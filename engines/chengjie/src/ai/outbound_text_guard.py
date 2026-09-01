@@ -624,6 +624,90 @@ def dedup_apology_catchphrase(
     return (out or src), hits
 
 
+# ── #109 第4病：目标话术渗味（步骤感元话术）────────────────────────────────
+#
+# 实锤（0831 skuio 原图，#111 同屏追问）：目标引擎给 AI 的推进 agenda 是内部
+# 剧本，AI 却把「过程语言」说给了客户——"Glad you're still interested — that's
+# the first step."（工作台中译「很高兴你还对这个感兴趣——这是第一步」）。客户
+# 视角这是「把我当项目推进」的出戏话术。确定性软校验：命中「步骤/里程碑/离
+# 目标近一步」类元话术 → 剥除该**子段**（逗号/破折号切分，保留同句其余内容），
+# 整句皆元话术才整句剥；剥空回退原文。词表刻意窄（宁可漏拦不误伤）：
+# 「下一步去哪玩」这类日常用语绝不能命中，故不收裸「下一步/next step」。
+
+_GOAL_META_RES = [
+    re.compile(
+        r"(?:that|this)(?:'|\u2019)?s\s+(?:just\s+)?(?:the|our)\s+first\s+step"
+        r"|(?:that|this)\s+is\s+(?:just\s+)?(?:the|our)\s+first\s+step"
+        r"|\bthe\s+first\s+step\s+(?:of|in|towards?)\b"
+        r"|\bstep\s+(?:one|1)\s+(?:is|of|complete[d]?)\b"
+        r"|\b(?:first|next)\s+milestone\b"
+        r"|\bone\s+step\s+closer\s+to\s+(?:my|our|the)\s+goal\b",
+        re.IGNORECASE),
+    re.compile(
+        r"这(?:只|就)?[是算](?:我们)?的?第一步"
+        r"|第一步(?:已(?:经)?)?(?:达成|完成)"
+        r"|离(?:我们的?)?目标(?:又)?近了一步"
+        r"|(?:第一|下一)个里程碑"),
+]
+_GOAL_META_SEG_SPLIT = re.compile(r"([，,;；:：]|——|—|…{1,2}|\.{3})")
+_GOAL_META_SENT_SPLIT = re.compile(r"(?<=[。！？!?\n])|(?<=[.](?=\s))")
+
+
+def _goal_meta_hit(seg: str) -> Optional[str]:
+    for rx in _GOAL_META_RES:
+        m = rx.search(seg)
+        if m:
+            return m.group(0)
+    return None
+
+
+def strip_goal_meta_talk(text: str) -> Tuple[str, List[str]]:
+    """剥除步骤感元话术子段（确定性、零 LLM、绝不抛；剥空回退原文）。"""
+    src = text or ""
+    try:
+        if not src.strip():
+            return src, []
+        hits: List[str] = []
+        out_sents: List[str] = []
+        for sent in [s for s in _GOAL_META_SENT_SPLIT.split(src) if s]:
+            if not _goal_meta_hit(sent):
+                out_sents.append(sent)
+                continue
+            # 子段级剥除：只丢命中的子段，保住同句里的正常内容
+            # （「很高兴你还对这个感兴趣——这是第一步。」只剥破折号后半）。
+            parts = _GOAL_META_SEG_SPLIT.split(sent)
+            kept: List[str] = []
+            pend_sep = ""
+            for p in parts:
+                if _GOAL_META_SEG_SPLIT.fullmatch(p or ""):
+                    pend_sep = p
+                    continue
+                h = _goal_meta_hit(p)
+                if h:
+                    hits.append(h)
+                    pend_sep = ""
+                    continue
+                if p.strip():
+                    if kept and pend_sep:
+                        kept.append(pend_sep)
+                    kept.append(p)
+                pend_sep = ""
+            rebuilt = "".join(kept).strip()
+            if rebuilt:
+                # 句尾标点跟着原句走（子段剥除可能把「……第一步。」的句号剥没）
+                tail = sent.rstrip()[-1:] if sent.rstrip()[-1:] in "。！？!?." else ""
+                if tail and not rebuilt.endswith(tuple("。！？!?.")):
+                    rebuilt += tail
+                out_sents.append(rebuilt)
+            # 整句皆元话术 → 整句剥（out_sents 不收）
+        if not hits:
+            return src, []
+        out = _cleanup_spacing("".join(out_sents))
+        return (out if (out or "").strip() else src), hits
+    except Exception:
+        return src, []
+
+
 # ── 出站收口点混语兜底（#97，实施91） ────────────────────────────────────────
 #
 # 击穿实锤（0830 21:47，v1.0.63 已带 #64 修复仍出「I'm 我 the one who's still
@@ -676,6 +760,7 @@ def sendpoint_lang_mix_pass(text: str) -> Tuple[str, str]:
 _STATS: Dict[str, int] = {"monologue": 0, "lang_mix_hard": 0, "lang_mix_soft": 0,
                           "unfounded_recall": 0, "recall_grounding": 0,
                           "shared_past": 0, "apology_dedup": 0,
+                          "goal_meta": 0,
                           "sendpoint_hard": 0, "sendpoint_kept": 0,
                           "sendpoint_soft": 0}
 
@@ -709,6 +794,8 @@ def resolve_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
         "vocative": bool(raw.get("vocative", True)),
         "lang_pin": bool(raw.get("lang_pin", True)),
         "shared_past": bool(raw.get("shared_past", True)),
+        # #109 第4病：目标话术渗味（"that's the first step" 类步骤感元话术）
+        "goal_meta": bool(raw.get("goal_meta", True)),
     }
 
 
@@ -777,6 +864,13 @@ def apply_outbound_text_guard(
         if ahits:
             meta["apology_hits"] = ahits
             _STATS["apology_dedup"] += 1
+    # #109 第4病：目标话术渗味——步骤感元话术（"that's the first step"）绝不
+    # 对客户出现；子段级剥除保住同句正常内容。
+    if c.get("goal_meta", True):
+        out, ghits2 = strip_goal_meta_talk(out)
+        if ghits2:
+            meta["goal_meta_hits"] = ghits2
+            _STATS["goal_meta"] += 1
     if c.get("lang_mix", True):
         verdict = detect_lang_mix(out)
         if verdict["action"] == "hard":

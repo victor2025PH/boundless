@@ -1090,6 +1090,10 @@
     try{ localStorage.setItem('hl_onboard_dismiss','1'); }catch(e){}
     var box=document.getElementById('db-onboard'); if(box) box.style.display='none';
   }
+  /* innerHTML 拼的 onclick 走全局作用域；此前漏挂 window，一直靠 base.html 的同名
+     全局骗过静态扫描（运行时点「不再提示」实为 ReferenceError）——2026-08-31
+     新手引导退役删掉 base 同名函数后门禁现形，就地修复。 */
+  window.dismissOnboard=dismissOnboard;
 
   function loadHealth(){
     var el=document.getElementById('db-health');

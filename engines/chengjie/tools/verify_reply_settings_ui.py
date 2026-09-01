@@ -29,7 +29,8 @@ P2 增补（2026-08-02 同日；中文主视图追加 9..11，另开英文视图
       ok/mid/bad 档位之一、文案非空（守评分徽章接线）。
   10. **实测均值容器钉**：`#rps-zone-obs` 存在于 DOM 即可——无实测数据时
       display:none 是合法态，刻意不钉可见性（守实测上轴容器）。
-  11. **锚点联动钉**：`.rps-anchors` 存在且 a 链接 >= 6；滚到 `#rps-adv`
+  11. **锚点联动钉**：`.rps-anchors` 存在且 a 链接 >= 4（2026-08-29 收成四组
+      sticky：接管 / 额度 / 节奏 / 平台）；滚到 `#rps-adv`
       后 IntersectionObserver 至少点亮 1 个 a.active（守 IO 滚动联动；
       IO 回调异步，自带「多等一拍重试一次」防 flaky）。
   12. **EN 播放按钮钉**：lang=en 下 `#rps-pv-play` 文案含 "Play preview"
@@ -49,6 +50,13 @@ P0-caps 增补（2026-08-03；中文视图追加 16..17）：
       `#rps-caps-markread` / `#rps-caps-typing`（已读/打字平台能力清单）
       存在于 DOM。display:none 是合法态（platform_modes 未配置 / 旧进程
       未回 platform_caps 字段），可见性由数据决定，刻意不钉。
+
+P2 额度组（2026-08-29）：中文视图追加 18。**不点全自动 / 不点保存**。
+  18. **额度组 / 发送闸门卡 / 快捷档 / sticky 锚点**：`#rps-grp-quota` 在 DOM；
+      `#rps-sec-sendgate` 可见；feat 装载后 `#rps-sg-body` 可见；出厂
+      `rpsGuardQuick(500)` 按钮在 DOM；`.rps-anchors` 为 sticky；中文
+      守卫 h3 含「单会话额度」、发送闸门 h3 含「单账号日发」；危险确认框
+      `#rps-confirm` 在 DOM（本工具不打开它）。
 
 用法::
 
@@ -333,11 +341,15 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
         print("== 11. 锚点联动钉（.rps-anchors × IntersectionObserver）==")
         anch = page.evaluate(
             "() => { const w = document.querySelector('.rps-anchors');"
+            " const as = w ? Array.from(w.querySelectorAll('a')) : [];"
             " return {found: !!w,"
-            "         links: w ? w.querySelectorAll('a').length : 0}; }")
-        ck.check("11a .rps-anchors 存在且 a 链接数 >= 6",
-                 anch["found"] and anch["links"] >= 6,
-                 f"found={anch['found']} links={anch['links']}")
+            "         links: as.length,"
+            "         hrefs: as.map(a => a.getAttribute('href') || '')}; }")
+        ck.check("11a .rps-anchors 存在且 a 链接数 >= 4（含 #rps-grp-quota）",
+                 anch["found"] and anch["links"] >= 4
+                 and "#rps-grp-quota" in anch["hrefs"],
+                 f"found={anch['found']} links={anch['links']}"
+                 f" hrefs={anch.get('hrefs')}")
         # IO 回调是异步的，时机受渲染/布局抖动影响 → 防 flaky：滚动后等 800ms
         # 判一次，未命中则补滚一次并多等 1200ms 重试，仍无 active 才判 FAIL。
         if not page.evaluate("() => !!document.getElementById('rps-adv')"):
@@ -401,6 +413,55 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                  caps_dom["note"] and caps_dom["mr"] and caps_dom["ty"],
                  f"note={caps_dom['note']} markread={caps_dom['mr']}"
                  f" typing={caps_dom['ty']}")
+
+        # ── 18. P2 额度组（2026-08-29）：只读 DOM/computed；不点全自动、不点保存
+        print("== 18. 额度组 / 发送闸门卡 / 快捷档 / sticky 锚点 ==")
+        ck.check("18a #rps-grp-quota 在 DOM",
+                 page.evaluate("() => !!document.getElementById('rps-grp-quota')"))
+        sg_disp = page.evaluate(
+            "() => { const el = document.getElementById('rps-sec-sendgate');"
+            " if (!el) return null;"
+            " return getComputedStyle(el).display; }")
+        ck.check("18b #rps-sec-sendgate 可见（非 display:none）",
+                 sg_disp not in (None, "none"), f"display={sg_disp!r}")
+        try:
+            page.wait_for_function(
+                "() => { const b = document.getElementById('rps-sg-body');"
+                " return b && getComputedStyle(b).display !== 'none'; }",
+                timeout=8000)
+            sg_body = True
+        except Exception:
+            sg_body = False
+        ck.check("18c feat 装载后 #rps-sg-body 可见",
+                 sg_body,
+                 "" if sg_body else "8s 内仍 hidden——白名单未装载或 rpsLoad 失败")
+        ck.check("18d 出厂档按钮 rpsGuardQuick(500) 在 DOM",
+                 page.evaluate(
+                     "() => Array.from(document.querySelectorAll("
+                     "'#rps-sec-guard button.rps-guard-quick'))"
+                     ".some(b => (b.getAttribute('onclick') || '')"
+                     ".indexOf('rpsGuardQuick(500)') >= 0)"))
+        sticky = page.evaluate(
+            "() => { const n = document.querySelector('.rps-anchors');"
+            " return n ? getComputedStyle(n).position : null; }")
+        ck.check("18e .rps-anchors position=sticky",
+                 sticky == "sticky", f"position={sticky!r}")
+        gh3 = page.evaluate(
+            "() => { const h = document.querySelector('#rps-sec-guard h3');"
+            " return h ? (h.textContent || '') : ''; }")
+        ck.check("18f 守卫 h3 含「单会话额度」",
+                 "单会话额度" in gh3, f"h3={gh3[:48]!r}")
+        sh3 = page.evaluate(
+            "() => { const h = document.querySelector('#rps-sec-sendgate h3');"
+            " return h ? (h.textContent || '') : ''; }")
+        ck.check("18g 发送闸门 h3 含「单账号日发」",
+                 "单账号日发" in sh3, f"h3={sh3[:48]!r}")
+        ck.check("18h 危险确认框 #rps-confirm 在 DOM",
+                 page.evaluate("() => !!document.getElementById('rps-confirm')"))
+        ck.check("18i 额度卡带 rps-card-tier-quota",
+                 page.evaluate(
+                     "() => { const el = document.getElementById('rps-sec-sendgate');"
+                     " return !!(el && el.classList.contains('rps-card-tier-quota')); }"))
 
         # 全页截图（诊断产物，PASS/FAIL 都留档）
         if shots:

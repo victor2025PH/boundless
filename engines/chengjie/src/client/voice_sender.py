@@ -46,35 +46,75 @@ def _ffmpeg_available() -> bool:
     return _ffmpeg_exe() is not None
 
 
+def ogg_opus_duration_ms(path: str) -> Optional[int]:
+    """纯 python 解析 Ogg/Opus 时长（毫秒）：末页 granule position / 48k。
+
+    #130（2026-09-01）：ffprobe 缺失的客户机（#101 已实锤存在）对 .ogg 语音
+    完全测不出时长 → Telegram 语音条只能靠对端客户端自己猜。Opus 的 granule
+    恒为 48kHz 采样单位（RFC 7845 §4），读最后一个 OggS 页头即得真时长——
+    零依赖、零解码。非 Ogg/解析失败返回 None（调用方回落其它探测层）。
+    """
+    p = Path(path)
+    try:
+        if not p.is_file():
+            return None
+        with open(p, "rb") as f:
+            head = f.read(4)
+            if head != b"OggS":
+                return None
+            # 从文件尾部找最后一个页头（页最大 ~64KB，翻倍窗口保险）
+            size = p.stat().st_size
+            f.seek(max(0, size - 128 * 1024))
+            tail = f.read()
+        idx = tail.rfind(b"OggS")
+        if idx < 0 or idx + 14 > len(tail):
+            return None
+        granule = int.from_bytes(tail[idx + 6: idx + 14], "little", signed=True)
+        if granule <= 0:
+            return None
+        return int(round(granule * 1000.0 / 48000.0))
+    except Exception:
+        return None
+
+
 def probe_audio_duration_ms(path: str) -> Optional[int]:
-    """用 ffprobe 探测音频时长（毫秒）。ffprobe 缺失/失败/无效返回 ``None``。
+    """探测音频时长（毫秒）：ffprobe → 纯 python 兜底（wav/mp3/ogg）。
 
     LINE 音频消息（``audio``）要求 ``duration`` 毫秒整数；官方通道语音出站据此填值。
+    #130：ffprobe 缺失/失败不再直接放弃——wav/mp3 走 tts_pipeline 的纯 python
+    解析、ogg 走本模块 granule 解析，让「对端实收时长==工作台时长」不依赖
+    客户机装了 ffmpeg 全家桶。全部失败才返回 ``None``。
     """
-    _probe = _ffprobe_exe()
-    if _probe is None:
-        return None
     p = Path(path)
     if not p.is_file():
         return None
+    _probe = _ffprobe_exe()
+    if _probe is not None:
+        try:
+            r = subprocess.run(
+                [
+                    _probe, "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(p),
+                ],
+                capture_output=True, text=True, timeout=20,
+            )
+            if r.returncode == 0:
+                secs = float((r.stdout or "").strip() or 0.0)
+                if secs > 0:
+                    return int(round(secs * 1000))
+        except Exception:
+            pass
+    # 纯 python 兜底（#130）：wav/mp3 复用 tts_pipeline 轻量解析；ogg 读 granule
     try:
-        r = subprocess.run(
-            [
-                _probe, "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(p),
-            ],
-            capture_output=True, text=True, timeout=20,
-        )
-        if r.returncode != 0:
-            return None
-        secs = float((r.stdout or "").strip() or 0.0)
-        if secs <= 0:
-            return None
-        return int(round(secs * 1000))
+        from src.ai.tts_pipeline import compute_audio_duration_sec
+        secs, _src = compute_audio_duration_sec(str(p))
+        if secs and secs > 0:
+            return int(round(secs * 1000))
     except Exception:
-        return None
+        pass
+    return ogg_opus_duration_ms(str(p))
 
 
 def convert_to_ogg_opus(

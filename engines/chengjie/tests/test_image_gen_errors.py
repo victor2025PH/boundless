@@ -192,7 +192,7 @@ class _FakeCM:
         self.config = cfg
 
 
-def _mk_app(tmp_path, monkeypatch, models):
+def _mk_app(tmp_path, monkeypatch, models, *, vram_free=None, queue_pending=None):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -213,6 +213,9 @@ def _mk_app(tmp_path, monkeypatch, models):
         }},
     }
     monkeypatch.setattr(igr, "_cached_probe", lambda url: models)
+    # 探针密闭化：不打真 LAN（此前 config 每次跑都对 176 发 vram 探测，慢且看网络脸色）
+    monkeypatch.setattr(igr, "_cached_vram", lambda url: vram_free)
+    monkeypatch.setattr(igr, "_cached_queue", lambda url: queue_pending)
     app = FastAPI()
     igr.register_image_gen_routes(app, auth_dep=lambda: True,
                                   config_manager=_FakeCM(cfg))
@@ -387,6 +390,119 @@ def test_album_file_sanitized(tmp_path, monkeypatch):
                       params={"path": str(outside)}).status_code == 400
     assert client.get("/api/image/album-file",
                       params={"path": ""}).status_code == 400
+
+
+# ── 2026-08-28：相册缩略图全裂 + 「较忙」永久误报 两起实录的回归钉 ────────
+# 根因一：相册面板上传的行文件落 src/web/static/persona_albums/，而 album-file
+#         的路径消毒只认 provider.album_dir → 每张缩略图 400（坐席看到 4 个裂图
+#         框，卡片还宣称「已有 4 张，点选可直接发送」）。
+# 根因二：把「空闲显存 < 14G」当「出图卡较忙」——同卡常驻聊天兜底 30B，空闲显存
+#         长期 0.x G 而 GPU 利用率 0，横幅一挂就再不消失（且对坐席泄露内部实现）。
+def test_stock_item_url_prefers_row_direct_url():
+    """行自带 /static 直服 URL 时直接用它；为空才回落 album-file。"""
+    assert igr.stock_item_url(
+        {"url": "/static/persona_albums/lin/a.jpg"}, "D:/x/a.jpg"
+    ) == "/static/persona_albums/lin/a.jpg"
+    # 坐席存册/自动补货的行 url 为空 → album-file（文件在 album_dir 内）
+    u = igr.stock_item_url({"url": ""}, "D:/albums/lin/b.jpg")
+    assert u.startswith("/api/image/album-file?path=")
+    # 非 / 开头的脏值不当直服 URL 用（防把相对/外链塞进 img src）
+    assert igr.stock_item_url({"url": "http://evil/x.jpg"}, "D:/a.jpg").startswith(
+        "/api/image/album-file?path=")
+
+
+def test_album_roots_covers_both_trees_and_rejects_outside(tmp_path):
+    roots = igr.album_roots(str(tmp_path / "albums"))
+    assert len(roots) == 2 and igr._STATIC_ALBUM_ROOT.resolve() in roots
+    inside = tmp_path / "albums" / "lin" / "a.jpg"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_bytes(b"x")
+    assert igr.resolve_album_path(str(inside), roots) is not None
+    assert igr.resolve_album_path(str(tmp_path / "secret.jpg"), roots) is None
+    assert igr.resolve_album_path("", roots) is None
+
+
+def test_album_file_serves_panel_uploaded_tree(tmp_path, monkeypatch):
+    """相册面板上传树（static/persona_albums）内的图必须 200——此前一律 400。"""
+    client = _mk_app(tmp_path, monkeypatch, None)
+    f = igr._STATIC_ALBUM_ROOT / "_gate_tmp" / "a.jpg"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"JPG")
+    try:
+        assert client.get("/api/image/album-file",
+                          params={"path": str(f)}).status_code == 200
+    finally:
+        f.unlink(missing_ok=True)
+        try:
+            f.parent.rmdir()
+        except OSError:
+            pass
+
+
+def test_album_stock_uses_panel_url(tmp_path, monkeypatch, _tmp_media_store):
+    st = _tmp_media_store
+    f = tmp_path / "cafe.jpg"
+    f.write_bytes(b"x")
+    st.add("lin", "photo", str(f), "/static/persona_albums/lin/cafe.jpg",
+           tags=["scene:咖啡馆"])
+    client = _mk_app(tmp_path, monkeypatch, None)
+    d = client.get("/api/image/album-stock", params={"persona_id": "lin"}).json()
+    assert d["items"][0]["url"] == "/static/persona_albums/lin/cafe.jpg"
+
+
+def test_min_free_gb_is_engine_aware():
+    """qwen_edit 的闸门是 18（`--min-free-gb 18`），不是写死的 14。"""
+    assert igr.min_free_gb_from_args(
+        ["python", "comfy_infer.py", "--engine", "qwen_edit",
+         "--min-free-gb", "18"]) == 18.0
+    assert igr.min_free_gb_from_args(["python", "comfy_infer.py"]) == 14.0
+    assert igr.min_free_gb_from_args(None) == 14.0
+    assert igr.min_free_gb_from_args(["--min-free-gb", "oops"]) == 14.0
+
+
+def test_probe_comfy_queue_reads_exec_info(monkeypatch):
+    import io
+    import json as _json
+
+    class _R:
+        def __init__(self, payload):
+            self._b = _json.dumps(payload).encode()
+
+        def read(self):
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(igr.urllib.request, "urlopen",
+                        lambda *a, **k: _R({"exec_info": {"queue_remaining": 3}}))
+    assert igr.probe_comfy_queue("http://x") == 3
+    monkeypatch.setattr(igr.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    assert igr.probe_comfy_queue("http://x") is None   # 探不到=未知，不是 0
+    assert igr.probe_comfy_queue("") is None
+    del io
+
+
+def test_config_exposes_queue_not_just_vram(tmp_path, monkeypatch):
+    """忙闲判据必须是队列+在途单；显存只作为『要不要预热』的输入之一。"""
+    client = _mk_app(tmp_path, monkeypatch, {"ckpts": [], "unets": []},
+                     vram_free=0.1, queue_pending=2)
+    d = client.get("/api/image/config").json()
+    assert d["busy_signal"] is True
+    assert d["queue_pending"] == 2 and d["busy_jobs"] == 0
+    assert d["vram_free_gb"] == 0.1          # 保留给运维/诊断
+    mins = {x["id"]: x["min_free_gb"] for x in d["engines_info"]}
+    assert mins["qwen_edit"] == 18.0 and mins["flux_pulid"] == 14.0
+
+
+def test_busy_job_count_only_counts_inflight():
+    jobs = {"a": {"status": "running"}, "b": {"status": "queued"},
+            "c": {"status": "done"}, "d": {"status": "cancelled"}}
+    assert igr.busy_job_count(jobs) == 2
 
 
 def test_mark_sent_records_ledger(tmp_path, monkeypatch, _tmp_media_store):

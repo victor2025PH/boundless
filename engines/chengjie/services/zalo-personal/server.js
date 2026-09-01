@@ -40,6 +40,10 @@ import { createGroupRegistry, resolveThreadType } from "./group-registry.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.ZALO_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8792);
+// 只绑回环：入站路由无鉴权中间件，绑 0.0.0.0 等于把账号操作面开给整个局域网。
+// 真实调用方只有本机 Python 引擎，全仓无远程引用。确需跨机时用 BIND_HOST 覆盖，
+// 但**必须先给入站加鉴权**再放开。
+const HOST = String(process.env.BIND_HOST || '127.0.0.1');
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 // Python 主进程统一收件箱入站桥（可选；未配置则不上报）。
@@ -412,7 +416,7 @@ app.post("/accounts/:id/logout", async (req, res) => {
   res.json({ ok: true, account_id: accountId });
 });
 
-const server = app.listen(PORT, async () => {
+const server = app.listen(PORT, HOST, async () => {
   logger.info(`Zalo personal login service on :${PORT} (sessions: ${SESSIONS_DIR})`);
   // 开机自动恢复已持久化的会话（幂等；Python 侧 worker 也会触发 /accounts/restore）。
   try {

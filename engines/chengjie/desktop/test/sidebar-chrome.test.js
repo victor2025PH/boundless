@@ -130,6 +130,27 @@ ctrl.apply();
 ok("apply → draft collapsed class", _cards.draft._set.has("collapsed"));
 ok("apply → voice expanded class", !_cards.voice._set.has("collapsed"));
 
+/* 三级优先：静态 class="collapsed" 是「HTML 侧声明的默认值」（2026-08-28）。
+   此前 apply() 无条件按 storage/defaults 覆写 → HTML 写了 collapsed 却被展开
+   （nurture 卡两个宿主都中招）。既不许被覆盖，也不许压过前两级。 */
+_mkCard("nurture", true);          // HTML 声明收起、不在 defaults、无 storage
+_mkCard("image", false);           // HTML 未声明、不在 defaults → 仍展开
+ok("static collapsed class = 第三级默认", ctrl.isCollapsed("nurture") === true);
+ok("无静态 class 且不在 defaults → 展开", ctrl.isCollapsed("image") === false);
+ctrl.apply();
+ok("apply 不抹掉 HTML 声明的 collapsed", _cards.nurture._set.has("collapsed"));
+ok("apply 不给未声明的卡加 collapsed", !_cards.image._set.has("collapsed"));
+ctrl.toggle("nurture");            // 坐席显式展开 → 存储该压过静态 class
+ok("storage 压过静态 class", ctrl.isCollapsed("nurture") === false);
+ok("toggle 后 DOM 同步展开", !_cards.nurture._set.has("collapsed"));
+ctrl.apply();
+ok("apply 后仍尊重坐席选择", !_cards.nurture._set.has("collapsed"));
+/* defaults 压过静态 class：voice 在 defaults=1，若 HTML 反着写也按 defaults */
+_mkCard("voice2", false);
+const ctrl2 = sc.createCardController({ storageKey: "ws_cp_cards_v2",
+  defaultCollapsed: { voice2: 1 } });
+ok("defaults 压过静态 class（第二级优先第三级）", ctrl2.isCollapsed("voice2") === true);
+
 // ── decorateCardIcons：填 SVG + 幂等 ─────────────────────────────────────────
 const _icEl = { __icDone: 0, getAttribute: () => "spark", innerHTML: "" };
 _icQuery = [_icEl];

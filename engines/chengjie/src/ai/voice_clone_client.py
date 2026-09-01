@@ -261,6 +261,8 @@ class VoiceCloneClient:
             cfg.get("base_url") or "http://192.168.0.188:7855").rstrip("/")
         self.protocol: str = str(cfg.get("protocol") or "fish_speech").strip().lower()
         self.clone_path: str = str(cfg.get("clone_path") or "/v1/tts/clone")
+        # CosyVoice3 方言 instruct2（请用四川话表达。）走独立端点，契约与 clone 不同
+        self.instruct_path: str = str(cfg.get("instruct_path") or "/v1/tts/instruct")
         self.health_path: str = str(cfg.get("health_path") or "/health")
         self.health_timeout_sec: float = float(cfg.get("health_timeout_sec") or 1.5)
         self.health_cache_sec: float = float(cfg.get("health_cache_sec") or 30)
@@ -499,6 +501,44 @@ class VoiceCloneClient:
         with urllib.request.urlopen(req, timeout=self.synth_timeout_sec) as resp:
             body = resp.read()
         return parse_clone_response(body)
+
+    def synthesize_instruct(
+        self, text: str, reference_audio_path: str, out: Path,
+        *, instruct: str,
+    ) -> None:
+        """CosyVoice3 ``/v1/tts/instruct``：自然语言方言/风格指令 + 参考音。
+
+        与 ``synthesize_clone`` 分流——clone 契约没有 ``instruct`` 字段，emotion=neutral
+        时走 zero_shot（粤语 ``<|yue|>`` 前缀用那条）。川渝/东北/闽南等官方 instruct
+        句必须打本端点。失败抛异常；响应解析复用 clone JSON 信封。
+        """
+        from src.ai.voice_emotion import strip_paralinguistic_marks
+        text = strip_paralinguistic_marks(text)
+        instr = str(instruct or "").strip()
+        if not instr:
+            raise RuntimeError("voice_clone_instruct: empty instruct")
+        ref = Path(reference_audio_path)
+        if not ref.is_file():
+            raise RuntimeError(f"reference_audio_missing:{reference_audio_path}")
+        ref_b64 = base64.b64encode(ref.read_bytes()).decode("ascii")
+        payload = json.dumps({
+            "text": str(text or ""),
+            "instruct": instr,
+            "reference_audio_b64": ref_b64,
+            "return_base64": True,
+        }).encode()
+        headers: Dict[str, Any] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.svc_token:
+            headers[self.svc_header] = self.svc_token
+        req = urllib.request.Request(
+            f"{self.base_url}{self.instruct_path}", data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=self.synth_timeout_sec) as resp:
+            audio = parse_clone_response(resp.read())
+        if not audio:
+            raise RuntimeError("voice_clone_instruct: decoded empty audio")
+        Path(out).write_bytes(audio)
 
 
 def reset_health_cache() -> None:

@@ -47,13 +47,23 @@ def test_enroll_moved_key_bilingual():
 
 
 def test_cache_stamps_bumped():
-    """?v= 双戳纪律：改共享组件必须 bump 三处引用（unified_inbox/personas/app）。"""
+    """?v= 双戳纪律：改共享组件必须 bump 三处引用（unified_inbox/personas/app）。
+
+    2026-08-31 修脆断言：原「恰好等于 20260827」的子串钉在 0830 批次 bump 后
+    就红了（共享树多线各自推进字母位）——改与 test_cp_voice_ui_revamp 同款的
+    **不回退地板**语义（≥ 本批门禁建立时的 20260827）。
+    """
+    import re
+    floor = (20260827, "")
+    pat = re.compile(r"cp-voice\.js\?v=(\d{8})([a-z]?)")
     for rel in ("src/web/templates/unified_inbox.html",
                 "src/web/templates/personas.html",
                 "shared/copilot/app.html"):
         src = _read(rel)
-        assert "cp-voice.js?v=20260823e" not in src, rel
-        assert "cp-voice.js?v=20260827" in src, rel
+        m = pat.search(src)
+        assert m, f"{rel} 缺 cp-voice.js 版本戳"
+        got = (int(m.group(1)), m.group(2) or "")
+        assert got >= floor, f"{rel} 版本戳回退：{got} < {floor}"
 
 
 # ── P2-h ─────────────────────────────────────────────────────────────────────

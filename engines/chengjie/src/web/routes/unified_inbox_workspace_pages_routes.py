@@ -178,21 +178,9 @@ def register_workspace_pages_routes(
 
     @app.get("/workspace", response_class=HTMLResponse)
     async def workspace_page(request: Request, _=Depends(page_auth)):
-        # WP-2/WP-5 首启直达（2026-08-17）：向导启用且未完成 → 非坐席 303 /welcome。
-        # 桌面壳 webview 走 token 会话不经 /login（登录落地钩子够不着它），把
-        # 「装完自动拉起 → 直达向导」做成后端语义 = 桌面/网页双端同享、零壳代码。
-        # 生产老实例 onboarding.enabled=false → welcome_pending 恒 False = 零变化。
-        # ⚠ agent 角色必须豁免：其页面白名单只有 /workspace*，重定向它 =
-        # /welcome 又被鉴权弹回 /workspace 的往返死循环。
-        try:
-            from src.utils.onboarding_state import welcome_pending
-            from src.utils.web_user_store import ROLE_AGENT
-            if (str(request.session.get("role") or "") != ROLE_AGENT
-                    and welcome_pending(
-                        getattr(config_manager, "config", None) or {})):
-                return RedirectResponse("/welcome", status_code=303)
-        except Exception:
-            pass                    # 向导判定任何异常绝不影响工作台可达
+        # 首启向导 303 闸门已删除（2026-08-31 新手引导退役）：/workspace 无条件可达。
+        # 历史教训（勿复活）：welcome_pending 闸门曾让「向导未完成」的新手从侧栏
+        # 永远进不了工作台——核心页面不得被任何 feature flag 挡路。
         return templates.TemplateResponse(request, "unified_inbox.html", _page_ctx(request))
 
     @app.get("/unified-inbox")

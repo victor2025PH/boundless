@@ -456,6 +456,29 @@ def _vram_free_gb() -> float:
         return -1.0
 
 
+def _comfy_reserved_gb() -> float:
+    """ComfyUI 自己在显存里占了多少(GB)——「大模型是否已常驻」的代理指标。
+
+    ``torch_vram_total`` = ComfyUI 进程 torch 侧 reserved。裸服务约 0.1G；
+    加载完 flux 全家桶后是十几 G。查不到返回 -1（未知）。
+    """
+    try:
+        with urllib.request.urlopen(COMFY_URL + "/system_stats", timeout=10) as r:
+            j = json.loads(r.read())
+        dev = (j.get("devices") or [{}])[0]
+        return float(dev.get("torch_vram_total", 0)) / (1024 ** 3)
+    except Exception:
+        return -1.0
+
+
+# 「模型已常驻」判据与活化显存下限（env 可调）。
+# 8G：裸服务 0.1G、加载完 flux 十几 G，8 落在两者之间且远离两端。
+WARM_RESERVED_GB = float(os.environ.get("COMFY_WARM_RESERVED_GB", "8") or 8)
+# 3G：1024x1024 flux 单张出图的活化显存约 2-4G（模型本身已在显存里，不再需要
+# min_free_gb 那么大的**加载**空间）。
+WARM_FREE_GB = float(os.environ.get("COMFY_WARM_FREE_GB", "3") or 3)
+
+
 def _free_comfy() -> None:
     """让 ComfyUI 卸载已加载模型 + 释放缓存显存（把地方让给换脸栈/给本次冷加载腾空间）。"""
     try:
@@ -531,10 +554,31 @@ def ensure_vram(min_free_gb: float, ollama_url: str = "") -> float:
     然后再查。
 
     返回最终 vram_free（GB）。调用方据此决定出图或回落。-1=查不到(放行)。
+
+    ⚠ **热加载优先**（2026-08-28 老板点名「要让模型一直热加载，不能等到用的时候
+    再加载」时定位到的自毁循环）：``min_free_gb`` 描述的是「把模型**装进**显存需要
+    多大空位」，模型**已经在**显存里时它就不适用了——而旧实现无条件先 ``/free``，
+    等于把马上要用的那份卸掉再从磁盘重载（实测冷加载 40-60s，热出图几秒）。同卡
+    Ollama 的翻译/嵌入模型会周期性把空闲显存压回闸门线以下，于是每次出图都重演
+    一遍：**热缓存的头号杀手是我们自己**。故先判常驻：已常驻且活化显存够 → 直接
+    放行，一个字节都不腾；活化不够也只卸**别人**（Ollama，秒级可重载），绝不卸自己。
     """
     free = _vram_free_gb()
     if free < 0:
         return free  # 查不到 → 不拦（交给出图本身，失败会回落）
+    if free < min_free_gb:
+        reserved = _comfy_reserved_gb()
+        if reserved >= WARM_RESERVED_GB:
+            if free >= WARM_FREE_GB:
+                _log("模型已驻留显存 %.1fG、空闲 %.1fG 够出图 → 跳过腾挪直接用(热)"
+                     % (reserved, free))
+                return max(free, min_free_gb)   # 闸门放行：无需再腾
+            _log("模型已驻留 %.1fG 但空闲仅 %.1fG，只卸 Ollama 腾活化空间(不卸自己)"
+                 % (reserved, free))
+            if ollama_url and _free_ollama(ollama_url):
+                free = _vram_free_gb()
+                _log("卸 Ollama 后 free=%.1fG" % free)
+            return max(free, min_free_gb) if free >= WARM_FREE_GB else free
     if free < min_free_gb:
         _log("显存不足 free=%.1fG < %.1fG，请求 ComfyUI 卸载腾显存…" % (free, min_free_gb))
         _free_comfy()

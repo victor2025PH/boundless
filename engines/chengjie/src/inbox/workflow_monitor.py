@@ -122,6 +122,7 @@ def chain_funnel(
     *,
     days: int = 14,
     reply_window_hours: int = 72,
+    deal_attr_days: int = 14,
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """窗口内按链聚合执行漏斗 + 「启动后 N 小时内客户有入站」回复率。
@@ -156,7 +157,8 @@ def chain_funnel(
 
     def _bucket() -> Dict[str, Any]:
         return {"started": 0, "completed": 0, "failed": 0, "cancelled": 0,
-                "running": 0, "mature_n": 0, "replied_n": 0, "attributed": 0}
+                "running": 0, "mature_n": 0, "replied_n": 0, "attributed": 0,
+                "deals_n": 0, "deal_amount": 0.0}
 
     total = _bucket()
     # 归因组回复率拆分（总量级；per-chain 只出 attributed 计数防表过宽）：
@@ -225,6 +227,43 @@ def chain_funnel(
                 attr_mature += 1
                 if replied:
                     attr_replied += 1
+
+    # ── 实施92 P0-3：链→成交归因（近似口径，诚实标注）────────────────────
+    # 每笔未撤销成交归到「它之前最近启动、且启动在 deal_attr_days 窗内」的那
+    # 条执行（同会话多链并行时只归最近一条，营收不双计）；与回复率同属近似
+    # 归因——无法证明客户是因为链才成交的。store 无 deal_events 表（旧库/
+    # 假 store）→ 全零软降级。
+    try:
+        deal_rows = store.deal_events_between(since)
+    except Exception:
+        deal_rows = []
+    if deal_rows:
+        attr_win = max(1, int(deal_attr_days)) * 86400
+        execs_by_conv: Dict[str, List[Dict[str, Any]]] = {}
+        for r in rows:
+            row = dict(r)
+            conv = str(row.get("conversation_id") or "")
+            if conv:
+                execs_by_conv.setdefault(conv, []).append(row)
+        for ev in deal_rows:
+            conv = str(ev.get("conversation_id") or "")
+            ev_ts = float(ev.get("ts") or 0)
+            best = None
+            for ex_row in execs_by_conv.get(conv, []):
+                st = float(ex_row.get("started_at") or 0)
+                if st < ev_ts <= st + attr_win:
+                    if best is None or st > float(best.get("started_at") or 0):
+                        best = ex_row
+            if best is None:
+                continue
+            amount = float(ev.get("amount") or 0)
+            bcid = str(best.get("chain_id") or "")
+            for bk in (total, by_chain.get(bcid)):
+                if bk is None:
+                    continue
+                bk["deals_n"] += 1
+                bk["deal_amount"] = round(
+                    float(bk.get("deal_amount") or 0) + amount, 2)
 
     def _rate(b: Dict[str, Any]) -> Optional[float]:
         return round(b["replied_n"] / b["mature_n"], 3) if b["mature_n"] else None

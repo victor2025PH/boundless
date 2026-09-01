@@ -145,11 +145,11 @@ def test_apply_guard_disabled_passthrough():
 
 def test_resolve_cfg_defaults_on_and_overridable():
     # vocative/lang_pin/shared_past（实施91 #105/#106/#110）与旧五键同段
-    # 配置、同默认开
+    # 配置、同默认开；goal_meta（#109 第4病）同族同默认。
     full_on = {"enabled": True, "monologue": True, "lang_mix": True,
                "unfounded_recall": True, "recall_grounding": True,
                "apology_dedup": True, "vocative": True, "lang_pin": True,
-               "shared_past": True}
+               "shared_past": True, "goal_meta": True}
     assert resolve_cfg(None) == full_on
     assert resolve_cfg({}) == full_on
     got = resolve_cfg({"companion": {"outbound_text_guard": {
@@ -158,7 +158,7 @@ def test_resolve_cfg_defaults_on_and_overridable():
     assert got == {"enabled": False, "monologue": True, "lang_mix": False,
                    "unfounded_recall": False, "recall_grounding": False,
                    "apology_dedup": False, "vocative": True, "lang_pin": True,
-                   "shared_past": True}
+                   "shared_past": True, "goal_meta": True}
 
 
 def test_empty_input_passthrough():
@@ -574,6 +574,79 @@ def test_apology_dedup_picks_unused_variant_91():
     out, hits = dedup_apology_catchphrase("被你抓包了啦", recent)
     assert hits
     assert "让你说着了" not in out and "好吧我承认" not in out
+
+
+# ── #109 第4病（0831 skuio 实锤）：目标话术渗味——步骤感元话术 ────────────────
+
+
+def test_109_goal_meta_field_sample_en():
+    """事故原话金标：『that's the first step』子段剥除，同句正常内容保住。"""
+    from src.ai.outbound_text_guard import strip_goal_meta_talk
+    out, hits = strip_goal_meta_talk(
+        "Glad you're still interested — that's the first step.")
+    assert hits and "first step" not in out.lower()
+    assert "Glad you're still interested" in out
+
+
+def test_109_goal_meta_field_sample_zh():
+    """工作台中译形态：『——这是第一步』同样剥除（破折号子段）。"""
+    from src.ai.outbound_text_guard import strip_goal_meta_talk
+    out, hits = strip_goal_meta_talk("很高兴你还对这个感兴趣——这是第一步。")
+    assert hits and "第一步" not in out
+    assert "很高兴你还对这个感兴趣" in out
+
+
+def test_109_goal_meta_milestone_and_goal_forms():
+    from src.ai.outbound_text_guard import strip_goal_meta_talk
+    out, hits = strip_goal_meta_talk(
+        "今天聊得很开心，离我们的目标又近了一步。")
+    assert hits and "近了一步" not in out and "聊得很开心" in out
+    out2, hits2 = strip_goal_meta_talk(
+        "That was lovely. We just hit our first milestone together!")
+    assert hits2 and "milestone" not in out2.lower()
+    assert "That was lovely" in out2
+
+
+def test_109_goal_meta_everyday_step_talk_untouched():
+    """日常「下一步/step」用语绝不误伤（宁可漏拦不误伤）。"""
+    from src.ai.outbound_text_guard import strip_goal_meta_talk
+    for s in ("下一步打算去哪玩？",
+              "你到楼下之后下一步就是右转直走。",
+              "The next step for your order is the payment link I sent.",
+              "Watch your step, the floor is wet.",
+              "我们一步一步来，不着急。"):
+        out, hits = strip_goal_meta_talk(s)
+        assert not hits and out == s, s
+
+
+def test_109_goal_meta_all_meta_falls_back_to_src():
+    """整段皆元话术 → 剥空回退原文（守卫绝不吞掉整条回复）。"""
+    from src.ai.outbound_text_guard import strip_goal_meta_talk
+    src = "That's the first step."
+    out, hits = strip_goal_meta_talk(src)
+    assert hits and out == src
+
+
+def test_109_goal_meta_wired_into_apply_and_stats():
+    """apply 编排接线 + 配置键 + 计数器（三件套缺一=静默缺陷）。"""
+    from src.ai.outbound_text_guard import (
+        apply_outbound_text_guard, guard_stats, resolve_cfg,
+    )
+    assert resolve_cfg(None).get("goal_meta") is True
+    assert resolve_cfg(
+        {"companion": {"outbound_text_guard": {"goal_meta": False}}}
+    ).get("goal_meta") is False
+    before = guard_stats().get("goal_meta", 0)
+    out, meta = apply_outbound_text_guard(
+        "Glad you're still interested — that's the first step.")
+    assert meta.get("goal_meta_hits")
+    assert "first step" not in out.lower()
+    assert guard_stats().get("goal_meta", 0) == before + 1
+    # 关子开关 → 原样放行
+    out2, meta2 = apply_outbound_text_guard(
+        "that's the first step for us",
+        {"enabled": True, "goal_meta": False})
+    assert "first step" in out2.lower() and not meta2.get("goal_meta_hits")
 
 
 # ── #91-B（同单）：他人串扰自曝红线（persona_guard 家族） ────────────────────

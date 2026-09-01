@@ -69,7 +69,21 @@ _CLAIM_WITHOUT_PHOTO = [re.compile(p, re.IGNORECASE) for p in (
 
 # 过去指涉排除（谈论以前发过的照片 ≠ 断言本条附了图）
 _PAST_REF_RE = re.compile(
-    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b")
+    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b"
+    r"|去年|(?:今年)?[春夏秋冬]天(?:去|在)|旅行时|旅行時|去玩(?:的时候|的時候)?")
+
+# 「此刻实拍」口径（实施90 季节/地点错配的触发条件）：只有把照片说成**现在拍的**
+# 才参与季节/地点错配判定——发异季/异国旧照配「上次去玩拍的」是真人行为，
+# 不许误伤；窄口径宣告形（刚拍/现在拍/just took），愿望/提问不命中。
+_FRESH_NOW_RE = re.compile(
+    r"[刚剛][刚剛]?\s*(?:拍|照|出炉|出爐)|现在\s*(?:拍|照)|現在\s*(?:拍|照)|"
+    r"这会儿\s*拍|這會兒\s*拍|今天\s*[刚剛]\s*拍|"
+    r"\bjust\s+(?:took|snapped|shot)\b|\btaking\s+(?:it\s+)?right\s+now\b",
+    re.IGNORECASE)
+
+# 对立季（唯一硬冲突对；春/秋过渡季歧义大刻意不判——与生产门同哲学但独立实现，
+# 评测器不 import 生产词表，防「词表改坏评测跟着瞎」）
+_OPPOSITE_SEASONS = frozenset({"summer", "winter"})
 
 # 强断言"我在 X"（配文声称身处某场景类；与照片实际场景类冲突才违规）。
 # 实施69：补东北口语「搁」（「我搁这儿呢」）——实录事故人设的自称句式。
@@ -142,12 +156,24 @@ def check_media_consistency(
     photo_sent: bool,
     scene: str = "",
     hour: Optional[int] = None,
+    media_season: str = "",
+    now_season: str = "",
+    media_place: str = "",
+    home_place: str = "",
 ) -> Dict[str, Any]:
     """单样本图文一致性判定（纯函数）。返回 ``{"ok": bool, "violations": [...]}``。
 
     ``text``＝随图配文或无图时的出站文本；``photo_sent``＝该消息是否真附了照片；
     ``scene``＝照片实际生成场景（英文短语，可空=相册现成图）；``hour``＝发送时刻
     （0-23，可空=跳过时间冲突检查）。
+
+    实施90 新增两轨（都缺省为空=不判，向后兼容）：
+    - ``media_season``/``now_season``：照片季节标注 vs 发送时人设当地季节——
+      **对立季**且配文按「此刻实拍」口径（``season_mismatch``）＝冬天把盛夏
+      海滩照说成刚拍；旧照口径（上次/去年夏天）合法放行。
+    - ``media_place``/``home_place``：照片拍摄国 vs 人设所在国——异国照片配
+      「刚拍」口径（``place_mismatch``）＝人在温哥华把东京街景说成现拍；
+      「之前去日本玩拍的」合法放行。
     """
     violations: List[str] = []
     t = str(text or "")
@@ -175,6 +201,17 @@ def check_media_consistency(
                 violations.append("time_mismatch")
         except Exception:
             pass
+    # 实施90：季节/地点 ×「此刻实拍」口径（旧照口径放行——真人也发旅行旧照，
+    # 穿帮点只在把它说成现在拍的）
+    if photo_sent and _FRESH_NOW_RE.search(t) and not _PAST_REF_RE.search(t):
+        ms = str(media_season or "").strip().lower()
+        ns = str(now_season or "").strip().lower()
+        if ms and ns and {ms, ns} == _OPPOSITE_SEASONS:
+            violations.append("season_mismatch")
+        mp = str(media_place or "").strip().upper()
+        hp = str(home_place or "").strip().upper()
+        if mp and hp and mp != hp:
+            violations.append("place_mismatch")
     return {"ok": not violations, "violations": violations}
 
 
@@ -205,7 +242,35 @@ _GOLDEN_SAMPLES: List[Dict[str, Any]] = [
     {"id": "scene2", "text": "我在夜市摊这儿呢，刚收完摊。", "photo_sent": True,
      "scene": "at home on the couch, cozy and relaxed",
      "expect_ok": False},                                     # 自称夜市×居家图
+    # —— 实施90 扩容：季节/地点 ×「此刻实拍」口径 ——
+    {"id": "season1", "text": "刚拍的，外面雪好大～", "photo_sent": True,
+     "scene": "", "media_season": "winter", "now_season": "summer",
+     "expect_ok": False},                                     # 盛夏把雪景说成刚拍
+    {"id": "season2", "text": "just took this at the beach, so hot today!",
+     "photo_sent": True, "scene": "", "media_season": "summer",
+     "now_season": "winter", "expect_ok": False},             # 寒冬把海滩照说成刚拍
+    {"id": "place1", "text": "刚拍的哦，这边夜景超美", "photo_sent": True,
+     "scene": "", "media_place": "JP", "home_place": "CA",
+     "expect_ok": False},                                     # 人在温哥华，东京照说成现拍
+    {"id": "place2", "text": "Just snapped this outside!", "photo_sent": True,
+     "scene": "", "media_place": "TH", "home_place": "CA",
+     "expect_ok": False},
     # —— 合法反例（不许误伤）——
+    {"id": "ok_season_old", "text": "去年冬天去玩拍的，给你看雪～", "photo_sent": True,
+     "scene": "", "media_season": "winter", "now_season": "summer",
+     "expect_ok": True},                                      # 旧照口径=真人行为
+    {"id": "ok_season_same", "text": "刚拍的，今天太阳好舒服", "photo_sent": True,
+     "scene": "", "media_season": "summer", "now_season": "summer",
+     "expect_ok": True},                                      # 同季实拍=真话
+    {"id": "ok_season_shoulder", "text": "刚拍的落叶～", "photo_sent": True,
+     "scene": "", "media_season": "autumn", "now_season": "winter",
+     "expect_ok": True},                                      # 过渡季刻意不判
+    {"id": "ok_place_honest", "text": "之前去日本玩拍的，超好看", "photo_sent": True,
+     "scene": "", "media_place": "JP", "home_place": "CA",
+     "expect_ok": True},                                      # 诚实旅行旧照
+    {"id": "ok_place_no_meta", "text": "刚拍的～", "photo_sent": True,
+     "scene": "", "media_place": "", "home_place": "CA",
+     "expect_ok": True},                                      # 无标注不判（保守）
     {"id": "ok_claim_backed", "text": "这不就来了嘛，你看看～", "photo_sent": True,
      "scene": "", "expect_ok": True},                         # 真附图=真话
     {"id": "ok_honest_signal", "text": "这边信号不太好，这会儿发不了照片呢",
@@ -243,6 +308,10 @@ def evaluate_media_consistency(
             photo_sent=bool(s.get("photo_sent")),
             scene=str(s.get("scene") or ""),
             hour=s.get("hour"),
+            media_season=str(s.get("media_season") or ""),
+            now_season=str(s.get("now_season") or ""),
+            media_place=str(s.get("media_place") or ""),
+            home_place=str(s.get("home_place") or ""),
         )
         expected = bool(s.get("expect_ok", True))
         hit = (verdict["ok"] == expected)

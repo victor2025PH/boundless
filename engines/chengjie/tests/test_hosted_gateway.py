@@ -28,7 +28,7 @@ def _reset_module_state():
     for key in (hg.VOICE_ENV_BASE, hg.VOICE_ENV_FIRST, hg.VOICE_ENV_HUBFISH_OFF,
                 hg.VOICE_ENV_AUTO, hg.ASR_ENV_BASE, hg.ASR_ENV_FIRST,
                 hg.ASR_ENV_AUTO, hg.VISION_ENV_BASE, hg.VISION_ENV_MODEL,
-                hg.VISION_ENV_AUTO):
+                hg.VISION_ENV_AUTO, hg.EMBED_ENV_BASE, hg.EMBED_ENV_MODEL):
         os.environ.pop(key, None)
 
 
@@ -632,11 +632,11 @@ def test_config_manager_replays_vision_auto_flag():
 
 class _CMM:
     def __init__(self, tmp_path, ai_key="cx.tok", avatar_voice=None,
-                 voice_recognition=None):
+                 voice_recognition=None, ai_extra=None):
         self.config_path = str(tmp_path / "config" / "config.yaml")
         Path(self.config_path).parent.mkdir(parents=True, exist_ok=True)
         self.config = {
-            "ai": {"api_key": ai_key},
+            "ai": {"api_key": ai_key, **(ai_extra or {})},
             "licensing": {"hosted_ai": {"enabled": True, "site_url": "https://bd2026.cc"}},
         }
         if avatar_voice is not None:
@@ -1020,3 +1020,118 @@ def test_fetch_device_token_desktop_skips_instance_id(monkeypatch):
     assert "instance_id" not in seen
     assert seen["source"] == "desktop"
     assert got.get("instance_id") == ""
+
+
+# ── 托管嵌入（2026-08-28 P0-1 配套；B126 根因的客户端半边）───────────────────
+# 服务端补 /api/ai/v1/embeddings 只救「没配嵌入端点」的客户档；**内测档 overlay
+# 把嵌入端点钉在 LAN**（140/176:11434），外网机器那两个地址不可达 → 客户端连败
+# 3 次熔断 120s → 语义记忆召回全程降级关键词。这批机器必须客户端改道。
+
+_LAN_EMBED = {
+    "embedding_base_url": "http://192.168.0.140:11434",
+    "embedding_base_urls": ["http://192.168.0.140:11434",
+                            "http://192.168.0.176:11434"],
+    "embedding_model": "bge-m3",
+}
+
+
+def test_hosted_embed_lan_dead_switches_to_gateway(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=dict(_LAN_EMBED))
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is True
+    ai = cm.config["ai"]
+    assert ai["embedding_base_urls"] == [_GW]
+    assert ai["embedding_base_url"] == _GW
+    assert ai["_hosted_embed"] is True
+    # api_key 刻意不写：ai_client 缺省继承 ai.api_key（设备令牌），换新自动跟随
+    assert "embedding_api_key" not in ai
+    assert os.environ.get(hg.EMBED_ENV_BASE) == _GW
+
+
+def test_hosted_embed_lan_alive_leaves_config_alone(tmp_path, monkeypatch):
+    """办公室机器：LAN 嵌入端点可达 → 一个字都不改（低延迟直连）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=dict(_LAN_EMBED))
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: True) is False
+    assert cm.config["ai"]["embedding_base_urls"] == _LAN_EMBED["embedding_base_urls"]
+    assert "_hosted_embed" not in cm.config["ai"]
+
+
+def test_hosted_embed_back_on_lan_restores(tmp_path, monkeypatch):
+    """漫游回内网：还原原端点（含原模型名），不把网关粘住。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra=dict(_LAN_EMBED))
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is True
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: True) is False
+    ai = cm.config["ai"]
+    assert ai["embedding_base_urls"] == _LAN_EMBED["embedding_base_urls"]
+    assert ai["embedding_base_url"] == _LAN_EMBED["embedding_base_url"]
+    assert "_hosted_embed" not in ai
+    assert not os.environ.get(hg.EMBED_ENV_BASE)
+
+
+def test_hosted_embed_never_touches_public_endpoint(tmp_path, monkeypatch):
+    """客户自配云端嵌入（OpenAI / 自建域名）→ 不可达也绝不改写。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    for url in ("https://api.openai.com", "http://embed.customer.example:11434"):
+        cm = _CMM(tmp_path, ai_extra={"embedding_base_url": url,
+                                      "embedding_model": "text-embedding-3-small"})
+        assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is False
+        assert cm.config["ai"]["embedding_base_url"] == url
+
+
+def test_hosted_embed_mixed_public_and_lan_not_touched(tmp_path, monkeypatch):
+    """混配（LAN + 云）：只要有一个公网端点就是用户的明示选择，整段不动。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra={
+        "embedding_base_urls": ["http://192.168.0.140:11434", "https://api.openai.com"],
+        "embedding_model": "bge-m3"})
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is False
+    assert len(cm.config["ai"]["embedding_base_urls"]) == 2
+
+
+def test_hosted_embed_no_endpoint_is_left_to_chat_fallback(tmp_path, monkeypatch):
+    """未配嵌入端点＝ai_client 本就回落对话客户端（即网关）→ 这里不插手。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path)
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is False
+    assert "embedding_base_url" not in cm.config["ai"]
+
+
+def test_hosted_embed_requires_device_token(tmp_path, monkeypatch):
+    """用户自有 Key（非 cx.）→ 网关鉴不了权，绝不改道（否则嵌入全 401）。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_key="sk-user-own", ai_extra=dict(_LAN_EMBED))
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is False
+    assert cm.config["ai"]["embedding_base_url"] == _LAN_EMBED["embedding_base_url"]
+
+
+def test_hosted_embed_fills_model_when_blank(tmp_path, monkeypatch):
+    """模型名为空时 ai_client.embed() 直接返回空、一次请求都不发 → 必须补非空值。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    cm = _CMM(tmp_path, ai_extra={"embedding_base_url": "http://192.168.0.140:11434",
+                                  "embedding_model": ""})
+    assert hg.ensure_hosted_embed(cm, probe=lambda u: False) is True
+    assert cm.config["ai"]["embedding_model"] == hg.HOSTED_EMBED_MODEL
+
+
+def test_apply_hosted_embed_replay_after_reload(tmp_path):
+    """热重载回放：重新读入的 LAN 配置必须再次被接管（否则语义记忆重新降级）。"""
+    cfg = {"ai": {"api_key": "cx.tok", **_LAN_EMBED}}
+    assert hg.apply_hosted_embed(cfg, _GW) is True
+    assert cfg["ai"]["embedding_base_urls"] == [_GW]
+    # 幂等：再来一次不叠加、不把网关自己存进 _lan_embed
+    assert hg.apply_hosted_embed(cfg, _GW) is True
+    assert cfg["ai"]["_lan_embed"]["embedding_base_urls"] == \
+        _LAN_EMBED["embedding_base_urls"]
+
+
+def test_is_private_endpoint():
+    assert hg.is_private_endpoint("http://192.168.0.140:11434") is True
+    assert hg.is_private_endpoint("http://127.0.0.1:11434") is True
+    assert hg.is_private_endpoint("http://10.1.2.3") is True
+    assert hg.is_private_endpoint("http://localhost:1234") is True
+    assert hg.is_private_endpoint("https://api.openai.com") is False
+    assert hg.is_private_endpoint("https://bd2026.cc/api/ai/v1") is False
+    assert hg.is_private_endpoint("") is False
+    assert hg.is_private_endpoint("not a url") is False

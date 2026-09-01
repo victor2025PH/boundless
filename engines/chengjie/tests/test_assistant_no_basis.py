@@ -245,6 +245,26 @@ def test_end_to_end_zero_hit_counts_as_no_hit(monkeypatch, tmp_path):
     assert h["qa_7d"]["no_basis_share"] == 0.0
 
 
+def test_end_to_end_zero_hit_can_now_be_answered(monkeypatch, tmp_path):
+    """零命中但产品事实卡答得了 → 记 answered=True，**不该**进未答清单。
+
+    这是本次行为变更的正向断言：老板实录「支持抖音吗」被拒答，而答案就在
+    产品事实卡里。若它仍被记成 miss，ops 的「未答清单」会催人去补一条根本
+    不缺的语料。
+    """
+    from tests.test_assistant_routes import _FakeAI, _client, _mk_app
+
+    app, *_ = _mk_app(monkeypatch, tmp_path,
+                      fake_ai=_FakeAI(answer="目前对接 Telegram 等，抖音暂不支持。"))
+    c = _client(app)
+    c.post("/api/assistant/query",
+           json={"q": "qqxyzzy foobar zzzz", "page": "/workspace"})
+
+    h = c.get("/api/assistant/health").json()
+    assert h["process"]["miss_no_hit"] == 0, h["process"]
+    assert h["process"]["miss_no_basis"] == 0
+
+
 def test_qa_log_infers_kind_from_top_score_without_schema_change(tmp_path):
     """分型靠既有 top_score 列推断——**零改表**，且对历史数据同样成立。
 
@@ -346,6 +366,7 @@ def test_top_score_is_bound_to_retrieval_not_to_branch():
         "top_score 未与 strong 绑定——docless 轮压根没有检索命中，"
         "给它记一个分数会让零命中被算成「哨兵拒答」，看板两个数对调"
     )
+    # 反向：字典**初始化**里不许直接塞 top_score（那会无条件带上）
     init = seg.split("if strong:", 1)[0]
     assert "top_score" not in init, "top_score 进了无条件初始化，分型会永远反转"
 

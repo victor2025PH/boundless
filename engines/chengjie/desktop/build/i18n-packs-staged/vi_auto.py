@@ -2728,9 +2728,14 @@ VI = {
     'ws.quotawall.watching': 'Trang nạp tiền đã được mở – Sau khi thanh toán xong, số dư sẽ được cập nhật tự động, và nó sẽ được khôi phục ngay lập tức ở đây.',
     'ws.restartcool.hint': '(Hệ thống đang ở chế độ bảo vệ làm mát, việc khởi động lại liên tục đã được ngăn chặn tự động)',
     'ws.restartcool.text': 'Dịch vụ vừa được khởi động lại, trong khoảng {n} phút đầu tiên nếu xảy ra lỗi tải dữ liệu thì là chuyện bình thường — vui lòng chờ để hệ thống tự khôi phục, không nên tải lại liên tục.',
-    'ws.uibuild.btn': 'Làm mới ngay lập tức',
+    'ws.uibuild.btn': 'Cập nhật ngay',
     'ws.uibuild.dismiss': 'Tạm thời không (không nhắc lại trong 2 giờ tới)',
-    'ws.uibuild.text': 'Giao diện bàn làm việc đã được cập nhật lên phiên bản mới, chỉ cần tải lại trang là có thể sử dụng (khuyến nghị nên gửi hoặc lưu lại những dữ liệu đang nhập trước).',
+    'ws.uibuild.short': 'Có bản giao diện mới',
+    'ws.uibuild.text': 'Đã có bản giao diện mới. Nhấn “Cập nhật ngay” để tải lại (khoảng 2 giây; nội dung đang gõ trong ô soạn tin sẽ được giữ lại).',
+    'ws.uibuild.unsent': 'Bạn còn ảnh hoặc tin nhắn thoại chưa gửi. Tải lại sẽ xoá chúng — hãy gửi trước rồi cập nhật.',
+    'ws.uibuild.force': 'Vẫn cập nhật',
+    'ws.uibuild.later': 'Gửi trước đã',
+    'ws.uibuild.auto_done': 'Giao diện đã được tự động cập nhật lên bản mới.',
     # ── wu_js001 ──
     'wu_js001': 'Không có sự so sánh theo chu kỳ',
     # ── wu_js002 ──

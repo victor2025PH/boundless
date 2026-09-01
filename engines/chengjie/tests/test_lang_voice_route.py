@@ -249,6 +249,84 @@ def test_follow_text_cantonese_takes_priority():
     assert out["voice"] == "zh-HK-HiuMaanNeural"
 
 
+# ══ 粤语克隆分支（2026-08-30，为 CosyVoice2 等原生粤语克隆后端留口）══════════
+
+_YUE_TEXT = "识听少少啦，但讲得麻麻地，咁你同我讲粤语都OK嘅"
+
+
+def test_cantonese_clone_backend_keeps_voice_profile():
+    """cantonese.backend 配克隆类＝运营声明该后端会念粤语 → 保留人设克隆声。"""
+    cfg = {"voice_lang_route": {
+        "enabled": True,
+        "cantonese": {"backend": "avatar_clone"}}}
+    vc = {"backend": "edge_tts", "voice": "zh-CN-XiaoxiaoNeural",
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "reference_audio_path": "x.wav"}}
+    out, tag = route_voice_cfg_for_text(vc, _YUE_TEXT, cfg)
+    assert tag == "yue"
+    assert out["backend"] == "avatar_clone"
+    assert out["voice_profile"]["enabled"] is True, "克隆分支不得停用人设克隆声"
+    assert out["voice_profile"]["reference_audio_path"] == "x.wav"
+    # 克隆失败回落 edge 时必须是粤语声——回落普通话音色念粤文正是要消灭的事故
+    assert out["fallback_voice"] == "zh-HK-HiuMaanNeural"
+
+
+def test_cantonese_clone_backend_voice_profile_merge_override():
+    """cantonese.voice_profile 是 merge 覆写：只覆给出的键（典型=clone_base_url
+    指到粤语克隆节点），人设自己的参考音/同意位保留＝同一把声讲粤语。"""
+    cfg = {"voice_lang_route": {
+        "enabled": True,
+        "cantonese": {"backend": "minicpm_clone",
+                      "voice_profile": {"backend": "minicpm_clone",
+                                        "clone_base_url": "http://127.0.0.1:7852"},
+                      "fallback_voice": "zh-HK-HiuGaaiNeural"}}}
+    vc = {"backend": "avatar_clone", "voice": "clone-x",
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "owner_consent": True,
+                            "reference_audio_path": "mandarin.wav"}}
+    out, tag = route_voice_cfg_for_text(vc, _YUE_TEXT, cfg)
+    assert tag == "yue"
+    assert out["backend"] == "minicpm_clone"
+    ovp = out["voice_profile"]
+    assert ovp["clone_base_url"] == "http://127.0.0.1:7852"      # 覆写键生效
+    assert ovp["backend"] == "minicpm_clone"
+    assert ovp["reference_audio_path"] == "mandarin.wav"          # 人设参考音保留
+    assert ovp["owner_consent"] is True                           # 同意位保留
+    assert out["fallback_voice"] == "zh-HK-HiuGaaiNeural"
+    assert vc["voice_profile"]["backend"] == "avatar_clone", "原配置不可被就地修改"
+
+
+def test_cantonese_clone_backend_full_override_still_works():
+    """覆写块也可带 reference_audio_path＝粤语专用参考音位（merge 语义下照样成立）。"""
+    cfg = {"voice_lang_route": {
+        "enabled": True,
+        "cantonese": {"backend": "minicpm_clone",
+                      "voice_profile": {
+                          "backend": "minicpm_clone",
+                          "reference_audio_path": "refs/lin_xiaoyu_yue.wav",
+                          "reference_text": "粤语逐字稿"}}}}
+    vc = {"backend": "avatar_clone", "voice": "clone-x",
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "reference_audio_path": "mandarin.wav"}}
+    out, tag = route_voice_cfg_for_text(vc, _YUE_TEXT, cfg)
+    assert tag == "yue"
+    assert out["voice_profile"]["reference_audio_path"] == "refs/lin_xiaoyu_yue.wav"
+    assert out["voice_profile"]["reference_text"] == "粤语逐字稿"
+
+
+def test_cantonese_edge_backend_behavior_pinned():
+    """edge 分支（默认档）行为钉死：停克隆、剥 RVC、兜底同音色——与克隆分支互斥。"""
+    vc = {"backend": "avatar_clone", "voice": "clone-x",
+          "rvc": {"enabled": True},
+          "voice_profile": {"enabled": True, "backend": "avatar_clone"}}
+    out, tag = route_voice_cfg_for_text(vc, _YUE_TEXT, _ROUTE_ON)
+    assert tag == "yue"
+    assert out["backend"] == "edge_tts"
+    assert out["voice_profile"] == {"enabled": False}
+    assert "rvc" not in out
+    assert out["fallback_voice"] == out["voice"]
+
+
 def test_builtin_map_voices_language_consistent():
     """内置映射表自洽：键=音色 ID 的语言前缀（fil 别名 tl 除外）。"""
     alias = {"tl": "fil"}
@@ -315,3 +393,276 @@ def test_route_stats_sanitizes_dirty_tags():
     d = st.dump()
     assert d["routed"] == {"en": 1}
     assert d["rejected"] == {"unknown": 1}
+
+
+# ══ 克隆链语种能力表（P0 2026-08-31「日文怪声」：effective-config.voice_langs
+#    数据源，前端据此在「跟随翻译发声」目标语超出引擎能力时生成前警示）══════
+
+def test_clone_voice_langs_hub_engine_pinned():
+    """hub 开 + 引擎钉住 → 按引擎表（IndexTTS-2 只有中英=事故根因场景）。"""
+    from src.ai.lang_voice_route import clone_voice_langs
+    av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts"}}
+    assert clone_voice_langs(av, "avatar_clone", "lin_xiaoyu") == ("zh", "en")
+    # 引擎名归一（别名/大小写）也认得
+    av2 = {"hub_fish": {"enabled": True, "tts_engine": "IndexTTS-2"}}
+    assert clone_voice_langs(av2, "avatar_clone", "x") == ("zh", "en")
+    av3 = {"hub_fish": {"enabled": True, "tts_engine": "fish_speech"}}
+    assert "ja" in clone_voice_langs(av3, "avatar_clone", "x")
+
+
+def test_clone_voice_langs_hub_unknown_engine_returns_empty():
+    """hub 档上引擎未钉/未登记 → ()=能力未知，前端不警示（宁漏不冤枉）。"""
+    from src.ai.lang_voice_route import clone_voice_langs
+    assert clone_voice_langs(
+        {"hub_fish": {"enabled": True}}, "avatar_clone", "x") == ()
+    assert clone_voice_langs(
+        {"hub_fish": {"enabled": True, "tts_engine": "totally_new_engine"}},
+        "avatar_clone", "x") == ()
+
+
+def test_clone_voice_langs_allowlist_miss_falls_to_backend_table():
+    """hub 开但人设不在 allowlist → 主路是本地克隆链，按后端缺省表。"""
+    from src.ai.lang_voice_route import clone_voice_langs
+    av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                       "persona_allowlist": ["a", "b"]}}
+    # avatar_clone=7852 CosyVoice3（zh/en/ja/ko）
+    assert clone_voice_langs(av, "avatar_clone", "not_in_list") == \
+        ("zh", "en", "ja", "ko")
+    # minicpm_clone 契约家族保守中英
+    assert clone_voice_langs(av, "minicpm_clone", "not_in_list") == ("zh", "en")
+
+
+def test_clone_voice_langs_operator_override_wins():
+    """运营显式覆写 avatar_voice.voice_langs 最高优先（去重+前缀归一）。"""
+    from src.ai.lang_voice_route import clone_voice_langs
+    av = {"voice_langs": ["ZH", "en", "ja", "zh-TW", ""],
+          "hub_fish": {"enabled": True, "tts_engine": "index_tts"}}
+    assert clone_voice_langs(av, "avatar_clone", "x") == ("zh", "en", "ja")
+
+
+def test_clone_voice_langs_unknown_backend_empty_and_never_raises():
+    from src.ai.lang_voice_route import clone_voice_langs
+    assert clone_voice_langs({}, "edge_tts", "") == ()
+    assert clone_voice_langs(None, "", "") == ()
+
+
+# ══ 合成前语种能力闸 clone_lang_gate（P0 2026-08-31：UI 警示之外的全链收口，
+#    TTSPipeline 在合成前单点消费；A 线/B 线/主动触达自动链自此不再产怪声）══════
+
+_AV_HUB_INDEX = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                              "persona_allowlist": ["p1"]}}
+
+
+def test_clone_lang_gate_blocks_ja_on_index_tts():
+    """事故根因场景：日文文本 + hub 钉 IndexTTS-2（仅中英）→ 拦（返回 ja）。"""
+    from src.ai.lang_voice_route import clone_lang_gate
+    txt = "どこにいるの。ご飯は食べた？一緒に遊びに行こうよ。"
+    assert clone_lang_gate(txt, _AV_HUB_INDEX, "avatar_clone", "p1") == "ja"
+    # 泰文同理（脚本明确、表内没有）
+    assert clone_lang_gate(
+        "สวัสดีค่ะ วันนี้เป็นยังไงบ้าง", _AV_HUB_INDEX, "avatar_clone", "p1") == "th"
+
+
+def test_clone_lang_gate_passes_supported_and_unknown():
+    """中英照常放行；语种不明/短文本/能力表未知 → 放行（宁可漏拦不误拦）。"""
+    from src.ai.lang_voice_route import clone_lang_gate
+    av = _AV_HUB_INDEX
+    assert clone_lang_gate("今天过得怎么样呀？", av, "avatar_clone", "p1") == ""
+    assert clone_lang_gate("How was your day today?", av, "avatar_clone", "p1") == ""
+    assert clone_lang_gate("OK", av, "avatar_clone", "p1") == ""      # 短文本→unknown
+    assert clone_lang_gate("", av, "avatar_clone", "p1") == ""
+    # 能力表未知（hub 引擎未钉）→ 不拦
+    assert clone_lang_gate(
+        "どこにいるの。ご飯は食べた？", {"hub_fish": {"enabled": True}},
+        "avatar_clone", "p1") == ""
+
+
+def test_clone_lang_gate_non_clone_backend_never_blocks():
+    """edge/openai 等非克隆后端不归本闸管（edge 的语种由 lang_voice_route 路由）。"""
+    from src.ai.lang_voice_route import clone_lang_gate, is_clone_backend
+    txt = "どこにいるの。ご飯は食べた？"
+    assert clone_lang_gate(txt, _AV_HUB_INDEX, "edge_tts", "p1") == ""
+    assert clone_lang_gate(txt, _AV_HUB_INDEX, "", "p1") == ""
+    assert is_clone_backend("avatar_clone") and is_clone_backend("minicpm_clone")
+    assert not is_clone_backend("edge_tts") and not is_clone_backend("")
+
+
+def test_clone_lang_gate_kaomoji_kana_not_misjudged_as_ja():
+    """中文正文夹颜文字假名（ヾ(≧▽≦*)o）→ 不得拦成 ja——拦错=中文被转去
+    edge 日语声念「日本腔中文」（2026-07-23 事故形态）。真日文（假名占主体）照拦。"""
+    from src.ai.lang_voice_route import clone_lang_gate
+    zh_kaomoji = "好呀好呀，今天超开心的啦 ヾ(≧▽≦*)o 等你消息哦"
+    assert clone_lang_gate(zh_kaomoji, _AV_HUB_INDEX, "avatar_clone", "p1") == ""
+    real_ja = "今日はほんとに楽しかったよ、また遊ぼうね"
+    assert clone_lang_gate(real_ja, _AV_HUB_INDEX, "avatar_clone", "p1") == "ja"
+
+
+def test_clone_lang_gate_respects_operator_override():
+    """运营显式 voice_langs 覆写含 ja → 日文放行（部署方最了解自家节点）。"""
+    from src.ai.lang_voice_route import clone_lang_gate
+    av = {"voice_langs": ["zh", "en", "ja"],
+          "hub_fish": {"enabled": True, "tts_engine": "index_tts"}}
+    assert clone_lang_gate(
+        "どこにいるの。ご飯は食べた？", av, "avatar_clone", "p1") == ""
+
+
+# ══ 繁→简发音输入 to_simplified_for_tts（P0-3 2026-08-31：zh-tw 零成本进克隆
+#    覆盖——繁简同音，只转喂给引擎的文本；日文/粤语/非中文内建豁免）══════════
+
+def test_to_simplified_for_tts_converts_traditional():
+    import pytest as _pytest
+    _pytest.importorskip("opencc")
+    from src.ai.lang_voice_route import to_simplified_for_tts
+    out = to_simplified_for_tts("時間還早，我們一起去聽寫測試吧")
+    assert "时间" in out and "听写" in out and "們" not in out
+
+
+def test_to_simplified_for_tts_leaves_japanese_alone():
+    """日文汉字与繁体同形（聞く→闻く 会把日文改成简中混排）→ 含假名文本原样返回。"""
+    from src.ai.lang_voice_route import to_simplified_for_tts
+    ja = "ニュースを聞くのが好きです"
+    assert to_simplified_for_tts(ja) == ja
+
+
+def test_to_simplified_for_tts_leaves_cantonese_alone():
+    """粤语用字不属繁简映射且有专线路由 → 粤语文本原样返回。"""
+    from src.ai.lang_voice_route import to_simplified_for_tts
+    yue = "你而家喺邊度呀？我哋一齊去食飯啦，唔好咁晏喎"
+    assert to_simplified_for_tts(yue) == yue
+
+
+def test_to_simplified_for_tts_identity_on_simplified_and_soft_fail():
+    from src.ai.lang_voice_route import to_simplified_for_tts
+    s = "今天过得怎么样呀"
+    assert to_simplified_for_tts(s) == s
+    assert to_simplified_for_tts("") == ""
+    assert to_simplified_for_tts(None) in ("", None)  # 防御式：绝不抛
+
+
+# ══ P1 语种→引擎路由（hub_fish.lang_engines，2026-08-31 全语种克隆地基）═══════
+# 能力表（clone_voice_langs）与择引擎（hub_engine_for_lang）读同一份配置，
+# 「闸门说能念」与「合成真用那台引擎」口径自动一致。
+
+def test_clone_voice_langs_lang_engines_extends_capability():
+    from src.ai.lang_voice_route import clone_voice_langs
+    av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                       "lang_engines": {"ja": "fish_speech"}}}
+    assert clone_voice_langs(av, "avatar_clone", "p") == ("zh", "en", "ja")
+    # 映射到未登记引擎的语种不虚报能力
+    av2 = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                        "lang_engines": {"th": "brand_new_engine"}}}
+    assert clone_voice_langs(av2, "avatar_clone", "p") == ("zh", "en")
+    # 主引擎未钉 → 仍是能力未知（映射不足以撑起整条主路的判定）
+    av3 = {"hub_fish": {"enabled": True,
+                        "lang_engines": {"ja": "fish_speech"}}}
+    assert clone_voice_langs(av3, "avatar_clone", "p") == ()
+
+
+def test_hub_engine_for_lang_lookup():
+    from src.ai.lang_voice_route import hub_engine_for_lang
+    av = {"hub_fish": {"enabled": True,
+                       "lang_engines": {"ja": "fish_speech",
+                                        "ko-KR": "cosyvoice"}}}
+    assert hub_engine_for_lang(av, "ja") == "fish_speech"
+    assert hub_engine_for_lang(av, "ja-JP") == "fish_speech"   # 查询带地区码
+    assert hub_engine_for_lang(av, "ko") == "cosyvoice"        # 配置键带地区码
+    assert hub_engine_for_lang(av, "en") == ""
+    assert hub_engine_for_lang({}, "ja") == ""
+    assert hub_engine_for_lang(None, "") == ""
+
+
+def test_clone_lang_gate_respects_lang_engines_routing():
+    """有 {ja: fish_speech} 映射 → 日文放行（会被改派到会念的引擎）；泰文仍拦。"""
+    from src.ai.lang_voice_route import clone_lang_gate
+    av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                       "persona_allowlist": ["p1"],
+                       "lang_engines": {"ja": "fish_speech"}}}
+    assert clone_lang_gate(
+        "どこにいるの。ご飯は食べた？", av, "avatar_clone", "p1") == ""
+    assert clone_lang_gate(
+        "สวัสดีค่ะ วันนี้เป็นยังไงบ้าง", av, "avatar_clone", "p1") == "th"
+
+
+def test_clone_voice_langs_hub_branch_only_for_avatar_family():
+    """hub 表只套 avatar_clone 家族——minicpm/lan/coqui 直连节点根本不经 hub，
+    套 hub 引擎表会把「语种路由改写后的后端」误判（2026-08-31 修）。"""
+    from src.ai.lang_voice_route import clone_voice_langs
+    av = {"hub_fish": {"enabled": True, "tts_engine": "fish_speech",
+                       "persona_allowlist": ["p1"]}}
+    assert "ja" in clone_voice_langs(av, "avatar_clone", "p1")   # hub 表（fish）
+    assert clone_voice_langs(av, "", "p1") != ()                 # backend 空沿用 hub 语义
+    assert clone_voice_langs(av, "minicpm_clone", "p1") == ("zh", "en")   # 后端表
+    assert clone_voice_langs(av, "voice_clone_lan", "p1") == ("zh", "en")
+
+
+# ══ 通用「语种 → 克隆节点」路由 voice_lang_route.clone_langs（P2 2026-08-31，
+#    粤语专线机制泛化：同一把声讲外语，节点×语种先过验收工具再落配置）══════════
+
+_ROUTE_CFG_JA = {"voice_lang_route": {
+    "enabled": True,
+    "follow_text": {"enabled": False},     # 隔离：只测克隆路由本身
+    "clone_langs": {"ja": {"voice_profile": {
+        "clone_base_url": "http://127.0.0.1:7852",
+        "clone_text_prefix": "<|ja|>"}}},
+}}
+
+
+def test_clone_lang_route_rewrites_backend_profile_and_clears_gate():
+    from src.ai.lang_voice_route import route_voice_cfg_for_text
+    vc = {"backend": "avatar_clone",
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "reference_audio_path": "x/ref.wav"}}
+    out, tag = route_voice_cfg_for_text(
+        vc, "今日はどこかへ出かけましたか？", _ROUTE_CFG_JA)
+    assert tag == "ja"
+    assert out["backend"] == "minicpm_clone"          # 缺省直连后端
+    vp = out["voice_profile"]
+    assert vp["backend"] == "minicpm_clone"           # 强制对齐防人设档静默盖回
+    assert vp["clone_base_url"] == "http://127.0.0.1:7852"
+    assert vp["clone_text_prefix"] == "<|ja|>"
+    assert vp["reference_audio_path"] == "x/ref.wav"  # 参考音跟人设走=同一把声
+    assert out["fallback_voice"] == "ja-JP-NanamiNeural"   # 兜底按语种取内置表
+    assert out["_lang_route_cleared"] == "ja"
+    assert "clone_base_url" not in vc["voice_profile"]     # 不改入参
+
+
+def test_clone_lang_route_skips_zh_unknown_unlisted():
+    from src.ai.lang_voice_route import route_voice_cfg_for_text
+    vc = {"backend": "avatar_clone"}
+    out, tag = route_voice_cfg_for_text(vc, "今天过得怎么样呀？", _ROUTE_CFG_JA)
+    assert tag == "" and out.get("_lang_route_cleared") is None    # zh 不路由
+    out2, tag2 = route_voice_cfg_for_text(
+        vc, "สวัสดีค่ะ วันนี้เป็นยังไงบ้าง", _ROUTE_CFG_JA)
+    assert tag2 == "" and out2.get("_lang_route_cleared") is None  # 映射外不路由
+    out3, tag3 = route_voice_cfg_for_text(vc, "OK", _ROUTE_CFG_JA)
+    assert tag3 == "" and out3.get("_lang_route_cleared") is None  # unknown 不路由
+
+
+def test_clone_lang_route_yields_to_cantonese_lane():
+    """粤语专线（特征字检测）优先于通用克隆路由——yue 文本走 yue 专线。"""
+    from src.ai.lang_voice_route import route_voice_cfg_for_text
+    cfg = {"voice_lang_route": {
+        "enabled": True,
+        "cantonese": {"voice": "zh-HK-HiuMaanNeural"},
+        "clone_langs": {"ja": {}},
+    }}
+    out, tag = route_voice_cfg_for_text(
+        {"backend": "edge_tts"}, "你而家喺邊度呀？我哋一齊去食飯啦", cfg)
+    assert tag == "yue"
+
+
+def test_clone_route_langs_helper():
+    """主动触达 planner 的能力并集数据源：路由整体关=空；zh 剔除；前缀归一。"""
+    from src.ai.lang_voice_route import clone_route_langs
+    cfg = {"voice_lang_route": {"enabled": True, "clone_langs": {
+        "ja": {"backend": "minicpm_clone"},
+        "KO-kr": {"backend": "minicpm_clone"},
+        "zh": {"backend": "minicpm_clone"},     # zh 不属外语路由语义，剔除
+        "th": "not-a-dict",                     # 垃圾值容忍
+    }}}
+    assert clone_route_langs(cfg) == ("ja", "ko")
+    assert clone_route_langs(
+        {"voice_lang_route": {"enabled": False,
+                              "clone_langs": {"ja": {}}}}) == ()
+    assert clone_route_langs({}) == ()
+    assert clone_route_langs(None) == ()

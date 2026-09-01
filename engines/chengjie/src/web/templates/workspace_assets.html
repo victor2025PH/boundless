@@ -27,6 +27,38 @@
   .ac-idrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   .ac-idrow .nm{font-weight:700;color:var(--tk-text);font-size:14px;}
   .ac-idrow .aid{font-size:11px;color:var(--tk-text-muted);}
+  /* 身份头（P0 2026-08-28）：头像给 17 张同质卡片一个视觉锚点，主标题走四级
+     回落，副行是脱敏后的平台标识 —— 原实现把 44 字的 LINE MID 当名字显示两遍。 */
+  .ac-head-row{display:flex;align-items:center;gap:10px;}
+  .ac-av{width:38px;height:38px;border-radius:50%;flex:none;display:flex;
+    align-items:center;justify-content:center;color:#fff;font-weight:700;
+    font-size:15px;overflow:hidden;}
+  .ac-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+  .ac-head-main{flex:1;min-width:0;}
+  .ac-nm2{font-weight:700;color:var(--tk-text);font-size:14px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .ac-sub2{font-size:11px;color:var(--tk-text-muted);display:flex;gap:6px;
+    align-items:center;flex-wrap:wrap;}
+  .ac-idbtn{border:none;background:transparent;padding:0 2px;cursor:pointer;
+    color:var(--tk-text-muted);font-size:11px;border-radius:4px;}
+  .ac-idbtn:hover{color:var(--tk-brand);}
+  .ac-idbtn:focus-visible{outline:2px solid var(--tk-brand);outline-offset:1px;}
+  .ac-nameit{font-size:10.5px;color:var(--tk-brand);border:1px dashed var(--tk-brand);
+    background:transparent;border-radius:8px;padding:0 6px;cursor:pointer;}
+  /* 动作菜单：溢出收纳，危险项与常规项之间有分隔（危险按钮不该好点） */
+  .ac-menuwrap{position:relative;}
+  .ac-menu{position:absolute;right:0;bottom:calc(100% + 4px);z-index:20;
+    min-width:172px;background:var(--tk-surface);border:1px solid var(--tk-border);
+    border-radius:10px;box-shadow:var(--tk-shadow);padding:4px;display:none;}
+  .ac-menu.open{display:block;}
+  .ac-menu button{display:block;width:100%;text-align:left;border:none;
+    background:transparent;color:var(--tk-text);font-size:12.5px;padding:6px 9px;
+    border-radius:7px;cursor:pointer;}
+  .ac-menu button:hover{background:var(--tk-surface-2);}
+  .ac-menu button.danger{color:var(--tk-danger-ink);}
+  .ac-menu-sep{height:1px;background:var(--tk-border);margin:4px 2px;}
+  .ac-note{font-size:10.5px;color:var(--tk-text-muted);margin-top:4px;line-height:1.45;}
+  .ac-kpi .n{font-size:10.5px;color:var(--tk-text-muted);margin-top:3px;line-height:1.4;}
   .ac-st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;}
   .ac-st.banned{color:var(--tk-danger-ink);background:repeating-linear-gradient(135deg, rgba(239,68,68,.14) 0 6px, rgba(239,68,68,.26) 6px 12px);}
   .ac-st.online{color:var(--tk-ok-ink);background:rgba(16,185,129,.14);}
@@ -129,6 +161,56 @@
     asset_snapshot: window.T('ac_k_snapshot')
   };
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  /* ===== 账号身份可读化（P0 2026-08-28）=====
+     老板原话「一些号码是很长的字串，也看不懂」——那些是平台自己的账号标识
+     （LINE 的 44 字 MID / Messenger 的 FB 数字 id / WhatsApp 的手机号），不是乱码。
+     旧实现主标题直接用 account_id、副行再打印一遍，同一串东西出现两次。
+     ⚠ self_name/self_username/self_avatar 由路由在**下次重启后**才带上（模板热更新
+     先于 .py 生效）→ 全部防御式消费：缺字段就退回旧的「脱敏 id」形态，绝不报错。 */
+  var MASK_PHONE = true;   // 与收件箱 _maskAcctId 同语义（手机号脱敏防截图外泄）
+  function maskId(id){
+    var s = String(id==null?'':id);
+    var m = s.match(/^(\+?)(\d{7,})$/);
+    if(m){
+      if(!MASK_PHONE) return s;
+      var d = m[2];
+      return m[1]+d.slice(0,3)+'****'+d.slice(-3);
+    }
+    return s.length>18 ? s.slice(0,17)+'\u2026' : s;
+  }
+  /* 四级回落：别名 > 平台昵称 > @用户名 > 脱敏 id。与收件箱账号抽屉同一条链
+     （那边早就这么做了，本页此前没接上）。 */
+  function acctName(a){
+    return String(a.label||'').trim()
+      || String(a.self_name||'').trim()
+      || (a.self_username ? ('@'+a.self_username) : '')
+      || maskId(a.account_id);
+  }
+  function isUnnamed(a){
+    return !String(a.label||'').trim() && !String(a.self_name||'').trim()
+      && !String(a.self_username||'').trim();
+  }
+  var AV_GRAD=[['#60a5fa','#2563eb'],['#38bdf8','#0284c7'],['#34d399','#059669'],
+    ['#a78bfa','#7c3aed'],['#f472b6','#db2777'],['#fbbf24','#d97706'],
+    ['#22d3ee','#0891b2'],['#818cf8','#4f46e5'],['#fb7185','#e11d48'],
+    ['#2dd4bf','#0d9488'],['#c084fc','#9333ea'],['#4ade80','#16a34a']];
+  function avGrad(seed){
+    var s=String(seed||'?'), h=0;
+    for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; }
+    var g=AV_GRAD[h%AV_GRAD.length];
+    return 'linear-gradient(135deg,'+g[0]+' 0%,'+g[1]+' 100%)';
+  }
+  function avatarHtml(a){
+    var nm = acctName(a);
+    var ini = (nm.replace(/^@/,'').trim().charAt(0) || String(a.platform||'?').charAt(0)).toUpperCase();
+    var grad = avGrad(a.platform+':'+a.account_id);
+    if(a.self_avatar){
+      return '<div class="ac-av" style="background:'+grad+'">'
+        + '<img src="'+esc(a.self_avatar)+'" alt="" data-fallback="'+esc(ini)+'">'
+        + '</div>';
+    }
+    return '<div class="ac-av" style="background:'+grad+'">'+esc(ini)+'</div>';
+  }
   function fmtN(n){try{return Number(n||0).toLocaleString();}catch(e){return String(n||0);}}
   function fmtMB(b){b=Number(b||0);if(b<=0)return '0 MB';var mb=b/1048576;return (mb>=100?Math.round(mb):mb.toFixed(1))+' MB';}
   /* 日期一律走全站统一 wsFmtDateTime（随 UI 语言本地化；勿改回内联浏览器 locale
@@ -142,9 +224,10 @@
       .finally(function(){clearTimeout(t);});
   }
 
-  function kpiHtml(v, label, sub, subBad){
+  function kpiHtml(v, label, sub, subBad, note){
     return '<div class="ac-kpi"><div class="v">'+v+'</div><div class="l">'+esc(label)+'</div>'
-      +(sub?('<div class="s'+(subBad?' bad':'')+'">'+esc(sub)+'</div>'):'')+'</div>';
+      +(sub?('<div class="s'+(subBad?' bad':'')+'">'+esc(sub)+'</div>'):'')
+      +(note?('<div class="n">'+esc(note)+'</div>'):'')+'</div>';
   }
   function renderKpis(d){
     var t = d.totals||{};
@@ -154,8 +237,12 @@
       (t.banned>0 ? (window.T('ac_st_banned')+' '+fmtN(t.banned)) : ''), t.banned>0);
     html += kpiHtml(fmtN(t.conversations), window.T('ac_kpi_convs'), '');
     html += kpiHtml(fmtN(t.messages), window.T('ac_kpi_msgs'), '');
-    html += kpiHtml(fmtN(t.contacts), window.T('ac_kpi_contacts'), '');
-    html += kpiHtml(fmtN(t.media_files), window.T('ac_kpi_media'), fmtMB(t.media_bytes));
+    // 两个 KPI 各带一句口径脚注：联系人是各账号相加（同一人重复计），媒体的
+    // 「每账号数」与「总览数」本就是两套口径（消息附件数 vs 磁盘文件数）。
+    html += kpiHtml(fmtN(t.contacts), window.T('ac_kpi_contacts'), '', false,
+      window.T('ac_note_contacts'));
+    html += kpiHtml(fmtN(t.media_files), window.T('ac_kpi_media'),
+      fmtMB(t.media_bytes), false, window.T('ac_note_media'));
     html += kpiHtml(bk ? '📦' : '—', window.T('ac_backup_last'),
       bk ? (fmtTs(bk.ts)+' · '+fmtMB(bk.bytes)) : window.T('ac_backup_none'));
     document.getElementById('ac-kpis').innerHTML = html;
@@ -173,10 +260,26 @@
     function w(x){return tot>0 ? String(100*Number(x||0)/tot) : '0';}
     var covered = Number(reach.covered||0);
     var covPct = tot>0 ? Math.round(100*covered/tot)+'%' : '—';
+    var nm = acctName(a);
     var html = '<div class="ac-card'+(st==='banned'?' banned':'')+'">';
-    html += '<div class="ac-idrow"><span class="nm">'+esc(a.label||a.account_id)+'</span>'
-      +'<span class="ac-st '+stCls+'">'+esc(ST_LABEL[stCls]||st)+'</span>'
-      +'<span class="aid">'+esc(a.platform)+' · '+esc(a.account_id)+'</span></div>';
+    // 身份头：头像 + 主标题（四级回落）+ 状态徽章 / 副行＝平台 · 脱敏 id + 复制
+    html += '<div class="ac-head-row">'
+      + avatarHtml(a)
+      + '<div class="ac-head-main">'
+      + '<div class="ac-nm2" title="'+esc(nm)+'">'+esc(nm)+'</div>'
+      + '<div class="ac-sub2"><span>'+esc(a.platform)+'</span>'
+      + '<span title="'+esc(a.account_id)+'">'+esc(maskId(a.account_id))+'</span>'
+      + '<button type="button" class="ac-idbtn" data-act="copyid"'
+      + ' data-aid="'+esc(a.account_id)+'"'
+      + ' title="'+esc(window.T('ac_id_copy'))+'"'
+      + ' aria-label="'+esc(window.T('ac_id_copy'))+'">⧉</button>'
+      + (isUnnamed(a) ? ('<button type="button" class="ac-nameit" data-act="rename"'
+          + ' data-pl="'+esc(a.platform)+'" data-aid="'+esc(a.account_id)+'"'
+          + ' title="'+esc(window.T('ac_name_it_t'))+'">'
+          + esc(window.T('ac_name_it'))+'</button>') : '')
+      + '</div></div>'
+      + '<span class="ac-st '+stCls+'">'+esc(ST_LABEL[stCls]||st)+'</span>'
+      + '</div>';
     if(st==='banned' && a.ban_reason){
       html += '<div class="ac-banrsn">⚠ '+esc(a.ban_reason)+'</div>';
     }
@@ -198,16 +301,56 @@
       + '<span><i class="dot user"></i>'+esc(window.T('ac_lg_user'))+' '+fmtN(reach.username_only)+'</span>'
       + '<span><i class="dot phone"></i>'+esc(window.T('ac_lg_phone'))+' '+fmtN(reach.phone_only)+'</span>'
       + '<span><i class="dot none"></i>'+esc(window.T('ac_lg_none'))+' '+fmtN(reach.none)+'</span>'
-      + '</div></div>';
+      + '</div>'
+      // 口径诚实化：0% 不加解释会被读成「客户全丢了」，而对 Messenger 这类平台
+      // 那是**口径必然**（会话档案天生没有 username/phone）。派生来源同样要说清。
+      + ((a.no_handle_platform && covered===0 && tot>0)
+          ? ('<div class="ac-note">ⓘ '+esc(window.T('ac_reach_nohandle'))+'</div>') : '')
+      + ((Number(reach.derived||0)>0)
+          ? ('<div class="ac-note">ⓘ '+esc(window.Tf('ac_reach_derived',{n:reach.derived}))+'</div>') : '')
+      + '</div>';
     html += '<div class="ac-meta">'+esc(window.T('ac_last_active'))+': '+fmtTs(a.last_ts)
       +' · '+esc(window.T('ac_media_files'))+': '+fmtN(c.media_files)+'</div>';
+    var pl = esc(a.platform), aid = esc(a.account_id);
+    var d = ' data-pl="'+pl+'" data-aid="'+aid+'"';
     html += '<div class="ac-ctas">'
-      + '<button class="ac-actbtn" type="button" data-act="export" data-pl="'+esc(a.platform)+'" data-aid="'+esc(a.account_id)+'">⬇ '+esc(window.T('ac_cta_export'))+'</button>';
+      + '<button class="ac-actbtn" type="button" data-act="export"'+d+'>⬇ '
+      + esc(window.T('ac_cta_export'))+'</button>';
     if(FEATURES.export_migration){
-      html += '<button class="ac-actbtn primary" type="button" data-act="migrate" data-pl="'+esc(a.platform)+'" data-aid="'+esc(a.account_id)+'">📦 '+esc(window.T('ac_cta_migrate'))+'</button>';
+      html += '<button class="ac-actbtn primary" type="button" data-act="migrate"'+d+'>📦 '
+        + esc(window.T('ac_cta_migrate'))+'</button>';
     } else if(st==='banned'){
       html += '<span class="ac-hint">'+esc(window.T('ac_migrate_pending'))+'</span>';
     }
+    /* 溢出菜单：重命名 / 恢复（仅 removed）/ 彻底删除（仅历史态）。
+       ⚠ 全走事件委托 + data-act，**不用内联 onclick** —— 本页脚本是 IIFE，内联
+       handler 必须挂 window 才可达（本仓一天内两次实锤的死按钮根因）；委托模式
+       从根上绕开那个陷阱，动态生成的行也零接线自动生效。
+       purge_hint 是后端粗筛（旧后端缺该字段 → 用状态兜底，仍然只对历史态出现）；
+       真正的判定权威是点下去之后 GET purge-history 的 purgeable。 */
+    var items = [];
+    items.push('<button type="button" data-act="rename"'+d+'>✎ '
+      + esc(window.T('ac_cta_rename'))+'</button>');
+    if(st==='removed'){
+      items.push('<button type="button" data-act="restore"'+d+'>↺ '
+        + esc(window.T('ac_cta_restore'))+'</button>');
+    }
+    var purgeOk = (a.purge_hint !== undefined)
+      ? !!a.purge_hint
+      : (st==='offline' || st==='removed' || st==='history_only' || st==='banned');
+    var danger = purgeOk
+      ? ('<div class="ac-menu-sep"></div><button type="button" class="danger"'
+         + ' data-act="purge"'+d+' data-count="'+Number(c.conversations||0)+'"'
+         + ' title="'+esc(window.T('ac_cta_purge_t'))+'">🗑 '
+         + esc(window.T('ac_cta_purge'))+'</button>')
+      : '';
+    html += '<span class="ac-menuwrap">'
+      + '<button class="ac-actbtn" type="button" data-act="menu"'+d
+      + ' aria-haspopup="menu" aria-expanded="false"'
+      + ' title="'+esc(window.T('ac_more'))+'"'
+      + ' aria-label="'+esc(window.T('ac_more'))+'">⋯</button>'
+      + '<span class="ac-menu" role="menu">'+items.join('')+danger+'</span>'
+      + '</span>';
     html += '</div></div>';
     return html;
   }
@@ -306,15 +449,181 @@
       .catch(function(){ renderLedger([]); });
   }
 
+  /* ===== 账号生命周期动作（P0 2026-08-28）=====
+     端点自 2026-08-17 就存在，此前只有收件箱账号抽屉的三级溢出菜单能到——
+     「账号资产中心」这个名字下面找不到删除，是老板报障的第一条。这里复用同一批
+     端点，零新后端。 */
+  function jpost(url, body, timeoutMs){
+    var ctl = new AbortController();
+    var t = setTimeout(function(){ctl.abort();}, timeoutMs||30000);
+    return fetch(url, {
+      method:'POST', credentials:'same-origin', signal:ctl.signal,
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body||{})
+    }).finally(function(){clearTimeout(t);});
+  }
+  function askConfirm(text, opts){
+    opts = opts || {};
+    if(window.AITRNotify && AITRNotify.confirm){
+      return AITRNotify.confirm(text, {
+        okText: opts.okText || window.T('ac_purge_go'),
+        cancelText: window.T('ac_cancel'),
+        danger: opts.danger !== false
+      });
+    }
+    // 总线缺席（旧页面缓存）→ 回落原生，绝不因为缺依赖就让动作静默失败
+    var v = false;
+    try{ v = window.confirm(text); }catch(e){}
+    return Promise.resolve(v);
+  }
+  function opFail(res, key){
+    if(res && res.status===403){ toast(window.T('ac_no_perm'), '#dc2626'); return; }
+    if(res && res.status===404){ toast(window.T('ac_purge_unready'), '#d97706'); return; }
+    if(res && res.status===409){ toast(window.T('ac_purge_blocked'), '#d97706'); return; }
+    toast(window.T(key), '#dc2626');
+  }
+  function copyId(aid){
+    var done = function(){ toast(window.T('ac_id_copied'), '#16a34a'); };
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(aid).then(done, function(){
+          toast(window.T('ac_id_copy_fail'), '#d97706');
+        });
+        return;
+      }
+    }catch(e){}
+    // 无 clipboard API（http 非安全上下文，LAN 部署常见）→ 隐藏 textarea + execCommand
+    try{
+      var ta = document.createElement('textarea');
+      ta.value = aid;
+      ta.style.cssText = 'position:fixed;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      ta.remove();
+      if(ok){ done(); return; }
+    }catch(e){}
+    toast(window.T('ac_id_copy_fail'), '#d97706');
+  }
+  function doRename(pl, aid, cur){
+    var v = null;
+    try{ v = window.prompt(window.T('ac_rename_prompt'), cur||''); }catch(e){ v = null; }
+    if(v === null) return;                      // 取消
+    jpost('/api/accounts/'+encodeURIComponent(pl)+'/'+encodeURIComponent(aid)+'/label',
+          {label: String(v).trim().slice(0,40)}, 20000)
+      .then(function(r){
+        if(!r.ok){ opFail(r, 'ac_rename_fail'); return; }
+        toast(window.T('ac_rename_ok'), '#16a34a');
+        load(true);
+      })
+      .catch(function(){ toast(window.T('ac_rename_fail'), '#dc2626'); });
+  }
+  function doRestore(pl, aid, nm){
+    askConfirm(window.Tf('ac_restore_confirm',{name:nm}),
+               {okText: window.T('ac_cta_restore'), danger:false})
+      .then(function(ok){
+        if(!ok) return;
+        return jpost('/api/accounts/'+encodeURIComponent(pl)+'/'+encodeURIComponent(aid)+'/restore',
+                     {}, 30000).then(function(r){
+          if(!r.ok){ opFail(r, 'ac_restore_fail'); return; }
+          toast(window.T('ac_restore_ok'), '#16a34a');
+          load(true);
+        });
+      })
+      .catch(function(){ toast(window.T('ac_restore_fail'), '#dc2626'); });
+  }
+  /* 彻底删除：**先拉体量预估再问**（GET 同路径零副作用）——「3 会话 30 条」与
+     「3 会话 8000 条」是两种决定；purgeable=false 在弹框之前就诚实拦下，省得走完
+     两步确认才撞 409。两步确认之间刻意提醒先导出备份。 */
+  function doPurge(pl, aid, nm, fallbackCount){
+    var base = '/api/accounts/'+encodeURIComponent(pl)+'/'+encodeURIComponent(aid)
+      + '/purge-history';
+    jfetch(base, 20000)
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(pv){
+        if(pv && pv.purgeable === false){
+          toast(window.T('ac_purge_blocked'), '#d97706');
+          return null;
+        }
+        var msg;
+        if(pv && typeof pv.messages === 'number'){
+          msg = window.Tf('ac_purge_confirm1',
+            {name:nm, c:fmtN(pv.conversations), m:fmtN(pv.messages)});
+        } else if(fallbackCount){
+          msg = window.Tf('ac_purge_confirm1',
+            {name:nm, c:fmtN(fallbackCount), m:'?'});
+        } else {
+          msg = window.Tf('ac_purge_confirm1_unknown', {name:nm});
+        }
+        return askConfirm(msg);
+      })
+      .then(function(ok){
+        if(!ok) return null;
+        return askConfirm(window.T('ac_purge_confirm2'));
+      })
+      .then(function(ok2){
+        if(!ok2) return null;
+        return jpost(base, {}, 60000).then(function(r){
+          if(!r.ok){ opFail(r, 'ac_purge_fail'); return; }
+          return r.json().then(function(d){
+            toast(window.Tf('ac_purge_ok',{n:fmtN((d&&d.purged_rows)||0)}), '#16a34a');
+            load(true);
+          });
+        });
+      })
+      .catch(function(){ toast(window.T('ac_purge_fail'), '#dc2626'); });
+  }
+  function closeMenus(except){
+    var list = document.querySelectorAll('#ac-cards .ac-menu.open');
+    for(var i=0;i<list.length;i++){
+      if(list[i] !== except) list[i].classList.remove('open');
+    }
+    var btns = document.querySelectorAll('#ac-cards [data-act="menu"][aria-expanded="true"]');
+    for(var j=0;j<btns.length;j++){
+      var m = btns[j].parentNode ? btns[j].parentNode.querySelector('.ac-menu') : null;
+      if(m !== except) btns[j].setAttribute('aria-expanded','false');
+    }
+  }
+
   document.getElementById('ac-cards').addEventListener('click', function(ev){
     var b = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
-    if(!b) return;
+    if(!b){ closeMenus(null); return; }
     var act = b.getAttribute('data-act');
     var pl = b.getAttribute('data-pl')||'';
     var aid = b.getAttribute('data-aid')||'';
+    var card = b.closest ? b.closest('.ac-card') : null;
+    var nmEl = card ? card.querySelector('.ac-nm2') : null;
+    var nm = nmEl ? nmEl.textContent : aid;
+    if(act==='menu'){
+      var menu = b.parentNode ? b.parentNode.querySelector('.ac-menu') : null;
+      if(!menu) return;
+      var willOpen = !menu.classList.contains('open');
+      closeMenus(menu);
+      menu.classList.toggle('open', willOpen);
+      b.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      return;
+    }
+    closeMenus(null);
     if(act==='export') doExport(pl, aid, b, false);
     else if(act==='migrate') doExport(pl, aid, b, true);
+    else if(act==='copyid') copyId(aid);
+    else if(act==='rename') doRename(pl, aid, (nm===maskId(aid) ? '' : nm));
+    else if(act==='restore') doRestore(pl, aid, nm);
+    else if(act==='purge') doPurge(pl, aid, nm, Number(b.getAttribute('data-count'))||0);
   });
+  // 外点关菜单（菜单在卡片内，容器上的委托只覆盖卡区）
+  document.addEventListener('click', function(ev){
+    if(!ev.target || !ev.target.closest || !ev.target.closest('#ac-cards')) closeMenus(null);
+  });
+  document.addEventListener('keydown', function(ev){
+    if(ev.key === 'Escape') closeMenus(null);
+  });
+  // 头像加载失败 → 回落渐变字首（绝不留空圈）
+  document.getElementById('ac-cards').addEventListener('error', function(ev){
+    var img = ev.target;
+    if(!img || img.tagName !== 'IMG' || !img.parentNode) return;
+    img.parentNode.textContent = img.getAttribute('data-fallback') || '?';
+  }, true);
   document.getElementById('ac-refresh').addEventListener('click', function(){ load(true); });
 
   load(false);

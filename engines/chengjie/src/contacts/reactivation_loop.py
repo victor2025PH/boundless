@@ -125,6 +125,7 @@ class ReactivationLoop:
         first_run_max_per_tick: int = 1,
         platform_priority: Optional[List[str]] = None,
         peer_filter: Optional[Callable[[str, str, str], bool]] = None,
+        sent_hook: Optional[Callable[[dict], None]] = None,
     ) -> None:
         self._scheduler = scheduler
         self._store = store
@@ -155,6 +156,10 @@ class ReactivationLoop:
         # 对方机器人/自家账号守卫（P1 2026-08-03）：(channel, account_id, chat_key)
         # -> True=该跳过。None=旧行为（不拦）。异常按放行（fail-open）。
         self._peer_filter = peer_filter
+        # 实施84 P0-6：真发 enqueue 成功后回调（background 侧用它把 reactivation
+        # 触达落 outreach_log 共享账本——此前只写 journey_events，逃逸在每联系人
+        # 打扰预算（contact_budget）与统一触达时间线之外）。异常绝不影响已完成发送。
+        self._sent_hook = sent_hook
         self._stop_evt: Optional[asyncio.Event] = None
         self._task: Optional[asyncio.Task] = None
 
@@ -501,6 +506,17 @@ class ReactivationLoop:
             get_metrics_store().record_reactivation_scheduled(cand.contact_id)
         except Exception:
             pass
+
+        # 实施84 P0-6：触达落共享账本（outreach_log，经注入的 sent_hook）
+        if self._sent_hook is not None:
+            try:
+                self._sent_hook({
+                    "channel": channel, "account_id": account_id,
+                    "chat_name": chat_name, "contact_id": cand.contact_id,
+                    "silent_days": eff_silent_days,
+                })
+            except Exception:
+                logger.debug("reactivation sent_hook 异常（忽略）", exc_info=True)
 
         # 落 reactivation_sent 事件防重复
         try:

@@ -414,6 +414,60 @@ async () => {
 """
 
 
+# ── S22（#111 0831 skuio「点标成交没反应」）：进行中目标卡按钮活性 ─────────
+# 「标成交」纯前端开表单（零依赖）、「调整期限」开期限编辑器——点了必须有
+# 可见反馈是 #111/#54 的验收本体；哑按钮回归（handler 断链/渲染分支吞掉）
+# 在此直接红。夹具 goal 钉 pace=natural（today/session 刻意无期限编辑器）。
+_SCEN22_JS = r"""
+async () => {
+  const host = document.createElement('div');
+  host.id = 'm_acts';
+  host.style.cssText = 'width:280px;';
+  document.body.appendChild(host);
+  window.__GOAL_MODE = 'active';
+  window.__FX__.goal = Object.assign({}, window.__FX__.goal, { pace: 'natural' });
+  const el = document.createElement('cp-goal');
+  el.context = { conversationId: 'telegram:acc:qa_acts_probe' };
+  host.appendChild(el);
+  const sr = () => el.shadowRoot;
+  const wait = async (fn, n) => {
+    for (let i = 0; i < (n || 60); i++) {
+      const v = fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return null;
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 80));
+  const out = {};
+  const winBtn = await wait(() => sr().querySelector('.gl-acts [data-act="won"]'));
+  out.won_btn = !!winBtn;
+  if (!winBtn) return Object.assign(out, { error: 'no won button on active card' });
+  winBtn.click();
+  const wonForm = await wait(() => sr().querySelector('[data-ref="won_product"]'));
+  out.won_form_opens = !!wonForm;                 // 点了必须有反馈（#111 本体）
+  const cancel = sr().querySelector('[data-act="won_cancel"]');
+  out.won_cancel_btn = !!cancel;
+  if (cancel) { cancel.click(); await tick(); }
+  out.won_form_closed = !sr().querySelector('[data-ref="won_product"]');
+  // 调整期限（#54 同族）：入口可能直连 meta 行或折叠在 ⋯ 菜单里
+  let dl = sr().querySelector('[data-act="deadline_toggle"]');
+  if (!dl) {
+    const more = sr().querySelector('[data-act="more_toggle"]');
+    if (more) { more.click(); await tick(); }
+    dl = sr().querySelector('[data-act="deadline_toggle"]');
+  }
+  out.deadline_btn = !!dl;
+  if (dl) {
+    dl.click();
+    const chip = await wait(() => sr().querySelector('[data-act="deadline_chip"]'));
+    out.deadline_opens = !!chip;                  // 期限编辑器可见=有反馈
+  }
+  return out;
+}
+"""
+
+
 def run(headed: bool) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -486,6 +540,19 @@ def run(headed: bool) -> int:
                          json.dumps(rn, ensure_ascii=False)[:120])
             else:
                 ck.check("[S21] 窄屏挂载渲染", False, str(rn))
+            # ── S22（#111/#54）：进行中卡「标成交/调整期限」点击必须有反馈 ──
+            page.set_viewport_size({"width": 1280, "height": 900})
+            r22 = page.evaluate(_SCEN22_JS)
+            if not isinstance(r22, dict) or r22.get("error"):
+                ck.check("[S22] 进行中卡按钮活性场景执行", False, str(r22))
+            else:
+                ck.check("[S22] 「标成交」点击即开成交表单（点了必有反馈）",
+                         r22.get("won_btn") and r22.get("won_form_opens"),
+                         json.dumps(r22, ensure_ascii=False)[:120])
+                ck.check("[S22b] 成交表单可取消关闭",
+                         r22.get("won_cancel_btn") and r22.get("won_form_closed"))
+                ck.check("[S22c] 「调整期限」点击即开期限编辑器（#54 同族）",
+                         r22.get("deadline_btn") and r22.get("deadline_opens"))
             browser.close()
     return ck.summary()
 

@@ -4018,6 +4018,10 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         fingerprint_id/sources``（sources 标出来源：registry/config/runtime）。
         """
         api_auth(request)
+        # fields=basic（2026-08-30）：轻量档，只回 registry+config 的账号基础态，跳过运行时
+        # 适配器/编排器/会话健康/配额聚合——供前端「先显示账号」首屏骨架用（个位数 ms，不受
+        # 任何 RPA 适配器响应性拖累）；完整态由随后的 loadChats/普通 /api/accounts 覆盖。
+        basic = str(request.query_params.get("fields", "")).lower() == "basic"
         cfg = (config_manager.config if config_manager is not None else {}) or {}
         merged: Dict[tuple, Dict[str, Any]] = {}
 
@@ -4077,6 +4081,24 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 r["label"] = label
             if "config" not in r["sources"]:
                 r["sources"].append("config")
+
+        # 轻量档早返回：running 由 registry status 廉价推得（online/running 即视为在线），
+        # 完整运行时态交给 loadChats/普通档补齐。跳过下方所有运行时/编排/健康/配额聚合。
+        if basic:
+            for a in merged.values():
+                a["running"] = str(a.get("status") or "").lower() in ("online", "running")
+            accounts = sorted(merged.values(),
+                              key=lambda x: (x["platform"], x["account_id"]))
+            mask_phone = bool(
+                ((cfg.get("accounts") or {}).get("self_profile") or {})
+                .get("mask_phone", True))
+            try:
+                _viewer_role = str(request.session.get("role", "") or "")
+            except Exception:
+                _viewer_role = ""
+            return {"ok": True, "accounts": accounts, "count": len(accounts),
+                    "mask_phone": mask_phone, "basic": True,
+                    "viewer_can_manage": _viewer_role not in _ALERT_CFG_DENY_ROLES}
 
         # 3) 运行时健康（适配器在线状态）
         try:

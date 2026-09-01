@@ -18,14 +18,16 @@ GARBLE = "目前目五一个以科莫大表几百各个方案国进也"
 
 
 class _FakeTranscriber:
-    """按序吐预设转写结果；None 条目=转写失败。"""
+    """按序吐预设转写结果；None 条目=转写失败。langs 记每次收到的语种码。"""
 
     def __init__(self, texts):
         self._texts = list(texts)
         self.calls = 0
+        self.langs = []
 
     async def transcribe_voice_message(self, path, language="zh"):
         self.calls += 1
+        self.langs.append(language)
         if not self._texts:
             return None
         return self._texts.pop(0)
@@ -125,11 +127,59 @@ def test_gate_stt_unavailable_failopen(tmp_path):
     assert av.read_bytes() == b"v1"
 
 
-def test_gate_short_or_foreign_text_skipped(tmp_path):
+def test_gate_short_text_skipped(tmp_path):
     _, info, calls, t = _run_gate(tmp_path, [GOOD], [], text="好呀")
-    assert info is None and t.calls == 0     # 短句不评
-    _, info2, _, t2 = _run_gate(tmp_path, ["ok"], [], text="See you tomorrow!")
-    assert info2 is None and t2.calls == 0   # 非中文不评
+    assert info is None and t.calls == 0     # 短句不评（中外同口径）
+    _, info2, _, t2 = _run_gate(tmp_path, ["hi"], [], text="Hi!")
+    assert info2 is None and t2.calls == 0   # 外语短句同样不评
+
+
+# ── 多语轨（P2-9 2026-08-31：旧「非中文不评」＝新语种开闸后最需要质检的语种
+#    恰好零回验——日文怪声就是这么漏网的。中文路径逐字节不变）────────────────
+
+_EN = "See you tomorrow my friend, take care on the way home!"
+_JA = "今日はほんとうに楽しかったよ、また一緒に遊ぼうね"
+
+
+def test_gate_foreign_en_evaluated_and_forced_lang(tmp_path):
+    """英文参评：按目标语种强制转写（stt 收到 en）、通用字符级 CER、结果带 lang。"""
+    _, info, calls, t = _run_gate(tmp_path, [_EN], [], text=_EN)
+    assert info == {"cer": 0.0, "retried": 0, "lang": "en"}
+    assert calls["n"] == 0 and t.calls == 1
+    assert t.langs == ["en"]
+
+
+def test_gate_foreign_ja_evaluated(tmp_path):
+    """日文参评（旧行为整条跳过）：假名+汉字全进字符级比对，stt 收到 ja。"""
+    _, info, _, t = _run_gate(tmp_path, [_JA], [], text=_JA)
+    assert info == {"cer": 0.0, "retried": 0, "lang": "ja"}
+    assert t.langs == ["ja"]
+
+
+def test_gate_foreign_garble_retries_and_keeps_better(tmp_path):
+    """外语坏 take（转写与送稿天差地别）→ 重合成取较优（与中文轨同编排）。"""
+    av, info, calls, _ = _run_gate(
+        tmp_path, ["totally unrelated words here", _EN], [b"v2"], text=_EN)
+    assert calls["n"] == 1
+    assert info["retried"] == 1 and info["cer"] == 0.0 and info["lang"] == "en"
+    assert av.read_bytes() == b"v2"
+
+
+def test_gate_multilingual_off_restores_old_skip(tmp_path):
+    """multilingual:false → 旧行为：非中文一律不评（运营逃生门）。"""
+    _, info, calls, t = _run_gate(
+        tmp_path, [_EN], [],
+        cfg={"enabled": True, "multilingual": False}, text=_EN)
+    assert info is None and calls["n"] == 0 and t.calls == 0
+
+
+def test_cer_chars_normalization_and_edge():
+    """通用字符级 CER：大小写/标点/空白归一；ref 归一后为空=不可评。"""
+    from src.ai.tts_pipeline import _cer_chars
+    assert _cer_chars("See you, TOMORROW!", "see you tomorrow") == 0.0
+    assert _cer_chars("こんにちは、せかい。", "こんにちは せかい") == 0.0
+    assert _cer_chars("", _EN) == 1.0
+    assert _cer_chars("anything", "！？…") == -1.0
 
 
 # ── 共享转写器登记 ────────────────────────────────────────────────────────────

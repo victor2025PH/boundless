@@ -24,3 +24,15 @@ try {
 } catch (_) {
   try { window.__chatxShellFocus = focusApi; } catch (_) { /* 环境异常：页面自然降级 */ }
 }
+
+// ── 壳能力标记（2026-08-29，页面侧特性探测）────────────────────────────────
+// wsRoute＝本壳主进程已把「打开 /workspace」收敛到主窗收件箱标签（openBackendPopup
+// 特判聚焦 + 深链转发）。_win_unique.html 的 Electron 分支据此分流：有标记＝点
+// 「坐席工作台」直接 window.open 交主进程（确定性聚焦，零探活等待）；无标记（旧壳）
+// ＝维持 BC 探活旧链。模板热更新先于壳更新到达时旧壳零行为变化——标记即版本闸。
+const capsApi = { wsRoute: true };
+try {
+  contextBridge.exposeInMainWorld("__chatxCaps", capsApi);
+} catch (_) {
+  try { window.__chatxCaps = capsApi; } catch (_) { /* 环境异常：页面自然降级 */ }
+}

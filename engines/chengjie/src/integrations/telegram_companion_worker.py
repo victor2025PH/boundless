@@ -442,7 +442,23 @@ class TelegramCompanionWorker:
         if kind == "image":
             msg = await inner.send_photo(target, media_path, caption=caption)
         elif kind == "voice":
-            msg = await inner.send_voice(target, media_path, caption=caption)
+            # #130：显式带 duration 属性——不带时 Telegram 端从文件自行推导，
+            # ffmpeg 缺失机器发出的未转码 WAV 会被对端按错误口径估成数倍时长
+            # （0901 实锤 0:06 发出、对端 0:35）。探测走三层兜底（ffprobe →
+            # wav/mp3 纯 python → ogg granule），全失败＝不带（旧行为）。
+            _dur_s: Optional[int] = None
+            try:
+                from src.client.voice_sender import probe_audio_duration_ms
+                _ms = probe_audio_duration_ms(media_path)
+                if _ms and _ms > 0:
+                    _dur_s = max(1, int(round(_ms / 1000.0)))
+            except Exception:
+                _dur_s = None
+            if _dur_s:
+                msg = await inner.send_voice(
+                    target, media_path, caption=caption, duration=_dur_s)
+            else:
+                msg = await inner.send_voice(target, media_path, caption=caption)
         elif kind == "video":
             msg = await inner.send_video(target, media_path, caption=caption)
         elif kind == "sticker":

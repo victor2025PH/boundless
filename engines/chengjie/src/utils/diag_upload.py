@@ -164,11 +164,13 @@ MINI_TAIL_KB = 24
 
 
 def error_detail_for(request: Any, err: str) -> str:
-    """机器码 → 用户语言人话（三分：本地未就绪 / 官网不可达 / 被拒收）。
+    """机器码 → 用户语言人话（本地未就绪 / DNS / 官网不可达 / 被拒收）。
 
     两个 HTTP 入口（support / ops-overview）共用，勿各写一份映射。"""
     from src.web.web_i18n import tr
     e = str(err or "")
+    if e == "upstream_dns_failed":
+        return tr(request, "err.svc.upstream_dns_failed")
     if e == "upstream_unreachable":
         return tr(request, "err.svc.upstream_unreachable")
     if e == "bundle_failed":
@@ -181,20 +183,55 @@ def error_detail_for(request: Any, err: str) -> str:
 
 
 def classify_upload_error(ex: Exception) -> str:
-    """传输异常 → 三分机器码（B53：urllib HTTPError 此前被折叠成 unreachable，
+    """传输异常 → 分型机器码（B53：urllib HTTPError 此前被折叠成 unreachable，
     「服务端拒收 413」与「根本没连上」不可分辨，排查方向直接走偏）。
 
     - ``upload_rejected_<status>``：连上了、服务端拒收（413 超限/401/5xx…）；
-    - ``upstream_unreachable``：连不上/超时/断线。
+    - ``upstream_dns_failed``（#17，实施90）：域名解析失败——本机 DNS 污染/
+      劫持/断网，与「解析得出但连不上」是两种病（前者换 DNS/网络就好，
+      后者多为线路/防火墙），折叠在一起排查方向必偏；
+    - ``upstream_unreachable``：解析正常但连不上/超时/断线。
     纯函数可单测。
     """
+    import socket
     import urllib.error
     if isinstance(ex, urllib.error.HTTPError):
         try:
             return f"upload_rejected_{int(ex.code)}"
         except Exception:
             return "upload_rejected"
+    # DNS 分型：gaierror 直抛或包在 URLError.reason 里两种形态都认
+    if isinstance(ex, socket.gaierror):
+        return "upstream_dns_failed"
+    reason = getattr(ex, "reason", None)
+    if isinstance(reason, socket.gaierror):
+        return "upstream_dns_failed"
     return "upstream_unreachable"
+
+
+def probe_site_connectivity(site: str, *, timeout_sec: float = 5.0) -> str:
+    """#17：上报失败后的连通自诊（小 GET，与大 POST 正交）。
+
+    返回 ``ok``（官网可达——大包被掐但线路活着，mini/暂存链会兜）/
+    ``dns``（域名解析失败）/ ``unreachable``（解析正常但连不通）。
+    同步小请求，调用方 to_thread；绝不抛。
+    """
+    import socket
+    import urllib.error
+    try:
+        req = urllib.request.Request(
+            f"{str(site or '').rstrip('/')}/api/diag-upload?probe=1",
+            method="GET")
+        with urllib.request.urlopen(req, timeout=timeout_sec):
+            return "ok"
+    except urllib.error.HTTPError:
+        return "ok"    # 有 HTTP 响应（404/405 都算）＝连通性本身没问题
+    except socket.gaierror:
+        return "dns"
+    except Exception as ex:  # noqa: BLE001
+        if isinstance(getattr(ex, "reason", None), socket.gaierror):
+            return "dns"
+        return "unreachable"
 
 
 # ── 报障暂存 outbox（实施86 域A-2①，#51/#17 沉淀）────────────────────────────
@@ -528,10 +565,10 @@ async def build_and_upload(config_manager, note: Any = "") -> Dict[str, Any]:
             logger.info("mini 诊断包重传仍失败（%d bytes）", len(mini_blob),
                         exc_info=True)
             err2 = classify_upload_error(ex)
-            # 长断网（mini 也 unreachable）→ 全尺寸包落 outbox，网络恢复自动补传
-            # （实施86 域A-2①）。拒收类不暂存：包已到达对端被明确拒绝。
+            # 长断网（mini 也 unreachable/DNS 失败）→ 全尺寸包落 outbox，网络恢复
+            # 自动补传（实施86 域A-2①）。拒收类不暂存：包已到达对端被明确拒绝。
             staged = False
-            if err2 == "upstream_unreachable":
+            if err2 in ("upstream_unreachable", "upstream_dns_failed"):
                 staged = await asyncio.to_thread(
                     stage_bundle, logs_dir, blob, note=note_s, fp=fp, ver=ver)
             return {"ok": False, "error": err2, "staged": bool(staged)}

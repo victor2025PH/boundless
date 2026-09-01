@@ -30,6 +30,15 @@ armed 危险态。静态门禁只能证「键在/字符串在」，证不了「�
       armed 确认（缩小影响面方向不设阻力）；写走 nurtureSave {canary:{key,pilot}}
   N10 ntr_ 埋点全链路：sim_start/golive_ask/confirm/cancel/save/pilot_on/
       probe_pre/probe_run/adv_open 全部经 sendBeacon 发出（fixture 截获断言）
+  N11 分区折叠（2026-08-28）：五个分区标题都是折叠开关；**收起后标题行必须仍带
+      该块关键读数**（灯+判词 / 引擎状态 / n-t 已启用 + 未保存红点）；引擎误配
+      警示收起后照旧显示（折叠≠把出问题的事实一起藏掉）；收起再展开编辑中方案
+      原样还在（_work 是内存 SSOT）；折叠态经 localStorage 跨实例记忆
+  N12 长列表截断 + 起号期口径（2026-08-28）：账号 >6 个截到 5 行 + 「显示全部 n 个」，
+      **在养的号一个都不许被截断藏掉**（有后果的号不是「列表太长」的代价），
+      ≤6 个不截（藏 1 个换一个按钮是净亏）；「养号中」→「起号期」+ 悬浮口径
+      （该数来自账号注册天数，与「已启用养护」无关，两数并排曾被读成矛盾）；
+      intro 引导只在账号方案展开时出现（不指着收起的东西说话）
 
 用法::
 
@@ -78,7 +87,7 @@ window.__mkStatus = () => {
     { platform: 'line', account_id: 'Uk4bhjJ4HC2jhfuF0CwF4LlyIJWgLnScdIt1OIkQOg',
       stage: 'active', label: '小林 LINE 主号' },
     { platform: 'messenger', account_id: '100089088819384', stage: 'offline', label: '' },
-  ];
+  ].concat(S.extraAccounts || []);   // N12 长列表截断用：测试侧可加号
   const accts = raw.map((a) => {
     const key = a.platform + ':' + a.account_id;
     return Object.assign({}, a, {
@@ -190,6 +199,27 @@ window.snap = () => {
     chips: ga('.nt-chip').map((c) => c.getAttribute('data-beh') + ':' + c.getAttribute('aria-pressed')).join('|'),
     pilots: ga('.nt-pilot').map((c) => c.getAttribute('aria-pressed')).join('|'),
     pilot2Armed: !!(ga('.nt-pilot')[1] && ga('.nt-pilot')[1].classList.contains('armed')),
+    // N11 分区折叠
+    folds: ga('.nt-sec').map((b) => b.getAttribute('data-fold') + ':' + b.getAttribute('aria-expanded')).join('|'),
+    hdOv: (g('[data-fold=overview]') || {}).textContent || '',
+    hdEng: (g('[data-fold=engine]') || {}).textContent || '',
+    hdAcct: (g('[data-fold=accounts]') || {}).textContent || '',
+    hdShadow: (g('[data-fold=shadow]') || {}).textContent || '',
+    ovLight: !!g('[data-fold=overview] .nt-light'),
+    dirtyDot: !!g('[data-fold=accounts] .dirty'),
+    healthBox: !!g('.nt-health'),
+    sumBox: !!g('.nt-sum'),
+    engBox: !!g('.nt-eng'),
+    hintBox: !!g('.nt-hint'),
+    // N12 长列表截断 + 起号期口径
+    kpiWarmLabel: ((ga('.nt-sum .nt-kpi')[1] || {}).querySelector
+      ? (ga('.nt-sum .nt-kpi')[1].querySelector('.l') || {}).textContent : '') || '',
+    kpiWarmTitle: (ga('.nt-sum .nt-kpi')[1]
+      ? (ga('.nt-sum .nt-kpi')[1].getAttribute('title') || '') : ''),
+    acctMore: (g('[data-act=acct-all]') || {}).textContent || '',
+    acctLess: !!g('[data-act=acct-less]'),
+    rowNames: ga('.nt-acct .nm').map((n) => n.textContent).join('|'),
+    stages: ga('.nt-acct .nt-stage').map((n) => n.textContent).join('|'),
   };
 };
 </script>
@@ -409,16 +439,152 @@ def run(page, ck: Checker) -> None:
     s = ev("snap()")
     ck.check("N8 chip 切回熄灭保存", "read:false" in s["chips"] and s["save1Disabled"] is True)
 
+    # N11 分区折叠：收起后标题必须仍带该块关键读数（否则折叠＝把信息弄丢）
+    s = ev("snap()")
+    ck.check("N11 五个分区标题都是折叠开关",
+             s["folds"] == "overview:true|engine:true|shadow:true|accounts:true|advanced:true",
+             s["folds"])
+    ev("() => { q('[data-fold=overview]').click(); }")
+    s = ev("snap()")
+    ck.check("N11 概览收起：KPI 消失但标题接过灯+判词",
+             (not s["healthBox"]) and (not s["sumBox"]) and s["ovLight"]
+             and "有账号需要留意" in s["hdOv"],
+             f"health={s['healthBox']} light={s['ovLight']} hd={s['hdOv']}")
+    ev("() => { q('[data-fold=overview]').click(); }")
+    ck.check("N11 概览展开复原",
+             _wait(page, "() => snap().healthBox === true && snap().sumBox === true"))
+
+    # 引擎收起：状态进标题，且误配警示**不许**跟着一起消失
+    ev("() => { window.__state.plans = {}; window.__el._load(); }")
+    ck.check("N11 前置：清空方案后误配警示出现",
+             _wait(page, "() => snap().notes.includes('引擎已开但没有启用养护的账号')"))
+    ev("() => { q('[data-fold=engine]').click(); }")
+    s = ev("snap()")
+    ck.check("N11 引擎收起：面板消失、状态进标题、误配警示照旧显示",
+             (not s["engBox"]) and "自动养护中" in s["hdEng"]
+             and "引擎已开但没有启用养护的账号" in s["notes"],
+             f"engBox={s['engBox']} hd={s['hdEng'][:40]} notes={s['notes'][:30]}")
+    ev("() => { q('[data-fold=engine]').click(); }")
+    ck.check("N11 引擎展开复原", _wait(page, "() => snap().engBox === true"))
+
+    # 账号方案收起：计数留在标题、未保存改动亮红点、展开后编辑内容原样还在
+    ev("() => { q('.nt-acct [data-role=on]').click(); }")
+    ev("() => { q('[data-fold=accounts]').click(); }")
+    s = ev("snap()")
+    ck.check("N11 账号方案收起：行消失、计数仍在、未保存红点点亮",
+             s["rowN"] == 0 and "0/2" in s["cnt"] and s["dirtyDot"],
+             f"rowN={s['rowN']} cnt={s['cnt']} dot={s['dirtyDot']}")
+    ev("() => { q('[data-fold=accounts]').click(); }")
+    s = ev("snap()")
+    ck.check("N11 展开后未保存改动原样还在（_work 是内存 SSOT）",
+             s["rowN"] == 2 and s["save1Disabled"] is False,
+             f"rowN={s['rowN']} save={s['save1Disabled']}")
+
+    # 折叠态 localStorage 记忆（file:// 下 localStorage 可能不可用 → 降级放行）
+    ls_ok = ev("() => { try { localStorage.setItem('__nt_probe', '1');"
+               " localStorage.removeItem('__nt_probe'); return true; } catch (e) { return false; } }")
+    if ls_ok:
+        ev("() => { q('[data-fold=shadow]').click(); }")
+        raw = ev("() => { try { return localStorage.getItem('cp.nurture.folds.v1') || ''; }"
+                 " catch (e) { return ''; } }")
+        ck.check("N11 折叠态写入 localStorage", '"shadow":1' in (raw or ""), str(raw)[:90])
+        inherited = ev("""async () => {
+          const el2 = document.createElement('cp-nurture');
+          el2.client = window.__stubClient;
+          document.body.appendChild(el2);
+          let v = 'timeout';
+          for (let i = 0; i < 60; i++) {
+            await new Promise((r) => setTimeout(r, 25));
+            const b = el2.shadowRoot.querySelector('[data-fold=shadow]');
+            if (b) { v = b.getAttribute('aria-expanded'); break; }
+          }
+          el2.remove();
+          return v;
+        }""")
+        ck.check("N11 新实例继承折叠态（跨会话记忆）", inherited == "false", str(inherited))
+        ev("() => { q('[data-fold=shadow]').click(); }")
+
+        # 全部收起 → 底部科普脚注一并收（否则折叠没真正把空间还回来）；展开即回来
+        ev("""() => { ['overview', 'engine', 'shadow', 'accounts', 'advanced']
+              .forEach((s) => { const b = q('[data-fold=' + s + ']'); if (b) b.click(); }); }""")
+        s = ev("snap()")
+        ck.check("N11 全收起：只剩分区标题行，科普脚注一并收起",
+                 s["folds"] == "overview:false|engine:false|shadow:false|accounts:false|advanced:false"
+                 and (not s["hintBox"]) and (not s["engBox"]) and s["rowN"] == 0,
+                 f"folds={s['folds']} hint={s['hintBox']}")
+        ev("() => { q('[data-fold=accounts]').click(); }")
+        ck.check("N11 展开任意一块 → 脚注回来", _wait(page, "() => snap().hintBox === true"))
+    else:
+        ck.check("N11 localStorage 不可用时折叠仍工作（记忆降级不报错）", True,
+                 "file:// 无 localStorage，跳过记忆断言")
+
+    # N12 长列表截断 + 起号期口径（2026-08-28）
+    # 前置守卫：N11 收尾时概览可能仍是收起态——本段断言不该依赖上一段的残留状态
+    ev("""() => { const b = q('[data-fold=overview]');
+          if (b && b.getAttribute('aria-expanded') === 'false') b.click(); }""")
+    s = ev("snap()")
+    ck.check("N12 起号期 KPI 不再叫「养号中」，且悬浮写明与「已启用养护」无关",
+             s["kpiWarmLabel"] == "起号期" and "与下方是否启用养护无关" in s["kpiWarmTitle"],
+             f"label={s['kpiWarmLabel']} title={s['kpiWarmTitle'][:40]}")
+
+    ev("""() => {
+      window.__state.extraAccounts = [];
+      for (let i = 1; i <= 8; i++) {
+        window.__state.extraAccounts.push({ platform: 'telegram',
+          account_id: '90000000' + i, stage: i === 1 ? 'warming' : 'active',
+          label: '备用号 ' + i });
+      }
+      // 末位的号「在养」——截断绝不许把有后果的号藏掉
+      window.__state.plans['telegram:900000008'] =
+        { enabled: true, profile: 'balanced', ramp_days: 0,
+          behaviors: { browse: false, read: false, react: false, self_chat: false } };
+      window.__el._load();
+    }""")
+    ck.check("N12 前置：10 个账号已加载", _wait(page, "() => snap().cnt.includes('/10')"))
+    s = ev("snap()")
+    ck.check("N12 长列表截断到 5 行 + 「显示全部 10 个账号」",
+             s["rowN"] == 5 and "显示全部 10 个账号" in s["acctMore"],
+             f"rowN={s['rowN']} btn={s['acctMore']}")
+    ck.check("N12 在养的号绝不被截断藏掉（末位「备用号 8」仍在）",
+             "备用号 8" in s["rowNames"], s["rowNames"])
+    ck.check("N12 行徽章同步改口径（stage_warming → 起号期）",
+             "起号期" in s["stages"], s["stages"])
+    ev("() => { q('[data-act=acct-all]').click(); }")
+    s = ev("snap()")
+    ck.check("N12 显示全部 → 10 行 + 出现「收起长列表」",
+             s["rowN"] == 10 and s["acctLess"], f"rowN={s['rowN']} less={s['acctLess']}")
+    ev("() => { q('[data-act=acct-less]').click(); }")
+    ck.check("N12 收起回 5 行", _wait(page, "() => snap().rowN === 5"))
+    ev("() => { window.__state.extraAccounts = []; window.__el._load(); }")
+    ck.check("N12 回到 2 个号时不截断（藏 1 个换一个按钮是净亏）",
+             _wait(page, "() => snap().rowN === 2 && snap().acctMore === ''"))
+
+    # intro 引导只在账号方案展开时出现（引导指向的东西不能是收起的）
+    ev("""() => { window.__state.engine.enabled = false; window.__state.plans = {};
+          window.__el._load(); }""")
+    ck.check("N12 前置：暂停+零方案 → intro 引导可见",
+             _wait(page, "() => snap().introShown === true"))
+    ev("() => { q('[data-fold=accounts]').click(); }")
+    s = ev("snap()")
+    ck.check("N12 账号方案折起 → 引导不再指着收起的东西说话", not s["introShown"])
+    ev("() => { q('[data-fold=accounts]').click(); }")
+    ck.check("N12 展开 → 引导回来", _wait(page, "() => snap().introShown === true"))
+
     # N10 ntr_ 埋点全链路（fixture 截获 sendBeacon，解 Blob 断言动作集）
     acts = ev("""async () => {
       const t = await Promise.all(window.__beacons.map((b) => b.text()));
       return t.map((s) => { try { return JSON.parse(s).action; } catch (e) { return ''; } });
     }""")
     need = {"ntr_sim_start", "ntr_golive_ask", "ntr_golive_cancel", "ntr_golive_confirm",
-            "ntr_save", "ntr_pilot_on", "ntr_probe_pre", "ntr_probe_run", "ntr_adv_open"}
+            "ntr_save", "ntr_pilot_on", "ntr_probe_pre", "ntr_probe_run", "ntr_adv_open",
+            # 折叠也要可读数：哪块被最多人收起＝分区优先级的直接证据
+            "ntr_fold_overview", "ntr_unfold_overview",
+            # 「显示全部」被点得多 ⇒ 截断上限（ACCT_VISIBLE_CAP）定小了
+            "ntr_acct_show_all", "ntr_acct_show_less"}
     got = set(acts or [])
     ck.check("N10 ntr_ 埋点全链路", need.issubset(got),
-             "missing=" + ",".join(sorted(need - got)) if not need.issubset(got) else f"{len(got & need)}/9")
+             "missing=" + ",".join(sorted(need - got)) if not need.issubset(got)
+             else f"{len(got & need)}/{len(need)}")
 
 
 def main() -> int:

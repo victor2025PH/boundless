@@ -94,6 +94,26 @@ def deepl_formality(style: str) -> str:
     return _DEEPL_FORMALITY.get(str(style or "").strip().lower(), "")
 
 
+# ── 中文变体目标语的风格钉子（2026-08-29）────────────────────────────────────
+# LLM 线（ai/custom）对 zh-tw/yue 的补充指令：光说 "Traditional Chinese" 模型偶尔
+# 仍蹦简体字；粤语若不点名「口语粤文」会输出普通话式书面中文换皮。NMT 线不消费
+# （HY-MT 中文 prompt 模板自带语种名，Qwen/Hunyuan 对「繁体中文/粤语」指令本就稳）。
+_VARIANT_STYLE_HINTS = {
+    "zh-tw": ("Output MUST use Traditional Chinese characters (繁體中文) only - "
+              "never Simplified characters."),
+    # 粤文惯用繁体字形（2026-08-30 实弹实锤：不点名会输出「你今晚有冇空？想请你
+    # 食饭倾偈」这类简体粤文混排——口语词对了、字形穿帮）。
+    "yue": ("Write in colloquial spoken Cantonese (地道粵語口語，用「嘅/唔/係/喺/"
+            "咁/哋」等粵文字), in Traditional Chinese characters (粵文慣用繁體，"
+            "如「請/飯/傾」不作「请/饭/倾」), NOT Mandarin-style written Chinese."),
+}
+
+
+def variant_style_hint(target_lang: str) -> str:
+    """中文变体目标语 → 附加风格指令（纯函数）；其他语种返回空串=行为不变。"""
+    return _VARIANT_STYLE_HINTS.get(str(target_lang or "").strip().lower(), "")
+
+
 def build_chat_tone(style: str) -> str:
     """LLM 线共用的 tone 段（AIEngine 与 OpenAICompatEngine 单一口径）。
 
@@ -300,11 +320,14 @@ class AIEngine:
         source_name = LANG_NAMES.get(source_lang, source_lang)
         target_name = LANG_NAMES.get(target_lang, target_lang)
         tone = build_chat_tone(style)   # P1-XT：chat 家族 + 语气附加，单一口径
+        variant = variant_style_hint(target_lang)   # zh-tw/yue 风格钉子（他语种空串）
+        if variant:
+            variant = f" {variant}"
         from src.ai.translation_fidelity import FIDELITY_PROMPT_RULE
         prompt = (
             f"Translate the following chat message from {source_name} to {target_name}. "
             f"{FIDELITY_PROMPT_RULE} "
-            f"{tone}{glossary_hint}\n\n{text}"
+            f"{tone}{variant}{glossary_hint}\n\n{text}"
         )
         try:
             out = await self.bare_chat(prompt)
@@ -321,8 +344,11 @@ class AIEngine:
 
 
 # DeepL 语种码（大写），仅列常用；缺失则不带 source_lang 让其自动检测。
+# zh-tw → ZH-HANT（DeepL 2024 起支持繁体目标；source 侧无此码，仅目标用——
+# translate() 里 source 查表 miss 即不带 source_lang，让 DeepL 自动检测，安全）。
 _DEEPL_LANG = {
-    "zh": "ZH", "en": "EN", "ja": "JA", "ko": "KO", "ru": "RU", "fr": "FR",
+    "zh": "ZH", "zh-tw": "ZH-HANT", "en": "EN", "ja": "JA", "ko": "KO",
+    "ru": "RU", "fr": "FR",
     "de": "DE", "es": "ES", "pt": "PT", "it": "IT", "id": "ID", "tr": "TR",
 }
 
@@ -437,14 +463,17 @@ class GoogleEngine:
 # Hunyuan-MT 官方模型卡覆盖的语种（映射到本项目语种码）。命中集内 supports_target=True，
 # 集外交给下游引擎（ai/deepl/google）——即便置信度切换关着，冷门语种也不会被硬吃。
 _HYMT_LANGS = {
-    "zh", "yue", "en", "ja", "ko", "fr", "es", "it", "pt", "de", "tr", "ru",
-    "ar", "th", "id", "ms", "vi", "tl", "hi", "pl", "cs", "nl", "km", "my",
-    "fa", "he", "bn", "ta", "te", "mr", "gu", "ur", "uk",
+    "zh", "zh-tw", "yue", "en", "ja", "ko", "fr", "es", "it", "pt", "de", "tr",
+    "ru", "ar", "th", "id", "ms", "vi", "tl", "hi", "pl", "cs", "nl", "km",
+    "my", "fa", "he", "bn", "ta", "te", "mr", "gu", "ur", "uk",
 }
+# 公开别名：前端语种目录 / agent-lang 白名单必须与模型卡锁死同一份。
+HYMT_TARGET_LANGS = frozenset(_HYMT_LANGS)
 
 # zh 相关语种对的中文指令名（Hunyuan-MT 官方 zh<=>xx prompt 用中文语种名）。
 _HYMT_ZH_NAME = {
-    "zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "fr": "法语",
+    "zh": "中文", "zh-tw": "繁体中文", "en": "英语", "ja": "日语",
+    "ko": "韩语", "fr": "法语",
     "es": "西班牙语", "it": "意大利语", "pt": "葡萄牙语", "de": "德语",
     "tr": "土耳其语", "ru": "俄语", "ar": "阿拉伯语", "th": "泰语",
     "id": "印尼语", "ms": "马来语", "vi": "越南语", "tl": "菲律宾语",
@@ -495,6 +524,7 @@ class OllamaMTEngine:
         max_tokens: int = 1024,
         keep_alive: str = "30m",
         api: str = "native",
+        payload_extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         # base_url 兼容三种形态：单字符串 / 逗号分隔字符串 / 列表（build_engines 的 base_urls）
         if isinstance(base_url, (list, tuple)):
@@ -514,6 +544,16 @@ class OllamaMTEngine:
         # keep_alive 是 Ollama 专有语义，openai 模式忽略）。缺省 native=旧行为零变化。
         self._api = ("openai" if str(api or "").strip().lower()
                      in ("openai", "openai_compat", "v1") else "native")
+        # openai 模式的**逐后端**请求体补丁（与 GenericEngine.payload_extra 同名同义）。
+        # 存在理由（2026-08-28 实锤）：LAN MT 落点换成 vLLM 上的 Qwen3.6-27B 后，该模型
+        # **默认开 thinking** → 响应 `message.content` 为 null、正文全在 `reasoning` 里，
+        # 且 60 token 预算全被思考吃光（finish_reason=length）⇒ 本引擎读 content 恒空，
+        # 翻译兜底**静默失效**（云端一挂就没有第二层了）。
+        # 解法是后端专有的，不该硬编进引擎：配 `chat_template_kwargs.enable_thinking:false`
+        # 即恢复（实测同句 9 token / 1.1s 出正确译文）。native 模式不合并——Ollama 的
+        # 采样参数走它自己的 `options` 结构，混进顶层会被忽略或报错。
+        self._payload_extra: Dict[str, Any] = (
+            dict(payload_extra) if isinstance(payload_extra, dict) else {})
         self._clients: Dict[str, Any] = {}
         self._url_bad_until: Dict[str, float] = {}
 
@@ -590,7 +630,10 @@ class OllamaMTEngine:
     def _build_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
         src = str(source_lang or "").strip().lower()
         tgt = str(target_lang or "").strip().lower()
-        if src == "zh" or tgt == "zh" or src == "yue" or tgt == "yue":
+        # zh 系（含 zh-tw 繁体等变体）与粤语走官方中文指令模板
+        _zh_side = (src.startswith("zh") or tgt.startswith("zh")
+                    or src == "yue" or tgt == "yue")
+        if _zh_side:
             name = _HYMT_ZH_NAME.get(tgt, tgt)
             return f"把下面的文本翻译成{name}，不要额外解释。\n\n{text}"
         from src.ai.translation_service import LANG_NAMES
@@ -622,6 +665,10 @@ class OllamaMTEngine:
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": self._max_tokens,
             }
+            # 后端专有补丁（如 Qwen3 系的 chat_template_kwargs.enable_thinking:false）。
+            # 放在固定字段**之后**合并＝允许覆写 max_tokens 这类需要按后端调的键。
+            if self._payload_extra:
+                payload.update(self._payload_extra)
             if self._temperature is not None:
                 payload["temperature"] = self._temperature
         else:
@@ -749,11 +796,14 @@ class OpenAICompatEngine:
             source_name = LANG_NAMES.get(src, src or "the source language")
             target_name = LANG_NAMES.get(tgt, tgt)
             tone = build_chat_tone(style)   # P1-XT：与 AIEngine 同一 tone 口径
+            variant = variant_style_hint(tgt)   # zh-tw/yue 风格钉子（与 AIEngine 同源）
+            if variant:
+                variant = f" {variant}"
             messages = [
                 {"role": "system", "content": AIEngine._BARE_TRANSLATION_SYSTEM},
                 {"role": "user", "content": (
                     f"Translate the following chat message from {source_name} "
-                    f"to {target_name}. {tone}{glossary_hint}\n\n{text}"
+                    f"to {target_name}. {tone}{variant}{glossary_hint}\n\n{text}"
                 )},
             ]
         payload: Dict[str, Any] = {
@@ -963,9 +1013,11 @@ class YoudaoEngine:
             return EngineResult("", self.name, False, f"{type(exc).__name__}: {exc}")
 
 
-# 百度翻译开放平台语种码（ja→jp / ko→kor / fr→fra / es→spa / vi→vie / ar→ara）。
+# 百度翻译开放平台语种码（ja→jp / ko→kor / fr→fra / es→spa / vi→vie / ar→ara；
+# zh-tw→cht=中文繁体）。
 _BAIDU_LANG = {
-    "zh": "zh", "en": "en", "ja": "jp", "ko": "kor", "fr": "fra", "es": "spa",
+    "zh": "zh", "zh-tw": "cht", "en": "en", "ja": "jp", "ko": "kor",
+    "fr": "fra", "es": "spa",
     "th": "th", "ar": "ara", "ru": "ru", "pt": "pt", "de": "de", "it": "it",
     "nl": "nl", "pl": "pl", "cs": "cs", "vi": "vie", "yue": "yue", "id": "id",
 }
@@ -1035,6 +1087,67 @@ class BaiduEngine:
             return EngineResult(out, self.name, bool(out), "" if out else "empty")
         except Exception as exc:  # noqa: BLE001
             return EngineResult("", self.name, False, f"{type(exc).__name__}: {exc}")
+
+
+class OpenCCEngine:
+    """本地简→繁确定性转换引擎（可选，2026-08-29）。
+
+    简体→繁体本质是字符/词汇映射而非翻译——OpenCC 零 token、微秒级、100% 保真，
+    比 LLM 更适合当 zh-tw 的首选线（LLM 只兜「源语言不是中文」的场景）。默认
+    profile ``s2twp``＝台湾正体 + 台湾常用词汇（软件→軟體、视频→影片）。
+
+    让位规则（供 EngineRouter 顺移下游引擎）：
+      - 目标语非 zh-tw → unsupported_target；
+      - 源语言明确非中文（en/ja/...）→ unsupported_source（字形转换救不了真翻译）；
+        源为空/unknown/auto 放行——translate() 的 detect 对中文文本必产出 zh，
+        护栏 `_output_lang_sane` 兜底非中文误入。
+    库缺失（opencc-python-reimplemented 未装）→ available=False，路由自动跳过。
+    """
+
+    name = "opencc"
+    label = "OpenCC"
+
+    _OK_SOURCES = {"", "zh", "zh-cn", "unknown", "auto"}
+
+    def __init__(self, *, profile: str = "s2twp") -> None:
+        self._profile = str(profile or "s2twp").strip() or "s2twp"
+        self._cc: Any = None
+
+    def supports_target(self, target_lang: str) -> bool:
+        return str(target_lang or "").strip().lower() == "zh-tw"
+
+    @property
+    def available(self) -> bool:
+        try:
+            import opencc  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    def _converter(self) -> Any:
+        if self._cc is None:
+            import opencc
+            self._cc = opencc.OpenCC(self._profile)
+        return self._cc
+
+    async def translate(
+        self, text: str, *, source_lang: str, target_lang: str,
+        style: str = "chat", glossary_hint: str = "",
+    ) -> EngineResult:
+        if not (text or "").strip():
+            return EngineResult("", self.name, False, "empty_input")
+        if not self.supports_target(target_lang):
+            return EngineResult("", self.name, False, f"unsupported_target:{target_lang}")
+        src = str(source_lang or "").strip().lower()
+        if src not in self._OK_SOURCES:
+            return EngineResult("", self.name, False, f"unsupported_source:{src}")
+        try:
+            out = str(self._converter().convert(str(text)))
+        except Exception as exc:  # noqa: BLE001
+            return EngineResult("", self.name, False, f"{type(exc).__name__}: {exc}")
+        if not out.strip():
+            return EngineResult("", self.name, False, "empty")
+        return EngineResult(out, self.name, True)
 
 
 class EngineRouter:
@@ -1392,6 +1505,7 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
                 max_tokens=int(mc.get("max_tokens", 1024) or 1024),
                 keep_alive=str(mc.get("keep_alive", "30m") or ""),
                 api=str(mc.get("api", "native") or "native"),
+                payload_extra=mc.get("payload_extra"),
             ))
         elif name == "microsoft":
             ms = cfg.get("microsoft") or {}
@@ -1408,6 +1522,10 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
             out.append(BaiduEngine(
                 bd.get("app_id", ""), bd.get("secret", ""),
                 timeout=float(bd.get("timeout_sec", timeout) or timeout)))
+        elif name == "opencc":
+            oc = cfg.get("opencc") or {}
+            out.append(OpenCCEngine(
+                profile=str(oc.get("profile", "s2twp") or "s2twp")))
         else:
             # P0-XL1：order 里的未知名先查 custom 通用线（OpenAI 兼容，一段配置=一条线路）；
             # custom 也没有 → 维持旧行为忽略（防拼写错直接炸装配）。

@@ -17,13 +17,19 @@ from typing import Any, Dict, Optional
 
 
 class VoiceSynthLangStats:
-    __slots__ = ("_lock", "_total", "_corrected", "_by_lang", "_started_at", "_last_ts")
+    __slots__ = ("_lock", "_total", "_corrected", "_by_lang", "_started_at",
+                 "_last_ts", "_blocked_by_lang", "_routed_by_pair")
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._total = 0                     # 克隆合成到达「语言决策」的总次数
         self._corrected = 0                 # 合成语言 ≠ config 默认（发生纠正）的次数
         self._by_lang: Dict[str, int] = {}  # 纠正后目标语种分布 {en: N, ja: M, ...}
+        # P0 语种能力闸拦截分布（2026-08-31）：{ja: N, th: M...}——「客户在要哪些
+        # 我们念不了的语种」的直接读数，决定 lang_engines/新引擎该先补哪门语言。
+        self._blocked_by_lang: Dict[str, int] = {}
+        # P1 语种→引擎改派分布：{"ja:fish_speech": N}——lang_engines 真实用量。
+        self._routed_by_pair: Dict[str, int] = {}
         self._started_at = time.time()
         self._last_ts = 0.0
 
@@ -41,6 +47,33 @@ class VoiceSynthLangStats:
                 self._corrected += 1
                 self._by_lang[u] = self._by_lang.get(u, 0) + 1
 
+    def record_blocked(self, lang: str) -> None:
+        """记一次语种能力闸拦截（合成层跳过克隆链）。best-effort 绝不抛。"""
+        try:
+            p = str(lang or "").strip().lower().split("-")[0]
+        except Exception:
+            return
+        if not p:
+            return
+        with self._lock:
+            self._last_ts = time.time()
+            if len(self._blocked_by_lang) < 32 or p in self._blocked_by_lang:
+                self._blocked_by_lang[p] = self._blocked_by_lang.get(p, 0) + 1
+
+    def record_lang_routed(self, lang: str, engine: str) -> None:
+        """记一次 lang_engines 语种→引擎改派命中。best-effort 绝不抛。"""
+        try:
+            key = (f"{str(lang or '').strip().lower().split('-')[0]}:"
+                   f"{str(engine or '').strip().lower()}")
+        except Exception:
+            return
+        if key == ":":
+            return
+        with self._lock:
+            self._last_ts = time.time()
+            if len(self._routed_by_pair) < 32 or key in self._routed_by_pair:
+                self._routed_by_pair[key] = self._routed_by_pair.get(key, 0) + 1
+
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             total = self._total
@@ -51,6 +84,10 @@ class VoiceSynthLangStats:
                 "corrected": int(self._corrected),
                 "corrected_rate": round(self._corrected / total, 4) if total else 0,
                 "by_lang": dict(sorted(self._by_lang.items())),
+                "lang_blocked": int(sum(self._blocked_by_lang.values())),
+                "blocked_by_lang": dict(sorted(self._blocked_by_lang.items())),
+                "lang_routed": int(sum(self._routed_by_pair.values())),
+                "routed_by_pair": dict(sorted(self._routed_by_pair.items())),
             }
 
     def dump_prom(self) -> str:
@@ -61,6 +98,10 @@ class VoiceSynthLangStats:
             "# TYPE voice_synth_language_corrected_total counter",
             "# HELP voice_synth_language_corrected_by_lang_total Language corrections by target language",
             "# TYPE voice_synth_language_corrected_by_lang_total counter",
+            "# HELP voice_synth_lang_blocked_total Clone syntheses blocked by language capability gate",
+            "# TYPE voice_synth_lang_blocked_total counter",
+            "# HELP voice_synth_lang_routed_total Hub engine reroutes by lang_engines map",
+            "# TYPE voice_synth_lang_routed_total counter",
         ]
         with self._lock:
             lines.append(f"voice_synth_total {self._total}")
@@ -68,6 +109,12 @@ class VoiceSynthLangStats:
             for lang, n in sorted(self._by_lang.items()):
                 lines.append(
                     f'voice_synth_language_corrected_by_lang_total{{to_lang="{_esc(lang)}"}} {int(n)}')
+            for lang, n in sorted(self._blocked_by_lang.items()):
+                lines.append(
+                    f'voice_synth_lang_blocked_total{{lang="{_esc(lang)}"}} {int(n)}')
+            for pair, n in sorted(self._routed_by_pair.items()):
+                lines.append(
+                    f'voice_synth_lang_routed_total{{pair="{_esc(pair)}"}} {int(n)}')
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -75,6 +122,8 @@ class VoiceSynthLangStats:
             self._total = 0
             self._corrected = 0
             self._by_lang.clear()
+            self._blocked_by_lang.clear()
+            self._routed_by_pair.clear()
             self._last_ts = 0.0
 
 

@@ -263,6 +263,36 @@
 
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
 
+      <!-- 🧭 多模型路由（像 Cursor 按任务挑模型/端点；2026-08-31）：models 档 +
+           task→档映射，保存写 overlay(ai.models/ai.task_routes) 并热生效。
+           GET/POST /api/setup/model-routes。 -->
+      <div class="f-row">
+        <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_mr_title', "多模型路由（按任务挑模型）") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_mr_sub', "像 Cursor 那样按任务挑模型/端点：规划用强模型、问答用便宜的、电脑操控用 VLM。保存即热生效。") }}</div>
+        <div id="dvmr-status" style="margin:.5rem 0;font-size:.8rem;color:var(--t2)">{{ (i18n or {}).get('dv_mr_loading', "加载中…") }}</div>
+        <div id="dvmr-model-list" style="display:flex;flex-direction:column;gap:.4rem;margin:.4rem 0"></div>
+        <div class="f-grid" style="grid-template-columns:1fr 1.6fr 1.2fr 1fr auto;gap:.4rem;align-items:end">
+          <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_name', "档名") }}</label>
+            <input class="f-inp" type="text" id="dvmr-new-name" placeholder="planner_local"></div>
+          <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_base', "Base URL") }}</label>
+            <input class="f-inp" type="text" id="dvmr-new-base" placeholder="http://192.168.0.173:8001"></div>
+          <div class="f-row"><label class="f-lbl">{{ (i18n or {}).get('dv_mr_f_model', "模型") }}</label>
+            <input class="f-inp" type="text" id="dvmr-new-model" placeholder="chatx"></div>
+          <div class="f-row"><label class="f-lbl">API Key <span class="badge-opt">{{ (i18n or {}).get('msg_s416', "可选") }}</span></label>
+            <input class="f-inp" type="password" id="dvmr-new-key" placeholder="{{ (i18n or {}).get('dv_cc_inherit', "留空=继承主链") }}"></div>
+          <button class="btn btn-s btn-sm" style="margin-bottom:2px" onclick="mrAddModel()">＋ {{ (i18n or {}).get('dv_mr_btn_add', "添加模型档") }}</button>
+        </div>
+        <div class="f-lbl" style="margin-top:.6rem">{{ (i18n or {}).get('dv_mr_routes_title', "任务 → 模型档") }}</div>
+        <div id="dvmr-route-list" style="display:flex;flex-direction:column;gap:.3rem;margin:.3rem 0"></div>
+        <div class="save-bar">
+          <span class="save-result" id="dvmr-save-res"></span>
+          <button class="btn btn-s btn-sm" onclick="mrProbe()">{{ (i18n or {}).get('dv_cc_btn_probe', "立即体检") }}</button>
+          <button class="btn btn-p btn-sm" onclick="mrSave()">{{ (i18n or {}).get('dv_mr_btn_save', "保存并生效") }}</button>
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
+
       <!-- 👁️ 内部功能显隐（ui_visibility，2026-08-14）：内部/运维界面默认对
            坐席隐藏，此处按键开启（即点即存，写 overlay 热生效）。单源判定
            src/web/ui_visibility.py；桌面壳经 GET /api/desktop/ui-flags 消费。 -->
@@ -1110,6 +1140,126 @@ async function dvccProbe(){
   res.textContent = '';
 }
 
+// ── 🧭 多模型路由（像 Cursor 按任务挑模型；2026-08-31）：models 档 + task→档映射 ──
+// GET/POST /api/setup/model-routes；保存写 overlay 并热生效。函数顶层声明=onclick 可达。
+let _dvmrModels = [];   // [{name, base_url, model, api_key(掩码回传或新值)}]
+let _dvmrRoutes = {};   // {task: profile}
+let _dvmrTasks = [];    // 已认任务名
+
+function _dvmrEsc(s){
+  const d = document.createElement('div');
+  d.textContent = String(s == null ? '' : s);
+  return d.innerHTML;
+}
+
+function _dvmrRenderModels(loaded){
+  loaded = loaded || [];
+  const box = document.getElementById('dvmr-model-list');
+  if(!box) return;
+  if(!_dvmrModels.length){
+    box.innerHTML = '<div style="font-size:.78rem;color:var(--t2)">' + window.T('dv_mr_js_none') + '</div>';
+    return;
+  }
+  box.innerHTML = _dvmrModels.map((m, i)=>{
+    const on = loaded.indexOf(m.name) >= 0;
+    let hc = '';
+    if(m.health){
+      hc = m.health.reachable
+        ? ('🟢' + (m.health.latency_ms ? (' ' + m.health.latency_ms + 'ms') : ''))
+        : '🔴';
+    }
+    return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem;border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem">'
+      + '<b style="min-width:120px">' + _dvmrEsc(m.name) + '</b>'
+      + '<span style="flex:1;opacity:.75">' + _dvmrEsc(m.base_url || '') + ' · ' + _dvmrEsc(m.model || '') + '</span>'
+      + (hc ? '<span class="ai-pill">' + hc + '</span>' : '')
+      + (on ? '<span class="ai-pill">' + window.T('dv_mr_js_loaded') + '</span>' : '')
+      + '<code style="opacity:.7">' + _dvmrEsc(m.api_key || window.T('dv_cc_js_inherit')) + '</code>'
+      + '<button class="btn btn-s btn-sm" data-dvmr-del="' + i + '" title="del">✕</button></div>';
+  }).join('');
+}
+
+function _dvmrRenderRoutes(){
+  const box = document.getElementById('dvmr-route-list');
+  if(!box) return;
+  const base = '<option value="">' + window.T('dv_mr_js_task_default') + '</option>'
+    + _dvmrModels.map(m=>'<option value="' + _dvmrEsc(m.name) + '">' + _dvmrEsc(m.name) + '</option>').join('');
+  box.innerHTML = _dvmrTasks.map(t=>{
+    const cur = _dvmrRoutes[t] || '';
+    const sel = base.replace('value="' + _dvmrEsc(cur) + '"', 'value="' + _dvmrEsc(cur) + '" selected');
+    return '<div style="display:flex;gap:.6rem;align-items:center;font-size:.8rem">'
+      + '<code style="min-width:160px">' + _dvmrEsc(t) + '</code>'
+      + '<select class="f-inp" data-dvmr-task="' + _dvmrEsc(t) + '" style="max-width:220px">' + sel + '</select></div>';
+  }).join('');
+}
+
+async function mrLoad(probe){
+  const st = document.getElementById('dvmr-status');
+  if(!st) return;
+  try{
+    const r = await apiFetch('/api/setup/model-routes' + (probe ? '?probe=1' : ''),
+                             {credentials:'same-origin'}, {timeoutMs: probe ? 30000 : 15000});
+    const d = await r.json();
+    if(!d.ok) throw new Error('bad response');
+    _dvmrModels = (d.models || []).map(m=>({
+      name: m.name, base_url: m.base_url || '', model: m.model || '',
+      api_key: m.api_key_masked || '', health: m.health || null,
+    }));
+    _dvmrRoutes = d.task_routes || {};
+    _dvmrTasks = d.known_tasks || [];
+    st.textContent = window.Tf('dv_mr_js_summary', {n: _dvmrModels.length, r: Object.keys(_dvmrRoutes).length});
+    _dvmrRenderModels(d.loaded || []);
+    _dvmrRenderRoutes();
+  }catch(e){
+    st.textContent = window.T('inbox.voice.unknown_err');
+  }
+}
+
+async function mrProbe(){
+  const st = document.getElementById('dvmr-status');
+  if(st){ st.textContent = window.T('dv_cc_js_probing'); }
+  await mrLoad(true);
+}
+
+function mrAddModel(){
+  const res = document.getElementById('dvmr-save-res');
+  const name = document.getElementById('dvmr-new-name').value.trim();
+  const base = document.getElementById('dvmr-new-base').value.trim();
+  const model = document.getElementById('dvmr-new-model').value.trim();
+  if(!name || !base || !model){ res.textContent = window.T('dv_mr_js_need_fields'); res.className = 'save-result err'; return; }
+  if(_dvmrModels.some(m=>m.name === name)){ res.textContent = window.Tf('dv_mr_js_dup', {name: name}); res.className = 'save-result err'; return; }
+  _dvmrModels.push({name: name, base_url: base, model: model,
+    api_key: document.getElementById('dvmr-new-key').value.trim()});
+  ['dvmr-new-name','dvmr-new-base','dvmr-new-model','dvmr-new-key'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  res.textContent = ''; res.className = 'save-result';
+  _dvmrRenderModels(); _dvmrRenderRoutes();
+}
+
+async function mrSave(){
+  const res = document.getElementById('dvmr-save-res');
+  const routes = {};
+  document.querySelectorAll('[data-dvmr-task]').forEach(sel=>{
+    const t = sel.getAttribute('data-dvmr-task');
+    const v = sel.value || '';
+    if(t && v) routes[t] = v;
+  });
+  res.textContent = window.T('ov_js_saving'); res.className = 'save-result';
+  try{
+    const r = await apiFetch('/api/setup/model-routes', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({models: _dvmrModels, task_routes: routes}),
+    }, {timeoutMs: 60000});
+    const d = await r.json();
+    if(!d.ok){ res.textContent = '✗ ' + (d.detail || ''); res.className = 'save-result err'; return; }
+    res.textContent = '✓ ' + (d.detail || '') + (d.ai_ready ? '' : (' · ' + window.T('dv_cc_js_reload_warn')));
+    res.className = 'save-result ok';
+    await mrLoad();
+  }catch(e){
+    res.textContent = window.T('tg_js_011') + e.message; res.className = 'save-result err';
+  }
+}
+
 // ── 内部功能显隐（ui_visibility）：即点即存，失败回滚勾选态 ──
 async function dvUivToggle(key, el){
   const res = document.getElementById('dvuiv-res');
@@ -1151,6 +1301,16 @@ async function dvUivToggle(key, el){
   }
   dvccLoad(false);
   dvAiPrimaryLoad();
+  const mbox = document.getElementById('dvmr-model-list');
+  if(mbox){
+    mbox.addEventListener('click', function(ev){
+      const b = ev.target && ev.target.closest ? ev.target.closest('[data-dvmr-del]') : null;
+      if(!b) return;
+      const i = parseInt(b.getAttribute('data-dvmr-del'), 10);
+      if(!isNaN(i)){ _dvmrModels.splice(i, 1); _dvmrRenderModels(); _dvmrRenderRoutes(); }
+    });
+  }
+  mrLoad();
 })();
 
 async function testWebhook(){

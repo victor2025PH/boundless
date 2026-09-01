@@ -256,13 +256,17 @@ def test_hormuz_incident_hard_news_never_opens(tmp_path):
     assert maybe_upgrade_to_news(ck, _cfg(cache), "c:hz:2", now=NOW) is ck
 
 
-_LIGHT_WTA = {
-    "title": "WTA1000多伦多站：张帅终结对普丁塞娃七连败，王欣瑜遭逆转出局",
-    "summary": "网球｜加拿大国家银行公开赛：张帅晋级女单第二轮",
+# 实施84 P2（2026-08-29）：轻话题夹具从赛事新闻（WTA/村BA）换成娱乐/展览——
+# 老板拍板「不做球队赛事类分享」后 exclude_sports 默认剔除赛事条目；本组测试
+# 考的是轻话题**机制**（硬闸/分散/时效/均匀化），不是体育政策，换夹具保住
+# 各自测试意图。赛事剔除本身的门禁见 test_sports_topics_excluded_by_default。
+_LIGHT_FILM = {
+    "title": "国产动画电影《雾山五行2》官宣定档国庆",
+    "summary": "续作首映礼将在上海举行",
     "link": "", "published_ts": NOW - 3600}
-_LIGHT_BBALL = {
-    "title": "宁夏原州“村BA”落幕 乡土赛事点燃乡村文体活力",
-    "summary": "一个篮球，拍出文明乡风", "link": "", "published_ts": NOW - 7200}
+_LIGHT_EXPO = {
+    "title": "敦煌壁画特展下月登陆省博物馆",
+    "summary": "展览首次展出三十件复原洞窟", "link": "", "published_ts": NOW - 7200}
 
 
 def test_mixed_pool_only_light_topics_open(tmp_path):
@@ -272,12 +276,12 @@ def test_mixed_pool_only_light_topics_open(tmp_path):
         {"title": "美伊官员称伊朗与阿曼接近达成霍尔木兹海峡航行协议 - 同花顺",
          "summary": "伊朗称与阿曼谈判接近完成",
          "link": "", "published_ts": NOW - 1800},
-        _LIGHT_WTA,
+        _LIGHT_FILM,
         {"title": "才让太辞去青海省副省长职务（附简历）",
          "summary": "", "link": "", "published_ts": NOW - 1800},
-        _LIGHT_BBALL,
+        _LIGHT_EXPO,
     ])
-    light_facts = {_LIGHT_WTA["title"][:80], _LIGHT_BBALL["title"][:80]}
+    light_facts = {_LIGHT_FILM["title"][:80], _LIGHT_EXPO["title"][:80]}
     for i in range(12):
         op = _news_opener(_cfg(cache), f"c:mx:{i}", now=NOW)
         assert op.get("mode") == NEWS_MODE
@@ -287,7 +291,7 @@ def test_mixed_pool_only_light_topics_open(tmp_path):
 def test_contacts_spread_across_topic_pool(tmp_path):
     """按联系人加盐：多联系人不再全员同题（修「9 人收到同一条霍尔木兹」）。"""
     cache = tmp_path / "topics_cache.json"
-    _stock(cache, topics=[_LIGHT_WTA, _LIGHT_BBALL])
+    _stock(cache, topics=[_LIGHT_FILM, _LIGHT_EXPO])
     got = {
         _news_opener(_cfg(cache), f"c:sp:{i}", now=NOW)["fact"]
         for i in range(16)
@@ -298,7 +302,7 @@ def test_contacts_spread_across_topic_pool(tmp_path):
 def test_stale_topics_soft_fallback_still_opens(tmp_path):
     """条目全旧（>24h）但缓存新鲜 → 放宽仍出货（时效是偏好不是硬闸）。"""
     cache = tmp_path / "topics_cache.json"
-    old = dict(_LIGHT_WTA)
+    old = dict(_LIGHT_FILM)
     old["published_ts"] = NOW - 40 * 3600
     _stock(cache, topics=[old])
     assert _news_opener(
@@ -308,12 +312,12 @@ def test_stale_topics_soft_fallback_still_opens(tmp_path):
 def test_fresh_topic_preferred_over_stale(tmp_path):
     """有今天内的条目时，隔夜旧条目不参与（对所有联系人成立）。"""
     cache = tmp_path / "topics_cache.json"
-    old = dict(_LIGHT_WTA)
+    old = dict(_LIGHT_FILM)
     old["published_ts"] = NOW - 40 * 3600
-    _stock(cache, topics=[old, _LIGHT_BBALL])
+    _stock(cache, topics=[old, _LIGHT_EXPO])
     for i in range(8):
         op = _news_opener(_cfg(cache), f"c:fp:{i}", now=NOW)
-        assert op["fact"] == _LIGHT_BBALL["title"][:80]
+        assert op["fact"] == _LIGHT_EXPO["title"][:80]
 
 
 # ── 8. 同日用量均匀化 + 72h 账本落盘（P2 2026-08-04）─────────────────────
@@ -335,7 +339,7 @@ def test_topic_usage_evens_out_distribution(tmp_path):
 
     from src.companion.proactive_topic import note_news_topic_used
     cache = tmp_path / "topics_cache.json"
-    _stock(cache, topics=[_LIGHT_WTA, _LIGHT_BBALL, _LIGHT_COFFEE])
+    _stock(cache, topics=[_LIGHT_FILM, _LIGHT_EXPO, _LIGHT_COFFEE])
     _reset_topic_usage()
     try:
         dist: Counter = Counter()
@@ -505,3 +509,77 @@ def test_news_opener_region_cache_preferred_and_falls_back(tmp_path):
     # 无 persona / 未命中区域 → 全局池旧行为
     op3 = _news_opener(cfg, "c:55:r3", now=NOW)
     assert op3.get("fact") == "全局咖啡节这周末开幕"
+
+
+# ── 9. 实施84 P2（2026-08-29 老板拍板）：赛事剔除 + 用户国别 + 兴趣路由 ────────
+
+def test_sports_topics_excluded_by_default(tmp_path):
+    """默认剔球队赛事类：全池赛事 → 无货回落；混池只出非赛事；
+    ``exclude_sports: false`` 显式关闭时恢复旧行为（政策可逃生）。"""
+    cache = tmp_path / "topics_cache.json"
+    wta = {"title": "WTA1000多伦多站：张帅晋级女单第二轮",
+           "summary": "网球公开赛战报", "link": "", "published_ts": NOW - 3600}
+    _stock(cache, topics=[wta])
+    assert _news_opener(_cfg(cache), "c:sp84:1", now=NOW) == {}
+    _stock(cache, topics=[wta, _LIGHT_FILM])
+    for i in range(8):
+        op = _news_opener(_cfg(cache), f"c:sp84:m{i}", now=NOW)
+        assert op.get("fact") == _LIGHT_FILM["title"][:80]
+    cfg_off = _cfg(cache)
+    cfg_off["companion"]["daily_topics"]["exclude_sports"] = False
+    got = {_news_opener(cfg_off, f"c:sp84:o{i}", now=NOW).get("fact")
+           for i in range(12)}
+    assert wta["title"][:80] in got
+
+
+def test_news_opener_user_region_beats_persona_region(tmp_path):
+    """用户国别 > 人设国别 > 全局（「新闻以用户所在国家为准」）。"""
+    g = tmp_path / "topics_cache.json"
+    _stock(g, topics=[{"title": "全局咖啡节这周末开幕", "summary": "咖啡",
+                       "link": "", "published_ts": NOW - 3600}])
+    cfg = _cfg55(g, region_feeds={"CA": ["https://ca/rss"],
+                                  "US": ["https://us/rss"]})
+    ca = tmp_path / "topics_cache.CA.json"
+    ca.write_text(json.dumps({"fetched_ts": NOW, "topics": [
+        {"title": "温哥华美食节人气爆棚", "summary": "美食",
+         "link": "", "published_ts": NOW - 1800}]}, ensure_ascii=False),
+        encoding="utf-8")
+    us = tmp_path / "topics_cache.US.json"
+    us.write_text(json.dumps({"fetched_ts": NOW, "topics": [
+        {"title": "纽约街头集市周末回归", "summary": "集市",
+         "link": "", "published_ts": NOW - 1800}]}, ensure_ascii=False),
+        encoding="utf-8")
+    persona = {"id": "x", "location": "vancouver"}
+    # 用户在美国、人设在温哥华 → 用 US 缓存（用户优先）
+    op = _news_opener(cfg, "c:84:u1", now=NOW,
+                      persona_fn=lambda: persona,
+                      user_country_fn=lambda: "US")
+    assert op.get("fact") == "纽约街头集市周末回归"
+    # 用户国别解析不出（""）→ 回落人设分源（CA 缓存）
+    op2 = _news_opener(cfg, "c:84:u2", now=NOW,
+                       persona_fn=lambda: persona,
+                       user_country_fn=lambda: "")
+    assert op2.get("fact") == "温哥华美食节人气爆棚"
+    # user_country_fn 抛异常 → 同回落，绝不阻断
+    def _boom():
+        raise RuntimeError("resolver down")
+    op3 = _news_opener(cfg, "c:84:u3", now=NOW,
+                       persona_fn=lambda: persona, user_country_fn=_boom)
+    assert op3.get("fact") == "温哥华美食节人气爆棚"
+
+
+def test_news_opener_user_words_rank_first(tmp_path):
+    """兴趣路由：用户聊天兴趣词（主）优先于人设口味词（次）选题。"""
+    cache = tmp_path / "topics_cache.json"
+    _stock(cache, topics=[_LIGHT_FILM, _LIGHT_EXPO, _LIGHT_COFFEE])
+    op = _news_opener(
+        _cfg(cache), "c:84:w1", now=NOW,
+        persona_words=["咖啡"],
+        user_words_fn=lambda: ["壁画"])
+    assert op.get("fact") == _LIGHT_EXPO["title"][:80]
+    # 用户词无货可配时人设词仍生效（次级）
+    op2 = _news_opener(
+        _cfg(cache), "c:84:w2", now=NOW,
+        persona_words=["咖啡"],
+        user_words_fn=lambda: ["量子物理"])
+    assert op2.get("fact") == _LIGHT_COFFEE["title"][:80]

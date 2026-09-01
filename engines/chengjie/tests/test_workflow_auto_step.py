@@ -127,7 +127,8 @@ class TestHookGates:
         store.set_automation_mode(CONV, "auto_ai", source="test")
         scheduled = []
 
-        async def _fake_stage(app_state, st, ex, note):
+        async def _fake_stage(app_state, st, ex, note, **_kw):
+            # **_kw：实施93 起 hook 会透传 cta_raw/cfg_root（步骤级转化目标）
             scheduled.append(note)
             return True
 

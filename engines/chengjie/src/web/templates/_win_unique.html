@@ -33,6 +33,17 @@
 
   if (window.top !== window) return;   /* iframe 内嵌（AI Studio 等）不参与命名与复用 */
 
+  /* 桌面壳判定 + 壳能力标记（2026-08-29）：wsRoute＝壳主进程已把「打开 /workspace」
+     收敛到主窗收件箱标签（openBackendPopup 特判：聚焦主窗 + cx-open-workspace 转深链）。
+     有能力＝工作台入口直接 window.open 交壳路由（确定性把主窗拉到前台，零探活等待，
+     也不再有「探活 miss 一次就漏一个弹窗」的残余）；无能力（旧壳）＝维持既有 BC 探活链。
+     模板热更新先于壳更新到达时旧壳零行为变化——这个标记就是分体部署的版本闸。 */
+  var IS_SHELL = false;
+  try { IS_SHELL = /\bElectron\//.test(navigator.userAgent || ''); } catch(_) {}
+  function _shellWsRoute(){
+    try { return !!(window.__chatxCaps && window.__chatxCaps.wsRoute); } catch(_) { return false; }
+  }
+
   /* ── 「返回工作台」去重（P1-③ 2026-08-11，修「还是会出现两个坐席工作台」实录）────
      入口收敛（上方 P0-A）只管「从后台/看板点进来」那个方向；反方向一直漏着：子页
      （报表/任务/客户档案/渠道中心…按设计落在 aitr_wsub 辅助窗）里的「返回工作台」
@@ -59,19 +70,68 @@
             || window.matchMedia('(display-mode: window-controls-overlay)').matches));
     } catch(_) { return false; }
   }
-  function _notifySwitched(){
-    var msg = (typeof window.T === 'function')
-      ? window.T('base.winuniq.switched') : 'base.winuniq.switched';
-    try { if (window.CRMW && window.CRMW.toast) { window.CRMW.toast(msg); return; } } catch(_) {}
-    try {   /* base.html 外壳无 CRMW → 自带极简提示条（3.2s 自散） */
-      var el = document.createElement('div');
-      el.textContent = msg;
-      el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99991;'
-        + 'background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);'
-        + 'border:1px solid var(--tk-border,#e5e6ea);border-radius:999px;'
-        + 'box-shadow:0 8px 28px rgba(15,27,45,.18);padding:8px 18px;font-size:12.5px;';
-      (document.body || document.documentElement).appendChild(el);
-      setTimeout(function(){ try { el.remove(); } catch(_) {} }, 3200);
+  /* 点击链路埋点（2026-08-31「点了没反应」修复）：verdict 计数进既有 ui_events 通道
+     （/api/admin/ui-event-trend?prefix=wsentry_ 可读），关键路径不再是观测盲区。 */
+  function _bcn(action){
+    try {
+      var body = JSON.stringify({page: location.pathname || '/', action: String(action || '')});
+      navigator.sendBeacon('/api/telemetry/ui-event', new Blob([body], {type: 'application/json'}));
+    } catch(_) {}
+  }
+  function _t(key){
+    /* i18n 纪律：不留中文兜底——T 缺席（理论上只在极早期）回落裸键名，键恒在由 pack 保证 */
+    try {
+      if (typeof window.T === 'function') {
+        var s = window.T(key);
+        if (s && s !== key) return s;
+      }
+    } catch(_) {}
+    return key;
+  }
+  /* 可操作提示条（2026-08-31 重做）：旧版是 3.2s 小 toast——「工作台在别处」却不给
+     任何出口，浏览器又不允许替用户聚焦别组窗口，坐席体感=点了没反应。现在：
+     ① 带 [在此打开] 逃生门（当前窗口直接导航，别处那个由多窗协调器自动转待机）；
+     ② 驻留 8s + 可手关；③ token 双回落（--card=后台壳 / --tk-*=工作台壳——旧版
+     在后台暗色壳里弹白胶囊就是只认 --tk-* 的锅）。detail.url 缺失时退化为纯文案条。 */
+  function _notifySwitched(detail){
+    try {
+      detail = detail || {};
+      var old = document.getElementById('winuniq-snack');
+      if (old) { try { old.remove(); } catch(_) {} }
+      var wrap = document.createElement('div');
+      wrap.id = 'winuniq-snack';
+      wrap.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99991;'
+        + 'display:flex;align-items:center;gap:10px;max-width:min(92vw,560px);'
+        + 'background:var(--card,var(--tk-surface,#fff));color:var(--t,var(--tk-text,#0f172a));'
+        + 'border:1px solid var(--bd,var(--tk-border,#e5e6ea));border-radius:12px;'
+        + 'box-shadow:0 8px 28px rgba(15,27,45,.18);padding:9px 12px 9px 16px;font-size:12.5px;line-height:1.5;';
+      var txt = document.createElement('span');
+      txt.textContent = _t('base.winuniq.switched');
+      wrap.appendChild(txt);
+      var url = String(detail.url || '');
+      if (url && url.charAt(0) === '/' && url.charAt(1) !== '/') {
+        var go = document.createElement('button');
+        go.type = 'button';
+        go.textContent = _t('base.winuniq.open_here');
+        go.style.cssText = 'flex-shrink:0;border:none;border-radius:8px;padding:5px 12px;cursor:pointer;'
+          + 'font-size:12px;font-weight:600;background:var(--p,var(--tk-brand,#1e8cf2));color:#fff;';
+        go.addEventListener('click', function(){
+          try { wrap.remove(); } catch(_) {}
+          _bcn('wsentry_openhere');
+          _navWithFeedback(url);
+        });
+        wrap.appendChild(go);
+      }
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.setAttribute('aria-label', 'close');
+      x.textContent = '\u2715';
+      x.style.cssText = 'flex-shrink:0;border:none;background:transparent;cursor:pointer;'
+        + 'font-size:12px;padding:4px 6px;color:inherit;opacity:.55;';
+      x.addEventListener('click', function(){ try { wrap.remove(); } catch(_) {} });
+      wrap.appendChild(x);
+      (document.body || document.documentElement).appendChild(wrap);
+      setTimeout(function(){ try { wrap.remove(); } catch(_) {} }, 8000);
     } catch(_) {}
   }
   /* 坐席「在场心跳」（P2 冻结标签页补丁）：__wsMultiWin 的主控位记录
@@ -113,16 +173,31 @@
       window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: d}));
     } catch(_) {}
   }
+  /* 点击即时反馈（2026-08-31）：探活期（250–1050ms）链接降透明+进度光标——
+     此前这段时间零反馈，是「点了没反应」体感的第一层。 */
+  function _busy(el, on){
+    try {
+      if (!el || !el.style) return;
+      if (on) { el.style.opacity = '.55'; el.style.cursor = 'progress'; el.setAttribute('aria-busy', 'true'); }
+      else { el.style.opacity = ''; el.style.cursor = ''; el.removeAttribute('aria-busy'); }
+    } catch(_) {}
+  }
   function _goHome(opts){
     try {
       opts = opts || {};
       var cid = String(opts.cid || '');
+      var el = opts.el || null;
       var url = String(opts.url || '') || ('/workspace' + (cid ? ('?conv=' + encodeURIComponent(cid)) : ''));
       if (_pathOf(location.pathname) === '/workspace') {
         if (cid && typeof window.__wsFocusConv === 'function') {
           try { window.__wsFocusConv(cid); return true; } catch(_) {}
         }
         return false;             /* 已在坐席页：交回调用方（默认＝原地重载） */
+      }
+      if (IS_SHELL && _shellWsRoute()) {
+        /* 新壳：window.open 经 setWindowOpenHandler → 主进程聚焦主窗收件箱并转深链，
+           本窗留在原页（wsub 弹窗/后台页不再被原地导航成第二个坐席）。 */
+        try { window.open(url, '_blank'); return true; } catch(_) {}
       }
       if (_isAppWin()) { _navWithFeedback(url); return true; }
       try {                       /* ③ opener 直连 */
@@ -133,17 +208,23 @@
           if (opPath === '/workspace') {
             try { op.focus(); } catch(_) {}
             if (cid) _tryHandoff(op, url);   /* ack 站内切会话；未 ack 350ms 导航兜底 */
-            _emitHandoff(cid, {opener: true});   /* toast 统一走中央监听 */
+            _bcn('wsentry_opener');
+            _emitHandoff(cid, {opener: true, url: url});   /* 提示统一走中央监听 */
             return true;
           }
         }
       } catch(_) {}
+      _busy(el, true);
       var took = _probeSeat(url, function(verdict){   /* ④ 耐心探活（allowPlain） */
+        _busy(el, false);
+        _bcn('wsentry_' + verdict);
         if (verdict === 'none') { _navWithFeedback(url); return; }
-        if (verdict === 'frozen') _emitHandoff(cid, {frozen: true});
-        /* 'hit'：事件已由 _bcHandoff 派发，中央监听出 toast，本窗留在原页 */
+        if (verdict === 'frozen') _emitHandoff(cid, {frozen: true, url: url});
+        /* 'hit'：事件已由 _bcHandoff 派发（detail 带 url），中央监听出提示条 */
       });
       if (took) return true;
+      _busy(el, false);
+      _bcn('wsentry_fallback');
       _navWithFeedback(url);      /* BC 不可用（极老内核）→ 旧行为原地导航 */
       return true;
     } catch(_) { return false; }
@@ -161,9 +242,9 @@
      无效再点一次＝窗口翻倍诱因）。中央监听统一出 toast；自带提示的页面（cases）置
      window.__aitrWsHandoffToastOwned=true 声明「我自己渲染」，中央让行防双弹。
      _notifySwitched 仅此一个调用点（单一渲染路径，静态门禁钉住）。 */
-  window.addEventListener('aitr:ws-handoff', function(){
+  window.addEventListener('aitr:ws-handoff', function(ev){
     if (window.__aitrWsHandoffToastOwned) return;
-    _notifySwitched();
+    _notifySwitched((ev && ev.detail) || {});
   });
   /* 委托拦截器：仅左键、无修饰键、无 target/download、站内精确 /workspace（含 ?/#）。
      **捕获相位**且本 include 位于 <head>（先于 body 顶部的 _loading_overlay 注册）→
@@ -182,18 +263,21 @@
       if (href !== '/workspace' && href.indexOf('/workspace?') !== 0
           && href.indexOf('/workspace#') !== 0) return;
       var p = _deepLinkParts(href) || {};
-      if (_goHome({cid: p.cid || '', url: href})) ev.preventDefault();
+      if (_goHome({cid: p.cid || '', url: href, el: a})) ev.preventDefault();
     } catch(_) {}
   }, true);
   /* 桌面壳（Electron webview，UA 含 Electron/，壳 webview 开了 allowpopups）：
-     壳内 window.open 不是「找同名标签页」而是真弹一个原生子窗口，命名寻址语义
-     不存在——旧版在此整体退出（每点一次会话深链弹一个新壳窗）。2026-08-09 起
-     改为**精简版** helper：仅对「工作台会话深链」先走 BC 交接（壳内已开的工作台
-     webview 同 partition，BroadcastChannel 可达 → 站内切会话零弹窗），250ms 无
-     应答回落 window.open 弹壳窗（壳内既有语义，allowpopups 恒可用，零回归）；
-     其余入口（管理后台原地跳转等）保持默认行为。壳自身已有 app 级单实例锁。 */
+     壳内 window.open 不是「找同名标签页」而是交给壳主进程 setWindowOpenHandler。
+     2026-08-29 起按壳能力分流（_shellWsRoute，见顶部）：
+     · 新壳（wsRoute）：/workspace 一律直接 window.open 交主进程——openBackendPopup
+       特判聚焦主窗收件箱标签并转深链，不再开原生弹窗；探活环节整体取消（探活 miss
+       一次就漏一个弹窗、命中又只弹提示不切换，两头都是「还是多开/没反应」的残余源）。
+     · 旧壳（无能力标记）：维持 2026-08-11 语义——先 BC 探活（壳内工作台 webview 同
+       partition 可达 → 站内切会话零弹窗），确无坐席才 window.open 弹壳窗，零回归。
+     其余入口（管理后台等）保持默认行为（主进程 admin 槽自会去重）。壳自身已有
+     app 级单实例锁。 */
   try {
-    if (/\bElectron\//.test(navigator.userAgent || '')) {
+    if (IS_SHELL) {
       window.__openUniqueUrl = function(url, kind){
         try {
           url = String(url || '');
@@ -201,13 +285,16 @@
           if (kind === 'admin') return false;
           var path0 = (url.split('#')[0].split('?')[0].replace(/\/+$/, '')) || '/';
           if (path0 !== '/workspace') return false;
-          /* 会话深链与普通 /workspace 入口都先走耐心探活（2026-08-11 起普通入口也
-             覆盖——此前普通入口 return false 走默认 _blank，每点一次弹一个新壳窗）；
-             确无坐席才回落 window.open 弹壳窗（壳内既有语义，零回归）。
-             toast 统一走中央 aitr:ws-handoff 监听（自带提示的页面置 owned 旗标让行）。 */
+          if (_shellWsRoute()) {
+            /* 新壳：确定性路由主窗，无需探活 */
+            try { window.open(url, '_blank'); return true; } catch(_) { return false; }
+          }
+          /* 旧壳回落：耐心探活（普通入口与深链同判重）；确无坐席才弹壳窗。
+             提示统一走中央 aitr:ws-handoff 监听（自带提示的页面置 owned 旗标让行）。 */
           return _probeSeat(url, function(verdict){
+            _bcn('wsentry_' + verdict);
             if (verdict === 'none') { try { window.open(url, '_blank'); } catch(_) {} return; }
-            if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true});
+            if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true, url: url});
           });
         } catch(_) { return false; }
       };
@@ -317,7 +404,7 @@
       if (p) { try { ch.postMessage({aitr: 'open-conv', token: token, cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId}); } catch(_) {} }
       try { ch.close(); } catch(_) {}
       try { if (cbs.hit) cbs.hit(); } catch(_) {}
-      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p ? p.cid : ''}})); } catch(_) {}
+      try { window.dispatchEvent(new CustomEvent('aitr:ws-handoff', {detail: {cid: p ? p.cid : '', url: url}})); } catch(_) {}
     };
     try { ch.postMessage({aitr: 'ws-ping', token: token}); }
     catch(_) { try { ch.close(); } catch(_) {} return false; }
@@ -335,13 +422,14 @@
      导航成唯一工作台。普通 /workspace 入口与深链同判重。 */
   function _tryBcHandoff(w, url){
     return _probeSeat(url, function(verdict){
+      _bcn('wsentry_' + verdict);
       if (verdict === 'none') {
         try { w.location.replace(url); } catch(_) { try { w.location.href = url; } catch(_) {} }
         try { w.focus(); } catch(_) {}
         return;
       }
       try { w.close(); } catch(_) {}
-      if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true});
+      if (verdict === 'frozen') _emitHandoff((_deepLinkParts(url) || {}).cid || '', {frozen: true, url: url});
     });
   }
 

@@ -76,7 +76,7 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260830" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+    assert "cp-goal.js?v=20260831" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
 
 
 def test_goal_sprint_pace_ui(goal_js: str):
@@ -321,21 +321,21 @@ def test_goal_i18n_dynamic_keys_bilingual():
 
 
 def test_inbox_host_tour_and_feedback(inbox_html: str):
-    """宿主：三步引导接线 + ❓ 重看入口挂 window + cp-fill/cp-action-done 出
-    用户可见反馈（修「点了没反馈」）+ goalHint 喂沉默时长。"""
-    assert "_cpTourStart" in inbox_html
-    assert "ws_cp_tour_done_v1" in inbox_html
-    assert "_cpTourMaybeAuto" in inbox_html
-    assert "\n  _cpTourStart," in inbox_html
+    """宿主：cp-fill/cp-action-done 出用户可见反馈（修「点了没反馈」）+
+    goalHint 喂沉默时长。三步引导（cp-tour）已于 2026-08-31 随新手引导整体
+    退役——此处反向钉住不复活（防复活总门禁见 test_onboarding_retired.py）。"""
+    assert "_cpTourStart" not in inbox_html
+    assert "_cpTourMaybeAuto" not in inbox_html
     assert "inbox.cp.fill_toast" in inbox_html
     assert "inbox.cp.exec_ok" in inbox_html
     assert "goalHint" in inbox_html
 
 
-def test_tour_css_tokens_present():
+def test_tour_css_tokens_absent():
+    """cp-tour 样式随功能退役清除（残留=死 CSS，且暗示有人把引导加回来了）。"""
     css = _CSS.read_text(encoding="utf-8")
-    for sel in (".cp-tour-veil", ".cp-tour-hl", ".cp-tour-pop"):
-        assert sel in css, f"missing CSS {sel}"
+    for sel in (".cp-tour-veil{", ".cp-tour-hl{", ".cp-tour-pop{"):
+        assert sel not in css, f"retired CSS resurfaced: {sel}"
 
 
 # ── P19（2026-07-31 深夜）：反馈率 0% 实锤后的复合按钮 + 本周成果面 ──────────

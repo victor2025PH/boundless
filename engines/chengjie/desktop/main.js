@@ -1037,14 +1037,16 @@ ipcMain.handle("desktop:voice-effective-config", async (_e, args) => {
   } catch (e) { return { ok: false, error: String(e) }; }
 });
 
-ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, platform, account_id }) => {
+ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, platform, account_id, target_lang }) => {
   try {
     // 会话上下文透传（试听=发送 契约；旧渲染层不传=旧行为）
+    // P0-V2b 译声：target_lang（'auto'=会话客户语言，服务端解析）先译后念
     const d = await backendPost("/api/voice/tts-test", {
       text, persona_id: persona_id || undefined,
       chat_key: chat_key || undefined,
       platform: platform || undefined,
       account_id: account_id || undefined,
+      target_lang: target_lang || undefined,
     });
     if (d.audio_url) return { ...d, ok: d.ok !== false };
     if (!d.filename) return d;
@@ -1620,6 +1622,33 @@ function bindBackendPopupLogin(win, intendedUrl) {
 // （后台多为列表/编辑页，硬拉回首页会丢编辑现场——与 _win_unique 浏览器侧同语义）。
 const backendPopupWins = new Map(); // slot → BrowserWindow
 
+// ── 坐席工作台「唯一容器」路由（2026-08-29，修「后台点坐席工作台仍多开一个」）──────
+// 主窗常驻统一收件箱标签（renderer buildInboxTab，默认首屏）＝坐席工作台唯一正身；
+// 再弹一个 /workspace 原生窗等于当场制造第二个工作台。此前两个体感都是「没生效」：
+//   · BC 探活命中 → 入口页只弹「请切换」提示，主窗不会被拉到前台（网页无权聚焦别窗）；
+//   · 探活 miss（webview 正在登录跳转/后端重启窗/刚启动）→ 落到本文件开弹窗，漏一个
+//     就长期跟主窗标签并存（遥测 mw.takeover_auto 修复后 8 天仍 15 次）。
+// 收敛为：精确 /workspace 的打开请求一律路由主窗——聚焦 + cx-open-workspace 通知
+// renderer 切收件箱标签，?conv= 深链由 renderer 经页面既有 open-conv 契约转入
+// （deliverToInbox 自带 ready 轮询，webview 未就绪深链不丢）。仅当收件箱标签被配置
+// 关闭（unified_inbox.enabled=false 的纯内嵌形态）或主窗不在时，回落旧弹窗语义。
+let mainSeatWin = null; // createWindow 登记；closed 清空（activate 重建会再登记）
+
+function focusMainInbox(url) {
+  const w = mainSeatWin;
+  if (!w || w.isDestroyed()) return false;
+  if (((config || {}).unified_inbox || {}).enabled === false) return false;
+  try {
+    w.webContents.send("cx-open-workspace", { url: String(url || "") });
+    if (w.isMinimized()) w.restore();
+    w.show();
+    w.focus();
+    return true;
+  } catch (e) {
+    return false; // 路由失败回落弹窗，绝不吞点击
+  }
+}
+
 function backendPopupSlot(url) {
   let p = "/";
   try { p = (new URL(String(url)).pathname || "/").replace(/\/+$/, "") || "/"; } catch (e) { /* keep "/" */ }
@@ -1649,6 +1678,9 @@ function reuseBackendPopup(slot, url) {
 
 function openBackendPopup(url) {
   const slot = backendPopupSlot(url);
+  // 精确 /workspace 先路由主窗收件箱标签（见上方 focusMainInbox），不再产生
+  // 「主窗标签 + workspace 弹窗」双工作台；主窗不可用才回落弹窗链。
+  if (slot === "workspace" && focusMainInbox(url)) return null;
   const reused = reuseBackendPopup(slot, url);
   if (reused) return reused;
   const child = new BrowserWindow({
@@ -2092,6 +2124,9 @@ async function createWindow() {
     winOpts.height = _fit.height;
   } catch (e) { /* 自适配失败不阻断开窗 */ }
   const win = new BrowserWindow(winOpts);
+  // 坐席工作台路由锚点（focusMainInbox 用）：主窗即统一收件箱的唯一容器
+  mainSeatWin = win;
+  win.on("closed", () => { if (mainSeatWin === win) mainSeatWin = null; });
   // 融合细条×全屏（titlebar merge P2b）：F11/视图菜单进全屏后原生窗控自动消失，
   // 32px 细条再常驻就是纯浪费——通知壳 renderer 收起（cx-tb-fs），退出全屏还原。
   if (TB_MERGED) {

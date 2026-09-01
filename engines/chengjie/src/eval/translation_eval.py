@@ -280,12 +280,16 @@ def build_deterministic_evaluator(
 
 
 def _probe_ollama_model(base_url: str, model: str, timeout: float = 3.0,
-                        api: str = "native") -> bool:
+                        api: str = "native", api_key: str = "") -> bool:
     """快速探测端点可达**且模型已就位**（native=/api/show；openai=/v1/models）。
 
     避免「端点宕机/模型未拉」时评测把 20 个样本全跑成 forward_failed——
     那是误导性的 FAIL，正确语义是 skip（资源不可用）。
-    P2-XL：``api="openai"``（vLLM 官方精度部署）改探 /v1/models 且校验模型名在列。"""
+    P2-XL：``api="openai"``（vLLM 官方精度部署）改探 /v1/models 且校验模型名在列。
+    2026-08-30 增补：/v1/models 失败 → 降级 1-token chat ping。生产拓扑实锤：
+    173:8001 网关只透传 POST chat/completions（GET /v1/models 直接 RST）→ 旧探针
+    把活端点判死，8-28 换 vLLM 落点后本地 MT 评测轨**静默全 skip**（周批趋势断线）。
+    chat ping 与真实调用同通道同鉴权，是更真实的可用性证据。"""
     try:
         import json as _json
         import urllib.request as _rq
@@ -294,12 +298,29 @@ def _probe_ollama_model(base_url: str, model: str, timeout: float = 3.0,
         if str(api or "").strip().lower() in ("openai", "openai_compat", "v1"):
             if not base.endswith("/v1"):
                 base = base + "/v1"
-            with _rq.urlopen(f"{base}/models", timeout=timeout) as r:
-                if not (200 <= r.status < 300):
-                    return False
-                data = _json.loads(r.read().decode("utf-8", "replace"))
-            ids = {str(m.get("id") or "") for m in (data.get("data") or [])}
-            return model in ids if ids else True
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            try:
+                req = _rq.Request(f"{base}/models",
+                                  headers={k: v for k, v in headers.items()
+                                           if k != "Content-Type"})
+                with _rq.urlopen(req, timeout=timeout) as r:
+                    if not (200 <= r.status < 300):
+                        raise OSError(f"http_{r.status}")
+                    data = _json.loads(r.read().decode("utf-8", "replace"))
+                ids = {str(m.get("id") or "") for m in (data.get("data") or [])}
+                return model in ids if ids else True
+            except Exception:
+                # 降级：真打一发 1-token chat（网关只透传 chat 的拓扑唯一可靠探法；
+                # thinking 模型 content 可能为空，这里只看 HTTP 2xx 不看正文）。
+                ping = _json.dumps({
+                    "model": model, "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }).encode()
+                req = _rq.Request(f"{base}/chat/completions", ping, headers)
+                with _rq.urlopen(req, timeout=max(timeout, 10.0)) as r:
+                    return 200 <= r.status < 300
         if base.endswith("/v1"):
             base = base[:-3].rstrip("/")
         body = _json.dumps({"name": model}).encode()
@@ -337,7 +358,9 @@ def build_local_mt_evaluator(
     if not urls or not model:
         return None
     if probe:
-        urls = [u for u in urls if _probe_ollama_model(u, model, api=api)]
+        _key = str(mc.get("api_key", "") or "")
+        urls = [u for u in urls
+                if _probe_ollama_model(u, model, api=api, api_key=_key)]
         if not urls:
             return None
     try:
@@ -351,6 +374,9 @@ def build_local_mt_evaluator(
             max_tokens=int(mc.get("max_tokens", 1024) or 1024),
             keep_alive=str(mc.get("keep_alive", "30m") or ""),
             api=api,
+            # 与生产 build_engines 同口径：漏传会让评测在「thinking 默认开」的后端上
+            # 全量拿到空译文，把后端配置问题误报成模型质量崩盘。
+            payload_extra=mc.get("payload_extra"),
         )
     except Exception:
         return None

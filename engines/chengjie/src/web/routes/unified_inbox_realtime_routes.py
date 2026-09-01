@@ -84,6 +84,9 @@ _SSE_EVENT_TYPES = frozenset({
     # 前端只消费 reason=daily_budget → 触顶中央弹窗（workspace_base __wsBudgetPop），
     # 修「预算熔断发生时坐席不开着那个会话就零感知」的盲区；其余 reason 前端暂忽略。
     "bot_peer_alert",
+    # 实施93c：客户首点 CTA 追踪短链（cta_links.handle_click 发布）——最热跟进
+    # 信号进工作台 toast + 铃铛；服务端只在首点发布，天然稀疏。
+    "cta_clicked",
 })
 
 # 写入 app.state.notif_queue 的重要事件类型
@@ -108,6 +111,7 @@ _NOTIF_EVENT_TYPES = frozenset({
     "orchestrator_worker_alert",
     "ops_report",
     "goal_completed_alert",
+    "cta_clicked",
 })
 
 # 复发型告警：按「类型+会话」在 notif_queue 内合并，仅保留最新一条（避免历史堆叠）
@@ -117,6 +121,8 @@ _COALESCE_NOTIF_TYPES = frozenset({
     # _maybe_push_notif（本队列无 conv_note 式幂等），coalesce 保最新一条
     # 即天然去重；跨日再触顶也只留最新（昨天的触顶已无行动价值）。
     "bot_peer_alert",
+    # 93c：同会话重复铸链再点（新 token 首点）只留最新一条——跟进动作是同一个
+    "cta_clicked",
 })
 
 

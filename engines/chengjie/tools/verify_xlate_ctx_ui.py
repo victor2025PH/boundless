@@ -191,6 +191,10 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
             print("[SKIP] 合成会话线程未渲染（实例形态变化？）")
             browser.close()
             return 0
+        page.evaluate(
+            "() => { try{ ['cp-tour-veil','cp-tour-hl','cp-tour-pop']"
+            ".forEach(id=>{var n=document.getElementById(id); if(n) n.remove();});"
+            "}catch(_){} }")
 
         # ── 1. 三类消息的右键菜单分型 ──────────────────────────────
         page.locator("#msg-area .msg-row#msg-gx1").click(button="right")
@@ -252,6 +256,23 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
         page.wait_for_selector("#lightbox-overlay.show", timeout=5000)
         panel = page.locator("#lightbox-xl")
         ck.check(panel.is_visible(), "灯箱侧栏出现")
+        ck.check(panel.locator(".lbxl-lang-row select").count() == 0,
+                 "灯箱无原生 select")
+        ck.check(panel.locator("#lb-xl-more").count() == 1, "灯箱「更多」芯片")
+        page.locator("#lb-xl-more").click()
+        page.wait_for_function(
+            "() => (document.getElementById('lightbox-xl')||{}).classList"
+            ".contains('is-pick')", timeout=3000)
+        n_pick = page.evaluate(
+            "() => document.querySelectorAll('#lb-xl-pick-list [data-xl-code]').length")
+        ck.check(n_pick >= 30, "灯箱选语页列出目录", f"n={n_pick}")
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "() => !(document.getElementById('lightbox-xl')||{}).classList"
+            ".contains('is-pick')", timeout=3000)
+        ck.check(page.evaluate(
+            "() => document.getElementById('lightbox-overlay')"
+            ".classList.contains('show')"), "Esc 只关选语页、灯箱仍开")
         btn = panel.locator("button", has_text="识别翻译").first
         ck.check(btn.count() > 0, "侧栏带「识别翻译」按钮（手动触发不自动烧）")
         btn.click()

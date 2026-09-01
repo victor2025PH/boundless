@@ -139,9 +139,14 @@ def test_peer_locale_never_uses_behavioural_inference():
 
     params = inspect.signature(ucr.resolve_peer_locale).parameters
     assert "activity_hours" not in params
-    # 且 resolve_for_conversation（调度侧）反过来必须能吃行为信号
+    # 且 resolve_for_conversation（调度侧）反过来必须能吃行为信号。
+    # 2026-08-29 钉子更新：sprint01 重构后取数与推断拆成两步
+    # （rows → utc_hours_from_rows(rows)），字面量随之更新——不变量本身
+    # 未变（调度侧吃统计推断 / prompt 侧 resolve_peer_locale 恒 activity_hours=None，
+    # 后者由本文件其它断言与 resolver 834 行显式 None 共同钉住）。
     src = inspect.getsource(ucr.resolve_for_conversation)
-    assert "activity_hours=utc_hours_for_conversation" in src
+    assert ("activity_hours=utc_hours_for_conversation" in src
+            or "activity_hours=utc_hours_from_rows" in src)
 
 
 def test_whatsapp_phone_is_explicit_signal_but_telegram_id_is_not():

@@ -135,13 +135,11 @@ _TRANSLATIONS = {
         # ── 语言切换 ──────────────────────────────────
         "lang_switch": "English",
         "lang_current": "简体中文",
-        # ── 新手引导 ──────────────────────────────────
-        "tour_skip": "跳过引导",
+        # ── 通用词条（历史上属新手引导；引导 2026-08-31 退役后仅存被
+        #    workflows/knowledge/messenger_rpa 复用的三个通用词，勿当孤儿删）──
         "tour_next": "下一步",
         "tour_done": "完成",
-        "tour_prev": "上一步",
         "tour_step": "步骤",
-        "tour_of": "/",
         # ── 快捷键 ────────────────────────────────────
         "shortcuts_title": "键盘快捷键",
         "shortcuts_nav": "导航",
@@ -316,17 +314,7 @@ _TRANSLATIONS = {
         "cases_load_fail": "加载失败",
         "cases_load_fail_hint": "请稍后点击「刷新」重试。如果问题持续，请联系技术支持。",
         "cases_close_prompt": "请输入结案说明（可为空）：",
-        # ── 简洁模式·新手引导弹窗（③-S5：base.html simple onboard-modal，原仅 full 态密封）──
-        "onb_welcome_title": "欢迎使用简洁模式",
-        "onb_welcome_desc": "系统已为你精简了操作界面，专注于最常用的功能：",
-        "onb_cases_label": "案例跟进",
-        "onb_cases_desc": "查看和处理客户案例",
-        "onb_kb_label": "知识库",
-        "onb_kb_desc": "浏览和搜索知识条目",
-        "onb_review_label": "学习队列",
-        "onb_review_desc": "审核 AI 生成的草稿",
-        "onb_footer": "进阶功能（真机矩阵、数据分析、人设工作室等）在完整模式——侧边栏底部随时可切换",
-        "onb_start": "开始使用",
+        # ── 简洁模式新手引导弹窗词条已随功能退役删除（2026-08-31）──
         # ── 实时日志页正文（③-S6：logs.html 工具栏 + 终端 + SSE 重连）──
         "logs_adv_title": "高级功能",
         "logs_adv_desc": "实时日志供技术排查使用。",
@@ -962,13 +950,11 @@ _TRANSLATIONS = {
         # ── Language ──────────────────────────────────
         "lang_switch": "中文",
         "lang_current": "English",
-        # ── Onboarding ────────────────────────────────
-        "tour_skip": "Skip Tour",
+        # ── Generic terms (ex-onboarding; tour retired 2026-08-31, these three
+        #    survive as generic words reused by workflows/knowledge/messenger_rpa) ──
         "tour_next": "Next",
         "tour_done": "Done",
-        "tour_prev": "Back",
         "tour_step": "Step",
-        "tour_of": "of",
         # ── Shortcuts ─────────────────────────────────
         "shortcuts_title": "Keyboard Shortcuts",
         "shortcuts_nav": "Navigation",
@@ -1108,17 +1094,7 @@ _TRANSLATIONS = {
         "cases_load_fail": "Failed to load",
         "cases_load_fail_hint": "Please click Refresh to retry. If it persists, contact technical support.",
         "cases_close_prompt": "Enter a resolution note (optional):",
-        # ── Simple-mode onboarding modal (③-S5: base.html simple onboard-modal; was full-only sealed) ──
-        "onb_welcome_title": "Welcome to Simple Mode",
-        "onb_welcome_desc": "We've streamlined the interface to focus on the features you use most:",
-        "onb_cases_label": "Case Follow-ups",
-        "onb_cases_desc": "View and handle customer cases",
-        "onb_kb_label": "Knowledge Base",
-        "onb_kb_desc": "Browse and search knowledge entries",
-        "onb_review_label": "Learning Queue",
-        "onb_review_desc": "Review AI-generated drafts",
-        "onb_footer": "Advanced features (Device Matrix, analytics, Persona Studio…) live in Full Mode — switch anytime from the bottom of the sidebar",
-        "onb_start": "Get started",
+        # ── Simple-mode onboarding modal keys removed with the feature (2026-08-31) ──
         # ── Live logs page body (③-S6: logs.html toolbar + terminal + SSE reconnect) ──
         "logs_adv_title": "Advanced feature",
         "logs_adv_desc": "Live logs are for technical troubleshooting.",

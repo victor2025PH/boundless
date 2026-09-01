@@ -58,3 +58,41 @@ async def test_translation_service_uses_ai_client():
     assert rv.provider == "ai"
     assert rv.translated_text == "你好朋友"
 
+
+# ── 中文变体（繁体/粤语）目标语（2026-08-29）──────────────────────────────────
+
+def test_normalize_lang_zh_variants_first_class():
+    """zh-tw 不再折叠成 zh（否则简→繁在 identity 短路里恒原样返回）；
+    zh-hant/zh-hk 归一到 zh-tw；简体折叠语义不变。"""
+    from src.ai.translation_service import LANG_NAMES, normalize_lang
+    assert normalize_lang("zh-TW") == "zh-tw"
+    assert normalize_lang("zh_Hant") == "zh-tw"
+    assert normalize_lang("zh-HK") == "zh-tw"
+    assert normalize_lang("zh-CN") == "zh"
+    assert normalize_lang("yue") == "yue"
+    # AI 线 prompt 显名（缺了会把裸码写进 prompt）
+    assert LANG_NAMES["zh-tw"] == "Traditional Chinese"
+    assert LANG_NAMES["yue"] == "Cantonese"
+
+
+@pytest.mark.asyncio
+async def test_translate_zh_to_traditional_and_cantonese_not_identity():
+    """简体→繁体/粤语必须真走引擎（修复前 zh-tw 被 normalize 折叠 → 恒 identity）。"""
+    class FakeAI:
+        def __init__(self, out):
+            self._out = out
+
+        async def chat(self, prompt, context=None):
+            return self._out
+
+    svc_tw = TranslationService(ai_client=FakeAI("謝謝你的幫忙"))
+    r_tw = await svc_tw.translate("谢谢你的帮忙", target_lang="zh-TW")
+    assert r_tw.ok is True and r_tw.provider == "ai"
+    assert r_tw.translated_text == "謝謝你的幫忙"
+    assert r_tw.target_lang == "zh-tw"
+
+    svc_yue = TranslationService(ai_client=FakeAI("唔該晒你幫手"))
+    r_yue = await svc_yue.translate("谢谢你的帮忙", target_lang="yue")
+    assert r_yue.ok is True and r_yue.provider == "ai"
+    assert r_yue.translated_text == "唔該晒你幫手"
+

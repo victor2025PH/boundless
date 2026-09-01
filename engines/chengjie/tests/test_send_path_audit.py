@@ -47,12 +47,18 @@ ALLOWLIST: Dict[str, tuple] = {
     "client/sender.py::TelegramSenderMixin.send_photo":
         (GUARDED, "Stage G：形象照直发纳入统一发送栈"),
     # ── 编排器受管 worker：物理发送在 worker，护栏在 orchestrator.send/send_media（Stage M）──
-    "integrations/account_orchestrator.py::TelegramProtocolWorker.send":
-        (GUARDED, "经 AccountOrchestrator.send → send_blocked 中心护栏后才派发"),
-    "integrations/account_orchestrator.py::TelegramProtocolWorker.send_media":
-        (GUARDED, "经 AccountOrchestrator.send_media → send_blocked 中心护栏后才派发"),
-    "integrations/telegram_companion_worker.py::TelegramCompanionWorker.send":
-        (GUARDED, "调 mixin send_message（已护栏）+ 经 orchestrator.send 中心护栏，双层"),
+    # loop-affinity 重构后 send/send_media 变成 _on_client_loop 委托壳，物理
+    # .client.send_* 内聚到 *_impl / *_inner（护栏链不变：编排器 send_blocked
+    # 仍在派发之前）。impl91 修复线 2026-08-31 同步名单（改名者漏更）。
+    "integrations/account_orchestrator.py::TelegramProtocolWorker._send_impl":
+        (GUARDED, "经 AccountOrchestrator.send → send_blocked 中心护栏后才派发"
+                  "（send 的 loop 封送内层）"),
+    "integrations/account_orchestrator.py::TelegramProtocolWorker._send_media_impl":
+        (GUARDED, "经 AccountOrchestrator.send_media → send_blocked 中心护栏后才派发"
+                  "（send_media 的 loop 封送内层）"),
+    "integrations/telegram_companion_worker.py::TelegramCompanionWorker._send_text_inner":
+        (GUARDED, "调 mixin send_message/send_message_return_id（已护栏）+ 经"
+                  " orchestrator.send 中心护栏，双层（send 的 loop 封送内层）"),
     # ── 管理员/坐席运维告警：有意不受 Kill-Switch 约束（冻结/风控期反而更需送达）──
     "client/sender.py::TelegramSenderMixin._send_escalation_private_jump_hint":
         (ADMIN_ALERT, "人工转接：发给坐席的群内消息定位提示，非客户内容"),
@@ -157,9 +163,10 @@ def test_companion_send_paths_are_guarded():
         "client/sender.py::TelegramSenderMixin._send_text_guarded",
         "client/sender.py::TelegramSenderMixin._send_reply",
         "client/sender.py::TelegramSenderMixin.send_photo",
-        "integrations/account_orchestrator.py::TelegramProtocolWorker.send",
-        "integrations/account_orchestrator.py::TelegramProtocolWorker.send_media",
-        "integrations/telegram_companion_worker.py::TelegramCompanionWorker.send",
+        # loop-affinity 重构后物理发送在 *_impl / *_inner（外壳 send 只做 loop 封送）
+        "integrations/account_orchestrator.py::TelegramProtocolWorker._send_impl",
+        "integrations/account_orchestrator.py::TelegramProtocolWorker._send_media_impl",
+        "integrations/telegram_companion_worker.py::TelegramCompanionWorker._send_text_inner",
     ]
     for k in must_guarded:
         assert k in ALLOWLIST, f"关键发送入口从白名单消失（被改名/删除？）：{k}"

@@ -18,8 +18,14 @@
     python tools/check_config_duplicates.py            # 查本机所有实例数据根
     python tools/check_config_duplicates.py --repo     # 顺带查仓库自带 config/
     python tools/check_config_duplicates.py --json
+    python tools/check_config_duplicates.py --fix PATH # 安全去重（见下）
 
-退出码：发现重复键 → 1（便于挂进重启前置或计划任务）。
+``--fix``（P0 2026-08-29 补，「重复键挡全线重启 12 小时」事故沉淀）：只删
+**与首次出现字节相同的单行标量重复行**——语义零变化（PyYAML 本就取最后一个，
+两行又一样），写前落 ``.bak.dup-<时间戳>`` 备份；值不同/块级重复绝不自动修
+（选错边=丢配置），如实列出留人工。生产实例 overlay 请由所有者跑。
+
+退出码：发现（或修后仍剩）重复键 → 1（便于挂进重启前置或计划任务）。
 """
 
 from __future__ import annotations
@@ -35,7 +41,10 @@ if str(ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_ROOT))
 
 
-from src.utils.yaml_duplicates import find_duplicate_keys  # noqa: E402
+from src.utils.yaml_duplicates import (  # noqa: E402
+    dedupe_identical_lines,
+    find_duplicate_keys,
+)
 
 
 def _targets(repo: bool, data_root: str = "") -> List[Path]:
@@ -55,13 +64,57 @@ def _targets(repo: bool, data_root: str = "") -> List[Path]:
     return out
 
 
+def apply_fix(path: Path) -> Dict[str, Any]:
+    """对单个文件做安全去重。返回 ``{removed, remaining, backup}``。
+
+    只有真删了行才写盘（写前落 ``.bak.dup-<ts>``）；无可修项=文件零触碰。"""
+    import time
+
+    text = path.read_text(encoding="utf-8")
+    res = dedupe_identical_lines(text)
+    out: Dict[str, Any] = {
+        "removed": res["removed"], "remaining": res["remaining"], "backup": ""}
+    if res["removed"]:
+        backup = path.with_name(
+            path.name + ".bak.dup-" + time.strftime("%Y%m%d-%H%M%S"))
+        backup.write_text(text, encoding="utf-8")
+        path.write_text(res["text"], encoding="utf-8")
+        out["backup"] = str(backup)
+    return out
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="配置重复键自检（只读）")
+    ap = argparse.ArgumentParser(description="配置重复键自检（只读；--fix 例外）")
     ap.add_argument("--repo", action="store_true", help="顺带检查仓库自带 config/")
     ap.add_argument("--data-root", default="",
                     help="只查这个实例数据根（重启前置按实例定向检查用）")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--fix", default="", metavar="FILE",
+                    help="对指定文件安全去重（仅删字节相同的单行标量重复；"
+                         "写前落 .bak.dup-<ts> 备份；其余重复列出留人工）")
     args = ap.parse_args()
+
+    if args.fix:
+        p = Path(args.fix)
+        if not p.is_file():
+            print(f"✗ 文件不存在: {p}", file=sys.stderr)
+            return 2
+        res = apply_fix(p)
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            print(f"-- dedupe {p} --")
+            for d in res["removed"]:
+                print(f"  REMOVED line {d['line']}  {d['path']}"
+                      f"（与 line {d['first_line']} 字节相同）")
+            if res["backup"]:
+                print(f"  backup: {res['backup']}")
+            for d in res["remaining"]:
+                print(f"  MANUAL  line {d['line']}  {d['path']}"
+                      "（值不同/块级重复——需人工判断保哪边）")
+            if not res["removed"] and not res["remaining"]:
+                print("  OK: no duplicate keys")
+        return 1 if res["remaining"] else 0
 
     report: Dict[str, List[str]] = {}
     for p in _targets(args.repo, args.data_root):

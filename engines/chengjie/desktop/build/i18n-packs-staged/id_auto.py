@@ -3014,9 +3014,14 @@ ID = {
     'ws.quotawall.watching': 'Halaman top-up telah dibuka—setelah pembayaran selesai, saldo akan otomatis masuk, dan di sini akan kembali normal secara otomatis.',
     'ws.restartcool.hint': '(Sistem dalam perlindungan pendinginan; proses restart berulang telah dihentikan secara otomatis)',
     'ws.restartcool.text': 'Layanan baru saja dihidupkan kembali; jika terjadi kegagalan memuat sesekali dalam waktu sekitar {n} menit, hal tersebut merupakan hal yang wajar. Silakan tunggu hingga pulih secara otomatis, jangan refresh berulang-ulang.',
-    'ws.uibuild.btn': 'Perbarui sekarang juga',
+    'ws.uibuild.btn': 'Perbarui sekarang',
     'ws.uibuild.dismiss': 'Sementara tidak (tidak ada pengingat dalam 2 jam ke depan)',
-    'ws.uibuild.text': 'Antarmuka meja kerja telah diperbarui ke versi terbaru, cukup refresh halaman untuk memuatnya (disarankan segera kirim/simpan data yang sedang diproses).',
+    'ws.uibuild.short': 'Ada versi baru',
+    'ws.uibuild.text': 'Tersedia versi antarmuka baru. Klik “Perbarui sekarang” untuk memuat ulang (sekitar 2 detik; teks di kotak ketik akan tetap tersimpan).',
+    'ws.uibuild.unsent': 'Masih ada foto atau pesan suara yang belum terkirim. Memuat ulang akan menghapusnya — kirim dulu, baru perbarui.',
+    'ws.uibuild.force': 'Tetap perbarui',
+    'ws.uibuild.later': 'Kirim dulu',
+    'ws.uibuild.auto_done': 'Antarmuka sudah diperbarui ke versi baru di latar belakang.',
     # ── wu_js001 ──
     'wu_js001': 'Tidak ada perbandingan periode.',
     # ── wu_js002 ──

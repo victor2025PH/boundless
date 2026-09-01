@@ -138,6 +138,41 @@ SMALLTALK_TOPIC_WORDS = (
     "nba", "wta", "atp", "esports",
 )
 
+# ── 实施84 P2（2026-08-29 老板拍板的内容策略）─────────────────────────────────
+# ① 不做球队赛事类分享——词表只含「赛事/球队」语义（比赛、联赛、世界杯…），
+#   刻意不含健身/瑜伽/骑行/露营等生活方式词（那些仍是正常闲聊素材）；
+# ② 社会/娱乐新闻为主——prefer_kinds 参与选题排序（entertainment/news 靠前）；
+# ③ 新闻以用户所在国家为准——cfg_for_user_region（见下）。
+SPORTS_EVENT_WORDS = (
+    "体育", "赛事", "比赛", "夺冠", "冠军", "联赛", "球迷", "球队", "足球",
+    "篮球", "网球", "乒乓", "羽毛球", "排球", "高尔夫", "马拉松",
+    "奥运", "亚运", "世界杯", "锦标赛", "公开赛", "电竞", "晋级",
+    "决赛", "半决赛", "夺金", "游泳", "田径", "体操", "球员", "球赛",
+    "nba", "wta", "atp", "esports", "sports", "match", "tournament",
+)
+
+
+def is_sports_event_topic(topic: Any) -> bool:
+    """该条目是否「球队赛事类」（kind=sports 的垂直源条目，或标题/摘要命中
+    赛事词）。纯函数，供主动分享与素材注入按内容策略剔除。"""
+    if not isinstance(topic, dict):
+        return False
+    if str(topic.get("kind") or "").strip().lower() == "sports":
+        return True
+    blob = (str(topic.get("title") or "")
+            + " " + str(topic.get("summary") or "")).lower()
+    return _match_any(blob, SPORTS_EVENT_WORDS)
+
+
+def _kind_rank(topic: Dict[str, Any], prefer_kinds) -> int:
+    """类别偏好序：prefer_kinds 里的类别按位次靠前，未列出的排最后。"""
+    kind = str(topic.get("kind") or "news").strip().lower()
+    try:
+        return list(prefer_kinds or ()).index(kind)
+    except ValueError:
+        return len(prefer_kinds or ())
+
+
 # 重话题否决表（veto，优先级高于轻词命中）：军政地缘/官员任免/宏观财经/
 # 灾难事故/边境移民。存在理由＝Google News 聚合摘要会把媒体品牌名（如
 # 「手机新浪网」）拼进 summary，轻词表会被这类噪声误点亮（2026-08-04
@@ -513,6 +548,9 @@ def pick_topics_for(
     cache: Optional[Dict[str, Any]] = None,
     cache_path: Optional[str] = None,
     variety_key: str = "",
+    secondary_tastes: Optional[List[str]] = None,
+    exclude_sports: bool = False,
+    prefer_kinds: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     """从缓存挑 ≤k 条话题：兴趣词命中的优先，其余按 crc32 当日确定性轮换
     补足（今天恒定、明天自动换）。返回 ``[{title, summary}]``。
@@ -521,9 +559,18 @@ def pick_topics_for(
     联系人分散到整个话题池——修 2026-08-04 实锤「同一条霍尔木兹新闻
     73 分钟内群发 9 个客户」（旧轮换键只含日期+标题，全员同题）。
     省略时保持旧键格式（日期#标题），既有调用方零行为变化。
+
+    实施84 P2 增量（默认值＝旧行为，既有调用方零变化）：
+    - ``secondary_tastes``：次级兴趣词——主词（如**用户**聊天里的兴趣）命中的
+      排最前，次词（如人设口味）命中的其次，其余轮换补足；
+    - ``exclude_sports``：剔除球队赛事类条目（老板拍板「不做赛事分享」）；
+    - ``prefer_kinds``：类别偏好序（如 ["entertainment","news"]＝社会/娱乐
+      为主），同优先层内先按类别再按轮换盐排。
     """
     data = cache if isinstance(cache, dict) else read_topics_cache(cache_path)
     topics = [t for t in (data.get("topics") or []) if isinstance(t, dict)]
+    if exclude_sports and topics:
+        topics = [t for t in topics if not is_sports_event_topic(t)]
     if not topics:
         return []
     now_v = float(now if now is not None else time.time())
@@ -531,25 +578,39 @@ def pick_topics_for(
     vk = str(variety_key or "").strip()
     tastes = [str(w or "").strip().lower() for w in (persona_tastes or [])]
     tastes = [w for w in tastes if w]
+    tastes2 = [str(w or "").strip().lower() for w in (secondary_tastes or [])]
+    tastes2 = [w for w in tastes2 if w]
 
-    def _matches(t: Dict[str, Any]) -> bool:
+    def _matches(t: Dict[str, Any], words) -> bool:
         blob = (str(t.get("title") or "") + " " + str(t.get("summary") or "")).lower()
-        return any(w in blob for w in tastes)
+        return any(w in blob for w in words)
 
     def _rot(t: Dict[str, Any]) -> int:
         title = t.get("title") or ""
         key = f"{day}#{vk}#{title}" if vk else f"{day}#{title}"
         return crc32(key.encode("utf-8", "ignore"))
 
-    matched = [t for t in topics if _matches(t)] if tastes else []
+    def _order_key(t: Dict[str, Any]):
+        if prefer_kinds:
+            return (_kind_rank(t, prefer_kinds), _rot(t))
+        return _rot(t)
+
+    matched = [t for t in topics if _matches(t, tastes)] if tastes else []
     matched_ids = {id(t) for t in matched}
-    rest = [t for t in topics if id(t) not in matched_ids]
-    if vk and len(matched) > 1:
+    matched2 = ([t for t in topics
+                 if id(t) not in matched_ids and _matches(t, tastes2)]
+                if tastes2 else [])
+    matched2_ids = {id(t) for t in matched2}
+    rest = [t for t in topics
+            if id(t) not in matched_ids and id(t) not in matched2_ids]
+    if len(matched) > 1 and (vk or prefer_kinds):
         # 同人设多条兴趣命中时也按联系人分散（否则该人设全部联系人仍同题）
-        matched.sort(key=_rot)
-    rest.sort(key=_rot)
+        matched.sort(key=_order_key)
+    if len(matched2) > 1:
+        matched2.sort(key=_order_key)
+    rest.sort(key=_order_key)
     keep = max(1, int(k))
-    picked = (matched + rest)[:keep]
+    picked = (matched + matched2 + rest)[:keep]
     return [
         {
             "title": str(t.get("title") or "")[:120],
@@ -718,6 +779,16 @@ def parse_topics_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             clean = [str(u).strip() for u in urls if str(u or "").strip()]
             if clean:
                 region_feeds[key] = clean
+    # 实施84 P2 内容策略键（2026-08-29 老板拍板）：
+    # exclude_sports 默认 **true**（产品级决定：不做球队赛事类分享）；
+    # prefer_kinds 默认 娱乐/社会新闻靠前；user_region 默认关（新子系统惯例）。
+    prefer_raw = dt.get("prefer_kinds")
+    if isinstance(prefer_raw, (list, tuple)):
+        prefer_kinds = [str(w).strip().lower() for w in prefer_raw
+                        if str(w or "").strip()]
+    else:
+        prefer_kinds = ["entertainment", "news"]
+    ur = dt.get("user_region") if isinstance(dt.get("user_region"), dict) else {}
     return {
         "enabled": bool(dt.get("enabled", False)),
         "feeds": feeds,
@@ -730,6 +801,9 @@ def parse_topics_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "cache_path": str(dt.get("cache_path") or DEFAULT_CACHE_PATH),
         "feed_kinds": dict(kind_map) if isinstance(kind_map, dict) else {},
         "region_feeds": region_feeds,
+        "exclude_sports": bool(dt.get("exclude_sports", True)),
+        "prefer_kinds": prefer_kinds,
+        "user_region_enabled": bool(ur.get("enabled", False)),
     }
 
 
@@ -778,6 +852,57 @@ def cfg_for_region(tcfg: Dict[str, Any], region_key: str) -> Dict[str, Any]:
     return out
 
 
+# ── 按用户国别分源（实施84 P2，2026-08-29 老板拍板「以用户所在城市和国家为准」）──
+def google_news_feed_url(country_code: str, lang: str = "zh") -> str:
+    """按国家码 + 用户语言自动构造 Google News RSS 源 URL；非法输入返回 ""。
+
+    中文用户 → 该国的简中版（如 ``gl=MY&ceid=MY:zh-Hans``）；其余语言用
+    「语言-国家」版式（如 ``hl=en-MY&gl=MY&ceid=MY:en``）。Google 对不存在的
+    版式组合会就近回落或返回空 feed——空 feed 走既有 fail-open 链（保留旧
+    缓存 → 选题时回落全局池），绝不阻塞。纯函数。
+    """
+    cc = re.sub(r"[^A-Za-z]", "", str(country_code or "")).upper()
+    if len(cc) != 2:
+        return ""
+    low = str(lang or "").strip().lower()
+    if low.startswith("zh"):
+        return (f"https://news.google.com/rss?hl=zh-CN&gl={cc}"
+                f"&ceid={cc}:zh-Hans")
+    m = re.match(r"^([a-z]{2})", low)
+    l2 = m.group(1) if m else "en"
+    return f"https://news.google.com/rss?hl={l2}-{cc}&gl={cc}&ceid={cc}:{l2}"
+
+
+def cfg_for_user_region(
+    tcfg: Dict[str, Any], country_code: str, lang: str = "zh",
+) -> Optional[Dict[str, Any]]:
+    """把归一化配置克隆成「**用户**所在国家」视图；不适用返回 None（调用方
+    回落人设分源/全局池）。纯函数。
+
+    优先级：① 运营显式配置的 ``region_feeds[国家码]``（人工选的源永远比
+    自动构造的可信）→ ② ``user_region.enabled`` 时自动构造该国 Google News
+    源（缓存文件按 ``u-<CC>`` 分家，各国独立刷新）。与 ``cfg_for_region``
+    的关系：那是人设居住地分源（实施55），本函数是用户侧分源（实施84）——
+    消费方先试本函数，None 再走人设分源，「用户在哪」优先于「人设在哪」。
+    """
+    base = tcfg if isinstance(tcfg, dict) else {}
+    cc = re.sub(r"[^A-Za-z]", "", str(country_code or "")).upper()
+    if len(cc) != 2:
+        return None
+    if cc in (base.get("region_feeds") or {}):
+        return cfg_for_region(base, cc)
+    if not base.get("user_region_enabled"):
+        return None
+    url = google_news_feed_url(cc, lang)
+    if not url:
+        return None
+    out = dict(base)
+    out["feeds"] = [url]
+    p = Path(str(base.get("cache_path") or DEFAULT_CACHE_PATH))
+    out["cache_path"] = str(p.with_name(f"{p.stem}.u-{cc}{p.suffix}"))
+    return out
+
+
 # ── last_offer 进程内账本（bounded）───────────────────────────────────────────
 def last_offered(convo_key: str) -> float:
     """该会话上次附话题素材的时间戳；没有记录返回 0。"""
@@ -806,12 +931,16 @@ __all__ = [
     "DEFAULT_FEEDS",
     "HEAVY_VETO_WORDS",
     "SMALLTALK_TOPIC_WORDS",
+    "SPORTS_EVENT_WORDS",
     "build_no_topics_hint",
     "build_topics_hint",
     "cfg_for_region",
+    "cfg_for_user_region",
     "feed_kind",
     "fetch_feed",
+    "google_news_feed_url",
     "is_news_question",
+    "is_sports_event_topic",
     "last_offered",
     "note_offered",
     "parse_topics_cfg",

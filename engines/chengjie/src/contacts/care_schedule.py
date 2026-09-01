@@ -28,6 +28,12 @@ _DAY = 86400.0
 # 「克制陪伴」语气模板（不寒暄、不追问、不引用具体事），区别普通约定回访。两端共享此常量。
 CRISIS_CARE_TOPIC = "情绪关怀"
 
+# 实施84 P1-2：工作目标到期排进 care 队列的行用 topic_norm=goal:<goal_id> 标记——
+# 派发器据此切「目标推进型关怀」模板（框架是"你们在推进的事"而非"对方之前提到过"），
+# 且豁免 no_context skip（目标节点本身就是开口理由）。排期侧（care_goal_link）与
+# 派发侧（care_dispatcher）共享此前缀。
+GOAL_CARE_NORM_PREFIX = "goal:"
+
 _STATUSES = ("pending", "sent", "skipped", "expired", "cancelled")
 
 
@@ -56,7 +62,8 @@ class CareScheduleStore:
         sent_at REAL,
         note TEXT NOT NULL DEFAULT '',
         sent_text TEXT NOT NULL DEFAULT '',
-        review TEXT NOT NULL DEFAULT ''
+        review TEXT NOT NULL DEFAULT '',
+        dry_sampled_at REAL NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_care_due ON care_schedule(status, due_at);
     CREATE INDEX IF NOT EXISTS idx_care_contact ON care_schedule(contact_key, status);
@@ -82,6 +89,8 @@ class CareScheduleStore:
         for ddl in (
             "ALTER TABLE care_schedule ADD COLUMN sent_text TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE care_schedule ADD COLUMN review TEXT NOT NULL DEFAULT ''",
+            # 实施84 P0-4：试运行拟稿时刻（行保持 pending，不再借 mark_sent 消费待办）
+            "ALTER TABLE care_schedule ADD COLUMN dry_sampled_at REAL NOT NULL DEFAULT 0",
         ):
             try:
                 self._conn.execute(ddl)
@@ -179,12 +188,75 @@ class CareScheduleStore:
                 ids.append(rid)
         return ids
 
+    def add_scheduled_care(
+        self,
+        *,
+        contact_key: str,
+        due_at: float,
+        topic: str,
+        topic_norm: str,
+        platform: str = "",
+        account_id: str = "",
+        chat_key: str = "",
+        event_at: float = 0.0,
+        source_text: str = "",
+        sentiment: str = "neutral",
+        confidence: float = 1.0,
+        dedup_days: float = 30.0,
+    ) -> Optional[int]:
+        """系统排期入口（实施84 P1-2，目标到期关怀等）：显式 ``topic_norm``。
+
+        与 ``add_commitment`` 的差异：① topic_norm 由调用方定（如
+        ``goal:<goal_id>``，派发器据此切模板）；② 去重看「同 contact 同
+        topic_norm 近 ``dedup_days`` 天内**任何状态**已有一条」——排期类
+        关怀发过/跳过后绝不该被下轮扫描重新排进队列（pending-only 去重
+        挡不住这个）。绝不抛。
+        """
+        now = time.time()
+        tnorm = str(topic_norm or "").strip()[:64] or _topic_norm(topic)
+        try:
+            with self._lock:
+                dup = self._conn.execute(
+                    "SELECT id FROM care_schedule WHERE contact_key = ?"
+                    " AND topic_norm = ? AND (status = 'pending'"
+                    " OR created_at >= ?) LIMIT 1",
+                    (str(contact_key), tnorm,
+                     now - max(0.0, float(dedup_days)) * _DAY),
+                ).fetchone()
+                if dup:
+                    return None
+                cur = self._conn.execute(
+                    "INSERT INTO care_schedule (contact_key, platform, account_id,"
+                    " chat_key, due_at, event_at, topic, topic_norm, sentiment,"
+                    " source_text, confidence, status, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                    (
+                        str(contact_key), str(platform), str(account_id),
+                        str(chat_key), float(due_at),
+                        float(event_at or due_at), str(topic)[:80], tnorm,
+                        str(sentiment)[:16], str(source_text or "")[:160],
+                        float(confidence), now, now,
+                    ),
+                )
+                self._conn.commit()
+                return int(cur.lastrowid) if cur.lastrowid else None
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule add_scheduled_care failed: %s", e)
+            return None
+
     # ── 查询 ────────────────────────────────────────────────────────────
     _COLS = [
         "id", "contact_key", "platform", "account_id", "chat_key", "due_at", "event_at",
         "topic", "topic_norm", "sentiment", "source_text", "confidence", "status",
         "created_at", "updated_at", "sent_at", "note", "sent_text", "review",
+        "dry_sampled_at",
     ]
+
+    # 实施84 P0-4：「试运行拟稿」的两种形态——旧库（sent+note=dry_run，2026-08 前的
+    # 消费式语义）与新库（pending+dry_sampled_at>0，快照不消费待办）。审核队列/进度/
+    # 负样本三个消费面共用此谓词，保证升级窗口两代数据都可见。
+    _DRY_DRAFT_WHERE = ("((status = 'sent' AND note = 'dry_run')"
+                        " OR (status = 'pending' AND dry_sampled_at > 0))")
 
     def _rows(self, where: str, params: list, limit: int,
               order_by: str = "due_at ASC") -> List[Dict[str, Any]]:
@@ -248,15 +320,31 @@ class CareScheduleStore:
     def recent_sent_texts(self, contact_key: str, *, limit: int = 5) -> List[str]:
         """某联系人最近真发过的关怀话术（B110④ 防重负样本，最新在前）。
 
-        只取非空 ``sent_text`` 的 sent 行（含 dry_run 拟稿快照——坐席可能放行
-        同款，句式同样该规避）；排序与 ``list_history`` 同键。喂
+        只取非空 ``sent_text`` 的行：sent 行（含旧语义 dry_run 拟稿快照）+
+        新语义 pending 且 ``dry_sampled_at>0`` 的试运行快照——坐席可能放行
+        同款，句式同样该规避；排序与 ``list_history`` 同键。喂
         ``build_care_prompt(recent_sent=)`` 当负样本，修「同客户连发五条
         『想你了』式模板」（0826 _527 实录）。
         """
         rows = self._rows(
-            " WHERE contact_key = ? AND status = 'sent' AND sent_text != ''",
+            " WHERE contact_key = ? AND sent_text != ''"
+            " AND (status = 'sent' OR dry_sampled_at > 0)",
             [str(contact_key)], max(1, min(int(limit), 20)),
             order_by=self._HISTORY_ORDER)
+        return [str(r.get("sent_text") or "").strip() for r in rows
+                if str(r.get("sent_text") or "").strip()]
+
+    def disliked_texts(self, *, limit: int = 20) -> List[str]:
+        """运营点过 👎 的拟稿/话术快照（持久口径，最新在前；实施84 P0-6）。
+
+        metrics 侧的会话级黑名单**刻意不持久化**（既有设计：主观判断重启重审），
+        但 care 自己的审核判定早已落 ``review`` 列——派发防重直接读这份持久
+        判定，重启后黑名单不再清零。任何状态的行都算（拟稿被 👎 后行可能
+        过期/发出，判定依然有效）。
+        """
+        rows = self._rows(
+            " WHERE review = 'dislike' AND sent_text != ''", [],
+            max(1, min(int(limit), 50)), order_by=self._HISTORY_ORDER)
         return [str(r.get("sent_text") or "").strip() for r in rows
                 if str(r.get("sent_text") or "").strip()]
 
@@ -326,6 +414,30 @@ class CareScheduleStore:
         return self._set_status(sid, "sent", note=note, set_sent_at=True,
                                 sent_text=sent_text)
 
+    def mark_dry_sampled(self, sid: int, *, sent_text: str = "",
+                         now: Optional[float] = None) -> bool:
+        """试运行拟稿快照（实施84 P0-4）：**不消费 pending**。
+
+        旧行为 ``mark_sent(note="dry_run")`` 会把待办吃掉——试运行期间「演习」
+        过的约定，切真发后不再派发（坐席以为 dry 只是预览，实际是消耗）。
+        新语义：行保持 pending（转真发后仍按期发出；逾期由 ``expire_overdue``
+        正常收口），本方法只记快照与时刻，供重拟冷却与持久审核队列使用。
+        ``now``＝调用方时钟（派发器透传自己的 tick 时刻，重拟冷却窗才与
+        派发判定同一把尺）；缺省墙钟。
+        """
+        try:
+            with self._lock:
+                n = float(now if now is not None else time.time())
+                cur = self._conn.execute(
+                    "UPDATE care_schedule SET dry_sampled_at = ?, sent_text = ?,"
+                    " updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (n, str(sent_text or "")[:2000], n, int(sid)))
+                self._conn.commit()
+                return bool(cur.rowcount)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule mark_dry_sampled failed: %s", e)
+            return False
+
     def backfill_sent_text(self, sid: int, text: str) -> bool:
         """存量回填：只补 sent 行的**空**快照（工具用；已有快照不覆盖，幂等安全）。
 
@@ -372,17 +484,19 @@ class CareScheduleStore:
 
     def review_stats(self) -> Dict[str, Any]:
         """审核进度（持久口径，替代进程内计数的「重启清零」）：
-        dry 拟稿近 7 天数 / 已审 like/dislike / 未审数。"""
+        dry 拟稿近 7 天数 / 已审 like/dislike / 未审数。两代 dry 形态都计
+        （见 ``_DRY_DRAFT_WHERE``）。"""
         out = {"drafts_7d": 0, "reviewed": 0, "like": 0, "dislike": 0, "unreviewed": 0}
         try:
             week = time.time() - 7 * _DAY
             r1 = self._conn.execute(
-                "SELECT COUNT(*) FROM care_schedule WHERE status = 'sent'"
-                " AND note = 'dry_run' AND COALESCE(sent_at, 0) >= ?", (week,)).fetchone()
+                "SELECT COUNT(*) FROM care_schedule WHERE"
+                " (status = 'sent' AND note = 'dry_run' AND COALESCE(sent_at, 0) >= ?)"
+                " OR dry_sampled_at >= ?", (week, week)).fetchone()
             out["drafts_7d"] = int(r1[0] or 0) if r1 else 0
             rows = self._conn.execute(
-                "SELECT review, COUNT(*) FROM care_schedule WHERE status = 'sent'"
-                " AND note = 'dry_run' GROUP BY review").fetchall()
+                f"SELECT review, COUNT(*) FROM care_schedule WHERE"
+                f" {self._DRY_DRAFT_WHERE} GROUP BY review").fetchall()
             for rv, n in rows:
                 v = str(rv or "")
                 if v == "like":
@@ -400,10 +514,11 @@ class CareScheduleStore:
         """持久待审队列：dry 拟稿、有话术快照、未审，最近在前。
 
         （审核队列从进程内 metrics 样本升级为本表——重启后待审拟稿不再消失；
-        无快照的老 dry 行文本已不可考，不进队列。）
+        无快照的老 dry 行文本已不可考，不进队列。两代 dry 形态都进队列，
+        见 ``_DRY_DRAFT_WHERE``。）
         """
         return self._rows(
-            " WHERE status = 'sent' AND note = 'dry_run' AND review = ''"
+            f" WHERE {self._DRY_DRAFT_WHERE} AND review = ''"
             " AND sent_text != ''", [],
             max(1, min(int(limit), 50)), order_by=self._HISTORY_ORDER)
 
@@ -534,4 +649,4 @@ def get_care_schedule_store(db_path=None) -> "CareScheduleStore":
 
 
 __all__ = ["CareScheduleStore", "get_care_schedule_store", "_topic_norm",
-           "CRISIS_CARE_TOPIC"]
+           "CRISIS_CARE_TOPIC", "GOAL_CARE_NORM_PREFIX"]

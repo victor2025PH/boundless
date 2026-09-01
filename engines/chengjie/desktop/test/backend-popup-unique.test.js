@@ -80,4 +80,72 @@ ok(
   "admin-nav-btn 丢失 onclick=__openUnique 接线 —— target=_blank 裸奔每点新开一个"
 );
 
+// ── 2026-08-29：坐席工作台「唯一容器」路由（主窗收件箱标签）────────────────────
+// 主窗常驻统一收件箱标签＝工作台唯一正身；workspace 弹窗一出生就是第二个工作台。
+// 修复=精确 /workspace 一律路由主窗（聚焦+深链转发），任何一环丢失都会退回
+// 「主窗标签 + 弹窗」双工作台（2026-08-29 之前遥测 8 天 15 次 takeover 的根源）。
+const shellPreloadJs = fs.readFileSync(path.join(__dirname, "..", "shell-preload.js"), "utf8");
+const rendererJs = fs.readFileSync(path.join(__dirname, "..", "renderer", "renderer.js"), "utf8");
+const popupPreloadJs = fs.readFileSync(path.join(__dirname, "..", "renderer", "popup-preload.js"), "utf8");
+const inboxPreloadJs = fs.readFileSync(path.join(__dirname, "..", "renderer", "inbox-preload.js"), "utf8");
+const winUniqueHtml = fs.readFileSync(
+  path.join(__dirname, "..", "..", "src", "web", "templates", "_win_unique.html"),
+  "utf8"
+);
+
+// ⑥ main.js：focusMainInbox 存在，且 openBackendPopup 对 workspace 槽先走主窗路由
+ok(
+  /function\s+focusMainInbox\(/.test(mainJs),
+  "main.js 丢失 focusMainInbox —— 工作台点击退回原生弹窗双开"
+);
+ok(
+  /slot === "workspace" && focusMainInbox\(url\)/.test(mainJs),
+  "openBackendPopup 丢失 workspace→主窗路由特判"
+);
+const routeIdx = fnBody.indexOf("focusMainInbox(");
+ok(
+  routeIdx >= 0 && routeIdx < fnBody.indexOf("reuseBackendPopup("),
+  "openBackendPopup 中主窗路由必须先于弹窗复用（先主窗、后弹窗回落）"
+);
+// 主窗登记 + 通知频道（缺登记 focusMainInbox 永远 false = 特判形同虚设）
+ok(/mainSeatWin = win/.test(mainJs), "createWindow 未登记 mainSeatWin");
+ok(/cx-open-workspace/.test(mainJs), "main.js 丢失 cx-open-workspace 通知频道");
+// 收件箱标签被配置关闭（纯内嵌形态）必须回落弹窗——弹窗是那形态下唯一工作台容器
+ok(
+  /unified_inbox\s*\|\|\s*\{\}\)\.enabled === false\)\s*return false/.test(mainJs),
+  "focusMainInbox 丢失 unified_inbox.enabled=false 回落闸"
+);
+
+// ⑦ 桥与承接：shell-preload 转发 + renderer 切标签/深链转 open-conv
+ok(
+  /onOpenWorkspace:/.test(shellPreloadJs) && /cx-open-workspace/.test(shellPreloadJs),
+  "shell-preload 丢失 onOpenWorkspace 桥"
+);
+ok(
+  /onOpenWorkspace\(/.test(rendererJs) && /Inbox\.activate\(INBOX_ID\)/.test(rendererJs),
+  "renderer 丢失 cx-open-workspace 承接（切收件箱标签）"
+);
+ok(
+  /aitr:\s*"open-conv"/.test(rendererJs) && /deliverToInbox\(/.test(rendererJs),
+  "renderer 丢失深链转 open-conv（?conv= 会话深链在壳内会失效）"
+);
+
+// ⑧ 能力标记（分体部署版本闸）：模板热更先于壳更新时，旧壳必须零行为变化
+ok(
+  /__chatxCaps/.test(popupPreloadJs) && /wsRoute/.test(popupPreloadJs),
+  "popup-preload 丢失 __chatxCaps.wsRoute —— 后台弹窗页探测不到新壳能力"
+);
+ok(
+  /__chatxCaps/.test(inboxPreloadJs) && /wsRoute/.test(inboxPreloadJs),
+  "inbox-preload 丢失 __chatxCaps.wsRoute —— 收件箱页探测不到新壳能力"
+);
+ok(
+  /_shellWsRoute\(\)/.test(winUniqueHtml) && /__chatxCaps/.test(winUniqueHtml),
+  "_win_unique 丢失壳能力探测 _shellWsRoute —— 新壳退回探活链（miss 漏弹窗）"
+);
+ok(
+  /_probeSeat\(url,/.test(winUniqueHtml),
+  "_win_unique 旧壳 BC 探活回落被删 —— 存量壳（无 wsRoute）会退化成每点弹一个"
+);
+
 console.log(`backend-popup-unique OK (${passed} assertions)`);

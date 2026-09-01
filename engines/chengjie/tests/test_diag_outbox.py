@@ -169,3 +169,74 @@ async def test_build_and_upload_rejected_not_staged(tmp_path):
 def test_outbox_dir_none_safe():
     assert outbox_dir(None) is None
     assert list_staged(None) == []
+
+
+# ── #17（实施90 二批）：连通自诊 + DNS 分型 ──────────────────────────────────
+
+def test_classify_dns_failure_17():
+    """DNS 失败必须与「解析正常但连不上」分开——两种病两种药。"""
+    import socket
+
+    from src.utils.diag_upload import classify_upload_error
+
+    assert classify_upload_error(socket.gaierror(11001, "getaddrinfo failed")) \
+        == "upstream_dns_failed"
+    # URLError 包着 gaierror（urllib 的常见形态）
+    err = urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
+    assert classify_upload_error(err) == "upstream_dns_failed"
+    # 普通连接失败仍是 unreachable
+    assert classify_upload_error(OSError("conn refused")) \
+        == "upstream_unreachable"
+    assert classify_upload_error(
+        urllib.error.URLError(TimeoutError())) == "upstream_unreachable"
+
+
+def test_probe_site_connectivity_verdicts_17():
+    import socket
+
+    from src.utils.diag_upload import probe_site_connectivity
+
+    with patch("urllib.request.urlopen") as up:
+        up.return_value.__enter__ = lambda s: s
+        up.return_value.__exit__ = lambda s, *a: False
+        assert probe_site_connectivity("https://x.example") == "ok"
+    with patch("urllib.request.urlopen",
+               side_effect=urllib.error.HTTPError("u", 404, "nf", None, None)):
+        # 有 HTTP 响应＝连通没问题（探针路径 404 也算通）
+        assert probe_site_connectivity("https://x.example") == "ok"
+    with patch("urllib.request.urlopen",
+               side_effect=socket.gaierror(11001, "getaddrinfo failed")):
+        assert probe_site_connectivity("https://x.example") == "dns"
+    with patch("urllib.request.urlopen", side_effect=OSError("down")):
+        assert probe_site_connectivity("https://x.example") == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_dns_failure_also_stages_17(tmp_path):
+    """DNS 失败与断网同属「会恢复的网络病」→ 同样落 outbox 暂存。"""
+    import socket
+
+    cm = _CM(tmp_path)
+
+    def _dns_dead(req, timeout=0):
+        raise urllib.error.URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    with patch("src.utils.diagnostic_bundle.build_diagnostic_bundle",
+               return_value=b"PK-full-bundle"), \
+         patch("urllib.request.urlopen", side_effect=_dns_dead):
+        out = await build_and_upload(cm, note="dns case")
+    assert out["ok"] is False
+    assert out["error"] == "upstream_dns_failed"
+    assert out["staged"] is True
+    logs_dir = Path(cm.config_path).parent.parent / "logs"
+    assert len(list_staged(logs_dir)) == 1
+
+
+def test_selfdiag_keys_bilingual_17():
+    from src.web.web_i18n import get_translations
+    zh = get_translations("zh")
+    en = get_translations("en")
+    for k in ("err.svc.upstream_dns_failed", "err.svc.selfdiag_site_ok",
+              "err.svc.selfdiag_dns", "err.svc.selfdiag_unreachable"):
+        assert zh.get(k), k
+        assert en.get(k), k

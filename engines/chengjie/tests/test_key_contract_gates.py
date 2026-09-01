@@ -31,9 +31,16 @@ _DOCUMENTED_OPTIONAL = {
     "catchphrase", "colloquial", "paralinguistic", "instruct",
     # voice_emotion：按情绪分参考音（多参考音进阶配置，文档约定）+ 情绪覆写
     "reference_audio_by_emotion", "emotion",
-    # 方言底色（生产实例 profiles_runtime 实配 chuanyu；测试密闭不读实例数据，
-    # 仓内 yaml 快照滞后于实例运行时数据——真产键，按文档型登记）
+    # 方言底色：仅出货 cantonese（粤语 prompt + CosyVoice3 <|yue|>）。
+    # 未出货档在 normalize_profile_shape 清掉，键仍可能出现在旧 yaml 里。
     "dialect_flavor",
+    # 粤语 lang_voice_route 覆写：clone_base_url 指到 117:7852，
+    # clone_text_prefix 拼 CosyVoice3 <|yue|>（不经 enroll 构建器）。
+    "clone_base_url", "clone_text_prefix",
+    # YAML 高手显式 clone_instruct（走 /v1/tts/instruct）；人设下拉不再提供。
+    "clone_instruct",
+    # 人设级语速覆写（lite_persona_overrides 陈默 1.06；优先于全局 pacing.tempo）
+    "pacing_tempo",
 }
 
 _READ_PAT = re.compile(

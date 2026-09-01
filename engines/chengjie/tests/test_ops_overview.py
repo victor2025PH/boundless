@@ -426,6 +426,61 @@ def test_group_members_card_i18n_bilingual():
         assert k in EN and EN[k], f"EN 缺 {k}"
 
 
+def test_account_health_card_renders_and_registered():
+    """P1-9 2026-08-29「🛡️ 账号健康」卡三件套（section / 渲染函数 / 注册表）
+    + 共享 metrics 分发链两分支 + 全零整卡隐藏 + 冻结/掉线亮黄。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="acctHealthSection"' in src
+    assert "function renderAccountHealth(d)" in src
+    assert "d.account_health" in src              # 数据源（共享 /api/workspace/metrics）
+    assert "anchor:'acctHealthKpis'" in src       # 卡片注册表登记
+    # 共享分发链两分支：正常响应 + 403 清卡
+    assert "renderAccountHealth(d)" in src
+    assert "renderAccountHealth(null)" in src
+    # 全零整卡隐藏惯例 + 险情亮黄
+    assert "opsHideCardEl(sec, 'ahealth', 'no_data')" in src
+    assert "opsSetCardLight('ahealth', (frozenN || downN) ? 'yellow' : '')" in src
+
+
+def test_account_health_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_ahealth", "ov2_ah_hint", "ov2_ah_online", "ov2_ah_down",
+            "ov2_ah_frozen", "ov2_ah_auto7", "ov2_ah_global",
+            "ov2_ah_kind_auto", "ov2_ah_kind_manual", "ov2_ah_down_keys",
+            "ov2_ah_stalled", "ov2_ah_safety7", "ov2_ah_safety7_v")
+    for k in keys:
+        assert k in ZH and ZH[k], f"ZH 缺 {k}"
+        assert k in EN and EN[k], f"EN 缺 {k}"
+
+
+def test_goal_pace_and_outcome_rows_i18n_bilingual():
+    """P2 2026-08-29 目标卡「限时达成 / 达成信号」行——含动态拼键
+    ``ov2_goal_osig_<kind>``（appointment/payment），静态 window.T 门禁
+    扫不到，这里显式钉 zh+en。行为侧零流量不占行（模板内 org>0 / n>0 闸）。"""
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_goal_pace", "ov2_goal_pace_tip", "ov2_goal_pace_today",
+            "ov2_goal_pace_session", "ov2_goal_osig", "ov2_goal_osig_tip",
+            "ov2_goal_osig_live", "ov2_goal_osig_appointment",
+            "ov2_goal_osig_payment")
+    for k in keys:
+        assert k in ZH and ZH[k], f"ZH 缺 {k}"
+        assert k in EN and EN[k], f"EN 缺 {k}"
+    from pathlib import Path
+
+    tpl = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html"
+           ).read_text(encoding="utf-8")
+    assert "report.by_pace" in tpl
+    assert "report.outcome_signals" in tpl
+    assert "ov2_goal_osig_'+k" in tpl
+
+
 def test_value_weekly_card_renders_and_registered():
     """卡片三件套必须齐：section 声明 / loader 读 value 段 / 注册表登记。
 

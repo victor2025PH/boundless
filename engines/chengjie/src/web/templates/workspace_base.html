@@ -754,12 +754,10 @@
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
 <!-- 实施75：统一通知总线（右下 toast + 系统状态胶囊 + 消息中心留痕）。
      顶部横幅体系冻结增量：新状态一律走 AITRNotify，勿再注册 wsBanner 横幅。 -->
-<script src="/static/workspace/notify-bus.js?v=20260828a"></script>
+<script src="/static/workspace/notify-bus.js?v=20260830a"></script>
 <!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
 <script src="/static/workspace/cmdk.js?v=20260820a"></script>
-<!-- WP-7 坐席新手任务卡（自包含悬浮组件；flag onboarding.agent_tasks 关=API 404=静默不渲染，
-     完成判定=fetch 旁路监听 5 个权威 API，全✓/收起自动卸载——常态零开销）。 -->
-<script src="/static/workspace/agent-tasks-card.js?v=20260818a" defer></script>
+<!-- WP-7 坐席新手任务卡已随新手引导整体退役（2026-08-31）。 -->
 <!-- PWA（Phase 1）：把工作台做成可安装的原生官网（独立窗口 + 离线壳）。-->
 <link rel="manifest" href="/manifest.webmanifest">
 <script>
@@ -3291,6 +3289,19 @@ window._pillChainFail=window._pillChainFail||function(fn){
           try{ document.dispatchEvent(new CustomEvent('draft_sla_breach',{detail:_br})); }catch(_){}
           refreshL4();
         }
+      } else if(msg && msg.type==='cta_clicked' && msg.data){
+        // 实施93c：客户首点引导链接 → 全员 toast（最热跟进窗口，点击直达会话）
+        var _cc=msg.data;
+        if(!_sseSettling()){
+          var _ccEl=CRMW.toast(
+            window.Tf('base.sse.cta_click',{target:(_cc.target_name||_cc.target_id||'?')}),
+            '#b45309','star');
+          if(_ccEl){ _ccEl.style.cursor='pointer'; _ccEl.onclick=function(){
+            if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cc.conversation_id); return; }
+            try{ sessionStorage.setItem('ws_focus_conv', _cc.conversation_id); }catch(_){}
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_cc.conversation_id}))) location.href='/workspace';
+          }; }
+        }
       } else if(msg && msg.type==='draft_reassigned' && msg.data){
         // K2：草稿自动再分配 → 被分配人 toast + 转发 CustomEvent
         var _ra=msg.data;
@@ -3335,7 +3346,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
       // 消息默认不进铃铛（隐私 + 噪音；会话列表未读才是它的家），开关随
       // GET /api/workspace/notifications 的 customer_messages 回传（服务端队列与
       // 前端 live 写入同一开关两面生效）；系统/需人工类事件不受影响。
-      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert'].indexOf(msg.type)>=0){
+      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert','cta_clicked'].indexOf(msg.type)>=0){
         if(msg.type!=='inbox_message' || window.__wsNotifCenterCustomerMsgs===true){
           if(window.__wsNotif) window.__wsNotif.add(msg);
         }
@@ -3418,9 +3429,21 @@ window._pillChainFail=window._pillChainFail||function(fn){
           try{ if(window.__wsBudgetPop) window.__wsBudgetPop(msg.data); }catch(_){}
         }
       }
-      // P47：工作链终态通知
+      // P47：工作链终态通知。#53/#48（0830 skuio 实锤：条件自动启动一轮 10-20 条
+      // 全在 step0 失败 → 每失败一弹＝右下角红框刷屏挡操作）：改走通知总线
+      // domKey 聚合——同类失败只保留一张卡带 ×N 计数，自带 ✕ 与自动淡出，
+      // 「查看工作链」直达处理页（四件套②③④一次到位）。总线缺席回落旧 toast。
       if(msg && msg.type==='workflow_execution_failed' && msg.data){
-        CRMW.toast(window.Tf('base.sse.wf_failed',{name:(msg.data.chain_name||'')}),'#ef4444','x');
+        if(window.AITRNotify){
+          AITRNotify.notify({
+            severity:'error',
+            text:window.Tf('base.sse.wf_failed',{name:(msg.data.chain_name||'')}),
+            domKey:'wf_failed', center:false,
+            actions:[{label:window.T('base.sse.wf_failed_open'), href:'/workflows'}]
+          });
+        }else{
+          CRMW.toast(window.Tf('base.sse.wf_failed',{name:(msg.data.chain_name||'')}),'#ef4444','x');
+        }
       }
       // P44：工作链步骤通知
       if(msg && msg.type==='workflow_step' && msg.data){
@@ -3581,6 +3604,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
     conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
     goal_completed_alert:{ iconName:'star', bg:'#fef9c3', label:window.T('base.notif.type_goal_done'), accent:'#ca8a04' },
+    cta_clicked:    { iconName:'star', bg:'#ffedd5', label:window.T('base.notif.type_cta_click'), accent:'#b45309' },
     bot_peer_alert: { iconName:'pause', bg:'#fee2e2', label:window.T('base.notif.type_budget_hit'), accent:'#dc2626' },
     sys_status:     { iconName:'gear', bg:'#e0e7ff', label:window.T('ntf.type_sys'), accent:'#6366f1' },
   };
@@ -3629,6 +3653,8 @@ window._pillChainFail=window._pillChainFail||function(fn){
       sub = window.Tf('base.notif.mention_sub',{name:(d.agent_name||d.agent_id||'?'),text:(d.body||'').slice(0,40)});
     } else if(n.type==='goal_completed_alert'){
       sub = window.Tf('base.notif.goal_done_sub',{name:(d.contact_name||d.chat_key||'?'),title:(d.title||d.template_name||'').slice(0,40)});
+    } else if(n.type==='cta_clicked'){
+      sub = window.Tf('base.notif.cta_sub',{target:(d.target_name||d.target_id||'?')});
     } else if(n.type==='bot_peer_alert'){
       var _bp=d.budget||{};
       var _bn=d.display_name||d.username||d.chat_key||'?';
@@ -3856,7 +3882,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
         // 新消息/升级/SLA/转派/@提及 → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='bot_peer_alert') && d.conversation_id){
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='bot_peer_alert'||n.type==='cta_clicked') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
           if(!(window.__wsGoHome&&window.__wsGoHome({cid:d.conversation_id}))) location.href='/workspace';
@@ -4426,12 +4452,15 @@ window.__wsMultiWin = (function(){
 /* AI 助手悬浮球 loader（2026-08-21 v2 带重试，同 base.html 尾部同款）：
    失败后 15s/60s 补探 + 回前台再探——实例重启窗内加载的页面不再永久丢球。 */
 (function(){
+  /* 内嵌豁免（2026-09-01）：坐席台抽屉等 iframe 宿主（?embed=1）不再自装球——
+     里外两个 document 各持单例互不相通，曾叠出双球；球只由外层宿主页出一次。 */
+  if(document.documentElement.getAttribute('data-ws-embed')==='1') return;
   var tries=0, done=false;
   function inject(b){
     if(done||window.AssistantBall) return;
     done=true;
     var s=document.createElement('script');
-    s.src='/assistant-shared/assistant-ball.js?v=20260829c';
+    s.src='/assistant-shared/assistant-ball.js?v=20260831a';
     s.onload=function(){
       if(window.AssistantBall) window.AssistantBall.init({
         shell:'workspace',
@@ -4450,7 +4479,7 @@ window.__wsMultiWin = (function(){
       document.head.appendChild(s2);
       /* 实施58 P2：「替我做」智能体+流星执行秀（后端未装载=入口如实待装） */
       var s3=document.createElement('script');
-      s3.src='/assistant-shared/assistant-agent.js?v=20260830b';
+      s3.src='/assistant-shared/assistant-agent.js?v=20260831c';
       s3.onload=function(){
         if(window.XZAgent) window.XZAgent.init({
           shell:'workspace',

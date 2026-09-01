@@ -125,6 +125,15 @@
   .wf-bs-fail{display:block;height:100%;background:var(--wf-err);}
   .wf-bs-n{flex:0 0 auto;font-weight:600;}
   .wf-bs-n .ok{color:var(--wf-ok);} .wf-bs-n .fail{color:var(--wf-err);}
+  /* 实施92d 成交引擎卡旅程示意：主题令牌取色（暗色自适应），不是装饰图而是
+     「这页在管什么」的一图流认知锚 */
+  .de-jn-viz{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0 10px;}
+  .de-jn-node{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:99px;
+    font-size:12px;font-weight:600;background:var(--wf-surface-2);border:1px solid var(--wf-bd);color:var(--wf-ink);}
+  .de-jn-node.hot{background:rgba(45,108,223,.10);border-color:var(--bl-growth-600,#0d76d9);color:var(--bl-growth-600,#0d76d9);}
+  .de-jn-node.win{background:rgba(16,185,129,.12);border-color:var(--wf-ok);color:var(--wf-ok);}
+  .de-jn-arr{color:var(--wf-ink-soft);font-size:12px;}
+  .de-jn-tag{font-size:10px;font-weight:400;color:var(--wf-ink-mut);}
 </style>
 {% endblock %}
 {% block content %}
@@ -167,6 +176,74 @@
 
   <!-- ── 工作链 ── -->
   <div id="panel-chains" class="wf-panel active">
+    <!-- 实施92 成交引擎卡：一键接通「打招呼→成交」（旧后端无端点 → 整卡隐藏） -->
+    <div class="wf-section" id="de-card" style="display:none;">
+      <h3><span id="de-title">{{ (i18n or {}).get('wf_de_title', "🚀 成交引擎") }} <span id="de-status-pill"></span></span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span id="de-msg" style="font-size:12px;font-weight:400;"></span>
+          <button class="btn-sm btn-primary" id="de-btn" onclick="WF.toggleDealEngine()"></button>
+        </span>
+      </h3>
+      <p style="font-size:12px;color:var(--wf-ink-mut);margin:0 0 8px;line-height:1.6;">{{ (i18n or {}).get('wf_de_desc', "一键接通「打招呼→成交」：后台按会话往来自动推导客户阶段（建联/培育/报价），进入报价自动挂「报价跟单」、标记成交自动挂「成交后关怀」，客户回复时链自动让路。链动作仍是提醒坐席（除非链自己选了自动推进档）。") }}</p>
+      <!-- 实施92d 旅程示意（93：guide 风味时 JS 按 data-stage/data-viztag 换文案） -->
+      <div class="de-jn-viz" aria-hidden="true">
+        <span class="de-jn-node">👋 {{ (i18n or {}).get('wf_stage_new', "新客") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node">🤝 {{ (i18n or {}).get('wf_stage_contacted', "建联") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node">🌱 {{ (i18n or {}).get('wf_stage_nurturing', "培育") }}</span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node hot">💬 <span data-stage="quoting">{{ (i18n or {}).get('wf_stage_quoting', "报价") }}</span><span class="de-jn-tag" data-viztag="quote">⚡{{ (i18n or {}).get('wf_de_viz_quote', "自动挂跟单") }}</span></span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node win">💰 <span data-stage="deal">{{ (i18n or {}).get('wf_stage_deal', "成交") }}</span><span class="de-jn-tag" data-viztag="deal">⚡{{ (i18n or {}).get('wf_de_viz_deal', "自动挂关怀") }}</span></span>
+        <span class="de-jn-arr">→</span>
+        <span class="de-jn-node"><span data-stage="repeat">🔁 {{ (i18n or {}).get('wf_stage_repeat', "复购") }}</span></span>
+      </div>
+      <div id="de-detail" style="font-size:12px;color:var(--wf-ink-mut);"></div>
+      <!-- 实施92b 自动发送档（引擎开启后可见）：话术步 AI 拟稿自动发 -->
+      <div id="de-auto" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--wf-bd);font-size:12px;color:var(--wf-ink-mut);align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong style="color:var(--wf-ink);">🤖 {{ (i18n or {}).get('wf_de_auto_label', "自动发送") }}</strong>
+        <span id="de-auto-pill"></span>
+        <span id="de-auto-meta"></span>
+        <span style="flex:1 1 auto;"></span>
+        <button class="btn-sm" id="de-auto-btn" onclick="WF.toggleDealEngineAuto()"></button>
+      </div>
+      <div id="de-auto-warn" style="display:none;margin-top:6px;font-size:11.5px;color:var(--th-ink-amber7,#b45309);"></div>
+    </div>
+    <!-- 实施93 转化目标库（旧后端无端点 → 整卡隐藏） -->
+    <div class="wf-section" id="cta-card" style="display:none;">
+      <h3>{{ (i18n or {}).get('wf_cta_title', "🎯 转化目标") }}
+        <span id="cta-msg" style="font-size:12px;font-weight:400;"></span>
+      </h3>
+      <p style="font-size:12px;color:var(--wf-ink-mut);margin:0 0 8px;line-height:1.6;">{{ (i18n or {}).get('wf_cta_desc', "把用户往哪引（网站/落地页/APP/群）。链的话术步选了目标后，发送时自动带上该客户专属的追踪短链——谁点了、点没点，旅程阶段自动推进。") }}</p>
+      <!-- #132：裸配置键/反代术语从运营界面退场——人话提示 + 就地配置入口
+           （保存写 overlay inbox.cta.public_base；技术细节收进悬浮 title） -->
+      <div id="cta-nobase" style="display:none;margin:0 0 8px;">
+        <div style="font-size:11.5px;color:var(--th-ink-amber7,#b45309);margin-bottom:6px;">{{ (i18n or {}).get('wf_cta_nobase', "⚠ 转化目标短链还没启用——需要一个客户能打开的网址。把你的网站地址填到下面保存即可；不确定填什么就联系为你部署的技术同学。") }}</div>
+        <div class="form-row" style="margin-bottom:0;">
+          <div class="form-col"><input id="cta-base-input" placeholder="{{ (i18n or {}).get('wf_cta_base_ph', '你的网站地址（例：https://你的域名.com）') }}" title="{{ (i18n or {}).get('wf_cta_base_tech_t', '技术说明：需把该域名的 /r/* 路径反向代理到本引擎（配置键 inbox.cta.public_base）') }}"></div>
+          <div class="form-col" style="flex:0 0 auto;">
+            <button class="btn-sm btn-primary" onclick="WF.saveCtaBase()">{{ (i18n or {}).get('wf_cta_base_save', '保存并启用') }}</button>
+          </div>
+        </div>
+      </div>
+      <div id="cta-list" style="margin-bottom:8px;"></div>
+      <div class="form-row" style="margin-bottom:0;">
+        <div class="form-col" style="flex:0 0 200px;"><input id="cta-name" placeholder="{{ (i18n or {}).get('wf_cta_add_name', '目标名称（例：官网落地页）') }}"></div>
+        <div class="form-col"><input id="cta-url" placeholder="{{ (i18n or {}).get('wf_cta_add_url', 'https://…') }}"></div>
+        <div class="form-col" style="flex:0 0 110px;">
+          <select id="cta-kind">
+            <option value="site">{{ (i18n or {}).get('wf_cta_kind_site', "网站") }}</option>
+            <option value="landing">{{ (i18n or {}).get('wf_cta_kind_landing', "落地页") }}</option>
+            <option value="app">{{ (i18n or {}).get('wf_cta_kind_app', "APP") }}</option>
+            <option value="group">{{ (i18n or {}).get('wf_cta_kind_group', "群") }}</option>
+          </select>
+        </div>
+        <div class="form-col" style="flex:0 0 auto;">
+          <button class="btn-sm btn-primary" onclick="WF.addCtaTarget()">{{ (i18n or {}).get('wf_cta_add_btn', "+ 添加目标") }}</button>
+        </div>
+      </div>
+    </div>
     <div class="wf-section">
       <h3>🔗 {{ (i18n or {}).get('wf_s049', "工作链配置") }}
         <span style="display:flex;gap:8px;align-items:center;">
@@ -193,14 +270,37 @@
             <option value="auto">{{ (i18n or {}).get('wf_exec_mode_auto', "自动推进（AI 拟稿自动发）") }}</option>
           </select>
         </div>
+        <!-- 实施92：客户回复时的让路档位（''=随全局默认 pause） -->
+        <div class="form-col" style="flex:0 0 240px;">
+          <label>{{ (i18n or {}).get('wf_onreply_label', "客户回复时") }}</label>
+          <select id="cf-on-reply" title="{{ (i18n or {}).get('wf_onreply_hint', '客户来新消息时本链如何让路。唤回类链建议「按完成收束」；关怀回访若必须走完选「不让路」。') }}">
+            <option value="">{{ (i18n or {}).get('wf_onreply_follow', "跟随默认（暂停让人接管）") }}</option>
+            <option value="pause">{{ (i18n or {}).get('wf_onreply_pause', "暂停，交坐席接管") }}</option>
+            <option value="complete">{{ (i18n or {}).get('wf_onreply_complete', "按完成收束（回复=目标达成）") }}</option>
+            <option value="continue">{{ (i18n or {}).get('wf_onreply_continue', "不让路，按节奏走完") }}</option>
+          </select>
+        </div>
         <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
           {{ (i18n or {}).get('wf_exec_mode_hint', "自动推进仅对「话术」步生效，且需系统开启 auto_advance 开关 + 会话处于全自动档；静默时段顺延，生成失败自动降级为提醒。建任务/打标签/备注步两档都自动执行。") }}
+          {{ (i18n or {}).get('wf_onreply_hint', "客户来新消息时本链如何让路。唤回类链建议「按完成收束」；关怀回访若必须走完选「不让路」。") }}
         </div>
       </div>
       <div class="form-row" style="background:var(--wf-surface-2);border:1px solid var(--wf-bd);border-radius:8px;padding:10px 12px;margin-bottom:12px;">
         <div class="form-col" style="flex:0 0 160px;">
           <label>{{ (i18n or {}).get('wf_s053', "自动触发 · 沉默天数") }}</label>
           <input id="cf-silence-days" type="number" min="0" value="0" placeholder="0={{ (i18n or {}).get('wf_s054', '不自动触发') }}">
+        </div>
+        <!-- 实施92：按旅程阶段自动挂链（成交引擎开启后生效） -->
+        <div class="form-col" style="flex:0 0 190px;">
+          <label>{{ (i18n or {}).get('wf_stage_trigger_label', "自动触发 · 进入阶段") }}</label>
+          <select id="cf-stage-enter" title="{{ (i18n or {}).get('wf_stage_trigger_hint', '需开启下方「成交引擎」（客户旅程阶段）后生效：进入所选阶段的会话自动挂上本链，同一次进入只挂一次。') }}">
+            <option value="">{{ (i18n or {}).get('wf_stage_none', "不按阶段触发") }}</option>
+            <option value="contacted">{{ (i18n or {}).get('wf_stage_contacted', "建联") }}</option>
+            <option value="nurturing">{{ (i18n or {}).get('wf_stage_nurturing', "培育") }}</option>
+            <option value="quoting">{{ (i18n or {}).get('wf_stage_quoting', "报价") }}</option>
+            <option value="deal">{{ (i18n or {}).get('wf_stage_deal', "成交") }}</option>
+            <option value="repeat">{{ (i18n or {}).get('wf_stage_repeat', "复购") }}</option>
+          </select>
         </div>
         <div class="form-col" style="flex:0 0 auto;align-self:flex-end;padding-bottom:4px;">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -210,6 +310,7 @@
         </div>
         <div class="form-col" style="font-size:11px;color:var(--wf-ink-mut);align-self:center;">
           {{ (i18n or {}).get('wf_auto_trigger_hint', "后台定时扫描，满足条件时自动启动本链（同会话同链仅一条运行中，不会重复）") }}
+          {{ (i18n or {}).get('wf_stage_trigger_hint', "需开启下方「成交引擎」（客户旅程阶段）后生效：进入所选阶段的会话自动挂上本链，同一次进入只挂一次。") }}
         </div>
       </div>
       <div style="font-size:13px;font-weight:600;color:var(--th-ink-gray7,#374151);margin-bottom:8px;">{{ (i18n or {}).get('wf_s057', "工作步骤（按序执行）") }}</div>
@@ -347,6 +448,245 @@ window.WF={
 //   勿再随面板批次删除；词条键由 test_template_window_t_keys_resolve 守。
 var _TYPE_LABELS={template:window.T('templates'),task:window.T('wf_s013'),tag:window.T('wf_s014'),note:window.T('wf_s015'),escalate:window.T('wf_s016'),chain:window.T('wf_s017')};
 
+// ── 实施92 成交引擎：旅程阶段人话标签 + 状态卡 + 一键开关 ────────────────────
+// 实施93：标签随 journey.flavor（sales=报价/成交/复购，guide=已引导/已转化/再转化）
+WF._stageLabel=function(s){
+  var g=((WF._deState&&WF._deState.flavor)||'sales')==='guide';
+  var k={new:'wf_stage_new',contacted:'wf_stage_contacted',nurturing:'wf_stage_nurturing',
+         quoting:g?'wf_stage_quoting_g':'wf_stage_quoting',
+         deal:g?'wf_stage_deal_g':'wf_stage_deal',
+         repeat:g?'wf_stage_repeat_g':'wf_stage_repeat'}[s];
+  return k?window.T(k):String(s||'');
+};
+// guide 风味：把 Jinja 静态渲染的旅程示意/编辑器下拉换成引导语系文案
+WF._applyFlavorLabels=function(){
+  if(((WF._deState&&WF._deState.flavor)||'sales')!=='guide')return;
+  document.querySelectorAll('.de-jn-viz [data-stage]').forEach(function(el){
+    var s=el.getAttribute('data-stage');
+    el.textContent=(s==='repeat'?'🔁 ':'')+WF._stageLabel(s);
+  });
+  var tags={quote:'wf_de_viz_quote_g',deal:'wf_de_viz_deal_g'};
+  document.querySelectorAll('.de-jn-viz [data-viztag]').forEach(function(el){
+    el.textContent='⚡'+window.T(tags[el.getAttribute('data-viztag')]||'');
+  });
+  var se=document.getElementById('cf-stage-enter');
+  if(se)Array.prototype.forEach.call(se.options,function(o){
+    if(o.value)o.textContent=WF._stageLabel(o.value);
+  });
+};
+// ── 实施93 转化目标库（旧后端 404 → 整卡隐藏；步骤编辑器 CTA 下拉共用缓存）──
+WF._ctaTargets=null;
+WF.loadCtaTargets=function(){
+  apiFetch('/api/workspace/cta-targets')
+    .then(function(r){ if(!r.ok)throw 0; return r.json(); })
+    .then(function(d){
+      if(!d||!d.ok)return;
+      WF._ctaTargets=d.targets||[];
+      var card=document.getElementById('cta-card'); if(!card)return;
+      card.style.display='block';
+      var nb=document.getElementById('cta-nobase');
+      if(nb)nb.style.display=d.public_base?'none':'block';
+      var box=document.getElementById('cta-list');
+      if(!box)return;
+      if(!WF._ctaTargets.length){
+        box.innerHTML='<div class="wf-empty" style="padding:8px;">'+window.T('wf_cta_empty')+'</div>';
+        return;
+      }
+      var kinds={site:window.T('wf_cta_kind_site'),landing:window.T('wf_cta_kind_landing'),
+                 app:window.T('wf_cta_kind_app'),group:window.T('wf_cta_kind_group')};
+      box.innerHTML=WF._ctaTargets.map(function(t){
+        var on=!!t.enabled;
+        return '<div class="step-card">'
+          +'<div style="flex:1;font-size:12px;min-width:0;">'
+            +'<strong>'+esc(t.name||t.target_id)+'</strong>'
+            +' <span class="cond-tag">'+esc(kinds[t.kind]||t.kind)+'</span>'
+            +'<div class="wf-step-note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(t.url||'')+'</div>'
+          +'</div>'
+          +'<label class="toggle-sw"><input type="checkbox"'+(on?' checked':'')
+            +' onchange="WF.toggleCtaTarget(\''+esc(t.target_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
+          +'<button class="btn-sm btn-danger" onclick="WF.delCtaTarget(\''+esc(t.target_id)+'\')">×</button>'
+          +'</div>';
+      }).join('');
+    }).catch(function(){});
+};
+WF._ctaSay=function(text,color){
+  var m=document.getElementById('cta-msg'); if(!m)return;
+  m.textContent=text; m.style.color=color;
+  setTimeout(function(){m.textContent='';},5000);
+};
+WF.addCtaTarget=function(){
+  var name=(document.getElementById('cta-name')||{}).value||'';
+  var url=(document.getElementById('cta-url')||{}).value||'';
+  var kind=(document.getElementById('cta-kind')||{}).value||'site';
+  if(!name.trim()||!/^https?:\/\//i.test(url.trim())){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');return;}
+  apiFetch('/api/workspace/cta-targets',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:name.trim(),url:url.trim(),kind:kind})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(d&&d.ok){
+        WF._ctaSay(window.T('wf_cta_saved'),'var(--wf-ok)');
+        document.getElementById('cta-name').value='';
+        document.getElementById('cta-url').value='';
+        WF.loadCtaTargets();
+      }else WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');
+    }).catch(function(){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');});
+};
+/* #132：转化目标短链公网基址——界面内直接配置（写 overlay），不再让运营去配置文件里找键 */
+WF.saveCtaBase=function(){
+  var inp=document.getElementById('cta-base-input');
+  var v=(inp&&inp.value||'').trim();
+  if(!/^https?:\/\/[^\s\/]+/i.test(v)){
+    WF._ctaSay(window.T('wf_cta_base_invalid'),'var(--wf-err)');
+    return;
+  }
+  apiFetch('/api/workspace/cta-public-base',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({public_base:v})}, {timeoutMs: 60000})
+    .then(function(r){ return r.json().catch(function(){return {};}); })
+    .then(function(d){
+      if(d&&d.ok){
+        WF._ctaSay(window.T('wf_cta_base_saved'),'var(--wf-ok)');
+        WF.loadCtaTargets();
+      }else WF._ctaSay((d&&d.message)||window.T('wf_cta_fail'),'var(--wf-err)');
+    }).catch(function(){WF._ctaSay(window.T('wf_cta_fail'),'var(--wf-err)');});
+};
+WF.toggleCtaTarget=function(id,en){
+  var t=(WF._ctaTargets||[]).find(function(x){return x.target_id===id;});
+  if(!t)return;
+  apiFetch('/api/workspace/cta-targets',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({target_id:id,name:t.name,url:t.url,kind:t.kind,utm:t.utm,enabled:en?1:0})}, {timeoutMs: 60000})
+    .then(function(){WF.loadCtaTargets();}).catch(function(){WF.loadCtaTargets();});
+};
+WF.delCtaTarget=function(id){
+  if(!confirm(window.T('wf_cta_del_confirm')))return;
+  apiFetch('/api/workspace/cta-targets/'+encodeURIComponent(id),{method:'DELETE'}, {timeoutMs: 60000})
+    .then(function(){WF.loadCtaTargets();});
+};
+WF._deState=null;
+WF.loadDealEngine=function(){
+  apiFetch('/api/workspace/workflows/deal-engine')
+    .then(function(r){ if(!r.ok)throw 0; return r.json(); })
+    .then(function(d){
+      if(!d||!d.ok)return;
+      WF._deState=d;
+      var card=document.getElementById('de-card'); if(!card)return;
+      card.style.display='block';
+      var on=!!d.engine_on;
+      var pill=document.getElementById('de-status-pill');
+      if(pill)pill.innerHTML='<span class="badge '+(on?'badge-completed':'badge-cancelled')+'">'
+        +(on?window.T('wf_de_on'):window.T('wf_de_off'))+'</span>';
+      var btn=document.getElementById('de-btn');
+      if(btn){btn.textContent=on?window.T('wf_de_btn_off'):window.T('wf_de_btn_on');
+        btn.className='btn-sm'+(on?'':' btn-primary');}
+      var det=document.getElementById('de-detail');
+      if(det)det.innerHTML=
+        '<span class="cond-tag">'+window.T('wf_de_journey')+' '+(d.journey_enabled?'✓':'✗')+'</span>'
+        +'<span class="cond-tag">'+window.T('wf_de_reply_yield')+' '+(d.reply_yield_enabled?'✓':'✗')+'</span>'
+        +(d.chains||[]).map(function(ch){
+          return '<span class="cond-tag">'+esc(ch.name||ch.chain_id)+' ('+WF._stageLabel(ch.stage)+') '
+            +(ch.wired?'✓ '+window.T('wf_de_chain_wired'):'✗ '+window.T('wf_de_chain_unwired'))+'</span>';
+        }).join('');
+      // 实施92b 自动发送区：引擎开着才展示（旧后端响应无 auto_send=隐藏）。
+      // auto_send 键同时是本批 .py（含 bulk-start 端点）已装载的特性探测——
+      // 首次探到时补渲染一次链卡，把「📤 批量挂链」按钮点亮（一次性，防循环）。
+      var au=d.auto_send||null;
+      if(au&&!WF._bulkReady){ WF._bulkReady=true; try{ WF.loadChains(); }catch(_e){} }
+      // 实施93：guide 风味把示意图/编辑器下拉换引导语系文案
+      try{ WF._applyFlavorLabels(); }catch(_e){}
+      var aRow=document.getElementById('de-auto');
+      var aWarn=document.getElementById('de-auto-warn');
+      if(aRow){
+        if(on&&au){
+          aRow.style.display='flex';
+          var aOn=!!au.on;
+          var aPill=document.getElementById('de-auto-pill');
+          if(aPill)aPill.innerHTML='<span class="badge '+(aOn?'badge-running':'badge-cancelled')+'">'
+            +(aOn?'⚡ '+window.T('wf_de_auto_pill_on'):window.T('wf_de_auto_pill_off'))+'</span>';
+          var aMeta=document.getElementById('de-auto-meta');
+          if(aMeta)aMeta.textContent=aOn?window.Tf('wf_de_auto_meta',
+            {qs:au.quiet_start,qe:au.quiet_end,n:au.max_per_day}):'';
+          var aBtn=document.getElementById('de-auto-btn');
+          if(aBtn){aBtn.textContent=aOn?window.T('wf_de_auto_btn_off'):window.T('wf_de_auto_btn_on');
+            aBtn.className='btn-sm'+(aOn?'':' btn-primary');}
+          if(aWarn){
+            var showWarn=aOn&&!au.deliver_wired;
+            aWarn.style.display=showWarn?'block':'none';
+            aWarn.textContent=showWarn?window.T('wf_de_auto_deliver_warn'):'';
+          }
+        }else{
+          aRow.style.display='none';
+          if(aWarn)aWarn.style.display='none';
+        }
+      }
+    }).catch(function(){});
+};
+WF.toggleDealEngineAuto=function(){
+  var st=WF._deState||{};
+  var au=st.auto_send||{};
+  var cur=!!au.on;
+  if(!confirm(window.T(cur?'wf_de_auto_confirm_off':'wf_de_auto_confirm_on')))return;
+  var btn=document.getElementById('de-auto-btn'); if(btn)btn.disabled=true;
+  var msg=document.getElementById('de-msg');
+  apiFetch('/api/workspace/workflows/deal-engine',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enable:true,auto_send:!cur})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(!(d&&d.ok)&&msg){
+        msg.textContent=window.Tf('wf_de_fail',{msg:String((d&&(d.auto_flag_msg||d.flag_msg||d.error))||'?').slice(0,80)});
+        msg.style.color='var(--wf-err)';
+        setTimeout(function(){msg.textContent='';},6000);
+      }
+      WF.loadDealEngine(); WF.loadChains();
+    }).catch(function(){ if(btn)btn.disabled=false; });
+};
+// ── 实施92b 批量挂链：dry-run 预览 → 确认 → 落地（服务端再兜 50 上限+防重）──
+WF.bulkStart=function(chainId){
+  var c=(_chainsCache||[]).find(function(x){return x.chain_id===chainId;});
+  var defDays=(c&&c.trigger_conditions&&c.trigger_conditions.silence_days)||7;
+  var days=prompt(window.T('wf_bulk_prompt'),String(defDays));
+  if(days==null)return;
+  days=Number(days)||0;
+  if(days<=0)return;
+  var msg=document.getElementById('seed-msg');
+  function _say(text,color){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){msg.textContent='';},6000); }
+  var url='/api/workspace/workflow-chains/'+encodeURIComponent(chainId)+'/bulk-start';
+  apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({silent_days_min:days,limit:50,dry_run:true})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok){_say(window.T('wf_bulk_fail'),'var(--wf-err)');return;}
+      var n=Number(d.candidates)||0;
+      if(!n){_say(window.T('wf_bulk_none'),'var(--wf-ink-soft)');return;}
+      if(!confirm(window.Tf('wf_bulk_confirm',{n:n,d:days})))return;
+      apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({silent_days_min:days,limit:50,dry_run:false})}, {timeoutMs: 60000})
+        .then(function(r){return r.json();}).then(function(d2){
+          if(d2&&d2.ok){_say(window.Tf('wf_bulk_done',{n:d2.started||0}),'var(--wf-ok)');WF.loadChains();}
+          else _say(window.T('wf_bulk_fail'),'var(--wf-err)');
+        }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
+    }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
+};
+WF.toggleDealEngine=function(){
+  var on=!!(WF._deState&&WF._deState.engine_on);
+  if(!confirm(window.T(on?'wf_de_confirm_off':'wf_de_confirm_on')))return;
+  var btn=document.getElementById('de-btn'); if(btn)btn.disabled=true;
+  var msg=document.getElementById('de-msg');
+  apiFetch('/api/workspace/workflows/deal-engine',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enable:!on})}, {timeoutMs: 60000})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn)btn.disabled=false;
+      if(d&&d.ok){
+        if(msg){msg.textContent=!on?window.Tf('wf_de_done_on',{n:(d.backfilled||0)}):window.T('wf_de_done_off');msg.style.color='var(--wf-ok)';}
+      }else{
+        if(msg){msg.textContent=window.Tf('wf_de_fail',{msg:String((d&&(d.flag_msg||d.error))||'?').slice(0,80)});msg.style.color='var(--wf-err)';}
+      }
+      setTimeout(function(){if(msg)msg.textContent='';},6000);
+      WF.loadDealEngine(); WF.loadChains();
+    }).catch(function(){
+      if(btn)btn.disabled=false;
+      if(msg){msg.textContent=window.Tf('wf_de_fail',{msg:'network'});msg.style.color='var(--wf-err)';}
+    });
+};
+
 // ── 工作链 ──────────────────────────────────────────────────────────────────
 var _chainSteps=[];
 var _chainsCache=[];
@@ -384,12 +724,15 @@ WF.loadChains=function(){
           +'<div class="wf-chain-hd">'
             +'<strong class="wf-chain-nm" title="ID: '+esc(c.chain_id)+'">🔗 '+esc(c.name)+'</strong>'
             +(c.exec_mode==='auto'?'<span class="wf-run-pill" title="'+window.T('wf_exec_mode_hint')+'">⚡ '+window.T('wf_chain_auto_badge')+'</span>':'')
+            +(c.on_reply==='complete'?'<span class="wf-reply-pill" title="'+window.T('wf_onreply_hint')+'">↩ '+window.T('wf_onreply_badge_complete')+'</span>':'')
+            +(c.on_reply==='continue'?'<span class="wf-run-pill" title="'+window.T('wf_onreply_hint')+'">⏩ '+window.T('wf_onreply_badge_continue')+'</span>':'')
             +(running?'<span class="wf-run-pill">'+window.Tf('wf_chain_running_n',{n:running})+'</span>':'')
             +replyPill
             +(on?'':'<span class="badge badge-cancelled">'+window.T('wf_chain_disabled')+'</span>')
             +'<span class="wf-chain-sp"></span>'
             +'<label class="toggle-sw" title="'+window.T('wf_chain_enable_t')+'"><input type="checkbox"'+(on?' checked':'')
               +' onchange="WF.toggleChain(\''+esc(c.chain_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
+            +((on&&WF._bulkReady)?'<button class="btn-sm" onclick="WF.bulkStart(\''+esc(c.chain_id)+'\')">'+window.T('wf_bulk_btn')+'</button> ':'')
             +'<button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
             +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button>'
           +'</div>'
@@ -398,6 +741,7 @@ WF.loadChains=function(){
             var tags=[];
             if(tc.silence_days)tags.push(window.T('ov_js_th_silent')+'≥'+tc.silence_days+window.T('wa_s158'));
             if(tc.churn_risk_high)tags.push(window.T('wf_js008'));
+            if(tc.stage_enter)tags.push(window.Tf('wf_cond_stage',{stage:WF._stageLabel(tc.stage_enter)}));
             return tags.length?'<div style="margin-bottom:6px;">'+tags.map(function(t){return '<span class="cond-tag">⚡ '+t+'</span>';}).join('')+'</div>':'';
           })()
           +'<div class="wf-steps-tl">'
@@ -419,14 +763,17 @@ WF.loadChains=function(){
     });
   });
 };
-// 启用开关：全量 upsert（页面本就是全量 PUT 语义）；失败也重载回真状态
+// 启用开关：全量 upsert（页面本就是全量 PUT 语义）；失败也重载回真状态。
+// ⚠ 全量 PUT 必须回传 exec_mode/on_reply——漏了会被 upsert 缺省悄悄重置
+//（实施92 补：exec_mode 此前就漏了，切开关=自动推进档静默掉回提醒档）。
 WF.toggleChain=function(id,en){
   var c=(_chainsCache||[]).find(function(x){return x.chain_id===id;});
   if(!c)return;
   apiFetch('/api/workspace/workflow-chains/'+encodeURIComponent(id),{method:'PUT',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({chain_id:id,name:c.name,steps:c.steps||[],
-      trigger_conditions:c.trigger_conditions||{},enabled:en?1:0})}, {timeoutMs: 60000})
+      trigger_conditions:c.trigger_conditions||{},enabled:en?1:0,
+      exec_mode:c.exec_mode||'remind',on_reply:c.on_reply||''})}, {timeoutMs: 60000})
     .then(function(r){return r.json();})
     .then(function(){WF.loadChains();})
     .catch(function(){WF.loadChains();});
@@ -438,10 +785,15 @@ WF.showChainForm=function(chain){
   var tc=chain?(chain.trigger_conditions||{}):{};
   document.getElementById('cf-silence-days').value=tc.silence_days||0;
   document.getElementById('cf-churn-high').checked=!!tc.churn_risk_high;
+  var _se=document.getElementById('cf-stage-enter');
+  if(_se)_se.value=tc.stage_enter||'';
   var _em=document.getElementById('cf-exec-mode');
   if(_em)_em.value=(chain&&chain.exec_mode==='auto')?'auto':'remind';
+  var _or=document.getElementById('cf-on-reply');
+  if(_or)_or.value=(chain&&chain.on_reply)||'';
   document.getElementById('chain-form-title').textContent=chain?window.T('wf_js010'):window.T('wf_s050');
   WF.renderSteps();
+  try{ WF._applyFlavorLabels(); }catch(_e){}
   document.getElementById('chain-form-wrap').style.display='block';
   document.getElementById('chain-form-wrap').scrollIntoView({behavior:'smooth'});
 };
@@ -449,6 +801,11 @@ WF.renderSteps=function(){
   var box=document.getElementById('cf-steps');
   if(!_chainSteps.length){box.innerHTML='<div class="wf-empty" style="padding:10px;">'+window.T('wf_js011')+' "'+window.T('wf_js012')+'"</div>';return;}
   box.innerHTML=_chainSteps.map(function(s,i){
+    // 实施92c：延迟输入带单位（小时/天）——运营心智是「第 3 天」，不该让人
+    // 换算 48/72；存储仍是 delay_hours 单一口径（整除 24 且 ≥24 默认展示为天）
+    var dh=Number(s.delay_hours)||0;
+    var isDay=dh>=24&&dh%24===0;
+    var dispV=isDay?(dh/24):dh;
     return '<div class="step-card">'
       +'<div class="step-num">'+(i+1)+'</div>'
       +'<div style="flex:1;display:flex;gap:8px;flex-wrap:wrap;">'
@@ -457,8 +814,23 @@ WF.renderSteps=function(){
         +'</select>'
         +'<input style="font-size:12px;width:180px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
           +'placeholder="'+window.T('wf_js013')+'" value="'+esc(s.note||'')+'" oninput="_stepField('+i+',\'note\',this.value)">'
-        +'<input style="font-size:12px;width:90px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
-          +'type="number" min="0" placeholder="'+window.T('wf_js009')+'(h)" value="'+(s.delay_hours||0)+'" oninput="_stepField('+i+',\'delay_hours\',Number(this.value))">'
+        +'<input style="font-size:12px;width:70px;padding:3px 7px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" '
+          +'type="number" min="0" step="any" placeholder="'+window.T('wf_js009')+'" value="'+dispV+'" oninput="_stepDelayVal('+i+',this)">'
+        +'<select style="font-size:12px;padding:3px 4px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;" onchange="_stepDelayUnit('+i+',this)">'
+          +'<option value="h"'+(isDay?'':' selected')+'>'+window.T('wf_unit_hours')+'</option>'
+          +'<option value="d"'+(isDay?' selected':'')+'>'+window.T('wf_unit_days')+'</option>'
+        +'</select>'
+        // 实施93：话术步可选转化目标（发送时自动带追踪短链；detail 见 hint）
+        +(s.action_type==='template'||!s.action_type
+          ?('<select style="font-size:12px;padding:3px 4px;border:1px solid var(--th-bd-gray3,#d1d5db);border-radius:5px;max-width:150px;" '
+            +'title="'+window.T('wf_step_cta_hint')+'" onchange="_stepField('+i+',\'cta\',this.value)">'
+            +'<option value="">'+window.T('wf_step_cta_none')+'</option>'
+            +'<option value="@primary"'+(s.cta==='@primary'?' selected':'')+'>'+window.T('wf_step_cta_primary')+'</option>'
+            +(WF._ctaTargets||[]).map(function(t){
+              return '<option value="'+esc(t.target_id)+'"'+(s.cta===t.target_id?' selected':'')+'>'
+                +esc(t.name||t.target_id)+'</option>';
+            }).join('')
+          +'</select>'):'')
         +'<button class="btn-sm btn-danger" onclick="_delStep('+i+')">×</button>'
       +'</div></div>';
   }).join('')
@@ -469,6 +841,18 @@ WF.renderSteps=function(){
 };
 window._stepField=function(i,k,v){_chainSteps[i][k]=v;};
 window._delStep=function(i){_chainSteps.splice(i,1);WF.renderSteps();};
+// 实施92c 延迟单位换算：输入值×单位 → delay_hours（存储单一口径不变）；
+// 切单位=时长不变只换显示（48h ↔ 2天），不整块重渲防打断输入
+window._stepDelayVal=function(i,el){
+  var unit=(el.nextElementSibling&&el.nextElementSibling.value)||'h';
+  var v=Number(el.value)||0;
+  _chainSteps[i].delay_hours=unit==='d'?v*24:v;
+};
+window._stepDelayUnit=function(i,el){
+  var dh=Number(_chainSteps[i].delay_hours)||0;
+  var inp=el.previousElementSibling;
+  if(inp)inp.value=el.value==='d'?Math.round(dh/24*100)/100:dh;
+};
 WF.addStep=function(){_chainSteps.push({action_type:'template',note:'',delay_hours:0});WF.renderSteps();};
 WF.editChain=function(id){
   apiFetch('/api/workspace/workflow-chains').then(function(r){return r.json();}).then(function(d){
@@ -485,9 +869,13 @@ WF.saveChain=function(){
   var trigger={};
   if(silenceDays>0)trigger.silence_days=silenceDays;
   if(churnHigh)trigger.churn_risk_high=true;
+  var _seEl=document.getElementById('cf-stage-enter');
+  if(_seEl&&_seEl.value)trigger.stage_enter=_seEl.value;
   var data={chain_id:document.getElementById('cf-id').value||undefined,name:name,steps:_chainSteps,trigger_conditions:trigger};
   var _emEl=document.getElementById('cf-exec-mode');
   data.exec_mode=(_emEl&&_emEl.value==='auto')?'auto':'remind';
+  var _orEl=document.getElementById('cf-on-reply');
+  data.on_reply=(_orEl&&_orEl.value)||'';
   // 保存必须回传当前 enabled（upsert 缺省按 True——否则编辑一条已停用的链会把它悄悄启用）
   var _cur=data.chain_id?(_chainsCache||[]).find(function(x){return x.chain_id===data.chain_id;}):null;
   if(_cur&&_cur.enabled!==undefined)data.enabled=_cur.enabled?1:0;
@@ -635,6 +1023,9 @@ WF.loadValueBar=function(){
       +item(t.started,window.T('wf_funnel_started'))
       +item(t.completed||0,window.T('ops.ct.st_completed'),true)
       +item(reply,window.T('wf_funnel_reply'),(t.reply_rate!=null&&t.reply_rate>=0.3))
+      +(Number(t.deals_n)>0
+        ?item(t.deals_n+(Number(t.deal_amount)>0?(' / '+t.deal_amount):''),
+              window.T('wf_funnel_deals'),true):'')
       +(Number(t.attributed)>0?item(t.attributed,window.T('wf_vb_goal')):'')
       +'<span class="wf-vb-go" onclick="WF.tab(\'monitor\')">'+window.T('wf_vb_go_monitor')+'</span>';
     bar.className='wf-value-bar on';
@@ -668,7 +1059,7 @@ WF.loadFunnel=function(useCache){
           +'<span class="wf-bs-n"><span class="ok">✓'+(s.ok||0)+'</span> <span class="fail">✗'+(s.failed||0)+'</span> / '+at+'</span>'
           +'</div>';
       }).join('');
-      return '<tr class="wf-bs-row"><td colspan="5">'+items+'</td></tr>';
+      return '<tr class="wf-bs-row"><td colspan="6">'+items+'</td></tr>';
     }
     var chips='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">'
       +'<strong style="font-size:13px;margin-right:4px;">'+window.Tf('wf_funnel_title',{d:d.days||14})+'</strong>'
@@ -678,6 +1069,11 @@ WF.loadFunnel=function(useCache){
       +'<span class="badge badge-failed">'+window.T('rpa_js_st_failed')+' '+(t.failed||0)+'</span>'
       +'<span class="badge badge-cancelled">'+window.T('rpa_js_st_cancelled')+' '+(t.cancelled||0)+'</span>'
       +'<span class="badge badge-chain" title="'+window.T('wf_funnel_reply_hint')+'">'+window.T('wf_funnel_reply')+' '+rate(t)+'</span>'
+      +(Number(t.deals_n)>0
+        ? ('<span class="badge badge-completed" title="'+window.T('wf_funnel_deal_hint')+'">💰 '
+           +window.T('wf_funnel_deals')+' '+t.deals_n
+           +(Number(t.deal_amount)>0?(' · '+t.deal_amount):'')+'</span>')
+        : '')
       +(Number(t.attributed)>0
         ? ('<span class="badge badge-chain">'+window.Tf('wf_funnel_attr',{n:t.attributed})
            +(t.attr_reply_rate!=null?(' · '+Math.round(Number(t.attr_reply_rate)*100)+'%'):'')+'</span>')
@@ -693,14 +1089,18 @@ WF.loadFunnel=function(useCache){
       var hasBs=(c.by_step||[]).length>0;
       var bsBtn=hasBs?(' <button class="wf-bs-btn" onclick="WF.toggleStepFunnel(\''+esc(c.chain_id)+'\')">'
         +(_stepOpen[c.chain_id]?'\u25BE '+window.T('wf_bs_hide'):'\u25B8 '+window.T('wf_bs_show'))+'</button>'):'';
+      var dealCell=Number(c.deals_n)>0
+        ?(c.deals_n+(Number(c.deal_amount)>0?(' · '+c.deal_amount):'')):'—';
       return '<tr><td>'+esc(c.chain_name||c.chain_id)+bsBtn+'</td><td>'+c.started+'</td><td>'+(c.completed||0)+'</td>'
-        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td></tr>'
+        +'<td>'+(c.failed||0)+'</td><td title="'+window.T('wf_funnel_reply_hint')+'">'+rate(c)+'</td>'
+        +'<td title="'+window.T('wf_funnel_deal_hint')+'">'+dealCell+'</td></tr>'
         +bsRows(c);
     }).join('');
     var table=rows?('<table class="wf-table"><thead><tr>'
       +'<th>'+window.T('wf_funnel_col_chain')+'</th><th>'+window.T('wf_funnel_started')+'</th>'
       +'<th>'+window.T('ops.ct.st_completed')+'</th><th>'+window.T('rpa_js_st_failed')+'</th>'
       +'<th>'+window.T('wf_funnel_col_reply')+'</th>'
+      +'<th>'+window.T('wf_funnel_col_deals')+'</th>'
       +'</tr></thead><tbody>'+rows+'</tbody></table>'):'';
     // P2 横条漏斗：宽度按启动数归一（0 值零宽不画假条）
     function fbRow(label,n,cls){
@@ -798,6 +1198,8 @@ try{
 }catch(_){}
 WF.tab(_initTab);
 WF.loadValueBar();   // P2 页头价值条：进页即拉（与监控 tab 共享单飞缓存，零重复请求）
+WF.loadDealEngine(); // 实施92 成交引擎卡（旧后端无端点 → 整卡保持隐藏）
+WF.loadCtaTargets(); // 实施93 转化目标库（旧后端无端点 → 整卡保持隐藏）
 // 首访自动播放引导（play-once：写 key 在播放前——完成/跳过/Esc 任何出口都不再自动纠缠；
 // 手动「▶ 播放引导」按钮不受此限）
 try{

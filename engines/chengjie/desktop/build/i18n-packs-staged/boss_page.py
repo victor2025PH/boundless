@@ -42,6 +42,17 @@ ZH = {
     # 空态（诚实：不摆零假数据）
     "bp_empty_title": "还没有可统计的数据",
     "bp_empty_body": "接入渠道并让 AI 开始接待后，这里会出现你的价值账单。",
+    # 「现在」区（P1-8 2026-08-29）：此刻有没有事等我
+    "bp_now_title": "现在，需要你知道的",
+    "bp_now_active": "正在推进的客户目标",
+    "bp_now_won": "近 24 小时成交",
+    "bp_now_won_amt": "合计 ${a}",
+    "bp_now_pending": "等人拍板的回复",
+    "bp_now_unans": "24 小时没回上的客户",
+    "bp_now_risk_sessions": "{n} 个渠道账号掉线，需要重新登录",
+    "bp_now_risk_frozen": "{n} 个账号被安全冻结（风控保护中，会自动恢复）",
+    "bp_now_risk_alert": "告警通道未接通——出了状况不会有人收到通知",
+    "bp_now_ok": "一切正常，没有需要处理的事",
 }
 
 EN = {
@@ -81,4 +92,15 @@ EN = {
     # empty state (honest: no fake zeros)
     "bp_empty_title": "Nothing to report yet",
     "bp_empty_body": "Once channels are connected and the AI starts handling customers, your value ledger appears here.",
+    # "right now" zone (P1-8 2026-08-29)
+    "bp_now_title": "Right now",
+    "bp_now_active": "Customer goals in motion",
+    "bp_now_won": "Won in the last 24h",
+    "bp_now_won_amt": "Total ${a}",
+    "bp_now_pending": "Replies waiting for approval",
+    "bp_now_unans": "Customers unanswered for 24h",
+    "bp_now_risk_sessions": "{n} channel account(s) offline — re-login needed",
+    "bp_now_risk_frozen": "{n} account(s) safety-frozen (risk-control protection, auto-recovers)",
+    "bp_now_risk_alert": "Alert channel not connected — nobody gets notified when something breaks",
+    "bp_now_ok": "All clear — nothing needs your attention",
 }

@@ -65,3 +65,37 @@ def test_clone_languages_tolerates_garbage():
     assert clone_capable_languages({"clone_languages": "en"}) == frozenset({"en"})
     assert clone_capable_languages({"clone_languages": 123}) == frozenset()
     assert clone_capable_languages({"clone_languages": [None, "", "  "]}) == frozenset()
+
+
+# ── P0（2026-08-31）：capable_langs 按克隆主路实况收窄意愿名单 ────────────────
+# clone_languages 是 fish 时代实证的「意愿」（en/ja/es）；主链切 IndexTTS-2
+# （仅中英）后名单不会自动跟上——收窄后名单内但念不了的语种回 edge 多语声，
+# 保住语音触达而不是「克隆试败 → 纯文本」。
+
+def test_capable_langs_narrows_stale_wishlist():
+    cfg = {"clone_languages": ["en", "ja", "es"]}
+    capable = ("zh", "en")            # SSOT：hub index_tts 仅中英
+    assert use_clone_for_language(cfg, "en", capable_langs=capable) is True
+    assert use_clone_for_language(cfg, "ja", capable_langs=capable) is False
+    assert use_clone_for_language(cfg, "es-ES", capable_langs=capable) is False
+
+
+def test_capable_langs_unknown_keeps_wishlist_semantics():
+    """能力未知（None/空元组）→ 维持纯名单语义（宁可漏收窄不误伤）。"""
+    cfg = {"clone_languages": ["en", "ja"]}
+    assert use_clone_for_language(cfg, "ja") is True
+    assert use_clone_for_language(cfg, "ja", capable_langs=None) is True
+    assert use_clone_for_language(cfg, "ja", capable_langs=()) is True
+
+
+def test_capable_langs_never_widens_wishlist():
+    """capable 再宽也不越权：名单外语种恒 False，中文恒 False。"""
+    cfg = {"clone_languages": ["en"]}
+    assert use_clone_for_language(
+        cfg, "th", capable_langs=("zh", "en", "th")) is False
+    assert use_clone_for_language(
+        cfg, "zh", capable_langs=("zh",)) is False
+    # BCP47 变体归一：capable 给 zh-TW 形态也认前缀
+    cfg2 = {"clone_languages": ["ja"]}
+    assert use_clone_for_language(
+        cfg2, "ja-JP", capable_langs=("ZH", "JA-jp")) is True

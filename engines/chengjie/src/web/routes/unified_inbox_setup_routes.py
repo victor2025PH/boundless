@@ -223,6 +223,38 @@ def _require_supervisor_or_shell(request: Request) -> None:
         _require_supervisor(request)
 
 
+def _probe_model_endpoint(base_url: str, api_key: str = "", timeout: float = 3.0) -> Dict[str, Any]:
+    """轻量探活模型端点（GET {base}/v1/models，OpenAI 兼容）：只读、不耗 token、短超时。
+
+    返回 ``{reachable, status, latency_ms}``。主机应答 4xx/5xx（如 401 鉴权）仍算
+    ``reachable=True``（端点在线，只是鉴权/路径问题）；连接失败/超时/坏 URL=False。
+    任何异常都不抛（体检不能把设置页打崩）。
+    """
+    import time as _t
+    import urllib.error
+    import urllib.request
+    b = str(base_url or "").strip().rstrip("/")
+    if not b or "://" not in b:
+        return {"reachable": False, "status": None, "latency_ms": 0, "error": "bad_url"}
+    if not b.endswith("/v1"):
+        b = b + "/v1"
+    url = b + "/models"
+    headers = {"Authorization": "Bearer " + (api_key or "probe")}
+    t0 = _t.time()
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {"reachable": True,
+                    "status": int(getattr(resp, "status", 200) or 200),
+                    "latency_ms": int((_t.time() - t0) * 1000)}
+    except urllib.error.HTTPError as he:
+        return {"reachable": True, "status": int(getattr(he, "code", 0) or 0),
+                "latency_ms": int((_t.time() - t0) * 1000)}
+    except Exception as ex:
+        return {"reachable": False, "status": None,
+                "latency_ms": int((_t.time() - t0) * 1000), "error": str(ex)[:80]}
+
+
 async def reload_ai_runtime(app, config_manager) -> bool:
     """P0-1：AI 凭证落盘后热重建 AIClient 并换绑运行中服务（best-effort，绝不抛）。
 
@@ -793,6 +825,10 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         # 依赖官网，此前断链只会表现为一堆互不相干的静默回落。探针 120s 进程缓存 +
         # 连续两振才报，同一 60s 轮询捎带；非托管态恒 None（前端隐藏）。
         try:
+            # 本函数作用域没有 asyncio（上个函数的局部导入不可达）——漏导入会被
+            # 本 except 吞成 site_link 恒 None＝功能静默死（undefined-names 门禁抓的）
+            import asyncio
+
             from src.utils.site_link_probe import site_link_snapshot
             site_link = await asyncio.to_thread(site_link_snapshot, config_manager)
         except Exception:
@@ -947,6 +983,126 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         ai_ready = await reload_ai_runtime(request.app, config_manager)
         return {"ok": True, "detail": tr(request, "setup.pool.saved"),
                 "count": len(cleaned), "ai_ready": bool(ai_ready)}
+
+    @app.get("/api/setup/model-routes")
+    async def api_setup_model_routes_get(request: Request, probe: int = 0):
+        """多模型路由总览（ai.models + ai.task_routes）：模型档（密钥打码）+ 任务映射 +
+        已认任务名 + 运行态（哪些档已装载）。``probe=1`` 时逐档探活端点（🟢/🔴，只读不耗
+        token）。密钥绝不回显全量。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        config = getattr(config_manager, "config", None) or {}
+        ai_cfg = config.get("ai") or {}
+        out_models = []
+        models_cfg = ai_cfg.get("models") or {}
+        if isinstance(models_cfg, dict):
+            for name, spec in models_cfg.items():
+                if not isinstance(spec, dict):
+                    continue
+                k = str(spec.get("api_key") or "")
+                base = str(spec.get("base_url") or "")
+                row = {
+                    "name": str(name),
+                    "base_url": base,
+                    "model": str(spec.get("model") or ""),
+                    "api_key_masked": (k[:4] + "…" + k[-4:]) if len(k) > 12 else ("…" if k.strip() else ""),
+                }
+                if probe:
+                    real_key = str(spec.get("api_key") or ai_cfg.get("api_key") or "")
+                    row["health"] = _probe_model_endpoint(base, real_key)
+                out_models.append(row)
+        routes_cfg = ai_cfg.get("task_routes") or {}
+        task_routes = ({str(t): str(p) for t, p in routes_cfg.items()}
+                       if isinstance(routes_cfg, dict) else {})
+        loaded = []
+        try:
+            ai_client = getattr(request.app.state, "ai_client", None)
+            if ai_client is not None:
+                loaded = list(getattr(ai_client, "_route_clients", {}).keys())
+        except Exception:
+            loaded = []
+        return {
+            "ok": True,
+            "models": out_models,
+            "task_routes": task_routes,
+            "known_tasks": ["assistant_planner", "assistant_qa", "computer_use", "chat"],
+            "loaded": loaded,
+        }
+
+    @app.post("/api/setup/model-routes")
+    async def api_setup_model_routes_save(request: Request):
+        """保存多模型路由到 overlay（ai.models + ai.task_routes）并热重建 AI 运行时。
+
+        - body: ``{models: [{name, base_url, model, api_key?}], task_routes: {task: profile}}``；
+        - base_url/model 必填；掩码回传的 api_key 沿用同名旧真值；空 api_key 允许（本地端点
+          无鉴权，运行时自动填占位）；task_routes 指向不存在的档直接拒绝（防「路由到空气」）。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        if config_manager is None:
+            return {"ok": False, "detail": tr(request, "err.svc.config_manager_not_ready")}
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        raw_models = (body or {}).get("models")
+        if not isinstance(raw_models, list):
+            return {"ok": False, "detail": tr(request, "err.setup.routes_models_required")}
+        if len(raw_models) > 20:
+            return {"ok": False, "detail": tr(request, "err.setup.routes_too_many", max=20)}
+        old_by_name: Dict[str, str] = {}
+        _m = (((getattr(config_manager, "config", None) or {}).get("ai") or {})
+              .get("models")) or {}
+        if isinstance(_m, dict):
+            for nm, sp in _m.items():
+                if isinstance(sp, dict):
+                    old_by_name[str(nm)] = str(sp.get("api_key") or "")
+        cleaned: Dict[str, Any] = {}
+        seen_names: set = set()
+        for i, item in enumerate(raw_models):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:40]
+            if not name:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_name_empty")}
+            if name in seen_names:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_dup_name", name=name)}
+            seen_names.add(name)
+            base = str(item.get("base_url") or "").strip()[:300]
+            if not base or "://" not in base:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_base_invalid", name=name)}
+            model = str(item.get("model") or "").strip()[:120]
+            if not model:
+                return {"ok": False, "detail": tr(request, "err.setup.routes_model_empty", name=name)}
+            spec: Dict[str, Any] = {"base_url": base, "model": model}
+            key = str(item.get("api_key") or "").strip()
+            if ("…" in key) or key.endswith("***"):
+                key = old_by_name.get(name, "")   # 掩码回传 → 沿用旧真值
+            if key:
+                spec["api_key"] = key[:512]
+            cleaned[name] = spec
+        raw_routes = (body or {}).get("task_routes") or {}
+        routes: Dict[str, str] = {}
+        if isinstance(raw_routes, dict):
+            for task, prof in raw_routes.items():
+                t = str(task).strip()[:40]
+                p = str(prof or "").strip()
+                if not t or not p:
+                    continue
+                if p not in cleaned:
+                    return {"ok": False,
+                            "detail": tr(request, "err.setup.routes_unknown_profile", task=t, name=p)}
+                routes[t] = p
+        ok1, msg1 = config_manager.set_overlay_flag("ai.models", cleaned)
+        if not ok1:
+            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason=msg1)}
+        ok2, msg2 = config_manager.set_overlay_flag("ai.task_routes", routes)
+        if not ok2:
+            return {"ok": False, "detail": tr(request, "err.setup.ai_save_failed", reason=msg2)}
+        ai_ready = await reload_ai_runtime(request.app, config_manager)
+        return {"ok": True, "detail": tr(request, "setup.routes.saved"),
+                "models": len(cleaned), "routes": len(routes), "ai_ready": bool(ai_ready)}
 
     @app.post("/api/setup/channels/{channel}")
     async def api_setup_channel_save(channel: str, request: Request):

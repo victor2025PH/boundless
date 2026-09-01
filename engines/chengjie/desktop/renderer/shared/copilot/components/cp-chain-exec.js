@@ -83,6 +83,15 @@
       this._goalRec = null;      // C1：{cid, goalId, chainId} 活跃目标推荐缓存（按会话）
       this._execOps = false;     // P1：后端 caps.exec_ops（暂停/跳步/重试端点已装载）
       this._opErr = null;        // P1：{id, msg} 单卡操作失败提示（下次成功/刷新即清）
+      // 实施92c 旅程条：{cid, stage, src, deals, enabled} / missing=旧后端 404 整条隐藏
+      this._journey = null;
+      this._jnEdit = false;      // 阶段切换行开合
+      this._jnBusy = false;      // 成交/阶段请求在途防双击
+      this._jnMsg = "";          // 一次性反馈（已记一单/失败原因）
+      // 实施93b 一键发链：目标缓存（全局非会话级）+ 选择行开合
+      this._ctaTargets = null;
+      this._ctaBase = "";
+      this._jnLinkPick = false;
     }
 
     emptyText() { return this.t("cp.chain.empty"); }
@@ -167,7 +176,51 @@
                  white-space:nowrap; }
       .todo button { flex:0 0 auto; }
       .bdg.paused { background:color-mix(in srgb,var(--cp-warn,#d97706) 14%,transparent);
-                    color:var(--cp-warn,#d97706); }`;
+                    color:var(--cp-warn,#d97706); }
+      /* 实施92c 旅程条：阶段 chip + 标记成交（打招呼→成交的坐席侧入口） */
+      .jn { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+            padding:5px 7px; margin-bottom:var(--cp-gap-xs,4px); border-radius:6px;
+            background:var(--cp-surface-2,#f8fafc);
+            border:1px solid var(--cp-border,#e2e8f0); }
+      .jn-lb { font-size:10px; color:var(--cp-text-tiny,#94a3b8); flex:0 0 auto; }
+      .jn-chip { border:0; cursor:pointer; padding:1px 8px; border-radius:99px;
+                 font-size:10px; line-height:17px; font-weight:var(--cp-fw-bold,600);
+                 background:var(--cp-track,#e2e8f0); color:var(--cp-text-dim,#64748b); }
+      .jn-chip.on { background:var(--cp-accent-weak,rgba(79,70,229,.12));
+                    color:var(--cp-accent,#4f46e5); }
+      .jn-chip.deal { background:color-mix(in srgb,var(--cp-ok,#0f9d75) 14%,transparent);
+                      color:var(--cp-ok,#0f9d75); }
+      .jn-deals { font-size:10px; color:var(--cp-text-dim,#64748b); flex:0 0 auto; }
+      .jn-sp { flex:1 1 auto; }
+      .jn-msg { font-size:10px; color:var(--cp-ok,#0f9d75); flex:0 0 auto; }
+      .jn-edit { display:flex; gap:4px; flex-wrap:wrap; padding:0 2px 5px; }
+      .jn-undo { border:0; background:transparent; cursor:pointer; font-size:10px;
+                 color:var(--cp-text-tiny,#94a3b8); text-decoration:underline; }
+      .jn-undo:hover { color:var(--cp-danger,#dc2626); }
+      .jn-ev { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+               font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+               padding:0 2px 5px; }
+      .jn-sug { color:var(--cp-accent,#4f46e5); }`;
+    }
+
+    /* 旅程阶段人话标签（顺序=后端 STAGE_ORDER，改一处必同改）。
+       实施93：guide 风味（journey 响应 flavor）时 quoting/deal/repeat 换
+       引导语系文案（已引导/已转化/再转化）——内部 id 不变只换展示。 */
+    _jnStages() { return ["new", "contacted", "nurturing", "quoting", "deal", "repeat"]; }
+
+    _jnFlavor() {
+      return String((this._journey && this._journey.flavor) || "sales");
+    }
+
+    _jnLabel(stage) {
+      let key = String(stage || "unset");
+      if (this._jnFlavor() === "guide"
+          && ["quoting", "deal", "repeat"].indexOf(key) >= 0) {
+        key += "_g";
+      }
+      const k = "cp.journey.stage." + key;
+      const v = this.t(k);
+      return (v && v.indexOf("cp.journey.") !== 0) ? v : String(stage || "");
     }
 
     async fetchData(ctx) {
@@ -183,6 +236,11 @@
         this._openExecs = {};
         this._goalRec = null;
         this._opErr = null;
+        this._journey = null;
+        this._jnEdit = false;
+        this._jnBusy = false;
+        this._jnMsg = "";
+        this._jnLinkPick = false;   // 目标缓存全局，选择行随会话收起
       }
       const res = await this._client.getChainExecutions({ conversationId: cid, limit: 8 });
       // C3：模块关（后端 403）→ 整卡隐藏（与 cp-goal 同模式：关闭 ≠ 报错）。
@@ -194,7 +252,42 @@
       this._hideCard(false);
       // P1 能力位：暂停/跳步/重试端点已装载才显操作按钮（旧后端无 caps=隐藏）
       this._execOps = !!(res && res.caps && res.caps.exec_ops);
+      // 实施92c：旅程条异步补载（裸 fetch 与 _loadGoalRec 同口径——该端点属
+      // journey 域，桌面壳 file:// 无同源 API → 整条隐藏；绝不阻塞主渲染）
+      this._kickJourney(cid);
       return res;
+    }
+
+    _kickJourney(cid) {
+      if (!HAS_HTTP || !cid) return;
+      if (this._journey && this._journey.cid === cid) return;   // 会话内缓存
+      const self = this;
+      fetch("/api/workspace/conv/" + encodeURIComponent(cid) + "/journey")
+        .then((r) => {
+          if (r.status === 404 || r.status === 403) return { __missing: true };
+          return r.ok ? r.json() : null;
+        })
+        .then((d) => {
+          if (!d) return;
+          if (d.__missing) {
+            self._journey = { cid, missing: true };
+          } else {
+            self._journey = {
+              cid,
+              stage: String(d.stage || ""),
+              src: String(d.src || ""),
+              deals: Array.isArray(d.deals) ? d.deals : [],
+              enabled: !!d.journey_enabled,
+              flavor: String(d.flavor || "sales"),
+              evidence: (d.evidence && typeof d.evidence === "object")
+                ? d.evidence : {},
+              suggested: (d.suggested_chain && d.suggested_chain.chain_id)
+                ? d.suggested_chain : null,
+            };
+          }
+          if (self._lastCid === cid) self._rerender();
+        })
+        .catch(() => { /* 网络异常＝本轮无旅程条，不打扰主卡 */ });
     }
 
     _hideCard(hide) {
@@ -206,7 +299,8 @@
 
     renderData(d) {
       const execs = Array.isArray(d && d.executions) ? d.executions : [];
-      let html = this._pickOpen ? this._renderPicker() : "";
+      let html = this._renderJourney(execs);
+      html += this._pickOpen ? this._renderPicker() : "";
       if (!execs.length) {
         if (!this._pickOpen) html += this._renderEmpty();
         return html;
@@ -229,6 +323,90 @@
       }
       return `<a class="mng" href="/workflows" target="_blank" rel="noopener">` +
         `${this.esc(this.t("cp.chain.manage_link"))}</a>`;
+    }
+
+    /* 实施92c 旅程条：阶段 chip（点击展开切换行）+ 成交计数 + 标记成交/撤销。
+       journey 数据未到/旧后端 404/桌面壳 file:// → 返回空串整条隐藏（特性探测）。 */
+    _renderJourney(execs) {
+      const j = this._journey;
+      if (!j || j.missing || j.cid !== this._lastCid) return "";
+      const esc = (s) => this.esc(s);
+      const stage = String(j.stage || "");
+      const chipCls = "jn-chip" + (stage === "deal" || stage === "repeat"
+        ? " deal" : (stage ? " on" : ""));
+      const deals = (j.deals || []).filter((x) => !x.revoked);
+      const dealsLine = deals.length
+        ? `<span class="jn-deals">💰 ${esc(this.t("cp.journey.deals_n", { n: deals.length }))}</span>` +
+          `<button type="button" class="jn-undo" data-act="jn_revoke" title="${esc(this.t("cp.journey.revoke_confirm"))}">${esc(this.t("cp.journey.revoke"))}</button>`
+        : "";
+      const msg = this._jnMsg
+        ? `<span class="jn-msg">${esc(this._jnMsg)}</span>` : "";
+      const markKey = this._jnFlavor() === "guide"
+        ? "cp.journey.mark_conv" : "cp.journey.mark_deal";
+      let html = `<div class="jn">` +
+        `<span class="jn-lb">${esc(this.t("cp.journey.stage_label"))}</span>` +
+        `<button type="button" class="${chipCls}" data-act="jn_edit" ` +
+        `title="${esc(this.t("cp.journey.stage_hint"))}">${esc(this._jnLabel(stage))}</button>` +
+        dealsLine + msg + `<span class="jn-sp"></span>` +
+        `<button type="button" class="jn-chip" data-act="jn_link" ` +
+        `title="${esc(this.t("cp.journey.link_hint"))}" ` +
+        `aria-label="${esc(this.t("cp.journey.link_hint"))}">\u{1F517}</button>` +
+        `<button type="button" class="jn-chip" data-act="jn_deal">` +
+        `${esc(this.t(markKey))}</button>` +
+        `</div>`;
+      if (this._jnEdit) {
+        html += `<div class="jn-edit">` + this._jnStages().map((s) =>
+          `<button type="button" class="jn-chip${s === stage ? " on" : ""}" ` +
+          `data-act="jn_set" data-stage="${esc(s)}">${esc(this._jnLabel(s))}</button>`,
+        ).join("") + `</div>`;
+      }
+      // 实施93b 一键发链目标选择行（仅当多目标时展开；单目标直铸不进这里）
+      if (this._jnLinkPick) {
+        const ts = (this._ctaTargets || []).filter((t) => t && t.enabled);
+        html += `<div class="jn-edit">` +
+          `<span class="jn-lb">${esc(this.t("cp.journey.link_pick"))}</span>` +
+          (ts.length
+            ? ts.map((t) =>
+              `<button type="button" class="jn-chip" data-act="jn_link_go" ` +
+              `data-id="${esc(t.target_id)}">${esc(t.name || t.target_id)}</button>`,
+            ).join("")
+            : `<span class="jn-msg">${esc(this.t("cp.journey.link_none"))}</span>`) +
+          `</div>`;
+      }
+      html += this._renderEvidence(j, execs);
+      return html;
+    }
+
+    /* 实施92d「为什么是现在」证据行 + 一键建议（有界建议卡结构：触发原因
+       可量化、动作可一键、可忽略不纠缠）。低于 1h 的等待不渲染（噪音地板）。 */
+    _renderEvidence(j, execs) {
+      const esc = (s) => this.esc(s);
+      const ev = (j && j.evidence) || {};
+      const wait = Number(ev.wait_hours) || 0;
+      const parts = [];
+      if (wait >= 1 && ev.waiting_on === "customer") {
+        parts.push("⏳ " + esc(this.t("cp.journey.ev_wait_customer",
+          { t: this._fmtDur(wait * 3600) })));
+      } else if (wait >= 1 && ev.waiting_on === "us") {
+        parts.push("📥 " + esc(this.t("cp.journey.ev_wait_us",
+          { t: this._fmtDur(wait * 3600) })));
+      }
+      // 建议链：仅当前会话无在途执行（running/paused）时展示——链在场＝
+      // 节奏已被接管，再建议第二条是添乱
+      let suggest = "";
+      const hasLive = (execs || []).some((x) =>
+        x && (x.status === "running" || x.status === "paused"));
+      if (j && j.suggested && !hasLive) {
+        suggest = `<span class="jn-sug">${esc(this.t("cp.journey.suggest",
+          { name: String(j.suggested.name || "") }))}</span>` +
+          `<button type="button" class="jn-chip on" data-act="start_run" ` +
+          `data-id="${esc(j.suggested.chain_id)}">` +
+          `${esc(this.t("cp.journey.suggest_btn"))}</button>`;
+      }
+      if (!parts.length && !suggest) return "";
+      return `<div class="jn-ev">` +
+        (parts.length ? `<span>${parts.join(" · ")}</span>` : "") +
+        suggest + `</div>`;
     }
 
     _emptyIllust() {
@@ -411,6 +589,31 @@
         if (fn) { try { fn("chains"); } catch (_e) { /* ignore */ } }
         return;
       }
+      if (act === "jn_edit") {
+        this._jnEdit = !this._jnEdit;
+        this._rerender();
+        return;
+      }
+      if (act === "jn_set") {
+        await this._journeySetStage(el && el.getAttribute("data-stage"));
+        return;
+      }
+      if (act === "jn_deal") {
+        await this._journeyMarkDeal();
+        return;
+      }
+      if (act === "jn_link") {
+        await this._jnLinkToggle();
+        return;
+      }
+      if (act === "jn_link_go") {
+        await this._jnLinkMint(el && el.getAttribute("data-id"));
+        return;
+      }
+      if (act === "jn_revoke") {
+        await this._journeyRevokeDeal();
+        return;
+      }
       if (act === "pick_close") {
         this._pickOpen = false;
         this._startErr = "";
@@ -519,6 +722,184 @@
       }
       this._opErr = { id: eid, msg: String((res && res.error) || "network error").slice(0, 120) };
       this._rerender();
+    }
+
+    /* ── 实施92c 旅程条动作（裸 fetch 同 _kickJourney 口径；busy 互斥防双击；
+       成功后清缓存重拉=阶段/成交台账以服务端为准，不本地猜） ── */
+
+    async _journeyFetch(path, body) {
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      let d = null;
+      try { d = await r.json(); } catch (_e) { d = null; }
+      return { httpOk: r.ok, data: d };
+    }
+
+    _journeyReload(flash) {
+      const cid = this._lastCid;
+      this._journey = null;          // 清会话缓存 → _kickJourney 重拉
+      this._jnMsg = String(flash || "");
+      this._kickJourney(cid);
+      this._rerender();
+      if (this._jnMsg) {
+        setTimeout(() => {
+          this._jnMsg = "";
+          try { this._rerender(); } catch (_e) { /* ignore */ }
+        }, 4000);
+      }
+    }
+
+    async _journeySetStage(stage) {
+      const cid = this._lastCid;
+      if (!cid || !stage || this._jnBusy) return;
+      this._jnBusy = true;
+      let ok = false;
+      try {
+        const r = await this._journeyFetch(
+          "/api/workspace/conv/" + encodeURIComponent(cid) + "/journey/stage",
+          { stage });
+        ok = !!(r.httpOk && r.data && r.data.ok);
+      } catch (_e) { ok = false; }
+      this._jnBusy = false;
+      this._jnEdit = false;
+      if (ok) {
+        _beacon("journey_stage_set");
+        this._journeyReload("");
+      } else {
+        this._jnMsg = this.t("cp.journey.op_fail");
+        this._rerender();
+      }
+    }
+
+    async _journeyMarkDeal() {
+      const cid = this._lastCid;
+      if (!cid || this._jnBusy) return;
+      let amount = 0;
+      if (typeof prompt === "function") {
+        const raw = prompt(this.t("cp.journey.deal_prompt"), "");
+        if (raw === null) return;                    // 取消＝不记
+        amount = parseFloat(String(raw).replace(/[^\d.]/g, "")) || 0;
+      }
+      this._jnBusy = true;
+      let res = null;
+      try {
+        res = await this._journeyFetch(
+          "/api/workspace/conv/" + encodeURIComponent(cid) + "/deal",
+          { amount });
+      } catch (_e) { res = null; }
+      this._jnBusy = false;
+      if (res && res.httpOk && res.data && res.data.ok) {
+        _beacon("journey_deal_marked");
+        this.emit("cp-action-done", { action_type: "journey_deal", ok: true });
+        this._journeyReload(this.t("cp.journey.deal_done"));
+        return;
+      }
+      this._jnMsg = this.t("cp.journey.deal_fail",
+        { msg: String((res && res.data && res.data.detail) || "network").slice(0, 40) });
+      this._rerender();
+    }
+
+    /* ── 实施93b 一键发链：铸客户专属追踪短链 → cp-fill 填入输入框 ──
+       单启用目标直铸零选择；多目标展开选择行；public_base 未配置/无目标/
+       旧后端 404 → 一次性提示不打扰。铸链即服务端推进「已引导」，成功后
+       重拉旅程条让阶段 chip 即时跟上。 */
+
+    async _jnLinkToggle() {
+      if (this._jnLinkPick) {
+        this._jnLinkPick = false;
+        this._rerender();
+        return;
+      }
+      if (!HAS_HTTP || this._jnBusy) return;
+      if (!this._ctaTargets) {
+        try {
+          const r = await fetch("/api/workspace/cta-targets");
+          if (r.ok) {
+            const d = await r.json();
+            this._ctaTargets = Array.isArray(d && d.targets) ? d.targets : [];
+            this._ctaBase = String((d && d.public_base) || "");
+          } else {
+            this._ctaTargets = [];
+            this._ctaBase = "";
+          }
+        } catch (_e) {
+          this._ctaTargets = [];
+          this._ctaBase = "";
+        }
+      }
+      if (!this._ctaBase) {
+        this._jnMsg = this.t("cp.journey.link_nobase");
+        this._rerender();
+        return;
+      }
+      const enabled = (this._ctaTargets || []).filter((t) => t && t.enabled);
+      if (!enabled.length) {
+        this._jnMsg = this.t("cp.journey.link_none");
+        this._rerender();
+        return;
+      }
+      if (enabled.length === 1) {
+        await this._jnLinkMint(enabled[0].target_id);
+        return;
+      }
+      this._jnLinkPick = true;
+      this._rerender();
+    }
+
+    async _jnLinkMint(targetId) {
+      const cid = this._lastCid;
+      if (!cid || !targetId || this._jnBusy) return;
+      this._jnBusy = true;
+      let res = null;
+      try {
+        res = await this._journeyFetch(
+          "/api/workspace/conv/" + encodeURIComponent(cid) + "/cta-link",
+          { target_id: targetId });
+      } catch (_e) { res = null; }
+      this._jnBusy = false;
+      this._jnLinkPick = false;
+      const url = (res && res.httpOk && res.data && res.data.ok
+        && res.data.url) || "";
+      if (url) {
+        _beacon("journey_link_minted");
+        this.emit("cp-fill", { text: String(url), source: "journey_link" });
+        this.emit("cp-action-done", { action_type: "journey_link", ok: true });
+        this._journeyReload(this.t("cp.journey.link_filled"));
+        return;
+      }
+      this._jnMsg = this.t("cp.journey.link_fail",
+        { msg: String((res && res.data && res.data.detail) || "network").slice(0, 40) });
+      this._rerender();
+    }
+
+    async _journeyRevokeDeal() {
+      const cid = this._lastCid;
+      const j = this._journey;
+      if (!cid || !j || this._jnBusy) return;
+      const deals = (j.deals || []).filter((x) => !x.revoked);
+      if (!deals.length) return;
+      if (typeof confirm === "function"
+          && !confirm(this.t("cp.journey.revoke_confirm"))) return;
+      const latest = deals[0];                       // 服务端按 ts DESC 返回
+      this._jnBusy = true;
+      let ok = false;
+      try {
+        const r = await this._journeyFetch(
+          "/api/workspace/conv/" + encodeURIComponent(cid)
+          + "/deal/" + encodeURIComponent(latest.id) + "/revoke", {});
+        ok = !!(r.httpOk && r.data && r.data.ok);
+      } catch (_e) { ok = false; }
+      this._jnBusy = false;
+      if (ok) {
+        _beacon("journey_deal_revoked");
+        this._journeyReload("");
+      } else {
+        this._jnMsg = this.t("cp.journey.op_fail");
+        this._rerender();
+      }
     }
 
     /* C1：读当前会话活跃工作目标 → 推荐种子链。软失败设计：goals 模块关(403)/

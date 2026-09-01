@@ -18,9 +18,12 @@
 
 ## 三组不变量
 
-1. **意图埋点在场**（漏斗分母 + P1 删除决策的裁决依据）
+1. **意图埋点在场**（漏斗分母；P1 起分模式/页签两类计）
 2. **画布令牌单源** ``--xz-*``（三模块合一；P1 模式条的前提）
-3. **入口行观感**：不得回退成 dashed 边框 / 截断 hint（P0-3 两处实锤）
+3. **模式化信息架构**（实施73 P1，2026-08-28）：三大功能经 ``registerMode``
+   认领模式条一格而非往面板插行；次级页签顺序＝老板拍板的 报障·我的·常问·⚙；
+   手机操控在标题栏而非第四个模式格；安全承诺整段常驻不被截断；主按钮不是
+   虚线占位；欢迎三卡不得复活。
 """
 from __future__ import annotations
 
@@ -64,20 +67,24 @@ def test_intent_beacons_present():
       asb_open_ext    程序化开面板（教学/代办投问）——必须与人点开分开计
       asb_tab_*       点开后去了哪个页签
       asb_ask         问答主链有没有被用
-      asb_chip        「大家常问」有没有人点（P1 要搬走它，得先有证据）
-      asb_h3_*        欢迎三卡的真实用量（P1 计划删除，删前需裁决依据）
+      asb_chip        本页常问 chip 有没有人点
+      asb_mode_*      三大功能的模式分布（P1 的唯一硬指标：入口触达率）
+      asb_faq_*       常问面板搜了没搜、点没点（P1-6 的验收判据）
       asb_report_*    报障提交量 vs 成功量（差值＝静默提交失败）
+
+    P1（2026-08-28）：``asb_h3_*`` 随欢迎三卡一并退场——那三枚埋点的使命就是
+    给「该不该删这三张重复卡」提供裁决依据，卡删了它们也就没有观测对象了。
     """
     src = _read(BALL)
     required = {
         "'asb_open'": "点开球（打开率的分子）",
         "'asb_open_ext'": "程序化开面板（不得混进打开率）",
-        "'asb_tab_'": "页签切换（去向分布）",
+        "'asb_tab_'": "次级页签切换（报障/我的/常问/⚙ 去向）",
+        "'asb_mode_'": "模式切换（问答/教学/替我做 三档分布）",
         "'asb_ask'": "问答主链计数",
-        "'asb_chip'": "大家常问点击（P1 搬迁裁决）",
-        "'asb_h3_ask'": "欢迎卡·问功能（P1 删除裁决）",
-        "'asb_h3_report'": "欢迎卡·报障（P1 删除裁决）",
-        "'asb_h3_teach'": "欢迎卡·学操作（P1 删除裁决）",
+        "'asb_chip'": "本页常问 chip 点击",
+        "'asb_faq_search'": "常问面板搜索（P1-6 有没有人用）",
+        "'asb_faq_pick'": "常问条目点击→直接发问（该面板的价值兑现点）",
         "'asb_report_submit'": "报障提交",
         "'asb_report_ok'": "报障成功（与 submit 的差＝失败率）",
     }
@@ -165,53 +172,150 @@ def test_canonical_theme_tokens_identical_across_modules():
         assert "var(--card,#fff)" in src, f"{p.name} 缺 admin 壳映射"
 
 
-# ── 3. 入口行观感（P0-3 两处实锤的回归钉）────────────────────────────────────
+# ── 3. 模式化信息架构（实施73 P1，2026-08-28）───────────────────────────────
 
-def test_entry_rows_are_not_dashed():
+def test_three_features_claim_modes_not_panel_rows():
+    """三大功能必须是**模式条里的一格**，不能退回「往面板底部插一行」。
+
+    旧模型（`.xzt-row` / `.xza-row` + MutationObserver 自愈）有两个致命面：
+    入口挤在面板最下缘最不显眼处；且那一行挂在面板层，**报障/我的页签下
+    也跟着显示**——每个页签都不清爽正是老板报障的那张截图。
+
+    退回插行不会有任何运行时报错（那正是它当初能长期存在的原因），故靠
+    静态门禁点名。
+    """
+    for p, cls in ((TEACH, "xzt-row"), (AGENT, "xza-row")):
+        src = _read(p)
+        assert f"'.{cls}'" not in src and f'"{cls}"' not in src, (
+            f"{p.name} 又出现 .{cls} 插行——三大功能应经 registerMode 认领模式"
+        )
+        assert "registerMode" in src, (
+            f"{p.name} 未经 AssistantBall.registerMode 认领模式——"
+            "模式条里会缺这一格，功能变成不可达"
+        )
+        assert "mount:" in src, f"{p.name} 模式定义缺 mount（没有内容可挂）"
+    ball = _read(BALL)
+    assert "registerMode: registerMode" in ball, (
+        "AssistantBall 不再暴露 registerMode——姊妹组件无从认领模式"
+    )
+    # 缺席的姊妹组件不得留下点不动的空格子：单模式时整条隐藏
+    assert "classList.toggle('solo'" in ball, (
+        "模式条缺单模式隐藏（solo）——组件缺席会留一个点不动的段控"
+    )
+
+
+def test_mode_bar_is_accessible_segmented_control():
+    """段控不是三个按钮摆一排：radiogroup 语义 + 方向键 + 减动效尊重。
+
+    这三条都属于「不做也能用、但做了才不像半成品」的那类——而且事后补
+    比一开始写贵得多（要重排 DOM）。
+    """
+    ball = _read(BALL)
+    assert 'role="radiogroup"' in ball, "模式条缺 radiogroup 语义"
+    assert 'role="radio"' in ball and "aria-checked" in ball, (
+        "模式格缺 radio/aria-checked——读屏用户听不出当前在哪个模式"
+    )
+    assert "ArrowRight" in ball and "ArrowLeft" in ball, (
+        "模式条缺方向键切换（radiogroup 的标准交互）"
+    )
+    m = re.search(r"\.asb-modes-ind\{([^}]*)\}", ball)
+    assert m and "transition:" in m.group(1), "滑块指示器缺过渡动画"
+    assert re.search(
+        r"prefers-reduced-motion:reduce\)\{\.asb-modes-ind\{transition:none\}",
+        ball), "减动效偏好下未禁用滑块动画"
+
+
+def test_secondary_tabs_order_report_mine_faq_settings():
+    """次级页签顺序是**老板拍板的**：报障 · 我的 · 常问 · ⚙。
+
+    「常问排在我的之后」是明确要求（原本它散在对话首屏挤版面）。顺序被
+    重排不会报错，只会让人找不到——故钉死相对位置。
+    """
+    ball = _read(BALL)
+    block = ball.split("function renderSubtabs", 1)[-1].split("\n  }", 1)[0]
+    order = re.findall(r'data-tab="([a-z]+)"', block)
+    assert order == ["report", "mine", "faq", "set"], (
+        f"次级页签顺序漂移：{order}；老板拍板的顺序是 报障·我的·常问·⚙"
+    )
+    assert "asb_faq_search" in ball and "asb_faq_pick" in ball, (
+        "常问面板缺埋点——P1 验收判据「faq 有非零流量」将无从判断"
+    )
+
+
+def test_phone_control_lives_in_title_bar_not_mode_bar():
+    """手机操控是「替我做」的远程输入端，**不是第四种能力**（§3.1 已拍板）。
+
+    做成第四个平级模式会让用户以为那是另一套功能，反而更看不出它与替我做
+    的关系——这正是配对成功数长期为 0 的诱因之一。落法＝标题栏图标 +
+    连接状态点，另在替我做模式内给一张说明卡（两处曝光，语义诚实）。
+    """
+    ball = _read(BALL)
+    assert 'class="asb-hd-pair"' in ball, "标题栏缺手机操控入口"
+    assert "/api/assistant/pair/sessions" in ball, (
+        "状态点未读真实配对态——绿灯必须对应真的连着手机"
+    )
+    assert "registerMode('agent'" in _read(AGENT), "替我做未认领模式"
+    assert "registerMode('pair'" not in _read(AGENT), (
+        "手机操控被做成了第四个模式格——违反 §3.1 已拍板的信息架构"
+    )
+    assert "pair_card_t" in _read(AGENT), "替我做模式内缺「用手机指挥」说明卡"
+
+
+def test_safety_promise_is_full_line_not_truncated():
+    """安全承诺承载「会不会真的点下去 / 会不会乱改我配置」的答案。
+
+    实锤（P0-3）：它曾被塞进入口行 nowrap+ellipsis 里显示成「…不会真…」，
+    最该看全的半句被吃掉。P1 把它升为模式卡内常驻整段（`.asb-md-safe`），
+    本门禁钉住它不得再被截断、且两个模式都真的渲染它。
+    """
+    ball = _read(BALL)
+    m = re.search(r"\.asb-md-safe\{([^}]*)\}", ball)
+    assert m, "球缺 .asb-md-safe 规则（模式卡的安全承诺样式）"
+    rule = m.group(1)
+    assert "text-overflow:ellipsis" not in rule and "nowrap" not in rule, (
+        ".asb-md-safe 又变回截断——安全承诺会被吃掉半句"
+    )
+    for p in (TEACH, AGENT):
+        src = _read(p)
+        assert "asb-md-safe" in src and "t('row_hint')" in src, (
+            f"{p.name} 的模式卡没渲染安全承诺"
+        )
+
+
+def test_primary_mode_action_is_not_dashed():
     """虚线边框在设计系统里是「占位 / 未完成 / 拖放区」语义。
 
-    小智把**主打功能**（教学模式 / 替我做 / 手机操控）做成虚线胶囊，用户的
-    第一反应是「这个还没做好」，不敢点。改回 dashed 就是把这个观感请回来。
-
-    注意：`.xzt-hover`（教学模式的悬停高亮框）用 dashed 是**正确**语义
-    ——那是选取指示器不是按钮，故本门禁只约束 `-row button`。
+    主打功能长成虚线胶囊，用户第一反应是「这个还没做好」，不敢点。
+    模式卡的主按钮必须是实心主色，副按钮实线描边。
+    （`.xzt-hover` 悬停高亮框用 dashed 是**正确**语义——那是选取指示器
+    不是按钮，故本门禁只约束模式卡按钮。）
     """
-    for p, cls in ((TEACH, "xzt-row"), (AGENT, "xza-row")):
-        src = _read(p)
-        m = re.search(rf"\.{cls} button\{{([^}}]*)\}}", src)
-        assert m, f"{p.name} 找不到 .{cls} button 规则（选择器被改名？）"
-        rule = m.group(1)
-        assert "dashed" not in rule, (
-            f"{p.name} 的 .{cls} button 又变回 dashed 边框——"
-            "主打功能不该长成「未完成占位」的样子"
-        )
-        assert "solid" in rule, f"{p.name} 的 .{cls} button 缺实线边框"
+    ball = _read(BALL)
+    go = re.search(r"\.asb-md-go\{([^}]*)\}", ball)
+    assert go, "球缺 .asb-md-go 规则（模式主按钮）"
+    assert "dashed" not in go.group(1), ".asb-md-go 变回 dashed 边框"
+    assert "background:var(--xz-accent" in go.group(1), (
+        ".asb-md-go 不再是实心主色按钮——主行动召唤退化成了普通链接观感"
+    )
+    sub = re.search(r"\.asb-md-b\{([^}]*)\}", ball)
+    assert sub, "球缺 .asb-md-b 规则（模式副按钮）"
+    assert "dashed" not in sub.group(1) and "solid" in sub.group(1), (
+        ".asb-md-b 缺实线描边"
+    )
 
 
-def test_entry_row_hint_is_not_truncated():
-    """入口行 hint 承载的是**打消顾虑的安全承诺**，不能被省略号吃掉。
+def test_welcome_h3_cards_stay_deleted():
+    """欢迎三卡（问功能 / 报个障 / 学操作）是同一批入口的第三次重复。
 
-    实锤：教学行 hint 全文是「进入后点击页面任意位置看讲解，不会真的执行」，
-    在 nowrap+ellipsis 下显示为「…不会真…」——最该看全的半句被截断，
-    这正是「没人敢开教学模式」的直接诱因之一。代办行同理（「改设置前必先确认」
-    是「替我做会不会乱改我配置」的答案）。
-
-    修法＝hint 独占整行（flex:1 0 100%）自然换行；行高多一行是刻意代价。
+    问功能=输入框、报障=次级页签、学操作=模式条第二格——三张卡只是在挤
+    首屏（首屏可点目标从 ~17 降到 ~12 主要就是删了它们）。这是反向门禁：
+    防「顺手加回一排快捷卡」的复发。
     """
-    for p, cls in ((TEACH, "xzt-row"), (AGENT, "xza-row")):
-        src = _read(p)
-        m = re.search(rf"\.{cls} \.hint\{{([^}}]*)\}}", src)
-        assert m, f"{p.name} 找不到 .{cls} .hint 规则"
-        rule = m.group(1)
-        assert "text-overflow:ellipsis" not in rule and "nowrap" not in rule, (
-            f"{p.name} 的 .{cls} .hint 又变回截断——安全承诺会被吃掉半句"
-        )
-        assert "100%" in rule, (
-            f"{p.name} 的 .{cls} .hint 未独占整行，换行不生效"
-        )
-        assert f".{cls}{{" in src and "flex-wrap:wrap" in src, (
-            f"{p.name} 的 .{cls} 缺 flex-wrap:wrap，hint 无法换到第二行"
-        )
+    ball = _read(BALL)
+    assert "asb-h3" not in ball, "欢迎三卡回归了——首屏重复入口又挤回来"
+    assert "h3_ask" not in ball and "h3_teach" not in ball, (
+        "三卡词条残留——删卡要连词条一起回收，否则下次有人照着又渲染一遍"
+    )
 
 
 def test_safety_promise_text_is_complete():

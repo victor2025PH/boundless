@@ -65,20 +65,25 @@ def test_short_noop_floor_still_respected():
 
 # ── ④ 方言词汇档（P1 文本层方言 MVP：注入走 style 通道，LLM 缓存键天然隔离）──
 
-def test_dialect_style_line_known_and_unknown():
+def test_dialect_style_line_unshipped_is_noop():
     from src.ai.voice_colloquial import dialect_style_line
-    line = dialect_style_line("chuanyu")
-    assert "川渝" in line and "巴适" in line and "绝不堆砌" in line
+    assert dialect_style_line("chuanyu") == ""
+    assert dialect_style_line("minnan") == ""
+    assert dialect_style_line("taiwan") == ""
+    assert dialect_style_line("hunan") == ""
+    assert dialect_style_line("dongbei") == ""
+    assert dialect_style_line("beijing") == ""
+    assert dialect_style_line("cantonese") == ""  # 粤语不走乡音词表
     assert dialect_style_line("") == ""
-    assert dialect_style_line("mars") == ""      # 未知档＝零行为变化
+    assert dialect_style_line("mars") == ""
 
 
-def test_build_voice_style_hint_appends_dialect():
+def test_build_voice_style_hint_skips_unshipped_dialect():
     from src.ai.voice_colloquial import build_voice_style_hint
     s = build_voice_style_hint("温柔", "", dialect="chuanyu")
-    assert "声线底色：温柔" in s and "川渝" in s
+    assert "声线底色：温柔" in s and "川渝" not in s
     s2 = build_voice_style_hint("温柔", "")
-    assert "川渝" not in s2                       # 缺省不带（向后兼容）
+    assert "川渝" not in s2
 
 
 def test_dialect_packs_mandarin_pronounceable():
@@ -90,21 +95,16 @@ def test_dialect_packs_mandarin_pronounceable():
             assert b not in pack["words"], (pack["label"], b)
 
 
-def test_dialect_style_line_patterns_and_avoid():
-    """2026-08-19 晚升级：句式标记 + 反北方腔渲染（修「台湾词念出东北味」）。
-
-    南方三档（taiwan/minnan/hunan）必须带句式与反腔指令；未配 patterns 的档
-    （如 beijing）保持纯词表行为。"""
+def test_dialect_packs_keep_patterns_while_unshipped():
+    """未出货词表仍保持句式结构（备查）；渲染出口 dialect_style_line 必须空。"""
     from src.ai.voice_colloquial import _DIALECT_PACKS, dialect_style_line
     for flavor in ("taiwan", "minnan", "hunan"):
-        line = dialect_style_line(flavor)
-        assert "句式上可用" in line, flavor
-        assert "绝不用" in line and "儿化" in line, flavor
-    assert "有够" in dialect_style_line("taiwan")
-    assert "我有+动词" in dialect_style_line("minnan")
-    assert "何解" in dialect_style_line("hunan")
-    line_bj = dialect_style_line("beijing")
-    assert "句式上可用" not in line_bj      # 可选键缺省=旧行为
+        pack = _DIALECT_PACKS[flavor]
+        assert pack.get("patterns")
+        assert pack.get("avoid")
+        assert dialect_style_line(flavor) == ""
+    assert "有够" in _DIALECT_PACKS["taiwan"]["words"]
+    assert "足" in _DIALECT_PACKS["minnan"]["words"]
     assert not _DIALECT_PACKS["beijing"].get("patterns")
 
 

@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS persona_media (
     last_sent_at   REAL NOT NULL DEFAULT 0,
     created_by     TEXT NOT NULL DEFAULT '',
     created_at     REAL NOT NULL DEFAULT 0,
-    updated_at     REAL NOT NULL DEFAULT 0
+    updated_at     REAL NOT NULL DEFAULT 0,
+    phash          TEXT NOT NULL DEFAULT '',
+    auto_meta      TEXT NOT NULL DEFAULT '{}',
+    tag_status     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_pmedia_persona ON persona_media(persona_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_pmedia_sha ON persona_media(persona_id, sha256);
@@ -84,7 +87,9 @@ _UPDATABLE = {
     "enabled", "tier", "min_bond_level", "thumb_url", "duration_ms",
     "width", "height",
 }
-_JSON_COLS = {"triggers", "tags", "caption_i18n"}
+_JSON_COLS = {"triggers", "tags", "caption_i18n", "auto_meta"}
+# JSON 列反序列化失败/缺省时的形态（caption_i18n/auto_meta 是 dict，其余 list）
+_JSON_DICT_COLS = {"caption_i18n", "auto_meta"}
 
 
 def _dumps(v: Any, default: str) -> str:
@@ -116,6 +121,11 @@ class PersonaMediaStore:
         """存量库补列/补表（幂等；调用方已持锁）。失败不抛——建表已成，缺列走降级路径。"""
         for table, col, decl in (
             ("persona_media_sends", "file_key", "TEXT NOT NULL DEFAULT ''"),
+            # 实施90（2026-08-30）AI 打标三件套：pHash 近重复指纹 / VLM 打标结论
+            # （建议态 JSON）/ 打标状态机（"" 未标 | pending | tagged | failed | skipped）
+            ("persona_media", "phash", "TEXT NOT NULL DEFAULT ''"),
+            ("persona_media", "auto_meta", "TEXT NOT NULL DEFAULT '{}'"),
+            ("persona_media", "tag_status", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 have = {r[1] for r in self._conn.execute(
@@ -185,9 +195,9 @@ class PersonaMediaStore:
             raw = d.get(col)
             try:
                 d[col] = json.loads(raw) if isinstance(raw, str) and raw else (
-                    {} if col == "caption_i18n" else [])
+                    {} if col in _JSON_DICT_COLS else [])
             except Exception:
-                d[col] = {} if col == "caption_i18n" else []
+                d[col] = {} if col in _JSON_DICT_COLS else []
         d["enabled"] = bool(d.get("enabled"))
         return d
 
@@ -199,6 +209,7 @@ class PersonaMediaStore:
         tier: str = "", min_bond_level: int = 0, bytes_: int = 0,
         width: int = 0, height: int = 0, duration_ms: int = 0, sha256: str = "",
         created_by: str = "", now: Optional[float] = None,
+        phash: str = "", tag_status: str = "",
     ) -> Dict[str, Any]:
         """新增一个媒体条目，返回落库后的行（dict）。"""
         mt = str(media_type or "").strip().lower()
@@ -215,14 +226,17 @@ class PersonaMediaStore:
             int(bytes_ or 0), int(width or 0), int(height or 0),
             int(duration_ms or 0), str(sha256 or ""), 0, 0.0,
             str(created_by or ""), ts, ts,
+            str(phash or ""), "{}", str(tag_status or ""),
         )
         with self._lock:
             self._conn.execute(
                 "INSERT INTO persona_media (id, persona_id, media_type, file_path, "
                 "url, thumb_url, triggers, caption, caption_i18n, tags, weight, "
                 "enabled, tier, min_bond_level, bytes, width, height, duration_ms, "
-                "sha256, hits, last_sent_at, created_by, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                "sha256, hits, last_sent_at, created_by, created_at, updated_at, "
+                "phash, auto_meta, tag_status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                row)
             self._conn.commit()
         got = self.get(mid)
         return got or {}
@@ -331,13 +345,22 @@ class PersonaMediaStore:
         tag_status: Optional[str] = None,
         tags: Optional[List[str]] = None,
         thumb_url: Optional[str] = None,
+        url: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """打标/补齐流水线的专用部分更新（None＝该字段不动）；返回更新后的行。"""
+        """打标/补齐流水线的专用部分更新（None＝该字段不动）；返回更新后的行。
+
+        ``url``＝策展素材「发布进 /static」的机器补写点（实施90：CLI 入册的
+        62 张 url 为空 → UI 永远裂图；发布后由这里回填，运营 update() 白名单
+        仍不许改 url——身份字段人工只能删了重传）。
+        """
         sets: List[str] = []
         args: List[Any] = []
         if phash is not None:
             sets.append("phash = ?")
             args.append(str(phash))
+        if url is not None:
+            sets.append("url = ?")
+            args.append(str(url))
         if auto_meta is not None:
             sets.append("auto_meta = ?")
             args.append(_dumps(dict(auto_meta), "{}"))

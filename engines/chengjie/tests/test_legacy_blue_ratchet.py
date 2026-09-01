@@ -94,6 +94,11 @@ _TAILWIND_CEILINGS = {
     # 多色渐变池一臂（与 unified_inbox 头像池同判据：一臂跟变量其余臂字面量
     # 会破坏池子一致性）
     "src/web/templates/episodic_memory.html": 1,
+    # 账号资产中心身份化 P0（2026-08-28）：卡片头像渐变 12 组确定性色池 AV_GRAD
+    # （与 unified_inbox 账号头像池**同一份色池、同一判据**——一臂跟品牌变量、
+    # 其余 11 臂留字面量会破坏池子一致性；色池的用途正是「一眼区分 17 个账号」，
+    # 全臂同色就失去意义）。2 处 = 蓝臂的起止两端 #60a5fa/#2563eb。
+    "src/web/templates/workspace_assets.html": 2,
     # 16 转 1 留 15（调色板重镇）：平台色表 PC web=蓝 1 + 头像渐变 12 组池 2 +
     # 账号 8 色池 1 + 说话人分离 6 色 1 + info toast/模式提示 5 + 命名语义令牌
     # --xl-info-*（回复预览蓝框）2 / --bdg-info-*（信息徽章）2 + 冷却 pill info 底 1

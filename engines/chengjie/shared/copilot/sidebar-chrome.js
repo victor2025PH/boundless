@@ -605,14 +605,31 @@
       } catch (_) {}
     }
 
-    function isCollapsed(name) {
+    /* 折叠态判定**三级**优先：① localStorage 记住的坐席选择 → ② 宿主传的
+       defaultCollapsed → ③ **HTML 上的静态 class="collapsed"**。
+       第 ③ 级是 2026-08-28 补的：此前 apply() 无条件按 ①② 覆写 class，于是
+       「HTML 明写 collapsed 但没进 defaults」的卡被静默展开——两个宿主的
+       `data-cp-card="nurture"` 都中招（智能养号是最长且最少用的卡，首次访问
+       却整卡摊开，正是「右栏太长」的一个真实来源）。同一初始态有两个事实源、
+       且 HTML 那个总是输，是这里的结构性坑；静态 class 就是「HTML 侧声明的
+       默认值」，别再让它被无声覆盖。
+       ⚠ 判定也被懒取数用（_cpCardCollapsed → 折叠时不喂 context），所以
+       「DOM 显示收起、判定说展开」还会多打一次取数——两半都由本修复收口。 */
+    function isCollapsed(name, cardEl) {
       var st = readState();
-      return name in st ? !!st[name] : !!defaults[name];
+      if (name in st) return !!st[name];
+      if (name in defaults) return !!defaults[name];
+      var el = cardEl;
+      if (!el && typeof document !== "undefined" && document.querySelector) {
+        el = document.querySelector('[data-cp-card="' + name + '"]');
+      }
+      return !!(el && el.classList && el.classList.contains("collapsed"));
     }
 
     function apply() {
       document.querySelectorAll(cardSel).forEach(function (card) {
-        card.classList.toggle("collapsed", isCollapsed(card.getAttribute("data-cp-card")));
+        card.classList.toggle(
+          "collapsed", isCollapsed(card.getAttribute("data-cp-card"), card));
       });
     }
 

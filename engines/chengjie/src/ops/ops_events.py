@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 _DAY = 86400.0
 _RETAIN_DAYS = 90  # 审计保留 90 天（够看季度健康史；表恒小）
 
+#: **数据主权类**事件：客户资产被谁在什么时候导出/清除/迁移的凭证。
+#: 与运维健康史（暂停/风控/熔断——看季度趋势 90 天足够）不是一个用途：
+#: 资产中心「快照 / 导出台账」是「资产保全」这个承诺的**唯一证据面**，
+#: 90 天后自动消失等于「三个月前那批客户数据是谁带走的」永久查不到。
+#: 单独给更长保留期而不是整表放宽——运维事件是高频的（限速触顶/风控每天都写），
+#: 整表放宽会让表无界增长；这几类是低频人工动作，两年也只有几百行。
+_CUSTODY_KINDS = (
+    "account_export",
+    "account_purge",
+    "account_export_migration",
+    "account_snapshot",
+    "asset_snapshot",
+)
+_CUSTODY_RETAIN_DAYS = 730  # 两年（够覆盖一个完整的合规追溯周期）
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS ops_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,8 +198,23 @@ class OpsEventStore:
                 "total": sum(by_kind.values()), "by_kind": by_kind}
 
     def _prune_locked(self, before_ts: float) -> None:
+        """清理陈旧行。``before_ts`` 是**普通运维事件**的截止线。
+
+        数据主权类事件（``_CUSTODY_KINDS``）走各自更长的保留期——它们是资产被
+        导出/清除的凭证，与「这号这周被风控几次」的健康史不是一个用途。两条
+        DELETE 而不是一条带 CASE：kind 列有索引，分开写两边都吃
+        ``idx_ops_events_kind_ts``，且语义一眼可读。
+        """
         try:
-            self._conn.execute("DELETE FROM ops_events WHERE ts<?", (float(before_ts),))
+            ph = ",".join("?" * len(_CUSTODY_KINDS))
+            self._conn.execute(
+                f"DELETE FROM ops_events WHERE ts<? AND kind NOT IN ({ph})",
+                (float(before_ts), *_CUSTODY_KINDS))
+            # 凭证类的截止线由自己的保留期算，**不跟随入参**：调用方传的是普通
+            # 事件的窗口，若拿它去删凭证就等于这条豁免根本没生效。
+            self._conn.execute(
+                f"DELETE FROM ops_events WHERE ts<? AND kind IN ({ph})",
+                (time.time() - _CUSTODY_RETAIN_DAYS * _DAY, *_CUSTODY_KINDS))
             self._conn.commit()
         except Exception:
             logger.debug("[ops_events] prune 失败（忽略）", exc_info=True)

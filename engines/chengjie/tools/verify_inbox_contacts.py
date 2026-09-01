@@ -109,10 +109,7 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
         browser = p.chromium.launch(headless=not headed)
         ctx = browser.new_context(viewport=VIEWPORT)
         ctx.request.post(base + "/login", form={"auth_token": token})
-        # 预置「业务助手三步引导已看过」：全新 profile 首次打开会话会弹 coach-marks，
-        # 其 cp-tour-veil 全屏拦截 pointer events，把后续每一次 click 卡到超时。
-        # 门禁不测引导（它有自己的锚点回落逻辑），直接标记看过。
-        ctx.add_init_script("try{localStorage.setItem('ws_cp_tour_done_v1','1');}catch(_){}")
+        # （cp-tour 已于 2026-08-31 随新手引导退役，无需再预置跳过键。）
         page = ctx.new_page()
         page.goto(base + "/workspace", wait_until="domcontentloaded")
         try:

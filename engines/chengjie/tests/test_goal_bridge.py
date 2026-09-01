@@ -109,6 +109,19 @@ def test_augment_auto_goal_appends_directive_and_consumes_beat():
     assert stats.dump()["injected"]["proactive"] == p0 + 1
 
 
+def test_sprint_session_skips_proactive_hitchhike():
+    store = get_goal_store(":memory:")
+    goal = store.create_goal(
+        conversation_id=CONV, platform="telegram", account_id="a1",
+        chat_key="42", template="custom", autonomy="auto",
+        params={"pace": "session"}, deadline_days=60 / 1440.0)
+    assert goal is not None
+    plan = _plan()
+    augment_plan_with_goal(_cfg(), None, plan)
+    assert "_goal_action_id" not in plan
+    assert plan["directive"] == "基础指令"
+
+
 def test_suggest_autonomy_skipped():
     store, goal = _seed_goal(autonomy="suggest")
     plan = _plan()

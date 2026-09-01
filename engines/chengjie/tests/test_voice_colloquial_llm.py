@@ -467,6 +467,20 @@ async def test_interrogative_skips_llm_tier():
 
 
 @pytest.mark.asyncio
+async def test_cantonese_text_skips_llm_tier():
+    """粤文语音稿 → 不调 LLM（2026-08-30 粤语人设）：粤文本身就是口语书写形，
+    改写 prompt/消毒器/语义地板都分不出粤/普——同义改写会把粤文磨回普通话书写，
+    再由 zh-HK 音色念出=失地道感。skip 即保真；普通话长陈述句不受影响。"""
+    reset_state()
+    fake = _FakeAI("不该被调用")
+    assert await llm_colloquialize(
+        "我哋今日去咗旺角饮茶，啲点心真係几好食，你得闲都嚟试下啦",
+        ai_client=fake) is None
+    assert fake.calls == 0
+    reset_state()
+
+
+@pytest.mark.asyncio
 async def test_unverifiable_rewrite_rejected_without_cache_poison():
     """无 embed（语义校验不成立）→ 拒用 LLM 稿（fail-closed）；且**不投毒
     缓存、不推熔断**——嵌入恢复后同句立刻可用，端点健康信号不被冤枉。"""
@@ -488,3 +502,56 @@ async def test_unverifiable_rewrite_rejected_without_cache_poison():
     assert await llm_colloquialize(_SRC, ai_client=ok) == "其实我今天过得还不错啦"
     assert ok.calls == 1                                # 缓存未被空串投毒
     reset_state()
+
+
+# ── #92（0830 晚餐自述矛盾）：餐食自述守卫 ───────────────────────────────────
+
+def test_food_terms_extraction_92():
+    from src.ai.voice_colloquial_llm import food_terms
+    got = food_terms("刚吃完晚饭，晚上就随便炒个饭对付")
+    assert "晚饭" in got
+    assert food_terms("今天好累呀") == set()
+    # 复合后缀：X饭/X面（贪婪前缀无妨，守卫按子串豁免判新增）
+    assert any("鸡蛋饭" in t for t in food_terms("你泡面配点青菜鸡蛋饭没"))
+
+
+def test_introduced_food_rejected_92():
+    """事故金标：改写引入原文没有的菜名饭名 → sanitize 拒（回落原文照念）。"""
+    from src.ai.voice_colloquial_llm import sanitize_llm_output
+    original = "我刚吃完晚饭，你吃了吗？"
+    bad = "刚吃完晚饭，你泡面配点青菜鸡蛋饭没？我这人懒，晚上就随便炒个饭对付"
+    assert sanitize_llm_output(bad, original) is None
+
+
+def test_food_preserving_rewrite_passes_92():
+    """合法口语化（不加新餐食词）照常通过。"""
+    from src.ai.voice_colloquial_llm import sanitize_llm_output
+    original = "我刚吃完晚饭，感觉非常满足，你吃了吗？"
+    good = "我刚吃完晚饭呀，特别满足，你吃了没？"
+    assert sanitize_llm_output(good, original) == good
+
+
+def test_food_decomposition_exempt_92():
+    """原文复合词被拆说（青菜鸡蛋面→青菜、鸡蛋）不算新增。"""
+    from src.ai.voice_colloquial_llm import introduced_food_terms
+    assert introduced_food_terms(
+        "我晚上做了青菜鸡蛋面", "晚上给自己整了碗面，放了青菜和鸡蛋") == []
+
+
+def test_introduced_food_detected_92():
+    from src.ai.voice_colloquial_llm import introduced_food_terms
+    got = introduced_food_terms("我刚吃完晚饭", "刚吃完晚饭，配了个蛋炒饭")
+    assert "蛋炒饭" in got
+
+
+def test_meal_redline_in_prompts_92():
+    """三个改写提示词都带自述行为/饮食红线 + 版本号已 bump（旧缓存作废）。"""
+    from src.ai.voice_colloquial_llm import (
+        _PROMPT_VERSION, _SCRIPT_PROMPT_VERSION, build_colloquial_prompt,
+        build_speech_script_prompt)
+    assert _PROMPT_VERSION >= 4
+    assert _SCRIPT_PROMPT_VERSION >= 5
+    for p in (build_colloquial_prompt("neutral", True, "", intensity="natural"),
+              build_colloquial_prompt("neutral", True, "", intensity="vivid"),
+              build_speech_script_prompt("neutral")):
+        assert "菜名饭名" in p, p[:120]

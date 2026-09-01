@@ -20,7 +20,7 @@
   'use strict';
   if (window.XZAgent) { return; }
 
-  var VER = '20260830b';
+  var VER = '20260831c';
 
   var I18N = {
     zh: {
@@ -65,6 +65,19 @@
       st_fail: '失败',
       st_skip: '已跳过',
       st_nav: '带你去',
+      /* DOM 动作总线（实施88 P0）：页面控件三类揭示手势的步骤注记 */
+      st_ui_click: '已帮你点开',
+      st_ui_fill: '已填入「{q}」',
+      st_ui_show: '在高亮处，带你看到了',
+      ui_missing: '页面上没找到这个控件（可能被折叠或没有权限），请手动找一下',
+      ui_on_pc: '该步请在电脑上操作（手机端已跳过）',
+      /* Windows 操控 runner 只读侦察结果注记（实施91 P1-1）：摘要已在服务端
+         消毒（窗口标题/控件名剥控制字符+截断），此处只做人话渲染、note 再经
+         esc 转义。受控机在电脑上、与本页设备无关——手机端不跳过。 */
+      pc_saw_win: '看了下那台电脑，开着 {n} 个窗口，前台是「{fg}」',
+      pc_saw_tree: '在「{w}」里看到 {n} 个可操作的地方',
+      pc_saw_shot: '截了张图存证（只本地留存、没外传）',
+      pc_saw_fail: '这台电脑没看成',
       cf_apply: '✅ 确认应用',
       cf_skip: '跳过这步',
       cf_hint: '改动可撤销；不确认不会写入',
@@ -112,6 +125,24 @@
       pair_fw_ok: '✅ 防火墙已放行，手机重扫二维码试试',
       pair_fw_cancelled: '已取消（系统授权未通过）',
       pair_fw_fail: '放行失败，请以管理员手动放行 backend.exe 的入站，或联系支持',
+      pc_title: '电脑操控',
+      pc_hint: '同一内网下，让我看看某台电脑现在开着什么、有哪些可点的地方',
+      pc_readonly: '现在我只能「看」电脑（窗口/控件/截图），还不能替你点——动手能力在路上',
+      pc_none: '还没有可操作的电脑',
+      pc_disabled: '电脑操控未开启：需管理员在配置里打开并登记受控机',
+      pc_online: '在线',
+      pc_offline: '离线',
+      pc_uia: '可侦察',
+      pc_look: '看看这台',
+      pc_kick: '踢下线',
+      pc_restore: '恢复',
+      pc_lv: '💻 电脑·只读',
+      pc_fail_hint: '想让我看电脑？点标题栏的 💻 先开启/配置',
+      pc_look_goal: '看看{m}现在开着什么',
+      pc_trust_grant: '授信免确认',
+      pc_trusted: '信任中',
+      pc_trust_left: '剩{n}分',
+      pc_untrust: '取消信任',
       fl_start: '✅ 开始',
       fl_no: '取消',
       fl_step_confirm: '确认要做的事',
@@ -165,6 +196,16 @@
       st_fail: 'Failed',
       st_skip: 'Skipped',
       st_nav: 'Navigating',
+      st_ui_click: 'Opened it for you',
+      st_ui_fill: 'Typed "{q}" in',
+      st_ui_show: 'Highlighted — take a look',
+      ui_missing: 'Could not find that control on the page (maybe ' +
+        'collapsed or not permitted); please check manually',
+      ui_on_pc: 'Do this step on the PC (skipped on phone)',
+      pc_saw_win: 'Looked at that PC: {n} windows open, foreground "{fg}"',
+      pc_saw_tree: 'Found {n} controls in "{w}"',
+      pc_saw_shot: 'Screenshot saved (kept locally, not sent)',
+      pc_saw_fail: "Couldn't inspect that PC",
       cf_apply: '✅ Apply',
       cf_skip: 'Skip',
       cf_hint: 'Reversible; nothing is written until you confirm',
@@ -213,6 +254,24 @@
       pair_fw_ok: '✅ Firewall allowed — rescan the QR on your phone',
       pair_fw_cancelled: 'Cancelled (system authorization declined)',
       pair_fw_fail: 'Failed — allow inbound for backend.exe manually as admin, or contact support',
+      pc_title: 'PC control',
+      pc_hint: 'On the same LAN, let me see what is open on a PC and what is clickable',
+      pc_readonly: 'For now I can only LOOK at the PC (windows/controls/screenshot), not click yet',
+      pc_none: 'No controllable PC yet',
+      pc_disabled: 'PC control is off: an admin must enable it and register machines',
+      pc_online: 'online',
+      pc_offline: 'offline',
+      pc_uia: 'inspectable',
+      pc_look: 'Look at this PC',
+      pc_kick: 'Kick',
+      pc_restore: 'Restore',
+      pc_lv: '💻 PC · read-only',
+      pc_fail_hint: 'Want me to look at your PC? Tap 💻 in the title bar to enable/set up',
+      pc_look_goal: 'show me what is open on {m}',
+      pc_trust_grant: 'Trust (no-confirm)',
+      pc_trusted: 'Trusted',
+      pc_trust_left: '{n}min left',
+      pc_untrust: 'Revoke trust',
       fl_start: '✅ Start',
       fl_no: 'Cancel',
       fl_step_confirm: 'Confirm the goal',
@@ -252,6 +311,16 @@
   function t(k) {
     var d = I18N[S.lang] || I18N.zh;
     return d[k] || I18N.zh[k] || k;
+  }
+  /* 目标像不像「让我看电脑」——只用于「做不了」时补一句开启/配置引导（实施91），
+     不参与任何路由/执行判定（那由规划器+服务端白名单管）。宁可少提示不误导。 */
+  function _looksLikePc(goal) {
+    var g = String(goal || '');
+    var zh = /(电脑|桌面|屏幕|窗口)/.test(g) &&
+      /(看|瞧|开着|在干|干嘛|操作|打开|控制)/.test(g);
+    var en = /\b(pc|computer|desktop|screen)\b/i.test(g) &&
+      /\b(see|show|open|look|what)\b/i.test(g);
+    return zh || en;
   }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -432,6 +501,23 @@
 '.xza-pair .ses-row button{border:1px solid #ef4444;color:#ef4444;background:none;' +
 'border-radius:7px;cursor:pointer;font-family:inherit;font-size:.66rem;' +
 'padding:.1rem .4rem}' +
+/* 电脑操控 runner 步专属视觉（实施91 P1-1）：青色设备轴 + 机器徽标，
+   和普通查询/带路一眼区分（美术视角：跨设备高权限动作需可辨识语义色）。 */
+'.xza-step.xza-st--pc{border-left:3px solid var(--xz-device,#0891b2)}' +
+'.xza-pcmac{flex-shrink:0;font-size:.62rem;border-radius:999px;padding:.06rem .4rem;' +
+'background:rgba(8,145,178,.12);color:var(--xz-device,#0891b2);font-weight:600}' +
+'.xza-pc-note{font-size:.7rem;color:var(--xz-muted,#888);line-height:1.5;' +
+'background:rgba(8,145,178,.08);border-radius:8px;padding:.4rem .55rem;margin:.1rem 0 .4rem}' +
+'.xza-pc-row{display:flex;align-items:center;gap:.4rem;font-size:.74rem;margin:.25rem 0}' +
+'.xza-pc-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.xza-pc-row .st{flex-shrink:0;font-size:.64rem;border-radius:999px;padding:.05rem .4rem}' +
+'.xza-pc-row .st.on{background:rgba(34,197,94,.14);color:#16a34a}' +
+'.xza-pc-row .st.off{background:rgba(148,163,184,.18);color:var(--xz-muted,#888)}' +
+'.xza-pc-row .st.trust{background:rgba(8,145,178,.14);color:var(--xz-device,#0891b2)}' +
+'.xza-pc-row button{border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
+'color:var(--xz-txt,#333);border-radius:7px;cursor:pointer;font-family:inherit;' +
+'font-size:.66rem;padding:.1rem .45rem}' +
+'.xza-pc-row button.look{border-color:var(--xz-device,#0891b2);color:var(--xz-device,#0891b2)}' +
 '@media(prefers-reduced-motion:reduce){.xza-panel,.xza-card,.xza-pair{animation:none}}';
     var st = document.createElement('style');
     st.id = 'xza-style';
@@ -804,7 +890,9 @@
       var ac = (rs[0] && rs[0].actions) || [];
       for (var k = 0; k < ac.length && labels.length < 7; k++) {
         var a = ac[k] || {};
-        if (a.id === 'goto_page') { continue; }
+        /* goto/ui 是「怎么做」的原语不是「做什么」的能力，当 chip 会把
+           规划器带进歧义追问，剔除 */
+        if (a.id === 'goto_page' || a.id === 'ui_act') { continue; }
         if (a.label) { labels.push(String(a.label)); }
       }
       cb(labels);
@@ -1054,6 +1142,151 @@
     }).catch(function () { /* best-effort */ });
   }
 
+  /* ── 电脑操控弹层（实施91 P1-1）：受控机清单 + 只读边界 + 踢下线/恢复 ──
+     受控机在电脑上、与本页设备无关；读 /api/assistant/pc/machines（绝不含 token）。
+     只读边界显式化：现在只能看、还不能点（动作面 P1-2 才开）。踢下线/恢复复用
+     已有 /api/assistant/pc/revoke|restore（与手机配对同族的管理写口）。 */
+  function closePc() {
+    if (S.pc) { try { S.pc.remove(); } catch (e) { /* */ } }
+    S.pc = null;
+  }
+  function openPcModal() {
+    closePc();
+    closePair();
+    var m = document.createElement('div');
+    m.className = 'xza-pair';
+    applyVars(m);
+    m.innerHTML = '<div class="xza-p-t">💻 <span>' + esc(t('pc_title')) +
+      '</span><button type="button" class="x" data-xza="pc-close">✕' +
+      '</button></div>' +
+      '<div class="xza-pc-note">' + esc(t('pc_readonly')) + '</div>' +
+      '<div style="font-size:.7rem;color:var(--xz-muted,#888)">' +
+      esc(t('pc_hint')) + '</div>' +
+      '<div class="ses"><div class="pc-list"><div class="xza-say" ' +
+      'style="text-align:center;padding:1rem 0">…</div></div></div>';
+    document.body.appendChild(m);
+    S.pc = m;
+    m.addEventListener('click', function (ev) {
+      var b = ev.target.closest('[data-xza]');
+      if (!b) { return; }
+      var a = b.getAttribute('data-xza');
+      if (a === 'pc-close') { closePc(); return; }
+      if (a === 'pc-look') {
+        var lbl = b.getAttribute('data-label') || b.getAttribute('data-mid') || '';
+        beacon('asb_pc_look');
+        closePc();
+        runGoal(t('pc_look_goal').replace('{m}', lbl));
+        return;
+      }
+      if (a === 'pc-kick') {
+        beacon('asb_pc_kick');
+        b.disabled = true;
+        post('/api/assistant/pc/revoke', { machine: b.getAttribute('data-mid') })
+          .then(function () { loadPcMachines(); });
+        return;
+      }
+      if (a === 'pc-restore') {
+        beacon('asb_pc_restore');
+        b.disabled = true;
+        post('/api/assistant/pc/restore', { machine: b.getAttribute('data-mid') })
+          .then(function () { loadPcMachines(); });
+        return;
+      }
+      if (a === 'pc-trust') {
+        beacon('asb_pc_trust');
+        b.disabled = true;
+        post('/api/assistant/pc/trust', { machine: b.getAttribute('data-mid') })
+          .then(function () { loadPcMachines(); });
+        return;
+      }
+      if (a === 'pc-untrust') {
+        beacon('asb_pc_untrust');
+        b.disabled = true;
+        post('/api/assistant/pc/trust/revoke',
+             { machine: b.getAttribute('data-mid') })
+          .then(function () { loadPcMachines(); });
+        return;
+      }
+    });
+    loadPcMachines();
+  }
+  function loadPcMachines() {
+    var list = S.pc && S.pc.querySelector('.pc-list');
+    if (!list) { return; }
+    fetch('/api/assistant/pc/machines').then(function (r) {
+      if (r.status === 404) { return { __pending: true }; }
+      return r.ok ? r.json() : null;
+    }).then(function (j) {
+      if (!S.pc || !list.isConnected) { return; }
+      if (j && j.__pending) {
+        /* 旧后端特性探测：端点未装载=如实待装，不装死 */
+        list.innerHTML = '<div class="xza-say">' + esc(t('p_na')) + '</div>';
+        return;
+      }
+      if (!j || !j.ok) {
+        list.innerHTML = '<div class="xza-say" style="color:#dc2626">' +
+          esc(t('net_err')) + '</div>';
+        return;
+      }
+      if (!j.enabled) {
+        list.innerHTML = '<div class="xza-say">' + esc(t('pc_disabled')) +
+          '</div>';
+        return;
+      }
+      var rows = j.machines || [];
+      if (!rows.length) {
+        list.innerHTML = '<div class="xza-say">' + esc(t('pc_none')) + '</div>';
+        return;
+      }
+      var h = '';
+      for (var i = 0; i < rows.length; i++) {
+        var r2 = rows[i] || {};
+        var mid = String(r2.id || '');
+        var lbl = String(r2.label || mid);
+        var online = !r2.revoked && !!r2.online;
+        var revoked = !!r2.revoked;
+        var leftMin = r2.trust_expires
+          ? Math.max(0, Math.round((Number(r2.trust_expires) * 1000
+            - Date.now()) / 60000)) : 0;
+        h += '<div class="xza-pc-row"><span class="nm">' + esc(lbl) + '</span>' +
+          '<span class="st ' + (online ? 'on' : 'off') + '">' +
+          esc(t(online ? 'pc_online' : 'pc_offline')) + '</span>' +
+          (online && r2.uia ? '<span class="st on">' + esc(t('pc_uia')) +
+            '</span>' : '') +
+          (online
+            ? '<button type="button" class="look" data-xza="pc-look" data-mid="' +
+              esc(mid) + '" data-label="' + esc(lbl) + '">' + esc(t('pc_look')) +
+              '</button>'
+            : '') +
+          /* 信任档（实施91 P2-C）：仅 trust_enabled + 在线时给授信/急停入口。
+             受信=青 chip「信任中·剩N分」+ 取消；未受信=「授信免确认」按钮。 */
+          (j.trust_enabled && online
+            ? (r2.trusted
+                ? '<span class="st trust">' + esc(t('pc_trusted')) +
+                  (leftMin > 0 ? ' ' + esc(t('pc_trust_left')
+                    .replace('{n}', String(leftMin))) : '') + '</span>' +
+                  '<button type="button" data-xza="pc-untrust" data-mid="' +
+                  esc(mid) + '">' + esc(t('pc_untrust')) + '</button>'
+                : '<button type="button" class="look" data-xza="pc-trust" ' +
+                  'data-mid="' + esc(mid) + '">' + esc(t('pc_trust_grant')) +
+                  '</button>')
+            : '') +
+          (revoked
+            ? '<button type="button" data-xza="pc-restore" data-mid="' + esc(mid) +
+              '">' + esc(t('pc_restore')) + '</button>'
+            : '<button type="button" data-xza="pc-kick" data-mid="' + esc(mid) +
+              '">' + esc(t('pc_kick')) + '</button>') +
+          '</div>';
+      }
+      list.innerHTML = h;
+    }).catch(function () {
+      if (list.isConnected) {
+        list.innerHTML = '<div class="xza-say" style="color:#dc2626">' +
+          esc(t('net_err')) + '</div>';
+      }
+    });
+  }
+
   /* ── 任务卡 ── */
   function closeCard() {
     if (S.card) { try { S.card.remove(); } catch (e) { /* */ } }
@@ -1157,12 +1390,18 @@
     }
     for (var i = 0; i < task.steps.length; i++) {
       var s = task.steps[i];
+      var isPc = s.kind === 'runner';
       var cls = 'xza-step' + (s.status === 'cur' || s.status === 'wait'
-        ? ' cur' : '') + (s.status === 'fail' ? ' fail' : '');
+        ? ' cur' : '') + (s.status === 'fail' ? ' fail' : '') +
+        (isPc ? ' xza-st--pc' : '');
+      var lvTxt = isPc ? t('pc_lv') : lvHuman(s.level);
+      var macBadge = (isPc && s.runner && s.runner.machine)
+        ? '<span class="xza-pcmac">@' + esc(s.runner.machine) + '</span>' : '';
       html += '<div class="' + cls + '" data-idx="' + i + '">' +
         '<div class="xza-st-hd"><span class="ic">' + stIcon(s.status) +
         '</span><span class="lb">' + esc(s.label || s.action) + '</span>' +
-        '<span class="lv">' + esc(lvHuman(s.level)) + '</span></div>';
+        macBadge +
+        '<span class="lv">' + esc(lvTxt) + '</span></div>';
       if (s.note) {
         html += '<div class="xza-st-note">' + esc(s.note) + '</div>';
       }
@@ -1459,6 +1698,16 @@
       var a = document.querySelector('a[href="' + step.goto + '"]');
       if (a && a.offsetParent) { return a; }
     }
+    if (step.kind === 'ui' && step.ui && step.ui.sel) {
+      /* 流星要飞向真实控件：先瞬时滚到屏内（smooth 会让坐标在飞行中漂移） */
+      var uel = null;
+      try { uel = document.querySelector(String(step.ui.sel)); }
+      catch (e) { uel = null; }
+      if (uel && uel.offsetParent) {
+        try { uel.scrollIntoView({ block: 'center' }); } catch (e2) { /* */ }
+        return uel;
+      }
+    }
     return S.card;
   }
   function replayMeteor() {
@@ -1734,7 +1983,8 @@
           return;
         }
         S.task.say = t('plan_empty') + String(j.say || '') + ' ' +
-          t('plan_empty2');
+          t('plan_empty2') +
+          (_looksLikePc(goal) ? ' ' + t('pc_fail_hint') : '');
         renderCard();
         /* 死路变菜单（2026-08-23）：列出真能做的事，点了即重新规划 */
         abilityLabels(function (labels) {
@@ -1793,6 +2043,83 @@
       return;
     }
 
+    if (step.kind === 'ui') {
+      /* DOM 动作总线（实施88 P0）：揭示类手势在前端就地执行。sel 是服务端
+         按 ui_anchors 白名单换出的（LLM 只提名 id）——这里绝不执行计划外
+         选择器；找不到/不可见=诚实失败，绝不装成功。 */
+      if (S.standalone) { return stepDone(step, 'ok', t('ui_on_pc')); }
+      var ui = step.ui || {};
+      var uel = null;
+      try { uel = document.querySelector(String(ui.sel || '')); }
+      catch (e) { uel = null; }
+      if (!uel || !uel.offsetParent) {
+        return stepDone(step, 'fail', t('ui_missing'));
+      }
+      beacon('asb_agent_ui_' + String(ui.gesture || 'x'));
+      try {
+        if (ui.gesture === 'click') {
+          uel.click();
+          return stepDone(step, 'ok', t('st_ui_click'));
+        }
+        if (ui.gesture === 'fill') {
+          try { uel.focus(); } catch (e2) { /* */ }
+          uel.value = String(ui.text || '');
+          uel.dispatchEvent(new Event('input', { bubbles: true }));
+          uel.dispatchEvent(new Event('change', { bubbles: true }));
+          return stepDone(step, 'ok',
+            t('st_ui_fill').replace('{q}', String(ui.text || '')));
+        }
+        /* show：targetFor 已滚动到位、流星已飞到并出涟漪，这里只收口 */
+        return stepDone(step, 'ok', t('st_ui_show'));
+      } catch (e3) {
+        return stepDone(step, 'fail', t('ui_missing'));
+      }
+    }
+
+    if (step.kind === 'runner' && step.level === 'L0') {
+      /* Windows 操控 runner 只读侦察（实施91 P1-1）：L0 无确认卡直接调；
+         L2 写动作（pc_launch/pc_focus）落到下面通用分支走确认卡（实施91 P1-2）。
+         走同一 /api/assistant/act，服务端 pc_inspect 分支已消毒摘要——
+         这里只把结构化结果渲染成人话（note 经 renderCard 的 esc 转义）。 */
+      var rtool = (step.runner && String(step.runner.tool)) || '';
+      beacon('asb_agent_pc_' + (rtool || 'x'));
+      post('/api/assistant/act',
+           { action: step.action, params: step.params, lang: S.lang })
+        .then(function (j) {
+          if (j.__status !== 200 || !j.ok) {
+            return stepDone(step, 'fail', String(j.detail || t('pc_saw_fail')));
+          }
+          var res = j.result || {};
+          if (!res.ok) {
+            return stepDone(step, 'fail', t('pc_saw_fail') +
+              (res.error ? '（' + String(res.error) + '）' : ''));
+          }
+          var tool = String(j.tool || rtool || '');
+          var note = t('st_ok');
+          if (tool === 'list_windows') {
+            var wins = res.windows || [];
+            var fg = '';
+            for (var wi = 0; wi < wins.length; wi++) {
+              if (wins[wi] && wins[wi].foreground) {
+                fg = String(wins[wi].title || '');
+                break;
+              }
+            }
+            note = t('pc_saw_win').replace('{n}', String(wins.length))
+              .replace('{fg}', fg || '—');
+          } else if (tool === 'read_tree') {
+            var tree = res.tree || {};
+            note = t('pc_saw_tree').replace('{n}', String(tree.count || 0))
+              .replace('{w}', String(res.window || ''));
+          } else if (tool === 'screenshot') {
+            note = t('pc_saw_shot');
+          }
+          return stepDone(step, 'ok', note);
+        })
+        .catch(function () { stepDone(step, 'fail', t('pc_saw_fail')); });
+      return;
+    }
+
     post('/api/assistant/act',
          { action: step.action, params: step.params, lang: S.lang })
       .then(function (j) {
@@ -1838,9 +2165,10 @@
                                   String(j2.detail || t('net_err')));
                 }
                 step.undo_id = j2.undo_id || '';
-                /* 生效口径只认服务端 hot_applied（诚实：没热更就说重启窗后生效） */
-                var hotNote = j2.hot_applied ? t('hot_worker')
-                  : t('hot_restart');
+                /* 生效口径只认服务端 hot_applied（诚实：没热更就说重启窗后生效）；
+                   runner 写动作（实施91 P1-2）走 runner_note（服务端已本地化）。 */
+                var hotNote = j2.runner_note ? String(j2.runner_note)
+                  : (j2.hot_applied ? t('hot_worker') : t('hot_restart'));
                 /* 存量档位对齐结果（切档动作专属）：同步了几个会话如实说；
                    服务端报对齐失败也如实说——「已热更」≠ 存量都跟上了 */
                 if (typeof j2.aligned === 'number' && j2.aligned > 0) {
@@ -1978,6 +2306,6 @@
   }
 
   window.XZAgent = { init: init, run: runGoal,
-    /* 球的标题栏手机键调这里（配对链仍全部归本模块） */
-    pair: openPairModal, _ver: VER };
+    /* 球的标题栏手机键/电脑键调这里（配对链与电脑操控弹层都归本模块） */
+    pair: openPairModal, pc: openPcModal, _ver: VER };
 })();

@@ -337,6 +337,32 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # → 7852) is cold or queued. ``requested_backend`` keeps the pre-swap
         # backend name so the UI can still show what a real send would use.
         fast = bool(body.get("fast"))
+        # 语言路由（P1 2026-08-31 试听=发送契约收口）：send-voice / A 线
+        # voice_reply / B 线 autosend 三条出站链都走 route_voice_cfg_for_text
+        # （粤语专线、clone_langs 语种→克隆节点改派、edge 音色按语种对齐），
+        # 唯独试听没接——ja/ko 开通克隆路由后，发送侧已是人设克隆声、试听侧
+        # 却仍被语种能力闸拦去 edge 标准声（0831 实录 22:10）：预览带头失真，
+        # 且「所听即所发」复用会把 edge 预览原样发给客户，路由被预览连累整链
+        # 失效。与 send-voice 同门槛：坐席显式覆写 voice/backend/voice_profile
+        # 时尊重人工选择不路由；fast 档（渠道中心秒回预览）本就强制 edge，
+        # 刻意不路由。拒发守卫在试听侧同样如实报错——试听能过而发送被拒＝
+        # 把失望留到更晚。
+        _explicit_voice_override = isinstance(cfg_override, dict) and any(
+            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
+        if not fast and not _explicit_voice_override:
+            try:
+                from src.ai.lang_voice_route import (
+                    is_reject_tag, route_voice_cfg_for_text)
+                voice_cfg, _lang_route = route_voice_cfg_for_text(
+                    voice_cfg, spoken_text, raw_cfg)
+                if is_reject_tag(_lang_route):
+                    return {
+                        "ok": False, "fast": fast, "reason": "lang_mismatch",
+                        "error": "voice/text language mismatch: "
+                                 + _lang_route.split(":", 1)[-1],
+                    }
+            except Exception:
+                logger.debug("[voice/tts-test] 语言路由异常（忽略）", exc_info=True)
         requested_backend = str(voice_cfg.get("backend") or "")
         if fast:
             voice_cfg["backend"] = "edge_tts"
@@ -414,6 +440,32 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     "reason": _classify_err(result.error)}
         note_voice_attempt(True, "preview")
 
+        # #93（2026-09-01）：「应克隆未克隆」显式化——解析出的音色配置本该走
+        # 克隆（voice_profile 生效且 backend 为克隆类），最终 provider 却不是
+        # 克隆且管线没记 fallback_from（如语言路由/中途换档的静默分支）→ 在此
+        # 补记，让前端黄条 + 降级发送确认照常亮。fast 档强制 edge 属刻意，不标。
+        try:
+            if not fast:
+                from src.ai.persona_voice import CLONE_BACKENDS as _CLB
+                _vp_exp = voice_cfg.get("voice_profile") \
+                    if isinstance(voice_cfg.get("voice_profile"), dict) else {}
+                _exp_backend = str(
+                    (_vp_exp.get("backend") if _vp_exp.get("enabled") else None)
+                    or voice_cfg.get("backend") or "").strip().lower()
+                _got = str(result.provider or "").strip().lower()
+                if (_exp_backend in _CLB and _got and _got not in _CLB
+                        and not (result.extra or {}).get("fallback_from")):
+                    result.extra = dict(result.extra or {})
+                    result.extra["fallback_from"] = _exp_backend
+                    result.extra.setdefault(
+                        "primary_error", "clone_not_engaged")
+                    logger.warning(
+                        "[voice/tts-test] #93 应克隆未克隆已补标：expected=%s "
+                        "got=%s persona=%s", _exp_backend, _got,
+                        voice_ctx.get("persona_id") or "-")
+        except Exception:
+            logger.debug("[voice/tts-test] #93 补标失败（忽略）", exc_info=True)
+
         # Rename to our deterministic preview path
         try:
             Path(result.audio_path).rename(preview_path)
@@ -455,6 +507,14 @@ def register_voice_routes(app, api_auth, config_manager=None):
         except Exception:
             logger.debug("[voice/tts-test] 复用 sidecar 登记失败（忽略）", exc_info=True)
 
+        # 回落原因归纳（P0 2026-08-31）：单一归纳口在 lang_voice_route，
+        # send-voice 同源消费；失败按「判不出」处理，绝不阻塞试听响应。
+        try:
+            from src.ai.lang_voice_route import fallback_reason_from_extra
+            _fb_reason, _fb_lang = fallback_reason_from_extra(result.extra or {})
+        except Exception:
+            _fb_reason, _fb_lang = "", ""
+
         file_url = f"/api/voice/tts-test/{preview_path.name}"
         return {
             "ok": True,
@@ -488,6 +548,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 # （档位路由降级 edge）此前完全静默。
                 "voice_mapped_from": (result.extra or {}).get(
                     "voice_mapped_from", ""),
+                # P0 2026-08-31（提示风暴复盘）：回落**原因**枚举（additive）——
+                # 语种改道（刻意保护）与通道故障是两种事，前端据此分文案分动作，
+                # 不再把日语改道播报成「通道中断→重试/报障」。
+                "fallback_reason": _fb_reason,
+                "fallback_lang": _fb_lang,
             },
         }
 
@@ -787,6 +852,45 @@ def register_voice_routes(app, api_auth, config_manager=None):
                             hub_risk = "recent_failures"
                     except Exception:
                         hub_risk = ""
+
+            # P0 语言能力预告（2026-08-31「日文怪声」事故）：主路可念语种 →
+            # 前端在「跟随翻译发声」目标语超出引擎能力时**生成前**警示（表驱动，
+            # 单一事实源 lang_voice_route.clone_voice_langs）。空列表=能力未知
+            # （前端不警示不冤枉）；edge 链按内置音色映射全集回传（send-voice 的
+            # follow_text 路由会按语种换音色）。旧前端不读此键，纯 additive。
+            voice_langs: list = []
+            try:
+                from src.ai.lang_voice_route import (
+                    EDGE_VOICE_BY_LANG, clone_route_langs, clone_voice_langs)
+                if _eff_backend in _clone_backends:
+                    voice_langs = list(clone_voice_langs(
+                        _av_cfg, _eff_backend, str(ctx.get("persona_id") or "")))
+                    # P1 2026-08-31：并入 clone_langs 路由已开通语种（如 ja/ko
+                    # 改派 117 克隆节点，试听/发送同路由）——不并，前端会对
+                    # 已开通语种恒亮「引擎不支持」误报（与 proactive planner
+                    # 的能力并集同口径）。主表空=能力未知，保持不判不冤枉。
+                    if voice_langs:
+                        for _p in clone_route_langs(raw_cfg):
+                            if _p not in voice_langs:
+                                voice_langs.append(_p)
+                elif _eff_backend == "edge_tts":
+                    voice_langs = sorted(EDGE_VOICE_BY_LANG.keys())
+            except Exception:
+                voice_langs = []
+
+            # P0-V2b 译声可见化（2026-08-30）：带会话上下文时顺带回传会话客户语言
+            # ——与 tts-test/send-voice 解析 'auto' 同一函数（_resolve_conv_language），
+            # 右栏语音卡生成前就能预告「将译成 X」且与真实发送同源。解析不出=空串
+            # （前端如实显示「客户语言未知」）；旧后端缺此键=前端特性探测自动隐藏。
+            conv_lang = ""
+            if chat_key:
+                try:
+                    from src.web.routes.unified_inbox_services import (
+                        _resolve_conv_language)
+                    conv_lang = _resolve_conv_language(
+                        request, platform, account_id or "default", chat_key) or ""
+                except Exception:
+                    conv_lang = ""
             return {
                 "ok": True,
                 "platform": platform,
@@ -800,6 +904,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "hub_risk": hub_risk,
                 "channel_backend": channel_backend,
                 "reference_audio": os.path.basename(ref) if ref else "",
+                "conv_lang": conv_lang,
+                "voice_langs": voice_langs,
             }
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "error": str(ex)[:200]}

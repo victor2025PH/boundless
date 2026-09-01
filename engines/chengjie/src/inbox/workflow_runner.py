@@ -79,12 +79,18 @@ class WorkflowRunner:
 
     def auto_start_chains(
         self, *, now: Optional[float] = None, max_per_day: int = 0,
+        journey_enabled: bool = False,
     ) -> int:
-        """P44+P35：根据链 trigger_conditions 自动启动（沉默/流失）。
+        """P44+P35：根据链 trigger_conditions 自动启动（沉默/流失/阶段进入）。
 
         ``max_per_day``（P2 2026-08-13）：每日自动开链预算（DB 口径跨重启稳，
         0=不限=旧行为）——运营给链配上 silence_days 的那一刻起这就是「对沉默
-        客户群发开链」的总闸门，没预算的自动化是事故温床。"""
+        客户群发开链」的总闸门，没预算的自动化是事故温床。
+
+        ``journey_enabled``（实施92 P0-4）：stage_enter 触发面的闸——链条件里
+        的 ``stage_enter: quoting|deal|...`` 只在旅程阶段脊柱开启时消费（进入
+        报价阶段自动挂报价跟单、成交自动挂关怀）；关闭时该条件静默不动
+        （与 silence_days 语义互不影响）。"""
         now = now or time.time()
         budget_left: Optional[int] = None
         if max_per_day > 0 and hasattr(self._store, "count_auto_started_chains_since"):
@@ -112,10 +118,35 @@ class WorkflowRunner:
                 continue
             silence_days = float(conds.get("silence_days") or 0)
             churn_only = bool(conds.get("churn_risk_high"))
-            if silence_days <= 0 and not churn_only:
+            stage_enter = str(conds.get("stage_enter") or "").strip().lower()
+            if silence_days <= 0 and not churn_only and not stage_enter:
                 continue
-            candidates = self._find_chain_candidates(silence_days, churn_only, now)
-            for cid in candidates:
+            # #48（0830 28DTZS 实锤）：可执行性预检——当前接线跑不通的链
+            # **不自动批量开**（自动开链是群发语义，一轮 10-20 条 × 必失败步
+            # = 失败风暴 + 预算白烧 + toast 刷屏）。手动启动不受此闸（单条、
+            # 人在场、失败可见）。当前唯一确定性死路＝task 步而 contacts 未接线。
+            _blocked_step = self._auto_start_blocker(chain)
+            if _blocked_step:
+                logger.warning(
+                    "WorkflowRunner 跳过自动开链 %s（%s——该步在当前部署必失败；"
+                    "手动启动不受限）",
+                    chain.get("name") or chain.get("chain_id"), _blocked_step)
+                continue
+            # 候选统一成 (cid, dedupe_since)：silence/churn 面 dedupe_since=0
+            #（只查在途链，旧行为）；stage 面 dedupe_since=阶段进入时刻——同一次
+            # 阶段进入只挂一次（终态也算「挂过」，防每小时对同人重复开链）。
+            candidates: List[tuple] = [
+                (cid, 0.0)
+                for cid in (self._find_chain_candidates(silence_days, churn_only, now)
+                            if (silence_days > 0 or churn_only) else [])
+            ]
+            if stage_enter and journey_enabled:
+                candidates.extend(self._find_stage_candidates(stage_enter, now))
+            seen: set = set()
+            for cid, dedupe_since in candidates:
+                if cid in seen:
+                    continue
+                seen.add(cid)
                 if budget_left is not None and started >= budget_left:
                     logger.info(
                         "WorkflowRunner 自动开链达每日预算（%d），本轮止步",
@@ -123,6 +154,13 @@ class WorkflowRunner:
                     return started
                 if self._store.has_running_chain(cid, chain["chain_id"]):
                     continue
+                if dedupe_since > 0:
+                    try:
+                        if self._store.chain_started_since(
+                                cid, chain["chain_id"], dedupe_since):
+                            continue
+                    except Exception:
+                        continue
                 self._store.start_chain_execution(
                     chain["chain_id"], cid,
                     {"auto": True, "trigger": conds},
@@ -133,6 +171,46 @@ class WorkflowRunner:
                     cid, "chain_started",
                     str(chain.get("name") or chain.get("chain_id") or ""))
         return started
+
+    # 阶段候选回看窗（秒）：扫描每小时跑，48h 窗保证重启/停机不漏；
+    # 「同一次进入只挂一次」由 chain_started_since(stage_ts) 判据兜底，
+    # 窗宽不会造成重复。
+    _STAGE_LOOKBACK_SEC = 48 * 3600
+
+    def _find_stage_candidates(self, stage: str, now: float) -> List[tuple]:
+        """实施92：处于 stage 且进入时刻在回看窗内的会话 → (cid, stage_ts)。"""
+        try:
+            rows = self._store.list_conversations_at_journey_stage(
+                stage, entered_since=now - self._STAGE_LOOKBACK_SEC, limit=100)
+        except Exception:
+            return []
+        out: List[tuple] = []
+        for r in rows:
+            cid = str(r.get("conversation_id") or "")
+            ts = float(r.get("stage_ts") or 0)
+            if cid and ts > 0:
+                out.append((cid, ts))
+        return out
+
+    def _auto_start_blocker(self, chain: Dict[str, Any]) -> str:
+        """自动开链可执行性预检：返回「必失败」的原因串（空=可开）。
+
+        只认**确定性**死路——task 步需要 contacts store，未接线时该步 100%
+        失败（#48 事故形态：桌面包 contacts 默认关 → 自动开出的每条链都在
+        task 步上撞死）。判定绝不抛：解析失败按可开（宁可放过，交给运行时
+        失败账本，那里现在有 error 原因了）。
+        """
+        try:
+            steps = json.loads(chain.get("steps_json") or "[]")
+        except Exception:
+            return ""
+        for i, step in enumerate(steps if isinstance(steps, list) else []):
+            if not isinstance(step, dict):
+                continue
+            if (str(step.get("action_type") or "") == "task"
+                    and self._contacts is None):
+                return f"step{i}=task 但 contacts 未接线"
+        return ""
 
     # ── 单条执行推进 ─────────────────────────────────────────────────────────
 
@@ -322,6 +400,7 @@ class WorkflowRunner:
                 result["note_added"] = True
             except Exception:
                 result["ok"] = False
+                result["error"] = "note_store_error"
             self._publish_step_event(conv_id, ex, f"📝 已添加内部备注：{note[:60]}", "note")
 
         elif action_type == "tag":
@@ -336,7 +415,11 @@ class WorkflowRunner:
                     result["tag"] = tag
                 except Exception:
                     result["ok"] = False
+                    result["error"] = "tag_apply_error"
 
+        # #48（0830 28DTZS 诊断包实锤后仍差最后一锤）：失败分支此前 ok=False
+        # 却**不写 error 原因** → step 账本 detail 恒空、日志轮转后根因永久失传
+        # ——值守对着「step0 集体失败」只能猜。每个失败口写机器可读原因。
         elif action_type == "task":
             due_h = float(step.get("delay_hours") or 72)
             if self._contacts:
@@ -350,10 +433,13 @@ class WorkflowRunner:
                         result["task_created"] = True
                     else:
                         result["ok"] = False
+                        result["error"] = "no_contact_id"
                 except Exception:
                     result["ok"] = False
+                    result["error"] = "task_store_error"
             else:
                 result["ok"] = False
+                result["error"] = "no_contacts_store"
 
         else:
             self._publish_step_event(conv_id, ex, note, action_type)

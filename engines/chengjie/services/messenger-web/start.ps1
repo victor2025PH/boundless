@@ -15,6 +15,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 # 服务监听端口（须与主进程 platform_login.messenger.web_url 一致）
 $env:PORT = "8791"
+$env:BIND_HOST = "127.0.0.1"   # 入站无鉴权，只许本机引擎调；放开前先加鉴权（server.js 同注）
 # 入站桥：Messenger 收到的消息 push 进统一收件箱（web 后台 18799）
 $env:PY_INGEST_URL = "http://127.0.0.1:18799/api/internal/protocol/ingest"
 # 会话健康桥（P0-2）：登录/掉线/放弃自愈等状态转移主动 push（不配则由 PY_INGEST_URL 自动推导）

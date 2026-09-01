@@ -383,7 +383,7 @@ def test_sender_voice_reply_passes_chat_id_as_contact_key(monkeypatch, tmp_path)
             self.account_persona_ids = []
 
     s = _S()
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     monkeypatch.setattr(s, "_presend_pace", AsyncMock())
     monkeypatch.setattr(s, "_postsend_record_count", lambda: None)
     s._emit_inbox = lambda **kw: None

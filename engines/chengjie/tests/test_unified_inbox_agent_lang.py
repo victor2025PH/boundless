@@ -71,6 +71,15 @@ def test_agent_lang_rejects_non_whitelist(tmp_path):
     assert c.get("/api/unified-inbox/agent-lang").json()["lang"] == ""
 
 
+def test_agent_lang_accepts_hymt_variants_and_european(tmp_path):
+    """UI 目录扩到 HY-MT 34 码后，繁体/粤语/法语必须能落库（否则芯片能选、保存 400）。"""
+    c = _client(tmp_path)
+    for lang in ("zh-tw", "yue", "fr"):
+        d = c.post("/api/unified-inbox/agent-lang", json={"lang": lang}).json()
+        assert d["ok"] is True and d["lang"] == lang, lang
+        assert c.get("/api/unified-inbox/agent-lang").json()["lang"] == lang
+
+
 def test_agent_lang_key_naming_and_audit(tmp_path):
     """KV 键必须是 per-agent 前缀（inbox.agent_lang.{agent}），updated_by 留痕。"""
     c = _client(tmp_path)

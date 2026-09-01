@@ -59,6 +59,48 @@ async def test_minicpm_clone_success(tmp_path, monkeypatch):
     assert rv.extra.get("minicpm_base_url") == "http://mc:7860"
 
 
+async def test_minicpm_clone_base_url_override_via_voice_profile(tmp_path, monkeypatch):
+    """voice_profile.clone_base_url 覆写端点（2026-08-30 粤语克隆分流）：
+    粤语路由把合成指到粤语克隆节点（117:7852），全局 minicpm_clone 段不动；
+    普通话链（无此键）仍打全局端点——见 test_minicpm_clone_success 的断言。"""
+    vcc.reset_health_cache()
+    monkeypatch.setattr(vcc.VoiceCloneClient, "health_ok", lambda self, **kw: True)
+
+    def fake_clone(self, text, ref, out, *, reference_text="", instructions=""):
+        Path(out).write_bytes(b"RIFF\x00\x00\x00\x00WAVEcloned")
+
+    monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_clone", fake_clone)
+    p = _mc_pipeline(tmp_path)
+    p.voice_profile["clone_base_url"] = "http://127.0.0.1:7852"
+    rv = await p.synthesize("我哋今日去饮茶好唔好")
+    assert rv.ok is True
+    assert rv.provider == "minicpm_clone"
+    assert rv.extra.get("minicpm_base_url") == "http://127.0.0.1:7852", \
+        "clone_base_url 覆写必须真的换掉请求端点"
+
+
+async def test_minicpm_clone_text_prefix_reaches_engine(tmp_path, monkeypatch):
+    """voice_profile.clone_text_prefix（CosyVoice 方言标签 <|yue|>）必须拼进
+    **送引擎的合成文本**最前面；原文/缓存键/镜像不受影响（extra 带观测锚）。"""
+    vcc.reset_health_cache()
+    monkeypatch.setattr(vcc.VoiceCloneClient, "health_ok", lambda self, **kw: True)
+    seen = {}
+
+    def fake_clone(self, text, ref, out, *, reference_text="", instructions=""):
+        seen["text"] = text
+        Path(out).write_bytes(b"RIFF\x00\x00\x00\x00WAVEcloned")
+
+    monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_clone", fake_clone)
+    p = _mc_pipeline(tmp_path)
+    p.voice_profile["clone_text_prefix"] = "<|yue|>"
+    rv = await p.synthesize("我哋今日去饮茶好唔好啦")
+    assert rv.ok is True
+    assert seen["text"].startswith("<|yue|>"), \
+        f"方言标签必须在送引擎文本最前面，实得 {seen['text'][:20]!r}"
+    assert rv.extra.get("clone_text_prefix") == "<|yue|>"
+    assert not str(rv.text or "").startswith("<|yue|>"), "原文不得被前缀污染"
+
+
 async def test_minicpm_clone_passes_emotion_instructions(tmp_path, monkeypatch):
     """情感非中性 → 结构化 instructions 下发主机（系统侧语气，绝不读出 → 零 garble）。"""
     vcc.reset_health_cache()
@@ -264,3 +306,61 @@ def test_minicpm_clone_cache_key_includes_ref_fingerprint(tmp_path):
     ref.write_bytes(b"RIFF" + b"\x00" * 64 + b"WAVEdifferent")
     k2 = p._cache_key("hi", "v", "minicpm_clone", NEUTRAL)
     assert k1 != k2
+
+
+def test_minicpm_cache_key_unshipped_dialect_does_not_split(tmp_path):
+    """未出货方言与普通话同一声学路径，不得为假口音分缓存。"""
+    from src.ai.voice_emotion import NEUTRAL
+    p = _mc_pipeline(tmp_path)
+    k0 = p._cache_key("hi", "v", "minicpm_clone", NEUTRAL)
+    p.voice_profile["dialect_flavor"] = "chuanyu"
+    k1 = p._cache_key("hi", "v", "minicpm_clone", NEUTRAL)
+    assert k0 == k1
+    p.voice_profile["dialect_flavor"] = "cantonese"
+    k2 = p._cache_key("hi", "v", "minicpm_clone", NEUTRAL)
+    assert k0 != k2
+
+
+async def test_clone_instruct_hits_instruct_endpoint(tmp_path, monkeypatch):
+    """voice_profile.clone_instruct → /v1/tts/instruct，不走 clone。"""
+    vcc.reset_health_cache()
+    monkeypatch.setattr(vcc.VoiceCloneClient, "health_ok", lambda self, **kw: True)
+    seen = {}
+
+    def fake_instruct(self, text, ref, out, *, instruct=""):
+        seen["text"] = text
+        seen["instruct"] = instruct
+        seen["url"] = self.base_url + self.instruct_path
+        Path(out).write_bytes(b"RIFF\x00\x00\x00\x00WAVEinstruct")
+
+    def boom(*a, **k):
+        raise AssertionError("clone_instruct 路径不得再打 synthesize_clone")
+
+    monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_instruct", fake_instruct)
+    monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_clone", boom)
+    p = _mc_pipeline(tmp_path)
+    p.voice_profile["clone_instruct"] = "请用四川话表达。"
+    p.voice_profile["clone_base_url"] = "http://127.0.0.1:7852"
+    rv = await p.synthesize("今天天气不错我们出去走走吧")
+    assert rv.ok is True
+    assert seen["instruct"] == "请用四川话表达。"
+    assert seen["url"] == "http://127.0.0.1:7852/v1/tts/instruct"
+    assert rv.extra.get("clone_instruct") == "请用四川话表达。"
+    assert rv.extra.get("minicpm_base_url") == "http://127.0.0.1:7852"
+
+
+async def test_dialect_flavor_chuanyu_does_not_switch_to_7852(
+        tmp_path, monkeypatch):
+    """未出货川渝不得改走 117:7852 instruct（无标准生成链）。"""
+    vcc.reset_health_cache()
+    monkeypatch.setattr(vcc.VoiceCloneClient, "health_ok", lambda self, **kw: True)
+
+    def boom(*a, **k):
+        raise AssertionError("未出货方言不得打 synthesize_instruct")
+
+    monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_instruct", boom)
+    p = _mc_pipeline(tmp_path)
+    p.voice_profile["backend"] = "avatar_clone"
+    p.voice_profile["dialect_flavor"] = "chuanyu"
+    p.backend = "avatar_clone"
+    assert p._effective_backend() == "avatar_clone"

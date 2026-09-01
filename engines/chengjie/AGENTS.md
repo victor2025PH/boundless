@@ -271,6 +271,43 @@ python ../../platform/spoken_style/smoke_test.py  # 包本体冒烟 26 项（异
  （drafts_routes 接线）；灰度复盘 CLI `python tools/spoken_style_obs.py`（只读：外语
  污染扫描 + 中文会话出站长度/语气词分布按灰度分界对比，多实例数据根自动发现）。
 
+**中文变体（繁体/粤语）翻译主线**（2026-08-29/30 四批：管道→引擎→UI→自动链→评测→
+变体客户发现；出向新增 zh-tw/yue/tl/ms，OpenCC 本地简繁引擎代码就绪未开闸）：
+```bash
+python -m pytest tests/test_translation_engines.py tests/test_translation_service.py \
+ tests/test_translation_confidence.py tests/test_outbound_translate.py \
+ tests/test_translation_memory.py -q --tb=line
+python tools/verify_xlate_ui.py   # 真浏览器 77 断言（登录已预置跳过 cp-tour 遮罩）
+```
+预期：全绿。关键不变量（改翻译语言语义前先读）：
+① **zh-tw 是一等目标语**：`normalize_lang` 不折叠 zh-tw（zh-hant/zh-hk 归一到 zh-tw）；
+ `outbound_translate.normalize_target` 同口径保留变体；前端 `_sameLang` 变体豁免
+ （zh-tw≠zh、zh-cn 仍=zh）。**三处口径联动**，改一处必同改——折叠回去=简→繁在
+ identity 短路里恒原样返回（一个字不变）。
+② **CJK 语种集合三处同步**：`_CJK_TARGETS`(engines)/`_CJK_LANGS`(outbound_translate，
+ 语音守卫 voice_peer_lang_conflict 同消费)/`_TARGET_SCRIPT`(confidence) 都含 yue/zh-tw
+ ——漏一处＝「中文→粤语」被 lang_mismatch 409 误拦或置信度缺 script 维度。
+③ **检测刻意不产出变体码**：`detect_language` 对繁/粤文本仍判 zh —— auto 档与会话
+ 语言投票**永远不会**自己变成 yue/zh-tw；自动链跟随变体**只靠 B67 explicit**
+ （「发→X」会话级事实源，`get_outbound_lang_if_set`）。弹层的变体提示（模式 2.5
+ 建议/模式三保持手动）因此存在，别当冗余删掉。
+④ **同形句豁免**：`_ZH_FAMILY_TARGETS`（zh/zh-tw/yue）家族互译 translated==text 不算
+ 「未真译」不 HOLD（「一起加油」简繁同形＝正确结果）；ja/ko 目标原样回吐仍照 HOLD。
+⑤ **LLM 线变体钉子** `variant_style_hint`：yue=口语粤文+**繁体字形**（实弹实锤不点名
+ 会出「有冇/食饭」简体粤文混排）；zh-tw=禁简体字。AIEngine 与 OpenAICompatEngine
+ 同源消费；HY-MT 线走官方中文 prompt（`_HYMT_ZH_NAME` 含 zh-tw/yue）不吃钉子。
+⑥ **OpenCC 引擎**（s2twp，零 token 微秒级）：仅吃「中文源→zh-tw」，非中文源让位下游；
+ 库缺失 available=False。开闸=order 加 opencc + per_lang_order（config.example 配方）。
+⑦ **前端变体发现** `_detectZhVariant`：保守字表 ≥2 特征字、先粤后繁；繁体表已剔日文
+ 同形字（時間問題現後誰給貨還——「時間の問題」误判实锤）；字表必须 `\u` 转义
+ （script 内 CJK 门禁不豁免字面量）；建议式（人确认），绝不自动改会话语言。
+⑧ **评测**：宽集含 zh→zh-tw/yue 各 3 条（yue 字符轨天然低，以语义轨为主判）；
+ evaluator 的 openai 探针 /v1/models 失败自动降级 1-token chat ping（173:8001 网关
+ 只透传 chat/completions，GET models 直接 RST——8-28 换 vLLM 落点后本地 MT 评测轨
+ 曾静默全 skip 的根因）。
+观测：`xlt_out_zhtw|yue|tl|ms`（采用量）/`xlt_variant_shown|accept`（发现转化）经
+`/api/admin/ui-event-trend?prefix=xlt_`；周批回译趋势 `logs/eval/translation_trend.jsonl`。
+
 **收件箱筛选区去噪主线**（2026-08-11 P0-P4，修实录「红框里按钮太多、还显示不全，
 不知道点哪」——405px 桌面壳下筛选区堆到 7 行占掉 196px 首屏，首屏只剩 6-7 条会话）：
 ```bash
@@ -1937,21 +1974,27 @@ FLAP、内联按钮写了函数没挂 window 暴露块经热更新**直接上生
    - **大批收口安排独占时段**：几十个文件的整理别和别人的日常提交挤在一起。
    探针 `[1/4]` 段直接报 index 是空闲还是被占（含文件清单）——被卡时先看它，别猜。
    ⚠ 提交一律**显式列文件**：`git add <明确路径>`，永远不要 `-A` / `commit -a`。
-8. **绝对禁止 `git reset --hard` / `git checkout .` / `git restore .`**（2026-08-29
-   06:26 实锤，代价最大的一次）：这棵树上常年有 100+ 个 dirty 文件、属于**多条并行
-   线**，工作树是共用的一个。那次 reset 把**所有线**未提交的改动一次抹平（reflog:
-   `reset: moving to HEAD`）；untracked 新文件侥幸存活，已跟踪文件的修改全灭。
-   实际损失：小智线丢掉 SSE 断流真凶修复（`admin.py` 退回伪造 `http.disconnect`
-   的版本，而 `body_replay.py` 因为是新文件还在、只是**没有任何调用方**）、四层
-   作答、拖拽缩放与主题桥、以及全部门禁改动；另一条线的 `assistant-teach.js`
-   教学行结构与 `asb_h3_ask` 埋点**至今没人救回来**（3 条门禁持续红）。
+8. **绝对禁止全树回退命令：`git reset --hard` / `git checkout .` / `git restore .` /
+   裸 `git stash push`（不带 `-- <明确路径>`）**（2026-08-29 06:26 实锤，代价最大的
+   一次）：这棵树上常年有 100+ 个 dirty 文件、属于**多条并行线**，工作树是共用的一个。
+   复盘更正（07:5x，肇事线自查自首）：真凶不是 reset --hard，是 wsroute 线验证
+   「某测试在 HEAD 是否也红」时执行的 `git stash push -m "probe"`——没带路径参数＝
+   把**所有线** 169 个未提交文件一次卷进 stash、工作树全部回到 HEAD（stash 内部
+   实现正是 reflog 里那条 `reset: moving to HEAD`，事后极易误判成 reset --hard）；
+   untracked 新文件侥幸存活。
    - **最阴险的地方是当时看不出来**：常驻进程内存里还是好代码，线上一切正常，
      故障要等到**下一次重启**才装载回滚后的磁盘并静默复发。所以它不是「当场
-     报错」而是**定时炸弹**，谁重启谁背。
+     报错」而是**定时炸弹**，谁重启谁背。肇事线自己几分钟后跑门禁仍是绿的
+     （各门禁恰好测的都不是被回退的那一面），自查都难。
+   - 本次**已恢复**（07:5x）：stash@{0}（06:26:32，消息 "probe"）完整保有全部
+     169 个文件——103 个事后无人再动的已原样恢复（含小智线 admin.py 与教学埋点，
+     3 条持续红门禁随恢复转绿）；65 个事后已被各线重新编辑的**刻意不动**，清单与
+     自查方法见 `D:\chengjie-instances\.ops\INCIDENT_0626_stash_recovery_20260829.md`；
+     **stash@{0} 在各线确认前禁止 drop**。
+   - 若真凶是 `reset --hard` 则**无任何 git 手段可救**（reflog 只记 HEAD 移动，
+     未提交工作树内容不在 git 里）——禁令的分量不因本次侥幸走了 stash 而减轻。
    - 只回滚**自己的**文件：`git checkout -- <明确路径>`（逐个列，别用 `.`）；
-     要临时收起自己的改动用 `git stash push -- <明确路径>`。
-   - **别指望 reflog 能救**：它只记 HEAD 移动，未提交的工作树内容压根不在 git 里，
-     `reset --hard` 之后没有任何 git 手段能取回。
+     要临时收起自己的改动用 `git stash push -- <明确路径>`（路径必须显式列）。
    - 推论（这次的真正教训）：**在这棵树上不要长时间留未提交的工作**。做完一批、
      门禁绿了就显式列文件提交；提交是这里唯一可靠的保险，不是流程洁癖。
 

@@ -83,6 +83,48 @@ def test_own_outbound_does_not_resurrect_badge(store):
     assert store.sum_effective_unread_by_account()[("telegram", "acc")] == 2
 
 
+def test_120_badge_counts_only_visible_private_unarchived(store):
+    """#120（0831 钧原图 921「幽灵未读」）：徽标聚合只数用户可见真未读。
+
+    列表默认视图只显示私聊未归档会话，而旧聚合把群/频道/归档/legacy 群
+    （chat_type 迁移列没回填的负 id TG 群）全数了进去——「全部账号⑩/TG⑦」
+    列表却无一条未读行。矩阵：私聊未读计入；群/频道不计；归档不计；
+    legacy 负 id TG 群（chat_type 仍 'private'）不计；LINE group/room 键不计。
+    """
+    # 私聊未读 → 计入
+    store.ingest_batch(_conv("telegram:acc:11", unread=2, last_ts=100),
+                       [_msg("telegram:acc:11", "p1", "in", 100)])
+    # 真群（chat_type=group）→ 不计
+    g = _conv("telegram:acc:22", unread=5, last_ts=100)
+    g.chat_type = "group"
+    store.ingest_batch(g, [_msg("telegram:acc:22", "g1", "in", 100)])
+    # legacy TG 群：负 id、chat_type 还顶着 'private' → 启发式排除
+    store.ingest_batch(
+        _conv("telegram:acc:-100777", unread=7, last_ts=100, chat_key="-100777"),
+        [_msg("telegram:acc:-100777", "lg1", "in", 100)])
+    # LINE group 键 → 不计；LINE 私聊 → 计入
+    store.ingest_batch(
+        _conv("line:acc:line:group:abc", unread=3, last_ts=100,
+              platform="line", chat_key="line:group:abc"),
+        [_msg("line:acc:line:group:abc", "lgr", "in", 100)])
+    store.ingest_batch(
+        _conv("line:acc:U123", unread=1, last_ts=100, platform="line",
+              chat_key="U123"),
+        [_msg("line:acc:U123", "lp1", "in", 100)])
+    # 归档的私聊未读 → 不计
+    store.ingest_batch(_conv("telegram:acc:33", unread=4, last_ts=100),
+                       [_msg("telegram:acc:33", "a1", "in", 100)])
+    store.set_conv_archived("telegram:acc:33", True)
+
+    agg = store.sum_effective_unread_by_account()
+    assert agg.get(("telegram", "acc"), 0) == 2, \
+        f"TG 应只剩私聊 2 条（群5/legacy群7/归档4 全不计），got {agg}"
+    assert agg.get(("line", "acc"), 0) == 1
+    # 取消归档 → 回到可见集合，重新计入
+    store.set_conv_archived("telegram:acc:33", False)
+    assert store.sum_effective_unread_by_account()[("telegram", "acc")] == 6
+
+
 def test_dialog_sync_unread_increase_lights_badge_without_messages(store):
     """目录同步（无消息回流）：未读增长⇒近似推进 last_in_ts，真新未读能点亮。"""
     store.upsert_protocol_chats("telegram", "acc", [

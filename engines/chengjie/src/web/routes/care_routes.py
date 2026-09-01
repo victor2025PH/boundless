@@ -374,7 +374,9 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             dry_rows = [{
                 "kind": "dry",
                 "id": int(r.get("id") or 0),
-                "ts": float(r.get("sent_at") or 0),
+                # 实施84 P0-4：新语义 dry 行是 pending（sent_at 空），时刻取
+                # dry_sampled_at；旧语义行仍读 sent_at。
+                "ts": float(r.get("sent_at") or r.get("dry_sampled_at") or 0),
                 "topic": str(r.get("topic") or ""),
                 "text": str(r.get("sent_text") or ""),
                 "platform": str(r.get("platform") or ""),
@@ -762,8 +764,22 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
                 str(item.get("contact_key") or ""), limit=4)
         except Exception:
             _recent_sent = []
-        prompt = build_care_prompt(item, context_block=context_block,
-                                   recent_sent=_recent_sent, ai_name=ai_name)
+        # 实施84 P0-2 预览=派发同源：增强块（人设/记忆/目标）经派发器公开方法
+        # 取同一份 provider——预览看到的就是真发的口径。派发器缺席按空（旧口径）。
+        _extras = {}
+        try:
+            engine = getattr(request.app.state, "care_engine", None) or {}
+            disp = engine.get("dispatcher")
+            if disp is not None and hasattr(disp, "prompt_extras"):
+                _extras = disp.prompt_extras(item) or {}
+        except Exception:
+            _extras = {}
+        prompt = build_care_prompt(
+            item, context_block=context_block,
+            recent_sent=_recent_sent, ai_name=ai_name,
+            persona_line=str(_extras.get("persona_line") or ""),
+            memory_block=str(_extras.get("memory_block") or ""),
+            goal_block=str(_extras.get("goal_block") or ""))
         try:
             text = (await ai.chat(prompt) or "").strip()
         except Exception:
@@ -772,6 +788,81 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         if not text:
             return {"ok": False, "reason": "llm_empty"}
         return {"ok": True, "id": int(sid), "preview": text}
+
+    # ── 实施84 P0-5：全部主动消息统一时间线（来源标注）────────────────────────
+    _TL_RITUAL_NOTES = ("ritual", "milestone")
+
+    def _outreach_source(batch_id: str, note: str) -> str:
+        """batch_id 前缀 → 管线来源码（前端 i18n 渲染人话）。
+
+        proactive_topic 批次按 note（=开场 mode）再分仪式/回访两桶——ritual
+        与 topic 走同一 _send/_log_outreach，批次前缀相同，mode 才是分界。
+        """
+        bid = str(batch_id or "")
+        if bid.startswith("care:"):
+            return "care"
+        if bid.startswith("reactivation:"):
+            return "reactivation"
+        if bid.startswith("proactive_topic:"):
+            n = str(note or "").lower()
+            if any(k in n for k in _TL_RITUAL_NOTES):
+                return "ritual"
+            return "topic"
+        return "other"
+
+    @app.get("/api/care/outreach-timeline")
+    async def api_care_outreach_timeline(
+        request: Request, days: float = 7, limit: int = 120,
+        conversation_id: str = "",
+        _=Depends(api_auth),
+    ):
+        """近 N 天**全部管线**的主动消息时间线（outreach_log 单一账本读口）。
+
+        修「坐席在关怀页看到的与客户实际收到的对不上」的感知裂缝：约定关怀 /
+        沉默回访 / 仪式问候 / 召回各自为政地发，此前没有任何一处能回答
+        「这位客户这周到底被主动打扰了几次、都是谁发的」。旧后端无
+        ``list_outreach_recent`` → 前端按 reason=unavailable 隐藏区块。
+
+        ``conversation_id``（实施84 P0-5b，可选）＝单会话过滤——收件箱消息流
+        给出站消息标「来源 chip」用（客户端按时间就近匹配消息行）。过滤在
+        全量行上做（读口 ≤1000 行，纯内存筛，不另写 SQL 分叉）。
+        """
+        inbox = getattr(request.app.state, "inbox_store", None)
+        if inbox is None or not hasattr(inbox, "list_outreach_recent"):
+            return {"ok": False, "reason": "unavailable"}
+        d = max(1.0, min(float(days or 7), 30.0))
+        rows = inbox.list_outreach_recent(
+            days=d, limit=max(1, min(int(limit or 120), 500))) or []
+        cid_filter = str(conversation_id or "").strip()
+        if cid_filter:
+            rows = [r for r in rows
+                    if str(r.get("conversation_id") or "") == cid_filter]
+        names = {}
+        try:
+            cids = [str(r.get("conversation_id") or "") for r in rows]
+            convs = inbox.get_conversations_for_ids([c for c in cids if c])
+            names = {k: str(v.get("display_name") or "")
+                     for k, v in (convs or {}).items()}
+        except Exception:
+            logger.debug("outreach timeline 名称 join 失败（忽略）", exc_info=True)
+        items = []
+        by_source: dict = {}
+        for r in rows:
+            src = _outreach_source(str(r.get("batch_id") or ""),
+                                   str(r.get("note") or ""))
+            by_source[src] = int(by_source.get(src, 0)) + 1
+            cid = str(r.get("conversation_id") or "")
+            items.append({
+                "ts": float(r.get("ts") or 0),
+                "source": src,
+                "batch_id": str(r.get("batch_id") or "")[:48],
+                "note": str(r.get("note") or "")[:48],
+                "platform": str(r.get("platform") or ""),
+                "conversation_id": cid,
+                "display_name": names.get(cid) or "",
+            })
+        return {"ok": True, "days": d, "count": len(items),
+                "by_source": by_source, "items": items}
 
     # ── Phase O 质量闭环：care dry_run 样本审核（与 reactivation 同范式）────────
     @app.get("/api/care/dry-run-samples")

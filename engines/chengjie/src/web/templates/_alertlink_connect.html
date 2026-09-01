@@ -111,7 +111,11 @@
   function _setBanner(want){
     if(!bannerMode || !window.AITRNotify) return;
     if(!want){ AITRNotify.ongoing.clear('alertlink'); return; }
-    AITRNotify.ongoing.set('alertlink', {text:AL_TXT, tone:'warn', title:AL_TITLE});
+    /* #53（0830 原图 811 实锤：胶囊盖住工具箱/语音面板无任何关闭手段）：
+       dismissMs=24h → 胶囊带 ✕，对测试机/不配 webhook 的用户可请走；
+       与 AL_LATER 贪睡同语义，静默到期未接通自动回来。 */
+    AITRNotify.ongoing.set('alertlink', {text:AL_TXT, tone:'warn', title:AL_TITLE,
+                                         dismissMs:24*3600*1000});
     AITRNotify.notify({
       severity:'warn', text:AL_TXT,
       dedupKey:'alertlink', dedupTtlMs:24*3600000, center:false,

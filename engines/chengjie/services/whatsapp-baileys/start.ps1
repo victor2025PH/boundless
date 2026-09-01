@@ -13,6 +13,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
 # 服务监听端口（须与主进程 platform_login.whatsapp.baileys_url 一致）
 $env:PORT = "8790"
+$env:BIND_HOST = "127.0.0.1"   # 入站无鉴权，只许本机引擎调；放开前先加鉴权（server.js 同注）
 # 入站桥：Baileys 收到的消息 push 进统一收件箱（web 后台 18799）
 $env:PY_INGEST_URL = "http://127.0.0.1:18799/api/internal/protocol/ingest"
 # 会话健康桥：连上/被登出/重连放弃等状态转移主动 push（不配则由 PY_INGEST_URL 自动推导）

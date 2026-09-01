@@ -297,6 +297,11 @@ class DeadPeerRegistry:
                 "ttl_by_reason": dict(self._ttl_by_reason),
             }
 
+    def entries_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """全部条目只读快照（#88 存量核销迁移的输入；键=``platform:peer``）。"""
+        with self._lock:
+            return {k: dict(v) for k, v in self._data.items()}
+
 
 # ── feature flag + 路径解析 + 单例 ─────────────────────────────
 
@@ -375,6 +380,146 @@ def clear_on_delivery(platform: str, peer: Any) -> bool:
         return False
 
 
+def registry_from_config(config: Any) -> Optional[DeadPeerRegistry]:
+    """按全局配置建/取共享单例；flag 关或解析失败 → None（绝不抛）。
+
+    与 ``sender._dead_peer_guard`` 同一套路径/TTL 解析——#88 启动核销迁移需要
+    在**任何发送链首次建单例之前**拿到带落盘路径的 registry，若各写一份解析
+    参数会漂移（首建定终身）。config 须带 ``config_path``（ConfigManager）。
+    """
+    try:
+        if not dead_peer_enabled(config):
+            return None
+        path = None
+        cp = getattr(config, "config_path", None)
+        if cp:
+            path = str(Path(cp).parent / "dead_peers.json")
+        dpc = _dead_peer_cfg(config)
+        ttl = float((dpc.get("ttl_sec") or 0) or 0)
+        tbr = dpc.get("ttl_by_reason")
+        return get_dead_peer_registry(
+            path=path, ttl_sec=ttl,
+            ttl_by_reason=tbr if isinstance(tbr, dict) else None)
+    except Exception:
+        return None
+
+
+def reconcile_stale_marks(registry: DeadPeerRegistry, inbox_db_path: Any,
+                          *, log: Any = None) -> Dict[str, int]:
+    """#88 存量旧标记核销：标记时间之后存在任一成功出站 → 清标（幂等迁移）。
+
+    背景（0830 skuio 实锤，工单 #88）：#73 补齐送达清标钩子之前累积的旧标
+    （Kate/Yhang「曾被对方拉黑」）没人核销——客户明明恢复可达（消息带勾送达）
+    黄条仍常驻、自动回复停摆。证据面＝``messages`` 出站镜像（**只在成功路径
+    写入**，见 sender._postsend_mirror_and_record / 编排器成功回写），故
+    「标记 ts 之后有 direction='out' 行」＝真实送达发生过。
+
+    只读打开 inbox.db（URI mode=ro，对活体生产库零写事务）；deactivated
+    （账号注销，不可逆）刻意**不核销**——注销后不可能有真送达，若出站镜像
+    晚于标记只可能是镜像时钟异常，宁可保守。返回 ``{checked, cleared}``。
+    """
+    import sqlite3
+
+    out = {"checked": 0, "cleared": 0}
+    try:
+        entries = registry.entries_snapshot()
+    except Exception:
+        return out
+    if not entries:
+        return out
+    try:
+        con = sqlite3.connect(
+            f"file:{Path(str(inbox_db_path)).as_posix()}?mode=ro",
+            uri=True, timeout=5)
+    except Exception:
+        return out
+    try:
+        for key, ent in entries.items():
+            out["checked"] += 1
+            reason = str(ent.get("reason") or "")
+            if reason == "deactivated":
+                continue
+            platform, _, peer = key.partition(":")
+            if not platform or not peer:
+                continue
+            mark_ts = float(ent.get("ts") or 0)
+            # conversation_id = platform:account:peer → 后缀匹配该 peer 的全部会话
+            esc = (peer.replace("\\", "\\\\")
+                       .replace("%", r"\%").replace("_", r"\_"))
+            try:
+                row = con.execute(
+                    "SELECT 1 FROM messages WHERE direction='out' AND ts > ? "
+                    "AND conversation_id LIKE ? ESCAPE '\\' LIMIT 1",
+                    (mark_ts, f"{platform}:%:{esc}")).fetchone()
+            except Exception:
+                continue
+            if row and registry.unblock(platform, peer):
+                out["cleared"] += 1
+                if log is not None:
+                    try:
+                        log.info(
+                            "[dead-peer] 存量核销：%s（标记后有成功出站，黄条解除）",
+                            key)
+                    except Exception:
+                        pass
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    return out
+
+
+def reconcile_peer_mark(registry: DeadPeerRegistry, inbox_db_path: Any,
+                        platform: str, account_id: str, peer: Any,
+                        *, log: Any = None) -> bool:
+    """#88 二轮：单会话 lazy 核销——打开会话时若「标记后有成功出站」即清标。
+
+    背景（0831 skuio v1.0.64 复测实锤）：启动一次性迁移只覆盖「boot 那一刻
+    已可核销」的标记；之后才满足条件的（或走了无清标钩子的旁路送达）要等
+    下一次重启才被扫到，黄条在此期间赖着。本函数挂在 send-caps 的 dead_peer
+    可见块**之前**（前端每次打开会话都会带 chat_key 打它）——打开即复核，
+    核销时机与重启解耦。
+
+    与 ``reconcile_stale_marks`` 同判据（messages 出站镜像只在成功路径写入；
+    deactivated 恒不核销），但用**精确** conversation_id 等值查询（platform:
+    account:peer 三元组在调用点齐备）——LIKE 后缀匹配走不了索引，放进每次
+    开会话的请求路径会变成全表扫。返回 True=本次真的清了标。
+    """
+    import sqlite3
+
+    try:
+        if registry is None or not registry.is_blocked(platform, peer):
+            return False
+        ent = registry.info_of(platform, peer) or {}
+        if str(ent.get("reason") or "") == "deactivated":
+            return False
+        mark_ts = float(ent.get("ts") or 0)
+        conv_id = f"{str(platform or '').lower()}:{account_id}:{peer_of(peer)}"
+        con = sqlite3.connect(
+            f"file:{Path(str(inbox_db_path)).as_posix()}?mode=ro",
+            uri=True, timeout=3)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM messages WHERE conversation_id=? "
+                "AND direction='out' AND ts > ? LIMIT 1",
+                (conv_id, mark_ts)).fetchone()
+        finally:
+            con.close()
+        if row and registry.unblock(platform, peer):
+            if log is not None:
+                try:
+                    log.info(
+                        "[dead-peer] lazy 核销：%s:%s（打开会话复核到标记后"
+                        "有成功出站，黄条解除）", platform, peer)
+                except Exception:
+                    pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def reset_singleton() -> None:
     """仅供测试：清空单例，让下次 get 重新按新 path 建。"""
     global _SINGLETON
@@ -385,5 +530,6 @@ def reset_singleton() -> None:
 __all__ = [
     "classify_send_error", "is_permanent_reason", "peer_of", "DeadPeerRegistry",
     "dead_peer_enabled", "get_dead_peer_registry", "peek_dead_peer_registry",
-    "clear_on_delivery", "reset_singleton",
+    "clear_on_delivery", "registry_from_config", "reconcile_stale_marks",
+    "reconcile_peer_mark", "reset_singleton",
 ]

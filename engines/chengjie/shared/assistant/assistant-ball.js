@@ -39,27 +39,14 @@
       tab_faq: '常问', tab_set: '偏好', set_t: '偏好与工具',
       /* 手机操控进标题栏（P1-2）：图标 + 连接状态点，不占模式条第四格 */
       pair_t: '手机操控', pair_on: '手机已连', pair_off: '未连手机',
+      /* 电脑操控进标题栏（实施91 P1-1）：同手机走通道式入口，enabled 才显 */
+      pc_t: '电脑操控', pc_on: '电脑在线', pc_off: '电脑未就绪',
       faq_ph: '搜索帮助库…', faq_page: '本页常问', faq_global: '全站常问',
       faq_kb: '帮助库条目', faq_seed: '新手先问这些',
       faq_empty: '还没有人问过。先在「问答」里问一句，这里会长出来。',
       faq_none: '没找到相关条目——直接问小智，答不上会记下来补语料',
       faq_na: '「常问」的后端待装载（下次重启后自动可用）',
       chips_title: '本页常问', chips_more: '更多 →',
-      /* 介绍屏第一句。缺这个键时 t() 回落成裸键，用户看到的就是字面的
-         「hello」——门禁 test_scanner_would_catch_the_hello_regression 专门
-         守它，正因为这条已经真实发生过一次。 */
-      hello: '我是小智，这个系统的内置助手。想知道怎么操作、或者哪里出了问题，问我就行。',
-      /* 拒答不该是死路（2026-08-29 老板实录「回复的内容没一点帮助」）：
-         答不上来时给几条**确定答得上**的问法，比只留一句「不知道」有用。 */
-      suggest_t: '这些我答得上，试试：',
-      suggest_near_t: '你是不是想问：',
-      /* 依据标注：**答什么**与**凭什么答**必须分开说。没有 basis=general
-         这条标注，模型的通用回答会被当成产品承诺。 */
-      basis_product: '依据产品说明',
-      basis_general: '通用回答 · 非产品文档',
-      resize_aria: '调整面板大小（方向键，Shift 加速，Esc 复位）',
-      move_hint: '拖动移动 · 双击复位',
-      reset_geo: '恢复默认大小和位置',
       input_ph: '输入问题，回车发送…', send: '发送',
       thinking: '思考中…', searching: '检索帮助库…',
       src_title: '来源', goto: '带我去', helpful: '有帮助吗',
@@ -102,7 +89,30 @@
       tools_support: '上传诊断',
       orb_fx_full: '动效：饱满', orb_fx_calm: '动效：安静',
       say_t: '播报这条回答（系统音色）', say_fail: '播报失败，请稍后重试',
+      /* 首屏第一句（P1-1）：一句话讲清三个模式各能干什么，让用户不必先给
+         自己分类。**此前这个键根本不存在** → t() 缺键回落裸键名，面板首屏
+         五天来一直显示 "hello"（2026-08-28 修，门禁
+         tests/test_assistant_i18n_keys.py 防复发）。 */
+      hello: '我能帮你三件事：**查用法**、**带你操作**、**替你动手**。' +
+        '直接把想问的、想做的说出来就行。',
       err_net: '网络异常，请重试', rate_hint: '操作太频繁，稍后再试',
+      /* 错误文案分级（P0-4）：收到过 meta＝请求已抵达服务端并开始处理，
+         此时说「网络异常」是在冤枉用户的网络（他会去重启路由器），必须
+         如实说是我们没出话。 */
+      err_nostream: '小智没能把回答送出来（服务端中断）。可以重试，或直接报障。',
+      err_report: '🐞 报障',
+      thinking_long: '正在问 AI（通常 5-30 秒）',
+      /* 拒答不该是死路（2026-08-29 老板实录「回复的内容没一点帮助」）：
+         答不上来时给几条**确定答得上**的问法，比只留一句「不知道」有用。 */
+      suggest_t: '这些我答得上，试试：',
+      suggest_near_t: '你是不是想问：',
+      /* 依据标注（2026-08-29）：**答什么**与**凭什么答**必须分开说。
+         没有 basis=general 这条标注，模型的通用回答会被当成产品承诺。 */
+      basis_product: '依据产品说明',
+      basis_general: '通用回答 · 非产品文档',
+      resize_aria: '调整面板大小（方向键，Shift 加速，Esc 复位）',
+      move_hint: '拖动移动 · 双击复位',
+      reset_geo: '恢复默认大小和位置',
     },
     en: {
       name: 'AI Assistant', open_aria: 'Open AI assistant', close: 'Close',
@@ -112,6 +122,7 @@
       tab_faq: 'FAQ', tab_set: 'Prefs', set_t: 'Preferences & tools',
       pair_t: 'Phone control', pair_on: 'Phone connected',
       pair_off: 'No phone connected',
+      pc_t: 'PC control', pc_on: 'PC online', pc_off: 'PC not ready',
       faq_ph: 'Search help…', faq_page: 'Popular on this page',
       faq_global: 'Popular everywhere',
       faq_kb: 'Help entries', faq_seed: 'Good first questions',
@@ -119,15 +130,6 @@
       faq_none: 'No entry matched — ask directly; misses are logged for the corpus',
       faq_na: 'The FAQ backend is not loaded yet (available after next restart)',
       chips_title: 'Popular here', chips_more: 'More →',
-      hello: "I'm Xiaozhi, the built-in assistant. Ask me how to do "
-        + 'something, or what went wrong.',
-      suggest_t: 'These I can answer — try one:',
-      suggest_near_t: 'Did you mean:',
-      basis_product: 'From the product description',
-      basis_general: 'General knowledge · not product docs',
-      resize_aria: 'Resize panel (arrow keys, Shift to speed up, Esc to reset)',
-      move_hint: 'Drag to move · double-click to reset',
-      reset_geo: 'Restore default size and position',
       input_ph: 'Type a question…',
       send: 'Send', thinking: 'Thinking…', searching: 'Searching help…',
       src_title: 'Sources', goto: 'Take me there', helpful: 'Helpful?',
@@ -167,8 +169,21 @@
       orb_fx_full: 'Motion: rich', orb_fx_calm: 'Motion: calm',
       say_t: 'Read this answer aloud (system voice)',
       say_fail: 'Read-aloud failed, please retry',
+      hello: 'Three things I can do: **answer how-to**, **walk you through**, '
+        + '**do it for you**. Just say what you need.',
       err_net: 'Network error, please retry',
       rate_hint: 'Too fast, try again later',
+      err_nostream: 'I could not deliver an answer (server cut the stream). '
+        + 'Retry, or file a report.',
+      err_report: '🐞 Report',
+      thinking_long: 'Asking the AI (usually 5-30s)',
+      suggest_t: 'These I can answer — try one:',
+      suggest_near_t: 'Did you mean:',
+      basis_product: 'From the product description',
+      basis_general: 'General knowledge · not product docs',
+      resize_aria: 'Resize panel (arrow keys, Shift to speed up, Esc to reset)',
+      move_hint: 'Drag to move · double-click to reset',
+      reset_geo: 'Restore default size and position',
     },
   };
 
@@ -325,7 +340,7 @@
 '.asb-panel.asb-moving .asb-body{pointer-events:none}' +
 '.asb-hd{cursor:grab;touch-action:none}' +
 '.asb-panel.asb-moving .asb-hd{cursor:grabbing}' +
-/* 八向手柄：四边 8px 命中带 + 四角 16px 方块（角优先，故 z 更高）。
+/* 八向手柄：四边 6px 命中带 + 四角 14px 方块（角优先，故 z 更高）。
    窄屏整组隐藏——那里 CSS 强制全宽贴底，拖拽没有意义且会挡内容。 */
 '.asb-rs{position:absolute;z-index:6;touch-action:none}' +
 '.asb-rs.n{top:-3px;left:14px;right:14px;height:8px;cursor:ns-resize}' +
@@ -350,12 +365,6 @@
 '.asb-hd-rst:hover{background:var(--xz-hover,rgba(0,0,0,.05));' +
 'color:var(--xz-txt,#111)}' +
 '.asb-hd-rst[hidden]{display:none}' +
-/* 依据徽标：产品事实卡＝中性；通用知识＝琥珀提示色，因为那句话不是产品承诺，
-   视觉上必须与「有文档依据」区分得开。 */
-'.asb-basis{align-self:flex-start;font-size:.66rem;color:var(--xz-muted,#888);' +
-'border-left:2px solid var(--xz-bd,#ddd);padding:.05rem .45rem;line-height:1.5}' +
-'.asb-basis.gen{color:#b45309;border-left-color:#f59e0b;' +
-'background:rgba(245,158,11,.08);border-radius:0 6px 6px 0}' +
 '@keyframes asbUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}' +
 '.asb-hd{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;' +
 'border-bottom:1px solid var(--xz-bd,#ddd);flex-shrink:0}' +
@@ -408,6 +417,16 @@
 'border-radius:50%;background:var(--xz-muted,#bbb);border:1.5px solid var(--xz-bg,#fff)}' +
 '.asb-hd-pair.on{color:var(--xz-txt,#111)}' +
 '.asb-hd-pair.on i{background:#22c55e}' +
+/* ── 标题栏电脑操控（实施91 P1-1）：与手机键同族的通道式入口，enabled 才显 ── */
+'.asb-hd-pc{position:relative;border:none;background:none;cursor:pointer;' +
+'font-size:.95rem;padding:.2rem .4rem;border-radius:8px;line-height:1;' +
+'color:var(--xz-muted,#888)}' +
+'.asb-hd-pc[hidden]{display:none}' +
+'.asb-hd-pc:hover{background:var(--xz-input,#f3f4f6)}' +
+'.asb-hd-pc i{position:absolute;right:2px;bottom:2px;width:7px;height:7px;' +
+'border-radius:50%;background:var(--xz-muted,#bbb);border:1.5px solid var(--xz-bg,#fff)}' +
+'.asb-hd-pc.on{color:var(--xz-txt,#111)}' +
+'.asb-hd-pc.on i{background:#22c55e}' +
 /* ── 模式内容通用卡（球提供，教学/替我做挂载时直接复用＝三个模式一套度量） */
 '.asb-md{display:flex;flex-direction:column;gap:.5rem}' +
 '.asb-md-hero{border:1px solid var(--xz-bd,#ddd);border-radius:12px;' +
@@ -425,6 +444,36 @@
 'font-size:.74rem;padding:.32rem .6rem}' +
 '.asb-md-b:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
 '.asb-md-safe{font-size:.68rem;color:var(--xz-muted,#888);line-height:1.55}' +
+/* ── 主次分层（P1-2，2026-08-28）──────────────────────────────────────────
+   此前「替我做」两张卡共用 .asb-md-hero＝同边框同底色同 padding，于是核心
+   能力与手机通道视觉权重相同，整屏零焦点（老板实录：版面太碎没有重点）。
+   现在：主卡＝accent 左轴 + 提亮标题 + 唯一实心主按钮（.asb-md-go，样式表
+   里早已定义却从没被调用过）；次要入口降级为一行 .asb-md-sub。 */
+'.asb-md-hero--pri{border-color:transparent;' +
+'border-left:3px solid var(--xz-accent,#4f6ef7);background:var(--xz-bg,#fff);' +
+'box-shadow:0 1px 6px rgba(0,0,0,.10)}' +
+'.asb-md-hero--pri .asb-md-t{font-size:.9rem}' +
+'.asb-md-hero--pri .asb-md-d{font-size:.74rem;color:var(--xz-txt,#333)}' +
+'.asb-md-hd{display:flex;align-items:center;gap:.4rem}' +
+'.asb-md-hd .asb-md-t{flex:1;min-width:0}' +
+'.asb-md-lnk{border:none;background:none;cursor:pointer;font-family:inherit;' +
+'font-size:.7rem;color:var(--xz-accent,#4f6ef7);padding:.1rem .2rem}' +
+'.asb-md-lnk:hover{text-decoration:underline}' +
+'.asb-md-sub{display:flex;align-items:center;gap:.5rem;width:100%;' +
+'text-align:left;box-sizing:border-box;border:1px solid var(--xz-bd,#ddd);' +
+'border-radius:10px;background:none;cursor:pointer;font-family:inherit;' +
+'padding:.45rem .55rem;color:var(--xz-txt,#333)}' +
+'.asb-md-sub:hover{border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-md-sub-i{font-size:1rem;line-height:1;flex-shrink:0}' +
+'.asb-md-sub-x{flex:1;min-width:0;display:flex;flex-direction:column;gap:.1rem}' +
+'.asb-md-sub-x b{font-size:.78rem;font-weight:600}' +
+'.asb-md-sub-x i{font-style:normal;font-size:.68rem;color:var(--xz-muted,#888)}' +
+'.asb-md-sub-go{color:var(--xz-muted,#bbb);flex-shrink:0;font-size:1rem;' +
+'line-height:1}' +
+/* 示例任务（P1-3）：空态是新用户最需要引导的位置，不该只说「还没有记录」。
+   点一条＝填进输入框并聚焦（不自动提交——替我做会改设置，得让人先看清）。 */
+'.asb-md-ex{display:flex;flex-direction:column;gap:.3rem}' +
+'.asb-md-ex-t{font-size:.68rem;color:var(--xz-muted,#888)}' +
 /* 模式状态行（实施73 P2-1）：一句「本页 N 处可讲解」就是进入模式的理由。
    0 处/词典未就绪时同一行改说实话，所以做成中性底色而非成绩单绿。 */
 '.asb-md-stat{font-size:.72rem;line-height:1.5;color:var(--xz-txt,#333);' +
@@ -470,14 +519,24 @@
 'border-bottom-right-radius:4px}' +
 '.asb-msg.ai{align-self:flex-start;background:var(--xz-input,#f3f4f6);' +
 'color:var(--xz-txt,#111);border-bottom-left-radius:4px}' +
-'.asb-msg.err{align-self:flex-start;background:rgba(239,68,68,.1);' +
-'color:#dc2626;border:1px solid rgba(239,68,68,.35)}' +
+/* 错误气泡视觉降级（P2）：原满饱和红描边 + #dc2626 文字在暗色壳里既刺眼
+   又对比度不足；改左色条保语义、正文回 --xz-txt 保可读。 */
+'.asb-msg.err{align-self:flex-start;background:rgba(239,68,68,.09);' +
+'color:var(--xz-txt,#111);border:none;border-left:3px solid #ef4444;' +
+'border-radius:4px 12px 12px 4px}' +
 '.asb-msg code{background:rgba(127,127,127,.16);padding:.05rem .3rem;' +
 'border-radius:4px;font-size:.76rem}' +
 '.asb-sref{color:var(--xz-accent,#4f6ef7);font-weight:600;font-size:.72rem}' +
 '.asb-srcs{align-self:flex-start;display:flex;flex-direction:column;gap:.3rem;' +
 'max-width:92%}' +
 '.asb-srcs-t{font-size:.66rem;color:var(--xz-muted,#888)}' +
+/* 依据徽标（2026-08-29）：产品事实卡＝中性；通用知识＝琥珀提示色，因为那句
+   话不是产品承诺，视觉上必须与「有文档依据」区分得开。用 color-mix 取宿主
+   accent/warn，不引入新色值（品牌令牌纪律）。 */
+'.asb-basis{align-self:flex-start;font-size:.66rem;color:var(--xz-muted,#888);' +
+'border-left:2px solid var(--xz-bd,#ddd);padding:.05rem .45rem;line-height:1.5}' +
+'.asb-basis.gen{color:#b45309;border-left-color:#f59e0b;' +
+'background:rgba(245,158,11,.08);border-radius:0 6px 6px 0}' +
 '.asb-src{display:flex;align-items:center;gap:.4rem;border:1px solid var(--xz-bd,#ddd);' +
 'border-radius:9px;padding:.3rem .55rem;font-size:.72rem;color:var(--xz-txt,#333);' +
 'background:var(--xz-bg,#fff)}' +
@@ -495,6 +554,10 @@
 'border-radius:9px;cursor:pointer;padding:.3rem .6rem;font-size:.74rem;' +
 'color:var(--xz-txt,#333);font-family:inherit}' +
 '.asb-act:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
+/* 错误动作成组（P0-4）：.asb-act 自带 align-self:flex-start，两个按钮直接
+   并列会各占一行；套一层 flex 让「重试 / 报障」读起来是一组出路。 */
+'.asb-err-acts{align-self:flex-start;display:flex;gap:.35rem;flex-wrap:wrap}' +
+'.asb-err-acts .asb-act{align-self:auto}' +
 '.asb-ft{display:flex;gap:.45rem;padding:.55rem .8rem;border-top:1px solid var(--xz-bd,#ddd);' +
 'flex-shrink:0;align-items:flex-end}' +
 '.asb-in{flex:1;resize:none;border:1px solid var(--xz-bd,#ddd);border-radius:10px;' +
@@ -556,7 +619,9 @@
 '.asb-st.verified{background:rgba(99,102,241,.14);color:#6366f1}' +
 '.asb-tk-note{font-size:.7rem;color:#059669}' +
 '.asb-mine-bar{display:flex;justify-content:flex-end}' +
-'.asb-empty{color:var(--xz-muted,#888);font-size:.78rem;text-align:center;padding:1.2rem 0}' +
+/* 空态 padding 1.2rem→.7rem（P2）：380x560 面板里固定件已吃掉约 29%，
+   一句「还没有记录」独占 62px 会把真正该被看见的引导挤下去。 */
+'.asb-empty{color:var(--xz-muted,#888);font-size:.78rem;text-align:center;padding:.7rem 0}' +
 '.asb-live .tip-toggle{display:none!important}' +
 '.asb-spot{position:fixed;z-index:10000;pointer-events:none;border:3px solid var(--xz-accent,#4f6ef7);' +
 'border-radius:12px;box-shadow:0 0 0 100vmax rgba(15,23,42,.38),0 0 22px rgba(99,102,241,.65);' +
@@ -1464,8 +1529,9 @@
         $panel.classList.toggle('asb-snapped', hit);
       } else {
         b = { x: start.x, y: start.y, w: start.w, h: start.h };
+        /* 西/北边拉伸要同时改原点：只改宽高会让对边跟着跑，手感完全不对 */
         /* 东/南方向就地封顶：交给 clampBox 去夹的话，它为了不出界会**上推
-           原点**，表现成「拉右下角结果整个窗往上跳」（实测 y 跳了 102px）。
+           原点**，表现成「拉右下角结果整个窗往上跳」（G4b 实测 y 跳了 102px）。
            缩放的心理契约是「按住的那个角跟手、对角钉死」，宁可拉不动也不能跳。 */
         if (dir.indexOf('e') > -1) {
           b.w = Math.min(start.w + dx, window.innerWidth - start.x - 8);
@@ -1473,7 +1539,6 @@
         if (dir.indexOf('s') > -1) {
           b.h = Math.min(start.h + dy, window.innerHeight - start.y - 8);
         }
-        /* 西/北边拉伸要同时改原点：只改宽高会让对边跟着跑，手感完全不对 */
         if (dir.indexOf('w') > -1) {
           b.w = start.w - dx;
           if (b.w < PANEL_MIN_W) { b.w = PANEL_MIN_W; }
@@ -1496,8 +1561,11 @@
       if (_rsRaf) { cancelAnimationFrame(_rsRaf); _rsRaf = 0; rsFlush(); }
       $panel.classList.remove('asb-moving', 'asb-snapped');
       rsShield(false);
-      /* **没真的动过就不落盘**：单击标题栏（很常见）否则会把当时的位置固化成
-         「自定义几何」，面板从此不再跟随球，用户完全不知道自己做了什么。 */
+      /* **没真的动过就不落盘**，两个理由都不是洁癖：
+         ① 单击标题栏（很常见）会把当时的位置固化成「自定义几何」，面板从此
+            不再跟随球，用户完全不知道自己做了什么；
+         ② 双击复位时，两次 pointerup 各存一遍，其中一次落在 dblclick 之后，
+            把刚清掉的存储又写回去——复位看起来「点了没反应」（G7 实测）。 */
       if (!moved) { return; }
       /* 存**落地后的真实几何**（clamp/min 都已生效），别存计算中间值 */
       savePanelBox(currentBox());
@@ -1508,14 +1576,15 @@
     node.addEventListener('pointerup', onUp);
     node.addEventListener('pointercancel', onUp);
     /* 刻意**不**在 pointerdown 上 preventDefault：那会阻断浏览器合成 click /
-       dblclick。文本选中由 `.asb-moving{user-select:none}` 压住。 */
+       dblclick，双击标题栏复位就永远收不到（G7 实测）。文本选中由
+       `.asb-moving{user-select:none}` 压住，移动中再 preventDefault 即可。 */
   }
 
   /* 键盘可达（无障碍不是可选项：手柄能 Tab 到就必须能用键盘操作）。
      方向键 16px 一档，Shift 加速到 48px，Esc 复位。 */
   function onHandleKey(e, dir) {
     var step = e.shiftKey ? 48 : 16;
-    var b = currentBox();
+    var b = currentBox(), used = true;
     var dx = e.key === 'ArrowRight' ? step : (e.key === 'ArrowLeft' ? -step : 0);
     var dy = e.key === 'ArrowDown' ? step : (e.key === 'ArrowUp' ? -step : 0);
     if (e.key === 'Escape') { resetPanelBox(); return true; }
@@ -1528,8 +1597,7 @@
       if (dir.indexOf('n') > -1) { b.h -= dy; b.y += dy; }
     }
     savePanelBox(applyPanelBox(b));
-    syncGeoReset();
-    if (e.preventDefault) { e.preventDefault(); }
+    if (used && e.preventDefault) { e.preventDefault(); }
     return true;
   }
 
@@ -1542,7 +1610,8 @@
     beacon('asb_panel_reset');
   }
 
-  /* 复位按钮只在「几何被改过」时露出（没改过就没有可复位的东西）。 */
+  /* 复位按钮只在「几何被改过」时露出（没改过就没有可复位的东西）。
+     每次拖拽落地与每次渲染都同步一次，别让它与真实状态脱节。 */
   function syncGeoReset() {
     try {
       var b = $panel.querySelector('.asb-hd-rst');
@@ -1550,10 +1619,11 @@
     } catch (e) { /* ignore */ }
   }
 
-  /* 自己认双击，不等浏览器合成 dblclick：拖拽用了 setPointerCapture，两次点击
-     的 target 会被重定向到捕获元素，Chromium 判定「不是同一个目标」就**根本不
-     合成 dblclick**——真实鼠标序列下复位永远不触发（合成事件却能过，所以静态
-     测试看不出来）。触摸屏对 dblclick 的支持也参差。 */
+  /* 自己认双击，不等浏览器合成 dblclick。两个实测理由：
+     ① 拖拽用了 setPointerCapture，两次点击的 target 会被重定向到捕获元素，
+        Chromium 判定「不是同一个目标」就**根本不合成 dblclick**——真实鼠标
+        序列下复位永远不触发（合成事件却能过，所以静态/合成测试看不出来）；
+     ② 触摸屏对 dblclick 的支持本来就参差，自己数更稳。 */
   var _tapT = 0, _tapX = 0, _tapY = 0;
   function isDoubleTap(e) {
     var now = Date.now();
@@ -1564,22 +1634,6 @@
     return dbl;
   }
 
-  /* 八向手柄。只有右下角进 Tab 序：八个都进会让键盘用户每次穿过面板都要按
-     八下 Tab，而缩放用一个角就够。 */
-  function rsHandlesHtml() {
-    var dirs = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'];
-    var out = '';
-    for (var i = 0; i < dirs.length; i++) {
-      var d = dirs[i];
-      out += '<div class="asb-rs ' + d + '" data-rs="' + d + '"' +
-        (d === 'se'
-          ? ' tabindex="0" role="separator" aria-orientation="vertical"' +
-            ' aria-label="' + esc(t('resize_aria')) + '"'
-          : ' aria-hidden="true"') + '></div>';
-    }
-    return out;
-  }
-
   function wirePanelGestures() {
     /* 事件委托：renderPanel() 每次重写 innerHTML，直接绑元素会在重渲染后失效 */
     $panel.addEventListener('pointerdown', function (e) {
@@ -1587,7 +1641,7 @@
       if (h) { startPanelGesture(e, h.getAttribute('data-rs') || 'se', h);
                return; }
       var hd = e.target && e.target.closest ? e.target.closest('.asb-hd') : null;
-      /* 标题栏里的按钮（关闭/配对/复位）不能变成拖拽把手 */
+      /* 标题栏里的按钮（关闭/配对）不能变成拖拽把手 */
       if (hd && !(e.target.closest && e.target.closest('button'))) {
         if (isDoubleTap(e)) { resetPanelBox(); return; }
         startPanelGesture(e, '', hd);
@@ -1598,6 +1652,11 @@
       if (h) { onHandleKey(e, h.getAttribute('data-rs') || 'se'); return; }
       if (e.target && e.target.classList &&
           e.target.classList.contains('asb-hd')) { onHandleKey(e, ''); }
+    });
+    /* 双击标题栏＝复位（与侧栏宽度手柄同一手势语义，不必另学） */
+    $panel.addEventListener('dblclick', function (e) {
+      if (e.target && e.target.closest && e.target.closest('.asb-hd') &&
+          !e.target.closest('button')) { resetPanelBox(); }
     });
   }
 
@@ -1694,6 +1753,7 @@
       /* 面板隐藏时 offsetWidth 恒 0 → 滑块只能在开的这一刻定位 */
       syncModes();
       loadPair();
+      loadPc();
       if (S.tab === 'mine') { loadTickets(); }
       var inp = $panel.querySelector('.asb-in');
       if (inp && window.innerWidth > 480) {
@@ -1778,24 +1838,43 @@
   }
 
   /* ────────────────────────────────────────────── 面板渲染 */
+  /* 八向手柄。只有右下角进 Tab 序（tabindex=0）：八个都进会让键盘用户每次
+     穿过面板都要按八下 Tab，而缩放用一个角就够——其余留给指针操作。 */
+  function rsHandlesHtml() {
+    var dirs = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'];
+    var out = '';
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i];
+      var kb = d === 'se';
+      out += '<div class="asb-rs ' + d + '" data-rs="' + d + '"' +
+        (kb ? ' tabindex="0" role="separator" aria-orientation="vertical"' +
+              ' aria-label="' + esc(t('resize_aria')) + '"'
+            : ' aria-hidden="true"') + '></div>';
+    }
+    return out;
+  }
+
   function renderPanel() {
     if (!MODES.chat) {
       defineMode('chat', { order: 10, icon: '💬', labelKey: 'mode_chat',
                            mount: mountChat });
     }
     $panel.innerHTML = '' +
-      '<div class="asb-hd">' +
+      '<div class="asb-hd" tabindex="0" title="' + esc(t('move_hint')) + '">' +
       '<span class="asb-hd-ic">' + ICON_SPARK + '</span>' +
       '<span class="asb-hd-name">' + esc(dispName()) + '</span>' +
       /* 复位入口做成**看得见的按钮**而不是只靠双击：双击这类手势发现性极差
-         （没人知道可以双击）。只在几何被改过时出现——没自定义过就没有「复位」
-         可言，常驻只是噪音。 */
+         （没人知道可以双击），且在指针捕获场景下浏览器未必合成 dblclick。
+         只在几何被改过时出现——没自定义过就没有「复位」可言，常驻只是噪音。 */
       '<button type="button" class="asb-hd-rst" data-act="rstgeo" hidden' +
       ' title="' + esc(t('reset_geo')) + '" aria-label="' +
       esc(t('reset_geo')) + '">⤢</button>' +
       '<button type="button" class="asb-hd-pair" data-act="pair" title="' +
       esc(t('pair_off')) + '" aria-label="' + esc(t('pair_t')) +
       '">📱<i aria-hidden="true"></i></button>' +
+      '<button type="button" class="asb-hd-pc" data-act="pc" hidden title="' +
+      esc(t('pc_off')) + '" aria-label="' + esc(t('pc_t')) +
+      '">💻<i aria-hidden="true"></i></button>' +
       '<button type="button" class="asb-x" data-act="close" aria-label="' +
       esc(t('close')) + '">✕</button></div>' +
       '<div class="asb-modes" role="radiogroup" aria-label="' +
@@ -1830,6 +1909,7 @@
     renderSubtabs();
     switchTab('chat', true);
     syncPair();
+    syncPc();
   }
 
   function reportOn() {
@@ -1942,6 +2022,39 @@
       .then(function () { S.pairBusy = false; });
   }
 
+  /* ── 标题栏电脑操控状态点（实施91 P1-1）──
+     电脑操控是一种能力，但同手机走「通道式」头栏入口（不占模式条第四格）。
+     读 /api/assistant/pc/machines：enabled=false / 端点未装载 → 键保持隐藏；
+     有在线受控机 → 绿点。绝不做死按钮：读不到就静默藏起来。 */
+  function syncPc() {
+    var btn = $panel && $panel.querySelector('.asb-hd-pc');
+    if (!btn) { return; }
+    if (!S.pcEnabled) { btn.hidden = true; return; }
+    btn.hidden = false;
+    var on = (S.pcOnlineN || 0) > 0;
+    btn.classList.toggle('on', on);
+    btn.title = on ? t('pc_on') : t('pc_off');
+  }
+
+  function loadPc() {
+    if (S.pcBusy) { return; }
+    S.pcBusy = true;
+    fetch('/api/assistant/pc/machines')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        S.pcEnabled = !!(j && j.ok && j.enabled);
+        var ms = (j && j.machines) || [];
+        var n = 0;
+        for (var i = 0; i < ms.length; i++) {
+          if (ms[i] && !ms[i].revoked && ms[i].online) { n += 1; }
+        }
+        S.pcOnlineN = n;
+        syncPc();
+      })
+      .catch(function () { /* 静默：键保持隐藏 */ })
+      .then(function () { S.pcBusy = false; });
+  }
+
   function modeApi(id) {
     return {
       lang: S.lang,
@@ -1950,7 +2063,22 @@
       close: function () { togglePanel(false); },
       /* 姊妹组件状态变了（如开/退教学）→ 让球重挂当前模式内容 */
       refresh: function () { if (S.tab === id) { switchTab(id, true); } },
+      /* 把文本填进本模式的输入框并聚焦，**刻意不提交**（P1-3）：示例任务是
+         引导，用户得先看清自己要说什么再按发送——尤其「替我做」会改设置。
+         与 ask 同属公共 API 层，姊妹组件不必去摸球的 DOM。 */
+      fill: function (text, focus) {
+        return fillComposer(text, focus);
+      },
     };
+  }
+
+  function fillComposer(text, focus) {
+    var inp = $panel && $panel.querySelector('.asb-in');
+    if (!inp) { return false; }
+    inp.value = String(text == null ? '' : text);
+    autoGrow(inp);
+    if (focus !== false) { inp.focus(); }
+    return true;
   }
 
   function renderTools() {
@@ -2123,24 +2251,30 @@
   /* 问答模式首屏（P1-3）：欢迎三卡已删除——问功能=输入框、报障=次级页签、
      学操作=模式条第二格，三张卡是同一批入口的第三次重复，只是在挤首屏。
      chips 由 5 条减为 **3 条本页相关**，「全站高频」搬去「常问」面板。 */
-  /* 「确定答得上」的问法池：介绍屏与拒答建议**共用同一个源**，否则两处会
-     各自漂移，出现「介绍屏推的问题，拒答时却说答不上」这种自相矛盾。
-     exclude 是刚问过的那一句——把用户刚被拒的问题再推一遍是最糟的建议。 */
+  /* 「确定答得上」的问题池——首屏引导与拒答建议**共用这一个源**，两处各写
+     一份必然漂移（一处推荐的问法另一处答不上，比不推荐更糟）。
+     boot.chips 来自 qa_log 里 answered=1 且没被 👎 的高频问句，所以点进去
+     必有结果；无历史时回落到三条**实测过分数**的问法（2026-08-28 用生产
+     语料量过：中文 133/121/266、英文 38/55/49，全部过 min_score=35）。
+     exclude＝刚问过的那句，避免「答不上来」之后又推荐同一句。 */
   function answerableChips(exclude) {
-    var pool = (S.boot && S.boot.chips && S.boot.chips.length)
-      ? S.boot.chips.slice(0)
+    var raw = (S.boot && S.boot.chips && S.boot.chips.length)
+      ? S.boot.chips
       : (S.lang === 'en'
         ? ['How to send a voice message', 'How to report a bug',
            'How to clear inbox filters']
         : ['怎么发语音', '在哪提交 bug', '收件箱筛选怎么清空']);
-    var ex = String(exclude || '').trim();
+    var ex = String(exclude == null ? '' : exclude).trim();
     var out = [];
-    for (var i = 0; i < pool.length && out.length < 3; i++) {
-      if (String(pool[i] || '').trim() !== ex) { out.push(pool[i]); }
+    for (var i = 0; i < raw.length && out.length < 3; i++) {
+      var c = String(raw[i] == null ? '' : raw[i]).trim();
+      if (c && c !== ex) { out.push(c); }
     }
     return out;
   }
 
+  /* 拒答时的出路（P1 2026-08-29）：与首屏 chip 同源、同点击链（data-q →
+     sendQuery），所以零新 handler、零新样式。池子空就什么都不加。 */
   /* 依据徽标：doc 走既有「来源」块（引用得到具体条目），product/general 只能
      给一句出处说明——但**必须给**，否则用户无从判断这句话有多少分量。 */
   function basisHtml(basis) {
@@ -2151,9 +2285,9 @@
       '">' + esc(t(key)) + '</div>';
   }
 
-  /* 拒答建议：优先用**本次真检索到的条目**（meta.sources），它们是离这个问题
-     最近的东西，服务端本来就送过来了、前端此前直接丢掉；按页面热度推
-     「怎么发语音」那种毫不相干的建议正是老板说的「没区别」。
+  /* 拒答建议（2026-08-29 P0-3）：优先用**本次真检索到的条目**（meta.sources），
+     它们是离这个问题最近的东西，服务端本来就送过来了、前端此前直接丢掉；
+     按页面热度推「怎么发语音」那种毫不相干的建议正是老板说的「没区别」。
      检索空了才回落到「确定答得上」的高频池。 */
   function suggestHtml(q, meta) {
     var near = [];
@@ -2164,13 +2298,25 @@
         if (ti) { near.push(ti); }
       }
     } catch (e0) { near = []; }
-    var list = near.length ? near : answerableChips(q);
-    if (!list.length) { return ''; }
+    if (near.length) {
+      var hn = '<div class="asb-chips asb-sugg"><span class="asb-chips-t">' +
+        esc(t('suggest_near_t')) + '</span>';
+      for (var m = 0; m < near.length; m++) {
+        hn += '<button type="button" class="asb-chip" data-sugg="1" data-q="' +
+          esc(near[m]) + '">' + esc(near[m]) + '</button>';
+      }
+      return hn + '</div>';
+    }
+    var chips = answerableChips(q);
+    if (!chips.length) { return ''; }
+    /* data-sugg 有两个作用：埋点与首屏 chip 分流（保住 asb_chip「本页常问
+       点击」的语义纯净），以及给门禁一个精确选择器——首屏也有 .asb-chips，
+       只按 class 断言分不清是哪一组。 */
     var h = '<div class="asb-chips asb-sugg"><span class="asb-chips-t">' +
-      esc(t(near.length ? 'suggest_near_t' : 'suggest_t')) + '</span>';
-    for (var m = 0; m < list.length; m++) {
+      esc(t('suggest_t')) + '</span>';
+    for (var i = 0; i < chips.length; i++) {
       h += '<button type="button" class="asb-chip" data-sugg="1" data-q="' +
-        esc(list[m]) + '">' + esc(list[m]) + '</button>';
+        esc(chips[i]) + '">' + esc(chips[i]) + '</button>';
     }
     return h + '</div>';
   }
@@ -2376,7 +2522,12 @@
       /* 首个 delta 到达后打字机接管气泡，计秒立即让位（否则互相覆写） */
       if (el.getAttribute('data-live') === '1') { clearInterval(tick); return; }
       var s = Math.round((Date.now() - tick0) / 1000);
-      if (s >= 3) { el.textContent = t('thinking') + ' ' + s + 's'; }
+      /* 8 秒后换成带预期的文案（P1-4）：qa_log 里存过 latency_ms=37638 的
+         真实案例，长静默期用户需要知道「这是正常的」，而不是猜是否卡死。 */
+      if (s >= 3) {
+        el.textContent = (s >= 8 ? t('thinking_long') : t('thinking')) +
+          ' ' + s + 's';
+      }
     }, 1000);
     fetch('/api/assistant/query', {
       method: 'POST',
@@ -2415,7 +2566,7 @@
       }
       replaceThinking(thinkId,
         '<div class="asb-msg err">' + esc(e && e.message || t('err_net')) +
-        '</div>' + retryHtml());
+        '</div>' + errActionsHtml(q));
       orbFlash();
     }).then(function () {
       clearInterval(tick);
@@ -2424,9 +2575,16 @@
     });
   }
 
-  function retryHtml() {
-    return '<button type="button" class="asb-act" data-act="retry">↻ ' +
-      esc(t('retry')) + '</button>';
+  /* 错误态动作（P0-4）：只给「重试」是把用户关在死路里——机制性故障重试
+     多少次都一样（2026-08-28 实录：坐席连点两次重试，两次同一个错）。报障
+     复用既有 to-report 链（切报障页 + 预填问题原文），零新后端零新键位。 */
+  function errActionsHtml(q) {
+    return '<div class="asb-err-acts">' +
+      '<button type="button" class="asb-act" data-act="retry">↻ ' +
+      esc(t('retry')) + '</button>' +
+      '<button type="button" class="asb-act" data-act="to-report" data-q="' +
+      esc(String(q || S.lastQ || '')) + '">' + esc(t('err_report')) +
+      '</button></div>';
   }
 
   function replaceThinking(thinkId, html) {
@@ -2452,19 +2610,27 @@
       else if (ev.ev === 'err') { errEv = ev; }
     }
     if (errEv || (!answer && !done)) {
+      /* meta 已到＝服务端收下并开始处理了，之后才断的（最常见是流在等 LLM
+         首 token 的静默窗里被中间层掐断——见 assistant_routes 的 keepalive
+         段）。这种情况说「网络异常」是在冤枉用户的网络，必须如实分开。 */
+      var emsg = (errEv && errEv.text) ||
+        (meta ? t('err_nostream') : t('err_net'));
       replaceThinking(thinkId,
-        '<div class="asb-msg err">' +
-        esc((errEv && errEv.text) || t('err_net')) + '</div>' + retryHtml());
+        '<div class="asb-msg err">' + esc(emsg) + '</div>' +
+        errActionsHtml(q));
       orbFlash();
       return;
     }
+    /* 拒答（零命中 或 NO_BASIS 哨兵）判据——**必须在渲染来源之前算**：
+       服务端的 meta 先于答案发出，所以哨兵路径下 sources 早就在线上了，
+       但那些条目**恰恰是被判定为回答不了这个问题的**。照旧列出来会读成
+       「它找到了却不肯说」——老板 2026-08-28 实录截图正是这一幕：一句
+       「没有找到可靠依据」下面挂着「为什么提示『在此使用/保持待机』」。 */
     var noBasis = !!(done && done.answered === false);
     var html = '<div class="asb-msg ai">' + mdLite(answer) + '</div>';
     /* 无文档依据但答了（产品事实卡 / 通用知识）→ 标一行出处。doc 依据走下面
        的「来源」块，不重复标。 */
     if (!noBasis && done) { html += basisHtml(done.basis); }
-    /* 拒答时**不列来源**：那几条正是被判定「答不了」的东西，摆出来等于
-       「我不知道，但这里有三个不相关的链接」，比不给更让人困惑。 */
     if (!noBasis && meta && meta.sources && meta.sources.length) {
       html += '<div class="asb-srcs"><span class="asb-srcs-t">' +
         esc(t('src_title')) + '</span>';
@@ -2504,7 +2670,8 @@
        ① meta.report_hint —— 问句里有故障词（报错/闪退…），答前就知道；
        ② done.answered === false —— 服务端判定「没依据」，**答完才知道**：
           零命中，或 LLM 自认参考条目回答不了（NO_BASIS 哨兵）。
-       只看 ① 会漏掉「答不上来」这个最该给出路的时刻。 */
+       只看 ① 会漏掉「答不上来」这个最该给出路的时刻。
+       （noBasis 已在上面来源渲染前算好。） */
     if (reportOn() && ((meta && meta.report_hint) || noBasis)) {
       html += '<button type="button" class="asb-act" data-act="to-report" ' +
         'data-q="' + esc(q) + '">' + esc(t('to_report')) + '</button>';
@@ -3146,8 +3313,10 @@
     var act = el.getAttribute('data-act');
     /* 快捷 chip：只有 data-q 没有 data-act（to-report 两者都有，act 优先） */
     if (!act && el.getAttribute('data-q')) {
-      /* 「大家常问」用量——P1 要把它搬去独立面板，搬之前得知道它有没有人点 */
-      beacon('asb_chip');
+      /* 「大家常问」用量——P1 要把它搬去独立面板，搬之前得知道它有没有人点。
+         拒答建议单独记 asb_sugg_pick：它是「答不上来之后还能不能救回来」的
+         唯一读数，混进 asb_chip 会同时污染两个指标。 */
+      beacon(el.getAttribute('data-sugg') ? 'asb_sugg_pick' : 'asb_chip');
       sendQuery(el.getAttribute('data-q'));
       return;
     }
@@ -3159,6 +3328,15 @@
       beacon('asb_pair_open');
       if (window.XZAgent && typeof window.XZAgent.pair === 'function') {
         try { window.XZAgent.pair(); } catch (e6) { /* ignore */ }
+      }
+      return;
+    }
+    /* 标题栏电脑操控：受控机弹层归 XZAgent（同一条 /api/assistant/pc 链），
+       组件缺席则静默——不做死按钮。 */
+    if (act === 'pc') {
+      beacon('asb_pc_open');
+      if (window.XZAgent && typeof window.XZAgent.pc === 'function') {
+        try { window.XZAgent.pc(); } catch (e7) { /* ignore */ }
       }
       return;
     }

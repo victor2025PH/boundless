@@ -155,6 +155,108 @@ def test_startup_check_ignores_broken_yaml(tmp_path):
     assert _dup_issues(check_config({}, config_path=str(p))) == []
 
 
+# ─────────────────── 安全去重（P0 2026-08-29，「重复键挡全线重启 12h」事故后补） ──
+
+
+def test_details_flag_identical_single_line_dup_fixable():
+    """事故原型：backfill 把同四条 `k: v` 写了两遍——字节相同的单行标量后现
+    ＝可安全删除（PyYAML 本就取最后一个，两行又一样，删掉语义零变化）。"""
+    from src.utils.yaml_duplicates import find_duplicate_key_details
+
+    text = ("voice:\n"
+            "  profile_map:\n"
+            "    marcus_wei: m1\n"
+            "    zhao_laoshi: z1\n"
+            "    marcus_wei: m1\n")
+    det = find_duplicate_key_details(text)
+    assert len(det) == 1
+    d = det[0]
+    assert d["path"] == "voice.profile_map.marcus_wei"
+    assert d["fixable"] is True
+    assert d["line"] == 5 and d["first_line"] == 3
+
+
+def test_details_value_diff_and_block_dup_not_fixable():
+    """值不同 / 块级重复——选错边＝丢配置，绝不自动修。"""
+    from src.utils.yaml_duplicates import find_duplicate_key_details
+
+    diff = find_duplicate_key_details("a: 1\nb: 2\na: 3\n")
+    assert diff[0]["fixable"] is False
+    block = find_duplicate_key_details(
+        "platform_login:\n  telegram:\n    x: 1\n  telegram:\n    y: 2\n")
+    assert block[0]["fixable"] is False
+    # 流式映射一行多键：删整行会连别的键一起删——不可修
+    flow = find_duplicate_key_details("m: {a: 1, a: 1}\n")
+    assert flow[0]["fixable"] is False
+    # 同行注释不同＝字节不同——不可修（注释也是运维语义）
+    cmt = find_duplicate_key_details("k: v  # one\nz: 1\nk: v  # two\n")
+    assert cmt[0]["fixable"] is False
+
+
+def test_dedupe_removes_identical_lines_and_keeps_comments():
+    from src.utils.yaml_duplicates import (
+        dedupe_identical_lines,
+        find_duplicate_keys,
+    )
+
+    text = ("# overlay 头注释\n"
+            "voice:\n"
+            "  profile_map:\n"
+            "    a: 1  # 说明\n"
+            "    b: 2\n"
+            "    a: 1  # 说明\n"
+            "    b: 2\n")
+    res = dedupe_identical_lines(text)
+    assert [d["path"] for d in res["removed"]] == [
+        "voice.profile_map.a", "voice.profile_map.b"]
+    assert res["remaining"] == []
+    assert find_duplicate_keys(res["text"]) == []
+    assert "# overlay 头注释" in res["text"]
+    assert res["text"].count("a: 1") == 1 and "# 说明" in res["text"]
+    assert res["text"].endswith("\n")
+
+
+def test_dedupe_mixed_keeps_manual_cases():
+    """可修的删掉、不可修的如实留下（残余按修后文本重算，行号不撒谎）。"""
+    from src.utils.yaml_duplicates import dedupe_identical_lines
+
+    text = ("k: v\n"
+            "k: v\n"
+            "x: 1\n"
+            "x: 2\n")
+    res = dedupe_identical_lines(text)
+    assert [d["path"] for d in res["removed"]] == ["k"]
+    assert [d["path"] for d in res["remaining"]] == ["x"]
+    assert res["remaining"][0]["fixable"] is False
+    assert res["text"].splitlines() == ["k: v", "x: 1", "x: 2"]
+    # 无可修项 → 文本原样返回
+    res2 = dedupe_identical_lines("x: 1\nx: 2\n")
+    assert res2["text"] == "x: 1\nx: 2\n" and res2["removed"] == []
+
+
+def test_cli_fix_writes_backup_and_signals_remaining(tmp_path, monkeypatch,
+                                                     capsys):
+    """--fix 契约：真删才写盘 + 先落 .bak.dup-*；修后仍有重复 → rc=1。"""
+    m = _mod()
+    p = tmp_path / "config.local.yaml"
+    p.write_text("k: v\nk: v\nx: 1\nx: 2\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["x", "--fix", str(p)])
+    assert m.main() == 1                      # x 值不同仍需人工 → 1
+    out = capsys.readouterr().out
+    assert "REMOVED" in out and "MANUAL" in out
+    assert p.read_text(encoding="utf-8") == "k: v\nx: 1\nx: 2\n"
+    baks = list(tmp_path.glob("config.local.yaml.bak.dup-*"))
+    assert len(baks) == 1
+    assert baks[0].read_text(encoding="utf-8") == "k: v\nk: v\nx: 1\nx: 2\n"
+
+    # 干净收口：全部可修 → rc=0；无重复的文件零触碰（不写备份）
+    p2 = tmp_path / "clean.yaml"
+    p2.write_text("a: 1\nb: 2\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["x", "--fix", str(p2)])
+    assert m.main() == 0
+    assert not list(tmp_path.glob("clean.yaml.bak.dup-*"))
+
+
 def test_live_instance_configs_have_no_duplicates():
     """本机实例配置必须干净——那是真正在跑的那份。
 

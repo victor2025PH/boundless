@@ -66,6 +66,39 @@ def _ritual_angle(mode: str, salt: str, now: Optional[float] = None) -> str:
     return pool[zlib.crc32(f"{salt}#{day}".encode("utf-8")) % len(pool)]
 
 
+# ── 反「AI 问候腔」硬约束（实施84 P0-5c，2026-08-29 老板点名「问候要像真人，
+# 不要虚假的问候像AI一样」）──────────────────────────────────────────────────
+# LLM 中文问候的最大公约数是祝愿体/客服体/加油体（「新的一天元气满满」「记得吃
+# 早餐多喝水」「愿你有个好心情」）——真人给朋友发消息从不这么说话，几天下来
+# 客户一眼识破规律。恒定注入到所有主动 mode 的组稿出口（本模块是 ritual /
+# checkin / follow_up / milestone 全管线唯一框定层）；节日/生日用弱化版——
+# 「祝你生日快乐」是正当用法，只禁贺卡腔不禁祝福本身。
+_ANTI_BOT_NOTE = (
+    "（说人话，别带机器腔：禁用「新的一天」「元气满满」「记得吃早餐/多喝水/"
+    "照顾好自己/注意身体」「愿你…/祝你…」这类祝愿腔、客服腔和加油打气的空话；"
+    "波浪号至多一个，emoji 至多一个且别放句首；两句话别写成工整对仗。"
+    "就写你会顺手敲出来的话，随意一点、甚至没头没尾一点都行。）\n"
+)
+_ANTI_BOT_NOTE_MILESTONE = (
+    "（说人话，别带机器腔：祝福要具体、像你自己会说的话，禁用「愿你的每一天"
+    "都…」式贺卡腔和排比句；波浪号至多一个，emoji 至多一个。）\n"
+)
+
+
+def _brevity_day(salt: str, now: Optional[float] = None) -> bool:
+    """「超短消息日」确定性掷签（约 3 天 1 天；实施84 P0-5c）。
+
+    真人问候的长度本来就忽长忽短——有时就发「起了没」三个字；天天 30 字
+    满格排比反而是机器特征。同会话同日恒定（15min tick 重试不换档、与切入角
+    轮换同哲学），明日自动重掷。只作用于 ritual/gentle_checkin 且无悬空话头时
+    （接茬有社交义务在身，不配超短档）。
+    """
+    day = time.strftime(
+        "%Y-%m-%d",
+        time.localtime(now if now is not None else time.time()))
+    return zlib.crc32(f"brev#{salt}#{day}".encode("utf-8")) % 3 == 0
+
+
 def _silence_header(name: str, plan: Dict[str, Any]) -> str:
     """沉默回访类开场的框定：按真实沉默时长说人话，短档明令禁「久别重逢」腔。"""
     bucket = str(plan.get("gap_bucket") or "")
@@ -227,6 +260,17 @@ def build_proactive_prompt(
         f"要求：只输出要发出去的那一句话本身，口语化、温暖、自然，{length}，"
         f"不要解释、不要加引号、不要署名。\n"
     )
+    # 反 AI 问候腔（实施84 P0-5c，恒定注入；节日/生日弱化版——祝福本身正当）
+    prompt += (_ANTI_BOT_NOTE_MILESTONE if mode.startswith("milestone_")
+               else _ANTI_BOT_NOTE)
+    # 超短消息日（仅问候类 mode、无悬空话头）：形态日变是真人感的一半——
+    # 内容再好，天天等长等结构照样被听出规律。
+    if (mode.startswith("ritual_") or mode == "gentle_checkin") and not pend:
+        if _brevity_day(str(plan.get("conversation_id") or ""), now):
+            prompt += (
+                "（今天就发一条超短的：5～12个字，像顺手敲出来的一句，"
+                "上面的切入方向可用可不用，一个短句甚至一个词也行。）\n"
+            )
     # 反编造共同回忆硬约束（P1 2026-08-03 神马搜索事故主防线）：可以聊此刻所见所感、
     # 可以说"想到你了"，但**绝不能凭空断言你们一起经历过的具体往事**——只有确有记载
     # 的事才能提。没有依据时不许写「你以前…/我们上次…/还记得我们…」这类断言（真人

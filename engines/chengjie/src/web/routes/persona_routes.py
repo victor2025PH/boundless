@@ -1843,6 +1843,57 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         return {"ok": True, "account_id": account_id, "profile_id": profile_id,
                 "config_saved": saved, "runner_hot_reloaded": reloaded}
 
+    # ── 统一账号人设绑定：运行时注册表平台（#78，2026-08-30）──────────────
+    # 桌面 QR/扫码登录的 LINE/WA/Messenger 账号活在 platform_accounts，config
+    # 里没有——tg/mrpa/wa 三个 config 型 assign 端点都写不到它们。本端点与
+    # #61 的 TG registry 分支同一写法：meta.persona_ids+persona_id 双键、
+    # merge_meta=True 铁律（整块替换会抹掉 session_string，2026-07-23 实锤）。
+    _REGISTRY_ASSIGN_PLATFORMS = {"line", "whatsapp", "messenger",
+                                  "zalo", "instagram"}
+
+    @app.post("/api/personas/registry-account/{platform}/{account_id}/assign-profile")
+    async def api_registry_assign_profile(
+            platform: str, account_id: str, request: Request,
+            _=Depends(auth_dep)):
+        """给运行时注册表账号（LINE/WA/Messenger…）指定/更换/清除人设。
+
+        Body: ``{"profile_id": "..."}``——空串=清除。telegram 刻意不在白名单
+        （tg-account 端点已带 registry 分支，双入口会分叉）。
+        """
+        _check_write_role(request)
+        plat = str(platform or "").strip().lower()
+        if plat not in _REGISTRY_ASSIGN_PLATFORMS:
+            raise HTTPException(404, f"platform '{plat}' not assignable here")
+        body = await request.json()
+        profile_id = str(body.get("profile_id") or "").strip()
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        if profile_id and pm.get_persona_by_id(profile_id) is None:
+            raise HTTPException(404, f"profile '{profile_id}' not found")
+        pids = [profile_id] if profile_id else []
+        try:
+            from src.integrations.account_registry import get_account_registry
+            _reg = get_account_registry()
+        except Exception:
+            raise HTTPException(503, tr(
+                request, "err.svc.config_manager_not_ready"))
+        _row = _reg.get(plat, account_id)
+        if not _row or str(_row.get("status") or "") == "removed":
+            raise HTTPException(
+                404, f"{plat} account '{account_id}' not found")
+        _reg.upsert(plat, account_id,
+                    meta={"persona_ids": pids,
+                          "persona_id": (profile_id or "")},
+                    merge_meta=True)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(
+                actor, "registry_assign_profile",
+                f"platform={plat} account={account_id} "
+                f"profile={profile_id or '(cleared)'} storage=registry")
+        return {"ok": True, "platform": plat, "account_id": account_id,
+                "profile_id": profile_id, "storage": "registry"}
+
     # ── P7-C: Promote mrpa-imported profile to operator-owned ────
 
     @app.post("/api/personas/profiles/{profile_id}/promote")
@@ -1889,19 +1940,12 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
 
         # Telegram accounts
         tg_accounts: list = []
-        _tg_default_unconfigured = False
         try:
             from src.client.telegram_account_registry import TelegramAccountRegistry
             _tg_cfg = (getattr(config_manager, "config", None) or {}).get("telegram", {})
             _reg = TelegramAccountRegistry.from_config(_tg_cfg)
             for acc in _reg.all_contexts():
                 primary_pid = acc.persona_ids[0] if acc.persona_ids else ""
-                if (acc.account_id == "default" and not acc.api_id
-                        and not acc.api_hash and not acc.phone_number):
-                    # config 回落单账号占位（无任何凭证）：桌面纯 QR 部署下它不是
-                    # 真账号——若运行时注册表有真账号则丢弃（#61 截图里那个孤零零
-                    # 的 default 就是它）；没有真账号时保留（117 单账号语义不变）。
-                    _tg_default_unconfigured = True
                 tg_accounts.append({
                     "account_id": acc.account_id,
                     "label": acc.label or acc.account_id,
@@ -1925,15 +1969,28 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                 if not _aid or _aid in _seen_aids:
                     continue
                 _pids = parse_persona_ids(_row.get("meta"))
+                _meta = _row.get("meta") if isinstance(_row.get("meta"), dict) else {}
                 tg_accounts.append({
                     "account_id": _aid,
-                    "label": str(_row.get("label") or "").strip() or _aid,
+                    # #78 二轮：主标签链 运营label → 账号自身昵称(self_name，
+                    # account_self_profile 富集) → 裸 id 兜底——skuio 原图 929
+                    # 六行全是裸数字 id 的根因就是这里没吃 self_name。
+                    "label": (str(_row.get("label") or "").strip()
+                              or str(_meta.get("self_name") or "").strip()
+                              or _aid),
+                    "username": str(_meta.get("self_username") or "").strip(),
                     "persona_ids": _pids,
                     "active_profile": (pm.get_persona_by_id(_pids[0])
                                        if _pids else None),
                     "source": "registry",
                 })
-            if _rt_rows and _tg_default_unconfigured:
+            # #78 二轮（钧 0831 原图 889 / skuio 929 两票）：运行时注册表有真账号
+            # 时 config 回落 default 槽一律隐藏——桌面包的主会话经 unify_login_registry
+            # 本就以真实身份进注册表（如 tg-desktop 行），default 槽只是它的别名，
+            # 与真实账号行重复占位且「清除」语义不明。一轮的判据还额外要求 default
+            # 槽「零凭证」，而桌面包 config 内嵌 api_id → 那个判据永假、伪行常驻。
+            # 无注册表账号的单账号部署（117 旧形态）default 仍保留。
+            if _rt_rows:
                 tg_accounts = [a for a in tg_accounts
                                if a.get("account_id") != "default"]
         except Exception:
@@ -1946,15 +2003,22 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         try:
             from src.integrations.messenger_rpa.account_pool import AccountRegistry
             _mrpa_cfg = (getattr(config_manager, "config", None) or {}).get("messenger_rpa", {})
-            _mreg = AccountRegistry.from_config(_mrpa_cfg, config_path="")
-            for ctx in _mreg.all_contexts():
-                primary_pid = ctx.persona_ids[0] if ctx.persona_ids else ""
-                mrpa_accounts.append({
-                    "account_id": ctx.account_id,
-                    "label": ctx.label or ctx.account_id,
-                    "persona_ids": ctx.persona_ids,
-                    "active_profile": pm.get_persona_by_id(primary_pid) if primary_pid else None,
-                })
+            if not isinstance(_mrpa_cfg, dict):
+                _mrpa_cfg = {}
+            # #78-②（0830 钧实锤「Messenger default 占位混排」）：messenger_rpa
+            # 未启用且未配 accounts 时，from_config 的 case-A 会凭空回退出一个
+            # 无凭证 default 占位——测试机没接 Messenger RPA 也看到幽灵行。
+            # 与 WA 分支同判据：enabled 或显式配了 accounts 才枚举。
+            if _mrpa_cfg.get("enabled") or _mrpa_cfg.get("accounts"):
+                _mreg = AccountRegistry.from_config(_mrpa_cfg, config_path="")
+                for ctx in _mreg.all_contexts():
+                    primary_pid = ctx.persona_ids[0] if ctx.persona_ids else ""
+                    mrpa_accounts.append({
+                        "account_id": ctx.account_id,
+                        "label": ctx.label or ctx.account_id,
+                        "persona_ids": ctx.persona_ids,
+                        "active_profile": pm.get_persona_by_id(primary_pid) if primary_pid else None,
+                    })
             # Count reply_profiles imported into PM (marked with _mrpa_source)
             _rp_cfg = _mrpa_cfg.get("reply_profiles") or {}
             _rp_list = _rp_cfg.get("profiles") or [] if isinstance(_rp_cfg, dict) else []
@@ -2008,9 +2072,58 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         except Exception:
             pass
 
+        # ── #78-①（0830 钧实锤「LINE 已登录账号完全缺席」）：运行时注册表
+        # 其余平台合并。桌面 QR/扫码登录的 LINE/WA/Messenger 账号都活在
+        # platform_accounts（编排器真相），#61 只合并了 TG——其余平台的账号
+        # 在「应用到」弹窗永远看不见。与 #61 同一读取口径（meta.persona_ids，
+        # parse_persona_ids 容忍历史形态）；removed 行不进枚举。
+        line_accounts: list = []
+        try:
+            from src.integrations.account_registry import (
+                get_account_registry, parse_persona_ids)
+            _rt_reg = get_account_registry()
+
+            def _registry_rows(_plat: str) -> list:
+                out = []
+                for _row in _rt_reg.list(_plat):
+                    if str(_row.get("status") or "") == "removed":
+                        continue
+                    _aid = str(_row.get("account_id") or "").strip()
+                    if not _aid:
+                        continue
+                    _pids = parse_persona_ids(_row.get("meta"))
+                    _meta = (_row.get("meta")
+                             if isinstance(_row.get("meta"), dict) else {})
+                    out.append({
+                        "account_id": _aid,
+                        # #78 二轮：label → self_name → id（LINE 裸 token 当主标签
+                        # 完全不可读，self_name 是登录时富集的账号自身昵称）。
+                        "label": (str(_row.get("label") or "").strip()
+                                  or str(_meta.get("self_name") or "").strip()
+                                  or _aid),
+                        "username": str(_meta.get("self_username") or "").strip(),
+                        "persona_ids": _pids,
+                        "active_profile": (pm.get_persona_by_id(_pids[0])
+                                           if _pids else None),
+                        "source": "registry",
+                    })
+                return out
+
+            line_accounts = _registry_rows("line")
+            _seen_wa = {str(a.get("account_id") or "") for a in wa_accounts}
+            wa_accounts.extend(
+                r for r in _registry_rows("whatsapp")
+                if r["account_id"] not in _seen_wa)
+            _seen_mrpa = {str(a.get("account_id") or "") for a in mrpa_accounts}
+            mrpa_accounts.extend(
+                r for r in _registry_rows("messenger")
+                if r["account_id"] not in _seen_mrpa)
+        except Exception:
+            pass
+
         # Profiles in active use (across all accounts + chat bindings)
         used_ids: set = set()
-        for acc in tg_accounts + mrpa_accounts + wa_accounts:
+        for acc in tg_accounts + mrpa_accounts + wa_accounts + line_accounts:
             used_ids.update(acc["persona_ids"])
         for p in bindings.values():
             pid = p.get("id", "") if isinstance(p, dict) else ""
@@ -2057,6 +2170,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             "mrpa_reply_profiles": mrpa_reply_profiles,
             "mrpa_imported_count": mrpa_imported_count,
             "wa_accounts": wa_accounts,
+            "line_accounts": line_accounts,   # #78：LINE 运行时账号（registry）
             "profiles_in_use": list(used_ids),
             "domain_persona_name": pm._domain_persona.get("name", "") if pm._domain_persona else "",
             "last_changed_at": last_changed_iso,

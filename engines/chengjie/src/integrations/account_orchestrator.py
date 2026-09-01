@@ -619,7 +619,9 @@ class AccountOrchestrator:
         # 「I'm 我 …」直发英文客户）；②呼格纠正（peer_calls_you→call_peer 互换 +
         # call_peer 近形 baba→babe + 人设名当客户呼格剥除——#105 语音问候链、
         # #96 Steven 案的文本面同款病）；③铆定语言兜底（B67「发→X」explicit ×
-        # 文字系统冲突 → 注入的翻译器修正；HOLD=放弃本条，无兜底纪律）。
+        # 文字系统冲突 → 注入的翻译器修正；HOLD=放弃本条，无兜底纪律；
+        # #133 起无显式铆定时回落客户语言画像——主动关怀/SOP/目标推进等一切
+        # proactive 链经此总出口，纯中文再也到不了英文客户）。
         # **人工路径绝不动**（origin=manual 是坐席亲手打的字/人审后的终稿）；
         # 开关随 companion.outbound_text_guard.{enabled,lang_mix,vocative,
         # lang_pin}（默认开）。
@@ -1157,7 +1159,22 @@ class TelegramProtocolWorker:
         if kind == "image":
             msg = await self.client.send_photo(target, media_path, caption=caption)
         elif kind == "voice":
-            msg = await self.client.send_voice(target, media_path, caption=caption)
+            # #130：显式 duration（三层探测，纯 python 兜底）——见
+            # telegram_companion_worker 同分支注释；探测不出＝旧行为不带。
+            _vdur: Optional[int] = None
+            try:
+                from src.client.voice_sender import probe_audio_duration_ms
+                _vms = probe_audio_duration_ms(media_path)
+                if _vms and _vms > 0:
+                    _vdur = max(1, int(round(_vms / 1000.0)))
+            except Exception:
+                _vdur = None
+            if _vdur:
+                msg = await self.client.send_voice(
+                    target, media_path, caption=caption, duration=_vdur)
+            else:
+                msg = await self.client.send_voice(
+                    target, media_path, caption=caption)
         elif kind == "video":
             msg = await self.client.send_video(target, media_path, caption=caption)
         elif kind == "sticker":

@@ -187,6 +187,10 @@ $gates = @(
     # copilot 词典键可解析 + /copilot 资源两宿主 ?v= 一致（2026-08-22 cp.app.h_nurture
     # 裸键事故沉淀；与 test_cp_app_i18n_keys 互锁，本条独有面=组件静态字面量+缓存戳）
     'tests/test_copilot_i18n_keys.py',
+    # overlay 覆盖（2026-08-28）：cp-i18n.js 加了键忘重跑生成器 → 繁中坐席静默
+    # 回落简中，此前零红灯（test_cp_i18n_parity 只查 cp-i18n.js 内部 zh↔en）。
+    # 另守「overlay 化石键」与机翻语种(vi/th/id)覆盖债的显式登记。
+    'tests/test_cp_i18n_overlay_coverage.py',
     'tests/test_admin_route_inventory.py',
     'tests/test_ops_overview.py',
     # Messenger web sign-in is a CROSS-LANGUAGE contract with no compile-time guard:
@@ -302,6 +306,10 @@ $gates = @(
     # 面板不变量：意图埋点（漏斗分母，删一枚就少一段真相且不报错）、画布令牌
     # 单源、入口行不得退回 dashed / hint 不得退回截断。
     'tests/test_assistant_beacons.py',
+    # DOM 动作总线（实施88 P0）：锚点清单钉死+手势/等级白名单（发送/删除类
+    # 控件混进注册表=灾难面）、每条锚点有模板物证（控件改名后流星飞向空气
+    # 且不报错）、LLM 只能提名 id 绝不透传选择器。
+    'tests/test_assistant_ui_anchors.py',
     # 报障闭环：报障别名必须在告警关注集里（不在=「点了报障没人收到」而自检
     # 判 healthy）、前端状态表必须等于后端 VALID_STATUSES、零命中必给报障入口。
     'tests/test_bug_report_loop.py',
@@ -311,9 +319,60 @@ $gates = @(
     # 问答检索质量：BM25 命中率下限 + 阈值校准余量 + 诚实拒答率。语料一改就
     # 能立刻知道有没有把原本能答的问题搞丢（补关键词有交叉挤占，实测过）。
     'tests/test_assistant_qa_eval.py',
+    # ── 报障值守闭环（实施81）：工单处置台 + 值守工具链 ──
+    # 处置台三件套接线（页面路由/nav/i18n 状态标签==VALID_STATUSES）+ /reply
+    # 端点行为（发送失败绝不回写台账）+ 回访文案 fix_note/update_hint 段 +
+    # 批量分诊不含 fixed（放开＝批量 @报障人刷屏）。
+    'tests/test_bug_tickets_console.py',
+    # 值守回复 CLI：群别名/幂等键自动唯一（固定 id 重跑被 send_dedup 静默吞）。
+    'tests/test_duty_reply.py',
+    # 值守缺位看门狗：误报路径全覆盖（员工亲号入站=已应答等）+ 4h 升级重提。
+    'tests/test_duty_watchdog.py',
+    # 首响 SLA 口径：burst 按首条计等待、未应答超龄也计超时（不做假账）。
+    'tests/test_duty_sla_report.py',
+    # 已知问题周公示：标题净化/窗口过滤/每节封顶（公示不是台账转储）。
+    'tests/test_duty_known_issues.py',
+    # update_hint 写 overlay 必须保注释（ruamel），失败拒写不降级整写。
+    'tests/test_duty_update_hint.py',
+    # 工单↔B案对账：台账无已修标记绝不建议 mark_fixed（把待开发说成已修=撒谎）。
+    'tests/test_duty_reconcile.py',
+    # ── impl85 173报障群派工修复批（2026-08-29） ──
+    # LINE 只出不进 P1：位点拉取兜底（首跑不回灌/去重/SSE 休眠/119 刷新/10004 告警）。
+    'tests/test_line_pull_sync.py',
+    # 「查看≠接管」触发面 ratchet：查看类路由禁写档位（#45 钧拍板口径）。
+    'tests/test_takeover_trigger_surface.py',
+    # 防复读拦截后换说法重试：重写稿必再过守卫，仍雷同维持跳过（只严不松）。
+    'tests/test_dup_rewrite_retry.py',
+    # 「无界科技·在线顾问」客户形态默认隐藏（widget 公网面不受污染）。
+    'tests/test_web_entry_hidden.py',
+    # 通知中心去客户聊天消息：默认不进铃铛/不弹预览，系统类恒放行。
+    'tests/test_notify_center_denoise.py',
+    # 自动修复派单：agent 工单书只读约束 + 产出五段契约 + 派单过滤排序。
+    'tests/test_duty_autofix_dispatch.py',
+    # 官方 bot 发送通道：只许出站（更新流归官网 webhook，字面量扫描）+ 自咬环
+    # 守卫（bot 公示的 bug 词不得被自己登记成工单）+ 回落语义。
+    'tests/test_bug_bot.py',
     # 「没依据」哨兵：命中时用户必须一个字都看不到、answered 必须记真话、
     # 哨兵出现在正文中间不得误伤。含端到端真跑路由两例。
     'tests/test_assistant_no_basis.py',
+    # ── 小智「Windows 操控 runner」（实施91 P1-0/P1-1，2026-08-30）──
+    # 全是纯逻辑/mock 传输/静态接线（非 Windows 也跑，uiautomation 软依赖缺库
+    # 自动降级），秒级。守本子系统的结构性安全防线（改一处漏接=写通道失守）：
+    #   pairing —— 机器白名单（LLM 只提名 id、绝不接受裸 URL）+ 踢下线立即生效 +
+    #              token 绝不出现在任何列表返回；
+    #   client  —— 目标只来自白名单换出 + 失败诚实回落（离线/超时不崩不假成功）+
+    #              token 只在请求头不外泄；
+    #   pc_actions —— pc_inspect 只读工具集 ⊆ runner READONLY_TOOLS 且不含动作工具、
+    #              plan/planner 拒非白名单机器/非只读工具、前端 execStep runner 分支
+    #              + pc_saw_* 双语（动作面 launch/click 结构性未实现＝P1-2 占位断言）。
+    'tests/test_runner_pairing.py',
+    'tests/test_runner_client.py',
+    'tests/test_pc_actions.py',
+    'tests/test_pc_runner.py',
+    'tests/test_pc_trust.py',
+    'tests/test_pc_vision.py',
+    'tests/test_pc_click_target.py',
+    'tests/test_pc_runner_preflight.py',
     # 静默吞异常 ratchet（2026-08-28 建账，基线 2,052 处 / 21 模块）：宽异常是刻意
     # 设计（绝不阻塞主链），问题在**无声**——handler 体只有 pass/return，既不记日志
     # 也不兜底，故障只能靠用户投诉暴露。不强制清存量，只锁「不许再涨」；未登记模块
@@ -323,7 +382,19 @@ $gates = @(
     # auth_token＝管理员级；新增可选 web_admin.worker_token 只放行 /api/internal/*，
     # 越界 403。留空＝旧行为。13 例覆盖未配置等价性/隔离属性/向后兼容/三道坏配置降级，
     # 外加「11 个内部端点全在作用域内」的覆盖面自证（防有人挪前缀后侧车静默 403）。
-    'tests/test_worker_token_scope.py'
+    'tests/test_worker_token_scope.py',
+    # 配置面门禁三件套（2026-08-28 中枢「云端优先·算力重分配」执行单期间发现的覆盖缺口）：
+    # LAN 拓扑迁移（翻译/嵌入/回落链/视觉端点换机器）是**高频**运维动作，一次要同时改
+    # 生产 overlay + 引擎根 overlay + 桌面包内置配置三层；而这三个门禁此前**不在任何线的
+    # sweep 清单里**，即「改配置」这条最常走的路一直没有广域门禁覆盖。同批实证：
+    # test_key_contract_gates 的 pacing_tempo 红（生产者在 desktop/build/
+    # lite_persona_overrides.yaml，而该门禁只扫 example/profiles_runtime/cloud_light 三份）
+    # 因为没人 sweep 它，长期无人认领——与 test_workspace_i18n_render 同一种腐烂。
+    # translation_engines 尤其要在场：引擎序/端点/api 模式（native vs openai）全由配置驱动，
+    # 写错只在真实翻译调用时才炸，且会被 EngineRouter 的故障转移吞成「悄悄换了引擎」。
+    'tests/test_translation_engines.py',
+    'tests/test_deploy_profiles.py',
+    'tests/test_config_check.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -570,6 +641,18 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: inbox identity bar, real browser (tools\verify_inbox_identity.py) ==='
     python (Join-Path $engineRoot 'tools\verify_inbox_identity.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Asset centre identity + lifecycle actions (2026-08-28 P0). Static gates can
+    # prove "no dumb buttons / keys resolve", NOT "17 cards actually render human
+    # names instead of 44-char LINE MIDs", "the overflow menu opens", or "delete
+    # only appears on historical accounts". The template hot-reloads straight to
+    # production, so those runtime facts need a real browser. STRICTLY read-only:
+    # opens the menu and reads the DOM, never clicks rename/restore/purge/export.
+    # Missing playwright / unreachable instance => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: asset centre identity+actions, real browser (tools\verify_asset_center_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_asset_center_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Composer language-mismatch warning bar (2026-08-15 D batch). Foreign-language
@@ -878,16 +961,8 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_goal_form_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
-    # /welcome first-run wizard (WP-2 2026-08-16): five-step state machine +
-    # persona_create_wizard modal hosted on a non-personas page + resume/skip
-    # persistence + send-to-self payload contract (chat_key='me'). All lifecycle
-    # behavior static gates cannot see; same fixture style as verify_goal_form_ui
-    # (file:// page, offline-rendered Jinja content, fake fetch, zero instance
-    # dependency). Missing playwright => SKIP exit 0.
-    Write-Output ''
-    Write-Output '=== -Full: welcome onboarding wizard, fixture browser (tools\verify_onboarding_ui.py) ==='
-    python (Join-Path $engineRoot 'tools\verify_onboarding_ui.py')
-    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+    # /welcome first-run wizard gate removed 2026-08-31: onboarding retired
+    # (routes unregistered, tool deleted; resurrection gate = tests/test_onboarding_retired.py).
 
     # Messenger 应用内登录（表单中继）渲染器 (2026-08-13): connect_relay.js 的 render 薄壳——
     # form 态同步骤不清屏（登录表单被 2.5s 轮询清空是致命 UX，cp-goal 草稿幸存事故同类）、
@@ -948,6 +1023,23 @@ if ($Full) {
     python (Join-Path $engineRoot 'tools\verify_cp_voice_ui.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
+    # cp-image panel (P0 2026-08-28): the three same-screen "do not trust this UI"
+    # defects were all invisible to static gates - album thumbnails 400'd and left
+    # broken-image boxes while the card still claimed "4 photos, click to send";
+    # the "GPU busy" banner keyed off VRAM occupancy (permanently true) instead of
+    # queue depth; explanatory text stayed 10px. This fixture pins the rendered
+    # behaviour: broken thumbs get dropped + count told honestly + whole block
+    # hidden when none survive, warm-up hint follows the SELECTED engine's real
+    # gate (14 vs 18), zero infra jargon in visible copy, config TTL refresh does
+    # not wipe a half-typed prompt, computed font-size floor 12px. Includes two
+    # self-proof assertions (reverts the component to pre-fix behaviour at runtime
+    # and asserts the checks go red). Same fixture style as cp-voice: file:// +
+    # real component + stub client, zero instance deps, zero GPU burn.
+    Write-Output ''
+    Write-Output '=== -Full: right-rail AI image panel, fixture browser (tools\verify_cp_image_ui.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_cp_image_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
     # Messenger in-app login (form-relay) driveTick state machine (B64 二期):
     # submit acknowledgement / verifying escalation / password eye / Enter-submit /
     # checkpoint+locked screenshot views. Fixture browser (stub fetchJson, zero
@@ -1002,6 +1094,22 @@ if ($Full) {
     Write-Output ''
     Write-Output '=== -Full: AI assistant ball, fixture browser (tools\verify_assistant_ui.py) ==='
     python (Join-Path $engineRoot 'tools\verify_assistant_ui.py')
+    if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
+
+    # Same panel, but on the LIVE instance (2026-08-28 incident class). The fixture
+    # gate above stubs fetch, so it stayed 100% green through five days of the Q&A
+    # chain being TOTALLY DEAD in production: the real stack adds login/RBAC, the
+    # multi-window coordinator, real BM25 corpus, a real streaming LLM, 7 layers of
+    # BaseHTTPMiddleware and the compression layer - and the fault lived in exactly
+    # that seam (body_size_limit_middleware faked a disconnect / then self-recursed,
+    # killing the SSE generator 0.4s after meta). Lesson: "component logic is sound"
+    # and "an agent can actually get an answer" are different claims; only this one
+    # proves the second. Asks ONE real question (burns one LLM call + one qa_log row
+    # - that IS the Q&A ledger); never triggers an agent action, never files a
+    # report, never sends a message. Missing playwright / unreachable => SKIP exit 0.
+    Write-Output ''
+    Write-Output '=== -Full: AI assistant panel, LIVE instance (tools\verify_assistant_live.py) ==='
+    python (Join-Path $engineRoot 'tools\verify_assistant_live.py')
     if ($LASTEXITCODE -ne 0) { $code = $LASTEXITCODE }
 
     # Sidebar resize perf rebuild (P0 2026-08-17): pointer-capture drag that must

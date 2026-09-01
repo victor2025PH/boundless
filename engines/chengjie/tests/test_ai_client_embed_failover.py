@@ -194,3 +194,40 @@ def test_embed_clients_fast_fail_construction(monkeypatch):
                 "读超时须有界（bge-m3 热态亚秒级，别继承 60s 大读超时）"
         except ImportError:
             assert float(to) <= 30.0
+
+
+# ── 熔断日志可读性（B126 排障教训，2026-08-28）───────────────────────────────
+# 端点回整页 HTML（网关缺路由的 404 页 / 反代 504 页）时，SDK 把整页塞进异常，
+# 于是每条熔断记录都是几 KB 的 `<!DOCTYPE html>…`：诊断包被撑大，而「这是网页
+# 不是 JSON」这个关键判据反倒要人工翻。压成一行 + 点名端点。
+
+def test_embed_exc_brief_strips_html_and_truncates():
+    html = ('Error code: 404 - <!DOCTYPE html><html lang="zh-CN"><head>'
+            '<title>404</title></head><body><div>' + "x" * 4000 + "</div></body></html>")
+    brief = AIClient._embed_exc_brief(Exception(html))
+    assert len(brief) <= AIClient._EMBED_EXC_BRIEF_CHARS + 1
+    assert "HTML" in brief, "必须点明「响应体是网页」——这就是路由缺失的判据"
+    assert "<html" not in brief.lower() and "<div" not in brief.lower(), "标签须剥掉"
+
+
+def test_embed_exc_brief_keeps_connection_errors_readable():
+    brief = AIClient._embed_exc_brief(OSError("[WinError 10060] connect timed out"))
+    assert "OSError" in brief and "10060" in brief
+    assert "HTML" not in brief, "连接类失败不该被误标成网页响应"
+    assert AIClient._embed_exc_brief(None) == "unknown"
+
+
+async def test_embed_failure_log_names_the_endpoints(caplog):
+    """熔断那条 WARNING 必须带端点清单：诊断包里才分得清「哪个端点在坏」。"""
+    import logging
+
+    bad_a = _FakeEmbClient(fail=True)
+    bad_b = _FakeEmbClient(fail=True)
+    c = _client_with([("http://e1:11434/v1", bad_a), ("http://e2:11434/v1", bad_b)])
+    with caplog.at_level(logging.WARNING, logger=c.logger.name):
+        for _ in range(AIClient._EMBED_FAIL_THRESHOLD):
+            c._embed_url_bad_until.clear()   # 每轮都真打两个端点
+            assert await c.embed(["你好"]) == []
+    warned = [r.getMessage() for r in caplog.records if "熔断" in r.getMessage()]
+    assert warned, "连败达阈值必须打一条 WARNING"
+    assert "e1:11434" in warned[-1] and "e2:11434" in warned[-1]

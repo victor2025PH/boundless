@@ -151,6 +151,11 @@ _EMITTED_ALERTS = [
      {"light": "red", "problems": [{"name": "DB", "detail": "连接失败"}]}),
     ("reply_risk", "human_reply_risk",
      {"agent_id": "u1", "risk_level": "high", "risk_reasons": ["辱骂"], "text_preview": "..."}),
+    # 实施93c：客户首点 CTA 追踪短链（cta_links.handle_click 首点发布）——
+    # 引导模型最热跟进信号，business 受众，webhook 直推老板/运营
+    ("cta_click", "cta_clicked",
+     {"conversation_id": "telegram:a1:5433982810", "target_id": "t1",
+      "target_name": "官网落地页", "token": "abc12345", "ts": 1756000000.0}),
     # 2026-08-18：报障群 AI 值守（bug_intake）——新 P0/P1 工单 + 危机词压制转人工
     ("bug_intake", "bug_intake_alert",
      {"kind": "ticket", "chat_id": "-1004290740529", "ticket_id": 7,

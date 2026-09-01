@@ -41,6 +41,20 @@ ZH = {
     "asb.agent.disabled": "「替我做」智能体未启用",
     "asb.agent.goal_empty": "请用一句话描述要做什么",
     "asb.agent.llm_down": "AI 规划服务暂不可用，请稍后再试",
+    # Windows 操控 runner /api/assistant/pc/*（实施91 P1）
+    "asb.pc.disabled": "「电脑操控」未启用（管理员可在配置里开启）",
+    # 电脑操控写动作（实施91 P1-2）：确认后 apply 的成败提示
+    "asb.pc.act_done": "已在电脑上执行",
+    "asb.pc.act_failed": "电脑上没执行成",
+    # run_command 回显（实施91 P2-B）
+    "asb.pc.cmd_done": "命令已执行（退出码 {code}）",
+    # 视觉定位点击（实施91 P3-B）
+    "asb.pc.click_target_done": "已按描述点击「{target}」",
+    "asb.pc.not_located": "没在画面里定位到「{target}」——换个说法，或先让我看看这台电脑",
+    "asb.pc.vision_disabled": "视觉定位点击未启用（管理员可在配置里开启 pc_runner.vision）",
+    # 信任档（实施91 P2-C）
+    "asb.pc.trust_disabled": "信任档未启用（管理员可在配置里开启 pc_runner.trust）",
+    "asb.pc.machine_unavailable": "该电脑不在白名单或已被踢下线",
     "asb.agent.plan_failed": "没能生成可靠的计划，请换个说法再试",
     # 手机扫码操控 /api/assistant/pair*（实施58 P4）
     "asb.pair.revoked": "手机配对已断开或过期，请重新扫码",
@@ -131,6 +145,20 @@ EN = {
     "asb.act.confirm_expired": "Confirmation expired or already used, please retry",
     "asb.act.apply_failed": "Apply failed: {detail}",
     "asb.act.undo_missing": "Undo record missing or expired",
+    # Windows control runner /api/assistant/pc/* (impl91 P1)
+    "asb.pc.disabled": "PC control is not enabled (an admin can turn it on "
+                       "in config)",
+    "asb.pc.act_done": "Done on the PC",
+    "asb.pc.act_failed": "Could not run it on the PC",
+    "asb.pc.cmd_done": "Command ran (exit {code})",
+    "asb.pc.click_target_done": "Clicked \"{target}\" by description",
+    "asb.pc.not_located": "Could not locate \"{target}\" on screen — rephrase, or "
+                          "let me inspect the PC first",
+    "asb.pc.vision_disabled": "Visual click is not enabled (an admin can turn on "
+                              "pc_runner.vision in config)",
+    "asb.pc.trust_disabled": "Trusted mode is not enabled (an admin can turn on "
+                             "pc_runner.trust in config)",
+    "asb.pc.machine_unavailable": "That PC is not whitelisted or was kicked",
     # agent /api/assistant/agent/* (impl58 P2)
     "asb.agent.disabled": "The do-it-for-me agent is not enabled",
     "asb.agent.goal_empty": "Please describe the goal in one sentence",

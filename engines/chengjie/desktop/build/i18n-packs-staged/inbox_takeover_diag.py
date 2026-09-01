@@ -20,6 +20,8 @@ ZH = {
     "inbox.takeover.banner_rearm": "，{min} 分钟无人工操作将自动接回",
     # P0-A1 2026-08-19 横幅治理：整条蓝带收敛为轻量 pill 的短文案（旧 banner 键保留兼容）
     "inbox.takeover.pill": "🙋 AI 已让位（{time} 起转人工）",
+    # impl85 阶段2（#45 拍板）：横幅写明触发原因——只有人工发出内容才让位，查看不算
+    "inbox.takeover.pill_cause": "，因本会话有人工发送",
     "inbox.takeover.pill_eta": "，约 {min} 分钟后自动接回",
     "inbox.takeover.resume_btn": "让 AI 接回",
     "inbox.takeover.resumed": "AI 已接回本会话（{mode}）",
@@ -120,6 +122,7 @@ EN = {
     "inbox.takeover.banner": "🙋 AI stepped aside: after your manual send at {time}, this conversation switched to human (AI no longer auto-replies here)",
     "inbox.takeover.banner_rearm": "; AI re-arms automatically after {min} min without agent activity",
     "inbox.takeover.pill": "🙋 AI stepped aside (manual since {time})",
+    "inbox.takeover.pill_cause": ", triggered by a manual send in this chat",
     "inbox.takeover.pill_eta": ", auto re-arms in ~{min} min",
     "inbox.takeover.resume_btn": "Let AI take over again",
     "inbox.takeover.resumed": "AI re-armed for this conversation ({mode})",

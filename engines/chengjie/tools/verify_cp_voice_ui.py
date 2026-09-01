@@ -33,6 +33,18 @@ P0 2026-08-05 随「预览清不掉 / 生成入口迷失 / 连点双发」修复
   V15 生成在途切会话 → 结果作废不回写新会话（epoch 代际防串）
   V16 生成可取消（代际作废复用同一机制）：立即复位、在途结果静默丢弃
   V17 字数计 400（与服务端试听上限同口径）：超限红字+生成禁用，回限自动恢复
+  V18 译声（P0-V2b 2026-08-30）：默认 target_lang='auto' 跟随会话客户语言、
+      预览渲染译稿行（所见即所念）、开关翻转=预览过期且请求不再带目标语、
+      发送事件带 translated 分桶、cp-voice-xl-changed 广播给宿主
+  V19 宿主目标语偏好（P0-V2c）：__cpVoiceXlPref 显式语种覆盖 auto（坐席
+      「我的消息 → X」心智模型）、预告行即时显示、偏好换语言=预览过期
+  V21 回落原因分支（P0 2026-08-31 提示风暴复盘）：lang_unsupported 走 info
+      蓝条（刻意保护非故障）+「改发原文」一键出路（关跟随+自动重生成）+
+      顶部语种预告同因去重；通道故障才走「暂不可用」黄条
+  V22 降级发送显式确认：非克隆声发送前 confirm（取消=不发/确认=发/同会话
+      记住选择），「回落必须显式」不变量的强化承接
+  V23 疑似无声=真闸门：红条即禁发（title 带原因）、其他提示让位单条出口、
+      重新生成出正常音频自动解除
 
 用法::
 
@@ -67,8 +79,25 @@ window.__calls = { tts: [], send: [], profiles: 0 };
 window.__ttsDelayMs = 30;
 window.__ttsFail = false;
 window.__ttsFallback = false;
+window.__ttsFbReason = '';   // P0 2026-08-31 回落原因分支（lang_unsupported/quota/…）
+window.__ttsFbLang = '';
+window.__ttsSilent = false;  // true=回真实静音 WAV（sniff 阻发闸场景）
 window.__sendDelayMs = 30;
 window.__sendFail = false;
+// 0.1s 静音 PCM16 WAV（可被 decodeAudioData 解码；峰值/RMS 双零 → 必判无声）
+window.__silentWavUrl = (() => {
+  const sr = 16000, n = 1600;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const w = (o, s2) => { for (let i = 0; i < s2.length; i++) v.setUint8(o + i, s2.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  let bin = ''; const u8 = new Uint8Array(buf);
+  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  return 'data:audio/wav;base64,' + btoa(bin);
+})();
 window.__stubClient = {
   async voiceProfiles() {
     window.__calls.profiles++;
@@ -80,11 +109,22 @@ window.__stubClient = {
     window.__calls.tts.push(JSON.parse(JSON.stringify(args || {})));
     await new Promise((r) => setTimeout(r, window.__ttsDelayMs));
     if (window.__ttsFail) return { ok: false, error: 'boom-503' };
-    return { ok: true, audio_url: 'data:audio/mp3;base64,AAAA',
+    // P0-V2b 译声契约模拟：带 target_lang 即回译稿三件套（与服务端响应同形）。
+    // #121：显式目标必须回显所请求的语种（真服务端如此），'auto' 才由「服务端」
+    // 解析成会话语言（夹具恒 ja）——旧夹具恒回 ja 与真实契约不符。
+    const xl = !!(args && args.target_lang);
+    const req = xl ? String(args.target_lang) : '';
+    return { ok: true,
+      audio_url: window.__ttsSilent ? window.__silentWavUrl : 'data:audio/mp3;base64,AAAA',
       filename: 'ttspreview-00aabbccdd.mp3',
+      voice_translated: xl,
+      spoken_text: xl ? 'こんにちは、теスト譯稿です' : '',
+      target_lang: xl ? (req === 'auto' ? 'ja' : req) : '',
       voice_meta: { persona_id: args && args.persona_id || '', provider: 'edge_tts',
         voice: 'zh-CN-XiaoxiaoNeural', emotion: 'warm',
-        fallback_from: window.__ttsFallback ? 'avatar_clone' : '' } };
+        fallback_from: window.__ttsFallback ? 'avatar_clone' : '',
+        fallback_reason: window.__ttsFallback ? (window.__ttsFbReason || '') : '',
+        fallback_lang: window.__ttsFallback ? (window.__ttsFbLang || '') : '' } };
   },
   async sendVoice(body) {
     window.__calls.send.push(JSON.parse(JSON.stringify(body || {})));
@@ -92,9 +132,13 @@ window.__stubClient = {
     if (window.__sendFail) return { ok: false, message: 'peer-offline' };
     // 所听即所发：带 preview_filename 即按复用命中回显（与服务端契约同语义）
     return { ok: true, reused_preview: !!(body && body.preview_filename),
-      voice_meta: { provider: 'edge_tts', emotion: 'warm' } };
+      voice_meta: { provider: 'edge_tts', emotion: 'warm',
+        translated: !!(body && body.target_lang),
+        target_lang: (body && body.target_lang) ? 'ja' : '' } };
   },
 };
+window.__xlEvents = 0;
+document.addEventListener('cp-voice-xl-changed', () => { window.__xlEvents++; });
 window.__sentEvents = 0;
 window.__sentDetails = [];
 document.addEventListener('cp-voice-sent', (ev) => {
@@ -123,8 +167,13 @@ window.snap = () => {
   const main = window.q('[data-role="gen-main"]');
   const send = window.q('[data-act="send"]');
   const note = window.q('[data-role="stale-note"]');
-  const hint = window.__el.shadowRoot.querySelector('.hint');
+  // P2 2026-08-30：状态/结果提示改写进专用 msg 行（旧 .hint 首匹配会命中可能
+  // hidden 的音色状态条 effstatus——提示写进看不见的元素）
+  const hint = window.q('[data-role="msg"]');
   return {
+    xlOn: !!(window.q('[data-role="xlfollow"]') || {}).checked,
+    xlHint: (window.q('[data-role="xlhint"]') || {}).textContent || '',
+    spokenVisible: !!window.q('.preview .pv-spoken'),
     boxHidden: !box || box.hidden, boxHtmlLen: box ? box.innerHTML.length : 0,
     boxStale: !!(box && box.classList.contains('stale')),
     mainLabel: main ? main.textContent : '', mainDisabled: !!(main && main.disabled),
@@ -151,6 +200,15 @@ window.waitIdle = async (ms) => {
     await new Promise((r) => setTimeout(r, 20));
   }
   return !window.__el._busy;
+};
+window.waitSilent = async (ms) => {   // sniff 是异步 fetch+decode，等红条出现
+  const t0 = Date.now();
+  while (Date.now() - t0 < (ms || 3000)) {
+    const n = window.q('[data-role="silent-note"]');
+    if (n && !n.hidden) return true;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  return false;
 };
 </script>
 </body></html>
@@ -184,7 +242,7 @@ class Checker:
         return 1 if fails else 0
 
 
-def run(page, ck: Checker) -> None:
+def run(page, ck: Checker, dlg) -> None:
     ev = page.evaluate
 
     # V1 初始渲染
@@ -282,7 +340,8 @@ def run(page, ck: Checker) -> None:
     ck.check("V9 cp-voice-sent 事件带 reused 分桶", det and det.get("reused") is True, str(det))
     page.wait_for_timeout(500)   # _hintResetMs=300 + 余量
     s = ev("snap()")
-    ck.check("V9 提示驻留后恢复默认引导", "先生成试听" in s["hintText"], s["hintText"])
+    ck.check("V9 提示驻留后清空（常驻引导语在静态行不重复）",
+             s["hintText"] == "", s["hintText"])
 
     # V10 发送在途连点只发一次
     ev(f"() => setText({TEXT_A!r})")
@@ -376,6 +435,180 @@ def run(page, ck: Checker) -> None:
     s = ev("snap()")
     ck.check("V17 空文本计数隐藏", s["cntHidden"])
 
+    # V18 译声（P0-V2b 2026-08-30）：默认跟随翻译（target_lang='auto'）、译稿行
+    # 可见、开关翻转=预览过期+请求不再带目标语、发送事件带 translated 分桶
+    s = ev("snap()")
+    ck.check("V18 跟随翻译默认开", s["xlOn"] is True)
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V18 试听请求带 target_lang='auto'", args.get("target_lang") == "auto", str(args))
+    ck.check("V18 译稿行可见（所见即所念）", s["spokenVisible"])
+    ev("() => { q('.preview [data-act=\"send\"]').click(); }")
+    ev("waitIdle()")
+    det = ev("window.__sentDetails[window.__sentDetails.length-1]")
+    body = ev("window.__calls.send[window.__calls.send.length-1]")
+    ck.check("V18 发送请求带 target_lang", body.get("target_lang") == "auto", str(body.get("target_lang")))
+    ck.check("V18 cp-voice-sent 带 translated 分桶", det and det.get("translated") is True, str(det))
+    s = ev("snap()")
+    ck.check("V18 发送成功提示带「已译成」", "已译成" in s["hintText"], s["hintText"])
+    # 开关翻转：已生成的试听立即过期（防「听中文原文、发出去外语」的所听非所发）
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    ev("""() => {
+      const cb = q('[data-role="xlfollow"]');
+      cb.checked = false;
+      cb.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    ck.check("V18 关跟随后预览过期+发送禁用",
+             s["boxStale"] and s["sendDisabled"] is True and s["noteVisible"])
+    ck.check("V18 关跟随后提示「按原文发声」", "按原文发声" in s["xlHint"], s["xlHint"])
+    xlev = ev("window.__xlEvents")
+    ck.check("V18 开关翻转广播 cp-voice-xl-changed", xlev >= 1, f"events={xlev}")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V18 关跟随后请求不带 target_lang", "target_lang" not in args, str(args))
+    ck.check("V18 关跟随后无译稿行", not s["spokenVisible"])
+    ev("""() => {
+      const cb = q('[data-role="xlfollow"]');
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    ck.check("V18 重新开跟随=语言维度再次过期", s["boxStale"] and s["sendDisabled"] is True)
+
+    # V19 宿主目标语偏好（P0-V2c 2026-08-30 用户实测修正）：坐席显式选了
+    # 「我的消息 → en」→ 请求带 target_lang='en'（auto 不得吃掉显式意图）、
+    # 预告行立即显示「将译成 英语」（不依赖后端 conv_lang）；偏好换语言=过期
+    ev("() => { q('.preview [data-act=\"clear-preview\"]').click(); }")
+    ev("() => { window.__cpVoiceXlPref = () => 'en'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V19 显式偏好预告「将译成 英语」", "英语" in s["xlHint"], s["xlHint"])
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V19 试听请求带显式 target_lang='en'",
+             args.get("target_lang") == "en", str(args))
+    ev("() => { window.__cpVoiceXlPref = () => 'ja'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V19 偏好换语言=预览过期+发送禁用",
+             s["boxStale"] and s["sendDisabled"] is True)
+    ev("() => { window.__cpVoiceXlPref = null; window.__el.refreshXl(); }")
+
+    # V20（#121 skuio 0831 原图 924）：宿主「我的消息 →」偏好**异步加载**出的值
+    # 与服务端试听时真实使用的目标语一致（auto 已解析成 ja）→ 绝不误报过期
+    # ——坐席什么都没改，'auto'→'ja' 只是表示层变化；换成真不同的语种才过期。
+    ev("() => { q('.preview [data-act=\"clear-preview\"]').click(); }")
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V20 无偏好时试听按 auto 请求", args.get("target_lang") == "auto", str(args))
+    ev("() => { window.__cpVoiceXlPref = () => 'ja'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V20 偏好迟到但与服务端已用目标一致=不误报过期",
+             (not s["boxStale"]) and s["sendDisabled"] is False,
+             f"stale={s['boxStale']} sendDisabled={s['sendDisabled']}")
+    ev("() => { window.__cpVoiceXlPref = () => 'en'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V20 偏好换成真不同语种=照常过期",
+             s["boxStale"] and s["sendDisabled"] is True)
+    ev("() => { window.__cpVoiceXlPref = null; window.__el.refreshXl(); }")
+
+    # V21（P0 2026-08-31 提示风暴复盘）：回落原因分支——语种改道是刻意保护，
+    # 走 info 蓝条（非警告色）+「改发原文」一键出路（关跟随翻译并自动重生成）；
+    # 顶部语种预告与该说明同因去重，同一件事只出现一处。
+    ev("() => { q('.preview [data-act=\"clear-preview\"]').click(); }")
+    ev("() => { window.__ttsFallback = true; window.__ttsFbReason = 'lang_unsupported';"
+       " window.__ttsFbLang = 'ja'; }")
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    fb = ev("""() => {
+      const n = q('[data-role="fallback-note"]');
+      return { has: !!n, hidden: n ? n.hidden : true,
+               reason: n ? (n.getAttribute('data-reason') || '') : '',
+               info: !!(n && n.classList.contains('info')),
+               btn: !!(n && n.querySelector('[data-act="xl-off-regen"]')) };
+    }""")
+    ck.check("V21 语种改道走 info 蓝条（data-reason=lang）",
+             fb["has"] and (not fb["hidden"]) and fb["info"] and fb["reason"] == "lang",
+             str(fb))
+    ck.check("V21 说明自带「改发原文」一键出路", fb["btn"])
+    s = ev("snap()")
+    ck.check("V21 顶部语种预告让位（同因去重）", s["xlHint"] == "", s["xlHint"])
+    ck.check("V21 语种改道不禁发（确认后可发）", s["sendDisabled"] is False)
+    n_tts = ev("window.__calls.tts.length")
+    ev("() => { q('.preview [data-act=\"xl-off-regen\"]').click(); }")
+    ev("waitIdle()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    s = ev("snap()")
+    ck.check("V21 一键出路=关跟随+按原文重生成",
+             ev("window.__calls.tts.length") == n_tts + 1
+             and "target_lang" not in args and s["xlOn"] is False, str(args))
+    ev("() => { window.__ttsFbReason = ''; window.__ttsFbLang = ''; }")
+
+    # V22（P1-3）：降级发送显式确认——取消=不发送；确认=发送；同会话记住选择
+    # 不重复骚扰（黄字警示挡不住肌肉记忆，确认弹层是「回落必须显式」的强化版）
+    ev(f"() => setText({TEXT_B!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    dlg["accept"] = False
+    dlg["count"] = 0
+    n_send = ev("window.__calls.send.length")
+    ev("() => { q('.preview [data-act=\"send\"]').click(); }")
+    ev("waitIdle()")
+    ck.check("V22 降级发送先确认（取消=不发送）",
+             dlg["count"] == 1 and ev("window.__calls.send.length") == n_send,
+             f"dialogs={dlg['count']} msg={dlg['last'][:40]}")
+    dlg["accept"] = True
+    ev("() => { q('.preview [data-act=\"send\"]').click(); }")
+    ev("waitIdle()")
+    ck.check("V22 确认后发送成功",
+             dlg["count"] == 2 and ev("window.__calls.send.length") == n_send + 1)
+    ev(f"() => setText({TEXT_B!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    ev("() => { q('.preview [data-act=\"send\"]').click(); }")
+    ev("waitIdle()")
+    ck.check("V22 同会话记住选择不再弹",
+             dlg["count"] == 2 and ev("window.__calls.send.length") == n_send + 2)
+
+    # V23（P0 2026-08-31）：疑似无声=真闸门——红条出现即禁发、回落说明让位
+    # （单条出口）；重新生成出正常音频自动解除。红字劝「不要发送」而按钮亮蓝
+    # 可点（0831 截图实录）就是本场景防的回归。
+    ev("() => { window.__ttsSilent = true; }")
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    ok_silent = ev("waitSilent(4000)")
+    s = ev("snap()")
+    ck.check("V23 无声产物红条+禁发", bool(ok_silent) and s["sendDisabled"] is True,
+             f"silent={ok_silent} sendDisabled={s['sendDisabled']}")
+    painted = ev("() => { const c = q('[data-role=\"wave\"]');"
+                 " return !!(c && c.getAttribute('data-painted') === '1'); }")
+    ck.check("V23 响度包络已绘制（可解码产物成像，无声=扁平基线）", painted)
+    fb_hidden = ev("() => { const n = q('[data-role=\"fallback-note\"]');"
+                   " return !n || n.hidden; }")
+    ck.check("V23 无声时回落说明让位（单条出口）", fb_hidden)
+    ev("() => { window.__ttsSilent = false; }")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    page.wait_for_timeout(400)   # 给 sniff 一拍：正常音频不得亮红条
+    silent_now = ev("() => { const n = q('[data-role=\"silent-note\"]');"
+                    " return !!(n && !n.hidden); }")
+    s = ev("snap()")
+    ck.check("V23 重新生成解除阻发", (not silent_now) and s["sendDisabled"] is False,
+             f"silent={silent_now} sendDisabled={s['sendDisabled']}")
+    ev("() => { window.__ttsFallback = false; }")
+
 
 def main() -> int:
     # Windows 控制台默认 GBK：emoji/生僻字直接 UnicodeEncodeError，统一改 UTF-8 输出
@@ -401,9 +634,21 @@ def main() -> int:
             page = browser.new_page(viewport={"width": 480, "height": 900})
             errors: List[str] = []
             page.on("pageerror", lambda e: errors.append(str(e)))
+            # 原生 confirm 弹层（V22 降级发送确认）：按 dlg["accept"] 接/拒并计数
+            dlg = {"accept": True, "count": 0, "last": ""}
+
+            def _on_dialog(d):
+                dlg["count"] += 1
+                dlg["last"] = str(d.message or "")
+                if dlg["accept"]:
+                    d.accept()
+                else:
+                    d.dismiss()
+
+            page.on("dialog", _on_dialog)
             page.goto(page_fp.as_uri())
             page.wait_for_timeout(150)   # 组件注册 + 首次渲染
-            run(page, ck)
+            run(page, ck, dlg)
             ck.check("V0 全程零未捕获 JS 异常", not errors, "; ".join(errors[:3]))
             browser.close()
     return ck.summary()

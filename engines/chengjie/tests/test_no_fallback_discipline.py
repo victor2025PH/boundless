@@ -658,6 +658,109 @@ def test_backup_endpoint_specs_observe_without_popup():
     assert "restore_strike_state" in src and "write_state" in src
 
 
+def test_mt_probe_url_is_v1_idempotent_and_matches_production():
+    """探针拼 MT 端点必须与 `OllamaMTEngine` 同规则（``/v1`` 幂等）。
+
+    2026-08-28 实锤：云优先重分配把 LAN MT 落点从 Ollama ``176:11434``（不带 /v1）
+    换成 vLLM ``173:8001/v1``（带 /v1）后，探针无条件补 ``/v1`` 拼出
+    ``…:8001/v1/v1/chat/completions`` → 404 → **翻译域 100% 假红**，而生产链其实是好的
+    （引擎侧本来就幂等）。`fail_strikes=2` 下差 20 分钟就发第一条误告警。
+
+    与识图那条「端点顺序/模型名一律问 vision_client」同一条纪律：探针拼端点的规则
+    必须跟生产同源，差一个 ``/v1`` 就变成「探的不是生产走的那条路」。
+    """
+    from src.ai.translation_engines import OllamaMTEngine
+    from src.ops.true_probe import _mt_chat_url
+
+    for base in ("http://173:8001/v1", "http://173:8001", "http://mt:11434",
+                 "http://mt:11434/", "http://173:8001/v1/"):
+        got = _mt_chat_url(base)
+        assert got.count("/v1") == 1, f"{base} → {got}"
+        assert got.endswith("/v1/chat/completions"), got
+        # 逐字对齐生产引擎——这是本函数存在的全部理由，两边分叉即红
+        assert got == OllamaMTEngine._openai_chat_url(base), base
+
+    # 真进 spec：单元函数对了而接线没换，是这类修复最常见的半途而废
+    cfg = dict(_FULL_CFG)
+    cfg["translation"] = {"engines": {"ollama_mt": {
+        "base_urls": ["http://173:8001/v1"], "model": "chatx", "api": "openai"}}}
+    tr = [s for s in build_probe_specs(cfg) if s["domain"] == "translate"][0]
+    assert tr["url"] == "http://173:8001/v1/chat/completions"
+
+
+def test_asr_fallback_levels_are_probed_but_do_not_pop(tmp_path):
+    """ASR 回落级必须进探针（2026-08-28 事故不变量）。
+
+    识图备胎 2026-08-27 就补上了逐端点探测，**ASR 的 `fallback` 一直漏着**——代价当天
+    就兑现了：生产 `fallback` 的唯一候选 140:7854 `/health` 恒 200 且 `loaded=true`，
+    真送音频 6 次只成功 1 次（39s，其余 240s 超时），而探针从不打它 ⇒「纸面兜底」
+    可以一路无声活到主路真挂的那天，也就是最没有余地的时刻。
+    """
+    cfg = dict(_FULL_CFG)
+    cfg["voice_recognition"] = {
+        **_FULL_CFG["voice_recognition"],
+        "fallback": [
+            {"provider": "avatar_whisper", "base_url": "http://av:7854",
+             "token_file": str(tmp_path / "tok.txt"), "timeout": 30},
+            {"provider": "openai_compatible", "base_url": "http://asr2:9000/v1",
+             "model": "whisper-1"},
+        ],
+    }
+    asr = [s for s in build_probe_specs(cfg) if s["domain"].startswith("asr")]
+    assert [s["domain"] for s in asr] == ["asr", "asr_backup1", "asr_backup2"]
+    # 备胎只观测不弹窗（与 vision_backup 同语义）；主路照常告警
+    assert "alert" not in asr[0]
+    assert asr[1]["alert"] is False and asr[2]["alert"] is False
+    # AvatarHub 契约与 OpenAI 兼容口不同源 → 独立一支，别混进 asr_transcribe
+    assert asr[1]["kind"] == "asr_transcribe_avatarhub"
+    assert asr[1]["url"] == "http://av:7854/transcribe_b64"
+    assert asr[1]["timeout"] == 30
+    # 内容断言必须同主路：备胎「有输出」同样不算活
+    assert "今天" in asr[1]["expect_any"] and "今天" in asr[2]["expect_any"]
+    assert asr[2]["kind"] == "asr_transcribe"
+    assert asr[2]["url"] == "http://asr2:9000/v1/audio/transcriptions"
+
+
+def test_asr_fallback_spec_never_guesses_endpoints():
+    """回落级配不全就不探——宁可不探，不可假绿/假红。
+
+    ① 不从主路继承 `base_url`：继承会把主路端点又探一遍，白烧一次推理还伪装成
+       「备胎健康」；② AvatarHub 缺 `token_file` 不探（转录器侧有内联默认值，探针
+       刻意不复刻——第二处默认值早晚与第一处分叉）；③ 进程内 provider 一律不探
+       （探它＝在 web 进程里再加载一份模型，违反本机显存纪律，且它们的失败模式
+       在启动期就暴露）。
+    """
+    def _domains(fb):
+        cfg = dict(_FULL_CFG)
+        cfg["voice_recognition"] = {**_FULL_CFG["voice_recognition"], "fallback": fb}
+        return [s["domain"] for s in build_probe_specs(cfg)
+                if s["domain"].startswith("asr")]
+
+    assert _domains([{"provider": "avatar_whisper"}]) == ["asr"]
+    assert _domains([{"provider": "avatar_whisper",
+                      "base_url": "http://av:7854"}]) == ["asr"]
+    assert _domains([{"provider": "openai_compatible"}]) == ["asr"]
+    for _local in ("sensevoice", "faster_whisper", "whisper_local"):
+        assert _domains([{"provider": _local}]) == ["asr"]
+    # 空列表＝2026-08-28 生产实例的实况（唯一落点、零兜底）：不得凭空造出备胎域
+    assert _domains([]) == ["asr"]
+    assert _domains(None) == ["asr"]
+
+
+def test_avatarhub_asr_probe_reuses_production_codec():
+    """AvatarHub 探针必须复用 avatar_voice 的载荷/解析/取令牌函数。
+
+    手搓一份编解码 ⇒「探的」与「生产走的」不是同一条路，探针就失去了全部意义
+    （与识图探针「端点顺序/模型名一律问 vision_client」同一条纪律）。
+    """
+    src = (_SRC / "ops" / "true_probe.py").read_text(encoding="utf-8")
+    i = src.index('kind == "asr_transcribe_avatarhub"')
+    seg = src[i: i + 1600]
+    for fn in ("build_stt_payload", "parse_stt_response", "read_service_token"):
+        assert fn in seg, f"未复用 avatar_voice.{fn}"
+    assert "X-AH-Svc" in seg
+
+
 def test_watchdog_probe_tick_actually_runs(tmp_path, monkeypatch):
     """**真调用** _check_true_probes 一轮——源码级断言抓不到运行时导入错误。
 

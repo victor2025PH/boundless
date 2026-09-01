@@ -879,7 +879,10 @@
           this._emitLoadedSignal(g);
           return this._renderForm() + this._toastHtml();
         }
-        this._wonFormOpen = false;
+        // #111（0831 skuio「点标成交没反应」实锤）：这里**不得**复位成交表单标志
+        // ——点「标成交」的 onAction 恰是「置位 → _rerender → 本函数」，旧的无条件
+        // 复位把表单在渲染前掐灭＝按钮点了永远没反应（真浏览器门禁 S22 钉住）。
+        // 会话切换的复位已由 set context 的重置块负责，此处不需要第二份。
         const mi = parseInt(g.milestone_idx, 10) || 0;
         if (this._prevMsIdx >= 0 && mi > this._prevMsIdx) this._celebrateMs = true;
         this._prevMsIdx = mi;

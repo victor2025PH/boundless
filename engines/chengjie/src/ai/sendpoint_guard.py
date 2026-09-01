@@ -36,6 +36,7 @@ _STATS: Dict[str, int] = {
     "vocative_near": 0,        # call_peer 近形变体（baba↔babe）纠正
     "vocative_self": 0,        # 人设名当客户呼格剥除
     "lang_pin_conflict": 0,    # 铆定语言 × 文本文字系统冲突检出
+    "lang_hint_conflict": 0,   # #133：客户语言画像（无显式铆定）冲突检出
     "lang_pin_translated": 0,  # 冲突 → 翻译修正成功
     "lang_pin_hold": 0,        # 冲突 → 翻译 HOLD（无兜底纪律：别发）
     "lang_pin_passthru": 0,    # 冲突但翻译器缺席/失败 → 原样放行
@@ -250,6 +251,32 @@ def outbound_lang_pin(platform: str, account_id: str, chat_key: str) -> str:
         return ""
 
 
+def outbound_peer_lang_hint(platform: str, account_id: str,
+                            chat_key: str) -> str:
+    """客户语言画像回落（#133）：无显式铆定时「该用什么语言跟这个客户说」。
+
+    #133 击穿机制：收口点铆定兜底只认 B67 显式铆定——绝大多数会话从没人手动
+    设过「发→X」，于是任何一条绕过上游翻译的 proactive 出站（主动关怀/SOP 步/
+    目标推进/未来新链）都能把纯中文原样发给英文客户（0901 viva Mexico 实锤：
+    12:57 常规回复过翻译出英文、12:53 两条主动关怀直发中文）。
+
+    证据口径与出站翻译/语言硬闸同源（``peer_language_hint``：入站证据加权投票
+    → conversations.language 持久列 → 出站历史参照）。判不出 → ""（收口点不动
+    手，与旧行为一致）。软失败绝不抛。
+    """
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None:
+            return ""
+        from src.inbox.draft_models import _conv_id
+        from src.inbox.outbound_translate import peer_language_hint
+        return peer_language_hint(store, _conv_id(
+            str(platform or ""), str(account_id or ""), str(chat_key or "")))
+    except Exception:
+        return ""
+
+
 _CJK_FAMILY_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 _LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
 
@@ -305,14 +332,27 @@ async def sendpoint_lang_pin_fix(
     先做零成本预检（store 铆定读取 + 文字系统冲突），已被上游翻译过的文本
     （autosend/deferred/proactive 三链都先过 translate_outbound_text）在这里
     零额外开销——本兜底只为「从没吃过铆定」的漏网路径（A 线原生 / 未来新链）。
+
+    #133（2026-09-01）：无显式铆定时回落 **客户语言画像**（``outbound_peer_
+    lang_hint``，与出站翻译同一证据口径）。冲突判定仍走 ``pin_script_conflict``
+    的保守文字系统口径（CJK↔非 CJK 高置信冲突才动手，en/es 之类不判）——
+    「英文会话任何主动消息不得出中文」在总出口一次收口，不再依赖每条 proactive
+    新链自觉接翻译。真翻译语义仍在注入的 translate_outbound_text（它自己会重
+    算目标语/显式铆定/HOLD 纪律），本函数只负责「该不该叫翻译」。
     """
     src = str(text or "")
     try:
         if not src.strip():
             return src, ""
         pin = outbound_lang_pin(platform, account_id, chat_key)
+        _pin_kind = "pin" if pin else ""
+        if not pin:
+            pin = outbound_peer_lang_hint(platform, account_id, chat_key)
+            _pin_kind = "hint" if pin else ""
         if not pin or not pin_script_conflict(src, pin):
             return src, ""
+        if _pin_kind == "hint":
+            _bump("lang_hint_conflict")
         _bump("lang_pin_conflict")
         fn = _TRANSLATOR
         if fn is None:
@@ -401,6 +441,7 @@ def presynth_text_guard(
 
 __all__ = [
     "resolve_sendpoint_names", "sendpoint_vocative_pass", "near_call_peer_fix",
-    "outbound_lang_pin", "pin_script_conflict", "set_sendpoint_translator",
-    "sendpoint_lang_pin_fix", "presynth_text_guard", "sendpoint_guard_stats",
+    "outbound_lang_pin", "outbound_peer_lang_hint", "pin_script_conflict",
+    "set_sendpoint_translator", "sendpoint_lang_pin_fix",
+    "presynth_text_guard", "sendpoint_guard_stats",
 ]

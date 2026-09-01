@@ -182,6 +182,9 @@ class AIClient(LoggerMixin):
         self._pool_calls = 0
         self._pool_ok = 0
         self._pool_last_key = ""
+        # 多模型路由（ai.models + ai.task_routes）：任务→独立端点/模型，默认空=不路由
+        self._route_clients: Dict[str, Dict[str, Any]] = {}
+        self._task_routes: Dict[str, str] = {}
         # 降级判定证据（degradation_snapshot 用）：三条出话链各自最近一次成功时刻
         self._last_primary_ok_ts = 0.0
         self._last_pool_ok_ts = 0.0
@@ -601,6 +604,9 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
+        # 多模型路由（ai.models + ai.task_routes）：主动按任务挑端点/模型（与 key_pool 正交）
+        self._build_route_clients(ai_config, api_key)
+
         # boot 探针后台化（P3-1）：见 initialize() docstring。分支逻辑与阻塞路径
         # 完全同构（_deferred_boot_probe），只是不再挡「进程起来 → /login 可服务」。
         if defer_probe:
@@ -841,17 +847,25 @@ class AIClient(LoggerMixin):
         conversation_history: Optional[List[Dict[str, str]]] = None,
         strategy_overrides: Optional[Dict[str, Any]] = None,
         *,
+        route: Optional[str] = None,
         _skip_quality_check: bool = False,
     ) -> Optional[str]:
         """OpenAI 兼容（Ollama）对话生成，与 generate_reply 行为对齐（熔断、重试、兜底）。"""
         _fb_lang = (context or {}).get("reply_lang", "zh")
+        # 多模型路由（ai.task_routes）：命中即用该档端点/模型跑「主尝试」；未命中=默认主链。
+        # 主尝试失败仍走下方备用池 → 本地兜底 → canned（绝不因路由丢话）。
+        _route = route or (context or {}).get("_route")
+        _profile = self.resolve_route(_route)
+        _primary_client = _profile["client"] if _profile else self._oa_client
+        _primary_extra = None if _profile else self._oa_extra_body
+        _primary_native = None if _profile else self._ollama_native_base
         # 本地优先模式（P1）：本地端点齐备即可出话——全本地部署常**根本没配云端 key**，
         # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先放弃回复。
         _local_primary = bool(
             self._primary_mode in ("local", "local_only")
             and self._fb_client and self._fb_model
         )
-        if not self._oa_client and not _local_primary:
+        if not _primary_client and not _local_primary:
             self.logger.error("AI 客户端未初始化")
             return self._fallback_reply(_fb_lang)
         if context is not None:
@@ -896,6 +910,8 @@ class AIClient(LoggerMixin):
             use_max_tokens = 256
         use_context_rounds = int(so["context_rounds"]) if "context_rounds" in so else None
         use_model = str(so["model"]) if so.get("model") else self.model
+        if _profile:
+            use_model = str(_profile["model"])  # 路由命中：主尝试用该档模型
         # P3 本地档分层：``ai.tiers.<tier>.local_model``（经 _apply_tier_overrides 随
         # setdefault 流入 so）或调用方显式 strategy_overrides.local_model —— 本地链
         # （local 主链 + 云挂兜底，同一端点不同模型即可分层，如 .173 同机 14b/30b）
@@ -1019,7 +1035,7 @@ class AIClient(LoggerMixin):
                 _fin: Any = None
                 _rtoks: Any = None
                 _rc_len: int = 0
-                if self._ollama_native_base:
+                if _primary_native:
                     reply, pt, ct = await self._ollama_native_chat(
                         messages=messages,
                         max_tokens=use_max_tokens,
@@ -1033,9 +1049,9 @@ class AIClient(LoggerMixin):
                         temperature=use_temperature,
                         max_tokens=use_max_tokens,
                     )
-                    if self._oa_extra_body:
-                        _create_kw["extra_body"] = self._oa_extra_body
-                    response = await self._oa_client.chat.completions.create(**_create_kw)
+                    if _primary_extra:
+                        _create_kw["extra_body"] = _primary_extra
+                    response = await _primary_client.chat.completions.create(**_create_kw)
                     elapsed_time = time.time() - start_time
                     reply = None
                     if response and response.choices:
@@ -1841,6 +1857,71 @@ class AIClient(LoggerMixin):
         except Exception:
             self.logger.debug("ecommerce 事实注入跳过", exc_info=True)
 
+    def _build_route_clients(self, ai_config: Dict[str, Any], api_key: Optional[str]) -> None:
+        """解析 ai.models + ai.task_routes → self._route_clients / self._task_routes。
+
+        纯构造（只建 client 对象、不发网络请求，可单测）。models=命名模型档（各自独立
+        OpenAI 兼容端点）；task_routes=任务名→档名（指向不存在的档静默忽略）。api_key
+        缺省复用主链 key；本地端点无鉴权时填占位 'ollama'。任何异常回落「无路由」。
+        """
+        self._route_clients = {}
+        self._task_routes = {}
+        try:
+            models = ai_config.get("models") or {}
+            if isinstance(models, dict):
+                for name, spec in models.items():
+                    if not isinstance(spec, dict):
+                        continue
+                    m_base = str(spec.get("base_url") or "").strip().rstrip("/")
+                    if not m_base or "://" not in m_base:
+                        continue
+                    if not m_base.endswith("/v1"):
+                        m_base = m_base + "/v1"
+                    m_model = str(spec.get("model") or self.model or "").strip()
+                    if not m_model:
+                        continue
+                    m_key = str(spec.get("api_key") or api_key or "").strip()
+                    if not m_key or m_key.upper().startswith("YOUR_"):
+                        m_key = "ollama"  # 本地端点常无需鉴权
+                    try:
+                        import httpx as _hx
+                        m_to: Any = _hx.Timeout(float(self.timeout), connect=5.0)
+                    except Exception:
+                        m_to = float(self.timeout)
+                    m_host = m_base.split("://", 1)[1].split("/", 1)[0]
+                    self._route_clients[str(name)] = {
+                        "client": AsyncOpenAI(api_key=m_key, base_url=m_base,
+                                              timeout=m_to, max_retries=0),
+                        "model": m_model,
+                        "label": f"{m_model} @ {m_host} ({name})",
+                    }
+            routes = ai_config.get("task_routes") or {}
+            if isinstance(routes, dict):
+                for task, prof in routes.items():
+                    p = str(prof or "").strip()
+                    if p and p in self._route_clients:
+                        self._task_routes[str(task)] = p
+            if self._route_clients:
+                self.logger.info(
+                    "多模型路由已配置: %d 档（%s）；任务映射 %s",
+                    len(self._route_clients), ", ".join(self._route_clients.keys()),
+                    self._task_routes or "（无）")
+        except Exception:
+            self.logger.debug("多模型路由解析失败（忽略，回落默认模型）", exc_info=True)
+
+    def resolve_route(self, task: Optional[str]) -> Optional[Dict[str, Any]]:
+        """任务名 → 模型档（{client, model, label}）。未配/未命中=None（走默认模型）。
+
+        与 key_pool（失效才顶班）正交：命中后仅换「主尝试」的 client+model；失败仍回落
+        备用池 → 本地兜底 → canned（绝不因路由丢话）。
+        """
+        if not task:
+            return None
+        name = self._task_routes.get(str(task))
+        if not name:
+            return None
+        return self._route_clients.get(name)
+
     async def generate_reply(
         self,
         user_message: str,
@@ -1848,6 +1929,7 @@ class AIClient(LoggerMixin):
         conversation_history: Optional[List[Dict[str, str]]] = None,
         strategy_overrides: Optional[Dict[str, Any]] = None,
         *,
+        route: Optional[str] = None,
         _skip_quality_check: bool = False,
     ) -> Optional[str]:
         """
@@ -1870,6 +1952,7 @@ class AIClient(LoggerMixin):
         ):
             reply = await self._generate_reply_openai_compat(
                 user_message, context, conversation_history, strategy_overrides,
+                route=route,
                 _skip_quality_check=_skip_quality_check,
             )
             # 2026-08-19 Token 计量（P5a 观测接线，licensing.token_ledger.enabled
@@ -2460,6 +2543,19 @@ class AIClient(LoggerMixin):
             )
             if _p_block:
                 parts.append("【后台人设定位 · 须遵守】\n" + _p_block)
+                # #131（2026-09-01，#109 回复质量家族）：人称/角色关系硬规则。
+                # 实锤：客户（卖车的）说「给你爸买个车，再找我买车险」，AI 答
+                # 「我爸那车再开十年没问题」还反过来「想换车第一个喊我报价」
+                # ——把客户口中的「你爸」听岔、又把自己代入成卖方。规则确定性
+                # 注入（零 LLM 成本，几十 token），只随人设块出现。
+                parts.append(
+                    "【人称与角色 · 硬规则】对方消息里的「你/你的」都指你自己"
+                    "（上述人设），「我/我的」指对方；「你爸/你妈/你家人」＝你"
+                    "（人设）的家人，不是对方的。回复前先分清这轮谁在卖、谁在买、"
+                    "谁求助、谁帮忙：对方向你推销或提供服务时，你是被推销的一方，"
+                    "绝不能反过来把自己说成卖方/报价方/服务方。历史消息同理，"
+                    "按各自说话人归属人称，别把对方说过的事当成自己的。"
+                )
             _p_resolved, _p_tier = _pm.get_persona_with_tier(_p_cid, _p_acc_pid)
             _p_name = _p_resolved.get("name", "?")
             # ★ 传给 context，让 _build_context_prompt 能做名字锁定；名字锁定必须用
@@ -3211,6 +3307,17 @@ class AIClient(LoggerMixin):
                     "人设档案与对方明说，与档案矛盾时一律以档案为准）】\n"
                     + _epi
                 )
+        # #91-A（0830 OMEN 实锤）：回忆类断言锁——与「没说过的绝不捏造」承诺锚
+        # 同族的硬约束，**无条件注入**（事故恰发生在记忆库全空时：LLM 当轮现编
+        # 「你上次提过那台惠普OMEN」还自夸「我记性可好了」，客户当场戳穿）。
+        # 出站侧另有确定性接地校验（outbound_text_guard.strip_hallucinated_recall）
+        # 兜漏网；被戳穿后的回话红线（他人串扰自曝）由 persona_guard 出站硬拦。
+        prompt_parts.append(
+            "【回忆纪律——硬约束】「你上次说过/提过/发过X」这类断言，只有 X 真实"
+            "出现在上面的历史消息或记忆要点里才允许说；对不上原话的一律不说，"
+            "绝不现编对方提过的内容，更不许配上「我记性可好了」这类自夸。"
+            "记不清就自然地问，绝不假装记得。"
+        )
         _slo = (context.get("_slow_think_outline") or "").strip()
         if _slo:
             prompt_parts.append(
@@ -3953,6 +4060,15 @@ class AIClient(LoggerMixin):
             "存成长期记忆只会积累过期噪声。"
             "【称呼判别】「叫我X」只有当 X 是名字/昵称/称号时才是称呼事实；"
             "「叫我别走」「叫我怎么办」这类 X 为动词短语的是祈使/求助语气，不是称呼，不得抽取。"
+            # #96（0830 Steven 实锤）：方向抽反——客户对助手打招呼「hi steven」
+            # 被抽成「用户称呼自己为steven」，AI 消费后拿自己人设名叫客户。
+            "【称呼方向铁律】用户消息里出现的名字若处于**招呼/呼叫位**"
+            "（如「hi X」「你好X」「morning X」「X 在吗」），那是用户在称呼"
+            "**助手**，绝不是用户自己的名字，不得抽取；只有用户明确自我介绍"
+            "（「我是X」「我叫X」「my name is X」「call me X」）才算用户自己的称呼。"
+            "【主语无歧义铁律】每条事实的主语必须显式写「客户」且方向唯一，"
+            "如「客户自称X」「客户希望被称呼为X」；禁止「用户称呼自己为X」"
+            "这类「自己」指代不清的双解句式。"
             "输出严格为一行 JSON，不要 markdown："
             '{"facts":["..."]} facts 为 0～4 条中文短句，无则 []。'
         )
@@ -4711,17 +4827,47 @@ class AIClient(LoggerMixin):
             self._embed_fail_streak = 0
             self._embed_unreachable_until = 0.0
 
-    def _note_embed_failure(self, exc: Exception) -> None:
+    #: 熔断日志里异常文本的截断长度（见 _embed_exc_brief 的「为什么」）
+    _EMBED_EXC_BRIEF_CHARS = 220
+
+    @classmethod
+    def _embed_exc_brief(cls, exc: Optional[Exception]) -> str:
+        """把嵌入异常压成一行可读摘要（剥 HTML、截断）。
+
+        2026-08-28 B126 排障教训：端点回的是**整页 HTML**（网关缺 embeddings 路由
+        时 Next.js 的 404 页、nginx 的 504 页）时，SDK 把整页塞进异常文本，于是
+        backend.log 里每条熔断记录都是几 KB 的 `<!DOCTYPE html>…`——诊断包被撑大，
+        而真正有用的那句「端点返回的是网页不是 JSON」反而要人工翻。剥标签 + 截断后
+        一眼就能分清「路由缺失/反代超时」（HTML）与「连不上」（连接异常）。
+        """
+        if exc is None:
+            return "unknown"
+        text = f"{type(exc).__name__}: {exc}".strip()
+        lowered = text.lower()
+        if "<!doctype html" in lowered or "<html" in lowered:
+            marker = "响应体是 HTML 页面（端点路由缺失 / 反代超时页），非 JSON"
+            head = re.sub(r"<[^>]*>", " ", text)
+            head = re.sub(r"\s+", " ", head).strip()
+            text = f"{marker} | {head}"
+        return (text[:cls._EMBED_EXC_BRIEF_CHARS] + "…"
+                if len(text) > cls._EMBED_EXC_BRIEF_CHARS else text)
+
+    def _note_embed_failure(self, exc: Exception,
+                            endpoints: Optional[List[str]] = None) -> None:
         """记一次失败；达阈值则开熔断窗口并**只此时**打一条 WARNING（避免每条消息刷屏）。"""
         self._embed_fail_streak += 1
+        brief = self._embed_exc_brief(exc)
+        where = ", ".join(endpoints or []) or "n/a"
         if self._embed_fail_streak >= self._EMBED_FAIL_THRESHOLD:
             self._embed_unreachable_until = time.time() + self._EMBED_COOLDOWN_SEC
             self.logger.warning(
-                "Embedding 连续失败 %d 次，熔断 %.0fs（期间降级关键词召回，零阻断）: %s",
-                self._embed_fail_streak, self._EMBED_COOLDOWN_SEC, exc)
+                "Embedding 连续失败 %d 次，熔断 %.0fs（期间降级关键词召回，零阻断）"
+                "endpoints=[%s]: %s",
+                self._embed_fail_streak, self._EMBED_COOLDOWN_SEC, where, brief)
         else:
             self.logger.debug(
-                "Embedding API 调用失败(第%d次): %s", self._embed_fail_streak, exc)
+                "Embedding API 调用失败(第%d次) endpoints=[%s]: %s",
+                self._embed_fail_streak, where, brief)
 
     _EMBED_URL_COOLDOWN_SEC = 60.0   # 单端点异常后的冷却窗（排序降权，不剔除）
 
@@ -4777,7 +4923,9 @@ class AIClient(LoggerMixin):
                     return [list(d.embedding) for d in result.data]
                 return []
             # 全部端点失败 → 才计一次全局熔断 streak（单点抖动不触发全局熔断）
-            self._note_embed_failure(_last_exc or RuntimeError("all embedding endpoints failed"))
+            self._note_embed_failure(
+                _last_exc or RuntimeError("all embedding endpoints failed"),
+                endpoints=[u for u, _ in _pairs])
             return []
         if not self.client:
             return []

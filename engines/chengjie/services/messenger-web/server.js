@@ -66,9 +66,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 实锤：server.js 的 E2EE PIN 自愈修复 08-15 00:17 已落盘，但在跑进程是 08-14 08:27
 // 启动的——磁盘代码 ≠ 在跑代码，且没有任何观测面能看见这个分叉（Python 实例重启
 // 与本 Node worker 重启是两个独立动作，极易只做前者）。/health 与 /accounts 现在
-// 自报 boot_ts + 代码指纹 + code_stale（=核心文件 mtime 晚于进程启动），看板/巡检
-// 一眼可判「写好的修复到底上没上」。指纹只在启动算一次；stale 探测每次现算（stat
-// 两个文件，微秒级）。任何异常回落安全值——观测面绝不影响业务。
+// 自报 boot_ts + 代码指纹 + code_stale（=磁盘内容指纹 ≠ 启动时指纹），看板/巡检
+// 一眼可判「写好的修复到底上没上」。任何异常回落安全值——观测面绝不影响业务。
+// 2026-08-31 判据升级 mtime → 内容对比：git 工作树操作/编辑器全存盘会把文件按原样
+// 重写（mtime 变、内容没变），mtime 判据一旦触发就钉死 true 直到重启，watchdog 每
+// 4h 空喊一次「代码分叉」（当日实锤：内容与在跑逐字节一致仍告警）。现在 stat 签名
+// （mtime+size）只作缓存失效键：文件没动零哈希开销；动过才重算指纹与启动基线比——
+// touch 不再误报，真改照样抓，半写态瞬时差异随下次保存自愈。
 const WORKER_BOOT_TS = Date.now();
 // 指纹集合必须覆盖**全部**运行时装载的自家模块（P4 实锤：首版只含 server.js+
 // msg_ops.js，login_classify.js 的修复上线后指纹纹丝不动——半部署探测器自己
@@ -78,17 +82,27 @@ const _CORE_FILES = [
   ...["msg_ops.js", "login_classify.js", "login_relay.js", "login_window.js", "self_profile.js"]
     .map((f) => path.join(path.dirname(fileURLToPath(import.meta.url)), f)),
 ];
+function _hashCoreFiles() {
+  const h = crypto.createHash("sha1");
+  for (const f of _CORE_FILES) h.update(fs.readFileSync(f));
+  return h.digest("hex").slice(0, 12);
+}
 const WORKER_CODE_FP = (() => {
-  try {
-    const h = crypto.createHash("sha1");
-    for (const f of _CORE_FILES) h.update(fs.readFileSync(f));
-    return h.digest("hex").slice(0, 12);
-  } catch (_) { return ""; }
+  try { return _hashCoreFiles(); } catch (_) { return ""; }
 })();
+// 磁盘指纹缓存：stat 签名没变直接复用上次结果（每次调用只 stat 6 个文件，微秒级）；
+// 重算失败不写缓存＝下次自动重试，瞬时 IO 错不会把结论钉死。
+let _diskFp = { sig: null, fp: WORKER_CODE_FP };
 function workerCodeInfo() {
   let stale = false;
   try {
-    stale = _CORE_FILES.some((f) => fs.statSync(f).mtimeMs > WORKER_BOOT_TS + 2000);
+    if (WORKER_CODE_FP) { // 启动基线都没算出来就没有可比性，保持 false
+      const sig = _CORE_FILES
+        .map((f) => { const s = fs.statSync(f); return s.mtimeMs + ":" + s.size; })
+        .join("|");
+      if (sig !== _diskFp.sig) _diskFp = { sig, fp: _hashCoreFiles() };
+      stale = _diskFp.fp !== WORKER_CODE_FP;
+    }
   } catch (_) { stale = false; }
   return {
     boot_ts: Math.floor(WORKER_BOOT_TS / 1000),
@@ -98,6 +112,10 @@ function workerCodeInfo() {
 }
 const SESSIONS_DIR = process.env.MSG_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8791);
+// 只绑回环：入站路由无鉴权中间件，绑 0.0.0.0 等于把账号操作面开给整个局域网。
+// 真实调用方只有本机 Python 引擎，全仓无远程引用。确需跨机时用 BIND_HOST 覆盖，
+// 但**必须先给入站加鉴权**再放开。
+const HOST = String(process.env.BIND_HOST || '127.0.0.1');
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 // ── 进程遗言钩子（实施72 排查 2026-08-27 加，纯日志零行为变更）────────────────
@@ -4091,7 +4109,7 @@ app.get("/accounts", (_req, res) => {
       });
     }
   }
-  // worker 段：boot_ts / code_fp / code_stale（磁盘代码晚于进程启动=改了没重启）。
+  // worker 段：boot_ts / code_fp / code_stale（磁盘内容指纹 ≠ 在跑指纹=改了没重启）。
   res.json({ accounts, worker: workerCodeInfo() });
 });
 
@@ -4852,7 +4870,7 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 // Windows 下 Stop-Process 走 SIGBREAK；也挂上。
 process.on("SIGBREAK", () => gracefulShutdown("SIGBREAK"));
 
-const _server = app.listen(PORT, async () => {
+const _server = app.listen(PORT, HOST, async () => {
   logger.info(`Messenger web login service on :${PORT} (sessions: ${SESSIONS_DIR})`);
   // 后台常驻场景（MSG_HEADLESS=1）开机恢复已登录账号。headed 交互登录一般不自动 restore。
   if (String(process.env.MSG_RESTORE_ON_BOOT ?? (HEADLESS ? "1" : "0")) === "1") {

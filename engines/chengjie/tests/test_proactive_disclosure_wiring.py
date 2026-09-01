@@ -124,17 +124,25 @@ def test_deferred_universal_send_wired_after_translate():
 
 
 def test_proactive_topic_wired_with_forced_text():
+    # 实施92b 修陈旧锚点：read-aware 批次给两个媒体分支叠加了 _rn_forced_text
+    # 守卫（源码已提交）但本静态钉没跟上——锚点更新为语义级（守卫条件 →
+    # 媒体调用相邻），不再钉缩进字面量（上次就是被换行/缩进变化打红的）。
     src = (ENGINE / "src" / "companion" / "proactive_topic.py").read_text(
         encoding="utf-8")
     i_disc = src.index("apply_disclosure_for")
-    i_photo = src.index("_try_send_photo(\n                    plan, text")
-    i_voice = src.index("await _try_send_voice(plan, text)")
+    i_photo = src.index("and _photo_plan and await _try_send_photo(")
+    i_voice = src.index("and await _try_send_voice(plan, text)")
     assert i_disc < i_photo and i_disc < i_voice, "披露判定必须在照片/语音分支之前"
     # 披露命中强制文本：两个媒体分支都必须被 _disc_forced_text 守住
-    assert re.search(r"if \(not _disc_forced_text\) and _photo_plan", src), \
-        "照片分支未被披露强制文本守住"
-    assert re.search(r"if \(not _disc_forced_text\) and await _try_send_voice", src), \
-        "语音分支未被披露强制文本守住"
+    # （read-aware 的 _rn_forced_text 同一守卫位并列，两者缺一不可）
+    assert re.search(
+        r"if \(\(not _disc_forced_text\) and \(not _rn_forced_text\)"
+        r"\s*\n\s*and _photo_plan and await _try_send_photo\(", src), \
+        "照片分支未被披露/已读强制文本双守卫"
+    assert re.search(
+        r"if \(\(not _disc_forced_text\) and \(not _rn_forced_text\)"
+        r"\s*\n\s*and await _try_send_voice\(", src), \
+        "语音分支未被披露/已读强制文本双守卫"
     # 语言提示与开场文案生成同源
     assert "lang_hint=_peer_language(plan)" in src
 

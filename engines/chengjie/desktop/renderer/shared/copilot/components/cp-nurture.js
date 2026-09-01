@@ -17,6 +17,22 @@
    - 视觉：字号最小 11px（--cp-fs-tiny），状态色走 --cp-* token（暗色自适配），
      行为改多选 chips，账号行两行网格，行内有改动才点亮「保存」（dirty 态）。
 
+   2026-08-28 分区折叠：**每个分区标题都是折叠开关**（概览 / 引擎 / 模拟记录 /
+   账号方案 / 高级），折叠态按分区存 localStorage（跨标签页与重开保留）。两条
+   不变量：① **折叠后标题行必须仍带该块的关键读数**（灯色判词 / 引擎状态 /
+   记录条数 / n-t 已启用 + 未保存红点 / 警告数）——只藏不留摘要＝把信息弄丢，
+   比长面板更糟；② 默认只收起「高级（管理员）」，其余展开——默认全收＝新用户
+   打开是一排空标题，自证不了面板有什么。折叠只是隐藏 DOM，`_work`（编辑中方案）
+   是内存里的单一事实源，收起再展开原样还在。
+
+   2026-08-28 第二批（长列表 + 词义）：
+   - 账号方案 >CAP+1 个截到 CAP 行 + 「显示全部 n 个」，**在养的号一个都不截**
+     （理由见 ACCT_VISIBLE_CAP 注释）；
+   - 「养号中」KPI 与行徽章改「起号期」+ 悬浮口径——该数出自
+     `account_signals.lifecycle_stage`（账号注册天数 < warmup_ramp_days），与
+     「已启用养护」不是一回事；同词并排曾被读成自相矛盾（实况 2 起号期 / 0-10 已启用）；
+   - intro 引导只在账号方案展开时出现（不指着收起的东西说「在下方…」）。
+
    弱会话依赖：不需要选中会话。context 重喂不重渲（本卡与会话无关）。
    client 需实现 nurtureStatus/nurtureSave（缺失如实报）；nurtureShadow/nurtureEngine/
    nurtureProbe 按存在性优雅降级。动态键（stage_/beh_ 等）渲染前有 raw-key 自检：
@@ -26,6 +42,19 @@
   if (!Base) return;
 
   const STAGES = ["active", "warming", "pending", "restricted", "banned", "offline"];
+
+  /* 分区折叠态：localStorage 记忆（跨标签页/重开保留）。默认值只收「高级」——
+     见顶部注释不变量②。localStorage 不可用（隐私模式/沙箱）时全链软失败，
+     折叠仍在本次会话内工作，只是不记忆。 */
+  const FOLD_KEY = "cp.nurture.folds.v1";
+  const FOLD_DEFAULT = { advanced: 1 };
+
+  /* 账号方案长列表截断（2026-08-28）：号一多，这一块就吃掉整个右栏（10 个号 ≈
+     750px，405px 壳里概览+引擎已占掉一半）。两条约束：
+     ① 只有 > CAP+1 才截——藏 1 个换一个按钮是净亏；
+     ② **只藏没启用养护的号**，正在养的一个都不藏（那些是有后果的号，
+        「列表太长」不是把它们藏起来的理由）。故 on 多于 CAP 时如实超出。 */
+  const ACCT_VISIBLE_CAP = 5;
 
   /* ntr_ 埋点（与 cp-goal 同机制）：sendBeacon → /api/telemetry/ui-event，
      读数 /api/admin/ui-event-trend?prefix=ntr_。best-effort 永不阻断。 */
@@ -52,7 +81,8 @@
       this._expanded = {};      // 展开行为 chips 的账号 key 集
       this._work = {};          // 每号编辑中方案（未保存工作副本，单一事实源）
       this._baseline = {};      // 每号服务端基线 JSON（判 dirty）
-      this._advOpen = false;    // 高级区折叠态（重渲染保留）
+      this._folds = this._readFolds();  // 分区折叠态（localStorage 记忆）
+      this._acctShowAll = false;        // 账号长列表「显示全部」（会话内，不记忆）
       this._goliveArm = false;  // go_live 内联确认态
       this.shadowRoot.addEventListener("change", (e) => this._onFieldChange(e));
     }
@@ -62,10 +92,24 @@
       .nt-ro { font-size:var(--cp-fs-tiny,11px); padding:5px 8px; border-radius:7px; margin-bottom:8px;
         background:var(--cp-bg-soft,#f1f5f9); color:var(--cp-text-dim,#64748b);
         border:1px solid var(--cp-border,#e2e8f0); }
-      .nt-sec { display:flex; align-items:center; gap:6px; margin:10px 0 6px;
-        font-size:var(--cp-fs-tiny,11px); font-weight:700; color:var(--cp-text-dim,#64748b); }
+      /* 分区标题＝折叠开关：本块须整体覆盖基类 button 的边框/底色/内距 */
+      .nt-sec { display:flex; align-items:center; gap:6px; margin:10px 0 6px; width:100%;
+        font:inherit; font-size:var(--cp-fs-tiny,11px); font-weight:700; text-align:left;
+        color:var(--cp-text-dim,#64748b); background:transparent; border:0;
+        border-radius:6px; padding:2px 3px; cursor:pointer; }
       .nt-sec:first-child { margin-top:0; }
-      .nt-sec .cnt { font-weight:400; color:var(--cp-text-tiny,#94a3b8); }
+      .nt-sec:hover { color:var(--cp-text,#1e293b); background:var(--cp-bg-soft,#f1f5f9); }
+      .nt-sec .car { flex-shrink:0; width:9px; font-size:9px; line-height:1;
+        color:var(--cp-text-tiny,#94a3b8); }
+      .nt-sec .tl { flex-shrink:0; }
+      .nt-sec .cnt { min-width:0; font-weight:400; color:var(--cp-text-tiny,#94a3b8);
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .nt-sec .cnt.dry { color:var(--cp-warn-ink,#b45309); }
+      .nt-sec .cnt.live { color:var(--cp-ok,#0f9d75); }
+      .nt-sec .nt-light { width:9px; height:9px; }
+      /* 折叠后「有未保存改动」的唯一可见处（展开时看得见亮着的保存钮） */
+      .nt-sec .dirty { flex-shrink:0; margin-left:auto; font-size:9px; line-height:1;
+        color:var(--cp-accent,#6366f1); }
       .nt-health { display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:6px;
         border:1px solid var(--cp-border,#e2e8f0); border-radius:9px; background:var(--cp-surface-2,#f8fafc); }
       .nt-light { width:11px; height:11px; border-radius:50%; flex-shrink:0; }
@@ -141,6 +185,10 @@
       .nt-sh-chip.real { background:var(--cp-ok-bg,rgba(15,157,117,.12)); color:var(--cp-ok,#0f9d75); }
       .nt-sh-chip.fail { background:var(--cp-danger-bg,rgba(220,38,38,.08)); color:var(--cp-danger,#dc2626); }
       .nt-empty { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); line-height:1.5; }
+      .nt-acct-more { width:100%; margin-bottom:6px; padding:4px 8px;
+        font-size:var(--cp-fs-tiny,11px); border-style:dashed;
+        color:var(--cp-text-dim,#64748b); }
+      .nt-acct-more:hover { color:var(--cp-text,#1e293b); }
       .nt-acct { border:1px solid var(--cp-border,#e2e8f0); border-radius:9px; padding:8px 9px;
         margin-bottom:6px; background:var(--cp-surface,#fff); }
       .nt-acct .hd { display:flex; align-items:center; gap:6px; min-width:0; }
@@ -192,9 +240,8 @@
         border-color:var(--cp-danger,#dc2626); color:var(--cp-danger,#dc2626); }
       .nt-chip:disabled { opacity:.55; cursor:default; }
       .nt-adv { margin:8px 0 0; }
-      .nt-adv-hd { width:100%; text-align:left; font-size:var(--cp-fs-tiny,11px);
-        color:var(--cp-text-dim,#64748b); background:transparent; border:0; padding:4px 2px; cursor:pointer; }
-      .nt-adv-hd:hover { color:var(--cp-text,#1e293b); }
+      /* 高级区标题与其它分区同款（样式全由 .nt-sec 提供，这里只调外距） */
+      .nt-adv-hd { margin:0 0 6px; }
       .nt-probe { border:1px dashed var(--cp-border,#e2e8f0); border-radius:8px; padding:8px 9px; }
       .nt-probe-hd { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
         margin-bottom:6px; line-height:1.5; }
@@ -230,6 +277,46 @@
     _tt(key, fallback) {
       const v = this.t(key);
       return v === key ? String(fallback == null ? "" : fallback) : v;
+    }
+
+    // ── 分区折叠 ─────────────────────────────────────────────────────────
+    _readFolds() {
+      try {
+        const raw = root.localStorage && root.localStorage.getItem(FOLD_KEY);
+        const o = raw ? JSON.parse(raw) : null;
+        return (o && typeof o === "object") ? o : {};
+      } catch (_e) { return {}; }
+    }
+    _writeFolds() {
+      try {
+        root.localStorage && root.localStorage.setItem(FOLD_KEY, JSON.stringify(this._folds || {}));
+      } catch (_e) { /* 记不住不影响本次会话折叠 */ }
+    }
+    _isFolded(id) {
+      const m = this._folds || {};
+      return (id in m) ? !!m[id] : !!FOLD_DEFAULT[id];
+    }
+    _toggleFold(id) {
+      if (!id) return;
+      const folded = !this._isFolded(id);
+      this._folds[id] = folded ? 1 : 0;
+      this._writeFolds();
+      // 展开「高级」沿用既有埋点名 ntr_adv_open（读数看板与门禁都认它）
+      _beacon(folded ? "ntr_fold_" + id
+        : (id === "advanced" ? "ntr_adv_open" : "ntr_unfold_" + id));
+      this._renderAll();
+    }
+    /* 分区标题＝折叠开关。summaryHtml 由调用方按折叠态决定：折叠时必须给出
+       该块的关键读数（不变量①），展开时通常留空（内容自己在下面）。 */
+    _secHead(id, title, summaryHtml, extraCls) {
+      const folded = this._isFolded(id);
+      if (this._secIds) this._secIds.push(id);   // 本轮真渲染出来的分区（判「全收起」）
+      return '<button type="button" class="nt-sec' + (extraCls ? " " + extraCls : "") +
+        '" data-act="fold" data-fold="' + this.esc(id) +
+        '" aria-expanded="' + (folded ? "false" : "true") + '">' +
+        '<span class="car">' + (folded ? "▸" : "▾") + "</span>" +
+        '<span class="tl">' + this.esc(title) + "</span>" +
+        (summaryHtml || "") + "</button>";
     }
 
     async _load() {
@@ -280,6 +367,7 @@
     // ── 渲染 ─────────────────────────────────────────────────────────────
     _renderAll() {
       const esc = (s) => this.esc(s);
+      this._secIds = [];        // _secHead 逐个登记，末尾据此判「是不是全收起了」
       const d = this._data || {};
       const lc = d.lifecycle || {};
       const eng = d.engine || {};
@@ -295,35 +383,48 @@
       const lcls = light === "green" ? "g" : light === "amber" ? "a" : light === "red" ? "r" : "u";
       const verdict = this.t("cp.nurture.verdict_" +
         (light === "green" ? "green" : light === "amber" ? "amber" : light === "red" ? "red" : "unknown"));
-      const kpi = (n, label, cls) =>
-        '<div class="nt-kpi"><div class="n' + (cls ? " " + cls : "") + '">' + n + "</div>" +
-        '<div class="l" title="' + esc(label) + '">' + esc(label) + "</div></div>";
+      // hint 给「起号期」用：这个数来自账号注册天数，不是「已配养护方案」的数，
+      // 两个数并排放最容易被读成矛盾（实况 2 起号期 / 0-10 已启用）→ 口径写在悬浮里
+      const kpi = (n, label, cls, hint) =>
+        '<div class="nt-kpi"' + (hint ? ' title="' + esc(hint) + '"' : "") + ">" +
+        '<div class="n' + (cls ? " " + cls : "") + '">' + n + "</div>" +
+        '<div class="l" title="' + esc(hint || label) + '">' + esc(label) + "</div></div>";
+      // 折叠时标题行接过灯 + 判词：概览这块的全部价值就是这一句，不能只剩标题
+      const ovFolded = this._isFolded("overview");
       const overview =
-        '<div class="nt-sec">' + esc(this.t("cp.nurture.sec_overview")) + "</div>" +
-        '<div class="nt-health" title="' + esc(this.t("cp.nurture.health")) + '">' +
-        '<span class="nt-light ' + lcls + '"></span>' +
-        '<span class="nt-verdict" title="' + esc(verdict) + '">' + esc(verdict) + "</span></div>" +
-        '<div class="nt-sum">' +
-        kpi(active, this.t("cp.nurture.active"), "") +
-        kpi(warming, this.t("cp.nurture.warming"), warming ? "warm" : "") +
-        kpi(risk, this.t("cp.nurture.risk"), risk ? "bad" : "") +
-        "</div>";
+        this._secHead("overview", this.t("cp.nurture.sec_overview"),
+          ovFolded ? '<span class="nt-light ' + lcls + '"></span>' +
+            '<span class="cnt" title="' + esc(verdict) + '">' + esc(verdict) + "</span>" : "") +
+        (ovFolded ? "" :
+          '<div class="nt-health" title="' + esc(this.t("cp.nurture.health")) + '">' +
+          '<span class="nt-light ' + lcls + '"></span>' +
+          '<span class="nt-verdict" title="' + esc(verdict) + '">' + esc(verdict) + "</span></div>" +
+          '<div class="nt-sum">' +
+          kpi(active, this.t("cp.nurture.active"), "") +
+          kpi(warming, this.t("cp.nurture.warming"), warming ? "warm" : "",
+            this.t("cp.nurture.warming_hint")) +
+          kpi(risk, this.t("cp.nurture.risk"), risk ? "bad" : "") +
+          "</div>");
 
       const ro = canW ? "" : '<div class="nt-ro">' + esc(this.t("cp.nurture.readonly")) + "</div>";
       // intro 横幅：引擎暂停期常驻 DOM（nurtured>0 时 hidden）——保存后 _syncCounts
       // 就地隐现，不整块重渲（重渲会冲掉行内「已保存 ✓」反馈）。
-      const intro = (canW && accounts.length && !eng.enabled)
+      // 账号方案折起时不出这条引导：它说的「在下方给账号开启养护」指向的东西被
+      // 收起来了，留着就是指着空处说话。
+      const intro = (canW && accounts.length && !eng.enabled && !this._isFolded("accounts"))
         ? '<div class="nt-intro" data-role="intro"' + ((d.nurtured || 0) ? " hidden" : "") + ">" +
           esc(this.t("cp.nurture.intro_empty")) + "</div>" : "";
 
-      this._render(
-        ro + overview + intro +
+      const body = ro + overview + intro +
         this._engineHtml(d, canW) +
         this._shadowSectionHtml(d) +
         this._accountsHtml(d, canW) +
-        (canW ? this._advancedHtml(d) : "") +
-        '<div data-role="err"></div>' +
-        '<div class="nt-hint">' + esc(this.t("cp.nurture.hint")) + "</div>");
+        (canW ? this._advancedHtml(d) : "");
+      // 全部分区收起 → 连底部科普脚注一起收（否则「全收起」后它反而是屏上最大一块
+      // 文字，折叠等于没把空间还回来）。展开任意一块即回来。
+      const allFolded = this._secIds.length > 0 && this._secIds.every((id) => this._isFolded(id));
+      this._render(body + '<div data-role="err"></div>' +
+        (allFolded ? "" : '<div class="nt-hint">' + esc(this.t("cp.nurture.hint")) + "</div>"));
       this._renderShadowInto();   // 已有样本时立即回填（重渲后列表容器是新的）
     }
 
@@ -350,6 +451,21 @@
       else if (dry) { state = this.t("cp.nurture.eng_dry"); cls = "dry"; }
       else { state = this.t("cp.nurture.eng_live", { n: eng.canary_count || 0 }); cls = "live"; }
       const stopped = (eng.enabled && !eng.running) ? (" · " + this.t("cp.nurture.eng_stopped")) : "";
+      const noCanary = (live && !(eng.canary_count))
+        ? '<div class="nt-note">' + esc(this.t("cp.nurture.eng_no_canary")) + "</div>" : "";
+      // 引擎开着却零启用方案＝最高频误配（lint 警告收进了高级折叠，这一条必须在
+      // 决策现场内联可见，否则「模拟运行中但记录永远是空的」没人看得懂）。
+      const noPlans = (eng.enabled && !(nurtured > 0))
+        ? '<div class="nt-note">' + esc(this.t("cp.nurture.warn_no_enabled_accounts")) + "</div>" : "";
+      // 折叠时标题行接过引擎状态（含状态色）——「现在是暂停还是在真发」是这块的
+      // 首要事实，收起后也必须一眼可见；折叠即不再构建按钮/确认框。
+      // **两条误配警示折叠后照旧显示**：折叠是「我知道了，先收起来」，不是
+      // 「把出问题的事实一起藏掉」——它们本就只在误配时才出现。
+      const engFolded = this._isFolded("engine");
+      const engHead = this._secHead("engine", this.t("cp.nurture.sec_engine"),
+        engFolded ? '<span class="cnt ' + cls + '" title="' + esc(state + stopped) + '">' +
+          esc(state + stopped) + "</span>" : "");
+      if (engFolded) return engHead + noCanary + noPlans;
       let btns = "";
       if (canW) {
         if (this._goliveArm) {
@@ -401,13 +517,7 @@
       const foot = (p === 0 && ex === 0)
         ? this.t("cp.nurture.eng_foot_zero")
         : this.t("cp.nurture.eng_foot", { p: p, e: ex });
-      const noCanary = (live && !(eng.canary_count))
-        ? '<div class="nt-note">' + esc(this.t("cp.nurture.eng_no_canary")) + "</div>" : "";
-      // 引擎开着却零启用方案＝最高频误配（lint 警告收进了高级折叠，这一条必须在
-      // 决策现场内联可见，否则「模拟运行中但记录永远是空的」没人看得懂）。
-      const noPlans = (eng.enabled && !(nurtured > 0))
-        ? '<div class="nt-note">' + esc(this.t("cp.nurture.warn_no_enabled_accounts")) + "</div>" : "";
-      return '<div class="nt-sec">' + esc(this.t("cp.nurture.sec_engine")) + "</div>" +
+      return engHead +
         '<div class="nt-eng">' + steps +
         '<span class="nt-eng-state ' + cls + '">' + esc(state) + esc(stopped) + "</span>" +
         btns + '<div class="nt-eng-foot">' + esc(foot) + "</div>" + noCanary + noPlans + "</div>";
@@ -418,7 +528,11 @@
       const led = eng.ledger || {};
       const has = this._shadow && this._shadow.length;
       if (!eng.enabled && !led.shadow_len && !has) return "";
-      return '<div class="nt-sec">' + this.esc(this.t("cp.nurture.shadow_hd")) + "</div>" +
+      const folded = this._isFolded("shadow");
+      const head = this._secHead("shadow", this.t("cp.nurture.shadow_hd"),
+        (folded && has) ? '<span class="cnt">' + this._shadow.length + "</span>" : "");
+      if (folded) return head;
+      return head +
         '<div class="nt-shadow"><div data-role="shadow-list">' + this._shadowRowsHtml() + "</div></div>";
     }
 
@@ -444,14 +558,51 @@
     _accountsHtml(d, canW) {
       const esc = (s) => this.esc(s);
       const accounts = d.accounts || [];
-      const head = '<div class="nt-sec">' + esc(this.t("cp.nurture.sec_accounts")) +
-        (accounts.length
-          ? '<span class="cnt" data-role="acct-cnt">' +
-            esc(this.t("cp.nurture.acct_count", { n: d.nurtured || 0, t: accounts.length })) + "</span>"
-          : "") + "</div>";
-      const rows = accounts.map((a) => this._acctHtml(a, canW)).join("") ||
+      const folded = this._isFolded("accounts");
+      // 「n/t 已启用」折不折叠都在（_syncCounts 就地回填靠这个 data-role，
+      // 折叠态下它仍在 DOM 里 → 保存后计数照常更新）
+      const cnt = accounts.length
+        ? '<span class="cnt" data-role="acct-cnt">' +
+          esc(this.t("cp.nurture.acct_count", { n: d.nurtured || 0, t: accounts.length })) + "</span>"
+        : "";
+      const dirtyN = folded
+        ? Object.keys(this._work).filter((k) => this._isDirty(k)).length : 0;
+      const dirty = dirtyN
+        ? '<span class="dirty" title="' + esc(this.t("cp.nurture.save")) + '">●</span>' : "";
+      const head = this._secHead("accounts", this.t("cp.nurture.sec_accounts"), cnt + dirty);
+      if (folded) return head;
+      const vis = this._visibleAccounts(accounts);
+      const rows = vis.rows.map((a) => this._acctHtml(a, canW)).join("") ||
         '<div class="nt-empty">' + esc(this.t("cp.nurture.no_accts")) + "</div>";
-      return head + rows;
+      let more = "";
+      if (vis.hidden) {
+        more = '<button type="button" class="nt-acct-more" data-act="acct-all">' +
+          esc(this.t("cp.nurture.acct_show_all", { n: accounts.length })) + "</button>";
+      } else if (this._acctShowAll && accounts.length > ACCT_VISIBLE_CAP + 1) {
+        more = '<button type="button" class="nt-acct-more" data-act="acct-less">' +
+          esc(this.t("cp.nurture.acct_show_less")) + "</button>";
+      }
+      return head + rows + more;
+    }
+
+    /* 「这个号在养吗」——工作副本优先于服务端基线（未保存的开关也算，否则刚打开
+       开关的号会在下一次重渲里被截断藏走）。 */
+    _acctOn(a) {
+      const w = this._work[String(a.nurture_key || "")];
+      return w ? !!w.enabled : !!((a.nurture_plan || {}).enabled);
+    }
+    /* 截断选择：保持原序，可见集 = 全部在养的号 ∪ 其余补到 CAP。 */
+    _visibleAccounts(accounts) {
+      if (this._acctShowAll || accounts.length <= ACCT_VISIBLE_CAP + 1) {
+        return { rows: accounts, hidden: 0 };
+      }
+      const on = accounts.filter((a) => this._acctOn(a));
+      const room = Math.max(0, ACCT_VISIBLE_CAP - on.length);
+      const keep = {};
+      on.concat(accounts.filter((a) => !this._acctOn(a)).slice(0, room))
+        .forEach((a) => { keep[String(a.nurture_key || "")] = 1; });
+      const rows = accounts.filter((a) => keep[String(a.nurture_key || "")]);
+      return { rows: rows, hidden: accounts.length - rows.length };
     }
 
     _acctHtml(a, canW) {
@@ -508,13 +659,14 @@
     }
 
     _advancedHtml(d) {
-      const esc = (s) => this.esc(s);
-      const open = !!this._advOpen;
-      const body = open
-        ? '<div class="nt-adv-bd">' + this._warningsHtml(d) + this._probeHtml(d) + "</div>"
-        : "";
-      return '<div class="nt-adv"><button type="button" class="nt-adv-hd" data-act="adv">' +
-        (open ? "▾ " : "▸ ") + esc(this.t("cp.nurture.sec_advanced")) + "</button>" + body + "</div>";
+      const folded = this._isFolded("advanced");   // 唯一默认收起的分区
+      const ws = (d && d.warnings) || [];
+      const head = this._secHead("advanced", this.t("cp.nurture.sec_advanced"),
+        (folded && ws.length) ? '<span class="cnt">⚠ ' + ws.length + "</span>" : "",
+        "nt-adv-hd");
+      const body = folded ? ""
+        : '<div class="nt-adv-bd">' + this._warningsHtml(d) + this._probeHtml(d) + "</div>";
+      return '<div class="nt-adv">' + head + body + "</div>";
     }
 
     _warningsHtml(d) {
@@ -563,9 +715,10 @@
       if (act === "golive-ask") { _beacon("ntr_golive_ask"); this._goliveArm = true; this._renderAll(); return; }
       if (act === "golive-no") { _beacon("ntr_golive_cancel"); this._goliveArm = false; this._renderAll(); return; }
       if (act === "golive-yes") { _beacon("ntr_golive_confirm"); this._goliveArm = false; this._saveEngine("go_live"); return; }
-      if (act === "adv") {
-        this._advOpen = !this._advOpen;
-        if (this._advOpen) _beacon("ntr_adv_open");
+      if (act === "fold") { this._toggleFold(el.getAttribute("data-fold")); return; }
+      if (act === "acct-all" || act === "acct-less") {
+        this._acctShowAll = (act === "acct-all");
+        _beacon(this._acctShowAll ? "ntr_acct_show_all" : "ntr_acct_show_less");
         this._renderAll();
         return;
       }

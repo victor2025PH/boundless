@@ -90,7 +90,10 @@ def register_support_routes(app, ctx) -> None:
         except Exception:
             note = ""  # 无 body / 非 JSON 都是合法调用（面板按钮就不带 note）
 
-        from src.utils.diag_upload import build_and_upload, error_detail_for
+        from src.utils.diag_upload import (
+            build_and_upload, error_detail_for, probe_site_connectivity,
+            site_url,
+        )
         out = await build_and_upload(config_manager, note=note)
         if out.get("ok"):
             resp = {"ok": True, "code": str(out.get("code") or "")}
@@ -100,7 +103,26 @@ def register_support_routes(app, ctx) -> None:
         err = str(out.get("error") or "upload_failed")
         # 实施86 域A-2①：长断网时包已落本机 outbox → 文案如实告知「已暂存会自动
         # 补传」，替代旧的「请检查网络后重试」死胡同（#51 skuio 实录）。
-        if out.get("staged") and err == "upstream_unreachable":
+        # #17（实施90）：失败文案叠加连通自诊结论（小 GET 与大 POST 正交）——
+        # 「DNS 解析失败（换网络/改 DNS）」「官网可达但大包被掐（已有 mini/暂存
+        # 兜底）」「线路整体不通」三种病给三种人话，替代笼统「检查网络」。
+        _diag_line = ""
+        if err in ("upstream_unreachable", "upstream_dns_failed"):
+            try:
+                import asyncio as _aio
+                _verdict = await _aio.to_thread(
+                    probe_site_connectivity, site_url(config_manager))
+                _diag_line = tr(request, {
+                    "ok": "err.svc.selfdiag_site_ok",
+                    "dns": "err.svc.selfdiag_dns",
+                }.get(_verdict, "err.svc.selfdiag_unreachable"))
+            except Exception:
+                _diag_line = ""
+        if out.get("staged") and err in ("upstream_unreachable",
+                                         "upstream_dns_failed"):
+            _base = tr(request, "err.svc.upstream_unreachable_staged")
             return {"ok": False, "staged": True,
-                    "detail": tr(request, "err.svc.upstream_unreachable_staged")}
-        return {"ok": False, "detail": error_detail_for(request, err)}
+                    "detail": (_base + ("\n" + _diag_line if _diag_line else ""))}
+        _d = error_detail_for(request, err)
+        return {"ok": False,
+                "detail": (_d + ("\n" + _diag_line if _diag_line else ""))}

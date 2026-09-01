@@ -11,7 +11,7 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\restart_preflight.ps1
 #     [-Instance zhiliao]      target instance (default zhiliao)
-#     [-SkipActiveCheck]       accept recent dirty-file activity (it is YOURS)
+#     [-SkipActiveCheck]       accept recent .py/config activity (it is YOURS)
 #     [-ExtraTests a.py,b.py]  extra pytest files (e.g. sibling batch tests)
 #
 # Read-only: never restarts, never writes. Exit 0 = GO, 1 = NO-GO.
@@ -33,7 +33,20 @@ Write-Output ("=== restart preflight for '{0}' @ {1} ===" -f $Instance, (Get-Dat
 Write-Output ''
 Write-Output '--- [1/5] shared-tree activity (a restart loads EVERY line\''s on-disk code) ---'
 $now = Get-Date
-$active = @()
+# Graded by whether a RESTART can actually load the file (2026-08-28):
+#   blocking = .py (imported) + startup-read config yaml -> a half-saved one of
+#              these is exactly the 2 AM boot failure this gate exists to stop.
+#   noise    = everything else (.md / .json state / .txt / .log / templates /
+#              css / js). Templates+i18n are hot-reload: a half-save there is
+#              ALREADY live and a restart neither causes nor worsens it, so it
+#              has no bearing on the restart decision.
+# Why grade at all: a scheduled task (SeatLogMonitor, every 15 min) rewrites
+# deploy/desktop/*.md + *.state.json forever, so the flat 10-min-quiet rule can
+# NEVER be satisfied naturally. A gate that always says NO-GO trains everyone to
+# pass -SkipActiveCheck reflexively, which silently disables the .py protection
+# too -- worse than no gate, because it still looks like one.
+$activeBlock = @()
+$activeNoise = @()
 foreach ($ln in (git status --short 2>$null)) {
     if (-not $ln -or $ln.Length -lt 4) { continue }
     $rel = $ln.Substring(3).Trim().Trim('"')
@@ -46,17 +59,27 @@ foreach ($ln in (git status --short 2>$null)) {
         if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
     }
     $age = ($now - (Get-Item -LiteralPath $p).LastWriteTime).TotalMinutes
-    if ($age -ge 0 -and $age -le 10) { $active += ('  {0,5:N1} min  {1}' -f [math]::Round($age, 1), $rel) }
-}
-if ($active.Count -gt 0) {
-    $active | Select-Object -First 15 | ForEach-Object { Write-Output $_ }
-    if ($SkipActiveCheck) {
-        Write-Output '  ACTIVE files present but -SkipActiveCheck given (operator says they are theirs).'
+    if ($age -lt 0 -or $age -gt 10) { continue }
+    $line = ('  {0,5:N1} min  {1}' -f [math]::Round($age, 1), $rel)
+    if ($rel -match '\.py$' -or $rel -match 'config/[^/]*\.(yaml|yml)$') {
+        $activeBlock += $line
     } else {
-        Write-Output '  NO-GO: files changed in the last 10 min - a sibling may be mid-save.'
+        $activeNoise += $line
+    }
+}
+if ($activeBlock.Count -gt 0) {
+    Write-Output '  loadable code touched in the last 10 min (a restart WILL load it):'
+    $activeBlock | Select-Object -First 15 | ForEach-Object { Write-Output $_ }
+    if ($SkipActiveCheck) {
+        Write-Output '  ACTIVE .py/config present but -SkipActiveCheck given (operator says they are theirs).'
+    } else {
+        Write-Output '  NO-GO: a sibling may be mid-save in code a restart loads.'
         Write-Output '         wait for quiet, or re-run with -SkipActiveCheck if these are YOUR saves.'
         $fails += 'active-files'
     }
+} elseif ($activeNoise.Count -gt 0) {
+    Write-Output '  quiet on loadable code; recently touched non-loadable files (NOT blocking):'
+    $activeNoise | Select-Object -First 8 | ForEach-Object { Write-Output $_ }
 } else {
     Write-Output '  quiet (no dirty file touched in 10 min).'
 }
@@ -250,7 +273,9 @@ if ($fails.Count -eq 0) {
     Write-Output ''
     Write-Output 'next steps (mechanism cross-refs):'
     if ($fails -contains 'active-files') {
-        Write-Output '  active-files  -> wait for quiet, or -SkipActiveCheck if YOUR saves;'
+        Write-Output '  active-files  -> a sibling is mid-save in .py/config that a restart LOADS'
+        Write-Output '                  (non-loadable files like .md/.json never block). Wait for'
+        Write-Output '                  quiet, or -SkipActiveCheck if those saves are YOURS;'
         Write-Output '                  declare -Intent so siblings know what you are loading:'
         Write-Output '                  scripts\agent_probe.ps1 -Intent "batch: <theme>"'
     }

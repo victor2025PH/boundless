@@ -112,6 +112,9 @@ LANG_NAMES: Dict[str, str] = {
     "yo": "Yoruba",
     "ig": "Igbo",
     "so": "Somali",
+    # ── 中文变体（2026-08-29 坐席出向翻译目标；detect 不产出这些码，纯目标语）──
+    "zh-tw": "Traditional Chinese",
+    "yue": "Cantonese",
     "unknown": "Unknown",
 }
 
@@ -366,6 +369,13 @@ class TranslationService:
             pref_engine = "deepl"
         if not src_text.strip():
             return TranslationResult(src_text, "", source, target, True, provider="none")
+        # #115（0831 钧原图 906）：纯媒体占位（「[图片]」「[语音消息]」这类整串
+        # 只有一对方括号的系统占位）没有可译正文，送 LLM 只会换来「您没有提供
+        # 需要翻译的消息内容」式 meta 错误响应（它此前被当译文进了会话流）。
+        # identity 早退＝原样返回：入站译文行不渲染、出站发原文，所有调用链同享。
+        # 带配文的「[图片] 今天拍的」不命中（占位后还有正文），照常翻译。
+        if re.fullmatch(r"\[[^\[\]]{1,24}\]", src_text.strip()):
+            return TranslationResult(src_text, src_text, source, target, True, provider="identity")
         if source == target:
             return TranslationResult(src_text, src_text, source, target, True, provider="identity")
 
@@ -627,10 +637,14 @@ class TranslationService:
 
 
 def normalize_lang(lang: str) -> str:
+    # zh-tw 是一等目标语（繁体中文，2026-08-29 起）：以前折叠成 zh 会让
+    # 简体→繁体在 translate() 的 source==target 短路里恒 identity（一个字不变）。
+    # zh-hant / zh-hk 作为别名归入 zh-tw（书面繁体先合并，港台用词变体后续再分）。
     code = str(lang or "").strip().lower().replace("_", "-")
     aliases = {
         "zh-cn": "zh",
-        "zh-tw": "zh",
+        "zh-hant": "zh-tw",
+        "zh-hk": "zh-tw",
         "cn": "zh",
         "jp": "ja",
         "kr": "ko",

@@ -102,9 +102,18 @@ brotli>=1.1.0
 # 防「I'm Lin Xiaoyu」这类正确英文自称被误拦；纯 Python 无二进制依赖，缺库软降级）
 pypinyin>=0.53.0
 
-# 简→繁 UI 词包生成（scripts/i18n_hant.py，s2twp 台湾用语短语级转换；纯 Python。
-# 仅 regen 繁体词包时用到——运行时与测试都不 import，产物 zh_hant_auto.py 随仓库走）
+# 简→繁转换（s2twp 台湾用语；纯 Python）。两个消费方：
+# ① scripts/i18n_hant.py regen 繁体 UI 词包（产物 zh_hant_auto.py 随仓库走）；
+# ② translation_engines.OpenCCEngine（2026-08-29，zh→zh-tw 出向翻译的零成本首选线，
+#    运行时惰性 import；库缺失 available=False 路由自动跳过，非硬依赖）。
 opencc-python-reimplemented>=0.1.7
 
 # 视频理解依赖系统 ffmpeg/ffprobe（抽画面帧 + 抽音轨；Dockerfile 已装）。
 # 视频音轨复用 faster-whisper ASR；画面帧复用 Pillow 拼图 + Vision。
+
+# 小智「Windows 操控 runner」执行层（实施91）：纯 Python UIA 无障碍树只读侦察
+# （list_windows / read_tree / screenshot）。**仅受控机（Windows）需要**——那台机
+# 上跑 runner/pc_runner.py 才装；小智后端 / CI / 非 Windows 缺库自动降级
+# （pc_runner._UIA_OK=False，侦察返回 degraded、服务不崩）。故用平台标记，
+# 非 win32 环境 pip 直接跳过、CI 相关门禁软依赖 skip。
+uiautomation>=2.0.18 ; sys_platform == "win32"

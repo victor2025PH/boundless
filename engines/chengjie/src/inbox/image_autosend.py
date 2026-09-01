@@ -665,11 +665,19 @@ def resolve_consistency_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         continuity = 90.0
     enabled = bool(c.get("enabled", True))
+    # 实施90 三个新键（随 enabled 总闸）：
+    # resend_policy: cooldown(默认，旧行为「翻旧照」) | strict(同会话绝不重发，
+    #   素材耗尽交生成链/诚实文字)；season_gate/place_gate（默认开）——只对
+    #   带 season:/place: 标注的条目生效，未打标部署零行为变化。
+    policy = str(c.get("resend_policy", "cooldown") or "cooldown").strip().lower()
     return {
         "enabled": enabled,
         "now_hour": (time.localtime().tm_hour if enabled else None),
         "resend_cooldown_hours": (cooldown if enabled else 0),
         "continuity_minutes": (continuity if enabled else 0),
+        "no_resend": bool(enabled and policy == "strict"),
+        "season_gate": bool(enabled and c.get("season_gate", True)),
+        "place_gate": bool(enabled and c.get("place_gate", True)),
     }
 
 
@@ -726,13 +734,26 @@ def pick_registered_media(
                 _req = ""
         if _req:
             _scene_cls = scene_class_of(_req) or _req.strip().lower()
+    # 实施90 季节/地点门：人设「此刻季节 + 所在国」上下文（软失败=不设门）。
+    _geo = {"season": "", "country": ""}
+    if cc.get("season_gate") or cc.get("place_gate"):
+        try:
+            from src.companion.media_taxonomy import persona_geo_context
+            _geo = persona_geo_context(str(persona_id or ""))
+        except Exception:
+            _geo = {"season": "", "country": ""}
     return pick_media(
         store, str(persona_id or ""), str(peer_text or ""),
         generic_ok=generic_ok, avoid_id=avoid_id, bond_level=bond_level,
         conv_key=conv_key, resend_after_days=_resend_days,
         now_hour=cc["now_hour"], required_scene_class=_scene_cls,
         resend_cooldown_hours=cc["resend_cooldown_hours"],
-        continuity_minutes=cc["continuity_minutes"])
+        continuity_minutes=cc["continuity_minutes"],
+        no_resend=bool(cc.get("no_resend")),
+        now_season=(str(_geo.get("season") or "")
+                    if cc.get("season_gate") else ""),
+        home_country=(str(_geo.get("country") or "")
+                      if cc.get("place_gate") else ""))
 
 
 def media_caption(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:

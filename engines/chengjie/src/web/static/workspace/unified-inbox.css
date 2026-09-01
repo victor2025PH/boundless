@@ -26,15 +26,25 @@
 :root[data-cp-theme="dark"] .connect-qr-mask{background:rgba(10,12,20,.86);color:#cbd5e1;}
 :root[data-cp-theme="dark"] .qr-panel{background:var(--bg-elev,#1a1c22);}
 
-/* 撑满父容器（workspace_base 留的 content 区，ws-body = 100vh-52px） */
-.inbox-root{display:grid;grid-template-columns:var(--nav-w) var(--list-w) 1fr;height:100%;overflow:hidden;background:var(--bg-page);}
+/* 撑满父容器（workspace_base 留的 content 区，ws-body = 100vh-52px）。
+   #75 二轮（2026-08-31，原图 915）：行轨必须 minmax(0,1fr) 硬钉在容器高——
+   缺省隐式行轨是 auto，行高取各列「最小贡献」的最大值；nav-rail 此前
+   overflow:visible ⇒ 最小贡献=全部图标堆叠高（低窗高 + 平台多时 > 容器高），
+   整行被撑破：三列面板全都探出视口底（实测 1280x540 下 panel 底越界 97px），
+   conv-items 自以为几乎不用滚（滑块占满全轨）而列表底被裁——三平台同病。 */
+.inbox-root{display:grid;grid-template-columns:var(--nav-w) var(--list-w) 1fr;grid-template-rows:minmax(0,1fr);height:100%;overflow:hidden;background:var(--bg-page);}
 
 /* ===== 平台导航栏 =====
    2026-08-17 起随主题翻转（修「选亮色左栏还是暗的」）：亮=极浅灰面+石板灰图标，
    暗=原深色渐变。--rail-* 令牌定义在 unified_inbox.html 的 :root 亮/暗块（暗档取
    历史字面量=暗色零视觉回归）；本文件所有 var() 带暗色回落值——模板与 CSS 热更新
    有先后窗口，令牌未落地时保持旧观感，每一步自洽。 */
-.nav-rail{display:flex;flex-direction:column;align-items:center;background:var(--rail-bg,linear-gradient(180deg,#15161b,#1a1c22));padding:8px 0;gap:4px;overflow:visible;box-shadow:var(--rail-edge,inset -1px 0 0 rgba(255,255,255,.07));}
+/* #75 二轮：overflow visible → y 向可滚（行轨钉死后低窗高下图标堆叠高会超出
+   rail 高度，不可滚=底部「账号管理/主题」按钮被裁没）。滚动条隐藏走 .adk-scroll
+   同款（滚轮/触摸仍可滚）；徽标 -3px/-2px 溢出只相对 44px 图标块、仍在 64px rail
+   盒内，x 向 hidden 不裁徽标；悬浮卡 .nav-tip 是 position:fixed 不受本裁剪影响。 */
+.nav-rail{display:flex;flex-direction:column;align-items:center;background:var(--rail-bg,linear-gradient(180deg,#15161b,#1a1c22));padding:8px 0;gap:4px;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;box-shadow:var(--rail-edge,inset -1px 0 0 rgba(255,255,255,.07));}
+.nav-rail::-webkit-scrollbar{display:none;}
 .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--bl-growth-ring,linear-gradient(135deg,#22d3ee,#3b82f6));box-shadow:0 0 12px rgba(34,211,238,.4);display:flex;align-items:center;justify-content:center;margin-bottom:8px;font-size:18px;}
 .nav-plat{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,opacity .15s;font-size:22px;color:var(--rail-ink,rgba(255,255,255,.5));flex-shrink:0;}
 .nav-plat:hover{background:var(--rail-hover,rgba(255,255,255,.1));}
@@ -164,7 +174,18 @@
 .fs-clear{color:var(--text-tiny);cursor:pointer;font-size:11px;margin-left:2px;white-space:nowrap;}
 .fs-clear:hover{color:var(--accent);}
 
-.conv-items{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+/* B60 族（工单#20/历史_307）：列 flex 子项缺 min-height:0 时不肯缩，父级
+   overflow:hidden 直接裁掉内容底＝「已归档」footer 滚不到。与 .group-sec-body 同构。 */
+/* #75（0830 skuio「左侧下拉条拉不动」）：旧 scrollbar-width:thin + 边框色拇指在
+   Windows 上 ≈6px 且与面板底几乎同色——看不见也抓不住（滚轮能用、拖拽必 miss）。
+   且 Chromium 下设了标准 scrollbar-width 会屏蔽 ::-webkit-scrollbar 自定义样式，
+   故此处**不设** scrollbar-width，改 webkit 伪类给 10px 可视拇指（Firefox 回落
+   系统默认宽条，同样可抓）。 */
+.conv-items{flex:1;min-height:0;overflow-y:auto;}
+.conv-items::-webkit-scrollbar{width:10px;}
+.conv-items::-webkit-scrollbar-track{background:transparent;}
+.conv-items::-webkit-scrollbar-thumb{background:color-mix(in srgb, var(--text-sub) 42%, transparent);border-radius:5px;border:2px solid transparent;background-clip:content-box;min-height:36px;}
+.conv-items::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb, var(--text-sub) 68%, transparent);border:2px solid transparent;background-clip:content-box;}
 /* 群组动态折叠区：贴底，群/频道单列，默认折叠；展开后自身可滚动，不挤占私聊列表。 */
 .group-section{position:relative;flex:none;border-top:1px solid var(--border);background:var(--bg-soft);max-height:46%;display:flex;flex-direction:column;overflow:hidden;}
 .group-sec-head{display:flex;align-items:center;gap:7px;padding:9px 14px;cursor:pointer;user-select:none;font-size:12px;font-weight:700;color:var(--text-sub);transition:background .15s;}
@@ -516,6 +537,66 @@
 .rt-primary:hover{background:var(--bl-growth-100,#ddeefd) !important;}
 /* 翻译弹层：标题 + 绿色一键开启 + 分区排版 */
 .xl-pop-hd{font-size:13px;font-weight:700;color:var(--text-main);margin:0 0 8px;display:flex;align-items:center;gap:5px;}
+.xl-pop-hd .xl-pop-x{margin-left:auto;border:0;background:transparent;color:var(--text-tiny);font-size:16px;line-height:1;padding:2px 4px;cursor:pointer;border-radius:6px;}
+.xl-pop-hd .xl-pop-x:hover{background:var(--bg-hover);color:var(--text-main);}
+.xl-pop-hd .xl-pop-x:focus-visible{outline:2px solid var(--xl-accent);outline-offset:1px;}
+/* 语种芯片：替代原生 <select>（34 项会盖住「发送选项」且系统控件不跟 --xl-accent） */
+.xl-lang-chip{display:inline-flex;align-items:center;gap:4px;min-width:132px;max-width:100%;
+  border:1px solid var(--xl-accent-border);border-radius:7px;padding:4px 8px;font:inherit;font-size:12px;font-weight:600;
+  background:var(--bg-soft);color:var(--xl-accent-strong);cursor:pointer;text-align:left;}
+.xl-lang-chip:hover{border-color:var(--xl-accent);}
+.xl-lang-chip:focus-visible{outline:2px solid var(--xl-accent);outline-offset:1px;}
+.xl-lang-chip.on{border-color:var(--xl-accent);background:var(--xl-accent-bg);font-weight:700;}
+.xl-lang-chip .xl-chip-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xl-lang-chip .xl-chip-caret{flex:none;opacity:.65;font-size:10px;}
+.xl-topbar .xl-lang-chip{min-width:108px;padding:2px 8px;font-size:11px;background:var(--bg-panel);}
+.xl-sel-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+.xlate-dir{position:relative;}
+#xlate-pop.show.is-pick{display:flex;flex-direction:column;overflow:hidden;max-height:min(72vh,560px);}
+#xl-pop-picker{display:none;flex-direction:column;min-height:240px;flex:1;min-height:0;}
+#xlate-pop.is-pick #xl-pop-home{display:none;}
+#xlate-pop.is-pick #xl-pop-picker{display:flex;}
+.xl-pick-hd{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.xl-pick-back{flex:none;border:1px solid var(--btn-border);border-radius:7px;background:var(--bg-soft);color:var(--text-main);
+  font-size:14px;line-height:1;padding:4px 8px;cursor:pointer;}
+.xl-pick-back:hover{border-color:var(--xl-accent);color:var(--xl-accent);}
+.xl-pick-title{font-size:13px;font-weight:700;color:var(--text-main);}
+.xl-pick-q{width:100%;box-sizing:border-box;border:1px solid var(--btn-border);border-radius:8px;padding:7px 10px;
+  font:inherit;font-size:12px;background:var(--bg-soft);color:var(--text-main);margin-bottom:8px;}
+.xl-pick-q:focus{outline:2px solid var(--xl-accent);outline-offset:1px;border-color:var(--xl-accent);}
+.xl-pick-recent{margin-bottom:6px;}
+.xl-pick-recent-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px;}
+.xl-pick-recent-chip{border:1px solid var(--xl-accent-border);border-radius:999px;padding:3px 10px;font:inherit;font-size:11px;font-weight:600;
+  background:var(--bg-soft);color:var(--xl-accent-strong);cursor:pointer;}
+.xl-pick-recent-chip.on,.xl-pick-recent-chip:hover{border-color:var(--xl-accent);background:var(--xl-accent-bg);}
+.xl-pick-list{flex:1;overflow:auto;min-height:0;-webkit-overflow-scrolling:touch;}
+.xl-pick-sec{font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;padding:8px 4px 4px;}
+.xl-pick-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;width:100%;min-height:36px;
+  border:0;border-radius:8px;background:transparent;color:var(--text-main);font:inherit;font-size:12px;
+  padding:6px 8px;cursor:pointer;text-align:left;}
+.xl-pick-row:hover{background:var(--bg-hover);}
+.xl-pick-row.on{background:var(--xl-accent-bg);color:var(--xl-accent-strong);font-weight:700;}
+.xl-pick-row-main{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xl-pick-row-sub{flex:none;font-size:11px;color:var(--text-tiny);max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xl-pick-empty{font-size:12px;color:var(--text-tiny);padding:16px 8px;text-align:center;}
+.xl-pick-row.kb{outline:2px solid var(--xl-accent);outline-offset:-2px;}
+.xl-pick-row.cust{box-shadow:inset 3px 0 0 var(--xl-accent);}
+#lightbox-xl.is-pick{display:flex !important;flex-direction:column;overflow:hidden;}
+#lb-xl-home{min-height:0;}
+#lb-xl-picker{display:none;flex-direction:column;min-height:220px;flex:1;min-height:0;}
+#lightbox-xl.is-pick #lb-xl-home{display:none;}
+#lightbox-xl.is-pick #lb-xl-picker{display:flex;}
+.lbxl-more{min-width:auto;}
+/* 语气四档：窄抽屉 nowrap 会裁成只剩两档；2×2 全可见 */
+#xl-tone-row{flex-wrap:wrap;}
+#xl-tone-seg{display:grid;grid-template-columns:1fr 1fr;overflow:visible;flex:1;min-width:168px;}
+#xl-tone-seg .xl-seg-btn{padding:5px 8px;}
+#xl-tone-seg .xl-seg-btn+.xl-seg-btn{border-left:0;}
+#xl-tone-seg .xl-seg-btn:nth-child(odd){border-right:1px solid var(--btn-border);}
+#xl-tone-seg .xl-seg-btn:nth-child(-n+2){border-bottom:1px solid var(--btn-border);}
+@media (max-width:480px){
+  #xlate-pop.show.is-pick{max-height:calc(100vh - 140px);}
+}
 .xl-quick-row{display:flex;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);}
 .xl-quick{flex:1;font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:7px 10px;border:1px solid transparent;border-radius:8px;background:var(--tk-emerald,#0f9d75);color:#fff;transition:background .15s,color .15s,border-color .15s,filter .15s;}
 .xl-quick:hover{filter:brightness(.92);}
@@ -622,6 +703,13 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 /* 单次翻译工具分区：小标题 + 2×2 网格，主次清晰、不再挤成乱行 */
 .xl-tools{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);}
 .xl-tools-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;margin-bottom:6px;}
+/* 「我的消息」子设置组（2026-08-30 UX 批）：发送方式/语气/语音三行本是出向翻译的
+   子设置，左侧 accent 竖线 + 缩进表达从属；出向=不译时整组降权（视觉上"这些先不用管"）。 */
+.xl-out-opts{margin:8px 0 0 4px;padding-left:9px;border-left:2px solid var(--xl-accent-border);transition:opacity .15s;}
+.xl-out-opts-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;margin-bottom:2px;}
+.xl-out-opts.dim{opacity:.45;}
+.xl-out-opts .xl-sendmode-row{margin-top:6px;}
+.xl-out-opts .xlate-dir{margin-top:6px;}
 .xl-tools-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .xl-tools-row .imgxl-btn{width:100%;text-align:center;}
 /* 入站自动译气泡 */
@@ -914,6 +1002,8 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 /* 会话行「谁在处理」微标（右侧 meta 列，与未读点/SLA 同列） */
 .conv-handler{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:8px;font-size:10px;font-weight:800;line-height:1;border:1px solid transparent;}
 .conv-handler.h-ai{color:var(--accent);border-color:color-mix(in srgb, var(--accent,#1e8cf2) 45%, transparent);background:color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent);}
+/* #12：全局真发暂停时的「AI⏸」黄态——绿标照亮=对人撒谎（钧 0830 实锤） */
+.conv-handler.h-ai.paused{color:#b45309;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);}
 .conv-handler.h-review{color:#b45309;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.12);}
 .conv-handler.h-manual{color:var(--text-sub);border-color:var(--border);background:var(--bg-soft);}
 .conv-handler.h-me{color:var(--tk-ok-ink);border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.10);}
@@ -1498,7 +1588,8 @@ button.fleet-cell:disabled{cursor:default;}
   color:var(--tk-amber-ink,#b45309);}
 .connect-steps .cs-dot{width:16px;height:16px;border-radius:50%;border:1.5px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
 .connect-steps .cs-sep{width:14px;height:1.5px;background:currentColor;opacity:.35;}
-.connect-hint{font-size:11.5px;color:var(--text-sub);line-height:1.6;}
+/* pre-line：#79 WA 扫码贴士以换行附在提示后（单行提示不受影响） */
+.connect-hint{font-size:11.5px;color:var(--text-sub);line-height:1.6;white-space:pre-line;}
 .connect-actions{display:flex;gap:8px;margin-top:14px;}
 .connect-actions button{flex:1;padding:9px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-sub);}
 .connect-actions .primary{background:var(--accent);border-color:var(--accent);color:#fff;}
@@ -2811,22 +2902,7 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 :root[data-cp-theme="dark"] .acct-chip .ac-unread{background:color-mix(in srgb,var(--text-sub,#94a3b8) 55%,transparent);}
 :root[data-cp-theme="dark"] .acct-chip .ac-unread.attn{background:#ef4444;}
 :root[data-cp-theme="dark"] .connect-qr-okov{background:color-mix(in srgb,var(--green,#22c55e) 14%,rgba(15,23,42,.82));}
-/* ── P18: 业务助手三步上手引导（coach marks）──
-   高亮环用 box-shadow 外扩 9999px 兼作背景压暗（单元素零合成层）；
-   透明 veil 收拢引导期误点（点击=下一步）。 */
-.cp-tour-veil{position:fixed;inset:0;z-index:10049;background:transparent;}
-.cp-tour-hl{position:fixed;z-index:10050;border-radius:10px;pointer-events:none;
-  box-shadow:0 0 0 3px var(--tk-brand,#4f46e5),0 0 0 9999px rgba(15,23,42,.45);
-  transition:left .25s ease,top .25s ease,width .25s ease,height .25s ease;}
-.cp-tour-pop{position:fixed;z-index:10051;width:300px;max-width:calc(100vw - 16px);
-  background:var(--tk-surface,#fff);border:1px solid var(--tk-border,#e2e8f0);
-  border-radius:12px;box-shadow:0 12px 40px rgba(15,23,42,.22);padding:12px 14px;}
-.cp-tour-t{font-size:13px;font-weight:700;color:var(--tk-text,#0f172a);margin-bottom:6px;}
-.cp-tour-b{font-size:12px;line-height:1.6;color:var(--tk-text-muted,#475569);}
-.cp-tour-ft{display:flex;gap:6px;align-items:center;margin-top:10px;}
-.cp-tour-dots{font-size:11px;color:var(--tk-text-muted,#94a3b8);margin-right:auto;}
-.cp-tour-pop .cp-tour-next{background:var(--tk-brand,#4f46e5);color:#fff;border-color:transparent;}
-@media (prefers-reduced-motion:reduce){ .cp-tour-hl{transition:none;} }
+/* ── P18 业务助手三步引导样式已随功能退役（2026-08-31 新手引导删除）── */
 /* ── P19: 本周成果 chip（agenda 行右侧；win=有成交时换庆祝色）── */
 .goal-af-wins{margin-left:auto;font-size:11px;line-height:20px;padding:0 9px;border-radius:99px;
   white-space:nowrap;background:color-mix(in srgb,var(--tk-brand,#4f46e5) 10%,transparent);

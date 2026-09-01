@@ -41,6 +41,20 @@ ZH = {
     "asb.agent.disabled": "「替我做」智能体未启用",
     "asb.agent.goal_empty": "请用一句话描述要做什么",
     "asb.agent.llm_down": "AI 规划服务暂不可用，请稍后再试",
+    # Windows 操控 runner /api/assistant/pc/*（实施91 P1）
+    "asb.pc.disabled": "「电脑操控」未启用（管理员可在配置里开启）",
+    # 电脑操控写动作（实施91 P1-2）：确认后 apply 的成败提示
+    "asb.pc.act_done": "已在电脑上执行",
+    "asb.pc.act_failed": "电脑上没执行成",
+    # run_command 回显（实施91 P2-B）
+    "asb.pc.cmd_done": "命令已执行（退出码 {code}）",
+    # 视觉定位点击（实施91 P3-B）
+    "asb.pc.click_target_done": "已按描述点击「{target}」",
+    "asb.pc.not_located": "没在画面里定位到「{target}」——换个说法，或先让我看看这台电脑",
+    "asb.pc.vision_disabled": "视觉定位点击未启用（管理员可在配置里开启 pc_runner.vision）",
+    # 信任档（实施91 P2-C）
+    "asb.pc.trust_disabled": "信任档未启用（管理员可在配置里开启 pc_runner.trust）",
+    "asb.pc.machine_unavailable": "该电脑不在白名单或已被踢下线",
     "asb.agent.plan_failed": "没能生成可靠的计划，请换个说法再试",
     # 手机扫码操控 /api/assistant/pair*（实施58 P4）
     "asb.pair.revoked": "手机配对已断开或过期，请重新扫码",
@@ -52,6 +66,18 @@ ZH = {
         "「未答清单」按频次排序＝运营补语料照单：跑 seed_product_help 或往 "
         "howto_pack 加条目。"
     ),
+    # 拒答分型行（实施74 P5，2026-08-27）：「没答上」有两种成因，处置完全不同
+    "ov2_as_refuse": "拒答分型（7天）",
+    "ov2_as_refuse_hit": "零命中",
+    "ov2_as_refuse_basis": "有条目但答不了",
+    "ov2_as_refuse_tip": (
+        "零命中＝语料里压根没有相关条目，处置是**补 how-to**（照「未答清单」加）；"
+        "有条目但答不了＝检索命中了、LLM 自认答不了（NO_BASIS 哨兵），处置是看"
+        "这批问题该不该进产品、或该条目内容不够。哨兵占比恒 0 且有拒答 → "
+        "哨兵没在工作（提示词没生效/模型不听话），此时小智会把沾边条目硬凑成答案。"
+    ),
+    "ov2_as_refuse_none": "本窗口没有拒答",
+    "ov2_as_refuse_silent": "哨兵零触发（有拒答却全是零命中）——请核查提示词是否生效",
     "ov2_as_kb": "语料条数",
     "ov2_as_qa7": "问答（7天）",
     "ov2_as_rate": "自答率",
@@ -119,6 +145,20 @@ EN = {
     "asb.act.confirm_expired": "Confirmation expired or already used, please retry",
     "asb.act.apply_failed": "Apply failed: {detail}",
     "asb.act.undo_missing": "Undo record missing or expired",
+    # Windows control runner /api/assistant/pc/* (impl91 P1)
+    "asb.pc.disabled": "PC control is not enabled (an admin can turn it on "
+                       "in config)",
+    "asb.pc.act_done": "Done on the PC",
+    "asb.pc.act_failed": "Could not run it on the PC",
+    "asb.pc.cmd_done": "Command ran (exit {code})",
+    "asb.pc.click_target_done": "Clicked \"{target}\" by description",
+    "asb.pc.not_located": "Could not locate \"{target}\" on screen — rephrase, or "
+                          "let me inspect the PC first",
+    "asb.pc.vision_disabled": "Visual click is not enabled (an admin can turn on "
+                              "pc_runner.vision in config)",
+    "asb.pc.trust_disabled": "Trusted mode is not enabled (an admin can turn on "
+                             "pc_runner.trust in config)",
+    "asb.pc.machine_unavailable": "That PC is not whitelisted or was kicked",
     # agent /api/assistant/agent/* (impl58 P2)
     "asb.agent.disabled": "The do-it-for-me agent is not enabled",
     "asb.agent.goal_empty": "Please describe the goal in one sentence",
@@ -134,6 +174,22 @@ EN = {
         "rate-limit hits = process counters. The missed-question list is the "
         "ops to-do for corpus refills (seed_product_help / howto_pack)."
     ),
+    # Refusal breakdown row (impl74 P5, 2026-08-27)
+    "ov2_as_refuse": "Refusals (7d)",
+    "ov2_as_refuse_hit": "no retrieval hit",
+    "ov2_as_refuse_basis": "hit but unanswerable",
+    "ov2_as_refuse_tip": (
+        "No retrieval hit = the corpus has nothing relevant; fix by adding "
+        "how-to entries (see the missed-question list). Hit but unanswerable "
+        "= retrieval matched yet the LLM declared it cannot answer (NO_BASIS "
+        "sentinel); decide whether those requests belong in the product, or "
+        "enrich that entry. A sentinel share stuck at 0 while refusals exist "
+        "means the sentinel is not working and the assistant is stretching "
+        "loosely-related entries into answers."
+    ),
+    "ov2_as_refuse_none": "No refusals in this window",
+    "ov2_as_refuse_silent":
+        "Sentinel never fired (all refusals were zero-hit) — check the prompt",
     "ov2_as_kb": "Corpus entries",
     "ov2_as_qa7": "Q&A (7d)",
     "ov2_as_rate": "Self-answer rate",

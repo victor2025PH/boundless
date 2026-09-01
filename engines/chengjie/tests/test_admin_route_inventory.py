@@ -439,6 +439,7 @@ _BASELINE = """
 /api/personas/profiles/{profile_id}/prompt-preview	GET
 /api/personas/profiles/{profile_id}/retire-verify	POST
 /api/personas/profiles/{profile_id}/revert	POST
+/api/personas/registry-account/{platform}/{account_id}/assign-profile	POST
 /api/personas/selfie-gate	GET
 /api/personas/selfie-gate	POST
 /api/personas/status	GET
@@ -450,9 +451,6 @@ _BASELINE = """
 /api/personas/{pid}/media/test	POST
 /api/personas/{pid}/media/retag-all	POST
 /api/personas/{pid}/media/{mid}/retag	POST
-/api/agent-tasks	GET
-/api/agent-tasks/complete	POST
-/api/agent-tasks/dismiss	POST
 /api/personas/{pid}/media/{mid}	DELETE
 /api/personas/{pid}/media/{mid}	PATCH
 /api/personas/{pid}/speech-print	POST
@@ -736,6 +734,20 @@ _BASELINE = """
 /api/workspace/chain-executions/{exec_id}/resume	POST
 /api/workspace/chain-executions/{exec_id}/skip-step	POST
 /api/workspace/chain-executions/{exec_id}/retry	POST
+/api/workspace/conv/{conversation_id}/journey	GET
+/api/workspace/conv/{conversation_id}/journey/stage	POST
+/api/workspace/conv/{conversation_id}/deal	POST
+/api/workspace/conv/{conversation_id}/deal/{deal_id}/revoke	POST
+/api/workspace/workflows/deal-engine	GET
+/api/workspace/workflows/deal-engine	POST
+/api/workspace/workflow-chains/{chain_id}/bulk-start	POST
+/api/workspace/journey-funnel	GET
+/api/workspace/cta-targets	GET
+/api/workspace/cta-targets	POST
+/api/workspace/cta-targets/{target_id}	DELETE
+/api/workspace/conv/{conversation_id}/cta-link	POST
+/r/{token}	GET
+/api/cta/convert	POST
 /api/workspace/conv/{conversation_id}/mention-suggestions	GET
 /api/workspace/conv/{conversation_id}/collab-context	GET
 /api/workspace/contact/{contact_id}/collab-context	GET
@@ -1239,6 +1251,23 @@ _ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE = """
 """
 _BASELINE += _ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE
 
+# 实施91（小智线 impl88）PC 受控机管理三端点——**代登记**（2026-08-30 晚：
+# 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住老板点名的发版重启；
+# 语义归属仍是小智线，端点行为以其实现为准，见 .ops NOTE_from_goals_sprint_*）。
+_ADDITIONS_2026_08_30_ASSISTANT_PC_PROXY = """
+/api/assistant/pc/machines	GET
+/api/assistant/pc/restore	POST
+/api/assistant/pc/revoke	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_30_ASSISTANT_PC_PROXY
+
+# 实施91 P2-C 信任档（免确认连跑，计时授信/急停）
+_ADDITIONS_2026_08_31_ASSISTANT_PC_TRUST = """
+/api/assistant/pc/trust	POST
+/api/assistant/pc/trust/revoke	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_31_ASSISTANT_PC_TRUST
+
 # 2026-08-18：完成通知链路状态（目标卡「达成后会通知谁」可见化；零密钥，
 # 文件真相口径与告警渠道面板同源）。
 _ADDITIONS_2026_08_18_GOALS_NOTIFY_STATUS = """
@@ -1308,6 +1337,13 @@ _ADDITIONS_2026_07_28_PERSONA_BIO_INVENTORY = """
 /api/personas/bio-inventory	GET
 """
 _BASELINE += _ADDITIONS_2026_07_28_PERSONA_BIO_INVENTORY
+
+# 2026-08-31：多模型路由管理（像 Cursor 按任务挑模型/端点；GET 总览 + POST 保存 overlay）
+_ADDITIONS_2026_08_31_MODEL_ROUTES_INVENTORY = """
+/api/setup/model-routes	GET
+/api/setup/model-routes	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_31_MODEL_ROUTES_INVENTORY
 
 # 2026-07-28 M10：导入向导「保存并验收」流水线——人工审核闸后的机械尾巴
 # （建档同步 + 传记入库/考题验收后台任务）收成一次提交；轮询复用
@@ -1558,16 +1594,9 @@ _ADDITIONS_2026_08_17_MSG_OPS_P2 = """
 """
 _BASELINE += _ADDITIONS_2026_08_17_MSG_OPS_P2
 
-# 2026-08-16 WP-2 首启向导（welcome_routes）：/welcome 五步向导页 + 聚合读面 +
-# 进度持久化 + 自动化档位护栏写。onboarding.enabled 基线关 → 页面与 API 全 404
-# （路由仍注册，闸在处理器内——「无此页」语义，老实例零可见变化）。
-_ADDITIONS_2026_08_16_WELCOME = """
-/welcome	GET
-/api/onboarding/status	GET
-/api/onboarding/state	POST
-/api/onboarding/automation-tier	POST
-"""
-_BASELINE += _ADDITIONS_2026_08_16_WELCOME
+# 2026-08-31 新手引导退役：WP-2 首启向导（/welcome + /api/onboarding/*）与
+# WP-7 坐席新手任务（/api/agent-tasks*）路由不再注册——条目已从清单移除，
+# 退役防复活门禁见 tests/test_onboarding_retired.py。
 
 # 2026-08-17 WP-4 合规只读导出（compliance_routes）：危机转介计数（SB 243 年报
 # 数字）+ 合规开关回显。写入面在危机处置链打点（record_crisis_referral），
@@ -1757,6 +1786,14 @@ _ADDITIONS_2026_08_29_PRESET_PREVIEW = """
 /api/companion/capabilities/preset-preview	GET
 """
 _BASELINE += _ADDITIONS_2026_08_29_PRESET_PREVIEW
+
+# 2026-08-31 #113 临时行程状态治理：一键清除（写 conversation_meta.
+# travel_cleared_ts 水位，草稿链/send-caps 可见面按水位忽略更早的行程自述，
+# 叙事立即回归档案常驻地）。会话头行程徽标 ✕ 按钮消费。
+_ADDITIONS_2026_08_31_TRAVEL_STATE = """
+/api/unified-inbox/travel-state/clear	POST
+"""
+_BASELINE += _ADDITIONS_2026_08_31_TRAVEL_STATE
 
 
 def _parse_baseline():

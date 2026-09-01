@@ -582,3 +582,102 @@ async def test_semantic_gate_disabled_keeps_old_behavior():
     router = EngineRouter([e1], min_confidence=0.5)
     r = await router.translate("你好", source_lang="zh", target_lang="en")
     assert r.ok and r.engine == "ollama_mt"
+
+
+# ── 中文变体（繁体/粤语）目标语（2026-08-29）──────────────────────────────────
+
+def test_variant_style_hint_zh_variants_only():
+    from src.ai.translation_engines import variant_style_hint
+    assert "繁體中文" in variant_style_hint("zh-tw")
+    assert "粵語口語" in variant_style_hint("YUE")   # 大小写不敏感
+    assert variant_style_hint("zh") == ""
+    assert variant_style_hint("en") == ""
+    assert variant_style_hint("") == ""
+
+
+def test_hymt_supports_zh_variants_with_chinese_prompt():
+    """zh-tw 进语种闸（HY-MT 官方模型卡本就含繁体）且走中文指令模板；yue 原有支持不回归。"""
+    eng = OllamaMTEngine(base_url="http://127.0.0.1:11434", model="m")
+    assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("yue") is True
+    p_tw = eng._build_prompt("你好", "zh", "zh-tw")
+    assert "翻译成繁体中文" in p_tw
+    p_yue = eng._build_prompt("你好", "zh", "yue")
+    assert "翻译成粤语" in p_yue
+
+
+def test_deepl_traditional_supported_cantonese_not():
+    eng = DeepLEngine("key")
+    assert eng.supports_target("zh-tw") is True   # → ZH-HANT
+    assert eng.supports_target("yue") is False    # DeepL 无粤语，路由让位下一引擎
+
+
+@pytest.mark.asyncio
+async def test_opencc_engine_converts_and_yields():
+    """OpenCC 简→繁：确定性转换（含台湾用词）；非中文源/非 zh-tw 目标让位下游。"""
+    pytest.importorskip("opencc")
+    from src.ai.translation_engines import OpenCCEngine
+
+    eng = OpenCCEngine()
+    assert eng.available is True
+    assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("zh") is False
+    assert eng.supports_target("yue") is False   # 粤语是语言变体不是字形转换
+
+    r = await eng.translate("软件视频信息", source_lang="zh", target_lang="zh-tw")
+    assert r.ok is True and r.engine == "opencc"
+    assert r.text == "軟體影片資訊"   # s2twp：字形 + 台湾用词双转换
+
+    # 明确非中文源 → 让位（字形转换救不了真翻译）
+    r2 = await eng.translate("hello", source_lang="en", target_lang="zh-tw")
+    assert r2.ok is False and r2.error.startswith("unsupported_source")
+    # 源未知/自动 → 放行（detect 对中文文本必产出 zh，护栏兜底）
+    r3 = await eng.translate("软件", source_lang="", target_lang="zh-tw")
+    assert r3.ok is True and r3.text == "軟體"
+
+
+def test_build_engines_recognizes_opencc():
+    engines = build_engines({"engines": {"order": ["opencc", "ai"]}}, ai_client=None)
+    assert [getattr(e, "name", "") for e in engines] == ["opencc", "ai"]
+
+
+@pytest.mark.asyncio
+async def test_router_opencc_first_llm_fallback_for_non_zh_source():
+    """per_lang_order 推荐姿势：zh-tw 先 opencc；英文源让位后由下游 LLM 承接。"""
+    pytest.importorskip("opencc")
+    from src.ai.translation_engines import OpenCCEngine
+
+    llm = _FixedEngine("ai", text="繁體譯文")
+    router = EngineRouter([OpenCCEngine(), llm])
+    r_zh = await router.translate("软件", source_lang="zh", target_lang="zh-tw")
+    assert r_zh.engine == "opencc" and r_zh.text == "軟體"
+    r_en = await router.translate("hello", source_lang="en", target_lang="zh-tw")
+    assert r_en.engine == "ai" and r_en.text == "繁體譯文"
+
+
+@pytest.mark.asyncio
+async def test_ai_engine_prompt_carries_variant_hint():
+    """LLM 线对 zh-tw/yue 必须带风格钉子（防简体字漏出/普通话书面语换皮）。"""
+    captured = {}
+
+    class _Cap:
+        async def chat(self, prompt, overrides=None):
+            captured["prompt"] = prompt
+            return "唔該晒你"
+
+    eng = AIEngine(_Cap())
+    r = await eng.translate("谢谢你", source_lang="zh", target_lang="yue")
+    assert r.ok is True
+    assert "Cantonese" in captured["prompt"]          # LANG_NAMES 显名
+    assert "粵語口語" in captured["prompt"]            # variant_style_hint 已注入
+
+    class _CapTw:
+        async def chat(self, prompt, overrides=None):
+            captured["prompt"] = prompt
+            return "謝謝你"
+
+    eng_tw = AIEngine(_CapTw())
+    r2 = await eng_tw.translate("谢谢你", source_lang="zh", target_lang="zh-tw")
+    assert r2.ok is True
+    assert "Traditional Chinese" in captured["prompt"]
+    assert "繁體中文" in captured["prompt"]

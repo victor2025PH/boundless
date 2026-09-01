@@ -357,6 +357,8 @@ def _news_opener(
     persona_words: Optional[List[str]] = None,
     persona_words_fn: Optional[Callable[[], List[str]]] = None,
     persona_fn: Optional[Callable[[], Any]] = None,
+    user_words_fn: Optional[Callable[[], List[str]]] = None,
+    user_country_fn: Optional[Callable[[], str]] = None,
 ) -> Dict[str, Any]:
     """今日新鲜事主动开场（签名对齐 _life_beat_opener/_weather_opener 同族，
     模块级故多收 config；返回 opener dict 或 {}＝无货，升级链自然落下一级）。
@@ -392,17 +394,32 @@ def _news_opener(
             return {}
         if not news_opener_allowed(contact_key, now=now):
             return {}
-        # 实施55 按人设分源：人设 id/居住地国家命中 region_feeds → 用该区域
-        # 缓存（并背景保鲜）；区域缓存冷启动/过期 → 回落全局缓存（宁可聊
-        # 全局新闻也不空手）。未配置 region_feeds＝旧行为逐位不变。
+        # 分源优先级（实施84 P2 > 实施55）：**用户**所在国家（显式信号解析，
+        # user_country_fn 惰性求值）→ 人设居住地 → 全局池。「用户在哪」优先
+        # 于「人设在哪」——老板拍板「新闻以用户所在城市和国家为准」。
+        # 区域缓存冷启动/过期 → 回落全局缓存（宁可聊全局新闻也不空手）。
         now_v = float(now if now is not None else time.time())
         rcfg = tcfg
         try:
-            from src.companion.daily_topics import cfg_for_region, region_key_for
-            _p = persona_fn() if persona_fn is not None else None
-            _rk = region_key_for(_p, tcfg.get("region_feeds"))
-            if _rk:
-                rcfg = cfg_for_region(tcfg, _rk)
+            from src.companion.daily_topics import (
+                cfg_for_region,
+                cfg_for_user_region,
+                region_key_for,
+            )
+            if user_country_fn is not None:
+                try:
+                    _ucc = str(user_country_fn() or "").strip()
+                except Exception:
+                    _ucc = ""
+                if _ucc:
+                    _ucfg = cfg_for_user_region(tcfg, _ucc)
+                    if _ucfg is not None:
+                        rcfg = _ucfg
+            if rcfg is tcfg:
+                _p = persona_fn() if persona_fn is not None else None
+                _rk = region_key_for(_p, tcfg.get("region_feeds"))
+                if _rk:
+                    rcfg = cfg_for_region(tcfg, _rk)
         except Exception:
             rcfg = tcfg
         if rcfg is not tcfg:
@@ -425,9 +442,14 @@ def _news_opener(
             cache = _fresh_cache(tcfg.get("cache_path"))
         if not cache:
             return {}
-        # 轻话题硬闸（allowlist）：识别不出类别的一律不做主动开场素材
+        # 轻话题硬闸（allowlist）：识别不出类别的一律不做主动开场素材。
+        # 实施84 P2：球队赛事类一并剔除（老板拍板「不做赛事分享，社会/娱乐
+        # 为主」；exclude_sports 默认开，生活方式类健身/露营词不受影响）。
+        from src.companion.daily_topics import is_sports_event_topic
+        _no_sports = bool(tcfg.get("exclude_sports", True))
         pool = [t for t in (cache.get("topics") or [])
-                if isinstance(t, dict) and smalltalk_topic(t)]
+                if isinstance(t, dict) and smalltalk_topic(t)
+                and not (_no_sports and is_sports_event_topic(t))]
         if not pool:
             return {}
         # 条目时效软偏好：优先今天内发布的，全旧才放宽（见常量注释）
@@ -455,9 +477,18 @@ def _news_opener(
                 words = persona_words_fn() or []
             except Exception:
                 words = []
+        # 实施84 P2 兴趣路由：用户聊天兴趣词（惰性求值）为主、人设口味为次
+        _uw: List[str] = []
+        if user_words_fn is not None:
+            try:
+                _uw = [str(w) for w in (user_words_fn() or []) if str(w).strip()]
+            except Exception:
+                _uw = []
         topics = pick_topics_for(
-            list(words or []), k=1, now=now_v, cache={"topics": pool},
-            variety_key=str(contact_key or ""))
+            _uw or list(words or []), k=1, now=now_v, cache={"topics": pool},
+            variety_key=str(contact_key or ""),
+            secondary_tastes=(list(words or []) if _uw else None),
+            prefer_kinds=tcfg.get("prefer_kinds"))
         if not topics:
             return {}
         t = topics[0] or {}
@@ -494,6 +525,8 @@ def maybe_upgrade_to_news(
     persona_words: Optional[List[str]] = None,
     persona_words_fn: Optional[Callable[[], List[str]]] = None,
     persona_fn: Optional[Callable[[], Any]] = None,
+    user_words_fn: Optional[Callable[[], List[str]]] = None,
+    user_country_fn: Optional[Callable[[], str]] = None,
 ) -> Dict[str, Any]:
     """在 build_proactive_opener 结果上做 news_share 升级判定（纯决策，可测）。
 
@@ -502,7 +535,9 @@ def maybe_upgrade_to_news(
     （实施55「新闻为主」）时 life_share 也让位——新闻有货即优先。其余富开场
     原样放行；升级成功把 ``silent_hours`` / ``gap_bucket`` 从原 opener 透传
     （prompt 框定层按真实沉默时长说话）。``persona_fn``＝人设 dict 惰性解析
-    （地区分源用）。无货/未开闸/异常 → 返回原 op，零行为变化。
+    （地区分源用）；``user_words_fn`` / ``user_country_fn``（实施84 P2）＝
+    用户聊天兴趣词 / 用户所在国家码的惰性解析（兴趣路由 + 用户国别分源）。
+    无货/未开闸/异常 → 返回原 op，零行为变化。
     """
     try:
         if str((op or {}).get("mode") or "") not in news_upgradeable_modes(config):
@@ -510,7 +545,8 @@ def maybe_upgrade_to_news(
         news = _news_opener(
             config, contact_key, now=now,
             persona_words=persona_words, persona_words_fn=persona_words_fn,
-            persona_fn=persona_fn)
+            persona_fn=persona_fn, user_words_fn=user_words_fn,
+            user_country_fn=user_country_fn)
         if news:
             news["silent_hours"] = (op or {}).get("silent_hours", 0.0)
             news["gap_bucket"] = str((op or {}).get("gap_bucket") or "")
@@ -1418,6 +1454,59 @@ async def maybe_start_companion_proactive(assistant) -> None:
             except Exception:
                 return []
 
+        def _news_user_words(memory_key: str) -> list:
+            """news_share 兴趣路由（实施84 P2）：**用户**聊天里的兴趣词——
+            episodic 记忆事实的内容 token（与 ritual 兴趣词同一取词口径，
+            memory_grounding._content_tokens）。失败返回 [] ＝ 回落人设词。"""
+            try:
+                sm = assistant.skill_manager
+                store = getattr(sm, "_episodic_store", None)
+                key = str(memory_key or "").strip()
+                if store is None or not key or not hasattr(store, "list_rows"):
+                    return []
+                from src.ai.memory_grounding import _content_tokens
+                out: list = []
+                seen: set = set()
+                for f in (store.list_rows(prefix=key, limit=50) or [])[:12]:
+                    lat, cjk = _content_tokens(str((f or {}).get("content") or ""))
+                    for tok in list(lat) + list(cjk):
+                        if tok and tok not in seen:
+                            seen.add(tok)
+                            out.append(tok)
+                    if len(out) >= 24:
+                        break
+                return out[:24]
+            except Exception:
+                return []
+
+        def _news_user_country(contact_key: str, memory_key: str) -> str:
+            """news_share 用户国别（实施84 P2「新闻以用户所在国家为准」）：
+            resolve_peer_locale 显式信号（自述城市/号码国码/语种默认国）→
+            国家码；user_clock 未开/解析不出返回 "" ＝ 回落人设分源。
+            phone/platform 取会话快照——resolver 内部按平台决定号码可否当
+            国码信号（与反应式 _inject_peer_locale 同参口径）。"""
+            try:
+                comp = (assistant.config.config or {}).get("companion") or {}
+                uc_cfg = comp.get("user_clock") or {}
+                if not bool(uc_cfg.get("enabled")):
+                    return ""
+                conv = _conv_index.get(str(contact_key or "")) or {}
+                from src.companion.user_clock_resolver import resolve_peer_locale
+                clock = resolve_peer_locale(
+                    str(contact_key or memory_key or ""),
+                    episodic_store=getattr(
+                        assistant.skill_manager, "_episodic_store", None),
+                    memory_key=str(memory_key or ""),
+                    phone=str(conv.get("chat_key") or ""),
+                    platform=str(conv.get("platform") or ""),
+                    language=str(conv.get("language") or ""),
+                    cfg=uc_cfg,
+                )
+                cc = str(getattr(clock, "country", "") or "").strip().upper()
+                return cc if len(cc) == 2 else ""
+            except Exception:
+                return ""
+
         def _opener(*, memory_key, silent_hours, stage, intimacy,
                     last_emotion="", last_emotion_intensity=-1.0, contact_key="",
                     min_silent_hours=None):
@@ -1449,7 +1538,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         persona_words_fn=lambda: _news_persona_words(
                             str(contact_key or "")),
                         persona_fn=lambda: _news_persona_obj(
-                            str(contact_key or "")))
+                            str(contact_key or "")),
+                        user_words_fn=lambda: _news_user_words(
+                            str(memory_key or "")),
+                        user_country_fn=lambda: _news_user_country(
+                            str(contact_key or ""), str(memory_key or "")))
                     if str((_upg or {}).get("mode") or "") == NEWS_MODE:
                         return _upg
                 except Exception:
@@ -1548,6 +1641,23 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 return False
             try:
                 return int(care_store.count_pending_by_contact(conversation_id)) > 0
+            except Exception:
+                return False
+
+        # 实施92b：与跟进 SOP 链划界——会话有在途链（running/paused）时业务节奏
+        # 由链主导（到点提醒/自动拟稿投递），本闲聊回访让路防双打扰。开关
+        # ``companion.proactive_topic.yield_to_chains``（默认开）；当前生产零
+        # 在途链＝零行为变化，链跑起来后自动生效。判定异常放行（fail-open）。
+        _yield_to_chains = bool(cfg.get("yield_to_chains", True))
+
+        def _has_running_chain(conversation_id: str) -> bool:
+            if not _yield_to_chains:
+                return False
+            store = getattr(assistant, "inbox_store", None)
+            if store is None:
+                return False
+            try:
+                return bool(store.has_any_running_chain(str(conversation_id or "")))
             except Exception:
                 return False
 
@@ -1654,7 +1764,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
             _skips: list = []
             plans = plan_proactive_sends(
                 convs, cooldown_map=cooldown_map, opener_fn=_opener,
-                has_pending_care=_has_pending_care, max_per_tick=lim, **_pp_live,
+                has_pending_care=_has_pending_care,
+                has_running_chain=_has_running_chain,
+                max_per_tick=lim, **_pp_live,
                 pacing_cfg=_pacing_live, priority_fn=_goal_priority,
                 backoff_cfg=_backoff_live,
                 response_pacing_cfg=_response_live,
@@ -2078,6 +2190,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
             account_id = plan["account_id"]
             chat_key = plan["chat_key"]
             _cfg_root = assistant.config.config or {}
+            # 人设提前解析（P0 2026-08-31）：克隆 vs edge 的分流需要「该人设克隆
+            # 主路的真实语种能力」（含会话覆写，与下方克隆链同一解析口径）。
+            from src.ai.persona_voice import resolve_effective_persona_id
+            pid = resolve_effective_persona_id(
+                _cfg_root, platform, account_id, str(chat_key or ""))
 
             async def _deliver_staged(staged) -> bool:
                 if not staged:
@@ -2109,10 +2226,32 @@ async def maybe_start_companion_proactive(assistant) -> None:
             )
             if _plang and not is_chinese_peer_language(_plang):
                 _fb = resolve_foreign_voice_cfg(_cfg_root)
-                if use_clone_for_language(_fb, _plang):
+                # 克隆主路真实语种能力（SSOT）＝clone_languages 意愿名单的收窄器：
+                # 引擎切换（fish→index_tts）后名单不会自动跟上，按实况收窄后，
+                # 名单内但念不了的语种回 edge 多语声（保住语音触达而非试败落文本）。
+                # backend 取 avatar_clone（克隆链缺省主路）；真值最终由 TTSPipeline
+                # 合成层语种闸兜底，此处只求「不比现实更乐观」。
+                _capable = ()
+                try:
+                    from src.ai.lang_voice_route import (
+                        clone_route_langs,
+                        clone_voice_langs,
+                    )
+                    # 主链能力 ∪ 按语种改派的克隆节点（clone_langs 路由）：
+                    # 缺后者会把日/韩客户的主动语音开场错误收窄到 edge 通用声
+                    # ——那些语种在合成层会被路由改派到验收过的克隆节点。
+                    _capable = tuple(clone_voice_langs(
+                        _cfg_root.get("avatar_voice"), "avatar_clone", pid))
+                    _routed = clone_route_langs(_cfg_root)
+                    if _routed:
+                        _capable = _capable + tuple(
+                            p for p in _routed if p not in _capable)
+                except Exception:
+                    _capable = ()
+                if use_clone_for_language(_fb, _plang, capable_langs=_capable):
                     assistant.logger.info(
-                        "[proactive] 外语开场走克隆链 lang=%s（clone_languages 名单内）",
-                        _plang)
+                        "[proactive] 外语开场走克隆链 lang=%s（clone_languages 名单内"
+                        "且克隆主路可念）", _plang)
                 else:
                     try:
                         if not foreign_voice_allowed(_fb, _plang):
@@ -2151,14 +2290,11 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     # 说明值得给 A 线补语音发送能力（P2 候选，先让数据说话）
                     _media_skip("voice", "not_owned")
                     return False
-                from src.ai.persona_voice import resolve_effective_persona_id
                 from src.inbox.voice_autosend import (
                     persona_allowed_for_voice,
                     stage_voice_file,
                 )
-                # 含会话覆写：主动语音开场与自动回复同声（换绑后不串音色）
-                pid = resolve_effective_persona_id(
-                    _cfg_root, platform, account_id, str(chat_key or ""))
+                # pid 已在上方提前解析（含会话覆写：主动语音开场与自动回复同声）
                 _l2_voice = (((_cfg_root.get("inbox") or {})
                              .get("l2_autosend") or {}).get("voice") or {})
                 if not persona_allowed_for_voice(_l2_voice, pid):
@@ -3060,6 +3196,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             quiet_end_hour=float(cfg.get("quiet_end_hour", 8)),
             dry_run=bool(cfg.get("dry_run", False)),
             has_pending_care=_has_pending_care,
+            has_running_chain=_has_running_chain,
             on_crisis_block=_on_crisis_block,
             on_sent=_on_teaser_sent,
             ritual_fn=_ritual_fn,

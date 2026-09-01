@@ -33,9 +33,84 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_S = 300.0
 
 
+def _build_now(store: Any, config: Dict[str, Any], notifier: Any = None,
+               now: Optional[float] = None) -> Dict[str, Any]:
+    """「现在」区（P1-8 2026-08-29）：钱 / 单 / 等 / 险——日报页此前全是
+    回顾性数字，老板看不到「此刻有没有事等我」。四块全部复用既有单口径
+    函数 + 进程单例 peek（绝不新建库），逐段软失败——缺段＝前端隐藏对应
+    格子，绝不摆假零。"""
+    t = float(now if now is not None else time.time())
+    out: Dict[str, Any] = {}
+    # 单 + 钱：营销目标（peek 既有单例——新建会凭空造 :memory: 空库把
+    # 「零目标」误报成事实，与 value_report 同纪律；未启用=段缺失）
+    try:
+        from src.companion.goals.store import peek_goal_store
+        gs = peek_goal_store()
+        if gs is not None:
+            oc = gs.outcome_counts(t - 86400.0, t)
+            summ = gs.summary() or {}
+            out["goals"] = {
+                "active": int((summ.get("by_status") or {}).get("active") or 0),
+                "won_24h": int(oc.get("won") or 0),
+                "won_amount_24h": float(oc.get("won_amount") or 0.0),
+                "done_24h": int(oc.get("done") or 0),
+            }
+    except Exception:
+        logger.debug("boss now: goals section skipped", exc_info=True)
+    waiting: Dict[str, Any] = {}
+    try:
+        # 等 ①：还没人拍板的回复（页面词条只说人话，不出工程词）
+        with store._lock:  # noqa: SLF001 —— 与 value_report 读法同惯例
+            pend = store._conn.execute(
+                "SELECT COUNT(*) FROM reply_drafts"
+                " WHERE status IN ('pending','enriching')").fetchone()[0]
+        waiting["replies_pending"] = int(pend)
+    except Exception:
+        logger.debug("boss now: pending section skipped", exc_info=True)
+    try:
+        # 等 ②：24h 没回上话的客户（reply_latency 同一口径；自带 300s TTL）
+        from src.ops.reply_latency import reply_latency_snapshot
+        d1 = (reply_latency_snapshot(store, now=t) or {}).get("d1") or {}
+        waiting["unanswered_24h"] = int(d1.get("unanswered") or 0)
+    except Exception:
+        logger.debug("boss now: latency section skipped", exc_info=True)
+    if waiting:
+        out["waiting"] = waiting
+    risk: Dict[str, Any] = {}
+    try:
+        # 险 ①：渠道账号掉线数（进程登记表，零 IO）
+        from src.integrations.platform_session_health import (
+            get_platform_session_health,
+        )
+        risk["sessions_down"] = len(
+            get_platform_session_health().unhealthy_sessions())
+    except Exception:
+        logger.debug("boss now: sessions section skipped", exc_info=True)
+    try:
+        # 险 ①b：被安全冻结的账号面（kill_switch 生效作用域数；fail-open=0 项）
+        from src.ops.kill_switch import status_snapshot
+        risk["frozen"] = len(status_snapshot())
+    except Exception:
+        logger.debug("boss now: frozen section skipped", exc_info=True)
+    try:
+        # 险 ②：告警通道 verdict（healthy 之外都该让老板知道「出事没人收通知」）
+        from src.integrations.alert_link_status import (
+            collect_alert_link_status,
+        )
+        risk["alert_link"] = str(
+            (collect_alert_link_status(config, notifier) or {})
+            .get("verdict") or "")
+    except Exception:
+        logger.debug("boss now: alert link section skipped", exc_info=True)
+    if risk:
+        out["risk"] = risk
+    return out
+
+
 def _build_payload(store: Any, config: Dict[str, Any],
+                   notifier: Any = None,
                    now: Optional[float] = None) -> Dict[str, Any]:
-    """聚合日账/周账/趋势/省时（纯装配；store 缺失由调用方兜）。"""
+    """聚合日账/周账/趋势/省时/现在（纯装配；store 缺失由调用方兜）。"""
     from src.ops.value_report import (
         build_daily_value,
         build_weekly_value,
@@ -59,6 +134,7 @@ def _build_payload(store: Any, config: Dict[str, Any],
         "daily": daily,
         "weekly": weekly,
         "series": series,
+        "now": _build_now(store, config, notifier, now=t),
         "saved": {
             "minutes_per_reply": mpr,
             "today_minutes": saved_today,
@@ -158,7 +234,8 @@ def register_boss_routes(app, *, page_auth, api_auth, templates,
         store = getattr(request.app.state, "inbox_store", None)
         if store is None:
             return {"ok": False, "available": False}
-        data = _build_payload(store, _cfg(), now=now)
+        notifier = getattr(request.app.state, "webhook_notifier", None)
+        data = _build_payload(store, _cfg(), notifier, now=now)
         _cache["ts"] = now
         _cache["data"] = data
         return data

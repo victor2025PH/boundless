@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 _BLOCK_MAX_KEYS = 200
 _block_counts: dict = {}
 _block_total: int = 0
+# #77：白名单豁免命中计数（进程口径）——「写入声明热生效」与「豁免判定真读到」
+# 是两回事，此前后者零观测（0830 AW7MUV 定性不了的根因之一）。
+_exempt_total: int = 0
 
 
 def _record_block(platform: str, account_id: str, reason: str) -> None:
@@ -54,7 +57,8 @@ def _record_block(platform: str, account_id: str, reason: str) -> None:
 
 def block_stats_snapshot() -> dict:
     """拦截计数快照（进程口径，重启清零；持久口径看 app.log WARNING 行）。"""
-    return {"total": int(_block_total), "by_key": dict(_block_counts)}
+    return {"total": int(_block_total), "by_key": dict(_block_counts),
+            "exempt_hits": int(_exempt_total)}
 
 
 def send_blocked(
@@ -120,24 +124,35 @@ def send_blocked(
         from src.skills.companion_send_gate import (
             evaluate, gate_enabled, peer_exempt,
         )
-        if gate_enabled(config) and not peer_exempt(config, chat_key):
-            from src.skills.account_signals import build_account_signals
-            limiter = None
-            try:
-                from src.integrations.protocol_autoreply_limits import (
-                    get_autoreply_limiter,
-                )
-                limiter = get_autoreply_limiter(config or {})
-            except Exception:
-                limiter = None
-            sig = build_account_signals(p, a, registry=registry, limiter=limiter)
-            dec = evaluate(sig, config, origin=origin)
-            if not dec.get("allowed", True):
-                _reason = f"send_gate:{dec.get('reason') or 'blocked'}"
+        if gate_enabled(config):
+            if peer_exempt(config, chat_key):
+                # #77：豁免命中显式留痕——「白名单真读到了、这次发送因此放行」
+                # 从此有正面证据（notify=False 的预判读路径不记不打，防轮询噪音）。
                 if notify:
-                    _record_block(p, a, f"{_reason}|{origin}")
-                    notify_send_blocked(p, a, _reason)
-                return True, _reason
+                    global _exempt_total
+                    _exempt_total += 1
+                    logger.info(
+                        "[send_gate] 白名单豁免命中 %s:%s → peer=%s"
+                        "（本次发送不受额度限制）", p, a, chat_key)
+            else:
+                from src.skills.account_signals import build_account_signals
+                limiter = None
+                try:
+                    from src.integrations.protocol_autoreply_limits import (
+                        get_autoreply_limiter,
+                    )
+                    limiter = get_autoreply_limiter(config or {})
+                except Exception:
+                    limiter = None
+                sig = build_account_signals(
+                    p, a, registry=registry, limiter=limiter)
+                dec = evaluate(sig, config, origin=origin)
+                if not dec.get("allowed", True):
+                    _reason = f"send_gate:{dec.get('reason') or 'blocked'}"
+                    if notify:
+                        _record_block(p, a, f"{_reason}|{origin}")
+                        notify_send_blocked(p, a, _reason)
+                    return True, _reason
     except Exception:
         pass
     return False, ""

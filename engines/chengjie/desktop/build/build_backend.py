@@ -18,10 +18,13 @@ electron-builder 的 extraResources 会把 backend-dist/ → 安装包内 resour
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import time
 from pathlib import Path
 
 # Windows 默认 GBK 控制台无法编码 ✓/✗/⚠ 等状态符 → 打包成功后最后一行 print 会抛
@@ -115,6 +118,151 @@ PLATFORM_SECRET_SUFFIXES = {".db", ".db-wal", ".db-shm", ".key", ".pem",
 STAGED_DESTS = ("src/web/static", "domains",
                 "platform/credpool", "platform/licensing",
                 "src/web/i18n_packs")
+
+# --ref 快照构建的落地目录（P0 2026-08-29，1.0.59「半途快照误发」事故后补）
+SNAPSHOT_DIR = HERE / "src-snapshot"
+SNAPSHOT_STAMP = "SNAPSHOT_REF.txt"
+
+
+# ── --ref 快照构建（防共享树半途脏文件搭车进发布包）─────────────────────────
+#
+# 背景：本树常年有 100+ 脏文件、多条并行线各自半途——默认模式直接读活树打包，
+# 发布时刻恰逢别人保存到一半＝把半成品发给全部客户（2026-08-29 v1.0.59 实锤，
+# 当天被迫重发 1.0.60）。--ref 模式把「发布内容」钉在一个 git 提交点：
+#   git archive <ref> 导出干净快照 → 用**快照里的** build_backend.py 在快照根上
+#   构建（老 ref 也自洽）→ 产出搬回本目录 backend-dist/ + 落 SNAPSHOT_REF.txt。
+# 默认（不带 --ref）行为逐字节不变——采纳与否是发布线的 SOP 决策。
+
+def _run_git(git_args: list, cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *git_args], cwd=str(cwd),
+                          capture_output=True)
+
+
+def export_ref_snapshot(
+    ref: str,
+    *,
+    engine_root: Path = REPO,
+    snapshot_dir: Path = SNAPSHOT_DIR,
+) -> tuple:
+    """把 ``<ref>`` 的引擎子树 + platform 瘦模块导出成干净快照。
+
+    返回 ``(快照引擎根, 短sha, notes)``；notes 里带「platform 包走了活树回落」
+    这类必须让发布者看见的降级说明。失败抛 RuntimeError（快照构建宁断不糊）。
+    """
+    notes: list = []
+    top = _run_git(["rev-parse", "--show-toplevel"], engine_root)
+    if top.returncode != 0:
+        raise RuntimeError(f"不在 git 仓库内，--ref 不可用: {engine_root}")
+    toplevel = Path(top.stdout.decode("utf-8", "replace").strip())
+    sha_p = _run_git(["rev-parse", "--short", f"{ref}^{{commit}}"], toplevel)
+    if sha_p.returncode != 0:
+        raise RuntimeError(
+            f"git ref 无法解析: {ref}: "
+            f"{sha_p.stderr.decode('utf-8', 'replace').strip()}")
+    sha = sha_p.stdout.decode("utf-8", "replace").strip()
+
+    shutil.rmtree(snapshot_dir, ignore_errors=True)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    def _archive_into(pathspec: str) -> bool:
+        args = ["archive", "--format=tar", sha]
+        if pathspec:
+            args += ["--", pathspec]
+        proc = _run_git(args, toplevel)
+        if proc.returncode != 0:
+            return False
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tf:
+            try:
+                tf.extractall(snapshot_dir, filter="data")
+            except TypeError:            # Python <3.12 无 filter 形参
+                tf.extractall(snapshot_dir)
+        return True
+
+    try:
+        rel_engine = engine_root.resolve().relative_to(toplevel.resolve())
+    except ValueError:
+        rel_engine = Path(".")
+    rel_posix = rel_engine.as_posix()
+    if not _archive_into("" if rel_posix == "." else rel_posix):
+        raise RuntimeError(f"git archive 引擎子树失败（ref={ref}）")
+    snap_engine = (snapshot_dir / rel_engine).resolve() \
+        if rel_posix != "." else snapshot_dir.resolve()
+    if not (snap_engine / "main.py").is_file():
+        raise RuntimeError(f"快照缺 main.py（引擎子树没导出全）: {snap_engine}")
+
+    # platform 瘦模块：优先取 ref 内容；未入库（独立仓/未跟踪）→ 活树拷贝回落
+    # （构建期 _stage_platform_pkg 照常剔机密，风险=platform 半途编辑搭车，如实播报）
+    snap_platform = snap_engine.parent.parent / "platform"
+    if snapshot_dir.resolve() not in snap_platform.resolve().parents:
+        # 引擎就在仓根（CI 单仓布局）：parent.parent 会逃出快照目录——绝不
+        # 往快照外写文件；该布局本就没有集团 platform 目录可打。
+        notes.append("引擎位于仓根布局，platform 瘦模块不适用（跳过）")
+        return snap_engine, sha, notes
+    for pkg in PLATFORM_PKGS:
+        live = _PLATFORM_ROOT / pkg
+        expect = snap_platform / pkg
+        if expect.is_dir():
+            continue                     # archive 已按仓库相对路径落对位置
+        try:
+            rel_pkg = live.resolve().relative_to(toplevel.resolve()).as_posix()
+        except ValueError:
+            rel_pkg = ""
+        if rel_pkg and _archive_into(rel_pkg) and expect.is_dir():
+            continue
+        if live.is_dir():
+            shutil.copytree(
+                live, expect,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            notes.append(
+                f"platform/{pkg} 不在 ref 内 → 活树回落拷贝（半途编辑可能搭车，"
+                "机密仍由打包暂存清洗剔除）")
+        else:
+            notes.append(f"platform/{pkg} 源缺失 → 包内将没有该模块（静默降级面）")
+    return snap_engine, sha, notes
+
+
+def _build_from_ref(args) -> int:
+    """--ref 主流程：导出快照 → 子进程跑快照里的本脚本 → 产出搬回 + 落 ref 戳。"""
+    try:
+        snap_engine, sha, notes = export_ref_snapshot(args.ref)
+    except RuntimeError as e:
+        print(f"✗ 快照导出失败: {e}", file=sys.stderr)
+        return 2
+    for n in notes:
+        print(f"⚠ {n}")
+    script = snap_engine / "desktop" / "build" / "build_backend.py"
+    if not script.is_file():
+        print(f"✗ 该 ref 尚无打包脚本（太老）: {script}", file=sys.stderr)
+        return 2
+    if args.export_only:
+        n_files = sum(1 for p in snap_engine.rglob("*") if p.is_file())
+        print(f"✓ 快照已导出（仅导出模式）：{snap_engine}  ref={args.ref}"
+              f" sha={sha} files={n_files}")
+        return 0
+    sub = [sys.executable, str(script)]
+    if args.clean:
+        sub.append("--clean")
+    if args.onefile:
+        sub.append("--onefile")
+    if args.keep_heavy:
+        sub.append("--keep-heavy")
+    print(f"→ 快照构建（ref={args.ref} sha={sha}）:\n  " + " ".join(sub))
+    proc = subprocess.run(sub, cwd=str(snap_engine))
+    if proc.returncode != 0:
+        print("✗ 快照构建失败（活树 backend-dist 未被触碰）", file=sys.stderr)
+        return proc.returncode
+    snap_out = snap_engine / "desktop" / "build" / "backend-dist"
+    if not snap_out.is_dir():
+        print(f"✗ 快照构建无产出目录: {snap_out}", file=sys.stderr)
+        return 1
+    shutil.rmtree(OUT, ignore_errors=True)
+    shutil.move(str(snap_out), str(OUT))
+    (OUT / SNAPSHOT_STAMP).write_text(
+        f"ref={args.ref}\nsha={sha}\nbuilt_at={time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        + "".join(f"note={n}\n" for n in notes),
+        encoding="utf-8")
+    print(f"✓ 快照构建完成：{OUT}（ref={args.ref} sha={sha}，{SNAPSHOT_STAMP} 已落）")
+    return 0
 
 
 def _stage_static() -> Path:
@@ -246,7 +394,18 @@ def main() -> int:
     ap.add_argument("--clean", action="store_true", help="打包前清空产出与缓存")
     ap.add_argument("--onefile", action="store_true", help="单文件模式（更慢、首启解压；默认 onedir 更稳）")
     ap.add_argument("--keep-heavy", action="store_true", help="不排除 whisper/torch 等重依赖")
+    ap.add_argument("--ref", default="", metavar="GIT_REF",
+                    help="从 git 提交点快照构建（防共享树半途脏文件搭车进发布包；"
+                         "产出仍落 backend-dist/ 并带 SNAPSHOT_REF.txt）")
+    ap.add_argument("--export-only", action="store_true",
+                    help="配合 --ref：只导出快照不构建（核对发布内容用）")
     args = ap.parse_args()
+
+    if args.export_only and not args.ref:
+        print("✗ --export-only 只与 --ref 搭配使用", file=sys.stderr)
+        return 2
+    if args.ref:
+        return _build_from_ref(args)
 
     try:
         import PyInstaller  # noqa: F401
@@ -256,7 +415,8 @@ def main() -> int:
 
     if args.clean:
         for d in (OUT, HERE / "build", HERE / "__pycache__", STATIC_STAGED,
-                  DOMAINS_STAGED, PLATFORM_STAGED, I18N_PACKS_STAGED):
+                  DOMAINS_STAGED, PLATFORM_STAGED, I18N_PACKS_STAGED,
+                  SNAPSHOT_DIR):
             shutil.rmtree(d, ignore_errors=True)
 
     OUT.mkdir(parents=True, exist_ok=True)

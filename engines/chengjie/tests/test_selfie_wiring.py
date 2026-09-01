@@ -407,7 +407,7 @@ def _photo_sender(cli, *, min_interval=0, last_send=0.0):
 @pytest.mark.asyncio
 async def test_send_photo_blocked_by_presend_guard(monkeypatch):
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: True)  # 冻结/被闸门拦
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: True)  # 冻结/被闸门拦
     assert await s.send_photo(7, "/p.png", "c") is False
     assert s.client.calls == []  # 护栏拦下，照片未真发（不绕过风控）
 
@@ -421,7 +421,7 @@ async def test_send_photo_paces_against_shared_wallclock(monkeypatch):
 
     monkeypatch.setattr("src.client.sender.asyncio.sleep", _fake_sleep)
     s = _photo_sender(_PhotoCli(), min_interval=5, last_send=time.time())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     ok = await s.send_photo(7, "/p.png", "c")
     assert ok is True
     assert slept.get("sec") is not None and slept["sec"] > 0  # 距上次<5s→补足节流
@@ -438,7 +438,7 @@ async def test_send_photo_no_pace_when_interval_zero(monkeypatch):
 
     monkeypatch.setattr("src.client.sender.asyncio.sleep", _fake_sleep)
     s = _photo_sender(_PhotoCli(), min_interval=0, last_send=time.time())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_photo(7, "/p.png", "c") is True
     assert "sec" not in slept  # min_interval=0 → 不节流（行为不变）
 
@@ -458,7 +458,7 @@ async def test_send_photo_mirrors_and_records(monkeypatch):
     monkeypatch.setattr(cc, "record_relationship_message", _rec)
 
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     s._emit_inbox = lambda **kw: emitted.update(kw)
 
     assert await s.send_photo(7, "/p.png", "看我新裙子") is True
@@ -480,7 +480,7 @@ async def test_send_photo_empty_caption_preview(monkeypatch):
     import src.utils.companion_context as cc
     monkeypatch.setattr(cc, "record_relationship_message", lambda *a, **k: None)
     s = _photo_sender(_PhotoCli())
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     s._emit_inbox = lambda **kw: emitted.update(kw)
     assert await s.send_photo(7, "/p.png", "") is True
     # 无配文 → 正文空、media_type=image（前端按 🖼️ 占位/真图渲染，不再显示裸标记）
@@ -494,7 +494,7 @@ async def test_postsend_mirror_record_no_emit_attr_still_records(monkeypatch):
     monkeypatch.setattr(cc, "record_relationship_message",
                         lambda *a, **k: recorded.update({"hit": True}))
     s = _photo_sender(_PhotoCli())  # 无 _emit_inbox 属性
-    monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+    monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
     assert await s.send_photo(7, "/p.png", "hi") is True  # 镜像缺省→优雅跳过、不抛
     assert recorded.get("hit") is True  # contacts 记账照常
 

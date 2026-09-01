@@ -153,6 +153,65 @@ def test_recent_context_and_few_shot_appended():
     assert "【风格示范】" in p
 
 
+# ── 实施84 P0-5c（2026-08-29）：反 AI 问候腔 + 超短消息日 ────────────────────
+# 老板点名「问候要像真人，不要虚假的问候像AI一样」——祝愿体/客服体/加油体是
+# LLM 问候的最大公约数；形态日变（有时超短）是真人感的另一半。
+
+def test_anti_bot_note_on_greeting_modes():
+    for plan in ({"mode": "ritual_morning", "directive": "早安"},
+                 {"mode": "gentle_checkin", "directive": "x", "silent_hours": 30},
+                 {"mode": "follow_up", "directive": "x", "silent_hours": 30}):
+        p = build_proactive_prompt("她", plan)
+        assert "别带机器腔" in p, plan
+        assert "元气满满" in p  # 禁词表在 prompt 里逐词点名
+
+
+def test_anti_bot_note_milestone_weak_version_keeps_blessing():
+    p = build_proactive_prompt(
+        "她", {"mode": "milestone_birthday", "directive": "生日祝福"})
+    assert "别带机器腔" in p
+    assert "贺卡腔" in p
+    # 弱化版不禁「祝你」——生日/节日祝福本身是正当用法
+    assert "元气满满" not in p
+
+
+def _brev_salts():
+    import time as _t
+    import zlib as _z
+    now = _t.time()
+    day = _t.strftime("%Y-%m-%d", _t.localtime(now))
+    short = next(s for s in (f"c{i}" for i in range(300))
+                 if _z.crc32(f"brev#{s}#{day}".encode("utf-8")) % 3 == 0)
+    plain = next(s for s in (f"c{i}" for i in range(300))
+                 if _z.crc32(f"brev#{s}#{day}".encode("utf-8")) % 3 != 0)
+    return now, short, plain
+
+
+def test_brevity_day_deterministic_per_conversation():
+    now, short, plain = _brev_salts()
+    mk = lambda cid: build_proactive_prompt(
+        "她", {"mode": "ritual_morning", "directive": "早安",
+               "conversation_id": cid}, now=now)
+    assert "超短的" in mk(short)
+    assert "超短的" in mk(short)   # 同会话同日恒定（tick 重试不换档）
+    assert "超短的" not in mk(plain)
+
+
+def test_brevity_suppressed_by_pending_and_non_greeting_modes():
+    now, short, _plain = _brev_salts()
+    # 悬空话头在身：接茬义务 > 超短形态
+    p = build_proactive_prompt(
+        "她", {"mode": "ritual_morning", "directive": "早安",
+               "conversation_id": short},
+        pending_inbound=["还没回我呢"], now=now)
+    assert "超短的" not in p
+    # follow_up 要引用具体事实，不吃超短档
+    p2 = build_proactive_prompt(
+        "她", {"mode": "follow_up", "directive": "x", "silent_hours": 30,
+               "conversation_id": short}, now=now)
+    assert "超短的" not in p2
+
+
 def test_empty_plan_safe():
     p = build_proactive_prompt("", {})
     assert isinstance(p, str) and "她" in p  # ai_name 缺省回落「她」

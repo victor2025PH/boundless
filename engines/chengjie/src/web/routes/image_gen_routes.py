@@ -43,6 +43,12 @@ logger = logging.getLogger("ai_chat_assistant.image_gen_routes")
 _ROLE_VIEWER = "viewer"
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
+# 相册文件的**第二棵树**：人设相册面板上传的图落 src/web/static/persona_albums/
+# （persona_media_routes._ALBUM_ROOT 同一推导），与 selfie provider.album_dir
+# （坐席存册/自动补货的落点）是两棵互不包含的树。绝对路径推导，不吃 CWD
+# （生产 CWD=实例数据根，相对路径会指到没人服务的地方）。
+_STATIC_ALBUM_ROOT = Path(__file__).resolve().parents[1] / "static" / "persona_albums"
+
 # 引擎默认标签（i18n 由前端 cp-i18n 兜；后端只回 id + 可选 label 覆写）。
 _DEFAULT_ENGINES = ("flux_pulid", "qwen_edit", "z_image")
 
@@ -266,6 +272,108 @@ def _comfy_interrupt(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def min_free_gb_from_args(cmd_args: Any, default: float = 14.0) -> float:
+    """从引擎 command_args 取 ``--min-free-gb``（缺省=comfy_infer 的默认 14）。
+
+    「本次出图会不会先卸模型腾显存」的**唯一判据**——此前前端把 14 写死，
+    qwen_edit 实际要 18（`_engine_command_args` 注入），于是选 qwen_edit 时
+    14~18G 区间该提示不提示。判据只应有一份，就是真正会传给子进程的那份。
+    """
+    args = [str(x) for x in (cmd_args or [])] if isinstance(cmd_args, list) else []
+    for i, a in enumerate(args):
+        if a == "--min-free-gb" and i + 1 < len(args):
+            try:
+                return float(args[i + 1])
+            except (TypeError, ValueError):
+                return default
+    return default
+
+
+def album_roots(album_dir: Any) -> tuple:
+    """相册文件允许被只读服务的根目录集（解析后去重，不可解析的丢弃）。
+
+    两棵树都算数：``provider.album_dir``（坐席存册/自动补货/FS 相册）与
+    ``src/web/static/persona_albums``（人设相册面板上传）。此前消毒只认前者，
+    面板上传的每一张过 album-file 都 400（2026-08-28 缩略图全裂实录）。
+    """
+    out: List[Path] = []
+    for cand in (Path(str(album_dir or "config/persona_albums")), _STATIC_ALBUM_ROOT):
+        try:
+            r = cand.resolve()
+        except OSError:
+            continue
+        if r not in out:
+            out.append(r)
+    return tuple(out)
+
+
+def resolve_album_path(raw: str, roots: tuple) -> Optional[Path]:
+    """把请求里的 path 消毒到 ``roots`` 之一的子树内；不在任何根内返回 None。"""
+    if not str(raw or "").strip():
+        return None
+    try:
+        p_res = Path(str(raw)).resolve()
+    except OSError:
+        return None
+    for root in roots:
+        try:
+            if os.path.commonpath([str(root), str(p_res)]) == str(root):
+                return p_res
+        except (ValueError, OSError):
+            continue  # 跨盘符/非法路径：换下一个根
+    return None
+
+
+def stock_item_url(row: Dict[str, Any], file_path: str) -> str:
+    """相册存货缩略图 URL：行自带的直服 URL 优先，否则走 album-file 只读服务。
+
+    相册面板上传的行带 ``/static/persona_albums/...``（已被 StaticFiles 直服，
+    零鉴权往返）；坐席存册/自动补货的行 url 为空、文件在 album_dir → 走
+    album-file。此前一律拼 album-file，前一类必 400。
+    """
+    direct = str(row.get("url") or "").strip()
+    if direct.startswith("/"):
+        return direct
+    return "/api/image/album-file?path=" + urllib.parse.quote(str(file_path))
+
+
+def probe_comfy_queue(url: str, timeout: float = 3.0) -> Optional[int]:
+    """查 ComfyUI 当前待办单数（running+pending）；失败 None=未知。
+
+    这才是「忙」：显存被常驻模型占满≠有任务在算（同卡还驻着聊天兜底 30B，
+    空闲显存长期 0.x G 而 GPU 利用率 0）。把占用当忙 = 横幅永久误报。
+    """
+    if not url:
+        return None
+    try:
+        with urllib.request.urlopen(url + "/prompt", timeout=timeout) as r:
+            j = json.loads(r.read())
+        return max(0, int((j.get("exec_info") or {}).get("queue_remaining", 0)))
+    except Exception:
+        return None
+
+
+_QUEUE_TTL_SEC = 10.0
+_queue_cache: Dict[str, Any] = {"ts": 0.0, "url": "", "n": None}
+
+
+def _cached_queue(url: str) -> Optional[int]:
+    now = time.time()
+    if (_queue_cache["url"] == url
+            and now - float(_queue_cache["ts"]) < _QUEUE_TTL_SEC):
+        return _queue_cache["n"]
+    n = probe_comfy_queue(url)
+    _queue_cache.update({"ts": now, "url": url, "n": n})
+    return n
+
+
+def busy_job_count(jobs: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+    """本进程在途的手动出图任务数（queued/running）。"""
+    src = _JOBS if jobs is None else jobs
+    return sum(1 for j in src.values()
+               if str(j.get("status") or "") in ("queued", "running"))
+
+
 def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=None,
                               page_auth=None):
     """挂载坐席手动出图 API。``auth_dep``=登录校验；``audit_store``=操作审计（可选）。"""
@@ -397,13 +505,22 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
         loop = asyncio.get_running_loop()
         models = await loop.run_in_executor(None, _cached_probe, comfy_url)
         vram_free = await loop.run_in_executor(None, _cached_vram, comfy_url)
+        queue_pending = await loop.run_in_executor(None, _cached_queue, comfy_url)
         deploy = engine_deploy_status(models, engines)
         quota = int(mcfg.get("daily_quota") or 0)
+        base_args = _provider_cfg().get("command_args")
         return {
             "ok": True,
             "enabled": True,
             "engines": engines,
-            "engines_info": [{"id": e, "deployed": deploy.get(e)} for e in engines],
+            # min_free_gb：该引擎真正会传给 comfy_infer 的显存闸门值——前端据此
+            # 判「这次会不会先腾显存（多等约 1 分钟）」，而不是拿一个写死的 14。
+            "engines_info": [
+                {"id": e, "deployed": deploy.get(e),
+                 "min_free_gb": min_free_gb_from_args(
+                     _engine_command_args(e, base_args, True))}
+                for e in engines
+            ],
             "comfy_ok": models is not None,
             "default_engine": str(mcfg.get("default_engine") or "flux_pulid"),
             "personas": personas,
@@ -413,7 +530,14 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
             "album_pick": True,
             # P2：场景热度提示 + 算力预警 + 日配额（0=不限）
             "scene_hints": True,
+            # vram_free_gb 保留给运维/诊断（ops GPU 水位卡口径），**坐席面板不再
+            # 渲染它**：显存占用≠忙，把它当忙闲说给坐席听是永久误报+泄露内部实现。
             "vram_free_gb": vram_free,
+            # 真忙闲：ComfyUI 队列深度（None=探不到）与本进程在途单数。前端取两者
+            # 较大值（我们自己的单也在 ComfyUI 队列里，相加会双计）。
+            "queue_pending": queue_pending,
+            "busy_jobs": busy_job_count(),
+            "busy_signal": True,   # 特性探测：旧前端忽略，新前端据此改走队列口径
             "daily_quota": quota,
             "quota_used": quota_used(_actor(request)) if quota > 0 else 0,
         }
@@ -688,7 +812,7 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
                         "path": fp,
                         "scene_class": cls,
                         "caption": str(row.get("caption") or ""),
-                        "url": "/api/image/album-file?path=" + urllib.parse.quote(fp),
+                        "url": stock_item_url(dict(row), fp),
                     })
                     if len(items) >= 6:
                         break
@@ -703,22 +827,16 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
 
     @app.get("/api/image/album-file")
     async def api_image_album_file(request: Request, _=Depends(auth_dep)):
-        """相册文件只读服务（viewer 可看）：路径消毒钉死在 album_dir 子树。"""
+        """相册文件只读服务（viewer 可看）：路径消毒钉死在相册双根子树内。
+
+        双根＝``provider.album_dir``（坐席存册/自动补货）+ ``static/persona_albums``
+        （相册面板上传，本就经 /static 直服，纳入不新增暴露面）。
+        """
         if not _enabled():
             raise HTTPException(403, tr(request, "err.image.disabled"))
         raw = str(request.query_params.get("path") or "").strip()
-        if not raw:
-            raise HTTPException(400, tr(request, "err.image.path_denied"))
-        album_root = Path(str(_provider_cfg().get("album_dir")
-                              or "config/persona_albums"))
-        try:
-            root_res = album_root.resolve()
-            p_res = Path(raw).resolve()
-            if os.path.commonpath([str(root_res), str(p_res)]) != str(root_res):
-                raise HTTPException(400, tr(request, "err.image.path_denied"))
-        except HTTPException:
-            raise
-        except Exception:
+        p_res = resolve_album_path(raw, album_roots(_provider_cfg().get("album_dir")))
+        if p_res is None:
             raise HTTPException(400, tr(request, "err.image.path_denied"))
         if not p_res.is_file() or p_res.suffix.lower() not in _IMAGE_EXT:
             raise HTTPException(404, tr(request, "err.image.src_missing"))

@@ -151,13 +151,18 @@ class AssistantQALog:
         out = sorted(agg.values(), key=lambda x: (-x["count"], x["q"]))
         return out[: max(1, limit)]
 
-    def top_questions(self, days: int = 14, limit: int = 6,
-                      page: str = "") -> list[str]:
-        """已成功回答的高频问题（面板快捷 chips 的动态来源）。
+    def top_questions_detail(self, days: int = 14, limit: int = 6,
+                             page: str = "") -> dict:
+        """已成功回答的高频问题，**按来源分组**（「常问」面板的数据源）。
 
-        P1（2026-08-23）：带 page 时**本页高频优先**、全局高频补位——
-        坐席在收件箱问的和老板在运营总览问的不是同一批问题。page 精确
-        匹配记录页（record 存的就是 location.pathname）。"""
+        返回 ``{"page": [{q, n}], "global": [{q, n}]}``——两组互斥（本页组里
+        出现过的问题不会在全站组重复），各自频次降序。
+
+        实施73 P1-6（2026-08-28）把它从 ``top_questions`` 里抽出来：面板要
+        **分组展示 + 显示频次**，而 chips 只要一串字符串。两者共用这一次
+        聚合，口径天然一致（面板说「本页常问」而 chips 给出别的顺序，会让
+        人以为其中一个坏了）。
+        """
         since = time.time() - max(1, days) * 86400
         try:
             with self._lock, self._connect() as conn:
@@ -168,7 +173,7 @@ class AssistantQALog:
                 ).fetchall()
         except Exception:
             logger.warning("assistant qa_log top_questions 失败", exc_info=True)
-            return []
+            return {"page": [], "global": []}
         want_page = str(page or "").strip()
         agg_all: dict[str, dict] = {}
         agg_page: dict[str, dict] = {}
@@ -176,25 +181,39 @@ class AssistantQALog:
             key = _norm_q(r["q"])
             if not key:
                 continue
-            slot = agg_all.setdefault(key, {"q": str(r["q"])[:80], "count": 0})
-            slot["count"] += 1
+            slot = agg_all.setdefault(key, {"q": str(r["q"])[:80], "n": 0})
+            slot["n"] += 1
             if want_page and str(r["page"] or "") == want_page:
-                ps = agg_page.setdefault(key,
-                                         {"q": str(r["q"])[:80], "count": 0})
-                ps["count"] += 1
-        lim = max(1, limit)
-        ranked_page = sorted(agg_page.values(),
-                             key=lambda x: (-x["count"], x["q"]))
-        out: list[str] = [x["q"] for x in ranked_page[:lim]]
-        seen = {_norm_q(q) for q in out}
-        for x in sorted(agg_all.values(), key=lambda y: (-y["count"], y["q"])):
-            if len(out) >= lim:
+                ps = agg_page.setdefault(key, {"q": str(r["q"])[:80], "n": 0})
+                ps["n"] += 1
+        lim = max(1, min(int(limit), 50))
+        ranked_page = sorted(agg_page.values(), key=lambda x: (-x["n"], x["q"]))
+        out_page = ranked_page[:lim]
+        seen = {_norm_q(x["q"]) for x in out_page}
+        out_global: list[dict] = []
+        for x in sorted(agg_all.values(), key=lambda y: (-y["n"], y["q"])):
+            if len(out_global) >= lim:
                 break
             if _norm_q(x["q"]) in seen:
                 continue
-            out.append(x["q"])
+            out_global.append(x)
             seen.add(_norm_q(x["q"]))
-        return out
+        return {"page": out_page, "global": out_global}
+
+    def top_questions(self, days: int = 14, limit: int = 6,
+                      page: str = "") -> list[str]:
+        """已成功回答的高频问题（面板快捷 chips 的动态来源）。
+
+        P1（2026-08-23）：带 page 时**本页高频优先**、全局高频补位——
+        坐席在收件箱问的和老板在运营总览问的不是同一批问题。page 精确
+        匹配记录页（record 存的就是 location.pathname）。"""
+        d = self.top_questions_detail(days=days, limit=limit, page=page)
+        out = [x["q"] for x in d.get("page", [])]
+        for x in d.get("global", []):
+            if len(out) >= max(1, limit):
+                break
+            out.append(x["q"])
+        return out[: max(1, limit)]
 
     def stats(self, days: int = 7) -> dict:
         """聚合读数（ops 卡）：问答量/自答率/差评数 + **拒答分型**。

@@ -13,7 +13,16 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# 克隆类后端集合（与 voice_routes / lang_voice_route 口径一致；#93 修补消费）
+CLONE_BACKENDS = frozenset({
+    "voice_clone_command", "coqui_http", "voice_clone_lan",
+    "avatar_clone", "minicpm_clone",
+})
 
 # UI 哨兵「系统通用音色」（2026-08-05 P0）：坐席下拉的第三种选择，介于
 # 「空串=跟随会话人设回落链」与「显式人设 id」之间——**钉死全局默认配置**
@@ -364,6 +373,27 @@ def resolve_effective_voice_context(
         if isinstance(resolved_persona, dict):
             _merge_voice_profile(
                 voice_cfg, resolved_persona.get("voice_profile") or {})
+        # #93（2026-09-01 女王会话实锤）：克隆档「齐备但 enabled 键缺失」修补。
+        # TTSPipeline._effective_backend 只认 enabled=true——克隆四件套（克隆
+        # backend + 参考音/speaker + 授权）都在、唯独 enabled 键在某次 merge/
+        # 迁移/手编中丢失时，克隆**根本不进场**、顶层静默回落标准声，且因为
+        # 从未尝试过克隆连 fallback_from 都不记（前端一片绿、客户听陌生声）。
+        # enabled 显式 False＝运营手动停用，绝不碰；只补「键不存在」的档。
+        try:
+            _vp_fix = voice_cfg.get("voice_profile")
+            if (isinstance(_vp_fix, dict) and "enabled" not in _vp_fix
+                    and str(_vp_fix.get("backend") or "").strip().lower()
+                    in CLONE_BACKENDS
+                    and bool(_vp_fix.get("owner_consent"))
+                    and (str(_vp_fix.get("reference_audio_path") or "").strip()
+                         or str(_vp_fix.get("speaker_id") or "").strip())):
+                _vp_fix["enabled"] = True
+                logger.warning(
+                    "[persona_voice] #93 克隆档 enabled 键缺失已就地补齐"
+                    "（persona=%s backend=%s）——此前该档静默回落标准声",
+                    resolved_id or "-", _vp_fix.get("backend"))
+        except Exception:
+            logger.debug("[persona_voice] 克隆档 enabled 修补跳过", exc_info=True)
 
     # 会话口味键（voice_opener_guard，P0-2 2026-08-03）：三条语音链（A 线
     # voice_reply / B 线 autosend / 坐席手动）都经本解析器 → 在此注入一次，

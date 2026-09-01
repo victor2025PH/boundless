@@ -326,11 +326,15 @@ def test_nav_monetization_follows_product_switch_not_ui_visibility():
 #   ② 纯运维/开发面 → 加进 nav_schema.CLIENT_HIDDEN_ITEM_IDS（同时也加进本表）。
 # 表本身不判对错，它只保证「有人想过这个问题」，且 review 时一眼能看出新页归属。
 _AUDIENCE_DECLARED = frozenset({
-    "analytics", "asset_center", "audit", "care", "cases", "crisis_audit", "dash",
+    "analytics", "asset_center", "audit", "bug_tickets", "care", "cases",
+    "crisis_audit", "dash",
     "developer", "diff", "episodic", "escalation", "funnel", "group_show", "help",
     "import", "knowledge", "learner", "line_rpa", "logs", "membership",
     "messenger_rpa", "monetization", "ops", "personal_settings", "personas",
-    "relations_health", "reply_settings", "rpa_overview", "settings", "strategies",
+    "relations_health", "reply_settings", "rpa_overview", "settings",
+    # singing（演唱线，2026-08-29 代表态）：陪伴向最终用户功能页，按客户可见
+    # 归档；若演唱线判定应藏运维面，请改加 nav_schema.CLIENT_HIDDEN_ITEM_IDS。
+    "singing", "strategies",
     "strategy_analytics", "telegram", "templates", "usage_center", "users",
     "voice_eval", "whatsapp_rpa", "work_goal", "workspace", "ws_aiq", "ws_boards",
     "ws_perf", "ws_queue", "ws_roi",

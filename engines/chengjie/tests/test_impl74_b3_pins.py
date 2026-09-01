@@ -34,6 +34,17 @@ def test_group_section_render_uses_flex():
     assert "sec.style.display='block'" not in body
 
 
+def test_conv_items_min_height_zero_for_scroll():
+    """B60 族回潮钉（工单#20，2026-08-29）：主会话列表 .conv-items 是列 flex
+    子项，缺 min-height:0 时不肯缩，父级 overflow:hidden 裁掉内容底 →
+    「已归档」footer 永远滚不进视口。实施74 当时只修了群组区，此处补主列表。"""
+    css = _read("src/web/static/workspace/unified-inbox.css")
+    m = re.search(r"\.conv-items\{([^}]*)\}", css)
+    assert m, "缺 .conv-items 规则"
+    body = m.group(1)
+    assert "min-height:0" in body and "overflow-y:auto" in body
+
+
 def test_group_sec_body_flex_scroll_css():
     css = _read("src/web/static/workspace/unified-inbox.css")
     m = re.search(r"\.group-sec-body\{([^}]*)\}", css)

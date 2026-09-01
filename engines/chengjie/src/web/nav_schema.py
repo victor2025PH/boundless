@@ -82,6 +82,8 @@ NAV_ICONS = {
     "film": _STROKE % '<rect x="2" y="2" width="20" height="20" rx="2.5"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M2 17h5M17 7h5M17 17h5"/>',
     # 2026-08-20：voice_eval 项引用 mic 却没登记 SVG（图标门禁红），侧栏渲染空白格子
     "mic": _STROKE % '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/>',
+    # 2026-08-28 实施81：报障工单处置台（bug_tickets）专属图标（可见项图标去重门禁）
+    "bug": _STROKE % '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M8 9H4M8 13H4M8 17H5M16 9h4M16 13h4M16 17h3M9 6a3 3 0 016 0"/>',
 }
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
@@ -218,6 +220,13 @@ NAV_ITEMS = {
                          label_key="ac_nav", label_zh="账号资产中心",
                          cmd_keys="assets asset 资产 资产中心 账号资产 保全 备份 迁移 "
                                   "导出 联系人迁移 封号 被封 vault migration export"),
+    # 报障工单处置台（实施81 P0-2）：报障群值守的工单闭环面——列表/详情/截图/
+    # 状态流转/一键回访/群内回复。master_only：值守与老板用，坐席不进。
+    "bug_tickets": dict(key="bug_tickets", path="/admin/bug-tickets", icon="bug",
+                        master_only=True, label_key="bug_tickets",
+                        label_zh="报障工单",
+                        cmd_keys="bug tickets 报障 工单 值守 处置 报障群 反馈 "
+                                 "修复 回访 bugintake"),
     "users": dict(key="users", path="/users", icon="users", label_key="users",
                   label_zh="用户管理", help="nav_users", cmd_keys="users 用户"),
     "settings": dict(key="settings", path="/settings", icon="gear",
@@ -364,7 +373,7 @@ NAV_GROUPS_FULL = [
          items=["usage_center", "membership"]),
     dict(label_key="section_compliance", label_zh="安全合规",
          note_key="section_note_compliance", note_zh="出了事怎么查",
-         items=["crisis_audit", "audit", "asset_center"]),
+         items=["crisis_audit", "audit", "asset_center", "bug_tickets"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
          note_key="section_note_system", note_zh="配置这套系统",
          items=["users", "settings", "logs", "developer"]),
@@ -394,7 +403,8 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
 # 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封（/developer 本就
 # 有密码闸）——内部人员在客户机上直接敲地址仍可进。
 # 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
-CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer")
+# bug_tickets（实施81）＝我方报障群值守的处置台，客户部署没有报障群值守语义。
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets")
 
 # ── 页群（2026-08-18 P1）：侧栏一个入口 + 页内 Tab 互切 ─────────────────────
 # 「合并看板/漏斗」刻意不做模板级合并：各页 JS 与数据装载互不相干，真合页＝

@@ -30,8 +30,17 @@
     mrpa: function (aid) { return '/api/personas/mrpa-account/' + encodeURIComponent(aid) + '/assign-profile'; },
     wa:   function (aid) { return '/api/personas/wa-account/'   + encodeURIComponent(aid) + '/assign-profile'; }
   };
-  var PLAT_LABEL = { tg: 'TG', mrpa: 'Messenger', wa: 'WhatsApp' };
-  var ACC_KEY = { tg: 'tg_accounts', mrpa: 'mrpa_accounts', wa: 'wa_accounts' };
+  /* #78（2026-08-30）：运行时注册表账号（桌面 QR 登录的 LINE/WA/Messenger，
+     source==='registry'）走通用 registry 端点——config 型端点写不到它们
+     （tg 例外：tg-account 端点自带 registry 分支）。 */
+  var REGISTRY_PLAT = { mrpa: 'messenger', wa: 'whatsapp', line: 'line' };
+  function _registryEndpoint(plat, aid) {
+    return '/api/personas/registry-account/' + encodeURIComponent(REGISTRY_PLAT[plat] || plat)
+      + '/' + encodeURIComponent(aid) + '/assign-profile';
+  }
+  var PLAT_LABEL = { tg: 'TG', mrpa: 'Messenger', wa: 'WhatsApp', line: 'LINE' };
+  var ACC_KEY = { tg: 'tg_accounts', mrpa: 'mrpa_accounts', wa: 'wa_accounts',
+                  line: 'line_accounts' };
 
   /* ── 模块状态 ──────────────────────────────────────────────────────────── */
   var _pid = '';        // 当前弹窗对应的人设 id
@@ -185,7 +194,8 @@
   function _renderAccountPane(d) {
     var box = document.getElementById('psa-pane-account');
     if (!box) return;
-    var plats = ['tg', 'mrpa', 'wa'];
+    // #78：line_accounts 进枚举（LINE 已登录账号此前完全缺席）
+    var plats = ['tg', 'mrpa', 'wa', 'line'];
     var total = 0, mine = 0, html = '';
     for (var i = 0; i < plats.length; i++) {
       var plat = plats[i];
@@ -198,17 +208,31 @@
         var curName = a.active_profile ? (a.active_profile.name || a.active_profile.id || '') : '';
         var isMine = (a.persona_ids || []).indexOf(_pid) !== -1;
         if (isMine) mine++;
+        // #78：registry 账号（tg 除外）assign 走通用 registry 端点
+        var src = (a.source === 'registry' && plat !== 'tg') ? 'registry' : '';
+        // #78：副行带「当前人设：」前缀——「小柔」是账号名还是人设名此前分不清
+        var subTxt = curName
+          ? (_t('psn_apply_cur_prefix', '当前人设：') + curName) : '—';
+        // #78 二轮（skuio 原图 929）：主标签=账号显示名（后端 label 链已吃
+        // self_name），id 缩小作副显且与主标签重复时不再复读；LINE 长 token
+        // 缩略展示（完整值进 title 悬浮可查）。@username 有则附带。
+        var aidShort = aid.length > 18 ? (aid.slice(0, 8) + '…' + aid.slice(-4)) : aid;
+        var dispName = (name === aid) ? (aidShort || '—') : name;
+        var uname = a.username ? String(a.username).replace(/^@/, '') : '';
+        var metaBits = '';
+        if (uname && uname !== name) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">@' + _esc(uname) + '</span>';
+        if (aid && name !== aid) metaBits += ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">' + _esc(aidShort) + '</span>';
         html += '<div class="psa-row">'
           + '<span class="psa-plat">' + PLAT_LABEL[plat] + '</span>'
           + '<div class="psa-row-main">'
-          +   '<div class="psa-row-name" title="' + _esc(aid) + '">' + _esc(name) + '</div>'
-          +   '<div class="psa-row-sub">' + (curName ? _esc(curName) : '—') + '</div>'
+          +   '<div class="psa-row-name" title="' + _esc(aid) + '">' + _esc(dispName) + metaBits + '</div>'
+          +   '<div class="psa-row-sub">' + _esc(subTxt) + '</div>'
           + '</div>'
           + (isMine
               ? '<span class="psa-cur">' + _esc(_t('psn_apply_current', '✓ 当前人设')) + '</span>'
-                + '<button class="btn btn-sm btn-danger" data-act="clear" data-plat="' + plat + '" data-aid="' + _esc(aid) + '">'
+                + '<button class="btn btn-sm btn-danger" data-act="clear" data-plat="' + plat + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
                 + _esc(_t('psn_apply_clear', '清除')) + '</button>'
-              : '<button class="btn btn-sm btn-primary" data-act="assign" data-plat="' + plat + '" data-aid="' + _esc(aid) + '">'
+              : '<button class="btn btn-sm btn-primary" data-act="assign" data-plat="' + plat + '" data-src="' + src + '" data-aid="' + _esc(aid) + '">'
                 + _esc(_t('psn_apply_assign', '指定')) + '</button>')
           + '</div>';
       }
@@ -220,8 +244,11 @@
   }
 
   // 指定 / 清除账号默认人设：POST assign-profile，body {profile_id}（清除传 ''，同 _ppPick('')）
-  async function _assign(plat, aid, profileId, btn) {
+  async function _assign(plat, aid, profileId, btn, src) {
     var ep = ENDPOINT[plat];
+    if (src === 'registry' || (!ep && REGISTRY_PLAT[plat])) {
+      ep = function (x) { return _registryEndpoint(plat, x); };
+    }
     if (!ep || !aid || (btn && btn.disabled)) return;
     if (btn) btn.disabled = true;
     try {
@@ -467,8 +494,8 @@
     var act = btn.getAttribute('data-act');
     if (act === 'close') close();
     else if (act === 'tab') _switchTab(btn.getAttribute('data-tab'));
-    else if (act === 'assign') _assign(btn.getAttribute('data-plat'), btn.getAttribute('data-aid'), _pid, btn);
-    else if (act === 'clear') _assign(btn.getAttribute('data-plat'), btn.getAttribute('data-aid'), '', btn);
+    else if (act === 'assign') _assign(btn.getAttribute('data-plat'), btn.getAttribute('data-aid'), _pid, btn, btn.getAttribute('data-src') || '');
+    else if (act === 'clear') _assign(btn.getAttribute('data-plat'), btn.getAttribute('data-aid'), '', btn, btn.getAttribute('data-src') || '');
     else if (act === 'unbind') _unbind(btn.getAttribute('data-cid'), btn);
     else if (act === 'bind') _bind(btn);
     else if (act === 'setdefault') _setDefault(btn);

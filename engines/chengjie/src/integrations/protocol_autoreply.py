@@ -1105,7 +1105,12 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
         from src.skills.companion_send_gate import (
             evaluate, gate_enabled, peer_exempt,
         )
-        if gate_enabled(cfg) and not peer_exempt(cfg, chat_key):
+        if gate_enabled(cfg) and peer_exempt(cfg, chat_key):
+            # #77（0830 AW7MUV）：豁免命中显式留痕——「白名单真读到了」有正面证据
+            logger.info(
+                "[send_gate] 白名单豁免命中 %s:%s → peer=%s（本次发送不受额度限制）",
+                platform, account_id, chat_key)
+        elif gate_enabled(cfg):
             try:
                 from src.integrations.account_registry import get_account_registry
                 from src.integrations.protocol_autoreply_limits import (
@@ -1123,7 +1128,9 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                 logger.debug("[send_gate] 信号装配失败，放行", exc_info=True)
                 dec = {"allowed": True}
             if not dec.get("allowed", True):
-                raise RuntimeError(f"send_gate_blocked:{dec.get('reason')}")
+                # #77：拦截即知目标——peer 进错误串（run_autoreply 日志/审计原样携带）
+                raise RuntimeError(
+                    f"send_gate_blocked:{dec.get('reason')}|peer={chat_key}")
         orch = get_orchestrator(cfg)
         try:
             return await orch.send(platform, account_id, chat_key, text)

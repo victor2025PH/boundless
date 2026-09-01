@@ -11,7 +11,11 @@
   --cp-gap: 10px;
   --cp-gap-lg: 14px;
 
-  --cp-fs-tiny: 11px;
+  /* 2026-08-28：tiny 11px→12px。低对比度 × 小字号是乘法关系，右栏「字看不清」
+     两个因子都占——提亮 --cp-text-dim/-tiny 的同批把字号抬到后台既有纪律的
+     下限（admin-theme.mdc：说明类文字 ≥ .75rem=12px）。这一档是全站 85 个
+     --cp-fs-tiny 引用点的单一开关，不必逐组件改。 */
+  --cp-fs-tiny: 12px;
   --cp-fs-sm: 12px;
   --cp-fs: 13px;
   --cp-fs-lg: 15px;

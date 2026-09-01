@@ -577,7 +577,7 @@ class TestVoiceUnifiedSendStack:
         monkeypatch.setattr(vs, "send_telegram_voice", sent)
 
         s = self._make_sender(monkeypatch)
-        monkeypatch.setattr(s, "_presend_blocked", lambda: True)  # 冻结/被闸门拦
+        monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: True)  # 冻结/被闸门拦
         msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
 
         out = await s._maybe_send_voice_reply(msg, "hi", is_peer_voice=False)
@@ -618,7 +618,7 @@ class TestVoiceUnifiedSendStack:
             PB, "protocol_media_root", lambda: tmp_path / "static_media")
 
         s = self._make_sender(monkeypatch)
-        monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+        monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
         paced = {}
         counted = {}
 
@@ -669,7 +669,7 @@ class TestVoiceUnifiedSendStack:
             PB, "protocol_media_root", lambda: tmp_path / "static_media")
 
         s = self._make_sender(monkeypatch, summary=True)
-        monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+        monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
 
         async def _pace():
             pass
@@ -741,7 +741,7 @@ class TestVoiceReplyLangRoute:
             lambda pid, raw, contact_key=None: dict(voice_cfg),
         )
         s = _S()
-        monkeypatch.setattr(s, "_presend_blocked", lambda: False)
+        monkeypatch.setattr(s, "_presend_blocked", lambda **_kw: False)
         return s
 
     @pytest.mark.asyncio

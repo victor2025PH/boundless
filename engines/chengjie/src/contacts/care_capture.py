@@ -88,8 +88,52 @@ def make_care_inbound_cb(
                 min_confidence=float(cfg.get("min_confidence", 0.6)),
                 dedup_window_days=float(cfg.get("dedup_window_days", 3)),
             )
+            # 实施84 P0-3：软承诺层（「下次给你看照片/等我忙完」，无时间锚）。
+            # 默认关（capture_soft.enabled）；独立置信阈值；per-contact pending
+            # 上限防灌（软句式多变、topic_norm 去重弱，上限才是真护栏）。
+            soft_cfg = dict(cfg.get("capture_soft") or {})
+            if soft_cfg.get("enabled", False) and not ids:
+                try:
+                    from src.contacts.care_commitment import (
+                        extract_soft_commitments,
+                    )
+                    _max_pending = int(soft_cfg.get(
+                        "max_pending_per_contact", 2) or 2)
+                    if store.count_pending_by_contact(contact_key) < _max_pending:
+                        for c in extract_soft_commitments(
+                                t, due_hours=float(
+                                    soft_cfg.get("due_hours", 72) or 72)):
+                            rid = store.add_commitment(
+                                c, contact_key=contact_key,
+                                platform=str(conv_dict.get("platform") or ""),
+                                account_id=str(
+                                    conv_dict.get("account_id") or "default"),
+                                chat_key=str(conv_dict.get("chat_key") or ""),
+                                min_confidence=float(soft_cfg.get(
+                                    "min_confidence", 0.55) or 0.55),
+                                dedup_window_days=float(
+                                    cfg.get("dedup_window_days", 3)),
+                            )
+                            if rid:
+                                ids.append(rid)
+                except Exception:
+                    logger.debug("[care] 软承诺捕获失败（忽略）", exc_info=True)
             if ids:
                 logger.info("[care] 捕获 %d 条关怀约定 contact=%s", len(ids), contact_key)
+                # 实施84 P1-1：捕获的约定回流该会话活跃工作目标的事件时间线
+                # （goal_link.enabled + capture_events；坐席在目标卡「AI 做了
+                # 什么」可见）。best-effort，绝不影响已完成的捕获。
+                try:
+                    from src.contacts.care_goal_link import record_capture_event
+                    record_capture_event(
+                        config_manager,
+                        conversation_id=contact_key,
+                        platform=str(conv_dict.get("platform") or ""),
+                        account_id=str(conv_dict.get("account_id") or "default"),
+                        chat_key=str(conv_dict.get("chat_key") or ""),
+                        text=t, count=len(ids))
+                except Exception:
+                    logger.debug("[care] 目标事件回流失败（忽略）", exc_info=True)
         except Exception:
             logger.debug("[care] 入站捕获失败（忽略）", exc_info=True)
 

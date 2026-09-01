@@ -209,6 +209,70 @@ def test_summary_reachability_buckets(env):
     assert rg["none"] == 1 and rg["covered"] == 0
 
 
+def test_reachability_denominator_matches_displayed_contacts(env):
+    """卡片不变量：可加回分母 **必须** 等于同卡展示的「联系人」总数。
+
+    两个数字在卡上并排摆着，看起来后者是前者的比例——2026-08-28 前并不是：
+    覆盖率按**私聊会话行**算，联系人按**人的并集**（通讯录 ∪ 私聊 peer）算，
+    生产实测某 WhatsApp 账号分母 9 vs 165。这条是那个 bug 的 API 级回归钉。
+    """
+    d = client_json(env)
+    for a in d["accounts"]:
+        assert a["reachability"]["total"] == a["contacts_detail"]["total"], (
+            f"{a['platform']}:{a['account_id']} 的可加回分母"
+            f"（{a['reachability']['total']}）与展示的联系人总数"
+            f"（{a['contacts_detail']['total']}）不一致——"
+            "卡上两个并排的数字必须同人群")
+        assert a["reachability"]["total"] == a["counts"]["contacts"]
+
+
+def test_reachability_counts_book_only_contacts(env):
+    """通讯录-only 联系人（无会话行）必须进分母。
+
+    它们在基表里是 `LEFT JOIN conversations` 的 miss 行，身份列为 **NULL**——
+    聚合 SQL 若不 COALESCE，`NULL=''` 求值为 NULL 会让四个桶全落 ELSE，
+    整行从分母里静默消失（首版实锤：并集应 12 人、实得 9）。
+    """
+    client, store = env
+    store.upsert_protocol_contacts("telegram", "alive", [
+        {"chat_key": "book1", "name": "只在通讯录里"},
+        {"chat_key": "book2", "name": "也只在通讯录里"},
+    ])
+    acr._summary_cache["ts"] = 0.0
+    acr._summary_cache["payload"] = None
+    d = client.get("/api/workspace/assets/summary").json()
+    alive = next(a for a in d["accounts"] if a["account_id"] == "alive")
+    # 原 2 个私聊 peer + 2 个通讯录-only = 4 人
+    assert alive["reachability"]["total"] == 4
+    assert alive["contacts_detail"]["total"] == 4
+    # 两个新人没有任何句柄（telegram 不派生）→ 计入 none 而不是消失
+    assert alive["reachability"]["none"] == 3
+
+
+def client_json(env):
+    client, _ = env
+    return client.get("/api/workspace/assets/summary").json()
+
+
+def test_summary_exposes_identity_and_action_hints(env):
+    """身份回落链与动作粗筛所需字段必须在 payload 里（前端四级回落的输入）。"""
+    d = client_json(env)
+    by = {a["account_id"]: a for a in d["accounts"]}
+    for a in d["accounts"]:
+        for k in ("self_name", "self_username", "self_avatar"):
+            assert k in a, f"缺 {k}（卡片主标题回落链会退化成裸 id）"
+        assert isinstance(a["purge_hint"], bool)
+        assert isinstance(a["no_handle_platform"], bool)
+    # label 只表示「运营起过的别名」，绝不回落成 account_id——否则前端分不出
+    # 「有没有起过名」，「起个名字」入口就永远不出现。
+    assert by["alive"]["label"] == "主号"
+    assert by["ghost"]["label"] == ""
+    # 历史/离线态才提示「彻底删除」；在线号不提示（真判定仍在 purge-history）
+    assert by["ghost"]["purge_hint"] is True
+    assert by["alive"]["purge_hint"] is False
+    assert by["dead"]["purge_hint"] is True          # banned 也属可清理历史态
+
+
 def test_summary_totals_backup_features(env):
     client, _ = env
     d = client.get("/api/workspace/assets/summary").json()

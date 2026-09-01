@@ -442,8 +442,6 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
   .cmd-box{width:95vw}
   /* Chart grid stack */
   .sa-section [style*="grid-template-columns:1fr 1fr"]{grid-template-columns:1fr!important}
-  /* Tour popup: smaller */
-  #tour-popup{width:min(260px,88vw)!important}
 }
 @media(max-width:480px){
   .topbar{padding:0 .85rem}
@@ -777,7 +775,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
 <div id="toast-root"></div>
 <!-- 实施75：统一通知总线（右下卡片 toast + 系统状态胶囊）。经典后台壳也挂载：
      会话过期/能力闸/告警链路等 _api_fetch / _alertlink_connect 共享提示走它。 -->
-<script src="/static/workspace/notify-bus.js?v=20260827b"></script>
+<script src="/static/workspace/notify-bus.js?v=20260830a"></script>
 
 <div class="pwd-overlay" id="pwd-overlay" onclick="if(event.target===this)closePwdModal()">
   <div class="pwd-card">
@@ -869,7 +867,6 @@ var _cmdPagesAll=[
   {name:{{ (i18n or {}).get("switch_mode","切换模式")|tojson }},url:'#mode',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/></svg>',keys:'mode 模式 简洁 完整 切换',simple:true},
   {name:{{ (i18n or {}).get("switch_theme","切换主题")|tojson }},url:'#theme',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/></svg>',keys:'theme 主题 暗色 亮色',simple:true},
   {name:{{ (i18n or {}).get("hb.cmd.tips","术语提示 开/关")|tojson }},url:'#tips',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',keys:'tips 术语 提示 悬停 词条 tooltip',simple:true},
-  {name:{{ (i18n or {}).get("hb.cmd.tour","重看新手引导")|tojson }},url:'#tour',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>',keys:'tour 引导 新手 教程 onboarding',simple:true},
   {name:{{ (i18n or {}).get("sup.cta.menu","上传诊断给客服")|tojson }},url:'#support',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',keys:'support 诊断 客服 上传 报障 diagnostics',simple:true},
   {name:{{ (i18n or {}).get("change_pwd","修改密码")|tojson }},url:'#password',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>',keys:'password 密码',simple:true},
   {name:{{ (i18n or {}).get("logout_full","退出登录")|tojson }},url:'#logout',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',keys:'logout 退出',simple:true}
@@ -899,9 +896,8 @@ function execCmd(url){
   if(url==='#reload'){location.reload();return}
   if(url==='#password'){openPwdModal();return}
   if(url==='#logout'){doLogout();return}
-  /* 帮助球退役后的三入口（2026-08-21）：术语提示/重看引导/上传诊断 */
+  /* 帮助球退役后的入口（2026-08-21）：术语提示/上传诊断；新手引导已退役（2026-08-31） */
   if(url==='#tips'){if(typeof window.toggleTermTips==='function')window.toggleTermTips();return}
-  if(url==='#tour'){localStorage.removeItem('tour_done');if(typeof startTour==='function')startTour();return}
   if(url==='#support'){try{window.openSupportPanel&&window.openSupportPanel('','cmdk')}catch(e){}return}
   if(url==='#mode'){location.href='/set_ui_mode?mode='+(_uiMode==='simple'?'full':'simple');return}
   /* 坐席工作台（含 ?card=goal 等深链）与侧栏同语义：复用/聚焦唯一工作台窗口，
@@ -936,7 +932,6 @@ document.addEventListener('keydown',function(e){
     closeCmdPalette();closeShortcuts();
     var pov=document.getElementById('pwd-overlay');if(pov&&pov.classList.contains('open'))closePwdModal();
     var cov=document.getElementById('confirm-overlay');if(cov&&cov.classList.contains('open'))document.getElementById('confirm-cancel').click();
-    endTour();
     return;
   }
   /* ? — show shortcuts */
@@ -1300,83 +1295,7 @@ function showToast(msg,type='ok',dur=3500){
   requestAnimationFrame(()=>requestAnimationFrame(()=>t.classList.add('show')));
   setTimeout(()=>{t.classList.remove('show');setTimeout(()=>t.remove(),350)},dur);
 }
-/* ── Onboarding Tour ───────────────────────────────── */
-/* 引导步骤双语：title/body 为中文，title_en/body_en 为英文；showTourStep 按 WS_LANG 取，缺则回落中文。 */
-var _tourSteps=[
-  {sel:'#sidebar .sb-brand',title:'欢迎使用 {{ product_name|default((i18n or {}).get("brand.product", "智聊")) }}',title_en:'Welcome to {{ product_name|default((i18n or {}).get("brand.product", "ChatX")) }}',body:'这里是您的管理中心。左侧导航菜单可访问所有功能模块。',body_en:'This is your control center. Use the left-hand navigation to reach every feature module.',pos:'right'},
-  {sel:'a[href="/cases"]',title:'案例跟进',title_en:'Case Follow-ups',body:'这是您最常用的页面 — 查看和处理客户案例，关注高风险用户，添加备注或结案。',body_en:'Your most-used page — review and handle customer cases, watch high-risk users, add notes or close cases.',pos:'right'},
-  {sel:'a[href="/knowledge"]',title:'知识库',title_en:'Knowledge Base',body:'所有 AI 回复话术、知识条目均在此管理。在"系统话术"分类下编辑即可。',body_en:'Manage all AI reply scripts and knowledge entries here. Edit them under the "System Scripts" category.',pos:'right'},
-  {sel:'#cmd-trigger',title:'命令面板（Ctrl+K）',title_en:'Command Palette (Ctrl+K)',body:'随时按 Ctrl+K 唤起命令面板，快速跳转任意页面或执行操作，无需鼠标。',body_en:'Press Ctrl+K anytime to open the command palette and jump to any page or run an action — no mouse needed.',pos:'bottom'},
-];
-var _TOUR_EN = (window.WS_LANG === 'en');
-var _tourIdx=0,_tourEl=null,_tourBg=null;
-function startTour(){
-  if(localStorage.getItem('tour_done')==='1')return;
-  _tourIdx=0;
-  _tourBg=document.createElement('div');
-  _tourBg.id='tour-bg';
-  _tourBg.style.cssText='position:fixed;inset:0;z-index:400;pointer-events:none';
-  document.body.appendChild(_tourBg);
-  showTourStep();
-}
-function showTourStep(){
-  var old=document.getElementById('tour-popup');if(old)old.remove();
-  var step=_tourSteps[_tourIdx];
-  var anchor=document.querySelector(step.sel);
-  if(!anchor){nextTourStep();return}
-  anchor.scrollIntoView({block:'nearest'});
-  var rect=anchor.getBoundingClientRect();
-  var pop=document.createElement('div');
-  pop.id='tour-popup';
-  var _tTitle=(_TOUR_EN&&step.title_en)?step.title_en:step.title;
-  var _tBody=(_TOUR_EN&&step.body_en)?step.body_en:step.body;
-  pop.innerHTML='<div style="font-weight:700;font-size:.9rem;margin-bottom:.4rem">'+_tTitle+'</div><div style="font-size:.82rem;color:var(--t2);line-height:1.5;margin-bottom:.9rem">'+_tBody+'</div><div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem"><span style="font-size:.72rem;color:var(--t3)">{{ (i18n or {}).get("tour_step","步骤") }} '+(_tourIdx+1)+' {{ (i18n or {}).get("tour_of","/") }} '+_tourSteps.length+'</span><div style="display:flex;gap:.4rem">'+(_tourIdx>0?'<button class="btn btn-s" style="font-size:.78rem;padding:.25rem .55rem" onclick="prevTourStep()">{{ (i18n or {}).get("tour_prev","上一步") }}</button>':'')+(_tourIdx<_tourSteps.length-1?'<button class="btn btn-p" style="font-size:.78rem;padding:.25rem .7rem" onclick="nextTourStep()">{{ (i18n or {}).get("tour_next","下一步") }}</button>':'<button class="btn btn-p" style="font-size:.78rem;padding:.25rem .7rem" onclick="endTour()">{{ (i18n or {}).get("tour_done","完成") }}</button>')+'<button class="btn btn-s" style="font-size:.72rem;padding:.2rem .45rem;color:var(--t3)" onclick="endTour()">{{ (i18n or {}).get("tour_skip","跳过") }}</button></div></div>';
-  pop.style.cssText='position:fixed;background:var(--card);border:1px solid var(--bd);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.18);padding:1.1rem 1.2rem;width:280px;z-index:401;animation:fadeUp .2s ease';
-  document.body.appendChild(pop);
-  var pw=280,ph=160;
-  var vw=window.innerWidth,vh=window.innerHeight;
-  var t,l;
-  if(step.pos==='right'){t=rect.top+rect.height/2-ph/2;l=rect.right+12}
-  else{t=rect.bottom+12;l=rect.left+rect.width/2-pw/2}
-  t=Math.max(8,Math.min(t,vh-ph-8));
-  l=Math.max(8,Math.min(l,vw-pw-8));
-  pop.style.top=t+'px';pop.style.left=l+'px';
-  /* Highlight anchor */
-  anchor.style.outline='2px solid var(--p)';anchor.style.outlineOffset='3px';anchor.style.borderRadius='8px';anchor._tour=true;
-}
-function clearTourHighlight(){
-  document.querySelectorAll('[data-tour-highlight]').forEach(function(el){el.style.outline='';el.style.outlineOffset='';el._tour=false});
-  var step=_tourSteps[_tourIdx];
-  if(step){var a=document.querySelector(step.sel);if(a){a.style.outline='';a.style.outlineOffset=''}}
-}
-function nextTourStep(){clearTourHighlight();_tourIdx++;if(_tourIdx>=_tourSteps.length)endTour();else showTourStep()}
-function prevTourStep(){clearTourHighlight();_tourIdx=Math.max(0,_tourIdx-1);showTourStep()}
-function endTour(){
-  var p=document.getElementById('tour-popup');if(p)p.remove();
-  if(_tourBg){_tourBg.remove();_tourBg=null}
-  clearTourHighlight();
-  localStorage.setItem('tour_done','1');
-}
-/* Auto start on first visit — 首启引导收敛：简洁模式「欢迎弹窗」未看过时不自动拉起引导，
-   避免「欢迎弹窗 + 引导浮层」同屏叠加；改由 dismissOnboard() 在用户点「开始使用」后顺次拉起。 */
-(function(){
-  if(localStorage.getItem('tour_done')==='1')return;
-  var pendingWelcome={{ 'true' if ui_mode == 'simple' else 'false' }} && !localStorage.getItem('_onboard_shown_simple');
-  if(pendingWelcome)return;
-  /* 自启动封顶（2026-08-22 引导治理）：此前中途弃走的 tour 会在**每个页面**从步骤 1/4
-     重弹（tour_done 只有点「跳过/完成」才落），左上角浮层跨页常驻＝骚扰。现约束为：
-     每会话至多自启一次（sessionStorage），历史累计至多 2 次（localStorage 计数）——
-     第 2 次仍没走完＝用户不感兴趣，视同完成永久静默；#tour（命令面板「新手引导」）
-     随时可显式重播，Esc 亦可随时关（见全局 keydown）。 */
-  try{
-    if(sessionStorage.getItem('tour_auto_sess')==='1')return;
-    var n=parseInt(localStorage.getItem('tour_auto_n')||'0',10)||0;
-    if(n>=2){localStorage.setItem('tour_done','1');return;}
-    localStorage.setItem('tour_auto_n',String(n+1));
-    sessionStorage.setItem('tour_auto_sess','1');
-  }catch(_){}
-  setTimeout(function(){try{startTour()}catch(e){}},1200);
-})();
+/* ── Onboarding Tour 已退役（2026-08-31 新手引导删除）：不再有任何自动/手动引导浮层 ── */
 /* CountUp */
 function countUp(el,target,dur=1200){
   if(isNaN(target))return;const start=performance.now();
@@ -1391,11 +1310,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   /* Ctrl+S save, Esc close */
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'){
-      /* 引导可 Esc 逃生（2026-08-22）：tour 浮层/欢迎弹窗此前只认按钮，键盘党被困 */
-      const tp=document.getElementById('tour-popup');
-      if(tp&&typeof endTour==='function'){endTour();return}
-      const ob=document.getElementById('onboard-modal');
-      if(ob&&ob.style.display==='flex'&&typeof window.dismissOnboard==='function'){window.dismissOnboard();return}
       document.querySelectorAll('.panel.open').forEach(p=>closePanel(p.id))
     }
     if((e.ctrlKey||e.metaKey)&&e.key==='s'){const f=document.querySelector('.panel.open form');if(f){e.preventDefault();f.requestSubmit()}}
@@ -1649,47 +1563,7 @@ function _diffLines(oldL, newL){
   connect();
 })();
 </script>
-{% if ui_mode == 'simple' %}
-<div id="onboard-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim55,rgba(0,0,0,.55));backdrop-filter:blur(4px);align-items:center;justify-content:center">
-  <div style="background:var(--card);border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.25);max-width:440px;width:92vw;padding:2rem;text-align:center;animation:fadeUp .3s ease">
-    <div style="font-size:2.5rem;margin-bottom:.8rem">👋</div>
-    <h2 style="font-size:1.2rem;font-weight:700;margin-bottom:.5rem">{{ (i18n or {}).get('onb_welcome_title','欢迎使用简洁模式') }}</h2>
-    <p style="font-size:.88rem;color:var(--t2);line-height:1.6;margin-bottom:1.2rem">
-      {{ (i18n or {}).get('onb_welcome_desc','系统已为你精简了操作界面，专注于最常用的功能：') }}
-    </p>
-    {#- 功能清单与简洁模式主区对齐（2026-08-03 精简）：工作台/案例/关怀/知识库/
-        [域页]/自动回复设置。行标签复用导航键，描述键在 i18n_packs/onboarding.py。 -#}
-    <div style="display:flex;flex-direction:column;gap:.5rem;text-align:left;margin-bottom:1.5rem;padding:0 .5rem">
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">💬</span> <b>{{ (i18n or {}).get('workspace_inbox','坐席工作台') }}</b> — {{ (i18n or {}).get('onb_ws_desc','全渠道客户消息集中在这里回复') }}</div>
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">📋</span> <b>{{ (i18n or {}).get('onb_cases_label','案例跟进') }}</b> — {{ (i18n or {}).get('onb_cases_desc','查看和处理客户案例') }}</div>
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">💗</span> <b>{{ (i18n or {}).get('care','主动关怀') }}</b> — {{ (i18n or {}).get('onb_care_desc','到点该问候谁，系统替你记着') }}</div>
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">📚</span> <b>{{ (i18n or {}).get('onb_kb_label','知识库') }}</b> — {{ (i18n or {}).get('onb_kb_desc','浏览和搜索知识条目') }}</div>
-      {% for dp in domain_web_pages if dp.get('show_in_simple') %}
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">🌐</span> <b>{{ dp.get('label_simple') or dp.get('label','') }}</b></div>
-      {% endfor %}
-      <div style="display:flex;align-items:center;gap:.6rem;font-size:.88rem"><span style="font-size:1.1rem">⏱️</span> <b>{{ (i18n or {}).get('rps_nav','自动回复设置') }}</b> — {{ (i18n or {}).get('onb_rps_desc','调 AI 替你回话的快慢与风格') }}</div>
-    </div>
-    <p style="font-size:.78rem;color:var(--t3);margin-bottom:1rem">{{ (i18n or {}).get('onb_footer','你随时可以在侧边栏底部切换到完整模式') }}</p>
-    <button onclick="dismissOnboard()" style="background:var(--p);color:var(--p-ink,#fff);border:none;border-radius:10px;padding:.65rem 2rem;font-size:.92rem;font-weight:600;cursor:pointer;transition:.15s">{{ (i18n or {}).get('onb_start','开始使用') }}</button>
-  </div>
-</div>
-<script>
-(function(){
-  var k='_onboard_shown_simple';
-  if(!localStorage.getItem(k)){
-    var m=document.getElementById('onboard-modal');
-    if(m) m.style.display='flex';
-  }
-  window.dismissOnboard=function(){
-    localStorage.setItem(k,'1');
-    var m=document.getElementById('onboard-modal');
-    if(m) m.style.display='none';
-    /* 简洁模式：欢迎弹窗已覆盖主入口，不再叠 4 步侧栏 tour（完整模式仍自动引导） */
-    try{ localStorage.setItem('tour_done','1'); }catch(e){}
-  };
-})();
-</script>
-{% endif %}
+{#- 简洁模式欢迎弹窗已退役（2026-08-31 新手引导删除）-#}
 <script>
 /* AI 助手悬浮球 loader（2026-08-21 v2 带重试）：探 /api/assistant/bootstrap——
    未装载(404)/灰度未开(enabled:false)静默。v1 只探一次：实例重启窗（15-30s）
@@ -1703,7 +1577,7 @@ function _diffLines(oldL, newL){
     if(done||window.AssistantBall) return;
     done=true;
     var s=document.createElement('script');
-    s.src='/assistant-shared/assistant-ball.js?v=20260829c';
+    s.src='/assistant-shared/assistant-ball.js?v=20260831a';
     s.onload=function(){
       if(window.AssistantBall) window.AssistantBall.init({
         shell:'admin',
@@ -1722,7 +1596,7 @@ function _diffLines(oldL, newL){
       document.head.appendChild(s2);
       /* 实施58 P2：「替我做」智能体+流星执行秀（后端未装载=入口如实待装） */
       var s3=document.createElement('script');
-      s3.src='/assistant-shared/assistant-agent.js?v=20260830b';
+      s3.src='/assistant-shared/assistant-agent.js?v=20260831c';
       s3.onload=function(){
         if(window.XZAgent) window.XZAgent.init({
           shell:'admin',
@@ -1754,43 +1628,65 @@ function _diffLines(oldL, newL){
 </script>
 <!-- 管理后台壳陈旧页提醒（2026-08-21 平移 → 实施75 迁右下）：模板热更新只对刷新
      后的页面生效，常开的管理页跑旧 JS＝「修好了还在踩」。首读 ui-build token 为
-     基线，每 5 分钟+回前台复查，变了出右下胶囊+卡片（立即刷新 / 暂不=2h 贪睡）。
-     探测失败一律静默。 -->
+     基线，每 5 分钟+回前台复查，变了出右下胶囊+卡片（立即更新 / 暂不=2h 贪睡）。
+     2026-08-28：胶囊自带常驻动作按钮（卡片 20s 过期后仍可执行）+ 文案不再说
+     「刷新页面」（桌面壳无此入口）+ 认 severity=silent 时不打扰。
+     **刻意不做工作台那套空闲自动重载**：后台页多是编辑中的长表单，自动重载的
+     代价（丢未保存配置）远大于收益，等人显式点。探测失败一律静默。 -->
 <script>
 (function(){
   var URL='/static/workspace/ui-build.txt';
   var KEY='adm_uibuild_snooze';
   var baseline='', shown=false;
-  var TXT={{ ((i18n or {}).get('hb.stale.text','后台界面已更新到新版本，刷新页面即可加载。'))|tojson }};
-  var BTN={{ ((i18n or {}).get('hb.stale.btn','立即刷新'))|tojson }};
+  var SHORT={{ ((i18n or {}).get('hb.stale.short','后台有新版本'))|tojson }};
+  var TXT={{ ((i18n or {}).get('hb.stale.text','后台界面有新版本，点「立即更新」重新载入本页。'))|tojson }};
+  var BTN={{ ((i18n or {}).get('hb.stale.btn','立即更新'))|tojson }};
   var SNZ={{ ((i18n or {}).get('hb.stale.dismiss','暂不（2 小时内不再提醒）'))|tojson }};
   var TITLE={{ ((i18n or {}).get('ntf.capsule_title','系统状态 · 点击查看通知中心'))|tojson }};
   function snoozed(){
     try{ return (Number(sessionStorage.getItem(KEY)||0) > Date.now()); }catch(_){ return false; }
+  }
+  function reloadNow(){
+    try{ if(typeof window.__blLoadShow==='function') window.__blLoadShow(); }catch(_){}
+    try{ location.reload(); }catch(_){ try{ location.href=location.href; }catch(_2){} }
+  }
+  function parseSev(lines){
+    for(var i=1;i<lines.length;i++){
+      var m=/^\s*severity\s*=\s*(silent|notice|urgent)\s*$/i.exec(String(lines[i]||''));
+      if(m) return m[1].toLowerCase();
+    }
+    return 'notice';
   }
   async function tick(){
     if(shown) return;
     try{
       var r=await fetch(URL+'?_='+Date.now(),{cache:'no-store'});
       if(!r.ok) return;
-      var cur=(await r.text()).split('\n')[0].trim();
+      var lines=String(await r.text()).split(/\r?\n/);
+      var cur=String(lines[0]||'').trim();
       if(!cur) return;
       if(!baseline){ baseline=cur; return; }
-      if(cur!==baseline && !snoozed() && window.AITRNotify){
-        AITRNotify.ongoing.set('uibuild', {text:TXT, tone:'info', title:TITLE});
-        AITRNotify.notify({
-          severity:'info', text:TXT, domKey:'uibuild', center:false, ttlMs:20000,
-          actions:[
-            {label:BTN, onClick:function(){ location.reload(); }},
-            {label:SNZ, onClick:function(){
-              try{ sessionStorage.setItem(KEY,String(Date.now()+2*3600*1000)); }catch(_){}
-              AITRNotify.ongoing.clear('uibuild');
-              shown=false;
-            }}
-          ]
-        });
-        shown=true;
-      }
+      if(cur===baseline || snoozed() || !window.AITRNotify) return;
+      var sev=parseSev(lines);
+      if(sev==='silent') return;
+      var tone=(sev==='urgent')?'warn':'info';
+      AITRNotify.ongoing.set('uibuild', {
+        text:SHORT, tone:tone, title:TITLE,
+        action:{label:BTN, onClick:reloadNow, title:TXT}
+      });
+      AITRNotify.notify({
+        severity:tone, text:TXT, domKey:'uibuild', center:false,
+        ttlMs:(sev==='urgent')?undefined:20000, sticky:(sev==='urgent'),
+        actions:[
+          {label:BTN, onClick:reloadNow},
+          {label:SNZ, onClick:function(){
+            try{ sessionStorage.setItem(KEY,String(Date.now()+2*3600*1000)); }catch(_){}
+            AITRNotify.ongoing.clear('uibuild');
+            shown=false;
+          }}
+        ]
+      });
+      shown=true;
     }catch(_){}
   }
   tick();

@@ -921,6 +921,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/": "dash", "/templates": "tpl",
         # ops_overview P1 挂壳（2026-08-03）：/admin/ops 继承 base.html 后侧栏需高亮
         "/admin/ops": "ops",
+        # 报障工单处置页（实施81 P0-2）
+        "/admin/bug-tickets": "bug_tickets",
         "/strategies": "strategies", "/strategy-analytics": "strategy-analytics",
         "/audit": "audit", "/diff": "diff", "/logs": "logs",
         "/analytics": "analytics", "/help": "help", "/users": "users",
@@ -1400,31 +1402,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_mb.getLogger("admin").warning("membership 路由注册失败", exc_info=True)
 
-    # ── WP-2：首启向导 /welcome（onboarding.enabled 基线关；关=页面与 API 全 404）──
-    try:
-        from src.web.routes.welcome_routes import register_welcome_routes
-
-        register_welcome_routes(
-            app, templates=templates, page_auth=_page_auth,
-            api_auth=_api_auth, config_manager=config_manager,
-            user_store=user_store)
-    except Exception:
-        import logging as _log_onb
-
-        _log_onb.getLogger("admin").warning("welcome 路由注册失败", exc_info=True)
-
-    # ── WP-7：坐席新手任务（onboarding.agent_tasks 基线关；关=API 全 404）──
-    try:
-        from src.web.routes.agent_tasks_routes import register_agent_tasks_routes
-
-        register_agent_tasks_routes(
-            app, api_auth=_api_auth, config_manager=config_manager,
-            user_store=user_store)
-    except Exception:
-        import logging as _log_agt
-
-        _log_agt.getLogger("admin").warning("agent-tasks 路由注册失败",
-                                            exc_info=True)
+    # ── WP-2 首启向导 /welcome 与 WP-7 坐席新手任务已退役（2026-08-31 新手引导删除）：
+    #    路由不再注册（访问=404）；模块文件与状态文件的物理清理见二期批。──
 
     # ── WP-4：合规只读导出（危机转介计数 + 开关回显；写入面在危机处置链打点）──
     try:
@@ -3155,16 +3134,32 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_cases.getLogger("admin").warning("cases 路由注册失败", exc_info=True)
 
-    # 报障群工单管理（bug_intake，2026-08-18：报障群 AI 值守台账）
+    # 报障群工单管理（bug_intake，2026-08-18：报障群 AI 值守台账；
+    # 2026-08-28 实施81：+处置台页面（page_auth）与 bot 发送配置（config_manager））
     try:
         from src.web.routes.bug_intake_routes import register_bug_intake_routes
 
-        register_bug_intake_routes(app, api_auth=_admin_ctx.api_auth)
+        register_bug_intake_routes(
+            app, api_auth=_admin_ctx.api_auth,
+            page_auth=_admin_ctx.page_auth, config_manager=config_manager)
     except Exception:
         import logging as _log_bi
 
         _log_bi.getLogger("admin").warning("bug_intake 路由注册失败",
                                            exc_info=True)
+
+    # 迁移包导出（账号资产保全，实施47 §5 工单 2）：联系人+会话+可加回句柄打成
+    # 一份离线 zip。资产中心页按路由路径探测本端点（features.export_migration），
+    # 装载后其「导出迁移包」CTA 自动点亮，无需前端改动。
+    try:
+        from src.web.routes.migration_export_routes import (
+            register_migration_export_routes,
+        )
+        register_migration_export_routes(app, api_auth=_admin_ctx.api_auth)
+    except Exception:
+        import logging as _log_mex
+        _log_mex.getLogger("admin").warning("migration_export 路由注册失败",
+                                            exc_info=True)
 
     # 回连认领（账号资产保全 P1）：封号账号 → 新账号的老客户识别 + 记忆合流
     try:

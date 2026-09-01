@@ -63,6 +63,23 @@ _CHAIN_ENDPOINTS = [
     ("GET", "/api/workspace/conv/tg:a:c1/chain-executions", None),
     ("POST", "/api/workspace/chain-executions/e1/cancel", {}),
     ("POST", "/api/workspace/conv/tg:a:c1/start-chain", {"chain_id": "c1"}),
+    # 实施92：旅程阶段 / 成交事件 / 成交引擎预设
+    ("GET", "/api/workspace/conv/tg:a:c1/journey", None),
+    ("POST", "/api/workspace/conv/tg:a:c1/journey/stage", {"stage": "new"}),
+    ("POST", "/api/workspace/conv/tg:a:c1/deal", {}),
+    ("POST", "/api/workspace/conv/tg:a:c1/deal/1/revoke", None),
+    ("GET", "/api/workspace/workflows/deal-engine", None),
+    ("POST", "/api/workspace/workflows/deal-engine", {"enable": True}),
+    ("POST", "/api/workspace/workflow-chains/c1/bulk-start",
+     {"silent_days_min": 7}),
+    ("GET", "/api/workspace/journey-funnel", None),
+    # 实施93 CTA（/r/{token} 公开跳转与 /api/cta/convert 深转化回传刻意不进
+    # 本表：链接/站外埋点已发到客户手里，模块开关不该把它们变死链/断回传；
+    # convert 端点自带 webhook_secret 鉴权）
+    ("GET", "/api/workspace/cta-targets", None),
+    ("POST", "/api/workspace/cta-targets", {"name": "x", "url": "https://x"}),
+    ("DELETE", "/api/workspace/cta-targets/t1", None),
+    ("POST", "/api/workspace/conv/tg:a:c1/cta-link", {"target_id": "t1"}),
 ]
 
 

@@ -81,6 +81,32 @@
 
     <div class="bp-say" id="bp-say"></div>
 
+    <!-- 「现在」区（P1-8 2026-08-29）：日报是回顾，这张卡回答「此刻有没有事等我」。
+         段缺失（未启用目标/取数失败）＝格子隐藏不摆假零；风险行触发才红。 -->
+    <div class="bp-card" id="bp-now-card" style="display:none">
+      <h3>{{ (i18n or {}).get('bp_now_title', '现在，需要你知道的') }}</h3>
+      <div class="bp-hero" style="margin-bottom:0">
+        <div class="bp-kpi" id="bp-t-active" style="display:none">
+          <div class="val" id="bp-n-active">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_active', '正在推进的客户目标') }}</div>
+        </div>
+        <div class="bp-kpi" id="bp-t-won" style="display:none">
+          <div class="val" id="bp-n-won">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_won', '近 24 小时成交') }}</div>
+          <div class="cmp up" id="bp-nc-won"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-n-pending">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_pending', '等人拍板的回复') }}</div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-n-unans">0</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_now_unans', '24 小时没回上的客户') }}</div>
+        </div>
+      </div>
+      <div id="bp-now-risk" class="bp-note" style="display:none"></div>
+    </div>
+
     <div class="bp-card">
       <h3>{{ (i18n or {}).get('bp_week_title', '本周合计') }}</h3>
       <div class="bp-week" id="bp-week"></div>
@@ -190,6 +216,44 @@
     el('bp-week').innerHTML = wk.map(function (s) {
       return '<span>' + s.replace(/(\d+(?:\.\d+)?)/g, '<b>$1</b>') + '</span>';
     }).join('');
+
+    // 「现在」区（P1-8）：段缺失=格子隐藏；风险行触发才红，没风险给颗定心丸
+    var nw = data.now || null;
+    if (nw && (nw.goals || nw.waiting || nw.risk)) {
+      el('bp-now-card').style.display = '';
+      var g = nw.goals || null;
+      el('bp-t-active').style.display = g ? '' : 'none';
+      el('bp-t-won').style.display = g ? '' : 'none';
+      if (g) {
+        el('bp-n-active').textContent = n(g.active);
+        el('bp-n-won').textContent = n(g.won_24h);
+        el('bp-nc-won').textContent = n(g.won_amount_24h) > 0
+          ? Tf('bp_now_won_amt', { a: n(g.won_amount_24h) }) : '';
+      }
+      var w = nw.waiting || {};
+      el('bp-n-pending').textContent = n(w.replies_pending);
+      el('bp-n-unans').textContent = n(w.unanswered_24h);
+      var risks = [];
+      var rk = nw.risk || {};
+      if (n(rk.sessions_down) > 0) {
+        risks.push(Tf('bp_now_risk_sessions', { n: n(rk.sessions_down) }));
+      }
+      if (n(rk.frozen) > 0) {
+        risks.push(Tf('bp_now_risk_frozen', { n: n(rk.frozen) }));
+      }
+      if (rk.alert_link && rk.alert_link !== 'healthy') {
+        risks.push(T('bp_now_risk_alert'));
+      }
+      var re = el('bp-now-risk');
+      re.style.display = '';
+      if (risks.length) {
+        re.style.color = 'var(--tk-danger,#dc2626)';
+        re.textContent = '\u26A0 ' + risks.join('\uFF1B');
+      } else {
+        re.style.color = 'var(--tk-emerald-ink,#059669)';
+        re.textContent = T('bp_now_ok');
+      }
+    }
 
     // 7 天趋势条
     var series = data.series || [];

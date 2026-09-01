@@ -3022,6 +3022,16 @@ class SkillManager(LoggerMixin):
             # 从不 pop）→ 本轮无 hints 时上一稿的语境提示会跨轮泄漏；下方 3b1b
             # 每轮必写时间锚点，不清则无限堆积进持久 context。
             user_context.pop("_topic_switch_hint", None)
+            # #113：行程清除水位——运营在会话头点过「清除行程」后，早于水位的
+            # 行程自述不再被当「当前状态」注入（enrich 内 self_claims 消费）。
+            try:
+                from src.integrations.protocol_bridge import (
+                    get_inbox_store as _tc_gis,
+                )
+                user_context["_travel_cleared_ts"] = _tc_gis(
+                ).get_travel_cleared_ts(conversation_id or "")
+            except Exception:
+                user_context["_travel_cleared_ts"] = 0.0
             try:
                 from src.inbox.inbound_enrich import apply_inbound_enrichments
                 apply_inbound_enrichments(

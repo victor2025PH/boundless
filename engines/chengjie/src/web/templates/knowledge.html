@@ -203,7 +203,7 @@
     <label style="display:flex;align-items:center;gap:.35rem;font-size:.83rem" class="pro-only">
       <input type="checkbox" id="entry-enabled-only" onchange="loadEntries()"> {{ (i18n or {}).get('kb_s021', "仅启用") }}
     </label>
-    <button class="btn btn-p btn-sm" onclick="openEntryDrawer()">
+    <button class="btn btn-p btn-sm" data-anchor="kb-new-entry" onclick="openEntryDrawer()">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       {{ (i18n or {}).get('kb_s005', "新建条目") }}
     </button>

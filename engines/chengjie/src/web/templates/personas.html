@@ -7717,7 +7717,7 @@ function openCreateFlow() {
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
 <script src="/static/js/persona_studio_core.js?v=20260730a"></script>
-<script src="/static/js/persona_apply_modal.js?v=p2"></script>
+<script src="/static/js/persona_apply_modal.js?v=p3"></script>
 <script src="/static/js/persona_create_wizard.js?v=p1"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
@@ -7726,12 +7726,12 @@ function openCreateFlow() {
      as unified_inbox). sidebar-chrome deliberately not loaded: cp-voice icons
      degrade to text gracefully. -->
 <script>window.CP_LANG = document.documentElement.getAttribute('lang') || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260831a"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260831h"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260831a"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260831h"></script>
 {% endif %}
 <script src="/copilot/client/copilot-client.js?v=20260830y"></script>
-<script src="/copilot/components/cp-voice.js?v=20260831a"></script>
+<script src="/copilot/components/cp-voice.js?v=20260831h"></script>
 <script>
 /* B25-1 glue (ASCII only per page gate): status line + unbind + component mount.
    Hook = _fillDrawerFields wrapper (single funnel: editor-open + JSON-import). */

@@ -817,19 +817,16 @@ def test_base_chrome_i18n_keys_all_defined(name):
 
 
 def test_base_tour_and_help_bilingual():
-    """③-S4：引导(tour) + 全局 tooltip 引擎 + nav_* 帮助词条已双语。
-    tour 仍是 JS 内联数据（中英并存、显示按 WS_LANG 客户端切换、缺英文回落中文），
-    悬浮词条已迁至 help_terms.py；此处做「数据层完整性 + 引擎确实按语言取 en 字段」的断言。"""
+    """③-S4：全局 tooltip 引擎 + nav_* 帮助词条已双语。
+    引导(tour)已于 2026-08-31 随新手引导整体退役（防复活门禁见
+    test_onboarding_retired.py），本用例只守 tooltip 引擎与词条数据层。"""
     from pathlib import Path
 
     base = Path(__file__).resolve().parents[1] / "src" / "web" / "templates" / "base.html"
     text = base.read_text(encoding="utf-8")
-    # tooltip / tour 引擎须按语言取 en 字段（缺则回落中文）
-    for needle in ("d.en", "d.desc_en", "d.usage_en", "_TOUR_EN"):
-        assert needle in text, f"tooltip/tour 引擎未接语言开关: {needle}"
-    # 引导英文文案在位（证明 tour 已双语）
-    for needle in ("Command Palette (Ctrl+K)", "This is your control center"):
-        assert needle in text, f"tour 英文缺失: {needle!r}"
+    # tooltip 引擎须按语言取 en 字段（缺则回落中文）
+    for needle in ("d.en", "d.desc_en", "d.usage_en"):
+        assert needle in text, f"tooltip 引擎未接语言开关: {needle}"
     # ③-S4b：全部悬浮词条（不止 nav_*）须含 en + desc_en（术语表整表收口）。
     # 词典已迁出 base.html 内联 → src/web/help_terms.py 单源(模板经 help_terms|tojson 消费),
     # 断言从"正则扫模板源码"升级为"直接校验数据结构"(更强:不受格式化影响)。
@@ -950,9 +947,8 @@ SEALED_PAGES = (
     ("workspace_dashboard.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin",
                                       funnel_done_stages=[])),
     ("draft_review.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
-    # WP-9（2026-08-17）对外英文走查收编：首启向导（WP-2，新客户第一屏）+ 老板日报
-    # （WP-3，老板每日一屏）——出海评估路径上的两大门面页，EN 泄漏在这里最伤。
-    ("welcome.html", {"ui_mode": "full"}),
+    # WP-9（2026-08-17）对外英文走查收编：老板日报（WP-3，老板每日一屏）。
+    # 首启向导 welcome.html 已随新手引导退役删除（2026-08-31），条目一并移除。
     ("boss.html", dict(ui_mode="full", user_name="admin", user_display_name="Admin")),
     # 自动回复设置（2026-08-02）：可见文案全走服务端 (i18n or {}).get(rps_*)；JS 文案经
     # RPS_I18N（Jinja 按渲染语言注入）而非 window.T——<script> 源码里的中文是 get 默认值、
@@ -1099,13 +1095,16 @@ def _strip_client_swapped(html: str) -> str:
     # 1) data-i18n（换 textContent）叶子元素的内文（``data-i18n="k"`` 精确匹配，不含 -title/-placeholder）
     html = _re.sub(r'(<(\w+)\b[^>]*\bdata-i18n="[^"]*"[^>]*>).*?(</\2>)', r"\1\3", html, flags=_re.S)
 
-    # 2) 挂了 data-i18n-title / -placeholder 的标签，其 title / placeholder 属性值加载时会被覆盖
+    # 2) 挂了 data-i18n-title / -placeholder / -label 的标签，其 title / placeholder /
+    #    label 属性值加载时会被覆盖（label：optgroup 分组名，2026-08-29 应用器同步扩展）
     def _blank(m):
         tag = m.group(0)
         if "data-i18n-title" in tag:
             tag = _re.sub(r'\btitle="[^"]*"', 'title=""', tag)
         if "data-i18n-placeholder" in tag:
             tag = _re.sub(r'\bplaceholder="[^"]*"', 'placeholder=""', tag)
+        if "data-i18n-label" in tag:
+            tag = _re.sub(r'\blabel="[^"]*"', 'label=""', tag)
         return tag
 
     return _re.sub(r"<\w+\b[^>]*>", _blank, html)

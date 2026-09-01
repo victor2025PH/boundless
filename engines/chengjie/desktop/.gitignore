@@ -12,6 +12,8 @@ dist-*/
 out/
 *.log
 build/backend-dist/
+# --ref 快照构建的导出树（纯构建产物，可随时重导；防几千个快照文件刷爆 git status）
+build/src-snapshot/
 build/ffmpeg/
 build/build/
 build/static-staged/

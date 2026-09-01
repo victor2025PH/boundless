@@ -197,6 +197,16 @@ ZH = {
     "cs4_hist_sub": "按状态筛、即时搜；点名字直达会话，「只看」聚焦单个联系人",
     "cs4_hist_empty": "还没有关怀记录——AI 听到约定会自动排上，也可以手动排一条",
     "cs4_hist_nomatch": "没有匹配的记录",
+    # ── 实施84 P0-5 2026-08-29：全部主动消息统一时间线（六管线一本账 + 来源标注）──
+    "cs5_tl_title": "全部主动消息（近 7 天）",
+    "cs5_tl_sub": "客户实际收到的每一条主动消息都在这里——不止关怀，问候 / 回访 / 召回也标明来源",
+    "cs5_tl_total": "共 {n} 条",
+    "cs5_tl_empty": "近 7 天没有任何管线发出过主动消息",
+    "cs5_tl_src_care": "约定关怀",
+    "cs5_tl_src_topic": "沉默回访",
+    "cs5_tl_src_ritual": "仪式问候",
+    "cs5_tl_src_react": "沉睡召回",
+    "cs5_tl_src_other": "其他",
 }
 
 EN = {
@@ -372,4 +382,13 @@ EN = {
     "cs4_hist_sub": "Filter by status or search instantly; click a name to open the conversation, “Only” to focus one contact",
     "cs4_hist_empty": "No care records yet — commitments are captured automatically, or schedule one manually",
     "cs4_hist_nomatch": "No matching records",
+    "cs5_tl_title": "All proactive messages (last 7 days)",
+    "cs5_tl_sub": "Every proactive message the customer actually received — care, check-ins, rituals and win-backs, each labeled by source",
+    "cs5_tl_total": "{n} total",
+    "cs5_tl_empty": "No proactive messages from any pipeline in the last 7 days",
+    "cs5_tl_src_care": "Care",
+    "cs5_tl_src_topic": "Check-in",
+    "cs5_tl_src_ritual": "Ritual",
+    "cs5_tl_src_react": "Win-back",
+    "cs5_tl_src_other": "Other",
 }

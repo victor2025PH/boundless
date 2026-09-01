@@ -76,6 +76,52 @@ def test_refusal_meta_without_frame_words_passes():
         "这个软件很好用", "This translation software works great")
 
 
+# ── #115（0831 钧原图 906）：实弹漏网句 + 空源硬化 ─────────────────────────
+
+_115_REFUSAL = "您没有提供需要翻译的消息内容。请发送您想翻译的文本。"
+
+
+def test_115_refusal_detects_field_sample():
+    """钧机实锤原句：「没有提供/请发送」框架形态此前不在词表 → 曾以气泡进会话流。"""
+    assert looks_like_engine_refusal("[贴纸]", _115_REFUSAL)
+    assert looks_like_engine_refusal("??", _115_REFUSAL)
+    # 繁体形态同拦
+    assert looks_like_engine_refusal(
+        "??", "您沒有提供需要翻譯的訊息內容。請發送您想翻譯的文本。")
+
+
+def test_115_refusal_empty_source_no_longer_bypasses():
+    """空源 + meta 拒绝话术＝最典型该拦的形态（旁路直连引擎的防线）。"""
+    assert looks_like_engine_refusal("", _115_REFUSAL)
+    # 空源 + 正常文本仍放行（宁漏勿误伤不变）
+    assert not looks_like_engine_refusal("", "Hello there!")
+
+
+async def test_115_media_placeholder_short_circuits_before_engine():
+    """纯媒体占位整串（「[图片]」）→ identity 早退，绝不送引擎。"""
+    class _Boom:
+        name = "ai"
+        available = True
+
+        def supports_target(self, target_lang):
+            return True
+
+        async def translate(self, *a, **kw):
+            raise AssertionError("placeholder must not reach engine")
+
+    svc = TranslationService(ai_client=None)
+    svc._router = EngineRouter([_Boom()])
+    for ph in ("[图片]", "[语音消息]", " [视频] "):
+        res = await svc.translate(ph, target_lang="en", source_lang="zh")
+        assert res.ok and res.provider == "identity"
+        assert res.translated_text == ph
+    # 带配文的占位不早退（有真实正文要译）
+    svc2 = TranslationService(ai_client=None)
+    svc2._router = EngineRouter([_StubEngine("ai", out="photo from today")])
+    res2 = await svc2.translate("[图片] 今天拍的", target_lang="en", source_lang="zh")
+    assert res2.ok and res2.translated_text == "photo from today"
+
+
 # ── 服务级拦截 ──────────────────────────────────────────────────────────
 
 async def test_service_intercepts_refusal_and_falls_back():

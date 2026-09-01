@@ -227,6 +227,15 @@ def parse_persona_lead_phrases(
 # 词表准入标准：普通话读者能懂 + 普通话音系可自然发音 + 无歧义贬义。
 # 粤语刻意不进本表——「系咯/唔使」是粤语书写形，普通话 TTS 念出来是 garble，
 # 粤语要走声学层（zh-HK 路由/粤语参考音），见 voice_lang_route.cantonese。
+# ⚠ 也别试图把粤语加进来（2026-08-30 论证过的顺序死结）：本表经 colloquial 改写
+# 发生在 TTSPipeline.synthesize **内部**，而音色路由（voice_lang_route）在发送层
+# **之前**已按原文定了音色——改写出的粤文会被已定的普通话音色硬念。粤语人设的
+# 正确形态＝persona_manager._format_persona_instructions 的「粤语人设」prompt 块
+# （voice_profile.dialect_flavor=cantonese → 书面稿原生粤文 → 路由按粤文命中切
+# 粤语音色/克隆），文字与语音天然一致。
+# ⚠ 2026-08-30 出货闸门：本表**不再注入**（见 dialect_style_line → is_shipped_dialect）。
+# 没有对应语言模型时，「普通话夹乡音词」会假装成闽南语/川渝。词表留档备查，
+# 粤语正确形态仍是 persona prompt 粤文 + lang_voice_route，不进本表。
 _DIALECT_PACKS: Dict[str, Dict[str, str]] = {
     "chuanyu": {
         "label": "川渝",
@@ -281,12 +290,17 @@ _DIALECT_PACKS["taiwan"]["avoid"] = (
 
 
 def dialect_style_line(flavor: str) -> str:
-    """方言档 → 口语化 prompt 的风格指令；未知/空档 → ""（零行为变化）。
+    """方言档 → 口语化 prompt 的风格指令；未知/空档/未出货 → ""。
 
-    2026-08-19 晚升级：除词表外渲染可选 ``patterns``（句式标记，辨识度远高于
-    孤词）与 ``avoid``（反腔——南方档显式禁北方口头语，修「台湾词念出东北味」）。
+    2026-08-30：闽普/乡音词表不再出货——没有对应语言模型时注入这些词会假装
+    「说了闽南语」。``_DIALECT_PACKS`` 留档，``is_shipped_dialect`` 放行后才渲染。
+    粤语不进本表（书面稿走 persona prompt + 声学路由）。
     """
-    p = _DIALECT_PACKS.get(str(flavor or "").strip().lower())
+    from src.ai.cosy_dialect import is_shipped_dialect
+    f = str(flavor or "").strip().lower()
+    if not is_shipped_dialect(f):
+        return ""
+    p = _DIALECT_PACKS.get(f)
     if not p:
         return ""
     line = (

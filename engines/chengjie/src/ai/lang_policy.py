@@ -39,6 +39,7 @@ __all__ = [
     "normalize_lang_code",
     "contains_language_alias",
     "valid_lang_code",
+    "voice_turn_lang_suspect",
 ]
 
 
@@ -674,6 +675,55 @@ def _window_dominant(history: Optional[List[Dict[str, Any]]], k: int = 6) -> str
 
     lang = detect_language(joined)
     return "" if (not lang or lang == "unknown") else lang
+
+
+def _lang_family(code: str) -> str:
+    """中文家族折叠（zh/zh-tw/zh-hk/yue → zh）——仅供跨语种**冲突判定**用。
+
+    检测端刻意不产变体码（zh-tw/yue 只来自显式设置），繁体/粤语会话来一条
+    zh 检测结果不是「语种翻转」。别拿本函数做翻译目标语归一（那边的变体
+    保留语义见 ``normalize_lang``）。
+    """
+    c = normalize_lang_code(code)
+    return "zh" if (c.startswith("zh") or c == "yue") else c
+
+
+def voice_turn_lang_suspect(
+    transcript_text: str,
+    *,
+    stable_lang: str,
+    prev_user_text: str = "",
+) -> bool:
+    """#95（实施91）语音轮语言锚：本条语音转写是否应被语言决策隔离。
+
+    实锤（0830 停电期）：中文客户语音被回落转写器转出韩语乱码
+    「섬멸에서 섬미꼬야」（whisper 错语言解码幻觉）→ 旧链当强证据采信 →
+    韩语回话 + 韩语 TTS 发给中文客户。原则与 #74 图片轮语言锚同族、与
+    WA 线 ``voice_lang_suspect`` 同契约：**单条语音转写的语种不得独立翻转
+    会话语言**。
+
+    返回 True＝隔离（调用方应把本条从语言证据中拿掉 + 置
+    ``_voice_lang_suspect`` 让 prompt 走「听不清请确认」块）。判定：
+
+    - 转写检出语种（家族折叠后）≠ 会话稳定语言 → 隔离；
+    - **坐实豁免**：上一条用户消息同语种（连续两条）→ 真实换语言，放行；
+    - 无稳定语言可对照（新会话）/ 转写检不出语种 → 放行（锚的是「相对
+      稳定语言的冲突」，不是「凡语音皆忽略」）。纯函数绝不抛。
+    """
+    try:
+        t = str(transcript_text or "").strip()
+        stable = _lang_family(stable_lang)
+        if not t or not stable:
+            return False
+        turn_lang = _lang_family(classify_evidence(t)[0] or "")
+        if not turn_lang or turn_lang == stable:
+            return False
+        prev = str(prev_user_text or "").strip()
+        if prev and _lang_family(classify_evidence(prev)[0] or "") == turn_lang:
+            return False  # 连续两条同语种 → 坐实真实换语言
+        return True
+    except Exception:
+        return False
 
 
 def resolve_conversation_language(

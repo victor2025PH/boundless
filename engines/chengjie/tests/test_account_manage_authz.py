@@ -115,6 +115,30 @@ def test_bearer_desktop_shell_not_blocked(app, config_dir):
     assert r2.status_code != 403, f"Bearer 桌面壳停止账号不应 403，得 {r2.status_code}"
 
 
+# ── fields=basic 轻量档（2026-08-30）：首屏「先显示账号」骨架用，个位数 ms ──────────
+
+def test_accounts_basic_fields_lightweight(auth_client):
+    """fields=basic：200 + basic:True + 每行带 platform/account_id + running(bool)；
+    只回 registry+config 基础态（跳过运行时/编排/健康/配额聚合），完整态由普通档补。"""
+    r = auth_client.get("/api/accounts?fields=basic")
+    assert r.status_code == 200
+    d = r.json()
+    assert d.get("ok") is True
+    assert d.get("basic") is True
+    assert isinstance(d.get("accounts"), list)
+    for a in d["accounts"]:
+        assert a.get("platform") and "account_id" in a
+        assert isinstance(a.get("running"), bool)
+
+
+def test_accounts_basic_respects_viewer_flag(app, config_dir):
+    """轻量档同样如实下发 viewer_can_manage（前端预判与服务端边界一致）。"""
+    c = _login(app, config_dir, ROLE_VIEWER)
+    r = c.get("/api/accounts?fields=basic")
+    assert r.status_code == 200
+    assert r.json().get("viewer_can_manage") is False
+
+
 # ── 契约自守：写口清单不許悄悄缩水（防「删了闸没人知道」） ────────────────────
 
 def test_gated_write_registry_matches_source():

@@ -15,11 +15,13 @@ ZH = {
     "hb.toast.tips_on": "术语提示已开启：悬停虚线下划线词条可查看解释",
     "hb.toast.tips_off": "术语提示已关闭",
     # ?球退役后（2026-08-21）功能移入命令面板的入口词条
+    # （hb.cmd.tour 已随新手引导退役删除，2026-08-31）
     "hb.cmd.tips": "术语提示 开/关",
-    "hb.cmd.tour": "重看新手引导",
     # 管理后台壳「后台已更新」陈旧页横幅（与工作台 ws.uibuild.* 同机制）
-    "hb.stale.text": "后台界面已更新到新版本，刷新页面即可加载。",
-    "hb.stale.btn": "立即刷新",
+    # 2026-08-28：同批去掉「刷新页面」浏览器术语（桌面壳无此入口）；short=胶囊短句
+    "hb.stale.short": "后台有新版本",
+    "hb.stale.text": "后台界面有新版本，点「立即更新」重新载入本页。",
+    "hb.stale.btn": "立即更新",
     "hb.stale.dismiss": "暂不（2 小时内不再提醒）",
 }
 
@@ -27,8 +29,8 @@ EN = {
     "hb.toast.tips_on": "Term tips on — hover dashed-underlined terms for explanations",
     "hb.toast.tips_off": "Term tips off",
     "hb.cmd.tips": "Term tips on/off",
-    "hb.cmd.tour": "Replay onboarding tour",
-    "hb.stale.text": "The admin UI has been updated — refresh to load the new version.",
-    "hb.stale.btn": "Refresh now",
+    "hb.stale.short": "New admin version",
+    "hb.stale.text": "A new version of the admin UI is ready. Click \u201cUpdate now\u201d to reload this page.",
+    "hb.stale.btn": "Update now",
     "hb.stale.dismiss": "Not now (snooze 2h)",
 }

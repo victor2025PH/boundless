@@ -137,6 +137,7 @@ def plan_proactive_sends(
     quiet_start_hour: float = 23.0,
     quiet_end_hour: float = 8.0,
     has_pending_care: Optional[Callable[[str], bool]] = None,
+    has_running_chain: Optional[Callable[[str], bool]] = None,
     on_crisis_block: Optional[Callable[[Dict[str, Any]], None]] = None,
     pacing_cfg: Optional[Dict[str, Any]] = None,
     priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
@@ -270,6 +271,17 @@ def plan_proactive_sends(
                     continue
             except Exception:
                 logger.debug("[proactive] has_pending_care 失败 cid=%s", cid, exc_info=True)
+        # 实施92b：与跟进 SOP 链去重——会话有在途链（running/paused）时业务
+        # 节奏由链主导（到点提醒/自动拟稿），本闲聊回访让路防「链刚跟进完
+        # 15 分钟又来一条没话找话」。判定异常按无链放行（fail-open）。
+        if has_running_chain is not None:
+            try:
+                if has_running_chain(cid):
+                    _diag(cid, "chain_running", "有在途跟进 SOP 链（链主导节奏，让路）")
+                    continue
+            except Exception:
+                logger.debug("[proactive] has_running_chain 失败 cid=%s", cid,
+                             exc_info=True)
         try:
             last_ts = float(c.get("last_ts") or 0)
         except (TypeError, ValueError):
@@ -580,6 +592,7 @@ class CompanionProactiveLoop:
         quiet_end_hour: float = 8.0,
         dry_run: bool = False,
         has_pending_care: Optional[Callable[[str], bool]] = None,
+        has_running_chain: Optional[Callable[[str], bool]] = None,
         on_crisis_block: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_sent: Optional[Callable[[Dict[str, Any]], None]] = None,
         ritual_fn: Optional[Callable[[List[Dict[str, Any]], float], List[Dict[str, Any]]]] = None,
@@ -623,6 +636,7 @@ class CompanionProactiveLoop:
         self._ritual_fn = ritual_fn
         self._ritual_cooldown = ritual_cooldown
         self._has_pending_care = has_pending_care
+        self._has_running_chain = has_running_chain
         self._on_crisis_block = on_crisis_block
         self._on_sent = on_sent
         self._interval = float(interval_sec)
@@ -694,6 +708,7 @@ class CompanionProactiveLoop:
             quiet_start_hour=eff_quiet_s,
             quiet_end_hour=eff_quiet_e,
             has_pending_care=self._has_pending_care,
+            has_running_chain=self._has_running_chain,
             on_crisis_block=self._on_crisis_block,
             pacing_cfg=eff_pacing,
             priority_fn=self._priority_fn,

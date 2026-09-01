@@ -117,6 +117,9 @@ window.wsToggleLang = function(ev){
     for(var j=0;j<ps.length;j++){ var pe=ps[j],pk=pe.getAttribute('data-i18n-placeholder'); if(pk){ var pv=window.T(pk,null); if(pv!==null&&pv!==undefined) pe.setAttribute('placeholder',pv); } }
     var ts=root.querySelectorAll('[data-i18n-title]');
     for(var m=0;m<ts.length;m++){ var te=ts[m],tk=te.getAttribute('data-i18n-title'); if(tk){ var tv=window.T(tk,null); if(tv!==null&&tv!==undefined) te.setAttribute('title',tv); } }
+    // optgroup 等靠 label 属性显示文案的元素（2026-08-29，翻译弹层语言分组首用）
+    var ls=root.querySelectorAll('[data-i18n-label]');
+    for(var q=0;q<ls.length;q++){ var le=ls[q],lk=le.getAttribute('data-i18n-label'); if(lk){ var lv=window.T(lk,null); if(lv!==null&&lv!==undefined) le.setAttribute('label',lv); } }
   }
   window.wsApplyI18n=apply;
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ apply(); });

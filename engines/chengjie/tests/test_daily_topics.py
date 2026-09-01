@@ -617,3 +617,107 @@ def test_cfg_for_region_swaps_feeds_and_cache_path(tmp_path):
     # 空键/未知键 → 原配置（全局池零行为变化）
     assert cfg_for_region(base, "")["cache_path"] == base["cache_path"]
     assert cfg_for_region(base, "XX")["feeds"] == base["feeds"]
+
+
+# ── 实施84 P2（2026-08-29 老板拍板）：赛事识别/类别偏好/次级兴趣/用户国别视图 ──
+
+def test_is_sports_event_topic_semantics():
+    from src.companion.daily_topics import is_sports_event_topic
+    # 赛事词命中 / kind=sports 垂直源
+    assert is_sports_event_topic(
+        {"title": "世界杯预选赛名单公布", "summary": ""}) is True
+    assert is_sports_event_topic(
+        {"title": "任意标题", "summary": "", "kind": "sports"}) is True
+    # 生活方式类不误伤（夜跑/咖啡/露营是正常闲聊素材，不是「球队赛事」）
+    assert is_sports_event_topic(
+        {"title": "城市夜跑活动报名开启", "summary": "5公里慢跑"}) is False
+    assert is_sports_event_topic(
+        {"title": "本地咖啡节这周末开幕", "summary": ""}) is False
+    assert is_sports_event_topic(None) is False
+
+
+def test_pick_topics_exclude_sports_and_prefer_kinds():
+    cache = {"topics": [
+        {"title": "A队夺冠之夜", "summary": "决赛战报", "kind": "news"},
+        {"title": "新片官宣定档国庆", "summary": "", "kind": "entertainment"},
+        {"title": "AI新品发布会", "summary": "", "kind": "tech"},
+    ]}
+    picked = pick_topics_for(
+        None, k=3, now=NOW, cache=cache, exclude_sports=True,
+        prefer_kinds=["entertainment", "news"])
+    titles = [t["title"] for t in picked]
+    assert "A队夺冠之夜" not in titles           # 赛事剔除
+    assert titles[0] == "新片官宣定档国庆"        # 娱乐类靠前，tech 殿后
+    assert titles[-1] == "AI新品发布会"
+    # 默认参数＝旧行为（不剔除、纯轮换）——既有调用方零变化
+    assert len(pick_topics_for(None, k=3, now=NOW, cache=cache)) == 3
+
+
+def test_pick_topics_secondary_tastes_rank():
+    cache = {"topics": [
+        {"title": "甲 咖啡新店开业", "summary": ""},
+        {"title": "乙 壁画特展开幕", "summary": ""},
+        {"title": "丙 街头市集回归", "summary": ""},
+    ]}
+    picked = pick_topics_for(
+        ["壁画"], k=3, now=NOW, cache=cache, secondary_tastes=["咖啡"])
+    titles = [t["title"] for t in picked]
+    # 主词（用户兴趣）命中最前，次词（人设口味）其次，其余轮换殿后
+    assert titles[0] == "乙 壁画特展开幕"
+    assert titles[1] == "甲 咖啡新店开业"
+    assert titles[2] == "丙 街头市集回归"
+
+
+def test_google_news_feed_url_builder():
+    from src.companion.daily_topics import google_news_feed_url
+    assert google_news_feed_url("my", "zh") == (
+        "https://news.google.com/rss?hl=zh-CN&gl=MY&ceid=MY:zh-Hans")
+    assert google_news_feed_url("US", "en-US") == (
+        "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en")
+    assert google_news_feed_url("th", "th") == (
+        "https://news.google.com/rss?hl=th-TH&gl=TH&ceid=TH:th")
+    assert google_news_feed_url("", "zh") == ""
+    assert google_news_feed_url("USA", "zh") == ""   # 非两位国家码
+
+
+def test_cfg_for_user_region_priorities(tmp_path):
+    from src.companion.daily_topics import cfg_for_user_region
+    base = parse_topics_cfg({"companion": {"daily_topics": {
+        "enabled": True,
+        "cache_path": str(tmp_path / "c.json"),
+        "region_feeds": {"CA": ["https://ca/rss"]},
+        "user_region": {"enabled": True},
+    }}})
+    # ① 运营显式配置的国家键最优先（人工选源 > 自动构造）
+    ca = cfg_for_user_region(base, "ca")
+    assert ca is not None
+    assert ca["feeds"] == ["https://ca/rss"]
+    assert ca["cache_path"].endswith("c.CA.json")
+    # ② 无运营键 + user_region 开 → 自动 Google News 源、u-CC 缓存分家
+    my = cfg_for_user_region(base, "MY", lang="zh")
+    assert my is not None
+    assert my["feeds"] == [
+        "https://news.google.com/rss?hl=zh-CN&gl=MY&ceid=MY:zh-Hans"]
+    assert my["cache_path"].endswith("c.u-MY.json")
+    # ③ user_region 关且无运营键 → None（调用方回落人设分源/全局池）
+    off = dict(base)
+    off["user_region_enabled"] = False
+    assert cfg_for_user_region(off, "MY") is None
+    # 运营键在 user_region 关时依然生效（配置优先于开关）
+    assert cfg_for_user_region(off, "CA") is not None
+    # ④ 非法国家码 → None
+    assert cfg_for_user_region(base, "") is None
+    assert cfg_for_user_region(base, "USA") is None
+
+
+def test_parse_cfg_impl84_policy_keys():
+    d = parse_topics_cfg({"companion": {"daily_topics": {"enabled": True}}})
+    assert d["exclude_sports"] is True                       # 产品级默认：不做赛事
+    assert d["prefer_kinds"] == ["entertainment", "news"]    # 社会/娱乐为主
+    assert d["user_region_enabled"] is False                 # 新子键默认关
+    o = parse_topics_cfg({"companion": {"daily_topics": {
+        "enabled": True, "exclude_sports": False,
+        "prefer_kinds": ["news"], "user_region": {"enabled": True}}}})
+    assert o["exclude_sports"] is False
+    assert o["prefer_kinds"] == ["news"]
+    assert o["user_region_enabled"] is True

@@ -56,6 +56,8 @@ _NEW_KEYS = [
     "inbox.xl.suggest", "inbox.xl.suggest_btn", "inbox.xl.sendmode",
     "inbox.xl.mode_direct", "inbox.xl.mode_preview", "inbox.xl.adv",
     "inbox.xl.mylang", "inbox.xl.mylang_follow", "inbox.xl.mylang_saved",
+    "inbox.xl.pick_search", "inbox.xl.pick_back",
+    "inbox.xl.pick_title_lb", "inbox.xl.pick_cust",
 ]
 
 
@@ -133,6 +135,13 @@ def check_source_wiring(ck: Checker) -> None:
              and "function _loadAgentLangPref" in src and "_xlAgentLangState" in src)
     ck.check("新内联 handler 已登记 window 导出清单",
              "_setOutPreviewMode, _onAgentLangChange, _xlateSuggestAccept," in src)
+    ck.check("HY-MT 目录 + 选语第二屏接线",
+             "const _XL_CATALOG=" in src and "function _canonXlLang" in src
+             and 'id="xl-pop-picker"' in src and 'id="xl-chip-in"' in src
+             and "function _xlPickOpen" in src)
+    ck.check("灯箱接同一选语页（无原生 select）",
+             "function _lbPickChrome" in src and "_xlPickOpen('lb')" in src
+             and "_LBXL_MORE_LANGS" not in src and "function _xlCustLang" in src)
     ck.check("埋点 xlt_* 在位",
              all(k in src for k in ("xlt_quick_on", "xlt_quick_off", "xlt_suggest_shown",
                                     "xlt_suggest_accept", "xlt_preview_on", "xlt_mgr_open",
@@ -146,7 +155,8 @@ def check_source_wiring(ck: Checker) -> None:
         css = INBOX_CSS.read_text(encoding="utf-8")
         for cls in (".xl-quick.on", ".rt-xl-status.flash", ".xl-conv-hint", ".xl-hint-btn",
                     ".xl-dir-card", ".xl-seg-btn", "details.xl-adv",
-                    ".dlm-editor", ".dlm-eff"):
+                    ".dlm-editor", ".dlm-eff", ".xl-lang-chip", "#xl-pop-picker",
+                    "#lb-xl-picker", ".xl-pick-row.cust"):
             ck.check(f"CSS 规则存在（{cls}）", cls in css)
         # 戳只增不减：字面量匹配会被后续批次正常 bump 误红（2026-08-17 实锤：
         # Account Dock 批 bump 到 20260817a 后本检查假红）——改「>= 20260816b」序比较。
@@ -178,6 +188,7 @@ def _login_workspace(p: Any, base: str, token: str, *, headed: bool,
     browser = p.chromium.launch(headless=not headed)
     ctx = browser.new_context(viewport=viewport or VIEWPORT, locale=locale)
     _swallow_beacons(ctx)
+    # （cp-tour 已于 2026-08-31 随新手引导退役，无需再预置跳过键。）
     ctx.request.post(base + "/login", form={"auth_token": token})
     page = ctx.new_page()
     page.goto(base + "/workspace", wait_until="domcontentloaded")
@@ -231,6 +242,19 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
             return ck.summary()
         lang_en = page.evaluate("() => window._agentLang()")
         ck.check("en-US context → en（浏览器语言信号）", lang_en == "en", f"got={lang_en!r}")
+        canon = page.evaluate("() => window._canonXlLang('zh_hant')")
+        ck.check("_canonXlLang('zh_hant') === 'zh-tw'", canon == "zh-tw", f"got={canon!r}")
+        n_tgt = page.evaluate("() => (window._XL_TARGETS||[]).length")
+        ck.check("_XL_TARGETS.length === 34", n_tgt == 34, f"got={n_tgt!r}")
+        sel_ok = page.evaluate(
+            """() => {
+              const vals = id => [...(document.getElementById(id)||{options:[]}).options]
+                .map(o => o.value);
+              const inn = vals('xlate-in'), out = vals('xlate-out');
+              return inn.includes('zh-tw') && inn.includes('fr')
+                && out.includes('zh-tw') && out.includes('fr') && out.includes('auto');
+            }""")
+        ck.check("入站/出站 select 含 zh-tw + fr（出站另含 auto）", sel_ok)
         try:
             ctx_vi = browser.new_context(viewport=VIEWPORT, locale="vi-VN")
             _swallow_beacons(ctx_vi)

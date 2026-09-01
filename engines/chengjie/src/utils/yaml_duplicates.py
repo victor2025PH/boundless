@@ -18,6 +18,100 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
+def find_duplicate_key_details(text: str) -> List[Dict[str, Any]]:
+    """重复键明细（P0 2026-08-29，「重复键挡全线重启 12 小时」事故后补）。
+
+    每条：``{path, line, first_line, fixable}``（line 从 1 起）。``fixable`` =
+    **后一次出现**是与首次出现**字节相同的单行标量条目**（块式映射内）——删掉
+    那一行语义零变化（PyYAML 本就取最后一个，两行又完全一样）。块级重复 /
+    值不同 / 流式映射 / 带不同注释，一律 ``fixable=False`` 留给人工判断。
+    解析失败返回 ``[{"path": "<parse-error>", ...}]``。
+    """
+    import yaml
+
+    out: List[Dict[str, Any]] = []
+    stack: List[str] = []
+    lines = text.splitlines()
+
+    def _line(idx: int) -> str:
+        return lines[idx].strip() if 0 <= idx < len(lines) else ""
+
+    class _Loader(yaml.SafeLoader):
+        pass
+
+    def _mapping(loader: Any, node: Any, deep: bool = False) -> Any:
+        first: Dict[str, Any] = {}
+        for k_node, v_node in node.value:
+            key = str(loader.construct_object(k_node, deep=True))
+            if key in first:
+                fk, fv = first[key]
+                dup_line = k_node.start_mark.line          # 0 起
+                fixable = (
+                    not node.flow_style
+                    and isinstance(v_node, yaml.ScalarNode)
+                    and isinstance(fv, yaml.ScalarNode)
+                    and v_node.start_mark.line == k_node.start_mark.line
+                    and v_node.end_mark.line == k_node.start_mark.line
+                    and fv.end_mark.line == fk.start_mark.line
+                    and _line(dup_line) != ""
+                    and _line(dup_line) == _line(fk.start_mark.line)
+                )
+                out.append({
+                    "path": ".".join(stack + [key]),
+                    "line": dup_line + 1,
+                    "first_line": fk.start_mark.line + 1,
+                    "fixable": bool(fixable),
+                })
+            else:
+                first[key] = (k_node, v_node)
+        result: Dict[Any, Any] = {}
+        for k_node, v_node in node.value:
+            key = loader.construct_object(k_node, deep=True)
+            stack.append(str(key))
+            try:
+                result[key] = loader.construct_object(v_node, deep=True)
+            finally:
+                stack.pop()
+        return result
+
+    _Loader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
+    try:
+        yaml.load(text, _Loader)
+    except Exception:
+        return [{"path": "<parse-error>", "line": 0,
+                 "first_line": 0, "fixable": False}]
+    return out
+
+
+def dedupe_identical_lines(text: str) -> Dict[str, Any]:
+    """删掉全部 ``fixable`` 重复行（字节相同的单行标量后现）。
+
+    返回 ``{text, removed, remaining}``：``removed``/``remaining`` 为明细列表；
+    没有可修项时 ``text`` 原样返回。**只做零语义变化的手术**——值不同/块级
+    重复绝不自作主张（选错边=丢配置，比重复键本身更糟）。
+    """
+    details = find_duplicate_key_details(text)
+    removable = sorted({d["line"] for d in details if d["fixable"]})
+    if not removable:
+        return {"text": text, "removed": [],
+                "remaining": [d for d in details if not d["fixable"]]}
+    keep_newline = text.endswith("\n")
+    lines = text.splitlines()
+    drop = {ln - 1 for ln in removable}
+    new_text = "\n".join(
+        ln for i, ln in enumerate(lines) if i not in drop)
+    if keep_newline and new_text:
+        new_text += "\n"
+    # 手术后复检：残余重复按新文本行号如实回报（连删多处后行号已位移）
+    remaining = [d for d in find_duplicate_key_details(new_text)]
+    return {
+        "text": new_text,
+        "removed": [d for d in details if d["fixable"]],
+        "remaining": remaining,
+    }
+
+
 def find_duplicate_keys(text: str) -> List[str]:
     """返回 YAML 文本里所有重复键的路径（``a.b.c`` 形式）；无重复返回 ``[]``。
 
@@ -62,4 +156,8 @@ def find_duplicate_keys(text: str) -> List[str]:
     return dups
 
 
-__all__ = ["find_duplicate_keys"]
+__all__ = [
+    "dedupe_identical_lines",
+    "find_duplicate_key_details",
+    "find_duplicate_keys",
+]

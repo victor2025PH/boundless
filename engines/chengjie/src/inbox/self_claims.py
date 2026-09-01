@@ -199,30 +199,65 @@ def _ago_phrase(sec: float) -> str:
     return f"约 {int(sec // 86400)} 天前"
 
 
+# #113（0831 skuio「马尼拉复读」实锤）：客户对行程的「知情回应」词表——
+# 保守收窄到明确谈及出行的回应（错认的代价=行程按旧 7 天窗锁叙事，即旧行为；
+# 漏认的代价=单句行程只有 6h 短窗，安全侧）。
+_TRAVEL_ECHO_RE = re.compile(
+    r"出差|旅行|旅游|度假|路上小心|一路平安|到了吗|什么时候回|"
+    r"\btrip\b|\btravel\b|\bvacation\b|\bholiday\b|\bflight\b|\bsafe travels\b",
+    re.IGNORECASE)
+
+# 行程地名抽取（多轮一致锚的判据）：首句「来马尼拉出差」抽出「马尼拉」，
+# 后续 assistant 消息再谈到同一地名（「马尼拉的会开完了」不必再命中行程句式）
+# ＝多轮一致。抽不出地名回落「两条消息都命中行程句式」的严判。
+_TRAVEL_PLACE_RE = re.compile(
+    r"(?:来|到|在)([\u4e00-\u9fff]{2,6})(?:出差|旅行|旅游|度假|办事|玩|待|呆)|"
+    r"\b(?:in|at)\s+([A-Z][A-Za-z]{2,14})\b")
+
+
+def _travel_place(sent: str) -> str:
+    m = _TRAVEL_PLACE_RE.search(str(sent or ""))
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or "").strip()
+
+
 def extract_recent_self_statements(
     history: List[Dict[str, Any]], *, now: float = 0.0,
+    travel_cleared_ts: float = 0.0,
 ) -> List[Dict[str, Any]]:
     """近时自述（即时行为/时间承诺），过新鲜度窗口后每类取最新一句。
 
-    返回 ``[{kind, text, ago_sec}]``（``ago_sec`` 无 ts 时为 None）。
-    纯函数、绝不抛；行内 ``ts``（epoch 秒）可选——B 线 normalize_history 透传，
-    A 线 _conversation_history 无 ts 走位置近因。
+    返回 ``[{kind, text, ago_sec}]``（``ago_sec`` 无 ts 时为 None；travel 条目
+    另带 ``anchored``）。纯函数、绝不抛；行内 ``ts``（epoch 秒）可选——B 线
+    normalize_history 透传，A 线 _conversation_history 无 ts 走位置近因。
+
+    #113 行程锚定：travel 自述**单句不建状态**——AI 一句幻觉的「在马尼拉出差」
+    此前直接吃 7 天窗、每轮被当「当前状态」注入=自锁叙事。现在只有「锚定」的
+    行程才享 7 天窗：≥2 条不同 assistant 消息一致提及，或首次提及之后客户有
+    知情回应（谈及出行）。未锚定的行程句降到 activity 同款 6h/3 条短窗——
+    短期自洽仍在（刚说过的话不当场否认），但几小时后自然松手。
+    ``travel_cleared_ts``：运营一键清除的水位——ts 早于它的行程自述一律忽略
+    （无 ts 行在水位非 0 时同样忽略：清除是显式人工决定，宁可少锚不复发）。
     """
     import time as _t
     now = float(now) if now else _t.time()
+    cleared = float(travel_cleared_ts or 0.0)
     latest: Dict[str, Dict[str, Any]] = {}
     try:
-        msgs = [m for m in list(history or [])
-                if isinstance(m, dict) and m.get("role") == "assistant"]
-        msgs = msgs[-_MAX_SCAN_MSGS:]
+        raw = [m for m in list(history or []) if isinstance(m, dict)]
+        raw = raw[-(_MAX_SCAN_MSGS * 2):]
+        msgs = [(gi, m) for gi, m in enumerate(raw)
+                if m.get("role") == "assistant"][-_MAX_SCAN_MSGS:]
         total = len(msgs)
         _windows = {
             "activity": (_ACTIVITY_WINDOW_SEC, _ACTIVITY_POS_WINDOW),
             "plan": (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW),
             "promise": (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW),
-            "travel": (_TRAVEL_WINDOW_SEC, _TRAVEL_POS_WINDOW),
         }
-        for idx, m in enumerate(msgs):
+        # travel 候选：先全收（窗口在锚定判定之后才能选），(全局位, 助手侧倒数位, ago, 句)
+        travel_hits: List[Tuple[int, int, Any, str]] = []
+        for idx, (gi, m) in enumerate(msgs):
             pos_from_end = total - idx  # 1 = 最新一条
             try:
                 mts = float(m.get("ts") or 0)
@@ -235,6 +270,12 @@ def extract_recent_self_statements(
                 for kind, rx in _TRANSIENT_PATTERNS:
                     if not rx.search(sent):
                         continue
+                    if kind == "travel":
+                        if cleared > 0 and (ago is None or mts <= cleared):
+                            break   # 清除水位之前（或不可判先后）的行程句：忽略
+                        travel_hits.append(
+                            (gi, pos_from_end, ago, sent[:_MAX_SENT_CHARS]))
+                        break
                     _win_sec, _win_pos = _windows.get(
                         kind, (_PLAN_WINDOW_SEC, _PLAN_POS_WINDOW))
                     if ago is not None:
@@ -246,6 +287,30 @@ def extract_recent_self_statements(
                                     "text": sent[:_MAX_SENT_CHARS],
                                     "ago_sec": ago}
                     break  # 一句只归一类，防同句双引
+        if travel_hits:
+            first_gi = travel_hits[0][0]
+            place = _travel_place(travel_hits[0][3])
+            if place:
+                multi_msg = any(
+                    place in str(m.get("content") or "")
+                    for gi, m in enumerate(raw)
+                    if gi != first_gi and m.get("role") == "assistant")
+            else:
+                multi_msg = len({gi for gi, _, _, _ in travel_hits}) >= 2
+            peer_echo = any(
+                _TRAVEL_ECHO_RE.search(str(m.get("content") or ""))
+                for gi, m in enumerate(raw)
+                if gi > first_gi and m.get("role") == "user")
+            anchored = multi_msg or peer_echo
+            gi, pos_from_end, ago, sent = travel_hits[-1]
+            win_sec, win_pos = (
+                (_TRAVEL_WINDOW_SEC, _TRAVEL_POS_WINDOW) if anchored
+                else (_ACTIVITY_WINDOW_SEC, _ACTIVITY_POS_WINDOW))
+            in_window = ((ago <= win_sec) if ago is not None
+                         else (pos_from_end <= win_pos))
+            if in_window:
+                latest["travel"] = {"kind": "travel", "text": sent,
+                                    "ago_sec": ago, "anchored": anchored}
     except Exception:
         return []
     return [latest[k] for k in ("activity", "plan", "promise", "travel")
@@ -254,9 +319,11 @@ def extract_recent_self_statements(
 
 def build_recent_self_statement_hint(
     history: List[Dict[str, Any]], *, now: float = 0.0,
+    travel_cleared_ts: float = 0.0,
 ) -> str:
     """「你刚说过」锚点（无命中返回 ""）。带时距的原句引用 + 自洽指令。"""
-    stmts = extract_recent_self_statements(history, now=now)
+    stmts = extract_recent_self_statements(
+        history, now=now, travel_cleared_ts=travel_cleared_ts)
     if not stmts:
         return ""
     lines = []
@@ -272,9 +339,10 @@ def build_recent_self_statement_hint(
         "别立刻改口（如说好下个月见就别再问这周哪天）。情况真的变了就自然地"
         "衔接说明，别装作从没说过。"
     )
-    kinds = {s["kind"] for s in stmts}
-    # #82：行程自述=当前状态覆盖层——期间主动按它叙事，到期回归档案常驻地。
-    if "travel" in kinds:
+    # #82/#113：行程自述=当前状态覆盖层——**只有锚定的行程**（多轮一致或客户
+    # 知情回应）才主动按它叙事；单句未锚定的行程只保上面的「不当场否认」，
+    # 绝不追加叙事指令（一句幻觉自锁 7 天叙事的入口在此关死）。
+    if any(s["kind"] == "travel" and s.get("anchored") for s in stmts):
         hint += (
             "你说过的临时行程（出差/旅行）在期间就是你的**当前状态**：这几天"
             "谈到你在哪、天气、在做什么都按它叙事；行程时限过了就自然回归你的"

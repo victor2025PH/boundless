@@ -209,16 +209,24 @@ async def test_build_and_upload_sends_machine_code_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_and_upload_network_error_maps_to_error_code(monkeypatch):
+async def test_build_and_upload_network_error_maps_to_error_code(monkeypatch, tmp_path):
     _stub_bundle(monkeypatch)
     import src.utils.diag_upload as du
 
     def _boom(req, timeout=0):
         raise OSError("no route to host")
 
+    # 实施86 域A-2① 起 unreachable 会落 outbox（staged 键）——断言跟上契约；
+    # 落盘路径重定向 tmp（旧 _Cfg 的 D:/nowhere 会被 stage_bundle mkdir 真建出来）。
+    class _TmpCfg:
+        config_path = str(tmp_path / "data" / "config" / "config.yaml")
+        config = {}
+
     monkeypatch.setattr(du.urllib.request, "urlopen", _boom)
-    out = await du.build_and_upload(_Cfg())
-    assert out == {"ok": False, "error": "upstream_unreachable"}
+    out = await du.build_and_upload(_TmpCfg())
+    assert out["ok"] is False
+    assert out["error"] == "upstream_unreachable"
+    assert out["staged"] is True   # A-2①：长断网必暂存（网络恢复自动补传）
 
 
 @pytest.mark.asyncio

@@ -134,6 +134,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     # case_alert=severity≥2 开案/升级；case_backlog_alert=立案后无人认领/处理的
     # 积压巡检（危机级单独点名）。同一别名一次订阅两类都收。
     "cases": {"types": {"case_alert", "case_backlog_alert"}, "levels": None},
+    # 实施93c：客户点了 CTA 追踪短链（引导模型的最热跟进信号——点击后几分钟
+    # 内跟进 vs 隔天跟进是两种成交率；首点才发布，天然稀疏不刷屏）
+    "cta_click": {"types": {"cta_clicked"}, "levels": None},
     # 账号接入链路停摆（某平台某方式发起 N 次成功 0 次；2026-07-25 LINE 扫码 100% 失败
     # 烂了多日无人知——ops 卡能看见但要有人开，这条把它变成推送）
     "login_funnel": {"types": {"login_funnel_alert"}, "levels": None},
@@ -224,6 +227,8 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     # 实测 8 条真实漏球全程零外发。语义上它和 draft_backlog/buried_conv 是同一族
     # （客户在等 + 运营能行动），归 business。
     "unanswered_inbound": "cp.alert.unanswered_inbound",
+    # 实施93c：客户点了引导链接＝购买意向最热时刻，运营/坐席立刻跟进
+    "cta_click": "cp.alert.cta_click",
     # 目标达成＝老板/运营最想收的好消息（成交/订阅/关系达标），且需要立刻行动
     # （趁热跟进），天然 business。
     "goal_complete": "cp.alert.goal_complete",
@@ -581,6 +586,17 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             f"**客户消息**: {peer or '（无）'}\n"
             f"**平台**: {data.get('platform', '?')}\n"
             "[📋 立即处理](/workspace/drafts)"
+        )
+
+    elif event_type == "cta_clicked":
+        # 实施93c：客户首次点开引导链接——最热跟进窗口，文案指路立刻开聊
+        _tn = str(data.get("target_name") or data.get("target_id") or "?")
+        title = "🔥 客户点了引导链接"
+        text = (
+            f"**目标**: {_tn}\n"
+            f"**会话**: {data.get('conversation_id', '?')}\n"
+            "点击后几分钟内是最热跟进窗口——"
+            "[💬 立即打开会话](/workspace)"
         )
 
     elif event_type == "bug_intake_alert":
@@ -2058,6 +2074,7 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "trial_fulfiller_alert": ("🟠 警告", "业务"),
     "goal_completed_alert": ("💰 业务", "业务"),
     "goal_miss_alert": ("📊 日报", "业务"),
+    "cta_clicked": ("💰 业务", "业务"),
     "draft_quality_alert": ("🟠 警告", "质量"),
     "ai_quality_alert": ("🟠 警告", "质量"),
     "media_promise_alert": ("🟠 警告", "质量"),

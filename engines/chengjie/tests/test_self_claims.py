@@ -266,22 +266,105 @@ def test_hint_carries_no_fabrication_rule():
 
 
 def test_travel_statement_anchored_and_narrated():
-    """#82 三层模型②：「来马尼拉出差三天」=当前状态覆盖层，hint 带叙事指令。"""
-    hist = _ht(("assistant", "对了，我来马尼拉出差三天，这几天都在酒店。", 6 * 3600))
+    """#82②/#113：**锚定的**行程（客户知情回应）=当前状态覆盖层，hint 带叙事指令。"""
+    hist = _ht(
+        ("assistant", "对了，我来马尼拉出差三天，这几天都在酒店。", 6 * 3600),
+        ("user", "出差辛苦啦，路上小心。", 5 * 3600),
+    )
     stmts = extract_recent_self_statements(hist)
-    assert any(s["kind"] == "travel" and "马尼拉" in s["text"] for s in stmts)
+    tr = next(s for s in stmts if s["kind"] == "travel")
+    assert "马尼拉" in tr["text"] and tr["anchored"] is True
     hint = build_recent_self_statement_hint(hist)
     assert "临时行程" in hint and "回归" in hint
 
 
 def test_travel_window_days_not_hours():
-    """行程窗口 7 天：昨天说的出差今天仍是当前状态；8 天前的过期。"""
-    fresh = _ht(("assistant", "我来马尼拉出差三天。", 24 * 3600))
+    """锚定行程窗口 7 天：昨天说的出差今天仍是当前状态；8 天前的过期。"""
+    fresh = _ht(
+        ("assistant", "我来马尼拉出差三天。", 24 * 3600),
+        ("assistant", "马尼拉这边事情比想的多，还得忙两天。", 20 * 3600),
+    )
     assert any(s["kind"] == "travel"
                for s in extract_recent_self_statements(fresh))
-    stale = _ht(("assistant", "我来马尼拉出差三天。", 8 * 86400))
+    stale = _ht(
+        ("assistant", "我来马尼拉出差三天。", 9 * 86400),
+        ("assistant", "马尼拉这边事情比想的多，还得忙两天。", 8 * 86400),
+    )
     assert not any(s["kind"] == "travel"
                    for s in extract_recent_self_statements(stale))
+
+
+# ── #113（0831 skuio「马尼拉复读」实锤）：单句幻觉不建行程态 + 一键清除水位 ──
+
+
+def test_113_single_unanchored_travel_gets_short_window_no_narration():
+    """单句行程（无第二次提及、无客户回应）＝未锚定：只有 6h 短窗，且 hint
+    绝不带「按它叙事」的状态指令——一句幻觉自锁 7 天叙事的入口在此关死。"""
+    fresh = _ht(("assistant", "Manila's got this way of holding you hostage "
+                              "with deadlines... I'm in Manila for work this week.",
+                 2 * 3600))
+    stmts = extract_recent_self_statements(fresh)
+    tr = next(s for s in stmts if s["kind"] == "travel")
+    assert tr["anchored"] is False
+    hint = build_recent_self_statement_hint(fresh)
+    assert "临时行程" not in hint          # 无叙事指令（只保「不当场否认」引用）
+    # 同一句 24h 后：短窗过期，彻底松手（旧行为=7 天窗还锁着）
+    day_old = _ht(("assistant", "I'm in Manila for work this week, "
+                                "back on the island soon.", 24 * 3600))
+    assert not any(s["kind"] == "travel"
+                   for s in extract_recent_self_statements(day_old))
+
+
+def test_113_multi_mention_anchors_travel():
+    """两条不同 assistant 消息一致提及＝多轮一致锚定（7 天窗 + 叙事指令）。"""
+    hist = _ht(
+        ("assistant", "我来马尼拉出差三天。", 30 * 3600),
+        ("assistant", "马尼拉的会开完了，明天还有一场。", 26 * 3600),
+    )
+    tr = next(s for s in extract_recent_self_statements(hist)
+              if s["kind"] == "travel")
+    assert tr["anchored"] is True
+    assert "临时行程" in build_recent_self_statement_hint(hist)
+
+
+def test_113_cleared_watermark_kills_travel_state():
+    """运营一键清除：水位之后不再有行程自述 → 状态消失、hint 无行程段。"""
+    now = _time.time()
+    hist = _ht(
+        ("assistant", "我来马尼拉出差三天。", 6 * 3600),
+        ("user", "出差辛苦啦，一路平安。", 5 * 3600),
+    )
+    # 未清除：锚定在场
+    assert any(s["kind"] == "travel"
+               for s in extract_recent_self_statements(hist))
+    # 清除水位晚于该自述 → 忽略
+    cleared = now - 3600   # 1h 前清除（自述在 6h 前）
+    assert not any(
+        s["kind"] == "travel"
+        for s in extract_recent_self_statements(
+            hist, travel_cleared_ts=cleared))
+    assert "临时行程" not in build_recent_self_statement_hint(
+        hist, travel_cleared_ts=cleared)
+    # 清除**之后**又说了新行程（客户也回应了）→ 新状态照常建立
+    hist2 = hist + _ht(
+        ("assistant", "这回真来宿务出差了，周末回。", 600),
+        ("user", "又出差呀，注意休息。", 300),
+    )
+    tr2 = [s for s in extract_recent_self_statements(
+        hist2, travel_cleared_ts=cleared) if s["kind"] == "travel"]
+    assert tr2 and "宿务" in tr2[0]["text"]
+
+
+def test_113_no_ts_rows_suppressed_after_clear():
+    """无 ts 的历史行（A 线形态）在清除水位非 0 时一律不建行程态——
+    分不清先后就宁可不锚（清除是显式人工决定）。"""
+    hist = _h(("assistant", "我来马尼拉出差三天。"))
+    assert any(s["kind"] == "travel"
+               for s in extract_recent_self_statements(hist))
+    assert not any(
+        s["kind"] == "travel"
+        for s in extract_recent_self_statements(
+            hist, travel_cleared_ts=_time.time()))
 
 
 def test_incident_request_direction_0830():

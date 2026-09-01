@@ -995,6 +995,33 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[inbox] read-sync 决策失败（已忽略）", exc_info=True)
         return {"ok": True, "conversation_id": cid, "last_read_ts": water}
 
+    @app.post("/api/unified-inbox/travel-state/clear")
+    async def api_unified_inbox_travel_state_clear(request: Request):
+        """#113：一键清除会话的「临时行程」派生状态——回归档案常驻地。
+
+        行程状态本体是对 assistant 历史的扫描派生（self_claims travel 锚），
+        无独立存储可删；本端点写 conversation_meta.travel_cleared_ts 水位，
+        草稿链与 send-caps 可见面都按水位忽略更早的行程自述。
+        body: ``{platform, account_id, chat_key}``。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").lower().strip()
+        account_id = str((body or {}).get("account_id") or "default").strip()
+        chat_key = str((body or {}).get("chat_key") or "").strip()
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform/chat_key"))
+        store = _inbox_store(request)
+        if store is None or not hasattr(store, "set_travel_cleared"):
+            raise HTTPException(503, tr(request, "err.ws.store_unavailable"))
+        cid = f"{platform}:{account_id}:{chat_key}"
+        ok = bool(store.set_travel_cleared(cid))
+        return {"ok": ok, "conversation_id": cid}
+
     @app.post("/api/unified-inbox/mark-account-read")
     async def api_unified_inbox_mark_account_read(request: Request):
         """按账号批量清未读（P2 账号真相闭环，2026-08-17）。

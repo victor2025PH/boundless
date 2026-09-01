@@ -106,7 +106,11 @@ def test_writes_only_via_act_family():
                "/api/assistant/agent/plan",
                "/api/assistant/transcribe", "/api/voice/tts-test",
                # P4 配对管理（会话签发/踢下线，非配置写）
-               "/api/assistant/pair", "/api/assistant/pair/revoke"}
+               "/api/assistant/pair", "/api/assistant/pair/revoke",
+               # 实施91 电脑操控受控机管理（踢下线/恢复，非配置写）
+               "/api/assistant/pc/revoke", "/api/assistant/pc/restore",
+               # 实施91 P2-C 信任档（授信/急停，非配置写）
+               "/api/assistant/pc/trust", "/api/assistant/pc/trust/revoke"}
     assert urls <= allowed, f"越界写通道：{urls - allowed}"
 
 

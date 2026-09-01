@@ -10,6 +10,10 @@
    人设；人设页与收件箱右栏共用同一登记流（单源两挂载点，避免双端重复维护）。 */
 (function (root) {
   const VOICE_KEY = "ws_voice_persona_v1";
+  // P0-V2b 译声开关（2026-08-30）：与主输入框「跟随翻译发声」共用同一存储键
+  // （同一语义一个开关、两个入口互通；'1'/缺省=开）。目标语恒 'auto'=会话客户
+  // 语言由服务端解析（与 send-voice 同源），解析不出=不译 fail-open。
+  const XL_KEY = "aitr.voicexl";
 
   function fileToB64(file) {
     return new Promise((resolve, reject) => {
@@ -46,6 +50,26 @@
       this._previewText = null;
       this._previewPersona = "";
       this._previewFilename = "";   // 所听即所发：随发送带回，服务端校验后复用试听音频
+      this._previewXl = "";         // 译声维度：试听生成时的目标语设置（'auto'/''），偏离=过期
+      // #121：试听时服务端**真实使用**的目标语（d.target_lang，仅 voice_translated
+      // 时有值）——'auto' 的解析真相。过期判定按「有效目标语」比对，防宿主的
+      // 「我的消息 →」偏好异步加载后 'auto'→'en' 这种纯表示层变化把没改任何
+      // 设置的试听常亮成过期（skuio 0831 原图 924 实锤）。
+      this._previewXlEff = "";
+      this._xlOn = this._loadXlOn();
+      this._effConvLang = null;     // 会话客户语言（effective-config 回传；null=后端未提供）
+      // 当前音色主路可念语种（effective-config.voice_langs；null/空=能力未知不警示）。
+      // P0 2026-08-31「日文怪声」：目标语超出引擎能力（如 IndexTTS-2 念日文）→ 生成前警示。
+      this._effVoiceLangs = null;
+      // ── 结果区裁决状态（P0 2026-08-31 提示风暴复盘）──────────────────────
+      // _silent: 无声探测阳性=阻发闸（重新生成清除）；_previewFallback: 本条
+      // 试听的回落原因（""=克隆声正常，lang_unsupported/quota/channel/generic）；
+      // _fbConfirmedKey: 降级发送已确认过的会话键（换会话/重渲失效）；
+      // _staleWas: 过期沿触发观测埋点（只记 false→true 跳变，不刷屏）。
+      this._silent = false;
+      this._previewFallback = "";
+      this._fbConfirmedKey = "";
+      this._staleWas = false;
       this._epoch = 0;
       this._genTimer = null;
       this._hintTimer = null;
@@ -58,19 +82,33 @@
         if (e.target && e.target.matches && e.target.matches('[data-role="text"]')) {
           this._syncStale();
           this._syncCounter();
+          this._autoGrow(e.target);
         }
       });
       this.addEventListener("cp-fill", (e) => {
         const t = (e.detail && e.detail.text) || "";
         if (!t) return;
         const ta = this.shadowRoot.querySelector('[data-role="text"]');
-        if (ta) { ta.value = t; this._syncStale(); this._syncCounter(); }   // 程序化赋值不触发 input，这里补判
+        if (ta) { ta.value = t; this._syncStale(); this._syncCounter(); this._autoGrow(ta); }   // 程序化赋值不触发 input，这里补判
       });
+    }
+
+    connectedCallback() {
+      // 译声开关跨窗口/iframe 同步：同 origin 的其他浏览上下文改了 localStorage
+      // （如主输入框翻译设置里的同名开关）→ storage 事件 → 本面板即时跟随。
+      // （同文档内的直改由宿主显式调 refreshXl()，storage 事件不覆盖同文档。）
+      if (!this._onStorage) {
+        this._onStorage = (e) => {
+          try { if (e && e.key === XL_KEY) this.refreshXl(); } catch (_e) { /* */ }
+        };
+      }
+      try { root.addEventListener("storage", this._onStorage); } catch (_e) { /* */ }
     }
 
     disconnectedCallback() {
       this._stopGenTimer();
       if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
+      try { if (this._onStorage) root.removeEventListener("storage", this._onStorage); } catch (_e) { /* */ }
     }
 
     _css() {
@@ -84,21 +122,69 @@
       select, input[type=text], textarea { font:inherit; font-size:var(--cp-fs-sm,12px);
         padding:4px 6px; border:1px solid var(--cp-border,#2a3544); border-radius:6px;
         background:var(--cp-surface,#0f1419); color:var(--cp-text,#e2e8f0); }
-      textarea { width:100%; min-height:52px; resize:vertical; box-sizing:border-box; }
+      textarea { width:100%; min-height:56px; resize:vertical; box-sizing:border-box; }
       button { font:inherit; font-size:var(--cp-fs-tiny,11px); cursor:pointer; padding:4px 8px;
         border:1px solid var(--cp-border,#2a3544); border-radius:6px;
         background:var(--cp-surface,#1a2332); color:var(--cp-text,#e2e8f0); }
       button.primary { background:var(--cp-accent,#3aa0ff); color:#fff; border-color:transparent; }
       button:disabled { opacity:.5; cursor:default; }
       .hint { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); margin:4px 0; }
+      /* ── P1 三区（2026-08-31）：①音色身份区 ②撰写区 ③结果区，细分隔线分区 ── */
+      .zone-id { padding-bottom:6px; border-bottom:1px solid var(--cp-border,#2a3544);
+                 margin-bottom:8px; }
+      .zone-id .row { margin-bottom:0; }
+      .zone-id select { flex:1; min-width:0; }
+      /* 音色状态行：健康点 + 名字·后端 chips + 短风险 + 「详情」开合 */
+      .effline { display:flex; align-items:center; flex-wrap:wrap; gap:2px 0;
+                 font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8);
+                 margin:6px 0 0; cursor:pointer; user-select:none; }
+      .effline .dot { width:8px; height:8px; border-radius:50%; flex:none;
+                      margin-right:5px; background:var(--cp-ok,#16a34a); }
+      .effline .dot.warn { background:var(--cp-warn,#d97706); }
+      .effline .dot.err { background:var(--cp-danger,#dc2626); }
+      .effline .eff-risk { margin-left:6px; }
+      .effline .eff-more { margin-left:auto; padding-left:8px; opacity:.7; flex:none; }
+      .effdetail { margin:4px 0 0; padding:6px 8px; border:1px dashed var(--cp-border,#2a3544);
+                   border-radius:6px; font-size:var(--cp-fs-tiny,11px);
+                   color:var(--cp-text-dim,#94a3b8); }
+      .effdetail > div { margin:2px 0; }
+      .effdetail .eff-acts { display:flex; justify-content:flex-end; margin-top:6px; }
+      .compose-foot { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px;
+                      margin:4px 0 6px; }
+      .compose-foot .hint { margin:0; flex:1; min-width:0; }
+      .compose-foot .cnt { margin-left:auto; }
+      .pv-foot { justify-content:flex-end; margin:6px 0 0; }
+      .gen-btn { display:flex; width:100%; justify-content:center; align-items:center;
+                 gap:5px; padding:6px 8px; font-size:var(--cp-fs-sm,12px); }
+      /* 首次使用提示（可关，localStorage 记忆）：常驻三步说明降噪为一次性引导 */
+      .tip { display:flex; gap:8px; align-items:flex-start; margin-top:6px; padding:6px 8px;
+             border-radius:6px; background:var(--cp-accent-bg,rgba(84,167,245,.14));
+             color:var(--cp-text-dim,#94a3b8); font-size:var(--cp-fs-tiny,11px); }
+      .tip button { flex:none; }
       .preview { margin-top:6px; padding:6px; border:1px dashed var(--cp-border,#2a3544); border-radius:6px; }
       .preview.stale { border-color:var(--cp-warn,#d97706); }
       .preview.stale audio { opacity:.5; }
       .pv-hd { justify-content:space-between; margin-bottom:2px; }
       .pv-hd .pv-actions { display:flex; gap:6px; }
       .warn { color:var(--cp-warn,#d97706); }
-      .cnt { text-align:right; font-size:var(--cp-fs-tiny,11px);
-             color:var(--cp-text-tiny,#94a3b8); margin:-2px 0 2px; }
+      /* 结果区状态 banner（P1-3）：warn/err 两档语义色，动作钮长在 banner 里 */
+      .pv-note { display:flex; align-items:flex-start; gap:6px; margin-top:6px;
+                 padding:5px 7px; border-radius:6px; font-size:var(--cp-fs-tiny,11px);
+                 border:1px solid transparent; }
+      .pv-note.warn { background:var(--cp-warn-bg,rgba(245,185,69,.12));
+                      border-color:var(--cp-warn-border,rgba(245,185,69,.38));
+                      color:var(--cp-warn-ink,#d97706); }
+      .pv-note.err { background:var(--cp-danger-bg,rgba(240,106,106,.14));
+                     border-color:var(--cp-danger,#dc2626);
+                     color:var(--cp-danger,#dc2626); }
+      /* info 档（P0 2026-08-31）：刻意的语种改道是「说明」不是「警告」——
+         蓝底与 warn/err 分级，警告色只留给真异常（全黄=没有重点）。 */
+      .pv-note.info { background:var(--cp-accent-bg,rgba(84,167,245,.14));
+                      border-color:var(--cp-accent-border,rgba(84,167,245,.38));
+                      color:var(--cp-text,#e2e8f0); }
+      .pv-note button { flex:none; margin-left:auto; }
+      canvas[data-role="wave"] { width:100%; height:24px; display:block; margin-top:2px; }
+      .cnt { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); }
       .cnt.err { color:var(--cp-danger,#dc2626); font-weight:600; }
       audio { width:100%; margin-top:4px; }
       .panel { margin-top:8px; padding-top:8px; border-top:1px dashed var(--cp-border,#2a3544); }
@@ -111,7 +197,20 @@
       .srcchip { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#e2e8f0);
                  background:var(--cp-surface,#0f1419); border:1px dashed var(--cp-border,#2a3544);
                  border-radius:6px; padding:4px 6px; }
-      .srcchip button { padding:0 5px; line-height:16px; }`;
+      .srcchip button { padding:0 5px; line-height:16px; }
+      /* P0-V2b 译声行：开关+目标语预告一行装下；提示为空时整行不占位 */
+      .xlrow { gap:8px; margin:2px 0 6px; }
+      .xlrow label { display:inline-flex; align-items:center; gap:4px; cursor:pointer;
+                     font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#e2e8f0); }
+      .xlrow input { margin:0; flex:none; }
+      .xlrow .xlh { margin:0; }
+      [data-role="msg"]:empty { display:none; }
+      .pv-spoken { margin-top:4px; white-space:pre-wrap; word-break:break-word; }
+      .pv-spoken .sp-txt { color:var(--cp-text,#e2e8f0); }
+      /* 音色状态条 chip：分隔符长在后继 chip 上（折行跟内容走，不悬挂行尾） */
+      .eff-bit { display:inline-block; }
+      .eff-bit + .eff-bit::before { content:"·"; margin:0 4px;
+        color:var(--cp-text-tiny,#94a3b8); }`;
     }
 
     set client(c) {
@@ -195,14 +294,37 @@
     _metaLine(d) {
       const m = (d && d.voice_meta) || {};
       const parts = [];
-      if (m.persona_id) parts.push(`${this._t("cp.voice.m_persona")} ${m.persona_id}`);
-      if (m.provider) parts.push(`${this._t("cp.voice.m_provider")} ${m.provider}`);
-      if (m.voice) parts.push(`${this._t("cp.voice.m_voice")} ${m.voice}`);
-      if (m.emotion) parts.push(`${this._t("cp.voice.m_emotion")} ${m.emotion}`);
-      if (m.fallback_from) parts.push(this._t("cp.voice.m_fallback", { from: m.fallback_from }));
-      return parts.length
-        ? `<div class="hint">${this._t("cp.voice.m_actual", { parts: this._esc(parts.join(" · ")) })}</div>`
-        : "";
+      if (m.persona_id) {
+        // 内部 id → 显示名（P0-2 2026-08-31：「人设 lin_xiaoyu」是调试口径，
+        // 坐席认的是「林小雨」；profiles 未加载/查不到时原样显示不装懂）
+        const row = (this._profiles || []).find((p) => p.persona_id === m.persona_id);
+        parts.push(`${this._t("cp.voice.m_persona")} ${(row && row.name) || m.persona_id}`);
+      }
+      if (m.provider) parts.push(`${this._t("cp.voice.m_provider")} ${this._backendLabel(m.provider)}`);
+      if (m.voice) {
+        // 音色代号人话化（P1-2 2026-08-31）：locale 型代号（ja-JP-NanamiNeural）
+        // 坐席只需要「音色 日语」；完整代号收进悬浮 title 供排障。
+        // 非 locale 值（克隆音色名）原样显示不装懂。
+        const lm = /^([a-z]{2,3})-[A-Za-z]{2,4}-/.exec(String(m.voice));
+        parts.push(`${this._t("cp.voice.m_voice")} ${lm ? this._langName(lm[1]) : m.voice}`);
+      }
+      const dur = Number(d && d.duration_sec) || 0;
+      if (dur > 0) {
+        const s = Math.max(1, Math.round(dur));
+        parts.push(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
+      }
+      if (m.emotion) parts.push(`${this._t("cp.voice.m_emotion")} ${this._emoLabel(m.emotion)}`);
+      if (m.fallback_from) parts.push(this._t("cp.voice.m_fallback", { from: this._backendLabel(m.fallback_from) }));
+      if (!parts.length) return "";
+      // chip 化（P1-2）：折行时分隔符跟内容走（同音色状态条 eff-bit 方案，
+      // 旧 " · " 拼串窄栏折行会行尾悬挂）；原始代号串进 title，不占坐席眼球。
+      const raw = [m.persona_id, m.provider, m.voice, m.emotion,
+        m.fallback_from ? `fallback_from=${m.fallback_from}` : "",
+        m.fallback_reason ? `reason=${m.fallback_reason}` : ""]
+        .filter(Boolean).join(" | ");
+      const chips = parts.map((b) => `<span class="eff-bit">${this._esc(b)}</span>`).join("");
+      return `<div class="hint" title="${this._esc(raw)}">`
+        + `${this._esc(this._t("cp.voice.m_actual", { parts: "" }))}${chips}</div>`;
     }
 
     async _loadProfiles() {
@@ -248,12 +370,22 @@
        recent_failures=台账事后证据）。与 send-voice 同源解析（effective-config
        带 chat/account 上下文），杜绝「状态条一套、发送另一套」。代际（_epoch）
        防会话切换后的陈旧回写；客户端无该方法（旧桌面壳）→ 静默隐藏，零依赖。 */
+    _hideEffStatus() {
+      const box = this.shadowRoot.querySelector('[data-role="effstatus"]');
+      const det = this.shadowRoot.querySelector('[data-role="effdetail"]');
+      if (box) box.hidden = true;
+      if (det) { det.hidden = true; det.innerHTML = ""; }
+    }
+
     async _refreshEffStatus() {
       const box = this.shadowRoot.querySelector('[data-role="effstatus"]');
       const c = this._ctx;
       if (!box) return;
       if (!c || !c.chatKey || !this._client || !this._client.voiceEffectiveConfig) {
-        box.hidden = true;
+        this._hideEffStatus();
+        this._effConvLang = null;
+        this._effVoiceLangs = null;
+        this._syncXlHint();
         return;
       }
       const epoch = this._epoch;
@@ -265,11 +397,18 @@
           account_id: c.accountId || undefined,
         });
         if (epoch !== this._epoch) return;   // 会话已切换：陈旧回写作废
-        if (!d || d.ok === false) { box.hidden = true; return; }
+        if (!d || d.ok === false) { this._hideEffStatus(); this._effVoiceLangs = null; return; }
         // 老后端护栏：响应缺新字段（hub_strict 等）＝服务端还没装载本批解析
         // （不认 chat_key 入参）——此时渲染的是「无会话上下文」的错误解析，
         // 与真实发送不同源。宁可不显示，不显示错的。
-        if (!("hub_strict" in d)) { box.hidden = true; return; }
+        if (!("hub_strict" in d)) { this._hideEffStatus(); this._effVoiceLangs = null; return; }
+        // 译声预告数据源：会话客户语言（与发送侧 'auto' 解析同源）。旧后端缺
+        // conv_lang 键 → null=不预告（特性探测，不显示错的）。
+        this._effConvLang = ("conv_lang" in d) ? String(d.conv_lang || "").toLowerCase() : null;
+        // 语言能力守卫数据源（特性探测：旧后端缺键/空列表 → null=不判不冤枉）
+        this._effVoiceLangs = (Array.isArray(d.voice_langs) && d.voice_langs.length)
+          ? d.voice_langs.map((x) => String(x || "").toLowerCase()) : null;
+        this._syncXlHint();
         const pid = d.persona_id || "";
         let name;
         if (d.persona_source === "system") {
@@ -281,32 +420,77 @@
           name = this._t("cp.voice.eff_global");
         }
         const bits = [this._t("cp.voice.eff_line",
-          { name, backend: d.backend || "" })];
-        const srcKey = `cp.voice.eff_src_${d.persona_source || ""}`;
-        const srcTxt = this._t(srcKey);
-        if (srcTxt && srcTxt !== srcKey) bits.push(srcTxt);
+          { name, backend: this._backendLabel(d.backend) })];
         if (d.is_clone) bits.push(d.ready ? "🎤" : this._t("cp.voice.eff_not_ready"));
-        let riskHtml = "";
-        if (d.hub_risk === "unreachable") {
-          riskHtml = `<div class="err">${this._esc(this._t("cp.voice.eff_hub_unreachable"))}</div>`;
-        } else if (d.hub_risk === "recent_failures") {
-          riskHtml = `<div class="warn">${this._esc(this._t("cp.voice.eff_hub_recent"))}</div>`;
-        }
-        // P3 音色体检行：解析出的人设最近声纹体检 warn/critical → 状态条给分数
-        // 与出路（critical=建议重新登记；数据源=夜间探针+enroll 即时体检 jsonl）
+        /* P1 降噪（2026-08-31）：状态行只留 健康点+名字·后端+短风险牌，整句
+           风险/来源/体检分收进「详情」折叠区——截图实录里琥珀长句常驻面板
+           前三行，重要的（会拒发）与次要的（曾失败）没有层级。短牌+点色
+           保住「会不会拒发」的即时可见性，全文一击展开。 */
         const qrow = pid
           ? (this._profiles || []).find((p) => p.persona_id === pid) : null;
-        if (qrow && (qrow.quality === "warn" || qrow.quality === "critical")) {
-          const qk = qrow.quality === "critical"
-            ? "cp.voice.eff_quality_crit" : "cp.voice.eff_quality_warn";
-          const score = (Number(qrow.quality_score) || 0).toFixed(2);
-          riskHtml += `<div class="${qrow.quality === "critical" ? "err" : "warn"}">`
-            + `${this._esc(this._t(qk, { score }))}</div>`;
+        const qual = (qrow && (qrow.quality === "warn" || qrow.quality === "critical"))
+          ? qrow : null;
+        const riskShortKey = {
+          unreachable: "cp.voice.eff_s_unreachable",
+          engine_offline: "cp.voice.eff_s_engine_offline",
+          timing_out: "cp.voice.eff_s_timing_out",
+          recent_failures: "cp.voice.eff_s_recent",
+        }[d.hub_risk] || "";
+        // engine_offline / timing_out 两态服务端 2026-08-22 起就会报，旧前端
+        // 却只认 unreachable/recent_failures（静默漏显示）——本批一并补全。
+        const riskFullKey = {
+          unreachable: "cp.voice.eff_hub_unreachable",
+          engine_offline: "cp.voice.eff_hub_engine_offline",
+          timing_out: "cp.voice.eff_hub_timing_out",
+          recent_failures: "cp.voice.eff_hub_recent",
+        }[d.hub_risk] || "";
+        const errRisk = d.hub_risk === "unreachable"
+          || d.hub_risk === "engine_offline" || d.hub_risk === "timing_out";
+        let dot = "ok";
+        if (errRisk || (qual && qual.quality === "critical")) dot = "err";
+        else if (riskFullKey || qual || (d.is_clone && !d.ready)) dot = "warn";
+        const detParts = [];
+        const srcKey = `cp.voice.eff_src_${d.persona_source || ""}`;
+        const srcTxt = this._t(srcKey);
+        if (srcTxt && srcTxt !== srcKey) detParts.push(`<div>${this._esc(srcTxt)}</div>`);
+        if (riskFullKey) {
+          detParts.push(`<div class="${errRisk ? "err" : "warn"}">`
+            + `${this._esc(this._t(riskFullKey))}</div>`);
         }
-        box.innerHTML = this._esc(bits.join(" · ")) + riskHtml;
+        if (qual) {
+          const qk = qual.quality === "critical"
+            ? "cp.voice.eff_quality_crit" : "cp.voice.eff_quality_warn";
+          const score = (Number(qual.quality_score) || 0).toFixed(2);
+          detParts.push(`<div class="${qual.quality === "critical" ? "err" : "warn"}">`
+            + `${this._esc(this._t(qk, { score }))}</div>`);
+        }
+        // chip 式渲染（P0-2 2026-08-31）：旧 " · " 字符串拼接在 🎤 这类窄尾段
+        // 折行时会在行尾留一个悬挂的「·」；分隔符改挂在后继 chip 的 ::before 上，
+        // 永远跟内容走不再悬空。
+        const chips = bits.filter(Boolean).map((b) =>
+          `<span class="eff-bit">${this._esc(b)}</span>`).join("");
+        let riskShort = "";
+        if (riskShortKey) {
+          riskShort = `<span class="eff-risk ${errRisk ? "err" : "warn"}">`
+            + `${this._esc(this._t(riskShortKey))}</span>`;
+        } else if (qual) {
+          const qtag = qual.quality === "critical"
+            ? "cp.voice.q_crit_tag" : "cp.voice.q_warn_tag";
+          riskShort = `<span class="eff-risk ${qual.quality === "critical" ? "err" : "warn"}">`
+            + `${this._esc(this._t(qtag))}</span>`;
+        }
+        const moreHtml = detParts.length
+          ? `<span class="eff-more">${this._esc(this._t("cp.voice.eff_more"))}</span>` : "";
+        const det = this.shadowRoot.querySelector('[data-role="effdetail"]');
+        const wasOpen = !!(det && !det.hidden && det.innerHTML);
+        box.innerHTML = `<span class="dot ${dot}"></span>` + chips + riskShort + moreHtml;
         box.hidden = false;
+        if (det) {
+          det.innerHTML = detParts.join("");
+          det.hidden = !(wasOpen && detParts.length);
+        }
       } catch (e) {
-        if (epoch === this._epoch) box.hidden = true;
+        if (epoch === this._epoch) { this._hideEffStatus(); this._effVoiceLangs = null; }
       }
     }
 
@@ -317,6 +501,14 @@
       this._previewText = null;
       this._previewPersona = "";
       this._previewFilename = "";
+      this._previewXl = "";
+      this._previewXlEff = "";
+      this._effConvLang = null;
+      this._effVoiceLangs = null;
+      this._silent = false;
+      this._previewFallback = "";
+      this._fbConfirmedKey = "";
+      this._staleWas = false;
       this._stopGenTimer();
       if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
       const w = this.shadowRoot.querySelector(".wrap");
@@ -326,20 +518,40 @@
         return;
       }
       w.className = "wrap";
+      /* P1 三区重排（2026-08-31）：①音色身份区（选择器+状态行+详情）②撰写区
+         （翻译开关+文本框+计数/提示）③主操作（生成钮跟在输入正下方，全宽）
+         ④结果区（预览）。改前顺序=按钮在输入之前、状态插在中间，坐席动线
+         上下反复跳（写字→上→下→更下）。 */
+      const tipHtml = this._tipSeen() ? "" : (
+        `<div class="tip" data-role="tip"><span>${this._t("cp.voice.hint")} ${this._t("cp.voice.enroll_moved")}</span>` +
+        `<button data-act="tip-got">${this._t("cp.voice.tip_got")}</button></div>`);
       w.innerHTML =
-        `<div class="row">
-          <button class="primary" data-act="tts" data-role="gen-main">${this._genLabelHtml()}</button>
-          <select data-role="persona" title="${this._esc(this._t("cp.voice.persona_title"))}"></select>
-          <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">${this._ic("trash", 13)}</button>
+        `<div class="zone-id">
+          <div class="row">
+            <select data-role="persona" title="${this._esc(this._t("cp.voice.persona_title"))}"></select>
+            <button data-act="unbind" title="${this._esc(this._t("cp.voice.unbind_title"))}">${this._ic("trash", 13)}</button>
+          </div>
+          <div data-role="effstatus" data-act="eff-toggle" class="effline" hidden
+               title="${this._esc(this._t("cp.voice.eff_more_t"))}"></div>
+          <div data-role="effdetail" class="effdetail" hidden></div>
         </div>
-        <div data-role="effstatus" class="hint" hidden></div>
+        <div class="row xlrow">
+          <label title="${this._esc(this._t("cp.voice.xl_follow_t"))}"><input type="checkbox" data-role="xlfollow"${this._xlOn ? " checked" : ""} /><span>${this._t("cp.voice.xl_follow")}</span></label>
+          <span class="hint xlh" data-role="xlhint"></span>
+        </div>
         <textarea data-role="text" placeholder="${this._esc(this._t("cp.voice.text_ph"))}"></textarea>
-        <div class="cnt" data-role="cnt" hidden></div>
-        <div class="hint">${this._t("cp.voice.hint")} ${this._t("cp.voice.enroll_moved")}</div>
+        <div class="compose-foot">
+          <div class="hint" data-role="msg"></div>
+          <span class="cnt" data-role="cnt" hidden></span>
+        </div>
+        <button class="primary gen-btn" data-act="tts" data-role="gen-main">${this._genLabelHtml()}</button>
+        ${tipHtml}
         <div data-role="preview" class="preview" hidden></div>`;
+      this._syncXlHint();
       /* B115（实施74，B25-① 口径落定）：工具箱撤克隆「录入+登记」整块——
          登记只留人设页语音区一个入口（本组件 mode="enroll" 挂载档保留）。
-         生成/试听/发送功能不动；hint 里指路人设页防「功能消失」误报。 */
+         生成/试听/发送功能不动；tip 里指路人设页防「功能消失」误报
+         （常驻三步说明降噪为一次性引导，cp.voice.hint/enroll_moved 词条复用）。 */
     }
 
     _enrollHtml() {
@@ -407,7 +619,121 @@
         this._savePersona(this._persona);
         this._syncStale();   // 换音色同样使试听过期（发送按当前音色重新合成）
         this._refreshEffStatus();
+        return;
       }
+      const xl = e.target.closest('[data-role="xlfollow"]');
+      if (xl) {
+        this._xlOn = !!xl.checked;
+        this._saveXlOn(this._xlOn);
+        this._syncXlHint();
+        this._syncStale();   // 语言维度变了：已生成的试听按过期处理（防「听中文发外语」）
+        // 通知宿主（同文档的主输入框「跟随翻译发声」行同键联动 + 埋点）
+        this.dispatchEvent(new CustomEvent("cp-voice-xl-changed", {
+          bubbles: true, composed: true, detail: { on: this._xlOn },
+        }));
+      }
+    }
+
+    /* ── P0-V2b 译声（打中文 → 客户收到目标语克隆声）────────────────────────
+       开关全局持久化（与主输入框共键）；目标语恒 'auto'：由服务端按会话客户
+       语言解析（与 send-voice 同一函数），解析不出=不译，fail-open 念原文。 */
+    _loadXlOn() {
+      try { return (localStorage.getItem(XL_KEY) || "1") === "1"; } catch (e) { return true; }
+    }
+    _saveXlOn(v) {
+      try { localStorage.setItem(XL_KEY, v ? "1" : "0"); } catch (e) { /* */ }
+    }
+    /* 目标语解析（2026-08-30 用户实测修正）：坐席在翻译设置里显式选了
+       「我的消息 → X」→ 语音跟着译成 X（宿主经 __cpVoiceXlPref 提供；这正是
+       坐席的心智模型——「我都把翻译改成英文了」）；未设置/设为 auto → 'auto'
+       =会话客户语言由服务端解析。无宿主注入（桌面独立 App/iframe）→ 'auto'。 */
+    _xlTarget() {
+      if (!this._xlOn) return "";
+      let pref = "";
+      try {
+        pref = String((root.__cpVoiceXlPref && root.__cpVoiceXlPref()) || "");
+      } catch (e) { pref = ""; }
+      pref = pref.trim().toLowerCase();
+      return (pref && pref !== "auto") ? pref : "auto";
+    }
+    /* 宿主/其他窗口改了开关或翻译目标 → 重读并刷新 UI（checkbox+预告+过期标记）。
+       开关未变也要重算预告/过期——宿主换「我的消息 →」目标语时走的就是这条。 */
+    refreshXl() {
+      const v = this._loadXlOn();
+      if (v !== this._xlOn) {
+        this._xlOn = v;
+        const cb = this.shadowRoot.querySelector('[data-role="xlfollow"]');
+        if (cb) cb.checked = v;
+      }
+      this._syncXlHint();
+      this._syncStale();
+    }
+    /* 语言名（cp.lang.* 词条，缺键回落代码大写）；空码返回空串 */
+    _langName(code) {
+      const c = String(code || "").trim().toLowerCase();
+      if (!c) return "";
+      const k = "cp.lang." + c.replace(/-/g, "_");
+      const v = this._t(k);
+      return (v && v !== k) ? v : c.toUpperCase();
+    }
+    /* 后端内部名 → 人话标签（cp.voice.bk_* 词条；没登记的原样显示不装懂） */
+    _backendLabel(code) {
+      const c = String(code || "").trim();
+      if (!c) return "";
+      const k = "cp.voice.bk_" + c.toLowerCase();
+      const v = this._t(k);
+      return (v && v !== k) ? v : c;
+    }
+    /* 情绪内部值 → 人话标签（cp.voice.emo_* 词条；没登记的原样显示不装懂）。
+       「情绪 playful」是调试口径，坐席该看到「俏皮」。 */
+    _emoLabel(code) {
+      const c = String(code || "").trim().toLowerCase();
+      if (!c) return "";
+      const k = "cp.voice.emo_" + c.replace(/[^a-z0-9]+/g, "_");
+      const v = this._t(k);
+      return (v && v !== k) ? v : c;
+    }
+    /* 译声预告行：显式目标（我的消息 → X）→ 直接「将译成 X」（不依赖后端
+       conv_lang，立即可见）；auto → 按会话客户语言（后端未回传时留空不猜、
+       解析不出=「客户语言未知·按原文发声」）；关=「按原文发声」；目标语为
+       粤语时给音系警示（普通话音系念粤文=「唔该」念 wú gāi，穿帮级）；
+       目标语超出当前音色引擎能力（P0 2026-08-31「日文怪声」：IndexTTS-2 念
+       假名=不是任何语言的怪声）→ 生成前红牌警示，别让坐席靠耳朵事后发现。 */
+    _syncXlHint() {
+      const el = this.shadowRoot.querySelector('[data-role="xlhint"]');
+      if (!el) return;
+      const paint = (txt, warn) => {
+        el.textContent = txt;
+        el.classList.toggle("warn", !!warn);
+      };
+      // 同因去重（P0 2026-08-31）：预览区已有「语种改道」说明（含一键出路）时，
+      // 顶部预告让位——同一件事两处黄牌是 0831 提示风暴的成因之一。
+      const langNote = this.shadowRoot.querySelector(
+        '[data-role="fallback-note"][data-reason="lang"]');
+      if (langNote && !langNote.hidden) { paint("", false); return; }
+      if (!this._xlOn) { paint(this._t("cp.voice.xl_off"), false); return; }
+      const tgt = this._xlTarget();   // 'auto' | 显式语种码
+      // 预告语种：显式目标立即可见；auto 用会话客户语言（null=后端未提供）
+      const lang = (tgt !== "auto") ? tgt : this._effConvLang;
+      if (lang === null) { paint("", false); return; }   // 特性探测：不显示错的
+      if (!lang) { paint(this._t("cp.voice.xl_unknown"), false); return; }
+      const code = String(lang).toLowerCase();
+      if (code === "yue") { paint(this._t("cp.voice.xl_yue_warn"), true); return; }
+      if (this._langUnsupported(code)) {
+        paint(this._t("cp.voice.xl_engine_unsupported",
+          { lang: this._langName(code) }), true);
+        return;
+      }
+      paint(this._t("cp.voice.xl_to", { lang: this._langName(code) }), false);
+    }
+    /* 目标语是否超出当前音色主路的可念语种（voice_langs 缺席/空=不判不冤枉）。
+       前缀比较（zh-tw→zh）：变体归母语种，避免对繁体中文这类同引擎可念的
+       变体误报（粤语另有专门音系警示，不走本判定）。 */
+    _langUnsupported(code) {
+      const langs = this._effVoiceLangs;
+      if (!Array.isArray(langs) || !langs.length) return false;
+      const p = String(code || "").toLowerCase().split("-")[0];
+      return !!p && langs.indexOf(p) < 0;
     }
 
     async _onClick(e) {
@@ -418,6 +744,9 @@
       if (act === "send") return this._sendVoice();
       if (act === "clear-preview") { this._clearPreview(); return; }
       if (act === "cancel-gen") { this._cancelGen(); return; }
+      if (act === "xl-off-regen") { this._xlOffRegen(); return; }
+      if (act === "eff-toggle") { this._toggleEffDetail(); return; }
+      if (act === "tip-got") { this._dismissTip(); return; }
       if (act === "unbind") return this._unbind();
       /* B115：toggle-enroll / clear-src 分支随工具箱登记块一并撤除——
          enroll-submit/force/rebind/reconcile 仍服务人设页 mode="enroll" 档。 */
@@ -434,6 +763,34 @@
       return ta ? String(ta.value || "").trim() : "";
     }
 
+    /* 音色详情开合（状态行整行可点；无详情内容时 no-op） */
+    _toggleEffDetail() {
+      const det = this.shadowRoot.querySelector('[data-role="effdetail"]');
+      if (!det || !det.innerHTML) return;
+      det.hidden = !det.hidden;
+    }
+
+    /* 首次使用提示（P1 降噪）：三步说明从常驻改为一次性引导，「知道了」后
+       localStorage 记忆不再出现（storage 异常按已读处理，绝不常驻打扰）。 */
+    _tipSeen() {
+      try { return localStorage.getItem("cpv.tip.v1") === "1"; } catch (e) { return true; }
+    }
+    _dismissTip() {
+      try { localStorage.setItem("cpv.tip.v1", "1"); } catch (e) { /* */ }
+      const t = this.shadowRoot.querySelector('[data-role="tip"]');
+      if (t) t.remove();
+    }
+
+    /* 输入框随内容自然长高（52→140px 封顶，超出滚动；手动拖拽 resize 仍可用） */
+    _autoGrow(ta) {
+      const el = ta || this.shadowRoot.querySelector('[data-role="text"]');
+      if (!el) return;
+      try {
+        el.style.height = "auto";
+        el.style.height = Math.min(140, Math.max(56, el.scrollHeight)) + "px";
+      } catch (e) { /* */ }
+    }
+
     async _genTts() {
       const text = this._text();
       if (!text) { this._hint(this._t("cp.voice.need_text"), false); return; }
@@ -446,19 +803,31 @@
       if (this._busy) return;   // 在途互斥：连点不重复烧合成
       const ep = this._epoch;
       const persona = this._persona || "";   // 生成基准取点击时刻（生成期间的改动会被判过期）
+      const xlt = this._xlTarget();          // 译声基准同点击时刻（开关翻转会被判过期）
       this._setBusy("tts");
       box.hidden = false;
       box.classList.remove("stale");
+      // 上一条的裁决状态随预览一起作废（重新生成=新的产物新的判定）
+      this._silent = false;
+      this._previewFallback = "";
+      this._staleWas = false;
       // 等待态一次成形（计秒只更新 span，别整块重写——否则「取消」按钮每秒被销毁重建）
       box.innerHTML =
         `<span data-role="gen-wait"></span>` +
-        `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
+        `<div class="row pv-foot">` +
         `<button data-act="cancel-gen">${this._t("cp.voice.cancel_btn")}</button></div>`;
       const waitEl = box.querySelector('[data-role="gen-wait"]');
       const t0 = Date.now();
       this._stopGenTimer();
+      // 预估时长与服务端克隆预算同公式（0.45s/字+10s，封顶 190s）；短文本多为
+      // 秒级热路，报预估反而吓人 → 仅 ≥40 字才显示。
+      const est = Math.min(190, Math.round(text.length * 0.45 + 10));
       const tick = () => {
-        if (waitEl) waitEl.textContent = this._t("cp.voice.gen_wait", { s: Math.floor((Date.now() - t0) / 1000) });
+        if (!waitEl) return;
+        const s = Math.floor((Date.now() - t0) / 1000);
+        waitEl.textContent = text.length >= 40
+          ? this._t("cp.voice.gen_wait_est", { s, est })
+          : this._t("cp.voice.gen_wait", { s });
       };
       tick();
       this._genTimer = setInterval(tick, 1000);
@@ -472,6 +841,8 @@
           chat_key: c.chatKey || undefined,
           platform: c.platform || undefined,
           account_id: c.accountId || undefined,
+          // 译声：'auto'=会话客户语言（服务端解析，与发送同源）；开关关=不传
+          target_lang: xlt || undefined,
         });
       } catch (e) { reqFail = true; }
       this._stopGenTimer();
@@ -487,9 +858,12 @@
               { msg: (d && (d.message || d.error)) || this._t("cp.voice.tts_unavailable") });
         this._previewText = null;
         this._previewFilename = "";
+        this._previewXl = "";
+        this._previewXlEff = "";
+        this._previewFallback = "";
         box.innerHTML =
           `<span class="err">${this._esc(msg)}</span>` +
-          `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
+          `<div class="row pv-foot">` +
           `<button data-act="tts">${this._t("cp.voice.retry_btn")}</button>` +
           `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button></div>`;
         return;
@@ -497,8 +871,53 @@
       this._previewText = text;
       this._previewPersona = persona;
       this._previewFilename = String((d && d.filename) || "");
+      this._previewXl = xlt;
+      // #121：记服务端真实译向（voice_translated 才有；未译=空串——之后会话
+      // 语言被解析出来时 curEff 会变，届时标过期是**正确**的：再发会变成译声）
+      this._previewXlEff = (d && d.voice_translated)
+        ? String(d.target_lang || "").toLowerCase() : "";
       const _vm = ((d && d.voice_meta) || {});
       const fb = _vm.fallback_from || _vm.voice_mapped_from;
+      /* 回落原因分支（P0 2026-08-31 提示风暴复盘）：服务端 fallback_reason
+         （additive）优先；老后端缺键时就地推断「语种改道」（本条确已翻译且
+         目标语超出主路能力）。语种改道是刻意保护——info 蓝条+一键出路；
+         「通道中断→重试/报障」文案只留给真通道故障（0831 实测通道全绿却教
+         坐席去报障，纯制造无效工单）。 */
+      let fbReason = String(_vm.fallback_reason || "");
+      let fbLang = String(_vm.fallback_lang || "");
+      if (fb && !fbReason && d.voice_translated
+          && this._langUnsupported(String(d.target_lang || ""))) {
+        fbReason = "lang_unsupported";
+        fbLang = String(d.target_lang || "");
+      }
+      this._previewFallback = fb ? (fbReason || "generic") : "";
+      let fbNote = "";
+      if (fb) {
+        if (fbReason === "lang_unsupported") {
+          const ln = this._langName(fbLang || String(d.target_lang || ""));
+          fbNote = `<div class="pv-note info" data-role="fallback-note" data-reason="lang">`
+            + `<span>${this._esc(this._t("cp.voice.fallback_lang", { lang: ln }))}</span>`
+            + `<button data-act="xl-off-regen">${this._t("cp.voice.fallback_lang_btn")}</button></div>`;
+        } else if (fbReason === "quota") {
+          fbNote = `<div class="pv-note warn" data-role="fallback-note" data-reason="quota">`
+            + `<span>${this._esc(this._t("cp.voice.fallback_quota"))}</span></div>`;
+        } else {
+          fbNote = `<div class="pv-note warn" data-role="fallback-note" data-reason="channel">`
+            + `<span>${this._esc(this._t("cp.voice.fallback_warn"))}</span></div>`;
+        }
+        this._warnBeacon(fbReason === "lang_unsupported" ? "fb_lang"
+          : (fbReason === "quota" ? "fb_quota" : "fb_channel"));
+      }
+      // 译声：把服务端真实念出的译稿亮给坐席（所见即所念）；未译=不渲染该行，
+      // translated 是服务端真值，绝不谎报「已译」。
+      const spokenLine = (d.voice_translated && d.spoken_text)
+        ? `<div class="hint pv-spoken">${this._esc(this._t("cp.voice.spoken_as",
+            { lang: this._langName(d.target_lang || "") }))}: <span class="sp-txt">${this._esc(d.spoken_text)}</span></div>`
+        : "";
+      /* 状态 banner 槽（P1-3）：回落/无声/过期三种警示统一 pv-note 结构与
+         语义色（过期从 err 红字校正为 warn——它与 stale 边框本就是同一状态，
+         旧版一琥珀一红是双重严重度）；过期 banner 内嵌「重新生成」＝在错误
+         发生点给出路，不必扫回预览头找按钮。 */
       box.innerHTML =
         `<div class="row pv-hd"><span>${this._ic("mic", 12)} ${this._t("cp.voice.preview")}</span>` +
         `<span class="pv-actions">` +
@@ -506,11 +925,14 @@
         `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button>` +
         `</span></div>` +
         `<audio controls src="${url}"></audio>` +
+        `<canvas data-role="wave" aria-hidden="true"></canvas>` +
+        spokenLine +
         this._metaLine(d) +
-        (fb ? `<div class="hint warn">${this._esc(this._t("cp.voice.fallback_warn"))}</div>` : "") +
-        `<div class="hint err" data-role="silent-note" hidden>${this._esc(this._t("cp.voice.silent_note"))}</div>` +
-        `<div class="hint err" data-role="stale-note" hidden>${this._esc(this._t("cp.voice.stale_note"))}</div>` +
-        `<div class="row" style="justify-content:flex-end;margin-top:6px;">` +
+        fbNote +
+        `<div class="pv-note err" data-role="silent-note" data-detector="v2-dual" hidden><span>${this._esc(this._t("cp.voice.silent_note"))}</span></div>` +
+        `<div class="pv-note warn" data-role="stale-note" hidden><span>${this._esc(this._t("cp.voice.stale_note"))}</span>` +
+        `<button data-act="tts">${this._t("cp.voice.regen_btn")}</button></div>` +
+        `<div class="row pv-foot">` +
         `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
       this._syncStale();   // 生成期间若已改字/换音色，立即标过期
       this._sniffSilence(url);   // B61：疑似无声产物 → 显式警示（best-effort）
@@ -518,10 +940,17 @@
 
     /** B61 哑音警示（2026-08-23）：服务端能量闸兜大头，但客户机 ffmpeg 缺席时
      *  压缩产物判不了——浏览器这端用 WebAudio 解码测峰值补盲区。任何失败静默
-     *  （检测是增益不是闸门）；epoch 变了（切会话/重新生成）不回写 DOM。 */
+     *  （检测是增益不是闸门）；epoch 变了（切会话/重新生成）不回写 DOM。
+     *
+     *  #121（skuio 0831 原图 924）阈值回校：旧判据「峰值 < 0.004」单信号——
+     *  正常但偏轻的合成音（短英句/柔音色/编码增益低）会被咬（实测报障音频
+     *  可正常播放）。改双信号必须同时成立：峰值 < 0.002（真空壳的量级）且
+     *  RMS < 0.0008（全程能量地板）。有真实语音内容的音频 RMS 远高于地板，
+     *  单一前导静音/轻音量不再误报；数字静音/空壳两项都为零照样拦。 */
     async _sniffSilence(url) {
       const ep = this._epoch;
       let silent = false;
+      let buckets = null;
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!AC || !window.fetch) return;
@@ -535,19 +964,70 @@
           if (!ch || !ch.length) return;
           const step = Math.max(1, Math.floor(ch.length / 48000));
           let peak = 0;
+          let sumSq = 0;
+          let n = 0;
+          // 响度包络桶（P1 2026-08-31）：同一遍采样顺手聚 96 桶峰值——
+          // 「有没有声」从纯凭耳朵/红条变成一眼可见的波形条（无声=扁平基线），
+          // 0831「能播放却被判无声」疑云的视觉自证层。零额外解码成本。
+          const NB = 96;
+          buckets = new Float32Array(NB);
           for (let i = 0; i < ch.length; i += step) {
             const a = Math.abs(ch[i]);
             if (a > peak) peak = a;
+            sumSq += a * a;
+            n += 1;
+            const b = Math.min(NB - 1, Math.floor((i / ch.length) * NB));
+            if (a > buckets[b]) buckets[b] = a;
           }
-          silent = peak < 0.004;
+          const rms = n ? Math.sqrt(sumSq / n) : 0;
+          silent = peak < 0.002 && rms < 0.0008;
         } finally {
           try { ac.close(); } catch (e) { /* 忽略 */ }
         }
       } catch (e) { return; }
-      if (!silent || ep !== this._epoch) return;
-      const note = this.shadowRoot
-        && this.shadowRoot.querySelector('[data-role="silent-note"]');
-      if (note) note.hidden = false;
+      if (ep !== this._epoch) return;
+      if (buckets) this._drawWave(buckets);
+      if (!silent) return;
+      // 阻发闸（P0 2026-08-31）：红字劝「不要发送」但按钮仍亮蓝可点＝视觉与
+      // 行为自相矛盾（0831 截图实锤）——阳性即禁发，重新生成清除。
+      // 误报敞口已被 #121 双信号阈值收窄到「真数字静音」量级。
+      this._silent = true;
+      this._warnBeacon("silent");
+      this._syncNotes();
+    }
+
+    /* 响度包络渲染（P1 2026-08-31）：_sniffSilence 已解码的 PCM 顺手成像。
+       峰值归一（听感相对量）；全静音=1px 扁平基线，视觉即「空」。画布缺席/
+       任何异常静默跳过——纯增益，绝不影响主流程。 */
+    _drawWave(buckets) {
+      try {
+        const cv = this.shadowRoot.querySelector('[data-role="wave"]');
+        if (!cv || !cv.getContext) return;
+        const dpr = Math.min(2, Number(root.devicePixelRatio) || 1);
+        const w = Math.max(60, cv.clientWidth || 240);
+        const h = Math.max(16, cv.clientHeight || 24);
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
+        const g = cv.getContext("2d");
+        if (!g) return;
+        g.scale(dpr, dpr);
+        g.clearRect(0, 0, w, h);
+        let peak = 0;
+        for (let i = 0; i < buckets.length; i += 1) {
+          if (buckets[i] > peak) peak = buckets[i];
+        }
+        const n = buckets.length;
+        const bw = w / n;
+        const mid = h / 2;
+        g.fillStyle = "rgba(84,167,245,.75)";
+        for (let i = 0; i < n; i += 1) {
+          const v = peak > 0 ? (buckets[i] / peak) : 0;
+          const bh = Math.max(1, v * (h - 2));
+          g.fillRect(i * bw + Math.min(1, bw * 0.15), mid - bh / 2,
+            Math.max(1, bw * 0.7), bh);
+        }
+        cv.setAttribute("data-painted", "1");
+      } catch (e) { /* 纯增益：失败不影响任何主流程 */ }
     }
 
     async _sendVoice() {
@@ -558,6 +1038,17 @@
       if (this._isStale()) {   // 双保险：按钮已禁用，键盘/时序穿透也拦
         this._hint(this._t("cp.voice.stale_note"), false);
         return;
+      }
+      if (this._silent) {   // 阻发闸双保险（同上：时序穿透也拦）
+        this._hint(this._t("cp.voice.silent_block_t"), false);
+        return;
+      }
+      /* 降级发送确认（P1-3 2026-08-31）：非克隆声不靠黄字自觉——发送前显式
+         确认一次「客户会听到与人设不同的声音」；同会话记住选择（换会话/重渲
+         即复位），不重复骚扰。原「回落必须显式」不变量由本确认承接且更强。 */
+      if (this._previewFallback && this._fbConfirmedKey !== this._convKey()) {
+        if (!confirm(this._t("cp.voice.fallback_send_confirm"))) return;
+        this._fbConfirmedKey = this._convKey();
       }
       const ep = this._epoch;
       this._setBusy("send");
@@ -570,6 +1061,9 @@
           chat_key: c.chatKey,
           text,
           persona_id: this._persona || undefined,
+          // 译声（与试听同口径）：'auto'=会话客户语言由服务端解析后先译后念；
+          // fail-open 在服务端（翻译失败念原文并如实标记），前端只透传。
+          target_lang: this._xlTarget() || undefined,
           // 所听即所发（P1）：带回试听产物名，服务端校验（同文本/同音色/未过期）
           // 通过则直接复用试听音频——客户听到的与坐席试听的逐字节一致，且省一次合成。
           preview_filename: this._previewFilename || undefined,
@@ -587,15 +1081,20 @@
         const ta = this.shadowRoot.querySelector('[data-role="text"]');
         if (ta) ta.value = "";
         const m = d.voice_meta || {};
+        // 译声：如实告知「客户听到的是哪种语言」（voice_meta.translated 为真值源）
+        const xlNote = (m.translated && m.target_lang)
+          ? ` · ${this._t("cp.voice.sent_xl", { lang: this._langName(m.target_lang) })}` : "";
         this._hint(
           this._t("cp.voice.sent")
-            + (m.provider ? ` (${m.provider}${m.emotion ? " / " + m.emotion : ""})` : ""),
+            + (m.provider ? ` (${this._backendLabel(m.provider)}${m.emotion ? " / " + this._emoLabel(m.emotion) : ""})` : "")
+            + xlNote,
           true);
         this._hintResetLater();
         this.dispatchEvent(new CustomEvent("cp-voice-sent", {
           bubbles: true, composed: true,
-          // reused=true ⇒ 客户收到的就是坐席试听的那份音频（宿主可分桶埋点）
-          detail: { reused: !!(d && d.reused_preview) },
+          // reused=true ⇒ 客户收到的就是坐席试听的那份音频；translated=true ⇒
+          // 客户听到的是译稿（宿主按两维分桶埋点）
+          detail: { reused: !!(d && d.reused_preview), translated: !!m.translated },
         }));
       } else if (reqFail) {
         this._hint(this._t("cp.voice.send_req_fail"), false);
@@ -748,8 +1247,13 @@
       await this._reconcile();
     }
 
+    /* 状态/结果提示写进专用 msg 行（P2 2026-08-30 修：旧实现 querySelector('.hint')
+       首匹配命中的是「音色状态条」effstatus——它可能带着 hidden（旧后端/解析失败时），
+       于是「请先输入文字/已发送/发送失败」全写进一个看不见的元素；即使可见也会顶掉
+       状态行。msg 行 :empty 不占位；无 msg 行（极端回退）时回落旧行为。 */
     _hint(msg, ok) {
-      const h = this.shadowRoot.querySelector(".hint");
+      const h = this.shadowRoot.querySelector('[data-role="msg"]')
+        || this.shadowRoot.querySelector(".hint");
       if (h) {
         h.textContent = msg;
         h.className = ok === true ? "hint ok" : (ok === false ? "hint err" : "hint");
@@ -765,8 +1269,14 @@
       this._previewText = null;
       this._previewPersona = "";
       this._previewFilename = "";
+      this._previewXl = "";
+      this._previewXlEff = "";
+      this._silent = false;
+      this._previewFallback = "";
+      this._staleWas = false;
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (box) { box.hidden = true; box.innerHTML = ""; box.classList.remove("stale"); }
+      this._syncXlHint();   // 语种改道说明随预览一起消失 → 顶部预告恢复
     }
 
     /* 取消生成＝代际+1（与切会话同一作废机制）：在途请求的结果回来后发现代际
@@ -778,7 +1288,7 @@
       this._busy = "";
       this._setBusy("");
       this._clearPreview();
-      this._hint(this._t("cp.voice.hint"));
+      this._hint("");   // 常驻引导语在静态行，msg 行清空即可（复写=文字出现两遍）
     }
 
     /* 字数计（与服务端试听上限同口径）：超限红字 + 生成按钮禁用，超限前先拦。 */
@@ -793,13 +1303,89 @@
       if (main) main.disabled = !!this._busy || n > this._maxChars;
     }
 
-    /* 预览过期判定：文字或音色与生成基准不一致（发送是服务端按**当前**文本重新合成，
-       不拦＝把从未试听过的内容发给客户）。无预览/无基准恒 false。 */
+    /* 预览过期判定：文字、音色或译声设置与生成基准不一致（发送是服务端按**当前**
+       文本/设置重新合成，不拦＝把从未试听过的内容发给客户——含「试听了中文原文、
+       开了翻译后发出去的却是外语」这种所听非所发）。无预览/无基准恒 false。
+
+       #121（skuio 0831 原图 924）：译声维度按**有效目标语**比对，不比原始表示——
+       宿主「我的消息 →」偏好异步加载会让 _xlTarget 从 'auto' 变成 'en'，而服务端
+       试听时早已按 'en' 念（d.target_lang 真值）：坐席什么都没改，raw 比对却把
+       试听常亮成过期。'auto' 双侧未解析时同样视为未变。真实的目标语切换
+       （en→ja / 开↔关）仍照常标过期。 */
+    _xlEffective() {
+      const raw = this._xlTarget();          // '' | 'auto' | 显式语种
+      if (!raw) return "";
+      if (raw !== "auto") return raw;
+      const conv = String(this._effConvLang || "").toLowerCase();
+      return conv || "auto";
+    }
     _isStale() {
       if (this._previewText == null) return false;
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box || box.hidden) return false;
-      return this._text() !== this._previewText || (this._persona || "") !== this._previewPersona;
+      const baseRaw = this._previewXl || "";
+      const baseEff = baseRaw === ""
+        ? ""
+        : (this._previewXlEff || (baseRaw !== "auto" ? baseRaw : "auto"));
+      let curEff = this._xlEffective();
+      // 基准本就是 'auto' 档（坐席没动过档位）且当前仍是 'auto' 未解析出会话
+      // 语言、而基准有服务端真值：拿不出「变了」的证据 → 视为未变（防
+      // eff-config 迟到期的窗口误报）。显式目标 → 'auto' 是真实的档位切换，
+      // 不吃此豁免（发送会重新解析，可能念出另一种语言）。
+      if (curEff === "auto" && baseRaw === "auto"
+          && baseEff && baseEff !== "auto") curEff = baseEff;
+      return this._text() !== this._previewText
+        || (this._persona || "") !== this._previewPersona
+        || curEff !== baseEff;
+    }
+
+    /* 结果区状态单出口（P1-1 精简版，2026-08-31 提示风暴复盘）：三条提示互斥，
+       按严重度只亮一条——无声(err,禁发) > 过期(warn,禁发) > 回落说明(info/warn,
+       确认后可发)。0831 截图实录回落+无声+过期三条黄红并列（外加顶部预告=四层），
+       坐席不知道信哪条；并列的根因是三个显隐点各自为政，收成唯一裁决口。 */
+    _syncNotes() {
+      const box = this.shadowRoot.querySelector('[data-role="preview"]');
+      if (!box || box.hidden) return;
+      const stale = this._previewText == null ? false : this._isStale();
+      const silentEl = box.querySelector('[data-role="silent-note"]');
+      const staleEl = box.querySelector('[data-role="stale-note"]');
+      const fbEl = box.querySelector('[data-role="fallback-note"]');
+      if (silentEl) silentEl.hidden = !this._silent;
+      if (staleEl) staleEl.hidden = this._silent || !stale;
+      if (fbEl) fbEl.hidden = this._silent || stale;
+      box.classList.toggle("stale", stale);
+      const send = box.querySelector('[data-act="send"]');
+      if (send) {
+        // 无声=真闸门：红字劝「不要发送」而按钮亮蓝可点，视觉与行为自相矛盾
+        send.disabled = stale || this._silent || !!this._busy;
+        send.title = this._silent ? this._t("cp.voice.silent_block_t") : "";
+      }
+      this._syncXlHint();   // 语种改道说明可见时顶部预告让位（同因去重）
+    }
+
+    /* 警示观测（P0-5）：宿主把 kind 转成 cpv_warn_* 埋点（ui-event 趋势）——
+       「提示风暴」从老板肉眼发现变成看板可查。无宿主（独立挂载）静默。 */
+    _warnBeacon(kind) {
+      try {
+        this.dispatchEvent(new CustomEvent("cp-voice-warn", {
+          bubbles: true, composed: true, detail: { kind: String(kind || "") },
+        }));
+      } catch (e) { /* */ }
+    }
+
+    /* 语种改道说明的一键出路：关闭「跟随翻译发声」（同键联动主输入框/其他
+       窗口）并立即按原文重新生成——别让坐席自己找开关、再找生成按钮。 */
+    _xlOffRegen() {
+      if (this._busy) return;
+      this._xlOn = false;
+      this._saveXlOn(false);
+      const cb = this.shadowRoot.querySelector('[data-role="xlfollow"]');
+      if (cb) cb.checked = false;
+      this._syncXlHint();
+      this.dispatchEvent(new CustomEvent("cp-voice-xl-changed", {
+        bubbles: true, composed: true, detail: { on: false },
+      }));
+      this._genTts();
     }
 
     _syncStale() {
@@ -807,11 +1393,9 @@
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box || box.hidden) return;
       const stale = this._isStale();
-      box.classList.toggle("stale", stale);
-      const note = box.querySelector('[data-role="stale-note"]');
-      if (note) note.hidden = !stale;
-      const send = box.querySelector('[data-act="send"]');
-      if (send) send.disabled = stale || !!this._busy;
+      if (stale && !this._staleWas) this._warnBeacon("stale");
+      this._staleWas = stale;
+      this._syncNotes();
     }
 
     /* 请求期按钮互斥：主生成钮换「生成中…」文案，预览区 🔁/发送一并禁用（连点=双烧/双发）。 */
@@ -827,18 +1411,19 @@
       this.shadowRoot.querySelectorAll('[data-act="tts"]').forEach((b) => { b.disabled = !!this._busy; });
       const send = this.shadowRoot.querySelector('[data-act="send"]');
       if (send) {
-        send.disabled = !!this._busy || this._isStale();
+        send.disabled = !!this._busy || this._isStale() || this._silent;
         send.textContent = this._busy === "send"
           ? this._t("cp.voice.sending") : this._t("cp.voice.send_btn");
       }
     }
 
-    /* 发送成功提示驻留一段时间后恢复默认引导——旧实现状态文案会永久顶掉引导语。 */
+    /* 发送成功提示驻留一段时间后清空 msg 行（:empty 自动收纳；常驻引导语在
+       下方静态行，无需复写——复写=同一段话在面板出现两遍）。 */
     _hintResetLater() {
       if (this._hintTimer) clearTimeout(this._hintTimer);
       this._hintTimer = setTimeout(() => {
         this._hintTimer = null;
-        this._hint(this._t("cp.voice.hint"));
+        this._hint("");
       }, this._hintResetMs);
     }
   }

@@ -87,11 +87,37 @@ def clone_capable_languages(foreign_cfg: Dict[str, Any]) -> frozenset:
         for x in langs if x and str(x).strip())
 
 
-def use_clone_for_language(foreign_cfg: Dict[str, Any], peer_language: str) -> bool:
-    """该外语是否改走克隆链（同一把声念外语）。中文恒 False（本就走克隆链）。"""
+def use_clone_for_language(
+    foreign_cfg: Dict[str, Any],
+    peer_language: str,
+    capable_langs: Any = None,
+) -> bool:
+    """该外语是否改走克隆链（同一把声念外语）。中文恒 False（本就走克隆链）。
+
+    ``capable_langs``（P0 2026-08-31「日文怪声」收口）：克隆主路**实际**可念
+    语种（``lang_voice_route.clone_voice_langs`` 的 SSOT 输出）。非空时，
+    ``clone_languages`` 白名单语种还须在能力表内才走克隆——白名单是「运营想用
+    克隆」的意愿（2026-08-02 hub fish 时代实证 en/ja/es），引擎切换后能力萎缩
+    （index_tts 仅中英）意愿名单不会自动跟上；按实况收窄后，名单内但念不了的
+    语种回到 edge 多语声（Phase15 行为），保住语音触达而不是「克隆试败 → 纯
+    文本」。None/空元组=能力未知，维持纯名单语义（宁可漏收窄不误伤）。
+    """
     if is_chinese_peer_language(peer_language):
         return False
-    return peer_lang_prefix(peer_language) in clone_capable_languages(foreign_cfg)
+    prefix = peer_lang_prefix(peer_language)
+    if prefix not in clone_capable_languages(foreign_cfg):
+        return False
+    if capable_langs:
+        try:
+            capable = {
+                str(x or "").strip().lower().split("-")[0]
+                for x in capable_langs if str(x or "").strip()
+            }
+        except TypeError:
+            return True
+        if capable and prefix not in capable:
+            return False
+    return True
 
 
 def pick_edge_voice(foreign_cfg: Dict[str, Any], peer_language: str) -> str:

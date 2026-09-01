@@ -364,6 +364,30 @@ def register_monetization_routes(app, *, api_auth, config_manager=None) -> None:
         res = rt.feature_check(ck, feature)
         return {"ok": True, **res}
 
+    def _bridge_deal_event(
+        request: Request, contact_key: str, amount, kind: str, item_id: str,
+    ) -> None:
+        """实施92 P0-3：变现入账 → 收件箱成交台账/旅程阶段（best-effort 桥）。
+
+        本生态 contact_key 即统一收件箱会话 id（care/entitlement 同口径）；
+        恰好对得上会话才落账（source=monetize），对不上/任何异常一律静默——
+        桥绝不影响入账主流程，也绝不猜测归属。"""
+        try:
+            ck = str(contact_key or "").strip()
+            store = getattr(request.app.state, "inbox_store", None)
+            if not ck or store is None:
+                return
+            if not store.get_conversation(ck):
+                return
+            from src.inbox.journey_stage import record_deal
+            record_deal(
+                store, ck,
+                amount=float(amount or 0),
+                note=f"{kind}:{item_id}"[:200],
+                recorded_by="monetize", source="monetize")
+        except Exception:
+            logger.debug("monetize→deal 桥失败（已忽略）", exc_info=True)
+
     # ── 运营手动开通 ─────────────────────────────────────────────────────
     @app.post("/api/monetize/grant")
     async def api_monetize_grant(request: Request, _=Depends(api_auth)):
@@ -393,14 +417,19 @@ def register_monetization_routes(app, *, api_auth, config_manager=None) -> None:
             if not ok:
                 return {"ok": False, "reason": "grant_failed",
                         "message": "开通失败（可能 ref 重复或 tier 非法）"}
+            _bridge_deal_event(request, ck, amount, kind, item_id)
             return {"ok": True, "kind": kind, "entitlement": store.get_entitlement(ck)}
         if kind == "unlock":
             newly = store.record_unlock(ck, item_id, source="manual", ref=ref,
                                         amount=amount, now=now)
+            if newly:
+                _bridge_deal_event(request, ck, amount, kind, item_id)
             return {"ok": True, "kind": kind, "newly_unlocked": bool(newly),
                     "entitlement": store.get_entitlement(ck)}
         tx_id = store.record_gift(ck, item_id, amount=amount, source="manual",
                                   ref=ref, now=now)
+        if tx_id:
+            _bridge_deal_event(request, ck, amount, kind, item_id)
         return {"ok": True, "kind": kind, "tx_id": tx_id}
 
     # ── 支付回调桩（外部服务商）──────────────────────────────────────────
@@ -439,16 +468,22 @@ def register_monetization_routes(app, *, api_auth, config_manager=None) -> None:
             ok = store.grant_subscription(
                 ck, item_id, now + days * _DAY, source="webhook",
                 ref=ref, amount=amount, now=now)
+            if ok:
+                _bridge_deal_event(request, ck, amount, kind, item_id)
             return {"ok": True, "applied": bool(ok), "kind": kind, "ref": ref}
         if kind == "unlock":
             # webhook 即使 unlock 已持有，也确保 ref 入账幂等（record_unlock 内已幂等）
             newly = store.record_unlock(ck, item_id, source="webhook", ref=ref,
                                         amount=amount, now=now)
+            if newly:
+                _bridge_deal_event(request, ck, amount, kind, item_id)
             return {"ok": True, "applied": bool(newly), "kind": kind, "ref": ref}
         tx_id = store.record_gift(ck, item_id, amount=amount, source="webhook",
                                   ref=ref, now=now)
         if currency and tx_id is None and ref:
             pass  # 幂等重投
+        if tx_id is not None:
+            _bridge_deal_event(request, ck, amount, kind, item_id)
         return {"ok": True, "applied": tx_id is not None, "kind": kind, "ref": ref}
 
     # ── ④ 支付网关：创建结账 + 服务商专用回调 ─────────────────────────────

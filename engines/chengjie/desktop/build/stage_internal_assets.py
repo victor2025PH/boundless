@@ -82,8 +82,10 @@ ALBUM_EXCLUDES = {"tmp_selfies"}
 # 盘符路径（D:\x / D:/x）；(?!//) 放过 URL 的 scheme://
 _ABS_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?!//)[\\/]")
 _SECRET_RE = re.compile(r"api_key|service_token|auth_token|secret_key|password", re.I)
-# overlay 种子里合法出现的键名（行为开关，不是凭据值）：逐行扫描时先剔除这些行
-_OVERLAY_SECRET_ALLOW = re.compile(r"^\s*api_key:\s*(ollama|local)\s*$")
+# overlay 种子里合法出现的键名（行为开关，不是凭据值）：逐行扫描时先剔除这些行。
+# vllm＝vLLM OpenAI 兼容端点的惯用非空占位（2026-08-29 cloudfirst 拓扑把 173:8001
+# chatx 端点写进内测 overlay 后新增），与 ollama/local 同性质，零凭据含量。
+_OVERLAY_SECRET_ALLOW = re.compile(r"^\s*api_key:\s*(ollama|local|vllm)\s*$")
 
 
 def _copy_tree(src: Path, dst: Path, *, excludes: set[str] | None = None) -> int:

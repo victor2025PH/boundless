@@ -1289,6 +1289,36 @@ function deliverToInbox(js, tries) {
   setTimeout(() => deliverToInbox(js, tries - 1), 250);
 }
 
+// ── 壳内「坐席工作台」路由承接（2026-08-29，与 main.js focusMainInbox 成对）────
+// 后台弹窗/任意壳内页面点「坐席工作台」→ 主进程不再开原生弹窗，转发到这里：
+// 切收件箱标签；?conv=/?focus= 深链复用页面 open-conv postMessage 契约站内开会话
+// （deliverToInbox 自带 ready 轮询——webview 还在登录/启动时深链不丢）。
+// 参数口径与 _win_unique._deepLinkParts 对齐：conv|focus / mid / flag / case。
+function wsDeepLinkParts(url) {
+  try {
+    const u = new URL(String(url || ""), "http://cx.local");
+    const q = u.searchParams;
+    const cid = q.get("conv") || q.get("focus") || "";
+    if (!cid) return null;
+    return { cid, mid: q.get("mid") || "", flag: q.get("flag") || "", caseId: q.get("case") || "" };
+  } catch (e) { return null; }
+}
+try {
+  if (window.shell && typeof window.shell.onOpenWorkspace === "function") {
+    window.shell.onOpenWorkspace((payload) => {
+      try {
+        if (typeof Inbox.activate === "function") Inbox.activate(INBOX_ID);
+        const p = wsDeepLinkParts(payload && payload.url);
+        if (p) {
+          deliverToInbox("window.postMessage(" + JSON.stringify({
+            aitr: "open-conv", cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId,
+          }) + ", location.origin);");
+        }
+      } catch (e) { /* 路由承接异常不伤壳主链 */ }
+    });
+  }
+} catch (e) { /* 桥缺席（极老 preload）＝保持旧行为 */ }
+
 // 账号管理面板（全局，不依赖会话）：👥 切换显隐，首次打开挂 client 触发加载
 function setupAccountsPanel() {
   const toggle = $("cp-accounts-toggle");

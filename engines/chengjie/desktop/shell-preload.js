@@ -152,4 +152,8 @@ contextBridge.exposeInMainWorld("shell", {
   onTitlebarTheme: (cb) => ipcRenderer.on("cx-titlebar-theme", (_e, mode) => { try { cb(mode); } catch (err) { /* 渲染回调异常不断桥 */ } }),
   // 全屏进出回推（P2b）：全屏时原生窗控自动消失，细条同步收起（退出还原）。
   onTitlebarFs: (cb) => ipcRenderer.on("cx-titlebar-fs", (_e, on) => { try { cb(!!on); } catch (err) { /* 渲染回调异常不断桥 */ } }),
+  // ── 坐席工作台唯一容器路由（2026-08-29）────────────────────────────────
+  // 主进程把「打开 /workspace」折进主窗（openBackendPopup 特判聚焦，不再开原生弹窗），
+  // renderer 收到后切收件箱标签并把 ?conv= 深链转成页面 open-conv。
+  onOpenWorkspace: (cb) => ipcRenderer.on("cx-open-workspace", (_e, payload) => { try { cb(payload || {}); } catch (err) { /* 渲染回调异常不断桥 */ } }),
 });

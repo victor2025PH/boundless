@@ -94,6 +94,33 @@ def workflow_tick(
         runner = WorkflowRunner(
             store, contacts_store=contacts, goal_event_hook=goal_hook,
             auto_step_hook=auto_hook)
+        # 实施92 P0-1：回复让路巡检**先于**步骤推进——同 tick 内客户已回的
+        # 会话先暂停/完成，到期步不会抢在让路前发出。计数进心跳快照可观测。
+        try:
+            from src.inbox.workflow_reply_yield import sweep as _ry_sweep
+            ry = _ry_sweep(store, cfg_root, now=n, goal_event_hook=goal_hook)
+            if ry.get("paused") or ry.get("completed"):
+                st_ry = state.setdefault(
+                    "reply_yield", {"paused_total": 0, "completed_total": 0})
+                st_ry["paused_total"] += int(ry.get("paused") or 0)
+                st_ry["completed_total"] += int(ry.get("completed") or 0)
+                st_ry["last_ts"] = n
+        except Exception:
+            logger.debug("reply_yield sweep failed", exc_info=True)
+        # 实施92 P0-2：旅程阶段增量扫描（journey.enabled 关＝纯 dict 读取零开销）
+        _journey_enabled = False
+        try:
+            from src.inbox.journey_stage import (
+                resolve_journey_cfg, scan_and_update,
+            )
+            _journey_enabled = bool(resolve_journey_cfg(cfg_root)["enabled"])
+            trans = scan_and_update(store, cfg_root, state, now=n)
+            if trans:
+                st_j = state.setdefault("journey", {"advanced_total": 0})
+                st_j["advanced_total"] += len(trans)
+                st_j["last_ts"] = n
+        except Exception:
+            logger.debug("journey scan failed", exc_info=True)
         processed = runner.process_due_executions()
         if processed:
             state["processed_total"] += int(processed)
@@ -103,14 +130,15 @@ def workflow_tick(
         if state["auto_start_tick"] >= AUTO_START_EVERY_TICKS:
             state["auto_start_tick"] = 0
             # 每日自动开链预算（inbox.workflows.auto_start.max_per_day，默认 30；
-            # 0=不限）——silence_days 触发面的总闸门
+            # 0=不限）——silence_days / stage_enter 两个触发面共用的总闸门
             try:
                 _as = (((cfg_root or {}).get("inbox") or {})
                        .get("workflows") or {}).get("auto_start") or {}
                 _budget = int(_as.get("max_per_day", 30))
             except Exception:
                 _budget = 30
-            started = runner.auto_start_chains(max_per_day=_budget)
+            started = runner.auto_start_chains(
+                max_per_day=_budget, journey_enabled=_journey_enabled)
             if started:
                 state["auto_started_total"] += int(started)
                 logger.info("[workflow-autorun] 条件自动启动 %d 条工作链",

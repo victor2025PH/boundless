@@ -109,3 +109,14 @@ try {
 } catch (_) {
   try { window.__chatxShellFocus = focusApi; } catch (_) { /* 页面自然降级 */ }
 }
+
+// ── 壳能力标记（2026-08-29，与 popup-preload.js 同名同契约）───────────────────
+// wsRoute＝壳主进程把「打开 /workspace」收敛到主窗收件箱标签。收件箱页自己点到
+// /workspace 链接（会话深链等）时，_win_unique 据此直接 window.open 交主进程，
+// 深链经 open-conv 转回本页站内切会话；旧壳无标记＝维持 BC 探活旧链。
+const capsApi = { wsRoute: true };
+try {
+  contextBridge.exposeInMainWorld("__chatxCaps", capsApi);
+} catch (_) {
+  try { window.__chatxCaps = capsApi; } catch (_) { /* 页面自然降级 */ }
+}

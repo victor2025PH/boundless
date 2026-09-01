@@ -38,6 +38,21 @@ def _looks_transient_fact(text: str) -> bool:
     return bool(_TRANSIENT_FACT_RE.search(text or ""))
 
 
+# #96（0830 Steven 实锤）：称呼/名字类事实判定——无溯源旧条目降权只对这一类
+# 生效（这类条目方向抽反的后果是「拿人设名叫客户」级身份穿帮，其余旧条目
+# 不背这个险）。词表保守：称呼语义的显式标记词，不碰泛泛的「叫」单字
+# （「用户叫外卖」会误伤）。
+_NAME_CLASS_FACT_RE = re.compile(
+    r"(称呼|自称|昵称|名字|叫我|叫她|叫他|叫TA|希望我叫|希望被叫|"
+    r"(?i:call(?:ed)?\s+(?:me|him|her|them)|name\s+is|'s\s+name|nickname))"
+)
+
+
+def _looks_name_class_fact(text: str) -> bool:
+    """内容像称呼/名字类事实（#96 无溯源降权的适用面判定）。"""
+    return bool(_NAME_CLASS_FACT_RE.search(text or ""))
+
+
 def _age_hint_label(age_sec: float) -> str:
     """秒龄 → 粗粒度中文年龄串（N小时/天/周/月）。"""
     if age_sec < 86400:
@@ -1116,7 +1131,7 @@ class EpisodicMemoryStore:
         rows = self._conn.execute(
             """
             SELECT content, embedding, created_at, salience, tier,
-              COALESCE(source, 'user_stated')
+              COALESCE(source, 'user_stated'), COALESCE(source_quote, '')
             FROM episodic_memory WHERE user_id = ?
               AND COALESCE(tier, 'raw') != 'stale'
             ORDER BY created_at DESC LIMIT ?
@@ -1126,7 +1141,8 @@ class EpisodicMemoryStore:
         if not rows:
             return ""
 
-        pairs: List[Tuple[str, Optional[bytes], float, Optional[float], str, str]] = [
+        pairs: List[Tuple[str, Optional[bytes], float, Optional[float], str, str,
+                          str]] = [
             (
                 r[0].strip(),
                 r[1],
@@ -1134,6 +1150,7 @@ class EpisodicMemoryStore:
                 (float(r[3]) if r[3] is not None else None),
                 (str(r[4]) if r[4] else "raw"),
                 (str(r[5]) if r[5] else "user_stated"),
+                (str(r[6]) if len(r) > 6 and r[6] else ""),
             )
             for r in rows if r and r[0]
         ]
@@ -1173,8 +1190,8 @@ class EpisodicMemoryStore:
             except Exception:
                 _rerank = None
 
-        # (text, created_at, tier)——ts/tier 一路带到渲染层供年龄标注
-        contents: List[Tuple[str, float, str]]
+        # (text, created_at, tier, source, source_quote)——一路带到渲染层
+        contents: List[Tuple[str, float, str, str, str]]
         if want_vec:
             vw = max(0.0, min(1.0, float(vector_weight)))
             kw_w = max(0.0, min(1.0, float(keyword_weight)))
@@ -1186,52 +1203,59 @@ class EpisodicMemoryStore:
                 for t, *_ in pairs
             ]
             max_kw = max(kws) if kws else 0.0
-            scored_rows: List[Tuple[float, str, float, str, str]] = []
-            for (t, emb_blob, ts, sal, tier, src), kw in zip(pairs, kws):
+            scored_rows: List[Tuple[float, str, float, str, str, str]] = []
+            for (t, emb_blob, ts, sal, tier, src, quote), kw in zip(pairs, kws):
                 kw_n = (kw / max_kw) if max_kw > 1e-9 else 0.0
                 ev = blob_to_vec(emb_blob)
                 vs = cosine_similarity(query_embedding, ev) if ev else 0.0
                 vs = max(0.0, min(1.0, (vs + 1.0) / 2.0))
                 fusion = vw * vs + kw_w * kw_n
                 final = _rerank(fusion, t, ts, sal, tier) if _rerank else fusion
-                scored_rows.append((final, t, ts, tier, src))
+                scored_rows.append((final, t, ts, tier, src, quote))
             scored_rows.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4]) for x in scored_rows]
+            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored_rows]
         elif want_kw:
-            scored: List[Tuple[float, str, float, str, str]] = []
+            scored: List[Tuple[float, str, float, str, str, str]] = []
             kws2 = [self._keyword_overlap_score(qt, t) for t, *_ in pairs]
             max_kw2 = max(kws2) if kws2 else 0.0
-            for (t, _, ts, sal, tier, src), sc in zip(pairs, kws2):
+            for (t, _, ts, sal, tier, src, quote), sc in zip(pairs, kws2):
                 if _rerank:
                     base = (sc / max_kw2) if max_kw2 > 1e-9 else 0.0
                     final = _rerank(base, t, ts, sal, tier)
                 else:
                     final = sc
-                scored.append((final, t, ts, tier, src))
+                scored.append((final, t, ts, tier, src, quote))
             scored.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4]) for x in scored]
+            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored]
         elif _rerank:
             # 无 query（纯近期）但开了重排：以新鲜度为 base 叠加显著性 + 稳定层加权
             from src.utils.memory_salience import recency_factor as _rf
-            scored3: List[Tuple[float, str, float, str, str]] = []
-            for t, _, ts, sal, tier, src in pairs:
+            scored3: List[Tuple[float, str, float, str, str, str]] = []
+            for t, _, ts, sal, tier, src, quote in pairs:
                 base = _rf(ts, None, recency_half_life_days)
-                scored3.append((_rerank(base, t, ts, sal, tier), t, ts, tier, src))
+                scored3.append(
+                    (_rerank(base, t, ts, sal, tier), t, ts, tier, src, quote))
             scored3.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4]) for x in scored3]
+            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored3]
         else:
-            contents = [(p[0], p[2], p[4], p[5]) for p in pairs]
+            contents = [(p[0], p[2], p[4], p[5], p[6]) for p in pairs]
 
         now_ts = time.time()
         lines: List[str] = []
         total = 0
-        for content, ts, tier, src in contents:
+        for content, ts, tier, src, quote in contents:
             # 五件套·档案>推断（#41/#24 0830）：AI 推断条目在 prompt 里显式
             # 标注——LLM 才知道这条不如档案/用户原话可信，冲突时让位（实锤：
             # 「用户不喜欢被叫 babe」推断压过档案称呼字段在反向教唆）。
             marks: List[str] = []
             if src == "ai_inferred":
                 marks.append("AI推断，可信度低于档案")
+            # #96（0830 Steven 实锤）：无溯源的**称呼/名字类**旧条目降权——
+            # 1.0.63 前存量抽取方向可疑（「用户称呼自己为steven」实为客户在
+            # 称呼助手），又没有原话可对质 → 显式告知 LLM 勿据此称呼对方。
+            # 只标称呼类（其余旧条目风险面不同，全标＝噪声稀释重点）。
+            elif not quote and _looks_name_class_fact(content):
+                marks.append("早期条目无原话溯源，方向存疑，勿据此称呼对方")
             if age_hints and tier != "stable" and ts > 0:
                 age = now_ts - ts
                 need = (_AGE_HINT_TRANSIENT_SEC if _looks_transient_fact(content)

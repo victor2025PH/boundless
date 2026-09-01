@@ -738,7 +738,13 @@ def apply_inbound_enrichments(
     # 承诺不许认领）与 travel（临时行程=当前状态覆盖层，期间按它叙事到期回归）。
     try:
         from src.inbox.self_claims import build_recent_self_statement_hint
-        rs_hint = build_recent_self_statement_hint(list(history or []))
+        # #113：行程清除水位（B 线草稿链在调用前把 conversation_meta 的
+        # travel_cleared_ts 放进 user_context；A 线无 store 接线=0 走旧行为，
+        # 其行程叙事由锚定规则+短窗兜底）。
+        rs_hint = build_recent_self_statement_hint(
+            list(history or []),
+            travel_cleared_ts=float(
+                user_context.get("_travel_cleared_ts") or 0))
         if rs_hint:
             hints.append(rs_hint)
     except Exception:

@@ -253,4 +253,66 @@ def extract_commitments(
     )]
 
 
-__all__ = ["CareCommitment", "extract_commitments"]
+# ── 实施84 P0-3：软承诺层（无时间锚的「下次/等我忙完」）──────────────────────
+# 硬约定层「必须有未来时间锚」的设计让「下次给你看照片」「等我忙完这阵去找你」
+# 这类高价值回访点全部漏网（生产实测 captured_24h=0 的主因之一）。软层默认关
+# （capture_soft.enabled），due=now+N 小时（默认 72h），置信度低一档，捕获侧
+# 另有 per-contact pending 上限防灌。宁缺毋滥：问句不捕、敷衍语不捕、
+# 已有时间锚让位硬约定（防同句双捕）。
+_SOFT_MARKERS = (
+    "下次", "下回", "回头", "改天", "过几天", "过段时间", "过阵子",
+    "等我忙完", "等我回来", "等我下班", "等我考完", "等我搞定", "等忙完",
+    "有空再", "有时间再", "到时候给你", "到时候发你", "回来再",
+)
+# 敷衍/客套语：形似承诺实为收尾，捕它=对客户莫名其妙
+_SOFT_BRUSHOFF = ("下次再说", "改天再说", "回头再说", "下次一定", "再说吧")
+
+
+def extract_soft_commitments(
+    text: str,
+    *,
+    now: Optional[float] = None,
+    due_hours: float = 72.0,
+    max_snippet: int = 160,
+) -> List[CareCommitment]:
+    """无时间锚的软承诺 → 0 或 1 条 CareCommitment（``anchor_text="soft:<词>"``）。
+
+    产出条件（全部满足）：命中软承诺 marker、非问句、非敷衍语、长度 ≥6 字、
+    **句中没有可解析的未来时间锚**（有锚归硬约定层，绝不双捕）。
+    置信度：有主题词 0.65 / 摘要兜底 0.55——由捕获侧按
+    ``capture_soft.min_confidence`` 独立把关，不与硬层阈值混用。
+    """
+    t = (text or "").strip()
+    if len(t) < 6:
+        return []
+    if "？" in t or "?" in t:
+        return []  # 问句多半是在问对方，不是自己的承诺
+    if any(b in t for b in _SOFT_BRUSHOFF):
+        return []
+    marker = next((m for m in _SOFT_MARKERS if m in t), None)
+    if marker is None:
+        return []
+    now_ts = float(now if now is not None else time.time())
+    base = datetime.fromtimestamp(now_ts)
+    if _resolve_event_date(t, base) is not None:
+        return []  # 有时间锚 → 硬约定层已处理
+    topic = _pick_topic(t)
+    if topic:
+        confidence = 0.65
+    else:
+        topic = t[:40].strip()
+        confidence = 0.55
+    due_at = now_ts + max(1.0, float(due_hours)) * 3600.0
+    event_day = _start_of_day(datetime.fromtimestamp(due_at))
+    return [CareCommitment(
+        due_at=due_at,
+        event_at=event_day.timestamp(),
+        topic=topic,
+        sentiment=_sentiment_of(t),
+        anchor_text=f"soft:{marker}",
+        source_text=t[:max_snippet],
+        confidence=confidence,
+    )]
+
+
+__all__ = ["CareCommitment", "extract_commitments", "extract_soft_commitments"]

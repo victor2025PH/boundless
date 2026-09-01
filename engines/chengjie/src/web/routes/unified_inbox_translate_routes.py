@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
 
+from src.ai.translation_engines import HYMT_TARGET_LANGS
 from src.ai.translation_service import normalize_lang
 from src.utils.agent_char_usage import check_request_quota, record_request_chars
 from src.web.web_i18n import tr
@@ -42,7 +43,11 @@ logger = logging.getLogger(__name__)
 # 部署共享一份，语义正确）。键：inbox.agent_lang.{agent_id}；lang="" = 清除。
 # 语种白名单与前端翻译目标集（_XL_TARGETS）同源，防任意串进 KV。
 _AGENT_LANG_KEY = "inbox.agent_lang"
-_AGENT_LANG_ALLOWED = {"zh", "en", "th", "vi", "id", "ja", "ko", "ru", "es", "pt"}
+# 2026-08-29 扩容：zh-tw（繁体）/yue（粤语）中文变体 + tl/ms（引擎早已支持）——
+# 与前端 xlate-out 下拉同步扩；conv-xlate-out（B67 会话级「发→X」事实源）同用本表。
+# 与 Hunyuan-MT 官方 34 码 / 前端 _XL_CATALOG 同一份——入站「我的语言」与
+# 会话级「发→X」白名单不得再各写一份短表（2026-08-30 两向语种对齐）。
+_AGENT_LANG_ALLOWED = set(HYMT_TARGET_LANGS)
 
 
 def _perm_ok(request: Request, perm: str) -> bool:

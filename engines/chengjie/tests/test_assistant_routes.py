@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """AI 助手悬浮球路由门禁（stub 鉴权 / 假 LLM / bug_intake@tmp，零生产依赖）。
 
-覆盖：enabled 闸 / bootstrap 探针 / 问答流（命中→LLM 引用回答；零命中→诚实
-不知道且**不调 LLM**）/ 限频 429 / 报障写 bug_tickets（platform 盖章 + webuser
+覆盖：enabled 闸 / bootstrap 探针 / 问答流（命中→LLM 引用回答标 basis=doc；
+零命中→转产品事实卡/通用知识链，按 GENERAL/NO_BASIS 哨兵标 basis 或诚实拒答
+——2026-08-29 起零命中不再直接拒答，见 test_query_no_hit_falls_through_to_
+product_facts 的原委）/ 限频 429 / 报障写 bug_tickets（platform 盖章 + webuser
 chat_id + 附件 magic bytes 消毒 + 去重并单）/ 我的工单（面板即回访盖 notify_ts
 + 只看自己的）/ 反馈 / health / agent 白名单静态钉 / TG 回访冲刷排除 webuser。
 """
@@ -234,6 +236,7 @@ def test_query_no_hit_sentinel_still_refuses(monkeypatch, tmp_path):
     evs = _stream_events(r)
     done = evs[-1]
     assert done["answered"] is False and done.get("basis") == "none"
+    # 用户看到的是诚实文案，不是哨兵字面量
     assert "NO_BASIS" not in evs[-2]["text"]
     assert log.miss_list(days=1)
     assert stats.dump()["miss"] == 1
@@ -704,6 +707,85 @@ def test_help_kb_anchor_migration_idempotent(monkeypatch, tmp_path):
     kb.upsert_entries([{"id": "old1", "title": "旧条目",
                         "keywords": "旧", "anchor": "#x"}])
     assert kb.search("旧条目", top_k=1)[0]["anchor"] == "#x"
+
+
+# ─────────────────────────────────────── 「常问」面板（实施73 P1-6，08-28）
+def _seed_faq_log(log):
+    """两页各自的高频问答：本页问题必须排在本页组、且不在全站组重复。"""
+    for _ in range(3):
+        log.record(user_id="u", role="agent", page="/workspace",
+                   q="怎么发语音", answered=True, top_score=50.0)
+    for _ in range(5):
+        log.record(user_id="u", role="agent", page="/ops-overview",
+                   q="怎么看今天的回复量", answered=True, top_score=50.0)
+    # 未答的不该进「常问」——常问是「问了有答案」的清单
+    log.record(user_id="u", role="agent", page="/workspace",
+               q="能不能自动打电话", answered=False)
+
+
+def test_faq_top_groups_page_first_and_no_duplicates(monkeypatch, tmp_path):
+    app, _ai, log, *_ = _mk_app(monkeypatch, tmp_path)
+    _seed_faq_log(log)
+    c = _client(app)
+    j = c.get("/api/assistant/faq", params={"page": "/workspace"}).json()
+    assert j["ok"] and j["mode"] == "top"
+    assert [x["q"] for x in j["page_items"]] == ["怎么发语音"]
+    assert j["page_items"][0]["n"] == 3
+    g = [x["q"] for x in j["global_items"]]
+    assert "怎么看今天的回复量" in g
+    # 本页组已出现过的不得在全站组重复占位（两组互斥是分组展示的前提）
+    assert "怎么发语音" not in g
+    # 未答问题不进常问
+    assert all("自动打电话" not in x for x in g + [i["q"] for i in j["page_items"]])
+
+
+def test_faq_scope_filters_groups(monkeypatch, tmp_path):
+    app, _ai, log, *_ = _mk_app(monkeypatch, tmp_path)
+    _seed_faq_log(log)
+    c = _client(app)
+    only_page = c.get("/api/assistant/faq",
+                      params={"page": "/workspace", "scope": "page"}).json()
+    assert only_page["page_items"] and only_page["global_items"] == []
+    only_global = c.get("/api/assistant/faq",
+                        params={"page": "/workspace", "scope": "global"}).json()
+    assert only_global["global_items"] and only_global["page_items"] == []
+
+
+def test_faq_search_reuses_help_kb(monkeypatch, tmp_path):
+    """搜索必须走问答链同一套检索栈——搜得到的就是答得出的。"""
+    app, *_ = _mk_app(monkeypatch, tmp_path)
+    c = _client(app)
+    j = c.get("/api/assistant/faq", params={"q": "语音"}).json()
+    assert j["ok"] and j["mode"] == "search"
+    assert any("语音" in x["title"] for x in j["items"])
+
+
+def test_faq_empty_falls_back_to_howto_seed(monkeypatch, tmp_path):
+    """新装机 qa_log 必然为空：给入门问题集而不是一个空面板。"""
+    app, *_ = _mk_app(monkeypatch, tmp_path)
+    c = _client(app)
+    j = c.get("/api/assistant/faq").json()
+    assert j["page_items"] == [] and j["global_items"] == []
+    assert len(j["seed_items"]) >= 3
+    assert all(x["q"] for x in j["seed_items"])
+
+
+def test_faq_respects_enabled_gate(monkeypatch, tmp_path):
+    app, *_ = _mk_app(monkeypatch, tmp_path, enabled=False)
+    assert _client(app).get("/api/assistant/faq").status_code == 403
+
+
+def test_top_questions_stays_flat_list_for_chips(monkeypatch, tmp_path):
+    """bootstrap 的 chips 仍要 list[str]——分组抽取不得改老调用方的契约。"""
+    from src.assistant.qa_log import AssistantQALog
+
+    log = AssistantQALog(tmp_path / "qa.db")
+    _seed_faq_log(log)
+    out = log.top_questions(days=14, limit=5, page="/workspace")
+    assert isinstance(out, list) and all(isinstance(x, str) for x in out)
+    assert out[0] == "怎么发语音"          # 本页优先
+    assert "怎么看今天的回复量" in out      # 全局补位
+    assert len(out) == len(set(out))        # 不重复
 
 
 if __name__ == "__main__":

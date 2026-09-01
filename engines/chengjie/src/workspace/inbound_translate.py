@@ -30,6 +30,25 @@ P0-3 默认翻转（B8）：``enabled`` 未显式配置时不再硬编码 False�
 - **写库主键修正**：live 聚合路径的消息 message_id 是裸平台 id，与 store 主键
   （``cid:pid``/``cid:h:hash``）不匹配 → 译文写库静默 no-op、下次重译。现经 overlay
   查行时把真实 store 主键随消息携带（``_store_mid``），首开会话的译文也能持久化。
+
+2026-08-28 修复「/thread 每次 5.7 秒」（health_report 每日告警的根因，实例 zhiliao
+把主翻译引擎从局域网 MT 切成云端 LLM 之后暴露）——三条不变量，改本模块前先读：
+
+- **同步单条超时不得大于同步预算**（``_SYNC_PER_MSG_TIMEOUT <= _SYNC_BUDGET_SEC``）：
+  预算只在「开始下一条之前」检查，单条超时比预算大多少，/thread 就能被单独一条
+  拖过预算多少。旧值 5.0s vs 预算 2.5s ⇒ 一条慢消息即可把响应顶到外层 6s 硬超时的
+  边上。实测：云端引擎译一条 286 字消息要 8.5s，**必然**吃满同步超时。
+- **同步超时 ≠ 翻译失败**：超时只说明「这条在响应路径里来不及」，必须转后台
+  （``_BG_PER_MSG_TIMEOUT`` 30s）走完整条引擎链。此前 ``deferred`` 从 break 位置
+  切片，**恰好把刚失败的那条漏在外面** → 它永远只能在同步通道里重试、永远超时，
+  每 ``_FAILED_TTL_SEC`` 复发一次，直到有更新的候选把它挤到后台才被译出。
+  引擎明确报错（非超时）仍只记负缓存不转后台——那是「引擎说不行」，立刻重试是浪费。
+  同步超时因此**不计入按日漏斗的 failed**（最终成败由后台侧自行落账），否则看板会
+  把「已转后台、后台译成了」的消息长期记成失败。
+- **机器人会话不进翻译链**：自建播报/通知 bot 发的是本方系统文案，翻译无收益，且
+  正是上面那条 8.5s 慢消息的来源（运维播报里混着拉丁串，语种检测会把中文播报判成
+  en）。判定复用 ``peer_bot_guard.conversation_row_is_bot``（全仓 bot 口径单一事实
+  源，触达统计剔除与之矩阵全等）；已有译文仍经 store overlay 正常展示。
 """
 
 from __future__ import annotations
@@ -51,15 +70,18 @@ _DEFAULT_CFG: Dict[str, Any] = {
     "max_per_thread": 5,      # 单次打开会话最多翻译条数（控成本，B9 收紧 8→5）
     "max_chars": 400,         # 超长消息跳过
     "style": "chat",
+    "skip_bot_peers": True,   # 机器人对端（自建播报/通知 bot）不进翻译链
 }
 
 # 同步预算：/thread 响应路径最多同步译几条 / 多久，其余转后台（见模块 docstring）。
 _SYNC_MAX_MSGS = 2
 _SYNC_BUDGET_SEC = 2.5
-# 单条超时：同步侧 5s（引擎挂死时确保在外层 6s 兜底前返回并**留下负缓存**——否则被
-# 外层 cancel 什么都不留，下次打开重蹈覆辙）；后台侧 30s（不拖响应，给慢引擎全额机会，
-# 但防挂死引擎把会话级 in-flight 锁永久占住）。
-_SYNC_PER_MSG_TIMEOUT = 5.0
+# 单条超时：同步侧必须 **<= 预算**（预算只在开始下一条前检查，单条超得越多、/thread
+# 被单条拖得越久；旧值 5.0 让预算名存实亡）。超时的那条转后台：30s 足够等云端 LLM
+# 出结果（实测译一条 286 字消息 8.5s），主引擎真失败时还能走完 order 里的兜底引擎
+# ——这两段同步路径都等不起。仍远小于 /thread 外层 6s 兜底 → 超时能自己返回并
+# **留下负缓存**，不被外层 cancel（否则什么都不留，下次打开重蹈覆辙）。
+_SYNC_PER_MSG_TIMEOUT = 2.5
 _BG_PER_MSG_TIMEOUT = 30.0
 
 # 失败负缓存：{message_id: 失败时刻}。TTL 内不重试，防「引擎宕机 × 5s 轮询」反复打满超时。
@@ -103,6 +125,8 @@ def parse_auto_translate_cfg(config_manager) -> Dict[str, Any]:
                     cfg[k] = int(raw[k])
             if raw.get("style"):
                 cfg["style"] = str(raw["style"])
+            if raw.get("skip_bot_peers") is not None:
+                cfg["skip_bot_peers"] = bool(raw["skip_bot_peers"])
     except Exception:
         logger.debug("parse auto_translate_inbound 失败，回落默认（未配置态）", exc_info=True)
     cfg["max_per_thread"] = max(1, min(30, int(cfg.get("max_per_thread") or 5)))
@@ -129,6 +153,41 @@ def _engines_available(translation_svc: Optional[TranslationService]) -> bool:
         return bool(router is not None and router.any_available())
     except Exception:
         return False
+
+
+def _peer_is_bot(store, conversation_id: str) -> bool:
+    """会话对端是否机器人。
+
+    判定**复用** ``peer_bot_guard.conversation_row_is_bot``——那是全仓 bot 口径的
+    单一事实源（持久列 > 运营覆写 -1 > Tier0 行级信号），且与触达统计剔除用的
+    ``_NOT_BOT_PEER_SQL`` 由门禁钉成矩阵全等。这里绝不另写一套判定，否则「哪些
+    会话算 bot」会长出第三种答案。
+
+    取不到一律 False：宁可多译一条，也不因读库抖动把真客户的会话静默排除在翻译外。
+    """
+    if store is None or not conversation_id:
+        return False
+    try:
+        conv = store.get_conversation(conversation_id)
+    except Exception:
+        logger.debug("读会话行失败（按非 bot 处理）", exc_info=True)
+        return False
+    if not conv:
+        return False
+    try:
+        from src.inbox.peer_bot_guard import conversation_row_is_bot
+        return bool(conversation_row_is_bot(conv))
+    except Exception:
+        logger.debug("bot 判定失败（按非 bot 处理）", exc_info=True)
+        return False
+
+
+def _strip_internal(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """剥除内部标注，不泄漏进 API 响应（后台任务已单独持有 mids，不受影响）。"""
+    for m in messages:
+        m.pop("_store_mid", None)
+        m.pop("_xlate_attempted", None)
+    return messages
 
 
 def _lang_matches(src: str, cfg: Dict[str, Any]) -> bool:
@@ -249,16 +308,18 @@ async def _translate_one(
     mid: str,
     target: str,
     style: str,
-    timeout: float = _SYNC_PER_MSG_TIMEOUT,
+    timeout: float,
 ) -> Tuple[str, Optional[Any]]:
     """译一条消息并回写库（``mid``＝store 真实主键，由调用方显式传入——后台任务
     运行时消息 dict 上的内部标注可能已被主流程剥除，不能再从 dict 反查）。
 
-    返回 (outcome, result)，outcome ∈ ok/noop/fail：
+    返回 (outcome, result)，outcome ∈ ok/noop/fail/timeout：
     - ok：产出有效译文（≠原文），挂到消息 + 写库；
     - noop：引擎处理成功但产出==原文（emoji/人名/不可译）——写「已处理」标记
       （translated_text=原文 + target_lang），下次不再重译；
-    - fail：异常/超时/引擎全败/空产出——记失败负缓存，TTL 内不重试。
+    - fail：异常/引擎全败/空产出——引擎明确说不行，记负缓存，TTL 内不重试；
+    - timeout：**只是这次没等到**，不代表译不出来。调用方据此决定是否换更长预算的
+      通道重试（同步侧转后台）；同样记负缓存，防同步路径被轮询反复打满。
     """
     # P0 2026-08-19：媒体消息只译客户 caption——「[图片内容] …」识别描述是系统自产
     # 内容（已是坐席服务语言），送引擎只会把碎片 OCR 再造伪句并**持久化落库**。
@@ -276,7 +337,7 @@ async def _translate_one(
         # 单条超时自己兜住并记负缓存——若等外层 /thread 6s 硬超时来掐，整个 enrich 被
         # cancel、什么都不留，下次打开同一条又卡满（修复前的死循环模式）。
         _mark_failed(mid)
-        return "fail", None
+        return "timeout", None
     except Exception:
         _mark_failed(mid)
         return "fail", None
@@ -405,8 +466,8 @@ def _spawn_bg_translate(
                     by_lang[src] = by_lang.get(src, 0) + 1
                 elif outcome == "noop":
                     n_noop += 1
-                elif outcome == "fail":
-                    n_fail += 1
+                else:
+                    n_fail += 1   # fail 与 timeout：后台是最后一程，都算真失败
             _record_funnel(store, n_ok, n_fail, by_lang, noop=n_noop)
         except Exception:
             logger.debug("后台补译任务异常（已忽略）", exc_info=True)
@@ -430,8 +491,9 @@ async def enrich_inbound_translations(
     """为入站消息补充译文。返回 (messages, stats)。
 
     stats：``from_store``（overlay 命中）/``translated``（本次同步新译）/``noop``
-    （产出==原文，已打标）/``failed``/``skipped``/``deferred``（交后台补译条数——
-    前端轮询下一拍经 store overlay 取回）。
+    （产出==原文，已打标）/``failed``（引擎明确报错）/``sync_timeout``（同步没等到、
+    已转后台）/``skipped``/``deferred``（交后台补译条数——前端轮询下一拍经 store
+    overlay 取回）/``bot_peer``（机器人会话，整条翻译链跳过）。
     """
     cfg = parse_auto_translate_cfg(config_manager)
     if translation_svc is None:
@@ -447,7 +509,9 @@ async def enrich_inbound_translations(
         "noop": 0,
         "skipped": 0,
         "failed": 0,
+        "sync_timeout": 0,
         "deferred": 0,
+        "bot_peer": False,
     }
     if not enabled or not messages:
         return messages, stats
@@ -460,6 +524,12 @@ async def enrich_inbound_translations(
             stats["from_store"] = _overlay_store_translations(messages, rows, target)
         except Exception:
             logger.debug("overlay store translations 失败", exc_info=True)
+
+    # 机器人对端（自建播报/通知 bot）：本方系统文案，翻译无收益且拖慢 /thread。
+    # 放在 overlay **之后**——历史上已译出的行仍要正常显示，只是不再产生新翻译。
+    if cfg.get("skip_bot_peers") and _peer_is_bot(store, conversation_id):
+        stats["bot_peer"] = True
+        return _strip_internal(messages), stats
 
     # 只处理最近的入站、未译、需译消息
     candidates: List[Dict[str, Any]] = []
@@ -501,6 +571,7 @@ async def enrich_inbound_translations(
     st = _stats()
     by_src_lang: Dict[str, int] = {}  # P3：新译出消息的客户来源语言分布（喂跨语言总览）
     deferred: List[Dict[str, Any]] = []
+    timed_out: List[Dict[str, Any]] = []   # 同步没等到 → 交后台的 30s 通道重试
     t0 = time.monotonic()
     for i, m in enumerate(candidates):
         if i >= _SYNC_MAX_MSGS or (time.monotonic() - t0) > _SYNC_BUDGET_SEC:
@@ -510,6 +581,7 @@ async def enrich_inbound_translations(
             store, translation_svc, conversation_id, m,
             mid=_persist_mid(conversation_id, m), target=target,
             style=str(cfg.get("style") or "chat"),
+            timeout=_SYNC_PER_MSG_TIMEOUT,
         )
         if st:
             st.record_sync(outcome)
@@ -519,26 +591,30 @@ async def enrich_inbound_translations(
             by_src_lang[src] = by_src_lang.get(src, 0) + 1
         elif outcome == "noop":
             stats["noop"] += 1
+        elif outcome == "timeout":
+            # 同步预算太短而已，不是译不出来——必须进后台，否则这条永远只在同步通道
+            # 里重试、永远超时（旧实现把它漏在 candidates[i:] 切片之外）。
+            stats["sync_timeout"] += 1
+            timed_out.append(m)
         else:
             stats["failed"] += 1
 
-    if deferred and store is not None and conversation_id:
+    # 后台一批 = 同步超时的（新→旧）+ 预算外的剩余候选，顺序与候选序一致
+    bg_batch = timed_out + deferred
+    if bg_batch and store is not None and conversation_id:
         if _spawn_bg_translate(
-            store, translation_svc, conversation_id, deferred,
+            store, translation_svc, conversation_id, bg_batch,
             target=target, style=str(cfg.get("style") or "chat"),
         ):
-            stats["deferred"] = len(deferred)
+            stats["deferred"] = len(bg_batch)
             if st:
-                st.record_deferred(len(deferred))
+                st.record_deferred(len(bg_batch))
 
     # P3：把本次「新译出 + 失败 + 打标 + 转后台」按日累计进入站漏斗
     # （命中缓存的 from_store 不计，避免重开重复；后台侧完成量由后台任务自行落账）。
+    # 同步超时**不进 failed**：它已转后台，最终成败由后台落账；计进来会让看板把
+    # 「后台译成了的消息」长期记成失败（2026-08-28 实录：失败 7 全是这类）。
     _record_funnel(store, stats["translated"], stats["failed"], by_src_lang,
                    noop=stats["noop"], deferred=stats["deferred"])
 
-    # 剥除内部标注，不泄漏进 API 响应（后台任务已单独持有 mids，不受影响）
-    for m in messages:
-        m.pop("_store_mid", None)
-        m.pop("_xlate_attempted", None)
-
-    return messages, stats
+    return _strip_internal(messages), stats

@@ -5,7 +5,10 @@
 ffmpeg/ffprobe/PIL 任一缺失只是拿不到该项元数据（返回 ``None``/``False``），
 绝不阻塞上传（上传成功与否只取决于扩展名白名单 + 体积，见 ``persona_media_routes``）。
 
-与 ``src/client/voice_sender.py`` 的 ffprobe 探测同型（``shutil.which`` 守卫 + subprocess 超时）。
+二进制解析走 ``src/utils/ffmpeg_resolver``（#101 事故沉淀，2026-08-31）：客户桌面包的
+ffmpeg/ffprobe 在 ``resources/ffmpeg/``、**不在 PATH**，旧的裸 ``shutil.which`` 在打包态
+永远探不到——LINE 出站语音时长恒 0（对方端显示 0:00）与相册视频探测全灭都是它。
+resolver 兜底仍回落 PATH，内部部署/开发机行为不变。
 """
 from __future__ import annotations
 
@@ -19,17 +22,39 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+def _ffmpeg_exe() -> Optional[str]:
+    """ffmpeg 可执行路径：打包布局（resources/ffmpeg/）优先，回落 PATH。"""
+    try:
+        from src.utils.ffmpeg_resolver import ffmpeg_path
+        return ffmpeg_path()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def _ffprobe_exe() -> Optional[str]:
+    try:
+        from src.utils.ffmpeg_resolver import ffprobe_path
+        return ffprobe_path()
+    except Exception:
+        return shutil.which("ffprobe")
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _ffmpeg_exe() is not None
 
 
 def ffprobe_available() -> bool:
-    return shutil.which("ffprobe") is not None
+    return _ffprobe_exe() is not None
 
 
 def probe_video(path: str) -> Optional[Dict[str, int]]:
-    """探测视频 ``{duration_ms, width, height}``。ffprobe 缺失/失败/无效返回 ``None``。"""
-    if not ffprobe_available():
+    """探测视频 ``{duration_ms, width, height}``。ffprobe 缺失/失败/无效返回 ``None``。
+
+    对纯音频文件同样可用：``format=duration`` 是容器级字段，不依赖视频流
+    （``streams`` 会是空、宽高回 0）——LINE 语音时长兜底链依赖这一点。
+    """
+    _probe = _ffprobe_exe()
+    if _probe is None:
         return None
     p = Path(path)
     if not p.is_file():
@@ -37,7 +62,7 @@ def probe_video(path: str) -> Optional[Dict[str, int]]:
     try:
         r = subprocess.run(
             [
-                "ffprobe", "-v", "error",
+                _probe, "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=width,height:format=duration",
                 "-of", "json", str(p),
@@ -76,7 +101,8 @@ def make_video_thumbnail(
 
     ``at_sec`` 落在视频时长之外时 ffmpeg 会抽不到帧 → 调用方宜按已探的时长夹取一个安全时间点。
     """
-    if not ffmpeg_available():
+    _ff = _ffmpeg_exe()
+    if _ff is None:
         return False
     src = Path(video_path)
     if not src.is_file():
@@ -85,7 +111,7 @@ def make_video_thumbnail(
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(
             [
-                "ffmpeg", "-y", "-ss", f"{max(0.0, float(at_sec)):.3f}",
+                _ff, "-y", "-ss", f"{max(0.0, float(at_sec)):.3f}",
                 "-i", str(src), "-frames:v", "1",
                 "-vf", f"scale={int(width)}:-1",
                 "-q:v", "3", str(out_path),
@@ -112,7 +138,41 @@ def probe_image(path: str) -> Optional[Dict[str, int]]:
         return None
 
 
+def make_photo_thumbnail(
+    src_path: str, out_path: str, *, max_px: int = 480,
+) -> bool:
+    """照片缩略图（长边缩到 ``max_px``，WebP q80）。PIL 缺失/失败返回 ``False``。
+
+    实施90：相册网格此前照片直载原图（最大 10MB/张 ×几十张进 480px 窄壳＝灰块
+    一片），视频早有抽帧封面而照片没有——补齐同款。``exif_transpose`` 兜底存量
+    未剥 EXIF 的原图（方向位不转，缩略图会横躺）。动图（gif）取首帧静态封面。
+    """
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+    except Exception:
+        return False
+    src = Path(src_path)
+    if not src.is_file():
+        return False
+    try:
+        with Image.open(src) as im:
+            im.seek(0)
+            try:
+                im = ImageOps.exif_transpose(im)
+            except Exception:
+                pass
+            im = im.convert("RGB")
+            im.thumbnail((int(max_px), int(max_px)), Image.LANCZOS)
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            im.save(str(out_path), "WEBP", quality=80, method=4)
+        return Path(out_path).is_file() and Path(out_path).stat().st_size > 0
+    except Exception:
+        logger.debug("[media_probe] 照片缩略图失败（已忽略）", exc_info=True)
+        return False
+
+
 __all__ = [
     "ffmpeg_available", "ffprobe_available",
     "probe_video", "make_video_thumbnail", "probe_image",
+    "make_photo_thumbnail",
 ]

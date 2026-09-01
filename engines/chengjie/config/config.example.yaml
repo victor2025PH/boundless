@@ -1607,6 +1607,23 @@ ai:
   #       base_url: https://open.bigmodel.cn/api/paas/v4
   #       model: glm-4-flash
 
+  # ── 多模型路由（像 Cursor 按任务挑模型；可选，默认空=不启用，行为不变）──────────
+  # 与 key_pool（主 key 失效才顶班）正交：这里**主动按任务/调用方挑模型或端点**。
+  #   models：命名模型档，每档 = 一个独立 OpenAI 兼容端点（本地 vLLM/Ollama 或任意云）。
+  #           base_url/model 必填；api_key 空则复用上面的 ai.api_key（本地端点可不填）。
+  #   task_routes：任务名 → 档名。命中即用该档跑「主尝试」；该档不在线/失败仍回落
+  #           备用池 → 本地兜底 → canned（与主链同一条降级链，绝不因路由丢话）。
+  #   已认任务名：assistant_planner（小智「替我做」规划）/ assistant_qa（小智问答）/
+  #           computer_use（电脑操控 VLM）/ chat（默认对话；不配=用 ai.model）。
+  # models:
+  #   planner_local: { base_url: http://192.168.0.173:8001, model: chatx }
+  #   qa_cheap:      { base_url: https://api.deepseek.com,   model: deepseek-v4-flash }
+  #   cu_vlm:        { base_url: http://192.168.0.176:11434, model: qwen3-vl:8b-instruct }
+  # task_routes:
+  #   assistant_planner: planner_local
+  #   assistant_qa:      qa_cheap
+  #   computer_use:      cu_vlm
+
   # 系统提示词
   system_prompt: |
     你是智能助手小灵，为用户提供友好、专业的客服服务。
@@ -3085,11 +3102,33 @@ inbox:
     # 引擎」一键开启（自动接好两条种子链 + 回填存量会话阶段）。
     journey:
       enabled: false
+      # 实施93 旅程风味：sales=报价→成交（价格关键词推导 quoting）；
+      # guide=引导→转化（把用户引到网站/落地页/APP：quoting 位=已引导，由
+      # CTA 铸链事件驱动；deal 位=已转化，由短链点击/webhook/人工标记驱动；
+      # 关键词推导停用）。阶段内部 id 不变，标签随风味换文案。
+      flavor: sales
       nurturing_min_days: 2
       nurturing_min_msgs: 6
       quote_lookback_days: 14
       # quote_keywords: ["报价", "价格", "多少钱", ...]   # 缺省保守词表，可按行业覆写
       scan_limit: 120
+
+  # ── 实施93 CTA 追踪短链（引导转化的事实源）──────────────────────────────
+  # 运营在 /workflows 页「转化目标」卡维护目标（网站/落地页/APP/群）；链话术步
+  # 选了目标后发送时自动带该客户专属短链 {public_base}/r/{token}；点击 302 到
+  # 目标（可附 utm_source=chat&utm_content=token）+ 旅程自动推进「已转化」。
+  # public_base 必须公网可达（把你的网站域名反代 /r/* 到本引擎）；未配置时
+  # 铸链接口如实拒绝——绝不把内网地址发给客户。
+  cta:
+    public_base: ""          # 例：https://www.example.com（勿带末尾斜杠）
+    utm_source: chat
+    # 93b 深转化回传（可选）：落地页/网站服务端在注册/下单后回传
+    #   POST {public_base 反代到本引擎}/api/cta/convert
+    #   头 X-CTA-Secret: <webhook_secret>
+    #   body {token 或 conversation_id, kind: signup|order|…, amount?, currency?, ref}
+    # amount>0 记营收台账并推进成交阶段；ref 幂等防服务商重推重复记账。
+    # 留空＝回传端点整体拒绝（不配即不暴露）。
+    webhook_secret: ""
 
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
   # ⭐ 对方机器人守卫：识别「聊天对方是 bot / 自动应答」并停掉 AI 自动回复，
@@ -4781,6 +4820,20 @@ assistant:
                                # 列的机器小智永远碰不到）。示例：
                                # - {id: zhuji, base_url: "http://127.0.0.1:18760", label: "主机"}
                                # - {id: kouxing, base_url: "http://192.168.0.198:18760", label: "视觉机"}
+    trust:                     # 信任档（实施91 P2-C）：某机在计时窗内免确认连跑。
+      enabled: false           # 默认关。开后可对某机授信（POST /api/assistant/pc/
+                               # trust），窗口内 L2 动作免确认直执行。⚠ 即便受信，
+                               # run_command 等 always_confirm 动作**永远弹确认卡**；
+                               # runner 侧 kill-switch/PC_RUNNER_ACTIONS/白名单照常拦。
+      default_ttl_sec: 1800    # 授信默认时长（30min）；不传 ttl 时用它。
+      max_ttl_sec: 28800       # 授信上限（8h），路由按此夹紧。
+    vision:                    # 视觉定位点击（实施91 P3-B）：控件无可用结构（画布/
+      enabled: false           # 自绘）时，按自然语言描述点——服务端截图经 Qwen3-VL
+                               # grounding 换出坐标（[0,1000] 归一化，探针实测；坐标
+                               # 服务端导出**非 LLM 生成**）→ click_point，runner 侧
+                               # _point_in_screen 越界兜底。默认关；开前先真截图复核
+                               # 命中率（tools/pc_vision_probe）。走 vision.base_urls
+                               # 同一 VLM，无需额外端点配置。仍是 L2 确认卡动作。
   report:
     enabled: true              # 报障通道（随总闸）
     max_shot_kb: 2048          # 截图附件上限（PNG/JPEG，magic bytes 校验）

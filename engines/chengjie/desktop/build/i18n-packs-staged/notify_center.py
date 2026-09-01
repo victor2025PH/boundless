@@ -19,6 +19,10 @@ ZH = {
     "ntf.rc_notif": "系统完成了一次维护，预热约 {n} 分钟，期间偶发加载慢属正常。",
     "ntf.ai_capsule": "AI 备用通道顶班中",
     "ntf.ai_recovered": "云端 AI 已恢复，回复速度回到正常。",
+    # P1-batch2（2026-08-27）：消息中心「进行中」置顶分组（胶囊明细面）
+    "ntf.ongoing_hdr": "进行中",
+    # batch3：通道离线重登等待卡（原横幅按钮上的逐秒计时改为一次性等待卡）
+    "ntf.chan_relogin_wait": "已请求重新登录，正在联系服务器…（最长约 1 分钟，结果会在右下角提示）",
 }
 
 EN = {
@@ -29,4 +33,6 @@ EN = {
     "ntf.rc_notif": "A maintenance restart just completed; warming up for about {n} min. Occasional slow loads are normal.",
     "ntf.ai_capsule": "AI running on backup channel",
     "ntf.ai_recovered": "Cloud AI has recovered — reply speed is back to normal.",
+    "ntf.ongoing_hdr": "Ongoing",
+    "ntf.chan_relogin_wait": "Re-login requested — contacting the server… (up to ~1 min; the result will appear at the bottom right)",
 }

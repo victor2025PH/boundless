@@ -552,6 +552,46 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
         except Exception as e:  # noqa: BLE001
             ck.skip("窄屏档", f"环境异常：{str(e)[:80]}")
 
+        # ── 9. 低窗高档（1280×540）：#75 二轮回归钉 ─────────────────────
+        # 隐式 grid 行轨 auto 时，nav-rail 的最小贡献（图标堆叠高）会把整行撑破
+        # 容器高 → 三列面板全探出视口底、conv-items 自以为无可滚（滑块占满全轨）
+        # 而列表底被裁。修复=行轨 minmax(0,1fr) + rail y 向可滚。此档钉住：
+        # 面板绝不越过视口底 + 列表真实可滚到底。
+        print("== 9. 低窗高档（1280x540）：面板不越底 / 列表可滚到底 ==")
+        try:
+            lctx = browser.new_context(viewport={"width": 1280, "height": 540})
+            lctx.request.post(base + "/login", form={"auth_token": token})
+            lpg = lctx.new_page()
+            lpg.goto(base + "/workspace", wait_until="domcontentloaded")
+            lpg.wait_for_function("() => typeof window.setPlatFilter === 'function'",
+                                  timeout=20000)
+            lpg.wait_for_timeout(3000)
+            low = lpg.evaluate("""() => {
+              const vh = window.innerHeight;
+              const panel = document.querySelector('.conv-list-panel');
+              const items = document.getElementById('conv-items');
+              const out = {vh: vh};
+              if (panel) out.panel_over = Math.round(panel.getBoundingClientRect().bottom - vh);
+              if (items) {
+                items.scrollTop = items.scrollHeight;
+                out.scrollable = items.scrollHeight > items.clientHeight + 40;
+                out.reach = Math.abs(items.scrollTop + items.clientHeight - items.scrollHeight) < 3;
+                items.scrollTop = 0;
+              }
+              return out;
+            }""")
+            ck.check("低窗高：会话列表面板不越过视口底",
+                     low.get("panel_over") is not None and low["panel_over"] <= 2,
+                     f"panel_over={low.get('panel_over')}px（>0=面板底探出视口）")
+            if not low.get("scrollable"):
+                ck.skip("低窗高：列表滚到底", "会话不足，列表本就不可滚")
+            else:
+                ck.check("低窗高：列表拖/滚可到底（scrollTop 不被夹）",
+                         low.get("reach") is True, f"reach={low.get('reach')}")
+            lctx.close()
+        except Exception as e:  # noqa: BLE001
+            ck.skip("低窗高档", f"环境异常：{str(e)[:80]}")
+
         browser.close()
     if baseline:
         print("\n== baseline 模式：仅打印实测值，未断言高度预算 ==")

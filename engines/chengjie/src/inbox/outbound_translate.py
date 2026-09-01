@@ -33,7 +33,14 @@ _SKIP_TARGETS = {"", "unknown", "und", "auto"}
 # （汉字 4 < 拉丁 6）→「已是客户语言」跳过翻译 → 中文原样发给英文客户。
 # 「文本里有没有 CJK」是确定性信号，不受检测器计票规则影响，作为跳过护栏的硬否决。
 _CJK_TEXT_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]")
-_CJK_LANGS = {"zh", "ja", "ko"}
+# yue/zh-tw 是一等 CJK 目标语（2026-08-29）：normalize_target 对中文变体不再折叠，
+# 漏加会让「CJK 文本 → 粤语/繁体」被 lang_gate/voice_peer_lang_conflict 误判成
+# 「中文发非 CJK 客户」而 409 拦截。
+_CJK_LANGS = {"zh", "zh-tw", "ja", "ko", "yue"}
+
+# 中文变体家族（互译时译文==原文仍可读，见 translate_outbound_text 的豁免注释）。
+# 刻意不含 ja/ko：日/韩目标原样回吐＝没翻，客户读不懂，照 HOLD。
+_ZH_FAMILY_TARGETS = {"zh", "zh-tw", "yue"}
 
 
 def contains_cjk(text: str) -> bool:
@@ -98,11 +105,19 @@ def parse_outbound_translate_cfg(config: Any) -> Dict[str, Any]:
     }
 
 
+# 繁体变体保留语义（不折叠成 zh）：否则 should_translate 里 zh→zh-tw 恒判同语跳过，
+# autosend 链的简→繁翻译永远不会发生。zh-hk/zh-hant 归一到 zh-tw（与
+# translation_service.normalize_lang 同口径）。
+_ZH_VARIANTS = {"zh-tw", "zh-hk", "zh-hant"}
+
+
 def normalize_target(lang: str) -> str:
-    """归一化语言码：zh-CN → zh；空/未知/auto → ""（表示「不可作为目标」）。"""
+    """归一化语言码：zh-CN → zh、zh-HK/zh-Hant → zh-tw；空/未知/auto → ""。"""
     low = str(lang or "").strip().lower()
     if low in _SKIP_TARGETS:
         return ""
+    if low in _ZH_VARIANTS:
+        return "zh-tw"
     return low.split("-")[0]
 
 
@@ -358,6 +373,56 @@ _TRANSLATABLE_RE = re.compile(
     r"\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u3040-\u30FF"
     r"\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]")
 
+# ── 实施93b：URL 保护（翻译前掩码 / 译后还原） ────────────────────────────
+# 动机：CTA 追踪短链（/r/{token}）随自动跟进追加进待译文本后，翻译引擎
+# （尤其 LLM 系）可能改写/转写/吞掉 URL——链接错一个字符就是死链，整条
+# 引导白发。占位 token 选 [[[L0]]] 形态：纯 ASCII 大写+三重方括号，NMT 与
+# LLM 引擎实测几乎必然原样保留，且不会与自然语言/markdown 撞形。
+_URL_RE = re.compile(r"https?://[^\s<>\"'）】\]]+", re.IGNORECASE)
+_URL_TOKEN_RE = re.compile(r"\[\[\[L(\d{1,2})\]\]\]")
+
+
+def _protect_urls(text: str) -> Dict[str, Any]:
+    """把文本中的 URL 替换为 [[[Ln]]] 占位。无 URL 返回空 dict（调用方零开销路径）。"""
+    urls: List[str] = []
+
+    def _sub(m: "re.Match[str]") -> str:
+        urls.append(m.group(0))
+        return f"[[[L{len(urls) - 1}]]]"
+
+    masked = _URL_RE.sub(_sub, text or "")
+    if not urls:
+        return {}
+    return {"masked": masked, "urls": urls}
+
+
+def _strip_url_tokens(masked: str) -> str:
+    """去掉占位 token 后的剩余文本（用于判断「除链接外还有没有可译内容」）。"""
+    return _URL_TOKEN_RE.sub(" ", masked or "")
+
+
+def _restore_urls(translated: str, url_map: Dict[str, Any]) -> str:
+    """把译文中的占位 token 还原为原 URL；被引擎吞掉的占位对应 URL 追加到文末。
+
+    追加而非 HOLD：链接必达是 CTA 链路的硬要求，消息其余部分已是合格译文，
+    因为一个被吞的占位扣下整条消息，比「链接挪到末尾」代价更大。
+    """
+    urls: List[str] = list(url_map.get("urls") or [])
+    seen: set = set()
+
+    def _sub(m: "re.Match[str]") -> str:
+        idx = int(m.group(1))
+        if 0 <= idx < len(urls):
+            seen.add(idx)
+            return urls[idx]
+        return m.group(0)  # 越界 token（引擎幻觉造的）原样留着，可见即可查
+
+    restored = _URL_TOKEN_RE.sub(_sub, translated or "")
+    lost = [u for i, u in enumerate(urls) if i not in seen]
+    if lost:
+        restored = restored.rstrip() + "\n" + "\n".join(lost)
+    return restored
+
 
 def parse_outbound_lang_gate_cfg(config: Any) -> Dict[str, Any]:
     """读 ``inbox.l2_autosend.lang_gate`` → ``{enabled}``。**默认开**。
@@ -474,9 +539,22 @@ async def translate_outbound_text(
         if eff_source == target:
             return text
 
+    # 实施93b URL 保护：翻译前把 URL 换成引擎几乎必然原样保留的占位 token，
+    # 译后还原——防翻译引擎改写/转写链接（CTA 追踪短链被改一个字符=死链，
+    # 自动发送+自动翻译叠加后这是常态路径不是边缘）。纯 URL 消息直接跳过
+    # 翻译（链接没有可译内容）；占位符被引擎吞掉时把对应 URL 追加到文末
+    # （链接必达，位置降级可接受——比 HOLD 整条消息或发丢链版本都诚实）。
+    _url_map = _protect_urls(text)
+    if _url_map:
+        text_masked = _url_map["masked"]
+        if not _TRANSLATABLE_RE.search(_strip_url_tokens(text_masked)):
+            return text          # 纯链接/链接+标点：无可译内容，原样放行
+    else:
+        text_masked = text
+
     try:
         res = await translation_service.translate(
-            text, target_lang=target, source_lang=eff_source, style=style,
+            text_masked, target_lang=target, source_lang=eff_source, style=style,
         )
     except Exception:
         # 无兜底纪律（2026-08-17 老板拍板）：翻译失败一律 HOLD 不发——旧「非 CJK
@@ -497,7 +575,16 @@ async def translate_outbound_text(
     # → 一律 HOLD 不发（2026-08-17 无兜底纪律：旧「非冲突态回落原文」拆除——发
     # 客户看不懂/未真译的文本＝静默替代品）。identity 回显正是 198 泄漏的机制。
     # 译文残留判定同用 cjk_substantial：好译文保留「村BA」这类专名引用不算失败。
-    degraded = (not ok or not translated or translated == text
+    # 例外（2026-08-30 中文变体）：zh→zh-tw/yue 简繁同形句（「一起加油」逐字同形）
+    # 转换后原样返回是**正确结果**而非未真译——原样发出客户完全可读，HOLD 反而
+    # 误扣合法消息。豁免收窄到中文变体家族互译（ja/ko 目标原样回吐仍按未译 HOLD）。
+    # 93b：质量判定全部在**掩码域**比较（translated vs text_masked）——URL 换
+    # 占位不改变任何既有语义，无 URL 时 text_masked == text 逐字节旧行为。
+    _same_text_ok = (translated == text_masked
+                     and target in _ZH_FAMILY_TARGETS
+                     and (eff_source in _ZH_FAMILY_TARGETS or not eff_source))
+    degraded = (not ok or not translated
+                or (translated == text_masked and not _same_text_ok)
                 or (cjk_conflict and cjk_substantial(translated)))
     if degraded:
         logger.warning(
@@ -507,6 +594,8 @@ async def translate_outbound_text(
         _gate_record("held", conversation_id=cid, target=target)
         _report_block_safe(cid, target, err or "translate_degraded")
         return None
+    if _url_map:
+        translated = _restore_urls(translated, _url_map)
 
     if cjk_conflict and gate_only:
         # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的

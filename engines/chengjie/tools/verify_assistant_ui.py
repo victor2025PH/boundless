@@ -62,6 +62,12 @@ _HTML = """<!doctype html>
 <body style="margin:16px;font-family:system-ui,'Microsoft YaHei',sans-serif;">
 <h3 id="page-title" data-anchor="fixture_page">fixture page</h3>
 <button id="t-emoji-btn" type="button">🎓 教学按钮（3）</button>
+<!-- DOM 动作总线夹具（实施88 P0 / M8）：fill 要真触发 input 事件、click 要
+     真进 onclick——两个计数器就是「执行器真的动了手」的运行时证据。 -->
+<input id="fx-ui-in" type="text" oninput="window.__fxInput=this.value"
+       style="width:120px">
+<button id="fx-ui-btn" type="button"
+        onclick="window.__fxClicks=(window.__fxClicks||0)+1">fx ui btn</button>
 @@ADMIN_GLOBALS@@
 <script>
 window.__api = { queries: [], reports: [], feedbacks: [], ticketsCalls: 0,
@@ -76,6 +82,34 @@ window.fetch = async function (url, opts) {
     if (window.__api.queryMode === 'err') return J({ ok: true, events: [
       { ev: 'meta', sources: [], report_hint: false },
       { ev: 'err', key: 'x', text: '生成失败请重试' }] });
+    if (window.__api.queryMode === 'general') {
+      /* 通用知识作答（2026-08-29 P0）：零命中 → 产品事实卡/通用链答出来了，
+         done 带 basis=general。UI 必须标注「非产品文档」，否则模型随口说的
+         会被当成产品承诺。 */
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: false, sources: [] },
+        { ev: 'delta', text: '一般来说可以这样写：您好，很高兴为您服务。' },
+        { ev: 'done', ms: 5, qa_id: 12, answered: true, basis: 'general' }] });
+    }
+    if (window.__api.queryMode === 'product') {
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: false, sources: [] },
+        { ev: 'delta', text: '目前对接 Telegram、WhatsApp、LINE、Messenger 和网页；抖音暂不支持。' },
+        { ev: 'done', ms: 5, qa_id: 13, answered: true, basis: 'product' }] });
+    }
+    if (window.__api.queryMode === 'nobasis') {
+      /* NO_BASIS 哨兵路径的**真实**线形（2026-08-29）：meta 先发且 sources
+         非空（检索过了 min_score），随后 LLM 自认答不了 → answered=false。
+         老板 8/28 截图就是这一幕：一句「没找到可靠依据」下面挂着一条无关
+         来源。err 模式测不到它——那条没有 sources 也没有 done。 */
+      return J({ ok: true, events: [
+        { ev: 'meta', report_hint: false, sources: [
+          { id: 'howto:multiwin', title: '为什么提示「在此使用/保持待机」',
+            path: '/workspace', score: 62 }] },
+        { ev: 'delta', text: '这个问题我在产品帮助库里没有找到可靠依据，' +
+          '为避免误导就不猜了；你的问题已记录，我们会尽快补充。' },
+        { ev: 'done', ms: 5, qa_id: 11, answered: false }] });
+    }
     if (window.__api.queryMode === 'sse') {
       /* 生产真形态（2026-08-21 P2）：text/event-stream 逐帧 */
       const frames = [
@@ -88,34 +122,6 @@ window.fetch = async function (url, opts) {
       const body = frames.map(f => 'data: ' + JSON.stringify(f) + '\\n\\n').join('');
       return new Response(body,
         { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-    }
-    if (window.__api.queryMode === 'nobasis') {
-      /* 服务端判定「没依据」（零命中或 NO_BASIS 哨兵）：answered=false。
-         关键在于 meta.sources **非空** —— 检索确实捞到了东西，只是那些东西
-         回答不了这个问题。UI 必须抑制它们，否则等于「我不知道，但这里有三个
-         不相关的链接」。这些条目同时是拒答建议的来源。 */
-      return J({ ok: true, events: [
-        { ev: 'meta', report_hint: true, sources: [
-          { id: 'howto:multiwin', title: '在此使用/保持待机是什么意思',
-            path: '/workspace', score: 34 },
-          { id: 'term:info_log', title: '信息日志(INFO)', path: '', score: 33 }] },
-        { ev: 'delta', text: '这个问题我在产品帮助库里没有找到可靠依据。' },
-        { ev: 'done', ms: 5, qa_id: 11, answered: false, basis: 'none' }] });
-    }
-    if (window.__api.queryMode === 'general') {
-      /* 通用知识作答（2026-08-29 P0）：零命中 → 通用链答出来了，done 带
-         basis=general。UI 必须标注「非产品文档」，否则模型随口说的会被当成
-         产品承诺。 */
-      return J({ ok: true, events: [
-        { ev: 'meta', report_hint: false, sources: [] },
-        { ev: 'delta', text: '一般来说可以这样写：您好，很高兴为您服务。' },
-        { ev: 'done', ms: 5, qa_id: 12, answered: true, basis: 'general' }] });
-    }
-    if (window.__api.queryMode === 'product') {
-      return J({ ok: true, events: [
-        { ev: 'meta', report_hint: false, sources: [] },
-        { ev: 'delta', text: '目前对接 Telegram、WhatsApp、LINE、Messenger 和网页；抖音暂不支持。' },
-        { ev: 'done', ms: 5, qa_id: 13, answered: true, basis: 'product' }] });
     }
     const hint = window.__api.queryMode === 'hint';
     return J({ ok: true, events: [
@@ -160,6 +166,12 @@ window.fetch = async function (url, opts) {
         new_h: '快', actor: 'me', undoable: true, undo_id: 'u1' }] });
   }
   if (url.indexOf('/api/assistant/actions') === 0) { return J({ ok: true, actions: [] }); }
+  if (url.indexOf('/api/assistant/agent/plan') === 0) {
+    /* DOM 总线场景（M8）：__api.planResp 由场景注入；生产里 ui.sel 是服务端
+       按 ui_anchors 白名单换出的，夹具只验前端执行器行为。 */
+    return J(window.__api.planResp || { ok: true, plan_ok: false, say: '',
+      steps: [], dropped: [], ask: '' });
+  }
   if (url.indexOf('/api/assistant/tickets') === 0) {
     window.__api.ticketsCalls++;
     return J({ ok: true, tickets: [
@@ -388,6 +400,56 @@ def _run_modes(page, ck: Checker) -> None:
              ev("() => document.querySelector('.asb-hd-pair')"
                 ".classList.contains('on')"))
     ev("() => { window.__api.pairSessions = []; }")
+
+    # M8 DOM 动作总线（实施88 P0）：ui 步在前端真执行——fill 真触发 input
+    # 事件、click 真进 onclick；找不到控件=诚实失败不装 ok。静态门禁只能证
+    # 「execStep 有 ui 分支」，这里证明它运行时真的动了手。
+    ev("() => { window.__fxClicks = 0; window.__fxInput = ''; "
+       "window.__api.planResp = { ok: true, plan_ok: true, say: '这就来', "
+       "dropped: [], steps: ["
+       "{ action: 'ui_act', level: 'L1', kind: 'ui', label: '填入搜索词', "
+       "params: { anchor: 'a1', text: '退款' }, ui: { anchor: 'a1', "
+       "sel: '#fx-ui-in', gesture: 'fill', page: '/workspace', "
+       "text: '退款' } }, "
+       "{ action: 'ui_act', level: 'L1', kind: 'ui', label: '点开夹具按钮', "
+       "params: { anchor: 'a2' }, ui: { anchor: 'a2', sel: '#fx-ui-btn', "
+       "gesture: 'click', page: '/workspace', text: '' } }] }; "
+       "window.XZAgent.run('帮我搜退款并点开按钮'); }")
+    page.wait_for_timeout(2600)   # 两步流星飞行 + 步间隔
+    ck.check("M8 fill 真的把文字送进输入框（input 事件触发计数器）",
+             ev("() => document.getElementById('fx-ui-in').value === '退款' "
+                "&& window.__fxInput === '退款'"),
+             ev("() => 'value=' + document.getElementById('fx-ui-in').value "
+                "+ ' hook=' + window.__fxInput"))
+    ck.check("M8b click 真的点到按钮（onclick 计数器=1）",
+             ev("() => window.__fxClicks === 1"),
+             ev("() => 'clicks=' + window.__fxClicks"))
+    ck.check("M8c 任务卡两步全 ✓ 且收尾",
+             ev("() => { var c = document.querySelector('.xza-card'); "
+                "if (!c) { return false; } "
+                "var ics = c.querySelectorAll('.xza-st-hd .ic'); "
+                "var okN = 0; ics.forEach(function (x) { "
+                "if (x.textContent === '\\u2713') { okN += 1; } }); "
+                "return okN === 2; }"),
+             ev("() => { var c = document.querySelector('.xza-card'); "
+                "return c ? c.textContent.slice(0, 160) : '(no card)'; }"))
+    # M8d 诚实失败：控件不存在必须 fail（流星飞向空气还报「完成」比失败更糟）
+    ev("() => { var x = document.querySelector('[data-xza=\"close-card\"]'); "
+       "if (x) { x.click(); } "
+       "window.__api.planResp = { ok: true, plan_ok: true, say: '试试', "
+       "dropped: [], steps: [{ action: 'ui_act', level: 'L1', kind: 'ui', "
+       "label: '点不存在的控件', params: { anchor: 'a3' }, "
+       "ui: { anchor: 'a3', sel: '#fx-not-exist', gesture: 'click', "
+       "page: '/workspace', text: '' } }] }; "
+       "window.XZAgent.run('点一个不存在的'); }")
+    page.wait_for_timeout(1600)
+    ck.check("M8d 控件不存在 → 诚实失败（fail 态 + 不误报成功）",
+             ev("() => { var c = document.querySelector('.xza-card'); "
+                "return !!c && !!c.querySelector('.xza-step.fail'); }"),
+             ev("() => { var c = document.querySelector('.xza-card'); "
+                "return c ? c.textContent.slice(0, 160) : '(no card)'; }"))
+    ev("() => { var x = document.querySelector('[data-xza=\"close-card\"]'); "
+       "if (x) { x.click(); } window.__api.planResp = null; }")
 
     page.click('.asb-mode[data-mode="chat"]')
     page.wait_for_timeout(120)
@@ -729,41 +791,42 @@ def _run_admin_tail(page, ck: Checker) -> None:
                 "String(window.__api.queries[window.__api.queries.length-1].q)"
                 ".indexOf('asb-ask') > -1"))
 
-    # ── A17 拒答 UX（2026-08-29，老板实录「回复的内容没一点帮助」）
-    # 清空聊天区：前面用例留下的气泡会污染「拒答时不列来源」这类否定断言。
+    # A17 拒答不是死路（2026-08-29 老板实录「回复的内容没一点帮助」）：
+    # NO_BASIS 哨兵下 meta 早已带着 sources 上线，但那些条目**正是被判定为
+    # 回答不了这个问题的**——照旧列出来会读成「它找到了却不肯说」。
+    # 先清屏：前面的轮次留了 7 个来源块，全局断言会被它们污染（首版就这样假红）。
+    # 清 DOM 不动 chatHistory，本轮 pushChat 照常建 thinking 气泡。
     ev("() => { var b = document.querySelector('.asb-body'); "
-       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'nobasis'; "
-       "return AssistantBall.ask('怎么导出所有客户的手机号'); }")
+       "if (b) { b.innerHTML = ''; } }")
+    ev("() => { window.__api.queryMode = 'nobasis'; "
+       "return AssistantBall.ask('怎么使用这个软件'); }")
     page.wait_for_timeout(400)
-    ck.check("A17 拒答不列来源（那几条正是被判定答不了的）",
+    ck.check("A17 拒答不列来源（那条来源正是被判定答不了的）",
              ev("() => !document.querySelector('.asb-srcs')"),
-             ev("() => document.querySelectorAll('.asb-srcs').length"))
-    ck.check("A17b 拒答给出可答的问法（死路变菜单）",
-             ev("() => !!document.querySelector('.asb-sugg .asb-chip[data-q]')"))
+             ev("() => document.querySelectorAll('.asb-srcs').length + ' srcs'"))
+    ck.check("A17b 拒答给出「我答得上」的建议（死路变菜单）",
+             ev("() => document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q][data-sugg]').length >= 1"),
+             ev("() => document.querySelectorAll('.asb-sugg .asb-chip')"
+                ".length + ' sugg'"))
     ck.check("A17c 拒答同时保留报障出路（可能真是故障）",
              ev("() => !!document.querySelector('[data-act=\"to-report\"]')"))
     ck.check("A17d 建议不推荐刚问过的那一句",
-             ev("() => { var c = document.querySelectorAll("
-                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < c.length;"
-                " i++) { if (c[i].getAttribute('data-q').indexOf('导出所有客户')"
-                " > -1) return false; } return true; }"))
-    ck.check("A17e 建议来自本次检索到的最近条目（非页面热度榜）",
-             ev("() => { var c = document.querySelectorAll("
-                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < c.length;"
-                " i++) { if (c[i].getAttribute('data-q').indexOf('在此使用') "
-                "> -1) return true; } return false; }"),
-             ev("() => { var c = document.querySelectorAll("
-                "'.asb-sugg .asb-chip[data-q]'); var o = []; for (var i = 0; "
-                "i < c.length; i++) { o.push(c[i].getAttribute('data-q')); } "
-                "return o.join(' | '); }"))
-    ev("() => { window.__sgN = window.__api.queries.length; "
-       "var c = document.querySelector('.asb-sugg .asb-chip[data-q]'); "
-       "if (c) { c.click(); } }")
-    page.wait_for_timeout(300)
-    ck.check("A17f 点建议真的投问（不是哑 chip）",
-             ev("() => window.__api.queries.length === window.__sgN + 1"))
+             ev("() => { var cs = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < cs.length;"
+                " i++) { if (cs[i].getAttribute('data-q') === "
+                "'怎么使用这个软件') return false; } return true; }"))
+    # 点建议 → 走 sendQuery（与首屏 chip 同一条链），且答成后来源回归
+    ev("() => { window.__api.queryMode = 'sse'; "
+       "window.__sugN = window.__api.queries.length; }")
+    page.click('.asb-sugg .asb-chip[data-q]')
+    page.wait_for_timeout(500)
+    ck.check("A17e 点建议真的投问（不是哑 chip）",
+             ev("() => window.__api.queries.length === window.__sugN + 1"))
+    ck.check("A17f 答成的回答仍照常列来源（抑制只针对拒答）",
+             ev("() => !!document.querySelector('.asb-srcs')"))
 
-    # ── A18 依据分层：零命中不再一律拒答，但**凭什么答**必须标出来
+    # A18 依据分层（2026-08-29 P0）：零命中不再一律拒答，但**凭什么答**必须标。
     ev("() => { var b = document.querySelector('.asb-body'); "
        "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'general'; "
        "return AssistantBall.ask('帮我写一句问候语'); }")
@@ -778,15 +841,23 @@ def _run_admin_tail(page, ck: Checker) -> None:
        "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'product'; "
        "return AssistantBall.ask('支持抖音吗'); }")
     page.wait_for_timeout(400)
-    ck.check("A18c 产品事实卡作答标注「依据产品说明」（中性、非琥珀）",
+    ck.check("A18c 产品事实卡作答标注「依据产品说明」",
              ev("() => { var e = document.querySelector('.asb-basis'); "
                 "return !!e && !e.classList.contains('gen'); }"))
+    # 拒答建议改用**本次真检索到的条目**，而不是页面热度榜（老板：建议与问题无关）
     ev("() => { var b = document.querySelector('.asb-body'); "
-       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'ok'; "
-       "return AssistantBall.ask('怎么发语音'); }")
+       "if (b) { b.innerHTML = ''; } window.__api.queryMode = 'nobasis'; "
+       "return AssistantBall.ask('怎么导出所有客户的手机号'); }")
     page.wait_for_timeout(400)
-    ck.check("A18d 有文档依据时照旧列来源（抑制只针对拒答）",
-             ev("() => !!document.querySelector('.asb-srcs')"))
+    ck.check("A18d 拒答建议来自本次检索到的最近条目（非页面热度）",
+             ev("() => { var c = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); for (var i = 0; i < c.length;"
+                " i++) { if (c[i].getAttribute('data-q').indexOf('在此使用') "
+                "> -1) return true; } return false; }"),
+             ev("() => { var c = document.querySelectorAll("
+                "'.asb-sugg .asb-chip[data-q]'); var o = []; for (var i = 0; "
+                "i < c.length; i++) { o.push(c[i].getAttribute('data-q')); } "
+                "return o.join(' | '); }"))
 
     run_panel_geometry(page, ck)
 
@@ -861,12 +932,11 @@ def run_panel_geometry(page, ck: Checker) -> None:
 
     这些不变量**静态门禁一条都证不了**：面板几何是真实指针事件 + 布局的产物，
     而模板/JS 热更新直接上生产，没有「未部署」缓冲。所以只能真浏览器点。
-    必须用真 mouse 事件（不是合成 dispatchEvent）才走得到 pointer capture 那条
-    路——首版实测：合成 dblclick 能触发复位，真鼠标序列却不能（capture 让两次
-    点击的 target 不一致，Chromium 因此不派发 dblclick），只有真事件抓得到。
+    用真 mouse 事件（不是 dispatchEvent 合成）才走得到 pointer capture 那条路。
     """
     ev = page.evaluate
 
+    # 复位到干净起点（前面的用例可能已经动过）
     ev("() => { localStorage.removeItem('asb_panel_v1'); }")
     ev("() => { if (!document.querySelector('.asb-panel.open')) "
        "{ document.querySelector('.asb-ball').click(); } }")
@@ -884,6 +954,7 @@ def run_panel_geometry(page, ck: Checker) -> None:
                 ".getBoundingClientRect(); return {x:r.left,y:r.top,"
                 "w:r.width,h:r.height}; }")
 
+    # ── 拖动标题栏：真指针按下→移动→抬起
     hd = page.query_selector(".asb-hd")
     box = hd.bounding_box()
     page.mouse.move(box["x"] + 60, box["y"] + box["height"] / 2)
@@ -899,16 +970,16 @@ def run_panel_geometry(page, ck: Checker) -> None:
              abs(after["x"] - before["x"]) > 40 or
              abs(after["y"] - before["y"]) > 40,
              f"before={before} after={after}")
-    # 每拖一次胖 2px 的回归钉：rect 含边框、style 写 content-box，存写闭环会累积
-    ck.check("G2b 移动不改变尺寸（box-sizing 闭环回归钉）",
+    ck.check("G2b 移动不改变尺寸（只挪不缩）",
              abs(after["w"] - before["w"]) < 2 and
              abs(after["h"] - before["h"]) < 2,
              f"w {before['w']}->{after['w']} h {before['h']}->{after['h']}")
     ck.check("G3 位置已持久化（刷新后不回弹）",
              ev("() => !!localStorage.getItem('asb_panel_v1')"))
 
-    # 先真拖到左上角腾出空间：否则底边贴着视口，**本来就拉不高**（首版这条红过，
-    # 查下来是出界封顶生效了＝把正确行为误判成 bug）
+    # ── 右下角缩放。先真拖到左上角腾出空间：否则底边贴着视口，**本来就拉不高**
+    #    （首版这条红过——断言假设能长高，实际是出界封顶生效了＝把正确行为误判成
+    #    bug。用真拖动而不是塞 localStorage，避免依赖开关面板的时序。）
     hd2 = page.query_selector(".asb-hd")
     b2 = hd2.bounding_box()
     page.mouse.move(b2["x"] + 60, b2["y"] + b2["height"] / 2)
@@ -933,14 +1004,14 @@ def run_panel_geometry(page, ck: Checker) -> None:
     ck.check("G4 右下角手柄能放大",
              grown["w"] > after["w"] + 40 and grown["h"] > after["h"] + 30,
              f"{after['w']}x{after['h']} -> {grown['w']}x{grown['h']}")
-    # 出界保护曾在这里跟手势打架，把原点上推 102px
     ck.check("G4b 放大时左上角不动（不是整窗平移）",
              abs(grown["x"] - after["x"]) < 3 and
              abs(grown["y"] - after["y"]) < 3,
              f"origin {after['x']},{after['y']} -> {grown['x']},{grown['y']}")
 
-    # 西北角：改尺寸的同时必须改原点。先推离左边缘，贴边时 clamp 会把 x 顶在
-    # 8px、右边缘跟着外扩（首版这条红过 6px，同样是正确行为被误判）
+    # ── 西北角：改尺寸的同时必须改原点，否则对边会跟着跑。
+    #    先把面板推到离左边缘远一点：贴边时 clamp 会把 x 顶在 8px，右边缘就跟着
+    #    外扩（首版这条红过 6px，查下来是出界保护在起作用＝正确行为被误判）。
     hd3 = page.query_selector(".asb-hd")
     b3 = hd3.bounding_box()
     page.mouse.move(b3["x"] + 60, b3["y"] + b3["height"] / 2)
@@ -968,6 +1039,7 @@ def run_panel_geometry(page, ck: Checker) -> None:
              f"right {grown['x'] + grown['w']}->{nw['r']} "
              f"bottom {grown['y'] + grown['h']}->{nw['b']}")
 
+    # ── 最小尺寸护栏：往回拽到负数也不能塌成一条线
     h4 = page.query_selector(".asb-rs.se")
     sb = h4.bounding_box()
     page.mouse.move(sb["x"] + sb["width"] / 2, sb["y"] + sb["height"] / 2)
@@ -981,8 +1053,9 @@ def run_panel_geometry(page, ck: Checker) -> None:
              tiny["w"] >= 290 and tiny["h"] >= 250,
              f"{tiny['w']}x{tiny['h']}")
 
-    # 复位走**看得见的按钮**。双击标题栏也支持，但它不是主入口：发现性差，且
-    # 真实鼠标序列下浏览器未必合成 dblclick（见函数 docstring）。
+    # ── 复位：走**看得见的按钮**。双击标题栏也支持，但它不是主入口——
+    #    发现性差，且真实鼠标序列下浏览器未必合成 dblclick（指针捕获会让两次
+    #    点击的 target 不一致，实测 Chromium 因此不派发 dblclick）。
     ck.check("G7a 几何改过后「复位」按钮出现",
              ev("() => { var b = document.querySelector('.asb-hd-rst'); "
                 "return !!b && !b.hidden; }"))
@@ -994,7 +1067,7 @@ def run_panel_geometry(page, ck: Checker) -> None:
              ev("() => { var b = document.querySelector('.asb-hd-rst'); "
                 "return !!b && b.hidden; }"))
 
-    # 越界自愈：存屏幕外坐标，重开必须夹回可视区，否则是「点了没反应」的幽灵
+    # ── 越界自愈：存一个屏幕外的坐标，重开必须夹回可视区
     ev("() => { localStorage.setItem('asb_panel_v1', JSON.stringify("
        "{x: 99999, y: 99999, w: 400, h: 400})); }")
     ev("() => { var p = document.querySelector('.asb-panel'); "
@@ -1003,19 +1076,20 @@ def run_panel_geometry(page, ck: Checker) -> None:
     page.wait_for_timeout(120)
     ev("() => { document.querySelector('.asb-ball').click(); }")
     page.wait_for_timeout(200)
-    ck.check("G8 存了屏幕外坐标也会被夹回可视区（防幽灵面板）",
-             ev("() => { var r = document.querySelector('.asb-panel')"
-                ".getBoundingClientRect(); return r.left < window.innerWidth "
-                "&& r.top < window.innerHeight && r.right > 0 && r.bottom > 0;"
-                " }"),
+    onscreen = ev("() => { var r = document.querySelector('.asb-panel')"
+                  ".getBoundingClientRect(); return r.left < window.innerWidth "
+                  "&& r.top < window.innerHeight && r.right > 0 && r.bottom > 0;"
+                  " }")
+    ck.check("G8 存了屏幕外坐标也会被夹回可视区（防幽灵面板）", onscreen,
              ev("() => { var r = document.querySelector('.asb-panel')"
                 ".getBoundingClientRect(); return r.left + ',' + r.top; }"))
-    # 残留遮罩会吃掉整页点击，比面板本身坏了更严重
+    # 拖拽遮罩必须已卸掉：残留会吃掉整页点击（比面板本身坏了更严重）
     ck.check("G9 手势结束后无残留遮罩（不会锁死整页）",
              ev("() => { var n = document.querySelectorAll("
                 "'div[aria-hidden=\"true\"]'); for (var i = 0; i < n.length; "
                 "i++) { var s = n[i].style; if (s && s.position === 'fixed' && "
                 "s.zIndex === '2147483000') return false; } return true; }"))
+    ev("() => { localStorage.removeItem('asb_panel_v1'); }")
 
     # ── P2 主题桥：--xz-* 此前全站无定义，面板永远用回落色＝没接进主题系统
     ck.check("G10 强调色接到宿主品牌令牌（不再是写死的回落色）",
@@ -1029,12 +1103,14 @@ def run_panel_geometry(page, ck: Checker) -> None:
                 "document.querySelector('.asb-panel')); "
                 "return !!s.getPropertyValue('--xz-bg').trim() && "
                 "!!s.getPropertyValue('--xz-txt').trim(); }"))
-    # 教学/代理浮层是 position:fixed 直接挂 body 的，桥若只套在小智容器上就漏
+    # 教学/代理模式的浮层是 position:fixed 直接挂 body 的，桥若只套在小智容器上
+    # 就会漏掉它们（首版实测如此）——所以这条专门守「body 上也拿得到」。
     ck.check("G10c 直挂 body 的浮层（教学气泡等）同样拿得到令牌",
              ev("() => { var v = getComputedStyle(document.body)"
                 ".getPropertyValue('--xz-accent').trim(); "
-                "return !!v && v.toLowerCase() !== '#4f6ef7'; }"))
-    ev("() => { localStorage.removeItem('asb_panel_v1'); }")
+                "return !!v && v.toLowerCase() !== '#4f6ef7'; }"),
+             ev("() => getComputedStyle(document.body)"
+                ".getPropertyValue('--xz-accent').trim()"))
 
 
 def run_ws(page, ck: Checker) -> None:
@@ -1045,6 +1121,39 @@ def run_ws(page, ck: Checker) -> None:
              ev("() => !!document.querySelector('.asb-panel.open') && "
                 "document.querySelectorAll('.asb-mode').length === 3"),
              ev("() => document.querySelectorAll('.asb-mode').length + ' modes'"))
+    # ── 「替我做」模式的引导结构（2026-08-28，老板实录「版面太碎没有重点」）
+    # 这三项修复全是**事件委托 + 动态 DOM**：静态哑按钮门禁只扫内联 on*=，
+    # 天生看不见它们；而共享组件保存即上生产，所以「点了真的有反应」只有
+    # 真浏览器能证明。窄屏 480 也正是老板截图的形态。
+    page.click('.asb-mode[data-mode="agent"]')
+    page.wait_for_timeout(250)
+    ck.check("W2 替我做：整屏只有一颗实心主按钮，且长在主卡上",
+             ev("() => document.querySelectorAll('.asb-md .asb-md-go')"
+                ".length === 1 && !!document.querySelector("
+                "'.asb-md-hero--pri .asb-md-go')"),
+             ev("() => document.querySelectorAll('.asb-md .asb-md-go').length"
+                " + ' go / pri=' + document.querySelectorAll("
+                "'.asb-md-hero--pri').length"))
+    ck.check("W2b 手机指挥降级为一行次要入口（通道≠能力，不再与主卡同级）",
+             ev("() => !!document.querySelector("
+                "'.asb-md-sub[data-xza=\"mode-pair\"]') && "
+                "!document.querySelector('.asb-md-hero[data-xza=\"mode-pair\"]')"))
+    ck.check("W2c 最近做过：标题行自带「全部 →」文字链（取代独占一行的按钮）",
+             ev("() => !!document.querySelector("
+                "'.asb-md-hd .asb-md-lnk[data-xza=\"mode-hist\"]')"))
+    # 主按钮＝把光标送进输入框（模式说明与底部输入框之间原本没有衔接动作）。
+    # fill('') 默认聚焦；改成 fill('', false) 或委托漏掉 mode-start 分支，
+    # 这颗「唯一主按钮」就变成点了毫无反应的哑键——正是本条要钉住的。
+    ev("() => { var i = document.querySelector('.asb-in'); if (i) i.blur(); }")
+    page.click('.asb-md-go[data-xza="mode-start"]')
+    page.wait_for_timeout(200)
+    ck.check("W2d 点主按钮 → 光标进输入框（说明→输入的衔接动作）",
+             ev("() => document.activeElement === "
+                "document.querySelector('.asb-in')"),
+             ev("() => (document.activeElement && "
+                "(document.activeElement.className || document.activeElement"
+                ".tagName)) || 'none'"))
+
     page.click('.asb-sub[data-tab="set"]')
     page.wait_for_timeout(150)
     ck.check("W1b ⚙ 偏好=仅动效档（workspace 壳无 admin 全局工具）",

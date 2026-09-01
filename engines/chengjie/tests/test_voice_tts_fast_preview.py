@@ -193,7 +193,15 @@ def test_failure_paths_carry_fast_flag(client, monkeypatch):
 _CONTRACT_KEYS = {"ok", "platform", "persona_id", "persona_source",
                   "backend", "voice", "is_clone", "ready",
                   "hub_strict", "hub_risk",
-                  "channel_backend", "reference_audio"}
+                  "channel_backend", "reference_audio",
+                  # P0-V2b 译声（2026-08-30）：会话客户语言（chat_key 缺席=空串）——
+                  # 右栏语音卡生成前预告「将译成 X」的数据源，前端按键存在性特性探测
+                  "conv_lang",
+                  # P0 语言能力守卫（2026-08-31 日文怪声）：克隆主路可念语种
+                  # （lang_voice_route.clone_voice_langs SSOT；空列表=能力未知）。
+                  # 字段由 voice_langs 线落地（test_cp_voice_ui_revamp 断言其存在），
+                  # 此处为契约集合补登——两门禁曾互相矛盾（一个要求有、一个要求无）。
+                  "voice_langs"}
 
 
 def test_effective_config_contract_telegram(client):
@@ -238,3 +246,100 @@ def test_effective_config_never_500(client, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert "resolver exploded" in body["error"]
+
+
+# ── 任务 3：试听=发送 语言路由（P1 2026-08-31 提示风暴复盘收口）──────────
+# 缺口：send-voice / A 线 voice_reply / B 线 autosend 都走 route_voice_cfg_for_text
+# （clone_langs 语种→克隆节点改派），唯独 tts-test 没接——ja/ko 开通路由后
+# 发送侧已是人设克隆声、试听侧仍被语种闸拦去 edge 标准声（0831 实录 22:10），
+# 且「所听即所发」复用会把 edge 预览原样发给客户＝预览连累整链。
+
+
+def _route_config():
+    cfg = _base_config()
+    cfg["voice_lang_route"] = {
+        "enabled": True,
+        "clone_langs": {
+            "ja": {
+                "backend": "minicpm_clone",
+                "voice_profile": {
+                    "clone_base_url": "http://127.0.0.1:7852",
+                    "clone_text_prefix": "<|ja|>",
+                },
+            },
+            # th 刻意选「不在任何克隆后端默认表里」的语种——union 断言的对照位
+            # （ja 已进 avatar_clone 默认表，验不出「并集来自路由」）
+            "th": {"backend": "minicpm_clone"},
+        },
+    }
+    return cfg
+
+
+@pytest.fixture
+def route_client():
+    app = FastAPI()
+    register_voice_routes(app, api_auth=_noop_auth,
+                          config_manager=_CfgMgr(_route_config()))
+    return TestClient(app)
+
+
+_JA_TEXT = "こんにちは、元気ですか"
+
+
+def test_tts_test_applies_clone_lang_route(route_client):
+    r = route_client.post("/api/voice/tts-test", json={"text": _JA_TEXT})
+    body = r.json()
+    assert body["ok"] is True
+    cfg = _FakeTTSPipeline.calls[0]["cfg"]
+    assert cfg["backend"] == "minicpm_clone"
+    assert cfg["_lang_route_cleared"] == "ja"          # 语种能力闸放行标记
+    vp = cfg["voice_profile"]
+    assert vp["clone_base_url"] == "http://127.0.0.1:7852"
+    assert vp["backend"] == "minicpm_clone"            # 防人设档 backend 盖回原链
+    assert str(cfg["fallback_voice"]).startswith("ja-")  # 7852 挂时绝不中文声念日文
+    # requested_backend=路由后的后端（「真实发送会用什么」如实回显）
+    assert body["requested_backend"] == "minicpm_clone"
+
+
+def test_tts_test_fast_skips_route(route_client):
+    r = route_client.post("/api/voice/tts-test",
+                          json={"text": _JA_TEXT, "fast": True})
+    assert r.json()["ok"] is True
+    cfg = _FakeTTSPipeline.calls[0]["cfg"]
+    assert cfg["backend"] == "edge_tts"               # fast 档本就强制 edge，不路由
+    assert "_lang_route_cleared" not in cfg
+
+
+def test_tts_test_explicit_override_skips_route(route_client):
+    r = route_client.post("/api/voice/tts-test", json={
+        "text": _JA_TEXT,
+        "voice_cfg_override": {"backend": "edge_tts",
+                               "voice": "ja-JP-KeitaNeural"},
+    })
+    assert r.json()["ok"] is True
+    cfg = _FakeTTSPipeline.calls[0]["cfg"]
+    assert cfg["backend"] == "edge_tts"               # 尊重坐席显式选择（同 send-voice）
+    assert cfg["voice"] == "ja-JP-KeitaNeural"
+    assert "_lang_route_cleared" not in cfg
+
+
+def test_tts_test_zh_text_route_noop(route_client):
+    """中文不吃 clone_langs（zh 主链本就克隆）——路由开着也零行为变化。"""
+    route_client.post("/api/voice/tts-test", json={"text": "你好呀"})
+    cfg = _FakeTTSPipeline.calls[0]["cfg"]
+    assert cfg["backend"] == "avatar_clone"
+    assert "_lang_route_cleared" not in cfg
+
+
+def test_effective_config_voice_langs_unions_routed(route_client, client):
+    """clone_langs 开通语种并入 voice_langs（前端不再对已开通语种误报
+    「引擎不支持」）；未开通部署保持原表，主表空=能力未知语义不变。"""
+    body = route_client.get("/api/voice/effective-config",
+                            params={"platform": "telegram"}).json()
+    assert body["ok"] is True
+    assert "th" in body["voice_langs"]      # 来自 clone_langs 路由并集
+    assert "ja" in body["voice_langs"]
+    assert "zh" in body["voice_langs"]
+    body2 = client.get("/api/voice/effective-config",
+                       params={"platform": "telegram"}).json()
+    assert "th" not in (body2["voice_langs"] or [])   # 未开通=不虚报能力

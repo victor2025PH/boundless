@@ -172,6 +172,8 @@ async def test_boss_value_route_shape_and_cache(tmp_path):
         d = r.json()
         assert d["ok"] and len(d["series"]) == 7
         assert d["saved"]["minutes_per_reply"] == 4.0
+        # 「现在」区随载荷（P1-8）：等段必在（真 store）；d4 pending 计入
+        assert d["now"]["waiting"]["replies_pending"] >= 1
         # 今天 2 条真发 × 4 分钟
         assert d["saved"]["today_minutes"] == 8.0
         assert d["daily"]["today"]["drafts"]["sent"] == 2
@@ -253,6 +255,60 @@ async def test_boss_page_renders_via_full_app(tmp_path, monkeypatch):
         r = await c.get("/workspace/boss")
         assert r.status_code == 200, r.status_code
         assert "bp-hero" in r.text and "bpExport" in r.text
+
+
+# ── 7. 「现在」区（P1-8 2026-08-29：钱/单/等/险） ────────────────────────────
+
+
+def test_build_now_sections(tmp_path):
+    """goals 单例热 → 单+钱段；pending 回复 + 24h 未回 → 等段；险段键在。
+    段与段互不拖累（peek 纪律：绝不新建 goals 库）。"""
+    from src.companion.goals.store import get_goal_store, reset_goal_store
+    from src.ops.reply_latency import reset_snapshot_cache
+    from src.web.routes import boss_routes as br
+
+    store = _mk_store(tmp_path)
+    _seed(store)                       # d4 = pending → 等人拍板 1 条
+    reset_snapshot_cache()
+    reset_goal_store()
+    try:
+        gs = get_goal_store(":memory:")
+        won = gs.create_goal(
+            conversation_id="telegram:a1:n1", platform="telegram",
+            account_id="a1", chat_key="n1", template="custom",
+            deadline_days=14, now=NOW - 7200)
+        assert gs.update_goal_fields(
+            won["goal_id"], status="done", done_at=NOW - 100,
+            result="manual:won", progress=1.0)
+        gs.add_event(won["goal_id"], "won_meta", '{"amount": 99}')
+        gs.create_goal(
+            conversation_id="telegram:a1:n2", platform="telegram",
+            account_id="a1", chat_key="n2", template="custom",
+            deadline_days=14, now=NOW)
+        out = br._build_now(store, {}, None, now=NOW)
+        assert out["goals"]["active"] == 1
+        assert out["goals"]["won_24h"] == 1
+        assert out["goals"]["won_amount_24h"] == 99.0
+        assert out["waiting"]["replies_pending"] == 1
+        assert out["waiting"]["unanswered_24h"] >= 0
+        assert "sessions_down" in out["risk"]
+        assert "alert_link" in out["risk"]
+    finally:
+        reset_goal_store()
+        reset_snapshot_cache()
+
+
+def test_build_now_soft_fail_and_no_fake_sections(tmp_path):
+    """goals 单例未热 → 无 goals 段（绝不摆假零）；坏 store → 等段缺失但
+    函数不抛（险段仍独立工作）。"""
+    from src.companion.goals.store import reset_goal_store
+    from src.web.routes import boss_routes as br
+
+    reset_goal_store()
+    out = br._build_now(object(), {}, None, now=NOW)
+    assert "goals" not in out
+    assert "replies_pending" not in (out.get("waiting") or {})
+    assert isinstance(out, dict)       # 全段软失败也返回 dict
 
 
 # ── 5/6. 词条纪律 ────────────────────────────────────────────────────────────

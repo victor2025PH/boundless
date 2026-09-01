@@ -129,7 +129,9 @@ async def test_budget_gate_ignored_in_dry_run():
                        dry_run=True, budget_gate=lambda ck: False)
     n = await d.run_once(now=NOW)
     assert n == 1                    # dry_run 不受预算拦（样本要流动）
-    assert s.list_recent(status="sent")[0]["note"] == "dry_run"
+    # 实施84 P0-4：dry 拟稿不消费待办——行保持 pending，快照落 dry_sampled_at
+    row = s.list_pending()[0]
+    assert float(row["dry_sampled_at"]) > 0 and row["sent_text"]
 
 
 async def test_budget_gate_crisis_exempt():

@@ -1129,6 +1129,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 record_agent_takeover(ibx, cid)
         except Exception:
             logger.debug("record_agent_send(media) 失败", exc_info=True)
+        # #88：媒体送达成功=可达铁证 → 清 dead-peer 陈旧标（与文本路由同口径）
+        try:
+            from src.ops.dead_peer_registry import clear_on_delivery
+            if clear_on_delivery(platform, chat_key):
+                logger.info(
+                    "[send-media] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
+                    cid)
+        except Exception:
+            pass
         return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
 
     @app.get("/api/unified-inbox/media-download")
@@ -1485,11 +1494,40 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         _vo_record(False, f"truncated:{_why}")
                         _vst.record_failed(_dedup_scope, _client_msg_id,
                                            f"truncated:{_why}")
+                        # 人话+下一步（P0-3 2026-08-31）：截断是克隆链单次方差的
+                        # 常见形态，裸码「truncated:...」坐席不知道该干什么。
                         return {"ok": False, "reason": "truncated",
-                                "message": tr(request, "err.inbox.tts_failed",
-                                              err=f"truncated:{_why}")}
+                                "message": tr(request, "err.voice.truncated")}
             except Exception:
                 logger.debug("[inbox/voice-send] 质量闸门异常（忽略）", exc_info=True)
+
+            # #93（2026-09-01）：「应克隆未克隆」显式化（与 tts-test 同口径）
+            # ——静默换声是穿帮事故，必须让前端黄条 + 降级发送确认亮起来。
+            try:
+                if not _explicit_voice_override:
+                    from src.ai.persona_voice import CLONE_BACKENDS as _CLB
+                    _vp_exp = voice_cfg.get("voice_profile") \
+                        if isinstance(voice_cfg.get("voice_profile"), dict) else {}
+                    _exp_backend = str(
+                        (_vp_exp.get("backend") if _vp_exp.get("enabled")
+                         else None)
+                        or voice_cfg.get("backend") or "").strip().lower()
+                    _got = str(getattr(result, "provider", "") or "").strip().lower()
+                    _rex = getattr(result, "extra", {}) or {}
+                    if (_exp_backend in _CLB and _got and _got not in _CLB
+                            and not _rex.get("fallback_from")):
+                        _rex = dict(_rex)
+                        _rex["fallback_from"] = _exp_backend
+                        _rex.setdefault("primary_error", "clone_not_engaged")
+                        result.extra = _rex
+                        logger.warning(
+                            "[inbox/voice-send] #93 应克隆未克隆已补标："
+                            "expected=%s got=%s persona=%s",
+                            _exp_backend, _got,
+                            voice_ctx.get("persona_id") or "-")
+            except Exception:
+                logger.debug("[inbox/voice-send] #93 补标失败（忽略）",
+                             exc_info=True)
 
             # 坐席字符计量归因（2026-08-16）：**真合成**成功（过质量闸门）才记 tts
             # 字符；上方复用试听产物分支刻意跳过不记账——已在 tts-test 计过，重复
@@ -1588,6 +1626,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _send_ms = int((_time.monotonic() - _t_send0) * 1000)
         _vo_record(True)
         cid = _conv_id(platform, account_id, chat_key)
+        # #88：语音送达成功=可达铁证 → 清 dead-peer 陈旧标（与文本路由同口径）
+        try:
+            from src.ops.dead_peer_registry import clear_on_delivery
+            if clear_on_delivery(platform, chat_key):
+                logger.info(
+                    "[send-voice] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
+                    cid)
+        except Exception:
+            pass
         try:
             ibx = _inbox_store(request)
             if ibx is not None:
@@ -1602,6 +1649,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
         _emotion = voice_ctx.get("emotion")
         _extra = getattr(result, "extra", {}) or {}
+        # 回落原因归纳（P0 2026-08-31）：与 tts-test 同源（lang_voice_route 单一
+        # 归纳口）——语种改道/额度/通道故障分开，前端与观测不再猜。
+        try:
+            from src.ai.lang_voice_route import fallback_reason_from_extra
+            _fb_reason, _fb_lang = fallback_reason_from_extra(_extra)
+        except Exception:
+            _fb_reason, _fb_lang = "", ""
         voice_meta = {
             "persona_id": voice_ctx.get("persona_id") or "",
             "persona_source": voice_ctx.get("persona_source") or "",
@@ -1609,6 +1663,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "voice": getattr(result, "voice", ""),
             "emotion": getattr(_emotion, "emotion", "") if _emotion else "",
             "fallback_from": _extra.get("fallback_from", ""),
+            "fallback_reason": _fb_reason,
+            "fallback_lang": _fb_lang,
             # P0-V2 译声（additive）：translated=false 时 target_lang 恒空串
             "translated": bool(_vxl.get("translated")),
             "target_lang": (_vxl.get("target_lang") or "") if _vxl.get("translated") else "",
@@ -1754,7 +1810,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _bc["enabled"] and (not _bc["orch_only"] or _owns))
         except Exception:
             _bubbles_on = False
-        return {
+        out = {
             "ok": True, "platform": plat, "account_id": acc,
             "can_media": can_media, "can_voice": can_voice,
             "voice_mode": voice_mode,
@@ -1773,16 +1829,65 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         # chat_key 为可选新参（旧前端不传=响应形状不变）。
         if chat_key:
             try:
-                from src.ops.dead_peer_registry import peek_dead_peer_registry
+                from src.ops.dead_peer_registry import (
+                    peek_dead_peer_registry, reconcile_peer_mark)
                 _dpr = peek_dead_peer_registry()
                 if _dpr is not None and _dpr.is_blocked(plat, chat_key):
-                    _dpi = _dpr.info_of(plat, chat_key) or {}
-                    out["dead_peer"] = {
-                        "blocked": True,
-                        "reason": str(_dpi.get("reason") or ""),
-                        "since": float(_dpi.get("first_ts") or 0),
-                        "evidence": str(_dpi.get("evidence") or "")[:120],
-                    }
+                    # #88 二轮（0831 skuio 复测）：报 blocked 之前先 lazy 复核
+                    # 「标记后有无成功出站」——启动一次性核销只覆盖 boot 时刻
+                    # 已可清的标，之后才满足条件的要等下次重启；打开会话即复核
+                    # 把核销时机与重启解耦（精确 conversation_id 等值查询，走索引）。
+                    _cleared = False
+                    try:
+                        _ibx = _inbox_store(request)
+                        _db = getattr(_ibx, "_db_path", None)
+                        if _db:
+                            _cleared = reconcile_peer_mark(
+                                _dpr, _db, plat, acc, chat_key, log=logger)
+                    except Exception:
+                        logger.debug("send-caps dead-peer lazy 核销跳过",
+                                     exc_info=True)
+                    if not _cleared:
+                        _dpi = _dpr.info_of(plat, chat_key) or {}
+                        out["dead_peer"] = {
+                            "blocked": True,
+                            "reason": str(_dpi.get("reason") or ""),
+                            "since": float(_dpi.get("first_ts") or 0),
+                            "evidence": str(_dpi.get("evidence") or "")[:120],
+                        }
             except Exception:
                 logger.debug("send-caps dead-peer 探测跳过", exc_info=True)
+        # #113 可见面：该会话当前的「临时行程」派生状态（AI 自述扫描 +
+        # 清除水位）——运营此前完全看不见「AI 认为自己在出差」这层状态，
+        # 更无从纠正。前端特性探测（无此键=旧后端，不渲染徽标）。
+        if chat_key:
+            try:
+                from src.inbox.self_claims import extract_recent_self_statements
+                _ibx2 = _inbox_store(request)
+                if _ibx2 is not None:
+                    _cid = f"{plat}:{acc}:{chat_key}"
+                    _cleared_ts = _ibx2.get_travel_cleared_ts(_cid)
+                    _hist = []
+                    for _m in reversed(
+                            _ibx2.list_recent_messages(_cid, limit=40) or []):
+                        _hist.append({
+                            "role": ("assistant"
+                                     if str(_m.get("direction") or "") == "out"
+                                     else "user"),
+                            "content": str(_m.get("text") or ""),
+                            "ts": float(_m.get("ts") or 0),
+                        })
+                    _tr = next(
+                        (s for s in extract_recent_self_statements(
+                            _hist, travel_cleared_ts=_cleared_ts)
+                         if s.get("kind") == "travel"), None)
+                    if _tr:
+                        out["travel_state"] = {
+                            "active": True,
+                            "text": str(_tr.get("text") or "")[:80],
+                            "ago_sec": _tr.get("ago_sec"),
+                            "anchored": bool(_tr.get("anchored")),
+                        }
+            except Exception:
+                logger.debug("send-caps travel-state 探测跳过", exc_info=True)
         return out

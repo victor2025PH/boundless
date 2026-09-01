@@ -173,14 +173,36 @@ def register_workflow_routes(app, *, api_auth) -> None:
 
     @app.post("/api/workspace/workflow-chains/seed")
     async def api_workflow_chains_seed(request: Request, _=Depends(api_auth)):
-        """B1：一键导入出厂模板链（幂等——按固定 chain_id 判重，已存在一律跳过不覆盖）。"""
+        """B1：一键导入出厂模板链（幂等——按固定 chain_id 判重，已存在一律跳过
+        不覆盖）。实施93：body {pack: sales|guide|auto}——auto（缺省）按
+        journey.flavor 选包；显式指定可跨风味补包。"""
         _require_workflows(request)
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
-        from src.inbox.workflow_starter import ensure_starter_chains
-        res = ensure_starter_chains(store)
-        return {"ok": True, **res}
+        body = {}
+        if request.headers.get("content-type", "").startswith("application/json"):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+        pack = str((body or {}).get("pack") or "auto").strip().lower()
+        if pack not in ("sales", "guide", "auto"):
+            pack = "auto"
+        if pack == "auto":
+            from src.inbox.journey_stage import resolve_journey_cfg
+            cfg = getattr(
+                getattr(request.app.state, "config_manager", None),
+                "config", None) or {}
+            pack = ("guide" if resolve_journey_cfg(cfg)["flavor"] == "guide"
+                    else "sales")
+        from src.inbox.workflow_starter import (
+            ensure_guide_chains,
+            ensure_starter_chains,
+        )
+        res = (ensure_guide_chains(store) if pack == "guide"
+               else ensure_starter_chains(store))
+        return {"ok": True, "pack": pack, **res}
 
     # ─── Phase 47: 工作链执行可视化 ─────────────────────────────────────
 
@@ -422,6 +444,480 @@ def register_workflow_routes(app, *, api_auth) -> None:
         if not store.retry_workflow_execution(exec_id):
             raise HTTPException(422, tr(request, "err.ws.exec_op_failed"))
         return _exec_op_result(store, exec_id, ex)
+
+    # ── 实施92：旅程阶段 / 成交事件 / 成交引擎预设 ────────────────────────
+
+    @app.get("/api/workspace/conv/{conversation_id}/journey")
+    async def api_conv_journey(conversation_id: str, request: Request):
+        """旅程阶段 + 成交台账 + 「为什么是现在」证据（右栏 NBA 卡消费）。
+
+        阶段展示不受 journey.enabled 闸（enabled 只闸自动推导与 stage_enter
+        挂链），响应回带 enabled 供前端区分「自动推进中 / 仅手动」。
+
+        实施92d 增量（有界建议卡的证据位）：
+        - ``evidence``：{waiting_on: customer|us|"", wait_hours, stage_age_hours}
+          ——「客户 26h 未回 / 客户已等 3h」的量化触发原因；
+        - ``suggested_chain``：当前阶段有高置信推荐链（STAGE_CHAIN_REC）且
+          未在途、7 天内没挂过 → {chain_id, name}；前端在无在途执行时展示
+          一键启动。人工建议位，与 stage_enter 自动挂链（需成交引擎开）互补。
+        """
+        api_auth(request)
+        _require_workflows(request)
+        store = _inbox_store(request)
+        from src.inbox.journey_stage import STAGE_ORDER, resolve_journey_cfg
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        _jcfg = resolve_journey_cfg(cfg)
+        if store is None:
+            return {"ok": True, "stage": "", "ts": 0, "src": "", "deals": [],
+                    "stages": STAGE_ORDER, "evidence": {}, "suggested_chain": None,
+                    "flavor": _jcfg["flavor"],
+                    "journey_enabled": _jcfg["enabled"]}
+        st = store.get_journey_stage(conversation_id)
+        import time as _t
+        now = _t.time()
+        evidence: Dict[str, Any] = {}
+        try:
+            last = (store.last_message_dirs([conversation_id])
+                    or {}).get(conversation_id) or {}
+            l_ts = float(last.get("ts") or 0)
+            if l_ts > 0:
+                evidence["waiting_on"] = (
+                    "customer" if str(last.get("direction")) == "out" else "us")
+                evidence["wait_hours"] = round(max(0.0, now - l_ts) / 3600, 1)
+            if float(st.get("ts") or 0) > 0 and st.get("stage"):
+                evidence["stage_age_hours"] = round(
+                    max(0.0, now - float(st["ts"])) / 3600, 1)
+        except Exception:
+            evidence = {}
+        suggested = None
+        try:
+            from src.inbox.workflow_starter import stage_chain_rec_for
+            rec_id = stage_chain_rec_for(_jcfg["flavor"]).get(
+                str(st.get("stage") or ""))
+            if rec_id:
+                chain = store.get_workflow_chain(rec_id)
+                if (chain and chain.get("enabled")
+                        and not store.has_running_chain(conversation_id, rec_id)
+                        and not store.chain_started_since(
+                            conversation_id, rec_id, now - 7 * 86400)):
+                    suggested = {"chain_id": rec_id,
+                                 "name": str(chain.get("name") or rec_id)}
+        except Exception:
+            suggested = None
+        return {
+            "ok": True, **st,
+            "deals": store.list_deal_events(conversation_id, limit=20),
+            "stages": STAGE_ORDER,
+            "evidence": evidence,
+            "suggested_chain": suggested,
+            "flavor": _jcfg["flavor"],
+            "journey_enabled": _jcfg["enabled"],
+        }
+
+    @app.post("/api/workspace/conv/{conversation_id}/journey/stage")
+    async def api_conv_journey_stage_set(
+        conversation_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """坐席显式设置旅程阶段（任意方向；src=manual，自动推导不再覆盖）。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        from src.inbox.journey_stage import set_stage_manual
+        agent_id, agent_name = _agent_from_request(request)
+        res = set_stage_manual(
+            store, conversation_id, str(body.get("stage") or ""),
+            by=agent_id or agent_name)
+        if not res.get("ok"):
+            raise HTTPException(422, tr(request, "err.ws.bad_journey_stage"))
+        return res
+
+    @app.post("/api/workspace/conv/{conversation_id}/deal")
+    async def api_conv_mark_deal(
+        conversation_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """标记成交（P0-3）：{amount?, currency?, note?} → 台账 + 阶段推进
+        deal/repeat。金额可空（先记一笔，金额事后补录也行——别让「想不起
+        金额」挡住记账）。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            amount = max(0.0, float(body.get("amount") or 0))
+        except (TypeError, ValueError):
+            amount = 0.0
+        from src.inbox.journey_stage import record_deal
+        agent_id, agent_name = _agent_from_request(request)
+        res = record_deal(
+            store, conversation_id, amount=amount,
+            currency=str(body.get("currency") or "")[:8],
+            note=str(body.get("note") or "")[:200],
+            recorded_by=agent_id or agent_name, source="manual")
+        if not res.get("ok"):
+            raise HTTPException(422, tr(request, "err.ws.exec_op_failed"))
+        _goal_chain_event(request, conversation_id, "deal_marked",
+                          str(body.get("note") or ""))
+        return res
+
+    @app.post("/api/workspace/conv/{conversation_id}/deal/{deal_id}/revoke")
+    async def api_conv_revoke_deal(
+        conversation_id: str, deal_id: int, request: Request, _=Depends(api_auth),
+    ):
+        """撤销成交（误标回退：软删台账 + 阶段按事件 prev_stage 还原）。"""
+        _require_workflows(request)
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        from src.inbox.journey_stage import revoke_deal
+        res = revoke_deal(store, conversation_id, deal_id)
+        if not res.get("ok"):
+            if res.get("error") == "not_found":
+                raise HTTPException(404, tr(request, "err.ws.deal_not_found"))
+            raise HTTPException(422, tr(request, "err.ws.exec_op_failed"))
+        return res
+
+    # 实施92b P1-7：批量挂链——收件箱筛选级的「给这批客户启动 X 链」。
+    # 刻意默认 dry_run（裸 POST 只出预览绝不群发）；每次上限 50；
+    # 双重防重：在途链跳过 + 7 天内挂过同链跳过（防连点/隔天重复群发）。
+    _BULK_REFIRE_GUARD_SEC = 7 * 86400
+
+    @app.post("/api/workspace/workflow-chains/{chain_id}/bulk-start")
+    async def api_bulk_start_chain(
+        chain_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """批量启动：{silent_days_min?: float, stage?: str,
+        conversation_ids?: [..], limit?: int, dry_run?: bool=true}。
+        silent_days_min=沉默≥N天的私聊；stage=处于某旅程阶段；
+        conversation_ids（实施92e）=显式会话清单——收件箱「筛选即选择」入口
+        直投当前筛选结果（服务端仍做私聊校验+在途/7天防重，前端清单只是候选）。
+        多个筛选并集。dry_run 回候选数+样本，落地调用需显式 dry_run=false。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        chain = store.get_workflow_chain(chain_id)
+        if not chain:
+            raise HTTPException(404, tr(request, "err.ws.chain_not_found"))
+        if not chain.get("enabled"):
+            raise HTTPException(422, tr(request, "err.ws.chain_disabled"))
+        try:
+            silent_days = float(body.get("silent_days_min") or 0)
+        except (TypeError, ValueError):
+            silent_days = 0.0
+        stage = str(body.get("stage") or "").strip().lower()
+        conv_ids = body.get("conversation_ids")
+        if not isinstance(conv_ids, list):
+            conv_ids = []
+        conv_ids = [str(c).strip() for c in conv_ids[:100] if str(c or "").strip()]
+        if silent_days <= 0 and not stage and not conv_ids:
+            raise HTTPException(422, tr(request, "err.ws.bulk_filter_required"))
+        try:
+            limit = max(1, min(int(body.get("limit") or 20), 50))
+        except (TypeError, ValueError):
+            limit = 20
+        import time as _t
+        now = _t.time()
+        seen: set = set()
+        candidates: list = []
+        rows: list = []
+        if silent_days > 0:
+            rows.extend(store.list_silent_private_conversations(
+                silent_days, limit=200))
+        if stage:
+            rows.extend(store.list_conversations_at_journey_stage(
+                stage, entered_since=0, limit=200))
+        # 显式清单：真实存在且为私聊才进候选（前端清单只是提名，
+        # 服务端校验兜底——幽灵 id / 群聊一律静默剔除）
+        for cid in conv_ids:
+            try:
+                conv = store.get_conversation(cid)
+            except Exception:
+                conv = None
+            if conv and str(conv.get("chat_type") or "private") == "private":
+                rows.append({"conversation_id": cid})
+        for r in rows:
+            cid = str(r.get("conversation_id") or "")
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            try:
+                if store.has_running_chain(cid, chain_id):
+                    continue
+                if store.chain_started_since(
+                        cid, chain_id, now - _BULK_REFIRE_GUARD_SEC):
+                    continue
+            except Exception:
+                continue
+            candidates.append(cid)
+            if len(candidates) >= limit:
+                break
+        dry = bool(body.get("dry_run", True))
+        if dry:
+            sample = []
+            for cid in candidates[:10]:
+                conv = store.get_conversation(cid) or {}
+                sample.append({"conversation_id": cid,
+                               "display_name": str(conv.get("display_name") or "")})
+            return {"ok": True, "dry_run": True,
+                    "candidates": len(candidates), "sample": sample}
+        agent = str(request.session.get("username") or "")
+        started = 0
+        for cid in candidates:
+            try:
+                store.start_chain_execution(
+                    chain_id, cid, {"bulk": True, "agent": agent},
+                    schedule_first_step=True)
+                started += 1
+                _goal_chain_event(request, cid, "chain_started",
+                                  str(chain.get("name") or chain_id))
+            except Exception:
+                logger.debug("bulk-start 单条失败（已跳过）%s", cid,
+                             exc_info=True)
+        return {"ok": True, "dry_run": False, "started": started,
+                "candidates": len(candidates)}
+
+    @app.get("/api/workspace/journey-funnel")
+    async def api_journey_funnel(request: Request, days: int = 14):
+        """实施92c/93：旅程阶段分布 + 窗口成交汇总 + CTA 引导/点击读数。"""
+        api_auth(request)
+        _require_workflows(request)
+        store = _inbox_store(request)
+        from src.inbox.journey_stage import STAGE_ORDER, resolve_journey_cfg
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        flavor = resolve_journey_cfg(cfg)["flavor"]
+        d = max(1, min(90, int(days or 14)))
+        if store is None:
+            return {"ok": True, "order": STAGE_ORDER, "stages": {},
+                    "flavor": flavor,
+                    "deals": {"n": 0, "amount": 0, "days": d},
+                    "cta": {"links": 0, "clicked": 0, "click_rate": None,
+                            "by_target": []}}
+        import time as _t
+        since = _t.time() - d * 86400
+        evs = store.deal_events_between(since)
+        amount = round(sum(float(e.get("amount") or 0) for e in evs), 2)
+        return {
+            "ok": True,
+            "order": STAGE_ORDER,
+            "flavor": flavor,
+            "stages": store.journey_stage_histogram(),
+            "deals": {"n": len(evs), "amount": amount, "days": d},
+            "cta": store.cta_stats(since_ts=since),
+        }
+
+    # ── 实施93：CTA 转化目标库 / 铸链 / 公开跳转 ─────────────────────────────
+
+    @app.get("/api/workspace/cta-targets")
+    async def api_cta_targets_list(request: Request):
+        api_auth(request)
+        _require_workflows(request)
+        store = _inbox_store(request)
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        from src.inbox.cta_links import resolve_cta_cfg
+        return {"ok": True,
+                "targets": store.list_cta_targets() if store else [],
+                "public_base": resolve_cta_cfg(cfg)["public_base"]}
+
+    @app.post("/api/workspace/cta-public-base")
+    async def api_cta_public_base_set(request: Request, _=Depends(api_auth)):
+        """#132：界面内配置短链公网基址（写 overlay ``inbox.cta.public_base``）。
+
+        此前该键只有红字提示裸奔在 SOP 页（连反代术语一起怼给运营）——运营
+        没有任何界面动作可做。校验只收 http(s) 完整地址；尾斜杠归一。
+        """
+        _require_workflows(request)
+        body = await request.json()
+        base = str(body.get("public_base") or "").strip().rstrip("/")
+        import re as _re
+        if not _re.match(r"^https?://[^\s/]+", base, _re.IGNORECASE):
+            raise HTTPException(
+                422, tr(request, "err.ws.field_required", field="public_base"))
+        cm = getattr(request.app.state, "config_manager", None)
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        ok, msg = cm.set_overlay_flag("inbox.cta.public_base", base)
+        if not ok:
+            return {"ok": False, "message": str(msg or "")[:200]}
+        return {"ok": True, "public_base": base}
+
+    @app.post("/api/workspace/cta-targets")
+    async def api_cta_targets_upsert(request: Request, _=Depends(api_auth)):
+        """新建/更新转化目标：{target_id?, name, url, kind?, utm?, enabled?}。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        name = str(body.get("name") or "").strip()
+        url = str(body.get("url") or "").strip()
+        if not body.get("target_id"):
+            if not name or not url.lower().startswith(("http://", "https://")):
+                raise HTTPException(
+                    422, tr(request, "err.ws.field_required", field="name/url"))
+        tid = store.upsert_cta_target(body)
+        return {"ok": True, "target_id": tid}
+
+    @app.delete("/api/workspace/cta-targets/{target_id}")
+    async def api_cta_targets_delete(
+        target_id: str, request: Request, _=Depends(api_auth),
+    ):
+        _require_workflows(request)
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        return {"ok": store.delete_cta_target(target_id)}
+
+    @app.post("/api/workspace/conv/{conversation_id}/cta-link")
+    async def api_conv_mint_cta_link(
+        conversation_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """为会话铸造（或复用）追踪短链：{target_id}。铸链即把旅程推进到
+        「已引导」。public_base 未配置 → 422 明示（绝不发内网地址）。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        from src.inbox.cta_links import mint_link
+        res = mint_link(store, cfg, conversation_id,
+                        str(body.get("target_id") or ""))
+        if not res.get("ok"):
+            if res.get("error") == "no_public_base":
+                raise HTTPException(422, tr(request, "err.ws.cta_no_base"))
+            raise HTTPException(422, tr(request, "err.ws.cta_target_invalid"))
+        return res
+
+    @app.get("/r/{token}")
+    async def public_cta_redirect(token: str, request: Request):
+        """公开跳转（无鉴权——客户点击）。只做 302 与计数：无数据回显、
+        token 不可枚举、点击计数封顶；未知 token → 404 纯文本。
+        刻意不闸 workflows flag：链接已发到客户手里，模块开关不该把它变死链。"""
+        import re as _re
+        if not _re.fullmatch(r"[A-Za-z0-9_-]{4,64}", str(token or "")):
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("not found", status_code=404)
+        store = _inbox_store(request)
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        url = None
+        if store is not None:
+            from src.inbox.cta_links import handle_click
+            url = handle_click(store, cfg, token)
+        if not url:
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("not found", status_code=404)
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url, status_code=302)
+
+    @app.post("/api/cta/convert")
+    async def public_cta_convert(request: Request):
+        """实施93b 深转化回传（落地页/网站/服务商服务端调用，无会话鉴权）。
+
+        body: ``{token 或 conversation_id, kind?, amount?, currency?, ref?, note?}``
+        安全对齐 monetize webhook（S6）：必须配置 ``inbox.cta.webhook_secret``
+        并校验 ``X-CTA-Secret`` 头（恒定时间比较）；未配置直接拒绝。
+        幂等：``ref`` 已记账（含已撤销）→ 跳过。amount>0 走 record_deal
+        （营收台账+阶段 deal/repeat）；amount=0 视作轻转化只推阶段。
+        刻意不闸 workflows flag：链接/埋点已在站外，模块开关不该断回传。"""
+        import hmac as _hmac
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        from src.inbox.cta_links import resolve_cta_cfg
+        secret = str(resolve_cta_cfg(cfg).get("webhook_secret") or "")
+        if not secret:
+            return {"ok": False, "reason": "webhook_secret_not_configured"}
+        got = request.headers.get("x-cta-secret") or ""
+        if not _hmac.compare_digest(got, secret):
+            return {"ok": False, "reason": "unauthorized"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        store = _inbox_store(request)
+        if store is None:
+            return {"ok": False, "reason": "inbox_not_ready"}
+        # 会话解析：token（短链跳转时带给落地页）优先，其次直给 conversation_id
+        cid = ""
+        token = str(body.get("token") or "").strip()
+        if token:
+            link = store.get_cta_link(token) if hasattr(
+                store, "get_cta_link") else None
+            cid = str((link or {}).get("conversation_id") or "")
+        if not cid:
+            cid = str(body.get("conversation_id") or "").strip()
+        if not cid:
+            return {"ok": False, "reason": "unknown_token"}
+        ref = str(body.get("ref") or "").strip()
+        if ref:
+            dup = store.find_deal_event_by_ref(ref)
+            if dup:
+                return {"ok": True, "deduped": True,
+                        "deal_id": int(dup.get("id") or 0)}
+        kind = str(body.get("kind") or "convert").strip()[:24] or "convert"
+        try:
+            amount = float(body.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+        from src.inbox import journey_stage as _js
+        if amount > 0:
+            res = _js.record_deal(
+                store, cid, amount=amount,
+                currency=str(body.get("currency") or "")[:8],
+                note=(f"cta:{kind} " + str(body.get("note") or "")).strip()[:200],
+                recorded_by="cta_webhook", source="cta_webhook", ref=ref)
+            return {"ok": bool(res.get("ok")), "deal_id": res.get("deal_id"),
+                    "stage": res.get("stage")}
+        # 无金额：轻转化（注册/安装/进群）——推进阶段；带 ref 时也落一笔
+        # 0 元台账行（幂等锚点 + 漏斗可见），不带 ref 只推阶段。
+        if ref:
+            res = _js.record_deal(
+                store, cid, amount=0.0,
+                note=f"cta:{kind}"[:200],
+                recorded_by="cta_webhook", source="cta_webhook", ref=ref)
+            return {"ok": bool(res.get("ok")), "deal_id": res.get("deal_id"),
+                    "stage": res.get("stage")}
+        res = _js.record_conversion(store, cid, source=f"cta_webhook:{kind}")
+        return {"ok": bool(res.get("ok")), "stage": res.get("stage"),
+                "advanced": bool(res.get("advanced"))}
+
+    @app.get("/api/workspace/workflows/deal-engine")
+    async def api_deal_engine_status(request: Request):
+        """成交引擎预设状态（workflows 页卡片消费）。"""
+        api_auth(request)
+        _require_workflows(request)
+        store = _inbox_store(request)
+        cfg = getattr(
+            getattr(request.app.state, "config_manager", None), "config", None) or {}
+        from src.inbox.workflow_starter import deal_engine_status
+        return {"ok": True, **deal_engine_status(store, cfg)}
+
+    @app.post("/api/workspace/workflows/deal-engine")
+    async def api_deal_engine_apply(request: Request, _=Depends(api_auth)):
+        """一键开/关成交引擎：{enable: bool, auto_send?: bool}。写 overlay
+        （保注释）+ 接/摘种子链 stage_enter 触发 + 开启时回填存量会话阶段。
+        ``auto_send``（实施92b）缺省不碰；显式 true/false 才切「话术步自动
+        拟稿自动发」档（auto_advance 总闸 + 两条预设链 exec_mode）。"""
+        _require_workflows(request)
+        body = await request.json()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        cm = getattr(request.app.state, "config_manager", None)
+        from src.inbox.workflow_starter import apply_deal_engine
+        _as = body.get("auto_send")
+        res = apply_deal_engine(
+            store, cm, bool(body.get("enable")),
+            auto_send=None if _as is None else bool(_as))
+        return res
 
     @app.post("/api/workspace/conv/{conversation_id}/start-chain")
     async def api_conv_start_chain(conversation_id: str, request: Request, _=Depends(api_auth)):

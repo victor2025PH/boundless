@@ -58,6 +58,21 @@ _DEFAULT_LEDGER_KINDS = (
 
 _RECONNECT_PROBE_PATH = "/api/admin/asset/reconnect/candidates"
 
+# 「彻底删除」在 UI 上是否**值得出现**的保守提示（P0，2026-08-28）。
+# ⚠ 这里刻意只做「要不要渲染菜单项」的粗筛，**判定权威仍是**
+# ``GET /api/accounts/{p}/{a}/purge-history`` 的 ``purgeable``——那个判定
+# （内置合成号 / config 常驻号 / 在册且非 offline·removed）住在
+# ``unified_inbox_account_routes._purge_history_blocked`` 闭包里，跨模块复刻
+# 就会出现「预览说能删、真删 409」的两套口径（本仓已明令禁止，见该函数
+# docstring）。前端点击时必先打那个 GET 拿权威判定。
+_PURGE_HINT_STATUSES = ("offline", "removed", "history_only", "banned")
+
+# 会话档案身份列（username/phone）天然为空的平台：这些平台的「可加回句柄
+# 覆盖率」恒为 0，是**口径必然而非资产丢失**。0% 不加解释会被读成「客户全丢了」
+# （2026-08-28 五视角复盘实录）。列表保持极窄——宁可漏解释，不可把真丢句柄的
+# 平台粉饰成「正常 0%」。
+_NO_HANDLE_PLATFORMS = ("messenger",)
+
 
 def _require_manager(request: Request) -> None:
     try:
@@ -90,48 +105,12 @@ def _ro_connect(db_path: Path) -> Optional[sqlite3.Connection]:
             return None
 
 
-def _reachability_map(db_path: Optional[Path]) -> Dict[Tuple[str, str], Dict[str, int]]:
-    """(platform, account_id) → {both, username_only, phone_only, none}。
-
-    口径：私聊会话（chat_type IN ('private','')）、非 bot、chat_key 非空——与
-    reconnect_claim 的加回清单同一人群；username/phone 取 conversations 身份列。
-    """
-    if not db_path:
-        return {}
-    conn = _ro_connect(Path(db_path))
-    if conn is None:
-        return {}
-    out: Dict[Tuple[str, str], Dict[str, int]] = {}
-    try:
-        rows = conn.execute(
-            """
-            SELECT platform, account_id,
-              SUM(CASE WHEN TRIM(username)!='' AND TRIM(phone)!='' THEN 1 ELSE 0 END),
-              SUM(CASE WHEN TRIM(username)!='' AND TRIM(phone)=''  THEN 1 ELSE 0 END),
-              SUM(CASE WHEN TRIM(username)=''  AND TRIM(phone)!='' THEN 1 ELSE 0 END),
-              SUM(CASE WHEN TRIM(username)=''  AND TRIM(phone)=''  THEN 1 ELSE 0 END)
-            FROM conversations
-            WHERE chat_key != '' AND chat_type IN ('private', '')
-              AND COALESCE(peer_is_bot, 0) = 0
-            GROUP BY platform, account_id
-            """
-        ).fetchall()
-        for r in rows:
-            both, uo, po, none = (int(r[2] or 0), int(r[3] or 0),
-                                  int(r[4] or 0), int(r[5] or 0))
-            out[(str(r[0]), str(r[1]))] = {
-                "both": both, "username_only": uo,
-                "phone_only": po, "none": none,
-            }
-    except Exception:
-        # 极老库缺身份列（迁移没跑过）→ 覆盖读数整体缺席，卡片显示「—」不装数。
-        logger.debug("[asset_center] reachability 查询失败", exc_info=True)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-    return out
+# ⚠ 原 `_reachability_map`（按**私聊会话行** GROUP BY 的可加回分桶）已于
+# 2026-08-28 删除：它与同卡并排展示的「联系人」不是同一人群（会话行 vs 通讯录 ∪
+# 私聊 peer 的并集），实测某 WhatsApp 账号分母差 156 人（9 vs 165）——两个数字挨着
+# 摆、看起来后者是前者的比例，其实不是。现统一走
+# `migration_export.reachability_over_union()`（人群与规则都与迁移包同源）。
+# 别把按会话聚合的版本加回来：那会让卡片重新自相矛盾。
 
 
 def _media_count_map(db_path: Optional[Path]) -> Dict[Tuple[str, str], int]:
@@ -270,7 +249,6 @@ def _build_summary(request: Request) -> Dict[str, Any]:
     if store is None:
         raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
     db_path = getattr(store, "_db_path", None)
-    reach_map = _reachability_map(db_path)
     media_map = _media_count_map(db_path)
 
     try:
@@ -286,9 +264,26 @@ def _build_summary(request: Request) -> Dict[str, Any]:
         if not p or not a:
             continue
         meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        # 账号自身资料（登录时由 account_self_profile 富集进 meta）：卡片主标题的
+        # 回落链靠它才不至于把 44 字的 LINE MID 当名字显示。读不到一律空串。
+        self_prof: Dict[str, str] = {}
+        try:
+            from src.integrations.account_self_profile import (
+                read_self_profile_from_meta,
+            )
+            self_prof = dict(read_self_profile_from_meta(meta) or {})
+        except Exception:
+            logger.debug("[asset_center] self_profile 读取失败", exc_info=True)
         seen[(p, a)] = {
             "platform": p, "account_id": a,
-            "label": str(row.get("label") or "") or a,
+            # ⚠ label 保持「运营起的别名」原义，**不再**回落成 account_id：
+            # 回落发生在前端的四级链（别名 > 平台昵称 > @用户名 > 脱敏 id），
+            # 后端塞 id 进 label 会让前端分不出「有没有起过名」（那正是
+            # 「起个名字」入口该不该出现的判据）。
+            "label": str(row.get("label") or ""),
+            "self_name": str(self_prof.get("self_name") or ""),
+            "self_username": str(self_prof.get("self_username") or ""),
+            "self_avatar": str(self_prof.get("self_avatar") or ""),
             "mode": str(row.get("mode") or ""),
             "registry_status": str(row.get("status") or ""),
             "banned": bool(meta.get("banned")),
@@ -300,7 +295,8 @@ def _build_summary(request: Request) -> Dict[str, Any]:
         key = (str(p), str(a))
         if key not in seen and key[0] and key[1]:
             seen[key] = {
-                "platform": key[0], "account_id": key[1], "label": key[1],
+                "platform": key[0], "account_id": key[1], "label": "",
+                "self_name": "", "self_username": "", "self_avatar": "",
                 "mode": "", "registry_status": "", "banned": False,
                 "ban_reason": "", "last_online_at": 0.0, "in_registry": False,
             }
@@ -317,7 +313,17 @@ def _build_summary(request: Request) -> Dict[str, Any]:
             cs = store.protocol_contacts_summary(p, a, include_chats=True) or {}
         except Exception:
             cs = {}
-        reach = dict(reach_map.get(key) or {})
+        # 可加回分桶必须与同卡展示的「联系人」**同一人群**（并集口径）：两者并排
+        # 摆着，看起来后者是前者的比例——原先百分比按私聊会话行算，实测某 WA 账号
+        # 分母差 156 人（9 vs 165）。规则与人群都与迁移包同源，见
+        # migration_export.reachability_over_union 的 docstring。
+        try:
+            from src.inbox.migration_export import reachability_over_union
+            reach = dict(reachability_over_union(db_path, p, a) or {})
+        except Exception:
+            logger.debug("[asset_center] 可加回聚合失败 %s:%s", p, a,
+                         exc_info=True)
+            reach = {}
         r_total = sum(int(reach.get(k) or 0) for k in
                       ("both", "username_only", "phone_only", "none"))
         covered = r_total - int(reach.get("none") or 0)
@@ -338,6 +344,16 @@ def _build_summary(request: Request) -> Dict[str, Any]:
             "platform": p,
             "account_id": a,
             "label": base["label"],
+            "self_name": base["self_name"],
+            "self_username": base["self_username"],
+            "self_avatar": base["self_avatar"],
+            # 「彻底删除」值不值得在这张卡上出现（粗筛）。**判定权威仍是**
+            # GET purge-history 的 purgeable——那个判定住在 account_routes 的闭包
+            # 里，跨模块复刻就会出现「卡片说能删、真删 409」的两套口径。
+            "purge_hint": status in _PURGE_HINT_STATUSES,
+            # 该平台的会话档案天然没有 username/phone → 覆盖率恒 0 是**口径必然
+            # 而非资产丢失**。前端据此给一句解释，否则 0% 会被读成「客户全丢了」。
+            "no_handle_platform": p in _NO_HANDLE_PLATFORMS,
             "mode": base["mode"],
             "status": status,
             "registry_status": base["registry_status"],

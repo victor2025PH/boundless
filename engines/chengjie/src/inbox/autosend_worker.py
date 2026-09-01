@@ -364,6 +364,28 @@ class AutosendWorker:
         except Exception:
             return False
 
+    def _dead_peer_clear(self, conv: str) -> None:
+        """#88：真实送达=可达铁证 → 清共享表标记 + 本地封禁冷却（no-op 安全）。
+
+        0830 skuio 实锤：Yhang 会话 AI 自动投递 18:38 双勾送达，黄条「曾被
+        对方拉黑」仍常驻——#73 的清标钩子只挂了手动路由与 A 线主动外发，
+        B 线（自动投递 + 人审通过投递）送达成功从不清标。本地
+        ``_blocked_conv_until`` 同清：真送达面前旧封禁冷却已无意义。
+        """
+        if not conv or conv == "?":
+            return
+        self._blocked_conv_until.pop(conv, None)
+        reg = self._dead_peer_shared()
+        if reg is None:
+            return
+        try:
+            if reg.unblock(self._platform_of_conv(conv), conv):
+                logger.info(
+                    "[AutosendWorker] 送达成功，已解除 dead-peer 标 conv=%s"
+                    "（自动回复恢复，黄条随下轮 send-caps 消失）", conv)
+        except Exception:
+            pass
+
     def _dead_peer_record(self, conv: str, err: str) -> None:
         """把**永久**不可达登记进共享表（可自愈类由 registry 内部忽略）。"""
         reg = self._dead_peer_shared()
@@ -785,6 +807,8 @@ class AutosendWorker:
                     res.get("error") or res.get("blocked") or "send not ok"))
             _delivered_ok = True
             self.total_human_delivered += 1
+            # #88：人审通过投递送达成功 → 清 dead-peer 标（与自动链同口径）
+            self._dead_peer_clear(item["conversation_id"])
             # B41：成功投递补写 DB sent_at（best-effort，与自动链同口径）
             try:
                 _st_mark = getattr(self._svc, "_store", None)
@@ -1177,6 +1201,8 @@ class AutosendWorker:
                     retry_after_ms=int(res.get("retry_after_ms") or 0))
             _delivered_ok = True
             self.total_delivered += 1
+            # #88：自动投递送达成功 → 清 dead-peer 标（黄条解除 + 自动回复恢复）
+            self._dead_peer_clear(_conv_id_g)
             # B41：成功投递补写 DB sent_at（best-effort）——跨重启的「已投过」
             # 证据 + 价值周报的 inbox 投递计数从此有真值。
             try:

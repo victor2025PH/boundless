@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # 提示词版本：进缓存键（内存+落盘）——改 few-shot/规则后旧缓存自动失效，
 # 防「提示词升级了、老句子还在念旧改写」。
 # v3（2026-08-03 P0-1）：禁感叹词开场（「嘿病」源头之一）+ 句长上限（治长句念稿）。
-_PROMPT_VERSION = 3
+# v4（2026-08-30 #92）：事实红线补「自述行为/饮食」——晚餐自述被改写链改飞的实锤
+# （原文说 A 顿饭、口语版念出 B 顿饭，语义余弦拦不住同域换菜）。
+_PROMPT_VERSION = 4
 
 # ── 情绪 → 语气词（喂给 LLM 的语气基调）─────────────────────────────────────
 _EMOTION_TONE = {
@@ -93,7 +95,9 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
             "目标：听起来像一个真实的人在微信语音里随口说，而不是念稿。",
             "红线（违反即失败）：",
             "1. 事实不可变——数字、时间、日期、金额、人名、地名、任何承诺，值和含义一律原样保留；",
-            "2. 不编造——不得加入原文没有的具体事实（可加语气/口头禅/口语连接，但不加「信息」）；",
+            "2. 不编造——不得加入原文没有的具体事实（可加语气/口头禅/口语连接，但不加「信息」）；"
+            "原文里「我吃了什么/我在做什么」这类自述是事实：吃的什么饭、做的什么事"
+            "一个都不能换、不能加（原文没提的菜名饭名绝不能出现）；",
             "3. 同一种语言，不串语言。",
             "重塑方式：",
             "- 拆开生硬长句，用日常口语词（因此→所以、是否→是不是、非常→特别、无需→不用）；",
@@ -122,7 +126,9 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
         "你是口语改写助手。把用户给的一句话改写成【适合用语音说出来】的口语版本。",
         "严格要求：",
         "1. 保持原意和所有信息不变，绝对不能增加新信息、遗漏或篡改信息——"
-        "数字、时间、日期、金额、人名、地名等关键信息必须原样保留（可用中文数字念法，但值不能变）；",
+        "数字、时间、日期、金额、人名、地名等关键信息必须原样保留（可用中文数字念法，但值不能变）；"
+        "原文里「我吃了什么/我在做什么」这类自述同属关键信息："
+        "吃的什么饭、做的什么事不能换，原文没提的菜名饭名绝不能出现；",
         "2. 把书面表达换成日常口语（如「因此」→「所以」、「是否」→「是不是」），拆开生硬的长句；",
         f"3. 语气{tone}；",
     ]
@@ -149,7 +155,8 @@ def build_colloquial_prompt(emotion: str = "neutral", lead: bool = True,
 # 刻意不用全局 _PROMPT_VERSION（bump 它会把普通口语化的全量落盘缓存一起作废）。
 # v4（2026-08-23 老板耳测四轮后定向）：禁笑声标记（引擎念出来怪异），笑意用话带；
 # 语调起伏交给分段+标点；文本口语度再加码（微信语音口吻）。
-_SCRIPT_PROMPT_VERSION = 4
+# v5（2026-08-30 #92）：红线补自述行为/饮食（与普通改写 v4 同批）。
+_SCRIPT_PROMPT_VERSION = 5
 
 
 def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
@@ -168,7 +175,9 @@ def build_speech_script_prompt(emotion: str = "neutral", style: str = "",
         "最后一段后面**不加**任何标记。",
         "红线（违反即废）：",
         "1. 数字、时间、日期、金额、人名、地名、承诺，值和含义一律原样保留；",
-        "2. 不得加入原文没有的事实（语气词/口头禅可以加，「信息」不能加）；",
+        "2. 不得加入原文没有的事实（语气词/口头禅可以加，「信息」不能加）——"
+        "「我吃了什么/我在做什么」这类自述是事实：吃的什么饭、做的什么事"
+        "不能换，原文没提的菜名饭名绝不能出现；",
         "3. 同一种语言，不串语言；",
         "4. 只输出剧本一行本身：不要引号、不要解释、不要复述规则。",
         "改写规则（先改写再分段，往「跟熟人发语音」的口吻改）：",
@@ -310,6 +319,51 @@ def lost_anchors(original: str, rewritten: str) -> list:
     return sorted(o - _anchor_set(rewritten))
 
 
+# ── 餐食自述守卫（#92，0830 实锤「晚餐自述矛盾」）───────────────────────────
+# 事故（钧/会话 Jenny，原图 812）：语音答「刚吃完晚饭，你泡面配点青菜鸡蛋饭没？
+# 我这人懒，晚上就随便炒个饭对付」——句内餐食叙事混乱。改写链的三道守卫全拦
+# 不住这类漂移：数字锚点只护数字/拉丁（CJK 菜名零保护）、语义余弦对「同域换菜」
+# 天然高分（晚饭话题→晚饭话题 cos≈0.9+）、长度守卫无关。确定性收口＝**改写
+# 不得引入原文没有的餐食名词**（原文没提的菜名饭名出现在口语版里=编造）；
+# 拒绝的代价仅是回落规则档（原文照念），零损失，故词表可以偏宽。
+# 刻意只查「新增」不查「丢失」：口语化省略修饰（「青菜鸡蛋面」→「面」）是
+# 合法压缩，反向查会大面积误拒。
+_FOOD_TERMS = (
+    "早饭", "早餐", "午饭", "午餐", "晚饭", "晚餐", "夜宵", "宵夜",
+    "泡面", "方便面", "螺蛳粉", "炒饭", "蛋炒饭", "炒面", "拌面", "汤面",
+    "米饭", "面条", "饺子", "包子", "馒头", "馄饨", "米线", "米粉",
+    "火锅", "烧烤", "串串", "外卖", "披萨", "汉堡", "寿司", "拉面",
+    "青菜", "鸡蛋", "牛肉", "猪脚", "鸡腿", "排骨", "烤肉", "麻辣烫",
+    "沙拉", "蛋糕", "奶茶", "咖啡", "豆浆", "稀饭",
+)
+_FOOD_SUFFIX_RE = re.compile(
+    r"[\u4e00-\u9fff]{1,4}(?:炒饭|盖饭|拌饭|烩饭|焖饭|蛋饭|炒面|拌面|汤面)")
+
+
+def food_terms(text: str) -> set:
+    """文本中的餐食名词集合（词表 + 「X饭/X面」复合后缀）。纯函数。"""
+    s = str(text or "")
+    out = {t for t in _FOOD_TERMS if t in s}
+    for m in _FOOD_SUFFIX_RE.finditer(s):
+        out.add(m.group(0))
+    return out
+
+
+def introduced_food_terms(original: str, rewritten: str) -> list:
+    """改写**新增**的餐食名词（原文没提的菜名饭名；空=餐食红线未破）。
+
+    复合词拆解防误报：原文「青菜鸡蛋面」被拆说成「青菜」「鸡蛋」不算新增
+    ——新增 term 若是原文任一餐食词/原文文本的子串则豁免。
+    """
+    o_text = str(original or "")
+    intro = []
+    for t in sorted(food_terms(rewritten) - food_terms(o_text)):
+        if t in o_text:
+            continue          # 原文正文本就含该词（如复合词内嵌）
+        intro.append(t)
+    return intro
+
+
 # ── 疑问句主导检测（2026-08-10 实录矫正）────────────────────────────────────
 # 事故：坐席手打「你晚上吃饭了吗，晚上有什么安排」被本地模型改写成**对它的回答**
 # （「你呢吃了吗，晚上打算随便弄点东西吃，然后在家呆着」）念出——答话与原问同
@@ -393,6 +447,13 @@ def sanitize_llm_output(
     _lost = lost_anchors(core, t)
     if _lost:
         logger.info("[voice_colloquial_llm] 拒改写：事实锚点丢失 %s", _lost[:3])
+        return None
+    # #92 餐食自述守卫：改写引入原文没有的菜名饭名 → 拒（同域换菜余弦拦不住，
+    # 确定性词表收口；回落=原文照念零损失）
+    _intro = introduced_food_terms(core, t)
+    if _intro:
+        logger.info("[voice_colloquial_llm] 拒改写：引入原文没有的餐食词 %s（#92）",
+                    _intro[:3])
         return None
     return t
 
@@ -863,6 +924,17 @@ async def llm_colloquialize(
     from src.ai.voice_colloquial import _is_chinese_dominant
     if not _is_chinese_dominant(core):
         return None
+    # 粤语语音稿不过 LLM 口语化（2026-08-30 粤语人设 verifier 抓缝）：粤文本身
+    # 就是口语书写形，改写零增益；而改写 prompt 只约束「同一种语言」、消毒器
+    # _is_chinese_dominant 分不出粤/普、语义地板拦不住同义「粤转普」——粤文会被
+    # 磨回普通话书写，再由 zh-HK 音色念出＝失地道感。skip 即保真（规则档词表
+    # 对粤文几乎零命中，天然无害，不必拦）。
+    try:
+        from src.ai.lang_voice_route import is_cantonese_text
+        if is_cantonese_text(core, min_markers=2):
+            return None
+    except Exception:
+        pass
     _bump("attempts")
     if is_interrogative_dominant(core):
         _bump("skipped_interrogative")
@@ -1044,6 +1116,7 @@ def reset_state(*, disk: bool = True) -> None:
 __all__ = [
     "DEFAULT_MIN_SIMILARITY",
     "llm_colloquialize", "set_ai_client", "build_colloquial_prompt", "sanitize_llm_output",
-    "lost_anchors", "is_interrogative_dominant", "health_signal", "reset_state",
+    "lost_anchors", "food_terms", "introduced_food_terms",
+    "is_interrogative_dominant", "health_signal", "reset_state",
     "parse_llm_endpoints", "get_last_provider",
 ]

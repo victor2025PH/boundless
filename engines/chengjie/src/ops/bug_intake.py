@@ -137,6 +137,8 @@ _STATS: Dict[str, int] = {
     "smalltalk_suppressed": 0, "photo_suppressed": 0, "feedback": 0,
     # B33（实施49 2026-08-21）：被限频拦下的真反馈登记数 / 被压制截图归档数
     "rate_capped_report": 0, "capped_photo_archived": 0,
+    # 实施82：官方 bot 消息被自咬环守卫压制的次数（bot 代发后应恒 >0）
+    "official_bot_suppressed": 0,
 }
 _DB_CONN: Optional[sqlite3.Connection] = None
 
@@ -338,6 +340,11 @@ def _db() -> sqlite3.Connection:
         for stmt in (
             "ALTER TABLE bug_tickets ADD COLUMN notify_ts REAL NOT NULL DEFAULT 0",
             "ALTER TABLE bug_tickets ADD COLUMN notify_note TEXT NOT NULL DEFAULT ''",
+            # 修复说明（实施81 P1-4）：标 fixed 时一句话写清改了什么，回访文案引用
+            "ALTER TABLE bug_tickets ADD COLUMN fix_note TEXT NOT NULL DEFAULT ''",
+            # 回访出站消息 id（实施82 P0）：bot 发送成功落此列——后续 reaction
+            # 验证轮询/编辑消息都锚它；0=未知（pyro 回落链不取 id，如实记 0）
+            "ALTER TABLE bug_tickets ADD COLUMN notify_msg_id INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 con.execute(stmt)
@@ -504,15 +511,26 @@ VALID_STATUSES = ("new", "confirmed", "in_progress", "fixed", "verified",
                   "closed")
 
 
-def set_ticket_status(ticket_id: int, status: str) -> bool:
+def set_ticket_status(ticket_id: int, status: str,
+                      fix_note: Optional[str] = None) -> bool:
+    """状态流转；``fix_note``（实施81 P1-4）＝「本次改了什么」一句话，标 fixed 时
+    随手写上，回访文案引用——回访从「已修复」变成「你报的 X 已改成 Y」。
+    传 None/空串不动既有值（重试回访等场景不许把已写的说明抹掉）。"""
     if status not in VALID_STATUSES:
         return False
     try:
         con = _db()
         with _LOCK:
-            cur = con.execute(
-                "UPDATE bug_tickets SET status=?, updated_ts=? WHERE id=?",
-                (status, time.time(), int(ticket_id)))
+            note = str(fix_note or "").strip()[:300]
+            if note:
+                cur = con.execute(
+                    "UPDATE bug_tickets SET status=?, fix_note=?, updated_ts=?"
+                    " WHERE id=?",
+                    (status, note, time.time(), int(ticket_id)))
+            else:
+                cur = con.execute(
+                    "UPDATE bug_tickets SET status=?, updated_ts=? WHERE id=?",
+                    (status, time.time(), int(ticket_id)))
             con.commit()
         return cur.rowcount > 0
     except Exception:
@@ -537,32 +555,85 @@ def _html_esc(s: Any) -> str:
             .replace(">", "&gt;"))
 
 
-def build_fix_notify_text(row: Dict[str, Any]) -> str:
-    """修复回访文案（HTML parse mode；@报障人用 tg://user 深链 mention）。
-
-    刻意由代码拼（与回执 footer 同理由：编号/@目标必须确定性正确）；
-    reporter_id 非数字（异常数据）时退化为纯文本称呼不带链接。
-    """
-    tid = int(row.get("id") or 0)
+def _mention_html(row: Dict[str, Any]) -> str:
+    """@报障人（tg://user 深链；reporter_id 非数字退化为纯文本称呼）。"""
     name = _html_esc(str(row.get("reporter_name") or "").strip() or "朋友")
     rid = str(row.get("reporter_id") or "").strip()
-    mention = (f'<a href="tg://user?id={rid}">{name}</a>'
-               if rid.isdigit() else name)
+    return (f'<a href="tg://user?id={rid}">{name}</a>'
+            if rid.isdigit() else name)
+
+
+def resolve_update_hint(config: Optional[Dict[str, Any]]) -> str:
+    """「怎么拿到修复」提示（``bug_intake.update_hint``，实施81 P0-3）。
+
+    运营按发版节奏改 overlay（如「已推送热补丁，重启智聊即生效」/「请更新到
+    1.0.59」）；**缺省空串＝回访文案不带更新段**（服务端修复即时生效，硬塞
+    「请更新」反而是误导），与旧行为完全一致。
+    """
+    try:
+        raw = ((config or {}).get("bug_intake") or {}).get("update_hint")
+        return str(raw or "").strip()[:200]
+    except Exception:
+        return ""
+
+
+def build_fix_notify_text(row: Dict[str, Any], update_hint: str = "") -> str:
+    """修复回访文案（HTML parse mode；@报障人用 tg://user 深链 mention）。
+
+    刻意由代码拼（与回执 footer 同理由：编号/@目标必须确定性正确）。
+    ``fix_note``（工单行内，P1-4）→ 「本次改动」段；``update_hint``（P0-3，
+    配置或调用方传入）→ 「获取方式」段——两段都可缺省，缺省即旧文案。
+    """
+    tid = int(row.get("id") or 0)
+    mention = _mention_html(row)
     title = _html_esc(str(row.get("title") or "").strip()[:60])
-    return (f"🔧 {mention} 你反馈的「{title}」（#{tid}）已修复上线，"
-            "方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！")
+    parts = [f"🔧 {mention} 你反馈的「{title}」（#{tid}）已修复上线"]
+    fix_note = str(row.get("fix_note") or "").strip()
+    if fix_note:
+        parts.append(f"（本次改动：{_html_esc(fix_note[:200])}）")
+    parts.append("。")
+    hint = str(update_hint or "").strip()
+    if hint:
+        parts.append(f"📦 获取方式：{_html_esc(hint[:200])}。")
+    parts.append("方便的话帮忙验证一下；确认没问题我们就关单，谢谢反馈！")
+    return "".join(parts)
 
 
-def mark_notified(ticket_id: int, ok: bool, note: str = "") -> None:
-    """记录回访通知结果（成功写 notify_ts；失败只记 note 供 /notify 重试）。"""
+def build_reply_text(row: Dict[str, Any], text: str, mention: bool = True) -> str:
+    """处置台「群内回复」文案（HTML parse mode，实施81 P0-2）。
+
+    @报障人 + 工单号前缀由代码拼（与回执 footer 同一理由），正文原样转义——
+    值守写什么发什么，不代改措辞。
+    """
+    tid = int(row.get("id") or 0)
+    body = _html_esc(str(text or "").strip())
+    head = (_mention_html(row) + " ") if mention else ""
+    footer = f"\n🎫 工单 #{tid}" if tid else ""
+    return f"{head}{body}{footer}"
+
+
+def mark_notified(ticket_id: int, ok: bool, note: str = "",
+                  msg_id: int = 0) -> None:
+    """记录回访通知结果（成功写 notify_ts；失败只记 note 供 /notify 重试）。
+
+    ``msg_id``（实施82）＝bot 出站消息 id，reaction 验证/编辑消息的锚；
+    pyro 回落链不取 id 传 0——0 不覆盖既有非零值（重试失败别抹掉锚）。
+    """
     try:
         con = _db()
         with _LOCK:
-            con.execute(
-                "UPDATE bug_tickets SET notify_ts=?, notify_note=?,"
-                " updated_ts=? WHERE id=?",
-                (time.time() if ok else 0, str(note or "")[:200],
-                 time.time(), int(ticket_id)))
+            if int(msg_id or 0) > 0:
+                con.execute(
+                    "UPDATE bug_tickets SET notify_ts=?, notify_note=?,"
+                    " notify_msg_id=?, updated_ts=? WHERE id=?",
+                    (time.time() if ok else 0, str(note or "")[:200],
+                     int(msg_id), time.time(), int(ticket_id)))
+            else:
+                con.execute(
+                    "UPDATE bug_tickets SET notify_ts=?, notify_note=?,"
+                    " updated_ts=? WHERE id=?",
+                    (time.time() if ok else 0, str(note or "")[:200],
+                     time.time(), int(ticket_id)))
             con.commit()
     except Exception:
         logger.debug("[bug_intake] 通知记账失败（忽略）", exc_info=True)
@@ -744,6 +815,17 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
             return None
         ts = float(now if now is not None else time.time())
         t = str(text or "").strip()
+        # 官方 bot 自咬环守卫（实施82 P0）：bot 代发后，回访/周公示会以「入站」
+        # 形态回到观察管线，文案里满是 bug 词（工单标题原文）——不压制就会被
+        # 自己的登记链当成新报障，dup 链滚雪球。硬压制 + 独立计数。
+        try:
+            from src.ops.bug_bot import is_official_bot
+            if is_official_bot(sender_id):
+                _bump("official_bot_suppressed")
+                return False
+        except Exception:
+            logger.debug("[bug_intake] bot 守卫异常（放行后续闸门）",
+                         exc_info=True)
         # 危机词：压制 AI（人来处理）+ 即时告警（每用户 30min 去抖）
         if t and is_crisis(t):
             _bump("crisis_hold")
@@ -1050,7 +1132,8 @@ __all__ = [
     "parse_cfg", "is_bug_group", "voice_suppressed", "classify_message",
     "classify_severity", "is_crisis", "normalize_title", "titles_similar",
     "record_bug_ticket", "append_ticket_note", "set_ticket_status",
-    "list_tickets", "get_ticket", "build_fix_notify_text", "mark_notified",
+    "list_tickets", "get_ticket", "build_fix_notify_text", "build_reply_text",
+    "resolve_update_hint", "mark_notified",
     "detect_verify_intent", "pending_verify_ticket", "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",

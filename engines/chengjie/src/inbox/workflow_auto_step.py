@@ -243,7 +243,9 @@ def make_auto_step_hook(app_state: Any, cfg_root: Any):
             # workflow_tick 在事件循环线程内同步执行 → 此处必有 running loop；
             # 无 loop（异常调用姿势）→ RuntimeError 被外层捕获降级 remind
             asyncio.get_running_loop().create_task(
-                _generate_and_stage(app_state, store, ex_snap, note))
+                _generate_and_stage(
+                    app_state, store, ex_snap, note,
+                    cta_raw=str(step.get("cta") or ""), cfg_root=cfg_root))
             return {"action": "auto"}
         except Exception:
             logger.debug("auto_step_hook failed（回落提醒档）", exc_info=True)
@@ -254,8 +256,14 @@ def make_auto_step_hook(app_state: Any, cfg_root: Any):
 
 async def _generate_and_stage(
     app_state: Any, store: Any, ex: Dict[str, Any], note: str,
+    *, cta_raw: str = "", cfg_root: Any = None,
 ) -> bool:
-    """异步：生成 → 落 L2 草稿。失败 → 发经典提醒 toast（人接手）。绝不抛。"""
+    """异步：生成 → 落 L2 草稿。失败 → 发经典提醒 toast（人接手）。绝不抛。
+
+    实施93 ``cta_raw``（步骤级转化目标，``@primary``＝首个启用目标）：生成成功
+    后为该会话铸追踪短链并**确定性追加**在文末——刻意不走「LLM 保留占位符」
+    （小模型丢占位符＝死链/白说）。铸链失败（目标缺失/停用/未配公网基址）→
+    整步降级提醒坐席（fail-closed：引导话术没有链接等于白说）。"""
     conv_id = str(ex.get("conversation_id") or "")
     step_idx = int(ex.get("current_step") or 0)
     try:
@@ -314,6 +322,31 @@ async def _generate_and_stage(
                 return False
         except Exception:
             logger.debug("[workflow-auto] 互斥二次复查异常（放行）", exc_info=True)
+        # 实施93：步骤级 CTA——铸追踪短链追加文末；任何失败整步降级提醒
+        if cta_raw:
+            link_url = ""
+            try:
+                from src.inbox.cta_links import (
+                    mint_link,
+                    resolve_step_target_id,
+                )
+                tid = resolve_step_target_id(store, cta_raw)
+                if tid:
+                    res = mint_link(store, cfg_root, conv_id, tid)
+                    if res.get("ok"):
+                        link_url = str(res.get("url") or "")
+            except Exception:
+                logger.debug("[workflow-auto] CTA 铸链异常", exc_info=True)
+                link_url = ""
+            if not link_url:
+                _bump("fallback_remind")
+                _publish_step_event(conv_id, ex, note, auto=False)
+                logger.info(
+                    "[workflow-auto] guard=cta_unavailable 铸链失败（目标缺失/"
+                    "停用/未配公网基址），降级提醒 conv=%s step=%s cta=%s",
+                    conv_id, step_idx, cta_raw)
+                return False
+            reply = reply.rstrip() + "\n" + link_url
         # L2 pending 落库：source_id 唯一键幂等；autosend 管线（含 register_l2_callback
         # 事件唤醒）从这里接管——deliver 闸门/翻译/风控/节奏全在那条链上
         store.upsert_draft({

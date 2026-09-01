@@ -451,6 +451,9 @@ class ConfigManager:
         - ``AITR_HOSTED_VISION_*``：厂商托管识图网关（同上，**永不入库**）。
         - ``AITR_HOSTED_VOICE_* / AITR_HOSTED_ASR_*``：托管克隆语音 / 语音识别
           （混合形态，只动种子 ``_lan_seed`` 标记过的段，**永不入库**）。
+        - ``AITR_HOSTED_EMBED_*``：托管嵌入（LAN 嵌入端点不可达时改走网关，
+          **永不入库**）——不回放的话热重载会把 ai.embedding_* 抹回 LAN，
+          语义记忆召回重新降级为关键词。
         """
         desktop = self._env_truthy("AITR_DESKTOP_MODE")
         host = os.environ.get("AITR_WEB_HOST")
@@ -460,6 +463,7 @@ class ConfigManager:
         hosted_vision = (os.environ.get("AITR_HOSTED_VISION_BASE_URL") or "").strip()
         hosted_voice = (os.environ.get("AITR_HOSTED_VOICE_BASE_URL") or "").strip()
         hosted_asr = (os.environ.get("AITR_HOSTED_ASR_BASE_URL") or "").strip()
+        hosted_embed = (os.environ.get("AITR_HOSTED_EMBED_BASE_URL") or "").strip()
         if desktop or host or port or token:
             web = self.config.get("web_admin")
             if not isinstance(web, dict):
@@ -482,6 +486,8 @@ class ConfigManager:
             self._apply_hosted_vision_env(hosted_vision)
         if hosted_voice or hosted_asr:
             self._apply_hosted_media_env(hosted_voice, hosted_asr)
+        if hosted_embed:
+            self._apply_hosted_embed_env(hosted_embed)
 
     def _apply_hosted_ai_env(self, hosted_key: str) -> None:
         """把 ``AITR_HOSTED_AI_*`` 注入内存中的 ``ai.*``（用户自有 Key 不覆盖）。"""
@@ -595,6 +601,22 @@ class ConfigManager:
                 # overlay 的 false 抹回，回放必须重放「自动开启」。
                 auto_enable=(os.environ.get("AITR_HOSTED_ASR_AUTO")
                              or "").strip() == "1")
+
+    def _apply_hosted_embed_env(self, gw_base: str) -> None:
+        """回放托管嵌入注入（与 ``_apply_hosted_media_env`` 同款理由）。
+
+        不做网络探测：注入时已判过「LAN 端点全不可达」，回放只是把那个结论重放
+        进新读入的配置。变更逻辑单一事实源在 ``hosted_gateway.apply_hosted_embed``。
+        """
+        try:
+            from src.ai.hosted_gateway import apply_hosted_embed
+        except Exception:
+            # 回放失败＝热重载后 ai.embedding_* 被抹回 LAN，语义召回静默降级成关键词。
+            # 不抛（配置热重载绝不能被它带崩），但必须留痕，否则没人查得到降级从哪来。
+            self.logger.debug("托管嵌入回放不可用（hosted_gateway 导入失败）",
+                              exc_info=True)
+            return
+        apply_hosted_embed(self.config, gw_base)
 
     def _ensure_baseline(self) -> None:
         """桌面态（AITR_DESKTOP_MODE）产品基线增量补齐——修「种子只影响新装」缺口。

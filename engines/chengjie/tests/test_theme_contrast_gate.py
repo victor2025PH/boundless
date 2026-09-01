@@ -30,6 +30,15 @@ import re
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 _BASE_HTML = _REPO / "src/web/templates/base.html"
 _TOKENS_CSS = _REPO / "src/web/static/theme-tokens.css"
+# 第三套体系：右栏副驾（shared/copilot），自成一套 --cp-*。2026-08-28 前不在本
+# 门禁覆盖内 → 整个右栏漏掉了 2026-08-16 那次全站提亮，实测比它所在的外壳暗
+# 一到两档（tiny 贴 surface-2 只有 4.19:1，已低于 AA）。纳入后回退会被点名。
+_CP_DARK_CSS = _REPO / "shared/copilot/theme-dark.css"
+_CP_LIGHT_CSS = _REPO / "shared/copilot/theme-light.css"
+_CP_TOKENS_CSS = _REPO / "shared/copilot/tokens.css"
+# 第四套：工作台外壳 --tk-*（workspace_base.html）。admin-theme.mdc 要求它与
+# base.html/codemod 表「三处联动」，但此前只有前两处进门禁——联动全靠人记。
+_WORKSPACE_HTML = _REPO / "src/web/templates/workspace_base.html"
 
 _TEXT_AA = 4.5   # 正文/小字（含 .7~.85rem 的 chips/徽章/meta）
 _GRAPHIC = 3.0   # 图形件（状态点/描边/大标题）
@@ -336,6 +345,198 @@ def test_debt_registry_not_stale():
         if got >= _TEXT_AA:
             stale.append(f"[{theme}] {desc} 已达 {got:.2f}≥{_TEXT_AA}——请除名并登记为正式契约")
     assert not stale, "\n".join(stale)
+
+
+# ---------------------------------------------------------------------------
+# 右栏副驾 --cp-* （shared/copilot，两端共享的第三套体系）
+# ---------------------------------------------------------------------------
+
+def _load_cp_palettes() -> tuple[dict, dict]:
+    light = _vars_of(_block(_strip_comments(_CP_LIGHT_CSS.read_text(encoding="utf-8")),
+                            r':root\[data-cp-theme="light"\],\s*\.cp-theme-light'))
+    dark = _vars_of(_block(_strip_comments(_CP_DARK_CSS.read_text(encoding="utf-8")),
+                           r':root\[data-cp-theme="dark"\],\s*\.cp-theme-dark'))
+    return light, dark
+
+
+# 面＝组件真实渲染栈：面板底 --cp-surface，卡内次级面 --cp-surface-2
+# （相册存货条/错误卡/骨架屏都在这一层，也正是对比度最差的那格）。
+_CP_PAIRS = [
+    ("副驾正文@面板面", "--cp-text", ["--cp-bg", "--cp-surface"], _TEXT_AA),
+    ("副驾次级文字@面板面", "--cp-text-dim", ["--cp-bg", "--cp-surface"], _TEXT_AA),
+    ("副驾次级文字@次级面", "--cp-text-dim", ["--cp-bg", "--cp-surface-2"], _TEXT_AA),
+    ("副驾三级文字@面板面", "--cp-text-tiny", ["--cp-bg", "--cp-surface"], _TEXT_AA),
+    ("副驾三级文字@次级面（存货条/错误卡）", "--cp-text-tiny",
+     ["--cp-bg", "--cp-surface-2"], _TEXT_AA),
+]
+
+# 与 base.html 同档的**暗色提亮地板**（AA 只是法定底线；4.5~5 的次级灰长时间
+# 盯着仍是「灰糊」——右栏是坐席全天盯的面板，标准不该低于它所在的外壳）。
+# 仅暗色：与 _PAIRS_DARK_FLOORS 同一决策——白底灰阶再抬会压掉层级，亮色维持
+# AA 4.5 契约（当前实测 7.56 / 5.40 / 4.93，均有余量）。
+_CP_DARK_FLOORS = [
+    ("副驾次级文字@面板面（提亮地板）", "--cp-text-dim", ["--cp-bg", "--cp-surface"], 8.0),
+    ("副驾次级文字@次级面（提亮地板）", "--cp-text-dim", ["--cp-bg", "--cp-surface-2"], 6.5),
+    ("副驾三级文字@面板面（提亮地板）", "--cp-text-tiny", ["--cp-bg", "--cp-surface"], 5.5),
+    ("副驾三级文字@次级面（提亮地板）", "--cp-text-tiny",
+     ["--cp-bg", "--cp-surface-2"], 5.5),
+]
+
+
+def test_copilot_rail_contrast_both_themes():
+    light, dark = _load_cp_palettes()
+    bad = _run_pairs(_CP_PAIRS, light, "cp-light")
+    bad += _run_pairs(_CP_PAIRS, dark, "cp-dark")
+    bad += _run_pairs(_CP_DARK_FLOORS, dark, "cp-dark")
+    assert not bad, (
+        "右栏副驾（shared/copilot）文字对比度低于登记阈值——改 theme-dark.css /"
+        " theme-light.css 的 --cp-text-* 前先跑本门禁；两端共享，desktop/renderer"
+        " 镜像须同步：\n  " + "\n  ".join(bad)
+    )
+
+
+def test_copilot_tiny_font_floor():
+    """说明类字号地板 12px（admin-theme.mdc 既有纪律）。
+
+    低对比度 × 小字号是乘法关系：只提亮不抬字号，10px 灰字照样看不清。
+    --cp-fs-tiny 是 85 个引用点的单一开关，钉住它就守住了整个右栏。
+    """
+    css = _strip_comments(_CP_TOKENS_CSS.read_text(encoding="utf-8"))
+    v = _vars_of(_block(css, r":root"))
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)px", v.get("--cp-fs-tiny", ""))
+    assert m, f"--cp-fs-tiny 不是 px 字面量: {v.get('--cp-fs-tiny')!r}"
+    assert float(m.group(1)) >= 12, (
+        f"--cp-fs-tiny={m.group(1)}px < 12px：右栏说明文字会重新变成「看不清」的"
+        f"那一档（2026-08-28 收口）")
+
+
+# 右栏残余硬编码小字号（<12px）**只减不增** ratchet。
+# 提亮 token 只解决颜色；字号写死在各组件 styles() 里，token 够不着——两个因子
+# 是乘法关系，只修一个仍是「看不清」。cp-image 本批已清零（0 条）；其余组件属
+# 存量债务，按当前实测值封顶：新增即红，清理后必须把天花板同步降下来
+# （test_tiny_font_ceilings_not_stale 防止表变成永久白名单）。
+_TINY_FONT_RE = re.compile(r"font-size:\s*(?:[0-9]|1[01])(?:\.\d+)?px")
+_COPILOT_DIR = _REPO / "shared" / "copilot"
+_TINY_FONT_CEILINGS = {
+    "app.html": 8,
+    "components/cp-accounts.js": 6,
+    "components/cp-chain-exec.js": 6,
+    "components/cp-collab.js": 2,
+    "components/cp-goal.js": 24,
+    "components/cp-kb.js": 5,
+    "components/cp-nurture.js": 7,
+    "components/cp-origin.js": 1,
+    "components/cp-persona.js": 9,
+    "components/cp-tg-members.js": 2,
+    "components/cp-voice.js": 1,
+    "components/cp-xlate-tools.js": 5,
+    # components/cp-image.js: 0（2026-08-28 全部迁到 var(--cp-fs-tiny)）——
+    # 不登记＝天花板 0，任何回潮立刻点名。
+}
+
+
+def _tiny_font_counts() -> dict[str, int]:
+    out: dict[str, int] = {}
+    for p in sorted(_COPILOT_DIR.rglob("*")):
+        if not p.is_file() or p.suffix not in (".js", ".html", ".css"):
+            continue
+        n = len(_TINY_FONT_RE.findall(p.read_text(encoding="utf-8")))
+        if n:
+            out[p.relative_to(_COPILOT_DIR).as_posix()] = n
+    return out
+
+
+def test_copilot_tiny_font_ratchet():
+    counts = _tiny_font_counts()
+    over = [f"{rel}: {n} > 天花板 {_TINY_FONT_CEILINGS.get(rel, 0)}"
+            for rel, n in counts.items() if n > _TINY_FONT_CEILINGS.get(rel, 0)]
+    assert not over, (
+        "右栏新增了 <12px 的硬编码字号（说明文字看不清的另一半因子）——改用 "
+        "var(--cp-fs-tiny,12px)；确需更小请在 _TINY_FONT_CEILINGS 登记并说明：\n  "
+        + "\n  ".join(sorted(over)))
+
+
+def test_tiny_font_ceilings_not_stale():
+    """清理过的文件必须把天花板同步降下来（防债务表变永久白名单）。"""
+    counts = _tiny_font_counts()
+    stale = [f"{rel}: 实测 {counts.get(rel, 0)} < 天花板 {cap}——请把天花板降到实测值"
+             for rel, cap in _TINY_FONT_CEILINGS.items() if counts.get(rel, 0) < cap]
+    assert not stale, "\n".join(sorted(stale))
+
+
+def test_cp_image_tiny_fonts_stay_at_zero():
+    """本批收口的面板钉死在 0（老板点名的「额度/提示」两行就出在这里）。"""
+    n = _tiny_font_counts().get("components/cp-image.js", 0)
+    assert n == 0, f"cp-image.js 又出现 {n} 处 <12px 硬编码字号"
+
+
+# ---------------------------------------------------------------------------
+# 工作台外壳 --tk-*（workspace_base.html）
+# ---------------------------------------------------------------------------
+
+def _load_tk_palettes() -> tuple[dict, dict]:
+    css = _strip_comments(_WORKSPACE_HTML.read_text(encoding="utf-8"))
+    light = _vars_of(_block(css, r":root"))
+    dark_over = _vars_of(_block(css, r'\[data-cp-theme="dark"\]'))
+    return light, {**light, **dark_over}   # 暗色=亮色基础上的覆写（CSS 级联同口径）
+
+
+# 文字系（frontend-theme.mdc：语义**文字**一律走 --tk-*-ink，别拿 --tk-amber 当字色）
+_TK_TEXT_PAIRS = [
+    ("工作台正文@卡面", "--tk-text", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    ("工作台次级文字@卡面", "--tk-text-muted", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    ("工作台次级文字@次级面", "--tk-text-muted", ["--tk-bg", "--tk-surface-2"], _TEXT_AA),
+    ("工作台次级文字@页面底", "--tk-text-muted", ["--tk-bg"], _TEXT_AA),
+    ("成功墨@卡面", "--tk-ok-ink", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    ("警示墨@卡面", "--tk-warn-ink", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    ("危险墨@卡面", "--tk-danger-ink", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    ("紫墨@卡面", "--tk-vio-ink", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+    # 别名（存量代码写 --tk-amber-ink，2026-08-10 接入弹窗实锤过它恒走亮色回落）
+    ("琥珀墨别名@卡面", "--tk-amber-ink", ["--tk-bg", "--tk-surface"], _TEXT_AA),
+]
+
+# 填充/图形系：--tk-brand 是**填充与描边**用色（亮色下做正文只有 3.45:1），
+# 按图形 3:1 校验——这正是 frontend-theme.mdc 那张表要表达的分工。
+_TK_GRAPHIC_PAIRS = [
+    ("品牌色图形@卡面（填充/圆点/描边）", "--tk-brand", ["--tk-bg", "--tk-surface"], _GRAPHIC),
+]
+
+# 暗色提亮地板：与 base.html --t2 同档（admin-theme.mdc 明写三处联动同档）
+_TK_DARK_FLOORS = [
+    ("暗色工作台次级文字@卡面（提亮地板）", "--tk-text-muted",
+     ["--tk-bg", "--tk-surface"], 8.0),
+    ("暗色工作台次级文字@次级面（提亮地板）", "--tk-text-muted",
+     ["--tk-bg", "--tk-surface-2"], 6.5),
+]
+
+
+def test_workspace_shell_contrast_both_themes():
+    light, dark = _load_tk_palettes()
+    bad = _run_pairs(_TK_TEXT_PAIRS + _TK_GRAPHIC_PAIRS, light, "tk-light")
+    bad += _run_pairs(_TK_TEXT_PAIRS + _TK_GRAPHIC_PAIRS, dark, "tk-dark")
+    bad += _run_pairs(_TK_DARK_FLOORS, dark, "tk-dark")
+    assert not bad, (
+        "工作台外壳 --tk-* 对比度低于登记阈值——admin-theme.mdc 要求 base.html 色板 /"
+        " codemod 表 / workspace --tk-* 三处联动同档，改一处先跑本门禁：\n  "
+        + "\n  ".join(bad))
+
+
+def test_workspace_shell_gate_detects_violation():
+    """探测器自证：把次级文字调回一个已知糊值，门禁必须点名。"""
+    _, dark = _load_tk_palettes()
+    poisoned = dict(dark)
+    poisoned["--tk-text-muted"] = "#6b7280"   # 暗卡面约 3.5:1
+    bad = _run_pairs(_TK_TEXT_PAIRS, poisoned, "poisoned")
+    assert any("次级文字" in b for b in bad), "糊值未被检出，门禁失效"
+
+
+def test_copilot_gate_detects_violation():
+    """探测器自证：把 --cp-text-tiny 调回收口前的旧值，门禁必须点名。"""
+    _, dark = _load_cp_palettes()
+    poisoned = dict(dark)
+    poisoned["--cp-text-tiny"] = "#85888f"   # 2026-08-28 之前的值（次级面 4.19:1）
+    bad = _run_pairs(_CP_PAIRS, poisoned, "poisoned")
+    assert any("三级文字@次级面" in b for b in bad), "旧灰值未被检出，门禁失效"
 
 
 def test_gate_detects_violation():

@@ -21,6 +21,7 @@ import json
 from typing import Any, Dict, List, Mapping, Optional
 
 from src.assistant import actions as act
+from src.assistant import ui_anchors
 
 MAX_STEPS_DEFAULT = 5
 MAX_SAY_CHARS = 300
@@ -32,6 +33,64 @@ def _params_doc(aid: str, spec: Mapping[str, Any], zh: bool) -> str:
     if aid == "goto_page":
         return "params={\"path\": <导航白名单内路径>}" if zh else \
             "params={\"path\": <one whitelisted nav path>}"
+    if aid == "ui_act":
+        return ("params={\"anchor\": <控件白名单 id>, "
+                "\"text\": <fill 类控件必填的搜索词>}" if zh else
+                "params={\"anchor\": <one whitelisted control id>, "
+                "\"text\": <search term, required for fill controls>}")
+    if aid == "pc_inspect":
+        return ("params={\"machine\": <受控机白名单 id>, \"tool\": "
+                "<list_windows|read_tree|screenshot>, \"window\": "
+                "<read_tree/screenshot 必填的窗口标题>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"tool\": "
+                "<list_windows|read_tree|screenshot>, \"window\": "
+                "<window title, required for read_tree/screenshot>}")
+    if aid == "pc_launch":
+        return ("params={\"machine\": <受控机白名单 id>, \"app_id\": "
+                "<notepad|calc|explorer|mspaint>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"app_id\": "
+                "<notepad|calc|explorer|mspaint>}")
+    if aid == "pc_focus":
+        return ("params={\"machine\": <受控机白名单 id>, \"window\": "
+                "<窗口标题>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"window\": "
+                "<window title>}")
+    if aid == "pc_run_app":
+        return ("params={\"machine\": <受控机白名单 id>, \"path\": "
+                "<程序绝对路径>, \"args\": [可选参数列表]}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"path\": "
+                "<absolute exe path>, \"args\": [optional list]}")
+    if aid == "pc_click":
+        return ("params={\"machine\": <受控机白名单 id>, \"window\": <窗口标题>, "
+                "\"target\": <控件 auto_id 或名字，先用 pc_inspect read_tree 取>}"
+                if zh else
+                "params={\"machine\": <whitelisted PC id>, \"window\": <title>, "
+                "\"target\": <control auto_id or name, get via read_tree first>}")
+    if aid == "pc_click_target":
+        return ("params={\"machine\": <受控机白名单 id>, \"window\": <窗口标题>, "
+                "\"target\": <要点什么的自然语言描述，如「蓝色的提交按钮」>}"
+                "——仅当 pc_click 因控件无结构点不到（画布/自绘）时用；坐标由服务端"
+                "视觉定位换出，你只给描述、绝不给坐标" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"window\": <title>, "
+                "\"target\": <natural-language description of what to click, e.g. "
+                "'the blue Submit button'>} — only when pc_click fails because the "
+                "control has no structure (canvas/custom); the server resolves "
+                "coordinates visually, you give ONLY the description, never coords")
+    if aid == "pc_type":
+        return ("params={\"machine\": <受控机白名单 id>, \"window\": <窗口标题>, "
+                "\"text\": <要输入的文字>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"window\": <title>, "
+                "\"text\": <text to type>}")
+    if aid == "pc_keys":
+        return ("params={\"machine\": <受控机白名单 id>, \"window\": <窗口标题>, "
+                "\"keys\": <快捷键，如 {Ctrl}s {Alt}{F4} {Enter}>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"window\": <title>, "
+                "\"keys\": <shortcut, e.g. {Ctrl}s {Alt}{F4} {Enter}>}")
+    if aid == "pc_run_command":
+        return ("params={\"machine\": <受控机白名单 id>, \"command\": "
+                "<PowerShell 命令，⚠高危、必人工确认>}" if zh else
+                "params={\"machine\": <whitelisted PC id>, \"command\": "
+                "<PowerShell command, DANGEROUS, always confirmed>}")
     fields = spec.get("fields") or []
     if not fields:
         return "params={}"
@@ -98,12 +157,18 @@ def build_planner_prompt(
     page: str = "",
     max_steps: int = MAX_STEPS_DEFAULT,
     config: Any = None,
+    pc_machines: Optional[List[str]] = None,
 ) -> str:
     zh = not str(lang or "").lower().startswith("en")
     lines: List[str] = []
     levels = act.allowed_levels_for_role(role)
+    pc_machines = pc_machines or []
     for aid, spec in act.ACTIONS.items():
         if spec["level"] not in levels:
+            continue
+        # runner 动作（pc_inspect）只在有可用受控机时才进白名单——pc_runner
+        # 总闸关 / 无配对机器时不列，免得 LLM 规划一个必被拒的步（实施91）。
+        if spec["kind"] == "runner" and not pc_machines:
             continue
         label = spec["label_zh" if zh else "label_en"]
         desc = spec["desc_zh" if zh else "desc_en"]
@@ -113,7 +178,19 @@ def build_planner_prompt(
     goal = str(goal or "").strip()[:MAX_GOAL_CHARS]
     snap = build_settings_snapshot(config, lang) if config else ""
     snap_block = ("\n\n" + snap) if snap else ""
+    ui_lines = ui_anchors.prompt_lines(lang)
+    pc_block = ""
+    if pc_machines:
+        if zh:
+            pc_block = ("\n\n可操作的电脑（pc_inspect 的 machine，只读侦察）："
+                        + "、".join(sorted(pc_machines)[:20]))
+        else:
+            pc_block = ("\n\nControllable PCs (machine for pc_inspect, "
+                        "read-only): " + ", ".join(sorted(pc_machines)[:20]))
     if zh:
+        ui_block = ("\n\n页面控件白名单（ui_act 的 anchor；标注为 fill 的"
+                    "必须带 text）：\n" + "\n".join(ui_lines)) if ui_lines \
+            else ""
         return (
             "你是客服软件的操作规划器。根据用户目标，从下面的动作白名单里"
             "挑选 0 到 " + str(max_steps) + " 步组成计划。\n"
@@ -122,7 +199,7 @@ def build_planner_prompt(
             "如果目标含糊到无法选参数（比如「调一下速度」没说快还是慢），"
             "可以 steps 留空并给 ask 一句追问（≤50 字），只许问一个问题。\n\n"
             "动作白名单：\n" + "\n".join(lines)
-            + snap_block + "\n\n"
+            + snap_block + ui_block + pc_block + "\n\n"
             "goto_page 允许的 path：" + nav + "\n"
             "用户当前页面：" + (page or "/") + "\n"
             "用户目标：" + goal + "\n\n"
@@ -131,6 +208,9 @@ def build_planner_prompt(
             "\"ask\": \"可选：向用户追问的一句话\", "
             "\"steps\": [{\"action\": \"动作id\", \"params\": {…}}]}"
         )
+    ui_block = ("\n\nOn-page control whitelist (anchor for ui_act; those "
+                "marked fill require text):\n" + "\n".join(ui_lines)) \
+        if ui_lines else ""
     return (
         "You are the operation planner of a customer-service app. Pick 0 to "
         + str(max_steps) + " steps from the whitelist below to achieve the "
@@ -139,7 +219,7 @@ def build_planner_prompt(
         "If the goal is too vague to pick params, leave steps empty and put "
         "ONE short clarifying question in ask.\n\n"
         "Action whitelist:\n" + "\n".join(lines)
-        + snap_block + "\n\n"
+        + snap_block + ui_block + pc_block + "\n\n"
         "Allowed goto_page paths: " + nav + "\n"
         "Current page: " + (page or "/") + "\n"
         "User goal: " + goal + "\n\n"
@@ -196,6 +276,58 @@ def parse_plan_json(raw: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ── 确定性「带你去」导航（2026-08-30，「原来会带我去页面现在不带了」实录）──
+# 导航步此前全凭 LLM 规划自由发挥：埋点账本 8-23/8-27 的计划带 goto
+# （asb_agent_resume 有数），之后的计划不带——同一个目标不同天两种体验。
+# 收成结构性规则：计划含改设置步骤且用户不在该设置的所在页面（ACTIONS
+# 注册表 home 字段）→ 在**首个**改设置步骤前插一步 goto_page。用户已在
+# 该页 / LLM 自己已排了去该页的导航 / home 不在导航白名单 → 不插。
+# ui 步（DOM 动作总线）同理：控件长在别的页上，必须先把人带过去——home
+# 取锚点注册表的 page 字段（实施88 P0）。
+def _step_home(s: Mapping[str, Any]) -> str:
+    kind = s.get("kind")
+    if kind == "settings":
+        return str((act.ACTIONS.get(str(s.get("action"))) or {})
+                   .get("home") or "")
+    if kind == "ui":
+        return str((s.get("ui") or {}).get("page") or "")
+    return ""
+
+
+def _maybe_insert_home_nav(
+    steps: List[Dict[str, Any]],
+    page: str,
+    nav_paths: Optional[set],
+    zh: bool,
+) -> List[Dict[str, Any]]:
+    if not steps:
+        return steps
+    allowed = nav_paths if nav_paths else set(act.CORE_NAV_PATHS)
+    cur = str(page or "").split("?", 1)[0]
+    have = {str(s.get("goto") or "") for s in steps
+            if s.get("kind") == "nav"}
+    for i, s in enumerate(steps):
+        home = _step_home(s)
+        if s.get("kind") not in ("settings", "ui"):
+            continue
+        if not home or home == cur or home in have or home not in allowed:
+            return steps
+        gspec = act.ACTIONS.get("goto_page") or {}
+        steps.insert(i, {
+            "action": "goto_page",
+            "level": "L1",
+            "kind": "nav",
+            "hot": None,
+            "label": str(gspec.get("label_zh" if zh else "label_en")
+                         or "goto_page"),
+            "params": {"path": home},
+            "goto": home,
+            "diff": None,
+        })
+        return steps
+    return steps
+
+
 # ── 校验（逐步过 plan_action，宁缺勿滥） ─────────────────────────────────
 def _step_params(plan: Mapping[str, Any]) -> Dict[str, Any]:
     """从 plan_action 输出反推「干净参数」（供前端逐步转投 /act 复验）。"""
@@ -221,6 +353,7 @@ def validate_plan(
     nav_paths: Optional[set] = None,
     max_steps: int = MAX_STEPS_DEFAULT,
     lang: str = "zh",
+    page: str = "",
 ) -> Dict[str, Any]:
     zh = not str(lang or "").lower().startswith("en")
     if not isinstance(parsed, Mapping):
@@ -255,16 +388,25 @@ def validate_plan(
             dropped.append({"action": aid, "reason": "forbidden"})
             continue
         spec = act.ACTIONS[aid]
-        steps.append({
+        # ui 步的标签用锚点人话（「打开账号抽屉」），比动作通用名信息量大
+        label = str(plan.get("ui_label") or "") if plan["kind"] == "ui" \
+            else ""
+        step = {
             "action": aid,
             "level": plan["level"],
             "kind": plan["kind"],
             "hot": plan.get("hot"),
-            "label": spec["label_zh" if zh else "label_en"],
+            "label": label or spec["label_zh" if zh else "label_en"],
             "params": _step_params(plan),
             "goto": plan.get("goto"),
             "diff": plan.get("diff"),
-        })
+        }
+        if plan.get("ui"):
+            step["ui"] = plan["ui"]
+        if plan.get("runner"):
+            step["runner"] = plan["runner"]
+        steps.append(step)
+    steps = _maybe_insert_home_nav(steps, page, nav_paths, zh)
     ok = bool(steps)
     # ask 只在「没有可执行步」时有意义（有步还追问＝拖泥带水，丢弃）
     return {"ok": ok, "reason": "" if ok else "no_valid_steps",

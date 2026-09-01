@@ -460,14 +460,17 @@
       if (account_id) q.set("account_id", account_id);
       return this._get(`/api/voice/effective-config?${q.toString()}`);
     }
-    async voiceTts({ text, persona_id, chat_key, platform, account_id }) {
+    async voiceTts({ text, persona_id, chat_key, platform, account_id, target_lang }) {
       // 会话上下文（可选）：带上后试听与 send-voice 走同一组解析入参
       // （试听=发送 契约；不带=旧行为，服务端按全局回落解析）。
+      // P0-V2b 译声：target_lang（'auto'=会话客户语言，服务端解析）→ 先译后念；
+      // 不传=旧行为按原文发声。fail-open 全在服务端，这里只透传。
       return this._post("/api/voice/tts-test", {
         text, persona_id: persona_id || undefined,
         chat_key: chat_key || undefined,
         platform: platform || undefined,
         account_id: account_id || undefined,
+        target_lang: target_lang || undefined,
       });
     }
     async sendVoice(body) { return this._post("/api/unified-inbox/send-voice", body || {}); }

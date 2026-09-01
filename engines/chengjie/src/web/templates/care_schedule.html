@@ -111,6 +111,12 @@
 details.cs3-fold{margin:.6rem 0}
 details.cs3-fold>summary{cursor:pointer;color:var(--t2);font-size:.8rem;padding:.45rem .2rem;user-select:none}
 details.cs3-fold>summary:hover{color:var(--p)}
+/* 实施84 P0-5：主动消息时间线来源徽标（六管线一本账） */
+.cs-tl-src{display:inline-block;padding:.1rem .5rem;border-radius:99px;font-size:.68rem;border:1px solid rgba(127,127,127,.35);color:var(--t2);white-space:nowrap}
+.cs-tl-care{color:#e05d7b;border-color:rgba(224,93,123,.4)}
+.cs-tl-topic{color:#4f8bd6;border-color:rgba(79,139,214,.4)}
+.cs-tl-ritual{color:#c98a2b;border-color:rgba(201,138,43,.4)}
+.cs-tl-reactivation{color:#7a5fd0;border-color:rgba(122,95,208,.4)}
 .cs-addp{background:var(--input);border-radius:10px;padding:.8rem .9rem;margin:.4rem 0 .6rem}
 .cs-p-row{display:flex;gap:.6rem;align-items:flex-start;margin-bottom:.55rem;flex-wrap:wrap}
 .cs-p-lb{width:56px;flex-shrink:0;color:var(--t3);font-size:.8rem;line-height:1.9}
@@ -272,6 +278,15 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
         <span id="cs-health-lights" style="display:flex;flex-wrap:wrap;gap:1rem"></span>
       </div>
       <p id="cs-shadow-line" style="font-size:.72rem;color:var(--t3);margin:.3rem 0 .6rem"></p>
+      <!-- 实施84 P0-5：全部主动消息统一时间线（默认隐藏，端点可用才显示） -->
+      <div id="cs-tl-sec" style="display:none">
+        <div class="cs3-sec">
+          <h4>{{ (i18n or {}).get('cs5_tl_title', "全部主动消息（近 7 天）") }}</h4>
+          <div class="sub">{{ (i18n or {}).get('cs5_tl_sub', "客户实际收到的每一条主动消息都在这里——不止关怀，问候 / 回访 / 召回也标明来源") }}</div>
+        </div>
+        <p id="cs-tl-summary" style="font-size:.75rem;color:var(--t2);margin:.2rem 0 .4rem"></p>
+        <div class="table-wrap"><table class="cs-table"><tbody id="cs-tl-body"></tbody></table></div>
+      </div>
       <div class="cs3-sec">
         <h4>{{ (i18n or {}).get('cs2_history', "全部记录") }}</h4>
         <div class="sub">{{ (i18n or {}).get('cs4_hist_sub', "按状态筛、即时搜；点名字直达会话，「只看」聚焦单个联系人") }}</div>
@@ -1020,9 +1035,50 @@ async function csAdd2(){
    投递真相徽标 + 48h 回复徽标 + 客户端即时搜索。新字段缺席（旧实例
    未重启）时自动回落旧渲染，任何一步都自洽。 ── */
 var _csHistLoaded=false,_csHistRows=[],_csHistOrder='';
+/* ── 实施84 P0-5：全部主动消息统一时间线（outreach_log 一本账 + 来源标注）──
+   修「页面上看到的与客户实际收到的对不上」：约定关怀/沉默回访/仪式问候/召回
+   各自为政地发，这里是唯一能回答「这位客户这周被主动打扰几次、都是谁发的」
+   的读口。旧后端未装载端点时 fetch 非 200 → 区块保持隐藏（特性探测，零报错）。*/
+var _csTlLoaded=false;
+function _csTlSrcLabel(s){
+  var m={care:'cs5_tl_src_care',topic:'cs5_tl_src_topic',ritual:'cs5_tl_src_ritual',
+         reactivation:'cs5_tl_src_react'};
+  return window.T(m[s]||'cs5_tl_src_other');
+}
+window._csTlSrcLabel=_csTlSrcLabel;
+async function _csTlLoad(){
+  if(_csTlLoaded)return;_csTlLoaded=true;
+  try{
+    const res=await apiFetch('/api/care/outreach-timeline?days=7&limit=120');
+    if(!res.ok)return;
+    const d=await res.json();
+    if(!d||!d.ok)return;
+    var sec=document.getElementById('cs-tl-sec');
+    if(!sec)return;
+    sec.style.display='';
+    var bs=d.by_source||{},parts=[];
+    Object.keys(bs).forEach(function(k){parts.push(_csTlSrcLabel(k)+' '+bs[k]);});
+    var sm=document.getElementById('cs-tl-summary');
+    if(sm)sm.textContent=window.Tf('cs5_tl_total',{n:d.count||0})+(parts.length?('  ·  '+parts.join('  ')):'');
+    var rows=(d.items||[]).slice(0,60).map(function(it){
+      var t=it.ts?window.wsFmtDateTime(it.ts,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+      var who=it.display_name||it.conversation_id||'';
+      return '<tr><td style="width:150px;color:var(--t3);font-size:.72rem">'+esc(t)+'</td>'
+        +'<td style="width:110px"><span class="cs-tl-src cs-tl-'+esc(it.source)+'">'+esc(_csTlSrcLabel(it.source))+'</span></td>'
+        +'<td>'+esc(who)+'</td>'
+        +'<td style="color:var(--t3);font-size:.72rem">'+esc(it.note||it.batch_id||'')+'</td></tr>';
+    }).join('');
+    var tb=document.getElementById('cs-tl-body');
+    if(tb)tb.innerHTML=rows||('<tr><td style="padding:1rem;color:var(--t3)">'+esc(window.T('cs5_tl_empty'))+'</td></tr>');
+  }catch(e){/* 特性探测：任何异常保持隐藏 */}
+}
+window._csTlLoad=_csTlLoad;
 function _csEngineToggle(){
   var er=document.getElementById('cs-engine-room');
-  if(er&&er.open&&!_csHistLoaded){_csHistLoaded=true;csLoad();}
+  if(er&&er.open){
+    _csTlLoad();
+    if(!_csHistLoaded){_csHistLoaded=true;csLoad();}
+  }
 }
 function _csHistReload(){if(_csHistLoaded)csLoad();}
 /* ── P2：联系人维度筛选（行内「只看」→ 服务端过滤 + 客户端兜底同滤） ── */

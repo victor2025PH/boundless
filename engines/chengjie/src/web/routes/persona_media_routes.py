@@ -23,7 +23,15 @@ from typing import Any, List
 
 from fastapi import Depends, HTTPException, Request
 
+import src.companion.media_auto_tag as _auto_tag
+from src.companion.image_phash import (
+    NEAR_DUP_MAX_HAMMING as _NEAR_DUP_MAX,
+    nearest as _phash_nearest,
+    phash_bytes as _phash_bytes,
+)
+from src.companion.media_ingest import process_photo_bytes as _process_photo
 from src.companion.media_probe import (
+    make_photo_thumbnail as _make_photo_thumbnail,
     make_video_thumbnail as _make_video_thumbnail,
     probe_image as _probe_image,
     probe_video as _probe_video,
@@ -147,11 +155,48 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             raise HTTPException(404, tr(request, "err.pmedia.not_found"))
         return row
 
+    def _vision_cfg() -> dict:
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+        except Exception:
+            cfg = {}
+        return dict(cfg.get("vision") or {})
+
+    def _album_ai_cfg() -> dict:
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+        except Exception:
+            cfg = {}
+        return _auto_tag.resolve_album_ai_cfg(cfg)
+
+    def _face_ref_for_tagging(pid: str, aicfg: dict) -> str:
+        """脸一致性抽检的基准照路径（face_check 关/无基准照 → ""＝跳过）。"""
+        if not aicfg.get("face_check", True):
+            return ""
+        try:
+            p = _find_face_ref(pid)
+            return str(p) if p is not None else ""
+        except Exception:
+            return ""
+
     @app.get("/api/personas/{pid}/media")
     async def list_persona_media(pid: str, request: Request, _=Depends(auth_dep)):
-        """列出该人设全部媒体条目 + 统计。"""
+        """列出该人设全部媒体条目 + 统计 + AI 打标覆盖摘要（实施90）。"""
         st = _require_store(request)
-        return {"items": st.list(str(pid)), "stats": st.stats(str(pid))}
+        items = st.list(str(pid))
+        ai = {"tagged": 0, "pending": 0, "failed": 0, "skipped": 0,
+              "untagged": 0, "thumbs_missing": 0}
+        for it in items:
+            s = str(it.get("tag_status") or "")
+            key = s if s in ("tagged", "pending", "failed", "skipped") else "untagged"
+            ai[key] += 1
+            if (str(it.get("media_type") or "photo") == "photo"
+                    and not str(it.get("thumb_url") or "")):
+                ai["thumbs_missing"] += 1
+        snap = _auto_tag.stats_snapshot()
+        ai["batch_active"] = bool(snap.get("batch_active"))
+        ai["enabled"] = bool(_album_ai_cfg().get("enabled"))
+        return {"items": items, "stats": st.stats(str(pid)), "ai": ai}
 
     @app.post("/api/personas/{pid}/speech-print")
     async def save_persona_speech_print(pid: str, request: Request,
@@ -239,6 +284,20 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         dup = st.find_by_sha(str(pid), sha)
         if dup is not None:
             return {"ok": True, "item": dup, "deduped": True}
+        # 实施90 照片入库预处理（全软失败）：EXIF 抽提示→剥离（隐私）+ pHash
+        # 近重复预警（sha 只能抓字节级重传；重编码/缩放的"同一张"靠指纹）。
+        near_dup = None
+        exif_hints: dict = {}
+        phash = ""
+        if mtype == "photo":
+            processed = _process_photo(data, ext)
+            data = processed.get("bytes") or data
+            exif_hints = processed.get("hints") or {}
+            phash = _phash_bytes(data)
+            if phash:
+                nid, ndist = _phash_nearest(phash, st.phashes(str(pid)))
+                if nid and ndist <= _NEAR_DUP_MAX:
+                    near_dup = {"id": nid, "distance": ndist}
         safe = _safe_pid(pid)
         d = _album_root() / safe
         try:
@@ -286,6 +345,11 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             meta = _probe_image(str(fpath)) or {}
             width = int(meta.get("width") or 0)
             height = int(meta.get("height") or 0)
+            # 照片缩略图（实施90）：网格此前直载原图＝窄壳灰块一片；与视频封面
+            # 同款落 <name>.thumb.webp，前端 thumb_url 优先。
+            thumb_name = f"{name}.thumb.webp"
+            if _make_photo_thumbnail(str(fpath), str(d / thumb_name)):
+                thumb_url = f"/static/persona_albums/{safe}/{thumb_name}"
         try:
             weight = int(form.get("weight") or 1)
         except Exception:
@@ -299,6 +363,8 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             actor = str(request.session.get("username") or "")
         except Exception:
             actor = ""
+        aicfg = _album_ai_cfg()
+        will_tag = bool(aicfg.get("enabled")) and bool(aicfg.get("auto_on_upload"))
         row = st.add(
             str(pid), mtype, str(fpath), url, thumb_url=thumb_url,
             triggers=_as_str_list(form.get("triggers")),
@@ -306,12 +372,28 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             tags=_as_str_list(form.get("tags")),
             weight=weight, enabled=enabled, min_bond_level=min_bond,
             bytes_=len(data), width=width, height=height,
-            duration_ms=duration_ms, sha256=sha, created_by=actor)
-        logger.info("[pmedia] 上传 pid=%s type=%s id=%s bytes=%d dur=%dms",
-                    pid, mtype, row.get("id"), len(data), duration_ms)
-        _audit(request, "pmedia_upload", f"pid={pid} id={row.get('id')}",
+            duration_ms=duration_ms, sha256=sha, created_by=actor,
+            phash=phash, tag_status=(_auto_tag.TAG_PENDING if will_tag else ""))
+        mid = str(row.get("id") or "")
+        # EXIF 结论级提示（月份/国别/季节——绝无原始坐标）先落 auto_meta，
+        # 打标任务读它做旁证；未开打标也留着（人工排查/以后补标可用）。
+        if exif_hints and any(v for v in exif_hints.values()):
+            got = st.set_auto_tag(mid, auto_meta={"exif": exif_hints})
+            row = got or row
+        if will_tag:
+            _auto_tag.schedule_tag(st, mid, _vision_cfg(),
+                                   face_ref=_face_ref_for_tagging(pid, aicfg))
+        logger.info("[pmedia] 上传 pid=%s type=%s id=%s bytes=%d dur=%dms "
+                    "phash=%s neardup=%s autotag=%s",
+                    pid, mtype, mid, len(data), duration_ms,
+                    "y" if phash else "n",
+                    (near_dup or {}).get("id", "-"), will_tag)
+        _audit(request, "pmedia_upload", f"pid={pid} id={mid}",
                f"type={mtype} bytes={len(data)}")
-        return {"ok": True, "item": row}
+        out = {"ok": True, "item": row}
+        if near_dup:
+            out["near_dup"] = near_dup
+        return out
 
     @app.patch("/api/personas/{pid}/media/{mid}")
     async def update_persona_media(pid: str, mid: str, request: Request, _=Depends(auth_dep)):
@@ -374,7 +456,11 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
 
     @app.post("/api/personas/{pid}/media/test")
     async def test_persona_media_trigger(pid: str, request: Request, _=Depends(auth_dep)):
-        """「试触发」：输入一句话，返回会命中的池（keyword/generic/none）+ 全部候选（不随机）。"""
+        """「试触发」：输入一句话，返回会命中的池（keyword/generic/none）+ 全部候选（不随机）。
+
+        实施90：带上与真发同口径的时段/季节/地点上下文——每个候选回 ``blocked_by``
+        （会话级冷却/防复读门与具体客户绑定，预览不判）。
+        """
         st = _require_store(request)
         body = await request.json()
         text = str((body or {}).get("text") or "")
@@ -383,9 +469,75 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         # 与真实链路同口径：通用池仅在「泛化要照片/自拍」请求时才作候选。
         generic_ok = bool(detect_selfie_request(text))
         rows = st.list(str(pid), enabled_only=True)
-        out = explain_match(rows, text, generic_ok=generic_ok)
+        cc: dict = {}
+        geo = {"season": "", "country": ""}
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+            scfg = ((cfg.get("companion") or {}).get("selfie") or {})
+            from src.inbox.image_autosend import resolve_consistency_cfg
+            cc = resolve_consistency_cfg(scfg if isinstance(scfg, dict) else {})
+            if cc.get("season_gate") or cc.get("place_gate"):
+                from src.companion.media_taxonomy import persona_geo_context
+                geo = persona_geo_context(str(pid))
+        except Exception:
+            cc = {}
+        now_season = (str(geo.get("season") or "")
+                      if cc.get("season_gate") else "")
+        home_country = (str(geo.get("country") or "")
+                        if cc.get("place_gate") else "")
+        out = explain_match(
+            rows, text, generic_ok=generic_ok,
+            now_hour=cc.get("now_hour"),
+            now_season=now_season, home_country=home_country)
         out["generic_ok"] = generic_ok
+        out["context"] = {"now_hour": cc.get("now_hour"),
+                          "now_season": now_season,
+                          "home_country": home_country}
         return out
+
+    # ── 实施90：AI 补标（VLM 打标 + 缩略图/pHash 资产补齐）────────────────────
+    # 手动补标是运营显式动作，不受 album_ai.enabled 闸（与回填 CLI 同语义）；
+    # enabled 只管「上传即自动打标」。批任务单工位互斥，进度靠列表轮询
+    # tag_status/thumb_url 变化。
+
+    @app.post("/api/personas/{pid}/media/retag-all")
+    async def retag_all_persona_media(pid: str, request: Request,
+                                      _=Depends(auth_dep)):
+        """整册补标：缺缩略图/pHash 先补齐，未打标（或全部）条目排队打标。"""
+        _require_write(request)
+        st = _require_store(request)
+        _require_persona(request, pid)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        only_missing = bool((body or {}).get("only_missing", True))
+        _aicfg = _album_ai_cfg()
+        res = _auto_tag.run_batch(
+            st, _vision_cfg(), persona_id=str(pid),
+            only_missing=only_missing,
+            limit=int(_aicfg.get("max_batch") or 200),
+            face_ref=_face_ref_for_tagging(pid, _aicfg),
+            publish_root=str(_ALBUM_ROOT),
+            url_base="/static/persona_albums")
+        _audit(request, "pmedia_retag_all", f"pid={pid}",
+               f"queued={res.get('queued')} assets={res.get('assets')} "
+               f"only_missing={only_missing}")
+        return res
+
+    @app.post("/api/personas/{pid}/media/{mid}/retag")
+    async def retag_persona_media(pid: str, mid: str, request: Request,
+                                  _=Depends(auth_dep)):
+        """单条重新打标（换图/纠错后用；强制重打不看 only_missing）。"""
+        _require_write(request)
+        st = _require_store(request)
+        _owned_row(request, st, pid, mid)
+        st.set_auto_tag(str(mid), tag_status=_auto_tag.TAG_PENDING)
+        ok = _auto_tag.schedule_tag(
+            st, str(mid), _vision_cfg(),
+            face_ref=_face_ref_for_tagging(pid, _album_ai_cfg()))
+        _audit(request, "pmedia_retag", f"pid={pid} id={mid}")
+        return {"ok": bool(ok), "item": st.get(str(mid))}
 
     # ── B119（实施74）：发图全局闸自查面 ─────────────────────────────────────
     # 事故（0826 _580/_581）：人设级相册开着、全局 companion.selfie.enabled 关着

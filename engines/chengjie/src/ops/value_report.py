@@ -97,6 +97,38 @@ def _outbound_window(conn, lo: float, hi: float) -> Dict[str, Any]:
     return {"messages_out": int(out_n), "messages_in": int(in_n)}
 
 
+def _deals_window(conn, lo: float, hi: float) -> Dict[str, Any]:
+    """实施92d：成交台账窗口段（deal_events 未撤销行；坐席标记 + 变现入账桥
+    都落这张表）。旧库无表（迁移未跑的只读副本）→ 全零软失败。"""
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amt "
+            "FROM deal_events WHERE revoked = 0 AND ts >= ? AND ts < ?",
+            (lo, hi)).fetchone()
+        return {"n": int(row["n"] or 0),
+                "amount": round(float(row["amt"] or 0), 2)}
+    except Exception:
+        return {"n": 0, "amount": 0.0}
+
+
+def _cta_window(conn, lo: float, hi: float) -> Dict[str, Any]:
+    """实施93d：追踪短链窗口段（本窗铸链 cohort + 其中已被点开数——cohort
+    口径避免「上周的链本周被点」把率算穿窗）。旧库无表 → 全零软失败。"""
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, "
+            "COALESCE(SUM(CASE WHEN first_click_ts > 0 THEN 1 ELSE 0 END), 0)"
+            " AS clicked "
+            "FROM cta_links WHERE created_ts >= ? AND created_ts < ?",
+            (lo, hi)).fetchone()
+        links = int(row["n"] or 0)
+        clicked = int(row["clicked"] or 0)
+        return {"links": links, "clicked": clicked,
+                "click_rate": round(clicked / links * 100.0, 1) if links else 0.0}
+    except Exception:
+        return {"links": 0, "clicked": 0, "click_rate": 0.0}
+
+
 def _goals_window(goal_store: Any, lo: float, hi: float,
                   inbox_store: Any = None) -> Dict[str, Any]:
     """营销目标终态窗口段（P2 2026-08-09）。store 侧自兜异常返回全零。
@@ -202,6 +234,28 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                 "outreach": _outreach_window(conn, lo_lw, lo_tw, not_bot),
                 "traffic": _outbound_window(conn, lo_lw, lo_tw),
             }
+            # 实施92d：成交段（两周全零不出段——没在用成交标记的部署一行不多）
+            d_tw = _deals_window(conn, lo_tw, t)
+            d_lw = _deals_window(conn, lo_lw, lo_tw)
+            # 实施93d：追踪短链段（guide 模型的核心产出面；同零隐藏纪律）
+            k_tw = _cta_window(conn, lo_tw, t)
+            k_lw = _cta_window(conn, lo_lw, lo_tw)
+        if k_tw.get("links") or k_lw.get("links"):
+            tw["cta"] = k_tw
+            lw["cta"] = k_lw
+        if d_tw.get("n") or d_lw.get("n"):
+            # 经跟进 SOP 归因的部分（与 chain-funnel 同口径的近似归因；
+            # 任何失败只丢归因注脚不丢成交主数）
+            try:
+                from src.inbox.workflow_monitor import chain_funnel
+                fn = chain_funnel(store, days=7, now=t)
+                attr = int((fn.get("total") or {}).get("deals_n") or 0)
+                if attr:
+                    d_tw["chain_attributed"] = attr
+            except Exception:
+                pass
+            tw["deals"] = d_tw
+            lw["deals"] = d_lw
         try:
             gs = goal_store
             if gs is None:
@@ -389,6 +443,25 @@ def weekly_value_lines(tw: Dict[str, Any], lw: Dict[str, Any]) -> List[str]:
         lines.append(
             f"主动触达 {o.get('sent', 0)} 次{_pct_delta(o.get('sent', 0), ol.get('sent', 0))}，"
             f"7 天内获回复 {o.get('responded', 0)} 次（回复率 {o.get('response_rate', 0)}%）")
+    # 实施92d：成交段（有段才出行；这是周报里唯一直接讲钱的行，排位靠前）
+    de, del_ = tw.get("deals", {}), lw.get("deals", {})
+    if de:
+        seg = f"促成成交 {de.get('n', 0)} 单{_pct_delta(de.get('n', 0), del_.get('n', 0))}"
+        amt = float(de.get("amount") or 0)
+        if amt:
+            seg += f"，合计 {amt}"
+        attr = int(de.get("chain_attributed") or 0)
+        if attr:
+            seg += f"（其中 {attr} 单经跟进 SOP 归因）"
+        lines.append(seg)
+    # 实施93d：追踪短链段（引导模型的「发→点」产出行；有铸链才出行）
+    k, kl = tw.get("cta", {}), lw.get("cta", {})
+    if k:
+        lines.append(
+            f"发出追踪链接 {k.get('links', 0)} 条"
+            f"{_pct_delta(k.get('links', 0), kl.get('links', 0))}，"
+            f"其中 {k.get('clicked', 0)} 条已被点开"
+            f"（点开率 {k.get('click_rate', 0)}%）")
     tr, trl = tw.get("traffic", {}), lw.get("traffic", {})
     if tr:
         lines.append(

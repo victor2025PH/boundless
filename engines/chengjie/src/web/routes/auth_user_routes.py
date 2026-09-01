@@ -69,15 +69,7 @@ def register_auth_user_routes(
         # 运维令牌直登仍走 `/`（见 token 分支），肌肉记忆与应急排查不改。
         if role == ROLE_AGENT:
             return "/workspace"
-        # WP-2 首启向导直达：onboarding.enabled 且未完成 → 非坐席首登落 /welcome
-        # （显式 ?next= 深链仍最优先——resolve_post_login_dest 只在无 next 时用本默认；
-        #  flag 关 / 已完成 / 任何异常 → welcome_pending 恒 False，登录流程零变化）。
-        try:
-            from src.utils.onboarding_state import welcome_pending
-            if welcome_pending(getattr(config_manager, "config", None) or {}):
-                return "/welcome"
-        except Exception:
-            pass
+        # 首启向导登录落地已删除（2026-08-31 新手引导退役）：新手登录直接进正常角色落地页。
         if role in (ROLE_ADMIN, ROLE_MASTER):
             return "/workspace/dash"
         return "/"

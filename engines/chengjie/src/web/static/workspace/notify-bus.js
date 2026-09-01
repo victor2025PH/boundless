@@ -5,7 +5,8 @@
  *   AITRNotify.notify(opts)        → 右下 toast（委托 CRMW.toast；CRMW 缺席自带最小渲染）
  *                                     + 消息中心留痕（__wsNotif.add，type=sys_status）
  *   AITRNotify.ongoing.set/clear   → 右下「系统状态胶囊」——顶部横幅的「常驻性」由它
- *                                     承接：一行小 chip、不通栏、不推挤内容，点击开通知中心。
+ *                                     承接：小 chip、不通栏、不推挤内容，点击开通知中心；
+ *                                     带 action 时右侧常驻一个动作按钮（见下方 ongoing.set）。
  *
  * 纪律（实施75 目标形态）：
  *   - 本文件不做 i18n（调用方传成品文案）、不做轮询（调用方喂数据）；
@@ -22,8 +23,15 @@
  *   center     false = 不写消息中心
  *   actions    [{label, onClick|href}]——带按钮的卡片 toast（自带渲染器，CRMW 无按钮能力）
  *   sticky     true = 不自动消失（必须点 ✕ 或任一按钮；用于「会话已过期」级须知）
- *   domKey     同键的存活卡片只保留一张（原地更新文案，不叠罗汉）
+ *   domKey     同键的存活卡片只保留一张：原地更新文案 + **计数聚合**（#53 四件套④，
+ *              2026-08-30）——存活期内同键再报显示「×N」徽标而不是叠罗汉/纯覆盖，
+ *              「工作链失败 ×12」一眼读出规模；卡片关闭即计数清零。
  * 另有 AITRNotify.dismiss(domKey)：程序化撤下某张存活卡片（如状态恢复时）。
+ *
+ * ongoing.set(id, o) 新增 o.dismissMs（#53 四件套①，2026-08-30）：>0 时胶囊带 ✕，
+ * 点 ✕ 本 id 静默 dismissMs 毫秒（localStorage 跨标签页），期内 set 直接忽略——
+ * 「告警通道未接通」这类对当前用户语义有限的常驻提示从此可以请走（0830 原图 811
+ * 实锤：胶囊盖住工具箱/语音面板且无任何关闭手段）。不传 = 旧行为（不可关）。
  */
 (function(){
   'use strict';
@@ -67,13 +75,21 @@
      视觉对齐 .tk-toast 家族：深底、圆角、左缘语义色条。 */
   function _cardToast(o){
     var wrap = _cardWrap();
+    var aggCount = 1;
     if(o.domKey){
       var live = wrap.querySelector('[data-ntf-domkey="' + o.domKey + '"]');
-      if(live){ try{ live.remove(); }catch(_e){} }
+      if(live){
+        /* #53-④ 同类聚合：存活卡片被同键再报 → 计数 +1（关闭即清零） */
+        aggCount = (parseInt(live.getAttribute('data-ntf-count') || '1', 10) || 1) + 1;
+        try{ live.remove(); }catch(_e){}
+      }
     }
     var t = document.createElement('div');
     t.setAttribute('role', o.severity === 'error' ? 'alert' : 'status');
-    if(o.domKey) t.setAttribute('data-ntf-domkey', String(o.domKey));
+    if(o.domKey){
+      t.setAttribute('data-ntf-domkey', String(o.domKey));
+      t.setAttribute('data-ntf-count', String(aggCount));
+    }
     t.style.cssText = 'max-width:360px;background:#232429;color:#fff;padding:10px 14px;'
       + 'border-radius:10px;font-size:13px;line-height:1.5;pointer-events:auto;'
       + 'box-shadow:0 6px 18px rgba(0,0,0,.28);border-left:3px solid '
@@ -84,6 +100,14 @@
     msg.style.cssText = 'flex:1 1 auto;';
     msg.textContent = String(o.text || '');
     row.appendChild(msg);
+    if(aggCount > 1){
+      var cnt = document.createElement('span');
+      cnt.setAttribute('data-ntf-agg', '1');
+      cnt.textContent = '\u00d7' + aggCount;
+      cnt.style.cssText = 'flex:0 0 auto;background:rgba(255,255,255,.18);'
+        + 'border-radius:9px;padding:0 7px;font-size:11.5px;font-weight:700;line-height:1.6;';
+      row.appendChild(cnt);
+    }
     var x = document.createElement('button');
     x.type = 'button';
     x.textContent = '\u2715';
@@ -275,8 +299,13 @@
     });
   }
 
-  /* ── 系统状态胶囊（横幅「常驻性」的新家）───────────────────────────── */
-  var _ongoing = {};   /* id -> {text, tone, title} */
+  /* ── 系统状态胶囊（横幅「常驻性」的新家）─────────────────────────────
+     2026-08-28：胶囊此前只有文本 + 「点开通知中心」，**持续状态却没有持续动作**——
+     配套卡片 20s 就自动消失，之后坐席只剩一句被截断的话（桌面壳还没有浏览器刷新
+     按钮可用）。三处同批修：① 可选 action ＝ 右侧常驻按钮；② 文本 2 行 clamp 不再
+     硬截断成半句；③ 结构 button 化（键盘可达 + 全文进 title/aria-label）。
+     配色随主题令牌，fallback 保住经典后台壳（该壳无 --tk-*，维持中性深底）。 */
+  var _ongoing = {};   /* id -> {text, tone, title, action:{label,onClick}} */
   var _box = null;
   var TONE_COLOR = { info:'var(--tk-brand,#1e8cf2)', warn:'#f59e0b', error:'#ef4444', success:'#22c55e' };
 
@@ -287,12 +316,26 @@
     var st = document.createElement('style');
     st.textContent = '#ws-status-capsule{position:fixed;right:16px;bottom:16px;z-index:9998;'
       + 'display:flex;flex-direction:column;gap:6px;align-items:flex-end;}'
-      + '#ws-status-capsule .wsntf-chip{display:flex;align-items:center;gap:7px;max-width:320px;'
-      + 'background:rgba(15,23,42,.92);color:#e2e8f0;border:1px solid rgba(148,163,184,.25);'
-      + 'border-radius:999px;padding:5px 12px;font-size:12px;line-height:1.4;cursor:pointer;'
+      + '#ws-status-capsule .wsntf-chip{display:flex;align-items:center;gap:6px;max-width:360px;'
+      + 'background:var(--tk-surface,rgba(15,23,42,.92));color:var(--tk-text,#e2e8f0);'
+      + 'border:1px solid var(--tk-border,rgba(148,163,184,.25));'
+      + 'border-radius:14px;padding:5px 8px 5px 12px;font-size:12px;line-height:1.4;'
       + 'box-shadow:0 4px 14px rgba(0,0,0,.25);user-select:none;}'
+      + '#ws-status-capsule .wsntf-main{display:flex;align-items:center;gap:7px;flex:1 1 auto;'
+      + 'min-width:0;border:none;background:transparent;color:inherit;font:inherit;'
+      + 'text-align:left;cursor:pointer;padding:0;}'
       + '#ws-status-capsule .wsntf-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}'
-      + '#ws-status-capsule .wsntf-txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+      /* 2 行封顶：短文案一行，长文案折行——绝不再把行动指引截成半句 */
+      + '#ws-status-capsule .wsntf-txt{min-width:0;display:-webkit-box;-webkit-line-clamp:2;'
+      + '-webkit-box-orient:vertical;overflow:hidden;}'
+      /* .wsntf-act 刻意**不**限定在 #ws-status-capsule 内：消息中心「进行中」分组
+         镜像同一个动作按钮，共用这一份规格（别再各写一套内联样式——那既是第二套
+         尺寸，也会顶穿模板的内联颜色 ratchet）。 */
+      + '.wsntf-act{flex:0 0 auto;border:1px solid var(--tk-brand,#1e8cf2);'
+      + 'background:var(--tk-brand,#1e8cf2);color:#fff;border-radius:8px;padding:3px 10px;'
+      + 'font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;}'
+      + '#ws-status-capsule button:focus-visible{outline:2px solid var(--tk-brand,#1e8cf2);'
+      + 'outline-offset:2px;}'
       /* 窄屏让开收件箱 56px 移动平台条 + 间隙（与筛选抽屉同决策） */
       + '@media (max-width:860px){#ws-status-capsule{bottom:76px;right:10px;}}';
     document.head.appendChild(st);
@@ -323,26 +366,74 @@
     }catch(_e){}
   }
 
+  var LS_ONG_SNOOZE = 'aitr.ntf.ong.snooze.';
+
+  function _ongSnoozed(id){
+    try{
+      return (parseInt(_lsGet(LS_ONG_SNOOZE + id) || '0', 10) || 0) > Date.now();
+    }catch(_e){ return false; }
+  }
+
+  function _chip(id, o){
+    var chip = document.createElement('div');
+    chip.className = 'wsntf-chip';
+    chip.setAttribute('data-ntf-id', id);
+    /* 全文进 title + aria-label：胶囊窄，长文案会被 clamp，悬停与读屏都必须拿到整句 */
+    var full = String(o.text || '') + (o.title ? (' \u2014 ' + o.title) : '');
+    var main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'wsntf-main';
+    main.title = full;
+    main.setAttribute('aria-label', full);
+    var dot = document.createElement('span');
+    dot.className = 'wsntf-dot';
+    dot.style.background = TONE_COLOR[o.tone] || TONE_COLOR.info;
+    var txt = document.createElement('span');
+    txt.className = 'wsntf-txt';
+    txt.textContent = o.text;
+    main.appendChild(dot);
+    main.appendChild(txt);
+    main.addEventListener('click', _openCenter);
+    chip.appendChild(main);
+    var a = o.action;
+    if(a && a.label){
+      var act = document.createElement('button');
+      act.type = 'button';
+      act.className = 'wsntf-act';
+      act.textContent = String(a.label);
+      if(a.title) act.title = String(a.title);
+      act.addEventListener('click', function(ev){
+        try{ ev.stopPropagation(); }catch(_e){}
+        try{ if(typeof a.onClick === 'function') a.onClick(); }catch(_e2){}
+      });
+      chip.appendChild(act);
+    }
+    /* #53-①：dismissMs > 0 → 胶囊带 ✕，点了本 id 静默该时长（localStorage 跨
+       标签页）。信息不丢：消息中心留痕仍在，静默到期自动恢复。 */
+    if(o.dismissMs > 0){
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '\u2715';
+      x.setAttribute('aria-label', 'dismiss');
+      x.style.cssText = 'flex:0 0 auto;border:none;background:transparent;'
+        + 'color:inherit;opacity:.55;cursor:pointer;font-size:11px;padding:0 2px;';
+      x.addEventListener('click', function(ev){
+        try{ ev.stopPropagation(); }catch(_e){}
+        _lsSet(LS_ONG_SNOOZE + id, String(Date.now() + o.dismissMs));
+        delete _ongoing[String(id)];
+        _render();
+      });
+      chip.appendChild(x);
+    }
+    return chip;
+  }
+
   function _render(){
     var box = _ensureBox();
     var ids = Object.keys(_ongoing);
     while(box.firstChild) box.removeChild(box.firstChild);
     for(var i = 0; i < ids.length; i++){
-      var o = _ongoing[ids[i]];
-      var chip = document.createElement('div');
-      chip.className = 'wsntf-chip';
-      chip.setAttribute('data-ntf-id', ids[i]);
-      if(o.title) chip.title = o.title;
-      var dot = document.createElement('span');
-      dot.className = 'wsntf-dot';
-      dot.style.background = TONE_COLOR[o.tone] || TONE_COLOR.info;
-      var txt = document.createElement('span');
-      txt.className = 'wsntf-txt';
-      txt.textContent = o.text;
-      chip.appendChild(dot);
-      chip.appendChild(txt);
-      chip.addEventListener('click', _openCenter);
-      box.appendChild(chip);
+      box.appendChild(_chip(ids[i], _ongoing[ids[i]]));
     }
     box.style.display = ids.length ? 'flex' : 'none';
     _syncToastOffset();
@@ -356,13 +447,22 @@
     alert: uxAlert,
     confirm: uxConfirm,
     ongoing: {
+      /* o.action = {label, onClick, title}：胶囊右侧常驻按钮。持续状态必须持续可
+         执行——只给文本会让坐席在卡片过期后无路可走（2026-08-28 「刷新页面」事故）。
+         o.dismissMs（#53）：>0 = 可关闭（✕ 静默该毫秒数）；静默期内 set 直接忽略。 */
       set: function(id, o){
         if(!id) return;
         o = o || {};
+        if(o.dismissMs > 0 && _ongSnoozed(String(id))) return;
+        var a = o.action;
         _ongoing[String(id)] = {
           text: String(o.text || ''),
           tone: String(o.tone || 'info'),
-          title: String(o.title || '')
+          title: String(o.title || ''),
+          dismissMs: Math.max(0, Number(o.dismissMs) || 0),
+          action: (a && a.label && typeof a.onClick === 'function')
+            ? { label: String(a.label), onClick: a.onClick, title: String(a.title || '') }
+            : null
         };
         _render();
       },
@@ -370,13 +470,21 @@
         if(_ongoing[String(id)]){ delete _ongoing[String(id)]; _render(); }
       },
       active: function(){ return Object.keys(_ongoing); },
+      /* 消息中心「进行中」分组用：只出可安全进 HTML 的字段，动作经 invoke(id) 触发
+         （中心那侧是 innerHTML 拼接，拿不到函数引用）。 */
       snapshot: function(){
         var out = [];
         for(var id in _ongoing){
           var o = _ongoing[id];
-          out.push({ id: id, text: o.text, tone: o.tone, title: o.title });
+          out.push({ id: id, text: o.text, tone: o.tone, title: o.title,
+                     actionLabel: (o.action ? o.action.label : '') });
         }
         return out;
+      },
+      invoke: function(id){
+        var o = _ongoing[String(id)];
+        if(!o || !o.action) return false;
+        try{ o.action.onClick(); return true; }catch(_e){ return false; }
       }
     }
   };

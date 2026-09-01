@@ -181,7 +181,9 @@ class TestHookMutex:
         store.set_automation_mode(conv, "auto_ai", source="test")
         _seed_inbound(store, conv)
 
-        async def _fake_stage(app_state, st, ex, note):
+        async def _fake_stage(app_state, st, ex, note, **kw):
+            # **kw：实施93 起真身多了 cta_raw/cfg_root 具名形参——替身不收会
+            # 在 create_task 前就 TypeError → hook 降级 remind（测试假红）
             return True
 
         import src.inbox.workflow_auto_step as mod

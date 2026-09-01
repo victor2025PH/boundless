@@ -165,16 +165,8 @@ def polish_hub_speak_text(text: str) -> str:
 _NON_CJK_RE = re.compile(r"[^\u4e00-\u9fff]")
 
 
-def _cer_cjk(hyp: str, ref: str) -> float:
-    """CJK-only 字错率 = 编辑距离 / len(ref)。ref 无 CJK → -1.0（不可评）。
-
-    只留汉字再比：标点/省略号/副语言标记（[sigh] 等）/拉丁字符天然剥离，
-    专抓「错别字/含混/幻觉插句」这类内容级劣化，不被格式差异干扰。
-    """
-    h = _NON_CJK_RE.sub("", str(hyp or ""))
-    r = _NON_CJK_RE.sub("", str(ref or ""))
-    if not r:
-        return -1.0
+def _edit_cer(h: str, r: str) -> float:
+    """编辑距离 / len(r)（r 已保证非空）。_cer_cjk / _cer_chars 共用的 DP 核。"""
     m, n = len(h), len(r)
     dp = list(range(n + 1))
     for i in range(1, m + 1):
@@ -185,6 +177,44 @@ def _cer_cjk(hyp: str, ref: str) -> float:
                         prev + (0 if h[i - 1] == r[j - 1] else 1))
             prev = cur
     return dp[n] / n
+
+
+def _cer_cjk(hyp: str, ref: str) -> float:
+    """CJK-only 字错率 = 编辑距离 / len(ref)。ref 无 CJK → -1.0（不可评）。
+
+    只留汉字再比：标点/省略号/副语言标记（[sigh] 等）/拉丁字符天然剥离，
+    专抓「错别字/含混/幻觉插句」这类内容级劣化，不被格式差异干扰。
+    """
+    h = _NON_CJK_RE.sub("", str(hyp or ""))
+    r = _NON_CJK_RE.sub("", str(ref or ""))
+    if not r:
+        return -1.0
+    return _edit_cer(h, r)
+
+
+_WORD_CH_RE = re.compile(r"\w")
+
+
+def _norm_word_chars(s: str) -> str:
+    """casefold + 只留各语字母/数字（``\\w`` 去下划线）——多语字符级比对的归一。
+
+    假名/谚文/泰文/西里尔/带变音拉丁全被 ``\\w`` 捕获；标点/空白/emoji/副语言
+    标记天然剥离（与 _cer_cjk 的「只比内容」哲学一致，脚本无关版）。
+    """
+    return "".join(
+        c for c in _WORD_CH_RE.findall(str(s or "").casefold()) if c != "_")
+
+
+def _cer_chars(hyp: str, ref: str) -> float:
+    """通用字符级错率（synth_verify 多语轨）：归一后编辑距离 / len(ref)。
+
+    ref 归一后为空 → -1.0（不可评）。对拉丁语种偏严（逐字母比对），阈值由
+    ``synth_verify.foreign_cer_threshold`` 单独放宽（默认 0.35）。
+    """
+    h, r = _norm_word_chars(hyp), _norm_word_chars(ref)
+    if not r:
+        return -1.0
+    return _edit_cer(h, r)
 
 
 async def verify_and_retry_synth(
@@ -216,13 +246,39 @@ async def verify_and_retry_synth(
         min_chars = max(1, int(cfg.get("min_chars", 6) or 6))
         retries = max(0, min(2, int(cfg.get("max_retries", 1) or 0)))
         stt_timeout = float(cfg.get("stt_timeout_sec", 15.0) or 15.0)
-        if len(_NON_CJK_RE.sub("", str(synth_text or ""))) < min_chars:
-            return None                     # 短句/非中文 → 指标不可靠，不评
+        # ── 多语轨（P2-9 2026-08-31）：旧行为「非中文不评」＝新语种开闸后最需要
+        # 质检的语种恰好零回验（日文怪声正是这么漏network的）。非中文且语种明确 →
+        # 按目标语种**强制**转写（多语 ASR 认语种码；强制解码使输出稳定可比）+
+        # 通用字符级 CER（阈值 foreign_cer_threshold 单独放宽）。中文路径逐字节
+        # 不变；``synth_verify.multilingual: false`` 回旧行为（非中文一律不评）。
+        lang = "zh"
+        try:
+            from src.ai.lang_voice_route import detect_text_lang
+            _dl = detect_text_lang(str(synth_text or ""))
+            if _dl and _dl != "unknown":
+                lang = _dl.split("-")[0]
+        except Exception:
+            lang = "zh"
+        foreign = lang != "zh" and bool(cfg.get("multilingual", True))
+        if foreign:
+            if len(_norm_word_chars(str(synth_text or ""))) < min_chars:
+                return None                 # 短句 → 指标不可靠，不评
+            threshold = float(
+                cfg.get("foreign_cer_threshold", 0.35) or 0.35)
+            metric = _cer_chars
+            stt_lang = lang
+        else:
+            if lang != "zh":
+                return None                 # multilingual 关 → 旧行为：非中文不评
+            if len(_NON_CJK_RE.sub("", str(synth_text or ""))) < min_chars:
+                return None                 # 短句/非中文 → 指标不可靠，不评
+            metric = _cer_cjk
+            stt_lang = "zh"
 
         async def _stt() -> Optional[str]:
             try:
                 return await asyncio.wait_for(
-                    transcriber.transcribe_voice_message(str(av_out), "zh"),
+                    transcriber.transcribe_voice_message(str(av_out), stt_lang),
                     timeout=stt_timeout)
             except Exception:
                 return None
@@ -230,7 +286,7 @@ async def verify_and_retry_synth(
         hyp = await _stt()
         if hyp is None:
             return None                     # 转写不可用 → fail-open
-        best_cer = _cer_cjk(hyp, synth_text)
+        best_cer = metric(hyp, synth_text)
         if best_cer < 0:
             return None
         attempt = 0
@@ -253,7 +309,7 @@ async def verify_and_retry_synth(
                         pass
                 break                       # 重合成失败 → 保留上一版
             hyp2 = await _stt()
-            c2 = _cer_cjk(hyp2, synth_text) if hyp2 is not None else -1.0
+            c2 = metric(hyp2, synth_text) if hyp2 is not None else -1.0
             if 0 <= c2 < best_cer:
                 best_cer = c2               # 新版更好 → 保留新文件
             else:
@@ -262,7 +318,11 @@ async def verify_and_retry_synth(
                         av_out.write_bytes(best_bytes)
                     except Exception:
                         pass
-        return {"cer": round(best_cer, 3), "retried": attempt}
+        out: Dict[str, Any] = {"cer": round(best_cer, 3), "retried": attempt}
+        if foreign:
+            # 仅外语轨携带语种（zh 路径返回形状与旧契约逐字节一致，pinned 测试不动）
+            out["lang"] = lang
+        return out
     except Exception:
         return None
 
@@ -774,6 +834,10 @@ class TTSPipeline:
         self.rvc = cfg.get("rvc") if isinstance(cfg.get("rvc"), dict) else {}
         # 人设 id（由 resolve_voice_cfg 注入）：预渲染语音命中层的查找键。
         self.persona_id = str(cfg.get("persona_id") or "").strip()
+        # 语种路由放行标记（lang_voice_route.clone_langs 改写时注入）：该语种
+        # 已被路由改派到「运营验收过会念它」的克隆节点 → 语种能力闸放行。
+        self.lang_route_cleared = str(
+            cfg.get("_lang_route_cleared") or "").strip().lower()
         # 人设口头禅/说话习惯（quirks）：口语化句首词 + LLM 改写语气提示。
         self.persona_quirks = str(cfg.get("persona_quirks") or "").strip()
         # 会话口味键（voice_opener_guard，P0-2 2026-08-03）：同一会话跨消息的
@@ -930,7 +994,12 @@ class TTSPipeline:
             return pre_rv
 
         # ── P0：缓存查找（命中即秒回，省外部调用）──
-        if self.enabled and self.cache_enabled and text_s.strip():
+        # 语种能力闸前置（2026-08-31）：克隆链念不了的语种不查也不写克隆键缓存
+        # ——修复前合成的怪声音频还躺在缓存里（键=克隆后端），TTL 内会借命中
+        # 复活；真值判定在 _synthesize_uncached 单点，这里只管缓存卫生。
+        _lang_gate_skip_cache = bool(self._clone_lang_blocked(text_s))
+        if (self.enabled and self.cache_enabled and text_s.strip()
+                and not _lang_gate_skip_cache):
             eff_backend = self._effective_backend()
             eff_voice = voice or self._effective_voice()
             # 改写变体维度（2026-08-10）：原文直念（pre_colloquialized）与改写链
@@ -989,12 +1058,22 @@ class TTSPipeline:
             split_part=split_part,
             interactive=interactive,
             total_budget_sec=total_budget_sec)
+        if _t2s_applied:
+            rv.extra["tts_t2s"] = True
 
         # ── RVC 变声（可选）：把克隆输出 WAV 再变成人设选定的 66 音色之一 ──
         rv = await self._maybe_apply_rvc(rv)
 
         # ── 环境底噪（可选，⑤ 活人感）：极低增益房间底噪，去「录音棚干净感」──
         rv = await self._maybe_apply_ambience(rv)
+
+        # ── #130 采样率标头自检（2026-09-01，钧 0:06→对端 0:35 实锤）────────
+        # WAV 标头 rate 与真实 PCM 不符（48k 数据被标 8k 类）时，后续所有环节
+        # （本地 ffmpeg 转码 / hub 重采样 / 对端客户端解码）都信标头 → 对端收到
+        # 6 倍拉长的慢放低音。音频出门后无法再救，只能在合成尾部对照独立参照
+        # （引擎节拍元数据 / 文本时长估计）就地改写标头。修不动/无参照＝不动。
+        if rv.ok:
+            self._maybe_fix_wav_header_rate(rv, text_s)
 
         # 截断嫌疑标记（不改 ok——判定保守但不武断；发送层闸门按配置决定拦不拦）
         if rv.ok and self._looks_truncated(text_s, rv.duration_sec):
@@ -1045,6 +1124,48 @@ class TTSPipeline:
         except Exception:
             return False
 
+    def _maybe_fix_wav_header_rate(self, rv: "TTSResult", text: str) -> None:
+        """#130：WAV 采样率标头 × 独立时长参照对账，明显失配就地改写标头。
+
+        参照优先级：引擎节拍元数据（``duration_source=pacing_meta``，与文件头
+        完全独立）用 1.8x 阈值；否则文本时长估计（粗但方向可靠——6x 级错误
+        闭眼可辨）用 3x 阈值 + 标头时长 ≥8s 双闸，宁可漏修不误修。修成后回写
+        ``rv.duration_sec``（后续截断闸/发送 duration 全部拿到真值）并落
+        ``extra.wav_rate_fixed``（观测/回归可查）。任何异常静默不动原文件。
+        """
+        try:
+            path = str(rv.audio_path or "")
+            if not (path.lower().endswith(".wav")
+                    and os.path.isfile(path)):
+                return
+            header_dur = _duration_from_wave(path)
+            if header_dur <= 0:
+                return
+            if (str(rv.duration_source or "") == "pacing_meta"
+                    and float(rv.duration_sec or 0) > 0):
+                ref, min_ratio, floor = float(rv.duration_sec), 1.8, 0.0
+            else:
+                ref, min_ratio, floor = estimate_speech_sec(text), 3.0, 8.0
+            if ref <= 0:
+                return
+            ratio = max(header_dur / ref, ref / header_dur)
+            if ratio < min_ratio or (floor and header_dur < floor
+                                     and ref < floor):
+                return
+            fix = fix_wav_header_rate(path, ref)
+            if not fix:
+                return
+            rv.extra["wav_rate_fixed"] = fix
+            rv.duration_sec = float(fix["dur_after"])
+            rv.duration_source = "wav_rate_fixed"
+            logger.warning(
+                "[tts] #130 WAV 采样率标头失配已修复：rate %s→%s "
+                "dur %.1fs→%.1fs（参照 %.1fs）file=%s",
+                fix["rate_from"], fix["rate_to"], fix["dur_before"],
+                fix["dur_after"], ref, Path(path).name)
+        except Exception:
+            logger.debug("[tts] WAV 标头自检异常（不动原文件）", exc_info=True)
+
     def _try_prerendered(self, text: str) -> Optional["TTSResult"]:
         """预渲染语音命中层：命中返回 TTSResult（provider=prerendered），未命中 None。
 
@@ -1060,6 +1181,11 @@ class TTSPipeline:
                 return None
             pre_cfg = av.get("prerender") if isinstance(av.get("prerender"), dict) else {}
             if not pre_cfg.get("enabled", True):
+                return None
+            # 方言声学覆写命中时预渲染是普通话备货，命中=发错口音
+            from src.ai.cosy_dialect import dialect_acoustic_override
+            if dialect_acoustic_override(str(
+                    (self.voice_profile or {}).get("dialect_flavor") or "")):
                 return None
             from src.ai.voice_prerender import (
                 copy_for_send,
@@ -1196,10 +1322,17 @@ class TTSPipeline:
             night = "n0"
         # RVC 目标音色并入键：同文本不同 rvc_voice 必须分缓存（否则串音）。
         rvc_v = self._rvc_target_voice()
+        # 仅出货方言进缓存键（未出货档已视为普通话，不得为假口音分键）
+        try:
+            from src.ai.cosy_dialect import normalize_dialect_flavor
+            dialect = normalize_dialect_flavor(
+                str((self.voice_profile or {}).get("dialect_flavor") or ""))
+        except Exception:
+            dialect = ""
         base = "|".join([
             backend, voice or "", self.format, self.model or "",
             self.instructions or "", emo, ref_fp, emo_ref, night, rvc_v,
-            hub_fp, str(variant or ""), text,
+            hub_fp, str(variant or ""), dialect, text,
         ])
         return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
@@ -1382,12 +1515,25 @@ class TTSPipeline:
             return min(t, max(floor, deadline - time.monotonic()))
         # ── 局域网克隆优先：在线则走 LAN 零样本克隆；不可用/失败按配置回落云端 ──
         if self._should_try_lan():
-            lan_rv = await self._try_lan_clone(rv, out, t0, spec=spec)
-            if lan_rv is not None:
-                return lan_rv  # LAN 成功 或 硬失败(未开兜底)；None = 回落云端
+            # 语种能力闸（LAN 克隆同样只会中英）：超能力语种跳过 LAN，交主链/兜底
+            if self._clone_lang_blocked(rv.text, backend="voice_clone_lan"):
+                logger.info("[tts] 文本语种超出 LAN 克隆能力 → 跳过 voice_clone_lan")
+            else:
+                lan_rv = await self._try_lan_clone(rv, out, t0, spec=spec)
+                if lan_rv is not None:
+                    return lan_rv  # LAN 成功 或 硬失败(未开兜底)；None = 回落云端
 
         # ── 主后端合成 ──
         primary_backend = self._effective_backend()
+        # ── P0 克隆语种能力闸（2026-08-31「日文怪声」全链收口）────────────────
+        # 手动面板的 voice_langs 警示护不住 A 线自动语音回复 / B 线 autosend /
+        # 主动触达三条自动链——在此单点兜底：文本语种明确超出克隆主路能力
+        # （SSOT=lang_voice_route.clone_voice_langs，空表=能力未知不拦）→ 整条
+        # 克隆链不打（省一次注定怪声的 GPU 往返），交下方既有兜底链：fallback
+        # 开 → edge 按语种对齐音色出标准声（extra.fallback_from 让前端亮「非
+        # 克隆声」黄字）；fallback 关 / no_edge 部署 → 如实失败，调用方回落文字。
+        # 非克隆后端 / 语种不明 / 短文本一律返回 ""（宁可漏拦不误拦）。
+        _lang_blocked = self._clone_lang_blocked(rv.text)
         # 2026-08-19 Token enforce（P6）：钱包耗尽 + enforce 开 + 主后端是克隆声
         # （计费引擎）→ 注入合成失败原因，交给下方**既有** edge 兜底块出免费兜底声
         # （voice/format 语义全复用，语音永不哑）；兜底不可用则照走克隆（永不断线 > 计费）。
@@ -1407,7 +1553,23 @@ class TTSPipeline:
         # minicpm_clone：与 fish 同 /v1/tts/clone 契约的远程情感克隆主机（产 WAV），作为
         # 可显式选择的克隆后端（异步语音消息专用，慢于实时但不阻塞）。成功直接定稿；
         # 失败且允许兜底 → 落到下方 edge 回落（绝不卡死出站）。
-        if _token_skip_clone:
+        if _lang_blocked:
+            err = f"clone_lang_unsupported:{_lang_blocked}"
+            rv.extra["clone_lang_blocked"] = _lang_blocked
+            # 拦截分布进 voice_synth_stats（metrics/Prom 已接）：「客户在要哪些
+            # 我们念不了的语种」直接决定 lang_engines/新引擎先补哪门语言。
+            try:
+                from src.ai.voice_synth_stats import get_voice_synth_stats
+                get_voice_synth_stats().record_blocked(_lang_blocked)
+            except Exception:
+                pass
+            logger.warning(
+                "[tts] 文本语种 '%s' 超出克隆链 '%s' 能力（persona=%s）→ 跳过克隆，%s",
+                _lang_blocked, primary_backend, self.persona_id or "-",
+                "走 edge 兜底" if (self.fallback_on_error and self.fallback_backend
+                                   and self.fallback_backend != primary_backend)
+                else "回落文字")
+        elif _token_skip_clone:
             err = "token_wallet_exhausted"
             logger.info(
                 "[tts] Token 钱包耗尽（enforce）→ 跳过克隆声 '%s'，走 '%s' 兜底",
@@ -1455,15 +1617,27 @@ class TTSPipeline:
                 "[tts] backend '%s' failed (%s) → 回落 '%s'", primary_backend, err, fb)
             fb_fmt = "mp3" if fb == "edge_tts" else self.format
             fb_out = out.with_suffix(f".{fb_fmt}")
+            # 语种闸拦下时兜底音色对齐文本语种（配置默认 zh 兜底声念泰文与怪声
+            # 同罪）；无映射维持配置值（edge 分支的 safe_edge_voice 仍兜非法名）。
+            fb_voice = self.fallback_voice
+            if _lang_blocked and fb == "edge_tts":
+                try:
+                    from src.ai.lang_voice_route import default_edge_voice_for_lang
+                    fb_voice = (default_edge_voice_for_lang(_lang_blocked)
+                                or self.fallback_voice)
+                except Exception:
+                    fb_voice = self.fallback_voice
             fb_err = await self._run_backend(
-                rv, rv.text, fb_out, self.fallback_voice, fb, fb_fmt,
+                rv, rv.text, fb_out, fb_voice, fb, fb_fmt,
                 _cap(timeout_sec),
                 spec=spec)
             if fb_err is None:
                 rv.provider = fb
                 rv.format = fb_fmt
-                rv.voice = (safe_edge_voice(self.fallback_voice)
-                            if fb == "edge_tts" else self.fallback_voice)
+                # 回写实际使用的兜底音色（fb_voice 可能已按语种对齐；写
+                # self.fallback_voice 会把「日语声念的」标成中文声=报告失真）
+                rv.voice = (safe_edge_voice(fb_voice)
+                            if fb == "edge_tts" else fb_voice)
                 rv.extra["fallback_from"] = primary_backend
                 rv.extra["primary_error"] = err
                 rv.latency_ms = int((time.monotonic() - t0) * 1000)
@@ -1522,10 +1696,51 @@ class TTSPipeline:
             rv.duration_source = "unknown"
         return None
 
+    def _voice_profile_for_synth(self) -> Dict[str, Any]:
+        """本次合成用的 voice_profile：清洗未出货 dialect_flavor。
+
+        粤语声学不在此处理（lang_voice_route 的 <|yue|> zero_shot）。
+        闽南/川渝等无专模，不得叠 CosyVoice3 instruct2。新 dict，不改入参。
+        """
+        try:
+            from src.ai.cosy_dialect import merge_dialect_acoustic
+            return merge_dialect_acoustic(self.voice_profile)
+        except Exception:
+            return dict(self.voice_profile or {})
+
     def _effective_backend(self) -> str:
-        if bool(self.voice_profile.get("enabled", False)):
-            return str(self.voice_profile.get("backend") or self.backend).strip().lower()
+        vp = self._voice_profile_for_synth()
+        if bool(vp.get("enabled", False)):
+            return str(vp.get("backend") or self.backend).strip().lower()
         return self.backend
+
+    def _clone_t2s_enabled(self) -> bool:
+        """繁→简发音输入转换开关（默认开；opt-out ``avatar_voice.clone_t2s: false``）。
+
+        与 voice_clone_client.auto_language 同哲学：这是纠正「繁体喂进简体建模
+        引擎念错字」的既有缺陷，非新子系统——简体文本转换恒为恒等，行为不变。
+        """
+        av = self.avatar_voice if isinstance(self.avatar_voice, dict) else {}
+        return bool(av.get("clone_t2s", True))
+
+    def _clone_lang_blocked(self, text: str, backend: Optional[str] = None) -> str:
+        """克隆链语种能力闸的薄封装（真值单点在 lang_voice_route.clone_lang_gate）。
+
+        返回被拦语种前缀或 ""（可念/非克隆后端/语种不明/能力未知/任何异常）。
+        语种路由放行标记（``_lang_route_cleared``，见 lang_voice_route.clone_langs）
+        命中被拦语种时放行——路由已把该语种改派到运营验收过的克隆节点。
+        """
+        try:
+            from src.ai.lang_voice_route import clone_lang_gate
+            blocked = clone_lang_gate(
+                text, self.avatar_voice,
+                backend=(self._effective_backend() if backend is None else backend),
+                persona_id=self.persona_id)
+            if blocked and blocked == self.lang_route_cleared:
+                return ""
+            return blocked
+        except Exception:
+            return ""
 
     def _effective_voice(self) -> str:
         if bool(self.voice_profile.get("enabled", False)):
@@ -1540,6 +1755,12 @@ class TTSPipeline:
         vp = self.voice_profile or {}
         if not (vp.get("enabled") and vp.get("owner_consent")):
             return False
+        try:
+            from src.ai.cosy_dialect import dialect_acoustic_override
+            if dialect_acoustic_override(str(vp.get("dialect_flavor") or "")):
+                return False
+        except Exception:
+            pass
         ref = str(vp.get("reference_audio_path") or "").strip()
         return bool(ref) and Path(ref).is_file()
 
@@ -1798,7 +2019,7 @@ class TTSPipeline:
             return rv
 
         # 克隆必须有同意 + 参考音文件：缺则配置类硬失败（暴露，不绕过 owner_consent）
-        vp = self.voice_profile or {}
+        vp = self._voice_profile_for_synth()
         ref = str(vp.get("reference_audio_path") or "").strip()
         if not bool(vp.get("owner_consent", False)):
             return _finalize_err("voice_profile_requires_owner_consent")
@@ -1882,7 +2103,9 @@ class TTSPipeline:
         # paced_synthesize 收 polish 回调，在切完之后对每段各自施用，顺序才对。
         # 方言前缀（<|yue|>）与分段编排相容性未验证（标签是 per-inference 语义，
         # 分段会把它切在首段）→ 带前缀时跳过 pacing 整段单发，保正确优先。
-        if not _vp_prefix:
+        # clone_instruct（川渝/东北 instruct2）同理：指令是整段语义，分段会丢。
+        _vp_instruct = str(vp.get("clone_instruct") or "").strip()
+        if not _vp_prefix and not _vp_instruct:
             _paced = await self._try_minicpm_pacing(
                 rv, mc_out, t0, spec=spec, text=spoken, client=client, ref=ref,
                 ref_text=ref_text, instr=instr, split_part=split_part,
@@ -1898,8 +2121,12 @@ class TTSPipeline:
             rv.extra["clone_text_prefix"] = _vp_prefix
 
         def _do_clone() -> None:
-            client.synthesize_clone(
-                spoken, ref, mc_out, reference_text=ref_text, instructions=instr)
+            if _vp_instruct:
+                client.synthesize_instruct(
+                    spoken, ref, mc_out, instruct=_vp_instruct)
+            else:
+                client.synthesize_clone(
+                    spoken, ref, mc_out, reference_text=ref_text, instructions=instr)
 
         try:
             await asyncio.wait_for(
@@ -1921,6 +2148,8 @@ class TTSPipeline:
             rv.audio_path = str(mc_out)
             rv.extra["bytes"] = mc_out.stat().st_size
             rv.extra["minicpm_base_url"] = client.base_url
+            if _vp_instruct:
+                rv.extra["clone_instruct"] = _vp_instruct
             try:
                 dur, src = compute_audio_duration_sec(str(mc_out), "wav")
                 rv.duration_sec = float(dur)
@@ -2013,6 +2242,33 @@ class TTSPipeline:
         # 引擎显式钉住（空=沿用 hub 档上配置=旧行为）：同一 hub 上智聊与幻影用同一
         # 引擎，才不会出现「同人设两种音色」。
         hub_engine = str(hf.get("tts_engine") or "").strip()
+        # 语言（防中文声纹念外语）——置于择引擎之前：语种→引擎路由要消费它
+        language = "zh"
+        try:
+            from src.ai.voice_clone_client import effective_clone_language
+            language = effective_clone_language(text, default="zh") or "zh"
+        except Exception:
+            language = "zh"
+        # ── P1 语种→引擎路由（2026-08-31 全语种克隆地基）────────────────────
+        # hub 多引擎并存而 tts_engine 全局钉死一个——语种超出钉住引擎能力时
+        # （ja×index_tts）只能整链放弃。``hub_fish.lang_engines`` 按本条文本
+        # 语种改派引擎（如 {ja: fish_speech}）；语种能力闸 SSOT
+        # （lang_voice_route.clone_voice_langs）读同一份配置，两处口径自动
+        # 一致。缺省空映射＝旧行为零变化；改派后的引擎照常吃下方目录预检/
+        # 超时熔断/采样率指纹闸（防 hub prefer 语义静默顶包）。
+        try:
+            from src.ai.lang_voice_route import hub_engine_for_lang
+            _eng_routed = hub_engine_for_lang(cfg, language)
+        except Exception:
+            _eng_routed = ""
+        if _eng_routed and _eng_routed != hub_engine:
+            rv.extra["hub_engine_lang_routed"] = f"{language}:{_eng_routed}"
+            hub_engine = _eng_routed
+            try:
+                from src.ai.voice_synth_stats import get_voice_synth_stats
+                get_voice_synth_stats().record_lang_routed(language, _eng_routed)
+            except Exception:
+                pass
         # 引擎冒名＝按合成失败处理（默认开）。置 false 只记录不拦，用于 hub 侧排障。
         verify_engine = bool(hf.get("verify_engine", True))
         strict_voice = str(
@@ -2037,13 +2293,8 @@ class TTSPipeline:
                 response_format = "wav"
                 rv.extra["hub_format_forced_wav"] = True
 
-        # 语言（防中文声纹念外语）+ 情绪（弱情绪归 neutral 保真，与本地链同口径）
-        language = "zh"
-        try:
-            from src.ai.voice_clone_client import effective_clone_language
-            language = effective_clone_language(text, default="zh") or "zh"
-        except Exception:
-            language = "zh"
+        # 情绪（弱情绪归 neutral 保真，与本地链同口径）；language 已在上方
+        # 语种→引擎路由处解析（同一份检测结果两处消费）。
         emotion = ""
         if spec is not None:
             try:
@@ -3439,6 +3690,91 @@ def _duration_from_mp3(path: str) -> float:
         return -1.0
     except Exception:
         return -1.0
+
+
+# ── #130：WAV 采样率标头自检修复（纯函数，供 pipeline 尾部与单测直用）──────
+
+_STD_WAV_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+
+
+def estimate_speech_sec(text: str) -> float:
+    """文本 → 语速时长粗估（秒）。只求数量级正确（辨 6x 级标头错误足够）。
+
+    口径：CJK 字 0.22s + 拉丁词 0.38s，地板 1.0s。空文本 → 0（不可用）。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return 0.0
+    cjk = len(_CJK_CHAR_RE.findall(t))
+    words = len(_LATIN_WORD_RE.findall(t))
+    est = cjk * 0.22 + words * 0.38
+    return max(1.0, est) if (cjk or words) else 0.0
+
+
+def fix_wav_header_rate(path: str, ref_sec: float) -> Dict[str, Any]:
+    """把 WAV fmt 块的采样率改写为「使时长最贴近 ``ref_sec`` 的标准采样率」。
+
+    只动 PCM/IEEE-float（audio_format 1/3）的 fmt 块 4 字节采样率 + 4 字节
+    byte-rate，PCM 数据零改动——48k 数据被标 8k 时改回 48k，音频即恢复原速。
+    保守闸：新旧时长差要有 ≥2x 的实质改善才动手；修不动/解析失败返回 ``{}``。
+    返回 ``{rate_from, rate_to, dur_before, dur_after}``。
+    """
+    import struct
+    try:
+        ref = float(ref_sec or 0)
+        if ref <= 0:
+            return {}
+        with open(path, "rb") as f:
+            head = f.read(12)
+            if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+                return {}
+            fmt_off = -1
+            fmt_size = 0
+            pos = 12
+            while True:
+                f.seek(pos)
+                ck = f.read(8)
+                if len(ck) < 8:
+                    return {}
+                cid, csz = ck[:4], struct.unpack("<I", ck[4:])[0]
+                if cid == b"fmt ":
+                    fmt_off, fmt_size = pos + 8, csz
+                    break
+                pos += 8 + csz + (csz & 1)
+            if fmt_off < 0 or fmt_size < 16:
+                return {}
+            f.seek(fmt_off)
+            fmt_data = f.read(16)
+        audio_format, channels, rate_from, _byte_rate, block_align, _bits = \
+            struct.unpack("<HHIIHH", fmt_data)
+        if audio_format not in (1, 3) or rate_from <= 0 or block_align <= 0:
+            return {}
+        dur_before = _duration_from_wave(path)
+        if dur_before <= 0:
+            return {}
+        frames = dur_before * rate_from
+        best = min(_STD_WAV_RATES, key=lambda r: abs(frames / r - ref))
+        if best == rate_from:
+            return {}
+        dur_after = frames / best
+        # 实质改善闸：新时长与参照的偏差至少比旧的好 2 倍
+        err_before = max(dur_before / ref, ref / dur_before)
+        err_after = max(dur_after / ref, ref / dur_after)
+        if err_after * 2.0 > err_before:
+            return {}
+        with open(path, "r+b") as f:
+            f.seek(fmt_off + 4)
+            f.write(struct.pack("<I", int(best)))
+            f.write(struct.pack("<I", int(best) * int(block_align)))
+        return {"rate_from": int(rate_from), "rate_to": int(best),
+                "dur_before": round(float(dur_before), 3),
+                "dur_after": round(float(dur_after), 3)}
+    except Exception:
+        logger.debug("[tts] fix_wav_header_rate 失败（不动原文件）",
+                     exc_info=True)
+        return {}
 
 
 def compute_audio_duration_sec(

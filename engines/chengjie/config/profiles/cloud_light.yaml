@@ -87,10 +87,3 @@ messenger_rpa:
   enabled: false
 whatsapp_rpa:
   enabled: false
-
-# ── 首启向导（WP-2）：新装客户默认见到 /welcome 五步向导；生产老实例（不经
-#    本档播种）保持基线 false 零打扰。完成后登录不再自动进入，页面仍可访问。
-#    WP-7 坐席新手任务卡随开箱档一并开（新坐席首日 5 任务；老坐席自动豁免）。──
-onboarding:
-  enabled: true
-  agent_tasks: true

@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 #: openapi 必须在场的路径（= 近期批次的 .py 装载证明；新批次往这里追加）
+#: /api/agent-tasks 已随新手引导退役移除（2026-08-31）——装载证明改由其余路径承担。
 EXPECTED_PATHS = (
-    "/api/agent-tasks",
     "/api/personas/{pid}/stock-readiness",
     "/api/personas/{pid}/speech-print",
     "/api/admin/crisis-referrals",
@@ -155,9 +155,7 @@ def run(base: str, data_root: Path) -> int:
     else:
         p.note("persona stock-readiness", "SKIP", "no personas")
 
-    code, body = p.get("/static/workspace/agent-tasks-card.js", raw=True)
-    p.note("agent-tasks card static", "PASS" if code == 200 else "FAIL",
-           f"http={code}")
+    # agent-tasks 卡静态探针已随新手引导退役移除（2026-08-31）
 
     fails = [r for r in p.rows if r[1] == "FAIL"]
     print(f"\nresult: {len([r for r in p.rows if r[1] == 'PASS'])} pass / "

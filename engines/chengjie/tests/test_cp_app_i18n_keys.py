@@ -73,3 +73,121 @@ def test_image_error_suggestions_do_not_leak_internal_hosts():
     bad = [k for k, v in list(zh.items()) + list(en.items())
            if k.startswith("cp.image.err") and ip.search(v)]
     assert not bad, f"错误文案泄漏内网地址：{sorted(set(bad))}"
+
+
+# 「显存」不是坐席的词汇（2026-08-28 老板点名：「这个信息不应该让用户看到」）。
+# 旧 cp.image.vram_low_warn 把内部实现（显存/腾挪/算力）直接摊给坐席，且在白标
+# 与演示场合等于自曝「这套系统跑在一台显存吃紧的共享卡上」。坐席只需要结果语言
+# （要多等多久）；显存数字仍在 /api/image/config 里给运维/ops 卡用。
+_INFRA_TERMS_ZH = ("显存", "视讯记忆体", "腾挪", "算力", "GPU", "VRAM")
+_INFRA_TERMS_EN = ("vram", "gpu")
+
+# 白名单：**只有**这两类允许出现内部实现词，且逐键登记（2026-08-28 全量盘点
+# 971 键得出，当时命中 10 处、软化 2 处后剩 8 处）。
+#   - 结构化失败卡（2026-08-22 错误面收口的产物）：出现时机是**真的失败了**，
+#     坐席下一步就是把原因转给运维——那时点名「显存不足」是有用信息不是噪音。
+#   - LAN GPU 主机掉线告警：受众本就是运维。
+# 常态文案（预警条/提示/按钮/存货说明）没有豁免：它们在「一切正常」时也挂着，
+# 坐席无从处置，只会变成看不懂的噪音 + 白标/演示露馅（老板 2026-08-28 点名）。
+_JARGON_ALLOW = {
+    "cp.image.errc_vram_insufficient",
+    "cp.image.errs_vram_insufficient",
+    "cp.image.errs_no_output",
+    "cp.alert.lan_gpu",
+}
+
+# 「模型 / 冷启动 / 预热」这一类**运行机制**词（2026-08-28 老板第二轮点名：
+# 「不要给用户说什么冷启动、模型，用户不了解也不关心」）。与上面的硬件词分开
+# 管：硬件词（显存/GPU）在失败卡里还有转述给运维的价值，机制词连那点价值都
+# 没有——坐席对「模型在不在显存里」既不理解也无从处置，只需要知道「要等多久」。
+# 因此这一组的豁免面更窄：只放过 cp.alert.*（受众本就是运维）与「模型文件缺失」
+# 这类**必须点名才能报修**的失败卡。
+_MECHANISM_TERMS = ("冷启动", "冷啟動", "加载模型", "載入模型", "预热", "預熱", "模型")
+_MECHANISM_ALLOW = {
+    "cp.alert.image_models",          # ops 告警：出图模型失踪
+    "cp.alert.colloquial_llm",        # ops 告警：口语化模型连续失败
+    "cp.image.errc_model_missing",    # 失败卡：不点名「模型文件缺失」运维无从下手
+    "cp.image.errs_model_missing",
+}
+
+
+def test_copilot_copy_has_no_mechanism_jargon():
+    """常态文案不得出现「模型/冷启动/预热」这类运行机制词。"""
+    zh, _en = _dicts()
+    bad = []
+    for k, v in zh.items():
+        if not k.startswith("cp.") or k in _MECHANISM_ALLOW:
+            continue
+        hit = [t for t in _MECHANISM_TERMS if t in str(v)]
+        if hit:
+            bad.append(f"{k} → {hit}  «{str(v)[:52]}»")
+    assert not bad, (
+        "右栏文案出现运行机制词（坐席不理解也无从处置）——只说「要等多久」「暂时"
+        "用不了」，机制细节留给日志与 ops：\n  " + "\n  ".join(sorted(bad)))
+
+
+def test_mechanism_allowlist_not_stale():
+    zh, _en = _dicts()
+    stale = [f"{k}：已不含机制词，请从 _MECHANISM_ALLOW 除名"
+             for k in sorted(_MECHANISM_ALLOW)
+             if k in zh and not any(t in str(zh[k]) for t in _MECHANISM_TERMS)]
+    assert not stale, "\n".join(stale)
+
+
+def test_copilot_copy_has_no_infra_jargon():
+    """扫**整个右栏词典**（不只出图面板）：新面板/新文案一律不许再漏内部词。"""
+    zh, en = _dicts()
+    bad = []
+    for k, v in zh.items():
+        if not k.startswith("cp.") or k in _JARGON_ALLOW:
+            continue
+        hit = [t for t in _INFRA_TERMS_ZH if t.lower() in str(v).lower()]
+        if hit:
+            bad.append(f"{k} → {hit}  «{str(v)[:48]}»")
+    for k, v in en.items():
+        if not k.startswith("cp.") or k in _JARGON_ALLOW:
+            continue
+        hit = [t for t in _INFRA_TERMS_EN if t in str(v).lower()]
+        if hit:
+            bad.append(f"{k} → {hit}  «{str(v)[:48]}»")
+    assert not bad, (
+        "右栏文案出现内部实现词（坐席无从处置 + 白标/演示露馅）——改成结果语言"
+        "（「要多等多久」「暂时用不了」），显存/队列等诊断信息留给 ops；确属"
+        "「真失败后转给运维」的诊断文案才登记进 _JARGON_ALLOW：\n  "
+        + "\n  ".join(sorted(bad)))
+
+
+def test_jargon_allowlist_not_stale():
+    """白名单条目被清理后必须除名（防它变成永久豁免）。"""
+    zh, en = _dicts()
+    stale = []
+    for k in sorted(_JARGON_ALLOW):
+        vz, ve = str(zh.get(k, "")), str(en.get(k, "") or "")
+        hit = ([t for t in _INFRA_TERMS_ZH if t.lower() in vz.lower()]
+               + [t for t in _INFRA_TERMS_EN if t in ve.lower()])
+        if k not in zh and k not in en:
+            stale.append(f"{k}：词条已删除，请从 _JARGON_ALLOW 除名")
+        elif not hit:
+            stale.append(f"{k}：已不含内部词，请从 _JARGON_ALLOW 除名")
+    assert not stale, "\n".join(stale)
+
+
+def test_image_busy_copy_is_outcome_language():
+    """忙闲提示必须存在且双语齐备（替代已下线的 vram_low_warn）。"""
+    zh, en = _dicts()
+    for k in ("cp.image.queue_wait", "cp.image.warmup_wait"):
+        assert k in zh and k in en, f"缺忙闲提示词条 {k}"
+    assert "cp.image.vram_low_warn" not in zh and "cp.image.vram_low_warn" not in en, (
+        "vram_low_warn 已于 2026-08-28 下线（把「显存被常驻模型占满」说成「出图卡"
+        "较忙」＝永久误报）——不要复活它")
+
+
+def test_infra_jargon_ratchet_detects_violation():
+    """探测器自证：把已下线的旧文案塞回常态键，门禁必须点名。"""
+    zh, _ = _dicts()
+    poisoned = dict(zh)
+    poisoned["cp.image.hint"] = "出图卡当前较忙（空闲显存 0.1G），要先腾挪显存"
+    bad = [k for k, v in poisoned.items()
+           if k.startswith("cp.") and k not in _JARGON_ALLOW
+           and any(t.lower() in str(v).lower() for t in _INFRA_TERMS_ZH)]
+    assert bad == ["cp.image.hint"], f"旧文案未被检出，门禁失效：{bad}"

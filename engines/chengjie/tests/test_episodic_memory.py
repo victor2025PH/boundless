@@ -53,6 +53,61 @@ def test_compute_memory_storage_key():
     assert compute_memory_storage_key("chat_user", "456", -10099) == "-10099_456"
 
 
+# ── #96（0830 Steven 实锤）：无溯源称呼类旧条目消费端降权 ────────────────────
+
+def test_no_provenance_name_fact_downweighted(mem_db: EpisodicMemoryStore):
+    """1.0.63 前存量「用户称呼自己为X」类条目（无 source_quote）注入 prompt
+    时必须带方向存疑标注——方向抽反的旧条目正是「拿人设名叫客户」的病灶。"""
+    uid = "u96"
+    # 模拟存量旧条目：显式空溯源（旧库 ALTER 后默认空串）
+    assert mem_db.add_fact(uid, "用户称呼自己为steven",
+                           source="user_stated", source_quote="") is not None
+    out = mem_db.get_bullets_for_prompt(uid)
+    assert "用户称呼自己为steven" in out
+    assert "无原话溯源" in out and "勿据此称呼对方" in out
+
+
+def test_name_fact_with_provenance_not_marked(mem_db: EpisodicMemoryStore):
+    # 新抽取条目带溯源 → 不标（标注只治「对不了质」的存量）
+    uid = "u96b"
+    assert mem_db.add_fact(uid, "客户自称：steven", source="user_stated",
+                           source_quote="my name is steven",
+                           source_ts=1.0) is not None
+    out = mem_db.get_bullets_for_prompt(uid)
+    assert "客户自称：steven" in out
+    assert "无原话溯源" not in out
+
+
+def test_non_name_fact_without_provenance_not_marked(mem_db: EpisodicMemoryStore):
+    # 非称呼类旧条目不标——全标＝噪声稀释重点
+    uid = "u96c"
+    assert mem_db.add_fact(uid, "用户喜欢喝美式咖啡",
+                           source="user_stated", source_quote="") is not None
+    out = mem_db.get_bullets_for_prompt(uid)
+    assert "美式咖啡" in out
+    assert "无原话溯源" not in out
+
+
+def test_ai_inferred_mark_takes_precedence(mem_db: EpisodicMemoryStore):
+    # ai_inferred 已有降权标注 → 不叠加溯源标注（elif 语义）
+    uid = "u96d"
+    assert mem_db.add_fact(uid, "用户希望被称呼为老板",
+                           source="ai_inferred", source_quote="") is not None
+    out = mem_db.get_bullets_for_prompt(uid)
+    assert "AI推断" in out
+    assert "无原话溯源" not in out
+
+
+def test_extract_prompt_pins_direction_rules():
+    """#96-B 抽取 prompt 方向/主语铁律接线钉（措辞可改，语义锚不许丢）。"""
+    import inspect
+    from src.ai.ai_client import AIClient
+    src = inspect.getsource(AIClient.extract_memory_bullets)
+    assert "称呼方向铁律" in src, "抽取 prompt 丢了呼叫位方向规则（#96）"
+    assert "主语无歧义铁律" in src, "抽取 prompt 丢了主语显式规则（#96）"
+    assert "用户称呼自己为X" in src, "抽取 prompt 必须显式禁双解句式（#96）"
+
+
 def test_strip_composite_user_id_defends_key_doubling():
     """P10（2026-07-27）：防「完整记忆键回喂」——conversation_id / canonical 被当
     chat_key 传入时剥回裸形态，否则 CPI 注册 platform:platform:… 翻倍键

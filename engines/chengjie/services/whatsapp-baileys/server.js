@@ -37,12 +37,18 @@ import {
 // close 分支决策抽成零依赖纯函数（2026-07-22 断网假死事故的根修）：决策可被 node --test
 // 单测（server.js 顶层 app.listen，测试没法安全 import 本文件），本文件只执行副作用。
 import { decideCloseAction, CLOSE_CODES } from "./close-policy.js";
+import { shouldMarkScanned } from "./scan-signal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.WA_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8790);
+// 只绑回环：本服务的入站路由（/accounts/:id/send、logout、二维码等）没有任何鉴权中间件，
+// 绑 0.0.0.0 等于把账号操作面开给整个局域网。真实调用方只有本机 Python 引擎
+// （实例配置 baileys_url=http://127.0.0.1:8790），全仓无远程引用。
+// 确需跨机时用 BIND_HOST 覆盖，但**必须先给入站加鉴权**再放开。
+const HOST = String(process.env.BIND_HOST || '127.0.0.1');
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 // close-policy 为保持零依赖内联了两个 DisconnectReason 码；这里与权威枚举比对一次，
@@ -1040,6 +1046,18 @@ async function _startLoginInner(loginId, proxyUrl) {
   sock.ev.on("creds.update", (update) => {
     try {
       if (sessions.get(loginId) !== entry) return; // 已被重连/登出换代 → 旧 sock 事件忽略
+      // 扫码反馈兜底（P0）：isNewLogin 若某版本不派发，凭据里 me.id 首现＝手机已确认配对；
+      // 仅对「展示过二维码」的扫码会话生效（qrImage 闸门排除磁盘恢复的老会话重连）。
+      try {
+        const meId = String(
+          (update && update.me && update.me.id) ||
+          (sock.authState && sock.authState.creds && sock.authState.creds.me &&
+            sock.authState.creds.me.id) || "").trim();
+        if (shouldMarkScanned(entry, { meId })) {
+          entry.status = "scanned";
+          logger.info({ loginId }, "WA QR scanned (creds.me)");
+        }
+      } catch (_) { /* 扫码兜底判定绝不能影响后续身份采集 */ }
       const nm = String(
         (update && update.me && update.me.name) ||
         (sock.authState && sock.authState.creds && sock.authState.creds.me &&
@@ -1182,13 +1200,20 @@ async function _startLoginInner(loginId, proxyUrl) {
     // 新会话状态改坏 / 触发幽灵重连（双 socket 抢同一 authDir → 440 互踢循环），旧 qr
     // 也会覆盖新码。已换代的 entry 一律整体忽略。
     if (sessions.get(loginId) !== entry) return;
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect, qr, isNewLogin } = update;
     if (qr) {
       try {
         entry.qrImage = await QRCode.toDataURL(qr, { width: 240, margin: 1 });
       } catch (e) {
         logger.error({ e }, "qr encode failed");
       }
+    }
+    // 扫码反馈（P0，2026-08-30）：Baileys 无原生「已扫描」态，扫完到 open 之间前端零反馈。
+    // isNewLogin=true＝手机扫码、配对握手已开始（随后多为 515 重启→open）；推进到 scanned，
+    // 前端即显示「已检测到扫码，正在登录…」并停止自动换码。判定收在 scan-signal.js 纯函数。
+    if (shouldMarkScanned(entry, { isNewLogin: !!isNewLogin })) {
+      entry.status = "scanned";
+      logger.info({ loginId, accountId: entry.accountId || "" }, "WA QR scanned (isNewLogin)");
     }
     if (connection === "open") {
       entry.status = "authorized";
@@ -1935,7 +1960,7 @@ app.get("/accounts", (_req, res) => {
   res.json({ accounts });
 });
 
-app.listen(PORT, async () => {
+app.listen(PORT, HOST, async () => {
   logger.info(`WA Baileys login service on :${PORT} (sessions: ${SESSIONS_DIR})`);
   // 开机自动恢复已登录账号 → 多账号 7×24 在线
   try {

@@ -374,3 +374,11 @@ config/local_trial.json
 # 中央凭据池的粘定机器 id（credpool_bridge 运行时写入，每机独有）
 config/.credpool_machine_id
 
+# 小智「电脑操控」runner 本地运行态（实施91）：token=密钥、kill=急停哨兵、
+# shots=截图落盘、审计——全是每机本地运行态，绝不入库。
+runner/.pc_runner_token
+runner/.pc_runner_kill
+runner/pc_runner_shots/
+runner/*.audit.jsonl
+tmp_pcvision/
+

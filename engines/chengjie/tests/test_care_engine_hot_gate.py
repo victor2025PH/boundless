@@ -80,7 +80,9 @@ async def test_enable_via_provider_without_restart():
 
     cfg.update({"enabled": True, "dry_run": True})
     assert await d.run_once(now=NOW) == 1
-    assert s.count(status="sent") == 1 and not rec  # dry_run 只记不发
+    # 实施84 P0-4：dry_run 只记不发，且**不消费待办**（行保持 pending）
+    assert not rec and s.count(status="sent") == 0
+    assert float(s.list_pending()[0]["dry_sampled_at"]) > 0
     assert d.health_snapshot()["dry_run_effective"] is True
 
     # 再来一条 → 切真发，下一 tick 生效

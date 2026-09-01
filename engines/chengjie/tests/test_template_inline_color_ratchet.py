@@ -79,7 +79,8 @@ _INLINE_COLOR_CEILINGS = {
     # 渐变端点色（深底常量，精确 token 不在映射表）」同判据同处置：深底横幅两主题
     # 恒定，token 化需先扩 codemod 映射表单源，归后续暗色收口批。
     # 2026-08-27 实施75 batch2：adm-uibuild 顶部横幅（深青渐变+浅青字）随迁移摘除，4→1。
-    "base.html": 1,
+    # 2026-08-31 新手引导退役：最后一处内联色随 tour/onboard-modal 删除清零，1→0。
+    "base.html": 0,
     # 2026-08-22 1→2 代记（同上，owner=styleguide 线）：+1 处 `acc-hd-icon`
     # 装饰渐变（#ec4899→#db2777），属本台账「映射表外长尾一次性装饰色」既有类别。
     "developer.html": 2,

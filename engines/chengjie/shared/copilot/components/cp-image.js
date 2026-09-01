@@ -32,6 +32,14 @@
    ⑦ 发送成功回写媒体账本（imageMarkSent best-effort）：重发冷却/服装连续窗
       从此认得手动发出的图（一致性旁路收口）。
    ⑧ 会话内最近 3 张历史缩略图（连生几张挑一张的自然工作流）+ 预览点击放大。
+   P0 增量（2026-08-28，「一屏三处不可信」实录：横幅永久误报 + 4 张裂图 + 灰字看不清）：
+   ⑨ 忙闲判据换成**队列深度/在途单**（cfg.busy_signal 特性探测），显存只用来判
+      「要不要预热」且按所选引擎的真实闸门（qwen_edit 18≠写死 14）；面板不再出现
+      显存数字与「算力/腾挪」等内部词（白标/演示会露馅，且坐席无从处置）。
+   ⑩ 存货缩略图带 onerror：坏图就地摘掉、张数改成真实可发数、全裂则整块不渲染
+      并上报一次遥测——绝不出现「宣称 N 张可发」配一排裂图框。
+   ⑪ config 快照按 TTL 续期（此前只在 connectedCallback 取一次，配额/忙闲/部署态
+      整个会话冻结）；只补状态块，绝不重渲表单。
    client 需实现 imageConfig/imageGenerate/imageSaveAlbum/sendMedia（缺失如实报，不静默）；
    P1 方法（imageJobCreate/Status/Cancel、imageAlbumStock、imageMarkSent）缺失时优雅退回。 */
 (function (root) {
@@ -55,6 +63,8 @@
   // 场景快捷（点击填入场景框；仅出图提示 + VLM 场景后验用，纯便利）。
   const SCENES = ["cafe", "office", "gym", "beach", "bedroom", "street", "home", "park"];
   const SIZES = [["1024x1024", "1:1"], ["832x1216", "3:4"], ["1216x832", "4:3"]];
+  // config 快照续期节流：忙闲/配额/部署态会变，但探针有成本（ComfyUI 往返）。
+  const CFG_TTL_MS = 60000;
 
   class CpImage extends Base {
     constructor() {
@@ -63,6 +73,7 @@
       this._tok = 0;
       this._booted = false;
       this._cfg = null;         // /api/image/config 结果
+      this._cfgTs = 0;          // 该快照的取回时刻（TTL 续期用）
       this._result = null;      // 最近一次生成 {preview_url, filename, path, engine}
       this._mode = "selfie";   // selfie | object
       this._engine = "";
@@ -75,6 +86,7 @@
       this._hist = [];          // 会话内最近生成 [{preview_url,...}]（cap 3）
       this._stockTimer = null;  // 相册存货查询 debounce
       this._stockTok = 0;       // 存货查询代际（防慢响应回写旧场景）
+      this._stockBeaconed = false;  // 「存货缩略图全裂」只上报一次
       this._sceneHints = null;  // P2 场景热度 [{scene,demand,unmet,stock}]（null=未取）
     }
 
@@ -94,11 +106,11 @@
         border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px);
         background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); margin-bottom:6px; }
       .im-chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:7px; }
-      .im-chip { font:inherit; font-size:10px; padding:2px 8px; cursor:pointer;
+      .im-chip { font:inherit; font-size:var(--cp-fs-tiny,12px); padding:2px 8px; cursor:pointer;
         border:1px solid var(--cp-border,#e2e8f0); border-radius:11px;
         background:var(--cp-surface-2,#f8fafc); color:var(--cp-text-dim,#64748b); }
       .im-chip:hover { border-color:var(--cp-accent,#6366f1); }
-      .im-lock { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--cp-text-dim,#64748b); cursor:pointer; }
+      .im-lock { display:inline-flex; align-items:center; gap:4px; font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-dim,#64748b); cursor:pointer; }
       .im-gen { display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:var(--cp-fs-sm,12px);
         font-weight:600; padding:7px 14px; border:0; border-radius:8px; cursor:pointer;
         background:var(--cp-accent,#6366f1); color:#fff; }
@@ -107,7 +119,7 @@
       .im-err { font-size:var(--cp-fs-tiny,11px); color:var(--cp-danger,#dc2626); margin-top:7px; line-height:1.5; }
       .im-preview { margin-top:8px; }
       .im-preview img { max-width:100%; border-radius:8px; border:1px solid var(--cp-border,#e2e8f0); display:block; }
-      .im-badge { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:var(--cp-ok,#0f9d75);
+      .im-badge { display:inline-flex; align-items:center; gap:4px; font-size:var(--cp-fs-tiny,12px); color:var(--cp-ok,#0f9d75);
         margin-top:5px; }
       .im-acts { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
       .im-acts button { display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:var(--cp-fs-tiny,11px);
@@ -115,15 +127,20 @@
         background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); cursor:pointer; }
       .im-acts button.primary { background:var(--cp-accent,#6366f1); color:#fff; border-color:var(--cp-accent,#6366f1); }
       .im-acts button[disabled] { opacity:.5; cursor:not-allowed; }
-      .im-hint { margin-top:7px; font-size:10px; color:var(--cp-text-tiny,#94a3b8); line-height:1.5; }
+      .im-hint { margin-top:7px; font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-tiny,#94a3b8); line-height:1.5; }
       .im-cap { width:100%; box-sizing:border-box; font:inherit; font-size:var(--cp-fs-tiny,11px);
         border:1px solid var(--cp-border,#e2e8f0); border-radius:var(--cp-radius-sm,6px);
         background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); padding:4px 7px; margin-top:6px; }
-      .im-warn { font-size:10.5px; line-height:1.55; color:var(--cp-warn-ink,#b45309);
+      .im-warn { font-size:var(--cp-fs-tiny,11px); line-height:1.55; color:var(--cp-warn-ink,#b45309);
         background:var(--cp-warn-bg,#fffbeb); border:1px solid var(--cp-warn-border,#fde68a);
         border-radius:7px; padding:5px 8px; margin-bottom:7px; }
       .im-warn.crit { color:var(--cp-danger,#dc2626); border-color:var(--cp-danger,#dc2626); }
       .im-warn[hidden] { display:none; }
+      /* 中性知情条（排队/预热）：琥珀=需要人处理，「会慢一点」不是那个语义——
+         用警示色说中性信息，久了坐席对真警告也不看了（告警疲劳）。 */
+      .im-note { font-size:var(--cp-fs-tiny,11px); line-height:1.55; color:var(--cp-text-dim,#64748b);
+        background:var(--cp-surface-2,#f8fafc); border:1px solid var(--cp-border,#e2e8f0);
+        border-radius:7px; padding:5px 8px; margin-bottom:7px; }
       .im-errcard { margin-top:8px; padding:8px 10px; border-radius:8px;
         background:var(--cp-surface-2,#f8fafc); border:1px solid var(--cp-border,#e2e8f0);
         border-left:3px solid var(--cp-danger,#dc2626); }
@@ -131,8 +148,8 @@
       .im-err-sug { margin-top:4px; font-size:var(--cp-fs-tiny,11px); line-height:1.55;
         color:var(--cp-text,#1e293b); }
       .im-err-tech { margin-top:6px; }
-      .im-err-tech summary { font-size:10px; color:var(--cp-text-tiny,#94a3b8); cursor:pointer; }
-      .im-err-tech pre { margin:4px 0 0; padding:6px 7px; font-size:10px; line-height:1.45;
+      .im-err-tech summary { font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-tiny,#94a3b8); cursor:pointer; }
+      .im-err-tech pre { margin:4px 0 0; padding:6px 7px; font-size:var(--cp-fs-tiny,12px); line-height:1.45;
         white-space:pre-wrap; word-break:break-all; max-height:130px; overflow:auto;
         background:var(--cp-surface,#fff); border:1px solid var(--cp-border,#e2e8f0);
         border-radius:6px; color:var(--cp-text-dim,#64748b); }
@@ -151,13 +168,13 @@
         background:var(--cp-surface,#fff); color:var(--cp-text,#1e293b); }
       .im-stock { margin:2px 0 7px; padding:6px 8px; border-radius:8px;
         border:1px dashed var(--cp-border,#e2e8f0); background:var(--cp-surface-2,#f8fafc); }
-      .im-stock-line { font-size:10.5px; color:var(--cp-text-dim,#64748b); margin-bottom:5px; }
+      .im-stock-line { font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-dim,#64748b); margin-bottom:5px; }
       .im-stock-row { display:flex; gap:5px; flex-wrap:wrap; }
       .im-stock-row img { width:52px; height:52px; object-fit:cover; border-radius:6px;
         border:1px solid var(--cp-border,#e2e8f0); cursor:pointer; display:block; }
       .im-stock-row img:hover { border-color:var(--cp-accent,#6366f1); }
       .im-hist { margin-top:7px; }
-      .im-hist .ttl { font-size:10px; color:var(--cp-text-tiny,#94a3b8); margin-bottom:4px; }
+      .im-hist .ttl { font-size:var(--cp-fs-tiny,12px); color:var(--cp-text-tiny,#94a3b8); margin-bottom:4px; }
       .im-hist-row { display:flex; gap:5px; }
       .im-hist-row img { width:44px; height:44px; object-fit:cover; border-radius:6px;
         border:1px solid var(--cp-border,#e2e8f0); cursor:pointer; opacity:.85; }
@@ -175,10 +192,31 @@
       this._booted = true;
       this._loadConfig();
     }
-    /* 弱会话：context 重喂只刷新发送按钮可用性，绝不重渲打断生成/预览。 */
+    /* 弱会话：context 重喂只刷新发送按钮可用性，绝不重渲打断生成/预览。
+       顺带按 TTL 悄悄续一次 config——此前 config 只在 connectedCallback 取一次，
+       忙闲/日配额/引擎部署态从打开面板那刻起整个会话冻结（额度永远显示 0、
+       预警条腾完显存也不消失）。只补状态块，绝不碰表单。 */
     async refresh() {
       this._notifyLoaded({ ok: true });
       this._syncSendBtn();
+      this._maybeRefetchConfig();
+    }
+    _maybeRefetchConfig(force) {
+      if (!this._cfg || this._busy) return;   // 生成中不打扰（也别浪费探针）
+      const now = Date.now();
+      if (!force && now - (this._cfgTs || 0) < CFG_TTL_MS) return;
+      this._cfgTs = now;
+      const client = this._cl();
+      if (!client || !client.imageConfig) return;
+      Promise.resolve(client.imageConfig()).then((d) => {
+        if (!d || !d.ok || !d.enabled) return;
+        this._cfg = d;
+        this._deploy = {};
+        (d.engines_info || []).forEach((x) => { if (x && x.id) this._deploy[x.id] = x.deployed; });
+        this._syncStatusBlocks();
+        const b = this.shadowRoot && this.shadowRoot.querySelector('[data-act="gen"]');
+        if (b && !this._busy) b.disabled = this._allUndeployed();
+      }, () => { /* 续期失败=保留旧快照，不打断坐席 */ });
     }
     _cl() {
       if (!this._client && root.CopilotShared && root.CopilotShared.createCopilotClient) {
@@ -197,6 +235,7 @@
       if (!d || !d.ok) { this._renderDisabled(this.t("cp.image.load_fail")); return; }
       if (!d.enabled) { this._renderDisabled(this.t("cp.image.disabled")); return; }
       this._cfg = d;
+      this._cfgTs = Date.now();
       this._deploy = {};
       (d.engines_info || []).forEach((x) => {
         if (x && x.id) this._deploy[x.id] = x.deployed;
@@ -260,6 +299,63 @@
       this._render('<div class="im-hint">' + this.esc(msg || "") + "</div>");
     }
 
+    /* ── 顶部预警区（2026-08-28 收口）───────────────────────────────────
+       分层：① 全引擎未部署=红（坐席自己救不了，必须找运维）② 服务不可达=黄
+       ③ 排队/预热=中性知情条。**刻意不再出现显存数字与「算力」字样**：
+       - 旧判据 `vram_free_gb < 14` 说的是「显存被占满」，不是「卡在忙」——同一
+         块卡还常驻着聊天兜底 30B（keep_alive 30m），空闲显存长期 0.x G 而 GPU
+         利用率为 0，于是那条「出图卡当前较忙」一挂就永不消失（实录）；
+       - 且它对坐席泄露内部实现（显存/腾挪/算力），白标与演示场合直接露馅。
+       忙闲改吃后端 queue_pending/busy_jobs；显存只用来判「要不要预热」。
+       旧后端无 busy_signal → 整块不出（宁可不说，也不说错）。 */
+    _warnsHtml() {
+      const esc = (s) => this.esc(s);
+      const cfg = this._cfg || {};
+      if (this._allUndeployed()) {
+        return '<div class="im-warn crit">' + esc(this.t("cp.image.all_undeployed")) + "</div>";
+      }
+      if (cfg.comfy_ok === false) {
+        return '<div class="im-warn">' + esc(this.t("cp.image.comfy_down_warn")) + "</div>";
+      }
+      if (!cfg.busy_signal) return "";
+      // 我们自己的在途单也在 ComfyUI 队列里 → 取较大值，相加会双计。
+      const q = Math.max(Number(cfg.queue_pending) || 0, Number(cfg.busy_jobs) || 0);
+      if (q > 0) {
+        return '<div class="im-note">' + esc(this.tf("cp.image.queue_wait", { n: q })) + "</div>";
+      }
+      if (this._needsWarmup()) {
+        return '<div class="im-note">' + esc(this.t("cp.image.warmup_wait")) + "</div>";
+      }
+      return "";
+    }
+    /* 本次出图要不要先卸模型腾显存（≈多等一分钟）：按**所选引擎**真实闸门判
+       （后端 engines_info[].min_free_gb＝真正传给 comfy_infer 的 --min-free-gb，
+       qwen_edit 是 18 不是 14）。闸门/显存任一未知 → 不判，不吓唬人。 */
+    _needsWarmup() {
+      const cfg = this._cfg || {};
+      const free = cfg.vram_free_gb;
+      if (typeof free !== "number" || free < 0) return false;
+      const info = (cfg.engines_info || []).find((x) => x && x.id === this._engine);
+      const min = info && typeof info.min_free_gb === "number" ? info.min_free_gb : 0;
+      return min > 0 && free < min;
+    }
+    _quotaHtml() {
+      const cfg = this._cfg || {};
+      if (!((Number(cfg.daily_quota) || 0) > 0)) return "";
+      return '<div class="im-hint" style="margin:0 0 6px;">' +
+        this.esc(this.tf("cp.image.quota_line",
+                         { u: Number(cfg.quota_used) || 0,
+                           q: Number(cfg.daily_quota) })) + "</div>";
+    }
+    _syncStatusBlocks() {
+      const sr = this.shadowRoot;
+      if (!sr) return;
+      const w = sr.querySelector('[data-role="warns"]');
+      if (w) w.innerHTML = this._warnsHtml();
+      const q = sr.querySelector('[data-role="quota"]');
+      if (q) q.innerHTML = this._quotaHtml();
+    }
+
     /* 重渲前快照表单值——切换类型/人设联动重渲不得吞掉坐席打了一半的输入。 */
     _fieldSnapshot() {
       const sr = this.shadowRoot;
@@ -303,23 +399,10 @@
       const chips = this._chipsHtml();
       const isSelfie = this._mode === "selfie";
       const allDown = this._allUndeployed();
-      // 服务器级预警：不可达（探测失败）/ 模型清单全空（2026-08-22 事故形态）/
-      // 算力紧张（P2 知情预警：会腾挪显存、耗时更长，可能短暂影响翻译）。
-      let warns = "";
-      if (allDown) {
-        warns += '<div class="im-warn crit">' + esc(this.t("cp.image.all_undeployed")) + "</div>";
-      } else if (cfg.comfy_ok === false) {
-        warns += '<div class="im-warn">' + esc(this.t("cp.image.comfy_down_warn")) + "</div>";
-      } else if (typeof cfg.vram_free_gb === "number" && cfg.vram_free_gb < 14) {
-        warns += '<div class="im-warn">' +
-          esc(this.tf("cp.image.vram_low_warn", { g: cfg.vram_free_gb })) + "</div>";
-      }
-      // 日配额（>0 才显示；后端 quota_exceeded 时错误卡另有对症文案）
-      const quotaLine = (Number(cfg.daily_quota) || 0) > 0
-        ? '<div class="im-hint" style="margin:0 0 6px;">' +
-          esc(this.tf("cp.image.quota_line",
-                      { u: Number(cfg.quota_used) || 0, q: Number(cfg.daily_quota) })) + "</div>"
-        : "";
+      // 预警区与配额行都做成**可独立重渲的容器**：引擎切换/配置重取只补这两块，
+      // 绝不整块重渲（会打断坐席打了一半的提示词）。
+      const warns = '<div data-role="warns">' + this._warnsHtml() + "</div>";
+      const quotaLine = '<div data-role="quota">' + this._quotaHtml() + "</div>";
       const html =
         warns + quotaLine +
         '<div class="im-row"><span class="lbl">' + esc(this.t("cp.image.persona")) + '</span>' +
@@ -345,7 +428,7 @@
         esc(isSelfie ? this.t("cp.image.ph_selfie") : this.t("cp.image.ph_object")) + '"></textarea>' +
         '<div class="im-chips"><span data-role="chipwrap" style="display:contents;">' + chips +
         '</span><input type="text" data-role="scene" placeholder="' +
-        esc(this.t("cp.image.scene_ph")) + '" style="flex:1;min-width:90px;font-size:10px;border:1px solid var(--cp-border,#e2e8f0);border-radius:11px;padding:2px 8px;background:var(--cp-surface,#fff);color:var(--cp-text,#1e293b);" /></div>' +
+        esc(this.t("cp.image.scene_ph")) + '" style="flex:1;min-width:90px;font-size:var(--cp-fs-tiny,12px);border:1px solid var(--cp-border,#e2e8f0);border-radius:11px;padding:2px 8px;background:var(--cp-surface,#fff);color:var(--cp-text,#1e293b);" /></div>' +
         '<div data-role="stock"></div>' +
         '<button type="button" class="im-gen" data-act="gen"' + (allDown ? " disabled" : "") + '>' +
         svg("gen", 14) + " " + esc(this.t("cp.image.gen_btn")) + "</button>" +
@@ -384,7 +467,10 @@
         if (this._cfg && this._cfg.scene_hints) this._loadSceneHints();
       });
       const es = sr.querySelector('[data-role="engine"]');
-      if (es) es.addEventListener("change", () => { this._engine = es.value || this._engine; });
+      if (es) es.addEventListener("change", () => {
+        this._engine = es.value || this._engine;
+        this._syncStatusBlocks();   // 预热提示按新引擎的显存闸门重算
+      });
       const lk = sr.querySelector('[data-role="lock"]');
       if (lk) lk.addEventListener("change", () => {
         if (!lk.disabled) this._lockPref = !!lk.checked;
@@ -413,13 +499,49 @@
       const el = this.shadowRoot && this.shadowRoot.querySelector('[data-role="stock"]');
       if (!el) return;
       if (!items || !items.length) { el.innerHTML = ""; return; }
-      const thumbs = items.slice(0, 6).map((it, i) =>
+      const shown = items.slice(0, 6);
+      const thumbs = shown.map((it, i) =>
         '<img src="' + this.esc(it.url) + '" loading="lazy" alt="" data-act="stockpick" data-idx="' + i + '" title="' +
         this.esc(it.caption || it.scene_class || "") + '" />').join("");
       el.innerHTML =
-        '<div class="im-stock"><div class="im-stock-line">' +
-        this.esc(this.tf("cp.image.stock_line", { n: items.length })) + "</div>" +
+        '<div class="im-stock"><div class="im-stock-line" data-role="stockline">' +
+        this.esc(this.tf("cp.image.stock_line", { n: shown.length })) + "</div>" +
         '<div class="im-stock-row">' + thumbs + "</div></div>";
+      this._wireStockFallback(el);
+    }
+    /* 缩略图加载失败就地摘掉，张数按**真正能发的**改写；一张都活不下来 → 整块
+       不渲染 + 上报一次。此前无 onerror：坏 URL 留下浏览器裂图框，而卡片还在宣称
+       「相册已有 N 张，点选可直接发送」（点了也没反应）——比什么都不显示更糟，
+       且坏了只能等坐席报障（2026-08-28 实录：后端 URL 拼错，4 张全裂无人知）。 */
+    _wireStockFallback(el) {
+      const row = el.querySelector(".im-stock-row");
+      if (!row) return;
+      const imgs = Array.prototype.slice.call(row.querySelectorAll("img"));
+      let alive = imgs.length;
+      imgs.forEach((img) => {
+        img.addEventListener("error", () => {
+          try { img.remove(); } catch (_e) { /* 已移除 */ }
+          alive -= 1;
+          if (alive <= 0) { el.innerHTML = ""; this._beaconStockBroken(); return; }
+          const line = el.querySelector('[data-role="stockline"]');
+          if (line) line.textContent = this.tf("cp.image.stock_line", { n: alive });
+        }, { once: true });
+      });
+    }
+    /* 存货缩略图全裂 = 服务端 URL/消毒口径坏了，坐席看不出所以然。每个面板生命
+       周期至多报一次，进既有前端错误遥测（只送消毒字段，无路径无原文）。 */
+    _beaconStockBroken() {
+      if (this._stockBeaconed) return;
+      this._stockBeaconed = true;
+      try {
+        if (!navigator.sendBeacon) return;
+        const body = JSON.stringify({
+          page: (location && location.pathname) || "", fn: "cp-image:stock",
+          type: "stock_thumb_broken",
+        });
+        navigator.sendBeacon("/api/telemetry/frontend-error",
+                             new Blob([body], { type: "application/json" }));
+      } catch (_e) { /* 遥测绝不影响功能 */ }
     }
     _status(msg) {
       const el = this.shadowRoot.querySelector('[data-role="status"]');
@@ -524,6 +646,7 @@
         this._busy = false;
         this._jobId = "";
         this._setGenDisabled(false);
+        this._maybeRefetchConfig(true);   // 配额已消耗/队列已变，立刻对账
         if (!d || !d.ok) { this._renderFail(d || {}); return; }
         this._result = d;
         this._pushHist(d);
