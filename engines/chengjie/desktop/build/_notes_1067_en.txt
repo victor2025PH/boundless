@@ -1,0 +1,4 @@
+Xiaozhi assistant upgraded: it now knows and guides every new feature - workflow SOP chains, deal engine, voice cloning, image summaries, AI image generation, updates and platform coverage; ask once and get the entry point plus steps (13-question golden set all green).
+More honest answers: capability boundaries are stated plainly - asking "how to export all phone numbers" gets the truthful "the CSV has no phone column" plus the alternative, instead of a shrug; "write a greeting for me" routes you to the composer's AI Reply drafting.
+Self-improving weekly: unanswered real questions are collected automatically every week, the corpus is patched accordingly and re-verified against the golden set.
+Chat translation fixes: the 34-language catalogue and the second language-picker page work again; Traditional Chinese / Cantonese regressions fixed.

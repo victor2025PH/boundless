@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.67",
+    "date": "2026-09-01",
+    "title": {
+      "zh": "小智全面懂新功能 · 边界诚实回答 · 每周自我迭代",
+      "en": "Xiaozhi knows every new feature, honest boundaries, weekly self-improvement"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "小智全面升级：新功能全都能答、能带路——工作链（SOP 跟进）、成交引擎、克隆音色、识图摘要、AI 生成图片、版本更新、平台支持范围等，问一句就给入口和步骤（13 题金标全绿）。",
+        "小智更诚实：功能边界如实回答——问「怎么导出所有客户的手机号」会明确告知 CSV 不含手机号并给替代方案，而不是装不知道；「帮我写问候语」会带你走输入区「AI回复」拟稿链。",
+        "小智持续自我迭代：真实提问里的未答问题每周自动盘点成清单，语料按单补齐后金标回归验证，答不上的问题会越来越少。",
+        "对话翻译修复：34 语目录与选语第二屏恢复正常，繁体/粤语翻译回归修复。"
+      ],
+      "en": [
+        "Xiaozhi assistant upgraded: it now knows and guides every new feature - workflow SOP chains, deal engine, voice cloning, image summaries, AI image generation, updates and platform coverage; ask once and get the entry point plus steps (13-question golden set all green).",
+        "More honest answers: capability boundaries are stated plainly - asking \"how to export all phone numbers\" gets the truthful \"the CSV has no phone column\" plus the alternative, instead of a shrug; \"write a greeting for me\" routes you to the composer's AI Reply drafting.",
+        "Self-improving weekly: unanswered real questions are collected automatically every week, the corpus is patched accordingly and re-verified against the golden set.",
+        "Chat translation fixes: the 34-language catalogue and the second language-picker page work again; Traditional Chinese / Cantonese regressions fixed."
+      ]
+    }
+  },
+  {
     "version": "1.0.66",
     "date": "2026-08-31",
     "title": {
