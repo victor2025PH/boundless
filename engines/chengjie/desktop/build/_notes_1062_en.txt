@@ -1,0 +1,6 @@
+Phone QR remote control fixed for good: the LAN entrance now opens automatically (strong-token installs only), failures explain themselves, and a one-click firewall allow is built in.
+Auto-reply modes behave: "default mode for new chats" and the "auto-send master switch" are separate controls with an impact preview; when sending is paused globally, chat badges honestly show "auto-send paused".
+New accounts confirm their takeover mode (full-auto / review / off) before going live; "Apply to" now lists every logged-in account.
+The AI remembers what it just said — no more contradicting itself minutes later.
+Cloned-voice fixes: no more stray English words read aloud; long previews no longer fall back to the standard voice.
+Assorted stability and polish fixes.
