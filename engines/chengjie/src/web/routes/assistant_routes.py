@@ -3,6 +3,7 @@
 
 端点：
   GET  /api/assistant/bootstrap  组件启动探针（enabled/白标名/快捷 chips）
+  GET  /api/assistant/faq        「常问」面板（高频分组 + 帮助库搜索）
   POST /api/assistant/query      产品问答（ndjson 流式：meta→delta→done|err）
   POST /api/assistant/report     一键报障（写 bug_tickets + 附件落盘 + 告警）
   GET  /api/assistant/tickets    我的工单（含面板即回访的 notify_ts 盖章）
@@ -45,6 +46,38 @@ logger = logging.getLogger("ai_chat_assistant.assistant.routes")
 # 45s wait_for 超时；本地链答长问经常 >45s 直接被掐）。仅保留防病态载荷的
 # 静默上限（人类输入永远打不到）。
 _MAX_Q_CHARS = 20000  # 静默截断，不再 400 拒绝
+
+
+def _reply_lang_and_name(request, data) -> tuple:
+    """小智回复语言：跟随智聊 UI 语言（``request.state.ui_lang``，由 i18n 中间件写入），
+    默认中文、可切换、覆盖全语言。返回 ``(code, name)``——code 必为 AIClient._LANG_NAMES
+    的键（否则回落 zh），name 为该语言自称名（空=按中文默认，不追加语言硬指令）。
+
+    优先级：ui_lang（智聊语言选择器，权威）→ 请求体 lang（旧前端兼容）→ zh。
+    zh-tw/zh-hk 等中文变体归 zh（书面主回复用简体；繁/粤变体由 translation 子系统另管）。
+    """
+    try:
+        from src.ai.ai_client import AIClient
+        names = AIClient._LANG_NAMES
+    except Exception:
+        names = {"zh": "中文", "en": "English"}
+    raw = ""
+    try:
+        raw = str(getattr(getattr(request, "state", None), "ui_lang", "") or "").strip().lower()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = str((data or {}).get("lang") or "").strip().lower()
+    code = "zh"
+    if raw in names:
+        code = raw
+    else:
+        base = raw.split("-")[0].split("_")[0]
+        if base in names:
+            code = base
+        elif base == "en":
+            code = "en"
+    return code, names.get(code, "")
 _MIN_DESC_CHARS = 5
 
 
@@ -61,6 +94,29 @@ def _query_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _report_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     r = cfg.get("report")
     return r if isinstance(r, dict) else {}
+
+
+def _faq_seed(lang: str, limit: int) -> list[dict]:
+    """「常问」空态 seed（实施73 P1-6）。
+
+    新装机 ``qa_log`` 必然为空，而空面板会让人以为功能坏了。回落 how-to
+    语料的标题——那本来就是一组「怎么做 X」的真问题，且与检索栈同源，点了
+    一定答得上；语料缺席则如实返回空表（不编题目）。
+    """
+    try:
+        from src.assistant.howto_pack import build_howto_entries
+
+        rows = build_howto_entries()
+    except Exception:
+        logger.warning("assistant faq seed 取 how-to 失败", exc_info=True)
+        return []
+    key = "title_en" if lang == "en" else "title"
+    out: list[dict] = []
+    for r in rows[: max(1, limit)]:
+        title = str(r.get(key) or r.get("title") or "").strip()
+        if title:
+            out.append({"q": title[:80], "n": 0})
+    return out
 
 
 def _sniff_image(raw: bytes) -> str:
@@ -125,19 +181,17 @@ def _session_user(request: Request) -> tuple[str, str, str]:
 #     让它自己声明＝零额外成本。
 # 流式下靠首段缓冲实现「命中哨兵就一个字都不吐」，代价只是首 8 字节的等待。
 _NO_BASIS = "NO_BASIS"
-
-
-def _is_no_basis(text: str) -> bool:
-    """LLM 是否自认「参考条目回答不了」（哨兵必须在开头，防正文误伤）。"""
-    return str(text or "").lstrip().upper().startswith(_NO_BASIS)
-
-
 # 第二枚哨兵（2026-08-29 P0，老板拍板「不能只调用帮助库」）：无文档依据时这一
 # 轮仍然作答，但必须让用户知道**依据是什么**。LLM 自报家门：以 GENERAL 开头＝
 # 「这不是产品文档内容，是通用知识」；不带前缀＝用产品事实卡答的。
 # 为什么用哨兵而不是再调一次 LLM 分类：首段缓冲机制（head_buf）本就已经在等
 # NO_BASIS，多认一个前缀是零成本；多一次往返则要给每条问答加一整个 RTT。
 _GENERAL = "GENERAL"
+
+
+def _is_no_basis(text: str) -> bool:
+    """LLM 是否自认「参考条目回答不了」（哨兵必须在开头，防正文误伤）。"""
+    return str(text or "").lstrip().upper().startswith(_NO_BASIS)
 
 
 def _is_general(text: str) -> bool:
@@ -161,10 +215,6 @@ def build_docless_prompt(q: str, ctx_block: str, hist_block: str,
     三条出路互斥且必须自报家门，否则用户分不清「这是产品承诺」还是「模型随口
     说的」——那比不回答更危险（销售会拿去当承诺）。红线仍是**绝不编造产品功能**：
     事实卡没写、文档也没有的产品问题一律走 NO_BASIS，不许拿通用知识去猜产品。
-
-    第 2 条的判据是**「是在问产品本身，还是让我帮你做事」**，不是「话题是否与
-    产品相关」——首版用后者，结果「帮我写一句给客户的问候语」因为带了「客户」
-    被判成产品问题拒答（真机实测）。
     """
     from src.assistant.product_facts import product_facts_block
 
@@ -212,6 +262,39 @@ def build_docless_prompt(q: str, ctx_block: str, hist_block: str,
     )
 
 
+def _detect_report_hint(q: str) -> bool:
+    ql = str(q or "").lower()
+    return any(k in ql for k in (
+        "报错", "坏了", "点了没反应", "没反应", "闪退", "打不开", "崩溃",
+        "bug", "error", "broken", "crash", "not working", "doesn't work",
+    ))
+
+
+def assistant_llm_extra_body(base_url: str, model: str, *,
+                             reasoning: bool = False) -> Dict[str, Any]:
+    """与 AIClient 同口径：deepseek-v4 默认关思维链。
+
+    助手直连曾漏下这一档（2026-08-23）：v4 思维链默认开且与正文共享
+    max_tokens，复杂帮助 prompt 会把 content 挤成 0 字；前端只认
+    delta/done，流在 meta 后结束 → 误显示「网络异常」。
+    """
+    base = str(base_url or "").lower()
+    model_l = str(model or "").lower()
+    if ("deepseek" in base and model_l.startswith("deepseek-v4")
+            and not reasoning):
+        return {"thinking": {"type": "disabled"}}
+    # vLLM 上的 Qwen3 系（本机 LAN 落点 173:8001 chatx=Qwen3.6-27B-abl）**默认
+    # 开 thinking**：正文全进 reasoning、message.content 恒为 null，预算还被思考
+    # 吃光（finish_reason=length）。2026-08-28 这个坑已经让 LAN 翻译兜底静默失效
+    # 过一次；docless 轮改打这个端点，必须同款关掉，否则用户看到的是空回答。
+    # 键名与 translation_engines / voice_colloquial_llm / ai_client 三处同源。
+    if not reasoning and (":8001" in base or "vllm" in base
+                          or model_l.startswith("chatx")
+                          or model_l.startswith("qwen3")):
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return {}
+
+
 # SSE 注释行（`:` 开头）：不是事件，前端 readNdjson 的 handleLine 直接忽略，
 # 但它让连接上一直有字节流动 —— 故加心跳**零前端改动**。
 _SSE_KEEPALIVE = ": ka\n\n"
@@ -226,7 +309,7 @@ async def stream_with_keepalive(agen, interval: float = _KA_INTERVAL_SEC):
     任何中间层（桌面壳 net stack / 反向 SSH 隧道 / nginx proxy_read_timeout）
     的空闲超时都会把这段静默当成死连接掐断 → 生成器收 CancelledError →
     那时再 yield err 已经没有接收者 → 前端只拿到 meta，落到兜底文案
-    「网络异常，请重试」，而用户的网络其实好得很。
+    「网络异常，请重试」，而用户的网络其实好得很（当日实测云端 0.28s 可达）。
 
     上游异常原样转交调用方（保持原 try/except 语义不变）；上游正常结束即
     return。**getter 用持久 future 而不是 wait_for(q.get())**：后者在超时
@@ -269,39 +352,6 @@ async def stream_with_keepalive(agen, interval: float = _KA_INTERVAL_SEC):
             pump.cancel()
 
 
-def _detect_report_hint(q: str) -> bool:
-    ql = str(q or "").lower()
-    return any(k in ql for k in (
-        "报错", "坏了", "点了没反应", "没反应", "闪退", "打不开", "崩溃",
-        "bug", "error", "broken", "crash", "not working", "doesn't work",
-    ))
-
-
-def assistant_llm_extra_body(base_url: str, model: str, *,
-                             reasoning: bool = False) -> Dict[str, Any]:
-    """与 AIClient 同口径：deepseek-v4 默认关思维链。
-
-    助手直连曾漏下这一档（2026-08-23）：v4 思维链默认开且与正文共享
-    max_tokens，复杂帮助 prompt 会把 content 挤成 0 字；前端只认
-    delta/done，流在 meta 后结束 → 误显示「网络异常」。
-    """
-    base = str(base_url or "").lower()
-    model_l = str(model or "").lower()
-    if ("deepseek" in base and model_l.startswith("deepseek-v4")
-            and not reasoning):
-        return {"thinking": {"type": "disabled"}}
-    # vLLM 上的 Qwen3 系（本机 LAN 落点 173:8001 chatx=Qwen3.6-27B-abl）**默认
-    # 开 thinking**：正文全进 reasoning、message.content 恒为 null，预算还被思考
-    # 吃光（finish_reason=length）。2026-08-28 这个坑已经让 LAN 翻译兜底静默失效
-    # 过一次；docless 轮改打这个端点，必须同款关掉，否则用户看到的是空回答。
-    # 键名与 translation_engines / voice_colloquial_llm / ai_client 三处同源。
-    if not reasoning and (":8001" in base or "vllm" in base
-                          or model_l.startswith("chatx")
-                          or model_l.startswith("qwen3")):
-        return {"chat_template_kwargs": {"enable_thinking": False}}
-    return {}
-
-
 def register_assistant_routes(app, ctx) -> None:
     _api_auth = ctx.api_auth
     config_manager = ctx.config_manager
@@ -331,17 +381,17 @@ def register_assistant_routes(app, ctx) -> None:
         面板打字机实时渲染，「不设秒数限制」后的体验闭环（等 8 秒黑盒 →
         看着答案长出来）。api_key='inherit' 复用 ai.api_key（不复制密钥）。
         无超时（老板拍板；SDK 600s 兜底防死连接）。"""
-        # 三个键**必须都支持 inherit**（2026-08-28 事故）：此前只有 api_key 写了
-        # inherit，base_url/model 硬编码 api.deepseek.com + deepseek-v4-flash。
-        # 主链端点后来迁到 siliconflow，于是 inherit 取到的是**新家的 key**，
-        # 拿它打旧家端点 → 每次提问 401；而 401 落在 except Exception 里只记一条
-        # WARNING 就静默回落，坐席看到的是「网络异常，请重试」，因果链断了五天
-        # 没人对得上。三键同源（都 inherit）是唯一不会再分叉的配法。
-        _ai = _cfg().get("ai") or {}
-        base = str(llm_cfg.get("base_url") or "inherit").strip()
+        _ai = _cfg().get("ai")
+        _ai = _ai if isinstance(_ai, dict) else {}
+        base = str(llm_cfg.get("base_url") or "").strip()
+        model = str(llm_cfg.get("model") or "").strip()
+        # base_url / model 同样支持 inherit（2026-08-28 错配事故的根治）：
+        # 主链端点迁移（api.deepseek.com → api.siliconflow.cn）时这里没跟着改，
+        # 而 api_key: inherit 取到的是**新家的** key —— 拿 A 家钥匙开 B 家门，
+        # 每次提问必 401，坐席看到的却是「网络异常」。三个键同源就不会再分叉；
+        # 显式值仍然优先（要单独指一个更便宜/更快的模型时照旧可配）。
         if base in ("", "inherit"):
             base = str(_ai.get("base_url") or "").strip()
-        model = str(llm_cfg.get("model") or "inherit").strip()
         if model in ("", "inherit"):
             model = str(_ai.get("model") or "").strip()
         if not base or not model:
@@ -447,6 +497,70 @@ def register_assistant_routes(app, ctx) -> None:
 
         return {"ok": True, "count": len(HELP_TERMS), "terms": HELP_TERMS}
 
+    # ------------------------------------------------------------ faq
+    @app.get("/api/assistant/faq")
+    async def api_assistant_faq(request: Request):
+        """「常问」面板数据源（实施73 P1-6，2026-08-28）。
+
+        一个端点两种模式：
+
+        * 无 ``q`` → 高频问题**分组**（本页 / 全站）+ 频次，数据源是真实问答
+          日志 ``qa_log``。**刻意不做人工维护的 FAQ 表**——人工表必然与实际
+          漂移（实施73 §5 已拍板）；零记录时回落 how-to 标题当入门问题集。
+        * 有 ``q`` → 走 ``help_kb`` BM25，与问答链**同一套检索栈**：搜得到的
+          就是答得出的，不新建第二套语料。
+        """
+        _api_auth(request)
+        _enabled_or_403(request)
+        qp = request.query_params
+        q = str(qp.get("q") or "").strip()[:120]
+        lang = "en" if str(qp.get("lang") or "").lower().startswith("en") else "zh"
+        try:
+            limit = int(qp.get("limit") or 12)
+        except Exception:
+            limit = 12
+        limit = max(1, min(limit, 30))
+        if q:
+            from src.assistant.help_kb import get_help_kb
+
+            try:
+                hits = get_help_kb().search(q, top_k=limit, lang=lang)
+            except Exception:
+                logger.warning("assistant faq 检索失败", exc_info=True)
+                hits = []
+            return {
+                "ok": True,
+                "mode": "search",
+                "items": [
+                    {"title": str(h.get("title") or "")[:120],
+                     "path": str(h.get("path") or "")}
+                    for h in hits if str(h.get("title") or "").strip()
+                ],
+            }
+        scope = str(qp.get("scope") or "both").strip().lower()
+        if scope not in ("page", "global", "both"):
+            scope = "both"
+        from src.assistant.qa_log import get_qa_log
+
+        try:
+            grouped = get_qa_log().top_questions_detail(
+                days=14, limit=limit, page=str(qp.get("page") or "")[:120])
+        except Exception:
+            logger.warning("assistant faq 高频取数失败", exc_info=True)
+            grouped = {"page": [], "global": []}
+        page_items = grouped.get("page", []) if scope != "global" else []
+        global_items = grouped.get("global", []) if scope != "page" else []
+        out: Dict[str, Any] = {
+            "ok": True,
+            "mode": "top",
+            "page_items": page_items,
+            "global_items": global_items,
+            "seed_items": [],
+        }
+        if not page_items and not global_items:
+            out["seed_items"] = _faq_seed(lang, limit)
+        return out
+
     # ------------------------------------------------------------ query
     @app.post("/api/assistant/query")
     async def api_assistant_query(request: Request):
@@ -458,6 +572,8 @@ def register_assistant_routes(app, ctx) -> None:
             raise HTTPException(400, tr(request, "asb.err.q_empty"))
         page = str(data.get("page") or "")[:120]
         lang = "en" if str(data.get("lang") or "").lower().startswith("en") else "zh"
+        # 小智回复语言跟随智聊 UI 语言（默认中文、可切换、全语言）
+        _reply_lang, _reply_lang_name = _reply_lang_and_name(request, data)
         uid, _uname, role = _session_user(request)
 
         # ── 多轮上下文（2026-08-23，老板批准 token 成本）：前端带最近几轮
@@ -606,7 +722,11 @@ def register_assistant_routes(app, ctx) -> None:
                         "customer-service system. Answer ONLY product-usage "
                         "questions, strictly based on the reference entries "
                         "below. Rules: for operations give the path, never "
-                        "perform actions; deleting/restarting/config changes "
+                        "perform actions (if an entry explicitly states the "
+                        "asked operation/feature does not exist or is not "
+                        "supported, relaying that fact plus the entry's "
+                        "alternative IS the correct answer); "
+                        "deleting/restarting/config changes "
                         "must carry an 'ask an admin to confirm' note; if the "
                         "references do not cover it, say so honestly and "
                         "suggest the report tab — NEVER invent features. Cite "
@@ -617,7 +737,18 @@ def register_assistant_routes(app, ctx) -> None:
                         "the very first thing and write nothing else — the "
                         "system will then show the user an honest note plus a "
                         "way to report it. Do not stretch a loosely related "
-                        "entry into an answer.\n\n"
+                        "entry into an answer.\n"
+                        "BUT: when an entry explicitly states that the asked "
+                        "capability does not exist / is not supported / has a "
+                        "boundary (often with an alternative), that IS the "
+                        f"answer — relay it honestly instead of `{_NO_BASIS}` "
+                        "(\"no\" backed by the docs is a valid answer, not a "
+                        "missing basis). Example: entry says \"bulk phone-"
+                        "number export does not exist; the list CSV has no "
+                        "phone column\", user asks \"how do I export all "
+                        "phone numbers\" -> correct answer: relay that fact "
+                        f"plus the alternative entry point, NOT `{_NO_BASIS}`."
+                        "\n\n"
                         f"User context:\n{ctx_block}\n\n"
                         "Reference entries:\n" + "\n\n".join(src_lines)
                         + hist_block
@@ -627,19 +758,33 @@ def register_assistant_routes(app, ctx) -> None:
                     prompt = (
                         "你是本客服系统的产品内置帮助助手。只回答本产品的使用"
                         "问题，且严格基于下方参考条目作答。规则：操作类问题只"
-                        "给路径与步骤，不代替执行；涉及删除/重启/修改配置必须"
+                        "给路径与步骤，不代替执行（条目若明确说明所问操作/功能"
+                        "**不存在或不支持**，「如实转告 + 给条目里的替代做法」"
+                        "就是正确答案）；涉及删除/重启/修改配置必须"
                         "提示「请管理员确认后操作」；参考条目覆盖不到时诚实说"
                         "明并建议走「报障」标签——**禁止编造功能**。回答内用 "
                         "[S1] 这样的标号引用来源。用中文简洁作答。\n"
                         "**重要**：如果参考条目确实回答不了这个问题，请把 "
                         f"`{_NO_BASIS}` 作为回答的最开头原样输出，且不要再写"
                         "别的内容——系统会替你给出诚实说明与报障入口。"
-                        "不要把只是沾边的条目硬凑成答案。\n\n"
+                        "不要把只是沾边的条目硬凑成答案。\n"
+                        "**但注意**：若条目**明确说明**所问功能不存在/不支持/"
+                        "有边界（通常还给了替代做法），那本身就是答案——请如实"
+                        f"转告而不是输出 `{_NO_BASIS}`（有据可依的「不能」是"
+                        "有效回答，不是没依据）。例：条目写着「没有批量导出"
+                        "手机号的功能，列表 CSV 不含手机号」，用户问「怎么导出"
+                        "所有客户的手机号」→ 正确做法是转告这一事实并给出条目里"
+                        f"的替代入口，而不是输出 `{_NO_BASIS}`。\n\n"
                         f"用户上下文：\n{ctx_block}\n\n"
                         "参考条目：\n" + "\n\n".join(src_lines)
                         + hist_block
                         + f"\n\n用户问题：{q}"
                     )
+                # 语言收口：zh/en 已由上面 scaffold 覆盖；其余语言在 prompt 末尾追加硬指令
+                # 覆盖 scaffold 的语言——直连流式与 generate_reply 兜底两条出话路径同享。
+                if _reply_lang != "zh" and not (_reply_lang == "en" and lang == "en") and _reply_lang_name:
+                    prompt += (f"\n\n[LANGUAGE] 请只用 {_reply_lang_name} 回复，不要混入其它语言。"
+                               f"Reply ONLY in {_reply_lang_name}.")
                 # 出话（无 wait_for 超时——2026-08-21 老板拍板）：
                 # ① 直连端点流式逐 token 推（快路径+打字机）；开流前失败回落
                 # ② 主链容灾 generate_reply（非流式整段一次推）。已吐半截再炸
@@ -648,7 +793,7 @@ def register_assistant_routes(app, ctx) -> None:
                 llm_cfg = (qcfg.get("llm")
                            if isinstance(qcfg.get("llm"), dict) else {})
                 # docless 轮走**局域网无审查模型**（老板 8/29 指定）：它既要答
-                # 通用问题（云端模型对某些提问会打太极），又要省云端 token——
+                # 通用问题（云端模型会拒绝或打太极的那些），又要省云端 token——
                 # 这一轮本就没有文档依据，用不着云端的强检索理解力。
                 # 缺省继承 ai.fallback（173:8001 chatx，OpenAI 兼容），所以不配
                 # general_llm 也能工作；显式配置优先。
@@ -723,9 +868,10 @@ def register_assistant_routes(app, ctx) -> None:
                     _fb = asyncio.ensure_future(sm.ai_client.generate_reply(
                         user_message=prompt,
                         context={"current_intent": "assistant_help",
-                                 "kb_context": ""},
+                                 "kb_context": "", "reply_lang": _reply_lang},
                         strategy_overrides={"temperature": 0.3,
                                             "max_tokens": max_tok},
+                        route="assistant_qa",
                     ))
                     while True:
                         _done, _p = await asyncio.wait(
@@ -757,6 +903,29 @@ def register_assistant_routes(app, ctx) -> None:
                 # LLM 自认没依据 → 诚实说明 + 报障入口，且 answered=False 让
                 # qa_log / 自答率 / ops「未答清单」记真话。
                 if _is_no_basis(answer):
+                    # ── NO_BASIS 客观复核（2026-09-01，实施93 飞轮批）──────
+                    # 实测（DeepSeek-V3.2 流式，temp 0.3）：条目**明确写着**
+                    # 「所问功能不存在 + 替代做法」时，模型 2/3 概率仍把它误判
+                    # 成「答不了」输出 NO_BASIS（快答路径；慢思考路径就答对）。
+                    # 提示词加例已到收益边界 → 确定性护栏：检索最高分 ≥120
+                    # （校准：金标负样本历史最高 109.8，「问题≈条目标题」的
+                    # 目标问句 148/196）时判定客观不成立，逐字转告条目原文
+                    # （零编造——不重新生成，只引用），answered=True。
+                    # 分数 <120 维持原拒答语义，负样本行为零变化。
+                    _top_hit = strong[0] if strong else None
+                    if _top_hit and float(_top_hit["score"]) >= 120.0:
+                        logger.info(
+                            "[assistant] NO_BASIS 被强命中推翻 score=%.1f id=%s",
+                            float(_top_hit["score"]), _top_hit["id"])
+                        answer = (f"[S1] {_top_hit['title']}："
+                                  f"{str(_top_hit['content'])[:400]}")
+                        yield _sse({"ev": "delta", "text": answer})
+                        qa_id = get_qa_log().record(answered=True, **_rec)
+                        stats.record_query(answered=True, latency_ms=latency)
+                        yield _sse({"ev": "done", "ms": latency,
+                                    "qa_id": qa_id, "answered": True,
+                                    "basis": "doc"})
+                        return
                     qa_id = get_qa_log().record(answered=False, **_rec)
                     # 拒答归因分两种：检索就没命中（no_hit）vs 命中了但 LLM 判定
                     # 答不了（no_basis）。ops 卡靠这个分辨「该补语料」还是「语料
@@ -782,10 +951,11 @@ def register_assistant_routes(app, ctx) -> None:
             except asyncio.CancelledError:
                 # 直连流收尾/客户端断开都可能是 CancelledError（BaseException），
                 # 不接 = meta 之后静默掐流，前端只能显示「网络异常」。
-                # ka/elapsed/stage 是这条日志唯一的诊断价值所在（2026-08-28 补）：
-                # ka>0 ＝连接上一直有字节在流动却照样被掐断，那就不是空闲超时，
-                # 得往桌面壳/代理的别的策略查；ka=0 且耗时很短 ＝客户端自己很快
-                # 走了（切页/关面板）。此前只有一句「被取消」，两种成因分不开。
+                # ka/elapsed 是这条日志唯一的诊断价值所在（2026-08-28 补）：
+                # ka>0 ＝连接上一直有字节在流动却照样被掐断，那就不是空闲
+                # 超时，得往桌面壳/代理的别的策略查；ka=0 且耗时很短 ＝客户端
+                # 自己很快走了（切页/关面板）。此前只有一句「被取消」，两种
+                # 完全不同的成因分不开。
                 logger.warning(
                     "[assistant] query 被取消（ka=%d, %.1fs, stage=%s）",
                     ka_sent, time.time() - t0, stage, exc_info=True)
@@ -806,8 +976,9 @@ def register_assistant_routes(app, ctx) -> None:
 
         return StreamingResponse(
             _gen(), media_type="text/event-stream",
-            # no-transform：显式禁止中间层改写/缓冲响应体（代理常按 Cache-Control
-            # 决定要不要攒够一块再转发，攒就等于把流式变成整段）。
+            # no-transform：与 admin.py 的另一个 SSE 对齐，显式禁止中间层
+            # 改写/缓冲正文（本进程的 CompressionMiddleware 已按 content-type
+            # 豁免 SSE，但链路上游的代理不看那个）。
             headers={"Cache-Control": "no-cache, no-transform",
                      "X-Accel-Buffering": "no"})
 

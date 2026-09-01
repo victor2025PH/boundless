@@ -167,6 +167,7 @@ def main() -> int:
                      "answer_head": a[:160]})
         if not args.json:
             print(f"[{verdict:9}] {tag:16} {rows[-1]['latency_ms']:>6}ms  "
+                  f"src={rows[-1]['sources']}  "
                   f"{a[:80].replace(chr(10), ' ')}")
 
     total = len(rows)

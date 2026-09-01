@@ -955,6 +955,73 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "generate picture",
         "/workspace",
     ),
+    # ── 真实缺口批②（2026-09-01，xiaozhi_gap_report 首跑捞出的高频未答；
+    #    口径：问候语代写=老板拍板「引到主输入框 AI 拟稿」；导出/平台=按代码
+    #    实况如实说（CSV 字段核实无手机号、平台矩阵四平台）。──
+    (
+        "ai-draft-for-me",
+        "让 AI 帮我写要发给客户的话（问候/回复代写）",
+        "Have the AI draft what to say to a customer (greetings/replies)",
+        "打开该客户的会话，点输入区的「AI回复」按钮——AI 会按当前人设与聊天"
+        "上下文生成草稿并拆成聊天短句，勾选要发的句子（可先编辑）后逐条发送。"
+        "要深度改写、换语气或换语言，用右栏「回复工坊」。问候语、破冰、回复"
+        "都走这条链：在会话里生成才带得上人设和上下文，我这里代写反而没有"
+        "这些信息。",
+        "Open the customer's conversation and click the AI Reply button in "
+        "the composer: the AI drafts persona-aware text from the chat "
+        "context, split into short messages you can tick, edit and send one "
+        "by one. For deep rewrites, tone or language changes use the Reply "
+        "Workshop in the right rail. Greetings, icebreakers and replies all "
+        "go through this - drafting inside the conversation is what gives "
+        "the AI your persona and context.",
+        # ⚠ 词表刻意不含「帮我写/写一句」：宽词会把「帮我写一首诗」这类闲聊
+        # 负样本吸过 min_score（首版实测 90.97 分假命中，金标当场抓出）。
+        "问候语 代写 话术 开场白 破冰 草稿 拟稿 AI回复 "
+        "greeting draft icebreaker",
+        "/workspace",
+    ),
+    (
+        "export-contacts",
+        "怎么导出客户列表 / 能导出手机号吗",
+        "How to export the customer list / can I export phone numbers",
+        "「客户列表」页（/workspace/contacts）右上有「导出 CSV」按钮，按当前"
+        "筛选导出（最多 5000 行），字段含：姓名、渠道、旅程阶段、亲密度、"
+        "是否有线索、标签、跟进时间、最后活跃时间。**CSV 不含手机号**——"
+        "当前版本没有批量导出客户手机号的功能（多数平台本就不向应用暴露"
+        "客户真实手机号）。要给单个账号做完整聊天备份，走账号管理的"
+        "「导出历史」（JSONL 格式，需管理员权限）。",
+        "The Customers page (/workspace/contacts) has an Export CSV button "
+        "(current filter, up to 5000 rows) with name, channels, journey "
+        "stage, intimacy, lead flag, tags, follow-up and last-active times. "
+        "The CSV does NOT contain phone numbers - bulk phone-number export "
+        "does not exist in this version (most platforms never expose real "
+        "phone numbers to apps). For a full per-account chat backup use "
+        "Export history in account management (JSONL, admin only).",
+        # ⚠ 词表刻意不含裸「导出/电话/号码/客户」：宽词把「能不能自动打电话
+        # 给客户」（92.17 假命中）与「客户是外国人…」这类含「客户」的别家正样
+        # 本都吸过来；标题已自带「导出客户列表/手机号」锚点，词表只留最有
+        # 区分度的三个名词。
+        "手机号 通讯录 CSV export contacts phone backup",
+        "/workspace/contacts",
+    ),
+    (
+        "supported-platforms",
+        "支持哪些平台 / 支持抖音吗",
+        "Which platforms are supported / is Douyin (TikTok) supported",
+        "当前支持四个平台：Telegram、WhatsApp、LINE、Messenger（Facebook），"
+        "账号接入都在坐席工作台的账号抽屉完成。抖音/TikTok、微信当前版本"
+        "暂不支持。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
+        "Four platforms are supported today: Telegram, WhatsApp, LINE and "
+        "Messenger (Facebook); accounts are connected from the account "
+        "drawer in the agent workspace. Douyin/TikTok and WeChat are not "
+        "supported in this version. To request another platform, submit it "
+        "via the Report tab.",
+        # ⚠ 词表刻意不含裸「支持/接入/渠道/哪些」：宽词把「支持多少个并发坐席」
+        # （189.92 假命中）与「**哪些**对话需要我亲自处理」这类别家问题吸过来；
+        # 标题已自带「支持哪些平台/支持抖音吗」锚点，词表只留平台名。
+        "平台 抖音 tiktok 微信 douyin platform supported channels",
+        "/workspace",
+    ),
     (
         "update-app",
         "怎么把智聊更新到最新版本",
