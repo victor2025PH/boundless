@@ -496,17 +496,36 @@ def report_read_upto(
         return 0
 
 
+# #146：对端删消息 → 关联记忆清理钩子（web 层启动时注册；签名 fn(rows)->{memory,context}）。
+# 与 inbox store getter 同一注册模式：桥层不 import SkillManager，谁有记忆库谁来接。
+_deleted_memory_purger: Optional[Callable[[List[Dict[str, Any]]], Any]] = None
+
+
+def register_deleted_memory_purger(
+    fn: Optional[Callable[[List[Dict[str, Any]]], Any]],
+) -> None:
+    global _deleted_memory_purger
+    _deleted_memory_purger = fn
+
+
+def get_deleted_memory_purger() -> Optional[Callable[[List[Dict[str, Any]]], Any]]:
+    return _deleted_memory_purger
+
+
 def report_deleted_messages(
     platform: str, account_id: str, platform_msg_ids: Any, *,
     chat_key: str = "",
 ) -> int:
-    """B87（实施68）：对端在手机上删了消息 → 工作台镜像同步软删。
+    """B87（实施68）+ #146：对端在手机上删了消息 → 工作台镜像同步软删 + 关联记忆清理。
 
     Telegram 的 ``UpdateDeleteMessages`` 只带裸 message id（私聊/小群无 chat id），
     ``UpdateDeleteChannelMessages`` 带 channel_id → 传 chat_key 收窄。软删（数据保留、
-    deleted_by=peer）：界面同步删，AI 记忆保留但按钧口径**不主动提已删内容**
-    （生成守卫另立，见 memory_grounding/skill_manager）。发 ``messages_deleted``
-    SSE 让所有工作台窗口即时同步。best-effort：返回软删条数，异常/未就绪返回 0。
+    deleted_by=peer）→ 界面同步删；**先**取被删行原文，软删后交注册的记忆清理钩子
+    （``peer_delete_purge``：情景记忆按 source_quote 反查删 + A 线上下文历史剔除；
+    B 线历史由 ``list_recent_messages`` 默认剔 peer 软删行）——钧口径已从「AI 记得但
+    不主动提」改为「删了就不该再影响 AI」（残留错误内容会污染后续每一轮）。
+    发 ``messages_deleted`` SSE 让所有工作台窗口即时同步。best-effort：返回软删条数，
+    异常/未就绪返回 0。
     """
     ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
     if not ids:
@@ -514,6 +533,14 @@ def report_deleted_messages(
     store = get_inbox_store()
     if store is None:
         return 0
+    rows: List[Dict[str, Any]] = []
+    try:
+        if hasattr(store, "select_live_by_platform_msg_ids"):
+            rows = list(store.select_live_by_platform_msg_ids(
+                platform, account_id, ids, chat_key=str(chat_key or "")) or [])
+    except Exception:
+        logger.debug("[protocol_bridge] 对端删除同步取原文失败", exc_info=True)
+        rows = []
     try:
         n = int(store.soft_delete_by_platform_msg_ids(
             platform, account_id, ids, chat_key=str(chat_key or ""),
@@ -522,13 +549,26 @@ def report_deleted_messages(
         logger.debug("[protocol_bridge] 对端删除同步软删失败", exc_info=True)
         return 0
     if n:
+        purged: Dict[str, Any] = {}
+        fn = _deleted_memory_purger
+        if fn is not None and rows:
+            try:
+                purged = dict(fn(rows) or {})
+            except Exception:
+                logger.debug("[protocol_bridge] 对端删除关联记忆清理失败", exc_info=True)
+        logger.info(
+            "[protocol_bridge] 对端删除同步 platform=%s acct=%s 软删=%d 记忆清理=%s 上下文剔除=%s",
+            str(platform or "").lower(), str(account_id or ""), n,
+            purged.get("memory", 0), purged.get("context", 0))
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("messages_deleted", {
                 "platform": str(platform or "").lower(),
                 "account_id": str(account_id or ""),
                 "chat_key": str(chat_key or ""),
-                "op": "peer_delete", "count": n})
+                "op": "peer_delete", "count": n,
+                "memory_purged": int(purged.get("memory", 0) or 0),
+                "context_purged": int(purged.get("context", 0) or 0)})
         except Exception:
             logger.debug("[protocol_bridge] 删除同步 SSE 发布失败", exc_info=True)
     return n

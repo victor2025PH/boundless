@@ -3442,7 +3442,10 @@ class InboxStore:
         platform_msg_id) 定位软删；``chat_key`` 非空时进一步限定该会话（频道版
         ``UpdateDeleteChannelMessages`` 有 channel_id，收窄防误删跨会话的同号 id）。
         幂等（deleted_at=0 才动），收尾重算受影响会话预览。数据保留（deleted_by
-        标 peer），AI 记忆不受影响——「界面同步删、AI 记得但不主动提」按钧口径。
+        标 peer）。AI 侧口径已改（#146，2026-09-02）：对端删的消息**不再进 AI 记忆
+        与历史**——``list_recent_messages`` 默认剔 peer 软删行，关联情景记忆由
+        ``protocol_bridge.report_deleted_messages`` 经 ``peer_delete_purge`` 清理
+        （先 ``select_live_by_platform_msg_ids`` 取原文再调本方法）。
         """
         plat = str(platform or "").lower()
         aid = str(account_id or "")
@@ -3480,6 +3483,37 @@ class InboxStore:
             if n:
                 self._conn.commit()
         return n
+
+    def select_live_by_platform_msg_ids(
+        self, platform: str, account_id: str, platform_msg_ids: List[str], *,
+        chat_key: str = "",
+    ) -> List[Dict[str, Any]]:
+        """#146：按 platform_msg_id 取**尚未软删**的消息原文（对端删除同步的前置读）。
+
+        与 ``soft_delete_by_platform_msg_ids`` 同一定位口径（本账号 / 可选 chat_key
+        收窄 / deleted_at=0），返回 ``[{conversation_id, message_id, platform_msg_id,
+        direction, text, ts}]``——调用方先拿原文去清关联记忆，再软删（软删后行仍在库，
+        但「哪些是本次新删的」只有删前这一刻知道）。
+        """
+        plat = str(platform or "").lower()
+        aid = str(account_id or "")
+        ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
+        if not plat or not ids:
+            return []
+        like_prefix = f"{plat}:{aid}:{str(chat_key)}" if chat_key else f"{plat}:{aid}:"
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                rows = self._conn.execute(
+                    f"SELECT conversation_id, message_id, platform_msg_id, direction,"
+                    f" text, ts FROM messages"
+                    f" WHERE deleted_at = 0 AND platform_msg_id IN ({ph})"
+                    f" AND conversation_id LIKE ?",
+                    [*chunk, like_prefix + "%"]).fetchall()
+                out.extend(dict(r) for r in rows)
+        return out
 
     def restore_messages_local(
         self, conversation_id: str, message_ids: List[str],
@@ -3771,6 +3805,12 @@ class InboxStore:
         replied-after 护栏等消费方**必须**看到软删行，本地删除不改变事实）；
         UI 线程读路径显式传 False 过滤「仅工作台删除」的消息。
 
+        **对端删的消息任何口径都不给**（#146，2026-09-02）：「本地删除不改变事实」只对
+        坐席自己的「仅工作台删除」成立——客户在手机上删了，那条在客户侧也不存在了。
+        而拟稿/自动回复/主动触达十几处都是拿默认口径当 LLM 历史，peer 软删行留在
+        里面＝删掉的错误内容继续喂给 AI（钧实锤「产生错误的记忆」）。故
+        ``deleted_by='peer'`` 的行在 include_deleted=True 下也剔除，单点收口。
+
         **并列 ts 必须用 rowid 兜底排序**（实施72 2026-08-27）：Messenger 网页端的
         时间只到**分钟**，同一分钟的多条消息 ts 完全相同；只按 ts 排序时并列组的
         次序由 SQLite 自行决定——实测按 ``ts DESC`` 扫索引会把并列组倒着给出，
@@ -3779,7 +3819,8 @@ class InboxStore:
         实时两条链都按时间顺序落库，所以它是并列组的正确次序。
         """
         limit = max(1, min(500, int(limit or 50)))
-        del_sql = "" if include_deleted else " AND deleted_at = 0"
+        del_sql = (" AND NOT (deleted_at > 0 AND deleted_by = 'peer')"
+                   if include_deleted else " AND deleted_at = 0")
         with self._lock:
             if before_ts is not None:
                 rows = self._conn.execute(

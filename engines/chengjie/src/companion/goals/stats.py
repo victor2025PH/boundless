@@ -30,6 +30,7 @@ class GoalStats:
         "offer_cited", "offer_by_id", "offer_claims_stripped",
         "offer_strip_samples", "offer_strip_by_source",
         "offer_strip_by_persona", "claim_stripped",
+        "camp_stripped", "camp_strip_samples",
         "deadline_shorten", "deadline_extend",
         "sprint_scheduled", "sprint_sent", "sprint_nudges",
         "sprint_auto_settled",
@@ -81,6 +82,9 @@ class GoalStats:
         self.offer_strip_by_source: Dict[str, int] = {}
         self.offer_strip_by_persona: Dict[str, int] = {}
         self.claim_stripped = 0
+        # #147：贬损自家阵营推广被剥的句数 + 命中句样本（distinct 上限 24）
+        self.camp_stripped = 0
+        self.camp_strip_samples: Dict[str, int] = {}
         self.deadline_shorten = 0
         self.deadline_extend = 0
         # 冲刺推进器（P0 2026-08-30）：时间驱动主动拍的排期/真发/手动加速
@@ -256,6 +260,24 @@ class GoalStats:
         with self._lock:
             self.claim_stripped += max(0, int(n or 0))
 
+    def record_camp_stripped(self, n: int = 1, samples: Any = ()) -> None:
+        """出站贬损守卫处置句数（#147：AI 在客户面前贬损自家阵营推广）。>0 = 人设
+        prompt 的「自家在推活动」块没压住反诈直觉，要查登记表/prompt。
+        ``samples``＝命中句（截 60 字，distinct 上限 24——运营要的是「在怎么贬」）。"""
+        with self._lock:
+            self.camp_stripped += max(0, int(n or 0))
+            try:
+                for frag in list(samples or [])[:8]:
+                    key = str(frag or "").strip()[:60]
+                    if not key:
+                        continue
+                    if (key in self.camp_strip_samples
+                            or len(self.camp_strip_samples) < 24):
+                        self.camp_strip_samples[key] = (
+                            self.camp_strip_samples.get(key, 0) + 1)
+            except Exception:
+                pass
+
     def record_deadline_edit(self, direction: str) -> None:
         """坐席改目标期限一次（P25 续）：``shorten``=加急 / ``extend``=延期。
 
@@ -355,6 +377,8 @@ class GoalStats:
                 "offer_strip_by_source": dict(self.offer_strip_by_source),
                 "offer_strip_by_persona": dict(self.offer_strip_by_persona),
                 "claim_stripped": self.claim_stripped,
+                "camp_stripped": self.camp_stripped,
+                "camp_strip_samples": dict(self.camp_strip_samples),
                 "deadline_edits": {"shorten": self.deadline_shorten,
                                    "extend": self.deadline_extend},
                 "sprint": {"scheduled": self.sprint_scheduled,
@@ -462,6 +486,9 @@ class GoalStats:
                 "# HELP goals_claim_stripped_total Outbound factual claims contradicting the catalog, stripped",
                 "# TYPE goals_claim_stripped_total counter",
                 f"goals_claim_stripped_total {self.claim_stripped}",
+                "# HELP goals_camp_stripped_total Outbound sentences disparaging our own camp's promotions, stripped",
+                "# TYPE goals_camp_stripped_total counter",
+                f"goals_camp_stripped_total {self.camp_stripped}",
                 "# HELP goals_deadline_edits_total Agent deadline adjustments (pace changes)",
                 "# TYPE goals_deadline_edits_total counter",
                 f'goals_deadline_edits_total{{direction="shorten"}} {self.deadline_shorten}',
@@ -514,6 +541,8 @@ class GoalStats:
             self.offer_strip_by_source = {}
             self.offer_strip_by_persona = {}
             self.claim_stripped = 0
+            self.camp_stripped = 0
+            self.camp_strip_samples = {}
             self.deadline_shorten = 0
             self.deadline_extend = 0
 

@@ -3287,6 +3287,12 @@ class AIClient(LoggerMixin):
         _goal = (context.get("_goal_block") or "").strip()
         if _goal:
             prompt_parts.append(_goal)
+        # #147：自家阵营在推活动硬约束（skill_manager._inject_goal_context 注入；
+        # 登记表在 site_catalog.camp_promotions，空登记无块。紧跟目标块＝同属
+        # 「商业事实」层，在坐席指令之前——指令不该能让人设去拆自家台）
+        _camp = (context.get("_camp_block") or "").strip()
+        if _camp:
+            prompt_parts.append(_camp)
         # P22：坐席显式指令（「采纳并拟稿」/缺口追问）。放在目标块之后、情感块之前——
         # 权重高于「今日陪伴偏置」但低于危机/人设硬约束；力度为 none 时指令里已写
         # 「只共情带话题不推销」，与目标块不互斥。

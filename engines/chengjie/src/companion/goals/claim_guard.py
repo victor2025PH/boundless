@@ -471,10 +471,157 @@ def sanitize_outbound_claims(
         return str(text or ""), 0, []
 
 
+# ── 6. 贬损自家阵营推广（#147，2026-09-02）────────────────────────────────────
+# 实录（LINE 客户 tisay × Claire 人设，全自动档）：客户提到收件箱里的佳士得夏季拍卖
+# 推广（我方其他人设在推），AI 连续四条出站贬损——
+#   「Those silly top-up bonuses」/「reads like a flashy ad more than anything real」/
+#   「auction houses don't beg for deposits like that」——把自家阵营的推广定性成疑似
+# 骗局广告。词表来自登记表（``offers.camp_terms``：camp_promotions + 当日 P13 活动
+# + 目录产品名），本模块只管「怎么判、怎么剥」。
+#
+# 两级命中（同 ``find_price_mismatch`` 的「消息级语境 × 小句级证据」思路）：
+#   ① 句内同时出现【自家词】+【负面定性词】→ 命中（「ChatX 就是个骗局」）；
+#   ② 已确立推广语境（客户本条/近轮或本回复里提过自家词）→ 句内【活动机制泛词】
+#      +【负面定性词】也命中——实录四句一句都没点名「佳士得」，全靠 top-up bonuses /
+#      ad / auction / deposits 这类机制词在贬，单靠 ① 一条都抓不到。
+# 句级（。！？!?；;\n）而非小句级剥离：贬损是整句的立场，剥半句留「不过你开心就好」
+# 这种残尾比整句删更别扭。剥空 → 中性兜底（绝不回退原文——原文就是那四句）。
+_CAMP_NEG_RE = re.compile(
+    r"骗局|骗人|诈骗|割韭菜|传销|庞氏|套路|噱头|花哨|浮夸|愚蠢|真蠢|太蠢|很蠢|挺蠢|"
+    r"傻子|傻瓜|智障|离谱|可笑|搞笑|好笑|垃圾|辣鸡|广告味|硬广|软文|营销号|忽悠|"
+    r"坑人|坑钱|圈钱|敛财|不靠谱|不可信|可疑|假的|假货|山寨|乞求|求着|低级|低端|"
+    r"廉价|掉价|没档次|恶心|土气|太土|俗气|洗脑|"
+    r"scam|scammy|fraud|fraudulent|sketchy|shady|dodgy|fishy|phishing|spammy|\bspam\b|"
+    r"\bjunk\b|gimmick|gimmicky|\bsilly\b|\bstupid\b|\bdumb\b|ridiculous|laughable|"
+    r"cheesy|tacky|flashy|desperate|\bbegs?\b|begging|too good to be true|red flag|"
+    r"rip[- ]?off|bogus|\bfake\b|\bsus\b|clickbait|snake oil|pyramid|ponzi|\bmlm\b|"
+    r"nonsense|garbage|\btrash\b|\ba joke\b|laugh(?:able|ing) at|sleazy|cringe",
+    re.IGNORECASE,
+)
+# 活动机制泛词（只在推广语境已确立时才作为「在谈自家活动」的证据）
+_CAMP_PROMO_GENERIC_RE = re.compile(
+    r"充值|奖励|返利|保证金|押金|等级|会员|促销|推广|广告|拍卖|竞拍|优惠|折扣|红包|"
+    r"礼包|加赠|返现|抽奖|积分|活动|"
+    r"top[- ]?ups?|recharge|deposits?|bonus(?:es)?|rewards?|tiers?|\bvip\b|promo(?:tion)?s?|"
+    r"campaigns?|\boffers?\b|\bdeals?\b|auctions?|bidding|\bads?\b|advert(?:s|ising|isement)?|"
+    r"newsletter|email blast|coupons?|cashback|rebates?|\bpoints\b|membership",
+    re.IGNORECASE,
+)
+# 否定/辩护句放行（宁漏勿误伤）：「ChatX 绝不是骗局」「it's not a scam」是在**替**
+# 自家辩护，剥掉它等于把辩护删了。代价＝「I'm not saying it's a scam, but…」这类
+# 打了补丁的贬损会漏过——prompt 层（camp_block）兜它。
+_CAMP_NEGATION_RE = re.compile(
+    r"不是|并非|绝非|不算|哪是|怎么会是|算不上|"
+    r"isn'?t|is not|aren'?t|are not|wasn'?t|not a\b|not some\b|"
+    r"\bnot\b.{0,12}\b(?:scam|fraud|spam|fake|ad|gimmick)|"
+    r"\bnever\b|hardly|far from|anything but|no way",
+    re.IGNORECASE,
+)
+# 句界：CJK 句末标点 + 换行 + **后跟空白/结尾的英文句点**（「$1.5」「bd2026.cc」
+# 里的点不切；英文段落不切句点＝整段当一句、把无辜的开场白连坐剥掉）。
+_SENT_SPLIT_KEEP_RE = re.compile(r"([。！!？?；;\n]|\.(?=\s|$))")
+_CAMP_FALLBACK_ZH = "这个活动我了解得不多，具体细则你以官方发布的信息为准就好"
+_CAMP_FALLBACK_EN = ("I don't know the fine print of that promotion — go by the "
+                     "official announcement for the details.")
+
+
+def _norm_terms(camp_terms: Iterable[str]) -> List[str]:
+    out: List[str] = []
+    for t in camp_terms or ():
+        s = str(t or "").strip().lower()
+        if len(s) >= 2 and s not in out:
+            out.append(s)
+    return out
+
+
+def _has_term(text: str, terms: Sequence[str]) -> bool:
+    low = str(text or "").lower()
+    return bool(low) and any(t in low for t in terms)
+
+
+def camp_fallback(text: str = "") -> str:
+    return _CAMP_FALLBACK_ZH if _CJK_RE.search(str(text or "")) else _CAMP_FALLBACK_EN
+
+
+def find_camp_disparagement(
+    text: str, *, camp_terms: Iterable[str] = (), context_text: str = "",
+) -> List[str]:
+    """贬损自家阵营推广的句子 → 返回命中句（去首尾空白）。
+
+    ``camp_terms`` 空 → 不判（没登记＝不知道谁是自家，宁漏勿误伤反诈提醒）。
+    ``context_text``＝客户本条/近轮消息合并文本，用于确立推广语境（跨轮）。
+    """
+    terms = _norm_terms(camp_terms)
+    body = str(text or "")
+    if not terms or not body.strip():
+        return []
+    promo_ctx = _has_term(body, terms) or _has_term(context_text, terms)
+    hits: List[str] = []
+    for sent in _SENT_SPLIT_KEEP_RE.split(body):
+        s = sent.strip()
+        if not s or _SENT_SPLIT_KEEP_RE.fullmatch(sent):
+            continue
+        if not _CAMP_NEG_RE.search(s):
+            continue
+        if _CAMP_NEGATION_RE.search(s):
+            continue        # 辩护/否定句：替自家说话的不剥
+        if _has_term(s, terms) or (promo_ctx and _CAMP_PROMO_GENERIC_RE.search(s)):
+            hits.append(s)
+    return hits
+
+
+def sanitize_camp_disparagement(
+    text: str, *, camp_terms: Iterable[str] = (), context_text: str = "",
+) -> Tuple[str, int, List[str]]:
+    """剥掉贬损自家阵营推广的**整句**；返回 ``(text, 处置条数, 命中句)``。
+
+    与 ``sanitize_outbound_claims`` 同纪律：整条被剥空 → 中性兜底（绝不回退
+    原文）；解析异常 → 原文（守卫故障不该吃掉回复）。
+    """
+    t = str(text or "")
+    if not t:
+        return t, 0, []
+    try:
+        hits = find_camp_disparagement(t, camp_terms=camp_terms,
+                                       context_text=context_text)
+        if not hits:
+            return t, 0, []
+        hit_set = set(hits)
+        parts = _SENT_SPLIT_KEEP_RE.split(t)
+        out: List[str] = []
+        for part in parts:
+            if not part:
+                continue
+            if _SENT_SPLIT_KEEP_RE.fullmatch(part):
+                if out and out[-1] == "\x00":
+                    continue        # 被剥句的尾标点一并摘掉
+                out.append(part)
+                continue
+            if part.strip() in hit_set:
+                out.append("\x00")
+            else:
+                out.append(part)
+        merged = "".join(p for p in out if p != "\x00")
+        lines: List[str] = []
+        for line in merged.split("\n"):
+            line = re.sub(r"[ \t\u3000]{2,}", " ", line).strip()
+            if _HUSK_RE.match(line):
+                continue
+            lines.append(line)
+        cleaned = "\n".join(lines).strip()
+        if not cleaned:
+            return camp_fallback(text), len(hits), hits
+        return cleaned, len(hits), hits
+    except Exception:  # noqa: BLE001
+        return str(text or ""), 0, []
+
+
 __all__ = [
-    "CHECKS", "catalog_prices", "check_outbound_claims", "compliant_fallback",
-    "dominant_language", "find_directive_leak", "find_gated_leak",
+    "CHECKS", "camp_fallback", "catalog_prices", "check_outbound_claims",
+    "compliant_fallback",
+    "dominant_language", "find_camp_disparagement", "find_directive_leak",
+    "find_gated_leak",
     "find_language_drift", "find_price_mismatch", "find_trial_mismatch",
     "mentions_our_commerce",
-    "sanitize_outbound_claims", "script_profile",
+    "sanitize_camp_disparagement", "sanitize_outbound_claims", "script_profile",
 ]

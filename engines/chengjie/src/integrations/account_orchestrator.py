@@ -1150,7 +1150,9 @@ class TelegramProtocolWorker:
     def _wire_receipts(self) -> None:
         """注册 pyrogram 原始更新处理器：对端读了我们发的消息（``UpdateReadHistoryOutbox``
         / 频道版 ``UpdateReadChannelOutbox``）→ 把该会话 ≤max_id 的出站消息升级为「已读」，
-        前端出站气泡即显示蓝色双勾（best-effort，不影响主消息流）。"""
+        前端出站气泡即显示蓝色双勾；对端删了消息（``UpdateDeleteMessages`` /
+        ``UpdateDeleteChannelMessages``，#146）→ 镜像软删 + 关联记忆清理
+        （``protocol_bridge.report_deleted_messages``）。均 best-effort，不影响主消息流。"""
         try:
             from pyrogram.handlers import RawUpdateHandler
             from pyrogram import raw
@@ -1160,7 +1162,8 @@ class TelegramProtocolWorker:
             async def _on_raw(_client: Any, update: Any, _users: Any, _chats: Any) -> None:  # noqa: ANN401
                 try:
                     from src.integrations.protocol_bridge import (
-                        report_read_upto, tg_peer_to_chat_key,
+                        report_deleted_messages, report_read_upto,
+                        tg_peer_to_chat_key,
                     )
                     if isinstance(update, raw.types.UpdateReadHistoryOutbox):
                         ck = tg_peer_to_chat_key(getattr(update, "peer", None))
@@ -1172,8 +1175,23 @@ class TelegramProtocolWorker:
                         if chid is not None:
                             report_read_upto("telegram", account_id, f"-100{int(chid)}",
                                              getattr(update, "max_id", 0))
+                    # #146（2026-09-02）：对端手机删消息 → 工作台镜像软删 + 关联记忆清理。
+                    # B87（实施68）只接在 A 线 companion client 上；协议多开账号走本 worker，
+                    # 此前删除事件根本没人听——「手机删了、工作台还在、AI 记忆还在」。
+                    # UpdateDeleteMessages（私聊/小群）只带裸 id → 全账号按 platform_msg_id；
+                    # UpdateDeleteChannelMessages 带 channel_id → 收窄到该会话。
+                    elif isinstance(update, raw.types.UpdateDeleteMessages):
+                        mids = [str(m) for m in (getattr(update, "messages", None) or [])]
+                        if mids:
+                            report_deleted_messages("telegram", account_id, mids)
+                    elif isinstance(update, raw.types.UpdateDeleteChannelMessages):
+                        chid = getattr(update, "channel_id", None)
+                        mids = [str(m) for m in (getattr(update, "messages", None) or [])]
+                        if chid is not None and mids:
+                            report_deleted_messages(
+                                "telegram", account_id, mids, chat_key=f"-100{int(chid)}")
                 except Exception:
-                    logger.debug("[tg-worker] 已读回执处理失败", exc_info=True)
+                    logger.debug("[tg-worker] 原始更新（已读/删除）处理失败", exc_info=True)
 
             self.client.add_handler(RawUpdateHandler(_on_raw))
         except Exception:

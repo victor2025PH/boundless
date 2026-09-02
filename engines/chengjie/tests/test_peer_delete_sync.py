@@ -2,6 +2,9 @@
 
 钧 _419：手机端（TG 官方客户端）删消息后工作台仍显示。口径（钧 04:03 定稿）＝
 界面同步删 + AI 记忆保留但不主动提已删内容。
+**#146（2026-09-02）改口径**：残留错误内容会进 AI 记忆污染后续回复 → 对端删的消息
+不再进 AI 历史（``list_recent_messages`` 默认口径也剔 peer 软删行；坐席「仅工作台
+删除」仍按旧业务口径可见），关联情景记忆另清（见 test_peer_delete_memory_purge）。
 
 链路：TG UpdateDeleteMessages（只带裸 message id）→ ``report_deleted_messages``
 → ``store.soft_delete_by_platform_msg_ids``（按 platform_msg_id 跨会话软删，本账号
@@ -36,13 +39,15 @@ def test_soft_delete_by_platform_msg_id(tmp_path: Path):
     n = store.soft_delete_by_platform_msg_ids("telegram", "acct", ["1002"])
     assert n == 1
 
-    # UI 读路径（include_deleted=False）看不到，业务口径（默认 True）仍在
+    # UI 读路径（include_deleted=False）看不到；#146 起业务默认口径（LLM 历史消费方）
+    # 也看不到 peer 软删行——客户侧都不存在的消息不该再喂给 AI
     visible = store.list_recent_messages(cid, limit=50, include_deleted=False)
     assert [m["text"] for m in visible] == ["第一条", "第三条"]
     allrows = store.list_recent_messages(cid, limit=50, include_deleted=True)
-    assert len(allrows) == 3
-    # 数据保留 + deleted_by=peer 留痕
-    deleted = [m for m in allrows if float(m.get("deleted_at") or 0) > 0]
+    assert [m["text"] for m in allrows] == ["第一条", "第三条"]
+    # 数据保留 + deleted_by=peer 留痕（库里仍在，只是读路径不给）
+    raw = store.list_messages(cid, limit=50)
+    deleted = [m for m in raw if float(m.get("deleted_at") or 0) > 0]
     assert len(deleted) == 1 and deleted[0]["deleted_by"] == "peer"
 
     # 幂等：再删同 id 不重复计
@@ -51,6 +56,46 @@ def test_soft_delete_by_platform_msg_id(tmp_path: Path):
     # 会话预览重算：末条已是「第三条」（删的是中间条，末条不变仍正确）
     conv = store.get_conversation(cid)
     assert conv["last_text"] == "第三条"
+
+
+def test_local_delete_keeps_business_view_but_peer_delete_does_not(tmp_path: Path):
+    """#146 两种软删的口径分岔：坐席「仅工作台删除」＝本地视图动作，业务口径
+    （include_deleted=True）必须仍看到（回复时延/replied-after 护栏的事实没变）；
+    对端删除＝客户侧也没了，任何口径都不给。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:555"
+    _seed(store, cid, "1", "坐席本地删的", 1.0)
+    _seed(store, cid, "2", "客户手机删的", 2.0)
+    _seed(store, cid, "3", "都在", 3.0)
+    mid_local = [m for m in store.list_messages(cid, limit=10) if m["text"] == "坐席本地删的"][0]["message_id"]
+    assert store.delete_messages_local(cid, [mid_local], deleted_by="agent:a1") == 1
+    assert store.soft_delete_by_platform_msg_ids("telegram", "acct", ["2"]) == 1
+
+    ui = [m["text"] for m in store.list_recent_messages(cid, limit=10, include_deleted=False)]
+    biz = [m["text"] for m in store.list_recent_messages(cid, limit=10, include_deleted=True)]
+    assert ui == ["都在"]
+    assert biz == ["坐席本地删的", "都在"]
+    # before_ts 游标分支同口径
+    older = [m["text"] for m in store.list_recent_messages(
+        cid, limit=10, before_ts=3.0, include_deleted=True)]
+    assert older == ["坐席本地删的"]
+
+
+def test_select_live_by_platform_msg_ids(tmp_path: Path):
+    """#146 前置读：只回尚未软删的行、本账号限定、chat_key 可收窄。"""
+    store = InboxStore(tmp_path / "inbox.db")
+    _seed(store, "telegram:acct:100", "42", "会话100", 1.0, chat_key="100")
+    _seed(store, "telegram:acct:200", "42", "会话200", 1.0, chat_key="200")
+    _seed(store, "telegram:other:300", "42", "别的账号", 1.0, account="other", chat_key="300")
+    rows = store.select_live_by_platform_msg_ids("telegram", "acct", ["42"])
+    assert sorted(r["text"] for r in rows) == ["会话100", "会话200"]
+    assert {r["direction"] for r in rows} == {"in"}
+    rows_n = store.select_live_by_platform_msg_ids("telegram", "acct", ["42"], chat_key="100")
+    assert [r["text"] for r in rows_n] == ["会话100"]
+    store.soft_delete_by_platform_msg_ids("telegram", "acct", ["42"], chat_key="100")
+    assert [r["text"] for r in store.select_live_by_platform_msg_ids(
+        "telegram", "acct", ["42"])] == ["会话200"]
+    assert store.select_live_by_platform_msg_ids("telegram", "acct", []) == []
 
 
 def test_soft_delete_scoped_to_account(tmp_path: Path):

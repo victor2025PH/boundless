@@ -1329,6 +1329,16 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             # 供官方 webhook 的 auto_ai 让位护栏只读查 automation_mode（System Z 去重）
             register_inbox_store_getter(
                 lambda: getattr(app.state, "inbox_store", None))
+            # #146：对端删消息 → 关联记忆清理。SkillManager 在 bootstrap 里 create_app
+            # 之后才挂上 app.state，故钩子内**每次调用时**惰性解析（与 store getter 同理）。
+            from src.integrations.protocol_bridge import register_deleted_memory_purger
+            from src.web.web_context import resolve_skill_manager
+
+            def _purge_deleted(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+                from src.inbox.peer_delete_purge import purge_for_deleted_rows
+                return purge_for_deleted_rows(resolve_skill_manager(None, app), rows)
+
+            register_deleted_memory_purger(_purge_deleted)
         except Exception:
             logger.debug("注册 protocol 收件箱 sink 失败", exc_info=True)
 

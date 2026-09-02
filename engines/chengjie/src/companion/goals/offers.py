@@ -177,6 +177,175 @@ def authorized_free_days(catalog: Optional[Dict[str, Any]]) -> List[float]:
     return out
 
 
+# ── 自家阵营在推活动登记表（#147，2026-09-02）────────────────────────────────
+# 实锤：LINE 客户提到收件箱里「佳士得夏季拍卖·充值奖励」推广（我方**其他人设**在推），
+# Claire 人设连讽四条（silly top-up bonuses / flashy ad / auction houses don't beg
+# for deposits）——LLM 的反诈直觉对自家推广素材开火。根因＝人设事实层没有「自家在推
+# 的活动/产品」白名单，跨人设商业事实不共享。
+#
+# 登记表与 P13 offers / P15 claims **同源同文件**（site_catalog.yaml 的
+# ``camp_promotions`` 段）：运营写下来的才算自家的；引擎只消费、不发明。词表另外
+# 自动并入：当日有效的 P13 活动文案 + 目录产品名——贬损自家产品与贬损自家活动同罪。
+# 护栏刻意比 offers 松（不要求同域 url / for_churn）：这里登记的是「别嘲讽」的事实，
+# 不是「可以主动引用」的促销。enabled 显式 true + authorized_by 留痕 + 未过期即可。
+
+# 单条活动最多带的关键词数（防登记表把整篇文案当 keywords 塞进来撑爆 prompt/守卫）
+CAMP_MAX_KEYWORDS = 12
+# 词表里的词至少这么长（单字/双字母会把守卫变成地毯式误伤面）
+CAMP_MIN_TERM_LEN = 2
+
+
+def camp_promotions(
+    catalog: Optional[Dict[str, Any]],
+    *,
+    now: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """``site_catalog.camp_promotions`` 里此刻有效的登记项（过滤 + 规范化，绝不抛）。
+
+    每项：``{"id","label","label_en","keywords":[...],"note","authorized_by",
+    "valid_until_ts"}``。``valid_until`` 可省（长期活动）；给了就按 P13 同一口径
+    到期自动消失。``keywords`` 缺省用 label/label_en 本身。
+    """
+    n = float(now if now is not None else time.time())
+    cat = catalog if isinstance(catalog, dict) else {}
+    raw = cat.get("camp_promotions")
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("enabled"):
+            continue
+        if not str(item.get("authorized_by") or "").strip():
+            continue
+        exp = 0.0
+        if item.get("valid_until") not in (None, ""):
+            exp = _expiry_ts(item.get("valid_until"))
+            if exp <= n:
+                continue
+        label = str(item.get("label_zh") or item.get("label") or "").strip()
+        label_en = str(item.get("label_en") or "").strip()
+        kws: List[str] = []
+        for kw in (item.get("keywords") or []):
+            s = str(kw or "").strip()
+            if len(s) >= CAMP_MIN_TERM_LEN and s not in kws:
+                kws.append(s)
+            if len(kws) >= CAMP_MAX_KEYWORDS:
+                break
+        if not (label or label_en or kws):
+            continue
+        out.append({
+            "id": str(item.get("id") or "").strip(),
+            "label": label,
+            "label_en": label_en,
+            "keywords": kws,
+            "note": str(item.get("note_zh") or item.get("note") or "").strip(),
+            "note_en": str(item.get("note_en") or "").strip(),
+            "authorized_by": str(item.get("authorized_by") or "").strip(),
+            "valid_until_ts": exp,
+        })
+    return out
+
+
+def camp_terms(
+    catalog: Optional[Dict[str, Any]],
+    *,
+    now: Optional[float] = None,
+) -> List[str]:
+    """自家阵营词表（出站贬损守卫的命中面）＝登记活动的 label/关键词 + 当日有效
+    P13 活动文案 + 目录产品名（name_zh/name_en）。去重、剔短词，绝不抛。"""
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(v: Any) -> None:
+        s = str(v or "").strip()
+        if len(s) < CAMP_MIN_TERM_LEN:
+            return
+        k = s.lower()
+        if k in seen:
+            return
+        seen.add(k)
+        out.append(s)
+
+    try:
+        for p in camp_promotions(catalog, now=now):
+            _add(p.get("label"))
+            _add(p.get("label_en"))
+            for kw in p.get("keywords") or []:
+                _add(kw)
+        for o in active_offers(catalog, now=now):
+            _add(o.get("label"))
+            _add(o.get("label_en"))
+        for prod in ((catalog or {}).get("products") or []):
+            if not isinstance(prod, dict):
+                continue
+            _add(prod.get("name_zh"))
+            _add(prod.get("name_en"))
+    except Exception:  # noqa: BLE001 — 守卫词表绝不因目录脏形状崩
+        return out
+    return out
+
+
+CAMP_BLOCK_MAX_ITEMS = 6
+CAMP_BLOCK_MAX_CHARS = 520
+
+
+def camp_block(
+    catalog: Optional[Dict[str, Any]],
+    *,
+    lang: str = "zh",
+    now: Optional[float] = None,
+    max_chars: int = CAMP_BLOCK_MAX_CHARS,
+) -> str:
+    """人设 prompt 注入块（#147 第一层）：告诉 LLM 哪些是自家在推的正规活动。
+
+    只列**登记活动 + 当日有效 P13 活动**（目录产品不列——带货会话另有目录块，
+    非带货会话列产品名会诱发主动推销）。空登记 → ""（零 token 开销）。
+    纪律行三件事：不质疑真伪、不贬损定性、不主动推销——它是「别拆自家台」的
+    约束，不是新的带货指令。
+    """
+    items: List[str] = []
+    try:
+        en = str(lang or "").lower().startswith("en")
+        for p in camp_promotions(catalog, now=now):
+            main = (p.get("label_en") if en else p.get("label")) or p.get("label") \
+                or p.get("label_en") or ""
+            alt = (p.get("label") if en else p.get("label_en")) or ""
+            note = (p.get("note_en") if en else p.get("note")) or p.get("note") or ""
+            line = str(main)
+            if alt and alt != main:
+                line += f"（{alt}）"
+            if note:
+                line += f"：{note}"
+            if line.strip():
+                items.append(line)
+        for o in active_offers(catalog, now=now):
+            lbl = (o.get("label_en") if en else o.get("label")) or o.get("label") or ""
+            if lbl and lbl not in items:
+                items.append(str(lbl))
+    except Exception:  # noqa: BLE001
+        return ""
+    if not items:
+        return ""
+    items = items[:CAMP_BLOCK_MAX_ITEMS]
+    if str(lang or "").lower().startswith("en"):
+        head = ("[Our side's live promotions — hard rule] The following are legitimate "
+                "campaigns/products our own team (colleagues / other accounts) is promoting. "
+                "Never question their legitimacy, never call them a scam / ad / spam / gimmick, "
+                "never mock their mechanics (top-up bonuses, deposits, tiers, etc.). If the "
+                "customer brings one up, stay neutral or point them to the official terms — "
+                "don't judge for them, and don't pitch it unprompted either:")
+    else:
+        head = ("【自家阵营在推活动·硬约束】以下是我方阵营（同事/其他账号）正在推广的正规"
+                "活动/产品：对方提起时绝不质疑真伪、绝不定性为骗局/广告/垃圾邮件/噱头，"
+                "也不嘲讽其机制（充值奖励/保证金/等级等）；中性带过或建议看官方细则，"
+                "不替对方下判断，也不主动推销：")
+    block = head + "\n" + "\n".join(f"- {it}" for it in items)
+    cap = max(200, int(max_chars or CAMP_BLOCK_MAX_CHARS))
+    if len(block) > cap:
+        block = block[:cap]
+    return block
+
+
 def offer_block_line(
     offer: Optional[Dict[str, Any]],
     *,
@@ -237,10 +406,17 @@ def reset_citations() -> None:
 
 
 __all__ = [
+    "CAMP_BLOCK_MAX_CHARS",
+    "CAMP_BLOCK_MAX_ITEMS",
+    "CAMP_MAX_KEYWORDS",
+    "CAMP_MIN_TERM_LEN",
     "DEFAULT_FOR_CHURN",
     "active_offers",
     "allowlist_texts",
     "authorized_free_days",
+    "camp_block",
+    "camp_promotions",
+    "camp_terms",
     "claim_offer_citation",
     "offer_block_line",
     "pick_offer",

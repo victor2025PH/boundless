@@ -1061,6 +1061,10 @@ def build_block_for_chat(
                         # ＝偷偷 8.5 折）即拦——措辞轴的 offer_guard 管不到裸数字。
                         "catalog_prices": _catalog_price_list(
                             cfg_root, getattr(config_obj, "config_path", None)),
+                        # #147：自家阵营词表（登记活动 + 当日活动 + 产品名）——
+                        # 出站贬损守卫在带货会话也读这份暂存，与无目标兜底同源
+                        "camp_terms": _camp_term_list(
+                            cfg_root, getattr(config_obj, "config_path", None)),
                     }
             except Exception:
                 logger.debug("goal cta stash skipped", exc_info=True)
@@ -1353,6 +1357,70 @@ def _catalog_price_list(cfg_root: Any, config_path: Any = None) -> List[float]:
         return []
 
 
+def _camp_term_list(cfg_root: Any, config_path: Any = None) -> List[str]:
+    """自家阵营词表（#147；单一出口 ``offers.camp_terms``：登记活动 + 当日 P13
+    活动 + 目录产品名）。绝不抛。"""
+    try:
+        from src.companion.goals import offers as offers_mod
+        from src.companion.goals import site_catalog as sc
+        return offers_mod.camp_terms(
+            sc.load_catalog(sc.catalog_path(cfg_root, config_path)))
+    except Exception:
+        return []
+
+
+def camp_guard_cfg(cfg_root: Any) -> Dict[str, Any]:
+    """``companion.goals.camp_guard`` 段（缺/坏 → {}；默认全开）。
+
+    - ``enabled``（默认 True）：出站贬损守卫总开关；
+    - ``prompt``（默认 True）：人设 prompt 注入「自家在推活动」块；
+    - ``prompt_mode``（``always`` | ``on_mention``，默认 always）：块是每轮都注还是
+      只在客户本条/近轮提到登记词时注。always 才兜得住实录里「客户说『跟垃圾邮件
+      竞争』、AI 接『I'll take that as a win』」那种不点名的后续轮；块本身只在有
+      登记时存在，空登记零 token。
+    """
+    try:
+        if not isinstance(cfg_root, dict):
+            return {}
+        cg = (((cfg_root.get("companion") or {}).get("goals") or {})
+              .get("camp_guard"))
+        return cg if isinstance(cg, dict) else {}
+    except Exception:
+        return {}
+
+
+def build_camp_block_for_chat(
+    cfg_root: Any, config_path: Any = None, *,
+    lang: str = "zh", inbound_text: str = "",
+    history_texts: Optional[List[str]] = None,
+) -> str:
+    """#147 第一层：人设 prompt 的「自家阵营在推活动」硬约束块（无登记 → ""）。
+
+    ``on_mention`` 模式下只在客户本条 / 近轮（``history_texts``）提到登记词时给块；
+    ``always``（默认）有登记即给。任何异常 → ""（prompt 组装绝不因目录层挂掉）。
+    """
+    try:
+        cg = camp_guard_cfg(cfg_root)
+        if not bool(cg.get("prompt", True)):
+            return ""
+        from src.companion.goals import offers as offers_mod
+        from src.companion.goals import site_catalog as sc
+        catalog = sc.load_catalog(sc.catalog_path(cfg_root, config_path))
+        block = offers_mod.camp_block(catalog, lang=lang)
+        if not block:
+            return ""
+        mode = str(cg.get("prompt_mode") or "always").strip().lower()
+        if mode == "on_mention":
+            terms = [t.lower() for t in offers_mod.camp_terms(catalog)]
+            pool = [str(inbound_text or "")] + [str(x or "") for x in (history_texts or [])]
+            low = "\n".join(pool).lower()
+            if not any(t in low for t in terms):
+                return ""
+        return block
+    except Exception:
+        return ""
+
+
 def catalog_guard_facts(cfg_root: Any,
                         config_path: Any = None) -> Dict[str, Any]:
     """出站事实守卫所需的**目录事实**（键与 ``_goal_cta`` 同名同源）。
@@ -1373,6 +1441,8 @@ def catalog_guard_facts(cfg_root: Any,
         "offer_texts": _authorized_offer_texts(cfg_root, config_path),
         "offer_free_days": _authorized_free_days(cfg_root, config_path),
         "catalog_prices": _catalog_price_list(cfg_root, config_path),
+        # #147：自家阵营词表——出站贬损守卫的命中面（与上面三项同源同文件）
+        "camp_terms": _camp_term_list(cfg_root, config_path),
     }
 
 

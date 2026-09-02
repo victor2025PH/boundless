@@ -55,6 +55,7 @@ _NON_PERSIST = frozenset({
     "_bazi_block",         # companion.bazi: 每轮注入前 pop 重建，落盘只是死重
     "_goal_block",         # companion.goals: 同上（目标态在 marketing_goals.db 才持久）
     "_goal_cta",           # companion.goals: 链接纪律档位暂存，出站守卫读后即焚
+    "_camp_block",         # #147: 自家阵营在推活动块，每轮从 site_catalog 重建
     "_known_profile_block",  # B50: 每轮从 episodic 重建（事实源在记忆库）
     "_self_state_block",     # B52: 每轮按 _self_state_log(持久) + TTL 重建
 })
@@ -128,6 +129,25 @@ class ContextStore:
         self._cache[user_id] = ctx
         self._evict_if_needed()
         return ctx
+
+    def peek(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """只读探视：已缓存 → 缓存对象；库里有 → 加载进缓存返回；都没有 → None。
+
+        与 ``get`` 的区别＝**不凭空建默认 ctx**。#146 对端删消息清理要对「已存在」
+        的上下文剔历史，用 get 会给每个被删消息的会话都造出一条空 ctx 并落盘。
+        """
+        uid = str(user_id or "")
+        if not uid:
+            return None
+        if uid in self._cache:
+            return self._cache[uid]
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM user_context WHERE user_id = ? LIMIT 1", (uid,)
+            ).fetchone()
+        except Exception:
+            return None
+        return self.get(uid) if row else None
 
     def mark_dirty(self, user_id: str):
         self._dirty.add(user_id)

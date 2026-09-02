@@ -94,3 +94,28 @@ claims:
 #     plan_key: autochat-entry
 #     product_id: chatx                # 留空=不限产品
 #     for_churn: [太贵, 预算紧张]       # 留空=默认价格敏感三类
+
+# 自家阵营在推活动登记表（#147，2026-09-02）——「别拆自家台」的事实源。
+# 实锤：客户提到收件箱里「佳士得夏季拍卖·充值奖励」推广（我方其他人设在推），
+# 另一人设连讽四条「silly top-up bonuses / flashy ad / auction houses don't beg
+# for deposits」——LLM 反诈直觉对自家推广素材开火。登记在这里的活动/产品：
+#   ① 人设 prompt 注入「自家在推活动」硬约束块（不质疑真伪/不贬损/不主动推销）；
+#   ② 出站贬损守卫：命中登记词 + 负面定性词（骗局/广告/愚蠢/乞求/spam/scam…）的
+#      句子确定性剥离；客户刚提过登记活动时，连「充值奖励/保证金/等级」这类机制泛词
+#      +负面词的句子也剥（跨轮语境）。
+# 词表另外自动并入：上面 offers 里当日有效的活动文案 + products 的产品名。
+# 护栏刻意比 offers 松：不要求同域 url / for_churn——登记的是「别嘲讽」的事实，
+# 不是「可以主动引用」的促销。enabled 显式 true + authorized_by 留痕 + 未过期即可；
+# valid_until 可省（长期活动）。改动即时生效（目录 mtime 热加载）。
+camp_promotions: []
+
+# camp_promotions:
+#   - id: christies-summer-2609
+#     enabled: true
+#     authorized_by: jun                       # 谁登记的（审计留痕，必填）
+#     valid_until: "2026-09-30"                # 可省=长期；给了到期自动失效
+#     label_zh: 佳士得夏季拍卖·充值奖励活动
+#     label_en: Christie's summer auction top-up bonus
+#     keywords: [佳士得, Christie's, Christies, 夏季拍卖, summer auction, 充值奖励, top-up bonus]
+#     note_zh: 同事账号在推的正规活动，细则以官方公告为准
+#     note_en: A legitimate campaign run by our colleagues; details per the official notice

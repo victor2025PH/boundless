@@ -314,6 +314,74 @@ def _guard_outbound_claims(
         return reply
 
 
+def _camp_context_text(user_context: Optional[Dict[str, Any]],
+                       *, max_user_msgs: int = 6) -> str:
+    """#147 跨轮推广语境：客户本条 + 近几条客户消息合并（纯读，绝不抛）。
+
+    实录四句贬损一句都没点名「佳士得」，全靠「top-up bonuses / ad / auction /
+    deposits」这类机制词在贬——只有知道客户刚提过登记活动，才敢把这些泛词句判成
+    在贬自家。只取**客户侧**消息：AI 自己上一轮提过自家词不算「客户在谈」。
+    """
+    parts: List[str] = []
+    try:
+        uc = user_context or {}
+        lm = str(uc.get("last_message") or "").strip()
+        if lm:
+            parts.append(lm)
+        hist = uc.get("_conversation_history")
+        if isinstance(hist, list):
+            users = [str((m or {}).get("content") or "") for m in hist
+                     if isinstance(m, dict) and str((m or {}).get("role") or "") == "user"]
+            parts.extend(x for x in users[-max_user_msgs:] if x.strip())
+    except Exception:
+        pass
+    return "\n".join(parts)[:4000]
+
+
+def _guard_camp_disparagement(
+    reply: str,
+    info: Dict[str, Any],
+    *,
+    cfg_root: Optional[Dict[str, Any]] = None,
+    logger: Any = None,
+    log_prefix: str = "",
+    context_text: str = "",
+) -> str:
+    """出站贬损守卫（#147）：句子命中【自家活动/产品词 + 负面定性词】→ 整句剥离；
+    客户刚提过登记活动时，【活动机制泛词 + 负面词】也剥。剥空换中性兜底。
+
+    词表 ``info["camp_terms"]`` 与 ``_guard_outbound_claims`` 的目录事实同源
+    （``_goal_cta`` 暂存 / ``catalog_guard_facts``）。开关
+    ``companion.goals.camp_guard.enabled``（默认开）；无登记词＝不判。
+    """
+    try:
+        from src.companion.goals.service import camp_guard_cfg
+        if not bool(camp_guard_cfg(cfg_root).get("enabled", True)):
+            return reply
+        terms = (info or {}).get("camp_terms") or []
+        if not terms:
+            return reply
+        from src.companion.goals.claim_guard import sanitize_camp_disparagement
+        out, n, hits = sanitize_camp_disparagement(
+            reply, camp_terms=terms, context_text=context_text)
+        if n:
+            if logger is not None:
+                logger.warning(
+                    "%s[goal-camp-guard] 贬损自家阵营推广已剥离 %d 句: %s",
+                    log_prefix, n, " | ".join(h[:60] for h in hits[:3]))
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                get_goal_stats().record_camp_stripped(n, samples=hits)
+            except Exception:
+                pass
+        return out
+    except Exception:
+        if logger is not None:
+            logger.debug("%s[goal-camp-guard] 守卫异常，保留原回复",
+                         log_prefix, exc_info=True)
+        return reply
+
+
 # 轮级入站信号键（媒体/语音/重复/提示类）：语义只属**当前这条消息**，绝不跨轮驻留。
 # 2026-08-16 实锤事故：_line_merge_keys 合并「只写不清」→ 8/01 键盘照片的识图描述随
 # _media_desc 驻留 user_context 15 天；8/16 一条语音消息把 _peer_message_is_media 置位
@@ -6333,6 +6401,29 @@ class SkillManager(LoggerMixin):
         user_context.pop("_goal_block", None)
         user_context.pop("_goal_cta", None)
         user_context.pop("_goal_inject_meta", None)
+        user_context.pop("_camp_block", None)
+        # #147 第一层：自家阵营在推活动硬约束块——**独立于目标系统**（有无漏斗目标、
+        # goals 开没开都注），空登记零开销。与出站贬损守卫同源同文件（site_catalog）。
+        try:
+            from src.companion.goals.service import build_camp_block_for_chat
+            _hist_u: List[str] = []
+            _h = user_context.get("_conversation_history")
+            if isinstance(_h, list):
+                _hist_u = [str((m or {}).get("content") or "") for m in _h[-8:]
+                           if isinstance(m, dict)
+                           and str((m or {}).get("role") or "") == "user"]
+            _camp = build_camp_block_for_chat(
+                getattr(self.config, "config", None) or {},
+                getattr(self.config, "config_path", None),
+                lang=str(user_context.get("reply_lang")
+                         or user_context.get("target_lang") or "zh"),
+                inbound_text=str(inbound_text or user_context.get("last_message") or ""),
+                history_texts=_hist_u,
+            )
+            if _camp:
+                user_context["_camp_block"] = _camp
+        except Exception:
+            self.logger.debug("camp block inject skipped", exc_info=True)
         try:
             from src.companion.goals.service import build_block_for_chat
             # P26：inbox store 经协议桥单例补齐（best-effort）——坐席手动
@@ -6398,8 +6489,18 @@ class SkillManager(LoggerMixin):
                                   log_prefix, exc_info=True)
                 return reply
             if not any(info.get(k) for k in
-                       ("offer_texts", "offer_free_days", "catalog_prices")):
+                       ("offer_texts", "offer_free_days", "catalog_prices",
+                        "camp_terms")):
                 return reply   # 目录空/未配 → 没有可比对的事实，零影响
+        # #147 贬损自家阵营推广守卫：跑在事实/优惠两轴**之前**——它剥的是整句
+        # 立场（「充值奖励真蠢」），先剥掉再让报价/试用轴看剩下的小句；有无目标
+        # 都跑（词表与目录事实同源）。跨轮语境取客户本条 + 近轮客户消息。
+        reply = _guard_camp_disparagement(
+            reply, info, cfg_root=_cfg_root_g,
+            logger=self.logger, log_prefix=log_prefix,
+            context_text=_camp_context_text(user_context))
+        if not reply:
+            return reply
         # 措辞轴（N折/券码/赠送）在无目标会话需先确认这段在谈**我方**商业事项：
         # 它只问「有没有 N 折」不问「谁在打折」，扩到全会话后会把陪聊的
         # 「楼下奶茶店今天打八折」剥成「我下班去买一杯」（实测 3/12 误报）。

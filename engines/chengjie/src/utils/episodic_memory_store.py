@@ -1439,6 +1439,50 @@ class EpisodicMemoryStore:
         self._conn.commit()
         return deleted
 
+    def delete_by_source_quotes(self, chat_key: str, quotes: List[str]) -> int:
+        """#146 对端删消息 → 删「抽取自那句原话」的事实。返回删除行数。
+
+        定位＝记忆键**以组件形式**含 chat_key（``platform:acct:peer`` / ``acct:peer`` /
+        ``peer`` / 群键 ``peer_uid``；纯子串不认）∧ ``source_quote`` 归一后与被删正文
+        前 200 字相等。只删 ``hits == 1``：复发事实＝客户在别处又说过，一条删了事实
+        仍成立。quote 为空的早期条目匹配不到，如实接受。绝不抛。
+        """
+        from src.inbox.peer_delete_purge import key_has_component, quotes_match
+        ck = str(chat_key or "").strip()
+        qs = [str(q or "") for q in (quotes or []) if str(q or "").strip()]
+        if not ck or not qs:
+            return 0
+        try:
+            rows = self._conn.execute(
+                "SELECT id, user_id, content, source_quote, COALESCE(hits, 1)"
+                " FROM episodic_memory"
+                " WHERE COALESCE(source_quote, '') != '' AND user_id LIKE ?",
+                (f"%{ck}%",),
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("delete_by_source_quotes fetch failed: %s", e)
+            return 0
+        victims: List[int] = []
+        for rid, uid, content, quote, hits in rows:
+            if not key_has_component(str(uid or ""), ck):
+                continue
+            if int(hits or 1) > 1:
+                continue
+            if any(quotes_match(quote, q) for q in qs):
+                victims.append(int(rid))
+                logger.info("[episodic] peer-deleted source → drop fact id=%s key=%s %r",
+                            rid, uid, str(content or "")[:60])
+        if not victims:
+            return 0
+        try:
+            self._conn.executemany(
+                "DELETE FROM episodic_memory WHERE id = ?", [(i,) for i in victims])
+            self._conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("delete_by_source_quotes delete failed: %s", e)
+            return 0
+        return len(victims)
+
     def fetch_rows_missing_embedding(
         self, limit: int = 20, memory_key_prefix: str = "", force: bool = False
     ) -> List[Tuple[int, str, str]]:
