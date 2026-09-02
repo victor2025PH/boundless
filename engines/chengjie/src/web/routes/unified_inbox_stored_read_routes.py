@@ -231,6 +231,32 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("[automation] send_gate 快照失败（忽略）", exc_info=True)
             send_gate = None
+        # #142（2026-09-02，钧 0902 07:55）：总闸拦截可见化——「会话档=全自动/
+        # 多选但被总闸拦下」的会话在会话视图内亮显式提示+一键恢复，不再只靠顶栏
+        # 小标签。判定单点仍是 deliver_paused_reason（telegram A 线直答豁免与
+        # effective_automation ⑦ 层同口径）；pause_meta 补「谁关的/何时/几点自动
+        # 恢复」；can_resume=主管角色（与 POST /api/companion/deliver-gate/resume
+        # 的 _require_supervisor 同闸，防「按钮亮了点下去 403」）。None＝未拦截/
+        # 旧后端，前端不渲染。
+        deliver_paused = None
+        try:
+            if (str(platform or "").lower() != "telegram"
+                    and mode in ("auto_ai", "multi_choice")):
+                from src.inbox.automation_mode import deliver_paused_reason
+                _dp_cm = getattr(request.app.state, "config_manager", None)
+                _dp_cfg = (getattr(_dp_cm, "config", None) or {}) if _dp_cm else {}
+                if deliver_paused_reason(_dp_cfg):
+                    from src.inbox.autosend_gate_state import (
+                        config_dir_from_manager, pause_meta,
+                    )
+                    from src.web.routes.unified_inbox_auth import _is_supervisor
+                    deliver_paused = pause_meta(
+                        _dp_cfg, config_dir_from_manager(_dp_cm)) or {}
+                    deliver_paused["can_resume"] = bool(_is_supervisor(request))
+        except Exception:
+            logger.debug("[automation] deliver_paused 读取失败（忽略）",
+                         exc_info=True)
+            deliver_paused = None
         # P0 2026-08-14 搁置状态搭同一趟便车（cp-conv-ops 持久状态行——「点了搁置
         # 又跳回原样」事故的读回半边）：0＝未搁置/已到点；前端 feat 探测本字段，
         # 缺失（旧后端）自动回落 GET /api/workspace/snoozed 权威清单。
@@ -249,7 +275,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 "budget": budget, "account": account, "effective": effective,
                 "mode_source": mode_source, "rearm": rearm,
                 "snooze_hold": snooze_hold,
-                "send_gate": send_gate, "snooze_until": snooze_until}
+                "send_gate": send_gate, "snooze_until": snooze_until,
+                "deliver_paused": deliver_paused}
 
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):

@@ -827,6 +827,14 @@ class HealthWatchdog:
         except Exception:
             logger.debug("接管接回巡检异常（已忽略）", exc_info=True)
 
+        # 真发总闸自动过期（#142 2026-09-02，默认关）：总闸被顺手关下后没人记得
+        # 打开＝全自动会话长期静默只拟稿。配置 pause_auto_resume_hours>0 时关满
+        # N 小时自动恢复 + 群外通知；只撤销有留痕的翻动（yaml 手改不动）。
+        try:
+            self._check_autosend_gate_expiry()
+        except Exception:
+            logger.debug("真发总闸自动过期巡检异常（已忽略）", exc_info=True)
+
         # AI 对聊提醒（P0-6 2026-08-09）：全自动会话双向高频互发（受管账号
         # 互聊/测试是允许行为）→ 只标记+提醒绝不拦截；默认开、独立去抖。
         try:
@@ -2247,6 +2255,27 @@ class HealthWatchdog:
             logger.info("[takeover_rearm] 本轮自动接回 %s 个会话：%s",
                         res.get("restored"),
                         ", ".join(res.get("restored_cids") or [])[:400])
+
+    def _check_autosend_gate_expiry(self, *, now: Optional[float] = None) -> None:
+        """真发总闸可选自动过期（#142 件三，默认关＝零行为变更）。
+
+        总闸「暂停真发」的设计定位是应急刹车，实际却常被顺手带到后长期留在
+        关位（#140 实录：会话档全自动、总闸关着、AI 只拟稿零外发、无人知晓）。
+        配置 ``inbox.l2_autosend.pause_auto_resume_hours`` > 0 后，关满 N 小时
+        自动恢复 + ``autosend_gate_alert`` 群外通知。全部语义（含「只撤销有
+        留痕的翻动」的安全边界）在 ``autosend_gate_state.sweep_gate_auto_resume``
+        纯核心里，这里只接线 config_manager 与热接线闭包。
+        """
+        cm = self._config_manager
+        if cm is None:
+            return
+        from src.inbox.autosend_gate_state import sweep_gate_auto_resume
+        rewire = getattr(getattr(self._app, "state", self._app),
+                         "autosend_rewire", None)
+        res = sweep_gate_auto_resume(cm, rewire=rewire, now=now)
+        if res.get("resumed"):
+            logger.info("[autosend_gate] 总闸自动过期恢复完成：paths=%s rewire=%s",
+                        res.get("paths"), res.get("rewire"))
 
     def _check_mutual_chat(self, *, now: Optional[float] = None) -> None:
         """AI 对聊「标记+提醒」（P0-6 2026-08-09；绝不拦截）。

@@ -803,6 +803,10 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
       @media (prefers-reduced-motion: reduce){ #budget-banner.bb-flash,#budget-banner.bb-soft .bb-ic,#budget-banner.bb-hard .bb-ic{animation:none;}}
       /* 新账号接管确认横幅（P0 2026-08-30）：信息蓝，pending 空时隐藏 */
       #am-banner{align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:rgba(59,130,246,.12);color:var(--tk-brand,#2563eb);border-bottom:1px solid rgba(59,130,246,.3);flex-wrap:wrap;}
+      /* #142 真发总闸应急态（2026-09-02）：全局横幅（琥珀加粗，比 send-gate 更醒目）
+         + 会话级拦截提示条。显隐由 _renderDpGlobalBanner/_renderDpConvBanner 驱动。 */
+      #dpause-banner{align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;font-size:13px;font-weight:700;line-height:1.5;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber5,#92400e);border-bottom:2px solid var(--th-bd-amber5,#f59e0b);}
+      #dpause-conv-banner{align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;font-size:13px;line-height:1.5;background:rgba(245,158,11,.13);color:var(--th-ink-amber5,#92400e);border-bottom:1px solid var(--th-bd-amber2,#fde68a);}
       #am-banner .hdr-btn{flex:none;white-space:nowrap;}
       #am-banner .am-rec{font-weight:700;border-color:currentColor;}
       #am-banner a{color:inherit;font-size:12px;flex:none;}
@@ -812,6 +816,16 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
            确认前按拟稿人审运行；数据源 /api/reply-settings/account-modes，
            按钮走事件委托（零内联 onclick），功能关/旧后端/清单空整条隐藏 -->
       <div id="am-banner" style="display:none;"></div>
+
+      <!-- #142（2026-09-02）真发总闸应急态横幅：总闸关着时顶栏从小标签升级为
+           醒目横幅——谁关的/何时/几点自动恢复 + 主管一键恢复。数据随 /chats
+           轮询的 deliver_paused_meta（旧后端无键=不渲染），_renderDpGlobalBanner
+           控显。琥珀加粗=应急态（比 send-gate 更醒目，非错误红）。 -->
+      <div id="dpause-banner" style="display:none;"></div>
+      <!-- #142 会话级拦截提示：会话档=全自动/多选但被总闸拦下 → 「本会话未真发」
+           显式提示 + 一键恢复（主管）/联系主管（坐席）。数据随 /automation 的
+           deliver_paused 段（45s 轮询），_renderDpConvBanner 控显。 -->
+      <div id="dpause-conv-banner" style="display:none;"></div>
 
       <!-- P0 2026-08-12「发送护栏」横幅：额度/急停/放量/授权/会话掉线的常驻可见化
            （当日实锤：warmup_cap 拦下人工发送被包成 ok:true，坐席点了毫无反应）。
@@ -6633,6 +6647,10 @@ async function _loadChatsBody(){
     // 回显）——行级「AI」徽标据此叠加「已暂停真发」黄态。旧后端无此键＝undefined
     // → 恒 false，行为与旧版逐字节一致。
     window._deliverPaused=!!d.deliver_paused;
+    // #142：应急态醒目横幅（谁关的/几点自动恢复/一键恢复）。旧后端无
+    // deliver_paused_meta ＝ null → 横幅隐藏（零回归）。
+    _dpMeta=d.deliver_paused_meta||null;
+    try{ _renderDpGlobalBanner(); }catch(_){}
     allChats=(d.chats||[]).filter(c=>c.account_status!=='offline');
     // 未读可信化 v2：**精确**本地保 0——只压「服务端快照不比本地已读标记新」的行
     // （行没新动静 last_ts<=mark.lastTs，或就是当前打开的会话）；真新入站
@@ -14099,6 +14117,90 @@ function _renderEffChip(){
   el.title=tip;
   el.style.display='inline-flex';
 }
+// ── #142（2026-09-02）真发总闸应急态可见化：全局醒目横幅 + 会话级拦截提示 ──
+// 此前总闸关着只有档位胶囊旁一个小标签（#140 实锤：用户以为自动回复坏了）。
+// 全局横幅数据随 /chats 轮询（deliver_paused_meta），会话提示随 /automation
+// （deliver_paused 段）；一键恢复走 POST /api/companion/deliver-gate/resume
+// （主管专属，服务端 _require_supervisor 同闸，can_resume 决定按钮是否渲染）。
+var _dpMeta=null;      // 全局暂停元信息（null=未暂停/旧后端 → 横幅隐藏）
+var _dpConvState=null; // 会话级拦截状态（null=未拦截 → 提示条隐藏）
+function _dpSrcLabel(src){
+  src=String(src||'');
+  if(!src) return window.T('inbox.dpause.src.unknown');
+  if(src.indexOf('standby-split')===0) return window.T('inbox.dpause.src.split');
+  if(src.indexOf('standby')===0) return window.T('inbox.dpause.src.standby');
+  if(src.indexOf('preset')===0) return window.T('inbox.dpause.src.preset');
+  if(src==='rollback') return window.T('inbox.dpause.src.rollback');
+  if(src==='inbox_banner:resume') return window.T('inbox.dpause.src.banner');
+  if(src==='auto_expire') return window.T('inbox.dpause.src.auto');
+  return src;   // 未知码原样展示（诚实优于装懂）
+}
+function _dpFmtTs(ts){
+  try{
+    ts=Number(ts)||0;
+    if(ts<=0) return '';
+    return window.wsFmtDateTime(ts,{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  }catch(_){ return ''; }
+}
+function _dpResumeBtnHtml(){
+  return '<button type="button" class="hdr-btn" style="flex:none;font-weight:700;border-color:currentColor;" '
+    +'onclick="deliverGateResume()">'+esc(window.T('inbox.dpause.resume_btn'))+'</button>';
+}
+function _renderDpGlobalBanner(){
+  var el=document.getElementById('dpause-banner');
+  if(!el) return;
+  var m=_dpMeta;
+  if(!m){ el.style.display='none'; el.innerHTML=''; return; }
+  var bits=[esc(window.T('inbox.dpause.global'))];
+  if(Number(m.since)>0){
+    bits.push(esc(window.Tf('inbox.dpause.global_by',{
+      time:_dpFmtTs(m.since)||'?',
+      actor:String(m.actor||'?'),
+      src:_dpSrcLabel(m.source)})));
+  }
+  if(Number(m.auto_resume_at)>0){
+    bits.push(esc(window.Tf('inbox.dpause.auto_resume',{time:_dpFmtTs(m.auto_resume_at)||'?'})));
+  }
+  var html='<span style="flex:1;min-width:0;">'+bits.join(' · ')+'</span>';
+  if(m.can_resume) html+=_dpResumeBtnHtml();
+  el.innerHTML=html;
+  el.style.display='flex';
+}
+function _renderDpConvBanner(){
+  var el=document.getElementById('dpause-conv-banner');
+  if(!el) return;
+  var s=_dpConvState;
+  if(!s){ el.style.display='none'; el.innerHTML=''; return; }
+  var html='<span style="flex:1;min-width:0;" title="'
+    +esc(window.Tf('inbox.dpause.conv_t',{reason:String(s.reason||'')}))+'">'
+    +esc(window.T('inbox.dpause.conv'))+'</span>';
+  html+=(s.can_resume
+    ? _dpResumeBtnHtml()
+    : '<span style="flex:none;font-size:12px;font-weight:400;">'
+      +esc(window.T('inbox.dpause.need_supervisor'))+'</span>');
+  el.innerHTML=html;
+  el.style.display='flex';
+}
+async function deliverGateResume(){
+  if(!confirm(window.T('inbox.dpause.resume_confirm'))) return;
+  try{
+    var r=await apiFetch('/api/companion/deliver-gate/resume',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({})},{timeoutMs:60000});
+    var d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(!r.ok||d.ok===false)
+      throw new Error(String((d&&(d.message||(d.detail&&d.detail.message)||d.detail))||('HTTP '+r.status)));
+    try{ _toast(window.T('inbox.dpause.resume_ok'),'#0f9d75'); }catch(_){}
+    _dpMeta=null; _renderDpGlobalBanner();
+    _dpConvState=null; _renderDpConvBanner();
+    window._deliverPaused=false;
+    // 服务端已热接线（rewire）——立即按真值重拉列表徽标与会话状态
+    try{ loadChats(); }catch(_){}
+    try{ if(selectedChat) _refreshConvStatus(selectedChat); }catch(_){}
+  }catch(e){
+    try{ _toast(window.Tf('inbox.dpause.resume_fail',{msg:String((e&&e.message)||'')}),'#b91c1c'); }catch(_){}
+  }
+}
+window.deliverGateResume=deliverGateResume;   // 内联 onclick 可达性（哑按钮铁律）
 // ── P0 2026-08-09 接管让位横幅 + AI 状态体检（.198/.104 事故三件套）──────
 // 「接管即静音」此前完全不可见：坐席手动发一条 → 会话被钉死 manual（实测
 // 卡 27h），坐席全程不知道是自己关掉了 AI。数据随 /automation 响应的
@@ -14475,6 +14577,7 @@ async function _refreshConvStatus(c){
     _rearmState=(d&&d.rearm)||null;
     _holdState=(d&&d.snooze_hold)||null;
     _gateState=(d&&d.send_gate)||null;
+    _dpConvState=(d&&d.deliver_paused)||null;   // #142 会话级拦截提示
     // 档位真值同步（接管/自动接回都发生在服务端，周期刷新是唯一感知口）：
     // 下拉未被用户操作（无焦点）时才动，操作中只更新内存值供横幅判断。
     if(d&&typeof d.mode==='string'&&d.mode){
@@ -14492,6 +14595,7 @@ async function _refreshConvStatus(c){
     _renderEffChip();
     _renderTakeoverBanner();
     _renderGateBanner();
+    _renderDpConvBanner();
   }catch(_){}
 }
 setInterval(function(){
@@ -14507,6 +14611,7 @@ async function loadModeState(c){
   _effState=null; _renderEffChip();
   _takeoverState=null; _rearmState=null; _holdState=null; _renderTakeoverBanner();
   _gateState=null; _renderGateBanner();
+  _dpConvState=null; _renderDpConvBanner();
   try{
     const r=await apiFetch(`/api/unified-inbox/automation?platform=${enc(c.platform)}&account_id=${enc(c.account_id||'default')}&chat_key=${enc(c.chat_key)}`);
     const d=await r.json();
@@ -14528,6 +14633,8 @@ async function loadModeState(c){
       _rearmState=(d&&d.rearm)||null;
       _holdState=(d&&d.snooze_hold)||null;
       _renderTakeoverBanner();
+      _dpConvState=(d&&d.deliver_paused)||null;   // #142 会话级拦截提示
+      _renderDpConvBanner();
       try{
         var row=(typeof allChats!=='undefined'?allChats:chats||[]).find(function(x){
           return x && c && x.conversation_id===c.conversation_id;

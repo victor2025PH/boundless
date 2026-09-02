@@ -412,7 +412,10 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
         <span class="rps-row-label">{{ (i18n or {}).get('rps_split_deliver_label', "真发总闸") }}</span>
         <label class="rps-switch"><input type="checkbox" id="rps-split-deliver" onchange="rpsSplitToggleDeliver(this)"><span class="rps-slider"></span></label>
         <span class="rps-row-hint">{{ (i18n or {}).get('rps_split_deliver_hint', "AI 能否自动发出消息（拟稿-投递链平台）。关＝全自动会话只拟稿不发送、徽标转「已暂停真发」；不改任何会话档位。Telegram 私聊直答不受此闸影响。") }}
-          <span id="rps-split-impact" style="display:block;color:var(--t3)"></span></span>
+          <span id="rps-split-impact" style="display:block;color:var(--t3)"></span>
+          {# #142 件二读侧：总闸翻动留痕（最近一次谁翻的 + 暂停中自动恢复时刻）。
+             数据源=split.deliver_flip / split.pause（旧后端无键 → 整行隐藏）。 #}
+          <span id="rps-split-flip" style="display:none;color:var(--t3)"></span></span>
       </div>
     </details>
     <!-- 影响全自动的因素清单（实施56 2026-08-22）：数据源 GET /api/reply-settings/health
@@ -1063,6 +1066,17 @@ var RPS_I18N = {
   splitDoneDeliverOff: {{ (i18n or {}).get('rps_split_done_deliver_off', "✅ 真发总闸已关闭：全自动会话只拟稿不发送")|tojson }},
   splitBlocked: {{ (i18n or {}).get('rps_split_blocked', "未生效：{reason}")|tojson }},
   splitImpact: {{ (i18n or {}).get('rps_split_impact', "当前 {n} 个会话显式设为全自动")|tojson }},
+  splitFlipLine: {{ (i18n or {}).get('rps_split_flip_line', "最近一次：{actor} 于 {time} 经「{src}」{action}")|tojson }},
+  splitFlipOn: {{ (i18n or {}).get('rps_split_flip_on', "打开")|tojson }},
+  splitFlipOff: {{ (i18n or {}).get('rps_split_flip_off', "关闭")|tojson }},
+  splitAutoResume: {{ (i18n or {}).get('rps_split_auto_resume', "暂停中：将于 {time} 自动恢复真发")|tojson }},
+  gateSrcStandby: {{ (i18n or {}).get('rps_gate_src_standby', "本页一键三档")|tojson }},
+  gateSrcSplit: {{ (i18n or {}).get('rps_gate_src_split', "本页拆开控制")|tojson }},
+  gateSrcPreset: {{ (i18n or {}).get('rps_gate_src_preset', "能力看板预设")|tojson }},
+  gateSrcRollback: {{ (i18n or {}).get('rps_gate_src_rollback', "一键回滚")|tojson }},
+  gateSrcBanner: {{ (i18n or {}).get('rps_gate_src_banner', "收件箱横幅一键恢复")|tojson }},
+  gateSrcAuto: {{ (i18n or {}).get('rps_gate_src_auto', "自动过期恢复")|tojson }},
+  gateSrcUnknown: {{ (i18n or {}).get('rps_gate_src_unknown', "未知入口")|tojson }},
   amModes: {
     auto_ai: {{ (i18n or {}).get('rps_master_auto', "全自动")|tojson }},
     review: {{ (i18n or {}).get('rps_master_suggest', "拟稿人审")|tojson }},
@@ -2297,6 +2311,42 @@ function rpsSplitRender(sp){
     var n = parseInt(sp.auto_ai_rows, 10);
     imp.textContent = (n > 0) ? RPS_I18N.splitImpact.replace('{n}', String(n)) : '';
   }
+  /* #142 件二读侧：最近一次总闸翻动（谁/何时/从哪）+ 暂停中的自动恢复时刻。
+     deliver_flip/pause 键缺席（旧后端/无留痕）→ 整行隐藏，零回归。 */
+  var flipEl = document.getElementById('rps-split-flip');
+  if (flipEl){
+    var bits = [];
+    var f = sp.deliver_flip;
+    if (f && f.ts){
+      var t = '';
+      try { t = window.wsFmtDateTime(Number(f.ts)); } catch (_e) { t = ''; }
+      bits.push(RPS_I18N.splitFlipLine
+        .replace('{actor}', String(f.actor || '?'))
+        .replace('{time}', t || '?')
+        .replace('{src}', rpsGateSrcLabel(f.source))
+        .replace('{action}', f.value ? RPS_I18N.splitFlipOn : RPS_I18N.splitFlipOff));
+    }
+    var pz = sp.pause;
+    if (pz && Number(pz.auto_resume_at) > 0){
+      var t2 = '';
+      try { t2 = window.wsFmtDateTime(Number(pz.auto_resume_at)); } catch (_e) { t2 = ''; }
+      bits.push(RPS_I18N.splitAutoResume.replace('{time}', t2 || '?'));
+    }
+    flipEl.textContent = bits.join(' · ');
+    flipEl.style.display = bits.length ? 'block' : 'none';
+  }
+}
+/* 总闸翻动来源码 → 人话（与收件箱横幅同一组口径）。未知码原样展示（诚实）。 */
+function rpsGateSrcLabel(src){
+  src = String(src || '');
+  if (!src) return RPS_I18N.gateSrcUnknown;
+  if (src.indexOf('standby-split') === 0) return RPS_I18N.gateSrcSplit;
+  if (src.indexOf('standby') === 0) return RPS_I18N.gateSrcStandby;
+  if (src.indexOf('preset') === 0) return RPS_I18N.gateSrcPreset;
+  if (src === 'rollback') return RPS_I18N.gateSrcRollback;
+  if (src === 'inbox_banner:resume') return RPS_I18N.gateSrcBanner;
+  if (src === 'auto_expire') return RPS_I18N.gateSrcAuto;
+  return src;
 }
 async function rpsSplitPost(setBody){
   var r = await apiFetch('/api/companion/standby', {

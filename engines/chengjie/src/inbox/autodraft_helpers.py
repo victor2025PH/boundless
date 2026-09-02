@@ -1079,6 +1079,17 @@ def make_auto_draft_cb(
         except Exception:
             logger.debug(
                 "[AutoDraft] 档位封顶失败（忽略）", exc_info=True)
+        # #142 拦截不再静默：总闸（deliver_paused ⑦ 层）把本会话的「全自动」
+        # 压成人审＝这条拟稿注定只写不发。记下命中细节，待草稿落库后写一条
+        # 可见审计事件（draft_audit_log），不再只靠顶栏小标签。
+        _gate_cap_detail = ""
+        try:
+            for _cap in _caps_applied:
+                if _cap.layer == "deliver_paused":
+                    _gate_cap_detail = str(_cap.detail or "deliver_paused")
+                    break
+        except Exception:
+            _gate_cap_detail = ""
         # 预算软停封顶（peer_bot_guard P2）：auto_ai → review。放在 companion
         # 双轨互斥**之前**——封顶后 allows_direct_autosend(mode)=False，互斥
         # 判定自然不再让位（A 线已按预算停发，System Z 必须接管拟稿，否则
@@ -1135,6 +1146,22 @@ def make_auto_draft_cb(
         draft_id = draft_svc.auto_generate_draft(
             conv, text, automation_mode=mode, enrich=cfg.enrich
         )
+        # #142 可见事件：这条稿被真发总闸拦下（会话档全自动、总闸关 → 只写
+        # 不发）。落 draft_audit_log（审计页/会话近期决策可查）；每条被拦稿
+        # 一行＝与事实等量，不刷屏。best-effort，绝不影响拟稿主链。
+        if draft_id and _gate_cap_detail and store is not None:
+            try:
+                store.record_draft_audit(
+                    draft_id,
+                    autopilot_level="L2",
+                    action="gate_intercepted",
+                    agent_id="autosend_gate",
+                    reason=f"deliver_paused:{_gate_cap_detail}",
+                    conversation_id=str(conv.get("conversation_id") or ""),
+                )
+            except Exception:
+                logger.debug(
+                    "[AutoDraft] 总闸拦截审计写入失败（忽略）", exc_info=True)
         # enrich：草稿已停泊（enriching），异步走人设产线补全正文
         if draft_id and cfg.enrich:
             try:

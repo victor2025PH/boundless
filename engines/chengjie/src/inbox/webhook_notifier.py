@@ -84,6 +84,8 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "conv_note":     {"types": {"conv_note"}, "levels": None},       # 坐席注解（@提及）
     "queue_alert":   {"types": {"queue_alert"}, "levels": None},     # P29 队列告警
     "autoreply_alert": {"types": {"autoreply_alert"}, "levels": None},  # 协议自动回复熔断/配额
+    # #142：真发总闸自动过期恢复（pause_auto_resume_hours 到点自动开闸的群外通知）
+    "autosend_gate": {"types": {"autosend_gate_alert"}, "levels": None},
     "health_alert":  {"types": {"health_alert"}, "levels": None},    # D3 运行时健康告警
     "billing_alert": {"types": {"billing_alert"}, "levels": None},   # E3 计费异常（超席位/超额）
     "ops_report":    {"types": {"ops_report"}, "levels": None},       # H1 运营周报自动外发
@@ -2011,6 +2013,21 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             "[📋 前往工作台](/workspace/unified-inbox)"
         )
 
+    elif event_type == "autosend_gate_alert":
+        # #142 件三：真发总闸自动过期恢复（pause_auto_resume_hours 到点）——
+        # 群外通知让「闸被自动打开了」这件事有人知道，而不是又一次静默翻转。
+        _by = str(data.get("paused_by") or "?")
+        _src = str(data.get("paused_source") or "?")
+        title = "▶️ 真发总闸已自动恢复"
+        text = (
+            f"**暂停时长**: {data.get('paused_hours', '?')} 小时（达到配置的自动过期线）\n"
+            f"**当时是谁关的**: {_by}（来源 {_src}）\n"
+            f"**已恢复开关**: {'、'.join(data.get('paths') or []) or '?'}\n"
+            "全自动会话已恢复 AI 自动发送。若这次暂停仍需要，请重新关闭总闸"
+            "（会重新计时）。\n"
+            "[⚙️ 前往自动回复设置](/workspace/reply-settings)"
+        )
+
     else:
         title = f"未分类事件：{event_type}"
         _kv = "、".join(f"{k}={str(v)[:40]}" for k, v in list(data.items())[:6])
@@ -2051,6 +2068,7 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "accounts_truth_alert": ("🟠 警告", "运营"),
     "draft_backlog_summary": ("🟠 警告", "运营"),
     "takeover_alert": ("🟠 警告", "运营"),
+    "autosend_gate_alert": ("🟠 警告", "运营"),
     "reply_budget_alert": ("🟠 警告", "运营"),
     "agent_quota_alert": ("🟠 警告", "运营"),
     "draft_sla_breach": ("🟠 警告", "运营"),

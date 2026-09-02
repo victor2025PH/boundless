@@ -752,6 +752,27 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                     getattr(config_manager, "config", None))
             except Exception:
                 return ""
+
+        def _deliver_paused_meta():
+            """#142 应急态横幅数据：暂停元信息（谁关的/何时/几点自动恢复）+
+            can_resume 能力位（主管角色，与一键恢复端点同闸）。未暂停/异常
+            → None（前端不渲染横幅，旧后端零回归）。"""
+            try:
+                if not _deliver_paused_flag():
+                    return None
+                from src.inbox.autosend_gate_state import (
+                    config_dir_from_manager, pause_meta,
+                )
+                from src.web.routes.unified_inbox_auth import _is_supervisor
+                meta = pause_meta(
+                    getattr(config_manager, "config", None),
+                    config_dir_from_manager(config_manager)) or {}
+                meta["can_resume"] = bool(_is_supervisor(request))
+                return meta
+            except Exception:
+                logger.debug("[chats] deliver_paused_meta 失败（忽略）",
+                             exc_info=True)
+                return None
         # scoped 过滤参数规范化：platform 小写（store 落库口径即小写平台名）、
         # account_id 保大小写（协议号/RPA 账号 id 可能大小写敏感）。
         platform = str(platform or "").strip().lower()
@@ -822,6 +843,7 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                     # 「旧后端忽略了参数」（后者对已退出号给诚实空态而非装无会话）
                     "hidden_included": want_hidden,
                     "deliver_paused": _deliver_paused_flag(),
+                    "deliver_paused_meta": _deliver_paused_meta(),
                 }
 
         limit = max(5, min(100, int(limit or 30)))
@@ -907,6 +929,9 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             # 徽标据此叠加「已暂停真发」黄态；判定单点=deliver_paused_reason
             # （与 effective_automation ⑦ 层同一函数，绝不各算一套）。
             "deliver_paused": _deliver_paused_flag(),
+            # #142：应急态横幅数据（谁关的/何时/自动恢复/能否一键恢复）。
+            # None=未暂停；旧前端不识此键零影响。
+            "deliver_paused_meta": _deliver_paused_meta(),
         }
 
     @app.post("/api/unified-inbox/mark-read")
