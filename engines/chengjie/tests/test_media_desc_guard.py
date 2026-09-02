@@ -191,8 +191,13 @@ async def test_enrich_counts_desc_type_distribution(tmp_path):
             media_type="image", media_ref="/static/protocol_media/whatsapp/a.jpg",
             caption="", config={"vision": {"enabled": True}},
         )
-    assert desc == typed                      # 标记保留（前端剥离显示、AI 可见分类信号）
-    assert text == f"[图片内容] {typed}"
+    # #143 C-补（0902）：描述落库前压单行——标记仍保留在行首（前端剥离显示、AI 可见
+    # 分类信号、parse_desc_type 可解析），但不再独占一行（续行曾逃过语言证据剥离）
+    from src.inbox.media_enrich import parse_desc_type
+    assert "\n" not in desc
+    assert desc == "类型=A 姓名: 张三 单号: EK2026082112345"
+    assert parse_desc_type(desc) == ("A", "姓名: 张三 单号: EK2026082112345")
+    assert text == f"[图片内容] {desc}"
     assert get_media_enrich_stats().dump()["by_type"].get("A") == 1
 
 

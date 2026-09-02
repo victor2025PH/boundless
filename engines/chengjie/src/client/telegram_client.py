@@ -1320,8 +1320,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # （单一判定源＝media_enrich.desc_looks_garbled，与协议线同口径）。
                 try:
                     from src.inbox.media_enrich import (
-                        GARBLED_DESC_NOTE, desc_looks_garbled,
+                        GARBLED_DESC_NOTE, desc_looks_garbled, flatten_desc_line,
                     )
+                    # #143 C-补：描述压单行（与 media_enrich / inbound_video 同口径），
+                    # 多行续行会逃过语言证据剥离把英文会话带成中文。
+                    desc = flatten_desc_line(desc) or desc
                     if desc_looks_garbled(desc):
                         self.logger.info(
                             "Vision 产出判为碎片文字汤（%d 字），已替换为提示", len(desc))

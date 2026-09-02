@@ -141,6 +141,40 @@ def parse_desc_type(desc: str) -> Tuple[str, str]:
     return m.group(1).upper(), t[m.end():].strip()
 
 
+_DESC_LINE_TERMINALS = "。！？；!?;…"
+
+
+def flatten_desc_line(desc: str) -> str:
+    """识别描述压成**单行**（#143 C-补，0902 工单「切中文」真机制）。
+
+    VLM 按 prompt「简洁分条」原样带换行落库：``[图片内容] 1. 可见物体：…\\n\\n2. 无票据/
+    订单/证件/表单/聊天记录``——语言证据剥离正则只剥带标记的**首行**，续行「2. 无票据…」
+    以裸中文漏进 ``classify_evidence``/``vote_language`` → 英文会话被判 zh 强证据，
+    pin/expected=zh 把英文原稿整段改成中文（HXP9YD 日志 13334/13339/13351）。
+    写入侧收口：换行 → 「；」（上一段已以句读结尾则只留空格），首行 ``类型=X`` 标记
+    保留为行首 token（``parse_desc_type`` / 前端 ``_DESC_TYPE_RE`` 都容忍空格分隔）。
+    三个写入点（本模块 / telegram_client._get_image_content / inbound_video）同口径；
+    读取侧 ``lang_policy`` 另有存量兼容剥离。纯函数，空入空出。
+    """
+    t = str(desc or "").replace("\r\n", "\n").replace("\r", "\n")
+    if "\n" not in t:
+        return t.strip()
+    code, body = parse_desc_type(t)
+    pieces = [ln.strip() for ln in body.split("\n")]
+    pieces = [p for p in pieces if p]
+    out = ""
+    for p in pieces:
+        if not out:
+            out = p
+        elif out[-1] in _DESC_LINE_TERMINALS:
+            out = f"{out} {p}"
+        else:
+            out = f"{out}；{p}"
+    if code:
+        return f"类型={code} {out}".strip()
+    return out
+
+
 def build_ask_image_prompt(question: str) -> str:
     """「问这张图」的 VLM 提问 prompt（P2 2026-08-19，ask-image 路由消费）。
 
@@ -529,6 +563,9 @@ async def enrich_inbound_media_text(
             desc = ""
 
         desc = (desc or "").strip()
+        if desc and mt in (_IMAGE_KINDS | _VIDEO_KINDS):
+            # #143 C-补：描述落库前压单行——多行续行会逃过语言证据剥离
+            desc = flatten_desc_line(desc)
         if desc and mt in (_IMAGE_KINDS | _VIDEO_KINDS) and desc_looks_garbled(desc):
             # 闸门：VLM 违抗「不要逐字抄零散文字」时兜底——展示/AI/翻译拿到的是诚实提示
             logger.info("[media_enrich] 识别产出判为碎片文字汤（%s，%d 字），已替换为提示",

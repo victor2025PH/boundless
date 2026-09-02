@@ -42,13 +42,30 @@ def compose_video_inbound_text(*, caption: str = "", video_desc: str = "") -> st
     - 带 caption：caption 保留在前，视频块换行追加（Phase5 caption 视频也抽帧）
     """
     cap = str(caption or "").strip()
-    desc = str(video_desc or "").strip()
+    desc = _single_line(video_desc)
     if desc:
         block = f"[视频内容] {desc}"
         return f"{cap}\n{block}" if cap else block
     if cap:
         return cap
     return "[视频]"
+
+
+def _single_line(desc: Any) -> str:
+    """描述压单行（#143 C-补，与 media_enrich.flatten_desc_line 同口径）。
+
+    VLM 画面描述 / ASR 转写都可能带换行；``[视频内容]`` 块只有首行带标记，续行会
+    逃过语言证据剥离把外语会话带偏成中文。导入失败退回「换行→；」的同语义实现。
+    """
+    t = str(desc or "").strip()
+    if "\n" not in t and "\r" not in t:
+        return t
+    try:
+        from src.inbox.media_enrich import flatten_desc_line
+        return flatten_desc_line(t)
+    except Exception:
+        return "；".join(p.strip() for p in t.replace("\r", "\n").split("\n")
+                        if p.strip())
 
 
 def vision_usable(vision_config: Optional[Dict[str, Any]]) -> bool:
@@ -127,10 +144,10 @@ async def understand_video_file(
 
     parts: List[str] = []
     if visual_desc:
-        parts.append(f"画面：{visual_desc}")
+        parts.append(f"画面：{_single_line(visual_desc)}")
     if audio_text:
         emo = f"（说话语气：{audio_emotion}）" if audio_emotion else ""
-        parts.append(f"语音：{audio_text}{emo}")
+        parts.append(f"语音：{_single_line(audio_text)}{emo}")
     result: Optional[str]
     if not parts:
         stats.record_outcome("empty")
