@@ -372,17 +372,25 @@ def _attn_aggregate_map(
     return out
 
 
-def _unread_aggregate_maps(store: Any) -> tuple[Dict[str, int], Dict[str, int]]:
+def _unread_aggregate_maps(
+    store: Any, *, include_archived: bool = False,
+) -> tuple[Dict[str, int], Dict[str, int]]:
     """从 store 取有效未读聚合 → (by_account, by_platform)。
 
     by_account 键 = ``platform:account_id``；by_platform 为各账号合计。
     store 不可用/失败 → 两个空 dict（前端回落窗口内求和）。
+    默认剔除已归档会话（与列表默认视图同一口径，#120）；
+    ``include_archived=True``＝``inbox.badge.include_archived`` 显式回退旧口径。
     """
     by_acct: Dict[str, int] = {}
     by_plat: Dict[str, int] = {}
     if store is None:
         return by_acct, by_plat
     try:
+        raw = store.sum_effective_unread_by_account(
+            include_archived=include_archived) or {}
+    except TypeError:
+        # 旧 store（无 include_archived 形参）：按其自身口径取数
         raw = store.sum_effective_unread_by_account() or {}
     except Exception:
         logger.debug("[chats] 有效未读聚合失败", exc_info=True)
@@ -396,6 +404,47 @@ def _unread_aggregate_maps(store: Any) -> tuple[Dict[str, int], Dict[str, int]]:
         by_acct[f"{p}:{a}"] = n_i
         by_plat[p] = int(by_plat.get(p) or 0) + n_i
     return by_acct, by_plat
+
+
+def _badge_include_archived(config_manager) -> bool:
+    """``inbox.badge.include_archived``（默认 False＝徽标剔除归档未读）。
+
+    托管存量机升级即生效的新行为；True＝显式回退 #120 之前的全库口径
+    （归档未读也计入主徽标）。读失败按默认（新行为）。
+    """
+    try:
+        cfg = (getattr(config_manager, "config", None) or {})
+        return bool(((cfg.get("inbox") or {}).get("badge") or {})
+                    .get("include_archived", False))
+    except Exception:
+        return False
+
+
+def _archived_unread_map(store: Any) -> Dict[str, Dict[str, int]]:
+    """归档中的有效未读聚合 → ``{"platform:account_id": {convs, unread}}``。
+
+    「被埋会话」告警（health_watchdog._check_buried_conversations）的界面化
+    取数口：主徽标剔除归档未读后，这份 map 驱动工作台「归档中还有 N 条未读」
+    入口——全库口径，不受 top-N 窗口截断。store 不可用/旧版无此方法 → {}
+    （前端回落窗口内推导，行为同旧版）。
+    """
+    if store is None or not hasattr(store, "sum_archived_unread_by_account"):
+        return {}
+    try:
+        raw = store.sum_archived_unread_by_account() or {}
+    except Exception:
+        logger.debug("[chats] 归档未读聚合失败", exc_info=True)
+        return {}
+    out: Dict[str, Dict[str, int]] = {}
+    for (plat, aid), v in raw.items():
+        n = int((v or {}).get("unread") or 0)
+        if n <= 0:
+            continue
+        p = str(plat or "web")
+        a = str(aid or "default")
+        out[f"{p}:{a}"] = {"convs": int((v or {}).get("convs") or 0),
+                           "unread": n}
+    return out
 
 
 def _accounts_summary_list(
@@ -864,9 +913,17 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         unread_by_account: Dict[str, int] = {}
         unread_by_platform: Dict[str, int] = {}
         try:
-            unread_by_account, unread_by_platform = _unread_aggregate_maps(store)
+            unread_by_account, unread_by_platform = _unread_aggregate_maps(
+                store, include_archived=_badge_include_archived(config_manager))
         except Exception:
             logger.debug("[chats] 未读聚合失败", exc_info=True)
+        # 被埋会话界面化（#142 报障）：归档中的有效未读单列一份聚合，驱动
+        # 「归档中还有 N 条未读」入口——徽标剔归档后，这些未读不能彻底隐身。
+        archived_unread_by_account: Dict[str, Dict[str, int]] = {}
+        try:
+            archived_unread_by_account = _archived_unread_map(store)
+        except Exception:
+            logger.debug("[chats] 归档未读聚合失败", exc_info=True)
         attn_by_account: Dict[str, int] = {}
         try:
             attn_by_account = _attn_aggregate_map(
@@ -891,6 +948,9 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                     unread_by_account.pop(_k, None)
                 attn_by_account = {k: v for k, v in attn_by_account.items()
                                    if k not in _dead}
+                archived_unread_by_account = {
+                    k: v for k, v in archived_unread_by_account.items()
+                    if k not in _dead}
         except Exception:
             logger.debug("[chats] 已退出账号聚合剔除失败", exc_info=True)
         try:
@@ -922,6 +982,10 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             # P6/P8：全库聚合（键 plat / plat:aid）；scoped/cursor 响应刻意不带
             "unread_by_platform": unread_by_platform,
             "unread_by_account": unread_by_account,
+            # #142 被埋会话界面化：归档中的有效未读（键 plat:aid →
+            # {convs, unread}，全库口径）。前端「归档中还有 N 条未读」入口
+            # 消费；旧前端不识此键零影响，空 dict=无归档未读/旧 store。
+            "archived_unread_by_account": archived_unread_by_account,
             "attn_by_account": attn_by_account,
             # P0 账号名录（全库口径；空列表=聚合失败，前端回落客户端推导）
             "accounts_summary": accounts_summary,

@@ -420,6 +420,121 @@ def test_placeholder_rejection_does_not_propagate(img):
     assert api.obs.uploads == [] and api.unsent == []
 
 
+# ─────────────────── 3a. reqSeq 抗判重（HTTP 423 病理） ───────────────────
+#
+# 病理（2026-09-01 skuio 客户机实锤）：应用重启后新 client 的 _reqseq 从 0 起，
+# 媒体占位内容彼此相同 → 撞历史 (reqSeq, 内容) 被服务端判重 → 返回**旧** message
+# id → OBS 上传 423 Locked → 旧逻辑按「上传失败」撤回＝误删客户已收到的好消息。
+
+class _Obs423(_FakeObs):
+    """前 ``lock_times`` 次上传回 423（真实 okline 异常带 status 属性 + 消息文本）。"""
+
+    def __init__(self, lock_times=1):
+        super().__init__()
+        self._lock_times = lock_times
+
+    def upload_message_object(self, oid, data, **kw):
+        self.uploads.append({"oid": oid, "size": len(data), **kw})
+        if len(self.uploads) <= self._lock_times:
+            e = RuntimeError("OBS upload failed: HTTP 423 path=https://obs/x")
+            e.status = 423
+            raise e
+        return {"ok": True}
+
+
+class _RestartedApi(_FakeApi):
+    """模拟重启后的 client：低位 reqSeq；两次 send_message 回不同 id。"""
+
+    def __init__(self, ids=("old-hit", "fresh-2"), **kw):
+        super().__init__(**kw)
+        self._reqseq = 3
+        self._ids = list(ids)
+
+    def send_message(self, message):
+        self.sent_messages.append(message)
+        return {"id": self._ids[min(len(self.sent_messages), len(self._ids)) - 1]}
+
+
+def test_is_obs_locked_detects_status_attr_and_text():
+    class _E(Exception):
+        status = 423
+
+    assert LM._is_obs_locked(_E("locked")) is True
+    assert LM._is_obs_locked(RuntimeError("OBS upload failed: HTTP 423 path=x")) is True
+    assert LM._is_obs_locked(RuntimeError("OBS upload failed: HTTP 500")) is False
+
+
+def test_compute_reqseq_floor_monotonic_even_on_clock_rollback():
+    f1 = LM.compute_reqseq_floor(0, now=LM._REQSEQ_EPOCH + 100)
+    assert f1 == 100, "正常路径＝秒级时间基线"
+    # 时钟回拨：时间基线倒退，也必须靠「已知值 + 兜底步长」严格前进
+    f2 = LM.compute_reqseq_floor(f1, now=LM._REQSEQ_EPOCH + 50)
+    assert f2 > f1
+
+
+def test_bump_client_reqseq_advances_across_restarts(tmp_path):
+    ff = str(tmp_path / "tokens.json.reqseq")
+    api1 = _FakeApi()
+    api1._reqseq = 0
+    f1 = LM.bump_client_reqseq(api1, account_id="U1", floor_file=ff)
+    assert api1._reqseq == f1 > 0
+    # 「重启」：新 client 又从 0 起，floor 必须严格越过上一轮
+    api2 = _FakeApi()
+    api2._reqseq = 0
+    f2 = LM.bump_client_reqseq(api2, account_id="U1", floor_file=ff)
+    assert f2 > f1
+    # 侧车文件读写失败不阻断（退化为纯时间基线）
+    api3 = _FakeApi()
+    api3._reqseq = 0
+    assert LM.bump_client_reqseq(api3, floor_file=str(tmp_path / "no" / "dir")) > 0
+
+
+def test_obs_423_retries_with_fresh_reqseq_and_never_recalls_old_id(img):
+    """核心不变量：423 命中的 id 疑为历史好消息——绝不撤回；
+    换新鲜 reqSeq 重发占位、对新 id 重传字节，消息最终送达。"""
+    pytest.importorskip("okline")
+    api = _RestartedApi(obs=_Obs423(lock_times=1))
+    res = LM.send_line_media(api, "Uabc", media_path=img, media_type="image")
+    assert res == {"delivered": True, "message_id": "fresh-2"}
+    assert api.unsent == [], "423 判重命中的旧 id 绝不许撤回（那是客户已收到的消息）"
+    assert api._reqseq > 3, "重试前必须把 reqSeq 推进到新鲜区间"
+    assert [u["oid"] for u in api.obs.uploads] == ["old-hit", "fresh-2"]
+    assert _stats()["outbound"]["ok"] == 1
+
+
+def test_obs_423_retry_still_same_id_gives_up_without_recall(img):
+    """重发占位仍拿到同一 id＝判重再次命中——放弃但不撤回（宁可这条不发，
+    也不删历史消息）。"""
+    pytest.importorskip("okline")
+    api = _RestartedApi(ids=("old-hit", "old-hit"), obs=_Obs423(lock_times=9))
+    res = LM.send_line_media(api, "Uabc", media_path=img, media_type="image")
+    assert res["delivered"] is False
+    assert res["error"] == "obs_upload_locked"
+    assert api.unsent == []
+
+
+def test_obs_423_twice_recalls_only_fresh_placeholder(img):
+    """重试后的占位持新鲜 reqSeq → 其 id 必是新消息，再失败时撤回它是安全的；
+    第一次 423 命中的旧 id 仍然不动。"""
+    pytest.importorskip("okline")
+    api = _RestartedApi(obs=_Obs423(lock_times=9))
+    res = LM.send_line_media(api, "Uabc", media_path=img, media_type="image")
+    assert res["delivered"] is False
+    assert res["error"] == "obs_upload_failed"
+    assert api.unsent == ["fresh-2"], "只许撤回重试轮的新占位，不许碰 old-hit"
+
+
+def test_obs_423_warning_logs_reqseq(img, caplog):
+    """验收③：判重命中必须在 WARNING 级留痕 reqSeq（客户机 backend.log 可归因）。"""
+    pytest.importorskip("okline")
+    import logging as _logging
+    api = _RestartedApi(obs=_Obs423(lock_times=1))
+    with caplog.at_level(_logging.WARNING, logger="src.integrations.line_media"):
+        LM.send_line_media(api, "Uabc", media_path=img, media_type="image")
+    hits = [r for r in caplog.records if "判重碰撞" in r.getMessage()]
+    assert hits and "reqSeq" in hits[0].getMessage()
+
+
 # ─────────────────── 3b. 观测埋点 ───────────────────
 
 def test_stats_record_inbound_paths(tmp_path):
@@ -580,6 +695,62 @@ async def test_mark_read_soft_fails():
     w.client = _Boom()
     w._last_in_msg_id["U"] = "M1"
     assert await w.mark_read("U") is False
+
+
+async def test_api_lock_wait_is_bounded(monkeypatch):
+    """悬死隔离（2026-09-02 WEXX7E 实锤）：一笔悬死请求持 ``_api_lock`` 不放时，
+    后续调用必须限时出局（明确异常，调用方按失败路径处置），而不是在锁上
+    无限排队陪葬——钧机就是这样整个 worker 无声僵死一小时的。"""
+    monkeypatch.setattr(LineProtocolWorker, "_API_LOCK_TIMEOUT_SEC", 0.05)
+    w = _worker()
+    w.client = _FakeApi()
+    w._api_lock.acquire()  # 模拟悬死的前一笔（持锁永不释放）
+    try:
+        with pytest.raises(RuntimeError, match="串行锁"):
+            await w.send("U", "hello")
+    finally:
+        w._api_lock.release()
+    # 锁释放后恢复正常收发
+    assert (await w.send("U", "hello"))["delivered"] is True
+
+
+def test_kick_stuck_send_terminates_live_bridge_only():
+    """恢复锤契约：只 terminate **存活**的签名桥 Node 进程（悬死线程的 readline
+    见 EOF 后自行抛错解锁）；进程已退/属性缺席/client 为 None 都必须静默无害
+    ——恢复锤自己抛错等于二次事故。"""
+    class _Proc:
+        pid = 4321
+
+        def __init__(self, alive):
+            self._alive = alive
+            self.terminated = 0
+
+        def poll(self):
+            return None if self._alive else 0
+
+        def terminate(self):
+            self.terminated += 1
+
+    def _client_with(proc):
+        signer = type("S", (), {"_proc": proc})()
+        transport = type("T", (), {"_signer": signer})()
+        return type("C", (), {"transport": transport})()
+
+    w = _worker()
+    alive = _Proc(alive=True)
+    w.client = _client_with(alive)
+    w.kick_stuck_send()
+    assert alive.terminated == 1
+
+    dead = _Proc(alive=False)
+    w.client = _client_with(dead)
+    w.kick_stuck_send()
+    assert dead.terminated == 0
+
+    w.client = _client_with(None)
+    w.kick_stuck_send()
+    w.client = None
+    w.kick_stuck_send()
 
 
 def test_inbound_media_skips_groups_by_default():

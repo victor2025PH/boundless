@@ -154,7 +154,11 @@ def test_no_basis_records_answered_false():
     src = ROUTES.read_text(encoding="utf-8")
     block = src.split("if _is_no_basis(answer):", 1)
     assert len(block) == 2, "找不到哨兵处置分支"
-    seg = block[1][:900]
+    # 窗口 900→2600（2026-09-02）：实施93 在分支头部加了「NO_BASIS 客观复核」
+    # 确定性护栏（强命中 ≥120 转告条目原文并如实记 answered=True——那是真答上
+    # 了，不是骗），拒答记账被推到 900 字符之外；本门禁守的是**拒答路径记真话**，
+    # 窗口只需盖住整个分支。
+    seg = block[1][:2600]
     assert "answered=False" in seg, "哨兵分支仍记 answered=True，自答率会继续骗人"
     # 用「调用 + 参数」两段判，别钉整串字面量：2026-08-29 这行因为要多带
     # refusal 分型而换行了，钉字面量只会在下次换行时再红一次。

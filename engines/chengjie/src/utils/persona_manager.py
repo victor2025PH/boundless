@@ -1580,12 +1580,31 @@ class PersonaManager:
             if _k in out and not isinstance(out[_k], dict):
                 out[_k] = {}
         vp = out.get("voice_profile")
-        if isinstance(vp, dict) and "dialect_flavor" in vp:
-            from src.ai.cosy_dialect import normalize_dialect_flavor
-            vp = dict(vp)
-            vp["dialect_flavor"] = normalize_dialect_flavor(
-                str(vp.get("dialect_flavor") or ""))
-            out["voice_profile"] = vp
+        if isinstance(vp, dict):
+            # 占位串拒绝落库（#137/#140，2026-09-02）：工作室半成品语音设置把
+            # voice/backend 等存成 "___" 类占位串，人设层 merge 时覆盖全局
+            # 克隆档 → 克隆声整机静默变 edge 通用声。upsert_profile 落库必经
+            # 本函数 → 在此剥离＝写边界单点收口；读取侧（persona_voice）另有
+            # 同口径豁免，历史脏档不用等重存也不再生效。
+            _ph_dirty = []
+            try:
+                from src.ai.lang_voice_route import is_voice_placeholder
+                _ph_dirty = [
+                    k for k in ("backend", "voice", "speaker_id",
+                                "reference_audio_path")
+                    if isinstance(vp.get(k), str) and is_voice_placeholder(vp[k])
+                ]
+            except Exception:
+                _ph_dirty = []
+            if _ph_dirty or "dialect_flavor" in vp:
+                vp = dict(vp)
+                for _pk in _ph_dirty:
+                    vp.pop(_pk, None)
+                if "dialect_flavor" in vp:
+                    from src.ai.cosy_dialect import normalize_dialect_flavor
+                    vp["dialect_flavor"] = normalize_dialect_flavor(
+                        str(vp.get("dialect_flavor") or ""))
+                out["voice_profile"] = vp
         return out
 
     def _format_persona_compact(

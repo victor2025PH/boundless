@@ -1795,6 +1795,22 @@ _ADDITIONS_2026_08_31_TRAVEL_STATE = """
 """
 _BASELINE += _ADDITIONS_2026_08_31_TRAVEL_STATE
 
+# 2026-09-01 #132 短链公网基址界面化：SOP 页可直接配置 ``inbox.cta.public_base``
+# overlay（unified_inbox_workflow_routes，随 b7161370 提交但漏登基线——
+# 2026-09-02 preflight 装配门禁抓到后补录）。
+_ADDITIONS_2026_09_01_CTA_PUBLIC_BASE = """
+/api/workspace/cta-public-base	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_01_CTA_PUBLIC_BASE
+
+# 2026-09-02 #142 真发总闸三件套（companion_capability_routes，随 ae772df1
+# 提交但漏登基线）：主管一键恢复真发（worker/deliver 被关过的一并打开，
+# _require_supervisor 同闸，翻动经 _audit_toggle 留痕）。
+_ADDITIONS_2026_09_02_DELIVER_GATE_RESUME = """
+/api/companion/deliver-gate/resume	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_02_DELIVER_GATE_RESUME
+
 
 def _parse_baseline():
     expected = set()

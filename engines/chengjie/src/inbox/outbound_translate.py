@@ -183,6 +183,17 @@ def vote_language(
             continue
         if not lang:
             continue
+        # #139 混排修正（与 lang_policy.classify_evidence 同口径）：中文句夹
+        # 拉丁品牌/套餐词（『你帮我看下 SMART 的 unli data promo』）会被 detect
+        # 按「拉丁 > 汉字」机械判 en——画像投票跟着记 en 正是「中文客户被判
+        # en」工单的第二半（第一半在生成端 classify_evidence）。
+        if lang == "en":
+            try:
+                from src.ai.lang_policy import latin_mixed_zh
+                if latin_mixed_zh(core):
+                    lang = "zh"
+            except Exception:  # pragma: no cover - 极端导入失败保持旧行为
+                pass
         # 新近度权重（越靠后越大）× 长度权重（越长越可信，封顶避免长文一票独大）
         recency = 1.0 + idx / max(1, n - 1)
         length_w = min(4.0, len(core) / 20.0 + 0.5)

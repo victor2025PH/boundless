@@ -58,7 +58,12 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.ai.translation_service import TranslationService, detect_language, normalize_lang
+from src.ai.translation_service import (
+    TranslationService,
+    detect_language,
+    detect_zh_variant,
+    normalize_lang,
+)
 from src.inbox.media_enrich import strip_media_desc
 
 logger = logging.getLogger(__name__)
@@ -326,6 +331,11 @@ async def _translate_one(
     text = strip_media_desc(
         str(m.get("text") or m.get("original_text") or ""))
     src_lang = str(m.get("language") or detect_language(text))
+    # #139-3：候选筛选已按旁路变体放行的粤语消息，译前源语言同口径改钉 yue——
+    # 否则这里按 store 标签/detect 又回到 zh，translate() 的 source==target
+    # identity 短路会把它原样吐回（白进候选一场）。
+    if normalize_lang(src_lang) == "zh":
+        src_lang = detect_zh_variant(text) or src_lang
     try:
         result = await asyncio.wait_for(
             translation_svc.translate(
@@ -558,6 +568,12 @@ async def enrich_inbound_translations(
         lang = str(m.get("language") or "").strip()
         if not lang or lang == "unknown":
             lang = detect_language(text)
+        # #139-3 粤语回归缺口：detect 对粤语恒回 zh（实施89 契约）→ 「译成中文」
+        # 链在 src==target 处恒跳过，粤语客户永远看不到普通话译文。旁路变体判定
+        # 把 zh 源里的粤语书面捞回候选（yue≠zh，_lang_matches 放行；zh-tw 目标
+        # 同理受益）。判不出/普通话 → 空串，行为与旧链完全一致。
+        if normalize_lang(lang) == "zh":
+            lang = detect_zh_variant(text) or lang
         if not _lang_matches(lang, cfg):
             stats["skipped"] += 1
             continue

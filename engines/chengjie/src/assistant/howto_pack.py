@@ -871,7 +871,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Create chains (or seed preset packs) on the Workflows page.",
         "工作链 跟进链 链条 挂链 SOP 剧本 跟单 批量挂链 停链 换链 "
         "follow-up workflow chain attach",
-        "/workflows",
+        "/workspace/workflows",
     ),
     (
         "deal-engine",
@@ -891,7 +891,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "appear automatically.",
         "成交引擎 成交 旅程 阶段 报价 下一步 建议链 NBA deal engine journey "
         "stage 看板",
-        "/workflows",
+        "/workspace/workflows",
     ),
     (
         "clone-voice-from-message",
@@ -1038,6 +1038,53 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "in the background and apply via the same restart banner.",
         "更新 升级 新版本 最新版 版本 重启更新 下载页 update upgrade version",
         "",
+    ),
+    # ── v1.0.68 随包新语料（2026-09-02，SOP：宣传的新入口小智必须答得上）──
+    (
+        "buried-archived-unread",
+        "「归档中还有 N 条未读」是什么 / 未读徽标和列表对不上",
+        "What is \"N unread in archived\" / badge doesn't match the list",
+        "顶部账号/平台的未读徽标现在只统计**未归档私聊**的有效未读——与列表"
+        "默认视图同一口径，不再出现「徽标有数、列表里找不到」。归档会话里还有"
+        "未读时，收件箱筛选条下会出现琥珀色「归档中还有 N 条未读 · 查看」入口，"
+        "点击直达归档视图处理；没有则自动隐藏。归档/取消归档会话时，未读数会"
+        "即时在主徽标与该入口之间转移。要回到旧口径（归档未读也计入主徽标），"
+        "由管理员开配置 inbox.badge.include_archived。",
+        "The account/platform unread badges now count only unarchived private "
+        "chats - the same scope as the default list view, so the badge can no "
+        "longer show counts you cannot find. When archived conversations "
+        "still hold unread messages, an amber \"N unread in archived - view\" "
+        "entry appears under the inbox filter bar and jumps straight to the "
+        "archived view; it hides itself at zero. Archiving or unarchiving a "
+        "conversation moves its unread count between the two instantly. An "
+        "admin can restore the old scope via inbox.badge.include_archived.",
+        "归档 未读 徽标 被埋 归档未读 badge archived buried unread",
+        "/workspace",
+    ),
+    (
+        "resume-deliver-gate",
+        "提示「全局已暂停真发」、全自动会话不外发怎么办",
+        "Banner says auto-send is paused globally / full-auto chats not sending",
+        "全局「真发总闸」被关闭时，全自动/多选档位的会话只拟稿、不外发——"
+        "收件箱顶栏会出现「⏸️ 全局已暂停真发」横幅，写明谁、几点、从哪个入口"
+        "关的，以及是否会自动恢复；打开受影响的会话也能看到「本会话未真发」"
+        "提示条。恢复：主管点横幅上的「▶ 恢复真发」并确认即可，全自动会话"
+        "立即恢复自动发送（需主管权限，非主管请联系管理员）。每次开关都有"
+        "留痕，回复设置页能看到「最近一次谁关的」；管理员还可配置到点自动"
+        "恢复（inbox.l2_autosend.pause_auto_resume_hours，默认关闭）。",
+        "When the global deliver master switch is off, full-auto/multi-choice "
+        "conversations keep drafting but stop sending - the inbox shows a "
+        "\"⏸️ Auto-send paused globally\" banner naming who closed it, when, "
+        "via which entry, and whether it auto-resumes; affected conversations "
+        "show their own notice. To resume, a supervisor clicks \"▶ Resume "
+        "auto-send\" on the banner and confirms - full-auto sending restarts "
+        "immediately (supervisor permission required). Every flip is audited "
+        "and the reply-settings page shows who last closed it; admins can "
+        "also set timed auto-resume (inbox.l2_autosend.pause_auto_resume_"
+        "hours, off by default).",
+        "暂停真发 真发总闸 恢复真发 不外发 只拟稿 没有发出去 deliver paused "
+        "resume auto-send",
+        "/workspace",
     ),
 ]
 

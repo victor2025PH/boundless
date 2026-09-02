@@ -123,7 +123,139 @@ _COALESCE_NOTIF_TYPES = frozenset({
     "bot_peer_alert",
     # 93c：同会话重复铸链再点（新 token 首点）只留最新一条——跟进动作是同一个
     "cta_clicked",
+    # 工单#142（2026-09-02 钧机实锤）：编排器 worker 反复报警曾在通知中心连排
+    # 5 条同义告警。按「类型+账号集合」合并（键见 _notif_coalesce_key），保最新
+    # 一条并累计 _notif_count，渲染端显示「×N」读出规模。
+    "orchestrator_worker_alert",
 })
+
+# ① 通知中心 i18n 准入表（工单#142，2026-09-02）：进 notif_queue 的每个事件类型
+# 都必须有「人话标题 + 一句话说明」词条（值：(标题key, 说明key)；渲染端
+# workspace_base._TYPE_META 同键消费）。缺映射的类型**不进**用户可见通知——
+# 裸英文事件名曾在通知中心连排刷屏（orchestrator_worker_alert×5、
+# stage_advance_pending×2，与 #117 裸键直显同族）。新增事件类型必须同步补齐：
+# 本表 + i18n 词条（zh+en）+ 前端 _TYPE_META，门禁
+# tests/test_notif_center_i18n_gate.py 三处联检，缺一即红。
+_NOTIF_TYPE_I18N: Dict[str, tuple] = {
+    "inbox_message": ("base.notif.type_inbox_message", "base.notif.msg_sub"),
+    "draft_sla_breach": ("base.notif.type_draft_sla_breach", "base.notif.draft_sla_sub"),
+    "draft_reassigned": ("base.notif.type_draft_reassigned", "base.notif.reassigned_sub"),
+    "conversation_assigned": ("base.notif.type_conversation_assigned", "base.notif.assigned_sub"),
+    "bot_peer_alert": ("base.notif.type_budget_hit", "base.notif.budget_sub_soft"),
+    "conv_note": ("base.notif.type_conv_note", "base.notif.mention_sub"),
+    "anomaly_alert": ("base.notif.type_anomaly_alert", "base.notif.anomaly_sub"),
+    "sla_alert": ("base.notif.type_sla_alert", "base.notif.sla_sub"),
+    "escalation": ("base.notif.type_escalation", "base.notif.esc_sub"),
+    "queue_alert": ("base.notif.type_queue_alert", "base.notif.queue_alert_sub"),
+    "stage_advance": ("base.notif.type_stage_advance", "base.sse.stage_advance"),
+    "stage_advance_pending": ("base.notif.type_stage_advance_pending", "base.sse.stage_pending"),
+    "stage_downgrade": ("base.notif.type_stage_downgrade", "base.sse.stage_downgrade"),
+    "stage_reunion": ("base.notif.type_stage_reunion", "base.sse.stage_reunion"),
+    "stage_sync": ("base.notif.type_stage_sync", "base.notif.stage_sync_sub"),
+    "workflow_step": ("base.notif.type_workflow_step", "base.sse.wf_step"),
+    "workflow_execution_completed": ("base.notif.type_wf_done", "base.notif.wf_done_sub"),
+    "workflow_execution_failed": ("base.notif.type_wf_failed", "base.sse.wf_failed"),
+    "workflow_execution_cancelled": ("base.notif.type_wf_cancelled", "base.notif.wf_cancelled_sub"),
+    "health_alert": ("base.notif.type_health_alert", "base.notif.health_sub"),
+    "billing_alert": ("base.notif.type_billing_alert", "base.notif.billing_sub"),
+    "orchestrator_worker_alert": ("base.notif.type_orch_worker", "base.notif.orch_worker_sub"),
+    "ops_report": ("base.notif.type_ops_report", "base.notif.ops_report_sub"),
+    "goal_completed_alert": ("base.notif.type_goal_done", "base.notif.goal_done_sub"),
+    "cta_clicked": ("base.notif.type_cta_click", "base.notif.cta_sub"),
+}
+
+# 缺映射类型的 ops 落账去抖（进程级一次；SSE 重放会反复经过同一事件）
+_UNMAPPED_NOTIF_LOGGED: set = set()
+
+
+def _notif_type_registered(etype: Any) -> bool:
+    """i18n 准入闸（纯判定 + 首见落账）：缺人话映射的事件类型不进用户可见通知。
+
+    首见时 logger.warning + ops_events 落账（kind=notif_type_unmapped），值守在
+    运营总览的事件审计流里能看见「有新事件类型裸奔被拦」，补词条后放行。
+    """
+    if etype in _NOTIF_TYPE_I18N:
+        return True
+    key = str(etype)
+    if key not in _UNMAPPED_NOTIF_LOGGED:
+        _UNMAPPED_NOTIF_LOGGED.add(key)
+        logger.warning(
+            "[notif] 事件类型 %s 缺 i18n 人话映射，已拦截不进通知中心——请补 "
+            "_NOTIF_TYPE_I18N + i18n 词条 + workspace_base._TYPE_META（门禁 "
+            "test_notif_center_i18n_gate 会红）", key)
+        try:
+            from src.ops.ops_events import get_ops_event_store
+            store = get_ops_event_store()
+            if store is not None:
+                # detail 走 ASCII 键值串（ops 审计惯例；亦不入路由响应中文棘轮账本）
+                store.record("notif_type_unmapped", reason=key,
+                             detail=f"etype={key};blocked=no_i18n_mapping")
+        except Exception:
+            logger.debug("notif_type_unmapped ops 落账失败（已忽略）", exc_info=True)
+    return False
+
+
+def _notif_coalesce_key(evt: dict) -> str:
+    """复发型告警的合并键（类型内）。
+
+    - ``orchestrator_worker_alert``：按**账号集合**合并（problems[].id =
+      ``platform:account_id``，排序拼接）；恢复事件（problems 空）自成一键——
+      同一批账号的反复告警只留最新一条，不再连排刷屏（工单#142）。
+    - 其余沿用「会话/草稿/id」旧口径。
+    """
+    d = (evt or {}).get("data") or {}
+    if evt.get("type") == "orchestrator_worker_alert":
+        ids = sorted(str(p.get("id") or "?") for p in (d.get("problems") or []))
+        return "|".join(ids) if ids else "recovered"
+    return str(d.get("conversation_id") or d.get("draft_id") or d.get("id") or "")
+
+
+def _queue_notif(nq: list, evt: dict) -> None:
+    """把已过准入的事件写入通知队列（合并/幂等的单一口径，纯函数可门禁）。
+
+    复发型告警按 :func:`_notif_coalesce_key` 合并：仅保留最新一条，并累计
+    ``_notif_count``（渲染端显示「×N」）。SSE 重连会把 recent_events 重放一遍
+    ——EventBus 历史存的是**同一 dict 对象**，故用 ``data is data`` 判重放：
+    重放不加计数、沿用旧时戳（不把已读顶回未读）。
+    """
+    etype = evt.get("type")
+    if etype in _COALESCE_NOTIF_TYPES:
+        key = _notif_coalesce_key(evt)
+        if key:
+            count, keep_ts = 1, None
+            kept = []
+            for n in nq:
+                if n.get("type") == etype and _notif_coalesce_key(n) == key:
+                    if n.get("data") is evt.get("data"):
+                        count = int(n.get("_notif_count") or 1)
+                        keep_ts = n.get("_notif_ts")
+                    else:
+                        count = int(n.get("_notif_count") or 1) + 1
+                else:
+                    kept.append(n)
+            nq[:] = kept
+            entry = {**evt, "_notif_ts": keep_ts or int(time.time() * 1000)}
+            if count > 1:
+                entry["_notif_count"] = count
+            nq.append(entry)
+            if len(nq) > 200:
+                del nq[:-200]
+            return
+    elif etype == "conv_note":
+        # 注解按 note_id 幂等：SSE 重连会重放 recent_events 并再次经过本函数，
+        # 同一条注解若刷新 _notif_ts 会把已读的提及顶回未读——首写胜出，重放丢弃。
+        nid = str((evt.get("data") or {}).get("note_id")
+                  or evt.get("note_id") or "")
+        if nid and any(
+            n.get("type") == "conv_note"
+            and str((n.get("data") or {}).get("note_id")
+                    or n.get("note_id") or "") == nid
+            for n in nq
+        ):
+            return
+    nq.append({**evt, "_notif_ts": int(time.time() * 1000)})
+    if len(nq) > 200:
+        del nq[:-200]
 
 
 def customer_msgs_in_center(config: dict | None) -> bool:
@@ -350,12 +482,15 @@ def register_realtime_routes(app, *, api_auth) -> None:
         def _maybe_push_notif(evt: dict):
             """将重要事件写入 app.state.notif_queue（P24 通知中心）。
 
-            复发型告警（升级/会话SLA/草稿SLA/队列/异常）按「类型+会话」合并：
-            写入前先剔除队列中同 key 的旧条，仅保留最新一条 —— 从源头避免历史里
-            同一会话堆几十条同义告警（前端亦有合并，这里是 defense-in-depth）。
+            三道闸依次过：类型白名单（_NOTIF_EVENT_TYPES，语义不动）→ i18n 人话
+            准入（_notif_type_registered，缺映射拦截+落账，工单#142）→ 内容级准入
+            （_notif_content_ok）。合并/幂等统一走 _queue_notif（复发型告警按
+            _notif_coalesce_key 只留最新一条并累计 ×N；前端亦有合并，defense-in-depth）。
             """
             etype = evt.get("type")
             if etype not in _NOTIF_EVENT_TYPES:
+                return
+            if not _notif_type_registered(etype):
                 return
             _cm = getattr(request.app.state, "config_manager", None)
             if not _notif_content_ok(
@@ -365,34 +500,7 @@ def register_realtime_routes(app, *, api_auth) -> None:
             if nq is None:
                 nq = []
                 request.app.state.notif_queue = nq
-            if etype in _COALESCE_NOTIF_TYPES:
-                d = evt.get("data") or {}
-                key = str(d.get("conversation_id") or d.get("draft_id") or d.get("id") or "")
-                if key:
-                    nq[:] = [
-                        n for n in nq
-                        if not (
-                            n.get("type") == etype
-                            and str((n.get("data") or {}).get("conversation_id")
-                                    or (n.get("data") or {}).get("draft_id")
-                                    or (n.get("data") or {}).get("id") or "") == key
-                        )
-                    ]
-            elif etype == "conv_note":
-                # 注解按 note_id 幂等：SSE 重连会重放 recent_events 并再次经过本函数，
-                # 同一条注解若刷新 _notif_ts 会把已读的提及顶回未读——首写胜出，重放丢弃。
-                nid = str((evt.get("data") or {}).get("note_id")
-                          or evt.get("note_id") or "")
-                if nid and any(
-                    n.get("type") == "conv_note"
-                    and str((n.get("data") or {}).get("note_id")
-                            or n.get("note_id") or "") == nid
-                    for n in nq
-                ):
-                    return
-            nq.append({**evt, "_notif_ts": int(time.time() * 1000)})
-            if len(nq) > 200:
-                del nq[:-200]
+            _queue_notif(nq, evt)
 
         async def _gen():
             try:

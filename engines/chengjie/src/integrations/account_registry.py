@@ -321,6 +321,43 @@ def parse_persona_ids(meta: Optional[Dict[str, Any]]) -> List[str]:
     return uniq
 
 
+#: 「非活跃」状态：登出(offline) / 已删除(removed)。计「能收发消息」的账号时排除。
+#: pending（登录在途 / 待编排器拉起）与 online / desktop 一并算活跃——与聊天页
+#: ``_registry_active_map`` / ``_merge_orchestrator_status`` 的「活跃账号」定义同口径。
+_INACTIVE_STATUSES = frozenset({"offline", "removed"})
+
+
+def live_accounts_by_platform(*, exclude_offline: bool = True) -> Dict[str, int]:
+    """各平台「当前能收发消息的账号数」——渠道接入向导计数 / 头部就绪口径单一源。
+
+    #126（2026-09-01 skuio）：向导 Telegram 行常显「已接 1 个账号」而机器实登多号。
+    与人设「应用到」弹窗（#61/#78）同族——**账号真相只在运行时注册表
+    ``platform_accounts``**（桌面 QR / 协议登录都 upsert 到这里；config 里没有）。
+
+    与向导既有 ``_accounts_by_platform`` 的关键差别（本函数是收敛后的单一事实源）：
+    - ``removed`` 恒不计（软删账号）；
+    - ``exclude_offline``（默认 True）：``offline``（登出/离线）**不计**——这是
+      「登录登出实时跟随」：登出一个号，向导「已接 N」与头部「能收发 X/7」立即
+      各减一，不再把一个躺着登出的号谎报成「已接」。人设「应用到」弹窗刻意保留
+      offline（那里是「给哪个号绑人设」，离线号回来仍要能绑），故两处口径按用途
+      各自成立，本函数专供「能不能收发」这一问。
+
+    取数失败一律返回空 dict（调用方回落纯配置口径，绝不让向导因此报错）。
+    """
+    try:
+        out: Dict[str, int] = {}
+        for row in get_account_registry().list():  # 默认已排除 removed
+            if exclude_offline and str(row.get("status") or "") in _INACTIVE_STATUSES:
+                continue
+            p = str(row.get("platform") or "").lower()
+            if p:
+                out[p] = out.get(p, 0) + 1
+        return out
+    except Exception:
+        logger.debug("live_accounts_by_platform 读取失败（调用方回落）", exc_info=True)
+        return {}
+
+
 def persona_binding_refs(profile_id: str) -> List[str]:
     """反查：哪些**未移除**账号显式绑定了该人设 → ``["platform:account_id", …]``。
 

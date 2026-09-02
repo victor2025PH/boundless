@@ -5,11 +5,18 @@
    此前裸奔。此处兜底：
      - ReferenceError（含 unhandledrejection 里的异步版）＝死代码/作用域错位，必是 bug；
      - SyntaxError＝模板半保存经热更新直上生产（「每步必须自洽」纪律的运行时探测器）；
-     - TypeError 刻意不收——「Failed to fetch」等网络抖动全是它，收了就是狼来了。
-   动作＝顶部红条（点击可关）+ beacon 到 /api/telemetry/frontend-error（只送消毒后的
-   page/fn/type 三字段，绝不送堆栈/原文），节流 3s、每页至多 5 发。
-   页级 dead-click 守卫 wire 时置 window.__feDeadClickGuard=1，本守卫对 'error' 事件让位
-   （防双 toast 双计数）；unhandledrejection 无页级守卫覆盖，恒由本守卫处理。 */
+     - 网络型 TypeError（Failed to fetch / NetworkError…）＝后端重启/网络抖动，**不是脚本
+       bug**——2026-09-01 WEXX7E 诊断实锤：后端重启瞬断被当「页面脚本出错」红条误报。
+       此类走独立**黄条**「连接中，正在重试」：同源探针 5s 一发，服务一回来横幅自动消失
+       （零人工动作）；点击可关（对齐 #53 提示可关闭治理），关后 2 分钟静默防反复弹。
+       绝不 beacon 到 frontend-error（那是脚本 bug 的告警通道，掺网络抖动＝狼来了）。
+     - 其余 TypeError 刻意不收——语义模糊，收了误报多于捕真。
+   真异常动作＝顶部红条（点击可关 + 内嵌「⤴ 报障」直达一键报障）+ beacon 到
+   /api/telemetry/frontend-error（只送消毒后的 page/fn/type 三字段，绝不送堆栈/原文），
+   节流 3s、每页至多 5 发。
+   页级 dead-click 守卫 wire 时置 window.__feDeadClickGuard=1，本守卫对 'error' 事件的
+   **真异常**分支让位（防双 toast 双计数）；网络型失败页级守卫不收，恒由本守卫处理；
+   unhandledrejection 无页级守卫覆盖，恒由本守卫处理。 */
 (function(){
   var _last = 0, _sent = 0;
   function _fnFromMsg(msg){
@@ -30,6 +37,19 @@
         (document.body || document.documentElement).appendChild(el);
       }
       el.textContent = txt;
+      /* 「⤴ 报障」直达（_support.html 全局挂载后即可用）：用户看到红条那一刻
+         就是报障意愿最高的一刻。stopPropagation 防触发外层「点击关闭」。 */
+      if(typeof window.openSupportPanel === 'function'){
+        var a = document.createElement('a');
+        a.href = 'javascript:void 0';
+        a.style.cssText = 'margin-left:9px;color:inherit;text-decoration:underline;font-weight:600;white-space:nowrap;';
+        a.textContent = '\u2934 ' + ((typeof window.T === 'function') ? window.T('sup.cta.toast') : 'Report');
+        a.onclick = function(ev){
+          try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){}
+          try{ window.openSupportPanel(String(el.textContent || '').slice(0, 160), 'guard_bar'); }catch(_){}
+        };
+        el.appendChild(a);
+      }
     }catch(_){}
   }
   function _report(fn, etype){
@@ -43,9 +63,51 @@
       navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type: 'application/json'}));
     }catch(_){}
   }
+
+  /* ── 网络型失败 → 黄条 + 探针自愈 ─────────────────────────────────────── */
+  var _netTimer = null, _netMuteUntil = 0;
+  function _isNetFail(reason, msg){
+    var s = String(msg || (reason && reason.message) || '');
+    /* Chrome: Failed to fetch / Firefox: NetworkError when attempting… /
+       Safari: Load failed / Node-ish 壳: fetch failed / 其它: network request failed */
+    return /failed to fetch|networkerror|load failed|fetch failed|network request failed|err_connection|err_network/i.test(s);
+  }
+  function _netBarHide(){
+    if(_netTimer){ clearTimeout(_netTimer); _netTimer = null; }
+    try{ var el = document.getElementById('fe-boot-guard-net'); if(el) el.remove(); }catch(_){}
+  }
+  function _netProbe(){
+    _netTimer = null;
+    try{
+      /* 探针只问「服务回来没有」：fetch 一 settle（无论状态码）＝链路通，横幅撤 */
+      fetch('/login', {cache: 'no-store'}).then(_netBarHide, function(){
+        if(document.getElementById('fe-boot-guard-net')) _netTimer = setTimeout(_netProbe, 5000);
+      });
+    }catch(_){ _netBarHide(); }
+  }
+  function _netBar(){
+    try{
+      if(Date.now() < _netMuteUntil) return;
+      var el = document.getElementById('fe-boot-guard-net');
+      if(!el){
+        el = document.createElement('div');
+        el.id = 'fe-boot-guard-net';
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;'
+          + 'background:#b45309;color:#fff;font-size:13px;padding:8px 14px;'
+          + 'text-align:center;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2);';
+        el.title = 'click to dismiss';
+        el.onclick = function(){ _netMuteUntil = Date.now() + 120000; _netBarHide(); };
+        (document.body || document.documentElement).appendChild(el);
+        el.textContent = (typeof window.T === 'function') ? window.T('fe.guard.net_retry') : 'fe.guard.net_retry';
+      }
+      if(!_netTimer) _netTimer = setTimeout(_netProbe, 5000);
+    }catch(_){}
+  }
+
   window.addEventListener('error', function(e){
-    if(window.__feDeadClickGuard) return;
     var err = e && e.error, msg = String((e && e.message) || '');
+    if(_isNetFail(err, msg)){ _netBar(); return; }   /* 网络瞬断≠脚本 bug，页级守卫也不收 */
+    if(window.__feDeadClickGuard) return;
     if(msg === 'Script error.' && !(e && e.filename)) return; /* 跨源脚本噪声无细节，不报 */
     var isRef = (err instanceof ReferenceError) || /is not defined/.test(msg);
     var isSyn = (err instanceof SyntaxError) || /SyntaxError/.test(msg);
@@ -54,6 +116,7 @@
   });
   window.addEventListener('unhandledrejection', function(e){
     var r = e && e.reason;
+    if(_isNetFail(r, r && r.message)){ _netBar(); return; }
     if(!(r instanceof ReferenceError)) return;
     _report(_fnFromMsg(r && r.message), 'ReferenceError');
   });

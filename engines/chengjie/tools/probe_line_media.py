@@ -41,7 +41,6 @@ import os
 import sqlite3
 import sys
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -267,10 +266,10 @@ def probe(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
         # ⚠ 一次性 client 的 ``_reqseq`` 从 0 起，而服务端去重键是
         # **(reqSeq, 消息内容)**（2026-07-31 真机实测）。两次探针都以 reqSeq=1 发
         # **完全相同**的图片占位 → 第二次被判重、返回上一条的 message id → 上传撞
-        # HTTP 423 Locked → ``send_line_media`` 会按「上传失败」去 unsend 那个 id，
-        # **把上一轮那条成功的测试图删掉**。长驻 worker 的 reqSeq 单调递增所以生产
-        # 不受影响，这是探针独有的脚枪：发之前把序号推到互不重叠的区间。
-        client._reqseq = int(time.time()) % 1_000_000  # noqa: SLF001
+        # HTTP 423 Locked。2026-09-02 起统一走 ``bump_client_reqseq``（与长驻
+        # worker 启动同一套时间基线，跨进程/跨重启单调不重叠）。
+        from src.integrations.line_media import bump_client_reqseq
+        bump_client_reqseq(client, account_id=own_mid or "probe")
 
         from src.integrations.line_media import send_line_media
         img = _make_test_image()

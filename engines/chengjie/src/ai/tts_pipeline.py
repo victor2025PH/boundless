@@ -791,10 +791,17 @@ class TTSPipeline:
         # 缺省音色＝中文女声（业务主力语言）。历史值 ja-JP-NanamiNeural 是 2026-07-23
         # 「新好友被日语腔轰炸」事故的静默地雷之一：任何一层配置漏填 voice，
         # 全站语音就默默变日语。
-        self.voice = str(
-            cfg.get("voice")
-            or ("zh-CN-XiaoxiaoNeural" if self.backend == "edge_tts" else "alloy")
-        ).strip()
+        # 占位串（"___" 等，#137/#140）视同未填——留着会被当真实音色送进
+        # edge/路由，判定 SSOT＝lang_voice_route.is_voice_placeholder。
+        _voice_raw = str(cfg.get("voice") or "").strip()
+        try:
+            from src.ai.lang_voice_route import is_voice_placeholder
+            if is_voice_placeholder(_voice_raw):
+                _voice_raw = ""
+        except Exception:
+            pass
+        self.voice = _voice_raw or (
+            "zh-CN-XiaoxiaoNeural" if self.backend == "edge_tts" else "alloy")
         self.model = str(cfg.get("model") or "gpt-4o-mini-tts").strip()
         self.format = str(cfg.get("format") or "mp3").strip().lower()
         self.out_dir = Path(str(cfg.get("out_dir") or "tmp_voice_replies"))
@@ -834,6 +841,9 @@ class TTSPipeline:
         self.rvc = cfg.get("rvc") if isinstance(cfg.get("rvc"), dict) else {}
         # 人设 id（由 resolve_voice_cfg 注入）：预渲染语音命中层的查找键。
         self.persona_id = str(cfg.get("persona_id") or "").strip()
+        # 生效音色来源标签（resolve_effective_voice_context 注入，#137/#140）：
+        # 「人设X/全局/会话覆盖」——每次合成的强制 INFO 行消费。
+        self.voice_source = str(cfg.get("voice_source") or "").strip()
         # 语种路由放行标记（lang_voice_route.clone_langs 改写时注入）：该语种
         # 已被路由改派到「运营验收过会念它」的克隆节点 → 语种能力闸放行。
         self.lang_route_cleared = str(
@@ -850,7 +860,15 @@ class TTSPipeline:
         # 兜底会丢掉克隆音色（换成通用音色），但「有声音」远胜「硬失败」。
         self.fallback_on_error = bool(cfg.get("fallback_on_error", True))
         self.fallback_backend = str(cfg.get("fallback_backend") or "edge_tts").strip().lower()
-        self.fallback_voice = str(cfg.get("fallback_voice") or "zh-CN-XiaoxiaoNeural").strip()
+        # 兜底音色同样过占位串豁免（safe_edge_voice 会再兜一层白形校验）
+        _fb_raw = str(cfg.get("fallback_voice") or "").strip()
+        try:
+            from src.ai.lang_voice_route import is_voice_placeholder as _ivp
+            if _ivp(_fb_raw):
+                _fb_raw = ""
+        except Exception:
+            pass
+        self.fallback_voice = _fb_raw or "zh-CN-XiaoxiaoNeural"
         # ── P0：TTS 输出缓存（默认开；neutral 输出与升级前一致，缓存无行为副作用）──
         cache_cfg = cfg.get("tts_cache") if isinstance(cfg.get("tts_cache"), dict) else {}
         self.cache_enabled = bool(cache_cfg.get("enabled", True))
@@ -985,6 +1003,17 @@ class TTSPipeline:
             spec = derive_emotion(text=text_s, default=self.emotion_default)
         else:
             spec = NEUTRAL
+
+        # ── 强制观测（#137/#140，2026-09-02）：每次合成打一行「生效后端/音色/
+        # 来源」INFO。占位串事故里登记、合成、路由三方日志各说各话，「到底哪层
+        # 配置在生效」全靠拼图——这行是下次诊断包的定锚，刻意不设开关。
+        if self.enabled and text_s.strip():
+            logger.info(
+                "[tts] 合成生效 backend=%s voice=%s 来源=%s",
+                self._effective_backend(),
+                (voice or self._effective_voice() or "-"),
+                self.voice_source
+                or (f"人设{self.persona_id}" if self.persona_id else "全局"))
 
         # ── 预渲染命中层（AvatarHub Phase 2）：固定台词直接复用夜间预合成的
         # OGG 语音条——零 GPU、零延迟、音色最像（7858 离线档质量 > 7852 在线档）。

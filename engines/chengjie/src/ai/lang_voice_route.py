@@ -380,6 +380,19 @@ def edge_voice_lang_prefix(voice_id: str) -> str:
     return ""
 
 
+def is_voice_placeholder(voice_id: str) -> bool:
+    """音色/说话人字段是否为**占位串**（如 ``___`` / ``--`` / ``…``）。
+
+    #137/#140（2026-09-02 钧机诊断包实锤）：人设工作室把半成品语音设置以
+    ``voice: "___"`` 落库，路由层把它当「一个语种不匹配的音色」→ 每条语音都
+    被切去 edge 通用声，克隆档形同虚设。判据＝非空但不含任何字母/数字
+    （unicode 口径）——真实音色（BCP47 / 克隆登记名）必含字母数字，绝不误伤。
+    空串**不算**占位（空=本来就未设置，语义由调用方自行处理）。
+    """
+    v = str(voice_id or "").strip()
+    return bool(v) and not any(ch.isalnum() for ch in v)
+
+
 def _is_multilingual_voice(voice_id: str) -> bool:
     """Multilingual 系 Edge 音色自适应文本语种，任何语言都无需换声。"""
     return "multilingual" in str(voice_id or "").lower()
@@ -564,8 +577,51 @@ def _route_clone_lang(
     return new_cfg, prefix
 
 
+def _recover_clone_profile(
+    voice_cfg: Dict[str, Any], config: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """音色未配置时回查可用克隆档：已合并档（人设层）→ 全局 voice_reply → 兼容层。
+
+    可用判据与 persona_voice #93 修补同口径：克隆类 backend + owner_consent +
+    （参考音 或 有效 speaker_id）。``enabled`` 显式 False＝运营手动停用，绝不复活。
+    命中返回该档的副本，全部落空返回 None。纯函数、绝不抛。
+    """
+    cands = []
+    vp = (voice_cfg or {}).get("voice_profile")
+    if isinstance(vp, dict):
+        cands.append(vp)
+    cfg = config or {}
+    for block in (
+        ((cfg.get("telegram") or {}).get("voice_reply") or {}),
+        ((cfg.get("messenger_rpa") or {}).get("voice_output") or {}),
+    ):
+        gvp = block.get("voice_profile") if isinstance(block, dict) else None
+        if isinstance(gvp, dict):
+            cands.append(gvp)
+    for cand in cands:
+        try:
+            backend = str(cand.get("backend") or "").strip().lower()
+            if backend not in _CLONE_BACKENDS:
+                continue
+            if cand.get("enabled") is False:
+                continue
+            if not bool(cand.get("owner_consent")):
+                continue
+            spk = str(cand.get("speaker_id") or "").strip()
+            if is_voice_placeholder(spk):
+                spk = ""
+            ref = str(cand.get("reference_audio_path") or "").strip()
+            if not (ref or spk):
+                continue
+            return dict(cand)
+        except Exception:
+            continue
+    return None
+
+
 def _route_follow_text(
     voice_cfg: Dict[str, Any], text: str, rc: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[Dict[str, Any], str]]:
     """通用「音色跟随文本语种」路由。未命中/不适用返回 None。"""
     follow = _follow_cfg(rc)
@@ -601,6 +657,55 @@ def _route_follow_text(
     cur_voice = _effective_voice_of(voice_cfg)
     if _is_multilingual_voice(cur_voice):
         return None
+
+    # ── 音色未配置守卫（#93/#137/#140，2026-09-02 钧机实锤）──────────────────
+    # 当前音色为空串/占位串（如 ``___``）＝**没有配置音色**，不是「一个语种
+    # 不匹配的音色」——旧逻辑按语种不匹配切 edge，把明明登记成功的克隆声
+    # 整台机器静默换成通用声（日志「文本语种 zh ≠ 音色 ___ → 切 edge_tts」
+    # 三行实锤，同机 22:32 克隆登记与云端合成全部成功）。正确动作：回查
+    # 人设/全局克隆档（voice_reply.voice_profile，backend=avatar_clone 等），
+    # 有可用克隆档 → 走克隆（克隆链原生跟随文本语种，无需换声）；确实没有
+    # 克隆 → 按语种取 edge 音色，但日志如实说「未配置」而非「不匹配」。
+    if not str(cur_voice or "").strip() or is_voice_placeholder(cur_voice):
+        recovered = _recover_clone_profile(voice_cfg, config)
+        mapped = _mapped_voice(follow, prefix)
+        if recovered is not None:
+            new_cfg = dict(voice_cfg or {})
+            new_vp = dict(recovered)
+            new_vp["enabled"] = True
+            new_cfg["voice_profile"] = new_vp
+            new_cfg["backend"] = str(
+                new_vp.get("backend") or "avatar_clone").strip().lower()
+            if is_voice_placeholder(str(new_cfg.get("voice") or "")):
+                new_cfg.pop("voice", None)
+            if mapped:   # 克隆失败回落 edge 时兜底音色也对齐文本语种
+                new_cfg["fallback_voice"] = mapped
+            logger.info(
+                "[lang_voice_route] 音色未配置（%s）→ 回查克隆档命中"
+                "（backend=%s speaker=%s）→ 走克隆",
+                repr(cur_voice or ""), new_cfg["backend"],
+                new_vp.get("speaker_id") or "-")
+            # tag 留空：这是把被占位串挤掉的克隆主链**恢复**，不是语言路由改声
+            return new_cfg, ""
+        if not mapped:
+            if bool(follow.get("reject_unmapped", True)):
+                logger.info(
+                    "[lang_voice_route] 音色未配置且语种 %s 无音色映射 → "
+                    "拒发语音回落文字", prefix)
+                return dict(voice_cfg or {}), f"{REJECT_TAG_PREFIX}{prefix}"
+            return None
+        new_cfg = dict(voice_cfg or {})
+        new_cfg["backend"] = "edge_tts"
+        new_cfg["voice"] = mapped
+        new_cfg["fallback_voice"] = mapped
+        new_cfg.pop("rvc", None)
+        new_cfg["voice_profile"] = {"enabled": False}
+        logger.info(
+            "[lang_voice_route] 音色未配置（%s）且无克隆档可回查 → "
+            "按文本语种 %s 选 edge 音色 (%s)",
+            repr(cur_voice or ""), prefix, mapped)
+        return new_cfg, prefix
+
     cur_prefix = edge_voice_lang_prefix(cur_voice)
     if cur_prefix == prefix:
         return None
@@ -639,7 +744,9 @@ def route_voice_cfg_for_text(
     - 粤语路由命中 → 改写副本（backend/voice 切粤语 TTS）、tag="yue"；
     - follow_text 命中 → 改写副本（edge 音色对齐文本语种）、tag=语种前缀（如 "en"）；
     - 拒发守卫命中 → tag="reject:<lang>"，调用方应放弃语音回落文字；
-    - 克隆链只对齐 fallback_voice 时 → 返回改写副本、tag 空串（主后端未变）。
+    - 克隆链只对齐 fallback_voice 时 → 返回改写副本、tag 空串（主后端未变）；
+    - 音色未配置（空串/占位串如 ``___``）→ 回查克隆档命中则恢复克隆主链
+      （tag 空串），否则按语种选 edge 音色（tag=语种前缀）。
     绝不抛异常；任何异常按未命中处理。
     """
     try:
@@ -653,7 +760,7 @@ def route_voice_cfg_for_text(
             # 检测）、克隆路由次之（同一把声讲外语）、edge 跟随兜底（换通用声）
             hit = _route_clone_lang(voice_cfg, text, rc)
         if hit is None:
-            hit = _route_follow_text(voice_cfg, text, rc)
+            hit = _route_follow_text(voice_cfg, text, rc, config)
         if hit is not None:
             _record_stats("hit", hit[1])
             return hit
@@ -733,6 +840,7 @@ __all__ = [
     "is_cantonese_text",
     "is_clone_backend",
     "is_reject_tag",
+    "is_voice_placeholder",
     "to_simplified_for_tts",
     "route_voice_cfg_for_text",
 ]

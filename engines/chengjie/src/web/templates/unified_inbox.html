@@ -100,7 +100,7 @@
 <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
 <script src="/copilot/components/cp-chain-exec.js?v=20260831f"></script>
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
-<script src="/copilot/components/cp-voice.js?v=20260831h"></script>
+<script src="/copilot/components/cp-voice.js?v=20260901a"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
 <script src="/copilot/components/cp-goal.js?v=20260831f"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260831b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260902a">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -605,6 +605,11 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
             </div>
           </span>
         </div>
+        {# #142 被埋会话界面化：主徽标剔除归档未读后，「归档中还有 N 条未读」在这里
+           常驻可见（0 条不占版面）——点击直达归档视图。内容由 _renderBuriedHint 填充。 #}
+        <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
+             onclick="_gotoBuriedArchive()"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
       </div>
       <div class="filter-summary" id="filter-summary"></div>
       </div><!-- /.list-header-body -->
@@ -2116,6 +2121,9 @@ let unreadByPlatform=null;   // {telegram: N, ...}
 let unreadByAccount=null;    // {"telegram:aid": N, ...}
 /* P8：近窗「需人工关注」聚合（SLA crit + 需人工标签，排除归档/搁置）；null 同上回落 */
 let attnByAccount=null;      // {"telegram:aid": N, ...}
+/* #142 被埋会话界面化：归档中的有效未读全库聚合（主徽标已剔归档，这份驱动
+   「归档中还有 N 条未读」入口）。null=旧后端/未抵达 → 回落窗口内推导。 */
+let archivedUnreadByAccount=null;   // {"telegram:aid": {convs:N, unread:M}, ...}
 /* P0 账号真相单源（2026-08-17）：服务端 accounts_summary 全库账号名录
    [{platform,account_id,status,paired,unread,attn,conv_count,last_ts}]；
    status ∈ online/connecting/error/offline/logged_out/removed/history_only。
@@ -4742,6 +4750,7 @@ function setFilter(f,el){
      由 toggleFtabMore 的外点监听在同一击里顺带关闭，语义不变。 */
   applyFilters();
   if(f==='snoozed') _ensureSnoozedComplete();   // 掉出列表窗口的搁置会话拉回补齐
+  if(f==='archived') _hydrateBuriedArchived();  // #142：窗口外被埋会话拉回补齐
   _syncViewLink();   // P5: 列表筛选进视角 hash
 }
 
@@ -4925,37 +4934,131 @@ function _setFtabCount(f,n){
   }
 }
 
-/* 被埋会话数（P0-198）：归档着、却有未读入站＝客户在等，而所有默认视图都看不见它。
-   刻意**不**复用 _filterCountBase（那个基集第一件事就是剔掉 archived），但沿用它的
-   平台/账号视角与群聊排除，让这枚计数与旁边几枚同口径、跟着账号 rail 一起变。
-   与后端 InboxStore.list_buried_archived / 被埋告警是同一判据。
-   [!] 已知边界（别把这枚数字当权威口径）：allChats 来自 list_conversations，那是
-   **last_ts DESC 截断**的最近 N 条。所以本计数只覆盖「客户还在发消息」的被埋会话
-   （还在发 → last_ts 一直被刷新 → 必在窗口内，恰好是最紧急的那半边）；「埋了很久、
-   客户已经放弃」的老会话 last_ts 早已沉底、根本不在 allChats 里，那半边由服务端三件套
-   兜（HealthWatchdog 告警 / ops「被埋会话」卡 / tools/audit_buried_conversations.py，
-   它们直接查库不受列表截断影响）。两边互补，刻意不在前端补拉全量。 */
-function _buriedCount(){
-  return (allChats||[]).filter(c=>{
+/* 被埋会话（P0-198 → #142 全库化）：归档着、却有未读入站＝客户在等，而所有默认
+   视图都看不见它。与后端 InboxStore.list_buried_archived / 被埋告警是同一判据。
+   #142 升级：服务端聚合（archivedUnreadByAccount，来自
+   sum_archived_unread_by_account，全库口径）在手时优先——旧窗口推导只看得见
+   last_ts 还在窗口内的被埋会话，「埋了很久、客户已放弃」的老会话（报障机实测
+   16 条/9218h）在窗口外，红点等于失明。旧后端/聚合未抵达 → 回落窗口推导
+   （行为同旧版）。平台/账号视角沿用旁边几枚计数的口径，跟着账号 rail 一起变。 */
+function _buriedStats(){
+  if(archivedUnreadByAccount){
+    let convs=0, unread=0;
+    Object.keys(archivedUnreadByAccount).forEach(k=>{
+      const i=k.indexOf(':');
+      const p=i>=0?k.slice(0,i):k, a=i>=0?k.slice(i+1):'default';
+      if(platFilter!=='all' && p!==platFilter) return;
+      if(accountFilter!=='all' && a!==accountFilter) return;
+      const v=archivedUnreadByAccount[k]||{};
+      convs+=Math.max(0,Number(v.convs)||0);
+      unread+=Math.max(0,Number(v.unread)||0);
+    });
+    return {convs:convs, unread:unread, srv:true};
+  }
+  let unread=0;
+  const rows=(allChats||[]).filter(c=>{
     if(platFilter!=='all' && c.platform!==platFilter) return false;
     if(accountFilter!=='all' && (c.account_id||'default')!==accountFilter) return false;
     if(_isRemovedRow(c)||_isLoggedOutRow(c)) return false;
     if(isGroupConv(c)) return false;
     return !!c.archived && (c.unread||0)>0;
-  }).length;
+  });
+  rows.forEach(c=>{ unread+=Math.max(0,Number(c.unread)||0); });
+  return {convs:rows.length, unread:unread, srv:false};
+}
+function _buriedCount(){ return _buriedStats().convs; }
+
+/* #142 被埋会话界面化：筛选条下的「归档中还有 N 条未读 · 查看」入口。
+   主徽标默认剔除归档未读（与列表默认视图同口径）后，这些未读不能彻底隐身——
+   这行就是 HealthWatchdog「被埋会话」告警的界面化：不轰炸、不闪烁，有则常驻、
+   读完自动消失，点击直达归档视图。归档/已移除视图内不显示（已经在看了）。 */
+function _renderBuriedHint(st){
+  const el=document.getElementById('buried-hint');
+  if(!el) return;
+  try{
+    const n=st?Math.max(0,Number(st.unread)||0):0;
+    if(!n || chatFilter==='archived' || chatFilter==='removed'
+        || _histView || searchQ || _convScope!=='private'){
+      el.style.display='none'; el.innerHTML=''; return;
+    }
+    el.innerHTML=`<span class="bh-ic">${uiIcon('archive',12)}</span>`
+      +`<span class="bh-txt">${esc(window.Tf('inbox.buried.hint',{n:n}))}</span>`
+      +`<span class="bh-go">${esc(window.T('inbox.arch.foot_go'))}</span>`;
+    el.title=window.Tf('inbox.filter.buried_t',{n:st.convs});
+    el.style.display='';
+  }catch(_){ el.style.display='none'; }
+}
+function _gotoBuriedArchive(){
+  try{
+    _uiBeacon('iflt_buried_hint');   // 埋点纪律：新增筛选入口必须带 beacon
+    setFilter('archived', document.querySelector('.ftab-more-item[data-f="archived"]'));
+  }catch(_){}
+}
+
+/* ── 归档视图完整性救援（#142，同「搁置中 tab」哲学 _ensureSnoozedComplete）──
+   主列表只装 top-N 近期会话；被埋会话往往 last_ts 早已沉底（报障机实测 9218h）
+   ——入口说「归档中还有 N 条未读」，点进归档视图却一条也看不见＝把原故障往下
+   挪了一层。进入归档视图时对照 /api/admin/buried-conversations（DB 级权威，与
+   HealthWatchdog 被埋告警同一判据），缺失的经 conv-probe 救援并入 allChats。
+   TTL 60s 防 tab 反复切换刷请求；救援上限 20 条/轮。
+   与搁置救援不同的一环：救援行须记入 _buriedInjected 供轮询后并回——
+   loadChats 每拍整体重建 allChats，不并回的话救援行 10s 就被洗掉。 */
+var _buriedHydrateTs=0;
+var _buriedInjected={};   // cid -> row（救援注入的窗口外被埋行）
+function _buriedRemerge(){
+  try{
+    const seen=new Set((allChats||[]).map(c=>String(c.conversation_id||'')));
+    Object.keys(_buriedInjected).forEach(cid=>{
+      const row=_buriedInjected[cid];
+      if(row && !seen.has(cid)) allChats.push(row);
+    });
+  }catch(_){}
+}
+async function _hydrateBuriedArchived(){
+  try{
+    const st=_buriedStats();
+    if(!st.srv || !st.convs) return;   // 无服务端聚合＝窗口口径已是全部所知
+    const inWin=(allChats||[]).filter(c=>!!c.archived&&(c.unread||0)>0).length;
+    if(inWin>=st.convs) return;        // 窗口已覆盖全部被埋会话
+    const now=Date.now();
+    if(now-_buriedHydrateTs<60000) return;
+    _buriedHydrateTs=now;
+    const r=await apiFetch('/api/admin/buried-conversations', undefined, {timeoutMs:15000});
+    if(!r.ok) return;
+    const d=await r.json();
+    if(!d || d.supported===false || !Array.isArray(d.rows)) return;
+    const have={}; (allChats||[]).forEach(c=>{ if(c.conversation_id) have[String(c.conversation_id)]=1; });
+    const missing=d.rows.filter(x=>x&&x.conversation_id&&!have[String(x.conversation_id)]).slice(0,20);
+    if(!missing.length) return;
+    let okAny=false;
+    for(const x of missing){
+      const cid=String(x.conversation_id);
+      try{
+        const probe=await _rescueConvFromStore(cid);
+        if(probe&&probe.injected){
+          okAny=true;
+          const row=allChats.find(c=>String(c.conversation_id)===String(probe.resolved_cid||cid));
+          if(row) _buriedInjected[String(row.conversation_id)]=row;
+        }
+      }catch(_){}
+    }
+    if(okAny&&chatFilter==='archived') applyFilters();
+  }catch(_){}
 }
 
 function _updateFilterCounts(){
   const base=_filterCountBase();
   // 归档折在「更多」菜单里，计数本身也被折没了 → 有人被埋时给「更多」按钮打红点，
   // 否则这枚计数要先点开菜单才看得见，等于没有。
-  const buried=_buriedCount();
+  const buriedStats=_buriedStats();
+  const buried=buriedStats.convs;
   _setFtabCount('archived', buried);
   const moreBtn=document.getElementById('ftab-more-btn');
   if(moreBtn){
     moreBtn.classList.toggle('has-buried', buried>0);
     moreBtn.title = buried>0 ? window.Tf('inbox.filter.buried_t',{n:buried}) : '';
   }
+  _renderBuriedHint(buriedStats);   // #142：筛选条下「归档中还有 N 条未读」入口
   _setFtabCount('unread', _countForFilter('unread', base));
   _setFtabCount('sla', _countForFilter('sla', base));
   _setFtabCount('claimed', _countForFilter('claimed', base));
@@ -6002,9 +6105,38 @@ function _archiveBatchPatch(cids, archived){
   });
 }
 
+/* #142：归档态翻转时把该会话的有效未读在两本账间即时搬家——主徽标聚合
+   （unreadByAccount/unreadByPlatform）与归档未读聚合（archivedUnreadByAccount）。
+   乐观调账（地板 0），下一轮全局轮询以服务端聚合对账校正；无服务端聚合（null）
+   时窗口推导自然跟随 c.archived/c.unread，无需调。群聊不进这两本账，跳过。 */
+function _buriedLocalAdjust(c, nowArchived){
+  try{
+    if(!c || isGroupConv(c)) return;
+    const n=Math.max(0,Number(c.unread)||0);
+    if(!n) return;
+    const p=c.platform||'web';
+    const k=p+':'+(c.account_id||'default');
+    if(unreadByAccount){
+      unreadByAccount[k]=Math.max(0,(Number(unreadByAccount[k])||0)+(nowArchived?-n:n));
+    }
+    if(unreadByPlatform){
+      unreadByPlatform[p]=Math.max(0,(Number(unreadByPlatform[p])||0)+(nowArchived?-n:n));
+    }
+    if(archivedUnreadByAccount){
+      const v=archivedUnreadByAccount[k]||{convs:0,unread:0};
+      v.convs=Math.max(0,(Number(v.convs)||0)+(nowArchived?1:-1));
+      v.unread=Math.max(0,(Number(v.unread)||0)+(nowArchived?n:-n));
+      if(v.unread>0) archivedUnreadByAccount[k]=v;
+      else delete archivedUnreadByAccount[k];
+    }
+    buildNavRail(allChats);
+    buildAccountChips();
+  }catch(_){}
+}
 async function _setArchivedByKey(key, archived){
   const c=allChats.find(x=>convKey(x)===key);
   if(!c) return;
+  if(!!c.archived!==!!archived) _buriedLocalAdjust(c, !!archived);
   c.archived=archived;
   if(selectedKey===key && selectedChat){ selectedChat.archived=archived; renderChatHeader(selectedChat); }
   applyFilters();
@@ -6461,10 +6593,13 @@ function _fetchWithTimeout(url, ms){
 
 /* ===== 数据加载 ===== */
 /* 连接三态正反馈（P0，2026-07-23）：
-   单次轮询失败 → 黄「连接波动」；连续 ≥3 次 → 红「连接中断」；恢复 → 绿「已恢复」2.5s 自动隐去。
+   单次轮询失败 → 黄「连接波动」；连续 ≥3 次**且持续 ≥45s** → 红「连接中断」；恢复 → 绿「已恢复」2.5s 自动隐去。
+   45s 时长门槛（2026-09-02，WEXX7E 诊断）：后端重启瞬断 10-25s 就能攒满 3 次失败，
+   旧规则纯按次数升红＝把例行重启误报成「连接中断」红条吓坐席（黄条本身就在说
+   「正在重试」，且恢复后自动消失）；真断站 45s 后照旧升红 + 自诊断，如实报警不打折。
    重启冷却窗内（workspace_base 的 __wsRestartCool）文案切「维护窗口」——把"为什么断"讲清楚。
    显示经 wsBanner 仲裁：连接条最高优先级，同刻压过 AI 降级/通道离线/冷却横幅，不叠罗汉。 */
-let _connFailStreak=0, _connState='ok', _connRestoreTimer=null;
+let _connFailStreak=0, _connState='ok', _connRestoreTimer=null, _connFirstFailTs=0;
 /* P0-2 红条自诊断 + 断连遥测（2026-08-12，修「服务端断与客户端断长一个样」）：
    进入 down 态即并行探测独立信标（gstatic/cloudflare 的 generate_204，no-cors——
    resolve 即公网可达，读不了内容也算通），三态判定：
@@ -6576,11 +6711,15 @@ function _setConnBanner(on){
   if(on){
     if(_connRestoreTimer){ clearTimeout(_connRestoreTimer); _connRestoreTimer=null; }
     _connFailStreak+=1;
-    _renderConnBanner(_connFailStreak>=3?'down':'soft');
-    // 连败进入「中断」＝网络断过的正面证据：SSE 可能正卡在半开连接上装健康，
+    if(!_connFirstFailTs) _connFirstFailTs=Date.now();
+    // 升红双门槛：次数（≥3，排除单次抖动）+ 时长（≥45s，排除后端重启瞬断）。
+    // 判定在每次失败轮询时重算——45s 后的下一轮失败即升红，无需额外定时器。
+    const _sustained=_connFailStreak>=3 && (Date.now()-_connFirstFailTs)>=45000;
+    _renderConnBanner(_sustained?'down':'soft');
+    // 连败＝网络断过的正面证据：SSE 可能正卡在半开连接上装健康，
     // 强制重建（函数内 30s 节流），恢复后即时推送不缺席。
     if(_connFailStreak===3 && typeof _sseKick==='function') _sseKick();
-    if(_connFailStreak>=3 && !_connDownSince){ _connDownSince=Date.now(); _connDiagnose(); }
+    if(_sustained && !_connDownSince){ _connDownSince=_connFirstFailTs; _connDiagnose(); }
   } else {
     const wasBad=(_connState==='soft'||_connState==='down');
     _connFailStreak=0;
@@ -6600,7 +6739,7 @@ function _setConnBanner(on){
         if(_connState==='restored') _renderConnBanner('ok');
       }, 2500);
     }
-    _connDownSince=0; _connVerdict=''; _connDiagSeq++;
+    _connDownSince=0; _connFirstFailTs=0; _connVerdict=''; _connDiagSeq++;
     if(_connDiagTimer){ clearTimeout(_connDiagTimer); _connDiagTimer=null; }
   }
 }
@@ -6668,6 +6807,7 @@ async function _loadChatsBody(){
     });
     _remergeScopedRows();   // P0 账号视角：全局快照覆盖 allChats 后把 scoped 行并回（防被轮询洗掉）
     _histRemerge();         // 历史只读视角同理：已退出/已移除行不在全局快照里，轮询后必须并回
+    _buriedRemerge();       // #142：归档视图救援注入的窗口外被埋行同理并回
     _chatsHasMore=!!d.has_more; _chatsOldestTs=d.oldest_ts||0; _syncLoadMoreBar();
     platformStatus=d.platform_status||{};
     // 已登出号不应出现在聊天 chip（账号管理抽屉走 /api/accounts）
@@ -6682,6 +6822,13 @@ async function _loadChatsBody(){
     }
     if(d.unread_by_account && typeof d.unread_by_account==='object'){
       unreadByAccount=d.unread_by_account;
+    }
+    // #142：归档未读聚合（空 dict 也是有效值＝「归档里没有未读」，须覆盖旧值；
+    // 仅键缺失＝旧后端 → 保持 null 回落窗口推导）
+    if(d.archived_unread_by_account && typeof d.archived_unread_by_account==='object'){
+      archivedUnreadByAccount=d.archived_unread_by_account;
+    }else if('archived_unread_by_account' in d){
+      archivedUnreadByAccount={};
     }
     if(d.attn_by_account && typeof d.attn_by_account==='object'){
       attnByAccount=d.attn_by_account;   // P8：近窗 attn（旧后端无此字段 → 保持窗口口径）
@@ -7498,10 +7645,22 @@ function _clearUnread(c){
   if(idx>=0 && (allChats[idx].unread>0 || allChats[idx].synced_unread>0)){
     // Dock P2：点开会话 → 账号徽标立刻降（服务端聚合乐观扣本会话未读，地板 0；
     // 近似值——synced_unread 是否计入服务端口径未知，下一轮 loadChats 对账校正）。
+    // #142：已归档会话的未读记在归档聚合那本账上（主徽标早已剔除它），
+    // 读掉时扣归档账 →「归档中还有 N 条未读」入口即时消退，绝不动主徽标账。
     try{
-      if(unreadByAccount){
-        const k=(allChats[idx].platform||'web')+':'+(allChats[idx].account_id||'default');
-        unreadByAccount[k]=Math.max(0,(Number(unreadByAccount[k])||0)-(Number(allChats[idx].unread)||0));
+      const row=allChats[idx];
+      const k=(row.platform||'web')+':'+(row.account_id||'default');
+      const n=Number(row.unread)||0;
+      if(row.archived){
+        // 群聊不进归档聚合（服务端白名单只数私聊）→ 不扣账
+        if(!isGroupConv(row) && archivedUnreadByAccount && archivedUnreadByAccount[k]){
+          const v=archivedUnreadByAccount[k];
+          v.convs=Math.max(0,(Number(v.convs)||0)-1);
+          v.unread=Math.max(0,(Number(v.unread)||0)-n);
+          if(v.unread<=0) delete archivedUnreadByAccount[k];
+        }
+      }else if(unreadByAccount){
+        unreadByAccount[k]=Math.max(0,(Number(unreadByAccount[k])||0)-n);
       }
     }catch(_){}
     allChats[idx].unread=0;
@@ -7516,6 +7675,7 @@ function _clearUnread(c){
     }
     buildNavRail(allChats); // 更新左侧平台导航未读数
     buildAccountChips();    // Dock P2：顶栏账号徽标同步降（上面已乐观扣聚合）
+    try{ _updateFilterCounts(); }catch(_){}  // #142：归档未读入口/被埋红点同拍消退
   }
   // v2：先落本地已读标记（轮询合并的精确保 0 依据），再持久化服务端水位。
   _noteLocalRead(c, 0);
@@ -10177,6 +10337,7 @@ async function toggleArchive(){
   const newArchived=!selectedChat.archived;
   const cid=selectedChat.conversation_id; // 先捕获，避免被后面 null 覆盖
   const key=selectedKey;                  // 同上：撤销要靠它找回行 + 重新打开会话
+  _buriedLocalAdjust(selectedChat, newArchived);   // #142：徽标/归档入口即时调账
   selectedChat.archived=newArchived;
   const idx=allChats.findIndex(c=>convKey(c)===selectedKey);
   if(idx>=0) allChats[idx].archived=newArchived;
@@ -11250,8 +11411,11 @@ let _kbAutoTimer=null;
 let _kbEntries=[];             // 当前会话推荐条目（chip 角标与浮层共用同一份数据）
 
 function _kbPref(){
-  try{ const v=localStorage.getItem(_KB_PREF_KEY); if(v==='chip'||v==='off') return v; }catch(_){}
-  return 'auto';
+  // #139-4（钧 UX 拍板 2026-09-01）：默认档从 auto（高置信自动展开）改为 chip
+  // （仅工具条角标，点击才展开）——打开聊天窗不再自动弹出推荐浮层。
+  // 曾显式选过 auto 的坐席（localStorage 存 'auto'）继续尊重其选择。
+  try{ const v=localStorage.getItem(_KB_PREF_KEY); if(v==='auto'||v==='chip'||v==='off') return v; }catch(_){}
+  return 'chip';
 }
 function _setKbPref(v){
   try{ localStorage.setItem(_KB_PREF_KEY, (v==='chip'||v==='off')?v:'auto'); }catch(_){}
@@ -11637,7 +11801,9 @@ async function _batchArchiveApply(cids, archived){
     if(!d.ok) return false;
     cids.forEach(cid=>{
       const c = allChats.find(x=>x.conversation_id===cid);
-      if(c) c.archived = archived ? 1 : 0;
+      if(!c) return;
+      if(!!c.archived!==!!archived) _buriedLocalAdjust(c, !!archived);  // #142
+      c.archived = archived ? 1 : 0;
     });
     applyFilters();
     return d;
@@ -18482,6 +18648,34 @@ function _sameLang(a,b){
   if(!na||!nb||na==='unknown'||nb==='unknown') return false;
   return na===nb;
 }
+/* == 粤语书面旁路判定（#139-3，0830 断电重建缺口回填）：与服务端
+   translation_service.detect_zh_variant 同一字表口径（原字与设计注释见服务端；
+   script 内检测字表按门禁 \u 转义——实施89 坑5）。检测端对粤语恒判 zh（实施89
+   契约不动），本函数只回答「这段中文是不是粤文」，供「收→中」链把粤语消息
+   捞回翻译候选：专用语法字命中任一即判；强特征字/词需 ≥2 个不同特征
+   （词命中后词内单字不重复计数，防单语素凑双证据）。 == */
+const _YUE_EXC='\u5605\u5497\u54cb\u55f0\u55fa\u569f';
+const _YUE_CHARS='\u5514\u5187\u4e5c\u5481\u5649\u5571\u5625\u55ee\u66ec\u56c9\u5569\u7540\u5622';
+const _YUE_WORDS=['\u4eca\u671d','\u7434\u65e5','\u807d\u65e5','\u542c\u65e5','\u800c\u5bb6','\u5b9c\u5bb6',
+  '\u9ede\u89e3','\u70b9\u89e3','\u5514\u8a72','\u5514\u8be5','\u5514\u597d','\u5514\u4fc2','\u5514\u7cfb',
+  '\u639b\u4f4f','\u6302\u4f4f','\u975a\u5230','\u9753\u5230','\u597d\u975a','\u597d\u9753',
+  '\u908a\u500b','\u8fb9\u4e2a','\u4e5c\u5622','\u54a9\u5622','\u775e\u4e0b','\u775e\u5413',
+  '\u5f97\u9592','\u5f97\u95f2','\u50be\u5048','\u503e\u5048','\u4ffe\u6211','\u7540\u6211',
+  '\u98f2\u8336','\u996e\u8336'];
+function _looksCantonese(t){
+  t=String(t||'');
+  if(!t) return false;
+  for(const ch of _YUE_EXC){ if(t.indexOf(ch)>=0) return true; }
+  const words=_YUE_WORDS.filter(function(w){ return t.indexOf(w)>=0; });
+  let n=words.length;
+  for(const ch of _YUE_CHARS){
+    if(t.indexOf(ch)>=0 && !words.some(function(w){ return w.indexOf(ch)>=0; })) n++;
+  }
+  return n>=2;
+}
+/* 会话最近一条是否粤语书面（B7 智能默认的粤语豁免：conversations.language 对粤语
+   会话记 zh，「中文会话×默认 zh」的默认关抑制会把粤语客户的「收→中」一起关掉）。 */
+function _convLooksYue(c){ return !!(c && _looksCantonese(String(c.last_text||''))); }
 function _loadXlateForConv(c){
   const key=c?convKey(c):'';
   const all=_xlatePrefs();
@@ -18500,7 +18694,8 @@ function _loadXlateForConv(c){
     // P0-4（2026-08-16）：内置默认从硬编码 zh 改为坐席语言（UI 语言/浏览器语言推导），
     // 外籍坐席开箱即得母语译文；已存过浏览器默认（bd.in）的老用户不受影响。
     const _def=hasBrowserIn?(bd.in||''):_agentLang();
-    _xlateIn=(_def && c && _sameLang(_def,c.language))?'':_def;
+    // #139-3 粤语豁免：粤语会话的 language 列是 zh，同语抑制会把「收→中」默认关掉
+    _xlateIn=(_def && c && _sameLang(_def,c.language) && !_convLooksYue(c))?'':_def;
   }
   _xlateOut=(convEntry&&convEntry.out)||bd.out||'';
   _outPreview=!!((convEntry&&convEntry.preview!==undefined)?convEntry.preview:bd.preview);
@@ -18537,7 +18732,8 @@ async function _loadServerDefaultLang(c){
     if(!_xlServerDefaultApplicable) return;  // 期间用户手改/设过会话级 → 不覆盖
     let srv=(d&&d.ok&&d.resolved)?String(d.resolved):'';
     // P0-3/B7：运营默认与会话客户语言同语（如 zh 默认 × 中文会话）→ identity 白跑，不覆盖
-    if(srv && _sameLang(srv,c.language)) srv='';
+    //（#139-3 粤语豁免：粤文会话 language=zh 但确需译到 zh，抑制不生效）
+    if(srv && _sameLang(srv,c.language) && !_convLooksYue(c)) srv='';
     if(srv && srv!==_xlateIn){
       _xlateIn=srv;
       const si=document.getElementById('xlate-in');
@@ -20781,7 +20977,11 @@ function _xlNeeds(m,lang){
   }else{
     // P0-3/B6：源语==目标语（如中文消息×目标 zh）→ 服务端必回 identity 且不显示，
     // 省掉整个 /translate 往返（服务端用同一 detect_language，判定口径一致）。
-    if(_sameLang(m.language,lang)) return false;
+    // #139-3 粤语例外：粤语消息的 language 标签/检测都是 zh，但目标 zh 时仍需
+    // 普通话译文——服务端 translate() 已有同口径旁路（detect_zh_variant），这里
+    // 只需别把请求闸死在客户端。
+    if(_sameLang(m.language,lang)
+       && !(_canonXlLang(lang)==='zh' && _looksCantonese(_xlateSrcText(m.text)))) return false;
     // 服务端已有**真译文**（enrich 写回 / store 直读）→ 绝不重复请求（B6 去重契约）。
     // 须 _meaningfulXlate 把关：store 行 translated_text 无译文时回落原文占位
     // （normalizer 形状兼容），不能被当成已译，否则超出 enrich 窗口的旧外语消息

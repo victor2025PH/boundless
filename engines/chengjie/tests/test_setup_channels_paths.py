@@ -103,3 +103,31 @@ def test_helpers_never_raise_on_broken_backends(monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert mod._accounts_by_platform() == {}
     assert isinstance(mod._login_ready({}), dict)
+
+
+def test_wizard_count_uses_live_source_and_excludes_offline(monkeypatch, tmp_path):
+    """#126：向导计数走 live_accounts_by_platform（运行时注册表），多账号全计、
+    登出（offline）即时不计——徽标「已接 N」与头部「能收发 X/7」登录登出实时跟随。"""
+    from src.integrations import account_registry as ar
+    r = ar.AccountRegistry(tmp_path / "acc.db")
+    monkeypatch.setattr(ar, "_registry", r)
+    for i in range(5):
+        r.upsert("telegram", f"tg{i}", mode="protocol", status="online")
+
+    monkeypatch.setattr(mod, "_require_supervisor", lambda request: None)
+    monkeypatch.setattr(mod, "_login_ready", lambda _cfg: {})
+    app = FastAPI()
+    cm = _CM({})
+    app.state.config_manager = cm
+    mod.register_setup_routes(app, api_auth=_auth, config_manager=cm)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    d = client.get("/api/setup/channels").json()
+    tg = next(c for c in d["channels"] if c["id"] == "telegram")
+    assert tg["linked_accounts"] == 5, "5 个 TG 在线 → 向导应显 5（#126 验收）"
+
+    # 登出一个号 → 计数即时降到 4（登录登出实时跟随）
+    r.set_status("telegram", "tg0", "offline")
+    d2 = client.get("/api/setup/channels").json()
+    tg2 = next(c for c in d2["channels"] if c["id"] == "telegram")
+    assert tg2["linked_accounts"] == 4

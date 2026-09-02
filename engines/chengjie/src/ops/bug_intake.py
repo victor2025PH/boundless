@@ -139,6 +139,8 @@ _STATS: Dict[str, int] = {
     "rate_capped_report": 0, "capped_photo_archived": 0,
     # 实施82：官方 bot 消息被自咬环守卫压制的次数（bot 代发后应恒 >0）
     "official_bot_suppressed": 0,
+    # 2026-09-02：本方账号（支持号/本 worker）消息被立单链自身守卫压制的次数
+    "self_msg_suppressed": 0,
 }
 _DB_CONN: Optional[sqlite3.Connection] = None
 
@@ -201,6 +203,32 @@ def voice_suppressed(config: Optional[Dict[str, Any]], chat_id: Any,
     if hit:
         _bump("voice_suppressed")
     return hit
+
+
+def _is_own_sender(cfg: Dict[str, Any], sender_id: Any,
+                   account_id: Any = "") -> bool:
+    """发送者是否本方账号（support_accounts / 本 worker / 官方 bot）。
+
+    镜像层的「跳过: 自身发送的消息」只认得本 worker 自己（from_user.id ==
+    user_info.id）：值守换了个支持号在群里发回访播报时，别的 worker 的观察链
+    会把它当客户消息立单（2026-09-02 实锤：#123/#125/#135/#136 全是
+    8506426282(BOUNDLESS) 的回访播报被 6834964252 的观察链登记成新工单——
+    播报文案满是 bug 词与工单号，正是分类器的靶子）。这里按发送者 id 收口，
+    立单链（observe/trigger）对本方消息一律 no-op。
+    """
+    sid = str(sender_id or "").strip()
+    if not sid:
+        return False
+    if sid in cfg["support_accounts"]:
+        return True
+    aid = str(account_id or "").strip()
+    if aid and sid == aid:
+        return True
+    try:
+        from src.ops.bug_bot import is_official_bot
+        return is_official_bot(sid)
+    except Exception:
+        return False
 
 
 # ── 分类 ───────────────────────────────────────────────────────────────────────
@@ -826,6 +854,12 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
         except Exception:
             logger.debug("[bug_intake] bot 守卫异常（放行后续闸门）",
                          exc_info=True)
+        # 本方支持号守卫（2026-09-02）：值守用另一个支持号发的回访播报，对本
+        # worker 是「他人消息」，镜像层拦不住——按 support_accounts 硬压制，
+        # 防止满是 bug 词的播报文案引燃回复/立单。
+        if str(sender_id or "").strip() in cfg["support_accounts"]:
+            _bump("self_msg_suppressed")
+            return False
         # 危机词：压制 AI（人来处理）+ 即时告警（每用户 30min 去抖）
         if t and is_crisis(t):
             _bump("crisis_hold")
@@ -936,6 +970,14 @@ def observe_group_message(
             return out
         ts = float(now if now is not None else time.time())
         t = str(text or "").strip()
+        # 立单链自身守卫（2026-09-02 #123/#125/#135/#136 误立单收口）：本方
+        # 账号（support_accounts / 本 worker / 官方 bot）的群发绝不进登记链
+        # ——回访播报满是 bug 词与工单号，混进来就成新工单。实时链与补拉链
+        # （bug_intake_backfill 回喂）共用本入口，一处收口两条链都干净。
+        if _is_own_sender(cfg, reporter_id, account_id):
+            _bump("self_msg_suppressed")
+            _record_event(cid, "self_msg_suppressed", reporter_id, t[:200])
+            return out
         out["active"] = True
         # 2026-08-21 11:05 老板纪律（B36 收紧版）：报障群是「真正解决问题的群」，
         # 群内登记/回复/整理全部由值守人工来——AI（本地模型/云端）一条不发。

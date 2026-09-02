@@ -26,12 +26,21 @@ prompt 字段就**全部白捡**，零下游改动。
   我们在上传失败时撤回占位（``unsend_message``），宁可什么都没发，也不发一条坏消息。
   payload 构造仍复用 okline 的 ``Message`` 工厂，只接管编排。
 
-⚠ **别用「一次性 client」发媒体**（读是安全的，见 ``_sync_bootstrap_blocking``）。
+⚠ **reqSeq 判重病理**（读是安全的，见 ``_sync_bootstrap_blocking``；发必须防）。
 ``OkLine`` 每次新建都把 ``_reqseq`` 归 0，而服务端去重键是 **(reqSeq, 消息内容)**
-（2026-07-31 真机实测）：两个新 client 各自以 reqSeq=1 发**同样**的图片占位会被判重、
-返回同一个 message id，随后 OBS 上传撞 HTTP 423 Locked，本模块便会按「上传失败」
-撤回那个 id ——**把上一条已经成功的消息删掉**。长驻 worker 的 reqSeq 单调递增故不受
-影响；离线工具若要发，先把 ``_reqseq`` 推到不重叠区间（见 tools/probe_line_media.py）。
+（2026-07-31 真机实测）：以撞历史的 reqSeq 发**同样**的媒体占位会被判重、返回
+**旧** message id，随后 OBS 上传撞 HTTP 423 Locked，若按「上传失败」撤回那个 id
+就**把之前已经成功的消息删掉**。最初以为只有一次性工具会踩（长驻 worker 单调递增），
+2026-09-01 skuio 客户机实锤（backend.log 四笔 423）：**应用重启**后 worker 的新
+client 同样从 0 起——媒体占位内容彼此相同，撞上上一轮进程的历史 reqSeq。
+两层修复（2026-09-02）：
+
+- ``bump_client_reqseq``：worker 启动即把 ``_reqseq`` 推到秒级时间基线的新鲜区间
+  （跨重启单调递增；侧车文件持久化 floor 防时钟回拨），从源头不撞；
+- ``send_line_media`` 的 423 路径：识别为判重碰撞 → **不撤回**（那个 id 多半是
+  历史好消息）→ 换新鲜 reqSeq 重发占位、对新 id 再传一次字节。
+
+离线工具若要发，同样先调 ``bump_client_reqseq``（见 tools/probe_line_media.py）。
 """
 
 from __future__ import annotations
@@ -405,6 +414,84 @@ def _http_status(exc: BaseException) -> int:
         return 0
 
 
+# ── reqSeq 抗判重（HTTP 423 病理，见模块头注释）──────────────────────────────────
+
+#: reqSeq 时间基线锚点（2025-06 附近的固定秒戳）。floor = 当前秒 - 锚点：时间以
+#: 1/秒前进、reqSeq 以 1/条消耗，LINE 单号频率远低于 1 条/秒，故「本轮用到的最大
+#: reqSeq」永远追不上「下轮启动时的时间基线」——跨重启天然单调不重叠。锚点让值域
+#: 从千万级起步，thrift i32 上限（2^31）还够用约 60 年。
+_REQSEQ_EPOCH = 1_750_000_000
+#: 时钟回拨时的兜底前进量：floor 至少比已知值（持久化/当前）大这么多。
+_REQSEQ_MIN_STEP = 1_000
+
+
+def compute_reqseq_floor(current: int = 0, now: Optional[float] = None) -> int:
+    """算「保证不与历史重叠」的 reqSeq 起点：max(时间基线, 已知值 + 兜底步长)。"""
+    ts = time.time() if now is None else now
+    try:
+        cur = int(current or 0)
+    except (TypeError, ValueError):
+        cur = 0
+    step_from_known = cur + _REQSEQ_MIN_STEP if cur > 0 else 1
+    return max(int(ts) - _REQSEQ_EPOCH, step_from_known, 1)
+
+
+def bump_client_reqseq(api: Any, *, account_id: str = "", floor_file: str = "") -> int:
+    """把 client 的 ``_reqseq`` 推到跨重启单调递增的新鲜区间（软失败，返回新 floor 或 0）。
+
+    worker 启动时必调（HTTP 423 病理的源头修复）：新建 client 的 reqSeq 从 0 起，
+    媒体占位内容彼此相同，重启后必撞上一轮进程的历史 (reqSeq, 内容) 被服务端判重。
+    ``floor_file``（约定 ``<tokens_path>.reqseq``）持久化本次 floor：正常情况下时间
+    基线已单调，它只在**时钟回拨**时兜底；读写失败都不阻断（退化为纯时间基线）。
+    """
+    persisted = 0
+    if floor_file:
+        try:
+            with open(floor_file, "r", encoding="utf-8") as fh:
+                persisted = int(str(fh.read()).strip() or 0)
+        except FileNotFoundError:
+            persisted = 0
+        except Exception:
+            logger.debug("[line_media] reqSeq floor 读取失败 path=%s", floor_file,
+                         exc_info=True)
+    try:
+        current = int(getattr(api, "_reqseq", 0) or 0)
+    except (TypeError, ValueError):
+        current = 0
+    floor = compute_reqseq_floor(max(persisted, current))
+    try:
+        api._reqseq = floor  # noqa: SLF001 —— okline 无公开 setter，病理修复只能进内部
+    except Exception:
+        logger.warning("[line_media] reqSeq 推进失败（维持从 0 起，重启后首条媒体"
+                       "可能撞判重）acct=%s", account_id, exc_info=True)
+        return 0
+    if floor_file:
+        try:
+            with open(floor_file, "w", encoding="utf-8") as fh:
+                fh.write(str(floor))
+        except Exception:
+            logger.debug("[line_media] reqSeq floor 持久化失败 path=%s", floor_file,
+                         exc_info=True)
+    logger.info("[line_media] reqSeq floor 推进 acct=%s %d→%d (persisted=%d)",
+                account_id, current, floor, persisted)
+    return floor
+
+
+def _is_obs_locked(exc: BaseException) -> bool:
+    """这次失败是不是 HTTP 423 Locked（reqSeq 判重碰撞的指纹）。
+
+    okline 的 OBS 上传抛 ``LineApiError``（带 ``status`` 属性、消息含
+    ``"HTTP 423"``）；三路都认：``status`` 属性 / requests 的 ``response`` /
+    消息文本，任一命中即是。
+    """
+    try:
+        if int(getattr(exc, "status", 0) or 0) == 423:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _http_status(exc) == 423 or "HTTP 423" in str(exc)
+
+
 def _try_refresh_token(api: Any) -> bool:
     """OBS 下载遇 401/403 时显式刷一次 access token（600s 冷却，绝不抛）。
 
@@ -712,24 +799,59 @@ def send_line_media(
     if not msg_id:
         return _fail("no_message_id")
 
-    try:
-        enc = api.get_encrypted_access_token(
-            int(EncryptedAccessTokenFeatureType.OBS_GENERAL))
-        api.obs.upload_message_object(
-            msg_id, data, name=name, obs_type=obs_type, cat=cat, enc_token=enc,
-        )
-    except Exception as exc:
-        # 占位已在对话里了 → 必须撤回，否则客户看到一条永久点不开的破图。
-        # 撤回本身失败也只能记日志（没有第二条退路），但 delivered 一定是 False。
-        logger.warning("[line_media] OBS 上传失败，撤回占位 msg=%s: %s", msg_id, exc)
+    dedup_retried = False
+    while True:
         try:
-            api.unsend_message(msg_id)
-            _record_recall(recalled=True)
-        except Exception:
-            _record_recall(recalled=False)
-            logger.warning("[line_media] 占位撤回也失败，会话里可能残留破损媒体 msg=%s",
-                           msg_id, exc_info=True)
-        return _fail("obs_upload_failed", message_id=msg_id)
+            enc = api.get_encrypted_access_token(
+                int(EncryptedAccessTokenFeatureType.OBS_GENERAL))
+            api.obs.upload_message_object(
+                msg_id, data, name=name, obs_type=obs_type, cat=cat, enc_token=enc,
+            )
+            break
+        except Exception as exc:
+            if _is_obs_locked(exc) and not dedup_retried:
+                # HTTP 423 = reqSeq 判重碰撞的指纹（见模块头注释）：服务端把这次
+                # 占位判成历史消息的重复、回了**旧** message id——那条多半是客户
+                # 已收到的好消息，**绝不能**按「上传失败」去撤回它。处置：把
+                # reqSeq 推到时间基线新鲜区间，重发占位拿真正的新 id，再传一次。
+                dedup_retried = True
+                try:
+                    old_seq = int(getattr(api, "_reqseq", 0) or 0)
+                except (TypeError, ValueError):
+                    old_seq = 0
+                fresh = compute_reqseq_floor(old_seq)
+                try:
+                    api._reqseq = fresh  # noqa: SLF001
+                except Exception:
+                    logger.debug("[line_media] 判重重试 reqSeq 推进失败", exc_info=True)
+                logger.warning(
+                    "[line_media] OBS 上传 HTTP 423（reqSeq 判重碰撞，msg=%s 疑为"
+                    "历史消息，不撤回）reqSeq %d→%d 重发占位重试", msg_id, old_seq, fresh)
+                try:
+                    sent = api.send_message(placeholder)
+                except Exception:
+                    logger.warning("[line_media] 判重重试的占位重发被拒 to=%s",
+                                   to, exc_info=True)
+                    return _fail("obs_upload_locked", message_id=msg_id)
+                new_id = str(sent.get("id") or "") if isinstance(sent, dict) else ""
+                if not new_id or new_id == msg_id:
+                    logger.warning("[line_media] 判重重试仍拿到同一 message id=%s"
+                                   "（放弃，不撤回）", msg_id)
+                    return _fail("obs_upload_locked", message_id=msg_id)
+                msg_id = new_id
+                continue
+            # 占位已在对话里了 → 必须撤回，否则客户看到一条永久点不开的破图。
+            # （判重重试后的占位持新鲜 reqSeq，id 必是新消息，撤回安全。）
+            # 撤回本身失败也只能记日志（没有第二条退路），但 delivered 一定是 False。
+            logger.warning("[line_media] OBS 上传失败，撤回占位 msg=%s: %s", msg_id, exc)
+            try:
+                api.unsend_message(msg_id)
+                _record_recall(recalled=True)
+            except Exception:
+                _record_recall(recalled=False)
+                logger.warning("[line_media] 占位撤回也失败，会话里可能残留破损媒体 msg=%s",
+                               msg_id, exc_info=True)
+            return _fail("obs_upload_failed", message_id=msg_id)
 
     cap = str(caption or "").strip()
     if cap:

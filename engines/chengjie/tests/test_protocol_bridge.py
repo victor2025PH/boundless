@@ -732,6 +732,58 @@ async def test_orchestrator_send_media_no_worker_raises():
         pass
 
 
+async def test_orchestrator_send_media_timeout_returns_explicit_failure():
+    """悬死兜底（2026-09-02 WEXX7E 实锤）：worker 的 send_media 永久无果时，
+    编排器必须在超时后回明确失败（delivered=False/error=send_timeout → 路由
+    502 → UI 有真话可报），而不是让 await 无限悬着；同时调用 worker 的
+    ``kick_stuck_send`` 恢复钩子（wait_for 只取消协程侧，卡死的线程不踢不醒）。
+    悬死超时不该往收件箱写出站镜像（客户没收到任何东西）。"""
+    import asyncio
+
+    orch = ao.AccountOrchestrator(
+        config={"orchestrator": {"send_media_timeout_sec": 0.05}})
+
+    class _HungWorker(FakeWorker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kicked = 0
+
+        async def send_media(self, chat_key: str, *, media_path: str,
+                             media_type: str, caption: str = "") -> dict:
+            await asyncio.Event().wait()  # 永不返回＝钧机 21:39 的悬死形态
+            raise AssertionError("unreachable")
+
+        def kick_stuck_send(self) -> None:
+            self.kicked += 1
+
+    w = _HungWorker()
+    _running_managed(orch, "telegram", "accH", w)
+    seen: list = []
+    pb.register_inbox_sink(lambda m: seen.append(m))
+    try:
+        res = await orch.send_media(
+            "telegram", "accH", "777", media_path="/tmp/a.jpg",
+            media_url="/u.jpg", media_type="image")
+    finally:
+        pb.register_inbox_sink(None)
+    assert res["delivered"] is False
+    assert res["error"] == "send_timeout"
+    assert w.kicked == 1, "超时后必须踢一次恢复钩子"
+    assert seen == [], "未送达不得写出站镜像"
+
+
+async def test_orchestrator_send_media_timeout_disabled_by_config():
+    """send_media_timeout_sec<=0 = 关闭兜底（保留逃生门）：正常 worker 照常送达。"""
+    orch = ao.AccountOrchestrator(
+        config={"orchestrator": {"send_media_timeout_sec": 0}})
+    w = FakeWorker()
+    _running_managed(orch, "telegram", "accN", w)
+    res = await orch.send_media(
+        "telegram", "accN", "777", media_path="/tmp/a.jpg",
+        media_url="/u.jpg", media_type="image")
+    assert res["delivered"] is True
+
+
 def test_static_media_ref_resolves_for_translate(monkeypatch, tmp_path):
     from src.inbox.media_resolver import resolve_for_translate
     root = tmp_path / "pm"

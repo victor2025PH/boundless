@@ -3563,12 +3563,19 @@ window._pillChainFail=window._pillChainFail||function(fn){
   // 复发型告警（升级/会话SLA/草稿SLA/队列/异常）会被反复推送（轮询+重连重发）。
   // 这些按「类型+会话」合并：同一会话只保留最新一条，避免铃铛堆几十条同义告警。
   var _COALESCE_TYPES={ escalation:1, sla_alert:1, draft_sla_breach:1, draft_backlog_summary:1, queue_alert:1, anomaly_alert:1, bot_peer_alert:1,
+    /* 工单#142：编排器 worker 告警按「类型+账号集合」合并（与服务端
+       _notif_coalesce_key 同键），不再连排刷屏；计数经 _notif_count 显示 ×N */
+    orchestrator_worker_alert:1,
     /* 实施75：系统状态（维护/降级留痕，notify-bus 写入）按 data.id 合并——
        一天 N 次维护只留最新一条，且不计未读角标（实时态由右下胶囊承载） */
     sys_status:1 };
   function _coalesceKey(n){
     if(!n||!_COALESCE_TYPES[n.type]) return null;
     var d=n.data||{};
+    if(n.type==='orchestrator_worker_alert'){
+      var ids=(d.problems||[]).map(function(p){ return String((p&&p.id)||'?'); }).sort();
+      return n.type+'|'+(ids.length?ids.join('|'):'recovered');
+    }
     return n.type+'|'+(d.conversation_id||d.draft_id||d.id||'');
   }
   // P0-协作闭环：@提及按 note_id 幂等去重（SSE 重连重放同一条注解不堆重复条目，
@@ -3607,7 +3614,31 @@ window._pillChainFail=window._pillChainFail||function(fn){
     cta_clicked:    { iconName:'star', bg:'#ffedd5', label:window.T('base.notif.type_cta_click'), accent:'#b45309' },
     bot_peer_alert: { iconName:'pause', bg:'#fee2e2', label:window.T('base.notif.type_budget_hit'), accent:'#dc2626' },
     sys_status:     { iconName:'gear', bg:'#e0e7ff', label:window.T('ntf.type_sys'), accent:'#6366f1' },
+    /* 工单#142：白名单事件全量人话映射——缺映射的类型不再裸显英文事件名
+       （_renderItem 直接不渲染 + 服务端 _notif_type_registered 拦截，双保险） */
+    queue_alert:    { iconName:'clock', bg:'#fee2e2', label:window.T('base.notif.type_queue_alert'), accent:'#dc2626' },
+    stage_advance:  { iconName:'star', bg:'#ede9fe', label:window.T('base.notif.type_stage_advance'), accent:'#7c3aed' },
+    stage_advance_pending:{ iconName:'clock', bg:'#fef3c7', label:window.T('base.notif.type_stage_advance_pending'), accent:'#b45309' },
+    stage_downgrade:{ iconName:'trend-down', bg:'#fef3c7', label:window.T('base.notif.type_stage_downgrade'), accent:'#b45309' },
+    stage_reunion:  { iconName:'heart', bg:'#fce7f3', label:window.T('base.notif.type_stage_reunion'), accent:'#be185d' },
+    stage_sync:     { iconName:'refresh', bg:'#ede9fe', label:window.T('base.notif.type_stage_sync'), accent:'#7c3aed' },
+    workflow_step:  { iconName:'zap', bg:'#d1fae5', label:window.T('base.notif.type_workflow_step'), accent:'#0f766e' },
+    workflow_execution_completed:{ iconName:'check', bg:'#d1fae5', label:window.T('base.notif.type_wf_done'), accent:'#16a34a' },
+    workflow_execution_failed:{ iconName:'x', bg:'#fee2e2', label:window.T('base.notif.type_wf_failed'), accent:'#dc2626' },
+    workflow_execution_cancelled:{ iconName:'pause', bg:'#f3f4f6', label:window.T('base.notif.type_wf_cancelled'), accent:'#6b7280' },
+    health_alert:   { iconName:'alert', bg:'#fee2e2', label:window.T('base.notif.type_health_alert'), accent:'#dc2626' },
+    billing_alert:  { iconName:'chart', bg:'#fef3c7', label:window.T('base.notif.type_billing_alert'), accent:'#d97706' },
+    orchestrator_worker_alert:{ iconName:'alert', bg:'#fee2e2', label:window.T('base.notif.type_orch_worker'), accent:'#dc2626' },
+    ops_report:     { iconName:'chart', bg:'#e0e7ff', label:window.T('base.notif.type_ops_report'), accent:'#6366f1' },
   };
+  /* ③ 流程心跳类（阶段流转/工作链步骤/日报等纯内部节奏信号）：默认收进
+     「技术详情」折叠区，不直排「其它」标签、不计未读角标——告警级
+     （orchestrator_worker_alert/health/billing/queue/工作链失败）仍直显。 */
+  var _TECH_TYPES={ stage_advance:1, stage_advance_pending:1, stage_downgrade:1,
+    stage_reunion:1, stage_sync:1, workflow_step:1,
+    workflow_execution_completed:1, workflow_execution_cancelled:1, ops_report:1 };
+  function _isTech(n){ return !!(n && _TECH_TYPES[n.type]); }
+  var _unmappedWarned={};
   // 群组动态：inbox_message 且会话类型为群组/频道 → 折叠展示、不计未读、不打扰
   function _isGroup(n){
     if(!n || n.type!=='inbox_message') return false;
@@ -3627,11 +3658,21 @@ window._pillChainFail=window._pillChainFail||function(fn){
   }
 
   function _renderItem(n){
-    var meta = _TYPE_META[n.type] || { iconName:'pin', bg:'#f3f4f6', label:n.type||window.T('base.notif.type_default'), accent:'transparent' };
+    var meta = _TYPE_META[n.type];
+    if(!meta){
+      /* 工单#142：缺人话映射的类型不许进用户可见通知（裸英文事件名曾连排刷屏）。
+         服务端 _notif_type_registered 已拦截新写入；这里兜住历史存量与旧后端。 */
+      if(n.type && !_unmappedWarned[n.type]){
+        _unmappedWarned[n.type]=1;
+        try{ console.warn('[notif] event type lacks i18n mapping, hidden:', n.type); }catch(_){}
+      }
+      return '';
+    }
     var ts = n._notif_ts || 0;
     var unread = ts > _readAt;
     var d = n.data || {};
     var title = meta.label;
+    if((n._notif_count||0)>1) title += ' ×'+n._notif_count;
     var sub = '';
     if(n.type==='inbox_message'){
       sub = window.Tf('base.notif.msg_sub',{name:(d.name||d.display_name||d.chat_key||'?'),text:(d.preview||d.text||'').slice(0,40)});
@@ -3662,6 +3703,37 @@ window._pillChainFail=window._pillChainFail||function(fn){
       sub = window.Tf(_bk,{name:_bn,used:(_bp.used!=null?_bp.used:'?'),limit:(_bp.limit!=null?_bp.limit:'?')});
     } else if(n.type==='sys_status'){
       sub = String(d.text||'').slice(0,80);
+    } else if(n.type==='orchestrator_worker_alert'){
+      sub = d.recovered ? window.T('base.notif.orch_worker_sub_ok')
+                        : window.Tf('base.notif.orch_worker_sub',{n:(d.problems||[]).length||'?'});
+    } else if(n.type==='health_alert'){
+      sub = d.recovered ? window.T('base.notif.health_sub_ok')
+                        : window.Tf('base.notif.health_sub',{n:(d.problems||[]).length||'?'});
+    } else if(n.type==='billing_alert'){
+      sub = d.recovered ? window.T('base.notif.billing_sub_ok')
+                        : window.Tf('base.notif.billing_sub',{n:(d.anomalies||[]).length||'?'});
+    } else if(n.type==='queue_alert'){
+      sub = window.Tf('base.notif.queue_alert_sub',{name:(d.display_name||'?'),min:(d.wait_min||Math.round((d.wait_sec||0)/60))});
+    } else if(n.type==='stage_advance'){
+      sub = window.Tf('base.sse.stage_advance',{from:(d.previous_stage_label||'?'),to:(d.stage_label||'?')});
+    } else if(n.type==='stage_advance_pending'){
+      sub = window.Tf('base.sse.stage_pending',{from:(d.confirmed_stage_label||'?'),to:(d.pending_stage_label||'?')});
+    } else if(n.type==='stage_downgrade'){
+      sub = window.Tf('base.sse.stage_downgrade',{stage:(d.stage_label||'?')});
+    } else if(n.type==='stage_reunion'){
+      sub = window.Tf('base.sse.stage_reunion',{stage:(d.stage_label||'')});
+    } else if(n.type==='stage_sync'){
+      sub = window.Tf('base.notif.stage_sync_sub',{stage:(d.target_stage_label||d.target_stage||'?')});
+    } else if(n.type==='workflow_step'){
+      sub = window.Tf('base.sse.wf_step',{text:(d.suggested_text||'').slice(0,40)});
+    } else if(n.type==='workflow_execution_completed'){
+      sub = window.Tf('base.notif.wf_done_sub',{name:(d.chain_name||'?')});
+    } else if(n.type==='workflow_execution_failed'){
+      sub = window.Tf('base.sse.wf_failed',{name:(d.chain_name||'?')});
+    } else if(n.type==='workflow_execution_cancelled'){
+      sub = window.Tf('base.notif.wf_cancelled_sub',{name:(d.chain_name||'?')});
+    } else if(n.type==='ops_report'){
+      sub = window.T('base.notif.ops_report_sub');
     }
     return '<div class="ws-notif-item'+(unread?' unread':'')+'" style="border-left-color:'+(meta.accent||'transparent')+';" onclick="window.__wsNotif.click(\''+esc(JSON.stringify(n).replace(/'/g,'\\'+"'"))+'\')">'
       +'<div class="ws-notif-icon" style="background:'+meta.bg+'">'+(typeof uiIcon==='function'?uiIcon(meta.iconName||'pin',14):'')+'</div>'
@@ -3681,6 +3753,9 @@ window._pillChainFail=window._pillChainFail||function(fn){
     sla_alert:'alert', draft_sla_breach:'alert', escalation:'alert',
     anomaly_alert:'alert', queue_alert:'alert',
     bot_peer_alert:'alert',
+    /* 工单#142：告警级系统事件归「告警」标签，不再挤在「其它」里 */
+    orchestrator_worker_alert:'alert', health_alert:'alert',
+    billing_alert:'alert', workflow_execution_failed:'alert',
   };
   function _nfMatch(n){
     if(_nfMode==='all') return true;
@@ -3688,10 +3763,12 @@ window._pillChainFail=window._pillChainFail||function(fn){
     return b===_nfMode;
   }
 
+  var _techOpen = false;
   function _renderNotif(){
     if(!list) return;
     var all = _notifications.slice().reverse().filter(_nfMatch);
-    var main = all.filter(function(n){ return !_isGroup(n); }).slice(0,50);
+    var main = all.filter(function(n){ return !_isGroup(n) && !_isTech(n); }).slice(0,50);
+    var techs = all.filter(_isTech).slice(0,50);
     var groups = all.filter(_isGroup).slice(0,50);
     var html = '';
     /* 实施75：「进行中」置顶分组＝右下状态胶囊的明细面（同一快照单源）。
@@ -3730,6 +3807,14 @@ window._pillChainFail=window._pillChainFail||function(fn){
     }
     html += main.length ? main.map(_renderItem).join('')
                         : '<div class="ws-notif-empty">'+window.T('base.notif.empty')+'</div>';
+    /* ③（工单#142）流程心跳类收进「技术详情」折叠区：默认收起，想看的人展开 */
+    if(techs.length){
+      html += '<div class="ws-notif-grp-hdr" id="ws-notif-tech-hdr">'
+        +'<span>'+window.Tf('base.notif.tech_hdr',{n:techs.length})+'</span>'
+        +'<span class="ws-notif-grp-cv">'+(_techOpen?window.T('base.notif.collapse'):window.T('base.notif.expand'))+'</span></div>'
+        +'<div class="ws-notif-grp-list" style="display:'+(_techOpen?'block':'none')+';">'
+        + techs.map(_renderItem).join('') + '</div>';
+    }
     if(groups.length){
       html += '<div class="ws-notif-grp-hdr" id="ws-notif-grp-hdr">'
         +'<span>'+window.Tf('base.notif.grp_hdr',{n:groups.length})+'</span>'
@@ -3738,15 +3823,20 @@ window._pillChainFail=window._pillChainFail||function(fn){
         + groups.map(_renderItem).join('') + '</div>';
     }
     list.innerHTML = html;
+    var th = document.getElementById('ws-notif-tech-hdr');
+    if(th) th.addEventListener('click', function(){ _techOpen=!_techOpen; _renderNotif(); });
     var gh = document.getElementById('ws-notif-grp-hdr');
     if(gh) gh.addEventListener('click', function(){ _grpOpen=!_grpOpen; _renderNotif(); });
   }
 
   function _updateBadge(){
     // 不计入铃铛角标的：①群组动态（被动展示）②复发型告警（升级/SLA/队列…
-    // 这些是「实时积压」，已由顶栏药丸承载并会被服务端反复重发；若计入角标会永远 99+ 且「全部已读」压不掉）。
+    // 这些是「实时积压」，已由顶栏药丸承载并会被服务端反复重发；若计入角标会永远 99+ 且「全部已读」压不掉）
+    // ③流程心跳类（技术详情折叠区，工单#142——默认不可见就不该顶角标）
+    // ④缺 i18n 映射的类型（面板里不渲染，计了角标会出现「有数字点开却没东西」）。
     var unread = _notifications.filter(function(n){
-      return (n._notif_ts||0) > _readAt && !_isGroup(n) && !_COALESCE_TYPES[n.type];
+      return (n._notif_ts||0) > _readAt && !_isGroup(n) && !_COALESCE_TYPES[n.type]
+        && !_isTech(n) && !!_TYPE_META[n.type];
     }).length;
     if(!badge) return;
     badge.textContent = unread > 99 ? '99+' : String(unread);

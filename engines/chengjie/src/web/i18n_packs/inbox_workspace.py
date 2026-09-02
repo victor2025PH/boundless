@@ -580,7 +580,8 @@ ZH = {
     "inbox.confirm.ok": "确定",
     "inbox.confirm.title": "确认操作",
     "inbox.conn.reconnecting": "⚠ 连接中断，自动重连中…",
-    "inbox.conn.soft": "⚠ 连接波动，自动重试中…",
+    # 黄条措辞对齐全局守卫（fe.guard.net_retry）：只说「重试中会自愈」，重启瞬断不吓人
+    "inbox.conn.soft": "⚠ 连接中，正在重试…（恢复后自动消失）",
     "inbox.conn.down": "⛔ 连接中断，持续重连中…（数据保留，恢复后自动刷新）",
     # P0-2 自诊断分流（2026-08-12）：down 态由独立信标探测判定是谁的问题，
     # 措辞直接给结论和动作建议——终结「是我的网还是系统挂了」的猜谜与误报。
@@ -1463,6 +1464,8 @@ ZH = {
     "inbox.filter.buried_t": "有 {n} 条已归档会话收到新消息（在「更多 ▾ · 归档」里查看）",
     # 「更多」按钮红点的悬浮解释（P0-198）：被埋＝归档着还有未读，客户在等而列表看不见
     "inbox.filter.buried_t": "归档里有 {n} 个会话还有未读消息（客户在等，默认视图看不到）",
+    # #142 被埋会话界面化：筛选条下常驻入口（徽标已剔归档未读，这里是它们的去处）
+    "inbox.buried.hint": "归档中还有 {n} 条未读",
     "inbox.filter.claimed": "我的",
     "inbox.filter.more": "更多",
     "inbox.filter.removed": "已移除",
@@ -3278,7 +3281,7 @@ EN = {
     "inbox.confirm.ok": "OK",
     "inbox.confirm.title": "Confirm action",
     "inbox.conn.reconnecting": "\u26a0 Connection lost, auto-reconnecting\u2026",
-    "inbox.conn.soft": "\u26a0 Connection unstable, retrying\u2026",
+    "inbox.conn.soft": "\u26a0 Reconnecting, retrying automatically\u2026 (clears itself once back)",
     "inbox.conn.down": "\u26d4 Connection lost, reconnecting\u2026 (data kept; auto-refreshes on recovery)",
     # P0-2 self-diagnosis wording split (2026-08-12) — see zh block note.
     "inbox.conn.down_local": "\u26a0 This computer's network is down (the system itself is fine) \u2014 check LAN/Wi-Fi; data kept, auto-refreshes once you're back online",
@@ -4142,6 +4145,7 @@ EN = {
     "inbox.filter.buried_t": "{n} archived conversation(s) got new messages (see More ▾ · Archived)",
     "inbox.filter.buried_t": "{n} archived conversation(s) still have unread messages "
                              "(customers waiting, hidden from default views)",
+    "inbox.buried.hint": "{n} unread in archive",
     "inbox.filter.claimed": "Mine",
     "inbox.filter.more": "More",
     "inbox.filter.removed": "Removed",

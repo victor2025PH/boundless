@@ -59,6 +59,21 @@ MAX_RESTARTS = 8             # 连续失败上限 → 熔断（标 error，停�
 # 故只每 N 轮打一行（约 1h），日常读数走 status 的 recv_cycles。
 _LINE_RECV_CYCLE_LOG_EVERY = 360
 
+# send_media 超时兜底默认值（秒）——2026-09-02 WEXX7E 实锤：LINE worker 的签名桥
+# Node 进程僵死后，媒体发送 await 永久无果、UI 只能靠前端 fetch 超时猜「网络异常」。
+# 45s 的依据：出站媒体上限 20MB，okline 单请求 HTTP 超时 30s，正常最慢一笔
+# （占位→OBS 上传→配文）也该在 40s 内出结果；再慢就是悬死，明确报失败比无限等强。
+# 可经 config.orchestrator.send_media_timeout_sec 调整，<=0 = 关闭兜底（旧行为）。
+DEFAULT_SEND_MEDIA_TIMEOUT_SEC = 45.0
+
+
+def _send_media_timeout_sec(config: Optional[Dict[str, Any]]) -> float:
+    try:
+        v = ((config or {}).get("orchestrator") or {}).get("send_media_timeout_sec")
+        return float(v) if v is not None else DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+    except (TypeError, ValueError):
+        return DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+
 
 def account_key(platform: str, account_id: str) -> str:
     return f"{str(platform).lower()}:{account_id}"
@@ -539,10 +554,13 @@ class AccountOrchestrator:
         # 排障插桩（2026-08-17 主号贴纸 loop 悬案）：静态推理与运行时行为矛盾
         # （守卫代码在盘在 pyc，发送却零守卫日志且跨 loop 崩）——把「实际派发给
         # 谁、当前 loop 是谁」打成事实。谜底揭开后可降 debug。
+        # 2026-09-02 WEXX7E 悬死实锤后升级为三段观测：本行=「已受理」，worker impl
+        # 起点打「开始执行」，下方 finally 后打「结果」——三段缺哪段，悬死点即哪段。
         try:
-            logger.info("[orchestrator] send_media dispatch %s:%s worker=%s cur_loop=%s",
+            logger.info("[orchestrator] send_media dispatch %s:%s worker=%s cur_loop=%s"
+                        " type=%s origin=%s",
                         platform, account_id, type(m.worker).__name__,
-                        id(asyncio.get_running_loop()))
+                        id(asyncio.get_running_loop()), media_type, origin)
         except Exception:
             pass
         _kw: Dict[str, Any] = dict(
@@ -561,8 +579,43 @@ class AccountOrchestrator:
                     _kw["media_url"] = media_url
             except (ValueError, TypeError):
                 pass
+        _timeout = _send_media_timeout_sec(self._config)
+        _t0 = time.monotonic()
         try:
-            res = await _sm(chat_key, **_kw)
+            try:
+                if _timeout > 0:
+                    res = await asyncio.wait_for(_sm(chat_key, **_kw), timeout=_timeout)
+                else:
+                    res = await _sm(chat_key, **_kw)
+            except asyncio.TimeoutError:
+                # 超时兜底（2026-09-02 WEXX7E）：worker 悬死时 await 永久无果，
+                # UI 只能靠前端超时猜「网络异常」。这里把悬死翻译成明确失败
+                # （delivered=False → 路由回 502，坐席 5 秒内可读到真话），并
+                # 尝试踢醒 worker（LINE 的签名桥僵死是已证成因，见
+                # LineProtocolWorker.kick_stuck_send）。注意 wait_for 只取消
+                # 协程侧，卡死的线程还在——不踢醒的话下一笔照样悬死。
+                logger.warning(
+                    "[orchestrator] send_media result %s:%s chat=%s type=%s "
+                    "delivered=False error=send_timeout（%.0fs 无结果，worker 疑似悬死）",
+                    platform, account_id, chat_key, media_type, _timeout)
+                _kick = getattr(m.worker, "kick_stuck_send", None)
+                if callable(_kick):
+                    try:
+                        _kick()
+                    except Exception:
+                        logger.debug("[orchestrator] kick_stuck_send 失败",
+                                     exc_info=True)
+                return {"delivered": False, "error": "send_timeout",
+                        "timeout_sec": _timeout}
+            except Exception as exc:
+                # 三段观测之「结果=异常」：此前 worker 抛错只有调用方（路由/自动链）
+                # 各自处置，编排器侧零痕迹——诊断包里对不上「派发了却没下文」。
+                logger.warning(
+                    "[orchestrator] send_media result %s:%s chat=%s type=%s "
+                    "delivered=False elapsed=%dms exc=%s",
+                    platform, account_id, chat_key, media_type,
+                    int((time.monotonic() - _t0) * 1000), str(exc)[:200])
+                raise
         finally:
             # 无论成功失败都清理微扰临时副本（原图不受影响）
             try:
@@ -570,6 +623,16 @@ class AccountOrchestrator:
                 cleanup_temp(_send_path, _dedup_temp)
             except Exception:
                 logger.debug("[orchestrator] 微扰临时文件清理失败", exc_info=True)
+        # 三段观测之「结果」：成功路径此前完全静默（send_line_media 成功只记 stats
+        # 不打日志）——「dispatch 后没下文」到底是悬死还是成功，诊断包无从分辨。
+        logger.info(
+            "[orchestrator] send_media result %s:%s chat=%s type=%s delivered=%s "
+            "mid=%s error=%s elapsed=%dms",
+            platform, account_id, chat_key, media_type,
+            (res.get("delivered", True) if isinstance(res, dict) else bool(res)),
+            (str(res.get("message_id") or "") if isinstance(res, dict) else ""),
+            (str(res.get("error") or "-") if isinstance(res, dict) else "-"),
+            int((time.monotonic() - _t0) * 1000))
         # P0-4：带回平台消息 id(wamid)，让出站回写与 worker 的 fromMe 回显同键去重
         _mid = str(res.get("message_id") or "") if isinstance(res, dict) else ""
         try:
@@ -1920,6 +1983,19 @@ class LineProtocolWorker:
             raise RuntimeError(f"缺少 LINE session tokens: {path}")
         from okline import OkLine
         self.client = OkLine.from_tokens_file(path)
+        # HTTP 423 病理修复（2026-09-02，skuio 客户机实锤）：新 client 的 _reqseq
+        # 从 0 起，而服务端去重键是 (reqSeq, 消息内容)——应用重启后媒体占位（内容
+        # 彼此相同）撞上一轮进程的历史 reqSeq 被判重 → 返回旧 id → OBS 上传 423 →
+        # 按失败撤回＝误删客户已收到的消息。启动即推进到时间基线新鲜区间（跨重启
+        # 单调），侧车文件 <tokens>.reqseq 防时钟回拨。软失败：还有发送侧的 423
+        # 判重重试兜底（见 send_line_media）。
+        try:
+            from src.integrations.line_media import bump_client_reqseq
+            bump_client_reqseq(self.client, account_id=self.account_id,
+                               floor_file=path + ".reqseq")
+        except Exception:  # noqa: BLE001
+            logger.warning("[line-worker] reqSeq 推进失败（重启后首条媒体可能撞判重）"
+                           " account=%s", self.account_id, exc_info=True)
         self._loop = asyncio.get_running_loop()
         self._start_receiver()
         self._start_pull_sync(path)
@@ -2325,13 +2401,59 @@ class LineProtocolWorker:
         """向后兼容薄封装：仅取显示名（内部走 ``_resolve_peer_identity``，头像一并缓存）。"""
         return self._resolve_peer_identity(mid)[0]
 
+    # _api_lock 获取限时（秒）：一笔悬死的请求（2026-09-02 WEXX7E：签名桥 Node 僵死）
+    # 持锁不放时，后续所有调用原本会在锁上**无限**排队且零日志。限时后排队者会以
+    # 明确异常出局（编排器/调用方按失败路径处置），而不是陪着一起悬死。
+    # 90s 的依据：合法最慢的持锁操作是 20MB 媒体上传（okline 单请求 30s 超时 ×
+    # 占位/上传/配文三步），限时必须显著大于它，否则大文件排队会被误杀。
+    _API_LOCK_TIMEOUT_SEC = 90.0
+
     async def _api_call(self, fn: Any, *args: Any, **kw: Any) -> Any:
         """在线程池里串行调用 okline（同步库）。锁在**线程内**取，见 ``_api_lock`` 说明。"""
         def _locked() -> Any:
-            with self._api_lock:
+            if not self._api_lock.acquire(timeout=self._API_LOCK_TIMEOUT_SEC):
+                raise RuntimeError(
+                    f"line api 串行锁 {self._API_LOCK_TIMEOUT_SEC:.0f}s 未取得"
+                    f"（前一笔请求疑似悬死）account={self.account_id}")
+            try:
                 return fn(*args, **kw)
+            finally:
+                self._api_lock.release()
 
         return await asyncio.to_thread(_locked)
+
+    def kick_stuck_send(self) -> None:
+        """恢复锤：编排器 ``send_media`` 超时兜底时调用（2026-09-02 WEXX7E 悬死）。
+
+        该链路唯一**无界**的阻塞点是 okline 的签名桥：``LtsmBridge._readline()``
+        对 Node 子进程的 stdout 裸 ``readline()`` 无超时，且 ``_call`` 全程持
+        ``bridge._lock``——Node 僵而不死（写不出响应也不退出）时，持锁线程永久
+        阻塞，同 client 的一切签名请求（发送、SSE 长轮询）跟着悬死，正是钧机
+        「dispatch 后无下文 + SSE 停摆靠拉取兜底」的完整病象。
+
+        处置：**绕开** ``bridge._lock`` 直接 terminate Node 进程——悬死线程的
+        readline 立即见 EOF → ``HmacSignerError`` 抛出 → 各级锁释放；下一笔请求
+        okline 的 ``_ensure_started`` 会自动重启桥，无需重启 worker。刻意不走
+        公开口 ``bridge.close()``：它也要取 ``bridge._lock``，锁正被悬死线程
+        持有时会二次死锁。访问 okline 私有属性是清醒的取舍，属性缺失时静默退出
+        （版本漂移不该让恢复锤反过来抛错）。
+        """
+        try:
+            signer = getattr(getattr(self.client, "transport", None), "_signer", None)
+            proc = getattr(signer, "_proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                logger.warning(
+                    "[line-worker] kick_stuck_send: 已终结疑似僵死的签名桥 Node 进程"
+                    " pid=%s account=%s（下一笔请求自动重启桥）",
+                    getattr(proc, "pid", "?"), self.account_id)
+            else:
+                logger.info(
+                    "[line-worker] kick_stuck_send: 签名桥无存活 Node 进程，无可踢"
+                    " account=%s（悬死点不在签名桥）", self.account_id)
+        except Exception:
+            logger.debug("[line-worker] kick_stuck_send 失败 account=%s",
+                         self.account_id, exc_info=True)
 
     async def mark_read(self, chat_key: str) -> bool:
         """把会话标记已读（``sendChatChecked``），拟人「先看后回」。
@@ -2392,6 +2514,16 @@ class LineProtocolWorker:
         if self.client is None:
             raise RuntimeError("line client 未连接")
         from src.integrations.line_media import resolve_line_media_cfg, send_line_media
+        # 三段观测之「开始执行」（2026-09-02 WEXX7E）：编排器 dispatch 日志之后、
+        # okline 真调用之前的存在证明——缺这行=协程没跑起来（loop/派发问题），
+        # 有这行没结果=卡在 okline 调用链（锁/签名桥/网络）。
+        _size = -1
+        try:
+            _size = os.path.getsize(media_path)
+        except OSError:
+            pass
+        logger.info("[line-worker] send_media begin acct=%s chat=%s type=%s size=%s",
+                    self.account_id, chat_key, media_type, _size)
         # 整段（占位→上传→配文）持锁：中途被另一次发送插入会打乱 reqSeq，
         # 也会让「占位」与「上传」之间夹进别人的请求。
         return await self._api_call(

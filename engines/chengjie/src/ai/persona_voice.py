@@ -47,20 +47,56 @@ _CLONE_BLEED_KEYS = (
 )
 
 
-def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> None:
+# voice_profile 里「指认一把具体声音」的字符串键——占位串清洗只看这些键
+# （reference_text 等自由文本不参与，防误伤）。
+_VOICE_ID_KEYS = ("backend", "voice", "speaker_id", "reference_audio_path")
+
+
+def _strip_voice_placeholders(vp: Dict[str, Any]) -> Dict[str, Any]:
+    """把 voice_profile 里的占位串键（如 ``voice: "___"``）剥掉，返回新 dict。
+
+    #137/#140（2026-09-02）：人设工作室的半成品语音设置以占位串落库，
+    人设层 merge 时覆盖全局克隆档 → 克隆声整机静默变 edge 通用声。
+    读取侧统一口径：**占位串视同未设置**（判定 SSOT＝
+    lang_voice_route.is_voice_placeholder）。无占位串时原样返回入参。
+    """
+    try:
+        from src.ai.lang_voice_route import is_voice_placeholder
+        dirty = [
+            k for k in _VOICE_ID_KEYS
+            if isinstance(vp.get(k), str) and is_voice_placeholder(vp[k])
+        ]
+        if not dirty:
+            return vp
+        out = dict(vp)
+        for k in dirty:
+            out.pop(k, None)
+        logger.debug(
+            "[persona_voice] voice_profile 占位串键视同未设置：%s", dirty)
+        return out
+    except Exception:
+        return vp
+
+
+def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> bool:
     """Apply a persona ``voice_profile`` on top of an already merged voice cfg.
 
     If the persona explicitly selects a *different* backend than the inherited
     one, clone-specific fields are dropped first so a public neural voice does
     not accidentally reuse the global clone's reference audio / consent flags.
+
+    Returns True when the profile actually contributed (voice_source 观测用)。
     """
     if not isinstance(vp, dict):
-        return
+        return False
+    # 占位串键（"___" 之类）视同未设置——剥掉后若一无所有，整份按空占位忽略，
+    # 全局克隆档不被半成品人设配置覆盖（#137/#140）。
+    vp = _strip_voice_placeholders(vp)
     # Ignore empty UI placeholders such as {backend:"", voice:""}.
     if not any(vp.get(k) for k in (
         "enabled", "backend", "voice", "speaker_id", "reference_audio_path",
     )):
-        return
+        return False
     base_vp = dict(merged.get("voice_profile") or {})
     new_backend = str(vp.get("backend") or "").strip().lower()
     old_backend = str(base_vp.get("backend") or "").strip().lower()
@@ -77,6 +113,7 @@ def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> None:
     for k in ("backend", "voice", "model", "format"):
         if vp.get(k):
             merged[k] = vp[k]
+    return True
 
 
 def resolve_voice_cfg(
@@ -113,6 +150,10 @@ def resolve_voice_cfg(
             if v is not None:
                 merged[k] = v
 
+        # 生效音色来自哪一层（#137/#140 观测收口：合成 INFO 打「来源」用）。
+        # 人设层真正贡献了配置才升格为 persona——半成品占位档被剥空时仍算全局。
+        _voice_layer = "global"
+
         # ── Layer 2: config.yaml per-persona voice_profile ──
         quirks_str = ""
         if persona_id:
@@ -127,7 +168,8 @@ def resolve_voice_cfg(
                 vp = p.get("voice_profile")
                 if not isinstance(vp, dict):
                     break
-                _merge_voice_profile(merged, vp)
+                if _merge_voice_profile(merged, vp):
+                    _voice_layer = f"persona:{persona_id}"
                 break
 
         # ── Layer 3 (highest): runtime PersonaManager profiles ──
@@ -138,10 +180,29 @@ def resolve_voice_cfg(
                 from src.utils.persona_manager import PersonaManager
                 p_rt = PersonaManager.get_instance().get_persona_by_id(str(persona_id))
                 if isinstance(p_rt, dict):
-                    _merge_voice_profile(merged, p_rt.get("voice_profile") or {})
+                    if _merge_voice_profile(merged, p_rt.get("voice_profile") or {}):
+                        _voice_layer = f"persona:{persona_id}"
                     quirks_str = str(p_rt.get("quirks") or quirks_str).strip()
             except Exception:
                 pass
+
+        if merged:   # 空配置仍返回 {}（既有契约：调用方以空 dict 判「无语音配置」）
+            merged["voice_source_layer"] = _voice_layer
+
+        # 顶层音色占位串同样视同未设置（全局 voice_reply.voice 也可能被存成
+        # "___"）——留着会被 TTSPipeline/路由当真实音色消费。
+        try:
+            from src.ai.lang_voice_route import is_voice_placeholder
+            for _k in ("voice", "fallback_voice"):
+                if is_voice_placeholder(str(merged.get(_k) or "")):
+                    merged.pop(_k, None)
+            _vp_top = merged.get("voice_profile")
+            if isinstance(_vp_top, dict):
+                _vp_clean = _strip_voice_placeholders(_vp_top)
+                if _vp_clean is not _vp_top:
+                    merged["voice_profile"] = _vp_clean
+        except Exception:
+            pass
 
         if quirks_str:
             merged["persona_quirks"] = quirks_str
@@ -371,8 +432,10 @@ def resolve_effective_voice_context(
         # Inline/snapshot bindings can carry a voice_profile without an id. Merge
         # it directly so legacy chat bindings still get their own voice.
         if isinstance(resolved_persona, dict):
-            _merge_voice_profile(
-                voice_cfg, resolved_persona.get("voice_profile") or {})
+            if _merge_voice_profile(
+                    voice_cfg, resolved_persona.get("voice_profile") or {}):
+                voice_cfg["voice_source_layer"] = (
+                    f"persona:{resolved_id}" if resolved_id else "persona:inline")
         # #93（2026-09-01 女王会话实锤）：克隆档「齐备但 enabled 键缺失」修补。
         # TTSPipeline._effective_backend 只认 enabled=true——克隆四件套（克隆
         # backend + 参考音/speaker + 授权）都在、唯独 enabled 键在某次 merge/
@@ -394,6 +457,22 @@ def resolve_effective_voice_context(
                     resolved_id or "-", _vp_fix.get("backend"))
         except Exception:
             logger.debug("[persona_voice] 克隆档 enabled 修补跳过", exc_info=True)
+
+    # 生效音色来源标签（#137/#140 强制观测）：TTSPipeline 每次合成的 INFO 行
+    # 据此打「人设X/全局/会话覆盖」——占位串事故里「配置到底谁在生效」全靠
+    # 猜，这行让下一次诊断包直接给出答案。层（voice_source_layer，谁贡献了
+    # 音色配置）× 人设解析档（persona_source，为什么选中这个人设）合成一个
+    # 人话标签。
+    _layer = str(voice_cfg.get("voice_source_layer") or "global")
+    if pin_system:
+        voice_cfg["voice_source"] = "全局(系统通用音色)"
+    elif _layer.startswith("persona:"):
+        _pname = _layer.split(":", 1)[1] or resolved_id or "?"
+        voice_cfg["voice_source"] = (
+            f"会话覆盖(人设{_pname})" if source == "conv_override"
+            else f"人设{_pname}")
+    else:
+        voice_cfg["voice_source"] = "全局"
 
     # 会话口味键（voice_opener_guard，P0-2 2026-08-03）：三条语音链（A 线
     # voice_reply / B 线 autosend / 坐席手动）都经本解析器 → 在此注入一次，

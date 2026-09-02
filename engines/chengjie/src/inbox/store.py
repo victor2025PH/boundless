@@ -2515,8 +2515,27 @@ class InboxStore:
                  "platform": str(r["platform"] or ""),
                  "account_id": str(r["account_id"] or "")} for r in rows]
 
+    # 「用户可见真未读」的私聊白名单（#120）：与 _contacts_union_sql 同源——
+    # chat_type 是迁移列，存量群可能仍顶着 'private'，故叠 legacy 群启发式。
+    # sum_effective_unread_by_account / sum_archived_unread_by_account 共用，
+    # 保证「主徽标 + 归档入口」两枚数字口径互补（同一全集按 archived 二分）。
+    _VISIBLE_UNREAD_WHERE = (
+        "c.chat_type IN ('private', '') "
+        "AND NOT (c.platform = 'telegram' AND c.chat_key GLOB '-[0-9]*') "
+        "AND NOT (c.platform = 'line' AND ("
+        "LOWER(c.chat_key) LIKE '%:group:%' "
+        "OR LOWER(c.chat_key) LIKE '%:room:%'))"
+    )
+    # 有效未读 CASE：与 Python effective_unread（v2）对齐——
+    # unread>0 AND 入站闸门 ts > last_read_ts，闸门=last_in_ts（0 回落 last_ts）。
+    _EFFECTIVE_UNREAD_CASE = (
+        "CASE WHEN c.unread > 0 "
+        "AND COALESCE(NULLIF(c.last_in_ts, 0), c.last_ts) "
+        "> COALESCE(c.last_read_ts, 0) THEN c.unread ELSE 0 END"
+    )
+
     def sum_effective_unread_by_account(
-        self, *, platform: str = "",
+        self, *, platform: str = "", include_archived: bool = False,
     ) -> Dict[Tuple[str, str], int]:
         """按 (platform, account_id) 汇总**用户可见的有效未读**。
 
@@ -2530,24 +2549,21 @@ class InboxStore:
         只数**私聊 + 未归档**。旧口径全表 SUM 把群/频道与归档会话也计进
         rail 徽标，而列表默认视图根本不显示它们：坐席看到「全部账号⑩/TG⑦」
         列表却无一条未读行。群未读有群组动态区自己的徽章、归档未读有
-        「更多」菜单的被埋红点，各自有归宿，不进主徽标。私聊白名单 +
-        legacy 群启发式与 ``_contacts_union_sql`` 同源（chat_type 是迁移列，
-        存量群可能仍顶着 'private'）。
+        「归档中还有未读」入口（``sum_archived_unread_by_account``），各自有
+        归宿，不进主徽标。
+
+        ``include_archived=True``＝#120 之前的旧口径（归档未读也计入徽标），
+        仅供 ``inbox.badge.include_archived`` 配置显式回退，勿新增调用。
         """
         sql = (
-            "SELECT c.platform, c.account_id, COALESCE(SUM(CASE "
-            "WHEN c.unread > 0 AND COALESCE(NULLIF(c.last_in_ts, 0), c.last_ts) "
-            "> COALESCE(c.last_read_ts, 0) "
-            "THEN c.unread ELSE 0 END), 0) AS n "
+            "SELECT c.platform, c.account_id, "
+            f"COALESCE(SUM({self._EFFECTIVE_UNREAD_CASE}), 0) AS n "
             "FROM conversations c "
             "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-            "WHERE c.chat_type IN ('private', '') "
-            "AND NOT (c.platform = 'telegram' AND c.chat_key GLOB '-[0-9]*') "
-            "AND NOT (c.platform = 'line' AND ("
-            "LOWER(c.chat_key) LIKE '%:group:%' "
-            "OR LOWER(c.chat_key) LIKE '%:room:%')) "
-            "AND COALESCE(m.archived, 0) = 0"
+            f"WHERE {self._VISIBLE_UNREAD_WHERE}"
         )
+        if not include_archived:
+            sql += " AND COALESCE(m.archived, 0) = 0"
         params: List[Any] = []
         if platform:
             sql += " AND c.platform = ?"
@@ -2558,6 +2574,44 @@ class InboxStore:
         out: Dict[Tuple[str, str], int] = {}
         for r in rows:
             out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = int(r["n"] or 0)
+        return out
+
+    def sum_archived_unread_by_account(
+        self, *, platform: str = "",
+    ) -> Dict[Tuple[str, str], Dict[str, int]]:
+        """按 (platform, account_id) 汇总**已归档会话**的有效未读（被埋会话的界面化口径）。
+
+        ``sum_effective_unread_by_account`` 的镜像另一半：主徽标剔除归档未读后
+        （#120），归档里的未读不能彻底隐身——工作台「归档中还有 N 条未读」入口
+        消费本聚合，让 HealthWatchdog「被埋会话」告警在界面上有对应的可点去处。
+        私聊白名单 / 有效未读 CASE 与主徽标同源（两枚数字恰为同一全集按
+        archived 二分），全库口径不受 top-N 窗口截断。
+        返回 ``{(platform, account_id): {"convs": 会话数, "unread": 未读合计}}``，
+        只含 unread>0 的桶。
+        """
+        sql = (
+            "SELECT c.platform, c.account_id, "
+            f"COALESCE(SUM({self._EFFECTIVE_UNREAD_CASE}), 0) AS n, "
+            f"COALESCE(SUM(CASE WHEN ({self._EFFECTIVE_UNREAD_CASE}) > 0 "
+            "THEN 1 ELSE 0 END), 0) AS cnt "
+            "FROM conversations c "
+            "JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
+            f"WHERE {self._VISIBLE_UNREAD_WHERE} "
+            "AND COALESCE(m.archived, 0) = 1"
+        )
+        params: List[Any] = []
+        if platform:
+            sql += " AND c.platform = ?"
+            params.append(platform)
+        sql += " GROUP BY c.platform, c.account_id HAVING n > 0"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        out: Dict[Tuple[str, str], Dict[str, int]] = {}
+        for r in rows:
+            out[(str(r["platform"] or ""), str(r["account_id"] or ""))] = {
+                "convs": int(r["cnt"] or 0),
+                "unread": int(r["n"] or 0),
+            }
         return out
 
     def account_directory(self) -> Dict[Tuple[str, str], Dict[str, float]]:

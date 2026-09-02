@@ -203,6 +203,32 @@ def test_verdict_engage_on_keywords_and_defer_on_chatter(bi):
     assert bi.trigger_verdict(CFG, -999, "u1", "大家晚上好") is None
 
 
+def test_self_sender_never_registers_or_engages(bi):
+    """2026-09-02 收口：本方账号消息绝不立单/引燃（#123/#125/#135/#136 实锤——
+    值守号 8506426282 的回访播报满是 bug 词，被 6834964252 的观察链误立单）。"""
+    # support_accounts 里的支持号发回访播报 → trigger 硬压制
+    assert bi.trigger_verdict(CFG, -100123, "777", "消息发不出去了，报错") is False
+    # observe 立单入口：不立单、active=False（调用方零分支透传）
+    res = bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="999", reporter_id="777",
+        reporter_name="BOUNDLESS",
+        text="你反馈的「消息发不出去」（#12）已修复上线，方便的话帮忙验证一下")
+    assert res["active"] is False and res["ticket_id"] == 0
+    assert bi.list_tickets() == []
+    # 本 worker 自己的 account_id（补拉链回喂形态）同样拦
+    res2 = bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="888", reporter_id="888",
+        reporter_name="自己", text="登录不上，全部崩溃了")
+    assert res2["active"] is False
+    assert bi.list_tickets() == []
+    assert bi.dump_stats()["self_msg_suppressed"] >= 3
+    # 普通用户不受守卫影响：照常立单
+    res3 = bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="999", reporter_id="u1",
+        reporter_name="张三", text="消息发不出去了")
+    assert res3["active"] and res3["ticket_id"] > 0
+
+
 class _BusStub:
     def __init__(self):
         self.published = []

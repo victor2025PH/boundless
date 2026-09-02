@@ -34,6 +34,7 @@ __all__ = [
     "parse_language_request",
     "classify_evidence",
     "evidence_lang",
+    "latin_mixed_zh",
     "latest_explicit_request",
     "resolve_conversation_language",
     "normalize_lang_code",
@@ -499,6 +500,33 @@ def _script_strength(core: str, own: int) -> str:
             else EvidenceStrength.WEAK)
 
 
+def latin_mixed_zh(core: str) -> bool:
+    """「中文句夹拉丁词」混排判定（#139，2026-09-01 工单实锤）。
+
+    ``detect_language`` 对混排文本按「拉丁字母数 > 汉字数」恒回 en——中文客户
+    聊菲律宾电话卡，一句『你帮我看下 SMART 的 unli data promo』拉丁 16 字 >
+    汉字 7 字 → 旧链判成**强证据 en**，草稿链当场切英文、画像投票跟着记 en
+    （994 图：中文客户收到整句英文 AI 草稿的根因）。
+
+    两条判据任一命中（汉字 ≥2 前提下）即混排中文：
+      ① 字符占比 ≥30%（阈值复用 ``_SCRIPT_STRONG_MIN_SHARE``，与泰文碎片同族）；
+      ② 汉字数 ≥4 且 ≥ 拉丁词数+2——纯字符占比对中文有结构性偏压（汉字单字
+        成词、拉丁 4-5 字母才一个词），『你帮我看下 SMART 的 unli data promo』
+        汉字 6 字=完整中文句骨架、拉丁 18 字母只是 4 个套餐词，占比仅 25%。
+    反例「how do you pronounce 谢谢 in english」（2 汉字/8 词）两条都不命中
+    ——那是英文句引用汉字。入参须为已剥离中性内容的证据文本。
+    """
+    cjk = len(_CJK_RE.findall(core))
+    if cjk < 2:
+        return False
+    latin = len(_LATIN_RE.findall(core))
+    total = cjk + latin
+    if total > 0 and (cjk / float(total)) >= _SCRIPT_STRONG_MIN_SHARE:
+        return True
+    latin_words = len(re.findall(r"[A-Za-z][A-Za-z']*", core))
+    return cjk >= 4 and cjk >= latin_words + 2
+
+
 def normalize_lang_code(code: str) -> str:
     """归一各产线语言码到策略层标准码（zh-cn/cn→zh、jp→ja、ar_ur→ar…）。
 
@@ -559,10 +587,18 @@ def classify_evidence(text: str) -> Tuple[str, str]:
     if lang != "en":
         return lang, EvidenceStrength.STRONG
 
+    # 混排修正（#139）先于含糊拉丁判级：detect 的 en 是「拉丁 > 汉字」的机械
+    # 多数，不代表客户在说英文。汉字占比够 → 判 zh 强（中文句夹外文词）；
+    # 汉字 ≥2 但占比不够（英文句引用汉字）→ en 证据封顶为弱，绝不当强证据
+    # 翻转会话语言（弱证据的兜底语义不变）。
+    if latin_mixed_zh(core):
+        return "zh", EvidenceStrength.STRONG
+    cjk_frag = len(_CJK_RE.findall(core)) >= 2
+
     # 含糊拉丁（en fallback）：成句才算强
     letters = len(_LATIN_RE.findall(core))
     words = len(re.findall(r"[A-Za-z][A-Za-z']*", core))
-    if letters >= 12 or words >= 3:
+    if (letters >= 12 or words >= 3) and not cjk_frag:
         return "en", EvidenceStrength.STRONG
     if letters >= 4:
         return "en", EvidenceStrength.WEAK
@@ -587,6 +623,8 @@ def evidence_lang(text: str) -> str:
     lang = detect_language(core)
     if not lang or lang == "unknown":
         return ""
+    if lang == "en" and latin_mixed_zh(core):
+        return "zh"  # #139 混排修正：中文句夹拉丁词不构成 en 证据
     return normalize_lang_code(lang)
 
 
@@ -668,13 +706,20 @@ def _window_dominant(history: Optional[List[Dict[str, Any]]], k: int = 6) -> str
     texts = _user_texts_newest_first(history)[:k]
     if not texts:
         return ""
-    joined = strip_neutral_tokens(" ".join(reversed(texts)))
+    # 换行拼接（不是空格）：媒体描述行剥离正则锚定行首（(?:^|\n)），空格拼接会让
+    # 「[图片内容] …」混进句中逃过剥离——识图中文残留曾靠 detect 的拉丁多数掩住，
+    # #139 混排修正后会被误翻成 zh（test_english_convo_image_turn_stays_english 钉）。
+    joined = strip_neutral_tokens("\n".join(reversed(texts)))
     if len(joined) < 2:
         return ""
     from src.ai.translation_service import detect_language
 
     lang = detect_language(joined)
-    return "" if (not lang or lang == "unknown") else lang
+    if not lang or lang == "unknown":
+        return ""
+    if lang == "en" and latin_mixed_zh(joined):
+        return "zh"  # #139 混排修正：窗口整体也是「中文为主夹外文词」
+    return lang
 
 
 def _lang_family(code: str) -> str:

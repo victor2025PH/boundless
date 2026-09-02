@@ -377,7 +377,14 @@ class TranslationService:
         if re.fullmatch(r"\[[^\[\]]{1,24}\]", src_text.strip()):
             return TranslationResult(src_text, src_text, source, target, True, provider="identity")
         if source == target:
-            return TranslationResult(src_text, src_text, source, target, True, provider="identity")
+            # #139-3 粤语旁路（2026-09-02）：detect 对粤语恒回 zh（实施89 契约），
+            # zh→zh 的 identity 短路曾把粤语消息原样吐回（996 图：『我今朝早起身
+            # 見到個天靚到咁』无普通话译文）。目标是 zh 时按保守字表重判源语言，
+            # yue≠zh → 继续走引擎真翻译；判不出仍走 identity（行为不变）。
+            if target == "zh":
+                source = detect_zh_variant(src_text) or source
+            if source == target:
+                return TranslationResult(src_text, src_text, source, target, True, provider="identity")
 
         key = self._cache_key(src_text, source, target, style, engine=pref_engine)
         # L1：进程内 TTL 缓存
@@ -750,6 +757,51 @@ def detect_language(text: str) -> str:
     if "ã" in lower or "õ" in lower:
         return "pt"
     return _maybe_statistical(t, "en" if latin else "unknown")
+
+
+# ── 粤语变体旁路判定（#139-3，2026-09-02：实施89 批次4 字表下沉服务端）──────
+# 主检测契约不变：detect_language 对中文家族恒回 zh（实施89 §三-2，语言投票/
+# conversations.language/lang_policy 都不吃变体码）。本表只服务「zh 源要不要
+# 译到 zh 目标」这类变体敏感消费方——入站翻译链（粤语→普通话）与前端变体
+# 发现提示。0830 断电 NUL 事故后 unified_inbox.html 的 _detectZhVariant 批次
+# 未被重建（重建只覆盖 34 语目录/选语页），粤语入站不出中文译文即此回归缺口。
+# 字表保守（宁漏勿错）：
+#   - 专用语法字（基本只出现在粤文书面，普通话不会自然出现）：命中任一即判；
+#   - 强特征字/词（普通话偶见或跨方言梗用法）：需 ≥2 个**不同**特征共同命中
+#     （防「唔…让我想想」拟声、「冇问题」梗、「好累咩」语气词误伤）。
+_YUE_EXCLUSIVE_CHARS = "嘅咗哋嗰喺嚟"
+_YUE_HINT_CHARS = "唔冇乜咁噉啱嘥嗮曬囉啩畀嘢"
+_YUE_HINT_WORDS = (
+    "今朝", "琴日", "聽日", "听日", "而家", "宜家", "點解", "点解",
+    "唔該", "唔该", "唔好", "唔係", "唔系", "掛住", "挂住", "靚到", "靓到",
+    "好靚", "好靓", "邊個", "边个", "乜嘢", "咩嘢", "睇下", "睇吓",
+    "得閒", "得闲", "傾偈", "倾偈", "俾我", "畀我", "食咗", "飲茶", "饮茶",
+)
+
+
+def detect_zh_variant(text: str) -> str:
+    """中文变体旁路判定：粤语书面 → ``"yue"``；其余/判不出 → ``""``。
+
+    与 :func:`detect_language` 的关系是旁路不是覆写——主检测对粤语仍回 zh。
+    入站翻译链靠它把「detect=zh × target=zh → identity 跳过」的粤语消息重新
+    捞回翻译候选（996 图实锤：『我今朝早起身見到個天靚到咁』无中文译文）。
+    特征词命中后，包含在词内的单字不再重复计数（防单个语素凑双证据）。
+    纯函数、绝不抛。
+    """
+    try:
+        t = str(text or "")
+        if not t or not _CJK_RE.search(t):
+            return ""
+        if any(ch in t for ch in _YUE_EXCLUSIVE_CHARS):
+            return "yue"
+        word_hits = [w for w in _YUE_HINT_WORDS if w in t]
+        char_hits = [
+            ch for ch in _YUE_HINT_CHARS
+            if ch in t and not any(ch in w for w in word_hits)
+        ]
+        return "yue" if (len(word_hits) + len(char_hits)) >= 2 else ""
+    except Exception:
+        return ""
 
 
 def _clean_translation(text: str) -> str:

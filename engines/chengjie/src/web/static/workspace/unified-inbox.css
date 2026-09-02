@@ -3522,6 +3522,18 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .conv-arch-foot .caf-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .conv-arch-foot .caf-go{margin-left:auto;flex:none;color:var(--accent,#1e8cf2);font-weight:600;}
 
+/* #142 被埋会话界面化：筛选条下「归档中还有 N 条未读」入口。琥珀基调（是提醒不是
+   告警红），常态低调、悬停才亮；display 由 _renderBuriedHint 控制，0 条不占版面。 */
+.buried-hint{display:flex;align-items:center;gap:6px;margin:4px 10px 2px;padding:5px 9px;
+  border:1px dashed color-mix(in srgb,#d97706 45%,var(--border));border-radius:8px;
+  background:color-mix(in srgb,#d97706 7%,transparent);cursor:pointer;
+  font-size:11.5px;color:#b45309;user-select:none;transition:border-color .15s,background .15s;}
+.buried-hint:hover{border-color:#d97706;background:color-mix(in srgb,#d97706 13%,transparent);}
+.buried-hint:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.buried-hint .bh-ic{display:inline-flex;align-items:center;flex:none;}
+.buried-hint .bh-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.buried-hint .bh-go{margin-left:auto;flex:none;color:var(--accent,#1e8cf2);font-weight:600;}
+
 /* 当前会话钉住（实施49 P0-1）：被补回列表的那一行——它不属于当前筛选口径，
    用虚线左沿 + 轻微降饱和标出「特意为你留着的」，同时保证选中态高亮仍压得住
    （selected 的背景/左沿在后面的更高特异度规则里，这里只补虚线与透明度）。 */

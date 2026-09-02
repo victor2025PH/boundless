@@ -385,23 +385,22 @@ async def _probe_public_media_url(url: str) -> Dict[str, Any]:
 
 
 def _accounts_by_platform() -> dict:
-    """各平台已接入的账号数（账号注册表，不含 removed）。
+    """各平台「当前能收发消息」的账号数——向导徽标「已接 N 个账号」与头部
+    「能收发消息的渠道 X/7」的计数源。
 
     向导「就绪」判定的第一手信号：扫码/协议登录进来的账号**不写任何渠道 yaml 键**，
     只看配置就会把一台正在收发消息的机器报成「已就绪 0/4」（实机反馈）。
+
+    #126（2026-09-01 skuio）：多账号登录后徽标常年停在「已接 1 个账号」——与
+    #61/#78 同族的账号枚举病换了个消费面。真相单一源＝运行时账号注册表
+    ``platform_accounts``（``live_accounts_by_platform``，与人设「应用到」弹窗
+    #78 二轮同一张表）。此前本函数直接 ``list()`` 把 **offline（已登出）** 账号
+    一并计入，登出一个号计数不减＝违背「登录登出实时跟随」；现收敛到统一源，
+    offline/removed 一律不计——登出即时 -1，头部就绪口径连带跟随。
     取数失败一律返回空 → 判定退回纯配置口径，绝不让向导因此报错。
     """
-    try:
-        from src.integrations.account_registry import get_account_registry
-        out: dict = {}
-        for row in get_account_registry().list():
-            p = str(row.get("platform") or "").lower()
-            if p:
-                out[p] = out.get(p, 0) + 1
-        return out
-    except Exception:
-        logger.debug("读取账号注册表失败（向导退回配置口径）", exc_info=True)
-        return {}
+    from src.integrations.account_registry import live_accounts_by_platform
+    return live_accounts_by_platform()
 
 
 def _login_ready(config: dict) -> dict:
