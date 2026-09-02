@@ -1199,9 +1199,27 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         # 整体替换抹掉；不带 merge 或人设不存在 → 维持整体替换旧契约。
         did_merge = False
         store_data = persona_data
+        _vp_preserved: list = []
         if bool(data.get("merge")):
             existing = pm.get_persona_by_id(profile_id)
             if existing:
+                # #149（2026-09-02 钧机 KKXSTU）：登记后的挂载断链——抽屉表单
+                # 只知道下拉里的 voice_profile.backend/voice 空串，deep-merge 会把
+                # 刚登记成功的克隆档 backend 顶空＝克隆声静默卸载（工具箱无 🎤、
+                # 合成回落标准声、启动统计 12/13）。空值不得覆写登记结果；显式
+                # 换后端/显式停用仍放行；解绑走 DELETE /api/voice/profiles。
+                try:
+                    from src.ai.voice_profile_guard import (
+                        protect_registered_clone_persona_patch)
+                    persona_data, _vp_preserved = \
+                        protect_registered_clone_persona_patch(existing, persona_data)
+                    if _vp_preserved:
+                        _plog.warning(
+                            "[persona] #149 保存保留已登记克隆档键 %s（persona=%s）"
+                            "——表单空值不得覆写登记结果",
+                            ",".join(_vp_preserved), profile_id)
+                except Exception:
+                    _plog.debug("[persona] 克隆档保存守卫跳过", exc_info=True)
                 store_data = pm.deep_merge_profile(existing, persona_data)
                 did_merge = True
         # P2-E（reply_profiles 迁移收尾）：Studio 保存＝显式接管。
@@ -1234,7 +1252,9 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                           f"id={profile_id} name={persona_data.get('name','?')}"
                           + (" took_over_mrpa=1" if took_over_mrpa else "")
                           + ("" if _persisted else " persisted=0")
-                          + (f" retired_conflicts={len(_rconf)}" if _rconf else ""))
+                          + (f" retired_conflicts={len(_rconf)}" if _rconf else "")
+                          + (f" vp_preserved={','.join(_vp_preserved)}"
+                             if _vp_preserved else ""))
         # 回传落库后的最新 rev，编辑器就地更新基线（免一次重取）
         _new_rev = ""
         try:
@@ -1244,7 +1264,9 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         return {"ok": True, "profile_id": profile_id, "merged": did_merge,
                 "rev": _new_rev,
                 "persisted": _persisted, "persist_warning": _persist_warn,
-                "retired_conflicts": _rconf}
+                "retired_conflicts": _rconf,
+                # #149：被守卫保留的克隆档键（前端据此提示「克隆音色已保留」）
+                "voice_profile_preserved": _vp_preserved}
 
     @app.delete("/api/personas/profiles/{profile_id}")
     async def api_profile_delete(profile_id: str, request: Request, _=Depends(auth_dep)):

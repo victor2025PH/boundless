@@ -289,6 +289,7 @@ async def verify_and_retry_synth(
         best_cer = metric(hyp, synth_text)
         if best_cer < 0:
             return None
+        best_hyp = str(hyp or "")
         attempt = 0
         while best_cer > threshold and attempt < retries:
             attempt += 1
@@ -312,15 +313,23 @@ async def verify_and_retry_synth(
             c2 = metric(hyp2, synth_text) if hyp2 is not None else -1.0
             if 0 <= c2 < best_cer:
                 best_cer = c2               # 新版更好 → 保留新文件
+                best_hyp = str(hyp2 or "")
             else:
                 if best_bytes is not None:  # 新版更差/不可评 → 回滚
                     try:
                         av_out.write_bytes(best_bytes)
                     except Exception:
                         pass
-        out: Dict[str, Any] = {"cer": round(best_cer, 3), "retried": attempt}
+        # hyp_chars（#121 三进宫除根，2026-09-02）：**最终保留那版音频**的转写
+        # 内容字符数（归一后）。>0 ＝ ASR 从这份产物里听出了字＝音频有声，
+        # 是「疑似无声」误报的终审白名单证据（KKXSTU 实锤：Whisper 全文转录
+        # 成功、前端红条照亮）。与 cer 一起进 rv.extra.synth_verify 供预览链消费。
+        out: Dict[str, Any] = {
+            "cer": round(best_cer, 3), "retried": attempt,
+            "hyp_chars": len(_norm_word_chars(best_hyp)),
+        }
         if foreign:
-            # 仅外语轨携带语种（zh 路径返回形状与旧契约逐字节一致，pinned 测试不动）
+            # 仅外语轨携带语种（zh 路径其余键形状与旧契约一致）
             out["lang"] = lang
         return out
     except Exception:

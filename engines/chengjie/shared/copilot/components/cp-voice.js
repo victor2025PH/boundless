@@ -315,12 +315,16 @@
       }
       if (m.emotion) parts.push(`${this._t("cp.voice.m_emotion")} ${this._emoLabel(m.emotion)}`);
       if (m.fallback_from) parts.push(this._t("cp.voice.m_fallback", { from: this._backendLabel(m.fallback_from) }));
+      // #121 三进宫：服务端终审「有声」直接亮在实际使用行——红条谎报的反证
+      // 同屏可见（转写命中/能量在场），坐席不必再靠耳朵和值守对质。
+      if (m.speech === "voiced") parts.push(this._t("cp.voice.m_speech_ok"));
       if (!parts.length) return "";
       // chip 化（P1-2）：折行时分隔符跟内容走（同音色状态条 eff-bit 方案，
       // 旧 " · " 拼串窄栏折行会行尾悬挂）；原始代号串进 title，不占坐席眼球。
       const raw = [m.persona_id, m.provider, m.voice, m.emotion,
         m.fallback_from ? `fallback_from=${m.fallback_from}` : "",
-        m.fallback_reason ? `reason=${m.fallback_reason}` : ""]
+        m.fallback_reason ? `reason=${m.fallback_reason}` : "",
+        m.speech ? `speech=${m.speech}${m.speech_basis ? "/" + m.speech_basis : ""}` : ""]
         .filter(Boolean).join(" | ");
       const chips = parts.map((b) => `<span class="eff-bit">${this._esc(b)}</span>`).join("");
       return `<div class="hint" title="${this._esc(raw)}">`
@@ -359,6 +363,13 @@
         });
         sel.innerHTML = html;
         const ok = Array.from(sel.options).some((o) => o.value === this._persona && !o.disabled);
+        // #149：记忆的选择已不在列表（人设删了/未就绪被置灰）→ 状态与下拉必须同步
+        // 复位。旧代码只改 sel.value、_persona 仍握着陈旧 id → 下拉显示「跟随会话
+        // 人设」而请求却带着陈旧 id，正是「所见非所用」的一种形态。
+        if (!ok && this._persona) {
+          this._persona = "";
+          this._savePersona("");
+        }
         sel.value = ok ? this._persona : "";
         this._refreshEffStatus();
       } catch (e) { /* */ }
@@ -850,12 +861,26 @@
       this._setBusy("");
       const url = d ? (d.dataUrl || d.audio_url ||
         (d.filename ? `/api/voice/tts-file/${encodeURIComponent(d.filename)}` : "")) : "";
-      if (reqFail || !url) {
+      /* #149 选声金标（2026-09-02）：所选人设必须就是合成路由用的人设。服务端
+         失配即拒（reason=voice_selection:*）；成功响应也复核 requested==resolved
+         ——「选 X 出 Y」宁可报错也绝不把 Y 的声音当 X 的试听摆出来。 */
+      const selBad = CpVoice.selectionMismatch(persona, d);
+      if (reqFail || !url || selBad) {
         // 失败态同样要能清除/重试——错误文案赖着不走与旧预览赖着不走是同一个病
-        const msg = reqFail
-          ? this._t("cp.voice.req_fail")
-          : this._t("cp.voice.gen_fail",
-              { msg: (d && (d.message || d.error)) || this._t("cp.voice.tts_unavailable") });
+        let msg;
+        if (reqFail) {
+          msg = this._t("cp.voice.req_fail");
+        } else if (selBad) {
+          msg = selBad === "persona_not_found"
+            ? this._t("cp.voice.sel_missing")
+            : this._t("cp.voice.sel_mismatch",
+                { resolved: (d && (d.resolved_persona_id
+                    || (d.voice_meta && d.voice_meta.persona_id))) || "-" });
+          this._warnBeacon("sel_mismatch");
+        } else {
+          msg = this._t("cp.voice.gen_fail",
+            { msg: (d && (d.message || d.error)) || this._t("cp.voice.tts_unavailable") });
+        }
         this._previewText = null;
         this._previewFilename = "";
         this._previewXl = "";
@@ -929,68 +954,134 @@
         spokenLine +
         this._metaLine(d) +
         fbNote +
-        `<div class="pv-note err" data-role="silent-note" data-detector="v2-dual" hidden><span>${this._esc(this._t("cp.voice.silent_note"))}</span></div>` +
+        `<div class="pv-note err" data-role="silent-note" data-detector="v3-server" data-speech="${this._esc(String(_vm.speech || ""))}" hidden><span>${this._esc(this._t(_vm.speech === "silent" ? "cp.voice.silent_note_server" : "cp.voice.silent_note"))}</span></div>` +
         `<div class="pv-note warn" data-role="stale-note" hidden><span>${this._esc(this._t("cp.voice.stale_note"))}</span>` +
         `<button data-act="tts">${this._t("cp.voice.regen_btn")}</button></div>` +
         `<div class="row pv-foot">` +
         `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
+      // 服务端已确认无声 → 不等本地解码，立即禁发（消灭「红条未出、发送可点」的空窗）
+      if (_vm.speech === "silent") {
+        this._silent = true;
+        this._warnBeacon("silent_server");
+      }
       this._syncStale();   // 生成期间若已改字/换音色，立即标过期
-      this._sniffSilence(url);   // B61：疑似无声产物 → 显式警示（best-effort）
+      this._sniffSilence(url, _vm, Number(d && d.duration_sec) || 0);   // 有声终审：服务端裁决优先，客户端解码只兜底/画波形
     }
 
-    /** B61 哑音警示（2026-08-23）：服务端能量闸兜大头，但客户机 ffmpeg 缺席时
-     *  压缩产物判不了——浏览器这端用 WebAudio 解码测峰值补盲区。任何失败静默
-     *  （检测是增益不是闸门）；epoch 变了（切会话/重新生成）不回写 DOM。
+    /* ── #149/#121 纯核心（不依赖 this/DOM/i18n，desktop/test 常驻门禁钉住）── */
+
+    /** 选声失配判定：返回 "" / "persona_not_found" / "persona_mismatch"。
+     *  - 服务端拒绝：d.reason = "voice_selection:<why>"；
+     *  - 服务端成功但复核不过：voice_meta.requested_persona_id（新后端才有）
+     *    与 voice_meta.persona_id 不等，或与本地请求时的选择不等；
+     *  - 旧后端（无 requested_persona_id）/ 未显式选人设 / 选「系统通用音色」→ ""。 */
+    static selectionMismatch(requested, d) {
+      const req = String(requested || "");
+      const r = String((d && d.reason) || "");
+      if (r.indexOf("voice_selection:") === 0) {
+        const why = r.slice("voice_selection:".length);
+        return why === "persona_not_found" ? why : "persona_mismatch";
+      }
+      if (!req || req === "__system__" || !d || d.ok === false) return "";
+      const m = d.voice_meta || {};
+      const served = String(m.requested_persona_id || "");
+      if (!served) return "";                 // 旧后端：无可核对真值，不判
+      const resolved = String(m.persona_id || "");
+      if (served !== req || (resolved && resolved !== req)) return "persona_mismatch";
+      return "";
+    }
+
+    /** 有声/无声最终裁决（#121 三进宫除根）：
+     *  meta.speech  服务端终审（voiced/silent/unknown|缺省）；
+     *  sniff        客户端解码结果 {peak, rms, decodedSec} 或 null（解码失败）；
+     *  serverSec    服务端报告的时长（>0 才参与解码合理性闸）。
+     *  规则：服务端 voiced → 绝不判无声；服务端 silent → 判无声；服务端无裁决时
+     *  才用客户端双信号（峰值<0.002 且 RMS<0.0008），且解码出的时长与服务端时长
+     *  相差过半＝解码器读错容器（WAV 被当 mp3 之类）→ 不判（不冤枉）。 */
+    static speechDecision(meta, sniff, serverSec) {
+      const s = String((meta && meta.speech) || "").toLowerCase();
+      if (s === "voiced") return { silent: false, basis: "server-voiced" };
+      if (s === "silent") return { silent: true, basis: "server-silent" };
+      if (!sniff || typeof sniff.peak !== "number") return { silent: false, basis: "no-decode" };
+      const sec = Number(serverSec) || 0;
+      const dec = Number(sniff.decodedSec) || 0;
+      if (sec > 0.5 && dec > 0 && Math.abs(dec - sec) > Math.max(1, sec * 0.5)) {
+        return { silent: false, basis: "decode-implausible" };
+      }
+      const silent = sniff.peak < 0.002 && sniff.rms < 0.0008;
+      return { silent, basis: silent ? "client-dual" : "client-ok" };
+    }
+
+    /** 有声/无声裁决 + 响度包络（B61 → #121 三进宫除根，2026-09-02）。
      *
-     *  #121（skuio 0831 原图 924）阈值回校：旧判据「峰值 < 0.004」单信号——
-     *  正常但偏轻的合成音（短英句/柔音色/编码增益低）会被咬（实测报障音频
-     *  可正常播放）。改双信号必须同时成立：峰值 < 0.002（真空壳的量级）且
-     *  RMS < 0.0008（全程能量地板）。有真实语音内容的音频 RMS 远高于地板，
-     *  单一前导静音/轻音量不再误报；数字静音/空壳两项都为零照样拦。 */
-    async _sniffSilence(url) {
+     *  三轮误报史：0831 单信号峰值阈值、0901 双信号（峰值+RMS）——1.0.70 仍复发
+     *  （KKXSTU：同一预览 wav 被 Whisper 全文转录成功，红条照亮）。根因是让
+     *  **浏览器端解码启发式当终审**：容器/MIME 打架、解码器读错头都会产出一段
+     *  「合法但近零」的样本，两条阈值怎么调都只是换一批误报。
+     *
+     *  本轮：服务端随试听响应下发终审 voice_meta.speech（转写命中 + 落盘字节能量，
+     *  见 src/ai/speech_verdict.py）——voiced 绝不亮红条、silent 直接亮；只有服务端
+     *  拿不到证据（unknown/旧后端）才用本地双信号兜底，且加解码合理性闸（解码时长
+     *  与服务端时长相差过半＝解码器读错，不判）。裁决核心 CpVoice.speechDecision
+     *  是纯函数（desktop/test 常驻门禁）。本地解码始终跑一遍——响度包络（波形条）
+     *  仍是坐席「一眼看见有没有声」的视觉自证层。任何失败静默；epoch 变了
+     *  （切会话/重新生成）不回写 DOM。 */
+    async _sniffSilence(url, meta, serverSec) {
       const ep = this._epoch;
-      let silent = false;
+      let sniff = null;
       let buckets = null;
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC || !window.fetch) return;
-        const r = await fetch(url);
-        if (!r.ok) return;
-        const buf = await r.arrayBuffer();
-        const ac = new AC();
-        try {
-          const audio = await ac.decodeAudioData(buf);
-          const ch = audio && audio.numberOfChannels ? audio.getChannelData(0) : null;
-          if (!ch || !ch.length) return;
-          const step = Math.max(1, Math.floor(ch.length / 48000));
-          let peak = 0;
-          let sumSq = 0;
-          let n = 0;
-          // 响度包络桶（P1 2026-08-31）：同一遍采样顺手聚 96 桶峰值——
-          // 「有没有声」从纯凭耳朵/红条变成一眼可见的波形条（无声=扁平基线），
-          // 0831「能播放却被判无声」疑云的视觉自证层。零额外解码成本。
-          const NB = 96;
-          buckets = new Float32Array(NB);
-          for (let i = 0; i < ch.length; i += step) {
-            const a = Math.abs(ch[i]);
-            if (a > peak) peak = a;
-            sumSq += a * a;
-            n += 1;
-            const b = Math.min(NB - 1, Math.floor((i / ch.length) * NB));
-            if (a > buckets[b]) buckets[b] = a;
+        if (AC && window.fetch) {
+          const r = await fetch(url);
+          if (r.ok) {
+            const buf = await r.arrayBuffer();
+            const ac = new AC();
+            try {
+              const audio = await ac.decodeAudioData(buf);
+              const nch = (audio && audio.numberOfChannels) || 0;
+              if (nch && audio.length) {
+                const len = audio.length;
+                const step = Math.max(1, Math.floor(len / 48000));
+                let peak = 0;
+                let sumSq = 0;
+                let n = 0;
+                // 响度包络桶（P1 2026-08-31）：同一遍采样顺手聚 96 桶峰值——
+                // 「有没有声」从纯凭耳朵/红条变成一眼可见的波形条（无声=扁平基线）。
+                // 多声道取各道最大值（单看 0 号声道会把「内容只在右声道」判成无声）。
+                const NB = 96;
+                buckets = new Float32Array(NB);
+                const chans = [];
+                for (let c = 0; c < nch; c += 1) chans.push(audio.getChannelData(c));
+                for (let i = 0; i < len; i += step) {
+                  let a = 0;
+                  for (let c = 0; c < chans.length; c += 1) {
+                    const v = Math.abs(chans[c][i]);
+                    if (v > a) a = v;
+                  }
+                  if (a > peak) peak = a;
+                  sumSq += a * a;
+                  n += 1;
+                  const b = Math.min(NB - 1, Math.floor((i / len) * NB));
+                  if (a > buckets[b]) buckets[b] = a;
+                }
+                sniff = { peak, rms: n ? Math.sqrt(sumSq / n) : 0,
+                          decodedSec: audio.duration || 0 };
+              }
+            } finally {
+              try { ac.close(); } catch (e) { /* 忽略 */ }
+            }
           }
-          const rms = n ? Math.sqrt(sumSq / n) : 0;
-          silent = peak < 0.002 && rms < 0.0008;
-        } finally {
-          try { ac.close(); } catch (e) { /* 忽略 */ }
         }
-      } catch (e) { return; }
+      } catch (e) { sniff = null; }
       if (ep !== this._epoch) return;
       if (buckets) this._drawWave(buckets);
-      if (!silent) return;
+      const verdict = CpVoice.speechDecision(meta, sniff, serverSec);
+      const note = this.shadowRoot.querySelector('[data-role="silent-note"]');
+      if (note) note.setAttribute("data-basis", verdict.basis);
+      if (!verdict.silent || this._silent) return;   // 服务端 silent 已在渲染时禁发，不重复计数
       // 阻发闸（P0 2026-08-31）：红字劝「不要发送」但按钮仍亮蓝可点＝视觉与
       // 行为自相矛盾（0831 截图实锤）——阳性即禁发，重新生成清除。
-      // 误报敞口已被 #121 双信号阈值收窄到「真数字静音」量级。
       this._silent = true;
       this._warnBeacon("silent");
       this._syncNotes();
@@ -1183,6 +1274,14 @@
           await this._loadProfiles();
           const sel = this.shadowRoot.querySelector('[data-role="persona"]');
           if (sel) sel.value = persona;
+          /* #149（2026-09-02）：登记成功广播给宿主——人设工作室抽屉据此回灌
+             voice_profile/rev（否则抽屉「保存」会拿登记前的空 backend 把刚登记
+             的克隆档顶掉，服务端另有守卫兜底，这里让界面同步不撒谎）。 */
+          this.dispatchEvent(new CustomEvent("cp-voice-enrolled", {
+            bubbles: true, composed: true,
+            detail: { persona_id: persona, mode: String(d.mode || ""),
+                      reference_audio_path: String(d.reference_audio_path || "") },
+          }));
           await this._audition(persona);
         } else {
           const qz = (d && d.quality) || {};
@@ -1340,9 +1439,14 @@
     }
 
     /* 结果区状态单出口（P1-1 精简版，2026-08-31 提示风暴复盘）：三条提示互斥，
-       按严重度只亮一条——无声(err,禁发) > 过期(warn,禁发) > 回落说明(info/warn,
-       确认后可发)。0831 截图实录回落+无声+过期三条黄红并列（外加顶部预告=四层），
-       坐席不知道信哪条；并列的根因是三个显隐点各自为政，收成唯一裁决口。 */
+       只亮一条——过期(warn,禁发) > 无声(err,禁发) > 回落说明(info/warn,确认后可发)。
+       0831 截图实录回落+无声+过期三条黄红并列（外加顶部预告=四层），坐席不知道
+       信哪条；并列的根因是三个显隐点各自为政，收成唯一裁决口。
+       #149（2026-09-02 KKXSTU 截图复盘）过期升到最前：旧序「无声 > 过期」下，坐席
+       换了下拉音色后红条仍压着过期说明，面板同时显示「下拉=美月」「实际使用=张景光」
+       ——被读成「选 X 出 Y」的路由事故。过期＝这条试听已不代表当前选择，它身上的
+       无声裁决无论真假都只对旧产物成立，正确出路只有重新生成；改回原选择后无声
+       红条照常回来（发送在两种状态下都禁用，闸门不松）。 */
     _syncNotes() {
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box || box.hidden) return;
@@ -1350,8 +1454,8 @@
       const silentEl = box.querySelector('[data-role="silent-note"]');
       const staleEl = box.querySelector('[data-role="stale-note"]');
       const fbEl = box.querySelector('[data-role="fallback-note"]');
-      if (silentEl) silentEl.hidden = !this._silent;
-      if (staleEl) staleEl.hidden = this._silent || !stale;
+      if (staleEl) staleEl.hidden = !stale;
+      if (silentEl) silentEl.hidden = stale || !this._silent;
       if (fbEl) fbEl.hidden = this._silent || stale;
       box.classList.toggle("stale", stale);
       const send = box.querySelector('[data-act="send"]');

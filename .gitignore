@@ -73,6 +73,11 @@ _pending_models/
 # 与上面官网资产同理放行；136KB，只此一个文件。
 !engines/chengjie/assets/probe/*.wav
 
+# #121 三进宫「疑似无声」误报的金标夹具（2026-09-02）：真实 IndexTTS-2 克隆产物
+# （22.05k/16bit/C2PA 尾块，与 KKXSTU 包里被误判的 tts-*.wav 同引擎同容器），
+# tests/test_preview_speech_verdict.py 用它钉「有声样本绝不判无声」。134KB，gold_ 前缀限定。
+!engines/chengjie/tests/fixtures/gold_*.wav
+
 # keep empty structure
 !**/.gitkeep
 

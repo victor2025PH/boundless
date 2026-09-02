@@ -18,11 +18,9 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# 克隆类后端集合（与 voice_routes / lang_voice_route 口径一致；#93 修补消费）
-CLONE_BACKENDS = frozenset({
-    "voice_clone_command", "coqui_http", "voice_clone_lan",
-    "avatar_clone", "minicpm_clone",
-})
+# 克隆类后端集合（单一事实源在 voice_profile_guard；这里再导出供 voice_routes /
+# lang_voice_route 既有 import 路径消费；#93 修补消费）
+from src.ai.voice_profile_guard import CLONE_BACKENDS  # noqa: E402,F401
 
 # UI 哨兵「系统通用音色」（2026-08-05 P0）：坐席下拉的第三种选择，介于
 # 「空串=跟随会话人设回落链」与「显式人设 id」之间——**钉死全局默认配置**
@@ -507,6 +505,48 @@ def resolve_effective_voice_context(
         "voice_cfg": voice_cfg,
         "emotion": emotion,
     }
+
+
+def check_voice_selection(
+    requested_persona_id: Optional[str],
+    voice_ctx: Dict[str, Any],
+) -> str:
+    """选声金标（#149，2026-09-02）：用户显式选了人设 X，合成路由必须落在 X 上。
+
+    返回空串＝一致；否则返回机器可读原因（调用方据此**拒绝合成**而不是静默换声）：
+      - ``persona_not_found``  显式 id 在人设库里不存在（被删/改名/陈旧偏好）——
+                               旧行为是静默回落全局音色、UI 仍显示所选名字；
+      - ``persona_mismatch``   解析出的 persona_id ≠ 请求 id（任何路由层偷换）；
+      - ``source_mismatch``    生效音色来源标签指认了**另一个**人设（合成 INFO 行
+                               「来源=人设Y」与用户选择 X 对不上＝P0 级信任破坏）。
+
+    未显式选择（空/None）或选「系统通用音色」哨兵 → 不检查（回落链/钉死全局是
+    既定语义）。纯函数、绝不抛。
+    """
+    req = str(requested_persona_id or "").strip()
+    if not req or req == SYSTEM_VOICE_ID:
+        return ""
+    try:
+        ctx = voice_ctx or {}
+        resolved = str(ctx.get("persona_id") or "").strip()
+        if resolved != req:
+            return "persona_mismatch"
+        if not isinstance(ctx.get("persona"), dict) or not ctx.get("persona"):
+            return "persona_not_found"
+        vc = ctx.get("voice_cfg") or {}
+        layer = str(vc.get("voice_source_layer") or "")
+        if layer.startswith("persona:"):
+            owner = layer.split(":", 1)[1].strip()
+            if owner and owner != req:
+                return "source_mismatch"
+        src = str(vc.get("voice_source") or "")
+        if src.startswith("人设") and src[2:].strip() not in ("", req):
+            return "source_mismatch"
+        if src.startswith("会话覆盖(人设") and not src.startswith(f"会话覆盖(人设{req})"):
+            return "source_mismatch"
+        return ""
+    except Exception:
+        return ""
 
 
 def default_account_persona_id(

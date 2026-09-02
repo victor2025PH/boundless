@@ -1056,7 +1056,11 @@ ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, pla
       { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) return { ok: false, message: SS("err.audio_fetch", { status: r.status }) };
     const b64 = Buffer.from(await r.arrayBuffer()).toString("base64");
-    const mt = String(d.format || "mp3").includes("ogg") ? "audio/ogg" : "audio/mpeg";
+    // #121：克隆链产物是 WAV（服务端 format=wav）——此前一律标 audio/mpeg，容器与
+    // MIME 打架是浏览器解码启发式误判「无声」的温床之一；按真实格式标注。
+    const fmt = String(d.format || "mp3").toLowerCase();
+    const mt = fmt.includes("ogg") || fmt.includes("opus") ? "audio/ogg"
+      : (fmt.includes("wav") ? "audio/wav" : "audio/mpeg");
     return { ...d, ok: true, dataUrl: `data:${mt};base64,${b64}` };
   } catch (e) { return { ok: false, error: String(e) }; }
 });

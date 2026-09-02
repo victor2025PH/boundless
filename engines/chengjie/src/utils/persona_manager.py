@@ -1605,6 +1605,23 @@ class PersonaManager:
                     vp["dialect_flavor"] = normalize_dialect_flavor(
                         str(vp.get("dialect_flavor") or ""))
                 out["voice_profile"] = vp
+            # 已登记克隆档自愈（#149，2026-09-02）：登记后抽屉「保存」把
+            # backend 顶成空串的存量坏档（登记痕迹 source/command_args 在场）
+            # 在写/载边界按来源推回 backend、补 enabled——启动装载与 upsert 都
+            # 经本函数，钧机上已被打坏的档下次装载即恢复，不必重新登记。
+            try:
+                from src.ai.voice_profile_guard import heal_clone_profile
+                healed, _fixed = heal_clone_profile(vp)
+                if _fixed:
+                    out["voice_profile"] = healed
+                    logger.warning(
+                        "[persona] #149 已登记克隆档自愈：persona=%s 补回 %s"
+                        "（backend=%s source=%s）——此前该档在工具箱无 🎤 且合成"
+                        "回落非克隆声",
+                        out.get("id") or "?", ",".join(_fixed),
+                        healed.get("backend"), healed.get("source") or "-")
+            except Exception:
+                logger.debug("[persona] 克隆档自愈跳过", exc_info=True)
         return out
 
     def _format_persona_compact(

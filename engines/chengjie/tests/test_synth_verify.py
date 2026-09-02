@@ -7,7 +7,7 @@
 import asyncio
 
 import src.voice_transcriber as vt_mod
-from src.ai.tts_pipeline import _cer_cjk, verify_and_retry_synth
+from src.ai.tts_pipeline import _cer_cjk, _norm_word_chars, verify_and_retry_synth
 from src.voice_transcriber import (
     get_shared_transcriber,
     register_shared_transcriber,
@@ -76,7 +76,9 @@ def _run_gate(tmp_path, stt_texts, resynth_payloads, cfg=None, text=GOOD):
 
 def test_gate_pass_no_retry(tmp_path):
     av, info, calls, t = _run_gate(tmp_path, [GOOD], [])
-    assert info == {"cer": 0.0, "retried": 0}
+    # hyp_chars（#121 三进宫，2026-09-02）：最终保留那版音频的转写内容字符数——
+    # 预览链有声终审的证据（speech_verdict）。zh 路径其余键形状不变。
+    assert info == {"cer": 0.0, "retried": 0, "hyp_chars": len(GOOD)}
     assert calls["n"] == 0 and t.calls == 1
     assert av.read_bytes() == b"v1"
 
@@ -94,6 +96,8 @@ def test_gate_retry_worse_rolls_back(tmp_path):
     assert calls["n"] == 1 and info["retried"] == 1
     assert av.read_bytes() == b"v1"
     assert info["cer"] == _cer_cjk(GARBLE, GOOD)
+    # hyp_chars 跟随**保留的那版**（首版 GARBLE），不是被回滚掉的空转写
+    assert info["hyp_chars"] == len(GARBLE)
 
 
 def test_gate_resynth_failure_restores(tmp_path):
@@ -144,7 +148,8 @@ _JA = "今日はほんとうに楽しかったよ、また一緒に遊ぼうね"
 def test_gate_foreign_en_evaluated_and_forced_lang(tmp_path):
     """英文参评：按目标语种强制转写（stt 收到 en）、通用字符级 CER、结果带 lang。"""
     _, info, calls, t = _run_gate(tmp_path, [_EN], [], text=_EN)
-    assert info == {"cer": 0.0, "retried": 0, "lang": "en"}
+    assert info == {"cer": 0.0, "retried": 0, "lang": "en",
+                    "hyp_chars": len(_norm_word_chars(_EN))}
     assert calls["n"] == 0 and t.calls == 1
     assert t.langs == ["en"]
 
@@ -152,7 +157,8 @@ def test_gate_foreign_en_evaluated_and_forced_lang(tmp_path):
 def test_gate_foreign_ja_evaluated(tmp_path):
     """日文参评（旧行为整条跳过）：假名+汉字全进字符级比对，stt 收到 ja。"""
     _, info, _, t = _run_gate(tmp_path, [_JA], [], text=_JA)
-    assert info == {"cer": 0.0, "retried": 0, "lang": "ja"}
+    assert info == {"cer": 0.0, "retried": 0, "lang": "ja",
+                    "hyp_chars": len(_norm_word_chars(_JA))}
     assert t.langs == ["ja"]
 
 

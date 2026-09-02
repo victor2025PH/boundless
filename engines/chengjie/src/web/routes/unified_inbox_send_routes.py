@@ -1380,6 +1380,31 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 account_persona_id=_acc_pid or None,
                 contact_key=chat_key or None, platform=platform,
                 account_id=account_id, text=spoken_text)
+            # 选声金标（#149）：与 tts-test 同一判据——坐席显式选的人设必须就是
+            # 解析结果，否则拒发（宁可不发，不发别人的声）。
+            try:
+                from src.ai.persona_voice import check_voice_selection
+                _sel_bad = check_voice_selection(persona_id, voice_ctx)
+            except Exception:
+                _sel_bad = ""
+            if _sel_bad:
+                logger.error(
+                    "[inbox/voice-send] #149 选声失配 reason=%s requested=%s "
+                    "resolved=%s → 拒发", _sel_bad, persona_id,
+                    voice_ctx.get("persona_id") or "-")
+                _dedup.release(_dedup_scope, _client_msg_id)
+                _vst.record_failed(
+                    _dedup_scope, _client_msg_id, f"voice_selection:{_sel_bad}")
+                return {"ok": False, "reason": f"voice_selection:{_sel_bad}",
+                        "requested_persona_id": str(persona_id or ""),
+                        "resolved_persona_id": str(voice_ctx.get("persona_id") or ""),
+                        "message": (
+                            tr(request, "err.voice.persona_not_found",
+                               persona_id=str(persona_id or ""))
+                            if _sel_bad == "persona_not_found"
+                            else tr(request, "err.voice.selection_mismatch",
+                                    persona_id=str(persona_id or ""),
+                                    resolved=str(voice_ctx.get("persona_id") or "-")))}
             voice_cfg = voice_ctx.get("voice_cfg") or {}
             _explicit_voice_override = isinstance(cfg_override, dict) and any(
                 cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
@@ -1658,6 +1683,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             _fb_reason, _fb_lang = "", ""
         voice_meta = {
             "persona_id": voice_ctx.get("persona_id") or "",
+            # #149：请求侧所选人设（与 tts-test 同字段，UI/对账可核「所选==所用」）
+            "requested_persona_id": str(persona_id or ""),
             "persona_source": voice_ctx.get("persona_source") or "",
             "provider": getattr(result, "provider", ""),
             "voice": getattr(result, "voice", ""),

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-02 13:09:13 · OpenCC s2twp + 術語釘 · 15778 鍵（源 zh 全量 15779）
+生成: 2026-09-02 23:17:10 · OpenCC s2twp + 術語釘 · 15781 鍵（源 zh 全量 15782）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -5672,6 +5672,7 @@ ZH_HANT = {
     'err.voice.ref_save_failed': '參考音訊儲存失敗: {err}',
     'err.voice.ref_too_large': '參考音訊過大（上限 15MB）',
     'err.voice.ref_too_short': '有效語音時長僅 {sec}s（不足 3s）——換一條更長的語音，或勾選「強制登記」跳過質檢',
+    'err.voice.selection_mismatch': '所選音色「{persona_id}」未能進入合成路由（解析為「{resolved}」），已拒絕傳送——請重新整理音色列表後重新選擇',
     'err.voice.src_dst_same': '源與目標人設相同',
     'err.voice.src_persona_not_found': '源人設 {src_id} 不存在',
     'err.voice.truncated': '合成出的音訊疑似截斷/壞音，已攔下未傳送——請重新生成一次，或把文案改短再試',
@@ -20544,12 +20545,16 @@ ZH_HANT = {
     'psn_use_default': '（使用預設人設）',
     # ── psn_vc_bound ──
     'psn_vc_bound': '已繫結克隆音色：{voice}',
+    # ── psn_vc_enrolled_synced ──
+    'psn_vc_enrolled_synced': '克隆音色已登記並掛載到本人設：{backend}',
     # ── psn_vc_h ──
     'psn_vc_h': '克隆音色（跟隨人設）',
     # ── psn_vc_none ──
     'psn_vc_none': '未繫結克隆音色——在下方登記即可',
     # ── psn_vc_not_ready ──
     'psn_vc_not_ready': '（未就緒：參考音缺失或未授權，請重新登記）',
+    # ── psn_vc_preserved ──
+    'psn_vc_preserved': '已保留本人設的克隆音色登記（表單裡的空語音設定不會覆蓋它）',
     # ── psn_vc_purge_q ──
     'psn_vc_purge_q': '是否連雲端聲紋一併永久刪除（不可恢復）？\n「確定」＝一併刪除；「取消」＝僅解綁（聲紋保留，可改綁其他人設）。',
     # ── psn_vc_req_fail ──

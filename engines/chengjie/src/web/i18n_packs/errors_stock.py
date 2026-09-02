@@ -294,6 +294,8 @@ ZH = {
     "err.voice.media_ref_invalid": "media_ref 不是有效的会话媒体引用",
     "err.voice.media_ref_not_found": "该语音消息的音频存档不存在（可能已被清理），请下载后改用文件上传",
     "err.voice.persona_not_found": "人设 {persona_id} 不存在",
+    # #149（2026-09-02）：所选音色与合成路由解析结果不一致 → 拒发（绝不静默换声）
+    "err.voice.selection_mismatch": "所选音色「{persona_id}」未能进入合成路由（解析为「{resolved}」），已拒绝发送——请刷新音色列表后重新选择",
     "err.voice.ref_file_required": "file（参考音频）必填",
     "err.voice.ref_not_audio": "参考音无法解码为音频（文件损坏或格式不支持），请换一条能正常播放的语音",
     "err.voice.ref_save_failed": "参考音频保存失败: {err}",
@@ -669,6 +671,8 @@ EN = {
     "err.voice.media_ref_invalid": "media_ref is not a valid conversation media reference",
     "err.voice.media_ref_not_found": "The audio archive for this voice message no longer exists (it may have been cleaned up); download it and upload as a file instead",
     "err.voice.persona_not_found": "Persona {persona_id} not found",
+    # #149 (2026-09-02): selected voice must be the one the synthesis route resolves to
+    "err.voice.selection_mismatch": "The selected voice \"{persona_id}\" did not reach the synthesis route (resolved to \"{resolved}\"); sending was refused — refresh the voice list and pick again",
     "err.voice.ref_file_required": "file (reference audio) is required",
     "err.voice.ref_not_audio": "Reference audio could not be decoded (corrupt or unsupported format); please pick a voice message that plays back normally",
     "err.voice.ref_save_failed": "Failed to save reference audio: {err}",

@@ -45,6 +45,13 @@ P0 2026-08-05 随「预览清不掉 / 生成入口迷失 / 连点双发」修复
       记住选择），「回落必须显式」不变量的强化承接
   V23 疑似无声=真闸门：红条即禁发（title 带原因）、其他提示让位单条出口、
       重新生成出正常音频自动解除
+  V24（#121 三进宫，2026-09-02 KKXSTU）服务端有声终审优先：voice_meta.speech=
+      'voiced' 时即便本地解码出静音也**绝不**亮红条（红条元素 data-detector=
+      v3-server / data-basis=server-voiced，实际使用行出「✓ 已核有声」）；
+      speech='silent' 时正常音频也直接红条+禁发（服务端确认无声）
+  V25（#149）过期优先于无声：无声红条亮着时换音色 → 红条让位、过期说明可见
+      （KKXSTU 截图「下拉美月／实际使用张景光」被读成选X出Y的成因）；换回原音色
+      红条回来；服务端选声失配（reason=voice_selection:*）→ 错误态而非预览
 
 用法::
 
@@ -82,6 +89,9 @@ window.__ttsFallback = false;
 window.__ttsFbReason = '';   // P0 2026-08-31 回落原因分支（lang_unsupported/quota/…）
 window.__ttsFbLang = '';
 window.__ttsSilent = false;  // true=回真实静音 WAV（sniff 阻发闸场景）
+window.__ttsSpeech = '';     // V24：服务端有声终审 voice_meta.speech（''=旧后端缺键）
+window.__ttsSelReject = '';  // V25：服务端选声失配 reason（voice_selection:<why>）
+window.__ttsEchoRequested = false;   // V25：新后端回填 voice_meta.requested_persona_id
 window.__sendDelayMs = 30;
 window.__sendFail = false;
 // 0.1s 静音 PCM16 WAV（可被 decodeAudioData 解码；峰值/RMS 双零 → 必判无声）
@@ -109,22 +119,33 @@ window.__stubClient = {
     window.__calls.tts.push(JSON.parse(JSON.stringify(args || {})));
     await new Promise((r) => setTimeout(r, window.__ttsDelayMs));
     if (window.__ttsFail) return { ok: false, error: 'boom-503' };
+    // V25：服务端选声失配拒绝（#149 契约：reason=voice_selection:<why>）
+    if (window.__ttsSelReject) {
+      return { ok: false, reason: 'voice_selection:' + window.__ttsSelReject,
+        requested_persona_id: (args && args.persona_id) || '',
+        resolved_persona_id: 'zhang_jingguang', error: 'mismatch' };
+    }
     // P0-V2b 译声契约模拟：带 target_lang 即回译稿三件套（与服务端响应同形）。
     // #121：显式目标必须回显所请求的语种（真服务端如此），'auto' 才由「服务端」
     // 解析成会话语言（夹具恒 ja）——旧夹具恒回 ja 与真实契约不符。
     const xl = !!(args && args.target_lang);
     const req = xl ? String(args.target_lang) : '';
-    return { ok: true,
-      audio_url: window.__ttsSilent ? window.__silentWavUrl : 'data:audio/mp3;base64,AAAA',
-      filename: 'ttspreview-00aabbccdd.mp3',
-      voice_translated: xl,
-      spoken_text: xl ? 'こんにちは、теスト譯稿です' : '',
-      target_lang: xl ? (req === 'auto' ? 'ja' : req) : '',
-      voice_meta: { persona_id: args && args.persona_id || '', provider: 'edge_tts',
+    const vm = { persona_id: args && args.persona_id || '', provider: 'edge_tts',
         voice: 'zh-CN-XiaoxiaoNeural', emotion: 'warm',
         fallback_from: window.__ttsFallback ? 'avatar_clone' : '',
         fallback_reason: window.__ttsFallback ? (window.__ttsFbReason || '') : '',
-        fallback_lang: window.__ttsFallback ? (window.__ttsFbLang || '') : '' } };
+        fallback_lang: window.__ttsFallback ? (window.__ttsFbLang || '') : '' };
+    // V24：新后端有声终审（additive；''=旧后端缺键，前端走本地兜底）
+    if (window.__ttsSpeech) { vm.speech = window.__ttsSpeech; vm.speech_basis = 'fixture'; }
+    if (window.__ttsEchoRequested) vm.requested_persona_id = (args && args.persona_id) || '';
+    return { ok: true,
+      audio_url: window.__ttsSilent ? window.__silentWavUrl : 'data:audio/mp3;base64,AAAA',
+      filename: 'ttspreview-00aabbccdd.mp3',
+      duration_sec: window.__ttsSilent ? 0.1 : 0,
+      voice_translated: xl,
+      spoken_text: xl ? 'こんにちは、теスト譯稿です' : '',
+      target_lang: xl ? (req === 'auto' ? 'ja' : req) : '',
+      voice_meta: vm };
   },
   async sendVoice(body) {
     window.__calls.send.push(JSON.parse(JSON.stringify(body || {})));
@@ -608,6 +629,102 @@ def run(page, ck: Checker, dlg) -> None:
     ck.check("V23 重新生成解除阻发", (not silent_now) and s["sendDisabled"] is False,
              f"silent={silent_now} sendDisabled={s['sendDisabled']}")
     ev("() => { window.__ttsFallback = false; }")
+
+    # V24（#121 三进宫，2026-09-02 KKXSTU）：服务端有声终审优先——同一份本地解码为
+    # 静音的产物，服务端说 voiced（Whisper 全文转录命中）→ 绝不亮红条、发送可点、
+    # 实际使用行带「✓ 已核有声」；服务端说 silent → 正常音频也红条+禁发。
+    ev("() => { window.__ttsSilent = true; window.__ttsSpeech = 'voiced'; }")
+    ev(f"() => setText({TEXT_B!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    page.wait_for_timeout(700)   # 给本地解码一拍：它必须**不**能翻案
+    v24 = ev("""() => {
+      const n = q('[data-role="silent-note"]');
+      const meta = q('.preview .hint[title]');
+      return { hidden: !n || n.hidden,
+               detector: n ? (n.getAttribute('data-detector') || '') : '',
+               basis: n ? (n.getAttribute('data-basis') || '') : '',
+               metaText: meta ? meta.textContent : '' };
+    }""")
+    s = ev("snap()")
+    ck.check("V24 服务端 voiced 压过本地静音解码：无红条+可发送",
+             v24["hidden"] and s["sendDisabled"] is False, str(v24))
+    ck.check("V24 红条元素带 v3-server 标记与 server-voiced 依据（F12 可查证）",
+             v24["detector"] == "v3-server" and v24["basis"] == "server-voiced", str(v24))
+    ck.check("V24 实际使用行出「✓ 已核有声」", "已核有声" in v24["metaText"], v24["metaText"])
+    painted = ev("() => { const c = q('[data-role=\"wave\"]');"
+                 " return !!(c && c.getAttribute('data-painted') === '1'); }")
+    ck.check("V24 响度包络仍绘制（本地解码只成像不裁决）", painted)
+    ev("() => { window.__ttsSilent = false; window.__ttsSpeech = 'silent'; }")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    v24b = ev("""() => {
+      const n = q('[data-role="silent-note"]');
+      return { visible: !!(n && !n.hidden), speech: n ? n.getAttribute('data-speech') : '',
+               text: n ? n.textContent : '' };
+    }""")
+    ck.check("V24 服务端 silent：正常音频也直接红条+禁发（不等本地解码）",
+             v24b["visible"] and s["sendDisabled"] is True and v24b["speech"] == "silent",
+             str(v24b))
+    ck.check("V24 服务端确认文案（区别于本地疑似）", "服务端已确认" in v24b["text"], v24b["text"])
+    ev("() => { window.__ttsSpeech = ''; }")
+
+    # V25（#149）：过期优先于无声——红条亮着时换音色，红条让位、过期说明可见（不再
+    # 出现「下拉=美月 / 实际使用=张景光 / 只有红条」的选X出Y误读）；换回原音色红条回来。
+    ev("() => { window.__ttsSilent = true; }")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    ok_silent = ev("waitSilent(4000)")
+    ck.check("V25 前置：本地兜底红条已亮", bool(ok_silent))
+    ev("""() => {
+      const sel = q('[data-role="persona"]');
+      sel.value = 'linda';
+      sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    silent_vis = ev("() => { const n = q('[data-role=\"silent-note\"]'); return !!(n && !n.hidden); }")
+    ck.check("V25 换音色后：过期说明可见、红条让位、发送仍禁用",
+             s["noteVisible"] and (not silent_vis) and s["sendDisabled"] is True,
+             f"stale={s['noteVisible']} silent={silent_vis} sendDisabled={s['sendDisabled']}")
+    ev("""() => {
+      const sel = q('[data-role="persona"]');
+      sel.value = '';
+      sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    silent_vis = ev("() => { const n = q('[data-role=\"silent-note\"]'); return !!(n && !n.hidden); }")
+    ck.check("V25 换回原音色：过期解除、红条回来、仍禁发",
+             (not s["noteVisible"]) and silent_vis and s["sendDisabled"] is True,
+             f"stale={s['noteVisible']} silent={silent_vis}")
+    ev("() => { window.__ttsSilent = false; }")
+    # 服务端选声失配 → 错误态（带重试/清除），不摆出别人的声音当预览
+    ev("""() => {
+      const sel = q('[data-role="persona"]');
+      sel.value = 'linda';
+      sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      window.__ttsSelReject = 'source_mismatch';
+    }""")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    err = ev("() => { const n = q('.preview .err'); return n ? n.textContent : ''; }")
+    ck.check("V25 服务端选声失配 → 错误态（无音频、带重试/清除）",
+             (not s["hasAudio"]) and s["hasRegen"] and s["hasClear"]
+             and "zhang_jingguang" in err, err)
+    ev("() => { window.__ttsSelReject = ''; window.__ttsEchoRequested = true; }")
+    ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V25 新后端回填 requested==所选 → 正常预览",
+             s["hasAudio"] and args.get("persona_id") == "linda", str(args))
+    ev("() => { window.__ttsEchoRequested = false; }")
+    ev("""() => {
+      const sel = q('[data-role="persona"]');
+      sel.value = '';
+      sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
 
 
 def main() -> int:

@@ -323,6 +323,33 @@ def register_voice_routes(app, api_auth, config_manager=None):
             voice_cfg = {}
             voice_ctx = {"persona_id": persona_id or "", "persona_source": "error", "emotion": None}
 
+        # 选声金标（#149，2026-09-02 钧机 KKXSTU）：坐席显式选了人设 X，解析结果
+        # 必须就是 X——人设不存在/被偷换/来源标签指认别人 → **拒绝合成**并明说，
+        # 绝不静默换声（选 X 出 Y 是 P0 级信任破坏；旧行为对不存在的 id 静默回落
+        # 全局音色，UI 仍显示所选名字）。合成 INFO 行「来源」由此与用户选择恒等。
+        try:
+            from src.ai.persona_voice import check_voice_selection
+            _sel_bad = check_voice_selection(persona_id, voice_ctx)
+        except Exception:
+            _sel_bad = ""
+        if _sel_bad:
+            logger.error(
+                "[voice/tts-test] #149 选声失配 reason=%s requested=%s resolved=%s "
+                "source=%s → 拒绝合成", _sel_bad, persona_id,
+                voice_ctx.get("persona_id") or "-",
+                (voice_ctx.get("voice_cfg") or {}).get("voice_source") or "-")
+            return {
+                "ok": False, "fast": bool(body.get("fast")),
+                "reason": f"voice_selection:{_sel_bad}",
+                "requested_persona_id": str(persona_id or ""),
+                "resolved_persona_id": str(voice_ctx.get("persona_id") or ""),
+                "error": (
+                    f"selected voice persona '{persona_id}' not found"
+                    if _sel_bad == "persona_not_found"
+                    else f"voice selection mismatch ({_sel_bad}): requested "
+                         f"'{persona_id}', resolved '{voice_ctx.get('persona_id') or '-'}'"),
+            }
+
         # Apply caller override (allows previewing unsaved UI settings)
         if isinstance(cfg_override, dict):
             voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
@@ -467,10 +494,42 @@ def register_voice_routes(app, api_auth, config_manager=None):
             logger.debug("[voice/tts-test] #93 补标失败（忽略）", exc_info=True)
 
         # Rename to our deterministic preview path
+        # #121 三进宫（2026-09-02）：后缀按**真实产物格式**命名（result.format），
+        # 不再沿用请求配置里的 format——克隆链出的是 WAV，此前被命名成 .mp3/.ogg
+        # 并以 audio/mpeg 送给浏览器，容器与 MIME 打架是客户端解码启发式误判的
+        # 温床之一。白名单 (mp3|ogg|wav) 之外的格式退回配置后缀（旧行为）。
+        _real_fmt = str(getattr(result, "format", "") or "").strip().lower()
+        if _real_fmt in ("mp3", "ogg", "wav") and _real_fmt != suffix:
+            preview_path = preview_path.with_suffix(f".{_real_fmt}")
         try:
             Path(result.audio_path).rename(preview_path)
         except Exception:
             preview_path = Path(result.audio_path)
+
+        # 有声/无声服务端终审（#121 三进宫除根）：转写证据（synth_verify 已在
+        # 合成链里跑过）× 最终落盘字节能量 → voice_meta.speech，前端以此为准；
+        # 详见 src/ai/speech_verdict.py。任何异常按 unknown（不阻塞试听）。
+        try:
+            from src.ai.speech_verdict import judge_preview_speech
+            _speech = await asyncio.to_thread(
+                judge_preview_speech, str(preview_path),
+                str(getattr(result, "format", "") or suffix),
+                (result.extra or {}).get("synth_verify"))
+        except Exception:
+            _speech = {"speech": "unknown", "basis": "", "transcript_chars": 0,
+                       "energy": "unknown"}
+        if _speech.get("speech") == "silent":
+            logger.warning(
+                "[voice/tts-test] 预览产物服务端判无声（energy=%s transcript_chars=%s "
+                "persona=%s file=%s）", _speech.get("energy"),
+                _speech.get("transcript_chars"),
+                voice_ctx.get("persona_id") or "-", preview_path.name)
+        else:
+            logger.info(
+                "[voice/tts-test] 有声终审 speech=%s basis=%s transcript_chars=%s "
+                "energy=%s file=%s", _speech.get("speech"), _speech.get("basis") or "-",
+                _speech.get("transcript_chars"), _speech.get("energy"),
+                preview_path.name)
 
         # Async cleanup of old files (non-blocking)
         try:
@@ -489,6 +548,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 target_lang=(_vt if _xl.get("translated") else ""),
                 meta={
                     "resolved_persona_id": voice_ctx.get("persona_id") or "",
+                    "requested_persona_id": str(persona_id or ""),
                     "persona_source": voice_ctx.get("persona_source") or "",
                     "provider": result.provider,
                     "voice": result.voice,
@@ -500,6 +560,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     "duration_sec": result.duration_sec,
                     "format": result.format,
                     "fast": bool(fast),
+                    "speech": _speech.get("speech") or "unknown",
+                    "speech_basis": _speech.get("basis") or "",
                     # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
                     "spoken_text": (spoken_text if _xl.get("translated") else ""),
                     "xl_provider": _xl.get("provider") or "",
@@ -535,6 +597,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
             "bytes": preview_path.stat().st_size if preview_path.is_file() else 0,
             "voice_meta": {
                 "persona_id": voice_ctx.get("persona_id") or "",
+                # #149：请求侧所选人设（前端据此核对「实际使用」==「所选」，不一致
+                # 即错误态；服务端已在解析后拒绝失配，这里是给 UI 的可核对真值）
+                "requested_persona_id": str(persona_id or ""),
                 "persona_source": voice_ctx.get("persona_source") or "",
                 "provider": result.provider,
                 "voice": result.voice,
@@ -553,6 +618,13 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 # 不再把日语改道播报成「通道中断→重试/报障」。
                 "fallback_reason": _fb_reason,
                 "fallback_lang": _fb_lang,
+                # #121 三进宫除根（2026-09-02）：服务端有声终审（additive）。
+                # voiced=前端不得亮「疑似无声」；silent=服务端确认无声直接禁发；
+                # unknown=前端才用自己的解码启发式兜底。basis 供 F12 现场归因。
+                "speech": _speech.get("speech") or "unknown",
+                "speech_basis": _speech.get("basis") or "",
+                "transcript_chars": int(_speech.get("transcript_chars") or 0),
+                "energy": _speech.get("energy") or "unknown",
             },
         }
 
