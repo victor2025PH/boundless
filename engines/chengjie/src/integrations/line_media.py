@@ -523,8 +523,15 @@ def _try_refresh_token(api: Any) -> bool:
         return False
 
 
-def _obs_download_with_retry(api: Any, msg_id: str) -> Tuple[bytes, str]:
-    """OBS 对象下载，至多两次尝试；返回 ``(字节, 最后失败摘要)``。
+def _obs_download_with_retry(
+    api: Any, msg_id: str,
+) -> Tuple[bytes, str, int]:
+    """OBS 对象下载，至多两次尝试；返回 ``(字节, 最后失败摘要, 最后 HTTP 状态)``。
+
+    第三个返回值是 A2（2026-09-03）加的：``404``＝对象在 LINE 侧已被回收，属
+    **终局**（重试/回填一万次都不会回来），要给坐席「已过期」而不是含糊的
+    「未取到」。证据：钧机 3U298U 16:56/16:57 两条
+    ``404 ... obs.line-apps.com/r/talk/m/<id>``。
 
     真机取证（#101）：同一对象几分钟内两败两成——瞬态失败 × 零重试就是
     「无音频存档」的日常来源，一次重试即可吃掉大部分瞬态。401/403 先刷
@@ -533,23 +540,50 @@ def _obs_download_with_retry(api: Any, msg_id: str) -> Tuple[bytes, str]:
     okline transport 的 30s 超时兜底。
     """
     last = ""
+    status = 0
     for attempt in (1, 2):
         try:
             data = api.obs.download_object(_OBS_SERVICE, _OBS_SID, msg_id) or b""
             if data:
-                return data, ""
-            last = "empty_body"
+                return data, "", 0
+            last, status = "empty_body", 0
         except Exception as exc:  # noqa: BLE001
             last = f"{type(exc).__name__}: {str(exc)[:120]}"
+            status = _http_status(exc)
             logger.debug("[line_media] OBS 下载失败 attempt=%d id=%s",
                          attempt, msg_id, exc_info=True)
-            if attempt == 1 and _http_status(exc) in (401, 403):
+            if status == 404:
+                break   # 对象已被回收：终局，重试没有意义
+            if attempt == 1 and status in (401, 403):
                 if _try_refresh_token(api):
                     continue  # 刷新成功 → 立刻重试，不吃退避
                 break  # 刷新失败/冷却中：再试大概率仍 401，别白打
         if attempt == 1:
             time.sleep(_OBS_RETRY_SLEEP_SEC)
-    return b"", last
+    return b"", last, status
+
+
+#: A2：入站媒体 miss 里**终局**的那一档——对象在 LINE 侧已回收（OBS 404）。
+#: 与 ``download_error``（瞬态/链路坏）分开的意义：终局要给坐席「已过期，让客户
+#: 重发」这种可执行的话，且媒体回填链（``/api/...media-refetch``）不该反复去捞它。
+MISS_EXPIRED = "expired"
+
+#: 「已过期」镜像占位文案（按大类给人话）。与贴纸的 ``[表情] …`` 占位同一形态：
+#: 落库文本必须自解释——坐席看会话时不该只看到一个点不开的 [图片]。
+_EXPIRED_TEXT = {
+    "image": "[图片] 该图片已过期（LINE 服务器不再保留），如需查看请让客户重发",
+    "video": "[视频] 该视频已过期（LINE 服务器不再保留），如需查看请让客户重发",
+    "voice": "[语音] 该语音已过期（LINE 服务器不再保留），如需收听请让客户重发",
+    "audio": "[音频] 该音频已过期（LINE 服务器不再保留），如需收听请让客户重发",
+    "document": "[文件] 该文件已过期（LINE 服务器不再保留），如需查看请让客户重发",
+}
+
+
+def expired_media_text(kind: str) -> str:
+    """入站媒体已过期的镜像占位文案；未知大类给通用兜底（绝不返回空串）。"""
+    k = str(kind or "").strip().lower()
+    return _EXPIRED_TEXT.get(
+        k, "[媒体] 该文件已过期（LINE 服务器不再保留），如需查看请让客户重发")
 
 
 def _download_sticker(url: str, timeout: float = 10.0) -> bytes:
@@ -569,6 +603,7 @@ def _download_sticker(url: str, timeout: float = 10.0) -> bytes:
 def download_line_media(
     api: Any, message: Optional[Dict[str, Any]], account_id: str, *,
     cfg: Optional[Dict[str, Any]] = None,
+    out: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
     """下载 LINE 入站媒体到 static 目录，返回 ``(媒体大类, /static URL)``。
 
@@ -579,20 +614,40 @@ def download_line_media(
       落「[图片]」占位（即改动前的行为），只是没有识别素材
     - 成功 → ``(kind, '/static/protocol_media/line/...')``
 
+    ``out``（A2，2026-09-03）：可选出参 dict，回填
+    ``{"reason", "detail", "http_status", "expired"}``——调用方据此把**终局**的
+    OBS 404 渲染成「已过期」而不是又一个点不开的 ``[图片]``。返回值形状刻意不变
+    （与 ``download_tg_media`` 同契约，且存量调用方/门禁按二元组断言）。
+
     全程软失败，绝不抛——入站落库主流程不能被一次下载失败带走。
     """
+    if out is not None:
+        out.clear()
+        out.update({"reason": "", "detail": "", "http_status": 0,
+                    "expired": False})
     meta = line_media_meta(message)
     if meta is None:
         return "", ""
     kind, ext = meta
     msg_id = str((message or {}).get("id") or "")
 
-    def _miss(reason: str, detail: str = "") -> Tuple[str, str]:
+    def _miss(reason: str, detail: str = "", status: int = 0) -> Tuple[str, str]:
         _record_inbound(kind, ok=False, skip_reason=reason)
+        if out is not None:
+            out.update({"reason": reason, "detail": detail,
+                        "http_status": int(status or 0),
+                        "expired": reason == MISS_EXPIRED})
         if reason in ("disabled", "stickers_disabled"):
             # 运营配置选择，不是故障——保持安静
             logger.debug("[line_media] 入站媒体按开关跳过 kind=%s id=%s reason=%s",
                          kind, msg_id, reason)
+        elif reason == MISS_EXPIRED:
+            # A2：终局，且**有可执行处置**（让客户重发）——必须 WARNING 且话说清楚，
+            # 别让值守把它当成又一次「下载失败，回头重试」（3U298U 实锤两条 404）
+            logger.warning(
+                "[line_media] 入站媒体已过期（OBS 404，对象已被 LINE 回收，重试/回填"
+                "都救不回）kind=%s id=%s acct=%s → 工作台标「已过期」提示让客户重发",
+                kind, msg_id, account_id)
         else:
             # 链路失败必须 INFO/WARNING 级可见（#101：debug 级＝客户机上无法归因）
             log = logger.warning if reason in _MISS_WARN_REASONS else logger.info
@@ -612,6 +667,7 @@ def download_line_media(
 
     data = b""
     fail_detail = ""
+    fail_status = 0
     if kind == "sticker":
         if not mcfg.get("stickers", True):
             return _miss("stickers_disabled")
@@ -627,14 +683,17 @@ def download_line_media(
         if not msg_id:
             return _miss("no_message_id")
         try:
-            data, fail_detail = _obs_download_with_retry(api, msg_id)
+            data, fail_detail, fail_status = _obs_download_with_retry(api, msg_id)
         except Exception as exc:  # noqa: BLE001 —— 纯保险：helper 自身不应抛
             return _miss("download_error", f"{type(exc).__name__}: {str(exc)[:120]}")
 
     if not data:
+        if fail_status == 404:
+            # A2：终局（对象已被 LINE 回收）——与瞬态 download_error 分档
+            return _miss(MISS_EXPIRED, fail_detail, 404)
         if fail_detail and fail_detail != "empty_body":
-            return _miss("download_error", fail_detail)
-        return _miss("empty_body")
+            return _miss("download_error", fail_detail, fail_status)
+        return _miss("empty_body", "", fail_status)
     # 自报体积不可信/缺失时的兜底：真实字节到手才知道大小，超限即丢（护磁盘）
     if len(data) > max_bytes:
         return _miss("too_large_actual", f"size={len(data)} max={max_bytes}")

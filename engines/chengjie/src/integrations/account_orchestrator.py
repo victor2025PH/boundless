@@ -2021,6 +2021,14 @@ class LineProtocolWorker:
         self._pull_sync: Any = None
         self._pull_thread: Optional[threading.Thread] = None
         self._pull_stop = threading.Event()
+        # A2（2026-09-03，钧机 3U298U 20:46-20:47）：签名桥被 kick_stuck_send 踢掉后
+        # E2EE 密钥失效待重建的脏标。okline 的 E2EEManager 存的是**那个 Node 进程里
+        # ltsm.wasm 的句柄**，桥换进程后句柄全成野值，而 is_ready() 只看 my_keys
+        # 非空 → 仍返回 True，加封发送于是拿野句柄去算、条条失败到 worker 重启。
+        # 懒重建：踢桥只打标（此刻桥还没起来，装不了），下一笔发送前才真重建。
+        self._e2ee_dirty: bool = False
+        self._e2ee_rebuilds: int = 0
+        self._e2ee_retries: int = 0
         # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
         # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
         # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
@@ -2246,7 +2254,18 @@ class LineProtocolWorker:
                 if len(self._last_in_msg_id) > 2000:
                     self._last_in_msg_id.clear()
                 self._last_in_msg_id[chat_key] = msg_id
-            media_type, media_ref = self._inbound_media(message, is_group=is_group)
+            _media_miss: Dict[str, Any] = {}
+            media_type, media_ref = self._inbound_media(
+                message, is_group=is_group, out=_media_miss)
+            if media_type and not media_ref and _media_miss.get("expired"):
+                # A2（2026-09-03）：OBS 404＝对象已被 LINE 回收，是**终局**。此前
+                # 这里只落一个点不开的「[图片]」，坐席只能一次次点重试/报障（3U298U
+                # 实锤两条 404）。给一句自解释且可执行的话：已过期，让客户重发。
+                from src.integrations.line_media import expired_media_text
+                if not str(text).strip():
+                    text = expired_media_text(media_type)
+                else:
+                    text = f"{text}\n{expired_media_text(media_type)}"
             if media_type == "sticker" and not media_ref and not str(text).strip():
                 # 贴纸图没下来（CDN 变更/动图/网络）→ 退到贴纸自带文字。用 A 线同款
                 # ``[表情] 语义`` 口径，inbound_enrich 的表情块解析可直接吃。
@@ -2513,9 +2532,13 @@ class LineProtocolWorker:
             proc = getattr(signer, "_proc", None)
             if proc is not None and proc.poll() is None:
                 proc.terminate()
+                # A2：桥换进程＝E2EE wasm 句柄全失效。此刻新桥还没起来（装密钥会把
+                # 它顺带拉起、且此处仍在悬死上下文里），只打脏标，交
+                # ``_ensure_e2ee_ready`` 在下一笔发送前懒重建。
+                self._e2ee_dirty = True
                 logger.warning(
                     "[line-worker] kick_stuck_send: 已终结疑似僵死的签名桥 Node 进程"
-                    " pid=%s account=%s（下一笔请求自动重启桥）",
+                    " pid=%s account=%s（下一笔请求自动重启桥；E2EE 密钥已标记待重建）",
                     getattr(proc, "pid", "?"), self.account_id)
             else:
                 logger.info(
@@ -2524,6 +2547,66 @@ class LineProtocolWorker:
         except Exception:
             logger.debug("[line-worker] kick_stuck_send 失败 account=%s",
                          self.account_id, exc_info=True)
+
+    # ── A2（2026-09-03）：Letter-Sealing 密钥自愈 ──────────────────────────────
+    # 详见 src/integrations/line_e2ee_recovery.py 模块头（含 3U298U 取证与机制）。
+
+    def _tokens_file(self) -> str:
+        """本号 session 文件路径（E2EE 导出块的所在）。"""
+        if self.tokens_path:
+            return self.tokens_path
+        try:
+            from src.integrations.line_protocol_login import tokens_path as _tp
+            return str(_tp(self.config, self.account_id) or "")
+        except Exception:
+            return ""
+
+    def _rebuild_e2ee_blocking(self, why: str) -> Dict[str, Any]:
+        """同步重建（跑在 ``_api_call`` 的线程里；okline 是同步库）。"""
+        from src.integrations.line_e2ee_recovery import rebuild_e2ee_from_session
+        res = rebuild_e2ee_from_session(
+            self.client, self._tokens_file(), account_id=self.account_id)
+        self._e2ee_rebuilds += 1
+        logger.info(
+            "[line-worker] E2EE 密钥重建 why=%s acct=%s ok=%s keys=%s reason=%s",
+            why, self.account_id, res.get("ok"), res.get("keys"),
+            res.get("reason") or "-")
+        return res
+
+    async def _ensure_e2ee_ready(self) -> None:
+        """懒重建：脏标在场才做，且**先清标再重建**（失败不留死循环重试）。
+
+        重建不成也照常返回——让真实发送错误自己浮出来，别在这儿替它判死
+        （没扫码登录过 E2EE 的号 reason=no_session_keys，纯文本会话本就不需要）。
+        """
+        if not self._e2ee_dirty or self.client is None:
+            return
+        self._e2ee_dirty = False
+        try:
+            await self._api_call(self._rebuild_e2ee_blocking, "bridge_restart")
+        except Exception:
+            logger.debug("[line-worker] E2EE 懒重建异常 acct=%s",
+                         self.account_id, exc_info=True)
+
+    async def _send_with_e2ee_retry(self, what: str, fn: Any, *args: Any) -> Any:
+        """发送 + 「密钥类报错 → 强制重握手 → 重试一次」。
+
+        只重试一次是刻意的：对端真关了 Letter Sealing / 账号被降级时重握手救不回来，
+        无限重试只会把节流打满（0827 的零退避重连事故是同一个教训）。
+        """
+        from src.integrations.line_e2ee_recovery import is_e2ee_key_error
+        await self._ensure_e2ee_ready()
+        try:
+            return await self._api_call(fn, *args)
+        except Exception as exc:
+            if not is_e2ee_key_error(exc):
+                raise
+            self._e2ee_retries += 1
+            logger.warning(
+                "[line-worker] %s 撞 E2EE 密钥错（%s）→ 强制重握手后重试一次 acct=%s",
+                what, str(exc)[:120], self.account_id)
+            await self._api_call(self._rebuild_e2ee_blocking, "key_error")
+            return await self._api_call(fn, *args)
 
     async def mark_read(self, chat_key: str) -> bool:
         """把会话标记已读（``sendChatChecked``），拟人「先看后回」。
@@ -2549,8 +2632,12 @@ class LineProtocolWorker:
 
     # ── 媒体（2026-07-31 补齐：此前 LINE 号只能收发文字）─────────────────────────
 
-    def _inbound_media(self, message: Dict[str, Any], *, is_group: bool) -> tuple:
+    def _inbound_media(self, message: Dict[str, Any], *, is_group: bool,
+                       out: Optional[Dict[str, Any]] = None) -> tuple:
         """入站媒体下载 → ``(媒体大类, /static URL)``；非媒体/关闭/失败均软回落。
+
+        ``out``（A2）：透传给 ``download_line_media`` 的 miss 细因出参——调用方靠
+        ``out["expired"]`` 把 OBS 404 这种**终局**渲染成「已过期」提示。
 
         **群聊默认不下载**：群与私聊共用同一条 okline 接收线程，热闹的群会把下载耗时
         叠到私聊 AI 回复的延迟上——而私聊才是 AI 与营收所在。要看群里的图，开
@@ -2567,7 +2654,7 @@ class LineProtocolWorker:
             if is_group and not mcfg.get("groups", False):
                 return "", ""
             return download_line_media(
-                self.client, message or {}, self.account_id, cfg=mcfg)
+                self.client, message or {}, self.account_id, cfg=mcfg, out=out)
         except Exception:
             logger.debug("[line-worker] 入站媒体处理失败（回落纯文本）", exc_info=True)
             return "", ""
@@ -2594,6 +2681,9 @@ class LineProtocolWorker:
             pass
         logger.info("[line-worker] send_media begin acct=%s chat=%s type=%s size=%s",
                     self.account_id, chat_key, media_type, _size)
+        # A2：媒体的「占位消息」走的也是 sendMessage，Letter-Sealing 会话里同样要
+        # 加封 → 桥重启后同样会撞野句柄（3U298U 20:46 那笔就是 send_media）。
+        await self._ensure_e2ee_ready()
         # 整段（占位→上传→配文）持锁：中途被另一次发送插入会打乱 reqSeq，
         # 也会让「占位」与「上传」之间夹进别人的请求。
         return await self._api_call(
@@ -2615,14 +2705,15 @@ class LineProtocolWorker:
         res = None
         if ref_id:
             try:
-                res = await self._api_call(
-                    self.client.reply_text, chat_key, text, ref_id)
+                res = await self._send_with_e2ee_retry(
+                    "reply_text", self.client.reply_text, chat_key, text, ref_id)
             except Exception:
                 logger.debug("[line-worker] 引用回复失败，回落普通发送 ref=%s",
                              ref_id, exc_info=True)
                 res = None
         if res is None:
-            res = await self._api_call(self.client.send_text, chat_key, text)
+            res = await self._send_with_e2ee_retry(
+                "send_text", self.client.send_text, chat_key, text)
         mid = ""
         try:
             if isinstance(res, dict):
@@ -2643,8 +2734,8 @@ class LineProtocolWorker:
         """
         if self.client is None:
             raise RuntimeError("line client 未连接")
-        res = await self._api_call(
-            self.client.send_sticker, str(chat_key),
+        res = await self._send_with_e2ee_retry(
+            "send_sticker", self.client.send_sticker, str(chat_key),
             str(package_id), str(sticker_id))
         mid = ""
         try:
