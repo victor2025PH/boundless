@@ -981,10 +981,14 @@ class TestSlaAlerts:
         assert r["waiting"] == 3
         assert r["breaching"] == 2
         assert r["critical"] == 1
-        assert len(r["items"]) == 1
+        # #144（0902）：items 同时装 warn/crit 两档并带 level，条数＝breaching＝徽标数字；
+        # 严重在前（面板「严重超时」段），提醒线其后（「超过提醒线」段）
+        assert len(r["items"]) == 2 == r["breaching"]
+        assert [it["level"] for it in r["items"]] == ["crit", "warn"]
         assert r["items"][0]["chat_key"] == "critc"
         assert r["items"][0]["name"] == "N_critc"
         assert r["items"][0]["conversation_id"] == "web:web:critc"
+        assert r["items"][1]["chat_key"] == "warnc"
 
 
 class TestSlaByAgent:

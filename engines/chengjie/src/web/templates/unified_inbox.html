@@ -5717,7 +5717,8 @@ function _tagChipHtml(t, conv){
 var _HANDOFF_REASON_KEYS={high_risk:'inbox.handoff.r_high_risk',empty_reply:'inbox.handoff.r_empty_reply',
   generate_error:'inbox.handoff.r_generate_error',send_error:'inbox.handoff.r_send_error',
   quota_hour:'inbox.handoff.r_quota_hour',quota_day:'inbox.handoff.r_quota_day',
-  circuit_open:'inbox.handoff.r_circuit_open',off_hours:'inbox.handoff.r_off_hours'};
+  circuit_open:'inbox.handoff.r_circuit_open',off_hours:'inbox.handoff.r_off_hours',
+  dup_guard_blocked:'inbox.handoff.r_dup_guard_blocked'};
 function _handoffTip(c){
   var hm=(c&&c.handoff_meta)||null;
   if(!hm||!hm.ts) return window.T('inbox.handoff.tip_generic');

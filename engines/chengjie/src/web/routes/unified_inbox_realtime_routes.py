@@ -380,7 +380,12 @@ def register_realtime_routes(app, *, api_auth) -> None:
             frames: List[str] = []
             try:
                 snap = _sla_alert_snapshot(request)
-                fresh = _edge_pick(snap.get("items", []), _sla_seen)
+                # #144：快照 items 现含 warn 档（徽标/面板口径）；SSE toast 语义仍是
+                # 「新转入**严重**超时」——只对 crit 档边沿触发，提醒线不弹 toast。
+                crit_items = [
+                    it for it in (snap.get("items") or [])
+                    if str(it.get("level") or "crit") == "crit"]
+                fresh = _edge_pick(crit_items, _sla_seen)
                 if emit:
                     for it in fresh:
                         frames.append(

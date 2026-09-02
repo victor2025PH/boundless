@@ -530,11 +530,12 @@
   .ws-drill-allbtn:hover{background:#fff7ed;color:#c2410c;border-color:#fed7aa;}
   .ws-drill-allbtn[disabled]{opacity:.6;cursor:default;}
   .ws-drill-empty{padding:28px 16px;text-align:center;color:#9ca3af;font-size:13px;}
-  /* 下钻面板分段标题（🔴 还没人接 = danger / 🟠 有人在跟·还没回 = amber）*/
+  /* 下钻面板分段标题（#144：🔴 严重超时 = danger / 🟠 超过提醒线 = amber；
+     旧 sec-wait/sec-handled 类名保留兼容） */
   .ws-drill-sec{font-size:11px;font-weight:700;letter-spacing:.03em;padding:9px 14px 5px;
     background:var(--tk-surface-2);color:var(--tk-text-muted);position:sticky;top:0;z-index:1;}
-  .ws-drill-sec.sec-wait{color:var(--tk-danger-ink);box-shadow:inset 3px 0 0 var(--tk-danger);}
-  .ws-drill-sec.sec-handled{color:var(--tk-warn-ink);box-shadow:inset 3px 0 0 var(--tk-amber);}
+  .ws-drill-sec.sec-wait,.ws-drill-sec.sec-crit{color:var(--tk-danger-ink);box-shadow:inset 3px 0 0 var(--tk-danger);}
+  .ws-drill-sec.sec-handled,.ws-drill-sec.sec-warn{color:var(--tk-warn-ink);box-shadow:inset 3px 0 0 var(--tk-amber);}
   /* 夜间 */
   [data-cp-theme="dark"] .ws-drill-panel{background:#1d1e24;box-shadow:0 8px 32px rgba(0,0,0,.6);}
   [data-cp-theme="dark"] .ws-drill-hdr{color:#f1f5f9;border-bottom-color:#334155;}
@@ -2832,12 +2833,35 @@ window._pillChainFail=window._pillChainFail||function(fn){
   var _slaState={};
   var _slaPulsePrev=0;   // pulse 基线：数字增大才扩散一次光环（非常驻闪烁）
   function fmtWaitMin(sec){ return CRMW.fmtWaitMin(sec); }
+  // #144（2026-09-02，skuio 截图 1019/1020）徽标与面板同一口径：后端 items 同时装
+  // warn/crit 两档并带 level；这里把「SLA 清单 ∪ 仅在升级清单里的会话」合成一份，
+  // 按 level 分两段（严重超时 / 超过提醒线）——徽标数字＝面板条数＝这份并集的长度。
+  // 此前徽标无严重项时取 breaching、面板却只渲染 ≥crit 的 items → 「待处理 2」点开空。
+  function _slaPanelItems(){
+    var seen={}, crit=[], warn=[];
+    var escMap={}; (_escItems||[]).forEach(function(it){ if(it&&it.conversation_id) escMap[it.conversation_id]=it; });
+    (_slaItems||[]).forEach(function(it){
+      if(!it||!it.conversation_id||seen[it.conversation_id]) return;
+      seen[it.conversation_id]=1;
+      (it.level==='warn'?warn:crit).push(it);   // 无 level（旧后端）＝旧口径全是严重
+    });
+    // 升级清单是全局口径（≥团队 crit）：个人阈值抬高后可能不在 SLA 清单里，补进严重段
+    (_escItems||[]).forEach(function(it){
+      if(!it||!it.conversation_id||seen[it.conversation_id]) return;
+      seen[it.conversation_id]=1; crit.push(it);
+    });
+    // 「还没人接」优先，再按等待时长降序
+    function _ord(a,b){ var ea=escMap[a.conversation_id]?0:1, eb=escMap[b.conversation_id]?0:1; return (ea-eb)||((b.wait_sec||0)-(a.wait_sec||0)); }
+    crit.sort(_ord); warn.sort(_ord);
+    return {crit:crit, warn:warn, all:crit.concat(warn), escMap:escMap};
+  }
   function _renderSlaPill(){
     if(!slaBadge) return;
     var s=_slaState||{};
-    var crit=s.crit||0, brk=s.brk||0;
-    if(s.quiet || !(crit||brk)){ slaBadge.style.display='none'; return; }
-    var sev = crit>0, n = sev?crit:brk;
+    var g=_slaPanelItems();
+    var n=g.all.length;
+    if(s.quiet || !n){ slaBadge.style.display='none'; _slaPulsePrev=0; return; }
+    var sev = g.crit.length>0;
     slaBadge.className='ws-pill '+(sev?'sev':'warn');
     var escN=(_escItems&&_escItems.length)||0;
     // 单一数字：超时是「待接管」的父集，二者在无人认领时恒等，并排两个数字=同义重复、徒增困惑。
@@ -2851,17 +2875,18 @@ window._pillChainFail=window._pillChainFail||function(fn){
     }
     _slaPulsePrev=n;
     var _sp=_slaPanelEl(); if(_sp && _sp.style.display==='flex') _renderSlaPanel();
-    // tooltip：先给一句汇总（共 N 条、其中几条还没人接），再列会话；「还没人接」项加 ⚠ 标记
-    var escIds={}; (_escItems||[]).forEach(function(it){ if(it&&it.conversation_id) escIds[it.conversation_id]=it.reason||'unclaimed'; });
+    // tooltip：先给一句汇总（共 N 条：几条严重、几条超提醒线、几条还没人接），再列会话；「还没人接」项加 ⚠ 标记
     var rz={unclaimed:window.T('base.reason.unclaimed'),holder_offline:window.T('base.reason.holder_offline'),holder_quiet:window.T('base.reason.holder_quiet')};
-    if(sev){
-      var head=(escN>0?(window.Tf('base.sla.tip_head_esc',{n:n,esc:escN})+'\n'):(window.Tf('base.sla.tip_head',{n:n})+'\n'));
-      slaBadge.title=head+(_slaItems||[]).slice(0,8).map(function(it){
-        // title 是纯文本上下文：塞 SVG 标记会被原样显示成 <svg...> 乱码 → 用文字符号
-        var m=escIds[it.conversation_id]?('  ⚠ '+(rz[escIds[it.conversation_id]]||window.T('base.reason.unclaimed'))):'';
-        return it.name+'（'+fmtWaitMin(it.wait_sec)+'）'+m;
-      }).join('\n');
-    } else { slaBadge.title=window.Tf('base.sla.tip_brk',{n:brk}); }
+    var head = sev
+      ? window.Tf('base.sla.tip_head_mix',{n:n,crit:g.crit.length,warn:g.warn.length})
+      : window.Tf('base.sla.tip_brk',{n:n});
+    if(escN>0) head+=' · '+window.Tf('base.sla.tip_esc_n',{esc:escN});
+    slaBadge.title=head+'\n'+g.all.slice(0,8).map(function(it){
+      // title 是纯文本上下文：塞 SVG 标记会被原样显示成 <svg...> 乱码 → 用文字符号
+      var er=g.escMap[it.conversation_id];
+      var m=er?('  ⚠ '+(rz[er.reason]||window.T('base.reason.unclaimed'))):'';
+      return it.name+'（'+fmtWaitMin(it.wait_sec)+'）'+m;
+    }).join('\n');
   }
   // in-flight 合并 + 尾随补刷（2026-08-05 实测事故）：SSE 重连会重放全部在途 SLA/升级
   // 事件，每条事件回调各触发一次 refresh → 生产积压 ~45 条时冷启动瞬间 45+45 个并发
@@ -2913,19 +2938,15 @@ window._pillChainFail=window._pillChainFail||function(fn){
   function _escd(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function _renderSlaPanel(){
     var _sl=_slaListEl(); if(!_sl) return;
-    var escMap={}; (_escItems||[]).forEach(function(it){ if(it&&it.conversation_id) escMap[it.conversation_id]=it; });
     var rz={unclaimed:window.T('base.reason.unclaimed'),holder_offline:window.T('base.reason.holder_offline'),holder_quiet:window.T('base.reason.holder_quiet')};
-    // 合并两口径（以严重超时为主，补入仅在升级清单里的会话），再按是否「还没人接」分两段
-    var seen={}, all=[];
-    (_slaItems||[]).forEach(function(it){ if(it&&it.conversation_id){ seen[it.conversation_id]=1; all.push(it); } });
-    (_escItems||[]).forEach(function(it){ if(it&&it.conversation_id && !seen[it.conversation_id]){ all.push(it); } });
-    if(!all.length){ _sl.innerHTML='<div class="ws-drill-empty">'+window.T('base.drill.empty')+'</div>'; return; }
-    var waitGrp=[], handledGrp=[];
-    all.forEach(function(it){ (escMap[it.conversation_id]?waitGrp:handledGrp).push(it); });
+    // #144：与徽标同一份并集（_slaPanelItems），按 level 分「严重超时 / 超过提醒线」两段；
+    // 「还没人接」不再单独成段，改为行内 ⚠ 标记（段内排前）——面板条数恒等于徽标数字。
+    var g=_slaPanelItems();
+    if(!g.all.length){ _sl.innerHTML='<div class="ws-drill-empty">'+window.T('base.drill.empty')+'</div>'; return; }
     function _row(it){
-      var er=escMap[it.conversation_id];
+      var er=g.escMap[it.conversation_id];
       var mk=er?('<span class="ws-drill-mark" style="display:inline-flex;align-items:center;gap:3px;">'+_ui('alert',10)+(rz[er.reason]||window.T('base.reason.unclaimed'))+'</span> '):'';
-      return '<div class="ws-drill-item" data-cid="'+_escd(it.conversation_id||'')+'">'
+      return '<div class="ws-drill-item" data-cid="'+_escd(it.conversation_id||'')+'" data-level="'+_escd(it.level||'crit')+'">'
         +'<div class="ws-drill-main"><div class="ws-drill-name">'+_escd(it.name||it.conversation_id||'?')+'</div>'
         +'<div class="ws-drill-sub">'+mk+window.T('base.drill.wait')+fmtWaitMin(it.wait_sec)+'</div></div>'
         +'<button class="ws-drill-btn ws-drill-claim" data-act="claim" title="'+window.T('base.drill.claim_t')+'">'+window.T('base.drill.claim')+'</button>'
@@ -2934,8 +2955,8 @@ window._pillChainFail=window._pillChainFail||function(fn){
         +'</div>';
     }
     var html='';
-    if(waitGrp.length){ html+='<div class="ws-drill-sec sec-wait">'+window.Tf('base.drill.sec_wait',{n:waitGrp.length})+'</div>'+waitGrp.slice(0,30).map(_row).join(''); }
-    if(handledGrp.length){ html+='<div class="ws-drill-sec sec-handled">'+window.Tf('base.drill.sec_handled',{n:handledGrp.length})+'</div>'+handledGrp.slice(0,30).map(_row).join(''); }
+    if(g.crit.length){ html+='<div class="ws-drill-sec sec-crit">'+window.Tf('base.drill.sec_crit',{n:g.crit.length})+'</div>'+g.crit.slice(0,30).map(_row).join(''); }
+    if(g.warn.length){ html+='<div class="ws-drill-sec sec-warn">'+window.Tf('base.drill.sec_warn',{n:g.warn.length})+'</div>'+g.warn.slice(0,30).map(_row).join(''); }
     _sl.innerHTML=html;
   }
   function _toggleSlaPanel(show){

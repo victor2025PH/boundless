@@ -38,15 +38,32 @@
     deliver / A 线直发）命中即静默跳过（不算投递错误、不喂熔断），分来源计数可观测。
     已知接受的罕见误拦：客户显式要求「再说一遍」的复读（0.667/0.637）——代价是
     沉默一轮可恢复，比同义双发暴露机器人便宜。
+
+2026-09-02 #144（skuio 工单，WA 英文/西语两会话实锤）——**similar 档只比对本轮**：
+  - 事故：客户发新消息 → AI 回复与 119s/88s 前**上一轮**的回复开头/内容词相近
+    （sim 0.55/0.59）→ similar 档拦下 → 重写链没救回 → 静默收尾，两会话此后零回复。
+    similar 档的设计语义是「同一 burst 两次独立生成的同义双发」；跨了客户新入站的
+    相近回复是**两轮各答一次**，不是双发——客户连问两句相近的话本来就该得到两条相近
+    的回答。``near_duplicate_of_recent(..., similar_since_ts=)``：早于「本稿所答的
+    最新入站」的出站行不参与 similar 判定；dup 档（≥0.90 原样复读）**不变**，跨轮
+    逐字复读仍拦（客户两分钟后再问同一句、AI 一字不差再答＝真复读）。
+  - 拦下后**绝不静默收尾**：重写链每个结局（attempted/rescued/still_dup/unchanged/
+    unusable/error）打 WARNING；重写失败且客户有新入站在等 → 调用方给会话打
+    「需人工」（reason=dup_guard_blocked）进待处理清单——沉默必须有人看见。
+  - 观测：``near_duplicate_report`` 把「跨轮相近被放行」单独回报，worker 拆
+    同轮拦截 / 跨轮拦截（仅 dup 档）/ 跨轮放行三计数。
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # 归一化：去空白 + 常见标点/emoji 噪声，小写化——「换个标点/emoji」不算新内容
 _STRIP_RE = re.compile(
@@ -108,7 +125,59 @@ def _is_media_placeholder(raw_text: str) -> bool:
     return str(raw_text or "").lstrip().startswith(("[", "【"))
 
 
-def near_duplicate_of_recent(
+def latest_inbound_ts(
+    rows: Optional[List[Dict[str, Any]]], *, before_ts: Optional[float] = None,
+) -> float:
+    """会话行里最近一条**入站**的 ts（``before_ts`` 给定时只看不晚于它的入站）。
+
+    「本稿所答的最新入站」＝草稿创建前最后一条客户消息（#144）：创建后才到的
+    入站属于下一轮（fresh_guard 管），不能把 since 边界推到它那里——否则夹在
+    两条入站之间的同轮出站会被漏比对。无入站 / 坏输入 → 0.0（调用方按「不筑
+    since 边界」处理＝旧行为）。纯函数绝不抛。
+    """
+    best = 0.0
+    for row in list(rows or []):
+        try:
+            if not isinstance(row, dict) or str(row.get("direction") or "") != "in":
+                continue
+            ts = float(row.get("ts") or 0.0)
+            if ts <= 0:
+                continue
+            if before_ts is not None and ts > float(before_ts):
+                continue
+            if ts > best:
+                best = ts
+        except Exception:
+            continue
+    return best
+
+
+def peer_awaiting_reply(rows: Optional[List[Dict[str, Any]]]) -> bool:
+    """客户是否有新入站在等回复＝会话最新一条（按 ts）是入站。
+
+    dup 拦截静默收尾前的判据（#144）：为 True 的会话拦下＝客户零回复，必须进
+    「需人工」清单让人看见；为 False（最新是出站，客户已有回复）只记日志。
+    无行 / 坏输入 → False（不打标——打标是有人工成本的动作，宁漏勿滥）。
+    """
+    latest_dir, latest_ts = "", -1.0
+    for row in list(rows or []):
+        try:
+            if not isinstance(row, dict):
+                continue
+            d = str(row.get("direction") or "")
+            if d not in ("in", "out"):
+                continue
+            if d == "out" and str(row.get("status") or "") in ("failed", "resent"):
+                continue  # 失败留痕不算「已回复」
+            ts = float(row.get("ts") or 0.0)
+            if ts >= latest_ts:
+                latest_dir, latest_ts = d, ts
+        except Exception:
+            continue
+    return latest_dir == "in"
+
+
+def near_duplicate_report(
     text: str,
     recent_rows: Optional[List[Dict[str, Any]]],
     *,
@@ -120,18 +189,26 @@ def near_duplicate_of_recent(
     similar_prefix: int = DEFAULT_SIMILAR_PREFIX,
     token_contain: float = DEFAULT_TOKEN_CONTAIN,
     token_ratio: float = DEFAULT_TOKEN_RATIO,
-) -> Optional[Dict[str, Any]]:
-    """待发文本是否与窗口内最近出站消息近重复。
+    similar_since_ts: Optional[float] = None,
+) -> Dict[str, Any]:
+    """近重复判定全报告：``{"hit": 命中或 None, "cross_round_similar": 被放行的跨轮相近或 None}``。
 
-    recent_rows：store.list_recent_messages 产物（含 direction/text/ts）。
-    命中返回 ``{level, similarity, age_sec, matched_text}``，否则 None。
-    防御式：任何字段缺失/异常按「不命中」处理（守卫绝不阻断正常发送）。
+    ``similar_since_ts``（#144）：similar 档只比对 ts ≥ 该值的出站——早于它的出站
+    是上一轮客户消息的回复，与本稿相近属「两轮各答一次」而非双发，记进
+    ``cross_round_similar``（可观测「若无此边界本会被误拦」）但**不命中**。
+    dup 档不受 since 影响（跨轮原样复读仍拦）。None/0 → 不筑边界（旧行为）。
     """
+    out: Dict[str, Any] = {"hit": None, "cross_round_similar": None}
     cand = normalize_for_dup(text)
     if len(cand) < int(min_len):
-        return None
+        return out
     now = float(now if now is not None else time.time())
+    try:
+        since = float(similar_since_ts or 0.0)
+    except (TypeError, ValueError):
+        since = 0.0
     best: Optional[Dict[str, Any]] = None
+    cross: Optional[Dict[str, Any]] = None
     for row in reversed(list(recent_rows or [])):
         try:
             if not isinstance(row, dict):
@@ -171,7 +248,15 @@ def near_duplicate_of_recent(
                 "similarity": round(ratio, 3),
                 "age_sec": max(0.0, round(now - ts, 1)),
                 "matched_text": prev_raw[:120],
+                "matched_ts": ts,
+                # 同轮＝匹配到的出站晚于本稿所答的最新入站（since 未筑时按同轮）
+                "same_round": (since <= 0) or (ts >= since),
             }
+            if level == "similar" and since > 0 and ts < since:
+                # #144：上一轮的回复——两轮各答一次不是双发，放行但留痕
+                if cross is None or hit["similarity"] > cross["similarity"]:
+                    cross = hit
+                continue
             # dup 强于 similar；同级取相似度更高者
             if (best is None
                     or (hit["level"] == "dup" and best["level"] != "dup")
@@ -180,7 +265,38 @@ def near_duplicate_of_recent(
                 best = hit
         except Exception:
             continue
-    return best
+    out["hit"] = best
+    out["cross_round_similar"] = cross
+    return out
+
+
+def near_duplicate_of_recent(
+    text: str,
+    recent_rows: Optional[List[Dict[str, Any]]],
+    *,
+    now: Optional[float] = None,
+    window_sec: float = DEFAULT_WINDOW_SEC,
+    min_len: int = DEFAULT_MIN_LEN,
+    dup_ratio: float = DEFAULT_DUP_RATIO,
+    similar_ratio: float = DEFAULT_SIMILAR_RATIO,
+    similar_prefix: int = DEFAULT_SIMILAR_PREFIX,
+    token_contain: float = DEFAULT_TOKEN_CONTAIN,
+    token_ratio: float = DEFAULT_TOKEN_RATIO,
+    similar_since_ts: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """待发文本是否与窗口内最近出站消息近重复。
+
+    recent_rows：store.list_recent_messages 产物（含 direction/text/ts）。
+    命中返回 ``{level, similarity, age_sec, matched_text, matched_ts, same_round}``，
+    否则 None。``similar_since_ts`` 语义见 :func:`near_duplicate_report`。
+    防御式：任何字段缺失/异常按「不命中」处理（守卫绝不阻断正常发送）。
+    """
+    return near_duplicate_report(
+        text, recent_rows, now=now, window_sec=window_sec, min_len=min_len,
+        dup_ratio=dup_ratio, similar_ratio=similar_ratio,
+        similar_prefix=similar_prefix, token_contain=token_contain,
+        token_ratio=token_ratio, similar_since_ts=similar_since_ts,
+    )["hit"]
 
 
 # ── 进程级出站登记表（2026-08-02）────────────────────────────────────────────
@@ -320,70 +436,100 @@ async def attempt_dup_rewrite(
     rewrite_fn: Any,
     source: str = "",
     now: Optional[float] = None,
+    similar_since_ts: Optional[float] = None,
+    conv_id: str = "",
 ) -> Optional[str]:
     """dup-guard 命中后的重写重试。返回「重写且再核通过」的文本；None=维持跳过。
 
     ``rewrite_fn``: ``async (text, matched_text) -> Optional[str]``（由调用链注入，
     A 线用 client.ai_client、B 线经 dup_guard_cfg 携带的闭包）。绝不抛。
+    ``similar_since_ts`` 与首检同值（#144）：重写稿再核不得比首检更严——否则
+    上一轮的回复会把换过说法的重写稿再拦一次。``conv_id`` 只用于结局日志。
+    每个结局都打 WARNING（#144「拦下后绝不静默收尾」）——``rewrite_fn`` 缺席 /
+    开关关也算一种结局（``skipped``），让「为什么没救回」在日志里有答案。
     """
     if not (cfg or {}).get("rewrite_retry", True):
+        _record_rewrite("skipped", source, conv_id=conv_id,
+                        detail="rewrite_retry=false")
         return None
     if rewrite_fn is None or not str(text or "").strip():
+        _record_rewrite("skipped", source, conv_id=conv_id,
+                        detail="no rewrite_fn" if rewrite_fn is None else "empty text")
         return None
-    _record_rewrite("attempted", source)
+    _record_rewrite("attempted", source, conv_id=conv_id)
     matched = str((hit or {}).get("matched_text") or "")
     try:
         new_text = await rewrite_fn(str(text), matched)
-    except Exception:
-        _record_rewrite("error", source)
+    except Exception as exc:
+        _record_rewrite("error", source, conv_id=conv_id,
+                        detail=f"{type(exc).__name__}: {exc}"[:160])
         return None
     new_text = str(new_text or "").strip().strip('"“”「」').strip()
     if not new_text or len(new_text) > max(200, len(str(text)) * 3):
-        _record_rewrite("unusable", source)
+        _record_rewrite("unusable", source, conv_id=conv_id,
+                        detail=f"len={len(new_text)}")
         return None
     if normalize_for_dup(new_text) == normalize_for_dup(text):
-        _record_rewrite("unchanged", source)
+        _record_rewrite("unchanged", source, conv_id=conv_id)
         return None
     try:
         hit2 = near_duplicate_of_recent(
             new_text, rows,
             window_sec=float((cfg or {}).get("window_sec", DEFAULT_WINDOW_SEC)),
-            now=now)
-    except Exception:
-        _record_rewrite("error", source)
+            now=now, similar_since_ts=similar_since_ts)
+    except Exception as exc:
+        _record_rewrite("error", source, conv_id=conv_id,
+                        detail=f"recheck {type(exc).__name__}"[:160])
         return None
     lvl2 = (hit2 or {}).get("level", "")
     blocked2 = bool(hit2) and (
         lvl2 == "dup" or bool((cfg or {}).get("block_similar", True)))
     if blocked2:
-        _record_rewrite("still_dup", source)
+        _record_rewrite(
+            "still_dup", source, conv_id=conv_id,
+            detail="level=%s sim=%.2f" % (
+                lvl2, float((hit2 or {}).get("similarity") or 0.0)))
         return None
-    _record_rewrite("rescued", source)
+    _record_rewrite("rescued", source, conv_id=conv_id,
+                    detail="len %d→%d" % (len(str(text)), len(new_text)))
     return new_text
 
 
 # ── 观测（进程级计数，autosend-status / metrics 可挂）────────────────────────
 _STATS_LOCK = threading.Lock()
-_STATS: Dict[str, int] = {"checked": 0, "hit_dup": 0, "hit_similar": 0, "forced": 0}
+_STATS: Dict[str, int] = {"checked": 0, "hit_dup": 0, "hit_similar": 0, "forced": 0,
+                          # #144：similar 档因「早于本轮最新入站」被放行的次数
+                          "released_cross_round": 0}
 _BLOCKED_BY_SOURCE: Dict[str, int] = {}
 # 拦截后重写重试漏斗（impl85 阶段3）：attempted → rescued（换说法后放行）/
-# still_dup（重写仍雷同，维持跳过）/ unchanged / unusable / error
+# still_dup（重写仍雷同，维持跳过）/ unchanged / unusable / error / skipped
 _REWRITE_STATS: Dict[str, int] = {}
 
 
-def _record_rewrite(outcome: str, source: str = "") -> None:
+def _record_rewrite(outcome: str, source: str = "", *, conv_id: str = "",
+                    detail: str = "") -> None:
+    """记重写漏斗一格 + 打 WARNING（#144：拦截后的每个结局都必须在日志可见）。"""
     key = str(outcome or "unknown")
     with _STATS_LOCK:
         _REWRITE_STATS[key] = _REWRITE_STATS.get(key, 0) + 1
         if source:
             sk = f"{key}:{source}"
             _REWRITE_STATS[sk] = _REWRITE_STATS.get(sk, 0) + 1
+    try:
+        logger.warning(
+            "[dup_guard] rewrite outcome=%s source=%s conv=%s%s",
+            key, source or "-", conv_id or "-",
+            (" " + str(detail)) if detail else "")
+    except Exception:
+        pass
 
 
 def record_dup_check(level: str = "", *, forced: bool = False,
-                     source: str = "", blocked: bool = False) -> None:
+                     source: str = "", blocked: bool = False,
+                     released_cross_round: bool = False) -> None:
     """记一次守卫判定：level ∈ ''(未命中)|dup|similar；forced=坐席确认后强发；
-    source/blocked=自动链来源（autosend|a_line）命中即拦截时记分来源计数。"""
+    source/blocked=自动链来源（autosend|a_line）命中即拦截时记分来源计数；
+    released_cross_round=本次有跨轮相近出站被 since 边界放行（#144 观测）。"""
     with _STATS_LOCK:
         _STATS["checked"] += 1
         if level == "dup":
@@ -394,6 +540,8 @@ def record_dup_check(level: str = "", *, forced: bool = False,
             _STATS["forced"] += 1
         if blocked and source:
             _BLOCKED_BY_SOURCE[source] = _BLOCKED_BY_SOURCE.get(source, 0) + 1
+        if released_cross_round:
+            _STATS["released_cross_round"] = _STATS.get("released_cross_round", 0) + 1
 
 
 def dup_guard_metrics_snapshot() -> Dict[str, Any]:
@@ -406,6 +554,9 @@ def dup_guard_metrics_snapshot() -> Dict[str, Any]:
 
 __all__ = [
     "near_duplicate_of_recent",
+    "near_duplicate_report",
+    "latest_inbound_ts",
+    "peer_awaiting_reply",
     "normalize_for_dup",
     "content_tokens",
     "token_containment",

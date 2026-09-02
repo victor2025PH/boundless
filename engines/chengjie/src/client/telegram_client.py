@@ -3313,9 +3313,20 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             except Exception:
                                 _dg_rows = []
                         _dg_rows.extend(_dg_reg.recent_rows(_dg_cid))
+                        # #144：similar 档只比对本轮（最新入站之后的出站）——上一轮
+                        # 回复与本条相近是两轮各答一次，不是双发；dup 档不受影响。
+                        _dg_since = 0.0
+                        try:
+                            from src.inbox.outbound_dup_guard import (
+                                latest_inbound_ts as _dg_lit,
+                            )
+                            _dg_since = float(_dg_lit(_dg_rows) or 0.0)
+                        except Exception:
+                            _dg_since = 0.0
                         _dg_hit = _dg_near(
                             reply_final, _dg_rows,
-                            window_sec=float(_dg_cfg.get("window_sec", 180.0)))
+                            window_sec=float(_dg_cfg.get("window_sec", 180.0)),
+                            similar_since_ts=_dg_since or None)
                         _dg_lvl = (_dg_hit or {}).get("level", "")
                         _dg_block = bool(_dg_hit) and (
                             _dg_lvl == "dup"
@@ -3353,7 +3364,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                     _dg_rw = await _dg_retry(
                                         text=reply_final, hit=_dg_hit,
                                         rows=_dg_rows, cfg=_dg_cfg,
-                                        rewrite_fn=_dg_rw_fn, source="a_line")
+                                        rewrite_fn=_dg_rw_fn, source="a_line",
+                                        similar_since_ts=_dg_since or None,
+                                        conv_id=_dg_cid)
                             except Exception:
                                 _dg_rw = None
                             if not _dg_rw:
@@ -3362,6 +3375,28 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                     _gate_bump("dup_guard")
                                 except Exception:
                                     pass
+                                # #144：拦下后绝不静默——A 线本条就是对最新入站的回复，
+                                # 没救回＝客户零回复 → 打「需人工」进待处理清单（best-effort）。
+                                try:
+                                    from src.integrations.protocol_autoreply import (
+                                        tag_needs_human as _dg_tag,
+                                    )
+                                    from src.integrations.protocol_bridge import (
+                                        get_inbox_store as _dg_tag_store,
+                                    )
+                                    _dg_st = _dg_tag_store()
+                                    if _dg_st is not None:
+                                        _dg_tag(_dg_st, {
+                                            "platform": "telegram",
+                                            "account_id": str(getattr(
+                                                self, "account_id", "default") or "default"),
+                                            "chat_key": str(chat_id),
+                                        }, reason="dup_guard_blocked", source="system")
+                                except Exception:
+                                    pass
+                                self.logger.warning(
+                                    "[dup_guard] A线拦截后未救回，本轮无回复，已标「需人工」"
+                                    "(reason=dup_guard_blocked) chat=%s", chat_id)
                                 return
                             self.logger.info(
                                 "[dup_guard] A线拦截后换说法重试成功 chat=%s "

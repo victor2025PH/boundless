@@ -272,6 +272,12 @@ class AutosendWorker:
         self.total_human_deliver_errors: int = 0  # 人工通过草稿投递失败数
         self.total_dup_blocked: int = 0          # 出站近重复守卫拦截数（不算投递错误）
         self.total_dup_rewritten: int = 0        # 拦截后换说法重试成功数（impl85 阶段3）
+        # #144（2026-09-02）拆计数：同轮双发拦截 / 跨轮拦截（仅 dup 档原样复读）/
+        # 跨轮相近被 since 边界放行（修前会被误拦的那部分）/ 拦下后打「需人工」数
+        self.total_dup_blocked_same_round: int = 0
+        self.total_dup_blocked_cross_round: int = 0
+        self.total_dup_cross_round_released: int = 0
+        self.total_dup_blocked_flagged: int = 0
         self.total_superseded: int = 0           # 新入站过期守卫跳过数（fresh_guard，不算 error）
         # 工作时间闸扣留事件数（同一草稿每 tick 重扫会重复计数——这是「扣留中」的
         # 活动信号而非唯一草稿数；复班后自然归零增长）
@@ -439,47 +445,141 @@ class AutosendWorker:
             logger.debug("[AutosendWorker] 在途登记表读取失败（忽略）", exc_info=True)
         return rows
 
-    def _dup_guard_check(self, item: Dict[str, Any],
-                         send_text: str) -> Optional[Dict[str, Any]]:
-        """出站近重复判定：DB 出站镜像 + 进程级在途登记表合并比对。
+    # 「本稿所答的最新入站」判定的时钟垫（#144）：入站 ts 来自平台（WA 秒级 /
+    # 服务端时钟），草稿 created_ts 是本机 time.time()——允许入站比拟稿「晚」这么
+    # 几秒仍算本稿所答的那条，防时钟偏差把 since 边界错退到上一轮入站。
+    _DUP_SINCE_GRACE_SEC = 2.0
 
-        防御式：store 缺失/查询异常按「不命中」（守卫绝不阻断正常投递）。
+    def _dup_guard_report(self, item: Dict[str, Any],
+                          send_text: str) -> Dict[str, Any]:
+        """出站近重复判定全报告：DB 出站镜像 + 进程级在途登记表合并比对。
+
+        返回 ``{hit, cross_round_similar, since_ts, rows}``。``since_ts``＝本稿所答
+        的最新入站 ts（#144：similar 档只比对它之后的出站；无入站/无 created_ts
+        参照 → 0＝不筑边界，旧行为）。防御式：store 缺失/查询异常按「不命中」
+        （守卫绝不阻断正常投递）。
         """
+        empty: Dict[str, Any] = {"hit": None, "cross_round_similar": None,
+                                 "since_ts": 0.0, "rows": []}
         conv = str(item.get("conversation_id") or "")
         if not conv:
-            return None
+            return empty
         try:
-            from src.inbox.outbound_dup_guard import near_duplicate_of_recent
-            return near_duplicate_of_recent(
-                send_text, self._dup_guard_rows(conv),
-                window_sec=float(self._dup_guard_cfg.get("window_sec", 180.0)),
+            from src.inbox.outbound_dup_guard import (
+                latest_inbound_ts,
+                near_duplicate_report,
             )
+            rows = self._dup_guard_rows(conv)
+            created = float(item.get("created_ts") or 0.0)
+            since = latest_inbound_ts(
+                rows,
+                before_ts=(created + self._DUP_SINCE_GRACE_SEC)
+                if created > 0 else None)
+            rep = near_duplicate_report(
+                send_text, rows,
+                window_sec=float(self._dup_guard_cfg.get("window_sec", 180.0)),
+                similar_since_ts=since or None,
+            )
+            rep["since_ts"] = since
+            rep["rows"] = rows
+            return rep
         except Exception:
             logger.debug("[AutosendWorker] 近重复守卫异常（放行）", exc_info=True)
-            return None
+            return empty
+
+    def _dup_guard_check(self, item: Dict[str, Any],
+                         send_text: str) -> Optional[Dict[str, Any]]:
+        """兼容薄壳：只回命中（见 ``_dup_guard_report``）。"""
+        return self._dup_guard_report(item, send_text).get("hit")
 
     async def _try_dup_rewrite(
         self, item: Dict[str, Any], send_text: str,
-        hit: Optional[Dict[str, Any]],
+        hit: Optional[Dict[str, Any]], *,
+        since_ts: Optional[float] = None,
+        rows: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[str]:
         """dup 拦截后「换个说法」重试（impl85 阶段3）。返回通过再核的重写稿或 None。
 
         rewrite_fn 由装配层放进 dup_guard_cfg（bootstrap / support_kwargs 注入
         ``rewrite_fn`` 闭包，内用 ai_client.rewrite_local）；未注入＝维持旧行为。
+        ``since_ts``/``rows`` 与首检同值（#144：再核不得比首检更严）。
         绝不抛（拦截语义只可能维持，不可能因重试异常放行原文）。
         """
         try:
             from src.inbox.outbound_dup_guard import attempt_dup_rewrite
             conv = str(item.get("conversation_id") or "")
             return await attempt_dup_rewrite(
-                text=send_text, hit=hit, rows=self._dup_guard_rows(conv),
+                text=send_text, hit=hit,
+                rows=list(rows) if rows is not None else self._dup_guard_rows(conv),
                 cfg=self._dup_guard_cfg,
                 rewrite_fn=self._dup_guard_cfg.get("rewrite_fn"),
-                source="autosend")
+                source="autosend",
+                similar_since_ts=since_ts or None,
+                conv_id=conv)
         except Exception:
             logger.debug("[AutosendWorker] dup 重写重试异常（维持跳过）",
                          exc_info=True)
             return None
+
+    def _dup_blocked_escalate(
+        self, item: Dict[str, Any], hit: Optional[Dict[str, Any]],
+        rows: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        """dup 拦截且重写没救回 → 绝不静默收尾（#144）。返回是否打了「需人工」。
+
+        客户有新入站在等（会话最新一条是入站）＝拦下即客户零回复：给会话打
+        「需人工」标（reason=dup_guard_blocked，chip 悬停可见原因）进待处理清单，
+        并发 ops 告警；最新一条已是出站（客户已有回复）→ 只留 WARNING。
+        全程 best-effort：打标失败也只记日志，绝不影响投递链。
+        """
+        conv = str(item.get("conversation_id") or "")
+        waiting = False
+        try:
+            from src.inbox.outbound_dup_guard import peer_awaiting_reply
+            waiting = peer_awaiting_reply(rows)
+        except Exception:
+            waiting = False
+        if not waiting:
+            logger.warning(
+                "[AutosendWorker] guard=near_duplicate 拦截后未救回，客户最新一条"
+                "已是出站（已有回复），本轮静默 conv=%s draft=%s",
+                conv, item.get("draft_id", ""))
+            return False
+        tagged = False
+        try:
+            store = getattr(self._svc, "_store", None)
+            if store is not None:
+                from src.integrations.protocol_autoreply import tag_needs_human
+                tagged = bool(tag_needs_human(store, {
+                    "platform": str(item.get("platform") or ""),
+                    "account_id": str(item.get("account_id") or "default"),
+                    "chat_key": str(item.get("chat_key") or ""),
+                }, reason="dup_guard_blocked", source="system"))
+        except Exception:
+            logger.debug("[AutosendWorker] dup 拦截打「需人工」失败（忽略）",
+                         exc_info=True)
+        if tagged:
+            self.total_dup_blocked_flagged += 1
+        logger.warning(
+            "[AutosendWorker] guard=near_duplicate 拦截后未救回且客户有新入站在等 "
+            "→ %s conv=%s draft=%s level=%s sim=%.2f matched=%r",
+            "已打「需人工」(reason=dup_guard_blocked)" if tagged
+            else "「需人工」已在/打标不可用，仅留痕",
+            conv, item.get("draft_id", ""),
+            (hit or {}).get("level", ""),
+            float((hit or {}).get("similarity") or 0.0),
+            str((hit or {}).get("matched_text", ""))[:60])
+        try:
+            from src.ops.ops_alert import notify as _ops_notify
+            _ops_notify(
+                "dup_guard_blocked",
+                f"⚠️ 出站近重复拦截后客户无回复 conv={conv}"
+                f"（level={(hit or {}).get('level', '')}，已进待处理清单）",
+                account_id=conv, reason="dup_guard_blocked")
+        except Exception:
+            logger.debug("[AutosendWorker] dup 拦截 ops_alert 失败（忽略）",
+                         exc_info=True)
+        return tagged
 
     def apply_deliver_delay(self, block: Optional[Dict[str, Any]]) -> None:
         """运行时热更新拟人打字延迟配置（「自动回复设置」页保存后即时生效）。
@@ -1081,27 +1181,54 @@ class AutosendWorker:
                     outbound_registry as _dup_reg,
                     record_dup_check as _dup_rec,
                 )
-                _hit = self._dup_guard_check(item, send_text)
+                # #144：similar 档只比对「本稿所答的最新入站」之后的出站——上一轮
+                # 的回复与本稿相近是两轮各答一次，不是双发（英文/西语两会话实锤：
+                # 客户新消息的回复被 119s/88s 前上一轮回复拦下 → 零回复）。
+                _rep = self._dup_guard_report(item, send_text)
+                _hit = _rep.get("hit")
+                _cross = _rep.get("cross_round_similar")
+                _since = float(_rep.get("since_ts") or 0.0)
+                _rows = _rep.get("rows") or []
                 _lvl = (_hit or {}).get("level", "")
                 _block = bool(_hit) and (
                     _lvl == "dup"
                     or bool(self._dup_guard_cfg.get("block_similar", True)))
+                if _cross and not _block:
+                    self.total_dup_cross_round_released += 1
+                    logger.info(
+                        "[AutosendWorker] guard=near_duplicate 跨轮相近放行 conv=%s "
+                        "sim=%.2f age=%.0fs matched=%r（匹配出站早于本轮入站 %.0fs，"
+                        "两轮各答一次非双发 #144）",
+                        _conv_id_g, _cross.get("similarity", 0.0),
+                        _cross.get("age_sec", 0.0),
+                        str(_cross.get("matched_text", ""))[:60],
+                        max(0.0, _since - float(_cross.get("matched_ts") or 0.0)))
                 try:
-                    _dup_rec(_lvl, source="autosend", blocked=_block)
+                    _dup_rec(_lvl, source="autosend", blocked=_block,
+                             released_cross_round=bool(_cross and not _block))
                 except Exception:
                     pass
                 if _block:
+                    _same_round = bool((_hit or {}).get("same_round", True))
                     logger.warning(
                         "[AutosendWorker] guard=near_duplicate 出站近重复"
-                        "拦截 conv=%s level=%s sim=%.2f age=%.0fs matched=%r",
-                        _conv_id_g, _lvl, _hit.get("similarity", 0.0),
+                        "拦截 conv=%s level=%s round=%s sim=%.2f age=%.0fs matched=%r",
+                        _conv_id_g, _lvl, "same" if _same_round else "cross",
+                        _hit.get("similarity", 0.0),
                         _hit.get("age_sec", 0.0),
                         str(_hit.get("matched_text", ""))[:60])
                     # impl85 阶段3：拦下后换说法重试一次（重写稿再过守卫），
-                    # 通过才继续投递；仍雷同/无重写链 → 维持静默跳过。
-                    _rw = await self._try_dup_rewrite(item, send_text, _hit)
+                    # 通过才继续投递；仍雷同/无重写链 → 跳过本条，但绝不静默：
+                    # 结局进 WARNING 日志，客户在等的会话打「需人工」（#144）。
+                    _rw = await self._try_dup_rewrite(
+                        item, send_text, _hit, since_ts=_since, rows=_rows)
                     if not _rw:
                         self.total_dup_blocked += 1
+                        if _same_round:
+                            self.total_dup_blocked_same_round += 1
+                        else:
+                            self.total_dup_blocked_cross_round += 1
+                        self._dup_blocked_escalate(item, _hit, _rows)
                         return
                     self.total_dup_rewritten += 1
                     logger.info(
@@ -1885,6 +2012,12 @@ class AutosendWorker:
             "total_human_deliver_errors": self.total_human_deliver_errors,
             "total_dup_blocked": self.total_dup_blocked,  # 出站近重复守卫拦截数
             "total_dup_rewritten": self.total_dup_rewritten,  # 拦截后换说法得救数
+            # #144 拆计数：同轮双发拦截 / 跨轮拦截（仅 dup 档原样复读）/
+            # 跨轮相近被 since 边界放行（修前会误拦）/ 拦下后打「需人工」数
+            "total_dup_blocked_same_round": self.total_dup_blocked_same_round,
+            "total_dup_blocked_cross_round": self.total_dup_blocked_cross_round,
+            "total_dup_cross_round_released": self.total_dup_cross_round_released,
+            "total_dup_blocked_flagged": self.total_dup_blocked_flagged,
             "dup_guard_enabled": bool(self._dup_guard_cfg.get("enabled")),
             "total_superseded": self.total_superseded,  # 新入站过期守卫跳过数
             "fresh_guard_enabled": bool(self._fresh_guard_cfg.get("enabled")),
