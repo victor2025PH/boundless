@@ -957,6 +957,22 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # （复合键 chat_id:mid——supergroup 消息 id 是 per-channel 的，裸 mid
                 # 会跨群相撞导致误判重复、静默丢消息）
                 mid = getattr(message, 'id', 0) or getattr(message, 'message_id', 0)
+                # C1-②（#123 族，2026-09-02）：报障群序号连续性哨兵——放在去重之前
+                # （重投/编辑同号对哨兵是无信息量的旧号，天然幂等），任何真到达
+                # 本进程的 id 都算「见过」；跳号＝中间有号没到本进程＝候选漏收，
+                # 宽限期后由 _bug_intake_seq_gap_sweep 云端定点补拉并重放本 handler。
+                try:
+                    from src.ops.bug_intake import note_group_msg_seq
+                    _bi_root = (self.config.config
+                                if hasattr(self.config, "config") else self.config)
+                    if note_group_msg_seq(
+                            _bi_root if isinstance(_bi_root, dict) else {},
+                            chat_id, mid,
+                            account_id=getattr(self, "account_id", "") or "default"):
+                        self._schedule_bug_intake_seq_sweep()
+                except Exception:
+                    self.logger.debug("[bug_intake] 序号哨兵登记失败（忽略）",
+                                      exc_info=True)
                 if not self._msg_dedup.claim(chat_id, mid):
                     self.logger.debug("[群消息] 跳过: 去重 chat=%s mid=%s", chat_id, mid)
                     _m = _metrics()
@@ -1031,6 +1047,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             except Exception as e:
                 self.logger.error(f"处理群组消息失败: {e}")
+
+        # C1-②：序号哨兵补拉重放入口——补回的消息走与实时到达**同一个** handler
+        # （去重/触发裁决/镜像/登记/媒体归档全链一致），不另起一条「补拉专用」半链。
+        self._group_message_handler = handle_group_message
 
         # 编辑消息（UI「回复逻辑」页 ignore_edited 开关，缺省=忽略）：pyrogram 的
         # 编辑更新走独立的 on_edited_message，不进上面的 on_message handler。
@@ -1622,6 +1642,86 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             except Exception:
                 self.logger.debug("[bug_backfill] 轮次异常（忽略）", exc_info=True)
             await asyncio.sleep(max(60, interval))
+
+    def _schedule_bug_intake_seq_sweep(self) -> None:
+        """C1-②：登记到新洞 → 拉起一次（单飞）宽限期后的收割+补拉任务。"""
+        task = getattr(self, "_bi_seq_sweep_task", None)
+        if task is not None and not task.done():
+            return
+        try:
+            self._bi_seq_sweep_task = asyncio.create_task(
+                self._bug_intake_seq_gap_sweep())
+        except Exception:
+            self.logger.debug("[bug_intake] 序号哨兵收割任务创建失败", exc_info=True)
+
+    async def _bug_intake_seq_gap_sweep(self) -> None:
+        """C1-②（#123 族）：宽限期后收割仍未自愈的跳号洞 → 云端按 id 定点拉取 →
+        拉到的真消息**重放进群消息 handler**（与实时到达同链：去重/触发/镜像/
+        登记/媒体归档一个不少）；核实为空的号（已删/服务消息）只记账。
+
+        循环直到本账号没有 pending 洞（一次跳号只等一个宽限期，连续跳号顺延）；
+        任何异常吞掉只记日志，绝不影响主消息循环。
+        """
+        try:
+            from src.ops.bug_intake import (
+                due_seq_gaps, seq_gap_backfilled, seq_grace_sec,
+                seq_sentinel_snapshot,
+            )
+            from src.integrations.protocol_bridge import fetch_tg_messages_by_ids
+        except Exception:
+            return
+        acct = str(getattr(self, "account_id", "") or "default")
+        handler = getattr(self, "_group_message_handler", None)
+        for _round in range(50):            # 硬上限：绝不成为常驻循环
+            await asyncio.sleep(float(seq_grace_sec()) + 1.0)
+            try:
+                cfg = (self.config.config
+                       if hasattr(self.config, "config") else self.config)
+                cfg = cfg if isinstance(cfg, dict) else {}
+                due = due_seq_gaps(cfg, account_id=acct)
+                for item in due:
+                    chat_id = str(item.get("chat_id") or "")
+                    ids = [int(i) for i in (item.get("missing_ids") or [])]
+                    if not chat_id or not ids or self.client is None:
+                        continue
+                    try:
+                        peer: Any = int(chat_id)
+                    except (TypeError, ValueError):
+                        peer = chat_id
+                    filled = 0
+                    note = ""
+                    try:
+                        got, empty = await fetch_tg_messages_by_ids(
+                            self.client, peer, ids)
+                    except Exception as exc:
+                        got, empty = [], []
+                        note = f"fetch_fail:{type(exc).__name__}"
+                    for m in got:
+                        try:
+                            if handler is not None:
+                                await handler(self.client, m)
+                            filled += 1
+                            self.logger.warning(
+                                "[bug_intake] 序号哨兵 补回漏收消息 chat=%s mid=%s "
+                                "from=%s text=%r", chat_id, getattr(m, "id", "?"),
+                                getattr(getattr(m, "from_user", None), "id", "?"),
+                                str(getattr(m, "text", None)
+                                    or getattr(m, "caption", None) or "")[:80])
+                        except Exception:
+                            self.logger.warning(
+                                "[bug_intake] 序号哨兵 重放 %s#%s 失败",
+                                chat_id, getattr(m, "id", "?"), exc_info=True)
+                    seq_gap_backfilled(chat_id, ids, filled, len(empty), note=note)
+            except Exception:
+                self.logger.debug("[bug_intake] 序号哨兵收割轮异常（忽略）",
+                                  exc_info=True)
+            try:
+                snap = seq_sentinel_snapshot()
+                if not any(int(v.get("pending") or 0) for k, v in snap.items()
+                           if k.startswith(f"{acct}:")):
+                    return
+            except Exception:
+                return
 
     async def _poll_inbound_loop(self):
         """轮询兜底主循环：定时拉取新进站私聊消息（补实时推送缺失）。

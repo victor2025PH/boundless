@@ -1811,6 +1811,15 @@ _ADDITIONS_2026_09_02_DELIVER_GATE_RESUME = """
 """
 _BASELINE += _ADDITIONS_2026_09_02_DELIVER_GATE_RESUME
 
+# 2026-09-02 C2 值守可见性：bug_events 台账只读口——被限频静默的真反馈
+# （rate_capped_report）/使用咨询（usage）不产生 bot 回执与工单，此前只躺在
+# 台账里；duty_watchdog 据此纳入「未应答告警」扫描面（限流只限 bot 自动
+# 回执，不得限值守可见性）。
+_ADDITIONS_2026_09_02_BUG_INTAKE_EVENTS = """
+/api/admin/bug-intake/events	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_02_BUG_INTAKE_EVENTS
+
 
 def _parse_baseline():
     expected = set()

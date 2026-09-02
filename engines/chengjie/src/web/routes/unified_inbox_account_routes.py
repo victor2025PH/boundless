@@ -609,6 +609,13 @@ _TG_GAP_PROBE: Dict[str, Dict[str, Any]] = {}
 _TG_GAP_LOCK = threading.Lock()
 _TG_GAP_MAX = 300
 _TG_GAP_COOLDOWN_SEC = 120.0
+# C1-①（#123 族，2026-09-02）：序号洞探测参数——镜像最近 200 个 id 内找相邻差 >1
+# 的缺号，单轮最多定点核实 100 个 id（= 一次 messages.getMessages）；核实为空
+# （已删/服务消息）的 id 进 per-cid 缓存，后续探测不再重复烧 RPC。
+_TG_GAP_HOLE_WINDOW = 200
+_TG_GAP_HOLE_MAX = 100
+_TG_GAP_EMPTY_IDS: Dict[str, set] = {}
+_TG_GAP_EMPTY_IDS_MAX = 2000
 
 
 def tg_gap_probe_snapshot(cid: str) -> Dict[str, Any]:
@@ -621,6 +628,44 @@ def tg_gap_probe_snapshot(cid: str) -> Dict[str, Any]:
 def _tg_gap_update(cid: str, **kw: Any) -> None:
     with _TG_GAP_LOCK:
         _TG_GAP_PROBE.setdefault(str(cid or ""), {}).update(kw)
+
+
+def tg_seq_holes_applicable(chat_key: str) -> bool:
+    """序号连续性判洞是否适用于该会话：只有 supergroup/channel（``-100`` 前缀）
+    的消息 id 按会话单调连续；私聊/小群 id 是账号全局序，相邻差 >1 是常态。"""
+    return str(chat_key or "").strip().startswith("-100")
+
+
+def _tg_gap_remember_empty(cid: str, ids: Any) -> None:
+    """记住核实为空的洞 id（已删/服务消息），下次探测直接剔除。"""
+    ids = [int(i) for i in (ids or []) if int(i or 0) > 0]
+    if not ids:
+        return
+    with _TG_GAP_LOCK:
+        s = _TG_GAP_EMPTY_IDS.setdefault(str(cid or ""), set())
+        s.update(ids)
+        if len(s) > _TG_GAP_EMPTY_IDS_MAX:
+            # 只留最新的一段（老洞越久越不可能再被问到）
+            keep = sorted(s)[-_TG_GAP_EMPTY_IDS_MAX:]
+            s.clear()
+            s.update(keep)
+
+
+def tg_gap_candidate_holes(store: Any, cid: str, chat_key: str) -> List[int]:
+    """镜像序号洞候选（已剔除核实为空缓存）；不适用/异常 → 空列表。"""
+    if store is None or not tg_seq_holes_applicable(chat_key):
+        return []
+    try:
+        holes = list(store.numeric_platform_msg_id_holes(
+            cid, window=_TG_GAP_HOLE_WINDOW, max_holes=_TG_GAP_HOLE_MAX))
+    except Exception:
+        logger.debug("[gap-probe] 序号洞扫描失败 cid=%s", cid, exc_info=True)
+        return []
+    if not holes:
+        return []
+    with _TG_GAP_LOCK:
+        known_empty = set(_TG_GAP_EMPTY_IDS.get(str(cid or ""), ()))
+    return [h for h in holes if h not in known_empty]
 
 
 def _tg_gap_try_start(cid: str, now: float, *, force: bool = False) -> bool:
@@ -647,7 +692,9 @@ def _tg_gap_try_start(cid: str, now: float, *, force: bool = False) -> bool:
         _TG_GAP_PROBE[cid] = {
             "state": "running", "checked_at": float(now),
             "top_id": 0, "mirror_max_id": 0, "gap": False,
+            "top_gap": False, "hole_gap": False,
             "fetched": 0, "inserted": 0, "capped": False,
+            "holes_probed": 0, "holes_filled": 0, "holes_empty": 0,
             "error": "", "error_kind": "", "finished_at": 0.0,
         }
         return True
@@ -687,6 +734,11 @@ def maybe_probe_tg_thread_gap(
     入口对比 dialog 顶部 id 与镜像最大 id，有缺口即在该账号 pyrogram loop 上
     补拉缺口段（ingest 去重、不触发 SSE/auto-draft/自动回复）。
 
+    C1-①（#123 族，2026-09-02）：顶部比对之外，同轮把镜像里的**序号洞**（相邻
+    数字 id 差 >1 的缺号，仅 supergroup/channel）交云端按 id 定点核实——0902
+    21:1x 实锤：1084 漏收而 1085 已是 top，旧口径 gap=false 永远探不出中间的洞。
+    核实为空的 id（已删/服务消息）进程内缓存，不重复烧 RPC。
+
     护栏：per-cid 120s 冷却（/thread 秒级轮询不放大 RPC）+ running 单飞 +
     账号断网冷却让路 + 账号级同步/全量深同步在跑时让路 + 严格 client 路由
     （不许主 client 顶别的账号）。返回触发结果（观测用）。
@@ -720,7 +772,9 @@ def maybe_probe_tg_thread_gap(
         mirror_max = int(store.max_numeric_platform_msg_id(cid) or 0)
     except Exception:
         mirror_max = 0
-    _tg_gap_update(cid, mirror_max_id=mirror_max)
+    # C1-①：序号洞候选（镜像内相邻 id 差 >1 的缺号；supergroup/channel 才适用）
+    hole_ids = tg_gap_candidate_holes(store, cid, chat_key)
+    _tg_gap_update(cid, mirror_max_id=mirror_max, holes_probed=len(hole_ids))
     import asyncio
     from src.inbox.ingest import ingest_thread
     from src.integrations.protocol_bridge import probe_fill_tg_gap, tg_error_kind
@@ -732,20 +786,44 @@ def maybe_probe_tg_thread_gap(
         try:
             stats = await probe_fill_tg_gap(
                 pyro, account_id, chat_key,
-                mirror_max_id=mirror_max, cap=300, ingest=_ingest)
+                mirror_max_id=mirror_max, cap=300, ingest=_ingest,
+                hole_ids=hole_ids)
+            _tg_gap_remember_empty(cid, stats.get("hole_empty_ids"))
             _tg_gap_update(
                 cid, state="done", finished_at=time.time(),
                 top_id=int(stats.get("top_id") or 0),
                 gap=bool(stats.get("gap")),
+                top_gap=bool(stats.get("top_gap")),
+                hole_gap=bool(stats.get("hole_gap")),
                 fetched=int(stats.get("fetched") or 0),
                 inserted=int(stats.get("inserted") or 0),
-                capped=bool(stats.get("capped")))
-            if stats.get("gap"):
+                capped=bool(stats.get("capped")),
+                holes_probed=int(stats.get("holes_probed") or 0),
+                holes_filled=int(stats.get("holes_filled") or 0),
+                holes_empty=int(stats.get("holes_empty") or 0))
+            if stats.get("top_gap"):
                 logger.info(
                     "[gap-probe] 缺口补拉 cid=%s top=%s mirror=%s 拉=%s 入=%s%s",
                     cid, stats.get("top_id"), mirror_max,
                     stats.get("fetched"), stats.get("inserted"),
                     "（触顶未接上）" if stats.get("capped") else "")
+            if stats.get("holes_probed"):
+                # 序号洞结果必须可见（#123 族：值守手动 gap-probe 只见 gap=false）
+                logger.log(
+                    logging.WARNING if stats.get("holes_filled") else logging.INFO,
+                    "[gap-probe] 序号洞核实 cid=%s 探=%s 补回=%s 空洞=%s ids=%s",
+                    cid, stats.get("holes_probed"), stats.get("holes_filled"),
+                    stats.get("holes_empty"),
+                    ",".join(str(h) for h in hole_ids[:20])
+                    + ("…" if len(hole_ids) > 20 else ""))
+            if stats.get("holes_filled"):
+                # 独立标签：值守阻塞哨兵（deploy/duty/group_sentinel.py）把
+                # 「gap-probe」整体列为噪声（0829 顶部补拉误报），而「洞里真有
+                # 漏收消息」是必须唤醒值守的真信号——换标签绕开噪声名单。
+                logger.warning(
+                    "[gap-hole-filled] 镜像序号洞补回 %s 条漏收消息 cid=%s（此前"
+                    "监听/轮询双双未收到；请核对是否有未应答提问）",
+                    stats.get("holes_filled"), cid)
         except Exception as exc:
             logger.debug("[gap-probe] 缺口补拉失败 cid=%s", cid, exc_info=True)
             _tg_gap_update(cid, state="error", error=str(exc)[:200],
@@ -3472,7 +3550,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         """B88：手动重试线程缺口补拉（豁免冷却；running 单飞仍生效）。
 
         前端线程顶部「补拉失败」横幅的重试按钮打这里；成功与否经 /thread 的
-        ``gap_probe`` 字段回看。
+        ``gap_probe`` 字段回看。C1-①：响应 ``gap_probe`` 里新增
+        ``holes_probed/holes_filled/holes_empty/top_gap/hole_gap``——值守手动
+        探测时 ``holes_probed>0`` 即表示本轮在核实序号洞，结果异步落快照。
         """
         api_auth(request)
         store = getattr(request.app.state, "inbox_store", None)

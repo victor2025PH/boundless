@@ -55,12 +55,24 @@ class _Msg:
         self.outgoing = False
 
 
-class _FakeClient:
-    """get_chat_history：newest→oldest 生成器，尊重 limit。"""
+class _EmptyMsg:
+    """pyrogram 对已删/不存在 id 的形态：Message(id=…, empty=True)。"""
 
-    def __init__(self, msgs):
+    def __init__(self, mid: int):
+        self.id = mid
+        self.empty = True
+        self.chat = None
+
+
+class _FakeClient:
+    """get_chat_history：newest→oldest 生成器，尊重 limit；
+    get_messages：按 id 定点返回（``by_id`` 里没有的 → empty 形态）。"""
+
+    def __init__(self, msgs, by_id=None):
         self._msgs = list(msgs)
         self.calls = []
+        self.get_messages_calls = []
+        self._by_id = {int(m.id): m for m in (by_id or [])}
 
     def get_chat_history(self, peer, **kwargs):
         self.calls.append((peer, dict(kwargs)))
@@ -72,6 +84,11 @@ class _FakeClient:
                 yield m
 
         return _gen()
+
+    async def get_messages(self, peer, message_ids=None, **kwargs):
+        ids = list(message_ids or [])
+        self.get_messages_calls.append((peer, ids))
+        return [self._by_id.get(int(i)) or _EmptyMsg(int(i)) for i in ids]
 
 
 def _mk_msgs(chat, top_id: int, n: int):
@@ -161,6 +178,133 @@ async def test_gap_fill_ingest_error_swallowed():
         client, "acct", "-1002000", mirror_max_id=100, cap=300, ingest=_boom)
     assert stats["fetched"] == 20
     assert stats["inserted"] == 0          # 失败被吞（best-effort），不炸调用方
+
+
+# ── C1-①（#123 族）：序号洞定点核实 ──────────────────────────────────────────
+
+async def test_hole_probe_finds_missed_message_when_top_is_current():
+    """0902 21:1x 实锤形态：1085 已是 top（镜像也有），1084 漏收——旧口径
+    gap=false；新口径按 hole_ids 定点拉回 1084。"""
+    chat = _Chat()
+    # 云端顶部就是 1085；镜像 mirror_max=1085 → 顶部无缺口
+    cloud = _mk_msgs(chat, top_id=1085, n=10)
+    client = _FakeClient(cloud, by_id=cloud)
+    got = []
+    stats = await probe_fill_tg_gap(
+        client, "acct", "-1002000", mirror_max_id=1085, cap=300,
+        ingest=lambda c, b: got.extend(b) or len(b),
+        hole_ids=[1084])
+    assert stats["top_gap"] is False          # 顶部比对确实探不出
+    assert stats["hole_gap"] is True          # 序号洞核实出真消息
+    assert stats["gap"] is True               # 对外总口径必须为真
+    assert stats["holes_probed"] == 1 and stats["holes_filled"] == 1
+    assert stats["holes_empty"] == 0
+    assert [int(m["message_id"]) for m in got] == [1084]
+    assert client.get_messages_calls == [(-1002000, [1084])]
+
+
+async def test_hole_probe_marks_deleted_ids_empty_for_cache():
+    chat = _Chat()
+    cloud = _mk_msgs(chat, top_id=200, n=5)
+    # 197 是真消息（漏收）；198/150 已删 → 定点拉取返回 empty 形态
+    client = _FakeClient(cloud, by_id=[m for m in cloud if m.id == 197])
+    stats = await probe_fill_tg_gap(
+        client, "acct", "-1002000", mirror_max_id=200, cap=300,
+        ingest=lambda c, b: len(b), hole_ids=[150, 197, 198])
+    assert stats["holes_probed"] == 3
+    assert stats["holes_filled"] == 1
+    assert stats["holes_empty"] == 2
+    assert stats["hole_empty_ids"] == [150, 198]
+    assert stats["inserted"] == 1
+
+
+async def test_hole_probe_chunks_by_100_and_skips_ids_above_mirror():
+    chat = _Chat()
+    cloud = _mk_msgs(chat, top_id=1000, n=3)
+    client = _FakeClient(cloud, by_id=[])
+    holes = list(range(1, 151)) + [1500]      # 1500 > mirror_max → 顶部链管，不定点探
+    stats = await probe_fill_tg_gap(
+        client, "acct", "-1002000", mirror_max_id=1000, cap=300,
+        ingest=lambda c, b: len(b), hole_ids=holes)
+    assert stats["holes_probed"] == 150
+    assert [len(ids) for _, ids in client.get_messages_calls] == [100, 50]
+    assert stats["holes_empty"] == 150 and stats["hole_gap"] is False
+
+
+async def test_hole_probe_fetch_error_is_not_counted_as_empty():
+    """拉不到 ≠ 不存在：单块失败不进 empty 缓存，下次还能再探。"""
+    chat = _Chat()
+    cloud = _mk_msgs(chat, top_id=50, n=2)
+
+    class _Boom(_FakeClient):
+        async def get_messages(self, peer, message_ids=None, **kw):
+            raise RuntimeError("FLOOD_WAIT_X")
+
+    client = _Boom(cloud, by_id=cloud)
+    stats = await probe_fill_tg_gap(
+        client, "acct", "-1002000", mirror_max_id=50, cap=300,
+        ingest=lambda c, b: len(b), hole_ids=[48])
+    assert stats["holes_probed"] == 1
+    assert stats["holes_filled"] == 0 and stats["holes_empty"] == 0
+    assert stats["hole_empty_ids"] == []
+
+
+def test_store_numeric_platform_msg_id_holes(tmp_path):
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:-1002000"
+    conv = InboxConversation(
+        conversation_id=cid, platform="telegram", account_id="acct",
+        chat_key="-1002000", display_name="bug群", chat_type="group")
+    ids = [1080, 1081, 1082, 1083, 1085]          # 1084 漏收
+    msgs = [InboxMessage(conversation_id=cid, platform_msg_id=str(i),
+                         text=f"m{i}", ts=float(i)) for i in ids]
+    msgs.append(InboxMessage(conversation_id=cid, platform_msg_id="wamid.x",
+                             text="非数字不参与", ts=1.0))
+    store.ingest_batch(conv, msgs)
+    assert store.numeric_platform_msg_id_holes(cid) == [1084]
+    # 大跨度洞（停机窗/深历史）不逐 id 展开
+    store.ingest_batch(conv, [InboxMessage(
+        conversation_id=cid, platform_msg_id="10", text="old", ts=0.5)])
+    assert store.numeric_platform_msg_id_holes(cid, max_span=50) == [1084]
+    # 跨度在阈内则全展开；max_holes 截断且最新的洞优先
+    store.ingest_batch(conv, [InboxMessage(
+        conversation_id=cid, platform_msg_id="1070", text="o", ts=0.7)])
+    holes = store.numeric_platform_msg_id_holes(cid, max_span=50)
+    assert holes == [1071, 1072, 1073, 1074, 1075, 1076, 1077, 1078, 1079, 1084]
+    assert store.numeric_platform_msg_id_holes(cid, max_holes=1) == [1084]
+    assert store.numeric_platform_msg_id_holes("telegram:acct:none") == []
+    assert store.numeric_platform_msg_id_holes("") == []
+
+
+def test_seq_holes_only_for_supergroups_and_empty_cache(tmp_path):
+    """私聊/小群 id 是账号全局序——相邻差 >1 是常态，绝不能当洞去拉。"""
+    assert R.tg_seq_holes_applicable("-1004345824259") is True
+    assert R.tg_seq_holes_applicable("-123456") is False
+    assert R.tg_seq_holes_applicable("5433982810") is False
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "telegram:acct:-1002000"
+    conv = InboxConversation(
+        conversation_id=cid, platform="telegram", account_id="acct",
+        chat_key="-1002000", display_name="bug群", chat_type="group")
+    store.ingest_batch(conv, [
+        InboxMessage(conversation_id=cid, platform_msg_id=str(i),
+                     text="x", ts=float(i)) for i in (10, 12, 14)])
+    R._TG_GAP_EMPTY_IDS.clear()
+    assert R.tg_gap_candidate_holes(store, cid, "-1002000") == [11, 13]
+    assert R.tg_gap_candidate_holes(store, cid, "12345") == []   # 私聊不适用
+    # 核实为空的 id 进缓存后不再重复探
+    R._tg_gap_remember_empty(cid, [11])
+    assert R.tg_gap_candidate_holes(store, cid, "-1002000") == [13]
+    R._TG_GAP_EMPTY_IDS.clear()
+
+
+def test_gap_probe_snapshot_has_hole_fields():
+    R._TG_GAP_PROBE.clear()
+    assert R._tg_gap_try_start("cidh", time.time()) is True
+    snap = R.tg_gap_probe_snapshot("cidh")
+    for k in ("holes_probed", "holes_filled", "holes_empty", "top_gap", "hole_gap"):
+        assert k in snap, f"快照缺 {k}——值守手动 gap-probe 必须看得见序号洞结果"
+    R._TG_GAP_PROBE.clear()
 
 
 # ── 探测登记表：冷却 + 单飞 + force + 容量 ───────────────────────────────────

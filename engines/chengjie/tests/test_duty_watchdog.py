@@ -14,8 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.duty_watchdog import (  # noqa: E402
+    DEFAULT_EVENT_KINDS,
     alert_decision,
     build_alert_text,
+    events_as_messages,
     find_unanswered,
     prune_state,
 )
@@ -119,6 +121,111 @@ def test_repeat_alert_text_marked():
                chat_key="-1004345824259", re_alert=True)
     txt = build_alert_text([hit], now=NOW)
     assert "🔁 持续未应答" in txt, "重提必须与首报视觉区分（老板要知道这是同一条在恶化）"
+
+
+# ── C2（2026-09-02 两踩实锤）：限流静默的真反馈/提问纳入扫描面 ────────────────
+
+def _ev(kind, ts, *, eid=1, chat="-1004345824259", rid="500", detail="语音发不出去"):
+    return {"id": eid, "ts": ts, "chat_id": chat, "kind": kind,
+            "reporter_id": rid, "detail": detail}
+
+
+def test_default_event_kinds_cover_capped_and_usage():
+    assert set(DEFAULT_EVENT_KINDS.split(",")) == {"rate_capped_report", "usage"}
+
+
+def test_rate_capped_report_event_surfaces_as_unanswered_question():
+    """skuio 四连报形态：镜像里没这几条（被限频压制没走 handler 主链），
+    只有台账 rate_capped_report 事件——必须能告警。"""
+    rows = events_as_messages([_ev("rate_capped_report", NOW - 3600)],
+                              chat_key="-1004345824259", staff_ids={"777"})
+    assert len(rows) == 1
+    hit = find_unanswered(rows, now=NOW, threshold_min=30, staff_ids={"777"})
+    assert hit and hit["kind"] == "rate_capped_report"
+    assert hit["message_id"] == "ev:1"                 # 与镜像 mid 不撞键
+    txt = build_alert_text([dict(hit, chat_key="-1004345824259")], now=NOW)
+    assert "限流静默" in txt, "值守必须知道这条是被 bot 限流吞掉的（未回执/未立单）"
+    assert "语音发不出去" in txt
+
+
+def test_event_cleared_by_later_staff_reply_in_thread():
+    rows = events_as_messages([_ev("usage", NOW - 3600, detail="怎么切全自动？")],
+                              chat_key="-1004345824259", staff_ids=set())
+    thread = [_msg("out", NOW - 3500, sender="")]
+    assert find_unanswered(thread + rows, now=NOW, threshold_min=30,
+                           staff_ids=set()) is None
+
+
+def test_events_filtered_by_group_and_staff_and_named_from_thread():
+    thread = [_msg("in", NOW - 7200, sender="500", name="skuio")]
+    evs = [
+        _ev("rate_capped_report", NOW - 3600, eid=1, rid="500"),
+        _ev("usage", NOW - 3500, eid=2, chat="-1004290740529"),   # 别的群
+        _ev("usage", NOW - 3400, eid=3, rid="777"),                # 支持号自己
+    ]
+    rows = events_as_messages(evs, chat_key="-1004345824259",
+                              thread_msgs=thread, staff_ids={"777"})
+    assert [r["message_id"] for r in rows] == ["ev:1"]
+    assert rows[0]["sender_name"] == "skuio"          # 名字从镜像同 sender 借
+
+
+def test_events_do_not_double_alert_same_key_across_runs():
+    hit_key = "-1004345824259:ev:1"
+    assert alert_decision({}, hit_key, NOW, 240) == "first"
+    assert alert_decision({hit_key: NOW - 60}, hit_key, NOW, 240) == ""
+
+
+def test_watchdog_reads_events_sqlite_fallback(tmp_path):
+    """旧引擎无 /events 端点 → 本机只读打开台账。"""
+    import sqlite3
+    from tools.duty_watchdog import _read_events_sqlite
+    (tmp_path / "config").mkdir()
+    con = sqlite3.connect(str(tmp_path / "config" / "bug_intake.db"))
+    con.execute("CREATE TABLE bug_events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " ts REAL, chat_id TEXT, kind TEXT, reporter_id TEXT, detail TEXT)")
+    con.execute("INSERT INTO bug_events (ts, chat_id, kind, reporter_id, detail)"
+                " VALUES (?,?,?,?,?)", (NOW - 100, "-1", "rate_capped_report", "5", "x"))
+    con.execute("INSERT INTO bug_events (ts, chat_id, kind, reporter_id, detail)"
+                " VALUES (?,?,?,?,?)", (NOW - 100, "-1", "bug_new", "5", "y"))
+    con.commit()
+    con.close()
+    rows = _read_events_sqlite(tmp_path, ["rate_capped_report", "usage"], NOW - 1000)
+    assert [r["kind"] for r in rows] == ["rate_capped_report"]
+    assert _read_events_sqlite(tmp_path / "nope", ["usage"], 0) == []
+
+
+def test_main_dry_run_alerts_on_capped_event_only_in_ledger(tmp_path, monkeypatch, capsys):
+    """端到端（HTTP 打桩）：镜像线程里没有那条被限流的提问，只有台账事件 →
+    看门狗仍要在 dry-run 输出里报出来并带「限流静默」标。"""
+    import tools.duty_watchdog as wd
+
+    def fake_get_json(base, path, token, params, timeout=30):
+        if path == "/api/unified-inbox/thread":
+            return {"messages": [_msg("in", NOW - 9000, sender="500", name="skuio",
+                                      text="老问题", mid="m1"),
+                                 _msg("out", NOW - 8900, sender="", mid="m2")]}
+        if path == "/api/admin/bug-intake/events":
+            assert params["kinds"] == "rate_capped_report,usage"
+            return {"ok": True, "events": [
+                _ev("rate_capped_report", NOW - 3600, eid=9, rid="500",
+                    detail="语音还是发不出去，第四次了")]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(wd, "_get_json", fake_get_json)
+    monkeypatch.setattr(wd, "resolve_data_roots", lambda v: [tmp_path])
+    monkeypatch.setattr(wd, "load_merged_config", lambda root: {
+        "bug_intake": {"groups": ["-1004345824259"], "support_accounts": ["777"]}})
+    monkeypatch.setattr(wd, "_read_token", lambda root: "tok")
+    monkeypatch.setattr(wd, "_deliver", lambda text: (_ for _ in ()).throw(
+        AssertionError("dry-run 不得投递")))
+    monkeypatch.setattr(sys, "argv", [
+        "duty_watchdog", "--dry-run", "--state", str(tmp_path / "st.json")])
+    assert wd.main() == 0
+    out = capsys.readouterr().out
+    assert "并入台账事件 1 条" in out
+    assert "限流静默" in out and "第四次了" in out
+    assert "skuio" in out, "发言人名应从镜像同 sender 借到"
+    assert "[dry-run]" in out
 
 
 def test_alert_recipient_is_boss():

@@ -610,6 +610,21 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"**原话**: {str(data.get('text') or '')[:120]}\n"
                 "[📥 前往收件箱群组动态](/workspace/inbox)"
             )
+        elif str(data.get("kind") or "") == "seq_gap":
+            # C1-②（#123 族，2026-09-02）：群消息序号跳号＝入站漏收哨兵；
+            # 自动补拉已在跑，告警是让值守知道「这几条是补回来的/没补回来」。
+            _ids = data.get("missing_ids") or []
+            _ids_txt = ",".join(str(i) for i in list(_ids)[:12])
+            if len(_ids) > 12:
+                _ids_txt += f"…（共 {len(_ids)} 个）"
+            title = "🕳️ 报障群消息跳号（疑似漏收，已触发自动补拉）"
+            text = (
+                f"**群**: {data.get('chat_id', '?')}\n"
+                f"**缺号**: {_ids_txt or '?'}\n"
+                f"**上一条**: #{data.get('last_mid', '?')} → **本条**: "
+                f"#{data.get('seen_mid', '?')}\n"
+                "补拉结果看日志 `[bug_intake] 序号哨兵` / 手动 gap-probe 可复核"
+            )
         else:
             _sev = str(data.get("severity") or "?")
             title = (f"{'🚨' if _sev == 'P0' else '🐞'} 报障群新工单 "

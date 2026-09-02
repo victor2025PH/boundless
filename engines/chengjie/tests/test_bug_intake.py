@@ -668,3 +668,121 @@ def test_wiring_skill_manager_silences_before_generation():
     assert idx_silent < idx_footer, "静默短路必须在生成链之前（不是终稿层丢草稿）"
     seg = src[idx_silent:idx_silent + 400]
     assert "return None" in seg, "静默=返回 None（与超时路径同契约）"
+
+
+# ── C1-②（#123 族，2026-09-02）：群消息序号连续性哨兵 ────────────────────────
+# 0902 21:1x 实锤：mid=1084 漏收、1085 正常到达，顶部比对的 gap-probe 报
+# gap=false。哨兵按「本条 mid > 上一条 +1」判候选洞，宽限期后告警+交补拉。
+
+def test_seq_sentinel_first_seen_only_sets_watermark(bi):
+    assert bi.note_group_msg_seq(CFG, -100123, 1083, account_id="a", now=100.0) == []
+    snap = bi.seq_sentinel_snapshot()
+    assert snap["a:-100123"] == {"last_mid": 1083, "pending": 0}
+
+
+def test_seq_sentinel_detects_skipped_mid_and_harvests_after_grace(bi, bus):
+    bi.note_group_msg_seq(CFG, -100123, 1083, account_id="a", now=100.0)
+    # 1084 没到，1085 到了 → 1084 是候选洞
+    assert bi.note_group_msg_seq(CFG, -100123, 1085, account_id="a", now=101.0) == [1084]
+    # 宽限期内不收割（乱序容忍）
+    assert bi.due_seq_gaps(CFG, now=101.0 + 5) == []
+    assert bus.published == []
+    # 宽限期过 → 落台账 + 告警 + 返回补拉计划
+    due = bi.due_seq_gaps(CFG, now=101.0 + bi.seq_grace_sec() + 0.5)
+    assert due == [{"account_id": "a", "chat_id": "-100123",
+                    "missing_ids": [1084], "last_mid": 1085}]
+    assert len(bus.published) == 1
+    etype, payload = bus.published[0]
+    assert etype == "bug_intake_alert" and payload["kind"] == "seq_gap"
+    assert payload["missing_ids"] == [1084]
+    assert payload["rate_key"] == "bug_intake:seq_gap:-100123:1084"
+    evs = bi.list_events(["seq_gap"])
+    assert len(evs) == 1 and "missing=1084" in evs[0]["detail"]
+    # 收割过的洞不会二次收割
+    assert bi.due_seq_gaps(CFG, now=999.0) == []
+    assert bi.dump_stats()["seq_gap"] == 1
+
+
+def test_seq_sentinel_late_arrival_heals_hole_without_alert(bi, bus):
+    bi.note_group_msg_seq(CFG, -100123, 10, account_id="a", now=100.0)
+    assert bi.note_group_msg_seq(CFG, -100123, 12, account_id="a", now=100.5) == [11]
+    # 11 晚到（乱序）→ 洞自愈
+    assert bi.note_group_msg_seq(CFG, -100123, 11, account_id="a", now=101.0) == []
+    assert bi.due_seq_gaps(CFG, now=200.0) == []
+    assert bus.published == []
+    # 重投/编辑同号：无信息量
+    assert bi.note_group_msg_seq(CFG, -100123, 12, account_id="a", now=102.0) == []
+
+
+def test_seq_sentinel_big_jump_not_expanded_and_non_bug_group_noop(bi, bus):
+    bi.note_group_msg_seq(CFG, -100123, 10, account_id="a", now=100.0)
+    # 大跳号（停机窗）：不逐 id 展开（归顶部缺口链/backfill），水位照推
+    assert bi.note_group_msg_seq(CFG, -100123, 10 + 500, account_id="a", now=101.0) == []
+    assert bi.seq_sentinel_snapshot()["a:-100123"]["pending"] == 0
+    assert bi.seq_sentinel_snapshot()["a:-100123"]["last_mid"] == 510
+    # 非报障群 / 关闭 / 坏 id：全 no-op
+    assert bi.note_group_msg_seq(CFG, -999, 5, account_id="a") == []
+    assert bi.note_group_msg_seq({}, -100123, 5, account_id="a") == []
+    assert bi.note_group_msg_seq(CFG, -100123, "abc", account_id="a") == []
+    assert "a:-999" not in bi.seq_sentinel_snapshot()
+
+
+def test_seq_sentinel_keys_per_account(bi):
+    """同群多账号各自一套水位（worker 各有各的到达面）；收割按账号过滤——
+    别把别人的洞摘走却不补。"""
+    bi.note_group_msg_seq(CFG, -100123, 10, account_id="a", now=1.0)
+    bi.note_group_msg_seq(CFG, -100123, 10, account_id="b", now=1.0)
+    assert bi.note_group_msg_seq(CFG, -100123, 12, account_id="a", now=2.0) == [11]
+    assert bi.note_group_msg_seq(CFG, -100123, 13, account_id="b", now=2.0) == [11, 12]
+    late = 2.0 + bi.seq_grace_sec() + 1
+    # b 的 sweep 只收 b 的洞；a 的洞原地不动
+    due_b = bi.due_seq_gaps(CFG, now=late, account_id="b")
+    assert [(d["account_id"], d["missing_ids"]) for d in due_b] == [("b", [11, 12])]
+    assert bi.seq_sentinel_snapshot()["a:-100123"]["pending"] == 1
+    due_a = bi.due_seq_gaps(CFG, now=late, account_id="a")
+    assert [(d["account_id"], d["missing_ids"]) for d in due_a] == [("a", [11])]
+    assert bi.due_seq_gaps(CFG, now=late) == []
+
+
+def test_seq_gap_backfilled_ledger(bi):
+    bi.seq_gap_backfilled(-100123, [1084, 1086], filled=1, empty=1)
+    evs = bi.list_events(["seq_gap_backfill"])
+    assert len(evs) == 1
+    assert "filled=1" in evs[0]["detail"] and "empty=1" in evs[0]["detail"]
+    st = bi.dump_stats()
+    assert st["seq_gap_filled"] == 1 and st["seq_gap_empty"] == 1
+
+
+def test_wiring_telegram_client_seq_sentinel_and_replay():
+    """接线钉：handler 顶部登记 + 补拉重放走同一个 handler（不另起半链）。"""
+    src = _read("src/client/telegram_client.py")
+    i_note = src.index("note_group_msg_seq(")
+    i_claim = src.index("self._msg_dedup.claim(chat_id, mid)")
+    assert i_note < i_claim, "哨兵必须在去重 claim 之前（任何真到达的 id 都算见过）"
+    assert "self._group_message_handler = handle_group_message" in src
+    assert "fetch_tg_messages_by_ids" in src
+    assert "seq_gap_backfilled(" in src
+    src_wh = _read("src/inbox/webhook_notifier.py")
+    assert '== "seq_gap"' in src_wh, "告警 formatter 必须认识 seq_gap（否则渲染成假「新工单」）"
+
+
+# ── C2（2026-09-02）：值守可见性——台账事件只读口 ─────────────────────────────
+
+def test_list_events_filters_and_default_kinds(bi):
+    bi._record_event(-100123, "rate_capped_report", "u1", "语音发不出", )
+    bi._record_event(-100123, "usage", "u2", "怎么切换全自动？")
+    bi._record_event(-100123, "bug_new", "u3", "崩溃")
+    bi._record_event(-100999, "usage", "u4", "别的群")
+    evs = bi.list_events(bi.DUTY_VISIBLE_EVENT_KINDS)
+    assert [e["kind"] for e in evs] == ["rate_capped_report", "usage", "usage"]
+    evs2 = bi.list_events(bi.DUTY_VISIBLE_EVENT_KINDS, chat_id=-100123)
+    assert [e["reporter_id"] for e in evs2] == ["u1", "u2"]
+    assert bi.list_events(["usage"], since_ts=9e12) == []
+    assert len(bi.list_events(None)) == 4
+    assert set(bi.DUTY_VISIBLE_EVENT_KINDS) == {"rate_capped_report", "usage"}
+
+
+def test_wiring_events_route_registered():
+    src = _read("src/web/routes/bug_intake_routes.py")
+    assert '"/api/admin/bug-intake/events"' in src
+    assert "DUTY_VISIBLE_EVENT_KINDS" in src

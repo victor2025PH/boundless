@@ -145,6 +145,29 @@ def register_bug_intake_routes(app, *, api_auth, page_auth=None,
             "bot_guard": True,
         }
 
+    @app.get("/api/admin/bug-intake/events")
+    async def api_bug_intake_events(
+        request: Request, kinds: str = "", since_min: int = 720,
+        chat_id: str = "", limit: int = 200,
+    ):
+        """bug_events 台账只读口（C2，2026-09-02）。
+
+        ``kinds``＝逗号分隔事件类型（缺省＝值守可见面 rate_capped_report,usage
+        ——被限频静默的真反馈/提问不产生 bot 回执与工单，此前只躺在台账里，
+        duty_watchdog 据此纳入「未应答告警」扫描）；``since_min``＝回看分钟数。
+        """
+        api_auth(request)
+        import time as _t
+        from src.ops import bug_intake
+        ks = [k.strip() for k in str(kinds or "").split(",") if k.strip()] \
+            or list(bug_intake.DUTY_VISIBLE_EVENT_KINDS)
+        since = _t.time() - max(1, min(int(since_min or 720), 7 * 1440)) * 60
+        return {
+            "ok": True, "kinds": ks, "since_ts": since,
+            "events": bug_intake.list_events(
+                ks, since_ts=since, chat_id=chat_id, limit=limit),
+        }
+
     if page_auth is not None:
         # 处置页（实施74 §6.1 推迟的「客服工单处置页」，实施81 落地）：
         # 列表 + 详情 + 截图内嵌 + 状态流转 + 一键回访 + 群内回复。

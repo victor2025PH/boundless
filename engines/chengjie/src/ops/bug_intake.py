@@ -42,6 +42,10 @@
 - **语音压制**（``voice_suppressed``）：报障群 / 支持账号一律不发语音——
   sender 的 voice_reply 闸读全局配置，支持人设没有克隆声，放行会落到全局
   voice_profile 的陪伴参考音（错声=「换人」级穿帮）。
+- **序号连续性哨兵**（C1-②，#123 族，2026-09-02）：``note_group_msg_seq`` /
+  ``due_seq_gaps`` / ``seq_gap_backfilled``——群消息 mid 跳号即候选漏收，
+  宽限期后落 ``bug_events(seq_gap)`` + 告警 + 交 telegram_client 云端定点补拉
+  重放主链（顶部比对的 gap-probe 探不出序号中间的洞，0902 21:1x 实锤）。
 
 门禁 tests/test_bug_intake.py。
 """
@@ -141,6 +145,9 @@ _STATS: Dict[str, int] = {
     "official_bot_suppressed": 0,
     # 2026-09-02：本方账号（支持号/本 worker）消息被立单链自身守卫压制的次数
     "self_msg_suppressed": 0,
+    # C1-②（#123 族，2026-09-02）：群消息序号哨兵——跳号告警次数 / 补拉回来的
+    # 真消息数 / 核实为空（已删/服务消息）的缺号数
+    "seq_gap": 0, "seq_gap_filled": 0, "seq_gap_empty": 0,
 }
 _DB_CONN: Optional[sqlite3.Connection] = None
 
@@ -389,6 +396,7 @@ def reset_state_for_tests() -> None:
     with _LOCK:
         _RATE.clear()
         _COLLECT.clear()
+        _SEQ.clear()
         for k in _STATS:
             _STATS[k] = 0
         if _DB_CONN is not None:
@@ -751,6 +759,39 @@ def record_capped_photo(chat_id: Any, sender_id: Any, media_url: str) -> None:
         logger.debug("[bug_intake] 压制截图登记失败（忽略）", exc_info=True)
 
 
+#: C2（2026-09-02 两踩实锤）：值守可见性扫描面——被防刷屏限频静默的真反馈
+#: （rate_capped_report）与使用咨询（usage）都不产生 bot 回执/工单，此前只存在
+#: bug_events 台账里；duty_watchdog 默认把这两类纳入「未应答告警」。
+DUTY_VISIBLE_EVENT_KINDS = ("rate_capped_report", "usage")
+
+
+def list_events(kinds: Any = None, since_ts: float = 0.0, chat_id: Any = "",
+                limit: int = 200) -> List[Dict[str, Any]]:
+    """读 bug_events 台账（升序）。``kinds`` 为空＝不按类型过滤；``since_ts``＝只取
+    该时刻之后；``chat_id`` 非空＝只看该群。供 duty_watchdog / 处置台消费。"""
+    try:
+        con = _db()
+        con.row_factory = sqlite3.Row
+        q = "SELECT id, ts, chat_id, kind, reporter_id, detail FROM bug_events WHERE 1=1"
+        args: List[Any] = []
+        ks = [str(k).strip() for k in (kinds or []) if str(k).strip()]
+        if ks:
+            q += " AND kind IN (%s)" % ",".join("?" * len(ks))
+            args.extend(ks)
+        if float(since_ts or 0) > 0:
+            q += " AND ts >= ?"
+            args.append(float(since_ts))
+        if str(chat_id or "").strip():
+            q += " AND chat_id = ?"
+            args.append(str(chat_id).strip())
+        q += " ORDER BY ts ASC, id ASC LIMIT ?"
+        args.append(max(1, min(int(limit or 200), 2000)))
+        return [dict(r) for r in con.execute(q, args).fetchall()]
+    except Exception:
+        logger.debug("[bug_intake] 事件列表失败", exc_info=True)
+        return []
+
+
 def list_tickets(status: str = "", limit: int = 100) -> List[Dict[str, Any]]:
     try:
         con = _db()
@@ -818,6 +859,184 @@ def _update_collected(st: Dict[str, Any], text: str) -> None:
     if any(w in t for w in ("先", "然后", "再点", "步骤", "第一步", "之后",
                             "点了", "打开", "点击")):
         got.add("steps")
+
+
+# ── 序号连续性哨兵（C1-②，#123 族，2026-09-02）──────────────────────────────
+# 0902 21:1x 实锤：群 mid=1084（用户提问原话）监听秒推与轮询兜底双双漏掉，
+# 1085 正常到达 → 顶部比对的 gap-probe 报 gap=false，序号中间的洞没有任何
+# 东西在看。supergroup 消息 id 按群单调连续（服务消息/已删消息也占号），
+# 所以「本条 mid > 上一条 mid + 1」＝中间有号没到本进程＝候选漏收。
+#
+# 状态机（进程内，按 account:chat 分键；重启清零＝首条只立水位不判洞）：
+#   note_group_msg_seq(cfg, chat, mid) —— 每条群消息（handler 顶部）调用：
+#       · mid 是 pending 里的洞 → 晚到而已，摘掉，不告警；
+#       · mid > last+1 → (last+1 .. mid-1) 入 pending（单跳 ≤ _SEQ_MAX_JUMP，
+#         更大的跳号是停机窗，顶部链/backfill 管，这里只登记不逐 id 展开）；
+#   due_seq_gaps(cfg, now) —— 宽限期（乱序到达的容忍窗）后仍在 pending 的洞
+#       → 落 bug_events(seq_gap) + 告警 + 返回给调用方去云端定点补拉；
+#   seq_gap_backfilled(chat, ids, filled, empty) —— 补拉结果记账（可见性）。
+# 只对报障群启用（is_bug_group）；任何异常吞掉不影响主链。
+_SEQ: Dict[str, Dict[str, Any]] = {}
+_SEQ_GRACE_SEC = 20.0          # 乱序到达容忍窗：pending 洞至少等这么久再判漏
+_SEQ_MAX_JUMP = 50             # 单次跳号超过此值不逐 id 展开（停机窗归别的链管）
+_SEQ_MAX_PENDING = 200         # 单群 pending 上限（防异常放大）
+
+
+def _seq_key(account_id: Any, chat_id: Any) -> str:
+    return f"{str(account_id or '').strip()}:{str(chat_id).strip()}"
+
+
+def seq_grace_sec() -> float:
+    return _SEQ_GRACE_SEC
+
+
+def note_group_msg_seq(config: Optional[Dict[str, Any]], chat_id: Any,
+                       msg_id: Any, account_id: Any = "",
+                       now: Optional[float] = None) -> List[int]:
+    """登记一条已到达的报障群消息 id；返回**本条新暴露出的**候选洞列表（升序）。
+
+    非报障群 / 无效 id → 空列表且不落任何状态。返回非空＝调用方应在
+    ``seq_grace_sec()`` 后调 ``due_seq_gaps`` 收尾（补拉+告警）。
+    """
+    try:
+        cfg = parse_cfg(config)
+        cid = str(chat_id).strip()
+        if not (cfg["enabled"] and cid in cfg["groups"]):
+            return []
+        try:
+            mid = int(msg_id or 0)
+        except (TypeError, ValueError):
+            return []
+        if mid <= 0:
+            return []
+        ts = float(now if now is not None else time.time())
+        key = _seq_key(account_id, cid)
+        with _LOCK:
+            st = _SEQ.get(key)
+            if st is None:
+                # 首见（进程启动后第一条）：只立水位。重启窗口的洞归顶部链/backfill
+                _SEQ[key] = {"last_mid": mid, "pending": {}, "chat_id": cid,
+                             "account_id": str(account_id or "")}
+                return []
+            pending: Dict[int, float] = st["pending"]
+            if mid in pending:
+                pending.pop(mid, None)      # 晚到：洞自愈
+                return []
+            last = int(st.get("last_mid") or 0)
+            if mid <= last:
+                return []                   # 重投/编辑/乱序旧号：无新信息
+            new_holes: List[int] = []
+            span = mid - last - 1
+            if 0 < span <= _SEQ_MAX_JUMP:
+                for h in range(last + 1, mid):
+                    if h not in pending and len(pending) < _SEQ_MAX_PENDING:
+                        pending[h] = ts
+                        new_holes.append(h)
+            elif span > _SEQ_MAX_JUMP:
+                logger.info(
+                    "[bug_intake] 序号哨兵 大跳号 chat=%s %s→%s（跨 %s，交顶部"
+                    "缺口链/backfill，不逐 id 展开）", cid, last, mid, span)
+            st["last_mid"] = mid
+            return new_holes
+    except Exception:
+        logger.debug("[bug_intake] 序号哨兵登记异常（忽略）", exc_info=True)
+        return []
+
+
+def due_seq_gaps(config: Optional[Dict[str, Any]],
+                 now: Optional[float] = None,
+                 grace_sec: Optional[float] = None,
+                 account_id: Any = None) -> List[Dict[str, Any]]:
+    """收割过了宽限期仍未自愈的洞：落台账 + 告警，返回
+    ``[{account_id, chat_id, missing_ids, last_mid}]`` 供调用方云端定点补拉。
+
+    每个洞只会被收割一次（从 pending 摘除）；补拉结果经 ``seq_gap_backfilled``
+    记账。``account_id`` 非 None ＝只收割该账号的洞（同进程多 worker 各自收割
+    各自的，别把别人的洞摘走却不补）。非报障群配置（已关闭）→ 清空状态返回空。
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        cfg = parse_cfg(config)
+        ts = float(now if now is not None else time.time())
+        grace = float(_SEQ_GRACE_SEC if grace_sec is None else grace_sec)
+        only_acct = None if account_id is None else str(account_id or "").strip()
+        harvested: List[Dict[str, Any]] = []
+        with _LOCK:
+            if not cfg["enabled"]:
+                _SEQ.clear()
+                return []
+            for key, st in list(_SEQ.items()):
+                cid = str(st.get("chat_id") or "")
+                if cid not in cfg["groups"]:
+                    _SEQ.pop(key, None)
+                    continue
+                if only_acct is not None and \
+                        str(st.get("account_id") or "") != only_acct:
+                    continue
+                pending: Dict[int, float] = st.get("pending") or {}
+                due = sorted(h for h, t0 in pending.items()
+                             if ts - float(t0 or 0) >= grace)
+                if not due:
+                    continue
+                for h in due:
+                    pending.pop(h, None)
+                harvested.append({
+                    "account_id": str(st.get("account_id") or ""),
+                    "chat_id": cid, "missing_ids": due,
+                    "last_mid": int(st.get("last_mid") or 0),
+                })
+        for item in harvested:
+            ids = item["missing_ids"]
+            _bump("seq_gap")
+            _record_event(
+                item["chat_id"], "seq_gap", "",
+                f"missing={','.join(str(i) for i in ids)} last={item['last_mid']}")
+            logger.warning(
+                "[bug_intake] 序号哨兵 跳号疑似漏收 chat=%s acct=%s 缺号=%s（已触发补拉）",
+                item["chat_id"], item["account_id"] or "-",
+                ",".join(str(i) for i in ids[:20]) + ("…" if len(ids) > 20 else ""))
+            _publish_alert("seq_gap", {
+                "chat_id": item["chat_id"], "missing_ids": list(ids),
+                "last_mid": item["last_mid"], "seen_mid": item["last_mid"],
+                "severity": "P1",
+                "rate_key": f"bug_intake:seq_gap:{item['chat_id']}:{ids[0]}",
+            })
+            out.append(item)
+    except Exception:
+        logger.debug("[bug_intake] 序号哨兵收割异常（忽略）", exc_info=True)
+    return out
+
+
+def seq_gap_backfilled(chat_id: Any, missing_ids: List[int],
+                       filled: int, empty: int, note: str = "") -> None:
+    """补拉结果记账：``filled``＝补回的真消息数（重放进主链），``empty``＝核实
+    为空的号（已删/服务消息）。差额（既没补回也没核实）＝拉取失败，日志可见。"""
+    try:
+        ids = [int(i) for i in (missing_ids or [])]
+        _bump("seq_gap_filled", int(filled or 0))
+        _bump("seq_gap_empty", int(empty or 0))
+        unresolved = max(0, len(ids) - int(filled or 0) - int(empty or 0))
+        detail = (f"missing={','.join(str(i) for i in ids)} filled={int(filled or 0)}"
+                  f" empty={int(empty or 0)} unresolved={unresolved}"
+                  + (f" note={str(note)[:80]}" if note else ""))
+        _record_event(chat_id, "seq_gap_backfill", "", detail)
+        logger.log(
+            logging.WARNING if (filled or unresolved) else logging.INFO,
+            "[bug_intake] 序号哨兵 补拉结果 chat=%s 缺号=%s 补回=%s 空洞=%s 未决=%s%s",
+            chat_id, len(ids), int(filled or 0), int(empty or 0), unresolved,
+            f" note={note}" if note else "")
+    except Exception:
+        logger.debug("[bug_intake] 序号哨兵记账异常（忽略）", exc_info=True)
+
+
+def seq_sentinel_snapshot() -> Dict[str, Any]:
+    """观测：各群水位与 pending 洞数（/api/admin/bug-intake stats 里可见）。"""
+    with _LOCK:
+        return {
+            key: {"last_mid": int(st.get("last_mid") or 0),
+                  "pending": len(st.get("pending") or {})}
+            for key, st in _SEQ.items()
+        }
 
 
 # ── 主入口 ────────────────────────────────────────────────────────────────────
@@ -1167,6 +1386,10 @@ def dump_stats() -> Dict[str, Any]:
         d["pending_notify"] = 0
     d["active"] = bool(
         d.get("observed") or d.get("tickets_24h") or d.get("open_total"))
+    try:
+        d["seq_sentinel"] = seq_sentinel_snapshot()
+    except Exception:
+        d["seq_sentinel"] = {}
     return d
 
 
@@ -1179,4 +1402,7 @@ __all__ = [
     "detect_verify_intent", "pending_verify_ticket", "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",
+    "note_group_msg_seq", "due_seq_gaps", "seq_gap_backfilled",
+    "seq_grace_sec", "seq_sentinel_snapshot",
+    "list_events", "DUTY_VISIBLE_EVENT_KINDS",
 ]

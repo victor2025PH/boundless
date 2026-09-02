@@ -65,6 +65,74 @@ def _perm_ok(request: Request, perm: str) -> bool:
         return True
 
 
+# ── C3（#148 B件排查实锤，2026-09-02）：guard=force 放行日志带操作来源 ──────────
+# 旧日志只有 ``[send] guard=force kind=dup conv=…``，分不清是**坐席在守卫弹窗点了
+# 「强发」**还是**失败气泡「重发」把上一轮的 force 标志顺手带了过来**（链路自带），
+# 定性要多绕一轮用户确认。这里把 who/how 一次写全：
+#   agent=坐席 id  sess=session 指纹（同浏览器会话稳定、不泄露 cookie）
+#   entry=ui（浏览器 session）| api（Bearer 令牌：脚本/桌面壳/duty_reply）| unknown
+#   src=前端 body.force_src：confirm（人点了确认）| retry_carry（重发携带旧标志）
+#       | duty_reply（值守 CLI 固定带 force_lang）| -（老前端/未声明）
+#   ip / cmid（client_msg_id 前 16 位，对得上前端超时对账与 send_dedup 日志）
+_FORCE_SRC_ALLOWED = ("confirm", "retry_carry", "duty_reply", "api", "batch_confirm")
+
+
+def _session_fingerprint(request: Request) -> str:
+    """session cookie 的 8 位摘要——同一浏览器会话稳定、跨会话不同、不含明文。"""
+    try:
+        raw = str(request.cookies.get("session") or "")
+        if not raw:
+            return "-"
+        import hashlib
+        return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:8]
+    except Exception:
+        return "-"
+
+
+def _request_entry(request: Request) -> str:
+    """请求入口归类：ui（带登录 session）/ api（纯 Bearer）/ unknown。"""
+    try:
+        if "session" in request.scope:
+            sess = request.session
+            if sess and (sess.get("user_id") or sess.get("username")):
+                return "ui"
+    except Exception:
+        pass
+    try:
+        if str(request.headers.get("Authorization") or "").startswith("Bearer "):
+            return "api"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def force_guard_log_fields(request: Request, body: Dict[str, Any]) -> Dict[str, str]:
+    """组 guard=force 日志字段（纯观测，任何异常回退占位符，绝不影响发送）。"""
+    out = {"agent": "-", "sess": "-", "entry": "unknown", "src": "-",
+           "ip": "-", "cmid": "-"}
+    try:
+        out["agent"] = str(_session_agent(request).get("agent_id") or "-")
+    except Exception:
+        pass
+    out["sess"] = _session_fingerprint(request)
+    out["entry"] = _request_entry(request)
+    try:
+        src = str((body or {}).get("force_src") or "").strip().lower()[:24]
+        out["src"] = src if src in _FORCE_SRC_ALLOWED else (
+            f"other:{src}" if src else "-")
+    except Exception:
+        pass
+    try:
+        out["ip"] = str(request.client.host or "-") if request.client else "-"
+    except Exception:
+        pass
+    try:
+        out["cmid"] = str((body or {}).get("client_msg_id") or "-")[:16] or "-"
+    except Exception:
+        pass
+    return out
+
+
 # ── 语音/媒体投递错误 → 人话（2026-08-20 内测工单 #3：语音发送失败给用户看的是
 # 裸英文 `err=ex`——VOICE_MESSAGES_FORBIDDEN 这类「对端隐私限制」被当成系统故障
 # 报障。词表按 dead_peer_registry 同款「大写+下划线无关」匹配；顺序=优先级。
@@ -610,11 +678,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
 
         # 观察期读数：坐席对守卫弹窗选了「强发」——高强发率=守卫在扰民（阈值该松），
         # 低强发率=拦得对。持久进日志供 chatx_readout 远程统计。
+        # C3（#148）：带操作来源——人点确认 vs 重发链路自带，一行日志定性。
         if body.get("force_lang") or body.get("force_dup"):
+            _ff = force_guard_log_fields(request, body)
             logger.info(
-                "[send] guard=force kind=%s conv=%s",
-                "lang" if body.get("force_lang") else "dup",
-                _conv_id(platform, account_id, chat_key))
+                "[send] guard=force kind=%s conv=%s agent=%s sess=%s entry=%s "
+                "src=%s ip=%s cmid=%s",
+                "+".join(k for k, on in (("lang", body.get("force_lang")),
+                                         ("dup", body.get("force_dup"))) if on),
+                _conv_id(platform, account_id, chat_key),
+                _ff["agent"], _ff["sess"], _ff["entry"], _ff["src"],
+                _ff["ip"], _ff["cmid"])
 
         # ── P0-198 语言错配护栏（后半，通用兜底）：无论翻译是否被请求/是否成功，
         #    只要**即将发出的文本**仍含 CJK 而客户会话语言是非 CJK → 409 交坐席确认

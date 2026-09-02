@@ -13596,6 +13596,7 @@ async function sendMsg(){
     if(confirm(String(det.message||'')+'\n\n'+window.T('inbox.send.force_confirm'))){
       gbody.client_msg_id=_newClientMsgId();
       if(det.code==='lang_mismatch') gbody.force_lang=1; else gbody.force_dup=1;
+      gbody.force_src='confirm';   // C3（#148）：人点确认；后续「重发」同一 body 由 resendFailed 改标 retry_carry
       const opt2={message_id:'_opt_'+(++_sendSeq), text:text, direction:'out',
                   ts:Date.now()/1000, _optimistic:true, _retryBody:gbody};
       threadMsgs.push(opt2);
@@ -13614,6 +13615,12 @@ async function resendFailed(optId){
   const body=threadMsgs[idx]._retryBody;
   if(!body || !selectedChat){ return; }
   body.client_msg_id=_newClientMsgId();   // 重发换新幂等键：显式重试永不被去重拦截
+  // C3（#148 B件）：force 标志随 _retryBody 复用——首次（刚点完确认）保留 confirm，
+  // 之后每次「重发」都是链路自带的旧标志 → 改标 retry_carry，服务端日志据此定性
+  // 「人点还是链路自带」，不再多绕一轮用户确认。
+  const _forceCarried=!!(body.force_lang||body.force_dup);
+  if(_forceCarried && body._force_used) body.force_src='retry_carry';
+  if(_forceCarried) body._force_used=true;
   threadMsgs[idx]._failed=false; threadMsgs[idx]._optimistic=true;
   renderMessages(selectedChat, threadMsgs, {silent:true});
   try{
@@ -18196,8 +18203,9 @@ async function _sendDraftParts(parts){
         text:text, client_msg_id:_newClientMsgId(), bubbles:0,   // 已经是短句，禁二次拆
       };
       if(_xlateOut) body.target_lang=_xlateOut;   // 出向翻译沿用会话设置（直发口径，逐条预览会把人逼疯）
-      if(forceLang) body.force_lang=1;
-      if(forceDup) body.force_dup=1;
+      // C3（#148）：整批沿用的 force 标志是「链路自带」不是本条人点——服务端日志按 src 区分
+      if(forceLang){ body.force_lang=1; body.force_src='batch_confirm'; body._force_used=true; }
+      if(forceDup){ body.force_dup=1; body.force_src='batch_confirm'; body._force_used=true; }
       if(i===0 && _dpickMeta && _dpickMeta.text){
         // 采纳归因（只记首条防多算）：AI 弹窗草稿 → 实发，经既有 copilot_meta 审计链
         // 落 /api/workspace/agent-copilot-stats 的 by_source。exact=原样发，edit=坐席改过。
@@ -18225,8 +18233,10 @@ async function _sendDraftParts(parts){
             if(confirm(String(det.message||'')+'\n\n'+window.T('inbox.send.force_confirm'))){
               if(det.code==='lang_mismatch'){ forceLang=true; body.force_lang=1; }
               else{ forceDup=true; body.force_dup=1; }
+              body.force_src='confirm';               // C3：本条是坐席亲点「强发」
               body.client_msg_id=_newClientMsgId();
               var r2=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:60000});
+              body._force_used=true;                  // 之后若走「重发」即为链路自带（retry_carry）
               var d2=await r2.json().catch(function(){ return {}; });
               ok=!!(d2&&d2.ok);
             }

@@ -83,11 +83,15 @@ def build_client_msg_id(now: Optional[float] = None, rand: str = "") -> str:
 def build_send_payload(chat_key: str, text: str, *, account_id: str,
                        client_msg_id: str,
                        reply_to_id: Optional[int] = None) -> Dict[str, Any]:
-    """/api/unified-inbox/send 载荷（skip_translate/force_lang 与值守 SOP 同参）。"""
+    """/api/unified-inbox/send 载荷（skip_translate/force_lang 与值守 SOP 同参）。
+
+    ``force_src="duty_reply"``（C3，#148）：值守 CLI 固定带 force_lang，服务端
+    ``guard=force`` 日志据此与坐席在弹窗亲点「强发」区分开。
+    """
     body: Dict[str, Any] = {
         "platform": "telegram", "account_id": str(account_id),
         "chat_key": str(chat_key), "text": str(text),
-        "skip_translate": True, "force_lang": 1,
+        "skip_translate": True, "force_lang": 1, "force_src": "duty_reply",
         "client_msg_id": client_msg_id,
     }
     if reply_to_id:

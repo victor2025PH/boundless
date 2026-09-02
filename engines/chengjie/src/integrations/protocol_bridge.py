@@ -21,7 +21,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from src.inbox.ingest import ingest_collected_chats
 from src.inbox.normalizer import PLATFORM_DISPLAY, message_obj, normalize_chat
@@ -1303,10 +1303,64 @@ async def deep_backfill_tg_history(
     return stats
 
 
+#: ``messages.getMessages`` 单次最多 100 个 id（MTProto 上限）。
+_TG_GET_MESSAGES_CHUNK = 100
+
+
+def _tg_message_is_empty(message: Any) -> bool:
+    """pyrogram 对已删/不存在的 id 返回 ``Message(empty=True)``（无 chat/date）。"""
+    if message is None:
+        return True
+    if bool(getattr(message, "empty", False)):
+        return True
+    return int(getattr(message, "id", 0) or 0) <= 0
+
+
+async def fetch_tg_messages_by_ids(
+    client: Any, peer: Any, ids: Sequence[int],
+) -> Tuple[List[Any], List[int]]:
+    """按 id 定点拉取（分块 ≤100/次）。返回 ``(非空消息列表, 核实为空的 id 列表)``。
+
+    单块失败只丢该块（不计入 empty——「拉不到」≠「不存在」，下次还能再探），
+    绝不让一块坏 id 拖垮整轮。
+    """
+    got: List[Any] = []
+    empty: List[int] = []
+    want = sorted({int(i) for i in (ids or []) if int(i or 0) > 0})
+    for i in range(0, len(want), _TG_GET_MESSAGES_CHUNK):
+        chunk = want[i:i + _TG_GET_MESSAGES_CHUNK]
+        try:
+            res = await client.get_messages(peer, message_ids=list(chunk))
+        except Exception:
+            logger.debug("[protocol_bridge] 定点拉取失败 peer=%s ids=%s..%s",
+                         peer, chunk[0], chunk[-1], exc_info=True)
+            continue
+        if res is None:
+            empty.extend(chunk)
+            continue
+        if not isinstance(res, (list, tuple)):
+            res = [res]
+        found = set()
+        for m in res:
+            mid = int(getattr(m, "id", 0) or 0)
+            if _tg_message_is_empty(m):
+                if mid > 0:
+                    empty.append(mid)
+                continue
+            found.add(mid)
+            got.append(m)
+        # 结果里根本没出现的 id（pyrogram 某些版本直接省略空项）也算核实为空
+        for mid in chunk:
+            if mid not in found and mid not in empty:
+                empty.append(mid)
+    return got, sorted(set(empty))
+
+
 async def probe_fill_tg_gap(
     client: Any, account_id: str, chat_key: str, *,
     mirror_max_id: int, cap: int = 300,
     ingest: Optional[Callable[[Dict[str, Any], List[Dict[str, Any]]], Any]] = None,
+    hole_ids: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
     """B88 线程缺口探测+补拉：newest-first 拉云端历史，遇到镜像已有的 id 即停。
 
@@ -1314,16 +1368,28 @@ async def probe_fill_tg_gap(
     这一段；本函数把这段补进镜像（ingest 按 platform_msg_id 去重，重复零成本），
     打开会话的读取链因此不再冻结在「重启前最后一条」。
 
-    返回 ``{"top_id", "gap", "fetched", "inserted", "capped"}``：
+    C1-①（#123 族，2026-09-02）：顶部比对探不出**序号中间的洞**（1084 漏收而
+    1085 已是 top → 旧口径 gap=false）。调用方把镜像里相邻 id 差 >1 的缺号
+    （``InboxStore.numeric_platform_msg_id_holes``）经 ``hole_ids`` 传入，这里
+    按 id 定点 ``get_messages`` 核实：拉到的真消息补进镜像（``holes_filled``），
+    核实为空的（已删/服务消息）记 ``hole_empty_ids`` 让调用方缓存、下次不再探。
+
+    返回 ``{"top_id", "gap", "top_gap", "hole_gap", "fetched", "inserted",
+    "capped", "holes_probed", "holes_filled", "holes_empty", "hole_empty_ids"}``：
     - ``top_id``＝云端顶部消息 id（0=会话无历史/取不到）；
-    - ``gap``＝顶部 id > mirror_max_id（镜像确实落后于云端）；
+    - ``top_gap``＝顶部 id > mirror_max_id（镜像顶部落后于云端）；
+    - ``hole_gap``＝序号洞里核实出真消息（镜像中段确实漏收）；
+    - ``gap``＝top_gap or hole_gap（对外总口径，前端/值守只看这个）；
     - ``capped``＝拉满 ``cap`` 仍没接上镜像（超长停机窗）——中段仍缺，调用方
       必须显式提示（禁止装作补完），深段走既有 deep-backfill；
     - ``mirror_max_id<=0``（镜像无数字 id 的冷会话）→ 只补最近一小页
       （min(cap, 50)），别把「打开会话」放大成深同步。
     """
     stats: Dict[str, Any] = {
-        "top_id": 0, "gap": False, "fetched": 0, "inserted": 0, "capped": False,
+        "top_id": 0, "gap": False, "top_gap": False, "hole_gap": False,
+        "fetched": 0, "inserted": 0, "capped": False,
+        "holes_probed": 0, "holes_filled": 0, "holes_empty": 0,
+        "hole_empty_ids": [],
     }
     if client is None or not chat_key:
         return stats
@@ -1355,7 +1421,35 @@ async def probe_fill_tg_gap(
     else:
         # 生成器耗尽而非 break 退出：拉满 limit 还没接上镜像 = 缺口比 cap 深
         stats["capped"] = bool(mmax > 0 and seen >= limit)
-    stats["gap"] = bool(stats["top_id"] > mmax)
+    stats["top_gap"] = bool(stats["top_id"] > mmax)
+
+    # ── 序号洞定点核实（只探镜像已有 id 以下的缺号；顶部段上面已经拉过）──
+    want_holes = sorted({int(h) for h in (hole_ids or [])
+                         if int(h or 0) > 0 and (mmax <= 0 or int(h) < mmax)})
+    if want_holes:
+        stats["holes_probed"] = len(want_holes)
+        got, empty = await fetch_tg_messages_by_ids(client, peer, want_holes)
+        stats["holes_empty"] = len(empty)
+        stats["hole_empty_ids"] = list(empty)
+        for message in got:
+            stats["fetched"] += 1
+            if chat_obj is None:
+                chat_obj = getattr(message, "chat", None)
+            payload = tg_message_payload(message, account_id)
+            obj = history_message_obj(payload, message) if payload is not None else None
+            if obj:
+                batch.append(obj)
+                stats["holes_filled"] += 1
+            else:
+                # 拉到了但不入库（服务消息等）：对镜像而言等价于空洞，缓存掉
+                mid = int(getattr(message, "id", 0) or 0)
+                if mid > 0:
+                    stats["hole_empty_ids"].append(mid)
+                    stats["holes_empty"] += 1
+        stats["hole_empty_ids"] = sorted(set(stats["hole_empty_ids"]))
+        stats["hole_gap"] = stats["holes_filled"] > 0
+    stats["gap"] = bool(stats["top_gap"] or stats["hole_gap"])
+
     if batch and chat_obj is not None and ingest is not None:
         newest = max(batch, key=lambda m: float(m.get("ts") or 0))
         chat = tg_chat_dict(

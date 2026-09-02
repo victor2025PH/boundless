@@ -3185,6 +3185,59 @@ class InboxStore:
         except (TypeError, ValueError):
             return 0
 
+    def numeric_platform_msg_id_holes(
+        self, conversation_id: str, *, window: int = 200,
+        max_holes: int = 100, max_span: int = 50,
+    ) -> List[int]:
+        """C1-①（#123 族，2026-09-02）：镜像最近 ``window`` 个纯数字 id 里的**序号洞**。
+
+        ``max_numeric_platform_msg_id`` 只能看见「顶部落后」；序号中间的洞
+        （0902 实锤：1084 漏收而 1085 已是 top → gap=false）永远探不出。这里按
+        相邻 id 差 >1 判候选洞，返回缺号列表（升序、去重），供云端按 id 定点拉取
+        核实——洞可能是已删消息/不入库的服务消息，是否真漏由拉取结果说话。
+
+        - 只在 **supergroup/channel** 语义下有意义（id 按会话单调连续）；私聊/
+          小群 id 是账号全局序，调用方（gap-probe）负责按 chat_key 判是否适用；
+        - ``max_span``：单个洞跨度超过此值视为停机窗/深回填对象（顶部链与
+          deep-backfill 管），跳过不展开——避免把 1 万条的历史空洞当「漏收」逐 id 拉；
+        - ``max_holes``：总缺号数上限，**最新的洞优先**（越新越可能是在线期漏收）；
+        - 软删行仍有 platform_msg_id → 不算洞（对端删了的消息镜像早知道）。
+        """
+        if not conversation_id:
+            return []
+        win = max(2, int(window or 200))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT CAST(platform_msg_id AS INTEGER) AS m FROM messages"
+                " WHERE conversation_id = ? AND platform_msg_id != ''"
+                " AND platform_msg_id NOT GLOB '*[^0-9]*'"
+                " ORDER BY m DESC LIMIT ?",
+                (conversation_id, win),
+            ).fetchall()
+        ids: List[int] = []
+        for r in rows:
+            try:
+                v = int(r["m"] or 0)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                ids.append(v)
+        if len(ids) < 2:
+            return []
+        ids.sort(reverse=True)          # 新 → 旧：最新的洞优先入选
+        holes: List[int] = []
+        cap = max(1, int(max_holes or 100))
+        span_cap = max(1, int(max_span or 50))
+        for hi, lo in zip(ids, ids[1:]):
+            span = hi - lo - 1
+            if span <= 0 or span > span_cap:
+                continue
+            for mid in range(hi - 1, lo, -1):
+                holes.append(mid)
+                if len(holes) >= cap:
+                    return sorted(holes)
+        return sorted(holes)
+
     def get_message_direction(
         self, conversation_id: str, platform_msg_id: str,
     ) -> str:

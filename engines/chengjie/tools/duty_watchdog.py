@@ -17,7 +17,15 @@ bug_intake_backfill 只补**登记**，不补「有人去回」）。本工具�
   重置计时**（实施81 P2-4：首报被淹没时 4 小时后再吵一次，介于「轰炸」与
   「报过一次就装死」之间——与 health_watchdog 家族 4h 重提同刻度）。
 
-数据面全只读（thread API GET）；投递失败退出码 1（计划任务日志可见）。
+C2（2026-09-02 两踩实锤）：扫描面 = 线程镜像 **∪ bug_events 台账**里的
+``rate_capped_report`` / ``usage`` 事件（``--event-kinds`` 可调）。被防刷屏
+限频静默的真反馈/提问不产生 bot 回执、不立单，此前值守面完全看不见
+（skuio 四连报+直接提问全被 rate_capped_report 吞掉）——限流只限 bot 自动
+回执，不得限值守可见性。事件行并入同一套「其后有无官方应答」判定，
+告警文案带 ⛔ 限流静默 标记。台账经 ``GET /api/admin/bug-intake/events``
+读取，旧引擎无此端点时回落本机只读打开 ``<data_root>/config/bug_intake.db``。
+
+数据面全只读（thread API GET / 台账只读）；投递失败退出码 1（计划任务日志可见）。
 
 用法::
 
@@ -33,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -54,6 +63,13 @@ _STATE_TTL_SEC = 48 * 3600
 # 官方 bot（@tgzkw_bot，实施82 起代发回访/公示）：它的群消息是**官方应答**，
 # 绝不能被当成客户提问计入未应答（否则每条回访都触发假告警）。
 OFFICIAL_BOT_IDS = {"8506426282"}
+# C2：默认纳入扫描面的台账事件类型（与 bug_intake.DUTY_VISIBLE_EVENT_KINDS 同源，
+# 这里硬编码是为了离线工具不依赖引擎包可导入）。
+DEFAULT_EVENT_KINDS = "rate_capped_report,usage"
+EVENT_KIND_LABELS = {
+    "rate_capped_report": "⛔ 限流静默（bot 未回执/未立单）",
+    "usage": "❔ 使用咨询（未回）",
+}
 
 
 def _out(s: str) -> None:
@@ -98,6 +114,47 @@ def find_unanswered(
     return out
 
 
+def events_as_messages(
+    events: List[Dict[str, Any]], *, chat_key: str,
+    thread_msgs: Optional[List[Dict[str, Any]]] = None,
+    staff_ids: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """C2：把 bug_events 台账行（rate_capped_report/usage）变成 ``find_unanswered``
+    认得的入站消息行，与线程镜像并入同一扫描面。
+
+    - 只取本群（``chat_key``）事件；reporter 是支持号/官方 bot 的不算提问；
+    - ``message_id``＝``ev:<id>``（与镜像 mid 不撞键；state 去重按此记）；
+    - 发言人名从镜像里同 sender_id 的行借（台账只存 id）；
+    - 行带 ``kind``＝事件类型，文案渲染据此打「限流静默」标。
+    """
+    staff = {str(x) for x in (staff_ids or set())}
+    names: Dict[str, str] = {}
+    for m in thread_msgs or []:
+        if isinstance(m, dict) and m.get("sender_id") and m.get("sender_name"):
+            names.setdefault(str(m["sender_id"]), str(m["sender_name"]))
+    out: List[Dict[str, Any]] = []
+    for e in events or []:
+        if not isinstance(e, dict):
+            continue
+        if str(e.get("chat_id") or "") != str(chat_key):
+            continue
+        rid = str(e.get("reporter_id") or "")
+        if rid and rid in staff:
+            continue
+        detail = str(e.get("detail") or "").strip()
+        out.append({
+            "direction": "in",
+            "ts": float(e.get("ts") or 0),
+            "sender_id": rid,
+            "sender_name": names.get(rid, ""),
+            "text": detail or f"[{e.get('kind') or 'event'}]",
+            "media_type": "",
+            "message_id": f"ev:{e.get('id') or int(float(e.get('ts') or 0))}",
+            "kind": str(e.get("kind") or ""),
+        })
+    return out
+
+
 def prune_state(state: Dict[str, float], now: float) -> Dict[str, float]:
     return {k: v for k, v in (state or {}).items()
             if now - float(v or 0) < _STATE_TTL_SEC}
@@ -127,7 +184,9 @@ def build_alert_text(hits: List[Dict[str, Any]], now: Optional[float] = None) ->
         who = h.get("sender_name") or h.get("sender_id") or "?"
         text = str(h.get("text") or "").strip() or f"[{h.get('media_type') or '媒体'}]"
         mark = "🔁 持续未应答" if h.get("re_alert") else "🔴"
-        lines.append(f"{mark} {gname} · {who} · 已等 {h.get('age_min')} 分钟")
+        kind_tag = EVENT_KIND_LABELS.get(str(h.get("kind") or ""), "")
+        lines.append(f"{mark} {gname} · {who} · 已等 {h.get('age_min')} 分钟"
+                     + (f" · {kind_tag}" if kind_tag else ""))
         lines.append(f"    {text[:140]}")
     lines.append("处置：python tools/duty_reply.py --group neice|official "
                  "--text \"...\"（或工作台群组动态直接回）")
@@ -164,6 +223,47 @@ def _read_token(data_root: Path) -> str:
     return ""
 
 
+def _read_events_sqlite(data_root: Path, kinds: List[str],
+                        since_ts: float, limit: int = 400) -> List[Dict[str, Any]]:
+    """本机只读打开台账（旧引擎无 /events 端点时的回落；文件不存在 → 空）。"""
+    db = Path(data_root) / "config" / "bug_intake.db"
+    if not db.is_file() or not kinds:
+        return []
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=5)
+    try:
+        con.row_factory = sqlite3.Row
+        q = ("SELECT id, ts, chat_id, kind, reporter_id, detail FROM bug_events"
+             " WHERE kind IN (%s) AND ts >= ? ORDER BY ts ASC, id ASC LIMIT ?"
+             % ",".join("?" * len(kinds)))
+        rows = con.execute(q, [*kinds, float(since_ts), int(limit)]).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def load_duty_events(base: str, token: str, data_root: Path, *,
+                     kinds: List[str], since_min: int) -> List[Dict[str, Any]]:
+    """C2 扫描面第二源：台账事件。API 优先（跨机可用），失败回落本机 sqlite。
+    两路都失败返回空并打 warn——扫描面缩回镜像单源，绝不让看门狗整轮失败。"""
+    if not kinds:
+        return []
+    try:
+        d = _get_json(base, "/api/admin/bug-intake/events", token, {
+            "kinds": ",".join(kinds), "since_min": str(int(since_min)),
+            "limit": "400"})
+        evs = d.get("events") if isinstance(d, dict) else None
+        if isinstance(evs, list):
+            return [e for e in evs if isinstance(e, dict)]
+    except Exception as exc:  # noqa: BLE001
+        _out(f"[warn] 台账事件端点不可用（{str(exc)[:80]}），回落本机 sqlite")
+    try:
+        return _read_events_sqlite(
+            data_root, kinds, time.time() - int(since_min) * 60)
+    except Exception as exc:  # noqa: BLE001
+        _out(f"[warn] 台账 sqlite 读取失败：{str(exc)[:120]}（扫描面退回镜像单源）")
+        return []
+
+
 def _deliver(text: str) -> tuple:
     """值守内部告警统一出口（@ai_zkw；见 tools/duty_alert.py）。"""
     from tools.duty_alert import deliver
@@ -182,8 +282,14 @@ def main() -> int:
     ap.add_argument("--base", default=DEFAULT_BASE)
     ap.add_argument("--data-root", default="")
     ap.add_argument("--state", default=str(DEFAULT_STATE))
+    ap.add_argument("--event-kinds", default=DEFAULT_EVENT_KINDS,
+                    help="并入扫描面的 bug_events 类型（逗号分隔；空=只看镜像）")
+    ap.add_argument("--event-lookback-min", type=int, default=720,
+                    help="台账事件回看窗（分钟）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    event_kinds = [k.strip() for k in str(args.event_kinds or "").split(",")
+                   if k.strip()]
 
     data_root = resolve_data_roots(args.data_root)[0]
     cfg = load_merged_config(data_root)
@@ -212,6 +318,11 @@ def main() -> int:
     now = time.time()
     state = prune_state(state, now)
 
+    # C2：台账事件（限流静默的真反馈/提问）一次拉全，按群并入各自扫描面
+    events = load_duty_events(
+        args.base, token, data_root, kinds=event_kinds,
+        since_min=max(args.threshold_min, int(args.event_lookback_min)))
+
     hits: List[Dict[str, Any]] = []
     for chat_key in groups:
         try:
@@ -221,8 +332,13 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             _out(f"[warn] 读取 {chat_key} 线程失败：{str(exc)[:120]}")
             continue
-        msgs = d.get("messages") or []
-        hit = find_unanswered(msgs, now=now,
+        msgs = list(d.get("messages") or [])
+        ev_rows = events_as_messages(
+            events, chat_key=chat_key, thread_msgs=msgs, staff_ids=staff)
+        if ev_rows:
+            _out(f"[scan] {chat_key} 并入台账事件 {len(ev_rows)} 条"
+                 f"（{','.join(sorted({r['kind'] for r in ev_rows}))}）")
+        hit = find_unanswered(msgs + ev_rows, now=now,
                               threshold_min=args.threshold_min,
                               staff_ids=staff)
         if not hit:
