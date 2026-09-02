@@ -100,7 +100,10 @@ def test_diag_upload_route_and_button_wired():
     routes = (_ROOT / "src" / "web" / "routes" / "ops_overview_routes.py").read_text(
         encoding="utf-8")
     assert "/api/admin/diagnostic-upload" in routes
-    assert "x-diag-meta" in routes, "直传必须带 app/fp 元信息（官网按它推客服 TG 摘要）"
+    # 上传实现已抽到共享模块（坐席入口同源）：路由钉委托、模块钉元信息头。
+    assert "build_and_upload" in routes, "直传路由必须走 diag_upload 共享实现"
+    shared = (_ROOT / "src" / "utils" / "diag_upload.py").read_text(encoding="utf-8")
+    assert "x-diag-meta" in shared, "直传必须带 app/fp 元信息（官网按它推客服 TG 摘要）"
     tpl = (_ROOT / "src" / "web" / "templates" / "settings.html").read_text(
         encoding="utf-8")
     assert "diag-upload-btn" in tpl
