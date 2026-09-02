@@ -1,10 +1,12 @@
 {
   "company": {
     "zh": "无界科技",
+    "zh_hant": "無界科技",
     "en": "BOUNDLESS"
   },
   "product": {
     "zh": "智聊",
+    "zh_hant": "智聊",
     "en": "ChatX"
   },
   "site_name": "无界科技 · 智聊",
