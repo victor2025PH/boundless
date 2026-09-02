@@ -12,6 +12,7 @@
     python tools/duty_evidence.py request 145 --what "诊断包：媒体发送失败+克隆声"
     python tools/duty_evidence.py received 144 --diag dr-1a0604f9836
     python tools/duty_evidence.py list              # 在途证据与超时档（30m/2h/24h）
+    python tools/duty_evidence.py probe 148         # VPS 遥测自动取版本/活跃/错误
 
 行为：
 1. ``reporter_version`` 列不存在时自动 ALTER TABLE 补列（与 notify_ts 当年
@@ -124,6 +125,51 @@ def classify_ticket(text: str) -> Tuple[str, List[str]]:
     if img:
         return CLASS_IMAGE, img
     return CLASS_MUST_LOG, []
+
+
+#: 机器码形态（工单 body 里用户自报 / 报障按钮 Note 自动携带）。
+_FP_RE = re.compile(r"\b[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}\b")
+
+
+def extract_fingerprints(text: str) -> List[str]:
+    """工单文本 → 机器码列表（出现序去重）。报障按钮的产品信息块自带机器码，
+    值守不该再问用户「你机器码多少」。"""
+    seen: List[str] = []
+    for m in _FP_RE.findall(str(text or "").upper()):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def parse_telemetry(lines: List[str], fp: str) -> Dict[str, Any]:
+    """VPS 遥测 JSONL 行（uploads.jsonl / client-logs.jsonl 混喂）→ 摘要。
+
+    返回 {version, last_seen_utc, sources, recent_errors[≤5]}；版本取**时间最新**
+    一条的 app/ver 字段（0902 实锤：钧一天内 1.067→1.070，取最新才是现状）。
+    行解析软失败——遥测账是 append-only 生产文件，坏行常态。
+    """
+    best_t, version = "", ""
+    errors: List[str] = []
+    sources = set()
+    fpu = str(fp or "").upper()
+    for ln in lines:
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        if str(d.get("fp") or "").upper() != fpu:
+            continue
+        t = str(d.get("t") or "")
+        ver = str(d.get("app") or d.get("ver") or "")
+        if ver and t >= best_t:
+            best_t, version = t, ver
+        if ver:
+            sources.add("uploads" if "app" in d else "client-logs")
+        if str(d.get("level") or "").upper() == "ERROR":
+            errors.append(f"{t[:16]} {str(d.get('msg') or '')[:90]}")
+    norm = extract_version(version) or version
+    return {"version": norm, "last_seen_utc": best_t,
+            "sources": sorted(sources), "recent_errors": errors[-5:]}
 
 
 #: 超时刻度（秒）→ 档名；与 v2③ 追问规则同刻度。
@@ -312,6 +358,92 @@ def cmd_check(con: sqlite3.Connection, data_root: Path, ticket: int) -> int:
     return 0
 
 
+#: 遥测所在 VPS（值守交接 §0 远程诊断链同宿主）；SSH 别名在 173/117 的
+#: ~/.ssh/config（bd2026 → ubuntu@165.154.233.121, key=hualing_deploy）。
+_TELEMETRY_SSH_HOST = "bd2026"
+_TELEMETRY_FILES = ("/home/ubuntu/hualing-leads/diag/uploads.jsonl",
+                    "/home/ubuntu/hualing-leads/client-logs.jsonl")
+
+
+def fetch_telemetry_lines(fp: str, *, host: str = _TELEMETRY_SSH_HOST,
+                          runner=None) -> List[str]:
+    """SSH 到遥测宿主 grep 指定机器码的行。``runner`` 可注入（测试）。"""
+    import subprocess
+    cmd = ["ssh", host,
+           "grep -h '" + str(fp) + "' " + " ".join(_TELEMETRY_FILES)
+           + " 2>/dev/null | tail -200"]
+    run = runner or (lambda c: subprocess.run(
+        c, capture_output=True, text=True, timeout=30, encoding="utf-8",
+        errors="replace"))
+    try:
+        r = run(cmd)
+        return [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+
+def resolve_ticket_fps(con: sqlite3.Connection, ticket: int,
+                       ledger_rows: Optional[List[Dict[str, Any]]] = None,
+                       ) -> List[str]:
+    """工单 → 机器码，三级回溯：本单 body → 同报障人全部工单（新→旧）→
+    本单证据台账（request/received 的 what/diag 里值守登记过的 fp——skuio 型
+    报障人从不用报障按钮、正文永远没机器码，但值守拉包时都写了）。"""
+    row = con.execute("select reporter_id, body from bug_tickets where id=?",
+                      (int(ticket),)).fetchone()
+    if not row:
+        return []
+    fps = extract_fingerprints(row[1])
+    if fps:
+        return fps
+    for (body,) in con.execute(
+            "select body from bug_tickets where reporter_id=? order by id desc",
+            (row[0],)).fetchall():
+        fps = extract_fingerprints(body)
+        if fps:
+            return fps
+    for r in reversed(ledger_rows or []):
+        if int(r.get("ticket") or 0) != int(ticket):
+            continue
+        fps = extract_fingerprints(
+            f"{r.get('what') or ''} {r.get('diag') or ''}")
+        if fps:
+            return fps
+    return []
+
+
+def cmd_probe(con: sqlite3.Connection, data_root: Path, ticket: int) -> int:
+    """报障人机器遥测探查：版本/最近活跃/最近错误，版本自动回填工单。
+
+    v3 §C 的自动化入口——「能自己取的绝不问用户」：报障按钮 Note 自带机器码、
+    uploads/beacon 自带版本，值守问「你版本多少」＝让用户复述日志里已有的东西。
+    """
+    ensure_reporter_version_column(con)
+    fps = resolve_ticket_fps(con, ticket, read_ledger(data_root))
+    if not fps:
+        _p(f"#{ticket} 找不到机器码（本单及同报障人历史工单均无）——"
+           "这种才需要问用户或发 diag-request")
+        return 1
+    for fp in fps:
+        info = parse_telemetry(fetch_telemetry_lines(fp), fp)
+        ver = info.get("version") or ""
+        _p(f"#{ticket} fp={fp} 版本={ver or '未知'} "
+           f"最近活跃(UTC)={info.get('last_seen_utc') or '-'} "
+           f"源={','.join(info.get('sources') or []) or '-'}")
+        for e in info.get("recent_errors") or []:
+            _p(f"  [ERROR] {e}")
+        if ver:
+            con.execute(
+                "update bug_tickets set reporter_version=? where id=?",
+                (ver, int(ticket)))
+            con.commit()
+            append_ledger(data_root, _ledger_row(
+                ticket, "probe", what=f"fp={fp} ver={ver} auto"))
+            _p(f"  → reporter_version={ver} 已回填")
+            return 0
+    _p(f"#{ticket} 遥测无该机器码记录——需 diag-request 或问用户")
+    return 1
+
+
 def cmd_list(data_root: Path) -> int:
     st = replay_ledger(read_ledger(data_root))
     pending = {t: s for t, s in st.items() if s.get("state") == "pending"}
@@ -341,6 +473,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("set-class")
     p.add_argument("ticket", type=int)
     p.add_argument("value", choices=[CLASS_MUST_LOG, CLASS_IMAGE])
+    p = sub.add_parser("probe"); p.add_argument("ticket", type=int)
     sub.add_parser("list")
     a = ap.parse_args(argv)
 
@@ -381,6 +514,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                           _ledger_row(a.ticket, "set_class", value=a.value))
             _p(f"#{a.ticket} 分类覆写 → {CLASS_LABEL[a.value]}")
             return 0
+        if a.cmd == "probe":
+            return cmd_probe(con, data_root, a.ticket)
         if a.cmd == "list":
             return cmd_list(data_root)
         return 2

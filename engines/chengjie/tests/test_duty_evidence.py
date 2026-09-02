@@ -17,8 +17,9 @@ import pytest
 
 from tools.duty_evidence import (
     CLASS_IMAGE, CLASS_MUST_LOG, backfill_versions, classify_ticket,
-    ensure_reporter_version_column, evidence_gate, extract_version,
-    overdue_tier, replay_ledger, ticket_send_gate, version_at_least,
+    ensure_reporter_version_column, evidence_gate, extract_fingerprints,
+    extract_version, overdue_tier, parse_telemetry, replay_ledger,
+    resolve_ticket_fps, ticket_send_gate, version_at_least,
 )
 
 
@@ -87,6 +88,51 @@ def test_classify_unknown_falls_back_conservative():
 def test_classify_144_and_146_are_must_log():
     assert classify_ticket("两个客户为什么没有自动回复")[0] == CLASS_MUST_LOG
     assert classify_ticket("手机删除消息了，工作台要同步删除")[0] == CLASS_MUST_LOG
+
+
+# ── 遥测自动提取（v3 §C 自动化：能自己取的绝不问用户）────────────────────────
+
+def test_extract_fingerprints():
+    body = ("产品: 智聊 ChatX\n机器码: B990-0C62-FC1C-F668\n"
+            "另一台 dc8f-0935-5ee4-f3d9 也有\n重复 B990-0C62-FC1C-F668")
+    assert extract_fingerprints(body) == [
+        "B990-0C62-FC1C-F668", "DC8F-0935-5EE4-F3D9"]
+    # sha256 片段/普通连字符串不误吞
+    assert extract_fingerprints("哈希 bb81fa29b1e6 和 2026-09-02 12:00") == []
+
+
+def test_parse_telemetry_takes_latest_version_and_errors():
+    lines = [
+        '{"t":"2026-09-02T04:12:23Z","code":"YEBHMS","app":"1.067","fp":"DC8F-0935-5EE4-F3D9"}',
+        '{"t":"2026-09-02T12:06:48Z","code":"64PY7D","app":"1.070","fp":"DC8F-0935-5EE4-F3D9"}',
+        '{"t":"2026-09-02T11:46:17Z","fp":"B990-0C62-FC1C-F668","ver":"1.070","level":"INFO","msg":"boot"}',
+        '{"t":"2026-09-02T11:46:18Z","fp":"B990-0C62-FC1C-F668","ver":"1.070","level":"ERROR","msg":"[SECURITY] secret_key"}',
+        "not json at all",
+    ]
+    d = parse_telemetry(lines, "DC8F-0935-5EE4-F3D9")
+    assert d["version"] == "1.0.70"          # 取时间最新，且规范化 1.070→1.0.70
+    assert d["last_seen_utc"].startswith("2026-09-02T12:06")
+    assert d["recent_errors"] == []          # 别机的 ERROR 不串味
+    d2 = parse_telemetry(lines, "b990-0c62-fc1c-f668")   # 大小写不敏感
+    assert d2["version"] == "1.0.70"
+    assert len(d2["recent_errors"]) == 1 and "SECURITY" in d2["recent_errors"][0]
+
+
+def test_resolve_ticket_fps_falls_back_to_reporter_history(tmp_path):
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE bug_tickets (id INTEGER PRIMARY KEY,"
+              " reporter_id TEXT, body TEXT)")
+    c.execute("INSERT INTO bug_tickets VALUES"
+              " (1,'u1','旧单 机器码: B990-0C62-FC1C-F668'),"
+              " (2,'u1','新单没写机器码'),"
+              " (3,'u2','别人的单也没写')")
+    assert resolve_ticket_fps(c, 2) == ["B990-0C62-FC1C-F668"]  # 回溯同人历史
+    assert resolve_ticket_fps(c, 3) == []                        # 无处可回溯
+    assert resolve_ticket_fps(c, 99) == []                       # 不存在的单
+    # 三级回溯：正文全无 → 证据台账里值守登记的 fp（skuio 型报障人）
+    ledger = [{"ticket": 3, "event": "request",
+               "what": "远程diag（DC8F-0935-5EE4-F3D9 机）"}]
+    assert resolve_ticket_fps(c, 3, ledger) == ["DC8F-0935-5EE4-F3D9"]
 
 
 # ── 证据台账 ──────────────────────────────────────────────────────────────────
