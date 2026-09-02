@@ -153,6 +153,19 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
         _peer_voice = False
     # 跨草稿静默窗：语音已达且无新入站 → 本轮不再发语音（文本侧在 deliver 同闸）。
     _vk0 = _cid or f"{platform}:{account_id}:{chat_key}"
+    # A3 熔断（#150，JZPBAC 21:03-21:09 两自家 AI 号语音乒乓 4 条/分钟无终止）：
+    # 同会话短窗语音达阈值 → 降级文字并冷却；voice_burst_guard 只告警不止损是根因。
+    try:
+        from src.client.voice_burst_guard import voice_degrade_reason as _vdr
+        _burst_why = _vdr(_vk0, _vb)
+    except Exception:
+        _burst_why = ""
+    if _burst_why:
+        record_voice_decision(False, _burst_why)
+        assistant.logger.warning(
+            "[autosend voice] 判文字 reason=%s（语音连发熔断，降级文字）"
+            "platform=%s acct=%s", _burst_why, platform, account_id)
+        return False
     if _sqav(
         conv_key=_vk0, recent_messages=_recent,
         quiet_after_sec=_session_cfg.get("quiet_after_sec", 90),

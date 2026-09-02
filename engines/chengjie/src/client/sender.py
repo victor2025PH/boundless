@@ -1469,6 +1469,19 @@ class TelegramSenderMixin:
             if trigger == "never":
                 self.logger.debug("[voice_reply] skip: trigger=never")
                 return False
+            # A3 熔断（#150）：同会话短窗语音达阈值 → 本条降级文字并冷却（A 线与
+            # B 线同口径；JZPBAC 实锤 A 线 voice_reply 正是乒乓的发送侧）。
+            try:
+                from src.client.voice_burst_guard import voice_degrade_reason
+                _burst_why = voice_degrade_reason(
+                    getattr(getattr(original_message, "chat", None), "id", ""),
+                    vr_cfg)
+            except Exception:
+                _burst_why = ""
+            if _burst_why:
+                self.logger.warning(
+                    "[voice_reply] skip: %s（语音连发熔断，本条降级文字）", _burst_why)
+                return False
             # 客户**打字**点名要语音/唱歌（when_peer_voice 只认「对方发了语音」会漏）→
             # 强制语音（P0-5，2026-07-29 对练补漏：打字要语音得不到语音、AI 打字冒充唱歌）。
             _peer_req_voice = False
