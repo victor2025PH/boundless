@@ -597,6 +597,48 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _client_msg_id = str(body.get("client_msg_id") or "").strip()
         _dedup = get_send_dedup()
         _dedup_scope = f"{platform}:{account_id}:{chat_key}"
+        # ── A1（#148 文本件，2026-09-03）：显式重发按**原件** id 幂等 ──────────
+        # 旧口径「重发换新键＝显式重试永不被拦」在断连窗里正好是双发的成因：
+        # 前端超时误标失败、服务端其实发出去了，新键让幂等键完全失效（钧机
+        # 64PY7D 实锤）。前端「重发」现在带 ``resend_of_cmid``＝原件
+        # client_msg_id；这里按原 id 查三态登记表 + 占位表判原件到底有没有出去。
+        # 键名刻意**不**复用 ``resend_of``——那个键在 B63③ 已有确定语义（失败
+        # 留痕行的 store message_id，成功后改标 resent），两者混用会互相误伤。
+        _resend_of_cmid = str(
+            body.get("resend_of_cmid")
+            or body.get("resend_of_client_msg_id") or "").strip()
+        if _resend_of_cmid and _resend_of_cmid != _client_msg_id:
+            from src.inbox.send_dedup import RESEND_ALLOW, resend_verdict
+            from src.inbox.voice_send_tracker import get_status as _vst_status
+            _prior_scope = f"text:{platform}:{account_id}:{chat_key}"
+            _prior = _vst_status(_prior_scope, _resend_of_cmid)
+            _prior_state = str((_prior or {}).get("state") or "unknown")
+            _verdict = resend_verdict(
+                _prior_state, _dedup.holds(_dedup_scope, _resend_of_cmid))
+            logger.info(
+                "[send] resend 幂等裁决 verdict=%s prior_state=%s conv=%s "
+                "orig_cmid=%s new_cmid=%s",
+                _verdict, _prior_state, _conv_id(platform, account_id, chat_key),
+                _resend_of_cmid[:16], _client_msg_id[:16])
+            if _verdict != RESEND_ALLOW:
+                logger.warning(
+                    "[send] guard=resend_dup 原件未确认失败 → 压制本次重发 "
+                    "verdict=%s prior_state=%s conv=%s orig_cmid=%s "
+                    "（此前此处会真发第二条＝客户收双条）",
+                    _verdict, _prior_state,
+                    _conv_id(platform, account_id, chat_key),
+                    _resend_of_cmid[:16])
+                return {
+                    "ok": True, "duplicate": True,
+                    "resend_suppressed": _verdict,
+                    "resend_prior_state": _prior_state,
+                    "result": {
+                        "duplicate": True,
+                        "message_id": str((_prior or {}).get("message_id") or ""),
+                    },
+                    "original_text": text, "sent_text": text, "translation": None,
+                    "message": tr(request, "inbox.send.resend_suppressed"),
+                }
         if not _dedup.reserve(_dedup_scope, _client_msg_id):
             logger.info(
                 "[send] 幂等去重命中，拒绝重复发送 scope=%s id=%s",

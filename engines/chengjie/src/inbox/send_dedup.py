@@ -34,7 +34,46 @@ import time
 from collections import OrderedDict
 from typing import Tuple
 
-__all__ = ["SendDedup", "get_send_dedup"]
+__all__ = ["SendDedup", "get_send_dedup", "resend_verdict",
+           "RESEND_ALLOW", "RESEND_SUPPRESS_SENT", "RESEND_SUPPRESS_IN_FLIGHT",
+           "RESEND_SUPPRESS_RESERVED"]
+
+# ── 显式重发的幂等裁决（A1，#148 文本件，2026-09-03）────────────────────────────
+# 事故（族4 第 6 层，钧机 64PY7D）：断连/慢发送窗里前端超时误标「发送失败」→ 坐席点
+# 「重发」→ 旧前端**每次重发都现造新 client_msg_id**（"显式重试永不被去重拦截" 的旧
+# 口径）→ 服务端眼里是全新一件，幂等键压根不认识它 → 客户收到两条一样的话。
+# 媒体件已在 E2（v1.0.71）把幂等键随件固定；文本件走的是乐观气泡 _retryBody，
+# 修法是让重发**带上原件的 client_msg_id**（``resend_of_cmid``），服务端按原 id 查
+# 三态登记表 + 占位表，判「原件到底有没有发出去」再决定放行还是压制。
+RESEND_ALLOW = "allow"
+RESEND_SUPPRESS_SENT = "suppress_sent"
+RESEND_SUPPRESS_IN_FLIGHT = "suppress_in_flight"
+RESEND_SUPPRESS_RESERVED = "suppress_reserved"
+
+
+def resend_verdict(prior_state: str, prior_reserved: bool) -> str:
+    """原件状态 → 本次重发的裁决（纯函数，无 IO，可直接单测）。
+
+    ``prior_state``＝``voice_send_tracker.get_status`` 的 state
+    （``sent``/``failed``/``in_flight``/``unknown``）；``prior_reserved``＝
+    ``SendDedup.holds`` 对原 id 的只读判定。
+
+    - ``sent``      → 压制（原件已送达，再发就是双发——本 bug 的正主）；
+    - ``in_flight`` → 压制（还在途；前端继续走 /send-status 对账收尾）；
+    - ``failed``    → 放行（服务端明确认败，重发正是该做的事）；
+    - ``unknown``   → 占位还在＝已发或在途（``release`` 只在失败路径调用）→ 压制；
+                      占位也没了＝失败过、或后端重启把两张表都清了 → 放行。
+                      **放行是这里的正确保守方向**：后端重启后无从得知，而漏发
+                      （静默丢消息）比重发一条更贵，且坐席是显式点了重发。
+    """
+    st = str(prior_state or "unknown").strip().lower()
+    if st == "sent":
+        return RESEND_SUPPRESS_SENT
+    if st == "in_flight":
+        return RESEND_SUPPRESS_IN_FLIGHT
+    if st == "failed":
+        return RESEND_ALLOW
+    return RESEND_SUPPRESS_RESERVED if prior_reserved else RESEND_ALLOW
 
 # 去重窗口：覆盖「双窗口先后点发送」「前端超时重放」的现实时距；
 # 超过窗口的同 id 重放按新消息放行（客户端 uuid 按次生成，正常不会撞）。
@@ -103,6 +142,22 @@ class SendDedup:
         with self._lock:
             if self._seen.pop(key, None) is not None:
                 self.total_released += 1
+
+    def holds(self, scope_key: str, client_msg_id: str) -> bool:
+        """该 id 的占位是否仍在窗口内（**只读**，不占位、不计数）。
+
+        A1（#148 文本件，2026-09-03）：``release`` 只在失败路径调用，所以
+        「占位还在」＝这一笔**要么已成功、要么仍在途**，两种都不该再发一遍。
+        供 ``resend_verdict`` 在 tracker 查无此键（条目过期）时兜底判定。
+        """
+        cid = str(client_msg_id or "").strip()
+        if not cid:
+            return False
+        key = (str(scope_key or ""), cid)
+        now = time.time()
+        with self._lock:
+            ts = self._seen.get(key)
+            return ts is not None and now - ts <= self._window
 
     def snapshot(self) -> dict:
         with self._lock:

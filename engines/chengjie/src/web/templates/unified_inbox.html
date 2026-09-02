@@ -13689,7 +13689,13 @@ async function resendFailed(optId){
   if(idx<0) return;
   const body=threadMsgs[idx]._retryBody;
   if(!body || !selectedChat){ return; }
-  body.client_msg_id=_newClientMsgId();   // 重发换新幂等键：显式重试永不被去重拦截
+  // A1（#148 文本件，0903）：换新键之前先把**原件**的键交给服务端——新键让服务端
+  // 眼里成了全新一件，断连/慢发送窗里前端超时误标失败而服务端其实发出去了，重发
+  // 就是真双发（钧机 64PY7D 实锤）。服务端按 resend_of_cmid 查原件三态再决定
+  // 放行还是压制；这里保持「换新键」不变（原件确实失败时同键会被占位挡住）。
+  const _priorCmid=String(body.client_msg_id||'');
+  if(_priorCmid) body.resend_of_cmid=_priorCmid;
+  body.client_msg_id=_newClientMsgId();   // 重发换新幂等键（原件幂等由 resend_of_cmid 兜）
   // C3（#148 B件）：force 标志随 _retryBody 复用——首次（刚点完确认）保留 confirm，
   // 之后每次「重发」都是链路自带的旧标志 → 改标 retry_carry，服务端日志据此定性
   // 「人点还是链路自带」，不再多绕一轮用户确认。
@@ -13703,6 +13709,12 @@ async function resendFailed(optId){
     const d=await r.json();
     if(d&&d.ok){
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
+      // A1：服务端按原件 id 判「其实已发出/仍在途」→ 压制了本次重发。清掉假失败
+      // 气泡之外还得说清楚，否则坐席只看到「点了重发但没多一条」会以为没生效。
+      if(d.resend_suppressed){
+        showHint(window.T('inbox.send.resend_suppressed'));
+        try{ _uiBeacon('resend_suppressed'); }catch(_){}
+      }
       await loadThread(selectedChat,true);
       await loadChats();
     } else {

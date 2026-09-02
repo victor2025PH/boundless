@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-02 23:17:10 · OpenCC s2twp + 術語釘 · 15781 鍵（源 zh 全量 15782）
+生成: 2026-09-03 02:16:32 · OpenCC s2twp + 術語釘 · 15785 鍵（源 zh 全量 15786）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -8795,10 +8795,13 @@ ZH_HANT = {
     'inbox.media.fetching': '拉取中…',
     'inbox.media.file_default': '檔案',
     'inbox.media.file_generic': '📎 媒體檔案',
+    'inbox.media.ghost_cleared': '✅ 後台已恢復：{n} 個「傳送失敗」實為誤報，檔案已送達，提示已清除',
     'inbox.media.img_alt': '圖片',
     'inbox.media.photo': '📷 圖片訊息',
     'inbox.media.retry_hint': '傳送失敗，點傳送重試',
+    'inbox.media.retry_hint_unknown': '後台剛重啟，結果未知；已自動核對對話記錄，確認沒發出再點傳送重試',
     'inbox.media.send_fail_net': '❌ 媒體傳送失敗（網路/服務異常）',
+    'inbox.media.send_fail_net_restart': '⚠ 後台重啟中，媒體傳送結果未知——恢復後會自動核對，別急著重發',
     'inbox.media.send_fail_status': '媒體傳送失敗（{status}）',
     'inbox.media.sending': '📤 傳送中：{name}',
     'inbox.media.sent': '✅ 媒體已傳送',
@@ -9131,6 +9134,7 @@ ZH_HANT = {
     'inbox.search.ph_msg': '搜尋訊息內容…',
     'inbox.send': '傳送',
     'inbox.send.force_confirm': '仍要傳送嗎？',
+    'inbox.send.resend_suppressed': '✓ 原訊息其實已經發出去了（剛才是超時誤報），本次重發已自動取消——客戶不會收到重複的話',
     'inbox.send.slow_confirmed': '✓ 已發出（本次傳送確認較慢，請勿重發）',
     'inbox.send.status_unknown': '傳送狀態未知：訊息可能已在路上，請稍後重新整理會話確認，暫時不要重發',
     'inbox.sidebar.resize_t': '拖動調節側欄寬度（雙擊恢復預設）',

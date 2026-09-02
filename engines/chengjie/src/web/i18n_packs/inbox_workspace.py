@@ -2065,6 +2065,8 @@ ZH = {
     "inbox.travel.clear_t": "立即清除该行程状态，叙事回归人设档案的常驻地",
     "inbox.travel.cleared": "行程状态已清除，叙事回归常驻地",
     "inbox.send.force_confirm": "仍要发送吗？",
+    # A1（#148 文本件）：重发被服务端按原件 id 判为「原件其实已发出/仍在途」而压制
+    "inbox.send.resend_suppressed": "✓ 原消息其实已经发出去了（刚才是超时误报），本次重发已自动取消——客户不会收到重复的话",
     "inbox.send.slow_confirmed": "✓ 已发出（本次发送确认较慢，请勿重发）",
     "inbox.send.status_unknown": "发送状态未知：消息可能已在路上，请稍后刷新会话确认，暂时不要重发",
     "inbox.sidebar.resize_t": "拖动调节侧栏宽度（双击恢复默认）",
@@ -4751,6 +4753,8 @@ EN = {
     "inbox.travel.clear_t": "Clear this trip state now; narration returns to the persona's home base",
     "inbox.travel.cleared": "Trip state cleared; narration returns to home base",
     "inbox.send.force_confirm": "Send anyway?",
+    # A1 (#148, text half): resend suppressed — the original was already sent / still in flight
+    "inbox.send.resend_suppressed": "✓ The original message did go out (the earlier failure was a timeout false alarm); this resend was cancelled automatically — the customer won't get a duplicate",
     "inbox.send.slow_confirmed": "✓ Sent (delivery confirmation was slow — do not resend)",
     "inbox.send.status_unknown": "Delivery status unknown: the message may still be on its way. Refresh the conversation shortly before deciding to resend.",
     "inbox.sidebar.resize_t": "Drag to resize sidebar (double-click to reset)",
