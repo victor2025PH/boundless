@@ -1,5 +1,43 @@
 [
   {
+    "version": "1.0.71",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "克隆声选谁出谁 · 无声误报根治 · 不再贬损自家活动 · 删消息同步 · 菜单栏跟随切语言 · 假失败自动清除 · 语音连发熔断",
+      "en": "Cloned voice plays what you pick, silent false alarms fixed, no more disparaging own promos, deletion sync, menu bar follows language, stale failures auto-clear, voice burst breaker"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆语音「选谁出谁」：工具箱选了某个人设的克隆声，实际合成一定是它——此前新克隆的声音会因未完成挂载而被静默换成别人的标准声、且在下拉里找不到；现在克隆完成即可选可用，选中的人设不存在时会明确提示而不是换声。",
+        "「音频异常（疑似无声）」误报根治：服务端复用语音识别结果做终审——只要产物能被转出文字或检测到能量，就不会再被标成「无声」，红条只在真无声时出现（此前三次返工仍误报的问题至此除根）。",
+        "AI 不再当着客户贬损自家活动/产品：人设会知道公司当前在推的活动清单（需在目录里登记），出站消息里对自家活动的「骚扰广告/骗局/愚蠢奖励」类嘲讽会被自动剥除或改为中性表述。",
+        "手机端删除的消息，工作台同步删除并清理关联记忆：客户或你在手机上撤回/删除的消息，不再残留在工作台会话与 AI 记忆里，避免 AI 之后引用已删内容。",
+        "切换界面语言后，顶部原生菜单栏（文件/编辑/视图/窗口/帮助）与帮助下拉同步切换，不再需要重启软件。",
+        "「媒体发送失败」假提示自动消除：后端重启或短暂断连期间产生的红色失败提示，在连接恢复后会按实际投递记录自动对账清除；重试同一媒体不再产生双发。",
+        "文字消息「重新发送」不再双发：断连期间被误标失败的消息点重发时，服务端按原消息幂等，客户只会收到一条。",
+        "LINE 端到端加密自愈：发送超时触发签名进程重启后，加密钥匙自动恢复、遇到钥匙缺失自动重握手一次，不再需要手动重启软件；对方已过期的视频/媒体给出「已过期，请对方重发」提示而不是无限重试。",
+        "语音连发自动熔断：同一会话一分钟内语音达到阈值（默认 3 条）时自动降级为文字并冷却，防止 AI 对 AI 或异常循环造成语音轰炸与额度消耗（可在语音回复设置里调阈值或关闭）。",
+        "诊断包自带「数据目录年龄」标注，卸载时勾选「彻底删除数据」会明确提示历史故障日志将无法用于排查。"
+      ],
+      "en": [
+        "Cloned voice: what you pick is what plays. Newly cloned voices no longer fall back silently to someone else's stock voice or go missing from the toolbox list; a cloned voice is selectable as soon as cloning finishes, and a missing persona now shows an explicit error instead of swapping voices.",
+        "\"Audio anomaly (possibly silent)\" false alarms fixed for good: the server now reuses the speech-recognition result as the final verdict, so any clip that transcribes or carries energy is never flagged silent; the red banner appears only for truly silent output.",
+        "The AI no longer disparages your own campaigns or products in front of customers: personas are aware of the company's registered promotions (add them to the catalog), and outgoing remarks calling them \"spam / scam / silly bonuses\" are stripped or neutralised automatically.",
+        "Messages deleted on the phone are now deleted in the workspace too, along with related memory entries, so the AI never quotes content that was withdrawn.",
+        "After switching the interface language, the native menu bar (File / Edit / View / Window / Help) and the Help dropdown switch immediately, no restart required.",
+        "Stale \"media send failed\" banners clear themselves: failures raised during a backend restart or brief disconnect are reconciled against the actual delivery record once the connection is back, and retrying the same media no longer double-sends.",
+        "\"Resend\" on a text message no longer double-sends: messages mis-marked as failed during a disconnect are resent idempotently by original message id, so the customer receives exactly one.",
+        "LINE end-to-end encryption self-heals: after a send timeout restarts the signing process, encryption keys are restored automatically and a missing-key error triggers one automatic re-handshake, with no app restart needed; expired incoming videos/media show \"expired, ask the sender to resend\" instead of retrying forever.",
+        "Voice burst circuit breaker: when one conversation hits the voice threshold within a minute (default 3), replies degrade to text and cool down automatically, preventing AI-to-AI or runaway loops from flooding voice and burning quota (threshold adjustable or disable in voice reply settings).",
+        "Diagnostic bundles now carry a \"data directory age\" marker, and choosing \"erase all data\" during uninstall warns that historical logs will no longer be available for troubleshooting."
+      ]
+    }
+  },
+  {
     "version": "1.0.70",
     "date": "2026-09-02",
     "title": {
