@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-01 15:38:59 · OpenCC s2twp + 術語釘 · 15709 鍵（源 zh 全量 15710）
+生成: 2026-09-02 13:09:13 · OpenCC s2twp + 術語釘 · 15778 鍵（源 zh 全量 15779）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1815,8 +1815,10 @@ ZH_HANT = {
     'base.drill.none_ignorable': '當前沒有可忽略的會話',
     'base.drill.open': '開啟',
     'base.drill.open_t': '開啟會話去回覆（回覆後不再超時）',
+    'base.drill.sec_crit': '嚴重超時（{n}）',
     'base.drill.sec_handled': '有人在跟 · 還沒回（{n}）',
     'base.drill.sec_wait': '還沒人接（{n}）',
+    'base.drill.sec_warn': '超過提醒線（{n}）',
     'base.drill.title': '需要處理的會話',
     'base.drill.wait': '等待 ',
     'base.grp.biz': '經營',
@@ -1874,6 +1876,8 @@ ZH_HANT = {
     'base.notif.anomaly_sub': '{metric} 異常：{msg}',
     'base.notif.assigned_sub': '{by} 轉給你 {n} 個會話',
     'base.notif.backlog_sub': '{n} 條待處理（L3={l3} · L4={l4}）',
+    'base.notif.billing_sub': '發現 {n} 項計費/額度異常，請到運營總覽核對',
+    'base.notif.billing_sub_ok': '計費異常已恢復正常',
     'base.notif.budget_sub': '「{name}」已用 {used}/{limit} 輪，自動回覆已暫停（明天恢復）',
     'base.notif.budget_sub_hard': '「{name}」已達硬頂 {used}/{limit}，擬稿已停（明天恢復）',
     'base.notif.budget_sub_relieved': '「{name}」今日額度已解除，AI 按原檔位繼續',
@@ -1892,19 +1896,28 @@ ZH_HANT = {
     'base.notif.f_other': '其它',
     'base.notif.goal_done_sub': '{name} · {title}',
     'base.notif.grp_hdr': '👥 群組動態 {n}',
+    'base.notif.health_sub': '{n} 個系統元件異常，部分能力可能降級，詳見運營總覽',
+    'base.notif.health_sub_ok': '系統元件已全部恢復正常',
     'base.notif.hour_ago': '{n}小時前',
     'base.notif.just_now': '剛剛',
     'base.notif.mention_sub': '{name}：{text}',
     'base.notif.metric': '指標',
     'base.notif.min_ago': '{n}分鐘前',
     'base.notif.msg_sub': '{name}：{text}',
+    'base.notif.ops_report_sub': '定期運營報告已生成，可在運營總覽檢視',
+    'base.notif.orch_worker_sub': '{n} 個賬號的訊息投遞遇到問題，正在自動重試；期間出站走備用通道',
+    'base.notif.orch_worker_sub_ok': '各賬號訊息投遞已恢復正常',
     'base.notif.prefs_link': '提示設定',
     'base.notif.prefs_link_t': '訊息提示音 / 彈窗設定',
+    'base.notif.queue_alert_sub': '客戶「{name}」已等待 {min} 分鐘沒人接待，請儘快認領',
     'base.notif.read_all': '全部已讀',
     'base.notif.reassigned_sub': '轉派給 {name}',
     'base.notif.sla_sub': '客戶「{name}」等待 {min}分鐘',
+    'base.notif.stage_sync_sub': '關係階段已同步為「{stage}」',
+    'base.notif.tech_hdr': '🔧 技術詳情 {n}',
     'base.notif.title': '通知中心',
     'base.notif.type_anomaly_alert': '異常告警',
+    'base.notif.type_billing_alert': '計費異常告警',
     'base.notif.type_budget_hit': 'AI 額度觸頂',
     'base.notif.type_conv_note': '同事 @ 提及',
     'base.notif.type_conversation_assigned': '會話轉派',
@@ -1915,8 +1928,23 @@ ZH_HANT = {
     'base.notif.type_draft_sla_breach': '草稿超時',
     'base.notif.type_escalation': '升級告警',
     'base.notif.type_goal_done': '目標達成',
+    'base.notif.type_health_alert': '系統健康告警',
     'base.notif.type_inbox_message': '新訊息',
+    'base.notif.type_ops_report': '運營報告',
+    'base.notif.type_orch_worker': '賬號投遞鏈告警',
+    'base.notif.type_queue_alert': '接待超時告警',
     'base.notif.type_sla_alert': 'SLA 告警',
+    'base.notif.type_stage_advance': '關係階段進階',
+    'base.notif.type_stage_advance_pending': '階段進階待確認',
+    'base.notif.type_stage_downgrade': '關係階段回落',
+    'base.notif.type_stage_reunion': '客戶回暖',
+    'base.notif.type_stage_sync': '關係階段同步',
+    'base.notif.type_wf_cancelled': '工作鏈已取消',
+    'base.notif.type_wf_done': '工作鏈完成',
+    'base.notif.type_wf_failed': '工作鏈失敗',
+    'base.notif.type_workflow_step': '工作鏈步驟',
+    'base.notif.wf_cancelled_sub': '工作鏈「{name}」已被取消',
+    'base.notif.wf_done_sub': '工作鏈「{name}」已走完，無需處理',
     'base.notif_t': '通知中心',
     'base.notify.dm_toast': '{title}：{body}',
     'base.page_title': '坐席工作台',
@@ -2006,8 +2034,10 @@ ZH_HANT = {
     'base.shell.pwd_ok': '密碼修改成功',
     'base.shell.pwd_submitting': '提交中…',
     'base.sla.tip_brk': '有 {n} 個會話超過提醒時間，待處理',
+    'base.sla.tip_esc_n': '其中 {esc} 條還沒人接',
     'base.sla.tip_head': '共 {n} 條超時未回覆',
     'base.sla.tip_head_esc': '共 {n} 條超時未回覆，其中 {esc} 條還沒人接',
+    'base.sla.tip_head_mix': '共 {n} 條待處理：嚴重超時 {crit} 條、超過提醒線 {warn} 條',
     'base.sse.assigned_you': '{by} 把 {n} 個會話轉給了你，點選檢視',
     'base.sse.auto_claim': '系統已把一位客戶自動分給你',
     'base.sse.auto_claim_lang': '系統已按語言把一位客戶分給你',
@@ -7226,6 +7256,7 @@ ZH_HANT = {
     'inbox.bulk.sop_none': '當前篩選沒有可掛的私聊會話',
     'inbox.bulk.sop_none_eligible': '篩選結果裡沒有符合條件的會話（都在途或近期掛過）',
     'inbox.bulk.sop_pick': '將從當前篩選的 {n} 個私聊中掛載。輸入鏈編號：',
+    'inbox.buried.hint': '歸檔中還有 {n} 條未讀',
     'inbox.caps.needs_public_url': '官方通道發媒體需先配置公網媒體 URL——開啟「渠道接入」嚮導填寫（IG/LINE 共用）',
     'inbox.caps.no_media': '該平台賬號暫不支援收件箱直髮媒體（需協議多開且線上）',
     'inbox.caps.no_voice': '該平台賬號暫不支援收件箱直髮語音（需協議多開且線上）',
@@ -8031,6 +8062,23 @@ ZH_HANT = {
     'inbox.dock.menu_unread': '只看該賬號未讀',
     'inbox.dock.order_reset': '已恢復預設排序',
     'inbox.dock.order_saved': '已儲存自定義排序（右鍵可恢復預設）',
+    'inbox.dpause.auto_resume': '將於 {time} 自動恢復',
+    'inbox.dpause.conv': '本會話未真發：全域性已暫停真發——AI 草稿照常在寫，但不會自動發出',
+    'inbox.dpause.conv_t': '這個會話的檔位是全自動/多選，但全域性「真發總閘」當前關閉（{reason}），自動投遞被攔下：AI 只寫草稿、不外發。恢復總閘後即恢復自動傳送。',
+    'inbox.dpause.global': '⏸️ 全域性已暫停真發：全自動會話只擬稿、不外發（Telegram 私聊直答不受影響）',
+    'inbox.dpause.global_by': '{time} 由 {actor} 經「{src}」關閉',
+    'inbox.dpause.need_supervisor': '恢復真發需主管許可權，請聯絡管理員',
+    'inbox.dpause.resume_btn': '▶ 恢復真發',
+    'inbox.dpause.resume_confirm': '恢復真發總閘：全自動會話將立即恢復 AI 自動傳送（傳送前仍過安全閘與額度護欄）。確定？',
+    'inbox.dpause.resume_fail': '恢復失敗：{msg}',
+    'inbox.dpause.resume_ok': '✅ 真發總閘已恢復，全自動會話恢復自動傳送',
+    'inbox.dpause.src.auto': '自動過期恢復',
+    'inbox.dpause.src.banner': '收件箱橫幅一鍵恢復',
+    'inbox.dpause.src.preset': '能力看板預設',
+    'inbox.dpause.src.rollback': '一鍵回滾',
+    'inbox.dpause.src.split': '設定頁拆開控制',
+    'inbox.dpause.src.standby': '設定頁一鍵三檔',
+    'inbox.dpause.src.unknown': '未知入口',
     'inbox.dpick.backup_lead': '已有一份現成 AI 備稿（同產線，稍早生成）：',
     'inbox.dpick.backup_use': '不等了，直接用備稿',
     'inbox.dpick.cancel': '取消生成',
@@ -8621,6 +8669,7 @@ ZH_HANT = {
     'inbox.grp.unmute': '取消靜音',
     'inbox.grp.unpin': '取消置頂',
     'inbox.handoff.r_circuit_open': 'AI 服務熔斷保護中',
+    'inbox.handoff.r_dup_guard_blocked': '近重複攔截：AI 回覆與剛發過的內容相近未發出，客戶在等回覆',
     'inbox.handoff.r_empty_reply': 'AI 生成了空回覆',
     'inbox.handoff.r_generate_error': 'AI 生成出錯',
     'inbox.handoff.r_high_risk': '客戶訊息命中高風險攔截',
@@ -21411,6 +21460,20 @@ ZH_HANT = {
     'rps_gate_platform_caps': '平台檔位上限',
     # ── rps_gate_readonly ──
     'rps_gate_readonly': '只讀',
+    # ── rps_gate_src_auto ──
+    'rps_gate_src_auto': '自動過期恢復',
+    # ── rps_gate_src_banner ──
+    'rps_gate_src_banner': '收件箱橫幅一鍵恢復',
+    # ── rps_gate_src_preset ──
+    'rps_gate_src_preset': '能力看板預設',
+    # ── rps_gate_src_rollback ──
+    'rps_gate_src_rollback': '一鍵回滾',
+    # ── rps_gate_src_split ──
+    'rps_gate_src_split': '本頁拆開控制',
+    # ── rps_gate_src_standby ──
+    'rps_gate_src_standby': '本頁一鍵三檔',
+    # ── rps_gate_src_unknown ──
+    'rps_gate_src_unknown': '未知入口',
     # ── rps_gate_title ──
     'rps_gate_title': '上游總閘',
     # ── rps_gate_worker ──
@@ -21883,6 +21946,8 @@ ZH_HANT = {
     'rps_sg_today': '今日傳送量（滾動 24 小時）',
     # ── rps_split_apply ──
     'rps_split_apply': '應用',
+    # ── rps_split_auto_resume ──
+    'rps_split_auto_resume': '暫停中：將於 {time} 自動恢復真發',
     # ── rps_split_blocked ──
     'rps_split_blocked': '未生效：{reason}',
     # ── rps_split_confirm_deliver_off ──
@@ -21901,6 +21966,12 @@ ZH_HANT = {
     'rps_split_done_deliver_on': '✅ 真發總閘已開啟',
     # ── rps_split_done_mode ──
     'rps_split_done_mode': '✅ 新會話預設檔已設為「{mode}」（既有會話不受影響）',
+    # ── rps_split_flip_line ──
+    'rps_split_flip_line': '最近一次：{actor} 於 {time} 經「{src}」{action}',
+    # ── rps_split_flip_off ──
+    'rps_split_flip_off': '關閉',
+    # ── rps_split_flip_on ──
+    'rps_split_flip_on': '開啟',
     # ── rps_split_hint ──
     'rps_split_hint': '上方三檔是「一鍵套餐」（預設檔與真發一起翻轉）；這裡可以只動其中一個：改預設檔不打斷正在自動傳送的會話，關真發不改任何會話檔位。',
     # ── rps_split_impact ──
@@ -25609,6 +25680,16 @@ ZH_HANT = {
     'wf_cta_add_name': '目標名稱（例：官網落地頁）',
     # ── wf_cta_add_url ──
     'wf_cta_add_url': 'https://…',
+    # ── wf_cta_base_invalid ──
+    'wf_cta_base_invalid': '請填以 https:// 開頭的完整網址',
+    # ── wf_cta_base_ph ──
+    'wf_cta_base_ph': '你的網站地址（例：https://你的域名.com）',
+    # ── wf_cta_base_save ──
+    'wf_cta_base_save': '儲存並啟用',
+    # ── wf_cta_base_saved ──
+    'wf_cta_base_saved': '已儲存，短鏈已啟用',
+    # ── wf_cta_base_tech_t ──
+    'wf_cta_base_tech_t': '技術說明：需把該域名的 /r/* 路徑反向代理到本引擎（配置鍵 inbox.cta.public_base）',
     # ── wf_cta_del_confirm ──
     'wf_cta_del_confirm': '刪除該轉化目標？已發出的短鏈會失效（404）。',
     # ── wf_cta_desc ──
@@ -25626,7 +25707,7 @@ ZH_HANT = {
     # ── wf_cta_kind_site ──
     'wf_cta_kind_site': '網站',
     # ── wf_cta_nobase ──
-    'wf_cta_nobase': '⚠ 未配置短鏈公網基址（inbox.cta.public_base）：鑄鏈不可用。把你的網站域名反代 /r/* 到本引擎後在配置裡填入。',
+    'wf_cta_nobase': '⚠ 轉化目標短鏈還沒啟用——需要一個客戶能開啟的網址。把你的網站地址填到下面儲存即可；不確定填什麼就聯絡為你部署的技術同學。',
     # ── wf_cta_saved ──
     'wf_cta_saved': '已儲存',
     # ── wf_cta_title ──
@@ -26149,6 +26230,7 @@ ZH_HANT = {
     'ws.banner.name.restartcool': '維護視窗',
     'ws.banner.name.session': '登入狀態',
     'ws.cap.denied_msg': '當前賬號未開通此能力（許可權閘已攔截）。如需使用請聯絡管理員開通。',
+    'ws.chandown.close_t': '關閉本條提醒：本次會話內同一事件不再彈出；通道圖示仍會標示該賬號離線，恢復線上後自動消失',
     'ws.chandown.dismiss_t': '暫時隱藏（24 小時內或狀態變化前不再顯示）',
     'ws.chandown.dur_dh': '{d} 天 {h} 小時',
     'ws.chandown.dur_hm': '{h} 小時 {m} 分鐘',
@@ -26167,6 +26249,8 @@ ZH_HANT = {
     'ws.chandown.relogin_ok2': '已在伺服器（執行登入服務的那台電腦）開啟登入視窗，請在 30 分鐘內到那台機器完成登入；完成後本提示自動消失。',
     'ws.chandown.relogin_trace': '（{t} {who} 已觸發過重登，登入視窗約 30 分鐘內有效）',
     'ws.chandown.relogin_trace_sb': '有同事',
+    'ws.chandown.snooze1h': '1 小時內別再提醒',
+    'ws.chandown.snooze1h_t': '暫緩 1 小時：期間新的掉線或狀態變化仍會立即提醒',
     'ws.chandown.text': '{plat} 通道已離線 {n} 分鐘，客戶訊息可能積壓——請通知管理員檢查連線',
     'ws.chandown.text2': '{plat} 通道（{who}）已斷線 {dur}，客戶訊息可能積壓——可嘗試重新登入，或聯絡管理員處理',
     'ws.chandown.waiting': '聯絡伺服器中… {s}s',

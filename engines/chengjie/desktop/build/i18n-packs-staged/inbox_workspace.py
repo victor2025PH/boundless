@@ -1982,6 +1982,8 @@ ZH = {
     "inbox.handoff.r_quota_day": "触及当日自动回复额度",
     "inbox.handoff.r_circuit_open": "AI 服务熔断保护中",
     "inbox.handoff.r_off_hours": "非营业时段",
+    # #144（0902）：出站近重复守卫拦下 AI 回复且没救回、客户在等 → 进待处理并说明原因
+    "inbox.handoff.r_dup_guard_blocked": "近重复拦截：AI 回复与刚发过的内容相近未发出，客户在等回复",
     "inbox.ctx.rm_tag_t": "点一下直接摘掉这个标签",
     "inbox.dpick.studio": "去工坊深编",
     "inbox.dpick.studio_t": "把勾选的短句填入输入框，并打开右栏「回复工坊」做改语言/改语气等深度编辑",
@@ -4664,6 +4666,7 @@ EN = {
     "inbox.handoff.r_quota_day": "daily auto-reply quota reached",
     "inbox.handoff.r_circuit_open": "AI service circuit breaker is open",
     "inbox.handoff.r_off_hours": "outside business hours",
+    "inbox.handoff.r_dup_guard_blocked": "near-duplicate guard: the AI reply was too close to what was just sent and was withheld; the customer is waiting",
     "inbox.ctx.rm_tag_t": "Click to remove this tag directly",
     "inbox.dpick.studio": "Deep-edit in Studio",
     "inbox.dpick.studio_t": "Put the ticked lines into the composer and open the Reply Studio on the right for language/tone deep edits",

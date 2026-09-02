@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.70",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "防重复不再误拦客户新消息的回复 · 待处理徽标与清单同口径 · 外语会话发图不再切中文",
+      "en": "Duplicate guard no longer drops replies to new messages, badge matches its list, no more Chinese switch after images"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户连着两轮发新消息、AI 两次回复内容相近时，第二条不再被「防重复发送」误拦而静默不发：只有同一轮里的重复才拦，客户每条新消息都会得到回复（WhatsApp 英文/西语会话实测）。",
+        "「防重复」拦下且换说法也没救回时，不再悄悄结束：会话会自动进入「需人工 / 待处理」清单并标明原因「近重复拦截」，坐席一眼可见、点开就能接手。",
+        "顶部「待处理」徽标与点开的清单口径一致：等待超过提醒线（如 30 分钟）的会话现在也会列出，面板分「严重超时 / 超过提醒线」两段，徽标数字就是清单条数，「全部忽略」对两段同样生效。",
+        "修正外语会话里客户发图片/贴纸后 AI 偶发「切中文」的真正原因：识图描述多行时的后半段曾被误当成客户语言证据；现在描述统一压成一行，历史多行描述也会被正确忽略，英文会话继续用英文回复。"
+      ],
+      "en": [
+        "When a customer sends two new messages in a row and the AI's two replies are similar, the second reply is no longer silently dropped by the duplicate-send guard: only repeats within the same turn are blocked, so every new customer message gets a reply (verified on WhatsApp English/Spanish conversations).",
+        "If the duplicate guard does block a reply and rewording cannot rescue it, the conversation no longer ends quietly: it is added to the \"Needs human / To handle\" list with the reason \"near-duplicate guard\", visible at a glance so an agent can take over.",
+        "The \"To handle\" badge now matches the list it opens: conversations past the reminder line (e.g. 30 minutes) are listed too, the panel is split into \"Critically overdue / Past the reminder line\", the badge number equals the list count, and \"Ignore all\" applies to both sections.",
+        "Fixed the real cause of the AI occasionally switching to Chinese after a customer sends a photo or sticker in a non-Chinese chat: multi-line image descriptions leaked their tail into language detection. Descriptions are now stored on one line and older multi-line ones are ignored, so English chats stay in English."
+      ]
+    }
+  },
+  {
     "version": "1.0.69",
     "date": "2026-09-02",
     "title": {
