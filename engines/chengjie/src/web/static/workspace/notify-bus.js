@@ -32,6 +32,11 @@
  * 点 ✕ 本 id 静默 dismissMs 毫秒（localStorage 跨标签页），期内 set 直接忽略——
  * 「告警通道未接通」这类对当前用户语义有限的常驻提示从此可以请走（0830 原图 811
  * 实锤：胶囊盖住工具箱/语音面板且无任何关闭手段）。不传 = 旧行为（不可关）。
+ *
+ * ongoing.set(id, o) 另支持 o.onDismiss / o.dismissTitle（工单 #143，2026-09-02）：
+ * onDismiss=函数时胶囊同样带 ✕，但静默语义交还调用方（如 chandown 按「异常集合
+ * 签名」记 sessionStorage——同事件本会话不再弹、新事故照常弹），总线不落 LS；
+ * 与 dismissMs 可并存（都传则两种记账都执行）。dismissTitle = ✕ 的 tooltip 文案。
  */
 (function(){
   'use strict';
@@ -409,17 +414,20 @@
       chip.appendChild(act);
     }
     /* #53-①：dismissMs > 0 → 胶囊带 ✕，点了本 id 静默该时长（localStorage 跨
-       标签页）。信息不丢：消息中心留痕仍在，静默到期自动恢复。 */
-    if(o.dismissMs > 0){
+       标签页）。信息不丢：消息中心留痕仍在，静默到期自动恢复。
+       #143：onDismiss=函数 → 同样带 ✕，静默记账交调用方（总线不落 LS）。 */
+    if(o.dismissMs > 0 || o.onDismiss){
       var x = document.createElement('button');
       x.type = 'button';
       x.textContent = '\u2715';
-      x.setAttribute('aria-label', 'dismiss');
+      x.setAttribute('aria-label', o.dismissTitle || 'dismiss');
+      if(o.dismissTitle) x.title = o.dismissTitle;
       x.style.cssText = 'flex:0 0 auto;border:none;background:transparent;'
         + 'color:inherit;opacity:.55;cursor:pointer;font-size:11px;padding:0 2px;';
       x.addEventListener('click', function(ev){
         try{ ev.stopPropagation(); }catch(_e){}
-        _lsSet(LS_ONG_SNOOZE + id, String(Date.now() + o.dismissMs));
+        if(o.dismissMs > 0) _lsSet(LS_ONG_SNOOZE + id, String(Date.now() + o.dismissMs));
+        try{ if(typeof o.onDismiss === 'function') o.onDismiss(); }catch(_e2){}
         delete _ongoing[String(id)];
         _render();
       });
@@ -460,6 +468,8 @@
           tone: String(o.tone || 'info'),
           title: String(o.title || ''),
           dismissMs: Math.max(0, Number(o.dismissMs) || 0),
+          dismissTitle: String(o.dismissTitle || ''),
+          onDismiss: (typeof o.onDismiss === 'function') ? o.onDismiss : null,
           action: (a && a.label && typeof a.onClick === 'function')
             ? { label: String(a.label), onClick: a.onClick, title: String(a.title || '') }
             : null

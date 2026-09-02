@@ -69,7 +69,9 @@ def is_placeholder_only(text: str) -> bool:
 # 长值 token 不会命中下面任何一条）。
 
 #: 识别描述在消息 text 里的标记前缀（写入方：本模块 / telegram_client / inbound_video）
-MEDIA_DESC_MARKERS = ("[图片内容]", "[视频内容]")
+#: #143（0902）：贴纸识别文本改标 ``[贴纸内容]``（曾与图片共用 [图片内容]，贴纸性
+#: 在正文/历史里丢失 → 表情包被当真实照片评论），同步进剥离表。
+MEDIA_DESC_MARKERS = ("[图片内容]", "[视频内容]", "[贴纸内容]")
 
 #: 闸门命中时的替换文案——诚实告知「有字但没法可靠抄」，并钉住 AI 不要臆测。
 GARBLED_DESC_NOTE = "图中文字零散（键盘按键/界面元素等），未能可靠识别；不要臆测图片内容"
@@ -541,6 +543,11 @@ async def enrich_inbound_media_text(
 
         if mt in _VIDEO_KINDS:
             text = f"{cap}\n[视频内容] {desc}" if cap else f"[视频内容] {desc}"
+        elif mt == "sticker":
+            # #143（0902 工单）：贴纸不再冒充 [图片内容]——前缀就是下游（历史行
+            # 重解析 _match_media_prefix / ai_client 媒体块 kind）的贴纸性载体，
+            # 丢了它，贴纸在后续轮次会被当真实照片评论（「贴纸里的猫」实锤）。
+            text = f"{cap}\n[贴纸内容] {desc}" if cap else f"[贴纸内容] {desc}"
         elif mt in _IMAGE_KINDS:
             text = f"{cap}\n[图片内容] {desc}" if cap else f"[图片内容] {desc}"
         elif mt in _VOICE_KINDS:

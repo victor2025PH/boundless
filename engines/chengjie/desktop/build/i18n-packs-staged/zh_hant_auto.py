@@ -5823,6 +5823,7 @@ ZH_HANT = {
     # ── fc_title ──
     'fc_title': '功能總覽',
     # ── fe ──
+    'fe.guard.net_retry': '連線中，正在重試…恢復後本提示自動消失',
     'fe.guard.page_error': '頁面指令碼出錯，部分功能可能失效',
     # ── fn_cta_title ──
     'fn_cta_title': '🔗 追蹤連結 發→點：',
@@ -7358,7 +7359,7 @@ ZH_HANT = {
     'inbox.conn.down_server': '⛔ 伺服器連線不通（你的網路正常）——正在自動重連，資料已保留；若持續超過 2 分鐘請聯絡運維',
     'inbox.conn.reconnecting': '⚠ 連線中斷，自動重連中…',
     'inbox.conn.restored': '✅ 連線已恢復，期間資料未丟失',
-    'inbox.conn.soft': '⚠ 連線波動，自動重試中…',
+    'inbox.conn.soft': '⚠ 連線中，正在重試…（恢復後自動消失）',
     'inbox.connect.back_mode': '← 換方式',
     'inbox.connect.back_prev': '← 上一步',
     'inbox.connect.bk_creds_missing': '缺憑據',

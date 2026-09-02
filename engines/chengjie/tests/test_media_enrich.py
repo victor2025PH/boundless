@@ -94,6 +94,44 @@ async def test_image_enrich_with_caption(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sticker_enrich_uses_sticker_marker(tmp_path):
+    """#143（0902）：贴纸识别产物标 [贴纸内容]，不再冒充 [图片内容]。
+
+    前缀是贴纸性在正文/历史行里的唯一载体（inbound_enrich._match_media_prefix
+    回解析为 sticker）——丢了它，后续轮次把表情包当真实照片评论（「贴纸里的猫」
+    实锤），且中文描述被当对方话语参与语言判定。
+    """
+    img = tmp_path / "s.webp"
+    img.write_bytes(b"fakewebp")
+    with patch(
+        "src.inbox.media_enrich._resolve_local_path", return_value=str(img),
+    ), patch(
+        "src.vision_client.has_any_vision_backend", return_value=True,
+    ), patch(
+        "src.vision_client.VisionClient.describe_image_with_ollama_zhipu_fallback",
+        new=AsyncMock(return_value=("一只卡通猫举着爱心", "ollama_ok")),
+    ):
+        text, desc = await enrich_inbound_media_text(
+            media_type="sticker",
+            media_ref="/static/protocol_media/whatsapp/s.webp",
+            caption="", config={"vision": {"enabled": True}},
+        )
+    assert desc == "一只卡通猫举着爱心"
+    assert text == "[贴纸内容] 一只卡通猫举着爱心"
+    # 回解析必须还原贴纸性（历史行/回扫链同口径）
+    from src.inbox.inbound_enrich import _match_media_prefix
+    kind, pdesc = _match_media_prefix(text)
+    assert kind == "sticker" and pdesc == "一只卡通猫举着爱心"
+    # 系统标注不构成语言证据（#74 剥离口径覆盖新前缀）
+    from src.ai.lang_policy import strip_system_injected
+    assert strip_system_injected(text) == ""
+    # strip_media_desc 剥得掉（翻译/记忆抽取卫生）
+    from src.inbox.media_enrich import strip_media_desc
+    assert strip_media_desc("看这个\n" + text) == "看这个"
+    assert strip_media_desc(text) == ""
+
+
+@pytest.mark.asyncio
 async def test_vision_disabled_falls_back(tmp_path):
     """vision.enabled=false → 不识别，回落占位。"""
     img = tmp_path / "a.jpg"

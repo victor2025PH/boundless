@@ -21,16 +21,29 @@ _MEDIA_BACKSCAN_DEFAULT = 5
 _MEDIA_WAIT_TICK_SEC = 1.5
 
 
-def _fold_image_desc(last: str, history: list, desc: str) -> str:
-    """把图片识别描述并入待回复正文与 history 占位行（Phase1.3 口径），返回新 last。
+def _media_desc_prefix(kind: str) -> str:
+    """识别描述并入正文/回写消息行时的标记前缀（与 media_enrich 产出同口径）。
+
+    #143（0902）：贴纸轮曾统一写 ``[图片内容]``——贴纸性在正文/历史里丢失，
+    下游把表情包当真实照片评论（「贴纸里的猫」实锤）。``[贴纸内容]`` 在
+    ``inbound_enrich._MEDIA_PREFIX_PATTERNS`` 里回解析为 sticker。
+    """
+    return "[贴纸内容]" if str(kind or "").strip().lower() == "sticker" \
+        else "[图片内容]"
+
+
+def _fold_image_desc(last: str, history: list, desc: str,
+                     kind: str = "image") -> str:
+    """把图片/贴纸识别描述并入待回复正文与 history 占位行（Phase1.3 口径），返回新 last。
 
     识别描述只走 media_desc 辅助块时模型反应明显弱于「描述在正文」——
     describe 直识与等待环重读（并行链路回写）两条来源共用本函数，口径一致。"""
+    _mk = _media_desc_prefix(kind)
     _cap = str(last or "").strip()
-    if _cap.startswith("[图片") or _cap in ("[贴纸]", "[媒体]", ""):
+    if _cap.startswith(("[图片", "[贴纸")) or _cap in ("[媒体]", ""):
         _cap = ""
     _ifull = (
-        f"{_cap}\n[图片内容] {desc}" if _cap else f"[图片内容] {desc}"
+        f"{_cap}\n{_mk} {desc}" if _cap else f"{_mk} {desc}"
     )
     if str(last or "").strip() in ("[图片]", "[贴纸]", "[媒体]", "") or _cap:
         last = _ifull
@@ -40,7 +53,7 @@ def _fold_image_desc(last: str, history: list, desc: str) -> str:
             if _hc in (
                 "[图片]", "[贴纸]", "[媒体]", "",
             ) or (
-                _hc and not _hc.startswith("[图片内容]")
+                _hc and not _hc.startswith(("[图片内容]", "[贴纸内容]"))
             ):
                 _hm["content"] = _ifull
             break
@@ -205,7 +218,8 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                                 cid,
                                 message_id=_peer_msg_id,
                                 media_ref=_peer_media_ref,
-                                text=f"[图片内容] {_peer_media_desc}",
+                                text=(f"{_media_desc_prefix(_peer_media_type)}"
+                                      f" {_peer_media_desc}"),
                                 only_if_empty=True,
                             )
                         except Exception:
@@ -219,7 +233,8 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                         # 块、正文停留 [图片] 占位——模型对占位正文的回应明显弱
                         # 于描述在正文（WA/协议线识图「答非所问」的直接根源）。
                         last = _fold_image_desc(
-                            last, history, _peer_media_desc)
+                            last, history, _peer_media_desc,
+                            kind=_peer_media_type)
                         assistant.logger.info(
                             "[AutoDraft] 图片识别补全: %s",
                             _peer_media_desc[:80],
@@ -227,7 +242,8 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                 elif _peer_media_desc:
                     # 等待环从消息行重读到的描述（并行链路已回写）：同样并入
                     # 正文与 history（与直识路径同口径）；不再回写、不再识别。
-                    last = _fold_image_desc(last, history, _peer_media_desc)
+                    last = _fold_image_desc(last, history, _peer_media_desc,
+                                            kind=_peer_media_type)
                     assistant.logger.info(
                         "[AutoDraft] 等图拿到并行回写描述: %s",
                         _peer_media_desc[:80],

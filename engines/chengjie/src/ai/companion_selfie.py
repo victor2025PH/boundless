@@ -1504,6 +1504,7 @@ def build_photo_caption_instruction(
     scene: str = "",
     freshness: str = "fresh",
     wanted_subject: str = "",
+    reply_lang: str = "",
 ) -> str:
     """构造「照片配文」LLM 指令（纯函数）——文图协同的关键一环。
 
@@ -1520,6 +1521,11 @@ def build_photo_caption_instruction(
     点名想看的**非人像主体**（「燕窝粥」「我的卧室」）——这张图里并没有它时，
     指令显式禁止「假装照片里有」。实录事故：自拍配文写成「给你瞅瞅我卧室的
     样子」「之前拍的存货，家里随便吃吃嘛」，画面里只有人脸。
+    ``reply_lang``（#143 0902，接 #74 语言锚）＝会话语言/客户语言画像：非空时
+    配文语言**显式钉死**，不再让模型「跟随对方消息的语言」——贴纸/图片轮的
+    「对方消息」是系统中文识别标注（[贴纸内容]/[图片内容] …），跟随它＝英文
+    会话配出中文文案（「手机里存的这张…」发英文客户实锤）。同理 peer_text
+    先剥系统注入行（lang_policy.strip_system_injected），剥空则不引用原话。
     解析/调用在 autosend 侧（保持本模块纯净可测）。
     """
     who = f"「{persona_name}」" if persona_name else "一个真人"
@@ -1533,7 +1539,15 @@ def build_photo_caption_instruction(
         desc = "一张你之前拍的自拍照（存货，画面里是你本人，不是现在拍的）"
     else:
         desc = "一张你刚拍的自拍照"
-    pt = str(peer_text or "").strip()[:120]
+    # 系统注入的识别标注（[贴纸内容]/[图片内容] 中文描述等）不是对方的话——
+    # 引进指令会既误导「相同语言」判断又诱导配文评论识别内容。剥不动时用原文
+    # （软失败，与 #74 同一剥离口径）。
+    try:
+        from src.ai.lang_policy import strip_system_injected as _cap_ssi
+        _pt_src = _cap_ssi(str(peer_text or ""))
+    except Exception:
+        _pt_src = str(peer_text or "")
+    pt = _pt_src.strip()[:120]
     sc = str(scene or "").strip()[:120]
     scene_line = (
         f"照片的拍摄场景是：{sc}（配文可自然带到你人在那儿、在做什么，用对话语言"
@@ -1555,12 +1569,29 @@ def build_photo_caption_instruction(
         "- 这张是之前拍的：**禁止**说「刚拍的/刚出炉/现在拍的」这类话，"
         "可以自然带过「翻到一张之前拍的/之前拍的这张」，也不要编造现在的拍摄过程\n"
         if is_old else "")
+    _rl = str(reply_lang or "").strip().lower()
+    _rl_names = {
+        "zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "es": "西语",
+        "pt": "葡语", "vi": "越南语", "th": "泰语", "id": "印尼语",
+        "ru": "俄语", "fr": "法语", "de": "德语", "yue": "粤语",
+    }
+    if _rl:
+        _rl_n = _rl_names.get(_rl.split("-")[0], _rl)
+        lang_line = (
+            f"- 配文必须用「{_rl_n}」写（这是你们会话一直在用的语言），"
+            "禁止使用其它语言\n")
+    elif pt:
+        lang_line = "- 使用与对方消息相同的语言\n"
+    else:
+        # 对方本轮是贴纸/图片（无文字）：没有可跟随的语言 → 按会话既有语言
+        lang_line = "- 使用你们会话一直在用的语言\n"
+    peer_line = f"对方刚才的消息：「{pt}」\n" if pt else ""
     return (
         f"你在聊天软件里扮演{who}（真人口吻）。你刚刚把{desc}发给了对方。\n"
-        f"对方刚才的消息：「{pt}」\n"
+        + peer_line
         + scene_line +
         "写一条随照片一起发送的配文，要求：\n"
-        "- 使用与对方消息相同的语言\n"
+        + lang_line +
         "- 口语化、自然、不超过 30 字，最多 1 个 emoji\n"
         "- 照片已经发出去了：禁止写「等我去拍」「我发不了照片」这类否认或拖延的话\n"
         + portrait_line + wanted_line + old_line +

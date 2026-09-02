@@ -39,6 +39,7 @@ import {
 import { decideCloseAction, CLOSE_CODES } from "./close-policy.js";
 import { shouldMarkScanned } from "./scan-signal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
+import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
 import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1732,13 +1733,24 @@ app.post("/accounts/:id/send-media", async (req, res) => {
   }
   const jid = toJid((req.body && req.body.jid) || "");
   const mpath = String((req.body && req.body.path) || "");
-  const mtype = String((req.body && req.body.media_type) || "document");
+  const rawType = String((req.body && req.body.media_type) || "");
+  let mtype = rawType;
   const caption = String((req.body && req.body.caption) || "");
   if (!jid || !mpath) {
     return res.status(400).json({ ok: false, error: "jid and path required" });
   }
   try {
     const buf = fs.readFileSync(mpath);
+    // 缺类型回退（工单 #143）：media_type 缺失/不在白名单 → 魔数嗅探，
+    // 嗅探不出才落 document。显式传 document/file 的不受影响。
+    if (!KNOWN_MEDIA_TYPES.has(mtype)) {
+      const sniffed = sniffMediaKind(buf);
+      logger.warn(
+        { path: mpath, media_type: rawType || "(missing)", sniffed: sniffed || "none" },
+        "send-media: missing/unknown media_type → magic-sniff fallback",
+      );
+      mtype = sniffed || "document";
+    }
     let content;
     if (mtype === "image") content = { image: buf, caption };
     else if (mtype === "voice") {
@@ -1756,7 +1768,11 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       }
       content = { audio: buf, ptt: true, mimetype: "audio/ogg; codecs=opus" };
     } else if (mtype === "video") content = { video: buf, caption };
-    else if (mtype === "sticker") {
+    else if (mtype === "audio") {
+      // 仅魔数嗅探回退可达（audio 不在白名单）：OGG 按普通音频发（非 ptt——
+      // 语音条语义仍只走上面显式 voice 的 OggS+OpusHead 硬闸，别误伤）。
+      content = { audio: buf, mimetype: "audio/ogg" };
+    } else if (mtype === "sticker") {
       // 2026-08-17 表情包主线：原生 WhatsApp 贴纸（上游规范化管线保证
       // 512×512 webp，动图为 animated webp——Baileys/WA 原生支持）。
       // 贴纸无 caption 语义，忽略 caption。

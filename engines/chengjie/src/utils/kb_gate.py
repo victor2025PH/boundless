@@ -124,7 +124,7 @@ def is_media_desc_text(text: str) -> bool:
     应整体跳过 KB。语音转写**不算**——那是用户说的话。
     """
     t = str(text or "").lstrip()
-    return t.startswith("[图片内容]") or t.startswith("[视频内容]")
+    return t.startswith(("[图片内容]", "[视频内容]", "[贴纸内容]"))
 
 
 # ── 学习漏斗入池守门（2026-08-02 学习队列断粮复盘）────────────────────

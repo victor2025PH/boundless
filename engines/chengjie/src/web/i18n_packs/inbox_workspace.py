@@ -2687,6 +2687,11 @@ ZH = {
     "ws.chandown.dur_hm": "{h} 小时 {m} 分钟",
     "ws.chandown.dur_m": "{m} 分钟",
     "ws.chandown.dismiss_t": "暂时隐藏（24 小时内或状态变化前不再显示）",
+    # 工单 #143（2026-09-02）：右下常驻胶囊补 ✕（本次会话内同一事件不再弹）+
+    # 「1 小时内别再提醒」暂缓；离线事实仍由账号 chip/平台色点承载，恢复在线自动消失。
+    "ws.chandown.close_t": "关闭本条提醒：本次会话内同一事件不再弹出；通道图标仍会标示该账号离线，恢复在线后自动消失",
+    "ws.chandown.snooze1h": "1 小时内别再提醒",
+    "ws.chandown.snooze1h_t": "暂缓 1 小时：期间新的掉线或状态变化仍会立即提醒",
     "ws.chandown.logout_btn": "登出该账号",
     "ws.chandown.logout_confirm": "确认登出 {who}？登出后系统停止该账号的收发与相关提醒，历史会话仍可查看；之后可在「账号管理」重新接入。",
     "ws.chandown.logout_ok": "已登出，提醒将停止；如需继续使用请到「账号管理」重新接入。",
@@ -5357,6 +5362,9 @@ EN = {
     "ws.chandown.dur_hm": "{h}h {m}m",
     "ws.chandown.dur_m": "{m} min",
     "ws.chandown.dismiss_t": "Hide temporarily (stays hidden for 24h or until the status changes)",
+    "ws.chandown.close_t": "Dismiss this alert: it won't reappear for the same incident during this session; the channel icon keeps showing the account as offline, and the alert clears automatically once it reconnects",
+    "ws.chandown.snooze1h": "Snooze 1 hour",
+    "ws.chandown.snooze1h_t": "Snooze for 1 hour; any new outage or status change will still alert immediately",
     "ws.chandown.logout_btn": "Log out this account",
     "ws.chandown.logout_confirm": "Log out {who}? The system stops its sending/receiving and related alerts; history stays viewable. You can re-add it in Account Management later.",
     "ws.chandown.logout_ok": "Logged out; alerts will stop. Re-add it in Account Management when needed.",

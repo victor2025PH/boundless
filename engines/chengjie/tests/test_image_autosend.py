@@ -238,7 +238,9 @@ async def test_run_registry_keyword_hit_sends_and_records():
         _cfg(enabled=True), "telegram", "acct1", "chatA", "lin",
         "给我跳舞看看", [], send_fn=send_fn, ai_text="好呀")
     assert ok is True
-    assert sent[0]["path"] == "/disk/dance.jpg" and sent[0]["type"] == "photo"
+    # 工单 #143：相册条目存的是 "photo"，发送层必须归一成 "image"——
+    # 裸传 "photo" 会让 WA 边车按 document 发出（对方看到点不开的「文档」）。
+    assert sent[0]["path"] == "/disk/dance.jpg" and sent[0]["type"] == "image"
     assert sent[0]["cap"] == "看我跳~"  # 用条目 caption
     assert st.get(row["id"])["hits"] == 1  # 命中计数 +1
 

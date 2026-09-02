@@ -580,7 +580,8 @@ ZH = {
     "inbox.confirm.ok": "确定",
     "inbox.confirm.title": "确认操作",
     "inbox.conn.reconnecting": "⚠ 连接中断，自动重连中…",
-    "inbox.conn.soft": "⚠ 连接波动，自动重试中…",
+    # 黄条措辞对齐全局守卫（fe.guard.net_retry）：只说「重试中会自愈」，重启瞬断不吓人
+    "inbox.conn.soft": "⚠ 连接中，正在重试…（恢复后自动消失）",
     "inbox.conn.down": "⛔ 连接中断，持续重连中…（数据保留，恢复后自动刷新）",
     # P0-2 自诊断分流（2026-08-12）：down 态由独立信标探测判定是谁的问题，
     # 措辞直接给结论和动作建议——终结「是我的网还是系统挂了」的猜谜与误报。
@@ -1463,6 +1464,8 @@ ZH = {
     "inbox.filter.buried_t": "有 {n} 条已归档会话收到新消息（在「更多 ▾ · 归档」里查看）",
     # 「更多」按钮红点的悬浮解释（P0-198）：被埋＝归档着还有未读，客户在等而列表看不见
     "inbox.filter.buried_t": "归档里有 {n} 个会话还有未读消息（客户在等，默认视图看不到）",
+    # #142 被埋会话界面化：筛选条下常驻入口（徽标已剔归档未读，这里是它们的去处）
+    "inbox.buried.hint": "归档中还有 {n} 条未读",
     "inbox.filter.claimed": "我的",
     "inbox.filter.more": "更多",
     "inbox.filter.removed": "已移除",
@@ -2684,6 +2687,11 @@ ZH = {
     "ws.chandown.dur_hm": "{h} 小时 {m} 分钟",
     "ws.chandown.dur_m": "{m} 分钟",
     "ws.chandown.dismiss_t": "暂时隐藏（24 小时内或状态变化前不再显示）",
+    # 工单 #143（2026-09-02）：右下常驻胶囊补 ✕（本次会话内同一事件不再弹）+
+    # 「1 小时内别再提醒」暂缓；离线事实仍由账号 chip/平台色点承载，恢复在线自动消失。
+    "ws.chandown.close_t": "关闭本条提醒：本次会话内同一事件不再弹出；通道图标仍会标示该账号离线，恢复在线后自动消失",
+    "ws.chandown.snooze1h": "1 小时内别再提醒",
+    "ws.chandown.snooze1h_t": "暂缓 1 小时：期间新的掉线或状态变化仍会立即提醒",
     "ws.chandown.logout_btn": "登出该账号",
     "ws.chandown.logout_confirm": "确认登出 {who}？登出后系统停止该账号的收发与相关提醒，历史会话仍可查看；之后可在「账号管理」重新接入。",
     "ws.chandown.logout_ok": "已登出，提醒将停止；如需继续使用请到「账号管理」重新接入。",
@@ -3278,7 +3286,7 @@ EN = {
     "inbox.confirm.ok": "OK",
     "inbox.confirm.title": "Confirm action",
     "inbox.conn.reconnecting": "\u26a0 Connection lost, auto-reconnecting\u2026",
-    "inbox.conn.soft": "\u26a0 Connection unstable, retrying\u2026",
+    "inbox.conn.soft": "\u26a0 Reconnecting, retrying automatically\u2026 (clears itself once back)",
     "inbox.conn.down": "\u26d4 Connection lost, reconnecting\u2026 (data kept; auto-refreshes on recovery)",
     # P0-2 self-diagnosis wording split (2026-08-12) — see zh block note.
     "inbox.conn.down_local": "\u26a0 This computer's network is down (the system itself is fine) \u2014 check LAN/Wi-Fi; data kept, auto-refreshes once you're back online",
@@ -4142,6 +4150,7 @@ EN = {
     "inbox.filter.buried_t": "{n} archived conversation(s) got new messages (see More ▾ · Archived)",
     "inbox.filter.buried_t": "{n} archived conversation(s) still have unread messages "
                              "(customers waiting, hidden from default views)",
+    "inbox.buried.hint": "{n} unread in archive",
     "inbox.filter.claimed": "Mine",
     "inbox.filter.more": "More",
     "inbox.filter.removed": "Removed",
@@ -5353,6 +5362,9 @@ EN = {
     "ws.chandown.dur_hm": "{h}h {m}m",
     "ws.chandown.dur_m": "{m} min",
     "ws.chandown.dismiss_t": "Hide temporarily (stays hidden for 24h or until the status changes)",
+    "ws.chandown.close_t": "Dismiss this alert: it won't reappear for the same incident during this session; the channel icon keeps showing the account as offline, and the alert clears automatically once it reconnects",
+    "ws.chandown.snooze1h": "Snooze 1 hour",
+    "ws.chandown.snooze1h_t": "Snooze for 1 hour; any new outage or status change will still alert immediately",
     "ws.chandown.logout_btn": "Log out this account",
     "ws.chandown.logout_confirm": "Log out {who}? The system stops its sending/receiving and related alerts; history stays viewable. You can re-add it in Account Management later.",
     "ws.chandown.logout_ok": "Logged out; alerts will stop. Re-add it in Account Management when needed.",

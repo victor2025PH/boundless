@@ -9105,9 +9105,11 @@ function _splitMediaDesc(text){
   if(!t) return {caption:'', desc:''};
   const idxImg=t.indexOf('[\u56fe\u7247\u5185\u5bb9]');   // [图片内容]
   const idxVid=t.indexOf('[\u89c6\u9891\u5185\u5bb9]');   // [视频内容]
+  const idxStk=t.indexOf('[\u8d34\u7eb8\u5185\u5bb9]');   // [贴纸内容]（#143 贴纸识别标记）
   let idx=-1, tokLen=0;
   if(idxImg>=0){ idx=idxImg; tokLen=6; }
   if(idxVid>=0 && (idx<0 || idxVid<idx)){ idx=idxVid; tokLen=6; }
+  if(idxStk>=0 && (idx<0 || idxStk<idx)){ idx=idxStk; tokLen=6; }
   if(idx<0) return {caption:_dropBarePlaceholder(t), desc:''};
   const caption=_dropBarePlaceholder(t.slice(0, idx).trim());
   const desc=t.slice(idx+tokLen).trim();
@@ -9136,7 +9138,8 @@ function _xlateSrcText(t){
      ——6 个 CJK 字会把短外语转写的语种判成 zh，撞 zh 目标语 identity 后永不补译。
      只剥行首一次；\u 转义=[语音转录] */
   if(t.lastIndexOf('[\u8bed\u97f3\u8f6c\u5f55]',0)===0) t=t.slice(6).replace(/^\s+/,'');
-  if(t.indexOf('[\u56fe\u7247\u5185\u5bb9]')<0 && t.indexOf('[\u89c6\u9891\u5185\u5bb9]')<0) return t;
+  if(t.indexOf('[\u56fe\u7247\u5185\u5bb9]')<0 && t.indexOf('[\u89c6\u9891\u5185\u5bb9]')<0
+     && t.indexOf('[\u8d34\u7eb8\u5185\u5bb9]')<0) return t;
   return (_splitMediaDesc(t).caption||'').trim();
 }
 /* P1 2026-08-19：识别描述首行的类型标记「类型=A|B|C」（vision prompt v2 产出）。
@@ -9295,12 +9298,14 @@ function _legacyDescHtml(m){
   const t=String((m&&m.text)||'');
   const iImg=t.indexOf('[\u56fe\u7247\u5185\u5bb9]');   // [图片内容]
   const iVid=t.indexOf('[\u89c6\u9891\u5185\u5bb9]');   // [视频内容]
-  if(iImg<0 && iVid<0) return null;
+  const iStk=t.indexOf('[\u8d34\u7eb8\u5185\u5bb9]');   // [贴纸内容]（#143）
+  if(iImg<0 && iVid<0 && iStk<0) return null;
   const sp=_splitMediaDesc(t);
   if(!sp.desc) return null;
-  const isVid=(iVid>=0 && (iImg<0 || iVid<iImg));
+  const isVid=(iVid>=0 && (iImg<0 || iVid<iImg) && (iStk<0 || iVid<iStk));
+  const isStk=(!isVid && iStk>=0 && (iImg<0 || iStk<iImg));
   const cap=sp.caption?`<div class="msg-media-cap">${_linkifyEsc(sp.caption,m,false)}</div>`:'';
-  const ph=`<div class="msg-media-placeholder">${window.T(isVid?'inbox.media.video':'inbox.media.photo')}${_fetchBtnHtml(m)}</div>`;
+  const ph=`<div class="msg-media-placeholder">${window.T(isVid?'inbox.media.video':(isStk?'inbox.media.sticker':'inbox.media.photo'))}${_fetchBtnHtml(m)}</div>`;
   return `${cap}${ph}${_aiDescRow(sp.desc, isVid?'inbox.media.ai_video':'inbox.media.ai_img')}`;
 }
 async function fetchMsgMedia(msgId){

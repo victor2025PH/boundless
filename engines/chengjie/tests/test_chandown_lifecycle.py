@@ -273,6 +273,34 @@ def test_banner_template_stale_class_and_dismiss_wired():
     assert "ws.chandown.profile_gone" in tpl, "「档案已不存在」分诊文案被移除"
 
 
+def test_capsule_closable_and_snooze_wired_143():
+    """工单 #143（2026-09-02）：右下常驻胶囊必须可关。
+
+    钉四件事：① ✕ = 本次会话内关闭同一签名（sessionStorage ws_chandown_closed；
+    新掉线/状态变化换签名即重现，不藏新事故）；② 通道恢复在线清关闭标记
+    （再掉线=新事件照常提醒）；③ 「1 小时内别再提醒」暂缓出路在场（复用签名
+    暂缓存储，非按-id 定时静默——那会把静默期内新账号掉线一并藏掉）；
+    ④ notify-bus 的 onDismiss 支撑在场。断线检测/轮询频率不属本工单，不得动。"""
+    tpl = (_ENGINE_ROOT / "src" / "web" / "templates"
+           / "workspace_base.html").read_text(encoding="utf-8")
+    assert "ws_chandown_closed" in tpl, "会话级关闭标记被移除——胶囊退回不可关"
+    assert "_chanClosed(sig)" in tpl, "关闭签名判定被移除（同一事件本会话不再弹）"
+    assert "sessionStorage.removeItem(CHAN_CLOSE_KEY)" in tpl, (
+        "恢复在线不清关闭标记——重连后再掉线会被旧关闭吞掉")
+    assert "onDismiss: function(){ _chanClose(sig); }" in tpl, "胶囊 ✕ 接线丢失"
+    assert "ws.chandown.snooze1h" in tpl, "1 小时暂缓出路被移除"
+    assert "_chanSnooze(sig, 3600000)" in tpl, "1h 暂缓须走签名暂缓存储"
+    bus = (_ENGINE_ROOT / "src" / "web" / "static" / "workspace"
+           / "notify-bus.js").read_text(encoding="utf-8")
+    assert "onDismiss" in bus, "notify-bus 不再支持 onDismiss——胶囊 ✕ 无处挂"
+    from src.web.web_i18n import get_translations
+    zh = get_translations("zh")
+    en = get_translations("en")
+    for key in ("ws.chandown.close_t", "ws.chandown.snooze1h",
+                "ws.chandown.snooze1h_t"):
+        assert zh.get(key) and en.get(key), f"{key} 双语缺失"
+
+
 def test_banner_i18n_keys_bilingual():
     from src.web.web_i18n import get_translations
     zh = get_translations("zh")

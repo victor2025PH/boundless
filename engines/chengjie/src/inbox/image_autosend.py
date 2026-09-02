@@ -1208,8 +1208,13 @@ async def run_autosend_image(
             cap, cap_src = await _guard_caption(
                 local, cap, cap_src, ("video" if mt == "video" else KIND_SELFIE),
                 "old")
+            # 工单 #143：相册条目的 media_type 是 photo/video（persona_media_store
+            # 口径），发送层白名单是 image/…——发出前归一（与 A 线
+            # skill_manager._try_send_selfie_media 同口径），"photo" 裸传会让
+            # WhatsApp 边车按 document 发出（对方看到点不开的「文档」）。
+            _send_mt = "video" if mt == "video" else "image"
             try:
-                ok = bool(await send_fn(local, url, mt, cap, (tag + (cap or "")).strip()))
+                ok = bool(await send_fn(local, url, _send_mt, cap, (tag + (cap or "")).strip()))
             except Exception:
                 logger.debug("[image_autosend] 注册媒体投递异常", exc_info=True)
                 ok = False

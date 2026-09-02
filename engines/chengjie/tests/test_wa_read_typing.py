@@ -105,3 +105,44 @@ def test_typing_skips_when_session_unhealthy(monkeypatch):
     w = _worker(monkeypatch, unhealthy=True)
     assert asyncio.run(w.send_chat_action("639111")) is False
     assert called == []
+
+
+# ── send_media：media_type 归一化必传（工单 #143，2026-09-02）─────────────
+# 相册链的 "photo" 曾裸传边车 → 不在 image/voice/video/sticker 白名单 →
+# 落 document 分支，对方端图片显示成点不开的「文档」。
+
+def _send_media_payload(monkeypatch, media_type, path="D:/x/pic.jpg"):
+    import src.integrations.whatsapp_baileys_login as wa
+    calls = []
+
+    async def _fake(url, payload, timeout=20.0):
+        calls.append((url, payload))
+        return {"ok": True, "message_id": "MID1"}
+
+    monkeypatch.setattr(wa, "_post_json", _fake)
+    w = _worker(monkeypatch)
+    res = asyncio.run(w.send_media(
+        "639111", media_path=path, media_type=media_type, caption="hi"))
+    assert res["delivered"] is True
+    assert len(calls) == 1
+    assert calls[0][0] == "http://svc/accounts/100/send-media"
+    return calls[0][1]
+
+
+def test_send_media_normalizes_photo_to_image(monkeypatch):
+    payload = _send_media_payload(monkeypatch, "photo")
+    assert payload["media_type"] == "image"
+
+
+def test_send_media_missing_type_falls_back_to_ext(monkeypatch):
+    assert _send_media_payload(monkeypatch, "")["media_type"] == "image"
+    assert _send_media_payload(
+        monkeypatch, "", path="D:/x/v.mp4")["media_type"] == "video"
+    assert _send_media_payload(
+        monkeypatch, "", path="D:/x/doc.pdf")["media_type"] == "document"
+
+
+def test_send_media_whitelist_types_pass_through(monkeypatch):
+    # sticker/image/video 原值直达边车（WA 有原生贴纸分支，绝不折叠成 image）
+    for mt in ("image", "video", "sticker", "document"):
+        assert _send_media_payload(monkeypatch, mt)["media_type"] == mt

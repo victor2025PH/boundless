@@ -685,6 +685,26 @@ def test_media_type_from_ext():
     assert pb.media_type_from_ext("") == "document"
 
 
+def test_normalize_outbound_media_type():
+    """工单 #143：相册链 "photo" 裸传 WA 边车曾落 document 分支（对方看到
+    点不开的「文档」）——别名必须归一，缺失/陌生值按扩展名兜底。"""
+    # 别名归一
+    assert pb.normalize_outbound_media_type("photo") == "image"
+    assert pb.normalize_outbound_media_type("PHOTO") == "image"
+    assert pb.normalize_outbound_media_type("img") == "image"
+    assert pb.normalize_outbound_media_type("audio") == "voice"
+    assert pb.normalize_outbound_media_type("gif") == "video"
+    # 白名单值原样放行（sticker 各边车有原生语义，绝不折叠成 image）
+    for mt in ("image", "voice", "video", "sticker", "document", "file"):
+        assert pb.normalize_outbound_media_type(mt) == mt
+    # 缺失/陌生值 → 按扩展名兜底
+    assert pb.normalize_outbound_media_type("", "a/b.jpg") == "image"
+    assert pb.normalize_outbound_media_type("whatever", "x.ogg") == "voice"
+    assert pb.normalize_outbound_media_type("", "x.mp4") == "video"
+    assert pb.normalize_outbound_media_type("", "x.bin") == "document"
+    assert pb.normalize_outbound_media_type("", "") == "document"
+
+
 def test_save_outbound_media(monkeypatch, tmp_path):
     monkeypatch.setattr(pb, "protocol_media_root", lambda: tmp_path / "pm")
     local, url, mtype = pb.save_outbound_media(

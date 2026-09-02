@@ -8574,15 +8574,10 @@ class SkillManager(LoggerMixin):
         if not row:
             return None
         mt = str(row.get("media_type") or "photo")
-        # 多语配文：优先客户当前消息语种（与后续 reply_lang 同源检测器），回落上一轮 reply_lang。
-        _lang = ""
-        try:
-            if hasattr(self.ai_client, "_detect_message_language"):
-                _lang = self.ai_client._detect_message_language(text) or ""
-        except Exception:
-            _lang = ""
-        if not _lang:
-            _lang = str(user_context.get("reply_lang") or "")
+        # 多语配文：优先客户当前消息语种（与后续 reply_lang 同源检测器），回落
+        # 上一轮 reply_lang。#143：统一走 _stage_lang（内含系统注入行剥离——
+        # 贴纸/图片轮的 text 是中文识别标注，直接检测会把外语会话判成中文）。
+        _lang = self._stage_lang(user_context, text)
         # 配文：条目多语配文 → 运营 caption_album（旧照口径）→ 双语 old-photo
         # 文案池。**不**回落全局 caption（那是「刚拍」口径——注册相册是备货旧照，
         # 「刚拍的～」配同一张图反复出现是实录穿帮点）。
@@ -9312,11 +9307,23 @@ class SkillManager(LoggerMixin):
 
     def _stage_lang(self, user_context: Dict[str, Any], text: str) -> str:
         """Stage 短路文案的语言判定：当前消息语种（与 reply_lang 同源检测器）→
-        上一轮 reply_lang → ''（=中文默认）。"""
+        上一轮 reply_lang → ''（=中文默认）。
+
+        #143（0902，接 #74）：先剥系统注入行再检测——贴纸/图片轮的 text 是
+        「[贴纸内容]/[图片内容]/[表情] 中文标注」，直接喂检测会把英文会话的
+        媒体轮判成中文 → 配文/搪塞文案全落中文池。剥空（纯媒体轮）→ 回落
+        会话级 reply_lang（其证据链早已豁免媒体行）。
+        """
         _lang = ""
         try:
-            if hasattr(self.ai_client, "_detect_message_language"):
-                _lang = self.ai_client._detect_message_language(text) or ""
+            from src.ai.lang_policy import strip_system_injected as _ssi
+            _lang_src = _ssi(text)
+        except Exception:
+            _lang_src = str(text or "")
+        try:
+            if _lang_src.strip() and hasattr(
+                    self.ai_client, "_detect_message_language"):
+                _lang = self.ai_client._detect_message_language(_lang_src) or ""
         except Exception:
             _lang = ""
         return _lang or str(user_context.get("reply_lang") or "")

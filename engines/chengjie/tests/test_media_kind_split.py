@@ -41,13 +41,27 @@ def test_sticker_with_vision_desc_gets_emotion_instruction():
         "_peer_message_is_media": True, "_media_kind": "sticker",
         "_media_desc": "一个可爱的小朋友卡通形象在笑", "platform": "whatsapp",
     })
-    assert "表情贴纸" in p and "不是真实照片" in p
+    assert "表情贴纸" in p and "不是生活照片" in p
     assert "回应对方此刻的情绪" in p
     assert "这是你拍的吗" in p  # 反例句显式进禁令
     # 不落照片评论框架
     assert "系统已识别对方发来的媒体内容如下" not in p
     # 识图描述仍作语义参考在场
     assert "参考语义" in p and "卡通形象" in p
+
+
+def test_sticker_desc_has_lang_anchor_143():
+    """#143（0902）：贴纸轮语言锚——参考语义是系统中文标注，显式声明
+    「非对方话语、语言不代表对方语言」，回复语言按【输出语言】执行；
+    语义补钉「不当作对方本人照片、不追问出处」。"""
+    p = _prompt({
+        "_peer_message_is_media": True, "_media_kind": "sticker",
+        "_media_desc": "一只卡通猫举着爱心", "platform": "whatsapp",
+    })
+    assert "系统自动标注" in p and "非对方话语" in p
+    assert "语言不代表对方的语言" in p and "输出语言" in p
+    assert "本人的照片" in p or "对方本人" in p
+    assert "出处" in p
 
 
 def test_bare_sticker_gets_emotion_instruction():

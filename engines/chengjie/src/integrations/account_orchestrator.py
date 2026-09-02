@@ -532,6 +532,46 @@ class AccountOrchestrator:
                 "[orchestrator] 媒体发送被护栏拦截 %s:%s → peer=%s (%s, origin=%s)",
                 platform, account_id, chat_key, _reason, origin)
             return {"delivered": False, "blocked": _reason}
+        # #143（0902，接 #64/#106/#133）：媒体 caption 与文本同过出站语种收口——
+        # 此前守卫只罩 send()，主动发图的配文（autosend/承诺兑现/相册秒发）从
+        # send_media 出门零防护，「手机里存的这张…」中文配文直达英文客户。
+        # 混语剥除 + 铆定/客户语言画像冲突 → 注入的翻译器修正；翻译 HOLD 时
+        # **弃配文照发图**（图本身语言无关，宁可无配文，不发错语言配文）。
+        # 人工路径（origin=manual）绝不动；镜像行 inbox_text 同步替换旧配文。
+        if str(origin or "auto") != "manual" and str(caption or "").strip():
+            _orig_cap = caption
+            try:
+                from src.ai.outbound_text_guard import (
+                    resolve_cfg as _otg_cfg_m, sendpoint_lang_mix_pass)
+                _gm_cfg = _otg_cfg_m(self._config)
+                if _gm_cfg.get("enabled", True) and _gm_cfg.get("lang_mix", True):
+                    _ccap, _cact = sendpoint_lang_mix_pass(caption)
+                    if _cact == "hard_stripped":
+                        logger.warning(
+                            "[orchestrator] 媒体配文混语兜底已剥 CJK（#143）"
+                            " %s:%s → peer=%s: %r → %r",
+                            platform, account_id, chat_key,
+                            caption[:60], _ccap[:60])
+                        caption = _ccap
+                if _gm_cfg.get("enabled", True) and _gm_cfg.get("lang_pin", True):
+                    from src.ai.sendpoint_guard import sendpoint_lang_pin_fix
+                    _cpt, _cpact = await sendpoint_lang_pin_fix(
+                        platform, account_id, str(chat_key or ""), caption)
+                    if _cpt is None:
+                        logger.warning(
+                            "[orchestrator] 媒体配文语言修正 HOLD → 弃配文照发图"
+                            "（#143） %s:%s → peer=%s: %r",
+                            platform, account_id, chat_key, caption[:60])
+                        caption = ""
+                    elif _cpt != caption:
+                        caption = _cpt
+                if caption != _orig_cap and inbox_text and _orig_cap:
+                    # 镜像行别带旧配文（调用方惯用「[图片] 配文」格式）
+                    inbox_text = inbox_text.replace(
+                        _orig_cap, caption).strip() or inbox_text
+            except Exception:
+                logger.debug("[orchestrator] 媒体配文语种兜底异常（原样放行）",
+                             exc_info=True)
         m = self._managed.get(account_key(platform, account_id))
         if not (m is not None and m.state == "running"
                 and m.worker is not None and hasattr(m.worker, "send_media")):
@@ -1427,10 +1467,22 @@ class WhatsAppProtocolWorker:
 
     async def send_media(self, chat_key: str, *, media_path: str,
                          media_type: str, caption: str = "") -> Dict[str, Any]:
+        from src.integrations.protocol_bridge import (
+            normalize_outbound_media_type,
+        )
         from src.integrations.whatsapp_baileys_login import _post_json
         if self._session_unhealthy():
             return {"delivered": False, "blocked": "session_unhealthy",
                     "error": "whatsapp session unhealthy (logged out / reconnect gave up)"}
+        # 工单 #143（2026-09-02 skuio）：media_type 归一化后必传——相册链的
+        # "photo" 裸传边车不在其白名单，落 document 分支 → 对方端图片显示成
+        # 点不开的「文档」。别名归一 + 缺失/陌生值按扩展名兜底。
+        _raw_mt = str(media_type or "").strip().lower()
+        media_type = normalize_outbound_media_type(media_type, media_path)
+        if media_type != _raw_mt:
+            logger.info(
+                "[orchestrator] WA media_type 归一 %r → %r path=%s",
+                _raw_mt, media_type, media_path)
         # Python 侧 PTT 闸：边车 400 之前先拦，失败原因进 delivered=False
         # 供 autosend 回落文字（与 Baileys looksLikeOggOpus 同口径）。
         if str(media_type or "").strip().lower() == "voice":

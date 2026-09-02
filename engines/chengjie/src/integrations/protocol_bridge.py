@@ -249,6 +249,34 @@ def media_type_from_ext(ext: str) -> str:
     return "document"
 
 
+#: 出站 media_type 别名 → 各协议边车白名单值（工单 #143，2026-09-02）。
+#: 相册库存条目的媒体大类是 ``photo``（persona_media_store），直传 WhatsApp 边车
+#: 不在其 image/voice/video/sticker 白名单 → 落 document 分支，客户端把图片
+#: 显示成点不开的「文档」。对齐 line_media.LINE_OUTBOUND_KINDS 的思路：
+#: 别名先归一，陌生值再按扩展名兜底。
+_OUT_TYPE_ALIASES = {
+    "photo": "image", "img": "image", "picture": "image",
+    "audio": "voice",
+    "gif": "video", "animation": "video", "video_note": "video",
+}
+#: 协议边车普遍认识的出站大类（sticker/file 各边车自行决定语义，这里只放行）。
+_OUT_TYPES = frozenset(
+    {"image", "voice", "video", "sticker", "document", "file"})
+
+
+def normalize_outbound_media_type(media_type: str, path: str = "") -> str:
+    """出站媒体大类归一：别名（photo/img/audio/gif…）归到白名单值；
+    缺失/陌生值按 ``path`` 扩展名兜底（``media_type_from_ext``，认不出＝document）。
+
+    发媒体给协议边车前**必须**过这一层——裸传别名的下场见 _OUT_TYPE_ALIASES 注释。
+    """
+    mt = str(media_type or "").strip().lower()
+    mt = _OUT_TYPE_ALIASES.get(mt, mt)
+    if mt in _OUT_TYPES:
+        return mt
+    return media_type_from_ext(os.path.splitext(str(path or ""))[1])
+
+
 def save_outbound_media(
     platform: str, account_id: str, filename: str, data: bytes,
 ) -> Tuple[str, str, str]:

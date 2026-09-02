@@ -1717,6 +1717,18 @@
   var _chanLastSig = '';      // 当前异常集合签名（供 暂缓/登出后的本地暂缓）
   var _chanNotifiedSig = '';  // 本页已弹过卡片的签名（轮询重绘只更新胶囊不重复弹卡）
   var CHAN_SNOOZE_KEY = 'ws_chandown_snooze';
+  /* 工单 #143（2026-09-02，skuio 0902 截图实锤）：常驻胶囊此前无任何关闭手段，
+     一直压在操作区。✕ = 本次会话内关闭**同一异常集合**（sessionStorage 存签名：
+     新掉线/状态变化改变签名 → 立即重现，不藏新事故；通道恢复在线时清标记 →
+     之后再掉线属新事件照常提醒）。关闭≠丢信息：账号 chip 状态点/平台色点仍标
+     离线，消息中心留痕仍在。断线检测与轮询频率一概不动。 */
+  var CHAN_CLOSE_KEY = 'ws_chandown_closed';
+  function _chanClosed(sig){
+    try{ return sessionStorage.getItem(CHAN_CLOSE_KEY) === sig; }catch(_e){ return false; }
+  }
+  function _chanClose(sig){
+    try{ sessionStorage.setItem(CHAN_CLOSE_KEY, sig); }catch(_e){}
+  }
   function _chanLabel(s){
     // P0（2026-08-14）：有昵称显示昵称（红条写 messenger:6158… 坐席不知道是谁掉线）
     var nm = String((s && s.name) || '').trim();
@@ -1848,13 +1860,15 @@
     var list = (ch && ch.unhealthy) || [];
     if(!list.length){
       _chanLastSig = '';
+      // #143：通道恢复在线 → 清会话级关闭标记（再次掉线=新事件，照常提醒）
+      try{ sessionStorage.removeItem(CHAN_CLOSE_KEY); }catch(_e){}
       AITRNotify.ongoing.clear('chandown');
       AITRNotify.dismiss('chandown');
       return;
     }
     var sig = _chanSig(list);
     _chanLastSig = sig;
-    if(_chanSnoozed(sig)){ AITRNotify.ongoing.clear('chandown'); return; }
+    if(_chanSnoozed(sig) || _chanClosed(sig)){ AITRNotify.ongoing.clear('chandown'); return; }
     var first = list[0] || {};
     var downMin = Number(first.down_min != null ? first.down_min : 0) || 0;
     var stale = downMin >= 2880;
@@ -1885,7 +1899,19 @@
     AITRNotify.ongoing.set('chandown', {
       text: text + hint,
       tone: stale ? 'warn' : 'error',
-      title: window.T('ntf.capsule_title')
+      title: window.T('ntf.capsule_title'),
+      // #143：✕ = 本会话内关闭本签名（不走总线 dismissMs 的按-id 定时静默——
+      // 那会把静默期内**新账号掉线**一并藏掉）；另给 1h 暂缓出路（复用签名暂缓存储）。
+      dismissTitle: window.T('ws.chandown.close_t'),
+      onDismiss: function(){ _chanClose(sig); },
+      action: {
+        label: window.T('ws.chandown.snooze1h'),
+        title: window.T('ws.chandown.snooze1h_t'),
+        onClick: function(){
+          _chanSnooze(sig, 3600000);
+          AITRNotify.ongoing.clear('chandown');
+        }
+      }
     });
     if(_chanNotifiedSig !== sig){
       _chanNotifiedSig = sig;

@@ -611,6 +611,17 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         return False
     if not _peer_text:
         return False
+    # 会话语言（#143 0902）：配文必须按会话语言/客户语言画像生成——此前 lang
+    # 恒空，固定配文池永远落中文（「手机里存的这张…」发英文客户实锤）；LLM 配文
+    # 又被指示「跟随对方消息语言」，而贴纸/图片轮的对方消息是系统中文识别标注。
+    # 判定走 resolve_reply_language（#74 同源证据口径：系统注入行不算语言证据）；
+    # 判不出返回空串＝旧行为（中文默认），出口另有 #64 出站语种兜底。
+    _conv_lang = ""
+    try:
+        from src.inbox.persona_reply import resolve_reply_language
+        _conv_lang = resolve_reply_language(_peer_text, _history, default="")
+    except Exception:
+        _conv_lang = ""
     # 生效人设（相册分册 / 出图 prompt 来源），与语音同口径解析（含会话覆写）。
     from src.ai.persona_voice import (
         resolve_effective_persona_id as _repi,
@@ -663,7 +674,10 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
             return await _ai.chat(_bc(
                 _peer_text, kind=_kind, subject=_subject,
                 persona_name=_pname, scene=_scene,
-                freshness=_freshness, wanted_subject=_wanted))
+                freshness=_freshness, wanted_subject=_wanted,
+                # #143：配文语言钉会话语言（贴纸/图片轮的对方消息是系统中文
+                # 标注，「跟随对方消息语言」会配出中文发外语客户）
+                reply_lang=_conv_lang))
 
     # 发送 marshalling：把 orch.send_media 投到 web loop（与语音同口径）。
     async def _send_fn(_mp, _mu, _mt, _cap, _inbox):
@@ -720,6 +734,9 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         _real_pid, _peer_text, _history,
         send_fn=_send_fn, ai_text=text,
         llm_refine=_refine, llm_caption=_caption,
+        # #143：lang 此前恒缺 → 固定配文池永远取中文；现按会话语言取
+        # （registry caption_i18n / caption_album 双语池同口径）。
+        lang=_conv_lang,
         assume_intent=str(assume_intent or ""),
         assume_scene=str(assume_scene or ""),
         directive_override=directive_override,
