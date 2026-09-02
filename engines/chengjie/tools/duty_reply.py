@@ -206,6 +206,10 @@ def main() -> int:
                     help="send 回落路径发完不拨回 auto_ai")
     ap.add_argument("--force-group", action="store_true",
                     help="跳过「群不在 bug_intake.groups」哨兵")
+    ap.add_argument("--receipt", action="store_true",
+                    help="受理回执/追问（不含根因定性）——跳过取证门禁")
+    ap.add_argument("--ack-no-evidence", action="store_true",
+                    help="明知证据未到仍发定性回复（落台账审计，自担风险）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -233,6 +237,25 @@ def main() -> int:
         _out(f"[err] {chat_key} 不在 bug_intake.groups {sorted(groups)}"
              "（防打错群；确认无误加 --force-group）")
         return 2
+
+    # 取证门禁（值守循环 v3 §B，2026-09-02）：must_log 类工单证据未到 → 拦定性
+    # 回复。0902 实锤：#145 无日志时的「两处根子」表述实为按修复史推断——本闸
+    # 让「先日志后定性」从纪律变成机器强制。--receipt=受理回执豁免；台账/工单库
+    # 任何异常 gate 软放行（取证台账绝不能瘫痪发送通道）。先于 dry-run：预演
+    # 也该看到会被拦。
+    gate_note = ""
+    if args.ticket and not args.receipt:
+        try:
+            from tools.duty_evidence import ticket_send_gate
+            gate_ok, gate_note = ticket_send_gate(
+                data_root, args.ticket, ack=args.ack_no_evidence)
+        except Exception:
+            gate_ok, gate_note = True, ""
+        if not gate_ok:
+            _out("[gate] " + gate_note)
+            return 3
+        if gate_note:
+            _out("[gate] " + gate_note)
 
     client_id = args.client_id or build_client_msg_id()
     _out(f"[plan] group={chat_key} ticket={args.ticket or '-'} "
@@ -299,6 +322,17 @@ def main() -> int:
                 "confirm_group": True})
             if rc != 200:
                 _out(f"[warn] 拨回 auto_ai 失败 HTTP {rc}（自查会话档位）")
+
+    # ack 审计：绕过取证门禁的定性回复必须在证据台账留痕（谁在什么时候
+    # 自担了「无日志定性」的风险，事后可查）。
+    if ok and args.ticket and args.ack_no_evidence and gate_note:
+        try:
+            from tools.duty_evidence import _ledger_row, append_ledger
+            append_ledger(Path(data_root), _ledger_row(
+                args.ticket, "ack_no_evidence",
+                what=f"client_msg_id={client_id}"))
+        except Exception:
+            _out("[warn] ack 审计写入失败（不影响发送结果）")
 
     row = build_ledger_row(chat_key=chat_key, text=text, ticket=args.ticket,
                            path=path_used, client_msg_id=client_id, ok=ok,
