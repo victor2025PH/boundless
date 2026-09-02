@@ -1,5 +1,35 @@
 [
   {
+    "version": "1.0.68",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "未读对账与归档入口 · 暂停真发可见可恢复 · LINE 发媒体更稳",
+      "en": "Truthful unread badges with archived entry, visible and recoverable send-pause, stabler LINE media"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "未读徽标与列表同口径：顶部账号/平台徽标只统计未归档私聊的未读；归档里还有未读时，筛选条下出现「归档中还有 N 条未读 · 查看」入口直达归档视图，处理完自动消失。",
+        "全局「暂停真发」不再静默：收件箱顶部亮横幅写明谁、几点、从哪个入口关的；主管点「▶ 恢复真发」一键恢复，可配置到点自动恢复。",
+        "LINE 发图片/视频修复：偶发卡死自动超时恢复；应用重启后发媒体报 423 发不出一并修复。",
+        "翻译修复：中文句子里夹英文单词不再被整句误判成英文导致误翻；粤语消息入站翻译修复。",
+        "语音修复：人设语音设置存了半成品占位配置时不再影响语音合成，按全局克隆音色正常出声。",
+        "体验治理：接入向导账号数如实显示（不再常显「已接 1 个账号」）；通知中心不再出现英文代码串、同类告警去重；报障群不再误登记系统回访播报；后端重启瞬断不再误报「页面脚本出错」。"
+      ],
+      "en": [
+        "Unread badges now match the list view: account/platform badges count only unarchived private chats; when archived conversations still hold unread messages, an amber \"N unread in archived - view\" entry under the filter bar jumps straight to the archived view and hides itself at zero.",
+        "The global send-pause is no longer silent: the inbox shows a banner naming who paused it, when and from where; a supervisor resumes with one click on the banner, and timed auto-resume can be configured.",
+        "LINE media sending fixed: occasional hangs now time out and recover automatically, and the post-restart 423 send failure is fixed.",
+        "Translation fixes: Chinese sentences with embedded English words are no longer mistranslated as English, and inbound Cantonese translation works again.",
+        "Voice fix: half-finished persona voice settings no longer break synthesis - the global cloned voice is used as expected.",
+        "Polish: the setup wizard shows the real connected-account count; the notification center no longer shows raw event codes and deduplicates repeated alerts; support-broadcast messages are no longer misregistered as new tickets; brief backend-restart blips no longer trigger a false \"page script error\"."
+      ]
+    }
+  },
+  {
     "version": "1.0.67",
     "date": "2026-09-01",
     "title": {
