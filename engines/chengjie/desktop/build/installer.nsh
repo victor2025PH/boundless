@@ -128,7 +128,7 @@ Var pid
   LangString cxKeepPath      ${LANG_ENGLISH} "Location: "
   LangString cxOpenDir       ${LANG_ENGLISH} "Open data folder"
   LangString cxWipeRadio     ${LANG_ENGLISH} "Erase ALL data permanently"
-  LangString cxWipeWarn      ${LANG_ENGLISH} "Everything listed above plus the update cache is deleted for good. Accounts must log in again; the next install starts completely fresh."
+  LangString cxWipeWarn      ${LANG_ENGLISH} "Everything listed above plus the update cache is deleted for good. Accounts must log in again; the next install starts completely fresh. Past diagnostic logs are erased too - any issue you reported can no longer be traced from this machine."
   LangString cxWipeConfirm   ${LANG_ENGLISH} "I understand this cannot be undone"
   LangString cxHelpLink      ${LANG_ENGLISH} "Need help or a fresh download? Visit bd2026.cc"
   LangString cxBtnKeep       ${LANG_ENGLISH} "Uninstall"
@@ -145,7 +145,7 @@ Var pid
   LangString cxKeepPath      ${LANG_SIMPCHINESE} "数据位置："
   LangString cxOpenDir       ${LANG_SIMPCHINESE} "打开数据文件夹"
   LangString cxWipeRadio     ${LANG_SIMPCHINESE} "彻底删除所有数据"
-  LangString cxWipeWarn      ${LANG_SIMPCHINESE} "以上全部数据与更新缓存将被永久删除，无法恢复；所有账号需重新登录，下次安装将是全新初始状态。"
+  LangString cxWipeWarn      ${LANG_SIMPCHINESE} "以上全部数据与更新缓存将被永久删除，无法恢复；所有账号需重新登录，下次安装将是全新初始状态。历史故障日志也将一并清除——已报障问题将无法再从本机取证排查。"
   LangString cxWipeConfirm   ${LANG_SIMPCHINESE} "我已了解此操作不可恢复"
   LangString cxHelpLink      ${LANG_SIMPCHINESE} "遇到问题或想重新下载？访问 bd2026.cc"
   LangString cxBtnKeep       ${LANG_SIMPCHINESE} "卸载"
@@ -231,23 +231,27 @@ Var pid
     Pop $cxRadioKeep
     ${NSD_OnClick} $cxRadioKeep un.cxSyncUi
 
-    ${NSD_CreateLabel} 10u 23u 282u 40u "$(cxKeepDetail)"
+    ; keep-detail block compressed 40u->36u and rows below shifted up 4u:
+    ; frees room for the 3-line wipe warning (grew 0902: "diagnostic logs
+    ; erased too" — 5GZHWT cold-start bundle lesson) without pushing the
+    ; confirm checkbox / help link past the ~140u custom-page floor.
+    ${NSD_CreateLabel} 10u 23u 282u 36u "$(cxKeepDetail)"
     Pop $0
     SetCtlColors $0 0x666666 transparent
 
-    ${NSD_CreateLabel} 10u 64u 282u 8u "$(cxKeepPath)${CX_USERDATA_DIR}"
+    ${NSD_CreateLabel} 10u 60u 282u 8u "$(cxKeepPath)${CX_USERDATA_DIR}"
     Pop $0
     SetCtlColors $0 0x666666 transparent
 
-    ${NSD_CreateLink} 10u 73u 150u 8u "$(cxOpenDir)"
+    ${NSD_CreateLink} 10u 69u 150u 8u "$(cxOpenDir)"
     Pop $0
     ${NSD_OnClick} $0 un.cxOpenDataDir
 
-    ${NSD_CreateRadioButton} 0 85u 292u 10u "$(cxWipeRadio)"
+    ${NSD_CreateRadioButton} 0 81u 292u 10u "$(cxWipeRadio)"
     Pop $cxRadioWipe
     ${NSD_OnClick} $cxRadioWipe un.cxSyncUi
 
-    ${NSD_CreateLabel} 10u 97u 282u 18u "$(cxWipeWarn)"
+    ${NSD_CreateLabel} 10u 93u 282u 22u "$(cxWipeWarn)"
     Pop $0
     SetCtlColors $0 0x1F1FBF transparent
 

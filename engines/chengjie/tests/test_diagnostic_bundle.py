@@ -112,6 +112,49 @@ def test_bundle_extra_files_soft_fail(tmp_path):
     assert "meta.json" in zf.namelist()
 
 
+def test_data_freshness_cold_start_vs_aged(tmp_path):
+    """0902 5GZHWT 冷启动包实锤：数据目录年龄标注让「包覆盖多久」meta 可判。"""
+    import os
+    import time as _t
+
+    from src.utils.diagnostic_bundle import data_freshness_meta
+
+    cfg = tmp_path / "config"; cfg.mkdir()
+    logs = tmp_path / "logs"; (logs / "app").mkdir(parents=True)
+    (cfg / "config.yaml").write_text("a: 1")
+    old_log = logs / "app" / "backend.log"; old_log.write_text("x")
+    new_log = logs / "wa.log"; new_log.write_text("y")
+    now = _t.time()
+
+    # 冷启动形态：全部文件都是刚生成的
+    m = data_freshness_meta(cfg, logs, now=now)
+    assert m["cold_start_suspect"] is True
+    assert m["data_dir_age_hours"] < 1.0
+
+    # 老机形态：config 三天前、日志跨度两天 → 非冷启动
+    os.utime(cfg / "config.yaml", (now - 3 * 86400, now - 3 * 86400))
+    os.utime(old_log, (now - 2 * 86400, now - 2 * 86400))
+    m = data_freshness_meta(cfg, logs, now=now)
+    assert m["cold_start_suspect"] is False
+    assert m["data_dir_age_hours"] >= 71.0
+    assert m["logs_span_hours"] >= 47.0
+    assert m["logs_earliest"] < m["logs_latest"]
+
+    # 目录缺失 → 空 dict，绝不抛
+    assert data_freshness_meta(tmp_path / "nope", None) == {}
+
+
+def test_bundle_meta_carries_data_freshness(tmp_path):
+    cfg = tmp_path / "config"; cfg.mkdir()
+    (cfg / "config.yaml").write_text("a: 1")
+    logs = tmp_path / "logs"; logs.mkdir()
+    (logs / "backend.log").write_text("line")
+    blob = build_diagnostic_bundle(config_dir=cfg, logs_dir=logs, meta={})
+    meta = json.loads(zipfile.ZipFile(io.BytesIO(blob)).read("meta.json"))
+    assert "data_freshness" in meta
+    assert meta["data_freshness"]["cold_start_suspect"] is True
+
+
 def test_runtime_log_files_collects_file_handlers(tmp_path):
     """diag_upload.runtime_log_files：进程正在写的 file handler 落点被收集。"""
     import logging

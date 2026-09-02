@@ -62,6 +62,69 @@ def _tail_bytes(p: Path, cap_bytes: int) -> bytes:
         return b""
 
 
+def data_freshness_meta(
+    config_dir: Optional[Path], logs_dir: Optional[Path],
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """数据目录年龄标注 → 并进 meta.json 的 ``data_freshness`` 段。绝不抛。
+
+    背景（0902 5GZHWT 实锤）：用户卸载勾「彻底删除」重装后自动上传的包是
+    **冷启动包**——日志从当次启动才开始，案发现场早已随数据清除消失。值守把
+    包拉回本地读完 backend.log 才发现白跑一趟。本函数让服务端/值守看 meta
+    第一眼就能判「这个包覆盖多久」：
+    - ``data_dir_age_hours``：config 目录最老文件 mtime 距今（数据目录年龄；
+      冷启动包 ≈ 0）；
+    - ``logs_span_hours`` / ``logs_earliest`` / ``logs_latest``：logs 目录及
+      一层子目录内日志文件 mtime 跨度（包能覆盖的时间窗）；
+    - ``cold_start_suspect``：两者都 < 24h → True（提示先问「是否刚重装/清过
+      数据」再决定要不要拉包分析）。
+    """
+    ts_now = float(now if now is not None else time.time())
+    out: Dict[str, Any] = {}
+
+    def _mtimes(root: Optional[Path], depth1: bool) -> list:
+        vals = []
+        try:
+            if not root or not Path(root).is_dir():
+                return vals
+            for p in Path(root).iterdir():
+                try:
+                    if p.is_file():
+                        vals.append(p.stat().st_mtime)
+                    elif depth1 and p.is_dir():
+                        for q in p.iterdir():
+                            if q.is_file():
+                                vals.append(q.stat().st_mtime)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return vals
+
+    try:
+        cfg_times = _mtimes(config_dir, depth1=False)
+        log_times = _mtimes(logs_dir, depth1=True)
+        if cfg_times:
+            out["data_dir_age_hours"] = round(
+                max(0.0, ts_now - min(cfg_times)) / 3600, 1)
+        if log_times:
+            lo, hi = min(log_times), max(log_times)
+            out["logs_span_hours"] = round(max(0.0, hi - lo) / 3600, 1)
+            out["logs_earliest"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(lo))
+            out["logs_latest"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(hi))
+        if out:
+            age = out.get("data_dir_age_hours")
+            span = out.get("logs_span_hours")
+            out["cold_start_suspect"] = bool(
+                (age is None or age < 24.0)
+                and (span is None or span < 24.0))
+    except Exception:
+        return {}
+    return out
+
+
 def build_diagnostic_bundle(
     *,
     config_dir: Optional[Path],
@@ -89,6 +152,11 @@ def build_diagnostic_bundle(
         try:
             m = dict(meta or {})
             m.setdefault("generated_at", time.strftime("%Y-%m-%d %H:%M:%S"))
+            # 数据目录年龄标注（0902 5GZHWT 冷启动包实锤）：让「这个包覆盖
+            # 多久」在 meta 第一眼可判，免得拉回本地读完日志才发现无现场。
+            fresh = data_freshness_meta(config_dir, logs_dir)
+            if fresh:
+                m.setdefault("data_freshness", fresh)
             zf.writestr("meta.json", json.dumps(m, ensure_ascii=False, indent=2))
         except Exception:
             zf.writestr("meta.json", "{}")
