@@ -760,9 +760,66 @@ def sendpoint_lang_mix_pass(text: str) -> Tuple[str, str]:
 _STATS: Dict[str, int] = {"monologue": 0, "lang_mix_hard": 0, "lang_mix_soft": 0,
                           "unfounded_recall": 0, "recall_grounding": 0,
                           "shared_past": 0, "apology_dedup": 0,
-                          "goal_meta": 0,
+                          "goal_meta": 0, "degenerate": 0,
                           "sendpoint_hard": 0, "sendpoint_kept": 0,
                           "sendpoint_soft": 0}
+
+
+# ── #152 F1：LLM 退化循环（复读机化）确定性检测 ─────────────────────────────
+# 0902 23:2x 实锤（skuio 机 82VFQ6 / 截图 _1093）：CUDDLESTHECAT 会话一条出站
+# 「越来越多越来越多…」重复数百遍直达客户。既有「复读守卫」比的是**与历史出站**
+# 的相似度（防把 4 天前说过的话原样再说），对**单条内部**的 token 循环视而不见——
+# 这就是漏网口。退化是纯形态问题，不需要 LLM 判断：同一个 n-gram 在文本里
+# **连续**出现 ≥ 阈值次即判退化，截到第一次出现处；截空（整条都是循环）交调用方
+# 按「不发+进待处理」处理。n-gram 用字符级（1..8 字）——中文无词边界，
+# 「越来越多」= 4 字 gram 连续重复；英文 "very very very" 也能靠 "very " 5 字 gram 命中。
+_DEGEN_MIN_REPEAT = 5          # 连续重复次数阈值（正常口语强调最多 2-3 次）
+_DEGEN_MAX_GRAM = 12           # 最长循环单元（字符）
+_DEGEN_MIN_SPAN = 20           # 循环总跨度下限（字符），短循环如「哈哈哈哈哈」不算
+
+
+def detect_degenerate_loop(
+    text: str, *, min_repeat: int = _DEGEN_MIN_REPEAT,
+) -> Optional[Tuple[int, int, str]]:
+    """找文本里首个退化循环 → ``(start, end, unit)``；无 → None。
+
+    对每个起点 i、每个单元长 g（1..MAX_GRAM），数 ``text[i:i+g]`` 从 i 起连续重复的
+    次数；次数 ≥ min_repeat 且总跨度 ≥ MIN_SPAN 即命中。O(n·G·k) 但 n 为单条
+    出站文本（≤ 数千字），实测微秒级。
+    """
+    s = text or ""
+    n = len(s)
+    if n < _DEGEN_MIN_SPAN:
+        return None
+    for i in range(n):
+        for g in range(1, _DEGEN_MAX_GRAM + 1):
+            if i + g * min_repeat > n:
+                break
+            unit = s[i:i + g]
+            if not unit.strip():
+                continue
+            k = 1
+            while s[i + k * g:i + (k + 1) * g] == unit:
+                k += 1
+            if k >= min_repeat and k * g >= _DEGEN_MIN_SPAN:
+                return i, i + k * g, unit
+    return None
+
+
+def strip_degenerate_loop(text: str) -> Tuple[str, Optional[str]]:
+    """截断退化循环：保留循环前的正常开头 + 单元**一次**，丢掉其后全部重复及尾随
+    内容（尾随内容在退化之后生成，同属不可信）。循环从文本开头就开始（没有任何
+    正常前文）→ 整条视为退化，返回空串——「越来越多」四个字单独发给客户同样是
+    废话，不值得保留。返回 ``(清理后文本, 命中的单元)``；未命中原样。"""
+    hit = detect_degenerate_loop(text)
+    if not hit:
+        return text, None
+    start, _end, unit = hit
+    head = text[:start]
+    if not head.strip():
+        return "", unit
+    cleaned = (head + unit).rstrip(" ，,、")
+    return cleaned, unit
 
 
 def guard_stats() -> Dict[str, int]:
@@ -796,6 +853,8 @@ def resolve_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
         "shared_past": bool(raw.get("shared_past", True)),
         # #109 第4病：目标话术渗味（"that's the first step" 类步骤感元话术）
         "goal_meta": bool(raw.get("goal_meta", True)),
+        # #152 F1：LLM 退化循环（同 n-gram 连续重复 ≥5）截断
+        "degenerate": bool(raw.get("degenerate", True)),
     }
 
 
@@ -830,6 +889,17 @@ def apply_outbound_text_guard(
     if not c.get("enabled", True):
         return src, meta
     out = src
+    # #152 F1：退化循环放第一道——后面的守卫对「越来越多×300」毫无意义，且截断
+    # 后的短文本才是它们该看的东西。截空＝整条都是循环，meta 标 degenerate_empty
+    # 让调用方按「不发+进待处理」处理，绝不把退化稿发给客户。
+    if c.get("degenerate", True):
+        out, unit = strip_degenerate_loop(out)
+        if unit is not None:
+            meta["degenerate_unit"] = unit
+            _STATS["degenerate"] += 1
+            if not out.strip():
+                meta["degenerate_empty"] = True
+                return "", meta
     if c.get("monologue", True):
         out, hits = sanitize_inner_monologue(out)
         if hits:

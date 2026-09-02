@@ -3584,6 +3584,17 @@ class SkillManager(LoggerMixin):
             )
             if user_context.get("_wellbeing_safety_override"):
                 _metric("crisis_override")
+            # #152 F1：守卫链把稿剥空（退化循环整条截空等）→ 不产出草稿。此前空稿
+            # 会继续走状态推进/记忆写回并以 reply="" 返回给 autodraft——上游按
+            # 「有稿」处理就把空/坏稿送进了发送队列。B 线空稿的正确终局是「无稿」，
+            # autodraft 据此不投递并把会话留在待处理清单（客户消息不会被静默吞：
+            # 无稿 → SLA 徽标计时照常 → 坐席接手）。
+            if not (reply or "").strip():
+                _metric("guard_emptied")
+                self.logger.warning(
+                    "%s[inbox_draft] 出站守卫链剥空稿件（#152 F1 退化截空等）→ 本轮"
+                    "不产出草稿，会话留待处理", log_prefix)
+                return None
 
             # 10. 回复后状态推进（陪伴 exchange_count/stage、剧情）+ 记忆写回
             try:
@@ -4968,6 +4979,18 @@ class SkillManager(LoggerMixin):
                 user_texts=_user_texts, memory_text=_mem_text,
                 recent_assistant_texts=_asst_texts,
                 relationship_stage=_rel_stage)
+            # #152 F1：LLM 退化循环。整条都是循环（截空）→ 绝不回落原文照发——
+            # 「越来越多×300」直达客户就是这条 `cleaned or reply` 回落造成的；
+            # 返回空串让 A/B 线走各自的「空稿」路径（不发+进待处理）。截后有残文
+            # 则照常放行残文并留 WARNING（残文是退化前的正常开头）。
+            if meta.get("degenerate_unit") is not None:
+                self.logger.warning(
+                    "%s[outbound_text_guard] 拦截 LLM 退化循环 unit=%r "
+                    "empty=%s（#152 F1）出站前=%r", log_prefix,
+                    str(meta["degenerate_unit"])[:20],
+                    bool(meta.get("degenerate_empty")), reply[:60])
+                if meta.get("degenerate_empty"):
+                    return ""
             if meta.get("monologue_hits"):
                 self.logger.warning(
                     "%s[outbound_text_guard] 拦截内心独白/旁白 %r（B118）",

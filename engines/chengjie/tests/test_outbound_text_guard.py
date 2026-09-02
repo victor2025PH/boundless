@@ -145,11 +145,11 @@ def test_apply_guard_disabled_passthrough():
 
 def test_resolve_cfg_defaults_on_and_overridable():
     # vocative/lang_pin/shared_past（实施91 #105/#106/#110）与旧五键同段
-    # 配置、同默认开；goal_meta（#109 第4病）同族同默认。
+    # 配置、同默认开；goal_meta（#109 第4病）/degenerate（#152 F1）同族同默认。
     full_on = {"enabled": True, "monologue": True, "lang_mix": True,
                "unfounded_recall": True, "recall_grounding": True,
                "apology_dedup": True, "vocative": True, "lang_pin": True,
-               "shared_past": True, "goal_meta": True}
+               "shared_past": True, "goal_meta": True, "degenerate": True}
     assert resolve_cfg(None) == full_on
     assert resolve_cfg({}) == full_on
     got = resolve_cfg({"companion": {"outbound_text_guard": {
@@ -158,7 +158,7 @@ def test_resolve_cfg_defaults_on_and_overridable():
     assert got == {"enabled": False, "monologue": True, "lang_mix": False,
                    "unfounded_recall": False, "recall_grounding": False,
                    "apology_dedup": False, "vocative": True, "lang_pin": True,
-                   "shared_past": True, "goal_meta": True}
+                   "shared_past": True, "goal_meta": True, "degenerate": True}
 
 
 def test_empty_input_passthrough():
