@@ -1,5 +1,31 @@
 [
   {
+    "version": "1.0.69",
+    "date": "2026-09-02",
+    "title": {
+      "zh": "贴纸不当照片评论 · 图片不再发成文档 · 多语会话配文回复锁语言 · 掉线提示可关",
+      "en": "Stickers not treated as photos, images no longer sent as documents, language-locked media replies, dismissible offline banner"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "表情/贴纸不再被误当成真实照片：AI 不再对贴纸追问「这是你拍的吗/这是谁」，只回应情绪，聊天更自然。",
+        "相册图片发送更可靠：修复个别情况下图片被发成打不开的「文档」的问题（WhatsApp 线实测）。",
+        "多语言会话更稳：在英文/外语会话里发图片或贴纸后，AI 的配文和回复不再偶发跳回中文，统一按你们会话一直在用的语言。",
+        "工作台「通道掉线」提示条现在可以关闭：点右侧 ✕ 关掉本次提醒，或选「1 小时暂缓」；掉线信息不会丢，若再次掉线会重新提醒。"
+      ],
+      "en": [
+        "Stickers are no longer mistaken for real photos: the AI stops asking \"did you take this / who is this\" about a sticker and simply responds to the mood.",
+        "More reliable image sending: fixed a case where an image could be delivered as an unopenable \"document\" (seen on the WhatsApp channel).",
+        "Steadier multilingual chats: after sending an image or sticker in a non-Chinese conversation, AI captions and replies no longer occasionally revert to Chinese and now follow the language you have been using.",
+        "The workspace \"channel offline\" banner can now be dismissed: click the x on the right to close it for now, or choose \"snooze 1 hour\"; no information is lost and you will be alerted again if a channel drops later."
+      ]
+    }
+  },
+  {
     "version": "1.0.68",
     "date": "2026-09-02",
     "title": {
