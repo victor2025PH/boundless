@@ -404,5 +404,105 @@ console.log(`  ..  主进程待迁中文串合计 ${mainTotal} 条`);
     "SS 用 {name} 占位（与渲染层 SH 同约定）");
 }
 
+// ── ⑦ 主进程词典 SHELL_STR + 原生/页内菜单（#151，2026-09-02）───────────────────
+// 原图 _1086：切英文后「文件/编辑/视图/窗口/帮助」与帮助下拉仍中文。此前本门禁只守
+// 渲染进程词典，SHELL_STR 的双语对等、菜单键齐全、以及「切语言时菜单重建」三件事都
+// 不在检查面——词条对了、机制没跟，门禁照绿。这里把三件事全钉住。
+{
+  const mainSrc = fs.readFileSync(path.join(DESKTOP, "main.js"), "utf8");
+  // 词典对象字面量：从 marker 起按大括号配对切出来，vm 求值（只有字符串键值，无副作用）
+  function extractDictLiteral(src, marker) {
+    const i = src.indexOf(marker);
+    if (i < 0) return null;
+    let j = src.indexOf("{", i), depth = 0;
+    for (let k = j; k < src.length; k++) {
+      if (src[k] === "{") depth++;
+      else if (src[k] === "}") { depth--; if (depth === 0) return src.slice(j, k + 1); }
+    }
+    return null;
+  }
+  const vm = require("vm");
+  let SHELL_STR = null;
+  try {
+    SHELL_STR = vm.runInNewContext("(" + extractDictLiteral(mainSrc, "const SHELL_STR =") + ")");
+  } catch (e) { SHELL_STR = null; }
+  ok(SHELL_STR && SHELL_STR.zh && SHELL_STR.en, "main.js::SHELL_STR 可解析（zh/en 两表）");
+  if (SHELL_STR && SHELL_STR.zh && SHELL_STR.en) {
+    const zk = Object.keys(SHELL_STR.zh).sort(), ek = Object.keys(SHELL_STR.en).sort();
+    const miss1 = zk.filter((k) => !(k in SHELL_STR.en)), miss2 = ek.filter((k) => !(k in SHELL_STR.zh));
+    ok(miss1.length === 0, `SHELL_STR zh→en 无缺键${miss1.length ? `（缺 ${miss1.join(", ")}）` : ""}`);
+    ok(miss2.length === 0, `SHELL_STR en→zh 无缺键${miss2.length ? `（缺 ${miss2.join(", ")}）` : ""}`);
+    const cjk = ek.filter((k) => CJK.test(String(SHELL_STR.en[k])));
+    ok(cjk.length === 0, `SHELL_STR en 侧零 CJK${cjk.length ? `（污染 ${cjk.join(", ")}）` : ""}`);
+    // 菜单清单：原生五菜单 + 帮助下拉三项 + 页内帮助的 support 项——原图里全部中文的
+    // 那批词条，必须双语齐备（缺一条＝那一项永远中文）。
+    const MENU_KEYS = ["menu.file", "menu.edit", "menu.view", "menu.window", "menu.help",
+      "menu.about", "menu.diag", "menu.check_update", "menu.support",
+      "menu.reload", "menu.force_reload", "menu.quit", "menu.undo", "menu.redo", "menu.cut",
+      "menu.copy", "menu.paste", "menu.select_all", "menu.zoom_reset", "menu.zoom_in",
+      "menu.zoom_out", "menu.fullscreen", "menu.minimize", "menu.close_win"];
+    const menuMissing = MENU_KEYS.filter((k) => !SHELL_STR.zh[k] || !SHELL_STR.en[k]);
+    ok(menuMissing.length === 0, `菜单词条 zh/en 齐备${menuMissing.length ? `（缺 ${menuMissing.join(", ")}）` : ""}`);
+    // main.js 里每个 SS("字面量") 都得有词条（拼错＝菜单显裸键）
+    const ssKeys = new Set();
+    const ssRe = /\bSS\(\s*["']([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+)["']/g;
+    let mm;
+    while ((mm = ssRe.exec(mainSrc))) ssKeys.add(mm[1]);
+    const badSs = [...ssKeys].filter((k) => !(k in SHELL_STR.zh));
+    ok(ssKeys.size >= 30, `main.js 已接 SS() 取词（${ssKeys.size} 个 key）`);
+    ok(badSs.length === 0, `SS() key 全部有词条${badSs.length ? `（未定义：${badSs.join(", ")}）` : ""}`);
+    // 菜单构建必须只经 SS() 取词：buildAppMenu/appMenuSpec 段内不得再有 label: "字面量"
+    const seg = mainSrc.slice(mainSrc.indexOf("function buildAppMenu"), mainSrc.indexOf("ipcMain.handle(\"desktop:app-menu-spec\""));
+    ok(seg.length > 0 && !/label:\s*["'`]/.test(seg), "buildAppMenu/appMenuSpec 零字面量 label（词条单源 SHELL_STR）");
+  }
+
+  // 切语言 → 菜单重建链（机制门禁）：纯函数模块 + 主进程接线 + preload/renderer 回推
+  const sync = require(path.join(DESKTOP, "shell-lang-sync.js"));
+  ok(sync.langFromSetLangUrl("http://127.0.0.1:18799/set_lang?lang=en") === "en", "shell-lang-sync：/set_lang?lang=en → en");
+  ok(sync.langFromSetLangUrl("http://127.0.0.1:18799/set_lang/?lang=zh-Hant") === "zh-Hant", "shell-lang-sync：尾斜杠也认");
+  ok(sync.langFromSetLangUrl("http://127.0.0.1:18799/set_lang") === "zh", "shell-lang-sync：无 lang 参数＝后端默认 zh");
+  ok(sync.langFromSetLangUrl("http://127.0.0.1:18799/workspace?lang=en") === null, "shell-lang-sync：非 /set_lang 导航不触发");
+  ok(sync.langFromSetLangUrl("file:///x/set_lang?lang=en") === null && sync.langFromSetLangUrl("garbage") === null,
+    "shell-lang-sync：非 http(s)/坏 URL → null");
+  ok(sync.shellConfigLangForTag("auto") === "" && sync.shellConfigLangForTag("zh-Hant") === "zh_hant"
+    && sync.shellConfigLangForTag("EN") === "en" && sync.shellConfigLangForTag("../x") === null
+    && sync.shellConfigLangForTag("") === null,
+    "shell-lang-sync：auto→跟随系统空串；连字符归一；脏值拒写");
+  ok(JSON.stringify(sync.shellLangPatchForNavigation("zh", "http://127.0.0.1:18799/set_lang?lang=en")) === JSON.stringify({ lang: "en" }),
+    "shell-lang-sync：zh→en 产生配置补丁");
+  ok(sync.shellLangPatchForNavigation("en", "http://127.0.0.1:18799/set_lang?lang=en") === null,
+    "shell-lang-sync：同值不重写（每次 /set_lang 导航都经过这里）");
+  ok(JSON.stringify(sync.shellLangPatchForNavigation("en", "http://127.0.0.1:18799/set_lang?lang=auto")) === JSON.stringify({ lang: "" }),
+    "shell-lang-sync：auto 写回空串（跟随系统）");
+  ok(/function rebuildAppMenu\(\)/.test(mainSrc) && /Menu\.setApplicationMenu\(buildAppMenu\(\)\)/.test(mainSrc),
+    "main.js 有 rebuildAppMenu（Menu.setApplicationMenu(buildAppMenu())）");
+  ok(/function applyShellLangFromNavigation\(/.test(mainSrc)
+    && /saveConfigPatch\(\{ unified_inbox: \{ lang: patch\.lang \} \}\)/.test(mainSrc)
+    && /if \(after !== before\) rebuildAppMenu\(\);/.test(mainSrc)
+    && /send\("cx-shell-lang", after\)/.test(mainSrc),
+    "applyShellLangFromNavigation：写配置 + 语种变了才重建菜单 + 回推 cx-shell-lang");
+  const attachSeg = mainSrc.slice(mainSrc.indexOf('on("did-attach-webview"'), mainSrc.indexOf('on("did-attach-webview"') + 900);
+  ok(/watchWebLangSwitch\(wc\)/.test(attachSeg), "did-attach-webview 挂 watchWebLangSwitch（工作台 webview 切语言）");
+  const popupSeg = mainSrc.slice(mainSrc.indexOf("function openBackendPopup"), mainSrc.indexOf("function makeBackendPopupHandler"));
+  ok(/watchWebLangSwitch\(child\.webContents\)/.test(popupSeg), "openBackendPopup 挂 watchWebLangSwitch（后台弹窗切语言）");
+  ok(/wc\.on\("will-navigate", onNav\)/.test(mainSrc) && /wc\.on\("did-start-navigation"/.test(mainSrc),
+    "watchWebLangSwitch 同时听 will-navigate 与 did-start-navigation");
+  const preloadSrc = fs.readFileSync(path.join(DESKTOP, "shell-preload.js"), "utf8");
+  ok(/onShellLang: \(cb\) => ipcRenderer\.on\("cx-shell-lang"/.test(preloadSrc), "shell-preload 暴露 onShellLang（cx-shell-lang）");
+  ok(/window\.shell\.onShellLang\(/.test(rendererJs) && /shellI18n\.setLang\(lang\)/.test(rendererJs),
+    "renderer.js 消费 onShellLang → shellI18n.setLang");
+  ok(typeof shellI18n.setLang === "function", "shell-i18n.js 导出 setLang（运行时换词）");
+  // Node 侧无 document：setLang 只改 LANG/缓存，不抛；非显式值拒绝；同值返回 false
+  ok(shellI18n.setLang("ja") === false, "setLang 拒绝非显式语言");
+  {
+    const cur = shellI18n.lang;
+    const other = cur === "en" ? "zh" : "en";
+    ok(shellI18n.setLang(other) === true && shellI18n.lang === other && shellI18n.t("cp.title") === DICT[other]["cp.title"],
+      "setLang 切换后 t() 立即按新语取词");
+    ok(shellI18n.setLang(other) === false, "setLang 同值返回 false");
+    shellI18n.setLang(cur);
+  }
+}
+
 if (failed) { console.error(`\nshell-i18n.test.js: ${failed} 项失败`); process.exit(1); }
 console.log("\nshell-i18n.test.js: all pass");

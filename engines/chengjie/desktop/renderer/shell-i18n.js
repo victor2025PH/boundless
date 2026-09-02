@@ -844,6 +844,36 @@
     for (var k in dict) { if (Object.prototype.hasOwnProperty.call(dict, k)) d[k] = dict[k]; }
   }
 
+  /* <html lang> 用规范 BCP-47 值（zh_hant→zh-Hant，字体/断行/读屏都认标准标签）。 */
+  var HTML_LANGS = { zh_hant: 'zh-Hant' };
+  function _syncDocLang() {
+    if (typeof document === 'undefined') return;
+    try { document.documentElement.setAttribute('lang', HTML_LANGS[LANG] || LANG); } catch (e) { /* ignore */ }
+    try { document.title = t('app.title'); } catch (e) { /* ignore */ }
+  }
+
+  /* 运行时换语言（#151，2026-09-02）：工作台里切了语言 → 主进程同步壳配置、重建原生
+     菜单后经 cx-shell-lang 回推。这里就地换词而不整窗重载（重载会连内嵌官方页一起
+     掉登录）：更新 LANG / CP_LANG / localStorage 缓存 / <html lang> / title，重跑静态
+     data-sh-i18n 替换，并派发 shell-lang-changed 让动态文案的持有方（rail 标题等）自取。
+     与 resolveLang 的关系：?lang= 是「开机时的权威源」，运行时切换后它就过期了——故
+     写进 localStorage，下一次没带 ?lang= 的装载也能对上。返回是否真的换了。 */
+  function setLang(raw) {
+    if (!isExplicit(raw)) return false;
+    var next = normalizeLang(raw);
+    if (next === LANG) return false;
+    LANG = next;
+    root.shellI18n.lang = LANG;
+    _lsSet(LANG);
+    root.CP_LANG = LANG;
+    _syncDocLang();
+    if (typeof document !== 'undefined') {
+      try { applyI18n(document); } catch (e) { /* ignore */ }
+      try { document.dispatchEvent(new CustomEvent('shell-lang-changed', { detail: { lang: LANG } })); } catch (e) { /* ignore */ }
+    }
+    return true;
+  }
+
   root.shellI18n = {
     lang: LANG,
     t: t,
@@ -852,18 +882,16 @@
     normalizeLang: normalizeLang,
     isExplicit: isExplicit,
     registerExt: registerExt,
+    setLang: setLang,
     _dict: DICT,
     _lsKey: LS_KEY,
   };
   root.SH = t;
 
   /* 浏览器侧同步副作用：<html lang> + document.title + CP_LANG 必须在 body
-     解析与 cp-i18n.js 加载之前就位（本文件在 <head> 内加载即满足）。
-     <html lang> 用规范 BCP-47 值（zh_hant→zh-Hant，字体/断行/读屏都认标准标签）。 */
-  var HTML_LANGS = { zh_hant: 'zh-Hant' };
+     解析与 cp-i18n.js 加载之前就位（本文件在 <head> 内加载即满足）。 */
   if (typeof document !== 'undefined') {
-    try { document.documentElement.setAttribute('lang', HTML_LANGS[LANG] || LANG); } catch (e) { /* ignore */ }
-    try { document.title = t('app.title'); } catch (e) { /* ignore */ }
+    _syncDocLang();
     if (root.CP_LANG !== 'zh' && root.CP_LANG !== 'en') root.CP_LANG = LANG;
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function () { applyI18n(document); });

@@ -415,6 +415,13 @@ def test_channel_banner_excludes_intentional_logout(monkeypatch):
     import src.integrations.platform_session_health as psh
     monkeypatch.setattr(psh, "_SINGLETON", None, raising=False)
     monkeypatch.setattr(psh, "_SEEDED", False, raising=False)
+    # 两个号都得在注册表里且 online：`session_expected_online`（状态中心 v2 起
+    # 横幅与看门狗共用的判据）把**无注册表行**的会话键当登录尝试幽灵一律不亮，
+    # 不建行的话 whatsapp 会因「幽灵」而非「主动登出」被滤掉，本例就测不到
+    # logged_out 那一层了。
+    reg = get_account_registry()
+    reg.upsert("messenger", "a", mode="web", status="online")
+    reg.upsert("whatsapp", "b", mode="protocol", status="online")
     hp = psh.get_platform_session_health()
     hp.record("messenger", "a", "logged_out", detail="logout")
     hp.record("whatsapp", "b", "needs_login", detail="cookie")

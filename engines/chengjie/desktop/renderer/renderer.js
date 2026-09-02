@@ -1319,6 +1319,26 @@ try {
   }
 } catch (e) { /* 桥缺席（极老 preload）＝保持旧行为 */ }
 
+// #151：工作台切语言 → 主进程同步壳配置 + 重建原生菜单后回推 → 壳 renderer 就地换词
+// （shell-i18n.setLang：静态 data-sh-i18n / <html lang> / title），不整窗重载。
+// 动态拼出的文案（rail 标题/chip）在下一次重建时自然跟上；这里补最显眼的收件箱标签。
+try {
+  if (window.shell && typeof window.shell.onShellLang === "function") {
+    window.shell.onShellLang((lang) => {
+      try {
+        if (!(window.shellI18n && window.shellI18n.setLang(lang))) return;
+        const item = document.querySelector('.rail-item[data-id="' + INBOX_ID + '"]');
+        if (item) {
+          item.title = SH("rail.inbox.title");
+          item.setAttribute("aria-label", SH("console.manual"));
+          const chip = item.querySelector(".rail-chip");
+          if (chip) { chip.textContent = SH("rail.inbox.chip"); chip.title = SH("rail.inbox.chip_title"); }
+        }
+      } catch (e) { /* 换词失败不伤壳主链（下次启动 ?lang= 会对齐） */ }
+    });
+  }
+} catch (e) { /* 桥缺席（极老 preload）＝保持旧行为 */ }
+
 // 账号管理面板（全局，不依赖会话）：👥 切换显隐，首次打开挂 client 触发加载
 function setupAccountsPanel() {
   const toggle = $("cp-accounts-toggle");

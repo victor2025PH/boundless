@@ -6738,6 +6738,8 @@ function _setConnBanner(on){
         _connRestoreTimer=null;
         if(_connState==='restored') _renderConnBanner('ok');
       }, 2500);
+      // E2：后端恢复时刻＝重启窗内「发送失败」提示的自动对账点（拉线程 → 送达即清）
+      try{ if(typeof _reconcileGhostMediaFailures==='function') _reconcileGhostMediaFailures('reconnect'); }catch(_){}
     }
     _connDownSince=0; _connFirstFailTs=0; _connVerdict=''; _connDiagSeq++;
     if(_connDiagTimer){ clearTimeout(_connDiagTimer); _connDiagTimer=null; }
@@ -8459,6 +8461,9 @@ async function _loadThreadBody(c,silent,key){
       });
     }
     threadMsgs=[..._keptOlder, ..._fresh];
+    // E2：线程刷新＝对账时机——重启窗里标「结果未知」的媒体件，对话记录里若已有同类
+    // 出站媒体即判送达、自动清掉红提示（幽灵报障根因）
+    try{ if(typeof _reconcileGhostMediaFailures==='function') _reconcileGhostMediaFailures('thread'); }catch(_){}
     threadMsgs.forEach(m=>{
       const p=(m&&m.message_id)?_prevXl.get(String(m.message_id)):null;
       // 服务端已带译文（enrich 写回）时以服务端为准，不覆盖
@@ -13169,14 +13174,18 @@ function _stageMedia(file){
   if(file.size>capMb*1024*1024){ _toast(window.Tf('inbox.file.too_large_mb',{mb:capMb}),'#dc2626'); return; }
   if(_mediaQueue.length>=_MEDIA_QUEUE_MAX){ _toast(window.Tf('inbox.file.queued_n',{n:_mediaQueue.length}),'#b45309'); return; }
   const url=(file.type&&file.type.indexOf('image/')===0)?URL.createObjectURL(file):'';
-  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued'});
+  // cmid 在暂存时生成一次、随件终身（0902 钧机实锤：此前每次提交现造新键，后端重启
+  // 窗内响应丢了 → 坐席点重试＝服务端眼里全新一件 → 双发；同键重试才吃得到 send_dedup）
+  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId()});
   _syncPendingMedia();
   _renderMediaBar();
   const ta=document.getElementById('reply-ta'); if(ta) ta.focus();
 }
 function _mediaItemHtml(it){
   const img=it.url?`<img src="${it.url}" alt="">`:`<span class="mpi-ico">${_mediaIconFor(it.file.type)}</span>`;
-  const sub=it.state==='failed'?window.T('inbox.media.retry_hint'):_fmtBytes(it.file.size);
+  // netFail=没拿到 HTTP 响应（后端重启窗/断网）：结果**未知**而非确定失败，措辞不同，
+  // 且 _reconcileGhostMediaFailures 会按对话记录自动对账清掉真送达的（E2 幽灵报障）
+  const sub=it.state==='failed'?window.T(it.netFail?'inbox.media.retry_hint_unknown':'inbox.media.retry_hint'):_fmtBytes(it.file.size);
   return `<span class="mpb-item${it.state==='sending'?' sending':''}${it.state==='failed'?' failed':''}" data-mpi="${it.id}">${img}`
     +`<span class="mpi-meta"><span class="mpi-name" title="${esc(it.file.name||'')}">${esc(it.file.name||window.T('inbox.media.file_default'))}</span>`
     +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span></span>`
@@ -13236,7 +13245,8 @@ function _xhrSendMedia(item,caption){
     fd.append('account_id', selectedChat.account_id||'default');
     fd.append('chat_key', selectedChat.chat_key);
     fd.append('caption', caption||'');
-    fd.append('client_msg_id', _newClientMsgId());   // P0 幂等键
+    if(!item.cmid) item.cmid=_newClientMsgId();
+    fd.append('client_msg_id', item.cmid);   // P0 幂等键：随件固定，重试同键（见 _stageMedia）
     fd.append('file', item.file);
     const xhr=new XMLHttpRequest();
     _mediaXhr=xhr;
@@ -13267,20 +13277,24 @@ async function _doSendMedia(caption){
   let sent=0, aborted=false;
   while(_mediaQueue.length){
     const item=_mediaQueue[0];
-    item.state='sending'; _renderMediaBar();
+    item.state='sending'; item.sentTs=Date.now(); item.convKey=convKey(selectedChat); _renderMediaBar();
     let res=null;
     try{ res=await _xhrSendMedia(item, sent===0?(caption||''):''); }
     catch(_){ res=null; }
     _mediaXhr=null;
     if(res&&res.d&&res.d.aborted){ aborted=true; break; }
     if(res&&res.status>=200&&res.status<300&&res.d&&res.d.ok){
+      // d.duplicate=同键重试命中服务端幂等（上次其实发出去了、只是响应丢了）→ 也算成功
       sent++;
       if(item.url){ try{ URL.revokeObjectURL(item.url); }catch(_){} }
       _mediaQueue.shift(); _syncPendingMedia(); _renderMediaBar();
       continue;
     }
-    // 失败停队列：失败件与其后队列原地保留（转红 + 重试提示），修正后再点发送
-    item.state='failed'; _renderMediaBar();
+    // 失败停队列：失败件与其后队列原地保留（转红 + 重试提示），修正后再点发送。
+    // res==null（无 HTTP 响应：后端重启窗/断网）＝结果**未知**——0902 钧机 SY8TGE 实锤
+    // 该时段文件全部送达，红提示却赖着不走 → 标 netFail，交 _reconcileGhostMediaFailures
+    // 在后端恢复/线程刷新后按对话记录对账自动清除；措辞也按「未知」不按「失败」。
+    item.state='failed'; item.netFail=!res; item.failTs=Date.now(); _renderMediaBar();
     const d=(res&&res.d)||{};
     if(res&&res.status===501){
       _toast(window.T('inbox.media.unsupported'),'#b45309');
@@ -13290,6 +13304,8 @@ async function _doSendMedia(caption){
     } else if(res){
       const _md=(d.detail&&typeof d.detail==='object')?(d.detail.message||''):(d.detail||'');
       _toast('❌ '+(_md||d.message||window.Tf('inbox.media.send_fail_status',{status:res.status})),'#dc2626');
+    } else if(_mediaBackendUnstable()){
+      _toast(window.T('inbox.media.send_fail_net_restart'),'#b45309');
     } else {
       _toast(window.T('inbox.media.send_fail_net'),'#dc2626');
     }
@@ -13303,6 +13319,65 @@ async function _doSendMedia(caption){
     try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
   }
   _mediaSending=false;
+}
+
+/* E2 幽灵报障（0902 钧机实锤，诊断包 SY8TGE）：拉诊断包触发后端重启，重启窗内媒体发送
+   拿不到 HTTP 响应 → 前端标「发送失败」红提示；但日志证明该时段文件**全部送达**（请求已
+   进后端、响应在重启里丢了）。红提示不会自己消失，坐席据此报障＝幽灵工单；点重试＝双发。
+   对账口径：netFail 件 ∧ 对话记录里出现「本次发起之后」的同类出站媒体 → 判定已送达，
+   自动移出队列并告知（宁可让坐席多看一眼对话，也不让假红提示赖着）。没证据的照留，
+   措辞是「结果未知」；后端恢复（_setConnBanner 恢复态）时主动拉一次线程再对账。 */
+function _mediaKindOf(file){
+  const t=String((file&&file.type)||'').toLowerCase();
+  if(t.indexOf('image/')===0) return 'image';
+  if(t.indexOf('video/')===0) return 'video';
+  if(t.indexOf('audio/')===0) return 'audio';
+  return 'document';
+}
+function _mediaKindMatches(kind,mt){
+  mt=String(mt||'').toLowerCase();
+  if(!mt) return false;
+  if(kind==='image') return mt==='image'||mt==='photo'||mt==='sticker';
+  if(kind==='video') return mt==='video'||mt==='animation';
+  if(kind==='audio') return mt==='audio'||mt==='voice';
+  return mt==='document'||mt==='file';
+}
+function _mediaBackendUnstable(){
+  try{
+    if(typeof _connState!=='undefined'&&_connState!=='ok') return true;
+    const rc=window.__wsRestartCool;
+    if(rc&&(rc.active||rc.quiet)&&(!rc.until||Date.now()<rc.until)) return true;
+  }catch(_){}
+  return false;
+}
+function _reconcileGhostMediaFailures(reason){
+  const ghosts=_mediaQueue.filter(it=>it&&it.state==='failed'&&it.netFail);
+  if(!ghosts.length||!selectedChat) return 0;
+  const ck=convKey(selectedChat);
+  const msgs=Array.isArray(threadMsgs)?threadMsgs:[];
+  const used=new Set();
+  let cleared=0;
+  for(const it of ghosts){
+    if(it.convKey&&it.convKey!==ck) continue;   // 别的会话的失败件，等切回去再对账
+    const kind=_mediaKindOf(it.file);
+    const since=(Number(it.sentTs||it.failTs||0)-5000)/1000;   // 服务端 ts 秒；发起前 5s 容差
+    const hit=msgs.find(m=>m&&!used.has(m)&&m.direction==='out'&&Number(m.ts||0)>=since&&_mediaKindMatches(kind,m.media_type));
+    if(!hit) continue;
+    used.add(hit);
+    if(it.url){ try{ URL.revokeObjectURL(it.url); }catch(_){} }
+    const idx=_mediaQueue.indexOf(it);
+    if(idx>=0) _mediaQueue.splice(idx,1);
+    cleared++;
+  }
+  if(cleared){
+    _syncPendingMedia(); _renderMediaBar();
+    _toast(window.Tf('inbox.media.ghost_cleared',{n:cleared}),'#0f9d75');
+    try{ _uiBeacon('media_ghost_cleared'); }catch(_){}
+  } else if(reason==='reconnect'){
+    // 恢复时刻线程可能还是重启前的旧数据：拉一次，loadThread 成功路径会再对账
+    try{ loadThread(selectedChat,true); }catch(_){}
+  }
+  return cleared;
 }
 
 /* 注：早前这里有第二个 _cancelMedia 覆盖版，只隐藏预览条却不清 _pendingMedia/objectURL——

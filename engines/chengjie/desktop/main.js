@@ -13,6 +13,7 @@ const tokenUtil = require("./token-util.js");
 const winFit = require("./win-fit.js");
 const hotpatchApply = require("./hotpatch-apply.js");
 const hotpatchStage = require("./hotpatch-stage.js");
+const shellLangSync = require("./shell-lang-sync.js");
 
 // 本机已落地的热补丁（resources/hotpatch.json，由 apply_chatx_hotpatch_node.ps1 写）。
 // 进程内只读一次：该文件只在「本进程已退出、helper 正在替换文件」时变，读到的永远是
@@ -1713,6 +1714,7 @@ function openBackendPopup(url) {
   // 弹窗里再点后台 target=_blank 链接（如后台侧栏「坐席工作台」）同走本唯一性收敛
   child.webContents.setWindowOpenHandler(makeBackendPopupHandler());
   wireEditContextMenu(child.webContents);   // 后台弹窗（admin/workspace 子页）同享右键编辑菜单
+  watchWebLangSwitch(child.webContents);    // #151：后台页里切语言同样让壳跟随
   bindBackendPopupLogin(child, url);
   child.loadURL(url);
   return child;
@@ -1906,7 +1908,8 @@ ipcMain.on("cp-pip-out", (e, msg) => {
 // zh_hant → zh）；**配置为空=「跟随系统」**（首启向导默认项，2026-08-27 起真跟随：
 // app.getLocale()=OS 界面语言 → 同一套家族映射；此前空值恒中文，「跟随系统」是假的）。
 // 显式未知值（如手改成 ja）保守维持中文、不偷跟系统——显式≠委托推断。
-// 菜单构建是启动期一次性，改语言重启壳生效。
+// 菜单在启动期构建一次；工作台里切语言（/set_lang 导航）由 watchWebLangSwitch 同步
+// 配置并 rebuildAppMenu（#151，此前要重启壳才生效）。
 const SHELL_EXT_LANGS = { vi: "en", th: "en", id: "en", zh_hant: "zh" }; // 码→词典回落底
 // BCP-47/配置值 → 壳语言码；认不出返回 ""（调用方决定回落方向）
 function shellLangFromTag(raw) {
@@ -2199,6 +2202,7 @@ async function createWindow() {
     console.log("[diag] webview attached");
     bindWhatsappWebviewUa(wc);
     wireEditContextMenu(wc);   // 官方页 + 工作台 webview：右键粘贴的主战场
+    watchWebLangSwitch(wc);    // #151：工作台 /set_lang 切语言 → 壳配置 + 菜单跟随
     wc.setWindowOpenHandler(makeBackendPopupHandler());
     wc.on("did-finish-load", () => rendererDiagLog("[diag] webview page loaded"));
     wc.on("did-fail-load", (_e2, code, desc) =>
@@ -2331,6 +2335,49 @@ function buildAppMenu() {
     },
   ];
   return Menu.buildFromTemplate(template);
+}
+
+// ── 壳语言跟随工作台切换（#151，2026-09-02）───────────────────────────────────
+// 原图 _1086：切英文后界面主体全英，唯原生菜单条 + 帮助下拉仍中文。词条早就走
+// SHELL_STR——问题是 SS() 读的 unified_inbox.lang 只由首启向导写，网页里 /set_lang
+// 只改后端 cookie，壳配置停在装机那一刻；加之 Menu 是启动期一次性构建。
+// 修：监听后台页 webContents 导航，命中 /set_lang?lang=<x>（页面切语言就是这一次
+// 整页跳转）→ ①同步壳配置（下次 loadFile 的 ?lang= 与页面 cookie 从此一致）
+// ②重建 Menu ③广播 cx-shell-lang 给壳 renderer 重取静态词。页内五菜单随页面重载
+// 自会重拉 menuSpec()。纯函数决策在 shell-lang-sync.js（门禁直跑）。
+function rebuildAppMenu() {
+  try { Menu.setApplicationMenu(buildAppMenu()); } catch (e) {
+    console.log("[i18n] app menu rebuild failed: " + ((e && e.message) || e));
+  }
+}
+function applyShellLangFromNavigation(rawUrl) {
+  let patch = null;
+  try {
+    patch = shellLangSync.shellLangPatchForNavigation(
+      (((config || {}).unified_inbox) || {}).lang, rawUrl);
+  } catch (e) { patch = null; }
+  if (!patch) return false;
+  const before = shellLang();
+  saveConfigPatch({ unified_inbox: { lang: patch.lang } });
+  const after = shellLang();
+  console.log(`[i18n] shell lang synced from workspace: ${JSON.stringify(patch.lang)} (${before} -> ${after})`);
+  if (after !== before) rebuildAppMenu();
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send("cx-shell-lang", after); } catch (e) { /* 窗已亡 */ }
+  }
+  return true;
+}
+function watchWebLangSwitch(wc) {
+  const onNav = (_e, url) => {
+    try { if (isBackendUrl(url)) applyShellLangFromNavigation(url); } catch (e) { /* 非后台页/坏 URL 忽略 */ }
+  };
+  // will-navigate=页面发起的跳转（location.href），did-start-navigation 兜住重定向/
+  // 编程式导航；两者都可能触发，patch 同值不重写（shell-lang-sync 内去重）。
+  wc.on("will-navigate", onNav);
+  wc.on("did-start-navigation", (_e, url, _inPlace, isMainFrame) => {
+    if (isMainFrame === false) return;
+    onNav(_e, url);
+  });
 }
 
 // ── 应用菜单内迁（P0 2026-08-22）────────────────────────────────────────────
