@@ -70,7 +70,7 @@
     var s = String(msg || (reason && reason.message) || '');
     /* Chrome: Failed to fetch / Firefox: NetworkError when attempting… /
        Safari: Load failed / Node-ish 壳: fetch failed / 其它: network request failed */
-    return /failed to fetch|networkerror|load failed|fetch failed|network request failed|err_connection|err_network/i.test(s);
+    return (/failed to fetch|networkerror|load failed|fetch failed|network request failed|err_connection|err_network/i).test(s);
   }
   function _netBarHide(){
     if(_netTimer){ clearTimeout(_netTimer); _netTimer = null; }

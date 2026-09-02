@@ -593,7 +593,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                  bulk-start 同批）才点亮（旧后端零死按钮）。 #}
               <div class="fp-sec" id="fp-bulk-sec" style="display:none;" data-i18n="inbox.filter.sec_bulk">批量操作</div>
               <div class="fp-chips" id="fp-bulk" style="display:none;">
-                <button type="button" class="fp-chip" onclick="_uiBeacon('iflt_bulk_sop');bulkSopFromFilter()" title="{{ (i18n or {}).get('inbox.bulk.sop_btn_t', '把当前筛选出的私聊会话批量挂上一条跟进 SOP 链（每次最多 50 个；在途/7 天内挂过的自动剔除）') }}" data-i18n="inbox.bulk.sop_btn">📤 给当前筛选结果挂跟进 SOP</button>
+                <button type="button" class="fp-chip" onclick="_uiBeacon('iflt_bulk_sop');bulkSopFromFilter()" title="{{ (i18n or {}).get('inbox.bulk.sop_btn_t', '把当前筛选出的私聊会话批量挂上一条跟进 SOP 链（每次最多 50 个；在途/7 天内挂过的自动剔除）') }}" data-i18n="inbox.bulk.sop_btn">给当前筛选结果挂跟进 SOP</button>
               </div>
               <div class="fp-foot">
                 <button type="button" class="fp-clear" onclick="_uiBeacon('iflt_clear_all');resetAllFilters()" data-i18n="inbox.filter.summary_clear">清空筛选</button>
@@ -4966,7 +4966,6 @@ function _buriedStats(){
   rows.forEach(c=>{ unread+=Math.max(0,Number(c.unread)||0); });
   return {convs:rows.length, unread:unread, srv:false};
 }
-function _buriedCount(){ return _buriedStats().convs; }
 
 /* #142 被埋会话界面化：筛选条下的「归档中还有 N 条未读 · 查看」入口。
    主徽标默认剔除归档未读（与列表默认视图同口径）后，这些未读不能彻底隐身——
@@ -26583,6 +26582,7 @@ Object.assign(window, {
   toggleTagFilterDropdown, setTagFilter, saveCurrentView,
   onSearch, setSortMode,   // P5-4: 内联 oninput/onchange 引用者一并登记进暴露块（与既有惯例一致，防御性）
   toggleStandbyPop, openOldestWaiting, bulkDowngradeAutoAi,   // 一期美化：值守胶囊弹层 + 空态驾驶舱 CTA + 一键降档
+  _gotoBuriedArchive,   // #142 被埋会话入口「归档中还有 N 条未读 · 查看」（静态 onclick/onkeydown，须挂 window）
   acceptComposerDraft, dismissComposerDraft, _cdraftHdClick, _cdraftExpand, _openAiDraftPanel,   // 二期：composer 草稿条
   // 批量操作
   batchArchive, batchTagPrompt, batchAssignPrompt, batchSnoozePrompt,

@@ -509,6 +509,13 @@ _EMITTED_ALERTS = [
       "bubbles": 8, "missing_selectors": ["composer", "sendBtn"],
       "down_minutes": 22, "first_reminder": True,
       "rate_key": "inject:telegram:8438080491"}),
+    # #142 件三（2026-09-02）：真发总闸关满 pause_auto_resume_hours 自动恢复
+    # （autosend_gate_state.sweep_gate_auto_resume 发布）——「闸被自动打开了」群外可见
+    ("autosend_gate", "autosend_gate_alert",
+     {"action": "auto_resumed",
+      "paths": ["inbox.l2_autosend.enabled"],
+      "paused_hours": 6.5, "paused_by": "admin", "paused_source": "preset",
+      "rate_key": "autosend_gate:auto_resume"}),
 ]
 
 
