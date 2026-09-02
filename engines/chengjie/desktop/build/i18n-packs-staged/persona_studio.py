@@ -1014,6 +1014,9 @@ ZH = {
     "psn_vc_unbind_q": "解绑人设 {pid} 的克隆音色？解绑后回落默认音色。",
     "psn_vc_purge_q": "是否连云端声纹一并永久删除（不可恢复）？\n「确定」＝一并删除；「取消」＝仅解绑（声纹保留，可改绑其他人设）。",
     "psn_vc_unbind_ok": "已解绑",
+    # #149（2026-09-02）：登记后抽屉保存不得把克隆档顶空——服务端保留了登记键时提示
+    "psn_vc_preserved": "已保留本人设的克隆音色登记（表单里的空语音设置不会覆盖它）",
+    "psn_vc_enrolled_synced": "克隆音色已登记并挂载到本人设：{backend}",
     "psn_vc_req_fail": "请求失败，请稍后重试",
     "psn_wiz_back": "上一步",
     "psn_wiz_blank": "从空白开始",
@@ -2078,6 +2081,9 @@ EN = {
     "psn_vc_unbind_q": "Unbind the clone voice of persona {pid}? It will fall back to the default voice.",
     "psn_vc_purge_q": "Also permanently delete the cloud voiceprint (irreversible)?\nOK = delete it too; Cancel = unbind only (voiceprint kept, can rebind).",
     "psn_vc_unbind_ok": "Unbound",
+    # #149 (2026-09-02): drawer save must not blank a freshly enrolled clone profile
+    "psn_vc_preserved": "Kept this persona's clone-voice enrollment (blank voice fields in the form do not override it)",
+    "psn_vc_enrolled_synced": "Clone voice enrolled and mounted on this persona: {backend}",
     "psn_vc_req_fail": "Request failed, please retry later",
     "psn_wiz_back": "Back",
     "psn_wiz_blank": "Start from scratch",
