@@ -886,6 +886,32 @@ def build_block_for_chat(
                 "injected": bool(injected), "reason": str(reason or "")}
             m.update(extra)
             user_context["_goal_inject_meta"] = m
+        # #152 F2（0902 skuio「工作目标完全没执行」）：此前注入判定只写内存 meta，
+        # 日志零痕迹——诊断包里翻遍找不到「这一轮目标为什么没进 prompt」。有目标
+        # 却未注入是坐席最需要知道的事：早退原因一律 INFO 落日志（无目标的会话
+        # 每轮都会走到 no_goal，那条降 DEBUG 防刷屏）。
+        try:
+            if reason == "no_goal" or reason == "disabled":
+                logger.debug("[goal-inject] skip=%s conv=%s", reason,
+                             conversation_id or f"{platform}:{account_id}:{chat_key}")
+            elif injected:
+                logger.info(
+                    "[goal-inject] injected conv=%s goal=%s ms=%s push=%s intent=%s",
+                    conversation_id or f"{platform}:{account_id}:{chat_key}",
+                    str(extra.get("goal_id") or "")[:12],
+                    extra.get("milestone_idx", "-"),
+                    extra.get("push_level", "-"),
+                    str(extra.get("intent") or "")[:40])
+            else:
+                logger.info(
+                    "[goal-inject] NOT injected reason=%s%s conv=%s goal=%s title=%r",
+                    reason,
+                    (f"({extra['hold_reason']})" if extra.get("hold_reason") else ""),
+                    conversation_id or f"{platform}:{account_id}:{chat_key}",
+                    str(extra.get("goal_id") or "")[:12],
+                    str(extra.get("title") or "")[:30])
+        except Exception:
+            pass
 
     try:
         cfg_root = getattr(config_obj, "config", None)

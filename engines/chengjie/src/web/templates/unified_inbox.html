@@ -15707,6 +15707,16 @@ function _applyGoalTabSignal(g){
   _updateCustomerTabBadge();
   if(typeof _syncGoalQuickBtn==='function') _syncGoalQuickBtn();
 }
+// #152 F2：每会话最近一次 AI 生成的目标注入判定（smart-reply 响应 goal_applied）。
+// 内存态、随页面生命周期；切会话不清（回到该会话仍能看到上一轮判定）。
+var _goalLastApplied={};
+function _noteGoalApplied(cid, ga){
+  try{
+    if(!cid || !ga || typeof ga!=='object') return;
+    _goalLastApplied[cid]={injected:!!ga.injected, reason:String(ga.reason||''), hold_reason:String(ga.hold_reason||''), ts:Date.now()};
+    if(cid===_wsCpCid) _renderHeroGoal();
+  }catch(_){}
+}
 function _paintHeroGoal(el, mode, opts){
   opts=opts||{};
   el.hidden=false;
@@ -15735,11 +15745,24 @@ function _paintHeroGoal(el, mode, opts){
   var fbHtml=opts.showFeedback
     ?(' <span class="hg-fb">('+esc(_goalT('inbox.goal.hero.feedback','Give feedback'))+')</span>')
     :'';
+  // #152 F2：上一轮 AI 生成时目标没进 prompt → 英雄行亮原因胶囊。此前后端 P25 观测
+  // （goal_applied）产出却零消费：卡显示「第3/3天」看着在推进，实际连指令都没带上。
+  var skipHtml='';
+  try{
+    var _ga=_goalLastApplied[_wsCpCid||''];
+    if(_ga && _ga.injected===false && String(_ga.reason||'')!=='no_goal'){
+      var _rk='inbox.goal.skip.'+String(_ga.reason||'unknown');
+      var _rt=_goalT(_rk, String(_ga.reason||'unknown'));
+      if(_ga.hold_reason) _rt+=' ('+String(_ga.hold_reason)+')';
+      skipHtml=' <span class="hg-skip" title="'+esc(_goalT('inbox.goal.hero.last_skip_t',''))+'">'+
+        esc(_goalTf('inbox.goal.hero.last_skip',{reason:_rt},'Last turn did not push the goal: {reason}'))+'</span>';
+    }
+  }catch(_){}
   // P22.1：回复台英雄行一键拟稿（有真实今日意图才出钮；点钮不跳客户 tab）
   var draftBtn=opts.canDraft
     ?(' <button type="button" class="hg-draft" data-hg-draft="1" title="'+esc(_goalT('inbox.goal.hero.draft_t','Draft from today\'s beat'))+'">'+esc(_goalT('inbox.goal.hero.draft','Draft'))+'</button>')
     :'';
-  el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-main">'+esc(main)+'</span>'+fbHtml+draftBtn;
+  el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span class="hg-main">'+esc(main)+'</span>'+fbHtml+draftBtn+skipHtml;
   el.onclick=function(ev){
     var t=ev&&ev.target;
     if(t&&t.closest&&t.closest('[data-hg-draft]')){
@@ -17868,6 +17891,7 @@ async function _dpickGenerate(c, msgs, opts){
     if(seq!==_dpickReqSeq || _dpickState!=='loading') return;          // 已取消/备稿接管：旧响应作废
     if(!selectedChat || convKey(selectedChat)!==convKey(c)){ draftPickCancel('switched'); return; }
     if(!d.ok || !d.reply){ _dpickShowError((d&&d.detail)||'',opts); return; }
+    _noteGoalApplied(cid, d.goal_applied);          // #152 F2：目标注没注入亮到英雄行
     var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
     // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
     // 复用 P0 的 chip+浮层，零新增 UI；无引用则清空 chip 防串会话残留。

@@ -1132,6 +1132,8 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .cp-hero-goal .hg-main{font-weight:600;color:var(--accent);}
 .cp-hero-goal .hg-fb{color:var(--accent);text-decoration:underline;text-underline-offset:2px;font-weight:600;}
 .cp-hero-goal .hg-hold{color:var(--text-tiny);font-style:italic;}
+/* #152 F2：上轮目标未注入原因胶囊（琥珀提示，不抢主行） */
+.cp-hero-goal .hg-skip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:11px;line-height:16px;color:var(--warn-fg,#a15c00);background:var(--warn-bg,rgba(255,170,0,.14));white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;}
 .cp-hero-goal.cta{color:var(--text-tiny);font-weight:500;opacity:.85;}
 .cp-hero-goal.cta:hover{opacity:1;color:var(--accent);}
 .cp-hero-goal .hg-draft{flex:0 0 auto;margin-left:auto;font:inherit;font-size:11px;font-weight:600;
