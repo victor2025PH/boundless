@@ -826,6 +826,15 @@ class TelegramSenderMixin:
                         resolve_sendpoint_names, sendpoint_vocative_pass)
                     _nm = resolve_sendpoint_names(
                         _sp_conf, "telegram", _sp_acct, _sp_chat)
+                    # #155：爱称按联系人取（与 prompt 注入同源，防守卫拿人设的
+                    # babe 去「纠正」本该是联系人 honey 的正确文本）
+                    try:
+                        from src.inbox.contact_names import (
+                            overlay_sendpoint_names)
+                        _nm = overlay_sendpoint_names(
+                            _nm, "telegram", _sp_acct, _sp_chat)
+                    except Exception:
+                        pass
                     if _nm:
                         _vt, _vm = sendpoint_vocative_pass(_out_text, _nm)
                         if _vt != _out_text:

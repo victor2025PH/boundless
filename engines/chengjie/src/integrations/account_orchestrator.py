@@ -753,6 +753,15 @@ class AccountOrchestrator:
                     _nm = resolve_sendpoint_names(
                         self._config, platform, account_id,
                         str(chat_key or ""), registry=self._registry)
+                    # #155：爱称按联系人取（守卫与 prompt 注入必须同源，否则
+                    # 守卫会拿人设的 babe 去「纠正」本该是联系人 honey 的正确文本）
+                    try:
+                        from src.inbox.contact_names import (
+                            overlay_sendpoint_names)
+                        _nm = overlay_sendpoint_names(
+                            _nm, platform, account_id, str(chat_key or ""))
+                    except Exception:
+                        pass
                     if _nm:
                         _vt, _vm = sendpoint_vocative_pass(text, _nm)
                         if _vt != text:

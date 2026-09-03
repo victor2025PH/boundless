@@ -239,6 +239,19 @@ def compute_mode_caps(
     except Exception:
         pass
 
+    # ── ④b 未选人设封顶（#156，2026-09-03）─────────────────────────────────
+    # 新账号不再自动补默认人设——用户没选过身份之前，AI 不该以任何身份代答
+    # （旧行为：上线即自动绑一个默认人设，客户收到的是一个从没人挑过的人格）。
+    # 与 ④ 同族「身份没确认就别开口」，与 #63「按账号确认接管」联动：接管方式
+    # 和以谁的身份接管，都得是人的显式决定。选定人设后本层自动消失。
+    # fail-open：判不出不封顶（判定失败绝不把在跑的账号静默降级）。
+    try:
+        from src.ai.persona_voice import account_persona_unselected
+        if account_persona_unselected(config, plat, acct):
+            caps.append(ModeCap("persona_unselected", "review", detail=acct))
+    except Exception:
+        pass
+
     # ── ⑤ 重连积压封顶（实施72 P2）：长断线恢复后的短窗强制人审 ─────────────
     # 断线期积压的消息经实时链涌入时时间戳=「现在」，AI 按当下语境回旧消息必然
     # 穿帮；恢复盖章（session-status offline→online 时写 meta.last_recovered_at/

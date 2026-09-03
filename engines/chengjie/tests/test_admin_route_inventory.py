@@ -1828,6 +1828,15 @@ _ADDITIONS_2026_09_03_ACCOUNT_UNREAD = """
 """
 _BASELINE += _ADDITIONS_2026_09_03_ACCOUNT_UNREAD
 
+# 2026-09-03 #155 人设归属层级：双向称呼（你称呼对方 / 对方称呼你）从人设档
+# 迁到**联系人级**——同一人设服务一百个客户，爱称是客户关系属性不是人设属性。
+# 读口附带人设级值供 UI 渲染「未设置时沿用人设的 xxx」。
+_ADDITIONS_2026_09_03_ADDRESS_NAMES = """
+/api/unified-inbox/conv-meta/address-names	GET
+/api/unified-inbox/conv-meta/address-names	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_03_ADDRESS_NAMES
+
 
 def _parse_baseline():
     expected = set()

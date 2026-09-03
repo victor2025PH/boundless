@@ -101,9 +101,23 @@ def test_platform_login_default_persona_id():
     ) == "lin_xiaoyu"
 
 
-def test_ensure_writes_default_when_empty():
+def test_new_account_waits_for_user_choice():
+    """#156（2026-09-03）：新账号**不自动绑定**人设——用户没选过身份之前，
+    AI 不该以任何身份说话（旧行为：上线即自动绑默认人设，客户收到的是一个
+    从没人挑过的人格，账号栏还显示得像是选过了）。"""
     reg = _FakeRegistry({"meta": {}})
     cfg = {"platform_login": {"default_persona_id": "lin_xiaoyu"}}
+    assert ensure_account_default_persona(
+        reg, "telegram", "6834964252", cfg) == ""
+    assert not reg.upserts
+    assert "persona_id" not in reg.get("telegram", "6834964252")["meta"]
+
+
+def test_auto_attach_opt_in_restores_legacy_write():
+    """批量铺号的部署仍可显式要旧便利：auto_attach_default_persona: true。"""
+    reg = _FakeRegistry({"meta": {}})
+    cfg = {"platform_login": {"default_persona_id": "lin_xiaoyu",
+                              "auto_attach_default_persona": True}}
     pid = ensure_account_default_persona(reg, "telegram", "6834964252", cfg)
     assert pid == "lin_xiaoyu"
     assert reg.upserts

@@ -2534,12 +2534,26 @@ class AIClient(LoggerMixin):
             _channel = str((context or {}).get("channel", "") or "")
             _p_platform = "whatsapp" if "whatsapp" in _channel else _channel
             _p_funnel = str((context or {}).get("funnel_stage", "") or "") if context else ""
+            # #155（2026-09-03）：称呼硬钉子按**联系人**取值（爱称是客户关系
+            # 属性，不是人设属性）。会话 id 三段齐了才传——缺任一段说明本次
+            # 调用没有会话上下文（工具型/预览），按纯人设级=旧行为。
+            _p_conv_id = ""
+            try:
+                _c = context or {}
+                _cn_p = str(_c.get("platform") or _c.get("channel") or "").strip()
+                _cn_a = str(_c.get("account_id") or "").strip()
+                _cn_k = str(_c.get("chat_key") or "").strip()
+                if _cn_p and _cn_a and _cn_k:
+                    _p_conv_id = f"{_cn_p.lower()}:{_cn_a}:{_cn_k}"
+            except Exception:
+                _p_conv_id = ""
             _p_block = _pm.format_persona_block(
                 _p_cid, detail=_pbd, name_override=_name_ov,
                 account_persona_id=_p_acc_pid,
                 platform=_p_platform,
                 funnel_stage=_p_funnel,
                 fallback_name=_fallback_name,
+                conversation_id=_p_conv_id,
             )
             if _p_block:
                 parts.append("【后台人设定位 · 须遵守】\n" + _p_block)

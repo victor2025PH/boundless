@@ -59,6 +59,101 @@ def register_intel_profile_routes(app, *, api_auth) -> None:
             "meta": meta,
         }
 
+    # ── #155 联系人级称呼（2026-09-03 人设归属层级）──────────────────
+    # 「你称呼对方（爱称）/ 对方称呼你」是**客户关系属性**不是人设属性：同一
+    # 人设服务一百个客户，不可能对每个人都叫 babe。此前它们长在人设档案里
+    # （personas.html 基本补充区），改一次影响所有客户。这两个端点是新层级的
+    # 读写口；注入与出站呼格守卫共同消费（src/inbox/contact_names.py）。
+
+    @app.get("/api/unified-inbox/conv-meta/address-names")
+    async def api_conv_address_names_get(
+        request: Request, conversation_id: str = "",
+    ):
+        """读该会话的联系人级称呼（附人设级值，供 UI 显示「继承自人设」）。"""
+        api_auth(request)
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="conversation_id"))
+        store = _inbox_store(request)
+        out: Dict[str, Any] = {
+            "ok": True, "conversation_id": cid,
+            "call_peer": "", "peer_calls_you": "",
+            "persona_call_peer": "", "persona_peer_calls_you": "",
+            "effective_call_peer": "", "effective_peer_calls_you": "",
+        }
+        try:
+            from src.inbox.contact_names import get_contact_names
+            got = get_contact_names(store, cid)
+            out["call_peer"] = got.get("call_peer") or ""
+            out["peer_calls_you"] = got.get("peer_calls_you") or ""
+        except Exception:
+            logger.debug("[conv-meta] 联系人称呼读取失败 cid=%s", cid,
+                         exc_info=True)
+        # 人设级值：UI 用它渲染 placeholder「未设置时沿用人设的 xxx」
+        try:
+            from src.ai.persona_voice import resolve_effective_persona_id
+            from src.utils.persona_manager import PersonaManager
+            cm = getattr(request.app.state, "config_manager", None)
+            cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
+            parts = cid.split(":", 2)
+            if len(parts) == 3:
+                pid = resolve_effective_persona_id(
+                    cfg, parts[0], parts[1], parts[2])
+                if pid:
+                    persona = PersonaManager.get_instance().get_persona_by_id(pid)
+                    pn = (persona or {}).get("names") or {}
+                    if isinstance(pn, dict):
+                        out["persona_call_peer"] = str(
+                            pn.get("call_peer") or "").strip()
+                        out["persona_peer_calls_you"] = str(
+                            pn.get("peer_calls_you") or "").strip()
+        except Exception:
+            logger.debug("[conv-meta] 人设级称呼读取失败 cid=%s", cid,
+                         exc_info=True)
+        out["effective_call_peer"] = (out["call_peer"]
+                                      or out["persona_call_peer"])
+        out["effective_peer_calls_you"] = (out["peer_calls_you"]
+                                           or out["persona_peer_calls_you"])
+        return out
+
+    @app.post("/api/unified-inbox/conv-meta/address-names")
+    async def api_conv_address_names_set(request: Request):
+        """写该会话的联系人级称呼。
+
+        body: ``{conversation_id, call_peer?, peer_calls_you?}``。缺键＝不动该
+        字段；**传空串＝显式清除**（改主意「这个客户不用爱称」必须做得到，清除
+        后自动回落人设级值）。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = str((body or {}).get("conversation_id") or "").strip()
+        if not cid:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="conversation_id"))
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            actor = str(request.session.get("username", "") or "") or "api"
+        except Exception:
+            actor = "api"
+        cp = body.get("call_peer")
+        py = body.get("peer_calls_you")
+        from src.inbox.contact_names import get_contact_names, set_contact_names
+        ok = set_contact_names(
+            store, cid,
+            call_peer=(None if cp is None else str(cp)),
+            peer_calls_you=(None if py is None else str(py)),
+            updated_by=actor)
+        got = get_contact_names(store, cid)
+        return {"ok": bool(ok), "conversation_id": cid,
+                "call_peer": got.get("call_peer") or "",
+                "peer_calls_you": got.get("peer_calls_you") or ""}
+
     # ── K3：客户画像聚合 API ───────────────────────────────────────
 
     @app.get("/api/unified-inbox/contact-profile")

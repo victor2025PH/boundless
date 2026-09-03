@@ -232,6 +232,19 @@ def _merge_orchestrator_status(
             # 身份可视化：账号级人设 id/名（逐号软失败留空串，绝不让 chats 500）
             v["persona_id"] = ""
             v["persona_name"] = ""
+            # #156（2026-09-03）：新账号不再自动补默认人设 → 账号栏要显式说
+            # 「未选人设」并引导去选。判据是**注册表有没有人选过**，不看配置
+            # 全局默认（那正是让「没人选过」看起来像「已选好」的东西）。
+            # 未选期间 AI 不代答（effective_automation 同源封顶 review）。
+            v["persona_unselected"] = False
+            try:
+                from src.ai.persona_voice import account_persona_unselected
+                v["persona_unselected"] = bool(account_persona_unselected(
+                    cfg, str(v.get("platform") or ""),
+                    str(v.get("account_id") or "default"),
+                    registry=registry_obj))
+            except Exception:
+                logger.debug("[chats] 未选人设判定失败 key=%s", k, exc_info=True)
             if _resolve_pid is not None:
                 try:
                     _pid = _resolve_pid(

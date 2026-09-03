@@ -1097,10 +1097,16 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_nickname','昵称') }}</label><input id="pe-pf-name-nickname" type="text"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_pf_name_usage','名字使用说明') }}</label><input id="pe-pf-name-usage-notes" type="text"></div>
     </div>
-    {# #24（0830）：称呼双向硬钉子字段——babe/baba 互换实锤的运营侧入口 #}
+    {# #155（0903）：称呼双向字段已迁往**联系人级**——「你称呼对方（爱称）/
+       对方称呼你」描述的是这段客户关系，不是人设自己：同一人设服务一百个客户，
+       不可能对每个人都叫 babe，改人设档会连带改掉另外九十九个。入口改在会话侧
+       （收件箱客户信息面板），存储 conversation_contact_names，注入与出站呼格
+       守卫同源消费。人设档里的存量值仍被读作回落默认值（升级零行为变化）。 #}
     <div class="ps-row">
-      <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_callpeer_tip','AI 对客户的固定爱称（如 babe）——注入为硬约束，绝不跟着客户的叫法互换，并压过 AI 推断记忆') }}">{{ (i18n or {}).get('psn_pf_name_callpeer','你称呼对方（爱称）') }}</label><input id="pe-pf-name-callpeer" type="text" placeholder="babe"></div>
-      <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_name_peercalls_tip','客户对 AI 的称呼（如 baba）——那是对方叫 AI 的，AI 绝不会拿它反过来称呼客户') }}">{{ (i18n or {}).get('psn_pf_name_peercalls','对方称呼你') }}</label><input id="pe-pf-name-peercalls" type="text" placeholder="baba"></div>
+      <div class="field-row" style="flex:1">
+        <label>{{ (i18n or {}).get('psn_pf_name_address','双向称呼（爱称）') }}</label>
+        <div class="pf-hint">{{ (i18n or {}).get('psn_pf_name_address_moved','「你称呼对方 / 对方称呼你」已按客户单独设置——请在收件箱打开该客户的会话后设置。人设档里的旧值仍作为未单独设置时的默认。') }}</div>
+      </div>
     </div>
     {# #104（0831）：所在地字段——此前仅 YAML 可配，客户端无入口 → 天气/时差接地对运营不可达 #}
     <div class="ps-row">
@@ -3989,8 +3995,8 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetVal('pe-pf-name-english', nms.english);
   _pfSetVal('pe-pf-name-nickname', nms.nickname);
   _pfSetVal('pe-pf-name-usage-notes', nms.usage_notes);
-  _pfSetVal('pe-pf-name-callpeer', nms.call_peer);
-  _pfSetVal('pe-pf-name-peercalls', nms.peer_calls_you);
+  // #155：call_peer / peer_calls_you 两格已迁往联系人级（收件箱会话侧），
+  // 人设页不再渲染输入框；存量值仍在档案里当回落默认，保存时原样保留。
   // #104 所在地：字符串直填；dict（自定义 lat/lon，仅 YAML 可配）取展示名回填，
   // 并记录填入基准——collect 端「dict 且未改」不出键，防精确坐标被覆写成字符串
   (function(){
@@ -4063,13 +4069,19 @@ function _collectProfileTabPatch() {
   // gender：空 → 不含（除非原有，则出空串真正清掉）
   var g = _pfStr('pe-pf-gender');
   if (g || _pfNonEmpty(_pfOrig('gender'))) patch.gender = g;
-  // names：任一子键满足包含规则才带 names；带时四子键按各自规则
+  // names：任一子键满足包含规则才带 names；带时各子键按各自规则
   var namesOut = {};
   [['pe-pf-name-western','full_western'],['pe-pf-name-english','english'],
-   ['pe-pf-name-nickname','nickname'],['pe-pf-name-usage-notes','usage_notes'],
-   ['pe-pf-name-callpeer','call_peer'],['pe-pf-name-peercalls','peer_calls_you']].forEach(function(pair){
+   ['pe-pf-name-nickname','nickname'],['pe-pf-name-usage-notes','usage_notes']].forEach(function(pair){
     var v = _pfStr(pair[0]);
     if (v || _pfNonEmpty(_pfOrig('names', pair[1]))) namesOut[pair[1]] = v;
+  });
+  /* #155：call_peer / peer_calls_you 已迁往联系人级，人设页无输入框。
+     存量值必须原样回传——不带键会被后端按「清空」处理，把还在当回落默认用的
+     旧值抹掉（迁移未覆盖的会话会当场丢爱称）。 */
+  ['call_peer','peer_calls_you'].forEach(function(k){
+    var ov = _pfOrig('names', k);
+    if (_pfNonEmpty(ov)) namesOut[k] = ov;
   });
   if (Object.keys(namesOut).length) patch.names = namesOut;
   // #104 所在地：字符串城市名（引擎按 CITY_PRESETS/文本推断解析；"none"=显式关）。

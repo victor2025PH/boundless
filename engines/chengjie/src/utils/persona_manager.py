@@ -169,19 +169,50 @@ def _join_text_items(v: Any) -> str:
     return str(v or "").strip()
 
 
-def _build_address_pin(persona: Dict[str, Any]) -> str:
+def resolve_address_names_for_conv(
+    persona: Dict[str, Any], conversation_id: str = "",
+) -> Dict[str, str]:
+    """本次出话该用的双向称呼：**联系人级 > 人设级**（#155，2026-09-03）。
+
+    这两个值描述的是「这段客户关系」不是「这个人设」：同一人设服务一百个
+    客户，不可能对每个人都叫 babe。#155 把它们挪到联系人级
+    （``src.inbox.contact_names``），人设级保留为存量兼容读（升级即生效，
+    不必等运营逐个重填）。inbox store 不可用/无会话 id → 纯人设级=旧行为。
+    """
+    p_names = persona.get("names") if isinstance(persona, dict) else {}
+    if not isinstance(p_names, dict):
+        p_names = {}
+    fallback = {
+        "call_peer": str(p_names.get("call_peer") or "").strip(),
+        "peer_calls_you": str(p_names.get("peer_calls_you") or "").strip(),
+    }
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        return fallback
+    try:
+        from src.inbox.contact_names import resolve_address_names
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None:
+            return fallback
+        return resolve_address_names(store, cid, persona)
+    except Exception:
+        return fallback
+
+
+def _build_address_pin(
+    persona: Dict[str, Any], conversation_id: str = "",
+) -> str:
     """#24（0830）称呼双向硬钉子（full/compact 共用；无字段返回空串）。
 
-    字段：``names.call_peer``（你称呼对方）/``names.peer_calls_you``（对方
-    称呼你）。实锤：档案明写「称呼对方为 babe」仍被客户满屏「baba」带跑，
-    且记忆库的 AI 推断（「用户不喜欢被叫 babe」）在反向教唆——故钉子必须
-    显式声明「绝不互换 + 档案压过记忆推断」。
+    取值：联系人级 > 人设级（#155 归属层级，见
+    ``resolve_address_names_for_conv``）。实锤：档案明写「称呼对方为 babe」
+    仍被客户满屏「baba」带跑，且记忆库的 AI 推断（「用户不喜欢被叫 babe」）
+    在反向教唆——故钉子必须显式声明「绝不互换 + 档案压过记忆推断」。
     """
-    names = persona.get("names") or {}
-    if not isinstance(names, dict):
-        return ""
-    call_peer = str(names.get("call_peer") or "").strip()
-    peer_calls = str(names.get("peer_calls_you") or "").strip()
+    resolved = resolve_address_names_for_conv(persona, conversation_id)
+    call_peer = resolved.get("call_peer") or ""
+    peer_calls = resolved.get("peer_calls_you") or ""
     if not (call_peer or peer_calls):
         return ""
     parts = []
@@ -1509,6 +1540,7 @@ class PersonaManager:
         funnel_stage: str = "",
         fallback_name: str = "",
         record_usage: bool = True,
+        conversation_id: str = "",
     ) -> str:
         """供 AI 系统提示拼接。detail=full 完整；compact 仅核心句+禁忌，减轻与域 system_prompt 重复。
         name_override: 若 config 中配置了 ai.ai_name，应传入以覆盖域 persona.yaml 里的默认名，避免与主系统提示冲突。
@@ -1519,6 +1551,9 @@ class PersonaManager:
             防止回落到域标签「线上陪伴」被当名字念出。
         record_usage: 近7日活跃统计埋点开关。生产回复链路保持默认 True；
             预览/管理类调用（web 预览、routes 下的试装配）应传 False 免刷虚计数。
+        conversation_id: ``platform:account_id:chat_key``（#155）。称呼硬钉子
+            据此取**联系人级**爱称（客户关系属性，不是人设属性）；不传=纯人设级
+            ＝旧行为，预览/管理类调用不必传。
         """
         p, _tier = self.get_persona_with_tier(chat_id, account_persona_id)
         # 近7日活跃统计埋点：本方法是所有生产回复链路（ai_client._build_system_instruction）
@@ -1547,13 +1582,15 @@ class PersonaManager:
             detail = "full"
         if detail == "compact":
             return self._format_persona_compact(
-                p, name_override=name_override, fallback_name=fallback_name
+                p, name_override=name_override, fallback_name=fallback_name,
+                conversation_id=conversation_id,
             )
         if detail == "none":
             return ""
         return self._format_persona_instructions(
             p, name_override=name_override, platform=platform,
             funnel_stage=funnel_stage, fallback_name=fallback_name,
+            conversation_id=conversation_id,
         )
 
     @staticmethod
@@ -1626,7 +1663,7 @@ class PersonaManager:
 
     def _format_persona_compact(
         self, persona: Dict[str, Any], *, name_override: str = "",
-        fallback_name: str = "",
+        fallback_name: str = "", conversation_id: str = "",
     ) -> str:
         persona = self.normalize_profile_shape(persona)
         name = self.resolve_spoken_name(
@@ -1660,8 +1697,8 @@ class PersonaManager:
                     + "（被问英文名/全名时如实回答，别编别的）。"
                 )
         # #24：称呼双向硬钉子——compact 是生产主用格式，称呼互换是当场穿帮
-        # 面（babe/baba 实锤），这条不能省。
-        _addr_c = _build_address_pin(persona)
+        # 面（babe/baba 实锤），这条不能省。#155：取值优先联系人级。
+        _addr_c = _build_address_pin(persona, conversation_id)
         if _addr_c:
             lines.append(_addr_c)
         # K1：年龄/性别事实钉子在 compact 也保留——「被问年龄答错」是最容易被
@@ -1847,6 +1884,7 @@ class PersonaManager:
     def _format_persona_instructions(
         self, persona: Dict[str, Any], *, name_override: str = "",
         platform: str = "", funnel_stage: str = "", fallback_name: str = "",
+        conversation_id: str = "",
     ) -> str:
         """Convert persona.yaml into natural language instructions for the LLM."""
         persona = self.normalize_profile_shape(persona)
@@ -1925,7 +1963,8 @@ class PersonaManager:
         # 仍被客户满屏「baba」带跑（AI 模仿着叫回去）。称呼字段必须是硬约束：
         # 两个方向绝不互换，且显式压过记忆推断（记忆库曾有「用户不喜欢被叫
         # babe」的 AI 推断在反向教唆——档案是运营明示，永远优先）。
-        _addr = _build_address_pin(persona)
+        # #155：取值优先联系人级（爱称是客户关系属性，不是人设属性）。
+        _addr = _build_address_pin(persona, conversation_id)
         if _addr:
             lines.append(_addr)
 

@@ -303,6 +303,21 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     web_app.state.inbox_store = assistant.inbox_store
                     assistant.logger.info("统一收件箱持久层已挂载（%s）", _inbox_db)
 
+                    # #155（2026-09-03 人设归属层级）：把人设档里的双向称呼
+                    # 一次性落成其已绑定会话的**联系人级默认值**——爱称是客户
+                    # 关系属性，此后各会话可独立改。幂等（联系人级已有值不覆盖）、
+                    # 只搬同一个值，迁移前后生效爱称逐字节一致。
+                    try:
+                        from src.inbox.contact_names import migrate_all_personas
+                        _cn_n = migrate_all_personas(assistant.inbox_store)
+                        if _cn_n:
+                            assistant.logger.info(
+                                "#155 联系人级称呼存量迁移完成：%d 个会话", _cn_n)
+                    except Exception:
+                        assistant.logger.debug(
+                            "#155 联系人级称呼迁移跳过（不影响启动）",
+                            exc_info=True)
+
                     # ── Phase B：统一草稿/审批层（read-through 聚合 4 平台源表） ──
                     from src.inbox.drafts import DraftService
                     from src.web.routes.drafts_routes import register_drafts_routes

@@ -785,6 +785,10 @@ ZH = {
     "psn_pf_location_tip": "人设常驻城市（如 马尼拉 / Vancouver）——驱动当地时间、时差桥与真实天气接地（#104：不填则从背景文本自动推断；填 none 显式关闭）",
     "psn_pf_mem_count": "{n} 条",
     "psn_pf_mem_hint": "一行一条，写可被追问验证的具体事实",
+    "psn_pf_name_address": "双向称呼（爱称）",
+    # #155（0903）：两格已按客户单独设置——同一人设服务一百个客户，爱称不该
+    # 长在人设档里（改一次影响全部客户）。人设页只留去处说明。
+    "psn_pf_name_address_moved": "「你称呼对方 / 对方称呼你」已改为按客户单独设置——请在收件箱打开该客户的会话后设置。人设档里的旧值仍作为未单独设置时的默认。",
     "psn_pf_name_callpeer": "你称呼对方（爱称）",
     "psn_pf_name_callpeer_tip": "AI 对客户的固定爱称（如 babe）——注入为硬约束，绝不跟着客户的叫法互换，并压过 AI 推断记忆",
     "psn_pf_name_english": "英文名",
@@ -1851,6 +1855,8 @@ EN = {
     "psn_pf_location_tip": "The persona's home city (e.g. Manila / Vancouver) — drives local time, timezone bridging and real weather grounding (#104: leave empty to auto-infer from background text; 'none' disables explicitly)",
     "psn_pf_mem_count": "{n} items",
     "psn_pf_mem_hint": "One per line; concrete facts that can survive follow-up questions",
+    "psn_pf_name_address": "Pet names (both directions)",
+    "psn_pf_name_address_moved": "\"You call them / They call you\" is now set per customer — open that customer's conversation in the inbox to set it. The value saved on the persona still applies to conversations that have no per-customer setting.",
     "psn_pf_name_callpeer": "You call them (pet name)",
     "psn_pf_name_callpeer_tip": "The AI's fixed pet name for the customer (e.g. babe) — injected as a hard constraint, never swapped to mimic the customer, overrides AI-inferred memories",
     "psn_pf_name_english": "English name",

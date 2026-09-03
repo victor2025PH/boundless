@@ -333,13 +333,28 @@ def test_ensure_default_persona_pending_keeps_explicit_binding():
 
 
 def test_ensure_default_persona_normal_account_unaffected(monkeypatch):
+    """#156 起「补默认人设」是 opt-in（auto_attach_default_persona）——开着时
+    普通账号行为与旧版逐字节一致（本例钉的就是这条兼容路径）。"""
     from src.ai import persona_voice as pv
     reg = FakeRegistry()
     reg.upsert("messenger", "A")
     monkeypatch.setattr(pv, "default_account_persona_id",
                         lambda cfg, plat: "gu_jia")
-    assert pv.ensure_account_default_persona(reg, "messenger", "A", {}) == "gu_jia"
+    cfg = {"platform_login": {"auto_attach_default_persona": True}}
+    assert pv.ensure_account_default_persona(
+        reg, "messenger", "A", cfg) == "gu_jia"
     assert reg.get("messenger", "A")["meta"]["persona_id"] == "gu_jia"
+
+
+def test_ensure_default_persona_default_is_wait_for_choice(monkeypatch):
+    """默认（未 opt-in）：不写库、返回空——等人选（#156）。"""
+    from src.ai import persona_voice as pv
+    reg = FakeRegistry()
+    reg.upsert("messenger", "B")
+    monkeypatch.setattr(pv, "default_account_persona_id",
+                        lambda cfg, plat: "gu_jia")
+    assert pv.ensure_account_default_persona(reg, "messenger", "B", {}) == ""
+    assert "persona_id" not in reg.get("messenger", "B")["meta"]
 
 
 # ── 6. session-status 接线（wiring 契约）────────────────────────────────

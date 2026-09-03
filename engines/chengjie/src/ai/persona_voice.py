@@ -625,6 +625,24 @@ def ensure_account_default_persona(
                     break
         if existing:
             return existing
+        # ── #156（2026-09-03）：新账号不自动绑定人设 ──────────────────────
+        # 「上线补默认人设」是便利功能，代价是**用户从没选过，AI 就已经以某个
+        # 身份在说话了**：账号栏看不出这号用的是谁（显示的是自动补的那个），
+        # 换人设要先意识到「原来已经绑了」。与 #63「按账号确认接管」同一哲学
+        # ——身份和接管方式都该是人的显式决定。未选期间返回空串：账号栏显示
+        # 「未选人设」引导选择，AI 不以任何身份代答（无人设 → 上游各链自然
+        # 降级；A 线 auto_ai 亦不会披着别人的皮上阵）。
+        # 显式开 ``platform_login.auto_attach_default_persona: true`` 回旧行为
+        # （批量铺号的部署仍可要便利，但那是显式选择）。
+        if not _auto_attach_enabled(full_config):
+            try:
+                import logging
+                logging.getLogger(__name__).info(
+                    "[persona] 新账号等待用户选择人设（#156 不自动绑定）"
+                    " platform=%s account=%s", plat, aid)
+            except Exception:
+                pass
+            return ""
         default = default_account_persona_id(full_config, plat)
         if not default:
             return ""
@@ -644,6 +662,68 @@ def ensure_account_default_persona(
         return default
     except Exception:
         return ""
+
+
+def _auto_attach_enabled(full_config: Optional[Dict[str, Any]]) -> bool:
+    """``platform_login.auto_attach_default_persona``（#156 起默认 False）。
+
+    True＝回到「上线自动补默认人设」的旧行为（批量铺号部署可显式要这份便利）。
+    读不到按新行为（不自动绑）——身份是人的显式决定，判不出时宁可等人选。
+    """
+    try:
+        pl = (full_config or {}).get("platform_login") or {}
+        return bool(pl.get("auto_attach_default_persona", False))
+    except Exception:
+        return False
+
+
+def account_persona_unselected(
+    full_config: Optional[Dict[str, Any]],
+    platform: str,
+    account_id: str,
+    *,
+    registry: Any = None,
+) -> bool:
+    """该账号是否**尚未由人选定人设**（#156，2026-09-03）。
+
+    判据＝注册表 meta 里没有显式绑定（``persona_id`` / ``persona_ids``）。
+    刻意**不看**配置里的全局默认——那正是问题所在：配置默认让「没人选过」
+    看起来像「已经选好了」，AI 于是披着一个用户从未挑过的身份上阵。
+
+    两个消费方：账号栏显示「未选人设」引导选择；
+    ``effective_automation`` 据此封顶 review（未选期间 AI 不代答，与 #63
+    「按账号确认接管」同哲学——身份和接管方式都得是人的显式决定）。
+
+    ``auto_attach_default_persona`` 开＝运营要旧的自动绑定便利 → 恒 False
+    （那种部署里「没绑」只是还没上线过，不该拦）。
+
+    **注册表里根本没有这一行 → False**（不是「没选」而是「不知道」）：
+    A 线 telegram default 号、测试/CLI 装配、注册表暂不可用都属这类，把它们
+    一律封成 review 就是拿判不出当判有罪。判不出一律 fail-open——绝不因为
+    判定本身出错把在跑的账号静默降级。
+    """
+    try:
+        if _auto_attach_enabled(full_config):
+            return False
+        plat = str(platform or "").strip().lower()
+        aid = str(account_id or "").strip()
+        if not plat or not aid:
+            return False
+        if registry is None:
+            from src.integrations.account_registry import get_account_registry
+            registry = get_account_registry()
+        row = registry.get(plat, aid)
+        if not row:
+            return False          # 无此行＝判不出（见 docstring），不是未选
+        meta = row.get("meta") or {}
+        if str(meta.get("persona_id") or "").strip():
+            return False
+        for p in (meta.get("persona_ids") or []):
+            if str(p or "").strip():
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def conv_override_enabled(full_config: Optional[Dict[str, Any]]) -> bool:
