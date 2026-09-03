@@ -43,7 +43,7 @@ $Work    = "C:\zhiliao-agent"
 $Snap    = Join-Path $Work "snapshots"
 New-Item -ItemType Directory -Force -Path $Snap | Out-Null
 
-$ScriptVer = "1.3.0"
+$ScriptVer = "1.3.1"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $windowStart = (Get-Date).AddMinutes(-$Since)
 $report = New-Object System.Collections.Generic.List[string]
@@ -84,6 +84,22 @@ function AppVersion {
     return "unknown"
 }
 
+function HeaderSafe([string]$s) {
+    # HTTP 头只收 ASCII：PS 5.1 的 Invoke-RestMethod 对含中文的头值直接抛
+    # 「Specified value has invalid Control characters」，请求根本发不出去（0903 23:04~0904
+    # 两机 6 次 UPLOAD_FAILED 全是这个，服务器一条请求都没收到）。非 ASCII 字符按 UTF-8
+    # 百分号编码，ASCII（含前缀 field-agent:xx: 的冒号）原样保留，值守按前缀识别不受影响；
+    # 完整中文备注仍在报告首行「- note:」里。
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $s.ToCharArray()) {
+        $c = [int]$ch
+        if ($c -ge 0x20 -and $c -le 0x7E) { [void]$sb.Append($ch) }
+        elseif ($c -lt 0x20 -or $c -eq 0x7F) { [void]$sb.Append(' ') }
+        else { [void]$sb.Append([uri]::EscapeDataString([string]$ch)) }
+    }
+    return $sb.ToString()
+}
+$script:LastUploadError = ""
 function Send-Report([string]$path) {
     # 上传一份报告，失败按 5/15/30s 退避重试 3 次（共 4 发）。返回短码或空串。
     $zipPath = Join-Path $Work "up.zip"
@@ -91,7 +107,7 @@ function Send-Report([string]$path) {
     Compress-Archive -Path $path -DestinationPath $zipPath -Force
     $noteS = ("field-agent:{0}:{1}:v{3}:{2}" -f $Owner, $Task, ($Note -replace '[\r\n"]', ' '), $ScriptVer)
     $noteS = $noteS.Substring(0, [Math]::Min(190, $noteS.Length))
-    $metaJson = @{ app = $ver; fp = $Fp; note = $noteS } | ConvertTo-Json -Compress
+    $metaJson = @{ app = $ver; fp = $Fp; note = (HeaderSafe $noteS) } | ConvertTo-Json -Compress
     $waits = @(0, 5, 15, 30)
     for ($i = 0; $i -lt $waits.Count; $i++) {
         if ($waits[$i] -gt 0) {
@@ -103,7 +119,12 @@ function Send-Report([string]$path) {
         try {
             $r = Invoke-RestMethod -Uri "https://bd2026.cc/api/diag-upload" -Method Post -InFile $zipPath -ContentType "application/zip" -Headers @{ "x-diag-meta" = $metaJson } -TimeoutSec 60
             if ($r.ok -and $r.code) { return [string]$r.code }
-        } catch {}
+            $script:LastUploadError = "server replied without code"
+        } catch {
+            # 空 catch 曾把真实原因吞掉（用户只见 UPLOAD_FAILED）；留最后一次异常给 CODE 行带出。
+            $script:LastUploadError = ($_.Exception.Message -replace '[\r\n]+', ' ')
+            Write-Host ("upload error: {0}" -f $script:LastUploadError)
+        }
     }
     return ""
 }
@@ -121,7 +142,7 @@ if ($Task -eq "reupload") {
     Write-Output "report=$($last.FullName)"
     $code = Send-Report $last.FullName
     if ($code) { Write-Output "CODE=$code"; exit 0 }
-    Write-Output "CODE=UPLOAD_FAILED (上传失败（网络），报告已保存在 $($last.FullName)，可把 .md 直接发群)"
+    Write-Output "CODE=UPLOAD_FAILED (上传失败，报告已保存在 $($last.FullName)，可把 .md 直接发群；原因: $script:LastUploadError)"
     exit 2
 }
 
@@ -180,5 +201,5 @@ if ((Get-Item $mdPath).Length -lt 40) {
 Write-Output "report=$mdPath"
 $code = Send-Report $mdPath
 if ($code) { Write-Output "CODE=$code"; exit 0 }
-Write-Output "CODE=UPLOAD_FAILED (上传失败（网络），报告已保存在 $mdPath，可把 .md 直接发群；网络恢复后可跑 -Task reupload 重传)"
+Write-Output "CODE=UPLOAD_FAILED (上传失败，报告已保存在 $mdPath，可把 .md 直接发群；网络恢复后可跑 -Task reupload 重传；原因: $script:LastUploadError)"
 exit 2
