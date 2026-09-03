@@ -37,10 +37,18 @@ param(
     [string]$Key             = "D:\chengjie-instances\.ops\vision_key",
     [int]   $Port176         = 18411,
     [int]   $Port140         = 18412,
+    # 2026-09-03: ASR (198:8765 -> 18415) and clone-TTS (104:7865 -> 18413) legs were NOT probed.
+    # 10:08-11:04 the whole 117 uplink was down; every packaged client lost speech-to-text for 56 min
+    # (gateway asr_fail x176, zero success) and nobody knew: this watchdog only looked at the two
+    # vision legs AND logged ssh_fail as a silent WARN. Both gaps closed below.
+    [int]   $PortAsr         = 18415,
+    [int]   $PortTts         = 18413,
     [string]$TunnelTask      = "VisionTunnel",
     [int]   $StrikeLimit     = 2,
     [int]   $RestartCooldownMin = 15,
     [int]   $BootWaitSec     = 120,
+    # consecutive ssh_fail runs (5 min apart) before raising the "uplink down" alert; 3 = ~15 min
+    [int]   $SshFailAlertAfter = 3,
     [switch]$ForceRestart,
     [switch]$DryRun,
     [string]$OpsDir          = "D:\chengjie-instances\.ops",
@@ -95,14 +103,20 @@ function Send-Alert([string]$msg) {
 $U = [char]0x8bc6 + [char]0x56fe  # "shi tu" (image recognition)
 $ALERT_DOWN = "[ChatX] " + $U + [char]0x9694 + [char]0x79bb + " tunnel watchdog: restart did NOT recover. Image recognition is DOWN for all installed clients (gateway 502). Check 117->VPS tunnel / 176 / 140 GPU. Log: vision_tunnel_watchdog.log"
 $ALERT_OK   = "[ChatX] " + $U + " tunnel recovered; image recognition back to normal."
+$ALERT_UPLINK_DOWN = "[ChatX] 117 uplink DOWN: watchdog cannot reach VPS for 15+ min. ALL relay legs (vision/ASR/clone-TTS) are 502 for every installed client. Check 117 NIC/route (0827 + 0903 same signature). Log: vision_tunnel_watchdog.log / net_probe_117.log"
+$ALERT_UPLINK_OK   = "[ChatX] 117 uplink recovered; relay legs back."
+$ALERT_LEG_DOWN    = "[ChatX] relay leg DOWN (tunnel itself OK): {0}. That capability is 502 for all installed clients; check the GPU host behind it."
 
 function Read-State {
     try {
         $s = Get-Content $StatePath -Raw | ConvertFrom-Json
         return @{ strikes = [int]$s.strikes; last_restart_epoch = [double]$s.last_restart_epoch;
-                  alerted = [bool]$s.alerted }
+                  alerted = [bool]$s.alerted;
+                  ssh_fails = [int]$s.ssh_fails; uplink_alerted = [bool]$s.uplink_alerted;
+                  leg_alerted = [string]$s.leg_alerted }
     } catch {
-        return @{ strikes = 0; last_restart_epoch = 0.0; alerted = $false }
+        return @{ strikes = 0; last_restart_epoch = 0.0; alerted = $false;
+                  ssh_fails = 0; uplink_alerted = $false; leg_alerted = "" }
     }
 }
 function Save-State($st) { try { ($st | ConvertTo-Json -Compress) | Set-Content -Path $StatePath } catch {} }
@@ -122,17 +136,20 @@ function Invoke-Ssh([string]$remoteCmd, [int]$timeoutSec = 20) {
 }
 
 function Get-TunnelHealth {
-    # One SSH round-trip probes both legs. For each port: is it LISTENing, and does curl /api/tags
-    # (Ollama, zero-GPU) return 200 through the forward. Emits a compact machine-parsable block.
+    # One SSH round-trip probes all legs. Vision legs: curl /api/tags (Ollama, zero-GPU) must be 200.
+    # ASR/TTS legs have no cheap GET; any HTTP status from the forward (404/405/422) proves the leg
+    # is alive end-to-end -- "000" means the forward is dead. Emits a compact machine-parsable block.
     # MUST be a single line: a multi-line here-string carries CRLF, and the CR breaks remote bash.
-    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done"
-    $r = Invoke-Ssh $probe 20
+    $probe = "for P in $Port176 $Port140; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/api/tags 2>/dev/null); echo leg `$P listen=`$L http=`$H; done; for P in $PortAsr $PortTts; do L=`$(ss -ltn 'sport = :'`$P 2>/dev/null | grep -c ':'`$P' '); H=`$(curl -s -m 6 -o /dev/null -w '%{http_code}' http://127.0.0.1:`$P/ 2>/dev/null); echo aux `$P listen=`$L http=`$H; done"
+    $r = Invoke-Ssh $probe 25
     if (-not $r.ok -or -not $r.out) { return @{ verdict = "ssh_fail"; detail = "ssh to VPS failed" } }
 
-    $legs = @{}
+    $legs = @{}; $aux = @{}
     foreach ($line in ($r.out -split "`n")) {
         if ($line -match "leg (\d+) listen=(\d+) http=(\d+)") {
             $legs[[int]$Matches[1]] = @{ listen = [int]$Matches[2]; http = [int]$Matches[3] }
+        } elseif ($line -match "aux (\d+) listen=(\d+) http=(\d+)") {
+            $aux[[int]$Matches[1]] = @{ listen = [int]$Matches[2]; http = [int]$Matches[3] }
         }
     }
     if ($legs.Count -eq 0) { return @{ verdict = "ssh_fail"; detail = "unparseable probe: $($r.out)" } }
@@ -141,13 +158,35 @@ function Get-TunnelHealth {
     $listening = @($legs.GetEnumerator() | Where-Object { $_.Value.listen -ge 1 }).Count
     $detail = ($legs.GetEnumerator() | Sort-Object Name |
         ForEach-Object { "p$($_.Key):listen=$($_.Value.listen),http=$($_.Value.http)" }) -join " "
+    # aux legs: alive = any HTTP status (the forward reached a real server); 000 = dead leg
+    $auxDead = @($aux.GetEnumerator() | Where-Object { $_.Value.http -eq 0 } | ForEach-Object {
+        if ($_.Key -eq $PortAsr) { "ASR:$($_.Key)" } elseif ($_.Key -eq $PortTts) { "TTS:$($_.Key)" } else { "aux:$($_.Key)" } })
+    $detail += " " + (($aux.GetEnumerator() | Sort-Object Name |
+        ForEach-Object { "a$($_.Key):listen=$($_.Value.listen),http=$($_.Value.http)" }) -join " ")
 
     if ($healthy -ge 1) {
-        if ($healthy -lt $legs.Count) { return @{ verdict = "warn_partial"; detail = $detail } }
-        return @{ verdict = "ok"; detail = $detail }
+        if ($healthy -lt $legs.Count) { return @{ verdict = "warn_partial"; detail = $detail; aux_dead = $auxDead } }
+        return @{ verdict = "ok"; detail = $detail; aux_dead = $auxDead }
     }
-    if ($listening -ge 1) { return @{ verdict = "zombie"; detail = $detail } }  # LISTEN but dead = zombie fwd
-    return @{ verdict = "dead"; detail = $detail }                              # no LISTEN = tunnel down
+    if ($listening -ge 1) { return @{ verdict = "zombie"; detail = $detail; aux_dead = $auxDead } }
+    return @{ verdict = "dead"; detail = $detail; aux_dead = $auxDead }
+}
+
+function Check-AuxLegs($h, $st) {
+    # ASR/TTS leg dead while tunnel is OK = GPU host behind it is down (restarting the tunnel would
+    # not help). Alert once per outage, clear once recovered. Mutates $st; caller saves.
+    $dead = @($h.aux_dead)
+    $key = ($dead -join ",")
+    if ($dead.Count -gt 0) {
+        if ($st.leg_alerted -ne $key) {
+            Write-Log "LEG" "aux leg(s) down: $key"
+            Send-Alert ($ALERT_LEG_DOWN -f $key)
+            $st.leg_alerted = $key
+        }
+    } elseif ($st.leg_alerted) {
+        Write-Log "LEG" "aux legs recovered ($($st.leg_alerted))"
+        $st.leg_alerted = ""
+    }
 }
 
 function Restart-Tunnel {
@@ -185,11 +224,18 @@ if ($ForceRestart) {
 
 $h = Get-TunnelHealth
 
+# uplink recovered bookkeeping (any verdict other than ssh_fail means the VPS answered)
+if ($h.verdict -ne "ssh_fail") {
+    if ($st.uplink_alerted) { Send-Alert $ALERT_UPLINK_OK; Write-Log "UPLINK" "recovered after $($st.ssh_fails) failed probes" }
+    $st.ssh_fails = 0; $st.uplink_alerted = $false
+}
+
 switch ($h.verdict) {
     "ok" {
         if ($st.strikes -gt 0) { Write-Log "OK" "tunnel recovered ($($h.detail)), strikes reset" }
         else { Write-Log "OK" "tunnel healthy ($($h.detail))" }
         if ($st.alerted) { Send-Alert $ALERT_OK; $st.alerted = $false }
+        Check-AuxLegs $h $st
         $st.strikes = 0; Save-State $st; exit 0
     }
     "warn_partial" {
@@ -197,12 +243,21 @@ switch ($h.verdict) {
         # leg. Restarting the tunnel would not fix a GPU-host outage, so only warn.
         Write-Log "WARN" "one leg down, tunnel OK, gateway uses live leg ($($h.detail))"
         if ($st.alerted) { Send-Alert $ALERT_OK; $st.alerted = $false }
+        Check-AuxLegs $h $st
         $st.strikes = 0; Save-State $st; exit 0
     }
     "ssh_fail" {
-        # Cannot reach the VPS to probe; restarting the LOCAL tunnel would not help. Do not touch.
-        Write-Log "WARN" "cannot probe VPS ($($h.detail)); skipping (network issue, not local tunnel)"
-        exit 0
+        # Cannot reach the VPS to probe; restarting the LOCAL tunnel would not help. Do not touch the
+        # tunnel -- but do NOT stay silent either: 2026-09-03 the 117 uplink was down 10:08-11:04 and
+        # this branch logged 12 quiet WARNs while every client lost ASR/vision/clone-TTS. After
+        # $SshFailAlertAfter consecutive failures (~15 min) raise the uplink alert (once per outage).
+        $st.ssh_fails = [int]$st.ssh_fails + 1
+        Write-Log "WARN" "cannot probe VPS ($($h.detail)); consecutive=$($st.ssh_fails) (network issue, not local tunnel)"
+        if ($st.ssh_fails -ge $SshFailAlertAfter -and -not $st.uplink_alerted) {
+            Send-Alert $ALERT_UPLINK_DOWN
+            $st.uplink_alerted = $true
+        }
+        Save-State $st; exit 0
     }
 }
 
