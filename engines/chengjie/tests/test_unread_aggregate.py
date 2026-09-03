@@ -311,6 +311,38 @@ def test_mark_account_read_clears_badge_and_drilldown(store):
                          "account_id": "acc"}).json()["count"] == 0
 
 
+# ══ 5. 查询形状（短路前置 + 覆盖索引） ══════════════════════════════════════
+
+def test_covering_index_created_on_first_query(store):
+    """`_LISTABLE` 的 EXISTS 按 (conversation_id, deleted_at) 探查，既有
+    idx_msg_conv_ts 是 (conversation_id, ts) → 要回表读 deleted_at。本模块
+    自建覆盖索引；索引与查询形状同生共死，放一起才不会「改了查询忘了索引」。"""
+    cn = __import__("src.inbox.unread_aggregate", fromlist=["x"])
+    cn._ensured.clear()
+    unread_maps(store)
+    with store._lock:
+        names = {r[0] for r in store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    assert "idx_msg_conv_live" in names
+    # 索引建不上也只影响快慢不影响对错（建表失败 → 静默降级，结果照旧）
+    cn._ensured.clear()
+
+
+def test_short_circuit_keeps_results_identical(store):
+    """把「有没有未读」提到 EXISTS 之前是**性能**优化，不得改变任何结果：
+    已读净 / 无消息 / 墓碑 三类照样不计，真未读照样一条不漏。"""
+    store.ingest_batch(_conv("telegram:acc:s1", unread=2, last_ts=100),
+                       [_msg("telegram:acc:s1", "m1", "in", 100)])
+    store.ingest_batch(_conv("telegram:acc:s2", unread=5, last_ts=90),
+                       [_msg("telegram:acc:s2", "m2", "in", 90)])
+    store.mark_conversation_read("telegram:acc:s2")          # 已读净 → 不计
+    store.upsert_protocol_chats("telegram", "acc", [
+        {"chat_key": "s3", "unread": 9, "ts": 80}])          # 零消息 → 不计
+    assert _badge(store) == 2
+    assert [c["chat_key"] for c in
+            unread_conversations(store, "telegram", "acc")] == ["s1"]
+
+
 def test_read_only_never_writes(store):
     """聚合是只读的：跑一轮不得改动任何未读/水位（徽标绝不能偷偷清账）。"""
     store.ingest_batch(_conv("telegram:acc:w1", unread=3, last_ts=100),
