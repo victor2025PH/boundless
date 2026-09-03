@@ -18823,6 +18823,11 @@ function _loadXlateForConv(c){
     // #139-3 粤语豁免：粤语会话的 language 列是 zh，同语抑制会把「收→中」默认关掉
     _xlateIn=(_def && c && _sameLang(_def,c.language) && !_convLooksYue(c))?'':_def;
   }
+  /* #154：bd.out（浏览器全局默认「发→X」）只作本机 UI 初值，**绝不**被同步成
+     另一个会话的服务端铆定——旧链路 _persistXlatePrefs→_syncConvXlateOutSrv 在
+     任何翻译偏好变动时把当时内存里的 _xlateOut 打上去，换会话未 hydrate 时它是
+     空的，一次「收→」改动就把 A 会话铆死的 en 删了。服务端值随后由
+     _hydrateConvXlateOut 异步覆盖（非空优先）。 */
   _xlateOut=(convEntry&&convEntry.out)||bd.out||'';
   _outPreview=!!((convEntry&&convEntry.preview!==undefined)?convEntry.preview:bd.preview);
   _xlBack=!!((convEntry&&convEntry.back!==undefined)?convEntry.back
@@ -18839,6 +18844,7 @@ function _loadXlateForConv(c){
   _loadConvPrefEngine(c);
   _xlServerDefaultApplicable=!hasConvIn;   // P3：仅无会话级 pref 时，服务端运营默认才可覆盖
   _loadServerDefaultLang(c);
+  _hydrateConvXlateOut(c);            // #154：「发→X」以服务端事实源为准
   _updateEngineHint();
   _updateXlStatus();
   _syncTopXlate();                    // P1：同步顶部常驻「译文语言」控件
@@ -19007,12 +19013,16 @@ function _renderEngineChips(matrix){
 }
 function _onXlateChange(){
   const si=document.getElementById('xlate-in'), so=document.getElementById('xlate-out');
+  const prevOut=_xlateOut;
   _xlateIn=si?si.value:''; _xlateOut=so?so.value:'';
   const bk=document.getElementById('xl-back-chk'); if(bk) _xlBack=!!bk.checked;   // P0-XL3
   _xlServerDefaultApplicable=false;   // P3：坐席手改即成会话级偏好，禁止服务端默认事后覆盖
   if(si) si.classList.toggle('on',!!_xlateIn);
   if(so) so.classList.toggle('on',!!_xlateOut);
   _persistXlatePrefs();
+  /* #154：只有「发→X」真被改动才写服务端事实源——改「收→」/语气/预览一律不碰
+     铆定（旧链路在这些路径上把可能为空的 _xlateOut 同步上去，等于程序清空）。 */
+  if(_xlateOut!==prevOut) _syncConvXlateOutSrv('ui_select');
   _resetOutPreview();
   _updateEngineHint();
   _updateXlStatus();
@@ -19030,29 +19040,68 @@ function _persistXlatePrefs(){
   // 同步全局默认：用户的最新选择成为新会话的默认（开了到处开、关了到处关）
   prefs.__default__=entry;
   try{ localStorage.setItem(_XL_KEY,JSON.stringify(prefs)); }catch(_){}
-  _syncConvXlateOutSrv();
+  /* #154：这里**不再**同步服务端。持久化会被语气/预览/反译等一切偏好变动调用，
+     而 _xlateOut 此刻可能只是「还没 hydrate 的空值」——一次无关改动就把会话
+     铆定删了（telegram:7331682688:8852939166 实锤）。服务端只由
+     _onXlateChange 里「#xlate-out 真被改」那一路写（source=ui_select）。 */
 }
 /* B67（实施67 P1-8）：「发→X」同步到服务端会话级事实源——此前只存 localStorage，
    AI 自动链（即时应答/主动消息）看不见用户意图，中文原样发给英文客户。
    best-effort + 特性探测 fail-soft（旧后端 404 后本会话期不再重试，行为=旧）。
-   只在值真变化时发（去抖：同会话同值不重复打）。 */
+   #154：清除必须显式 clear:true（服务端对裸空串 no-op）；source 进审计表。 */
 let _convXlOutFeat=null;            // null=未探测 / false=旧后端
 const _convXlOutSent={};            // convKey → 上次已同步值
-function _syncConvXlateOutSrv(){
+function _syncConvXlateOutSrv(source){
   try{
     if(_convXlOutFeat===false || !selectedChat) return;
     const key=convKey(selectedChat);
     const val=String(_xlateOut||'');
     if(_convXlOutSent[key]===val) return;
+    const body={platform:selectedChat.platform,
+      account_id:selectedChat.account_id||'default',
+      chat_key:selectedChat.chat_key,lang:val,
+      source:String(source||'ui_select')};
+    if(!val){ body.clear=true; body.source='clear'; }   // 坐席真的选了「不译」
     apiFetch('/api/unified-inbox/conv-xlate-out',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({platform:selectedChat.platform,
-        account_id:selectedChat.account_id||'default',
-        chat_key:selectedChat.chat_key,lang:val})
+      body:JSON.stringify(body)
     }).then(function(r){
       if(r&&r.status===404){ _convXlOutFeat=false; return; }
       _convXlOutFeat=true; _convXlOutSent[key]=val;
     }).catch(function(_){});
+  }catch(_){}
+}
+/* #154：切会话时以服务端「发→X」为准 hydrate（服务端非空优先，并回写
+   localStorage 会话级条目）——此前只从 localStorage 灌，清缓存/换机/换浏览器
+   后 UI 显示「不译」而服务端仍铆着，坐席看到的和 AI 用的不是一回事。
+   服务端为空＝没设过，保留本地初值（含浏览器默认），但**不**推回服务端。 */
+async function _hydrateConvXlateOut(c){
+  try{
+    if(!c || _convXlOutFeat===false) return;
+    const qs='platform='+encodeURIComponent(c.platform||'')
+      +'&account_id='+encodeURIComponent(c.account_id||'default')
+      +'&chat_key='+encodeURIComponent(c.chat_key||'');
+    const r=await apiFetch('/api/unified-inbox/conv-xlate-out?'+qs);
+    if(r&&r.status===404){ _convXlOutFeat=false; return; }
+    _convXlOutFeat=true;
+    const d=await r.json();
+    if(selectedChat!==c) return;                 // 已切走 → 丢弃过期响应
+    const srv=String((d&&d.ok&&d.lang)||'');
+    const key=convKey(c);
+    _convXlOutSent[key]=srv;                     // 去抖基线＝服务端真值
+    if(!srv || srv===_xlateOut) return;
+    _xlateOut=srv;
+    const so=document.getElementById('xlate-out');
+    if(so){ so.value=srv; so.classList.toggle('on',!!srv); }
+    try{
+      const prefs=_xlatePrefs();
+      const entry=prefs[key]||{};
+      entry.out=srv;
+      prefs[key]=entry;
+      localStorage.setItem(_XL_KEY,JSON.stringify(prefs));
+    }catch(_){}
+    _resetOutPreview();
+    _updateEngineHint(); _updateXlStatus(); _syncLangWarn(); _syncVoiceXlRow();
   }catch(_){}
 }
 /* ── D 批（2026-08-15）：手发语言错配警示 ─────────────────────────────
@@ -21275,7 +21324,7 @@ async function _onDocXlateRun(){
   const out=document.getElementById('docxl-result');
   const btn=document.getElementById('docxl-run-btn');
   if(!text){ alert(window.T('inbox.xl.doc_need_text')); return; }
-  const target=_xlateOut||_xlateIn||_agentLang();
+  const target=_seatXlTarget();
   const body={text:text,target_lang:target,style:'chat'};
   if(target==='auto' && selectedChat){
     body.platform=selectedChat.platform; body.account_id=selectedChat.account_id||'default';
@@ -21312,6 +21361,11 @@ async function _onDocXlateRun(){
     if(btn) btn.disabled=false;
   }
 }
+/* #154(d)：坐席侧译文目标语＝会话「收→」（给坐席看的东西用坐席看得懂的语言）。
+   旧口径 _xlateOut||_xlateIn 把**出站铆定**当成阅读语言：铆「发→英」的会话里
+   上传一份日文文档，译出来的是英文——坐席读不懂，还白烧一遍引擎。出站铆定
+   只该管「发给客户的消息」。「收→」空（不译）→ 回落坐席语言。 */
+function _seatXlTarget(){ return _xlateIn||_agentLang(); }
 function _docxlDownload(txt){
   try{
     const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
@@ -21338,7 +21392,7 @@ async function _onAudioFilePick(f, status, out, kind){
       rd.onload=function(){ res(String(rd.result||'')); };
       rd.onerror=rej; rd.readAsDataURL(f);
     });
-    const target=_xlateOut||_xlateIn||_agentLang();
+    const target=_seatXlTarget();
     // 音频转写常见分钟级 → 5min 预算；视频还要先抽音轨 → 7min。不走 SSE（单文件单结果）
     // P4：上传口=文件加工面，默认索要双语字幕（有真时间戳才回 srt_text；
     // 老 176 服务/缓存命中无分段 → 服务端如实缺席，按钮不出现）
@@ -21374,7 +21428,7 @@ async function _onAudioFilePick(f, status, out, kind){
           const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
           const a=document.createElement('a');
           a.href=URL.createObjectURL(blob);
-          a.download=(f.name.replace(/\.[^.]+$/,'')||'media')+'.'+((_xlateOut||_xlateIn||_agentLang())||'xx')+extname;
+          a.download=(f.name.replace(/\.[^.]+$/,'')||'media')+'.'+(_seatXlTarget()||'xx')+extname;
           document.body.appendChild(a); a.click();
           setTimeout(function(){ try{URL.revokeObjectURL(a.href);a.remove();}catch(_){} },1500);
         }catch(_){}
@@ -21408,7 +21462,7 @@ async function _onDocxFilePick(input){
       rd.onload=function(){ res(String(rd.result||'')); };
       rd.onerror=rej; rd.readAsDataURL(f);
     });
-    const target=_xlateOut||_xlateIn||_agentLang();
+    const target=_seatXlTarget();
     const body={file_b64:b64,filename:f.name,target_lang:target,style:'chat',
                 stream: !!window.EventSource};
     // P1：字幕双语勾选（仅 .srt/.vtt 被服务端消费，其他格式忽略该位）

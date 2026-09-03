@@ -192,6 +192,104 @@ async def test_lang_pin_fix_translator_exception_passthru(_pin_store):
     assert out == src   # 翻译器炸了绝不拦断发送
 
 
+# ── #154：铆定缺位时的出站历史回落 ───────────────────────────────────────────
+
+class _HistStore:
+    """只有出站历史、没有「发→X」行的会话（＝铆定被程序清空后的现场）。"""
+
+    def __init__(self, msgs):
+        self._msgs = list(msgs)
+
+    def get_outbound_lang_if_set(self, cid):
+        return ""
+
+    def list_recent_messages(self, cid, limit=50):
+        return self._msgs[-limit:]
+
+
+def _hist(langs_texts):
+    return [{"direction": "out", "text": t} for t in langs_texts]
+
+
+@pytest.fixture()
+def _hist_store_factory():
+    from src.integrations import protocol_bridge as pb
+
+    made = []
+
+    def _mk(msgs):
+        st = _HistStore(msgs)
+        made.append(st)
+        pb.register_inbox_store_getter(lambda: st)
+        return st
+
+    try:
+        yield _mk
+    finally:
+        pb.register_inbox_store_getter(None)
+        set_sendpoint_translator(None)
+
+
+_EN_HIST = ["Good morning, hope you slept well.",
+            "That sounds like a lovely plan for the weekend.",
+            "I'll be around later tonight if you want to chat."]
+
+
+def test_history_pin_needs_enough_consistent_samples(_hist_store_factory):
+    from src.ai.sendpoint_guard import outbound_history_lang_pin
+    _hist_store_factory(_hist(_EN_HIST))
+    assert outbound_history_lang_pin("telegram", "7331682688", "8852939166") == "en"
+    # 样本不足（<3）→ 不回落，收口点不动手
+    _hist_store_factory(_hist(_EN_HIST[:2]))
+    assert outbound_history_lang_pin("telegram", "7331682688", "8852939166") == ""
+
+
+def test_history_pin_last_message_switched_language(_hist_store_factory):
+    """最近一条已换语言 → 历史多数不作数（刚切语言的会话不许被拽回去）。"""
+    from src.ai.sendpoint_guard import outbound_history_lang_pin
+    _hist_store_factory(_hist(_EN_HIST + ["おはよう、今日もいい一日になりますように。"]))
+    assert outbound_history_lang_pin("telegram", "7331682688", "8852939166") == ""
+
+
+async def test_154_japanese_lines_rewritten_via_history_pin(_hist_store_factory):
+    """#154 金标端到端：铆定被清空 + 一路英文出站历史 → 四条日语原文全被改写。"""
+    from src.eval.sendpoint_guard_eval import INCIDENT_154_JA
+    _hist_store_factory(_hist(_EN_HIST))
+
+    async def _fake(platform, account_id, chat_key, text):
+        return "Sleep well, I'll be here tomorrow."
+
+    set_sendpoint_translator(_fake)
+    for ja in INCIDENT_154_JA:
+        out, act = await sendpoint_lang_pin_fix(
+            "telegram", "7331682688", "8852939166", ja)
+        assert act == "translated", ja
+        assert out == "Sleep well, I'll be here tomorrow."
+
+
+async def test_history_pin_does_not_fire_on_consistent_language(_hist_store_factory):
+    """日语会话（历史也是日语）发日语＝零冲突，绝不误动手。"""
+    ja_hist = ["おはよう、よく眠れた？", "それは楽しそうな週末だね。",
+               "夜にまた話そうね。"]
+    _hist_store_factory(_hist(ja_hist))
+    calls = []
+
+    async def _fake(platform, account_id, chat_key, text):
+        calls.append(text)
+        return text
+
+    set_sendpoint_translator(_fake)
+    out, act = await sendpoint_lang_pin_fix(
+        "telegram", "7331682688", "8852939166", "おやすみ、また明日ね")
+    assert out == "おやすみ、また明日ね" and act == "" and calls == []
+
+
+def test_explicit_pin_still_wins_over_history(_pin_store):
+    """显式铆定在场时不看历史（_pin_store 无 list_recent_messages 也照样解析）。"""
+    from src.ai.sendpoint_guard import outbound_lang_pin
+    assert outbound_lang_pin("telegram", "acct1", "555") == "en"
+
+
 # ── 语音合成前收口（#105 语音面） ────────────────────────────────────────────
 
 def test_presynth_interactive_verbatim(monkeypatch):

@@ -616,20 +616,27 @@ def register_translate_routes(app, *, api_auth) -> None:
         request: Request, _=Depends(api_auth),
     ):
         """写会话级「发→X」出站语言。body：``{platform, account_id, chat_key,
-        lang}``（``lang=""`` = 清除；``"auto"`` = 跟客户语言；白名单语种 = 钉死）。
+        lang, clear?, source?}``（``"auto"`` = 跟客户语言；白名单语种 = 钉死；
+        **删除必须显式 ``clear:true``**）。
 
-        前端 ``_persistXlatePrefs`` 在写 localStorage 的同时 best-effort 同步此端点
-        （特性探测 fail-soft：旧后端 404 = 行为不变）。落库后 A 线/B 线/proactive
-        全部出站路径读同一事实源（outbound_translate 显式目标优先）。
+        #154（2026-09-04）：空串不再等于清除。前端任何翻译偏好变动都会走
+        ``_persistXlatePrefs`` → 同步本端点，而彼时内存里的 ``_xlateOut`` 可能
+        因为「换了会话还没 hydrate」是空的——一次「收→」改动就把另一会话铆死的
+        ``en`` 删掉，之后四条日语原文全绕过 pin 直发（会话 telegram:7331682688:
+        8852939166 实锤）。现在 ``lang=""`` 且无 ``clear`` = **no-op**，如实回
+        当前库里的值（前端据此回填，比静默不动更好排障）。
+        ``source`` 进审计（ui_select/ui_prefsync/api/import/clear），落库后
+        A 线/B 线/proactive 全部出站路径读同一事实源。
         """
         body = await request.json()
         raw = str(body.get("lang") or "").strip().lower()
+        want_clear = bool(body.get("clear"))
         if raw and raw != "auto":
             lang = normalize_lang(raw)
             if lang not in _AGENT_LANG_ALLOWED:
                 return {"ok": False, "error": "bad_lang"}
         else:
-            lang = raw     # '' 清除 / 'auto' 跟客户语言
+            lang = raw     # '' / 'auto'（跟客户语言）
         ibx = _inbox_store(request)
         if ibx is None:
             return {"ok": False, "error": "inbox_unavailable"}
@@ -638,7 +645,20 @@ def register_translate_routes(app, *, api_auth) -> None:
                        str(body.get("chat_key") or ""))
         if not cid:
             return {"ok": False, "error": "bad_conversation"}
+        source = str(body.get("source") or "").strip().lower() or "api"
+        if want_clear:
+            lang, source = "", "clear"
+        elif not lang:
+            # 空串 no-op：不动库，如实回当前值（#154 根因三之一的止血点）
+            try:
+                cur = ibx.get_outbound_lang_if_set(cid)
+            except Exception:
+                cur = ""
+            return {"ok": True, "conversation_id": cid, "lang": cur,
+                    "noop": True}
         try:
+            ibx.set_outbound_lang(cid, lang, source=source)
+        except TypeError:      # 旧 store（无 source 形参）——保持可回滚
             ibx.set_outbound_lang(cid, lang)
         except Exception:
             logger.debug("set_outbound_lang failed", exc_info=True)

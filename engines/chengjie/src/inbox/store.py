@@ -1036,6 +1036,22 @@ _MIGRATIONS = [
         lang             TEXT NOT NULL DEFAULT '',
         updated_at       REAL NOT NULL
     )""",
+    # #154（2026-09-04）「发→X」铆定被程序清空的审计轨：会话 telegram:7331682688:
+    # 8852939166 铆 en 后被前端偏好同步（任意翻译偏好变动都把当时可能为空的
+    # _xlateOut POST 上来）静默删行，四条日语原文因此绕过铆定直发。删行本身在
+    # 库里不留任何痕迹 → 排障只能靠 sendpoint 日志「突然没了」反推。本表记每次
+    # 变更的前后值与来源，清除额外打 WARNING。
+    # source ∈ ui_select | ui_prefsync | api | import | clear。
+    """CREATE TABLE IF NOT EXISTS conversation_outbound_lang_log (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id  TEXT NOT NULL,
+        prev             TEXT NOT NULL DEFAULT '',
+        new              TEXT NOT NULL DEFAULT '',
+        source           TEXT NOT NULL DEFAULT '',
+        ts               REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_colog_conv "
+    "ON conversation_outbound_lang_log(conversation_id, ts DESC)",
     # 实施72 P2（2026-08-27）补收时间戳诚实化：1=ts 为合成值（断线补收/历史回填
     # 按序回推，只保序不保真）。写入方＝messenger thread-history 合并与「拉更早」；
     # 消费方＝reply_latency SLO 剔除（合成时间的历史消息绝不进「客户在等」口径）、
@@ -4621,14 +4637,39 @@ class InboxStore:
             return ""
         return str(row["lang"] or "").strip().lower()
 
-    def set_outbound_lang(self, conversation_id: str, lang: str) -> None:
-        """写会话级出站语言（''=清除设置，删行）。独立小表，绝不碰
-        conversation_settings 的「行存在=档位显式设置」语义。"""
+    #: 「发→X」变更来源白名单（#154 审计）。ui_select=坐席真的动了选择器；
+    #: ui_prefsync=前端偏好批量同步（历史上正是它把铆定冲空的）；api=服务端/
+    #: 脚本；import=批量导入；clear=显式清除。表外的值一律记 'other'。
+    OUTBOUND_LANG_SOURCES = frozenset(
+        {"ui_select", "ui_prefsync", "api", "import", "clear"})
+
+    def set_outbound_lang(
+        self, conversation_id: str, lang: str, *, source: str = "api",
+    ) -> str:
+        """写会话级出站语言（''=清除设置，删行），返回**变更前**的值。
+
+        独立小表，绝不碰 conversation_settings 的「行存在=档位显式设置」语义。
+
+        #154：每次真实跃迁落 ``conversation_outbound_lang_log``（prev/new/source），
+        清除（new=''）额外打 WARNING——铆定被程序清空是高危事故形态（四条日语
+        原文因此绕过 pin 直发），事后必须能在库里查到「谁在什么时候清的」。
+        空串是否等于「清除」由**调用方**决定：HTTP 层要求 ``clear:true`` 才会
+        把 '' 传进来（api 路由的空串 no-op 语义在那边收口）。
+        """
         if not conversation_id:
-            return
+            return ""
         lv = str(lang or "").strip().lower()[:16]
+        src = str(source or "api").strip().lower()[:16]
+        if src not in self.OUTBOUND_LANG_SOURCES:
+            src = "other"
         now = self._now()
         with self._lock:
+            row = self._conn.execute(
+                "SELECT lang FROM conversation_outbound_lang "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            prev = str((row["lang"] if row else "") or "").strip().lower()
             if not lv:
                 self._conn.execute(
                     "DELETE FROM conversation_outbound_lang "
@@ -4647,7 +4688,42 @@ class InboxStore:
                     """,
                     (conversation_id, lv, now),
                 )
+            if prev != lv:
+                try:
+                    self._conn.execute(
+                        "INSERT INTO conversation_outbound_lang_log "
+                        "(conversation_id, prev, new, source, ts) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (conversation_id, prev, lv, src, now),
+                    )
+                except Exception:
+                    logger.debug("conversation_outbound_lang_log 落行失败（忽略）",
+                                 exc_info=True)
             self._conn.commit()
+        if prev != lv and not lv:
+            logger.warning(
+                "[outbound_lang] 会话「发→X」铆定被清除（#154）conv=%s prev=%s "
+                "source=%s", conversation_id, prev, src)
+        return prev
+
+    def list_outbound_lang_log(
+        self, conversation_id: str, *, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """会话「发→X」变更时间线（新→旧）。无历史 → 空表。"""
+        if not conversation_id:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT prev, new, source, ts "
+                "FROM conversation_outbound_lang_log "
+                "WHERE conversation_id = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                (conversation_id, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {"prev": str(r["prev"] or ""), "new": str(r["new"] or ""),
+             "source": str(r["source"] or ""), "ts": float(r["ts"] or 0)}
+            for r in rows
+        ]
 
     def list_automation_mode_log(
         self, conversation_id: str, *, limit: int = 20,

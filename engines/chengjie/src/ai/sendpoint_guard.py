@@ -37,6 +37,7 @@ _STATS: Dict[str, int] = {
     "vocative_self": 0,        # 人设名当客户呼格剥除
     "lang_pin_conflict": 0,    # 铆定语言 × 文本文字系统冲突检出
     "lang_hint_conflict": 0,   # #133：客户语言画像（无显式铆定）冲突检出
+    "lang_hist_conflict": 0,   # #154：出站历史主语种回落（铆定缺位/被清空）冲突检出
     "lang_pin_translated": 0,  # 冲突 → 翻译修正成功
     "lang_pin_hold": 0,        # 冲突 → 翻译 HOLD（无兜底纪律：别发）
     "lang_pin_passthru": 0,    # 冲突但翻译器缺席/失败 → 原样放行
@@ -251,6 +252,66 @@ def outbound_lang_pin(platform: str, account_id: str, chat_key: str) -> str:
         return ""
 
 
+# 出站历史回落（#154）：样本/占比双闸——「我们一直在用什么语言跟他说」要成为
+# 事实上的铆定，得有足够多且足够一致的历史，且**最后一条**也是这个语言
+#（刚换语言的会话不许被历史多数拽回去）。
+_OUT_HIST_WINDOW = 12
+_OUT_HIST_MIN_SAMPLES = 3
+_OUT_HIST_MIN_SHARE = 2.0 / 3.0
+
+
+def outbound_history_lang_pin(platform: str, account_id: str,
+                              chat_key: str) -> str:
+    """显式铆定缺位时的**保守**回落：本会话出站主语种（#154）。
+
+    #154 击穿机制：铆定被程序清空后（前端偏好同步把空的 `_xlateOut` POST 上来
+    删了行），收口点回落的是**客户语言画像**——日语客户 × 日语草稿＝零冲突，
+    于是四条日语原文在铆 en 的会话里长驱直出。但「我们前面几十条都在说英文」
+    本身就是最强的铆定证据，且与客户画像正交。
+
+    判据（宁漏勿误）：窗口内出站可判语言样本 ≥3、主语种占比 ≥2/3、且最近一条
+    出站也是该语种。任一不满足 → ""（收口点不动手，与旧行为一致）。软失败绝不抛。
+    """
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None or not hasattr(store, "list_recent_messages"):
+            return ""
+        from src.inbox.draft_models import _conv_id
+        from src.inbox.outbound_translate import normalize_target
+        from src.ai.translation_service import detect_language
+        cid = _conv_id(str(platform or ""), str(account_id or ""),
+                       str(chat_key or ""))
+        if not cid:
+            return ""
+        rows = store.list_recent_messages(cid, limit=_OUT_HIST_WINDOW) or []
+        langs: List[str] = []
+        for m in rows:
+            if not isinstance(m, dict) or str(m.get("direction") or "in") != "out":
+                continue
+            text = str(m.get("text") or "").strip()
+            # 纯媒体占位（[语音]/[图片]…）不构成语言证据——与 vote_language 同口径
+            if not text or (text.startswith("[") and text.endswith("]")
+                            and " " not in text):
+                continue
+            try:
+                lang = normalize_target(detect_language(text))
+            except Exception:
+                continue
+            if lang:
+                langs.append(lang)
+        if len(langs) < _OUT_HIST_MIN_SAMPLES:
+            return ""
+        top = max(set(langs), key=langs.count)
+        if langs.count(top) / float(len(langs)) < _OUT_HIST_MIN_SHARE:
+            return ""
+        if langs[-1] != top:      # 刚切语言 → 历史多数不作数
+            return ""
+        return top
+    except Exception:
+        return ""
+
+
 def outbound_peer_lang_hint(platform: str, account_id: str,
                             chat_key: str) -> str:
     """客户语言画像回落（#133）：无显式铆定时「该用什么语言跟这个客户说」。
@@ -347,11 +408,19 @@ async def sendpoint_lang_pin_fix(
         pin = outbound_lang_pin(platform, account_id, chat_key)
         _pin_kind = "pin" if pin else ""
         if not pin:
+            # #154：显式铆定缺位（含「被程序清空」）→ 先认本会话出站主语种，
+            # 再认客户语言画像。前者在「铆 en 的日语客户」这类会话里是唯一能
+            # 拦住日语原文的证据——客户画像与日语草稿零冲突，判不出问题。
+            pin = outbound_history_lang_pin(platform, account_id, chat_key)
+            _pin_kind = "hist" if pin else ""
+        if not pin:
             pin = outbound_peer_lang_hint(platform, account_id, chat_key)
             _pin_kind = "hint" if pin else ""
         if not pin or not pin_script_conflict(src, pin):
             return src, ""
-        if _pin_kind == "hint":
+        if _pin_kind == "hist":
+            _bump("lang_hist_conflict")
+        elif _pin_kind == "hint":
             _bump("lang_hint_conflict")
         _bump("lang_pin_conflict")
         fn = _TRANSLATOR
@@ -441,7 +510,8 @@ def presynth_text_guard(
 
 __all__ = [
     "resolve_sendpoint_names", "sendpoint_vocative_pass", "near_call_peer_fix",
-    "outbound_lang_pin", "outbound_peer_lang_hint", "pin_script_conflict",
+    "outbound_lang_pin", "outbound_peer_lang_hint",
+    "outbound_history_lang_pin", "pin_script_conflict",
     "set_sendpoint_translator", "sendpoint_lang_pin_fix",
     "presynth_text_guard", "sendpoint_guard_stats",
 ]

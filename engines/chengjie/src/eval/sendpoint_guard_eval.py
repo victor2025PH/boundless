@@ -28,6 +28,15 @@ INCIDENT_105_VOICE = ("Seven days with you, and I can't imagine "
 INCIDENT_96_TEXT = "…wish you were there to judge it with me, Steven."
 # #106 原句（原图 869，铆「发→英」仍纯中文三连之一）
 INCIDENT_106_ZH = "哈哈，这构图还挺有味道的，那个戴墨镜的男士是主角吗？"
+# #154 原句（0903 backend.log 14:50:35/14:50:45/14:58:15/14:58:24，会话
+# telegram:7331682688:8852939166 铆 en，A 线直发日语四条）。13:11:09 同会话
+# sendpoint 还在按 pin=en 改写，14:50 后 pin 读空——铆定被前端偏好同步清了。
+INCIDENT_154_JA = [
+    "うん、ちゃんと休むよ。",
+    "風は任せて、いい夢を届けるからね。 おやすみ🌙",
+    "うん、ちゃんと目閉じるね。",
+    "おやすみ、また明日ね🌙",
+]
 
 
 @dataclass
@@ -105,6 +114,10 @@ LANG_PIN_GOLDENS: List[LangPinSample] = [
     LangPinSample("OK", "en", False, "短文本不判"),
     LangPinSample("Long English sentence with no CJK at all here.",
                   "zh", True, "反向：铆中文发纯英长句"),
+] + [
+    LangPinSample(_s, "en", True,
+                  "#154 0903 A 线直发日语（铆 en 被程序清空后漏网）")
+    for _s in INCIDENT_154_JA
 ]
 
 
@@ -194,5 +207,6 @@ __all__ = [
     "VocativeSample", "LangPinSample",
     "VOCATIVE_GOLDENS", "LANG_PIN_GOLDENS",
     "INCIDENT_105_VOICE", "INCIDENT_96_TEXT", "INCIDENT_106_ZH",
+    "INCIDENT_154_JA",
     "evaluate_sendpoint_guard", "format_sendpoint_guard_report",
 ]
