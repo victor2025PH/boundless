@@ -37,6 +37,7 @@ $Work    = "C:\zhiliao-agent"
 $Snap    = Join-Path $Work "snapshots"
 New-Item -ItemType Directory -Force -Path $Snap | Out-Null
 
+$ScriptVer = "1.2.2"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $windowStart = (Get-Date).AddMinutes(-$Since)
 $report = New-Object System.Collections.Generic.List[string]
@@ -78,7 +79,7 @@ function AppVersion {
 }
 
 $ver = AppVersion
-Add-Line "# field-agent:${Owner}:${Task}"
+Add-Line "# field-agent:${Owner}:${Task}  (zl_collect v$ScriptVer)"
 Add-Line "- time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  fp: $Fp  app: $ver"
 if ($Note) { Add-Line "- note: $Note" }
 Add-Line ""
@@ -124,11 +125,17 @@ switch ($Task) {
 }
 
 $mdPath = Join-Path $Snap ("{0}_{1}_report.md" -f $stamp, $Task)
-$report | Out-File -FilePath $mdPath -Encoding UTF8
+[System.IO.File]::WriteAllText($mdPath, [string]::Join("`r`n", $report.ToArray()), (New-Object System.Text.UTF8Encoding($true)))
+if ((Get-Item $mdPath).Length -lt 40) {
+    Write-Output "report=$mdPath"
+    Write-Output "CODE=EMPTY_REPORT (脚本版本 v$ScriptVer；报告为空，请把本行发给值守)"
+    exit 3
+}
 $zip = Join-Path $Work "up.zip"
 Remove-Item $zip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path $mdPath -DestinationPath $zip -Force
-$noteS = ("field-agent:{0}:{1}:{2}" -f $Owner, $Task, ($Note -replace '[\r\n"]', ' ')).Substring(0, [Math]::Min(190, ("field-agent:{0}:{1}:{2}" -f $Owner, $Task, $Note).Length))
+$noteS = ("field-agent:{0}:{1}:v{3}:{2}" -f $Owner, $Task, ($Note -replace '[\r\n"]', ' '), $ScriptVer)
+$noteS = $noteS.Substring(0, [Math]::Min(190, $noteS.Length))
 $meta = @{ app = $ver; fp = $Fp; note = $noteS } | ConvertTo-Json -Compress
 try {
     $resp = Invoke-RestMethod -Uri "https://bd2026.cc/api/diag-upload" -Method Post -InFile $zip -ContentType "application/zip" -Headers @{ "x-diag-meta" = $meta } -TimeoutSec 60
