@@ -169,6 +169,13 @@ def test_sum_effective_unread_by_account_matches_effective_unread(tmp_path):
         platform="line", account_id="acctB", chat_key="1",
         display_name="b1", last_ts=now, last_text="hi", unread=1,
     ))
+    # #159：徽标口径（_unread_aggregate_maps）只数**清单里点得开**的会话，
+    # 而 upsert_conversation 建的是零消息占位行——本测的对象是「聚合 vs 逐行
+    # effective_unread 同口径」，得给每条补一条可见消息才落在测试对象上，
+    # 否则测的是占位剔除（那条另有 tests/test_unread_aggregate.py 专测）。
+    for cid, ts in (("telegram:acctA:1", now), ("telegram:acctA:2", now - 10),
+                    ("telegram:acctA:3", now - 20), ("line:acctB:1", now)):
+        _mk_msg(store, cid, direction="in", ts=ts)
     got = store.sum_effective_unread_by_account()
     assert got[("telegram", "acctA")] == 5  # 3+2
     assert got[("line", "acctB")] == 1
@@ -191,6 +198,8 @@ def test_enrich_injects_unread_from_aggregate(tmp_path, monkeypatch):
         platform="telegram", account_id="acc1", chat_key="1",
         display_name="Alice", last_ts=now, last_text="hi", unread=4,
     ))
+    # #159：徽标口径要求会话在清单里点得开（至少一条未软删消息），补一条
+    _mk_msg(store, "telegram:acc1:1", direction="in", ts=now)
     monkeypatch.setattr(
         "src.integrations.account_registry.get_account_registry",
         lambda: type("R", (), {"list": staticmethod(lambda platform=None: [])})(),

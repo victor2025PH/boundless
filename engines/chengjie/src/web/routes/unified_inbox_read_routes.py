@@ -375,17 +375,34 @@ def _attn_aggregate_map(
 def _unread_aggregate_maps(
     store: Any, *, include_archived: bool = False,
 ) -> tuple[Dict[str, int], Dict[str, int]]:
-    """从 store 取有效未读聚合 → (by_account, by_platform)。
+    """按**清单同一口径**聚合有效未读 → (by_account, by_platform)。
 
     by_account 键 = ``platform:account_id``；by_platform 为各账号合计。
     store 不可用/失败 → 两个空 dict（前端回落窗口内求和）。
     默认剔除已归档会话（与列表默认视图同一口径，#120）；
     ``include_archived=True``＝``inbox.badge.include_archived`` 显式回退旧口径。
+
+    #159（2026-09-03 证据包 G4BYWH：steven 号三处显示 7、清单一条都没有）：
+    此前直取 ``store.sum_effective_unread_by_account``，而清单在取行之后还要
+    过一串清单专属剔除（删除墓碑 / 消息全被软删 / 协议号纯占位残值）——徽标
+    少了这几道就成了幽灵数字。口径收进 ``src/inbox/unread_aggregate``，与
+    「点数字直达那 N 条」用同一份 WHERE：点进去的条数与徽标恒等，对不上
+    即真 bug 而非两套口径各说各话。新模块失败 → 回落旧聚合（宁可回到已知的
+    偏大口径，也不让徽标整个消失）。
     """
     by_acct: Dict[str, int] = {}
     by_plat: Dict[str, int] = {}
     if store is None:
         return by_acct, by_plat
+    try:
+        from src.inbox.unread_aggregate import unread_maps
+        maps = unread_maps(store, include_archived=include_archived)
+        if maps is not None:
+            # 空 dict 是**有效结果**（「确实一条未读都没有」＝#159 的正解），
+            # 只有 None（聚合没跑成）才回落旧口径——否则幽灵数字原样复活。
+            return maps
+    except Exception:
+        logger.debug("[chats] 清单口径未读聚合失败（回落旧聚合）", exc_info=True)
     try:
         raw = store.sum_effective_unread_by_account(
             include_archived=include_archived) or {}
@@ -394,7 +411,7 @@ def _unread_aggregate_maps(
         raw = store.sum_effective_unread_by_account() or {}
     except Exception:
         logger.debug("[chats] 有效未读聚合失败", exc_info=True)
-        return by_acct, by_plat
+        return {}, {}
     for (plat, aid), n in raw.items():
         n_i = int(n or 0)
         if n_i <= 0:
@@ -1110,6 +1127,47 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         cid = f"{platform}:{account_id}:{chat_key}"
         ok = bool(store.set_travel_cleared(cid))
         return {"ok": ok, "conversation_id": cid}
+
+    @app.get("/api/unified-inbox/account-unread")
+    async def api_unified_inbox_account_unread(
+        request: Request, platform: str, account_id: str = "",
+        limit: int = 200,
+    ):
+        """账号栏那个数字**具体是哪几条**（#159 幽灵未读，2026-09-03 G4BYWH）。
+
+        坐席看到 7 却在清单里找不到，只能怀疑系统在骗人。徽标既然是个数字，
+        就该点得开：本端点与徽标聚合共用同一份 WHERE（差别只在 SUM vs 明细），
+        所以「点进去看到的条数」与徽标恒等——对不上就是真 bug，而不是两套
+        口径各说各话。前端拿列表可直达那 N 条，也可据此一键清零
+        （POST mark-account-read，同一水位机制）。
+
+        query: ``platform``（必填）、``account_id``（空=该平台全部账号）、
+        ``limit``（缺省 200，上限 500）。
+        """
+        api_auth(request)
+        plat = str(platform or "").strip().lower()
+        if not plat:
+            raise HTTPException(400, tr(request, "err.ws.field_required",
+                                        field="platform"))
+        acct = str(account_id or "").strip()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            from src.inbox.unread_aggregate import unread_conversations
+            convs = unread_conversations(
+                store, plat, acct, limit=limit,
+                include_archived=_badge_include_archived(config_manager))
+        except Exception:
+            logger.debug("[inbox] account-unread 明细失败 %s:%s", plat, acct,
+                         exc_info=True)
+            convs = []
+        return {
+            "ok": True, "platform": plat, "account_id": acct,
+            "conversations": convs,
+            "unread_total": sum(int(c.get("unread") or 0) for c in convs),
+            "count": len(convs),
+        }
 
     @app.post("/api/unified-inbox/mark-account-read")
     async def api_unified_inbox_mark_account_read(request: Request):

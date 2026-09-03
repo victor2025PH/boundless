@@ -1820,6 +1820,14 @@ _ADDITIONS_2026_09_02_BUG_INTAKE_EVENTS = """
 """
 _BASELINE += _ADDITIONS_2026_09_02_BUG_INTAKE_EVENTS
 
+# 2026-09-03 #159 账号栏幽灵未读：徽标那个数字**具体是哪几条**（与徽标聚合
+# 共用同一份 WHERE，点进去的条数与数字恒等）。坐席据此直达那 N 条，或走既有
+# mark-account-read 一键清零。
+_ADDITIONS_2026_09_03_ACCOUNT_UNREAD = """
+/api/unified-inbox/account-unread	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_03_ACCOUNT_UNREAD
+
 
 def _parse_baseline():
     expected = set()
