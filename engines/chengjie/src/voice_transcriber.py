@@ -370,8 +370,9 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
 
     契约：POST {base_url}/transcribe_b64 {"audio_base64","language"}
           → {"ok":true,"text":"...","no_speech_prob":...}
-    令牌**运行时**读 ``token_file``（默认 D:/faceX/mfys/secrets/service_token.txt），
-    绝不写进代码库/日志。令牌缺失/服务不可达 → 返 None（级联回落下一级，不抛）。
+    令牌**运行时**解析（``avatar_voice.resolve_service_token``：配置 token_file →
+    网关设备令牌 → 开发机路径），绝不写进代码库/日志。令牌缺失/服务不可达 →
+    返 None（级联回落下一级，不抛），且同类告警每进程只出一次。
     入站 ogg/opus 先经 ffmpeg 转 16k 单声道 WAV（识别更稳）；ffmpeg 缺失则送原始字节。
     """
 
@@ -381,9 +382,13 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
         self.base_url = str(
             av.get('base_url') or config.get('base_url')
             or 'http://192.168.0.140:7854').rstrip('/')
+        # #161（2026-09-03 钧机 22:54）：开发机路径不再当内置默认——客户机上它
+        # 恒不存在，令牌解析却看起来「配过了」，AvatarHub STT 二级回落遂静默失败
+        # （上一级刚把「타 타 타」判幻觉丢弃，这一级没接住＝整条转写链断）。
+        # 空串＝未配置，由 resolve_service_token 走网关设备令牌 → 开发机路径两级
+        # 回落（本机/LAN 部署行为不变）。
         self.token_file = str(
-            av.get('token_file') or config.get('token_file')
-            or 'D:/faceX/mfys/secrets/service_token.txt')
+            av.get('token_file') or config.get('token_file') or '')
         try:
             self.timeout_sec = float(
                 av.get('timeout') or config.get('timeout') or 30)
@@ -403,12 +408,13 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
             build_stt_payload,
             convert_to_wav_16k_mono,
             parse_stt_response,
-            read_service_token,
+            resolve_service_token,
+            warn_token_missing_once,
         )
 
-        token = read_service_token(self.token_file)
+        token = resolve_service_token(self.token_file)
         if not token:
-            self.logger.warning("AvatarHub STT 令牌不可用（token_file 缺失/为空）")
+            warn_token_missing_once("AvatarHub STT", self.token_file)
             return None
 
         # ogg/opus → 16k 单声道 WAV（best-effort；失败送原始字节，服务端也能解）

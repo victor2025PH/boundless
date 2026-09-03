@@ -663,8 +663,8 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
             # 的载荷/解析函数，与 AvatarWhisperTranscriber 走**同一套编解码**——
             # 探针手搓一份就会变成「探的和生产走的不是一条路」。
             from src.ai.avatar_voice import (
-                build_stt_payload, parse_stt_response, read_service_token)
-            token = read_service_token(str(spec.get("token_file") or ""))
+                build_stt_payload, parse_stt_response, resolve_service_token)
+            token = resolve_service_token(str(spec.get("token_file") or ""))
             if not token:
                 return False, "X-AH-Svc token unavailable"
             # 夹具语言**已知是中文**，故显式 "zh"：这与「用户任意语音必须走空串

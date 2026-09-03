@@ -87,12 +87,68 @@ def test_hallucination_or_unrelated_transcript_not_evidence():
     assert speech_verdict(weak, True)["speech"] == "silent"
     unrelated = {"cer": TRANSCRIPT_MAX_CER + 0.1, "retried": 1, "hyp_chars": 60}
     assert speech_verdict(unrelated, None)["speech"] == "unknown"
-    assert speech_verdict(unrelated, False)["speech"] == "voiced"   # 能量兜住
+    # #161：转出与送稿无关的字 + 有能量 ＝「念错」，不再被能量兜成 voiced
+    assert speech_verdict(unrelated, False)["speech"] == "garbled"
 
 
 def test_verdict_tolerates_garbage_shapes():
     assert speech_verdict({"cer": "x", "hyp_chars": "y"}, None)["speech"] == "unknown"
     assert speech_verdict("not-a-dict", False)["speech"] == "voiced"
+
+
+# ══ 1b. 念错（garbled）：#161 日语克隆乱音「有能量即放行」除根 ═══════════════
+
+#: 1145 证据群 22:46-23:04 的形状：日语轨 CER 0.85、重合成过一次仍然这么差、
+#: 字节有能量（「ゾオパパパ」是响的，只是不是任何语言）
+_JA_GARBLED_SV = {"cer": 0.85, "retried": 1, "lang": "ja", "hyp_chars": 22}
+
+
+def test_ja_garbled_is_not_voiced():
+    """事故原形：有能量 + 转写与送稿无关 + 重合成救不回来 → garbled，绝不放行。"""
+    v = speech_verdict(_JA_GARBLED_SV, False)
+    assert v["speech"] == "garbled"
+    assert v["energy"] == "ok" and v["transcript_chars"] == 22
+    assert "0.85" in v["basis"]
+
+
+def test_garbled_needs_all_three_signals():
+    """三个信号缺一不可——宁可漏拦不误拦（与本模块其余判据同哲学）。"""
+    # 能量判不了 → 不改判（拿不到字节证据就不指认引擎念错）
+    assert speech_verdict(_JA_GARBLED_SV, None)["speech"] == "unknown"
+    # 能量确认无声 → 那是 silent 的地盘，不抢
+    assert speech_verdict(_JA_GARBLED_SV, True)["speech"] == "silent"
+    # 只转出一两个字（ASR 幻觉量级）→ 证据不足，不判念错
+    thin = dict(_JA_GARBLED_SV, hyp_chars=TRANSCRIPT_MIN_CHARS - 1)
+    assert speech_verdict(thin, False)["speech"] == "voiced"
+    # CER 未过门槛（小瑕疵不是念错）→ 照常 voiced
+    ok_ish = dict(_JA_GARBLED_SV, cer=0.20)
+    assert speech_verdict(ok_ish, False)["speech"] == "voiced"
+
+
+def test_single_shot_high_cer_is_confident_enough():
+    """单发但 CER 高到离谱（≥0.60）→ 不必等重合成也定案；
+    中间地带（0.35≤CER<0.60 且没重合成过）→ 疑罪从无，仍判 voiced。"""
+    assert speech_verdict(
+        {"cer": 0.72, "retried": 0, "hyp_chars": 30}, False)["speech"] == "garbled"
+    assert speech_verdict(
+        {"cer": 0.40, "retried": 0, "hyp_chars": 30}, False)["speech"] == "voiced"
+    assert speech_verdict(
+        {"cer": 0.40, "retried": 1, "hyp_chars": 30}, False)["speech"] == "garbled"
+
+
+def test_zh_clean_take_never_garbled():
+    """中文正常产物（CER≈0）永远不该被新判据误伤——这是 99% 的流量。"""
+    for cer in (0.0, 0.05, 0.12, 0.29):
+        assert speech_verdict(
+            {"cer": cer, "retried": 0, "hyp_chars": 40}, False)["speech"] == "voiced"
+        assert speech_verdict(
+            {"cer": cer, "retried": 1, "hyp_chars": 40}, False)["speech"] == "voiced"
+
+
+def test_garbled_on_real_gold_fixture(tmp_path):
+    """金标真实产物（有能量）配上乱码回验 → judge_preview_speech 也判 garbled。"""
+    v = judge_preview_speech(GOLD, "wav", _JA_GARBLED_SV)
+    assert v["speech"] == "garbled" and v["energy"] == "ok"
 
 
 # ══ 2. 金标真实样本 ═══════════════════════════════════════════════════════════
@@ -178,7 +234,30 @@ def test_synth_verify_reports_transcript_chars(tmp_path):
 
 @pytest.mark.parametrize("fmt", ["wav", "mp3", "ogg"])
 def test_route_shape_voice_meta_keys(fmt):
-    """tts-test 响应契约：voice_meta.speech ∈ {voiced,silent,unknown}（前端特性探测）。"""
-    v = speech_verdict(None, None)
-    assert set(v) == {"speech", "basis", "transcript_chars", "energy"}
-    assert v["speech"] in ("voiced", "silent", "unknown")
+    """tts-test 响应契约：voice_meta.speech ∈ {voiced,silent,garbled,unknown}
+    （前端特性探测；garbled 是 #161 新增第三档）。"""
+    for sv, en in ((None, None), (_KKXSTU_SV, False), (None, True),
+                   (_JA_GARBLED_SV, False)):
+        v = speech_verdict(sv, en)
+        assert set(v) == {"speech", "basis", "transcript_chars", "energy"}
+        assert v["speech"] in ("voiced", "silent", "garbled", "unknown")
+
+
+def test_garbled_wired_into_preview_route_and_frontend():
+    """写了没挂线：服务端改派 Edge + 前端「疑似念错」文案分支必须在场。"""
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    vr = (repo / "src" / "web" / "routes" / "voice_routes.py").read_text(
+        encoding="utf-8")
+    assert "_redispatch_garbled_to_edge" in vr
+    assert 'clone_lang_garbled:' in vr
+    for tree in ("shared", "desktop/renderer/shared"):
+        js = (repo / tree.replace("/", "\\") / "copilot" / "components"
+              / "cp-voice.js").read_text(encoding="utf-8")
+        assert "blockNoteKey" in js, tree
+        assert '"garbled"' in js, tree
+        i18n = (repo / tree.replace("/", "\\") / "copilot" / "i18n"
+                / "cp-i18n.js").read_text(encoding="utf-8")
+        for k in ("cp.voice.garbled_note", "cp.voice.garbled_block_t",
+                  "cp.voice.std_voice_note"):
+            assert i18n.count(f'"{k}"') >= 2, f"{tree} 缺双语词条 {k}"

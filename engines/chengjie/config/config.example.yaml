@@ -939,6 +939,10 @@ avatar_voice:
   # 克隆主路可念语种显式覆写（运营最了解自家节点；缺省由引擎能力表自动推导，
   # 见 lang_voice_route.CLONE_ENGINE_LANGS）。设置后 effective-config.voice_langs
   # 警示与合成层语种闸都按此表判。例：voice_langs: [zh, en, ja]
+  # ⚠ #161（2026-09-03）起缺省表**只登记实测念对的语种**，日语/韩语一律不在内
+  # （1.0.71 实录：日语三次 CER>0.35、重合成仍「ゾオパパパ」乱音）。要开日语等
+  # 语种，先跑 tools/verify_clone_lang.py 过全套机器判据 + 人耳抽检，再在此显式
+  # 覆写——这个键的语义就是「部署方为这份能力背书」。
   # voice_langs: []
   # 合成后 ASR 回转校验门（默认关；开=坏 take 自动重合成取较优，fail-open 绝不
   # 阻塞发声）。多语轨（P2-9 2026-08-31）：非中文文本按目标语种强制转写 + 通用
@@ -1125,7 +1129,12 @@ avatar_voice:
   boot_cooldown_sec: 120
   stt:                                   # C：远端 Whisper STT（跨机需 X-AH-Svc 令牌）
     base_url: http://192.168.0.140:7854
-    token_file: D:/faceX/mfys/secrets/service_token.txt   # 令牌运行时读取，勿入库
+    # 令牌运行时读取、勿入库。留空＝按 avatar_voice.resolve_service_token 三级解析：
+    # 本键 → 网关设备令牌（AITR_HOSTED_AI_KEY，托管部署由官网下发）→ 开发机路径。
+    # #161（2026-09-03）：此前本键的内置默认是开发机私有路径，客户机上恒不存在却
+    # 让解析看起来「配过了」，STT 二级回落遂静默失败（22:54 实录）。自建 LAN 部署
+    # 照常在此写自己的令牌文件路径；托管部署留空即可。
+    token_file: D:/faceX/mfys/secrets/service_token.txt
     timeout_sec: 30
     language: zh
     max_no_speech_prob: 0.85             # 静音概率超此值判无人声（防幻觉转写）

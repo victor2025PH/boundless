@@ -13,8 +13,13 @@
      两者合成一个权威裁决随 tts-test 响应下发（``voice_meta.speech``）：
        voiced  → 前端**绝不**亮红条（客户端解码启发式只画波形不裁决）；
        silent  → 服务端确认无声，前端直接亮红条+禁发（真空壳照拦）；
+       garbled → 有声但念错（#161，见下），同样禁发，文案与无声分开；
        unknown → 服务端拿不到证据（转写器未接、非 16bit wav 且无 ffmpeg），
                  前端才用自己的启发式兜底（并加解码合理性闸）。
+
+#161（2026-09-03 钧机 1.0.71 报告）补第三档 ``garbled``：日语克隆三次 CER>0.35、
+重合成仍是「ゾオパパパ」乱音，旧两档裁决里「有能量」直接判 voiced 放行——
+「喇叭在响」被当成了「念的是人话」。有声与念对是两件事，本模块从此分开判。
 
 纯函数 ``speech_verdict`` 可单测；``judge_preview_speech`` 只多一步读文件。
 """
@@ -31,6 +36,10 @@ TRANSCRIPT_MIN_CHARS = 4
 #: 转写内容与送稿的字错率上限：CER 高于此值＝转出来的字与送稿无关（幻觉/杂音），
 #: 不能当有声证据。KKXSTU 实锤 CER≈0；synth_verify 自身阈值 0.30/0.35。
 TRANSCRIPT_MAX_CER = 0.75
+#: 「念错」判定的 CER 下限（与 synth_verify.foreign_cer_threshold 同口径 0.35）
+GARBLED_MIN_CER = 0.35
+#: 单发即定案的 CER：高到这个程度不必等重合成也能认定念错
+GARBLED_CONFIDENT_CER = 0.60
 
 
 def speech_verdict(
@@ -44,6 +53,7 @@ def speech_verdict(
     （True=确定无声 / False=有能量 / None=判不了）。
 
     规则（金标：「ASR 能从产物转出与送稿相关的文字」即有声，终审白名单）：
+      转写乱码（见下）        → garbled（有声但念错：不放行，调用方改派 Edge）
       转写命中且 CER 相关     → voiced（basis=transcript；能量 False 附 +energy；
                                能量 True 与之矛盾时仍判 voiced 但 basis 带 conflict
                                并打 WARNING——静音上幻觉出与送稿相关的整句在
@@ -51,6 +61,15 @@ def speech_verdict(
       energy True            → silent（服务端确认无声：真空壳照拦）
       energy False           → voiced（basis=energy：有能量、无转写证据）
       其余                    → unknown
+
+    ``garbled``（#161，2026-09-03 钧机 1145 证据群）：日语三次 CER>0.35、重合成
+    仍是「ゾオパパパ」乱音，而本函数只有「有声/无声」两档 → 有能量即判 voiced
+    放行发给客户，坐席事后只能靠耳朵发现。「有能量」只证明喇叭在响，不证明念
+    的是人话。判据＝**ASR 确实转出了字**（排除静音幻觉）＋ CER 高到与送稿无关
+    ＋ 字节有能量 ＋（管线已重合成过一次仍这么差 或 CER 高到单发即可定案）。
+    三个条件缺一不可：只有 CER 高可能是 ASR 对小语种的识别力问题，配上「重合成
+    也救不回来」才是引擎念不了这门语言的实锤。能量判无声时不改判（那是 silent
+    的地盘）；能量判不了时不改判（宁可漏拦不误拦，与本模块其余判据同哲学）。
     """
     sv = synth_verify if isinstance(synth_verify, dict) else {}
     try:
@@ -61,8 +80,30 @@ def speech_verdict(
         cer = float(sv.get("cer")) if sv.get("cer") is not None else -1.0
     except (TypeError, ValueError):
         cer = -1.0
+    try:
+        retried = int(sv.get("retried") or 0)
+    except (TypeError, ValueError):
+        retried = 0
     transcript_ok = hyp_chars >= TRANSCRIPT_MIN_CHARS and 0.0 <= cer <= TRANSCRIPT_MAX_CER
     energy_tag = "unknown" if energy is None else ("silent" if energy else "ok")
+
+    garbled = (
+        hyp_chars >= TRANSCRIPT_MIN_CHARS
+        and cer >= GARBLED_MIN_CER
+        and energy is False
+        and (retried >= 1 or cer >= GARBLED_CONFIDENT_CER)
+    )
+    if garbled:
+        logger.warning(
+            "[speech_verdict] 转写出字但与送稿无关（%d 字, CER=%.2f, 重合成 %d 次）"
+            "且字节有能量 → 判念错（garbled），不得按「有能量」放行",
+            hyp_chars, cer, retried)
+        return {
+            "speech": "garbled",
+            "basis": f"transcript_cer:{cer:.2f}",
+            "transcript_chars": hyp_chars,
+            "energy": energy_tag,
+        }
 
     if transcript_ok:
         speech = "voiced"

@@ -62,11 +62,14 @@
       // P0 2026-08-31「日文怪声」：目标语超出引擎能力（如 IndexTTS-2 念日文）→ 生成前警示。
       this._effVoiceLangs = null;
       // ── 结果区裁决状态（P0 2026-08-31 提示风暴复盘）──────────────────────
-      // _silent: 无声探测阳性=阻发闸（重新生成清除）；_previewFallback: 本条
-      // 试听的回落原因（""=克隆声正常，lang_unsupported/quota/channel/generic）；
+      // _silent: 裁决阳性=阻发闸（重新生成清除）；_silentKind: 阻发原因
+      // （"silent"=无声 / "garbled"=有声但念错，#161 起两者文案与出路分开）；
+      // _previewFallback: 本条试听的回落原因（""=克隆声正常，
+      // lang_unsupported/quota/channel/generic）；
       // _fbConfirmedKey: 降级发送已确认过的会话键（换会话/重渲失效）；
       // _staleWas: 过期沿触发观测埋点（只记 false→true 跳变，不刷屏）。
       this._silent = false;
+      this._silentKind = "";
       this._previewFallback = "";
       this._fbConfirmedKey = "";
       this._staleWas = false;
@@ -315,6 +318,13 @@
       }
       if (m.emotion) parts.push(`${this._t("cp.voice.m_emotion")} ${this._emoLabel(m.emotion)}`);
       if (m.fallback_from) parts.push(this._t("cp.voice.m_fallback", { from: this._backendLabel(m.fallback_from) }));
+      // #161（2026-09-03）：语种改道走的是标准声，这件事必须写在**实际使用**行上
+      // ——蓝条说明会被过期/无声提示按互斥规则藏起来（_syncNotes 单出口），藏掉
+      // 之后坐席就再没有任何地方能看见「客户听到的不是人设的声音」。
+      if (m.fallback_reason === "lang_unsupported") {
+        parts.push(this._t("cp.voice.std_voice_note",
+          { lang: this._langName(String(m.fallback_lang || "")) }));
+      }
       // #121 三进宫：服务端终审「有声」直接亮在实际使用行——红条谎报的反证
       // 同屏可见（转写命中/能量在场），坐席不必再靠耳朵和值守对质。
       if (m.speech === "voiced") parts.push(this._t("cp.voice.m_speech_ok"));
@@ -517,6 +527,7 @@
       this._effConvLang = null;
       this._effVoiceLangs = null;
       this._silent = false;
+      this._silentKind = "";
       this._previewFallback = "";
       this._fbConfirmedKey = "";
       this._staleWas = false;
@@ -820,6 +831,7 @@
       box.classList.remove("stale");
       // 上一条的裁决状态随预览一起作废（重新生成=新的产物新的判定）
       this._silent = false;
+      this._silentKind = "";
       this._previewFallback = "";
       this._staleWas = false;
       // 等待态一次成形（计秒只更新 span，别整块重写——否则「取消」按钮每秒被销毁重建）
@@ -954,15 +966,16 @@
         spokenLine +
         this._metaLine(d) +
         fbNote +
-        `<div class="pv-note err" data-role="silent-note" data-detector="v3-server" data-speech="${this._esc(String(_vm.speech || ""))}" hidden><span>${this._esc(this._t(_vm.speech === "silent" ? "cp.voice.silent_note_server" : "cp.voice.silent_note"))}</span></div>` +
+        `<div class="pv-note err" data-role="silent-note" data-detector="v3-server" data-speech="${this._esc(String(_vm.speech || ""))}" hidden><span>${this._esc(this._t(CpVoice.blockNoteKey(_vm.speech)))}</span></div>` +
         `<div class="pv-note warn" data-role="stale-note" hidden><span>${this._esc(this._t("cp.voice.stale_note"))}</span>` +
         `<button data-act="tts">${this._t("cp.voice.regen_btn")}</button></div>` +
         `<div class="row pv-foot">` +
         `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
-      // 服务端已确认无声 → 不等本地解码，立即禁发（消灭「红条未出、发送可点」的空窗）
-      if (_vm.speech === "silent") {
+      // 服务端已确认无声/念错 → 不等本地解码，立即禁发（消灭「红条未出、发送可点」的空窗）
+      if (_vm.speech === "silent" || _vm.speech === "garbled") {
         this._silent = true;
-        this._warnBeacon("silent_server");
+        this._silentKind = _vm.speech;
+        this._warnBeacon(_vm.speech === "garbled" ? "garbled_server" : "silent_server");
       }
       this._syncStale();   // 生成期间若已改字/换音色，立即标过期
       this._sniffSilence(url, _vm, Number(d && d.duration_sec) || 0);   // 有声终审：服务端裁决优先，客户端解码只兜底/画波形
@@ -992,24 +1005,39 @@
     }
 
     /** 有声/无声最终裁决（#121 三进宫除根）：
-     *  meta.speech  服务端终审（voiced/silent/unknown|缺省）；
+     *  meta.speech  服务端终审（voiced/silent/garbled/unknown|缺省）；
      *  sniff        客户端解码结果 {peak, rms, decodedSec} 或 null（解码失败）；
      *  serverSec    服务端报告的时长（>0 才参与解码合理性闸）。
-     *  规则：服务端 voiced → 绝不判无声；服务端 silent → 判无声；服务端无裁决时
-     *  才用客户端双信号（峰值<0.002 且 RMS<0.0008），且解码出的时长与服务端时长
-     *  相差过半＝解码器读错容器（WAV 被当 mp3 之类）→ 不判（不冤枉）。 */
+     *  规则：服务端 voiced → 绝不判无声；服务端 silent/garbled → 禁发；服务端无
+     *  裁决时才用客户端双信号（峰值<0.002 且 RMS<0.0008），且解码出的时长与服务端
+     *  时长相差过半＝解码器读错容器（WAV 被当 mp3 之类）→ 不判（不冤枉）。
+     *  ``kind``（#161 2026-09-03）：禁发的**原因**——"silent"=没声音、"garbled"=
+     *  有声但念错（克隆引擎念不了这门语言，产物是有能量的乱音）。两种事故的
+     *  出路不同（无声重试即可，念错要换语言/换标准声），文案必须分开。 */
+    /** 禁发红条的文案键：#161 起「疑似无声」与「疑似念错」是两条独立事故线，
+     *  同一条红字既说不清原因也给不出正确出路（无声重试即可，念错必须换语言
+     *  或改用标准声）。garbled=服务端终审判念错；silent=服务端确认无声；
+     *  其余（unknown/缺省=客户端启发式兜底判定）沿用「疑似无声」旧文案。 */
+    static blockNoteKey(speech) {
+      const s = String(speech || "").toLowerCase();
+      if (s === "garbled") return "cp.voice.garbled_note";
+      if (s === "silent") return "cp.voice.silent_note_server";
+      return "cp.voice.silent_note";
+    }
+
     static speechDecision(meta, sniff, serverSec) {
       const s = String((meta && meta.speech) || "").toLowerCase();
-      if (s === "voiced") return { silent: false, basis: "server-voiced" };
-      if (s === "silent") return { silent: true, basis: "server-silent" };
-      if (!sniff || typeof sniff.peak !== "number") return { silent: false, basis: "no-decode" };
+      if (s === "voiced") return { silent: false, basis: "server-voiced", kind: "" };
+      if (s === "silent") return { silent: true, basis: "server-silent", kind: "silent" };
+      if (s === "garbled") return { silent: true, basis: "server-garbled", kind: "garbled" };
+      if (!sniff || typeof sniff.peak !== "number") return { silent: false, basis: "no-decode", kind: "" };
       const sec = Number(serverSec) || 0;
       const dec = Number(sniff.decodedSec) || 0;
       if (sec > 0.5 && dec > 0 && Math.abs(dec - sec) > Math.max(1, sec * 0.5)) {
-        return { silent: false, basis: "decode-implausible" };
+        return { silent: false, basis: "decode-implausible", kind: "" };
       }
       const silent = sniff.peak < 0.002 && sniff.rms < 0.0008;
-      return { silent, basis: silent ? "client-dual" : "client-ok" };
+      return { silent, basis: silent ? "client-dual" : "client-ok", kind: silent ? "silent" : "" };
     }
 
     /** 有声/无声裁决 + 响度包络（B61 → #121 三进宫除根，2026-09-02）。
@@ -1079,10 +1107,11 @@
       const verdict = CpVoice.speechDecision(meta, sniff, serverSec);
       const note = this.shadowRoot.querySelector('[data-role="silent-note"]');
       if (note) note.setAttribute("data-basis", verdict.basis);
-      if (!verdict.silent || this._silent) return;   // 服务端 silent 已在渲染时禁发，不重复计数
+      if (!verdict.silent || this._silent) return;   // 服务端 silent/garbled 已在渲染时禁发，不重复计数
       // 阻发闸（P0 2026-08-31）：红字劝「不要发送」但按钮仍亮蓝可点＝视觉与
       // 行为自相矛盾（0831 截图实锤）——阳性即禁发，重新生成清除。
       this._silent = true;
+      this._silentKind = verdict.kind || "silent";
       this._warnBeacon("silent");
       this._syncNotes();
     }
@@ -1131,7 +1160,7 @@
         return;
       }
       if (this._silent) {   // 阻发闸双保险（同上：时序穿透也拦）
-        this._hint(this._t("cp.voice.silent_block_t"), false);
+        this._hint(this._t(this._blockTitleKey()), false);
         return;
       }
       /* 降级发送确认（P1-3 2026-08-31）：非克隆声不靠黄字自觉——发送前显式
@@ -1371,6 +1400,7 @@
       this._previewXl = "";
       this._previewXlEff = "";
       this._silent = false;
+      this._silentKind = "";
       this._previewFallback = "";
       this._staleWas = false;
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
@@ -1447,6 +1477,12 @@
        ——被读成「选 X 出 Y」的路由事故。过期＝这条试听已不代表当前选择，它身上的
        无声裁决无论真假都只对旧产物成立，正确出路只有重新生成；改回原选择后无声
        红条照常回来（发送在两种状态下都禁用，闸门不松）。 */
+    /* 禁发原因 title/hint 的文案键（#161：念错与无声出路不同，别混成一句）。 */
+    _blockTitleKey() {
+      return this._silentKind === "garbled"
+        ? "cp.voice.garbled_block_t" : "cp.voice.silent_block_t";
+    }
+
     _syncNotes() {
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box || box.hidden) return;
@@ -1462,7 +1498,7 @@
       if (send) {
         // 无声=真闸门：红字劝「不要发送」而按钮亮蓝可点，视觉与行为自相矛盾
         send.disabled = stale || this._silent || !!this._busy;
-        send.title = this._silent ? this._t("cp.voice.silent_block_t") : "";
+        send.title = this._silent ? this._t(this._blockTitleKey()) : "";
       }
       this._syncXlHint();   // 语种改道说明可见时顶部预告让位（同因去重）
     }

@@ -1,4 +1,4 @@
-# zl_collect.ps1 -- field-agent 现场取证一键脚本（v1.2.1，2026-09-03；v1.2 在 PS5.1 下报告 0 字节：函数名 R 撞内置别名 Invoke-History、$since 撞参数 $Since）
+﻿# zl_collect.ps1 -- field-agent 现场取证一键脚本（v1.2.1，2026-09-03；v1.2 在 PS5.1 下报告 0 字节：函数名 R 撞内置别名 Invoke-History、$since 撞参数 $Since）
 #
 # 为什么要有这个脚本：Cursor 对「读工作区外文件 / 压缩 / 向外网 POST」三类动作各弹一次
 # 安全确认，用户不点允许 agent 就卡死（0903 钧机实录：Cursor 提示危险、包从未上传）。
@@ -9,12 +9,18 @@
 #   powershell -ExecutionPolicy Bypass -File C:\zhiliao-agent\zl_collect.ps1 -Task selfcheck
 #   powershell -ExecutionPolicy Bypass -File C:\zhiliao-agent\zl_collect.ps1 -Task report -Note "发图失败" -Since 30 -Keywords "send_media,media_send,delivered=False"
 #   powershell -ExecutionPolicy Bypass -File C:\zhiliao-agent\zl_collect.ps1 -Task verify -Version 1.0.71
+#   powershell -ExecutionPolicy Bypass -File C:\zhiliao-agent\zl_collect.ps1 -Task reupload    # 只重传最近一份报告，不重新取证
 # 输出最后一行固定为  CODE=XXXXXX  （6 位短码）或  CODE=UPLOAD_FAILED（此时 report 在 snapshots 里，用户手发群）。
+#
+# 上传重试（v1.3.0，#161）：0903 钧机 zl_collect 出 UPLOAD_FAILED 而 VPS 侧无任何请求
+# 记录＝请求根本没出客户机（客户端网络），而当时只重试一次、隔 3 秒——家用网络抖动
+# 的典型恢复窗口比这长得多。改 1+3 次、退避 5/15/30s；仍失败时报告已在 snapshots，
+# 用 -Task reupload 可单独重传（不必让用户重跑一遍取证）。
 #
 # 隐私：不读 config/、不读任何 token/cookie；日志摘录按行截取，密钥形态（sk-/Bearer/token=）整行打码。
 
 param(
-    [ValidateSet("selfcheck", "report", "verify")]
+    [ValidateSet("selfcheck", "report", "verify", "reupload")]
     [string]$Task = "report",
     [string]$Note = "",          # 一句话症状（进 report 首行与上传 meta）
     [int]   $Since = 30,         # 抓最近 N 分钟的日志行
@@ -37,7 +43,7 @@ $Work    = "C:\zhiliao-agent"
 $Snap    = Join-Path $Work "snapshots"
 New-Item -ItemType Directory -Force -Path $Snap | Out-Null
 
-$ScriptVer = "1.2.2"
+$ScriptVer = "1.3.0"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $windowStart = (Get-Date).AddMinutes(-$Since)
 $report = New-Object System.Collections.Generic.List[string]
@@ -78,7 +84,47 @@ function AppVersion {
     return "unknown"
 }
 
+function Send-Report([string]$path) {
+    # 上传一份报告，失败按 5/15/30s 退避重试 3 次（共 4 发）。返回短码或空串。
+    $zipPath = Join-Path $Work "up.zip"
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    Compress-Archive -Path $path -DestinationPath $zipPath -Force
+    $noteS = ("field-agent:{0}:{1}:v{3}:{2}" -f $Owner, $Task, ($Note -replace '[\r\n"]', ' '), $ScriptVer)
+    $noteS = $noteS.Substring(0, [Math]::Min(190, $noteS.Length))
+    $metaJson = @{ app = $ver; fp = $Fp; note = $noteS } | ConvertTo-Json -Compress
+    $waits = @(0, 5, 15, 30)
+    for ($i = 0; $i -lt $waits.Count; $i++) {
+        if ($waits[$i] -gt 0) {
+            # Write-Host 而非 Write-Output：函数返回值走管道，进度行混进去会让
+            # 调用方把「upload retry…」当成短码打进最后一行 CODE=。
+            Write-Host ("upload retry {0}/3 in {1}s ..." -f $i, $waits[$i])
+            Start-Sleep -Seconds $waits[$i]
+        }
+        try {
+            $r = Invoke-RestMethod -Uri "https://bd2026.cc/api/diag-upload" -Method Post -InFile $zipPath -ContentType "application/zip" -Headers @{ "x-diag-meta" = $metaJson } -TimeoutSec 60
+            if ($r.ok -and $r.code) { return [string]$r.code }
+        } catch {}
+    }
+    return ""
+}
+
 $ver = AppVersion
+
+if ($Task -eq "reupload") {
+    # 只重传最近一份报告：上次 UPLOAD_FAILED 后报告已在本机，重跑取证既慢又会
+    # 换掉现场（日志窗口已经滚过去了）。
+    $last = Get-ChildItem -Path $Snap -Filter "*_report.md" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $last) {
+        Write-Output "CODE=NO_REPORT (snapshots 里没有报告可重传，请先跑 -Task report)"
+        exit 3
+    }
+    Write-Output "report=$($last.FullName)"
+    $code = Send-Report $last.FullName
+    if ($code) { Write-Output "CODE=$code"; exit 0 }
+    Write-Output "CODE=UPLOAD_FAILED (上传失败（网络），报告已保存在 $($last.FullName)，可把 .md 直接发群)"
+    exit 2
+}
+
 Add-Line "# field-agent:${Owner}:${Task}  (zl_collect v$ScriptVer)"
 Add-Line "- time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  fp: $Fp  app: $ver"
 if ($Note) { Add-Line "- note: $Note" }
@@ -131,21 +177,8 @@ if ((Get-Item $mdPath).Length -lt 40) {
     Write-Output "CODE=EMPTY_REPORT (脚本版本 v$ScriptVer；报告为空，请把本行发给值守)"
     exit 3
 }
-$zip = Join-Path $Work "up.zip"
-Remove-Item $zip -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path $mdPath -DestinationPath $zip -Force
-$noteS = ("field-agent:{0}:{1}:v{3}:{2}" -f $Owner, $Task, ($Note -replace '[\r\n"]', ' '), $ScriptVer)
-$noteS = $noteS.Substring(0, [Math]::Min(190, $noteS.Length))
-$meta = @{ app = $ver; fp = $Fp; note = $noteS } | ConvertTo-Json -Compress
-try {
-    $resp = Invoke-RestMethod -Uri "https://bd2026.cc/api/diag-upload" -Method Post -InFile $zip -ContentType "application/zip" -Headers @{ "x-diag-meta" = $meta } -TimeoutSec 60
-    if ($resp.ok -and $resp.code) { Write-Output "report=$mdPath"; Write-Output "CODE=$($resp.code)"; exit 0 }
-} catch {}
-try {
-    Start-Sleep -Seconds 3
-    $resp = Invoke-RestMethod -Uri "https://bd2026.cc/api/diag-upload" -Method Post -InFile $zip -ContentType "application/zip" -Headers @{ "x-diag-meta" = $meta } -TimeoutSec 60
-    if ($resp.ok -and $resp.code) { Write-Output "report=$mdPath"; Write-Output "CODE=$($resp.code)"; exit 0 }
-} catch {}
 Write-Output "report=$mdPath"
-Write-Output "CODE=UPLOAD_FAILED"
+$code = Send-Report $mdPath
+if ($code) { Write-Output "CODE=$code"; exit 0 }
+Write-Output "CODE=UPLOAD_FAILED (上传失败（网络），报告已保存在 $mdPath，可把 .md 直接发群；网络恢复后可跑 -Task reupload 重传)"
 exit 2

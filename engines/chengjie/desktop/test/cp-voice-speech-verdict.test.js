@@ -5,8 +5,10 @@
  * 背景（#121 三进宫 + #149，2026-09-02 KKXSTU）：
  *  · 「音频异常（疑似无声）」红条两轮改阈值仍误报——1.0.70 上被 Whisper 全文转录
  *    成功的预览 wav 照亮红条。根因是让浏览器端解码启发式当终审。本轮裁决改为
- *    服务端下发 voice_meta.speech（voiced/silent/unknown），客户端只在 unknown 时
- *    兜底，且加解码合理性闸。裁决核心 CpVoice.speechDecision 是纯静态方法。
+ *    服务端下发 voice_meta.speech（voiced/silent/garbled/unknown），客户端只在
+ *    unknown 时兜底，且加解码合理性闸。裁决核心 CpVoice.speechDecision 是纯静态
+ *    方法。#161（1.0.71 日语克隆乱音）补第三档 garbled＝有声但念错，与无声分文案
+ *    分出路（CpVoice.blockNoteKey）。
  *  · 「选 X 出 Y」（下拉美月、实际使用张景光）——CpVoice.selectionMismatch 复核
  *    服务端 reason=voice_selection:* 与 voice_meta.requested_persona_id。
  *
@@ -48,6 +50,7 @@ function loadCpVoice() {
 const Cls = loadCpVoice();
 ok("speechDecision 挂在类上", typeof Cls.speechDecision === "function");
 ok("selectionMismatch 挂在类上", typeof Cls.selectionMismatch === "function");
+ok("blockNoteKey 挂在类上", typeof Cls.blockNoteKey === "function");
 
 // ── speechDecision：服务端裁决优先 ──────────────────────────────────────────
 const dead = { peak: 0.0001, rms: 0.00001, decodedSec: 9.2 };   // 客户端解码出「近零」
@@ -66,6 +69,23 @@ eq("server silent 判无声", v.silent, true);
 eq("basis=server-silent", v.basis, "server-silent");
 v = Cls.speechDecision({ speech: "silent" }, null, 0);
 eq("server silent 且解码失败仍判无声", v.silent, true);
+
+// 服务端 garbled（#161 日语「ゾオパパパ」）→ 禁发，且原因与无声分开
+v = Cls.speechDecision({ speech: "garbled", speech_basis: "transcript_cer:0.85" }, live, 2.7);
+eq("server garbled 禁发", v.silent, true);
+eq("basis=server-garbled", v.basis, "server-garbled");
+eq("kind=garbled（文案分流依据）", v.kind, "garbled");
+eq("silent 的 kind 是 silent",
+   Cls.speechDecision({ speech: "silent" }, live, 2.7).kind, "silent");
+eq("voiced 无 kind", Cls.speechDecision({ speech: "voiced" }, dead, 9.2).kind, "");
+eq("客户端兜底判无声时 kind=silent",
+   Cls.speechDecision({}, dead, 0).kind, "silent");
+// 文案键：念错/无声/客户端兜底三条各归各的，绝不混成一句
+eq("garbled 用念错文案", Cls.blockNoteKey("garbled"), "cp.voice.garbled_note");
+eq("silent 用服务端无声文案", Cls.blockNoteKey("silent"), "cp.voice.silent_note_server");
+eq("unknown 用旧疑似无声文案", Cls.blockNoteKey("unknown"), "cp.voice.silent_note");
+eq("缺省（旧后端）用旧疑似无声文案", Cls.blockNoteKey(undefined), "cp.voice.silent_note");
+eq("大小写不敏感", Cls.blockNoteKey("GARBLED"), "cp.voice.garbled_note");
 
 // 服务端 unknown / 旧后端缺键 → 客户端双信号兜底
 v = Cls.speechDecision({ speech: "unknown" }, dead, 0);

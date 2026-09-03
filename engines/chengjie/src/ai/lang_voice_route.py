@@ -99,8 +99,9 @@ _CLONE_BACKENDS = frozenset({
 # 口径=**确证能念**才进表（表内缺失→警示）；整条链拿不准→返回空元组=不警示，
 # 宁可漏警不冤枉（与孤儿引用门禁「只守高置信」同哲学）。
 #   index_tts / moss_ttsd：官方仅中英（日/西/阿是 IndexTTS-2.5 才加的，hub 未升级）；
-#   fish_speech：2026-08-02 hub 真机实证 en/ja/es（ko 稳定失败，刻意不进表）；
-#   avatar_clone（7852 CosyVoice3）：官方 zh/en/ja/ko（Phase2/6 英文真机实证）。
+#   fish_speech：2026-08-02 hub 真机实证 en/es（ko 稳定失败、ja 已撤，见下）；
+#   avatar_clone（7852 CosyVoice3）：官方宣称 zh/en/ja/ko，本表只登记**实测念对**
+#     的 zh/en/es/tl（#161 见下）。
 # ⚠ 本表是**引擎语言能力**（模型层），不等于「任意声纹档×该引擎」可直接开闸：
 # 2026-08-31 实测 hub fish_speech 对 8-29 重登的「-智聊」档全语种翻车（zh CER
 # 0.53 / en 声纹 0.38=别人的声音 / ja 疑似哑音→ASR 幻觉套话）——档是 IndexTTS-2
@@ -110,14 +111,29 @@ _CLONE_BACKENDS = frozenset({
 CLONE_ENGINE_LANGS: Dict[str, Tuple[str, ...]] = {
     "index_tts": ("zh", "en"),
     "moss_ttsd": ("zh", "en"),
-    "fish_speech": ("zh", "en", "ja", "es"),
+    # #161（2026-09-03 钧机 1.0.71 报告 22:46-23:04）：日语连三次 CER>0.35、
+    # 重合成仍是「ゾオパパパ」乱音 → ja 从 fish 表撤下（8-02 的 ja 实证属
+    # fish 时代的档，8-31 起 hub 档以 IndexTTS-2 形态注册，fish 消费不到正确
+    # 参考音，旧实证已不可比）。要重新开闸须先过 tools/verify_clone_lang.py。
+    "fish_speech": ("zh", "en", "es"),
+    # 7852/CosyVoice3（avatar_clone 后端的实际引擎）：官方宣称 zh/en/ja/ko，
+    # 但「官方宣称」不是本表的入表口径——只登记**实测念对**的语种。
+    # 1145 证据群：zh/es/tl 克隆成功且校验通过；ja 乱音；ko 无任何实证。
+    "cosyvoice": ("zh", "en", "es", "tl"),
+    "cosyvoice3": ("zh", "en", "es", "tl"),
+}
+# 后端 → 该后端实际跑的引擎（能力真值仍取自 CLONE_ENGINE_LANGS，两表同源）。
+# #161 前 avatar_clone 在此另写一份 (zh,en,ja,ko)，与引擎表各说各话：hub 未开
+# 的部署走后端表 → ja/ko 一路放行到合成，念出乱音后靠「有能量」放行发给客户。
+_CLONE_BACKEND_ENGINE: Dict[str, str] = {
+    "avatar_clone": "cosyvoice3",
+    "minicpm_clone": "index_tts",
+    "voice_clone_lan": "index_tts",
+    "voice_clone_command": "index_tts",
+    "coqui_http": "index_tts",
 }
 _CLONE_BACKEND_LANGS: Dict[str, Tuple[str, ...]] = {
-    "avatar_clone": ("zh", "en", "ja", "ko"),
-    "minicpm_clone": ("zh", "en"),
-    "voice_clone_lan": ("zh", "en"),
-    "voice_clone_command": ("zh", "en"),
-    "coqui_http": ("zh", "en"),
+    b: CLONE_ENGINE_LANGS[e] for b, e in _CLONE_BACKEND_ENGINE.items()
 }
 
 

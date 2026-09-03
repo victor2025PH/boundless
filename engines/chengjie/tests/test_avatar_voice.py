@@ -235,6 +235,52 @@ def test_read_service_token_runtime_and_cache(tmp_path):
     assert read_service_token("") == ""
 
 
+# ── #161：令牌三级解析 + 缺失只告警一次（钧机 22:54 STT 二级回落静默失败）──
+def test_resolve_service_token_prefers_config_then_gateway(tmp_path, monkeypatch):
+    from src.ai.avatar_voice import resolve_service_token
+
+    f = tmp_path / "svc.txt"
+    f.write_text("from-file\n", encoding="utf-8")
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "cx.device-token")
+    # 配置读得到 → 配置优先（LAN 算力机既有行为逐字不变）
+    assert resolve_service_token(str(f)) == "from-file"
+    # 客户机形态：未配置 token_file，但网关注了设备令牌 → 用它（此前 STT 腿
+    # 拿不到它，二级回落必然缺令牌失败）
+    assert resolve_service_token("") == "cx.device-token"
+    # 显式配了却读不到 ≠ 悄悄换一台机器的令牌：如实空（配置错误不许被掩盖）
+    monkeypatch.delenv("AITR_HOSTED_AI_KEY", raising=False)
+    assert resolve_service_token(str(tmp_path / "nope.txt")) == ""
+    # 非 cx.* 的环境值不当服务令牌用（那是别的体系的 key）
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", "sk-not-a-device-token")
+    assert resolve_service_token(str(tmp_path / "nope.txt")) == ""
+
+
+def test_warn_token_missing_only_once_per_scope(caplog):
+    import logging as _logging
+
+    from src.ai import avatar_voice as _av
+
+    _av._TOKEN_WARNED.discard("STT-unit")
+    with caplog.at_level(_logging.DEBUG, logger="src.ai.avatar_voice"):
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+        _av.warn_token_missing_once("STT-unit", "C:/nope.txt")
+    warns = [r for r in caplog.records if r.levelno == _logging.WARNING]
+    assert len(warns) == 1, [r.getMessage() for r in warns]
+    # 首告警必须给出下一步动作，且绝不打印令牌本身
+    assert "token_file" in warns[0].getMessage()
+    _av._TOKEN_WARNED.discard("STT-unit")
+
+
+def test_stt_token_file_no_longer_defaults_to_dev_path():
+    """客户机上开发机路径恒不存在，却让令牌解析看起来「配过了」（#161 根因）。"""
+    from src.ai.avatar_voice import AvatarVoiceClient
+
+    assert AvatarVoiceClient({}).stt_token_file == ""
+    assert AvatarVoiceClient(
+        {"stt": {"token_file": "X:/t.txt"}}).stt_token_file == "X:/t.txt"
+
+
 def test_load_reference_b64_cache_invalidates_on_change(tmp_path):
     f = tmp_path / "ref.wav"
     f.write_bytes(b"AAA")

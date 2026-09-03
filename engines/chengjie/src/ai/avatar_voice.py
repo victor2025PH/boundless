@@ -104,6 +104,9 @@ _REGISTERED_SPK: set = set()
 # 服务令牌缓存：path -> (mtime, token)
 _TOKEN_CACHE: Dict[str, Tuple[float, str]] = {}
 _TOKEN_LOCK = threading.Lock()
+# 「令牌不可用」已告警过的用途集合（#161：缺令牌是**稳态配置事实**不是偶发故障，
+# 每条语音回验都刷一行 WARNING 只会把真故障淹掉。进程内每个用途只说一次）
+_TOKEN_WARNED: set = set()
 # 计划任务拉起冷却：task_name -> last_trigger_monotonic
 _BOOT_TRIGGER: Dict[str, float] = {}
 
@@ -1304,6 +1307,57 @@ def find_reference_text(reference_audio_path: str) -> str:
 
 
 # ── 令牌 / 参考音缓存 ─────────────────────────────────────────────────────────
+#: STT 令牌的历史内置默认路径（117 开发机的私有路径）。#161（2026-09-03 钧机
+#: 报告 22:54）：客户机上这个路径根本不存在 → AvatarHub STT 二级回落因令牌缺失
+#: 静默失败，「转录判幻觉丢弃」之后就没有第二次机会。它现在只作为**本机兜底**
+#: 参与解析，且排在网关令牌/显式配置之后——客户机走网关设备令牌，不再依赖它。
+DEV_STT_TOKEN_FILE = "D:/faceX/mfys/secrets/service_token.txt"
+
+
+def resolve_service_token(token_file: str = "") -> str:
+    """解析跨机服务令牌（X-AH-Svc）：显式配置 → 网关设备令牌 → 开发机兜底路径。
+
+    #161：托管客户机没有集群令牌文件，此前 STT 二级回落必然缺令牌而失败——
+    而设备令牌（``AITR_HOSTED_AI_KEY``，hosted_gateway 注入，官网网关同头验它）
+    在同一进程里明明是有的，只是 STT 腿没接。三段优先级：
+
+    1. ``token_file`` 显式配置且读得到（LAN 算力机部署的既有行为，零变化）；
+    2. 环境里的设备令牌 ``cx.*``（托管桌面版；调用时取值＝换新不失效）；
+    3. 开发机内置路径——**仅当未显式配置时**。显式配了却读不到＝运营指定的
+       令牌源出了问题，此时偷偷改用另一台机器的令牌只会把配置错误掩盖成
+       「时好时坏」；那种情况如实降级并告警（旧行为逐字保留）。
+
+    全部落空 → ""（调用方按 STT 不可用降级，不抛）。
+    """
+    configured = str(token_file or "").strip()
+    tok = read_service_token(configured)
+    if tok:
+        return tok
+    hosted = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
+    if hosted.startswith("cx."):
+        return hosted
+    if not configured:
+        return read_service_token(DEV_STT_TOKEN_FILE)
+    return ""
+
+
+def warn_token_missing_once(scope: str, token_file: str = "") -> None:
+    """「令牌不可用」按用途只告警一次（#161：缺令牌是稳态，不该每条语音刷屏）。
+
+    首次 WARNING 带上下一步动作（网关下发/配置 token_file），后续同用途降 DEBUG。
+    **绝不打印令牌本身或其片段**。
+    """
+    if scope in _TOKEN_WARNED:
+        logger.debug("[avatar_voice] %s 令牌仍不可用（已告警过，不重复）", scope)
+        return
+    _TOKEN_WARNED.add(scope)
+    logger.warning(
+        "[avatar_voice] %s 令牌不可用（配置 token_file=%s 读不到，且环境无网关设备"
+        "令牌）→ 该能力本次降级；托管部署请确认官网网关已下发设备令牌，自建部署请"
+        "配置 avatar_voice.stt.token_file。本进程同类告警只出这一次。",
+        scope, str(token_file or "") or "-")
+
+
 def read_service_token(token_file: str) -> str:
     """运行时读跨机服务令牌（X-AH-Svc）。带 mtime 缓存；**绝不写日志/绝不硬编码**。
 
@@ -1393,8 +1447,10 @@ class AvatarVoiceClient:
         stt = cfg.get("stt") if isinstance(cfg.get("stt"), dict) else {}
         self.stt_base_url: str = str(
             stt.get("base_url") or "http://192.168.0.140:7854").rstrip("/")
-        self.stt_token_file: str = str(
-            stt.get("token_file") or "D:/faceX/mfys/secrets/service_token.txt")
+        # #161：不再把开发机路径当内置默认——客户机上它恒不存在，却让所有令牌
+        # 解析看起来「配过了」。空串＝未配置，由 resolve_service_token 走网关
+        # 设备令牌 → 开发机兜底路径两级回落（本机部署行为不变）。
+        self.stt_token_file: str = str(stt.get("token_file") or "")
         self.stt_timeout_sec: float = float(stt.get("timeout_sec") or 30.0)
         self.stt_language: str = str(stt.get("language") or "zh")
         self.stt_max_no_speech_prob: float = float(
@@ -1594,15 +1650,12 @@ class AvatarVoiceClient:
             host = ""
         if host in ("127.0.0.1", "localhost", "::1"):
             return None
-        token = read_service_token(self.stt_token_file)
-        if not token:
-            # 托管桌面版（2026-08-03）：客户机没有集群令牌文件 → 改带设备令牌
-            # （cx.…，hosted_gateway 注入的 env，调用时取值＝换新不失效）。官网网关
-            # 验它放行（同一 X-AH-Svc 头）；LAN 节点令牌不匹配照旧 401→冷却切换，
-            # 与「无令牌 401」等价，零回退。
-            hosted = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
-            if hosted.startswith("cx."):
-                token = hosted
+        # 托管桌面版（2026-08-03）：客户机没有集群令牌文件 → 改带设备令牌
+        # （cx.…，hosted_gateway 注入的 env，调用时取值＝换新不失效）。官网网关
+        # 验它放行（同一 X-AH-Svc 头）；LAN 节点令牌不匹配照旧 401→冷却切换，
+        # 与「无令牌 401」等价，零回退。三级回落收在 resolve_service_token
+        # （#161：STT 腿此前只读文件，同一份设备令牌它用不上）。
+        token = resolve_service_token(self.stt_token_file)
         return {"X-AH-Svc": token} if token else None
 
     def _post_any(self, path: str, payload: bytes, *, timeout: float) -> bytes:
@@ -1851,9 +1904,9 @@ class AvatarVoiceClient:
         """
         if not audio_bytes:
             return None
-        token = read_service_token(self.stt_token_file)
+        token = resolve_service_token(self.stt_token_file)
         if not token:
-            logger.warning("[avatar_voice] STT 令牌不可用（token_file 缺失/为空）")
+            warn_token_missing_once("STT", self.stt_token_file)
             return None
         payload = build_stt_payload(
             audio_bytes, language=str(language or self.stt_language))
@@ -1890,8 +1943,9 @@ class AvatarVoiceClient:
         t = str(text or "").strip()
         if not t:
             return None
-        token = read_service_token(self.stt_token_file)
+        token = resolve_service_token(self.stt_token_file)
         if not token:
+            warn_token_missing_once("translate", self.stt_token_file)
             return None
         try:
             payload = json.dumps({

@@ -756,7 +756,10 @@ def test_avatarhub_asr_probe_reuses_production_codec():
     src = (_SRC / "ops" / "true_probe.py").read_text(encoding="utf-8")
     i = src.index('kind == "asr_transcribe_avatarhub"')
     seg = src[i: i + 1600]
-    for fn in ("build_stt_payload", "parse_stt_response", "read_service_token"):
+    # #161：取令牌口径升级为 resolve_service_token（配置 → 网关设备令牌 →
+    # 开发机路径三级），探针必须跟着走同一条——只读文件的旧口径会让托管客户机
+    # 上「生产能转写、探针报没令牌」，探针反过来制造假故障。
+    for fn in ("build_stt_payload", "parse_stt_response", "resolve_service_token"):
         assert fn in seg, f"未复用 avatar_voice.{fn}"
     assert "X-AH-Svc" in seg
 

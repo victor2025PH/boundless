@@ -255,6 +255,99 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return tr(request, "err.voice.profile_not_ready")
         return ""
 
+    async def _redispatch_garbled_to_edge(
+        voice_cfg: Dict[str, Any], spoken_text: str, result: Any,
+        preview_path: Path, speech: Dict[str, Any], *, persona_id: str = "",
+    ):
+        """念错（garbled）→ 就地改派 Edge 标准声重合成一次。
+
+        #161（2026-09-03 钧机 1145 证据群）：克隆链念不了这门语言时产物是「有
+        能量的乱音」，旧链按「有能量」放行发给客户。合成前的语种能力闸只拦得住
+        表里登记过的语种，表来不及更新的（或 hub 换引擎后能力变了的）由这条
+        事后腿兜住——两者是同一个决定的两个时机，动作一致：改派 Edge。
+
+        返回 ``(speech, result, preview_path)`` 三元组：改派成功＝新产物的裁决
+        （extra 补 fallback_from/primary_error，前端照常亮「非克隆声」）；改派
+        失败或新产物仍判乱码＝原样返回，调用方如实标 garbled 让前端禁发。
+        任何异常按「改派失败」处理，绝不阻塞试听。
+        """
+        try:
+            from src.ai.lang_voice_route import (
+                default_edge_voice_for_lang, detect_text_lang)
+            _lang = (detect_text_lang(spoken_text) or "").split("-")[0]
+            _edge_voice = default_edge_voice_for_lang(_lang)
+            if not _edge_voice:
+                # 该语种连 Edge 音色都没有 → 没有可改派的目标，保留 garbled
+                logger.warning(
+                    "[voice/tts-test] #161 判念错但语种 '%s' 无 Edge 音色可改派"
+                    "（persona=%s）→ 保留 garbled 禁发", _lang or "?", persona_id or "-")
+                return speech, result, preview_path
+
+            _fb_cfg = dict(voice_cfg or {})
+            _fb_cfg["backend"] = "edge_tts"
+            _fb_cfg["voice"] = _edge_voice
+            _fb_cfg["fallback_voice"] = _edge_voice
+            _fb_cfg["format"] = "mp3"
+            _fb_cfg.pop("rvc", None)
+            _fb_cfg["voice_profile"] = {"enabled": False}
+            _fb_cfg["out_dir"] = str(_TTS_PREVIEW_DIR)
+
+            from src.ai.tts_pipeline import TTSPipeline
+            _fb_result = await asyncio.wait_for(
+                TTSPipeline(_fb_cfg).synthesize(
+                    spoken_text, timeout_sec=30.0,
+                    pre_colloquialized=True, interactive=True,
+                    total_budget_sec=30.0),
+                timeout=35.0)
+            if not (_fb_result and _fb_result.ok and _fb_result.audio_path):
+                logger.warning(
+                    "[voice/tts-test] #161 念错改派 Edge 合成失败（persona=%s "
+                    "lang=%s err=%s）→ 保留 garbled 禁发", persona_id or "-",
+                    _lang, getattr(_fb_result, "error", "") or "-")
+                return speech, result, preview_path
+
+            _fb_path = preview_path.with_suffix(
+                f".{str(_fb_result.format or 'mp3').lower()}")
+            try:
+                Path(_fb_result.audio_path).rename(_fb_path)
+            except Exception:
+                _fb_path = Path(_fb_result.audio_path)
+
+            from src.ai.speech_verdict import judge_preview_speech
+            _fb_speech = await asyncio.to_thread(
+                judge_preview_speech, str(_fb_path),
+                str(_fb_result.format or "mp3"),
+                (_fb_result.extra or {}).get("synth_verify"))
+            if _fb_speech.get("speech") == "garbled":
+                # Edge 标准声也判念错＝多半是 ASR 对这门语言的识别力问题而非
+                # 引擎念错；保留改派后的产物（它至少是按语种训练的音色），
+                # 但仍如实标 garbled 交前端禁发，不替坐席打包票。
+                logger.warning(
+                    "[voice/tts-test] #161 改派 Edge 后仍判念错（lang=%s）"
+                    "→ 保留 garbled 禁发", _lang)
+                return _fb_speech, _fb_result, _fb_path
+
+            _fb_result.extra = dict(_fb_result.extra or {})
+            _fb_result.extra.setdefault(
+                "fallback_from", str((result.extra or {}).get("fallback_from")
+                                     or result.provider or "avatar_clone"))
+            _fb_result.extra["primary_error"] = f"clone_lang_garbled:{_lang}"
+            _fb_result.extra["clone_lang_blocked"] = _lang
+            logger.warning(
+                "[voice/tts-test] #161 克隆产物判念错（%s）→ 已改派 Edge 标准声 "
+                "%s 重合成（persona=%s）", speech.get("basis") or "-",
+                _edge_voice, persona_id or "-")
+            try:
+                preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
+            except Exception:
+                pass
+            return _fb_speech, _fb_result, _fb_path
+        except Exception:
+            logger.warning(
+                "[voice/tts-test] #161 念错改派异常 → 保留 garbled 禁发",
+                exc_info=True)
+            return speech, result, preview_path
+
     async def _run_tts_preview(body: Dict[str, Any], text: str,
                                xlate_svc: Any = None) -> Dict[str, Any]:
         """tts-test 核心段：resolve voice_cfg → override → fast 档 → 合成 → 整形响应。
@@ -518,11 +611,28 @@ def register_voice_routes(app, api_auth, config_manager=None):
         except Exception:
             _speech = {"speech": "unknown", "basis": "", "transcript_chars": 0,
                        "energy": "unknown"}
+
+        # #161（2026-09-03）念错改派：终审判 garbled＝产物有声但念的不是这门
+        # 语言（日语「ゾオパパパ」实录）——克隆链念不了就别硬念，就地改派 Edge
+        # 标准声重合成一次。这与语种能力闸（合成前拦）是同一个决定的两个时机：
+        # 闸门按表事前拦，终审按产物事后兜——表来不及更新的语种由这条兜住。
+        # 改派仍失败/仍判乱码 → 保留原产物并如实标 garbled（前端禁发）。
+        if _speech.get("speech") == "garbled":
+            _speech, result, preview_path = await _redispatch_garbled_to_edge(
+                voice_cfg, spoken_text, result, preview_path, _speech,
+                persona_id=str(voice_ctx.get("persona_id") or ""))
+
         if _speech.get("speech") == "silent":
             logger.warning(
                 "[voice/tts-test] 预览产物服务端判无声（energy=%s transcript_chars=%s "
                 "persona=%s file=%s）", _speech.get("energy"),
                 _speech.get("transcript_chars"),
+                voice_ctx.get("persona_id") or "-", preview_path.name)
+        elif _speech.get("speech") == "garbled":
+            logger.warning(
+                "[voice/tts-test] 预览产物服务端判念错且改派 Edge 未成功"
+                "（basis=%s transcript_chars=%s persona=%s file=%s）",
+                _speech.get("basis") or "-", _speech.get("transcript_chars"),
                 voice_ctx.get("persona_id") or "-", preview_path.name)
         else:
             logger.info(

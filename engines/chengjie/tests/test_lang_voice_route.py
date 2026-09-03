@@ -407,7 +407,37 @@ def test_clone_voice_langs_hub_engine_pinned():
     av2 = {"hub_fish": {"enabled": True, "tts_engine": "IndexTTS-2"}}
     assert clone_voice_langs(av2, "avatar_clone", "x") == ("zh", "en")
     av3 = {"hub_fish": {"enabled": True, "tts_engine": "fish_speech"}}
-    assert "ja" in clone_voice_langs(av3, "avatar_clone", "x")
+    assert "es" in clone_voice_langs(av3, "avatar_clone", "x")
+
+
+def test_clone_voice_langs_no_ja_anywhere_by_default(): # noqa: D401
+    """#161（2026-09-03 钧机 1145）：日语不得在任何缺省能力表里出现。
+
+    1.0.71 实录：日语三次 CER>0.35、重合成仍「ゾオパパパ」乱音。fish 的 ja
+    实证属 8-02 的 fish 时代档（8-31 起 hub 档以 IndexTTS-2 形态注册，fish
+    消费不到正确参考音，旧实证不可比）；avatar_clone 的 ja/ko 是照抄
+    CosyVoice3 官方宣称、从无本地实测。缺省一律不放行，要开闸先过
+    tools/verify_clone_lang.py 或由运营显式 voice_langs 背书。
+    """
+    from src.ai.lang_voice_route import (
+        CLONE_ENGINE_LANGS, clone_voice_langs)
+    for eng, langs in CLONE_ENGINE_LANGS.items():
+        assert "ja" not in langs, f"{eng} 缺省表不得含 ja"
+        assert "ko" not in langs, f"{eng} 缺省表不得含 ko"
+    for backend in ("avatar_clone", "minicpm_clone", "voice_clone_lan",
+                    "voice_clone_command", "coqui_http"):
+        got = clone_voice_langs({}, backend, "x")
+        assert "ja" not in got and "ko" not in got, (backend, got)
+
+
+def test_clone_backend_table_derives_from_engine_table():
+    """后端表必须是引擎表的投影——#161 前两表各写一份，avatar_clone 声称
+    ja/ko 而其引擎（CosyVoice3）从未实测过，hub 未开的部署直接放行到合成。"""
+    from src.ai.lang_voice_route import (
+        _CLONE_BACKEND_ENGINE, CLONE_ENGINE_LANGS, clone_voice_langs)
+    for backend, engine in _CLONE_BACKEND_ENGINE.items():
+        assert engine in CLONE_ENGINE_LANGS, f"{backend} 指向未登记引擎 {engine}"
+        assert clone_voice_langs({}, backend, "x") == CLONE_ENGINE_LANGS[engine]
 
 
 def test_clone_voice_langs_hub_unknown_engine_returns_empty():
@@ -425,9 +455,9 @@ def test_clone_voice_langs_allowlist_miss_falls_to_backend_table():
     from src.ai.lang_voice_route import clone_voice_langs
     av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
                        "persona_allowlist": ["a", "b"]}}
-    # avatar_clone=7852 CosyVoice3（zh/en/ja/ko）
+    # avatar_clone=7852 CosyVoice3；#161 起只登记实测念对的 zh/en/es/tl
     assert clone_voice_langs(av, "avatar_clone", "not_in_list") == \
-        ("zh", "en", "ja", "ko")
+        ("zh", "en", "es", "tl")
     # minicpm_clone 契约家族保守中英
     assert clone_voice_langs(av, "minicpm_clone", "not_in_list") == ("zh", "en")
 
@@ -545,16 +575,21 @@ def test_to_simplified_for_tts_identity_on_simplified_and_soft_fail():
 
 def test_clone_voice_langs_lang_engines_extends_capability():
     from src.ai.lang_voice_route import clone_voice_langs
+    # 改派目标引擎**确实登记了**该语种才计入（#161 后 fish 的实测语种是 es）
     av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
-                       "lang_engines": {"ja": "fish_speech"}}}
-    assert clone_voice_langs(av, "avatar_clone", "p") == ("zh", "en", "ja")
+                       "lang_engines": {"es": "fish_speech"}}}
+    assert clone_voice_langs(av, "avatar_clone", "p") == ("zh", "en", "es")
+    # #161：改派到 fish 的日语不再虚报能力——fish 自己的表里已经没有 ja 了
+    av_ja = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                          "lang_engines": {"ja": "fish_speech"}}}
+    assert clone_voice_langs(av_ja, "avatar_clone", "p") == ("zh", "en")
     # 映射到未登记引擎的语种不虚报能力
     av2 = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
                         "lang_engines": {"th": "brand_new_engine"}}}
     assert clone_voice_langs(av2, "avatar_clone", "p") == ("zh", "en")
     # 主引擎未钉 → 仍是能力未知（映射不足以撑起整条主路的判定）
     av3 = {"hub_fish": {"enabled": True,
-                        "lang_engines": {"ja": "fish_speech"}}}
+                        "lang_engines": {"es": "fish_speech"}}}
     assert clone_voice_langs(av3, "avatar_clone", "p") == ()
 
 
@@ -572,15 +607,24 @@ def test_hub_engine_for_lang_lookup():
 
 
 def test_clone_lang_gate_respects_lang_engines_routing():
-    """有 {ja: fish_speech} 映射 → 日文放行（会被改派到会念的引擎）；泰文仍拦。"""
+    """改派到**确实会念**该语种的引擎 → 放行；表外语种仍拦。
+
+    #161 起用 es 做正例：日语已从所有引擎表撤下，「改派 fish 念日语」正是
+    1145 证据群里念出「ゾオパパパ」的那条路，闸门必须照拦。"""
     from src.ai.lang_voice_route import clone_lang_gate
     av = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
                        "persona_allowlist": ["p1"],
-                       "lang_engines": {"ja": "fish_speech"}}}
+                       "lang_engines": {"es": "fish_speech"}}}
     assert clone_lang_gate(
-        "どこにいるの。ご飯は食べた？", av, "avatar_clone", "p1") == ""
+        "Hola, ¿cómo estás? Quiero saber más sobre esto, señor",
+        av, "avatar_clone", "p1") == ""
     assert clone_lang_gate(
         "สวัสดีค่ะ วันนี้เป็นยังไงบ้าง", av, "avatar_clone", "p1") == "th"
+    av_ja = {"hub_fish": {"enabled": True, "tts_engine": "index_tts",
+                          "persona_allowlist": ["p1"],
+                          "lang_engines": {"ja": "fish_speech"}}}
+    assert clone_lang_gate(
+        "どこにいるの。ご飯は食べた？", av_ja, "avatar_clone", "p1") == "ja"
 
 
 def test_clone_voice_langs_hub_branch_only_for_avatar_family():
@@ -589,7 +633,7 @@ def test_clone_voice_langs_hub_branch_only_for_avatar_family():
     from src.ai.lang_voice_route import clone_voice_langs
     av = {"hub_fish": {"enabled": True, "tts_engine": "fish_speech",
                        "persona_allowlist": ["p1"]}}
-    assert "ja" in clone_voice_langs(av, "avatar_clone", "p1")   # hub 表（fish）
+    assert "es" in clone_voice_langs(av, "avatar_clone", "p1")   # hub 表（fish）
     assert clone_voice_langs(av, "", "p1") != ()                 # backend 空沿用 hub 语义
     assert clone_voice_langs(av, "minicpm_clone", "p1") == ("zh", "en")   # 后端表
     assert clone_voice_langs(av, "voice_clone_lan", "p1") == ("zh", "en")
