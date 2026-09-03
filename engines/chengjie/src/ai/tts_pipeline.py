@@ -1622,8 +1622,19 @@ class TTSPipeline:
                 interactive=interactive,
                 deadline=deadline)
             if av_rv is not None:
-                return av_rv
-            err = "avatar_clone_unreachable"
+                # #161 自动链事后腿：成品判「念错」→ 当语种闸命中处置（下方
+                # 既有 edge 兜底块会按语种对齐音色出标准声）。合成前的表拦不住
+                # 「表来不及更新/hub 换引擎后能力变了」，这条兜住。
+                _garb = (await self._clone_take_garbled(av_rv)
+                         if av_rv.ok else "")
+                if not _garb:
+                    return av_rv
+                _lang_blocked = _garb
+                err = f"clone_lang_garbled:{_garb}"
+                rv.extra["clone_lang_blocked"] = _garb
+                self._discard_garbled_take(av_rv, _garb, primary_backend)
+            else:
+                err = "avatar_clone_unreachable"
         elif primary_backend == "minicpm_clone":
             mc_rv = await self._try_minicpm_clone(
                 rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
@@ -1631,8 +1642,16 @@ class TTSPipeline:
                 skip_llm_colloquial=skip_llm_colloquial,
                 split_part=split_part, interactive=interactive)
             if mc_rv is not None:
-                return mc_rv
-            err = "minicpm_clone_unreachable"
+                _garb = (await self._clone_take_garbled(mc_rv)
+                         if mc_rv.ok else "")
+                if not _garb:
+                    return mc_rv
+                _lang_blocked = _garb
+                err = f"clone_lang_garbled:{_garb}"
+                rv.extra["clone_lang_blocked"] = _garb
+                self._discard_garbled_take(mc_rv, _garb, primary_backend)
+            else:
+                err = "minicpm_clone_unreachable"
         else:
             err = await self._run_backend(
                 rv, rv.text, out, rv.voice, primary_backend, rv.format,
@@ -1778,6 +1797,79 @@ class TTSPipeline:
                 return ""
             return blocked
         except Exception:
+            return ""
+
+    def _discard_garbled_take(
+        self, rv: "TTSResult", lang: str, backend: str,
+    ) -> None:
+        """判定念错后**作废这版成品**：清成功态 + 删文件 + 告警 + 记账。
+
+        清成功态是这条腿的要害：克隆分支里 ``rv.ok`` 早已置 True、
+        ``audio_path`` 指着那份乱音（返回的就是同一个 rv 对象）。若只是往下
+        走兜底而不清，一旦 edge 兜底也失败，末尾 ``return rv`` 会把 ok=True +
+        乱音路径原样交给调用方——发出去的还是「ゾオパパパ」，比不修更糟。
+        兜底成功时 ``_run_backend`` 会重新写这些字段，清空无副作用。
+
+        记账进语种闸同一本账（``record_blocked``）：「客户在要哪些我们念不了
+        的语种」这个问题，事前被表拦下的与事后判乱码的是同一类事实，分两本账
+        会让「该给哪门语言补引擎」的判断少看一半数据。
+        """
+        logger.warning(
+            "[tts] 克隆成品判「念错」（语种 %s，后端 %s，persona=%s）→ 作废本版"
+            "并按语种不支持处置（改走标准声兜底）；绝不把乱音发给客户",
+            lang, backend, self.persona_id or "-")
+        try:
+            p = Path(str(rv.audio_path or ""))
+            if p.is_file():
+                p.unlink(missing_ok=True)   # type: ignore[call-arg]
+        except Exception:
+            pass
+        rv.ok = False
+        rv.audio_path = ""
+        rv.duration_sec = -1.0
+        rv.duration_source = "unknown"
+        try:
+            from src.ai.voice_synth_stats import get_voice_synth_stats
+            get_voice_synth_stats().record_blocked(lang)
+        except Exception:
+            pass
+
+    async def _clone_take_garbled(self, rv: "TTSResult") -> str:
+        """克隆产物**事后**判「念错」→ 返回被判语种前缀，否则 ""（#161 自动链腿）。
+
+        合成前的语种能力闸按表拦，表准了就够；但表来不及更新、或 hub 换引擎后
+        能力变了时，自动出站链（A 线语音回复 / B 线 autosend / 主动触达）就没有
+        第二道——1145 实录的日语乱音正是这么发给客户的（试听链 0903 已补事后腿，
+        自动链当时还没有）。本方法把同一个决定补在自动链上：判乱码 → 调用方按
+        「克隆链念不了这门语言」处置，与语种闸命中后的动作一致（改派 Edge）。
+
+        成本纪律：先过 ``garbled_suspect``（只看已在手的回验证据，零 IO）——
+        正常产物（CER≈0，占绝大多数流量）在这里就返回，一次文件都不读；只有
+        疑似的那几条才付一次能量检测。判不出/异常一律 ""（fail-open：绝不因为
+        这条新腿把在跑的语音链打挂）。
+        """
+        try:
+            sv = (rv.extra or {}).get("synth_verify")
+            from src.ai.speech_verdict import garbled_suspect, speech_verdict
+            if not garbled_suspect(sv):
+                return ""
+            p = Path(str(rv.audio_path or ""))
+            if not p.is_file():
+                return ""
+            from src.ai.avatar_voice import detect_silent_audio
+            energy = await asyncio.to_thread(
+                lambda: detect_silent_audio(p.read_bytes(), str(rv.format or "")))
+            if speech_verdict(sv, energy).get("speech") != "garbled":
+                return ""
+            lang = ""
+            try:
+                from src.ai.lang_voice_route import detect_text_lang
+                lang = (detect_text_lang(rv.text) or "").split("-")[0]
+            except Exception:
+                lang = ""
+            return lang or "unknown"
+        except Exception:
+            logger.debug("[tts] 克隆产物念错判定异常（放行）", exc_info=True)
             return ""
 
     def _effective_voice(self) -> str:

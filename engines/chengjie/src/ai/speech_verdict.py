@@ -42,6 +42,37 @@ GARBLED_MIN_CER = 0.35
 GARBLED_CONFIDENT_CER = 0.60
 
 
+def garbled_suspect(synth_verify: Optional[Dict[str, Any]]) -> bool:
+    """**只看回验证据**判「这条疑似念错」（不读文件、零 IO 的前置筛）。
+
+    ``speech_verdict`` 的 garbled 判据是四信号合取，其中「字节有能量」要读整个
+    音频文件。自动出站链（A 线语音回复 / B 线 autosend / 主动触达）每条消息都
+    要过，无差别读文件是白付的成本——而回验证据（CER/字数/重合成次数）本来就
+    在管线手里。本函数抽出其中**不需要 IO** 的三条：ASR 确实出了字 + CER 高到
+    与送稿无关 +（重合成过 或 CER 高到单发定案）。
+
+    返回 True 只表示「值得再花一次能量检测去坐实」，**不是判决**——终审仍由
+    ``speech_verdict`` 出（能量判无声那是 silent 的地盘，判不了则不改判）。
+    正常产物（CER≈0，占绝大多数流量）在这里就返回 False，一次文件都不读。
+    """
+    sv = synth_verify if isinstance(synth_verify, dict) else {}
+    try:
+        hyp_chars = int(sv.get("hyp_chars") or 0)
+    except (TypeError, ValueError):
+        return False
+    try:
+        cer = float(sv.get("cer")) if sv.get("cer") is not None else -1.0
+    except (TypeError, ValueError):
+        return False
+    try:
+        retried = int(sv.get("retried") or 0)
+    except (TypeError, ValueError):
+        retried = 0
+    return (hyp_chars >= TRANSCRIPT_MIN_CHARS
+            and cer >= GARBLED_MIN_CER
+            and (retried >= 1 or cer >= GARBLED_CONFIDENT_CER))
+
+
 def speech_verdict(
     synth_verify: Optional[Dict[str, Any]],
     energy: Optional[bool],
@@ -87,13 +118,9 @@ def speech_verdict(
     transcript_ok = hyp_chars >= TRANSCRIPT_MIN_CHARS and 0.0 <= cer <= TRANSCRIPT_MAX_CER
     energy_tag = "unknown" if energy is None else ("silent" if energy else "ok")
 
-    garbled = (
-        hyp_chars >= TRANSCRIPT_MIN_CHARS
-        and cer >= GARBLED_MIN_CER
-        and energy is False
-        and (retried >= 1 or cer >= GARBLED_CONFIDENT_CER)
-    )
-    if garbled:
+    # 三条不需 IO 的信号抽在 garbled_suspect（自动链的零成本前置筛复用同一份
+    # 判据，两处口径绝不各写一套）；这里只多加「字节确有能量」这条终审证据。
+    if garbled_suspect(sv) and energy is False:
         logger.warning(
             "[speech_verdict] 转写出字但与送稿无关（%d 字, CER=%.2f, 重合成 %d 次）"
             "且字节有能量 → 判念错（garbled），不得按「有能量」放行",

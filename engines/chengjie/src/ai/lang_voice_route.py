@@ -827,8 +827,12 @@ def fallback_reason_from_extra(extra: Optional[Dict[str, Any]]) -> Tuple[str, st
     ex = extra if isinstance(extra, dict) else {}
     lang = str(ex.get("clone_lang_blocked") or "").strip()
     perr = str(ex.get("primary_error") or "").strip()
-    if not lang and perr.startswith("clone_lang_unsupported:"):
-        lang = perr.split(":", 1)[1].strip()
+    # 事前拦（闸门按表）与事后判（成品乱码，#161 自动链腿）对用户是同一件事：
+    # 这门语言克隆声念不了、本条已改标准声。两个码归同一个 reason，前端无需
+    # 分辨是哪道闸拦的——「保护性改道非故障」的文案与出路完全一致。
+    for _mark in ("clone_lang_unsupported:", "clone_lang_garbled:"):
+        if not lang and perr.startswith(_mark):
+            lang = perr.split(":", 1)[1].strip()
     if lang:
         return "lang_unsupported", lang
     if perr == "token_wallet_exhausted":
