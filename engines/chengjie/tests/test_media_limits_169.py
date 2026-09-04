@@ -157,6 +157,38 @@ def test_obs_upload_timeout_ctx_never_lowers_and_tolerates_unknown_shape():
         assert eff == "weird"
 
 
+# ─────────────────── 4. 编排器 send_media 悬死兜底按体积加时 ───────────────────
+
+def test_orchestrator_send_media_timeout_scales_with_size():
+    """45s 悬死兜底不得把正常的 60MB(40s)/100MB(60s) 上传判成 send_timeout。"""
+    from src.integrations import account_orchestrator as AO
+    base = AO.DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+    assert AO._send_media_timeout_sec(None) == base
+    assert AO._send_media_timeout_sec(None, 0) == base
+    assert AO._send_media_timeout_sec(None, "bad") == base
+    # 小文件（图片/语音）几乎不变
+    assert AO._send_media_timeout_sec(None, 300 * 1024) < base + 2
+    t60 = AO._send_media_timeout_sec(None, 60 * ML.MB)
+    t100 = AO._send_media_timeout_sec(None, 100 * ML.MB)
+    assert base < t60 < t100 <= AO.SEND_MEDIA_TIMEOUT_CAP_SEC
+    assert t60 > 60.5 * 2  # 真机实测 100MB 60.5s；60MB 档也要有充足余量
+    assert AO._send_media_timeout_sec(None, 10 ** 12) == AO.SEND_MEDIA_TIMEOUT_CAP_SEC
+    # 运营配置仍是基数；显式关闭（<=0）保持旧语义不被体积项复活
+    cfg = {"orchestrator": {"send_media_timeout_sec": 10}}
+    assert AO._send_media_timeout_sec(cfg, 0) == 10.0
+    assert AO._send_media_timeout_sec(cfg, 60 * ML.MB) > 10.0
+    assert AO._send_media_timeout_sec({"orchestrator": {"send_media_timeout_sec": 0}},
+                                      60 * ML.MB) == 0.0
+
+
+def test_orchestrator_send_media_passes_file_size_to_timeout():
+    import inspect
+    from src.integrations import account_orchestrator as AO
+    src = inspect.getsource(AO.AccountOrchestrator.send_media)
+    assert "_send_media_timeout_sec(self._config, _sz)" in src
+    assert "os.path.getsize(_send_path)" in src
+
+
 def test_send_line_media_upload_goes_through_timeout_ctx(monkeypatch):
     """send_line_media 的 OBS 上传必须包在放宽超时里（静态接线钉住，别被重构掉）。"""
     import inspect

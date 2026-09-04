@@ -92,12 +92,30 @@ def line_recv_hold_sec(streak: int) -> float:
 DEFAULT_SEND_MEDIA_TIMEOUT_SEC = 45.0
 
 
-def _send_media_timeout_sec(config: Optional[Dict[str, Any]]) -> float:
+#: #169（2026-09-05）：上限放到 LINE 100MB 后，45s 悬死兜底会把**正常的大文件上传**
+#: 判成 send_timeout（117 号真机：60MB 40.2s / 100MB 60.5s 才送达）——路由回 502、
+#: 坐席看红字重发，客户却已收到＝双发。故按体积加时：``+ size / 256KB/s``（与
+#: ``line_media.OBS_UPLOAD_MIN_BPS`` 同口径的保守上行下界），只加不减、封顶 900s。
+#: 小文件（图片/语音）size 项趋零，45s 悬死判定不变。
+SEND_MEDIA_TIMEOUT_MIN_BPS = 256 * 1024
+SEND_MEDIA_TIMEOUT_CAP_SEC = 900.0
+
+
+def _send_media_timeout_sec(config: Optional[Dict[str, Any]], size_bytes: int = 0) -> float:
     try:
         v = ((config or {}).get("orchestrator") or {}).get("send_media_timeout_sec")
-        return float(v) if v is not None else DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+        base = float(v) if v is not None else DEFAULT_SEND_MEDIA_TIMEOUT_SEC
     except (TypeError, ValueError):
-        return DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+        base = DEFAULT_SEND_MEDIA_TIMEOUT_SEC
+    if base <= 0:
+        return base  # 运营显式关闭兜底（旧语义）
+    try:
+        n = max(0, int(size_bytes or 0))
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return base
+    return float(min(SEND_MEDIA_TIMEOUT_CAP_SEC, base + n / float(SEND_MEDIA_TIMEOUT_MIN_BPS)))
 
 
 def account_key(platform: str, account_id: str) -> str:
@@ -675,7 +693,11 @@ class AccountOrchestrator:
                     _kw["media_url"] = media_url
             except (ValueError, TypeError):
                 pass
-        _timeout = _send_media_timeout_sec(self._config)
+        try:
+            _sz = os.path.getsize(_send_path) if _send_path else 0
+        except (OSError, TypeError, ValueError):
+            _sz = 0
+        _timeout = _send_media_timeout_sec(self._config, _sz)
         _t0 = time.monotonic()
         try:
             try:
