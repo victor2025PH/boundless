@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import time
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,9 +31,12 @@ CFG = {
 @pytest.fixture()
 def bi(tmp_path, monkeypatch):
     from src.ops import bug_intake
+    from src.ops import bug_intake_backfill as bfm
     bug_intake.reset_state_for_tests()
     monkeypatch.setattr(
         bug_intake, "_db_path", lambda: tmp_path / "bug_intake.db")
+    # J-5 A：已观察 mid 集与 DB 同落本测 tmp（note_group_msg_seq 会写它）
+    monkeypatch.setattr(bfm, "_SEEN_PATH_OVERRIDE", tmp_path / "bug_intake_seen.json")
     yield bug_intake
     bug_intake.reset_state_for_tests()
 
@@ -764,6 +769,113 @@ def test_wiring_telegram_client_seq_sentinel_and_replay():
     assert "seq_gap_backfilled(" in src
     src_wh = _read("src/inbox/webhook_notifier.py")
     assert '== "seq_gap"' in src_wh, "告警 formatter 必须认识 seq_gap（否则渲染成假「新工单」）"
+
+
+# ── J-5 A（2026-09-05）：backfill 二次观察收口 ─────────────────────────────────
+
+def _run(coro):
+    import asyncio
+    return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(coro)
+
+
+def test_seq_sentinel_marks_seen_for_backfill(bi):
+    """实时链 note_group_msg_seq 一到即登记「已观察」（早于去重/限频/observe）。"""
+    from src.ops.bug_intake_backfill import is_seen
+    bi.note_group_msg_seq(CFG, -100123, 500, account_id="777", now=1.0)
+    assert is_seen(-100123, 500)
+    # 非报障群 / 无效 id 不登记
+    bi.note_group_msg_seq(CFG, -100999, 7, account_id="777", now=1.0)
+    bi.note_group_msg_seq(CFG, -100123, 0, account_id="777", now=1.0)
+    assert not is_seen(-100999, 7) and not is_seen(-100123, 0)
+
+
+def test_observe_same_mid_twice_is_single_observation(bi, bus):
+    """同 mid 二次 observe：不落第二条事件、不改工单、不计限频、out.dup=True。"""
+    first = bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="777", reporter_id="u1",
+        reporter_name="skuio 花无缺", text="发图还是失败，报错了", msg_id=1001)
+    assert first["active"] and first["category"] == "bug"
+    tid = first["ticket_id"]
+    n_ev = len(bi.list_events(None))
+    body0 = bi.get_ticket(tid)["body"]
+    again = bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="777", reporter_id="u1",
+        reporter_name="skuio", text="发图还是失败，报错了", msg_id=1001, now=time.time() + 300)
+    assert again["active"] is False and again.get("dup") is True
+    assert len(bi.list_events(None)) == n_ev
+    assert bi.get_ticket(tid)["body"] == body0
+    assert bi.get_ticket(tid)["report_count"] == 1
+    assert bi.dump_stats()["observe_dup"] == 1
+    assert bi.dump_stats()["observed"] == 1
+
+
+def test_observe_realtime_without_mid_then_replay_with_mid_dedups(bi, bus):
+    """实时链现状不传 msg_id（skill_manager 调用点无 mid）→ 回放带 mid 在 60s 内
+    按 (reporter, 文本) 近似判重；超窗 / 两侧都带不同 mid 则是真两条。"""
+    t0 = 1000.0
+    a = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                 reporter_id="u1", reporter_name="skuio 花无缺",
+                                 text="语音发不出去", now=t0)
+    assert a["active"] and a["category"] == "bug"
+    b = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                 reporter_id="u1", reporter_name="skuio",
+                                 text="语音发不出去", now=t0 + 30, msg_id=2001)
+    assert b.get("dup") is True
+    # 同文本超窗 → 不是同一条（正常观察：收集窗内 → collect 补录进同一单）
+    c = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                 reporter_id="u1", reporter_name="skuio",
+                                 text="语音发不出去", now=t0 + 120, msg_id=2002)
+    assert c["active"] is True and not c.get("dup")
+    assert c["category"] == "collect" and c["ticket_id"] == a["ticket_id"]
+    # 两侧都带 mid 且不同 → 60s 内同文本也是两条真消息
+    d = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                 reporter_id="u1", reporter_name="skuio",
+                                 text="语音发不出去", now=t0 + 130, msg_id=2003)
+    assert d["active"] is True and not d.get("dup")
+    # 别的报障人同文本不判重
+    e = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                 reporter_id="u9", reporter_name="钧",
+                                 text="语音发不出去", now=t0 + 5)
+    assert e["active"] is True
+
+
+def test_verify_yes_not_retriggered_by_backfill_replay(bi, bus):
+    """0904 21:0x 实录：花无缺一句「我这边显示的都好了」实时链已消费（#153），
+    4 分钟后 backfill 重喂又在 #154 上 verify_yes。现在：实时链见过的 mid 回放
+    直接跳过；即便没进哨兵、只要 60s 内同文本也短路——第二张单保持 fixed。"""
+    from src.ops.bug_intake_backfill import run_backfill_once, save_state
+    tid_a = _mk_fixed_notified(bi, reporter="u1", text="消息发不出去")
+    tid_b = _mk_fixed_notified(bi, reporter="u1", text="语音听不到")
+    t0 = time.time()
+    # 实时链：哨兵登记 mid=3001（此处只登记不判洞），随后 observe（无 mid，现状）
+    bi.note_group_msg_seq(CFG, -100123, 3001, account_id="777", now=t0)
+    rt = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                  reporter_id="u1", reporter_name="skuio 花无缺",
+                                  text="我这边显示的都好了", now=t0)
+    assert rt["category"] == "verify"
+    verified = {tid_a, tid_b} - {
+        t for t in (tid_a, tid_b) if bi.get_ticket(t)["status"] == "fixed"}
+    assert len(verified) == 1
+    n_yes = bi.dump_stats()["verify_yes"]
+    # backfill 4 分钟后回放同一条（水位落后于 3001）
+    sp = bi._db_path().parent / "state.json"
+    save_state({"-100123": {"last_msg_id": 3000, "ts": t0}}, sp)
+
+    async def _fetch(chat_id, cap):
+        return [{"id": 3001, "text": "我这边显示的都好了", "reporter_id": "u1",
+                 "reporter_name": "skuio", "outgoing": False, "has_media": False}]
+
+    s = _run(run_backfill_once(CFG, _fetch, account_id="777", state_path=sp,
+                               now=t0 + 240))
+    assert s["seen_skipped"] == 1 and s["replayed"] == 0
+    assert bi.dump_stats()["verify_yes"] == n_yes
+    still_fixed = [t for t in (tid_a, tid_b) if bi.get_ticket(t)["status"] == "fixed"]
+    assert len(still_fixed) == 1, "第二张单不得被同一句话再 verify_yes"
+    assert len(bi.list_events(["verify_yes"])) == 1
+
+
+def test_dump_stats_has_observe_dup(bi):
+    assert "observe_dup" in bi.dump_stats()
 
 
 # ── C2（2026-09-02）：值守可见性——台账事件只读口 ─────────────────────────────

@@ -23,12 +23,25 @@ seen 账本**（``config/bug_intake_backfill.state.json``，C 类数据落实例
 配置 ``bug_intake.backfill.{enabled, interval_sec, cap}``——随 ``bug_intake``
 主开关走（bug_intake.enabled=false 或 groups 空 → 循环整体不跑）；
 backfill.enabled 默认 **true**（本功能就是监控自察，装上即该工作）。
+
+**二次观察收口（J-5 A，2026-09-05）**：水位账本只知道「本模块回放到哪」，
+不知道实时链已经处理过哪些 mid——实时链每次进程重启后 ``note_group_msg_seq``
+的 ``_SEQ`` 归零、backfill 水位又落后于实况，于是 0904 21:0x 花无缺一句
+「我这边显示的都好了」实时被限频压下后，4 分钟后被 backfill 当漏网重喂：
+#153 落了第二条 rate_capped 正文、verify_yes 又在 #154 上触发一次。
+修法＝**「已观察 mid 集」**（``config/bug_intake_seen.json``，与水位账本同目录）：
+实时链 ``note_group_msg_seq`` 一到就 ``mark_seen``（早于去重/限频/observe，
+只要消息进过实时链就算见过）；回放前 ``is_seen`` 命中即跳过并计
+``seen_skipped``；回放成功也 ``mark_seen``。每群保最近 ``_SEEN_MAX_PER_CHAT``
+个 id，跨重启持久。旧水位语义原样保留（首见不回放 / cap 不跳档）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -36,6 +49,135 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 logger = logging.getLogger("ai_chat_assistant.bug_intake_backfill")
 
 _STATE_PATH_DEFAULT = Path("config") / "bug_intake_backfill.state.json"
+
+# ── 已观察 mid 集（实时链 × 回放链共享；J-5 A）────────────────────────────────
+_SEEN_FILE_NAME = "bug_intake_seen.json"
+_SEEN_MAX_PER_CHAT = 2000          # 每群保最近 N 个 id（报障群日均几十条，够覆盖数周）
+_SEEN_PATH_OVERRIDE: Optional[Path] = None   # 测试隔离用；生产恒 None
+_SEEN_LOCK = threading.Lock()
+_SEEN_CACHE: Optional[Dict[str, Dict[int, float]]] = None   # chat → {mid: ts}
+_SEEN_CACHE_PATH: Optional[Path] = None
+
+
+def seen_path() -> Path:
+    """已观察集落盘路径：与 ``bug_intake.db`` 同 ``config_dir()`` 契约（生产＝实例
+    数据根 config/，与水位账本同目录；测试经 AITR_DATA_DIR 落 tmp）。绝不抛。"""
+    if _SEEN_PATH_OVERRIDE is not None:
+        return Path(_SEEN_PATH_OVERRIDE)
+    try:
+        from src.licensing.data_paths import config_dir
+        return Path(config_dir()) / _SEEN_FILE_NAME
+    except Exception:
+        return Path("config") / _SEEN_FILE_NAME
+
+
+def _seen_load_locked() -> Dict[str, Dict[int, float]]:
+    """按当前路径装载（路径变化/首次访问才读盘）；调用方持 ``_SEEN_LOCK``。"""
+    global _SEEN_CACHE, _SEEN_CACHE_PATH
+    p = seen_path()
+    if _SEEN_CACHE is not None and _SEEN_CACHE_PATH == p:
+        return _SEEN_CACHE
+    data: Dict[str, Dict[int, float]] = {}
+    try:
+        if p.is_file():
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for cid, ent in raw.items():
+                    mids = ent.get("mids") if isinstance(ent, dict) else None
+                    if not isinstance(mids, list):
+                        continue
+                    ts0 = float(ent.get("ts") or 0.0)
+                    bucket: Dict[int, float] = {}
+                    for m in mids:
+                        try:
+                            bucket[int(m)] = ts0
+                        except (TypeError, ValueError):
+                            continue
+                    if bucket:
+                        data[str(cid)] = bucket
+    except Exception:
+        logger.debug("[bug_backfill] 已观察集读取失败（按空）", exc_info=True)
+        data = {}
+    _SEEN_CACHE, _SEEN_CACHE_PATH = data, p
+    return data
+
+
+def _seen_save_locked(data: Dict[str, Dict[int, float]]) -> None:
+    """整表落盘（tmp+replace 原子换；失败只记 debug——账本丢了最坏是多回放一次，
+    observe 侧另有近似去重兜底）。调用方持 ``_SEEN_LOCK``。"""
+    p = seen_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            cid: {"mids": sorted(bucket.keys()),
+                  "ts": max(bucket.values()) if bucket else 0.0}
+            for cid, bucket in data.items() if bucket
+        }
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
+    except Exception:
+        logger.debug("[bug_backfill] 已观察集写入失败（忽略）", exc_info=True)
+
+
+def mark_seen(chat_id: Any, msg_id: Any, *, now: Optional[float] = None,
+              persist: bool = True) -> bool:
+    """登记 (chat, mid) 已被某条链观察过；返回 True＝本次新登记，False＝早已在集
+    /无效入参。超每群上限按 id 剔最旧（mid 单调，最小即最旧）。绝不抛。"""
+    try:
+        cid = str(chat_id or "").strip()
+        mid = int(msg_id or 0)
+    except (TypeError, ValueError):
+        return False
+    if not cid or mid <= 0:
+        return False
+    ts = float(now if now is not None else time.time())
+    try:
+        with _SEEN_LOCK:
+            data = _seen_load_locked()
+            bucket = data.setdefault(cid, {})
+            if mid in bucket:
+                return False
+            bucket[mid] = ts
+            if len(bucket) > _SEEN_MAX_PER_CHAT:
+                for old in sorted(bucket.keys())[:len(bucket) - _SEEN_MAX_PER_CHAT]:
+                    bucket.pop(old, None)
+            if persist:
+                _seen_save_locked(data)
+        return True
+    except Exception:
+        logger.debug("[bug_backfill] mark_seen 异常（忽略）", exc_info=True)
+        return False
+
+
+def is_seen(chat_id: Any, msg_id: Any) -> bool:
+    """(chat, mid) 是否已被观察过。绝不抛；异常按「未见过」（宁多回放不漏单，
+    observe 侧近似去重再兜一层）。"""
+    try:
+        cid = str(chat_id or "").strip()
+        mid = int(msg_id or 0)
+        if not cid or mid <= 0:
+            return False
+        with _SEEN_LOCK:
+            return mid in _seen_load_locked().get(cid, {})
+    except Exception:
+        return False
+
+
+def seen_count(chat_id: Any) -> int:
+    """某群已观察集大小（观测/测试用）。"""
+    try:
+        with _SEEN_LOCK:
+            return len(_seen_load_locked().get(str(chat_id or "").strip(), {}))
+    except Exception:
+        return 0
+
+
+def reset_seen_for_tests() -> None:
+    """测试隔离：清进程缓存（下次访问按当前路径重读）。不动文件。"""
+    global _SEEN_CACHE, _SEEN_CACHE_PATH
+    with _SEEN_LOCK:
+        _SEEN_CACHE, _SEEN_CACHE_PATH = None, None
 
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
@@ -118,6 +260,16 @@ def plan_replay(
     return missed[:cap]
 
 
+def _row_reporter_name(r: Dict[str, Any]) -> str:
+    """回喂名口径对齐实时链：``first_name + " " + last_name``（行里有姓才拼；
+    fetch 方只给 ``reporter_name`` 时原样透传）。"""
+    first = str(r.get("reporter_name") or "").strip()
+    last = str(r.get("reporter_last_name") or "").strip()
+    if last and last not in first:
+        return f"{first} {last}".strip()
+    return first
+
+
 def max_row_id(rows: List[Dict[str, Any]]) -> int:
     best = 0
     for r in rows or []:
@@ -142,12 +294,19 @@ async def run_backfill_once(
     """对全部报障群跑一轮补拉。
 
     ``fetch_history(chat_id, cap) -> [{id, text, reporter_id, reporter_name,
-    outgoing, has_media}]``（新旧不限序）；``observe`` 缺省用真
-    ``bug_intake.observe_group_message``（测试注入假体）。
-    返回 ``{groups, replayed, media_skipped, first_seen}`` 摘要。
+    outgoing, has_media[, reporter_last_name]}]``（新旧不限序）；``observe`` 缺省
+    用真 ``bug_intake.observe_group_message``（测试注入假体）。
+    返回 ``{groups, replayed, media_skipped, first_seen, seen_skipped}`` 摘要。
+
+    - 行带 ``reporter_last_name`` 时回喂名＝``first last``（与实时链
+      ``_peer_display_name`` 同口径；0904 实录 backfill 记「skuio」实时记
+      「skuio 花无缺」，值守对账要靶两个名字）；
+    - 已在「已观察 mid 集」的行跳过（计 ``seen_skipped``，水位照推）；回喂成功
+      的行 ``mark_seen``；``msg_id`` 透传 observe 供其按 mid 精确去重。
     """
     cfg = parse_backfill_cfg(config)
-    summary = {"groups": 0, "replayed": 0, "media_skipped": 0, "first_seen": 0}
+    summary = {"groups": 0, "replayed": 0, "media_skipped": 0, "first_seen": 0,
+               "seen_skipped": 0}
     if not cfg["enabled"]:
         return summary
     if observe is None:
@@ -190,15 +349,23 @@ async def run_backfill_once(
         summary["media_skipped"] += len(media_only)
         replayed_top = last_id
         for r in missed:
+            rid = int(r.get("id") or 0)
+            if is_seen(chat_id, rid):
+                # 实时链已经处理过（限频压下/登记过/去重过都算）——回放＝二次观察
+                summary["seen_skipped"] += 1
+                replayed_top = max(replayed_top, rid)
+                continue
             try:
                 observe(
                     config, chat_id=chat_id, account_id=account_id,
                     reporter_id=str(r.get("reporter_id") or ""),
-                    reporter_name=str(r.get("reporter_name") or ""),
+                    reporter_name=_row_reporter_name(r),
                     text=str(r.get("text") or ""),
+                    msg_id=rid,
                 )
                 summary["replayed"] += 1
-                replayed_top = max(replayed_top, int(r.get("id") or 0))
+                replayed_top = max(replayed_top, rid)
+                mark_seen(chat_id, rid, now=ts)
             except Exception:
                 logger.warning("[bug_backfill] 回喂 %s#%s 失败（跳过该条）",
                                chat_id, r.get("id"), exc_info=True)

@@ -58,7 +58,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,9 @@ _STATS: Dict[str, int] = {
     "official_bot_suppressed": 0,
     # 2026-09-02：本方账号（支持号/本 worker）消息被立单链自身守卫压制的次数
     "self_msg_suppressed": 0,
+    # J-5 A（2026-09-05）：observe 入口按 mid / (reporter,文本,60s) 判为二次观察
+    # 而短路的次数（实时链与 backfill 回放对同一条消息只许一次登记）
+    "observe_dup": 0,
     # C1-②（#123 族，2026-09-02）：群消息序号哨兵——跳号告警次数 / 补拉回来的
     # 真消息数 / 核实为空（已删/服务消息）的缺号数
     "seq_gap": 0, "seq_gap_filled": 0, "seq_gap_empty": 0,
@@ -397,6 +400,8 @@ def reset_state_for_tests() -> None:
         _RATE.clear()
         _COLLECT.clear()
         _SEQ.clear()
+        _OBSERVED_MID.clear()
+        _OBSERVED_TXT.clear()
         for k in _STATS:
             _STATS[k] = 0
         if _DB_CONN is not None:
@@ -405,6 +410,11 @@ def reset_state_for_tests() -> None:
             except Exception:
                 pass
             _DB_CONN = None
+    try:
+        from src.ops.bug_intake_backfill import reset_seen_for_tests
+        reset_seen_for_tests()
+    except Exception:
+        pass
 
 
 def _record_event(chat_id: Any, kind: str, reporter_id: Any = "",
@@ -910,6 +920,13 @@ def note_group_msg_seq(config: Optional[Dict[str, Any]], chat_id: Any,
         if mid <= 0:
             return []
         ts = float(now if now is not None else time.time())
+        # J-5 A：消息一进实时链就登记「已观察」（早于去重/限频/observe——之后无论
+        # 被哪一层压下，backfill 都不该再把它当漏网重喂）。持久化跨重启。
+        try:
+            from src.ops.bug_intake_backfill import mark_seen
+            mark_seen(cid, mid, now=ts)
+        except Exception:
+            logger.debug("[bug_intake] mark_seen 失败（忽略）", exc_info=True)
         key = _seq_key(account_id, cid)
         with _LOCK:
             st = _SEQ.get(key)
@@ -1169,15 +1186,59 @@ def _with_lang_anchor(out: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+_OBSERVED_MID: Dict[str, Dict[int, float]] = {}      # chat → {mid: ts}
+_OBSERVED_TXT: Dict[str, Tuple[float, int]] = {}     # "chat:reporter:norm(text)" → (ts, mid)
+_OBSERVED_TXT_WINDOW_SEC = 60.0
+_OBSERVED_MAX = 4000
+
+
+def _observe_dedup_locked(cid: str, reporter_id: Any, text: str,
+                          mid: int, ts: float) -> bool:
+    """observe 入口的二次观察判定（调用方持 ``_LOCK``）。返回 True＝重复。
+
+    - ``mid>0``：同群同 mid 已观察过 → 重复（精确）；
+    - 近似兜底（实时链目前不传 mid——skill_manager 调用点没有 msg_id）：同群
+      同 reporter 同归一化文本、``_OBSERVED_TXT_WINDOW_SEC`` 内 → 重复，**但**
+      两侧都带 mid 且不同时不算（用户 60s 内真发两句一样的话是两条消息）。
+    非重复即登记；两表有界。
+    """
+    key = f"{cid}:{str(reporter_id or '').strip()}:{normalize_title(text)}"
+    mids = _OBSERVED_MID.setdefault(cid, {})
+    if mid > 0 and mid in mids:
+        return True
+    prev = _OBSERVED_TXT.get(key)
+    if prev is not None:
+        pts, pmid = prev
+        if 0.0 <= ts - pts <= _OBSERVED_TXT_WINDOW_SEC \
+                and (mid <= 0 or pmid <= 0 or pmid == mid):
+            return True
+    if mid > 0:
+        mids[mid] = ts
+        if len(mids) > _OBSERVED_MAX:
+            for old in sorted(mids.keys())[:len(mids) // 2]:
+                mids.pop(old, None)
+    _OBSERVED_TXT[key] = (ts, mid)
+    if len(_OBSERVED_TXT) > _OBSERVED_MAX:
+        for k, _ in sorted(_OBSERVED_TXT.items(),
+                           key=lambda kv: kv[1][0])[:len(_OBSERVED_TXT) // 2]:
+            _OBSERVED_TXT.pop(k, None)
+    return False
+
+
 def observe_group_message(
     config: Optional[Dict[str, Any]], *, chat_id: Any, account_id: Any,
     reporter_id: Any, reporter_name: str, text: str,
-    now: Optional[float] = None,
+    now: Optional[float] = None, msg_id: Any = 0,
 ) -> Dict[str, Any]:
     """报障群消息观察（接线在 skill_manager.process_message 群 hint 之后）。
 
     返回 {active, category, ticket_id, is_new, severity, report_count,
     prompt_block, footer}；active=False 时其余键为空——调用方零分支透传。
+
+    ``msg_id``（J-5 A，可选）：带上时按 (chat, mid) 精确判「二次观察」；不带
+    （实时链 skill_manager 现状）退到 (reporter, 文本, 60s) 近似去重。命中重复
+    → ``active=False, dup=True``，不落事件不改工单不计限频——0904 实录同一句
+    「都好了」实时被限频压下、4 分钟后 backfill 重喂又在另一张单上 verify_yes。
     """
     out = {"active": False, "category": "", "ticket_id": 0, "is_new": False,
            "severity": "", "report_count": 0, "prompt_block": "", "footer": "",
@@ -1189,6 +1250,10 @@ def observe_group_message(
             return out
         ts = float(now if now is not None else time.time())
         t = str(text or "").strip()
+        try:
+            mid = int(msg_id or 0)
+        except (TypeError, ValueError):
+            mid = 0
         # 立单链自身守卫（2026-09-02 #123/#125/#135/#136 误立单收口）：本方
         # 账号（support_accounts / 本 worker / 官方 bot）的群发绝不进登记链
         # ——回访播报满是 bug 词与工单号，混进来就成新工单。实时链与补拉链
@@ -1197,6 +1262,20 @@ def observe_group_message(
             _bump("self_msg_suppressed")
             _record_event(cid, "self_msg_suppressed", reporter_id, t[:200])
             return out
+        with _LOCK:
+            dup = _observe_dedup_locked(cid, reporter_id, t, mid, ts)
+        if dup:
+            _bump("observe_dup")
+            out["dup"] = True
+            logger.info("[bug_intake] 二次观察短路 chat=%s mid=%s reporter=%s",
+                        cid, mid or "-", reporter_id)
+            return out
+        if mid > 0:
+            try:
+                from src.ops.bug_intake_backfill import mark_seen
+                mark_seen(cid, mid, now=ts)
+            except Exception:
+                logger.debug("[bug_intake] mark_seen 失败（忽略）", exc_info=True)
         out["active"] = True
         # 2026-08-21 11:05 老板纪律（B36 收紧版）：报障群是「真正解决问题的群」，
         # 群内登记/回复/整理全部由值守人工来——AI（本地模型/云端）一条不发。
