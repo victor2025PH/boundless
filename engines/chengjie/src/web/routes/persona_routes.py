@@ -137,6 +137,59 @@ def legacy_debt_snapshot(app) -> int:
     return sum(1 for k in entries if k not in managed)
 
 
+_PLACEHOLDER_ACCOUNT_IDS = frozenset({"default", ""})
+
+
+def registry_row_is_placeholder(row) -> bool:
+    """#179（2026-09-05 钧原图 1186「TG default —」幽灵行）：运行时注册表里的
+    「占位行」不该进「应用到 → 账号默认」枚举。
+
+    #61 把 platform_accounts 注册表并进枚举后，config 的 ``default`` 槽已按
+    「有注册表账号即丢」收口（#78 二轮），但注册表**自身**也可能躺着一条
+    ``default`` 行（桌面包主会话别名 / 早期 N5 同步残留），它无 label、非真登录，
+    穿过合并循环就渲染成「default —」——与真实账号行重复占位且「清除」语义不明。
+
+    占位判据（宁可少拦不误拦真号）：
+    - ``account_id`` 为 ``default`` / 空串：别名槽，恒占位；
+    - 或 **既无 label 又无 self_name**、且从未上线（``status`` 非 online 且
+      ``last_online_at`` 为 0）：只有一个裸 id 的 pending 空壳。真号哪怕此刻离线，
+      只要曾上线过 / 有昵称，一律保留。
+    """
+    if not isinstance(row, dict):
+        return True
+    aid = str(row.get("account_id") or "").strip()
+    if aid in _PLACEHOLDER_ACCOUNT_IDS:
+        return True
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    has_label = bool(str(row.get("label") or "").strip()
+                     or str(meta.get("self_name") or "").strip())
+    if has_label:
+        return False
+    online = str(row.get("status") or "").strip().lower() == "online"
+    try:
+        ever_online = float(row.get("last_online_at") or 0) > 0
+    except (TypeError, ValueError):
+        ever_online = False
+    return not (online or ever_online)
+
+
+def config_default_account_is_live(tg_cfg, config_obj=None) -> bool:
+    """#179：config 单账号回退槽 ``default`` 只有在**协议客户端真会用它登录**时
+    才算一个账号——判据与 ``bootstrap.services`` 起协议客户端的闸门同源
+    （``_is_desktop_mode`` / ``_telegram_configured``）：桌面包（desktop_mode）或
+    凭证不全/占位（YOUR_*）时协议客户端根本不启动，这个 ``default`` 就只是
+    ``from_config`` 的兜底占位，不该出现在「应用到 → 账号默认」里。
+    117 旧形态（真凭证 + 非桌面）保留。任何异常按「不是真号」处理——宁可少列。
+    """
+    try:
+        from src.bootstrap.env_probe import _is_desktop_mode, _telegram_configured
+        if _is_desktop_mode(config_obj):
+            return False
+        return bool(_telegram_configured(tg_cfg))
+    except Exception:
+        return False
+
+
 def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None):
     """Register persona management API endpoints。config_manager 用于人设持久化。"""
 
@@ -1964,9 +2017,15 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         tg_accounts: list = []
         try:
             from src.client.telegram_account_registry import TelegramAccountRegistry
-            _tg_cfg = (getattr(config_manager, "config", None) or {}).get("telegram", {})
+            _cfg_obj = getattr(config_manager, "config", None) or {}
+            _tg_cfg = _cfg_obj.get("telegram", {})
             _reg = TelegramAccountRegistry.from_config(_tg_cfg)
+            # #179：config 回退槽 default 只在协议客户端真会拿它登录时才算账号
+            # （桌面包 / 凭证不全 → from_config 的兜底占位，直接不列）。
+            _cfg_default_live = config_default_account_is_live(_tg_cfg, _cfg_obj)
             for acc in _reg.all_contexts():
+                if acc.is_default and not _cfg_default_live:
+                    continue
                 primary_pid = acc.persona_ids[0] if acc.persona_ids else ""
                 tg_accounts.append({
                     "account_id": acc.account_id,
@@ -1989,6 +2048,10 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             for _row in _rt_rows:
                 _aid = str(_row.get("account_id") or "").strip()
                 if not _aid or _aid in _seen_aids:
+                    continue
+                # #179：注册表里的占位行（default 别名槽 / 无名且从未上线的
+                # pending 空壳）不进枚举——它们不是能「指定人设」的真账号。
+                if registry_row_is_placeholder(_row):
                     continue
                 _pids = parse_persona_ids(_row.get("meta"))
                 _meta = _row.get("meta") if isinstance(_row.get("meta"), dict) else {}
