@@ -19,7 +19,10 @@ from src.inbox.channel_adapters import (
     TelegramInboxAdapter,
     WebInboxAdapter,
     collect_chats_via_adapters,
+    count_group_chats,
     default_inbox_adapters,
+    note_group_list_count,
+    reset_group_count_watch,
     send_via_adapters,
     status_via_adapters,
 )
@@ -140,6 +143,28 @@ def test_collect_isolates_failing_adapter():
     chats = collect_chats_via_adapters(req, 20, [_Boom(), LineInboxAdapter()])
     # 失败适配器被隔离，其它仍产出
     assert len(chats) == 1 and chats[0]["platform"] == "line"
+
+
+def test_group_count_watch_logs_on_change(caplog):
+    """#32③：群数量变化可观测；首扫不打、同数不打。"""
+    reset_group_count_watch()
+    mixed = [
+        {"chat_type": "private"},
+        {"chat_type": "group"},
+        {"chat_type": "channel"},
+        {"is_group": True, "chat_type": ""},
+    ]
+    assert count_group_chats(mixed) == 3
+    with caplog.at_level("INFO"):
+        prev, now = note_group_list_count(mixed)
+        assert prev is None and now == 3
+        assert "group count changed" not in caplog.text
+        prev, now = note_group_list_count(mixed)
+        assert prev == 3 and now == 3
+        assert "group count changed" not in caplog.text
+        prev, now = note_group_list_count(mixed[:1])
+        assert prev == 3 and now == 0
+        assert "group count changed 3 -> 0" in caplog.text
 
 
 # ── A2 写路径：status / send 适配器对称 ─────────────────────────────

@@ -14,7 +14,7 @@ Telegram 四套不同的 source API（``list_chats`` / ``list_pending`` / ``list
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from src.inbox.normalizer import conv_id, name_is_real, normalize_chat, store_row_to_chat
 
@@ -811,6 +811,49 @@ def default_inbox_adapters() -> List[ChannelAdapter]:
     ]
 
 
+_GROUP_CHAT_TYPES = frozenset({
+    "group", "supergroup", "gigagroup", "megagroup", "channel",
+})
+_last_group_count: Optional[int] = None
+
+
+def count_group_chats(chats: List[Dict[str, Any]]) -> int:
+    """会话列表里群/频道条数（#32③ 观测用；不改过滤语义）。"""
+    n = 0
+    for c in chats or []:
+        if not isinstance(c, dict):
+            continue
+        ct = str(c.get("chat_type") or "").strip().lower()
+        if ct in _GROUP_CHAT_TYPES:
+            n += 1
+            continue
+        if c.get("is_group") is True:
+            n += 1
+    return n
+
+
+def reset_group_count_watch() -> None:
+    """测试用：清进程内上次群数量。"""
+    global _last_group_count
+    _last_group_count = None
+
+
+def note_group_list_count(
+    chats: List[Dict[str, Any]],
+) -> Tuple[Optional[int], int]:
+    """群数量相对上次采集变化时打 INFO，方便下次复现定层。不抛。"""
+    global _last_group_count
+    now = count_group_chats(chats)
+    prev = _last_group_count
+    if prev is not None and prev != now:
+        logger.info(
+            "[inbox-list] group count changed %s -> %s total=%s",
+            prev, now, len(chats or []),
+        )
+    _last_group_count = now
+    return prev, now
+
+
 def collect_chats_via_adapters(
     request: Any, limit: int, adapters: List[ChannelAdapter],
 ) -> List[Dict[str, Any]]:
@@ -822,6 +865,10 @@ def collect_chats_via_adapters(
         except Exception:
             logger.debug("适配器 %s 收集失败",
                          getattr(adapter, "platform", "?"), exc_info=True)
+    try:
+        note_group_list_count(out)
+    except Exception:
+        logger.debug("群数量观测失败", exc_info=True)
     return out
 
 
