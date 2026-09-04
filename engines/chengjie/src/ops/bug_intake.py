@@ -177,11 +177,19 @@ _STATS: Dict[str, int] = {
     "observe_dup": 0,
     # J-5 D（决策 D4 后半）：已知报障人「图+任意文字」判 other 被升格立单的次数
     "photo_report": 0,
+    # J-5 E-2：报障人**回复支持号消息**（回访 / 带 #N 的播报）→ 不看 30 分钟收集窗
+    # 直接续写该单的次数（0905 #165＝41 分钟后的追问被立成新单）
+    "reply_continue": 0,
     # C1-②（#123 族，2026-09-02）：群消息序号哨兵——跳号告警次数 / 补拉回来的
     # 真消息数 / 核实为空（已删/服务消息）的缺号数
     "seq_gap": 0, "seq_gap_filled": 0, "seq_gap_empty": 0,
 }
 _DB_CONN: Optional[sqlite3.Connection] = None
+# J-5 E-2：本方账号群发消息 → 其文中 #N 工单号（"<chat>:<mid>" → [tid,...]）。
+# 进程内热路；重启后由 bug_events 里 self_msg_suppressed 事件的 ``mid=`` 前缀
+# 反查兜底（见 ticket_for_reply）。
+_OWN_MSG_REFS: Dict[str, List[int]] = {}
+_OWN_MSG_REFS_MAX = 2000
 
 
 def _bump(key: str, n: int = 1) -> None:
@@ -438,6 +446,7 @@ def reset_state_for_tests() -> None:
         _SEQ.clear()
         _OBSERVED_MID.clear()
         _OBSERVED_TXT.clear()
+        _OWN_MSG_REFS.clear()
         for k in _STATS:
             _STATS[k] = 0
         if _DB_CONN is not None:
@@ -780,6 +789,75 @@ def is_known_reporter(chat_id: Any, reporter_id: Any) -> bool:
     except Exception:
         logger.debug("[bug_intake] 已知报障人查询失败", exc_info=True)
         return False
+
+
+def _remember_own_message(chat_id: Any, msg_id: int, text: str) -> List[int]:
+    """本方账号群发（回访 / 播报）落 mid→#N 映射，供 reply 续写反查。"""
+    refs = extract_ticket_refs(text)
+    if not (msg_id > 0 and refs):
+        return refs
+    key = f"{chat_id}:{int(msg_id)}"
+    with _LOCK:
+        _OWN_MSG_REFS[key] = refs
+        if len(_OWN_MSG_REFS) > _OWN_MSG_REFS_MAX:
+            for k in list(_OWN_MSG_REFS)[:_OWN_MSG_REFS_MAX // 2]:
+                _OWN_MSG_REFS.pop(k, None)
+    return refs
+
+
+def ticket_for_reply(chat_id: Any, reply_to_msg_id: Any,
+                     reporter_id: Any = "") -> int:
+    """报障人**回复的那条支持号消息**对应哪张单（J-5 E-2，0=定不了）。
+
+    三级反查：① 某单 ``notify_msg_id``（bot 回访消息，最可靠锚点）；② 进程内
+    ``_OWN_MSG_REFS``（本方播报文中 #N）；③ bug_events 里 ``self_msg_suppressed``
+    事件 detail 的 ``mid=<id> refs=#a,#b`` 前缀（重启后兜底）。播报提到多张单时
+    只认**该 reporter 自己的**那张，仍多于一张＝定不了（宁可走普通链，不乱续）。
+    命中的单若已并入他单（``dup_of>0``）跟到主单。
+    """
+    try:
+        rmid = int(reply_to_msg_id or 0)
+    except (TypeError, ValueError):
+        return 0
+    if rmid <= 0:
+        return 0
+    cid = str(chat_id).strip()
+    rid = str(reporter_id or "").strip()
+    try:
+        con = _db()
+        row = con.execute(
+            "SELECT id, dup_of FROM bug_tickets WHERE chat_id=? AND notify_msg_id=?"
+            " ORDER BY id DESC LIMIT 1", (cid, rmid)).fetchone()
+        if row:
+            return int(row[1] or 0) or int(row[0])
+        with _LOCK:
+            refs = list(_OWN_MSG_REFS.get(f"{cid}:{rmid}") or [])
+        if not refs:
+            ev = con.execute(
+                "SELECT detail FROM bug_events WHERE chat_id=? AND"
+                " kind='self_msg_suppressed' AND detail LIKE ? ORDER BY id DESC"
+                " LIMIT 1", (cid, f"mid={rmid} %")).fetchone()
+            if ev:
+                m = re.match(r"mid=\d+ refs=([#\d,]+)", str(ev[0]))
+                refs = extract_ticket_refs(m.group(1)) if m else []
+        if not refs:
+            return 0
+        if len(refs) > 1 and rid:
+            q = ",".join("?" for _ in refs)
+            mine = [int(r[0]) for r in con.execute(
+                f"SELECT id FROM bug_tickets WHERE chat_id=? AND reporter_id=?"
+                f" AND id IN ({q})", [cid, rid, *refs]).fetchall()]
+            refs = [t for t in refs if t in mine]
+        if len(refs) != 1:
+            return 0
+        row = con.execute("SELECT id, dup_of FROM bug_tickets WHERE id=?",
+                          (refs[0],)).fetchone()
+        if not row:
+            return 0
+        return int(row[1] or 0) or int(row[0])
+    except Exception:
+        logger.debug("[bug_intake] reply 归属反查失败", exc_info=True)
+        return 0
 
 
 _TICKET_REF_RE = re.compile(r"#\s*(\d{1,7})")
@@ -1200,12 +1278,13 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
                     has_photo: bool = False,
                     is_direct: bool = False,
                     account_id: Any = "", sender_name: str = "",
-                    msg_id: Any = 0) -> Optional[bool]:
+                    msg_id: Any = 0, reply_to_msg_id: Any = 0) -> Optional[bool]:
     """群触发三态（接线在 trigger._should_reply_to_group_message 顶部）。
 
-    ``account_id`` / ``sender_name`` / ``msg_id``（J-5 C，可选）：限频压制路径
-    里就地登记时透传给 ``observe_group_message``（调用方 trigger.py 现状不传，
-    工单 reporter 名退化为 id——值守接线后补齐）。
+    ``account_id`` / ``sender_name`` / ``msg_id`` / ``reply_to_msg_id``（J-5 C/E，
+    可选）：限频压制路径里就地登记时透传给 ``observe_group_message``（调用方
+    trigger.py 现状不传，工单 reporter 名退化为 id、reply 续单不生效——值守
+    接线后补齐）。
 
     None=非报障群（走原有触发链一字不变）；True=引燃；False=硬压制。
     **报障群内不再返回 None**（2026-08-20 串戏事故收口）：闲聊/纯图落回原生
@@ -1280,7 +1359,8 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
                         config, chat_id=cid, account_id=account_id,
                         reporter_id=sender_id,
                         reporter_name=str(sender_name or ""),
-                        text=t, now=ts, msg_id=msg_id, count_reply=False)
+                        text=t, now=ts, msg_id=msg_id,
+                        reply_to_msg_id=reply_to_msg_id, count_reply=False)
                     if res.get("dup"):
                         tag = "[dup] "
                     elif res.get("ticket_id"):
@@ -1327,7 +1407,8 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
                         config, chat_id=cid, account_id=account_id,
                         reporter_id=sender_id,
                         reporter_name=str(sender_name or ""),
-                        text=t, now=ts, msg_id=msg_id, count_reply=False,
+                        text=t, now=ts, msg_id=msg_id,
+                        reply_to_msg_id=reply_to_msg_id, count_reply=False,
                         has_photo=True)
                     # 新单已开收集窗 → 这张图本身记进它的证据链
                     note_screenshot(config, cid, sender_id, now=ts)
@@ -1337,6 +1418,11 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
                 return False
         # 收集窗内的后续消息：持续接话（用户在补工单信息，别装死）
         if _in_collect_window(cid, sender_id, cfg["collect_window_min"], ts):
+            _bump("engaged")
+            return True
+        # J-5 E-2：回复支持号消息（回访 / 带 #N 播报）＝续写那张单，超出 30 分钟
+        # 收集窗也放进 observe（否则判 other 落 smalltalk_suppressed，续写丢失）
+        if t and ticket_for_reply(cid, reply_to_msg_id, sender_id):
             _bump("engaged")
             return True
         if not t:
@@ -1468,7 +1554,14 @@ def observe_group_message(
         # （bug_intake_backfill 回喂）共用本入口，一处收口两条链都干净。
         if _is_own_sender(cfg, reporter_id, account_id):
             _bump("self_msg_suppressed")
-            _record_event(cid, "self_msg_suppressed", reporter_id, t[:200])
+            # J-5 E-2：记下本方消息 mid → 文中 #N，报障人「回复这条」时据此续单。
+            # detail 前缀 ``mid=<id> refs=#a,#b | `` 固定格式——ticket_for_reply
+            # 重启后靶它反查，别改。
+            refs = _remember_own_message(cid, mid, t) if mid > 0 else []
+            prefix = (f"mid={mid} refs=" + ",".join(f"#{r}" for r in refs) + " | "
+                      if mid > 0 and refs else "")
+            _record_event(cid, "self_msg_suppressed", reporter_id,
+                          prefix + t[:200])
             return out
         with _LOCK:
             dup = _observe_dedup_locked(cid, reporter_id, t, mid, ts)
@@ -1557,6 +1650,15 @@ def observe_group_message(
                 return _with_lang_anchor(out)
 
         st = _in_collect_window(cid, reporter_id, cfg["collect_window_min"], ts)
+        # J-5 E-2：回复支持号消息（回访 / 带 #N 播报）＝续写那张单，**不看**
+        # 30 分钟收集窗，且显式锚点压过时间窗（窗内正在补录别的单也改锚这张）。
+        # 0905 #165：追问距首报 41 分钟超窗被立成新单，其实是 #164 的续写。
+        _rt = ticket_for_reply(cid, reply_to_msg_id, reporter_id)
+        if _rt and (st is None or int(st.get("ticket_id") or 0) != _rt):
+            st = {"ticket_id": _rt, "ts": ts, "got": set()}
+            _bump("reply_continue")
+            _record_event(cid, "reply_continue", reporter_id,
+                          f"#{_rt} rmid={reply_to_msg_id} | {t[:120]}")
         if st is not None:
             # 收集窗内：补录进工单，不新开单
             _update_collected(st, t)
@@ -1715,6 +1817,7 @@ __all__ = [
     "resolve_update_hint", "mark_notified",
     "detect_verify_intent", "pending_verify_ticket", "candidate_verify_tickets",
     "extract_ticket_refs", "resolve_verify_target", "is_known_reporter",
+    "ticket_for_reply",
     "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",

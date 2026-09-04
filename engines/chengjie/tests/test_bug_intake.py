@@ -1224,3 +1224,174 @@ def test_wiring_events_route_registered():
     src = _read("src/web/routes/bug_intake_routes.py")
     assert '"/api/admin/bug-intake/events"' in src
     assert "DUTY_VISIBLE_EVENT_KINDS" in src
+
+
+# ── J-5 E-2（2026-09-05）：回复支持号消息＝续写该单，不看 30 分钟收集窗 ──────
+# 0905 #165：钧「再查找原因，这是这几天重复存在的错误」距 #164 首报 41 分钟，
+# 超窗被立成新单——其实是同一件事的追问。锚点＝回访消息 notify_msg_id /
+# 本方播报文中 #N。
+
+def _own_broadcast(bi, mid, text, now=None):
+    """支持号 777 在群里发播报（补拉链回喂形态，带 mid）→ 被自身守卫压制并记 mid→#N。"""
+    return bi.observe_group_message(
+        CFG, chat_id=-100123, account_id="999", reporter_id="777",
+        reporter_name="BOUNDLESS", text=text, msg_id=mid, now=now)
+
+
+def test_e2_ticket_for_reply_prefers_notify_msg_id(bi):
+    tid = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    bi.mark_notified(tid, True, "", msg_id=6100)
+    assert bi.ticket_for_reply(-100123, 6100, "u1") == tid
+    assert bi.ticket_for_reply(-100123, 6199, "u1") == 0
+    assert bi.ticket_for_reply(-100123, 0, "u1") == 0
+    assert bi.ticket_for_reply(-100123, "x", "u1") == 0
+
+
+def test_e2_ticket_for_reply_from_own_broadcast_hash_and_restart_fallback(bi):
+    a = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u1",
+                             reporter_name="钧", text="语音发不出去")["ticket_id"]
+    b = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u2",
+                             reporter_name="花无缺", text="连不上官网")["ticket_id"]
+    # 播报只提一张单 → 谁回都归它
+    res = _own_broadcast(bi, 7001, f"#{a} 已修，重启后请验证")
+    assert res["active"] is False and bi.list_tickets() and len(bi.list_tickets()) == 2
+    assert bi.ticket_for_reply(-100123, 7001, "u2") == a
+    # 播报提两张单 → 只认回复者自己的那张；两张都不是他的 → 定不了
+    _own_broadcast(bi, 7002, f"今晚上线：#{a} #{b} 两单修复")
+    assert bi.ticket_for_reply(-100123, 7002, "u1") == a
+    assert bi.ticket_for_reply(-100123, 7002, "u2") == b
+    assert bi.ticket_for_reply(-100123, 7002, "u9") == 0
+    # 事件 detail 带固定前缀（重启兜底靶它）
+    ev = [e for e in bi.list_events(["self_msg_suppressed"])
+          if e["detail"].startswith("mid=7002 ")]
+    assert len(ev) == 1 and ev[0]["detail"].startswith(f"mid=7002 refs=#{a},#{b} | ")
+    # 模拟重启：进程内映射清空 → 从 bug_events 反查仍命中
+    bi._OWN_MSG_REFS.clear()
+    assert bi.ticket_for_reply(-100123, 7001, "u2") == a
+    assert bi.ticket_for_reply(-100123, 7002, "u1") == a
+    # 无 #N 的播报不记映射
+    _own_broadcast(bi, 7003, "大家早，今晚发版")
+    assert bi.ticket_for_reply(-100123, 7003, "u1") == 0
+
+
+def test_e2_ticket_for_reply_follows_dup_of(bi):
+    a = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u1",
+                             reporter_name="钧", text="语音发不出去")["ticket_id"]
+    b = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u1",
+                             reporter_name="钧", text="克隆声音报错 obs 上传失败")["ticket_id"]
+    con = bi._db()
+    con.execute("UPDATE bug_tickets SET dup_of=?, status='closed' WHERE id=?", (a, b))
+    con.commit()
+    _own_broadcast(bi, 7010, f"#{b} 并入 #{a}")
+    # 播报提两张、都归 u1 → 定不了（宁可走普通链）
+    assert bi.ticket_for_reply(-100123, 7010, "u1") == 0
+    _own_broadcast(bi, 7011, f"#{b} 收到")
+    assert bi.ticket_for_reply(-100123, 7011, "u1") == a  # 跟到主单
+
+
+def test_e2_reply_to_notify_after_window_appends_not_new(bi):
+    """#165 复现：首报 → 41 分钟后回着支持号消息追问 → 补进原单，不新开。"""
+    t0 = 1_800_000_000.0
+    first = _observe(bi, "u1", "语音发不出去，一直转圈", now=t0, msg_id=100)
+    tid = first["ticket_id"]
+    assert first["is_new"] and tid
+    bi.set_ticket_status(tid, "fixed")
+    bi.mark_notified(tid, True, "", msg_id=101)
+    con = bi._db()
+    con.execute("UPDATE bug_tickets SET status='confirmed' WHERE id=?", (tid,))
+    con.commit()
+    # 41 分钟后（收集窗 30 分钟已过）——不带 reply_to：立成新单（旧行为 = #165）
+    later = t0 + 41 * 60
+    plain = _observe(bi, "u1", "再查找原因，这是这几天重复存在的错误",
+                     now=later, msg_id=200)
+    assert plain["category"] == "bug" and plain["is_new"] and plain["ticket_id"] != tid
+    # 同样超窗，但回着支持号消息（reply_to=101）→ 续写原单
+    bi.reset_state_for_tests()  # 清进程态（收集窗/去重），DB 路径仍指本测 tmp
+    first = _observe(bi, "u1", "语音发不出去，一直转圈", now=t0, msg_id=300)
+    tid = first["ticket_id"]
+    bi.mark_notified(tid, True, "", msg_id=301)
+    out = _observe(bi, "u1", "再查找原因，这是这几天重复存在的错误",
+                   now=later, msg_id=400, reply_to_msg_id=301)
+    assert out["category"] == "collect" and out["ticket_id"] == tid
+    assert not out["is_new"]
+    body = bi.get_ticket(tid)["body"]
+    assert "再查找原因" in body
+    evs = bi.list_events(["reply_continue"])
+    assert len(evs) == 1 and f"#{tid} rmid=301" in evs[0]["detail"]
+    assert bi._STATS["reply_continue"] == 1
+    # 续写重开收集窗：紧接着的补充也进同一单
+    out2 = _observe(bi, "u1", "版本 1.0.73，点发送就报错", now=later + 60, msg_id=401)
+    assert out2["category"] == "collect" and out2["ticket_id"] == tid
+
+
+def test_e2_reply_anchor_beats_active_collect_window_of_other_ticket(bi):
+    """正在给单 B 补录，却回着单 A 的回访消息说话 → 显式锚点压过时间窗，归 A。"""
+    t0 = 1_800_000_000.0
+    a = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    bi.mark_notified(a, True, "", msg_id=8100)
+    con = bi._db()
+    con.execute("UPDATE bug_tickets SET status='confirmed' WHERE id=?", (a,))
+    con.commit()
+    b_out = _observe(bi, "u1", "克隆声音报错 obs 上传失败", now=t0, msg_id=500)
+    b = b_out["ticket_id"]
+    assert b and b != a
+    out = _observe(bi, "u1", "这个登录问题现在提示网络错误",
+                   now=t0 + 60, msg_id=501, reply_to_msg_id=8100)
+    assert out["category"] == "collect" and out["ticket_id"] == a
+    assert "网络错误" in bi.get_ticket(a)["body"]
+    assert "网络错误" not in bi.get_ticket(b)["body"]
+
+
+def test_e2_reply_with_verify_intent_still_goes_verify_path(bi):
+    """回着回访说「好了」走 verify（B 已钉），不落 reply_continue。"""
+    a = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    bi.mark_notified(a, True, "", msg_id=8200)
+    out = _observe(bi, "u1", "好了，能用了", reply_to_msg_id=8200)
+    assert out["category"] == "verify" and out["ticket_id"] == a
+    assert bi.list_events(["reply_continue"]) == []
+
+
+def test_e2_reply_to_unrelated_message_is_normal_chain(bi):
+    """回的是群里随便一条（非支持号/无 #N）→ 原链：闲聊静默 / 报障立新单。"""
+    a = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    bi.mark_notified(a, True, "", msg_id=8300)
+    out = _observe(bi, "u1", "语音发不出去了", reply_to_msg_id=4242)
+    assert out["category"] == "bug" and out["is_new"] and out["ticket_id"] != a
+    assert bi.list_events(["reply_continue"]) == []
+
+
+def test_e2_verdict_engages_reply_to_support_message_outside_window(bi):
+    """trigger_verdict：超窗、文字判 other、但回着支持号播报 → 引燃（进 observe），
+    不再落 smalltalk_suppressed。"""
+    a = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u1",
+                             reporter_name="钧", text="语音发不出去")["ticket_id"]
+    _own_broadcast(bi, 9001, f"#{a} 已记录，今晚排查")
+    # 不带 reply_to：other → 静默
+    assert bi.trigger_verdict(CFG, -100123, "u1", "嗯这个", msg_id=9002) is False
+    assert len(bi.list_events(["smalltalk_suppressed"])) == 1
+    # 带 reply_to 支持号播报 → 引燃
+    assert bi.trigger_verdict(CFG, -100123, "u1", "嗯这个", msg_id=9003,
+                              reply_to_msg_id=9001) is True
+    assert len(bi.list_events(["smalltalk_suppressed"])) == 1
+    # 回的不是支持号消息 → 仍静默
+    assert bi.trigger_verdict(CFG, -100123, "u1", "嗯这个", msg_id=9004,
+                              reply_to_msg_id=1234) is False
+
+
+def test_e2_verdict_capped_path_passes_reply_to(bi):
+    """限频压制路径就地登记也带 reply_to → 续单而非新单。"""
+    import time as _t
+    t0 = _t.time()
+    a = bi.record_bug_ticket(chat_id=-100123, account_id="777", reporter_id="u1",
+                             reporter_name="钧", text="语音发不出去")["ticket_id"]
+    _own_broadcast(bi, 9101, f"#{a} 已记录")
+    bi._rate_mark("u:-100123:u1", t0)
+    bi._rate_mark("u:-100123:u1", t0)
+    # 超出 30 分钟收集窗但仍在限频 1 小时桶内（若放到 3600s 后桶已过期）
+    assert bi.trigger_verdict(CFG, -100123, "u1", "还是发不出去，重启也不行",
+                              now=t0 + 45 * 60, msg_id=9102,
+                              reply_to_msg_id=9101) is False
+    assert len(_tickets(bi)) == 1
+    assert "重启也不行" in bi.get_ticket(a)["body"]
+    caps = bi.list_events(["rate_capped_report"])
+    assert len(caps) == 1 and f"[registered #{a} collect]" in caps[0]["detail"]
