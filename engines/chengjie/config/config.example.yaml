@@ -1544,6 +1544,16 @@ ai:
                           # （文字聊天可接受再开；与 voice_colloquial_llm 只开一个）
     rewrite_llm: ""       # 改写后端（OpenAI 兼容 chat/completions；空=包缺省 .173 qwen14b）
     rewrite_model: ""     # 改写模型名（空=包缺省）
+    # #40 地区语气档（2026-09-04，随 enabled 总闸）：让中文回复「像本地人说话」
+    # ——zh-TW 台灣口語（啦/耶/喔/欸 + 禁大陸/北方口語與網路詞）、zh-HK 港式粵文
+    # （繁體 + 係/唔/嘅/咩）。zh-CN 档恒不追加任何指令（存量 prompt 逐字不变）。
+    # 档位解析优先级（SSOT=src/ai/persona_region.py）：人设 speaking.region 显式字段
+    # → 人设 voice_profile.dialect_flavor=cantonese（→zh-HK）→ 人设居住地 location
+    # 的国家码 TW/HK（region_from_location 开时）→ 会话「发→zh-tw / yue」铆定
+    # → 下面的全局默认 region → zh-CN。禁用词只**观测**（命中计数+INFO，不改文本）。
+    region_enabled: true        # false=全部按 zh-CN（一键回旧行为）
+    region: ""                  # 全局默认档位：zh-CN / zh-TW / zh-HK（空=zh-CN）
+    region_from_location: true  # 人设居住地在台北/香港 → 视为该档（false=只认显式字段与会话铆定）
     # 灰度观测：spoken_style_bridge.stats() 有进程内计数（L1/L2 注入、zh_only 拦截、
     # L4 尝试/生效/直通），L4 每 20 次尝试自动打一行 INFO 汇总——直通率>30% 说明
     # 事实锁在大量拒绝或改写后端超时，该调模型/提示词/超时了。

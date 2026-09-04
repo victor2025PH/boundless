@@ -2830,9 +2830,12 @@ class AIClient(LoggerMixin):
         # role=本会话人设口称名（上方 persona 解析已写进 context）→ 说话指纹按人设分流
         try:
             from src.ai.spoken_style_bridge import system_block as _ss_system_block
+            # #40：context 透传 → 地区档（zh-TW/zh-HK）按 人设/居住地/会话「发→」解析；
+            # zh-CN 档恒不追加（存量 prompt 逐字不变）
             _ss_b = _ss_system_block(
                 self.config,
                 role=str((context or {}).get("_resolved_persona_name") or ""),
+                context=context,
             )
             if _ss_b:
                 parts.append(_ss_b)
@@ -4581,6 +4584,7 @@ class AIClient(LoggerMixin):
                 reply = await _ss_rewrite(
                     self.config, reply,
                     role=str(enhanced_context.get("_resolved_persona_name") or ""),
+                    context=enhanced_context,  # #40 地区档禁用词观测（只计数不改文本）
                 )
             except Exception:
                 pass

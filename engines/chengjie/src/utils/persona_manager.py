@@ -95,6 +95,9 @@ PROMPT_EXEMPT_FIELDS = frozenset({
                              # （例外：dialect_flavor 已挪 CONSUMED——粤语档进 prompt）
     # 由**其它子系统**各自拼块注入，这里注入会形成双源真相
     "location",              # persona_location：本地时钟/天气/场景块的单一事实源
+    "speaking.region",       # #40 地区语气档（zh-CN/zh-TW/zh-HK）：由 spoken_style_bridge
+                             # 经 persona_region.resolve_region 注入 L1 地区块（SSOT=
+                             # src/ai/persona_region.py）；此处再注入＝双源真相
     "life_arc",              # deep_persona：L1 生活线按 stride_days 派生自己的块
     "selfie_scenes",         # 生图场景池；「AI 此刻在哪」归 scene_state SSOT（Phase18）
     # 非人设台词

@@ -51,6 +51,7 @@ _STATS = {
     "l4_attempt": 0,       # 改写尝试
     "l4_applied": 0,       # 改写生效
     "l4_passthrough": 0,   # 事实锁拒绝/超时/后端失败 → 原句直通
+    "l1_region_inject": 0,  # #40 地区档（zh-TW/zh-HK）真注入次数；zh-CN 恒不计（回归钉）
 }
 _L4_LOG_EVERY = 20
 
@@ -139,43 +140,84 @@ def _is_zh(text: str) -> bool:
     return han >= 2 and han >= len(t) * 0.4
 
 
-def system_block(config, role: str = "") -> str:
+def resolve_region(config, context=None, region: str = "") -> str:
+    """#40 地区档解析（zh-CN / zh-TW / zh-HK）。显式 ``region`` 优先；否则按
+    persona_region 的优先级（人设显式字段 → 粤语 dialect → 人设居住地 → 会话「发→」
+    变体 → 全局默认 zh-CN）。``ai.spoken_style.region_enabled: false`` → 恒 zh-CN。
+    """
+    c = _cfg(config)
+    if not bool(c.get("region_enabled", True)):
+        return "zh-CN"
+    try:
+        from src.ai import persona_region as _pr
+        r = _pr.normalize_region(region)
+        if r:
+            return r
+        return _pr.resolve_region_from_context(config, context)
+    except Exception:
+        logger.debug("spoken_style resolve_region 失败，回落 zh-CN", exc_info=True)
+        return "zh-CN"
+
+
+def region_block(config, context=None, region: str = "") -> str:
+    """#40：地区档 L1 指令块（语气词 / 句式 / 禁用词）。zh-CN 恒空串（存量 prompt 逐字不变）。"""
+    if not _enabled(config):
+        return ""
+    try:
+        from src.ai import persona_region as _pr
+        reg = resolve_region(config, context, region)
+        out = _pr.region_block(reg)
+        if out:
+            _bump("l1_region_inject")
+        return out
+    except Exception:
+        logger.debug("spoken_style region_block 失败，跳过", exc_info=True)
+        return ""
+
+
+def system_block(config, role: str = "", *, context=None, region: str = "") -> str:
     """L1：稳定 system 追加段（说话指纹/副语言/情绪协议；不含人设卡）。空串=不注入。
 
     ``role`` 是本会话人设的口称名（ai_client 从 context._resolved_persona_name 透传），
     优先于配置里的静态 ai.spoken_style.role——智聊是多人设产品，说话指纹按
     「哪个人设在说话」分流才有意义；指纹键契约=人设口称名（resolve_spoken_name 输出）。
+
+    ``context`` / ``region``（#40 地区档，2026-09-04）：地区档块**叠加**在包内指纹之后
+    （指纹文件 speech_prints.json 是 avatarhub 字节拷贝件，不改它）。两者都缺 →
+    按全局默认 zh-CN → 不追加任何东西，输出与加档前逐字一致。
+    包缺席时指纹段为空、地区档仍可独立注入（它不依赖包）。
     """
     if not _enabled(config):
         return ""
     ss = _load()
-    if ss is None:
-        return ""
-    # overlay 保鲜（P1-1）：出厂件/overlay 任一被手改 → 重物化合并文件，包内
-    # mtime 热加载随即生效（保住「改此文件即时生效」的两侧语义）。新鲜时
-    # 只花两次 stat + 一次小 JSON 读，L1 每次构建调用可承受。
-    try:
-        from src.ai.speech_prints_overlay import ensure_runtime_file
-        ensure_runtime_file()
-    except Exception:
-        pass
-    c = _cfg(config)
-    try:
-        blocks = ss.system_blocks(
-            persona_card=None,                      # chengjie 自有 persona 体系，不双注入
-            role=str(role or c.get("role") or ""),
-            laugh=False,                            # 无真笑素材一律呼吸版（假笑更毁真实感）
-            emotion_tags=bool(c.get("emotion_tags", False)),
-        )
-        if not c.get("paraling", False):
-            blocks = [b for b in blocks if not b.startswith("【副语言】")]
-        out = "\n\n".join(b for b in blocks if b)
-        if out:
-            _bump("l1_inject")
-        return out
-    except Exception:
-        logger.debug("spoken_style system_block 失败，跳过", exc_info=True)
-        return ""
+    fp_out = ""
+    if ss is not None:
+        # overlay 保鲜（P1-1）：出厂件/overlay 任一被手改 → 重物化合并文件，包内
+        # mtime 热加载随即生效（保住「改此文件即时生效」的两侧语义）。新鲜时
+        # 只花两次 stat + 一次小 JSON 读，L1 每次构建调用可承受。
+        try:
+            from src.ai.speech_prints_overlay import ensure_runtime_file
+            ensure_runtime_file()
+        except Exception:
+            pass
+        c = _cfg(config)
+        try:
+            blocks = ss.system_blocks(
+                persona_card=None,                      # chengjie 自有 persona 体系，不双注入
+                role=str(role or c.get("role") or ""),
+                laugh=False,                            # 无真笑素材一律呼吸版（假笑更毁真实感）
+                emotion_tags=bool(c.get("emotion_tags", False)),
+            )
+            if not c.get("paraling", False):
+                blocks = [b for b in blocks if not b.startswith("【副语言】")]
+            fp_out = "\n\n".join(b for b in blocks if b)
+            if fp_out:
+                _bump("l1_inject")
+        except Exception:
+            logger.debug("spoken_style system_block 失败，跳过", exc_info=True)
+            fp_out = ""
+    reg_out = region_block(config, context, region)
+    return "\n\n".join(x for x in (fp_out, reg_out) if x)
 
 
 def turn_tail(config, user_text: str) -> str:
@@ -202,7 +244,25 @@ def turn_tail(config, user_text: str) -> str:
         return ""
 
 
-async def rewrite_reply(config, reply: str, role: str = "") -> str:
+def observe_region_output(config, reply: str, *, context=None, region: str = "") -> list:
+    """#40 出站观测：非 CN 档回复命中禁用词 → 计数 + INFO（**不改文本**）。返回命中列表。
+
+    改写会引入新的失败面（「整」在「整理/整個」里是常字），故只观测；命中率高
+    再决定要不要在 L4 加一次带负样本的重写。CN 档 / 未启用 / 非中文 → 恒空。
+    """
+    if not reply or not _enabled(config) or not _is_zh(reply):
+        return []
+    try:
+        from src.ai import persona_region as _pr
+        reg = resolve_region(config, context, region)
+        if reg == "zh-CN":
+            return []
+        return _pr.note_banned_hits(reply, reg)
+    except Exception:
+        return []
+
+
+async def rewrite_reply(config, reply: str, role: str = "", *, context=None) -> str:
     """L4：口语化改写（本地小模型整段重写句子架构，事实锁把关；失败/超时/拒绝=原句直通）。
 
     前提（都写在 config 注释里）：ai.spoken_style.rewrite: true，且 role 在包内
@@ -211,9 +271,13 @@ async def rewrite_reply(config, reply: str, role: str = "") -> str:
     rewrite_llm / rewrite_model 可换成任何 OpenAI 兼容端点。
     非中文主体回复直接跳过（改写器是中文口语手艺）。
     ``role`` 同 system_block：会话人设口称名优先，缺省回落配置静态 role。
+    ``context``（#40）：只用于地区档禁用词**观测**（不改文本），改写本体不吃地区
+    （改写提示词在 avatarhub 字节拷贝件里，本线不动）。
     """
     if not reply or not _enabled(config):
         return reply
+    if context is not None:
+        observe_region_output(config, reply, context=context)
     c = _cfg(config)
     if not c.get("rewrite", False):
         return reply
