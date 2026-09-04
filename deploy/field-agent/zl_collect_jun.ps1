@@ -1,4 +1,4 @@
-﻿# zl_collect.ps1 -- field-agent 现场取证一键脚本（v1.2.1，2026-09-03；v1.2 在 PS5.1 下报告 0 字节：函数名 R 撞内置别名 Invoke-History、$since 撞参数 $Since）
+﻿# zl_collect.ps1 -- field-agent 现场取证一键脚本（v1.3.1，2026-09-04：x-diag-meta 头里非 ASCII 备注百分号编码，修 PS5.1 发送前抛「invalid Control characters」；v1.2.2 自报版本+空报告不上传；v1.2.1 修 PS5.1 报告 0 字节：函数名 R 撞内置别名 Invoke-History、$since 撞参数 $Since）
 #
 # 为什么要有这个脚本：Cursor 对「读工作区外文件 / 压缩 / 向外网 POST」三类动作各弹一次
 # 安全确认，用户不点允许 agent 就卡死（0903 钧机实录：Cursor 提示危险、包从未上传）。
