@@ -4,6 +4,9 @@
 <style>
   .dr-wrap{height:100%;overflow-y:auto;background:#f7f8fa;padding:18px;}
   .dr-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  /* #158 返回聊天入口：与 .dr-tab 同规格的中性按钮态链接 */
+  .dr-back{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border:1px solid #d1d5db;border-radius:16px;font-size:13px;color:#374151;background:#fff;text-decoration:none;white-space:nowrap;flex:0 0 auto;}
+  .dr-back:hover{background:#f1f5f9;color:#111827;text-decoration:none;}
   .dr-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
   .dr-tab{padding:5px 14px;border:1px solid #d1d5db;border-radius:16px;font-size:13px;cursor:pointer;background:#fff;color:#374151;}
   .dr-tab.active{background:var(--bl-growth-600,#0d76d9);color:#fff;border-color:var(--bl-growth-600,#0d76d9);}
@@ -119,7 +122,14 @@
 {% block content %}
 <div class="dr-wrap">
   <div class="dr-header">
-    <h2 style="margin:0;font-size:18px;display:inline-flex;align-items:center;"><span data-ui-icon="clipboard" data-size="17" style="margin-right:7px;"></span><span data-i18n="draft.title">草稿审批工作台</span></h2>
+    <div style="display:flex;gap:12px;align-items:center;min-width:0;">
+      <!-- #158 固定返回入口：**原生 <a href>**，不挂页级脚本——本页 IIFE 崩了也能出去。
+           站内 /workspace 链接由 _win_unique 捕获相位拦截器统一走 __wsGoHome（别处有活跃
+           坐席就交接、壳内交主窗收件箱），零接线自动获益；拦截器缺席时原生导航兜底。
+           禁加 target=_blank（会绕开去重语义、在壳内多开一个工作台）。 -->
+      <a href="/workspace" id="dr-back-chat" class="dr-back" data-i18n-title="draft.back_chat_title" title="返回聊天（坐席工作台）"><span aria-hidden="true">&larr;</span><span data-i18n="draft.back_chat">返回聊天</span></a>
+      <h2 style="margin:0;font-size:18px;display:inline-flex;align-items:center;"><span data-ui-icon="clipboard" data-size="17" style="margin-right:7px;"></span><span data-i18n="draft.title">草稿审批工作台</span></h2>
+    </div>
     <div style="display:flex;gap:10px;align-items:center;">
       <button onclick="triggerBulkAutosend()" id="btn-bulk" style="padding:5px 12px;border:1px solid var(--th-bd-green6,#16a34a);border-radius:6px;background:var(--th-bg-surface,#fff);color:var(--th-ink-green6,#15803d);font-size:13px;cursor:pointer;display:inline-flex;align-items:center;"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="draft.bulk_l2">一键发所有 L2</span></button>
       <a href="/workspace/draft-audit" id="audit-link" style="font-size:13px;color:var(--th-ink-blue6,#1d4ed8);text-decoration:none;display:none;" data-i18n="draft.audit_link">查看审计日志 →</a>

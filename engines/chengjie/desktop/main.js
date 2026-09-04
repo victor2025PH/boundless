@@ -1681,11 +1681,22 @@ function reuseBackendPopup(slot, url) {
   }
 }
 
-function openBackendPopup(url) {
+// #158（2026-09-04）：请求来自哪个弹窗（from.win / from.slot）。wsub 辅助弹窗（草稿审批等
+// /workspace/* 子页）里点「聊天」→ 主窗接手后把辅助窗关掉：否则主窗在后面亮了、前台弹窗
+// 原地不动，体感仍是「点了没反应」。admin 槽刻意不关——后台管理是用户另开的现场。
+function closeHandedOffPopup(from) {
+  if (!from || from.slot !== "wsub") return;
+  const w = from.win;
+  if (!w || w.isDestroyed()) return;
+  try { w.close(); } catch (e) { /* 关不掉不阻断主窗聚焦 */ }
+  try { if (mainSeatWin && !mainSeatWin.isDestroyed()) mainSeatWin.focus(); } catch (e) { /* 二次聚焦 best-effort */ }
+}
+
+function openBackendPopup(url, from) {
   const slot = backendPopupSlot(url);
   // 精确 /workspace 先路由主窗收件箱标签（见上方 focusMainInbox），不再产生
   // 「主窗标签 + workspace 弹窗」双工作台；主窗不可用才回落弹窗链。
-  if (slot === "workspace" && focusMainInbox(url)) return null;
+  if (slot === "workspace" && focusMainInbox(url)) { closeHandedOffPopup(from); return null; }
   const reused = reuseBackendPopup(slot, url);
   if (reused) return reused;
   const child = new BrowserWindow({
@@ -1711,8 +1722,9 @@ function openBackendPopup(url) {
   child.on("closed", () => {
     if (backendPopupWins.get(slot) === child) backendPopupWins.delete(slot);
   });
-  // 弹窗里再点后台 target=_blank 链接（如后台侧栏「坐席工作台」）同走本唯一性收敛
-  child.webContents.setWindowOpenHandler(makeBackendPopupHandler());
+  // 弹窗里再点后台 target=_blank 链接（如后台侧栏「坐席工作台」）同走本唯一性收敛；
+  // 带上自己的槽位与句柄——wsub 子页弹窗点「聊天」交接主窗后由 closeHandedOffPopup 收窗。
+  child.webContents.setWindowOpenHandler(makeBackendPopupHandler({ win: child, slot: slot }));
   wireEditContextMenu(child.webContents);   // 后台弹窗（admin/workspace 子页）同享右键编辑菜单
   watchWebLangSwitch(child.webContents);    // #151：后台页里切语言同样让壳跟随
   bindBackendPopupLogin(child, url);
@@ -1720,11 +1732,11 @@ function openBackendPopup(url) {
   return child;
 }
 
-function makeBackendPopupHandler() {
+function makeBackendPopupHandler(from) {
   return ({ url }) => {
     if (!isBackendUrl(url)) return { action: "allow" };
     setImmediate(() => {
-      try { openBackendPopup(url); } catch (e) {
+      try { openBackendPopup(url, from); } catch (e) {
         console.log("[popup] open failed: " + ((e && e.message) || e));
       }
     });

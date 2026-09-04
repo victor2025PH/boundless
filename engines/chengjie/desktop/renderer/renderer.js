@@ -430,6 +430,9 @@ initTitlebar();
     Inbox.wv = wv;
     Inbox.overlay = overlay;
     Inbox.phase = "loading";
+    // #158：收件箱「家」地址（含 ?lang=/&theme=）——onOpenWorkspace 判 webview 是否漂去了
+    // 子页（/workspace/drafts 等）并据此导航回来；单源在此，别在承接处再拼一份。
+    Inbox.homeUrl = fullUrl;
 
     function setPhase(phase, msg) {
       Inbox.phase = phase;
@@ -1303,12 +1306,34 @@ function wsDeepLinkParts(url) {
     return { cid, mid: q.get("mid") || "", flag: q.get("flag") || "", caseId: q.get("case") || "" };
   } catch (e) { return null; }
 }
+// #158（2026-09-04，「审批页进得去出不来」）：收件箱页的「去审批」是同窗 location.href
+// → 主窗收件箱 webview **自己**漂到了 /workspace/drafts；再点「聊天」经 _win_unique →
+// window.open → focusMainInbox 回到这里，旧承接只 Inbox.activate（标签本来就激活）
+// ＝点了什么都没发生。现在先问 ws-home-route：webview 不在收件箱主路径就把它导航回去
+// （深链参数并进 URL，页面自带 ?conv= 解析）；在主路径才走 postMessage 站内切会话。
+function inboxCurrentUrl() {
+  try { return Inbox.wv ? String(Inbox.wv.getURL() || "") : ""; } catch (e) { return ""; }
+}
+function routeWorkspaceOpen(reqUrl) {
+  const mod = window.WsHomeRoute;
+  if (mod && typeof mod.resolveWorkspaceHome === "function") {
+    return mod.resolveWorkspaceHome(inboxCurrentUrl(), Inbox.homeUrl || "", reqUrl);
+  }
+  const p = wsDeepLinkParts(reqUrl);          // 模块缺席：退回旧行为（只切标签 + 深链 postMessage）
+  return p ? { action: "deliver", parts: p } : { action: "none", parts: null };
+}
 try {
   if (window.shell && typeof window.shell.onOpenWorkspace === "function") {
     window.shell.onOpenWorkspace((payload) => {
       try {
         if (typeof Inbox.activate === "function") Inbox.activate(INBOX_ID);
-        const p = wsDeepLinkParts(payload && payload.url);
+        const reqUrl = (payload && payload.url) || "";
+        const route = routeWorkspaceOpen(reqUrl);
+        if (route.action === "navigate" && Inbox.wv) {
+          try { Inbox.wv.loadURL(route.url); } catch (e) { try { Inbox.wv.setAttribute("src", route.url); } catch (e2) { /* 导航失败：标签已切，至少不静默 deny 主窗聚焦 */ } }
+          return;
+        }
+        const p = route.parts;
         if (p) {
           deliverToInbox("window.postMessage(" + JSON.stringify({
             aitr: "open-conv", cid: p.cid, mid: p.mid, flag: p.flag, caseId: p.caseId,

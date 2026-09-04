@@ -56,7 +56,7 @@ ok(
 
 // ④ 子弹窗自身的 window.open 也必须走同一收敛（后台侧栏「坐席工作台」在弹窗里点）
 ok(
-  /child\.webContents\.setWindowOpenHandler\(\s*makeBackendPopupHandler\(\)\s*\)/.test(mainJs),
+  /child\.webContents\.setWindowOpenHandler\(\s*makeBackendPopupHandler\([^)]*\)\s*\)/.test(mainJs),
   "openBackendPopup 丢失 child.webContents.setWindowOpenHandler —— 弹窗里再点后台链接不去重"
 );
 
