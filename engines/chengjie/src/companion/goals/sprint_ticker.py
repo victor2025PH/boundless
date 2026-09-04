@@ -796,6 +796,7 @@ class SprintGoalTicker:
         self._emotion_gate = emotion_gate
         self._interval = max(30.0, float(interval_sec))
         self.last_tick_ts: float = 0.0
+        self.ticks: int = 0          # 累计拍数（停摆巡检 payload 用，关闸也计）
         self.last_scheduled: int = 0
         self.last_skips: Dict[str, int] = {}
         self._stop_evt: Optional[asyncio.Event] = None
@@ -838,6 +839,7 @@ class SprintGoalTicker:
             "enabled": bool(cfg.get("enabled", False)),
             "interval_sec": self._interval,
             "last_tick_ts": self.last_tick_ts,
+            "ticks": self.ticks,
             "last_scheduled": self.last_scheduled,
             "last_skips": dict(self.last_skips),
         }
@@ -846,6 +848,7 @@ class SprintGoalTicker:
     def run_once(self, *, now: Optional[float] = None) -> Dict[str, Any]:
         n = float(now if now is not None else time.time())
         self.last_tick_ts = n
+        self.ticks += 1
         skips: Dict[str, int] = {}
         summary: Dict[str, Any] = {"enabled": True, "scanned": 0,
                                    "scheduled": 0, "skips": skips}

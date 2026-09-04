@@ -99,6 +99,30 @@ def _pending_drafts(state) -> Optional[int]:
         return None
 
 
+def _loop_heartbeat(obj: Any) -> Optional[Dict[str, Any]]:
+    """对象型常备循环（SprintGoalTicker / CareDispatcher）→ 与 dict 心跳同构。
+
+    D1b P0-5：两者都有 ``last_tick_ts``（run_once 入口即打点，配置关闸也照跳）、
+    ``_interval``（停摆阈值按拍放宽）、``is_running()``（asyncio task 活性）。
+    对象缺失 → None（= 未挂载，与 dict 心跳缺失同罪）；属性读取异常 → 视同
+    「有对象但零心跳」，让停摆判定按宽限走而不是崩掉整个巡检。
+    """
+    if obj is None:
+        return None
+    hb: Dict[str, Any] = {"last_tick_ts": 0.0, "ticks": 0,
+                          "interval_sec": 0.0, "running": None}
+    try:
+        hb["last_tick_ts"] = float(getattr(obj, "last_tick_ts", 0.0) or 0.0)
+        hb["ticks"] = int(getattr(obj, "ticks", 0) or 0)
+        hb["interval_sec"] = float(getattr(obj, "_interval", 0.0) or 0.0)
+        fn = getattr(obj, "is_running", None)
+        if callable(fn):
+            hb["running"] = bool(fn())
+    except Exception:
+        logger.debug("loop heartbeat 读取失败（按零心跳）", exc_info=True)
+    return hb
+
+
 def audio_probe_target(config: Dict[str, Any]) -> str:
     """决策：该不该探测 LAN GPU 音频服务，探哪个 /health（纯函数）。
 
@@ -3724,23 +3748,40 @@ class HealthWatchdog:
             self._scanloop_alerted: Dict[str, float] = {}
             self._scanloop_watch_since = ts
         state_root = getattr(self._app, "state", self._app)
-        loops = (
+        # D1b P0-5（2026-09-05）：冲刺推进器 / care 派发循环也进同一张停摆表——
+        # 「自动推进」真开的两条腿：ticker 排拍、dispatcher 真发，任一停走目标卡
+        # 照样写着「下一主动拍≈HH:MM」而一条都不会出手。两者是对象型循环
+        # （有 last_tick_ts/_interval/is_running），经 _loop_heartbeat 折成与
+        # dict 心跳同构。dispatcher 被 bootstrap 刻意跳过（ai_missing）不算停摆。
+        care_eng = getattr(state_root, "care_engine", None)
+        care_eng = care_eng if isinstance(care_eng, dict) else {}
+        loops = [
             ("goal_scan", getattr(state_root, "goal_scan_state", None)),
             ("workflow_autorun",
              getattr(state_root, "workflow_autorun_state", None)),
-        )
+            ("goal_sprint", _loop_heartbeat(
+                getattr(state_root, "goal_sprint_ticker", None)
+                or care_eng.get("sprint_ticker"))),
+        ]
+        if not care_eng.get("dispatcher_skip"):
+            loops.append(("care_dispatch",
+                          _loop_heartbeat(care_eng.get("dispatcher"))))
         from src.integrations.shared.event_bus import get_event_bus
         for name, st in loops:
             last_tick = float((st or {}).get("last_tick_ts") or 0.0)
+            # 循环自带节拍（ticker 默认 120s、可热调到更长）时，停摆阈值至少
+            # 放宽到 3 拍——否则运营把 interval 调到 10 分钟就天天误报。
+            loop_itv = float((st or {}).get("interval_sec") or 0.0)
+            stall_sec = max(stall_min * 60.0, loop_itv * 3.0)
             if last_tick <= 0:
                 # 心跳从未出现：挂载失败或旧进程。给足启动宽限（watch_since
                 # 起算），宽限外仍无心跳 → 与停摆同罪。
                 stalled = (ts - float(self._scanloop_watch_since)) \
-                    >= stall_min * 60.0
+                    >= stall_sec
                 stalled_min = ((ts - float(self._scanloop_watch_since)) / 60.0
                                if stalled else 0.0)
             else:
-                stalled = (ts - last_tick) >= stall_min * 60.0
+                stalled = (ts - last_tick) >= stall_sec
                 stalled_min = (ts - last_tick) / 60.0
             alerted_at = float(self._scanloop_alerted.get(name) or 0.0)
             if stalled:
@@ -3752,6 +3793,9 @@ class HealthWatchdog:
                     "ticks": int((st or {}).get("ticks") or 0),
                     "last_tick_ts": last_tick,
                     "mounted": st is not None,
+                    # 对象型循环带 asyncio task 活性：False=task 已退出（崩了）
+                    # 而非「慢」；dict 心跳没有此字段 → None
+                    "running": (st or {}).get("running"),
                     "reminder": bool(alerted_at),
                     "rate_key": f"scan_stall:{name}",
                 }

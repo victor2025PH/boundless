@@ -1555,9 +1555,18 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
 
     elif event_type == "scan_loop_stall_alert":
         _loop_names = {"goal_scan": "目标结算/提醒扫描",
-                       "workflow_autorun": "工作链推进"}
-        _ln = _loop_names.get(str(data.get("loop") or ""),
-                              str(data.get("loop") or "?"))
+                       "workflow_autorun": "工作链推进",
+                       # D1b P0-5：自动推进的两条腿
+                       "goal_sprint": "目标冲刺推进器（自动推进排拍）",
+                       "care_dispatch": "主动派发循环（自动推进真发）"}
+        _loop_impact = {
+            "goal_scan": "目标完成不被发现/提醒不发",
+            "workflow_autorun": "工作链步骤不推进",
+            "goal_sprint": "「自动推进」目标一拍都不排——卡片仍写着下一拍时间",
+            "care_dispatch": "已排好的主动拍/约定回访一条都不发出去",
+        }
+        _lk = str(data.get("loop") or "")
+        _ln = _loop_names.get(_lk, _lk or "?")
         if data.get("recovered"):
             title = f"✅ 常备循环已恢复：{_ln}"
             text = "**状态**: 心跳恢复跳动\n[📊 查看运营总览](/admin/ops)"
@@ -1565,13 +1574,18 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             _sm = float(data.get("stalled_min") or 0)
             _mounted = data.get("mounted")
             prefix = "⏰" if data.get("reminder") else "🚨"
-            _cause = ("循环未挂载（bootstrap 启动失败/旧进程）"
-                      if _mounted is False else "心跳停走（事件循环卡死/异常退出）")
+            if _mounted is False:
+                _cause = "循环未挂载（bootstrap 启动失败/旧进程）"
+            elif data.get("running") is False:
+                _cause = "循环 task 已退出（异常崩溃，非「慢」）"
+            else:
+                _cause = "心跳停走（事件循环卡死/异常退出）"
+            _imp = _loop_impact.get(
+                _lk, "静默失效，不修没人会替你发现")
             title = f"{prefix} 常备循环停摆：{_ln}（{_sm:.0f} 分钟无心跳）"
             text = (
                 f"**判定**: {_cause}\n"
-                "**影响**: 目标完成不被发现/提醒不发（goal_scan）或工作链步骤"
-                "不推进（workflow_autorun）——都是静默失效，不修没人会替你发现\n"
+                f"**影响**: {_imp}——静默失效，不修没人会替你发现\n"
                 "**处置**: 查 app.log 里循环启动行与异常栈；重启实例可临时恢复\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
