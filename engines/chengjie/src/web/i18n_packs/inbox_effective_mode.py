@@ -36,6 +36,14 @@ ZH = {
                                        "人确认后再发，且不会自动挂人设。这是防「AI 用"
                                        "错身份对客户开口」的闸。解除：主管在运维总览"
                                        "「🪪 登录身份决议」卡里点「确认转正」（≤60 秒生效）。",
+    # ── #156（2026-09-04 I-2 补齐）：④b 未选人设封顶——对话 B 上了后端层（933da0f8），
+    # 坐席文案 + 前端白名单这半没跟上，掉进 generic 分支把 persona_unselected 原始层名晒给坐席。
+    "inbox.effcap.persona_unselected": "🎭 未选人设 · 转人审",
+    "inbox.effcap.persona_unselected_t": "该账号（{acct}）还没有选定人设：新登录的账号不再"
+                                         "自动挂默认人设，选定前会话按「{mode}」执行——AI "
+                                         "照常拟稿，人确认后再发，不会以任何身份代答。解除："
+                                         "在账号栏点该账号 →「选择人设」（或人设页绑定），"
+                                         "选定后本层自动消失（≤60 秒生效）。",
     "inbox.effcap.reconnect_backlog": "🔌 断线补收窗 · 转人审",
     "inbox.effcap.reconnect_backlog_t": "该账号刚从长时间断线恢复，正在补收断线期的旧"
                                         "消息：这些消息的时间不可靠（可能是几天前的），"
@@ -91,6 +99,16 @@ EN = {
                                        "To lift it, a supervisor clicks \"Confirm "
                                        "identity\" on the ops overview card "
                                        "\"Login identity\" (takes effect within 60s).",
+    "inbox.effcap.persona_unselected": "🎭 No persona selected · human review",
+    "inbox.effcap.persona_unselected_t": "This account ({acct}) has no persona selected "
+                                         "yet: newly logged-in accounts no longer get a "
+                                         "default persona attached automatically, so until "
+                                         "one is chosen the conversation runs as \"{mode}\" "
+                                         "— the AI still drafts, a human sends, and the AI "
+                                         "never answers under an unchosen identity. To lift "
+                                         "it, pick a persona for this account from the "
+                                         "account bar (or the Personas page); the cap clears "
+                                         "automatically (within 60s).",
     "inbox.effcap.reconnect_backlog": "🔌 Reconnect backlog · human review",
     "inbox.effcap.reconnect_backlog_t": "This account just recovered from a long "
                                         "outage and is importing messages from the "

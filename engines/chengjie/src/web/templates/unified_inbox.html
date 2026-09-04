@@ -14357,7 +14357,8 @@ function _renderEffChip(){
   // 实锤：④⑤⑥ 三层上线时忘了这一步）。门禁 test_effcap_layers_have_seat_labels
   // 从 compute_mode_caps 反查，漏一层即红。
   var EFFCAP_LAYERS=['warmup','platform','business_line',
-    'identity_pending','reconnect_backlog','own_fleet_peer','deliver_paused'];
+    'identity_pending','reconnect_backlog','own_fleet_peer','deliver_paused',
+    'persona_unselected'];   // #156 ④b（对话 B 后端层 933da0f8，I-2 补坐席文案 + 白名单）
   var layer=(EFFCAP_LAYERS.indexOf(String(cap.layer||''))>=0)?String(cap.layer):'generic';
   var effLabel='';
   try{ effLabel=_modeLabel(e.mode); }catch(_){ effLabel=String(e.mode||''); }
@@ -14377,6 +14378,8 @@ function _renderEffChip(){
     tip=window.Tf('inbox.effcap.own_fleet_peer_t',{peer:String(cap.detail||''),mode:effLabel});
   }else if(layer==='deliver_paused'){
     tip=window.Tf('inbox.effcap.deliver_paused_t',{mode:effLabel});
+  }else if(layer==='persona_unselected'){
+    tip=window.Tf('inbox.effcap.persona_unselected_t',{acct:String(cap.detail||''),mode:effLabel});
   }else{
     tip=window.Tf('inbox.effcap.generic_t',{mode:effLabel,layer:String(cap.layer||'')});
   }
