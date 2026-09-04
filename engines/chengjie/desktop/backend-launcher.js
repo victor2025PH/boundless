@@ -274,6 +274,10 @@ function createBackendManager(deps) {
   let backendDataDir = ""; // 本次拉起的后端数据根（stop() 清哨兵用，见 markCleanShutdown）
   let identity = null;        // 最近一次身份探针结果（null=未探到/老后端）
   let versionMismatch = false;
+  let lastConfig = null;      // 最近一次拉起用的配置（崩溃自愈重拉要用同一份）
+  let readySince = 0;         // 本次进程就绪时刻（判「稳过一段时间」→ 重置重拉计数）
+  let respawnCount = 0;       // 连续自愈重拉次数（稳定运行后归零）
+  let respawnTimer = null;
 
   function shellVersion() {
     // displayVersion（内测 1.001 展示号）优先：它同时喂给 AITR_APP_VERSION（后端
@@ -392,7 +396,54 @@ function createBackendManager(deps) {
     }
   }
 
+  /**
+   * 后端非主动退出后的退避重拉（2026-09-04 kouxing 事故）。
+   *
+   * 事故：后端撞满 Windows ``select()`` 的文件描述符上限 → 走防幽灵 ``exit 78``
+   * 自杀，而壳这边只把 status 记成 failed 就不管了 → 端口再没人 LISTENING，
+   * 壳一直空打 18799，坐席看到的是「一直连不上」，得有人远程 stop+relaunch
+   * 才回来（实录静默掉线，靠值守巡检才发现）。
+   *
+   * 刻意**不做无限重启**：连续重拉封顶 ``respawnMax`` 次，之后停手并把 lastError
+   * 留在 getStatus 里（壳红条/健康看板可见）——「起来就崩」必须让人看见，
+   * 无限重启只会把真故障掩盖成一条永远在闪的状态灯。反之，只要新进程稳过
+   * ``respawnStableMs`` 就把计数归零，于是「偶发崩一次」总能自愈。
+   */
+  function scheduleRespawn(code, signal) {
+    const max = deps.respawnMax != null ? deps.respawnMax : 5;
+    const delays = deps.respawnDelaysMs || [2000, 5000, 15000, 30000, 60000];
+    const stableMs = deps.respawnStableMs != null ? deps.respawnStableMs : 120000;
+    const later = deps.setTimeout || setTimeout;
+
+    // 上一次跑够久 = 这是一次偶发崩溃，不是起飞即坠 → 重新给满额度
+    if (readySince && (Date.now() - readySince) >= stableMs) respawnCount = 0;
+    readySince = 0;
+
+    if (max <= 0 || !lastConfig) return;
+    if (respawnCount >= max) {
+      // 复用 exit 处理已写好的中文 lastError，只补 ASCII 后缀——既保住坐席可读，
+      // 又不给本文件的「硬编码中文串」ratchet 添新条目
+      lastError = `${lastError} [auto-respawn gave up after ${respawnCount} tries]`;
+      log(`giving up auto-respawn after ${respawnCount} tries (code=${code} signal=${signal}); see userData/logs/backend.log`);
+      return;
+    }
+    const wait = delays[Math.min(respawnCount, delays.length - 1)];
+    respawnCount += 1;
+    log(`backend exited unexpectedly -> respawn in ${Math.round(wait / 1000)}s (attempt ${respawnCount}/${max})`);
+    if (respawnTimer) { try { clearTimeout(respawnTimer); } catch (e) {} }
+    respawnTimer = later(() => {
+      respawnTimer = null;
+      if (quitting || child) return;
+      void start(lastConfig);
+    }, wait);
+    // 定时器不该把 Electron 主进程钉在事件循环里（退出时应能直接走）
+    if (respawnTimer && typeof respawnTimer.unref === "function") {
+      try { respawnTimer.unref(); } catch (e) {}
+    }
+  }
+
   async function _doStart(config) {
+    lastConfig = config;
     // 发布态：可写数据根 = userData/data；config + dbs/json/logs 都落这里（避免写只读安装包）。
     let dataDir = "";
     if (app && app.isPackaged) {
@@ -511,6 +562,7 @@ function createBackendManager(deps) {
       lastError = `后端进程退出（code=${code} signal=${signal}）`;
       log(lastError + "；详见 userData/logs/backend.log");
       void wasChild;
+      scheduleRespawn(code, signal);
     });
 
     const ok = await waitForReady(config, {
@@ -519,6 +571,7 @@ function createBackendManager(deps) {
     });
     if (ok) {
       status = "ready";
+      readySince = Date.now();
       log("后端就绪");
     } else if (child) {
       status = "failed";
@@ -577,6 +630,7 @@ function createBackendManager(deps) {
    */
   async function stopAndWait(timeoutMs) {
     quitting = true;
+    if (respawnTimer) { try { clearTimeout(respawnTimer); } catch (e) {} respawnTimer = null; }
     if (logStream) { try { logStream.end(); } catch (e) {} logStream = null; }
     const proc = child;
     if (!proc || !proc.pid) { status = "stopped"; return true; }

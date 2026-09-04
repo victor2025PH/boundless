@@ -425,5 +425,102 @@ console.log(`backend-launcher.test.js: ${pass} passed`);
     lok("stopAndWait→无 child 直接 true", (await mgr.stopAndWait(1000)) === true);
   }
 
+  // (i) 后端异常退出 → 退避自愈重拉（2026-09-04 kouxing 事故：后端撞 FD 上限走防幽灵
+  //     exit 78 自杀，壳只把状态记成 failed 就不管了 → 端口再没人 LISTENING，坐席
+  //     「一直连不上」，得有人远程 stop+relaunch 才回来）
+  {
+    const timers = [];
+    let spawned = 0;
+    let alive = false;   // 后端是否真的在应答（死了之后探活必须失败，否则重拉会误判成「复用外部后端」）
+    let exitCb = null;
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => {
+        spawned++; alive = true;
+        return { pid: 4242, stdout: { on() {} }, stderr: { on() {} },
+          on(evt, cb) { if (evt === "exit") exitCb = cb; } };
+      },
+      fetch: async () => { if (alive) return { status: 200 }; throw new Error("unreachable"); },
+      setTimeout: (fn) => { timers.push(fn); return { unref() {} }; },
+      respawnDelaysMs: [1], respawnMax: 2, respawnStableMs: 999999,
+    }));
+    const crash = async (drainOne) => {
+      alive = false;
+      exitCb(78, null);
+      if (!drainOne) return;
+      const fn = timers.shift();
+      if (fn) fn();
+      await new Promise((r) => setTimeout(r, 30));
+    };
+    await mgr.start(CFG);
+    lok("首次拉起就绪", spawned === 1 && mgr.getStatus().status === "ready");
+
+    await crash(false);                     // 防幽灵自杀
+    lok("异常退出→已排一次自愈重拉", timers.length === 1);
+    const t1 = timers.shift(); t1();
+    await new Promise((r) => setTimeout(r, 30));
+    lok("exit 78 后壳真的把后端重拉起来了", spawned === 2);
+
+    await crash(true);
+    lok("第二次异常退出仍在额度内", spawned === 3);
+
+    // 起飞即坠：额度用尽后停手，线索留在 lastError（壳红条/健康看板可见），
+    // 刻意不无限重启——那只会把真故障掩盖成一条永远在闪的状态灯
+    await crash(false);
+    lok("额度用尽→不再排重拉", timers.length === 0);
+    lok("额度用尽→lastError 留线索", /gave up/.test(mgr.getStatus().lastError || ""));
+    lok("额度用尽→spawn 次数封顶", spawned === 3);
+  }
+
+  // (i2) 稳定跑过一段时间后才崩 = 偶发崩溃 → 额度归零，永远能自愈
+  {
+    const timers = [];
+    let spawned = 0;
+    let alive = false;
+    let exitCb = null;
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => {
+        spawned++; alive = true;
+        return { pid: 4242, stdout: { on() {} }, stderr: { on() {} },
+          on(evt, cb) { if (evt === "exit") exitCb = cb; } };
+      },
+      fetch: async () => { if (alive) return { status: 200 }; throw new Error("unreachable"); },
+      setTimeout: (fn) => { timers.push(fn); return { unref() {} }; },
+      respawnDelaysMs: [1], respawnMax: 1, respawnStableMs: 0, // 0 = 每次都算「跑够久」
+    }));
+    await mgr.start(CFG);
+    for (let i = 0; i < 3; i++) {
+      alive = false;
+      exitCb(78, null);
+      const fn = timers.shift();
+      if (fn) fn();
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    lok("偶发崩溃→额度归零，三次都自愈", spawned === 4);
+  }
+
+  // (i3) 壳主动关闭（stopAndWait 已置 quitting）→ 绝不重拉（否则退不掉应用）
+  {
+    const timers = [];
+    let spawned = 0;
+    let exitCb = null;
+    const mgr = createBackendManager(baseDeps({
+      spawn: () => {
+        spawned++;
+        return { pid: 4242, stdout: { on() {} }, stderr: { on() {} },
+          on(evt, cb) { if (evt === "exit") exitCb = cb; } };
+      },
+      fetch: async () => { throw new Error("unreachable"); },
+      setTimeout: (fn) => { timers.push(fn); return { unref() {} }; },
+      exec: () => {},
+      pidAlive: () => false,
+      respawnDelaysMs: [1], respawnMax: 3,
+    }));
+    await mgr.start(CFG);
+    await mgr.stopAndWait(500);
+    exitCb(0, "SIGTERM");
+    lok("主动关闭→不排重拉", timers.length === 0);
+    lok("主动关闭→不再 spawn", spawned === 1);
+  }
+
   console.log(`backend-launcher.test.js lifecycle: ${lpass} passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

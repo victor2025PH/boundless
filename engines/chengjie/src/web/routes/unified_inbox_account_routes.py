@@ -43,6 +43,38 @@ logger = logging.getLogger(__name__)
 # HTTP 返回，超时会让它重投同一条消息。ASR 自己有超时，这层只兜「整条链卡死」。
 _INGEST_ASR_TIMEOUT_SEC = 25.0
 
+# 入站转录并发闸（2026-09-04 kouxing 事故）：边车冷启动会把积压语音**一次性**灌进来
+# （实录 11 秒内十几路），每路各占一条 Whisper HTTPS 连接，文件描述符越过 Windows
+# ``select()`` 的 512 上限后 uvicorn 事件循环整体抛 ValueError → 防幽灵 exit 78 →
+# 坐席静默掉线。闸门刻意开在 ``asyncio.wait_for`` **内侧**：排队时间算进同一个 25s
+# 墙钟预算内，超时仍按占位符落库（既有退化路径），绝不让排队把边车的 HTTP 拖到重投。
+_INGEST_ASR_MAX_CONCURRENCY_DEFAULT = 3
+_INGEST_ASR_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _ingest_asr_sem(cfg: Optional[Dict[str, Any]] = None) -> asyncio.Semaphore:
+    """进程级转录并发闸（首次调用时按配置定档，之后恒定）。"""
+    global _INGEST_ASR_SEM
+    if _INGEST_ASR_SEM is None:
+        n = _INGEST_ASR_MAX_CONCURRENCY_DEFAULT
+        try:
+            raw = ((cfg or {}).get("voice_recognition") or {}).get(
+                "ingest_concurrency")
+            if raw is not None:
+                n = max(1, min(8, int(raw)))
+        except Exception:
+            n = _INGEST_ASR_MAX_CONCURRENCY_DEFAULT
+        _INGEST_ASR_SEM = asyncio.Semaphore(n)
+        logger.info("[protocol] 入站语音转录并发闸 = %s", n)
+    return _INGEST_ASR_SEM
+
+
+async def _transcribe_ingest_guarded(vtr: Any, path: str, lang: str,
+                                     cfg: Optional[Dict[str, Any]] = None) -> Any:
+    """过并发闸再转录（调用方负责把本协程包进 wait_for 限总时长）。"""
+    async with _ingest_asr_sem(cfg):
+        return await vtr.transcribe_voice_message(path, lang)
+
 # 各平台「边车 worker」的登录 mode——即会主动 POST /session-status 的那些服务所对应的
 # mode（messenger-web=web / whatsapp-baileys=protocol，与各自 login provider 落库口径一致）。
 # session-status 收到 authorized 兜底提升账号时据此钉正 mode：新建/修复的行必须落在
@@ -1503,7 +1535,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                         _vlang = str((_cfg0.get("voice_recognition") or {}).get(
                             "language", "auto")) or "auto"
                         _vtxt = await asyncio.wait_for(
-                            _vtr.transcribe_voice_message(str(_vpath), _vlang),
+                            _transcribe_ingest_guarded(
+                                _vtr, str(_vpath), _vlang, _cfg0),
                             timeout=_INGEST_ASR_TIMEOUT_SEC,
                         )
                         if _vtxt and str(_vtxt).strip():

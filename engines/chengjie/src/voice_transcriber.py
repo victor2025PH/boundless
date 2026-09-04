@@ -6,6 +6,7 @@ import os
 import re
 import asyncio
 import tempfile
+import threading
 from collections import Counter
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -310,8 +311,41 @@ class OpenAITranscriber(VoiceTranscriber):
         if not self.api_key:
             self.logger.warning("OpenAI API密钥未配置")
 
+        # 复用同一个客户端（见 _get_client 的事故说明）
+        self._client: Any = None
+        self._client_fp: Any = None
+        self._client_lock = threading.Lock()
+
         _ep = self.base_url or "https://api.openai.com/v1"
         self.logger.info(f"OpenAI Whisper API转录服务初始化 endpoint={_ep} model={self.model}")
+
+    def _get_client(self, api_key: str) -> Any:
+        """取（并缓存）OpenAI 客户端。
+
+        2026-09-04 kouxing 事故的一半根因：此前**每次转录都新建** ``openai.OpenAI``，
+        每个客户端各自带一条 httpx 连接池且从不 ``close()`` → 句柄只涨不落。按凭据
+        指纹缓存即可复用；托管令牌 30 天换新时指纹变化会自然重建，不必重启进程。
+        """
+        import openai
+        fp = (api_key, self.base_url or "", self.timeout_sec, self.max_retries)
+        with self._client_lock:
+            if self._client is None or self._client_fp != fp:
+                kwargs: Dict[str, Any] = {
+                    "api_key": api_key,
+                    "max_retries": self.max_retries,
+                    "timeout": self.timeout_sec,
+                }
+                if self.base_url:
+                    kwargs["base_url"] = self.base_url
+                old = self._client
+                self._client = openai.OpenAI(**kwargs)
+                self._client_fp = fp
+                if old is not None:
+                    try:
+                        old.close()
+                    except Exception:
+                        pass
+            return self._client
 
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
         """使用OpenAI Whisper API转录"""
@@ -334,29 +368,26 @@ class OpenAITranscriber(VoiceTranscriber):
                     self.logger.warning("托管转写：设备令牌尚未就绪（AITR_HOSTED_AI_KEY 空）")
                     return None
 
-            # 设置客户端（支持 OpenAI 兼容端点：Groq / SiliconFlow / 本地等）。
+            # 客户端复用（支持 OpenAI 兼容端点：Groq / SiliconFlow / 本地等）。
             # max_retries=0 + timeout：主转录不可达/慢时快速失败回落，不重试、不阻塞理解链。
-            client_kwargs: Dict[str, Any] = {
-                "api_key": api_key,
-                "max_retries": self.max_retries,
-                "timeout": self.timeout_sec,
-            }
-            if self.base_url:
-                client_kwargs["base_url"] = self.base_url
-            client = openai.OpenAI(**client_kwargs)
+            client = self._get_client(api_key)
 
-            # 打开语音文件
-            with open(voice_file_path, 'rb') as audio_file:
-                self.logger.info(f"调用OpenAI Whisper API: {voice_file_path}")
+            # SDK 的 transcriptions.create 是**同步阻塞**调用：直接在事件循环上跑会把
+            # 整个 web 进程按住整个 ASR 时长（实录单条 25s 墙钟）——期间边车重投、坐席
+            # 轮询全部堆在待处理连接上，越过 Windows ``select()`` 512 上限即整体崩。
+            # 故挪进线程池；并发上限由入站侧的转录闸控制（见
+            # ``unified_inbox_account_routes._ingest_asr_sem``）。
+            def _call() -> Any:
+                with open(voice_file_path, 'rb') as audio_file:
+                    return client.audio.transcriptions.create(
+                        model=self.model,
+                        file=audio_file,
+                        language=language if language != "auto" else None,
+                        response_format="text"
+                    )
 
-                response = client.audio.transcriptions.create(
-                    model=self.model,
-                    file=audio_file,
-                    language=language if language != "auto" else None,
-                    response_format="text"
-                )
-
-                return response
+            self.logger.info(f"调用OpenAI Whisper API: {voice_file_path}")
+            return await asyncio.to_thread(_call)
 
         except ImportError:
             self.logger.error("OpenAI库未安装，请运行: pip install openai")
