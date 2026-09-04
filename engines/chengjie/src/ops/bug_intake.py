@@ -87,6 +87,30 @@ BUG_WORDS = (
     # 第七轮（2026-08-21 凌晨实录，5 条漏答被闸门压制）：「根本没法再点」
     # （没法=无法的口语变体）、「只拟稿没有自动发出」「所以没有触发」
     "没法", "没有自动", "没有触发",
+    # J-5 D（2026-09-05，09-04 夜钧/skuio 五句漏网实录：「文字转语音克隆成功了，
+    # 不能发送」「媒体这里发不了任何东西了」「WHATSAPP登陆了几分钟，登陆不上」
+    # 「这个红色框框的要修复」——全判 other → smalltalk_suppressed 无痕）。
+    # 「隐藏」刻意不进表：单字会把「建议隐藏或删除」这类 feedback 吃成 bug。
+    "不能发送", "发不了", "登陆不上", "要修复", "不同步", "不消失", "点不进",
+    "发送不了", "收不了", "打不了", "传不了", "传不上",
+)
+# J-5 D：正则形态的 bug 判据（词表管不住的量词/结构句）。
+# ① 「显示 N 条」——「发了一条显示2条」重复渲染族；② 「<界面部件>(是)空的」
+#    ——「图标空的」（「空的」单独不进词表：「有空的话」是闲聊高频）；
+# ③ 否定式问句「为什么/为啥/怎么会 … <产品名词>」——问句语体的报障，此前只有
+#    带问号且 ≥6 字才算 usage，无问号的直接 other。
+_BUG_PRODUCT_NOUNS = (
+    "消息", "媒体", "语音", "登录", "登陆", "角标", "图片", "视频", "文件", "头像",
+    "人设", "翻译", "账号", "发送", "接收", "克隆", "红点", "未读", "通知", "界面",
+    "按钮", "图标", "列表", "工单", "群", "贴图", "表情", "转写", "同步", "会话",
+)
+_BUG_PATTERNS = (
+    re.compile(r"显示\s*\d+\s*条"),
+    re.compile(r"(图标|界面|页面|列表|框|头像|内容|栏|区)\s*(是|都)?\s*空的"),
+    re.compile(r"(为什么|为啥|怎么会|为何)[^。！？!?]{0,30}("
+               + "|".join(_BUG_PRODUCT_NOUNS) + ")"),
+    re.compile(r"(" + "|".join(_BUG_PRODUCT_NOUNS)
+               + r")[^。！？!?]{0,12}(为什么|为啥|怎么会|为何)"),
 )
 USAGE_WORDS = (
     "怎么", "如何", "怎样", "在哪", "哪里", "哪儿", "什么意思", "教程", "教一下",
@@ -151,6 +175,8 @@ _STATS: Dict[str, int] = {
     # J-5 A（2026-09-05）：observe 入口按 mid / (reporter,文本,60s) 判为二次观察
     # 而短路的次数（实时链与 backfill 回放对同一条消息只许一次登记）
     "observe_dup": 0,
+    # J-5 D（决策 D4 后半）：已知报障人「图+任意文字」判 other 被升格立单的次数
+    "photo_report": 0,
     # C1-②（#123 族，2026-09-02）：群消息序号哨兵——跳号告警次数 / 补拉回来的
     # 真消息数 / 核实为空（已删/服务消息）的缺号数
     "seq_gap": 0, "seq_gap_filled": 0, "seq_gap_empty": 0,
@@ -257,6 +283,8 @@ def classify_message(text: str) -> str:
     if not t:
         return "other"
     if any(w in t for w in BUG_WORDS):
+        return "bug"
+    if any(p.search(t) for p in _BUG_PATTERNS):
         return "bug"
     if any(w in t for w in FEEDBACK_WORDS):
         return "feedback"
@@ -730,6 +758,28 @@ def pending_verify_ticket(chat_id: Any, reporter_id: Any,
     """
     cands = candidate_verify_tickets(chat_id, reporter_id, now=now, limit=1)
     return cands[0] if cands else None
+
+
+def is_known_reporter(chat_id: Any, reporter_id: Any) -> bool:
+    """该 reporter 在此群曾立过任一工单（任何状态）。
+
+    J-5 D（决策 D4 后半）：已知报障人在报障群发「图 + 任意文字」＝报障材料——
+    「这个」「看图」配截图判 other 被静默（0904 skuio 三张带图报障落
+    capped_photo_archived 无单）。只认**本群**历史，避免别群报障人在此群晒图
+    被当报障。
+    """
+    rid = str(reporter_id or "").strip()
+    if not rid:
+        return False
+    try:
+        con = _db()
+        row = con.execute(
+            "SELECT 1 FROM bug_tickets WHERE chat_id=? AND reporter_id=? LIMIT 1",
+            (str(chat_id), rid)).fetchone()
+        return row is not None
+    except Exception:
+        logger.debug("[bug_intake] 已知报障人查询失败", exc_info=True)
+        return False
 
 
 _TICKET_REF_RE = re.compile(r"#\s*(\d{1,7})")
@@ -1263,6 +1313,28 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
             if not t:
                 _bump("photo_suppressed")
                 return False
+            # J-5 D（决策 D4 后半）：已知报障人「图 + 任意文字」＝报障材料——
+            # 文字判 other 也不许进闲聊静默，就地 observe 立单（收集窗内则由
+            # observe 自然补录）。返回 False：AI 静默档下与 True 等价；AI 开
+            # 启档下该形态此前本就是 smalltalk_suppressed，不算回归。
+            if (classify_message(t) == "other"
+                    and not detect_verify_intent(t)
+                    and _in_collect_window(cid, sender_id,
+                                           cfg["collect_window_min"], ts) is None
+                    and is_known_reporter(cid, sender_id)):
+                try:
+                    observe_group_message(
+                        config, chat_id=cid, account_id=account_id,
+                        reporter_id=sender_id,
+                        reporter_name=str(sender_name or ""),
+                        text=t, now=ts, msg_id=msg_id, count_reply=False,
+                        has_photo=True)
+                    # 新单已开收集窗 → 这张图本身记进它的证据链
+                    note_screenshot(config, cid, sender_id, now=ts)
+                except Exception:
+                    logger.warning("[bug_intake] 已知报障人随图立单失败",
+                                   exc_info=True)
+                return False
         # 收集窗内的后续消息：持续接话（用户在补工单信息，别装死）
         if _in_collect_window(cid, sender_id, cfg["collect_window_min"], ts):
             _bump("engaged")
@@ -1285,8 +1357,11 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
         if is_direct:
             _bump("engaged")
             return True
-        # 报障群不陪聊：非报障、非点名一律静默
+        # 报障群不陪聊：非报障、非点名一律静默。
+        # J-5 D：记事件（此前无痕——0904 五句漏网报障连一条痕迹都没有，值守
+        # 面板从这里就能盯「被静默的都是什么」，词表缺口照单补）。
         _bump("smalltalk_suppressed")
+        _record_event(cid, "smalltalk_suppressed", sender_id, t[:200])
         return False
     except Exception:
         logger.debug("[bug_intake] trigger_verdict 异常（放行原链）", exc_info=True)
@@ -1353,7 +1428,7 @@ def observe_group_message(
     config: Optional[Dict[str, Any]], *, chat_id: Any, account_id: Any,
     reporter_id: Any, reporter_name: str, text: str,
     now: Optional[float] = None, msg_id: Any = 0, reply_to_msg_id: Any = 0,
-    count_reply: bool = True,
+    count_reply: bool = True, has_photo: bool = False,
 ) -> Dict[str, Any]:
     """报障群消息观察（接线在 skill_manager.process_message 群 hint 之后）。
 
@@ -1361,6 +1436,9 @@ def observe_group_message(
     ``notify_msg_id``（bot 回访消息）时确认/否认归属该单。不带＝只认文中 ``#N``。
     ``count_reply``（J-5 C）：False＝本次只登记不回复（限频压制路径 / 回放链），
     不记回复限频——否则被拍扁的登记反过来把预算烧得更死。
+    ``has_photo``（J-5 D）：本条随图。已知报障人（本群曾立单）随图的任意文字
+    判 other 时升格为 bug 立单/补录（事件 ``photo_report``）——截图配「这个」
+    就是报障材料，不是闲图。
 
     返回 {active, category, ticket_id, is_new, severity, report_count,
     prompt_block, footer}；active=False 时其余键为空——调用方零分支透传。
@@ -1503,6 +1581,12 @@ def observe_group_message(
             return _with_lang_anchor(out)
 
         cat = classify_message(t)
+        if (cat == "other" and has_photo and t
+                and is_known_reporter(cid, reporter_id)):
+            # J-5 D：已知报障人「图 + 任意文字」→ 按报障立单（不进闲聊静默）
+            cat = "bug"
+            _bump("photo_report")
+            _record_event(cid, "photo_report", reporter_id, t[:200])
         out["category"] = cat
         if cat == "bug":
             rec = record_bug_ticket(
@@ -1630,7 +1714,8 @@ __all__ = [
     "list_tickets", "get_ticket", "build_fix_notify_text", "build_reply_text",
     "resolve_update_hint", "mark_notified",
     "detect_verify_intent", "pending_verify_ticket", "candidate_verify_tickets",
-    "extract_ticket_refs", "resolve_verify_target", "list_pending_notify",
+    "extract_ticket_refs", "resolve_verify_target", "is_known_reporter",
+    "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",
     "note_group_msg_seq", "due_seq_gaps", "seq_gap_backfilled",

@@ -848,6 +848,104 @@ def test_c_capped_smalltalk_still_not_registered(bi):
     assert _tickets(bi) == []
 
 
+# ── J-5 D（决策 D4 后半）：分类器漏钧式短句 + 已知报障人「图+字」立单 ─────────
+_D_LEAKED_FIVE = (
+    "为什么我发了一条显示2条",
+    "WHATSAPP登陆了几分钟，登陆不上",
+    "这个红色框框的要修复，隐藏",
+    "文字转语音克隆成功了，不能发送",
+    "媒体这里发不了任何东西了，图标空的",
+)
+
+
+@pytest.mark.parametrize("txt", _D_LEAKED_FIVE)
+def test_d_classifier_catches_0904_leaked_sentences(bi, txt):
+    assert bi.classify_message(txt) == "bug"
+
+
+@pytest.mark.parametrize("txt", ["哈哈", "收到", "谢谢", "有空的话再聊",
+                                 "今天天气不错", "为什么你这么好看"])
+def test_d_classifier_keeps_smalltalk_other(bi, txt):
+    assert bi.classify_message(txt) == "other"
+
+
+def test_d_classifier_feedback_priority_kept(bi):
+    # 「隐藏」刻意不进 BUG 词表：建议句仍是 feedback
+    assert bi.classify_message("该功能导向不明，如果非必须，建议隐藏或者删除") == "feedback"
+    assert bi.classify_message("建议把这个页面隐藏掉") == "feedback"
+
+
+def test_d_leaked_sentences_open_tickets_via_verdict(bi):
+    # 五句各来自不同报障人（避免收集窗合并）→ 五张单、零 smalltalk_suppressed
+    for i, txt in enumerate(_D_LEAKED_FIVE):
+        uid = f"d{i}"
+        assert bi.trigger_verdict(CFG, -100123, uid, txt) is True
+        res = _observe(bi, uid, txt)
+        assert res["active"] and res["category"] == "bug" and res["ticket_id"]
+    assert len(_tickets(bi)) == 5
+    assert bi._STATS["smalltalk_suppressed"] == 0
+
+
+def test_d_known_reporter_photo_plus_any_text_opens_ticket(bi):
+    import time as _t
+    now = _t.time()
+    # 先成为已知报障人（一张真单），收集窗过期后再发「图+『这个』」
+    r = _observe(bi, "u1", "语音发送失败", now=now)
+    later = now + 3600
+    assert bi.is_known_reporter(-100123, "u1") is True
+    assert bi.trigger_verdict(CFG, -100123, "u1", "这个", has_photo=True,
+                              now=later, account_id="777",
+                              sender_name="张三") is False
+    tks = _tickets(bi)
+    assert len(tks) == 2 and tks[-1]["title"] == "这个"
+    assert tks[-1]["id"] != r["ticket_id"]
+    assert bi._STATS["photo_report"] == 1
+    assert bi._STATS["smalltalk_suppressed"] == 0
+    evs = _events_of(bi, "photo_report")
+    assert len(evs) == 1 and evs[0]["detail"] == "这个"
+    # 这张图记进**新单**的证据链（升格立单开收集窗后补记）
+    assert bi._STATS["screenshots"] == 1
+    assert any(e["detail"] == f"#{tks[-1]['id']}"
+               for e in _events_of(bi, "screenshot"))
+
+
+def test_d_unknown_reporter_photo_plus_smalltalk_still_suppressed(bi):
+    assert bi.is_known_reporter(-100123, "stranger") is False
+    assert bi.trigger_verdict(CFG, -100123, "stranger", "这个",
+                              has_photo=True) is False
+    assert _tickets(bi) == []
+    assert bi._STATS["photo_report"] == 0
+    assert bi._STATS["smalltalk_suppressed"] == 1
+
+
+def test_d_known_reporter_photo_in_collect_window_appends_not_new(bi):
+    r = _observe(bi, "u1", "语音发送失败")
+    # 收集窗内随图跟进：verdict 走 engaged（True），不另开单
+    assert bi.trigger_verdict(CFG, -100123, "u1", "看这个", has_photo=True) is True
+    assert len(_tickets(bi)) == 1
+    assert bi._STATS["photo_report"] == 0
+    res = _observe(bi, "u1", "看这个", has_photo=True)
+    assert res["category"] == "collect" and res["ticket_id"] == r["ticket_id"]
+
+
+def test_d_observe_has_photo_upgrade_only_for_other(bi):
+    _observe(bi, "u1", "语音发送失败")
+    # 已知报障人 + 图 + 明确 usage 问句 → 仍按 usage（不强升 bug）
+    import time as _t
+    res = _observe(bi, "u1", "怎么切换全自动？", has_photo=True,
+                   now=_t.time() + 3600)
+    assert res["category"] == "usage"
+    assert bi._STATS["photo_report"] == 0
+
+
+def test_d_smalltalk_suppressed_records_event(bi):
+    assert bi.trigger_verdict(CFG, -100123, "u5", "哈哈今天天气不错") is False
+    evs = _events_of(bi, "smalltalk_suppressed")
+    assert len(evs) == 1
+    assert evs[0]["reporter"] == "u5" and evs[0]["detail"] == "哈哈今天天气不错"
+    assert bi._STATS["smalltalk_suppressed"] == 1
+
+
 def test_c_parse_cfg_default_registration_not_rate_limited(bi):
     assert bi.parse_cfg(CFG)["rate_limit_registration"] is False
     assert bi.parse_cfg({"bug_intake": {"enabled": True,
