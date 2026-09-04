@@ -40,6 +40,15 @@ _ROLE_VIEWER = "viewer"
 # list 接口逐条 settle（每条=进程内 DB 读），上限护住最坏情况
 _LIST_SETTLE_CAP = 100
 
+# #166：ledger.settle_goal 里有**专属信号分支**的模板（进度=里程碑/信号驱动）；
+# 其余（custom / 未知模板）走 else 分支——进度只跟日历爬，卡上「89%」是时间不是
+# 推进。右栏卡按 beats.progress_kind 标注口径。与 ledger 分支表同步（门禁钉住）。
+_SIGNAL_PROGRESS_TEMPLATES = frozenset((
+    "conversion_unlock", "conversion_subscribe", "relationship_stage",
+    "relationship_intimacy", "engagement_reactivate", "acquire_and_convert",
+    "retention_expand", "profile_discovery",
+))
+
 
 def _split_conversation_id(conversation_id: str):
     """``platform:account_id:chat_key`` → 三元组（chat_key 可含冒号，split 限 2 刀）。"""
@@ -254,28 +263,43 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         )
         # caps：让前端把 auto 档说明对齐真实行为——bridge 关着时「自动推进」
         # 不会主动发消息，表单如实注明（文案与行为一致是硬原则）。
-        cfg = _cfg_root()
-        companion = cfg.get("companion") if isinstance(cfg.get("companion"), dict) else {}
-        goals_cfg = companion.get("goals") if isinstance(companion.get("goals"), dict) else {}
-        bridge_cfg = goals_cfg.get("bridge") if isinstance(goals_cfg.get("bridge"), dict) else {}
-        proactive_cfg = (companion.get("proactive_topic")
-                         if isinstance(companion.get("proactive_topic"), dict) else {})
+        # #166（2026-09-05）：引擎真相单一出口 service.sprint_engine_status——
+        # 旧三键（bridge_enabled/proactive_enabled/sprint_enabled）原样保留给旧前端；
+        # 新增「有效性 + 阻塞点」（派发终点 care 关闸/dry_run、平台白名单），
+        # 前端据此把「自动推进」灰掉并说清为什么，不再兜售引擎不执行的事。
+        es = _svc().sprint_engine_status(
+            _cfg_root(), platform=str(request.query_params.get("platform") or ""))
         return {
             "templates": list_templates(),
             "autonomy_levels": list(AUTONOMY_LEVELS),
             "statuses": list(GOAL_STATUSES),
             "caps": {
-                "bridge_enabled": bool(bridge_cfg.get("enabled", False)),
-                "proactive_enabled": bool(proactive_cfg.get("enabled", False)),
+                "bridge_enabled": bool(es.get("bridge_enabled")),
+                "proactive_enabled": bool(es.get("proactive_enabled")),
                 # P3 2026-08-30：冲刺推进器开关——前端据此如实描述限时档行为
                 # （开=「AI 按时间表主动出击」；关=「对方开口才推进」）
-                "sprint_enabled": bool(
-                    (goals_cfg.get("sprint") or {}).get("enabled", False)
-                    if isinstance(goals_cfg.get("sprint"), dict) else False),
+                "sprint_enabled": bool(es.get("sprint_enabled")),
+                "sprint_effective": bool(es.get("sprint_effective")),
+                "sprint_blockers": list(es.get("sprint_blockers") or []),
+                "sprint_platforms": list(es.get("sprint_platforms") or []),
+                "natural_auto_effective": bool(es.get("natural_auto_effective")),
+                "natural_auto_blockers": list(es.get("natural_auto_blockers") or []),
             },
+            "engine": es,
             # P24 建目标向导：参数枚举源（解锁项/会员档/官网产品/阶段词表）
             "pickers": _pickers(),
         }
+
+    @app.get("/api/goals/engine-status")
+    async def goals_engine_status(
+        request: Request, platform: str = "", _auth=Depends(auth_dep)
+    ):
+        """目标引擎真相（#166）：``{enabled, inject_enabled, sprint_enabled,
+        sprint_effective, sprint_blockers, sprint_platforms, care_enabled,
+        care_dry_run, bridge_enabled, proactive_enabled, natural_auto_effective,
+        natural_auto_blockers}``。goals 关也 200（readiness 同哲学：关着也要能
+        说明为什么）；``platform`` 给了就把白名单判定计入 blockers。"""
+        return _svc().sprint_engine_status(_cfg_root(), platform=platform)
 
     def _attach_notified(view, store):
         """done 终局视图附「完成提醒已发出」回执（P2 2026-08-18）——读通知幂等
@@ -305,7 +329,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 return view
             if str(view.get("status")) != "active":
                 return view
-            from src.companion.goals.service import resolve_goals_cfg
+            from src.companion.goals.service import (
+                resolve_goals_cfg,
+                sprint_engine_status,
+            )
             from src.companion.goals.sprint_ticker import (
                 next_phase_ts,
                 parse_sprint_cfg,
@@ -317,9 +344,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             }
             beats = store.list_actions(str(view.get("goal_id") or ""),
                                        limit=120)
-            ticker_on = bool(scfg.get("enabled"))
+            # #166：ticker_on 必须是**整条链有效**（sprint 开 + 派发终点 care 开且非
+            # dry_run + 本平台在白名单），不是 sprint.enabled 一个开关——否则卡上
+            # 「下一主动拍≈HH:MM」就是在承诺一条 care dry_run 只拟稿不真发的拍。
+            es = sprint_engine_status(
+                _cfg_root(), platform=str(view.get("platform") or ""))
+            ticker_on = bool(es.get("sprint_effective"))
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
+                "ticker_enabled": bool(scfg.get("enabled")),
+                "blockers": list(es.get("sprint_blockers") or []),
                 "beats_used": len(beats),
                 "next_phase_ts": round(
                     next_phase_ts(goal_like, scfg), 1) if ticker_on else 0,
@@ -330,6 +364,59 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             }
         except Exception:
             logger.debug("sprint live attach skipped", exc_info=True)
+        return view
+
+    def _attach_beats(view, store):
+        """进行中目标 → 「动作 N/M 拍」进度口径（#166）：卡上那个 89% 是**时间进度**
+        （自定义/自然档目标的 progress 只跟日历爬），坐席把它读成「推进了 89%」——
+        并排给出真正出过手的拍数：N＝consumed/sent 且力度非 none 的拍（与
+        refresh_goal 的 engaged_beats 同口径）；M＝限时档生效封顶 / 自然档＝总天数
+        （一天一拍）。非活跃零开销；best-effort 绝不抛。"""
+        try:
+            if not isinstance(view, dict) or str(view.get("status")) != "active":
+                return view
+            from src.companion.goals.pace import (
+                effective_beat_cap,
+                is_sprint,
+                resolve_pace,
+            )
+            from src.companion.goals.service import resolve_goals_cfg
+            from src.companion.goals.sprint_ticker import parse_sprint_cfg
+            acts = store.list_actions(str(view.get("goal_id") or ""), limit=120)
+            used = sum(
+                1 for a in acts
+                if str(a.get("status")) in ("consumed", "sent")
+                and str(a.get("push_level") or "") != "none")
+            pace = resolve_pace({"template": view.get("template"),
+                                 "params": view.get("params") or {},
+                                 "start_ts": view.get("start_ts"),
+                                 "deadline_ts": view.get("deadline_ts")})
+            tid = str(view.get("template") or "")
+            if is_sprint(pace):
+                scfg = parse_sprint_cfg(resolve_goals_cfg(_cfg_root()))
+                cap = effective_beat_cap(
+                    pace, overrides=scfg,
+                    mode=str((view.get("params") or {}).get("sprint_mode") or ""))
+                kind = ("milestone" if tid in _SIGNAL_PROGRESS_TEMPLATES
+                        else "beats")
+            else:
+                cap = int(view.get("total_days") or 0)
+                kind = ("milestone" if tid in _SIGNAL_PROGRESS_TEMPLATES
+                        else "time")
+            tot = float(view.get("total_sec") or 0.0)
+            rem = float(view.get("remaining_sec") or 0.0)
+            time_pct = int(round(max(0.0, min(1.0, (tot - rem) / tot)) * 100)) \
+                if tot > 0 else 0
+            view["beats"] = {
+                "used": int(used), "cap": int(cap),
+                # progress 口径：time＝只跟日历爬（ledger custom/未知模板分支，
+                # 「89%」是时间不是推进）；beats＝限时档按已出手拍爬；
+                # milestone＝模板里程碑信号驱动
+                "progress_kind": kind,
+                "time_pct": time_pct,
+            }
+        except Exception:
+            logger.debug("beats attach skipped", exc_info=True)
         return view
 
     def _attach_sprint_recap(view, store):
@@ -404,8 +491,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 store, lang=lang),
             store)
         # settle-on-read 可能本轮刚转终态（限时目标到期）——复盘字段同样要附
-        return {"goal": _attach_sprint_live(
-            _attach_sprint_recap(view, store), store), "last": None}
+        view = _attach_beats(_attach_sprint_live(
+            _attach_sprint_recap(view, store), store), store)
+        # #166：卡片带引擎真相（按本会话平台判白名单）——「自动推进」档在引擎
+        # 不能真出手时卡上要说清，不能只在建目标表单里说一次
+        return {"goal": view, "last": None,
+                "engine": svc.sprint_engine_status(
+                    _cfg_root(), platform=str(view.get("platform") or platform))}
 
     @app.get("/api/goals/report")
     async def goals_report(

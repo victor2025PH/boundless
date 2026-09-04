@@ -116,6 +116,83 @@ def goals_enabled(cfg_root: Any) -> bool:
     return bool(resolve_goals_cfg(cfg_root).get("enabled", False))
 
 
+def sprint_engine_status(cfg_root: Any, *, platform: str = "") -> Dict[str, Any]:
+    """目标引擎真相（#166，2026-09-05）——启动日志 / ``GET /api/goals/engine-status`` /
+    右栏卡 ``sprint_live.ticker_on`` / 建目标表单 caps **同一出口**。
+
+    「自动推进」档能不能真的自己出手，取决于一整条链而不是一个开关：
+    - 限时档（today/session）：``goals.enabled`` → ``goals.sprint.enabled`` →
+      **派发终点 care 派发器**（``companion.proactive_care.enabled`` 关或
+      ``dry_run`` 开＝主动拍只拟稿不真发）→ ``sprint.platforms`` 白名单；
+    - 自然档（natural）：``goals.bridge.enabled`` 搭 ``proactive_topic`` 顺风车
+      （``proactive_topic.enabled`` 关或 ``dry_run`` 开＝不真发）。
+    skuio 88MP86 实锤：sprint 关、bridge 关、care dry_run 开——卡片却写「自动推进」。
+    ``sprint_blockers`` / ``natural_auto_blockers`` 把每一道没过的闸点名；
+    ``platform`` 非空时白名单判定计入 blockers。纯函数、绝不抛。
+    """
+    out: Dict[str, Any] = {
+        "enabled": False, "inject_enabled": True,
+        "sprint_enabled": False, "sprint_platforms": [],
+        "care_enabled": False, "care_dry_run": False,
+        "sprint_blockers": [], "sprint_effective": False,
+        "bridge_enabled": False, "proactive_enabled": False,
+        "proactive_dry_run": False,
+        "natural_auto_blockers": [], "natural_auto_effective": False,
+        "platform": str(platform or "").strip().lower(),
+    }
+    try:
+        root = cfg_root if isinstance(cfg_root, dict) else {}
+        companion = root.get("companion") if isinstance(
+            root.get("companion"), dict) else {}
+        gcfg = resolve_goals_cfg(root)
+        out["enabled"] = bool(gcfg.get("enabled", False))
+        inject_cfg = gcfg.get("inject") if isinstance(gcfg.get("inject"), dict) else {}
+        out["inject_enabled"] = bool(inject_cfg.get("enabled", True))
+        from src.companion.goals.sprint_ticker import parse_sprint_cfg
+        scfg = parse_sprint_cfg(gcfg)
+        out["sprint_enabled"] = bool(scfg.get("enabled", False))
+        out["sprint_platforms"] = [str(p) for p in (scfg.get("platforms") or ())]
+        care = companion.get("proactive_care") if isinstance(
+            companion.get("proactive_care"), dict) else {}
+        out["care_enabled"] = bool(care.get("enabled", False))
+        out["care_dry_run"] = bool(care.get("dry_run", False))
+        bridge = gcfg.get("bridge") if isinstance(gcfg.get("bridge"), dict) else {}
+        out["bridge_enabled"] = bool(bridge.get("enabled", False))
+        pt = companion.get("proactive_topic") if isinstance(
+            companion.get("proactive_topic"), dict) else {}
+        out["proactive_enabled"] = bool(pt.get("enabled", False))
+        out["proactive_dry_run"] = bool(pt.get("dry_run", False))
+
+        sb: List[str] = []
+        if not out["enabled"]:
+            sb.append("goals_disabled")
+        if not out["sprint_enabled"]:
+            sb.append("sprint_disabled")
+        if not out["care_enabled"]:
+            sb.append("care_disabled")
+        elif out["care_dry_run"]:
+            sb.append("care_dry_run")
+        if out["platform"] and out["platform"] not in out["sprint_platforms"]:
+            sb.append("platform")
+        out["sprint_blockers"] = sb
+        out["sprint_effective"] = not sb
+
+        nb: List[str] = []
+        if not out["enabled"]:
+            nb.append("goals_disabled")
+        if not out["bridge_enabled"]:
+            nb.append("bridge_disabled")
+        if not out["proactive_enabled"]:
+            nb.append("proactive_disabled")
+        elif out["proactive_dry_run"]:
+            nb.append("proactive_dry_run")
+        out["natural_auto_blockers"] = nb
+        out["natural_auto_effective"] = not nb
+    except Exception:
+        logger.debug("sprint_engine_status failed", exc_info=True)
+    return out
+
+
 def resolve_db_path(cfg_root: Any, config_path: Any = None) -> str:
     """目标库路径：``companion.goals.db_path`` 显式值 > ``<config 目录>/marketing_goals.db``。"""
     cfg = resolve_goals_cfg(cfg_root)
@@ -2199,4 +2276,5 @@ __all__ = [
     "sanitize_won_meta",
     "settle_order_ref",
     "sold_plan_counts_cached",
+    "sprint_engine_status",
 ]

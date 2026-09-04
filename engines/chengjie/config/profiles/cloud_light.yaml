@@ -72,6 +72,17 @@ translation:
 companion:
   selfie:
     enabled: false
+  # ── 工作目标「冲刺推进器」出厂开（老板决策 D1，2026-09-05，#166）──
+  # 此前出厂 false：限时目标（pace=today/session）选了「自动推进」也只在对方开口时
+  # 带方向，卡片却写着「自动推进 · 进行中」——UI 兜售引擎不执行的事。开启后限时
+  # 目标按相位（开场/跟进/收口）排主动拍进 care 派发管线。**安全闸一律沿用 example
+  # 默认**：silence_min_sec / min_gap_sec / min_remaining_sec / 危机情绪 block /
+  # opt-out 静默 / 只对 autonomy=auto + auto_ai 会话 / platforms 白名单。
+  # ⚠ 派发终点是 care 派发器：companion.proactive_care.enabled=false 或 dry_run=true
+  # 时主动拍只拟稿不真发（引擎状态 /api/goals/engine-status 会如实报 blockers）。
+  goals:
+    sprint:
+      enabled: true
 
 # ── 运维探针：LAN/自有 Key 巡检类全关（探不到 = 看板恒 unknown / 告警噪声）──
 ops:

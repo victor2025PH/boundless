@@ -401,6 +401,14 @@
       .gl-sprint-line { display:flex; gap:6px; align-items:center; justify-content:space-between;
                         font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
                         margin-top:2px; }
+      /* #166 引擎真相：auto 档但推进器不能真出手 → 标签打叉 + 卡上一行说清为什么
+         （不再只在建目标表单里提一次；「自动推进 · 进行中」不能是空头承诺） */
+      .gl-tag.off { border-style:dashed; color:var(--cp-warn,#b45309);
+                    border-color:var(--cp-warn,#b45309); }
+      .gl-engine-note { font-size:var(--cp-fs-tiny,11px); line-height:1.45; margin:2px 0 4px;
+                        color:var(--cp-warn,#b45309); }
+      .gl-auto-card.off { opacity:.62; border-style:dashed; }
+      .gl-auto-card.off.sel { opacity:.85; }
       .gl-sprint-line .gl-nudge { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:1px 8px;
                         border-color:var(--cp-goal-sprint,#d97706); color:var(--cp-goal-sprint,#b45309);
                         background:color-mix(in srgb,var(--cp-goal-sprint,#d97706) 8%,transparent); }
@@ -1010,9 +1018,18 @@
     _renderActive(g) {
       const esc = (s) => this.esc(s);
       const lvl = String(g.autonomy || "suggest");
-      const hint = this._autonomyHint(lvl) || this.t("inbox.goal.autonomy_cycle_t");
-      const tag = `<button type="button" class="gl-tag" data-act="autonomy_cycle"` +
-        ` title="${esc(hint)}">${esc(this._autonomyLabel(lvl))}</button>`;
+      // #166：auto 档但引擎在本目标节奏/平台下不能真出手 → 标签打叉（虚线警示色）
+      // + 提示语点名原因；卡身另起一行说明（见 engineNote），不再只靠 hover
+      const gpace = String(g.pace || "natural");
+      const engA = (lvl === "auto" && g.status === "active")
+        ? this._autoEngine(gpace, (this._d && this._d.engine) || null) : null;
+      const engOff = !!(engA && !engA.on);
+      const engWhy = engOff ? this._engineWhy(engA.blockers) : "";
+      const hint = engOff
+        ? this.t("inbox.goal.autonomy.auto_ineffective_t", { why: engWhy })
+        : (this._autonomyHint(lvl) || this.t("inbox.goal.autonomy_cycle_t"));
+      const tag = `<button type="button" class="gl-tag${engOff ? " off" : ""}" data-act="autonomy_cycle"` +
+        ` title="${esc(hint)}">${esc(this._autonomyLabel(lvl))}${engOff ? " \u26A0" : ""}</button>`;
       const origin = AUTO_ORIGIN[String(g.created_by || "")]
         ? `<span class="gl-origin" title="${esc(this.t("inbox.goal.origin.auto_t"))}">` +
           `${esc(this.t("inbox.goal.origin.auto"))}</span>`
@@ -1082,15 +1099,26 @@
           `<button type="button" data-act="extend_30m">${esc(this.t("inbox.goal.extend_30m"))}</button>` +
           `<button type="button" data-act="extend_2h">${esc(this.t("inbox.goal.extend_2h"))}</button></span>`
         : "";
+      // #166 进度口径标注：自定义/未知模板自然档的 progress 只跟日历爬（ledger else
+      // 分支），「89%」是**时间**不是推进——按 beats.progress_kind 标「时间 89%」，并
+      // 并排给真出过手的拍数「动作 N/M 拍」（N=consumed/sent 且力度非 none，M=限时
+      // 档封顶 / 自然档总天数）。旧后端无 beats ＝维持原样。
+      const bt = (g.beats && typeof g.beats === "object") ? g.beats : null;
+      const pctTxt = (bt && bt.progress_kind === "time")
+        ? this.t("inbox.goal.meta.time_pct", { pct })
+        : `${pct}%`;
+      const beatsTxt = (bt && (parseInt(bt.cap, 10) || 0) > 0)
+        ? ` · ${this.t("inbox.goal.meta.beats", { n: parseInt(bt.used, 10) || 0, m: parseInt(bt.cap, 10) || 0 })}`
+        : "";
       /* 限时节奏用倒计时 + 顺延按钮，不走「改成天数」表单（分钟级期限填成整数天会立刻过期）。
          倒计时活字（P3 2026-08-30）：sp_remain 由 30s tick 原位刷新，不整卡重渲染。 */
       const metaInner = isSprint
         ? `<span class="gl-meta-txt${urgent ? " urgent" : ""}">${urgent ? "\u23F3 " : ""}` +
           `<span data-ref="sp_remain" data-dl="${esc(String(parseFloat(g.deadline_ts) || 0))}">${esc(dayTxt)}</span>` +
-          ` · ${pct}%</span>${ext}`
+          ` · ${esc(pctTxt)}${esc(beatsTxt)}</span>${ext}`
         : `<button type="button" class="gl-meta-btn${urgent ? " urgent" : ""}" data-act="deadline_toggle"` +
           ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
-          `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${pct}%` +
+          `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${esc(pctTxt)}${esc(beatsTxt)}` +
           `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button>`;
       // 冲刺调度状态行（P3 2026-08-30）：把推进器的时刻表摊开给坐席——
       // 「已推进几拍 · 下一主动拍几点 / 引擎没开只等对方开口」+ 手动加速入口。
@@ -1103,7 +1131,12 @@
         const bn = parseInt(live.beats_used, 10) || 0;
         if (bn > 0) bits.push(this.t("inbox.goal.sprint.beats", { n: bn }));
         if (!live.ticker_on) {
-          bits.push(this.t("inbox.goal.sprint.engine_off"));
+          // #166：sprint 开着却被派发终点（care 关闸/dry_run）或平台白名单拦住 →
+          // 点名原因，不再一律说「引擎未开启」（说错原因＝运维去翻错开关）
+          const blk = Array.isArray(live.blockers) ? live.blockers : [];
+          bits.push((live.ticker_enabled && blk.length)
+            ? this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(blk) })
+            : this.t("inbox.goal.sprint.engine_off"));
         } else {
           const nts = parseFloat(live.next_phase_ts) || 0;
           if (nts > Date.now() / 1000) {
@@ -1121,7 +1154,12 @@
           : "";
         sprintLine = `<div class="gl-sprint-line"><span>${esc(bits.join(" · "))}</span>${nudge}</div>`;
       }
-      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine +
+      // #166：auto 档而引擎不能真出手 → 卡身一行说清（限时档由 sprintLine 的
+      // engine_off 已覆盖，不重复；自然档此前完全没有这一行）
+      const engineNote = (engOff && !(live && !live.ticker_on))
+        ? `<div class="gl-engine-note">\u26A0 ${esc(this.t("inbox.goal.engine.card_off", { why: engWhy }))}</div>`
+        : "";
+      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote +
         (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
       if (isSprint && g.status === "active") this._armSprintTick();
 
@@ -2704,15 +2742,63 @@
       return "";
     }
 
-    /* auto 档的诚实注解：桥未开时如实说明「不会自己主动发消息」。
+    /* #166 引擎真相（单一判定口）：auto 档在给定节奏下能不能**真的自己出手**。
+       数据源：卡片走 for-conversation 的 engine（按本会话平台判白名单），表单走
+       /api/goals/templates 的 caps；两者字段同名。返回 {on, blockers} 或 null
+       （旧后端缺字段＝不猜，维持中性文案）。
+       限时档（today/session）看 sprint_effective（sprint 开 + 派发终点 care 开且非
+       dry_run + 平台在白名单）；自然档看 natural_auto_effective（bridge 开 +
+       proactive_topic 开且非 dry_run）。老字段 sprint_enabled/bridge_enabled 作回落。 */
+    _autoEngine(pace, src) {
+      const e = src || (this._d && this._d.engine)
+        || (this._templates && this._templates.caps) || null;
+      if (!e || typeof e !== "object") return null;
+      const p = this._normPace(pace);
+      const arr = (x) => Array.isArray(x) ? x.map(String) : [];
+      if (p === "today" || p === "session") {
+        if (typeof e.sprint_effective === "boolean") {
+          return { on: e.sprint_effective, blockers: arr(e.sprint_blockers) };
+        }
+        if (typeof e.sprint_enabled === "boolean") {
+          return { on: e.sprint_enabled, blockers: e.sprint_enabled ? [] : ["sprint_disabled"] };
+        }
+        return null;
+      }
+      if (typeof e.natural_auto_effective === "boolean") {
+        return { on: e.natural_auto_effective, blockers: arr(e.natural_auto_blockers) };
+      }
+      if (typeof e.bridge_enabled === "boolean") {
+        return { on: e.bridge_enabled, blockers: e.bridge_enabled ? [] : ["bridge_disabled"] };
+      }
+      return null;
+    }
+
+    /* 阻塞点码 → 人话（未知码原样显示，不吞） */
+    _engineWhy(blockers) {
+      const out = [];
+      (blockers || []).forEach((b) => {
+        const k = "inbox.goal.engine.blk." + String(b);
+        const s = this.t(k);
+        out.push((s && String(s).indexOf("inbox.goal.") !== 0) ? s : String(b));
+      });
+      return out.join(LANG === "en" ? ", " : "、");
+    }
+
+    /* auto 档的诚实注解：推进器/主动桥在当前节奏下不能真出手时如实说明
+       「不会自己主动发消息，只在对方来消息时带方向」并点名原因。
        caps 缺失（旧后端）＝不注解，只显示中性 hint，绝不猜。 */
     _autonomyNote(lvl) {
       if (String(lvl) !== "auto") return "";
       const caps = (this._templates && this._templates.caps) || null;
-      if (caps && caps.bridge_enabled === false) {
-        return this.t("inbox.goal.autonomy.auto_note_off");
-      }
-      return "";
+      const pace = this._normPace(this._formPace);
+      const eng = this._autoEngine(pace, caps);
+      if (!eng || eng.on) return "";
+      const sprintBand = pace === "today" || pace === "session";
+      const base = this.t(sprintBand
+        ? "inbox.goal.autonomy.auto_note_sprint_off"
+        : "inbox.goal.autonomy.auto_note_off");
+      const why = this._engineWhy(eng.blockers);
+      return why ? this.t("inbox.goal.autonomy.auto_note_why", { note: base, why }) : base;
     }
 
     /* ── 建目标向导（P24：一页堆全 → 两步）──────────────────────────────
@@ -2851,8 +2937,13 @@
       // 全自动为主（2026-08-12 运营方针）：缺省 auto；偏好记忆只回放 suggest/auto
       // ——observe 是「这个目标先看看」的一次性选择，不许粘成后续所有目标的默认
       // （实录：一次选了只观察，之后三个目标全默认 observe → 坐席以为功能没生效）
-      const prefAuto = (AUTONOMY.indexOf(prefs.autonomy) >= 0
+      let prefAuto = (AUTONOMY.indexOf(prefs.autonomy) >= 0
         && prefs.autonomy !== "observe") ? prefs.autonomy : "auto";
+      // #166：推进器/主动桥在本节奏下不能真出手 → 缺省不落到灰掉的「自动推进」
+      // （skuio 实录：默认 auto → 卡上「自动推进 · 进行中」却什么都不会主动做）；
+      // 坐席仍可显式点选 auto（卡内有原因说明）。只改缺省，不动本次表单里已选的值。
+      const engDef = this._autoEngine(pace, (this._templates && this._templates.caps) || null);
+      if (engDef && !engDef.on && prefAuto === "auto") prefAuto = "suggest";
       const curAuto = AUTONOMY.indexOf(this._formAutonomy) >= 0
         ? this._formAutonomy : prefAuto;
       this._formAutonomy = (sprintBand && curAuto === "observe") ? "suggest" : curAuto;
@@ -2970,15 +3061,24 @@
         .sort((a, b) =>
           (rank[String(a)] == null ? 9 : rank[String(a)])
           - (rank[String(b)] == null ? 9 : rank[String(b)]));
+      // #166：推进器/主动桥在当前节奏下不能真出手 → 「自动推进」卡灰掉（虚线+降透明，
+      // 仍可点选——它仍是合法档位，只是此刻等价于顺势建议）、推荐徽标让给「顺势建议」、
+      // 卡内说明换成引擎未生效的原因。caps 缺失（旧后端）＝维持原样不猜。
+      const eng = this._autoEngine(this._formPace, (this._templates && this._templates.caps) || null);
+      const autoOff = !!(eng && !eng.on);
       return `<div class="gl-auto-cards" role="radiogroup">` + levels.map((l) => {
         const lvl = String(l);
         const sel = lvl === cur;
-        const rec = lvl === "auto"
+        const recOn = autoOff ? lvl === "suggest" : lvl === "auto";
+        const rec = recOn
           ? `<span class="gl-scen-rec">${esc(this.t("inbox.goal.form.recommended"))}</span>` : "";
-        return `<div class="gl-auto-card${sel ? " sel" : ""}" data-act="pick_autonomy"` +
-          ` data-lvl="${esc(lvl)}" role="radio" aria-checked="${sel ? "true" : "false"}">` +
-          `<div class="gl-auto-nm">${esc(this._autonomyLabel(lvl))}${rec}</div>` +
-          `<div class="gl-auto-d"${sel ? "" : " hidden"}>${esc(this._autonomyHint(lvl))}</div></div>`;
+        const off = autoOff && lvl === "auto";
+        const desc = off ? (this._autonomyNote("auto") || this._autonomyHint(lvl)) : this._autonomyHint(lvl);
+        return `<div class="gl-auto-card${sel ? " sel" : ""}${off ? " off" : ""}" data-act="pick_autonomy"` +
+          ` data-lvl="${esc(lvl)}" role="radio" aria-checked="${sel ? "true" : "false"}"` +
+          `${off ? ` title="${esc(this._autonomyNote("auto"))}"` : ""}>` +
+          `<div class="gl-auto-nm">${esc(this._autonomyLabel(lvl))}${off ? " \u26A0" : ""}${rec}</div>` +
+          `<div class="gl-auto-d"${sel ? "" : " hidden"}>${esc(desc)}</div></div>`;
       }).join("") + `</div>`;
     }
 

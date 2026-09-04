@@ -275,7 +275,11 @@ def test_goal_autonomy_auto_primary(goal_js: str):
     ③ 参与度卡展示序 auto 优先、observe 垫底（后端 autonomy_levels 仅成员集）。"""
     assert 'prefs.autonomy !== "observe"' in goal_js      # observe 不粘偏好
     assert '? prefs.autonomy : "auto"' in goal_js          # 缺省回落 auto
-    assert 'const rec = lvl === "auto"' in goal_js         # 推荐徽标在 auto 卡
+    # #166（2026-09-05）唯一例外：引擎在当前节奏下**不能真出手**（sprint 关 / care
+    # dry_run / 平台白名单 / bridge 关…）时推荐徽标让给 suggest、缺省不落灰掉的
+    # auto——「全自动为主」的前提是全自动真的会动；引擎能出手时口径不变
+    assert 'const recOn = autoOff ? lvl === "suggest" : lvl === "auto"' in goal_js
+    assert 'if (engDef && !engDef.on && prefAuto === "auto") prefAuto = "suggest"' in goal_js
     assert "{ auto: 0, suggest: 1, observe: 2 }" in goal_js  # 展示序前端定
 
 

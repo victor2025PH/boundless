@@ -2777,8 +2777,10 @@ class TestAuthorizedOffers:
         assert "text = _guard_offer_text(text, plan)" in src
         # 剥离位置必须在三条发送分支之前（照片/语音/文本都取同一个 text）
         i_guard = src.index("text = _guard_offer_text(text, plan)")
-        assert i_guard < src.index("if _photo_plan and await _try_send_photo(")
-        assert i_guard < src.index("if await _try_send_voice(plan, text):")
+        # 08-27 起照片分支多了一个前置条件（`… and _photo_plan and await …`），
+        # 断言按调用字面而非整个 if 头钉（J-2 2026-09-05 修 I-3 记录的预存红）
+        assert i_guard < src.index("_photo_plan and await _try_send_photo(")
+        assert i_guard < src.index("and await _try_send_voice(plan, text)")
 
     def test_traction_claims_stripped_and_boundaries(self):
         """P15：带数字的社会证明（编客户数）必剥；汉字数量词/无数字/百分比刻意不抓。"""

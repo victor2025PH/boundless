@@ -317,7 +317,7 @@ class _NudgeInbox:
 
 
 def _nudge_client(gs, care_store, monkeypatch, *, inbox=None,
-                  sprint_enabled=True):
+                  sprint_enabled=True, care=None):
     import src.contacts.care_schedule as cs_mod
     import src.integrations.protocol_bridge as pb
     from src.web.routes.goal_routes import register_goal_routes
@@ -329,6 +329,9 @@ def _nudge_client(gs, care_store, monkeypatch, *, inbox=None,
         "enabled": True, "db_path": ":memory:",
         "sprint": {"enabled": sprint_enabled},
     }}}
+    if care is not None:
+        # #166：sprint_live.ticker_on 现在是整条链有效（含派发终点 care）
+        cfg["companion"]["proactive_care"] = dict(care)
     app = FastAPI()
 
     def auth_dep(request: Request) -> None:
@@ -355,7 +358,9 @@ def test_nudge_schedules_immediate_phase(monkeypatch):
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True and body["phase"] == 0
-        rows = cs.list_due(now=NOW + 30)
+        # schedule_nudge 的 due_at 锚**请求时刻**（time.time()+2）；模块级 NOW 是收集
+        # 时刻——与别的文件同进程跑超过 28s 后 NOW+30 < due_at → 0 行（时间炸弹）
+        rows = cs.list_due(now=time.time() + 30)
         assert len(rows) == 1
         assert rows[0]["topic_norm"] == f"goal:{gid}:p0"
         kinds = [e["kind"] for e in gs.list_events(gid, limit=10)]
@@ -429,7 +434,10 @@ def test_for_conversation_attaches_sprint_live(monkeypatch):
     from src.contacts.care_schedule import CareScheduleStore
     gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
     _sprint_goal(gs, chat="n6", started_ago=600)
-    client = _nudge_client(gs, cs, monkeypatch, inbox=_NudgeInbox())
+    # #166：ticker_on＝整条链有效——派发终点 care 必须开且非 dry_run（skuio 88MP86
+    # 实锤：sprint 一开、care dry_run 一挡，卡上「下一主动拍≈HH:MM」就是空头承诺）
+    client = _nudge_client(gs, cs, monkeypatch, inbox=_NudgeInbox(),
+                           care={"enabled": True, "dry_run": False})
     try:
         d = client.get(
             "/api/goals/for-conversation?conversation_id=telegram:a1:n6"
@@ -437,9 +445,26 @@ def test_for_conversation_attaches_sprint_live(monkeypatch):
         live = (d.get("goal") or {}).get("sprint_live") or {}
         assert live.get("ticker_on") is True
         assert live.get("nudgeable") is True
+        assert live.get("blockers") == []
         assert float(live.get("next_phase_ts") or 0) > NOW   # 45% 相位还在未来
     finally:
         svc, orig = client._restore
+        svc.get_configured_store = orig
+    # care 未配置（example 默认关）→ ticker_enabled 仍 True 但 ticker_on False，
+    # blockers 点名 care_disabled；nudgeable 随之 False
+    gs2, cs2 = GoalStore(":memory:"), CareScheduleStore(":memory:")
+    _sprint_goal(gs2, chat="n7", started_ago=600)
+    client2 = _nudge_client(gs2, cs2, monkeypatch, inbox=_NudgeInbox())
+    try:
+        d2 = client2.get(
+            "/api/goals/for-conversation?conversation_id=telegram:a1:n7"
+        ).json()
+        live2 = (d2.get("goal") or {}).get("sprint_live") or {}
+        assert live2.get("ticker_enabled") is True
+        assert live2.get("ticker_on") is False and live2.get("nudgeable") is False
+        assert live2.get("blockers") == ["care_disabled"]
+    finally:
+        svc, orig = client2._restore
         svc.get_configured_store = orig
 
 

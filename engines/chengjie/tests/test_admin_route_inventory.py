@@ -1251,6 +1251,14 @@ _ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE = """
 """
 _BASELINE += _ADDITIONS_2026_08_30_GOALS_SPRINT_NUDGE
 
+# #166 J-2 2026-09-05：目标引擎真相（goals 开关 / 注入 / 冲刺推进器 + 派发终点
+# care 关闸·dry_run / 平台白名单 / 自然档主动桥）——前端据此不再兜售引擎不执行
+# 的「自动推进」。goals 关也 200（与 readiness 同哲学：关着也要能说明为什么）。
+_ADDITIONS_2026_09_05_GOALS_ENGINE_STATUS = """
+/api/goals/engine-status	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_05_GOALS_ENGINE_STATUS
+
 # 实施91（小智线 impl88）PC 受控机管理三端点——**代登记**（2026-08-30 晚：
 # 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住老板点名的发版重启；
 # 语义归属仍是小智线，端点行为以其实现为准，见 .ops NOTE_from_goals_sprint_*）。

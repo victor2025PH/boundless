@@ -827,6 +827,13 @@ companion:
     relationship: true
   goals:
     enabled: true
+    # #166 老板决策 D1（2026-09-05）：冲刺推进器出厂开——限时目标（today/session）
+    # 选「自动推进」后按相位排主动拍，不再只等对方开口。安全闸沿用代码默认
+    # （silence_min/min_gap/危机/opt-out/auto_ai 会话/platforms 白名单）。存量内测机
+    # 升级后由 _merge_missing 补齐本键（用户显式写过的值不动）。⚠ 派发终点是
+    # proactive_care 派发器：上面 dry_run=true 时主动拍只拟稿不真发，卡片会如实标注。
+    sprint:
+      enabled: true
     # v1.005：目标完成提醒（应用内 + 小智播报）与到期清扫（与生产一致）
     notify:
       enabled: true

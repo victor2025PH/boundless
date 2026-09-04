@@ -410,17 +410,27 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                     web_app.state.goal_sprint_ticker = sprint_ticker
                 except Exception:
                     pass
-            _scfg0 = {}
+            # #166（2026-09-05）：此前 enabled=False 也打 ✅——skuio 机三次重启都
+            # 「✅ 冲刺推进器已常备（enabled=False）」，目标卡却写着「自动推进」。
+            # 引擎真相单一出口 goals.service.sprint_engine_status：关闸 / 派发终点
+            # 被 care 关闸或 dry_run 拦住 → WARNING 直说「自动推进档不会主动出手」。
             try:
-                from src.companion.goals.service import resolve_goals_cfg
-                from src.companion.goals.sprint_ticker import parse_sprint_cfg
-                _scfg0 = parse_sprint_cfg(resolve_goals_cfg(
-                    assistant.config.config or {}))
+                from src.companion.goals.service import sprint_engine_status
+                _es = sprint_engine_status(assistant.config.config or {})
             except Exception:
-                _scfg0 = {}
-            assistant.logger.info(
-                "✅ 冲刺推进器已常备（goals.sprint.enabled=%s）",
-                bool(_scfg0.get("enabled", False)))
+                _es = {}
+            if _es.get("sprint_effective"):
+                assistant.logger.info(
+                    "✅ 冲刺推进器已常备（goals.sprint.enabled=True，platforms=%s）",
+                    ",".join(_es.get("sprint_platforms") or ()))
+            elif not _es.get("sprint_enabled"):
+                assistant.logger.warning(
+                    "⚠ 冲刺推进器未启用（companion.goals.sprint.enabled=False）："
+                    "目标「自动推进」档不会主动出手，只在对方来消息时带方向")
+            else:
+                assistant.logger.warning(
+                    "⚠ 冲刺推进器已开但派发被拦（%s）：限时目标的主动拍只拟稿不真发",
+                    ",".join(_es.get("sprint_blockers") or ()) or "unknown")
         except Exception:
             assistant.logger.warning("冲刺推进器启动跳过", exc_info=True)
 
