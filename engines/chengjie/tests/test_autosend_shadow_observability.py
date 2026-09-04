@@ -171,6 +171,54 @@ def test_warm_from_disk_restores_counters_and_pending(clean_ledger):
     assert shadow_log.pending_count() == 1
 
 
+def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatch):
+    """真库走一遍：放行 → worker 同款 resolve(autosend)+mark_draft_sent → sent；
+    另一稿被 worker 守卫取消（update_draft_status cancelled/send_blocked）→ cancelled。
+    钉的是 get_draft 真实返回的键名（sent_at/status/decided_by/decided_at），假件测不出。"""
+    from src.ai.chat_assistant_service import quick_risk
+    from src.inbox.drafts import DraftService
+    from src.inbox.store import InboxStore
+
+    monkeypatch.delenv("AITR_AUTOSEND_POLICY_MODE", raising=False)
+    store = InboxStore(tmp_path / "e2e.db")
+    try:
+        svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+
+        def conv(k):
+            return {"conversation_id": f"telegram:acct1:{k}", "platform": "telegram",
+                    "account_id": "acct1", "chat_key": k, "display_name": "T"}
+        d_sent = svc.auto_generate_draft(conv("u1"), "please stop messaging me", automation_mode="auto_ai")
+        d_cancel = svc.auto_generate_draft(conv("u2"), "I want to kill myself", automation_mode="auto_ai")
+        d_wait = svc.auto_generate_draft(conv("u3"), "send me your bank card number", automation_mode="auto_ai")
+        assert shadow_log.pending_count() == 3
+        # 首轮：三稿都还 pending → 无终局
+        assert svc.reconcile_shadow_outcomes() == 0
+        # worker 同款：resolve(autosend) → 投递成功 mark_draft_sent
+        r = svc.resolve_with_audit(d_sent, "autosend", by="autosend_worker")
+        assert r.get("ok"), r
+        assert store.mark_draft_sent(d_sent)
+        # worker 守卫取消（send_blocked 路径写法）
+        store.update_draft_status(d_cancel, status="cancelled", decided_by="send_blocked")
+        n = svc.reconcile_shadow_outcomes()
+        assert n == 2
+        assert shadow_log.pending_count() == 1                 # d_wait 仍 pending
+        snap = shadow_log.stats_snapshot()
+        assert snap["outcomes"] == {"sent": 1, "cancelled": 1}
+        assert snap["sent_rate"] == 0.5
+        rows = [json.loads(l) for p in clean_ledger.glob("*.jsonl")
+                for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        outs = {r["draft_id"]: r for r in rows if r.get("kind") == "outcome"}
+        assert outs[d_sent]["outcome"] == "sent" and outs[d_sent]["hold_reason"] == "stop_contact"
+        assert outs[d_cancel]["outcome"] == "cancelled" and outs[d_cancel]["reason"] == "send_blocked"
+        assert d_wait not in outs
+        # hold 行带二批字段（真链路口径）
+        holds = {r["draft_id"]: r for r in rows if r.get("kind", "hold") == "hold"}
+        assert holds[d_sent]["lang"] == "en" and holds[d_sent]["intent"] == "停止联系"
+        assert holds[d_sent]["peer_text_fp"] == shadow_log.text_fingerprint("please stop messaging me")
+    finally:
+        store.close()
+
+
 def test_worker_and_service_wired_to_reconcile():
     worker = _read("src/inbox/autosend_worker.py")
     assert 'getattr(self._svc, "reconcile_shadow_outcomes", None)' in worker
