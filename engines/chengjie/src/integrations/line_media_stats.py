@@ -27,6 +27,8 @@ class LineMediaStats:
         "_out_total", "_out_ok", "_out_by_kind", "_out_fail",
         "_orphan_recalled", "_recall_failed", "_caption_failed",
         "_started_at", "_last_ts",
+        "_recv_giveups", "_recv_giveup_by_acct", "_recv_hold_total_sec",
+        "_recv_last_reason",
     )
 
     def __init__(self) -> None:
@@ -44,6 +46,12 @@ class LineMediaStats:
         self._orphan_recalled = 0    # 上传失败 → 撤回了占位（客户没看到破图）
         self._recall_failed = 0      # 连撤回都失败 → 客户**可能真看到了**破图
         self._caption_failed = 0     # 图发出去了但配文没发出（不影响 delivered）
+        # #180：LINE receiver（gw operation/receive 长轮询）连败放弃→交编排器重启的次数。
+        # 它就是「媒体按钮/语音发送突然 501」的直接上游读数：放弃期 worker 不在 running。
+        self._recv_giveups = 0
+        self._recv_giveup_by_acct: Dict[str, int] = {}
+        self._recv_hold_total_sec = 0.0
+        self._recv_last_reason = ""
         self._started_at = time.time()
         self._last_ts = 0.0
 
@@ -98,11 +106,33 @@ class LineMediaStats:
         except Exception:
             pass
 
+    # ── receiver（#180）───────────────────────────────────────────────────────
+    def record_receiver_giveup(self, account_id: str, *, reason: str = "",
+                               hold_sec: float = 0.0) -> None:
+        """receiver 连败放弃一次（→ 编排器重启）；``hold_sec``＝随之安排的跨重启退避。"""
+        try:
+            with self._lock:
+                self._recv_giveups += 1
+                a = str(account_id or "unknown")[:16]
+                self._recv_giveup_by_acct[a] = self._recv_giveup_by_acct.get(a, 0) + 1
+                self._recv_hold_total_sec += max(0.0, float(hold_sec or 0.0))
+                if reason:
+                    self._recv_last_reason = str(reason)[:200]
+                self._last_ts = time.time()
+        except Exception:
+            pass
+
     # ── 导出 ─────────────────────────────────────────────────────────────────
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             return {
-                "active": bool(self._in_total or self._out_total),
+                "active": bool(self._in_total or self._out_total or self._recv_giveups),
+                "receiver": {
+                    "restarts_total": self._recv_giveups,
+                    "by_account": dict(self._recv_giveup_by_acct),
+                    "hold_total_sec": int(self._recv_hold_total_sec),
+                    "last_reason": self._recv_last_reason,
+                },
                 "inbound": {
                     "total": self._in_total,
                     "ok": self._in_ok,
@@ -133,6 +163,8 @@ class LineMediaStats:
             "line_media_outbound_ok_total %d" % o["ok"],
             "line_media_orphan_recalled_total %d" % o["orphan_recalled"],
             "line_media_recall_failed_total %d" % o["recall_failed"],
+            "line_receiver_restarts_total %d" % d["receiver"]["restarts_total"],
+            "line_receiver_hold_seconds_total %d" % d["receiver"]["hold_total_sec"],
         ]
         for k, v in sorted(i["skipped"].items()):
             lines.append('line_media_inbound_skipped_total{reason="%s"} %d' % (k, v))

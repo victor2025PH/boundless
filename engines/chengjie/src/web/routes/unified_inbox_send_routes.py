@@ -195,6 +195,58 @@ def _media_cap_mb(config: Dict[str, Any], platform: str) -> int:
         return _MEDIA_CAP_DEFAULT_MB
 
 
+# ── #180：owns_media 为 False 的 501 分因（2026-09-05）─────────────────────────
+# 钧机 3PZ95W：同一 LINE 账号 12:06 send_media type=voice delivered=True 成功过两次，
+# 00:48 却 501「该账号不支持从收件箱发送语音（需 protocol 多开且在线）」——能力存在，
+# 只是 worker 那一刻不在 running（receiver 连败→编排器重启期）。通用措辞对 LINE 号是
+# 误导（坐席以为「这个号永远发不了语音」）。按 orchestrator.media_capability 分两套话：
+#   no_worker / no_send_media → 「该平台账号暂不支持从工作台发送语音/媒体」
+#   worker_not_running        → 「{platform} 通道正在重连（{state}），稍后再试」
+# 返回体是 dict（前端 d.detail.message 已兼容），带 reason/state/backoff_sec 供媒体按钮
+# 灰态 tooltip 同源（unified_inbox.html 属 J-4，落点写进结束报告）。
+_PLATFORM_LABEL = {"line": "LINE", "whatsapp": "WhatsApp", "telegram": "Telegram",
+                   "messenger": "Messenger", "instagram": "Instagram", "zalo": "Zalo"}
+
+
+def media_capability_or_none(orch: Any, platform: str, account_id: str) -> Dict[str, Any]:
+    """编排器分因能力（旧编排器无 media_capability 时按 owns_media 合成同形状）。"""
+    fn = getattr(orch, "media_capability", None)
+    if callable(fn):
+        try:
+            cap = dict(fn(platform, account_id) or {})
+            cap.setdefault("owns", False)
+            cap.setdefault("reason", "" if cap["owns"] else "no_worker")
+            cap.setdefault("state", "")
+            return cap
+        except Exception:
+            logger.debug("media_capability 探测失败（回落 owns_media）", exc_info=True)
+    owns = False
+    try:
+        owns = bool(orch.owns_media(platform, account_id))
+    except Exception:
+        owns = False
+    return {"owns": owns, "reason": "" if owns else "no_worker", "state": "",
+            "backoff_sec": 0}
+
+
+def _media_unsupported_exc(request: Request, cap: Dict[str, Any], *,
+                           platform: str, kind: str) -> HTTPException:
+    """按分因给 501：``kind`` ∈ media|voice。detail 为 dict（message + 机器可读字段）。"""
+    reason = str(cap.get("reason") or "no_worker")
+    state = str(cap.get("state") or "")
+    label = _PLATFORM_LABEL.get(str(platform or "").lower(), str(platform or "").upper() or "?")
+    if reason == "worker_not_running":
+        msg = tr(request, f"err.inbox.{kind}_reconnecting", platform=label,
+                 state=state or "restarting")
+    else:
+        msg = tr(request, f"err.inbox.{kind}_unsupported_platform")
+    return HTTPException(501, {
+        "code": f"{kind}_unsupported", "message": msg, "reason": reason,
+        "state": state, "platform": str(platform or "").lower(),
+        "backoff_sec": int(cap.get("backoff_sec") or 0),
+    })
+
+
 # P1-3（2026-08-11）：语音合成期「正在录音」气泡的 fire-and-forget 任务强引用集
 # （create_task 对任务仅弱引用，防 GC 吞任务——与 voice_routes._TTS_JOBS 同教训）。
 _VOICE_ACTION_TASKS: set = set()
@@ -1103,14 +1155,20 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         upload = form.get("file")
         if not chat_key or upload is None or not getattr(upload, "filename", ""):
             raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
+        logger.info(
+            "[send-media] request platform=%s acct=%s chat=%s file=%s",
+            platform, account_id, chat_key,
+            str(getattr(upload, "filename", "") or "")[:80],
+        )
         # 能力权限（2026-08-16）：发媒体受 chat.send_media 闸（媒体不耗字符额度）
         _deny_capability(request, "chat.send_media")
         _raise_if_account_blocked(request, platform, account_id)
 
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
-        if not orch.owns_media(platform, account_id):
-            raise HTTPException(501, tr(request, "err.inbox.media_unsupported"))
+        _cap = media_capability_or_none(orch, platform, account_id)
+        if not _cap.get("owns"):
+            raise _media_unsupported_exc(request, _cap, platform=platform, kind="media")
         # 护栏预检（P0 2026-08-12）：此时尚未读文件/落盘/占幂等位，被拦零清理
         _gate_ex = _send_gate_exc(
             request, platform, account_id, chat_key, owned=True)
@@ -1341,10 +1399,12 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
 
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
-        if not orch.owns_media(platform, account_id):
+        _cap = media_capability_or_none(orch, platform, account_id)
+        if not _cap.get("owns"):
             _dedup.release(_dedup_scope, _client_msg_id)
-            _vst.record_failed(_dedup_scope, _client_msg_id, "voice_unsupported")
-            raise HTTPException(501, tr(request, "err.inbox.voice_unsupported"))
+            _vst.record_failed(_dedup_scope, _client_msg_id,
+                               f"voice_unsupported:{_cap.get('reason') or 'no_worker'}")
+            raise _media_unsupported_exc(request, _cap, platform=platform, kind="voice")
         # 护栏预检（P0 2026-08-12）：拦在 TTS 合成之前——额度已满还烧一次
         # GPU 克隆纯属浪费；对账表记 send_blocked（超时对账端点不再谎报 sent）。
         _gate_ex = _send_gate_exc(
@@ -1907,10 +1967,19 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         can_media = False
         can_voice = False
         caps_reason = ""
+        worker_state = ""
+        backoff_sec = 0
         try:
             from src.integrations.account_orchestrator import get_orchestrator
-            can_media = bool(get_orchestrator().owns_media(plat, acc))
+            _cap = media_capability_or_none(get_orchestrator(), plat, acc)
+            can_media = bool(_cap.get("owns"))
             can_voice = can_media
+            if not can_media:
+                # #180：按钮为什么灰——no_worker / no_send_media（平台不支持）vs
+                # worker_not_running（通道重连中，稍后自己会亮）；前端 tooltip 同源
+                caps_reason = str(_cap.get("reason") or "no_worker")
+                worker_state = str(_cap.get("state") or "")
+                backoff_sec = int(_cap.get("backoff_sec") or 0)
         except Exception:
             logger.debug("send-caps 探测失败（按不支持处理）", exc_info=True)
         # official 账号的诚实能力覆盖：官方 worker 类上恒有 send_media（owns_media
@@ -1958,8 +2027,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "can_media": can_media, "can_voice": can_voice,
             "voice_mode": voice_mode,
             # 官方通道能力受限时的机器可读原因（zalo_api_no_media / needs_public_url），
-            # 前端 tooltip 可按码出更具体的解释；空串=无特殊限制
+            # 前端 tooltip 可按码出更具体的解释；空串=无特殊限制。#180 起还会是
+            # no_worker / no_send_media / worker_not_running（配 worker_state / backoff_sec）
             "caps_reason": caps_reason,
+            "worker_state": worker_state,
+            "backoff_sec": backoff_sec,
             "bubbles": _bubbles_on, "bubbles_max_parts": _bubbles_max,
             # P3 2026-08-17：该平台出站媒体体积上限（MB）——前端上传前预检与
             # 服务端 413 同源（_media_cap_mb），不再各写一套 25MB 常量。

@@ -59,6 +59,31 @@ MAX_RESTARTS = 8             # 连续失败上限 → 熔断（标 error，停�
 # 故只每 N 轮打一行（约 1h），日常读数走 status 的 recv_cycles。
 _LINE_RECV_CYCLE_LOG_EVERY = 360
 
+# ── #180 LINE receiver 连败放弃的**跨重启**退避（2026-09-05）───────────────────
+# 3PZ95W（钧机）19:55–20:02：receiver 对 line-chrome-gw /api/operation/receive 连败
+# 6 次（≈2 分钟）→ 放弃 → 编排器重启 worker → 新 receiver 立刻又连败 6 次 → …
+# 多轮循环。每轮重启期 worker 不在 running，工作台媒体/语音按钮全灰、发语音 501。
+# 监督器（line_recv_supervisor）只管**一条接收线程内**的退避；跨重启的节奏由这里
+# 按账号记账：连续放弃 n 次 → 下次 start() 后 receiver **延后** hold(n) 秒再拉
+# （60s→2m→4m→…封顶 30m），延后期 worker 仍 running（client 在、拉取兜底在，能发
+# 能收），状态标 ``reconnecting`` 而非静默。receiver 稳跑 ≥ 10 分钟即清零。
+_LINE_RECV_HOLD_BASE_SEC = 60.0
+_LINE_RECV_HOLD_CAP_SEC = 1800.0
+_LINE_RECV_STABLE_RESET_SEC = 600.0
+#: account_id → {"streak": 连续放弃次数, "ts": 上次放弃时刻, "reason": 最后一次异常摘要}
+_LINE_RECV_GIVEUP: Dict[str, Dict[str, Any]] = {}
+
+
+def line_recv_hold_sec(streak: int) -> float:
+    """连续放弃 ``streak`` 次后，下一次 receiver 拉起前该等多久（纯函数）。"""
+    try:
+        n = int(streak)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 0.0
+    return float(min(_LINE_RECV_HOLD_CAP_SEC, _LINE_RECV_HOLD_BASE_SEC * (2 ** (n - 1))))
+
 # send_media 超时兜底默认值（秒）——2026-09-02 WEXX7E 实锤：LINE worker 的签名桥
 # Node 进程僵死后，媒体发送 await 永久无果、UI 只能靠前端 fetch 超时猜「网络异常」。
 # 45s 的依据：出站媒体上限 20MB，okline 单请求 HTTP 超时 30s，正常最慢一笔
@@ -398,6 +423,37 @@ class AccountOrchestrator:
             m is not None and m.state == "running"
             and m.worker is not None and hasattr(m.worker, "send_media")
         )
+
+    def media_capability(self, platform: str, account_id: str) -> Dict[str, Any]:
+        """``owns_media`` 的分因版（#180）：为什么不能从工作台发媒体/语音。
+
+        ``reason``：``""``（可发）/ ``no_worker``（账号未托管或该平台无 worker 工厂）/
+        ``no_send_media``（worker 在但该平台/开关不支持发媒体，如 LINE 未开
+        ``platform_login.line.media.outbound``）/ ``worker_not_running``（worker 在
+        error/starting/stopping 等重连期——钧机 3PZ95W 00:48 那种：同账号两小时前
+        还 delivered=True，此刻只是 receiver 连败正在被编排器重启）。前端据此把 501
+        文案与媒体按钮灰态 tooltip 分成「该平台不支持」vs「通道正在重连，稍后再试」，
+        后者带 ``state``/``backoff_sec`` 让坐席知道等多久。
+        """
+        m = self._managed.get(account_key(platform, account_id))
+        if m is None:
+            return {"owns": False, "reason": "no_worker", "state": "",
+                    "restarts": 0, "backoff_sec": 0}
+        has_send = m.worker is not None and hasattr(m.worker, "send_media")
+        backoff = max(0.0, float(m.backoff_until or 0.0) - self._now())
+        out: Dict[str, Any] = {
+            "owns": False, "reason": "", "state": str(m.state or ""),
+            "restarts": int(m.restarts or 0), "backoff_sec": int(round(backoff)),
+            "last_error": str(m.last_error or "")[:160],
+        }
+        if m.state == "running" and has_send:
+            out["owns"] = True
+            return out
+        if m.state != "running":
+            out["reason"] = "worker_not_running"
+            return out
+        out["reason"] = "no_send_media"
+        return out
 
     async def mark_read(self, platform: str, account_id: str, chat_key: str) -> bool:
         """把该会话标记已读（向平台发「已读」回执，拟人「先看后回」）。
@@ -2038,6 +2094,11 @@ class LineProtocolWorker:
         self._e2ee_dirty: bool = False
         self._e2ee_rebuilds: int = 0
         self._e2ee_retries: int = 0
+        # #180 receiver 跨重启退避观测：idle|running|reconnecting（延后拉起中）|gave_up
+        self._recv_state: str = "idle"
+        self._recv_hold_until: float = 0.0
+        self._recv_hold_timer: Optional[threading.Timer] = None
+        self._recv_last_error: str = ""
         # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
         # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
         # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
@@ -2084,7 +2145,7 @@ class LineProtocolWorker:
             logger.warning("[line-worker] reqSeq 推进失败（重启后首条媒体可能撞判重）"
                            " account=%s", self.account_id, exc_info=True)
         self._loop = asyncio.get_running_loop()
-        self._start_receiver()
+        self._start_receiver_with_hold()
         self._start_pull_sync(path)
         self.state = "running"
         self.detail = ""
@@ -2308,12 +2369,89 @@ class LineProtocolWorker:
         except Exception:
             logger.debug("[line-worker] inbound 推送失败 via=%s", via, exc_info=True)
 
+    # ── #180 receiver 跨重启退避 ─────────────────────────────────────────────
+
+    def _recv_hold_remaining(self, now: Optional[float] = None) -> float:
+        """按账号账本算本次 start() 后 receiver 该延后多少秒（0＝立刻拉）。"""
+        ts = time.time() if now is None else now
+        rec = _LINE_RECV_GIVEUP.get(self.account_id) or {}
+        streak = int(rec.get("streak") or 0)
+        if streak <= 0:
+            return 0.0
+        hold = line_recv_hold_sec(streak)
+        elapsed = max(0.0, ts - float(rec.get("ts") or 0.0))
+        return max(0.0, hold - elapsed)
+
+    def _note_recv_giveup(self, reason: str) -> float:
+        """receiver 放弃一次：账本 streak+1、记原因、算下次 hold、进观测。返回 hold 秒数。"""
+        rec = _LINE_RECV_GIVEUP.setdefault(self.account_id, {"streak": 0, "ts": 0.0, "reason": ""})
+        rec["streak"] = int(rec.get("streak") or 0) + 1
+        rec["ts"] = time.time()
+        rec["reason"] = str(reason or "")[:200]
+        hold = line_recv_hold_sec(rec["streak"])
+        self._recv_state = "gave_up"
+        try:
+            from src.integrations.line_media_stats import get_line_media_stats
+            get_line_media_stats().record_receiver_giveup(
+                self.account_id, reason=rec["reason"], hold_sec=hold)
+        except Exception:
+            pass
+        # 根因单列观测（不猜修）：最后一次异常原文 + 连续放弃次数 + 本轮 hold。
+        # 「为什么 gw operation/receive 连败」的证据链从这一行开始攒。
+        logger.error(
+            "[line-worker] receiver 放弃 #%d account=%s → 交编排器重启；下次拉起前 hold=%.0fs"
+            "（期间 worker 仍 running、拉取兜底在收）last_error=%s",
+            rec["streak"], self.account_id, hold, rec["reason"] or "-")
+        return hold
+
+    def _maybe_reset_recv_giveup(self) -> None:
+        """receiver 稳跑 ≥ _LINE_RECV_STABLE_RESET_SEC → 清账本（连败已停，退避归零）。"""
+        rec = _LINE_RECV_GIVEUP.get(self.account_id)
+        if not rec or int(rec.get("streak") or 0) <= 0:
+            return
+        if self._recv_started_ts and (time.time() - self._recv_started_ts) >= _LINE_RECV_STABLE_RESET_SEC:
+            logger.info("[line-worker] receiver 已稳跑 %.0fs，连败账本清零 account=%s（此前 streak=%d）",
+                        time.time() - self._recv_started_ts, self.account_id, rec["streak"])
+            _LINE_RECV_GIVEUP.pop(self.account_id, None)
+
+    def _start_receiver_with_hold(self) -> None:
+        """start() 用：连败账本要求 hold 则延后拉 receiver（状态 reconnecting），否则立刻拉。"""
+        hold = self._recv_hold_remaining()
+        if hold <= 0:
+            self._start_receiver()
+            return
+        self._recv_state = "reconnecting"
+        self._recv_hold_until = time.time() + hold
+        rec = _LINE_RECV_GIVEUP.get(self.account_id) or {}
+        logger.warning(
+            "[line-worker] receiver 延后 %.0fs 再拉起 account=%s（连续放弃 %d 次，退避中；"
+            "拉取兜底照常收消息，发送不受影响）", hold, self.account_id,
+            int(rec.get("streak") or 0))
+
+        def _fire() -> None:
+            try:
+                if self.state != "running" or self.client is None:
+                    return  # worker 已被停掉：不要在尸体上起线程
+                self._start_receiver()
+            except Exception:
+                logger.warning("[line-worker] 延后拉起 receiver 失败 account=%s",
+                               self.account_id, exc_info=True)
+
+        t = threading.Timer(hold, _fire)
+        t.daemon = True
+        t.name = f"line-recv-hold-{self.account_id[:8]}"
+        self._recv_hold_timer = t
+        t.start()
+
     def _start_receiver(self) -> None:
         """后台 daemon 线程跑 okline Bot：收到消息 → 落库 + 自动回复（best-effort）。"""
         from okline import Bot
         account_id = self.account_id
         client = self.client
         bot = Bot(client)
+        self._recv_state = "running"
+        self._recv_hold_until = 0.0
+        self._recv_hold_timer = None
 
         @bot.on_message
         def _on_msg(ctx: Any) -> None:  # noqa: ANN401
@@ -2349,6 +2487,7 @@ class LineProtocolWorker:
                         bot.run(reconnect=False)
                     except Exception as exc:  # noqa: BLE001
                         clean = False
+                        self._recv_last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                         logger.warning(
                             "[line-worker] receiver 断开 account=%s streak=%d: %s",
                             account_id, sup.streak + 1,
@@ -2369,7 +2508,11 @@ class LineProtocolWorker:
                         logger.error(
                             "[line-worker] receiver 连败 %d 次，放弃并交编排器"
                             "重启 account=%s", verdict["streak"], account_id)
+                        # #180：跨重启退避记账（编排器重启后 start() 按它延后拉 receiver）
+                        self._note_recv_giveup(self._recv_last_error)
                         break
+                    if verdict["streak"] == 0:
+                        self._maybe_reset_recv_giveup()
                     if verdict["sleep_sec"] > 0:
                         time.sleep(verdict["sleep_sec"])
             except Exception:
@@ -2907,18 +3050,39 @@ class LineProtocolWorker:
         except Exception:
             logger.debug("[line-worker] pull_stop 置位失败（忽略）", exc_info=True)
         try:
+            t = self._recv_hold_timer
+            if t is not None:
+                t.cancel()
+            self._recv_hold_timer = None
+            if self._recv_state == "reconnecting":
+                self._recv_state = "idle"
+        except Exception:
+            pass
+        try:
             if self.client is not None:
                 self.client.close()
         except Exception:
             pass
 
+    def _recv_holding(self) -> bool:
+        """receiver 正处于 #180 的延后拉起窗（Timer 在走、还没到点）。"""
+        t = self._recv_hold_timer
+        return bool(self._recv_state == "reconnecting" and t is not None and t.is_alive()
+                    and time.time() < self._recv_hold_until + 5.0)
+
     async def healthy(self) -> bool:
-        return bool(self.client is not None and self._thread is not None
-                    and self._thread.is_alive())
+        if self.client is None:
+            return False
+        if self._thread is not None and self._thread.is_alive():
+            return True
+        # 延后拉起期不算不健康：client 在、拉取兜底在收；判不健康会让编排器再重启一轮，
+        # 把退避变成风暴——那正是 #180 要停掉的循环。
+        return self._recv_holding()
 
     def status(self) -> Dict[str, Any]:
         # B98：入站活性快照进 status——诊断/看门狗据此判「登录在、收不到」
         # （recv_started 有值但 last_inbound 长期不动 = 接收链假活）。
+        rec = _LINE_RECV_GIVEUP.get(self.account_id) or {}
         out = {"type": "line_protocol", "account_id": self.account_id,
                "state": self.state, "detail": self.detail,
                "recv_started_ts": round(self._recv_started_ts, 1),
@@ -2926,7 +3090,12 @@ class LineProtocolWorker:
                "inbound_count": self._inbound_count,
                "recv_cycles": self._recv_cycles,
                "thread_alive": bool(self._thread is not None
-                                    and self._thread.is_alive())}
+                                    and self._thread.is_alive()),
+               # #180：receiver 连败/退避观测（reconnecting=延后拉起中）
+               "recv_state": self._recv_state,
+               "recv_hold_until": round(self._recv_hold_until, 1),
+               "recv_giveup_streak": int(rec.get("streak") or 0),
+               "recv_last_error": self._recv_last_error}
         # impl85 阶段1：拉取兜底观测（pulled_total>0 = SSE 流确实在漏消息）
         if self._pull_sync is not None:
             try:
