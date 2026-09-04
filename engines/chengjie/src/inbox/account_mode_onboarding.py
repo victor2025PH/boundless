@@ -20,9 +20,11 @@
 
 失败方向（热路每条消息都会问，绝不能成为故障点）
 ============================================
-任何 IO / 解析 / 注册表异常 → ``None``（回落全局旧行为）。``connected_at``
-判不出（=0.0）按**老账号**处理——宁可不打扰、不改行为，也不把老客户的自动
-回复静默降级成人审（与 ``resolve_account_connected_at`` 的失败方向一致）。
+任何 IO / 解析 / 注册表异常 → ``None``（回落全局旧行为）。
+``connected_at`` 判不出（=0.0）：#63 曾按老账号 fail-open；#167（首次登录
+直接全自动）把「判不出」改成**待确认**——桌面首登协议号经常还没写下
+created_at，按老账号会立刻被 bootstrap 写成 ``auto_ai``。真正的存量靠
+「接入时刻早于 baseline 超过 ``FIRST_LOGIN_GRACE_SEC``」识别。
 
 持久化
 ======
@@ -50,6 +52,12 @@ DECISION_MODES = ("auto_ai", "review", "manual")
 
 #: 新账号未确认前的生效档位（安全默认＝拟稿人审）。
 PENDING_DEFAULT_MODE = "review"
+
+#: #167 首次登录竞态窗：账号在登录链 upsert 的 ``created_at`` 往往早于
+#: 首次入站才写入的 ``baseline_ts`` 几秒到几小时。窗内未确认一律 review，
+#: 避免「刚登进来就被 bootstrap 写成全自动」。存量（接入早于 baseline
+#: 超过本窗）仍按 #63 豁免。
+FIRST_LOGIN_GRACE_SEC = 7 * 86400
 
 #: 会话行对齐时的写入来源（standby 的 _ALIGN_SOURCES 刻意不含它：账号级决策
 #: 是人按账号做的显式决定，不被全局一键批量覆盖——与 human 行同待遇）。
@@ -169,15 +177,24 @@ def decided_mode(platform: str, account_id: str) -> Optional[str]:
 def is_new_account(
     platform: str, account_id: str, *, now: Optional[float] = None,
 ) -> bool:
-    """账号接入时刻晚于基线 → 新账号。接入时刻判不出（0.0）→ False（按存量）。"""
+    """账号是否走「未确认 → review」的新号口径（#63 + #167）。
+
+    - 接入时刻晚于基线 → 新号（#63）
+    - 接入时刻在基线前 ``FIRST_LOGIN_GRACE_SEC`` 内 → 仍当新号
+      （#167：登录 upsert 早于首次入站冻结 baseline 的竞态）
+    - 接入时刻判不出（0.0）→ 当新号（#167：首登协议号常无 created_at）
+    - 基线未写入 → False（还没启用，不改行为）
+    """
     baseline = float(_load_state().get("baseline_ts") or 0.0)
     if baseline <= 0:
         return False
     try:
         connected = float(_resolve_connected_at(platform, account_id, now=now) or 0.0)
     except Exception:
-        return False
-    return connected > baseline
+        return True
+    if connected <= 0:
+        return True
+    return connected > (baseline - FIRST_LOGIN_GRACE_SEC)
 
 
 def account_mode_for(
@@ -185,7 +202,8 @@ def account_mode_for(
 ) -> Optional[str]:
     """账号级生效档位；``None``＝本层不表态（回落全局）。
 
-    已确认 → 所选档；新账号未确认 → ``review``（安全默认）；存量账号 → None。
+    已确认 → 所选档；新账号 / 首登竞态 / 接入时刻未知且未确认 → ``review``
+    （#63 + #167 安全默认）；存量账号（接入早于 baseline 超过宽限）→ None。
     """
     try:
         if not onboarding_enabled(config):
@@ -212,6 +230,109 @@ def account_mode_from_cid(
     if len(parts) < 3:
         return None
     return account_mode_for(parts[0], parts[1], config)
+
+
+def _cid_parts(conversation_id: str) -> Optional[tuple]:
+    parts = str(conversation_id or "").split(":", 2)
+    if len(parts) < 3:
+        return None
+    plat, acct = str(parts[0] or "").strip().lower(), str(parts[1] or "").strip()
+    if not plat or not acct:
+        return None
+    return plat, acct, str(parts[2] or "")
+
+
+def persona_is_user_explicit(
+    platform: str,
+    account_id: str,
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    conversation_id: str = "",
+    registry: Any = None,
+) -> bool:
+    """人设是否用户显式绑定（#167 与 #156 同口径）。
+
+    True＝会话覆写命中，或注册表 ``meta.persona_id`` / ``persona_ids`` 有值
+    且不是 ``auto_attach_default_persona`` 写进去的全局默认。
+    无注册表行 / 未绑 / 读失败 → False（按默认人设处理，未确认则不真发）。
+    """
+    try:
+        plat = str(platform or "").strip().lower()
+        aid = str(account_id or "").strip()
+        if not plat or not aid:
+            return False
+        from src.ai.persona_voice import (
+            conv_override_enabled,
+            default_account_persona_id,
+            resolve_effective_persona,
+            _auto_attach_enabled,
+        )
+        ck = ""
+        if conversation_id:
+            bits = str(conversation_id).split(":", 2)
+            if len(bits) >= 3:
+                ck = bits[2]
+        if ck and conv_override_enabled(config):
+            try:
+                _pid, src = resolve_effective_persona(
+                    config or {}, plat, aid, ck, registry=registry)
+                if src == "conv_override" and _pid:
+                    return True
+            except Exception:
+                pass
+        if registry is None:
+            from src.integrations.account_registry import get_account_registry
+            registry = get_account_registry()
+        row = registry.get(plat, aid) if registry is not None else None
+        if not row:
+            return False
+        meta = row.get("meta") or {}
+        bound = str(meta.get("persona_id") or "").strip()
+        if not bound:
+            for p in (meta.get("persona_ids") or []):
+                bound = str(p or "").strip()
+                if bound:
+                    break
+        if not bound:
+            return False
+        default = default_account_persona_id(config, plat)
+        if (_auto_attach_enabled(config) and default
+                and bound == default):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def cap_unconfirmed_default_persona(
+    conversation_id: str,
+    mode: str,
+    config: Optional[Dict[str, Any]] = None,
+    *,
+    registry: Any = None,
+) -> str:
+    """#167 真发前最后一道：未确认 + 默认人设 → 只拟稿。
+
+    已确认 / 功能关 / 人设是用户显式绑定 / 档位本就不是 auto_ai → 原样返回。
+    """
+    try:
+        if str(mode or "").strip().lower() != "auto_ai":
+            return mode
+        if not onboarding_enabled(config):
+            return mode
+        bits = _cid_parts(conversation_id)
+        if bits is None:
+            return mode
+        plat, aid, _ck = bits
+        if decided_mode(plat, aid) is not None:
+            return mode
+        if persona_is_user_explicit(
+                plat, aid, config, conversation_id=conversation_id,
+                registry=registry):
+            return mode
+        return PENDING_DEFAULT_MODE
+    except Exception:
+        return mode
 
 
 def decide_account_mode(
@@ -343,9 +464,11 @@ def _reset_for_tests() -> None:
 
 __all__ = [
     "DECISION_MODES", "PENDING_DEFAULT_MODE", "ALIGN_SOURCE",
+    "FIRST_LOGIN_GRACE_SEC",
     "onboarding_enabled", "ensure_baseline", "account_key",
     "decided_mode", "is_new_account", "account_mode_for",
     "account_mode_from_cid", "decide_account_mode",
     "pending_accounts", "decisions_snapshot",
     "align_account_conversations",
+    "persona_is_user_explicit", "cap_unconfirmed_default_persona",
 ]

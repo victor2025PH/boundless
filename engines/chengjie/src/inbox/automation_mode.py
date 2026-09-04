@@ -172,6 +172,13 @@ def resolve_automation_mode(
             and not group_autopilot_exempt(conversation_id, config)
             and conversation_is_group(store, conversation_id)):
         return "review"
+    try:
+        from src.inbox.account_mode_onboarding import (
+            cap_unconfirmed_default_persona,
+        )
+        mode = cap_unconfirmed_default_persona(conversation_id, mode, config)
+    except Exception:
+        pass
     return mode
 
 
@@ -207,6 +214,23 @@ def maybe_bootstrap_automation_mode(
         if mode == "auto_ai" and not group_autopilot_exempt(conversation_id, config):
             return "review"
         return mode
+    # #167：onboarding 未确认不落盘全局档（bootstrap 只对已确认账号生效）。
+    # 存量未确认 + 用户显式人设仍可回落全局 auto_ai，但不写会话行——确认后
+    # 会话动态跟随账号决策，避免把「确认前的全自动」钉死。
+    try:
+        from src.inbox.account_mode_onboarding import (
+            cap_unconfirmed_default_persona,
+            decided_mode,
+            onboarding_enabled,
+        )
+        mode = cap_unconfirmed_default_persona(conversation_id, mode, config)
+        # 未确认：不落盘（无论被封成 review 还是存量显式人设回落 auto_ai）
+        if onboarding_enabled(config):
+            parts = str(conversation_id or "").split(":", 2)
+            if len(parts) >= 3 and decided_mode(parts[0], parts[1]) is None:
+                return mode
+    except Exception:
+        pass
     if bootstrap_enabled_from_config(config) and mode in AUTOMATION_MODES:
         try:
             store.set_automation_mode(conversation_id, mode, source="bootstrap")

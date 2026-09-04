@@ -97,13 +97,14 @@ def test_baseline_freezes_on_first_call():
 def test_new_account_defaults_review_old_and_unknown_fall_through(monkeypatch):
     amo.ensure_baseline(now=NOW - 3600)
     monkeypatch.setattr(amo, "_resolve_connected_at", _connected({
-        "telegram:new1": NOW,            # 基线后接入 → 新账号
-        "telegram:old1": NOW - 86400,    # 基线前接入 → 存量
-        # telegram:unknown 不在表里 → 0.0＝判不出
+        "telegram:new1": NOW,                 # 基线后接入 → 新账号
+        "telegram:old1": NOW - 30 * 86400,    # 早于 baseline 超过宽限 → 存量
+        # telegram:unknown 不在表里 → 0.0
     }))
     assert amo.account_mode_for("telegram", "new1", CFG_ON) == "review"
     assert amo.account_mode_for("telegram", "old1", CFG_ON) is None
-    assert amo.account_mode_for("telegram", "unknown", CFG_ON) is None
+    # #167：判不出按待确认（首登协议号常无 created_at），不再 fail-open 成存量
+    assert amo.account_mode_for("telegram", "unknown", CFG_ON) == "review"
 
 
 def test_decide_overrides_pending_default(monkeypatch):
@@ -180,11 +181,14 @@ def test_bootstrap_skips_persist_while_account_layer_active(monkeypatch):
 def test_bootstrap_unchanged_for_old_accounts(monkeypatch):
     amo.ensure_baseline(now=NOW - 3600)
     monkeypatch.setattr(amo, "_resolve_connected_at",
-                        _connected({"telegram:old1": NOW - 86400}))
+                        _connected({"telegram:old1": NOW - 30 * 86400}))
+    # 存量 + 用户显式人设：未确认仍回落全局 auto_ai，但 #167 不落盘
+    monkeypatch.setattr(amo, "persona_is_user_explicit",
+                        lambda *a, **k: True)
     st = _FakeStore()
     cid = "telegram:old1:peer"
     assert maybe_bootstrap_automation_mode(st, cid, CFG_ON) == "auto_ai"
-    assert st.set_calls == [(cid, "auto_ai", "bootstrap")]   # 旧行为原样
+    assert st.set_calls == []
 
 
 # ── 决策对齐 ──────────────────────────────────────────────────────────────
