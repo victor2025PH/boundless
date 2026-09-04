@@ -102,6 +102,15 @@ _OBJECT_PHOTO_MARKERS = (
     "你煮嘅", "妳煮嘅", "你整嘅", "你買嘅", "你买嘅",
 )
 
+# EN 物体图（#171 同批）：「picture of your dog / photo of the food」是要
+# 「你的东西」的图，不是人设自拍——旧子串 marker「picture of you」会吃进
+# 「picture of your dog」（前缀重合）。「of your face / of yourself」仍是自拍。
+_OBJECT_PHOTO_RE_EN = re.compile(
+    r"\b(?:photos?|pics?|pictures?|shots?)\s+of\s+"
+    r"(?:your|ur|the|that|this|my|his|her|their)\s+(?!face\b|self\b|selfie\b)\w+",
+    re.I,
+)
+
 # 用户谈自己的照片：无指向 AI 领属时不命中（防「我给你看我的照片」）。
 # 实施69 追加自述动作组（「我去拍个照」是用户叙述自己要去拍照，不是索图——
 # 新收的「拍个照」marker 若无此护栏会把它误判成要图）。
@@ -141,6 +150,49 @@ _REQUEST_PATTERNS: Tuple[Pattern[str], ...] = (
     # 实施69：「拍(照)X给我看看」动词前置语序（「拍照烤串的给我看看」）。
     # 主体是什么交 wanted_media_subject 判，这里只负责认出「这是要图」。
     re.compile(r"拍照?[^，。！？!?\n]{0,10}(?:给|給|俾)\s*我\s*(?:看|睇)"),
+    # #171（2026-09-05 WhatsApp 英文客户实录）：EN 索图此前只靠上面的子串表
+    # （send me a pic / photo of you…），_PHOTO_CORE 全是中文名词——「send me a
+    # photo」「show me a picture」「can I see a pic」「got any pics」这些最常见
+    # 英文形态一个都进不来 → 图链不启动，LLM 独自空转出「I just sent it」。
+    # ① send/show/shoot/drop (me) a photo|pic|picture|selfie（排除「picture of
+    #    your dog/the food」——那是物体图，交上下文要图链）
+    re.compile(
+        r"\b(?:send|show|shoot|drop|gimme|give)\s+(?:me\s+)?"
+        r"(?:a|an|another|one\s+more|some|ur|your|the|that|dat)\s+"
+        r"(?:pics?|photos?|pictures?|selfies?|face)\b"
+        r"(?!\s+of\s+(?!(?:you|u|yourself|ya)\b))",
+        re.I,
+    ),
+    # ② can/could I see (you | your face | what you look like | a pic)——
+    #    排除「can I see you tonight/tomorrow/in person」这类约见面语义
+    re.compile(
+        r"\b(?:can|could|may)\s+i\s+(?:please\s+)?see\s+"
+        r"(?:(?:a|another|one\s+more|some)\s+(?:pics?|photos?|pictures?|selfies?)|"
+        r"your\s+face|what\s+(?:you|u)\s+look\s+like|(?:you|u))\b"
+        r"(?!\s+(?:tonight|tomorrow|today|later|soon|again|this|next|in\s+person|irl|"
+        r"at|on|after|before|when|sometime|for|there|then|now|one\s+day|someday))",
+        re.I,
+    ),
+    # ③ got any pics? / do you have any photos / any selfies?——裸「got photos」
+    #    不收（「I got photos from my trip」是客户自述），必须带 any/more/new 限定
+    re.compile(
+        r"\b(?:(?:got|do\s+you\s+have|you\s+got|u\s+got|you\s+have|u\s+have)\s+"
+        r"(?:any\s+|more\s+|other\s+|new\s+|some\s+)|any\s+(?:more\s+|other\s+|new\s+)?)"
+        r"(?:pics?|photos?|pictures?|selfies?)\b"
+        r"(?!\s+of\s+(?!(?:you|u|yourself|ya)\b))",
+        re.I,
+    ),
+    # ④ let me / lemme see you / your face / what you look like
+    re.compile(
+        r"\b(?:let\s+me|lemme)\s+see\s+(?:you|u|your\s+face|what\s+(?:you|u)\s+look\s+like)\b"
+        r"(?!\s+(?:tonight|tomorrow|today|later|soon|again|in\s+person|irl))",
+        re.I,
+    ),
+    # ⑤ what (do) you look like / how do you look
+    re.compile(
+        r"\bwhat\s+(?:do\s+|does\s+)?(?:you|u)\s+look\s+like\b|\bhow\s+do\s+(?:you|u)\s+look\b",
+        re.I,
+    ),
     # 闽南「甲我看…相」
     re.compile(
         r"(?:甲我|乎我|予我|共我).{0,8}(?:看|睇).{0,10}" + _PHOTO_CORE
@@ -178,6 +230,8 @@ def detect_selfie_request(text: str) -> bool:
     if not t or len(t) > 200:  # 超长多半是叙述而非索图
         return False
     if any(m in t for m in _OBJECT_PHOTO_MARKERS):
+        return False
+    if _OBJECT_PHOTO_RE_EN.search(t):
         return False
     if any(g in t for g in _OWN_PHOTO_GUARD):
         if not any(x in t for x in (

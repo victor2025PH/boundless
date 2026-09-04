@@ -65,11 +65,34 @@ _CLAIM_WITHOUT_PHOTO = [re.compile(p, re.IGNORECASE) for p in (
     r"\bhere(?:'|’)?s\s+(?:a|an|my|the|one)?\s*(?:photo|pic(?:ture)?|selfie)",
     r"\bjust\s+(?:took|sent)\s+(?:this|it|one|a\s+(?:photo|pic|selfie))",
     r"\b(?:photo|pic|selfie)\s+(?:is\s+)?(?:sent|on\s+(?:the|its)\s+way)",
+    # #171（2026-09-05 WhatsApp Mizuki→John 实录）：英文**过去时假声明**——
+    # 「I just sent it, you should have it now」「let me try sending it again」
+    # ——旧表只认 just sent / here's a pic 宣告形，「you should have it」「send it
+    # again」（补发承诺预设「发过」）全漏。与生产 detect_sent_claim 同族但独立
+    # 维护（评测器不 import 生产词表）。否定（didn't send）在 check 里统一排除。
+    r"\bi(?:'ve|’ve|\s+have)?\s+(?:just\s+|already\s+)?sent\s+(?:you\s+)?"
+    r"(?:it|that|one|(?:the|a|an|my|another)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    r"\b(?:already|just)\s+sent\s+(?:it|that|one|(?:the|a|my)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    r"\b(?:you|u)\s+should\s+(?:have|see)\s+(?:it|them|the\s+(?:photos?|pics?|pictures?)|my\s+(?:photos?|pics?))\b",
+    r"\b(?:re-?send(?:ing)?|send(?:ing)?)\s+(?:it|them|that|the\s+(?:photos?|pics?|pictures?))\s+(?:again|one\s+more\s+time|once\s+more)\b",
+    r"\b(?:let\s+me|i(?:'ll|’ll|\s+will))\s+(?:try\s+(?:and\s+|to\s+)?)?re-?send\b",
+    r"\bdid\s+(?:you|u)\s+(?:get|receive)\s+(?:(?:it|them)\s+yet|(?:the|my)\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    # zh 同形态：刚发给你了 / 已经发过去了 / 我再发一次 / 你收到了吗
+    r"(?:已经|已經|刚刚|剛剛|刚才|剛才|刚|剛)\s*(?:就)?\s*(?:给|給)?\s*你?\s*(?:发|發|传|傳)\s*(?:给|給)?\s*(?:你|过去|過去|出去)\s*(?:了|啦)?",
+    r"(?:再|重新|重)\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|给你|給你|过去|過去)",
+    r"(?:照片|图|圖|自拍)[^\n，,]{0,6}(?:收到|收得到)\s*(?:了)?\s*(?:吗|嗎|没|沒)",
 )]
+
+# 否定排除（「I didn't send anything」「我没发」是诚实否认，不是已发断言）
+_DENIAL_RE = re.compile(
+    r"\b(?:didn(?:'|’)?t|did\s+not|never|haven(?:'|’)?t|couldn(?:'|’)?t|can(?:'|’)?t|forgot\s+to)\s+"
+    r"(?:\w+\s+)?(?:send|sent)\b|没\s*(?:有)?\s*(?:发|發|传|傳)|沒\s*(?:有)?\s*(?:发|發|传|傳)|还没\s*(?:发|發)",
+    re.IGNORECASE)
 
 # 过去指涉排除（谈论以前发过的照片 ≠ 断言本条附了图）
 _PAST_REF_RE = re.compile(
-    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b"
+    r"上次|之前|昨天|前几天|前幾天|那[张張]|\blast\s+time\b|\bearlier\b|\byesterday\b"
+    r"|\blast\s+(?:week|night)\b"
     r"|去年|(?:今年)?[春夏秋冬]天(?:去|在)|旅行时|旅行時|去玩(?:的时候|的時候)?")
 
 # 「此刻实拍」口径（实施90 季节/地点错配的触发条件）：只有把照片说成**现在拍的**
@@ -182,7 +205,8 @@ def check_media_consistency(
             if rx.search(t):
                 violations.append("deny_with_photo")
                 break
-    elif not _PAST_REF_RE.search(t):  # 谈论以前的照片 ≠ 断言本条附图
+    elif not _PAST_REF_RE.search(t) and not _DENIAL_RE.search(t):
+        # 谈论以前的照片 / 诚实否认「没发」≠ 断言本条附图
         for rx in _CLAIM_WITHOUT_PHOTO:
             if rx.search(t):
                 violations.append("claim_without_photo")
@@ -255,7 +279,23 @@ _GOLDEN_SAMPLES: List[Dict[str, Any]] = [
     {"id": "place2", "text": "Just snapped this outside!", "photo_sent": True,
      "scene": "", "media_place": "TH", "home_place": "CA",
      "expect_ok": False},
+    # —— #171（2026-09-05 WhatsApp Mizuki→John 实录）：英文过去时假声明 ——
+    {"id": "sent_claim1",
+     "text": "Oh, sorry — I just sent it, you should have it now.",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 实录原句①
+    {"id": "sent_claim2",
+     "text": "Hmm, that's weird — let me try sending it again for you.",
+     "photo_sent": False, "scene": "", "expect_ok": False},   # 实录原句②（补发预设已发）
+    {"id": "sent_claim3", "text": "我刚发给你了呀，你收到了吗", "photo_sent": False,
+     "scene": "", "expect_ok": False},                        # zh 同形态
     # —— 合法反例（不许误伤）——
+    {"id": "ok_sent_claim_backed",
+     "text": "Oh, sorry — I just sent it, you should have it now.",
+     "photo_sent": True, "scene": "", "expect_ok": True},     # 真附图=真话
+    {"id": "ok_sent_denial", "text": "I didn't send anything yet, hold on",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 诚实否认
+    {"id": "ok_sent_old", "text": "I sent it yesterday, remember?",
+     "photo_sent": False, "scene": "", "expect_ok": True},    # 远过去不由本轨判
     {"id": "ok_season_old", "text": "去年冬天去玩拍的，给你看雪～", "photo_sent": True,
      "scene": "", "media_season": "winter", "now_season": "summer",
      "expect_ok": True},                                      # 旧照口径=真人行为

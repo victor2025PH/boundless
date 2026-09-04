@@ -79,6 +79,38 @@ def test_past_reference_not_claim():
         "上次刚拍的那张你还留着吗", photo_sent=False)["ok"]
 
 
+# ── #171：英文过去时假声明（2026-09-05 WhatsApp Mizuki→John 实录必红）──────────
+@pytest.mark.parametrize("text", [
+    "Oh, sorry — I just sent it, you should have it now.",       # 实录①
+    "Hmm, that's weird — let me try sending it again for you.",  # 实录②
+    "I already sent you the photo, check again",
+    "did you get the photo?",
+    "我刚发给你了呀，你收到了吗",
+    "我再发一次哈",
+])
+def test_sent_claim_without_photo_caught(text):
+    v = check_media_consistency(text, photo_sent=False)
+    assert not v["ok"] and "claim_without_photo" in v["violations"], text
+    # 同一句真附了图 → 真话
+    assert check_media_consistency(text, photo_sent=True)["ok"], text
+
+
+@pytest.mark.parametrize("text", [
+    "I didn't send anything yet, hold on",   # 诚实否认
+    "I sent it yesterday, remember?",        # 远过去
+    "我没发呀，等我一下",
+])
+def test_sent_claim_denial_and_past_not_flagged(text):
+    assert check_media_consistency(text, photo_sent=False)["ok"], text
+
+
+def test_sent_claim_tamper_selfproof():
+    bad = [{"id": "tamper_sc",
+            "text": "Oh, sorry — I just sent it, you should have it now.",
+            "photo_sent": False, "expect_ok": True}]
+    assert evaluate_media_consistency(bad)["passed"] is False
+
+
 # ── 金标语料 + 探测器自证 ────────────────────────────────────────────────────
 def test_golden_corpus_all_pass():
     report = evaluate_media_consistency()
@@ -168,7 +200,8 @@ def test_new_goldens_present_and_detector_selfproof():
     assert report["passed"] is True
     ids = {r["id"] for r in report["results"]}
     for need in ("season1", "season2", "place1", "place2",
-                 "ok_season_old", "ok_place_honest"):
+                 "ok_season_old", "ok_place_honest",
+                 "sent_claim1", "sent_claim2", "ok_sent_claim_backed"):
         assert need in ids, need
     # 篡改新轨金标（把季节错配标成没问题）必 FAIL
     bad = [{"id": "tamper3", "text": "刚拍的，外面雪好大～", "photo_sent": True,

@@ -38,7 +38,9 @@ KIND_VOICE = "voice"
 KIND_VIDEOCALL = "video_call"
 
 # ── 句子切分（剥离粒度=整句：承诺句常带"你等着哈"这类跟班短语，整句剥最干净）──
-_SENT_SPLIT_RE = re.compile(r"([。！？!?～~;；…\n]+)")
+# 英文句点只在后跟空白/行尾时算句界（#171 2026-09-05：实录是英文多句消息，
+# 此前整段英文算一句，剥离＝整条清空；小数「3.5」/域名「a.com」无空白不切）。
+_SENT_SPLIT_RE = re.compile(r"([。！？!?～~;；…\n]+|\.(?=\s|$))")
 
 
 def _sentences(text: str) -> List[str]:
@@ -495,9 +497,201 @@ def strip_media_claims(text: str, *, media_context: bool = False) -> str:
     return res
 
 
-def build_promise_rewrite_instruction(text: str, kind: str = KIND_IMAGE) -> str:
-    """LLM 撤回重写指令（首选路径；任意语言可靠）。只输出改写后的消息正文。"""
+# ── 「已发」假声明（sent-claim，#171 2026-09-05）────────────────────────────────
+# 实录（WhatsApp Mizuki→John，88MP86 22:26/22:27）：「Oh, sorry — I just sent it,
+# you should have it now.」→ 客户「I never got it」→「Hmm, that's weird — let me
+# try sending it again for you.」全程零 send_media，真图 23 分钟后才由另一句入站
+# 触发。两道既有防线为何都没开口：``detect_media_claim`` 吃 media_context 门控，
+# 门只在客户**近几条**用媒体名词索图时开（John 的原话没进词表，「I never got it」
+# 也不含名词）；promise 词表要求 photo/pic 名词，「sending it again」是代词宾语。
+#
+# 本组**不吃 media_context**：「我刚发了/你该收到了/我再发一次/收到了吗」这类
+# 第一人称完成态本身就是强断言，真伪交调用方对照**近 N 分钟媒体真发账本**判
+# （B 线 inbox 出站 media_type / A 线 ``_media_sent_log``，见 ``media_pending.
+# media_sent_within``）——账本比语境猜测可靠：近窗内真发过＝真话放行，没发＝谎。
+# 排除面（宁漏勿误）：否定（didn't/never sent、没发/还没发）、方向相反（did you
+# send / 你发了吗、sent it to my mom）、非媒体宾语（money/link/address、红包/快递/
+# 地址…——那类谎不归发图链管，拉进来会误发自拍）、远过去（yesterday/上周——
+# 30 分钟账本判不了）。刻意**不**跳过问号句：「did you get the photo?」正是
+# 断言形态之一，方向相反的问句由排除面而不是问号处理。
+_SENT_CLAIM_IMG = [re.compile(p, re.IGNORECASE) for p in (
+    # en：I (just|already) sent it / sent you the photo / sent one over
+    r"\bi(?:'ve|’ve|\s+have|'d|’d|\s+had)?\s+(?:just\s+|already\s+|literally\s+)?(?:re-?)?sent\s+"
+    r"(?:you\s+|u\s+)?(?:it|that|those|one|"
+    r"(?:the|a|an|my|another|some|those|these|two|2)\s+"
+    r"(?:photos?|pics?|pictures?|images?|selfies?|shots?))\b",
+    # en：(already|just) sent it（省主语；「you/he sent」由排除面挡）
+    r"\b(?:just|already)\s+sent\s+(?:it|that|those|one|"
+    r"(?:the|a|an|my|another)\s+(?:photos?|pics?|pictures?|images?|selfies?))\b",
+    # en：you should have it (now|by now) / you should (be able to) see it
+    r"\b(?:you|u)\s+should\s+(?:have\s+(?:gotten|received|got)?|(?:be\s+able\s+to\s+)?see|be\s+getting)\s*"
+    r"(?:it|them|that|the\s+(?:photos?|pics?|pictures?|images?|selfies?)|"
+    r"my\s+(?:photos?|pics?|pictures?|selfies?))\b",
+    # en：it should be there / it should have gone through / it's in your chat
+    r"\bit\s+should\s+(?:be\s+(?:there|in\s+your\s+(?:inbox|chat|messages|dms?|whatsapp|phone))|"
+    r"have\s+(?:come|gone)\s+through)\b",
+    r"\bit(?:'s|’s|\s+is)\s+(?:already\s+)?in\s+your\s+(?:inbox|chat|messages|dms?|whatsapp|phone)\b",
+    # en：(let me) (try) send(ing) it again / one more time —— 含「上一次已发」预设
+    r"\b(?:let\s+me\s+|i(?:'ll|’ll|\s+will|'m\s+gonna|’m\s+gonna|\s+am\s+gonna|'m\s+going\s+to|’m\s+going\s+to|\s+am\s+going\s+to)\s+|i(?:'m|’m|\s+am)\s+)?"
+    r"(?:just\s+)?(?:try\s+(?:and\s+|to\s+)?)?(?:re-?send(?:ing)?|send(?:ing)?)\s+"
+    r"(?:it|that|them|those|the\s+(?:photos?|pics?|pictures?|images?|selfies?))\s+"
+    r"(?:again|one\s+more\s+time|once\s+more|over\s+again|a\s+second\s+time)\b",
+    # en：let me resend / I'll resend（第一人称 resend 动词本身预设「发过」）
+    r"\b(?:let\s+me|i(?:'ll|’ll|\s+will|'m\s+gonna|’m\s+gonna|\s+am\s+gonna|'m\s+going\s+to|’m\s+going\s+to|\s+can|\s+could))\s+"
+    r"(?:just\s+)?(?:try\s+(?:and\s+|to\s+)?)?re-?send(?:ing)?\b",
+    r"\bre-?sending\s+(?:it|that|them|those)\s+(?:now|right\s+now|to\s+you)\b",
+    # en：did you get it yet? / did you get the photo? / did it go through?
+    r"\b(?:did|didn(?:'|’)?t|have|haven(?:'|’)?t)\s+(?:you|u|ya)\s+(?:get|got|receive|received|see|seen)\s+"
+    r"(?:(?:it|them|that|those)\s+(?:yet|already)|(?:the|my)\s+(?:photos?|pics?|pictures?|images?|selfies?)|"
+    r"what\s+i\s+(?:just\s+)?sent)\b",
+    r"\bdid\s+(?:it|they|the\s+(?:photos?|pics?|pictures?|images?))\s+(?:go|come|get)\s+through\b",
+    # en：sending it now / over（代词宾语进行态；promise 词表要求 photo 名词）
+    r"\bsending\s+(?:it|them|that|those|one)\s+(?:now|right\s+now|over|your\s+way|to\s+you)\b",
+    # zh：已经/刚/刚刚/刚才 + (给你)发/传 + 你/过去/出去 (+了)
+    r"(?:已经|已經|刚刚|剛剛|刚才|剛才|刚|剛|这不|這不)\s*(?:就)?\s*(?:给|給)?\s*你?\s*"
+    r"(?:发|發|传|傳)\s*(?:给|給)?\s*(?:你|过去|過去|出去)\s*(?:了|啦)?",
+    # zh：发给你了 / 发你了 / 发过去了 / 传出去了 / 给你发(过去)了
+    r"(?:发|發|传|傳)\s*(?:给|給)\s*你\s*(?:了|啦)|(?:发|發|传|傳)\s*你\s*(?:了|啦)",
+    r"(?:发|發|传|傳)\s*(?:过去|過去|出去)\s*(?:了|啦)",
+    r"(?:给|給)\s*你\s*(?:发|發|传|傳)\s*(?:过去|過去)?\s*(?:了|啦)",
+    # zh：我再发一次/一遍、重发一下、再发给你（补发承诺预设「发过」）
+    r"(?:再|重新|重)\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|一回|给你|給你|过去|過去|你)",
+    # zh：你收到了吗 / 收到没（出站问对方是否收到＝自称已发）
+    r"(?:你)?\s*(?:收到|收得到)\s*(?:了)?\s*(?:吗|嗎|没|沒|没有|沒有|未|不)",
+)]
+
+_SENT_CLAIM_VOICE = [re.compile(p, re.IGNORECASE) for p in (
+    r"\bi(?:'ve|’ve|\s+have)?\s+(?:just\s+|already\s+)?sent\s+(?:you\s+|u\s+)?(?:a|the|my|another)\s+"
+    r"(?:voice\s*(?:note|message|memo|msg)|audio(?:\s+message)?|vn|recording)\b",
+    r"\b(?:you|u)\s+should\s+(?:have|hear|see)\s+(?:the|my)\s+"
+    r"(?:voice\s*(?:note|message|memo)|audio|recording)\b",
+    r"(?:语音|語音)\s*(?:已经|已經|刚|剛|刚刚|剛剛)?\s*(?:发|發|传|傳)\s*(?:给|給)?\s*"
+    r"(?:你|过去|過去|出去)\s*(?:了|啦)?",
+    r"(?:已经|已經|刚刚|剛剛|刚才|剛才|刚|剛)\s*(?:给|給)?\s*你?\s*(?:发|發|录|錄)\s*了?\s*"
+    r"(?:一?[条條段个個])?\s*(?:语音|語音)",
+    r"(?:再|重新|重)\s*(?:发|發)\s*(?:一?[条條段个個]|一次|一遍)?\s*(?:语音|語音)",
+)]
+
+_SENT_CLAIM_EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
+    # 否定：没发/还没发/发不出去/不是我发的
+    r"没\s*(?:有)?\s*(?:发|發|传|傳)|沒\s*(?:有)?\s*(?:发|發|传|傳)|"
+    r"还没\s*(?:发|發)|還沒\s*(?:发|發)|不是\s*我\s*(?:发|發)|"
+    r"(?:发|發|传|傳)\s*不\s*(?:出|了|上)|(?:发|發)\s*失败|(?:发|發)\s*失敗",
+    r"\b(?:didn(?:'|’)?t|did\s+not|never|haven(?:'|’)?t|have\s+not|hasn(?:'|’)?t|"
+    r"couldn(?:'|’)?t|could\s+not|can(?:'|’)?t|cannot|won(?:'|’)?t|forgot\s+to|"
+    r"failed\s+to|wasn(?:'|’)?t\s+able\s+to|not\s+able\s+to)\s+(?:\w+\s+)?(?:send|sent|re-?send)\b",
+    # 方向相反：问/让对方发；「你/他刚发」是别人发的
+    r"\b(?:can|could|would|will|did|do|have|are|pls|please)\s+(?:you|u|ya)\s+(?:please\s+)?"
+    r"(?:re-?send|send|forward|share|resent)\b",
+    r"\b(?:you|u|he|she|they|we)\s+(?:just\s+|already\s+)?(?:sent|resent)\b",
+    r"你\s*(?:再)?\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|过来|過來|给我|給我|了\s*(?:吗|嗎|没|沒))|"
+    r"(?:你|他|她|他们|他們|你们|你們)\s*(?:刚|剛|已经|已經)?\s*(?:发|發|传|傳)\s*(?:给|給)?\s*我",
+    # 第三方去向（发给别人不是发给对方）
+    r"\bsent\s+(?:it|them|that|those|one|the\s+\w+|a\s+\w+)\s+to\s+(?!(?:you|u|ya)\b)",
+    r"(?:发|發|传|傳)\s*(?:给|給)\s*(?!你)(?:我|他|她|它|老板|老闆|朋友|同事|家人|妈|媽|爸|群)",
+    # 非媒体宾语（那类谎不归发图链管，拉进来会误发自拍）
+    r"\b(?:money|payment|cash|deposit|transfer|wire|invoice|bill|receipt|link|url|address|"
+    r"(?:phone\s+)?number|email|e-mail|mail|gift|present|package|parcel|order|file|document|"
+    r"doc|code|otp|password|request|invite|invitation|location|pin|contact|message|text|msg|"
+    r"dm|letter|resume|cv|form|application|details|info|information|schedule|itinerary|"
+    r"tickets?|flowers)\b",
+    r"红包|紅包|转账|轉賬|转帐|轉帳|付款|汇款|匯款|钱|錢|链接|鏈接|连结|連結|网址|網址|地址|"
+    r"定位|位置|号码|號碼|手机号|手機號|邮件|郵件|邮箱|郵箱|消息|信息|讯息|訊息|短信|简讯|"
+    r"簡訊|留言|文件|文档|文檔|资料|資料|名片|验证码|驗證碼|礼物|禮物|快递|快遞|包裹|订单|"
+    r"訂單|合同|合約|发票|發票|简历|簡歷|表格|申请|申請|邀请|邀請|朋友圈|动态|動態|微博|"
+    r"工资|工資|奖金|獎金",
+    # 远过去（近窗账本判不了，真伪无法即时证实）
+    r"\byesterday\b|\blast\s+(?:week|night|month|year|time)\b|\b(?:days?|weeks?|months?)\s+ago\b|"
+    r"\bthe\s+other\s+day\b|\bearlier\s+(?:this\s+week|today)\b|\bthis\s+morning\b",
+    r"昨天|昨晚|前天|上周|上週|上个月|上個月|上次|之前|前几天|前幾天|今早|上午",
+)]
+
+
+def _sentence_sent_claim_kind(sent: str) -> str:
+    """单句是否「声称已发/要补发」媒体（不吃 media_context）。返回 'image'/'voice'/''。"""
+    s = str(sent or "").strip()
+    if not s:
+        return ""
+    for ex in _SENT_CLAIM_EXCLUDES:
+        if ex.search(s):
+            return ""
+    for rx in _SENT_CLAIM_VOICE:
+        if rx.search(s):
+            return KIND_VOICE
+    for rx in _SENT_CLAIM_IMG:
+        if rx.search(s):
+            return KIND_IMAGE
+    return ""
+
+
+def detect_sent_claim(text: str) -> str:
+    """出站文本是否含「已经发了 / 你该收到了 / 我再发一次 / 收到了吗」式**过去时
+    假声明**（#171）。返回 'image'/'voice'/''（image 优先——有兑现路径）。
+
+    与 :func:`detect_media_claim` 的分工：那个抓「这不就来了嘛/你看看这张」类
+    完成态但必须由客户索图语境开门；本函数抓的形态本身就是强断言，**不吃语境**，
+    真伪由调用方对照近窗媒体真发账本判定（真发过＝真话，绝不剥）。
+    """
+    found = ""
+    for sent in _sentences(text):
+        k = _sentence_sent_claim_kind(sent)
+        if k == KIND_IMAGE:
+            return KIND_IMAGE
+        if k and not found:
+            found = k
+    return found
+
+
+def strip_sent_claims(text: str) -> str:
+    """句级剥离「已发假声明」句（与 strip_media_claims 对称；剥空返回空串由调用方兜底）。
+
+    只在「命中 sent-claim 且近窗无媒体真发」时调用；正常文本原样返回。
+    """
+    raw = str(text or "")
+    if not raw.strip():
+        return raw
+    parts = _SENT_SPLIT_RE.split(raw)
+    out: List[str] = []
+    i = 0
+    while i < len(parts):
+        seg = parts[i]
+        delim = parts[i + 1] if i + 1 < len(parts) else ""
+        if seg.strip() and _sentence_sent_claim_kind(seg):
+            i += 2
+            continue
+        out.append(seg)
+        if delim:
+            out.append(delim)
+        i += 2
+    res = "".join(out).strip()
+    if res and not re.search(r"[\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", res):
+        return ""
+    return res
+
+
+def build_promise_rewrite_instruction(
+    text: str, kind: str = KIND_IMAGE, *, sent_claim: bool = False,
+) -> str:
+    """LLM 撤回重写指令（首选路径；任意语言可靠）。只输出改写后的消息正文。
+
+    ``sent_claim=True``（#171）＝原文是「已经发了/你该收到了/我再发一次」式假声明：
+    改写方向不是「岔开话题卖关子」而是**如实说这边这会儿发不出去、稍后补**——
+    客户刚说「我没收到」，再卖关子等于二次欺骗。
+    """
     t = str(text or "").strip()[:400]
+    if sent_claim and kind in (KIND_IMAGE, KIND_VOICE):
+        what = "语音" if kind == KIND_VOICE else "照片"
+        return (
+            f"下面这条聊天消息声称{what}已经发出去了/让对方查收/说要再发一次，"
+            f"但实际上这一轮并没有发出任何{what}。\n"
+            f"请改写这条消息：删掉所有「刚发了/已经发了/你应该收到了/我再发一次/"
+            f"收到了吗」这类关于{what}的已发断言和补发承诺，改成如实、轻描淡写地说"
+            f"这边{what}这会儿传不出去、稍后再补（不要编造别的借口、不要道歉连篇、"
+            "不要解释系统原因、不要说自己是 AI）；其余内容、语言、语气、长度尽量"
+            "保持原样，用与原消息相同的语言输出。\n"
+            "只输出改写后的消息正文，不要引号。\n"
+            f"原消息：「{t}」"
+        )
     if kind == KIND_VIDEOCALL:
         # 视频通话没有兑现路径：承诺=谎言。改写方向是"婉拒但不冷场"。
         return (
@@ -549,6 +743,26 @@ _DEFLECTIONS = {
     },
 }
 
+# 「已发假声明」被整句剥空时的兜底（#171）：客户刚说「没收到」，再卖关子＝二次
+# 欺骗——这里如实说「这边没发出去、这会儿传不了、稍后补」（远期口径，不做即时
+# 新承诺；文案已过 detect_media_promise / detect_sent_claim 双检不回环）。
+_SENT_CLAIM_DEFLECTIONS = {
+    KIND_IMAGE: {
+        "zh": "呃，照片好像没发出去…我这边这会儿传不了，晚点补给你哈",
+        "ja": "あれ、写真うまく送れてなかったみたい…今ちょっと送れないから、あとで送るね",
+        "ko": "어라, 사진이 제대로 안 갔나 봐… 지금은 잘 안 보내져서 조금 뒤에 다시 보내줄게",
+        "en": "ugh, looks like the photo didn't actually go through on my end… "
+              "it won't send right now, I'll make it up to you a bit later",
+    },
+    KIND_VOICE: {
+        "zh": "呃，语音好像没发出去…这会儿录不了，先打字聊哈",
+        "ja": "あれ、ボイスが送れてなかったみたい…今は録れないから、まずメッセージで話そ",
+        "ko": "어라, 음성이 안 갔나 봐… 지금은 녹음이 안 돼서 일단 문자로 얘기하자",
+        "en": "ugh, looks like the voice note didn't go through… "
+              "I can't record right now, let's just text for a bit",
+    },
+}
+
 
 def _script_lang(sample: str) -> str:
     """按文字系统粗分语言（假名→ja、谚文→ko、汉字→zh、其余→en）。
@@ -563,8 +777,15 @@ def _script_lang(sample: str) -> str:
     return "en"
 
 
-def deflection_line(sample_text: str, kind: str = KIND_IMAGE) -> str:
-    """整句被剥空后的语言对齐兜底：轻巧岔开话题、不否认能力、不做新承诺。"""
+def deflection_line(
+    sample_text: str, kind: str = KIND_IMAGE, *, sent_claim: bool = False,
+) -> str:
+    """整句被剥空后的语言对齐兜底：轻巧岔开话题、不否认能力、不做新承诺。
+
+    ``sent_claim=True``（#171）→ 改用「这边没发出去、稍后补」的如实口径。"""
+    if sent_claim and kind in _SENT_CLAIM_DEFLECTIONS:
+        table = _SENT_CLAIM_DEFLECTIONS[kind]
+        return table.get(_script_lang(sample_text), table.get("en", ""))
     table = _DEFLECTIONS.get(kind if kind in _DEFLECTIONS else KIND_IMAGE, {})
     return table.get(_script_lang(sample_text), table.get("en", ""))
 
@@ -805,6 +1026,7 @@ __all__ = [
     "KIND_IMAGE", "KIND_VIDEOCALL", "KIND_VOICE",
     "detect_media_promise", "strip_media_promises",
     "detect_media_claim", "strip_media_claims", "wants_media",
+    "detect_sent_claim", "strip_sent_claims",
     "build_promise_rewrite_instruction", "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",
     "detect_show_offer_subject", "wanted_media_subject",

@@ -10187,8 +10187,10 @@ class SkillManager(LoggerMixin):
                 deflection_line,
                 detect_media_claim,
                 detect_media_promise,
+                detect_sent_claim,
                 strip_media_claims,
                 strip_media_promises,
+                strip_sent_claims,
                 wants_media,
             )
             # media_context：客户在**索要**媒体 → 才把「这不就来了嘛/你看看这张」
@@ -10220,6 +10222,27 @@ class SkillManager(LoggerMixin):
                 _mctx = False
             kind = detect_media_promise(reply) or detect_media_claim(
                 reply, media_context=_mctx)
+            # #171 过去时假声明（「I just sent it, you should have it now」
+            # 「我再发一次」）：不吃 media_context（实录里门全程没开），真伪对照
+            # 本会话 _media_sent_log 近窗——近 window_min 内真发过＝真话放行。
+            _sent_claim = False
+            if not kind:
+                try:
+                    _scg = pg_cfg.get("sent_claim", {}) or {}
+                    if not isinstance(_scg, dict):
+                        _scg = {}
+                    if _scg.get("enabled", True):
+                        from src.ai.media_pending import (
+                            media_sent_within as _msw,
+                        )
+                        _sck = detect_sent_claim(reply)
+                        if _sck and not _msw(
+                                user_context,
+                                float(_scg.get("window_min", 30) or 30) * 60.0):
+                            kind = _sck
+                            _sent_claim = True
+                except Exception:
+                    _sent_claim = False
             if not kind:
                 # 无承诺/断言，但可能是 offer（「要不要看照片」）→ 记悬置：
                 # 客户下轮短肯定后若图迟迟不到，后续谎言仍有门可拦（实施69）。
@@ -10230,8 +10253,13 @@ class SkillManager(LoggerMixin):
                     pass
                 return reply
             try:
-                from src.inbox.image_autosend import record_promise_event
-                record_promise_event("detected")
+                from src.inbox.image_autosend import (
+                    record_promise_event, record_sent_claim_event,
+                )
+                if _sent_claim:
+                    record_sent_claim_event("detected")
+                else:
+                    record_promise_event("detected")
             except Exception:
                 pass
             # ── 1) 异步兑现（仅发图承诺；photo_directive 刚失败则跳过防复烧）──
@@ -10251,13 +10279,16 @@ class SkillManager(LoggerMixin):
                     user_id_str, user_context, chat_id, log_prefix,
                     promised_scene=_pscene)
                 try:
-                    from src.inbox.image_autosend import record_promise_event
-                    record_promise_event("fulfill_scheduled")
+                    from src.inbox.image_autosend import (
+                        record_promise_event, record_sent_claim_event,
+                    )
+                    (record_sent_claim_event if _sent_claim
+                     else record_promise_event)("fulfill_scheduled")
                 except Exception:
                     pass
                 self.logger.info(
-                    "%s[promise_guard] 发图承诺→异步兑现已排队（保留原文）",
-                    log_prefix)
+                    "%s[promise_guard] 发图%s→异步兑现已排队（保留原文）",
+                    log_prefix, "「已发」假声明" if _sent_claim else "承诺")
                 # 承诺出站=客户进入等待态（实施69）：兑现成功由媒体日志熄灭，
                 # 失败则悬置压住后续轮的「来了嘛/发过了」。
                 try:
@@ -10270,16 +10301,23 @@ class SkillManager(LoggerMixin):
             # 先剥「将发」承诺句，再剥「已发」断言句（claim；本轮无媒体=谎）。
             stripped = strip_media_promises(reply)
             stripped = strip_media_claims(stripped, media_context=_mctx)
+            if _sent_claim:
+                stripped = strip_sent_claims(stripped)
             # 二次校验：剥完仍残留承诺/断言（跨句拼接漏网）→ 整条兜底话术。
             if stripped.strip() and (
                     detect_media_promise(stripped)
-                    or detect_media_claim(stripped, media_context=_mctx)):
+                    or detect_media_claim(stripped, media_context=_mctx)
+                    or (_sent_claim and detect_sent_claim(stripped))):
                 stripped = ""
             if not stripped.strip():
-                stripped = deflection_line(reply, kind)
+                # 假声明剥空 → 如实「这边没发出去、稍后补」，不卖关子（客户刚说没收到）
+                stripped = deflection_line(reply, kind, sent_claim=_sent_claim)
             try:
-                from src.inbox.image_autosend import record_promise_event
-                record_promise_event("retracted")
+                from src.inbox.image_autosend import (
+                    record_promise_event, record_sent_claim_event,
+                )
+                (record_sent_claim_event if _sent_claim
+                 else record_promise_event)("retracted")
             except Exception:
                 pass
             # 连续空头承诺计数（P1 熔断）：发图承诺/断言被撤回=又一次「说了没发」→
@@ -10294,8 +10332,9 @@ class SkillManager(LoggerMixin):
             self.logger.info(
                 "%s[promise_guard] 出站%s%s已撤回（本轮无媒体真发，streak=%s）",
                 log_prefix, "发图" if kind == "image" else "发语音",
-                "断言" if detect_media_claim(reply, media_context=_mctx)
-                and not detect_media_promise(reply) else "承诺",
+                "「已发」假声明" if _sent_claim
+                else ("断言" if detect_media_claim(reply, media_context=_mctx)
+                      and not detect_media_promise(reply) else "承诺"),
                 user_context.get("_photo_promise_streak", 0))
             # 撤回后的文本按理已无承诺；若剥残（跨句拼接）仍有 → 照记悬置兜底。
             try:

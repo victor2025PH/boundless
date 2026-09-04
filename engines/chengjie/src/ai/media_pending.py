@@ -62,6 +62,30 @@ def _last_media_sent_ts(user_context: Dict[str, Any]) -> float:
     return best
 
 
+def last_media_sent_ts(user_context: Dict[str, Any]) -> float:
+    """公开口径：该会话（A 线 user_context）最近一次媒体真发的时间戳；无则 0。"""
+    return _last_media_sent_ts(user_context or {})
+
+
+def media_sent_within(
+    user_context: Dict[str, Any], window_sec: float, *, now: Any = None,
+) -> bool:
+    """近 ``window_sec`` 秒内该会话是否真发过媒体（#171「已发假声明」的真伪判据）。
+
+    A 线所有发图路径都写 ``_media_sent_log``，这里只读它：窄窗内真发过＝
+    「我刚发了/你该收到了」是真话（绝不剥）；没发＝谎（走兑现→撤回）。
+    异常/无日志一律 False（宁可多拦一次「刚发了」，也不放过一句空头断言——
+    调用方紧跟着会先尝试真发一张，拦错的代价只是多送一张图）。
+    """
+    try:
+        ts = _last_media_sent_ts(user_context or {})
+        if ts <= 0:
+            return False
+        return (_now(now) - ts) <= max(0.0, float(window_sec))
+    except Exception:
+        return False
+
+
 def _state(user_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     st = user_context.get(STATE_KEY)
     return st if isinstance(st, dict) and st.get("kind") else None
@@ -252,5 +276,5 @@ def pending_urges(user_context: Dict[str, Any], *, now: Any = None) -> int:
 __all__ = [
     "STATE_KEY", "PENDING_TTL_SEC", "is_media_urging",
     "note_peer_turn", "note_ai_turn", "pending_kind", "pending_subject",
-    "pending_urges",
+    "pending_urges", "last_media_sent_ts", "media_sent_within",
 ]

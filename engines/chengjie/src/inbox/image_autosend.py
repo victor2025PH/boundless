@@ -199,6 +199,16 @@ def record_promise_event(name: str) -> None:
         pass
 
 
+def record_sent_claim_event(name: str) -> None:
+    """「已发假声明」守卫事件计数（#171：detected/fulfilled/retracted；与 promise_*
+    同族、同一快照出口）。快照键 ``sent_claim_<name>``——「AI 说『刚发了』而近窗
+    没真发」被抓了多少、其中多少补成真图、多少改成诚实文本。"""
+    key = "sent_claim_" + str(name or "").strip()
+    with _METRICS_LOCK:
+        _METRICS[key] = int(_METRICS.get(key, 0) or 0) + 1
+        _METRICS["last_ts"] = time.time()
+
+
 def metrics_snapshot() -> Dict[str, Any]:
     with _METRICS_LOCK:
         snap = dict(_METRICS)
@@ -1495,5 +1505,6 @@ __all__ = [
     "run_autosend_kline",
     "last_media_sent", "note_media_sent",
     "record_image_sent", "record_image_fallback", "metrics_snapshot",
+    "record_promise_event", "record_sent_claim_event",
     "image_gen_inflight",
 ]

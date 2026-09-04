@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any  # noqa: F401
+from typing import Any, Optional  # noqa: F401
 
 
 async def autosend_voice(assistant, platform, account_id, chat_key, text,
@@ -758,35 +758,82 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
 
 async def _depromise_autosend_text(
     assistant, text: str, kind: str, *, media_context: bool = False,
+    sent_claim: bool = False,
 ) -> str:
     """撤回未兑现的媒体承诺/断言（出站前最后修正）：LLM 重写（任意语言可靠）→
     正则句级剥离 → 语言对齐兜底话术。绝不返回空串（空文本没法投递）。
 
     只在「文本承诺/声称发了照片语音、且真发失败或未启用」时才被调用——正常文本
     永远不经过这里（零副作用）。``media_context``＝客户本轮在索要媒体，据此一并
-    剥「已发」断言句（claim；2026-07-29 对练实证：撤回后残留「这不就来了嘛」）。"""
+    剥「已发」断言句（claim；2026-07-29 对练实证：撤回后残留「这不就来了嘛」）。
+    ``sent_claim``（#171）＝命中「我刚发了/你该收到了/我再发一次」式过去时假声明
+    且近窗无媒体真发：重写指令与兜底话术改用「这边没发出去、稍后补」的如实口径，
+    正则回落一并剥 sent-claim 句。"""
     from src.ai.outbound_promise_guard import (
         build_promise_rewrite_instruction, deflection_line,
-        detect_media_claim, detect_media_promise,
-        strip_media_claims, strip_media_promises,
+        detect_media_claim, detect_media_promise, detect_sent_claim,
+        strip_media_claims, strip_media_promises, strip_sent_claims,
     )
     _ai = getattr(assistant, "ai_client", None)
     if _ai is not None:
         try:
             out = str(await _ai.chat(
-                build_promise_rewrite_instruction(text, kind)) or "")
+                build_promise_rewrite_instruction(
+                    text, kind, sent_claim=sent_claim)) or "")
             out = out.strip().strip('"“”「」').strip()
             # 重写合格判定：非空、长度不失控、且确实不再含承诺**或断言**（防阳奉阴违）
             if (out and len(out) <= max(200, len(str(text or "")) * 3)
                     and not detect_media_promise(out)
-                    and not detect_media_claim(out, media_context=media_context)):
+                    and not detect_media_claim(out, media_context=media_context)
+                    and not (sent_claim and detect_sent_claim(out))):
                 return out
         except Exception:
             assistant.logger.debug(
                 "[promise_guard] LLM 撤回重写失败，回落正则剥离", exc_info=True)
     stripped = strip_media_promises(text)
     stripped = strip_media_claims(stripped, media_context=media_context)
-    return stripped if stripped.strip() else deflection_line(text, kind)
+    if sent_claim:
+        stripped = strip_sent_claims(stripped)
+    return stripped if stripped.strip() else deflection_line(
+        text, kind, sent_claim=sent_claim)
+
+
+def _media_sent_recently(
+    assistant, platform: str, account_id: str, chat_key: str, *,
+    kind: str = "image", window_sec: float = 1800.0, now: Optional[float] = None,
+) -> bool:
+    """B 线「近窗内该会话是否真发过媒体」（#171 已发假声明的真伪判据）。
+
+    读 inbox 出站消息镜像（``list_recent_messages`` 的 ``direction=out`` +
+    ``media_type``）——所有编排器 send_media 路径都镜像到这里，相册/生成/坐席
+    手发一律可见，比只查 ``persona_media_sends`` 账本（仅注册相册）覆盖全。
+    ``kind``＝image 看 image/photo/video，voice 看 voice/audio。取数异常 → False
+    （宁可多拦一次「刚发了」——紧跟着会先尝试真发一张，拦错代价只是多送一张图）。
+    """
+    try:
+        from src.inbox.normalizer import conv_id as _cidf
+        _st = getattr(assistant, "inbox_store", None)
+        if _st is None:
+            return False
+        _now = float(now if now is not None else time.time())
+        _types = (("voice", "audio") if kind == "voice"
+                  else ("image", "photo", "video"))
+        _rc = _st.list_recent_messages(
+            _cidf(platform, account_id, chat_key), limit=24) or []
+        for _m in _rc:
+            if str(_m.get("direction") or "in") != "out":
+                continue
+            if str(_m.get("media_type") or "") not in _types:
+                continue
+            try:
+                _mts = float(_m.get("ts") or 0)
+            except (TypeError, ValueError):
+                continue
+            if _mts > 0 and (_now - _mts) <= max(0.0, float(window_sec)):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 async def autosend_bazi_kline(assistant, platform, account_id, chat_key, text) -> bool:
@@ -1390,6 +1437,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             # （重写/剥离），文本、语音（念的就是这段文本）都不再对客户撒谎。
             _promised = ""
             _mctx = False
+            _sent_claim = False
             _pg = {}
             try:
                 _pg = (((_assistant_ref.config.config or {}).get(
@@ -1453,13 +1501,45 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                                           media_context=_mctx)
                                      or _dmc(str(text or ""),
                                              media_context=_mctx))
+                    # #171 过去时假声明（「I just sent it, you should have it
+                    # now」「let me try sending it again」）：不吃 media_context
+                    # （实录里门全程没开），真伪对照近窗媒体真发镜像——近
+                    # window_min 内真发过＝真话放行；没发＝谎 → 同走兑现优先
+                    # →撤回兜底，只是撤回口径改「这边没发出去、稍后补」。
+                    if not _promised:
+                        _scg = _pg.get("sent_claim", {}) or {}
+                        if not isinstance(_scg, dict):
+                            _scg = {}
+                        if _scg.get("enabled", True):
+                            from src.ai.outbound_promise_guard import (
+                                detect_sent_claim as _dsc,
+                            )
+                            _sck = (_dsc(str(original_text or ""))
+                                    or _dsc(str(text or "")))
+                            if _sck and not _media_sent_recently(
+                                    _assistant_ref, platform, account_id,
+                                    chat_key, kind=_sck,
+                                    window_sec=float(
+                                        _scg.get("window_min", 30) or 30) * 60.0):
+                                _promised = _sck
+                                _sent_claim = True
+                                from src.inbox.image_autosend import (
+                                    record_sent_claim_event as _rsce0,
+                                )
+                                _rsce0("detected")
+                                _assistant_ref.logger.info(
+                                    "[promise_guard] 出站含「已发」假声明（%s）"
+                                    "且近窗无媒体真发 → 走兑现/撤回 platform=%s "
+                                    "acct=%s", _sck, platform, account_id)
             except Exception:
                 _promised = ""
             if _promised == "image":
                 from src.inbox.image_autosend import (
                     record_promise_event as _rpe,
+                    record_sent_claim_event as _rsce,
                 )
-                _rpe("detected")
+                if not _sent_claim:
+                    _rpe("detected")
                 if _pg.get("fulfill", True):
                     # P0 一致性：承诺句点名了场景（「拍张海边的发你」）→ 兑现
                     # 必须贴场景（相册场景类硬匹配/生成带场景），随机人像不算兑现。
@@ -1478,23 +1558,27 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                             chat_key, text, assume_intent="selfie",
                             assume_scene=_pscene,
                         ):
-                            _rpe("fulfilled")
+                            (_rsce if _sent_claim else _rpe)("fulfilled")
                             _assistant_ref.logger.info(
-                                "[promise_guard] 文本承诺发图 → 已兑现为真实"
+                                "[promise_guard] 文本%s发图 → 已兑现为真实"
                                 "图片投递 platform=%s acct=%s",
+                                "「已发」假声明" if _sent_claim else "承诺",
                                 platform, account_id)
                             return {"ok": True, "delivered_as": "image"}
                     except Exception:
                         _assistant_ref.logger.debug(
                             "[promise_guard] 兑现发图失败", exc_info=True)
                 text = await _depromise_autosend_text(
-                    _assistant_ref, text, "image", media_context=_mctx)
+                    _assistant_ref, text, "image", media_context=_mctx,
+                    sent_claim=_sent_claim)
                 # 原文含未兑现承诺：语音/视频分支改念撤回后的文本（防克隆声念出谎话）
                 original_text = None
-                _rpe("retracted")
+                (_rsce if _sent_claim else _rpe)("retracted")
                 _assistant_ref.logger.info(
-                    "[promise_guard] 发图承诺无法兑现 → 已撤回改写文本 "
-                    "platform=%s acct=%s", platform, account_id)
+                    "[promise_guard] 发图%s无法兑现 → 已撤回改写文本 "
+                    "platform=%s acct=%s",
+                    "「已发」假声明" if _sent_claim else "承诺",
+                    platform, account_id)
             elif _promised == "video_call":
                 # A2（2026-07-22）：视频通话承诺没有兑现路径（无此能力），
                 # 直接撤回改写（真机实录 AI 曾声称「WhatsApp 视频都开到㗎」，
@@ -1590,6 +1674,14 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                     platform, account_id, chat_key, _voice_text,
                     sent_text=text,
                 ):
+                    if _sent_claim and _promised == "voice":
+                        try:
+                            from src.inbox.image_autosend import (
+                                record_sent_claim_event as _rsce_v,
+                            )
+                            _rsce_v("fulfilled")
+                        except Exception:
+                            pass
                     return {"ok": True, "delivered_as": "voice"}
             except Exception:
                 _assistant_ref.logger.debug(
@@ -1599,14 +1691,19 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             if _promised == "voice":
                 from src.inbox.image_autosend import (
                     record_promise_event as _rpe2,
+                    record_sent_claim_event as _rsce2,
                 )
-                _rpe2("detected")
+                if not _sent_claim:
+                    _rpe2("detected")
                 text = await _depromise_autosend_text(
-                    _assistant_ref, text, "voice", media_context=_mctx)
-                _rpe2("retracted")
+                    _assistant_ref, text, "voice", media_context=_mctx,
+                    sent_claim=_sent_claim)
+                (_rsce2 if _sent_claim else _rpe2)("retracted")
                 _assistant_ref.logger.info(
-                    "[promise_guard] 发语音承诺未兑现 → 已撤回改写文本 "
-                    "platform=%s acct=%s", platform, account_id)
+                    "[promise_guard] 发语音%s未兑现 → 已撤回改写文本 "
+                    "platform=%s acct=%s",
+                    "「已发」假声明" if _sent_claim else "承诺",
+                    platform, account_id)
             # 时空接轨（B 线）：当地墙钟 vs 时段问候/错城现居
             try:
                 _cfg_w = _assistant_ref.config.config or {}
