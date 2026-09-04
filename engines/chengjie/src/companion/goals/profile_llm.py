@@ -4,12 +4,15 @@
 代运营民宿的」这类自由表达全漏。本轨用一次小 LLM 调用做**摘录式**抽取，
 三层护栏防「LLM 编画像」（错画像比空画像更毒，会被 ledger 当推进信号）：
 
-1. **摘录接地**（ground_extracted）：抽出值必须是消息原文片段（规范化子串 /
-   数字组全命中 / CJK bigram 重叠 ≥0.7），编造/推断/翻译一律丢弃——与
-   memory_grounding「宁可漏记不可错记」同哲学。
-2. **只填空槽**：upsert 走 source="llm" + overwrite=False，坐席手录永远优先；
+1. **摘录接地**（ground_extracted）：必须过 ``src.ai.memory_grounding``
+   （``fact_grounded_in_user_msg``）——抽出值与客户原话要有内容级词汇重叠
+   （CJK bigram / 拉丁词 / 数字）。只在助手回复里出现、用户从没说过的内容
+   一律丢弃（2026-07-13 大阪/不用上班事故）。本模块**只读复用**该护栏，不改它。
+2. **低把握标待确认**：过接地的 LLM 值入库 ``src=llm_pending``，不丢弃也不
+   冒充已核实；坐席手录（agent）仍覆盖一切。
+3. **只填空槽**：upsert ``overwrite=False``，坐席手录永远优先；
    只对当前缺的槽位发问（提示词按缺口生成）。
-3. **预算+冷却**：每会话冷却（默认 30min）+ 全局每日预算（默认 150 次），
+4. **预算+冷却**：每会话冷却（默认 30min）+ 全局每日预算（默认 150 次），
    调度即记账（LLM 挂了也不重复烧）。
 
 调度模型：fire-and-forget ``loop.create_task``——两条注入链（A 线 reply /
@@ -27,9 +30,14 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from src.ai.memory_grounding import fact_grounded_in_user_msg
 from src.companion.goals.profile_slots import fill_rates, get_slot, missing_slots
 
 logger = logging.getLogger("GoalProfileLLM")
+
+# 过接地但仍是 LLM 猜的——画像卡/注入行标「待确认」，不是丢弃。
+LLM_PENDING_SRC = "llm_pending"
+PENDING_LABEL = "待确认"
 
 DEFAULT_COOLDOWN_MIN = 30
 DEFAULT_DAILY_BUDGET = 150
@@ -194,42 +202,27 @@ def parse_extraction(raw: Optional[str]) -> Dict[str, str]:
     return out
 
 
-def _norm(s: str) -> str:
-    return re.sub(r"[\s，。,.!！?？、;；:：'\"“”‘’()（）]+", "", str(s or "")).casefold()
-
-
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-
-
-def _bigrams(s: str) -> set:
-    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else ({s} if s else set())
-
-
-def _grounded(text_norm: str, value: str) -> bool:
-    v = _norm(value)
-    if not v:
-        return False
-    if v in text_norm:
-        return True
-    digits = re.findall(r"\d+", v)
-    if digits and all(d in text_norm for d in digits):
-        return True
-    # CJK bigram 重叠：容忍「客服回不过来」vs 原文「客服都回不过来」级别的
-    # 摘录微差；阈值 0.7 仍会毙掉整段编造（编造内容 bigram 命中率接近 0）。
-    if len(v) >= 4 and _CJK_RE.search(v):
-        bg = _bigrams(v)
-        if bg:
-            hit = sum(1 for b in bg if b in text_norm)
-            return hit / len(bg) >= 0.7
-    return False
-
-
 def ground_extracted(text: str, extracted: Dict[str, str]) -> Dict[str, str]:
-    """摘录接地：只留「确实出自原文」的值（宁可漏采不错采）。"""
-    tn = _norm(text)
-    if not tn:
+    """摘录接地：只留锚定在**客户原话**上的值（宁可漏采不错采）。
+
+    单一事实源＝``memory_grounding.fact_grounded_in_user_msg``（事故金标）。
+    本地不再另算一套 bigram 阈值——两套会在边界上分叉，分叉就是漏网。
+    """
+    msg = str(text or "").strip()
+    if not msg:
         return {}
-    return {k: v for k, v in (extracted or {}).items() if _grounded(tn, v)}
+    out: Dict[str, str] = {}
+    for k, v in (extracted or {}).items():
+        val = str(v or "").strip()
+        if not val:
+            continue
+        try:
+            if fact_grounded_in_user_msg(val, msg):
+                out[str(k)] = val
+        except Exception:
+            # 判定器自身异常 → 不入库（画像比记忆更难清，宁可漏）
+            logger.debug("profile grounding failed", exc_info=True)
+    return out
 
 
 # ── 执行 / 调度 ──────────────────────────────────────────────────────────────
@@ -271,7 +264,7 @@ async def run_llm_capture(
             return 0
         store.upsert_customer_profile(
             str(platform or ""), str(chat_key or ""), grounded,
-            source="llm", now=now)
+            source=LLM_PENDING_SRC, now=now)
         try:
             from src.companion.goals.stats import get_goal_stats
             get_goal_stats().record_profile_captured_llm(len(grounded))
@@ -339,6 +332,8 @@ def schedule_llm_capture(
 
 
 __all__ = [
+    "LLM_PENDING_SRC",
+    "PENDING_LABEL",
     "build_extract_prompt",
     "ground_extracted",
     "in_discovery",

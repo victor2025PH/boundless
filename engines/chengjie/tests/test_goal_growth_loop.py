@@ -332,7 +332,7 @@ async def test_run_llm_capture_grounds_and_fills(mem_store):
     assert n == 2
     prof = mem_store.get_customer_profile("telegram", "100")
     assert prof["fields"]["need"]["v"] == "客服回不过来"
-    assert prof["fields"]["need"]["src"] == "llm"
+    assert prof["fields"]["need"]["src"] == "llm_pending"
     assert prof["fields"]["occupation"]["v"] == "民宿代运营"
     assert "budget" not in prof["fields"]          # 编造被接地毙掉
 
@@ -388,7 +388,7 @@ async def test_schedule_gates_disabled_cooldown_budget(mem_store):
     await asyncio.sleep(0.05)
     assert ai.calls == 2
     prof = mem_store.get_customer_profile("telegram", "1")
-    assert prof["fields"]["need"]["src"] == "llm"
+    assert prof["fields"]["need"]["src"] == "llm_pending"
 
 
 def test_looks_worth_extracting_skips_greetings():

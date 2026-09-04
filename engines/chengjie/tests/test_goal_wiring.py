@@ -683,3 +683,51 @@ async def test_profile_llm_include_narrows_prompt():
     assert "age" in p and "occupation" in p
     assert "team_size" not in p and "budget" not in p
     pl.reset_state()
+
+
+def test_profile_llm_uses_memory_grounding_not_homebrew():
+    """C3：接地必须走 memory_grounding，不许另算一套。"""
+    src = (_SRC_ROOT / "companion" / "goals" / "profile_llm.py").read_text(
+        encoding="utf-8", errors="ignore")
+    assert "from src.ai.memory_grounding import fact_grounded_in_user_msg" in src
+    assert "fact_grounded_in_user_msg(" in src
+
+
+def test_profile_llm_natural_city_job_pending():
+    """C3 验收：自然提到城市/职业（非标准句式）→ 入档且标待确认。"""
+    from src.companion.goals.profile_llm import (
+        LLM_PENDING_SRC,
+        PENDING_LABEL,
+        ground_extracted,
+    )
+    from src.companion.goals.profile_slots import facts_line
+    text = "我在厦门那边给人做装修，白天基本都在工地"
+    got = ground_extracted(text, {
+        "location": "厦门",
+        "occupation": "装修",
+    })
+    assert got["location"] == "厦门"
+    assert got["occupation"] == "装修"
+    line = facts_line({
+        "location": {"v": "厦门", "src": LLM_PENDING_SRC, "ts": 1},
+        "occupation": {"v": "装修", "src": LLM_PENDING_SRC, "ts": 1},
+    })
+    assert PENDING_LABEL in line
+    assert "厦门" in line and "装修" in line
+
+
+def test_profile_llm_rejects_memory_grounding_incident_corpus():
+    """C3 验收：AI 臆测一条不入档——复用 2026-07-13 事故金标。"""
+    from src.companion.goals.profile_llm import ground_extracted
+    # tests/test_memory_grounding.py::test_hallucinated_facts_rejected_real_incident
+    assert ground_extracted("好呀好呀", {
+        "location": "大阪",
+        "occupation": "不用上班",
+        "interests": "用户想去大阪玩",
+    }) == {}
+    assert ground_extracted("好呀好呀", {
+        "timeline": "用户明天不用上班",
+    }) == {}
+    assert ground_extracted("你在干嘛呢 干嘛呢", {
+        "need": "用户深夜还在线，可能明天休息",
+    }) == {}

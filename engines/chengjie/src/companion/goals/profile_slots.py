@@ -316,7 +316,7 @@ def slot_src(fields: Optional[Dict[str, Any]], key: str) -> str:
     cell = (fields or {}).get(str(key or ""))
     if isinstance(cell, dict) and str(cell.get("v") or "").strip():
         s = str(cell.get("src") or "").strip().lower()
-        return s if s in ("auto", "llm", "agent") else ""
+        return s if s in ("auto", "llm", "llm_pending", "agent") else ""
     return ""
 
 
@@ -371,7 +371,12 @@ def facts_line(
             cell, dict) else str(cell or "").strip()
         if not v:
             continue
+        src = ""
+        if isinstance(cell, dict):
+            src = str(cell.get("src") or "").strip().lower()
         piece = f"{s.get('label_zh') or key}:{v[:14]}"
+        if src in ("llm", "llm_pending"):
+            piece += "(待确认)"
         sep = 1 if parts else 0
         if used + sep + len(piece) > max(20, int(max_chars)):
             break
