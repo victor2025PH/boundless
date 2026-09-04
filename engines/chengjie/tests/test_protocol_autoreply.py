@@ -95,7 +95,10 @@ async def test_both_gates_on_sends_and_passes_persona():
 
 
 @pytest.mark.asyncio
-async def test_high_risk_reply_not_sent():
+async def test_high_risk_reply_not_sent(monkeypatch):
+    """enforce 档（旧行为）：AI 稿命中高风险 → 转人工不自动发。#160 v2 起默认 shadow
+    放行（见下面两条），这里显式切 enforce 兼作「旧规则仍在」反向验证。"""
+    monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
     sent = []
     res = await pa.run_autoreply(
         _payload(), registry=_FakeRegistry(_row()),
@@ -105,6 +108,91 @@ async def test_high_risk_reply_not_sent():
     )
     assert res["skipped"] == "high_risk"
     assert sent == []
+
+
+@pytest.fixture
+def _shadow_ledger(tmp_path, monkeypatch):
+    from src.inbox import autosend_shadow_log as sl
+    d = tmp_path / "shadow"
+    monkeypatch.setenv(sl.ENV_DIR, str(d))
+    monkeypatch.delenv("AITR_AUTOSEND_POLICY_MODE", raising=False)
+    sl.get_stats().reset()
+    sl._reset_pending_for_tests()
+    return d
+
+
+def _ledger_rows(d):
+    import json
+    out = []
+    if d.exists():
+        for p in sorted(d.glob("shadow_*.jsonl")):
+            out += [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return out
+
+
+@pytest.mark.asyncio
+async def test_high_risk_reply_released_in_shadow_with_ledger(_shadow_ledger):
+    """#160 v2 shadow（默认）：AI 稿高风险照发；台账一行 hold(stage=protocol) + 一行
+    outcome(sent)；不登记 reconcile 待终局（本链无草稿行）；res 带 shadow_released。"""
+    from src.inbox import autosend_shadow_log as sl
+    sent = []
+    res = await pa.run_autoreply(
+        _payload("我要退款"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("好的，请提供付款账号我帮你退款"), send=_make_send(sent),
+        risk_fn=lambda t: "high",
+    )
+    assert res["sent"] is True and res["risk"] == "high" and res["shadow_released"] is True
+    assert len(sent) == 1
+    rows = _ledger_rows(_shadow_ledger)
+    holds = [r for r in rows if r.get("kind") == "hold"]
+    outs = [r for r in rows if r.get("kind") == "outcome"]
+    assert len(holds) == 1 and len(outs) == 1
+    h, o = holds[0], outs[0]
+    assert h["stage"] == "protocol" and h["would_hold_level"] == "L4" and h["hold_reason"] == "reply_risk"
+    assert h["platform"] == "telegram" and h["account_id"] == "tg1" and h["conv_key"] == "123"
+    assert h["draft_id"].startswith("proto:telegram:tg1:123:")
+    assert h["reply_risk"] == "high" and h["peer_risk"] == "low"
+    assert any("付款" in x or "退款" in x for x in h["risk_hits"]), h["risk_hits"]
+    assert h["text_fp"] and h["peer_text_fp"] and h["lang"] == "zh"
+    assert o["draft_id"] == h["draft_id"] and o["outcome"] == "sent"
+    assert sl.pending_count() == 0                      # 不进 reconcile 队列
+    snap = sl.stats_snapshot()
+    assert snap["total"] == 1 and snap["by_stage"] == {"protocol": 1} and snap["outcomes"] == {"sent": 1}
+    # 不记原文
+    raw = "".join(p.read_text(encoding="utf-8") for p in _shadow_ledger.glob("*.jsonl"))
+    assert "好的，请提供付款账号我帮你退款" not in raw
+
+
+@pytest.mark.asyncio
+async def test_high_risk_shadow_send_failure_records_delivery_failed(_shadow_ledger):
+    async def _send_fail(**kw):
+        raise RuntimeError("send_gate_blocked:kill_switch")
+    res = await pa.run_autoreply(
+        _payload("退款"), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("请给我银行卡号"), send=_send_fail,
+        risk_fn=lambda t: "high",
+    )
+    assert res["skipped"] == "send_error" and res["shadow_released"] is True
+    outs = [r for r in _ledger_rows(_shadow_ledger) if r.get("kind") == "outcome"]
+    assert len(outs) == 1
+    assert outs[0]["outcome"] == "delivery_failed"
+    assert outs[0]["reason"].startswith("gate:send_gate_blocked")   # 类别与 send_health 同口径
+
+
+@pytest.mark.asyncio
+async def test_medium_risk_never_touches_ledger(_shadow_ledger):
+    """本链旧规则只对 high 动手，medium 一直放行 → 台账不记（口径与旧行为逐字一致）。"""
+    sent = []
+    res = await pa.run_autoreply(
+        _payload(), registry=_FakeRegistry(_row()),
+        cfg={"protocol_autoreply": {"enabled": True}},
+        generate=_make_gen("有优惠哦"), send=_make_send(sent),
+        risk_fn=lambda t: "medium",
+    )
+    assert res["sent"] is True and res["shadow_released"] is False
+    assert _ledger_rows(_shadow_ledger) == []
 
 
 @pytest.mark.asyncio

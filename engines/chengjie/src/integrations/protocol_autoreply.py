@@ -74,6 +74,76 @@ def _default_risk(text: str) -> str:
         return "low"
 
 
+def _risk_policy_decide(reply: str):
+    """AI 稿高风险 → 经 autosend_policy.decide 单一入口（#160 v2）。
+
+    本链是「无人值守直发」，等价于 auto_ai 会话；入站侧不在这里判（生成前已由
+    SkillManager 处理），所以 peer_risk 固定 low、只带 reply_risk=high。命中词用
+    ``keyword_risk_hits`` 补齐（注入的 risk_fn 只回档位）。
+    """
+    from src.inbox.autosend_policy import decide as _decide
+    hits: list = []
+    try:
+        from src.inbox.drafts import keyword_risk_hits
+        _lvl, hits = keyword_risk_hits(reply)
+    except Exception:
+        hits = []
+    return _decide(
+        peer_risk="low", peer_reasons=[], reply_risk="high", reply_reasons=["keyword"],
+        risk_hits=hits, automation_mode="auto_ai",
+    )
+
+
+def _shadow_hold(decision: Any, *, platform: str, account_id: str, chat_key: str,
+                 reply: str, inbound: str, ts: float) -> Optional[Dict[str, Any]]:
+    """影子档放行 → 台账 hold 行（stage=protocol，不登记 reconcile：本链无草稿行，
+    发送结果紧接着由 ``_shadow_outcome`` 当场落）。best-effort，绝不影响发送。"""
+    sh = getattr(decision, "shadow", None)
+    if sh is None:
+        return None
+    try:
+        from src.inbox import autosend_shadow_log as _sl
+        try:
+            from src.ai.chat_assistant_service import detect_language as _dl
+            lang = str(_dl(inbound) or "")
+        except Exception:
+            lang = ""
+        rec = _sl.build_record(
+            platform=platform, account_id=account_id, conv_key=chat_key,
+            draft_id=f"proto:{platform}:{account_id}:{chat_key}:{int(ts)}",
+            would_hold_level=sh.would_hold_level, hold_reason=sh.hold_reason,
+            peer_risk=sh.peer_risk, peer_reasons=sh.peer_reasons,
+            reply_risk=sh.reply_risk, reply_reasons=sh.reply_reasons,
+            risk_hits=sh.risk_hits, text=reply, stage="protocol",
+            automation_mode=decision.automation_mode, policy_mode=decision.policy_mode,
+            lang=lang, peer_text=inbound, ts=ts,
+        )
+        _sl.record(rec, track_outcome=False)
+        _sl.maybe_alert(rec)
+        return rec
+    except Exception:
+        logger.debug("[protocol-autoreply] 影子台账落行失败（忽略）", exc_info=True)
+        return None
+
+
+def _shadow_outcome(rec: Optional[Dict[str, Any]], outcome: str, reason: str) -> None:
+    """影子放行稿的去向：sent / delivery_failed（reason 类别与 B 线 send_health 同口径）。"""
+    if not rec:
+        return
+    try:
+        from src.inbox import autosend_shadow_log as _sl
+        r = str(reason or "")
+        if outcome == "delivery_failed":
+            try:
+                from src.inbox.send_health import classify_fail_reason
+                r = f"{classify_fail_reason(r)}:{r[:48]}"
+            except Exception:
+                pass
+        _sl.record_outcome(rec, outcome, r)
+    except Exception:
+        logger.debug("[protocol-autoreply] 影子去向落行失败（忽略）", exc_info=True)
+
+
 # 触发「转人工」的原因（自动回复未能安全送出 → 需要坐席接管）
 HANDOFF_REASONS = frozenset({
     "high_risk", "empty_reply", "generate_error", "send_error",
@@ -484,9 +554,28 @@ async def run_autoreply(
         risk = (risk_fn(reply) if risk_fn else "low") or "low"
     except Exception:
         risk = "low"
+    # #160 v2（2026-09-04 老板拍板，本链 2026-09-04 11:0x 收编）：AI 稿命中高风险词
+    # **不再直接转人工**——与草稿链同走 autosend_policy.decide 单一入口：shadow 档
+    # 照发 + 影子台账落一行（stage=protocol）+ 发送后当场写去向；enforce 档保留旧行为
+    # （high_risk → 转人工打标）。本链旧规则只对 high 动手（medium 一直放行），故这里
+    # 只对 high 走 policy，台账口径与旧行为逐字一致。
+    _shadow_rec: Optional[Dict[str, Any]] = None
     if risk == "high":
-        logger.warning("[protocol-autoreply] 命中高风险，转人工不自动发：%s", key)
-        return _result("high_risk", text=reply, inbound=text, risk=risk)
+        _decision = None
+        try:
+            _decision = _risk_policy_decide(reply)
+        except Exception:
+            logger.debug("[protocol-autoreply] policy decide 异常（按 enforce 旧行为）", exc_info=True)
+        if _decision is None or _decision.level != "L2":
+            logger.warning("[protocol-autoreply] 命中高风险，转人工不自动发：%s", key)
+            return _result("high_risk", text=reply, inbound=text, risk=risk)
+        _shadow_rec = _shadow_hold(
+            _decision, platform=platform, account_id=account_id, chat_key=chat_key,
+            reply=reply, inbound=text, ts=(ts if now is not None else time.time()))
+        logger.info(
+            "[protocol-autoreply] 高风险稿已放行（shadow）%s hold=%s hits=%s",
+            key, (_decision.shadow.hold_reason if _decision.shadow else "-"),
+            ("|".join((_decision.shadow.risk_hits or [])[:4]) if _decision.shadow else "-"))
 
     # 单段落收口（2026-08-09）：本链不具备分条能力，而 bubbles 开启时拟稿合同是
     # 「每行一句」——多行文本从本链整条发出＝「一条消息带结构化换行」（2026-08-08
@@ -591,15 +680,20 @@ async def run_autoreply(
     except Exception as _send_ex:
         logger.warning("[protocol-autoreply] 发送失败 %s", key, exc_info=True)
         _err = str(_send_ex)
+        # 影子放行的稿没发出去 → 去向当场落 delivery_failed（类别与 B 线同口径）
+        _shadow_outcome(_shadow_rec, "delivery_failed", _err)
         # 闸门拦截（send_gate_blocked:*）是配置性节流，不是基础设施故障——
         # 不喂熔断计数（否则限流会连带把断路器打开、雪上加霜）；
         # 错误串带回 res 供 hook 层发「限流拦截」告警（2026-07-22 可见性铁律）。
         if _err.startswith("send_gate_blocked"):
             return _result("send_error", text=reply, inbound=text, risk=risk,
-                           breaker_opened=False, error=_err)
+                           breaker_opened=False, error=_err,
+                           shadow_released=_shadow_rec is not None)
         opened = limiter.record_failure(account_key) if limiter is not None else False
         return _result("send_error", text=reply, inbound=text, risk=risk,
-                       breaker_opened=opened, error=_err)
+                       breaker_opened=opened, error=_err,
+                       shadow_released=_shadow_rec is not None)
+    _shadow_outcome(_shadow_rec, "sent", "protocol_autoreply")
     # 发送成功后用「发送时刻」刷新冷却基准 + 记账号配额/闭合熔断
     send_ts = ts if now is not None else time.time()
     _last_reply[key] = (dedup_text, send_ts)
@@ -611,7 +705,8 @@ async def run_autoreply(
     if limiter is not None:
         limiter.record_sent(account_key, send_ts)
         limiter.record_success(account_key)
-    return _result("ok", sent=True, text=reply, inbound=text, risk=risk)
+    return _result("ok", sent=True, text=reply, inbound=text, risk=risk,
+                   shadow_released=_shadow_rec is not None)
 
 
 # 自动回复未能安全送出时，给会话打的标签（在统一收件箱里高亮，供坐席接管）

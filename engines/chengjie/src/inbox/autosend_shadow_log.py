@@ -341,11 +341,15 @@ def _append_line(rec: Dict[str, Any]) -> bool:
         return False
 
 
-def record(rec: Dict[str, Any]) -> bool:
+def record(rec: Dict[str, Any], *, track_outcome: bool = True) -> bool:
     """落一行 hold 记录（JSONL）+ 计数 + 登记待终局。任何异常只记日志不抛——台账绝不阻塞发送。
 
     先回填再落行：磁盘回填必须发生在本进程**第一次** bump 之前，否则本进程刚写的行
     会被回填再数一遍（record / reconcile / stats_snapshot 三个入口都先 warm，幂等）。
+
+    ``track_outcome=False``：本行没有草稿行可供 reconcile 对照（如协议号直发链——发送
+    与判定同步发生，调用方随后自己 ``record_outcome``），不登记待终局，否则 60s 后会被
+    判成 missing 污染去向统计。
     """
     try:
         warm_from_disk()
@@ -353,7 +357,39 @@ def record(rec: Dict[str, Any]) -> bool:
         logger.debug("autosend_shadow warm_from_disk 失败（忽略）", exc_info=True)
     ok = _append_line(rec)
     _STATS.bump(rec)
-    _pending_put(rec)
+    if track_outcome:
+        _pending_put(rec)
+    return ok
+
+
+def record_outcome(hold_rec: Dict[str, Any], outcome: str, reason: str = "",
+                   *, now: Optional[float] = None) -> bool:
+    """同步链路直接写 outcome 行（不经 reconcile）：由 hold 行推导关联键。
+
+    协议号自动回复等「判定→立即发送」的链没有草稿行，发送结果当场就知道；
+    与 reconcile 写出的行同一契约（OUTCOME_FIELDS），CLI/卡片无差别消费。
+    """
+    now_f = float(now if now is not None else time.time())
+    hold_ts = float(hold_rec.get("ts") or now_f)
+    did = str(hold_rec.get("draft_id") or "")
+    rec = {
+        "kind": "outcome",
+        "ts": now_f,
+        "draft_id": did,
+        "outcome": str(outcome or "unknown"),
+        "reason": str(reason or "")[:64],
+        "hold_reason": str(hold_rec.get("hold_reason") or ""),
+        "hold_ts": hold_ts,
+        "latency_sec": round(max(0.0, now_f - hold_ts), 1),
+        "platform": str(hold_rec.get("platform") or ""),
+        "account_id": str(hold_rec.get("account_id") or ""),
+        "conv_key": str(hold_rec.get("conv_key") or ""),
+    }
+    ok = _append_line(rec)
+    _STATS.bump_outcome(rec)
+    if did:
+        with _PENDING_LOCK:
+            _PENDING.pop(did, None)
     return ok
 
 
@@ -563,7 +599,7 @@ def iter_records(days: int = 30, *, base: Optional[Path] = None,
 __all__ = [
     "ALERT_REASONS", "RECORD_FIELDS", "OUTCOME_FIELDS", "OUTCOMES", "DEFAULT_DIR", "ENV_DIR",
     "DEFAULT_OUTCOME_GRACE_SEC", "DEFAULT_OUTCOME_MAX_AGE_SEC",
-    "build_record", "record", "maybe_alert", "iter_records",
+    "build_record", "record", "record_outcome", "maybe_alert", "iter_records",
     "classify_outcome", "failed_reason_from_audit", "reconcile_outcomes", "warm_from_disk",
     "pending_count",
     "stats_snapshot", "get_stats", "shadow_dir", "shadow_file_for", "text_fingerprint",
