@@ -91,6 +91,13 @@ _OBS_SID = "m"
 DEFAULT_INBOUND_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_OUTBOUND_MAX_BYTES = 20 * 1024 * 1024
 
+#: #172：OBS 404 ≠「已过期」。只有消息龄 ≥ 此值（小时）才许标 MISS_EXPIRED。
+#: 默认 7 天——2026-09-05 真机取证（117 号，region PH）：手机发的图 98.7h、语音 98.7h、
+#: 自发语音 162.6h 仍全部 200；LINE 自己给 FILE 消息标的 ``FILE_EXPIRE_TIMESTAMP``
+#: 恰好 = 发送时刻 + 7 天。指令草稿里的 24h 占位值被这组数据直接证伪（24h 的对象
+#: 还在服务端），故不采用。运营可按 ``platform_login.line.media.expired_after_hours`` 覆盖。
+DEFAULT_EXPIRED_AFTER_HOURS = 24.0 * 7
+
 #: 贴纸不在 OBS 消息对象里（消息只带 STKID/STKPKGID），图在公开贴纸商店 CDN。
 #: 动图贴纸取到的是静帧——对 VLM「这人发了什么表情」足够。
 _STICKER_URL = (
@@ -127,6 +134,13 @@ def resolve_line_media_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             return default
         return v if v > 0 else default
 
+    def _hours(key: str, default: float) -> float:
+        try:
+            v = float(cfg.get(key) or 0)
+        except (TypeError, ValueError):
+            return default
+        return v if v > 0 else default
+
     return {
         "inbound": _flag("inbound", True),
         "outbound": _flag("outbound", False),
@@ -136,6 +150,8 @@ def resolve_line_media_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "groups": _flag("groups", False),
         "inbound_max_bytes": _size("inbound_max_bytes", DEFAULT_INBOUND_MAX_BYTES),
         "outbound_max_bytes": _size("outbound_max_bytes", DEFAULT_OUTBOUND_MAX_BYTES),
+        # #172：OBS 404 只有在消息龄 ≥ 此阈值时才许判「已过期」（见 classify_missing）
+        "expired_after_hours": _hours("expired_after_hours", DEFAULT_EXPIRED_AFTER_HOURS),
     }
 
 
@@ -524,14 +540,19 @@ def _try_refresh_token(api: Any) -> bool:
 
 
 def _obs_download_with_retry(
-    api: Any, msg_id: str,
+    api: Any, msg_id: str, *, sid: str = _OBS_SID, oid_path: str = "",
+    talk_meta: str = "",
 ) -> Tuple[bytes, str, int]:
     """OBS 对象下载，至多两次尝试；返回 ``(字节, 最后失败摘要, 最后 HTTP 状态)``。
 
-    第三个返回值是 A2（2026-09-03）加的：``404``＝对象在 LINE 侧已被回收，属
-    **终局**（重试/回填一万次都不会回来），要给坐席「已过期」而不是含糊的
-    「未取到」。证据：钧机 3U298U 16:56/16:57 两条
-    ``404 ... obs.line-apps.com/r/talk/m/<id>``。
+    第三个返回值是 A2（2026-09-03）加的：``404``＝对象在该路径下不存在。#172 起
+    **不再**由本函数判「已过期」——404 只是一个 HTTP 状态，是否终局交
+    ``classify_missing``（消息龄 + ``object_info.obs`` 服务端状态）裁决。
+
+    ``sid`` / ``oid_path`` / ``talk_meta``（#172，2026-09-05）：镜像 LINE Chrome
+    客户端 ``yb()`` 的对象定位——Letter Sealing 媒体存在 ``talk/em/<OID>``（不是
+    ``talk/m/<消息id>``）且要带 ``X-Talk-Meta`` 头；原图质量的图在 ``<id>/original``。
+    ``oid_path`` 缺省＝消息 id（旧行为，存量调用方/门禁不变）。
 
     真机取证（#101）：同一对象几分钟内两败两成——瞬态失败 × 零重试就是
     「无音频存档」的日常来源，一次重试即可吃掉大部分瞬态。401/403 先刷
@@ -541,32 +562,379 @@ def _obs_download_with_retry(
     """
     last = ""
     status = 0
+    oid = oid_path or msg_id
+    kwargs: Dict[str, Any] = {}
+    if talk_meta:
+        kwargs["talk_meta"] = talk_meta
     for attempt in (1, 2):
         try:
-            data = api.obs.download_object(_OBS_SERVICE, _OBS_SID, msg_id) or b""
+            data = api.obs.download_object(_OBS_SERVICE, sid, oid, **kwargs) or b""
             if data:
                 return data, "", 0
             last, status = "empty_body", 0
         except Exception as exc:  # noqa: BLE001
             last = f"{type(exc).__name__}: {str(exc)[:120]}"
             status = _http_status(exc)
-            logger.debug("[line_media] OBS 下载失败 attempt=%d id=%s",
-                         attempt, msg_id, exc_info=True)
+            logger.debug("[line_media] OBS 下载失败 attempt=%d id=%s path=%s/%s",
+                         attempt, msg_id, sid, oid, exc_info=True)
             if status == 404:
-                break   # 对象已被回收：终局，重试没有意义
+                break   # 该路径下没有对象：换路径/判定交调用方，重试同路径没有意义
             if attempt == 1 and status in (401, 403):
                 if _try_refresh_token(api):
                     continue  # 刷新成功 → 立刻重试，不吃退避
                 break  # 刷新失败/冷却中：再试大概率仍 401，别白打
+            if 400 <= status < 500:
+                break   # 其余 4xx（如 em 路径缺 X-Talk-Meta 的 400）是请求形态错，重打无益
         if attempt == 1:
             time.sleep(_OBS_RETRY_SLEEP_SEC)
     return b"", last, status
 
 
-#: A2：入站媒体 miss 里**终局**的那一档——对象在 LINE 侧已回收（OBS 404）。
-#: 与 ``download_error``（瞬态/链路坏）分开的意义：终局要给坐席「已过期，让客户
-#: 重发」这种可执行的话，且媒体回填链（``/api/...media-refetch``）不该反复去捞它。
-MISS_EXPIRED = "expired"
+# ── #172：Letter Sealing 媒体 + 对象定位 + 404 分档（2026-09-05）────────────────
+#
+# 事故：skuio 机（88MP86 / 3U298U）Kevin(钧) 发来的图与视频在 4 分钟内就被本模块
+# 判成「已过期（OBS 404）」，而同会话的语音、以及 117 号收 skuio 发的图/语音全部正常。
+# 读 okline 随包的 LINE Chrome 客户端源码（``okline/ltsm/ltsmSandbox.js``，line-chrome
+# 3.7.2）后定层——是**对象定位**与**加密**两层都缺，不是保留期：
+#
+# * ``yb()``：消息 ``contentMetadata.e2eeVersion`` 非空（Letter Sealing 媒体）时，
+#   对象在 ``/r/talk/<SID=contentMetadata.SID or "m">/<OID=contentMetadata.OID or id>``
+#   （e2ee-next 用 ``SID="em"``），可带 ``?p=<OBS_POP>``；预览＝``<OID>__ud-preview``。
+#   非加密消息：``/r/talk/m/<id>``，原图质量（``MEDIA_CONTENT_INFO.category=="original"``）
+#   在 ``<id>/original``，预览在 ``<id>/preview``。我们一律打 ``talk/m/<id>`` → 404。
+# * 下载加密对象要带 ``X-Talk-Meta``（``SE(id)``：thrift 二进制 Message{4:id, 27:[]}
+#   → base64 → ``{"message":…}`` → base64）。
+# * 对象字节是密文：密钥材料 ``keyMaterial`` 在**消息 chunks 解密后的 JSON** 里
+#   （Chrome 端解密后塞进 ``contentMetadata.ENC_KM``），HKDF-SHA256(salt=∅,
+#   info="FileEncryption") 派生 encKey(32)+macKey(32)+nonce(12)；末 32 字节是
+#   HMAC-SHA256 标签（视频按 128KB 分块 SHA-256 拼接后再 HMAC）；正文 AES-256-CTR，
+#   counter = nonce || 0x00000000。okline 的 ``decrypt_message`` 只回填 ``text``，
+#   把 ``keyMaterial`` 丢掉了——本模块自己走一遍解密拿它。
+#
+# 117 号收 skuio 的图/语音为什么好：那些消息**没有** ``e2eeVersion``（skuio 手机对
+# 媒体没开 Letter Sealing），走的正是 ``talk/m/<id>``；钧的手机对媒体开了。
+
+#: 入站媒体 miss 原因（``out["reason"]``）。终局只有 MISS_EXPIRED；其余都允许重试。
+MISS_EXPIRED = "expired"          # 龄 ≥ 阈值且服务端说对象不存在：让客户重发
+MISS_NOT_FOUND = "not_found"      # 404 但龄很小/未知：拉取失败，可重试（#172 的默认档）
+MISS_PENDING = "pending"          # object_info: uploading / incompleted（对方还没传完）
+MISS_ENCODING = "encoding"        # object_info: encodeStatus=ing（服务端转码中，视频/音频）
+MISS_E2EE_NO_KEY = "e2ee_no_key"  # 加密媒体但本设备无法解出 keyMaterial（无 E2EE 密钥）
+MISS_E2EE_DECRYPT = "e2ee_decrypt_failed"  # 拿到密文但 HMAC/解密失败
+
+#: 允许坐席/回填链重试的 miss 档（与 MISS_EXPIRED 互斥）
+RETRYABLE_MISS = frozenset({
+    MISS_NOT_FOUND, MISS_PENDING, MISS_ENCODING, MISS_E2EE_DECRYPT,
+    "download_error", "empty_body",
+})
+
+#: 加密媒体按解密明文 ``fileName`` 采信扩展名的白名单（按大类）
+_E2EE_MEDIA_EXTS: Dict[str, Tuple[str, ...]] = {
+    "image": (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"),
+    "video": (".mp4", ".mov", ".m4v", ".webm", ".3gp"),
+    "voice": (".m4a", ".aac", ".mp4", ".ogg", ".opus", ".oga", ".mp3", ".wav"),
+}
+
+_MEDIA_KM_INFO = b"FileEncryption"
+_MEDIA_KM_OKM_LEN = 76          # 32 encKey + 32 macKey + 12 nonce
+_MEDIA_HMAC_LEN = 32
+_MEDIA_VIDEO_CHUNK = 131072     # 视频 HMAC 按 128KB 分块哈希（Chrome ``bv``）
+
+
+class E2EEMediaError(Exception):
+    """Letter Sealing 媒体解密失败（HMAC 不匹配 / 密钥材料坏 / 缺依赖）。"""
+
+
+def line_message_age_sec(message: Optional[Dict[str, Any]],
+                         now: Optional[float] = None) -> float:
+    """消息龄（秒）：``createdTime``（LINE 给毫秒）→ 现在。缺失/非法返回 ``-1``。"""
+    try:
+        created = int(str((message or {}).get("createdTime") or "0").strip() or 0)
+    except (TypeError, ValueError):
+        return -1.0
+    if created <= 0:
+        return -1.0
+    created_s = created / 1000.0 if created > 100_000_000_000 else float(created)
+    ts = time.time() if now is None else float(now)
+    return max(0.0, ts - created_s)
+
+
+def classify_missing(age_sec: float, expired_after_hours: float, *,
+                     obj_status: str = "", encode_status: str = "") -> str:
+    """404/对象不存在 → miss 档位（纯函数）。
+
+    - ``object_info`` 说 ``uploading``/``incompleted`` → MISS_PENDING；
+      ``encodeStatus=="ing"`` → MISS_ENCODING（对方视频还在转码，稍后就有）。
+    - 其余：只有 **龄已知且 ≥ 阈值** 才是 MISS_EXPIRED；龄未知（-1）一律 NOT_FOUND
+      ——没有证据就不许对坐席说「LINE 已回收」。
+    """
+    st = str(obj_status or "").strip().lower()
+    if st in ("uploading", "incompleted"):
+        return MISS_PENDING
+    if str(encode_status or "").strip().lower() == "ing":
+        return MISS_ENCODING
+    try:
+        thr_h = float(expired_after_hours)
+    except (TypeError, ValueError):
+        thr_h = DEFAULT_EXPIRED_AFTER_HOURS
+    if thr_h <= 0:
+        thr_h = DEFAULT_EXPIRED_AFTER_HOURS
+    if age_sec is not None and age_sec >= 0 and age_sec >= thr_h * 3600.0:
+        return MISS_EXPIRED
+    return MISS_NOT_FOUND
+
+
+def is_e2ee_media(message: Optional[Dict[str, Any]]) -> bool:
+    """Chrome ``dv()``：``contentMetadata.e2eeVersion`` 非空＝Letter Sealing 媒体。"""
+    if not isinstance(message, dict):
+        return False
+    meta = message.get("contentMetadata")
+    return bool(isinstance(meta, dict) and str(meta.get("e2eeVersion") or "").strip())
+
+
+def obs_object_locator(message: Optional[Dict[str, Any]], *,
+                       preview: bool = False) -> Tuple[str, str]:
+    """Chrome ``yb()``：消息 → ``(sid, oid_path)``，拼成 ``/r/talk/<sid>/<oid_path>``。
+
+    ``oid_path`` 已含 tid（``/original`` / ``/preview``）与 ``?p=<OBS_POP>``——
+    okline 的 ``download_object`` 只按 f-string 拼 URL，直接把它当 oid 传即可。
+    """
+    msg = message if isinstance(message, dict) else {}
+    msg_id = str(msg.get("id") or "")
+    meta = msg.get("contentMetadata") if isinstance(msg.get("contentMetadata"), dict) else {}
+    pop = str(meta.get("OBS_POP") or "").strip()
+    suffix = f"?p={pop}" if pop else ""
+    if is_e2ee_media(msg):
+        sid = str(meta.get("SID") or "").strip() or _OBS_SID
+        oid = str(meta.get("OID") or "").strip() or msg_id
+        if preview:
+            oid = f"{oid}__ud-preview"
+        return sid, f"{oid}{suffix}"
+    tid = ""
+    if preview:
+        tid = "preview"
+    else:
+        info = meta.get("MEDIA_CONTENT_INFO")
+        if isinstance(info, str):
+            try:
+                import json as _json
+                info = _json.loads(info)
+            except Exception:  # noqa: BLE001
+                info = None
+        if isinstance(info, dict) and str(info.get("category") or "") == "original":
+            tid = "original"
+    return _OBS_SID, f"{msg_id}{'/' + tid if tid else ''}{suffix}"
+
+
+def obs_object_candidates(message: Optional[Dict[str, Any]]) -> list:
+    """按 Chrome 口径的主路径 + 兜底路径列表（去重，主路径在前）。
+
+    兜底：加密消息若 ``SID/OID`` 缺省则与 ``talk/m/<id>`` 同路径；带 ``/original``
+    的原图消息回落到不带 tid 的基路径（服务端是否同时保留标清版未知，多试一次
+    只是一个 GET）。
+    """
+    msg = message if isinstance(message, dict) else {}
+    msg_id = str(msg.get("id") or "")
+    primary = obs_object_locator(msg)
+    cands = [primary]
+    base = (_OBS_SID, msg_id)
+    if msg_id and base not in cands:
+        cands.append(base)
+    return cands
+
+
+def build_talk_meta(message_id: str) -> str:
+    """Chrome ``SE(id)``：下载加密对象要带的 ``X-Talk-Meta`` 头。
+
+    thrift 二进制 ``Message`` 只写两个字段：``4:id``（STRING）与 ``27``（空 LIST
+    of STRUCT），STOP 结尾 → base64 → ``{"message": <b64>}`` → 再 base64。
+    """
+    import base64 as _b64
+    import json as _json
+    raw = str(message_id or "").encode("utf-8")
+    buf = (
+        b"\x0b" + (4).to_bytes(2, "big") + len(raw).to_bytes(4, "big") + raw
+        + b"\x0f" + (27).to_bytes(2, "big") + b"\x0c" + (0).to_bytes(4, "big")
+        + b"\x00"
+    )
+    inner = _b64.b64encode(buf).decode("ascii")
+    return _b64.b64encode(
+        _json.dumps({"message": inner}, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+
+def e2ee_media_material(api: Any, message: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """解开 Letter Sealing 媒体消息的 chunks → ``{"keyMaterial", "fileName"}``。
+
+    okline 的 ``E2EEManager.decrypt`` 把明文 JSON 只取 ``text``/``location``，媒体
+    的 ``keyMaterial``/``fileName`` 被丢掉——这里复用它的信道/解密原语（V1/V2、
+    1:1/群）自己走一遍，拿全量明文。任何失败返回 ``{}``（调用方记 e2ee_no_key）。
+    """
+    msg = message if isinstance(message, dict) else {}
+    chunks = msg.get("chunks") or []
+    if not isinstance(chunks, list) or len(chunks) < 3:
+        return {}
+    e2ee = getattr(api, "e2ee", None)
+    if e2ee is None:
+        return {}
+    try:
+        if not e2ee.is_ready():
+            return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        import base64 as _b64
+        from okline import e2ee_crypto as fr
+        version = fr.message_e2ee_version(msg)
+        parse = fr.parse_chunks_v1 if version == 1 else fr.parse_chunks
+        ciphertext, skid, rkid = parse(chunks)
+        sender = str(msg.get("from") or "")
+        to = str(msg.get("to") or "")
+        if e2ee._is_group(msg):  # noqa: SLF001 —— okline 无公开的「解出全量明文」入口
+            gk_handle, _gkid = e2ee._group_key_handle(to, rkid or None)  # noqa: SLF001
+            channel = e2ee._bridge.e2ee_create_channel_with_pubkey(  # noqa: SLF001
+                gk_handle, e2ee._user_pub(sender, skid or 0))  # noqa: SLF001
+        else:
+            channel = e2ee._channel_for_receive(sender, skid or 0, rkid or 0)  # noqa: SLF001
+        ct_b64 = _b64.b64encode(ciphertext).decode("ascii")
+        if version == 1:
+            pt_b64 = e2ee._bridge.e2ee_decrypt_v1(channel, ciphertext_b64=ct_b64)  # noqa: SLF001
+        else:
+            pt_b64 = e2ee._bridge.e2ee_decrypt_v2(  # noqa: SLF001
+                channel, to=to, frm=sender, sender_key_id=skid or 0,
+                receiver_key_id=rkid or 0,
+                content_type=int(msg.get("contentType", 0) or 0),
+                ciphertext_b64=ct_b64)
+        plain = fr.deserialize_plaintext(_b64.b64decode(pt_b64))
+    except Exception:  # noqa: BLE001
+        logger.debug("[line_media] E2EE 媒体 keyMaterial 解密失败 id=%s",
+                     msg.get("id"), exc_info=True)
+        return {}
+    if not isinstance(plain, dict):
+        return {}
+    out: Dict[str, str] = {}
+    km = str(plain.get("keyMaterial") or "").strip()
+    if km:
+        out["keyMaterial"] = km
+    fn = str(plain.get("fileName") or "").strip()
+    if fn:
+        out["fileName"] = fn
+    return out
+
+
+def _hkdf_sha256(ikm: bytes, info: bytes, length: int, salt: bytes = b"") -> bytes:
+    import hashlib
+    import hmac as _hmac
+    prk = _hmac.new(salt or b"\x00" * 32, ikm, hashlib.sha256).digest()
+    okm = b""
+    block = b""
+    counter = 1
+    while len(okm) < length:
+        block = _hmac.new(prk, block + info + bytes([counter]), hashlib.sha256).digest()
+        okm += block
+        counter += 1
+    return okm[:length]
+
+
+def derive_media_keys(key_material_b64: str) -> Tuple[bytes, bytes, bytes]:
+    """Chrome ``mv()``：keyMaterial(b64) → ``(encKey32, macKey32, nonce12)``。"""
+    import base64 as _b64
+    try:
+        ikm = _b64.b64decode(str(key_material_b64 or "").strip() + "==")
+    except Exception as exc:  # noqa: BLE001
+        raise E2EEMediaError(f"bad_key_material: {exc}") from exc
+    if not ikm:
+        raise E2EEMediaError("empty_key_material")
+    okm = _hkdf_sha256(ikm, _MEDIA_KM_INFO, _MEDIA_KM_OKM_LEN)
+    return okm[:32], okm[32:64], okm[64:76]
+
+
+def _media_hmac_input(body: bytes, *, is_video: bool) -> bytes:
+    """Chrome ``vv()``：视频对正文按 128KB 分块 SHA-256 后拼接再 HMAC；其余直接正文。"""
+    if not is_video:
+        return body
+    import hashlib
+    digests = []
+    for at in range(0, len(body), _MEDIA_VIDEO_CHUNK):
+        digests.append(hashlib.sha256(body[at:at + _MEDIA_VIDEO_CHUNK]).digest())
+    return b"".join(digests)
+
+
+def encrypt_e2ee_media(plain: bytes, key_material_b64: str, *, is_video: bool = False) -> bytes:
+    """Chrome ``gv()`` 的逆向（门禁/探针自证用）：AES-CTR 加密 + 追加 HMAC 标签。"""
+    enc_key, mac_key, nonce = derive_media_keys(key_material_b64)
+    import hmac as _hmac
+    import hashlib
+    body = _aes_ctr(enc_key, nonce + b"\x00\x00\x00\x00", bytes(plain))
+    tag = _hmac.new(mac_key, _media_hmac_input(body, is_video=is_video),
+                    hashlib.sha256).digest()
+    return body + tag
+
+
+def decrypt_e2ee_media(data: bytes, key_material_b64: str, *, is_video: bool = False) -> bytes:
+    """Chrome ``vv()``：验 HMAC（末 32 字节）→ AES-256-CTR 解正文。不匹配即抛。"""
+    import hmac as _hmac
+    import hashlib
+    blob = bytes(data or b"")
+    if len(blob) <= _MEDIA_HMAC_LEN:
+        raise E2EEMediaError("ciphertext_too_short")
+    enc_key, mac_key, nonce = derive_media_keys(key_material_b64)
+    body, tag = blob[:-_MEDIA_HMAC_LEN], blob[-_MEDIA_HMAC_LEN:]
+    expect = _hmac.new(mac_key, _media_hmac_input(body, is_video=is_video),
+                       hashlib.sha256).digest()
+    if not _hmac.compare_digest(expect, tag):
+        raise E2EEMediaError("hmac_mismatch")
+    return _aes_ctr(enc_key, nonce + b"\x00\x00\x00\x00", body)
+
+
+def _aes_ctr(key: bytes, counter16: bytes, data: bytes) -> bytes:
+    """AES-CTR（加解密同一运算）。优先 ``cryptography``（okline 硬依赖），回落 pycryptodome。"""
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        c = Cipher(algorithms.AES(key), modes.CTR(counter16)).encryptor()
+        return c.update(data) + c.finalize()
+    except ImportError:
+        pass
+    try:
+        from Crypto.Cipher import AES  # type: ignore
+        from Crypto.Util import Counter  # type: ignore
+        ctr = Counter.new(128, initial_value=int.from_bytes(counter16, "big"))
+        return AES.new(key, AES.MODE_CTR, counter=ctr).encrypt(data)
+    except ImportError as exc:
+        raise E2EEMediaError("no_aes_backend") from exc
+
+
+def obs_object_info(api: Any, message: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Chrome ``mE()``：``GET /r/talk/<sid>/<oid>/object_info.obs`` → 服务端对象状态。
+
+    返回 ``{"status": exist|notexist|uploading|incompleted|"", "encodeStatus": …,
+    "http_status": int}``；任何失败返回空 status（调用方回落纯龄判定）。只在下载
+    失败路径调（多一次轻量 GET），它是「404 到底是没有还是还没好」的唯一服务端真相。
+    """
+    out: Dict[str, Any] = {"status": "", "encodeStatus": "", "http_status": 0}
+    obs = getattr(api, "obs", None)
+    fn = getattr(obs, "object_info", None)
+    if fn is None:
+        return out
+    msg = message if isinstance(message, dict) else {}
+    sid, oid_path = obs_object_locator(msg)
+    oid_only = oid_path.split("?", 1)[0].split("/", 1)[0]
+    path = f"/r/{_OBS_SERVICE}/{sid}/{oid_only}"
+    try:
+        kw: Dict[str, Any] = {}
+        if is_e2ee_media(msg):
+            kw["talk_meta"] = build_talk_meta(str(msg.get("id") or ""))
+        res = fn(path, **kw)
+    except Exception as exc:  # noqa: BLE001
+        out["http_status"] = _http_status(exc)
+        logger.debug("[line_media] object_info 失败 path=%s", path, exc_info=True)
+        return out
+    if isinstance(res, dict):
+        out["status"] = str(res.get("status") or "").strip().lower()
+        out["encodeStatus"] = str(res.get("encodeStatus") or "").strip().lower()
+        out["http_status"] = 200
+    return out
+
 
 #: 「已过期」镜像占位文案（按大类给人话）。与贴纸的 ``[表情] …`` 占位同一形态：
 #: 落库文本必须自解释——坐席看会话时不该只看到一个点不开的 [图片]。
@@ -578,12 +946,52 @@ _EXPIRED_TEXT = {
     "document": "[文件] 该文件已过期（LINE 服务器不再保留），如需查看请让客户重发",
 }
 
+_KIND_LABEL = {"image": "图片", "video": "视频", "voice": "语音", "audio": "音频",
+               "document": "文件", "sticker": "贴纸"}
+
+#: 可重试 miss 的镜像占位文案（#172）：说清「拉取失败、可以重试」，不许说「已过期」。
+_MISS_TEXT_TEMPLATES = {
+    MISS_NOT_FOUND: "[{label}] 拉取失败（LINE 服务端 404，消息龄 {age}），点击重试",
+    MISS_PENDING: "[{label}] 对方的{label}还在上传中，稍后点击重试",
+    MISS_ENCODING: "[{label}] 对方的{label}仍在 LINE 服务端处理（转码）中，稍后点击重试",
+    MISS_E2EE_NO_KEY: "[{label}] 加密{label}（Letter Sealing），本设备暂无解密密钥，请在手机上查看",
+    MISS_E2EE_DECRYPT: "[{label}] 加密{label}解密失败，点击重试",
+}
+
 
 def expired_media_text(kind: str) -> str:
     """入站媒体已过期的镜像占位文案；未知大类给通用兜底（绝不返回空串）。"""
     k = str(kind or "").strip().lower()
     return _EXPIRED_TEXT.get(
         k, "[媒体] 该文件已过期（LINE 服务器不再保留），如需查看请让客户重发")
+
+
+def _age_phrase(age_sec: float) -> str:
+    if age_sec is None or age_sec < 0:
+        return "未知"
+    if age_sec < 3600:
+        return f"{max(1, int(age_sec // 60))} 分钟"
+    if age_sec < 48 * 3600:
+        return f"{age_sec / 3600:.1f} 小时"
+    return f"{age_sec / 86400:.1f} 天"
+
+
+def inbound_miss_text(kind: str, out: Optional[Dict[str, Any]]) -> str:
+    """按 ``download_line_media`` 的 ``out`` 出参给镜像占位文案；无需改文案的 miss 返回空串。
+
+    只有**对坐席有处置意义**的档才出话：已过期（让客户重发）/ 可重试（点击重试）/
+    加密无钥（去手机看）。开关关、超限、瞬态 download_error 保持原「[图片]」占位。
+    """
+    o = out if isinstance(out, dict) else {}
+    reason = str(o.get("reason") or "")
+    k = str(kind or "").strip().lower()
+    if reason == MISS_EXPIRED or o.get("expired"):
+        return expired_media_text(k)
+    tpl = _MISS_TEXT_TEMPLATES.get(reason)
+    if not tpl:
+        return ""
+    label = _KIND_LABEL.get(k, "媒体")
+    return tpl.format(label=label, age=_age_phrase(float(o.get("age_sec", -1) or -1)))
 
 
 def _download_sticker(url: str, timeout: float = 10.0) -> bytes:
@@ -615,28 +1023,44 @@ def download_line_media(
     - 成功 → ``(kind, '/static/protocol_media/line/...')``
 
     ``out``（A2，2026-09-03）：可选出参 dict，回填
-    ``{"reason", "detail", "http_status", "expired"}``——调用方据此把**终局**的
-    OBS 404 渲染成「已过期」而不是又一个点不开的 ``[图片]``。返回值形状刻意不变
-    （与 ``download_tg_media`` 同契约，且存量调用方/门禁按二元组断言）。
+    ``{"reason", "detail", "http_status", "expired", "retryable", "age_sec",
+    "e2ee", "obs_status", "path"}``——调用方据此把**终局**的过期渲染成「已过期」、
+    把可重试的 miss 渲染成「拉取失败，点击重试」（``inbound_miss_text``）。返回值
+    形状刻意不变（与 ``download_tg_media`` 同契约，且存量调用方/门禁按二元组断言）。
+
+    #172（2026-09-05）三处改动，见模块内「Letter Sealing 媒体 + 对象定位」注释：
+    ① 对象定位按 Chrome ``yb()``（加密媒体走 ``talk/<SID>/<OID>`` + ``X-Talk-Meta``，
+    原图走 ``<id>/original``），主路径 404 再试兜底路径；② 加密媒体解出 keyMaterial
+    后 HMAC 校验 + AES-CTR 解密，解不出钥匙记 ``e2ee_no_key`` 不下载密文白占磁盘；
+    ③ 404 不再直接判「已过期」：先问 ``object_info.obs``（uploading/转码中→可重试），
+    再按消息龄 vs ``expired_after_hours`` 分 NOT_FOUND（可重试）/EXPIRED（终局）。
 
     全程软失败，绝不抛——入站落库主流程不能被一次下载失败带走。
     """
     if out is not None:
         out.clear()
         out.update({"reason": "", "detail": "", "http_status": 0,
-                    "expired": False})
+                    "expired": False, "retryable": False, "age_sec": -1.0,
+                    "e2ee": False, "obs_status": "", "path": ""})
     meta = line_media_meta(message)
     if meta is None:
         return "", ""
     kind, ext = meta
     msg_id = str((message or {}).get("id") or "")
+    age_sec = line_message_age_sec(message)
+    e2ee = is_e2ee_media(message) and kind != "sticker"
+    if out is not None:
+        out.update({"age_sec": age_sec, "e2ee": e2ee})
 
-    def _miss(reason: str, detail: str = "", status: int = 0) -> Tuple[str, str]:
+    def _miss(reason: str, detail: str = "", status: int = 0,
+              obs_status: str = "") -> Tuple[str, str]:
         _record_inbound(kind, ok=False, skip_reason=reason)
         if out is not None:
             out.update({"reason": reason, "detail": detail,
                         "http_status": int(status or 0),
-                        "expired": reason == MISS_EXPIRED})
+                        "expired": reason == MISS_EXPIRED,
+                        "retryable": reason in RETRYABLE_MISS,
+                        "obs_status": obs_status})
         if reason in ("disabled", "stickers_disabled"):
             # 运营配置选择，不是故障——保持安静
             logger.debug("[line_media] 入站媒体按开关跳过 kind=%s id=%s reason=%s",
@@ -645,9 +1069,18 @@ def download_line_media(
             # A2：终局，且**有可执行处置**（让客户重发）——必须 WARNING 且话说清楚，
             # 别让值守把它当成又一次「下载失败，回头重试」（3U298U 实锤两条 404）
             logger.warning(
-                "[line_media] 入站媒体已过期（OBS 404，对象已被 LINE 回收，重试/回填"
-                "都救不回）kind=%s id=%s acct=%s → 工作台标「已过期」提示让客户重发",
-                kind, msg_id, account_id)
+                "[line_media] 入站媒体已过期（OBS 404 且消息龄 %s ≥ 阈值，对象已被 LINE"
+                " 回收，重试/回填都救不回）kind=%s id=%s acct=%s obs_status=%s"
+                " → 工作台标「已过期」提示让客户重发",
+                _age_phrase(age_sec), kind, msg_id, account_id, obs_status or "-")
+        elif reason in (MISS_NOT_FOUND, MISS_PENDING, MISS_ENCODING,
+                        MISS_E2EE_NO_KEY, MISS_E2EE_DECRYPT):
+            # #172：可重试档必须把 kind/id/status/age 一行写清（重试点击也走这里）
+            logger.warning(
+                "[line_media] 入站媒体未取到（可重试）kind=%s id=%s acct=%s reason=%s"
+                " http=%s age=%s e2ee=%s obs_status=%s%s",
+                kind, msg_id, account_id, reason, status or "-", _age_phrase(age_sec),
+                e2ee, obs_status or "-", f" err={detail}" if detail else "")
         else:
             # 链路失败必须 INFO/WARNING 级可见（#101：debug 级＝客户机上无法归因）
             log = logger.warning if reason in _MISS_WARN_REASONS else logger.info
@@ -668,6 +1101,7 @@ def download_line_media(
     data = b""
     fail_detail = ""
     fail_status = 0
+    key_material = ""
     if kind == "sticker":
         if not mcfg.get("stickers", True):
             return _miss("stickers_disabled")
@@ -682,18 +1116,59 @@ def download_line_media(
     else:
         if not msg_id:
             return _miss("no_message_id")
+        talk_meta = ""
+        if e2ee:
+            material = e2ee_media_material(api, message)
+            key_material = material.get("keyMaterial", "")
+            if not key_material:
+                # 没钥匙下载密文毫无意义（还白占磁盘）；Chrome 端同样只在有 keyMaterial
+                # 时才带 X-Talk-Meta 去取加密对象。
+                return _miss(MISS_E2EE_NO_KEY, "no keyMaterial (e2ee not ready or "
+                             "chunks undecryptable)")
+            talk_meta = build_talk_meta(msg_id)
+            # 加密媒体的真实文件名只在解密明文里（服务端元数据不带）：文件类沿用原扩展名
+            # （坐席点开即认得），音/视频只在扩展名是已知容器时采信（官方客户端发的是
+            # m4a/mp4，但 e2ee 流程原样上传，OGG 原件就还是 OGG——扩展名错会让播放器不认）
+            real = os.path.splitext(material.get("fileName", ""))[1].lower()
+            if real and len(real) <= 12 and (
+                    kind == "document" or real in _E2EE_MEDIA_EXTS.get(kind, ())):
+                ext = real
         try:
-            data, fail_detail, fail_status = _obs_download_with_retry(api, msg_id)
+            for sid, oid_path in obs_object_candidates(message):
+                if out is not None:
+                    out["path"] = f"/r/{_OBS_SERVICE}/{sid}/{oid_path}"
+                data, fail_detail, fail_status = _obs_download_with_retry(
+                    api, msg_id, sid=sid, oid_path=oid_path, talk_meta=talk_meta)
+                if data or fail_status != 404:
+                    break
         except Exception as exc:  # noqa: BLE001 —— 纯保险：helper 自身不应抛
             return _miss("download_error", f"{type(exc).__name__}: {str(exc)[:120]}")
 
     if not data:
         if fail_status == 404:
-            # A2：终局（对象已被 LINE 回收）——与瞬态 download_error 分档
-            return _miss(MISS_EXPIRED, fail_detail, 404)
+            # #172：404 ≠ 已过期。先问服务端对象状态（上传中/转码中都不是「没了」），
+            # 再按消息龄 vs 阈值分 NOT_FOUND（可重试）/EXPIRED（终局）。
+            info = obs_object_info(api, message)
+            reason = classify_missing(
+                age_sec, float(mcfg.get("expired_after_hours")
+                               or DEFAULT_EXPIRED_AFTER_HOURS),
+                obj_status=info.get("status", ""),
+                encode_status=info.get("encodeStatus", ""))
+            return _miss(reason, fail_detail, 404, obs_status=info.get("status", ""))
         if fail_detail and fail_detail != "empty_body":
             return _miss("download_error", fail_detail, fail_status)
         return _miss("empty_body", "", fail_status)
+
+    if key_material:
+        try:
+            data = decrypt_e2ee_media(data, key_material, is_video=(kind == "video"))
+        except E2EEMediaError as exc:
+            return _miss(MISS_E2EE_DECRYPT, str(exc), 200)
+        except Exception as exc:  # noqa: BLE001
+            return _miss(MISS_E2EE_DECRYPT, f"{type(exc).__name__}: {str(exc)[:120]}", 200)
+        if not data:
+            return _miss(MISS_E2EE_DECRYPT, "empty_plaintext", 200)
+
     # 自报体积不可信/缺失时的兜底：真实字节到手才知道大小，超限即丢（护磁盘）
     if len(data) > max_bytes:
         return _miss("too_large_actual", f"size={len(data)} max={max_bytes}")
@@ -705,6 +1180,10 @@ def download_line_media(
         with open(dest, "wb") as fh:
             fh.write(data)
         _record_inbound(kind, ok=True)
+        if e2ee:
+            logger.info("[line_media] Letter Sealing 媒体已解密落盘 kind=%s id=%s acct=%s"
+                        " bytes=%d path=%s", kind, msg_id, account_id, len(data),
+                        (out or {}).get("path") if out is not None else "-")
         return kind, url
     except Exception as exc:  # noqa: BLE001
         return _miss("write_error", f"{type(exc).__name__}: {str(exc)[:120]}")

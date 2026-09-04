@@ -2266,15 +2266,24 @@ class LineProtocolWorker:
             _media_miss: Dict[str, Any] = {}
             media_type, media_ref = self._inbound_media(
                 message, is_group=is_group, out=_media_miss)
-            if media_type and not media_ref and _media_miss.get("expired"):
-                # A2（2026-09-03）：OBS 404＝对象已被 LINE 回收，是**终局**。此前
-                # 这里只落一个点不开的「[图片]」，坐席只能一次次点重试/报障（3U298U
-                # 实锤两条 404）。给一句自解释且可执行的话：已过期，让客户重发。
-                from src.integrations.line_media import expired_media_text
-                if not str(text).strip():
-                    text = expired_media_text(media_type)
-                else:
-                    text = f"{text}\n{expired_media_text(media_type)}"
+            _miss_hint = ""
+            if media_type and not media_ref:
+                # A2（2026-09-03）：OBS 404 终局 → 「已过期，让客户重发」；
+                # #172（2026-09-05）：404 不再等于过期——可重试档（拉取失败/对方还在
+                # 上传/服务端转码中/加密媒体无钥）各给一句自解释的话，且**收到即预取
+                # 失败进回填**：后台按退避再拉两次，拉到即原地回填媒体（见
+                # ``_schedule_media_retry``）。文案单源 ``line_media.inbound_miss_text``。
+                from src.integrations.line_media import inbound_miss_text
+                _miss_hint = inbound_miss_text(media_type, _media_miss)
+                if _miss_hint:
+                    if not str(text).strip():
+                        text = _miss_hint
+                    else:
+                        text = f"{text}\n{_miss_hint}"
+                if _media_miss.get("retryable"):
+                    self._schedule_media_retry(
+                        message, chat_key=chat_key, is_group=is_group,
+                        kind=media_type, hint=_miss_hint)
             if media_type == "sticker" and not media_ref and not str(text).strip():
                 # 贴纸图没下来（CDN 变更/动图/网络）→ 退到贴纸自带文字。用 A 线同款
                 # ``[表情] 语义`` 口径，inbound_enrich 的表情块解析可直接吃。
@@ -2670,6 +2679,114 @@ class LineProtocolWorker:
         except Exception:
             logger.debug("[line-worker] 入站媒体处理失败（回落纯文本）", exc_info=True)
             return "", ""
+
+    #: #172 入站媒体回填退避（秒）：首次 20s（对方视频转码/上传收尾的典型窗），
+    #: 再 120s 兜一次；两次都空手＝留给坐席手动「点击重试」（fetch-media 路由）。
+    _MEDIA_RETRY_DELAYS: tuple = (20.0, 120.0)
+
+    def _schedule_media_retry(
+        self, message: Dict[str, Any], *, chat_key: str, is_group: bool,
+        kind: str, hint: str = "", attempt: int = 0,
+    ) -> None:
+        """入站媒体首拉失败（可重试档）→ 后台定时再拉，拉到即回填落库行（best-effort）。
+
+        「收到即预取，失败进回填队列」的最小实现：不依赖坐席点开。每条消息至多
+        ``len(_MEDIA_RETRY_DELAYS)`` 次；daemon Timer，进程退出即散，绝不阻塞
+        接收线程。回填走 store 既有的幂等回写（``update_message_media`` 只填空行；
+        文案只在仍是本轮写的 miss 提示时才换成标准占位，绝不踩客户原话）。
+        """
+        delays = self._MEDIA_RETRY_DELAYS
+        if attempt >= len(delays):
+            return
+        msg_id = str((message or {}).get("id") or "")
+        if not msg_id or not chat_key:
+            return
+        try:
+            import threading
+            snapshot = dict(message or {})
+
+            def _job() -> None:
+                self._retry_media_job(
+                    snapshot, chat_key=chat_key, is_group=is_group, kind=kind,
+                    hint=hint, attempt=attempt)
+
+            t = threading.Timer(float(delays[attempt]), _job)
+            t.daemon = True
+            t.name = f"line-media-retry-{msg_id}-{attempt + 1}"
+            t.start()
+            logger.info("[line-worker] 入站媒体回填已排程 kind=%s id=%s attempt=%d in=%ss",
+                        kind, msg_id, attempt + 1, delays[attempt])
+        except Exception:
+            logger.debug("[line-worker] 媒体回填排程失败", exc_info=True)
+
+    def _retry_media_job(
+        self, message: Dict[str, Any], *, chat_key: str, is_group: bool,
+        kind: str, hint: str, attempt: int,
+    ) -> None:
+        msg_id = str((message or {}).get("id") or "")
+        out: Dict[str, Any] = {}
+        try:
+            media_type, media_ref = self._inbound_media(message, is_group=is_group, out=out)
+        except Exception:  # noqa: BLE001
+            media_type, media_ref = "", ""
+        if not media_ref:
+            logger.info("[line-worker] 入站媒体回填仍未取到 kind=%s id=%s attempt=%d"
+                        " reason=%s http=%s obs_status=%s",
+                        kind, msg_id, attempt + 1, out.get("reason"),
+                        out.get("http_status"), out.get("obs_status") or "-")
+            if out.get("retryable"):
+                self._schedule_media_retry(
+                    message, chat_key=chat_key, is_group=is_group, kind=kind,
+                    hint=hint, attempt=attempt + 1)
+            return
+        try:
+            from src.inbox.normalizer import conv_id
+            from src.integrations.protocol_bridge import get_inbox_store, media_placeholder
+            store = get_inbox_store()
+            if store is None:
+                logger.info("[line-worker] 入站媒体回填成功但 store 不可用 id=%s", msg_id)
+                return
+            cid = conv_id("line", self.account_id, chat_key)
+            filled = bool(store.update_message_media(
+                cid, media_type=media_type or kind, media_ref=media_ref,
+                platform_msg_id=msg_id))
+            logger.info("[line-worker] 入站媒体回填成功 kind=%s id=%s attempt=%d ref=%s"
+                        " row_updated=%s", kind, msg_id, attempt + 1, media_ref, filled)
+            if filled and hint:
+                # 只把本轮写下的 miss 提示换成标准占位；行上若是别的文本一律不动
+                row = store.get_message(f"{cid}:{msg_id}") or {}
+                if str(row.get("text") or "").strip() == hint.strip():
+                    store.update_message_text(
+                        cid, text=media_placeholder(media_type or kind),
+                        media_ref=media_ref, only_if_empty=False)
+            if filled and self._loop is not None and (media_type or kind) in (
+                    "voice", "audio", "image", "video"):
+                # 转写/识别回填（与 fetch-media 路由同口径，best-effort）：救活的语音
+                # 坐席要能读、AI 要能看——只回填播放器等于修了一半。
+                self._enrich_backfilled_media(cid, media_type or kind, media_ref)
+        except Exception:
+            logger.debug("[line-worker] 入站媒体回填落库失败 id=%s", msg_id, exc_info=True)
+
+    def _enrich_backfilled_media(self, cid: str, media_type: str, media_ref: str) -> None:
+        async def _run() -> None:
+            try:
+                from src.inbox.media_enrich import enrich_inbound_media_text
+                from src.integrations.protocol_bridge import get_inbox_store, media_placeholder
+                etext, _ = await asyncio.wait_for(
+                    enrich_inbound_media_text(
+                        media_type=media_type, media_ref=media_ref, config=self.config),
+                    timeout=30.0)
+                etext = str(etext or "").strip()
+                store = get_inbox_store()
+                if store is not None and etext and etext != media_placeholder(media_type):
+                    store.update_message_text(cid, text=etext, media_ref=media_ref)
+            except Exception:
+                logger.debug("[line-worker] 回填媒体识别失败 ref=%s", media_ref, exc_info=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_run(), self._loop)
+        except Exception:
+            logger.debug("[line-worker] 回填媒体识别调度失败", exc_info=True)
 
     async def _send_media_impl(
         self, chat_key: str, *, media_path: str, media_type: str = "",

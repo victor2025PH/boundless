@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import time
 import types
 
 import pytest
@@ -230,18 +231,43 @@ def test_obs_404_is_terminal_expired_and_not_retried(monkeypatch):
 
 
 def test_download_reports_expired_via_out(monkeypatch):
-    """出参把终局细因交给调用方（返回值形状保持二元组，存量门禁不动）。"""
+    """出参把终局细因交给调用方（返回值形状保持二元组，存量门禁不动）。
+
+    #172 起「终局」多了一个前提：消息龄 ≥ ``expired_after_hours``（默认 7 天）。
+    这里给一条 8 天前的消息——404 才许标已过期。
+    """
     import src.integrations.line_media as LM
 
     monkeypatch.setattr(
         LM, "_obs_download_with_retry",
-        lambda api, mid: (b"", "HTTPError: 404 Client Error: Not Found", 404))
-    msg = {"id": "M1", "contentType": LM.CT_IMAGE}
+        lambda api, mid, **kw: (b"", "HTTPError: 404 Client Error: Not Found", 404))
+    old_ms = int((time.time() - 8 * 86400) * 1000)
+    msg = {"id": "M1", "contentType": LM.CT_IMAGE, "createdTime": str(old_ms)}
     out: dict = {}
     kind, url = LM.download_line_media(object(), msg, "acct", out=out)
     assert (kind, url) == ("image", ""), "返回契约不变"
     assert out["expired"] is True
     assert out["reason"] == LM.MISS_EXPIRED
+    assert out["http_status"] == 404
+    assert out["retryable"] is False
+
+
+def test_fresh_404_is_not_found_not_expired(monkeypatch):
+    """#172 事故本体：4 分钟前的视频 404 曾被判「已过期」。现在＝拉取失败，可重试。"""
+    import src.integrations.line_media as LM
+
+    monkeypatch.setattr(
+        LM, "_obs_download_with_retry",
+        lambda api, mid, **kw: (b"", "HTTPError: 404 Client Error: Not Found", 404))
+    fresh_ms = int((time.time() - 4 * 60) * 1000)
+    msg = {"id": "630323359523275215", "contentType": LM.CT_VIDEO,
+           "createdTime": str(fresh_ms)}
+    out: dict = {}
+    kind, url = LM.download_line_media(object(), msg, "acct", out=out)
+    assert (kind, url) == ("video", "")
+    assert out["expired"] is False
+    assert out["reason"] == LM.MISS_NOT_FOUND
+    assert out["retryable"] is True
     assert out["http_status"] == 404
 
 
@@ -251,22 +277,24 @@ def test_transient_download_error_is_not_expired(monkeypatch):
 
     monkeypatch.setattr(
         LM, "_obs_download_with_retry",
-        lambda api, mid: (b"", "ConnectTimeout: ...", 0))
+        lambda api, mid, **kw: (b"", "ConnectTimeout: ...", 0))
     out: dict = {}
     LM.download_line_media(
         object(), {"id": "M2", "contentType": LM.CT_IMAGE}, "a", out=out)
     assert out["expired"] is False and out["reason"] == "download_error"
 
 
-def test_wiring_inbound_renders_expired_hint():
+def test_wiring_inbound_renders_miss_hint():
+    """入站链把 miss 细因渲染成人话（单源 ``inbound_miss_text``：已过期/可重试/加密无钥）。"""
     src = (REPO / "src/integrations/account_orchestrator.py").read_text(
         encoding="utf-8")
-    assert 'expired_media_text' in src, "入站链要把 expired 渲染成人话"
-    i = src.index('_media_miss.get("expired")')
-    seg = src[i:i + 900]
-    assert "expired_media_text(media_type)" in seg
+    assert 'inbound_miss_text' in src, "入站链要把 miss 渲染成人话"
+    i = src.index('inbound_miss_text(media_type, _media_miss)')
+    seg = src[i - 200:i + 900]
     # 已有文本（配文）时不许覆盖掉客户原话
-    assert 'f"{text}\\n{expired_media_text(media_type)}"' in seg
+    assert 'f"{text}\\n{_miss_hint}"' in seg
+    # 可重试档必须进回填排程（收到即预取，失败进回填）
+    assert '_media_miss.get("retryable")' in seg and "_schedule_media_retry(" in seg
 
 
 @pytest.mark.parametrize("status", [401, 403, 500, 0])
