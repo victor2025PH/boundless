@@ -27,8 +27,12 @@ def test_note_meta_logs_not_injected(caplog):
     src = inspect.getsource(service.build_block_for_chat)
     assert "[goal-inject] NOT injected reason=" in src
     assert "[goal-inject] injected conv=" in src
-    # no_goal 必须是 DEBUG（无目标会话每轮都走到这里）
+    # #166（2026-09-05）改口径：有会话 id 的 no_goal 升 INFO 带全部查找键、按会话
+    # 10 分钟节流（skuio 88MP86 实锤：右栏卡有目标、拟稿链 9.5h 零 goal-inject 行
+    # ＝no_goal 恒 DEBUG 让「用什么键查、查到没」不可证）；无会话 id 仍 DEBUG，
+    # disabled 仍 DEBUG。行为细节由 tests/test_goal_inject_keys_166.py 钉住。
     assert 'reason == "no_goal"' in src and "logger.debug(\"[goal-inject] skip=" in src
+    assert "reason=no_goal conv=%s plat=%s" in src and "_inject_log_allowed(" in src
 
 
 def test_frontend_consumes_goal_applied():

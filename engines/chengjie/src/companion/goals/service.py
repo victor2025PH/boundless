@@ -39,6 +39,68 @@ NEGATIVE_EMOTIONS = frozenset(
 
 DEFAULT_DB_NAME = "marketing_goals.db"
 
+# #166（2026-09-05）注入口「无目标 / 异常」可见性节流：同一会话 10 分钟内只落
+# 一行 INFO/WARNING（拟稿链每条入站都走注入口，高频会话不节流＝刷屏）。
+# 键 = 会话 id；有上限防长期运行撑爆（超限一次性清空重来，宁可多打一行）。
+_INJECT_LOG_THROTTLE_SEC = 600.0
+_INJECT_LOG_CAP = 4000
+_inject_log_seen: Dict[str, float] = {}
+
+
+def _inject_log_allowed(key: str, now: Optional[float] = None) -> bool:
+    """会话级节流：距上次放行 ≥ ``_INJECT_LOG_THROTTLE_SEC`` 才放行。绝不抛。"""
+    try:
+        n = float(now if now is not None else time.time())
+        k = str(key or "")
+        last = _inject_log_seen.get(k)
+        if last is not None and (n - last) < _INJECT_LOG_THROTTLE_SEC:
+            return False
+        if len(_inject_log_seen) >= _INJECT_LOG_CAP:
+            _inject_log_seen.clear()
+        _inject_log_seen[k] = n
+        return True
+    except Exception:
+        return True
+
+
+def resolve_inject_lookup_keys(
+    *, platform: str = "", chat_key: str = "", account_id: str = "",
+    conversation_id: str = "",
+) -> Dict[str, str]:
+    """注入口查找键归一（#166 键一致性）：右栏卡走 ``goal_routes._split_conversation_id
+    (conv)`` 拆三元组，拟稿链传的是 ``(conversation_id, platform, chat_key,
+    account_id)`` 四个散值——两边喂同一个 ``find_active_goal`` 却可能因「conv 有、
+    account 是 ''/'default'」或「三元组齐、conv 空」而走到不同的匹配分支。
+
+    规则（只补齐，绝不放宽账号锁）：
+    - conv 形如 ``platform:account:chat_key`` → platform/chat_key 缺则从 conv 补；
+      account 为空或占位 ``default`` 时**以 conv 内的账号为准**（卡片口径）；
+    - conv 空而三元组齐 → 合成 ``platform:account:chat_key`` 作 conv（让精确命中
+      这一层也参与，与建目标落库的 conversation_id 同形态）；
+    - 调用方显式给了与 conv 不同的真实账号 → 尊重调用方（多账号同 peer 防串号）。
+    纯函数、绝不抛；不满足任一规则时原样返回。
+    """
+    plat = str(platform or "").strip()
+    ck = str(chat_key or "").strip()
+    acct = str(account_id or "").strip()
+    conv = str(conversation_id or "").strip()
+    try:
+        parts = conv.split(":", 2) if conv else []
+        if len(parts) == 3 and parts[0].strip() and parts[1].strip():
+            c_plat, c_acct, c_ck = (p.strip() for p in parts)
+            if not plat:
+                plat = c_plat
+            if not ck:
+                ck = c_ck
+            if not acct or acct.lower() == "default":
+                acct = c_acct
+        elif not conv and plat and acct and ck and acct.lower() != "default":
+            conv = f"{plat}:{acct}:{ck}"
+    except Exception:
+        pass
+    return {"platform": plat, "chat_key": ck, "account_id": acct,
+            "conversation_id": conv}
+
 
 def resolve_goals_cfg(cfg_root: Any) -> Dict[str, Any]:
     """``companion.goals`` 配置段（缺/异常 → {} = 默认关）。"""
@@ -908,6 +970,19 @@ def build_block_for_chat(
     ["_goal_inject_meta"]``（生成链透传成 API 的 ``goal_applied``）——坐席端
     「设了目标为什么没切入」从黑箱变成可读原因。user_context 非 dict 时静默。
     """
+    # #166 键一致性：查找键先归一（conv ↔ 三元组互补、占位账号以 conv 为准），
+    # 下面的 find_active_goal 与日志都用归一后的键——日志里印的就是真正查库的键。
+    _keys = resolve_inject_lookup_keys(
+        platform=platform, chat_key=chat_key, account_id=account_id,
+        conversation_id=conversation_id)
+    platform = _keys["platform"] or str(platform or "")
+    chat_key = _keys["chat_key"] or str(chat_key or "")
+    account_id = _keys["account_id"]
+    conversation_id = _keys["conversation_id"]
+
+    def _conv_label() -> str:
+        return conversation_id or f"{platform}:{account_id}:{chat_key}"
+
     def _note_meta(injected: bool, reason: str, **extra: Any) -> None:
         if isinstance(user_context, dict):
             m: Dict[str, Any] = {
@@ -916,12 +991,25 @@ def build_block_for_chat(
             user_context["_goal_inject_meta"] = m
         # #152 F2（0902 skuio「工作目标完全没执行」）：此前注入判定只写内存 meta，
         # 日志零痕迹——诊断包里翻遍找不到「这一轮目标为什么没进 prompt」。有目标
-        # 却未注入是坐席最需要知道的事：早退原因一律 INFO 落日志（无目标的会话
-        # 每轮都会走到 no_goal，那条降 DEBUG 防刷屏）。
+        # 却未注入是坐席最需要知道的事：早退原因一律 INFO 落日志。
+        # #166（0905 skuio 88MP86：9.5h 零 [goal-inject] 行，右栏卡却显示目标进行中）：
+        # no_goal 此前恒 DEBUG＝「拟稿链到底用什么键查、查到没」在诊断包里不可证。
+        # 现在：有会话 id 的 no_goal 升 INFO 并带**全部查找键**，按会话 10 分钟节流
+        # （无会话 id 的系统/主动链调用仍 DEBUG）；disabled 保持 DEBUG（配置态，
+        # 启动日志已可见）。
         try:
-            if reason == "no_goal" or reason == "disabled":
-                logger.debug("[goal-inject] skip=%s conv=%s", reason,
-                             conversation_id or f"{platform}:{account_id}:{chat_key}")
+            if reason == "disabled":
+                logger.debug("[goal-inject] skip=%s conv=%s", reason, _conv_label())
+            elif reason == "no_goal":
+                if conversation_id and _inject_log_allowed(
+                        f"no_goal|{conversation_id}", now):
+                    logger.info(
+                        "[goal-inject] NOT injected reason=no_goal conv=%s plat=%s "
+                        "chat_key=%s acct=%s chain=%s（同会话 10 分钟内不重复）",
+                        conversation_id, platform, chat_key, account_id or "-",
+                        chain)
+                else:
+                    logger.debug("[goal-inject] skip=no_goal conv=%s", _conv_label())
             elif injected:
                 logger.info(
                     "[goal-inject] injected conv=%s goal=%s ms=%s push=%s intent=%s",
@@ -1362,14 +1450,28 @@ def build_block_for_chat(
                 str(action.get("action_id")), "consumed", detail=chain)
         get_goal_stats().record_injected(chain)
         return block
-    except Exception:
-        logger.debug("build_block_for_chat failed", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        # #166：此前 DEBUG 吞掉＝注入链任何一环炸了都与「无目标」在日志里同样
+        # 无声（skill_manager._inject_goal_context 那层也是 debug）。升 WARNING
+        # 带异常类名 + 查找键；首次带堆栈，同会话 10 分钟内只记一行。契约不变：
+        # 绝不抛（目标层挂了不能拖垮回复主链）。
+        try:
+            _first = _inject_log_allowed(f"error|{_conv_label()}", now)
+            logger.warning(
+                "[goal-inject] ERROR %s: %s conv=%s plat=%s chat_key=%s acct=%s "
+                "chain=%s",
+                type(exc).__name__, str(exc)[:160], conversation_id or "-",
+                platform, chat_key, account_id or "-", chain,
+                exc_info=_first)
+        except Exception:
+            pass
         try:
             # 直接覆写：异常路径返回 None（块没出去），哪怕成功元数据已写过
             # 也已失真——统一按 error 记，绝不留「injected=True 却没块」的谎
             if isinstance(user_context, dict):
                 user_context["_goal_inject_meta"] = {
-                    "injected": False, "reason": "error"}
+                    "injected": False, "reason": "error",
+                    "error": type(exc).__name__}
         except Exception:
             pass
         return None
@@ -2093,6 +2195,7 @@ __all__ = [
     "run_winback_scan",
     "resolve_db_path",
     "resolve_goals_cfg",
+    "resolve_inject_lookup_keys",
     "sanitize_won_meta",
     "settle_order_ref",
     "sold_plan_counts_cached",

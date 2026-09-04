@@ -303,7 +303,12 @@ class GoalStore:
                 if row:
                     return self._row_to_goal(row)
         except Exception as e:  # noqa: BLE001
-            logger.debug("find_active_goal failed: %s", e)
+            # #166：读库异常此前 DEBUG → 对调用方与「无目标」无法区分（拟稿链
+            # 表现成 no_goal、右栏卡却能查到）。升 WARNING 带异常类名 + 查找键。
+            logger.warning(
+                "find_active_goal failed: %s: %s (conv=%s plat=%s chat_key=%s acct=%s)",
+                type(e).__name__, str(e)[:160], conversation_id or "-",
+                platform or "-", chat_key or "-", account_id or "-")
         return None
 
     def count_active_for_conversation(self, conversation_id: str) -> int:
