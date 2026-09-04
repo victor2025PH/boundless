@@ -541,6 +541,13 @@ def probe(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
                                     if isinstance(m, dict)]
             if want_verify:
                 verified: List[Dict[str, Any]] = []
+                # #169：--max-mb 同样放宽这条只读回读的入站上限——LINE 服务端会把大视频
+                # 转码（100MB 源 → ~27.5MB），缺省 20MB 入站上限下 verify 会 too_large_actual，
+                # 拿不到 magic 就无法闭合「对方能播」的验收。
+                _vmax = float(getattr(args, "max_mb", 0) or 0)
+                if _vmax > 0:
+                    mcfg = dict(mcfg)
+                    mcfg["inbound_max_bytes"] = int(_vmax * 1024 * 1024)
                 for m in rows:
                     if not isinstance(m, dict):
                         continue

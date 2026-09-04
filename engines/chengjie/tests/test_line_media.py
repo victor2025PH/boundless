@@ -229,7 +229,16 @@ def test_cfg_overrides_and_dirty_values():
         inbound=None, inbound_max_bytes="oops", outbound_max_bytes=0))
     assert dirty["inbound"] is True
     assert dirty["inbound_max_bytes"] == LM.DEFAULT_INBOUND_MAX_BYTES
-    assert dirty["outbound_max_bytes"] == LM.DEFAULT_OUTBOUND_MAX_BYTES
+    # #169：出站缺省与收件箱路由同源（内建 LINE 100MB），不再是独立硬编码的 20MB
+    from src.inbox.media_limits import platform_media_cap_bytes
+    assert dirty["outbound_max_bytes"] == platform_media_cap_bytes(None, "line")
+    assert dirty["outbound_max_bytes"] > LM.DEFAULT_OUTBOUND_MAX_BYTES
+    # 运营在 inbox.media.limits_mb.line 压上限 → worker 缺省跟着走（两端不分叉）
+    tight = LM.resolve_line_media_cfg({
+        "platform_login": {"line": {"media": {}}},
+        "inbox": {"media": {"limits_mb": {"line": 20}}},
+    })
+    assert tight["outbound_max_bytes"] == 20 * 1024 * 1024
     assert LM.resolve_line_media_cfg({"platform_login": {"line": "nope"}})["inbound"] is True
 
 

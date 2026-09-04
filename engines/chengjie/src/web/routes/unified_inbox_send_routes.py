@@ -176,23 +176,14 @@ def _deny_capability(request: Request, perm: str) -> None:
 
 # ── 出站媒体体积上限（P3 2026-08-17：25MB 硬编码 → 按平台/配置）────────────
 # inbox.media.limits_mb: {default: 25, telegram: 200, whatsapp: 64, ...}
-# 未配置回落 25（旧行为）；夹 [1, 2048] 防误配。前端经 send-caps.media_max_mb
-# 拿到同一数字做上传前预检（两端同源，不各写一套）。
-_MEDIA_CAP_DEFAULT_MB = 25
-
-
-def _media_cap_mb(config: Dict[str, Any], platform: str) -> int:
-    """该平台的出站媒体体积上限（MB）：limits_mb.{platform} → .default → 25。"""
-    try:
-        lim = (((config or {}).get("inbox") or {}).get("media") or {}) \
-            .get("limits_mb") or {}
-        v = lim.get(str(platform or "").lower())
-        if v is None:
-            v = lim.get("default")
-        n = int(v) if v is not None else _MEDIA_CAP_DEFAULT_MB
-        return max(1, min(2048, n))
-    except Exception:
-        return _MEDIA_CAP_DEFAULT_MB
+# #169 2026-09-05：limits_mb 缺省时不再一律 25——内建平台默认表（LINE 100 按 117 号
+# 真机三档实测 / TG 200 / WA 64）在 `src/inbox/media_limits.py`，LINE worker 的
+# `outbound_max_bytes` 缺省同源（此前独立硬编码 20MB，比路由还低）。前端经
+# send-caps.media_max_mb 拿到同一数字做上传前预检（两端同源，不各写一套）。
+from src.inbox.media_limits import (  # noqa: E402
+    describe_over_cap as _describe_over_cap,
+    platform_media_cap_mb as _media_cap_mb,
+)
 
 
 # ── #180：owns_media 为 False 的 501 分因（2026-09-05）─────────────────────────
@@ -1255,8 +1246,21 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             except Exception:
                 logger.warning("[send-media] 超限拒收后临时文件未能删除 path=%s", local,
                                exc_info=True)
+            # #169：文案带实际大小与差值。流式落盘超限即停，此刻不知道总大小，
+            # 拿 Content-Length（multipart 整体）当近似值——对几十 MB 的文件，
+            # 表单包裹开销是千分位噪音；拿不到就 size=0（文案退化为只报上限）。
+            try:
+                _decl = int(request.headers.get("content-length") or 0)
+            except (TypeError, ValueError):
+                _decl = 0
+            _ov = _describe_over_cap(_decl, _cap_mb)
+            logger.info("[send-media] 超限拒收 platform=%s cap=%sMB declared=%sMB file=%s",
+                        platform, _cap_mb, _ov["size"], str(upload.filename or "")[:80])
+            _key = ("err.inbox.file_too_large_detail" if _ov["size"] > 0
+                    else "err.inbox.file_too_large_mb")
             raise HTTPException(413, tr(
-                request, "err.inbox.file_too_large_mb", mb=_cap_mb))
+                request, _key,
+                mb=_cap_mb, cap=_cap_mb, size=_ov["size"], over=_ov["over"]))
 
         # P0 2026-08-17：文档无配文 → 用原始文件名作收件箱镜像文本（气泡/会话
         # 预览显示「report.pdf」而非空行；只影响坐席台可读文本，不发给客户）。

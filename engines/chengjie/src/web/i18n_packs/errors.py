@@ -99,6 +99,8 @@ ZH = {
     "err.inbox.gate_exempt_failed": "白名单写入失败：{msg}",
     # 出站媒体体积上限（P3 2026-08-17：按平台配置，替代 25MB 硬编码文案）
     "err.inbox.file_too_large_mb": "文件超过该平台体积上限（{mb} MB）",
+    # #169 2026-09-05：带实际大小与差值（size/over 为 MB，一位小数；size 未知时路由回落上一条）
+    "err.inbox.file_too_large_detail": "文件 {size} MB 超过该平台体积上限 {cap} MB（超出 {over} MB，请压缩后重发）",
     # 图片问答「问这张图」（P2 2026-08-19，unified_inbox_vision_routes）
     "err.imgask.question_required": "请先输入要问的问题",
     "err.imgask.not_image": "该消息不是图片，暂不支持问图",
@@ -228,6 +230,7 @@ EN = {
     "err.inbox.gate_exempt_failed": "Failed to write whitelist: {msg}",
     # Outbound media size cap (P3 2026-08-17: per-platform config replaces the 25MB literal)
     "err.inbox.file_too_large_mb": "File exceeds this platform's size limit ({mb} MB)",
+    "err.inbox.file_too_large_detail": "File is {size} MB, over this platform's {cap} MB limit (by {over} MB) — please compress and resend",
     "err.imgask.question_required": "Enter a question first",
     "err.imgask.not_image": "This message is not an image",
     "err.imgask.media_unavailable": "Image file for this message is unavailable (not archived or already cleaned up)",

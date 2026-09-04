@@ -45,6 +45,7 @@ client 同样从 0 起——媒体占位内容彼此相同，撞上上一轮进�
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import secrets
@@ -89,7 +90,37 @@ _OBS_SERVICE = "talk"
 _OBS_SID = "m"
 
 DEFAULT_INBOUND_MAX_BYTES = 20 * 1024 * 1024
+#: 出站缺省只在 ``src.inbox.media_limits`` 不可用时兜底（#169 起真值走那边，见
+#: ``_outbound_default_bytes``）。保留常量是为了旧测试/旧调用方的 import 不断。
 DEFAULT_OUTBOUND_MAX_BYTES = 20 * 1024 * 1024
+
+#: #169 OBS 大文件上传：okline transport 缺省 timeout=30s 且是 **socket 级**（含写）。
+#: 2026-09-05 117 号真机：30MB 18.5s 送达；60MB 单 POST 在 30s 写超时上撞
+#: ``('Connection aborted.', TimeoutError('The write operation timed out'))`` ×3 次重试
+#: ＝91s 后 obs_upload_failed。上传期按体积放宽：``base + size / OBS_UPLOAD_MIN_BPS``。
+#: 256KB/s 是对坐席机上行带宽的保守下界（低于它上传本身就不可用）。
+OBS_UPLOAD_TIMEOUT_BASE_SEC = 30.0
+OBS_UPLOAD_MIN_BPS = 256 * 1024
+OBS_UPLOAD_TIMEOUT_MAX_SEC = 900.0
+
+
+def _outbound_default_bytes(config: Optional[Dict[str, Any]]) -> int:
+    """LINE 出站体积缺省＝收件箱路由同源（``inbox.media.limits_mb.line`` → 内建 100MB）。"""
+    try:
+        from src.inbox.media_limits import platform_media_cap_bytes
+        return int(platform_media_cap_bytes(config, "line"))
+    except Exception:
+        return DEFAULT_OUTBOUND_MAX_BYTES
+
+
+def obs_upload_timeout_sec(size_bytes: int) -> float:
+    """按体积算 OBS 单次上传的 socket 超时（秒），夹 [base, max]。纯函数。"""
+    try:
+        n = max(0, int(size_bytes or 0))
+    except (TypeError, ValueError):
+        n = 0
+    t = OBS_UPLOAD_TIMEOUT_BASE_SEC + n / float(OBS_UPLOAD_MIN_BPS)
+    return float(max(OBS_UPLOAD_TIMEOUT_BASE_SEC, min(OBS_UPLOAD_TIMEOUT_MAX_SEC, t)))
 
 #: #172：OBS 404 ≠「已过期」。只有消息龄 ≥ 此值（小时）才许标 MISS_EXPIRED。
 #: 默认 7 天——2026-09-05 真机取证（117 号，region PH）：手机发的图 98.7h、语音 98.7h、
@@ -149,7 +180,11 @@ def resolve_line_media_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         # 耗时叠到私聊 AI 回复的延迟上。关＝群消息维持改动前的「[图片]」占位行为。
         "groups": _flag("groups", False),
         "inbound_max_bytes": _size("inbound_max_bytes", DEFAULT_INBOUND_MAX_BYTES),
-        "outbound_max_bytes": _size("outbound_max_bytes", DEFAULT_OUTBOUND_MAX_BYTES),
+        # #169：出站上限缺省与收件箱 send-media 路由**同源**（inbox.media.limits_mb.line
+        # → 内建 LINE 默认 100MB）。此前这里独立硬编码 20MB、比路由的 25 还低——路由
+        # 放行的 20~25MB 文件到 worker 才被 media_too_large 拒掉。显式配
+        # platform_login.line.media.outbound_max_bytes 仍最高优先。
+        "outbound_max_bytes": _size("outbound_max_bytes", _outbound_default_bytes(config)),
         # #172：OBS 404 只有在消息龄 ≥ 此阈值时才许判「已过期」（见 classify_missing）
         "expired_after_hours": _hours("expired_after_hours", DEFAULT_EXPIRED_AFTER_HOURS),
     }
@@ -1236,6 +1271,43 @@ def _convert_audio_for_line(path: str) -> str:
     return ""
 
 
+@contextlib.contextmanager
+def _obs_upload_timeout(api: Any, size_bytes: int):
+    """上传期把 okline transport 的 socket 超时按体积放宽，退出恢复原值。
+
+    ``ObsClient.upload_message_object`` 不接 timeout 形参、透传的是
+    ``transport.config.timeout``（LineConfig 是可变 dataclass），只能在这一段临时改。
+    调用方在 worker 的 ``_api_call`` 锁内（整段占位→上传→配文互斥），同 transport 的
+    receiver 长轮询自带显式 ``long_poll_timeout``，不受影响。任何取不到/改不了的
+    形状（测试假 api、okline 升级换字段）一律静默不放宽＝旧行为。
+    """
+    cfgobj = None
+    old = None
+    try:
+        cfgobj = getattr(getattr(getattr(api, "obs", None), "_t", None), "config", None)
+        if cfgobj is None:
+            cfgobj = getattr(getattr(api, "transport", None), "config", None)
+        old = getattr(cfgobj, "timeout", None)
+    except Exception:
+        cfgobj, old = None, None
+    want = obs_upload_timeout_sec(size_bytes)
+    bumped = False
+    if cfgobj is not None and isinstance(old, (int, float)) and want > float(old):
+        try:
+            cfgobj.timeout = want
+            bumped = True
+        except Exception:
+            bumped = False
+    try:
+        yield want if bumped else old
+    finally:
+        if bumped:
+            try:
+                cfgobj.timeout = old
+            except Exception:
+                pass
+
+
 def send_line_media(
     api: Any, to: str, *, media_path: str, media_type: str = "", caption: str = "",
     cfg: Optional[Dict[str, Any]] = None,
@@ -1342,9 +1414,10 @@ def send_line_media(
         try:
             enc = api.get_encrypted_access_token(
                 int(EncryptedAccessTokenFeatureType.OBS_GENERAL))
-            api.obs.upload_message_object(
-                msg_id, data, name=name, obs_type=obs_type, cat=cat, enc_token=enc,
-            )
+            with _obs_upload_timeout(api, len(data)):
+                api.obs.upload_message_object(
+                    msg_id, data, name=name, obs_type=obs_type, cat=cat, enc_token=enc,
+                )
             break
         except Exception as exc:
             if _is_obs_locked(exc) and not dedup_retried:
