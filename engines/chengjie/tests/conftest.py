@@ -39,6 +39,9 @@ for _k in [k for k in os.environ if k.startswith("AITR_")]:
 _TEST_DATA_ROOT = Path(tempfile.mkdtemp(prefix="aitr-test-dataroot-"))
 (_TEST_DATA_ROOT / "config").mkdir(parents=True, exist_ok=True)
 os.environ["AITR_DATA_DIR"] = str(_TEST_DATA_ROOT)
+# I-4 灰度账本（src/ops/region_quote_gray）默认相对 CWD 落 logs/i4_gray——pytest 的 CWD
+# 是引擎根，测试触发 decide/observe 会把账本写进仓库树；一并指到进程级 tmp。
+os.environ.setdefault("AITR_I4_GRAY_DIR", str(_TEST_DATA_ROOT / "logs" / "i4_gray"))
 atexit.register(lambda: shutil.rmtree(_TEST_DATA_ROOT, ignore_errors=True))
 
 # reunion 草稿 prompt 配置（``config/reunion_prompts.yaml``）＝真实生产配置，

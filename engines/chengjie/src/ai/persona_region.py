@@ -404,4 +404,14 @@ def note_banned_hits(reply: str, region: str) -> list:
     if sc:
         _bump("script_hit")
         logger.info("[persona_region] %s 档回复漏出简体字 %s", region, sc)
+    # 持久灰度账本（logs/i4_gray/region_*.jsonl）：L4 负样本改写要不要开，看的是跨
+    # 重启的命中率；只落地区/命中词/长度，不落回复原文。
+    try:
+        from src.ops import region_quote_gray
+        region_quote_gray.append("region", {
+            "region": region, "banned": list(hits), "script": list(sc),
+            "len": len(reply or ""),
+        })
+    except Exception:  # noqa: BLE001
+        pass
     return hits

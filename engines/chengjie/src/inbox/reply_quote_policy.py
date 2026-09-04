@@ -263,6 +263,16 @@ _STATS: Dict[str, Any] = {
 }
 
 
+def _gray(rec: Dict[str, Any]) -> None:
+    """持久灰度账本（logs/i4_gray/quote_*.jsonl）：进程计数重启即清零，调
+    min_relevance 要的是跨重启样本。只落决策字段，不落用户原文。"""
+    try:
+        from src.ops import region_quote_gray
+        region_quote_gray.append("quote", rec)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def record_decision(dec: QuoteDecision) -> None:
     with _LOCK:
         _STATS["decided"] += 1
@@ -271,17 +281,25 @@ def record_decision(dec: QuoteDecision) -> None:
         else:
             r = dec.reason or "unknown"
             _STATS["skipped"][r] = int(_STATS["skipped"].get(r, 0)) + 1
+    _gray({
+        "quote": bool(dec.quote), "reason": dec.reason,
+        "score": dec.score if dec.score is not None else None,
+        "burst_len": dec.burst_len,
+        "n_cand": len(dec.candidates or ()),
+    })
 
 
 def record_applied(result: Any) -> None:
     if isinstance(result, Mapping) and result.get("quote_applied"):
         with _LOCK:
             _STATS["applied"] += 1
+        _gray({"applied": True})
 
 
 def record_fallback_plain() -> None:
     with _LOCK:
         _STATS["fallback_plain"] += 1
+    _gray({"fallback_plain": True})
 
 
 def stats_snapshot() -> Dict[str, Any]:
