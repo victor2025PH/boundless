@@ -12956,12 +12956,14 @@ function renderMessages(c, msgs, opts={}){
     let _outSub='';
     if(isOut && m.text){
       let _oOrig='', _oMeta=null;
-      if(m.agent_original && _meaningfulXlate(m.text,m.agent_original)){
+      // #154 上午形态：原文不是「收→」语言（自动链 LLM 草稿随对方漂移）→ 不当 ✎ 原文渲染，
+      // 让常规补译按「收→」出译文行（_origReadable，与 _outHasOrig 同一判据）。
+      if(m.agent_original && _meaningfulXlate(m.text,m.agent_original) && _origReadable(m.agent_xlate||null)){
         _oOrig=m.agent_original; _oMeta=m.agent_xlate||null;
       } else {
         const _ck=((typeof convKey==='function'&&selectedChat)?convKey(selectedChat):'')+'\u0001'+m.text;
         const _o=_outOrigMap.get(_ck);
-        if(_o && _o.orig && _meaningfulXlate(m.text,_o.orig)){ _oOrig=_o.orig; _oMeta=_o.meta||null; }
+        if(_o && _o.orig && _meaningfulXlate(m.text,_o.orig) && _origReadable(_o.meta||null)){ _oOrig=_o.orig; _oMeta=_o.meta||null; }
       }
       if(_oOrig) _outSub=`<div class="msg-orig-sub">${esc(_oOrig)}${_oMeta?_xlWarnBadge(_oMeta):''}</div>`;
     }
@@ -21001,13 +21003,27 @@ function _docMsgXlDone(tx,p){
   }
 }
 
+// #154 上午形态（2026-09-04）：✎ 原文副行只在「原文是坐席能读的语言」时才算对照原文。
+// 自动链（autosend / sendpoint 铆定守卫）记进 outbound_translations 的 original_text 是
+// **LLM 草稿**，会跟着对方最新入站漂移——实录：会话「收→中·发→英」，钧发日语 → 草稿日语
+// → 守卫按 pin=en 译成英文真发英文，但 ✎ 行渲染的是日语草稿，且 _outHasOrig 把它当
+// 「已双语」压掉了中文补译 → 坐席看着像「AI 用日语回了客户」。判据＝记录的 source_lang 与
+// 会话「收→」不同语（两者都已知才判；未知 source / 未设「收→」保持旧行为＝坐席手打原文）。
+// 不可读 → 不出 ✎ 行，出站气泡交给常规补译管线按「收→」出译文行（语言锁定会话设置）。
+function _origReadable(meta){
+  try{
+    const src=(meta&&meta.source_lang)?String(meta.source_lang):'';
+    if(!src||!_xlateIn) return true;
+    return _sameLang(src,_xlateIn);
+  }catch(_){ return true; }
+}
 // P2：出站消息是否已有「中文原文副行」（一击直发的坐席原文），用于判定无需再补译避免冗余/烧 API。
 function _outHasOrig(m){
   if(!m||!m.text) return false;
-  if(m.agent_original && _meaningfulXlate(m.text,m.agent_original)) return true;
+  if(m.agent_original && _meaningfulXlate(m.text,m.agent_original)) return _origReadable(m.agent_xlate||null);
   if(typeof convKey==='function' && selectedChat){
     const o=_outOrigMap.get(convKey(selectedChat)+'\u0001'+m.text);
-    if(o && o.orig && _meaningfulXlate(m.text,o.orig)) return true;
+    if(o && o.orig && _meaningfulXlate(m.text,o.orig)) return _origReadable(o.meta||null);
   }
   return false;
 }
