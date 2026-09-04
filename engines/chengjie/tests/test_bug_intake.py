@@ -377,19 +377,22 @@ def test_verify_yes_closes_ticket(bi, bus):
     tid = _mk_fixed_notified(bi)
     # 无报障关键词的确认话也要引燃（verdict 走 verify 路径）
     assert bi.trigger_verdict(CFG, -100123, "u1", "好了，能用了") is True
+    # J-5 B（D5）：归属靶文中 #N
     out = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
                                    reporter_id="u1", reporter_name="张三",
-                                   text="好了，能用了")
+                                   text=f"#{tid} 好了，能用了")
     assert out["category"] == "verify"
     assert "✅" in out["footer"] and f"#{tid}" in out["footer"]
     assert bi.get_ticket(tid)["status"] == "verified"
+    ev = bi.list_events(["verify_yes"])
+    assert len(ev) == 1 and "via=hash" in ev[0]["detail"]
 
 
 def test_verify_no_reopens_and_rearms_collect(bi, bus):
     tid = _mk_fixed_notified(bi, reporter="u2")
     out = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
                                    reporter_id="u2", reporter_name="李四",
-                                   text="更新了还是不行")
+                                   text=f"更新了 #{tid} 还是不行")
     assert out["category"] == "verify" and "🔁" in out["footer"]
     row = bi.get_ticket(tid)
     assert row["status"] == "confirmed"
@@ -408,6 +411,127 @@ def test_verify_needs_notified_ticket(bi):
                              text="卡死了")
     bi.set_ticket_status(r["ticket_id"], "fixed")
     assert bi.pending_verify_ticket(-100123, "u3") is None
+    assert bi.candidate_verify_tickets(-100123, "u3") == []
+
+
+# ── J-5 B（决策 D5）：verify 归属只认 #N / reply_to，裸短句不翻单 ─────────────
+def _observe(bi, reporter, text, **kw):
+    return bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
+                                    reporter_id=reporter, reporter_name="钧",
+                                    text=text, **kw)
+
+
+def test_extract_ticket_refs_and_resolve_pure():
+    from src.ops import bug_intake as bi
+    assert bi.extract_ticket_refs("#142 好了") == [142]
+    assert bi.extract_ticket_refs("# 140 和 #142 都可以了，#142") == [140, 142]
+    assert bi.extract_ticket_refs("已经可以了") == []
+    cands = [{"id": 142, "notify_msg_id": 9001},
+             {"id": 140, "notify_msg_id": 9000},
+             {"id": 138, "notify_msg_id": 0}]
+    assert bi.resolve_verify_target("#140 好了", cands)[0]["id"] == 140
+    assert bi.resolve_verify_target("#140 好了", cands)[1] == "hash"
+    # #N 优先于 reply_to（回着 A 的回访说「#B 好了」以明说为准）
+    assert bi.resolve_verify_target("#138 好了", cands, 9001)[0]["id"] == 138
+    assert bi.resolve_verify_target("好了", cands, 9001) == (cands[0], "reply")
+    assert bi.resolve_verify_target("好了", cands, 9000)[0]["id"] == 140
+    assert bi.resolve_verify_target("好了", cands, 0) == (None, "no_anchor")
+    assert bi.resolve_verify_target("好了", cands, 777) == (None, "no_anchor")
+    assert bi.resolve_verify_target("#999 好了", cands) == (None, "hash_unknown")
+    assert bi.resolve_verify_target("好了", []) == (None, "no_candidates")
+
+
+def test_verify_hash_targets_named_ticket_not_latest(bi, bus):
+    """0905 实锤：钧说的是 WhatsApp 登录那张，却翻了 id 最大的总闸单。现在
+    「#<老单> 好了」必须翻老单、新单原地不动。"""
+    old = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    new = _mk_fixed_notified(bi, text="总闸打不开")
+    assert new > old
+    out = _observe(bi, "u1", f"#{old} 已经可以了")
+    assert out["category"] == "verify" and out["ticket_id"] == old
+    assert bi.get_ticket(old)["status"] == "verified"
+    assert bi.get_ticket(new)["status"] == "fixed"
+
+
+def test_verify_bare_short_phrase_is_ambiguous_not_flipped(bi, bus):
+    """「已经可以了」无 #N 无 reply_to → 一张单都不翻，记 verify_ambiguous 事件
+    （值守可见），消息本身照常走普通链（不是被吞掉）。"""
+    a = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    b = _mk_fixed_notified(bi, text="总闸打不开")
+    n_yes = bi.dump_stats()["verify_yes"]
+    out = _observe(bi, "u1", "已经可以了，看是否可以修复，稳定一点的")
+    assert out["active"] is True and out["category"] != "verify"
+    assert bi.get_ticket(a)["status"] == "fixed"
+    assert bi.get_ticket(b)["status"] == "fixed"
+    assert bi.dump_stats()["verify_yes"] == n_yes
+    assert bi.dump_stats()["verify_ambiguous"] == 1
+    ev = bi.list_events(["verify_ambiguous"])
+    assert len(ev) == 1
+    assert ev[0]["detail"].startswith("yes:no_anchor")
+    assert f"#{a}" in ev[0]["detail"] and f"#{b}" in ev[0]["detail"]
+    assert bi.list_events(["verify_yes"]) == []
+
+
+def test_verify_reply_to_notify_message_attributes_that_ticket(bi, bus):
+    """回着 bot 的回访消息说「好了」→ 归属该回访对应的单（哪怕它不是最新）。"""
+    old = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    new = _mk_fixed_notified(bi, text="总闸打不开")
+    bi.mark_notified(old, True, "", msg_id=5100)
+    bi.mark_notified(new, True, "", msg_id=5200)
+    out = _observe(bi, "u1", "好了，能用了", reply_to_msg_id=5100)
+    assert out["category"] == "verify" and out["ticket_id"] == old
+    assert bi.get_ticket(old)["status"] == "verified"
+    assert bi.get_ticket(new)["status"] == "fixed"
+    ev = bi.list_events(["verify_yes"])
+    assert len(ev) == 1 and "via=reply" in ev[0]["detail"]
+    # 回的不是回访消息（随便回了群里别的话）→ 不归属
+    out2 = _observe(bi, "u1", "还是不行", reply_to_msg_id=4242,
+                    now=time.time() + 120)
+    assert out2["category"] != "verify"
+    assert bi.get_ticket(new)["status"] == "fixed"
+    assert bi.dump_stats()["verify_ambiguous"] == 1
+
+
+def test_verify_hash_unknown_ticket_does_not_flip_others(bi, bus):
+    """带了号但不是该报障人的待验单（别人的 / 打错）→ 不翻任何单，记 ambiguous。"""
+    mine = _mk_fixed_notified(bi, text="消息发不出去")
+    out = _observe(bi, "u1", "#999 好了")
+    assert out["category"] != "verify"
+    assert bi.get_ticket(mine)["status"] == "fixed"
+    ev = bi.list_events(["verify_ambiguous"])
+    assert len(ev) == 1 and ev[0]["detail"].startswith("yes:hash_unknown")
+
+
+def test_verify_ambiguous_silent_when_no_candidates(bi, bus):
+    """没有任何待验单时「好了」就是闲聊：不记 ambiguous（否则群里每句好了都
+    进值守面板＝噪音）。"""
+    _observe(bi, "u9", "好了")
+    assert bi.dump_stats()["verify_ambiguous"] == 0
+    assert bi.list_events(["verify_ambiguous"]) == []
+
+
+def test_backfill_row_reply_to_passthrough(bi, bus, tmp_path):
+    """回放链把行里的 reply_to 透传进 observe → 归属同实时链口径。"""
+    from src.ops import bug_intake_backfill as bf
+    old = _mk_fixed_notified(bi, text="WhatsApp 登录不了")
+    new = _mk_fixed_notified(bi, text="总闸打不开")
+    bi.mark_notified(old, True, "", msg_id=6100)
+    bi.mark_notified(new, True, "", msg_id=6200)
+    cfg = dict(CFG)
+    cfg["bug_intake"] = dict(CFG["bug_intake"])
+    cfg["bug_intake"]["backfill"] = {"enabled": True, "cap": 30}
+    sp = tmp_path / "bf.state.json"
+    bf.save_state({"-100123": {"last_msg_id": 7000, "ts": 1.0}}, sp)
+
+    async def fetch(chat_id, cap):
+        return [{"id": 7001, "text": "好了，能用了", "reporter_id": "u1",
+                 "reporter_name": "钧", "outgoing": False, "has_media": False,
+                 "reply_to_id": "6100"}]
+
+    s = _run(bf.run_backfill_once(cfg, fetch, account_id="777", state_path=sp))
+    assert s["replayed"] == 1
+    assert bi.get_ticket(old)["status"] == "verified"
+    assert bi.get_ticket(new)["status"] == "fixed"
 
 
 # ── P3：截图收集 + 回访积压 ───────────────────────────────────────────────────
@@ -842,16 +966,18 @@ def test_observe_realtime_without_mid_then_replay_with_mid_dedups(bi, bus):
 def test_verify_yes_not_retriggered_by_backfill_replay(bi, bus):
     """0904 21:0x 实录：花无缺一句「我这边显示的都好了」实时链已消费（#153），
     4 分钟后 backfill 重喂又在 #154 上 verify_yes。现在：实时链见过的 mid 回放
-    直接跳过；即便没进哨兵、只要 60s 内同文本也短路——第二张单保持 fixed。"""
+    直接跳过；即便没进哨兵、只要 60s 内同文本也短路——第二张单保持 fixed。
+    （B/D5 后确认句须带 #N 才翻单；本例带 #tid_a，A 的「不二次观察」保证不变。）"""
     from src.ops.bug_intake_backfill import run_backfill_once, save_state
     tid_a = _mk_fixed_notified(bi, reporter="u1", text="消息发不出去")
     tid_b = _mk_fixed_notified(bi, reporter="u1", text="语音听不到")
     t0 = time.time()
+    txt = f"#{tid_a} 我这边显示的都好了"
     # 实时链：哨兵登记 mid=3001（此处只登记不判洞），随后 observe（无 mid，现状）
     bi.note_group_msg_seq(CFG, -100123, 3001, account_id="777", now=t0)
     rt = bi.observe_group_message(CFG, chat_id=-100123, account_id="777",
                                   reporter_id="u1", reporter_name="skuio 花无缺",
-                                  text="我这边显示的都好了", now=t0)
+                                  text=txt, now=t0)
     assert rt["category"] == "verify"
     verified = {tid_a, tid_b} - {
         t for t in (tid_a, tid_b) if bi.get_ticket(t)["status"] == "fixed"}
@@ -862,7 +988,7 @@ def test_verify_yes_not_retriggered_by_backfill_replay(bi, bus):
     save_state({"-100123": {"last_msg_id": 3000, "ts": t0}}, sp)
 
     async def _fetch(chat_id, cap):
-        return [{"id": 3001, "text": "我这边显示的都好了", "reporter_id": "u1",
+        return [{"id": 3001, "text": txt, "reporter_id": "u1",
                  "reporter_name": "skuio", "outgoing": False, "has_media": False}]
 
     s = _run(run_backfill_once(CFG, _fetch, account_id="777", state_path=sp,

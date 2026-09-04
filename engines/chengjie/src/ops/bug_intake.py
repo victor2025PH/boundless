@@ -138,6 +138,9 @@ _STATS: Dict[str, int] = {
     "observed": 0, "bug_new": 0, "bug_dup": 0, "usage": 0, "other": 0,
     "crisis_hold": 0, "rate_capped": 0, "engaged": 0, "alerts": 0,
     "voice_suppressed": 0, "screenshots": 0, "verify_yes": 0, "verify_no": 0,
+    # J-5 B（决策 D5）：确认/否认词命中、有待验单、但无 #N / reply_to 定不了
+    # 归属 → 不翻单只记事件的次数
+    "verify_ambiguous": 0,
     "smalltalk_suppressed": 0, "photo_suppressed": 0, "feedback": 0,
     # B33（实施49 2026-08-21）：被限频拦下的真反馈登记数 / 被压制截图归档数
     "rate_capped_report": 0, "capped_photo_archived": 0,
@@ -685,23 +688,102 @@ def mark_notified(ticket_id: int, ok: bool, note: str = "",
         logger.debug("[bug_intake] 通知记账失败（忽略）", exc_info=True)
 
 
-def pending_verify_ticket(chat_id: Any, reporter_id: Any,
-                          now: Optional[float] = None
-                          ) -> Optional[Dict[str, Any]]:
-    """该报障人在此群「已回访待验证」的最新 fixed 单（14 天窗）。"""
+def candidate_verify_tickets(chat_id: Any, reporter_id: Any,
+                             now: Optional[float] = None,
+                             limit: int = 50) -> List[Dict[str, Any]]:
+    """该报障人在此群「已回访待验证」的全部 fixed 单（14 天窗，id 降序）。
+
+    J-5 B（决策 D5）：候选是**列表**不是「最新一张」——同一报障人回访后几十张
+    单同时待验时，一句「还是不行」以前打到 id 最大那张（I-6 结论 B / 0905
+    #142→#140→#138 连翻）。归属由 ``resolve_verify_target`` 按 ``#N`` / reply_to
+    决定，决定不了就不翻单；本列表同时供值守面板挑选。
+    """
     ts = float(now if now is not None else time.time())
     try:
         con = _db()
         con.row_factory = sqlite3.Row
-        row = con.execute(
+        rows = con.execute(
             "SELECT * FROM bug_tickets WHERE chat_id=? AND reporter_id=?"
             " AND status='fixed' AND notify_ts>0 AND updated_ts>=?"
-            " ORDER BY id DESC LIMIT 1",
-            (str(chat_id), str(reporter_id), ts - 14 * 86400)).fetchone()
-        return dict(row) if row else None
+            " ORDER BY id DESC LIMIT ?",
+            (str(chat_id), str(reporter_id), ts - 14 * 86400,
+             max(1, min(int(limit), 200)))).fetchall()
+        return [dict(r) for r in rows]
     except Exception:
         logger.debug("[bug_intake] 待验证单查询失败", exc_info=True)
-        return None
+        return []
+
+
+def pending_verify_ticket(chat_id: Any, reporter_id: Any,
+                          now: Optional[float] = None
+                          ) -> Optional[Dict[str, Any]]:
+    """兼容壳：``candidate_verify_tickets`` 的首张（最新）。
+
+    ⚠ 只用于「有没有待验单」的存在性判断（trigger_verdict / 面板）；**归属**
+    一律走 ``resolve_verify_target``——拿本函数结果直接翻状态就是 D5 要禁的
+    「短句打到 id 最大那张」。
+    """
+    cands = candidate_verify_tickets(chat_id, reporter_id, now=now, limit=1)
+    return cands[0] if cands else None
+
+
+_TICKET_REF_RE = re.compile(r"#\s*(\d{1,7})")
+
+
+def extract_ticket_refs(text: str) -> List[int]:
+    """文中 ``#N`` 工单号（去重保序）。「#142 好了」→ [142]。"""
+    out: List[int] = []
+    for m in _TICKET_REF_RE.finditer(str(text or "")):
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            continue
+        if n > 0 and n not in out:
+            out.append(n)
+    return out
+
+
+def resolve_verify_target(text: str, candidates: List[Dict[str, Any]],
+                          reply_to_msg_id: Any = 0
+                          ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """确认/否认句该归到哪张单（决策 D5，纯函数）。
+
+    返回 ``(ticket, how)``：
+    - 文中 ``#N`` 且 N 在候选集 → 该单，``how="hash"``；
+    - 无可用 ``#N`` 但本条是**对支持号回访消息的回复**（``reply_to_msg_id`` ==
+      某候选的 ``notify_msg_id``）→ 该单，``how="reply"``；
+    - 其余 → ``(None, reason)``：``no_candidates`` / ``hash_unknown``（带了号但
+      不属该报障人待验集）/ ``no_anchor``（裸短句「可以了/好了」——群闲聊里出现
+      概率太高，不翻单，调用方记 ``verify_ambiguous`` 事件交值守）。
+    ``#N`` 优先于 reply_to：用户回着 A 的回访说「#B 好了」，以其明说的为准。
+    """
+    cands = [c for c in (candidates or []) if isinstance(c, dict)]
+    if not cands:
+        return None, "no_candidates"
+    by_id = {}
+    for c in cands:
+        try:
+            by_id[int(c.get("id") or 0)] = c
+        except (TypeError, ValueError):
+            continue
+    refs = extract_ticket_refs(text)
+    for n in refs:
+        if n in by_id:
+            return by_id[n], "hash"
+    try:
+        rmid = int(reply_to_msg_id or 0)
+    except (TypeError, ValueError):
+        rmid = 0
+    if rmid > 0:
+        for c in cands:
+            try:
+                if int(c.get("notify_msg_id") or 0) == rmid:
+                    return c, "reply"
+            except (TypeError, ValueError):
+                continue
+    if refs:
+        return None, "hash_unknown"
+    return None, "no_anchor"
 
 
 def list_pending_notify(limit: int = 20) -> List[Dict[str, Any]]:
@@ -1148,7 +1230,9 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
         if not t:
             return False
         # 修复确认/否认（verified 自动闭环）：无报障关键词也要接话
-        if detect_verify_intent(t) and pending_verify_ticket(
+        # （接话≠翻单：归属由 observe 的 resolve_verify_target 定，这里只判
+        #  「有待验单可能在说它」——AI 静默档下仅影响 engaged 计数）
+        if detect_verify_intent(t) and candidate_verify_tickets(
                 cid, sender_id, now=ts):
             _bump("engaged")
             return True
@@ -1228,9 +1312,12 @@ def _observe_dedup_locked(cid: str, reporter_id: Any, text: str,
 def observe_group_message(
     config: Optional[Dict[str, Any]], *, chat_id: Any, account_id: Any,
     reporter_id: Any, reporter_name: str, text: str,
-    now: Optional[float] = None, msg_id: Any = 0,
+    now: Optional[float] = None, msg_id: Any = 0, reply_to_msg_id: Any = 0,
 ) -> Dict[str, Any]:
     """报障群消息观察（接线在 skill_manager.process_message 群 hint 之后）。
+
+    ``reply_to_msg_id``（J-5 B，可选）：本条所回复的消息 id；等于某待验单的
+    ``notify_msg_id``（bot 回访消息）时确认/否认归属该单。不带＝只认文中 ``#N``。
 
     返回 {active, category, ticket_id, is_new, severity, report_count,
     prompt_block, footer}；active=False 时其余键为空——调用方零分支透传。
@@ -1287,16 +1374,32 @@ def observe_group_message(
         _rate_mark(f"u:{cid}:{reporter_id}", ts)
         _rate_mark(f"g:{cid}", ts)
 
-        # verified 自动闭环（P3）：已回访的 fixed 单 + 确认/否认口径 → 直接流转
+        # verified 自动闭环（P3）：已回访的 fixed 单 + 确认/否认口径 → 直接流转。
+        # J-5 B（决策 D5）：归属只认文中 #N 或「回复 bot 回访消息」；裸短句
+        # 「可以了/好了」有待验单却定不了是哪张 → 不翻状态，只记
+        # verify_ambiguous 事件（值守面板可见），消息继续走普通链。
         _vi = detect_verify_intent(t)
         if _vi:
-            vt = pending_verify_ticket(cid, reporter_id, now=ts)
+            _cands = candidate_verify_tickets(cid, reporter_id, now=ts)
+            vt, _how = resolve_verify_target(t, _cands, reply_to_msg_id)
+            if vt is None and _cands:
+                _bump("verify_ambiguous")
+                _record_event(
+                    cid, "verify_ambiguous", reporter_id,
+                    f"{_vi}:{_how} cands="
+                    + ",".join(f"#{c.get('id')}" for c in _cands[:8])
+                    + f" | {t[:120]}")
+                logger.info(
+                    "[bug_intake] verify 归属不明（%s/%s）chat=%s reporter=%s "
+                    "候选=%s 不翻单", _vi, _how, cid, reporter_id,
+                    [c.get("id") for c in _cands[:8]])
             if vt is not None:
                 vtid = int(vt.get("id") or 0)
                 if _vi == "yes":
                     set_ticket_status(vtid, "verified")
                     _bump("verify_yes")
-                    _record_event(cid, "verify_yes", reporter_id, f"#{vtid}")
+                    _record_event(cid, "verify_yes", reporter_id,
+                                  f"#{vtid} via={_how}")
                     with _LOCK:
                         _COLLECT.pop(_collect_key(cid, reporter_id), None)
                     out.update({
@@ -1312,7 +1415,8 @@ def observe_group_message(
                     append_ticket_note(
                         vtid, f"[验证未过 {reporter_name or reporter_id}] {t}")
                     _bump("verify_no")
-                    _record_event(cid, "verify_no", reporter_id, f"#{vtid}")
+                    _record_event(cid, "verify_no", reporter_id,
+                                  f"#{vtid} via={_how}")
                     with _LOCK:
                         _COLLECT[_collect_key(cid, reporter_id)] = {
                             "ticket_id": vtid, "ts": ts, "got": set()}
@@ -1478,7 +1582,8 @@ __all__ = [
     "record_bug_ticket", "append_ticket_note", "set_ticket_status",
     "list_tickets", "get_ticket", "build_fix_notify_text", "build_reply_text",
     "resolve_update_hint", "mark_notified",
-    "detect_verify_intent", "pending_verify_ticket", "list_pending_notify",
+    "detect_verify_intent", "pending_verify_ticket", "candidate_verify_tickets",
+    "extract_ticket_refs", "resolve_verify_target", "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",
     "note_group_msg_seq", "due_seq_gaps", "seq_gap_backfilled",

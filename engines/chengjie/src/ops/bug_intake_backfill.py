@@ -270,6 +270,22 @@ def _row_reporter_name(r: Dict[str, Any]) -> str:
     return first
 
 
+def _row_reply_to(r: Dict[str, Any]) -> int:
+    """行所回复的消息 id（J-5 B verify 归属锚）。fetch 方可给 ``reply_to_id`` /
+    ``reply_to_msg_id`` / ``reply_to_message_id`` 任一键；缺省 0＝不带锚。"""
+    for k in ("reply_to_msg_id", "reply_to_id", "reply_to_message_id"):
+        v = r.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    return 0
+
+
 def max_row_id(rows: List[Dict[str, Any]]) -> int:
     best = 0
     for r in rows or []:
@@ -362,6 +378,7 @@ async def run_backfill_once(
                     reporter_name=_row_reporter_name(r),
                     text=str(r.get("text") or ""),
                     msg_id=rid,
+                    reply_to_msg_id=_row_reply_to(r),
                 )
                 summary["replayed"] += 1
                 replayed_top = max(replayed_top, rid)
