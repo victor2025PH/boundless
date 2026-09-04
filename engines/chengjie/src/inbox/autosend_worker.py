@@ -1541,6 +1541,9 @@ class AutosendWorker:
         草稿载荷列表（platform/account_id/chat_key/text）。投递本身在 async 的 _tick 里做。
         """
         drafts = self._svc.list_drafts(status="pending", limit=200)
+        # 捞稿只认草稿行上由 src/inbox/autosend_policy.decide 写下的档位（#160 v2 单一
+        # 入口不变量）：这里**不**按 risk_level/关键词再算一遍——两处各算一套就会出现
+        # 「台账说放行了、实际还是被拦」的不可归因状态。
         l2 = [d for d in drafts if d.get("autopilot_level") == "L2"]
         sent, errors = 0, 0
         to_deliver: List[Dict[str, Any]] = []

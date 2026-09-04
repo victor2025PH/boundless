@@ -139,3 +139,243 @@ def test_whole_word_boundaries_for_risk_terms():
     # 中文精确短语：「不想活动」不是「不想活」
     assert quick_risk("今天不想活动了，太累")[0] == "low"
     assert quick_risk("我不想活了")[0] == "high"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 第二层：shadow 档的放行行为（autosend_policy.decide + DraftService 接线 + 台账）
+# ═══════════════════════════════════════════════════════════════════════
+
+import json
+from pathlib import Path
+
+from src.inbox import autosend_policy as pol
+from src.inbox import autosend_shadow_log as shadow_log
+from src.inbox.drafts import DraftService, is_autosend_allowed, risk_to_autopilot
+from src.inbox.store import InboxStore
+
+
+@pytest.fixture
+def shadow_env(tmp_path, monkeypatch):
+    """台账落 tmp、策略走默认 shadow、计数器清零。"""
+    d = tmp_path / "shadow"
+    monkeypatch.setenv(shadow_log.ENV_DIR, str(d))
+    monkeypatch.delenv(pol.ENV_POLICY_MODE, raising=False)
+    shadow_log.get_stats().reset()
+    return d
+
+
+@pytest.fixture
+def store(tmp_path):
+    s = InboxStore(tmp_path / "policy.db")
+    yield s
+    s.close()
+
+
+def _conv(cid="tg:acct1:u1", chat_key="u1"):
+    return {"conversation_id": cid, "platform": "telegram",
+            "account_id": "acct1", "chat_key": chat_key, "display_name": "T"}
+
+
+def _decide_text(text, *, reply="", mode="auto_ai", policy=None):
+    """把「入站文本 + AI 稿」按 drafts.py 同口径喂进 decide()。"""
+    a = quick_analyze(text)
+    kw_level, kw_hits = keyword_risk_hits(text)
+    peer_risk = pol.max_risk(a["risk_level"], kw_level or "low")
+    reasons = list(a["risk_reasons"]) + (["keyword"] if kw_level else [])
+    hits = list(a["risk_hits"]) + [h for h in kw_hits if h not in a["risk_hits"]]
+    r_level, r_hits = keyword_risk_hits(reply)
+    return pol.decide(
+        peer_risk, reasons, r_level or "low", ["keyword"] if r_level else [],
+        hits + r_hits, automation_mode=mode, policy_mode=policy,
+    )
+
+
+def _lines(d: Path):
+    out = []
+    if d.exists():
+        for p in sorted(d.glob("shadow_*.jsonl")):
+            out += [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return out
+
+
+# 判中五条（含 AI 稿）：shadow 下全放行 + 恰好一条台账
+_SHADOW_CASES = [
+    # (入站文本, AI 稿, 期望 hold_reason, would_hold_level)
+    ("please stop messaging me", "", "stop_contact", "L4"),
+    ("别再联系我", "", "stop_contact", "L4"),
+    ("I want to kill myself", "", "self_harm", "L4"),
+    ("send me your bank card number", "", "credential_or_payment_request", "L4"),
+    ("ok how do I pay", "Just transfer to this account and I'll ship it", "reply_risk", "L4"),
+]
+
+
+@pytest.mark.parametrize("text,reply,reason,would", _SHADOW_CASES)
+def test_shadow_releases_and_produces_exactly_one_record(shadow_env, text, reply, reason, would):
+    d = _decide_text(text, reply=reply)
+    assert d.level == "L2", (text, d)
+    assert d.hold_reason == "", d
+    assert d.autosend_allowed is True
+    assert d.shadow is not None, "判中却没有影子记录＝台账丢数据"
+    assert d.shadow.would_hold_level == would
+    assert d.shadow.hold_reason == reason, d.shadow
+    assert d.shadow.risk_hits, "命中词必须有，否则一个月后分不清真该拦还是误伤"
+    assert d.policy_mode == "shadow"
+
+
+@pytest.mark.parametrize("text", _NO_RISK)
+def test_shadow_no_risk_inputs_produce_zero_records(shadow_env, text):
+    d = _decide_text(text)
+    assert d.level == "L2" and d.hold_reason == ""
+    assert d.shadow is None, (text, d.shadow)
+
+
+@pytest.mark.parametrize("mode,level", [("review", "L1"), ("manual", "L0"), ("multi_choice", "L1")])
+def test_explicit_non_auto_mode_still_held_and_not_in_ledger(shadow_env, mode, level):
+    """会话档位是用户显式选的，与风险/policy_mode 无关：照旧挂起、不进台账。"""
+    for text in ("please stop messaging me", "hi there"):
+        d = _decide_text(text, mode=mode)
+        assert d.level == level, (mode, text, d)
+        assert d.held and d.hold_reason.startswith("mode:")
+        assert d.shadow is None
+    # enforce＝旧表逐字：review+high 仍是 L4 主管闸（反向验证基线），且不是影子
+    d = _decide_text("please stop messaging me", mode="review", policy="enforce")
+    assert d.level == "L4" and d.shadow is None and d.hold_reason == "stop_contact"
+    d = _decide_text("hi there", mode="review", policy="enforce")
+    assert d.level == "L1" and d.shadow is None
+
+
+@pytest.mark.parametrize("text,reply,reason,would", _SHADOW_CASES)
+def test_enforce_reverse_verification_restores_hold(shadow_env, text, reply, reason, would):
+    """§6-10 反向验证：把 policy 置 enforce，2–5 必须变回挂起——证明旧规则没被删。"""
+    d = _decide_text(text, reply=reply, policy="enforce")
+    assert d.level == would, (text, d)
+    assert d.hold_reason == reason
+    assert d.autosend_allowed is False
+    assert d.shadow is None          # 真扣了就不是影子
+
+
+def test_env_override_switches_policy_mode(shadow_env, monkeypatch):
+    assert pol.current_policy_mode() == "shadow"
+    monkeypatch.setenv(pol.ENV_POLICY_MODE, "enforce")
+    assert pol.current_policy_mode() == "enforce"
+    assert risk_to_autopilot("high", "auto_ai") == "L4"
+    assert is_autosend_allowed("medium", "auto_ai") is False
+    monkeypatch.setenv(pol.ENV_POLICY_MODE, "shadow")
+    assert risk_to_autopilot("high", "auto_ai") == "L2"
+    assert is_autosend_allowed("medium", "auto_ai") is True
+    assert risk_to_autopilot("high", "review") == "L1"
+    assert risk_to_autopilot("low", "manual") == "L0"
+
+
+def test_legacy_table_pinned_verbatim():
+    """旧表逐字保留（enforce 起点 + 台账判据）。"""
+    assert pol.legacy_level("high", "auto_ai") == "L4"
+    assert pol.legacy_level("high", "review") == "L4"
+    assert pol.legacy_level("medium", "auto_ai") == "L3"
+    assert pol.legacy_level("low", "auto_ai") == "L2"
+    assert pol.legacy_level("low", "review") == "L1"
+    assert pol.legacy_level("low", "manual") == "L0"
+    assert pol.resolve_policy_mode({"inbox": {"l2_autosend": {"policy_mode": "enforce"}}}) == "enforce"
+    assert pol.resolve_policy_mode({"inbox": {"l2_autosend": {"policy_mode": "bogus"}}}) == "shadow"
+    assert pol.resolve_policy_mode({}) == "shadow"
+
+
+# ── DraftService 接线：真库 + 真台账文件 ─────────────────────────────
+
+def test_service_auto_generate_releases_and_writes_ledger(shadow_env, store):
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    peer = "hey I'm really busy these days, please stop messaging me, thanks a lot"
+    did = svc.auto_generate_draft(_conv(), peer, automation_mode="auto_ai")
+    assert did
+    row = store.get_draft(did)
+    assert row["autopilot_level"] == "L2"           # 放行
+    assert row["risk_level"] == "high"              # 风险信息照样写进 draft 行（供台账/分析）
+    rows = _lines(shadow_env)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    for k in shadow_log.RECORD_FIELDS:
+        assert k in r, f"台账缺字段 {k}"
+    assert r["hold_reason"] == "stop_contact" and r["would_hold_level"] == "L4"
+    assert r["draft_id"] == did and r["account_id"] == "acct1" and r["conv_key"] == "u1"
+    assert r["stage"] == "peer" and r["automation_mode"] == "auto_ai"
+    assert any("stop messaging" in h for h in r["risk_hits"]), r["risk_hits"]
+    # ⛔ 不记原文：入站/出站**整条原文**都不许出现在台账文件里（命中词是 ≤40 字的短语片段）
+    raw = "".join(p.read_text(encoding="utf-8") for p in shadow_env.glob("*.jsonl"))
+    assert peer not in raw
+    assert row["draft_text"] not in raw
+    assert all(len(h) <= 40 for h in r["risk_hits"])
+    assert r["text_fp"] and r["text_len"] == len(row["draft_text"])
+    snap = shadow_log.stats_snapshot()
+    assert snap["total"] == 1 and snap["stop_contact"] == 1 and snap["by_reason"]["stop_contact"] == 1
+
+
+def test_service_no_risk_zero_ledger(shadow_env, store):
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    did = svc.auto_generate_draft(
+        _conv(), "Yes you did because I was happy chatting with you i didn't want to stop",
+        automation_mode="auto_ai")
+    assert did and store.get_draft(did)["autopilot_level"] == "L2"
+    assert _lines(shadow_env) == []
+    assert shadow_log.stats_snapshot()["total"] == 0
+
+
+def test_service_review_mode_held_not_in_ledger(shadow_env, store):
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    did = svc.auto_generate_draft(_conv(), "please stop messaging me", automation_mode="review")
+    assert store.get_draft(did)["autopilot_level"] == "L1"
+    assert _lines(shadow_env) == []
+
+
+def test_service_enrich_reply_risk_recorded_once(shadow_env, store):
+    """入站干净 + AI 稿要付款 → 放行 L2，台账恰好一条 stage=reply / reply_risk=high。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    did = svc.auto_generate_draft(_conv(), "ok how do I pay", automation_mode="auto_ai", enrich=True)
+    assert _lines(shadow_env) == []                 # 入站侧无风险
+    ok = svc.enrich_draft(did, reply_text="send the deposit to account 1234 first",
+                          automation_mode="auto_ai")
+    assert ok
+    row = store.get_draft(did)
+    assert row["status"] == "pending" and row["autopilot_level"] == "L2"
+    rows = _lines(shadow_env)
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "reply" and rows[0]["reply_risk"] == "high"
+    assert rows[0]["hold_reason"] == "reply_risk"
+    assert rows[0]["risk_hits"], rows[0]
+
+
+def test_service_enrich_does_not_double_count_peer_hold(shadow_env, store):
+    """入站已判中（记过一行）+ AI 稿也高风险 → 同一稿不记两遍。"""
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    did = svc.auto_generate_draft(_conv(), "I want to kill myself", automation_mode="auto_ai", enrich=True)
+    assert len(_lines(shadow_env)) == 1
+    svc.enrich_draft(did, reply_text="please transfer to this account", automation_mode="auto_ai")
+    assert len(_lines(shadow_env)) == 1
+    assert store.get_draft(did)["autopilot_level"] == "L2"
+
+
+def test_service_enforce_holds_for_real(shadow_env, store, monkeypatch):
+    monkeypatch.setenv(pol.ENV_POLICY_MODE, "enforce")
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    did = svc.auto_generate_draft(_conv(), "please stop messaging me", automation_mode="auto_ai")
+    assert store.get_draft(did)["autopilot_level"] == "L4"
+    assert _lines(shadow_env) == []                 # enforce 真扣，不写影子台账
+
+
+def test_alert_only_for_stop_contact_and_self_harm(shadow_env, monkeypatch):
+    published = []
+
+    class _Bus:
+        def publish(self, t, data):
+            published.append((t, data))
+
+    import src.integrations.shared.event_bus as eb
+    monkeypatch.setattr(eb, "get_event_bus", lambda: _Bus())
+    base = dict(platform="telegram", account_id="a", conv_key="c", draft_id="d",
+                would_hold_level="L4", peer_risk="high", peer_reasons=["x"],
+                reply_risk="low", reply_reasons=[], risk_hits=["w"], text="t")
+    assert shadow_log.maybe_alert(shadow_log.build_record(hold_reason="stop_contact", **base)) is True
+    assert shadow_log.maybe_alert(shadow_log.build_record(hold_reason="self_harm", **base)) is True
+    assert shadow_log.maybe_alert(shadow_log.build_record(hold_reason="money", **base)) is False
+    assert [p[0] for p in published] == ["autosend_shadow_alert", "autosend_shadow_alert"]
+    assert published[0][1]["rate_key"] == "a:c"
+    assert published[0][1]["reason"] == "stop_contact"

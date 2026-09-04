@@ -20,6 +20,10 @@ from .draft_models import (
     WhatsAppPendingAdapter,
     UnifiedDraft,
 )
+# #160 I-1（2026-09-04）：放行决策单一入口 + 影子台账。本文件任何地方要算 L0–L4
+# 都必须经 policy_decide（直接或经 risk_to_autopilot 薄壳），不许自己再写一套映射。
+from .autosend_policy import decide as policy_decide, Decision as _PolicyDecision
+from . import autosend_shadow_log as _shadow_log
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,25 @@ def keyword_risk_level(text: str) -> Optional[str]:
         if pattern.search(t):
             return level
     return None
+
+
+def _as_list(v: Any) -> List[str]:
+    """risk_reasons 列在 store 里可能是 JSON 串/列表/空——统一成 list[str]。"""
+    if not v:
+        return []
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if str(x)]
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith("["):
+            try:
+                import json as _json
+                arr = _json.loads(s)
+                return [str(x) for x in arr if str(x)] if isinstance(arr, list) else []
+            except Exception:
+                return []
+        return [p.strip() for p in s.split(",") if p.strip()]
+    return [str(v)]
 
 
 def _max_risk(a: str, b: Optional[str]) -> str:
@@ -579,13 +602,21 @@ class DraftService:
             return {"ok": False, "error": "no store"}
         kind, _, sid = str(draft_id or "").partition(":")
         risk_level = str(analysis.get("risk_level") or "low")
-        autopilot = risk_to_autopilot(risk_level, automation_mode)
+        _reasons = list(analysis.get("risk_reasons") or [])
+        # 单一入口：LLM 分析的 peer 风险也只经 policy 定档（shadow 下不降档、进台账）
+        decision = policy_decide(
+            peer_risk=risk_level, peer_reasons=_reasons,
+            risk_hits=list(analysis.get("risk_hits") or []),
+            automation_mode=automation_mode,
+        )
+        autopilot = decision.level
+        _platform = (self._by_kind.get(kind).platform if kind in self._by_kind else "")
         try:
             self._store.upsert_draft({
                 "source_kind": kind, "source_id": sid,
-                "platform": (self._by_kind.get(kind).platform if kind in self._by_kind else ""),
+                "platform": _platform,
                 "risk_level": risk_level,
-                "risk_reasons": analysis.get("risk_reasons") or [],
+                "risk_reasons": _reasons,
                 "autopilot_level": autopilot,
                 "translated_preview": str(analysis.get("translated_preview") or ""),
                 "status": "pending",
@@ -593,10 +624,17 @@ class DraftService:
         except Exception:
             logger.debug("apply_analysis overlay 写入失败", exc_info=True)
             return {"ok": False, "error": "overlay write failed"}
+        if decision.shadow is not None:
+            self._record_shadow(
+                decision, stage="analysis", platform=_platform, account_id="",
+                conv_key=str(analysis.get("conversation_id") or ""), draft_id=draft_id,
+                text="",
+            )
         return {
             "ok": True,
             "autopilot_level": autopilot,
-            "autosend_allowed": is_autosend_allowed(risk_level, automation_mode),
+            "autosend_allowed": decision.autosend_allowed,
+            "shadow": decision.shadow.to_dict() if decision.shadow else None,
         }
 
     # ── B2 强制风险执行 + 审计闭环 ───────────────────────────────
@@ -645,11 +683,14 @@ class DraftService:
         base_risk = str(draft.get("risk_level") or "unknown")
         effective_risk = _max_risk(base_risk, kw_risk)
         if kw_risk and effective_risk != base_risk:
-            # 实时更新 overlay（best-effort）
-            autopilot_from_kw = risk_to_autopilot(
-                effective_risk,
-                draft.get("automation_mode") or "review",
-            )
+            # 实时更新 overlay（best-effort）。档位只认 policy（经 risk_to_autopilot 薄壳）；
+            # 草稿行不带 automation_mode 时按现有档位反推（L2 行＝auto_ai 会话），
+            # 否则 shadow 下会把正在自动发的 L2 行误写成 L1（#160 单一入口收口）。
+            _mode_hint = str(
+                draft.get("automation_mode")
+                or ("auto_ai" if str(draft.get("autopilot_level") or "") == "L2"
+                    else "review"))
+            autopilot_from_kw = risk_to_autopilot(effective_risk, _mode_hint)
             try:
                 if self._store is not None:
                     kind, _, sid = str(draft_id or "").partition(":")
@@ -1047,12 +1088,20 @@ class DraftService:
         try:
             from src.ai.chat_assistant_service import quick_analyze, _suggestions, detect_language
             analysis = quick_analyze(t)
-            risk_level = _max_risk(
-                analysis.get("risk_level", "low"),
-                keyword_risk_level(t),
+            _kw_level, _kw_hits = keyword_risk_hits(t)
+            risk_level = _max_risk(analysis.get("risk_level", "low"), _kw_level)
+            _peer_reasons = list(analysis.get("risk_reasons") or [])
+            if _kw_level and "keyword" not in _peer_reasons:
+                _peer_reasons.append("keyword")
+            _risk_hits = list(analysis.get("risk_hits") or [])
+            _risk_hits += [h for h in _kw_hits if h not in _risk_hits]
+            # 档位**只认** autosend_policy.decide（#160 v2：shadow 下风险不降档，
+            # 「本会被扣」进影子台账；review/manual 档由会话档位自身决定，与风险无关）
+            _decision = policy_decide(
+                peer_risk=risk_level, peer_reasons=_peer_reasons,
+                risk_hits=_risk_hits, automation_mode=automation_mode,
             )
-            # L0: 手动只发，不自动生成（保留给完全人工场景）
-            autopilot = risk_to_autopilot(risk_level, automation_mode)
+            autopilot = _decision.level
 
             lang = analysis.get("language", "zh")
             intent = analysis.get("intent", "")
@@ -1082,7 +1131,7 @@ class DraftService:
                 "draft_text": draft_text,
                 "draft_lang": lang,
                 "risk_level": risk_level,
-                "risk_reasons": analysis.get("risk_reasons") or [],
+                "risk_reasons": _peer_reasons,
                 "autopilot_level": autopilot,
                 "status": _status,
                 # 显式刷新代龄：同会话幂等键是对同一行 upsert，不带它重拟稿会沿用
@@ -1102,9 +1151,19 @@ class DraftService:
             except Exception:
                 logger.debug("Q2 质量评分写入失败（已忽略）", exc_info=True)
 
+            # 影子台账：旧规则本会扣（L3/L4）但已放行 → 落一行（不改变发送行为）。
+            # 日志同时带 shadow=<reason> hits=<命中词>——放行了也要能从日志看出「本来会被拦」。
+            _sh = _decision.shadow
+            if _sh is not None:
+                self._record_shadow(
+                    _decision, stage="peer", platform=platform, account_id=account_id,
+                    conv_key=chat_key or conv_id, draft_id=draft_id, text=draft_text,
+                )
             logger.info(
-                "auto_generate_draft OK conv=%s level=%s draft_id=%s",
+                "auto_generate_draft OK conv=%s level=%s draft_id=%s shadow=%s hits=%s",
                 conv_id, autopilot, draft_id,
+                (_sh.hold_reason if _sh else "-"),
+                ("|".join(_sh.risk_hits[:4]) if _sh and _sh.risk_hits else "-"),
             )
             # G1：向事件总线发布 draft_created，供 SSE 实时通知坐席工作台
             try:
@@ -1154,9 +1213,23 @@ class DraftService:
         if draft is None or str(draft.get("status") or "") != "enriching":
             return False
         base_risk = str(draft.get("risk_level") or "low")
-        reply_risk = keyword_risk_level(reply)
+        _peer_reasons = _as_list(draft.get("risk_reasons"))
+        reply_risk, _reply_hits = keyword_risk_hits(reply)
+        _reply_reasons = ["keyword"] if reply_risk else []
         effective_risk = _max_risk(base_risk, reply_risk)
-        autopilot = risk_to_autopilot(effective_risk, automation_mode)
+        # 档位只认 policy：入站风险 + AI 稿风险一起进 decide（shadow 下不降档）。
+        # 台账去重：入站侧「本会被扣」已在 auto_generate_draft 落过一行，这里只在
+        # **AI 稿把扣稿档位推高/新引入**时再落（stage=reply）——同一稿不记两遍。
+        _peer_only = policy_decide(
+            peer_risk=base_risk, peer_reasons=_peer_reasons,
+            automation_mode=automation_mode,
+        )
+        _decision = policy_decide(
+            peer_risk=base_risk, peer_reasons=_peer_reasons,
+            reply_risk=reply_risk or "low", reply_reasons=_reply_reasons,
+            risk_hits=_reply_hits, automation_mode=automation_mode,
+        )
+        autopilot = _decision.level
         lang = reply_lang or str(draft.get("draft_lang") or "")
         ok = self._store.finalize_draft_enrichment(
             draft_id,
@@ -1176,11 +1249,48 @@ class DraftService:
                 self._store.update_draft_quality(draft_id, q, bd)
             except Exception:
                 logger.debug("enrich_draft 质量分写入失败（已忽略）", exc_info=True)
+            _sh = _decision.shadow
+            _new_hold = _sh is not None and (
+                _peer_only.shadow is None
+                or _peer_only.shadow.would_hold_level != _sh.would_hold_level)
+            if _new_hold:
+                self._record_shadow(
+                    _decision, stage="reply",
+                    platform=str(draft.get("platform") or ""),
+                    account_id=str(draft.get("account_id") or ""),
+                    conv_key=str(draft.get("chat_key") or draft.get("conversation_id") or ""),
+                    draft_id=draft_id, text=reply,
+                )
             logger.info(
-                "enrich_draft OK draft_id=%s level=%s risk=%s",
+                "enrich_draft OK draft_id=%s level=%s risk=%s shadow=%s hits=%s",
                 draft_id, autopilot, effective_risk,
+                (_sh.hold_reason if _sh else "-"),
+                ("|".join(_reply_hits[:4]) if _reply_hits else "-"),
             )
         return ok
+
+    def _record_shadow(
+        self, decision: _PolicyDecision, *, stage: str, platform: str,
+        account_id: str, conv_key: str, draft_id: str, text: str,
+    ) -> None:
+        """影子台账落行 + stop_contact/self_harm 即时告警。best-effort，绝不影响发送。"""
+        sh = decision.shadow
+        if sh is None:
+            return
+        try:
+            rec = _shadow_log.build_record(
+                platform=platform, account_id=account_id, conv_key=conv_key,
+                draft_id=draft_id, would_hold_level=sh.would_hold_level,
+                hold_reason=sh.hold_reason, peer_risk=sh.peer_risk,
+                peer_reasons=sh.peer_reasons, reply_risk=sh.reply_risk,
+                reply_reasons=sh.reply_reasons, risk_hits=sh.risk_hits,
+                text=text, stage=stage, automation_mode=decision.automation_mode,
+                policy_mode=decision.policy_mode,
+            )
+            _shadow_log.record(rec)
+            _shadow_log.maybe_alert(rec)
+        except Exception:
+            logger.debug("autosend_shadow 记账失败（已忽略）", exc_info=True)
 
     def release_enriching_draft(self, draft_id: str) -> bool:
         """人设补全失败的兜底：把停泊草稿原样翻 pending（保留规则模板占位，降级旧行为）。"""
@@ -1225,27 +1335,21 @@ _MEDIUM = "medium"
 
 
 def risk_to_autopilot(risk_level: str, automation_mode: str) -> str:
-    """把风险等级 + 自动化模式映射到 L0–L4。
+    """把风险等级 + 自动化模式映射到 L0–L4 —— **薄壳，只认 autosend_policy.decide**。
 
-    L0 仅翻译(manual) / L1 草稿待审(默认/review) / L2 低风险自动(auto_ai+low) /
-    L3 中风险审批(medium) / L4 高风险人工(high)。
+    L0 仅翻译(manual) / L1 草稿待审(review/multi_choice) / L2 auto_ai 放行 /
+    L3、L4 只在 ``policy_mode=enforce`` 下由风险产生。#160 v2（2026-09-04）默认
+    ``shadow``：风险不再降档，high/medium 在 auto_ai 下照样 L2，「本会被扣」进影子台账。
+    旧表见 ``autosend_policy.legacy_level``。**不许在别处再算一遍档位。**
     """
-    risk = str(risk_level or "low").lower()
-    mode = str(automation_mode or "review").lower()
-    if risk == _HIGH:
-        return "L4"
-    if risk == _MEDIUM:
-        return "L3"
-    if mode == "manual":
-        return "L0"
-    if mode == "auto_ai":
-        return "L2"
-    return "L1"
+    return policy_decide(
+        peer_risk=risk_level, automation_mode=automation_mode,
+    ).level
 
 
 def is_autosend_allowed(risk_level: str, automation_mode: str) -> bool:
-    """是否允许自动发送。核心安全不变量：medium/high 一律禁止自动发，
-    即使 automation_mode=auto_ai。仅 L2（低风险 + auto_ai）放行。"""
+    """是否允许自动发送＝policy 判 L2。shadow 档下仅由会话档位决定（auto_ai 即放行）；
+    enforce 档下 medium/high 仍禁自动发。"""
     return risk_to_autopilot(risk_level, automation_mode) == "L2"
 
 

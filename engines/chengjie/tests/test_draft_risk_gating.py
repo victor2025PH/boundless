@@ -1,7 +1,18 @@
 """Phase B↔C 桥接：风险分层 L0–L4 + 自动发送门禁。"""
 
+import pytest
+
 from src.inbox.store import InboxStore
 from src.inbox.drafts import DraftService, risk_to_autopilot, is_autosend_allowed
+
+
+@pytest.fixture(autouse=True)
+def _legacy_enforce_policy(monkeypatch):
+    """#160 v2（2026-09-04）起默认 ``policy_mode=shadow``：风险不再降档、全放行、只写台账。
+    本文件钉的是旧 L3/L4 扣稿语义＝``enforce`` 档骨架，显式切 enforce 跑——同时充当
+    「旧规则逻辑仍在、一个月后可直接启用」的反向验证（指令 §6-10）。shadow 行为见
+    ``tests/test_drafts_risk_policy.py``。"""
+    monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
 
 
 def test_risk_to_autopilot_levels():

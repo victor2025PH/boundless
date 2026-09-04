@@ -39,6 +39,14 @@ from src.inbox.drafts import DraftService
 from src.web.routes.drafts_routes import register_drafts_routes
 
 
+@pytest.fixture(autouse=True)
+def _legacy_enforce_policy(monkeypatch):
+    """#160 v2（2026-09-04）起默认 ``policy_mode=shadow``（风险不降档、全放行、只写台账）。
+    本文件 E2 段钉的是旧「high→L4 / medium→L3」语义＝``enforce`` 档骨架，显式切 enforce 跑，
+    兼作反向验证。shadow 行为见 ``tests/test_drafts_risk_policy.py``。"""
+    monkeypatch.setenv("AITR_AUTOSEND_POLICY_MODE", "enforce")
+
+
 # ──────────────────────────────────────────────────────
 # helpers
 # ──────────────────────────────────────────────────────
