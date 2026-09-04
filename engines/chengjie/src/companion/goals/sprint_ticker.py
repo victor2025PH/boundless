@@ -42,6 +42,12 @@ PHASE_DIRECTIVES = (
 
 DEFAULT_PHASE_POINTS = (0.0, 0.45, 0.75)
 
+# D1b P0-2（2026-09-05）：出厂白名单从 ("telegram",) 扩到三大私聊平台——此前
+# sprint.enabled=true 的桌面种子/cloud_light 在 WhatsApp / LINE（付费主力平台）
+# 上静默不出手，卡片却写「自动推进」。messenger 刻意不入：platform_modes 把它
+# 封顶 review（网页链路不稳），自发消息本就不该在那条链上出手。
+DEFAULT_SPRINT_PLATFORMS = ("telegram", "whatsapp", "line")
+
 
 def parse_sprint_cfg(goals_cfg: Any) -> Dict[str, Any]:
     """``companion.goals.sprint`` → 全键齐备的配置 dict（坏值回默认，绝不抛）。"""
@@ -74,7 +80,8 @@ def parse_sprint_cfg(goals_cfg: Any) -> Dict[str, Any]:
         pts = list(DEFAULT_PHASE_POINTS)
 
     platforms = tuple(
-        str(x).strip().lower() for x in (raw.get("platforms") or ("telegram",))
+        str(x).strip().lower()
+        for x in (raw.get("platforms") or DEFAULT_SPRINT_PLATFORMS)
         if str(x).strip())
     jit = raw.get("jitter_sec")
     try:
@@ -95,6 +102,12 @@ def parse_sprint_cfg(goals_cfg: Any) -> Dict[str, Any]:
 
     return {
         "enabled": bool(raw.get("enabled", False)),
+        # D1b P0-1：冲刺自己的灰度开关（只拟稿不真发）。冲刺行不再吃
+        # proactive_care.dry_run（那是 care 业务的灰度），要灰度冲刺请开这个。
+        "dry_run": bool(raw.get("dry_run", False)),
+        # 「platforms 是否显式配置」——出厂默认与显式配置行为一致，但启动
+        # WARNING 要能区分「运营没想过白名单」（sprint_engine_status 消费）
+        "platforms_explicit": bool(raw.get("platforms")),
         "interval_sec": _f("interval_sec", 120.0, 30.0, 1800.0),
         "max_per_tick": int(_f("max_per_tick", 6, 1, 50)),
         "phase_points": tuple(pts),
@@ -104,7 +117,7 @@ def parse_sprint_cfg(goals_cfg: Any) -> Dict[str, Any]:
         "exempt_contact_budget": bool(raw.get("exempt_contact_budget", True)),
         "ignore_quiet_hours": bool(raw.get("ignore_quiet_hours", False)),
         "jitter_sec": jitter,
-        "platforms": platforms or ("telegram",),
+        "platforms": platforms or DEFAULT_SPRINT_PLATFORMS,
         # P1 力度体系：收口升档阈 + 退避/熔断/封顶覆写（None=内置基线）
         "escalate_at": _f("escalate_at", 0.35, 0.05, 0.9),
         "backoff_after": _opt_int("backoff_after", 0, 20),
@@ -113,7 +126,32 @@ def parse_sprint_cfg(goals_cfg: Any) -> Dict[str, Any]:
         "session_cap": _opt_int("session_cap", 1, 24),
         # P2 完成提速：高置信联系方式信号 → 冲刺目标直接结算 done（默认关）
         "auto_settle_contact": bool(raw.get("auto_settle_contact", False)),
+        # D1b P0-3：自然档「每日一拍」也由本推进器出手（默认开，随 sprint.enabled）
+        # ——此前自然档 auto 只能搭 proactive_topic 顺风车（bridge），而那条链
+        # 沉默阈 12–48h + 仅 telegram，几天期的目标结构上等不到一拍。
+        "natural_daily": bool(raw.get("natural_daily", True)),
+        "natural_window": _hour_window(raw.get("natural_window")),
+        "natural_silence_min_sec": _f(
+            "natural_silence_min_sec", 6 * 3600.0, 0.0, 3 * 86400.0),
+        "natural_min_gap_sec": _f(
+            "natural_min_gap_sec", 6 * 3600.0, 0.0, 3 * 86400.0),
     }
+
+
+DEFAULT_NATURAL_WINDOW = (10, 20)
+
+
+def _hour_window(raw: Any) -> Tuple[int, int]:
+    """``[start_hour, end_hour)`` 本地小时窗；坏值回默认 (10, 20)。"""
+    try:
+        a, b = int(raw[0]), int(raw[1])
+        a = max(0, min(a, 23))
+        b = max(1, min(b, 24))
+        if a < b:
+            return a, b
+    except (TypeError, ValueError, IndexError):
+        pass
+    return DEFAULT_NATURAL_WINDOW
 
 
 def phase_norm(goal_id: str, phase: int) -> str:
@@ -121,22 +159,46 @@ def phase_norm(goal_id: str, phase: int) -> str:
     return f"goal:{str(goal_id or '')[:48]}:p{max(0, int(phase))}"
 
 
-def parse_goal_care_norm(tnorm: Any) -> Tuple[str, Optional[int]]:
-    """``goal:{gid}[:p{n}]`` → ``(goal_id, phase|None)``；非 goal 行 → ``("", None)``。
+def daily_norm(goal_id: str, day: str) -> str:
+    """自然档每日拍的 care ``topic_norm``（一日一发；``day``=YYYY-MM-DD 本地日键）。"""
+    d = str(day or "").replace("-", "")[:8]
+    return f"goal:{str(goal_id or '')[:48]}:d{d}"
 
-    兼容 impl84 旧格式（无相位后缀=到期关怀行）。goal_id 本体不含冒号
-    （store 生成的 hex id），按最后一个 ``:p<digits>`` 拆。
+
+def parse_goal_care_kind(tnorm: Any) -> Tuple[str, str, Any]:
+    """``goal:*`` 行分型 → ``(kind, goal_id, arg)``：
+
+    - ``("sprint", gid, phase:int)``   ``goal:{gid}:p{n}`` 冲刺相位行
+    - ``("daily", gid, day:"YYYY-MM-DD")`` ``goal:{gid}:d{YYYYMMDD}`` 自然档每日拍
+    - ``("care", gid, None)``         impl84 到期关怀行（无后缀）
+    - ``("", "", None)``              非 goal 行
     """
     s = str(tnorm or "").strip()
     if not s.startswith("goal:"):
-        return "", None
+        return "", "", None
     body = s[len("goal:"):]
     if not body:
-        return "", None
+        return "", "", None
     head, sep, tail = body.rpartition(":p")
     if sep and head and tail.isdigit():
-        return head, int(tail)
-    return body, None
+        return "sprint", head, int(tail)
+    head, sep, tail = body.rpartition(":d")
+    if sep and head and tail.isdigit() and len(tail) == 8:
+        return "daily", head, f"{tail[:4]}-{tail[4:6]}-{tail[6:]}"
+    return "care", body, None
+
+
+def parse_goal_care_norm(tnorm: Any) -> Tuple[str, Optional[int]]:
+    """``goal:{gid}[:p{n}]`` → ``(goal_id, phase|None)``；非 goal 行 → ``("", None)``。
+
+    兼容 impl84 旧格式（无相位后缀=到期关怀行）与 D1b 每日拍行（``:d…`` 后缀
+    → phase=None，goal_id 正确剥出）。goal_id 本体不含冒号（store 生成的
+    hex id）。
+    """
+    kind, gid, arg = parse_goal_care_kind(tnorm)
+    if not kind:
+        return "", None
+    return gid, (int(arg) if kind == "sprint" else None)
 
 
 def phase_directive(phase: int, total_phases: int = 3) -> str:
@@ -219,6 +281,109 @@ def due_phase(
     if gap > 0 and last_outbound_ts > 0 and (now - last_outbound_ts) < gap:
         return None
     return candidate
+
+
+def due_daily(
+    goal: Dict[str, Any],
+    *,
+    cfg: Dict[str, Any],
+    now: float,
+    last_inbound_ts: float = 0.0,
+    last_outbound_ts: float = 0.0,
+    today_action: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """自然档「今天该不该主动拍一次」→ 本地日键 ``YYYY-MM-DD``（None=不拍）。纯函数。
+
+    判定序（每条可单测；D1b P0-3 2026-09-05）：
+    1. 目标活跃且今天不是建目标当天（day 0 由建目标那轮对话/回复链自己接住，
+       主动拍从第二天起——当天再追一句是连珠炮）；有 deadline 且已过 → 不拍；
+    2. 本地小时落在 ``natural_window`` 内（默认 10–20 点：自然档是日常节奏，
+       不像冲刺有时限压力，深夜/清晨不出手）；
+    3. 今日拍已 consumed/sent（回复链顺势拍过 / 今天已主动拍过）→ 不拍；
+       今日拍被坐席驳回（detail 以 ``rejected`` 起）→ 不拍（人已否决）；
+    4. 沉默闸：对方 ``natural_silence_min_sec``（默认 6h）内开过口 → 让回复链；
+    5. 出站间隔闸：距我方上条出站 < ``natural_min_gap_sec``（默认 6h）→ 不拍。
+    一日一发由 care ``topic_norm=goal:{gid}:d{日}`` 去重兜底（本函数不查库）。
+    """
+    if not isinstance(goal, dict):
+        return None
+    try:
+        created = float(goal.get("created_at") or goal.get("start_ts") or 0)
+        deadline = float(goal.get("deadline_ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if deadline > 0 and now >= deadline:
+        return None
+    lt = time.localtime(now)
+    day = f"{lt.tm_year:04d}-{lt.tm_mon:02d}-{lt.tm_mday:02d}"
+    if created > 0:
+        ct = time.localtime(created)
+        if (ct.tm_year, ct.tm_yday) == (lt.tm_year, lt.tm_yday):
+            return None
+    w0, w1 = cfg.get("natural_window") or DEFAULT_NATURAL_WINDOW
+    if not (int(w0) <= lt.tm_hour < int(w1)):
+        return None
+    if isinstance(today_action, dict):
+        st = str(today_action.get("status") or "")
+        if st in ("consumed", "sent"):
+            return None
+        if str(today_action.get("detail") or "").startswith("rejected"):
+            return None
+    sil = float(cfg.get("natural_silence_min_sec") or 0)
+    if sil > 0 and last_inbound_ts > 0 and (now - last_inbound_ts) < sil:
+        return None
+    gap = float(cfg.get("natural_min_gap_sec") or 0)
+    if gap > 0 and last_outbound_ts > 0 and (now - last_outbound_ts) < gap:
+        return None
+    return day
+
+
+def natural_source_text(goal: Dict[str, Any],
+                        today_action: Optional[Dict[str, Any]] = None) -> str:
+    """自然档每日拍的 care ``source_text``（≤160 字）：优先用规划器已排的今日
+    拍意图（与回复链「同一拍」口径），没有就按里程碑给一句通用推进语。"""
+    title = str(goal.get("title") or "").strip() or "这件事"
+    intent = ""
+    if isinstance(today_action, dict):
+        intent = str(today_action.get("intent") or "").strip()
+    if not intent:
+        intent = "自然接住对方近况，把这件事轻轻带进来一步，先看反应"
+    return (f"日常推进「{title[:40]}」；本拍：" + intent)[:160]
+
+
+def record_natural_beat_sent(
+    gstore: Any, goal_id: str, day: str, *, now: Optional[float] = None,
+) -> bool:
+    """自然档每日主动拍真发成功（care sent_hook 调）→ 今日拍行落 ``sent``
+    （已有 planned 行则直接改状态；没有则以通用意图新建）+ 事件 + 计数。绝不抛。
+
+    与回复链的当日拍**共用同一日键**：主动拍发出后，回复链本日再命中同目标
+    会看到 ``sent`` 行而不再重拍——「一天一拍」跨两条链成立。
+    """
+    try:
+        n = float(now if now is not None else time.time())
+        gid = str(goal_id or "")
+        d = str(day or "").strip()
+        if not gid or not d or gstore.get_goal(gid) is None:
+            return False
+        row = gstore.get_action(gid, d)
+        if row is None:
+            row = gstore.upsert_action(
+                gid, d, intent="自然推进一步", push_level="soft",
+                status="sent", detail="daily:auto", now=n)
+        elif str(row.get("status") or "") not in ("consumed", "sent"):
+            gstore.mark_action(str(row.get("action_id") or ""), "sent",
+                               detail="daily:auto")
+        gstore.add_event(gid, "beat_sent", "daily:auto")
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            get_goal_stats().record_sprint_sent()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        logger.debug("record_natural_beat_sent failed", exc_info=True)
+        return False
 
 
 def record_sprint_beat_sent(
@@ -471,10 +636,12 @@ class SprintGoalTicker:
             except Exception:
                 inbox = None
         mutes = self._optout_mutes()
+        natural_daily = bool(cfg.get("natural_daily", True))
         scheduled = 0
         for g in goals:
             try:
-                if not is_sprint(resolve_pace(g)):
+                sprint = is_sprint(resolve_pace(g))
+                if not sprint and not natural_daily:
                     continue
                 summary["scanned"] += 1
                 gid = str(g.get("goal_id") or "")
@@ -542,12 +709,36 @@ class SprintGoalTicker:
                             continue
                     except Exception:
                         pass
-                phase = due_phase(
-                    g, cfg=cfg, now=n,
-                    last_inbound_ts=last_in, last_outbound_ts=last_out)
-                if phase is None:
-                    _skip("not_due")
-                    continue
+                if sprint:
+                    phase = due_phase(
+                        g, cfg=cfg, now=n,
+                        last_inbound_ts=last_in, last_outbound_ts=last_out)
+                    if phase is None:
+                        _skip("not_due")
+                        continue
+                    tnorm = phase_norm(gid, phase)
+                    topic = (str(g.get("title") or "").strip() or "限时推进")[:40]
+                    src = sprint_source_text(
+                        g, phase, n, len(cfg.get("phase_points") or ()))
+                    evt = f"p{phase}"
+                else:
+                    # D1b P0-3 自然档每日一拍：与回复链共用今日拍行（consumed/
+                    # sent 即让位），窗口内一日一发。
+                    try:
+                        from src.companion.goals.planner import day_key
+                        today_row = gstore.get_action(gid, day_key(n))
+                    except Exception:
+                        today_row = None
+                    day = due_daily(
+                        g, cfg=cfg, now=n, last_inbound_ts=last_in,
+                        last_outbound_ts=last_out, today_action=today_row)
+                    if day is None:
+                        _skip("not_due")
+                        continue
+                    tnorm = daily_norm(gid, day)
+                    topic = (str(g.get("title") or "").strip() or "日常推进")[:40]
+                    src = natural_source_text(g, today_row)
+                    evt = f"d{day}"
                 rid = self._care_store.add_scheduled_care(
                     contact_key=conv,
                     platform=str(g.get("platform") or ""),
@@ -555,10 +746,9 @@ class SprintGoalTicker:
                     chat_key=str(g.get("chat_key") or ""),
                     due_at=n + 5.0,
                     event_at=float(g.get("deadline_ts") or 0) or (n + 5.0),
-                    topic=(str(g.get("title") or "").strip() or "限时推进")[:40],
-                    topic_norm=phase_norm(gid, phase),
-                    source_text=sprint_source_text(
-                        g, phase, n, len(cfg.get("phase_points") or ())),
+                    topic=topic,
+                    topic_norm=tnorm,
+                    source_text=src,
                     confidence=1.0,
                     dedup_days=3.0,
                 )
@@ -568,7 +758,7 @@ class SprintGoalTicker:
                 scheduled += 1
                 try:
                     gstore.add_event(
-                        gid, "sprint_scheduled", f"p{phase} care#{int(rid)}")
+                        gid, "sprint_scheduled", f"{evt} care#{int(rid)}")
                 except Exception:
                     pass
                 try:

@@ -122,22 +122,29 @@ def sprint_engine_status(cfg_root: Any, *, platform: str = "") -> Dict[str, Any]
 
     「自动推进」档能不能真的自己出手，取决于一整条链而不是一个开关：
     - 限时档（today/session）：``goals.enabled`` → ``goals.sprint.enabled`` →
-      **派发终点 care 派发器**（``companion.proactive_care.enabled`` 关或
-      ``dry_run`` 开＝主动拍只拟稿不真发）→ ``sprint.platforms`` 白名单；
-    - 自然档（natural）：``goals.bridge.enabled`` 搭 ``proactive_topic`` 顺风车
-      （``proactive_topic.enabled`` 关或 ``dry_run`` 开＝不真发）。
+      ``goals.sprint.dry_run`` 关 → ``sprint.platforms`` 白名单。**D1b P0-1
+      （2026-09-05）起 care 派发器的 enabled/dry_run 不再是冲刺的闸**——冲刺行
+      在派发器里按 ``goal_row_policy.live`` 绕过 care 灰度门（借管线不借开关）；
+      ``care_enabled``/``care_dry_run`` 仍回传供看板参考，但不进 blockers。
+    - 自然档（natural）：``goals.sprint.natural_daily`` 开＝推进器自己每日一拍
+      （D1b P0-3，与冲刺同链同闸）；否则回落 ``goals.bridge.enabled`` 搭
+      ``proactive_topic`` 顺风车（``proactive_topic.enabled`` 关或 ``dry_run``
+      开＝不真发）。
     skuio 88MP86 实锤：sprint 关、bridge 关、care dry_run 开——卡片却写「自动推进」。
     ``sprint_blockers`` / ``natural_auto_blockers`` 把每一道没过的闸点名；
     ``platform`` 非空时白名单判定计入 blockers。纯函数、绝不抛。
     """
     out: Dict[str, Any] = {
         "enabled": False, "inject_enabled": True,
-        "sprint_enabled": False, "sprint_platforms": [],
+        "sprint_enabled": False, "sprint_dry_run": False,
+        "sprint_platforms": [], "sprint_platforms_explicit": False,
+        "natural_daily": False,
         "care_enabled": False, "care_dry_run": False,
         "sprint_blockers": [], "sprint_effective": False,
         "bridge_enabled": False, "proactive_enabled": False,
         "proactive_dry_run": False,
         "natural_auto_blockers": [], "natural_auto_effective": False,
+        "natural_auto_via": "",
         "platform": str(platform or "").strip().lower(),
     }
     try:
@@ -151,7 +158,10 @@ def sprint_engine_status(cfg_root: Any, *, platform: str = "") -> Dict[str, Any]
         from src.companion.goals.sprint_ticker import parse_sprint_cfg
         scfg = parse_sprint_cfg(gcfg)
         out["sprint_enabled"] = bool(scfg.get("enabled", False))
+        out["sprint_dry_run"] = bool(scfg.get("dry_run", False))
         out["sprint_platforms"] = [str(p) for p in (scfg.get("platforms") or ())]
+        out["sprint_platforms_explicit"] = bool(scfg.get("platforms_explicit"))
+        out["natural_daily"] = bool(scfg.get("natural_daily", True))
         care = companion.get("proactive_care") if isinstance(
             companion.get("proactive_care"), dict) else {}
         out["care_enabled"] = bool(care.get("enabled", False))
@@ -163,29 +173,34 @@ def sprint_engine_status(cfg_root: Any, *, platform: str = "") -> Dict[str, Any]
         out["proactive_enabled"] = bool(pt.get("enabled", False))
         out["proactive_dry_run"] = bool(pt.get("dry_run", False))
 
+        # 冲刺链（D1b P0-1 起 care 的 enabled/dry_run 不再入闸：冲刺行 live）
         sb: List[str] = []
         if not out["enabled"]:
             sb.append("goals_disabled")
         if not out["sprint_enabled"]:
             sb.append("sprint_disabled")
-        if not out["care_enabled"]:
-            sb.append("care_disabled")
-        elif out["care_dry_run"]:
-            sb.append("care_dry_run")
+        elif out["sprint_dry_run"]:
+            sb.append("sprint_dry_run")
         if out["platform"] and out["platform"] not in out["sprint_platforms"]:
             sb.append("platform")
         out["sprint_blockers"] = sb
         out["sprint_effective"] = not sb
 
+        # 自然档：推进器每日拍（与冲刺同链同闸）优先；关了才看 bridge 顺风车
         nb: List[str] = []
-        if not out["enabled"]:
-            nb.append("goals_disabled")
-        if not out["bridge_enabled"]:
-            nb.append("bridge_disabled")
-        if not out["proactive_enabled"]:
-            nb.append("proactive_disabled")
-        elif out["proactive_dry_run"]:
-            nb.append("proactive_dry_run")
+        if out["sprint_enabled"] and out["natural_daily"]:
+            out["natural_auto_via"] = "daily"
+            nb = list(sb)
+        else:
+            out["natural_auto_via"] = "bridge"
+            if not out["enabled"]:
+                nb.append("goals_disabled")
+            if not out["bridge_enabled"]:
+                nb.append("bridge_disabled")
+            if not out["proactive_enabled"]:
+                nb.append("proactive_disabled")
+            elif out["proactive_dry_run"]:
+                nb.append("proactive_dry_run")
         out["natural_auto_blockers"] = nb
         out["natural_auto_effective"] = not nb
     except Exception:

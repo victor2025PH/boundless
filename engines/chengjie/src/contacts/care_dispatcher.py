@@ -61,10 +61,15 @@ PromptExtrasProvider = Callable[[dict], dict]
 # 当地时间顺延——「事件日 20:00 服务器时间」对跨时区客户可能是凌晨三点）。
 # None/解析不出 → 服务器本地钟（旧行为）。
 UserClockProvider = Callable[[dict], Any]
-# goal_row_policy：(item dict) -> {"exempt_budget","ignore_quiet","jitter"}（P0
-# 2026-08-30 冲刺推进器）：**只对 goal:* 行**征询的豁免策略——限时冲刺是用户
+# goal_row_policy：(item dict) -> {"exempt_budget","ignore_quiet","jitter","live"}
+# （P0 2026-08-30 冲刺推进器）：**只对 goal:* 行**征询的豁免策略——限时冲刺是用户
 # 显式拍板的全力决定，联系人预算/安静时段顺延/慢抖动这些「骚扰型」闸门按
 # 配置放行；危机/opt-out/对端 bot 等「安全型」闸门不在此列（绝不豁免）。
+# ``live=True``（D1b P0-1 2026-09-05）＝该行**不吃 care 自己的灰度门**：
+# ``proactive_care.enabled=false`` 时仍派、``dry_run=true`` 时仍真发——冲刺拍
+# 只是借 care 的管线投递，care 的「灰度第一阶段看 LLM 质量」不是冲刺的灰度
+# （冲刺有自己的 ``goals.sprint.enabled`` / ``goals.sprint.dry_run``）。此前
+# 两者耦合＝桌面种子 care dry_run:true 让所有冲刺目标卡写「自动推进」却一拍不发。
 # None/异常/非 goal 行 → {}（全默认，旧行为）。
 GoalRowPolicy = Callable[[dict], dict]
 
@@ -337,6 +342,10 @@ def _when_desc(event_at: float, now: float) -> str:
 
 
 class CareDispatcher:
+    # max_per_tick=0（不限）时单 tick 最多取多少到期待办——只是查询页大小，
+    # 不是业务上限（下一 tick 继续取余量）。
+    _UNLIMITED_TICK_FETCH = 200
+
     def __init__(
         self,
         *,
@@ -374,7 +383,8 @@ class CareDispatcher:
         self._proactive_allowed = proactive_allowed
         self._ai_name = ai_name or "她"
         self._default_lang = default_lang or "zh"
-        self._max_per_tick = max(1, int(max_per_tick))
+        # 「0=不限」：max_per_tick<=0 ＝ 本 tick 不截断（到期的全派）
+        self._max_per_tick = max(0, int(max_per_tick))
         self._interval = max(60.0, float(interval_sec))
         self._skip_if_no_context = bool(skip_if_no_context)
         self._quiet_start = float(quiet_start_hour)
@@ -480,14 +490,20 @@ class CareDispatcher:
         n = float(now if now is not None else time.time())
         self.last_tick_ts = n
         cfg = self._live_cfg()
+        # D1b P0-1：care 关闸时冲刺行（goal_row_policy.live）仍要派——care 的开关
+        # 管的是「约定回访」这类 care 自己的业务，不是冲刺推进器的开关。
+        goal_only = False
         if cfg is not None:
             if not cfg.get("enabled", False):
                 self.last_tick_gated = True
                 self.last_tick_scheduled = 0
-                return 0
+                if self._goal_row_policy is None:
+                    return 0
+                goal_only = True
             self._dry_run = bool(cfg.get("dry_run", False))
             try:
-                self._max_per_tick = max(1, int(cfg.get("max_per_tick", self._max_per_tick)))
+                # 「0=不限」语义：0/负值＝本 tick 不截断（旧 max(1,…) 会把 0 静默钉成 1）。
+                self._max_per_tick = max(0, int(cfg.get("max_per_tick", self._max_per_tick)))
             except Exception:
                 pass
             try:
@@ -495,7 +511,8 @@ class CareDispatcher:
                     cfg.get("dry_resample_hours", self._dry_resample_hours)))
             except Exception:
                 pass
-        self.last_tick_gated = False
+        if not goal_only:
+            self.last_tick_gated = False
         # 每轮先清理逾期太久仍 pending 的待办（错过关怀时机不补发），best-effort
         try:
             expired = self._store.expire_overdue(now=n, grace_days=self._expire_grace_days)
@@ -503,13 +520,19 @@ class CareDispatcher:
                 logger.info("[care_dispatcher] 清理逾期待办 %d 条", expired)
         except Exception:
             logger.debug("care_dispatcher expire_overdue 异常", exc_info=True)
-        due = self._store.list_due(now=n, limit=self._max_per_tick * 4)
+        _cap = int(self._max_per_tick or 0)
+        due = self._store.list_due(
+            now=n, limit=(_cap * 4) if _cap > 0 else self._UNLIMITED_TICK_FETCH)
+        if goal_only:
+            # care 关闸：只放冲刺 live 行，其余到期行原样留 pending（care 开闸后
+            # 仍按期发出、逾期由 expire_overdue 正常收口——与 dry 语义同款「不消费」）
+            due = [it for it in (due or []) if self._goal_live(it)]
         if not due:
             self.last_tick_scheduled = 0
             return 0
         scheduled = 0
         for item in due:
-            if scheduled >= self._max_per_tick:
+            if _cap > 0 and scheduled >= _cap:
                 break
             try:
                 if await self._dispatch_one(item, n):
@@ -518,6 +541,23 @@ class CareDispatcher:
                 logger.debug("care dispatch_one 异常 id=%s", item.get("id"), exc_info=True)
         self.last_tick_scheduled = scheduled
         return scheduled
+
+    def _goal_policy(self, item: dict) -> dict:
+        """goal:* 行的豁免策略（非 goal 行 / 未注入 / 异常 → {}）。"""
+        if self._goal_row_policy is None:
+            return {}
+        if not str(item.get("topic_norm") or "").startswith(GOAL_CARE_NORM_PREFIX):
+            return {}
+        try:
+            gp = self._goal_row_policy(dict(item))
+            return gp if isinstance(gp, dict) else {}
+        except Exception:
+            logger.debug("goal_row_policy 异常（按默认）", exc_info=True)
+            return {}
+
+    def _goal_live(self, item: dict) -> bool:
+        """该 goal 行是否**绕过 care 灰度门**（enabled/dry_run）真发（D1b P0-1）。"""
+        return bool(self._goal_policy(item).get("live"))
 
     def _mark_skipped(self, sid: int, reason: str) -> None:
         """store.mark_skipped + 记 metrics skip 原因（O·P 联动质量看板用）。"""
@@ -575,18 +615,14 @@ class CareDispatcher:
         is_goal_care = str(item.get("topic_norm") or "").startswith(
             GOAL_CARE_NORM_PREFIX)
         # P0 2026-08-30：冲刺行豁免策略（只对 goal:* 行征询；异常=全默认）
-        goal_policy: dict = {}
-        if is_goal_care and self._goal_row_policy is not None:
-            try:
-                gp = self._goal_row_policy(dict(item))
-                goal_policy = gp if isinstance(gp, dict) else {}
-            except Exception:
-                logger.debug("goal_row_policy 异常（按默认）", exc_info=True)
-                goal_policy = {}
+        goal_policy: dict = self._goal_policy(item) if is_goal_care else {}
+        # D1b P0-1：本行的 dry 语义——冲刺 live 行不吃 care 的 dry_run（冲刺自己
+        # 的灰度是 goals.sprint.dry_run，由 policy 决定 live 与否）
+        dry = bool(self._dry_run) and not goal_policy.get("live")
 
         # 实施84 P0-4：dry 语义改「不消费待办」后同一行每 tick 仍到期——重拟
         # 冷却窗内直接静默跳过（不 mark、不烧 LLM；行保持 pending 待真发/过期）。
-        if self._dry_run:
+        if dry:
             _last_dry = float(item.get("dry_sampled_at") or 0)
             if (_last_dry > 0
                     and (now - _last_dry) < self._dry_resample_hours * 3600.0):
@@ -617,7 +653,7 @@ class CareDispatcher:
         # 冲刺窗内第二拍必被它吃掉——用户拍板的全力档不吃这个刹车）；
         # gate 自身异常按放行（fail-open：预算是体验优化，不是安全红线）。
         if (self._budget_gate is not None and not is_crisis_care
-                and not self._dry_run
+                and not dry
                 and not goal_policy.get("exempt_budget")):
             allowed = True
             try:
@@ -703,7 +739,7 @@ class CareDispatcher:
                 defer_until, start_hour=self._quiet_start,
                 end_hour=self._quiet_end, clock=_clock)
 
-        if self._dry_run:
+        if dry:
             logger.info("[care DRY] id=%s contact=%s topic=%s reply=%r",
                         sid, contact_key, topic, reply[:120])
             try:

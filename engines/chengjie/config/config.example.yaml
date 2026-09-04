@@ -2500,7 +2500,20 @@ companion:
       exempt_contact_budget: true   # 冲刺拍豁免 care 每联系人预算（min_gap 4h/日 2 条是天级刻度）
       ignore_quiet_hours: false     # true=安静时段照发（用户拍板全力档才开；默认仍顺延）
       jitter_sec: [30, 180]      # 冲刺拍派发抖动（care 默认 60-1200s 对小时级窗口太慢）
-      platforms: [telegram]      # 主动出手平台白名单（对齐 proactive_topic 实施72 收敛）
+      platforms: [telegram, whatsapp, line]   # 主动出手平台白名单（D1b 2026-09-05 出厂三平台；
+                                 #   不写＝吃出厂默认并在启动日志 WARNING 提醒）
+      # ── D1b 2026-09-05「自动推进怎么才算真开」──
+      # 冲刺/每日拍借 proactive_care 管线只为复用拟稿/投递/护栏，**不继承** care 的
+      # enabled/dry_run 业务开关：care 关着或 dry_run 时冲刺行照样真发（goal_only 模式）。
+      # 要让目标推进器自己「只拟稿不发」，用它自己的 dry_run。
+      dry_run: false
+      # 自然档（pace=natural）目标改由本 ticker 每天拍一次（不再依赖 proactive_topic 的
+      # 沉默 ≥N 小时才出手；那是天级节奏，对 7-14 天的目标等于没有）。
+      # 每日拍 live 但**不豁免**联系人预算/安静时段——日常节奏吃日常刹车。
+      natural_daily: true
+      natural_window: [10, 21]   # 每日拍只在本地时钟这个小时窗内出手
+      natural_silence_min_sec: 3600   # 对方 1h 内开过口 → 回复链接管，今天不主动拍
+      natural_min_gap_sec: 7200       # 距我方上一条出站 < 2h → 等下一轮
       # ── P1 推进力加度 ──
       escalate_at: 0.35          # 剩余占比 < 此值 → 力度升 close（收口档：可明确报价/给下一步）
       # backoff_after: 1         # 覆写限时档退避拍数（缺省 session=1 / today=1）
@@ -3110,6 +3123,7 @@ inbox:
     # 群发开链」的总闸门——没预算的自动化是事故温床。
     auto_start:
       max_per_day: 30
+      max_per_tick: 5   # #168：每小时扫描最多新开几条（88MP86 一次 20 条=LLM 齐射）
     # ── 实施92 P0-1 客户回复即让路（默认开，护栏性质）─────────────────────
     # 会话有运行中工作链且客户来了新消息 → 链按档位让路：pause=暂停交人接管
     # （默认）/ complete=按完成收束（唤回类链的语义）/ continue=不让路。

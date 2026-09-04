@@ -9,7 +9,8 @@ skuio 88MP86（1.0.73）实况：goals 开、sprint 关、bridge 关、proactive
   dry_run / 平台白名单；自然档 bridge / proactive_topic）；
 - ``GET /api/goals/engine-status`` goals 关也 200；``/api/goals/templates`` caps 带
   有效性+阻塞点（旧三键保留）；``for-conversation`` 带 ``engine`` + ``beats``；
-- ``sprint_live.ticker_on`` 必须是**整条链有效**（sprint 开但 care dry_run → False）；
+- ``sprint_live.ticker_on`` 必须是**整条链有效**（sprint 开但 sprint.dry_run → False；
+  D1b 2026-09-05 起 care 的 enabled/dry_run 不再是冲刺的闸——冲刺行 live 绕过）；
 - ``beats.progress_kind``：custom/未知模板自然档=time（89% 是时间）；与 ledger 分支表同步；
 - 启动日志：sprint 关 → WARNING「未启用」，开但被拦 → WARNING「派发被拦」，全通 → ✅。
 """
@@ -68,46 +69,81 @@ def _client(cfg):
 # ── 纯函数 ───────────────────────────────────────────────────────────────────
 
 def test_status_skuio_shape_all_blocked():
-    """skuio 实况：goals 开 / sprint 关 / care dry_run / bridge 关 → 两档全部无效。"""
+    """skuio 实况：goals 开 / sprint 关 / care dry_run / bridge 关 → 两档全部无效。
+    D1b 起 care dry_run 不再是冲刺的闸（冲刺行 live），但 sprint 关本身仍拦；
+    自然档在 sprint 关时回落 bridge 链 → bridge_disabled。"""
     es = sprint_engine_status(_cfg(
         care={"enabled": True, "dry_run": True},
         topic={"enabled": True, "dry_run": False}), platform="whatsapp")
     assert es["enabled"] is True and es["sprint_enabled"] is False
     assert es["sprint_effective"] is False
-    assert es["sprint_blockers"] == ["sprint_disabled", "care_dry_run", "platform"]
+    # whatsapp 已在 D1b 出厂白名单 → 只剩 sprint_disabled 一道闸
+    assert es["sprint_blockers"] == ["sprint_disabled"]
+    assert es["care_dry_run"] is True, "care 状态仍回传供看板参考"
     assert es["natural_auto_effective"] is False
+    assert es["natural_auto_via"] == "bridge"
     assert es["natural_auto_blockers"] == ["bridge_disabled"]
 
 
-def test_status_sprint_on_but_care_dry_run_not_effective():
-    """D1 只翻 sprint.enabled 在桌面种子（care dry_run=true）上**不够**——派发终点
-    只拟稿不真发，必须点名 care_dry_run 而不是报绿。"""
+def test_status_sprint_on_care_dry_run_no_longer_blocks():
+    """D1b P0-1：桌面种子 care dry_run=true 上只翻 sprint.enabled 现在**够了**——
+    冲刺行按 goal_row_policy.live 绕过 care 灰度门真发；只有 sprint 自己的
+    dry_run 才拦。"""
     es = sprint_engine_status(_cfg(
         goals={"sprint": {"enabled": True, "platforms": ["telegram", "whatsapp"]}},
         care={"enabled": True, "dry_run": True}), platform="whatsapp")
     assert es["sprint_enabled"] is True
-    assert es["sprint_effective"] is False
-    assert es["sprint_blockers"] == ["care_dry_run"]
+    assert es["sprint_effective"] is True and es["sprint_blockers"] == []
+    es2 = sprint_engine_status(_cfg(
+        goals={"sprint": {"enabled": True, "dry_run": True,
+                          "platforms": ["whatsapp"]}}), platform="whatsapp")
+    assert es2["sprint_dry_run"] is True
+    assert es2["sprint_blockers"] == ["sprint_dry_run"]
 
 
-def test_status_sprint_on_care_disabled_not_effective():
-    """example 默认 proactive_care.enabled=false：cloud_light 只开 sprint 同样被拦。"""
+def test_status_sprint_on_care_disabled_no_longer_blocks():
+    """example 默认 proactive_care.enabled=false：cloud_light 只开 sprint 也真发
+    （派发器 goal_only 模式只放 live 目标行）。"""
     es = sprint_engine_status(_cfg(goals={"sprint": {"enabled": True}}))
-    assert es["sprint_blockers"] == ["care_disabled"]
-    assert es["sprint_effective"] is False
+    assert es["care_enabled"] is False
+    assert es["sprint_blockers"] == [] and es["sprint_effective"] is True
 
 
-def test_status_platform_whitelist_counts_only_when_platform_given():
-    cfg = _cfg(goals={"sprint": {"enabled": True}},
-               care={"enabled": True, "dry_run": False})
+def test_status_platform_whitelist_default_three_platforms():
+    """D1b P0-2：出厂白名单 telegram/whatsapp/line；messenger 刻意不入。"""
+    cfg = _cfg(goals={"sprint": {"enabled": True}})
     assert sprint_engine_status(cfg)["sprint_effective"] is True
-    assert sprint_engine_status(cfg, platform="telegram")["sprint_effective"] is True
-    es = sprint_engine_status(cfg, platform="whatsapp")
+    for p in ("telegram", "whatsapp", "line"):
+        assert sprint_engine_status(cfg, platform=p)["sprint_effective"] is True, p
+    es = sprint_engine_status(cfg, platform="messenger")
     assert es["sprint_effective"] is False and es["sprint_blockers"] == ["platform"]
-    assert es["sprint_platforms"] == ["telegram"]
+    assert es["sprint_platforms"] == ["telegram", "whatsapp", "line"]
+    assert es["sprint_platforms_explicit"] is False
+    es2 = sprint_engine_status(
+        _cfg(goals={"sprint": {"enabled": True, "platforms": ["telegram"]}}),
+        platform="whatsapp")
+    assert es2["sprint_platforms_explicit"] is True
+    assert es2["sprint_blockers"] == ["platform"]
 
 
-def test_status_natural_auto_effective_needs_bridge_and_live_topic():
+def test_status_natural_auto_via_daily_when_sprint_on():
+    """D1b P0-3：sprint 开 + natural_daily（默认开）→ 自然档走推进器每日拍，
+    与冲刺同闸；natural_daily 关 → 回落 bridge 链。"""
+    es = sprint_engine_status(_cfg(goals={"sprint": {"enabled": True}}))
+    assert es["natural_auto_via"] == "daily"
+    assert es["natural_auto_effective"] is True and es["natural_auto_blockers"] == []
+    es = sprint_engine_status(
+        _cfg(goals={"sprint": {"enabled": True}}), platform="messenger")
+    assert es["natural_auto_blockers"] == ["platform"]
+    es = sprint_engine_status(_cfg(
+        goals={"sprint": {"enabled": True, "natural_daily": False},
+               "bridge": {"enabled": True}},
+        topic={"enabled": True, "dry_run": False}))
+    assert es["natural_auto_via"] == "bridge"
+    assert es["natural_auto_effective"] is True
+
+
+def test_status_natural_auto_bridge_needs_live_topic():
     cfg = _cfg(goals={"bridge": {"enabled": True}},
                topic={"enabled": True, "dry_run": False})
     assert sprint_engine_status(cfg)["natural_auto_effective"] is True
@@ -141,28 +177,29 @@ def test_engine_status_route_platform_param():
     c = _client(_cfg(goals={"sprint": {"enabled": True}},
                      care={"enabled": True, "dry_run": False}))
     assert c.get("/api/goals/engine-status").json()["sprint_effective"] is True
-    d = c.get("/api/goals/engine-status?platform=whatsapp").json()
+    d = c.get("/api/goals/engine-status?platform=messenger").json()
     assert d["sprint_effective"] is False and d["sprint_blockers"] == ["platform"]
 
 
 def test_templates_caps_keep_legacy_keys_and_add_effectiveness():
-    c = _client(_cfg(goals={"sprint": {"enabled": True}},
-                     care={"enabled": True, "dry_run": True}))
+    c = _client(_cfg(goals={"sprint": {"enabled": True, "dry_run": True}},
+                     care={"enabled": True, "dry_run": False}))
     caps = c.get("/api/goals/templates").json()["caps"]
     for k in ("bridge_enabled", "proactive_enabled", "sprint_enabled"):
         assert k in caps, f"旧前端契约键 {k} 不能丢"
     assert caps["sprint_enabled"] is True
     assert caps["sprint_effective"] is False
-    assert caps["sprint_blockers"] == ["care_dry_run"]
+    assert caps["sprint_blockers"] == ["sprint_dry_run"]
     assert caps["natural_auto_effective"] is False
     assert isinstance(caps["sprint_platforms"], list)
 
 
 def test_for_conversation_carries_engine_and_beats_time_kind():
     """自定义目标自然档（skuio 形态）：beats.progress_kind=time、cap=总天数、
-    engine 按会话平台判白名单。"""
-    c = _client(_cfg(goals={"sprint": {"enabled": True}},
-                     care={"enabled": True, "dry_run": True}))
+    engine 按会话平台判白名单（会话平台 whatsapp，白名单只给 telegram → platform）。"""
+    c = _client(_cfg(goals={"sprint": {"enabled": True, "dry_run": True,
+                                       "platforms": ["telegram"]}},
+                     care={"enabled": True, "dry_run": False}))
     r = c.post("/api/goals", json={
         "template": "custom", "conversation_id": CONV, "autonomy": "auto",
         "deadline_days": 3, "params": {"note": "收口"}})
@@ -177,7 +214,7 @@ def test_for_conversation_carries_engine_and_beats_time_kind():
     eng = d["engine"]
     assert eng["platform"] == "whatsapp"
     assert eng["sprint_effective"] is False
-    assert "care_dry_run" in eng["sprint_blockers"] and "platform" in eng["sprint_blockers"]
+    assert "sprint_dry_run" in eng["sprint_blockers"] and "platform" in eng["sprint_blockers"]
     assert eng["natural_auto_effective"] is False
 
 
@@ -199,13 +236,14 @@ def test_for_conversation_beats_used_counts_consumed_non_none():
 
 
 def test_sprint_live_ticker_on_requires_effective_chain():
-    """限时档：sprint 开 + care dry_run → ticker_on=False、nudgeable=False、
-    blockers 点名；care 真发 → ticker_on=True。"""
-    def _mk(care_dry):
+    """限时档：sprint 开 + sprint.dry_run → ticker_on=False、nudgeable=False、
+    blockers 点名；dry_run 关 → ticker_on=True。D1b 起 care 的 dry_run 对冲刺
+    无效（冲刺行 live），所以这里 care 恒 dry_run=True 以钉住「不再被拦」。"""
+    def _mk(sprint_dry):
         c = _client(_cfg(
-            goals={"sprint": {"enabled": True,
+            goals={"sprint": {"enabled": True, "dry_run": sprint_dry,
                               "platforms": ["telegram", "whatsapp"]}},
-            care={"enabled": True, "dry_run": care_dry}))
+            care={"enabled": True, "dry_run": True}))
         r = c.post("/api/goals", json={
             "template": "conversion_unlock", "conversation_id": CONV,
             "autonomy": "auto", "pace": "today", "deadline_days": 0.2})
@@ -216,7 +254,7 @@ def test_sprint_live_ticker_on_requires_effective_chain():
     live = g["sprint_live"]
     assert live["ticker_enabled"] is True
     assert live["ticker_on"] is False and live["nudgeable"] is False
-    assert live["blockers"] == ["care_dry_run"]
+    assert live["blockers"] == ["sprint_dry_run"]
     assert g["beats"]["progress_kind"] == "milestone"
     reset_goal_store()
     g2 = _mk(False)
@@ -275,7 +313,8 @@ def test_cp_goal_ui_consumes_engine_truth_in_both_trees():
         if k.endswith("."):
             continue  # 动态拼接前缀（inbox.goal.engine.blk. + 码），下面逐码验
         assert k in g.ZH and k in g.EN, f"i18n 键 {k} 缺 zh/en"
-    for blk in ("goals_disabled", "sprint_disabled", "care_disabled", "care_dry_run",
+    for blk in ("goals_disabled", "sprint_disabled", "sprint_dry_run",
+                "care_disabled", "care_dry_run",
                 "platform", "bridge_disabled", "proactive_disabled", "proactive_dry_run"):
         k = f"inbox.goal.engine.blk.{blk}"
         assert k in g.ZH and k in g.EN, f"阻塞点码 {blk} 缺 zh/en 人话"

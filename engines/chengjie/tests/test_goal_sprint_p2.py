@@ -317,7 +317,7 @@ class _NudgeInbox:
 
 
 def _nudge_client(gs, care_store, monkeypatch, *, inbox=None,
-                  sprint_enabled=True, care=None):
+                  sprint_enabled=True, care=None, sprint_dry_run=False):
     import src.contacts.care_schedule as cs_mod
     import src.integrations.protocol_bridge as pb
     from src.web.routes.goal_routes import register_goal_routes
@@ -327,7 +327,7 @@ def _nudge_client(gs, care_store, monkeypatch, *, inbox=None,
                         (lambda: inbox) if inbox is not None else None)
     cfg = {"companion": {"goals": {
         "enabled": True, "db_path": ":memory:",
-        "sprint": {"enabled": sprint_enabled},
+        "sprint": {"enabled": sprint_enabled, "dry_run": sprint_dry_run},
     }}}
     if care is not None:
         # #166：sprint_live.ticker_on 现在是整条链有效（含派发终点 care）
@@ -434,10 +434,11 @@ def test_for_conversation_attaches_sprint_live(monkeypatch):
     from src.contacts.care_schedule import CareScheduleStore
     gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
     _sprint_goal(gs, chat="n6", started_ago=600)
-    # #166：ticker_on＝整条链有效——派发终点 care 必须开且非 dry_run（skuio 88MP86
-    # 实锤：sprint 一开、care dry_run 一挡，卡上「下一主动拍≈HH:MM」就是空头承诺）
+    # #166：ticker_on＝整条链有效。D1b P0-1（2026-09-05）起 care 的 enabled/dry_run
+    # 不再是冲刺的闸（冲刺行 live 绕过灰度门）——这里刻意给 care dry_run=True
+    # 钉住「不再被拦」；skuio 88MP86 那种「sprint 开、care dry_run 挡」不复存在。
     client = _nudge_client(gs, cs, monkeypatch, inbox=_NudgeInbox(),
-                           care={"enabled": True, "dry_run": False})
+                           care={"enabled": True, "dry_run": True})
     try:
         d = client.get(
             "/api/goals/for-conversation?conversation_id=telegram:a1:n6"
@@ -450,11 +451,12 @@ def test_for_conversation_attaches_sprint_live(monkeypatch):
     finally:
         svc, orig = client._restore
         svc.get_configured_store = orig
-    # care 未配置（example 默认关）→ ticker_enabled 仍 True 但 ticker_on False，
-    # blockers 点名 care_disabled；nudgeable 随之 False
+    # sprint 自己的 dry_run（推进器灰度档）→ ticker_enabled 仍 True 但 ticker_on
+    # False，blockers 点名 sprint_dry_run；nudgeable 随之 False
     gs2, cs2 = GoalStore(":memory:"), CareScheduleStore(":memory:")
     _sprint_goal(gs2, chat="n7", started_ago=600)
-    client2 = _nudge_client(gs2, cs2, monkeypatch, inbox=_NudgeInbox())
+    client2 = _nudge_client(gs2, cs2, monkeypatch, inbox=_NudgeInbox(),
+                            sprint_dry_run=True)
     try:
         d2 = client2.get(
             "/api/goals/for-conversation?conversation_id=telegram:a1:n7"
@@ -462,7 +464,7 @@ def test_for_conversation_attaches_sprint_live(monkeypatch):
         live2 = (d2.get("goal") or {}).get("sprint_live") or {}
         assert live2.get("ticker_enabled") is True
         assert live2.get("ticker_on") is False and live2.get("nudgeable") is False
-        assert live2.get("blockers") == ["care_disabled"]
+        assert live2.get("blockers") == ["sprint_dry_run"]
     finally:
         svc, orig = client2._restore
         svc.get_configured_store = orig

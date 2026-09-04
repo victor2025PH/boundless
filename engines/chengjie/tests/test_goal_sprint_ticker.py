@@ -38,7 +38,11 @@ def test_parse_cfg_defaults():
     assert cfg["phase_points"] == DEFAULT_PHASE_POINTS
     assert cfg["exempt_contact_budget"] is True
     assert cfg["ignore_quiet_hours"] is False
-    assert cfg["platforms"] == ("telegram",)
+    # D1b P0-2：出厂白名单三平台（付费主力 WA/LINE 不再静默漏掉）；未显式配
+    assert cfg["platforms"] == ("telegram", "whatsapp", "line")
+    assert cfg["platforms_explicit"] is False
+    assert cfg["dry_run"] is False
+    assert cfg["natural_daily"] is True
     assert cfg["jitter_sec"] == (30.0, 180.0)
 
 
@@ -51,7 +55,7 @@ def test_parse_cfg_bad_values_fall_back():
     assert cfg["interval_sec"] == 120.0          # 坏值回默认
     assert cfg["phase_points"] == DEFAULT_PHASE_POINTS  # 全越界回默认
     assert cfg["jitter_sec"] == (30.0, 180.0)
-    assert cfg["platforms"] == ("telegram",)
+    assert cfg["platforms"] == ("telegram", "whatsapp", "line")  # 空列表回出厂
     assert cfg["max_per_tick"] == 1              # 夹下限
 
 
@@ -263,15 +267,151 @@ def test_run_once_crisis_block_skips():
     assert out2["scheduled"] == 1
 
 
-def test_run_once_ignores_natural_goals():
+def test_run_once_ignores_natural_goals_when_daily_off():
+    """natural_daily=false → 旧行为：自然档不进 ticker（回落 bridge 顺风车）。"""
     gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
     gs.create_goal(
         conversation_id="telegram:a1:u9", platform="telegram", account_id="a1",
         chat_key="u9", template="custom", autonomy="auto", deadline_days=14,
         params={"note": "长线"}, now=NOW - 1200)
-    t = _mk_ticker(gs, cs, inbox=_TickInbox())
+    t = _mk_ticker(gs, cs, sprint_cfg={"natural_daily": False},
+                   inbox=_TickInbox())
     out = t.run_once(now=NOW)
     assert out["scanned"] == 0 and out["scheduled"] == 0
+
+
+# ── D1b P0-3 自然档每日拍 ────────────────────────────────────────────────
+def _natural_goal(gs, *, days_ago=2.0, chat="u9", autonomy="auto",
+                  deadline_days=14):
+    return gs.create_goal(
+        conversation_id=f"telegram:a1:{chat}", platform="telegram",
+        account_id="a1", chat_key=chat, template="custom", autonomy=autonomy,
+        deadline_days=deadline_days, params={"note": "长线"},
+        now=NOW - days_ago * 86400)
+
+
+def _noon(day_offset=0):
+    """今天（或偏移日）本地 12:00 —— 落在默认 natural_window (10,20) 内。"""
+    lt = time.localtime(NOW + day_offset * 86400)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 12, 0, 0, 0, 0, -1))
+
+
+_DCFG = parse_sprint_cfg({"sprint": {"enabled": True}})
+
+
+def test_due_daily_basic_and_day_zero_skip():
+    from src.companion.goals.sprint_ticker import due_daily
+    n = _noon()
+    g = {"created_at": n - 2 * 86400, "deadline_ts": n + 10 * 86400}
+    assert due_daily(g, cfg=_DCFG, now=n) == time.strftime("%Y-%m-%d", time.localtime(n))
+    # 建目标当天不主动拍
+    assert due_daily({"created_at": n - 3600, "deadline_ts": n + 86400},
+                     cfg=_DCFG, now=n) is None
+    # 已过期不拍
+    assert due_daily({"created_at": n - 5 * 86400, "deadline_ts": n - 60},
+                     cfg=_DCFG, now=n) is None
+
+
+def test_due_daily_window_silence_gap_and_today_action():
+    from src.companion.goals.sprint_ticker import due_daily
+    n = _noon()
+    g = {"created_at": n - 2 * 86400, "deadline_ts": 0}
+    # 深夜不在窗口
+    lt = time.localtime(n)
+    night = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 2, 0, 0, 0, 0, -1))
+    assert due_daily(g, cfg=_DCFG, now=night) is None
+    # 沉默闸：对方 1h 前开口（<6h）让回复链
+    assert due_daily(g, cfg=_DCFG, now=n, last_inbound_ts=n - 3600) is None
+    assert due_daily(g, cfg=_DCFG, now=n, last_inbound_ts=n - 7 * 3600)
+    # 出站间隔闸
+    assert due_daily(g, cfg=_DCFG, now=n, last_outbound_ts=n - 3600) is None
+    # 今日拍已被回复链消费 / 已主动发 / 被驳回 → 不拍；planned 放行
+    for st, det in (("consumed", ""), ("sent", ""), ("planned", "rejected:x")):
+        assert due_daily(g, cfg=_DCFG, now=n,
+                         today_action={"status": st, "detail": det}) is None
+    assert due_daily(g, cfg=_DCFG, now=n,
+                     today_action={"status": "planned", "detail": ""})
+
+
+def test_parse_goal_care_kind_three_shapes():
+    from src.companion.goals.sprint_ticker import (
+        daily_norm, parse_goal_care_kind, parse_goal_care_norm)
+    assert parse_goal_care_kind("goal:abc:p2") == ("sprint", "abc", 2)
+    assert parse_goal_care_kind(daily_norm("abc", "2026-09-05")) == (
+        "daily", "abc", "2026-09-05")
+    assert parse_goal_care_kind("goal:abc") == ("care", "abc", None)
+    assert parse_goal_care_kind("care:xyz") == ("", "", None)
+    assert parse_goal_care_kind("goal:") == ("", "", None)
+    # 旧口 parse_goal_care_norm 对 daily 行也能剥出 goal_id（phase=None）
+    assert parse_goal_care_norm("goal:abc:d20260905") == ("abc", None)
+    assert parse_goal_care_norm("goal:abc:p1") == ("abc", 1)
+
+
+def test_run_once_natural_daily_schedules_once_per_day():
+    gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
+    from src.companion.goals.sprint_ticker import daily_norm
+    n = _noon()
+    g = _natural_goal(gs)
+    gid = str(g["goal_id"])
+    inbox = _TickInbox(msgs=[
+        {"direction": "in", "content": "嗯", "ts": n - 8 * 3600},
+        {"direction": "out", "content": "好", "ts": n - 9 * 3600},
+    ])
+    t = _mk_ticker(gs, cs, inbox=inbox)
+    out = t.run_once(now=n)
+    assert out["scanned"] == 1 and out["scheduled"] == 1
+    due = cs.list_due(now=n + 30)
+    assert len(due) == 1
+    day = time.strftime("%Y-%m-%d", time.localtime(n))
+    assert due[0]["topic_norm"] == daily_norm(gid, day)
+    assert "日常推进" in str(due[0]["source_text"])
+    # 同日再扫 → 去重
+    out2 = t.run_once(now=n + 600)
+    assert out2["scheduled"] == 0 and out2["skips"].get("dedup") == 1
+
+
+def test_run_once_natural_daily_respects_reply_chain_beat():
+    """回复链今天已顺势拍过（consumed）→ 主动拍让位，一天一拍跨链成立。"""
+    gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
+    from src.companion.goals.planner import day_key
+    n = _noon()
+    g = _natural_goal(gs)
+    gid = str(g["goal_id"])
+    gs.upsert_action(gid, day_key(n), intent="x", push_level="soft")
+    gs.mark_action(gs.get_action(gid, day_key(n))["action_id"], "consumed")
+    t = _mk_ticker(gs, cs, inbox=_TickInbox())
+    out = t.run_once(now=n)
+    assert out["scheduled"] == 0 and out["skips"].get("not_due") == 1
+
+
+def test_run_once_natural_daily_shares_safety_gates():
+    """自治档/平台白名单/自动化档同样管自然档每日拍。"""
+    gs, cs = GoalStore(":memory:"), CareScheduleStore(":memory:")
+    n = _noon()
+    _natural_goal(gs, chat="a", autonomy="suggest")
+    t = _mk_ticker(gs, cs, inbox=_TickInbox(mode="review"))
+    _natural_goal(gs, chat="b")
+    out = t.run_once(now=n)
+    assert out["scheduled"] == 0
+    assert out["skips"].get("autonomy") == 1
+    assert out["skips"].get("automation_mode") == 1
+
+
+def test_record_natural_beat_sent_marks_today_row():
+    from src.companion.goals.sprint_ticker import record_natural_beat_sent
+    gs = GoalStore(":memory:")
+    g = _natural_goal(gs)
+    gid = str(g["goal_id"])
+    assert record_natural_beat_sent(gs, gid, "2026-09-05", now=NOW)
+    row = gs.get_action(gid, "2026-09-05")
+    assert row and row["status"] == "sent" and row["detail"] == "daily:auto"
+    kinds = [e["kind"] for e in gs.list_events(gid, limit=10)]
+    assert "beat_sent" in kinds
+    # 已有 planned 行 → 改状态不新建
+    gs.upsert_action(gid, "2026-09-06", intent="y", push_level="soft")
+    assert record_natural_beat_sent(gs, gid, "2026-09-06", now=NOW)
+    assert gs.get_action(gid, "2026-09-06")["status"] == "sent"
+    assert record_natural_beat_sent(gs, "nope", "2026-09-05") is False
 
 
 def test_run_once_silence_gate_defers_to_reply_chain():

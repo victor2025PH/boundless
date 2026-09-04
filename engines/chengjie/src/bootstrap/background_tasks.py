@@ -282,20 +282,27 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             )
             try:
                 from src.companion.goals.sprint_ticker import (
-                    parse_goal_care_norm,
+                    parse_goal_care_kind,
+                    record_natural_beat_sent,
                     record_sprint_beat_sent,
                 )
-                gid, phase = parse_goal_care_norm(item.get("topic_norm"))
+                kind, gid, arg = parse_goal_care_kind(item.get("topic_norm"))
                 if gid:
                     from src.companion.goals.store import peek_goal_store
                     gstore = peek_goal_store()
                     if gstore is not None:
-                        if phase is not None:
+                        if kind == "sprint":
                             # 冲刺主动拍（P0 2026-08-30）：落拍行+beat_sent+计数
-                            record_sprint_beat_sent(gstore, gid, phase)
+                            record_sprint_beat_sent(gstore, gid, int(arg))
                             gstore.add_event(
                                 gid, "care_sent",
-                                f"冲刺拍 p{phase} 已发出：{topic}")
+                                f"冲刺拍 p{int(arg)} 已发出：{topic}")
+                        elif kind == "daily":
+                            # 自然档每日主动拍（D1b P0-3）：今日拍行落 sent
+                            record_natural_beat_sent(gstore, gid, str(arg))
+                            gstore.add_event(
+                                gid, "care_sent",
+                                f"每日主动拍已发出：{topic}")
                         else:
                             gstore.add_event(
                                 gid, "care_sent", f"到期关怀已发出：{topic}")
@@ -307,24 +314,37 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
 
         def _goal_row_policy(item: dict) -> dict:
             """冲刺行豁免策略（P0 2026-08-30）：goals.sprint 实时配置 →
-            {exempt_budget, ignore_quiet, jitter}。非相位行/关闸/异常 → {}。"""
+            {exempt_budget, ignore_quiet, jitter, live}。非相位行/关闸/异常 → {}。
+
+            ``live``（D1b P0-1 2026-09-05）＝goals 开 + sprint 开 + sprint 自己的
+            dry_run 关：该行绕过 care 的 enabled/dry_run 灰度门真发。冲刺借 care
+            管线只是为了拟稿/投递/护栏复用，不该继承 care 的业务开关。
+            自然档每日拍行（``:d…``，D1b P0-3）同样 live，但**不豁免**预算/安静
+            时段——日常节奏就该吃日常刹车；只有冲刺是用户拍板的全力档。
+            """
             try:
                 from src.companion.goals.service import resolve_goals_cfg
                 from src.companion.goals.sprint_ticker import (
-                    parse_goal_care_norm,
+                    parse_goal_care_kind,
                     parse_sprint_cfg,
                 )
-                gid, phase = parse_goal_care_norm(item.get("topic_norm"))
-                if not gid or phase is None:
+                kind, gid, _arg = parse_goal_care_kind(item.get("topic_norm"))
+                if not gid or kind not in ("sprint", "daily"):
                     return {}
-                scfg = parse_sprint_cfg(resolve_goals_cfg(
-                    assistant.config.config or {}))
+                gcfg = resolve_goals_cfg(assistant.config.config or {})
+                scfg = parse_sprint_cfg(gcfg)
                 if not scfg.get("enabled"):
                     return {}
+                live = (bool(gcfg.get("enabled", False))
+                        and not bool(scfg.get("dry_run")))
+                if kind == "daily":
+                    return {"exempt_budget": False, "ignore_quiet": False,
+                            "jitter": scfg.get("jitter_sec"), "live": live}
                 return {
                     "exempt_budget": bool(scfg.get("exempt_contact_budget")),
                     "ignore_quiet": bool(scfg.get("ignore_quiet_hours")),
                     "jitter": scfg.get("jitter_sec"),
+                    "live": live,
                 }
             except Exception:
                 return {}
@@ -421,8 +441,17 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 _es = {}
             if _es.get("sprint_effective"):
                 assistant.logger.info(
-                    "✅ 冲刺推进器已常备（goals.sprint.enabled=True，platforms=%s）",
-                    ",".join(_es.get("sprint_platforms") or ()))
+                    "✅ 冲刺推进器已常备（goals.sprint.enabled=True，platforms=%s，"
+                    "natural_daily=%s）",
+                    ",".join(_es.get("sprint_platforms") or ()),
+                    bool(_es.get("natural_daily", True)))
+                # D1b P0-2：白名单没显式配就是吃出厂默认——提醒运营看一眼，
+                # 别再出现「sprint 开着、付费主力平台却静默不出手」
+                if not _es.get("sprint_platforms_explicit"):
+                    assistant.logger.warning(
+                        "⚠ goals.sprint.platforms 未显式配置，按出厂默认 %s 出手；"
+                        "要收窄/放宽请在 config.local.yaml 写明",
+                        ",".join(_es.get("sprint_platforms") or ()))
             elif not _es.get("sprint_enabled"):
                 assistant.logger.warning(
                     "⚠ 冲刺推进器未启用（companion.goals.sprint.enabled=False）："
