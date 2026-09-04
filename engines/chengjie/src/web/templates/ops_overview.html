@@ -3412,8 +3412,10 @@ function renderAutosendShadow(d){
   if(!sh || !(Number(sh.total)||0)){ opsSetCardLight('ashadow', ''); opsHideCardEl(sec, 'ashadow', 'healthy'); return; }
   opsShowCardEl(sec, 'ashadow');
   var stopN = Number(sh.stop_contact)||0, harmN = Number(sh.self_harm)||0;
-  // 要人看的两个 reason 有量 → 黄灯；其余只是「本会被扣」的观测量，不亮灯
-  opsSetCardLight('ashadow', (stopN || harmN) ? 'yellow' : '');
+  var werrN = Number(sh.write_errors)||0;
+  // 台账落盘失败 → 红灯（一个月数据在静默丢，比任何命中都要紧）；要人看的两个 reason
+  // 有量 → 黄灯；其余只是「本会被扣」的观测量，不亮灯
+  opsSetCardLight('ashadow', werrN ? 'red' : ((stopN || harmN) ? 'yellow' : ''));
   var lastTs = Number(sh.last_ts)||0;
   // 放行后的去向：已送达 / 已终局（cancelled/approved_unsent/rejected 都算终局）+ 待终局
   var settledN = Number(sh.settled)||0, sentN = Number(sh.sent)||0, pendN = Number(sh.pending_outcomes)||0;
@@ -3425,6 +3427,7 @@ function renderAutosendShadow(d){
     {label:window.T('ov2_js_ash_sent'), value:(settledN?(fmt(sentN)+' / '+fmt(settledN)):'—')+(pendN?(' <span class="muted" style="font-size:12px;">+'+fmt(pendN)+' '+window.T('ov2_js_ash_pending')+'</span>'):'')},
     {label:window.T('ov2_js_ash_last'), value:(lastTs?window.wsFmtDateTime(lastTs):'—')},
   ];
+  if(werrN){ kpis.push({label:window.T('ov2_js_ash_werr'), value:fmt(werrN), color:'var(--red)'}); }
   kp.innerHTML = kpis.map(function(c){
     return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
       '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';

@@ -57,6 +57,15 @@ RECORD_FIELDS = (
     "persona_id",       # 生效人设（「人设 A 的客户更常叫停」这类结论靠它）
     "peer_text_fp",     # 入站原话 sha1 前 8 位（比 conv_key+ts 更准的回溯键；不落原文）
     "peer_msg_id",      # 触发拟稿的入站消息 id（messages.message_id，与转录回写同口径；可空）
+    "peer_msg_match",   # peer_msg_id 怎么来的：exact（正文逐字相同）/ newest（取最新入站）/ 空
+)
+# 契约冻结：一个月台账靠字段名分析，改名/删除/重排前缀都会让旧行读不出来。
+# 门禁 test_record_fields_contract_is_append_only 钉住——新字段只许追加到末尾。
+RECORD_FIELDS_FROZEN_V1 = (
+    "ts", "platform", "account_id", "conv_key", "draft_id",
+    "would_hold_level", "hold_reason", "peer_risk", "peer_reasons",
+    "reply_risk", "reply_reasons", "risk_hits", "text_fp", "text_len",
+    "stage", "automation_mode", "policy_mode",
 )
 
 # 放行后的去向（kind=outcome 行；与 hold 行按 draft_id 关联）。台账只记「放行」不记
@@ -76,6 +85,8 @@ OUTCOMES = ("sent", "cancelled", "rejected", "delivery_failed", "approved_unsent
 DEFAULT_OUTCOME_GRACE_SEC = 30 * 60
 # hold 行多久还没终局就放弃追踪（草稿被 cleanup_old_drafts 清了也归 missing）
 DEFAULT_OUTCOME_MAX_AGE_SEC = 7 * 86400
+# 在途稿复查 autosend_failed 审计的最小间隔（reconcile 每 tick 跑，别每 tick 都翻审计）
+AUDIT_RECHECK_SEC = 120.0
 _PENDING_CAP = 5000
 
 
@@ -279,6 +290,7 @@ def build_record(
     persona_id: str = "",
     peer_text: str = "",
     peer_msg_id: str = "",
+    peer_msg_match: str = "",
 ) -> Dict[str, Any]:
     """按 RECORD_FIELDS 契约组装一行 hold 记录（不落盘）。
 
@@ -310,6 +322,7 @@ def build_record(
         "persona_id": str(persona_id or "")[:64],
         "peer_text_fp": text_fingerprint(peer_text) if peer_text else "",
         "peer_msg_id": str(peer_msg_id or "")[:64],
+        "peer_msg_match": str(peer_msg_match or "")[:8],
     }
 
 
@@ -437,11 +450,18 @@ def reconcile_outcomes(store: Any, *, now: Optional[float] = None, max_items: in
             logger.debug("reconcile: get_draft(%s) 异常（跳过）", did, exc_info=True)
             continue
         hold_ts = float(meta.get("ts") or 0)
-        # approved 且未送达的稿才去翻审计（低频；其它终态行上就看得出）
+        # approved 且未送达的稿才去翻审计（其它终态行上就看得出）；同一稿在途期间最多
+        # 每 AUDIT_RECHECK_SEC 查一次审计——worker tick 30-60s 一轮，宽限 30min 内不
+        # 节流会对同一条稿打几十次审计查询
         failed: Optional[str] = None
         if (row is not None and str(row.get("status") or "") == "approved"
                 and float(row.get("sent_at") or 0) <= 0):
-            failed = failed_reason_from_audit(store, did)
+            last_chk = float(meta.get("audit_checked_ts") or 0)
+            if now_f - last_chk >= AUDIT_RECHECK_SEC:
+                failed = failed_reason_from_audit(store, did)
+                with _PENDING_LOCK:
+                    if did in _PENDING:
+                        _PENDING[did]["audit_checked_ts"] = now_f
         outcome, reason = classify_outcome(
             row, hold_ts, now=now_f, grace_sec=grace_sec, max_age_sec=max_age_sec,
             failed_reason=failed)

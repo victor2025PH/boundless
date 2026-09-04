@@ -1171,7 +1171,7 @@ class DraftService:
                     conv_key=chat_key or conv_id, draft_id=draft_id, text=draft_text,
                     lang=str(lang or ""), intent=str(intent or ""),
                     emotion=str(emotion or ""), peer_text=t,
-                    peer_msg_id=self._latest_inbound_msg_id(conv_id, t),
+                    peer_msg=self._latest_inbound_msg_id(conv_id, t),
                 )
             logger.info(
                 "auto_generate_draft OK conv=%s level=%s draft_id=%s shadow=%s hits=%s",
@@ -1275,7 +1275,7 @@ class DraftService:
                     conv_key=str(draft.get("chat_key") or draft.get("conversation_id") or ""),
                     draft_id=draft_id, text=reply,
                     lang=str(lang or ""), peer_text=str(draft.get("peer_text") or ""),
-                    peer_msg_id=self._latest_inbound_msg_id(
+                    peer_msg=self._latest_inbound_msg_id(
                         str(draft.get("conversation_id") or ""),
                         str(draft.get("peer_text") or "")),
                 )
@@ -1291,7 +1291,7 @@ class DraftService:
         self, decision: _PolicyDecision, *, stage: str, platform: str,
         account_id: str, conv_key: str, draft_id: str, text: str,
         lang: str = "", intent: str = "", emotion: str = "", peer_text: str = "",
-        peer_msg_id: str = "",
+        peer_msg: Tuple[str, str] = ("", ""),
     ) -> None:
         """影子台账落行 + stop_contact/self_harm 即时告警。best-effort，绝不影响发送。
 
@@ -1312,33 +1312,39 @@ class DraftService:
                 policy_mode=decision.policy_mode,
                 lang=lang, intent=intent, emotion=emotion, peer_text=peer_text,
                 persona_id=self._shadow_persona_id(platform, account_id, conv_key),
-                peer_msg_id=peer_msg_id,
+                peer_msg_id=(peer_msg[0] if peer_msg else ""),
+                peer_msg_match=(peer_msg[1] if peer_msg else ""),
             )
             _shadow_log.record(rec)
             _shadow_log.maybe_alert(rec)
         except Exception:
             logger.debug("autosend_shadow 记账失败（已忽略）", exc_info=True)
 
-    def _latest_inbound_msg_id(self, conversation_id: str, peer_text: str = "") -> str:
-        """触发拟稿的入站消息 id（与 autodraft_helpers.enrich_auto_draft 的 _peer_msg_id
-        同源：``list_recent_messages`` 里最近一条入站）。优先取正文与 ``peer_text`` 逐字
-        相同的那条（客户连发两条时不串行），否则取最新入站。只在影子落行时调用（低频）。"""
+    def _latest_inbound_msg_id(self, conversation_id: str, peer_text: str = "") -> Tuple[str, str]:
+        """触发拟稿的入站消息 id + 匹配方式。与 autodraft_helpers.enrich_auto_draft 的
+        _peer_msg_id 同源（``list_recent_messages`` 里的入站行）。
+
+        返回 ``(message_id, how)``：how=``exact``（正文与 peer_text 逐字相同——客户连发
+        两条时不串行）/ ``newest``（没有逐字相同的，取最新入站；同秒双入站极罕见场景下
+        可能取到相邻那条，一个月后用 peer_text_fp 互校）/ ``""``（会话无消息行，不猜）。
+        只在影子落行时调用（低频）。"""
         if self._store is None or not conversation_id:
-            return ""
+            return "", ""
         try:
             rows = self._store.list_recent_messages(conversation_id, limit=10) or []
         except Exception:
-            return ""
+            return "", ""
         want = str(peer_text or "").strip()
         newest: Dict[str, Any] = {}
         for r in rows:
             if str(r.get("direction") or "in") != "in":
                 continue
             if want and str(r.get("text") or "").strip() == want:
-                return str(r.get("message_id") or "")
+                return str(r.get("message_id") or ""), "exact"
             if float(r.get("ts") or 0) >= float(newest.get("ts") or 0):
                 newest = r
-        return str(newest.get("message_id") or "") if newest else ""
+        mid = str(newest.get("message_id") or "") if newest else ""
+        return mid, ("newest" if mid else "")
 
     @staticmethod
     def _shadow_persona_id(platform: str, account_id: str, chat_key: str) -> str:

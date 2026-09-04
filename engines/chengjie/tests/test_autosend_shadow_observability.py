@@ -190,6 +190,53 @@ def test_reconcile_delivery_failed_does_not_wait_for_grace(clean_ledger):
     assert o["draft_id"] == "d-fail" and o["reason"].startswith("platform:")
 
 
+def test_record_fields_contract_is_append_only():
+    """一个月台账靠字段名分析：v1 前缀冻结，新字段只许追加到末尾，不许改名/删除/重排。"""
+    frozen = shadow_log.RECORD_FIELDS_FROZEN_V1
+    assert shadow_log.RECORD_FIELDS[:len(frozen)] == frozen
+    assert len(set(shadow_log.RECORD_FIELDS)) == len(shadow_log.RECORD_FIELDS)
+    # build_record 产出的键 == 契约（不多不少），outcome 行同理
+    rec = shadow_log.build_record(
+        platform="p", account_id="a", conv_key="c", draft_id="d", would_hold_level="L4",
+        hold_reason="x", peer_risk="high", peer_reasons=[], reply_risk="low", reply_reasons=[],
+        risk_hits=[], text="t")
+    assert tuple(rec.keys()) == shadow_log.RECORD_FIELDS
+    assert set(shadow_log.OUTCOMES) >= {"sent", "cancelled", "rejected", "delivery_failed",
+                                        "approved_unsent", "missing"}
+
+
+def test_reconcile_throttles_audit_recheck_for_inflight(clean_ledger):
+    """在途稿每 AUDIT_RECHECK_SEC 才翻一次审计，不是每 tick 一次。"""
+    shadow_log.record(_hold("d-inflight"))
+
+    class _S(_FakeStore):
+        audit_calls = 0
+
+        def list_draft_audit(self, *, draft_id="", limit=10):
+            _S.audit_calls += 1
+            return [{"action": "autosend", "reason": ""}]
+    store = _S({"d-inflight": {"sent_at": 0, "status": "approved",
+                               "decided_by": "autosend_worker", "decided_at": _NOW}})
+    for i in range(5):                                        # 5 个 tick，间隔 30s
+        shadow_log.reconcile_outcomes(store, now=_NOW + 30 * i)
+    assert store.calls == 5                                   # 草稿行每 tick 都看
+    assert _S.audit_calls == 2                                # 审计只在 0s 与 120s 各查一次
+    assert shadow_log.pending_count() == 1
+
+
+def test_write_error_counted_and_surfaced(clean_ledger, monkeypatch):
+    """落盘失败必须可见：计数器 +1、record 返回 False，且卡片按 write_errors 亮红灯。"""
+    monkeypatch.setenv(shadow_log.ENV_DIR, str(clean_ledger / "not-a-dir.jsonl"))
+    (clean_ledger).mkdir(parents=True, exist_ok=True)
+    (clean_ledger / "not-a-dir.jsonl").write_text("x", encoding="utf-8")   # 目录位被文件占住
+    ok = shadow_log.record(_hold("d-werr"))
+    assert ok is False
+    snap = shadow_log.stats_snapshot()
+    assert snap["write_errors"] == 1 and snap["total"] == 1     # 计数仍记（进程口径不丢）
+    src = _read("src/web/templates/ops_overview.html")
+    assert "werrN ? 'red'" in src and "ov2_js_ash_werr" in src
+
+
 def test_reconcile_tolerates_no_store_and_store_errors(clean_ledger):
     shadow_log.record(_hold("d1"))
     assert shadow_log.reconcile_outcomes(None) == 0
@@ -280,8 +327,14 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
         holds = {r["draft_id"]: r for r in rows if r.get("kind", "hold") == "hold"}
         assert holds[d_sent]["lang"] == "en" and holds[d_sent]["intent"] == "停止联系"
         assert holds[d_sent]["peer_text_fp"] == shadow_log.text_fingerprint(peer1)
-        assert holds[d_sent]["peer_msg_id"] == want_mid
+        assert holds[d_sent]["peer_msg_id"] == want_mid and holds[d_sent]["peer_msg_match"] == "exact"
         assert holds[d_cancel]["peer_msg_id"] == ""            # 该会话没有消息行 → 空串不猜
+        assert holds[d_cancel]["peer_msg_match"] == ""
+        # 正文不同（客户又发了别的）→ 回落最新入站并标 newest
+        store.ingest_message(InboxMessage(conversation_id="telegram:acct1:u3", platform_msg_id="m-901",
+                                          direction="in", text="something else", ts=time.time()))
+        mid, how = svc._latest_inbound_msg_id("telegram:acct1:u3", "send me your bank card number")
+        assert mid and how == "newest"
     finally:
         store.close()
 
