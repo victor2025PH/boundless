@@ -731,3 +731,28 @@ def test_profile_llm_rejects_memory_grounding_incident_corpus():
     assert ground_extracted("你在干嘛呢 干嘛呢", {
         "need": "用户深夜还在线，可能明天休息",
     }) == {}
+
+
+def test_profile_llm_short_values_need_literal_anchor():
+    """C3 复核补丁：memory_grounding 对取不出 token 的超短值保守放行——
+    画像值常常就这么短，LLM 编个「3万」「男」不能靠这条口子入档。"""
+    from src.ai.memory_grounding import fact_grounded_in_user_msg
+    from src.companion.goals.profile_llm import ground_extracted
+    msg = "我们公司有5个人，主要做民宿代运营，客服都回不过来"
+    # 护栏本身对这些值确实放行（复核时的实测），补丁必须拦住
+    assert fact_grounded_in_user_msg("3万", msg)
+    assert fact_grounded_in_user_msg("男", msg)
+    got = ground_extracted(msg, {
+        "budget": "3万",            # 编造数字
+        "gender": "男",             # 编造单字
+        "team_size": "5人",         # 原话是「5个人」，「5人」不是字面子串
+        "occupation": "民宿代运营",  # 长值走护栏 bigram，正常过
+    })
+    assert "budget" not in got and "gender" not in got
+    assert "team_size" not in got
+    assert got.get("occupation") == "民宿代运营"
+    # 短值确实出自原话 → 照常入档
+    assert ground_extracted("我在北京，做电商", {"location": "北京"}) == {
+        "location": "北京"}
+    assert ground_extracted("预算3万左右吧", {"budget": "3万"}) == {
+        "budget": "3万"}

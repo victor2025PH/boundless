@@ -202,11 +202,36 @@ def parse_extraction(raw: Optional[str]) -> Dict[str, str]:
     return out
 
 
+_SHORT_VALUE_MAX = 3
+_NORM_STRIP_RE = re.compile(r"[\s，。,.!！?？、;；:：'\"“”‘’()（）]+")
+
+
+def _norm_literal(s: str) -> str:
+    return _NORM_STRIP_RE.sub("", str(s or "")).casefold()
+
+
+def _short_value_anchored(val: str, msg: str) -> bool:
+    """超短值的字面锚定（C3 复核补丁，2026-09-04）。
+
+    ``fact_grounded_in_user_msg`` 对取不出内容 token 的值（单个 CJK 字 /
+    单位数 / 「3万」「男」这类）**保守放行**——那是给长句记忆设计的「无从
+    判断」分支；画像槽的值却常常就是这么短，放行＝LLM 编个数字就进长期画像
+    （实测：原话「公司有5个人」，编造「预算 3万」「性别 男」全过）。
+    对规范化后 ≤3 字的值，额外要求它是客户原话的字面子串；长值仍完全交给
+    护栏本身判（不另算一套阈值）。
+    """
+    v = _norm_literal(val)
+    if len(v) > _SHORT_VALUE_MAX:
+        return True
+    return bool(v) and v in _norm_literal(msg)
+
+
 def ground_extracted(text: str, extracted: Dict[str, str]) -> Dict[str, str]:
     """摘录接地：只留锚定在**客户原话**上的值（宁可漏采不错采）。
 
-    单一事实源＝``memory_grounding.fact_grounded_in_user_msg``（事故金标）。
-    本地不再另算一套 bigram 阈值——两套会在边界上分叉，分叉就是漏网。
+    单一事实源＝``memory_grounding.fact_grounded_in_user_msg``（事故金标），
+    必过、不绕开；本地不另算 bigram 阈值——两套会在边界上分叉，分叉就是漏网。
+    唯一叠加＝``_short_value_anchored``：护栏「无从判断」的超短值补字面锚定。
     """
     msg = str(text or "").strip()
     if not msg:
@@ -217,7 +242,8 @@ def ground_extracted(text: str, extracted: Dict[str, str]) -> Dict[str, str]:
         if not val:
             continue
         try:
-            if fact_grounded_in_user_msg(val, msg):
+            if (fact_grounded_in_user_msg(val, msg)
+                    and _short_value_anchored(val, msg)):
                 out[str(k)] = val
         except Exception:
             # 判定器自身异常 → 不入库（画像比记忆更难清，宁可漏）
