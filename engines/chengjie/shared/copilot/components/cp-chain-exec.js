@@ -778,8 +778,10 @@
       const cid = this._lastCid;
       if (!cid || this._jnBusy) return;
       let amount = 0;
-      if (typeof prompt === "function") {
-        const raw = prompt(this.t("cp.journey.deal_prompt"), "");
+      // #173：原生 prompt 在 Electron 渲染进程会抛，统一走页内弹层 window.uiPrompt；
+      // 宿主未装载弹层则按「不填金额」记 0（与旧的 typeof 守卫语义一致）。
+      if (typeof window.uiPrompt === "function") {
+        const raw = await window.uiPrompt(this.t("cp.journey.deal_prompt"), "", { type: "text" });
         if (raw === null) return;                    // 取消＝不记
         amount = parseFloat(String(raw).replace(/[^\d.]/g, "")) || 0;
       }

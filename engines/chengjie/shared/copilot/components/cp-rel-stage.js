@@ -189,7 +189,10 @@
         } else if (action === "reunion") {
           await this._client.reunionStage({ conversationId: cid });
         } else if (action === "downgrade") {
-          const reason = (typeof prompt === "function") ? prompt(this.t("cp.rel.downgrade_prompt")) : "";
+          // #173：原生 prompt 在 Electron 渲染进程会抛（typeof 仍是 function），
+          // 统一走页内弹层 window.uiPrompt；宿主未装载弹层＝视同取消。
+          const reason = (typeof window.uiPrompt === "function")
+            ? await window.uiPrompt(this.t("cp.rel.downgrade_prompt"), "") : "";
           if (!reason || !reason.trim()) {
             this.shadowRoot.querySelectorAll("button[data-act]").forEach((b) => (b.disabled = false));
             return;

@@ -639,10 +639,18 @@ WF.toggleDealEngineAuto=function(){
     }).catch(function(){ if(btn)btn.disabled=false; });
 };
 // ── 实施92b 批量挂链：dry-run 预览 → 确认 → 落地（服务端再兜 50 上限+防重）──
+// #173（2026-09-05）：原生 prompt 在 Electron 渲染进程直接抛 → 按钮「点了没反应」；
+// 改走页内弹层 window.uiPrompt（_win_unique.html 引入 /copilot/ui-prompt.js），
+// 弹层缺席时如实提示而不是静默死。
 WF.bulkStart=function(chainId){
   var c=(_chainsCache||[]).find(function(x){return x.chain_id===chainId;});
   var defDays=(c&&c.trigger_conditions&&c.trigger_conditions.silence_days)||7;
-  var days=prompt(window.T('wf_bulk_prompt'),String(defDays));
+  if(typeof window.uiPrompt!=='function'){
+    var m0=document.getElementById('seed-msg');
+    if(m0){m0.textContent=window.T('wf_bulk_fail');m0.style.color='var(--wf-err)';}
+    return;
+  }
+  window.uiPrompt(window.T('wf_bulk_prompt'),String(defDays),{type:'number'}).then(function(days){
   if(days==null)return;
   days=Number(days)||0;
   if(days<=0)return;
@@ -663,6 +671,7 @@ WF.bulkStart=function(chainId){
           else _say(window.T('wf_bulk_fail'),'var(--wf-err)');
         }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
     }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
+  });
 };
 WF.toggleDealEngine=function(){
   var on=!!(WF._deState&&WF._deState.engine_on);
@@ -732,7 +741,7 @@ WF.loadChains=function(){
             +'<span class="wf-chain-sp"></span>'
             +'<label class="toggle-sw" title="'+window.T('wf_chain_enable_t')+'"><input type="checkbox"'+(on?' checked':'')
               +' onchange="WF.toggleChain(\''+esc(c.chain_id)+'\',this.checked)"><span class="toggle-slider"></span></label>'
-            +((on&&WF._bulkReady)?'<button class="btn-sm" onclick="WF.bulkStart(\''+esc(c.chain_id)+'\')">'+window.T('wf_bulk_btn')+'</button> ':'')
+            +((on&&WF._bulkReady)?'<button class="btn-sm" title="'+esc(window.T('wf_bulk_btn_tip'))+'" onclick="WF.bulkStart(\''+esc(c.chain_id)+'\')">'+window.T('wf_bulk_btn')+'</button> ':'')
             +'<button class="btn-sm" onclick="WF.editChain(\''+esc(c.chain_id)+'\')">'+window.T('edit')+'</button> '
             +'<button class="btn-sm btn-danger" onclick="WF.delChain(\''+esc(c.chain_id)+'\')">'+window.T('delete')+'</button>'
           +'</div>'
