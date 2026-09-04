@@ -63,8 +63,8 @@ def build_goal_block(
 ) -> Optional[str]:
     """组 3-6 行目标块。无标题（无目标）→ None。
 
-    ``profile_gap``（可选）：摸底段的「画像缺口」提示（如「预算档、上线时间」），
-    出一行轻量采集指令——只声明还想自然了解什么，严禁连环追问语义。
+    ``profile_gap``（可选）：摸底段本轮**唯一**缺口（一个未填槽的 ask 短语），
+    出一行硬约束采集指令——像朋友闲聊，不要像查户口，一轮只问一个。
     ``context_note``（可选）：目标背景一行（params.note——挽回目标的「老客户
     曾购 X」/ 回流客户的「别当新客户从头摸底」这类战略语境；P7 前只在坐席 UI
     可见、从没进过 prompt）。
@@ -122,8 +122,7 @@ def build_goal_block(
     gap = str(profile_gap or "").strip()
     if gap:
         lines.append(
-            f"【画像缺口】还想在闲聊中自然了解：{gap}"
-            "（顺着话题带出来，一次最多问一件，绝不像查户口）")
+            f"【画像缺口】像朋友闲聊，不要像查户口，一轮只问一个：{gap}")
     # 限时档（remaining_sec 有值）用冲刺纪律：敷衍可再试，拒绝/低落仍放下
     lines.append(_DISCIPLINE_SPRINT if used_remaining else _DISCIPLINE)
     block = "\n".join(lines)

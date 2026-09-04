@@ -20,8 +20,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+# C2（I-3）：摸底注入硬约束——LLM 经常把软提示当可忽略。文案钉死这句，
+# 一轮只丢一个未填槽；连问三个字段比不问更糟（用户会当问卷机器人）。
+HARD_ASK_DISCIPLINE = "像朋友闲聊，不要像查户口，一轮只问一个"
+_ASKED_PARAM = "_gap_asked"
+_ASKED_FP_PARAM = "_gap_asked_fp"
+_ASKED_LAST_PARAM = "_gap_asked_last"
 
 TRACKS = ("relation", "bant")
 
@@ -119,6 +127,7 @@ def fill_rates(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def missing_slots(
     fields: Optional[Dict[str, Any]], *, track: str = "bant", limit: int = 2,
     include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """按登记顺序取还没填的槽位定义（画像缺口 → 采集提示/UI chips）。
 
@@ -126,33 +135,48 @@ def missing_slots(
     采集专用槽（churn_reason）不进缺口，防被当「该问的问题」推给所有客户。
     ``include``（P26）：显式槽位键列表（摸底目标按坐席勾选出缺口，顺序即
     优先级）；给了 include 时 track 忽略。
+    ``exclude``（C2）：已问过但仍空的槽——跳过以免连轮追问同一句；
+    全被排除但仍有缺口时回落第一空槽（第二圈，防问完就哑火）。
     """
+    skip = {str(x).strip().lower() for x in (exclude or []) if str(x).strip()}
     out: List[Dict[str, Any]] = []
+    fallback: List[Dict[str, Any]] = []
+    cap = max(1, int(limit))
+
+    def _take(s: Dict[str, Any]) -> bool:
+        if _filled(fields or {}, s["key"]):
+            return False
+        item = dict(s)
+        fallback.append(item)
+        if s["key"] in skip:
+            return False
+        out.append(item)
+        return len(out) >= cap
+
     if include:
         for k in include:
             s = _SLOT_BY_KEY.get(str(k or "").strip().lower())
             if s is None or s["track"] not in TRACKS:
                 continue
-            if not _filled(fields or {}, s["key"]):
-                out.append(dict(s))
-                if len(out) >= max(1, int(limit)):
-                    break
-        return out
-    for s in SLOTS:
-        if track:
-            if s["track"] != track:
-                continue
-        elif s["track"] not in TRACKS:
-            continue
-        if not _filled(fields or {}, s["key"]):
-            out.append(dict(s))
-            if len(out) >= max(1, int(limit)):
+            if _take(s):
                 break
-    return out
+    else:
+        for s in SLOTS:
+            if track:
+                if s["track"] != track:
+                    continue
+            elif s["track"] not in TRACKS:
+                continue
+            if _take(s):
+                break
+    if out:
+        return out
+    return fallback[:cap]
 
 
 def gap_hint(fields: Optional[Dict[str, Any]], *, lang: str = "zh",
-             limit: int = 2, include: Optional[List[str]] = None) -> str:
+             limit: int = 2, include: Optional[List[str]] = None,
+             exclude: Optional[List[str]] = None) -> str:
     """摸底段注入用的缺口短语（如「业务痛点、预算档」）；全齐 → ""。
 
     ``include``：摸底目标的勾选槽位（缺口只在其中取，配 ``limit=1`` 实现
@@ -160,11 +184,91 @@ def gap_hint(fields: Optional[Dict[str, Any]], *, lang: str = "zh",
     """
     miss = missing_slots(
         fields, track=("" if include else "bant"), limit=limit,
-        include=include)
+        include=include, exclude=exclude)
     if not miss:
         return ""
     k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
     return "、".join(str(m.get(k) or m.get("label_zh") or m["key"]) for m in miss)
+
+
+def slot_ask(key: str, lang: str = "zh") -> str:
+    s = get_slot(key)
+    if not s:
+        return ""
+    k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
+    return str(s.get(k) or s.get("label_zh") or key)
+
+
+def inbound_gap_fp(text: str) -> str:
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    return hashlib.sha1(t.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def asked_slot_keys(params: Optional[Dict[str, Any]]) -> List[str]:
+    raw = (params or {}).get(_ASKED_PARAM) or []
+    if isinstance(raw, str):
+        raw = re.split(r"[,，、;\s]+", raw)
+    out: List[str] = []
+    for it in raw:
+        k = str(it or "").strip().lower()
+        if k and k not in out and k in _SLOT_BY_KEY:
+            out.append(k)
+    return out
+
+
+def next_unfilled_slot(
+    fields: Optional[Dict[str, Any]], *,
+    include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+    track: str = "",
+) -> Optional[Dict[str, Any]]:
+    """登记序（或勾选序）第一个未填且不在 exclude 里的槽；全被问过仍空
+    → 回落第一空槽。全齐 → None。"""
+    miss = missing_slots(
+        fields, track=track, limit=32, include=include, exclude=exclude)
+    return dict(miss[0]) if miss else None
+
+
+def resolve_inject_gap(
+    fields: Optional[Dict[str, Any]],
+    params: Optional[Dict[str, Any]],
+    *,
+    inbound_text: str = "",
+    include: Optional[List[str]] = None,
+    lang: str = "zh",
+) -> Tuple[str, str, Optional[Dict[str, Any]]]:
+    """注入链单缺口决议（C2 硬约束）。
+
+    返回 ``(ask_phrase, slot_key, params_patch)``。全齐 → ``("", "", None)``。
+    同一条入站指纹复用上轮槽，不轮转（A/B 双链同条不连耗两个槽）。
+    入站为空 → 只取第一空槽、不写 params（预览/旧测试保持稳定）。
+    新入站 → 跳过已问仍空的槽，并把本轮槽记进 ``params._gap_asked``。
+    """
+    p = dict(params or {})
+    asked = asked_slot_keys(p)
+    fp = inbound_gap_fp(inbound_text)
+    last = str(p.get(_ASKED_LAST_PARAM) or "").strip().lower()
+    if fp and str(p.get(_ASKED_FP_PARAM) or "") == fp and last:
+        if not _filled(fields or {}, last):
+            return slot_ask(last, lang), last, None
+    slot = next_unfilled_slot(
+        fields, include=include, exclude=asked, track="")
+    if not slot:
+        return "", "", None
+    key = str(slot.get("key") or "")
+    phrase = slot_ask(key, lang)
+    if not fp:
+        return phrase, key, None
+    new_asked = list(asked)
+    if key and key not in new_asked:
+        new_asked.append(key)
+    patch = dict(p)
+    patch[_ASKED_PARAM] = new_asked
+    patch[_ASKED_FP_PARAM] = fp
+    patch[_ASKED_LAST_PARAM] = key
+    return phrase, key, patch
 
 
 def parse_selected_slots(raw: Any) -> List[str]:
@@ -641,9 +745,13 @@ __all__ = [
     "churn_strategy_hint",
     "facts_line",
     "fill_rates",
+    "HARD_ASK_DISCIPLINE",
     "gap_hint",
     "get_slot",
     "missing_slots",
+    "next_unfilled_slot",
+    "resolve_inject_gap",
+    "slot_ask",
     "parse_selected_slots",
     "selected_fill_rate",
     "slot_keys",

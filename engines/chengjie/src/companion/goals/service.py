@@ -853,7 +853,7 @@ def merged_beat_intent(intent: str, gap: str) -> str:
     it = str(intent or "").strip()
     if not g:
         return it
-    tail = f"本轮顺势了解：{g}（一次只问这一件，问完就回到闲聊）"
+    tail = f"本轮顺势了解：{g}（像朋友闲聊，不要像查户口，一轮只问一个）"
     return f"{it}；{tail}" if it else tail
 
 
@@ -868,16 +868,19 @@ def discovery_gap_for_goal(
         if not template.get("gap_in_intent"):
             return ""
         from src.companion.goals.profile_slots import (
-            gap_hint,
             parse_selected_slots,
+            resolve_inject_gap,
         )
         sel = parse_selected_slots((goal.get("params") or {}).get("slots"))
         if not sel:
             return ""
         prof = store.get_customer_profile(
             str(goal.get("platform") or ""), str(goal.get("chat_key") or ""))
-        return gap_hint(dict((prof or {}).get("fields") or {}),
-                        include=sel, limit=1, lang=lang)
+        phrase, _key, _patch = resolve_inject_gap(
+            dict((prof or {}).get("fields") or {}),
+            goal.get("params") or {},
+            include=sel, lang=lang)
+        return phrase
     except Exception:
         logger.debug("discovery_gap_for_goal failed", exc_info=True)
         return ""
@@ -1170,8 +1173,12 @@ def build_block_for_chat(
         profile_gap = ""
         profile_facts = ""
         prof_fields: Dict[str, Any] = {}
+        gap_patch: Optional[Dict[str, Any]] = None
         try:
-            from src.companion.goals.profile_slots import facts_line, gap_hint
+            from src.companion.goals.profile_slots import (
+                facts_line,
+                resolve_inject_gap,
+            )
             prof = store.get_customer_profile(platform, str(chat_key or ""))
             prof_fields = dict((prof or {}).get("fields") or {})
             profile_facts = facts_line(prof_fields)
@@ -1181,15 +1188,16 @@ def build_block_for_chat(
             if has_slots and int(
                     (res.get("goal") or {}).get("milestone_idx") or 0
             ) >= _gap_from:
-                if sel_slots:
-                    # 勾选槽位 → 每轮只带一个最高优先缺口（列表越长 LLM
-                    # 越想一口气问完，「一次最多问一件」得靠数据侧收口）
-                    profile_gap = gap_hint(
-                        prof_fields, include=sel_slots, limit=1)
-                else:
-                    profile_gap = gap_hint(prof_fields)
+                # C2：每轮硬带**一个**未填槽（勾选序 / 登记序第一空槽）；
+                # 有入站则轮换已问仍空的槽，防连五轮追问同一句。
+                profile_gap, _gap_key, gap_patch = resolve_inject_gap(
+                    prof_fields,
+                    (res.get("goal") or goal).get("params") or {},
+                    inbound_text=inbound_text,
+                    include=sel_slots or None)
         except Exception:
             profile_gap = profile_facts = ""
+            gap_patch = None
 
         # P9b 流失应对策略：生命周期会话 + 原因在档 → 背景行拼「应对：…」。
         # 按当轮画像现值动态拼（不烤进 note——采集常发生在目标创建之后）。
@@ -1245,6 +1253,13 @@ def build_block_for_chat(
             milestone_idx=int(view.get("milestone_idx") or 0),
             profile_gap=gap_for_meta,
         )
+        if gap_patch:
+            try:
+                gid = str((res.get("goal") or goal).get("goal_id") or "")
+                if gid:
+                    store.update_goal_fields(gid, params=gap_patch)
+            except Exception:
+                logger.debug("persist gap_asked failed", exc_info=True)
 
         # 官网产品目录块（P3）：模板声明 catalog + 今日拍力度 soft/direct →
         # 附「可推荐产品 + CTA 纪律」。同轮已有命理变现引导（suppress）不叠加。

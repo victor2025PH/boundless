@@ -505,6 +505,19 @@ def test_selected_slots_pure_functions():
         "做什么生意/工作"
     assert gap_hint({"age": {"v": "28岁"}, "occupation": {"v": "律师"}},
                     include=["age", "occupation"]) == ""
+    # C2：已问仍空的槽跳过，避免连轮追问同一句
+    from src.companion.goals.profile_slots import resolve_inject_gap
+    p1, k1, patch1 = resolve_inject_gap(
+        {}, {"slots": "age,occupation"}, inbound_text="嗯",
+        include=["age", "occupation"])
+    assert k1 == "age" and "年龄" in p1 and patch1
+    p2, k2, patch2 = resolve_inject_gap(
+        {}, patch1, inbound_text="好的", include=["age", "occupation"])
+    assert k2 == "occupation" and k2 != k1 and patch2
+    # 同条入站指纹不轮转
+    p2b, k2b, patch2b = resolve_inject_gap(
+        {}, patch2, inbound_text="好的", include=["age", "occupation"])
+    assert k2b == k2 and patch2b is None
 
 
 def test_goal_hold_on_manual_negative_mood_via_inbox_store():
@@ -547,9 +560,51 @@ def test_merged_beat_intent_pure():
     from src.companion.goals.service import merged_beat_intent
     out = merged_beat_intent("先把互动热起来", "大概哪个年龄段")
     assert out.startswith("先把互动热起来；")
-    assert "本轮顺势了解：大概哪个年龄段" in out and "一次只问这一件" in out
+    assert "本轮顺势了解：大概哪个年龄段" in out
+    assert "像朋友闲聊，不要像查户口，一轮只问一个" in out
     assert merged_beat_intent("原意图", "") == "原意图"      # 无缺口原样
     assert "本轮顺势了解" in merged_beat_intent("", "职业")   # 无意图仍给方向
+
+
+def test_discovery_five_turns_rotate_unfilled_slots():
+    """C2 验收：连续 5 轮 → 5 个不同未填槽各问一次；无重复；已采集不再问。"""
+    from src.companion.goals.profile_slots import HARD_ASK_DISCIPLINE
+    store, _goal = _seed_discovery_goal(
+        chat_key="d5c2",
+        slots="age,occupation,location,interests,name")
+    sm = _SM(goals_cfg=_ON)
+    asked = []
+    for i, inbound in enumerate(("嗯", "好的", "在呀", "哦", "哈哈"), start=1):
+        ctx = {}
+        sm._inject_goal_context(
+            ctx, platform="telegram", chat_key="d5c2",
+            conversation_id="telegram:default:d5c2",
+            inbound_text=inbound)
+        blk = ctx.get("_goal_block") or ""
+        assert HARD_ASK_DISCIPLINE in blk, inbound
+        meta_gap = (ctx.get("_goal_inject_meta") or {}).get("profile_gap") or ""
+        assert meta_gap, inbound
+        asked.append(meta_gap)
+    assert len(asked) == 5
+    assert len(set(asked)) == 5
+    # 同条入站再注一次（A/B 双链）不轮到第 6 槽
+    ctx = {}
+    sm._inject_goal_context(
+        ctx, platform="telegram", chat_key="d5c2",
+        conversation_id="telegram:default:d5c2",
+        inbound_text="哈哈")
+    assert (ctx.get("_goal_inject_meta") or {}).get("profile_gap") == asked[-1]
+    # 已采集的槽不再问
+    store.upsert_customer_profile(
+        "telegram", "d5c2", {"age": "28岁"}, source="auto")
+    ctx = {}
+    sm._inject_goal_context(
+        ctx, platform="telegram", chat_key="d5c2",
+        conversation_id="telegram:default:d5c2",
+        inbound_text="那再说说")
+    nxt = (ctx.get("_goal_inject_meta") or {}).get("profile_gap") or ""
+    assert nxt and "年龄" not in nxt
+    assert nxt not in ("大概哪个年龄段",)
 
 
 def test_discovery_gap_for_goal_semantics():

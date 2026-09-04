@@ -431,7 +431,9 @@ def test_service_captures_profile_and_shows_gap(tmp_path):
     g = store.get_goal(goal["goal_id"])
     assert g["milestone_idx"] == 1
     assert "【画像缺口】" in block
-    assert "平台" in block                                  # channel 缺口在列
+    assert "像朋友闲聊，不要像查户口，一轮只问一个" in block
+    assert "怎么称呼" in block                              # 登记序第一空槽
+    assert "几个人在做" not in block                        # 已采 team_size
 
 
 def test_service_attaches_catalog_at_offer_stage(tmp_path):
