@@ -32,6 +32,33 @@ logger = logging.getLogger(__name__)
 AUTO_START_EVERY_TICKS = 60     # ≈1h（与旧 ScheduledReporter 接线同节奏）
 
 
+def resolve_auto_start_cfg(cfg_root: Any) -> Dict[str, Any]:
+    """``inbox.workflows.auto_start``：每日预算 + 单轮上限（#168）。
+
+    ``max_per_tick`` 默认 5——88MP86 一次条件开链 20 条＝LLM 齐射。
+    ``max_per_day`` 默认 30（0=不限，与旧 runner 口径一致）。
+    """
+    out = {"max_per_day": 30, "max_per_tick": 5}
+    try:
+        if not isinstance(cfg_root, dict):
+            return out
+        raw = (((cfg_root.get("inbox") or {}).get("workflows") or {})
+               .get("auto_start") or {})
+        if not isinstance(raw, dict):
+            return out
+        try:
+            out["max_per_day"] = max(0, int(raw.get("max_per_day", 30)))
+        except (TypeError, ValueError):
+            pass
+        try:
+            out["max_per_tick"] = max(0, int(raw.get("max_per_tick", 5)))
+        except (TypeError, ValueError):
+            pass
+    except Exception:
+        pass
+    return out
+
+
 def autorun_enabled(cfg_root: Any) -> bool:
     """``inbox.workflows.autorun``（默认开）× ``inbox.workflows.enabled``（默认开）。"""
     try:
@@ -129,16 +156,12 @@ def workflow_tick(
         state["auto_start_tick"] += 1
         if state["auto_start_tick"] >= AUTO_START_EVERY_TICKS:
             state["auto_start_tick"] = 0
-            # 每日自动开链预算（inbox.workflows.auto_start.max_per_day，默认 30；
-            # 0=不限）——silence_days / stage_enter 两个触发面共用的总闸门
-            try:
-                _as = (((cfg_root or {}).get("inbox") or {})
-                       .get("workflows") or {}).get("auto_start") or {}
-                _budget = int(_as.get("max_per_day", 30))
-            except Exception:
-                _budget = 30
+            # 每日自动开链预算 + 单轮上限（#168：默认 5，防一小时齐射 20 条）
+            _as = resolve_auto_start_cfg(cfg_root)
             started = runner.auto_start_chains(
-                max_per_day=_budget, journey_enabled=_journey_enabled)
+                max_per_day=_as["max_per_day"],
+                max_per_tick=_as["max_per_tick"],
+                journey_enabled=_journey_enabled)
             if started:
                 state["auto_started_total"] += int(started)
                 logger.info("[workflow-autorun] 条件自动启动 %d 条工作链",

@@ -81,13 +81,16 @@ def test_gates():
 
 def test_auto_start_runs_on_hourly_cadence(monkeypatch):
     from src.inbox.workflow_runner import WorkflowRunner
-    calls = {"auto": 0}
+    calls = {"auto": 0, "kw": None}
     monkeypatch.setattr(WorkflowRunner, "process_due_executions",
                         lambda self: 0)
     # P2 起 auto_start_chains 带 max_per_day 预算 kwarg（tick 从配置透传，缺省 30）
-    monkeypatch.setattr(
-        WorkflowRunner, "auto_start_chains",
-        lambda self, **kw: calls.__setitem__("auto", calls["auto"] + 1) or 2)
+    # #168 加 max_per_tick（出厂 5）
+    def _auto(self, **kw):
+        calls["auto"] += 1
+        calls["kw"] = kw
+        return 2
+    monkeypatch.setattr(WorkflowRunner, "auto_start_chains", _auto)
     store = InboxStore(":memory:")
     state: dict = {"auto_start_tick": wa.AUTO_START_EVERY_TICKS - 2}
     wa.workflow_tick(state, _app_state(store))      # 第 59 tick：不触发
@@ -96,6 +99,8 @@ def test_auto_start_runs_on_hourly_cadence(monkeypatch):
     assert calls["auto"] == 1
     assert state["auto_started_total"] == 2
     assert state["auto_start_tick"] == 0            # 计数复位
+    assert calls["kw"]["max_per_day"] == 30
+    assert calls["kw"]["max_per_tick"] == 5
 
 
 def test_tick_never_raises(monkeypatch):

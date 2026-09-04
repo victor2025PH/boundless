@@ -163,7 +163,8 @@ def build_auto_instruction(chain_name: str, step_idx: int, note: str) -> str:
     return (
         f"按跟进 SOP「{chain_name}」第{int(step_idx) + 1}步推进：{note}"
         "（自然融入当前对话，别生硬转折、别像模板群发；这是按节奏的主动跟进，"
-        "若最近对话已经聊过这个话题，就顺着已有话头自然延续，不要复读）"
+        "若最近对话已经聊过这个话题，就顺着已有话头自然延续，不要复读。"
+        "以当前人设第一人称、朋友口吻推进，不出现助理/团队/开户/引导页/几分钟搞定）"
     )
 
 
@@ -210,13 +211,13 @@ def make_auto_step_hook(app_state: Any, cfg_root: Any):
             if _mx:
                 _bump("deferred_mutex")
                 _jit = (zlib.crc32(str(conv_id).encode("utf-8")) % 300)
-                return {"action": "defer",
+                return {"action": "defer", "reason": "deferred_mutex",
                         "until": now + _MUTEX_DEFER_SEC + float(_jit)}
             # 闸 4：静默窗 → 顺延（不执行不提醒，节奏平移到窗口后）
             lt_hour = time.localtime(now).tm_hour
             if in_quiet_hours(lt_hour, cfg["quiet_start"], cfg["quiet_end"]):
                 _bump("deferred_quiet")
-                return {"action": "defer",
+                return {"action": "defer", "reason": "deferred_quiet",
                         "until": quiet_defer_until(now, cfg["quiet_end"], conv_id)}
             # 预算：每 tick（防 LLM 齐射）+ 每日（DB 口径）——超了回落提醒档，
             # 拍不丢、人接手
@@ -290,6 +291,9 @@ async def _generate_and_stage(
                 last_inbound = txt
         if not last_inbound:
             _bump("fallback_remind")
+            logger.warning(
+                "WorkflowRunner 自动拟稿失败: exec=%s step=%s reason=no_inbound",
+                ex.get("exec_id"), step_idx)
             _publish_step_event(conv_id, ex, note, auto=False)
             return False
         from src.inbox.persona_reply import generate_persona_reply
@@ -307,6 +311,9 @@ async def _generate_and_stage(
         reply = str((out or {}).get("reply") or "").strip()
         if not (out or {}).get("ok") or not reply:
             _bump("fallback_remind")
+            logger.warning(
+                "WorkflowRunner 自动拟稿失败: exec=%s step=%s reason=empty_draft",
+                ex.get("exec_id"), step_idx)
             _publish_step_event(conv_id, ex, note, auto=False)
             return False
         # B41 通道互斥二次复查：生成的十几秒里常规通道可能已对同一入站出稿

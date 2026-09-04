@@ -24,6 +24,98 @@ _STATUS_LABELS = {
     "pending": "待执行",
 }
 
+_ERROR_ZH = {
+    "no_contact_id": "会话未关联联系人",
+    "no_contacts_store": "任务步未接线",
+    "task_store_error": "任务写入失败",
+    "note_store_error": "备注写入失败",
+    "tag_apply_error": "打标失败",
+    "step_failed": "步骤失败",
+    "chain_not_found": "链定义已删",
+    "no_inbound": "会话无入站",
+    "empty_draft": "拟稿为空",
+    "deferred_quiet": "静默窗顺延",
+    "deferred_mutex": "通道互斥顺延",
+}
+
+
+def human_wait(sec: int) -> str:
+    """倒计时口语（#168 卡文案：9 小时 56 分后）。"""
+    sec = max(0, int(sec))
+    if sec < 60:
+        return "不到 1 分钟"
+    mins = sec // 60
+    if mins < 60:
+        return f"{mins} 分钟"
+    hours, rem = divmod(mins, 60)
+    if hours < 24:
+        return f"{hours} 小时" + (f" {rem} 分" if rem else "")
+    days, h = divmod(hours, 24)
+    return f"{days} 天" + (f" {h} 小时" if h else "")
+
+
+def _hhmm(ts: float) -> str:
+    try:
+        return time.strftime("%H:%M", time.localtime(float(ts)))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "--:--"
+
+
+def _fail_reason_zh(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return "未知原因"
+    head = s.split(":", 1)[0].strip()
+    zh = _ERROR_ZH.get(head)
+    if zh and ":" in s and s != head:
+        tail = s.split(":", 1)[1].strip()
+        return f"{zh}（{tail}）" if tail and tail != head else zh
+    return zh or s[:80]
+
+
+def explain_execution_card(
+    *,
+    status: str,
+    countdown_sec: int = 0,
+    step_name: str = "",
+    context: Optional[Dict[str, Any]] = None,
+    last_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """链卡三态文案（#168）：运行中 / 已让路暂停 / 失败。纯函数。"""
+    ctx = context if isinstance(context, dict) else {}
+    last = last_result if isinstance(last_result, dict) else {}
+    step = str(step_name or "").strip() or "下一步"
+    st = str(status or "")
+    yield_ts = 0.0
+    try:
+        yield_ts = float(ctx.get("reply_yield_ack_ts") or ctx.get("reply_yield_at") or 0)
+    except (TypeError, ValueError):
+        yield_ts = 0.0
+    if st == "failed":
+        raw = str(ctx.get("last_error") or last.get("last_error")
+                  or last.get("error") or last.get("fail_reason") or "")
+        return {"card_state": "failed",
+                "card_label": f"失败（{_fail_reason_zh(raw)}）"}
+    if st == "paused" and yield_ts > 0:
+        hhmm = _hhmm(yield_ts)
+        if countdown_sec > 0:
+            mins = max(1, int(countdown_sec) // 60) if countdown_sec >= 60 else 1
+            return {
+                "card_state": "yielded",
+                "card_label": f"已让路暂停（客户 {hhmm} 回话，静默 {mins} 分钟后续跑）",
+            }
+        return {
+            "card_state": "yielded",
+            "card_label": f"已让路暂停（客户 {hhmm} 回话，待坐席恢复后续跑）",
+        }
+    if st == "running":
+        wait = human_wait(countdown_sec) if countdown_sec > 0 else "即将执行"
+        suffix = f"{wait}后" if countdown_sec > 0 else wait
+        return {"card_state": "running",
+                "card_label": f"运行中 · 下一步 {suffix}（{step}）"}
+    return {"card_state": st or "pending",
+            "card_label": _STATUS_LABELS.get(st, st or "待执行")}
+
 
 def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dict[str, Any]:
     """将 workflow_executions 行富化为前端可展示结构。"""
@@ -75,6 +167,16 @@ def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dic
                 break
 
     countdown = max(0, int(next_at - ts)) if next_at > ts else 0
+    step_name = (
+        str((cur_step or {}).get("note") or (cur_step or {}).get("text") or "").strip()
+        or _TYPE_LABELS.get(
+            (cur_step or {}).get("action_type", ""),
+            (cur_step or {}).get("action_type", ""))
+        or "下一步"
+    )
+    card = explain_execution_card(
+        status=status, countdown_sec=countdown, step_name=step_name[:40],
+        context=context, last_result=last_result)
     return {
         "exec_id": row.get("exec_id"),
         "chain_id": row.get("chain_id"),
@@ -84,6 +186,8 @@ def enrich_execution(row: Dict[str, Any], *, now: Optional[float] = None) -> Dic
         "platform": row.get("platform") or "",
         "status": status,
         "status_label": _STATUS_LABELS.get(status, status),
+        "card_state": card["card_state"],
+        "card_label": card["card_label"],
         "current_step": cur,
         "current_step_display": min(cur + 1, total) if total else 0,
         "total_steps": total,

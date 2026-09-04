@@ -94,6 +94,7 @@ class TestPureFns:
         s = build_auto_instruction("报价跟单", 1, "确认对方的态度")
         assert "报价跟单" in s and "第2步" in s and "确认对方的态度" in s
         assert "不要复读" in s                          # 自动跟进防复读钉子
+        assert "朋友口吻" in s and "不出现助理" in s     # #168 人设口吻钉子
 
 
 # ── hook 闸门与预算 ─────────────────────────────────────────────────────────

@@ -22,6 +22,26 @@ STEP_RETRY_DELAY_SEC = 30
 MAX_STEP_RETRIES = 1
 
 
+def format_step_fail_reason(
+    result: Optional[Dict[str, Any]] = None, reason: str = "",
+) -> str:
+    """步骤失败/重试的机器可读原因（日志 + last_error 共用）。
+
+    #168：88MP86 十条 ``步骤重试`` 只有 exec/step/retry、零原因——值守对着
+    「执行失败」只能猜。优先 result.error / detail / last_error，再拼 reason。
+    """
+    extra = ""
+    if isinstance(result, dict):
+        extra = str(
+            result.get("error") or result.get("detail")
+            or result.get("last_error") or ""
+        ).strip()
+    base = str(reason or "").strip()
+    if extra and base and extra != base and base not in extra:
+        return f"{base}:{extra}"[:200]
+    return (extra or base or "unknown")[:200]
+
+
 class WorkflowRunner:
     """P44：工作链步骤执行器。
 
@@ -73,12 +93,15 @@ class WorkflowRunner:
                 budget -= n
                 if n > 0:
                     processed += 1
-            except Exception:
-                logger.debug("WorkflowRunner 单条执行失败", exc_info=True)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "WorkflowRunner 单条执行失败: exec=%s %s: %s",
+                    ex.get("exec_id"), type(e).__name__, str(e)[:160])
         return processed
 
     def auto_start_chains(
         self, *, now: Optional[float] = None, max_per_day: int = 0,
+        max_per_tick: int = 0,
         journey_enabled: bool = False,
     ) -> int:
         """P44+P35：根据链 trigger_conditions 自动启动（沉默/流失/阶段进入）。
@@ -86,6 +109,9 @@ class WorkflowRunner:
         ``max_per_day``（P2 2026-08-13）：每日自动开链预算（DB 口径跨重启稳，
         0=不限=旧行为）——运营给链配上 silence_days 的那一刻起这就是「对沉默
         客户群发开链」的总闸门，没预算的自动化是事故温床。
+
+        ``max_per_tick``（#168）：单次扫描最多新开几条（0=不限=旧行为）。
+        88MP86 一小时齐射 20 条＝LLM 齐射 + 客户齐收；autorun 出厂默认 5。
 
         ``journey_enabled``（实施92 P0-4）：stage_enter 触发面的闸——链条件里
         的 ``stage_enter: quoting|deal|...`` 只在旅程阶段脊柱开启时消费（进入
@@ -132,18 +158,27 @@ class WorkflowRunner:
                     "手动启动不受限）",
                     chain.get("name") or chain.get("chain_id"), _blocked_step)
                 continue
-            # 候选统一成 (cid, dedupe_since)：silence/churn 面 dedupe_since=0
+            # 候选统一成 (cid, dedupe_since, why)：silence/churn 面 dedupe_since=0
             #（只查在途链，旧行为）；stage 面 dedupe_since=阶段进入时刻——同一次
             # 阶段进入只挂一次（终态也算「挂过」，防每小时对同人重复开链）。
+            why_sc = "+".join(
+                p for p in (
+                    f"silence_days={silence_days:g}" if silence_days > 0 else "",
+                    "churn_risk_high" if churn_only else "",
+                ) if p
+            ) or "trigger"
             candidates: List[tuple] = [
-                (cid, 0.0)
+                (cid, 0.0, why_sc)
                 for cid in (self._find_chain_candidates(silence_days, churn_only, now)
                             if (silence_days > 0 or churn_only) else [])
             ]
             if stage_enter and journey_enabled:
-                candidates.extend(self._find_stage_candidates(stage_enter, now))
+                candidates.extend(
+                    (cid, ts, f"stage_enter={stage_enter}")
+                    for cid, ts in self._find_stage_candidates(stage_enter, now)
+                )
             seen: set = set()
-            for cid, dedupe_since in candidates:
+            for cid, dedupe_since, why in candidates:
                 if cid in seen:
                     continue
                 seen.add(cid)
@@ -151,6 +186,11 @@ class WorkflowRunner:
                     logger.info(
                         "WorkflowRunner 自动开链达每日预算（%d），本轮止步",
                         max_per_day)
+                    return started
+                if max_per_tick > 0 and started >= max_per_tick:
+                    logger.info(
+                        "WorkflowRunner 自动开链达本轮上限（%d），本轮止步",
+                        max_per_tick)
                     return started
                 if self._store.has_running_chain(cid, chain["chain_id"]):
                     continue
@@ -163,10 +203,13 @@ class WorkflowRunner:
                         continue
                 self._store.start_chain_execution(
                     chain["chain_id"], cid,
-                    {"auto": True, "trigger": conds},
+                    {"auto": True, "trigger": conds, "trigger_reason": why},
                     schedule_first_step=True,
                 )
                 started += 1
+                logger.info(
+                    "[workflow-autorun] 自动开链 chain=%s conv=%s reason=%s",
+                    chain.get("chain_id"), cid, why)
                 self._record_goal_event(
                     cid, "chain_started",
                     str(chain.get("name") or chain.get("chain_id") or ""))
@@ -267,12 +310,16 @@ class WorkflowRunner:
                 until = float(verdict.get("until") or 0)
                 if until <= now:
                     until = now + 3600.0
+                defer_why = str(verdict.get("reason") or "deferred_quiet")
+                logger.warning(
+                    "WorkflowRunner 步骤顺延: exec=%s step=%s reason=%s until=%.0f",
+                    exec_id, step_idx, defer_why, until)
                 self._store.update_workflow_execution(
                     exec_id,
                     current_step=step_idx,
                     next_step_at=until,
                     last_result={"action_type": "template", "ok": True,
-                                 "detail": "deferred_quiet"},
+                                 "detail": defer_why, "last_error": defer_why},
                     context_json=self._load_context(ex),
                 )
                 return False
@@ -283,7 +330,17 @@ class WorkflowRunner:
                     "text": str(step.get("note") or step.get("text") or ""),
                 }
         if result is None:
-            result = self._execute_step(conv_id, step, ex)
+            try:
+                result = self._execute_step(conv_id, step, ex)
+            except Exception as e:  # noqa: BLE001
+                result = {
+                    "action_type": str(step.get("action_type") or "template"),
+                    "ok": False,
+                    "error": f"{type(e).__name__}:{str(e)[:120]}",
+                }
+                logger.warning(
+                    "WorkflowRunner 步骤异常: exec=%s step=%s %s: %s",
+                    exec_id, step_idx, type(e).__name__, str(e)[:160])
 
         # P1 2026-08-09：环节执行落账（成功/失败/重试各一行）——每环节转化率的
         # 数据地基；此前只有 last_result_json（新步覆盖旧步）无从聚合。绝不阻塞推进。
@@ -350,16 +407,18 @@ class WorkflowRunner:
             return False
         retries[key] = count + 1
         ctx["step_retries"] = retries
+        err = format_step_fail_reason(result, "step_failed")
+        ctx["last_error"] = err
         self._store.update_workflow_execution(
             ex["exec_id"],
             current_step=step_idx,
             next_step_at=now + STEP_RETRY_DELAY_SEC,
-            last_result={**result, "retry": count + 1},
+            last_result={**result, "retry": count + 1, "last_error": err},
             context_json=ctx,
         )
-        logger.info(
-            "WorkflowRunner 步骤重试: exec=%s step=%s retry=%s",
-            ex["exec_id"], step_idx, count + 1,
+        logger.warning(
+            "WorkflowRunner 步骤重试: exec=%s step=%s retry=%s reason=%s",
+            ex["exec_id"], step_idx, count + 1, err,
         )
         return True
 
@@ -371,7 +430,22 @@ class WorkflowRunner:
         *,
         result: Optional[Dict[str, Any]] = None,
     ) -> None:
+        err = format_step_fail_reason(result, reason)
+        ctx = self._load_context(ex)
+        ctx["last_error"] = err
+        # last_error 落 last_result_json（已有 JSON 列，不改 store 表结构）；
+        # complete 不覆写 last_result，故先写再收束。
+        self._store.update_workflow_execution(
+            ex["exec_id"],
+            current_step=int(ex.get("current_step") or 0),
+            next_step_at=float(ex.get("next_step_at") or 0),
+            last_result={**(result or {}), "last_error": err, "fail_reason": reason},
+            context_json=ctx,
+        )
         self._store.complete_workflow_execution(ex["exec_id"], status="failed")
+        logger.warning(
+            "WorkflowRunner 步骤失败: exec=%s step=%s reason=%s",
+            ex.get("exec_id"), int(ex.get("current_step") or 0), err)
         self._publish_status_event(conv_id, ex, "failed", reason=reason, result=result)
 
     def _load_context(self, ex: Dict[str, Any]) -> Dict[str, Any]:
@@ -398,9 +472,9 @@ class WorkflowRunner:
                     agent_id="system", agent_name="工作链",
                 )
                 result["note_added"] = True
-            except Exception:
+            except Exception as e:  # noqa: BLE001
                 result["ok"] = False
-                result["error"] = "note_store_error"
+                result["error"] = f"note_store_error:{type(e).__name__}"
             self._publish_step_event(conv_id, ex, f"📝 已添加内部备注：{note[:60]}", "note")
 
         elif action_type == "tag":
@@ -413,9 +487,9 @@ class WorkflowRunner:
                     from src.inbox.effective_mood import apply_mood_tag
                     apply_mood_tag(self._store, conv_id, tag, by="workflow")
                     result["tag"] = tag
-                except Exception:
+                except Exception as e:  # noqa: BLE001
                     result["ok"] = False
-                    result["error"] = "tag_apply_error"
+                    result["error"] = f"tag_apply_error:{type(e).__name__}"
 
         # #48（0830 28DTZS 诊断包实锤后仍差最后一锤）：失败分支此前 ok=False
         # 却**不写 error 原因** → step 账本 detail 恒空、日志轮转后根因永久失传
@@ -434,9 +508,9 @@ class WorkflowRunner:
                     else:
                         result["ok"] = False
                         result["error"] = "no_contact_id"
-                except Exception:
+                except Exception as e:  # noqa: BLE001
                     result["ok"] = False
-                    result["error"] = "task_store_error"
+                    result["error"] = f"task_store_error:{type(e).__name__}"
             else:
                 result["ok"] = False
                 result["error"] = "no_contacts_store"
