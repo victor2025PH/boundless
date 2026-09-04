@@ -1216,8 +1216,17 @@
           // 客户听到的是译稿（宿主按两维分桶埋点）
           detail: { reused: !!(d && d.reused_preview), translated: !!m.translated },
         }));
-      } else if (reqFail) {
-        this._hint(this._t("cp.voice.send_req_fail"), false);
+      } else if (reqFail || (d && d.status === 0 && d.code === "network")) {
+        /* #164（2026-09-05 J-4 C）：没拿到 HTTP 响应（fetch TypeError / 断网 / 后端重启窗）
+           ≠ 发送失败——服务端可能已收到并发出。红字「发送失败」会诱导重发（客户收两条），
+           改按「结果未知」黄字 + 让宿主刷一次消息流由坐席亲眼确认；红字只留给后端明确
+           返回的失败（下面分支）。同时落一行 console 供值守拿包（桌面壳 → renderer 日志）。 */
+        try {
+          console.warn("[send-voice] no-response url=/api/unified-inbox/send-voice src=cp-voice reason="
+            + ((d && d.error) || "network"));
+        } catch (_e) { /* */ }
+        this._hint(this._t("cp.voice.result_unknown"), "warn");
+        this.dispatchEvent(new CustomEvent("cp-voice-result-unknown", { bubbles: true, composed: true }));
       } else {
         this._hint(this._t("cp.voice.send_fail",
           { msg: (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.need_online") }), false);
@@ -1384,7 +1393,8 @@
         || this.shadowRoot.querySelector(".hint");
       if (h) {
         h.textContent = msg;
-        h.className = ok === true ? "hint ok" : (ok === false ? "hint err" : "hint");
+        // ok: true=绿 / false=红 / "warn"=黄（结果未知类，#164）/ 其它=中性
+        h.className = ok === true ? "hint ok" : (ok === false ? "hint err" : (ok === "warn" ? "hint warn" : "hint"));
       }
     }
 

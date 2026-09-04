@@ -986,6 +986,7 @@
     "cp.voice.send_btn": "📨 傳送語音給對方",
     "cp.voice.send_fail": "傳送失敗：{msg}",
     "cp.voice.send_req_fail": "傳送請求失敗",
+    "cp.voice.result_unknown": "⚠ 傳送結果未知（沒收到後台回應）：已刷新訊息流，先確認這條語音有沒有出現，再決定要不要重傳",
     "cp.voice.sending": "傳送中…",
     "cp.voice.sent": "語音已傳送 🎙️",
     "cp.voice.sent_xl": "已譯成 {lang}",
