@@ -22,6 +22,48 @@ from urllib.parse import urlparse
 DEFAULT_FOR_CHURN = ("太贵", "预算紧张", "换了别家")
 
 
+def bound_persona_ids(item: Optional[Dict[str, Any]]) -> tuple:
+    """条目上的人设绑定（``personas`` / ``persona_ids`` / ``for_personas``）。
+
+    空元组＝未绑定＝全人设共享（向后兼容：现网 ChatX/LingoX 未填即共享）。
+    纯函数，坏形状 → ()。
+    """
+    if not isinstance(item, dict):
+        return ()
+    raw = item.get("personas")
+    if raw is None:
+        raw = item.get("persona_ids")
+    if raw is None:
+        raw = item.get("for_personas")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    out = []
+    seen = set()
+    for x in raw:
+        s = str(x or "").strip().lower()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return tuple(out)
+
+
+def visible_to_persona(item: Optional[Dict[str, Any]], persona_id: str = "") -> bool:
+    """该条目此刻能否进「可推荐」注入。
+
+    - 未绑定（空 personas）→ 共享，对所有人设可见；
+    - 已绑定且 ``persona_id`` 命中 → 可见；
+    - 已绑定但 ``persona_id`` 为空或不匹配 → **不可见**（fail-closed：
+      绑定了别人的货，不知道当前人设时宁可不注入，也不串味）。
+    """
+    bound = bound_persona_ids(item)
+    if not bound:
+        return True
+    pid = str(persona_id or "").strip().lower()
+    return bool(pid) and pid in bound
+
+
 def _same_site(url: str, base_url: str) -> bool:
     try:
         host = (urlparse(str(url or "")).netloc or "").split("@")[-1]
@@ -89,6 +131,7 @@ def active_offers(
             "for_churn": for_churn,
             "valid_until_ts": exp,
             "authorized_by": str(item.get("authorized_by") or "").strip(),
+            "personas": list(bound_persona_ids(item)),
         })
     return out
 
@@ -98,12 +141,14 @@ def pick_offer(
     *,
     churn_reason: str = "",
     product_id: str = "",
+    persona_id: str = "",
     now: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """选一条可引用的活动：主流失原因命中 + （若活动限定产品）产品匹配。
 
     命中多条时优先「限定了本产品」的，其次最早到期的（快过期的先用掉）。
     无流失原因 / 无命中 → None（回落 P11 入门档转向，绝不硬塞活动）。
+    ``persona_id``：已绑定其他人设的活动不入选（#145③ 串味）。
     """
     primary = str(churn_reason or "").split("、", 1)[0].strip()
     if not primary:
@@ -111,7 +156,8 @@ def pick_offer(
     pid = str(product_id or "").strip()
     cands = [o for o in active_offers(catalog, now=now)
              if primary in o["for_churn"]
-             and (not o["product_id"] or not pid or o["product_id"] == pid)]
+             and (not o["product_id"] or not pid or o["product_id"] == pid)
+             and visible_to_persona(o, persona_id)]
     if not cands:
         return None
     cands.sort(key=lambda o: (0 if (pid and o["product_id"] == pid) else 1,
@@ -242,6 +288,7 @@ def camp_promotions(
             "note_en": str(item.get("note_en") or "").strip(),
             "authorized_by": str(item.get("authorized_by") or "").strip(),
             "valid_until_ts": exp,
+            "personas": list(bound_persona_ids(item)),
         })
     return out
 
@@ -412,6 +459,7 @@ __all__ = [
     "CAMP_MIN_TERM_LEN",
     "DEFAULT_FOR_CHURN",
     "active_offers",
+    "bound_persona_ids",
     "allowlist_texts",
     "authorized_free_days",
     "camp_block",
@@ -421,4 +469,5 @@ __all__ = [
     "offer_block_line",
     "pick_offer",
     "reset_citations",
+    "visible_to_persona",
 ]

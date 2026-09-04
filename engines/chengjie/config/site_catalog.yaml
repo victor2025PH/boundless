@@ -6,6 +6,9 @@
 #   - products/*/product.yaml       产品事实
 # 收录纪律：只收公开货架产品；gated 线（ReachX/FaceX 类）绝不入目录。
 # pains 关键词 = 选品匹配面（对方画像 need/channel/occupation 文本命中计分）。
+# personas: 可选。空/缺省＝全人设共享。填 [zhao_laoshi] 则只注入该人设；
+# 已绑定其他人设的产品名会被 persona_guard 出站剥离（#145③）。
+# 现网 ChatX / LingoX 刻意不填＝共享货架（不要给它们加绑定）。
 
 site:
   base_url: https://bd2026.cc

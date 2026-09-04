@@ -22,6 +22,7 @@ def test_collect_forbidden_empty_persona():
     fb = collect_forbidden({})
     assert fb["phrases"] == []
     assert fb["deny_ai"] is False
+    assert fb.get("foreign_products") == []
 
 
 # ── find_violations ──────────────────────────────────────────────────────────

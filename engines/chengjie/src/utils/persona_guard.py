@@ -16,7 +16,13 @@ LLM 不总是遵守 prompt 里"禁止使用 X"的指令；一旦回复漏出客�
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+# #145③：整段都是他人设产品名、剥空时的中性兜底——绝不回退原文（回退＝串味出站）。
+_FOREIGN_PRODUCT_FALLBACK_ZH = "那个我没怎么接触过，咱们聊点别的吧"
+_FOREIGN_PRODUCT_FALLBACK_EN = (
+    "That's not really my area — let's talk about something else."
+)
 
 # 自曝 AI 身份的模式（仅 deny_ai 人设启用）。保守匹配："我是…AI" 命中，
 # 但 "我不是 AI" 不命中（否定句不算露馅）。
@@ -126,7 +132,8 @@ _SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 
 
 def collect_forbidden(
-    persona: Dict[str, Any], *, honest_identity: bool = False
+    persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """从人设 dict 抽取守卫所需的禁用项。
 
@@ -160,7 +167,48 @@ def collect_forbidden(
     # honest_identity 合规模式随家族豁免。
     return {"phrases": phrases, "deny_ai": deny_ai,
             "retired_terms": retired,
-            "peer_leak": not honest_identity}
+            "peer_leak": not honest_identity,
+            "foreign_products": _foreign_products_for(persona, foreign_products)}
+
+
+def _foreign_products_for(
+    persona: Dict[str, Any],
+    foreign_products: Optional[List[str]],
+) -> List[str]:
+    """他人设产品名命中面。显式传入（含空表）优先；否则按人设 id 从目录加载。
+
+    无 id / 加载失败 / 目录全是共享货 → []，行为与旧版一致。
+    """
+    if foreign_products is not None:
+        out: List[str] = []
+        seen = set()
+        for x in foreign_products:
+            s = str(x or "").strip()
+            if len(s) < 2:
+                continue
+            k = s.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(s)
+        return out
+    pid = ""
+    if isinstance(persona, dict):
+        pid = str(persona.get("id") or persona.get("persona_id") or "").strip()
+    if not pid:
+        return []
+    try:
+        from src.companion.goals import site_catalog as sc
+        cat = sc.load_catalog(sc.catalog_path({}))
+        return list(sc.foreign_product_names(cat, pid) or [])
+    except Exception:
+        return []
+
+
+def _foreign_product_fallback(text: str) -> str:
+    if _CJK_RE.search(text or ""):
+        return _FOREIGN_PRODUCT_FALLBACK_ZH
+    return _FOREIGN_PRODUCT_FALLBACK_EN
 
 
 def _norm(s: str) -> str:
@@ -199,12 +247,15 @@ def matches_ai_self_identity(text: str) -> List[str]:
 
 
 def find_violations(
-    text: str, persona: Dict[str, Any], *, honest_identity: bool = False
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
 ) -> List[str]:
     """返回 ``text`` 中命中的违规片段清单（空 = 合规）。"""
     if not text:
         return []
-    fb = collect_forbidden(persona, honest_identity=honest_identity)
+    fb = collect_forbidden(
+        persona, honest_identity=honest_identity,
+        foreign_products=foreign_products)
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
@@ -212,6 +263,8 @@ def find_violations(
         hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
     if fb.get("peer_leak"):
         hits.extend(matches_multi_peer_leak(text))
+    if fb.get("foreign_products"):
+        hits.extend(_matches_phrase(_norm(text), fb["foreign_products"]))
     return hits
 
 
@@ -236,11 +289,15 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
         return True
     if fb.get("peer_leak") and matches_multi_peer_leak(sentence):
         return True
+    if fb.get("foreign_products") and _matches_phrase(
+            _norm(sentence), fb["foreign_products"]):
+        return True
     return False
 
 
 def sanitize(
-    text: str, persona: Dict[str, Any], *, honest_identity: bool = False
+    text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
+    foreign_products: Optional[List[str]] = None,
 ) -> Tuple[str, List[str]]:
     """剥离违规句，返回 ``(清洁文本, 命中清单)``。
 
@@ -252,18 +309,23 @@ def sanitize(
     """
     if not text:
         return text, []
-    fb = collect_forbidden(persona, honest_identity=honest_identity)
+    fb = collect_forbidden(
+        persona, honest_identity=honest_identity,
+        foreign_products=foreign_products)
     if (not fb["phrases"] and not fb["deny_ai"]
-            and not fb.get("retired_terms") and not fb.get("peer_leak")):
+            and not fb.get("retired_terms") and not fb.get("peer_leak")
+            and not fb.get("foreign_products")):
         return text, []
-    violations = find_violations(text, persona, honest_identity=honest_identity)
+    violations = find_violations(
+        text, persona, honest_identity=honest_identity,
+        foreign_products=foreign_products)
     if not violations:
         return text, []
     kept = [s for s in _split_sentences(text) if not _sentence_violates(s, fb)]
     cleaned = "".join(kept).strip()
     if not cleaned:
         cleaned = text
-        for p in fb["phrases"]:
+        for p in list(fb["phrases"]) + list(fb.get("foreign_products") or []):
             if p:
                 cleaned = re.sub(re.escape(p), "", cleaned, flags=re.I)
         cleaned = cleaned.strip()
@@ -279,7 +341,15 @@ def sanitize(
             if c2 and c2 != base.strip():
                 cleaned = c2
         if not cleaned:
+            # #145③：他人设产品名剥空不得回退原文（回退＝串味出站）。
+            if fb.get("foreign_products") and _matches_phrase(
+                    _norm(text), fb["foreign_products"]):
+                return _foreign_product_fallback(text), violations
             return text, violations
+    if (fb.get("foreign_products")
+            and _matches_phrase(_norm(text), fb["foreign_products"])
+            and not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", cleaned or "")):
+        return _foreign_product_fallback(text), violations
     return cleaned, violations
 
 

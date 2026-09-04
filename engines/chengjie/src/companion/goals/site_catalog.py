@@ -96,6 +96,62 @@ def _products(catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [p for p in prods if isinstance(p, dict)] if isinstance(prods, list) else []
 
 
+def _persona_id_from_fields(fields: Optional[Dict[str, Any]]) -> str:
+    """画像/调用方塞进 fields 的人设 id（``_persona_id`` / ``persona_id``）。"""
+    if not isinstance(fields, dict):
+        return ""
+    for key in ("_persona_id", "persona_id"):
+        v = fields.get(key)
+        if isinstance(v, dict):
+            v = v.get("v")
+        s = str(v or "").strip()
+        if s:
+            return s
+    return ""
+
+
+def products_for_persona(
+    catalog: Dict[str, Any],
+    persona_id: str = "",
+) -> List[Dict[str, Any]]:
+    """按会话人设过滤后的货架。未绑定＝共享；已绑定其他人设的一条都不给。"""
+    return [p for p in _products(catalog)
+            if offers_mod.visible_to_persona(p, persona_id)]
+
+
+def foreign_product_names(
+    catalog: Dict[str, Any],
+    persona_id: str = "",
+) -> List[str]:
+    """未绑定给 ``persona_id`` 的产品名（name_zh / name_en），做出站守卫命中面。
+
+    共享货（空 personas）不算「他人设」——全员可提。只拦**显式绑了别人**的名字。
+    去重、剔短词（<2），绝不抛。
+    """
+    pid = str(persona_id or "").strip()
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(v: Any) -> None:
+        s = str(v or "").strip()
+        if len(s) < 2:
+            return
+        k = s.lower()
+        if k in seen:
+            return
+        seen.add(k)
+        out.append(s)
+
+    for prod in _products(catalog):
+        if offers_mod.visible_to_persona(prod, pid):
+            continue
+        if not offers_mod.bound_persona_ids(prod):
+            continue
+        _add(prod.get("name_zh"))
+        _add(prod.get("name_en"))
+    return out
+
+
 def _profile_text(fields: Optional[Dict[str, Any]]) -> str:
     """画像字段拼成小写匹配文本（need/channel/occupation 参与选品）。"""
     parts: List[str] = []
@@ -138,12 +194,18 @@ def pick_products(
     pinned: str = "",
     limit: int = 2,
     sold: Optional[Dict[str, int]] = None,
+    persona_id: str = "",
 ) -> List[Dict[str, Any]]:
     """确定性选品：钉死的排最前；其余按 pains 关键词与画像的命中数降序；
     痛点平分时按**近窗真实成交数**（``sold``＝sold_boost_map 产物）——卖动过
     的排前（相关性第一、销量只做同分裁决，不让爆款盖过对症）；再平分按目录
-    声明序。画像全空 → 纯目录序 + 销量裁决。"""
-    prods = _products(catalog)
+    声明序。画像全空 → 纯目录序 + 销量裁决。
+
+    ``persona_id``（#145③）：已绑定其他人设的产品一条都不入选。未传时回落
+    ``fields._persona_id``。未绑定＝共享，行为与旧版一致。
+    """
+    pid = str(persona_id or "").strip() or _persona_id_from_fields(fields)
+    prods = products_for_persona(catalog, pid)
     if not prods:
         return []
     text = _profile_text(fields)
@@ -307,6 +369,7 @@ def build_catalog_block(
     plan_pref: str = "",
     cta_bias: str = "",
     offer: Optional[Dict[str, Any]] = None,
+    persona_id: str = "",
 ) -> Optional[str]:
     """组「可推荐产品」prompt 块。无产品/推进力度 none → None（纯陪伴日不带货）。
 
@@ -322,6 +385,12 @@ def build_catalog_block(
     order/cs 档，且只许照转不许加码）——见 ``goals.offers``。
     """
     lvl = str(push_level or "soft").strip().lower()
+    if persona_id:
+        products = [p for p in (products or [])
+                    if isinstance(p, dict)
+                    and offers_mod.visible_to_persona(p, persona_id)]
+        if offer and not offers_mod.visible_to_persona(offer, persona_id):
+            offer = None
     if lvl not in ("soft", "direct") or not products:
         return None
     site = site or {}
@@ -404,11 +473,13 @@ __all__ = [
     "DEFAULT_MAX_CHARS",
     "build_catalog_block",
     "catalog_path",
+    "foreign_product_names",
     "load_catalog",
     "entry_plan_key",
     "pick_cta",
     "pick_products",
     "product_link",
+    "products_for_persona",
     "sold_boost_map",
     "resolve_catalog_cfg",
 ]
