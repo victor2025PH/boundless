@@ -182,19 +182,24 @@ def quick_analyze(text: str) -> Dict[str, Any]:
     """同步零成本规则全量分析（不调 LLM）。返回 intent / emotion / risk / next_step。
 
     供 Copilot API 实时分析客户来文（<1ms 响应，纯规则，无 I/O）。
-    返回字段：intent, emotion, risk_level, risk_reasons, next_step, language
+    返回字段：intent, emotion, risk_level, risk_reasons, risk_hits, next_step, language
+
+    ``risk_hits``（#160 2026-09-04）＝到底命中了哪些词/短语。影子台账靠它分
+    「真该拦 vs 正则误伤」——没有它一个月后的数据只能看到 reason 名，分不出
+    `stop_contact` 是「别再联系我」还是「i didn't want to stop」。
     """
     t = str(text or "")
     lang = detect_language(t)
     emotion = _detect_emotion(t)
     intent = _detect_intent(t, emotion=emotion)
-    risk_level, reasons = _detect_risk(t, emotion=emotion, intent=intent)
+    risk_level, reasons, hits = _detect_risk_detailed(t, emotion=emotion, intent=intent)
     next_step = _next_step(intent, emotion, risk_level)
     return {
         "intent": intent,
         "emotion": emotion,
         "risk_level": risk_level,
         "risk_reasons": list(reasons),
+        "risk_hits": list(hits),
         "next_step": next_step,
         "language": lang,
     }
@@ -241,11 +246,10 @@ def _detect_intent(text: str, *, emotion: str) -> str:
     if any(k in t for k in ("早上好", "早安", "上午好", "中午好", "午安", "下午好",
                             "晚上好", "晚安", "好久不见", "好久没见")):
         return "打招呼"
-    # 停止联系：固定短语 + 「别/不要/勿/停止 …(≤4字)… 联系/打扰/骚扰/发消息」正则，
-    # 兼容「别再联系」「不要打扰我」「不要再发消息了」等非连续表达（评测发现的漏判）。
-    if any(k in t for k in ("stop", "don't contact", "unsubscribe",
-                            "别联系", "别发", "不要发", "勿扰")) \
-            or re.search(r"(别|不要|不想|勿|停止)\S{0,4}(联系|打扰|骚扰|发消息|发信息)", t):
+    # 停止联系：英文整词/词组 + 否定式排除（#160：`"stop" in t` 子串曾把
+    # "i didn't want to stop" 判成停止联系 → high → L4 扣稿），中文固定短语 +
+    # 「别/不要/勿/停止 …(≤4字)… 联系/打扰/骚扰/发消息」正则（非连续表达，评测漏判）。
+    if _stop_contact_hit(t):
         return "停止联系"
     if emotion in {"低落", "焦虑"}:
         return "需要安抚"
@@ -263,25 +267,131 @@ def _detect_intent(text: str, *, emotion: str) -> str:
     return "继续聊天"
 
 
-def _detect_risk(text: str, *, emotion: str, intent: str) -> tuple[str, List[str]]:
-    t = text.lower()
+# ── 风险/意图词表（#160 2026-09-04 整词化）────────────────────────────────
+# 事故：`any(k in t for k in ("stop", …))` 子串匹配把客户一句完全正面的
+# "Yes you did because I was happy chatting with you i didn't want to stop"
+# 判成「停止联系」→ high → L4 扣稿，干净的 AI 稿在全自动档下静默不发。
+# 规则：英文一律 \b 整词/词组（sexy≠sex、hotpot≠hot、bank holiday≠bank card）
+# + 否定式排除；中文用精确短语（中文无词边界，但裸单字如「骗」会把「你骗我啦」
+# 这类打趣算进去，故收成词组）。每条命中都能报出**命中了哪个词**——一个月影子
+# 台账靠它分「真该拦 vs 误伤」，也是 stop_contact 即时推值守群不变告警疲劳的前提。
+
+# ASCII 词边界：Python `\b` 把 CJK 当 \w，「请问可以refund吗」里 refund 前后就没有
+# 边界 → 中英混排（本语料常态）漏判。英文整词一律用这对 lookaround。
+_LB = r"(?<![A-Za-z0-9_])"
+_RB = r"(?![A-Za-z0-9_])"
+
+_STOP_CONTACT_EN = re.compile(
+    r"(?<![-A-Za-z0-9_])(?:"
+    # 带对象的放最前：同一起点下让「please stop messaging me」整句成为命中词，
+    # 而不是只剩一个「please stop」（台账要看得出对方到底拒绝了什么）
+    r"(?:please\s+)?stop\s+(?:texting|messaging|contacting|calling|bothering"
+    r"|writing(?:\s+to)?|talking\s+to)(?:\s+me)?" + _RB
+    + r"|please\s+stop" + _RB
+    + r"|(?:don'?t|do\s+not|never)\s+(?:contact|message|text|call|write\s+to)\s+me" + _RB
+    + r"|unsubscribe" + _RB
+    + r"|leave\s+me\s+alone" + _RB
+    + r"|lose\s+my\s+number" + _RB
+    + r")",
+    re.IGNORECASE,
+)
+# 否定式：「didn't want to stop」「can't stop thinking about you」——这里的 stop
+# 是「停下（聊天/想你）」，不是叫我们别联系；先把这些片段挖掉再判正向短语。
+_STOP_CONTACT_NEGATED = re.compile(
+    _LB + r"(?:didn'?t|don'?t|can'?t|cannot|couldn'?t|never|won'?t|wouldn'?t|not)\s+"
+    r"(?:want\s+to\s+|wanna\s+|really\s+|ever\s+)?stop" + _RB,
+    re.IGNORECASE,
+)
+_STOP_CONTACT_ZH = re.compile(
+    r"别联系|别再联系|不要联系|勿扰|别发了|别再发|不要发了|不要再发"
+    r"|(?:别|不要|不想|勿|停止)\S{0,4}(?:联系|打扰|骚扰|发消息|发信息)"
+)
+
+# high 档风险主题词（客户**提到**了敏感主题）。命中不再扣稿（#160 v2 全放行），
+# 只做两件事：① 转守卫提示喂生成侧（不得报价/不得给账号或付款信息）；② 进影子台账。
+_RISK_TERMS: Dict[str, "re.Pattern[str]"] = {
+    "self_harm": re.compile(
+        _LB + r"(?:suicide|suicidal|kill\s+myself|end\s+my\s+life|end\s+it\s+all"
+        r"|hurt\s+myself|self[- ]harm|don'?t\s+want\s+to\s+live|want\s+to\s+die)" + _RB
+        + r"|自杀|自残|轻生|不想活(?!动|跃|泼)|活不下去|结束(?:自己的)?生命",
+        re.IGNORECASE),
+    "money": re.compile(
+        _LB + r"(?:(?:send|lend|give|wire|transfer|borrow|need)\s+(?:me\s+|some\s+|the\s+)?money"
+        r"|wire\s*transfer|bank\s+(?:card|account|transfer|details|info)"
+        r"|card\s+number|account\s+number|crypto|bitcoin|usdt|paypal|venmo|zelle"
+        r"|cash\s*app|western\s+union)" + _RB
+        + r"|转账|银行卡|借钱|打款|汇款|银行账[号户]",
+        re.IGNORECASE),
+    "privacy": re.compile(
+        _LB + r"(?:passport|password|passcode|(?:home|street|physical|my|your)\s+address"
+        r"|id\s+number|social\s+security|ssn|otp|verification\s+code)" + _RB
+        + r"|密码|护照|住址|身份证|家庭地址|验证码",
+        re.IGNORECASE),
+    "adult": re.compile(
+        _LB + r"(?:nudes?|naked|sex|sexting|porn|onlyfans)" + _RB
+        + r"|裸照|成人视频|约炮",
+        re.IGNORECASE),
+}
+# 索要凭证/付款信息（客户在**要**我们的银行卡/密码/验证码……，不是泛泛提到）
+_CRED_REQUEST = re.compile(
+    _LB + r"(?:send|give|share|tell|show|text|type|enter|provide|what(?:'s|\s+is)|need|want)" + _RB
+    + r"[^.!?\n]{0,40}?"
+    + _LB + r"(?:bank\s+(?:card|account)|card\s+(?:number|details)|account\s+(?:number|details)"
+    r"|password|passcode|pin\s+(?:code|number)|otp|verification\s+code|passport"
+    r"|id\s+number|wallet\s+address|crypto\s+address|paypal|venmo|zelle|usdt)" + _RB
+    + r"|(?:发|给|告诉|报|说|输入|提供)[^。！？\n]{0,12}?(?:银行卡|卡号|账号|密码|验证码|护照|身份证|钱包地址)"
+    r"|(?:银行卡|卡号|账号|密码|验证码|护照|身份证|钱包地址)[^。！？\n]{0,6}?(?:发|给|告诉|是多少|是什么|多少)",
+    re.IGNORECASE,
+)
+
+
+def _norm_hit(s: str) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+def _stop_contact_hit(text: str) -> str:
+    """「停止联系」命中的原词组（空串＝未命中）。否定式片段先挖掉再判正向。"""
+    t = str(text or "").lower()
+    if not t:
+        return ""
+    m = _STOP_CONTACT_ZH.search(t)
+    if m:
+        return m.group(0)
+    scrubbed = _STOP_CONTACT_NEGATED.sub(" ", t)
+    m = _STOP_CONTACT_EN.search(scrubbed)
+    return _norm_hit(m.group(0)) if m else ""
+
+
+def _detect_risk_detailed(
+    text: str, *, emotion: str, intent: str,
+) -> tuple[str, List[str], List[str]]:
+    """(risk_level, reasons, hits)。hits 与 reasons 同序对齐（一条 reason 一个命中词）。"""
+    t = str(text or "").lower()
     reasons: List[str] = []
-    high_terms = {
-        "self_harm": ("suicide", "kill myself", "自杀", "不想活"),
-        "money": ("money", "transfer", "bank", "crypto", "转账", "银行卡", "借钱", "打款"),
-        "privacy": ("passport", "password", "address", "密码", "护照", "住址", "身份证"),
-        "adult": ("nude", "sex", "裸照", "成人视频"),
-    }
-    for label, kws in high_terms.items():
-        if any(k in t for k in kws):
+    hits: List[str] = []
+    for label, pat in _RISK_TERMS.items():
+        m = pat.search(t)
+        if m:
             reasons.append(label)
+            hits.append(_norm_hit(m.group(0)))
+    m = _CRED_REQUEST.search(t)
+    if m:
+        reasons.append("credential_or_payment_request")
+        hits.append(_norm_hit(m.group(0)))
     if intent == "停止联系":
         reasons.append("stop_contact")
+        hits.append(_stop_contact_hit(t) or "stop_contact")
     if reasons:
-        return "high", reasons
+        return "high", reasons, hits
     if emotion == "生气" or intent == "不满/投诉":
-        return "medium", ["negative_emotion"]
-    return "low", []
+        return "medium", ["negative_emotion"], []
+    return "low", [], []
+
+
+def _detect_risk(text: str, *, emotion: str, intent: str) -> tuple[str, List[str]]:
+    """向后兼容壳：只回 (level, reasons)。要命中词用 ``_detect_risk_detailed``。"""
+    level, reasons, _hits = _detect_risk_detailed(text, emotion=emotion, intent=intent)
+    return level, reasons
 
 
 def _relationship_stage(chat: Optional[Dict[str, Any]], msg_count: int) -> str:

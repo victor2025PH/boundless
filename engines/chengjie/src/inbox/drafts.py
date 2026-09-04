@@ -25,21 +25,56 @@ logger = logging.getLogger(__name__)
 
 # ── B2 敏感关键词强制升级表（不依赖 LLM，规则层兜底）─────────────────
 # 格式：(pattern, forced_risk_level)  — 按顺序匹配，首中即止
-# high → L4 强制拦截；medium → L3 必须审批
+# high / medium 现在只决定 **would_hold_level**（影子台账口径，#160 v2 全放行）；
+# 发送行为由 autosend_policy.decide 单点决定。
+# 2026-09-04 整词化：英文 \b 整词/词组（`card.*number` 这类跨词通配曾把整句
+# 吃进去；`bank holiday`≠银行卡、`hotpot`≠hot），中文精确短语（裸「骗」把
+# 「你骗我啦」这类打趣也算作诈骗 → 改「骗子/诈骗/被骗/骗钱/骗局」）。
+# ASCII 词边界（Python `\b` 把 CJK 当 \w，「请问可以refund吗」的 refund 前后没有边界）
+_LB = r"(?<![A-Za-z0-9_])"
+_RB = r"(?![A-Za-z0-9_])"
 _SENSITIVE_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    # L4: 支付/账号安全/直接要钱
+    # high: 支付/账号安全/直接要钱（AI 稿里出现＝AI 自己要说付款/账号/密码）
     (re.compile(
-        r"(退款|refund|退钱|付款|支付|payment|转账|wire\s*transfer|银行卡|card.*number"
-        r"|密码|password|账号密码|account.*password|验证码|otp|二维码.*付)",
+        _LB + r"(?:refund|payment|pay\s+(?:me|now|here|first|via|by)|wire\s*transfer"
+        r"|transfer\s+(?:to|it\s+to|the\s+money|funds)|bank\s+(?:card|account|transfer|details)"
+        r"|card\s+number|account\s+number|password|passcode|otp|verification\s+code"
+        r"|(?:send|make)\s+(?:the\s+|a\s+)?deposit|deposit\s+(?:to|into))" + _RB
+        + r"|退款|退钱|付款|支付|转账|银行卡|卡号|账号密码|密码|验证码|二维码.{0,4}付|打款|汇款",
         re.IGNORECASE,
     ), "high"),
-    # L3: 优惠/折扣/投诉/敏感服务
+    # medium: 优惠/折扣/投诉/敏感服务
     (re.compile(
-        r"(优惠|折扣|discount|coupon|免费|free.*shipping|投诉|complaint|律师|法律|起诉"
-        r"|骗|scam|fraud|报警|police)",
+        _LB + r"(?:discount|coupon|free\s+shipping|complaint|lawyer|attorney|lawsuit"
+        r"|sue\s+(?:you|them|him|her|us)|scam(?:mer)?|fraud|police)" + _RB
+        + r"|优惠|折扣|免费|投诉|律师|法律|起诉|骗子|诈骗|被骗|骗钱|骗局|报警",
         re.IGNORECASE,
     ), "medium"),
 ]
+
+_RISK_RANK = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
+
+
+def keyword_risk_hits(text: str) -> Tuple[Optional[str], List[str]]:
+    """(强制 risk_level 或 None, 命中词组列表)。
+
+    与 ``keyword_risk_level`` 同表同口径，但把**全部**命中词收齐（不首中即止）——
+    影子台账要的就是「到底哪个正则在响」；level 取最高档。
+    """
+    t = str(text or "")
+    best: Optional[str] = None
+    hits: List[str] = []
+    for pattern, level in _SENSITIVE_PATTERNS:
+        matched = False
+        for m in pattern.finditer(t):
+            matched = True
+            h = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+            if h and h not in hits:
+                hits.append(h)
+        if matched and (best is None
+                        or _RISK_RANK.get(level, 0) > _RISK_RANK.get(best, 0)):
+            best = level
+    return best, hits
 
 
 def keyword_risk_level(text: str) -> Optional[str]:
