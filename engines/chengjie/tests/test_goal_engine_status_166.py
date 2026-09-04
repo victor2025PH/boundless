@@ -235,10 +235,29 @@ def test_for_conversation_beats_used_counts_consumed_non_none():
     assert g["beats"]["cap"] == 5
 
 
-def test_sprint_live_ticker_on_requires_effective_chain():
+class _StubInbox:
+    def __init__(self, mode="auto_ai"):
+        self.mode = mode
+
+    def get_automation_mode(self, conv):
+        return self.mode
+
+    def get_conv_meta(self, conv):
+        return {}
+
+    def list_recent_messages(self, conv, limit=10):
+        return []
+
+
+def test_sprint_live_ticker_on_requires_effective_chain(monkeypatch):
     """限时档：sprint 开 + sprint.dry_run → ticker_on=False、nudgeable=False、
-    blockers 点名；dry_run 关 → ticker_on=True。D1b 起 care 的 dry_run 对冲刺
-    无效（冲刺行 live），所以这里 care 恒 dry_run=True 以钉住「不再被拦」。"""
+    blockers 点名；dry_run 关 + 会话 auto_ai → ticker_on=True、nudgeable=True。
+    D1b 起 care 的 dry_run 对冲刺无效（冲刺行 live），所以这里 care 恒
+    dry_run=True 以钉住「不再被拦」。P0-4 起运行时闸也进卡片：无 inbox /
+    会话 review 档 → 引擎全绿也不许承诺下一拍（与 ticker 同闸）。"""
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: _StubInbox())
+
     def _mk(sprint_dry):
         c = _client(_cfg(
             goals={"sprint": {"enabled": True, "dry_run": sprint_dry,
@@ -261,6 +280,52 @@ def test_sprint_live_ticker_on_requires_effective_chain():
     assert g2["sprint_live"]["ticker_on"] is True
     assert g2["sprint_live"]["nudgeable"] is True
     assert g2["sprint_live"]["blockers"] == []
+    assert g2["sprint_live"]["next_phase_ts"] > 0
+    assert g2["sprint_live"]["runtime"]["automation_mode"] is True
+
+    # P0-4：引擎全绿但会话在人审档 → 运行时闸点名、不给时间承诺、按钮不亮
+    reset_goal_store()
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: _StubInbox("review"))
+    g3 = _mk(False)
+    live3 = g3["sprint_live"]
+    assert live3["ticker_on"] is True, "引擎配置本身是开的"
+    assert live3["blockers"] == ["automation_mode"]
+    assert live3["nudgeable"] is False and live3["next_phase_ts"] == 0
+
+    # 读不到 inbox＝fail-closed（ticker 也不会排）
+    reset_goal_store()
+    monkeypatch.setattr(pb, "_inbox_store_getter", None)
+    live4 = _mk(False)["sprint_live"]
+    assert "no_inbox" in live4["blockers"]
+    assert live4["nudgeable"] is False and live4["next_phase_ts"] == 0
+
+
+def test_preflight_route_end_to_end(monkeypatch):
+    """GET /api/goals/{id}/preflight（D1b P0-4）：三层合一 + HH:MM 友好串 +
+    404 语义；进程层在无 app.state 挂载时为 None（不当 blocker）。"""
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: _StubInbox())
+    c = _client(_cfg(
+        goals={"sprint": {"enabled": True, "dry_run": False,
+                          "platforms": ["telegram", "whatsapp"]}},
+        care={"enabled": False, "dry_run": True}))
+    r = c.post("/api/goals", json={
+        "template": "conversion_unlock", "conversation_id": CONV,
+        "autonomy": "auto", "pace": "today", "deadline_days": 0.2})
+    gid = r.json()["goal"]["goal_id"]
+    p = c.get(f"/api/goals/{gid}/preflight").json()
+    assert p["ok"] is True, p["blockers"]
+    assert p["pace"] == "today"
+    assert p["process"] == {"ticker_running": None, "dispatcher_running": None}
+    assert p["runtime"]["automation_mode"] is True
+    assert p["next_due"] > 0 and len(p["next_due_hhmm"]) == 5
+
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: _StubInbox("review"))
+    p2 = c.get(f"/api/goals/{gid}/preflight").json()
+    assert p2["ok"] is False and p2["blockers"] == ["automation_mode"]
+    assert p2["next_due"] == 0 and p2["next_due_hhmm"] == ""
+
+    assert c.get("/api/goals/nope/preflight").status_code == 404
 
 
 # ── 分支表同步 / 启动日志 ─────────────────────────────────────────────────────

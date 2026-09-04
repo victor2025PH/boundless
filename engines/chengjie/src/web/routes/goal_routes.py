@@ -350,16 +350,45 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             es = sprint_engine_status(
                 _cfg_root(), platform=str(view.get("platform") or ""))
             ticker_on = bool(es.get("sprint_effective"))
+            blockers = list(es.get("sprint_blockers") or [])
+            # D1b P0-4：卡片只在**运行时闸也全过**时承诺「下一主动拍≈HH:MM」——
+            # 引擎配置全绿但会话在 review 档 / 对方 opt-out / 危机窗内，ticker 照样
+            # 一条都不排，此前卡上却一直挂着时间承诺。运行时闸与 ticker 同一函数。
+            runtime: Dict[str, Any] = {}
+            if ticker_on and str(view.get("autonomy") or "") == "auto":
+                try:
+                    from src.companion.goals.sprint_ticker import (
+                        RUNTIME_GATE_ORDER,
+                        goal_runtime_gates,
+                    )
+                    from src.companion.goals.sprint_ticker import (
+                        load_optout_mutes,
+                    )
+                    mutes = load_optout_mutes(_config_path())
+                    rg = goal_runtime_gates(
+                        dict(view), cfg=scfg, inbox=_inbox_store(),
+                        mutes=mutes, stop_on_fail=False)
+                    runtime = dict(rg.get("gates") or {})
+                    blockers += [k for k in RUNTIME_GATE_ORDER
+                                 if k in runtime and not runtime[k]
+                                 and k not in ("autonomy",)]
+                except Exception:
+                    logger.debug("sprint runtime gates skipped", exc_info=True)
+            live_ok = ticker_on and not any(
+                b in blockers for b in ("platform", "no_conversation",
+                                        "no_inbox", "automation_mode",
+                                        "crisis", "optout"))
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
                 "ticker_enabled": bool(scfg.get("enabled")),
-                "blockers": list(es.get("sprint_blockers") or []),
+                "blockers": blockers,
+                "runtime": runtime,
                 "beats_used": len(beats),
                 "next_phase_ts": round(
-                    next_phase_ts(goal_like, scfg), 1) if ticker_on else 0,
-                # 立即推进按钮显隐：auto 档 + 引擎开（档位/危机等硬闸在
-                # 路由内再查一遍——按钮只是入口不是授权）
-                "nudgeable": ticker_on
+                    next_phase_ts(goal_like, scfg), 1) if live_ok else 0,
+                # 立即推进按钮显隐：auto 档 + 引擎开 + 运行时闸全过（档位/危机等
+                # 硬闸在路由内再查一遍——按钮只是入口不是授权）
+                "nudgeable": live_ok
                 and str(view.get("autonomy") or "") == "auto",
             }
         except Exception:
@@ -1544,6 +1573,68 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         logger.info("[goal-sprint] 坐席手动加速 goal=%s p%s care#%s",
                     goal_id, phase, rid)
         return {"ok": True, "phase": int(phase), "care_id": int(rid)}
+
+    @app.get("/api/goals/{goal_id}/preflight")
+    async def goals_preflight(
+        request: Request, goal_id: str, _auth=Depends(auth_dep),
+    ):
+        """「这条目标现在能不能真的自动出手」一次说全（D1b P0-4 2026-09-05）。
+
+        三层合一（引擎配置 / 进程活性 / 目标运行时闸）→ ``{ok, blockers[],
+        engine, process, runtime, due_now, next_due, pending_rows}``。
+        运行时闸与 ticker ``run_once`` 同一函数（``goal_runtime_gates``），
+        preflight 说「能」ticker 就一定会排——此前卡片只看引擎配置，会话在
+        review 档 / opt-out / 危机窗时照样挂着「下一主动拍≈HH:MM」。
+        blockers 用配置键名口径（与 ``sprint_engine_status`` 同一词表），
+        前端按 ``inbox.goal.engine.blk.*`` 直接翻译。只读，绝不抛 5xx。"""
+        svc = _require_enabled(request)
+        store = _store(svc)
+        goal = store.get_goal(goal_id)
+        if goal is None:
+            raise HTTPException(404, tr(request, "err.goals.not_found"))
+        from src.companion.goals.sprint_ticker import (
+            load_optout_mutes,
+            preflight_goal,
+        )
+        tk = getattr(app.state, "goal_sprint_ticker", None)
+        ticker_running = None
+        if tk is not None:
+            try:
+                ticker_running = bool(tk.is_running())
+            except Exception:
+                ticker_running = None
+        dispatcher_running = None
+        try:
+            eng = getattr(app.state, "care_engine", None) or {}
+            disp = eng.get("dispatcher") if isinstance(eng, dict) else None
+            if disp is not None:
+                dispatcher_running = bool(disp.is_running())
+        except Exception:
+            dispatcher_running = None
+        care_store = None
+        try:
+            care_store = getattr(app.state, "care_schedule_store", None)
+        except Exception:
+            care_store = None
+        try:
+            mutes = load_optout_mutes(_config_path())
+        except Exception:
+            mutes = {}
+        out = preflight_goal(
+            dict(goal), cfg_root=_cfg_root(),
+            inbox=_inbox_store(), care_store=care_store, mutes=mutes,
+            ticker_running=ticker_running,
+            dispatcher_running=dispatcher_running,
+        )
+        # 「下一拍」给前端 HH:MM 友好串（本地时区）
+        try:
+            import time as _t3
+            nd = float(out.get("next_due") or 0)
+            out["next_due_hhmm"] = (
+                _t3.strftime("%H:%M", _t3.localtime(nd)) if nd > 0 else "")
+        except Exception:
+            out["next_due_hhmm"] = ""
+        return out
 
     @app.post("/api/goals/{goal_id}/status")
     async def goals_status(

@@ -1137,6 +1137,11 @@
           bits.push((live.ticker_enabled && blk.length)
             ? this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(blk) })
             : this.t("inbox.goal.sprint.engine_off"));
+        } else if (Array.isArray(live.blockers) && live.blockers.length) {
+          // D1b P0-4：引擎配置全绿但**运行时闸**没过（会话人审档 / 危机窗 / opt-out /
+          // 读不到收件箱）→ 点名原因。此前落到「等对方开口」——坐席以为在等客户，
+          // 其实推进器一条都不会排。
+          bits.push(this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(live.blockers) }));
         } else {
           const nts = parseFloat(live.next_phase_ts) || 0;
           if (nts > Date.now() / 1000) {

@@ -1259,6 +1259,13 @@ _ADDITIONS_2026_09_05_GOALS_ENGINE_STATUS = """
 """
 _BASELINE += _ADDITIONS_2026_09_05_GOALS_ENGINE_STATUS
 
+# D1b P0-4 2026-09-05：单目标预检——引擎配置 / 进程活性 / 目标运行时闸（会话档位·
+# 危机·opt-out，与 ticker run_once 同一函数）三层合一，卡片只在全过时承诺下一拍。
+_ADDITIONS_2026_09_05_GOALS_PREFLIGHT = """
+/api/goals/{goal_id}/preflight	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_05_GOALS_PREFLIGHT
+
 # 实施91（小智线 impl88）PC 受控机管理三端点——**代登记**（2026-08-30 晚：
 # 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住老板点名的发版重启；
 # 语义归属仍是小智线，端点行为以其实现为准，见 .ops NOTE_from_goals_sprint_*）。

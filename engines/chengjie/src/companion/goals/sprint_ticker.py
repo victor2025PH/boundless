@@ -536,6 +536,242 @@ def _last_in_out_ts(msgs: Any) -> Tuple[float, float]:
     return last_in, last_out
 
 
+# 运行时闸的固定顺序（ticker 短路顺序 = preflight 展示顺序，安全型闸在前）。
+RUNTIME_GATE_ORDER: Tuple[str, ...] = (
+    "autonomy", "platform", "no_conversation", "no_inbox",
+    "automation_mode", "crisis", "optout",
+)
+
+
+def goal_runtime_gates(
+    goal: Dict[str, Any],
+    *,
+    cfg: Dict[str, Any],
+    inbox: Any,
+    mutes: Optional[Dict[str, Any]] = None,
+    now: Optional[float] = None,
+    emotion_gate: Optional[Callable[[dict, dict], str]] = None,
+    stop_on_fail: bool = False,
+) -> Dict[str, Any]:
+    """单个目标的**运行时**安全闸（D1b P0-4：ticker 与 preflight 的单一事实源）。
+
+    返回 ``{"gates": {name: bool}, "skip": 首个未过闸名或 "", "last_in", "last_out"}``。
+    ``stop_on_fail=True``（ticker 用）在首个未过闸处短路——与旧 ``run_once`` 逐条
+    ``continue`` 语义等价、零多余 I/O；``False``（preflight 用）把能判的闸都判完，
+    坐席一次看全「还差哪几道」而不是修一道再撞下一道。
+
+    fail-closed 口径与旧实现一致：读不到 inbox / 档位 → 该闸不过；
+    情绪闸/opt-out 判定**自身异常**→ 放行（那两处历来如此，避免探针故障把全部
+    目标判死）。绝不抛。
+    """
+    n = float(now if now is not None else time.time())
+    gates: Dict[str, bool] = {}
+    skip = ""
+    last_in = last_out = 0.0
+
+    def _fail(name: str) -> bool:
+        nonlocal skip
+        gates[name] = False
+        if not skip:
+            skip = name
+        return stop_on_fail
+
+    gates["autonomy"] = str(goal.get("autonomy") or "") == "auto"
+    if not gates["autonomy"] and _fail("autonomy"):
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    platform = str(goal.get("platform") or "").strip().lower()
+    gates["platform"] = platform in (cfg.get("platforms") or ())
+    if not gates["platform"] and _fail("platform"):
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    conv = str(goal.get("conversation_id") or "").strip()
+    gates["no_conversation"] = bool(conv)
+    if not conv:
+        # 后面几道全依赖会话 id，无会话时一律视为未过（preflight 全列）
+        _fail("no_conversation")
+        for k in ("no_inbox", "automation_mode", "crisis", "optout"):
+            gates.setdefault(k, False)
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    # 自发消息的安全前提：能读到会话档位与消息流。读不到＝fail-closed
+    gates["no_inbox"] = inbox is not None
+    if inbox is None:
+        _fail("no_inbox")
+        for k in ("automation_mode", "crisis", "optout"):
+            gates.setdefault(k, False)
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    try:
+        mode_ok = str(inbox.get_automation_mode(conv) or "") == "auto_ai"
+    except Exception:
+        mode_ok = False
+    gates["automation_mode"] = mode_ok
+    if not mode_ok and _fail("automation_mode"):
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    # 危机 block（安全型，绝不豁免）；soft（普通负面）放行——
+    # 冲刺拟稿模板自带「对方明确拒绝/情绪低落就收住」纪律。
+    try:
+        meta = inbox.get_conv_meta(conv) or {}
+    except Exception:
+        meta = {}
+    crisis_ok = True
+    try:
+        if emotion_gate is not None:
+            verdict = str(emotion_gate(dict(goal), dict(meta)))
+        else:
+            from src.utils.wellbeing_guard import proactive_emotion_gate
+            intensity = meta.get("last_emotion_intensity")
+            verdict = proactive_emotion_gate(
+                None, now=n,
+                last_emotion=str(meta.get("last_emotion") or ""),
+                last_emotion_intensity=(
+                    float(intensity) if intensity is not None else None),
+            )
+        crisis_ok = verdict != "block"
+    except Exception:
+        crisis_ok = True
+    gates["crisis"] = crisis_ok
+    if not crisis_ok and _fail("crisis"):
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
+
+    try:
+        msgs = inbox.list_recent_messages(conv, limit=10) or []
+    except Exception:
+        msgs = []
+    last_in, last_out = _last_in_out_ts(msgs)
+
+    optout_ok = True
+    if mutes and conv in mutes:
+        try:
+            from src.utils.proactive_optout import optout_active
+            optout_ok = not optout_active(mutes.get(conv), now=n,
+                                          last_in_ts=last_in)
+        except Exception:
+            optout_ok = True
+    gates["optout"] = optout_ok
+    if not optout_ok:
+        _fail("optout")
+
+    return {"gates": gates, "skip": skip,
+            "last_in": last_in, "last_out": last_out}
+
+
+def preflight_goal(
+    goal: Dict[str, Any],
+    *,
+    cfg_root: Any,
+    inbox: Any,
+    care_store: Any = None,
+    mutes: Optional[Dict[str, Any]] = None,
+    now: Optional[float] = None,
+    ticker_running: Optional[bool] = None,
+    dispatcher_running: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """「这条目标现在能不能真的自动出手」一次说全（D1b P0-4）。
+
+    三层合一：① 引擎配置层（``sprint_engine_status``：ticker 开关 / dry_run / 平台
+    白名单 / 出站真发闸）；② 进程层（ticker / dispatcher 线程是否真在跑——配置说开
+    ≠ 进程活着）；③ 目标运行时层（``goal_runtime_gates`` 全列不短路）。
+    ``ok`` 只在三层全过时为 True；``blockers`` 为按修复优先级排好的闸名列表，
+    ``next_due`` 给「下一拍几点」（仅 ok 时有意义）。绝不抛。
+    """
+    n = float(now if now is not None else time.time())
+    try:
+        from src.companion.goals.service import resolve_goals_cfg
+        goals_cfg = resolve_goals_cfg(cfg_root)
+    except Exception:
+        goals_cfg = {}
+    cfg = parse_sprint_cfg(goals_cfg)
+    out: Dict[str, Any] = {
+        "ok": False, "goal_id": str(goal.get("goal_id") or ""),
+        "pace": "", "blockers": [], "engine": {}, "runtime": {},
+        "process": {}, "next_due": 0.0,
+    }
+    try:
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        pace = resolve_pace(goal)
+        sprint = is_sprint(pace)
+        out["pace"] = str(pace)
+    except Exception:
+        sprint = False
+
+    # ① 引擎配置层
+    engine_blockers: list = []
+    try:
+        from src.companion.goals.service import sprint_engine_status
+        eng = sprint_engine_status(
+            cfg_root, platform=str(goal.get("platform") or "")) or {}
+        out["engine"] = eng
+        engine_blockers = [str(b) for b in (eng.get("sprint_blockers") or [])]
+    except Exception:
+        out["engine"] = {"error": True}
+    if not sprint and not bool(cfg.get("natural_daily", True)):
+        engine_blockers.append("natural_daily_off")
+
+    # ② 进程层（None＝调用方不知道，不当 blocker，只如实透传）
+    out["process"] = {"ticker_running": ticker_running,
+                      "dispatcher_running": dispatcher_running}
+    proc_blockers: list = []
+    if ticker_running is False:
+        proc_blockers.append("ticker_not_running")
+    if dispatcher_running is False:
+        proc_blockers.append("dispatcher_not_running")
+
+    # ③ 目标运行时层
+    rg = goal_runtime_gates(goal, cfg=cfg, inbox=inbox, mutes=mutes, now=n,
+                            stop_on_fail=False)
+    out["runtime"] = rg["gates"]
+    rt_blockers = [k for k in RUNTIME_GATE_ORDER
+                   if k in rg["gates"] and not rg["gates"][k]
+                   and k not in engine_blockers]   # platform 已由引擎层点名
+
+    # 已完成/已归档的目标本就不该出手，如实标出
+    status = str(goal.get("status") or "active")
+    if status != "active":
+        rt_blockers.insert(0, "goal_not_active")
+
+    out["blockers"] = engine_blockers + proc_blockers + rt_blockers
+    out["ok"] = not out["blockers"]
+
+    # 下一拍（只在 ok 时算，避免给「不能发」的目标一个时间承诺）：
+    # due_now=本 tick 就会排（相位/日拍已到、沉默/间隔闸都过）；next_due=下一相位点。
+    out["due_now"] = False
+    out["pending_rows"] = 0
+    if out["ok"]:
+        try:
+            if care_store is not None:
+                try:
+                    out["pending_rows"] = sum(
+                        1 for r in (care_store.list_recent(limit=200) or [])
+                        if str(r.get("status") or "") == "pending"
+                        and str(r.get("topic_norm") or "").startswith(
+                            f"goal:{out['goal_id']}:"))
+                except Exception:
+                    out["pending_rows"] = 0
+            if sprint:
+                out["due_now"] = due_phase(
+                    goal, cfg=cfg, now=n,
+                    last_inbound_ts=rg["last_in"],
+                    last_outbound_ts=rg["last_out"]) is not None
+                out["next_due"] = float(next_phase_ts(goal, cfg, now=n))
+            else:
+                out["due_now"] = due_daily(
+                    goal, cfg=cfg, now=n,
+                    last_inbound_ts=rg["last_in"],
+                    last_outbound_ts=rg["last_out"]) is not None
+                # 自然档：下一拍＝今天窗口内（若还没到窗口）或明天窗口起点
+                lt = time.localtime(n)
+                w0, _w1 = cfg.get("natural_window") or DEFAULT_NATURAL_WINDOW
+                day0 = n - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+                cand = day0 + int(w0) * 3600
+                out["next_due"] = cand if cand > n else cand + 86400
+        except Exception:
+            out["next_due"] = 0.0
+    return out
+
+
 class SprintGoalTicker:
     """后台循环：按相位把冲刺主动拍排进 care 管线（常备接线 + 配置热闸，
     ``sprint.enabled=false`` 时每 tick 空转零副作用——与 CareGoalScanner 同哲学）。"""
@@ -645,70 +881,16 @@ class SprintGoalTicker:
                     continue
                 summary["scanned"] += 1
                 gid = str(g.get("goal_id") or "")
-                if str(g.get("autonomy") or "") != "auto":
-                    _skip("autonomy")
-                    continue
-                platform = str(g.get("platform") or "").strip().lower()
-                if platform not in (cfg.get("platforms") or ()):
-                    _skip("platform")
-                    continue
                 conv = str(g.get("conversation_id") or "").strip()
-                if not conv:
-                    _skip("no_conversation")
+                # 运行时闸（D1b P0-4 起与 preflight 同一函数：卡片/预检说「能出手」
+                # 与 ticker 真出手用同一套判定，不再各算一套）
+                rg = goal_runtime_gates(
+                    g, cfg=cfg, inbox=inbox, mutes=mutes, now=n,
+                    emotion_gate=self._emotion_gate, stop_on_fail=True)
+                if rg["skip"]:
+                    _skip(rg["skip"])
                     continue
-                # 自发消息的安全前提：能读到会话档位与消息流。读不到＝fail-closed
-                # （宁可不发也不往人审会话/未知状态里自动出手）。
-                if inbox is None:
-                    _skip("no_inbox")
-                    continue
-                try:
-                    if str(inbox.get_automation_mode(conv) or "") != "auto_ai":
-                        _skip("automation_mode")
-                        continue
-                except Exception:
-                    _skip("automation_mode")
-                    continue
-                # 危机 block（安全型，绝不豁免）；soft（普通负面）放行——
-                # 冲刺拟稿模板自带「对方明确拒绝/情绪低落就收住」纪律。
-                try:
-                    meta = inbox.get_conv_meta(conv) or {}
-                except Exception:
-                    meta = {}
-                try:
-                    if self._emotion_gate is not None:
-                        verdict = str(self._emotion_gate(dict(g), dict(meta)))
-                    else:
-                        from src.utils.wellbeing_guard import (
-                            proactive_emotion_gate,
-                        )
-                        intensity = meta.get("last_emotion_intensity")
-                        verdict = proactive_emotion_gate(
-                            None, now=n,
-                            last_emotion=str(meta.get("last_emotion") or ""),
-                            last_emotion_intensity=(
-                                float(intensity) if intensity is not None
-                                else None),
-                        )
-                    if verdict == "block":
-                        _skip("crisis")
-                        continue
-                except Exception:
-                    pass
-                try:
-                    msgs = inbox.list_recent_messages(conv, limit=10) or []
-                except Exception:
-                    msgs = []
-                last_in, last_out = _last_in_out_ts(msgs)
-                # opt-out 静默（安全型，绝不豁免）
-                if conv in mutes:
-                    try:
-                        from src.utils.proactive_optout import optout_active
-                        if optout_active(mutes.get(conv), now=n,
-                                         last_in_ts=last_in):
-                            _skip("optout")
-                            continue
-                    except Exception:
-                        pass
+                last_in, last_out = rg["last_in"], rg["last_out"]
                 if sprint:
                     phase = due_phase(
                         g, cfg=cfg, now=n,
@@ -837,4 +1019,7 @@ __all__ = [
     "remaining_phrase",
     "schedule_nudge",
     "sprint_source_text",
+    "RUNTIME_GATE_ORDER",
+    "goal_runtime_gates",
+    "preflight_goal",
 ]
