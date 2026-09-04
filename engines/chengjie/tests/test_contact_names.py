@@ -251,7 +251,10 @@ def test_persona_studio_no_longer_renders_the_two_fields():
         encoding="utf-8")
     assert 'id="pe-pf-name-callpeer"' not in html
     assert 'id="pe-pf-name-peercalls"' not in html
-    # 但必须留「去哪儿设置」的说明（删了格子不说去处＝功能凭空消失）
-    assert "psn_pf_name_address_moved" in html
+    # #178（0905 skuio 原图 1192）：#155 留下的「已改为按客户单独设置——请去
+    # 收件箱…」说明条也删了——档案页里一段没输入项、只指路去别处的说明是噪音；
+    # 去处由收件箱客户信息面板自身承担。两键随删，模板不得再引用。
+    assert "psn_pf_name_address_moved" not in html
+    assert "psn_pf_name_address" not in html
     # 存量值仍随保存原样回传（不带键会被后端当清空，抹掉回落默认）
     assert "'call_peer','peer_calls_you'" in html

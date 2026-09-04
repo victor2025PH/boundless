@@ -1101,13 +1101,10 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
        对方称呼你」描述的是这段客户关系，不是人设自己：同一人设服务一百个客户，
        不可能对每个人都叫 babe，改人设档会连带改掉另外九十九个。入口改在会话侧
        （收件箱客户信息面板），存储 conversation_contact_names，注入与出站呼格
-       守卫同源消费。人设档里的存量值仍被读作回落默认值（升级零行为变化）。 #}
-    <div class="ps-row">
-      <div class="field-row" style="flex:1">
-        <label>{{ (i18n or {}).get('psn_pf_name_address','双向称呼（爱称）') }}</label>
-        <div class="pf-hint">{{ (i18n or {}).get('psn_pf_name_address_moved','「你称呼对方 / 对方称呼你」已按客户单独设置——请在收件箱打开该客户的会话后设置。人设档里的旧值仍作为未单独设置时的默认。') }}</div>
-      </div>
-    </div>
+       守卫同源消费。人设档里的存量值仍被读作回落默认值（升级零行为变化）。
+       #178（0905 skuio 原图 1192）：#155 落地时留在这里的「已改为按客户单独
+       设置——请去收件箱…」迁移说明条整块删除——档案页里一段没有任何输入项、
+       只指路去别处的说明，对运营是噪音（存量值仍随保存原样回传，见下方 JS）。 #}
     {# #104（0831）：所在地字段——此前仅 YAML 可配，客户端无入口 → 天气/时差接地对运营不可达 #}
     <div class="ps-row">
       <div class="field-row"><label title="{{ (i18n or {}).get('psn_pf_location_tip','人设常驻城市（如 马尼拉 / Vancouver）——驱动当地时间、时差桥与真实天气接地（不填则从背景文本自动推断；填 none 显式关闭）') }}">{{ (i18n or {}).get('psn_pf_location','所在地（城市）') }}</label><input id="pe-pf-location" type="text" placeholder="Manila"></div>
