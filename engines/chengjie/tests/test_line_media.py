@@ -809,6 +809,33 @@ def test_probe_refuses_confirm_without_target(monkeypatch, capsys):
     assert mod.main() == 2
 
 
+def test_probe_picks_online_account_first():
+    mod = _probe_mod()
+    accounts = [
+        {"account_id": "off", "status": "offline"},
+        {"account_id": "on", "status": "online"},
+        {"account_id": "gone", "status": "removed"},
+    ]
+    assert mod.pick_line_account(accounts)["account_id"] == "on"
+    assert mod.pick_line_account(accounts, "off")["account_id"] == "off"
+    assert mod.pick_line_account(accounts, "gone") is None
+    assert mod.pick_line_account([]) is None
+
+
+def test_probe_media_magic_rejects_json_envelope(tmp_path):
+    """2026-08-13：把 JSON 信封当成 wav 落盘。KB 数过了、magic 必须红。"""
+    mod = _probe_mod()
+    fake = tmp_path / "x.wav"
+    fake.write_bytes(b'{"ok":true,"audio_base64":"xxxx"}')
+    r = mod.check_media_magic(str(fake), "voice")
+    assert r["ok"] is False
+    assert "bad_magic" in r["reason"]
+    jpg = tmp_path / "y.jpg"
+    jpg.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 8)
+    assert mod.check_media_magic(str(jpg), "image")["container"] == "JPEG"
+    assert mod.check_media_magic(str(tmp_path / "nope.jpg"), "image")["reason"] == "missing_file"
+
+
 def test_probe_output_is_ascii_only():
     """输出不得含 ✓/✗ 之类字符：PS5.1 控制台是 GBK，编不出就整条 traceback
     （本仓 watchdog_emotion_tts.ps1 与本工具首跑都踩过）。"""

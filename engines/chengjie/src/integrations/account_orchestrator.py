@@ -2661,6 +2661,9 @@ class LineProtocolWorker:
             )
             mcfg = resolve_line_media_cfg(self.config)
             if is_group and not mcfg.get("groups", False):
+                logger.info(
+                    "[line-worker] 入站媒体跳过（群聊未开 platform_login.line.media.groups）"
+                    " acct=%s", self.account_id)
                 return "", ""
             return download_line_media(
                 self.client, message or {}, self.account_id, cfg=mcfg, out=out)

@@ -111,6 +111,74 @@ def _resolve_tokens_path(cfg: Dict[str, Any], acct: Dict[str, Any],
         return ""
 
 
+def pick_line_account(accounts, wanted_id=""):
+    """拣探测账号：显式 id 优先；否则 online 优先，避免离线号让 get_profile 空转。"""
+    wanted = str(wanted_id or "").strip()
+    alive = []
+    for a in accounts or []:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get("status") or "") == "removed":
+            continue
+        if wanted and str(a.get("account_id") or "") != wanted:
+            continue
+        alive.append(a)
+    if not alive:
+        return None
+    online = [a for a in alive if str(a.get("status") or "") == "online"]
+    return (online or alive)[0]
+
+
+def check_media_magic(path: str, kind: str = "") -> dict:
+    """落盘媒体的 magic-byte 校验（2026-08-13 事故：HTTP 200 + KB 数不等于真音频）。
+
+    返回 ``{"ok": bool, "container": str, "reason": str}``。缺文件 / 头对不上 → ok=False。
+    """
+    if not path or not os.path.isfile(path):
+        return {"ok": False, "container": "", "reason": "missing_file"}
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(16)
+    except OSError as exc:
+        return {"ok": False, "container": "", "reason": "unreadable:%s" % exc}
+    tag = ""
+    if head[:2] == b"\xff\xd8":
+        tag = "JPEG"
+    elif head[:4] == b"\x89PNG":
+        tag = "PNG"
+    elif head[:4] == b"GIF8":
+        tag = "GIF"
+    elif head[:4] == b"OggS":
+        tag = "OGG"
+    elif head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        tag = "WAV"
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        tag = "WEBP"
+    elif len(head) >= 8 and head[4:8] == b"ftyp":
+        tag = "MP4"
+    elif head[:3] == b"ID3" or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        tag = "MP3"
+    if not tag:
+        return {
+            "ok": False, "container": "",
+            "reason": "bad_magic head=%s" % head[:8].hex(),
+        }
+    kind_l = str(kind or "").strip().lower()
+    expect = {
+        "image": {"JPEG", "PNG", "GIF", "WEBP"},
+        "voice": {"OGG", "WAV", "MP3", "MP4"},
+        "audio": {"OGG", "WAV", "MP3", "MP4"},
+        "video": {"MP4", "OGG"},
+        "sticker": {"JPEG", "PNG", "GIF", "WEBP"},
+    }.get(kind_l)
+    if expect and tag not in expect:
+        return {
+            "ok": False, "container": tag,
+            "reason": "kind_mismatch kind=%s container=%s" % (kind_l, tag),
+        }
+    return {"ok": True, "container": tag, "reason": ""}
+
+
 def _make_test_image() -> str:
     """当场画一张明确写着「测试」的小图（不用人设自拍/相册内容）。"""
     from PIL import Image, ImageDraw
@@ -144,15 +212,12 @@ def probe(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
         report["error"] = "该数据根下没有 LINE 账号"
         return report
 
-    acct = next(
-        (a for a in accounts
-         if (not args.account or a["account_id"] == args.account)
-         and a["status"] not in ("removed",)),
-        None,
-    )
+    acct = pick_line_account(accounts, args.account)
     if acct is None:
         report["error"] = "没有可用的 LINE 账号（--account 不匹配或全部 removed）"
         return report
+    report["picked_account"] = acct["account_id"]
+    report["picked_status"] = acct.get("status") or ""
 
     tokens = _resolve_tokens_path(cfg, acct, root)
     report["tokens_path"] = tokens
@@ -177,6 +242,13 @@ def probe(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
             own_mid = ""
             report["profile_error"] = str(exc)[:200]
         report["own_mid"] = own_mid
+        if not own_mid:
+            # 默认只读若拣到离线号会走到这里：必须红字，不许空 flowMap 假装探过。
+            extra = report.get("profile_error") or "empty mid"
+            report["error"] = (
+                "get_profile 失败，无法探 media flow（账号 status=%s）: %s"
+                % (acct.get("status") or "?", extra))
+            return report
 
         # ── 只读：媒体流程判据（本探针存在的首要理由）───────────────────────
         targets = [t for t in ([own_mid] + list(args.flow_mid or [])) if t]
@@ -234,7 +306,18 @@ def probe(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
                 from src.integrations.protocol_bridge import static_media_ref_to_path
                 local = static_media_ref_to_path(url) or ""
                 item["local"] = local
-                item["bytes"] = os.path.getsize(local) if os.path.isfile(local) else 0
+                if local and os.path.isfile(local):
+                    item["bytes"] = os.path.getsize(local)
+                    magic = check_media_magic(local, kind)
+                    item["magic"] = magic
+                    if not magic.get("ok"):
+                        report["error"] = (
+                            "入站落盘未过 magic bytes（kind=%s bytes=%s %s）——HTTP 200/KB 数不算验证"
+                            % (kind, item.get("bytes"), magic.get("reason") or "fail"))
+                else:
+                    report["error"] = "入站拿到 URL 但本地文件不存在 ref=%s" % url
+            else:
+                report["error"] = "入站下载未取到媒体（kind=%s ref 空）" % (kind or "?")
             # 再把它喂给平台无关的识别层——这一步才回答「AI 到底看不看得见」
             if local and args.enrich:
                 import asyncio
@@ -299,7 +382,11 @@ def _print(report: Dict[str, Any]) -> None:
     for a in report.get("accounts") or []:
         print("  账号            : %s mode=%s status=%s"
               % (a["account_id"], a["mode"], a["status"]))
-    if report.get("error"):
+    if report.get("picked_account"):
+        print("  拣号            : %s status=%s"
+              % (report.get("picked_account"), report.get("picked_status")))
+    # 错误不提前 return：入站 magic 失败时仍要把路径/字节打出来，方便对账。
+    if report.get("error") and not report.get("own_mid") and not report.get("inbound"):
         print("  x %s" % report["error"])
         return
     print("  own_mid         : %s" % (report.get("own_mid") or "(取不到)"))
@@ -316,6 +403,10 @@ def _print(report: Dict[str, Any]) -> None:
         print("  -- 入站链路（真实 OBS 对象 -> 生产下载函数）--")
         print("    kind=%s bytes=%s ref=%s"
               % (ib.get("kind"), ib.get("bytes"), ib.get("media_ref") or "(未取到)"))
+        mag = ib.get("magic") or {}
+        if mag:
+            print("    magic          : ok=%s container=%s %s"
+                  % (mag.get("ok"), mag.get("container") or "-", mag.get("reason") or ""))
         if ib.get("vlm_desc") is not None or ib.get("enrich_error"):
             print("    VLM: %s" % (ib.get("vlm_desc") or ib.get("enrich_error")))
             print("    喂给 AI 的文本: %s" % (ib.get("ai_text") or ""))
@@ -335,6 +426,8 @@ def _print(report: Dict[str, Any]) -> None:
             get_line_media_stats().dump().get("outbound"), ensure_ascii=False))
     except Exception:  # noqa: BLE001
         pass
+    if report.get("error"):
+        print("  x %s" % report["error"])
 
 
 def main() -> int:
