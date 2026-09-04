@@ -87,6 +87,53 @@ I-6 （零代码风险，随时可与任何条并行）
 ⚠ **接手方不要相信总账里"未开工"就直接开工** —— 先跑第 3 步的 `git log` 核一遍。
 上一轮可能额度断在"改完没来得及更新总账"那一刻。以 **commit 和落点表为准，总账是索引**。
 
+## 复查记录（2026-09-04 13:2x，值守线全批核验）
+
+**结论：未全部完成。** 六条里 I-1/I-2/I-3/I-4 代码已落地，I-5 部分、I-6 卡在等老板点头。
+
+已核实为**真的做完了**：
+- **I-1 在真流量上验证成立**：坐席机 kouxing `logs/autosend_shadow/shadow_20260904.jsonl`
+  有 `would_hold_level=L4 / hold_reason=adult / policy_mode=shadow / kind=hold` 的记录，
+  二三批新增字段（lang/intent/emotion/persona_id/peer_text_fp/peer_msg_id/peer_msg_match）全齐——
+  旧策略会扣稿转人工的稿子，v2 下**放行了且只留台账**。zhiliao 侧 0 条（12:53 才装载，窗口短）。
+- **1.0.72 已装三台坐席**（yunsheng / kouxing / lianbei 全部 UP / 1.072），
+  三台 `renderer.log` 的 `Uncaught` 计数都是 **0**（#158 的"无 JS 异常"这一半成立）。
+- **广域门禁 792 过 / 1 红**：唯一红是他线在途的 `test_alert_delivery_e2e::
+  test_source_alerts_all_have_e2e_payload`（`phantom_unread_alert` 未提交，红龄 2.8h，非本线）。
+
+核实为**仍然没做**（有代码证据，不是猜）：
+- **I-5 E4 `withdrawn_cite.sanitize_outbound` 全库无调用方**（只在 `withdrawn_cite.py:140`
+  定义、`:215` 导出）——"记得但不主动提"的**出站那一半没接线**，入站半边有效。
+- **I-5 E3 `pick_products` 两个调用点都不传 `persona_id`**（`goals/service.py:1278`、
+  `web/routes/goal_routes.py:190`），而 `_persona_id` 这个回落键**全库没有任何写入方**
+  → `pid=""` → `offers.visible_to_persona` 是 fail-closed → **绑定了人设的产品在
+  目标/选品注入链上一条都出不来**。串味确实修好了，但代价是绑定货全黑，需要两个调用点
+  把 `persona_id` 传进去（`service.py:1386` 已有 `resolve_account_persona_id` 可用）。
+- I-5 E5①（悬浮清单，老板已定"删"）、E1（LINE 语音/视频/贴纸真机）未动。
+- I-2 交接的三项 `unified_inbox.html` UI 未落地（未选人设入口 / 未读数字可点 #159 / 双向称呼 #155）。
+- **I-6 三项全卡在等老板点头**：F1② 61 单回访文案（复查仍是 61 单：skuio 47 / 钧 13 / 其他 1）、
+  F3 台账写入、F2 两机 selfcheck 短码。工单库 25 单非终态（`new` 6 / `verified` 4 /
+  `confirmed` 15），其中 I 批那些**代码已修、台账没跟**——正是 F3 要清的账。
+- **I-4 优化批未装载**：`d3a41597`(13:08) / `f1e324a7`(13:17) 晚于 zhiliao 末次重启
+  （12:53:35 watchdog_start），等下个重启窗。
+
+**本次复查新发现的 P0（1.0.72 装机触发，已止血）**：
+- kouxing 装完 1.0.72 后后端**启动 85 秒即自杀**：
+  `ValueError('too many file descriptors in select()')` → 防幽灵 exit 78 → 坐席掉线约 5 分钟。
+  根因＝**入站语音落库前转录没有并发闸**：`unified_inbox_account_routes.py:1506`
+  每条入站语音各自 `await transcribe_voice_message`（25s 墙钟），而 WhatsApp 边车在冷启动时
+  把积压语音一次性灌进来（日志里 13:17:06–13:17:17 十几路 `调用OpenAI Whisper API` 并发），
+  `voice_transcriber._transcribe_impl` 还**每次新建 `openai.OpenAI` 客户端**（各带连接池）
+  → FD 数越过 Windows `select()` 的 512 上限 → uvicorn 事件循环整体异常终止。
+- **第二个 bug：exit 78 之后壳不会重新拉起后端**——壳进程（pid 8044）一直在 `SYN_SENT`
+  空打 18799，无人 LISTENING，坐席看到的就是"一直连不上"。要人工 stop+relaunch 才回来。
+- 处置：`stop_chatx_node.ps1` + `relaunch_chatx_node.ps1` → 后端 pid 3636 已连续心跳 180s+
+  （越过 85s 那个崩点）稳住；另两台该崩溃计数为 0。
+- 待修（**未施工**，且当前有他线正在改 `skill_manager.py` / `rate_limiter.py` /
+  `account_limiter.py`（意向板"unlimited outbound mode"），碰发送链要先避让）：
+  ① 入站 ASR 加并发闸（信号量，建议 3）+ 复用单个 OpenAI 客户端；
+  ② exit 78 让壳侧要么重拉后端、要么弹红条告诉坐席（现在是静默死）。
+
 ## 全批收口（6 条都完成后，由值守做）
 
 1. 合并六份落点表进 `docs/发版对账_v1.0.72.md`（I-2 建的骨架）
