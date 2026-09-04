@@ -82,12 +82,40 @@ def sh(cmd: list, timeout: int = 40) -> str:
         return ""
 
 
+def sh_full(cmd: list, timeout: int = 40) -> tuple:
+    """(stdout, 失败原因) —— 原因＝stderr 首行 / 'timeout' / 异常名，空串＝成功。
+
+    I-6 F4①（2026-09-04）：旧 ``sh`` 把 stderr 与超时全吞成空串，日志只能写
+    「network/ssh」猜原因；对照 net_probe_117.log 发现失败分钟链路全绿
+    （vps=3/3 pub=3/3），红噪音全是探针自己的——不带原因的失败日志等于没有日志。
+    """
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
+        if (r.stdout or "").strip():
+            return r.stdout, ""
+        err = (r.stderr or "").strip().splitlines()
+        return "", (err[0][:160] if err else f"rc={r.returncode} empty stdout")
+    except subprocess.TimeoutExpired:
+        return "", f"timeout>{timeout}s"
+    except Exception as exc:  # noqa: BLE001
+        return "", f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
 def probe_packs(st: dict) -> None:
-    out = sh(["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", VPS,
-              f"tail -12 {REMOTE_UPLOADS}"])
+    cmd = ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", VPS,
+           f"tail -12 {REMOTE_UPLOADS}"]
+    out, why = sh_full(cmd)
     if not out.strip():
-        log("vps probe failed (network/ssh)")
-        return
+        # 一次短退避重试：同一分钟 net_probe_117 显示链路全绿时的空输出多为
+        # ssh 握手瞬时失败（sshd MaxStartups / 与 LedgerBackup、callback_poll 等
+        # 并发 ssh 撞车），重试即过；两次都空才算失败，并带出真实原因。
+        time.sleep(3)
+        out, why2 = sh_full(cmd)
+        if not out.strip():
+            log(f"vps probe failed ({why or 'empty'} | retry: {why2 or 'empty'})")
+            return
+        log(f"vps probe recovered on retry (first: {why or 'empty'})")
     seen = set(st["codes"])
     for line in out.splitlines():
         m = _CODE_RE.search(line)
