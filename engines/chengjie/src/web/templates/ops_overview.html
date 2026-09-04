@@ -427,6 +427,13 @@
     <div id="csrfRejectDetail"></div>
   </section>
 
+  <section id="autosendShadowSection" style="display:none;">
+    <h2>🕶️ {{ (i18n or {}).get('ov2_s_ashadow', "风险放行影子台账（#160：旧规则本会扣、现已放行）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_ashadow_hint', "2026-09-04 起风险扣稿全放行，触发只写台账；这里是进程口径（重启清零），一个月数据的权威口径在 logs/autosend_shadow/*.jsonl，读数用 tools/autosend_shadow_report.py。stop_contact / self_harm 已即时推值守群（别名 autosend_shadow）：客户叫停后 AI 仍在发＝骚扰＝封号风险，需人工介入止损。") }}</div>
+    <div class="grid" id="autosendShadowKpis"></div>
+    <div id="autosendShadowDetail"></div>
+  </section>
+
   <section id="outMirrorSection" style="display:none;">
     <h2>📤 {{ (i18n or {}).get('ov2_s_omirror', "出站媒体归档（镜像发布失败观测）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_om_hint', "A 线出站图/语音发完即删，先归档到 /static 坐席台才能回放。归档失败＝那条媒体在聊天记录里退化成「无音频存档」的纯文字占位。有失败就查磁盘、protocol_media 目录可写性与 app.log。") }}</div>
@@ -2638,7 +2645,7 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderLineMedia(null); }catch(_lm){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderAccountHealth(null); }catch(_ah){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderAutosendShadow(null); }catch(_as){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderLineMedia(null); }catch(_lm){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderAccountHealth(null); }catch(_ah){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
     const d = await r.json();
     try{ renderImageXlate(d); }catch(_ix){}
     try{ renderTokenLedger(d); }catch(_tk){}
@@ -2647,6 +2654,7 @@ async function loadFrontendErrors(){
     try{ renderDpickFunnel(d); }catch(_df){}
     try{ renderPersonaOverride(d); }catch(_po){}
     try{ renderCsrfRejects(d); }catch(_cs){}
+    try{ renderAutosendShadow(d); }catch(_as){}
     try{ renderOutboundMirror(d); }catch(_om){}
     try{ renderLineMedia(d); }catch(_lm){}
     try{ renderPhotoCapability(d); }catch(_pc){}
@@ -3388,6 +3396,52 @@ function renderCsrfRejects(d){
     +   '<table><tr><th>'+window.T('ov2_js_csrf_col_kind')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byKind, 8)+'</table></div>'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_csrf_by_path')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_js_csrf_col_path')+'</th><th>'+window.T('ov2_js_csrf_col_count')+'</th></tr>'+topRows(byPath, 8)+'</table></div>'
+    + '</div>';
+}
+
+// 🕶️ 风险放行影子台账卡（#160 I-1，2026-09-04）：与 loadFrontendErrors 共享同一次
+// /api/workspace/metrics 响应，读 autosend_shadow 段（进程口径重启清零；持久口径是
+// logs/autosend_shadow/*.jsonl，读数 CLI tools/autosend_shadow_report.py）。零命中 → 整卡隐藏。
+// reason 是后端枚举；hit 是 ≤40 字的正则命中片段（可能含客户原词）→ 一律 _esc 再拼 HTML。
+function renderAutosendShadow(d){
+  var sec = document.getElementById('autosendShadowSection');
+  var kp = document.getElementById('autosendShadowKpis');
+  var dv = document.getElementById('autosendShadowDetail');
+  if(!sec || !kp || !dv) return;
+  var sh = (d && d.autosend_shadow) || null;
+  if(!sh || !(Number(sh.total)||0)){ opsSetCardLight('ashadow', ''); opsHideCardEl(sec, 'ashadow', 'healthy'); return; }
+  opsShowCardEl(sec, 'ashadow');
+  var stopN = Number(sh.stop_contact)||0, harmN = Number(sh.self_harm)||0;
+  // 要人看的两个 reason 有量 → 黄灯；其余只是「本会被扣」的观测量，不亮灯
+  opsSetCardLight('ashadow', (stopN || harmN) ? 'yellow' : '');
+  var lastTs = Number(sh.last_ts)||0;
+  var kpis = [
+    {label:window.T('ov2_js_ash_total'), value:fmt(Number(sh.total)||0)},
+    {label:window.T('ov2_js_ash_today'), value:fmt(Number(sh.today)||0)},
+    {label:window.T('ov2_js_ash_stop'), value:fmt(stopN), color:(stopN?'var(--red)':'')},
+    {label:window.T('ov2_js_ash_harm'), value:fmt(harmN), color:(harmN?'var(--red)':'')},
+    {label:window.T('ov2_js_ash_last'), value:(lastTs?window.wsFmtDateTime(lastTs):'—')},
+  ];
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div></div>';
+  }).join('');
+  function reasonRows(obj, n){
+    return Object.keys(obj).slice(0, n||8).map(function(k){
+      return '<tr><td>'+_esc(k)+'</td><td>'+fmt(Number(obj[k])||0)+'</td></tr>';
+    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  }
+  function hitRows(arr, n){
+    return (arr||[]).slice(0, n||10).map(function(h){
+      return '<tr><td>'+_esc(h && h.hit)+'</td><td>'+fmt(Number(h && h.n)||0)+'</td></tr>';
+    }).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+  }
+  dv.innerHTML =
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;">'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_ash_by_reason')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_ash_col_reason')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+reasonRows(sh.by_reason||{}, 8)+'</table></div>'
+    + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_ash_top_hits')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_ash_col_hit')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+hitRows(sh.top_hits||[], 10)+'</table></div>'
     + '</div>';
 }
 
@@ -8319,6 +8373,8 @@ var OPS_CARDS = [
   {key:'assist',   group:'quality', anchor:'assistKpis',       loaders:[loadAssistant]},
   {key:'loginfn',  group:'infra',   anchor:'loginFunnelKpis',  loaders:[loadFeTrend]},
   {key:'csrf',     group:'infra',   anchor:'csrfRejectKpis',   loaders:[loadFrontendErrors]},
+  // 风险放行影子台账（#160 2026-09-04）：旧规则本会扣、现已放行的稿子有多少、为什么
+  {key:'ashadow',  group:'quality', anchor:'autosendShadowKpis', loaders:[loadFrontendErrors]},
   {key:'omirror',  group:'infra',   anchor:'outMirrorKpis',    loaders:[loadFrontendErrors]},
   // LINE 媒体收发（#101 2026-08-31）：无音频存档/0:00 的远程归因读数面
   {key:'linemedia',group:'infra',   anchor:'lineMediaKpis',    loaders:[loadFrontendErrors]},
@@ -8358,6 +8414,7 @@ var _OPS_HIDE_HINT = {
   mconsist: {reason:'disabled'},
   imgen:    {reason:'no_data'},
   csrf:     {reason:'healthy'},
+  ashadow:  {reason:'healthy'},
   omirror:  {reason:'healthy'},
   linemedia:{reason:'no_data'},
   buried:   {reason:'healthy'},

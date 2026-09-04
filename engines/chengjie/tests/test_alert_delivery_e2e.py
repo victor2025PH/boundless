@@ -151,6 +151,13 @@ _EMITTED_ALERTS = [
      {"light": "red", "problems": [{"name": "DB", "detail": "连接失败"}]}),
     ("reply_risk", "human_reply_risk",
      {"agent_id": "u1", "risk_level": "high", "risk_reasons": ["辱骂"], "text_preview": "..."}),
+    # #160 I-1（2026-09-04 v2）：风险扣稿全放行、只写台账；stop_contact/self_harm 命中
+    # 即时推值守群（不拦只报），rate_key 按 account:conv
+    ("autosend_shadow", "autosend_shadow_alert",
+     {"reason": "stop_contact", "platform": "telegram", "account_id": "a1",
+      "conv_key": "6834964252", "draft_id": "inbox:telegram:a1:6834964252",
+      "would_hold_level": "L4", "risk_hits": ["stop messaging me"], "stage": "peer",
+      "rate_key": "a1:6834964252"}),
     # 实施93c：客户首点 CTA 追踪短链（cta_links.handle_click 首点发布）——
     # 引导模型最热跟进信号，business 受众，webhook 直推老板/运营
     ("cta_click", "cta_clicked",

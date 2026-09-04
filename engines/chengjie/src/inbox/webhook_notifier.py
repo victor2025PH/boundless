@@ -154,6 +154,10 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "memory_key_drift": {"types": {"memory_key_drift_alert"}, "levels": None},
     # 平台会话健康告警（P0-2：外部 worker 会话 needs_login/expired 主动 push → 立即外发）
     "platform_session": {"types": {"platform_session_alert"}, "levels": None},
+    # 风险放行影子台账即时通知（#160 I-1 2026-09-04 v2：扣稿全放行、只写台账）——仅
+    # stop_contact / self_harm 命中时发（不拦只报）：客户叫停后 AI 仍在发＝骚扰＝封号
+    # 风险，值守能在封号前几分钟看到；rate_key 按 account:conv 防同会话刷屏
+    "autosend_shadow": {"types": {"autosend_shadow_alert"}, "levels": None},
     # 主机级关键告警镜像（云端 Key 失效/云端不可达/余额不足；host_alert 弹窗的远程副本，
     # 机主不在算力机前也能收到）
     "host_alert": {"types": {"host_alert"}, "levels": None},
@@ -217,6 +221,8 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     "buried_conv":      "cp.alert.buried_conv",         # 会话被归档埋掉，客户在等却看不见
     "cases":            "cp.alert.cases",               # 会话需要人工跟进（案例开案/升级）
     "bot_peer":         "cp.alert.bot_peer",            # 对方疑似机器人，AI 已自动停发/降档
+    # #160 v2：客户叫停/自伤词命中但已放行——处置动作是运营/坐席接管会话止损，归 business
+    "autosend_shadow":  "cp.alert.autosend_shadow",
     "login_funnel":     "cp.alert.login_funnel",        # 账号一直接不上
     "queue_alert":      "cp.alert.queue_alert",         # 会话排队超时
     "csat_alert":       "cp.alert.csat_alert",          # 客户满意度跌破
@@ -1018,6 +1024,31 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "`available:true`；上面点名的 parkable 服务泊车即可腾显存\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
+
+    elif event_type == "autosend_shadow_alert":
+        # #160 v2：不拦、只报。文案必须带会话 id + 命中词 + 「已放行，如需止损请人工介入」
+        reason = str(data.get("reason") or "")
+        hits = [str(h) for h in (data.get("risk_hits") or [])][:4]
+        conv = str(data.get("conv_key") or "?")
+        acct = str(data.get("account_id") or "?")
+        plat = str(data.get("platform") or "?")
+        if reason == "self_harm":
+            title = "🕶️ 客户提到自伤/自杀词，AI 稿已放行（影子档）"
+            impact = ("发出的稿已过 crisis safety net（安全指令注入 / 红线整段覆盖 / "
+                      "热线补一次），但仍建议人工看一眼")
+        else:
+            title = "🕶️ 客户叫停联系，AI 稿已放行（影子档）"
+            impact = ("客户说了「别再联系」之后 AI 若继续发＝骚扰＝举报＝封号风险；"
+                      "该词**没有**下游守卫")
+        text = (
+            f"**会话**: {plat}:{acct} · conv={conv} · draft={str(data.get('draft_id') or '')}\n"
+            f"**命中词**: {'、'.join(hits) if hits else '—'}（reason={reason}，"
+            f"旧规则档位 {str(data.get('would_hold_level') or '')}）\n"
+            f"**影响**: {impact}\n"
+            "**处置**: 已放行，如需止损请人工介入——收件箱打开该会话接管/改 manual；"
+            "误报请把命中词反馈给 I-1 台账（tools/autosend_shadow_report.py）\n"
+            "[📥 打开收件箱](/workspace/inbox)"
+        )
 
     elif event_type == "avatar_voice_alert":
         if data.get("recovered"):
@@ -2076,6 +2107,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "colloquial_llm_alert": ("🔵 提示", "算力"),
     "ai_primary_guard_alert": ("🟠 警告", "算力"),
     "bot_peer_alert": ("🟠 警告", "链路"),
+    # #160 v2 影子放行：客户叫停/自伤词已放行——需要人看一眼决定要不要接管，警告级
+    "autosend_shadow_alert": ("🟠 警告", "运营"),
     "inject_health_alert": ("🟠 警告", "链路"),
     "login_funnel_alert": ("🟠 警告", "链路"),
     "ai_mutual_chat_alert": ("🔵 提示", "链路"),

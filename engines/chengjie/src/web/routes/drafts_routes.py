@@ -1251,6 +1251,16 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 风险放行影子台账（#160 I-1，2026-09-04 老板拍板 v2：扣稿全放行、触发只写台账）：
+        # total/today/by_reason/by_level/by_stage/top_hits + stop_contact/self_harm 单列。
+        # 进程口径重启清零；持久口径是 logs/autosend_shadow/*.jsonl（CLI
+        # tools/autosend_shadow_report.py）。恒暴露（total=0 时 ops 卡整卡隐藏）。
+        try:
+            from src.inbox.autosend_shadow_log import stats_snapshot as _ashadow_stats
+            metrics["autosend_shadow"] = _ashadow_stats()
+        except Exception:
+            pass
+
         # 出站文本形态守卫（实施74 B118/B121/B104）：monologue=括号独白拦截、
         # lang_mix_hard/soft=语种混杂剥除/观测、unfounded_recall=无出处引用剥句。
         # 进程口径重启清零；恒暴露（全 0=没流量或没命中，与「没接」可区分）。
