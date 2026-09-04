@@ -8138,6 +8138,15 @@ class SkillManager(LoggerMixin):
         try:
             from src.companion.self_state import self_state_note
             note = self_state_note(user_context)
+            # #177：人工接管期间坐席以人设身份亲口说过的事实（持久、无 TTL；
+            # ``human_outbound_memory`` 于手动发送成功后写入）——与短期自述状态
+            # 同一注入口，A/B 两线同经此处，ai_client 零改动。
+            try:
+                from src.inbox.human_outbound_memory import human_said_note
+                _hn = human_said_note(user_context)
+            except Exception:
+                _hn = ""
+            note = "\n".join(x for x in (note, _hn) if x)
             if note:
                 user_context["_self_state_block"] = note
         except Exception:
