@@ -1463,8 +1463,13 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 from src.inbox.normalizer import conv_id as _mk_conv_id
                 _pre_cid = _mk_conv_id(_plat, _acct, _ck)
                 if store.get_automation_mode_if_set(_pre_cid) is None:
-                    store.set_automation_mode(
-                        _pre_cid, "manual" if _is_spam_request else "auto_ai")
+                    # #162（2026-09-04）：automation_mode_log 带 source，改档来源可审计
+                    _pre_mode = "manual" if _is_spam_request else "auto_ai"
+                    try:
+                        store.set_automation_mode(
+                            _pre_cid, _pre_mode, source="protocol_request_preset")
+                    except TypeError:
+                        store.set_automation_mode(_pre_cid, _pre_mode)
             except Exception:
                 logger.debug("[protocol] 陌生人请求预置档位失败", exc_info=True)
         _text = str((body or {}).get("text") or "")

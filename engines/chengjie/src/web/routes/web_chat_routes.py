@@ -364,8 +364,14 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
         except Exception:
             logger.debug("[web_chat] 入站落库失败", exc_info=True)
         if is_new and store is not None:
+            # #162（2026-09-04）：automation_mode_log 带 source，改档来源可审计
             try:
-                store.set_automation_mode(cid, service.default_mode)
+                store.set_automation_mode(cid, service.default_mode, source="webchat_default")
+            except TypeError:
+                try:
+                    store.set_automation_mode(cid, service.default_mode)
+                except Exception:
+                    pass
             except Exception:
                 pass
         _funnel_on_message(_contact_hooks(request), service, vid, text, direction="in")

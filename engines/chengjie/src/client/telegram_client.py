@@ -1028,7 +1028,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 text = message.text or message.caption or ""
                 chat_title = message.chat.title if message.chat.title else "Unknown"
                 username = from_user.username if from_user else "unknown"
-                self.logger.info(f"[群组监控] 收到消息 [{chat_title}/{username}]: {text[:100]}...")
+                self.logger.info(
+                    f"[群组监控] 收到消息 [{chat_title}/{username}] "
+                    f"account={getattr(self, 'account_id', 'default')} "
+                    f"conv=telegram:{getattr(self, 'account_id', 'default')}:{message.chat.id}: "
+                    f"{text[:100]}...")
                 daily_stats.bump("messages")
 
                 # 检查是否需要回复（使用异步方法）
@@ -2380,7 +2384,18 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 text = self._annotate_inbound_emoji(text)
 
             if text:
-                self.logger.info(f"收到消息 [{chat_title}/{username}]: {self._log_safe_text(text)}")
+                # #162（2026-09-04）：同机多账号时两个号收到同一句话只按用户名记日志，
+                # 分不出「各收一次」还是「串号」——补 account/conv（conv 与 B 线收件箱
+                # 会话 id 同口径：platform:account:chat_id，可直接对上 protocol_media 目录）
+                _acct = str(getattr(self, "account_id", "default") or "default")
+                try:
+                    from src.inbox.normalizer import conv_id as _mk_cid
+                    _cid = _mk_cid("telegram", _acct, str(message.chat.id))
+                except Exception:
+                    _cid = f"telegram:{_acct}:{message.chat.id}"
+                self.logger.info(
+                    f"收到消息 [{chat_title}/{username}] account={_acct} conv={_cid}: "
+                    f"{self._log_safe_text(text)}")
                 daily_stats.bump("messages")
                 m = _metrics()
                 if m:
