@@ -3536,6 +3536,20 @@ inbox:
     # + Prometheus outbound_lang_gate_total（held/rescued/no_target_sent 分桶）。
     lang_gate:
       enabled: true           # 默认开（安全不变量）；false=逃生门，回到零防护旧行为
+    # ── #37 自动链引用回复（I-4 D2，2026-09-04）────────────────────────
+    # 客户连发多条、AI 回一条 → 对方不知道在回哪句。开后投递前经纯函数
+    # src/inbox/reply_quote_policy.py 决策：**未回复入站 ≥2 条且最相关候选过地板**
+    # 才带原生 reply_to（TG reply_to_message_id / WA quoted / LINE related_message_id /
+    # Messenger 按文本定位气泡）；**单条入站一律不引用**（真人不会对着唯一一条消息按
+    # 引用）；分不清在回哪句（低相关）也不引用——宁可少引用。只在编排器协议 worker
+    # 路径生效（RPA 回落适配器不收 reply_to → 如实普通发送）；分条时仅首条带引用；
+    # 带引用发送异常 → 自动去引用重发一次，绝不阻塞投递。
+    quote_reply:
+      enabled: false          # 默认关（零行为变更）；true 才按上面规则引用
+      min_unanswered: 2       # 未回复入站至少几条才考虑（<2 恒不引用，配 1 也钳回 2）
+      min_relevance: 0.15     # 最相关候选的词汇覆盖分地板（0..1）；低于＝不引用
+      max_age_sec: 86400      # 候选入站最老多久（更老的不算「刚连发」）
+      platforms: []           # 空=编排器能发的平台都可；非空=白名单（telegram/whatsapp/line/messenger）
     # ── 全自动语音（把「全自动聊天+翻译+语音」凑齐成闭环）──────────────
     # 开后：auto_ai 会话的 L2 回复在投递时先按策略转 TTS 语音发出（合成/投递失败自动回落文本）。
     # 一处生效全平台：Telegram / WhatsApp / Messenger / LINE / Instagram（经 orch.send_media）。

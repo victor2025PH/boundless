@@ -1725,20 +1725,81 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             except Exception:
                 _orch_owns = False
 
-            async def _send_one(_txt: str):
-                def _make_coro():
+            # #37 引用回复决策（I-4 D2，2026-09-04）：客户连发多条、AI 回一条时
+            # 对方不知道在回哪句。纯函数 reply_quote_policy 按「未回复入站 ≥2 且
+            # 最相关候选过地板」决定是否带原生 reply_to；单条入站一律不引用。
+            # 只在编排器路径（协议 worker）生效——RPA 回落适配器不收 reply_to。
+            # 任何异常＝不引用（绝不阻断投递）。
+            _quote_ref = None
+            try:
+                from src.inbox import reply_quote_policy as _rqp
+                _qcfg = _rqp.parse_quote_cfg(_assistant_ref.config.config or {})
+                if _qcfg.get("enabled") and _rqp.platform_allows_quote(
+                        platform, _qcfg, orch_owns=_orch_owns):
+                    _q_store = getattr(_assistant_ref, "inbox_store", None)
+                    if _q_store is not None:
+                        from src.inbox.normalizer import conv_id as _cidf_q
+                        _q_rows = _q_store.list_recent_messages(
+                            _cidf_q(platform, account_id, chat_key), limit=12)
+                        # text=实发文本（出站翻译后＝客户语言，与入站同语）；
+                        # original_text=人设原文（与入站 translated_text 同语）——
+                        # 两路都比，跨语会话也能算出相关性。
+                        _qdec = _rqp.decide_quote(
+                            _q_rows, str(text or ""), cfg=_qcfg,
+                            reply_alt=str(original_text or ""))
+                        _rqp.record_decision(_qdec)
+                        _quote_ref = _qdec.as_reply_to()
+                        if _quote_ref:
+                            _assistant_ref.logger.info(
+                                "[reply_quote] 引用 idx=%d/%d score=%.2f "
+                                "platform=%s id=%s text=%r",
+                                _qdec.target_index, _qdec.burst_len, _qdec.score,
+                                platform, _quote_ref.get("id"),
+                                str(_quote_ref.get("text") or "")[:40])
+            except Exception:
+                _quote_ref = None
+                _assistant_ref.logger.debug(
+                    "[reply_quote] 决策异常（不引用）", exc_info=True)
+
+            async def _send_one(_txt: str, _reply_to=None):
+                def _make_coro(_rt):
                     return _send_via(
                         _send_shim, platform, account_id,
                         chat_key, _txt, _send_adapters,
-                        origin=_send_origin,
+                        origin=_send_origin, reply_to=_rt,
                     )
-                if (_orch_owns and _wl is not None
-                        and _wl.is_running()):
-                    _fut = asyncio.run_coroutine_threadsafe(
-                        _make_coro(), _wl
-                    )
-                    return await asyncio.wrap_future(_fut)
-                return await _make_coro()
+
+                async def _run(_rt):
+                    if (_orch_owns and _wl is not None
+                            and _wl.is_running()):
+                        _fut = asyncio.run_coroutine_threadsafe(
+                            _make_coro(_rt), _wl
+                        )
+                        return await asyncio.wrap_future(_fut)
+                    return await _make_coro(_rt)
+
+                if not _reply_to:
+                    return await _run(None)
+                # 带引用发送失败（目标消息已删/id 无效/worker 拒绝）→ 去引用重发
+                # 一次：引用是锦上添花，投递才是底线。
+                try:
+                    _r = await _run(_reply_to)
+                except Exception as _qex:  # noqa: BLE001
+                    _assistant_ref.logger.info(
+                        "[reply_quote] 带引用发送失败，去引用重发 platform=%s: %s",
+                        platform, _qex)
+                    try:
+                        from src.inbox import reply_quote_policy as _rqp2
+                        _rqp2.record_fallback_plain()
+                    except Exception:
+                        pass
+                    return await _run(None)
+                try:
+                    from src.inbox import reply_quote_policy as _rqp3
+                    _rqp3.record_applied(_r)
+                except Exception:
+                    pass
+                return _r
 
             # 文本短句分条（inbox.reply_style.bubbles）：翻译后的 text 已是客户
             # 可读文本。仅编排器路径拆——RPA runner 自有 human_pacing，再拆会
@@ -1793,7 +1854,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             if len(_parts) <= 1:
                 # 单条分支发 _parts[0]（保留组时是折叠后的单段，非原始多行文本）
                 _single_text = _parts[0] if _parts else str(text or "")
-                _res_single = await _send_one(_single_text)
+                _res_single = await _send_one(_single_text, _quote_ref)
                 if not (isinstance(_res_single, dict) and (
                         _res_single.get("ok") is False
                         or _res_single.get("delivered") is False
@@ -1923,7 +1984,9 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                                 "[reply_bubbles] 条间打断判定异常（继续发）",
                                 exc_info=True)
                 try:
-                    _last_res = await _send_one(_part) or {}
+                    # 仅首条带引用（与坐席手动分条 _deliver_bubble_parts 同语义）
+                    _last_res = await _send_one(
+                        _part, _quote_ref if _i == 0 else None) or {}
                 except Exception as _ex:
                     if _sent_n > 0:
                         _assistant_ref.logger.warning(
