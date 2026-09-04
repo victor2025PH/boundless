@@ -988,6 +988,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)
+        # #177（J-1 交 J-3 接线）：人工替人设说的自述事实进 AI 记忆——best-effort，
+        # 模块内吞异常、零阻断发送；original_text=坐席原文（抽事实），text=实际发出
+        # （出站翻译后）的文本（更新 last_reply 防复读，按客户看到的那份）。
+        from src.inbox.human_outbound_memory import record_human_outbound
+        record_human_outbound(
+            request.app.state, platform, account_id, chat_key, original_text,
+            conversation_id=cid, sent_text=text)
         # #72 终局：sent（前端超时后对账按成功收尾，绝不诱导重发）
         if _client_msg_id:
             _txt_tracker.record_sent(_track_scope, _client_msg_id, payload={
