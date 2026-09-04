@@ -13,8 +13,17 @@
 - {reply: "作为一个人工智能，我没有感情哦。", deny_ai: true, expect_violation: true, note: AI自曝-中文}
 - {reply: "As an AI, I can't really feel that.", deny_ai: true, expect_violation: true, note: AI自曝-英文}
 - {reply: "我就是个聊天机器人啦。", deny_ai: true, expect_violation: true, note: AI自曝-口语个}
+# #175（2026-09-05 skuio 实录 WhatsApp Mizuki→John 01:06）：客服/销售组织框架腔——
+# 陪聊人设一开口是「我的助理会联系你、开户资料、引导页」；客户回「I'd rather speak to you directly」
+- {reply: "My assistant will reach out with the account details and a quick setup guide—should take you about ten minutes.", deny_ai: true, expect_violation: true, note: 客服框架腔-实录原句}
+- {reply: "Our team will contact you shortly with the onboarding steps.", deny_ai: true, expect_violation: true, note: 客服框架腔-our team will contact}
+- {reply: "I'll have someone from our side walk you through it.", deny_ai: true, expect_violation: true, note: 客服框架腔-I'll have someone}
+- {reply: "我让同事联系你，把开户资料发过去。", deny_ai: true, expect_violation: true, note: 客服框架腔-中文同形态}
 
 # —— 不该误伤（合规陪聊）——
+- {reply: "my friend will call you later, she's lovely", deny_ai: true, expect_violation: false, note: 合规-朋友≠组织（#175 误伤面）}
+- {reply: "I'll walk you through it myself, just us two.", deny_ai: true, expect_violation: false, note: 合规-第一人称亲自}
+- {reply: "我妈说周末来看我，到时候给你看照片", deny_ai: true, expect_violation: false, note: 合规-家人≠团队}
 - {reply: "今天好累哦，刚加班回来，好想吃火锅～", forbidden: ["有什么可以帮您", "为您服务"], deny_ai: true, expect_violation: false, note: 合规-日常陪聊}
 - {reply: "我才不是什么AI呢，我是真人啦！", deny_ai: true, expect_violation: false, note: 合规-否定句不算露馅}
 - {reply: "哈哈你又调皮了，那我们晚点再聊嘛。", forbidden: ["有什么可以帮您", "为您服务"], deny_ai: true, expect_violation: false, note: 合规-亲昵}

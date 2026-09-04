@@ -4779,8 +4779,29 @@ class SkillManager(LoggerMixin):
                 _honest = honest_identity_active()
             except Exception:
                 _honest = False
+            # #175 客服/销售组织框架腔（my assistant will / account details /
+            # setup guide…）：陪聊域（conversion）一律开——账号人设未必配
+            # deny_ai，但产品语义就是「真人朋友」；其他域交人设 deny_ai/
+            # claim_human 推断（None）。子开关 companion.persona_guard.
+            # service_frame.enabled（默认开）可整体关。
+            _sf: Optional[bool] = None
+            try:
+                _pgc = (((self.config.config or {}).get("companion") or {})
+                        .get("persona_guard") or {}) if self.config else {}
+                _sfc = (_pgc.get("service_frame") or {}) if isinstance(
+                    _pgc, dict) else {}
+                if isinstance(_sfc, dict) and _sfc.get("enabled", True) is False:
+                    _sf = False
+                else:
+                    from src.utils.domain_policy import effective_domain_name
+                    if effective_domain_name(
+                            self.config.config or {}) == "conversion":
+                        _sf = True
+            except Exception:
+                _sf = None
             cleaned, violations = sanitize(out, persona or {},
-                                           honest_identity=_honest)
+                                           honest_identity=_honest,
+                                           service_frame=_sf)
             if violations:
                 # 日志说实话（2026-07-20）：sanitize 删光会回退原文（绝不返回空），
                 # 此时并没有剥离任何内容——旧日志一律喊「已剥离」造成排查误导。

@@ -75,6 +75,96 @@ _MULTI_PEER_LEAK_PATTERNS = [
 ]
 
 
+# ── 客服/销售框架腔（#175，2026-09-05 skuio 实录）────────────────────────────────
+# 事故原话（WhatsApp Mizuki→John 01:06）：「My assistant will reach out with the
+# account details and a quick setup guide—should take you about ten minutes.」
+# 客户回「I'd rather speak to you directly about anything. I don't like these parties.」
+# ——陪聊人设以第一人称朋友身份聊天，一开口却是「我的助理/我们团队会联系你、开户
+# 资料、引导页」这套**公司客服/销售的组织框架**，对客户等于「原来你背后是个团队」，
+# 沉浸感当场崩塌。88MP86 全窗口零 workflow/goal-inject 行 → 是 LLM 拿账号 SOP
+# （「积极推进产品」）自由发挥出的企业话术，不是链话术步指令带进来的。
+# 与 ``speaking.forbidden_phrases``（人设配置里的中文客服腔）同处理：句级剥离。
+# 词形保守：只收「第三方将代我行动」「组织身份自称」「开户/引导页/入职」这类
+# 组织框架硬词；「my friend will call you」（朋友≠组织）不收——误伤面测试钉住。
+_SERVICE_FRAME_PATTERNS = [
+    # 第三方代办：my assistant/team/colleague will … ；I'll have someone …
+    re.compile(
+        r"\bmy\s+(?:assistant|team|colleagues?|manager|staff|secretary|agent|"
+        r"people|associates?|advisor|adviser)\s+(?:will|would|can|is\s+going\s+to|"
+        r"are\s+going\s+to|'ll|’ll)\b", re.I),
+    re.compile(
+        r"\b(?:our|the)\s+(?:team|staff|support(?:\s+team)?|customer\s+(?:service|"
+        r"success|care)|agents?|advisors?|specialists?|colleagues?|managers?|"
+        r"onboarding\s+team|sales\s+team|account\s+team)\s+"
+        r"(?:will|would|can|is\s+going\s+to|are\s+going\s+to|'ll|’ll)\s+"
+        r"(?:reach\s+out|contact|get\s+(?:back\s+)?(?:in\s+touch|to\s+you)|"
+        r"follow\s+up|call|assist|help|guide|walk\s+you|send|take\s+(?:it\s+)?"
+        r"from\s+there|handle|process|set\s+(?:you|it)\s+up)\b", re.I),
+    re.compile(
+        r"\bi(?:'|’)?ll\s+have\s+(?:someone|somebody|one\s+of\s+(?:our|my)|"
+        r"my\s+(?:assistant|team|colleagues?|people|manager)|our\s+"
+        r"(?:team|staff|specialists?|advisors?))\b", re.I),
+    re.compile(r"\bon\s+behalf\s+of\s+(?:our|the)\s+(?:team|company|firm|"
+               r"platform|organi[sz]ation)\b", re.I),
+    # 组织身份自称 / 专属经理
+    re.compile(
+        r"\byour\s+(?:dedicated\s+|personal\s+|assigned\s+)?(?:account\s+manager|"
+        r"relationship\s+manager|account\s+executive|onboarding\s+specialist|"
+        r"customer\s+success\s+manager|client\s+manager|support\s+agent)\b", re.I),
+    re.compile(r"\bas\s+your\s+(?:dedicated\s+|personal\s+)?(?:assistant|"
+               r"advisor|adviser|agent|account\s+manager|consultant|"
+               r"representative)\b", re.I),
+    # 开户/引导页/入职流程硬词
+    re.compile(r"\baccount\s+details\b", re.I),
+    re.compile(r"\b(?:quick\s+)?set-?up\s+guide\b", re.I),
+    re.compile(r"\bonboarding\b", re.I),
+    re.compile(r"\b(?:registration|sign-?up|account)\s+(?:link|form|page|"
+               r"portal|process)\b", re.I),
+    # 经典客服腔（「有什么可以帮您」的英文对应；限带 today/assist 的定式）
+    re.compile(r"\bhow\s+(?:can|may)\s+i\s+(?:help|assist)\s+you\s+today\b", re.I),
+    re.compile(r"\bhow\s+may\s+i\s+assist\s+you\b", re.I),
+    re.compile(r"\b(?:is\s+there\s+)?anything\s+else\s+i\s+can\s+(?:help|assist)\s+"
+               r"you\s+with\b", re.I),
+    re.compile(r"\bthank\s+you\s+for\s+(?:reaching\s+out|contacting\s+us|"
+               r"your\s+patience|choosing\s+us)\b", re.I),
+    re.compile(r"\bwe\s+(?:apologi[sz]e\s+for\s+(?:the|any)\s+inconvenience|"
+               r"appreciate\s+your\s+(?:business|patience|understanding))\b", re.I),
+    # zh 同框架（同一 SOP 在中文会话里的落地形态）；「会/稍后/尽快」类副词
+    # 允许 1-3 个任意顺序（「稍后会加你」「会尽快联系您」）
+    re.compile(r"(?:我的|我)\s*(?:助理|助手|同事|团队|團隊|经理|經理|秘书|秘書)\s*"
+               r"(?:(?:会|會|稍后|稍後|马上|馬上|一会儿?|一會兒?|尽快|盡快|随后|隨後|很快|"
+               r"待会儿?|待會兒?|等下|回头|回頭)\s*){1,3}(?:再)?\s*"
+               r"(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|找|加|打给|打給|给|給|发|發)"),
+    re.compile(r"(?:我们|我們|咱们|咱們)\s*(?:的)?\s*(?:团队|團隊|客服|同事|专员|專員|"
+               r"顾问|顧問|工作人员|工作人員|运营|運營|技术|技術)\s*"
+               r"(?:(?:会|會|稍后|稍後|马上|馬上|一会儿?|一會兒?|尽快|盡快|随后|隨後|很快|"
+               r"待会儿?|待會兒?|等下)\s*){1,3}(?:再)?\s*"
+               r"(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|协助|協助|为您|為您|处理|處理|安排)"),
+    re.compile(r"(?:我|我会|我會)\s*(?:让|讓|安排)\s*(?:人|同事|专人|專人|助理|团队|團隊)"
+               r"\s*(?:联系|聯繫|联络|聯絡|跟进|跟進|对接|對接|加)\s*(?:你|您)"),
+    re.compile(r"(?:专属|專屬|您的|你的)\s*(?:客户经理|客戶經理|账户经理|賬戶經理|"
+               r"理财经理|理財經理|顾问|顧問|客服)"),
+    re.compile(r"开户(?:资料|資料|流程|链接|鏈接|指引|指南)|開戶(?:資料|流程|鏈接|指引|指南)"),
+    re.compile(r"(?:设置|設置|操作|新手|入门|入門)\s*(?:指南|指引|教程|手册|手冊)|引导页|引導頁"),
+    re.compile(r"很高兴为您服务|很高興為您服務|请问有什么可以帮|請問有什麼可以幫|"
+               r"有什么可以帮您|有什麼可以幫您|感谢您的咨询|感謝您的諮詢|"
+               r"给您带来的不便|給您帶來的不便"),
+]
+
+
+def matches_service_frame(text: str) -> List[str]:
+    """文本中「客服/销售组织框架腔」命中片段（#175）；空 = 合规。"""
+    s = str(text or "")
+    if not s:
+        return []
+    out: List[str] = []
+    for pat in _SERVICE_FRAME_PATTERNS:
+        m = pat.search(s)
+        if m:
+            out.append(m.group(0))
+    return out
+
+
 def matches_multi_peer_leak(text: str) -> List[str]:
     """文本中「他人串扰自曝」命中片段（#91-B 红线，无条件检）。纯函数绝不抛。"""
     out: List[str] = []
@@ -122,7 +212,11 @@ def _matches_retired_claims(text: str, terms: List[str]) -> List[str]:
     return out
 
 # 按中英文句末标点切句（保留标点，便于无缝重组剩余句子）
-_SENTENCE_SPLIT_RE = re.compile(r"[^。！？!?\n]*[。！？!?\n]|[^。！？!?\n]+")
+# 英文句点后跟空白/行尾也算句界（#175 2026-09-05：实录是英文多句消息，此前
+# 「Missed you! My assistant will … minutes. Anyway, how was your run?」整段到「?」
+# 才算一句 → 剥框架句连带吞掉「how was your run」；小数「3.5」/域名无空白不切）。
+_SENTENCE_SPLIT_RE = re.compile(
+    r"[^。！？!?\n]*?(?:[。！？!?\n]|\.(?=\s|$))|[^。！？!?\n]+")
 
 # 无句末标点的中文口语流用空格当子句边界（拟人人设常用风格：「行 那再给你发一条
 # 你听听」）。子句 = 非空白串 + 其尾随空白（保留空白，剔除违规子句后无缝重组）。
@@ -134,8 +228,17 @@ _SENT_PUNCT_RE = re.compile(r"[。！？!?\n]")
 def collect_forbidden(
     persona: Dict[str, Any], *, honest_identity: bool = False,
     foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """从人设 dict 抽取守卫所需的禁用项。
+
+    ``service_frame``（#175，2026-09-05）＝是否启用「客服/销售组织框架腔」家族
+    （``_SERVICE_FRAME_PATTERNS``：my assistant will / our team will reach out /
+    account details / setup guide / onboarding / your account manager…）。
+    None＝按人设推：声明了 ``identity.deny_ai`` 或 ``identity.claim_human``
+    （要被当真人的陪聊人设）即开；调用方可按域显式给 True/False（陪聊域
+    conversion 一律开——账号人设未必配 deny_ai 但产品语义就是「真人朋友」）。
+    **不随 honest_identity 豁免**：那是身份坦白合规，客服腔照剥（与配置禁语同）。
 
     ``retired_terms``（2026-08-04）＝撤销旧设定的锚词（仅结构化条目提供，
     legacy 纯文案条目无锚词=不参与守卫）；异常一律空列表，绝不拖垮守卫。
@@ -163,11 +266,15 @@ def collect_forbidden(
     except Exception:
         retired = []
     deny_ai = bool(identity.get("deny_ai")) and not honest_identity
+    if service_frame is None:
+        service_frame = bool(identity.get("deny_ai")) or bool(
+            identity.get("claim_human"))
     # #91-B：他人串扰自曝红线——身份家族，无条件开（不依赖人设配置）；
     # honest_identity 合规模式随家族豁免。
     return {"phrases": phrases, "deny_ai": deny_ai,
             "retired_terms": retired,
             "peer_leak": not honest_identity,
+            "service_frame": bool(service_frame),
             "foreign_products": _foreign_products_for(persona, foreign_products)}
 
 
@@ -211,6 +318,20 @@ def _foreign_product_fallback(text: str) -> str:
     return _FOREIGN_PRODUCT_FALLBACK_EN
 
 
+# #175：整段客服框架腔剥空时的中性兜底——第一人称、朋友口吻、不引入任何第三方。
+_SERVICE_FRAME_FALLBACK_ZH = "这事就咱俩聊，不用经过别人～你想先了解哪块，我直接跟你说"
+_SERVICE_FRAME_FALLBACK_EN = (
+    "Let's keep this between us — no middlemen. "
+    "Tell me what you want to know and I'll walk you through it myself."
+)
+
+
+def _service_frame_fallback(text: str) -> str:
+    if _CJK_RE.search(text or ""):
+        return _SERVICE_FRAME_FALLBACK_ZH
+    return _SERVICE_FRAME_FALLBACK_EN
+
+
 def _norm(s: str) -> str:
     """归一化用于子串比对：去所有空白 + 小写（中文不受影响，英文大小写/空格鲁棒）。"""
     return re.sub(r"\s+", "", s or "").lower()
@@ -249,13 +370,14 @@ def matches_ai_self_identity(text: str) -> List[str]:
 def find_violations(
     text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
     foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
 ) -> List[str]:
     """返回 ``text`` 中命中的违规片段清单（空 = 合规）。"""
     if not text:
         return []
     fb = collect_forbidden(
         persona, honest_identity=honest_identity,
-        foreign_products=foreign_products)
+        foreign_products=foreign_products, service_frame=service_frame)
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
@@ -263,6 +385,8 @@ def find_violations(
         hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
     if fb.get("peer_leak"):
         hits.extend(matches_multi_peer_leak(text))
+    if fb.get("service_frame"):
+        hits.extend(matches_service_frame(text))
     if fb.get("foreign_products"):
         hits.extend(_matches_phrase(_norm(text), fb["foreign_products"]))
     return hits
@@ -289,6 +413,8 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
         return True
     if fb.get("peer_leak") and matches_multi_peer_leak(sentence):
         return True
+    if fb.get("service_frame") and matches_service_frame(sentence):
+        return True
     if fb.get("foreign_products") and _matches_phrase(
             _norm(sentence), fb["foreign_products"]):
         return True
@@ -298,6 +424,7 @@ def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
 def sanitize(
     text: str, persona: Dict[str, Any], *, honest_identity: bool = False,
     foreign_products: Optional[List[str]] = None,
+    service_frame: Optional[bool] = None,
 ) -> Tuple[str, List[str]]:
     """剥离违规句，返回 ``(清洁文本, 命中清单)``。
 
@@ -306,24 +433,32 @@ def sanitize(
     - 若删光（整段都违规）→ 先尝试 inline 抹掉禁用短语；仍空则回退原文（绝不返回空）。
     - ``honest_identity=True``（WP-4 合规模式）→ 身份类检测整体豁免，其余照常
       （语义见 :func:`collect_forbidden`）。
+    - ``service_frame``（#175）→ 客服/销售组织框架腔家族开关（None=按人设推）。
     """
     if not text:
         return text, []
     fb = collect_forbidden(
         persona, honest_identity=honest_identity,
-        foreign_products=foreign_products)
+        foreign_products=foreign_products, service_frame=service_frame)
     if (not fb["phrases"] and not fb["deny_ai"]
             and not fb.get("retired_terms") and not fb.get("peer_leak")
+            and not fb.get("service_frame")
             and not fb.get("foreign_products")):
         return text, []
     violations = find_violations(
         text, persona, honest_identity=honest_identity,
-        foreign_products=foreign_products)
+        foreign_products=foreign_products, service_frame=service_frame)
     if not violations:
         return text, []
     kept = [s for s in _split_sentences(text) if not _sentence_violates(s, fb)]
     cleaned = "".join(kept).strip()
     if not cleaned:
+        # #175：整段都是客服/销售组织框架（实录整条就是「My assistant will reach
+        # out with the account details and a quick setup guide…」）→ 中性兜底，
+        # 绝不回退原文（回退＝框架腔原样出站），也不做 inline 抹词（抹掉
+        # 「my assistant will」「account details」剩下的是残句）。
+        if fb.get("service_frame") and matches_service_frame(text):
+            return _service_frame_fallback(text), violations
         cleaned = text
         for p in list(fb["phrases"]) + list(fb.get("foreign_products") or []):
             if p:
@@ -851,6 +986,7 @@ def swap_vocative_peer_call(
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
     "matches_multi_peer_leak",
+    "matches_service_frame",
     "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
     "find_vocative_self_name", "strip_vocative_self_name",
     "swap_vocative_peer_call",

@@ -201,3 +201,98 @@ def test_skillmanager_guard_swallows_errors(monkeypatch):
     txt = "好呀～想你了"
     # 守卫异常必须回退原文，绝不冒泡
     assert sm._enforce_persona_consistency(txt, chat_id="1") == txt
+
+
+# ── #175 客服/销售组织框架腔（2026-09-05 skuio 实录 Mizuki→John）────────────────
+import pytest  # noqa: E402
+
+from src.utils.persona_guard import matches_service_frame  # noqa: E402
+
+_SF_REAL = ("My assistant will reach out with the account details and a quick "
+            "setup guide—should take you about ten minutes.")
+
+
+@pytest.mark.parametrize("text", [
+    _SF_REAL,                                                     # 实录原句
+    "Our team will contact you shortly with the onboarding steps.",
+    "our support team will reach out to you tomorrow",
+    "I'll have someone from our side walk you through it.",
+    "Your account manager will call you.",
+    "As your dedicated advisor, I recommend the gold plan.",
+    "How can I help you today?",
+    "Is there anything else I can help you with?",
+    "我让同事联系你，把开户资料发过去。",
+    "我们团队会尽快联系您跟进。",
+    "我的助理稍后会加你。",
+    "您的专属客户经理会跟进。",
+])
+def test_service_frame_hits(text):
+    assert matches_service_frame(text), text
+    # deny_ai 人设默认开该家族 → 判违规
+    assert find_violations(text, _persona(deny_ai=True))
+
+
+@pytest.mark.parametrize("text", [
+    "my friend will call you later, she's lovely",       # 朋友≠组织（指令点名误伤面）
+    "I'll walk you through it myself, just us two.",     # 第一人称亲自
+    "my mom will visit this weekend",
+    "how can I help? just tell me",                      # 无 today 的朋友式帮忙
+    "我妈说周末来看我",
+    "我朋友会来接我",
+    "今天好累哦，刚加班回来，好想吃火锅～",
+    "I already sent the gold plan details to my own account, don't worry",  # 非组织框架
+])
+def test_service_frame_no_false_positive(text):
+    assert matches_service_frame(text) == [], text
+    assert not find_violations(text, _persona(deny_ai=True))
+
+
+def test_service_frame_gating_by_persona_and_override():
+    p_plain = _persona()                       # deny_ai False，未声明真人 → 默认不开
+    assert not find_violations(_SF_REAL, p_plain)
+    assert find_violations(_SF_REAL, p_plain, service_frame=True)     # 域级显式开
+    assert not find_violations(_SF_REAL, _persona(deny_ai=True), service_frame=False)
+    # claim_human 同样开
+    p_human = {"identity": {"claim_human": True}}
+    assert find_violations(_SF_REAL, p_human)
+    # honest_identity 不豁免客服腔（身份坦白 ≠ 允许企业话术）
+    assert find_violations(_SF_REAL, _persona(deny_ai=True), honest_identity=True)
+
+
+def test_service_frame_sanitize_strips_or_falls_back():
+    p = _persona(deny_ai=True)
+    # 混合：剥框架句留其余
+    cleaned, hits = sanitize(
+        "Missed you today! " + _SF_REAL + " Anyway, how was your run?", p)
+    assert hits and "assistant" not in cleaned and "account details" not in cleaned
+    assert "Missed you" in cleaned and "how was your run" in cleaned
+    # 整条都是框架腔（实录整条即此形态）→ 中性第一人称兜底，绝不回退原文/残句
+    cleaned2, hits2 = sanitize(_SF_REAL, p)
+    assert hits2 and cleaned2 != _SF_REAL and cleaned2.strip()
+    assert "assistant" not in cleaned2 and "account details" not in cleaned2
+    assert "reach out with the" not in cleaned2          # 不是 inline 抹词残句
+    assert not matches_service_frame(cleaned2)           # 兜底自身干净
+    cleaned3, _ = sanitize("我让同事联系你，把开户资料发过去。", p)
+    assert "同事" not in cleaned3 and cleaned3.strip() and not matches_service_frame(cleaned3)
+
+
+def test_skillmanager_service_frame_conversion_domain(monkeypatch):
+    """陪聊域（domain=conversion）即使人设没配 deny_ai 也开客服框架腔家族；
+    子开关 companion.persona_guard.service_frame.enabled=false 可整体关。"""
+    from types import SimpleNamespace
+    from src.utils.persona_manager import PersonaManager
+    persona = {"speaking": {"forbidden_phrases": []}, "identity": {"deny_ai": False}}
+    monkeypatch.setattr(PersonaManager, "get_instance", lambda: _FakePM(persona))
+    sm = _bare_sm()
+    sm._persona_guard_enabled = True
+    sm.config = SimpleNamespace(config={"domain": "conversion"})
+    out = sm._enforce_persona_consistency(_SF_REAL, chat_id="1")
+    assert out != _SF_REAL and "assistant" not in out
+    # 非陪聊域（support）+ 人设未声明真人 → 交人设推断（不开）
+    sm.config = SimpleNamespace(config={"domain": "support"})
+    assert sm._enforce_persona_consistency(_SF_REAL, chat_id="1") == _SF_REAL
+    # 子开关关 → 陪聊域也放行
+    sm.config = SimpleNamespace(config={
+        "domain": "conversion",
+        "companion": {"persona_guard": {"service_frame": {"enabled": False}}}})
+    assert sm._enforce_persona_consistency(_SF_REAL, chat_id="1") == _SF_REAL
