@@ -777,6 +777,21 @@ def apply_inbound_enrichments(
                 hints.append(_sus_hint)
     except Exception:
         pass
+    try:
+        from src.inbox.withdrawn_cite import (
+            build_withdrawn_hint, quotes_for, redact_history)
+        _cid = str(
+            user_context.get("conversation_id")
+            or user_context.get("chat_id") or "").strip()
+        _qs = quotes_for(_cid)
+        if _qs:
+            _wh = build_withdrawn_hint(_qs, inbound=t)
+            if _wh:
+                hints.append(_wh)
+            if isinstance(history, list) and history:
+                history[:] = redact_history(history, _qs)
+    except Exception:
+        pass
     if hints:
         user_context["_topic_switch_hint"] = "\n".join(hints)
 

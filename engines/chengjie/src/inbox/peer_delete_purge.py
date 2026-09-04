@@ -1,22 +1,16 @@
 # -*- coding: utf-8 -*-
-"""对端删消息 → 关联记忆清理（#146，2026-09-02）。
+"""对端删消息 → 工作台软删后的记忆侧处置（#32② / #145⑤）。
 
-钧实锤：手机上删了消息，工作台没跟着删——这不只是显示不同步，残留的错误内容会进
-AI 记忆、影响后面每一轮回复。B87（实施68）已把镜像软删接到 A 线 client；本模块补
-「删了的消息不能再影响 AI」的三条腿：
+#146（2026-09-02）曾把关联情景记忆物理删掉、A 线历史整条剔除。2026-09-04 老板
+拍板改回：「同步删除（显得专业）；AI 可以有记忆，但不要主动提删掉的信息。」
+凭空少一条会让后续回复接不上——所以记忆**保留**，历史**留槽位**换成占位。
 
-1. **情景记忆**（``episodic_memory``）：按 ``source_quote``（五件套溯源列＝抽取自
-   哪句原话）精确反查——被删消息的正文归一后与 quote 前 200 字相等 → 删该事实。
-   只删 ``hits == 1``（复发事实＝客户在别处又说过一遍，一条删了事实仍在）。
-   早期无溯源的条目（quote 为空）匹配不到，如实接受。
-2. **A 线对话上下文**（``ContextStore._conversation_history`` / ``last_message``）：
-   剔掉 role=user 且正文匹配的条目；``last_message`` 命中时清空——否则下一轮
-   「上一轮补录进历史」机制会把它再塞回去。只碰**已存在**的上下文（不因清理
-   而凭空建 ctx）。
-3. **B 线历史**：不在本模块——``InboxStore.list_recent_messages`` 已在默认口径下剔
-   ``deleted_by='peer'`` 行（单点收口，十几处 LLM 历史消费方零改动）。
-
-全部 best-effort：任何一步失败只记 debug、不影响软删本身与 SSE。
+本模块三条腿（工作台移除仍走 store 既有 ``deleted_by=peer``，本文件不改 store）：
+1. **账本** ``withdrawn_cite.record_withdrawn``：记下被撤原文；
+2. **情景记忆不删**（``purge_episodic`` 现只记账，不再 ``delete_by_source_quotes``）；
+3. **A 线上下文**把匹配的 user 条换成占位，不删轮次。
+B 线 ``list_recent_messages`` 默认仍剔 peer 软删行（属 store.py，本条不能改）——
+注入层用账本 hint 补「知道但不提」。
 """
 
 from __future__ import annotations
@@ -98,28 +92,35 @@ def inbound_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def purge_episodic(episodic_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
-    """情景记忆清理：按 (chat_key, quote) 反查删除。返回删除条数。"""
-    if episodic_store is None or not hasattr(episodic_store, "delete_by_source_quotes"):
-        return 0
-    by_chat: Dict[str, List[str]] = {}
-    for r in inbound_rows(rows):
-        _plat, _acct, ck = split_conversation_id(str(r.get("conversation_id") or ""))
-        if not ck:
-            continue
-        by_chat.setdefault(ck, []).append(r["_quote"])
+    """记忆侧：记下撤回原文，**不删**情景事实。返回新记账条数。
+
+    ``episodic_store`` 保留形参以兼容旧调用方；现网不再调 ``delete_by_source_quotes``。
+    """
     n = 0
-    for ck, quotes in by_chat.items():
+    try:
+        from src.inbox.withdrawn_cite import record_withdrawn
+    except Exception:
+        return 0
+    for r in inbound_rows(rows):
+        cid = str(r.get("conversation_id") or "").strip()
+        q = str(r.get("_quote") or r.get("text") or "")
         try:
-            n += int(episodic_store.delete_by_source_quotes(ck, quotes) or 0)
+            if record_withdrawn(cid, q):
+                n += 1
         except Exception:
-            logger.debug("[peer-delete] episodic purge failed chat=%s", ck, exc_info=True)
+            logger.debug("[peer-delete] withdrawn ledger failed cid=%s", cid, exc_info=True)
     return n
 
 
 def purge_context_history(context_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
-    """A 线对话上下文清理：剔历史里匹配的 user 条 + 清命中的 last_message。返回改动数。"""
+    """A 线对话上下文：匹配的 user 条换成占位（不删轮次）。返回改动数。"""
     if context_store is None or not hasattr(context_store, "peek"):
         return 0
+    try:
+        from src.inbox.withdrawn_cite import PLACEHOLDER
+    except Exception:
+        PLACEHOLDER = "（对方已撤回一条消息，不得主动引用其内容）"
+
     changed = 0
     try:
         from src.utils.context_store import make_context_key
@@ -143,15 +144,22 @@ def purge_context_history(context_store: Any, rows: Iterable[Dict[str, Any]]) ->
             touched = False
             hist = ctx.get("_conversation_history")
             if isinstance(hist, list):
-                kept = [m for m in hist
-                        if not (isinstance(m, dict)
-                                and str(m.get("role") or "") == "user"
-                                and quotes_match(m.get("content"), r["_quote"]))]
-                if len(kept) != len(hist):
-                    ctx["_conversation_history"] = kept
-                    touched = True
+                new_hist = []
+                for m in hist:
+                    if (isinstance(m, dict)
+                            and str(m.get("role") or "") == "user"
+                            and quotes_match(m.get("content"), r["_quote"])):
+                        mm = dict(m)
+                        mm["content"] = PLACEHOLDER
+                        mm["_withdrawn"] = True
+                        new_hist.append(mm)
+                        touched = True
+                    else:
+                        new_hist.append(m)
+                if touched:
+                    ctx["_conversation_history"] = new_hist
             if quotes_match(ctx.get("last_message"), r["_quote"]):
-                ctx["last_message"] = ""
+                ctx["last_message"] = PLACEHOLDER
                 touched = True
             if touched:
                 changed += 1

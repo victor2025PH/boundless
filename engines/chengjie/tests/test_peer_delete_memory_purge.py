@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
-"""#146（2026-09-02，钧）：手机删除消息 → 工作台同步删 + **关联记忆一并清理**。
+"""#32② / #145⑤（2026-09-04）：手机删除消息 → 工作台同步删；记忆保留但不主动提。
 
-「残留错误内容会进 AI 记忆、影响后面每一轮回复」——B87 只做了镜像软删且刻意留了
-记忆（「AI 记得但不主动提」）。本批三条腿：
-  ① 情景记忆：被删消息正文 ↔ ``source_quote``（五件套溯源）精确反查删（hits==1 才删）；
-  ② A 线上下文：``_conversation_history`` 剔匹配 user 条 + 命中的 ``last_message`` 清空；
-  ③ B 线历史：``list_recent_messages`` 默认口径剔 peer 软删行（见 test_peer_delete_sync）。
-另：协议多开的 TelegramProtocolWorker 此前**根本没接**删除事件（B87 只接了 A 线 client）
-——接线自证钉源码。
+#146 曾把关联情景记忆物理删掉、A 线历史整条剔除。老板拍板改回：
+  ① 情景记忆**不删**，只把原文记进 ``withdrawn_cite`` 账本；
+  ② A 线上下文**留槽位**，匹配 user 条换成占位（防轮次塌陷）；
+  ③ 工作台移除仍走 store 既有 ``deleted_by=peer``（本条不能改 store.py）。
+``delete_by_source_quotes`` 底层方法仍测（方法还在，只是 purge 不再调它）。
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.inbox import peer_delete_purge as pdp
+from src.inbox.withdrawn_cite import PLACEHOLDER, quotes_for, reset_ledger
 from src.inbox.models import InboxConversation, InboxMessage
 from src.inbox.store import InboxStore
 from src.utils.context_store import ContextStore, make_context_key
@@ -105,6 +104,7 @@ def test_episodic_delete_by_source_quotes(tmp_path: Path):
 
 
 def test_purge_episodic_groups_by_chat_key(tmp_path: Path):
+    reset_ledger()
     st = EpisodicMemoryStore(tmp_path / "bot.db")
     st.add_fact("telegram:acct:555", "用户住在北京", "llm", source_quote="我住在北京哦")
     st.add_fact("telegram:acct:777", "用户住在上海", "llm", source_quote="我住在上海哦")
@@ -113,8 +113,12 @@ def test_purge_episodic_groups_by_chat_key(tmp_path: Path):
         {"conversation_id": "telegram:acct:777", "direction": "out", "text": "我住在上海哦"},  # 出站不算
     ]
     assert pdp.purge_episodic(st, rows) == 1
-    assert {r["content"] for r in st.list_rows(limit=10)} == {"用户住在上海"}
-    assert pdp.purge_episodic(None, rows) == 0
+    # 事实两边都留着（不再物理删）；只给入站那条记账
+    assert {r["content"] for r in st.list_rows(limit=10)} == {"用户住在北京", "用户住在上海"}
+    assert quotes_for("telegram:acct:555") == ["我住在北京哦"]
+    assert quotes_for("telegram:acct:777") == []
+    reset_ledger()
+    assert pdp.purge_episodic(None, rows) == 1  # 账本不依赖 store
 
 
 # ── ② A 线上下文历史 ─────────────────────────────────────────────────────────
@@ -134,16 +138,18 @@ def test_purge_context_history_and_last_message(tmp_path: Path):
     rows = [{"conversation_id": "telegram:acct:555", "direction": "in", "text": "我住在北京哦"}]
     assert pdp.purge_context_history(cs, rows) == 1
     ctx2 = cs.peek(key)
-    assert [m["content"] for m in ctx2["_conversation_history"]] == ["北京好地方", "今天好累"]
-    assert ctx2["last_message"] == ""
+    assert [m["content"] for m in ctx2["_conversation_history"]] == [
+        PLACEHOLDER, "北京好地方", "今天好累"]
+    assert ctx2["_conversation_history"][0].get("_withdrawn") is True
+    assert ctx2["last_message"] == PLACEHOLDER
     # 不凭空建 ctx：另一个会话没有上下文 → peek 为 None、不落盘
     assert cs.peek(make_context_key("999", "acct")) is None
     assert pdp.purge_context_history(
         cs, [{"conversation_id": "telegram:acct:999", "direction": "in", "text": "凭空的消息"}]) == 0
     assert cs.peek(make_context_key("999", "acct")) is None
-    # 落盘后重开仍是清理后的形态
+    # 落盘后重开仍是占位形态
     cs2 = ContextStore(tmp_path / "bot.db", ttl_days=30)
-    assert cs2.peek(key)["last_message"] == ""
+    assert cs2.peek(key)["last_message"] == PLACEHOLDER
 
 
 def test_context_store_peek_loads_persisted_without_creating(tmp_path: Path):
@@ -159,6 +165,7 @@ def test_context_store_peek_loads_persisted_without_creating(tmp_path: Path):
 
 # ── 编排入口 + bridge 端到端 ─────────────────────────────────────────────────
 def test_purge_for_deleted_rows_orchestrates_both(tmp_path: Path):
+    reset_ledger()
     st = EpisodicMemoryStore(tmp_path / "bot.db")
     cs = ContextStore(tmp_path / "bot.db", ttl_days=30)
     st.add_fact("telegram:acct:555", "用户住在北京", "llm", source_quote="我住在北京哦")
@@ -169,12 +176,15 @@ def test_purge_for_deleted_rows_orchestrates_both(tmp_path: Path):
     sm = SimpleNamespace(_episodic_store=st, _context_store=cs)
     rows = [{"conversation_id": "telegram:acct:555", "direction": "in", "text": "我住在北京哦"}]
     assert pdp.purge_for_deleted_rows(sm, rows) == {"memory": 1, "context": 1}
+    assert {r["content"] for r in st.list_rows(limit=10)} == {"用户住在北京"}
+    assert quotes_for("telegram:acct:555") == ["我住在北京哦"]
     assert pdp.purge_for_deleted_rows(None, rows) == {"memory": 0, "context": 0}
     assert pdp.purge_for_deleted_rows(sm, []) == {"memory": 0, "context": 0}
 
 
 def test_bridge_report_deleted_purges_memory_and_sse(tmp_path: Path, monkeypatch):
-    """端到端：TG 删除事件 → 软删 + 记忆清理 + SSE 带清理计数。"""
+    """端到端：TG 删除事件 → 软删 + 记忆记账 + SSE 带清理计数。"""
+    reset_ledger()
     import src.integrations.protocol_bridge as pb
     from src.integrations.shared import event_bus as eb
     monkeypatch.setattr(eb, "_bus", None, raising=False)
@@ -196,9 +206,10 @@ def test_bridge_report_deleted_purges_memory_and_sse(tmp_path: Path, monkeypatch
     finally:
         pb.register_deleted_memory_purger(None)
     assert n == 1
-    # 镜像：UI 与业务口径都不见了；记忆：只删了被删那句抽出的事实
+    # 镜像：工作台业务口径不见了；记忆：事实两边都留着（只记账不删）
     assert [m["text"] for m in store.list_recent_messages(cid, limit=10)] == ["今天好累"]
-    assert {r["content"] for r in st.list_rows(limit=10)} == {"用户今天很累"}
+    assert {r["content"] for r in st.list_rows(limit=10)} == {"用户住在北京", "用户今天很累"}
+    assert quotes_for(cid) == ["我住在北京哦"]
 
     from src.integrations.shared.event_bus import get_event_bus
     evts = [e for e in get_event_bus().recent_events(50) if e["type"] == "messages_deleted"]
