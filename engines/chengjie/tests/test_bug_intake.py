@@ -753,6 +753,108 @@ def test_b33_wiring_trigger_archives_capped_photo():
     assert "record_capped_photo" in src
 
 
+# ── J-5 C（决策 D4）：限频只管回复不管登记 ────────────────────────────────
+def _tickets(bi):
+    con = bi._db()
+    return [dict(r) for r in con.execute(
+        "SELECT id, reporter_id, title, status FROM bug_tickets ORDER BY id"
+    ).fetchall()]
+
+
+def test_c_rate_capped_new_report_still_opens_ticket(bi):
+    # 直接烧光 cap=2（不经 observe，避免先开收集窗）→ 一条**新** bug 被限频
+    # 压制，但工单照立（0904 skuio 三条真报障被拍扁的复现场景）
+    import time as _t
+    now = _t.time()
+    bi._rate_mark("u:-100123:u1", now)
+    bi._rate_mark("u:-100123:u1", now)
+    assert _tickets(bi) == []
+    assert bi.trigger_verdict(CFG, -100123, "u1", "语音发送失败，报错了",
+                              now=now + 1, account_id="777",
+                              sender_name="张三", msg_id=9001) is False
+    tks = _tickets(bi)
+    assert len(tks) == 1
+    new = tks[-1]
+    assert new["reporter_id"] == "u1" and "语音" in new["title"]
+    evs = _events_of(bi, "rate_capped_report")
+    assert len(evs) == 1
+    assert evs[0]["detail"].startswith(f"[registered #{new['id']} ")
+    assert "语音发送失败" in evs[0]["detail"]
+    assert bi._STATS["rate_capped_report"] == 1
+    assert bi._STATS["rate_capped"] == 1
+
+
+def test_c_capped_registration_does_not_burn_reply_budget(bi):
+    # 就地登记走 count_reply=False：用户桶计数不因被拍扁的登记再 +1
+    import time as _t
+    now = _t.time()
+    for i in range(2):
+        _observe(bi, "u1", f"发不出消息 变体{i}", now=now)
+    assert bi.trigger_verdict(CFG, -100123, "u1", "语音发送失败，报错了",
+                              now=now + 1) is False
+    # 桶里仍是 2 条（observe 两次），不是 3
+    assert len(bi._RATE.get("u:-100123:u1", [])) == 2
+
+
+def test_c_capped_followup_lands_in_collect_window(bi):
+    # 建单开收集窗 → 烧光预算 → 补充材料被限频：仍归进同一工单收集事件
+    res = _observe(bi, "u1", "语音发送失败")
+    _observe(bi, "u1", "补充：弹了报错窗")
+    assert bi.trigger_verdict(CFG, -100123, "u1", "版本是 1.0.73，安卓 14",
+                              account_id="777", sender_name="张三") is False
+    evs = _events_of(bi, "rate_capped_report")
+    assert len(evs) == 1
+    assert evs[0]["detail"].startswith(f"[registered #{res['ticket_id']} collect]")
+    # 工单没有多开一张（没被当成新 bug）
+    assert len(_tickets(bi)) == 1
+
+
+def test_c_capped_verify_hash_still_flips_ticket(bi):
+    # 待验单 + 预算烧光 → 「#N 修好了」被限频压制，但 verify 归属照走
+    tid = _mk_fixed_notified(bi, text="发图失败")
+    import time as _t
+    now = _t.time()
+    bi._rate_mark("u:-100123:u1", now)
+    bi._rate_mark("u:-100123:u1", now)
+    assert bi.trigger_verdict(CFG, -100123, "u1", f"#{tid} 修好了", now=now + 1,
+                              account_id="777", sender_name="张三") is False
+    con = bi._db()
+    st = con.execute("SELECT status FROM bug_tickets WHERE id=?",
+                     (tid,)).fetchone()[0]
+    assert st == "verified"
+    assert any("via=hash" in e["detail"] for e in _events_of(bi, "verify_yes"))
+
+
+def test_c_rate_limit_registration_true_restores_old_semantics(bi):
+    cfg = {"bug_intake": dict(CFG["bug_intake"], rate_limit_registration=True)}
+    for i in range(2):
+        bi.observe_group_message(cfg, chat_id=-100123, account_id="777",
+                                 reporter_id="u1", reporter_name="张三",
+                                 text=f"发不出消息 变体{i}")
+    before = len(_tickets(bi))
+    assert bi.trigger_verdict(cfg, -100123, "u1", "语音发送失败，报错了") is False
+    assert len(_tickets(bi)) == before  # 旧语义：只记事件不立单
+    evs = _events_of(bi, "rate_capped_report")
+    assert len(evs) == 1 and not evs[0]["detail"].startswith("[")
+
+
+def test_c_capped_smalltalk_still_not_registered(bi):
+    import time as _t
+    now = _t.time()
+    bi._rate_mark("u:-100123:u2", now)
+    bi._rate_mark("u:-100123:u2", now)
+    assert bi.trigger_verdict(CFG, -100123, "u2", "哈哈今天天气不错") is False
+    assert _events_of(bi, "rate_capped_report") == []
+    assert _tickets(bi) == []
+
+
+def test_c_parse_cfg_default_registration_not_rate_limited(bi):
+    assert bi.parse_cfg(CFG)["rate_limit_registration"] is False
+    assert bi.parse_cfg({"bug_intake": {"enabled": True,
+                                        "rate_limit_registration": 1}}
+                        )["rate_limit_registration"] is True
+
+
 # ── AI 全静默（2026-08-21 11:05 老板纪律 B36 收紧版：报障群登记/回复/整理全部
 #    由值守人工来，本地模型与云端一条不发；observe 台账照记）──────────────────
 def test_ai_silent_marks_all_categories_but_still_records(bi, bus):

@@ -174,6 +174,9 @@ def parse_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "max_replies_per_group_hour": 20,
         "collect_window_min": _COLLECT_TTL_DEFAULT_MIN,
         "ai_silent": True,
+        # J-5 C（决策 D4）：限频只管「要不要回复」；True 才回到旧语义「超额连登记
+        # 一起丢」。默认 False——AI 静默档下限频唯一效果就是丢登记（0904 三条真报障）。
+        "rate_limit_registration": False,
     }
     try:
         raw = (config or {}).get("bug_intake") or {}
@@ -181,6 +184,8 @@ def parse_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             return out
         out["enabled"] = bool(raw.get("enabled", False))
         out["ai_silent"] = bool(raw.get("ai_silent", True))
+        out["rate_limit_registration"] = bool(
+            raw.get("rate_limit_registration", False))
         out["groups"] = {str(g).strip() for g in (raw.get("groups") or [])
                          if str(g).strip()}
         out["support_accounts"] = {
@@ -1143,8 +1148,14 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
                     sender_id: Any, text: str,
                     now: Optional[float] = None,
                     has_photo: bool = False,
-                    is_direct: bool = False) -> Optional[bool]:
+                    is_direct: bool = False,
+                    account_id: Any = "", sender_name: str = "",
+                    msg_id: Any = 0) -> Optional[bool]:
     """群触发三态（接线在 trigger._should_reply_to_group_message 顶部）。
+
+    ``account_id`` / ``sender_name`` / ``msg_id``（J-5 C，可选）：限频压制路径
+    里就地登记时透传给 ``observe_group_message``（调用方 trigger.py 现状不传，
+    工单 reporter 名退化为 id——值守接线后补齐）。
 
     None=非报障群（走原有触发链一字不变）；True=引燃；False=硬压制。
     **报障群内不再返回 None**（2026-08-20 串戏事故收口）：闲聊/纯图落回原生
@@ -1194,16 +1205,45 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
         # 被拦：文字靠人工 sync 才还原、随图媒体直接永久丢失）。登记面＝bug_events
         # 台账收全文 + 收集窗截图照记 + trigger 层把被压制的图归档进 protocol_media。
         # 判据保守：分类命中 bug/usage/feedback / 带字截图 / 收集窗内（正在补材料）。
+        # J-5 C（决策 D4，2026-09-05）：限频**只管回复不管登记**——超额时
+        # _report_like 的消息就地走 observe_group_message（立单/收集窗补录/
+        # verify 归属全套），只是 return False 不回复；rate_capped_report 事件
+        # 保留但语义改为「已登记、未回复」（detail 带 [registered #N] 前缀）。
+        # 0904 22:55 / 00:58 / 01:11 skuio 三条真报障被拍扁＝旧语义的代价；
+        # AI 静默档下限频本就没有第二个效果。`rate_limit_registration: true`
+        # 回旧语义（超额连登记一起丢）。
         _report_like = bool(
             (t and classify_message(t) in ("bug", "usage", "feedback"))
             or (has_photo and t)
-            or _in_collect_window(cid, sender_id, cfg["collect_window_min"], ts))
+            or _in_collect_window(cid, sender_id, cfg["collect_window_min"], ts)
+            or (t and detect_verify_intent(t)
+                and candidate_verify_tickets(cid, sender_id, now=ts)))
 
         def _note_capped_report() -> None:
             if not _report_like:
                 return
             _bump("rate_capped_report")
-            _record_event(cid, "rate_capped_report", sender_id, t[:300])
+            tag = ""
+            if not cfg["rate_limit_registration"]:
+                try:
+                    res = observe_group_message(
+                        config, chat_id=cid, account_id=account_id,
+                        reporter_id=sender_id,
+                        reporter_name=str(sender_name or ""),
+                        text=t, now=ts, msg_id=msg_id, count_reply=False)
+                    if res.get("dup"):
+                        tag = "[dup] "
+                    elif res.get("ticket_id"):
+                        tag = (f"[registered #{res['ticket_id']} "
+                               f"{res.get('category') or ''}] ")
+                    else:
+                        tag = f"[observed {res.get('category') or '-'}] "
+                except Exception:
+                    logger.warning("[bug_intake] 限频路径就地登记失败",
+                                   exc_info=True)
+                    tag = "[register_failed] "
+            _record_event(cid, "rate_capped_report", sender_id,
+                          (tag + t)[:300])
             if has_photo:
                 note_screenshot(config, cid, sender_id, now=ts)
 
@@ -1313,11 +1353,14 @@ def observe_group_message(
     config: Optional[Dict[str, Any]], *, chat_id: Any, account_id: Any,
     reporter_id: Any, reporter_name: str, text: str,
     now: Optional[float] = None, msg_id: Any = 0, reply_to_msg_id: Any = 0,
+    count_reply: bool = True,
 ) -> Dict[str, Any]:
     """报障群消息观察（接线在 skill_manager.process_message 群 hint 之后）。
 
     ``reply_to_msg_id``（J-5 B，可选）：本条所回复的消息 id；等于某待验单的
     ``notify_msg_id``（bot 回访消息）时确认/否认归属该单。不带＝只认文中 ``#N``。
+    ``count_reply``（J-5 C）：False＝本次只登记不回复（限频压制路径 / 回放链），
+    不记回复限频——否则被拍扁的登记反过来把预算烧得更死。
 
     返回 {active, category, ticket_id, is_new, severity, report_count,
     prompt_block, footer}；active=False 时其余键为空——调用方零分支透传。
@@ -1370,9 +1413,13 @@ def observe_group_message(
         # skill_manager 消费本标记在生成前短路（模型不跑，比丢弃草稿省 16-45s）。
         out["ai_silent"] = bool(cfg.get("ai_silent"))
         _bump("observed")
-        # 本轮要回复 → 记限频（mention/回复链路径也从这里计数）
-        _rate_mark(f"u:{cid}:{reporter_id}", ts)
-        _rate_mark(f"g:{cid}", ts)
+        # 本轮要回复 → 记限频（mention/回复链路径也从这里计数）。
+        # J-5 C：限频压制路径就地登记 / 回放链 count_reply=False 不计数——
+        # 超额后登记不再反过来把预算烧得更死。（ai_silent 档预算照记：那只影响
+        # verdict 三态，登记已由 trigger_verdict 压制路径兜住，不必改语义。）
+        if count_reply:
+            _rate_mark(f"u:{cid}:{reporter_id}", ts)
+            _rate_mark(f"g:{cid}", ts)
 
         # verified 自动闭环（P3）：已回访的 fixed 单 + 确认/否认口径 → 直接流转。
         # J-5 B（决策 D5）：归属只认文中 #N 或「回复 bot 回访消息」；裸短句
