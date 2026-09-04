@@ -30,12 +30,20 @@ def test_workspace_metrics_wires_autosend_shadow():
     assert "autosend_shadow_log import stats_snapshot" in src
 
 
-def test_stats_snapshot_shape_and_zero_state(monkeypatch, tmp_path):
-    monkeypatch.setenv(shadow_log.ENV_DIR, str(tmp_path / "s"))
+@pytest.fixture
+def clean_ledger(monkeypatch, tmp_path):
+    d = tmp_path / "s"
+    monkeypatch.setenv(shadow_log.ENV_DIR, str(d))
     shadow_log.get_stats().reset()
+    shadow_log._reset_pending_for_tests()
+    return d
+
+
+def test_stats_snapshot_shape_and_zero_state(clean_ledger):
     snap = shadow_log.stats_snapshot()
     for k in ("total", "today", "by_reason", "by_level", "by_stage", "top_hits",
-              "stop_contact", "self_harm", "alerts", "write_errors", "last_ts", "dir"):
+              "stop_contact", "self_harm", "alerts", "write_errors", "last_ts", "dir",
+              "outcomes", "settled", "sent", "sent_rate", "pending_outcomes", "warmed_from"):
         assert k in snap, k
     assert snap["total"] == 0 and snap["today"] == 0        # 零命中 → 卡片隐藏口径
     rec = shadow_log.build_record(
@@ -49,6 +57,130 @@ def test_stats_snapshot_shape_and_zero_state(monkeypatch, tmp_path):
     assert snap["by_reason"] == {"money": 1} and snap["by_level"] == {"L4": 1}
     assert snap["top_hits"] == [{"hit": "bank card", "n": 1}]
     assert snap["stop_contact"] == 0 and snap["self_harm"] == 0
+    assert snap["pending_outcomes"] == 1 and snap["settled"] == 0 and snap["sent_rate"] is None
+
+
+# ── 放行后的去向（outcome）─────────────────────────────────────────────
+
+_NOW = 1_800_000_000.0
+
+
+def test_classify_outcome_matrix():
+    c = shadow_log.classify_outcome
+    hold = _NOW - 600
+    assert c({"sent_at": _NOW - 10, "status": "approved", "decided_by": "autosend_worker"}, hold, now=_NOW) == ("sent", "autosend_worker")
+    assert c({"sent_at": 0, "status": "cancelled", "decided_by": "send_blocked"}, hold, now=_NOW) == ("cancelled", "send_blocked")
+    assert c({"sent_at": 0, "status": "cancelled", "decided_by": "channel_mutex"}, hold, now=_NOW) == ("cancelled", "channel_mutex")
+    assert c({"sent_at": 0, "status": "rejected", "decided_by": "agent7"}, hold, now=_NOW) == ("rejected", "agent7")
+    # approved 但没 sent_at：宽限内在途（拟人延迟窗），超宽限 → approved_unsent
+    row = {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker", "decided_at": _NOW - 60}
+    assert c(row, hold, now=_NOW) == ("", "")
+    row_old = {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker",
+               "decided_at": _NOW - 3600, "error": "UndeliveredError: send not ok"}
+    assert c(row_old, hold, now=_NOW) == ("approved_unsent", "UndeliveredError: send not ok")
+    # 仍 pending：不到 max_age 继续等；超龄 → missing
+    assert c({"sent_at": 0, "status": "pending"}, hold, now=_NOW) == ("", "")
+    assert c({"sent_at": 0, "status": "pending"}, _NOW - 8 * 86400, now=_NOW) == ("missing", "stale_pending")
+    # 行没了（被 cleanup 清理）→ missing；刚写完那一瞬读不到不算
+    assert c(None, hold, now=_NOW) == ("missing", "row_gone")
+    assert c(None, _NOW - 5, now=_NOW) == ("", "")
+
+
+class _FakeStore:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = 0
+
+    def get_draft(self, did):
+        self.calls += 1
+        return self.rows.get(did)
+
+
+def _hold(did, reason="stop_contact", ts=None):
+    return shadow_log.build_record(
+        platform="telegram", account_id="a1", conv_key="c-" + did, draft_id=did,
+        would_hold_level="L4", hold_reason=reason, peer_risk="high", peer_reasons=[reason],
+        reply_risk="low", reply_reasons=[], risk_hits=["x"], text="t", stage="peer",
+        ts=ts if ts is not None else _NOW - 600)
+
+
+def test_reconcile_writes_outcomes_and_settles_pending(clean_ledger):
+    for did in ("d-sent", "d-cancel", "d-wait", "d-gone"):
+        shadow_log.record(_hold(did))
+    assert shadow_log.pending_count() == 4
+    store = _FakeStore({
+        "d-sent": {"sent_at": _NOW - 5, "status": "approved", "decided_by": "autosend_worker"},
+        "d-cancel": {"sent_at": 0, "status": "cancelled", "decided_by": "mode_downgraded"},
+        "d-wait": {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker", "decided_at": _NOW - 30},
+        # d-gone → None
+    })
+    n = shadow_log.reconcile_outcomes(store, now=_NOW)
+    assert n == 3                                   # sent / cancelled / missing；d-wait 在途继续等
+    assert shadow_log.pending_count() == 1
+    snap = shadow_log.stats_snapshot()
+    assert snap["outcomes"] == {"sent": 1, "cancelled": 1, "missing": 1}
+    assert snap["settled"] == 3 and snap["sent"] == 1 and snap["sent_rate"] == 0.333
+    rows = [json.loads(l) for p in clean_ledger.glob("*.jsonl")
+            for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    outs = [r for r in rows if r.get("kind") == "outcome"]
+    assert len(outs) == 3
+    for o in outs:
+        for k in shadow_log.OUTCOME_FIELDS:
+            assert k in o, k
+    by = {o["draft_id"]: o for o in outs}
+    assert by["d-cancel"]["reason"] == "mode_downgraded" and by["d-cancel"]["hold_reason"] == "stop_contact"
+    assert by["d-sent"]["latency_sec"] == 600.0
+    # 第二轮：d-wait 超宽限 → approved_unsent，注销
+    n2 = shadow_log.reconcile_outcomes(store, now=_NOW + 3600)
+    assert n2 == 1 and shadow_log.pending_count() == 0
+    assert shadow_log.stats_snapshot()["outcomes"]["approved_unsent"] == 1
+    # 幂等：没有待终局时不查库
+    calls = store.calls
+    assert shadow_log.reconcile_outcomes(store, now=_NOW + 7200) == 0
+    assert store.calls == calls
+
+
+def test_reconcile_tolerates_no_store_and_store_errors(clean_ledger):
+    shadow_log.record(_hold("d1"))
+    assert shadow_log.reconcile_outcomes(None) == 0
+    assert shadow_log.reconcile_outcomes(object()) == 0          # 没有 get_draft
+
+    class _Boom:
+        def get_draft(self, did):
+            raise RuntimeError("db locked")
+    assert shadow_log.reconcile_outcomes(_Boom(), now=_NOW) == 0
+    assert shadow_log.pending_count() == 1                       # 异常不注销，下轮再试
+
+
+def test_warm_from_disk_restores_counters_and_pending(clean_ledger):
+    """重启后：计数器与待终局登记从 JSONL 回填；已有 outcome 的不再 pending。"""
+    now = time.time()
+    shadow_log.record(_hold("d-a", ts=now - 100))
+    shadow_log.record(_hold("d-b", reason="self_harm", ts=now - 90))
+    store = _FakeStore({"d-a": {"sent_at": now - 50, "status": "approved", "decided_by": "autosend_worker"},
+                        "d-b": {"sent_at": 0, "status": "pending"}})      # 还在队列里
+    assert shadow_log.reconcile_outcomes(store, now=now) == 1
+    # 模拟重启：清进程态，再首次读 snapshot
+    shadow_log.get_stats().reset()
+    shadow_log._reset_pending_for_tests()
+    snap = shadow_log.stats_snapshot()
+    assert snap["warmed_from"] == "3d"
+    assert snap["total"] == 2 and snap["today"] == 2
+    assert snap["by_reason"] == {"stop_contact": 1, "self_harm": 1}
+    assert snap["outcomes"] == {"sent": 1} and snap["pending_outcomes"] == 1
+    assert shadow_log.pending_count() == 1
+
+
+def test_worker_and_service_wired_to_reconcile():
+    worker = _read("src/inbox/autosend_worker.py")
+    assert 'getattr(self._svc, "reconcile_shadow_outcomes", None)' in worker
+    assert "run_in_executor(None, _recon)" in worker
+    drafts = _read("src/inbox/drafts.py")
+    assert "def reconcile_shadow_outcomes(self" in drafts
+    assert "_shadow_log.reconcile_outcomes(self._store" in drafts
+    from src.inbox.drafts import DraftService
+    svc = DraftService(inbox_store=None)
+    assert svc.reconcile_shadow_outcomes() == 0                  # 无 store → 0，不抛
 
 
 # ── ops-overview 卡三件套 ──────────────────────────────────────────────
@@ -65,6 +197,9 @@ def test_ops_card_renders_and_registered():
     assert "opsHideCardEl(sec, 'ashadow', 'healthy')" in src
     assert "ashadow:  {reason:'healthy'}" in src
     assert "_esc(h && h.hit)" in src
+    # 放行后的去向：已送达/已终局 KPI + 去向表 + 回填提示
+    assert "sh.settled" in src and "sh.pending_outcomes" in src and "sh.outcomes" in src
+    assert "sh.warmed_from" in src
 
 
 def test_ops_card_i18n_keys_bilingual():
@@ -72,7 +207,9 @@ def test_ops_card_i18n_keys_bilingual():
     keys = ("ov2_s_ashadow", "ov2_ashadow_hint", "ov2_js_ash_total", "ov2_js_ash_today",
             "ov2_js_ash_stop", "ov2_js_ash_harm", "ov2_js_ash_last", "ov2_js_ash_by_reason",
             "ov2_js_ash_top_hits", "ov2_js_ash_col_reason", "ov2_js_ash_col_hit",
-            "ov2_js_ash_col_count", "ov2_hidb_ashadow")
+            "ov2_js_ash_col_count", "ov2_hidb_ashadow",
+            "ov2_js_ash_sent", "ov2_js_ash_pending", "ov2_js_ash_outcomes",
+            "ov2_js_ash_col_outcome", "ov2_js_ash_warm_note")
     for k in keys:
         assert ZH.get(k), k
         assert EN.get(k), k
@@ -161,10 +298,50 @@ def test_cli_summarize_four_sections(tmp_path):
     # --reason 过滤
     only = rpt.collect(30, dirs=[tmp_path], reason="self_harm", now=now)
     assert [r["draft_id"] for r in only] == ["d3"]
-    # 渲染四段标题齐全
+    # 渲染五段标题齐全（无 outcome 行时 1b 给出解释而非空白）
     out = rpt.render(s, days=30, dirs=[tmp_path], reason="")
-    for tag in ("[1]", "[2]", "[3]", "[4]"):
+    for tag in ("[1]", "[1b]", "[2]", "[3]", "[4]"):
         assert tag in out
+    assert "无 outcome 行" in out
+
+
+def test_cli_joins_outcomes_by_draft(tmp_path):
+    """放行后的去向：outcome 行按 draft_id 关联 hold 行，算送达率/未送达明细/待终局。"""
+    import tools.autosend_shadow_report as rpt
+    now = time.time()
+    holds = [
+        _rec(now - 300, "stop_contact", ["stop messaging me"], conv="c1", did="d1"),
+        _rec(now - 280, "stop_contact", ["stop messaging me"], conv="c2", did="d2"),
+        _rec(now - 260, "money", ["bank card"], conv="c3", did="d3"),
+        _rec(now - 240, "money", ["bank card"], conv="c4", did="d4"),   # 无 outcome → pending
+    ]
+    outs = [
+        {"kind": "outcome", "ts": now - 200, "draft_id": "d1", "outcome": "sent", "reason": "autosend_worker",
+         "hold_reason": "stop_contact", "hold_ts": now - 300, "latency_sec": 100.0,
+         "platform": "telegram", "account_id": "a1", "conv_key": "c1"},
+        {"kind": "outcome", "ts": now - 190, "draft_id": "d2", "outcome": "cancelled", "reason": "send_blocked",
+         "hold_reason": "stop_contact", "hold_ts": now - 280, "latency_sec": 90.0,
+         "platform": "telegram", "account_id": "a1", "conv_key": "c2"},
+        {"kind": "outcome", "ts": now - 180, "draft_id": "d3", "outcome": "sent", "reason": "autosend_worker",
+         "hold_reason": "money", "hold_ts": now - 260, "latency_sec": 80.0,
+         "platform": "telegram", "account_id": "a1", "conv_key": "c3"},
+    ]
+    _write_ledger(tmp_path, holds + outs)
+    recs = rpt.collect(30, dirs=[tmp_path], now=now)
+    assert len(recs) == 7
+    s = rpt.summarize(recs)
+    assert s["total"] == 4                                   # hold 行数不被 outcome 行污染
+    assert s["outcomes"] == {"sent": 2, "cancelled": 1}
+    assert s["settled"] == 3 and s["pending_outcome"] == 1 and s["sent_rate"] == 0.667
+    assert s["outcomes_by_reason"]["stop_contact"] == {"sent": 1, "cancelled": 1}
+    assert s["outcomes_by_reason"]["money"] == {"sent": 1, "pending": 1}
+    assert s["cancel_reasons"] == {"cancelled:send_blocked": 1}
+    assert s["outcome_latency_p50_sec"] == 90.0
+    out = rpt.render(s, days=30, dirs=[tmp_path], reason="")
+    assert "送达率 0.667" in out and "cancelled:send_blocked" in out
+    # --reason 过滤对 outcome 行同样生效（outcome 行带 hold_reason）
+    only = rpt.collect(30, dirs=[tmp_path], reason="money", now=now)
+    assert sorted(r["draft_id"] for r in only) == ["d3", "d3", "d4"]
 
 
 def test_cli_main_json_and_empty(tmp_path, capsys):

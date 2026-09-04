@@ -63,14 +63,22 @@ def collect(days: int, *, dirs: Iterable[Path], reason: str = "",
     return out
 
 
-def summarize(records: List[Dict[str, Any]], *, samples: int = 20) -> Dict[str, Any]:
-    """纯函数：台账行 → 四段汇总（门禁按它钉口径）。"""
+def summarize(all_rows: List[Dict[str, Any]], *, samples: int = 20) -> Dict[str, Any]:
+    """纯函数：台账行 → 五段汇总（门禁按它钉口径）。
+
+    行分两类：``kind=hold``（缺 kind 视为 hold，兼容 v1 行）与 ``kind=outcome``；
+    outcome 按 draft_id 关联到 hold（一稿一终局）。
+    """
+    records = [r for r in all_rows if str(r.get("kind") or "hold") != "outcome"]
+    outcome_rows = [r for r in all_rows if str(r.get("kind") or "") == "outcome"]
     by_reason: Counter = Counter()
     by_level: Counter = Counter()
     by_stage: Counter = Counter()
     by_account: Counter = Counter()
     by_platform: Counter = Counter()
     by_day: Counter = Counter()
+    by_lang: Counter = Counter()
+    by_persona: Counter = Counter()
     hits: Counter = Counter()
     hits_by_reason: Dict[str, Counter] = defaultdict(Counter)
     for r in records:
@@ -81,9 +89,39 @@ def summarize(records: List[Dict[str, Any]], *, samples: int = 20) -> Dict[str, 
         by_account[f"{r.get('platform') or '?'}:{r.get('account_id') or '?'}"] += 1
         by_platform[str(r.get("platform") or "?")] += 1
         by_day[time.strftime("%Y-%m-%d", time.localtime(float(r.get("ts") or 0)))] += 1
+        by_lang[str(r.get("lang") or "?")] += 1
+        by_persona[str(r.get("persona_id") or "?")] += 1
         for h in (r.get("risk_hits") or []):
             hits[str(h)] += 1
             hits_by_reason[reason][str(h)] += 1
+    # 放行后的去向：outcome 行按 draft_id 关联（一稿取最后一条终局）
+    outcome_by_draft: Dict[str, Dict[str, Any]] = {}
+    for o in sorted(outcome_rows, key=lambda x: float(x.get("ts") or 0)):
+        outcome_by_draft[str(o.get("draft_id") or "")] = o
+    outcomes: Counter = Counter()
+    outcomes_by_reason: Dict[str, Counter] = defaultdict(Counter)
+    cancel_reasons: Counter = Counter()
+    latencies: List[float] = []
+    pending = 0
+    for r in records:
+        did = str(r.get("draft_id") or "")
+        o = outcome_by_draft.get(did)
+        reason = str(r.get("hold_reason") or "unknown")
+        if o is None:
+            pending += 1
+            outcomes_by_reason[reason]["pending"] += 1
+            continue
+        oc = str(o.get("outcome") or "unknown")
+        outcomes[oc] += 1
+        outcomes_by_reason[reason][oc] += 1
+        if oc in ("cancelled", "approved_unsent", "rejected"):
+            cancel_reasons[f"{oc}:{o.get('reason') or '?'}"] += 1
+        try:
+            latencies.append(float(o.get("latency_sec") or 0))
+        except Exception:
+            pass
+    settled = sum(outcomes.values())
+    sent_n = outcomes.get("sent", 0)
     # 抽样：每个 reason 均匀取，保证小桶也有样本可复核
     per_reason = max(1, samples // max(1, len(by_reason))) if by_reason else 0
     sample_rows: List[Dict[str, Any]] = []
@@ -122,6 +160,16 @@ def summarize(records: List[Dict[str, Any]], *, samples: int = 20) -> Dict[str, 
         },
         "stop_contact": by_reason.get("stop_contact", 0),
         "self_harm": by_reason.get("self_harm", 0),
+        "by_lang": dict(by_lang.most_common()),
+        "by_persona": dict(by_persona.most_common(12)),
+        # 放行后的去向
+        "outcomes": dict(outcomes.most_common()),
+        "outcomes_by_reason": {k: dict(v) for k, v in outcomes_by_reason.items()},
+        "cancel_reasons": dict(cancel_reasons.most_common(12)),
+        "settled": settled,
+        "pending_outcome": pending,
+        "sent_rate": (round(sent_n / settled, 3) if settled else None),
+        "outcome_latency_p50_sec": (sorted(latencies)[len(latencies) // 2] if latencies else None),
         "samples": sample_rows,
     }
 
@@ -140,6 +188,22 @@ def render(summary: Dict[str, Any], *, days: int, dirs: List[Path], reason: str)
     for k, v in summary["by_reason"].items():
         L.append(f"    {k:<32} {v:>6}")
     L.append(f"    档位分布 {summary['by_level']} · 阶段 {summary['by_stage']}")
+    L.append(f"    语言 {summary['by_lang']} · 人设 {summary['by_persona']}")
+    L.append("")
+    L.append("[1b] 放行后的去向（放出去的稿到底发出去了没；cancelled/approved_unsent 说明 worker 的"
+             "其它守卫替它拦了）")
+    if summary["settled"]:
+        L.append(f"    已终局 {summary['settled']} · 送达率 {summary['sent_rate']} · "
+                 f"待终局 {summary['pending_outcome']} · 终局中位耗时 {summary['outcome_latency_p50_sec']}s")
+        for k, v in summary["outcomes"].items():
+            L.append(f"    {k:<32} {v:>6}")
+        for k, v in summary["outcomes_by_reason"].items():
+            L.append(f"      {k:<30} {v}")
+        if summary["cancel_reasons"]:
+            L.append(f"    未送达明细: {summary['cancel_reasons']}")
+    else:
+        L.append(f"    （无 outcome 行，待终局 {summary['pending_outcome']}：worker 尚未跑过 "
+                 "reconcile，或本批代码刚装载；每个 worker tick 末尾会补齐）")
     L.append("")
     L.append("[2] 按账号（是不是某个号在集中触发） / 按平台")
     for k, v in summary["by_account"].items():

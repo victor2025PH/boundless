@@ -1094,6 +1094,18 @@ class AutosendWorker:
         else:
             logger.debug("[AutosendWorker] 本轮无 L2 待发草稿")
 
+        # #160 影子台账「放行后的去向」：把已放行但未终局的稿对照草稿行终态写 outcome
+        # （sent / cancelled:<decided_by> / rejected / approved_unsent）。单一收口点——本文件
+        # 6 处取消路径与投递成败都体现在 reply_drafts 行上，这里按结果读，不逐处埋钩子。
+        # 主键查询 ≤200 次/轮、放线程池、任何异常吞掉：绝不影响发送主流程。
+        _recon = getattr(self._svc, "reconcile_shadow_outcomes", None)
+        if callable(_recon):
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, _recon)
+            except Exception:
+                logger.debug("[AutosendWorker] shadow outcome reconcile 失败（忽略）",
+                             exc_info=True)
+
         # H3：每日清理超龄已处理草稿（best-effort，不影响发送主流程）
         if self._cleanup_enabled and (time.time() - self._last_cleanup_ts) > self._cleanup_interval:
             try:

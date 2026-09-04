@@ -28,7 +28,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,31 @@ RECORD_FIELDS = (
     "stage",            # peer=入站定级时 / reply=AI 稿收尾时 / analysis=LLM 分析 overlay
     "automation_mode",  # 会话档位（应恒为 auto_ai——review 不进台账）
     "policy_mode",      # shadow（enforce 档不写本台账）
+    # v1.1（2026-09-04 二批）：一个月后补不回来的维度
+    "kind",             # hold（本会被扣）| outcome（放行后的去向，见 OUTCOME_FIELDS）
+    "lang",             # 会话/入站语言（中英正则误伤率分开看）
+    "intent",           # quick_analyze 意图（白给）
+    "emotion",          # quick_analyze 情绪（白给）
+    "persona_id",       # 生效人设（「人设 A 的客户更常叫停」这类结论靠它）
+    "peer_text_fp",     # 入站原话 sha1 前 8 位（比 conv_key+ts 更准的回溯键；不落原文）
 )
+
+# 放行后的去向（kind=outcome 行；与 hold 行按 draft_id 关联）。台账只记「放行」不记
+# 「送达」就答不了「放出去的稿到底发出去了没」——worker 的 send_block / mode_downgraded /
+# channel_mutex / superseded 都可能在放行之后取消它。
+OUTCOME_FIELDS = (
+    "kind", "ts", "draft_id", "outcome", "reason", "hold_reason", "hold_ts",
+    "latency_sec", "platform", "account_id", "conv_key",
+)
+# outcome 取值：sent（sent_at>0，真送达）/ cancelled（worker/陈旧作废，reason=decided_by）
+# / rejected（人工拒）/ approved_unsent（approved 但超宽限仍无 sent_at＝投递失败或被延迟窗放弃）
+# / missing（草稿行已被清理，无从判定）
+OUTCOMES = ("sent", "cancelled", "rejected", "approved_unsent", "missing")
+# approved 后多久没 sent_at 才算终局（拟人延迟窗 + 分条间隔最长约 2–3 分钟，留足余量）
+DEFAULT_OUTCOME_GRACE_SEC = 30 * 60
+# hold 行多久还没终局就放弃追踪（草稿被 cleanup_old_drafts 清了也归 missing）
+DEFAULT_OUTCOME_MAX_AGE_SEC = 7 * 86400
+_PENDING_CAP = 5000
 
 
 _WRITE_LOCK = threading.Lock()
@@ -73,12 +97,14 @@ class ShadowStats:
             self.by_level: Dict[str, int] = {}
             self.by_stage: Dict[str, int] = {}
             self.by_hit: Dict[str, int] = {}
+            self.outcomes: Dict[str, int] = {}
             self.alerts = 0
             self.write_errors = 0
             self.last_ts = 0.0
             self.last_reason = ""
             self._day = _day_key(time.time())
             self.today = 0
+            self.warmed_from = ""     # 非空＝计数器从磁盘台账回填过（跨重启口径）
 
     def bump(self, rec: Dict[str, Any]) -> None:
         with self._lock:
@@ -98,12 +124,19 @@ class ShadowStats:
                 hk = str(h)[:40]
                 if len(self.by_hit) < 200 or hk in self.by_hit:
                     self.by_hit[hk] = self.by_hit.get(hk, 0) + 1
-            self.last_ts = now
+            self.last_ts = max(self.last_ts, now)
             self.last_reason = r
+
+    def bump_outcome(self, rec: Dict[str, Any]) -> None:
+        with self._lock:
+            o = str(rec.get("outcome") or "unknown")
+            self.outcomes[o] = self.outcomes.get(o, 0) + 1
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             top_hits = sorted(self.by_hit.items(), key=lambda kv: -kv[1])[:10]
+            sent = self.outcomes.get("sent", 0)
+            settled = sum(self.outcomes.values())
             return {
                 "total": self.total,
                 "today": self.today if self._day == _day_key(time.time()) else 0,
@@ -113,15 +146,81 @@ class ShadowStats:
                 "top_hits": [{"hit": k, "n": v} for k, v in top_hits],
                 "stop_contact": self.by_reason.get("stop_contact", 0),
                 "self_harm": self.by_reason.get("self_harm", 0),
+                # 放行后的去向（已终局的那部分；pending_outcomes＝还在等 worker/人处置）
+                "outcomes": dict(sorted(self.outcomes.items(), key=lambda kv: -kv[1])),
+                "settled": settled,
+                "sent": sent,
+                "sent_rate": (round(sent / settled, 3) if settled else None),
+                "pending_outcomes": len(_PENDING),
                 "alerts": self.alerts,
                 "write_errors": self.write_errors,
                 "last_ts": self.last_ts,
                 "last_reason": self.last_reason,
+                "warmed_from": self.warmed_from,
                 "dir": str(shadow_dir()),
             }
 
 
 _STATS = ShadowStats()
+
+# 待终局登记：draft_id → hold 行摘要。record() 登记；reconcile_outcomes() 查草稿行终态
+# 后写 outcome 行并注销。重启后由 warm_from_disk() 从近几天 JSONL 回填（hold 减 outcome）。
+_PENDING: Dict[str, Dict[str, Any]] = {}
+# 登记表被 web 线程（record）与 worker 线程池（reconcile）同时碰——迭代时被插入会抛，
+# 首次回填也可能被两个线程同时触发，统一走这把锁。
+_PENDING_LOCK = threading.RLock()
+_WARMED = False
+
+
+def _pending_put(rec: Dict[str, Any]) -> None:
+    did = str(rec.get("draft_id") or "")
+    if not did:
+        return
+    with _PENDING_LOCK:
+        if len(_PENDING) >= _PENDING_CAP and did not in _PENDING:
+            # 满了淘汰最老的一条（极端情况下宁丢旧账不撑爆内存）
+            oldest = min(_PENDING.items(), key=lambda kv: float(kv[1].get("ts") or 0))[0]
+            _PENDING.pop(oldest, None)
+        _PENDING[did] = {
+            "ts": float(rec.get("ts") or time.time()),
+            "hold_reason": str(rec.get("hold_reason") or ""),
+            "platform": str(rec.get("platform") or ""),
+            "account_id": str(rec.get("account_id") or ""),
+            "conv_key": str(rec.get("conv_key") or ""),
+        }
+
+
+def warm_from_disk(days: int = 3, *, force: bool = False) -> int:
+    """重启后回填：进程计数器 + 待终局登记 ← 近 N 天 JSONL。
+
+    进程计数器重启就清零是既有教训（care 影子档）；本机每天重启数次，不回填的话
+    ops 卡每天都从 0 起跳。返回回填的 hold 行数。幂等（只做一次，``force`` 重做），
+    且必须先于本进程第一次 bump（三个入口 record / reconcile / stats_snapshot 都先调它）。
+    """
+    global _WARMED
+    with _PENDING_LOCK:
+        if _WARMED and not force:
+            return 0
+        _WARMED = True
+        n = 0
+        settled: set = set()
+        holds: List[Dict[str, Any]] = []
+        for rec in iter_records(days):
+            if str(rec.get("kind") or "hold") == "outcome":
+                settled.add(str(rec.get("draft_id") or ""))
+                _STATS.bump_outcome(rec)
+            else:
+                holds.append(rec)
+        # iter_records 按文件名（日期）升序产出 → bump 的按日翻转逻辑成立，today 回填正确。
+        # 回填后计数器语义＝「近 N 天 + 本进程」（卡上标 warmed_from），跨月累计看 CLI。
+        for rec in holds:
+            _STATS.bump(rec)
+            n += 1
+            did = str(rec.get("draft_id") or "")
+            if did and did not in settled:
+                _pending_put(rec)
+        _STATS.warmed_from = f"{days}d"
+        return n
 
 
 def get_stats() -> ShadowStats:
@@ -129,7 +228,14 @@ def get_stats() -> ShadowStats:
 
 
 def stats_snapshot() -> Dict[str, Any]:
-    """metrics / ops 卡消费口。零命中时 total=0（卡片按此隐藏）。"""
+    """metrics / ops 卡消费口。零命中时 total=0（卡片按此隐藏）。
+
+    首次调用先从磁盘回填（幂等）：重启后 ops 一读就是近几天口径，不是 0。
+    """
+    try:
+        warm_from_disk()
+    except Exception:
+        logger.debug("autosend_shadow warm_from_disk 失败（忽略）", exc_info=True)
     return _STATS.snapshot()
 
 
@@ -164,8 +270,16 @@ def build_record(
     automation_mode: str = "auto_ai",
     policy_mode: str = "shadow",
     ts: Optional[float] = None,
+    lang: str = "",
+    intent: str = "",
+    emotion: str = "",
+    persona_id: str = "",
+    peer_text: str = "",
 ) -> Dict[str, Any]:
-    """按 RECORD_FIELDS 契约组装一行（不落盘）。``text`` 只取指纹与长度，绝不入账。"""
+    """按 RECORD_FIELDS 契约组装一行 hold 记录（不落盘）。
+
+    ``text``（出站稿）与 ``peer_text``（入站原话）都只取指纹与长度，绝不入账。
+    """
     return {
         "ts": float(ts if ts is not None else time.time()),
         "platform": str(platform or ""),
@@ -185,12 +299,16 @@ def build_record(
         "stage": str(stage or "peer"),
         "automation_mode": str(automation_mode or ""),
         "policy_mode": str(policy_mode or "shadow"),
+        "kind": "hold",
+        "lang": str(lang or "")[:16],
+        "intent": str(intent or "")[:32],
+        "emotion": str(emotion or "")[:32],
+        "persona_id": str(persona_id or "")[:64],
+        "peer_text_fp": text_fingerprint(peer_text) if peer_text else "",
     }
 
 
-def record(rec: Dict[str, Any]) -> bool:
-    """落一行 JSONL + 计数。任何异常只记日志不抛——台账绝不阻塞发送。"""
-    ok = True
+def _append_line(rec: Dict[str, Any]) -> bool:
     try:
         p = shadow_file_for(float(rec.get("ts") or time.time()))
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -198,12 +316,124 @@ def record(rec: Dict[str, Any]) -> bool:
         with _WRITE_LOCK:
             with open(p, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
+        return True
     except Exception:
-        ok = False
         _STATS.write_errors += 1
         logger.warning("autosend_shadow 台账落盘失败（已忽略）", exc_info=True)
+        return False
+
+
+def record(rec: Dict[str, Any]) -> bool:
+    """落一行 hold 记录（JSONL）+ 计数 + 登记待终局。任何异常只记日志不抛——台账绝不阻塞发送。
+
+    先回填再落行：磁盘回填必须发生在本进程**第一次** bump 之前，否则本进程刚写的行
+    会被回填再数一遍（record / reconcile / stats_snapshot 三个入口都先 warm，幂等）。
+    """
+    try:
+        warm_from_disk()
+    except Exception:
+        logger.debug("autosend_shadow warm_from_disk 失败（忽略）", exc_info=True)
+    ok = _append_line(rec)
     _STATS.bump(rec)
+    _pending_put(rec)
     return ok
+
+
+def classify_outcome(row: Optional[Dict[str, Any]], hold_ts: float, *,
+                     now: Optional[float] = None,
+                     grace_sec: float = DEFAULT_OUTCOME_GRACE_SEC,
+                     max_age_sec: float = DEFAULT_OUTCOME_MAX_AGE_SEC) -> Tuple[str, str]:
+    """草稿行终态 → (outcome, reason)；("", "") 表示尚未终局（继续等）。纯函数，门禁钉口径。
+
+    - ``sent_at>0`` → sent（无论谁批的：autosend 与人工通过后的真投递都会 mark_draft_sent）
+    - status cancelled → cancelled，reason=decided_by（channel_mutex / mode_downgraded /
+      send_blocked / pilot_native / superseded_by_inbound / work_schedule_regen / stale_peer…）
+    - status rejected → rejected（人工拒）
+    - status approved 且 sent_at==0：宽限内视为在途（拟人延迟窗/分条间隔）；超宽限 →
+      approved_unsent（投递失败宁丢不重发 / 延迟窗内客户插话放弃 / 人工通过未接投递）
+    - 行不存在（被 cleanup_old_drafts 清理）→ missing；pending/enriching 超 max_age → missing
+    """
+    now_f = float(now if now is not None else time.time())
+    if row is None:
+        return ("missing", "row_gone") if now_f - hold_ts > 60 else ("", "")
+    if float(row.get("sent_at") or 0) > 0:
+        return "sent", str(row.get("decided_by") or "")
+    status = str(row.get("status") or "")
+    if status == "cancelled":
+        return "cancelled", str(row.get("decided_by") or "")
+    if status == "rejected":
+        return "rejected", str(row.get("decided_by") or "")
+    if status == "approved":
+        decided_at = float(row.get("decided_at") or row.get("updated_at") or hold_ts)
+        if now_f - decided_at >= grace_sec:
+            return "approved_unsent", str(row.get("error") or row.get("decided_by") or "")
+        return "", ""
+    if now_f - hold_ts >= max_age_sec:
+        return "missing", f"stale_{status or 'unknown'}"
+    return "", ""
+
+
+def reconcile_outcomes(store: Any, *, now: Optional[float] = None, max_items: int = 200,
+                       grace_sec: float = DEFAULT_OUTCOME_GRACE_SEC,
+                       max_age_sec: float = DEFAULT_OUTCOME_MAX_AGE_SEC) -> int:
+    """把待终局的 hold 记录对照草稿行终态，写 outcome 行。返回本轮写出的行数。
+
+    单一收口点：worker 里 6 处取消路径 + 投递成功/失败点都不用各埋一个钩子——它们
+    最终都体现在 reply_drafts 行的 status/decided_by/sent_at 上，这里按结果读。
+    只读 ``store.get_draft``（主键查询，≤max_items 次），任何异常只记日志不抛。
+    """
+    if store is None or not hasattr(store, "get_draft"):
+        return 0
+    warm_from_disk()
+    now_f = float(now if now is not None else time.time())
+    written = 0
+    # 老的先查（先到先终局），单轮封顶防大积压时拖慢 worker tick；先拷贝快照再查库，
+    # 查库期间不持锁（record 不被阻塞）
+    with _PENDING_LOCK:
+        batch = sorted(((k, dict(v)) for k, v in _PENDING.items()),
+                       key=lambda kv: float(kv[1].get("ts") or 0))[:max_items]
+    for did, meta in batch:
+        try:
+            row = store.get_draft(did)
+        except Exception:
+            logger.debug("reconcile: get_draft(%s) 异常（跳过）", did, exc_info=True)
+            continue
+        hold_ts = float(meta.get("ts") or 0)
+        outcome, reason = classify_outcome(
+            row, hold_ts, now=now_f, grace_sec=grace_sec, max_age_sec=max_age_sec)
+        if not outcome:
+            continue
+        rec = {
+            "kind": "outcome",
+            "ts": now_f,
+            "draft_id": did,
+            "outcome": outcome,
+            "reason": str(reason or "")[:64],
+            "hold_reason": str(meta.get("hold_reason") or ""),
+            "hold_ts": hold_ts,
+            "latency_sec": round(max(0.0, now_f - hold_ts), 1),
+            "platform": str(meta.get("platform") or ""),
+            "account_id": str(meta.get("account_id") or ""),
+            "conv_key": str(meta.get("conv_key") or ""),
+        }
+        if _append_line(rec):
+            written += 1
+        _STATS.bump_outcome(rec)
+        with _PENDING_LOCK:
+            _PENDING.pop(did, None)
+    return written
+
+
+def pending_count() -> int:
+    with _PENDING_LOCK:
+        return len(_PENDING)
+
+
+def _reset_pending_for_tests() -> None:
+    global _WARMED
+    with _PENDING_LOCK:
+        _PENDING.clear()
+        _WARMED = False
 
 
 def maybe_alert(rec: Dict[str, Any]) -> bool:
@@ -267,7 +497,9 @@ def iter_records(days: int = 30, *, base: Optional[Path] = None,
 
 
 __all__ = [
-    "ALERT_REASONS", "RECORD_FIELDS", "DEFAULT_DIR", "ENV_DIR",
+    "ALERT_REASONS", "RECORD_FIELDS", "OUTCOME_FIELDS", "OUTCOMES", "DEFAULT_DIR", "ENV_DIR",
+    "DEFAULT_OUTCOME_GRACE_SEC", "DEFAULT_OUTCOME_MAX_AGE_SEC",
     "build_record", "record", "maybe_alert", "iter_records",
+    "classify_outcome", "reconcile_outcomes", "warm_from_disk", "pending_count",
     "stats_snapshot", "get_stats", "shadow_dir", "shadow_file_for", "text_fingerprint",
 ]

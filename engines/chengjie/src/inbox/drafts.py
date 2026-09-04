@@ -628,7 +628,9 @@ class DraftService:
             self._record_shadow(
                 decision, stage="analysis", platform=_platform, account_id="",
                 conv_key=str(analysis.get("conversation_id") or ""), draft_id=draft_id,
-                text="",
+                text="", lang=str(analysis.get("language") or ""),
+                intent=str(analysis.get("intent") or ""),
+                emotion=str(analysis.get("emotion") or ""),
             )
         return {
             "ok": True,
@@ -1158,6 +1160,8 @@ class DraftService:
                 self._record_shadow(
                     _decision, stage="peer", platform=platform, account_id=account_id,
                     conv_key=chat_key or conv_id, draft_id=draft_id, text=draft_text,
+                    lang=str(lang or ""), intent=str(intent or ""),
+                    emotion=str(emotion or ""), peer_text=t,
                 )
             logger.info(
                 "auto_generate_draft OK conv=%s level=%s draft_id=%s shadow=%s hits=%s",
@@ -1260,6 +1264,7 @@ class DraftService:
                     account_id=str(draft.get("account_id") or ""),
                     conv_key=str(draft.get("chat_key") or draft.get("conversation_id") or ""),
                     draft_id=draft_id, text=reply,
+                    lang=str(lang or ""), peer_text=str(draft.get("peer_text") or ""),
                 )
             logger.info(
                 "enrich_draft OK draft_id=%s level=%s risk=%s shadow=%s hits=%s",
@@ -1272,8 +1277,13 @@ class DraftService:
     def _record_shadow(
         self, decision: _PolicyDecision, *, stage: str, platform: str,
         account_id: str, conv_key: str, draft_id: str, text: str,
+        lang: str = "", intent: str = "", emotion: str = "", peer_text: str = "",
     ) -> None:
-        """影子台账落行 + stop_contact/self_harm 即时告警。best-effort，绝不影响发送。"""
+        """影子台账落行 + stop_contact/self_harm 即时告警。best-effort，绝不影响发送。
+
+        persona_id 在此惰性解析（只在真要落行时才算——影子命中是低频事件）：走出站链
+        同一口径 ``resolve_effective_persona_id``，任何失败落空串。
+        """
         sh = decision.shadow
         if sh is None:
             return
@@ -1286,11 +1296,37 @@ class DraftService:
                 reply_reasons=sh.reply_reasons, risk_hits=sh.risk_hits,
                 text=text, stage=stage, automation_mode=decision.automation_mode,
                 policy_mode=decision.policy_mode,
+                lang=lang, intent=intent, emotion=emotion, peer_text=peer_text,
+                persona_id=self._shadow_persona_id(platform, account_id, conv_key),
             )
             _shadow_log.record(rec)
             _shadow_log.maybe_alert(rec)
         except Exception:
             logger.debug("autosend_shadow 记账失败（已忽略）", exc_info=True)
+
+    @staticmethod
+    def _shadow_persona_id(platform: str, account_id: str, chat_key: str) -> str:
+        if not platform or not account_id:
+            return ""
+        try:
+            from src.compliance.runtime import runtime_config
+            from src.ai.persona_voice import resolve_effective_persona_id
+            return str(resolve_effective_persona_id(
+                runtime_config() or {}, platform, account_id, chat_key) or "")
+        except Exception:
+            return ""
+
+    def reconcile_shadow_outcomes(self, **kw: Any) -> int:
+        """把影子台账里「放行后还没终局」的稿对照草稿行终态，写 outcome 行（sent/cancelled/…）。
+
+        由 AutosendWorker 每 tick 末尾调用（单一收口点：worker 的 6 处取消路径与
+        投递成败都体现在草稿行上，这里按结果读，不在各处埋钩子）。best-effort。
+        """
+        try:
+            return int(_shadow_log.reconcile_outcomes(self._store, **kw))
+        except Exception:
+            logger.debug("autosend_shadow reconcile 失败（已忽略）", exc_info=True)
+            return 0
 
     def release_enriching_draft(self, draft_id: str) -> bool:
         """人设补全失败的兜底：把停泊草稿原样翻 pending（保留规则模板占位，降级旧行为）。"""

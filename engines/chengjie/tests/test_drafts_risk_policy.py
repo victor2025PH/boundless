@@ -161,6 +161,7 @@ def shadow_env(tmp_path, monkeypatch):
     monkeypatch.setenv(shadow_log.ENV_DIR, str(d))
     monkeypatch.delenv(pol.ENV_POLICY_MODE, raising=False)
     shadow_log.get_stats().reset()
+    shadow_log._reset_pending_for_tests()
     return d
 
 
@@ -299,6 +300,11 @@ def test_service_auto_generate_releases_and_writes_ledger(shadow_env, store):
     assert r["draft_id"] == did and r["account_id"] == "acct1" and r["conv_key"] == "u1"
     assert r["stage"] == "peer" and r["automation_mode"] == "auto_ai"
     assert any("stop messaging" in h for h in r["risk_hits"]), r["risk_hits"]
+    # v1.1 维度：语言/意图/情绪白给，入站原话只留指纹，kind 标 hold
+    assert r["kind"] == "hold"
+    assert r["lang"] == "en" and r["intent"] == "停止联系" and r["emotion"]
+    assert r["peer_text_fp"] == shadow_log.text_fingerprint(peer) and len(r["peer_text_fp"]) == 8
+    assert "persona_id" in r          # 无人设配置时为空串，但字段必须在
     # ⛔ 不记原文：入站/出站**整条原文**都不许出现在台账文件里（命中词是 ≤40 字的短语片段）
     raw = "".join(p.read_text(encoding="utf-8") for p in shadow_env.glob("*.jsonl"))
     assert peer not in raw

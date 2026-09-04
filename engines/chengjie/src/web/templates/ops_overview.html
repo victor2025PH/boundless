@@ -3415,11 +3415,14 @@ function renderAutosendShadow(d){
   // 要人看的两个 reason 有量 → 黄灯；其余只是「本会被扣」的观测量，不亮灯
   opsSetCardLight('ashadow', (stopN || harmN) ? 'yellow' : '');
   var lastTs = Number(sh.last_ts)||0;
+  // 放行后的去向：已送达 / 已终局（cancelled/approved_unsent/rejected 都算终局）+ 待终局
+  var settledN = Number(sh.settled)||0, sentN = Number(sh.sent)||0, pendN = Number(sh.pending_outcomes)||0;
   var kpis = [
     {label:window.T('ov2_js_ash_total'), value:fmt(Number(sh.total)||0)},
     {label:window.T('ov2_js_ash_today'), value:fmt(Number(sh.today)||0)},
     {label:window.T('ov2_js_ash_stop'), value:fmt(stopN), color:(stopN?'var(--red)':'')},
     {label:window.T('ov2_js_ash_harm'), value:fmt(harmN), color:(harmN?'var(--red)':'')},
+    {label:window.T('ov2_js_ash_sent'), value:(settledN?(fmt(sentN)+' / '+fmt(settledN)):'—')+(pendN?(' <span class="muted" style="font-size:12px;">+'+fmt(pendN)+' '+window.T('ov2_js_ash_pending')+'</span>'):'')},
     {label:window.T('ov2_js_ash_last'), value:(lastTs?window.wsFmtDateTime(lastTs):'—')},
   ];
   kp.innerHTML = kpis.map(function(c){
@@ -3442,7 +3445,10 @@ function renderAutosendShadow(d){
     +   '<table><tr><th>'+window.T('ov2_js_ash_col_reason')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+reasonRows(sh.by_reason||{}, 8)+'</table></div>'
     + '<div style="flex:1;min-width:220px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_ash_top_hits')+'</div>'
     +   '<table><tr><th>'+window.T('ov2_js_ash_col_hit')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+hitRows(sh.top_hits||[], 10)+'</table></div>'
-    + '</div>';
+    + '<div style="flex:1;min-width:200px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">'+window.T('ov2_js_ash_outcomes')+'</div>'
+    +   '<table><tr><th>'+window.T('ov2_js_ash_col_outcome')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+reasonRows(sh.outcomes||{}, 6)+'</table></div>'
+    + '</div>'
+    + (sh.warmed_from ? ('<div class="muted" style="font-size:11px;margin-top:6px;">'+window.T('ov2_js_ash_warm_note')+'</div>') : '');
 }
 
 // 📤 出站媒体归档卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
