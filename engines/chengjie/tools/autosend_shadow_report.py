@@ -114,7 +114,7 @@ def summarize(all_rows: List[Dict[str, Any]], *, samples: int = 20) -> Dict[str,
         oc = str(o.get("outcome") or "unknown")
         outcomes[oc] += 1
         outcomes_by_reason[reason][oc] += 1
-        if oc in ("cancelled", "approved_unsent", "rejected"):
+        if oc in ("cancelled", "delivery_failed", "approved_unsent", "rejected"):
             cancel_reasons[f"{oc}:{o.get('reason') or '?'}"] += 1
         try:
             latencies.append(float(o.get("latency_sec") or 0))

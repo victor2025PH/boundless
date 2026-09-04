@@ -78,6 +78,10 @@ def test_classify_outcome_matrix():
     row_old = {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker",
                "decided_at": _NOW - 3600, "error": "UndeliveredError: send not ok"}
     assert c(row_old, hold, now=_NOW) == ("approved_unsent", "UndeliveredError: send not ok")
+    # approved + 审计里有 autosend_failed → 立即 delivery_failed，不等宽限；已送达的不受影响
+    assert c(row, hold, now=_NOW, failed_reason="gate:send_gate: kill_switch") == \
+        ("delivery_failed", "gate:send_gate: kill_switch")
+    assert c({"sent_at": _NOW - 1, "status": "approved"}, hold, now=_NOW, failed_reason="x") == ("sent", "")
     # 仍 pending：不到 max_age 继续等；超龄 → missing
     assert c({"sent_at": 0, "status": "pending"}, hold, now=_NOW) == ("", "")
     assert c({"sent_at": 0, "status": "pending"}, _NOW - 8 * 86400, now=_NOW) == ("missing", "stale_pending")
@@ -140,6 +144,52 @@ def test_reconcile_writes_outcomes_and_settles_pending(clean_ledger):
     assert store.calls == calls
 
 
+def test_failed_reason_from_audit_categorizes_via_send_health():
+    class _S:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def list_draft_audit(self, *, draft_id="", limit=10):
+            return self.rows
+
+    f = shadow_log.failed_reason_from_audit
+    assert f(_S([{"action": "autosend", "reason": ""}]), "d") is None
+    assert f(_S([{"action": "autosend_failed", "reason": "send_gate: kill_switch active"}]), "d") \
+        == "gate:send_gate: kill_switch active"
+    assert f(_S([{"action": "autosend_failed", "reason": "投递失败: 502 bad gateway"}]), "d") \
+        .startswith("platform:")
+    assert f(_S([{"action": "autosend_failed", "reason": ""}]), "d") == "other"
+    assert f(object(), "d") is None                          # 没有 list_draft_audit
+
+    class _Boom(_S):
+        def list_draft_audit(self, **kw):
+            raise RuntimeError("locked")
+    assert f(_Boom([]), "d") is None
+
+
+def test_reconcile_delivery_failed_does_not_wait_for_grace(clean_ledger):
+    """approved 且审计里有 autosend_failed → 当轮就终局为 delivery_failed（宽限只管在途）。"""
+    shadow_log.record(_hold("d-fail"))
+    shadow_log.record(_hold("d-inflight"))
+
+    class _S(_FakeStore):
+        def list_draft_audit(self, *, draft_id="", limit=10):
+            if draft_id == "d-fail":
+                return [{"action": "autosend_failed", "reason": "投递失败: timeout"}]
+            return [{"action": "autosend", "reason": ""}]
+    store = _S({
+        "d-fail": {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker", "decided_at": _NOW - 5},
+        "d-inflight": {"sent_at": 0, "status": "approved", "decided_by": "autosend_worker", "decided_at": _NOW - 5},
+    })
+    assert shadow_log.reconcile_outcomes(store, now=_NOW) == 1
+    snap = shadow_log.stats_snapshot()
+    assert snap["outcomes"] == {"delivery_failed": 1} and shadow_log.pending_count() == 1
+    rows = [json.loads(l) for p in clean_ledger.glob("*.jsonl")
+            for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    o = [r for r in rows if r.get("kind") == "outcome"][0]
+    assert o["draft_id"] == "d-fail" and o["reason"].startswith("platform:")
+
+
 def test_reconcile_tolerates_no_store_and_store_errors(clean_ledger):
     shadow_log.record(_hold("d1"))
     assert shadow_log.reconcile_outcomes(None) == 0
@@ -177,6 +227,7 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
     钉的是 get_draft 真实返回的键名（sent_at/status/decided_by/decided_at），假件测不出。"""
     from src.ai.chat_assistant_service import quick_risk
     from src.inbox.drafts import DraftService
+    from src.inbox.models import InboxMessage
     from src.inbox.store import InboxStore
 
     monkeypatch.delenv("AITR_AUTOSEND_POLICY_MODE", raising=False)
@@ -187,11 +238,19 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
         def conv(k):
             return {"conversation_id": f"telegram:acct1:{k}", "platform": "telegram",
                     "account_id": "acct1", "chat_key": k, "display_name": "T"}
-        d_sent = svc.auto_generate_draft(conv("u1"), "please stop messaging me", automation_mode="auto_ai")
+        # u1 先落一条入站消息（拟稿真实前提）→ hold 行应带该消息 id
+        peer1 = "please stop messaging me"
+        store.ingest_message(InboxMessage(conversation_id="telegram:acct1:u1", platform_msg_id="m-777",
+                                          direction="in", text=peer1, ts=time.time() - 5))
+        want_mid = [m for m in store.list_recent_messages("telegram:acct1:u1", limit=5)
+                    if m.get("direction") == "in"][-1].get("message_id")
+        assert want_mid
+        d_sent = svc.auto_generate_draft(conv("u1"), peer1, automation_mode="auto_ai")
         d_cancel = svc.auto_generate_draft(conv("u2"), "I want to kill myself", automation_mode="auto_ai")
         d_wait = svc.auto_generate_draft(conv("u3"), "send me your bank card number", automation_mode="auto_ai")
-        assert shadow_log.pending_count() == 3
-        # 首轮：三稿都还 pending → 无终局
+        d_fail = svc.auto_generate_draft(conv("u4"), "别再联系我", automation_mode="auto_ai")
+        assert shadow_log.pending_count() == 4
+        # 首轮：全部还 pending → 无终局
         assert svc.reconcile_shadow_outcomes() == 0
         # worker 同款：resolve(autosend) → 投递成功 mark_draft_sent
         r = svc.resolve_with_audit(d_sent, "autosend", by="autosend_worker")
@@ -199,22 +258,30 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
         assert store.mark_draft_sent(d_sent)
         # worker 守卫取消（send_blocked 路径写法）
         store.update_draft_status(d_cancel, status="cancelled", decided_by="send_blocked")
+        # worker 投递失败路径：resolve 成功但送不出 → 只写 autosend_failed 审计，行不变
+        assert svc.resolve_with_audit(d_fail, "autosend", by="autosend_worker").get("ok")
+        svc.record_autosend_failure(d_fail, conversation_id="telegram:acct1:u4",
+                                    reason="send_gate: kill_switch active")
         n = svc.reconcile_shadow_outcomes()
-        assert n == 2
+        assert n == 3
         assert shadow_log.pending_count() == 1                 # d_wait 仍 pending
         snap = shadow_log.stats_snapshot()
-        assert snap["outcomes"] == {"sent": 1, "cancelled": 1}
-        assert snap["sent_rate"] == 0.5
+        assert snap["outcomes"] == {"sent": 1, "cancelled": 1, "delivery_failed": 1}
+        assert snap["sent_rate"] == 0.333
         rows = [json.loads(l) for p in clean_ledger.glob("*.jsonl")
                 for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
         outs = {r["draft_id"]: r for r in rows if r.get("kind") == "outcome"}
         assert outs[d_sent]["outcome"] == "sent" and outs[d_sent]["hold_reason"] == "stop_contact"
         assert outs[d_cancel]["outcome"] == "cancelled" and outs[d_cancel]["reason"] == "send_blocked"
+        assert outs[d_fail]["outcome"] == "delivery_failed"
+        assert outs[d_fail]["reason"] == "gate:send_gate: kill_switch active"
         assert d_wait not in outs
-        # hold 行带二批字段（真链路口径）
+        # hold 行带二批字段（真链路口径）+ 入站消息 id
         holds = {r["draft_id"]: r for r in rows if r.get("kind", "hold") == "hold"}
         assert holds[d_sent]["lang"] == "en" and holds[d_sent]["intent"] == "停止联系"
-        assert holds[d_sent]["peer_text_fp"] == shadow_log.text_fingerprint("please stop messaging me")
+        assert holds[d_sent]["peer_text_fp"] == shadow_log.text_fingerprint(peer1)
+        assert holds[d_sent]["peer_msg_id"] == want_mid
+        assert holds[d_cancel]["peer_msg_id"] == ""            # 该会话没有消息行 → 空串不猜
     finally:
         store.close()
 

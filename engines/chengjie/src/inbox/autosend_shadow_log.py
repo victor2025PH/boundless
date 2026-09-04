@@ -56,6 +56,7 @@ RECORD_FIELDS = (
     "emotion",          # quick_analyze 情绪（白给）
     "persona_id",       # 生效人设（「人设 A 的客户更常叫停」这类结论靠它）
     "peer_text_fp",     # 入站原话 sha1 前 8 位（比 conv_key+ts 更准的回溯键；不落原文）
+    "peer_msg_id",      # 触发拟稿的入站消息 id（messages.message_id，与转录回写同口径；可空）
 )
 
 # 放行后的去向（kind=outcome 行；与 hold 行按 draft_id 关联）。台账只记「放行」不记
@@ -66,9 +67,11 @@ OUTCOME_FIELDS = (
     "latency_sec", "platform", "account_id", "conv_key",
 )
 # outcome 取值：sent（sent_at>0，真送达）/ cancelled（worker/陈旧作废，reason=decided_by）
-# / rejected（人工拒）/ approved_unsent（approved 但超宽限仍无 sent_at＝投递失败或被延迟窗放弃）
-# / missing（草稿行已被清理，无从判定）
-OUTCOMES = ("sent", "cancelled", "rejected", "approved_unsent", "missing")
+# / rejected（人工拒）/ delivery_failed（approved 后 worker 记了 autosend_failed 审计，
+# reason=「类别:原文」，类别复用 send_health.classify_fail_reason：gate=闸门节流 /
+# permanent=无发言权等 / platform=平台故障 / other）/ approved_unsent（approved 但超宽限仍无
+# sent_at 且无失败审计＝延迟窗内客户插话放弃、人工通过未接投递等）/ missing（草稿行已被清理）
+OUTCOMES = ("sent", "cancelled", "rejected", "delivery_failed", "approved_unsent", "missing")
 # approved 后多久没 sent_at 才算终局（拟人延迟窗 + 分条间隔最长约 2–3 分钟，留足余量）
 DEFAULT_OUTCOME_GRACE_SEC = 30 * 60
 # hold 行多久还没终局就放弃追踪（草稿被 cleanup_old_drafts 清了也归 missing）
@@ -275,6 +278,7 @@ def build_record(
     emotion: str = "",
     persona_id: str = "",
     peer_text: str = "",
+    peer_msg_id: str = "",
 ) -> Dict[str, Any]:
     """按 RECORD_FIELDS 契约组装一行 hold 记录（不落盘）。
 
@@ -305,6 +309,7 @@ def build_record(
         "emotion": str(emotion or "")[:32],
         "persona_id": str(persona_id or "")[:64],
         "peer_text_fp": text_fingerprint(peer_text) if peer_text else "",
+        "peer_msg_id": str(peer_msg_id or "")[:64],
     }
 
 
@@ -342,15 +347,19 @@ def record(rec: Dict[str, Any]) -> bool:
 def classify_outcome(row: Optional[Dict[str, Any]], hold_ts: float, *,
                      now: Optional[float] = None,
                      grace_sec: float = DEFAULT_OUTCOME_GRACE_SEC,
-                     max_age_sec: float = DEFAULT_OUTCOME_MAX_AGE_SEC) -> Tuple[str, str]:
+                     max_age_sec: float = DEFAULT_OUTCOME_MAX_AGE_SEC,
+                     failed_reason: Optional[str] = None) -> Tuple[str, str]:
     """草稿行终态 → (outcome, reason)；("", "") 表示尚未终局（继续等）。纯函数，门禁钉口径。
 
     - ``sent_at>0`` → sent（无论谁批的：autosend 与人工通过后的真投递都会 mark_draft_sent）
     - status cancelled → cancelled，reason=decided_by（channel_mutex / mode_downgraded /
       send_blocked / pilot_native / superseded_by_inbound / work_schedule_regen / stale_peer…）
     - status rejected → rejected（人工拒）
-    - status approved 且 sent_at==0：宽限内视为在途（拟人延迟窗/分条间隔）；超宽限 →
-      approved_unsent（投递失败宁丢不重发 / 延迟窗内客户插话放弃 / 人工通过未接投递）
+    - status approved 且 sent_at==0：
+        · ``failed_reason`` 非 None（调用方从 draft_audit_log 读到 autosend_failed）→
+          **立即** delivery_failed，不等宽限（投递失败宁丢不重发，行不会再变）；
+        · 否则宽限内视为在途（拟人延迟窗/分条间隔）；超宽限 → approved_unsent
+          （延迟窗内客户插话放弃 / 人工通过未接投递 / 进程中途重启）
     - 行不存在（被 cleanup_old_drafts 清理）→ missing；pending/enriching 超 max_age → missing
     """
     now_f = float(now if now is not None else time.time())
@@ -364,6 +373,8 @@ def classify_outcome(row: Optional[Dict[str, Any]], hold_ts: float, *,
     if status == "rejected":
         return "rejected", str(row.get("decided_by") or "")
     if status == "approved":
+        if failed_reason is not None:
+            return "delivery_failed", str(failed_reason or "")
         decided_at = float(row.get("decided_at") or row.get("updated_at") or hold_ts)
         if now_f - decided_at >= grace_sec:
             return "approved_unsent", str(row.get("error") or row.get("decided_by") or "")
@@ -371,6 +382,33 @@ def classify_outcome(row: Optional[Dict[str, Any]], hold_ts: float, *,
     if now_f - hold_ts >= max_age_sec:
         return "missing", f"stale_{status or 'unknown'}"
     return "", ""
+
+
+def failed_reason_from_audit(store: Any, draft_id: str) -> Optional[str]:
+    """从 draft_audit_log 取该稿的 autosend_failed 原因（无则 None）。
+
+    worker 的投递失败**不改草稿行**（宁丢不重发，只写审计 ``record_autosend_failure``），
+    所以行上看不出失败；这里读审计补齐。返回「类别:原文」——类别复用 send_health 的
+    归因（gate=闸门节流 / permanent=无发言权等 / platform=平台故障 / other），一个月后
+    一眼分清「被反封号闸门拦了」和「平台真故障」。任何异常 → None（按无失败审计处理）。
+    """
+    fn = getattr(store, "list_draft_audit", None)
+    if not callable(fn):
+        return None
+    try:
+        rows = fn(draft_id=draft_id, limit=10) or []
+    except Exception:
+        return None
+    for r in rows:
+        if str((r or {}).get("action") or "") == "autosend_failed":
+            reason = str(r.get("reason") or "")
+            try:
+                from src.inbox.send_health import classify_fail_reason
+                cat = classify_fail_reason(reason)
+            except Exception:
+                cat = "other"
+            return f"{cat}:{reason[:48]}" if reason else cat
+    return None
 
 
 def reconcile_outcomes(store: Any, *, now: Optional[float] = None, max_items: int = 200,
@@ -399,8 +437,14 @@ def reconcile_outcomes(store: Any, *, now: Optional[float] = None, max_items: in
             logger.debug("reconcile: get_draft(%s) 异常（跳过）", did, exc_info=True)
             continue
         hold_ts = float(meta.get("ts") or 0)
+        # approved 且未送达的稿才去翻审计（低频；其它终态行上就看得出）
+        failed: Optional[str] = None
+        if (row is not None and str(row.get("status") or "") == "approved"
+                and float(row.get("sent_at") or 0) <= 0):
+            failed = failed_reason_from_audit(store, did)
         outcome, reason = classify_outcome(
-            row, hold_ts, now=now_f, grace_sec=grace_sec, max_age_sec=max_age_sec)
+            row, hold_ts, now=now_f, grace_sec=grace_sec, max_age_sec=max_age_sec,
+            failed_reason=failed)
         if not outcome:
             continue
         rec = {
@@ -500,6 +544,7 @@ __all__ = [
     "ALERT_REASONS", "RECORD_FIELDS", "OUTCOME_FIELDS", "OUTCOMES", "DEFAULT_DIR", "ENV_DIR",
     "DEFAULT_OUTCOME_GRACE_SEC", "DEFAULT_OUTCOME_MAX_AGE_SEC",
     "build_record", "record", "maybe_alert", "iter_records",
-    "classify_outcome", "reconcile_outcomes", "warm_from_disk", "pending_count",
+    "classify_outcome", "failed_reason_from_audit", "reconcile_outcomes", "warm_from_disk",
+    "pending_count",
     "stats_snapshot", "get_stats", "shadow_dir", "shadow_file_for", "text_fingerprint",
 ]

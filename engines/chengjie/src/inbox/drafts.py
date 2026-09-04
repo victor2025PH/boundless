@@ -625,9 +625,18 @@ class DraftService:
             logger.debug("apply_analysis overlay 写入失败", exc_info=True)
             return {"ok": False, "error": "overlay write failed"}
         if decision.shadow is not None:
+            # 账号/会话键从刚写的 overlay 行回读（analysis 载荷本身不带账号）
+            _acct, _ck = "", str(analysis.get("conversation_id") or "")
+            try:
+                _row = self._store.get_draft(draft_id) or {}
+                _acct = str(_row.get("account_id") or "")
+                _ck = str(_row.get("chat_key") or _row.get("conversation_id") or _ck)
+                _platform = str(_row.get("platform") or _platform)
+            except Exception:
+                pass
             self._record_shadow(
-                decision, stage="analysis", platform=_platform, account_id="",
-                conv_key=str(analysis.get("conversation_id") or ""), draft_id=draft_id,
+                decision, stage="analysis", platform=_platform, account_id=_acct,
+                conv_key=_ck, draft_id=draft_id,
                 text="", lang=str(analysis.get("language") or ""),
                 intent=str(analysis.get("intent") or ""),
                 emotion=str(analysis.get("emotion") or ""),
@@ -1162,6 +1171,7 @@ class DraftService:
                     conv_key=chat_key or conv_id, draft_id=draft_id, text=draft_text,
                     lang=str(lang or ""), intent=str(intent or ""),
                     emotion=str(emotion or ""), peer_text=t,
+                    peer_msg_id=self._latest_inbound_msg_id(conv_id, t),
                 )
             logger.info(
                 "auto_generate_draft OK conv=%s level=%s draft_id=%s shadow=%s hits=%s",
@@ -1265,6 +1275,9 @@ class DraftService:
                     conv_key=str(draft.get("chat_key") or draft.get("conversation_id") or ""),
                     draft_id=draft_id, text=reply,
                     lang=str(lang or ""), peer_text=str(draft.get("peer_text") or ""),
+                    peer_msg_id=self._latest_inbound_msg_id(
+                        str(draft.get("conversation_id") or ""),
+                        str(draft.get("peer_text") or "")),
                 )
             logger.info(
                 "enrich_draft OK draft_id=%s level=%s risk=%s shadow=%s hits=%s",
@@ -1278,6 +1291,7 @@ class DraftService:
         self, decision: _PolicyDecision, *, stage: str, platform: str,
         account_id: str, conv_key: str, draft_id: str, text: str,
         lang: str = "", intent: str = "", emotion: str = "", peer_text: str = "",
+        peer_msg_id: str = "",
     ) -> None:
         """影子台账落行 + stop_contact/self_harm 即时告警。best-effort，绝不影响发送。
 
@@ -1298,11 +1312,33 @@ class DraftService:
                 policy_mode=decision.policy_mode,
                 lang=lang, intent=intent, emotion=emotion, peer_text=peer_text,
                 persona_id=self._shadow_persona_id(platform, account_id, conv_key),
+                peer_msg_id=peer_msg_id,
             )
             _shadow_log.record(rec)
             _shadow_log.maybe_alert(rec)
         except Exception:
             logger.debug("autosend_shadow 记账失败（已忽略）", exc_info=True)
+
+    def _latest_inbound_msg_id(self, conversation_id: str, peer_text: str = "") -> str:
+        """触发拟稿的入站消息 id（与 autodraft_helpers.enrich_auto_draft 的 _peer_msg_id
+        同源：``list_recent_messages`` 里最近一条入站）。优先取正文与 ``peer_text`` 逐字
+        相同的那条（客户连发两条时不串行），否则取最新入站。只在影子落行时调用（低频）。"""
+        if self._store is None or not conversation_id:
+            return ""
+        try:
+            rows = self._store.list_recent_messages(conversation_id, limit=10) or []
+        except Exception:
+            return ""
+        want = str(peer_text or "").strip()
+        newest: Dict[str, Any] = {}
+        for r in rows:
+            if str(r.get("direction") or "in") != "in":
+                continue
+            if want and str(r.get("text") or "").strip() == want:
+                return str(r.get("message_id") or "")
+            if float(r.get("ts") or 0) >= float(newest.get("ts") or 0):
+                newest = r
+        return str(newest.get("message_id") or "") if newest else ""
 
     @staticmethod
     def _shadow_persona_id(platform: str, account_id: str, chat_key: str) -> str:
