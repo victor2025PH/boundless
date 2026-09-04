@@ -114,6 +114,51 @@ class TranslationMemoryStore:
             )
             self._conn.commit()
 
+    def delete(self, cache_key: str) -> bool:
+        """删一条记忆（#176：命中后被判「引擎拒绝话术」的坏译文要立刻作废，
+        否则每次命中都原样吐出、永不重验）。返回是否真删到行；异常 False。"""
+        if not cache_key:
+            return False
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "DELETE FROM translation_memory WHERE cache_key = ?", (cache_key,))
+                self._conn.commit()
+                return int(cur.rowcount or 0) > 0
+        except Exception:
+            logger.debug("[xlate_memory] delete 失败（已忽略）", exc_info=True)
+            return False
+
+    def delete_many(self, cache_keys) -> int:
+        """批量删（清洗 CLI 用）。返回实删行数；异常 0。"""
+        keys = [str(k) for k in (cache_keys or []) if k]
+        if not keys:
+            return 0
+        n = 0
+        try:
+            with self._lock:
+                for i in range(0, len(keys), 500):
+                    chunk = keys[i:i + 500]
+                    cur = self._conn.execute(
+                        "DELETE FROM translation_memory WHERE cache_key IN (%s)"
+                        % ",".join("?" * len(chunk)), tuple(chunk))
+                    n += int(cur.rowcount or 0)
+                self._conn.commit()
+        except Exception:
+            logger.debug("[xlate_memory] delete_many 失败（已忽略）", exc_info=True)
+        return n
+
+    def iter_rows(self, *, limit: int = 0):
+        """只读遍历全部记忆行（清洗 CLI 扫描用；不改 hit_count）。``limit``>0 截断。"""
+        sql = ("SELECT cache_key, source_text, translated_text, source_lang, "
+               "target_lang, style, engine, glossary_ver, hit_count, created_at, "
+               "last_hit_at FROM translation_memory ORDER BY created_at")
+        if limit and int(limit) > 0:
+            sql += " LIMIT %d" % int(limit)
+        with self._lock:
+            rows = self._conn.execute(sql).fetchall()
+        return [dict(r) for r in rows]
+
     def stats(self) -> Dict[str, Any]:
         with self._lock:
             row = self._conn.execute(

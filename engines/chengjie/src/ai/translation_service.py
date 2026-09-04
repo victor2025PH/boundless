@@ -391,12 +391,14 @@ class TranslationService:
         cached = self._cache_get(key)
         if cached is not None:
             cached.cached = True
+            self._log_xlate("cache", cached)
             return cached
         # L2：持久翻译记忆（跨重启命中）
         mem = self._memory_get(key)
         if mem is not None:
             mem.cached = True
             self._cache_put(key, mem)  # 回填 L1
+            self._log_xlate("memory", mem)
             return mem
 
         # P0-4 字符额度闸门：额度用尽且 licensing.enforce 开 → 阻断本次引擎翻译
@@ -473,6 +475,7 @@ class TranslationService:
                 error=res.error or "translate_failed",
             )
             self._cache_put(key, result)
+            self._log_xlate("engine", result)
             return result
 
         out = restore_protected(res.text, mapping)
@@ -488,6 +491,7 @@ class TranslationService:
                     provider=res.engine or "ai", error="engine_refusal",
                 )
                 self._cache_put(key, result)
+                self._log_xlate("engine", result)
                 return result
         except Exception:
             pass
@@ -515,7 +519,41 @@ class TranslationService:
                 add_translated_chars(len(src_text), source, target)
             except Exception:
                 pass
+        self._log_xlate("engine", result)
         return result
+
+    # #176（2026-09-05 skuio 实录）：「Exactly」→「好的，请发送需要翻译的内容。」——
+    # 0831 之前被 LLM 引擎写进翻译记忆的 meta 拒绝话术，每次命中记忆都原样吐出、
+    # 永不重验（守卫只挂在引擎新译分支）。命中路径现在先过同一判据：坏条目当场
+    # 作废（记忆删行 / L1 弹出）按 miss 处理走引擎重译。计数供看板/清洗对账。
+    _refusal_purged: Dict[str, int] = {"memory": 0, "cache": 0}
+
+    @staticmethod
+    def _is_stale_refusal(result: Optional["TranslationResult"]) -> bool:
+        if result is None or not result.ok:
+            return False
+        try:
+            from src.ai.translation_confidence import looks_like_engine_refusal
+            return looks_like_engine_refusal(
+                result.source_text, result.translated_text)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _log_xlate(hit: str, result: "TranslationResult") -> None:
+        """出口一行 INFO（#176 顺手补：入站翻译此前不记 INFO，事故窗口 01:13–01:17
+        零翻译日志）。**不记原文/译文**，只记命中层/引擎/长度/成败/错误码。"""
+        try:
+            logger.info(
+                "[xlate] hit=%s provider=%s src_len=%d ok=%s%s%s",
+                hit, result.provider or "-", len(result.source_text or ""),
+                "1" if result.ok else "0",
+                (" err=" + str(result.error)) if result.error else "",
+                (" conf=%.2f" % result.confidence)
+                if result.ok and result.confidence >= 0 else "",
+            )
+        except Exception:
+            pass
 
     def _memory_get(self, key: str) -> Optional[TranslationResult]:
         if self._memory_store is None:
@@ -534,6 +572,20 @@ class TranslationService:
             ok=True,
             provider=str(row.get("engine") or "ai"),
         )
+        if self._is_stale_refusal(result):
+            # 坏译文：删记忆行 → 本次按 miss 走引擎重译（新译成功才会重新入库；
+            # 新译仍是拒绝话术则只进短负缓存，绝不再进记忆）
+            try:
+                self._memory_store.delete(key)
+            except Exception:
+                pass
+            self._refusal_purged["memory"] = int(
+                self._refusal_purged.get("memory", 0)) + 1
+            logger.info(
+                "[xlate] memory hit rejected as engine_refusal → purged & retranslate "
+                "provider=%s src_len=%d", result.provider,
+                len(result.source_text or ""))
+            return None
         # P0-2：L2 记忆行不持久置信度（确定性评分随取随算，零成本零漂移）
         try:
             from src.ai.translation_confidence import translation_confidence
@@ -633,7 +685,14 @@ class TranslationService:
         if time.time() - ts > ttl:
             self._cache.pop(key, None)
             return None
-        return TranslationResult(**result.to_dict())
+        out = TranslationResult(**result.to_dict())
+        if self._is_stale_refusal(out):
+            # #176：L1 里也可能躺着记忆回填来的坏译文（进程重启前入的）→ 弹出按 miss
+            self._cache.pop(key, None)
+            self._refusal_purged["cache"] = int(
+                self._refusal_purged.get("cache", 0)) + 1
+            return None
+        return out
 
     def _cache_put(self, key: str, result: TranslationResult) -> None:
         if len(self._cache) >= self.max_cache_items:
