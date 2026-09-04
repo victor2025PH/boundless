@@ -14,6 +14,7 @@ from src.companion.goals.pace import (
     beat_cap,
     clamp_deadline_days,
     count_beats_for_cap,
+    default_pace_for_deadline,
     infer_pace_from_seconds,
     is_sprint,
     normalize_pace,
@@ -86,6 +87,17 @@ def test_infer_pace_from_span():
     assert infer_pace_from_seconds(45 * 60) == "session"
     assert infer_pace_from_seconds(8 * 3600) == "today"
     assert infer_pace_from_seconds(14 * 86400) == "natural"
+
+
+def test_default_pace_for_deadline_create_entry():
+    """#65 C1：建目标没给 pace → 按跨度落档；白名单外打回 natural。
+    显式 pace（含显式 natural）尊重客户端。"""
+    assert default_pace_for_deadline("custom", 60 / 1440.0) == "session"
+    assert default_pace_for_deadline("custom", 8 / 24.0) == "today"
+    assert default_pace_for_deadline("custom", 14.0) == "natural"
+    assert default_pace_for_deadline("relationship_intimacy", 0.04) == "natural"
+    assert default_pace_for_deadline("custom", 0.04, explicit="natural") == "natural"
+    assert default_pace_for_deadline("custom", 14.0, explicit="session") == "session"
 
 
 def test_resolve_pace_params_win_then_infer():

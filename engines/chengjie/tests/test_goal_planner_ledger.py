@@ -327,6 +327,25 @@ class TestSettleCustom:
         assert res["milestone_idx"] == 3
         assert res["progress"] == 0.95
 
+    def test_sprint_beats_climb_progress_clock_alone_stays_low(self):
+        """#65 C1：3 小时 custom 聊了 16 分钟，纯时间口径 ≈9%；
+        extras.sprint_beats 按拍爬（natural 不带这两个键 → 一字不变）。"""
+        start = NOW - 16 * 60
+        deadline = start + 3 * 3600
+        g = _goal("custom", start_ts=start, deadline_ts=deadline,
+                  params={"pace": "today"})
+        clock = _settle(g, _sig())
+        assert clock["status"] == "active"
+        assert clock["progress"] < 0.15          # ~9%，用户原话卡在个位数
+        beat1 = _settle(g, _sig(extras={"sprint_beats": 1, "sprint_cap": 4}))
+        assert beat1["progress"] >= 0.20
+        beat2 = _settle(g, _sig(extras={"sprint_beats": 2, "sprint_cap": 4}))
+        assert beat2["progress"] > beat1["progress"]
+        # 无 extras = natural 路径，与 clock 逐字一致
+        natural = _settle(g, _sig())
+        assert natural["progress"] == clock["progress"]
+        assert natural["milestone_idx"] == clock["milestone_idx"]
+
     def test_custom_expires_after_deadline(self):
         goal = _goal("custom", start_ts=NOW - 20 * _DAY,
                      deadline_ts=NOW - 6 * _DAY)

@@ -182,9 +182,33 @@ class TestCreate:
                     deadline_days=60 / 1440.0)
         assert r.status_code == 400
 
-    def test_create_natural_still_clamps_below_one_day(self):
+    def test_create_without_pace_autofalls_by_deadline_span(self):
+        """#65 C1（2026-09-04）：客户端没给 pace 的子日期限 → 按跨度自动落档
+        （≤2.5h session / <20h today），子日跨度原样入库——旧行为「一律
+        natural 再夹成 1 天」正是 60 分钟目标在库里永远是 1 天 natural
+        的入口失真。8h 落 today 而非 session：session 夹限 15–120 分。"""
         client, _ = _build_client()
-        r = _create(client, deadline_days=0.04)
+        r = _create(client, deadline_days=0.04)      # conversion_unlock ∈ SPRINT_OK
+        assert r.status_code == 200
+        g = r.json()["goal"]
+        assert g["pace"] == "session" and g["params"]["pace"] == "session"
+        span = float(g["deadline_ts"]) - float(g["start_ts"])
+        assert abs(span - 0.04 * 86400.0) < 2.0
+        # 8 小时 → today
+        r2 = _create(client, conv="telegram:a1:c8h", template="custom",
+                     deadline_days=8 / 24.0)
+        assert r2.json()["goal"]["pace"] == "today"
+        # 白名单外模板（关系）子日期限仍走 natural（夹成 1 天），不放开
+        r3 = _create(client, conv="telegram:a1:crel",
+                     template="relationship_intimacy", deadline_days=0.04)
+        assert r3.status_code == 200
+        assert r3.json()["goal"]["pace"] == "natural"
+        assert r3.json()["goal"]["total_days"] == 1
+
+    def test_create_explicit_natural_still_clamps_below_one_day(self):
+        """显式 pace=natural 是坐席/客户端的明示选择 → 仍按 natural 夹到 ≥1 天。"""
+        client, _ = _build_client()
+        r = _create(client, pace="natural", deadline_days=0.04)
         assert r.status_code == 200
         g = r.json()["goal"]
         assert g["pace"] == "natural"

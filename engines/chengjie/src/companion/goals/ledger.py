@@ -213,6 +213,22 @@ def settle_goal(
         frac = max(0.0, min(1.0, _elapsed_days(goal, n) / total))
         mi = max(mi, min(3, int(frac * 4)))
         progress = max(progress, round(min(0.95, frac), 3))
+        # #65 C1（2026-09-04）：限时档（today/session）进度按「已出手的拍」爬。
+        # 纯时间口径在 3 小时目标里＝聊了半小时还是 9%（用户原话），看着像没执行。
+        # service 只在 sprint 时塞 extras.sprint_beats/sprint_cap（natural 不带
+        # 这两个键 → 本段零感知，行为逐字不变）。单调不回退、仍绝不自动完成
+        # （封顶 0.9：拍打满＝「该说的都说了」，成没成要看对方/人工确认）。
+        beats_raw = signals.extras.get("sprint_beats")
+        if beats_raw is not None:
+            try:
+                beats = max(0, int(beats_raw))
+                cap = max(1, int(signals.extras.get("sprint_cap") or 3))
+            except (TypeError, ValueError):
+                beats, cap = 0, 3
+            if beats > 0:
+                mi = max(mi, min(3, beats))
+                progress = max(progress, round(
+                    min(0.9, beats / float(cap) * 0.9), 3))
 
     # ── 时间相位（模板声明 phase_days 才生效；存量模板零行为变更）──────────────
     # 兑底：天窗过了信号还没到 → 按时推进（「1-3 天摸底、7-10 天收口」的硬保证）；

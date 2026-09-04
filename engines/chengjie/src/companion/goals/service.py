@@ -168,9 +168,17 @@ def refresh_goal(
     negative_emotion: bool = False,
     emotion_intensity: float = -1.0,
     now: Optional[float] = None,
+    inbound_turn: bool = False,
 ) -> Dict[str, Any]:
     """结算 + 当日拍规划的单一入口。返回
-    ``{"goal": 最新行, "action": 今日拍|None, "hold": 原因|None}``。绝不抛。"""
+    ``{"goal": 最新行, "action": 今日拍|None, "hold": 原因|None}``。绝不抛。
+
+    ``inbound_turn``（#65 C1）：本次调用由对方**本条入站**触发（注入链传
+    ``inbound_text`` 非空）。inbox 侧读不到入站时刻（standalone / 镜像未开 /
+    store 未就绪）时把「对方刚开口」锚在 ``now``——否则 session 档整段只有
+    ``s:0`` 一个槽、退避计数把历史全部算成「没回还在推」，两三拍后永久 hold。
+    inbox 有值时一律以 inbox 为准（不动既有口径）。
+    """
     n = float(now if now is not None else time.time())
     out: Dict[str, Any] = {"goal": goal, "action": None, "hold": None}
     try:
@@ -187,6 +195,37 @@ def refresh_goal(
             emotion_intensity=emotion_intensity,
             now=n,
         )
+        if inbound_turn and float(signals.last_inbound_ts or 0) <= 0:
+            signals.last_inbound_ts = n
+        # 节奏档在结算前就要知道（#65 C1）：限时档的进度按「已出手的拍」爬，
+        # 结算器要吃 sprint_beats/sprint_cap 信号；natural 不带这两个键 → 结算
+        # 器零感知（回归钉：natural 行为逐字不变）。
+        from src.companion.goals.pace import (
+            DEFAULT_ESCALATE_AT,
+            count_beats_for_cap,
+            effective_beat_cap,
+            is_sprint,
+            planner_thresholds,
+            remaining_sec as _rem_sec,
+            resolve_pace,
+            slot_key,
+            sprint_push,
+            total_sec as _tot_sec,
+        )
+        pace = resolve_pace(goal)
+        sprint = is_sprint(pace)
+        # P1 推进力加度：冲刺配置覆写 + 全力模式（params.sprint_mode，用户逐
+        # 目标显式拍板）+ 剩余占比（收口升档判据）。
+        scfg: Dict[str, Any] = {}
+        sprint_mode = ""
+        if sprint:
+            try:
+                from src.companion.goals.sprint_ticker import parse_sprint_cfg
+                scfg = parse_sprint_cfg(resolve_goals_cfg(cfg_root))
+            except Exception:
+                scfg = {}
+            sprint_mode = str(
+                (goal.get("params") or {}).get("sprint_mode") or "")
         # 画像双轨完成度（P1）：模板声明 profile_slots → 读画像卡 → signals.extras
         # （acquire_and_convert 结算据 bant_fill 推「摸底完成」里程碑）。
         if template.get("profile_slots"):
@@ -216,15 +255,25 @@ def refresh_goal(
         stats = get_goal_stats()
 
         # 「已开价」证据：direct 拍进入过生成/发出（转化模板里程碑 3 的推进条件）
+        # + 已出手拍数（#65 C1：限时档进度信号——consumed/sent 且非陪伴 none 拍）
         direct_engaged = False
+        engaged_beats = 0
         try:
             for a in store.list_actions(gid, limit=60):
-                if (str(a.get("push_level")) == "direct"
-                        and str(a.get("status")) in ("consumed", "sent")):
+                if str(a.get("status")) not in ("consumed", "sent"):
+                    continue
+                lvl = str(a.get("push_level") or "")
+                if lvl != "none":
+                    engaged_beats += 1
+                if lvl == "direct":
                     direct_engaged = True
-                    break
         except Exception:
             direct_engaged = False
+            engaged_beats = 0
+        if sprint:
+            signals.extras["sprint_beats"] = engaged_beats
+            signals.extras["sprint_cap"] = effective_beat_cap(
+                pace, overrides=scfg, mode=sprint_mode)
 
         res = settle_goal(
             template_id=tid, template=template, goal=goal, signals=signals,
@@ -267,34 +316,10 @@ def refresh_goal(
 
         # 拍槽位：natural=日历日；today=小时；session=对方本条入站。
         # 限时档绝不能再走「每天一拍」——60 分钟目标否则整段只有一拍、到期必 expired。
-        from src.companion.goals.pace import (
-            DEFAULT_ESCALATE_AT,
-            count_beats_for_cap,
-            effective_beat_cap,
-            is_sprint,
-            planner_thresholds,
-            remaining_sec as _rem_sec,
-            resolve_pace,
-            slot_key,
-            sprint_push,
-            total_sec as _tot_sec,
-        )
-        pace = resolve_pace(goal)
-        sprint = is_sprint(pace)
-        # P1 推进力加度：冲刺配置覆写 + 全力模式（params.sprint_mode，用户逐
-        # 目标显式拍板）+ 剩余占比（收口升档判据）。
-        scfg: Dict[str, Any] = {}
-        sprint_mode = ""
+        # （pace / sprint / scfg / sprint_mode 已在结算前算好，见上）
         rem_ratio: Optional[float] = None
         closing = False
         if sprint:
-            try:
-                from src.companion.goals.sprint_ticker import parse_sprint_cfg
-                scfg = parse_sprint_cfg(resolve_goals_cfg(cfg_root))
-            except Exception:
-                scfg = {}
-            sprint_mode = str(
-                (goal.get("params") or {}).get("sprint_mode") or "")
             _tot = _tot_sec(goal)
             if _tot > 0:
                 rem_ratio = _rem_sec(goal, n) / _tot
@@ -1122,7 +1147,8 @@ def build_block_for_chat(
                 logger.debug("goal mood hold override skipped", exc_info=True)
         res = refresh_goal(
             store, cfg_root, goal, inbox_store=inbox_store,
-            negative_emotion=neg, now=now)
+            negative_emotion=neg, now=now,
+            inbound_turn=bool(str(inbound_text or "").strip()))
         if res.get("hold") or str((res.get("goal") or {}).get("status")) != "active":
             _note_meta(
                 False, "hold" if res.get("hold") else "inactive",

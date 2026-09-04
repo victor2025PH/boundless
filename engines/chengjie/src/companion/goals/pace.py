@@ -87,6 +87,39 @@ def infer_pace_from_goal(goal: Optional[Dict[str, Any]]) -> str:
     return infer_pace_from_seconds(deadline - start)
 
 
+def default_pace_for_deadline(
+    template_id: str,
+    deadline_days: Any,
+    explicit: Any = None,
+) -> str:
+    """建目标入口的节奏落值（#65 C1，2026-09-04）。
+
+    - 客户端**显式**给了 pace（含显式 ``natural``）→ 尊重它（仍过白名单，
+      白名单外打回 natural；400 由路由层判）；
+    - 没给 → 按期限跨度回推（≤2.5h session / <20h today / 其余 natural），
+      白名单外模板一律 natural。阈值对齐 ``clamp_deadline_days`` 三档区间
+      （session 15–120 分 / today 2–12 时 / natural ≥1 天）——不能按字面
+      「<1 天全 session」，否则 3–8 小时目标会被 session 夹成 2 小时。
+
+    修的是入口失真：旧路由把「没给 pace」当 natural → ``clamp_deadline_days``
+    把 60 分钟目标夹成 1 天——``resolve_pace`` 的跨度回推在库里永远见不到
+    子日跨度，节奏档形同虚设。坐席表单**不必**暴露 pace：系统按期限自己判。
+    """
+    tid = str(template_id or "")
+    exp = str(explicit or "").strip()
+    if exp:
+        p = normalize_pace(exp)
+        return p if pace_allowed(tid, p) else "natural"
+    try:
+        d = float(deadline_days or 0)
+    except (TypeError, ValueError):
+        d = 0.0
+    if d <= 0:
+        return "natural"
+    inferred = infer_pace_from_seconds(d * _DAY)
+    return inferred if pace_allowed(tid, inferred) else "natural"
+
+
 def resolve_pace(goal: Optional[Dict[str, Any]]) -> str:
     """生效节奏：params.pace（校验模板白名单）→ 期限跨度回推 → natural。"""
     if not isinstance(goal, dict):
@@ -323,6 +356,7 @@ __all__ = [
     "beat_cap",
     "clamp_deadline_days",
     "count_beats_for_cap",
+    "default_pace_for_deadline",
     "effective_beat_cap",
     "infer_pace_from_goal",
     "infer_pace_from_seconds",

@@ -409,6 +409,75 @@ class TestSprintPaceRefresh:
         assert act["push_level"] == "none"
         assert act["intent"] in CARE_INTENTS
 
+    def test_inbound_turn_anchors_slot_when_inbox_has_no_ts(self):
+        """inbox 读不到入站时刻时，inbound_turn 把本条开口锚在 now，
+        否则 session 整段只有 s:0、两三拍后永久 hold。"""
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:805", platform="telegram",
+            account_id="a1", chat_key="805", template="custom",
+            params={"pace": "session"}, deadline_days=60 / 1440.0, now=now)
+        r1 = refresh_goal(store, cfg, goal, now=now, inbound_turn=True)
+        r2 = refresh_goal(store, cfg, goal, now=now + 40, inbound_turn=True)
+        assert r1["action"]["day"] == f"s:{int(now)}"
+        assert r2["action"]["day"] == f"s:{int(now + 40)}"
+        assert r1["action"]["action_id"] != r2["action"]["action_id"]
+        assert str(r1["goal"]["status"]) == "active"
+        assert str(r2["goal"]["status"]) == "active"
+
+    def test_session_injects_within_three_inbound_turns(self):
+        """#65 验收：60 分钟 custom 在 3 个入站回合内至少注入 1 次，且不 expired。"""
+        now = time.time()
+        cfg = _cfg_obj()
+        store = get_configured_store(cfg.config, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:806", platform="telegram",
+            account_id="a1", chat_key="806", template="custom",
+            params={"pace": "session", "note": "要到TA的微信"},
+            deadline_days=60 / 1440.0, now=now)
+        injected = 0
+        for i in range(3):
+            t = now + i * 25
+            ctx = {}
+            block = build_block_for_chat(
+                cfg, platform="telegram", chat_key="806", account_id="a1",
+                conversation_id="telegram:a1:806",
+                inbound_text=f"在吗 {i}",
+                inbox_store=_InboxTs(t),
+                user_context=ctx, now=t)
+            if block:
+                injected += 1
+            g = store.get_goal(goal["goal_id"])
+            assert g["status"] == "active"
+        assert injected >= 1
+        assert store.get_goal(goal["goal_id"])["status"] == "active"
+
+    def test_today_progress_climbs_after_consumed_beats(self):
+        """3 小时 today 档：拍被消耗后进度按拍爬，不是卡在时钟个位数。"""
+        now = time.time()
+        cfg = _enabled_cfg()
+        cfg["companion"]["goals"]["db_path"] = ":memory:"
+        store = get_configured_store(cfg, None)
+        goal = store.create_goal(
+            conversation_id="telegram:a1:807", platform="telegram",
+            account_id="a1", chat_key="807", template="custom",
+            params={"pace": "today"}, deadline_days=3 / 24.0, now=now)
+        t1 = now + 16 * 60
+        r1 = refresh_goal(store, cfg, goal, inbox_store=_InboxTs(t1), now=t1)
+        act = r1["action"]
+        assert act is not None
+        assert store.mark_action(act["action_id"], "consumed")
+        t2 = t1 + 3600
+        r2 = refresh_goal(
+            store, cfg, store.get_goal(goal["goal_id"]),
+            inbox_store=_InboxTs(t2), now=t2)
+        g2 = r2["goal"]
+        assert g2["status"] == "active"
+        assert float(g2["progress"] or 0) >= 0.20
+
 
 def test_outcome_report_by_pace(mem_store):
     """报表按节奏拆终态：params.pace/期限跨度 → natural/session 分桶，

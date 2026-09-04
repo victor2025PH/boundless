@@ -1067,9 +1067,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         params_in = body.get("params") if isinstance(
             body.get("params"), dict) else {}
         params_in = dict(params_in)
-        pace = normalize_pace(body.get("pace") or params_in.get("pace"))
+        _explicit_pace = body.get("pace") or params_in.get("pace")
+        pace = normalize_pace(_explicit_pace)
         if not pace_allowed(template_id, pace):
             raise HTTPException(400, tr(request, "err.goals.pace_not_allowed"))
+        if not str(_explicit_pace or "").strip():
+            # #65 C1（2026-09-04）：客户端没给 pace → 按期限跨度自动落档
+            # （≤2.5h session / <20h today）。此前一律 natural，下一行
+            # clamp 把 60 分钟目标夹成 1 天——子日跨度进不了库，节奏档形同虚设。
+            from src.companion.goals.pace import default_pace_for_deadline
+            pace = default_pace_for_deadline(template_id, deadline_days)
         deadline_days = clamp_deadline_days(
             pace, deadline_days,
             default_days=float(tmpl.get("default_days") or 14))
