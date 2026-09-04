@@ -614,6 +614,14 @@
     <div class="grid" id="bubblesKpis"></div>
     <div id="bubblesDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
+  <!-- I-4（2026-09-04）：#40 地区语气档 + #37 自动链引用回复 观测卡。数据源
+       /api/workspace/metrics.persona_region + .spoken_style.l1_region_inject 与
+       /api/drafts/autosend-status.worker.quote_reply；两侧都无流量且引用未开 → 整卡隐藏。 -->
+  <section id="regionQuoteSection" style="display:none;">
+    <h2>🗣️ {{ (i18n or {}).get('ov2_s_rq', "地区语气档 · 自动链引用回复（I-4 #40/#37）") }}</h2>
+    <div class="grid" id="regionQuoteKpis"></div>
+    <div id="regionQuoteDetail" style="margin-top:8px;"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
 
   <section id="realWorldSection" style="display:none;">
     <h2>🌍 {{ (i18n or {}).get('ov2_s_rw', "真实世界接轨（人设当地时钟 / 天气 / 客户时区 / 双侧节日）") }}</h2>
@@ -7583,6 +7591,56 @@ async function loadReplyBubbles(){
     det.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_bb_note')+'</div>';
   }catch(_){ sec.style.display='none'; }
 }
+async function loadRegionQuote(){
+  // I-4：#40 地区语气档（metrics.persona_region + spoken_style.l1_region_inject）
+  //     + #37 自动链引用回复（autosend-status.worker.quote_reply）。
+  // 两个数据源各自失败不拖累另一半；两侧都零流量且引用未开 → 整卡隐藏（站内惯例）。
+  var sec = document.getElementById('regionQuoteSection');
+  var kp = document.getElementById('regionQuoteKpis');
+  var det = document.getElementById('regionQuoteDetail');
+  if(!sec || !kp || !det) return;
+  try{
+    var pr = {}, ss = {}, qr = null, denied = false;
+    try{
+      const r1 = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
+      if(r1.status === 403){ denied = true; }
+      else if(r1.ok){ const m = await r1.json(); pr = m.persona_region || {}; ss = m.spoken_style || {}; }
+    }catch(_){ }
+    try{
+      const r2 = await apiFetch('/api/drafts/autosend-status', {credentials:'same-origin'});
+      if(r2.status === 403){ denied = true; }
+      else if(r2.ok){ const d = await r2.json(); qr = ((d && d.worker) || {}).quote_reply || null; }
+    }catch(_){ }
+    if(denied && !qr && !Object.keys(pr).length){ opsHideCardEl(sec, 'rq', 'no_access'); return; }
+    var inj = Number(ss.l1_region_inject||0);
+    var obs = Number(pr.observed||0);
+    var q = qr || {};
+    var decided = Number(q.decided||0);
+    if(!inj && !obs && !decided && !q.enabled){ opsHideCardEl(sec, 'rq', 'no_data'); return; }
+    opsShowCardEl(sec, 'rq');
+    function pct(n, d){ return d>0 ? Math.round(n/d*100)+'%' : '—'; }
+    var src = ['persona','dialect','location','outbound','default'].map(function(k){
+      var v = Number(pr['resolve_'+k]||0); return v ? (window.T('ov2_rq_src_'+k)+' '+fmt(v)) : '';
+    }).filter(Boolean);
+    var skipped = q.skipped || {};
+    var skParts = Object.keys(skipped).sort(function(a,b){ return (skipped[b]||0)-(skipped[a]||0); })
+      .map(function(k){ return k+' '+fmt(skipped[k]); });
+    var kpis = [
+      {label:window.T('ov2_rq_inject'), value:fmt(inj)+' · '+(src.length?src.join(' / '):'—')},
+      {label:window.T('ov2_rq_banned'), value:fmt(pr.banned_hit||0)+' / '+fmt(obs)+' ('+pct(Number(pr.banned_hit||0), obs)+')'},
+      {label:window.T('ov2_rq_script'), value:fmt(pr.script_hit||0)+' / '+fmt(obs)+' ('+pct(Number(pr.script_hit||0), obs)+')'},
+      {label:window.T('ov2_rq_quote'), value:(qr ? (q.enabled ? window.T('ov2_rq_on') : window.T('ov2_rq_off')) : '—')+' · '+fmt(q.quoted||0)+' / '+fmt(decided)+' ('+pct(Number(q.quoted||0), decided)+')'},
+      {label:window.T('ov2_rq_applied'), value:fmt(q.applied||0)+' · '+window.T('ov2_rq_fallback')+' '+fmt(q.fallback_plain||0)},
+      {label:window.T('ov2_rq_skipped'), value:skParts.length?skParts.join(' · '):'—'},
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+        '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';
+    }).join('');
+    var thr = qr ? (' · '+window.T('ov2_rq_thr')+' '+fmt(q.min_unanswered||0)+' / '+(Number(q.min_relevance||0).toFixed(2))) : '';
+    det.innerHTML = '<div class="muted" style="font-size:12px;">'+window.T('ov2_rq_note')+thr+'</div>';
+  }catch(_){ sec.style.display='none'; }
+}
 async function loadChainFunnel(){
   var sec = document.getElementById('chainFunnelSection');
   var kp = document.getElementById('chainFunnelKpis');
@@ -8361,6 +8419,7 @@ var OPS_CARDS = [
   // ── 增长与触达 ──
   {key:'proactive',group:'growth',  anchor:'proactiveEngKpis', loaders:[loadProactiveEngagement]},
   {key:'bubbles',  group:'growth',  anchor:'bubblesKpis',      loaders:[loadReplyBubbles]},
+  {key:'rq',       group:'growth',  anchor:'regionQuoteKpis',  loaders:[loadRegionQuote]},
   {key:'rw',       group:'growth',  anchor:'realWorldKpis',    loaders:[loadRealWorld]},
   {key:'bazi',     group:'growth',  anchor:'baziKpis',         loaders:[loadBazi]},
   {key:'originp',  group:'growth',  anchor:'originProfileKpis',loaders:[loadFrontendErrors]},
@@ -8444,6 +8503,7 @@ var _OPS_HIDE_HINT = {
   care:     {reason:'disabled'},
   proactive:{reason:'disabled'},
   bubbles:  {reason:'no_data'},
+  rq:       {reason:'no_data'},
   asmedia:  {reason:'disabled'},
   ededup:   {reason:'no_data'},
   ishadow:  {reason:'disabled'},

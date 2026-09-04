@@ -270,6 +270,20 @@ def register_drafts_routes(app, *, api_auth):
         except Exception:
             pass
         try:
+            # #37 自动链引用回复（I-4 D2）：decided/quoted/skipped{single_inbound,
+            # low_relevance,…}/applied/fallback_plain + 配置回显（enabled/地板）——
+            # 「开了却 decided 恒 0」＝接线断；「low_relevance 占比高」＝地板该调。
+            from src.inbox import reply_quote_policy as _rqp
+            _qr = _rqp.stats_snapshot()
+            _cm_q = getattr(request.app.state, "config_manager", None)
+            _qcfg = _rqp.parse_quote_cfg(getattr(_cm_q, "config", None) or {})
+            _qr["enabled"] = bool(_qcfg.get("enabled"))
+            _qr["min_unanswered"] = int(_qcfg.get("min_unanswered") or 0)
+            _qr["min_relevance"] = float(_qcfg.get("min_relevance") or 0)
+            snap["quote_reply"] = _qr
+        except Exception:
+            pass
+        try:
             # Phase18：主动触达分形态回复率（photo/voice/text A/B）——数据源 outreach_log，
             # 看板「数据健康」卡直读本端点即可渲染，无需再打 companion 路由。
             _ibx = getattr(request.app.state, "inbox_store", None)
@@ -1248,6 +1262,15 @@ def register_metrics_route(app, *, api_auth):
         try:
             from src.ai.spoken_style_bridge import stats as _spoken_style_stats
             metrics["spoken_style"] = _spoken_style_stats()
+        except Exception:
+            pass
+        # #40 地区语气档（I-4 D1）：resolve_* 各解析来源计数（人设显式/粤语 dialect/
+        # 居住地/会话「发→」/全局默认）+ observed（非 CN 档出站被观测条数）+
+        # banned_hit（命中大陆口语禁用词）+ script_hit（繁體档漏简体字）。
+        # 命中率 = hit/observed；高了再决定要不要 L4 带负样本重写（现只观测不改文本）。
+        try:
+            from src.ai.persona_region import stats as _persona_region_stats
+            metrics["persona_region"] = _persona_region_stats()
         except Exception:
             pass
 

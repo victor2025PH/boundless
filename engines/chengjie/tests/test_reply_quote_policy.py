@@ -342,3 +342,63 @@ def test_autosend_bubbles_only_first_part_quotes(monkeypatch):
     assert res.get("parts_sent") == 3
     assert seen[0][1] is not None and seen[0][1]["id"] == "22"
     assert seen[1][1] is None and seen[2][1] is None
+
+
+# ── 观测暴露面（I-4 续，2026-09-04）：autosend-status.quote_reply / metrics.persona_region ──
+
+def _obs_client(config: dict):
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from src.web.routes.drafts_routes import register_drafts_routes, register_metrics_route
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _inj(request: Request, call_next):
+        request.scope["session"] = {"role": "admin", "user_id": "u1", "username": "u1"}
+        return await call_next(request)
+
+    # 本文件 `from __future__ import annotations` → 注解是字符串，FastAPI 要在模块
+    # 全局里解析 `Request`；局部导入解析不到会把 r 当 query 参数（422）。故不注解。
+    def _api_auth():
+        return True
+
+    register_drafts_routes(app, api_auth=_api_auth)
+    register_metrics_route(app, api_auth=_api_auth)
+    app.state.config_manager = SimpleNamespace(config=config)
+    app.state.autosend_worker = SimpleNamespace(
+        status_snapshot=lambda: {"running": True, "enabled": True})
+    return TestClient(app, raise_server_exceptions=True)
+
+
+def test_autosend_status_exposes_quote_reply_stats_and_cfg():
+    rqp.reset_stats()
+    rqp.record_decision(decide_quote(_ROWS3, "那家火锅店叫蜀大侠", cfg={"enabled": True}))
+    rqp.record_decision(decide_quote([_m("in", "在吗", NOW - 5, "1")], "在的", cfg={"enabled": True}))
+    rqp.record_fallback_plain()
+    c = _obs_client({"inbox": {"l2_autosend": {"quote_reply": {
+        "enabled": True, "min_relevance": 0.2}}}})
+    q = c.get("/api/drafts/autosend-status").json()["worker"]["quote_reply"]
+    assert q["enabled"] is True
+    assert q["min_unanswered"] == 2 and q["min_relevance"] == 0.2
+    assert q["decided"] == 2 and q["quoted"] == 1
+    assert q["skipped"] == {"single_inbound": 1}
+    assert q["fallback_plain"] == 1
+    # 未配置 → enabled=False 回显（「没开」与「没流量」可区分）
+    c2 = _obs_client({})
+    assert c2.get("/api/drafts/autosend-status").json()["worker"]["quote_reply"]["enabled"] is False
+
+
+def test_metrics_exposes_persona_region_stats():
+    from src.ai import persona_region as pr
+    pr.note_banned_hits("你什么时候来，这个说的对", "zh-HK")
+    c = _obs_client({})
+    m = c.get("/api/workspace/metrics").json()
+    reg = m.get("persona_region")
+    assert reg is not None
+    for k in ("resolve_persona", "resolve_dialect", "resolve_location",
+              "resolve_outbound", "resolve_default", "banned_hit", "script_hit", "observed"):
+        assert k in reg, k
+    assert reg["observed"] >= 1 and reg["banned_hit"] >= 1 and reg["script_hit"] >= 1
+    # spoken_style 段仍在（地区块注入计数 l1_region_inject 从这里读）
+    assert "l1_region_inject" in (m.get("spoken_style") or {})

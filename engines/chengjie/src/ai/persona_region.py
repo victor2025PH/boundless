@@ -159,7 +159,12 @@ def region_block(region: str) -> str:
         return ""
     lines = [f"【地區語氣｜{p['label']}】你是{p['label']}人，中文要像{p['label']}本地人在聊天，而不是大陸腔。"]
     if p.get("script"):
-        lines.append(f"- 字形：全程{p['script']}字。")
+        # 字形硬钉子（I-4 续，2026-09-04）：#36 实弹实锤只说「繁體」LLM 会出「有冇/食饭」
+        # 简体粤文混排——把最高频的简体字当负样本点名，比一句「全程繁體」硬得多。
+        lines.append(
+            f"- 【字形硬性要求】每一個字都用{p['script']}字，粵語用字也一樣（係/唔/嘅/咩/佢/喺/嗰）。"
+            "簡體字一個都不許出現，尤其這些最容易漏的：" + "、".join(_SIMPLIFIED_MARKERS) + "。"
+        )
     if p.get("particles"):
         lines.append("- 句尾語氣詞自然地用這些（別每句都加，兩三句出現一次就好）：" + "、".join(p["particles"]) + "。")
     for pat in p.get("patterns") or []:
@@ -170,6 +175,34 @@ def region_block(region: str) -> str:
 
 
 # ─────────────────────────── 禁用词命中观测（不改文本，只计数） ────────────────
+
+# 高频「简体独有」字（对应繁体字形不同）：只用于 script=繁體 档的出站观测——
+# 命中＝LLM 漏了字形要求。刻意只挑简繁**必不同**的字（「的/是」简繁同形不在内），
+# 且都是日常聊天里几乎每句必出的字，漏一个就抓得到。
+_SIMPLIFIED_MARKERS: tuple = (
+    "这", "说", "吗", "们", "么", "为", "会", "发", "时", "间", "过", "还", "没",
+    "来", "对", "后", "个", "开", "见", "让", "请", "谢", "点", "东", "买", "钱",
+    "饭", "习", "书", "车", "电", "话", "问", "题", "关", "系", "现", "样",
+)
+_SIMPLIFIED_RE = re.compile("[" + "".join(_SIMPLIFIED_MARKERS) + "]")
+
+
+def find_simplified_chars(text: str, region: str) -> list:
+    """繁體档回复里出现的简体特征字（去重、按出现顺序）。非繁體档 / 空文本恒空。
+
+    与 ``find_banned_words`` 同哲学：只观测不改写（简→繁改写归 #36 的出向翻译栈，
+    这里再做一套＝双源）。
+    """
+    reg = normalize_region(region)
+    if not reg or not text:
+        return []
+    if not (REGION_PROFILES.get(reg, {}).get("script")):
+        return []
+    seen: list = []
+    for ch in _SIMPLIFIED_RE.findall(text):
+        if ch not in seen:
+            seen.append(ch)
+    return seen
 
 # 单字禁用词只在「独立成词」高置信位置计数（否则「賊船」「忒斯拉」全误报）；
 # 没登记上下文正则的单字（咱/俺/啥/咋）本身就是特征字，直接子串匹配。
@@ -214,6 +247,8 @@ _STATS: Dict[str, int] = {
     "resolve_outbound": 0,     # 由会话「发→」变体决定
     "resolve_default": 0,      # 回落全局默认
     "banned_hit": 0,           # 出站回复命中禁用词（观测）
+    "script_hit": 0,           # 繁體档回复漏出简体特征字（观测）
+    "observed": 0,             # 非 CN 档出站回复被观测的总条数（命中率分母）
 }
 
 
@@ -355,9 +390,18 @@ def resolve_region_from_context(config: Any, context: Any) -> str:
 
 
 def note_banned_hits(reply: str, region: str) -> list:
-    """出站观测：命中禁用词就计数 + INFO 一行（不改文本）。"""
+    """出站观测：命中禁用词 / 繁體档漏简体字 就计数 + INFO 一行（不改文本）。
+
+    返回禁用词命中列表（保持旧契约）；简体字命中只计 ``script_hit`` 与日志。
+    ``observed`` 每调用 +1＝命中率分母（ops 卡按 hit/observed 读）。
+    """
+    _bump("observed")
     hits = find_banned_words(reply, region)
     if hits:
         _bump("banned_hit")
         logger.info("[persona_region] %s 档回复命中禁用词 %s", region, hits)
+    sc = find_simplified_chars(reply, region)
+    if sc:
+        _bump("script_hit")
+        logger.info("[persona_region] %s 档回复漏出简体字 %s", region, sc)
     return hits

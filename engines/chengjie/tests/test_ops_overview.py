@@ -1227,3 +1227,39 @@ def test_ksguard_card_i18n_keys_bilingual():
     for k in keys:
         assert ZH.get(k), k
         assert EN.get(k), k
+
+
+# ── 「🗣️ 地区语气档 · 自动链引用回复」卡（I-4 #40/#37，2026-09-04）──────────────
+
+def test_region_quote_card_renders_and_registered():
+    """卡片三件套（section / loader / 注册表 + 隐藏原因表）+ 双数据源 + 零流量隐藏惯例。
+
+    D1/D2 都是「只观测不改文本 / 只引用不阻塞」的保守设计，没有这张卡，
+    禁用词命中率与 low_relevance 占比只能翻日志，调参判据就不存在。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    assert 'id="regionQuoteSection"' in src
+    assert "async function loadRegionQuote()" in src
+    assert "m.persona_region" in src                       # 数据源 1：metrics 段
+    assert ".quote_reply" in src                           # 数据源 2：autosend-status.worker
+    assert "anchor:'regionQuoteKpis'" in src               # 卡片注册表
+    assert "rq:       {reason:'no_data'}" in src           # 隐藏原因表
+    # 两侧零流量且引用未开 → 整卡隐藏（引用已开但零流量仍显示＝证明「在岗」）
+    assert "if(!inj && !obs && !decided && !q.enabled)" in src
+
+
+def test_region_quote_card_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_s_rq", "ov2_rq_inject", "ov2_rq_src_persona", "ov2_rq_src_dialect",
+            "ov2_rq_src_location", "ov2_rq_src_outbound", "ov2_rq_src_default",
+            "ov2_rq_banned", "ov2_rq_script", "ov2_rq_quote", "ov2_rq_on", "ov2_rq_off",
+            "ov2_rq_applied", "ov2_rq_fallback", "ov2_rq_skipped", "ov2_rq_thr",
+            "ov2_rq_note")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k

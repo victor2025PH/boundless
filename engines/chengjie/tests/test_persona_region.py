@@ -96,6 +96,43 @@ def test_find_banned_words_hk():
     assert pr.find_banned_words("你幾時返嚟呀，點解唔開心喎", "zh-HK") == []
 
 
+def test_hk_block_has_hard_script_pin_with_negative_samples():
+    """#36 实锤：只说「繁體」会出简体粤文混排 → 块里必须点名高频简体字当负样本。"""
+    b = pr.region_block("zh-HK")
+    assert "字形硬性要求" in b
+    for ch in ("这", "说", "吗", "们"):
+        assert ch in b
+    assert "係/唔/嘅/咩" in b
+    # TW 档不声明 script（简→繁归 #36 出向翻译栈），不得带字形硬钉子
+    assert "字形硬性要求" not in pr.region_block("zh-TW")
+
+
+def test_find_simplified_chars_only_for_traditional_profile():
+    # 港式粤文里混进简体「这/说/吗」→ 命中；地道繁體粤文 → 空
+    assert pr.find_simplified_chars("佢这样说吗", "zh-HK") == ["这", "样", "说", "吗"]
+    assert pr.find_simplified_chars("你係唔係想食飯呀，幾時得閒喎", "zh-HK") == []
+    # 非繁體档（TW 未声明 script / CN）恒空——那不是这个观测该管的
+    assert pr.find_simplified_chars("这个说的对吗", "zh-TW") == []
+    assert pr.find_simplified_chars("这个说的对吗", "zh-CN") == []
+    assert pr.find_simplified_chars("", "zh-HK") == []
+
+
+def test_note_banned_hits_counts_observed_banned_and_script():
+    s0 = pr.stats()
+    hits = pr.note_banned_hits("你什么时候来啊，这个说的对", "zh-HK")
+    s1 = pr.stats()
+    assert "什么" in hits                              # 旧契约：返回禁用词列表
+    assert s1["observed"] == s0["observed"] + 1        # 分母 +1
+    assert s1["banned_hit"] == s0["banned_hit"] + 1
+    assert s1["script_hit"] == s0["script_hit"] + 1    # 「这/说」漏简体
+    # 地道句：observed +1，两种命中都不动
+    pr.note_banned_hits("你幾時返嚟呀，點解唔開心喎", "zh-HK")
+    s2 = pr.stats()
+    assert s2["observed"] == s1["observed"] + 1
+    assert s2["banned_hit"] == s1["banned_hit"]
+    assert s2["script_hit"] == s1["script_hit"]
+
+
 # ───────────────────────── 解析优先级 ─────────────────────────
 
 def test_resolve_explicit_persona_field_wins():
