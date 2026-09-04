@@ -536,6 +536,62 @@ def run(base: str, token: str, *, shots: Optional[Path] = None,
                 if shots:
                     page.screenshot(path=str(shots / "acct_scope_purity.png"))
 
+        print("== 13. 角标数字可点 → 明细浮层，条数 == 角标数（#170 幽灵未读，同 WHERE 恒等） ==")
+        # 回到全部账号视角：账号 chip 上的灰色未读角标（.ac-unread 非 attn 态）才是
+        # 「未读会话数」语义；attn 红标数字＝可行动数，与明细行数不是同一口径，跳过。
+        page.evaluate("window.setAccountFilter('all')")
+        page.wait_for_timeout(800)
+        badge = page.evaluate("""() => {
+          const els = Array.from(document.querySelectorAll(
+            '.ac-unread[data-ac-unread]:not(.attn)'));
+          const b = els.find(e => e.offsetParent !== null && e.getAttribute('data-aid'));
+          if (!b) return null;
+          const txt = (b.textContent || '').trim();
+          return {n: txt === '99+' ? -1 : parseInt(txt, 10),
+                  plat: b.getAttribute('data-plat') || '',
+                  aid: b.getAttribute('data-aid') || ''};
+        }""")
+        if not badge or badge.get("n") in (None, -1) or badge["n"] <= 0:
+            print("  [SKIP] 当前无可见的账号未读角标（无未读=无从验证；不构成失败）")
+        else:
+            page.click(f".ac-unread[data-ac-unread][data-plat='{badge['plat']}']"
+                       f"[data-aid='{badge['aid']}'] >> nth=0")
+            try:
+                page.wait_for_function(
+                    "() => { const p = document.getElementById('ac-unread-pop');"
+                    " if (!p || p.style.display === 'none') return false;"
+                    " return !!p.querySelector('.acup-row') || !!p.querySelector('[data-acup-mark]'); }",
+                    timeout=8000)
+            except Exception:
+                pass
+            pop_st = page.evaluate("""() => {
+              const p = document.getElementById('ac-unread-pop');
+              if (!p) return {open: false};
+              return {open: p.style.display !== 'none',
+                      rows: p.querySelectorAll('.acup-row').length,
+                      mark: !!p.querySelector('[data-acup-mark]')};
+            }""")
+            ck.check("点击角标数字 → 明细浮层打开（不是切账号）", pop_st.get("open"))
+            # 浮层行 = 服务端 account-unread 明细；徽标 = 同 WHERE 的 SUM 聚合口径，两者恒等
+            srv = page.evaluate(
+                f"""async () => {{
+                  const r = await fetch('/api/unified-inbox/account-unread?platform='
+                    + encodeURIComponent('{badge['plat']}') + '&account_id='
+                    + encodeURIComponent('{badge['aid']}'));
+                  const d = await r.json(); return {{count: d.count, total: d.unread_total}};
+                }}""")
+            ck.check("浮层条数 == 服务端明细条数",
+                     pop_st.get("rows") == srv.get("count"),
+                     f"rows={pop_st.get('rows')} srv={srv!r}")
+            ck.check("角标数 == 服务端同 WHERE 聚合（unread_total 或 count）",
+                     badge["n"] in (srv.get("total"), srv.get("count")),
+                     f"badge={badge['n']} srv={srv!r}")
+            ck.check("浮层带「全部标已读」按钮（mark-account-read 入口）", pop_st.get("mark"))
+            page.keyboard.press("Escape")
+            page.evaluate("document.body.click()")
+            if shots:
+                page.screenshot(path=str(shots / "acct_unread_pop.png"))
+
         browser.close()
     return ck.summary()
 

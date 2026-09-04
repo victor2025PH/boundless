@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260902a">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905a">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -4452,6 +4452,17 @@ function _renderCompactBar(){
       onBody:_expandListHeader, onClear:()=>setConvScope('private')});
   }
 
+  // #170：被埋会话入口在紧凑态也要可见——#buried-hint 长在 .list-header-body 里，列表一滚
+  // （>72px）整块 body 折起，入口随之消失＝「归档里还有未读」只在筛选条展开态可见。
+  // 与 _renderBuriedHint 同一显隐判据（归档/已移除视图、搜索、非私聊范围不出）。
+  if(_convScope==='private' && chatFilter!=='archived' && chatFilter!=='removed' && !searchQ && !_histView){
+    const bs=_buriedStats();
+    if(bs && bs.unread>0){
+      items.unshift({cls:'wait', label:window.Tf('inbox.buried.hint',{n:bs.unread}), count:0, isCur:false,
+        onBody:()=>{ _gotoBuriedArchive(); _expandListHeader(); }});
+    }
+  }
+
   // 无激活筛选时：展示紧急队列入口（P2 行为保留）——点击即切 tab（P5-1d：队列入口直接应用，不 × 清除）
   if(chatFilter==='all' && !tagFilter && accountFilter==='all' && !searchQ && !funnelFilter && !_goalAgendaFilter && _sortMode==='recent' && _convScope==='private'){
     if(_filterCounts.attn>0){
@@ -4980,12 +4991,89 @@ function _renderBuriedHint(st){
         || _histView || searchQ || _convScope!=='private'){
       el.style.display='none'; el.innerHTML=''; return;
     }
+    // #170：入口旁给「取消归档这 N 条」——坐席「逐个点开 15 个归档会话角标仍不消」
+    // 的根因是归档态会话不在默认视图、点开也未必落在同一账号；一键把它们浮回默认
+    // 视图才是可行动的出路（取消归档是安全方向，走 _undoToast 可撤）。
+    const convs=st?Math.max(0,Number(st.convs)||0):0;
     el.innerHTML=`<span class="bh-ic">${uiIcon('archive',12)}</span>`
       +`<span class="bh-txt">${esc(window.Tf('inbox.buried.hint',{n:n}))}</span>`
+      +(convs?`<button type="button" class="bh-unarch" data-bh-unarch="1" title="${esc(window.T('inbox.buried.unarch_t'))}">${esc(window.Tf('inbox.buried.unarch',{n:convs}))}</button>`:'')
       +`<span class="bh-go">${esc(window.T('inbox.arch.foot_go'))}</span>`;
     el.title=window.Tf('inbox.filter.buried_t',{n:st.convs});
     el.style.display='';
+    const ub=el.querySelector('[data-bh-unarch]');
+    if(ub) ub.addEventListener('click',function(ev){
+      ev.preventDefault(); ev.stopPropagation();   // 不触发外层「查看」跳转
+      _unarchiveBuried(ub);
+    });
   }catch(_){ el.style.display='none'; }
+}
+/* #170 一键取消归档当前视角（平台/账号筛选）下全部被埋会话。
+   会话清单以 /api/admin/buried-conversations 为权威（DB 级，与 HealthWatchdog
+   被埋告警同判据——主列表只装 top-N，被埋会话 last_ts 往往早已沉底、窗口里根本没有），
+   端点不可用时回落窗口内 allChats 已知行。写入走 _archiveBatchPatch（与单条归档同一条
+   有序链，防与撤销并发乱序）；成功后 loadChats 对账，并给一次可撤回（重新归档）。 */
+var _unarchBuriedBusy=false;
+async function _unarchiveBuried(btn){
+  if(_unarchBuriedBusy) return;
+  _unarchBuriedBusy=true;
+  if(btn){ btn.disabled=true; btn.classList.add('busy'); }
+  try{ _uiBeacon('iflt_buried_unarch'); }catch(_){}
+  const inScope=function(plat,acct){
+    if(platFilter!=='all' && plat!==platFilter) return false;
+    if(accountFilter!=='all' && (acct||'default')!==accountFilter) return false;
+    return true;
+  };
+  const cidParts=function(cid){
+    // conversation_id = platform:account_id:chat_key（chat_key 自身可含冒号，只切前两段）
+    const s=String(cid||''); const i=s.indexOf(':'); if(i<0) return null;
+    const j=s.indexOf(':',i+1); if(j<0) return null;
+    return {plat:s.slice(0,i), acct:s.slice(i+1,j)};
+  };
+  const picked={};
+  try{
+    const r=await apiFetch('/api/admin/buried-conversations', undefined, {timeoutMs:15000});
+    if(r.ok){
+      const d=await r.json();
+      if(d && d.supported!==false && Array.isArray(d.rows)){
+        d.rows.forEach(function(x){
+          const cid=x&&x.conversation_id; if(!cid) return;
+          const p=cidParts(cid); if(!p) return;
+          if(inScope(p.plat,p.acct)) picked[String(cid)]=1;
+        });
+      }
+    }
+  }catch(_){}
+  // 窗口内已知的被埋行并入（端点不可用/救援注入行都在这里兜住）
+  (allChats||[]).forEach(function(c){
+    if(!c||!c.conversation_id||!c.archived||!((c.unread||0)>0)) return;
+    if(isGroupConv(c)||_isRemovedRow(c)||_isLoggedOutRow(c)) return;
+    if(inScope(c.platform||'web', c.account_id||'default')) picked[String(c.conversation_id)]=1;
+  });
+  const cids=Object.keys(picked).slice(0,200);
+  try{
+    if(!cids.length){ _toast(window.T('inbox.buried.unarch_none')); return; }
+    const res=await _archiveBatchPatch(cids,false);
+    const out=res&&res.ok?await res.json():null;
+    if(!out||!out.ok) throw new Error('batch_unarchive_failed');
+    // 本地即时对账：窗口内行翻归档态并搬账（服务端聚合下一拍校正）
+    cids.forEach(function(cid){
+      const c=(allChats||[]).find(x=>String(x.conversation_id)===cid);
+      if(c && c.archived){ _buriedLocalAdjust(c,false); c.archived=false; }
+      delete _buriedInjected[cid];
+    });
+    applyFilters();
+    const n=Number(out.updated)||cids.length;
+    _undoToast(window.Tf('inbox.buried.unarch_ok',{n:n}), function(){
+      _archiveBatchPatch(cids,true).then(function(){ try{ loadChats(); }catch(_){} }).catch(function(){});
+    });
+    try{ loadChats(); }catch(_){}
+  }catch(_){
+    _toast(window.T('inbox.buried.unarch_fail'),'#dc2626');
+  }finally{
+    _unarchBuriedBusy=false;
+    if(btn){ btn.disabled=false; btn.classList.remove('busy'); }
+  }
 }
 function _gotoBuriedArchive(){
   try{

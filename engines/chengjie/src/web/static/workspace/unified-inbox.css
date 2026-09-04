@@ -3535,6 +3535,14 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .buried-hint .bh-ic{display:inline-flex;align-items:center;flex:none;}
 .buried-hint .bh-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
 .buried-hint .bh-go{margin-left:auto;flex:none;color:var(--accent,#1e8cf2);font-weight:600;}
+/* #170 一键取消归档这 N 条：实心琥珀小按钮，与「查看」文字链分开（一个是安全的写操作、
+   一个是导航），busy 期置灰防连点。 */
+.buried-hint .bh-unarch{margin-left:auto;flex:none;appearance:none;border:1px solid #d97706;
+  background:#d97706;color:#fff;border-radius:6px;padding:2px 8px;font:inherit;font-size:11px;
+  font-weight:600;line-height:1.4;cursor:pointer;white-space:nowrap;}
+.buried-hint .bh-unarch:hover{background:#b45309;border-color:#b45309;}
+.buried-hint .bh-unarch:disabled,.buried-hint .bh-unarch.busy{opacity:.55;cursor:progress;}
+.buried-hint .bh-unarch+.bh-go{margin-left:0;}
 
 /* 当前会话钉住（实施49 P0-1）：被补回列表的那一行——它不属于当前筛选口径，
    用虚线左沿 + 轻微降饱和标出「特意为你留着的」，同时保证选中态高亮仍压得住

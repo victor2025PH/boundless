@@ -1466,6 +1466,12 @@ ZH = {
     "inbox.filter.buried_t": "归档里有 {n} 个会话还有未读消息（客户在等，默认视图看不到）",
     # #142 被埋会话界面化：筛选条下常驻入口（徽标已剔归档未读，这里是它们的去处）
     "inbox.buried.hint": "归档中还有 {n} 条未读",
+    # #170 一键取消归档被埋会话（当前平台/账号视角下全部；可撤回）
+    "inbox.buried.unarch": "取消归档这 {n} 条",
+    "inbox.buried.unarch_t": "把这些归档着却有未读的会话一键浮回默认视图（可撤销）",
+    "inbox.buried.unarch_ok": "已取消归档 {n} 条会话，它们已回到默认视图",
+    "inbox.buried.unarch_fail": "取消归档失败，请稍后重试",
+    "inbox.buried.unarch_none": "当前视角下没有可取消归档的被埋会话",
     "inbox.filter.claimed": "我的",
     "inbox.filter.more": "更多",
     "inbox.filter.removed": "已移除",
@@ -4158,6 +4164,11 @@ EN = {
     "inbox.filter.buried_t": "{n} archived conversation(s) still have unread messages "
                              "(customers waiting, hidden from default views)",
     "inbox.buried.hint": "{n} unread in archive",
+    "inbox.buried.unarch": "Unarchive these {n}",
+    "inbox.buried.unarch_t": "Bring these archived-but-unread conversations back to the default view (undoable)",
+    "inbox.buried.unarch_ok": "Unarchived {n} conversation(s); they are back in the default view",
+    "inbox.buried.unarch_fail": "Unarchive failed, please retry",
+    "inbox.buried.unarch_none": "No buried conversations to unarchive in the current view",
     "inbox.filter.claimed": "Mine",
     "inbox.filter.more": "More",
     "inbox.filter.removed": "Removed",
