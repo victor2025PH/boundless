@@ -1070,6 +1070,9 @@ ZH = {
     "psc_pp_selfie": "自拍",
     "psc_pp_object": "物体图",
     "psc_pp_hint": "试聊不烧 GPU；生产环境会随本条回复自动发送",
+    # #193 全局规则未保存离开守卫（替代桌面壳静默吞掉的 beforeunload）
+    "psn_gr_leave_confirm": "「全局规则」有未保存的改动。\n\n确定 = 放弃改动并离开；取消 = 留在本页先保存。",
+    "psn_gr_leave_stay": "已留在本页：全局规则还有未保存的改动，请先保存或放弃",
 }
 
 EN = {
@@ -2138,4 +2141,6 @@ EN = {
     "psc_pp_selfie": "selfie",
     "psc_pp_object": "object",
     "psc_pp_hint": "Trial chat does not burn GPU; production sends with this reply",
+    "psn_gr_leave_confirm": "Global Rules has unsaved changes.\n\nOK = discard them and leave; Cancel = stay and save first.",
+    "psn_gr_leave_stay": "Staying on this page: Global Rules still has unsaved changes — save or discard them first",
 }

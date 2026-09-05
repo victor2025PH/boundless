@@ -7743,6 +7743,28 @@ if (location.hash === '#rules') { setTimeout(function() { _grLoaded = true; grLo
 window.addEventListener('beforeunload', function(e) {
   if (_grDirty) { e.preventDefault(); e.returnValue = ''; }
 });
+// #193：桌面壳（Electron）对 beforeunload 拦截的默认处理是「静默取消导航」——不弹任何对话框。
+// 全局规则有未保存改动时点侧栏「声音评测」等链接就像没反应，早绘制载入层 15s 后还会误报
+// 「页面未能打开: /admin/voice-eval」。站内链接点击在 window 捕获段（先于 _loading_overlay
+// 的 document 捕获监听）显式问一次：留下 → 阻止导航且不亮载入层、切到规则 tab 提示保存；
+// 离开 → 清脏标放行（beforeunload 不再二次拦）。判定口径与载入层同一套（同源/非锚点/非下载/
+// 非命名窗口/非同页）。壳侧另有 will-prevent-unload 原生确认兜关窗与非链接导航。
+window.addEventListener('click', function(e) {
+  if (!_grDirty) return;
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  var a = (e.target && e.target.closest) ? e.target.closest('a[href]') : null;
+  if (!a || a.hasAttribute('download') || a.hasAttribute('data-winname')) return;
+  if (a.target && a.target !== '_self') return;
+  var h = a.getAttribute('href') || '';
+  if (!h || h.charAt(0) === '#' || /^(javascript|mailto|tel|blob|data):/i.test(h)) return;
+  var u; try { u = new URL(a.href, location.href); } catch (_) { return; }
+  if (u.origin !== location.origin) return;
+  if (u.pathname === location.pathname && u.search === location.search) return;
+  if (confirm(window.T('psn_gr_leave_confirm'))) { _grDirty = false; return; }
+  e.preventDefault(); e.stopPropagation();
+  try { switchTab('rules'); } catch (_) {}
+  _toast(window.T('psn_gr_leave_stay'), 'info');
+}, true);
 
 // ── P1 静态模块桥 ─────────────────────────────────────────────────────────────
 // let 声明的顶层变量不上 window;用 getter 显式导出给 /static/js/persona_*.js 模块读取
