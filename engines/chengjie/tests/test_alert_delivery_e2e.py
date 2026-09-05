@@ -342,6 +342,14 @@ _EMITTED_ALERTS = [
       "reminder": False, "rate_key": "buried_conv:remind"}),
     ("buried_conv", "buried_conv_alert",
      {"recovered": True, "rate_key": "buried_conv:recovered"}),
+    # 幽灵未读（#159 / #120 族：账号栏徽标口径与旧全库口径的差额）：告警 + 恢复
+    ("phantom_unread", "phantom_unread_alert",
+     {"phantom": 7, "badge_total": 3, "store_total": 10,
+      "worst_accounts": [{"account": "telegram:acctA", "phantom": 5},
+                         {"account": "whatsapp:acctB", "phantom": 2}],
+      "reminder": False, "rate_key": "phantom_unread:remind"}),
+    ("phantom_unread", "phantom_unread_alert",
+     {"recovered": True, "rate_key": "phantom_unread:recovered"}),
     # 账号接入链路停摆（某 platform:mode 发起 N 次成功 0 次）：告警 + 恢复
     ("login_funnel", "login_funnel_alert",
      {"key": "messenger:web", "platform": "messenger", "mode": "web",

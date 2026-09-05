@@ -119,6 +119,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     # 被埋会话（P0-198 2026-08-04）：会话归档着却有未读入站＝客户在等，而工作台所有
     # 默认视图都过滤 archived=1 → 没人看得见、也没有任何信号会响
     "buried_conv": {"types": {"buried_conv_alert"}, "levels": None},
+    # 幽灵未读（#159 2026-09-03）：账号栏徽标口径与旧全库口径的差额——「显示 7、
+    # 清单一条没有」这类事故此前只能等客户截图（#145件④ 挂了两周）
+    "phantom_unread": {"types": {"phantom_unread_alert"}, "levels": None},
     # 对方机器人守卫（P0 2026-08-03：主动触达问候 @SpamBot → 80 秒 8 轮 LLM 空转实锤）
     # ——检出 bot/复读/秒回熔断/预算封顶时通知（每会话每日至多一次）
     "bot_peer": {"types": {"bot_peer_alert"}, "levels": None},
@@ -1680,6 +1683,35 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📥 打开收件箱](/workspace/inbox)"
             )
 
+    elif event_type == "phantom_unread_alert":
+        if data.get("recovered"):
+            title = "✅ 幽灵未读已清零"
+            text = (
+                "**状态**: 这台机器上已没有「算在旧口径里、清单上却点不开」的未读\n"
+                "[📥 打开收件箱](/workspace/inbox)"
+            )
+        else:
+            n = int(data.get("phantom") or 0)
+            badge = int(data.get("badge_total") or 0)
+            store_n = int(data.get("store_total") or 0)
+            worst = data.get("worst_accounts") or []
+            prefix = "⏰" if data.get("reminder") else "🔎"
+            worst_txt = "、".join(
+                f"{str(w.get('account') or '?')}({int(w.get('phantom') or 0)})"
+                for w in worst[:5]) or "—"
+            title = f"{prefix} {n} 条幽灵未读（账号栏与清单口径差额）"
+            text = (
+                f"**差额**: 旧口径 {store_n} 条 / 账号栏现显示 {badge} 条\n"
+                f"**最多的账号**: {worst_txt}\n"
+                "**这是什么**: 已删会话的残值、消息被全部撤回的会话、协议号手机端"
+                "未读残值——点开什么都看不到，1.0.72 起账号栏已不再显示它们\n"
+                "**要不要管**: 数字本身不是故障（存量残值会自然存在一段时间）；"
+                "但持续增长说明有会话在被反复重建，值得查一次目录同步\n"
+                "**处置**: 账号栏点未读数字可直达那几条；确认无用则用「清未读」"
+                "一键清账\n"
+                "[📥 打开收件箱](/workspace/inbox)"
+            )
+
     elif event_type == "login_funnel_alert":
         _key = str(data.get("key") or "?")
         if data.get("recovered"):
@@ -2165,6 +2197,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "case_alert": ("🟠 警告", "运营"),
     "case_backlog_alert": ("🔵 提示", "运营"),
     "buried_conv_alert": ("🟠 警告", "运营"),
+    # 提示级而非警告：差额本身不是故障（存量残值会自然存在），是可量化的卫生指标
+    "phantom_unread_alert": ("🔵 提示", "运营"),
     "unanswered_inbound_alert": ("🔵 提示", "运营"),
     "draft_reassigned": ("🔵 提示", "运营"),
     "draft_created": ("🔵 提示", "运营"),

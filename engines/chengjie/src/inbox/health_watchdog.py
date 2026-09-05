@@ -676,6 +676,12 @@ class HealthWatchdog:
         self._bc_alerted: bool = False
         self._bc_last_remind: float = 0.0
         self.total_buried_conv_alerts: int = 0
+        # 幽灵未读巡检（#159，2026-09-03）：徽标口径与旧全库口径的差额——
+        # 「账号栏显示 7、清单一条没有」这类事故不该靠客户截图才发现
+        # （#145件④ 从 0817 挂到 0903 才等到一份带现场的诊断包）。
+        self._pu_alerted: bool = False
+        self._pu_last_remind: float = 0.0
+        self.total_phantom_unread_alerts: int = 0
         # 案例积压巡检（2026-08-03 案例中心 P4）：AI 立了案没人认领/处理 →
         # 案例中心就退化回「永远 0 的看板」老病。聚合告警 + 危机级单独点名。
         self._cb_alerted: bool = False
@@ -1031,6 +1037,13 @@ class HealthWatchdog:
             self._check_buried_conversations()
         except Exception:
             logger.debug("被埋会话巡检异常（已忽略）", exc_info=True)
+
+        # 幽灵未读（#159）：徽标口径与旧全库口径的差额——账号栏那个数字里有
+        # 多少是「清单上点不开」的残值。等客户截图发现太慢（#145件④ 等了两周）。
+        try:
+            self._check_phantom_unread()
+        except Exception:
+            logger.debug("幽灵未读巡检异常（已忽略）", exc_info=True)
 
         # 案例积压：AI 判定「需要人跟进」的案例无人认领/处理——危机级尤其不能等
         try:
@@ -3160,6 +3173,88 @@ class HealthWatchdog:
             "被埋会话：%d 个会话已归档却有未读入站（共 %d 条未读，最近活动距今 %.0fh；"
             "人工归档 %d / 自动归档 %d）——客户在等，但工作台默认视图看不见它们",
             len(rows), total_unread, oldest_h, len(rows) - auto_n, auto_n,
+        )
+
+    def _check_phantom_unread(self, *, now: Optional[float] = None) -> None:
+        """账号栏未读徽标与清单口径的**差额** → 主动轰人（#159，2026-09-03）。
+
+        事故形态：steven 号三处显示 7 条待处理、清单一条都没有（证据包
+        G4BYWH）。1.0.72 起徽标改按清单口径算（``inbox.unread_aggregate``），
+        差额即「被新闸门剔掉的幽灵未读」——墓碑会话、一条可见消息都不剩的
+        会话、协议号纯占位残值。
+
+        为什么要主动报：#145件④ 从 0817 挂到 0903 才等到一份带现场的诊断包，
+        整整两周里值守只能等客户截图。差额是台机器自己就能算出来的数，不该靠
+        用户发现。**差额 > 0 不等于故障**（旧残值本来就会存在一段时间），它是
+        「这台机器上有多少未读是幽灵」的量化——超阈值才吵人。
+
+        配置 ``health_watchdog.phantom_unread_remind.{enabled,min_phantom,
+        interval_min}``（默认开，阈值 5）。取数失败/旧 store → 静默跳过。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        pr = (((cfg.get("health_watchdog") or {}).get("phantom_unread_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not pr.get("enabled", True):
+            return
+        store = self._inbox()
+        if store is None:
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            from src.inbox.unread_aggregate import phantom_unread_report
+            rep = phantom_unread_report(store) or {}
+        except Exception:
+            logger.debug("幽灵未读巡检取数失败（忽略）", exc_info=True)
+            return
+        phantom = int(rep.get("phantom") or 0)
+        min_phantom = max(1, int(pr.get("min_phantom", 5) or 5))
+
+        if phantom < min_phantom:
+            # 清零＝存量残值被清干净了（用户清了未读/会话被真正删掉）→ 报喜一次
+            if self._pu_alerted and phantom <= 0:
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("phantom_unread_alert", {
+                        "recovered": True,
+                        "rate_key": "phantom_unread:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出幽灵未读清零通知")
+                except Exception:
+                    logger.debug("phantom_unread recovery 发布失败（忽略）",
+                                 exc_info=True)
+                self._pu_alerted = False
+                self._pu_last_remind = 0.0
+            return
+
+        interval_sec = max(600.0, float(pr.get("interval_min", 360) or 360) * 60.0)
+        if self._pu_alerted and ts - self._pu_last_remind < interval_sec:
+            return
+
+        by_acct = rep.get("by_account") or {}
+        worst = sorted(by_acct.items(), key=lambda kv: -int(kv[1] or 0))[:5]
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("phantom_unread_alert", {
+                "phantom": phantom,
+                "badge_total": int(rep.get("badge") or 0),
+                "store_total": int(rep.get("store") or 0),
+                "worst_accounts": [{"account": k, "phantom": int(v or 0)}
+                                   for k, v in worst],
+                "reminder": bool(self._pu_alerted),
+                "rate_key": "phantom_unread:remind",
+            })
+        except Exception:
+            logger.debug("phantom_unread alert 发布失败（忽略）", exc_info=True)
+            return
+        self._pu_alerted = True
+        self._pu_last_remind = ts
+        self.total_phantom_unread_alerts += 1
+        logger.warning(
+            "幽灵未读：全库有 %d 条未读算在旧口径里、但清单上点不开（徽标口径 %d / "
+            "旧口径 %d）——最多的账号：%s。这些多来自已删会话残值、消息被全部撤回的"
+            "会话、协议号手机端未读残值；1.0.72 起账号栏已不再显示它们",
+            phantom, int(rep.get("badge") or 0), int(rep.get("store") or 0),
+            "、".join(f"{k}({v})" for k, v in worst) or "-",
         )
 
     def _filter_backlog_by_schedule(
