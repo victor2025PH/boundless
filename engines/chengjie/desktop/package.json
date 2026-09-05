@@ -3,9 +3,9 @@
   "version": "1.0.72",
   "displayVersion": "1.072",
   "private": true,
-  "description": "桌面壳：嵌官方 web 客户端 + 注入点击翻译/智能回复（对接本仓库 FastAPI 后端）",
+  "description": "智聊 ChatX · 多平台 AI 聊天与成交桌面端 · 无界科技 BOUNDLESS",
   "main": "main.js",
-  "author": "telegram-mtproto-ai",
+  "author": "无界科技 BOUNDLESS",
   "scripts": {
     "copy-shared": "node copy-shared.js",
     "prestart": "node copy-shared.js",
@@ -47,6 +47,7 @@
   "build": {
     "appId": "com.telegram-mtproto-ai.desktop",
     "productName": "智聊",
+    "copyright": "Copyright © 2026 无界科技 BOUNDLESS",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -130,11 +131,13 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "license": "build/installer-notice.txt",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "uninstallDisplayName": "智聊 ChatX ${version}",
       "include": "build/installer.nsh",
       "installerLanguages": [
-        "zh_CN",
-        "en_US"
+        "en_US",
+        "zh_CN"
       ]
     },
     "mac": {

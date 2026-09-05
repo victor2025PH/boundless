@@ -20,3 +20,4 @@ build/static-staged/
 build/domains-staged/
 build/*.spec
 build/build-info.json
+build/flavor.nsh

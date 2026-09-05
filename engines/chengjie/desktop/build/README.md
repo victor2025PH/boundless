@@ -33,6 +33,15 @@ npm run dist:win:fresh
 运行时 `backend-launcher.js` 在发布态优先用 `resources/backend/backend(.exe)`，
 开发态回退系统 Python 跑仓库根 `main.py`。
 
+**安装器界面资产（2026-09-05）**：向导的品牌位图 `installerSidebar.bmp` /
+`installerHeader.bmp` 由 `brand-assets/build_installer_art.py` 生成并镜像到本目录（不要手
+工 P 图）；「安装前须知」页是按语言的 `license_zh_CN.rtf` / `license_en_US.rtf`，源文件是
+同目录的 `installer-notice.<lang>.txt`，改完跑 `node build/write-installer-notice.js` 重新生成
+（门禁按源 sha1 核对新鲜度）。`write-build-info.js` 还会写 `build/flavor.nsh`（gitignore）：非
+clean 形态的向导带琥珀「内测版」角标（`*-internal.bmp` 变体）与品牌栏后缀，缺文件按内测处理，
+所以对外干净包必须走 `npm run dist:win:clean`。页面流、颜色令牌、字体、DPI 等全在
+`installer.nsh` 顶部注释与 `.cursor/rules/chatx-desktop-install.mdc`「安装器界面/品牌层」一节。
+
 **新鲜度门禁（2026-08-08）**：`predist` / `predist:win` 会跑
 `python build/check_backend_freshness.py`。`build:backend` 成功后在
 `backend-dist/.source-fingerprint.json` 落源码内容指纹；若工作树相对该戳已脏，

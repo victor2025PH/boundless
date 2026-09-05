@@ -148,6 +148,37 @@ alwaysApply: false
 `restore_chatx_accounts_node.ps1` keep-list 互为镜像（两边有交叉注释）。
 卸载器实弹测试**禁止在 117 跑**（会真卸本机在用坐席端），用沙箱或坐席机发版流程验证。
 
+## 安装器界面/品牌层（desktop >= 1.0.74，2026-09-05）
+
+- 页序：安装 = 欢迎 → [检测到已有数据] → 安装前须知 → 目录（「安装」按钮）→ 进度 → 完成；
+  卸载 = 欢迎 → 保留/删除数据 → 进度 → 完成。「为哪位用户安装」页由 `customInstallMode`
+  强制按用户并跳过（仅旧的全机安装例外）。数据页刻意排在目录页**之前**：NSIS 只给紧邻
+  instfiles 的那一页标「安装」，别把它挪回 `customPageAfterChangeDir`（门禁会红）。
+- 品牌位图：`brand-assets/build_installer_art.py` 生成 `07_installer/*.bmp` 并镜像到
+  `desktop/build/installerSidebar.bmp` / `installerHeader.bmp`（24 位、MUI 标准尺寸 x2，
+  配 `ManifestDPIAware`）。改构图只改脚本重跑，不要手工 P 图。
+- 须知页：改 `desktop/build/installer-notice.zh_CN.txt` / `.en_US.txt`，然后
+  `node build/write-installer-notice.js` 重新生成 `license_zh_CN.rtf` / `license_en_US.rtf`
+  （产物入库；门禁按源文件 sha1 核对新鲜度，忘了重跑会红）。`build.nsis.license` 必须留空。
+- 颜色只许用 `installer.nsh` 顶部的 `CX_C_*` 令牌常量（HTML RRGGBB 顺序；旧的 `0x1F1FBF`
+  「红字」其实是深蓝）；中文界面字体由 `customHeader` 里 `SetFont /LANG=` 覆盖 NLF 的宋体。
+- 元数据：`package.json` 的 `description` / `author` / `build.copyright` 是安装包属性与
+  「应用和功能」发布者栏的来源，保持无界科技口径；**`appId` 绝不能动**（升级链身份）。
+- 形态角标：`write-build-info.js` 顺带写 `build/flavor.nsh`（gitignore），非 clean 形态的向导
+  用 `installerSidebar-internal.bmp` / `installerHeader-internal.bmp`（琥珀「内测版」胶囊）并在
+  品牌栏加「· 内测版」；文件缺失按内测处理（角标常亮）。所以**对外干净包必须走
+  `npm run dist:win:clean`**（predist 写入 clean），直接 `electron-builder` 出的包一律带角标。
+- 清数据结果不再弹窗：卸载/安装完成页的标题与正文是变量（`$cxUnFinMsg` / `$cxInsFinMsg`），
+  wipe 分支把「已全部清除」或「残留路径 + 下次登录自动清除」写进去；残留会触发 MUI 重启
+  变体页，默认选「稍后重启」。静默通道仍靠 DetailPrint + `%TEMP%\chatx_wipe.log`。
+- 以上全部钉在 `test/uninstall-nsh-invariants.test.js`；改完只想看界面不想跑 predist 门禁时，
+  `set CHATX_ALLOW_STANDARD=1&& npx electron-builder --win -c.directories.output=dist-uitest`
+  出一个临时包，走到目录页截图后取消即可（不点「安装」不落任何文件），完事删 `dist-uitest`。
+  要看英文界面再加 `-c.nsis.displayLanguageSelector=true`（多出语言选择框，选 English），
+  正式包不要带这个开关。向导语言跟随系统：`installerLanguages` 里 **en_US 排第一**是刻意的——
+  NSIS 匹配不到系统语言时用第一个语言，中文系统照样精确命中中文，海外非英语系统回落英文。英文文案比中文长 ~1.6 倍，门禁钉了 keep-detail ≤150 字符、欢迎页
+  bullet ≤54 字符（2026-09-05 英文实机截图曾溢出被截）。
+
 ## 173 专属坑（每次都撞，按此处置）
 
 - `installer exit=-1073741819`(0xC0000005) 连崩＝NSIS System.dll 在 SSH 会话的已知抖动（Win11 高发；**2026-08-17 实测 Win10/.198 也抖过一次、重试第 2 次即成——不是 Win11 专属，重试机制勿删**），**不是包坏**（sha256 已验）。脚本自带 4 次重试+控制台会话计划任务兜底（2026-08-13 修复过 PS5.1 stderr 终止 bug）。

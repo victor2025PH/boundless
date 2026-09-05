@@ -44,8 +44,12 @@ ok(fs.existsSync(nshPath), "build/installer.nsh 不存在");
 const langs = nsis.installerLanguages;
 ok(
   Array.isArray(langs) && langs.length === 2 && langs.includes("zh_CN") && langs.includes("en_US"),
-  "build.nsis.installerLanguages 必须是 [zh_CN, en_US]（LangString 只有中英两套）"
+  "build.nsis.installerLanguages 必须是 [en_US, zh_CN]（LangString 只有中英两套）"
 );
+// 顺序即回落语言：NSIS 按系统语言精确/主语言匹配，匹配不到就用第一个加载的语言文件。
+// 中文系统仍精确命中 zh_CN（繁体按主语言命中简体），越南/泰/印尼等系统回落英文——
+// 之前 zh_CN 在前，海外非英语系统拿到的是全中文向导且无处切换（2026-09-05 round 4）。
+ok(langs[0] === "en_US", "installerLanguages 第一项必须是 en_US（不支持的系统语言回落英文而不是中文）");
 
 // ---- 编码：UTF-8 BOM ---------------------------------------------------------
 const raw = fs.readFileSync(nshPath);
@@ -54,7 +58,8 @@ const text = raw.toString("utf8").replace(/^\uFEFF/, "");
 
 // ---- 三个宏齐备 --------------------------------------------------------------
 function macroBody(name) {
-  const m = text.match(new RegExp("!macro\\s+" + name + "[\\s\\S]*?!macroend"));
+  // \b：customInstall 不得误配 customInstallMode（2026-09-05 加模式页宏时踩到）
+  const m = text.match(new RegExp("!macro\\s+" + name + "\\b[\\s\\S]*?!macroend"));
   ok(m, "缺少 !macro " + name);
   return m ? m[0] : "";
 }
@@ -165,8 +170,17 @@ ok(text.includes('!include "getProcessInfo.nsh"'), "定义 customCheckAppRunning
 ok(/^Var pid\r?$/m.test(text), "定义 customCheckAppRunning 后必须自带 Var pid（$pid 在两个编译单元的 CHECK 里都被引用，顶层安全）");
 
 // ---- C7: 安装侧「保留/清空数据」页 + 执行闸 -----------------------------------
-const insPage = macroBody("customPageAfterChangeDir");
-ok(insPage.includes("Page custom cxInsDataPageCreate"), "customPageAfterChangeDir 必须注册安装侧数据处置页");
+// 2026-09-05 起数据页注册在 customWelcomePage（欢迎页之后、须知页之前），不再挂
+// customPageAfterChangeDir：NSIS 只给「物理上紧邻 instfiles 的那一页」标「安装」按钮，
+// 数据页排在目录页之后时，全新安装（数据页运行时跳过）目录页显示「下一步」却直接开装。
+const insPage = macroBody("customWelcomePage");
+ok(insPage.includes("Page custom cxInsDataPageCreate"), "customWelcomePage 必须注册安装侧数据处置页（紧随欢迎页）");
+ok(
+  insPage.indexOf("MUI_PAGE_WELCOME") < insPage.indexOf("Page custom cxInsDataPageCreate") &&
+    insPage.indexOf("Page custom cxInsDataPageCreate") < insPage.indexOf('MUI_PAGE_HEADER_TEXT "$(cxNoticeTitle)"'),
+  "安装页序必须是 欢迎 → 数据处置 → 须知（须知页设置定义在数据页注册之后，MUI 按下一页消费）"
+);
+ok(!macroBody("customPageAfterChangeDir").includes("Page custom"), "customPageAfterChangeDir 不得再注册页面（目录页必须是 instfiles 前最后一页，否则「安装」按钮消失）");
 ok(insPage.includes("Var cxInsWipeGo"), "缺少 Var cxInsWipeGo（安装侧 wipe 决策自有变量，$R9 教训同 C1）");
 ok(/\$\{If\} \$\{isUpdated\}\s*\r?\n\s*Abort/.test(insPage), "cxInsDataPageCreate 必须在 isUpdated（自动更新链）直接跳过页面");
 ok(insPage.includes("${NSD_SetState} $cxInsRadioKeep ${BST_CHECKED}"), "安装侧数据页默认必须选中「保留数据」");
@@ -212,6 +226,160 @@ const outsideMacros = text
   .replace(/!macro[\s\S]*?!macroend/g, "")
   .replace(/^Var pid\r?$/m, "");
 ok(!/^\s*Var\s/m.test(outsideMacros), "Var 声明必须在宏体内（顶层 Var 在另一编译单元未引用，-WX 下打包必炸；唯一豁免=Var pid）");
+
+// ---- 品牌/界面 chrome（2026-09-05 安装器视觉收口） -----------------------------
+// 2026-09-05 之前安装器零品牌资产：electron-builder 找不到 build/installerSidebar.bmp
+// 会**静默**回落到 NSIS 自带 nsis3-metro.bmp（Windows 蓝底 + NSIS 自己的 logo），
+// 没有任何报警——完成页/卸载欢迎页给第三方打了几十个版本的广告。这里把资产
+// 存在性、格式（24 位 BMP，STM_SETIMAGE 下 32 位会发黑）、尺寸（MUI 标准 x2，
+// 配 ManifestDPIAware）钉死，缺一样安装包拒绝出生。
+function bmpInfo(p) {
+  const b = fs.readFileSync(p);
+  return {
+    magic: b.toString("ascii", 0, 2),
+    offBits: b.readUInt32LE(10),
+    width: b.readInt32LE(18),
+    height: b.readInt32LE(22),
+    bpp: b.readUInt16LE(28),
+    // 首个像素（BMP 自底向上 → 文件里第一个像素是左下角；BGR 顺序）→ "RRGGBB"
+    firstPixel: (() => {
+      const o = b.readUInt32LE(10);
+      return [b[o + 2], b[o + 1], b[o]].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
+    })(),
+  };
+}
+ok(nsis.installerSidebar === "build/installerSidebar.bmp", "build.nsis.installerSidebar 必须显式指向 build/installerSidebar.bmp（隐式约定缺文件会静默回落 NSIS 自带图）");
+ok(nsis.installerHeader === "build/installerHeader.bmp", "build.nsis.installerHeader 必须显式指向 build/installerHeader.bmp");
+// 尺寸 = YaHei UI 9pt 下 MUI 控件的真实像素（191x410 / 175x74 @96dpi，2026-09-05 实机
+// EnumChildWindows 量得）x2；不是 NSIS 文档的 164x314 / 150x57——那是 MS Shell Dlg 8pt
+// 的几何，换了字体就按新比例出图，否则 ChatX 图标被横向挤压 ~11%
+for (const [key, w, h] of [["installerSidebar", 382, 820], ["installerHeader", 350, 148]]) {
+  const p = path.join(appDir, nsis[key]);
+  ok(fs.existsSync(p), `缺 ${nsis[key]}（重跑 brand-assets/build_installer_art.py）`);
+  const info = bmpInfo(p);
+  ok(info.magic === "BM", `${nsis[key]} 不是 BMP`);
+  ok(info.bpp === 24, `${nsis[key]} 必须是 24 位 BMP（当前 ${info.bpp} 位；带 alpha 的位图在 MUI 里发黑）`);
+  ok(info.width === w && info.height === h, `${nsis[key]} 尺寸必须 ${w}x${h}（MUI 标准尺寸 x2；当前 ${info.width}x${info.height}）`);
+  if (key === "installerHeader") {
+    // 页眉位图底色必须 == MUI_BGCOLOR，否则页眉带右侧出现色块拼缝
+    const m = /!define MUI_BGCOLOR\s+"?([0-9A-Fa-f]{6})"?/.exec(text);
+    ok(m, "缺 !define MUI_BGCOLOR（页眉/欢迎/完成页底色）");
+    ok(info.firstPixel === m[1].toUpperCase(), `installerHeader.bmp 底色 ${info.firstPixel} 必须与 MUI_BGCOLOR ${m[1].toUpperCase()} 一致（否则页眉拼缝）`);
+  }
+}
+// 内测角标变体（round 2）：非 clean 形态换用 -internal 位图 + 品牌栏后缀；flavor.nsh 由
+// write-build-info.js 产出（gitignore），缺文件按 internal 处理——失败模式必须是「多个角标」
+for (const [name, w, h] of [["installerSidebar-internal.bmp", 382, 820], ["installerHeader-internal.bmp", 350, 148]]) {
+  const p = path.join(appDir, "build", name);
+  ok(fs.existsSync(p), `缺 build/${name}（重跑 brand-assets/build_installer_art.py）`);
+  const info = bmpInfo(p);
+  ok(info.bpp === 24 && info.width === w && info.height === h, `build/${name} 必须 24 位 ${w}x${h}（当前 ${info.bpp} 位 ${info.width}x${info.height}）`);
+  if (name.startsWith("installerHeader")) ok(info.firstPixel === "FFFFFF", `build/${name} 底色必须与 MUI_BGCOLOR 一致`);
+}
+ok(/^!include \/NONFATAL "flavor\.nsh"\r?$/m.test(outsideMacros), "缺 !include /NONFATAL flavor.nsh（形态事实来自 write-build-info.js）");
+ok(/!ifndef CX_FLAVOR\r?\n\s*!define CX_FLAVOR "internal"/.test(text), "flavor.nsh 缺失时必须默认 internal（角标常亮，内测包不得冒充干净包）");
+ok(/!if "\$\{CX_FLAVOR\}" != "clean"[\s\S]*?MUI_WELCOMEFINISHPAGE_BITMAP "\$\{BUILD_RESOURCES_DIR\}\\installerSidebar-internal\.bmp"[\s\S]*?MUI_UNWELCOMEFINISHPAGE_BITMAP "\$\{BUILD_RESOURCES_DIR\}\\installerSidebar-internal\.bmp"[\s\S]*?MUI_HEADERIMAGE_BITMAP "\$\{BUILD_RESOURCES_DIR\}\\installerHeader-internal\.bmp"/.test(text), "非 clean 形态必须把三张位图（安装/卸载侧栏 + 页眉）都换成 -internal 变体");
+ok(/STR:\$\(cxBranding\)\$\{CX_BRAND_SUFFIX\}/.test(macroBody("cxSetBranding")), "品牌栏必须带 ${CX_BRAND_SUFFIX}（内测后缀）");
+ok(fs.readFileSync(path.join(appDir, "build", "write-build-info.js"), "utf8").includes('"flavor.nsh"'), "build/write-build-info.js 必须产出 flavor.nsh");
+ok(/^build\/flavor\.nsh\r?$/m.test(fs.readFileSync(path.join(appDir, ".gitignore"), "utf8")), "desktop/.gitignore 缺 build/flavor.nsh（生成物不得入库）");
+ok(/^ManifestDPIAware true\r?$/m.test(outsideMacros), "缺 ManifestDPIAware true（坐席 4K@200% 下整个安装器被系统位图拉伸发虚）");
+// 窗口标题随向导语言（英文实机截图曾显示「智聊 Setup」）
+ok(/^Caption "\$\(cxCaption\)"\r?$/m.test(outsideMacros) && /^UninstallCaption "\$\(cxUnCaption\)"\r?$/m.test(outsideMacros), "缺 Caption/UninstallCaption LangString（英文向导标题会是「智聊 Setup」）");
+// 英文长句上限（2026-09-05 英文实机截图：keep-detail 三行溢出 18u 标签被截）：
+// 数据页说明行 2 行 ≈ 150 字符，欢迎页单条 bullet ≈ 50 字符
+{
+  const enStr = (key) => { const m = new RegExp('LangString\\s+' + key + '\\s+\\$\\{LANG_ENGLISH\\}\\s+"((?:[^"\\\\]|\\\\.|\\$\\")*)"').exec(header); return m ? m[1] : ""; };
+  ok(enStr("cxKeepDetail").length > 0 && enStr("cxKeepDetail").length <= 150, "cxKeepDetail 英文超过 150 字符会在 18u（两行）标签里被截（当前 " + enStr("cxKeepDetail").length + "）");
+  for (const line of enStr("cxWelText").split("$\\r$\\n")) {
+    // 实测：53 字符一行放得下，58 字符折行（195u 宽 YaHei UI 9pt）
+    if (line.startsWith("-  ")) ok(line.length <= 54, "欢迎页英文 bullet 超过一行会折行错位: " + line);
+  }
+}
+// SimpChinese.nlf 硬编码宋体 9pt：不在 customHeader（MUI_LANGUAGE 之后唯一钩子）覆盖，
+// 中文安装器全程宋体（2026-09-05 首次实机截图实锤）
+ok(/SetFont \/LANG=\$\{LANG_SIMPCHINESE\} "Microsoft YaHei UI" 9/.test(header), "customHeader 缺 SetFont /LANG=${LANG_SIMPCHINESE} \"Microsoft YaHei UI\" 9（否则中文界面回落 NLF 的宋体）");
+// 英文也用同一字体：对话框单位随字体变，MUI 把位图拉到控件大小——两种语言同字体 =
+// 控件长宽比唯一，位图按该比例出图才不会被挤压（YaHei UI 的拉丁字形本就是 Segoe UI）
+ok(/SetFont \/LANG=\$\{LANG_ENGLISH\} "Microsoft YaHei UI" 9/.test(header), "customHeader 缺 SetFont /LANG=${LANG_ENGLISH} \"Microsoft YaHei UI\" 9（两种语言必须同字体，位图长宽比才唯一）");
+ok(/^!define MUI_ABORTWARNING\r?$/m.test(outsideMacros), "缺 MUI_ABORTWARNING（点 × 直接退出无确认）");
+ok(/^!define MUI_UNABORTWARNING\r?$/m.test(outsideMacros), "缺 MUI_UNABORTWARNING（卸载器点 × 直接退出无确认）");
+// 颜色纪律：SetCtlColors 只许引用 CX_C_* 令牌常量。裸色值 = 绕开令牌，且 NSIS 按 HTML
+// RRGGBB 顺序解析——首版把 0x1F1FBF 当红色写，实际渲染成深蓝（2026-09-05 读码实锤）。
+const colorDefs = {};
+for (const m of text.matchAll(/^!define (CX_C_\w+)\s+"([0-9A-Fa-f]{6})"\r?$/gm)) colorDefs[m[1]] = m[2];
+ok(Object.keys(colorDefs).length >= 3, "缺 CX_C_* 颜色常量（至少 TEXT2/LINK/WARN 三档）");
+for (const line of text.split(/\r?\n/)) {
+  const m = /^\s*SetCtlColors\s+\$\w+\s+(\S+)/.exec(line);
+  if (!m) continue;
+  const tok = m[1];
+  const ref = /^\$\{(CX_C_\w+)\}$/.exec(tok);
+  ok(ref && colorDefs[ref[1]], "SetCtlColors 只许用 ${CX_C_*} 令牌常量（裸色值绕开品牌令牌）: " + line.trim());
+}
+// 链接纪律：每个 NSD_CreateLink 六行内必须绑定 NSD_OnClick（安装侧帮助链接曾是死链）
+{
+  const lines = text.split(/\r?\n/);
+  lines.forEach((ln, i) => {
+    if (!/\$\{NSD_CreateLink\}/.test(ln)) return;
+    const win = lines.slice(i + 1, i + 7).join("\n");
+    ok(/\$\{NSD_OnClick\}/.test(win), "NSD_CreateLink 之后 6 行内没有 NSD_OnClick（死链）: " + ln.trim());
+  });
+}
+// 须知页：按语言的 RTF（build/license_<lang>.rtf）由 write-installer-notice.js 从 .txt 源
+// 生成并入库。build.nsis.license 必须留空——一旦设了单文件，electron-builder 就不再
+// 收集按语言文件，中文用户又会看到中英对照半屏。RTF 内嵌源文本 sha1，改了源忘了重跑
+// 生成脚本 → 这里红。
+ok(nsis.license == null, "build.nsis.license 必须留空（设了单文件会禁用按语言的 license_<lang>.rtf 收集）");
+const notice = require(path.join(appDir, "build", "write-installer-notice.js"));
+for (const [srcName, outName] of notice.TARGETS) {
+  const srcPath = path.join(appDir, "build", srcName);
+  const outPath = path.join(appDir, "build", outName);
+  ok(fs.existsSync(srcPath), `缺须知页源文件 build/${srcName}`);
+  ok(fs.existsSync(outPath), `缺 build/${outName}（运行 node build/write-installer-notice.js）`);
+  const rtf = fs.readFileSync(outPath, "latin1");
+  ok(rtf.startsWith("{\\rtf1"), `build/${outName} 不是 RTF`);
+  ok(!/[\x80-\xff]/.test(rtf), `build/${outName} 含原始高字节（非 ASCII 必须 \\uN? 转义，否则 RichEdit 按代码页解码乱码）`);
+  const m = /\{\\\*\\cxsrc ([0-9a-f]{40})\}/.exec(rtf);
+  const srcText = fs.readFileSync(srcPath, "utf8").replace(/^\uFEFF/, "");
+  ok(m && m[1] === notice.sourceHash(srcText), `build/${outName} 已过期：${srcName} 改了但没重跑 node build/write-installer-notice.js`);
+}
+ok(!fs.existsSync(path.join(appDir, "build", "installer-notice.txt")), "旧的单文件 build/installer-notice.txt 应已删除（须知页改为按语言 RTF）");
+// 欢迎页 / 完成页 / 模式页 / 进度状态行（2026-09-05 流程收口）
+ok(/!macro\s+customWelcomePage[\s\S]*?MUI_PAGE_WELCOME[\s\S]*?!macroend/.test(text), "缺 customWelcomePage（electron-builder 助手式默认无欢迎页，首屏会是许可页）");
+ok(/!macro\s+customWelcomePage[\s\S]*?skipPageIfUpdated[\s\S]*?MUI_PAGE_WELCOME/.test(text), "customWelcomePage 必须先插 skipPageIfUpdated（非静默自动更新不该多一页）");
+ok(/!macro\s+customInstallMode[\s\S]*?isForceCurrentInstall[\s\S]*?!macroend/.test(text), "缺 customInstallMode（隐藏「为哪位用户安装」页，按用户安装是产品设定）");
+ok(/!macro\s+customInstallMode[\s\S]*?hasPerMachineInstallation[\s\S]*?!macroend/.test(text), "customInstallMode 必须给旧的全机安装留例外（否则会在旁边再装一份）");
+ok(/!ifndef BUILD_UNINSTALLER[\s\S]*?MUI_FINISHPAGE_TITLE[\s\S]*?!else[\s\S]*?MUI_FINISHPAGE_TITLE[\s\S]*?!endif/.test(text), "MUI_FINISHPAGE_* 必须按 BUILD_UNINSTALLER 分支（卸载完成页与安装完成页消费同一组设置）");
+// 清数据结果走完成页文案而非弹窗（round 2）：完成页文本是变量，customInit/customUnInit 播种
+// 默认文案，wipe 分支改写；卸载侧 REBOOTOK 残留会触发 MUI 重启变体页，同一变量也要接上
+ok(/!macro\s+customUnInit\b[\s\S]*?StrCpy \$cxUnFinMsg "\$\(cxUnFinText\)"[\s\S]*?!macroend/.test(text), "缺 customUnInit 播种 $cxUnFinMsg 默认文案（否则完成页空白）");
+ok(/!macro\s+customInit\b[\s\S]*?StrCpy \$cxInsFinMsg "\$\(cxFinText\)"[\s\S]*?!macroend/.test(text), "缺 customInit 播种 $cxInsFinMsg 默认文案（否则完成页空白）");
+ok(welcome.includes("Var cxUnFinMsg") && welcome.includes("Var cxUnFinTitle"), "customUnWelcomePage 缺 Var cxUnFinMsg/cxUnFinTitle（卸载完成页变量须在宏内声明）");
+ok(insPage.includes("Var cxInsFinMsg"), "customWelcomePage 缺 Var cxInsFinMsg");
+ok(/!else[\s\S]*?!define MUI_FINISHPAGE_TEXT "\$cxUnFinMsg"[\s\S]*?!define MUI_FINISHPAGE_TEXT_REBOOT "\$cxUnFinMsg"[\s\S]*?MUI_FINISHPAGE_REBOOTLATER_DEFAULT[\s\S]*?!endif/.test(text), "卸载完成页 TEXT 与 TEXT_REBOOT 都必须绑 $cxUnFinMsg 且默认「稍后重启」（残留走 /REBOOTOK 会切到重启变体页）");
+ok(/!define MUI_FINISHPAGE_TEXT "\$cxInsFinMsg"/.test(text), "安装完成页 TEXT 必须绑 $cxInsFinMsg");
+ok(!/MessageBox/.test(uninst), "customUnInstall 不得再弹 MessageBox（清数据结果写进完成页；C5 如实报告仍由 cxWipeLeftover/cxWipeDone 文案承载）");
+ok(/StrCpy \$cxUnFinMsg "\$\(cxWipeLeftover\)\$\\r\$\\n\$cxLeft/.test(uninst), "残留路径必须写进 $cxUnFinMsg（如实点名）");
+ok(insMac.includes('StrCpy $cxInsFinMsg "$(cxInsFinWiped)"') && insMac.includes('StrCpy $cxInsFinMsg "$(cxInsFinLeft)"'), "customInstall 两个 wipe 结果分支都必须改写 $cxInsFinMsg");
+ok(macroBody("customPageAfterChangeDir").includes("MUI_PAGE_CUSTOMFUNCTION_SHOW cxInstFilesShow"), "缺进度页状态行（模板 SetDetailsPrint none 后进度页全程无字；必须挂在 customPageAfterChangeDir——唯一紧邻 MUI_PAGE_INSTFILES 的钩子）");
+// 两页同一套版式：粗体选项标题 / 分隔线 / 路径省略号（视觉层级 + 长路径不截尾）
+for (const [name, body] of [["un.cxDataPageCreate", welcome], ["cxInsDataPageCreate", insPage]]) {
+  ok(/CreateFont\s+\$\w+\s+"\$\(\^Font\)"\s+"\$\(\^FontSize\)"\s+"700"/.test(body), name + " 缺粗体字体（两个选项标题用对话框字体 700 字重）");
+  ok(body.includes("${NSD_CreateHLine}"), name + " 缺选项分隔线");
+  ok(body.includes("${SS_PATHELLIPSIS}"), name + " 数据路径行缺 SS_PATHELLIPSIS（长路径被截尾）");
+}
+ok(!/DetailPrint\s+"ChatX:/.test(text), "DetailPrint 不得再用英文硬编码（卸载器进度页可见，双语 UI 里必须走 LangString）");
+// 底部品牌栏（控件 1028）运行时改写：两个编译单元各一份函数，缺一边 = 该单元未引用函数 → -WX 炸
+// 品牌栏是两个控件：1028 可见文字 + 1256 盖在刻线 1035 上、按自身文字宽度画不透明底的遮罩。
+// makensis 探针实测（2026-09-05）：只写 1028 = 文字被线贯穿；只写 1256 = 看不出变化；两个都写才对。
+const brandMacro = macroBody("cxSetBranding");
+ok(/GetDlgItem \$0 \$HWNDPARENT 1028[\s\S]*?WM_SETTEXT[\s\S]*?GetDlgItem \$0 \$HWNDPARENT 1256[\s\S]*?WM_SETTEXT/.test(brandMacro), "cxSetBranding 必须同时写 1028（可见文字）与 1256（刻线遮罩）");
+ok(/!ifndef BUILD_UNINSTALLER[\s\S]*?MUI_CUSTOMFUNCTION_GUIINIT cxGuiInit[\s\S]*?Function cxGuiInit[\s\S]*?cxSetBranding[\s\S]*?!else[\s\S]*?MUI_CUSTOMFUNCTION_UNGUIINIT un\.cxGuiInit[\s\S]*?Function un\.cxGuiInit[\s\S]*?cxSetBranding[\s\S]*?!endif/.test(text), "品牌栏 GUIINIT 函数必须按 BUILD_UNINSTALLER 分支各定义一份（cxGuiInit / un.cxGuiInit）");
+ok(en.has("cxBranding"), "缺 cxBranding LangString（品牌栏文案）");
+
+// 元数据纪律：安装包 exe 的 FileDescription/CompanyName/版权串与卸载列表「发布者」都来自
+// 这几个字段，不得再出现内部代号（appId 例外——改它会让升级链认成另一款软件，不检查）。
+ok(!/telegram-mtproto-ai|桌面壳|FastAPI/.test(String(pkg.author) + String(pkg.description)), "package.json author/description 出现内部代号（会印在安装包属性与「应用和功能」发布者栏）");
+ok(pkg.build && typeof pkg.build.copyright === "string" && /无界科技|BOUNDLESS/.test(pkg.build.copyright), "build.copyright 必须显式写无界科技口径（默认串会拼成 Copyright © <year> <author 旧值>）");
 
 // ---- 自指：本测试挂进 test 与 predist 三链（防未来掉链） ----------------------
 for (const key of ["test", "predist", "predist:win", "predist:win:clean"]) {
