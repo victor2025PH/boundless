@@ -141,6 +141,76 @@ def test_provider_poll_forwards_self_profile(monkeypatch):
         ("whatsapp", "8613800000000", "小雨", "https://pps.whatsapp.net/p.jpg")]
 
 
+def test_provider_poll_forwards_dns_retry_hint(monkeypatch):
+    """#181（J-6 B-2 交办）：边车 /login/:id/status 回 hint_code=dns_retry + pairing_dns_fails
+    → poll 必须原样透传给登录路由（路由再放进状态响应，前端出「DNS 失败 N 次正在重试」）。
+    hint_code 是可来回变的实时态：边车不再报时要落空串而不是粘住旧值。"""
+    async def fake_post(url, payload, timeout=20.0):
+        return {"login_id": "wa_abc", "qr_image": "data:image/png;base64,xxx"}
+
+    seq = [
+        {"status": "pending", "hint_code": "dns_retry", "pairing_dns_fails": 4,
+         "pairing_ms": 12000},
+        {"status": "pending", "pairing_dns_fails": 0},
+        {"status": "pending", "hint_code": "dns_retry", "pairing_dns_fails": "oops"},
+    ]
+
+    async def fake_get(url, timeout=20.0):
+        return seq.pop(0)
+
+    monkeypatch.setattr(wab, "_post_json", fake_post)
+    monkeypatch.setattr(wab, "_get_json", fake_get)
+
+    async def run():
+        provider = wab.make_provider(
+            {"platform_login": {"whatsapp": {"baileys_url": "http://x"}}})
+        info = await provider(None, "whatsapp", "protocol", "")
+        r1 = await info["poll"](None)
+        assert r1["status"] == "pending"
+        assert r1["hint_code"] == "dns_retry"
+        assert r1["pairing_dns_fails"] == 4
+        r2 = await info["poll"](None)
+        assert r2["hint_code"] == ""            # 边车不再报 → 清掉，不粘
+        assert "pairing_dns_fails" not in r2    # 零次不带键（旧前端零感知）
+        r3 = await info["poll"](None)
+        assert r3["hint_code"] == "dns_retry"
+        assert "pairing_dns_fails" not in r3    # 脏值不带、不抛
+
+    asyncio.run(run())
+
+
+def test_login_status_route_exposes_pairing_dns_fails():
+    """路由侧钉：状态响应带 hint_code（已有）且在 provider 给了 pairing_dns_fails 时透传——
+    没有这一行前端拿不到 N，文案只能写死「正在重试」。"""
+    import inspect
+
+    from src.web.routes import unified_inbox_login_routes as R
+    src = inspect.getsource(R)
+    assert '"hint_code": sess.hint_code' in src
+    assert '_pout["pairing_dns_fails"] = int(res.get("pairing_dns_fails") or 0)' in src
+
+
+def test_frontend_dns_retry_live_hint_wired():
+    """前端半边（unified_inbox.html）：实时提示表认 dns_retry、轮询把 pairing_dns_fails 传给
+    _applyConnectLiveHint、文案 zh/en 都带 {n} 占位——三处缺一，坐席看到的仍是恒定的「等待扫码」。"""
+    from pathlib import Path
+
+    from src.web.web_i18n import get_translations
+
+    tpl = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "unified_inbox.html").read_text(encoding="utf-8")
+    compact = tpl.replace(" ", "")
+    assert "dns_retry:{st:'inbox.wa.st_dns_retry',hint:'inbox.wa.hint_dns_retry',n:true}" in compact
+    assert "_applyConnectLiveHint(d.hint_code,d.pairing_dns_fails)" in compact
+    # 带计数的码：计数变了也要刷（否则「失败 1 次」粘到超时）
+    assert "if(c===_connectLiveHint&&nn===_connectLiveHintN)return;" in compact
+    for lang in ("zh", "en"):
+        tr = get_translations(lang)
+        assert str(tr.get("inbox.wa.st_dns_retry") or "").strip(), lang
+        hint = str(tr.get("inbox.wa.hint_dns_retry") or "")
+        assert "{n}" in hint, (lang, hint)
+
+
 # ── 占位会话拉历史（消除 no_anchor 死角）────────────────────────────────────
 # 背景：Node 同步会话列表只建"零消息"占位会话；用户点开想拉历史时 store 里没有
 # 带 platform_msg_id 的锚点，旧逻辑直接返回 no_anchor → 会话永远是空的。

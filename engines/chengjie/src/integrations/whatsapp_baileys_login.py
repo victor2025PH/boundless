@@ -127,9 +127,22 @@ def make_provider(config: Dict[str, Any]):
                         config=config)
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] self_profile 富集失败（忽略）", exc_info=True)
-            return {"status": st, "account_id": aid,
-                    "detail": str(res.get("detail") or ""),
-                    "qr_image": str(res.get("qr_image") or "")}
+            out: Dict[str, Any] = {
+                "status": st, "account_id": aid,
+                "detail": str(res.get("detail") or ""),
+                "qr_image": str(res.get("qr_image") or ""),
+                # #181（J-6 B-2）实时提示码：边车 scan-signal 判出配对期 DNS 连败
+                # （getaddrinfo ENOTFOUND 被 Baileys 包成 408）→ hint_code="dns_retry"，
+                # 非终态、可来回变，空值也照落（与 messenger/instagram 桥接同口径）。
+                "hint_code": str(res.get("hint_code") or ""),
+            }
+            try:
+                dns_fails = int(res.get("pairing_dns_fails") or 0)
+            except (TypeError, ValueError):
+                dns_fails = 0
+            if dns_fails > 0:
+                out["pairing_dns_fails"] = dns_fails
+            return out
 
         async def _cancel(session: Any) -> None:
             try:

@@ -24043,15 +24043,20 @@ const _CONNECT_LIVE_HINT_KEYS={
   checkpoint:{st:'inbox.connect.st_live_checkpoint',hint:'inbox.connect.hint_live_checkpoint'},
   account_locked:{st:'inbox.connect.st_live_locked',hint:'inbox.connect.hint_live_locked'},
   password_error:{st:'inbox.connect.st_live_pwderr',hint:'inbox.connect.hint_live_pwderr'},
+  // #181（K-3 A，J-6 B-2 交办）WA 配对期 DNS 连败：边车 scan-signal 判出 getaddrinfo
+  // ENOTFOUND（Baileys 包成 408）正在 3s 短退避重试；hint 带 {n}=pairing_dns_fails。
+  dns_retry:{st:'inbox.wa.st_dns_retry',hint:'inbox.wa.hint_dns_retry',n:true},
 };
 let _connectLiveHint='';
-function _applyConnectLiveHint(code){
+let _connectLiveHintN=0;
+function _applyConnectLiveHint(code,n){
   const c=String(code||'');
-  // 轮询 2.5s 一轮，同码重刷会让文案持续闪烁 → 只在变化时动 DOM
-  if(c===_connectLiveHint) return;
-  _connectLiveHint=c;
+  const nn=Math.max(0,Number(n)||0);
+  // 轮询 2.5s 一轮，同码重刷会让文案持续闪烁 → 只在变化时动 DOM（带计数的码计数变了也算变）
+  if(c===_connectLiveHint && nn===_connectLiveHintN) return;
+  _connectLiveHint=c; _connectLiveHintN=nn;
   const m=_CONNECT_LIVE_HINT_KEYS[c];
-  if(m){ _setConnectState('warn',window.T(m.st),window.T(m.hint)); return; }
+  if(m){ _setConnectState('warn',window.T(m.st),m.n?window.Tf(m.hint,{n:nn}):window.T(m.hint)); return; }
   // 回到正常等待态（人从 2FA 页退回登录页）：恢复该形态的默认等待文案。
   // 不恢复的话上一条黄条会一直粘着，比没提示更误导。
   _setConnectState('pending',window.T(_kindVocab().pending),_connectHintText(null));
@@ -26279,7 +26284,7 @@ async function pollConnect(){
     }
     // 实时提示只在等待态生效：scanned/pin/authorized/failed 各有自己的权威文案，
     // 让一条来回变的旁观提示去盖它们只会打架。
-    if(st==='pending') _applyConnectLiveHint(d.hint_code);
+    if(st==='pending') _applyConnectLiveHint(d.hint_code, d.pairing_dns_fails);
     // 有效期条随每轮 poll 校准（扫了码等确认时会话仍在老化，条继续走是对的）
     if(st==='pending'||st==='scanned') _setConnectTtl(Number(d.expires_in)||0);
     if(st==='scanned'){

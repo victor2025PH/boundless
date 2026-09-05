@@ -498,6 +498,13 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                          "qr_image": str(res.get("qr_image") or "")
                          or _login_qr_data_url(poll_qr),
                          "expires_in": sess.remaining_sec()}
+                # #181 WA 配对 DNS 连败次数：随 hint_code=dns_retry 一起给前端出「失败 N 次，
+                # 正在重试」；非 WA / 无连败时不带键（旧前端零感知）。
+                if res.get("pairing_dns_fails"):
+                    try:
+                        _pout["pairing_dns_fails"] = int(res.get("pairing_dns_fails") or 0)
+                    except (TypeError, ValueError):
+                        pass
                 if sess.cred_source:
                     _pout["cred_source"] = sess.cred_source
                     _pout["retry_after_sec"] = int(sess.retry_after_sec)

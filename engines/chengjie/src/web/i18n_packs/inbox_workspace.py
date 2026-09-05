@@ -798,6 +798,10 @@ ZH = {
     "inbox.connect.hint_live_checkpoint": "Facebook 弹出了安全验证（如「确认您是真人」／异常登录检查）。请在登录窗口里完成验证——窗口可以最大化、也可用 Ctrl+滚轮放大页面；验证未通过前 Facebook 不会发送验证码。反复失败时：关闭本弹窗重新接入一次，或换个网络环境再试。",
     "inbox.connect.st_live_pwderr": "登录页报错",
     "inbox.connect.hint_live_pwderr": "登录窗口提示账号或密码有误，请在登录窗口里重新输入。",
+    # ── #181 WA 扫码配对期 DNS 连败（K-3 A，J-6 B-2 交办）：边车把 getaddrinfo ENOTFOUND
+    # 分类成 dns 并 3s 短退避重试；hint_code=dns_retry + pairing_dns_fails → 黄条实时可见。
+    "inbox.wa.st_dns_retry": "正在重试连接",
+    "inbox.wa.hint_dns_retry": "网络解析 WhatsApp 服务器失败 {n} 次，正在重试（DNS 问题，检查本机网络/代理）",
     # ── 登录方式名称/描述（后端 label_key/desc_key 指向这里；后端自带中文兜底仅防缺键）──
     # 2026-08-11 用户化改名：旧名「协议多开」是机制黑话——坐席视角这就是「扫码登录」
     # （与 Zalo 个人号卡「扫码登录（个人号）」同一命名系）；多开/省资源卖点在 desc + caps 徽片。
@@ -3531,6 +3535,9 @@ EN = {
     "inbox.connect.hint_live_checkpoint": "Facebook raised a security check (e.g. \u201cconfirm you're human\u201d / unusual-login review). Complete it inside the sign-in window — the window can be maximized and zoomed with Ctrl + scroll. Facebook will not send the verification code until this check passes. If it keeps failing, close this dialog and reconnect once, or try a different network.",
     "inbox.connect.st_live_pwderr": "Sign-in page reported an error",
     "inbox.connect.hint_live_pwderr": "The sign-in window says the account or password is wrong — re-enter them in the sign-in window.",
+    # ── #181 WA pairing DNS failures (K-3 A): sidecar classifies getaddrinfo ENOTFOUND as dns and retries every 3s ──
+    "inbox.wa.st_dns_retry": "Retrying connection",
+    "inbox.wa.hint_dns_retry": "Could not resolve the WhatsApp servers {n} time(s); retrying (DNS problem — check this machine's network / proxy)",
     # ── Login method names / descriptions (backend label_key / desc_key point here) ──
     "inbox.connect.mode_l_protocol": "Scan to sign in",
     "inbox.connect.mode_d_protocol": "Direct protocol connection; run many accounts on one machine, lightest on resources",
