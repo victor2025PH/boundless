@@ -1727,6 +1727,7 @@ function openBackendPopup(url, from) {
   child.webContents.setWindowOpenHandler(makeBackendPopupHandler({ win: child, slot: slot }));
   wireEditContextMenu(child.webContents);   // 后台弹窗（admin/workspace 子页）同享右键编辑菜单
   watchWebLangSwitch(child.webContents);    // #151：后台页里切语言同样让壳跟随
+  wireUnloadGuard(child.webContents, child); // #193：beforeunload 不再静默吞导航/关窗
   bindBackendPopupLogin(child, url);
   child.loadURL(url);
   return child;
@@ -1742,6 +1743,39 @@ function makeBackendPopupHandler(from) {
     });
     return { action: "deny" };
   };
+}
+
+// ── beforeunload 还原浏览器语义（#193，2026-09-05）────────────────────────────────
+// 页面用 beforeunload 守未保存改动（人设工作室「全局规则」等）时，Electron 的默认处理是
+// **静默取消**导航/关窗——不弹任何对话框。坐席体感：点侧栏「声音评测」像没反应，15s 后
+// 页面早绘制载入层还误报「页面未能打开: /admin/voice-eval」（skuio #193）；关窗关不掉。
+// 这里对壳内全部承载后台页的 webContents 挂 will-prevent-unload：原生确认框「离开 / 留下」，
+// 选离开则 preventDefault 忽略 beforeunload 放行；默认/Esc＝留下（与浏览器一致）。
+// 对话框自身异常时放行——宁可让页面走掉，也不把人锁在页面里再演一次「点了没反应」。
+function wireUnloadGuard(wc, ownerWin) {
+  if (!wc || wc.__cxUnloadWired) return;
+  wc.__cxUnloadWired = true;
+  wc.on("will-prevent-unload", (e) => {
+    let leave = true;
+    try {
+      const w = (ownerWin && !ownerWin.isDestroyed()) ? ownerWin : BrowserWindow.fromWebContents(wc);
+      const opts = {
+        type: "question",
+        buttons: [SS("unload.leave"), SS("unload.stay")],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        title: SS("unload.title"),
+        message: SS("unload.msg"),
+        detail: SS("unload.detail"),
+      };
+      const r = (w && !w.isDestroyed()) ? dialog.showMessageBoxSync(w, opts) : dialog.showMessageBoxSync(opts);
+      leave = (r === 0);
+    } catch (err) {
+      leave = true;
+    }
+    if (leave) e.preventDefault();
+  });
 }
 
 // ── 悬浮副驾原生置顶窗（cp PiP shell 桥 P1，2026-08-18）──────────────────────
@@ -1981,6 +2015,11 @@ const SHELL_STR = {
     // 充值到账奖励时刻（海报 CTA → 浏览器付款 → 入账后的系统通知）
     "camp.credited_title": "充值已到账 🎉",
     "camp.credited_body": "+{n} 已入账，工作台额度已更新，感谢支持！",
+    // #193：页面 beforeunload 拦截 → 原生「离开 / 留下」确认（此前 Electron 静默吞掉）
+    "unload.title": "有未保存的改动",
+    "unload.msg": "这个页面有未保存的改动。",
+    "unload.detail": "离开会丢失这些改动；留下可以先保存。",
+    "unload.leave": "离开", "unload.stay": "留下",
   },
   en: {
     "menu.file": "File", "menu.reload": "Reload", "menu.force_reload": "Force Reload",
@@ -2009,6 +2048,10 @@ const SHELL_STR = {
     "err.audio_fetch": "Audio fetch failed ({status})", "err.empty_audio": "Empty audio",
     "camp.credited_title": "Top-up credited 🎉",
     "camp.credited_body": "+{n} just landed — your workspace quota is updated. Thank you!",
+    "unload.title": "Unsaved changes",
+    "unload.msg": "This page has unsaved changes.",
+    "unload.detail": "Leaving will discard them; stay to save first.",
+    "unload.leave": "Leave", "unload.stay": "Stay",
   },
 };
 // 扩展语壳词条 overlay（scripts/i18n_desktop_ext.py 生成 shell-str-ext.json；
@@ -2210,11 +2253,13 @@ async function createWindow() {
   });
   win.webContents.setWindowOpenHandler(makeBackendPopupHandler());
   wireEditContextMenu(win.webContents);   // 主窗 chrome（首跑向导等原生输入件）
+  wireUnloadGuard(win.webContents, win);  // #193
   win.webContents.on("did-attach-webview", (_e, wc) => {
     console.log("[diag] webview attached");
     bindWhatsappWebviewUa(wc);
     wireEditContextMenu(wc);   // 官方页 + 工作台 webview：右键粘贴的主战场
     watchWebLangSwitch(wc);    // #151：工作台 /set_lang 切语言 → 壳配置 + 菜单跟随
+    wireUnloadGuard(wc, win);  // #193：工作台 webview 漂到后台页时同样不被静默吞
     wc.setWindowOpenHandler(makeBackendPopupHandler());
     wc.on("did-finish-load", () => rendererDiagLog("[diag] webview page loaded"));
     wc.on("did-fail-load", (_e2, code, desc) =>
