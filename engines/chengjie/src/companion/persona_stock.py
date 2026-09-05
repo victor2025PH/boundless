@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""人设一键备货就绪度（WP-6，2026-08-17）：档案/音色/相册/台词/说话指纹 五行聚合。
+"""人设「上线准备」清单（WP-6 备货就绪度 → #189 改口径，2026-09-05）。
 
-「建人设」的开箱体验升级：personas 页「备货」tab 一屏看清该人设四项资产
-（档案 / 克隆音色 / 相册 / 预渲染台词库）+ 说话指纹（spoken_style 契约）各自
-就绪没有、缺的给入口，汇总完成度。**纯只读聚合**——五个子系统各自的单一事实源
-在哪，本模块就读哪（绝不另算一套）：
+personas 页「上线准备」tab 一屏看清该人设能不能开始接客：**清单四项**
+档案 / 声音（或选不发语音）/ 相册（仅开启照片能力时）/ 绑定账号，缺的给入口，
+汇总完成度。台词库（预渲染缓存）与说话指纹（spoken_style 包）是研发/运营侧
+机制、不是用户功能（#189 skuio：台词库「专属 0/共享 11」把就绪度卡在 75%）——
+两项仍聚合（``internal=True``）供运营面板/高级区读，但**不进清单也不进分母**。
+**纯只读聚合**——各子系统的单一事实源在哪，本模块就读哪（绝不另算一套）：
 
 - 档案：PersonaManager 档案 dict（路由层取好传入）；
 - 音色：``persona_voice.resolve_voice_cfg``（与 TTS 发送同一套解析）+
@@ -16,10 +18,17 @@
 - 说话指纹：``platform/spoken_style/data/speech_prints.json`` 键 =
   ``resolve_spoken_name(persona)`` 逐字一致（规则契约：漏了=该人设只剩通用口语层）。
 
+- 绑定账号：运行时账号注册表 ``meta.persona_ids`` + config 各平台 ``persona_ids``
+  + PersonaManager 会话绑定 + 全局默认人设（与 ``/api/personas/status`` 的
+  ``profiles_in_use`` 同一组源，按单人设收敛）。
+
 **适用性语义**（完成度分母只算适用项，防「永远到不了 100%」的假焦虑）：
-- 相册行：人设显式 ``capabilities.photos: false``（运营关掉整条发图能力）→ 不适用；
-  缺省/开 → 适用（备相册本就是开图能力的前置动作）;
-- 指纹行：spoken_style 交付包不存在（未随部署）→ 不适用。
+- 声音行：人设 ``voice_profile.enabled: false`` 或合并后语音配置 ``enabled: false``
+  （部署没开语音回复且人设未单独开）→ 「选了不发语音」，不适用；
+- 相册行：``capabilities.photos`` 显式 true 才适用（发图能力缺省关——关着时备相册
+  素材也发不出去，不该催人备）；
+- 台词库 / 指纹行：``internal=True``，永不进分母；指纹另带 ``applicable``＝包是否
+  随部署（前端只在包可用时于「高级」区渲染，不可用整行不出现）。
 
 **刻意不做**：不自动往 ``speech_prints.json`` 写占位条目——占位会**消音**
 「缺指纹」这个有用信号（空 guide 的占位＝人设只剩通用层，跟没有一样），而
@@ -112,6 +121,98 @@ def speech_print_snippet(spoken_name: str) -> str:
     return json.dumps({str(spoken_name or "?"): entry}, ensure_ascii=False, indent=2)
 
 
+#: 清单项顺序（前端按此渲染；不在此列的 item 都是 internal）
+CHECKLIST_ITEMS = ("profile", "voice", "album", "binding")
+
+#: 运行时账号注册表里参与「绑定账号」判定的平台
+_BINDING_PLATFORMS = ("telegram", "whatsapp", "line", "messenger")
+
+
+def _cfg_account_pids(cfg: Dict[str, Any], section: str) -> Dict[str, Set[str]]:
+    """config 段 ``<section>.accounts[].persona_ids`` + 扁平 ``<section>.persona_ids``
+    → {account_id: {pid,...}}（扁平形态记到 ``default`` 槽）。绝不抛。"""
+    out: Dict[str, Set[str]] = {}
+    try:
+        sec = cfg.get(section) or {}
+        if not isinstance(sec, dict):
+            return out
+        for acc in (sec.get("accounts") or []):
+            if not isinstance(acc, dict):
+                continue
+            aid = str(acc.get("account_id") or acc.get("adb_serial")
+                      or acc.get("id") or "").strip()
+            pids = {str(x).strip() for x in (acc.get("persona_ids") or []) if str(x).strip()}
+            if aid and pids:
+                out.setdefault(aid, set()).update(pids)
+        flat = {str(x).strip() for x in (sec.get("persona_ids") or []) if str(x).strip()}
+        if flat:
+            out.setdefault("default", set()).update(flat)
+    except Exception:
+        pass
+    return out
+
+
+def collect_binding_usage(persona_id: str, pm: Any = None,
+                          full_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """该人设被哪些地方用着（只读；任一源读失败按 0 计，绝不抛）。
+
+    返回 ``{account_count, chat_count, is_default, accounts: [(platform, account_id)…≤8]}``。
+    源与 ``/api/personas/status.profiles_in_use`` 同一组：运行时注册表各平台
+    ``meta.persona_ids``（removed 行跳过）、config 各平台 ``persona_ids``、
+    PersonaManager 会话绑定（引用式 ``_profile_ref`` / 内联 ``id``）、全局默认人设。
+    """
+    pid = str(persona_id or "").strip()
+    cfg = full_config if isinstance(full_config, dict) else {}
+    seen: Set[tuple] = set()
+    chat_count = 0
+    is_default = False
+    if not pid:
+        return {"account_count": 0, "chat_count": 0, "is_default": False, "accounts": []}
+    try:
+        from src.integrations.account_registry import get_account_registry, parse_persona_ids
+        reg = get_account_registry()
+        for plat in _BINDING_PLATFORMS:
+            for row in reg.list(plat) or []:
+                if str(row.get("status") or "") == "removed":
+                    continue
+                aid = str(row.get("account_id") or "").strip()
+                if aid and pid in parse_persona_ids(row.get("meta")):
+                    seen.add((plat, aid))
+    except Exception:
+        logger.debug("[persona_stock] 账号注册表读取失败（按 0 计）", exc_info=True)
+    for section, plat in (("telegram", "telegram"), ("whatsapp_rpa", "whatsapp"),
+                          ("messenger_rpa", "messenger")):
+        for aid, pids in _cfg_account_pids(cfg, section).items():
+            if pid in pids:
+                seen.add((plat, aid))
+    if pm is not None:
+        try:
+            for v in (pm.get_all_chat_bindings() or {}).values():
+                if not isinstance(v, dict):
+                    continue
+                if str(v.get("_profile_ref") or "") == pid or str(v.get("id") or "") == pid:
+                    chat_count += 1
+        except Exception:
+            pass
+        try:
+            dom = getattr(pm, "_domain_persona", None)
+            if isinstance(dom, dict) and str(dom.get("id") or "") == pid:
+                is_default = True
+            elif not dom:
+                dflt = pm.get_persona("")
+                if isinstance(dflt, dict) and str(dflt.get("id") or "") == pid:
+                    is_default = True
+        except Exception:
+            pass
+    accounts = sorted(seen)
+    return {
+        "account_count": len(accounts),
+        "chat_count": chat_count,
+        "is_default": is_default,
+        "accounts": [list(a) for a in accounts[:8]],
+    }
+
+
 def collect_stock_readiness(
     persona_id: str,
     persona: Optional[Dict[str, Any]],
@@ -121,16 +222,20 @@ def collect_stock_readiness(
     prints_keys: Optional[Set[str]] = None,
     prints_available: Optional[bool] = None,
     supply: Optional[Dict[str, Dict[str, int]]] = None,
+    binding: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """五行就绪度聚合（只读）。keyword 参数全部可注入＝可单测；路由层喂真实源。
+    """「上线准备」聚合（只读）。keyword 参数全部可注入＝可单测；路由层喂真实源。
 
     返回::
 
-        {persona_id, items: {profile, voice, album, lines, speech_print},
+        {persona_id, checklist: [profile, voice, album, binding],
+         items: {profile, voice, album, binding, lines, speech_print},
          completion: 0.0-1.0, ready_count, applicable_count}
 
-    每个 item：``{ready, applicable, ...detail}``；不适用项 ``ready`` 恒 False
-    且不进完成度分母。
+    每个 item：``{ready, applicable, ...detail}``；``internal=True`` 的项（lines /
+    speech_print）与不适用项都不进完成度分母，不适用项 ``ready`` 恒 False。
+    ``binding`` 缺省（None）＝路由层没喂 → 该行 ``applicable=False`` 不进分母
+    （旧调用方零行为变化）。
     """
     pid = str(persona_id or "").strip()
     cfg = full_config if isinstance(full_config, dict) else {}
@@ -150,15 +255,22 @@ def collect_stock_readiness(
         "missing_fields": missing_fields,
     }
 
-    # ── 2. 音色（与 TTS 发送同一套 resolve）──────────────────────────────
+    # ── 2. 声音（与 TTS 发送同一套 resolve；选了不发语音 → 不适用）──────────
     voice: Dict[str, Any] = {"ready": False, "applicable": True, "backend": "",
                              "clone": False, "has_ref": False,
-                             "has_transcript": False}
+                             "has_transcript": False, "voice_off": False}
     try:
         from src.ai.persona_voice import resolve_voice_cfg
         vcfg = resolve_voice_cfg(pid, cfg) or {}
         vp = vcfg.get("voice_profile") if isinstance(
             vcfg.get("voice_profile"), dict) else {}
+        # #189「声音（或选不发语音）」：人设档案 voice_profile.enabled 显式 false，
+        # 或合并后（全局 voice_reply/voice_output + 人设层）enabled 显式 false
+        # ＝这个人设/部署就是不发语音，声音行不该催人配。
+        _pvp = (p or {}).get("voice_profile") if isinstance((p or {}).get("voice_profile"), dict) else {}
+        if _pvp.get("enabled") is False or (vcfg and vcfg.get("enabled") is False):
+            voice["voice_off"] = True
+            voice["applicable"] = False
         backend = str(vcfg.get("backend") or vp.get("backend") or "").strip()
         voice["backend"] = backend
         voice["clone"] = backend in CLONE_BACKENDS
@@ -188,36 +300,53 @@ def collect_stock_readiness(
             # 故再看 voice/voice_profile 是否有人设级痕迹）→ 算「基础语音」就绪
             voice["ready"] = bool(backend) and bool(
                 str(vcfg.get("voice") or vp.get("voice") or "").strip())
+        if not voice["applicable"]:
+            voice["ready"] = False
     except Exception:
         logger.debug("[persona_stock] voice 解析失败", exc_info=True)
     items["voice"] = voice
 
-    # ── 3. 相册（显式关发图能力 → 不适用）────────────────────────────────
+    # ── 3. 相册（仅开启照片能力时适用；capabilities.photos 缺省关）──────────
     caps = (p or {}).get("capabilities") or {}
-    photos_off = caps.get("photos") is False
+    photos_on = isinstance(caps, dict) and caps.get("photos") is True
     sup = supply if isinstance(supply, dict) else {}
     own = sup.get(pid) or {}
     shared = sup.get("") or {}
     items["album"] = {
-        "ready": (not photos_off) and sum(own.values()) > 0,
-        "applicable": not photos_off,
+        "ready": photos_on and sum(own.values()) > 0,
+        "applicable": photos_on,
+        "photos_on": photos_on,
         "count": int(sum(own.values())),
         "shared_count": int(sum(shared.values())),
         "scenes": sorted(k for k, v in own.items() if v),
     }
 
-    # ── 4. 台词库（人设专属文件；_common 单独计数不顶专属）───────────────
+    # ── 4. 绑定账号（路由层喂 collect_binding_usage；没喂＝不适用不进分母）──
+    b = binding if isinstance(binding, dict) else None
+    items["binding"] = {
+        "ready": bool(b) and (int(b.get("account_count") or 0) > 0
+                              or int(b.get("chat_count") or 0) > 0
+                              or bool(b.get("is_default"))),
+        "applicable": b is not None,
+        "account_count": int((b or {}).get("account_count") or 0),
+        "chat_count": int((b or {}).get("chat_count") or 0),
+        "is_default": bool((b or {}).get("is_default")),
+        "accounts": list((b or {}).get("accounts") or []),
+    }
+
+    # ── 5. 台词库（internal：预渲染缓存，运营面板读；不进清单/分母）────────
     ldir = Path(lines_dir) if lines_dir else Path(DEFAULT_LINES_DIR)
     own_lines = count_lines_file(ldir / f"{pid}.txt") if pid else 0
     common_lines = count_lines_file(ldir / COMMON_LINES_NAME)
     items["lines"] = {
         "ready": own_lines > 0,
-        "applicable": True,
+        "applicable": False,
+        "internal": True,
         "count": own_lines,
         "common_count": common_lines,
     }
 
-    # ── 5. 说话指纹（键=口称名逐字一致；包缺失=不适用）───────────────────
+    # ── 6. 说话指纹（internal；applicable＝包随部署，前端据此决定高级区是否渲染）──
     keys = prints_keys
     if keys is None and prints_available is not False:
         keys = load_speech_print_keys()
@@ -234,14 +363,17 @@ def collect_stock_readiness(
     items["speech_print"] = {
         "ready": hit,
         "applicable": available,
+        "internal": True,
         "spoken_name": spoken,
         "snippet": "" if (hit or not available) else speech_print_snippet(spoken),
     }
 
-    applicable = [k for k, v in items.items() if v.get("applicable")]
+    applicable = [k for k in CHECKLIST_ITEMS
+                  if items[k].get("applicable") and not items[k].get("internal")]
     ready = [k for k in applicable if items[k].get("ready")]
     return {
         "persona_id": pid,
+        "checklist": list(CHECKLIST_ITEMS),
         "items": items,
         "ready_count": len(ready),
         "applicable_count": len(applicable),

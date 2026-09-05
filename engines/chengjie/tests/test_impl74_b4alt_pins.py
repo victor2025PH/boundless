@@ -6,7 +6,10 @@ test_wellbeing_guard）。
   runtime_log_files 空手 → 诊断包无主日志。兜底＝收壳捕获的
   ``<userData>/logs/backend.log``（AITR_DATA_DIR=<userData>/data 布局契约）。
 - B96（_467）：复制视角链接的说明/成功提示必须写清用途+「首开需登录属正常」。
-- B106（_514）：备货页台词库行常驻用途说明（只提速语音，不教 AI 说话）。
+- B106（_514）：备货页台词库行常驻用途说明（只提速语音，不教 AI 说话）——
+  #189（2026-09-05）后台词库整块从人设编辑器移出（研发侧预渲染缓存不是用户功能），
+  「导入 50 条以为 AI 该学会主动说」的误解路径随之消失；编辑器只在语音 tab 留一句
+  「常用短句会自动预合成，无需维护」，入库入口保留在 ops「AvatarHub 语音」卡。
 """
 from __future__ import annotations
 
@@ -77,10 +80,17 @@ def test_copy_link_copy_explains_login():
     assert "sign" in EN["inbox.acct.link_copied"].lower()
 
 
-def test_lines_note_bilingual_and_rendered():
+def test_lines_bank_moved_out_of_persona_editor_189():
+    """#189：编辑器不再提供台词库入库（误解源头），只留「自动预合成」一句；ops 卡入口仍在。"""
     from src.web.i18n_packs.persona_studio import EN, ZH
-    assert "不会教 AI" in ZH["psn_stock_lines_note"]
-    assert "does not teach" in EN["psn_stock_lines_note"].lower()
+    assert "psn_stock_lines_note" not in ZH and "psn_stock_lines_add" not in ZH
+    assert "预合成" in ZH["psn_voice_prerender_note"] and "无需维护" in ZH["psn_voice_prerender_note"]
+    assert "pre-synthesized" in EN["psn_voice_prerender_note"].lower()
     tpl = (_ENGINE_ROOT / "src" / "web" / "templates" / "personas.html"
            ).read_text(encoding="utf-8")
-    assert "psn_stock_lines_note" in tpl
+    assert "psn_voice_prerender_note" in tpl
+    assert "prerender-lines/add" not in tpl, "台词库入库入口不得回到人设编辑器"
+    assert "_stockQuickLine" not in tpl
+    ops = (_ENGINE_ROOT / "src" / "web" / "templates" / "ops_overview.html"
+           ).read_text(encoding="utf-8")
+    assert "prerender-lines/add" in ops, "运营侧入库入口（AvatarHub 语音卡）必须保留"

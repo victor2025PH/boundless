@@ -231,14 +231,16 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
     @app.get("/api/personas/{pid}/stock-readiness")
     async def persona_stock_readiness(pid: str, request: Request,
                                       _=Depends(auth_dep)):
-        """WP-6 备货面板：档案/音色/相册/台词/说话指纹 五行就绪度聚合（只读）。
+        """「上线准备」面板（#189 起）：档案/声音/相册/绑定账号 四项清单 + 台词库/
+        说话指纹两项 internal 聚合（只读）。
 
         逻辑全在 ``src.companion.persona_stock``（可单测纯聚合）；本路由只喂
-        真实源（PersonaManager 档案 + 相册供给快照 + 实例配置）。
+        真实源（PersonaManager 档案 + 相册供给快照 + 实例配置 + 绑定用量）。
         """
         p = _require_persona(request, pid)
         from src.companion.media_gap import collect_scene_supply
-        from src.companion.persona_stock import collect_stock_readiness
+        from src.companion.persona_stock import (
+            collect_binding_usage, collect_stock_readiness)
 
         cfg = getattr(config_manager, "config", None) or {}
         scfg = (cfg.get("companion") or {}).get("selfie") or {}
@@ -248,7 +250,13 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             logger.debug("[persona-stock] 相册供给读取失败（按空计）",
                          exc_info=True)
             supply = {}
-        out = collect_stock_readiness(str(pid), p, cfg, supply=supply)
+        try:
+            from src.utils.persona_manager import PersonaManager
+            binding = collect_binding_usage(str(pid), PersonaManager.get_instance(), cfg)
+        except Exception:
+            logger.debug("[persona-stock] 绑定用量读取失败（按 0 计）", exc_info=True)
+            binding = {"account_count": 0, "chat_count": 0, "is_default": False, "accounts": []}
+        out = collect_stock_readiness(str(pid), p, cfg, supply=supply, binding=binding)
         out["ok"] = True
         return out
 

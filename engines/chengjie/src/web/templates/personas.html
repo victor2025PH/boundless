@@ -1024,7 +1024,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <button class="dtab" data-dtab="style" onclick="switchDTab('style')">{{ (i18n or {}).get('psn_dtab_style','风格') }}<span class="ddot" id="ddot-style"></span></button>
     <button class="dtab" data-dtab="voice" onclick="switchDTab('voice')">{{ (i18n or {}).get('psn_dtab_voice','语音') }}<span class="ddot" id="ddot-voice"></span></button>
     <button class="dtab" data-dtab="album" onclick="switchDTab('album')">{{ (i18n or {}).get('psn_dtab_album','相册') }}<span class="ddot" id="ddot-album"></span></button>
-    <button class="dtab" data-dtab="stock" onclick="switchDTab('stock')">{{ (i18n or {}).get('psn_dtab_stock','备货') }}<span class="ddot" id="ddot-stock"></span></button>
+    <button class="dtab" data-dtab="stock" onclick="switchDTab('stock')">{{ (i18n or {}).get('psn_dtab_stock','上线准备') }}<span class="ddot" id="ddot-stock"></span></button>
     <button class="dtab" data-dtab="preview" onclick="switchDTab('preview')">{{ (i18n or {}).get('psn_dtab_preview','预览') }}<span class="ddot" id="ddot-preview"></span><span class="diff-cnt" id="pe-diff-cnt"></span></button>
   </div>
   <!-- Pane: Basic -->
@@ -1239,6 +1239,8 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <!-- 克隆绑定锁提示：voice_profile.backend ∈ 克隆家族时显示（_vpSyncBackendUi 托管） -->
       <div id="pe-vp-clone-hint" style="display:none;font-size:.74rem;color:var(--th-ink-amber7,#b45309);margin-top:.5rem;line-height:1.5">🔒 {{ (i18n or {}).get('psn_vp_clone_bound','该人设已绑定克隆音色（由收件箱的语音登记弹层写入）。改成其他选项＝不再用克隆声；改动后请先试听确认再保存。') }}</div>
       <div style="font-size:.74rem;color:var(--t2);margin-top:.5rem;line-height:1.5">💡 {{ (i18n or {}).get('psn_voice_hint','留空则继承域级默认人设的语音设置') }}</div>
+      <!-- #189：台词库（预渲染缓存）从编辑器移出——用户侧只留这一句；入库入口在 ops「🎙️ AvatarHub 语音」卡 -->
+      <div style="font-size:.7rem;color:var(--t3);margin-top:.3rem;line-height:1.5">{{ (i18n or {}).get('psn_voice_prerender_note','常用短句会在夜间自动预合成以加快发送，无需维护。') }}</div>
       <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
       <div id="pe-vq-row" style="font-size:.74rem;color:var(--t2);margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;line-height:1.5">
         🩺 {{ (i18n or {}).get('psn_vq_title','音色体检') }}：<span id="pe-vq-line">{{ (i18n or {}).get('psn_vq_none','暂无体检数据') }}</span>
@@ -1326,12 +1328,13 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div style="font-size:.7rem;color:var(--t2);margin:.15rem 0 .1rem;line-height:1.5">{{ (i18n or {}).get('pma_summary_sub','（图/视频 + 触发词，客户说到就自动发）') }}</div>
     <div id="pe-album-body">{{ (i18n or {}).get('psn_expand_to_load','点击展开加载…') }}</div>
   </div>
-  <!-- Pane: Stock readiness（WP-6 备货：档案/音色/相册/台词/指纹 五行聚合）-->
+  <!-- Pane: 上线准备（#189 起：档案/声音/相册/绑定账号 四项清单；台词库/说话指纹是研发侧机制，
+       台词库整块移出（ops「AvatarHub 语音」卡保留入库入口）、指纹只在包可用时进「高级」折叠区）-->
   <div class="dpane" id="dpane-stock">
-    <div class="pma-panel-hd">🎒 {{ (i18n or {}).get('psn_stock_title','备货就绪度') }}
+    <div class="pma-panel-hd">🚀 {{ (i18n or {}).get('psn_stock_title','上线准备') }}
       <span id="pe-stock-badge" style="font-size:.66rem;font-weight:400;color:var(--t2);margin-left:.15rem"></span>
     </div>
-    <div style="font-size:.7rem;color:var(--t2);margin:.15rem 0 .1rem;line-height:1.5">{{ (i18n or {}).get('psn_stock_sub','（档案 / 克隆音色 / 相册 / 台词库 / 说话指纹——缺的这里给入口；全✓＝该人设开箱即用）') }}</div>
+    <div style="font-size:.7rem;color:var(--t2);margin:.15rem 0 .1rem;line-height:1.5">{{ (i18n or {}).get('psn_stock_sub','（档案 / 声音 / 相册 / 绑定账号——缺的这里给入口；全✓＝这个人设可以开始接客）') }}</div>
     <div id="pe-stock-body">{{ (i18n or {}).get('psn_expand_to_load','点击展开加载…') }}</div>
   </div>
   <style>
@@ -2582,7 +2585,8 @@ function _ppTab(which) {
 let _albumLoaded = false;
 let _stockLoaded = false;
 
-// ── WP-6 备货就绪度（档案/音色/相册/台词/指纹 五行；只读聚合 + 缺项入口）────
+// ── 上线准备（WP-6 备货就绪度 → #189 改口径：档案/声音/相册/绑定账号 四项清单；
+//    台词库整块移出（ops 卡保留入库入口）、说话指纹只在包可用时进「高级」折叠区，两项都不进分母）──
 async function stockLoad() {
   const body = document.getElementById('pe-stock-body');
   const pid = _pmaPid();
@@ -2630,59 +2634,61 @@ function _stockRender(body, pid, d) {
     _escHtml(pr.name || pid) + ((pr.missing_fields || []).length
       ? ' · ' + T('psn_stock_profile_fields_missing') + _escHtml((pr.missing_fields || []).join(', ')) : ''),
     '');
-  // 2 音色
+  // 2 声音（或选不发语音 → 不适用，不催）
   const v = it.voice || {};
-  let vdet = v.backend ? (_escHtml(v.backend) + ' · ' + (v.clone ? T('psn_stock_voice_clone') : T('psn_stock_voice_basic'))) : '-';
-  if (v.clone && !v.has_ref) vdet += ' · ' + T('psn_stock_voice_no_ref');
-  if (v.clone && v.has_ref) vdet += ' · ' + (v.has_transcript ? T('psn_stock_transcript_ok') : T('psn_stock_transcript_missing'));
-  html += _stockRow(v.ready, true, T('psn_stock_row_voice'), vdet,
-    v.ready ? '' : '<button class="btn btn-xs" onclick="switchDTab(\'voice\')">' + T('psn_stock_go_voice') + '</button>');
-  // 3 相册
+  let vdet;
+  if (v.voice_off) {
+    vdet = T('psn_stock_voice_off');
+  } else {
+    vdet = v.backend ? (_escHtml(v.backend) + ' · ' + (v.clone ? T('psn_stock_voice_clone') : T('psn_stock_voice_basic'))) : T('psn_stock_voice_none');
+    if (v.clone && !v.has_ref) vdet += ' · ' + T('psn_stock_voice_no_ref');
+    if (v.clone && v.has_ref) vdet += ' · ' + (v.has_transcript ? T('psn_stock_transcript_ok') : T('psn_stock_transcript_missing'));
+  }
+  html += _stockRow(v.ready, v.applicable !== false, T('psn_stock_row_voice'), vdet,
+    (v.applicable !== false && !v.ready) ? '<button class="btn btn-xs" onclick="switchDTab(\'voice\')">' + T('psn_stock_go_voice') + '</button>' : '');
+  // 3 相册（仅开启照片能力时进清单；关着时只给「去开」入口，不算缺项）
   const a = it.album || {};
   html += _stockRow(a.ready, a.applicable, T('psn_stock_row_album'),
     a.applicable ? (a.count + ' · ' + T('psn_stock_shared') + ' ' + a.shared_count
       + ((a.scenes || []).length ? ' · ' + _escHtml((a.scenes || []).join('/')) : ''))
-      : T('psn_stock_photos_off'),
-    (a.applicable && !a.ready) ? '<button class="btn btn-xs" onclick="switchDTab(\'album\')">' + T('psn_stock_go_album') + '</button>' : '');
-  // 4 台词库（专属行 + 一键入库）。B106（实施74 b4alt，_514「导入 50 条以为 AI
-  // 该学会主动说」）：行内常驻用途说明——台词库=语音预渲染提速，不教 AI 说话。
-  const ln = it.lines || {};
-  html += _stockRow(ln.ready, true, T('psn_stock_row_lines'),
-    T('psn_stock_lines_own') + ' ' + (ln.count || 0) + ' · ' + T('psn_stock_lines_common') + ' ' + (ln.common_count || 0)
-    + '<div style="font-size:.66rem;color:var(--t2);line-height:1.5;margin-top:.15rem">' + _escHtml(T('psn_stock_lines_note')) + '</div>'
-    + '<div class="pma-row" style="margin-top:.25rem"><input id="pe-stock-line-in" class="pma-in" maxlength="60" placeholder="' + _escAttr(T('psn_stock_lines_ph')) + '">'
-    + '<button class="btn btn-xs" onclick="_stockQuickLine(\'' + _escAttr(pid) + '\')">' + T('psn_stock_lines_add') + '</button>'
-    + '<span id="pe-stock-line-st" class="pma-status"></span></div>', '');
-  // 5 说话指纹（P1-1：模板可编辑 + 直存实例 overlay——打包态出厂件只读也能配）
+      : T('psn_stock_photos_off') + ((a.count || 0) > 0 ? ' · ' + T('psn_stock_photos_off_stocked').replace('{n}', String(a.count)) : ''),
+    (!a.applicable || !a.ready) ? '<button class="btn btn-xs" onclick="switchDTab(\'album\')">' + T(a.applicable ? 'psn_stock_go_album' : 'psn_stock_go_album_enable') + '</button>' : '');
+  // 4 绑定账号（没有账号在用＝人设不会对任何客户说话；旧后端无此项 → applicable=false 显「—」）
+  const b = it.binding || {};
+  let bdet;
+  if (!b.applicable) bdet = T('psn_stock_pending_restart');
+  else if (b.ready) {
+    const parts = [];
+    if (b.account_count) parts.push(T('psn_stock_bind_accounts').replace('{n}', String(b.account_count)));
+    if (b.chat_count) parts.push(T('psn_stock_bind_chats').replace('{n}', String(b.chat_count)));
+    if (b.is_default) parts.push(T('psn_stock_bind_default'));
+    bdet = parts.join(' · ');
+    if ((b.accounts || []).length) {
+      bdet += '<div style="font-size:.64rem;color:var(--t3);margin-top:.1rem">'
+        + _escHtml(b.accounts.map(function(x){ return (x[0] || '') + ':' + (x[1] || ''); }).join('  ')) + '</div>';
+    }
+  } else bdet = T('psn_stock_bind_none');
+  html += _stockRow(b.ready, !!b.applicable, T('psn_stock_row_binding'), bdet,
+    (b.applicable && !b.ready) ? '<button class="btn btn-xs" onclick="if(window.PSApply)PSApply.open(' + _jsArgAttr(pid) + ')">' + T('psn_stock_go_apply') + '</button>' : '');
+  // 高级（运营）：说话指纹——spoken_style 包随部署才渲染；缺包整块不出现；不进分母。
+  // 模板可编辑 + 直存实例 overlay（P1-1：打包态出厂件只读也能配）。
   const sp = it.speech_print || {};
-  html += _stockRow(sp.ready, sp.applicable, T('psn_stock_row_print'),
-    sp.applicable
-      ? (sp.ready ? _escHtml(sp.spoken_name || '')
-        : T('psn_stock_print_missing_pre') + '<b>' + _escHtml(sp.spoken_name || '?') + '</b>'
-          + '<textarea id="pe-stock-print-snippet" rows="6" style="width:100%;margin-top:.25rem;font-family:monospace;font-size:.64rem">' + _escHtml(sp.snippet || '') + '</textarea>'
-          + '<div class="pma-row" style="margin-top:.25rem">'
-          + '<button class="btn btn-xs" onclick="_stockSavePrint(\'' + _escAttr(pid) + '\')">' + T('psn_stock_print_save') + '</button>'
-          + '<button class="btn btn-xs" onclick="_stockCopyPrint()">' + T('psn_stock_print_copy') + '</button>'
-          + '<span id="pe-stock-print-st" class="pma-status"></span></div>')
-      : T('psn_stock_pack_missing'),
-    '');
+  if (sp.applicable) {
+    html += '<details style="margin-top:.55rem;border-top:1px dashed var(--bd);padding-top:.4rem">'
+      + '<summary style="cursor:pointer;font-size:.7rem;color:var(--t2)">' + _escHtml(T('psn_stock_adv_title')) + '</summary>'
+      + '<div style="font-size:.66rem;color:var(--t3);margin:.25rem 0;line-height:1.5">' + _escHtml(T('psn_stock_adv_sub')) + '</div>'
+      + _stockRow(sp.ready, true, T('psn_stock_row_print'),
+        sp.ready ? _escHtml(sp.spoken_name || '')
+          : T('psn_stock_print_missing_pre') + '<b>' + _escHtml(sp.spoken_name || '?') + '</b>'
+            + '<textarea id="pe-stock-print-snippet" rows="6" style="width:100%;margin-top:.25rem;font-family:monospace;font-size:.64rem">' + _escHtml(sp.snippet || '') + '</textarea>'
+            + '<div class="pma-row" style="margin-top:.25rem">'
+            + '<button class="btn btn-xs" onclick="_stockSavePrint(\'' + _escAttr(pid) + '\')">' + T('psn_stock_print_save') + '</button>'
+            + '<button class="btn btn-xs" onclick="_stockCopyPrint()">' + T('psn_stock_print_copy') + '</button>'
+            + '<span id="pe-stock-print-st" class="pma-status"></span></div>',
+        '')
+      + '</details>';
+  }
   body.innerHTML = html;
-}
-async function _stockQuickLine(pid) {
-  const inp = document.getElementById('pe-stock-line-in');
-  const st = document.getElementById('pe-stock-line-st');
-  const text = ((inp || {}).value || '').trim();
-  if (!text) return;
-  if (st) st.textContent = '…';
-  try {
-    const r = await apiFetch('/api/voice/prerender-lines/add', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: text, target: pid})});
-    if (!r.ok) { if (st) st.textContent = window.T('psn_stock_add_fail') + r.status; return; }
-    if (st) st.textContent = window.T('psn_stock_lines_added');
-    if (inp) inp.value = '';
-    _stockLoaded = true; stockLoad();     // 刷新计数（保持 tab 已加载态）
-  } catch (e) { if (st) st.textContent = window.T('psn_stock_add_fail') + e; }
 }
 function _stockCopyPrint() {
   const ta = document.getElementById('pe-stock-print-snippet');
