@@ -4200,6 +4200,17 @@ async function loadPlatformSessions(){
     if(abandonedN){
       kpis.push({label:window.T('ov2_js_ps_abandoned'), value:'⚪ '+fmt(abandonedN)});
     }
+    // J-6 B（2026-09-05）：WA 边车 close 原因分类分布（进程累计，只数不健康事件）。
+    // dns 占大头＝本机解析/代理问题不是 WhatsApp 掉线；forbidden＝账号被限。零流量不占版面。
+    // 键是受控枚举（dns/net/server/forbidden/logged_out/restart/other），可直接拼。
+    var byRc = ps.by_reason_class || {};
+    var rcKeys = Object.keys(byRc).filter(function(k){ return Number(byRc[k]) > 0; });
+    if(rcKeys.length){
+      rcKeys.sort(function(a, b){ return Number(byRc[b]) - Number(byRc[a]); });
+      kpis.push({label:window.T('ov2_js_ps_reason_class'),
+        value:'<span style="font-size:13px;">'+rcKeys.slice(0, 4).map(function(k){
+          return esc(k)+' '+fmt(Number(byRc[k])||0); }).join(' · ')+'</span>'});
+    }
     // P4 漏斗 KPI：半死进入 / 重登 / 恢复（进程累计；有流量才追加，免空卡挤位）
     var funnel = ps.stall_funnel || null;
     if(funnel && (Number(funnel.went)||Number(funnel.relogin)||Number(funnel.recovered))){

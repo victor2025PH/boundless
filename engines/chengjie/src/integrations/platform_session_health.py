@@ -21,7 +21,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("ai_chat_assistant.platform_session_health")
 
@@ -82,11 +82,35 @@ def derive_inbox_hint(*, stalled: bool, detail: str = "",
     return d[:64]
 
 
+# J-6 B（2026-09-05）：WA 边车 close 原因分类（与 whatsapp-baileys/close-policy.js
+# REASON_CLASSES 逐字对齐）。Node 侧在 postStatus 把分类以 ``[rc:<class>]`` 前缀写进
+# detail（老后端零改动也能在横幅里看见），这里把它解出来成独立字段，ops 卡/看门狗
+# 才能按类聚合：dns 多＝本机解析/代理问题，别再把 ENOTFOUND 当「WhatsApp 掉线」修。
+_REASON_CLASSES = ("dns", "net", "server", "forbidden", "logged_out", "restart", "other")
+_RC_PREFIX_RE = re.compile(r"^\[rc:([a-z_]{1,16})\]\s*")
+
+
+def parse_reason_class(detail: str) -> Tuple[str, str]:
+    """从 detail 前缀解 ``(reason_class, 去前缀后的 detail)``（纯函数）。
+
+    无前缀 → ``("", detail)``；前缀值不在枚举内归 ``other``（Node 新增类别先于
+    Python 上线时不丢计数）。
+    """
+    d = str(detail or "")
+    m = _RC_PREFIX_RE.match(d)
+    if not m:
+        return "", d
+    cls = m.group(1)
+    if cls not in _REASON_CLASSES:
+        cls = "other"
+    return cls, d[m.end():]
+
+
 class PlatformSessionHealth:
     """外部 worker 会话状态登记（线程安全，进程级）。"""
 
     __slots__ = ("_lock", "_started_at", "_sessions", "total_events",
-                 "_by_status", "_inbox_health",
+                 "_by_status", "_by_reason_class", "_inbox_health",
                  "total_stall_went", "total_stall_recovered", "total_relogin")
 
     def __init__(self) -> None:
@@ -96,6 +120,8 @@ class PlatformSessionHealth:
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.total_events = 0
         self._by_status: Dict[str, int] = {}
+        # J-6 B：不健康事件按 close 原因类聚合（进程累计；只数带 [rc:] 前缀的事件）
+        self._by_reason_class: Dict[str, int] = {}
         # 入站健康心跳（P0，2026-08-04「Messenger 登录态在、消息读不到」半死态解药）：
         # key = "platform:account_id" → {unread, read_attempts, read_fails,
         #   last_inbound_ts, ts, first_seen, stall_since, last_remind_ts}。
@@ -122,9 +148,16 @@ class PlatformSessionHealth:
         """
         st = _san(status, 24).lower() or "unknown"
         key = self._key(platform, account_id)
+        # J-6 B：解 Node 侧 [rc:<class>] 前缀。detail 保留原样（含前缀）——横幅/旧
+        # 消费面直显时「[rc:dns] …」本身就是对坐席有用的信息；reason_class 另存一份
+        # 供聚合。健康态（authorized）不带前缀，解出空串即清掉上一轮原因。
+        reason_class, _ = parse_reason_class(detail)
         with self._lock:
             self.total_events += 1
             self._by_status[st] = self._by_status.get(st, 0) + 1
+            if reason_class and st in UNHEALTHY_STATUSES:
+                self._by_reason_class[reason_class] = (
+                    self._by_reason_class.get(reason_class, 0) + 1)
             sess = self._sessions.get(key)
             if sess is None:
                 if len(self._sessions) >= _MAX_KEYS:
@@ -134,7 +167,7 @@ class PlatformSessionHealth:
                             "superseded": []}
                 sess = {"status": "", "detail": "", "login_id": "", "ts": 0.0,
                         "changes": 0, "unhealthy_since": 0.0,
-                        "last_remind_ts": 0.0}
+                        "last_remind_ts": 0.0, "reason_class": ""}
                 self._sessions[key] = sess
             prev = str(sess.get("status") or "")
             changed = prev != st
@@ -143,6 +176,7 @@ class PlatformSessionHealth:
             now = time.time()
             sess["status"] = st
             sess["detail"] = str(detail or "")[:300]
+            sess["reason_class"] = reason_class
             sess["login_id"] = _san(login_id)
             sess["ts"] = now
             # 持续不健康起点：进入不健康时打点，期间同态重推（如放弃自愈的周期重报）
@@ -480,6 +514,8 @@ class PlatformSessionHealth:
                 "started_at": self._started_at,
                 "total_events": self.total_events,
                 "by_status": dict(sorted(self._by_status.items())),
+                # J-6 B：不健康事件按 close 原因类（dns/net/server/forbidden/…）
+                "by_reason_class": dict(sorted(self._by_reason_class.items())),
                 "sessions": sessions,
                 "unhealthy": unhealthy,
                 "unhealthy_count": len(unhealthy),
@@ -505,6 +541,15 @@ class PlatformSessionHealth:
             for st, n in sorted(self._by_status.items()):
                 lines.append(
                     f'platform_session_events_total{{status="{_esc(st)}"}} {int(n)}')
+            if self._by_reason_class:
+                lines += [
+                    "# HELP platform_session_close_reason_total Unhealthy session "
+                    "events by close reason class (dns/net/server/forbidden/...)",
+                    "# TYPE platform_session_close_reason_total counter",
+                ]
+                for rc, n in sorted(self._by_reason_class.items()):
+                    lines.append(
+                        f'platform_session_close_reason_total{{reason_class="{_esc(rc)}"}} {int(n)}')
             lines += [
                 "# HELP platform_session_unhealthy Whether the session's last "
                 "reported status is unhealthy (1) or healthy (0)",

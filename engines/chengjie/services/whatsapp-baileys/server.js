@@ -38,8 +38,9 @@ import {
 // 单测（server.js 顶层 app.listen，测试没法安全 import 本文件），本文件只执行副作用。
 import {
   decideCloseAction, CLOSE_CODES, nextForbiddenState, forbiddenRoundsMax,
+  classifyCloseReason, ReasonWindow, dnsRetryConfig, reconnectDelay,
 } from "./close-policy.js";
-import { shouldMarkScanned } from "./scan-signal.js";
+import { shouldMarkScanned, pairingObservation } from "./scan-signal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
 import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
@@ -76,6 +77,36 @@ const _forbiddenState = new Map(); // loginId → {streak, rounds}
 const WA_FORBIDDEN_RETRY_MS = Math.max(
   0, Number(process.env.WA_FORBIDDEN_RETRY_MIN ?? 30) * 60 * 1000 || 0);
 const _forbiddenSince = new Map(); // loginId → 进入终态的 Date.now()
+
+// J-6 B：close 原因分类观测——每次 close（含 startLogin 在 DNS 处直接抛的「无 close 事件」
+// 失败）归成 reason_class（dns/net/server/forbidden/logged_out/restart/other，见
+// close-policy.REASON_CLASSES），进 10 分钟滚动窗（/health.stability.reason_10m）与进程累计
+// （reason_total）；postStatus 的 detail 以 `[rc:<class>]` 前缀携带同一分类（Python 侧
+// platform_session_health 解析该前缀，不改 session-status 路由契约）。
+const _reasonWindow = new ReasonWindow({ windowMs: 10 * 60 * 1000 });
+const _lastReason = new Map(); // loginId → {cls, code, ts}
+// ENOTFOUND 短退避：连续 dns 类 close 期间 3s × WA_DNS_RETRY_COUNT（默认 10）固定重试且
+// 不消耗常规 5 次预算（否则 30s 能恢复的 DNS 抖动被 3→6→12→24→48s 拖成 90s+，配对期
+// 尤其明显——#181 配对 4-5 分钟的直接来源）；超过次数回到常规指数曲线 → giving up → 慢重试。
+const WA_DNS_RETRY = dnsRetryConfig(process.env);
+const _dnsStreak = new Map(); // loginId → 连续 dns 类 close 次数（非 dns close / open 清零）
+
+/** 登记一次 close 原因（窗口计数 + DNS 连击 + 配对期 DNS 失败计数）。返回 reason_class。 */
+function noteCloseReason(loginId, entry, code, reason, errCode) {
+  const cls = classifyCloseReason(code, reason, errCode);
+  _reasonWindow.record(cls);
+  _lastReason.set(loginId, { cls, code: Number(code) || 0, ts: Date.now() });
+  if (cls === "dns") {
+    _dnsStreak.set(loginId, (_dnsStreak.get(loginId) || 0) + 1);
+    // #181：配对进行中（有起点、尚未 open）遇 DNS 失败 → 计数，供 /login/:id/status 出提示
+    if (entry && Number(entry.pairingStartedAt) > 0 && !entry.pairingMs) {
+      entry.pairingDnsFails = (Number(entry.pairingDnsFails) || 0) + 1;
+    }
+  } else {
+    _dnsStreak.delete(loginId);
+  }
+  return cls;
+}
 
 // 韧性护栏：Baileys 是社区逆向库，偶发内部 promiseTimeout('Timed Out')/解密异常等会以
 // unhandledRejection/uncaughtException 冒泡；若不接住，整个网关进程会 ~60s 崩一次（app-state
@@ -168,14 +199,25 @@ async function postIngest(payload) {
  *  P1 身份化：authorized 时顺带携带自身昵称/头像（pushname/avatar_url），
  *  Python 的 session-status 端点据此富集 registry meta.self_*——重启重连即回填，
  *  不必重新扫码。字段缺失时 Python 侧 no-op（前向/后向兼容）。 */
-async function postStatus(loginId, entry, status, detail) {
+async function postStatus(loginId, entry, status, detail, reasonClass) {
   if (!PY_STATUS_URL) return;
+  // J-6 B：不健康态上报携带 reason_class（独立字段 + detail 前缀 `[rc:x] `）。前缀是给
+  // Python 侧 platform_session_health 解析的（session-status 路由只透传 detail，不改其契约）；
+  // authorized 等健康态不带（detail 由 UI 直显，别掺标签）。
+  let rc = String(reasonClass || "");
+  if (!rc && status && status !== "authorized") {
+    const lr = _lastReason.get(loginId);
+    if (lr && lr.cls) rc = lr.cls;
+  }
+  let det = String(detail || "");
+  if (rc && status !== "authorized" && !/^\[rc:/.test(det)) det = `[rc:${rc}] ${det}`;
   await postJson(PY_STATUS_URL, {
     platform: "whatsapp",
     account_id: String((entry && entry.accountId) || ""),
     login_id: String(loginId || ""),
     status: String(status || ""),
-    detail: String(detail || ""),
+    detail: det,
+    reason_class: rc,
     pushname: String((entry && entry.selfName) || ""),
     avatar_url: String((entry && entry.selfAvatarUrl) || ""),
     ts: Math.floor(Date.now() / 1000),
@@ -284,9 +326,23 @@ function scheduleSlowRetry(loginId, proxyUrl) {
 function scheduleReconnect(loginId, proxyUrl) {
   const rec = _reconnectAttempts.get(loginId) || { count: 0, lastTs: 0 };
   if (Date.now() - rec.lastTs > 5 * 60 * 1000) rec.count = 0; // 距上次 >5min = 新事件
+  const entry = sessions.get(loginId);
+  // J-6 B：DNS 短退避阶段——最近一次 close 是 dns 类且连击 ≤ WA_DNS_RETRY.count：固定 3s
+  // 重试、**不消耗**常规预算（rec.count 不动，只刷 lastTs 防 5min 判新事件）。连击超限自然
+  // 回落下方常规曲线。决策纯函数 reconnectDelay（close-policy.js）。
+  const _dns = reconnectDelay({
+    attempt: rec.count + 1, dnsStreak: _dnsStreak.get(loginId) || 0, dnsCfg: WA_DNS_RETRY });
+  if (_dns.dnsPhase) {
+    rec.lastTs = Date.now();
+    _reconnectAttempts.set(loginId, rec);
+    logger.warn({ loginId, dnsStreak: _dnsStreak.get(loginId) || 0, dnsRetryMax: WA_DNS_RETRY.count,
+      delayMs: _dns.delayMs, reason_class: "dns" },
+      "WA DNS failure → short fixed-interval retry (regular backoff budget untouched)");
+    _armReconnectTimer(loginId, proxyUrl, _dns.delayMs);
+    return;
+  }
   rec.count += 1; rec.lastTs = Date.now();
   _reconnectAttempts.set(loginId, rec);
-  const entry = sessions.get(loginId);
   if (rec.count > _RECONNECT_MAX) {
     // J-6 A：本轮耗尽——若整轮 close 全是 403 则 403 轮数 +1（下次 403 close 由
     // decideCloseAction 按阈值判 forbidden 终态），否则清零。
@@ -303,9 +359,13 @@ function scheduleReconnect(loginId, proxyUrl) {
     scheduleSlowRetry(loginId, proxyUrl); // 不死等：低频再给重连机会
     return;
   }
-  const delay = Math.min(3000 * Math.pow(2, rec.count - 1), 60000);
-  logger.warn({ loginId, attempt: rec.count, delayMs: delay },
+  const delay = _dns.delayMs;
+  logger.warn({ loginId, attempt: rec.count, delayMs: delay,
+    reason_class: (_lastReason.get(loginId) || {}).cls || "" },
     "WA connection closed unexpectedly → scheduling reconnect");
+  _armReconnectTimer(loginId, proxyUrl, delay);
+}
+function _armReconnectTimer(loginId, proxyUrl, delay) {
   setTimeout(() => {
     // 幂等护栏：快重连与慢重试/手动 reconnect 端点是并行通道，触发时会话可能已被
     // 登出移除（不复活）或已由别的通道连回（authorized）——此时再 startLogin 会开出
@@ -316,8 +376,11 @@ function scheduleReconnect(loginId, proxyUrl) {
       // startLogin 自身抛异常（典型：断网时 fetchLatestBaileysVersion DNS 失败）＝这次
       // 尝试连 socket 都没建出来，不会有 close 事件续命 → 只打日志重连链就断了（又一条
       // 死径）。这里把失败重新入队 scheduleReconnect：计数自然递增 → 耗尽 → 慢重试兜底，
-      // 指数退避保证不会热循环。
-      logger.error({ e: String((e && e.message) || e), loginId },
+      // 指数退避保证不会热循环。J-6 B：这条无 close 事件的失败同样要归类（多半就是
+      // ENOTFOUND），否则 DNS 短退避与 /health 计数都看不见它。
+      const msg = String((e && e.message) || e);
+      const cls = noteCloseReason(loginId, sessions.get(loginId), 0, msg, e && (e.code || (e.cause && e.cause.code)));
+      logger.error({ e: msg, loginId, reason_class: cls },
         "WA reconnect attempt failed → re-scheduling");
       scheduleReconnect(loginId, proxyUrl);
     });
@@ -1042,11 +1105,21 @@ async function _startLoginInner(loginId, proxyUrl) {
     syncFullHistory: true,
   });
 
+  // J-6 B / #181 配对时延：纯扫码流程（无凭据）在建 entry 时起表；配对途中的 515 重启 /
+  // DNS 重连会换代 entry，起点与配对期 DNS 失败计数从旧 entry 继承（配对跨越多代 socket）；
+  // 配对已完成（旧 entry.pairingMs 已定格）则不再起表。
+  const _prevEntry = sessions.get(loginId) || {};
+  const _pairDone = Number(_prevEntry.pairingMs) > 0;
+  const _pairStart = _pairDone ? 0
+    : (Number(_prevEntry.pairingStartedAt) || (credsAccountId ? 0 : Date.now()));
   const entry = {
     sock,
     status: "pending",
     qrImage: "",
     accountId: credsAccountId,
+    pairingStartedAt: _pairStart,
+    pairingDnsFails: _pairDone ? 0 : (Number(_prevEntry.pairingDnsFails) || 0),
+    pairingMs: _pairDone ? Number(_prevEntry.pairingMs) : 0,
     // P1 身份化：账号自身昵称(pushName)/头像直链——连接成功后采集，供 Python 富集
     // registry meta.self_*（连接中心/账号切换条显示真实身份而非「账号N」）。
     selfName: "",
@@ -1249,8 +1322,16 @@ async function _startLoginInner(loginId, proxyUrl) {
       } catch (_) {
         // 保留现值（凭据预填）；仅在读 sock.user 异常时走到这里
       }
+      // J-6 B / #181：配对完成 → 定格 pairing_ms（首次 open 且有起点），随日志出可对账
+      if (Number(entry.pairingStartedAt) > 0 && !entry.pairingMs) {
+        entry.pairingMs = Math.max(1, Date.now() - Number(entry.pairingStartedAt));
+        entry.pairingStartedAt = 0;
+        logger.info({ loginId, accountId: entry.accountId, pairing_ms: entry.pairingMs,
+          pairing_dns_fails: Number(entry.pairingDnsFails) || 0 }, "WA pairing completed");
+      }
       logger.info({ loginId, accountId: entry.accountId }, "WA connected");
       _reconnectAttempts.delete(loginId); // 连上 → 清零重连退避计数
+      _dnsStreak.delete(loginId); // J-6 B：连上 = DNS 连击清零
       _forbiddenState.delete(loginId); // J-6 A：连上 = 403 连续计数清零
       _forbiddenSince.delete(loginId);
       const _srt = _slowRetryTimers.get(loginId); // 已恢复 → 撤掉排队中的慢重试
@@ -1288,13 +1369,21 @@ async function _startLoginInner(loginId, proxyUrl) {
       //         440 connectionReplaced(同号另一处登录挤掉) / 515 restartRequired / 408 timedOut。
       const _reason = String(
         (lastDisconnect && lastDisconnect.error && (lastDisconnect.error.message || lastDisconnect.error)) || "");
-      logger.warn(
-        { loginId, accountId: entry.accountId || "", code, status: entry.status, reason: _reason },
-        "WA connection closed");
       // 分支决策抽在 close-policy.js（纯函数，node --test 单测）；这里只执行副作用。
       // isStale 在 close 时点重算：处理器顶部已拦一次，但上方 qr 分支有 await，极端时序下
       // entry 可能在 await 期间被 startLogin 换代——close 副作用绝不能落在已换代的会话上。
       const _stale = sessions.get(loginId) !== entry;
+      // J-6 B：原因分类（dns/net/server/forbidden/logged_out/restart/other）。底层 Node 错误码
+      // 藏在 Boom 的 data（Baileys 把 ENOTFOUND/ECONNRESET 都映成 408，只靠 code 分不出 DNS）。
+      const _errCode = String(
+        (lastDisconnect && lastDisconnect.error &&
+          ((lastDisconnect.error.data && lastDisconnect.error.data.code) || lastDisconnect.error.code)) || "");
+      const _cls = _stale ? classifyCloseReason(code, _reason, _errCode)
+        : noteCloseReason(loginId, entry, code, _reason, _errCode);
+      logger.warn(
+        { loginId, accountId: entry.accountId || "", code, status: entry.status, reason: _reason,
+          reason_class: _cls, stale: _stale },
+        "WA connection closed");
       // J-6 A：403 连续计数先于决策更新（陈旧事件不计——旧 socket 的 close 不属于当前会话）。
       let _fstate = _forbiddenState.get(loginId) || { streak: 0, rounds: 0 };
       if (!_stale) {
@@ -1330,7 +1419,10 @@ async function _startLoginInner(loginId, proxyUrl) {
         // 失败也要入重连队列：restart 时点恰逢断网时 startLogin 会在 DNS 处直接抛，
         // 只打日志的话这条会话就永远停在原地（与快重连 catch 同一死径，同一修法）。
         startLogin(loginId, entry.proxyUrl).catch((e) => {
-          logger.error({ e: String((e && e.message) || e), loginId },
+          const msg = String((e && e.message) || e);
+          const cls = noteCloseReason(loginId, sessions.get(loginId), 0, msg,
+            e && (e.code || (e.cause && e.cause.code)));
+          logger.error({ e: msg, loginId, reason_class: cls },
             "restart failed → re-scheduling reconnect");
           scheduleReconnect(loginId, entry.proxyUrl);
         });
@@ -1410,10 +1502,19 @@ app.use(express.json());
 function stabilityStats() {
   let forbidden = 0;
   for (const e of sessions.values()) if (e && e.status === "forbidden") forbidden++;
+  // J-6 B：近 10 分钟各类 close 计数 + 进程累计 + 处于 DNS 短退避的登录数
+  let dnsPhase = 0;
+  for (const [lid, n] of _dnsStreak.entries()) {
+    const e = sessions.get(lid);
+    if (e && e.status !== "authorized" && n > 0 && n <= WA_DNS_RETRY.count) dnsPhase++;
+  }
   return {
     forbidden,
     forbidden_rounds_max: WA_FORBIDDEN_ROUNDS,
     forbidden_retry_min: Math.round(WA_FORBIDDEN_RETRY_MS / 60000),
+    reason_10m: _reasonWindow.counts(),
+    reason_total: { ..._reasonWindow.total },
+    dns_retry: { delay_ms: WA_DNS_RETRY.delayMs, count: WA_DNS_RETRY.count, in_phase: dnsPhase },
   };
 }
 
@@ -1500,6 +1601,10 @@ app.post("/login/start", async (req, res) => {
 app.get("/login/:id/status", (req, res) => {
   const entry = sessions.get(req.params.id);
   if (!entry) return res.json({ status: "expired", detail: "session not found" });
+  // J-6 B / #181：配对时延观测——pairing_ms（进行中=已耗时/完成=定格值）+ 配对期 DNS 失败数
+  // + hint_code（"dns_retry"：≥60s 且期间有 ENOTFOUND → 前端提示「本机解析不到 WhatsApp 域名，
+  // 正在自动重试；请检查 DNS/代理」，别让坐席以为码坏了反复换码）。纯函数 pairingObservation。
+  const _pair = pairingObservation(entry);
   res.json({
     status: entry.status,
     account_id: entry.accountId,
@@ -1507,6 +1612,10 @@ app.get("/login/:id/status", (req, res) => {
     // P1 身份化：登录轮询携带自身昵称/头像 → Python enrich_from_fields 富集
     pushname: entry.selfName || "",
     avatar_url: entry.selfAvatarUrl || "",
+    pairing_ms: _pair.pairing_ms,
+    pairing_dns_fails: _pair.pairing_dns_fails,
+    hint_code: _pair.hint_code,
+    reason_class: (_lastReason.get(req.params.id) || {}).cls || "",
   });
 });
 
@@ -2034,6 +2143,8 @@ app.post("/accounts/:id/logout", async (req, res) => {
     sessions.delete(loginId);
     _forbiddenState.delete(loginId); // J-6 A：登出即清 403 终态记账（换号重配对从零判）
     _forbiddenSince.delete(loginId);
+    _dnsStreak.delete(loginId); // J-6 B：同理清 DNS 连击/最近原因
+    _lastReason.delete(loginId);
   }
   // 清磁盘 session 目录（authDir 或按 loginId 兜底）→ 防 restoreAll 复活
   try {

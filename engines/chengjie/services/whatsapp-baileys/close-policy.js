@@ -120,3 +120,127 @@ export function decideCloseAction(entry, code, isStale, ctx) {
   // 纯扫码流程（从未配对成功、无凭据）失败 → expired，等用户重新发起扫码。
   return { action: "expire" };
 }
+
+// ── J-6 B：close 原因分类 + 滚动窗口计数 + DNS 短退避 ─────────────────────────
+//
+// 事故：`WebSocket Error (getaddrinfo ENOTFOUND web.whatsapp.com)` 与真正的服务端踢线
+// （428/440/500）在日志里都只是「WA connection closed」+ 一串报文，配对慢（#181，4-5 分钟）
+// 与断线抖动的根因都要人肉翻 reason 字符串才分得出。这里把 (code, reason) 归成固定枚举
+// reason_class，随 close 日志 / postStatus / /health 一起出——运维读一个字段就知道该查
+// DNS/网络还是账号。
+
+/** reason_class 枚举（顺序即 /health 输出顺序）。 */
+export const REASON_CLASSES = Object.freeze([
+  "dns", // 域名解析失败：ENOTFOUND / EAI_AGAIN / getaddrinfo（本机 DNS/代理/断网首要嫌疑）
+  "net", // 传输层：ECONNRESET / ETIMEDOUT / 408 timedOut / 428 connectionClosed 等网络抖动
+  "server", // WhatsApp 服务端主动关闭：440 connectionReplaced / 500 badSession / 503 / 411
+  "forbidden", // 403 账号被限制/封禁
+  "logged_out", // 401 设备解绑/手机端登出
+  "restart", // 515 配对后协议性重启（正常流程，计数只为对账不告警）
+  "other", // 归不进上面任何一类（code=0 且报文无特征）
+]);
+
+const _DNS_RE = /ENOTFOUND|EAI_AGAIN|EAI_NODATA|EAI_NONAME|getaddrinfo/i;
+const _NET_RE = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EPIPE|ECONNABORTED|socket hang up|network/i;
+const _SERVER_CODES = new Set([440, 500, 503, 411, 405]);
+const _NET_CODES = new Set([408, 428]);
+
+/**
+ * 把一次 close 归类为 REASON_CLASSES 之一（纯函数）。
+ *
+ * @param {number} code    lastDisconnect statusCode（取不到传 0）
+ * @param {string} reason  错误报文（Boom message / startLogin 抛出的 message）
+ * @param {string} [errCode] 底层 Node 错误码（err.code / err.data.code，如 "ENOTFOUND"），可选
+ * @returns {string} reason_class
+ *
+ * 优先级：账号态码（403/401/515）> 报文里的 Node 错误特征（DNS > 传输层）> 状态码族。
+ * 账号态码先判是因为 Baileys 把 DNS/ECONNRESET 都映成 408，靠 code 分不出 DNS；而 403/401
+ * 报文千篇一律（"Connection Failure"），只有 code 可信。
+ */
+export function classifyCloseReason(code, reason, errCode) {
+  const c = Number(code) || 0;
+  if (c === CLOSE_CODES.forbidden) return "forbidden";
+  if (c === CLOSE_CODES.loggedOut) return "logged_out";
+  if (c === CLOSE_CODES.restartRequired) return "restart";
+  const r = String(reason || "");
+  const ec = String(errCode || "").toUpperCase();
+  if (_DNS_RE.test(ec) || _DNS_RE.test(r)) return "dns";
+  if ((ec && _NET_RE.test(ec)) || _NET_RE.test(r)) return "net";
+  if (_SERVER_CODES.has(c)) return "server";
+  if (_NET_CODES.has(c)) return "net";
+  return "other";
+}
+
+/**
+ * 滚动时间窗计数器（默认 10 分钟）：record(cls) 记一次、counts() 出各类近窗计数。
+ * 纯内存、零依赖；now 可注入便于单测。事件数封顶 maxEvents（防长时间断网刷爆内存，
+ * 超限丢最旧）。
+ */
+export class ReasonWindow {
+  constructor(opts) {
+    const o = opts || {};
+    this.windowMs = Math.max(1000, Number(o.windowMs) || 10 * 60 * 1000);
+    this.maxEvents = Math.max(10, Number(o.maxEvents) || 2000);
+    this._now = typeof o.now === "function" ? o.now : Date.now;
+    this._events = []; // [{ts, cls}]，按 ts 递增
+    this.total = Object.create(null); // 进程累计（不滚动）
+  }
+  record(cls, ts) {
+    const k = REASON_CLASSES.includes(cls) ? cls : "other";
+    const t = Number.isFinite(ts) ? ts : this._now();
+    this._events.push({ ts: t, cls: k });
+    this.total[k] = (this.total[k] || 0) + 1;
+    if (this._events.length > this.maxEvents) this._events.splice(0, this._events.length - this.maxEvents);
+    this._prune(t);
+  }
+  _prune(nowTs) {
+    const cutoff = nowTs - this.windowMs;
+    let i = 0;
+    while (i < this._events.length && this._events[i].ts < cutoff) i++;
+    if (i > 0) this._events.splice(0, i);
+  }
+  /** 近窗各类计数（所有类都出，缺省 0，便于看板固定列）。 */
+  counts(ts) {
+    const t = Number.isFinite(ts) ? ts : this._now();
+    this._prune(t);
+    const out = {};
+    for (const k of REASON_CLASSES) out[k] = 0;
+    for (const e of this._events) out[e.cls] += 1;
+    return out;
+  }
+}
+
+/** DNS 短退避缺省：ENOTFOUND 先 3s 固定间隔重试 10 次（本机 DNS 抖动/代理刚起通常几秒内恢复，
+ *  走 3→6→12→24→48s 指数曲线会把 30s 就能恢复的断线拖成 90s+，配对期尤其明显）。 */
+export const DNS_RETRY_DEFAULT = Object.freeze({ delayMs: 3000, count: 10 });
+
+/** 读环境变量 WA_DNS_RETRY_MS / WA_DNS_RETRY_COUNT（非法/缺省 → 默认；count=0 关闭短退避）。 */
+export function dnsRetryConfig(env) {
+  const e = env || {};
+  const d = Number(e.WA_DNS_RETRY_MS);
+  const n = Number(e.WA_DNS_RETRY_COUNT);
+  return {
+    delayMs: Number.isFinite(d) && d >= 500 ? Math.floor(d) : DNS_RETRY_DEFAULT.delayMs,
+    count: Number.isFinite(n) && n >= 0 ? Math.floor(n) : DNS_RETRY_DEFAULT.count,
+  };
+}
+
+/**
+ * 重连延迟决策（纯函数）。
+ *
+ * @param {{attempt: number, dnsStreak?: number, dnsCfg?: {delayMs:number,count:number}}} p
+ *   attempt=常规曲线第几次（1 起）；dnsStreak=最近连续 dns 类 close 次数（0=上次不是 DNS）。
+ * @returns {{delayMs: number, dnsPhase: boolean}}
+ *   dnsPhase=true 表示处于 DNS 短退避阶段：调用方**不应**消耗常规重连预算（否则 10 次 3s
+ *   重试瞬间把 5 次预算烧光进 giving up）；streak 超过 count 后回到常规指数曲线。
+ */
+export function reconnectDelay(p) {
+  const o = p || {};
+  const cfg = o.dnsCfg || DNS_RETRY_DEFAULT;
+  const streak = Number(o.dnsStreak) || 0;
+  if (streak > 0 && cfg.count > 0 && streak <= cfg.count) {
+    return { delayMs: cfg.delayMs, dnsPhase: true };
+  }
+  const attempt = Math.max(1, Number(o.attempt) || 1);
+  return { delayMs: Math.min(3000 * Math.pow(2, attempt - 1), 60000), dnsPhase: false };
+}

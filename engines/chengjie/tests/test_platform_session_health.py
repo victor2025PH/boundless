@@ -75,6 +75,59 @@ def test_store_unknown_session_is_healthy():
     assert _store().is_unhealthy("messenger", "nobody") is False
 
 
+# ── J-6 B：close 原因分类（[rc:<class>] 前缀）──────────────────────────────
+
+def test_parse_reason_class_prefix():
+    from src.integrations.platform_session_health import parse_reason_class
+    assert parse_reason_class("[rc:dns] WebSocket Error (getaddrinfo ENOTFOUND)") == (
+        "dns", "WebSocket Error (getaddrinfo ENOTFOUND)")
+    assert parse_reason_class("[rc:forbidden] 403 forbidden x3 rounds") == (
+        "forbidden", "403 forbidden x3 rounds")
+    # 无前缀 → 空类、原样
+    assert parse_reason_class("cookies expired") == ("", "cookies expired")
+    assert parse_reason_class("") == ("", "")
+    # Node 新增未知类别 → other（不丢计数）
+    assert parse_reason_class("[rc:quantum] weird")[0] == "other"
+    # 前缀只认句首（detail 正文里出现的 [rc:] 不算）
+    assert parse_reason_class("x [rc:dns] y") == ("", "x [rc:dns] y")
+
+
+def test_store_reason_class_tracked_and_aggregated():
+    s = _store()
+    s.record("whatsapp", "639270135480", "failed",
+             detail="[rc:dns] WebSocket Error (getaddrinfo ENOTFOUND web.whatsapp.com)")
+    s.record("whatsapp", "639270135480", "failed", detail="[rc:dns] again")
+    s.record("whatsapp", "639170000001", "forbidden", detail="[rc:forbidden] 403 x3")
+    # 健康态事件不带前缀也不进原因聚合
+    s.record("whatsapp", "639170000002", "authorized")
+    # 旧 worker（无前缀）不健康事件：不进聚合、reason_class 空
+    s.record("messenger", "100", "needs_login", detail="cookies expired")
+
+    d = s.dump()
+    assert d["by_reason_class"] == {"dns": 2, "forbidden": 1}
+    sess = d["sessions"]
+    assert sess["whatsapp:639270135480"]["reason_class"] == "dns"
+    # detail 原样保留前缀（横幅直显时「[rc:dns] …」本身就是给坐席的信息）
+    assert sess["whatsapp:639270135480"]["detail"].startswith("[rc:dns]")
+    assert sess["whatsapp:639170000001"]["reason_class"] == "forbidden"
+    assert sess["messenger:100"]["reason_class"] == ""
+
+    # 恢复后 reason_class 清空（authorized 不带前缀）
+    s.record("whatsapp", "639270135480", "authorized")
+    assert s.dump()["sessions"]["whatsapp:639270135480"]["reason_class"] == ""
+
+    prom = s.dump_prom()
+    assert 'platform_session_close_reason_total{reason_class="dns"} 2' in prom
+    assert 'platform_session_close_reason_total{reason_class="forbidden"} 1' in prom
+
+
+def test_store_prom_omits_reason_block_when_empty():
+    s = _store()
+    s.record("messenger", "100", "needs_login", detail="cookies expired")
+    assert "platform_session_close_reason_total" not in s.dump_prom()
+    assert s.dump()["by_reason_class"] == {}
+
+
 # ── B63-②（实施64 P1-4）：发送失败会话性败因 → 健康登记 ─────────────────────
 
 def test_note_send_auth_failure_maps_session_codes(monkeypatch):

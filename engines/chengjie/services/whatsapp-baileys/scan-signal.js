@@ -25,3 +25,32 @@ export function shouldMarkScanned(entry, sig) {
   if (s.meId && entry.qrImage) return true;
   return false;
 }
+
+/** 配对期 DNS 提示阈值：配对已耗时 ≥60s 且期间至少 1 次 dns 类 close → 给坐席可见提示。 */
+export const PAIRING_DNS_HINT_MS = 60 * 1000;
+
+/**
+ * 配对时延观测（J-6 B / #181，纯函数）：从 entry 上的配对起点与 DNS 失败计数推导
+ * 「配对已耗时多少 / 要不要给坐席 DNS 提示」。
+ *
+ * 背景：#181 实录配对 4-5 分钟，日志里全是 `ENOTFOUND web.whatsapp.com` 短退避——不是
+ * 用户扫码慢，是本机解析不到 WhatsApp 域名在反复重连。前端只看得到「正在登录…」，
+ * 坐席以为码坏了反复换码。这里给出 hint_code="dns_retry"，前端按既有 hint_code 通道渲染。
+ *
+ * @param {{pairingStartedAt?: number, pairingDnsFails?: number, pairingMs?: number}|null} entry
+ * @param {number} [now] 注入时钟（缺省 Date.now()）
+ * @returns {{pairing_ms: number, pairing_dns_fails: number, hint_code: string}}
+ *   pairing_ms：配对进行中＝已耗时；已完成（entry.pairingMs 已定格）＝最终值；从未配对＝0。
+ *   hint_code：满足阈值为 "dns_retry"，否则 ""。
+ */
+export function pairingObservation(entry, now) {
+  const e = entry || {};
+  const t = Number.isFinite(now) ? now : Date.now();
+  const fails = Math.max(0, Number(e.pairingDnsFails) || 0);
+  let ms = 0;
+  if (Number.isFinite(e.pairingMs) && e.pairingMs > 0) ms = Math.floor(e.pairingMs);
+  else if (Number(e.pairingStartedAt) > 0) ms = Math.max(0, Math.floor(t - Number(e.pairingStartedAt)));
+  const inProgress = !(Number.isFinite(e.pairingMs) && e.pairingMs > 0) && Number(e.pairingStartedAt) > 0;
+  const hint = inProgress && fails > 0 && ms >= PAIRING_DNS_HINT_MS ? "dns_retry" : "";
+  return { pairing_ms: ms, pairing_dns_fails: fails, hint_code: hint };
+}
