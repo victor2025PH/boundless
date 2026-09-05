@@ -4715,6 +4715,14 @@ health_watchdog:
     min_count: 1                      # 被埋会话数达此值即告警
     min_unread: 1                     # 未读数下限（提高＝只报「客户催了好几句」的）
     interval_min: 240                 # 重提间隔（4h）；清空自动补发恢复通知
+  # 幽灵未读巡检（#120 / #159 族 / #145件④，默认开；K-1 C `35b224c4`）：conversations.unread
+  # 汇总数 − 消息表里真实未读入站数 ＝「这台机器上有多少未读是幽灵」（会话被删/清了未读
+  # 但 badge 残值还在）。差额 > 0 不等于故障，超 min_phantom 才吵人；清零自动报喜一次。
+  # 经 phantom_unread_alert 事件外发（告警渠道订阅别名 phantom_unread）。
+  phantom_unread_remind:
+    enabled: true
+    min_phantom: 5                    # 幽灵未读条数达此值即告警
+    interval_min: 360                 # 重提间隔（6h，最低 10 分钟）
   # 入站「半死态」提醒（默认开；2026-08-04 Messenger 黑洞实锤）：账号登录探测绿
   # （authorized，有输入框有会话列表）但**侧栏有未读、进线程读取持续全失败**＝看得到
   # 读不到。实测根因：cookie 快照恢复了登录、E2EE 设备密钥没恢复 → 消息区永久卡
