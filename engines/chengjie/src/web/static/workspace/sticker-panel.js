@@ -320,7 +320,7 @@
         failToast(d, r.status);
       }
     }).catch(function () {
-      toast(T('inbox.media.send_fail_net'), '#dc2626');
+      toast(T('inbox.media.send_fail_net_restart'), '#b45309');
     }).then(function () {
       S.sending = false;
       if (cell) cell.classList.remove('busy');
