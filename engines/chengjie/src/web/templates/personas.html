@@ -4848,7 +4848,7 @@ function _pdiRenderResult(res) {
     for (var i = 0; i < fieldKeys.length; i++) {
       var fk = fieldKeys[i];
       if (_pdiSrcKeys.indexOf(fk) !== -1) {
-        return '<a href="javascript:void(0)" class="pdi-src-link" onclick="_pdiShowSources(' + JSON.stringify(fk) + ')">📎 ' + _escHtml(window.T('psn_src_link')) + '</a>';
+        return '<a href="javascript:void(0)" class="pdi-src-link" onclick="_pdiShowSources(' + _jsArgAttr(fk) + ')">📎 ' + _escHtml(window.T('psn_src_link')) + '</a>';
       }
     }
     return '';
@@ -5619,23 +5619,31 @@ function _quizRenderHistory(reports, summary) {
   }
   var show = reports.slice(0, 8);
   listEl.innerHTML = show.map(function(rep) {
-    rep = rep || {};
-    var id = String(rep.id == null ? '' : rep.id);
-    if (!id) return '';
-    var sc = Number(rep.score); if (isNaN(sc)) sc = 0;
-    sc = Math.max(0, Math.min(100, Math.round(sc)));
-    var passed = rep.passed != null ? rep.passed : '—';
-    var total = rep.total != null ? rep.total : '—';
-    // 裁判改判数：关键词判错但 LLM 裁判认可 → 走高说明判分越来越靠兜底
-    var judged = Number(rep.judged); if (isNaN(judged) || judged < 0) judged = 0;
-    return '<button type="button" class="pq-hist-row" onclick="_quizOpenHist(' + JSON.stringify(id) + ')">'
-      + '<span class="pq-hist-score">' + sc + '</span>'
-      + '<span class="pq-hist-ts">' + _escHtml(_quizFmtTs(rep.ts)) + '</span>'
-      + '<span class="pq-hist-pt">' + _escHtml(String(passed) + '/' + String(total)) + '</span>'
-      + (judged ? '<span class="pq-hist-judged" title="'
-          + _escHtml(window.T('psn_quiz_hist_judged_tip')) + '">⚖ ' + judged + '</span>' : '')
-      + '</button>';
+    // #191：单条记录字段脏/缺不得拖垮整张列表——逐行隔离，坏行跳过并记 beacon
+    try { return _quizHistRowHtml(rep); }
+    catch (e) { _feBeacon('_quizRenderHistory', 'render'); return ''; }
   }).join('');
+}
+function _quizHistRowHtml(rep) {
+  rep = rep || {};
+  var id = String(rep.id == null ? '' : rep.id);
+  if (!id) return '';
+  var sc = Number(rep.score); if (isNaN(sc)) sc = 0;
+  sc = Math.max(0, Math.min(100, Math.round(sc)));
+  var passed = rep.passed != null ? rep.passed : '—';
+  var total = rep.total != null ? rep.total : '—';
+  // 裁判改判数：关键词判错但 LLM 裁判认可 → 走高说明判分越来越靠兜底
+  var judged = Number(rep.judged); if (isNaN(judged) || judged < 0) judged = 0;
+  // #191 根因：此处原为 JSON.stringify(id) 直接拼进双引号 onclick 属性——字符串的双引号把
+  // 属性截成 `_quizOpenHist(` → 每一行点击必抛 SyntaxError → 全局守卫红条「页面脚本出错」。
+  // 内联 handler 的字符串实参一律走 _jsArgAttr（JSON 字面量 + 属性转义）。
+  return '<button type="button" class="pq-hist-row" onclick="_quizOpenHist(' + _jsArgAttr(id) + ')">'
+    + '<span class="pq-hist-score">' + sc + '</span>'
+    + '<span class="pq-hist-ts">' + _escHtml(_quizFmtTs(rep.ts)) + '</span>'
+    + '<span class="pq-hist-pt">' + _escHtml(String(passed) + '/' + String(total)) + '</span>'
+    + (judged ? '<span class="pq-hist-judged" title="'
+        + _escHtml(window.T('psn_quiz_hist_judged_tip')) + '">⚖ ' + judged + '</span>' : '')
+    + '</button>';
 }
 // ── I4 线：考题分数趋势（I3 契约 /quiz/trend；404 / enabled:false → 整行不显示）──
 var _quizTrendMap = null;
@@ -5696,6 +5704,8 @@ async function _quizOpenHist(rid) {
   if (!pid || rid == null || rid === '' || !viewEl) return;
   viewEl.innerHTML = '<div style="font-size:.7rem;color:var(--t2)">'
     + _escHtml(window.T('psn_quiz_hist_loading')) + '</div>';
+  var failHtml = '<div style="font-size:.7rem;color:var(--t3)">'
+    + _escHtml(window.T('psn_quiz_hist_open_fail')) + '</div>';
   try {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid)
       + '/quiz/reports/' + encodeURIComponent(String(rid)));
@@ -5703,10 +5713,13 @@ async function _quizOpenHist(rid) {
     if (r.status === 404 || r.status === 403) { viewEl.innerHTML = ''; return; }
     var d = null;
     try { d = await r.json(); } catch (e2) {}
-    if (!r.ok || !d || d.ok === false) { viewEl.innerHTML = ''; return; }
+    if (!r.ok || !d || d.ok === false) { viewEl.innerHTML = failHtml; return; }
     var report = (d.report && typeof d.report === 'object') ? d.report : d;
-    _quizRenderResult(report, viewEl);
-  } catch (e) { viewEl.innerHTML = ''; }
+    // 渲染层单独兜：报告体字段脏（items 非数组 / expect 非串等）只降级成一句话，
+    // 不再冒泡成全页红条；beacon 带函数名让 ops「前端哑按钮错误」卡能归因到这里。
+    try { _quizRenderResult(report, viewEl); }
+    catch (e3) { viewEl.innerHTML = failHtml; _feBeacon('_quizOpenHist', 'render'); }
+  } catch (e) { viewEl.innerHTML = failHtml; }
 }
 
 // ── C 线：卡片完整度徽标（A 线 list API 的数值型 completeness；旧后端无字段=不渲染）
@@ -7442,6 +7455,18 @@ function _grAutoHeight(ta) {
 
 function _escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function _escAttr(s) { return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+/* 内联 on*="fn(…)" 里的字符串实参：先 JSON 字面量再做属性转义。裸 JSON.stringify 的双引号会
+   把双引号属性截断（#191 历史质检行点击即 SyntaxError 的根因）。 */
+function _jsArgAttr(v) { return _escAttr(JSON.stringify(String(v == null ? '' : v))); }
+/* 页内可归因遥测：与全局守卫同一后端计数（/api/telemetry/frontend-error），只送 page/fn/type。
+   守卫兜到的 SyntaxError 拿不到函数名，这里由 handler 自己报名字，ops 卡才能定位到哪一处。 */
+function _feBeacon(fn, type) {
+  try {
+    if (!navigator.sendBeacon) return;
+    var body = JSON.stringify({page: location.pathname, fn: String(fn || ''), type: String(type || 'handler')});
+    navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type: 'application/json'}));
+  } catch (e) {}
+}
 
 // ── P6-a: Search / filter ────────────────────────────────────────────────────
 function _grApplyFilter() {

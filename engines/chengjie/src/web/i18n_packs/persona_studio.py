@@ -843,6 +843,7 @@ ZH = {
     "psn_quiz_hist_empty": "暂无历史",
     "psn_quiz_hist_judged_tip": "关键词判错、LLM 裁判改判为对的题数；持续走高说明判分越来越依赖兜底",
     "psn_quiz_hist_loading": "加载中…",
+    "psn_quiz_hist_open_fail": "这份报告暂时打不开（数据不完整或服务未响应），可稍后再试",
     "psn_quiz_hist_sum": "共 {n} 次 · 均分 {avg} · 最近 {last}",
     "psn_quiz_hist_title": "历史质检",
     "psn_quiz_off": "考题功能未启用（后端未开启）",
@@ -1911,6 +1912,7 @@ EN = {
                                  "accepted; a rising count means scoring increasingly "
                                  "relies on the fallback"),
     "psn_quiz_hist_loading": "Loading…",
+    "psn_quiz_hist_open_fail": "This report can't be opened right now (incomplete data or no response); try again later",
     "psn_quiz_hist_sum": "{n} runs · avg {avg} · last {last}",
     "psn_quiz_hist_title": "Quiz history",
     "psn_quiz_off": "Quiz feature is not enabled on the backend",
