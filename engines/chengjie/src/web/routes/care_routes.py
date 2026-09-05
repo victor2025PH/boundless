@@ -635,12 +635,27 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         {contact_key, platform, account_id, chat_key, topic, due_at?|due_in_hours?,
          source_text?, sentiment?}。手动可信 → confidence=1.0，不受阈值/去重拦截。"""
         from src.contacts.care_commitment import CareCommitment
+        from src.contacts.care_intent import detect_instruction_intent
 
         body = await request.json()
         contact_key = str(body.get("contact_key") or "").strip()
         topic = str(body.get("topic") or "").strip()
+        # J-8 #182 两种类型：event＝客户的事（AI 自然关心，经 LLM）；
+        # verbatim＝到点原文直发（零 LLM）。缺省 event 保旧调用方语义。
+        mode = str(body.get("mode") or "event").strip().lower()
+        if mode not in ("event", "verbatim"):
+            return {"ok": False, "reason": "bad_mode"}
         if not contact_key or not topic:
             return {"ok": False, "reason": "missing", "message": "contact_key 和 topic 必填"}
+        # 意图守卫：「什么事」填的是给 AI 的指令 / 要发的话（「主动问候对方早上好」）
+        # → 不入队，回 reason=looks_like_instruction 让前端提示切换到原文直发；
+        # 运营确认仍按客户的事入队时带 confirm_event=true 放行。
+        if mode == "event" and not bool(body.get("confirm_event")):
+            verdict = detect_instruction_intent(topic)
+            if verdict.get("looks_like_instruction"):
+                return {"ok": False, "reason": "looks_like_instruction",
+                        "guard_reason": str(verdict.get("reason") or ""),
+                        "suggest_mode": "verbatim"}
         now = time.time()
         if body.get("due_at"):
             try:
@@ -655,13 +670,28 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         if due_at <= now:
             return {"ok": False, "reason": "due_in_past", "message": "到期时间须在未来"}
 
+        store = _store(request)
+        if mode == "verbatim":
+            # 原文＝topic 栏填的整句话（前端同一个输入框）；source_text 可显式给全文
+            text = str(body.get("text") or body.get("source_text") or topic).strip()
+            if not hasattr(store, "add_verbatim"):
+                return {"ok": False, "reason": "unsupported"}
+            rid = store.add_verbatim(
+                contact_key=contact_key, due_at=due_at, text=text,
+                platform=str(body.get("platform") or ""),
+                account_id=str(body.get("account_id") or "default"),
+                chat_key=str(body.get("chat_key") or ""),
+            )
+            if not rid:
+                return {"ok": False, "reason": "add_failed", "message": "写入失败"}
+            return {"ok": True, "id": rid, "mode": "verbatim"}
+
         commitment = CareCommitment(
             due_at=due_at, event_at=due_at, topic=topic,
             sentiment=str(body.get("sentiment") or "neutral"),
             anchor_text="manual", source_text=str(body.get("source_text") or "")[:160],
             confidence=1.0,
         )
-        store = _store(request)
         rid = store.add_commitment(
             commitment, contact_key=contact_key,
             platform=str(body.get("platform") or ""),
@@ -671,7 +701,52 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         )
         if not rid:
             return {"ok": False, "reason": "add_failed", "message": "写入失败（可能重复）"}
-        return {"ok": True, "id": rid}
+        return {"ok": True, "id": rid, "mode": "event"}
+
+    @app.post("/api/care/intent-check")
+    async def api_care_intent_check(request: Request, _=Depends(api_auth)):
+        """J-8 #182 前端逐键守卫：「什么事」这栏像不像一条要发出去的话/指令。
+        纯函数、零副作用；与 add 端点同一判定源（``detect_instruction_intent``）。"""
+        from src.contacts.care_intent import detect_instruction_intent
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        v = detect_instruction_intent(str(body.get("topic") or ""))
+        return {"ok": True, "looks_like_instruction": bool(v.get("looks_like_instruction")),
+                "reason": str(v.get("reason") or "")}
+
+    @app.post("/api/care/schedule/{sid}/send-text")
+    async def api_care_schedule_send_text(sid: int, request: Request, _=Depends(api_auth)):
+        """J-8 #182「改一改再发」：预览上手改的终稿直接送出站队列（不经 LLM）。
+
+        body：{text}。经派发器 ``deliver_text``（与自动派发同一 ``_send``：deferred
+        队列 gate / pacing / kill-switch / 安静时段顺延全享），成功即该行 mark_sent。
+        结构化 reason：not_pending / empty_text / missing_route / gated / send_failed /
+        dispatcher_missing。
+        """
+        store = _store(request)
+        item = store.get(int(sid))
+        if not item or str(item.get("status")) != "pending":
+            return {"ok": False, "reason": "not_pending"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return {"ok": False, "reason": "empty_text"}
+        engine = getattr(request.app.state, "care_engine", None) or {}
+        disp = engine.get("dispatcher") if isinstance(engine, dict) else None
+        if disp is None or not hasattr(disp, "deliver_text"):
+            return {"ok": False, "reason": "dispatcher_missing"}
+        res = await disp.deliver_text(dict(item), text)
+        res = dict(res or {})
+        res.setdefault("ok", False)
+        res["id"] = int(sid)
+        return res
 
     @app.post("/api/care/schedule/{sid}/cancel")
     async def api_care_schedule_cancel(sid: int, request: Request, _=Depends(api_auth)):
@@ -735,9 +810,21 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         item = store.get(int(sid))
         if not item or str(item.get("status")) != "pending":
             return {"ok": False, "reason": "not_pending"}
+        # J-8 #182：预览先回「我理解为」结构化字段（前端按 i18n 拼句）；
+        # 原文直发行不经 LLM，预览就是原文。
+        understanding: dict = {}
+        try:
+            from src.contacts.care_intent import care_understanding
+            understanding = care_understanding(item)
+        except Exception:
+            understanding = {}
+        if understanding.get("mode") == "verbatim":
+            return {"ok": True, "id": int(sid), "mode": "verbatim",
+                    "preview": str(understanding.get("source_text") or ""),
+                    "understanding": understanding}
         ai = getattr(request.app.state, "ai_client", None)
         if ai is None:
-            return {"ok": False, "reason": "ai_missing"}
+            return {"ok": False, "reason": "ai_missing", "understanding": understanding}
         from src.contacts.care_dispatcher import build_care_prompt
 
         context_block = ""
@@ -784,10 +871,11 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             text = (await ai.chat(prompt) or "").strip()
         except Exception:
             logger.debug("care preview LLM 失败 sid=%s", sid, exc_info=True)
-            return {"ok": False, "reason": "llm_error"}
+            return {"ok": False, "reason": "llm_error", "understanding": understanding}
         if not text:
-            return {"ok": False, "reason": "llm_empty"}
-        return {"ok": True, "id": int(sid), "preview": text}
+            return {"ok": False, "reason": "llm_empty", "understanding": understanding}
+        return {"ok": True, "id": int(sid), "mode": "event", "preview": text,
+                "understanding": understanding}
 
     # ── 实施84 P0-5：全部主动消息统一时间线（来源标注）────────────────────────
     _TL_RITUAL_NOTES = ("ritual", "milestone")

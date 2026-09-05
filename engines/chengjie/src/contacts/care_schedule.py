@@ -34,7 +34,32 @@ CRISIS_CARE_TOPIC = "情绪关怀"
 # 派发侧（care_dispatcher）共享此前缀。
 GOAL_CARE_NORM_PREFIX = "goal:"
 
+# J-8 #182：运营「到点发这句话」（原文直发）行用 topic_norm=verbatim:<sha8> 标记——
+# 派发器据此**跳过 LLM 拟稿**、原样把 source_text 送 deferred 队列（仍吃 gate /
+# pacing / quiet_hours / kill-switch）；预览端点直接回显原文。与「客户的事（AI 自然
+# 关心）」的分界只看这个前缀，不引入新列（老库零迁移）。
+VERBATIM_CARE_NORM_PREFIX = "verbatim:"
+# 原文直发允许的最大长度（普通 source_text 截 160 是「客户原话摘录」口径；
+# 运营手写要发的整句话不能被截断，否则发出去的是半句）。
+VERBATIM_MAX_CHARS = 1000
+
 _STATUSES = ("pending", "sent", "skipped", "expired", "cancelled")
+
+
+def is_verbatim_care(item: Any) -> bool:
+    """该 care 行是否为「原文直发」行（按 topic_norm 前缀判，item 为 dict/None 皆安全）。"""
+    try:
+        return str((item or {}).get("topic_norm") or "").startswith(
+            VERBATIM_CARE_NORM_PREFIX)
+    except Exception:
+        return False
+
+
+def care_verbatim_text(item: Any) -> str:
+    """「原文直发」行到点要发的文本（=source_text 全文）；非 verbatim 行返回 ""。"""
+    if not is_verbatim_care(item):
+        return ""
+    return str((item or {}).get("source_text") or "").strip()
 
 
 def _topic_norm(topic: str) -> str:
@@ -242,6 +267,50 @@ class CareScheduleStore:
                 return int(cur.lastrowid) if cur.lastrowid else None
         except Exception as e:  # noqa: BLE001
             logger.debug("care_schedule add_scheduled_care failed: %s", e)
+            return None
+
+    def add_verbatim(
+        self,
+        *,
+        contact_key: str,
+        due_at: float,
+        text: str,
+        platform: str = "",
+        account_id: str = "",
+        chat_key: str = "",
+    ) -> Optional[int]:
+        """J-8 #182：运营「到点发这句话」——原文直发行入队。
+
+        ``text`` 就是到点要发出去的整句话（≤ ``VERBATIM_MAX_CHARS``，**不截 160**）；
+        ``topic`` 存一行摘要（列表卡片显示用），``topic_norm=verbatim:<sha8>``
+        让派发器/预览识别并绕过 LLM。手动可信：不做去重、confidence=1.0。绝不抛。
+        """
+        import hashlib
+        body = str(text or "").strip()
+        if not body:
+            return None
+        body = body[:VERBATIM_MAX_CHARS]
+        summary = " ".join(body.split())[:80]
+        tnorm = (VERBATIM_CARE_NORM_PREFIX
+                 + hashlib.sha1(body.encode("utf-8")).hexdigest()[:8])
+        now = time.time()
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "INSERT INTO care_schedule (contact_key, platform, account_id,"
+                    " chat_key, due_at, event_at, topic, topic_norm, sentiment,"
+                    " source_text, confidence, status, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'neutral', ?, 1.0, 'pending', ?, ?)",
+                    (
+                        str(contact_key), str(platform), str(account_id),
+                        str(chat_key), float(due_at), float(due_at),
+                        summary, tnorm, body, now, now,
+                    ),
+                )
+                self._conn.commit()
+                return int(cur.lastrowid) if cur.lastrowid else None
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule add_verbatim failed: %s", e)
             return None
 
     # ── 查询 ────────────────────────────────────────────────────────────
@@ -649,4 +718,6 @@ def get_care_schedule_store(db_path=None) -> "CareScheduleStore":
 
 
 __all__ = ["CareScheduleStore", "get_care_schedule_store", "_topic_norm",
-           "CRISIS_CARE_TOPIC", "GOAL_CARE_NORM_PREFIX"]
+           "CRISIS_CARE_TOPIC", "GOAL_CARE_NORM_PREFIX",
+           "VERBATIM_CARE_NORM_PREFIX", "VERBATIM_MAX_CHARS",
+           "is_verbatim_care", "care_verbatim_text"]

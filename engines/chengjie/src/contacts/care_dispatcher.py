@@ -25,6 +25,8 @@ from typing import Any, Awaitable, Callable, List, Optional
 from src.contacts.care_schedule import (
     CRISIS_CARE_TOPIC,
     GOAL_CARE_NORM_PREFIX,
+    care_verbatim_text,
+    is_verbatim_care,
     CareScheduleStore,
 )
 
@@ -261,6 +263,16 @@ def build_care_prompt(
     topic = str(item.get("topic") or "").strip()
     if topic == CRISIS_CARE_TOPIC:
         return _CRISIS_CARE_PROMPT.format(ai_name=ai_name, lang=lang)
+    # J-8 #182：记忆要点按**事件相关性**筛（人鱼潘事故：整块记忆无差别喂给
+    # LLM → 无关记忆被硬塞进话术）。保留与 topic/source_text 有内容词重叠的条目，
+    # 一条不剩 → 整块不注入。派发与预览共用本函数 → 同口径。
+    if memory_block:
+        try:
+            from src.contacts.care_intent import filter_relevant_memory
+            memory_block = filter_relevant_memory(
+                memory_block, topic, str(item.get("source_text") or ""))
+        except Exception:
+            memory_block = ""
     extra_blocks = _compose_extra_blocks(
         persona_line=persona_line, memory_block=memory_block,
         goal_block=goal_block)
@@ -614,6 +626,10 @@ class CareDispatcher:
         # 实施84 P1-2：目标推进型排期行（goal:*）——模板与 no_context 豁免见下
         is_goal_care = str(item.get("topic_norm") or "").startswith(
             GOAL_CARE_NORM_PREFIX)
+        # J-8 #182：运营「到点发这句话」行（verbatim:*）——**不经 LLM**，原文进
+        # deferred 队列；豁免 no_context / already_discussed（运营已决定要发什么），
+        # 仍吃 peer 守卫 / 变现配额 / 联系人预算 / 安静时段 / 队列 gate。
+        is_verbatim = is_verbatim_care(item)
         # P0 2026-08-30：冲刺行豁免策略（只对 goal:* 行征询；异常=全默认）
         goal_policy: dict = self._goal_policy(item) if is_goal_care else {}
         # D1b P0-1：本行的 dry 语义——冲刺 live 行不吃 care 的 dry_run（冲刺自己
@@ -639,7 +655,8 @@ class CareDispatcher:
                 logger.debug("proactive_allowed 异常（忽略放行）", exc_info=True)
 
         # O3 改进①：近期已主动聊过该事 → 跳过（防到点打卡）。危机关怀豁免（陪伴该送）。
-        if self._already_discussed is not None and not is_crisis_care:
+        if (self._already_discussed is not None and not is_crisis_care
+                and not is_verbatim):
             try:
                 if self._already_discussed(contact_key, topic):
                     self._mark_skipped(sid, "already_discussed")
@@ -665,54 +682,62 @@ class CareDispatcher:
                 self._mark_skipped(sid, "contact_budget")
                 return False
 
-        context_block = ""
-        if self._context_provider is not None and not is_crisis_care:
+        if is_verbatim:
+            # 原文直发：运营手写的整句话就是要发的文本；零 LLM、零增强块、
+            # 不过身份泄露/黑名单相似（那是给 AI 拟稿的守卫，人写的话人负责）。
+            reply = care_verbatim_text(item)
+            if not reply:
+                self._mark_skipped(sid, "verbatim_empty")
+                return False
+        else:
+            context_block = ""
+            if self._context_provider is not None and not is_crisis_care:
+                try:
+                    context_block = (self._context_provider(contact_key) or "").strip()
+                except Exception:
+                    logger.debug("context_provider 异常", exc_info=True)
+            # 危机关怀不要求上下文（陪伴本身即目的），也**不注入**对话要点（避免回放低谷内容）。
+            # 目标推进行同样豁免（实施84 P1-2）：目标节点本身就是开口理由，source_text 自带背景。
+            if (self._skip_if_no_context and not context_block
+                    and not is_crisis_care and not is_goal_care):
+                self._mark_skipped(sid, "no_context")
+                return False
+
+            # B110④：该联系人最近已发关怀 → 防重负样本（危机专线不吃；读失败按空）
+            recent_sent: List[str] = []
+            if not is_crisis_care:
+                try:
+                    recent_sent = self._store.recent_sent_texts(contact_key, limit=4)
+                except Exception:
+                    recent_sent = []
+
+            # 实施84 P0-2：拟稿增强块（人设口吻/记忆要点/目标背景）；危机专线不吃
+            extras = {} if is_crisis_care else self.prompt_extras(item)
+
+            prompt = build_care_prompt(
+                item, context_block=context_block, recent_sent=recent_sent,
+                ai_name=self._ai_name, lang=self._default_lang, now=now,
+                persona_line=str(extras.get("persona_line") or ""),
+                memory_block=str(extras.get("memory_block") or ""),
+                goal_block=str(extras.get("goal_block") or ""))
             try:
-                context_block = (self._context_provider(contact_key) or "").strip()
+                reply = (await self._ai.chat(prompt) or "").strip()
             except Exception:
-                logger.debug("context_provider 异常", exc_info=True)
-        # 危机关怀不要求上下文（陪伴本身即目的），也**不注入**对话要点（避免回放低谷内容）。
-        # 目标推进行同样豁免（实施84 P1-2）：目标节点本身就是开口理由，source_text 自带背景。
-        if (self._skip_if_no_context and not context_block
-                and not is_crisis_care and not is_goal_care):
-            self._mark_skipped(sid, "no_context")
-            return False
+                logger.warning("care LLM 失败 id=%s", sid, exc_info=True)
+                return False  # 留 pending，下个 tick 重试
+            if not reply or len(reply) < 4:
+                self._mark_skipped(sid, "llm_empty")
+                return False
+            low = reply.lower()
+            if any(b.lower() in low for b in _IDENTITY_LEAK):
+                self._mark_skipped(sid, "identity_leak")
+                return False
 
-        # B110④：该联系人最近已发关怀 → 防重负样本（危机专线不吃；读失败按空）
-        recent_sent: List[str] = []
-        if not is_crisis_care:
-            try:
-                recent_sent = self._store.recent_sent_texts(contact_key, limit=4)
-            except Exception:
-                recent_sent = []
-
-        # 实施84 P0-2：拟稿增强块（人设口吻/记忆要点/目标背景）；危机专线不吃
-        extras = {} if is_crisis_care else self.prompt_extras(item)
-
-        prompt = build_care_prompt(
-            item, context_block=context_block, recent_sent=recent_sent,
-            ai_name=self._ai_name, lang=self._default_lang, now=now,
-            persona_line=str(extras.get("persona_line") or ""),
-            memory_block=str(extras.get("memory_block") or ""),
-            goal_block=str(extras.get("goal_block") or ""))
-        try:
-            reply = (await self._ai.chat(prompt) or "").strip()
-        except Exception:
-            logger.warning("care LLM 失败 id=%s", sid, exc_info=True)
-            return False  # 留 pending，下个 tick 重试
-        if not reply or len(reply) < 4:
-            self._mark_skipped(sid, "llm_empty")
-            return False
-        low = reply.lower()
-        if any(b.lower() in low for b in _IDENTITY_LEAK):
-            self._mark_skipped(sid, "identity_leak")
-            return False
-
-        # Phase O 质量闭环：与运营 dislike 黑名单话术相似 → 重生成一次，仍相似则跳过
-        # （复用 reactivation 同一黑名单：被标记的雷同话术在 care 里同样该避免）
-        reply = await self._avoid_disliked(prompt, reply, sid)
-        if not reply:
-            return False
+            # Phase O 质量闭环：与运营 dislike 黑名单话术相似 → 重生成一次，仍相似则跳过
+            # （复用 reactivation 同一黑名单：被标记的雷同话术在 care 里同样该避免）
+            reply = await self._avoid_disliked(prompt, reply, sid)
+            if not reply:
+                return False
 
         # O3 改进②：发送时刻命中 quiet_hours → 顺延到结束（而非跳过）。
         # 实施84 P0-6：能解析出客户时钟时按**对方当地时间**判安静窗（provider
@@ -769,10 +794,13 @@ class CareDispatcher:
         try:
             row_id = await self._send(
                 platform, account_id, chat_key, reply, defer_until,
-                ("care:crisis" if is_crisis_care else f"care:{topic[:24]}"),
+                ("care:crisis" if is_crisis_care
+                 else "care:verbatim" if is_verbatim
+                 else f"care:{topic[:24]}"),
                 self._staleness,
                 {"care": True, "care_id": sid, "contact_key": contact_key,
-                 "topic": topic, "crisis_care": is_crisis_care},
+                 "topic": topic, "crisis_care": is_crisis_care,
+                 "verbatim": is_verbatim},
             )
         except Exception:
             logger.warning("care send_callback 失败 id=%s", sid, exc_info=True)
@@ -789,6 +817,62 @@ class CareDispatcher:
         # 话术快照随行留档（deferred 队列有终态保留期，审计文本以本表为持久口径）
         self._store.mark_sent(sid, note=f"deferred:{int(row_id)}", sent_text=reply)
         return True
+
+    async def deliver_text(self, item: dict, text: str, *,
+                           now: Optional[float] = None) -> Dict[str, Any]:
+        """J-8 #182「改一改再发」：运营在预览上手改的终稿**直接**送出站队列。
+
+        与派发同一条 ``_send``（deferred 队列 gate / pacing / kill-switch 全享），
+        安静时段同样顺延；成功 → 该 care 行 mark_sent（note=``manual:deferred:<id>``，
+        话术快照留档）+ sent_hook 落触达账本。不经 LLM、不过拟稿守卫（人写的话
+        人负责）。返回 ``{"ok", "reason", "row_id"}``，绝不抛。
+        """
+        n = float(now if now is not None else time.time())
+        sid = int(item.get("id") or 0)
+        body = str(text or "").strip()
+        if not body:
+            return {"ok": False, "reason": "empty_text"}
+        chat_key = str(item.get("chat_key") or "")
+        platform = str(item.get("platform") or "")
+        account_id = str(item.get("account_id") or "default") or "default"
+        contact_key = str(item.get("contact_key") or "")
+        if not chat_key or not platform:
+            return {"ok": False, "reason": "missing_route"}
+        _clock = None
+        if self._user_clock_provider is not None:
+            try:
+                _clock = self._user_clock_provider(dict(item))
+            except Exception:
+                _clock = None
+        defer_until = shift_out_of_quiet_hours(
+            n + random.uniform(self._jitter[0], min(self._jitter[1], 120.0)),
+            start_hour=self._quiet_start, end_hour=self._quiet_end, clock=_clock)
+        try:
+            row_id = await self._send(
+                platform, account_id, chat_key, body, defer_until,
+                "care:manual", self._staleness,
+                {"care": True, "care_id": sid, "contact_key": contact_key,
+                 "topic": str(item.get("topic") or ""), "crisis_care": False,
+                 "manual_rewrite": True},
+            )
+        except Exception:
+            logger.warning("care deliver_text 失败 id=%s", sid, exc_info=True)
+            return {"ok": False, "reason": "send_failed"}
+        if not row_id:
+            return {"ok": False, "reason": "gated"}
+        if self._sent_hook is not None:
+            try:
+                self._sent_hook(dict(item))
+            except Exception:
+                logger.debug("care sent_hook 异常（忽略）", exc_info=True)
+        try:
+            if sid:
+                self._store.mark_sent(sid, note=f"manual:deferred:{int(row_id)}",
+                                      sent_text=body)
+        except Exception:
+            logger.debug("care deliver_text mark_sent 异常", exc_info=True)
+        return {"ok": True, "reason": "", "row_id": int(row_id),
+                "defer_until": defer_until}
 
     def _hits_dislike(self, reply: str):
         """(命中?, 相似样本)。双源黑名单（实施84 P0-6）：

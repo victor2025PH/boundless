@@ -1855,6 +1855,15 @@ _ADDITIONS_2026_09_03_ADDRESS_NAMES = """
 """
 _BASELINE += _ADDITIONS_2026_09_03_ADDRESS_NAMES
 
+# 2026-09-05 J-8 #182 手动加关怀「意图反转」修复：intent-check = 前端逐键的
+# 「这像是要发的话还是客户的事」判定（与 schedule POST 的服务端闸门同一纯函数）；
+# send-text = 预览上手改终稿直送出站队列（零 LLM，运营对文本负责）。
+_ADDITIONS_2026_09_05_CARE_VERBATIM = """
+/api/care/intent-check	POST
+/api/care/schedule/{sid}/send-text	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_05_CARE_VERBATIM
+
 
 def _parse_baseline():
     expected = set()

@@ -142,6 +142,16 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
 .cs-chip.on{background:color-mix(in srgb, var(--p,#1e8cf2) 14%, transparent);border-color:var(--p);color:var(--p);font-weight:600}
 #cs-p-topic{max-width:260px}
 #cs-p-msg{font-size:.72rem;margin-left:.6rem}
+/* ── J-8 #182：类型/意图守卫/理解回显/原文直发徽标/改一改再发 ── */
+#cs-add-panel.kind-verbatim #cs-p-topic{max-width:100%;flex:1 1 420px}
+#cs-add-panel.kind-verbatim #cs-p-topics .cs-chip{display:none}
+.cs6-intent{flex-basis:100%;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;font-size:.74rem;color:var(--amber);background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);border-radius:6px;padding:.35rem .6rem;margin-top:.3rem}
+.cs6-vb{display:inline-block;font-size:.66rem;font-weight:600;padding:.08rem .4rem;border-radius:4px;background:rgba(99,102,241,.14);color:#6366f1;margin-left:.3rem;vertical-align:middle}
+.cs6-und{font-size:.74rem;color:var(--t2);margin-bottom:.3rem}
+.cs6-und b{color:var(--t1)}
+.cs6-und .warn{color:var(--amber)}
+.cs6-edit{width:100%;min-height:64px;margin-top:.35rem;font-size:.8rem;resize:vertical}
+.cs6-edit-ops{display:flex;gap:.4rem;align-items:center;margin-top:.3rem;font-size:.72rem}
 /* ── P0 2026-08-03 历史可读性：名字链接 / 投递真相 / 回复徽标 / 话术展开 ── */
 .cs4-sub{color:var(--t3);font-size:.72rem;margin-top:.15rem}
 .cs4-rp,.cs4-dv{display:inline-block;font-size:.72rem;font-weight:600;padding:.12rem .45rem;border-radius:4px;background:var(--input);color:var(--t3)}/* 内距对齐 badge-st，同格并排不跳高 */
@@ -234,8 +244,17 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
             </div>
           </div>
         </div>
+        <!-- J-8 #182：类型二选一——「客户的事」经 LLM 自然关心；「到点发这句话」原文直发零 LLM。
+             修实录：运营把「主动问候对方早上好」填进「什么事」→ AI 当成客户承诺了要问候某人。 -->
         <div class="cs-p-row">
-          <span class="cs-p-lb">{{ (i18n or {}).get('cs2_add_what', "什么事") }}</span>
+          <span class="cs-p-lb">{{ (i18n or {}).get('cs6_add_kind', "类型") }}</span>
+          <div class="cs-p-main cs-chips" id="cs-p-kinds">
+            <button type="button" class="cs-chip on" data-kind="event" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs6_kind_event_t', 'AI 会以人设口吻自然关心客户的这件事（经 LLM 拟稿）') }}">{{ (i18n or {}).get('cs6_kind_event', "客户的事（AI 自然关心）") }}</button>
+            <button type="button" class="cs-chip" data-kind="verbatim" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs6_kind_verbatim_t', '到点原样发出你写的这句话，不经 AI 改写') }}">{{ (i18n or {}).get('cs6_kind_verbatim', "到点发这句话（原文直发）") }}</button>
+          </div>
+        </div>
+        <div class="cs-p-row">
+          <span class="cs-p-lb" id="cs-p-what-lb">{{ (i18n or {}).get('cs6_add_what_event', "客户的什么事") }}</span>
           <div class="cs-p-main cs-chips" id="cs-p-topics">
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_interview', "面试") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_followup', "复查") }}</button>
@@ -243,7 +262,12 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_birthday', "生日") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_trip', "旅行") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_move', "搬家") }}</button>
-            <input type="text" id="cs-p-topic" class="f-input" placeholder="{{ (i18n or {}).get('cs2_add_topic_ph', '或自己填：面试 / 复查 / 提车 …') }}">
+            <input type="text" id="cs-p-topic" class="f-input" oninput="_csIntentWatch()" placeholder="{{ (i18n or {}).get('cs2_add_topic_ph', '或自己填：面试 / 复查 / 提车 …') }}">
+            <div id="cs-p-intent" class="cs6-intent" style="display:none">
+              <span id="cs-p-intent-txt"></span>
+              <button type="button" class="cs-act p" onclick="csIntentSwitch()">{{ (i18n or {}).get('cs6_intent_switch', "改为「到点发这句话」") }}</button>
+              <button type="button" class="cs-act" onclick="csIntentKeep()">{{ (i18n or {}).get('cs6_intent_keep', "就是客户的事") }}</button>
+            </div>
           </div>
         </div>
         <div class="cs-p-row">
@@ -588,16 +612,19 @@ function _csFarChip(it){
       +esc(window.T('cs3_far_chip'))+'</span>';
   }catch(_){ return ''; }
 }
+/* J-8 #182：原文直发行按 topic_norm 前缀识别（与后端 is_verbatim_care 同一分界） */
+function _csIsVerbatim(it){return String(it&&it.topic_norm||'').indexOf('verbatim:')===0;}
 function _csCardHtml(it){
   var name=_csItemName(it);
+  var vb=_csIsVerbatim(it);
   var q=it.source_text
-    ? '<div class="q"><span class="ql">'+window.T('cs2_card_quote')+'</span>「'+esc(it.source_text)+'」</div>'
+    ? '<div class="q"><span class="ql">'+window.T(vb?'cs6_card_verbatim_q':'cs2_card_quote')+'</span>「'+esc(it.source_text)+'」</div>'
     : '';
   return '<div class="cs3-card">'+
     '<div class="hd">'+_csAvaLetter(name)+
       '<span class="nm">'+esc(name)+'</span>'+
       '<span class="pf">'+esc(it.platform||'')+'</span>'+
-      '<span class="tp">'+esc(it.topic||'—')+'</span>'+
+      '<span class="tp">'+esc(it.topic||'—')+(vb?'<span class="cs6-vb" title="'+esc(window.T('cs6_kind_verbatim_t'))+'">'+esc(window.T('cs6_vb_badge'))+'</span>':'')+'</span>'+
       '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csFarChip(it)+'</span>'+
     '</div>'+q+
     '<div class="pv" id="cs-pv-'+it.id+'"></div>'+
@@ -789,8 +816,23 @@ async function csPreview(id){
   try{
     var r=await apiFetch('/api/care/schedule/'+id+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},{timeoutMs:60000});
     var d=await r.json();
-    if(!d.ok){box.textContent=window.T('cs2_preview_fail')+(d.reason||r.status);return;}
-    box.innerHTML='<span class="pvl">'+window.T('cs2_ghost_ai')+'</span>'+esc(d.preview);
+    var und=_csUnderstandingHtml(d.understanding);
+    if(!d.ok){box.innerHTML=und+esc(window.T('cs2_preview_fail')+(d.reason||r.status));return;}
+    /* J-8 #182：先「我理解为」再草稿；草稿可手改后直接发（不经 LLM，走同一出站队列）。 */
+    var lbl=(d.mode==='verbatim')?window.T('cs6_ghost_verbatim'):window.T('cs2_ghost_ai');
+    box.innerHTML=und+'<span class="pvl">'+lbl+'</span>'+esc(d.preview)+
+      '<div class="cs6-edit-ops">'+
+        '<button type="button" class="cs-act" id="cs-edbtn-'+id+'" onclick="csEditToggle('+id+')">'+window.T('cs6_edit_btn')+'</button>'+
+      '</div>'+
+      '<div id="cs-ed-'+id+'" style="display:none">'+
+        '<textarea class="f-input cs6-edit" id="cs-ed-ta-'+id+'"></textarea>'+
+        '<div class="cs6-edit-ops">'+
+          '<button type="button" class="cs-act p" onclick="csEditSend('+id+')">'+window.T('cs6_edit_send')+'</button>'+
+          '<span style="color:var(--t3)">'+window.T('cs6_edit_hint')+'</span>'+
+          '<span id="cs-ed-msg-'+id+'"></span>'+
+        '</div>'+
+      '</div>';
+    var ta=document.getElementById('cs-ed-ta-'+id);if(ta)ta.value=String(d.preview||'');
     if(btn)btn.textContent=window.T('cs3_preview_again');
   }catch(e){
     var _to=e&&(e.name==='AbortError'||/timeout|abort/i.test(String(e&&e.message||e)));
@@ -798,6 +840,41 @@ async function csPreview(id){
                        :(window.T('cs2_preview_fail')+String(e&&e.message||e).slice(0,80));
   }
   finally{if(btn)btn.disabled=false;}
+}
+/* J-8 #182：「我理解为」回显（后端 care_understanding 结构化字段 → 按 i18n 拼句）。
+   事件模式且像指令 → 黄字提醒（AI 会把它当客户的事关心，可能不是你要的）。 */
+function _csUnderstandingHtml(u){
+  if(!u||!u.mode)return '';
+  var when=esc(u.when||'');
+  if(u.mode==='verbatim'){
+    return '<div class="cs6-und">'+esc(window.T('cs6_und_lead'))+' <b>'+esc(window.Tf('cs6_und_verbatim',{when:when}))+'</b></div>';
+  }
+  var h='<div class="cs6-und">'+esc(window.T('cs6_und_lead'))+' <b>'+
+    esc(window.Tf('cs6_und_event',{when:when,topic:String(u.topic||'')}))+'</b>';
+  if(u.looks_like_instruction)h+='<div class="warn">⚠ '+esc(window.T('cs6_und_instr_warn'))+'</div>';
+  return h+'</div>';
+}
+function csEditToggle(id){
+  var ed=document.getElementById('cs-ed-'+id);
+  if(!ed)return;
+  ed.style.display=(ed.style.display==='none')?'':'none';
+  if(ed.style.display!=='none'){var ta=document.getElementById('cs-ed-ta-'+id);if(ta)ta.focus();}
+}
+async function csEditSend(id){
+  var ta=document.getElementById('cs-ed-ta-'+id);
+  var msg=document.getElementById('cs-ed-msg-'+id);
+  var text=(ta&&ta.value||'').trim();
+  if(!text){if(msg){msg.style.color='var(--amber)';msg.textContent=window.T('cs6_edit_empty');}return;}
+  if(!confirm(window.T('cs6_edit_confirm')))return;
+  if(msg){msg.style.color='var(--t3)';msg.textContent='…';}
+  try{
+    var r=await apiFetch('/api/care/schedule/'+id+'/send-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})},{timeoutMs:60000});
+    var d=await r.json();
+    if(!d.ok){if(msg){msg.style.color='var(--red)';msg.textContent=window.T('cs6_edit_fail')+(d.reason||r.status);}return;}
+    if(msg){msg.style.color='var(--green)';msg.textContent=window.T('cs6_edit_ok');}
+    csPlanLoad();
+    _csHistReload();
+  }catch(e){if(msg){msg.style.color='var(--red)';msg.textContent=window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80);}}
 }
 async function csSendNow(id){
   if(!confirm(window.T('cs_js003')))return;
@@ -979,6 +1056,59 @@ function csTopicChip(el){
   el.classList.add('on');
   document.getElementById('cs-p-topic').value=el.textContent.trim();
 }
+/* ── J-8 #182：类型切换 + 意图守卫（前端就地判，后端 add 端点同一判定源二次拦） ── */
+var _csKind='event',_csIntentTimer=null,_csIntentKeep=false;
+/* 与后端 detect_instruction_intent 同口径的**轻量**前置判（零往返即时提示）；
+   拿不准的交给 /api/care/intent-check 复核。字面量用 \u 转义：script 内 CJK 门禁不豁免。 */
+var _CS_LEAD_VERBS=['\u95ee\u5019','\u4e3b\u52a8\u95ee\u5019','\u63d0\u9192','\u544a\u8bc9','\u53d1','\u8bf4','\u795d','\u95ee\u95ee','\u95ee\u4e00\u4e0b','\u8ddf\u4ed6','\u8ddf\u5979','\u7ed9\u4ed6','\u7ed9\u5979','\u56de\u590d','\u8054\u7cfb','greet','remind','tell','send','say','wish','ask'];
+function _csLooksLikeInstruction(t){
+  t=String(t||'').trim();if(!t)return false;
+  var low=t.toLowerCase();
+  if(/^[\u201c"\u300c\u300e']/.test(t))return true;
+  for(var i=0;i<_CS_LEAD_VERBS.length;i++){if(low.indexOf(_CS_LEAD_VERBS[i])===0)return true;}
+  return false;
+}
+function csKindChip(el){
+  _csKind=el.getAttribute('data-kind')||'event';
+  var box=document.getElementById('cs-p-kinds');
+  box.querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});
+  el.classList.add('on');
+  var panel=document.getElementById('cs-add-panel');
+  if(panel)panel.classList.toggle('kind-verbatim',_csKind==='verbatim');
+  var lb=document.getElementById('cs-p-what-lb');
+  if(lb)lb.textContent=window.T(_csKind==='verbatim'?'cs6_add_what_verbatim':'cs6_add_what_event');
+  var inp=document.getElementById('cs-p-topic');
+  if(inp)inp.placeholder=window.T(_csKind==='verbatim'?'cs6_add_text_ph':'cs2_add_topic_ph');
+  _csIntentKeep=false;
+  _csIntentWatch();
+}
+function _csIntentShow(on){
+  var w=document.getElementById('cs-p-intent');if(!w)return;
+  w.style.display=on?'':'none';
+  if(on){var t=document.getElementById('cs-p-intent-txt');if(t)t.textContent=window.T('cs6_intent_hint');}
+}
+function _csIntentWatch(){
+  if(_csKind!=='event'||_csIntentKeep){_csIntentShow(false);return;}
+  var v=(document.getElementById('cs-p-topic').value||'').trim();
+  _csIntentShow(_csLooksLikeInstruction(v));
+  /* 复核（防前端词表漏判）：300ms 去抖，只在有内容时问一次后端 */
+  if(_csIntentTimer)clearTimeout(_csIntentTimer);
+  if(!v)return;
+  _csIntentTimer=setTimeout(async function(){
+    try{
+      var r=await apiFetch('/api/care/intent-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:v})},{timeoutMs:8000});
+      var d=await r.json();
+      var cur=(document.getElementById('cs-p-topic').value||'').trim();
+      if(cur!==v||_csKind!=='event'||_csIntentKeep)return;
+      if(d&&d.ok)_csIntentShow(!!d.looks_like_instruction);
+    }catch(_){}
+  },300);
+}
+function csIntentSwitch(){
+  var b=document.querySelector('#cs-p-kinds .cs-chip[data-kind="verbatim"]');
+  if(b)csKindChip(b);
+}
+function csIntentKeep(){_csIntentKeep=true;_csIntentShow(false);}
 function csWhenChip(el){
   _csWhen=el.getAttribute('data-when')||'tonight';
   var box=document.getElementById('cs-p-whens');
@@ -1012,8 +1142,11 @@ async function csAdd2(){
     platform:_csSel.platform||'',
     account_id:_csSel.account_id||'default',
     chat_key:_csSel.chat_key||'',
-    topic:topic
+    topic:topic,
+    mode:_csKind
   };
+  if(_csKind==='verbatim')payload.text=topic;
+  else if(_csIntentKeep)payload.confirm_event=true;
   if(_csWhen==='custom'){payload.due_in_hours=parseFloat(document.getElementById('cs-p-hours').value||'24');}
   else if(_csWhen==='h24'){payload.due_in_hours=24;}
   else{payload.due_at=_csDueAt(_csWhen);}
@@ -1021,8 +1154,15 @@ async function csAdd2(){
   try{
     var res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},{timeoutMs:60000});
     var d=await res.json();
+    if(!d.ok&&d.reason==='looks_like_instruction'){
+      /* 后端守卫拦下：不入队，把切换提示亮出来让运营决定 */
+      msg.style.color='var(--amber)';msg.textContent=window.T('cs6_add_guarded');
+      _csIntentShow(true);
+      return;
+    }
     if(!d.ok){msg.style.color='var(--red)';msg.textContent=window.T('cs2_add_fail')+(d.message||d.reason||'');return;}
-    msg.style.color='var(--green)';msg.textContent=window.T('cs2_add_ok');
+    msg.style.color='var(--green)';msg.textContent=window.T(_csKind==='verbatim'?'cs6_add_ok_verbatim':'cs2_add_ok');
+    _csIntentKeep=false;_csIntentShow(false);
     document.getElementById('cs-p-topic').value='';
     document.getElementById('cs-p-topics').querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});
     csPlanLoad();
