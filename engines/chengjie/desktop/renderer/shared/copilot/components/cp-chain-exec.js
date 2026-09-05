@@ -495,6 +495,14 @@
 
       const note = (status === "running" && ex.current_step_note)
         ? `<div class="nxt" title="${esc(ex.current_step_note)}">→ ${esc(String(ex.current_step_note).slice(0, 60))}</div>` : "";
+      // #168 链卡三态（J-2 交办，2026-09-05）：服务端 enrich_execution 已给
+      // card_state/card_label（running / yielded / failed）。running 的解释与上面
+      // meta+timing 同义不重复；yielded（让路暂停：客户几点回话、静默多久后续跑）
+      // 与 failed（失败原因）是旧卡只有一个「已暂停 / 失败」徽标看不出所以然的
+      // 两态，才补一行。旧后端缺字段＝空串＝旧行为。
+      const cardState = String(ex.card_state || "");
+      const cardExplain = ((cardState === "yielded" || cardState === "failed") && ex.card_label)
+        ? `<div class="nxt cardl" title="${esc(ex.card_label)}">${esc(String(ex.card_label).slice(0, 90))}</div>` : "";
       const last = (ex.last_result && ex.last_result.text)
         ? `<div class="last" title="${esc(ex.last_result.text)}">${esc(String(ex.last_result.text).slice(0, 80))}</div>` : "";
 
@@ -542,7 +550,7 @@
         autoBdg +
         `<span class="bdg${bdgCls ? " " + bdgCls : ""}">${esc(ex.status_label || status)}</span></div>` +
         (segs ? `<div class="trk">${segs}</div>` : "") +
-        meta + note + todo + last + drawer + opErr + foot +
+        meta + note + cardExplain + todo + last + drawer + opErr + foot +
         `</div>`;
     }
 
