@@ -1091,6 +1091,117 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "resume auto-send",
         "/workspace",
     ),
+    (
+        "acct-unread-open",
+        "怎么点开账号栏上的未读数字",
+        "How to open unread conversations from the account badge",
+        "账号栏（顶部账号条或左侧账号坞）每个号旁边的未读数字可以点。"
+        "点开后弹出的列表就是这个数字对应的那几条会话（和徽标同一口径），"
+        "点一行即打开该会话。有具体账号时还可以点「全部标已读」一次清掉这一号的未读。",
+        "The unread number beside each account on the account bar or dock is "
+        "clickable. The popover lists exactly the conversations that number "
+        "counts; click a row to open it. For a specific account you can also "
+        "Mark all read.",
+        "未读数字 未读徽标 点开未读 哪几条未读 account unread badge",
+        "/workspace",
+    ),
+    (
+        "bind-persona-yellow-dot",
+        "账号黄点怎么绑人设",
+        "How to bind a persona from the yellow dot",
+        "账号栏上的黄色小点表示这个号还没绑定人设，回复会走默认配置。"
+        "直接点黄点会打开账号抽屉并进入该号详情，在人设一栏选好人设保存即可。",
+        "A yellow dot on an account means no persona is bound. Click the dot "
+        "to open the account drawer on that account, then pick a persona and save.",
+        "未绑人设 黄点 绑定人设 账号人设 yellow dot persona",
+        "/workspace",
+    ),
+    (
+        "set-address-names",
+        "怎么设置我和客户怎么互相称呼",
+        "How to set what I call the customer and what they call me",
+        "打开会话后，右栏「客户关系」身份区有两个输入框：「我怎么叫对方」"
+        "和「对方怎么叫我」。改完点别处即保存。空着则沿用人设默认称呼；"
+        "想明确不用爱称，把框清空再保存。",
+        "Open a conversation. On the Customer tab, the two address fields "
+        "set how you call them and how they call you. Changes save on blur. "
+        "Leave blank to inherit the persona default; clear a field to drop a nickname.",
+        "称呼 怎么叫 爱称 对方怎么叫我 call_peer peer_calls_you 双向称呼",
+        "/workspace",
+    ),
+    (
+        "autosend-shadow-release",
+        "全自动还会被高风险扣稿吗",
+        "Does full-auto still hold high-risk drafts",
+        "全自动就是全自动：自动回复不再因「高风险」扣稿转人工，触发只后台记台账、"
+        "坐席侧零拦截。你自己在输入框点发送也不会被二次拦住。"
+        "风险仍会记入运维台账，一个月后再决定要不要立新规则。",
+        "Full-auto stays full-auto: drafts are no longer held for high risk. "
+        "Triggers are logged in the back-office ledger only; agent-typed send "
+        "is not blocked either. New rules will wait for a month of real data.",
+        "全自动 放行 不拦 台账 高风险 扣稿 影子 shadow autosend",
+        "/workspace",
+    ),
+    # ── J-9 #184（2026-09-05）：厂商产品说明从「知识库对客条目」迁到这里 ──
+    # 背景：首装曾把生产机 110 条厂商话术（智聊/通译/幻声…价格与卖点）播进
+    # 用户 KB → 用户的 AI 对着**用户的客户**推销厂商产品。产品说明属于「用户问
+    # 助手」的内置帮助，不属于对客检索语料。价格刻意不写（会变，权威口径在
+    # 官方客服/官网），这里只答「是什么 / 去哪问」。
+    (
+        "vendor-product-lines",
+        "无界科技有哪些产品（智聊/通译/幻声…）",
+        "What products does Boundless offer (ChatX / LingoX / VoiceX ...)",
+        "你现在用的是「智聊 ChatX」——AI 自动接客、翻译、跟进、促单的聊天系统。"
+        "同一家（无界科技 BOUNDLESS，官网 bd2026.cc）还有：通译 LingoX（多平台聊天"
+        "实时互译 SCRM）、通传 VoxX（克隆声会议/直播同传）、幻声 VoiceX（声音克隆）、"
+        "幻颜 FaceX（AI 换脸）、幻影 LiveX（数字人直播/口播）、智拓 ReachX（真机获客），"
+        "底座是可私有部署的「无界底座」大模型。价格与试用以官网和官方客服为准。",
+        "You are using ChatX, the AI sales-chat product. The same vendor "
+        "(Boundless, bd2026.cc) also ships LingoX (multi-platform chat "
+        "translation SCRM), VoxX (voice-cloned live interpretation), VoiceX "
+        "(voice cloning), FaceX (face swap), LiveX (digital human live/voice-over) "
+        "and ReachX (real-device lead generation), all on a self-hostable LLM base. "
+        "Pricing and trials: see the official site or vendor support.",
+        "产品线 智聊 通译 通传 幻声 幻颜 幻影 智拓 无界 无界科技 ChatX LingoX VoiceX "
+        "FaceX LiveX ReachX 有哪些产品 你们还有什么产品 官网",
+        "",
+    ),
+    (
+        "vendor-support-contact",
+        "怎么联系厂商客服 / 官网下载中心在哪",
+        "How to reach vendor support / where is the download center",
+        "厂商官方 Telegram 客服 @WJKJ2026（7×24，人工响应约 5 分钟）；产品与价格"
+        "自助查询 Bot @tgzkw_bot；官网 bd2026.cc（下载中心在 /download，各版本更新"
+        "说明也在那里）。软件报障优先走产品内「诊断包/一键体检」拿 6 位码再发给客服，"
+        "定位最快。付款前务必通过官方客服核对收款信息，勿信第三方转发的地址。",
+        "Official vendor support on Telegram: @WJKJ2026 (24/7, ~5 min human "
+        "response); self-service product/price bot @tgzkw_bot; website bd2026.cc "
+        "(downloads and release notes under /download). For bugs, generate a "
+        "diagnostic code in-app first, then send it to support. Always verify "
+        "payment details with official support only.",
+        "客服 联系客服 厂商 官方 下载 下载中心 安装包 官网 报障 诊断包 support "
+        "download contact vendor",
+        "",
+    ),
+    (
+        "kb-vendor-preset",
+        "知识库里的「厂商预置」条目是什么，能删吗",
+        "What are the 'vendor preset' knowledge entries and can I delete them",
+        "旧版安装包曾把厂商自己的产品话术（智聊/通译等的卖点与报价）一并装进了"
+        "你的知识库，它们带「厂商预置」标记。桌面版对客回复检索**已硬性排除**这些"
+        "条目（不看启用/停用），不会对你的客户推销厂商产品。知识库页顶部有提示条，"
+        "点「查看」可按来源筛出来，点「一键清空」即可全部删除；也可以在来源筛选里"
+        "选「厂商预置」逐条处理。你自己新建/导入的条目不受影响。",
+        "Older installers copied the vendor's own sales knowledge (ChatX / LingoX "
+        "pitches and pricing) into your knowledge base; they are tagged "
+        "'vendor preset'. On desktop, customer-facing retrieval hard-excludes them "
+        "regardless of the enabled flag, so your AI never pitches vendor products "
+        "to your customers. Use the banner on the Knowledge page (View / Clear all) "
+        "or the source filter to remove them. Your own entries are untouched.",
+        "厂商预置 知识库 清空 删除 预置条目 系统预置 厂商 vendor preset knowledge "
+        "清理 一键清空 来源筛选",
+        "/knowledge",
+    ),
 ]
 
 
