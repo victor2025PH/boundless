@@ -270,6 +270,44 @@ class EpisodicMemoryStore:
         except Exception as e:  # noqa: BLE001
             logger.debug("episodic_grounding_drops ddl failed: %s", e)
 
+    def _ensure_review_columns(self) -> None:
+        """J-10 A2（#183，决策 D8）例外审核 + 软删 + 召回计数列，向后兼容幂等 ALTER。
+
+        - ``review_reason``：``conflict`` / ``high_impact`` / ``low_confidence`` /
+          ``self_fact`` / ``commitment`` / 空（空＝不需要人看，照常召回）；
+        - ``impact``：``high`` / ``normal``（敏感类页面标红，不阻断记录）；
+        - ``status``：``active`` / ``ignored``（软删：不召回、可恢复；「过时」沿用
+          ``tier='stale'``，不双写）；
+        - ``conflict_group``：与同槽 stable 冲突时两条并列的组键（不自动覆盖）；
+        - ``recall_count`` / ``last_recalled_ts``：注入 prompt 的次数与最近时刻
+          （A3 召回记账写入；A2 自动转正读它）。
+        旧行默认：不需审核 / normal / active / 未召回——行为不变。
+        """
+        cur = self._conn.execute("PRAGMA table_info(episodic_memory)")
+        cols = [str(r[1]) for r in cur.fetchall()]
+        migrations = [
+            ("review_reason", "ALTER TABLE episodic_memory ADD COLUMN review_reason TEXT NOT NULL DEFAULT ''"),
+            ("impact", "ALTER TABLE episodic_memory ADD COLUMN impact TEXT NOT NULL DEFAULT 'normal'"),
+            ("status", "ALTER TABLE episodic_memory ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
+            ("conflict_group", "ALTER TABLE episodic_memory ADD COLUMN conflict_group TEXT NOT NULL DEFAULT ''"),
+            ("recall_count", "ALTER TABLE episodic_memory ADD COLUMN recall_count INTEGER NOT NULL DEFAULT 0"),
+            ("last_recalled_ts", "ALTER TABLE episodic_memory ADD COLUMN last_recalled_ts REAL NOT NULL DEFAULT 0"),
+        ]
+        changed = False
+        for col, ddl in migrations:
+            if col not in cols:
+                self._conn.execute(ddl)
+                changed = True
+                logger.info("episodic_memory: added column %s", col)
+        try:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_epi_review"
+                " ON episodic_memory(status, review_reason)")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("idx_epi_review failed: %s", e)
+        if changed:
+            self._conn.commit()
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -281,6 +319,7 @@ class EpisodicMemoryStore:
         self._ensure_source_column()
         self._ensure_provenance_columns()
         self._ensure_grounding_drops_table()
+        self._ensure_review_columns()
 
     def close(self) -> None:
         if self._conn:
@@ -297,6 +336,10 @@ class EpisodicMemoryStore:
         embedding_model: str = "",
         source_quote: str = "",
         source_ts: float = 0.0,
+        confidence: Optional[float] = None,
+        author: str = "",
+        review_reason: Optional[str] = None,
+        impact: Optional[str] = None,
     ) -> Optional[int]:
         """Insert one fact; returns new row id, or None if duplicate / failed.
 
@@ -309,6 +352,12 @@ class EpisodicMemoryStore:
 
         五件套（#41 0830）：``source_quote``/``source_ts`` 记「抽取自哪句原话、
         何时」——空值兼容旧调用（无溯源）；quote 截 200 字防原话超长撑库。
+
+        J-10 A2（D8）：写入即打例外标——``memory_review.classify_fact`` 四类
+        （self_fact / commitment / high_impact / low_confidence，``confidence`` /
+        ``author`` 是它的输入）+ 本方法查同槽 ``stable`` 得第五类 ``conflict``
+        （两条并列 ``conflict_group``，**不再自动覆盖** stable）。``review_reason`` /
+        ``impact`` 显式传入则不再自算（导入/测试用）。
         """
         c = (content or "").strip()
         if len(c) < 2 or len(c) > 500:
@@ -317,6 +366,12 @@ class EpisodicMemoryStore:
         h = hashlib.sha256(_norm_for_hash(c).encode("utf-8")).hexdigest()
         now = time.time()
         sal = self._compute_salience(c)
+        _rr, _imp = self._review_tags(
+            user_id, c, source=src, confidence=confidence, author=author,
+            review_reason=review_reason, impact=impact)
+        _cgroup = ""
+        if _rr == "conflict":
+            _cgroup = self._conflict_group_for(user_id, c)
         try:
             _emb_dim = (len(embedding_blob) // 4) if embedding_blob else 0
             _emb_model = (embedding_model or "") if embedding_blob else ""
@@ -328,11 +383,12 @@ class EpisodicMemoryStore:
             cur = self._conn.execute(
                 "INSERT INTO episodic_memory (user_id, content, content_hash, category,"
                 " created_at, embedding, embedding_model, embedding_dim,"
-                " salience, tier, hits, last_seen, source, source_quote, source_ts)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw', 1, ?, ?, ?, ?)",
+                " salience, tier, hits, last_seen, source, source_quote, source_ts,"
+                " review_reason, impact, status, conflict_group)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'raw', 1, ?, ?, ?, ?, ?, ?, 'active', ?)",
                 (user_id, c, h, (category or "general")[:32], now, embedding_blob,
                  _emb_model, _emb_dim, sal, now, src, _quote,
-                 (_sts if _sts > 0 else now)),
+                 (_sts if _sts > 0 else now), _rr, _imp, _cgroup),
             )
             self._conn.commit()
             return int(cur.lastrowid) if cur.lastrowid else None
@@ -361,6 +417,319 @@ class EpisodicMemoryStore:
         except Exception as e:
             logger.debug("episodic insert failed: %s", e)
             return None
+
+    # ── J-10 A2：例外审核队列 / 软删 / 冲突并列 ──────────────────────────────
+
+    def _review_tags(
+        self, user_id: str, content: str, *, source: str,
+        confidence: Optional[float], author: str,
+        review_reason: Optional[str], impact: Optional[str],
+    ) -> Tuple[str, str]:
+        """写入打标：显式传入优先；否则文本四类 + 同槽 stable 冲突（最高优先级）。绝不抛。"""
+        try:
+            from src.utils.memory_review import (
+                IMPACT_HIGH, IMPACT_NORMAL, REVIEW_CONFLICT, REVIEW_REASONS, classify_fact,
+            )
+        except Exception:  # pragma: no cover - 防御
+            return "", "normal"
+        try:
+            rr_auto, imp_auto = classify_fact(
+                content, source=source, confidence=confidence, author=author,
+                low_confidence_threshold=self._low_conf_threshold())
+            if review_reason is None:
+                rr = rr_auto
+                # 同槽 stable 冲突＝最高优先级（数据态判定，文本四类让位）
+                if self._find_stable_conflict(user_id, content) is not None:
+                    rr = REVIEW_CONFLICT
+            else:
+                rr = str(review_reason or "").strip()
+                rr = rr if rr in REVIEW_REASONS else ""
+            if impact is None:
+                imp = imp_auto
+            else:
+                imp = str(impact or "").strip()
+                imp = imp if imp in (IMPACT_HIGH, IMPACT_NORMAL) else IMPACT_NORMAL
+            return rr, imp
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic review tagging failed: %s", e)
+            return "", "normal"
+
+    def _low_conf_threshold(self) -> float:
+        thr = getattr(self, "low_confidence_threshold", None)
+        if thr is None:
+            from src.utils.memory_review import DEFAULT_LOW_CONFIDENCE_THRESHOLD
+            return DEFAULT_LOW_CONFIDENCE_THRESHOLD
+        return float(thr)
+
+    def _find_stable_conflict(self, user_id: str, content: str) -> Optional[int]:
+        """新事实与该用户某条 **stable**（active、非 stale）事实同槽异值 → 返回那条 id。"""
+        from src.utils.memory_slots import extract_slot, slots_conflict
+        slot = extract_slot(content or "")
+        if not slot:
+            return None
+        try:
+            rows = self._conn.execute(
+                "SELECT id, content FROM episodic_memory"
+                " WHERE user_id = ? AND COALESCE(tier, 'raw') = 'stable'"
+                " AND COALESCE(status, 'active') = 'active'"
+                " ORDER BY created_at DESC LIMIT 300",
+                (user_id,),
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic stable conflict scan failed: %s", e)
+            return None
+        for rid, text in rows:
+            s2 = extract_slot(text or "")
+            if s2 and slots_conflict(slot, s2):
+                return int(rid)
+        return None
+
+    def _conflict_group_for(self, user_id: str, content: str) -> str:
+        """冲突组键＝被冲突的 stable 行 id（``g<id>``）；同时把那条 stable 也挂上组键，
+        两条并列可查、都不动 tier（不自动覆盖，让人选）。"""
+        sid = self._find_stable_conflict(user_id, content)
+        if sid is None:
+            return ""
+        group = f"g{sid}"
+        try:
+            self._conn.execute(
+                "UPDATE episodic_memory SET conflict_group = ?"
+                " WHERE id = ? AND COALESCE(conflict_group, '') = ''",
+                (group, sid))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic conflict_group mark failed: %s", e)
+        return group
+
+    _ROW_COLS = (
+        "id, user_id, content, category, created_at,"
+        " CASE WHEN embedding IS NOT NULL AND length(embedding) >= 8 THEN 1 ELSE 0 END,"
+        " COALESCE(source, 'user_stated'), COALESCE(tier, 'raw'), COALESCE(hits, 1),"
+        " COALESCE(source_quote, ''), COALESCE(source_ts, 0),"
+        " COALESCE(status, 'active'), COALESCE(review_reason, ''), COALESCE(impact, 'normal'),"
+        " COALESCE(conflict_group, ''), COALESCE(recall_count, 0), COALESCE(last_recalled_ts, 0)"
+    )
+
+    @staticmethod
+    def _row_to_dict(r: Tuple[Any, ...]) -> Dict[str, Any]:
+        return {
+            "id": r[0],
+            "memory_key": r[1],
+            "content": r[2],
+            "category": r[3],
+            "created_at": r[4],
+            "has_embedding": bool(r[5]),
+            "source": r[6],
+            "tier": r[7],
+            "hits": int(r[8] or 1),
+            # 五件套·溯源（#41）：抽取自哪句原话/何时（空=早期条目无记录）
+            "source_quote": str(r[9] or ""),
+            "source_ts": float(r[10] or 0),
+            # J-10 A2/A3
+            "status": str(r[11] or "active"),
+            "review_reason": str(r[12] or ""),
+            "impact": str(r[13] or "normal"),
+            "conflict_group": str(r[14] or ""),
+            "recall_count": int(r[15] or 0),
+            "last_recalled_ts": float(r[16] or 0),
+        }
+
+    def review_queue(
+        self, *, user_id: str = "", reason: str = "", limit: int = 100, offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """例外队列：``status=active`` 且 ``review_reason`` 非空的条目（其余不进队列）。
+
+        ``conflict`` 条目附 ``conflict_with``＝同组另一条（stable）的摘要，页面并列
+        「保留哪条」。``user_id`` 给定则只看该客户；``reason`` 给定则只看该类。
+        按 impact（high 先）→ 新近排序。绝不抛（异常返回 []）。
+        """
+        lim = max(1, min(int(limit or 100), 500))
+        off = max(0, min(int(offset or 0), 100000))
+        where = ["COALESCE(status, 'active') = 'active'", "COALESCE(review_reason, '') != ''"]
+        params: List[Any] = []
+        uid = str(user_id or "").strip()
+        if uid:
+            where.append("user_id = ?")
+            params.append(uid)
+        rs = str(reason or "").strip()
+        if rs:
+            where.append("review_reason = ?")
+            params.append(rs)
+        try:
+            rows = self._conn.execute(
+                f"SELECT {self._ROW_COLS} FROM episodic_memory"
+                f" WHERE {' AND '.join(where)}"
+                " ORDER BY CASE WHEN COALESCE(impact, 'normal') = 'high' THEN 0 ELSE 1 END,"
+                " created_at DESC, id DESC LIMIT ? OFFSET ?",
+                params + [lim, off],
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic review_queue failed: %s", e)
+            return []
+        out = [self._row_to_dict(r) for r in rows]
+        for item in out:
+            if item["review_reason"] == "conflict" and item["conflict_group"]:
+                item["conflict_with"] = self._conflict_peer(item["id"], item["conflict_group"])
+        return out
+
+    def _conflict_peer(self, row_id: int, group: str) -> Optional[Dict[str, Any]]:
+        try:
+            r = self._conn.execute(
+                f"SELECT {self._ROW_COLS} FROM episodic_memory"
+                " WHERE conflict_group = ? AND id != ? AND COALESCE(status, 'active') = 'active'"
+                " ORDER BY CASE WHEN COALESCE(tier, 'raw') = 'stable' THEN 0 ELSE 1 END,"
+                " created_at DESC LIMIT 1",
+                (group, int(row_id)),
+            ).fetchone()
+        except Exception:
+            return None
+        return self._row_to_dict(r) if r else None
+
+    def review_counts(self, *, user_id: str = "") -> Dict[str, Any]:
+        """例外队列计数：``{"pending", "by_reason": {reason: n}, "high_impact_pending"}``。
+
+        页面「今日需处理 M 件」/ 客户列表红点直接读。绝不抛（异常返回零）。
+        """
+        out: Dict[str, Any] = {
+            "pending": 0,
+            "by_reason": {"conflict": 0, "high_impact": 0, "low_confidence": 0,
+                          "self_fact": 0, "commitment": 0},
+            "high_impact_pending": 0,
+        }
+        where = "COALESCE(status, 'active') = 'active' AND COALESCE(review_reason, '') != ''"
+        params: List[Any] = []
+        uid = str(user_id or "").strip()
+        if uid:
+            where += " AND user_id = ?"
+            params.append(uid)
+        try:
+            rows = self._conn.execute(
+                f"SELECT review_reason, COUNT(*),"
+                f" SUM(CASE WHEN COALESCE(impact, 'normal') = 'high' THEN 1 ELSE 0 END)"
+                f" FROM episodic_memory WHERE {where} GROUP BY review_reason",
+                params,
+            ).fetchall()
+            for reason, n, hi in rows:
+                out["by_reason"][str(reason or "")] = int(n or 0)
+                out["pending"] += int(n or 0)
+                out["high_impact_pending"] += int(hi or 0)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic review_counts failed: %s", e)
+        return out
+
+    def confirm_fact(self, row_id: int) -> Optional[str]:
+        """例外确认（confirm 语义不变：转正 + 清 review_reason）——适用于任何进了队列的
+        条目（含 user_stated 的 high_impact / commitment），以及旧口径的 ai_inferred。
+        ``conflict`` 条目请走 :meth:`resolve_conflict`（这里也接受：视为「保留新条」）。
+        返回被确认的 content；未命中返回 None。
+        """
+        try:
+            rid = int(row_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT content, COALESCE(review_reason, ''), COALESCE(conflict_group, '')"
+                " FROM episodic_memory WHERE id = ?"
+                " AND (COALESCE(source, 'user_stated') = 'ai_inferred'"
+                "      OR COALESCE(review_reason, '') != '')",
+                (rid,),
+            ).fetchone()
+            if not row:
+                return None
+            if row[1] == "conflict" and row[2]:
+                res = self.resolve_conflict(rid)
+                return str(row[0]) if res.get("kept") == rid else None
+            self._conn.execute(
+                "UPDATE episodic_memory"
+                " SET source = 'user_stated', tier = 'stable', review_reason = '',"
+                " status = 'active', last_seen = ?"
+                " WHERE id = ?",
+                (int(time.time()), rid),
+            )
+            self._conn.commit()
+            return str(row[0])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic confirm_fact failed: %s", e)
+            return None
+
+    def ignore_fact(self, row_id: int) -> Optional[str]:
+        """软删「不再使用」：``status=ignored``——不召回、不进队列、不算画像；可恢复。
+        返回被忽略的 content（审计）；未命中返回 None。硬删仍是 :meth:`delete_by_id`。"""
+        try:
+            rid = int(row_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT content FROM episodic_memory WHERE id = ?", (rid,)).fetchone()
+            if not row:
+                return None
+            self._conn.execute(
+                "UPDATE episodic_memory SET status = 'ignored', last_seen = ? WHERE id = ?",
+                (int(time.time()), rid))
+            self._conn.commit()
+            return str(row[0])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic ignore_fact failed: %s", e)
+            return None
+
+    def restore_fact(self, row_id: int) -> Optional[str]:
+        """恢复软删条目（``ignored`` → ``active``）。返回 content；未命中/本就 active → None。"""
+        try:
+            rid = int(row_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT content FROM episodic_memory WHERE id = ?"
+                " AND COALESCE(status, 'active') = 'ignored'", (rid,)).fetchone()
+            if not row:
+                return None
+            self._conn.execute(
+                "UPDATE episodic_memory SET status = 'active', last_seen = ? WHERE id = ?",
+                (int(time.time()), rid))
+            self._conn.commit()
+            return str(row[0])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic restore_fact failed: %s", e)
+            return None
+
+    def resolve_conflict(self, keep_id: int) -> Dict[str, Any]:
+        """冲突组人工择一：保留 ``keep_id``（转正 stable、清 review_reason / 组键），
+        同组其余条目标 ``tier='stale'``（与矛盾消解同语义：不硬删、备查）。
+
+        返回 ``{"kept": id|None, "staled": [ids], "content": str}``；``keep_id`` 不在
+        任何冲突组时 kept=None。
+        """
+        out: Dict[str, Any] = {"kept": None, "staled": [], "content": ""}
+        try:
+            kid = int(keep_id)
+        except (TypeError, ValueError):
+            return out
+        try:
+            row = self._conn.execute(
+                "SELECT content, COALESCE(conflict_group, '') FROM episodic_memory"
+                " WHERE id = ?", (kid,)).fetchone()
+            if not row or not row[1]:
+                return out
+            group = str(row[1])
+            others = [int(r[0]) for r in self._conn.execute(
+                "SELECT id FROM episodic_memory WHERE conflict_group = ? AND id != ?",
+                (group, kid)).fetchall()]
+            now = int(time.time())
+            self._conn.execute(
+                "UPDATE episodic_memory SET tier = 'stable', review_reason = '',"
+                " conflict_group = '', source = 'user_stated', status = 'active', last_seen = ?"
+                " WHERE id = ?", (now, kid))
+            if others:
+                self._conn.executemany(
+                    "UPDATE episodic_memory SET tier = 'stale', review_reason = '',"
+                    " conflict_group = '' WHERE id = ?", [(i,) for i in others])
+            self._conn.commit()
+            out.update({"kept": kid, "staled": others, "content": str(row[0])})
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic resolve_conflict failed: %s", e)
+        return out
 
     def list_key_stats(self) -> List[Tuple[str, int]]:
         """返回 ``[(user_id_key, fact_count), ...]``，按事实数降序。
@@ -473,6 +842,7 @@ class EpisodicMemoryStore:
 
         R3：``stable`` 稳定层（已巩固的人设级记忆）**永不被裁剪**——只淘汰 ``raw`` 层
         的最旧者，使长期重要记忆不会因近期琐事刷量而被挤掉。
+        J-10 A2：软删（``status=ignored``）的条目最先被裁——它们本就不再使用。
         """
         n = self.count(user_id)
         if n <= keep:
@@ -483,7 +853,8 @@ class EpisodicMemoryStore:
             DELETE FROM episodic_memory WHERE id IN (
                 SELECT id FROM episodic_memory
                 WHERE user_id = ? AND COALESCE(tier, 'raw') != 'stable'
-                ORDER BY created_at ASC LIMIT ?
+                ORDER BY CASE WHEN COALESCE(status, 'active') = 'ignored' THEN 0 ELSE 1 END,
+                         created_at ASC LIMIT ?
             )
             """,
             (user_id, to_drop),
@@ -526,6 +897,7 @@ class EpisodicMemoryStore:
                        COALESCE(source, 'user_stated')
                 FROM episodic_memory
                 WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw'
+                  AND COALESCE(status, 'active') = 'active'
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (user_id, max(2, min(int(max_scan), 500))),
@@ -557,6 +929,7 @@ class EpisodicMemoryStore:
                     SELECT id, content
                     FROM episodic_memory
                     WHERE user_id = ? AND COALESCE(tier, 'raw') = 'stable'
+                      AND COALESCE(status, 'active') = 'active'
                     ORDER BY created_at DESC LIMIT ?
                     """,
                     (user_id, max(2, min(int(max_scan), 500))),
@@ -607,6 +980,22 @@ class EpisodicMemoryStore:
                     "UPDATE episodic_memory SET tier = 'stale' WHERE id = ?",
                     [(i,) for i in all_stale],
                 )
+                # J-10 A2：R11 由系统推翻了 stable ＝ 这组冲突已被证据解决——清掉组内
+                # 的 conflict 标记，否则赢的新条仍被当「待人选」挡在 prompt 外。
+                if stable_stale_ids:
+                    groups = [
+                        str(r[0]) for r in self._conn.execute(
+                            "SELECT DISTINCT COALESCE(conflict_group, '') FROM episodic_memory"
+                            f" WHERE id IN ({','.join('?' * len(stable_stale_ids))})",
+                            stable_stale_ids,
+                        ).fetchall() if r and r[0]
+                    ]
+                    for g in groups:
+                        self._conn.execute(
+                            "UPDATE episodic_memory SET conflict_group = '',"
+                            " review_reason = CASE WHEN review_reason = 'conflict'"
+                            " THEN '' ELSE review_reason END"
+                            " WHERE conflict_group = ?", (g,))
                 self._conn.commit()
             except Exception as e:  # noqa: BLE001
                 logger.debug("episodic contradiction mark failed: %s", e)
@@ -663,6 +1052,7 @@ class EpisodicMemoryStore:
                 SELECT id, content, embedding, created_at, hits, salience, last_seen
                 FROM episodic_memory
                 WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw'
+                  AND COALESCE(status, 'active') = 'active'
                   AND embedding IS NOT NULL
                 ORDER BY created_at DESC LIMIT ?
                 """,
@@ -797,6 +1187,8 @@ class EpisodicMemoryStore:
         stable_min_hits: int = 2,
         source_aware: bool = False,
         inferred_min_hits: Optional[int] = None,
+        auto_promote_days: Optional[float] = 7.0,
+        auto_promote_min_recalls: int = 1,
     ) -> Dict[str, int]:
         """离线巩固：把 ``raw`` 层里**复发**（hits≥min_hits）或**情绪浓**
         （salience≥min_salience，若给）的事实晋升为 ``stable`` 稳定层。
@@ -814,8 +1206,15 @@ class EpisodicMemoryStore:
         stable 需更高复发门槛（``inferred_min_hits``，默认 ``min_hits+1``），且推翻 stable
         的证据只数 ``user_stated``。``user_stated`` 走原门槛，行为不变。
 
-        返回 ``{"promoted", "stable_total", "raw_total", "merged", "gray_pairs",
-        "superseded", "stable_superseded"}``。
+        **J-10 A2（D8）第二条晋升路径**：``age ≥ auto_promote_days``（默认 7 天，None 关）
+        且 ``recall_count ≥ auto_promote_min_recalls``（默认 1；A3 召回记账写入）且
+        **不在冲突中**（``review_reason != 'conflict'``）→ stable。「用过、没被推翻」本身
+        就是印证——不再只认「重复 ≥2 次」。两条路径都不碰 ``conflict`` 条目（两条并列等人选，
+        绝不让冲突双方都成 stable）；软删（``status=ignored``）不参与。
+        配置 ``memory.consolidation.auto_promote.{days, min_recalls}``。
+
+        返回 ``{"promoted", "auto_promoted", "stable_total", "raw_total", "merged",
+        "gray_pairs", "superseded", "stable_superseded"}``（``promoted`` 含 auto）。
         """
         superseded = 0
         stable_superseded = 0
@@ -863,11 +1262,14 @@ class EpisodicMemoryStore:
         else:
             cond = stated_cond
             params = [user_id] + stated_params
+        # J-10 A2：两条路径都不碰冲突中 / 软删的条目
+        guard = (" AND COALESCE(review_reason, '') != 'conflict'"
+                 " AND COALESCE(status, 'active') = 'active'")
         try:
             cur = self._conn.execute(
                 f"""
                 UPDATE episodic_memory SET tier = 'stable'
-                WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw' AND {cond}
+                WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw' AND {cond}{guard}
                 """,
                 params,
             )
@@ -876,8 +1278,28 @@ class EpisodicMemoryStore:
         except Exception as e:  # noqa: BLE001
             logger.debug("episodic consolidate failed: %s", e)
             promoted = 0
+        auto_promoted = 0
+        if auto_promote_days is not None:
+            try:
+                days = float(auto_promote_days)
+                min_rc = max(1, int(auto_promote_min_recalls or 1))
+                if days >= 0:
+                    cur2 = self._conn.execute(
+                        f"""
+                        UPDATE episodic_memory SET tier = 'stable'
+                        WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw'
+                          AND created_at <= ? AND COALESCE(recall_count, 0) >= ?{guard}
+                        """,
+                        (user_id, time.time() - days * 86400, min_rc),
+                    )
+                    self._conn.commit()
+                    auto_promoted = int(cur2.rowcount or 0)
+                    promoted += auto_promoted
+            except Exception as e:  # noqa: BLE001
+                logger.debug("episodic auto-promote failed: %s", e)
         return {
             "promoted": promoted,
+            "auto_promoted": auto_promoted,
             "stable_total": self._count_tier(user_id, "stable"),
             "raw_total": self._count_tier(user_id, "raw"),
             "merged": merged,
@@ -943,6 +1365,7 @@ class EpisodicMemoryStore:
                 "SELECT COALESCE(tier, 'raw'), COALESCE(source, 'user_stated'), COUNT(*)"
                 " FROM episodic_memory"
                 " WHERE user_id = ? AND COALESCE(tier, 'raw') != 'stale'"
+                " AND COALESCE(status, 'active') = 'active'"
                 " GROUP BY 1, 2",
                 (uid,),
             ).fetchall()
@@ -970,6 +1393,7 @@ class EpisodicMemoryStore:
                 tops = self._conn.execute(
                     "SELECT content FROM episodic_memory"
                     " WHERE user_id = ? AND COALESCE(tier, 'raw') = 'stable'"
+                    " AND COALESCE(status, 'active') = 'active'"
                     " ORDER BY COALESCE(salience, 0) DESC, COALESCE(hits, 1) DESC,"
                     " created_at DESC LIMIT ?",
                     (uid, n),
@@ -984,6 +1408,7 @@ class EpisodicMemoryStore:
                     "SELECT id, content FROM episodic_memory"
                     " WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw'"
                     " AND COALESCE(source, 'user_stated') = 'ai_inferred'"
+                    " AND COALESCE(status, 'active') = 'active'"
                     " ORDER BY COALESCE(salience, 0) DESC, COALESCE(hits, 1) DESC,"
                     " created_at DESC LIMIT 6",
                     (uid,),
@@ -1000,32 +1425,12 @@ class EpisodicMemoryStore:
         """R15：坐席确认一条 AI 推断为属实——升格为 user_stated 且直接置 stable。
 
         人工背书是比"复发"更强的置信信号，故直接转稳定（而非等 consolidate）。
-        仅作用于当前还是 ``ai_inferred`` 的行，避免误改用户明说事实的 tier。
+        J-10 A2 起委托 :meth:`confirm_fact`：除 ``ai_inferred`` 外，也接受进了例外
+        队列（``review_reason`` 非空）的 user_stated 条目；确认同时清 review_reason。
+        不在队列的 user_stated 行仍不命中（避免误改用户明说事实的 tier）。
         R16：返回被确认的 ``content``（供调用方写审计留痕），未命中返回 ``None``。
         """
-        try:
-            rid = int(row_id)
-        except (TypeError, ValueError):
-            return None
-        try:
-            row = self._conn.execute(
-                "SELECT content FROM episodic_memory"
-                " WHERE id = ? AND COALESCE(source, 'user_stated') = 'ai_inferred'",
-                (rid,),
-            ).fetchone()
-            if not row:
-                return None
-            self._conn.execute(
-                "UPDATE episodic_memory"
-                " SET source = 'user_stated', tier = 'stable', last_seen = ?"
-                " WHERE id = ?",
-                (int(time.time()), rid),
-            )
-            self._conn.commit()
-            return str(row[0])
-        except Exception as e:  # noqa: BLE001
-            logger.debug("episodic confirm_inferred_fact failed: %s", e)
-            return None
+        return self.confirm_fact(row_id)
 
     def update_fact_content(self, row_id: int, content: str) -> bool:
         """五件套·可编辑（#41 0830 定稿问题③）：人工改写记忆条文。
@@ -1075,7 +1480,8 @@ class EpisodicMemoryStore:
                 " SUM(CASE WHEN COALESCE(tier, 'raw') = 'raw' THEN 1 ELSE 0 END),"
                 " COUNT(*)"
                 " FROM episodic_memory"
-                " WHERE COALESCE(source, 'user_stated') = 'ai_inferred'",
+                " WHERE COALESCE(source, 'user_stated') = 'ai_inferred'"
+                " AND COALESCE(status, 'active') = 'active'",
             ).fetchone()
             if row:
                 out["pending"] = int(row[0] or 0)
@@ -1153,12 +1559,16 @@ class EpisodicMemoryStore:
         fetch_n = max_items * 6 if (want_kw or want_vec) else max_items * 2
         fetch_n = min(fetch_n, 120)
 
+        # J-10 A2：软删（ignored）不召回；与 stable 冲突待人选的新条不召回
+        # （stable 那条仍在——不自动覆盖、也不让 prompt 里出现两个互相矛盾的事实）
         rows = self._conn.execute(
             """
             SELECT content, embedding, created_at, salience, tier,
               COALESCE(source, 'user_stated'), COALESCE(source_quote, '')
             FROM episodic_memory WHERE user_id = ?
               AND COALESCE(tier, 'raw') != 'stale'
+              AND COALESCE(status, 'active') = 'active'
+              AND COALESCE(review_reason, '') != 'conflict'
             ORDER BY created_at DESC LIMIT ?
             """,
             (user_id, fetch_n),
@@ -1305,6 +1715,8 @@ class EpisodicMemoryStore:
         q: str = "",
         q_keys: Optional[List[str]] = None,
         offset: int = 0,
+        status: str = "active",
+        review: str = "",
     ) -> List[Dict[str, Any]]:
         """Admin: recent rows, optional filter on memory key (user_id) and source。
 
@@ -1318,6 +1730,11 @@ class EpisodicMemoryStore:
 
         ``offset``＝「加载更多」分页（P1）。排序带 id 次键：created_at 只有秒级
         粒度，同秒多行在纯 created_at 排序下跨页可能重排 → 翻页丢行/重行。
+
+        J-10 A2：``status``＝``active``（默认，日常视图不见软删）/ ``ignored``（维护区
+        「已不再使用」可恢复）/ ``all``；``review``＝``pending``（只看进了例外队列的）
+        或某一具体原因。每行多带 status / review_reason / impact / conflict_group /
+        recall_count / last_recalled_ts。
         """
         limit = max(1, min(int(limit or 100), 500))
         off = max(0, min(int(offset or 0), 100000))
@@ -1326,6 +1743,16 @@ class EpisodicMemoryStore:
         qq = (q or "").strip()
         where = []
         params: List[Any] = []
+        st = str(status or "active").strip().lower()
+        if st in ("active", "ignored"):
+            where.append("COALESCE(status, 'active') = ?")
+            params.append(st)
+        rv = str(review or "").strip().lower()
+        if rv == "pending":
+            where.append("COALESCE(review_reason, '') != ''")
+        elif rv:
+            where.append("COALESCE(review_reason, '') = ?")
+            params.append(rv)
         if p:
             where.append("user_id LIKE ?")
             params.append(f"%{p}%")
@@ -1345,32 +1772,13 @@ class EpisodicMemoryStore:
         params.extend([limit, off])
         rows = self._conn.execute(
             f"""
-            SELECT id, user_id, content, category, created_at,
-              CASE WHEN embedding IS NOT NULL AND length(embedding) >= 8 THEN 1 ELSE 0 END,
-              COALESCE(source, 'user_stated'), COALESCE(tier, 'raw'), COALESCE(hits, 1),
-              COALESCE(source_quote, ''), COALESCE(source_ts, 0)
+            SELECT {self._ROW_COLS}
             FROM episodic_memory{clause}
             ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
             """,
             params,
         ).fetchall()
-        out: List[Dict[str, Any]] = []
-        for r in rows:
-            out.append({
-                "id": r[0],
-                "memory_key": r[1],
-                "content": r[2],
-                "category": r[3],
-                "created_at": r[4],
-                "has_embedding": bool(r[5]),
-                "source": r[6],
-                "tier": r[7],
-                "hits": int(r[8] or 1),
-                # 五件套·溯源（#41）：抽取自哪句原话/何时（空=早期条目无记录）
-                "source_quote": str(r[9] or ""),
-                "source_ts": float(r[10] or 0),
-            })
-        return out
+        return [self._row_to_dict(r) for r in rows]
 
     def admin_summary(self, days: int = 7, top_n: int = 3) -> Dict[str, Any]:
         """管理者摘要：近 N 天新增条数/覆盖用户数 + 全库记忆最多 Top-N 用户。
@@ -1382,28 +1790,42 @@ class EpisodicMemoryStore:
         d = max(1, min(int(days or 7), 90))
         n = max(1, min(int(top_n or 3), 10))
         since = time.time() - d * 86400
+        # J-10 A2：口径只数 active（软删不算「AI 已记住」）；另出全库总数/覆盖客户数
+        # + 例外队列计数，供页面顶部「AI 已记住 N 件事 · 覆盖 U 位客户 · 今日需处理 M 件」。
+        act = "COALESCE(status, 'active') = 'active'"
         try:
             row = self._conn.execute(
-                "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM episodic_memory"
-                " WHERE created_at >= ?",
+                f"SELECT COUNT(*), COUNT(DISTINCT user_id) FROM episodic_memory"
+                f" WHERE created_at >= ? AND {act}",
                 (since,),
             ).fetchone()
+            tot = self._conn.execute(
+                f"SELECT COUNT(*), COUNT(DISTINCT user_id),"
+                f" SUM(CASE WHEN COALESCE(tier, 'raw') = 'stable' THEN 1 ELSE 0 END)"
+                f" FROM episodic_memory WHERE {act} AND COALESCE(tier, 'raw') != 'stale'",
+            ).fetchone()
             top = self._conn.execute(
-                "SELECT user_id, COUNT(*) AS n FROM episodic_memory"
+                f"SELECT user_id, COUNT(*) AS n FROM episodic_memory WHERE {act}"
                 " GROUP BY user_id ORDER BY n DESC, MAX(created_at) DESC LIMIT ?",
                 (n,),
             ).fetchall()
         except Exception:
             return {"window_days": d, "new_count": 0, "new_users": 0, "top": [],
+                    "total_count": 0, "total_users": 0, "stable_count": 0,
+                    "review": self.review_counts(),
                     "grounding_drops": self.grounding_drop_summary(days=d)}
         return {
             "window_days": d,
             "new_count": int(row[0] or 0),
             "new_users": int(row[1] or 0),
+            "total_count": int(tot[0] or 0),
+            "total_users": int(tot[1] or 0),
+            "stable_count": int(tot[2] or 0),
             "top": [
                 {"memory_key": str(r[0] or ""), "count": int(r[1] or 0)}
                 for r in top
             ],
+            "review": self.review_counts(),
             "grounding_drops": self.grounding_drop_summary(days=d),
         }
 
@@ -1612,6 +2034,7 @@ class EpisodicMemoryStore:
         limit = max(1, min(int(limit or 20), 200))
         p = (memory_key_prefix or "").strip()
         cond = "1=1" if force else "(embedding IS NULL OR length(embedding) < 8)"
+        cond += " AND COALESCE(status, 'active') = 'active'"   # J-10 A2：软删不补向量
         if p:
             rows = self._conn.execute(
                 f"""

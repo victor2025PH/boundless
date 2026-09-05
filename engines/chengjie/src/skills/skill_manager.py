@@ -501,6 +501,10 @@ class SkillManager(LoggerMixin):
                 from src.utils.episodic_memory_store import EpisodicMemoryStore
                 self._episodic_store = EpisodicMemoryStore(_epath)
                 self.logger.info("情景记忆已启用: %s", _epath)
+                # J-10 A2：例外打标阈值透传（memory.review.low_confidence_threshold，默认 0.6）
+                _rv_thr = (self._memory_cfg.get("review") or {}).get("low_confidence_threshold")
+                if _rv_thr is not None:
+                    self._episodic_store.low_confidence_threshold = float(_rv_thr)
                 # P8：启动时 observe-only 扫一轮，ops 去重卡立刻有读数
                 try:
                     _obs = self._episodic_store.observe_dedup_all_users()
@@ -5560,11 +5564,26 @@ class SkillManager(LoggerMixin):
                     _dd_thr = None
                     if _dd:
                         _dd_thr = float(_dd) if not isinstance(_dd, bool) else 0.92
+                    # J-10 A2（D8）：第二条晋升路径「N 天无冲突且被召回 ≥1」——
+                    # memory.consolidation.auto_promote.{days, min_recalls}；false 关。
+                    _ap = ccfg.get("auto_promote", {})
+                    _ap_days: Optional[float] = 7.0
+                    _ap_min = 1
+                    if _ap is False:
+                        _ap_days = None
+                    elif isinstance(_ap, dict):
+                        if _ap.get("enabled", True) is False:
+                            _ap_days = None
+                        else:
+                            _ap_days = float(_ap.get("days", 7))
+                            _ap_min = int(_ap.get("min_recalls", 1))
                     res = self._episodic_store.consolidate(
                         key,
                         min_hits=int(ccfg.get("min_hits", 2)),
                         min_salience=(float(_ms) if _ms is not None else None),
                         dedup_threshold=_dd_thr,
+                        auto_promote_days=_ap_days,
+                        auto_promote_min_recalls=_ap_min,
                         # #96（实施91）：默认开——0831 实锤同客户三条年龄条目
                         # 并存打架（22岁/21岁/今年21岁），矛盾消解保留最新、
                         # 旧值标 stale（保留备查，绝不硬删）。显式 false 仍可关。
@@ -5615,8 +5634,10 @@ class SkillManager(LoggerMixin):
     def episodic_list_for_admin(
         self, prefix: str = "", limit: int = 100, source: str = "",
         q: str = "", q_keys: Optional[List[str]] = None, offset: int = 0,
+        status: str = "", review: str = "",
     ) -> List[Dict[str, Any]]:
-        """后台记忆列表。``q``/``q_keys``＝身份化联合搜索；``offset``＝加载更多分页
+        """后台记忆列表。``q``/``q_keys``＝身份化联合搜索；``offset``＝加载更多分页；
+        J-10 A2 ``status``（ignored / all）/ ``review``（pending / 原因）例外标记透传
         （均见 store.list_rows）。
 
         新参缺省时保持旧三参调用形状——测试里大量老签名 fake store 依赖该形状。

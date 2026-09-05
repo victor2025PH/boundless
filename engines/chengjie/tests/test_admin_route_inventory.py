@@ -173,6 +173,10 @@ _BASELINE = """
 /api/episodic-memory/{row_id}	DELETE
 /api/episodic-memory/{row_id}	PUT
 /api/episodic-memory/{row_id}/confirm	POST
+/api/episodic-memory/{row_id}/ignore	POST
+/api/episodic-memory/{row_id}/restore	POST
+/api/episodic-memory/resolve-conflict	POST
+/api/episodic-memory/review-queue	GET
 /api/unified-inbox/send-status	GET
 /api/episodic-memory/key-health	GET
 /api/episodic-memory/key-migrate	POST

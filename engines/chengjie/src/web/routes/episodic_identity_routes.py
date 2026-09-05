@@ -174,6 +174,7 @@ def register_episodic_identity_routes(app, ctx) -> None:
     async def api_episodic_memory_list(
         request: Request, prefix: str = "", limit: int = 100, source: str = "",
         q: str = "", identity: int = 1, offset: int = 0,
+        status: str = "active", review: str = "",
     ):
         """情景记忆条目列表（memory_key = 私聊用户 id 或 群id_用户id）。
 
@@ -185,6 +186,9 @@ def register_episodic_identity_routes(app, ctx) -> None:
         ``offset``＝「加载更多」分页（P1 前端消费）。
         管理者摘要走独立端点 ``GET /api/episodic-memory/summary``（P3）。
         新参缺省时对 skill_manager 保持旧三参调用形状（兼容既有 fake/断言）。
+        J-10 A2：``status``＝active（默认）/ ignored（维护区「已不再使用」）/ all；
+        ``review``＝pending 或具体原因（conflict / high_impact / low_confidence /
+        self_fact / commitment）。
         """
         _api_auth(request)
         sm = _get_sm()
@@ -197,6 +201,9 @@ def register_episodic_identity_routes(app, ctx) -> None:
         pre = (prefix or "")[:120]
         if qq and pre.strip() == qq:
             pre = ""  # 过渡期前端 q+prefix 双发同值：按 q 语义接管，防 AND 缩窄
+        st = str(status or "active").strip().lower()
+        st = st if st in ("active", "ignored", "all") else "active"
+        rv = str(review or "").strip().lower()[:24]
         inbox_db = _inbox_db_or_none()
         kwargs: Dict[str, Any] = dict(prefix=pre, limit=lim, source=src)
         if qq:
@@ -206,6 +213,10 @@ def register_episodic_identity_routes(app, ctx) -> None:
             kwargs.update(q=qq, q_keys=q_keys)
         if off:
             kwargs["offset"] = off
+        if st != "active":
+            kwargs["status"] = st
+        if rv:
+            kwargs["review"] = rv
         rows = sm.episodic_list_for_admin(**kwargs)
         if identity and inbox_db is not None and rows:
             try:
@@ -501,6 +512,109 @@ def register_episodic_identity_routes(app, ctx) -> None:
             except Exception:
                 pass
         return {"ok": True, "confirmed": int(row_id)}
+
+    # ── J-10 A2（#183 · D8）：例外队列 / 软删 / 冲突择一 ─────────────────────
+
+    def _store_or_503(request: Request, *methods: str):
+        sm = _get_sm()
+        store = getattr(sm, "_episodic_store", None) if sm else None
+        if store is None or not all(hasattr(store, m) for m in methods):
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        return store
+
+    def _audit_epi(request: Request, action: str, target: str, *, old_val: str = "",
+                   new_val: str = "") -> None:
+        audit = getattr(ctx, "audit_store", None)
+        if not audit:
+            return
+        try:
+            actor = str(
+                request.session.get("username")
+                or request.session.get("role") or "web_admin"
+            )
+            audit.log(actor, action, target=target, old_val=old_val, new_val=new_val)
+        except Exception:
+            pass
+
+    @app.get("/api/episodic-memory/review-queue")
+    async def api_episodic_review_queue(
+        request: Request, memory_key: str = "", reason: str = "",
+        limit: int = 100, offset: int = 0, identity: int = 1,
+    ):
+        """例外队列：只列 ``review_reason`` 非空且 ``status=active`` 的条目（其余不进队列）。
+
+        返回 ``{items, count, counts: {pending, by_reason, high_impact_pending}}``；
+        ``conflict`` 条目带 ``conflict_with``（同组 stable 那条）供「保留哪条」并列展示。
+        ``memory_key`` 只看某客户（档案抽屉）；``reason`` 只看某类（同类型批量动作）。
+        """
+        _api_auth(request)
+        store = _store_or_503(request, "review_queue", "review_counts")
+        mk = str(memory_key or "").strip()[:200]
+        rs = str(reason or "").strip().lower()[:24]
+        items = store.review_queue(
+            user_id=mk, reason=rs,
+            limit=max(1, min(int(limit or 100), 500)),
+            offset=max(0, min(int(offset or 0), 100000)))
+        inbox_db = _inbox_db_or_none()
+        if identity and inbox_db is not None and items:
+            try:
+                idmap = resolve_identities(
+                    inbox_db, [str(r.get("memory_key") or "") for r in items])
+                for r in items:
+                    ident = idmap.get(str(r.get("memory_key") or ""))
+                    if ident:
+                        r["identity"] = ident
+            except Exception:
+                pass
+        return {"ok": True, "items": items, "count": len(items),
+                "counts": store.review_counts(user_id=mk)}
+
+    @app.post("/api/episodic-memory/{row_id}/ignore")
+    async def api_episodic_memory_ignore(request: Request, row_id: int):
+        """「不再使用」＝软删（``status=ignored``：不召回、不进队列、可恢复）。
+        硬删仍是 ``DELETE /api/episodic-memory/{row_id}``（页面收进「更多」二级确认）。"""
+        _api_write("episodic_memory")(request)
+        store = _store_or_503(request, "ignore_fact")
+        content = store.ignore_fact(int(row_id))
+        if content is None:
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        _audit_epi(request, "episodic_ignore", str(row_id), old_val=str(content)[:160])
+        return {"ok": True, "ignored": int(row_id)}
+
+    @app.post("/api/episodic-memory/{row_id}/restore")
+    async def api_episodic_memory_restore(request: Request, row_id: int):
+        """恢复软删条目（``ignored`` → ``active``）。"""
+        _api_write("episodic_memory")(request)
+        store = _store_or_503(request, "restore_fact")
+        content = store.restore_fact(int(row_id))
+        if content is None:
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        _audit_epi(request, "episodic_restore", str(row_id), new_val=str(content)[:160])
+        return {"ok": True, "restored": int(row_id)}
+
+    @app.post("/api/episodic-memory/resolve-conflict")
+    async def api_episodic_memory_resolve_conflict(request: Request):
+        """冲突组人工择一。Body ``{keep_id}``：保留那条转正 stable，同组其余标过时（stale，
+        不硬删）。``keep_id`` 不在任何冲突组 → 404。"""
+        _api_write("episodic_memory")(request)
+        store = _store_or_503(request, "resolve_conflict")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        try:
+            keep_id = int(body.get("keep_id"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="keep_id"))
+        res = store.resolve_conflict(keep_id)
+        if not res.get("kept"):
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        _audit_epi(request, "episodic_resolve_conflict", str(keep_id),
+                   old_val=",".join(str(i) for i in res.get("staled") or []),
+                   new_val=str(res.get("content") or "")[:160])
+        return {"ok": True, **res}
 
     @app.post("/api/episodic-memory/backfill")
     async def api_episodic_memory_backfill(
