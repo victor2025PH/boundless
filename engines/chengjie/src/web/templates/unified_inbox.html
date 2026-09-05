@@ -7595,6 +7595,18 @@ function _capsDenyTitle(caps, kind){
   const r=caps&&caps.caps_reason?String(caps.caps_reason):'';
   if(r==='zalo_api_no_media') return window.T('inbox.caps.zalo_api_no_media');
   if(r==='needs_public_url') return window.T('inbox.caps.needs_public_url');
+  // #180 三分因（J-3 交办，2026-09-05）：send-caps 带 caps_reason/worker_state/backoff_sec
+  // ——「worker 没托管 / worker 在但不发媒体 / worker 在重连（还要等 N 秒）」是三件
+  // 完全不同的事，坐席对着灰按钮要知道该等还是该找运维；旧后端缺字段走下面通用文案。
+  if(r==='worker_not_running'){
+    const st=caps.worker_state?String(caps.worker_state):'';
+    const bo=parseInt(caps.backoff_sec,10)||0;
+    let t=window.Tf('inbox.caps.worker_not_running',{state:st||'—'});
+    if(bo>0) t+=' · '+window.Tf('inbox.caps.backoff_in',{n:bo});
+    return t;
+  }
+  if(r==='no_worker') return window.T('inbox.caps.no_worker');
+  if(r==='no_send_media') return kind==='voice'?window.T('inbox.caps.no_send_voice'):window.T('inbox.caps.no_send_media');
   if(kind==='voice'&&caps&&caps.voice_mode==='auto_only')
     return window.T('inbox.caps.voice_auto_only');
   return kind==='voice'?window.T('inbox.caps.no_voice'):window.T('inbox.caps.no_media');
