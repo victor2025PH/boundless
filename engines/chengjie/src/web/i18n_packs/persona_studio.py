@@ -1077,6 +1077,9 @@ ZH = {
     # #193 全局规则未保存离开守卫（替代桌面壳静默吞掉的 beforeunload）
     "psn_gr_leave_confirm": "「全局规则」有未保存的改动。\n\n确定 = 放弃改动并离开；取消 = 留在本页先保存。",
     "psn_gr_leave_stay": "已留在本页：全局规则还有未保存的改动，请先保存或放弃",
+    # #192 标签云折叠
+    "psn_tags_more": "更多 {n} 个标签",
+    "psn_tags_less": "收起标签",
 }
 
 EN = {
@@ -2151,4 +2154,6 @@ EN = {
     "psc_pp_hint": "Trial chat does not burn GPU; production sends with this reply",
     "psn_gr_leave_confirm": "Global Rules has unsaved changes.\n\nOK = discard them and leave; Cancel = stay and save first.",
     "psn_gr_leave_stay": "Staying on this page: Global Rules still has unsaved changes — save or discard them first",
+    "psn_tags_more": "{n} more tags",
+    "psn_tags_less": "Fewer tags",
 }

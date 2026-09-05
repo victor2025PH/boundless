@@ -46,6 +46,8 @@
 .tag-cloud{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.55rem;min-height:0}
 .tag-cloud .tc-chip{cursor:pointer;padding:.15rem .5rem;border-radius:5px;font-size:.71rem;font-weight:600;background:var(--input);border:1px solid var(--bd);color:var(--t2);transition:all .15s}
 .tag-cloud .tc-chip:hover,.tag-cloud .tc-chip.active{background:color-mix(in srgb, var(--p,#1e8cf2) 12%, transparent);color:var(--p,#1e8cf2);border-color:color-mix(in srgb, var(--p,#1e8cf2) 30%, transparent)}
+/* #192：90 个标签占满三四行 → 默认只显高频 12 个 + 「更多」展开 */
+.tag-cloud .tc-more{font-weight:500;border-style:dashed;color:var(--t3)}
 .viewer-lock{pointer-events:none;opacity:.4;cursor:not-allowed}
 .viewer-banner{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:8px;padding:.5rem .85rem;font-size:.8rem;color:var(--amber);margin-bottom:.9rem;display:none}
 .bulk-panel{background:color-mix(in srgb, var(--p,#1e8cf2) 5%, transparent);border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);border-radius:10px;padding:.85rem 1rem;margin-top:.9rem}
@@ -178,6 +180,10 @@
 /* ── Profile Pool header ─────────────────────────────────────────────────── */
 .pp-content{padding:1.4rem 1.8rem 2rem;max-width:1400px}
 .pp-header{display:flex;align-items:center;gap:.55rem;margin-bottom:.75rem;flex-wrap:wrap}
+/* #192：1024px 宽下头部控件不得被 flex 压缩到只剩省略号——带数字/短文案的控件一律不缩 */
+.pp-header .sort-sel,.pp-header .pp-count,.pp-header .btn,#dash-refresh-btn,.pp-header #health-filter-badge{flex:none}
+.pp-header>div{flex-wrap:wrap;justify-content:flex-end}
+.fresh-badge,.tb-cnt,.pp-count{white-space:nowrap}
 .pp-search-wrap{position:relative;flex:1;min-width:200px}
 .pp-search-icon{position:absolute;left:.55rem;top:50%;transform:translateY(-50%);color:var(--t2);pointer-events:none;width:14px;height:14px}
 .pp-search{width:100%;padding:.32rem .55rem .32rem 2rem;border:1px solid var(--bd);border-radius:7px;background:var(--input);color:var(--t);font-size:.82rem;transition:border-color .15s;box-sizing:border-box}
@@ -532,8 +538,8 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   </div>
   <div class="topbar-r">
     <span id="save-status" class="tts-status" style="margin-right:.45rem"></span>
-    <button class="btn btn-sm btn-primary" onclick="openCreateFlow()">＋ {{ (i18n or {}).get('psn_new_profile','新建人设') }}</button>
-      <button class="btn btn-sm" id="kbd-help-btn" onclick="_toggleKbdHelp()" title="{{ (i18n or {}).get('psn_kbd_help_t','快捷键速查') }}" style="font-size:.8rem;font-weight:700;width:1.75rem;padding:0;text-align:center">?</button>
+    {# #192：页头右上的「新建人设」与人设池工具栏最右那个功能重复——只保留工具栏的 #}
+    <button class="btn btn-sm" id="kbd-help-btn" onclick="_toggleKbdHelp()" title="{{ (i18n or {}).get('psn_kbd_help_t','快捷键速查') }}" style="font-size:.8rem;font-weight:700;min-width:1.75rem;padding:0 .45rem;text-align:center;flex:none">?</button>
   </div>
 </div>
 
@@ -8092,7 +8098,7 @@ function openCreateFlow() {
 }
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
-<script src="/static/js/persona_studio_core.js?v=20260730a"></script>
+<script src="/static/js/persona_studio_core.js?v=20260905a"></script>
 <script src="/static/js/persona_apply_modal.js?v=p3"></script>
 <script src="/static/js/persona_create_wizard.js?v=p1"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>

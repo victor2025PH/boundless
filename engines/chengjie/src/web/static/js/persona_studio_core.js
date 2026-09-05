@@ -145,16 +145,44 @@ async function _playVoicePreview(pid, btn) {
 // _activeTag、_sfFilter、_healthTierFilter、_customOrder、_selectedProfiles、_bulkMode、
 // _platBindMap、_filteredProfiles、_SRC、_hl、_fmt、_faceRefs、各 DnD/菜单/提示回调。
 // 顶层 let/const 跨 <script> 词法共享;本文件在内联脚本之后、DOMContentLoaded 之前加载。
+// #192：90 个标签占满三四行 → 默认只显高频 TAG_CLOUD_TOP 个（当前选中的即使在长尾也显），
+// 其余收进「更多 N 个标签 ▾」，点开/收起只切 _tagCloudExpanded 重绘。标签值经属性转义进
+// data-tag，点击从 dataset 取——旧写法把标签拼进 onclick 单引号串，含引号/尖括号的标签会炸。
+var TAG_CLOUD_TOP = 12;
+var _tagCloudExpanded = false;
+function _tcAttr(s) {
+  s = String(s == null ? '' : s);
+  return (typeof _escAttr === 'function') ? _escAttr(s)
+    : s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 function renderTagCloud(profiles) {
   const cloud = document.getElementById('tag-cloud');
   if (!cloud) return;
   const tmap = {};
   profiles.forEach(function(p) { (p.tags || []).forEach(function(t) { tmap[t] = (tmap[t] || 0) + 1; }); });
-  cloud.innerHTML = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1]; }).map(function(e) {
+  const all = Object.entries(tmap).sort(function(a,b){ return b[1]-a[1] || String(a[0]).localeCompare(String(b[0])); });
+  let show = all;
+  const hidden = Math.max(0, all.length - TAG_CLOUD_TOP);
+  if (!_tagCloudExpanded && hidden > 0) {
+    show = all.slice(0, TAG_CLOUD_TOP);
+    if (_activeTag && !show.some(function(e){ return e[0] === _activeTag; }) && tmap[_activeTag]) {
+      show = show.concat([[_activeTag, tmap[_activeTag]]]);
+    }
+  }
+  let html = show.map(function(e) {
     var t = e[0], c = e[1];
-    var tSafe = t.replace(/'/g, "\\'");
-    return '<span class="tc-chip' + (_activeTag === t ? ' active' : '') + '" data-tag="' + t + '" onclick="_clickTagText(\'' + tSafe + '\')">' + t + ' <span style="opacity:.65">' + c + '</span></span>';
+    return '<span class="tc-chip' + (_activeTag === t ? ' active' : '') + '" data-tag="' + _tcAttr(t) + '" onclick="_clickTagText(this.dataset.tag)">' + _tcAttr(t) + ' <span style="opacity:.65">' + c + '</span></span>';
   }).join('');
+  if (hidden > 0) {
+    const lbl = _tagCloudExpanded ? window.T('psn_tags_less')
+      : window.Tf('psn_tags_more', {n: String(hidden)});
+    html += '<span class="tc-chip tc-more" onclick="_toggleTagCloud()">' + _tcAttr(lbl) + (_tagCloudExpanded ? ' ▴' : ' ▾') + '</span>';
+  }
+  cloud.innerHTML = html;
+}
+function _toggleTagCloud() {
+  _tagCloudExpanded = !_tagCloudExpanded;
+  renderTagCloud(_allProfiles || []);
 }
 
 function _clickTagText(tag) {
