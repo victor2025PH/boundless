@@ -229,3 +229,16 @@ def test_mark_apply_sets_three_columns_keeps_notify_zero_and_logs(tmp_path):
     assert all(p["action"] == "skip_status" for p in plan2)
     assert dlf.apply_mark_fixed(db, plan2) == 0
     assert _row(db, 171)["fix_note"] == "n171"
+
+
+def test_mark_body_append_only_when_given(tmp_path):
+    db = _mk_db_open(tmp_path)
+    p = tmp_path / "plan.json"
+    p.write_text('[{"id": 160, "fix_note": "n160", "body_append": "五行表：①A ②真机 ③A"},'
+                 ' {"id": 171, "fix_note": "n171"}]', encoding="utf-8")
+    notes = dlf.load_mark_plan_file(p)
+    plan = dlf.plan_mark_fixed(dlf.load_rows_full(db, list(notes)), notes)
+    assert "body+=" in dlf.render_mark_plan(plan, apply=False)
+    assert dlf.apply_mark_fixed(db, plan) == 2
+    assert _row(db, 160)["body"].endswith("\n五行表：①A ②真机 ③A")
+    assert _row(db, 171)["body"] == "谎称已发照片"  # 没给就不碰 body

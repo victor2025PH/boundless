@@ -195,7 +195,7 @@ def load_mark_plan_file(path: Path) -> Dict[int, str]:
         items = list(raw)
     else:
         raise SystemExit("[err] 计划文件须是 JSON 对象或列表")
-    out: Dict[int, str] = {}
+    out: Dict[int, Any] = {}
     for it in items:
         try:
             tid = int(str((it or {}).get("id")).replace("#", "").strip())
@@ -204,12 +204,23 @@ def load_mark_plan_file(path: Path) -> Dict[int, str]:
         note = str((it or {}).get("fix_note") or "").strip()
         if not note:
             raise SystemExit(f"[err] #{tid} fix_note 为空")
-        out[tid] = note
+        extra = str((it or {}).get("body_append") or "").strip()
+        # 列表形态可带 body_append（复合单拆件表等长文，fix_note 300 字装不下）；
+        # 值为 str 时保持旧契约，带 body_append 时用 dict。
+        out[tid] = {"fix_note": note, "body_append": extra} if extra else note
     return out
 
 
+def _note_of(v: Any) -> str:
+    return str(v["fix_note"] if isinstance(v, dict) else v).strip()
+
+
+def _body_append_of(v: Any) -> str:
+    return str(v.get("body_append") or "").strip() if isinstance(v, dict) else ""
+
+
 def plan_mark_fixed(rows: Sequence[Dict[str, Any]],
-                    notes: Dict[int, str]) -> List[Dict[str, Any]]:
+                    notes: Dict[int, Any]) -> List[Dict[str, Any]]:
     """每张目标单一条计划项：``action`` = mark | skip_status | missing。
 
     只有 ``status ∈ MARK_FIXED_FROM`` 的行给 mark；fixed / closed / verified
@@ -233,7 +244,8 @@ def plan_mark_fixed(rows: Sequence[Dict[str, Any]],
             item["action"] = "skip_status"
         else:
             item.update({"action": "mark", "status_to": "fixed",
-                         "fix_note": str(notes[tid]).strip()[:FIX_NOTE_MAX]})
+                         "fix_note": _note_of(notes[tid])[:FIX_NOTE_MAX],
+                         "body_append": _body_append_of(notes[tid])[:2000]})
         plan.append(item)
     return plan
 
@@ -252,6 +264,9 @@ def render_mark_plan(plan: Sequence[Dict[str, Any]], apply: bool) -> str:
             lines.append(
                 f"  #{tid}  {p['status_from']} → fixed  [{p.get('reporter', '')}] "
                 f"{p.get('title', '')}\n        fix_note: {p['fix_note']}")
+            if p.get("body_append"):
+                lines.append(f"        body+= ({len(p['body_append'])} 字) "
+                             f"{p['body_append'][:80]}…")
     n_do = sum(1 for p in plan if p["action"] == "mark")
     lines.append(f"  将改 {n_do} 单，notify_ts 保持 0（进汇总回访池）"
                  + ("" if apply else "——加 --apply 执行"))
@@ -289,10 +304,18 @@ def apply_mark_fixed(db_path: Path, plan: Sequence[Dict[str, Any]],
     try:
         for p in todo:
             tid = int(p["ticket_id"])
-            cur = con.execute(
-                "UPDATE bug_tickets SET status='fixed', fix_note=?, updated_ts=?"
-                f" WHERE id=? AND status IN ({marks})",
-                (p["fix_note"], ts, tid, *MARK_FIXED_FROM))
+            extra = str(p.get("body_append") or "")
+            if extra:
+                cur = con.execute(
+                    "UPDATE bug_tickets SET status='fixed', fix_note=?, updated_ts=?,"
+                    " body=substr(body || char(10) || ?, 1, 6000)"
+                    f" WHERE id=? AND status IN ({marks})",
+                    (p["fix_note"], ts, extra, tid, *MARK_FIXED_FROM))
+            else:
+                cur = con.execute(
+                    "UPDATE bug_tickets SET status='fixed', fix_note=?, updated_ts=?"
+                    f" WHERE id=? AND status IN ({marks})",
+                    (p["fix_note"], ts, tid, *MARK_FIXED_FROM))
             if cur.rowcount != 1:
                 continue
             con.execute(
