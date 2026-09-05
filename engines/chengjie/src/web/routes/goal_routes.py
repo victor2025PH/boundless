@@ -188,6 +188,12 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             # 与 prompt 注入同口径：近窗成交量做痛点同分裁决（P4 反哺）
             sold = sc.sold_boost_map(
                 cat, _svc().sold_plan_counts_cached(store))
+            # 人设过滤同注入链（#145③）：刻意复用注入侧同一个解析器，预览与
+            # 真推口径不得分叉——坐席照着预览说话，预览多出一条真推不出来的货
+            # 比没有预览更坑。pick_products 是 fail-closed，不传＝绑定货全黑。
+            pid = _svc()._account_persona(
+                _cfg_root(), str(view.get("platform") or ""),
+                str(view.get("account_id") or ""))
             view["products"] = [{
                 "id": str(p.get("id") or ""),
                 "name": str(p.get("name_en" if en else "name_zh")
@@ -197,7 +203,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "price_from": str(p.get("price_from") or ""),
                 "url": sc.product_link(site, p),
             } for p in sc.pick_products(
-                cat, fields, pinned=pinned, limit=2, sold=sold)]
+                cat, fields, pinned=pinned, limit=2, sold=sold,
+                persona_id=pid)]
         except Exception:   # 目录层软失败：不出产品行即可
             logger.debug("attach products failed", exc_info=True)
         return view

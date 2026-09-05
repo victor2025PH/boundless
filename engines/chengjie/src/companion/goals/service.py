@@ -1264,6 +1264,13 @@ def build_block_for_chat(
         # 注意保持调用方 dict 身份（空 dict 也不换新对象）——_goal_cta 暂存要
         # 写回调用方的 user_context 才能被出站守卫读到
         uc = user_context if isinstance(user_context, dict) else {}
+        # 本轮账号生效人设：**选品与出站守卫必须同源**。守卫（foreign_product_names）
+        # 按这个 id 判「哪些产品名属于别的人设」，选品（pick_products）按同一个 id
+        # 决定「哪些货能进注入」——两处取不同来源时，选中的绑定货会被守卫当他人设
+        # 的货剥掉名字，等于自己拆自己的台。算一次，两处共用。
+        catalog_persona_id = (
+            _account_persona(cfg_root, platform, account_id)
+            if template.get("catalog") else "")
         # P4 链接纪律守卫档位暂存：catalog 模板的每一轮（含 hold/驳回/让位等
         # 早退路径——恰是最该守纪律的日子）先落保守档 ""=剥全部本域链接；
         # 真出目录块时再升为当日实际档。出站守卫（A线 5c3 / 拟稿 9）读后即焚。
@@ -1288,8 +1295,7 @@ def build_block_for_chat(
                             cfg_root, getattr(config_obj, "config_path", None)),
                         # P16：人设归属——守卫剥离计数按人设分桶，
                         # 「哪个人设在编折扣」直接可见（best-effort，失败留空）
-                        "persona_id": _account_persona(
-                            cfg_root, platform, account_id),
+                        "persona_id": catalog_persona_id,
                         # P15 事实声明守卫：目录登记的合法价格。LLM 报了目录里
                         # 没有的数（实录「团队版198美金一个月，算下来一个月168」
                         # ＝偷偷 8.5 折）即拦——措辞轴的 offer_guard 管不到裸数字。
@@ -1455,8 +1461,13 @@ def build_block_for_chat(
                 # 零流量时空表=纯 pains 排序，行为不变）
                 sold = sc.sold_boost_map(
                     catalog, sold_plan_counts_cached(store, now=now))
+                # persona_id 必须显式传（#145③ 修复的另一半）：pick_products 的
+                # 人设过滤是 fail-closed——不知道当前人设时，**绑定了任何人设的
+                # 货一条都不入选**。此前这里不传，回落 fields._persona_id 又从没
+                # 有人写过 → 绑定货在选品链上全黑，运营配了也永远推不出来。
                 prods = sc.pick_products(
-                    catalog, prof_fields, pinned=pinned, sold=sold)
+                    catalog, prof_fields, pinned=pinned, sold=sold,
+                    persona_id=catalog_persona_id)
                 # 成交归因 ref（默认开）：对客链接挂会话 id，官网下单经
                 # order-hook/order_pull 按 ref 回流自动结算目标 done。
                 link_ref = ""

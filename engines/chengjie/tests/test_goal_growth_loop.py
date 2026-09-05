@@ -3379,3 +3379,70 @@ class TestAuthorizedOffers:
             conversation_id=CONV, user_context=uc, chain="reply",
             inbound_text="在吗", now=NOW + 60)
         assert (uc.get("_goal_cta") or {}).get("persona_id") == "su_wan"
+
+    def test_pick_products_receives_persona_id(self, monkeypatch):
+        """#145③ 的另一半：选品也必须拿到人设 id。
+
+        ``pick_products`` 的人设过滤是 **fail-closed**——不知道当前人设时，
+        绑定了任何人设的货一条都不入选。注入侧此前不传，回落用的
+        ``fields._persona_id`` 又从没有人写过 → 运营把货绑到人设上就等于
+        把它从选品链上删掉，配了也永远推不出来。这里钉住「真传进去了」，
+        且与出站守卫（``_goal_cta.persona_id``）取的是同一个值——两处分叉时，
+        选中的绑定货会被守卫当他人设的货剥掉名字。
+        """
+        from src.companion.goals import service as svc_mod
+        from src.companion.goals import site_catalog as sc_mod
+        from src.companion.goals.service import (
+            build_block_for_chat,
+            get_configured_store,
+        )
+
+        cat = _offer_catalog()
+        cat["products"] = [
+            {"id": "chatx", "name_zh": "智聊", "pitch_zh": "AI 客服",
+             "pains": ["客服"], "personas": ["su_wan"],
+             "plans": [{"key": "autochat-entry", "name_zh": "入门版"}]},
+            {"id": "other", "name_zh": "别人的货", "pitch_zh": "x",
+             "pains": ["客服"], "personas": ["lin_jiaxin"]},
+        ]
+        monkeypatch.setattr(sc_mod, "load_catalog", lambda *a, **k: cat)
+        monkeypatch.setattr(
+            svc_mod, "_account_persona", lambda cfg, p, a: "su_wan")
+        seen: dict = {}
+        real_pick = sc_mod.pick_products
+
+        def _spy(catalog, fields=None, **kw):
+            seen.update(kw)
+            out = real_pick(catalog, fields, **kw)
+            seen["ids"] = [str(p.get("id") or "") for p in out]
+            return out
+
+        monkeypatch.setattr(sc_mod, "pick_products", _spy)
+        cfg_obj = SimpleNamespace(config=_lc_cfg(), config_path=None)
+        store = get_configured_store(cfg_obj.config, None)
+        store.create_goal(
+            conversation_id=CONV, platform="telegram", account_id="a1",
+            chat_key="301", template="retention_expand",
+            deadline_days=30, created_by="retention_auto", now=NOW)
+        uc: dict = {}
+        build_block_for_chat(
+            cfg_obj, platform="telegram", chat_key="301", account_id="a1",
+            conversation_id=CONV, user_context=uc, chain="reply",
+            inbound_text="在吗", now=NOW + 60)
+        assert seen.get("persona_id") == "su_wan", (
+            "选品没拿到人设 id → 绑定货全黑")
+        assert seen.get("persona_id") == (
+            uc.get("_goal_cta") or {}).get("persona_id"), "选品与守卫必须同源"
+        assert "chatx" in (seen.get("ids") or []), "本人设的绑定货必须进选品"
+        assert "other" not in (seen.get("ids") or []), "他人设的货不得入选"
+
+    def test_goal_card_preview_passes_persona_id(self):
+        """坐席看的「系统会推什么」预览与真推同口径（不传＝预览也全黑）。"""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[1] / "src" / "web" / "routes"
+               / "goal_routes.py").read_text(encoding="utf-8")
+        seg = src[src.index("def _attach_products("):]
+        seg = seg[:seg.index("def _pickers(")]
+        assert "_account_persona(" in seg, "预览必须复用注入侧同一个人设解析器"
+        assert "persona_id=pid" in seg, "预览选品必须传 persona_id"
