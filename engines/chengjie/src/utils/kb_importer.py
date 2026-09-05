@@ -89,6 +89,7 @@ class KBImporter:
         errors = 0
         for entry in entries:
             try:
+                entry.setdefault("source", "import")
                 self._kb.add_entry(entry)
                 success += 1
             except Exception as e:

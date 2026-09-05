@@ -10,6 +10,7 @@
 
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -41,6 +42,52 @@ _DEFAULT_KB_CATEGORIES = [
 ]
 
 KB_CATEGORIES = list(_DEFAULT_KB_CATEGORIES)
+
+
+# ── 条目来源（J-9 #184：厂商产品知识与用户知识隔离）──────────────
+# user   ＝ 用户在 KB 页手工建的；import ＝ 批量导入器写入的；
+# system ＝ 系统话术种子（template_key 非空）与首装示例；
+# vendor ＝ 厂商自家产品/售卖话术（随内测包 knowledge_base.db 带进来的那 105 条）。
+# 对客检索在桌面模式下**硬排除** vendor（不靠 enabled 标志），管理端仍可查看/清空。
+KB_SOURCES = ("user", "import", "system", "vendor")
+KB_SOURCE_DEFAULT = "user"
+# 厂商 KB 的分类集合（zhiliao conversion 域专有，不在 _DEFAULT_KB_CATEGORIES 内，
+# 故按分类回填不会误伤默认分类下的用户条目）。
+VENDOR_KB_CATEGORIES = frozenset({
+    "产品介绍", "产品支持", "价格与支付", "公司与信任",
+    "异议处理", "联系与下单", "部署与售后",
+})
+KB_SOURCE_BACKFILL_KEY = "kb_source_backfill_v1"
+
+_VENDOR_EXCLUSION_OVERRIDE: Optional[bool] = None
+
+
+def set_vendor_retrieval_excluded(value: Optional[bool]) -> None:
+    """进程级覆写（测试/运维用）：True 强制排除、False 强制放行、None 回到自动判定。"""
+    global _VENDOR_EXCLUSION_OVERRIDE
+    _VENDOR_EXCLUSION_OVERRIDE = value
+
+
+def vendor_retrieval_excluded() -> bool:
+    """对客检索是否排除 source=vendor。
+
+    判定序：显式覆写 → env ``AITR_KB_EXCLUDE_VENDOR``（1/0）→ 桌面模式
+    （``AITR_DESKTOP_MODE=1``）默认排除。服务器部署（厂商自家 conversion 域售卖机器人
+    就靠这批条目答客）默认不排除，行为零变化。
+    """
+    if _VENDOR_EXCLUSION_OVERRIDE is not None:
+        return bool(_VENDOR_EXCLUSION_OVERRIDE)
+    flag = (os.environ.get("AITR_KB_EXCLUDE_VENDOR") or "").strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return (os.environ.get("AITR_DESKTOP_MODE") or "").strip() == "1"
+
+
+def normalize_kb_source(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    return s if s in KB_SOURCES else KB_SOURCE_DEFAULT
 
 
 def set_kb_categories(categories: list):
@@ -354,6 +401,7 @@ class KnowledgeBaseStore:
     _index: _BM25Index = _BM25Index()     # BM25 文本索引
     _vindex: _VectorIndex = _VectorIndex() # 向量语义索引
     _index_dirty: bool = True
+    _vendor_ids: set = set()               # 已索引 enabled 条目里 source=vendor 的 id
     _tpl_cache: Dict[str, Dict] = {}       # template_key → {replies, vars, mode}
     _tpl_cache_ts: float = 0
 
@@ -532,18 +580,68 @@ class KnowledgeBaseStore:
                 )
             except sqlite3.OperationalError:
                 pass
+            # J-9：条目来源列（user/import/system/vendor）
+            try:
+                c.execute(
+                    f"ALTER TABLE kb_entries ADD COLUMN source TEXT DEFAULT '{KB_SOURCE_DEFAULT}'"
+                )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute("CREATE INDEX IF NOT EXISTS idx_kb_source ON kb_entries(source)")
+            except sqlite3.OperationalError:
+                pass
+            self._backfill_sources(c)
+
+    def _backfill_sources(self, c) -> None:
+        """一次性回填存量条目的 source（kb_meta 打标，幂等）。
+
+        · template_key 非空 → system（系统话术种子）
+        · 分类 ∈ VENDOR_KB_CATEGORIES → vendor（内测包随 knowledge_base.db 带进来的
+          厂商产品/售卖话术；这些分类不在默认分类表里，用户自建条目不会被误标）
+        其余保持默认 user。回填只动仍为默认值的行，且只跑一次——之后运营在 KB 页
+        把某条改回 user 不会被下次启动再刷成 vendor。
+        """
+        try:
+            done = c.execute(
+                "SELECT v FROM kb_meta WHERE k=?", (KB_SOURCE_BACKFILL_KEY,)
+            ).fetchone()
+            if done:
+                return
+            c.execute(
+                "UPDATE kb_entries SET source='system' "
+                "WHERE COALESCE(template_key,'')!='' AND COALESCE(source,?)=?",
+                (KB_SOURCE_DEFAULT, KB_SOURCE_DEFAULT),
+            )
+            cats = sorted(VENDOR_KB_CATEGORIES)
+            placeholders = ",".join("?" * len(cats))
+            c.execute(
+                f"UPDATE kb_entries SET source='vendor' "
+                f"WHERE category IN ({placeholders}) AND COALESCE(source,?)=?",
+                (*cats, KB_SOURCE_DEFAULT, KB_SOURCE_DEFAULT),
+            )
+            c.execute(
+                "INSERT INTO kb_meta(k, v) VALUES(?, ?) "
+                "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (KB_SOURCE_BACKFILL_KEY, time.strftime("%Y-%m-%dT%H:%M:%S")),
+            )
+        except sqlite3.OperationalError:
+            pass
 
     # ── BM25 索引管理 ──────────────────────────────────────
 
     def _rebuild_index(self):
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, title, triggers, scenario, steps, principles, embedding "
+                "SELECT id, title, triggers, scenario, steps, principles, embedding, source "
                 "FROM kb_entries WHERE enabled=1"
             ).fetchall()
         docs = []
         vec_rows = []
+        vendor_ids = set()
         for r in rows:
+            if (r["source"] or KB_SOURCE_DEFAULT) == "vendor":
+                vendor_ids.add(str(r["id"]))
             triggers_raw = r["triggers"] or "[]"
             try:
                 trig_list = json.loads(triggers_raw)
@@ -563,6 +661,7 @@ class KnowledgeBaseStore:
                 vec_rows.append({"id": _eid, "embedding": r["embedding"]})
         self._index.build(docs)
         self._vindex.load(vec_rows)   # 加载已有向量到内存索引
+        KnowledgeBaseStore._vendor_ids = vendor_ids
         KnowledgeBaseStore._index_dirty = False
 
     def _touch_index(self):
@@ -679,33 +778,49 @@ class KnowledgeBaseStore:
     # ── 搜索（BM25 + 错误码双路）────────────────────────
 
     def search(self, query: str, top_k: int = 5, lang: str = "zh",
-               query_vec: Optional[List[float]] = None) -> Dict:
+               query_vec: Optional[List[float]] = None,
+               include_vendor: Optional[bool] = None) -> Dict:
         """
         混合检索：BM25 + 向量 RRF 融合（向量不可用时自动降级为纯 BM25）。
         query_vec: 可选，外部调用方预先计算好的查询向量（避免重复 API 调用）。
+        include_vendor: 是否让 source=vendor 条目参与召回。None＝按
+          ``vendor_retrieval_excluded()`` 自动判定（桌面模式默认排除）；对客链路
+          （kb_gate）一律走 None，管理端「检索测试」可显式 True。排除发生在
+          截断 top_k **之前**，vendor 条目不占名额也不进 RRF。
         返回：{
           "entries": [...],      # 匹配的知识条目
           "error_codes": [...],  # 匹配的错误码
           "examples": [...],     # 相关对话示例
           "rules": [...],        # 全局硬规则
           "search_mode": str,    # bm25 | hybrid
+          "vendor_excluded": bool,
         }
         """
         if KnowledgeBaseStore._index_dirty:
             self._rebuild_index()
 
-        _cache_key = f"{query[:200]}|{top_k}|{lang}|{'v' if query_vec else 'b'}"
+        exclude_vendor = (vendor_retrieval_excluded() if include_vendor is None
+                          else (not include_vendor))
+        vendor_ids = KnowledgeBaseStore._vendor_ids if exclude_vendor else set()
+
+        _cache_key = (f"{query[:200]}|{top_k}|{lang}|{'v' if query_vec else 'b'}"
+                      f"|{'x' if exclude_vendor else 'a'}")
         cached = self._search_cache.get(_cache_key)
         if cached is not None:
             return cached
 
         # ── BM25 检索 ──────────────────────────────────────
-        bm25_results = self._index.search(query, top_k=max(top_k * 2, 10))
+        _fetch_k = max(top_k * 2, 10) + (len(vendor_ids) if vendor_ids else 0)
+        bm25_results = self._index.search(query, top_k=_fetch_k)
+        if vendor_ids:
+            bm25_results = [(d, s) for d, s in bm25_results if d not in vendor_ids]
 
         # ── 向量检索（有向量索引且有查询向量时）───────────
         search_mode = "bm25"
         if query_vec and self._vindex.count() > 0:
-            vec_results = self._vindex.search(query_vec, top_k=max(top_k * 2, 10))
+            vec_results = self._vindex.search(query_vec, top_k=_fetch_k)
+            if vendor_ids:
+                vec_results = [(d, s) for d, s in vec_results if d not in vendor_ids]
             if vec_results:
                 merged = _rrf_merge(bm25_results, vec_results)
                 ranked = merged[:top_k]
@@ -721,8 +836,13 @@ class KnowledgeBaseStore:
         if entry_ids:
             with self._conn() as c:
                 placeholders = ",".join("?" * len(entry_ids))
+                _vendor_sql = (
+                    f" AND COALESCE(source,'{KB_SOURCE_DEFAULT}')!='vendor'"
+                    if exclude_vendor else ""
+                )
                 rows = c.execute(
-                    f"SELECT * FROM kb_entries WHERE id IN ({placeholders}) AND enabled=1",
+                    f"SELECT * FROM kb_entries WHERE id IN ({placeholders}) AND enabled=1"
+                    f"{_vendor_sql}",
                     entry_ids,
                 ).fetchall()
                 row_map = {r["id"]: dict(r) for r in rows}
@@ -770,6 +890,7 @@ class KnowledgeBaseStore:
             "examples": self._search_examples(query, lang=lang, top_k=3),
             "rules": self.get_rules(enabled_only=True, global_only=True),
             "search_mode": search_mode,
+            "vendor_excluded": bool(exclude_vendor),
         }
         self._search_cache.put(_cache_key, result)
         return result
@@ -889,8 +1010,8 @@ class KnowledgeBaseStore:
                 "(id,category,title,triggers,scenario,steps,principles,example_reply_zh,"
                 "forbidden,enabled,use_count,rating,reply_mode,template_key,"
                 "template_vars,fallback_group,reply_direct_spec,negative_triggers,"
-                "created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "source,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     entry_id,
                     data.get("category", "其他"),
@@ -910,6 +1031,10 @@ class KnowledgeBaseStore:
                     data.get("fallback_group", ""),
                     rds_str,
                     json.dumps(neg_trig, ensure_ascii=False),
+                    normalize_kb_source(
+                        data.get("source")
+                        or ("system" if data.get("template_key") else KB_SOURCE_DEFAULT)
+                    ),
                     now, now,
                 ),
             )
@@ -1010,10 +1135,12 @@ class KnowledgeBaseStore:
             if isinstance(neg_trig, str):
                 neg_trig = [t.strip() for t in neg_trig.split(",") if t.strip()]
             data["negative_triggers"] = json.dumps(neg_trig, ensure_ascii=False)
+        if "source" in data:
+            data["source"] = normalize_kb_source(data["source"])
         allowed = ["category","title","triggers","scenario","steps","principles",
                    "example_reply_zh","forbidden","enabled",
                    "reply_mode","template_key","template_vars","fallback_group",
-                   "reply_direct_spec","negative_triggers"]
+                   "reply_direct_spec","negative_triggers","source"]
         sets = ", ".join(f"{k}=?" for k in allowed if k in data)
         vals = [data[k] for k in allowed if k in data]
         if not sets:
@@ -1090,12 +1217,20 @@ class KnowledgeBaseStore:
         return entry
 
     def list_entries(self, category: str = "", enabled_only: bool = False,
-                     search: str = "") -> List[Dict]:
+                     search: str = "", source: str = "") -> List[Dict]:
+        """source: ''=全部；'vendor'/'user'/…=只看该来源；'-vendor'=排除该来源。"""
         conds, params = [], []
         if category:
             conds.append("category=?"); params.append(category)
         if enabled_only:
             conds.append("enabled=1")
+        src = (source or "").strip()
+        if src.startswith("-"):
+            conds.append(f"COALESCE(source,'{KB_SOURCE_DEFAULT}')!=?")
+            params.append(normalize_kb_source(src[1:]))
+        elif src:
+            conds.append(f"COALESCE(source,'{KB_SOURCE_DEFAULT}')=?")
+            params.append(normalize_kb_source(src))
         where = ("WHERE " + " AND ".join(conds)) if conds else ""
         with self._conn() as c:
             rows = c.execute(
@@ -1392,6 +1527,11 @@ class KnowledgeBaseStore:
             cats = c.execute(
                 "SELECT category, COUNT(*) as cnt FROM kb_entries GROUP BY category"
             ).fetchall()
+            srcs = c.execute(
+                f"SELECT COALESCE(source,'{KB_SOURCE_DEFAULT}') AS s, COUNT(*) AS cnt "
+                "FROM kb_entries GROUP BY s"
+            ).fetchall()
+        by_source = {r["s"]: r["cnt"] for r in srcs}
         return {
             "total_entries": total,
             "enabled_entries": enabled,
@@ -1400,9 +1540,88 @@ class KnowledgeBaseStore:
             "rules": rules,
             "feedback": feedback,
             "good_feedback": good,
-            "satisfaction_rate": round(good / feedback * 100, 1) if feedback else 0,
+            # 分母为 0 时 None（前端显示「暂无反馈」），不再假报 0.0%
+            "satisfaction_rate": round(good / feedback * 100, 1) if feedback else None,
             "by_category": {r["category"]: r["cnt"] for r in cats},
+            "by_source": by_source,
+            "entries_user": by_source.get("user", 0) + by_source.get("import", 0),
+            "entries_vendor": by_source.get("vendor", 0),
+            "entries_system": by_source.get("system", 0),
+            "vendor_excluded": vendor_retrieval_excluded(),
         }
+
+    def health(self, days: int = 7) -> Dict:
+        """KB 自检快照（J-9 #184：「用户机上 KB 是不是空的 / 检索到底有没有在用」）。
+
+        hits_7d / last_hit_ts 取自 kb_query_log——skill_manager 在 kb_gate 真把
+        kb_context 注入 prompt 时才 ``log_query(hit=True)``（L2308），所以这里的命中
+        数就是「进过 prompt 的次数」，不是「搜到过东西」。query_log 只滚动保留 7 天，
+        days>7 也只能看到 7 天。
+        """
+        st = self.stats()
+        since = time.time() - max(1, int(days)) * 86400
+        hits = queries = 0
+        last_hit_ts = 0.0
+        try:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT COUNT(*) AS n, SUM(hit) AS h, MAX(CASE WHEN hit=1 THEN ts END) AS lh "
+                    "FROM kb_query_log WHERE ts >= ?",
+                    (since,),
+                ).fetchone()
+                queries = int(row["n"] or 0)
+                hits = int(row["h"] or 0)
+                last_hit_ts = float(row["lh"] or 0.0)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cov = self.embedding_coverage()
+            embedded = int(cov.get("done", 0))
+        except Exception:
+            embedded = 0
+        return {
+            "entries_total": st["total_entries"],
+            "entries_enabled": st["enabled_entries"],
+            "entries_user": st["entries_user"],
+            "entries_vendor": st["entries_vendor"],
+            "entries_system": st["entries_system"],
+            "embedded": embedded,
+            "queries_7d": queries,
+            "hits_7d": hits,
+            "last_hit_ts": last_hit_ts,
+            "vendor_excluded": st["vendor_excluded"],
+            "feedback": st["feedback"],
+            "satisfaction_rate": st["satisfaction_rate"],
+        }
+
+    def purge_by_source(self, source: str) -> int:
+        """按来源整批删除条目（含译文/版本/图片记录），返回删除数。KB 页「一键清空厂商预置」用。
+
+        只接受 vendor / system / import：user 是用户自己的知识，不许经此整批删；
+        未知值也拒绝（normalize 会把它折成 user——这里必须 fail-closed，不能靠路由层）。
+        """
+        src = str(source or "").strip().lower()
+        if src not in ("vendor", "system", "import"):
+            raise ValueError(f"purge_by_source: refusing source={source!r}")
+        with self._conn() as c:
+            ids = [r[0] for r in c.execute(
+                f"SELECT id FROM kb_entries WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')=?",
+                (src,),
+            ).fetchall()]
+            if not ids:
+                return 0
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                for tbl, col in (("kb_entries", "id"), ("kb_translations", "entry_id"),
+                                 ("kb_entry_versions", "entry_id"),
+                                 ("kb_entry_images", "entry_id")):
+                    try:
+                        c.execute(f"DELETE FROM {tbl} WHERE {col} IN ({ph})", chunk)
+                    except sqlite3.OperationalError:
+                        pass
+        self._touch_index()
+        return len(ids)
 
     # ── 向量化接口（智能体 Embedding 接入点）────────────────
     # Phase 2：传入 embedding_fn(texts) -> List[List[float]]
@@ -1863,6 +2082,7 @@ class KnowledgeBaseStore:
                     else:
                         result["skipped"] += 1
                 else:
+                    entry.setdefault("source", "import")
                     new_id = self.add_entry(entry)
                     existing[title] = new_id   # 防止同批次重复
                     result["added"] += 1
@@ -2625,7 +2845,7 @@ def seed_kb_examples(store: "KnowledgeBaseStore", category: str = "all") -> dict
             result["skipped"] += 1
             continue
         try:
-            store.add_entry(entry)
+            store.add_entry({**entry, "source": entry.get("source") or "system"})
             existing_titles.add(entry["title"])
             result["added"] += 1
         except Exception:
@@ -2873,4 +3093,100 @@ def seed_system_replies(store: "KnowledgeBaseStore") -> dict:
         except Exception:
             result["failed"] += 1
     ensure_kb_seeded_once_meta(store)
+    return result
+
+
+# ── 首装格式示例（J-9 #184）───────────────────────────────────────────
+# 桌面首装的知识库不再随包带生产 KB（那是厂商自家产品话术），改为只播 3 条
+# 「教格式用」的示例：标题带【示例】前缀、**停用态**（不会进对客检索，用户改成
+# 自己的内容再启用）、source=system（KB 页「系统话术/示例」筛选可见、不计入
+# entries_user）。只在桌面模式、且库里没有任何用户/导入/厂商条目时播一次。
+KB_FORMAT_EXAMPLES_SEEDED_KEY = "kb_format_examples_seeded_v1"
+KB_FORMAT_EXAMPLE_PREFIX = "【示例】"
+
+KB_FORMAT_EXAMPLES: List[Dict] = [
+    {
+        "id": "kbx-fmt-01",
+        "category": "常规咨询",
+        "title": f"{KB_FORMAT_EXAMPLE_PREFIX}营业时间 / 联系方式",
+        "triggers": ["营业时间", "几点开门", "怎么联系", "客服电话", "hours", "contact"],
+        "scenario": "客户问什么时候有人在、怎么联系到人。把这条改成你的真实时间与联系方式。",
+        "steps": "1. 直接给出营业时段与时区\n2. 给出可用的联系渠道\n3. 非营业时间说明多久内回复",
+        "principles": "信息要具体（时段+时区+渠道），不要让客户再追问",
+        "example_reply_zh": "我们的服务时间是周一到周五 9:00–18:00（北京时间）。非工作时间留言，我们会在下一个工作日 2 小时内回复您。",
+        "forbidden": "不要写「随时都在」这类做不到的承诺",
+        "enabled": 0,
+    },
+    {
+        "id": "kbx-fmt-02",
+        "category": "退款投诉",
+        "title": f"{KB_FORMAT_EXAMPLE_PREFIX}退款 / 退货政策",
+        "triggers": ["退款", "退货", "退钱", "refund", "return"],
+        "scenario": "客户要退款或退货。把天数、条件、到账时间改成你的实际政策。",
+        "steps": "1. 先确认订单与原因\n2. 说明是否符合退款条件\n3. 告知流程与到账时间",
+        "principles": "先共情再说规则；能退就干脆，不能退也要给替代方案",
+        "example_reply_zh": "收到，请把订单号发我。7 天内未使用的订单支持无理由退款，审核后 3–5 个工作日原路退回。",
+        "forbidden": "不要在未核实订单前承诺一定能退",
+        "enabled": 0,
+    },
+    {
+        "id": "kbx-fmt-03",
+        "category": "常规咨询",
+        "title": f"{KB_FORMAT_EXAMPLE_PREFIX}价格 / 套餐怎么问怎么答",
+        "triggers": ["多少钱", "价格", "报价", "套餐", "price", "how much"],
+        "scenario": "客户问价。示例演示「先问需求再报价」的写法，触发词按你的产品词替换。",
+        "steps": "1. 问清用量/规格/数量\n2. 给出对应档位价格\n3. 主动说明包含什么、不包含什么",
+        "principles": "报价要带条件，不要只丢一个数字",
+        "example_reply_zh": "可以的～方便先告诉我您大概的用量吗？我按您的情况给一个最合适的档位报价，避免多花钱。",
+        "forbidden": "不要编造折扣或限时活动",
+        "enabled": 0,
+    },
+]
+
+
+def seed_kb_format_examples(store: "KnowledgeBaseStore", *, force: bool = False) -> dict:
+    """首装播 3 条格式示例（幂等；桌面模式外 no-op，除非 force）。
+
+    播种前提（缺一不播）：① 桌面模式（``AITR_DESKTOP_MODE=1``）或 force；② kb_meta 未打
+    ``kb_format_examples_seeded_v1``；③ 库里没有任何 user/import/vendor 条目（已经在用的库、
+    或从旧内测包带着厂商条目升级上来的库都不需要「教格式」）。播种后无论加了几条都打标，
+    用户删掉示例不会在下次启动被灌回。
+    """
+    result = {"added": 0, "skipped": 0, "reason": ""}
+    desktop = (os.environ.get("AITR_DESKTOP_MODE") or "").strip() == "1"
+    if not (desktop or force):
+        result["reason"] = "not_desktop"
+        return result
+    if store.get_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY):
+        result["reason"] = "already_seeded"
+        return result
+    try:
+        with store._conn() as c:
+            non_system = c.execute(
+                f"SELECT COUNT(*) FROM kb_entries "
+                f"WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')!='system'"
+            ).fetchone()[0]
+            existing_ids = {
+                r[0] for r in c.execute(
+                    "SELECT id FROM kb_entries WHERE id LIKE 'kbx-fmt-%'"
+                ).fetchall()
+            }
+    except sqlite3.OperationalError:
+        result["reason"] = "db_error"
+        return result
+    if non_system:
+        store.set_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY, "skipped_nonempty")
+        result["reason"] = "kb_in_use"
+        result["skipped"] = len(KB_FORMAT_EXAMPLES)
+        return result
+    for ex in KB_FORMAT_EXAMPLES:
+        if ex["id"] in existing_ids:
+            result["skipped"] += 1
+            continue
+        try:
+            store.add_entry({**ex, "source": "system"})
+            result["added"] += 1
+        except Exception:
+            result["skipped"] += 1
+    store.set_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
     return result
