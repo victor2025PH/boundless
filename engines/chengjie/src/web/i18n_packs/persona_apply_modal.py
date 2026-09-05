@@ -99,6 +99,19 @@ ZH = {
     "pma_st_conflict": "标注分歧",
     "pma_f_conflict": "标注分歧",
     "pma_bulk_adopt": "采纳AI触发词",
+    # ── #190（2026-09-05）：试触发吸顶定位 / 卡片精简+高级 / 上传引导触发词 / 统一保存 / 分页 ──
+    "pma_f_notrg": "缺触发词",
+    "pma_notrg_n": "{n} 个缺触发词（不填＝只在泛化要图时随机发）",
+    "pma_more": "加载更多（还有 {n}）",
+    "pma_adv": "高级：配文 / 权重 / 关系门槛",
+    "pma_need_trg_ph": "填触发词：客户说到什么就发这张（逗号分隔）",
+    "pma_need_trg_toast": "已上传 {n} 个素材——请给它们填触发词；AI 识别完成后卡片上会出现建议词，点一下即可采纳",
+    "pma_unsaved_n": "{n} 张卡片有改动未保存",
+    "pma_save_all": "保存 {n} 处改动",
+    "pma_saved_n": "已保存 {n} 处改动",
+    "pma_discard_all": "放弃改动",
+    "pma_discard_confirm": "放弃 {n} 张卡片的未保存改动？",
+    "pma_unsaved_dropped": "相册有 {n} 处改动未保存，已随切换人设作废",
 }
 
 EN = {
@@ -199,4 +212,17 @@ EN = {
     "pma_st_conflict": "Tag conflict",
     "pma_f_conflict": "Tag conflicts",
     "pma_bulk_adopt": "Adopt AI triggers",
+    # ── #190 (2026-09-05): sticky test-trigger + locate / compact cards + advanced / trigger guidance / unified save / paging ──
+    "pma_f_notrg": "No triggers",
+    "pma_notrg_n": "{n} without triggers (no triggers = only sent at random on a generic photo request)",
+    "pma_more": "Load more ({n} left)",
+    "pma_adv": "Advanced: caption / weight / min bond",
+    "pma_need_trg_ph": "Add triggers: send this when the customer mentions… (comma-separated)",
+    "pma_need_trg_toast": "{n} item(s) uploaded — add trigger words for them; once AI tagging finishes, suggested words appear on the card, click to adopt",
+    "pma_unsaved_n": "{n} card(s) have unsaved changes",
+    "pma_save_all": "Save {n} change(s)",
+    "pma_saved_n": "Saved {n} change(s)",
+    "pma_discard_all": "Discard changes",
+    "pma_discard_confirm": "Discard unsaved changes on {n} card(s)?",
+    "pma_unsaved_dropped": "{n} unsaved album change(s) were dropped when switching persona",
 }

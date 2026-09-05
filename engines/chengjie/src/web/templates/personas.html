@@ -1359,6 +1359,27 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-empty{font-size:.72rem;color:var(--t2);padding:.6rem;text-align:center;line-height:1.6}
     .btn-xs{padding:.12rem .4rem;font-size:.64rem}
     .pma-test-out{width:100%;margin-top:.35rem;font-size:.7rem}
+    /* #190：试触发/搜索吸顶 + 底部统一保存条 + 卡片精简态 */
+    .pma-sticky{position:sticky;top:-.95rem;z-index:3;background:var(--card);padding:.45rem 0 .35rem;margin:.1rem 0 .2rem;border-bottom:1px solid var(--bd)}
+    .pma-tools{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin-top:.3rem;font-size:.66rem;color:var(--t2)}
+    .pma-tools select{padding:.18rem .3rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);font-size:.66rem}
+    .pma-savebar{position:sticky;bottom:-.95rem;z-index:3;display:flex;gap:.5rem;align-items:center;justify-content:flex-end;padding:.5rem .6rem;margin-top:.5rem;background:var(--card);border-top:2px solid var(--p);box-shadow:0 -4px 14px rgba(0,0,0,.12)}
+    .pma-card.pma-dirty{border-color:var(--p);box-shadow:0 0 0 1px var(--p) inset}
+    .pma-card.pma-hit{outline:2px solid var(--th-ink-green6,#15803d);outline-offset:2px;animation:pmaHit 1.2s ease-in-out 2}
+    @keyframes pmaHit{0%,100%{box-shadow:none}50%{box-shadow:0 0 0 4px rgba(21,128,61,.25)}}
+    .pma-card.pma-need-trg{border-color:var(--th-bd-amber5,#f59e0b)}
+    .pma-st{position:absolute;right:.25rem;top:.25rem;display:flex;gap:.15rem;flex-wrap:wrap;justify-content:flex-end;max-width:70%}
+    .pma-st span{font-size:.58rem;background:rgba(0,0,0,.6);color:#fff;padding:.03rem .28rem;border-radius:4px}
+    .pma-st .warn{background:rgba(217,119,6,.9)}
+    .pma-chips{display:flex;gap:.2rem;flex-wrap:wrap;align-items:center}
+    .pma-chip{font-size:.62rem;padding:.04rem .4rem;border:1px dashed var(--bd);border-radius:99px;background:var(--input);color:var(--t2);cursor:pointer;line-height:1.5}
+    .pma-chip:hover{border-color:var(--p);color:var(--t)}
+    .pma-adv summary{cursor:pointer;font-size:.62rem;color:var(--t2);list-style:none;padding:.05rem 0}
+    .pma-adv summary::-webkit-details-marker{display:none}
+    .pma-adv[open] summary{color:var(--t)}
+    .pma-adv .pma-in,.pma-adv .pma-row{margin-top:.25rem}
+    .pma-more{width:100%;margin:.4rem 0;padding:.4rem;font-size:.72rem}
+    .pma-cand-th{width:44px;height:44px;object-fit:cover;border-radius:6px;border:1px solid var(--bd);margin:.15rem;cursor:pointer;vertical-align:middle}
     .pma-pool{padding:.2rem .4rem;border-radius:5px;display:inline-block}
     .pma-pool-keyword{background:rgba(34,197,94,.15);color:#16a34a}
     .pma-pool-generic{background:rgba(59,130,246,.15);color:#2563eb}
@@ -2764,10 +2785,12 @@ async function pmaLoad() {
       const gr = await apiFetch('/api/personas/selfie-gate');
       if (gr.ok) gate = await gr.json();
     } catch (e) { /* 不渲染总闸行 */ }
-    _pmaRender(body, d.items || [], d.stats || {}, photosOn, gate);
+    _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, photosOn: photosOn, gate: gate };
+    _pmaRender(body, _pmaState.items, _pmaState.stats, photosOn, gate);
     pmaFaceLoad();
     const badge = document.getElementById('pe-album-badge');
     if (badge) { const t = (d.stats || {}).total || 0; badge.textContent = t ? '(' + t + ')' : ''; }
+    _pmaMaybePollAi();
   } catch (e) { body.textContent = window.T('pma_load_fail') + e; }
 }
 
@@ -2924,38 +2947,146 @@ async function pmaTogglePhotos() {
   } finally { cb.disabled = false; }
 }
 
+// ── #190 相册面板状态：分页 / 搜索筛选 / 脏标（统一保存）/ 试触发定位 ─────────────
+// skuio 实录四点：试触发在 325 张卡底下找不到；每张卡一整套表单；触发词全空没人引导；
+// 卡内「保存」与抽屉「保存」两套。现：试触发+搜索吸顶、卡片默认只显缩略图+触发词
+// （权重/门槛/配文进「高级」）、AI 建议触发词 chips（实施90 auto_meta.triggers_suggest
+// 一直在库里没人消费）+ 上传后引导、卡片改动只标脏 → 底部一处「保存 N 处改动」。
+// 分页 60 张一屏（首屏 <1s），编辑值存 _pmaEdits 随重渲/翻页回填，绝不因翻页丢输入。
+var _pmaState = null;      // {items, stats, ai, photosOn, gate}
+var _pmaEdits = {};        // mid → 未保存字段 {triggers, caption, caption_i18n, weight, min_bond_level, enabled}
+var _pmaShown = 0;
+var _PMA_PAGE = 60;
+var _pmaFilter = 'all';
+var _pmaQuery = '';
+var _pmaPollTimer = null;
+var _pmaPollLeft = 0;
+
+function _pmaDirtyCount() { return Object.keys(_pmaEdits).length; }
+
+function _pmaItemView(it) {
+  // 显示值＝库里的值 + 未保存改动（翻页/筛选/重载都不丢输入）
+  const e = _pmaEdits[String(it.id)];
+  return e ? Object.assign({}, it, e) : it;
+}
+
+function _pmaVisibleItems() {
+  const st = _pmaState || { items: [] };
+  const q = (_pmaQuery || '').trim().toLowerCase();
+  return (st.items || []).filter(function (raw) {
+    const it = _pmaItemView(raw);
+    const trg = (it.triggers || []);
+    const meta = (raw.auto_meta && typeof raw.auto_meta === 'object') ? raw.auto_meta : {};
+    switch (_pmaFilter) {
+      case 'notrg': if (trg.length) return false; break;
+      case 'nohit': if ((raw.hits || 0) > 0) return false; break;
+      case 'off': if (it.enabled) return false; break;
+      case 'untagged': if (String(raw.tag_status || '') === 'tagged') return false; break;
+      case 'photo': if (raw.media_type === 'video') return false; break;
+      case 'video': if (raw.media_type !== 'video') return false; break;
+      default: break;
+    }
+    if (!q) return true;
+    const hay = [trg.join(' '), it.caption || '', meta.desc || '',
+      (meta.triggers_suggest || []).join(' '), (raw.tags || []).join(' ')].join(' ').toLowerCase();
+    return hay.indexOf(q) !== -1;
+  });
+}
+
 function _pmaRender(body, items, stats, photosOn, gate) {
   const on = !!photosOn;
+  stats = stats || {};
   const capbar = _pmaCapBar(on, (stats && stats.total) || items.length || 0, gate);
   const faceref = '<div id="pma-faceref" style="display:none;padding:.55rem .6rem;margin-bottom:.55rem;'
     + 'border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
   // 开关关时上传/测触发词仍可备货与自检，但用 opacity 标「当前不会发出」——
   // 备货与开闸是两步，关掉不等于删素材（与 pma_cap_off_stocked 警示同语义）。
   const dim = on ? '' : ' opacity:.55';
+  const ai = (_pmaState && _pmaState.ai) || {};
+  const aiBtn = (typeof ai.enabled !== 'undefined')
+    ? ' <button class="btn btn-xs" onclick="pmaRetagAll()" title="' + _pmaEsc(window.T('pma_sug_trg')) + '">' + window.T('pma_ai_btn') + '</button>'
+      + (ai.batch_active || ai.pending ? '<span class="pma-status">' + window.T('pma_ai_running') + '</span>' : '')
+    : '';
   const uploader =
     '<div class="pma-up" style="' + dim + '">'
     + '<input type="file" id="pma-file" multiple accept="image/*,video/*" style="display:none" onchange="pmaUpload()">'
     + '<input type="text" id="pma-up-trg" class="pma-in" placeholder="' + window.T('pma_triggers_ph') + '">'
     + '<button class="btn btn-sm btn-primary" onclick="_pmaPick()">＋ ' + window.T('pma_upload_label') + '</button>'
+    + aiBtn
     + '<span id="pma-up-status" class="pma-status"></span>'
     + '</div>';
+  // 试触发 + 搜索筛选：吸顶（.dpane 是滚动容器），命中时滚到并高亮命中卡
+  const filters = [['all', 'pma_f_all'], ['notrg', 'pma_f_notrg'], ['nohit', 'pma_f_nohit'], ['off', 'pma_f_off'],
+    ['untagged', 'pma_f_untagged'], ['photo', 'pma_f_photo'], ['video', 'pma_f_video']];
   const test =
-    '<div class="pma-test" style="' + dim + '">'
-    + '<input type="text" id="pma-test-in" class="pma-in" placeholder="' + window.T('pma_test_ph') + '">'
+    '<div class="pma-sticky" style="' + dim + '">'
+    + '<div class="pma-test" style="margin:0">'
+    + '<input type="text" id="pma-test-in" class="pma-in" placeholder="' + window.T('pma_test_ph') + '" onkeydown="if(event.key===\'Enter\')pmaTest()">'
     + '<button class="btn btn-sm" onclick="pmaTest()">' + window.T('pma_test_btn') + '</button>'
-    + '<div id="pma-test-out" class="pma-test-out"></div>'
+    + '</div>'
+    + '<div id="pma-test-out" class="pma-test-out" style="margin-top:.2rem"></div>'
+    + (items.length ? ('<div class="pma-tools">'
+      + '<input type="search" id="pma-q" class="pma-in" style="min-width:150px" placeholder="' + window.T('pma_search_ph') + '" value="' + _pmaEsc(_pmaQuery) + '" oninput="_pmaSetQuery(this.value)">'
+      + '<select id="pma-filter" onchange="_pmaSetFilter(this.value)">'
+      + filters.map(function (f) { return '<option value="' + f[0] + '"' + (_pmaFilter === f[0] ? ' selected' : '') + '>' + window.T(f[1]) + '</option>'; }).join('')
+      + '</select>'
+      + '<span id="pma-count"></span>'
+      + '</div>') : '')
     + '</div>';
-  let grid, summary = '';
-  if (!items.length) {
-    grid = '<div class="pma-empty">' + window.T('pma_empty') + '</div>';
-  } else {
-    grid = '<div class="pma-grid" style="' + dim + '">' + items.map(_pmaCard).join('') + '</div>';
+  let summary = '';
+  if (items.length) {
     const totalHits = items.reduce((a, it) => a + (it.hits || 0), 0);
+    const noTrg = items.filter(function (it) { return !(_pmaItemView(it).triggers || []).length; }).length;
     summary = '<div class="pma-summary" style="' + dim + '"><span>🖼 ' + (stats.photo || 0) + '</span>'
       + '<span>🎬 ' + (stats.video || 0) + '</span>'
-      + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span></div>';
+      + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span>'
+      + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
+      + (typeof ai.tagged === 'number' && items.length ? '<span>' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
+      + '</div>';
   }
-  body.innerHTML = capbar + faceref + uploader + summary + grid + test;
+  body.innerHTML = capbar + faceref + uploader + test + summary
+    + '<div id="pma-grid-wrap" style="' + dim + '"></div>'
+    + '<div id="pma-savebar"></div>';
+  _pmaRenderGrid();
+  _pmaRenderSaveBar();
+}
+
+function _pmaRenderGrid() {
+  const wrap = document.getElementById('pma-grid-wrap');
+  if (!wrap || !_pmaState) return;
+  const all = _pmaState.items || [];
+  if (!all.length) { wrap.innerHTML = '<div class="pma-empty">' + window.T('pma_empty') + '</div>'; return; }
+  const vis = _pmaVisibleItems();
+  if (!_pmaShown) _pmaShown = _PMA_PAGE;
+  const show = vis.slice(0, _pmaShown);
+  let html = show.length ? '<div class="pma-grid">' + show.map(_pmaCard).join('') + '</div>'
+    : '<div class="pma-empty">' + window.T('pma_f_empty') + '</div>';
+  if (vis.length > show.length) {
+    html += '<button class="btn pma-more" onclick="_pmaShowMore()">'
+      + _pmaEsc(window.Tf('pma_more', { n: String(vis.length - show.length) })) + '</button>';
+  }
+  wrap.innerHTML = html;
+  const cnt = document.getElementById('pma-count');
+  if (cnt) cnt.textContent = window.Tf('pma_count_shown', { shown: String(show.length), total: String(all.length) });
+}
+function _pmaShowMore() { _pmaShown += _PMA_PAGE; _pmaRenderGrid(); }
+function _pmaSetQuery(v) { _pmaQuery = String(v || ''); _pmaShown = _PMA_PAGE; _pmaRenderGrid(); }
+function _pmaSetFilter(v) {
+  _pmaFilter = String(v || 'all'); _pmaShown = _PMA_PAGE;
+  const sel = document.getElementById('pma-filter'); if (sel && sel.value !== _pmaFilter) sel.value = _pmaFilter;
+  _pmaRenderGrid();
+}
+
+function _pmaRenderSaveBar() {
+  const bar = document.getElementById('pma-savebar');
+  if (!bar) return;
+  const n = _pmaDirtyCount();
+  if (!n) { bar.innerHTML = ''; return; }
+  bar.innerHTML = '<div class="pma-savebar">'
+    + '<span style="font-size:.72rem;color:var(--t2);margin-right:auto">' + _pmaEsc(window.Tf('pma_unsaved_n', { n: String(n) })) + '</span>'
+    + '<button class="btn btn-sm" onclick="pmaDiscardAll()">' + window.T('pma_discard_all') + '</button>'
+    + '<button class="btn btn-sm btn-primary" id="pma-save-all" onclick="pmaSaveAll()">' + _pmaEsc(window.Tf('pma_save_all', { n: String(n) })) + '</button>'
+    + '</div>';
 }
 
 function _pmaDur(ms) {
@@ -2980,39 +3111,200 @@ function _pmaParseI18n(s) {
   return out;
 }
 
-function _pmaCard(it) {
-  const isVid = it.media_type === 'video';
-  const url = _pmaEsc(it.url);
+function _pmaCard(raw) {
+  const it = _pmaItemView(raw);
+  const isVid = raw.media_type === 'video';
+  const url = _pmaEsc(raw.url);
   let thumb;
   if (isVid) {
     // 有封面缩略图（ffmpeg 抽帧）→ 用海报图 + ▶ 覆盖（秒开、不拉全片）；无则回落 <video>。
-    thumb = it.thumb_url
-      ? '<img src="' + _pmaEsc(it.thumb_url) + '" class="pma-th" loading="lazy"><span class="pma-play">▶</span>'
+    thumb = raw.thumb_url
+      ? '<img src="' + _pmaEsc(raw.thumb_url) + '" class="pma-th" loading="lazy"><span class="pma-play">▶</span>'
       : '<video src="' + url + '" class="pma-th" muted preload="metadata"></video><span class="pma-play">▶</span>';
-    const dur = _pmaDur(it.duration_ms);
+    const dur = _pmaDur(raw.duration_ms);
     if (dur) thumb += '<span class="pma-dur">' + dur + '</span>';
   } else {
-    thumb = '<img src="' + url + '" class="pma-th" loading="lazy">';
+    // 卡片缩略图优先用打标流水线出的小图（325 张全上原图＝首屏拖死）
+    thumb = '<img src="' + _pmaEsc(raw.thumb_url || raw.url) + '" class="pma-th" loading="lazy" decoding="async">';
   }
   const badge = '<span class="pma-badge">' + (isVid ? '🎬 ' + window.T('pma_video') : '🖼 ' + window.T('pma_photo')) + '</span>';
-  const trg = (it.triggers || []).join(', ');
-  const mid = _pmaEsc(it.id);
-  return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + '" data-mid="' + mid + '">'
-    + '<div class="pma-thwrap"><a href="' + url + '" target="_blank" rel="noopener" style="display:block">' + thumb + '</a>' + badge + '</div>'
-    + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T('pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
-    + '<input type="text" class="pma-in pma-cap" value="' + _pmaEsc(it.caption) + '" placeholder="' + window.T('pma_caption_label') + '">'
-    + '<textarea class="pma-in pma-cap-i18n" rows="1" placeholder="' + window.T('pma_cap_i18n_ph') + '" title="' + window.T('pma_cap_i18n_label') + '">' + _pmaEsc(_pmaI18nToStr(it.caption_i18n)) + '</textarea>'
-    + '<div class="pma-row">'
-    +   '<label class="pma-lb">' + window.T('pma_weight_label') + '<input type="number" class="pma-num pma-wt" min="1" value="' + (it.weight || 1) + '"></label>'
-    +   '<label class="pma-lb">' + window.T('pma_bond_label') + '<input type="number" class="pma-num pma-bd" min="0" value="' + (it.min_bond_level || 0) + '"></label>'
+  // 状态角标（实施90 打标状态 / 敏感 / 脸不符 / 未启用）——只显异常，正常态无角标
+  const meta = (raw.auto_meta && typeof raw.auto_meta === 'object') ? raw.auto_meta : {};
+  const flags = meta.flags || {};
+  const sts = [];
+  if (!it.enabled) sts.push('<span>' + window.T('pma_st_off') + '</span>');
+  const tagSt = String(raw.tag_status || '');
+  if (tagSt === 'pending') sts.push('<span>' + window.T('pma_st_pending') + '</span>');
+  else if (tagSt === 'failed') sts.push('<span class="warn">' + window.T('pma_st_failed') + '</span>');
+  if (flags.nsfw || flags.explicit || flags.underage) sts.push('<span class="warn">' + window.T('pma_st_flag') + '</span>');
+  if (meta.face_match && meta.face_match.same === false) sts.push('<span class="warn">' + window.T('pma_st_facemis') + '</span>');
+  const trgArr = it.triggers || [];
+  const trg = trgArr.join(', ');
+  const mid = _pmaEsc(raw.id);
+  const midArg = _jsArgAttr(raw.id);
+  // AI 建议触发词（库里 auto_meta.triggers_suggest 一直没人消费）：去掉已有的，点一下采纳
+  const sug = (meta.triggers_suggest || []).map(String).filter(function (s) { return s && trgArr.indexOf(s) === -1; }).slice(0, 8);
+  let chips = '';
+  if (sug.length) {
+    chips = '<div class="pma-chips" title="' + _pmaEsc(window.T('pma_sug_trg')) + '">✨ '
+      + sug.map(function (s) { return '<span class="pma-chip" onclick="_pmaAdoptTrigger(' + midArg + ',' + _jsArgAttr(s) + ')">' + _pmaEsc(s) + '</span>'; }).join('')
+      + (sug.length > 1 ? '<span class="pma-chip" style="border-style:solid" onclick="_pmaAdoptTrigger(' + midArg + ',null)">' + window.T('pma_adopt_all') + '</span>' : '')
+      + '</div>';
+  }
+  const dirty = !!_pmaEdits[String(raw.id)];
+  const needTrg = !trgArr.length;
+  const bondSug = (typeof meta.suggest_min_bond === 'number' && meta.suggest_min_bond !== (it.min_bond_level || 0))
+    ? ' <span class="pma-chip" onclick="_pmaAdoptBond(' + midArg + ',' + meta.suggest_min_bond + ')">' + _pmaEsc(window.Tf('pma_sug_bond', { v: String(meta.suggest_min_bond) })) + '</span>' : '';
+  return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
+    + '<div class="pma-thwrap"><a href="' + url + '" target="_blank" rel="noopener" style="display:block">' + thumb + '</a>' + badge
+    + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
+    + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
+    + chips
+    + '<div class="pma-row" style="justify-content:space-between">'
     +   '<label class="pma-lb"><input type="checkbox" class="pma-en"' + (it.enabled ? ' checked' : '') + '>' + window.T('pma_enabled_label') + '</label>'
+    +   '<span class="pma-hits" style="flex:none">' + window.T('pma_hits') + ' ' + (raw.hits || 0) + '</span>'
+    +   '<button class="btn btn-xs btn-danger" title="' + _pmaEsc(window.T('pma_del_btn')) + '" onclick="pmaDeleteItem(' + midArg + ')">🗑</button>'
     + '</div>'
-    + '<div class="pma-row">'
-    +   '<span class="pma-hits">' + window.T('pma_hits') + ' ' + (it.hits || 0) + '</span>'
-    +   '<button class="btn btn-xs btn-primary" onclick="pmaSaveItem(\'' + mid + '\')">' + window.T('pma_save_btn') + '</button>'
-    +   '<button class="btn btn-xs btn-danger" onclick="pmaDeleteItem(\'' + mid + '\')">' + window.T('pma_del_btn') + '</button>'
-    + '</div>'
+    // 高级：配文 / 多语配文 / 权重 / 关系门槛 / 重新识别——默认收起（#190「325 套表单」）
+    + '<details class="pma-adv"><summary>⚙ ' + window.T('pma_adv') + '</summary>'
+    +   '<input type="text" class="pma-in pma-cap" value="' + _pmaEsc(it.caption) + '" placeholder="' + window.T('pma_caption_label') + '">'
+    +   '<textarea class="pma-in pma-cap-i18n" rows="1" placeholder="' + window.T('pma_cap_i18n_ph') + '" title="' + window.T('pma_cap_i18n_label') + '">' + _pmaEsc(_pmaI18nToStr(it.caption_i18n)) + '</textarea>'
+    +   '<div class="pma-row">'
+    +     '<label class="pma-lb">' + window.T('pma_weight_label') + '<input type="number" class="pma-num pma-wt" min="1" value="' + (it.weight || 1) + '"></label>'
+    +     '<label class="pma-lb">' + window.T('pma_bond_label') + '<input type="number" class="pma-num pma-bd" min="0" value="' + (it.min_bond_level || 0) + '"></label>'
+    +     bondSug
+    +   '</div>'
+    +   (meta.desc ? '<div style="font-size:.62rem;color:var(--t3);margin-top:.25rem;line-height:1.4">' + _pmaEsc(meta.desc) + '</div>' : '')
+    +   (typeof (_pmaState && _pmaState.ai || {}).enabled !== 'undefined'
+        ? '<div class="pma-row"><button type="button" class="btn btn-xs" onclick="pmaRetagOne(' + midArg + ')">' + window.T('pma_retag_one') + '</button></div>' : '')
+    + '</details>'
     + '</div>';
+}
+
+// 卡片任一输入变化 → 只标脏（不落库），值进 _pmaEdits；底部保存条随之出现
+function _pmaCollect(card) {
+  const getV = (sel) => { const e = card.querySelector(sel); return e ? e.value : ''; };
+  const enEl = card.querySelector('.pma-en');
+  return {
+    triggers: getV('.pma-trg').split(/[,\n，、;；]/).map((s) => s.trim()).filter(Boolean),
+    caption: getV('.pma-cap'),
+    caption_i18n: _pmaParseI18n(getV('.pma-cap-i18n')),
+    weight: parseInt(getV('.pma-wt') || '1', 10) || 1,
+    min_bond_level: parseInt(getV('.pma-bd') || '0', 10) || 0,
+    enabled: !!(enEl && enEl.checked),
+  };
+}
+function _pmaOnEdit(card) {
+  if (!card || !_pmaState) return;
+  const mid = card.getAttribute('data-mid');
+  if (!mid) return;
+  const raw = (_pmaState.items || []).find(function (x) { return String(x.id) === mid; });
+  const cur = _pmaCollect(card);
+  // 与库里值相同 → 视为未改（撤回编辑不留脏标）
+  const same = raw && JSON.stringify([cur.triggers, cur.caption, cur.caption_i18n, cur.weight, cur.min_bond_level, cur.enabled])
+    === JSON.stringify([raw.triggers || [], raw.caption || '', raw.caption_i18n || {}, raw.weight || 1, raw.min_bond_level || 0, !!raw.enabled]);
+  if (same) delete _pmaEdits[mid]; else _pmaEdits[mid] = cur;
+  card.classList.toggle('pma-dirty', !same);
+  card.classList.toggle('pma-need-trg', !cur.triggers.length);
+  card.classList.toggle('pma-off', !cur.enabled);
+  _pmaRenderSaveBar();
+}
+function _pmaAdoptTrigger(mid, word) {
+  const card = document.querySelector('.pma-card[data-mid="' + String(mid).replace(/"/g, '\\"') + '"]');
+  if (!card) return;
+  const inp = card.querySelector('.pma-trg');
+  if (!inp) return;
+  const cur = inp.value.split(/[,\n，、;；]/).map((s) => s.trim()).filter(Boolean);
+  let add = [];
+  if (word == null) {
+    const raw = (_pmaState.items || []).find(function (x) { return String(x.id) === String(mid); });
+    const meta = (raw && raw.auto_meta && typeof raw.auto_meta === 'object') ? raw.auto_meta : {};
+    add = (meta.triggers_suggest || []).map(String);
+  } else add = [String(word)];
+  add.forEach(function (w) { if (w && cur.indexOf(w) === -1) cur.push(w); });
+  inp.value = cur.join(', ');
+  _pmaOnEdit(card);
+  // 采纳后 chips 里少一个：局部重绘该卡（保留脏值）
+  const raw2 = (_pmaState.items || []).find(function (x) { return String(x.id) === String(mid); });
+  if (raw2) { const tmp = document.createElement('div'); tmp.innerHTML = _pmaCard(raw2); const nc = tmp.firstElementChild; if (nc) { const adv = card.querySelector('.pma-adv'); if (adv && adv.open) { const nadv = nc.querySelector('.pma-adv'); if (nadv) nadv.open = true; } card.replaceWith(nc); } }
+}
+function _pmaAdoptBond(mid, v) {
+  const card = document.querySelector('.pma-card[data-mid="' + String(mid).replace(/"/g, '\\"') + '"]');
+  const inp = card && card.querySelector('.pma-bd');
+  if (!inp) return;
+  inp.value = String(v);
+  _pmaOnEdit(card);
+}
+
+async function pmaSaveAll() {
+  const pid = _pmaPid();
+  const mids = Object.keys(_pmaEdits);
+  if (!pid || !mids.length) return;
+  const btn = document.getElementById('pma-save-all');
+  if (btn) { btn.disabled = true; btn.textContent = window.T('pma_saving'); }
+  let ok = 0, fail = 0;
+  for (const mid of mids) {
+    const payload = _pmaEdits[mid];
+    try {
+      const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      }, { timeoutMs: 60000 });
+      if (r.ok) { ok++; delete _pmaEdits[mid]; } else { fail++; }
+    } catch (e) { fail++; }
+  }
+  if (fail) _toast(window.T('pma_save_fail') + fail, 'err');
+  else _toast(window.Tf('pma_saved_n', { n: String(ok) }), 'info');
+  await pmaLoad();   // 失败项仍在 _pmaEdits，重渲后保持脏态可重试
+}
+function pmaDiscardAll() {
+  if (!_pmaDirtyCount()) return;
+  if (!confirm(window.Tf('pma_discard_confirm', { n: String(_pmaDirtyCount()) }))) return;
+  _pmaEdits = {};
+  _pmaRenderGrid();
+  _pmaRenderSaveBar();
+}
+
+// 实施90 打标：整册补标 / 单条重新识别（建议触发词由此而来）；pending 期间轮询列表刷新 chips
+async function pmaRetagAll() {
+  const pid = _pmaPid();
+  if (!pid) return;
+  const st = document.getElementById('pma-up-status');
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/retag-all', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ only_missing: true }),
+    }, { timeoutMs: 60000 });
+    if (r.status === 404) { if (st) st.textContent = window.T('pma_ai_need_restart'); return; }
+    if (!r.ok) { if (st) st.textContent = window.T('pma_ai_fail') + r.status; return; }
+    const d = await r.json();
+    const n = (d && d.queued) || 0;
+    if (st) st.textContent = n ? window.Tf('pma_ai_queued', { n: String(n) }) : window.T('pma_ai_queued_zero');
+    if (n) { _pmaPollLeft = 20; _pmaMaybePollAi(true); }
+  } catch (e) { if (st) st.textContent = window.T('pma_ai_fail') + e; }
+}
+async function pmaRetagOne(mid) {
+  const pid = _pmaPid();
+  if (!pid) return;
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid) + '/retag', { method: 'POST' }, { timeoutMs: 60000 });
+    if (r.status === 404) { _toast(window.T('pma_ai_need_restart'), 'err'); return; }
+    if (!r.ok) { _toast(window.T('pma_ai_fail') + r.status, 'err'); return; }
+    _pmaPollLeft = 20; _pmaMaybePollAi(true);
+    await pmaLoad();
+  } catch (e) { _toast(window.T('pma_ai_fail') + e, 'err'); }
+}
+function _pmaMaybePollAi(force) {
+  if (_pmaPollTimer) { clearTimeout(_pmaPollTimer); _pmaPollTimer = null; }
+  const ai = (_pmaState && _pmaState.ai) || {};
+  const busy = !!(ai.pending || ai.batch_active);
+  if (!force && !busy) { _pmaPollLeft = 0; return; }
+  if (!force && _pmaPollLeft <= 0) return;
+  if (_pmaPollLeft <= 0) _pmaPollLeft = 20;
+  _pmaPollTimer = setTimeout(async function () {
+    _pmaPollTimer = null;
+    _pmaPollLeft--;
+    if (!_albumLoaded || !_pmaPid()) return;
+    await pmaLoad();   // pmaLoad 末尾会按 ai.pending 决定是否继续
+  }, 4000);
 }
 
 function _pmaPick() {
@@ -3041,31 +3333,19 @@ async function pmaUpload() {
   }
   inp.value = '';
   if (st) st.textContent = window.T('pma_upload_ok') + ' ' + ok + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
+  const before = new Set(((_pmaState || {}).items || []).map(function (x) { return String(x.id); }));
   await pmaLoad();
-}
-
-async function pmaSaveItem(mid) {
-  const pid = _pmaPid();
-  const card = document.querySelector('.pma-card[data-mid="' + mid + '"]');
-  if (!pid || !card) return;
-  const getV = (sel) => { const e = card.querySelector(sel); return e ? e.value : ''; };
-  const trgArr = getV('.pma-trg').split(/[,\n，、;；]/).map((s) => s.trim()).filter(Boolean);
-  const enEl = card.querySelector('.pma-en');
-  const payload = {
-    triggers: trgArr,
-    caption: getV('.pma-cap'),
-    caption_i18n: _pmaParseI18n(getV('.pma-cap-i18n')),
-    weight: parseInt(getV('.pma-wt') || '1', 10) || 1,
-    min_bond_level: parseInt(getV('.pma-bd') || '0', 10) || 0,
-    enabled: !!(enEl && enEl.checked),
-  };
-  try {
-    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid), {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    }, { timeoutMs: 60000 });
-    if (r.ok) { _toast(window.T('pma_saved'), 'info'); await pmaLoad(); }
-    else { _toast(window.T('pma_save_fail') + r.status, 'err'); }
-  } catch (e) { _toast(window.T('pma_save_fail') + e, 'err'); }
+  // #190「触发词全空」：上传完引导填触发词——新卡没触发词就切到「缺触发词」筛选、
+  // 聚焦第一张的输入框；AI 建议 chips 会在识别完成后（轮询）出现在卡上。
+  if (ok && !(trg && trg.trim())) {
+    const fresh = ((_pmaState || {}).items || []).filter(function (x) { return !before.has(String(x.id)) && !(x.triggers || []).length; });
+    if (fresh.length) {
+      _pmaSetFilter('notrg');
+      _toast(window.Tf('pma_need_trg_toast', { n: String(fresh.length) }), 'info', 6000);
+      const first = document.querySelector('.pma-card[data-mid="' + String(fresh[0].id).replace(/"/g, '\\"') + '"] .pma-trg');
+      if (first) { try { first.focus(); first.scrollIntoView({ block: 'center' }); } catch (e) {} }
+    }
+  }
 }
 
 async function pmaDeleteItem(mid) {
@@ -3084,21 +3364,45 @@ async function pmaTest() {
   if (!pid || !inp || !out) return;
   out.textContent = '…';
   try {
-    const r = await fetch('/api/personas/' + encodeURIComponent(pid) + '/media/test', {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: inp.value || '' }),
     });
     const d = await r.json();
     let label = window.T('pma_pool_none');
     if (d.pool === 'keyword') { label = window.T('pma_pool_keyword'); }
     else if (d.pool === 'generic') { label = window.T('pma_pool_generic'); }
+    const cands = d.candidates || [];
     let html = '<div class="pma-pool pma-pool-' + _pmaEsc(d.pool) + '">' + label + '</div>';
-    if ((d.candidates || []).length) {
+    if (cands.length) {
+      const gateName = { tod: 'pma_gate_tod', season: 'pma_gate_season', place: 'pma_gate_place' };
       html += '<div class="pma-cands">' + window.T('pma_candidates') + ': '
-        + (d.candidates || []).map((c) => '<img src="' + _pmaEsc(c.url) + '" class="pma-cand-th" title="' + _pmaEsc((c.triggers || []).join(', ')) + '">').join('')
+        + cands.map((c) => {
+          const blocked = (c.blocked_by || []).map(function (g) { return window.T(gateName[g] || g); });
+          const tip = (c.triggers || []).join(', ') + (blocked.length ? ' · ' + window.T('pma_test_blocked') + blocked.join('/') : '');
+          return '<img src="' + _pmaEsc(c.thumb_url || c.url) + '" class="pma-cand-th" title="' + _pmaEsc(tip) + '"'
+            + (blocked.length ? ' style="opacity:.45"' : '') + ' onclick="_pmaLocate(' + _jsArgAttr(c.id) + ')">';
+        }).join('')
         + '</div>';
     }
     out.innerHTML = html;
+    // #190「试触发在底部」：命中即滚到并高亮命中卡（分页外的先翻到）
+    if (cands.length) _pmaLocate(cands[0].id, cands.map(function (c) { return String(c.id); }));
   } catch (e) { out.textContent = window.T('pma_test_fail') + e; }
+}
+// 定位一张卡：不在当前筛选/分页里就清筛选、翻到它所在页；高亮 ids（默认只它）
+function _pmaLocate(mid, ids) {
+  if (!_pmaState) return;
+  const want = String(mid);
+  const hi = new Set((ids && ids.length) ? ids.map(String) : [want]);
+  let idx = _pmaVisibleItems().findIndex(function (x) { return String(x.id) === want; });
+  if (idx === -1) { _pmaFilter = 'all'; _pmaQuery = ''; const q = document.getElementById('pma-q'); if (q) q.value = ''; const f = document.getElementById('pma-filter'); if (f) f.value = 'all'; idx = _pmaVisibleItems().findIndex(function (x) { return String(x.id) === want; }); }
+  if (idx === -1) return;
+  if (idx >= _pmaShown) _pmaShown = Math.ceil((idx + 1) / _PMA_PAGE) * _PMA_PAGE;
+  _pmaRenderGrid();
+  document.querySelectorAll('.pma-card.pma-hit').forEach(function (c) { c.classList.remove('pma-hit'); });
+  document.querySelectorAll('.pma-card').forEach(function (c) { if (hi.has(c.getAttribute('data-mid'))) c.classList.add('pma-hit'); });
+  const card = document.querySelector('.pma-card[data-mid="' + want.replace(/"/g, '\\"') + '"]');
+  if (card) { try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {} }
 }
 
 
@@ -3114,6 +3418,10 @@ function _resetEditorExtras() {
   if (bp) { bp.removeAttribute('open'); document.getElementById('pe-bindings-body').textContent = window.T('psn_js_089'); document.getElementById('pe-bindings-badge').textContent = ''; }
   if (pp) { pp.removeAttribute('open'); document.getElementById('pe-prompt-body').textContent = window.T('psn_js_089'); }
   // 相册现为独立 tab（无 details）：切人设时清空内容 + 徽标，下次切到 album tab 惰性重载。
+  // #190：未保存的卡片改动随人设切换作废——不静默，toast 点破
+  if (_pmaDirtyCount()) _toast(window.Tf('pma_unsaved_dropped', { n: String(_pmaDirtyCount()) }), 'err', 5000);
+  _pmaEdits = {}; _pmaState = null; _pmaShown = 0; _pmaFilter = 'all'; _pmaQuery = '';
+  if (_pmaPollTimer) { clearTimeout(_pmaPollTimer); _pmaPollTimer = null; }
   const ab = document.getElementById('pe-album-body'); if (ab) ab.textContent = window.T('psn_expand_to_load');
   const abd = document.getElementById('pe-album-badge'); if (abd) abd.textContent = '';
 }
