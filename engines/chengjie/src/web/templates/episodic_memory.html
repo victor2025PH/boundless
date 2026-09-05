@@ -1447,9 +1447,12 @@ async function csLoad() {
     const res = await apiFetch('/api/episodic-memory/correction-stats?days=30');
     if (!res.ok) return;
     const d = await res.json();
-    // 抽检准确率＝坐席确认属实 /（确认 + 仍待看）；样本 <5 只显示「—」免误导
-    var denom = (d.confirmed || 0) + (d.pending_inferred || 0);
-    document.getElementById('cs-rate').textContent = denom >= 5 ? ((d.adoption_rate || 0) * 100).toFixed(0) + '%' : '—';
+    // 抽检准确率＝确认属实 /（确认 + 不再使用/删除），只数坐席已判过的；判过 <5 条只显示「—」免误导。
+    // 旧后端无 judged 字段 → 回退旧口径（确认 /（确认 + 待看））。
+    var hasJudged = (typeof d.judged !== 'undefined');
+    var denom = hasJudged ? (d.judged || 0) : ((d.confirmed || 0) + (d.pending_inferred || 0));
+    var rate = hasJudged ? (d.accuracy_rate || 0) : (d.adoption_rate || 0);
+    document.getElementById('cs-rate').textContent = denom >= 5 ? (rate * 100).toFixed(0) + '%' : '—';
     var rcard = document.getElementById('cs-rate-card');
     if (rcard) rcard.title = window.Tf('em_kpi_accuracy_tip', {d: d.window_days || 30}) + ' · ' + (d.confirmed || 0) + '/' + denom;
     var actors = d.by_actor || [];

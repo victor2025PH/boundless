@@ -85,15 +85,22 @@ def build_correction_stats(
 ) -> Dict[str, Any]:
     """R17/R18：聚合"AI 推断→人工确认"质量指标。
 
-    采纳数来自审计（action=episodic_confirm_inferred）；待确认数来自记忆库当前 raw 的
-    ai_inferred。采纳率为近似 confirmed/(confirmed+pending)。供 correction-stats 端点
-    与 alert-status 低采纳告警共用，避免聚合逻辑两处漂移。
+    采纳数来自审计（action=episodic_confirm_inferred）；``pending_inferred`` 自 J-10 二期起
+    ＝例外队列待处理数（store.inferred_counts 已统一到 review_reason 口径）。
+    ``adoption_rate`` = confirmed/(confirmed+pending) 保持 R18 语义——它是**积压信号**
+    （确认少、待看多 → 队列没人处理），alert-status 低采纳告警继续读它。
+
+    J-10 二期新增「抽检准确率」：只数坐席**已判过**的——``rejected``＝审计里的
+    ``episodic_ignore`` + ``episodic_delete``（坐席判「不对/不要」），``judged`` =
+    confirmed + rejected，``accuracy_rate`` = confirmed/judged；积压量不再污染准确率。
+    供 correction-stats 端点与 alert-status 共用，避免聚合逻辑两处漂移。
     """
     win = max(1, min(int(days or 30), 365))
     since = time.strftime(
         "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - win * 86400)
     )
     rows = []
+    rejected = 0
     if audit_store:
         try:
             rows = audit_store.query(
@@ -101,6 +108,11 @@ def build_correction_stats(
             ) or []
         except Exception:
             rows = []
+        for act in ("episodic_ignore", "episodic_delete"):
+            try:
+                rejected += len(audit_store.query(limit=5000, action=act, since=since) or [])
+            except Exception:
+                pass
     by_actor: Dict[str, int] = {}
     daily: Dict[str, int] = {}
     recent = []
@@ -127,6 +139,7 @@ def build_correction_stats(
     pending = int(inferred.get("pending", 0) or 0)
     denom = confirmed + pending
     adoption_rate = round(confirmed / denom, 4) if denom else 0.0
+    judged = confirmed + rejected
     out: Dict[str, Any] = {
         "ok": True,
         "window_days": win,
@@ -135,6 +148,9 @@ def build_correction_stats(
         "total_inferred": int(inferred.get("total", 0) or 0),
         "adoption_rate": adoption_rate,
         "sample": denom,
+        "rejected": rejected,
+        "judged": judged,
+        "accuracy_rate": round(confirmed / judged, 4) if judged else 0.0,
         "by_actor": sorted(
             [{"actor": a, "count": c} for a, c in by_actor.items()],
             key=lambda x: x["count"], reverse=True,

@@ -246,17 +246,19 @@ def test_profile_summary_blank_key(mem):
     assert mem.profile_summary("")["total"] == 0
 
 
-# ── R15：待确认推断 + 一键转明说 ───────────────────────────────────────
+# ── R15 → J-10 二期：侧栏「待确认」＝例外队列（review_reason 非空），不再是全部 raw 推断 ──
 
 def test_profile_summary_pending_inferred_listed(mem):
     uid = "P3"
     mem.add_fact(uid, "用户明说住北京", source="user_stated")
-    inf = mem.add_fact(uid, "用户可能是工程师", source="ai_inferred")
+    inf = mem.add_fact(uid, "用户可能是工程师", source="ai_inferred")   # 「可能」→ low_confidence 进队列
+    plain = mem.add_fact(uid, "用户喜欢看科幻电影", source="ai_inferred")  # 普通推断：自动记，不进队列
     out = mem.profile_summary(uid)
     ids = [p["id"] for p in out["pending_inferred"]]
-    assert inf in ids
+    assert inf in ids and plain not in ids
     assert all(p["content"] for p in out["pending_inferred"])
-    # user_stated 不进待确认列表
+    assert out["pending_inferred"][0]["review_reason"] == "low_confidence"
+    # 不需要人看的 user_stated 不进列表
     assert "用户明说住北京" not in [p["content"] for p in out["pending_inferred"]]
 
 
@@ -266,9 +268,21 @@ def test_profile_summary_no_pending_when_no_inferred(mem):
     assert mem.profile_summary(uid)["pending_inferred"] == []
 
 
+def test_profile_summary_pending_includes_user_stated_exceptions(mem):
+    """D8：高影响的「客户说的」也要人看一眼——进侧栏待确认；确认后离队。"""
+    uid = "P4b"
+    hi = mem.add_fact(uid, "客户最近在住院", source="user_stated")
+    out = mem.profile_summary(uid)
+    assert [p["id"] for p in out["pending_inferred"]] == [hi]
+    assert out["pending_inferred"][0]["impact"] == "high"
+    assert mem.confirm_inferred_fact(hi) == "客户最近在住院"
+    assert mem.profile_summary(uid)["pending_inferred"] == []
+
+
 def test_confirm_inferred_promotes_to_stable_user_stated(mem):
     uid = "P5"
     inf = mem.add_fact(uid, "用户可能养狗", source="ai_inferred")
+    assert inf in [p["id"] for p in mem.profile_summary(uid)["pending_inferred"]]
     # R16：确认返回被确认的 content（供审计留痕）
     assert mem.confirm_inferred_fact(inf) == "用户可能养狗"
     assert _source(mem, inf) == "user_stated"
@@ -291,30 +305,36 @@ def test_confirm_missing_row_returns_none(mem):
     assert mem.confirm_inferred_fact("bad") is None
 
 
-# ── R17：全库 AI 推断计数 ───────────────────────────────────────────────
+# ── R17 → J-10 二期：pending＝例外队列；raw_inferred＝旧口径只作观测 ───────────
 
 def test_inferred_counts_empty(mem):
-    assert mem.inferred_counts() == {"pending": 0, "total": 0}
+    assert mem.inferred_counts() == {"pending": 0, "total": 0, "raw_inferred": 0}
 
 
 def test_inferred_counts_pending_vs_total(mem):
-    mem.add_fact("u1", "推断A", source="ai_inferred")  # raw → pending
+    mem.add_fact("u1", "推断A", source="ai_inferred")  # raw、不需人看 → 只算 raw_inferred
     b = mem.add_fact("u2", "推断B", source="ai_inferred")
     c = mem.add_fact("u3", "推断C", source="ai_inferred")
     mem.add_fact("u4", "明说D", source="user_stated")  # 不计
-    # B 晋升 stable、C 置 stale —— 都不再算 pending，但仍是 ai_inferred 计入 total
+    q = mem.add_fact("u5", "客户可能是护士", source="ai_inferred")   # 「可能」→ 进队列
+    mem.add_fact("u6", "客户最近在住院", source="user_stated")     # 高影响 → 进队列（不算 ai_inferred）
+    # B 晋升 stable、C 置 stale —— 都不再算 raw，但仍是 ai_inferred 计入 total
     mem._conn.execute("UPDATE episodic_memory SET tier='stable' WHERE id=?", (b,))
     mem._conn.execute("UPDATE episodic_memory SET tier='stale' WHERE id=?", (c,))
     mem._conn.commit()
     out = mem.inferred_counts()
-    assert out["total"] == 3   # A/B/C 均 ai_inferred
-    assert out["pending"] == 1  # 仅 A 是 raw
+    assert out["total"] == 4          # A/B/C/护士 均 ai_inferred
+    assert out["raw_inferred"] == 2   # A + 护士 仍是 raw
+    assert out["pending"] == 2        # 护士（低置信）+ 住院（高影响）
+    assert out["pending"] == mem.review_counts()["pending"]
+    mem.confirm_inferred_fact(q)
+    assert mem.inferred_counts()["pending"] == 1
 
 
 def test_inferred_counts_excludes_confirmed(mem):
     inf = mem.add_fact("u1", "推断X", source="ai_inferred")
     mem.confirm_inferred_fact(inf)  # 翻成 user_stated，移出 ai_inferred 集合
-    assert mem.inferred_counts() == {"pending": 0, "total": 0}
+    assert mem.inferred_counts() == {"pending": 0, "total": 0, "raw_inferred": 0}
 
 
 def test_legacy_db_backfills_source(tmp_path):

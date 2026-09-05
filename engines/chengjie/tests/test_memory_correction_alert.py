@@ -96,6 +96,24 @@ def test_build_stats_trend_and_rate(tmp_path):
     assert sum(t["count"] for t in out["trend"]) == 3
 
 
+def test_build_stats_accuracy_counts_only_judged(tmp_path):
+    """J-10 二期：抽检准确率只数坐席判过的（确认 vs 不再使用/删除），积压不进分母；
+    R18 的 adoption_rate（积压信号）口径不变。"""
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    for i in range(3):
+        audit.log("alice", "episodic_confirm_inferred", target=str(i), new_val=f"f{i}")
+    audit.log("alice", "episodic_ignore", target="9", old_val="x")
+    audit.log("bob", "episodic_delete", target="10", old_val="y")
+    audit.log("bob", "episodic_restore", target="9", new_val="x")      # 恢复不算判定
+    out = build_correction_stats(audit, _sm(pending=20, total=30), days=30)
+    assert out["confirmed"] == 3 and out["rejected"] == 2 and out["judged"] == 5
+    assert abs(out["accuracy_rate"] - 0.6) < 1e-6
+    # 积压信号照旧：3/(3+20)
+    assert out["sample"] == 23 and abs(out["adoption_rate"] - 3 / 23) < 1e-4   # 四位小数
+    empty = build_correction_stats(None, None, days=30)
+    assert empty["judged"] == 0 and empty["accuracy_rate"] == 0.0
+
+
 def test_build_stats_no_trend_flag(tmp_path):
     audit = AuditStore(db_path=tmp_path / "audit.db")
     audit.log("a", "episodic_confirm_inferred", target="1", new_val="x")

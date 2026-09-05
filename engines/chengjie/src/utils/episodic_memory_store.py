@@ -1437,24 +1437,18 @@ class EpisodicMemoryStore:
                 out["top_stable"] = [str(r[0]) for r in tops if r and r[0]]
         except Exception:  # noqa: BLE001
             pass
-        # R15：待确认的 AI 推断（raw + ai_inferred），供坐席一键转明说
-        if out["ai_inferred"]:
-            try:
-                pend = self._conn.execute(
-                    "SELECT id, content FROM episodic_memory"
-                    " WHERE user_id = ? AND COALESCE(tier, 'raw') = 'raw'"
-                    " AND COALESCE(source, 'user_stated') = 'ai_inferred'"
-                    " AND COALESCE(status, 'active') = 'active'"
-                    " ORDER BY COALESCE(salience, 0) DESC, COALESCE(hits, 1) DESC,"
-                    " created_at DESC LIMIT 6",
-                    (uid,),
-                ).fetchall()
-                out["pending_inferred"] = [
-                    {"id": int(r[0]), "content": str(r[1])}
-                    for r in pend if r and r[1]
-                ]
-            except Exception:  # noqa: BLE001
-                pass
+        # R15 → J-10 二期：侧栏「待确认」统一到例外队列口径（review_reason 非空），不再是
+        # 「所有 raw 的 AI 推断」——D8 下客户事实自动记，只有五类例外才请坐席看一眼；
+        # 一键确认走同一条 /confirm（confirm_fact 接受任何进了队列的条目）。
+        try:
+            out["pending_inferred"] = [
+                {"id": int(q["id"]), "content": str(q["content"]),
+                 "review_reason": str(q.get("review_reason") or ""),
+                 "impact": str(q.get("impact") or "normal")}
+                for q in self.review_queue(user_id=uid, limit=6)
+            ]
+        except Exception:  # noqa: BLE001
+            pass
         return out
 
     def confirm_inferred_fact(self, row_id: int) -> Optional[str]:
@@ -1504,12 +1498,14 @@ class EpisodicMemoryStore:
             return False
 
     def inferred_counts(self) -> Dict[str, int]:
-        """R17：全库 AI 推断计数——``pending``（raw 待确认）与 ``total``（任意 tier）。
+        """R17 → J-10 二期：``pending``＝**例外队列**待处理数（``review_reason`` 非空、active，
+        与 ``review_counts().pending`` 同源）；``total``＝库内 AI 推断累计（任意 tier）；
+        ``raw_inferred``＝旧口径「raw 的 AI 推断」只作观测。
 
-        确认后事实会翻成 ``user_stated``，故已从 ai_inferred 集合移出；``pending`` 是
-        当前仍待坐席核实的 raw 推断（不含 stale）。store 异常返回零。
+        D8 下 raw 的 AI 推断不再等于「待确认」——它们照常召回、7 天被用即自动转正；
+        「38 条待确认」这个数从此只数真需要人看的。store 异常返回零。
         """
-        out = {"pending": 0, "total": 0}
+        out = {"pending": 0, "total": 0, "raw_inferred": 0}
         try:
             row = self._conn.execute(
                 "SELECT"
@@ -1520,8 +1516,9 @@ class EpisodicMemoryStore:
                 " AND COALESCE(status, 'active') = 'active'",
             ).fetchone()
             if row:
-                out["pending"] = int(row[0] or 0)
+                out["raw_inferred"] = int(row[0] or 0)
                 out["total"] = int(row[1] or 0)
+            out["pending"] = int(self.review_counts().get("pending") or 0)
         except Exception as e:  # noqa: BLE001
             logger.debug("episodic inferred_counts failed: %s", e)
         return out
