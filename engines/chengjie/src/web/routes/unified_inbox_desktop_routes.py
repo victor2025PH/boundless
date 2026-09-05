@@ -254,8 +254,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
     async def api_desktop_guard_check(request: Request, _=Depends(api_auth)):
         """桌面壳「填入并发送」前风控护栏（规则层，零 LLM 成本，毫秒级）。
 
-        复用 ``src.inbox.drafts.keyword_risk_level``（支付/密码/账号安全=high→拦截；
-        优惠/投诉/法律=medium→提醒），并检测「作为AI」等机器措辞（可能露馅）。
+        复用 ``src.inbox.drafts.keyword_risk_level``。2026-09-04 起 ``block`` 恒
+        False（与自动链影子档同口径：风险只记台账+回 hits 画黄条，不拦发送）。
         body: {text}
         返回: {ok, risk: high|medium|low, block, hits:[{term,level}], robotic:[...]}
         """
@@ -279,7 +279,34 @@ def register_desktop_routes(app, *, api_auth) -> None:
         for ph in _ROBOTIC_PHRASES:
             if ph in text:
                 robotic.append(ph)
-        return {"ok": True, "risk": risk, "block": risk == "high",
+        # 2026-09-04 老板拍板：桌面「填入并发送」与自动链同口径——风险只记不拦。
+        # block 恒 False；hits/risk 仍回给前端画黄条，坐席看见但不被二次确认挡住。
+        if risk == "high" or hits or robotic:
+            try:
+                from src.inbox.autosend_shadow_log import record as _shadow_rec
+                _shadow_rec({
+                    "ts": time.time(),
+                    "platform": "desktop",
+                    "account_id": "",
+                    "conv_key": "",
+                    "draft_id": "",
+                    "would_hold_level": "L4" if risk == "high" else "L3",
+                    "hold_reason": "desktop_guard",
+                    "peer_risk": "",
+                    "peer_reasons": [],
+                    "reply_risk": risk,
+                    "reply_reasons": [h.get("level") for h in hits if isinstance(h, dict)],
+                    "risk_hits": [h.get("term") for h in hits if isinstance(h, dict)][:8],
+                    "text_fp": "",
+                    "text_len": len(text),
+                    "stage": "desktop_guard",
+                    "automation_mode": "manual",
+                    "policy_mode": "shadow",
+                    "kind": "hold",
+                }, track_outcome=False)
+            except Exception:
+                logger.debug("[desktop] guard-check 影子台账失败", exc_info=True)
+        return {"ok": True, "risk": risk, "block": False,
                 "hits": hits, "robotic": robotic}
 
     @app.post("/api/desktop/ingest")
