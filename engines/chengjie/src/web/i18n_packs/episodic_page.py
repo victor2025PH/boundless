@@ -113,6 +113,13 @@ ZH = {
     "em_semantics_hint": "列表中所有条目都会参与 AI 记忆召回；「确认属实」＝人工核实（推断转正入稳定层），「编辑」＝改正后保存（视为人工核实），「删除」＝立即移出、不再参与回复。",
     "em_src_quote_none": "早期条目未记录来源原话",
     "em_src_quote_tip": "抽取自对方原话：「{q}」",
+    "em_used_title": "最近被用",
+    "em_used_tip": "AI 最近几轮回复时真正带进提示词的记忆（按轮次，最新在前）",
+    "em_used_none": "这位客户的记忆还没被 AI 用过",
+    "em_used_round": "{t} · 用了 {n} 条",
+    "em_used_chain_inbox": "收件箱拟稿",
+    "em_used_chain_direct": "直接回复",
+    "em_used_deleted": "（已删除）",
 }
 
 EN = {
@@ -227,4 +234,11 @@ EN = {
     "em_semantics_hint": "Every listed entry participates in AI memory recall. \"Confirm\" = human-verified (inference promoted to stable tier); \"Edit\" = correct and save (counts as verified); \"Delete\" = removed immediately, no longer used in replies.",
     "em_src_quote_none": "No source quote recorded for this early entry",
     "em_src_quote_tip": "Extracted from their message: \"{q}\"",
+    "em_used_title": "Recently used",
+    "em_used_tip": "Memories actually placed into the prompt for the AI's latest replies (per round, newest first)",
+    "em_used_none": "None of this customer's memories has been used by the AI yet",
+    "em_used_round": "{t} · {n} used",
+    "em_used_chain_inbox": "inbox draft",
+    "em_used_chain_direct": "direct reply",
+    "em_used_deleted": "(deleted)",
 }

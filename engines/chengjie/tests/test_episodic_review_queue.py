@@ -246,9 +246,11 @@ def test_review_routes_end_to_end(tmp_path):
     new = st.add_fact(uid, "用户住在上海")
     hi = st.add_fact(uid, "客户有一个女儿")
     plain = st.add_fact(uid, "客户喜欢喝美式咖啡")
+    from src.skills.skill_manager import SkillManager
     sm = MagicMock()
     sm._episodic_store = st
-    sm.episodic_list_for_admin = lambda **kw: st.list_rows(**kw)
+    # 走真实 wrapper（status / review 透传必须真到 store——A2 首版曾只提交了签名没提交透传体）
+    sm.episodic_list_for_admin = lambda **kw: SkillManager.episodic_list_for_admin(sm, **kw)
     tc = MagicMock()
     tc.skill_manager = sm
     app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=tc)

@@ -5229,10 +5229,7 @@ class SkillManager(LoggerMixin):
         sw = float(scfg.get("salience_weight", 0.15))
         rw = float(scfg.get("recency_weight", 0.10))
         hl = float(scfg.get("recency_half_life_days", 30.0))
-        txt = self._episodic_store.get_bullets_for_prompt(
-            key,
-            mx,
-            mc,
+        _gb_kwargs = dict(  # J-10 A3：两种取法共用同一套参数
             query_text=(current_user_text or "").strip(),
             rerank_keywords=rr,
             query_embedding=query_embedding,
@@ -5244,6 +5241,13 @@ class SkillManager(LoggerMixin):
             recency_weight=rw,
             recency_half_life_days=hl,
         )
+        # J-10 A3：能给行 id 的 store 走 with_ids（召回记账用）；旧/假 store 走旧口
+        _with_ids = getattr(self._episodic_store, "get_bullets_with_ids", None)
+        _used_ids: List[int] = []
+        if callable(_with_ids):
+            txt, _used_ids = _with_ids(key, mx, mc, **_gb_kwargs)
+        else:
+            txt = self._episodic_store.get_bullets_for_prompt(key, mx, mc, **_gb_kwargs)
         if txt:
             user_context["_episodic_memory_text"] = txt
             try:
@@ -5251,6 +5255,15 @@ class SkillManager(LoggerMixin):
                 get_metrics_store().record_episodic_inject()
             except Exception:
                 pass
+            # J-10 A3：召回记账一行（best-effort 零阻断）——哪条记忆在哪个会话哪一轮被用
+            try:
+                _conv = str(user_context.get("conversation_id") or "")
+                self._episodic_store.record_recall(
+                    _used_ids, memory_key=key, conversation_id=_conv,
+                    chain=("inbox" if _conv else "direct"),
+                    inbound_msg_id=str(user_context.get("user_msg_id") or ""))
+            except Exception:
+                self.logger.debug("[episodic] recall log skipped", exc_info=True)
             if use_fusion:
                 self.logger.debug(
                     "episodic inject fusion key=%s chars=%s", key, len(txt)
@@ -5649,6 +5662,10 @@ class SkillManager(LoggerMixin):
             extra.update(q=q, q_keys=q_keys or [])
         if offset:
             extra["offset"] = int(offset)
+        if status and status != "active":
+            extra["status"] = str(status)   # J-10 A2：软删视图（ignored / all）
+        if review:
+            extra["review"] = str(review)   # J-10 A2：例外队列筛选（pending / 原因）
         if extra:
             return self._episodic_store.list_rows(
                 prefix=prefix, limit=limit, source=source, **extra,

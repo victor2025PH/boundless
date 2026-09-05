@@ -270,6 +270,34 @@ class EpisodicMemoryStore:
         except Exception as e:  # noqa: BLE001
             logger.debug("episodic_grounding_drops ddl failed: %s", e)
 
+    # J-10 A3（#183）：召回记账——哪条记忆在哪个会话的哪一轮被注入过 prompt。此前使用侧
+    # 零埋点：算不出「被用次数 / 贡献」，也做不了「草稿旁可见」。skill_manager 注入点
+    # 一行写入（best-effort 零阻断）；/api/episodic-memory/used 按会话回读最近几轮。
+    _RECALL_LOG_DDL = """
+    CREATE TABLE IF NOT EXISTS episodic_recall_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL NOT NULL,
+        batch_id TEXT NOT NULL DEFAULT '',
+        memory_key TEXT NOT NULL DEFAULT '',
+        row_id INTEGER NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT '',
+        chain TEXT NOT NULL DEFAULT '',
+        draft_or_reply_id TEXT NOT NULL DEFAULT '',
+        inbound_msg_id TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_epi_recall_conv ON episodic_recall_log(conversation_id, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_epi_recall_key ON episodic_recall_log(memory_key, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_epi_recall_row ON episodic_recall_log(row_id);
+    """
+    _RECALL_LOG_RETAIN_SEC = 90 * 86400
+
+    def _ensure_recall_log_table(self) -> None:
+        try:
+            self._conn.executescript(self._RECALL_LOG_DDL)
+            self._conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic_recall_log ddl failed: %s", e)
+
     def _ensure_review_columns(self) -> None:
         """J-10 A2（#183，决策 D8）例外审核 + 软删 + 召回计数列，向后兼容幂等 ALTER。
 
@@ -320,6 +348,7 @@ class EpisodicMemoryStore:
         self._ensure_provenance_columns()
         self._ensure_grounding_drops_table()
         self._ensure_review_columns()
+        self._ensure_recall_log_table()
 
     def close(self) -> None:
         if self._conn:
@@ -1547,6 +1576,36 @@ class EpisodicMemoryStore:
         实时状态复述），标注后陈旧事实反而成为自然回访素材（「上次你说下雨…」）。
         stable 层是巩固过的无时效结论（爱好/身份），不标注；48h 内新鲜事实不标注。
         """
+        return self.get_bullets_with_ids(
+            user_id, max_items, max_chars, query_text=query_text,
+            rerank_keywords=rerank_keywords, query_embedding=query_embedding,
+            use_vector_fusion=use_vector_fusion, vector_weight=vector_weight,
+            keyword_weight=keyword_weight, use_salience_rerank=use_salience_rerank,
+            salience_weight=salience_weight, recency_weight=recency_weight,
+            recency_half_life_days=recency_half_life_days, age_hints=age_hints,
+        )[0]
+
+    def get_bullets_with_ids(
+        self,
+        user_id: str,
+        max_items: int = 8,
+        max_chars: int = 1200,
+        query_text: Optional[str] = None,
+        rerank_keywords: bool = False,
+        query_embedding: Optional[List[float]] = None,
+        use_vector_fusion: bool = False,
+        vector_weight: float = 0.5,
+        keyword_weight: float = 0.5,
+        use_salience_rerank: bool = False,
+        salience_weight: float = 0.15,
+        recency_weight: float = 0.10,
+        recency_half_life_days: float = 30.0,
+        age_hints: bool = True,
+    ) -> Tuple[str, List[int]]:
+        """同 :meth:`get_bullets_for_prompt`，另回**实际注入的行 id 列表**（顺序＝bullet 顺序）。
+
+        J-10 A3：注入点拿 id 去 :meth:`record_recall` 记账；不记账的调用方继续用旧方法。
+        """
         from src.utils.episodic_vector import blob_to_vec, cosine_similarity
 
         max_items = max(1, min(int(max_items or 8), 40))
@@ -1564,7 +1623,7 @@ class EpisodicMemoryStore:
         rows = self._conn.execute(
             """
             SELECT content, embedding, created_at, salience, tier,
-              COALESCE(source, 'user_stated'), COALESCE(source_quote, '')
+              COALESCE(source, 'user_stated'), COALESCE(source_quote, ''), id
             FROM episodic_memory WHERE user_id = ?
               AND COALESCE(tier, 'raw') != 'stale'
               AND COALESCE(status, 'active') = 'active'
@@ -1574,10 +1633,11 @@ class EpisodicMemoryStore:
             (user_id, fetch_n),
         ).fetchall()
         if not rows:
-            return ""
+            return "", []
 
+        # (text, embedding, created_at, salience, tier, source, source_quote, row_id)
         pairs: List[Tuple[str, Optional[bytes], float, Optional[float], str, str,
-                          str]] = [
+                          str, int]] = [
             (
                 r[0].strip(),
                 r[1],
@@ -1585,12 +1645,13 @@ class EpisodicMemoryStore:
                 (float(r[3]) if r[3] is not None else None),
                 (str(r[4]) if r[4] else "raw"),
                 (str(r[5]) if r[5] else "user_stated"),
-                (str(r[6]) if len(r) > 6 and r[6] else ""),
+                (str(r[6]) if r[6] else ""),
+                int(r[7] or 0),
             )
             for r in rows if r and r[0]
         ]
         if not pairs:
-            return ""
+            return "", []
 
         # R2（REMT-lite）+ R3（分层）：可选"显著性×时间衰减 + 稳定层加权"重排
         # （默认关，零行为变化）。R3：优先用写入期落库的 salience，省去每次重算。
@@ -1625,8 +1686,8 @@ class EpisodicMemoryStore:
             except Exception:
                 _rerank = None
 
-        # (text, created_at, tier, source, source_quote)——一路带到渲染层
-        contents: List[Tuple[str, float, str, str, str]]
+        # (text, created_at, tier, source, source_quote, row_id)——一路带到渲染层
+        contents: List[Tuple[str, float, str, str, str, int]]
         if want_vec:
             vw = max(0.0, min(1.0, float(vector_weight)))
             kw_w = max(0.0, min(1.0, float(keyword_weight)))
@@ -1638,47 +1699,48 @@ class EpisodicMemoryStore:
                 for t, *_ in pairs
             ]
             max_kw = max(kws) if kws else 0.0
-            scored_rows: List[Tuple[float, str, float, str, str, str]] = []
-            for (t, emb_blob, ts, sal, tier, src, quote), kw in zip(pairs, kws):
+            scored_rows: List[Tuple[float, str, float, str, str, str, int]] = []
+            for (t, emb_blob, ts, sal, tier, src, quote, rid), kw in zip(pairs, kws):
                 kw_n = (kw / max_kw) if max_kw > 1e-9 else 0.0
                 ev = blob_to_vec(emb_blob)
                 vs = cosine_similarity(query_embedding, ev) if ev else 0.0
                 vs = max(0.0, min(1.0, (vs + 1.0) / 2.0))
                 fusion = vw * vs + kw_w * kw_n
                 final = _rerank(fusion, t, ts, sal, tier) if _rerank else fusion
-                scored_rows.append((final, t, ts, tier, src, quote))
+                scored_rows.append((final, t, ts, tier, src, quote, rid))
             scored_rows.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored_rows]
+            contents = [(x[1], x[2], x[3], x[4], x[5], x[6]) for x in scored_rows]
         elif want_kw:
-            scored: List[Tuple[float, str, float, str, str, str]] = []
+            scored: List[Tuple[float, str, float, str, str, str, int]] = []
             kws2 = [self._keyword_overlap_score(qt, t) for t, *_ in pairs]
             max_kw2 = max(kws2) if kws2 else 0.0
-            for (t, _, ts, sal, tier, src, quote), sc in zip(pairs, kws2):
+            for (t, _, ts, sal, tier, src, quote, rid), sc in zip(pairs, kws2):
                 if _rerank:
                     base = (sc / max_kw2) if max_kw2 > 1e-9 else 0.0
                     final = _rerank(base, t, ts, sal, tier)
                 else:
                     final = sc
-                scored.append((final, t, ts, tier, src, quote))
+                scored.append((final, t, ts, tier, src, quote, rid))
             scored.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored]
+            contents = [(x[1], x[2], x[3], x[4], x[5], x[6]) for x in scored]
         elif _rerank:
             # 无 query（纯近期）但开了重排：以新鲜度为 base 叠加显著性 + 稳定层加权
             from src.utils.memory_salience import recency_factor as _rf
-            scored3: List[Tuple[float, str, float, str, str, str]] = []
-            for t, _, ts, sal, tier, src, quote in pairs:
+            scored3: List[Tuple[float, str, float, str, str, str, int]] = []
+            for t, _, ts, sal, tier, src, quote, rid in pairs:
                 base = _rf(ts, None, recency_half_life_days)
                 scored3.append(
-                    (_rerank(base, t, ts, sal, tier), t, ts, tier, src, quote))
+                    (_rerank(base, t, ts, sal, tier), t, ts, tier, src, quote, rid))
             scored3.sort(key=lambda x: (-x[0], -len(x[1])))
-            contents = [(x[1], x[2], x[3], x[4], x[5]) for x in scored3]
+            contents = [(x[1], x[2], x[3], x[4], x[5], x[6]) for x in scored3]
         else:
-            contents = [(p[0], p[2], p[4], p[5], p[6]) for p in pairs]
+            contents = [(p[0], p[2], p[4], p[5], p[6], p[7]) for p in pairs]
 
         now_ts = time.time()
         lines: List[str] = []
+        used_ids: List[int] = []
         total = 0
-        for content, ts, tier, src, quote in contents:
+        for content, ts, tier, src, quote, rid in contents:
             # 五件套·档案>推断（#41/#24 0830）：AI 推断条目在 prompt 里显式
             # 标注——LLM 才知道这条不如档案/用户原话可信，冲突时让位（实锤：
             # 「用户不喜欢被叫 babe」推断压过档案称呼字段在反向教唆）。
@@ -1702,10 +1764,135 @@ class EpisodicMemoryStore:
             if total + len(line) + 1 > max_chars:
                 break
             lines.append(line)
+            if rid:
+                used_ids.append(int(rid))
             total += len(line) + 1
             if len(lines) >= max_items:
                 break
-        return "\n".join(lines)
+        return "\n".join(lines), used_ids
+
+    # ── J-10 A3：召回记账 ───────────────────────────────────────────────────────
+
+    def record_recall(
+        self, row_ids: List[int], *, memory_key: str = "", conversation_id: str = "",
+        chain: str = "", draft_or_reply_id: str = "", inbound_msg_id: str = "",
+        now: Optional[float] = None,
+    ) -> int:
+        """一次注入 → ``episodic_recall_log`` 每条记忆一行（同 ``batch_id``）+ 行上
+        ``recall_count += 1`` / ``last_recalled_ts``。返回写入行数；绝不抛、零阻断。
+
+        ``chain``：``inbox``（B 线拟稿）/ ``direct``（A 线直回）等；``draft_or_reply_id``
+        注入时通常还不存在，留空——J-4 草稿旁按 ``conversation_id`` 取最近一批即可。
+        顺手清 90 天前的日志。
+        """
+        ids = []
+        for x in row_ids or []:
+            try:
+                i = int(x)
+            except (TypeError, ValueError):
+                continue
+            if i > 0 and i not in ids:
+                ids.append(i)
+        if not ids:
+            return 0
+        ts = float(now if now is not None else time.time())
+        batch = f"{int(ts * 1000):x}-{ids[0]}"
+        mk = str(memory_key or "")[:200]
+        conv = str(conversation_id or "")[:200]
+        ch = str(chain or "")[:32]
+        dr = str(draft_or_reply_id or "")[:64]
+        im = str(inbound_msg_id or "")[:64]
+        try:
+            self._conn.executemany(
+                "INSERT INTO episodic_recall_log (ts, batch_id, memory_key, row_id,"
+                " conversation_id, chain, draft_or_reply_id, inbound_msg_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(ts, batch, mk, i, conv, ch, dr, im) for i in ids])
+            self._conn.executemany(
+                "UPDATE episodic_memory SET recall_count = COALESCE(recall_count, 0) + 1,"
+                " last_recalled_ts = ? WHERE id = ?",
+                [(ts, i) for i in ids])
+            self._conn.execute(
+                "DELETE FROM episodic_recall_log WHERE ts < ?",
+                (ts - self._RECALL_LOG_RETAIN_SEC,))
+            self._conn.commit()
+            return len(ids)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic record_recall failed: %s", e)
+            return 0
+
+    def recent_recalls(
+        self, *, conversation_id: str = "", memory_key: str = "",
+        batches: int = 1, limit: int = 60,
+    ) -> List[Dict[str, Any]]:
+        """按会话（或记忆键）回读最近 N 批注入：``[{batch_id, ts, chain, inbound_msg_id,
+        conversation_id, items: [row…]}]``，最新批在前；每行带当前 content / source / tier /
+        review_reason / impact / source_quote / status / recall_count（已硬删的行只剩 id）。
+
+        供 J-4 草稿旁「本轮用了这几条记忆」与页面会话抽屉「最近被用」。绝不抛。
+        """
+        conv = str(conversation_id or "").strip()
+        mk = str(memory_key or "").strip()
+        if not conv and not mk:
+            return []
+        nb = max(1, min(int(batches or 1), 20))
+        lim = max(1, min(int(limit or 60), 500))
+        where, params = [], []  # type: List[str], List[Any]
+        if conv:
+            where.append("conversation_id = ?")
+            params.append(conv)
+        if mk:
+            where.append("memory_key = ?")
+            params.append(mk)
+        try:
+            brows = self._conn.execute(
+                f"SELECT batch_id, MAX(ts), MAX(chain), MAX(inbound_msg_id), MAX(conversation_id)"
+                f" FROM episodic_recall_log WHERE {' AND '.join(where)}"
+                " GROUP BY batch_id ORDER BY MAX(ts) DESC LIMIT ?",
+                params + [nb],
+            ).fetchall()
+            out: List[Dict[str, Any]] = []
+            for bid, ts, chain, imid, cid in brows:
+                rids = [int(r[0]) for r in self._conn.execute(
+                    "SELECT row_id FROM episodic_recall_log WHERE batch_id = ?"
+                    " ORDER BY id ASC LIMIT ?", (bid, lim)).fetchall()]
+                items: List[Dict[str, Any]] = []
+                if rids:
+                    q = ",".join("?" * len(rids))
+                    found = {
+                        int(r[0]): self._row_to_dict(r) for r in self._conn.execute(
+                            f"SELECT {self._ROW_COLS} FROM episodic_memory WHERE id IN ({q})",
+                            rids).fetchall()
+                    }
+                    for i in rids:
+                        items.append(found.get(i) or {"id": i, "deleted": True})
+                out.append({
+                    "batch_id": str(bid or ""), "ts": float(ts or 0),
+                    "chain": str(chain or ""), "inbound_msg_id": str(imid or ""),
+                    "conversation_id": str(cid or ""), "items": items,
+                })
+            return out
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic recent_recalls failed: %s", e)
+            return []
+
+    def recall_stats(self, days: int = 7) -> Dict[str, Any]:
+        """近 N 天召回读数：``{injections（批次数）, rows（条·次）, distinct_rows, conversations}``。"""
+        d = max(1, min(int(days or 7), 90))
+        since = time.time() - d * 86400
+        out = {"window_days": d, "injections": 0, "rows": 0, "distinct_rows": 0,
+               "conversations": 0}
+        try:
+            r = self._conn.execute(
+                "SELECT COUNT(DISTINCT batch_id), COUNT(*), COUNT(DISTINCT row_id),"
+                " COUNT(DISTINCT conversation_id) FROM episodic_recall_log WHERE ts >= ?",
+                (since,)).fetchone()
+            if r:
+                out.update({"injections": int(r[0] or 0), "rows": int(r[1] or 0),
+                            "distinct_rows": int(r[2] or 0), "conversations": int(r[3] or 0)})
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic recall_stats failed: %s", e)
+        return out
 
     def list_rows(
         self,
@@ -1827,6 +2014,7 @@ class EpisodicMemoryStore:
             ],
             "review": self.review_counts(),
             "grounding_drops": self.grounding_drop_summary(days=d),
+            "recall": self.recall_stats(days=d),
         }
 
     def record_grounding_drops(

@@ -616,6 +616,35 @@ def register_episodic_identity_routes(app, ctx) -> None:
                    new_val=str(res.get("content") or "")[:160])
         return {"ok": True, **res}
 
+    # ── J-10 A3（#183）：使用侧——最近几轮用了哪些记忆 ──────────────────────
+
+    @app.get("/api/episodic-memory/used")
+    async def api_episodic_memory_used(
+        request: Request, conversation_id: str = "", memory_key: str = "",
+        limit: int = 1, rows: int = 60,
+    ):
+        """最近 ``limit`` 轮注入 prompt 的记忆（按会话或记忆键）。
+
+        契约（交 J-4 草稿旁「本轮用了这几条记忆 · 一键不再使用」）：
+        ``{ok, batches: [{batch_id, ts, chain: inbox|direct, inbound_msg_id, conversation_id,
+        items: [{id, content, source, tier, review_reason, impact, source_quote, status,
+        recall_count, last_recalled_ts, …} | {id, deleted: true}]}], count}``——最新批在前，
+        ``items`` 顺序＝当轮 prompt 里的 bullet 顺序。「不再使用」→ ``POST
+        /api/episodic-memory/{id}/ignore``。两参皆空 → 400。
+        """
+        _api_auth(request)
+        conv = str(conversation_id or "").strip()[:200]
+        mk = str(memory_key or "").strip()[:200]
+        if not conv and not mk:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="conversation_id"))
+        store = _store_or_503(request, "recent_recalls")
+        batches = store.recent_recalls(
+            conversation_id=conv, memory_key=mk,
+            batches=max(1, min(int(limit or 1), 20)),
+            limit=max(1, min(int(rows or 60), 500)))
+        return {"ok": True, "batches": batches, "count": len(batches)}
+
     @app.post("/api/episodic-memory/backfill")
     async def api_episodic_memory_backfill(
         request: Request, limit: int = 20, prefix: str = "", force: bool = False

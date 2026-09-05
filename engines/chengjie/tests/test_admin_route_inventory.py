@@ -177,6 +177,7 @@ _BASELINE = """
 /api/episodic-memory/{row_id}/restore	POST
 /api/episodic-memory/resolve-conflict	POST
 /api/episodic-memory/review-queue	GET
+/api/episodic-memory/used	GET
 /api/unified-inbox/send-status	GET
 /api/episodic-memory/key-health	GET
 /api/episodic-memory/key-migrate	POST

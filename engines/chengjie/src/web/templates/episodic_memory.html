@@ -690,6 +690,29 @@ function _emFindItem(id){
   return null;
 }
 /* ── 人档抽屉：一个客户的全部记忆（prefix 精确查询 + 客户端全等过滤）── */
+/* J-10 A3：最近几轮 AI 真正用到的记忆（按批次，最新在前）。旧后端无该接口 → 分区保持隐藏。 */
+async function _emDrvLoadUsed(key){
+  var sec=document.getElementById('em-drv-used'); var bd=document.getElementById('em-drv-used-bd');
+  if(!sec||!bd)return;
+  try{
+    var q=new URLSearchParams({memory_key:key,limit:'3'});
+    var res=await apiFetch('/api/episodic-memory/used?'+q.toString());
+    if(_emDrvKey!==key||!res.ok)return;
+    var d=await res.json(); if(_emDrvKey!==key)return;
+    var bs=d.batches||[];
+    if(!bs.length){bd.innerHTML='<div style="font-size:.72rem;color:var(--t3)">'+_emEsc(window.T('em_used_none'))+'</div>';sec.hidden=false;return;}
+    bd.innerHTML=bs.map(function(b){
+      var ago=b.ts?_emAgo(b.ts):null; var t=ago?ago.rel:'';
+      var ch=b.chain==='inbox'?window.T('em_used_chain_inbox'):(b.chain==='direct'?window.T('em_used_chain_direct'):'');
+      var head=window.Tf('em_used_round',{t:t,n:(b.items||[]).length})+(ch?' · '+ch:'');
+      var items=(b.items||[]).map(function(it){
+        return '<li>'+_emEsc(it.content||('#'+it.id))+(it.deleted?' <span style="color:var(--t3)">'+_emEsc(window.T('em_used_deleted'))+'</span>':'')+'</li>';
+      }).join('');
+      return '<div style="margin:.35rem 0"><div style="font-size:.7rem;color:var(--t3)" title="'+_emEsc(ago?ago.abs:'')+'">'+_emEsc(head)+'</div><ul style="margin:.2rem 0 0 1rem;padding:0;font-size:.78rem">'+items+'</ul></div>';
+    }).join('');
+    sec.hidden=false;
+  }catch(e){/* 旧后端 / 网络失败：分区不出现 */}
+}
 function _emDrvEls(){
   var bk=document.getElementById('em-drv-bk');
   var pn=document.getElementById('em-drv');
@@ -796,6 +819,8 @@ function _emDrvRender(){
       +byCat[c].map(function(r){return _emDrvRowHtml(r,name);}).join('')+'</div>';
   }).join('');
   if(!rows.length)secs=_emEmptyHtml();
+  // J-10 A3：「最近被用」分区（/api/episodic-memory/used 自证）——异步填充，失败静默隐藏
+  var usedSec='<div class="em-drv-sec" id="em-drv-used" hidden><h4 title="'+_emEsc(window.T('em_used_tip'))+'">'+_emEsc(window.T('em_used_title'))+'</h4><div id="em-drv-used-bd"></div></div>';
   els.pn.innerHTML=
     '<div class="em-drv-hd">'+_emAvatar(idn,key)
     +'<div style="flex:1;min-width:0">'
@@ -804,7 +829,8 @@ function _emDrvRender(){
     +'<div style="font-size:.68rem;color:var(--t3);margin-top:.3rem">'+_emEsc(stats)+(span?' · '+_emEsc(span):'')+'</div>'
     +(_emMaskOn?'':'<div style="font-size:.62rem;color:var(--t3);margin-top:.25rem;font-family:Consolas,monospace;word-break:break-all">'+_emEsc(key)+'</div>')
     +'</div><button type="button" class="em-drv-x" id="em-drv-x" title="'+_emEsc(window.T('close'))+'">✕</button></div>'
-    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+secs+'</div>';
+    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+usedSec+secs+'</div>';
+  _emDrvLoadUsed(key);
   var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
   var cp=document.getElementById('em-drv-copy'); if(cp)cp.addEventListener('click',function(){_emCopyText(key,cp);});
   var bb=document.getElementById('em-drv-batch');
