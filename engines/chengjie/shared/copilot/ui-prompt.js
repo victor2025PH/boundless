@@ -27,7 +27,7 @@
   var CSS =
     ".uip-backdrop{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;" +
     "justify-content:center;background:rgba(15,23,42,.45);padding:16px;box-sizing:border-box;}" +
-    ".uip-card{width:min(420px,100%);background:var(--cp-bg-card,var(--tk-bg-card,var(--bg-card,#fff)));" +
+    ".uip-card{width:min(420px,100%);background:var(--cp-surface,var(--tk-bg-card,var(--bg-card,#fff)));" +
     "color:var(--cp-text,var(--tk-text,var(--text,#111827)));border:1px solid var(--cp-border,var(--tk-border,#e5e7eb));" +
     "border-radius:12px;box-shadow:0 18px 48px rgba(0,0,0,.28);padding:16px 16px 12px;box-sizing:border-box;" +
     "font:inherit;font-size:14px;line-height:1.5;}" +
