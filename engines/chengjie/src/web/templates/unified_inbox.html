@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905c">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -2298,7 +2298,8 @@ function rebuildAccountMeta(){
   Object.values(platformStatus||{}).forEach(a=>{
     const pl=a.platform||'web'; const id=a.account_id||'default';
     accountMeta[`${pl}:${id}`]={label:a.label||'', running:!!a.running,
-      persona_id:a.persona_id||'', persona_name:a.persona_name||'',
+      persona_id:a.persona_unselected?'':(a.persona_id||''), persona_name:a.persona_name||'',
+      persona_unselected:!!a.persona_unselected,
       self_name:a.self_name||'', self_username:a.self_username||'', self_avatar:a.self_avatar||''};
   });
 }
@@ -2416,7 +2417,7 @@ function buildAccountChips(){
   // 「全部账号」聚合 chip：宫格图标入族（与头像 chip 同视觉家族）+ 分级未读徽标
   let html=`<div class="acct-chip ac-all ${accountFilter==='all'?'active':''}" role="button" tabindex="0" onclick="setAccountFilter('all')" onkeydown="_acChipKey(event)" title="${esc(window.Tf('inbox.acct.n_online',{n:accts.length,on:onCount}))}">
       <span class="ac-all-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>
-      <span class="ac-name">${window.T('inbox.acct.all_accounts')}</span>${_acUnreadBadge(totUnread,totAttn)}</div>`;
+      <span class="ac-name">${window.T('inbox.acct.all_accounts')}</span>${_acUnreadBadge(totUnread,totAttn,platFilter,'')}</div>`;
   shown.forEach(a=>{
     const nm=_acctLabel(platFilter,a.account_id);   // 已优先 label > 真实身份 > 序号
     const ord=_acctOrdinal[`${platFilter}:${a.account_id}`];
@@ -2431,7 +2432,7 @@ function buildAccountChips(){
     const ghost=!a.paired;
     const loggedOut=(a.acct_status==='offline');   // P0 真相化：已退出账号（注册表 offline）
     // 身份可视化：有人设的 chip 提示带人设名；运行中却未绑人设 → 黄色警示点
-    const noPersona=!ghost&&a.running&&!meta.persona_id;
+    const noPersona=!ghost&&a.running&&(!meta.persona_id||meta.persona_unselected);
     let tip=ghost?`${a.account_id} · ${window.T('inbox.acct.ghost_t')}`:String(a.account_id);
     if(loggedOut) tip+=` · ${window.T('inbox.acct.out_tag_t')}`;
     if(a.inbox_stalled) tip+=` · ${window.T('inbox.acct.stall_tag_t')}`;
@@ -2439,9 +2440,9 @@ function buildAccountChips(){
     html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}${loggedOut?' ac-loggedout':''}${a.inbox_stalled?' ac-stall':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
       <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
       <span class="ac-name">${esc(nm)}</span>
-      ${noPersona?`<span class="conv-nopersona-dot" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
+      ${noPersona?`<span class="conv-nopersona-dot" data-ac-nopersona="1" data-plat="${esc(platFilter)}" data-aid="${esc(a.account_id)}" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
       ${loggedOut?`<span class="ac-ghost-tag ac-out-tag">${window.T('inbox.acct.out_tag')}</span>`:(a.inbox_stalled?`<span class="ac-ghost-tag ac-stall-tag">${window.T('inbox.acct.stall_tag')}</span>`:(ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''))}
-      ${_acUnreadBadge(a.unread,a.attn)}</div>`;
+      ${_acUnreadBadge(a.unread,a.attn,platFilter,a.account_id)}</div>`;
   });
   // 「仅历史」账号折叠开关（有历史账号且未开「仅在线」时展示）——留在滚动区（就地展开语义）；
   // P0 真相化：折叠进 chip 的存量未读以灰色角标汇总（只查档不可回复，绝不用红色 attn 口径）
@@ -2480,11 +2481,95 @@ function buildAccountChips(){
 // （2026-08-22 真相化：旧版红标显示未读总数，「红 99+」谎报工作量；顺带修掉
 // 「attn>0 但未读=0 时不出角标」的漏报）；常规未读 → 中性灰数字（账号 chip 较宽，
 // 保留每号工作量读数，与 rail 图标的 dim-dot 分工不同）。
-function _acUnreadBadge(unread,attn){
-  if(attn>0) return `<span class="ac-unread attn" title="${esc(window.Tf('inbox.acct.attn_t',{n:attn}))}">${attn>99?'99+':attn}</span>`;
+function _acUnreadBadge(unread,attn,plat,aid){
+  const attrs=plat?` data-ac-unread="1" data-plat="${esc(plat)}" data-aid="${esc(aid||'')}" role="button" tabindex="0"`:'';
+  if(attn>0) return `<span class="ac-unread attn"${attrs} title="${esc(window.Tf('inbox.acct.attn_t',{n:attn}))}">${attn>99?'99+':attn}</span>`;
   if(!unread) return '';
   const n=unread>99?'99+':unread;
-  return `<span class="ac-unread">${n}</span>`;
+  return `<span class="ac-unread"${attrs} title="${esc(window.T('inbox.acct.unread_open_t'))}">${n}</span>`;
+}
+function _closeAcctUnreadPop(){
+  const p=document.getElementById('ac-unread-pop');
+  if(p) p.style.display='none';
+}
+function _openAcctPersonaBind(pl,aid){
+  try{ if(typeof window._uiBeacon==='function') window._uiBeacon('acct_nopersona_open'); }catch(_){}
+  try{ openDrawer(); }catch(_){}
+  setTimeout(function(){ try{ openAcctDetail(pl, aid||'default'); }catch(_){} }, 60);
+}
+async function _openAcctUnreadPop(plat,aid,anchor){
+  try{ if(typeof window._uiBeacon==='function') window._uiBeacon('acct_unread_open'); }catch(_){}
+  let pop=document.getElementById('ac-unread-pop');
+  if(!pop){
+    pop=document.createElement('div');
+    pop.id='ac-unread-pop';
+    pop.className='ac-unread-pop';
+    pop.addEventListener('click',function(ev){ ev.stopPropagation(); });
+    document.body.appendChild(pop);
+  }
+  pop.innerHTML='<div class="acup-hd">'+esc(window.T('inbox.acct.unread_pop_title'))+'</div><div class="acup-bd"><div class="acup-empty">'+esc(window.T('inbox.acct.unread_loading'))+'</div></div>';
+  pop.style.display='block';
+  try{
+    const r=anchor.getBoundingClientRect();
+    const w=Math.min(360, Math.max(240, r.width+120));
+    let left=Math.max(8, Math.min(r.left, window.innerWidth-w-8));
+    let top=r.bottom+6;
+    if(top+220>window.innerHeight) top=Math.max(8, r.top-226);
+    pop.style.left=left+'px'; pop.style.top=top+'px'; pop.style.width=w+'px';
+  }catch(_){}
+  const q='/api/unified-inbox/account-unread?platform='+encodeURIComponent(plat||'')+'&account_id='+encodeURIComponent(aid||'');
+  try{
+    const res=await apiFetch(q);
+    const d=await res.json();
+    const list=(d&&d.conversations)||[];
+    let rows='';
+    list.forEach(function(c){
+      const cid=String(c.conversation_id||'');
+      const nm=c.display_name||c.title||cid;
+      const txt=c.last_text||'';
+      rows+=`<button type="button" class="acup-row" data-cid="${esc(cid)}"><span class="acup-name">${esc(nm)}</span><span class="acup-txt">${esc(txt)}</span></button>`;
+    });
+    const mark=aid?`<button type="button" class="acup-mark" data-acup-mark="1">${esc(window.T('inbox.acct.unread_mark'))}</button>`:'';
+    pop.innerHTML='<div class="acup-hd"><span>'+esc(window.T('inbox.acct.unread_pop_title'))+'</span>'+mark+'</div><div class="acup-bd">'+(rows||('<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>'))+'</div>';
+    pop.querySelectorAll('.acup-row').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        const cid=btn.getAttribute('data-cid')||'';
+        _closeAcctUnreadPop();
+        if(cid) _openConvByCid(cid);
+      });
+    });
+    const mb=pop.querySelector('[data-acup-mark]');
+    if(mb) mb.addEventListener('click', async function(){
+      try{
+        const r=await apiFetch('/api/unified-inbox/mark-account-read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:plat,account_id:aid})});
+        const out=await r.json();
+        if(out&&out.ok){ _toast(window.T('inbox.acct.unread_mark_ok')); _closeAcctUnreadPop(); try{ loadChats(); }catch(_){} }
+        else _toast(window.T('inbox.acct.unread_mark_fail'));
+      }catch(_){ _toast(window.T('inbox.acct.unread_mark_fail')); }
+    });
+  }catch(_){
+    pop.querySelector('.acup-bd').innerHTML='<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>';
+  }
+}
+if(!window.__acUnreadBound){
+  window.__acUnreadBound=1;
+  document.addEventListener('click',function(ev){
+    const t=ev.target&&ev.target.closest?ev.target.closest('[data-ac-unread]'):null;
+    if(!t){
+      const np=ev.target&&ev.target.closest?ev.target.closest('[data-ac-nopersona]'):null;
+      if(np){
+        ev.preventDefault(); ev.stopPropagation();
+        _openAcctPersonaBind(np.getAttribute('data-plat')||'', np.getAttribute('data-aid')||'');
+        return;
+      }
+      if(!document.getElementById('ac-unread-pop')||document.getElementById('ac-unread-pop').style.display==='none') return;
+      if(ev.target&&ev.target.closest&&ev.target.closest('#ac-unread-pop')) return;
+      _closeAcctUnreadPop();
+      return;
+    }
+    ev.preventDefault(); ev.stopPropagation();
+    _openAcctUnreadPop(t.getAttribute('data-plat')||'', t.getAttribute('data-aid')||'', t);
+  }, true);
 }
 function _acScrollHint(sc){
   const more=(sc.scrollWidth-sc.clientWidth-sc.scrollLeft)>4, less=sc.scrollLeft>4;
@@ -3051,7 +3136,7 @@ function _renderAcctPicker(){
   const gridIc='<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
   let rows=`<div class="ac-pick-row ${accountFilter==='all'?'sel':''}" role="option" tabindex="0" aria-selected="${accountFilter==='all'}" onclick="_acPickChoose('all')" onkeydown="_acPickKey(event,'all')">
     <span class="apr-av apr-all" aria-hidden="true">${gridIc}</span>
-    <div class="apr-main"><span class="apr-name">${window.T('inbox.acct.all_accounts')}</span></div>${_acUnreadBadge(totUnread,totAttn)}</div>`;
+    <div class="apr-main"><span class="apr-name">${window.T('inbox.acct.all_accounts')}</span></div>${_acUnreadBadge(totUnread,totAttn,platFilter,'')}</div>`;
   // P3 价值信息：今日会话数（platformStatus 的 P4 富集字段）直接进下拉副行——
   // 总览下拉就是「账号信息面」，比另起一套 chip hover 浮层子系统更省、不重复
   const _psToday={};
@@ -3073,7 +3158,7 @@ function _renderAcctPicker(){
       <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
       <div class="apr-main"><span class="apr-name">${esc(nm)}${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}</span>
       ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}</div>
-      ${_acUnreadBadge(a.unread,a.attn)}</div>`;
+      ${_acUnreadBadge(a.unread,a.attn,platFilter,aid)}</div>`;
   });
   // P4: 底部「复制视角链接」——总览已是信息面，附带分享出口比另开菜单更贴
   rows+=_acPickFootHtml();
@@ -3113,7 +3198,7 @@ function _renderAcctPickerDock(){
         <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
         <div class="apr-main"><span class="apr-name">${esc(nm)}${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}</span>
         ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}</div>
-        ${_acUnreadBadge(a.unread,a.attn)}</div>`;
+        ${_acUnreadBadge(a.unread,a.attn,pl,aid)}</div>`;
     });
   });
   rows+=_acPickFootHtml();
@@ -3283,7 +3368,7 @@ function _adkItemHtml(pl, a){
   const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(pl+':'+aid);
   const ghost=!a.paired;
   const active=(platFilter===pl && accountFilter===aid);
-  const noPersona=!ghost&&a.running&&!meta.persona_id;
+  const noPersona=!ghost&&a.running&&(!meta.persona_id||meta.persona_unselected);
   // 副行优先级：异常状态标 > 人设名 > 脱敏 ID（与主名不同时才给，避免复读）
   let sub='';
   if(a.inbox_stalled) sub=`<span class="ac-ghost-tag ac-stall-tag">${window.T('inbox.acct.stall_tag')}</span>`;
@@ -3299,9 +3384,9 @@ function _adkItemHtml(pl, a){
       <span class="adk-plat" aria-hidden="true">${platIcon(pl,12)}</span>
       <span class="adk-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
     <span class="adk-txt"><span class="adk-name">${esc(nm)}</span>${sub?`<span class="adk-sub">${sub}</span>`:''}</span>
-    ${noPersona?`<span class="conv-nopersona-dot" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
+    ${noPersona?`<span class="conv-nopersona-dot" data-ac-nopersona="1" data-plat="${esc(pl)}" data-aid="${esc(aid)}" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
     <button type="button" class="adk-more" tabindex="-1" draggable="false" aria-haspopup="menu" title="${esc(window.T('inbox.acct.more'))}" aria-label="${esc(window.T('inbox.acct.more'))}">${uiIcon('more',14)}</button>
-    ${_acUnreadBadge(a.unread,a.attn)}</div>`;
+    ${_acUnreadBadge(a.unread,a.attn,pl,aid)}</div>`;
 }
 function buildAcctDock(){
   const dock=document.getElementById('acct-dock'); if(!dock) return;
@@ -5961,6 +6046,9 @@ function _applyAcctVisuals(dom, c){
       if(pb) pb.remove();
       if(!nd){ nd=document.createElement('span'); nd.className='conv-nopersona-dot'; nameEl.appendChild(nd); }
       nd.title=window.T('inbox.ident.no_persona_t');
+      nd.setAttribute('data-ac-nopersona','1');
+      nd.setAttribute('data-plat',c.platform||'');
+      nd.setAttribute('data-aid',c.account_id||'default');
     } else {
       if(pb) pb.remove();
       if(nd) nd.remove();
@@ -16824,6 +16912,8 @@ async function loadInfoSidebar(c){
   rows.innerHTML=`
     ${_renderIdentityHero(c)}
     ${_phone}
+    ${c.conversation_id?`<div class="info-row"><span class="info-label">${window.T('inbox.info.call_peer')}</span><input id="cust-call-peer" class="info-addr-in" maxlength="40" autocomplete="off" placeholder="${esc(window.T('inbox.info.call_peer_ph'))}"></div>
+    <div class="info-row"><span class="info-label">${window.T('inbox.info.peer_calls_you')}</span><input id="cust-peer-calls" class="info-addr-in" maxlength="40" autocomplete="off" placeholder="${esc(window.T('inbox.info.peer_calls_you_ph'))}"></div>`:''}
     ${c.unanswered_sec>60?`<div class="info-row"><span class="info-label">${window.T('inbox.info.waiting')}</span><span class="info-val" style="color:var(--warn);">${fmtWait(c.unanswered_sec)}</span></div>`:''}
     ${c.contact_id?`<div class="info-row"><span class="info-label">CRM</span><a class="info-val" href="/workspace/contact/${enc(c.contact_id)}" style="color:var(--accent);" target="_blank" data-winname="workspace" onclick="return __openUnique(event,this)">${window.T('inbox.info.view_profile')}</a></div>`:''}
     ${c.conversation_id?`<div class="info-row"><span class="info-label">${window.T('cs2_inbox_entry_label')}</span><a class="info-val" href="/care-schedule?contact=${enc(c.conversation_id)}" style="color:var(--accent);" target="_blank">${window.T('cs2_inbox_entry_go')}</a></div>`:''}
@@ -16851,8 +16941,36 @@ async function loadInfoSidebar(c){
   var jp=document.getElementById('cpp-journey');
   if(jp) jp.textContent=c.funnel_stage?(FUNNEL[c.funnel_stage]||c.funnel_stage):'';
 
+  if(c.conversation_id) _loadAddrNames(c.conversation_id);
   // 若侧栏打开且「AI 对话分析」卡为展开态，才触发（懒加载，省 LLM 调用）
   if(infoOn && !_cpCardCollapsed('analysis')) _loadAiAnalysis(c);
+}
+async function _loadAddrNames(cid){
+  const a=document.getElementById('cust-call-peer');
+  const b=document.getElementById('cust-peer-calls');
+  if(!a||!b||!cid) return;
+  try{
+    const r=await apiFetch('/api/unified-inbox/conv-meta/address-names?conversation_id='+encodeURIComponent(cid));
+    const d=await r.json();
+    if(!d||!d.ok) return;
+    a.value=d.call_peer||'';
+    b.value=d.peer_calls_you||'';
+    if(d.persona_call_peer) a.placeholder=d.persona_call_peer;
+    if(d.persona_peer_calls_you) b.placeholder=d.persona_peer_calls_you;
+    const save=function(){ _saveAddrNames(cid); };
+    a.onchange=save; b.onchange=save;
+  }catch(_){}
+}
+async function _saveAddrNames(cid){
+  const a=document.getElementById('cust-call-peer');
+  const b=document.getElementById('cust-peer-calls');
+  if(!a||!b||!cid) return;
+  try{
+    const r=await apiFetch('/api/unified-inbox/conv-meta/address-names',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid,call_peer:a.value,peer_calls_you:b.value})});
+    const d=await r.json();
+    if(d&&d.ok) _toast(window.T('inbox.info.addr_saved'));
+    else _toast(window.T('inbox.info.addr_fail'));
+  }catch(_){ _toast(window.T('inbox.info.addr_fail')); }
 }
 
 // 阶段 E：人工标记成交/转化，推进客户旅程至漏斗终点
@@ -17282,10 +17400,7 @@ var _CP_TEAR_OPEN_KEY='cp_tear_open_v1', _CP_TEAR_GEOM_KEY='cp_tear_geom_v1';
 var _cpTorn={};
 function _cpCardTorn(key){ return !!(_cpTorn&&_cpTorn[key]); }
 function _cpTearWanted(){
-  try{
-    var a=JSON.parse(localStorage.getItem(_CP_TEAR_OPEN_KEY)||'[]');
-    return Array.isArray(a)?a.filter(function(k){ return _CP_TEARABLE[k]; }):[];
-  }catch(_){ return []; }
+  return [];
 }
 function _cpTearPersist(arr){ try{ localStorage.setItem(_CP_TEAR_OPEN_KEY,JSON.stringify(arr)); }catch(_){} }
 function _cpTearGeomAll(){
@@ -27031,6 +27146,7 @@ Object.assign(window, {
   acctPersonaAlign,                 // P3：对齐同人设账号（dry-run 预览 → 确认 → 批量推送）
   setAccountFilter, toggleAccountOnlineOnly, toggleGhostAccounts, renameAcct,
   _acChipKey,                       // P3：rail 键盘导航（Enter/Space 激活 + 左右移焦）
+  _openAcctUnreadPop, _openAcctPersonaBind, _closeAcctUnreadPop, _saveAddrNames,
   // P0 账号视角增强（2026-07-29）：溢出箭头 / 账号总览下拉（开关+选择+键盘）
   _acNudge, toggleAcctPicker, _acPickChoose, _acPickKey, _copyViewLink,
   // Account Dock（20260817-0055 批）：四个内联 handler 落地时漏挂 window（哑按钮

@@ -906,7 +906,21 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .conv-persona-badge{display:inline-flex;align-items:center;font-size:10px;padding:0 5px;line-height:14px;border-radius:999px;font-weight:600;vertical-align:middle;margin-left:3px;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .conv-persona-badge.ov{padding-left:4px;}
 .conv-persona-badge.ov::before{content:"";width:5px;height:5px;border-radius:50%;flex:none;margin-right:3px;background:var(--tk-emerald,#10b981);box-shadow:0 0 0 1.5px rgba(16,185,129,.22);}
-.conv-nopersona-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.22);vertical-align:middle;margin-left:4px;flex:0 0 auto;cursor:help;}
+.conv-nopersona-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.22);vertical-align:middle;margin-left:4px;flex:0 0 auto;cursor:pointer;}
+.conv-nopersona-dot[data-ac-nopersona]{cursor:pointer;}
+.ac-unread[data-ac-unread]{cursor:pointer;}
+.ac-unread-pop{position:fixed;z-index:80;min-width:240px;max-width:360px;max-height:70vh;overflow:auto;background:var(--bg-panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:10px;box-shadow:0 12px 36px rgba(0,0,0,.18);padding:8px 0;font-size:12px;}
+.ac-unread-pop .acup-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 12px 8px;font-weight:700;color:var(--text-main);}
+.ac-unread-pop .acup-bd{padding:0 4px 4px;}
+.ac-unread-pop .acup-row{display:block;width:100%;text-align:left;border:0;background:transparent;padding:7px 12px;cursor:pointer;color:var(--text-main);}
+.ac-unread-pop .acup-row:hover{background:var(--bg-soft,#f8fafc);}
+.ac-unread-pop .acup-name{display:block;font-weight:600;}
+.ac-unread-pop .acup-txt{display:block;color:var(--text-sub,#64748b);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ac-unread-pop .acup-empty{padding:10px 12px;color:var(--text-sub);}
+.ac-unread-pop .acup-mark{border:1px solid var(--border);background:var(--bg-elev,#fff);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;}
+.info-addr-in{width:100%;min-width:0;border:1px solid var(--border,#e2e8f0);border-radius:6px;padding:3px 7px;font-size:12px;background:var(--bg-elev,#fff);color:var(--text-main);}
+/* 2026-09-04：悬浮撕窗清单下线，入口整组隐藏（JS _cpTearWanted 同步恒空） */
+.cp-tear-btn,#ws-cp-dockall-btn,#ws-cp-pip-btn{display:none !important;}
 /* P2: 会话条悬浮快捷操作（认领/归档/标签）——hover 才显示，避免常态拥挤。
    P0-3（2026-08-27 实施69）：右下角 → 右上角 + 180ms 出现延迟。旧位置（bottom:6px）与
    第二行右侧的标签/风控 chips（.conv-line2-chips）同占一角且 z-index 更高，坐席想看标签
