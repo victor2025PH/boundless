@@ -8214,7 +8214,20 @@ class SkillManager(LoggerMixin):
                 _hn = human_said_note(user_context)
             except Exception:
                 _hn = ""
-            note = "\n".join(x for x in (note, _hn) if x)
+            # J-10 三期（#177/#171）：未兑现承诺块——memory.promises.inject 出厂关；
+            # 开后只列近 max_age_days 内、最多 max_items 条，块头钉「别自相矛盾、不要每轮道歉」。
+            _pn = ""
+            try:
+                _pc = (self._memory_cfg or {}).get("promises") or {}
+                if isinstance(_pc, dict) and _pc.get("inject", False):
+                    from src.utils.memory_promises import promise_note
+                    _pn = promise_note(
+                        user_context,
+                        max_items=int(_pc.get("max_items", 3)),
+                        max_age_days=float(_pc.get("max_age_days", 14)))
+            except Exception:
+                _pn = ""
+            note = "\n".join(x for x in (note, _hn, _pn) if x)
             if note:
                 user_context["_self_state_block"] = note
         except Exception:

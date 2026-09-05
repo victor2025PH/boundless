@@ -90,6 +90,51 @@ def test_record_dedupe_and_status_lifecycle():
     assert promise_note({}) == ""
 
 
+def test_promise_note_windows_and_tone():
+    now = time.time()
+    ctx: dict = {}
+    record_promises(ctx, "明天给你打电话", now=now - 3 * 86400)          # 3 天前 → open
+    record_promises(ctx, "改天拍给你看", now=now - 9 * 86400)            # 9 天前 → overdue，媒体类
+    record_promises(ctx, "下次带你去吃火锅", now=now - 30 * 86400)        # 30 天前 → 超出 14 天窗，不提
+    note = promise_note(ctx, now=now)
+    assert "明天给你打电话" in note and "改天拍给你看" in note and "火锅" not in note
+    assert "说了 9 天还没做" in note and "别自相矛盾" in note and "不要每轮解释或道歉" in note
+    assert "照片/语音类" in note                                          # 有媒体承诺才加这句
+    assert "照片/语音类" not in promise_note({"_promise_log": ctx["_promise_log"][:1]}, now=now)
+    # max_items / max_age_days 可调；全 done → 空
+    assert note.count("你说过") == 2
+    assert promise_note(ctx, now=now, max_items=1).count("你说过") == 1
+    assert "火锅" in promise_note(ctx, now=now, max_age_days=0)          # 0 = 不限
+    for e in ctx["_promise_log"]:
+        mark_promise_done(ctx, e["ts"], e["text"], now=now)
+    assert promise_note(ctx, now=now) == ""
+
+
+def test_inject_self_state_wires_promise_note_behind_flag():
+    """三期接线：memory.promises.inject 出厂关 → 块里没有；开 → 与 human_said / self_state 同一注入口。"""
+    from src.skills.skill_manager import SkillManager
+
+    class _Stub:
+        logger = logging.getLogger("t")
+        _memory_cfg: dict = {}
+        _inject_self_state = SkillManager._inject_self_state
+
+    now = time.time()
+    ctx: dict = {"_human_said_log": [{"ts": now - 60, "fact": "我有个女儿", "author": "human", "quote": "x"}]}
+    record_promises(ctx, "明天给你打电话", now=now - 3600)
+    s = _Stub()
+    s._inject_self_state(ctx)
+    assert "我有个女儿" in ctx["_self_state_block"] and "明天给你打电话" not in ctx["_self_state_block"]
+    s._memory_cfg = {"promises": {"inject": True, "max_items": 3}}
+    s._inject_self_state(ctx)
+    blk = ctx["_self_state_block"]
+    assert "我有个女儿" in blk and "明天给你打电话" in blk and "别自相矛盾" in blk
+    # 承诺已兑现 → 块里退出；其余不受影响
+    mark_promise_done(ctx, ctx[LOG_KEY][0]["ts"], "明天给你打电话")
+    s._inject_self_state(ctx)
+    assert "明天给你打电话" not in ctx["_self_state_block"] and "我有个女儿" in ctx["_self_state_block"]
+
+
 def test_bounded_log():
     ctx: dict = {}
     for i in range(20):

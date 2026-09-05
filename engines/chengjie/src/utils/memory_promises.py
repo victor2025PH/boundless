@@ -285,17 +285,37 @@ def delete_promise(user_context: Optional[Dict[str, Any]], ts: Any, text: str) -
 
 
 def promise_note(user_context: Optional[Dict[str, Any]], *, now: Optional[float] = None,
-                 max_items: int = 3) -> str:
-    """未兑现承诺的 prompt 块（**本期不接线**，留给二期按口吻/频率设计后一行接入）。"""
-    items = [p for p in promise_entries(user_context, now=now) if p["status"] != STATUS_DONE]
+                 max_items: int = 3, max_age_days: float = 14.0) -> str:
+    """未兑现承诺的 prompt 块（三期接线：``memory.promises.inject`` 出厂关，
+    ``skill_manager._inject_self_state`` 一行消费）。
+
+    口吻与频率的三道闸：① 只列 open/overdue，超过 ``max_age_days`` 的老账不再提（别翻旧账）；
+    ② 最多 ``max_items`` 条；③ 块头明说「是既定事实、别自相矛盾；只在对方提起或自然相关时
+    回应，不要每轮解释或道歉」——目的是**一致性**（别装作没说过），不是逼 AI 兑现。
+    媒体类未兑现的另加一句：能真发就发，不能就别再空头承诺（与 media_pending / 承诺守卫同向）。
+    """
+    ts_now = float(now if now is not None else time.time())
+    max_age = max(0.0, float(max_age_days)) * 86400
+    items = [
+        p for p in promise_entries(user_context, now=ts_now)
+        if p["status"] != STATUS_DONE and (max_age <= 0 or (ts_now - float(p["ts"] or 0)) <= max_age)
+    ]
     if not items:
         return ""
     lines = []
+    has_media = False
     for p in items[:max(1, int(max_items))]:
         stamp = time.strftime("%m-%d", time.localtime(p["ts"])) if p["ts"] > 0 else ""
-        lines.append(f"- {stamp + ' ' if stamp else ''}{p['text']}")
-    return ("【你答应过对方但还没兑现的事（只在自然相关时提及，不要每轮找借口）】\n"
-            + "\n".join(lines))
+        age_days = int((ts_now - float(p["ts"] or 0)) // 86400)
+        tail = f"（说了 {age_days} 天还没做）" if p["status"] == STATUS_OVERDUE else ""
+        lines.append(f"- {stamp + ' ' if stamp else ''}你说过「{p['text']}」{tail}")
+        if p.get("promise_kind") == KIND_MEDIA:
+            has_media = True
+    head = ("【你之前答应过对方、还没兑现的事——这是你们之间的既定事实：别装作没说过、"
+            "别自相矛盾；只在对方提起或自然相关时回应，不要每轮解释或道歉】")
+    if has_media:
+        head += "\n（照片/语音类：能真发就发，发不了就别再空头承诺）"
+    return head + "\n" + "\n".join(lines)
 
 
 __all__ = [
