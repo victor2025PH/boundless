@@ -229,6 +229,41 @@ def test_review_queue_ordering_filter_and_summary(store: EpisodicMemoryStore):
     assert store.review_counts()["pending"] == 2
 
 
+# ── B1：时间线人话分组（服务端算，随行给 group）──────────────────────────────
+def test_timeline_group_and_row_field(store: EpisodicMemoryStore):
+    from src.utils.memory_review import timeline_group
+    assert timeline_group("客户有一个女儿") == "family"
+    assert timeline_group("客户结过一次婚") == "family"
+    assert timeline_group("客户说下周来见我") == "event"
+    assert timeline_group("客户最近在住院") == "event"
+    assert timeline_group("用户自称：小明") == "basic"
+    assert timeline_group("客户 25 岁") == "basic"
+    assert timeline_group("客户住在上海") == "basic"
+    assert timeline_group("客户喜欢喝美式咖啡") == "pref"
+    assert timeline_group("I have a daughter") == "family"
+    assert timeline_group("Customer works as a nurse") == "basic"
+    assert timeline_group("客户每周三晚上有空") == "pref"
+    assert timeline_group("嗯嗯") == "other"
+    rid = store.add_fact("k-tl", "客户喜欢喝美式咖啡")
+    row = store.list_rows(prefix="k-tl")[0]
+    assert row["id"] == rid and row["group"] == "pref"
+    assert store.review_queue() == [] or all("group" in i for i in store.review_queue())
+
+
+def test_page_renders_health_card_queue_and_maintenance(auth_client):
+    """B1–B5 模板自证：健康卡 KPI / 例外队列容器 / 维护折叠区 / 隐私行 / 无「向量」列。"""
+    r = auth_client.get("/episodic-memory")
+    assert r.status_code == 200
+    html = r.text
+    for needle in ('id="cs-pending-card"', 'id="cs-remembered"', 'id="cs-dropped"', 'id="cs-used"',
+                   'id="cs-rate-card"', 'id="em-queue"', 'id="em-queue-bd"', 'class="em-privacy"',
+                   'id="em-maint"', "AI 记忆健康", "今日需处理", "不再使用", "谁说的 / 状态"):
+        assert needle in html, needle
+    assert 'id="cs-total"' not in html and "库内 AI 推断累计" not in html   # 旧「记忆校正质量」卡已换
+    assert 'id="cs-confirmed"' not in html
+    assert ">向量</th>" not in html                                          # 「向量」列已删
+
+
 # ── 路由 ───────────────────────────────────────────────────────────────────
 def test_review_routes_end_to_end(tmp_path):
     from starlette.testclient import TestClient

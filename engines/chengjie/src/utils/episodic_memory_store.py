@@ -540,10 +540,17 @@ class EpisodicMemoryStore:
 
     @staticmethod
     def _row_to_dict(r: Tuple[Any, ...]) -> Dict[str, Any]:
+        try:
+            from src.utils.memory_review import timeline_group
+            _grp = timeline_group(str(r[2] or ""))
+        except Exception:  # pragma: no cover - 防御
+            _grp = "other"
         return {
             "id": r[0],
             "memory_key": r[1],
             "content": r[2],
+            # J-10 B1：时间线人话分组（basic / family / pref / event / other，纯展示）
+            "group": _grp,
             "category": r[3],
             "created_at": r[4],
             "has_embedding": bool(r[5]),

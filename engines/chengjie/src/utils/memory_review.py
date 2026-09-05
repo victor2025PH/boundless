@@ -94,6 +94,44 @@ _SELF_FACT_RE = re.compile(
 _CUSTOMER_SUBJECT_RE = re.compile(r"^[\"“「『\s]*(?:用户|客户|对方|他|她|TA|customer|user)\b", re.IGNORECASE)
 
 
+# J-10 B1：客户记忆时间线的人话分组（basic 基本信息 / family 关系与家人 / pref 偏好与习惯 /
+# event 近期事件与约定 / other）。纯展示用，不进任何判定；关系/事件优先于基本信息，
+# 免得「结婚」「搬家」被归到基本信息。
+TIMELINE_GROUPS: Tuple[str, ...] = ("basic", "family", "pref", "event", "other")
+_TL_FAMILY_RE = re.compile(
+    r"女儿|儿子|孩子|小孩|闺女|老公|老婆|丈夫|妻子|前夫|前妻|父母|爸|妈|兄|弟|姐|妹|家人|亲戚|"
+    r"男朋友|女朋友|对象|婚|单身|恋爱|分手|宠物|养了|猫|狗|"
+    r"\b(?:daughter|sons?|kids?|child(?:ren)?|husband|wife|parents?|mother|father|brother|sister|"
+    r"married|divorce|single|boyfriend|girlfriend|pets?|dog|cat)\b", re.IGNORECASE)
+_TL_EVENT_RE = re.compile(
+    r"明天|后天|下周|下个月|周末|这周|月底|约好|约定|见面|承诺|答应|计划|打算|准备|要去|会来|会去|"
+    r"生病|住院|手术|搬家|出差|旅行|旅游|考试|面试|辞职|换工作|买房|买车|转账|还钱|借钱|"
+    r"\b(?:meet|promis|plan|next\s+week|tomorrow|weekend|trip|travel|hospital|surgery|moving|exam|interview)",
+    re.IGNORECASE)
+_TL_BASIC_RE = re.compile(
+    r"自称|叫我|名字|昵称|称呼|岁|年龄|生日|出生|住在|居住|来自|老家|家在|城市|职业|工作|上班|"
+    r"是.{0,4}(?:护士|老师|医生|工程师|司机|老板|学生|设计师)|学历|大学|身高|体重|星座|属相|电话|手机|微信|地址|"
+    r"\b(?:name|call\s+me|age|years?\s+old|birthday|born|lives?\s+in|from|city|works?|job|occupation|"
+    r"student|teacher|nurse|doctor|engineer|address|phone)\b", re.IGNORECASE)
+_TL_PREF_RE = re.compile(
+    r"喜欢|喜爱|爱吃|爱喝|爱看|爱听|讨厌|受不了|习惯|经常|总是|每天|每周|偏好|口味|爱好|兴趣|最爱|想吃|想去|"
+    r"\b(?:likes?|loves?|hates?|prefers?|usually|always|every\s+(?:day|week)|favou?rite|hobby|interest|enjoys?)\b",
+    re.IGNORECASE)
+
+
+def timeline_group(content: str) -> str:
+    t = str(content or "")
+    if _TL_FAMILY_RE.search(t):
+        return "family"
+    if _TL_EVENT_RE.search(t):
+        return "event"
+    if _TL_BASIC_RE.search(t):
+        return "basic"
+    if _TL_PREF_RE.search(t):
+        return "pref"
+    return "other"
+
+
 def is_high_impact(content: str) -> bool:
     return bool(_HIGH_IMPACT_RE.search(str(content or "")))
 
@@ -164,6 +202,7 @@ __all__ = [
     "REVIEW_CONFLICT", "REVIEW_HIGH_IMPACT", "REVIEW_LOW_CONFIDENCE",
     "REVIEW_SELF_FACT", "REVIEW_COMMITMENT", "REVIEW_REASONS",
     "IMPACT_HIGH", "IMPACT_NORMAL", "STATUS_ACTIVE", "STATUS_IGNORED", "STATUSES",
-    "DEFAULT_LOW_CONFIDENCE_THRESHOLD",
+    "DEFAULT_LOW_CONFIDENCE_THRESHOLD", "TIMELINE_GROUPS",
     "is_high_impact", "is_commitment", "is_hedged", "is_self_fact", "classify_fact",
+    "timeline_group",
 ]

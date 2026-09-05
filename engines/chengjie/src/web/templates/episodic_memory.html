@@ -32,6 +32,18 @@
 .badge-tier{display:inline-block;padding:.1rem .35rem;border-radius:4px;font-size:.6rem;font-weight:700;margin-left:.25rem;text-transform:uppercase}
 .badge-tier.stable{background:color-mix(in srgb, var(--p,#1e8cf2) 15%, transparent);color:var(--p)}
 .badge-tier.stale{background:var(--input);color:var(--t3);text-decoration:line-through}
+/* J-10 B4：色点语义——客户说的＝绿 / AI 推断＝琥珀 / 需要你看＝红 / 已过时＝灰 */
+.badge-src::before,.badge-review::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:.3rem;vertical-align:middle;background:currentColor}
+.badge-review{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600;margin-left:.25rem;background:color-mix(in srgb, var(--tk-danger-ink,#dc2626) 12%, transparent);color:var(--tk-danger-ink,#dc2626)}
+.badge-review.hi{outline:1px solid color-mix(in srgb, var(--tk-danger-ink,#dc2626) 40%, transparent)}
+.badge-ignored{display:inline-block;padding:.1rem .4rem;border-radius:4px;font-size:.65rem;font-weight:600;margin-left:.25rem;background:var(--input);color:var(--t3)}
+.btn-more{background:none;border:none;color:var(--t3);cursor:pointer;font-size:.9rem;font-weight:700;padding:.1rem .4rem;border-radius:6px;line-height:1}
+.btn-more:hover{background:var(--input);color:var(--t1)}
+.em-maint{margin-top:1rem;border:1px dashed var(--bd);border-radius:10px;padding:.2rem .8rem .6rem;color:var(--t3);font-size:.78rem}
+.em-maint summary{cursor:pointer;padding:.4rem 0;font-weight:600;color:var(--t2)}
+.em-maint-bar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.4rem}
+.em-privacy{font-size:.72rem;color:var(--t3);margin:.8rem 0 0;display:flex;gap:.4rem;align-items:flex-start}
+.em-privacy svg{width:14px;height:14px;flex:none;margin-top:.1rem;opacity:.7}
 .mono{font-family:Consolas,monospace;font-size:.76rem;word-break:break-all}
 .btn-del{background:none;border:none;color:var(--red);cursor:pointer;font-size:.78rem;font-weight:600;padding:.2rem .4rem;border-radius:6px}
 .btn-del:hover{background:var(--rs)}
@@ -124,14 +136,29 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
     {{ (i18n or {}).get('em_s002', "记忆校正质量") }}
     <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('em_s003', "坐席把 AI 推断确认为事实的采纳情况（近") }} <span id="cs-win">30</span> {{ (i18n or {}).get('db_js_012', "天）") }}</span>
   </h2>
+  {# J-10 B5：「AI 记忆健康」KPI——今日需处理 / AI 已记住 / 未记录（护栏丢弃）/ 被用轮数 / 抽检准确率；
+     数据全部来自 A 组新增字段（/summary 的 review / grounding_drops / recall + /correction-stats） #}
   <div class="cs-grid" id="cs-grid">
-    <div class="cs-stat"><div class="num" id="cs-confirmed">—</div><div class="lb">{{ (i18n or {}).get('em_s004', "已采纳（确认数）") }}</div></div>
-    <div class="cs-stat" id="cs-pending-card" style="cursor:pointer" title="{{ (i18n or {}).get('em_id_pending_tip', '点击查看全部待确认推断') }}" onclick="emShowPending()"><div class="num" id="cs-pending">—</div><div class="lb">{{ (i18n or {}).get('em_s005', "待确认推断") }} ↓</div></div>
-    <div class="cs-stat"><div class="num" id="cs-rate">—</div><div class="lb">{{ (i18n or {}).get('em_s006', "采纳率（近似）") }}</div></div>
-    <div class="cs-stat"><div class="num" id="cs-total">—</div><div class="lb">{{ (i18n or {}).get('em_s007', "库内 AI 推断累计") }}</div></div>
+    <div class="cs-stat" id="cs-pending-card" style="cursor:pointer" title="{{ (i18n or {}).get('em_id_pending_tip', '点击查看需要你看一眼的记忆') }}" onclick="emToggleQueue()"><div class="num" id="cs-pending">—</div><div class="lb">{{ (i18n or {}).get('em_review_title', "今日需处理") }} ↓</div></div>
+    <div class="cs-stat"><div class="num" id="cs-remembered">—</div><div class="lb" id="cs-remembered-lb">{{ (i18n or {}).get('em_s008', "AI 记得的事") }}</div></div>
+    <div class="cs-stat" id="cs-dropped-card" style="cursor:help"><div class="num" id="cs-dropped">—</div><div class="lb" id="cs-dropped-lb">{{ (i18n or {}).get('em_kpi_dropped', "有 {n} 条因无法核对原话未记录").replace('{n}', '—') }}</div></div>
+    <div class="cs-stat"><div class="num" id="cs-used">—</div><div class="lb" id="cs-used-lb">{{ (i18n or {}).get('em_kpi_used', "近 {d} 天回复时用上 {n} 轮").replace('{d}', '7').replace('{n}', '—') }}</div></div>
+    <div class="cs-stat" id="cs-rate-card" style="cursor:help"><div class="num" id="cs-rate">—</div><div class="lb">{{ (i18n or {}).get('em_s006', "抽检准确率") }}</div></div>
   </div>
+  <div id="cs-funnel" style="font-size:.74rem;color:var(--t3);margin:-.3rem 0 .4rem"></div>
   <div id="cs-actors" style="font-size:.78rem;color:var(--t2)"></div>
   <div id="cs-trend" style="margin-top:.6rem"></div>
+  {# J-10 B2：例外队列——每张卡说明「为什么需要你看」，动作按类型，处理完自动刷新 #}
+  <div id="em-queue" hidden style="margin-top:.8rem;border-top:1px solid var(--bd);padding-top:.6rem">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.4rem">
+      <strong id="em-queue-title" style="font-size:.86rem"></strong>
+      <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('em_review_target', "目标：日均少于 5 件——超过说明自动规则要调") }}</span>
+      <span style="flex:1"></span>
+      <button type="button" class="em-btn-plain" id="em-queue-all" style="font-size:.72rem;padding:.25rem .55rem;display:none" onclick="_emQueueLoad(200)">{{ (i18n or {}).get('em_review_open_all', "查看全部") }}</button>
+      <button type="button" class="em-btn-plain" style="font-size:.72rem;padding:.25rem .55rem" onclick="emToggleQueue()">{{ (i18n or {}).get('em_review_collapse', "收起") }}</button>
+    </div>
+    <div id="em-queue-bd"></div>
+  </div>
 </div>
 
 <div class="card fa">
@@ -158,31 +185,37 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
       <input type="number" id="em-limit" value="80" min="1" max="500" class="f-input">
     </div>
     <button type="button" class="btn btn-p" onclick="emLoad()">{{ (i18n or {}).get('db_s027', "加载") }}</button>
-    {% if user_role in ('master', 'admin') %}
-    <button type="button" class="btn" id="em-backfill-btn" onclick="emBackfill()" title="{{ (i18n or {}).get('em_s015', '为无向量条目调用 embedding 补全') }}">{{ (i18n or {}).get('em_s016', "补全向量") }}</button>
-    <button type="button" class="btn" id="em-bulkdel-btn" onclick="emBulkDelete()" title="{{ (i18n or {}).get('em_bulk_title', '按内容关键词批量删除记忆：先预览数量、确认后删除，全程计入审计') }}" style="color:var(--tk-danger-ink,#dc2626)">{{ (i18n or {}).get('em_bulk_btn', '🧹 按关键词批量删除') }}</button>
-    {% endif %}
   </div>
   <p id="em-status" style="font-size:.8rem;color:var(--t2);margin-bottom:.6rem"></p>
-  {# memory-mgmt semantics line (#41 0830): answers what confirm/edit/delete
-     actually mean and whether unconfirmed rows count as memory (agents had
-     to guess before - skuio asked four questions in a row). #}
-  <p style="font-size:.74rem;color:var(--t3);margin:-.3rem 0 .6rem">{{ (i18n or {}).get('em_semantics_hint', "列表中所有条目都会参与 AI 记忆召回；「确认属实」＝人工核实（推断转正入稳定层），「编辑」＝改正后保存（视为人工核实），「删除」＝立即移出、不再参与回复。") }}</p>
+  {# memory-mgmt semantics line (#41 0830 → J-10 B3 人话化): what confirm / edit /
+     stop-using mean, and that only exceptions are queued for a human. #}
+  <p style="font-size:.74rem;color:var(--t3);margin:-.3rem 0 .6rem">{{ (i18n or {}).get('em_semantics_hint', "客户说过的事会自动记住并参与 AI 回复；只有「需要你看一眼」的例外才请你处理。「确认属实」＝人工核实；「编辑」＝改正后保存；「不再使用」＝AI 不再提这件事（可恢复）；彻底删除在「更多」里。") }}</p>
   <div class="table-wrap">
     <table class="em-table" id="em-table">
       <thead>
         <tr>
-          <th style="min-width:210px">{{ (i18n or {}).get('em_id_user', "用户") }}</th>
+          <th style="min-width:210px">{{ (i18n or {}).get('em_id_user', "客户") }}</th>
           <th>{{ (i18n or {}).get('em_s017', "内容") }}</th>
-          <th style="width:130px">{{ (i18n or {}).get('em_s018', "来源/层级") }}</th>
-          <th style="width:90px">{{ (i18n or {}).get('em_s019', "向量") }}</th>
+          <th style="width:150px">{{ (i18n or {}).get('em_s018', "谁说的 / 状态") }}</th>
           <th style="width:160px">{{ (i18n or {}).get('time', "时间") }}</th>
-          <th style="width:120px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
+          <th style="width:150px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
         </tr>
       </thead>
-      <tbody id="em-body"><tr><td colspan="6" style="padding:2rem;color:var(--t3)">{{ (i18n or {}).get('dash.q.clicked', "点击") }}「{{ (i18n or {}).get('em_s020', "加载」") }}</td></tr></tbody>
+      <tbody id="em-body"><tr><td colspan="5" style="padding:2rem;color:var(--t3)">{{ (i18n or {}).get('dash.loading', "加载中…") }}</td></tr></tbody>
     </table>
   </div>
+  {# J-10 B3：运维工具收进页尾「维护」折叠区（补全向量 / 清理 / 演示打码 / 批量删除 / 恢复已不再使用），日常视图不出现 #}
+  {% if user_role in ('master', 'admin') %}
+  <details class="em-maint" id="em-maint">
+    <summary title="{{ (i18n or {}).get('em_maint_tip', '运维工具，日常用不到') }}">🛠 {{ (i18n or {}).get('em_maint_title', "维护") }}</summary>
+    <div class="em-maint-bar" id="em-maint-bar">
+      <button type="button" class="btn" id="em-ignored-btn" onclick="emToggleIgnoredView()" title="{{ (i18n or {}).get('em_ignore_tip', '') }}">{{ (i18n or {}).get('em_ignored_load', "查看已不再使用") }}</button>
+      <button type="button" class="btn" id="em-backfill-btn" onclick="emBackfill()" title="{{ (i18n or {}).get('em_s015', '为无向量条目调用 embedding 补全') }}">{{ (i18n or {}).get('em_s016', "补全向量") }}</button>
+      <button type="button" class="btn" id="em-bulkdel-btn" onclick="emBulkDelete()" title="{{ (i18n or {}).get('em_bulk_title', '按内容关键词批量删除记忆：先预览数量、确认后删除，全程计入审计') }}" style="color:var(--tk-danger-ink,#dc2626)">{{ (i18n or {}).get('em_bulk_btn', '🧹 按关键词批量删除') }}</button>
+    </div>
+  </details>
+  {% endif %}
+  <p class="em-privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg><span>{{ (i18n or {}).get('em_privacy_line', "记忆只保存在你自己的系统数据库，不经第三方；金钱 / 见面 / 地址 / 健康 / 证件类默认需你确认；随时可编辑、不再使用或彻底删除。") }}</span></p>
 </div>
 
 <script>
@@ -345,7 +378,14 @@ function _emRowHtml(it) {
   var tsCell = ago
     ? '<span title="' + _emEsc(ago.abs) + '" style="cursor:help;color:var(--t2);font-size:.76rem">' + _emEsc(ago.rel) + '</span>'
     : '—';
-  var emb = it.has_embedding ? '<span class="badge-emb on">'+window.T('em_js002')+'</span>' : '<span class="badge-emb off">'+window.T('em_js003')+'</span>';
+  var badges = _emStateBadges(it);
+  var hits = (it.hits && it.hits > 1) ? ' <span style="color:var(--t3);font-size:.65rem">×' + it.hits + '</span>' : '';
+  var used = _emUsedNote(it);
+  var op = emCanDelete ? _emActions(it, _emRowName(it)) : '<span style="color:var(--t3);font-size:.75rem">—</span>';
+  return '<tr data-id="' + it.id + '"><td>' + _emUserCell(it) + '</td><td>' + _emEsc(it.content || '') + used + '</td><td>' + badges + hits + '</td><td>' + tsCell + '</td><td>' + op + '</td></tr>';
+}
+/* J-10 B3/B4：状态徽标（客户说的/AI 推断的 · 已确认/已过时 · 需要你看 · 已不再使用）——列表与抽屉共用 */
+function _emStateBadges(it) {
   var srcOn = it.source === 'ai_inferred';
   /* memory-mgmt provenance (#41): hover the source badge to see which
      original message the fact was extracted from (old rows: honest N/A). */
@@ -356,26 +396,40 @@ function _emRowHtml(it) {
   var tier = '';
   if (it.tier === 'stable') tier = '<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
   else if (it.tier === 'stale') tier = '<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
-  var hits = (it.hits && it.hits > 1) ? ' <span style="color:var(--t3);font-size:.65rem">×' + it.hits + '</span>' : '';
-  var cat = (it.category && it.category !== 'general')
-    ? '<span class="em-cat">'+_emEsc(it.category)+'</span>' : '';
-  var op;
-  if (emCanDelete) {
-    var okBtn = srcOn
-      ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emConfirm(this)" title="'+_emEsc(window.T('em_id_confirm_tip'))+'">'+window.T('em_id_confirm')+'</button>'
-      : '';
-    /* memory-mgmt edit (#41): wrong memories go from delete-only to
-       fix-and-keep. Feature probe: rows carrying source_quote = new backend
-       loaded (PUT route exists); during the hot-template/old-backend window
-       the button stays hidden so nobody clicks into a 404. */
-    var canEdit = Object.prototype.hasOwnProperty.call(it || {}, 'source_quote');
-    op = okBtn
-      + (canEdit ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emEdit(this)" title="'+_emEsc(window.T('em_edit_tip'))+'">'+window.T('em_edit')+'</button>' : '')
-      + '<button type="button" class="btn-del" data-id="'+it.id+'" data-name="'+_emEsc(_emRowName(it))+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
-  } else {
-    op = '<span style="color:var(--t3);font-size:.75rem">—</span>';
+  var rv = '';
+  if (it.review_reason) {
+    var rl = window.T('em_review_reason_' + it.review_reason) || String(it.review_reason);
+    rv = '<span class="badge-review' + (it.impact === 'high' ? ' hi' : '') + '" style="cursor:help" title="' + _emEsc(rl) + '">' + _emEsc(window.T('em_review_badge')) + '</span>';
   }
-  return '<tr data-id="' + it.id + '"><td>' + _emUserCell(it) + '</td><td>' + cat + _emEsc(it.content || '') + '</td><td>' + src + tier + hits + '</td><td>' + emb + '</td><td>' + tsCell + '</td><td>' + op + '</td></tr>';
+  var ig = (it.status === 'ignored') ? '<span class="badge-ignored">' + _emEsc(window.T('em_ignore')) + '</span>' : '';
+  return src + tier + rv + ig;
+}
+/* J-10 A3 使用侧：被用次数 / 上次用在（rows 带 recall_count / last_recalled_ts 时才显示） */
+function _emUsedNote(it) {
+  if (!it || typeof it.recall_count === 'undefined') return '';
+  var n = parseInt(it.recall_count || 0, 10) || 0;
+  var t = '';
+  if (n > 0 && it.last_recalled_ts) { var ago = _emAgo(it.last_recalled_ts); t = window.Tf('em_tl_last_used', {t: ago.rel}); }
+  var s = n > 0 ? (window.Tf('em_tl_used', {n: n}) + (t ? ' · ' + t : '')) : window.T('em_tl_never_used');
+  return '<div style="font-size:.66rem;color:var(--t3);margin-top:.15rem">' + _emEsc(s) + '</div>';
+}
+/* J-10 B3：动作列——确认属实（需要你看 / AI 推断）· 编辑 · 不再使用（软删默认）· ⋯ 彻底删除；已不再使用的行给「恢复」 */
+function _emActions(it, personName) {
+  var canEdit = Object.prototype.hasOwnProperty.call(it || {}, 'source_quote');
+  var soft = Object.prototype.hasOwnProperty.call(it || {}, 'status');   // 新后端才有软删
+  if (it.status === 'ignored') {
+    return '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emRestore(this)">'+_emEsc(window.T('em_restore'))+'</button>'
+      + '<button type="button" class="btn-more" data-id="'+it.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)" title="'+_emEsc(window.T('em_hard_delete'))+'">⋯</button>';
+  }
+  var okBtn = (it.source === 'ai_inferred' || it.review_reason)
+    ? '<button type="button" class="btn-ok" data-id="'+it.id+'" onclick="emConfirm(this)" title="'+_emEsc(window.T('em_id_confirm_tip'))+'">'+window.T('em_id_confirm')+'</button>'
+    : '';
+  var editBtn = canEdit ? '<button type="button" class="btn-ok" data-id="'+it.id+'" data-content="'+_emEsc(it.content||'')+'" onclick="emEdit(this)" title="'+_emEsc(window.T('em_edit_tip'))+'">'+window.T('em_edit')+'</button>' : '';
+  var delBtn = soft
+    ? '<button type="button" class="btn-del" data-id="'+it.id+'" data-content="'+_emEsc(it.content||'')+'" onclick="emIgnore(this)" title="'+_emEsc(window.T('em_ignore_tip'))+'">'+_emEsc(window.T('em_ignore'))+'</button>'
+      + '<button type="button" class="btn-more" data-id="'+it.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)" title="'+_emEsc(window.T('em_more')+' · '+window.T('em_hard_delete'))+'">⋯</button>'
+    : '<button type="button" class="btn-del" data-id="'+it.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
+  return okBtn + editBtn + delBtn;
 }
 function _emMoreSync(state) {
   // state: 'more'=可续载 | 'end'=点过且到底 | 'none'=无需分页
@@ -506,12 +560,15 @@ function _emSumRender(){
       if(chip)emOpenProfile(chip.getAttribute('data-emsum-key')||'');
     });
   }
-  var line=window.Tf('em_id_sum_line',{d:d.window_days||7,n:d.new_count||0,u:d.new_users||0});
+  // J-10 B5：KPI 数字已在上方「AI 记忆健康」卡，这里只留「记忆最丰富」客户快捷入口
+  var hasHealth=!!document.getElementById('cs-remembered');
+  var line=hasHealth?'':window.Tf('em_id_sum_line',{d:d.window_days||7,n:d.new_count||0,u:d.new_users||0});
   var tops=(d.top||[]).map(function(t){
     var nm=_emRowName({identity:t.identity,memory_key:t.memory_key});
     return '<span class="em-card-badge" data-emsum-key="'+_emEsc(t.memory_key||'')+'" title="'+_emEsc(window.T('em_id_filter_tip'))+'">'+_emEsc(nm)+' · '+(t.count||0)+'</span>';
   }).join('');
-  el.innerHTML='<span>'+_emEsc(line)+'</span>'
+  if(!line&&!tops){el.innerHTML='';return;}
+  el.innerHTML=(line?'<span>'+_emEsc(line)+'</span>':'')
     +(tops?'<span style="color:var(--t3)">'+_emEsc(window.T('em_id_sum_top'))+':</span>'+tops:'');
 }
 function _emEmptyHtml(){
@@ -568,7 +625,7 @@ function _emRenderTable(){
   var body=document.getElementById('em-body'); if(!body)return;
   var rows=_emSortRows(_emItems.filter(_emRowPass));
   if(!rows.length){
-    body.innerHTML='<tr><td colspan="6">'+_emEmptyHtml()+'</td></tr>';
+    body.innerHTML='<tr><td colspan="5">'+_emEmptyHtml()+'</td></tr>';
     return;
   }
   body.innerHTML=rows.map(_emRowHtml).join('');
@@ -584,7 +641,9 @@ function _emBuildGroups(){
     g.rows.push(it);
     if(it.identity&&(!g.idn||(!g.idn.resolved&&it.identity.resolved)))g.idn=it.identity;
     var ca=String(it.created_at||''); if(ca>g.latest)g.latest=ca;
-    if(it.source==='ai_inferred')g.pending++;
+    // J-10 B1：卡片红点＝需要你看一眼（review_reason）；旧后端无该字段 → 回退 AI 推断计数
+    if(Object.prototype.hasOwnProperty.call(it,'review_reason')){if(it.review_reason)g.pending++;}
+    else if(it.source==='ai_inferred')g.pending++;
     var c=String(it.category||'general'); g.cats[c]=(g.cats[c]||0)+1;
   }
   var arr=Array.from(map.values());
@@ -603,7 +662,8 @@ function _emCardHtml(g){
   }
   if(_emMaskOn)sub=(g.idn&&g.idn.resolved&&g.idn.kind==='group')?window.T('em_id_group'):'';
   var ago=g.latest?_emAgo(g.latest):null;
-  var cats=Object.keys(g.cats).filter(function(c){return c!=='general';}).slice(0,3)
+  // J-10 B3：heuristic / llm / general 是研发分类名，不给用户看
+  var cats=Object.keys(g.cats).filter(function(c){return c!=='general'&&c!=='heuristic'&&c!=='llm';}).slice(0,3)
     .map(function(c){return '<span class="em-cat">'+_emEsc(c)+'</span>';}).join('');
   var prev=g.rows.length?String(g.rows[0].content||''):'';
   return '<div class="em-card" data-key="'+_emEsc(g.key)+'" title="'+_emEsc(window.T('em_id_filter_tip'))+'">'
@@ -613,7 +673,7 @@ function _emCardHtml(g){
     +'<span class="em-card-badge">'+_emEsc(window.Tf('em_id_person_n',{n:g.rows.length}))+'</span></div>'
     +(prev?'<div class="em-card-prev">'+_emEsc(prev)+'</div>':'')
     +'<div class="em-card-meta">'
-    +(g.pending?'<span class="em-card-badge warn">'+_emEsc(window.Tf('em_id_pending_n',{n:g.pending}))+'</span>':'')
+    +(g.pending?'<span class="badge-review">'+_emEsc(window.Tf('em_id_pending_n',{n:g.pending}))+'</span>':'')
     +cats+(ago?'<span title="'+_emEsc(ago.abs)+'">'+_emEsc(ago.rel)+'</span>':'')
     +'</div></div>';
 }
@@ -637,7 +697,7 @@ function _emSkeletonShow(){
     var body=document.getElementById('em-body');
     if(body)body.innerHTML=new Array(7).join(
       '<tr><td><div class="em-skel" style="width:80%"></div></td><td><div class="em-skel"></div></td>'
-      +'<td><div class="em-skel" style="width:70%"></div></td><td><div class="em-skel" style="width:50%"></div></td>'
+      +'<td><div class="em-skel" style="width:70%"></div></td>'
       +'<td><div class="em-skel" style="width:60%"></div></td><td><div class="em-skel" style="width:40%"></div></td></tr>');
   }
 }
@@ -690,6 +750,11 @@ function _emFindItem(id){
   return null;
 }
 /* ── 人档抽屉：一个客户的全部记忆（prefix 精确查询 + 客户端全等过滤）── */
+/* J-10 B1：时间线人话分组——服务端 memory_review.timeline_group 随行给 group（basic/family/pref/event/other）；旧后端无该字段 → other */
+function _emTimelineGroup(r){
+  var g=(r&&r.group)?String(r.group):'other';
+  return ['basic','family','pref','event','other'].indexOf(g)>=0?g:'other';
+}
 /* J-10 A3：最近几轮 AI 真正用到的记忆（按批次，最新在前）。旧后端无该接口 → 分区保持隐藏。 */
 async function _emDrvLoadUsed(key){
   var sec=document.getElementById('em-drv-used'); var bd=document.getElementById('em-drv-used-bd');
@@ -803,25 +868,12 @@ function _emDrvErr(e){
   var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
 }
 function _emDrvRowHtml(r,personName){
-  var srcOn=r.source==='ai_inferred';
-  var srcTipD=_emSrcQuoteTip(r);
-  var chips=srcOn
-    ?'<span class="badge-src inferred" style="cursor:help" title="'+_emEsc(srcTipD)+'">AI '+window.T('em_s013')+'</span>'
-    :'<span class="badge-src stated" style="cursor:help" title="'+_emEsc(srcTipD)+'">'+window.T('em_s012')+'</span>';
-  var tier='';
-  if(r.tier==='stable')tier='<span class="badge-tier stable">'+window.T('em_js004')+'</span>';
-  else if(r.tier==='stale')tier='<span class="badge-tier stale">'+window.T('em_js005')+'</span>';
   var ago=r.created_at?_emAgo(r.created_at):null;
   var t=ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'';
-  var acts='';
-  if(emCanDelete){
-    var canEditD=Object.prototype.hasOwnProperty.call(r||{},'source_quote');
-    acts=(srcOn?'<button type="button" class="btn-ok" data-id="'+r.id+'" onclick="emConfirm(this)">'+window.T('em_id_confirm')+'</button>':'')
-      +(canEditD?'<button type="button" class="btn-ok" data-id="'+r.id+'" data-content="'+_emEsc(r.content||'')+'" onclick="emEdit(this)" title="'+_emEsc(window.T('em_edit_tip'))+'">'+window.T('em_edit')+'</button>':'')
-      +'<button type="button" class="btn-del" data-id="'+r.id+'" data-name="'+_emEsc(personName||'')+'" onclick="emDel(this)">'+window.T('delete')+'</button>';
-  }
-  return '<div class="em-drv-row"><div class="c">'+_emEsc(r.content||'')+'</div>'
-    +'<div class="m">'+chips+tier+t+'<span class="sp"></span>'+acts+'</div></div>';
+  var acts=emCanDelete?_emActions(r,personName):'';
+  var quote=(r.source_quote)?'<div style="font-size:.68rem;color:var(--t3);margin-top:.15rem" title="'+_emEsc(window.T('em_src_quote_tip').replace('{q}',''))+'">「'+_emEsc(String(r.source_quote).slice(0,80))+'」</div>':'';
+  return '<div class="em-drv-row"><div class="c">'+_emEsc(r.content||'')+quote+_emUsedNote(r)+'</div>'
+    +'<div class="m">'+_emStateBadges(r)+t+'<span class="sp"></span>'+acts+'</div></div>';
 }
 function _emDrvRender(){
   var els=_emDrvEls(); var key=_emDrvKey; var rows=_emDrvRows;
@@ -839,23 +891,32 @@ function _emDrvRender(){
     else sub=(idn.username?'@'+idn.username:'')||idn.phone||'';
   }
   if(_emMaskOn)sub=(idn&&idn.resolved&&idn.kind==='group')?window.T('em_id_group'):'';
-  var pend=rows.filter(function(r){return r.source==='ai_inferred';});
+  // J-10 B2：「需要你看一眼」＝进了例外队列的（review_reason 非空）；旧后端无该字段 → 回退 AI 推断
+  var hasReview=rows.some(function(r){return Object.prototype.hasOwnProperty.call(r||{},'review_reason');});
+  var pend=rows.filter(function(r){return hasReview?!!r.review_reason:(r.source==='ai_inferred');});
   var stats=window.Tf('em_id_person_n',{n:rows.length})
     +(pend.length?' · '+window.Tf('em_id_pending_n',{n:pend.length}):'');
   var ds=rows.map(function(r){return String(r.created_at||'');}).filter(Boolean).sort();
   var span=ds.length?window.Tf('em_id_drawer_span',{a:(window.wsFmtDate(ds[0])||ds[0]),b:(window.wsFmtDate(ds[ds.length-1])||ds[ds.length-1])}):'';
   var convA=(!_emMaskOn&&idn&&idn.resolved&&idn.conversation_id)
     ?'<a class="btn" style="font-size:.72rem;padding:.3rem .6rem;text-decoration:none" href="/workspace?conv='+encodeURIComponent(idn.conversation_id)+'" target="_blank" rel="noopener" data-winname="workspace" onclick="return __openUnique(event,this)">'+_emEsc(window.T('em_id_open_conv'))+' ↗</a>':'';
-  var batchB=(emCanDelete&&pend.length)
-    ?'<button type="button" class="btn" id="em-drv-batch" style="font-size:.72rem;padding:.3rem .6rem;color:var(--green)">'+_emEsc(window.T('em_id_batch_ok'))+' ('+pend.length+')</button>':'';
+  // J-10 B2：批量只对同类型——每个 review 原因一个按钮（冲突不批量：要人选）
+  var byReason={};
+  pend.forEach(function(r){var k=hasReview?String(r.review_reason||''):'low_confidence'; if(k==='conflict')return; (byReason[k]=byReason[k]||[]).push(r);});
+  var batchB=emCanDelete?Object.keys(byReason).filter(function(k){return byReason[k].length>=2;}).map(function(k){
+    var rl=window.T('em_review_reason_'+k)||k;
+    return '<button type="button" class="btn em-drv-batch" data-reason="'+_emEsc(k)+'" style="font-size:.72rem;padding:.3rem .6rem;color:var(--green)">'+_emEsc(window.Tf('em_review_batch_same',{r:rl,n:byReason[k].length}))+'</button>';
+  }).join(''):'';
   var copyB=_emMaskOn?'':'<button type="button" class="em-btn-plain" id="em-drv-copy" style="font-size:.72rem;padding:.3rem .6rem">'+_emEsc(window.T('em_id_copy_tip'))+'</button>';
+  // J-10 B1：记忆时间线按人话分组（基本信息 / 关系与家人 / 偏好与习惯 / 近期事件与约定 / 其他），
+  // 不再露 heuristic/llm 这类研发分类名；组内按时间倒序
   var byCat={};
-  rows.forEach(function(r){
-    var c=(r.category&&r.category!=='general')?String(r.category):window.T('em_id_uncat');
+  rows.slice().sort(function(a,b){return (b.created_at||0)-(a.created_at||0);}).forEach(function(r){
+    var c=_emTimelineGroup(r);
     (byCat[c]=byCat[c]||[]).push(r);
   });
-  var secs=Object.keys(byCat).map(function(c){
-    return '<div class="em-drv-sec"><h4>'+_emEsc(c)+' · '+byCat[c].length+'</h4>'
+  var secs=['basic','family','pref','event','other'].filter(function(c){return byCat[c];}).map(function(c){
+    return '<div class="em-drv-sec"><h4>'+_emEsc(window.T('em_tl_'+c))+' · '+byCat[c].length+'</h4>'
       +byCat[c].map(function(r){return _emDrvRowHtml(r,name);}).join('')+'</div>';
   }).join('');
   if(!rows.length)secs=_emEmptyHtml();
@@ -877,19 +938,22 @@ function _emDrvRender(){
   _emDrvLoadSelf(key,convIdForSelf);
   var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
   var cp=document.getElementById('em-drv-copy'); if(cp)cp.addEventListener('click',function(){_emCopyText(key,cp);});
-  var bb=document.getElementById('em-drv-batch');
-  if(bb)bb.addEventListener('click',function(){
-    _emModal({
-      title:window.T('em_id_batch_ok'),
-      body:'<div>'+_emEsc(window.Tf('em_id_batch_ok_body',{n:pend.length}))+'</div>',
-      ok:window.T('confirm'),
-      onOk:async function(prog){
-        for(var k2=0;k2<pend.length;k2++){
-          try{await apiFetch('/api/episodic-memory/'+pend[k2].id+'/confirm',{method:'POST'},{timeoutMs:60000});}catch(e){}
-          if(prog)prog(k2+1,pend.length);
+  Array.prototype.forEach.call(els.pn.querySelectorAll('.em-drv-batch'),function(bb){
+    bb.addEventListener('click',function(){
+      var group=byReason[bb.getAttribute('data-reason')]||[];
+      if(!group.length)return;
+      _emModal({
+        title:window.T('em_id_batch_ok'),
+        body:'<div>'+_emEsc(window.Tf('em_id_batch_ok_body',{n:group.length}))+'</div>',
+        ok:window.T('confirm'),
+        onOk:async function(prog){
+          for(var k2=0;k2<group.length;k2++){
+            try{await apiFetch('/api/episodic-memory/'+group[k2].id+'/confirm',{method:'POST'},{timeoutMs:60000});}catch(e){}
+            if(prog)prog(k2+1,group.length);
+          }
+          emLoad(); csLoad(); _emDrvReload(); if(typeof _emQueueLoad==='function')_emQueueLoad();
         }
-        emLoad(); csLoad(); _emDrvReload();
-      }
+      });
     });
   });
 }
@@ -985,28 +1049,63 @@ function _emInjectControls(){
     if(a3&&a3.parentNode===bar){a3.insertAdjacentElement('afterend',g4);}
     else{bar.appendChild(g4);}
   }
-  if(!document.getElementById('em-mask-btn')){
+  // J-10 B3：演示打码 / 清理孤儿键 / 清理已过时 都是运维件 → 进页尾「维护」区（viewer 无维护区则不注入）
+  var mbar=document.getElementById('em-maint-bar');
+  if(mbar&&!document.getElementById('em-mask-btn')){
     var mb=document.createElement('button');
     mb.type='button'; mb.id='em-mask-btn'; mb.className='em-mask-btn';
     mb.textContent=window.T('em_id_mask');
     mb.title=window.T('em_id_mask_tip');
     mb.addEventListener('click',emToggleMask);
-    bar.appendChild(mb);
+    mbar.appendChild(mb);
   }
-  if(emCanDelete&&!document.getElementById('em-cleanup-btn')){
+  if(mbar&&emCanDelete&&!document.getElementById('em-cleanup-btn')){
     var cb=document.createElement('button');
     cb.type='button'; cb.id='em-cleanup-btn'; cb.className='em-btn-danger'; cb.style.display='none';
     cb.addEventListener('click',emCleanupUnresolved);
-    bar.appendChild(cb);
+    mbar.appendChild(cb);
   }
-  if(emCanDelete&&!document.getElementById('em-stale-btn')){
+  if(mbar&&emCanDelete&&!document.getElementById('em-stale-btn')){
     var sb=document.createElement('button');
     sb.type='button'; sb.id='em-stale-btn'; sb.className='em-btn-danger'; sb.style.display='none';
     sb.addEventListener('click',emCleanupStale);
-    bar.appendChild(sb);
+    mbar.appendChild(sb);
   }
   _emSegSync();
   _emMaskSync();
+}
+/* J-10 B3：软删默认——「不再使用」（POST /ignore，可恢复）；「恢复」；维护区切换「已不再使用」视图 */
+var _emStatusF='';   // ''=active（默认） | 'ignored'
+function emIgnore(btn){
+  var id=(btn&&btn.dataset)?(btn.dataset.id||''):''; if(!id)return;
+  var it=_emFindItem(id);
+  var cur=(it&&it.content)?String(it.content):((btn.dataset&&btn.dataset.content)?String(btn.dataset.content):'');
+  _emModal({
+    title:window.T('em_ignore_title'),
+    body:'<div>'+_emEsc(window.Tf('em_ignore_body',{t:cur.slice(0,80)}))+'</div>',
+    ok:window.T('em_ignore'),
+    onOk:async function(){
+      var res=await apiFetch('/api/episodic-memory/'+id+'/ignore',{method:'POST'},{timeoutMs:60000});
+      if(!res.ok){alert(window.T('em_review_action_fail')+' '+res.status);return;}
+      emLoad(); csLoad(); if(_emDrvOpen())_emDrvReload(); if(typeof _emQueueLoad==='function')_emQueueLoad();
+    }
+  });
+}
+async function emRestore(btn){
+  var id=(btn&&btn.dataset)?(btn.dataset.id||''):''; if(!id)return;
+  btn.disabled=true;
+  try{
+    var res=await apiFetch('/api/episodic-memory/'+id+'/restore',{method:'POST'},{timeoutMs:60000});
+    if(!res.ok){alert(window.T('em_review_action_fail')+' '+res.status);btn.disabled=false;return;}
+    emLoad(); csLoad(); if(_emDrvOpen())_emDrvReload();
+  }catch(e){alert(e);btn.disabled=false;}
+}
+function emToggleIgnoredView(){
+  _emStatusF=(_emStatusF==='ignored')?'':'ignored';
+  var b=document.getElementById('em-ignored-btn');
+  if(b)b.textContent=(_emStatusF==='ignored')?window.T('em_review_collapse')+' · '+window.T('em_ignored_view'):window.T('em_ignored_load');
+  if(_emStatusF==='ignored'&&_emViewCur!=='list')emSetView('list');
+  emLoad();
 }
 document.addEventListener('keydown',function(e){
   if(e.key!=='Escape')return;
@@ -1028,6 +1127,7 @@ async function emLoad() {
     const q = new URLSearchParams({ limit: String(limit) });
     if (qv) { q.set('q', qv); q.set('prefix', qv); }
     if (source) q.set('source', source);
+    if (_emStatusF) q.set('status', _emStatusF);   // J-10 B3：维护区「已不再使用」视图
     _emParams = q;
     const res = await apiFetch('/api/episodic-memory?' + q.toString());
     if (!res.ok) { if (st) st.textContent = window.T('ln_js_036')+' ' + res.status; return; }
@@ -1062,15 +1162,6 @@ async function emLoadMore() {
     _emMoreSync('more');
   }
 }
-function emShowPending() {
-  var sel = document.getElementById('em-source');
-  if (sel) sel.value = 'ai_inferred';
-  var inp = document.getElementById('em-q');
-  if (inp) inp.value = '';
-  emLoad();
-  var tgt = (_emViewCur === 'group') ? document.getElementById('em-groups') : document.getElementById('em-table');
-  if (tgt && tgt.scrollIntoView) tgt.scrollIntoView({behavior:'smooth', block:'start'});
-}
 async function emConfirm(btn) {
   var id = (btn&&btn.dataset)?(btn.dataset.id||''):'';
   if (!id) return;
@@ -1081,6 +1172,7 @@ async function emConfirm(btn) {
     emLoad();
     csLoad();
     if (_emDrvOpen()) _emDrvReload();
+    if (typeof _emQueueLoad === 'function') _emQueueLoad();
   } catch (e) { alert(e); btn.disabled = false; }
 }
 /* memory-mgmt provenance tip (#41): quote the original message when
@@ -1230,16 +1322,136 @@ async function emBackfill() {
   } catch (e) { st.textContent = window.T('ov_js_req_fail')+': ' + e; }
   finally { if (btn) btn.disabled = false; }
 }
+/* J-10 B2：例外队列面板——每张卡说明「为什么需要你看」，动作按类型；处理完自动刷新 */
+var _emQueueTouched = false;   // 用户手动收起过 → 不再自动展开
+function _emQueueSyncTitle(n, byReason) {
+  var t = document.getElementById('em-queue-title'); if (!t) return;
+  var parts = Object.keys(byReason || {}).filter(function(k){return byReason[k];})
+    .map(function(k){return (window.T('em_review_reason_' + k) || k) + ' ' + byReason[k];});
+  t.textContent = window.Tf('em_review_title_n', {n: n}) + (parts.length ? ' · ' + parts.join(' · ') : '');
+}
+function emToggleQueue() {
+  var q = document.getElementById('em-queue'); if (!q) return;
+  _emQueueTouched = true;
+  q.hidden = !q.hidden;
+  if (!q.hidden) { _emQueueLoad(); q.scrollIntoView && q.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+}
+function _emQueueItemHtml(it) {
+  var r = String(it.review_reason || '');
+  var name = _emRowName(it);
+  var ask = window.T('em_review_ask_' + r) || '';
+  var reason = window.T('em_review_reason_' + r) || r;
+  var when = it.created_at ? _emAgo(it.created_at) : null;
+  var head = '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.72rem;color:var(--t3)">'
+    + '<span class="badge-review' + (it.impact === 'high' ? ' hi' : '') + '">' + _emEsc(reason) + '</span>'
+    + '<a href="javascript:void(0)" onclick="emOpenProfile(' + JSON.stringify(String(it.memory_key || '')).replace(/"/g, '&quot;') + ')" style="color:var(--t2);text-decoration:none;font-weight:600">' + _emEsc(name) + '</a>'
+    + (when ? '<span title="' + _emEsc(when.abs) + '">' + _emEsc(when.rel) + '</span>' : '')
+    + '<span style="flex:1"></span><em style="color:var(--t2)">' + _emEsc(ask) + '</em></div>';
+  var quote = it.source_quote ? '<div style="font-size:.7rem;color:var(--t3);margin-top:.15rem">「' + _emEsc(String(it.source_quote).slice(0, 100)) + '」</div>' : '';
+  var body, acts = '';
+  if (r === 'conflict' && it.conflict_with) {
+    var a = it, b = it.conflict_with;
+    body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.35rem">'
+      + '<div style="border:1px solid var(--bd);border-radius:8px;padding:.45rem"><div style="font-size:.66rem;color:var(--t3)">' + _emEsc(window.T('em_js004')) + '</div><div>' + _emEsc(b.content || '') + '</div>'
+      + (emCanDelete ? '<button type="button" class="btn-ok" onclick="emQueueResolve(' + b.id + ')">' + _emEsc(window.T('em_review_keep_this')) + '</button>' : '') + '</div>'
+      + '<div style="border:1px solid var(--tk-danger-ink,#dc2626);border-radius:8px;padding:.45rem"><div style="font-size:.66rem;color:var(--t3)">' + _emEsc(window.T('em_id_tier_raw')) + '</div><div>' + _emEsc(a.content || '') + '</div>' + quote
+      + (emCanDelete ? '<button type="button" class="btn-ok" onclick="emQueueResolve(' + a.id + ')">' + _emEsc(window.T('em_review_keep_this')) + '</button>' : '') + '</div></div>';
+  } else {
+    body = '<div style="margin-top:.3rem">' + _emEsc(it.content || '') + '</div>' + quote;
+    if (emCanDelete) {
+      var okLabel = r === 'self_fact' ? window.T('em_review_is_customer') : (r === 'commitment' ? window.T('em_review_remember') : window.T('em_id_confirm'));
+      acts = '<div style="margin-top:.35rem">'
+        + '<button type="button" class="btn-ok" onclick="emQueueAct(' + it.id + ',\'confirm\')">' + _emEsc(okLabel) + '</button>'
+        + '<button type="button" class="btn-del" onclick="emQueueAct(' + it.id + ',\'ignore\')">' + _emEsc(window.T('em_ignore')) + '</button>'
+        + '</div>';
+    }
+  }
+  return '<div class="em-drv-row" data-qid="' + it.id + '" style="padding:.5rem .2rem">' + head + body + acts + '</div>';
+}
+var _emQueueItems = [];
+async function _emQueueLoad(limit) {
+  var bd = document.getElementById('em-queue-bd'); if (!bd) return;
+  var lim = limit || 20;
+  try {
+    var res = await apiFetch('/api/episodic-memory/review-queue?limit=' + lim);
+    if (!res.ok) { bd.innerHTML = ''; return; }
+    var d = await res.json();
+    _emQueueItems = d.items || [];
+    var counts = d.counts || {};
+    _emQueueSyncTitle(counts.pending || 0, counts.by_reason || {});
+    var allBtn = document.getElementById('em-queue-all');
+    if (allBtn) allBtn.style.display = ((counts.pending || 0) > _emQueueItems.length) ? '' : 'none';
+    if (!_emQueueItems.length) { bd.innerHTML = '<div style="font-size:.8rem;color:var(--green);padding:.4rem 0">' + _emEsc(window.T('em_review_empty')) + '</div>'; return; }
+    bd.innerHTML = _emQueueItems.map(_emQueueItemHtml).join('');
+  } catch (e) { bd.innerHTML = ''; }
+}
+function _emQueueAfter() { _emQueueLoad(); emLoad(); if (_emDrvOpen()) _emDrvReload(); }
+async function emQueueAct(id, action) {
+  try {
+    var res = await apiFetch('/api/episodic-memory/' + id + '/' + action, {method: 'POST'}, {timeoutMs: 60000});
+    if (!res.ok) { alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
+    var row = document.querySelector('[data-qid="' + id + '"]'); if (row) row.remove();   // 处理完自动跳下一条
+    _emHealthLoad(); _emQueueAfter();
+  } catch (e) { alert(e); }
+}
+async function emQueueResolve(keepId) {
+  try {
+    var res = await apiFetch('/api/episodic-memory/resolve-conflict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({keep_id: keepId})}, {timeoutMs: 60000});
+    if (!res.ok) { alert(window.T('em_review_action_fail') + ' ' + res.status); return; }
+    _emHealthLoad(); _emQueueAfter();
+  } catch (e) { alert(e); }
+}
+/* J-10 B5：「AI 记忆健康」卡——/summary（A 组新增 review / grounding_drops / recall / total_*）+ /correction-stats（抽检） */
+function _emSetText(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
+async function _emHealthLoad() {
+  try {
+    var res = await apiFetch('/api/episodic-memory/summary?days=7&top=3');
+    if (!res.ok) return;
+    var d = await res.json(); if (!d || d.ok !== true) return;
+    _emSumData = d; _emSumRender();
+    var days = d.window_days || 7;
+    var rv = d.review || {}; var gd = d.grounding_drops || {}; var rc = d.recall || {};
+    var pending = parseInt(rv.pending || 0, 10) || 0;
+    _emSetText('cs-pending', pending);
+    var card = document.getElementById('cs-pending-card');
+    if (card) card.style.borderLeft = pending ? '3px solid var(--tk-danger-ink,#dc2626)' : '';
+    if (typeof d.total_count !== 'undefined') {
+      _emSetText('cs-remembered', d.total_count);
+      _emSetText('cs-remembered-lb', window.T('em_kpi_remembered_lb') + ' · ' + window.Tf('em_kpi_remembered_sub',
+        {u: d.total_users || 0, d: days, x: d.new_count || 0, s: d.stable_count || 0}));
+    }
+    if (gd && typeof gd.total !== 'undefined') {
+      _emSetText('cs-dropped', gd.total);
+      _emSetText('cs-dropped-lb', window.Tf('em_kpi_dropped_lb', {d: days}));
+      var br = gd.by_reason || {};
+      var rs = Object.keys(br).filter(function(k){return br[k];}).map(function(k){return (window.T('em_drop_' + k) || k) + ' ' + br[k];}).join('，') || '—';
+      var dc = document.getElementById('cs-dropped-card'); if (dc) dc.title = window.Tf('em_kpi_dropped_tip', {r: rs});
+    }
+    if (rc && typeof rc.injections !== 'undefined') {
+      _emSetText('cs-used', rc.injections);
+      _emSetText('cs-used-lb', window.Tf('em_kpi_used_lb', {d: days}));
+    }
+    // 漏斗一行：候选 ≈ 入库 + 丢弃 → 核对原话通过＝入库 → 需要你看
+    var fn = document.getElementById('cs-funnel');
+    if (fn && typeof d.total_count !== 'undefined') {
+      var kept = d.new_count || 0, dropped = (gd && gd.total) || 0;
+      fn.textContent = window.Tf('em_kpi_funnel', {d: days, c: kept + dropped, k: kept, p: pending});
+    }
+    _emQueueSyncTitle(pending, rv.by_reason || {});
+    if (pending && !_emQueueTouched) { var q = document.getElementById('em-queue'); if (q && q.hidden) { q.hidden = false; _emQueueLoad(); } }
+  } catch (e) { /* 看板失败不阻断主表 */ }
+}
 async function csLoad() {
+  _emHealthLoad();
   try {
     const res = await apiFetch('/api/episodic-memory/correction-stats?days=30');
     if (!res.ok) return;
     const d = await res.json();
-    document.getElementById('cs-confirmed').textContent = d.confirmed != null ? d.confirmed : '—';
-    document.getElementById('cs-pending').textContent = d.pending_inferred != null ? d.pending_inferred : '—';
-    document.getElementById('cs-total').textContent = d.total_inferred != null ? d.total_inferred : '—';
-    document.getElementById('cs-rate').textContent = ((d.adoption_rate || 0) * 100).toFixed(1) + '%';
-    document.getElementById('cs-win').textContent = d.window_days || 30;
+    // 抽检准确率＝坐席确认属实 /（确认 + 仍待看）；样本 <5 只显示「—」免误导
+    var denom = (d.confirmed || 0) + (d.pending_inferred || 0);
+    document.getElementById('cs-rate').textContent = denom >= 5 ? ((d.adoption_rate || 0) * 100).toFixed(0) + '%' : '—';
+    var rcard = document.getElementById('cs-rate-card');
+    if (rcard) rcard.title = window.Tf('em_kpi_accuracy_tip', {d: d.window_days || 30}) + ' · ' + (d.confirmed || 0) + '/' + denom;
     var actors = d.by_actor || [];
     var box = document.getElementById('cs-actors');
     if (actors.length) {
@@ -1247,7 +1459,7 @@ async function csLoad() {
         return '<span class="cs-actor">' + (a.actor || '?').replace(/</g, '&lt;') + ' · ' + a.count + '</span>';
       }).join('');
     } else {
-      box.innerHTML = '<span style="color:var(--t3)">'+window.T('em_js013')+' ' + (d.window_days || 30) + ' '+window.T('em_js014')+'</span>';
+      box.innerHTML = '';
     }
     // 每日确认量趋势（迷你柱）
     var trend = d.trend || [];
@@ -1284,8 +1496,7 @@ document.addEventListener('DOMContentLoaded', function() {
   try { _emMaskOn = (localStorage.getItem('em_mask') === '1'); } catch (e) { _emMaskOn = false; }
   _emInjectControls();
   emLoad();
-  csLoad();
-  _emSumLoad();
+  csLoad();   // 含 _emHealthLoad（/summary：KPI + 记忆最丰富 + 队列自动展开）
 });
 </script>
 {% endblock %}
