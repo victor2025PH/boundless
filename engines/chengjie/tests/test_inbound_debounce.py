@@ -11,8 +11,10 @@ peer_text 含两条全文。
 from __future__ import annotations
 
 from src.inbox.inbound_debounce import (
+    DEFAULT_VOICE_WINDOW_SEC,
     InboundMerger,
     is_fragment_burst,
+    is_voice_piece,
     merge_burst_texts,
     resolve_merge_cfg,
 )
@@ -219,3 +221,73 @@ def test_fragment_burst_relaxes_max_wait():
     assert h.calls == []                          # 碎片模式未强制开火
     h.last_timer().fire()
     assert h.calls[0][1] == "你是个大傻"
+
+
+# ── 语音条单独合并窗（K-3 F / J-2 顺手项，2026-09-05）───────────────────────
+# 88MP86 BABY BEAR 09-04 20:39–22:25 `guard=fresh post_humanize 延迟窗内客户插话`
+# 30+ 次：客户连发语音条，8s 窗每条都到点各自拟稿再被 fresh-guard 放弃＝白烧 LLM。
+
+def test_voice_piece_detection():
+    assert is_voice_piece("[语音]") is True
+    assert is_voice_piece("  [语音] 转写在这") is True         # 预览形态也认
+    assert is_voice_piece("在吗", {"media_type": "voice"}) is True   # conv 信号（前向兼容）
+    assert is_voice_piece("在吗", {"content_type": "VOICE"}) is True
+    assert is_voice_piece("在吗") is False
+    assert is_voice_piece("[图片]") is False
+    assert is_voice_piece("", None) is False
+    assert is_voice_piece(None, {"media_type": ""}) is False
+
+
+def test_voice_burst_uses_longer_window_still_capped_by_max_wait():
+    """语音条 → 静默窗按 voice_window_sec（15s）开，而不是 8s；硬上限照旧约束。"""
+    h = Harness(window_sec=8, max_wait_sec=25, voice_window_sec=15)
+    h.merger.push(_conv(), "[语音]")
+    assert h.last_timer().delay == 15.0           # 语音窗，不是 8
+    h.now += 12                                   # 8s 窗早到点了，15s 窗还在 → 第二条并入
+    h.merger.push(_conv(), "[语音]")
+    assert h.timers[0].cancelled
+    # 首条起 12s，硬上限 25s 只剩 13s < 15s 语音窗 → 取先到者
+    assert h.last_timer().delay == 13.0
+    assert h.calls == []
+    h.last_timer().fire()
+    assert len(h.calls) == 1
+    assert h.calls[0][1] == "[语音]\n[语音]"
+    snap = h.merger.stats_snapshot()
+    assert snap["merged_bursts"] == 1 and snap["voice_windows"] == 2
+
+
+def test_text_window_unchanged_and_text_after_voice_uses_text_window():
+    """文本窗不变：纯文本仍是 8s；语音之后来文本 → 客户已在打字，回常规窗。"""
+    h = Harness(window_sec=8, max_wait_sec=25, voice_window_sec=15)
+    h.merger.push(_conv(), "你叫什么名字")
+    assert h.last_timer().delay == 8.0
+    h.now += 3
+    h.merger.push(_conv(), "[语音]")
+    assert h.last_timer().delay == 15.0
+    h.now += 3
+    h.merger.push(_conv(), "刚发的听到了吗")
+    assert h.last_timer().delay == 8.0            # 最新一条是文本 → 常规窗
+    assert h.merger.stats_snapshot()["voice_windows"] == 1
+
+
+def test_voice_window_defaults_and_never_below_text_window():
+    h = Harness(window_sec=8)
+    h.merger.push(_conv(), "[语音]")
+    assert h.last_timer().delay == DEFAULT_VOICE_WINDOW_SEC == 15.0
+    # 配置写小了（voice 2s < window 8s）→ 按常规窗兜底，语音永远不比文本更急
+    h2 = Harness(window_sec=8, voice_window_sec=2)
+    h2.merger.push(_conv(), "[语音]")
+    assert h2.last_timer().delay == 8.0
+    # 旧调用方不传 → 不抛、走默认
+    assert resolve_merge_cfg({"inbound_merge": {}})["voice_window_sec"] == 15.0
+    assert resolve_merge_cfg({"inbound_merge": {"voice_window_sec": 20}})["voice_window_sec"] == 20.0
+
+
+def test_autodraft_wiring_passes_voice_window():
+    """接线钉：autodraft_helpers 构造 InboundMerger 时把配置里的 voice_window_sec 传进去
+    ——否则配置键是摆设。"""
+    import inspect
+
+    from src.inbox import autodraft_helpers as AH
+    src = inspect.getsource(AH)
+    assert 'voice_window_sec=_im_cfg.get("voice_window_sec")' in src

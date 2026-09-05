@@ -1287,6 +1287,8 @@ def setup_auto_draft(assistant, draft_svc, web_app):
                 max_texts=_im_cfg["max_texts"],
                 frag_max_wait_sec=_im_cfg["frag_max_wait_sec"],
                 frag_max_texts=_im_cfg["frag_max_texts"],
+                # K-3 F：语音条单独静默窗（连发语音不再逐条触发拟稿再被 fresh-guard 放弃）
+                voice_window_sec=_im_cfg.get("voice_window_sec"),
             )
             assistant.inbox_store.register_new_inbound_cb(_merger.push)
             try:
@@ -1294,10 +1296,10 @@ def setup_auto_draft(assistant, draft_svc, web_app):
             except Exception:
                 pass
             assistant.logger.info(
-                "[inbound_merge] 入站爆发合并已启用（window=%.1fs max_wait=%.1fs "
-                "max_texts=%d）",
-                _im_cfg["window_sec"], _im_cfg["max_wait_sec"],
-                _im_cfg["max_texts"])
+                "[inbound_merge] 入站爆发合并已启用（window=%.1fs voice_window=%.1fs "
+                "max_wait=%.1fs max_texts=%d）",
+                _im_cfg["window_sec"], float(_im_cfg.get("voice_window_sec") or 0),
+                _im_cfg["max_wait_sec"], _im_cfg["max_texts"])
         else:
             assistant.inbox_store.register_new_inbound_cb(_auto_draft_cb)
         assistant.logger.info(
