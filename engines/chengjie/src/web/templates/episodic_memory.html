@@ -144,6 +144,8 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
     <div class="cs-stat" id="cs-dropped-card" style="cursor:help"><div class="num" id="cs-dropped">—</div><div class="lb" id="cs-dropped-lb">{{ (i18n or {}).get('em_kpi_dropped', "有 {n} 条因无法核对原话未记录").replace('{n}', '—') }}</div></div>
     <div class="cs-stat"><div class="num" id="cs-used">—</div><div class="lb" id="cs-used-lb">{{ (i18n or {}).get('em_kpi_used', "近 {d} 天回复时用上 {n} 轮").replace('{d}', '7').replace('{n}', '—') }}</div></div>
     <div class="cs-stat" id="cs-rate-card" style="cursor:help"><div class="num" id="cs-rate">—</div><div class="lb">{{ (i18n or {}).get('em_s006', "抽检准确率") }}</div></div>
+    {# J-10 三期：AI 答应过还没做（承诺账本跨客户汇总；旧后端无接口则整格隐藏） #}
+    <div class="cs-stat" id="cs-promises-card" hidden style="cursor:pointer" title="{{ (i18n or {}).get('em_kpi_promises_tip', '') }}" onclick="emTogglePromises()"><div class="num" id="cs-promises">—</div><div class="lb" id="cs-promises-lb">{{ (i18n or {}).get('em_promises_title', "AI 答应过还没做") }} ↓</div></div>
   </div>
   <div id="cs-funnel" style="font-size:.74rem;color:var(--t3);margin:-.3rem 0 .4rem"></div>
   <div id="cs-actors" style="font-size:.78rem;color:var(--t2)"></div>
@@ -158,6 +160,16 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
       <button type="button" class="em-btn-plain" style="font-size:.72rem;padding:.25rem .55rem" onclick="emToggleQueue()">{{ (i18n or {}).get('em_review_collapse', "收起") }}</button>
     </div>
     <div id="em-queue-bd"></div>
+  </div>
+  {# J-10 三期：未兑现承诺面板——超期在前；打开客户 / 已兑现 / 删除 #}
+  <div id="em-promises" hidden style="margin-top:.8rem;border-top:1px solid var(--bd);padding-top:.6rem">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.4rem">
+      <strong id="em-promises-title" style="font-size:.86rem"></strong>
+      <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('em_promises_hint', "") }}</span>
+      <span style="flex:1"></span>
+      <button type="button" class="em-btn-plain" style="font-size:.72rem;padding:.25rem .55rem" onclick="emTogglePromises()">{{ (i18n or {}).get('em_review_collapse', "收起") }}</button>
+    </div>
+    <div id="em-promises-bd"></div>
   </div>
 </div>
 
@@ -1425,6 +1437,68 @@ async function emQueueResolve(keepId) {
     _emHealthLoad(); _emQueueAfter();
   } catch (e) { alert(e); }
 }
+/* J-10 三期：「AI 答应过还没做」——承诺账本跨客户汇总（/promises/open，超期在前）。
+   旧后端无接口 → KPI 格与面板都不出现。 */
+var _emPromItems = [];
+function emTogglePromises() {
+  var p = document.getElementById('em-promises'); if (!p) return;
+  p.hidden = !p.hidden;
+  if (!p.hidden) { _emPromisesLoad(); p.scrollIntoView && p.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
+}
+async function _emPromisesLoad() {
+  var card = document.getElementById('cs-promises-card');
+  var bd = document.getElementById('em-promises-bd');
+  try {
+    var res = await apiFetch('/api/episodic-memory/promises/open?limit=100');
+    if (!res.ok) return;                       // 404＝旧后端：保持隐藏
+    var d = await res.json();
+    _emPromItems = d.items || [];
+    var c = d.counts || {};
+    var total = (c.open || 0) + (c.overdue || 0), over = c.overdue || 0;
+    if (card) {
+      card.hidden = false;
+      _emSetText('cs-promises', total);
+      _emSetText('cs-promises-lb', window.Tf('em_kpi_promises_lb', {o: over}) + ' ↓');
+      card.style.borderLeft = over ? '3px solid var(--tk-danger-ink,#dc2626)' : '';
+    }
+    var t = document.getElementById('em-promises-title');
+    if (t) t.textContent = window.Tf('em_promises_title_n', {n: total, o: over});
+    if (!bd) return;
+    if (!_emPromItems.length) { bd.innerHTML = '<div style="font-size:.8rem;color:var(--green);padding:.4rem 0">' + _emEsc(window.T('em_promises_empty')) + '</div>'; return; }
+    bd.innerHTML = _emPromItems.map(function(it, i) {
+      var name = _emRowName({identity: it.identity, memory_key: it.memory_key});
+      var kind = window.T('em_promises_kind_' + String(it.promise_kind || 'generic')) || String(it.promise_kind || '');
+      var stCls = (it.status === 'overdue') ? 'badge-review hi' : 'badge-review';
+      var stTxt = window.T('em_self_status_' + String(it.status || 'open')) || String(it.status || '');
+      var who = (it.author === 'human') ? '<span class="badge-ignored" title="' + _emEsc(window.T('em_self_by_human')) + '">👤</span>' : '';
+      var acts = emCanDelete
+        ? '<button type="button" class="btn-ok" data-pi="' + i + '" data-act="done">' + _emEsc(window.T('em_self_mark_done')) + '</button>'
+          + '<button type="button" class="btn-del" data-pi="' + i + '" data-act="del">' + _emEsc(window.T('em_self_delete')) + '</button>'
+        : '';
+      return '<div class="em-drv-row" data-pi-row="' + i + '" style="padding:.5rem .2rem">'
+        + '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.72rem;color:var(--t3)">'
+        + '<span class="' + stCls + '" style="text-transform:none">' + _emEsc(stTxt) + '</span>'
+        + '<a href="javascript:void(0)" data-pi="' + i + '" data-act="open" style="color:var(--t2);text-decoration:none;font-weight:600">' + _emEsc(name) + '</a>'
+        + '<span class="em-cat">' + _emEsc(kind) + '</span>' + who
+        + '<span>' + _emEsc(window.Tf('em_promises_age', {n: it.age_days || 0})) + (it.due_hint ? ' · ' + _emEsc(it.due_hint) : '') + '</span></div>'
+        + '<div style="margin-top:.3rem">' + _emEsc(it.text || '') + '</div>'
+        + '<div style="margin-top:.35rem;display:flex;gap:.3rem;flex-wrap:wrap"><button type="button" class="em-btn-plain" data-pi="' + i + '" data-act="open" style="font-size:.72rem;padding:.2rem .5rem">' + _emEsc(window.T('em_promises_open_customer')) + '</button>' + acts + '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(bd.querySelectorAll('[data-pi]'), function(b) {
+      b.addEventListener('click', async function() {
+        var it = _emPromItems[parseInt(b.getAttribute('data-pi'), 10)]; if (!it) return;
+        var act = b.getAttribute('data-act');
+        if (act === 'open') { emOpenProfile(it.memory_key || it.context_key); return; }
+        var url = act === 'done' ? '/api/episodic-memory/self-log/mark-done' : '/api/episodic-memory/self-log/delete';
+        b.disabled = true;
+        var r = await apiFetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({memory_key: it.context_key, kind: 'promise', ts: it.ts, text: it.text})});
+        if (r && r.ok) { _emPromisesLoad(); if (_emDrvOpen()) _emDrvReload(); }
+        else { b.disabled = false; alert(window.T('em_review_action_fail') + ' ' + (r ? r.status : '')); }
+      });
+    });
+  } catch (e) { /* 看板失败不阻断主表 */ }
+}
 /* J-10 B5：「AI 记忆健康」卡——/summary（A 组新增 review / grounding_drops / recall / total_*）+ /correction-stats（抽检） */
 function _emSetText(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
 async function _emHealthLoad() {
@@ -1467,6 +1541,7 @@ async function _emHealthLoad() {
 }
 async function csLoad() {
   _emHealthLoad();
+  _emPromisesLoad();   // J-10 三期：KPI 格 + 面板（旧后端 404 → 保持隐藏）
   try {
     const res = await apiFetch('/api/episodic-memory/correction-stats?days=30');
     if (!res.ok) return;
@@ -1524,6 +1599,8 @@ document.addEventListener('DOMContentLoaded', function() {
   _emInjectControls();
   emLoad();
   csLoad();   // 含 _emHealthLoad（/summary：KPI + 记忆最丰富 + 队列自动展开）
+  // J-10 三期：告警深链 /episodic-memory?promises=overdue → 直接展开未兑现承诺面板
+  if (_sp.get('promises')) { var _pp = document.getElementById('em-promises'); if (_pp) _pp.hidden = false; }
 });
 </script>
 {% endblock %}

@@ -240,6 +240,45 @@ class ContextStore:
         ex = set(exclude or ())
         return [(uid, ctx) for uid, ctx in rows_all if uid not in ex]
 
+    def iter_rows_with_key(self, json_key: str, limit: int = 300):
+        """列出含某个顶层键的会话上下文 ``(uid, ctx)``——内存缓存优先（未 flush 的最新态），
+        再补 SQLite 里的（LIKE 粗筛 + JSON 精筛，只读、不进缓存）。
+
+        J-10 三期给承诺账本跨客户汇总用（``_promise_log``）；与 :meth:`iter_persisted_case_rows`
+        同一哲学：把整表拉进内存会挤掉活跃会话，所以只按 LIKE 命中的行反序列化。
+        返回行是共享引用，**调用方只读勿改**。
+        """
+        key = str(json_key or "").strip()
+        if not key:
+            return []
+        out = []
+        seen = set()
+        for uid, ctx in list(self._cache.items()):
+            if isinstance(ctx, dict) and ctx.get(key):
+                out.append((uid, ctx))
+                seen.add(uid)
+        if self._conn is None:
+            return out
+        try:
+            rows = self._conn.execute(
+                "SELECT user_id, data FROM user_context WHERE data LIKE ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (f'%"{key}"%', max(1, int(limit))),
+            ).fetchall()
+        except Exception:
+            return out
+        for uid, data in rows:
+            if uid in seen:
+                continue
+            try:
+                ctx = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(ctx, dict) and ctx.get(key):
+                out.append((uid, ctx))
+                seen.add(uid)
+        return out
+
     def close(self):
         self.flush_all()
         if self._conn:

@@ -135,6 +135,95 @@ def test_inject_self_state_wires_promise_note_behind_flag():
     assert "明天给你打电话" not in ctx["_self_state_block"] and "我有个女儿" in ctx["_self_state_block"]
 
 
+def test_collect_open_promises_across_contexts(tmp_path):
+    """三期：跨客户汇总（缓存优先 + SQLite 补），超期在前；done 不算。"""
+    from src.utils.memory_promises import collect_open_promises
+    now = time.time()
+    cs = ContextStore(db_path=tmp_path / "bot.db", ttl_days=30)
+    a = cs.get("acct:1"); record_promises(a, "明天给你打电话", now=now - 9 * 86400)     # overdue
+    b = cs.get("acct:2"); record_promises(b, "改天拍给你看", now=now - 2 * 86400)       # open（媒体）
+    c = cs.get("acct:3"); record_promises(c, "下次带你去吃火锅", now=now - 3 * 86400)
+    mark_promise_done(c, c[LOG_KEY][0]["ts"], "下次带你去吃火锅")                      # done → 不算
+    cs.get("acct:4")["last_reply"] = "无承诺的会话"
+    for k in ("acct:1", "acct:2", "acct:3", "acct:4"):
+        cs.mark_dirty(k)
+    cs.flush()
+    cs._cache.clear()                                    # 逼走 SQLite 路径
+    rows = cs.iter_rows_with_key(LOG_KEY)
+    assert sorted(uid for uid, _ in rows) == ["acct:1", "acct:2", "acct:3"]
+    assert cs.iter_rows_with_key("") == []
+    res = collect_open_promises(cs, now=now)
+    assert res["counts"] == {"open": 1, "overdue": 1}
+    assert [i["context_key"] for i in res["items"]] == ["acct:1", "acct:2"]
+    assert res["items"][0]["status"] == STATUS_OVERDUE and res["items"][0]["age_days"] == 9
+    assert [i["context_key"] for i in collect_open_promises(cs, now=now, overdue_only=True)["items"]] == ["acct:1"]
+    # 缓存里未 flush 的最新态优先
+    d = cs.get("acct:5"); record_promises(d, "今晚给你发照片", now=now - 60)
+    assert collect_open_promises(cs, now=now)["counts"]["open"] == 2
+    assert collect_open_promises(object(), now=now) == {"items": [], "counts": {"open": 0, "overdue": 0}}
+    cs.close()
+
+
+def test_open_promises_route_and_overdue_alert(tmp_path):
+    """三期：/promises/open 带 memory_key 解析 + KPI 页面格 + alert-status 超期告警（阈值可配）。"""
+    from starlette.testclient import TestClient
+    from src.utils.audit_store import AuditStore
+    from src.utils.episodic_memory_store import EpisodicMemoryStore
+    from src.web.admin import create_app
+    from tests.test_web_episodic_memory_api import _load_cm, _run_async
+
+    now = time.time()
+    cs = ContextStore(db_path=tmp_path / "bot.db", ttl_days=30)
+    for i in range(6):
+        ctx = cs.get(f"17345893506:1330842224{i}")
+        record_promises(ctx, "明天给你打电话", now=now - 10 * 86400)
+        cs.mark_dirty(f"17345893506:1330842224{i}")
+    cs.flush()
+    st = EpisodicMemoryStore(tmp_path / "mem.db")
+    st.add_fact("whatsapp:17345893506:13308422240", "客户喜欢喝美式咖啡")
+    cm = _run_async(_load_cm(tmp_path))
+    cm.config.setdefault("memory", {})["promises"] = {"overdue_alert": {"min_count": 5}}
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    sm = MagicMock()
+    sm._context_store = cs
+    sm._episodic_store = st
+    sm.crisis_count_for_admin = MagicMock(return_value=0)
+    sm.episodic_inferred_counts = MagicMock(return_value={"pending": 0, "total": 0})
+    tc = MagicMock()
+    tc.skill_manager = sm
+    app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=tc)
+    client = TestClient(app, raise_server_exceptions=True)
+    from src.utils.web_user_store import ROLE_MASTER, WebUserStore
+    ws = WebUserStore(tmp_path / "web_users.db")
+    if ws.user_count() == 0:
+        ws.create_user("admin", "test-token-123", ROLE_MASTER)
+    client.get("/login")
+    client.post("/login", data={"username": "admin", "password": "test-token-123"}, follow_redirects=True)
+    client.headers.update({"Authorization": "Bearer test-token-123"})
+    with client:
+        r = client.get("/api/episodic-memory/promises/open", params={"overdue_only": 1})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["counts"]["overdue"] == 6 and d["count"] == 6
+        by_ctx = {i["context_key"]: i for i in d["items"]}
+        # 有记忆的那位解析到 canonical 记忆键；其余回退上下文键
+        assert by_ctx["17345893506:13308422240"]["memory_key"] == "whatsapp:17345893506:13308422240"
+        assert by_ctx["17345893506:13308422241"]["memory_key"] == "17345893506:13308422241"
+        al = [a for a in client.get("/api/alert-status").json().get("alerts") or [] if a["type"] == "memory_promise_overdue"]
+        assert len(al) == 1 and "6 件事" in al[0]["title"] and al[0]["action_url"].endswith("?promises=overdue")
+        # 处理掉两条 → 4 < min_count 5 → 告警消失
+        for k in ("17345893506:13308422240", "17345893506:13308422241"):
+            it = by_ctx[k]
+            assert client.post("/api/episodic-memory/self-log/mark-done",
+                               json={"memory_key": k, "kind": "promise", "ts": it["ts"], "text": it["text"]}).status_code == 200
+        assert client.get("/api/episodic-memory/promises/open").json()["counts"]["overdue"] == 4
+        assert [a for a in client.get("/api/alert-status").json().get("alerts") or [] if a["type"] == "memory_promise_overdue"] == []
+        html = client.get("/episodic-memory").text
+        assert 'id="cs-promises-card"' in html and 'id="em-promises"' in html
+    st.close()
+    cs.close()
+
+
 def test_bounded_log():
     ctx: dict = {}
     for i in range(20):

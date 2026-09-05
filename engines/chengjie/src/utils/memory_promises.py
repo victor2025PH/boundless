@@ -284,6 +284,48 @@ def delete_promise(user_context: Optional[Dict[str, Any]], ts: Any, text: str) -
     return True
 
 
+def collect_open_promises(
+    context_store: Any, *, now: Optional[float] = None, limit: int = 300,
+    overdue_only: bool = False,
+) -> Dict[str, Any]:
+    """跨客户汇总未兑现承诺（J-10 三期「AI 答应过还没做」提醒的数据源）。
+
+    ``context_store`` 需有 ``iter_rows_with_key``（ContextStore）；没有 → 零读数。
+    返回 ``{"items": [{context_key, ts, text, promise_kind, due_hint, author, status, age_days}],
+    "counts": {"open", "overdue"}}``——超期的排前面（越久越前），再是 open（越久越前）。绝不抛。
+    """
+    out: Dict[str, Any] = {"items": [], "counts": {STATUS_OPEN: 0, STATUS_OVERDUE: 0}}
+    it = getattr(context_store, "iter_rows_with_key", None)
+    if not callable(it):
+        return out
+    ts_now = float(now if now is not None else time.time())
+    try:
+        rows = it(LOG_KEY, limit=max(1, int(limit)))
+    except Exception:
+        return out
+    items: List[Dict[str, Any]] = []
+    for uid, ctx in rows or []:
+        try:
+            for p in promise_entries(ctx, now=ts_now):
+                st = p.get("status")
+                if st == STATUS_DONE:
+                    continue
+                out["counts"][st] = out["counts"].get(st, 0) + 1
+                if overdue_only and st != STATUS_OVERDUE:
+                    continue
+                items.append({
+                    "context_key": str(uid or ""), "ts": float(p["ts"] or 0), "text": p["text"],
+                    "promise_kind": p.get("promise_kind") or KIND_GENERIC,
+                    "due_hint": p.get("due_hint") or "", "author": p.get("author") or "ai",
+                    "status": st, "age_days": int((ts_now - float(p["ts"] or 0)) // 86400),
+                })
+        except Exception:
+            continue
+    items.sort(key=lambda x: (0 if x["status"] == STATUS_OVERDUE else 1, x["ts"]))
+    out["items"] = items
+    return out
+
+
 def promise_note(user_context: Optional[Dict[str, Any]], *, now: Optional[float] = None,
                  max_items: int = 3, max_age_days: float = 14.0) -> str:
     """未兑现承诺的 prompt 块（三期接线：``memory.promises.inject`` 出厂关，
@@ -323,5 +365,5 @@ __all__ = [
     "KIND_MEDIA", "KIND_CALL", "KIND_MEET", "KIND_SEND", "KIND_GENERIC",
     "STATUS_OPEN", "STATUS_OVERDUE", "STATUS_DONE",
     "extract_promises", "record_promises", "promise_entries",
-    "mark_promise_done", "delete_promise", "promise_note",
+    "mark_promise_done", "delete_promise", "promise_note", "collect_open_promises",
 ]

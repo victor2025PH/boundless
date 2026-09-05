@@ -620,6 +620,24 @@ class EpisodicMemoryStore:
             return None
         return self._row_to_dict(r) if r else None
 
+    def find_memory_keys(self, context_key: str, limit: int = 5) -> List[str]:
+        """ContextStore 键（``acct:peer`` / 裸 peer）→ 记忆键候选（``platform:acct:peer`` canonical
+        或同串），J-10 三期承诺提醒「打开客户」用；有记忆最多的排前。绝不抛。"""
+        ck = str(context_key or "").strip()
+        if not ck:
+            return []
+        try:
+            rows = self._conn.execute(
+                "SELECT user_id, COUNT(*) AS n FROM episodic_memory"
+                " WHERE user_id = ? OR user_id LIKE ?"
+                " GROUP BY user_id ORDER BY n DESC LIMIT ?",
+                (ck, f"%:{ck}", max(1, min(int(limit or 5), 20))),
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic find_memory_keys failed: %s", e)
+            return []
+        return [str(r[0]) for r in rows if r and r[0]]
+
     def export_user(self, user_id: str, *, include_ignored: bool = False,
                     limit: int = 2000) -> List[Dict[str, Any]]:
         """J-10 二期：单客户全量导出（记忆键精确匹配，按时间正序）。默认不含软删；绝不抛。"""

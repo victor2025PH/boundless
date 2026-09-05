@@ -837,6 +837,47 @@ def register_episodic_identity_routes(app, ctx) -> None:
             media_type="application/json; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="memory_{safe}_{stamp}.json"'})
 
+    @app.get("/api/episodic-memory/promises/open")
+    async def api_episodic_promises_open(
+        request: Request, overdue_only: int = 0, limit: int = 50, identity: int = 1,
+    ):
+        """J-10 三期：跨客户「AI 答应过还没做」——未兑现承诺汇总（超期在前）。
+
+        每条带 ``context_key``（ContextStore 键）与解析出的 ``memory_key``（打开客户档案抽屉用）
+        + ``identity``；``counts.{open, overdue}``。数据源＝各会话 ``_promise_log``，
+        `memory_promises.collect_open_promises`。
+        """
+        _api_auth(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
+        from src.utils.memory_promises import collect_open_promises
+        cs = getattr(sm, "_context_store", None)
+        res = collect_open_promises(cs, overdue_only=bool(overdue_only))
+        lim = max(1, min(int(limit or 50), 500))
+        items = list(res.get("items") or [])[:lim]
+        store = getattr(sm, "_episodic_store", None)
+        for it in items:
+            mk = ""
+            if store is not None and hasattr(store, "find_memory_keys"):
+                try:
+                    ks = store.find_memory_keys(it["context_key"])
+                    mk = ks[0] if ks else ""
+                except Exception:
+                    mk = ""
+            it["memory_key"] = mk or it["context_key"]
+        inbox_db = _inbox_db_or_none()
+        if identity and inbox_db is not None and items:
+            try:
+                idmap = resolve_identities(inbox_db, [i["memory_key"] for i in items])
+                for it in items:
+                    ident = idmap.get(it["memory_key"])
+                    if ident:
+                        it["identity"] = ident
+            except Exception:
+                pass
+        return {"ok": True, "items": items, "count": len(items), "counts": res.get("counts") or {}}
+
     @app.post("/api/episodic-memory/self-log/mark-done")
     async def api_episodic_self_log_mark_done(request: Request):
         """J-10 二期：坐席点「已兑现」。Body ``{memory_key|conversation_id, kind: "promise", ts, text}``。

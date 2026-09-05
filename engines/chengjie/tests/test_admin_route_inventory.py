@@ -177,6 +177,7 @@ _BASELINE = """
 /api/episodic-memory/{row_id}/ignore	POST
 /api/episodic-memory/{row_id}/restore	POST
 /api/episodic-memory/resolve-conflict	POST
+/api/episodic-memory/promises/open	GET
 /api/episodic-memory/review-queue	GET
 /api/episodic-memory/self-log	GET
 /api/episodic-memory/self-log/delete	POST
