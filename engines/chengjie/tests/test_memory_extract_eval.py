@@ -93,6 +93,30 @@ def test_report_format_smoke():
     assert "记忆抽取质量报告" in out
 
 
+def test_cli_memory_extract_reports_grounding_and_trend(tmp_path):
+    """J-10 二期：run_eval --memory-extract 一并出接地护栏报告 + --out-jsonl 趋势行。"""
+    import json
+    import subprocess
+    import sys
+
+    trend = tmp_path / "trend.jsonl"
+    r = subprocess.run(
+        [sys.executable, "-m", "scripts.run_eval", "--memory-extract", "--json",
+         "--out-jsonl", str(trend)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+    )
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    body = r.stdout[r.stdout.index("{"):r.stdout.rindex("}") + 1]
+    out = json.loads(body)
+    assert out["passed_all"] is True and out["extractor"] == "heuristic"
+    assert out["grounding"]["passed"] is True
+    assert out["grounding"]["summary"]["leaked"] == 0 and out["grounding"]["summary"]["lost"] == 0
+    assert out["grounding"]["results"] == []          # 只列非 ok 的
+    line = json.loads(trend.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert line["kind"] == "memory_extract" and line["passed"] is True
+    assert line["grounding"]["kept_ok"] == line["grounding"]["expect_keep"]
+
+
 def test_xlang_sample_set_loads_and_is_llm_only():
     """跨语言增补集：可加载、含 Phase8 forbid；不喂启发式门禁（启发式不认英文事实）。"""
     samples = load_extract_samples(XLANG_EXTRACT_SAMPLES_PATH)

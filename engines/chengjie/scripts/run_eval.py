@@ -501,22 +501,73 @@ def main(argv=None) -> int:
     if args.memory_extract:
         samples = load_extract_samples(
             args.dataset or "config/eval/memory_extract_samples.yaml")
+        extractor_label = "heuristic"
         if args.extract_llm:
             extract_fn = build_llm_extract_fn()
             if extract_fn is None:
                 print("[note] LLM 抽取评测需 ai_client.extract_memory_bullets（配好 ai + key）。"
                       "当前不可用，跳过。")
                 return 0
+            extractor_label = "llm"
+            # J-10 二期：LLM 抽取器加跨语言/混语增补集（英文客户事实 + Phase8 forbid）；
+            # 启发式只认中文自称正则，不吃这组 expect，故只在 LLM 轨合入。
+            if not args.dataset:
+                try:
+                    from src.eval.memory_extract_eval import XLANG_EXTRACT_SAMPLES_PATH
+                    if os.path.exists(XLANG_EXTRACT_SAMPLES_PATH):
+                        samples = list(samples) + load_extract_samples(XLANG_EXTRACT_SAMPLES_PATH)
+                except Exception as ex:  # noqa: BLE001
+                    print(f"[warn] 跨语言增补集加载失败，只跑主集: {ex}")
         else:
             extract_fn = heuristic_extract_fn
         report = evaluate_fact_extraction(
             extract_fn, samples,
             recall_target=args.extract_recall, max_false_positive=args.extract_max_fp)
+        # J-10 二期：抽取器之后那道接地护栏（引文级 / 跨语言）一并出报告——纯函数常驻，
+        # 漏网（该丢没丢）一条即 FAIL；样本缺失则跳过不影响抽取报告。
+        grounding = None
+        try:
+            from src.eval.memory_extract_eval import (
+                evaluate_evidence_grounding, format_grounding_report,
+            )
+            grounding = evaluate_evidence_grounding()
+        except FileNotFoundError:
+            grounding = None
+        except Exception as ex:  # noqa: BLE001
+            print(f"[warn] 接地护栏评测跳过: {ex}")
+            grounding = None
+        passed = bool(report["passed"]) and (grounding is None or bool(grounding["passed"]))
+        if args.out_jsonl:
+            try:
+                import datetime as _dt
+                line = {
+                    "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                    "kind": "memory_extract", "extractor": extractor_label,
+                    "dataset": args.dataset or "config/eval/memory_extract_samples.yaml",
+                    **report["summary"],
+                    "grounding": (grounding["summary"] if grounding else None),
+                    "passed": passed,
+                }
+                os.makedirs(os.path.dirname(args.out_jsonl) or ".", exist_ok=True)
+                with open(args.out_jsonl, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(line, ensure_ascii=False) + "\n")
+                print(f"[trend] 已追加 → {args.out_jsonl}")
+            except Exception as ex:  # noqa: BLE001 - 趋势落盘失败不影响评测退出码
+                print(f"[warn] 趋势 JSONL 写入失败: {ex}")
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2))
+            out = dict(report)
+            out["extractor"] = extractor_label
+            if grounding is not None:
+                out["grounding"] = {"summary": grounding["summary"], "passed": grounding["passed"],
+                                    "results": [r for r in grounding["results"] if r["verdict"] != "ok"]}
+            out["passed_all"] = passed
+            print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
+            print(f"[extractor] {extractor_label}  样本: {len(samples)}")
             print(format_extract_report(report))
-        return 0 if report["passed"] else 1
+            if grounding is not None:
+                print(format_grounding_report(grounding))
+        return 0 if passed else 1
 
     if args.semantic_dedup:
         print(f"[info] {describe_availability()}")
