@@ -210,6 +210,7 @@ _BASELINE = """
 /api/kb/entries	POST
 /api/kb/entries/batch-update	POST
 /api/kb/entries/bulk-disable	POST
+/api/kb/entries/purge-source	POST
 /api/kb/entries/{entry_id}	DELETE
 /api/kb/entries/{entry_id}	GET
 /api/kb/entries/{entry_id}	PUT
@@ -233,6 +234,7 @@ _BASELINE = """
 /api/kb/feedback	GET
 /api/kb/feedback	POST
 /api/kb/feedback/{fb_id}/promote	POST
+/api/kb/health	GET
 /api/kb/health-stats	GET
 /api/kb/images/{img_id}	DELETE
 /api/kb/implicit-feedback	POST

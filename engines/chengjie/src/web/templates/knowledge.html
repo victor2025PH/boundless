@@ -163,7 +163,7 @@
     <div class="kb-stat"><strong id="s-entries">{{ stats.total_entries }}</strong> {{ (i18n or {}).get('db_js_075', "条知识") }}</div>
     <div class="kb-stat pro-only"><strong id="s-examples">{{ stats.examples }}</strong> {{ (i18n or {}).get('kb_s008', "对话示例") }}</div>
     <div class="kb-stat pro-only"><strong id="s-ec">{{ stats.error_codes }}</strong> {{ (i18n or {}).get('kb_s009', "错误码") }}</div>
-    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} <span style="color:var(--green)" id="s-sat">{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}</span></div>
+    <div class="kb-stat pro-only"><strong id="s-feedback">{{ stats.feedback }}</strong> {{ (i18n or {}).get('db_js_042', "反馈") }} <span style="color:var(--green)" id="s-sat">{% if stats.satisfaction_rate is none %}{{ (i18n or {}).get('kb2_sat_none', "暂无反馈") }}{% else %}{{ stats.satisfaction_rate }}%{{ (i18n or {}).get('kb_s010', "满意") }}{% endif %}</span></div>
     <!-- 健康分：原本藏在维护面板深处，提到页头常驻可见（点击直达诊断）。刻意不加
          pro-only——简洁模式的运营正是最需要"知识库健不健康"信号的人群。 -->
     <div class="kb-stat" id="kb-health-chip" style="display:none;cursor:pointer" onclick="openMaintPanel();runHealthCheck()" title="{{ (i18n or {}).get('kb2_health_tip', '知识库健康分（点击查看诊断建议与修复入口）') }}">🏥 <strong id="s-health">—</strong> <span id="s-health-grade" style="font-size:.72rem;color:var(--t3)"></span></div>
@@ -193,6 +193,14 @@
     <select id="entry-cat" onchange="loadEntries()" style="min-width:90px">
       <option value="">{{ (i18n or {}).get('kb_s018', "全部分类") }}</option>
       {% for cat in categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
+    </select>
+    <!-- 来源筛选（J-9 #184）：把「厂商随包预置的自家产品说明」与用户自建条目分开看 -->
+    <select id="entry-source" onchange="loadEntries()" title="{{ (i18n or {}).get('kb2_src_tip', '按条目来源筛选') }}">
+      <option value="">{{ (i18n or {}).get('kb2_src_all', "全部来源") }}</option>
+      <option value="user">{{ (i18n or {}).get('kb2_src_user', "我建的") }}</option>
+      <option value="import">{{ (i18n or {}).get('kb2_src_import', "批量导入") }}</option>
+      <option value="system">{{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</option>
+      <option value="vendor">{{ (i18n or {}).get('kb2_src_vendor', "系统预置·厂商产品") }}</option>
     </select>
     <select id="entry-sort" onchange="loadEntries()" class="pro-only">
       <option value="">{{ (i18n or {}).get('psn_sort_default', "默认排序") }}</option>
@@ -237,6 +245,19 @@
     <button class="btn btn-s btn-sm pro-only" onclick="exportMarkdown()" title="{{ (i18n or {}).get('kb_s033', '导出知识库为 Markdown 文档') }}">
       📄 Markdown
     </button>
+  </div>
+  <!-- 厂商预置条目提示（J-9 #184）：服务端首渲染按 stats.entries_vendor 决定是否可见，
+       之后由 refreshStats → _syncVendorNotice 维持；「稍后」只在本会话隐藏，升级后再提醒。 -->
+  <div id="kb-vendor-notice" role="status"
+       style="display:{{ 'flex' if (stats.entries_vendor or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
+    <span>📦 {{ (i18n or {}).get('kb2_vendor_lead', "检测到") }} <strong id="kb-vendor-n">{{ stats.entries_vendor or 0 }}</strong> {{ (i18n or {}).get('kb2_vendor_lead2', "条厂商随包预置的产品说明（不是你的知识）。") }}
+      <span id="kb-vendor-state" style="color:var(--t3)">{% if stats.vendor_excluded %}{{ (i18n or {}).get('kb2_vendor_excluded', "对客回复已排除它们。") }}{% else %}{{ (i18n or {}).get('kb2_vendor_not_excluded', "当前部署对客回复仍会用到它们。") }}{% endif %}</span>
+    </span>
+    <span style="display:flex;gap:.4rem;margin-left:auto">
+      <button class="btn btn-s btn-sm" onclick="kbShowVendor()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbPurgeVendor()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_vendor_purge', "一键清空") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbDismissVendorNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
+    </span>
   </div>
   <div id="entry-grid" class="entry-grid">
     <div class="empty-state"><p>{{ (i18n or {}).get('dash.loading', "加载中…") }}</p></div>
@@ -847,6 +868,7 @@ function kbResetFilters(){
   document.getElementById('entry-search').value='';
   document.getElementById('entry-cat').value='';
   document.getElementById('entry-enabled-only').checked=false;
+  const _src=document.getElementById('entry-source'); if(_src) _src.value='';
   loadEntries();
 }
 async function loadEntries(){
@@ -854,7 +876,9 @@ async function loadEntries(){
   const cat=document.getElementById('entry-cat').value;
   const enabled=document.getElementById('entry-enabled-only').checked;
   const sort=document.getElementById('entry-sort').value;
-  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort});
+  const srcEl=document.getElementById('entry-source');
+  const source=srcEl?srcEl.value:'';
+  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort,source});
   const {entries}=await api('GET','/api/kb/entries?'+params);
   const grid=document.getElementById('entry-grid');
   _allEntryIds = (entries||[]).map(e=>String(e.id));   // 更新全选池
@@ -862,7 +886,7 @@ async function loadEntries(){
     /* 空态分语义（2026-08-22 P5）：「筛选无结果」与「库真空」是两回事——
        前者给一键清筛，后者给三件套（插画+一句人话+真 CTA：起步包向导/新建）。
        旧实现一行灰字两头凑，违反 /developer 样式指南卡 ⑤。 */
-    if(search || cat || enabled){
+    if(search || cat || enabled || source){
       grid.innerHTML='<div class="empty-state"><p>'+window.T('kb2_nomatch')+'</p>'
         +'<button class="btn btn-s btn-sm" onclick="kbResetFilters()">'+window.T('kb2_clearfilter')+'</button></div>';
     }else{
@@ -918,6 +942,7 @@ function entryCard(e){
       ${e.reply_mode==='direct'?'<span class="badge b-g pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_006')+'</span>'
        :e.reply_mode==='ai_strict'?'<span class="badge b-u pro-only" style="font-size:.65rem;margin-left:.3rem">'+window.T('kb_js_007')+'</span>':''}
       ${e.template_key?`<span class="badge b-p pro-only" style="font-size:.65rem;margin-left:.3rem">${esc(e.template_key)}</span>`:''}
+      ${e.source==='vendor'?'<span class="badge b-n" style="font-size:.65rem;margin-left:.3rem" title="'+window.T('kb2_src_vendor_tip')+'">'+window.T('kb2_src_vendor_badge')+'</span>':''}
     </div>
     <div class="entry-title">${esc(e.title)}</div>
     <div class="entry-scenario">${esc(e.scenario||'')}</div>
@@ -1581,8 +1606,48 @@ async function refreshStats(){
   document.getElementById('s-examples').textContent=s.examples;
   document.getElementById('s-ec').textContent=s.error_codes;
   document.getElementById('s-feedback').textContent=s.feedback;
-  document.getElementById('s-sat').textContent=s.satisfaction_rate+'%'+window.T('kb_s010');
+  /* 分母为 0 → 后端回 null，显示「暂无反馈」而不是假 0.0%（J-9） */
+  document.getElementById('s-sat').textContent=(s.satisfaction_rate==null)
+    ? window.T('kb2_sat_none') : (s.satisfaction_rate+'%'+window.T('kb_s010'));
+  _syncVendorNotice(s);
 }
+
+/* ── 厂商预置条目提示 / 一键清空（J-9 #184）──────────────────
+   内测包随 knowledge_base.db 带进来的厂商自家产品说明（source=vendor）。
+   对客检索在桌面模式已硬排除；这里让运营看得见、能一键清走。 */
+function _syncVendorNotice(s){
+  const box=document.getElementById('kb-vendor-notice');
+  if(!box) return;
+  const n=(s&&s.entries_vendor)||0;
+  const dismissed=sessionStorage.getItem('kb.vendorNotice.dismiss')==='1';
+  if(!n||dismissed){ box.style.display='none'; return; }
+  document.getElementById('kb-vendor-n').textContent=n;
+  const st=document.getElementById('kb-vendor-state');
+  if(st) st.textContent=s.vendor_excluded?window.T('kb2_vendor_excluded'):window.T('kb2_vendor_not_excluded');
+  box.style.display='flex';
+}
+function kbShowVendor(){
+  const sel=document.getElementById('entry-source'); if(sel){ sel.value='vendor'; }
+  loadEntries();
+  const grid=document.getElementById('entry-grid'); if(grid) grid.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function kbDismissVendorNotice(){
+  sessionStorage.setItem('kb.vendorNotice.dismiss','1');
+  const box=document.getElementById('kb-vendor-notice'); if(box) box.style.display='none';
+}
+async function kbPurgeVendor(){
+  const s=await api('GET','/api/kb/stats');
+  const n=(s&&s.entries_vendor)||0;
+  if(!n){ toast(window.T('kb2_vendor_none')); return; }
+  if(!confirm(window.Tf('kb2_vendor_purge_confirm',{n}))) return;
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-source',{source:'vendor'}); }
+  catch(err){ toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
+  toast(window.Tf('kb2_vendor_purged',{n:(r&&r.count)||0}));
+  const sel=document.getElementById('entry-source'); if(sel&&sel.value==='vendor') sel.value='';
+  await loadEntries(); await refreshStats();
+}
+window.kbShowVendor=kbShowVendor; window.kbDismissVendorNotice=kbDismissVendorNotice; window.kbPurgeVendor=kbPurgeVendor;
 
 /* ── HTML 转义 ────────────────────────────────────────── */
 function esc(s){

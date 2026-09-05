@@ -5374,6 +5374,7 @@ ZH_HANT = {
     'err.kb.import_bad_format': '無效的匯入格式',
     'err.kb.msg_reply_empty': 'user_message 和 ai_reply 不能為空',
     'err.kb.no_update_fields': '未提供可更新的欄位',
+    'err.kb.purge_source_invalid': '只能整批清空 vendor / system / import 來源的條目',
     'err.kb.query_empty': 'query 不能為空',
     'err.kb.question_empty': 'question 不能為空',
     'err.kb.skill_mgr_unloaded': 'skill_manager 未載入，請確認 bot 正在執行',
@@ -9859,6 +9860,46 @@ ZH_HANT = {
     'kb2_sandbox_try': '沙盒試一句',
     # ── kb2_sandbox_try_tip ──
     'kb2_sandbox_try_tip': '儲存前先到沙盒用觸發詞試一次命中效果（不發訊息）',
+    # ── kb2_sat_none ──
+    'kb2_sat_none': '暫無反饋',
+    # ── kb2_src_all ──
+    'kb2_src_all': '全部來源',
+    # ── kb2_src_import ──
+    'kb2_src_import': '批次匯入',
+    # ── kb2_src_system ──
+    'kb2_src_system': '系統話術/示例',
+    # ── kb2_src_tip ──
+    'kb2_src_tip': '按條目來源篩選',
+    # ── kb2_src_user ──
+    'kb2_src_user': '我建的',
+    # ── kb2_src_vendor ──
+    'kb2_src_vendor': '系統預置·廠商產品',
+    # ── kb2_src_vendor_badge ──
+    'kb2_src_vendor_badge': '廠商預置',
+    # ── kb2_src_vendor_tip ──
+    'kb2_src_vendor_tip': '隨安裝包預置的廠商自家產品說明，不是你的知識；桌面模式下對客回覆不會用到',
+    # ── kb2_vendor_excluded ──
+    'kb2_vendor_excluded': '對客回覆已排除它們。',
+    # ── kb2_vendor_later ──
+    'kb2_vendor_later': '稍後',
+    # ── kb2_vendor_lead ──
+    'kb2_vendor_lead': '檢測到',
+    # ── kb2_vendor_lead2 ──
+    'kb2_vendor_lead2': '條廠商隨包預置的產品說明（不是你的知識）。',
+    # ── kb2_vendor_none ──
+    'kb2_vendor_none': '沒有廠商預置條目',
+    # ── kb2_vendor_not_excluded ──
+    'kb2_vendor_not_excluded': '當前部署對客回覆仍會用到它們。',
+    # ── kb2_vendor_purge ──
+    'kb2_vendor_purge': '一鍵清空',
+    # ── kb2_vendor_purge_confirm ──
+    'kb2_vendor_purge_confirm': '確定刪除全部 {n} 條廠商預置條目？只刪 source=廠商預置 的條目，你自建/匯入的知識不受影響。',
+    # ── kb2_vendor_purge_fail ──
+    'kb2_vendor_purge_fail': '清空失敗，請稍後重試',
+    # ── kb2_vendor_purged ──
+    'kb2_vendor_purged': '已清空 {n} 條廠商預置條目',
+    # ── kb2_vendor_view ──
+    'kb2_vendor_view': '檢視',
     # ── kb_js_001 ──
     'kb_js_001': '暫無知識條目，點選',
     # ── kb_js_002 ──

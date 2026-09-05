@@ -2,6 +2,8 @@
 """路由错误文案域词条(tr(request, 'err.*') 消费)。结构见包 docstring。"""
 
 ZH = {
+    # KB 来源隔离（2026-09-05 J-9 #184）
+    "err.kb.purge_source_invalid": "只能整批清空 vendor / system / import 来源的条目",
     # 工具箱「AI 生成图片」/「智能养号」（2026-08-21）
     "err.image.viewer_denied": "只读角色不能生成图片",
     "err.image.disabled": "AI 生成图片未启用",
@@ -133,6 +135,8 @@ ZH = {
 }
 
 EN = {
+    # KB source isolation (2026-09-05 J-9 #184)
+    "err.kb.purge_source_invalid": "Only vendor / system / import entries can be purged in bulk",
     # Toolbox "AI Image" / "Smart Nurturing" (2026-08-21)
     "err.image.viewer_denied": "Viewer role cannot generate images",
     "err.image.disabled": "AI image generation is disabled",

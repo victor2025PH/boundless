@@ -26,7 +26,7 @@ from typing import List
 from fastapi import BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-from src.utils.kb_store import KB_CATEGORIES
+from src.utils.kb_store import KB_CATEGORIES, seed_kb_format_examples
 from src.web.kb_ai_helpers import ai_translate_entry, auto_fill_entry
 from src.web.web_i18n import tr
 
@@ -42,6 +42,15 @@ def register_kb_routes(app, ctx):
     _api_auth = ctx.api_auth
     _require_auth = ctx.require_auth
     _fire_webhook = ctx.fire_webhook
+
+    # J-9 #184：桌面首装播 3 条停用态格式示例（非桌面 / 已有用户条目 / 已播过 → no-op）。
+    # 挂在这里而非 admin.py：kb_* 归 J-9，admin.py 归 J-7/J-8，不越界。
+    try:
+        _fmt_seed = seed_kb_format_examples(_kb_store)
+        if _fmt_seed.get("added"):
+            logger.info("KB 首装格式示例已播种: %s", _fmt_seed)
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("KB 首装格式示例播种失败（忽略）: %s", _exc)
 
     def _run_kb_conflict_checkers(data: dict) -> list:
         """Run all registered KB conflict checkers from domain packs."""
@@ -92,15 +101,44 @@ def register_kb_routes(app, ctx):
         category: str = "",
         search: str = "",
         enabled_only: bool = False,
+        source: str = "",
     ):
+        """source: ''=全部；vendor/user/import/system=只看该来源；-vendor=排除该来源（J-9）。"""
         _api_auth(request)
-        entries = _kb_store.list_entries(category=category, enabled_only=enabled_only, search=search)
+        entries = _kb_store.list_entries(
+            category=category, enabled_only=enabled_only, search=search, source=source)
         for e in entries:
             try:
                 e["triggers"] = json.loads(e.get("triggers", "[]"))
             except Exception:
                 e["triggers"] = []
         return {"entries": entries, "total": len(entries)}
+
+    @app.post("/api/kb/entries/purge-source")
+    async def api_kb_purge_source(request: Request):
+        """一键清空某来源的全部条目（KB 页「系统预置·厂商产品 → 一键清空」）。
+
+        只接受 vendor / system / import——user 条目不许整批清（那是用户自己的知识，
+        要清走 /api/kb/purge 全库清空的显式路径）。
+        """
+        _api_auth(request)
+        data = await request.json()
+        src = str(data.get("source") or "").strip().lower()
+        if src not in ("vendor", "system", "import"):
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_source_invalid",
+                        "source must be one of vendor/system/import"))
+        count = _kb_store.purge_by_source(src)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_source", f"{src}:{count} entries")
+        return {"ok": True, "source": src, "count": count}
+
+    @app.get("/api/kb/health")
+    async def api_kb_health(request: Request, days: int = 7):
+        """KB 自检（J-9 #184）：条目分来源计数 / 向量化数 / 7 天注入命中数 / 最近命中时刻。"""
+        _api_auth(request)
+        return _kb_store.health(days=days)
 
     @app.get("/api/kb/entries/{entry_id}")
     async def api_kb_get_entry(request: Request, entry_id: str):
@@ -346,8 +384,10 @@ def register_kb_routes(app, ctx):
         data = await request.json()
         query = data.get("query", "")
         lang = data.get("lang", "zh")
+        # 默认与对客链路同口径（桌面模式排除 vendor）；管理员显式 include_vendor=true 才放行
+        _inc_vendor = True if data.get("include_vendor") else None
         t0 = time.time()
-        result = _kb_store.search(query, top_k=5, lang=lang)
+        result = _kb_store.search(query, top_k=5, lang=lang, include_vendor=_inc_vendor)
         ai_context = _kb_store.build_ai_context_from_result(result, lang=lang)
         elapsed_ms = int((time.time() - t0) * 1000)
         for e in result.get("entries", []):
