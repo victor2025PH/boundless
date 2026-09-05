@@ -9,6 +9,7 @@ from __future__ import annotations
 from src.inbox.inbound_enrich import apply_inbound_enrichments
 from src.inbox.withdrawn_cite import (
     PLACEHOLDER,
+    apply_to_reply,
     build_withdrawn_hint,
     quotes_for,
     record_withdrawn,
@@ -113,3 +114,22 @@ def test_inbound_enrich_injects_hint_and_redacts_history():
     assert "不得主动引用" in (uc.get("_topic_switch_hint") or "")
     assert hist[0]["content"] == PLACEHOLDER
     assert len(hist) == 2
+
+
+def test_apply_to_reply_uses_ledger_and_inbound_exempt():
+    record_withdrawn(CID, QUOTE)
+    cleaned, hits = apply_to_reply(_FIVE_DRAFTS[0], CID)
+    assert "日本" not in cleaned
+    assert hits
+    kept, nohits = apply_to_reply(
+        "日本那边我帮你看看天气。", CID, inbound="日本好玩吗")
+    assert "日本" in kept
+    assert nohits == []
+
+
+def test_enrich_draft_wires_apply_to_reply():
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "src" / "inbox" / "drafts.py"
+    text = src.read_text(encoding="utf-8")
+    assert "apply_to_reply" in text
+    assert "withdrawn_cite" in text

@@ -1226,6 +1226,20 @@ class DraftService:
         draft = self._store.get_draft(draft_id)
         if draft is None or str(draft.get("status") or "") != "enriching":
             return False
+        # #32② / #145⑤：出站稿不得主动提起对方已撤回的内容（入站已含则不剥）
+        try:
+            from src.inbox.withdrawn_cite import apply_to_reply
+            reply, _wh = apply_to_reply(
+                reply,
+                str(draft.get("conversation_id") or ""),
+                inbound=str(draft.get("peer_text") or ""),
+            )
+            if _wh:
+                logger.info(
+                    "[withdrawn_cite] enrich_draft 剥离主动引用 draft=%s hits=%s",
+                    draft_id, _wh[:5])
+        except Exception:
+            logger.debug("withdrawn_cite enrich skip", exc_info=True)
         base_risk = str(draft.get("risk_level") or "low")
         _peer_reasons = _as_list(draft.get("risk_reasons"))
         reply_risk, _reply_hits = keyword_risk_hits(reply)

@@ -159,6 +159,16 @@ def sanitize_outbound(
     return cleaned, hits
 
 
+def apply_to_reply(
+    text: str, conversation_id: str = "", *, inbound: str = "",
+) -> Tuple[str, List[str]]:
+    """发送链入口：按会话账本剥主动引用。无账本 / 异常由调用方自己兜。"""
+    qs = quotes_for(conversation_id)
+    if not qs:
+        return str(text or ""), []
+    return sanitize_outbound(text, qs, inbound=inbound)
+
+
 def redact_history(
     history: Optional[List[Dict[str, Any]]], quotes: Iterable[str],
 ) -> List[Dict[str, Any]]:
@@ -210,6 +220,7 @@ __all__ = [
     "normalize_quote",
     "quotes_for",
     "record_withdrawn",
+    "apply_to_reply",
     "redact_history",
     "reset_ledger",
     "sanitize_outbound",

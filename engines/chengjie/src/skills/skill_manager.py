@@ -4969,6 +4969,28 @@ class SkillManager(LoggerMixin):
         """
         if not reply:
             return reply
+        # #32② / #145⑤：出站不得主动提起对方已撤回的内容（对方本轮又说了则不剥）
+        try:
+            from src.inbox.withdrawn_cite import apply_to_reply
+            _cid = ""
+            _inbound = ""
+            if isinstance(user_context, dict):
+                _cid = str(
+                    user_context.get("conversation_id")
+                    or user_context.get("chat_id") or "")
+                _hist = user_context.get("_conversation_history") or []
+                for _m in reversed(_hist):
+                    if isinstance(_m, dict) and _m.get("role") == "user":
+                        _inbound = str(_m.get("content") or "")
+                        break
+            _cleaned, _hits = apply_to_reply(
+                reply, conversation_id=_cid, inbound=_inbound)
+            if _hits:
+                self.logger.info(
+                    "%s[withdrawn_cite] 剥离主动引用 %r", log_prefix, _hits[:5])
+                reply = _cleaned
+        except Exception:
+            self.logger.debug("[withdrawn_cite] skip", exc_info=True)
         try:
             from src.ai.outbound_text_guard import (
                 apply_outbound_text_guard, resolve_cfg,
