@@ -19,7 +19,57 @@
 export const CLOSE_CODES = Object.freeze({
   restartRequired: 515, // 配对完成后协议要求重启 socket（正常流程，非故障）
   loggedOut: 401, // 设备被解绑 / 手机端登出 → 必须人工重新配对，自动重连无意义
+  forbidden: 403, // 账号被 WhatsApp 限制/封禁（"Connection Failure"）→ 重连只会再吃 403
 });
+
+/**
+ * 403 forbidden 终态阀（J-6 A，2026-09-05）。
+ *
+ * 事故：skuio 88MP86 一个 403 账号 10 小时 38 轮「5 次快退避 → giving up → 15min 慢重试」，
+ * 刷出 185 条 reconnect 日志把真问题淹没。403 语义上与 401 一样是「服务端拒绝这个账号」，
+ * 但瞬时 403 也偶见（风控抖动/网关短暂拒绝），所以不在首个 403 就判死：**连续
+ * FORBIDDEN_ROUNDS_DEFAULT 轮 giving up 全是 403** 才进终态；中间任何一次非 403 的 close
+ * 或一次成功 open 都把计数清零。0 = 关闭终态判定（恢复旧行为，只当 428 处理）。
+ */
+export const FORBIDDEN_ROUNDS_DEFAULT = 2;
+
+/** 读环境变量 WA_FORBIDDEN_ROUNDS（非法/缺省 → 默认 2；0 = 不判终态）。 */
+export function forbiddenRoundsMax(env) {
+  const raw = env && env.WA_FORBIDDEN_ROUNDS;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return FORBIDDEN_ROUNDS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return FORBIDDEN_ROUNDS_DEFAULT;
+  return Math.floor(n);
+}
+
+/**
+ * 403 连续计数状态机（纯函数：输入旧状态 + 事件，返回新状态，不改入参）。
+ *
+ * state = { streak: 连续 403 close 次数, rounds: 连续「整轮都是 403」的 giving-up 轮数 }
+ * 事件：
+ *   {type:"close", code}                 — 一次 close：403 → streak+1；其他码 → 全清零
+ *   {type:"exhausted", attemptsPerRound} — scheduleReconnect 耗尽：本轮 ≥attemptsPerRound
+ *                                           次 close 全是 403 → rounds+1，否则 rounds 清零
+ *   {type:"open"}                        — 连上了 → 全清零
+ */
+export function nextForbiddenState(prev, ev) {
+  const s = prev && typeof prev === "object"
+    ? { streak: Number(prev.streak) || 0, rounds: Number(prev.rounds) || 0 }
+    : { streak: 0, rounds: 0 };
+  const type = ev && ev.type;
+  if (type === "open") return { streak: 0, rounds: 0 };
+  if (type === "close") {
+    if (Number(ev.code) === CLOSE_CODES.forbidden) return { streak: s.streak + 1, rounds: s.rounds };
+    return { streak: 0, rounds: 0 };
+  }
+  if (type === "exhausted") {
+    const per = Math.max(1, Number(ev.attemptsPerRound) || 1);
+    // 一轮 = 触发 close + attemptsPerRound 次重连 close；streak ≥ per 即「这一轮全是 403」
+    if (s.streak >= per) return { streak: s.streak, rounds: s.rounds + 1 };
+    return { streak: s.streak, rounds: 0 };
+  }
+  return s;
+}
 
 /**
  * 决定 close 事件后的动作。只读输入、无任何副作用。
@@ -27,9 +77,18 @@ export const CLOSE_CODES = Object.freeze({
  * @param {object|null} entry  会话条目（只读 status / accountId 两个字段）
  * @param {number} code        lastDisconnect 的 statusCode（取不到时调用方传 0）
  * @param {boolean} isStale    事件是否来自已被替换的旧 socket（sessions 槽位已换代）
- * @returns {{action: "ignore"|"restart"|"logged_out"|"reconnect"|"expire"}}
+ * @param {{forbiddenRounds?: number, forbiddenRoundsMax?: number,
+ *          forbiddenStreak?: number, attemptsPerRound?: number}} [ctx]
+ *        403 终态阀上下文：forbiddenRounds=该 login 已连续多少轮 giving up 全是 403
+ *        （见 nextForbiddenState），forbiddenRoundsMax=阈值（缺省 FORBIDDEN_ROUNDS_DEFAULT，
+ *        0=关）。forbiddenStreak+attemptsPerRound 可选：按「连续 403 close 次数」折算
+ *        等效轮数（一轮 = 触发 close + attemptsPerRound 次重连 close），与 rounds 取大——
+ *        Python 编排器每次退避重启都会打 /reconnect 清重连计数，giving-up 事件可能永远
+ *        不触发，只按 rounds 判会让 403 账号在编排器护送下无限重连；streak 不受此影响。
+ *        不传 ctx 时 403 与 428 同待遇（向后兼容旧调用方/旧测试）。
+ * @returns {{action: "ignore"|"restart"|"logged_out"|"forbidden"|"reconnect"|"expire"}}
  */
-export function decideCloseAction(entry, code, isStale) {
+export function decideCloseAction(entry, code, isStale, ctx) {
   // 陈旧事件最高优先级：startLogin（重连/重启/手动 reconnect）会替换 sessions 里的 entry，
   // 旧 socket 迟到的 close 不得影响新会话——否则会把刚建的新连接状态改坏、触发幽灵重连，
   // 双 socket 抢同一 authDir → WhatsApp 440 connectionReplaced 冲突循环。
@@ -38,6 +97,20 @@ export function decideCloseAction(entry, code, isStale) {
   if (code === CLOSE_CODES.restartRequired) return { action: "restart" };
   // 设备端解绑/登出：终态，重连只会再次被拒，必须人工重新扫码配对。
   if (code === CLOSE_CODES.loggedOut) return { action: "logged_out" };
+  // 403 forbidden：连续 N 轮 giving up 都是 403 → 终态（与 logged_out 平级，停快/慢重连，
+  // 需换号或申诉后人工重新配对）。未达阈值的 403 仍按下方「曾配对 → reconnect」走完退避
+  // （防瞬时 403 误判）。
+  if (code === CLOSE_CODES.forbidden && ctx) {
+    const max = ctx.forbiddenRoundsMax === undefined ? FORBIDDEN_ROUNDS_DEFAULT
+      : Number(ctx.forbiddenRoundsMax) || 0;
+    let rounds = Number(ctx.forbiddenRounds) || 0;
+    const per = Number(ctx.attemptsPerRound) || 0;
+    if (per > 0) {
+      const streak = Number(ctx.forbiddenStreak) || 0;
+      rounds = Math.max(rounds, Math.floor(streak / (per + 1)));
+    }
+    if (max > 0 && rounds >= max) return { action: "forbidden" };
+  }
   // 曾配对的账号（当前 authorized，或 accountId 非空＝持久化凭据里有 me）：无论此刻处于
   // pending/reconnecting 哪个中间态，掉线都继续重连。退避与放弃由 scheduleReconnect 统一
   // 负责（耗尽 → expired + postStatus + 慢重试兜底），这里绝不直接判死。

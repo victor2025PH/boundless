@@ -28,8 +28,12 @@ logger = logging.getLogger("ai_chat_assistant.platform_session_health")
 # 视为「不健康」的会话状态（会话不可用于收发）。
 # blocked（B99 2026-08-26）＝worker 检出平台「临时封锁」页：账号在线但发送必失败，
 # 边车已自冻；这里入不健康集合让横幅/看门狗/发送闸同步可见。
+# forbidden（J-6 A 2026-09-05）＝WhatsApp 边车连续多轮 403 forbidden（账号受限/
+# 被封）后的**终态**：Node 已停自动重连（close-policy.decideCloseAction →
+# "forbidden"），再重连只会继续吃 403。入不健康集合 → 横幅红/看门狗升级提醒/
+# 发送闸快速失败；ops 卡按钮语义变「解锁重连/换号重配对」（Node 侧 30min 解锁冷却）。
 UNHEALTHY_STATUSES = frozenset(
-    {"expired", "needs_login", "logged_out", "failed", "blocked"})
+    {"expired", "needs_login", "logged_out", "failed", "blocked", "forbidden"})
 # 视为「健康」的状态
 HEALTHY_STATUSES = frozenset({"authorized"})
 # 「放弃的登录尝试」（登录窗未授权就被关掉，从来不是真实账号）——worker 上报
@@ -777,7 +781,11 @@ def report_session_transition(
         from src.integrations.account_registry import get_account_registry
         _reg = get_account_registry()
         _rst = str((_reg.get(plat, acct) or {}).get("status") or "")
-        if st in ("logged_out", "needs_login", "expired") and _rst == "online":
+        # forbidden（J-6 A）：403 终态与登出同待遇——账号在平台侧已不可用，注册表
+        # 翻 offline + worker:forbidden 标记，编排器不再把它当「该在线却不在」反复护送
+        # 重连（Node 侧另有 /reconnect 解锁冷却双保险）。
+        if (st in ("logged_out", "needs_login", "expired", "forbidden")
+                and _rst == "online"):
             # 自灭型掉线（worker 上报，非运营操作）：翻状态之外落 offline_reason
             # 标记（merge 不动其他 meta 键）。看门狗对 offline 账号的持续提醒
             # **只认 worker:* 标记**——没有它，死号在一次转移告警后就永远静音

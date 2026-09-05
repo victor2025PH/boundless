@@ -7,7 +7,10 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decideCloseAction, CLOSE_CODES } from "../close-policy.js";
+import {
+  decideCloseAction, CLOSE_CODES, nextForbiddenState, forbiddenRoundsMax,
+  FORBIDDEN_ROUNDS_DEFAULT,
+} from "../close-policy.js";
 
 // Baileys DisconnectReason 语义（与 close-policy 内联常量对齐；server.js 启动时另有
 // 与权威枚举的比对告警）。428=connectionClosed 是断网/踢线最常见码。
@@ -67,8 +70,131 @@ test("防御性：entry 为 null（会话已被移除）且非 stale → expire�
     { action: "expire" });
 });
 
-test("CLOSE_CODES 契约：restartRequired=515 / loggedOut=401（Baileys DisconnectReason 同值）", () => {
+test("CLOSE_CODES 契约：restartRequired=515 / loggedOut=401 / forbidden=403（Baileys DisconnectReason 同值）", () => {
   // server.js 启动时会与真实枚举比对；这里锁死字面值，防止两边同时被误改。
   assert.equal(CLOSE_CODES.restartRequired, 515);
   assert.equal(CLOSE_CODES.loggedOut, 401);
+  assert.equal(CLOSE_CODES.forbidden, 403);
+});
+
+// ── J-6 A：403 forbidden 终态阀（skuio 88MP86：一个 403 账号 10h 38 轮重连刷 185 条日志）──
+
+const PAIRED = Object.freeze({ status: "authorized", accountId: "12132684190" });
+const ATTEMPTS = 5; // 与 server.js _RECONNECT_MAX 同值：一轮 = 5 次快退避后 giving up
+
+/** 模拟 server.js 一轮「close(403) → 5 次重连各 close(403) → giving up」的状态机推进。 */
+function oneForbiddenRound(state) {
+  let s = state;
+  for (let i = 0; i < ATTEMPTS + 1; i++) s = nextForbiddenState(s, { type: "close", code: 403 });
+  return nextForbiddenState(s, { type: "exhausted", attemptsPerRound: ATTEMPTS });
+}
+
+test("403 首轮：rounds=0 → 仍是 reconnect（走完一轮退避，防瞬时 403 误判）", () => {
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: 0, forbiddenRoundsMax: 2 }),
+    { action: "reconnect" });
+  // 第一轮 giving up 后 rounds=1，仍未达默认阈值 2 → 第二轮继续 reconnect
+  const s1 = oneForbiddenRound(undefined);
+  assert.equal(s1.rounds, 1);
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: s1.rounds, forbiddenRoundsMax: 2 }),
+    { action: "reconnect" });
+});
+
+test("403 第二轮 giving up 后 → 下一次 403 close 判 forbidden 终态", () => {
+  const s2 = oneForbiddenRound(oneForbiddenRound(undefined));
+  assert.equal(s2.rounds, 2);
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: s2.rounds, forbiddenRoundsMax: 2 }),
+    { action: "forbidden" });
+  // 缺省阈值（ctx 不带 forbiddenRoundsMax）= FORBIDDEN_ROUNDS_DEFAULT
+  assert.equal(FORBIDDEN_ROUNDS_DEFAULT, 2);
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: 2 }),
+    { action: "forbidden" });
+});
+
+test("编排器护送场景：giving up 永不触发（rounds 恒 0），连续 403 streak 折算等效轮数也能到终态", () => {
+  // Python 编排器每次退避重启打 /reconnect 清 _reconnectAttempts → exhausted 事件不来，
+  // rounds 停在 0；但每次 close(403) 的 streak 照常累积。一轮 = 1+ATTEMPTS 次 close。
+  let s;
+  for (let i = 0; i < 2 * (ATTEMPTS + 1) - 1; i++) s = nextForbiddenState(s, { type: "close", code: 403 });
+  assert.equal(s.rounds, 0);
+  // 差一次不到两轮 → 仍 reconnect
+  assert.deepEqual(
+    decideCloseAction(PAIRED, 403, false, { forbiddenRounds: 0, forbiddenRoundsMax: 2,
+      forbiddenStreak: s.streak, attemptsPerRound: ATTEMPTS }),
+    { action: "reconnect" });
+  s = nextForbiddenState(s, { type: "close", code: 403 });
+  assert.equal(s.streak, 2 * (ATTEMPTS + 1));
+  assert.deepEqual(
+    decideCloseAction(PAIRED, 403, false, { forbiddenRounds: 0, forbiddenRoundsMax: 2,
+      forbiddenStreak: s.streak, attemptsPerRound: ATTEMPTS }),
+    { action: "forbidden" });
+  // 不传 attemptsPerRound → 不折算（旧契约：只看 rounds）
+  assert.deepEqual(
+    decideCloseAction(PAIRED, 403, false, { forbiddenRounds: 0, forbiddenRoundsMax: 2, forbiddenStreak: 999 }),
+    { action: "reconnect" });
+  // rounds 已达阈值时 streak 小也判终态（取大）
+  assert.deepEqual(
+    decideCloseAction(PAIRED, 403, false, { forbiddenRounds: 2, forbiddenRoundsMax: 2,
+      forbiddenStreak: 1, attemptsPerRound: ATTEMPTS }),
+    { action: "forbidden" });
+});
+
+test("阀=0 关闭终态判定 → 403 永远按 reconnect（恢复旧行为）；不传 ctx 亦向后兼容", () => {
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: 99, forbiddenRoundsMax: 0 }),
+    { action: "reconnect" });
+  assert.deepEqual(
+    decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false, { forbiddenRounds: 0, forbiddenRoundsMax: 0,
+      forbiddenStreak: 999, attemptsPerRound: ATTEMPTS }),
+    { action: "reconnect" });
+  assert.deepEqual(decideCloseAction(PAIRED, CLOSE_CODES.forbidden, false), { action: "reconnect" });
+});
+
+test("403 计数被非 403 close 打断即清零（一轮里混进 428/408 → 不算「整轮 403」）", () => {
+  let s = nextForbiddenState(undefined, { type: "close", code: 403 });
+  s = nextForbiddenState(s, { type: "close", code: 403 });
+  s = nextForbiddenState(s, { type: "close", code: 428 });
+  assert.deepEqual(s, { streak: 0, rounds: 0 });
+  // 已攒 1 轮，第二轮夹一次 408 → exhausted 时 streak < 5 → rounds 清零
+  s = oneForbiddenRound(undefined);
+  for (let i = 0; i < 3; i++) s = nextForbiddenState(s, { type: "close", code: 403 });
+  s = nextForbiddenState(s, { type: "close", code: 408 });
+  for (let i = 0; i < 3; i++) s = nextForbiddenState(s, { type: "close", code: 403 });
+  s = nextForbiddenState(s, { type: "exhausted", attemptsPerRound: ATTEMPTS });
+  assert.equal(s.rounds, 0);
+});
+
+test("open 全清零；stale 的 403 close 仍 ignore；401/428 语义不变（2026-07-22 回归钉）", () => {
+  const s2 = oneForbiddenRound(oneForbiddenRound(undefined));
+  assert.deepEqual(nextForbiddenState(s2, { type: "open" }), { streak: 0, rounds: 0 });
+  const ctx = { forbiddenRounds: 2, forbiddenRoundsMax: 2 };
+  assert.deepEqual(decideCloseAction(PAIRED, CLOSE_CODES.forbidden, true, ctx), { action: "ignore" });
+  assert.deepEqual(decideCloseAction(PAIRED, CLOSE_CODES.loggedOut, false, ctx), { action: "logged_out" });
+  assert.deepEqual(decideCloseAction(PAIRED, CONNECTION_CLOSED, false, ctx), { action: "reconnect" });
+  assert.deepEqual(decideCloseAction({ status: "pending", accountId: "12132684190" }, 0, false, ctx),
+    { action: "reconnect" });
+  assert.deepEqual(decideCloseAction({ status: "pending", accountId: "" }, CONNECTION_CLOSED, false, ctx),
+    { action: "expire" });
+});
+
+test("nextForbiddenState 是纯函数：不改入参、坏输入不炸", () => {
+  const prev = { streak: 3, rounds: 1 };
+  const out = nextForbiddenState(prev, { type: "close", code: 403 });
+  assert.deepEqual(prev, { streak: 3, rounds: 1 });
+  assert.deepEqual(out, { streak: 4, rounds: 1 });
+  assert.deepEqual(nextForbiddenState(null, null), { streak: 0, rounds: 0 });
+  assert.deepEqual(nextForbiddenState("junk", { type: "nope" }), { streak: 0, rounds: 0 });
+});
+
+test("forbiddenRoundsMax 读 WA_FORBIDDEN_ROUNDS：缺省 2 / 非法回默认 / 0 关 / 小数取整", () => {
+  assert.equal(forbiddenRoundsMax({}), 2);
+  assert.equal(forbiddenRoundsMax(undefined), 2);
+  assert.equal(forbiddenRoundsMax({ WA_FORBIDDEN_ROUNDS: "" }), 2);
+  assert.equal(forbiddenRoundsMax({ WA_FORBIDDEN_ROUNDS: "abc" }), 2);
+  assert.equal(forbiddenRoundsMax({ WA_FORBIDDEN_ROUNDS: "-1" }), 2);
+  assert.equal(forbiddenRoundsMax({ WA_FORBIDDEN_ROUNDS: "0" }), 0);
+  assert.equal(forbiddenRoundsMax({ WA_FORBIDDEN_ROUNDS: "3.7" }), 3);
 });

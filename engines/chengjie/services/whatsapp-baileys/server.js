@@ -36,7 +36,9 @@ import {
 } from "@whiskeysockets/baileys";
 // close 分支决策抽成零依赖纯函数（2026-07-22 断网假死事故的根修）：决策可被 node --test
 // 单测（server.js 顶层 app.listen，测试没法安全 import 本文件），本文件只执行副作用。
-import { decideCloseAction, CLOSE_CODES } from "./close-policy.js";
+import {
+  decideCloseAction, CLOSE_CODES, nextForbiddenState, forbiddenRoundsMax,
+} from "./close-policy.js";
 import { shouldMarkScanned } from "./scan-signal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
@@ -55,12 +57,25 @@ const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 // close-policy 为保持零依赖内联了两个 DisconnectReason 码；这里与权威枚举比对一次，
 // 上游 Baileys 罕见改值时大声告警而非静默走错分支。
 if (CLOSE_CODES.restartRequired !== DisconnectReason.restartRequired ||
-    CLOSE_CODES.loggedOut !== DisconnectReason.loggedOut) {
+    CLOSE_CODES.loggedOut !== DisconnectReason.loggedOut ||
+    CLOSE_CODES.forbidden !== DisconnectReason.forbidden) {
   logger.error({ closeCodes: CLOSE_CODES, disconnectReason: {
     restartRequired: DisconnectReason.restartRequired,
     loggedOut: DisconnectReason.loggedOut,
+    forbidden: DisconnectReason.forbidden,
   } }, "close-policy CLOSE_CODES drifted from Baileys DisconnectReason — fix close-policy.js");
 }
+// J-6 A：403 forbidden 终态阀——连续 WA_FORBIDDEN_ROUNDS（默认 2）轮 giving up 全是 403
+// 才判终态（0=关，恢复「403 当 428」旧行为）。计数状态机在 close-policy.js（纯函数）。
+const WA_FORBIDDEN_ROUNDS = forbiddenRoundsMax(process.env);
+const _forbiddenState = new Map(); // loginId → {streak, rounds}
+// 终态后 /accounts/:id/reconnect 的解锁冷却（默认 30min，0=关）：Python 编排器对不在
+// /accounts 里的账号每次退避重启都打一次 reconnect（≤2min 一次，8 次熔断），若每次都解锁
+// 终态，403 账号会在编排器护送下继续吃 403——冷却内 reconnect 只回 {forbidden:true} 不动作；
+// 人工在冷却后点「解锁重连」= 新一轮 403 判定预算（申诉解封后的正规出路）。
+const WA_FORBIDDEN_RETRY_MS = Math.max(
+  0, Number(process.env.WA_FORBIDDEN_RETRY_MIN ?? 30) * 60 * 1000 || 0);
+const _forbiddenSince = new Map(); // loginId → 进入终态的 Date.now()
 
 // 韧性护栏：Baileys 是社区逆向库，偶发内部 promiseTimeout('Timed Out')/解密异常等会以
 // unhandledRejection/uncaughtException 冒泡；若不接住，整个网关进程会 ~60s 崩一次（app-state
@@ -258,6 +273,7 @@ function scheduleSlowRetry(loginId, proxyUrl) {
     _slowRetryTimers.delete(loginId);
     const cur = sessions.get(loginId);
     if (!cur || cur.status === "authorized") return; // 已登出移除/已恢复
+    if (cur.status === "forbidden") return; // J-6 A：403 终态，不再自动重连（人工 reconnect 才解）
     logger.info({ loginId }, "WA slow-retry: starting a fresh reconnect cycle");
     _reconnectAttempts.delete(loginId);
     scheduleReconnect(loginId, proxyUrl);
@@ -272,7 +288,13 @@ function scheduleReconnect(loginId, proxyUrl) {
   _reconnectAttempts.set(loginId, rec);
   const entry = sessions.get(loginId);
   if (rec.count > _RECONNECT_MAX) {
-    logger.error({ loginId, attempts: rec.count },
+    // J-6 A：本轮耗尽——若整轮 close 全是 403 则 403 轮数 +1（下次 403 close 由
+    // decideCloseAction 按阈值判 forbidden 终态），否则清零。
+    const fs0 = nextForbiddenState(_forbiddenState.get(loginId),
+      { type: "exhausted", attemptsPerRound: _RECONNECT_MAX });
+    _forbiddenState.set(loginId, fs0);
+    logger.error({ loginId, attempts: rec.count, forbiddenRounds: fs0.rounds,
+      forbiddenRoundsMax: WA_FORBIDDEN_ROUNDS },
       "WA reconnect loop exhausted → giving up (manual re-pair may be needed)");
     if (entry) entry.status = "expired";
     postStatus(loginId, entry, "expired",
@@ -1229,6 +1251,8 @@ async function _startLoginInner(loginId, proxyUrl) {
       }
       logger.info({ loginId, accountId: entry.accountId }, "WA connected");
       _reconnectAttempts.delete(loginId); // 连上 → 清零重连退避计数
+      _forbiddenState.delete(loginId); // J-6 A：连上 = 403 连续计数清零
+      _forbiddenSince.delete(loginId);
       const _srt = _slowRetryTimers.get(loginId); // 已恢复 → 撤掉排队中的慢重试
       if (_srt) { clearTimeout(_srt); _slowRetryTimers.delete(loginId); }
       // P1 身份化：先采集自身昵称/头像再上报，让 authorized push 即携带身份
@@ -1270,9 +1294,37 @@ async function _startLoginInner(loginId, proxyUrl) {
       // 分支决策抽在 close-policy.js（纯函数，node --test 单测）；这里只执行副作用。
       // isStale 在 close 时点重算：处理器顶部已拦一次，但上方 qr 分支有 await，极端时序下
       // entry 可能在 await 期间被 startLogin 换代——close 副作用绝不能落在已换代的会话上。
-      const decision = decideCloseAction(entry, code, sessions.get(loginId) !== entry);
+      const _stale = sessions.get(loginId) !== entry;
+      // J-6 A：403 连续计数先于决策更新（陈旧事件不计——旧 socket 的 close 不属于当前会话）。
+      let _fstate = _forbiddenState.get(loginId) || { streak: 0, rounds: 0 };
+      if (!_stale) {
+        _fstate = nextForbiddenState(_fstate, { type: "close", code });
+        _forbiddenState.set(loginId, _fstate);
+      }
+      const decision = decideCloseAction(entry, code, _stale, {
+        forbiddenRounds: _fstate.rounds, forbiddenRoundsMax: WA_FORBIDDEN_ROUNDS,
+        // streak 折算等效轮数：编排器每次退避重启打 /reconnect 会清 _reconnectAttempts，
+        // giving-up 事件可能永不触发，只看 rounds 会让 403 账号被编排器护送着无限重连。
+        forbiddenStreak: _fstate.streak, attemptsPerRound: _RECONNECT_MAX,
+      });
       if (decision.action === "ignore") {
         return; // 陈旧事件：新 entry 已接管，旧 socket 的 close 不再有任何影响
+      } else if (decision.action === "forbidden") {
+        // J-6 A 终态：连续 N 轮 giving up 全是 403 = 账号被 WhatsApp 限制/封禁。停快/慢重连
+        // （否则 10 小时 38 轮日志刷屏淹没真问题），上报 Python 让 ops 卡红行 + 「重新配对」；
+        // 人工 POST /accounts/:id/reconnect（冷却期外）会清计数重新给一轮预算。
+        entry.status = "forbidden";
+        _reconnectAttempts.delete(loginId);
+        _forbiddenSince.set(loginId, Date.now());
+        const _srt = _slowRetryTimers.get(loginId);
+        if (_srt) { clearTimeout(_srt); _slowRetryTimers.delete(loginId); }
+        logger.error({ loginId, accountId: entry.accountId || "", forbiddenRounds: _fstate.rounds,
+          forbiddenStreak: _fstate.streak },
+          "WA 403 forbidden for consecutive reconnect rounds → terminal (no more auto reconnect)");
+        postStatus(loginId, entry, "forbidden",
+          `WhatsApp returned 403 forbidden ${_fstate.streak} times in a row ` +
+          "(account restricted/banned); auto-reconnect stopped — switch number or appeal, then re-pair manually")
+          .catch(() => {});
       } else if (decision.action === "restart") {
         // 登录成功后 Baileys 要求重启 socket —— 重新拉起以维持连接（沿用同一代理）。
         // 失败也要入重连队列：restart 时点恰逢断网时 startLogin 会在 DNS 处直接抛，
@@ -1353,8 +1405,20 @@ app.use(express.json());
 // classifyBackendIdentity）。旧版本没有该字段 → 壳按「旧版」放行，不影响升级。
 // caps.sticker：send-media 具备原生贴纸分支（Python 侧发贴纸前握手——
 // 老边车没有该分支时会把贴纸掉成 document 附件，探不到 caps 就回退发图片）。
+// J-6：/health 附带边车稳定性读数（只读进程内计数，零 IO）。旧调用方只看 ok/svc/caps，
+// 新增字段向后兼容。forbidden=当前处于 403 终态的账号数（非累计事件数）。
+function stabilityStats() {
+  let forbidden = 0;
+  for (const e of sessions.values()) if (e && e.status === "forbidden") forbidden++;
+  return {
+    forbidden,
+    forbidden_rounds_max: WA_FORBIDDEN_ROUNDS,
+    forbidden_retry_min: Math.round(WA_FORBIDDEN_RETRY_MS / 60000),
+  };
+}
+
 app.get("/health", (_req, res) =>
-  res.json({ ok: true, svc: "wa-baileys", caps: { sticker: true } }));
+  res.json({ ok: true, svc: "wa-baileys", caps: { sticker: true }, stability: stabilityStats() }));
 
 app.post("/accounts/restore", async (_req, res) => {
   const restored = await restoreAll();
@@ -1382,6 +1446,24 @@ app.post("/accounts/:id/reconnect", async (req, res) => {
   }
   if (entry.status === "authorized") {
     return res.json({ ok: true, already: true });
+  }
+  // J-6 A：403 终态的解锁走冷却——冷却内（默认 30min）只回 {forbidden:true}，不拉起
+  // （编排器每次退避重启都会打到这里；封禁不会在几分钟内解除，立即重连只会再吃 403）。
+  // 冷却外的 reconnect = 人工/编排器给的新一轮 403 判定预算：清 403 计数重新判。
+  // 注意非终态时**不清** _forbiddenState：一次 403 就是一次 403，谁触发的重连都不改变
+  // 「账号被拒」这个事实，清了会让编排器的周期 reconnect 把连续计数永远打断。
+  if (entry.status === "forbidden") {
+    const since = _forbiddenSince.get(loginId) || 0;
+    const left = WA_FORBIDDEN_RETRY_MS - (Date.now() - since);
+    if (left > 0) {
+      logger.info({ loginId, accountId, retryAfterSec: Math.ceil(left / 1000) },
+        "WA reconnect requested for 403-forbidden account inside cooldown → not reconnecting");
+      return res.json({ ok: true, forbidden: true, status: "forbidden",
+        retry_after_sec: Math.ceil(left / 1000) });
+    }
+    _forbiddenState.delete(loginId);
+    _forbiddenSince.delete(loginId);
+    logger.warn({ loginId, accountId }, "WA 403-forbidden account unlocked by reconnect request → new 403 budget");
   }
   // 人工/编排器触发＝新一轮重连预算：清退避计数与慢重试定时器，立即拉起。
   _reconnectAttempts.delete(loginId);
@@ -1948,7 +2030,11 @@ app.post("/accounts/:id/logout", async (req, res) => {
     clearSelfProfileTimer(entry); // 会话清理 → 延迟自采 timer 一并撤
     if (entry && entry.sock) await entry.sock.logout().catch(() => {});
   } catch (_) {}
-  if (loginId) sessions.delete(loginId);
+  if (loginId) {
+    sessions.delete(loginId);
+    _forbiddenState.delete(loginId); // J-6 A：登出即清 403 终态记账（换号重配对从零判）
+    _forbiddenSince.delete(loginId);
+  }
   // 清磁盘 session 目录（authDir 或按 loginId 兜底）→ 防 restoreAll 复活
   try {
     const dir = (entry && entry.authDir) ||

@@ -4228,7 +4228,21 @@ async function loadPlatformSessions(){
           ' data-lid="'+esc(o.login_id||'')+'" data-acct="'+esc(k.split(':')[1]||'')+'"'+
           ' style="font-size:12px;padding:2px 10px;">'+window.T('ov2_js_ps_relogin')+'</button>';
       }
-      return '<tr><td>'+esc(k)+'</td><td>'+dot+' '+esc(o.status||'?')+'</td><td>'+
+      // J-6 A（2026-09-05）：WA 403 forbidden 终态——边车已停自动重连（再连只会继续吃
+      // 403 刷日志）。状态列用 ⛔ + 人话 + 悬浮说明；按钮语义改「解锁重连」（Node 侧
+      // /reconnect 在 30min 冷却内只回 status=forbidden 不动作，冷却后=新一轮 403 判定
+      // 预算；换号走 WhatsApp 频道页重新扫码，不在此按钮）。
+      var statusCell = dot+' '+esc(o.status||'?');
+      if(String(o.status||'') === 'forbidden'){
+        statusCell = '<span title="'+esc(window.T('ov2_js_ps_forbidden_tip'))+'">⛔ '+
+          esc(window.T('ov2_js_ps_forbidden'))+'</span>';
+        if(act){
+          act = act.replace('>'+window.T('ov2_js_ps_relogin')+'</button>',
+            ' data-psess-forbidden="1" title="'+esc(window.T('ov2_js_ps_forbidden_tip'))+'">'+
+            window.T('ov2_js_ps_unlock')+'</button>');
+        }
+      }
+      return '<tr><td>'+esc(k)+'</td><td>'+statusCell+'</td><td>'+
         esc((o.detail||'').slice(0,80))+'</td><td class="muted">'+esc(when)+'</td><td>'+act+'</td></tr>';
     }).join('');
     // 入站半死行（黄点）：cookie 看似 online 但未读读不到（E2EE 密钥丢失等）→ 服务器完整重登
@@ -4289,7 +4303,15 @@ async function loadPlatformSessions(){
       }, {timeoutMs:120000});
       const d = await r.json().catch(function(){ return {}; });
       if(r.ok && d && d.ok){
-        btn.textContent = window.T('ov2_js_ps_relogin_ok');
+        // J-6 A：403 终态账号在解锁冷却内 → Node 不重连、只回 status=forbidden；
+        // 别显示「已打开/重连中」误导运营，如实说明冷却并把按钮还回去。
+        if(d.status === 'forbidden'){
+          AITRNotify.alert(window.T('ov2_js_ps_forbidden_cooldown'));
+          btn.disabled = false; btn.textContent = old;
+          return;
+        }
+        btn.textContent = btn.hasAttribute('data-psess-forbidden')
+          ? window.T('ov2_js_ps_unlock_ok') : window.T('ov2_js_ps_relogin_ok');
         setTimeout(loadPlatformSessions, 4000);
       }else{
         AITRNotify.alert(window.T('ov2_js_ps_relogin_fail')+' '+((d && d.detail) || r.status));
