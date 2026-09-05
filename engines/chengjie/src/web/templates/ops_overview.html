@@ -4211,6 +4211,14 @@ async function loadPlatformSessions(){
         value:'<span style="font-size:13px;">'+rcKeys.slice(0, 4).map(function(k){
           return esc(k)+' '+fmt(Number(byRc[k])||0); }).join(' · ')+'</span>'});
     }
+    // J-6 C（2026-09-05）：libsignal Bad MAC 解密失败（各账号最新快照求和）：
+    // 总数 / 已自愈（删对端会话）次数 / 当前连击中对端数。零流量不占版面。
+    var bm = ps.bad_mac || null;
+    if(bm && (Number(bm.total)||Number(bm.heals))){
+      kpis.push({label:window.T('ov2_js_ps_bad_mac'),
+        value:'<span title="'+esc(window.T('ov2_js_ps_bad_mac_tip'))+'">'+
+          fmt(Number(bm.total)||0)+' / '+fmt(Number(bm.heals)||0)+' / '+fmt(Number(bm.active)||0)+'</span>'});
+    }
     // P4 漏斗 KPI：半死进入 / 重登 / 恢复（进程累计；有流量才追加，免空卡挤位）
     var funnel = ps.stall_funnel || null;
     if(funnel && (Number(funnel.went)||Number(funnel.relogin)||Number(funnel.recovered))){

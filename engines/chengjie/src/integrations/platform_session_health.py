@@ -106,6 +106,34 @@ def parse_reason_class(detail: str) -> Tuple[str, str]:
     return cls, d[m.end():]
 
 
+# J-6 C：Bad MAC（libsignal 解密对端消息失败）自愈读数。Node 边车按 (login, 对端) 计
+# 连击、达阈删对端 Signal 会话后，把**该登录的累计快照**以 ``[bm:total=T,peers=P,
+# heals=H,active=A]`` 标签写进 authorized 上报的 detail（同 rc 前缀的套路：不改
+# session-status 路由契约）。这里解成 dict 存每会话最新快照 → dump().bad_mac 聚合
+# 进 ops 卡。快照语义（非增量）＝上报频率不影响正确性，Node 侧节流上报即可。
+_BM_TAG_RE = re.compile(r"\[bm:([a-z_]+=\d+(?:,[a-z_]+=\d+){0,7})\]")
+_BM_KEYS = ("total", "peers", "heals", "active")
+
+
+def parse_bad_mac(detail: str) -> Dict[str, int]:
+    """从 detail 里的 ``[bm:k=v,...]`` 标签解 Bad MAC 快照（纯函数）。
+
+    无标签 → ``{}``；只收 ``_BM_KEYS`` 内的键（其余忽略），值取非负整数。
+    """
+    m = _BM_TAG_RE.search(str(detail or ""))
+    if not m:
+        return {}
+    out: Dict[str, int] = {}
+    for kv in m.group(1).split(","):
+        k, _, v = kv.partition("=")
+        if k in _BM_KEYS:
+            try:
+                out[k] = max(0, int(v))
+            except ValueError:
+                continue
+    return out
+
+
 class PlatformSessionHealth:
     """外部 worker 会话状态登记（线程安全，进程级）。"""
 
@@ -152,6 +180,7 @@ class PlatformSessionHealth:
         # 消费面直显时「[rc:dns] …」本身就是对坐席有用的信息；reason_class 另存一份
         # 供聚合。健康态（authorized）不带前缀，解出空串即清掉上一轮原因。
         reason_class, _ = parse_reason_class(detail)
+        bad_mac = parse_bad_mac(detail)  # J-6 C：{} = 本次上报不带快照（不清旧值）
         with self._lock:
             self.total_events += 1
             self._by_status[st] = self._by_status.get(st, 0) + 1
@@ -167,7 +196,8 @@ class PlatformSessionHealth:
                             "superseded": []}
                 sess = {"status": "", "detail": "", "login_id": "", "ts": 0.0,
                         "changes": 0, "unhealthy_since": 0.0,
-                        "last_remind_ts": 0.0, "reason_class": ""}
+                        "last_remind_ts": 0.0, "reason_class": "",
+                        "bad_mac": {}}
                 self._sessions[key] = sess
             prev = str(sess.get("status") or "")
             changed = prev != st
@@ -175,7 +205,12 @@ class PlatformSessionHealth:
                 sess["changes"] = int(sess.get("changes") or 0) + 1
             now = time.time()
             sess["status"] = st
-            sess["detail"] = str(detail or "")[:300]
+            _detail = str(detail or "")
+            if bad_mac:
+                sess["bad_mac"] = bad_mac
+                # 标签只是运输载体，不进直显 detail（authorized 行 detail 本就少见）
+                _detail = _BM_TAG_RE.sub("", _detail).strip()
+            sess["detail"] = _detail[:300]
             sess["reason_class"] = reason_class
             sess["login_id"] = _san(login_id)
             sess["ts"] = now
@@ -510,6 +545,7 @@ class PlatformSessionHealth:
             inbox = {k: dict(v) for k, v in sorted(self._inbox_health.items())}
             stalled = [k for k, v in inbox.items()
                        if float(v.get("stall_since") or 0.0)]
+            bad_mac = self._bad_mac_aggregate_locked()
             return {
                 "started_at": self._started_at,
                 "total_events": self.total_events,
@@ -529,7 +565,22 @@ class PlatformSessionHealth:
                     "relogin": int(self.total_relogin),
                     "open": len(stalled),
                 },
+                # J-6 C：Bad MAC 自愈聚合（各账号最新快照求和；accounts=有过 Bad MAC 的账号数）
+                "bad_mac": bad_mac,
             }
+
+    def _bad_mac_aggregate_locked(self) -> Dict[str, int]:
+        agg = {k: 0 for k in _BM_KEYS}
+        accounts = 0
+        for sess in self._sessions.values():
+            bm = sess.get("bad_mac") or {}
+            if not bm:
+                continue
+            accounts += 1
+            for k in _BM_KEYS:
+                agg[k] += int(bm.get(k) or 0)
+        agg["accounts"] = accounts
+        return agg
 
     def dump_prom(self) -> str:
         with self._lock:
@@ -550,6 +601,18 @@ class PlatformSessionHealth:
                 for rc, n in sorted(self._by_reason_class.items()):
                     lines.append(
                         f'platform_session_close_reason_total{{reason_class="{_esc(rc)}"}} {int(n)}')
+            _bm = self._bad_mac_aggregate_locked()
+            if _bm.get("accounts"):
+                lines += [
+                    "# HELP platform_session_bad_mac_total libsignal Bad MAC decrypt "
+                    "failures reported by sidecars (sum of latest per-account snapshots)",
+                    "# TYPE platform_session_bad_mac_total gauge",
+                    f"platform_session_bad_mac_total {int(_bm['total'])}",
+                    "# HELP platform_session_bad_mac_heals_total Peer Signal sessions "
+                    "deleted by Bad MAC self-heal",
+                    "# TYPE platform_session_bad_mac_heals_total gauge",
+                    f"platform_session_bad_mac_heals_total {int(_bm['heals'])}",
+                ]
             lines += [
                 "# HELP platform_session_unhealthy Whether the session's last "
                 "reported status is unhealthy (1) or healthy (0)",

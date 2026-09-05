@@ -41,6 +41,10 @@ import {
   classifyCloseReason, ReasonWindow, dnsRetryConfig, reconnectDelay,
 } from "./close-policy.js";
 import { shouldMarkScanned, pairingObservation } from "./scan-signal.js";
+import {
+  badMacConfig, BadMacTracker, isBadMacStub, isPeerPlaintext, peerSessionJids, maskJid,
+  badMacDetailTag,
+} from "./bad-mac-heal.js";
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
 import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
@@ -106,6 +110,61 @@ function noteCloseReason(loginId, entry, code, reason, errCode) {
     _dnsStreak.delete(loginId);
   }
   return cls;
+}
+
+// J-6 C：Bad MAC（libsignal 解密对端消息失败）自愈。此前**没有**任何处置——日志里紧跟的
+// 「app-state resync requested」是 open 时的通讯录补拉（resyncContacts），与 Signal 会话无关。
+// 按 (loginId, 对端 jid) 计连续 Bad MAC，≥ WA_BAD_MAC_THRESHOLD（默认 3）→ 删该对端 session
+// 记录（signalRepository.deleteSession，Baileys 常规处置）让下一条消息以 prekey 重建会话；
+// 删后 30min 冷却不重删。绝不 resync 全部 app-state / 绝不动其他对端会话。
+const WA_BAD_MAC = badMacConfig(process.env);
+const _badMac = new BadMacTracker(WA_BAD_MAC);
+// 给 Python 的快照上报节流（每登录 ≥60s 一次；heal 事件不节流）。快照是累计值而非增量，
+// 漏发不影响正确性——只是 ops 卡读数晚一点。
+const _badMacPostedAt = new Map(); // loginId → Date.now()
+const BAD_MAC_POST_MIN_MS = 60 * 1000;
+
+/** 把该登录的 Bad MAC 累计快照经 postStatus（同态 authorized + [bm:…] 标签）带给 Python。 */
+function postBadMacSnapshot(loginId, entry, force) {
+  if (!entry || entry.status !== "authorized") return; // 非在线态不掺标签（detail 直显）
+  const now = Date.now();
+  if (!force && now - (_badMacPostedAt.get(loginId) || 0) < BAD_MAC_POST_MIN_MS) return;
+  _badMacPostedAt.set(loginId, now);
+  const tag = badMacDetailTag(_badMac.snapshotFor(loginId));
+  postStatus(loginId, entry, "authorized", `${tag} bad-mac`).catch(() => {});
+}
+
+/** 入站消息经过：Bad MAC stub → 计数/自愈；明文 → 该对端连击清零。best-effort，绝不抛。 */
+async function observeBadMac(loginId, entry, msg) {
+  const jids = peerSessionJids(msg);
+  if (!jids.length) return;
+  const peer = jids[0];
+  if (isPeerPlaintext(msg)) { _badMac.noteOk(loginId, peer); return; }
+  if (!isBadMacStub(msg)) return;
+  const r = _badMac.record(loginId, peer);
+  const masked = maskJid(peer);
+  if (!r.heal) {
+    logger.warn({ loginId, peer: masked, streak: r.streak, total: r.total,
+      inCooldown: r.inCooldown }, "WA Bad MAC from peer (counting)");
+    postBadMacSnapshot(loginId, entry, false);
+    return;
+  }
+  const repo = entry && entry.sock && entry.sock.signalRepository;
+  if (!repo || typeof repo.deleteSession !== "function") {
+    logger.warn({ loginId, peer: masked, streak: r.streak },
+      "WA Bad MAC streak hit threshold but signalRepository.deleteSession unavailable");
+    return;
+  }
+  try {
+    await repo.deleteSession(jids);
+    _badMac.markHealed(loginId, peer);
+    logger.warn({ loginId, peer: masked, streak: r.streak, total: r.total, addrs: jids.length },
+      "WA Bad MAC self-heal: deleted peer Signal session (will rebuild on next message)");
+    postBadMacSnapshot(loginId, entry, true);
+  } catch (e) {
+    logger.warn({ loginId, peer: masked, e: String((e && e.message) || e) },
+      "WA Bad MAC self-heal: deleteSession failed");
+  }
 }
 
 // 韧性护栏：Baileys 是社区逆向库，偶发内部 promiseTimeout('Timed Out')/解密异常等会以
@@ -1178,6 +1237,8 @@ async function _startLoginInner(loginId, proxyUrl) {
   sock.ev.on("messages.upsert", async (m) => {
     try {
       for (const msg of (m && m.messages) || []) {
+        // J-6 C：解密失败 stub 计数/自愈（明文顺手清零连击）；不影响后续落库语义
+        try { await observeBadMac(loginId, entry, msg); } catch (_) {}
         // P4-6A：撤回/编辑走 protocolMessage，先拦截改写线程；否则按普通消息落库
         const op = WA_SYNC_EDITS ? extractProtocolOp(msg) : null;
         if (op) {
@@ -1515,6 +1576,8 @@ function stabilityStats() {
     reason_10m: _reasonWindow.counts(),
     reason_total: { ..._reasonWindow.total },
     dns_retry: { delay_ms: WA_DNS_RETRY.delayMs, count: WA_DNS_RETRY.count, in_phase: dnsPhase },
+    // J-6 C：bad_mac_total / bad_mac_peers / heals + 当前连击中的对端 Top5（jid 打码）
+    bad_mac: _badMac.snapshot(5),
   };
 }
 
@@ -2145,6 +2208,8 @@ app.post("/accounts/:id/logout", async (req, res) => {
     _forbiddenSince.delete(loginId);
     _dnsStreak.delete(loginId); // J-6 B：同理清 DNS 连击/最近原因
     _lastReason.delete(loginId);
+    _badMac.clear(loginId); // J-6 C：会话目录随之删除，对端连击记账一并清
+    _badMacPostedAt.delete(loginId);
   }
   // 清磁盘 session 目录（authDir 或按 loginId 兜底）→ 防 restoreAll 复活
   try {

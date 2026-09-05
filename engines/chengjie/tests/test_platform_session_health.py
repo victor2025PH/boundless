@@ -128,6 +128,55 @@ def test_store_prom_omits_reason_block_when_empty():
     assert s.dump()["by_reason_class"] == {}
 
 
+# ── J-6 C：Bad MAC 快照标签 [bm:…] → 每会话快照 + 聚合 ───────────────────────
+
+def test_parse_bad_mac_tag():
+    from src.integrations.platform_session_health import parse_bad_mac
+    assert parse_bad_mac("[bm:total=7,peers=2,heals=1,active=1] bad-mac") == {
+        "total": 7, "peers": 2, "heals": 1, "active": 1}
+    # 无标签 / 空 → {}
+    assert parse_bad_mac("cookies expired") == {}
+    assert parse_bad_mac("") == {}
+    # 未知键忽略、已知键照收；标签可在任意位置
+    assert parse_bad_mac("x [bm:total=3,foo=9] y") == {"total": 3}
+    # [rc:] 前缀与 [bm:] 标签并存互不干扰
+    assert parse_bad_mac("[rc:dns] [bm:total=1,peers=1,heals=0,active=1]") == {
+        "total": 1, "peers": 1, "heals": 0, "active": 1}
+
+
+def test_store_bad_mac_snapshot_and_aggregate():
+    s = _store()
+    # 无标签的 authorized：不产生 bad_mac
+    s.record("whatsapp", "639170000002", "authorized")
+    assert s.dump()["bad_mac"] == {"total": 0, "peers": 0, "heals": 0,
+                                   "active": 0, "accounts": 0}
+    assert "platform_session_bad_mac_total" not in s.dump_prom()
+
+    s.record("whatsapp", "639270135480", "authorized",
+             detail="[bm:total=7,peers=2,heals=1,active=1] bad-mac")
+    s.record("whatsapp", "639170000001", "authorized",
+             detail="[bm:total=3,peers=1,heals=0,active=1] bad-mac")
+    d = s.dump()
+    assert d["bad_mac"] == {"total": 10, "peers": 3, "heals": 1, "active": 2,
+                            "accounts": 2}
+    # 标签只是运输载体，不进直显 detail
+    assert "[bm:" not in d["sessions"]["whatsapp:639270135480"]["detail"]
+    assert d["sessions"]["whatsapp:639270135480"]["bad_mac"]["total"] == 7
+
+    # 快照是累计值：后来的不带标签的同态上报不清旧值；带标签的覆盖（非累加）
+    s.record("whatsapp", "639270135480", "authorized")
+    assert s.dump()["sessions"]["whatsapp:639270135480"]["bad_mac"]["total"] == 7
+    s.record("whatsapp", "639270135480", "authorized",
+             detail="[bm:total=9,peers=2,heals=2,active=0] bad-mac")
+    d = s.dump()
+    assert d["sessions"]["whatsapp:639270135480"]["bad_mac"]["heals"] == 2
+    assert d["bad_mac"]["total"] == 12 and d["bad_mac"]["heals"] == 2
+
+    prom = s.dump_prom()
+    assert "platform_session_bad_mac_total 12" in prom
+    assert "platform_session_bad_mac_heals_total 2" in prom
+
+
 # ── B63-②（实施64 P1-4）：发送失败会话性败因 → 健康登记 ─────────────────────
 
 def test_note_send_auth_failure_maps_session_codes(monkeypatch):
