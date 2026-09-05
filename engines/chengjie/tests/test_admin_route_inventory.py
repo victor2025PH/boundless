@@ -169,6 +169,7 @@ _BASELINE = """
 /api/episodic-memory/backfill	POST
 /api/episodic-memory/bulk-delete	POST
 /api/episodic-memory/correction-stats	GET
+/api/episodic-memory/export	GET
 /api/episodic-memory/summary	GET
 /api/episodic-memory/{row_id}	DELETE
 /api/episodic-memory/{row_id}	PUT

@@ -264,6 +264,48 @@ def test_page_renders_health_card_queue_and_maintenance(auth_client):
     assert ">向量</th>" not in html                                          # 「向量」列已删
 
 
+# ── J-10 二期：每客户导出 ────────────────────────────────────────────────────
+def test_export_route_json_and_csv(tmp_path):
+    from starlette.testclient import TestClient
+    from src.utils.audit_store import AuditStore
+    from src.web.admin import create_app
+    from tests.test_web_episodic_memory_api import _load_cm, _run_async
+
+    cm = _run_async(_load_cm(tmp_path))
+    audit = AuditStore(db_path=tmp_path / "audit.db")
+    st = EpisodicMemoryStore(tmp_path / "mem.db")
+    uid = "telegram:acct:800"
+    a = st.add_fact(uid, "客户喜欢喝美式咖啡", source_quote="我爱喝美式")
+    b = st.add_fact(uid, "客户喜欢看科幻电影")
+    st.ignore_fact(b)
+    st.add_fact("telegram:acct:801", "别人的记忆")
+    assert [r["id"] for r in st.export_user(uid)] == [a]
+    assert {r["id"] for r in st.export_user(uid, include_ignored=True)} == {a, b}
+    assert st.export_user("") == []
+    sm = MagicMock()
+    sm._episodic_store = st
+    sm._context_store = MagicMock(spec=[])            # 无 peek → self_experience 静默为空
+    tc = MagicMock()
+    tc.skill_manager = sm
+    app = create_app(cm, audit_store=audit, boot_ts=0, telegram_client=tc)
+    with TestClient(app, raise_server_exceptions=True) as client:
+        client.headers.update({"Authorization": "Bearer test-token-123"})
+        r = client.get("/api/episodic-memory/export", params={"memory_key": uid})
+        assert r.status_code == 200 and "attachment" in r.headers.get("content-disposition", "")
+        d = r.json()
+        assert d["memory_key"] == uid and [m["id"] for m in d["memories"]] == [a]
+        assert d["memories"][0]["source_quote"] == "我爱喝美式" and d["self_experience"] == []
+        r2 = client.get("/api/episodic-memory/export",
+                        params={"memory_key": uid, "format": "csv", "include_ignored": 1})
+        assert r2.status_code == 200 and r2.headers["content-type"].startswith("text/csv")
+        lines = r2.text.lstrip("\ufeff").splitlines()
+        assert lines[0].startswith("id,content,source,tier,status") and len(lines) == 3
+        assert "客户喜欢看科幻电影" in r2.text and "ignored" in r2.text
+        assert client.get("/api/episodic-memory/export").status_code == 400
+        assert audit.query(limit=5, action="episodic_export")
+    st.close()
+
+
 # ── 路由 ───────────────────────────────────────────────────────────────────
 def test_review_routes_end_to_end(tmp_path):
     from starlette.testclient import TestClient

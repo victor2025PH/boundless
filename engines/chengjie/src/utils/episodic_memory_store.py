@@ -620,6 +620,26 @@ class EpisodicMemoryStore:
             return None
         return self._row_to_dict(r) if r else None
 
+    def export_user(self, user_id: str, *, include_ignored: bool = False,
+                    limit: int = 2000) -> List[Dict[str, Any]]:
+        """J-10 二期：单客户全量导出（记忆键精确匹配，按时间正序）。默认不含软删；绝不抛。"""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return []
+        where = "user_id = ?"
+        if not include_ignored:
+            where += " AND COALESCE(status, 'active') = 'active'"
+        try:
+            rows = self._conn.execute(
+                f"SELECT {self._ROW_COLS} FROM episodic_memory WHERE {where}"
+                " ORDER BY created_at ASC, id ASC LIMIT ?",
+                (uid, max(1, min(int(limit or 2000), 10000))),
+            ).fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic export_user failed: %s", e)
+            return []
+        return [self._row_to_dict(r) for r in rows]
+
     def review_counts(self, *, user_id: str = "") -> Dict[str, Any]:
         """例外队列计数：``{"pending", "by_reason": {reason: n}, "high_impact_pending"}``。
 

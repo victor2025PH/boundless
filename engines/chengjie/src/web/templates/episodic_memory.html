@@ -929,6 +929,9 @@ function _emDrvRender(){
     return '<button type="button" class="btn em-drv-batch" data-reason="'+_emEsc(k)+'" style="font-size:.72rem;padding:.3rem .6rem;color:var(--green)">'+_emEsc(window.Tf('em_review_batch_same',{r:rl,n:byReason[k].length}))+'</button>';
   }).join(''):'';
   var copyB=_emMaskOn?'':'<button type="button" class="em-btn-plain" id="em-drv-copy" style="font-size:.72rem;padding:.3rem .6rem">'+_emEsc(window.T('em_id_copy_tip'))+'</button>';
+  // J-10 二期：每客户导出（JSON 含人设说过/承诺过；CSV 只导记忆行）——演示打码时不给导
+  var expB=_emMaskOn?'':'<a class="em-btn-plain" style="font-size:.72rem;padding:.3rem .6rem;text-decoration:none" href="/api/episodic-memory/export?memory_key='+encodeURIComponent(key)+'&format=json" title="'+_emEsc(window.T('em_export_tip'))+'" download>⬇ '+_emEsc(window.T('em_export'))+'</a>'
+    +'<a class="em-btn-plain" style="font-size:.72rem;padding:.3rem .6rem;text-decoration:none" href="/api/episodic-memory/export?memory_key='+encodeURIComponent(key)+'&format=csv" download>'+_emEsc(window.T('em_export_csv'))+'</a>';
   // J-10 B1：记忆时间线按人话分组（基本信息 / 关系与家人 / 偏好与习惯 / 近期事件与约定 / 其他），
   // 不再露 heuristic/llm 这类研发分类名；组内按时间倒序
   var byCat={};
@@ -954,7 +957,7 @@ function _emDrvRender(){
     +'<div style="font-size:.68rem;color:var(--t3);margin-top:.3rem">'+_emEsc(stats)+(span?' · '+_emEsc(span):'')+'</div>'
     +(_emMaskOn?'':'<div style="font-size:.62rem;color:var(--t3);margin-top:.25rem;font-family:Consolas,monospace;word-break:break-all">'+_emEsc(key)+'</div>')
     +'</div><button type="button" class="em-drv-x" id="em-drv-x" title="'+_emEsc(window.T('close'))+'">✕</button></div>'
-    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+usedSec+selfSec+secs+'</div>';
+    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+expB+'</div>'+usedSec+selfSec+secs+'</div>';
   _emDrvLoadUsed(key);
   _emDrvLoadSelf(key,convIdForSelf);
   var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);

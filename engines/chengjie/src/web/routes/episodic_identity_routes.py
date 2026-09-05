@@ -776,6 +776,67 @@ def register_episodic_identity_routes(app, ctx) -> None:
                    old_val=f"[{kind}] {text[:160]}")
         return {"ok": True, "deleted": {"kind": kind, "text": text[:160]}, "context_key": key}
 
+    @app.get("/api/episodic-memory/export")
+    async def api_episodic_memory_export(
+        request: Request, memory_key: str = "", format: str = "json", include_ignored: int = 0,
+    ):
+        """J-10 二期：单客户记忆导出（隐私行承诺的「可导出」）。
+
+        ``format=json``：``{memory_key, exported_at, identity?, memories: [...], self_experience: [...]}``
+        （附件下载）；``format=csv``：只导记忆行（content / 谁说的 / 状态 / 时间 / 原话 / 被用次数）。
+        默认不含「不再使用」的；``include_ignored=1`` 全导。导出落审计（谁导了谁的记忆）。
+        """
+        _api_auth(request)
+        mk = str(memory_key or "").strip()[:200]
+        if not mk:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="memory_key"))
+        store = _store_or_503(request, "export_user")
+        rows = store.export_user(mk, include_ignored=bool(include_ignored))
+        sm = _get_sm()
+        ident: Dict[str, Any] = {}
+        inbox_db = _inbox_db_or_none()
+        if inbox_db is not None:
+            try:
+                ident = resolve_identities(inbox_db, [mk]).get(mk) or {}
+            except Exception:
+                ident = {}
+        self_items: list = []
+        try:
+            from src.utils.memory_self_log import collect_self_experience
+            ctx, _k = _self_log_ctx(sm, mk, str(ident.get("conversation_id") or ""))
+            self_items = collect_self_experience(ctx) if ctx is not None else []
+        except Exception:
+            self_items = []
+        _audit_epi(request, "episodic_export", mk, new_val=f"rows={len(rows)} fmt={format}")
+        from fastapi.responses import Response
+        import json as _json
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safe = "".join(ch if ch.isalnum() else "_" for ch in mk)[:60] or "memory"
+        if str(format or "").lower() == "csv":
+            import csv
+            import io
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["id", "content", "source", "tier", "status", "review_reason", "impact",
+                        "created_at", "source_quote", "recall_count", "last_recalled_ts"])
+            for r in rows:
+                w.writerow([r.get("id"), r.get("content"), r.get("source"), r.get("tier"),
+                            r.get("status"), r.get("review_reason"), r.get("impact"),
+                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(r.get("created_at") or 0))),
+                            r.get("source_quote"), r.get("recall_count"),
+                            (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(r.get("last_recalled_ts") or 0)))
+                             if r.get("last_recalled_ts") else "")])
+            return Response(
+                content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="memory_{safe}_{stamp}.csv"'})
+        payload = {"memory_key": mk, "exported_at": time.time(), "identity": ident or None,
+                   "memories": rows, "self_experience": self_items}
+        return Response(
+            content=_json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="memory_{safe}_{stamp}.json"'})
+
     @app.post("/api/episodic-memory/self-log/mark-done")
     async def api_episodic_self_log_mark_done(request: Request):
         """J-10 二期：坐席点「已兑现」。Body ``{memory_key|conversation_id, kind: "promise", ts, text}``。
