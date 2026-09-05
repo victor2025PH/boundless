@@ -82,6 +82,19 @@ def test_line_worker_outbound_default_follows_media_limits():
     assert own["outbound_max_bytes"] == 5 * ML.MB
 
 
+def test_line_inbound_default_covers_server_transcoded_video():
+    """J-3 C 真机：LINE 服务端把 100MB 源视频转码成 27.5MB 下发；入站缺省 20MB 会拒下＝
+    「发得出、收不到」。缺省必须 ≥ 28MB（现定 32MB），且 resolve 缺省仍走这个常量。"""
+    assert LM.DEFAULT_INBOUND_MAX_BYTES >= 28 * ML.MB
+    assert LM.DEFAULT_INBOUND_MAX_BYTES == 32 * ML.MB
+    c = LM.resolve_line_media_cfg({"platform_login": {"line": {"media": {}}}})
+    assert c["inbound_max_bytes"] == LM.DEFAULT_INBOUND_MAX_BYTES
+    # 现场显式覆写仍最高优先（不被常量顶掉）
+    own = LM.resolve_line_media_cfg(
+        {"platform_login": {"line": {"media": {"inbound_max_bytes": 5 * ML.MB}}}})
+    assert own["inbound_max_bytes"] == 5 * ML.MB
+
+
 def test_i18n_keys_bilingual():
     from src.web.web_i18n import get_translations
     for lang in ("zh", "en"):

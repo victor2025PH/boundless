@@ -89,7 +89,10 @@ LINE_OUTBOUND_KINDS: Dict[str, Tuple[int, str, Optional[str]]] = {
 _OBS_SERVICE = "talk"
 _OBS_SID = "m"
 
-DEFAULT_INBOUND_MAX_BYTES = 20 * 1024 * 1024
+#: 入站缺省 32MB（2026-09-05 J-3 C 真机：LINE 服务端把 100MB 源视频转码成 27.5MB 再下发，
+#: 旧 20MB 会把这类转码件 ``too_large_actual`` 拒下＝「发得出、收不到」；出站已放到 100MB）。
+#: 现场可用 ``platform_login.line.media.inbound_max_bytes`` 覆写。
+DEFAULT_INBOUND_MAX_BYTES = 32 * 1024 * 1024
 #: 出站缺省只在 ``src.inbox.media_limits`` 不可用时兜底（#169 起真值走那边，见
 #: ``_outbound_default_bytes``）。保留常量是为了旧测试/旧调用方的 import 不断。
 DEFAULT_OUTBOUND_MAX_BYTES = 20 * 1024 * 1024
