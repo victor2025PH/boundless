@@ -102,7 +102,8 @@ def test_extract_prompt_pins_direction_rules():
     """#96-B 抽取 prompt 方向/主语铁律接线钉（措辞可改，语义锚不许丢）。"""
     import inspect
     from src.ai.ai_client import AIClient
-    src = inspect.getsource(AIClient.extract_memory_bullets)
+    # J-10 A1：prompt 本体搬进 extract_memory_facts（extract_memory_bullets 成兼容壳）
+    src = inspect.getsource(AIClient.extract_memory_facts)
     assert "称呼方向铁律" in src, "抽取 prompt 丢了呼叫位方向规则（#96）"
     assert "主语无歧义铁律" in src, "抽取 prompt 丢了主语显式规则（#96）"
     assert "用户称呼自己为X" in src, "抽取 prompt 必须显式禁双解句式（#96）"

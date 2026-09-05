@@ -5505,7 +5505,11 @@ class SkillManager(LoggerMixin):
                 await self._episodic_patch_embedding(rid, fact)
                 n_heuristic += 1
 
-            facts_llm: List[str] = []
+            # J-10 A1（#183）：LLM 抽取走引文级接地——每条事实带客户原话逐字引文
+            # ``evidence``（原语言），护栏只核引文 → 外语客户的中文事实不再整条被丢。
+            # 引文即 source_quote（比整句更准的溯源）；无引文时回退整句。
+            facts_llm: List[Tuple[str, str]] = []
+            grounding_dropped: List[Dict[str, Any]] = []
             cooldown = float(ex.get("cooldown_seconds", 20))
             now = time.time()
             if (
@@ -5513,16 +5517,38 @@ class SkillManager(LoggerMixin):
                 and self.ai_client
                 and (now - self._memory_llm_last.get(key, 0) >= cooldown)
             ):
-                facts_llm = await self.ai_client.extract_memory_bullets(mu, reply)
+                _ext_facts = getattr(self.ai_client, "extract_memory_facts", None)
+                if callable(_ext_facts):
+                    _res = await _ext_facts(mu, reply) or {}
+                    facts_llm = [
+                        (str(it.get("fact") or ""), str(it.get("evidence") or ""))
+                        for it in (_res.get("facts") or [])
+                        if isinstance(it, dict) and it.get("fact")
+                    ]
+                    grounding_dropped = list(_res.get("dropped") or [])
+                else:
+                    facts_llm = [
+                        (str(f), "")
+                        for f in (await self.ai_client.extract_memory_bullets(mu, reply) or [])
+                    ]
                 self._memory_llm_last[key] = time.time()
 
-            for f in facts_llm:
+            for f, _ev in facts_llm:
                 # R12：LLM 抽取是对话推断/概括 → ai_inferred（晋升/推翻 stable 需更高置信）
                 rid = self._episodic_store.add_fact(
                     key, f, "llm", source="ai_inferred",
-                    source_quote=_prov_quote, source_ts=_prov_ts,
+                    source_quote=(_ev.strip()[:200] or _prov_quote), source_ts=_prov_ts,
                 )
                 await self._episodic_patch_embedding(rid, f)
+
+            if grounding_dropped:
+                # 观测：按原因记账 → admin_summary → 页面「有 N 条因无法核对原话未记录」
+                try:
+                    _rec = getattr(self._episodic_store, "record_grounding_drops", None)
+                    if callable(_rec):
+                        _rec(key, grounding_dropped)
+                except Exception:
+                    self.logger.debug("[episodic] grounding drop record failed", exc_info=True)
 
             # R3：裁剪前先做离线巩固——把复发/情绪浓的事实晋升 stable（永不被裁剪）
             ccfg = self._memory_cfg.get("consolidation") or {}
@@ -5580,8 +5606,8 @@ class SkillManager(LoggerMixin):
             # P3-deep 诊断：写入数量统计
             self.logger.info(
                 "[episodic] extract done key=%s heuristic_count=%d llm_count=%d "
-                "intent=%s msg_len=%d",
-                key, n_heuristic, len(facts_llm), intent, len(mu),
+                "intent=%s msg_len=%d grounding_dropped=%d",
+                key, n_heuristic, len(facts_llm), intent, len(mu), len(grounding_dropped),
             )
         except Exception as _e:
             self.logger.warning("[episodic] extract failed key=%s: %s", key, _e)

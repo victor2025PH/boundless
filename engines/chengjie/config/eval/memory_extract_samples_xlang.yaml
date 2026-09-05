@@ -1,0 +1,27 @@
+# 记忆抽取质量评测样本 · 跨语言 / 混语增补（J-10 A1，#183 · 2026-09-05）
+# 只喂 **LLM 抽取器**门禁（tests/test_memory_extract_eval.py::test_llm_extraction_gate，
+# 缺 key 优雅跳过）——启发式抽取器只认中文自称/称呼正则，不吃这组 expect，故与
+# memory_extract_samples.yaml 分文件，免拉低启发式常驻门禁的召回。
+# 字段同主样本：text / reply / expect / forbid / note。
+#
+# 88MP86 实锤：skuio 机整晚 992 轮抽取 960 轮 llm_count=0，151 条英文客户事实被旧接地
+# 判据全丢。修后这组 expect 应能留下（fact 中文 + evidence 原语言逐字引文）。
+
+# —— 该抽（跨语言召回）——
+- {text: "I have a daughter and she is my greatest treasure", reply: "Aww she must be so lucky 🥹",
+   expect: ["女儿"], note: "EN→ZH 指令验收句"}
+- {text: "I've only had three boyfriends in my whole life. And I was married once.",
+   reply: "That's a big thing to share...", expect: ["婚"], note: "88MP86 BABY BEAR"}
+- {text: "My parents are retired and I pay all their bills.", reply: "You carry so much 💛",
+   expect: ["退休"], note: "88MP86 20:46"}
+- {text: "我现在住在 Cebu，working as a nurse", reply: "护士好辛苦呀",
+   expect: ["护士"], note: "中英混语"}
+- {text: "Call me Alex please", reply: "Alex it is 😊", expect: ["Alex"], note: "EN-call me（与主样本同）"}
+
+# —— 不该抽（Phase8 事故语料：AI 臆测一条不能过）——
+- {text: "好呀好呀", reply: "突然换日文了！那我也用日文回你～你说想去大阪玩，明天不用上班吧？",
+   forbid: ["大阪", "上班"], note: "Phase8 真实事故"}
+- {text: "yes", reply: "So you don't work tomorrow, right?", forbid: ["上班", "工作"],
+   note: "EN 应答词不能洗白 AI 提议"}
+- {text: "ok sure haha", reply: "You're from Japan, aren't you?", forbid: ["日本"],
+   note: "填充词引文"}

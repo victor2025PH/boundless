@@ -210,9 +210,12 @@ def test_memory_extraction_strips_media_desc_wiring():
     root = pathlib.Path(__file__).resolve().parents[1] / "src"
     ai_src = (root / "ai" / "ai_client.py").read_text(encoding="utf-8")
     sm_src = (root / "skills" / "skill_manager.py").read_text(encoding="utf-8")
-    # ai_client.extract_memory_bullets 入口剥离（单一收口，覆盖全部调用方）
-    seg = ai_src.split("async def extract_memory_bullets", 1)[1][:1200]
-    assert "strip_media_desc" in seg, "extract_memory_bullets 丢失媒体描述剥离"
+    # ai_client.extract_memory_facts 入口剥离（单一收口，覆盖全部调用方；
+    # J-10 A1 起 extract_memory_bullets 是它的兼容壳）
+    seg = ai_src.split("async def extract_memory_facts", 1)[1][:1800]
+    assert "strip_media_desc" in seg, "extract_memory_facts 丢失媒体描述剥离"
+    assert "extract_memory_bullets" in ai_src.split("async def extract_memory_facts", 1)[0], (
+        "extract_memory_bullets 兼容壳丢失")
     # skill_manager 启发式抽取吃的是剥离后的 mu_facts
     assert "extract_heuristic_facts(mu_facts)" in sm_src, "启发式抽取丢失媒体描述剥离"
 

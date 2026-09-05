@@ -246,6 +246,30 @@ class EpisodicMemoryStore:
             self._conn.commit()
             logger.info("episodic_memory: added source_quote/source_ts columns")
 
+    # J-10 A1（#183）：接地护栏丢弃记账——「外语客户零记忆」此前只在日志 WARNING 里，
+    # 页面完全看不出来。按原因（no_evidence / evidence_mismatch / fact_unanchored）落表，
+    # admin_summary 出 7 天读数 → 页面「有 N 条因无法核对原话未记录」。fact/evidence
+    # 截短只作核对示例。
+    _GROUNDING_DROPS_DDL = """
+    CREATE TABLE IF NOT EXISTS episodic_grounding_drops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL,
+        fact TEXT NOT NULL DEFAULT '',
+        evidence TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_epi_gdrop_ts ON episodic_grounding_drops(ts);
+    """
+    _GROUNDING_DROPS_RETAIN_SEC = 30 * 86400
+
+    def _ensure_grounding_drops_table(self) -> None:
+        try:
+            self._conn.executescript(self._GROUNDING_DROPS_DDL)
+            self._conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic_grounding_drops ddl failed: %s", e)
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -256,6 +280,7 @@ class EpisodicMemoryStore:
         self._ensure_consolidation_columns()
         self._ensure_source_column()
         self._ensure_provenance_columns()
+        self._ensure_grounding_drops_table()
 
     def close(self) -> None:
         if self._conn:
@@ -1369,7 +1394,8 @@ class EpisodicMemoryStore:
                 (n,),
             ).fetchall()
         except Exception:
-            return {"window_days": d, "new_count": 0, "new_users": 0, "top": []}
+            return {"window_days": d, "new_count": 0, "new_users": 0, "top": [],
+                    "grounding_drops": self.grounding_drop_summary(days=d)}
         return {
             "window_days": d,
             "new_count": int(row[0] or 0),
@@ -1378,7 +1404,89 @@ class EpisodicMemoryStore:
                 {"memory_key": str(r[0] or ""), "count": int(r[1] or 0)}
                 for r in top
             ],
+            "grounding_drops": self.grounding_drop_summary(days=d),
         }
+
+    def record_grounding_drops(
+        self, user_id: str, dropped: List[Dict[str, Any]], *, now: Optional[float] = None,
+    ) -> int:
+        """J-10 A1：接地护栏丢弃记账（按原因）。返回写入行数；绝不抛、零阻断抽取链。
+
+        ``dropped`` 每条 ``{"fact", "evidence", "reason"}``（``memory_grounding.
+        filter_grounded_fact_items`` 的输出形状）。顺手清 30 天前的旧行。
+        """
+        rows = []
+        ts = float(now if now is not None else time.time())
+        for d in dropped or []:
+            if not isinstance(d, dict):
+                continue
+            reason = str(d.get("reason") or "").strip()[:32]
+            if not reason:
+                continue
+            rows.append((
+                ts, str(user_id or "")[:200], reason,
+                str(d.get("fact") or "")[:160], str(d.get("evidence") or "")[:120],
+            ))
+        if not rows:
+            return 0
+        try:
+            self._conn.executemany(
+                "INSERT INTO episodic_grounding_drops (ts, user_id, reason, fact, evidence)"
+                " VALUES (?, ?, ?, ?, ?)", rows)
+            self._conn.execute(
+                "DELETE FROM episodic_grounding_drops WHERE ts < ?",
+                (ts - self._GROUNDING_DROPS_RETAIN_SEC,))
+            self._conn.commit()
+            return len(rows)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic record_grounding_drops failed: %s", e)
+            return 0
+
+    def grounding_drop_summary(
+        self, days: int = 7, *, user_id: str = "", recent: int = 5,
+    ) -> Dict[str, Any]:
+        """近 N 天护栏丢弃读数：``{"total", "by_reason": {reason: n}, "recent": [...]}``。
+
+        ``user_id`` 给定则只看该记忆键（客户档案抽屉用）。``recent`` 条示例给页面
+        「未记录的有哪些」——fact/evidence 已在写入时截短。store 异常返回零读数。
+        """
+        d = max(1, min(int(days or 7), 90))
+        since = time.time() - d * 86400
+        out: Dict[str, Any] = {
+            "window_days": d, "total": 0,
+            "by_reason": {"no_evidence": 0, "evidence_mismatch": 0, "fact_unanchored": 0},
+            "recent": [],
+        }
+        uid = str(user_id or "").strip()
+        where = "ts >= ?"
+        params: List[Any] = [since]
+        if uid:
+            where += " AND user_id = ?"
+            params.append(uid)
+        try:
+            rows = self._conn.execute(
+                f"SELECT reason, COUNT(*) FROM episodic_grounding_drops"
+                f" WHERE {where} GROUP BY reason", params,
+            ).fetchall()
+            for reason, n in rows:
+                c = int(n or 0)
+                out["by_reason"][str(reason or "")] = c
+                out["total"] += c
+            k = max(0, min(int(recent or 0), 50))
+            if k and out["total"]:
+                rec = self._conn.execute(
+                    f"SELECT ts, user_id, reason, fact, evidence FROM episodic_grounding_drops"
+                    f" WHERE {where} ORDER BY ts DESC, id DESC LIMIT ?", params + [k],
+                ).fetchall()
+                out["recent"] = [
+                    {"ts": float(r[0] or 0), "memory_key": str(r[1] or ""),
+                     "reason": str(r[2] or ""), "fact": str(r[3] or ""),
+                     "evidence": str(r[4] or "")}
+                    for r in rec
+                ]
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic grounding_drop_summary failed: %s", e)
+        return out
 
     def get_row_brief(self, row_id: int) -> Optional[Dict[str, Any]]:
         """单行摘要（删除审计留痕用）：{id, memory_key, content, source}。
@@ -1444,14 +1552,24 @@ class EpisodicMemoryStore:
 
         定位＝记忆键**以组件形式**含 chat_key（``platform:acct:peer`` / ``acct:peer`` /
         ``peer`` / 群键 ``peer_uid``；纯子串不认）∧ ``source_quote`` 归一后与被删正文
-        前 200 字相等。只删 ``hits == 1``：复发事实＝客户在别处又说过，一条删了事实
+        前 200 字相等，**或**（J-10 A1 起 LLM 事实的 ``source_quote`` 是客户原话里的
+        一段逐字引文）引文归一后是被删正文的子串（引文归一后 ≥6 字，防「ok」级短引文
+        撞遍全部消息）。只删 ``hits == 1``：复发事实＝客户在别处又说过，一条删了事实
         仍成立。quote 为空的早期条目匹配不到，如实接受。绝不抛。
         """
         from src.inbox.peer_delete_purge import key_has_component, quotes_match
+        from src.ai.memory_grounding import normalize_for_match
         ck = str(chat_key or "").strip()
         qs = [str(q or "") for q in (quotes or []) if str(q or "").strip()]
         if not ck or not qs:
             return 0
+        qs_norm = [normalize_for_match(q) for q in qs]
+
+        def _sub_quote_match(quote: str) -> bool:
+            qn = normalize_for_match(quote)
+            if len(qn) < 6:
+                return False
+            return any(qn in t for t in qs_norm if t)
         try:
             rows = self._conn.execute(
                 "SELECT id, user_id, content, source_quote, COALESCE(hits, 1)"
@@ -1468,7 +1586,7 @@ class EpisodicMemoryStore:
                 continue
             if int(hits or 1) > 1:
                 continue
-            if any(quotes_match(quote, q) for q in qs):
+            if any(quotes_match(quote, q) for q in qs) or _sub_quote_match(str(quote or "")):
                 victims.append(int(rid))
                 logger.info("[episodic] peer-deleted source → drop fact id=%s key=%s %r",
                             rid, uid, str(content or "")[:60])

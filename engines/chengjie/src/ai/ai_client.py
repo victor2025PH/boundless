@@ -4022,8 +4022,20 @@ class AIClient(LoggerMixin):
 
         return "zh"
 
-    def _parse_memory_facts_json(self, raw: str) -> List[str]:
-        """Parse model output {\"facts\": [\"...\"]}."""
+    # Filter: discard facts about the assistant's own name/identity.
+    # These override the configured persona and cause "名字污染".
+    _MEMORY_IDENTITY_FILTERS = (
+        "助手", "称呼助手", "告知全名", "助手全名", "助手名", "助手叫",
+        "我叫", "我的名字", "bot叫", "AI叫",
+    )
+
+    def _parse_memory_fact_items(self, raw: str) -> List[Dict[str, str]]:
+        """Parse model output → ``[{"fact", "evidence"}]``.
+
+        J-10 A1：新格式 ``{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter"}]}``；
+        旧格式 ``{"facts":["..."]}`` 仍可解析（evidence 为空 → 接地护栏按 ``no_evidence``
+        丢并计数，可观测模型是否没按新格式输出）。容 ``text``/``quote`` 别名键。
+        """
         if not raw or not isinstance(raw, str):
             return []
         t = raw.strip()
@@ -4037,27 +4049,40 @@ class AIClient(LoggerMixin):
         facts = obj.get("facts") if isinstance(obj, dict) else None
         if not isinstance(facts, list):
             return []
-        # Filter: discard facts about the assistant's own name/identity.
-        # These override the configured persona and cause "名字污染".
-        _IDENTITY_FILTERS = (
-            "助手", "称呼助手", "告知全名", "助手全名", "助手名", "助手叫",
-            "我叫", "我的名字", "bot叫", "AI叫",
-        )
-        out: List[str] = []
+        out: List[Dict[str, str]] = []
         for x in facts:
-            s = str(x).strip()
+            if isinstance(x, dict):
+                s = str(x.get("fact") or x.get("text") or x.get("content") or "").strip()
+                ev = str(x.get("evidence") or x.get("quote") or "").strip()
+            else:
+                s, ev = str(x).strip(), ""
             if 2 <= len(s) <= 500:
-                if not any(kw in s for kw in _IDENTITY_FILTERS):
-                    out.append(s)
+                if not any(kw in s for kw in self._MEMORY_IDENTITY_FILTERS):
+                    out.append({"fact": s, "evidence": ev[:200]})
             if len(out) >= 6:
                 break
         return out
 
+    def _parse_memory_facts_json(self, raw: str) -> List[str]:
+        """Parse model output {\"facts\": [...]} → 事实文本列表（兼容壳）。"""
+        return [it["fact"] for it in self._parse_memory_fact_items(raw)]
+
     async def extract_memory_bullets(self, user_msg: str, assistant_msg: str) -> List[str]:
+        """兼容壳：只要事实文本（评测器 / 旧调用方）。真实抽取见 ``extract_memory_facts``。"""
+        res = await self.extract_memory_facts(user_msg, assistant_msg)
+        return [str(it.get("fact") or "") for it in (res.get("facts") or []) if it.get("fact")]
+
+    async def extract_memory_facts(self, user_msg: str, assistant_msg: str) -> Dict[str, Any]:
         """
         One cheap LLM call: extract 0–4 durable user-specific facts from this turn.
         Skips when circuit breaker is open (caller may still use heuristics).
+
+        返回 ``{"facts": [{"fact", "evidence"}], "dropped": [{"fact", "evidence", "reason"}],
+        "candidates": int}``——``facts`` 已过引文级接地护栏（``evidence`` 是客户原话逐字
+        引文，调用方存进 ``source_quote``）；``dropped`` 供调用方按原因记账
+        （``no_evidence`` / ``evidence_mismatch``）。任何失败 → 三者皆空。
         """
+        empty: Dict[str, Any] = {"facts": [], "dropped": [], "candidates": 0}
         # P1 2026-08-19：剥掉 [图片内容]/[视频内容] 识别描述——系统自产内容不得变成
         # 「用户事实」（聊天截图里被抄录的“我是XX”会污染本人画像，Phase8 幻觉同族）。
         # 剥完只剩空（纯媒体消息）→ 下面的长度闸自然短路返回 []。
@@ -4069,10 +4094,10 @@ class AIClient(LoggerMixin):
         u = (user_msg or "").strip()
         a = (assistant_msg or "").strip()
         if len(u) < 2 or len(a) < 2:
-            return []
+            return empty
         if self._cb_enabled and self._cb_open_until > 0 and time.time() < self._cb_open_until:
-            self.logger.debug("extract_memory_bullets skipped: circuit open")
-            return []
+            self.logger.debug("extract_memory_facts skipped: circuit open")
+            return empty
 
         sys_inst = (
             "你是对话记忆抽取器。根据本轮用户消息与助手回复，抽取值得后续聊天记住的客观信息"
@@ -4084,6 +4109,14 @@ class AIClient(LoggerMixin):
             "ASSISTANT 回复只是语境参考——凡是只出现在助手回复里的猜测、提议、问句内容"
             "（如助手问「明天不用上班吗？」而用户没有确认），一律不得作为事实输出。"
             "用户没有明确说的，宁可不抽。"
+            # J-10 A1（#183）：引文级接地——事实用中文概括，引文保持客户原语言逐字复制，
+            # 护栏只核引文是否真出自 USER 消息（语言无关）。英文/泰文/日文客户的话
+            # 不再因「中文事实 vs 外语原话零重叠」被整条丢掉。
+            "【引文铁律】每条事实必须附 evidence：从 USER 消息里**逐字复制**的一段原话"
+            "（保持客户原语言，不翻译、不改写、不拼接、不补词，≤80 字，只取能直接支撑"
+            "该事实的那一段）；USER 消息里找不到能逐字引用的支撑原话，就不要输出这条事实。"
+            "evidence 绝不能取自 ASSISTANT 回复。客户用英文/泰文/日文等外语说的，"
+            "fact 仍写中文，evidence 照抄原文。"
             "【持久性铁律】只抽取有持续意义的信息（身份/称呼/偏好/关系/经历/约定/计划）；"
             "转瞬即逝的当下状态一律不抽——此刻天气（正在下雨/好热）、正在做的动作"
             "（在吃饭/刚到家）、当下瞬时情绪（现在好困）等，这些由近期对话自然衔接，"
@@ -4100,7 +4133,8 @@ class AIClient(LoggerMixin):
             "如「客户自称X」「客户希望被称呼为X」；禁止「用户称呼自己为X」"
             "这类「自己」指代不清的双解句式。"
             "输出严格为一行 JSON，不要 markdown："
-            '{"facts":["..."]} facts 为 0～4 条中文短句，无则 []。'
+            '{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter"}]} '
+            "facts 为 0～4 条，fact 是中文短句，evidence 是 USER 消息里的逐字原文；无则 []。"
         )
         usr = f"USER:\n{u[:2000]}\n\nASSISTANT:\n{a[:2000]}"
 
@@ -4114,22 +4148,22 @@ class AIClient(LoggerMixin):
                             {"role": "user", "content": usr},
                         ],
                         temperature=0.15,
-                        max_tokens=320,
+                        max_tokens=480,
                     )
 
                 response = await asyncio.wait_for(_call(), timeout=14.0)
                 raw = ""
                 if response and response.choices:
                     raw = (response.choices[0].message.content or "").strip()
-                return self._ground_extracted_facts(
-                    self._parse_memory_facts_json(raw), u)
+                return self._ground_extracted_fact_items(
+                    self._parse_memory_fact_items(raw), u)
 
             if GENAI_AVAILABLE and self.client:
                 use_model = self.model
                 config = types.GenerateContentConfig(
                     system_instruction=sys_inst,
                     temperature=0.15,
-                    max_output_tokens=320,
+                    max_output_tokens=480,
                 )
                 response = await asyncio.wait_for(
                     self.client.aio.models.generate_content(
@@ -4145,13 +4179,60 @@ class AIClient(LoggerMixin):
                         raw = (response.text or "").strip()
                     except (ValueError, AttributeError, IndexError):
                         raw = ""
-                return self._ground_extracted_facts(
-                    self._parse_memory_facts_json(raw), u)
+                return self._ground_extracted_fact_items(
+                    self._parse_memory_fact_items(raw), u)
         except asyncio.TimeoutError:
-            self.logger.debug("extract_memory_bullets timeout")
+            self.logger.debug("extract_memory_facts timeout")
         except Exception as e:
-            self.logger.debug("extract_memory_bullets failed: %s", e)
-        return []
+            self.logger.debug("extract_memory_facts failed: %s", e)
+        return empty
+
+    def _ground_extracted_fact_items(
+        self, items: List[Dict[str, str]], user_msg: str,
+    ) -> Dict[str, Any]:
+        """引文级接地护栏（J-10 A1）：只保留 ``evidence`` 真出自用户原话的事实。
+
+        判据见 ``memory_grounding.ground_fact_with_evidence``：引文必须真出自用户原话
+        （跨语种只认引文，事实文本不参与匹配）；同语种照旧叠加旧词汇判据；应答词
+        （yes / 好呀）不算引文——安全语义不弱于 Phase8 以来的旧护栏。
+        丢弃即记 WARNING 并按原因回传（``no_evidence`` / ``evidence_mismatch`` /
+        ``fact_unanchored``），调用方落库记账 → 页面「有 N 条因无法核对原话未记录」。
+        护栏自身异常 → 回退旧判据（绝不比旧防线更松，也绝不阻断记忆链）。
+        """
+        out: Dict[str, Any] = {"facts": [], "dropped": [], "candidates": len(items or [])}
+        if not items:
+            return out
+        try:
+            from src.ai.memory_grounding import ground_fact_items
+            kept, dropped = ground_fact_items(items, user_msg)
+            out["facts"] = [
+                {"fact": str(k.get("text") or ""), "evidence": str(k.get("evidence") or "")}
+                for k in kept if k.get("text")
+            ]
+            out["dropped"] = [
+                {"fact": str(d.get("text") or ""), "evidence": str(d.get("evidence") or ""),
+                 "reason": str(d.get("reason") or "")}
+                for d in dropped if d.get("text")
+            ]
+            if out["dropped"]:
+                self.logger.warning(
+                    "记忆抽取接地护栏丢弃 %d 条未锚定用户原话的事实: %s",
+                    len(out["dropped"]),
+                    "; ".join(
+                        f"[{d['reason']}] {d['fact'][:40]} ⇐ {d['evidence'][:40]!r}"
+                        for d in out["dropped"]),
+                )
+        except Exception:
+            # 判定器整体异常 → 旧判据兜底（与 memory_grounding 单项兜底同口径）
+            self.logger.debug("memory grounding failed; falling back to lexical rule",
+                              exc_info=True)
+            kept_txt = self._ground_extracted_facts(
+                [str(it.get("fact") or "") for it in items if it.get("fact")], user_msg)
+            out["facts"] = [
+                {"fact": str(it.get("fact") or ""), "evidence": str(it.get("evidence") or "")}
+                for it in items if str(it.get("fact") or "") in kept_txt
+            ]
+        return out
 
     def _ground_extracted_facts(self, facts: List[str], user_msg: str) -> List[str]:
         """接地护栏：只保留锚定在用户原话上的事实（防「AI 臆测→假记忆→复读幻觉」）。

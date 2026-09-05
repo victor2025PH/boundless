@@ -76,6 +76,17 @@ def test_grounding_rejects_facts_without_lexical_overlap():
     assert kept == ["我有个女儿"]
 
 
+def test_grounding_english_human_outbound_kept():
+    """J-10 A1：坐席用英文替人设说的话同样过引文级护栏（人工出站也可能是英文）。"""
+    body = "I have a daughter, she's 5. Maybe you could move in with me someday"
+    facts = hom.extract_self_facts(body)
+    assert any("daughter" in f for f in facts)
+    kept = hom._grounded(facts, body)
+    assert kept == facts
+    # 原话里没有的英文事实仍丢
+    assert hom._grounded(["I have a son"], body) == []
+
+
 # ── 端到端：手动发送成功 → ContextStore 持久 → 注入块 ───────────────────────
 class _FakeSM:
     """只提供 human_outbound_memory 依赖的四个成员，ContextStore 用真的（tmp）。"""

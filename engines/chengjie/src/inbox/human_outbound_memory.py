@@ -143,13 +143,16 @@ def extract_self_facts(text: str) -> List[str]:
 
 
 def _grounded(facts: List[str], source_text: str) -> List[str]:
-    """接地护栏（与 AI 侧 ``_ground_extracted_facts`` 同口径）：事实必须锚定在原话上。"""
+    """接地护栏（与 AI 侧 ``_ground_extracted_fact_items`` 同口径，J-10 A1 引文级）：
+    这里的事实**就是原话子句**，故以自身为引文——归一化后必须是原话子串（或 token
+    重叠 ≥60%），语言无关；坐席用英文替人设说的话同样过得去。"""
     try:
-        from src.ai.memory_grounding import filter_grounded_facts
-        kept, dropped = filter_grounded_facts(list(facts or []), source_text)
+        from src.ai.memory_grounding import ground_fact_items
+        items = [{"text": f, "evidence": f} for f in (facts or []) if str(f or "").strip()]
+        kept, dropped = ground_fact_items(items, source_text)
         if dropped:
             logger.info("[human_memory] 接地护栏丢弃 %d 条未锚定事实", len(dropped))
-        return kept
+        return [str(k["text"]) for k in kept if k.get("text")]
     except Exception:
         return []   # 护栏自身异常 → 宁漏勿错：不落库
 
