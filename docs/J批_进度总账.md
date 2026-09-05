@@ -22,7 +22,7 @@
 | **J-5** | 登记链与值守工具 | 限频/分类/backfill/verify + #138 #140 #142（+#165 收集窗） | $120 | 已完成（代码侧，未重启；台账已改） | A `da1bbb86`（backfill 共享 seen 集 + observe mid 去重）/ B `7be18026`（verify 只认 #N / reply_to）/ C `9ec70d37`（限频不管登记）/ D `1287f489`（分类器补句 + 已知报障人图+字立单 + smalltalk 落事件）/ E-1 `6ed68d53`（`duty_ledger_fix` 已 `--apply`：#138/#140/#142 verified→fixed，notify_ts 保留，`ledger_fix` #750-752）/ E-2 `e4cf6896`（回复支持号消息续单）/ F `5f4f68f1`（AGENTS v1.3）；三测试文件 130 passed；61 单 fixed 未回访只记数不发 | 交值守：① `trigger.py` L299 / `skill_manager` L977 / `telegram_client._fetch` 透传 `account_id/sender_name/msg_id/reply_to_msg_id/last_name`（他线文件，落点表「交值守」①）；② AGENTS_JUN/SKUIO v1.3 重发两机并明说覆盖；③ 12:30 窗装载 | `发版对账_v1.0.74_J5.md` | ~$100 |
 | **J-6** | WhatsApp 边车稳定性（Node） | #181 + 403 无限重连 + ENOTFOUND + Bad MAC | $150 | 未开工 | | | `发版对账_v1.0.74_J6.md` | |
 | **J-7** | 人设工作室体验与报错 | #189 #190 #191 #192 #193 #186（+#178/#179 若 J-4 未做） | $150 | 未开工（**J-4 已于 08:4x 释放 personas.html / persona_routes.py**，#178/#179 已由 J-4 做掉，可整批开工） | | | `发版对账_v1.0.74_J7.md` | |
-| **J-8** | 陪伴安全 + 关怀语义 | #185（P1）#182 | $190 | 未开工 | | | `发版对账_v1.0.74_J8.md` | |
+| **J-8** | 陪伴安全 + 关怀语义 | #185（P1）#182 | $190 | **进行中**（A 完成，B 开工） | A #185 `256e3380`（三档空态 + 一键开启 overlay 保注释 + cloud_light/desktop.internal 出厂开 + R8 桥 `wellbeing_escalation_bridge.py` 徽标/置顶/案例 + 页名「客户安全预警」人话化 + viewer 不可见；三件 crisis 评测全绿，skill_manager 零改动） | B #182；值守：下个重启窗装载 `.py`（桥 / enable 路由 / 角色门）；88MP86 回访口径见落点表 | `发版对账_v1.0.74_J8.md` | ~$70 |
 | **J-9** | 知识库隔离 + 检索自检 | #184 | $150 | 未开工 | | | `发版对账_v1.0.74_J9.md` | |
 
 状态取值：`未开工` / `进行中` / `已完成` / `部分完成(等下一账号)` / `阻塞(原因)`
