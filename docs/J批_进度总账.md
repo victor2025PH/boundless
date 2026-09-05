@@ -57,6 +57,7 @@ J-8 加 wellbeing 两键的 cloud_light.yaml / config.desktop.internal.yaml：D1
 | 日期 | 决策 | 影响 |
 |---|---|---|
 | 2026-09-05 | 见公共底座 D1–D6（sprint 出厂开 / 电话点击揭示 / 桌面包隐藏告警 nag / 限频不管登记 / verify 认 #N / 三单改回 fixed）——**默认按底座表执行，老板划掉的除外** | J-2 / J-4 / J-5 |
+| 2026-09-05 15:05 | **D7 拍板：开**——`companion.wellbeing.crisis_audit` / `crisis_escalation` 桌面包出厂默认开，审计页按角色门控，升级同时亮工作台徽标 | J-8 A 直接施工 |
 
 ## 03:3x–05:4x 新增（skuio 又传 16 份 Cursor 报告，已立单 #182–#193；06:5x 已分派）
 
