@@ -2389,6 +2389,12 @@ window._focusHashEntry=_focusHashEntry;
 window.addEventListener('hashchange',_focusHashEntry);
 
 /* 初始加载 */
+// J-9 #184：ops 卡「/knowledge?source=vendor」深链 → 预置来源筛选（值不在下拉里则忽略）
+try{
+  const _qsSrc=new URLSearchParams(location.search).get('source')||'';
+  const _srcSel=document.getElementById('entry-source');
+  if(_qsSrc && _srcSel && Array.from(_srcSel.options).some(o=>o.value===_qsSrc)) _srcSel.value=_qsSrc;
+}catch(_e){}
 loadEntries().then(_focusHashEntry).catch(()=>{});
 loadHealthChip();
 // 静默加载待审核数量

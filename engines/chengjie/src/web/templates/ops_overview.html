@@ -578,6 +578,12 @@
     <div id="pAuditDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
   </section>
 
+  <section id="kbhSection" style="display:none;">
+    <h2>📚 {{ (i18n or {}).get('ov2_s_kbh', "知识库接通性（用户条目 / 近 7 天注入命中）") }}</h2>
+    <div class="grid" id="kbhKpis"></div>
+    <div id="kbhDetail"><div class="empty">{{ (i18n or {}).get('dash.loading', "加载中…") }}</div></div>
+  </section>
+
   <section>
     <h2>🧬 {{ (i18n or {}).get('ov2_s_localtts', "本机情感克隆 IndexTTS2（随主程序启停）") }}</h2>
     <div class="grid" id="localTtsKpis"></div>
@@ -6897,6 +6903,65 @@ async function loadProxyManaged(){
   }
 }
 
+// 📚 知识库接通性卡（J-9 #184 2026-09-05）：读 /api/kb/health。回答 skuio 的
+// 「KB/技能检索对拟稿零贡献」——用户条目是不是空的、厂商预置有没有被排除、
+// 近 7 天有没有条目真进过 prompt（kb_query_log hit=1，由 skill_manager kb_gate 落）。
+// 无任何条目且零查询 → 整卡隐藏（服务器空库部署不占版面）；桌面空库＝显式提示。
+async function loadKbHealth(){
+  var sec = document.getElementById('kbhSection');
+  var kp = document.getElementById('kbhKpis');
+  var dv = document.getElementById('kbhDetail');
+  if(!sec || !kp || !dv) return;
+  try{
+    const r = await apiFetch('/api/kb/health?days=7', {credentials:'same-origin'});
+    if(!r.ok){ opsHideHttp(sec, 'kbh', r.status); return; }
+    const d = await r.json();
+    if(!d || typeof d.entries_total !== 'number'){ opsHideCardEl(sec, 'kbh', 'error'); return; }
+    var total = Number(d.entries_total)||0, user = Number(d.entries_user)||0, vendor = Number(d.entries_vendor)||0;
+    var hits = Number(d.hits_7d)||0, queries = Number(d.queries_7d)||0, emb = Number(d.embedded)||0;
+    if(!total && !queries){ opsHideCardEl(sec, 'kbh', 'no_data'); return; }
+    opsShowCardEl(sec, 'kbh');
+    // 灯：厂商预置在参与对客检索＝黄（服务器默认可接受，桌面不该）；有用户条目却 7 天零命中＝黄
+    var light = '';
+    if(vendor && !d.vendor_excluded) light = 'yellow';
+    else if(user && queries && !hits) light = 'yellow';
+    opsSetCardLight('kbh', light);
+    var kpis = [
+      {label:window.T('ov2_kbh_user'), value:String(user)},
+      {label:window.T('ov2_kbh_vendor'), value:String(vendor)},
+      {label:window.T('ov2_kbh_embedded'), value:String(emb)},
+      {label:window.T('ov2_kbh_hits7'), value:String(hits)}
+    ];
+    kp.innerHTML = kpis.map(function(c){
+      return '<div class="kpi"><div class="muted" style="font-size:12px;">'+esc(c.label)
+        +'</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+esc(c.value)+'</div></div>';
+    }).join('');
+    var parts = [];
+    parts.push('<div style="font-size:13px;font-weight:600;">'+esc(window.Tf('ov2_kbh_line', {u:user, h:hits, q:queries}))+'</div>');
+    if(d.last_hit_ts){
+      var t = window.wsFmtDate(d.last_hit_ts*1000,{month:'2-digit',day:'2-digit'})+' '+window.wsFmtTime(d.last_hit_ts*1000,{hour:'2-digit',minute:'2-digit'});
+      parts.push('<div class="muted" style="font-size:12px;margin-top:4px;">'+esc(window.Tf('ov2_kbh_last_hit', {t:t}))+'</div>');
+    }else{
+      parts.push('<div class="muted" style="font-size:12px;margin-top:4px;">'+esc(window.T('ov2_kbh_never'))+'</div>');
+    }
+    if(!user){
+      parts.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'+esc(window.T('ov2_kbh_empty_user'))+'</div>');
+    }else if(queries && !hits){
+      parts.push('<div style="color:var(--tk-amber-ink,#d97706);font-size:12px;margin-top:6px;">'+esc(window.Tf('ov2_kbh_zero_hits', {u:user, e:emb}))+'</div>');
+    }
+    if(vendor){
+      var vk = d.vendor_excluded ? 'ov2_kbh_vendor_excluded' : 'ov2_kbh_vendor_included';
+      var vc = d.vendor_excluded ? 'var(--tk-fg-muted,#6b7280)' : 'var(--tk-amber-ink,#d97706)';
+      parts.push('<div style="color:'+vc+';font-size:12px;margin-top:6px;">'+esc(window.Tf(vk, {n:vendor}))+' <a href="/knowledge?source=vendor" style="margin-left:4px;">/knowledge →</a></div>');
+    }
+    var fb = Number(d.feedback)||0;
+    parts.push('<div class="muted" style="font-size:12px;margin-top:6px;">'
+      +esc(fb ? window.Tf('ov2_kbh_feedback', {p:d.satisfaction_rate, n:fb}) : window.T('ov2_kbh_feedback_none'))+'</div>');
+    parts.push('<div class="muted" style="font-size:11px;margin-top:8px;">'+esc(window.T('ov2_kbh_hint'))+'</div>');
+    dv.innerHTML = parts.join('');
+  }catch(e){ sec.style.display='none'; }
+}
+
 // 🆔 资料变更审计流卡：读 /api/admin/profile-audit（ops_events 的 profile_push/align）。
 // 近 7 天按天聚合 + 最近批次归组 + 明细；无事件/缺库则整卡隐藏。
 async function loadProfileAudit(){
@@ -8504,6 +8569,8 @@ var OPS_CARDS = [
   {key:'uqchar',   group:'boss',    anchor:'uqCharKpis',       loaders:[loadUsageQuota]},
   // 额度墙转化（quotawall v2 P2 2026-08-21；营收漏斗 → boss 组）
   {key:'qwfun',    group:'boss',    anchor:'qwFunnelKpis',     loaders:[loadQwFunnel]},
+  // 知识库接通性（J-9 #184 2026-09-05）：用户条目/厂商预置/7 天注入命中 → 内容质量组
+  {key:'kbh',      group:'quality', anchor:'kbhKpis',          loaders:[loadKbHealth]},
 ];
 var OPS_CARDS_BY_KEY = {};
 OPS_CARDS.forEach(function(c){ OPS_CARDS_BY_KEY[c.key] = c; });
@@ -8513,6 +8580,7 @@ OPS_CARDS.forEach(function(c){ OPS_CARDS_BY_KEY[c.key] = c; });
 // 仅收录核对过 hide 条件的卡；宁标 unknown，不假装「可去开启」。
 var _OPS_HIDE_HINT = {
   value:    {reason:'no_data'},
+  kbh:      {reason:'no_data'},
   referral: {reason:'disabled', href:'/developer'},
   uqchar:   {reason:'disabled'},
   qwfun:    {reason:'no_data'},

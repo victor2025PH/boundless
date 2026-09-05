@@ -325,3 +325,41 @@ def test_howto_pack_carries_vendor_product_entries():
     from src.assistant import howto_pack
     ids = {row[0] for row in howto_pack._HOWTO}
     assert {"vendor-product-lines", "vendor-support-contact", "kb-vendor-preset"} <= ids
+
+
+# ── ops-overview「📚 知识库接通性」卡（三件套 + 数据源 + 隐藏惯例；i18n 独立 pack） ──
+
+def test_ops_kb_health_card_renders_and_registered():
+    """section / loader / 注册表三件套少一件即静默缺陷（与 value 卡同款不变量）。
+
+    这张卡是「KB 检索对拟稿零贡献」质疑的唯一读数面：没有它，只能翻 kb_query_log。
+    数据源必须是 /api/kb/health（命中口径＝kb_gate 真注入 prompt），空库且零查询整卡隐藏。
+    """
+    src = (ENGINE_ROOT / "src/web/templates/ops_overview.html").read_text(encoding="utf-8")
+    assert 'id="kbhSection"' in src
+    assert "async function loadKbHealth()" in src
+    assert "/api/kb/health?days=7" in src
+    assert "anchor:'kbhKpis'" in src
+    assert "loaders:[loadKbHealth]" in src
+    assert "kbh:      {reason:'no_data'}" in src
+    assert "if(!total && !queries){ opsHideCardEl(sec, 'kbh', 'no_data'); return; }" in src
+    # 深链到 KB 页的厂商来源筛选，且 KB 页真消费该 query 参数
+    assert "/knowledge?source=vendor" in src
+    kb_page = (ENGINE_ROOT / "src/web/templates/knowledge.html").read_text(encoding="utf-8")
+    assert "new URLSearchParams(location.search).get('source')" in kb_page
+
+
+def test_ops_kb_health_card_i18n_bilingual_in_own_pack():
+    from src.web.i18n_packs.kb_health_ops import EN, ZH
+    from src.web.web_i18n import get_translations
+
+    keys = ("ov2_s_kbh", "ov2_kbh_user", "ov2_kbh_vendor", "ov2_kbh_embedded",
+            "ov2_kbh_hits7", "ov2_kbh_line", "ov2_kbh_last_hit", "ov2_kbh_never",
+            "ov2_kbh_empty_user", "ov2_kbh_vendor_excluded", "ov2_kbh_vendor_included",
+            "ov2_kbh_zero_hits", "ov2_kbh_feedback_none", "ov2_kbh_feedback", "ov2_kbh_hint")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+    # pack 已被合并视图装载（前端 window.T 才解析得到，不显裸键）
+    merged = get_translations("zh")
+    assert merged.get("ov2_s_kbh") == ZH["ov2_s_kbh"]
