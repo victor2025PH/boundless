@@ -80,11 +80,11 @@ J-8 加 wellbeing 两键的 cloud_light.yaml / config.desktop.internal.yaml：D1
 
 ## 值守收尾清单（不开对话，值守自己做）
 
-- [ ] **12:30 重启窗装载 zhiliao**（`restart_preflight` → `restart_instance.ps1 -Instance zhiliao`）：J-1/J-2/J-3/D1b 全部 `.py` 才生效；装完用 88MP86 复盘口径核 #166（`[goal-inject]` 行）、#177（真机「我有个女儿」→ 下轮草稿含「你亲口说过」块）。
-- [ ] **22:30 窗一并装载 J-9 六个 `.py`**（`kb_store/kb_routes/kb_importer/kb_starter/config_manager/howto_pack`）；装后 `GET /api/kb/health` 应回 `entries_vendor≈110, vendor_excluded=false`——zhiliao 是服务器部署、厂商条目是它自己的业务语料，**不要在 zhiliao 点「一键清空厂商预置」**；skuio/钧装 1.0.74 后读 ops「📚 知识库接通性」卡按 `发版对账_v1.0.74_J9.md`「回答 skuio」四条判词。
-- [ ] skuio 机 1.0.74 装完跑 `python tools/xlate_memory_purge.py --db %APPDATA%\telegram-ai-desktop\data\config\translation_memory.db --apply`（J-1 C 交办；不跑也会在命中时自愈）。
-- [ ] LINE 入站缺省 `DEFAULT_INBOUND_MAX_BYTES` 20MB → 32–40MB（J-3 C 发现：服务端转码件 100MB→27.5MB 会被拒下）；一行常量 + 一条测试，`line_media.py`。
-- [ ] `config.example.yaml`：`companion.media_promise_guard.sent_claim.{enabled,window_min}`（J-1 A）与 `inbox.workflows.auto_start.max_per_tick: 5`（J-2 B）两处**文档键**——等 D1b 收工后再加（该文件他在改）。
+- [x] **装载 zhiliao**（K-5 ①段，09-05 20:50:56 `restart_preflight` GO → `restart_instance`）：J-1…J-10 + D1b + K-1…K-4 全部 `.py` 一次装载（`680ddf81..b513ded9` 81 条）；`[goal-inject]` 行等有目标会话来入站（22:3x 前无入站，K-5 ⑤ 5b 继续盯）；#177 真机块等 1.0.74 装机。
+- [x] **J-9 六个 `.py` 同车装载**：`GET /api/kb/health` 200 → `entries_total=105, entries_vendor=77（zhiliao 实值，非 110）, entries_user=4, vendor_excluded=false`；未点一键清空；skuio/钧 ops 📚 卡读数等装机（K-5 ⑤ 5b）。
+- [ ] skuio 机 1.0.74 装完跑 `python tools/xlate_memory_purge.py --db %APPDATA%\telegram-ai-desktop\data\config\translation_memory.db --apply`（J-1 C 交办；不跑也会在命中时自愈）——K-5 ③ 步 8。
+- [x] LINE 入站缺省 20MB → **32MB**：K-3 D `88c442f9`，已随 ①段装载。
+- [x] `config.example.yaml` 两处文档键：K-3 E `ee7f8dda`（+ K-1 C `phantom_unread_remind` 键 `28089c22`）。
 - [ ] `mutual_chat` 判据（88MP86 把 John / BABY BEAR 判成「双向高频疑 AI 对聊」）阈值复核（J-1 顺手项）。
 - [ ] 钧机远程包到手 → 补 #180（00:48 LINE worker 状态）/ #181（00:20–00:25 wa-sidecar）证据回读；#164 回访文案（1.0.74 装完）。
 - [ ] skuio 两张截图（#171 John 原话 / #166 目标详情）03:36 已第二次提醒；仍不到则 J-1 A 的 EN 词表按常见形态收口，#166 键核对靠 A1 的 INFO 日志（装载后自证），不再追问。
