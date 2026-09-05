@@ -14,7 +14,10 @@ smoke_backend 验「标准包首启能跑」；本脚本验 clean 增量：**生
     prerender_lines / assets/voices（或存在但零文件）
   · knowledge_base.db 只含产品出厂内容：kb_entries 全部带 template_key
     （seed_system_replies 的系统话术模板，任何全新安装都会自带且可编辑；
-    template_key 为空＝人工录入的业务知识＝泄漏），kb_error_codes/kb_rules/
+    template_key 为空＝人工录入的业务知识＝泄漏）或 source='system'
+    （J-9 #184 起 kb_entries.source 列：桌面空库首启播 3 条**停用**格式示例
+    seed_kb_format_examples，与话术模板同属出厂内容；vendor/user/import 仍算
+    泄漏），kb_error_codes/kb_rules/
     kb_meta 是启动预置（DEFAULT_ERROR_CODES/DEFAULT_RULES/kb_seeded_once）
     放行，其余表 0 行
   · persona_bio.db / persona_media.db 不存在，或存在但所有表 0 行
@@ -112,12 +115,17 @@ def _kb_business_leak(path: Path) -> str:
                         hits.append(f"kb_entries={n}行（无 template_key 列，"
                                     "无法证明是系统话术）")
                     continue
+                # J-9 #184：source='system' 是产品出厂内容（首启 3 条停用格式
+                # 示例）；无 source 列的旧库按 'user' 算，口径不放宽。
+                src_expr = ("COALESCE(source,'user')" if "source" in cols
+                            else "'user'")
                 n_biz = int(con.execute(
                     "SELECT COUNT(*) FROM kb_entries "
-                    "WHERE COALESCE(template_key,'')=''").fetchone()[0])
+                    "WHERE COALESCE(template_key,'')='' "
+                    f"AND {src_expr}!='system'").fetchone()[0])
                 if n_biz:
                     hits.append(f"kb_entries 业务条目 {n_biz} 行"
-                                "（template_key 为空＝非系统话术模板）")
+                                "（template_key 为空且 source≠system＝非出厂内容）")
                 continue
             n = int(con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0])
             if n:
