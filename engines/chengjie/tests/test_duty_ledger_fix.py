@@ -164,3 +164,68 @@ def test_count_fixed_unnotified(tmp_path):
     dlf.apply_plan(db, plan)
     # 回滚保留 notify_ts → 不进「fixed 未回访」名单
     assert dlf.count_fixed_unnotified(db) == 1
+
+
+# ── --mark-fixed-file（K-5 ④段 A 案：标 fixed 不触发逐单回访）─────────────────
+
+def _mk_db_open(tmp_path: Path) -> Path:
+    """在 _mk_db 之上补两张待标的单：#160 new / #171 confirmed。"""
+    db = _mk_db(tmp_path)
+    con = sqlite3.connect(str(db))
+    now = time.time()
+    for tid, st, title in ((160, "new", "风险扣稿"), (171, "confirmed", "谎称已发照片")):
+        con.execute(
+            "INSERT INTO bug_tickets(id,created_ts,updated_ts,chat_id,reporter_name,"
+            "title,body,status) VALUES(?,?,?,?,?,?,?,?)",
+            (tid, now - 86400, now - 1000, "-100", "skuio", title, title, st))
+    con.commit()
+    con.close()
+    return db
+
+
+def test_mark_plan_file_accepts_object_and_list(tmp_path):
+    p1 = tmp_path / "a.json"
+    p1.write_text('{"#160": "一句人话", "171": "另一句"}', encoding="utf-8")
+    assert dlf.load_mark_plan_file(p1) == {160: "一句人话", 171: "另一句"}
+    p2 = tmp_path / "b.json"
+    p2.write_text('[{"id": 160, "fix_note": "x"}]', encoding="utf-8")
+    assert dlf.load_mark_plan_file(p2) == {160: "x"}
+    p3 = tmp_path / "c.json"
+    p3.write_text('{"160": ""}', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        dlf.load_mark_plan_file(p3)
+
+
+def test_mark_plan_only_touches_new_and_confirmed(tmp_path):
+    db = _mk_db_open(tmp_path)
+    notes = {160: "n160", 171: "n171", 150: "已 fixed 的", 151: "verified 的", 999: "无此单"}
+    plan = dlf.plan_mark_fixed(dlf.load_rows_full(db, list(notes)), notes)
+    acts = {p["ticket_id"]: p["action"] for p in plan}
+    assert acts == {150: "skip_status", 151: "skip_status", 160: "mark",
+                    171: "mark", 999: "missing"}
+    txt = dlf.render_mark_plan(plan, apply=False)
+    assert "将改 2 单" in txt and "--apply" in txt and "n171" in txt
+
+
+def test_mark_apply_sets_three_columns_keeps_notify_zero_and_logs(tmp_path):
+    db = _mk_db_open(tmp_path)
+    long_note = "长" * 400
+    notes = {160: long_note, 171: "n171"}
+    plan = dlf.plan_mark_fixed(dlf.load_rows_full(db, list(notes)), notes)
+    before = dlf.count_fixed_unnotified(db)
+    assert dlf.apply_mark_fixed(db, plan, now=1_700_000_000.0) == 2
+    r160, r171 = _row(db, 160), _row(db, 171)
+    assert r160["status"] == "fixed" and r171["status"] == "fixed"
+    assert r160["fix_note"] == "长" * dlf.FIX_NOTE_MAX  # 与 set_ticket_status 同截断
+    assert r171["fix_note"] == "n171"
+    assert r160["updated_ts"] == 1_700_000_000.0
+    # 不触发回访：notify_ts / notify_msg_id 原样为 0 → 进汇总回访池
+    assert r160["notify_ts"] == 0 and r160["notify_msg_id"] == 0
+    assert dlf.count_fixed_unnotified(db) == before + 2
+    kinds = [e for e in _events(db) if e[0] == dlf.EVENT_KIND]
+    assert len(kinds) == 2 and "no-notify" in kinds[0][2]
+    # 幂等：重跑全部 skip，不改 fix_note
+    plan2 = dlf.plan_mark_fixed(dlf.load_rows_full(db, list(notes)), notes)
+    assert all(p["action"] == "skip_status" for p in plan2)
+    assert dlf.apply_mark_fixed(db, plan2) == 0
+    assert _row(db, 171)["fix_note"] == "n171"

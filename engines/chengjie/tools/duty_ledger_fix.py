@@ -17,11 +17,21 @@
     python tools/duty_ledger_fix.py --rollback-verified 138,140,142 --apply
     python tools/duty_ledger_fix.py --rollback-verified 138 --note "自定义 note" --apply
     python tools/duty_ledger_fix.py --count-fixed-unnotified               # 只读计数
+    python tools/duty_ledger_fix.py --mark-fixed-file tmp/plan.json        # dry-run
+    python tools/duty_ledger_fix.py --mark-fixed-file tmp/plan.json --apply
 
-护栏：只动 ``status='verified'`` 的行（已被人改过的不重改，幂等）；直连 SQLite
+第二个用例＝**批量标 fixed 但不触发逐单回访**（K-5 ④段，老板 2026-09-05 拍 A 案）：
+``/api/admin/bug-intake/{id}/status`` 标 fixed 会当场逐单 @报障人，一次标几十
+单等于轰炸；本模式与该路由写同样三列 ``status / fix_note / updated_ts``，
+``notify_ts`` 保持 0，让这些单进「fixed 未回访」池，由 ``duty_notify_summary``
+的两份汇总回访一次盖掉。计划文件＝JSON 对象 ``{"37": "fix_note…", …}`` 或列表
+``[{"id": 37, "fix_note": "…"}, …]``；只动 ``status ∈ {new, confirmed}`` 的行
+（已 fixed / closed / verified 的一律跳过，幂等）；每单落一条 ``ledger_fix`` 事件。
+
+护栏：回滚只动 ``status='verified'`` 的行（已被人改过的不重改，幂等）；直连 SQLite
 短事务 ``timeout=10``（活库 WAL，引擎进程持连接）；**不 VACUUM / 不改 schema**；
 不经 ``/api/admin/bug-intake/{id}/status`` 路由——那条路 fixed 会自动触发回访。
-纯函数 ``plan_rollback`` 有门禁 ``tests/test_duty_ledger_fix.py``。
+纯函数 ``plan_rollback`` / ``plan_mark_fixed`` 有门禁 ``tests/test_duty_ledger_fix.py``。
 """
 from __future__ import annotations
 
@@ -167,6 +177,137 @@ def apply_plan(db_path: Path, plan: Sequence[Dict[str, Any]],
     return done
 
 
+# ── 批量标 fixed（不触发回访）────────────────────────────────────────────────
+
+MARK_FIXED_FROM = ("new", "confirmed")
+FIX_NOTE_MAX = 300  # 与 bug_intake.set_ticket_status 的截断一致
+
+
+def load_mark_plan_file(path: Path) -> Dict[int, str]:
+    """计划文件 → {ticket_id: fix_note}。对象形态键是单号字串；列表形态每项
+    ``{"id", "fix_note"}``。空 fix_note 直接拒绝——标 fixed 没有说明就是给回访
+    留白。"""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    items: List[Any]
+    if isinstance(raw, dict):
+        items = [{"id": k, "fix_note": v} for k, v in raw.items()]
+    elif isinstance(raw, list):
+        items = list(raw)
+    else:
+        raise SystemExit("[err] 计划文件须是 JSON 对象或列表")
+    out: Dict[int, str] = {}
+    for it in items:
+        try:
+            tid = int(str((it or {}).get("id")).replace("#", "").strip())
+        except (TypeError, ValueError, AttributeError):
+            raise SystemExit(f"[err] 计划项缺合法 id：{it!r}")
+        note = str((it or {}).get("fix_note") or "").strip()
+        if not note:
+            raise SystemExit(f"[err] #{tid} fix_note 为空")
+        out[tid] = note
+    return out
+
+
+def plan_mark_fixed(rows: Sequence[Dict[str, Any]],
+                    notes: Dict[int, str]) -> List[Dict[str, Any]]:
+    """每张目标单一条计划项：``action`` = mark | skip_status | missing。
+
+    只有 ``status ∈ MARK_FIXED_FROM`` 的行给 mark；fixed / closed / verified
+    一律 skip（重跑不会覆盖别人已写的 fix_note，也不会把 verified 翻回去）。
+    """
+    by_id = {int(r.get("id") or 0): r for r in rows or []}
+    plan: List[Dict[str, Any]] = []
+    for tid in sorted(notes):
+        r = by_id.get(int(tid))
+        if r is None:
+            plan.append({"ticket_id": int(tid), "action": "missing"})
+            continue
+        item = {
+            "ticket_id": int(tid),
+            "title": str(r.get("title") or "").splitlines()[0][:60],
+            "reporter": str(r.get("reporter_name") or ""),
+            "status_from": str(r.get("status") or ""),
+            "notify_ts": float(r.get("notify_ts") or 0),
+        }
+        if item["status_from"] not in MARK_FIXED_FROM:
+            item["action"] = "skip_status"
+        else:
+            item.update({"action": "mark", "status_to": "fixed",
+                         "fix_note": str(notes[tid]).strip()[:FIX_NOTE_MAX]})
+        plan.append(item)
+    return plan
+
+
+def render_mark_plan(plan: Sequence[Dict[str, Any]], apply: bool) -> str:
+    head = "[APPLY]" if apply else "[DRY-RUN]"
+    lines = [f"{head} 批量标 fixed（不触发回访）计划（{len(plan)} 项）："]
+    for p in plan:
+        tid = p["ticket_id"]
+        if p["action"] == "missing":
+            lines.append(f"  #{tid}  ⛔ 库内无此单")
+        elif p["action"] == "skip_status":
+            lines.append(f"  #{tid}  ⏭ 跳过：status={p['status_from']!r} 不在 "
+                         f"{'/'.join(MARK_FIXED_FROM)}（{p.get('title', '')}）")
+        else:
+            lines.append(
+                f"  #{tid}  {p['status_from']} → fixed  [{p.get('reporter', '')}] "
+                f"{p.get('title', '')}\n        fix_note: {p['fix_note']}")
+    n_do = sum(1 for p in plan if p["action"] == "mark")
+    lines.append(f"  将改 {n_do} 单，notify_ts 保持 0（进汇总回访池）"
+                 + ("" if apply else "——加 --apply 执行"))
+    return "\n".join(lines)
+
+
+def load_rows_full(db_path: Path, ids: Sequence[int]) -> List[Dict[str, Any]]:
+    if not ids:
+        return []
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    con = sqlite3.connect(uri, uri=True, timeout=5)
+    try:
+        con.row_factory = sqlite3.Row
+        q = ",".join("?" for _ in ids)
+        rows = con.execute(
+            f"SELECT id,status,title,reporter_name,notify_ts,fix_note FROM bug_tickets"
+            f" WHERE id IN ({q})", [int(i) for i in ids]).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def apply_mark_fixed(db_path: Path, plan: Sequence[Dict[str, Any]],
+                     actor: str = "duty_ledger_fix",
+                     now: Optional[float] = None) -> int:
+    """执行 mark 项：与 ``set_ticket_status`` 同三列，``WHERE status IN (…)`` 再守一次；
+    不碰 notify_ts / notify_msg_id。"""
+    ts = float(now if now is not None else time.time())
+    todo = [p for p in plan if p["action"] == "mark"]
+    if not todo:
+        return 0
+    marks = ",".join("?" for _ in MARK_FIXED_FROM)
+    con = sqlite3.connect(str(db_path), timeout=10)
+    done = 0
+    try:
+        for p in todo:
+            tid = int(p["ticket_id"])
+            cur = con.execute(
+                "UPDATE bug_tickets SET status='fixed', fix_note=?, updated_ts=?"
+                f" WHERE id=? AND status IN ({marks})",
+                (p["fix_note"], ts, tid, *MARK_FIXED_FROM))
+            if cur.rowcount != 1:
+                continue
+            con.execute(
+                "INSERT INTO bug_events(ts, chat_id, kind, reporter_id, detail)"
+                " SELECT ?, chat_id, ?, ?, ? FROM bug_tickets WHERE id=?",
+                (ts, EVENT_KIND, actor,
+                 f"#{tid} {p['status_from']}->fixed (no-notify, summary pending)",
+                 tid))
+            done += 1
+        con.commit()
+    finally:
+        con.close()
+    return done
+
+
 def count_fixed_unnotified(db_path: Path) -> int:
     uri = f"file:{db_path.as_posix()}?mode=ro"
     con = sqlite3.connect(uri, uri=True, timeout=5)
@@ -192,6 +333,9 @@ def main() -> int:
     ap.add_argument("--data-root", default="")
     ap.add_argument("--count-fixed-unnotified", action="store_true",
                     help="只读：status='fixed' AND notify_ts=0 的单数")
+    ap.add_argument("--mark-fixed-file", default="",
+                    help="JSON 计划文件：批量 new/confirmed → fixed + fix_note，"
+                         "不触发逐单回访（notify_ts 保持 0）")
     args = ap.parse_args()
 
     data_root = resolve_data_roots(args.data_root)[0]
@@ -203,6 +347,18 @@ def main() -> int:
 
     if args.count_fixed_unnotified:
         _out(f"fixed 且未回访（notify_ts=0）：{count_fixed_unnotified(db)} 单")
+
+    if args.mark_fixed_file:
+        notes = load_mark_plan_file(Path(args.mark_fixed_file))
+        mplan = plan_mark_fixed(load_rows_full(db, list(notes)), notes)
+        if args.json:
+            _out(json.dumps(mplan, ensure_ascii=False, indent=1))
+        else:
+            _out(render_mark_plan(mplan, apply=args.apply))
+        if args.apply:
+            n = apply_mark_fixed(db, mplan)
+            _out(f"[apply] 已标 fixed {n} 单（事件 kind={EVENT_KIND}，未发回访）")
+            _out(f"fixed 且未回访（notify_ts=0）：{count_fixed_unnotified(db)} 单")
 
     ids = parse_ids(args.rollback_verified)
     if not ids:
