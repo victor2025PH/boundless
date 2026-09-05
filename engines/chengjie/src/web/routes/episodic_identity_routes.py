@@ -645,6 +645,121 @@ def register_episodic_identity_routes(app, ctx) -> None:
             limit=max(1, min(int(rows or 60), 500)))
         return {"ok": True, "batches": batches, "count": len(batches)}
 
+    # ── J-10 A4（#177）：「AI 自身经历」入口——人设说过 / 承诺过 / 发过（只读 + 删一条）──
+
+    def _self_log_ctx(sm: Any, memory_key: str, conversation_id: str):
+        """记忆键 → 该会话的 user_context（只读 ``peek``，绝不凭空建 ctx）。
+
+        ContextStore 键＝``make_context_key(chat_key, account_id)``（``acct:peer`` / 裸
+        peer）；记忆键多带 ``platform:`` 前缀或已链成 canonical。候选顺序：
+        conversation_id 拆出的 acct/chat → identity 解析出的 conversation_id → 记忆键
+        剥平台前缀 → 记忆键本身。返回 ``(ctx, key)``；找不到 → ``(None, "")``。
+        """
+        cs = getattr(sm, "_context_store", None) if sm else None
+        peek = getattr(cs, "peek", None)
+        if not callable(peek):
+            return None, ""
+        from src.utils.context_store import make_context_key
+        from src.utils.episodic_memory_store import strip_composite_user_id
+        from src.inbox.peer_delete_purge import split_conversation_id
+        cands: list = []
+        convs = [conversation_id]
+        if memory_key:
+            inbox_db = _inbox_db_or_none()
+            if inbox_db is not None:
+                try:
+                    ident = resolve_identities(inbox_db, [memory_key]).get(memory_key) or {}
+                    if ident.get("conversation_id"):
+                        convs.append(str(ident["conversation_id"]))
+                except Exception:
+                    pass
+        for c in convs:
+            plat, acct, chat = split_conversation_id(str(c or ""))
+            if chat:
+                cands.append(make_context_key(chat, acct))
+                cands.append(chat)
+        if memory_key:
+            for plat in ("telegram", "whatsapp", "line", "messenger", "instagram", "wechat"):
+                s = strip_composite_user_id(memory_key, plat)
+                if s != memory_key:
+                    cands.append(s)
+            cands.append(memory_key)
+        seen = set()
+        for k in cands:
+            k = str(k or "").strip()
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            try:
+                ctx = peek(k)
+            except Exception:
+                ctx = None
+            if isinstance(ctx, dict):
+                return ctx, k
+        return None, ""
+
+    @app.get("/api/episodic-memory/self-log")
+    async def api_episodic_self_log(
+        request: Request, memory_key: str = "", conversation_id: str = "",
+    ):
+        """人设自己的经历时间线：坐席替人设说过（``_human_said_log``，#177）/ AI 自述近况
+        （``_self_state_log``）/ 发过的媒体（``_media_sent_log``）/ TTL 内承诺待兑现
+        （``_media_pending``）。只读；``items`` 按时间倒序，每条 ``{kind, ts, text, …}``。
+        找不到对应会话上下文 → ``items=[]`` + ``found=false``（不是错误）。
+        """
+        _api_auth(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready_sm"))
+        mk = str(memory_key or "").strip()[:200]
+        conv = str(conversation_id or "").strip()[:200]
+        if not mk and not conv:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="memory_key"))
+        from src.utils.memory_self_log import collect_self_experience
+        ctx, key = _self_log_ctx(sm, mk, conv)
+        items = collect_self_experience(ctx) if ctx is not None else []
+        return {"ok": True, "found": ctx is not None, "context_key": key,
+                "items": items, "count": len(items)}
+
+    @app.post("/api/episodic-memory/self-log/delete")
+    async def api_episodic_self_log_delete(request: Request):
+        """删一条人设经历记录。Body ``{memory_key|conversation_id, kind, ts, text}``。
+        只改那份 bounded 日志并落盘；不触碰任何注入逻辑（下一轮自然不再带这条）。"""
+        _api_write("episodic_memory")(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        mk = str(body.get("memory_key") or "").strip()[:200]
+        conv = str(body.get("conversation_id") or "").strip()[:200]
+        kind = str(body.get("kind") or "").strip()[:32]
+        text = str(body.get("text") or "")[:400]
+        if (not mk and not conv) or not kind:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="kind"))
+        from src.utils.memory_self_log import delete_self_experience_entry
+        ctx, key = _self_log_ctx(sm, mk, conv)
+        if ctx is None:
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        ok = delete_self_experience_entry(ctx, kind, body.get("ts"), text)
+        if not ok:
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        cs = getattr(sm, "_context_store", None)
+        try:
+            if cs is not None and key:
+                cs.mark_dirty(key)
+                cs.flush(key)
+        except Exception:
+            pass
+        _audit_epi(request, "episodic_self_log_delete", key or mk or conv,
+                   old_val=f"[{kind}] {text[:160]}")
+        return {"ok": True, "deleted": {"kind": kind, "text": text[:160]}, "context_key": key}
+
     @app.post("/api/episodic-memory/backfill")
     async def api_episodic_memory_backfill(
         request: Request, limit: int = 20, prefix: str = "", force: bool = False

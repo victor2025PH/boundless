@@ -713,6 +713,46 @@ async function _emDrvLoadUsed(key){
     sec.hidden=false;
   }catch(e){/* 旧后端 / 网络失败：分区不出现 */}
 }
+/* J-10 A4（#177）：人设自己的经历（坐席替人设说过 / AI 自述近况 / 发过 / 承诺待兑现）。
+   只读展示 + 「删除这条记录」；旧后端无接口 → 分区保持隐藏。 */
+async function _emDrvLoadSelf(key,convId){
+  var sec=document.getElementById('em-drv-self'); var bd=document.getElementById('em-drv-self-bd');
+  if(!sec||!bd)return;
+  try{
+    var q=new URLSearchParams({memory_key:key}); if(convId)q.set('conversation_id',convId);
+    var res=await apiFetch('/api/episodic-memory/self-log?'+q.toString());
+    if(_emDrvKey!==key||!res.ok)return;
+    var d=await res.json(); if(_emDrvKey!==key)return;
+    var items=d.items||[];
+    if(!items.length){bd.innerHTML='<div style="font-size:.72rem;color:var(--t3)">'+_emEsc(window.T('em_self_none'))+'</div>';sec.hidden=false;return;}
+    bd.innerHTML=items.map(function(it,i){
+      var ago=it.ts?_emAgo(it.ts):null;
+      var kindLabel=window.T('em_self_kind_'+String(it.kind||''))||String(it.kind||'');
+      var extra=(it.kind==='media_sent'&&it.scene)?' · '+_emEsc(it.scene):'';
+      var del=emCanDelete?'<button type="button" class="btn-del" data-i="'+i+'" style="margin-left:auto">'+_emEsc(window.T('em_self_delete'))+'</button>':'';
+      return '<div class="em-drv-row" data-self-i="'+i+'"><div class="c">'+_emEsc(it.text||'')+'</div>'
+        +'<div class="m"><span class="badge-src '+(it.kind==='promise_pending'?'inferred':'stated')+'">'+_emEsc(kindLabel)+'</span>'
+        +(ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'')+extra+'<span class="sp"></span>'+del+'</div></div>';
+    }).join('');
+    sec.hidden=false;
+    Array.prototype.forEach.call(bd.querySelectorAll('button[data-i]'),function(b){
+      b.addEventListener('click',function(){
+        var it=items[parseInt(b.getAttribute('data-i'),10)]; if(!it)return;
+        _emModal({
+          title:window.T('em_self_delete'),
+          body:'<div>'+_emEsc(window.Tf('em_self_delete_body',{t:String(it.text||'').slice(0,80)}))+'</div>',
+          ok:window.T('confirm'),
+          onOk:async function(){
+            var body={memory_key:key,kind:it.kind,ts:it.ts,text:it.text}; if(convId)body.conversation_id=convId;
+            var r=await apiFetch('/api/episodic-memory/self-log/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(r&&r.ok){_emDrvLoadSelf(key,convId);}
+            else{alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
+          }
+        });
+      });
+    });
+  }catch(e){/* 旧后端 / 网络失败：分区不出现 */}
+}
 function _emDrvEls(){
   var bk=document.getElementById('em-drv-bk');
   var pn=document.getElementById('em-drv');
@@ -821,6 +861,9 @@ function _emDrvRender(){
   if(!rows.length)secs=_emEmptyHtml();
   // J-10 A3：「最近被用」分区（/api/episodic-memory/used 自证）——异步填充，失败静默隐藏
   var usedSec='<div class="em-drv-sec" id="em-drv-used" hidden><h4 title="'+_emEsc(window.T('em_used_tip'))+'">'+_emEsc(window.T('em_used_title'))+'</h4><div id="em-drv-used-bd"></div></div>';
+  // J-10 A4（#177）：「人设说过 / 承诺过」分区（/api/episodic-memory/self-log）——只读 + 删一条
+  var selfSec='<div class="em-drv-sec" id="em-drv-self" hidden><h4 title="'+_emEsc(window.T('em_self_tip'))+'">'+_emEsc(window.T('em_self_title'))+'</h4><div id="em-drv-self-bd"></div></div>';
+  var convIdForSelf=(idn&&idn.resolved&&idn.conversation_id)?String(idn.conversation_id):'';
   els.pn.innerHTML=
     '<div class="em-drv-hd">'+_emAvatar(idn,key)
     +'<div style="flex:1;min-width:0">'
@@ -829,8 +872,9 @@ function _emDrvRender(){
     +'<div style="font-size:.68rem;color:var(--t3);margin-top:.3rem">'+_emEsc(stats)+(span?' · '+_emEsc(span):'')+'</div>'
     +(_emMaskOn?'':'<div style="font-size:.62rem;color:var(--t3);margin-top:.25rem;font-family:Consolas,monospace;word-break:break-all">'+_emEsc(key)+'</div>')
     +'</div><button type="button" class="em-drv-x" id="em-drv-x" title="'+_emEsc(window.T('close'))+'">✕</button></div>'
-    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+usedSec+secs+'</div>';
+    +'<div class="em-drv-bd"><div class="em-drv-acts">'+convA+batchB+copyB+'</div>'+usedSec+selfSec+secs+'</div>';
   _emDrvLoadUsed(key);
+  _emDrvLoadSelf(key,convIdForSelf);
   var x=document.getElementById('em-drv-x'); if(x)x.addEventListener('click',_emDrvClose);
   var cp=document.getElementById('em-drv-copy'); if(cp)cp.addEventListener('click',function(){_emCopyText(key,cp);});
   var bb=document.getElementById('em-drv-batch');

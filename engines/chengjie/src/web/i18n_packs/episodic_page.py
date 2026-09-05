@@ -120,6 +120,15 @@ ZH = {
     "em_used_chain_inbox": "收件箱拟稿",
     "em_used_chain_direct": "直接回复",
     "em_used_deleted": "（已删除）",
+    "em_self_title": "人设说过 / 承诺过",
+    "em_self_tip": "AI（或人工接管时的坐席）以人设身份对这位客户说过的自己的事、发过的东西、还没兑现的承诺——只展示，不参与记忆抽取",
+    "em_self_none": "还没有人设自己的经历记录",
+    "em_self_kind_human_said": "坐席替人设说过",
+    "em_self_kind_ai_state": "AI 自述近况",
+    "em_self_kind_media_sent": "发过",
+    "em_self_kind_promise_pending": "承诺待兑现",
+    "em_self_delete": "删除这条记录",
+    "em_self_delete_body": "删除后 AI 不再把这条当作自己说过/做过的事：「{t}」",
 }
 
 EN = {
@@ -241,4 +250,13 @@ EN = {
     "em_used_chain_inbox": "inbox draft",
     "em_used_chain_direct": "direct reply",
     "em_used_deleted": "(deleted)",
+    "em_self_title": "Persona said / promised",
+    "em_self_tip": "Things the AI (or an agent during manual takeover) said about itself to this customer, media it sent, and promises not yet fulfilled — display only, not part of memory extraction",
+    "em_self_none": "No persona-side records yet",
+    "em_self_kind_human_said": "agent said as persona",
+    "em_self_kind_ai_state": "AI said about itself",
+    "em_self_kind_media_sent": "sent",
+    "em_self_kind_promise_pending": "promise pending",
+    "em_self_delete": "Delete this record",
+    "em_self_delete_body": "After deletion the AI will no longer treat this as something it said/did: \"{t}\"",
 }
