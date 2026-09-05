@@ -695,16 +695,21 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     ),
     (
         "crisis-audit-page",
-        "危机审计是什么",
-        "What the Crisis audit page is",
-        "「危机审计」是危机级事件的留痕表（客户流露自伤/极端情绪等），供复盘与"
-        "人工处置：可按用户筛选、只看未处理，逐条「标记已处理」。需要先开启"
-        "companion.wellbeing.crisis_audit。内容敏感，建议只给主管或合规角色看。",
-        "Crisis audit is the trail of severe/elevated crisis events for review "
-        "and follow-up: filter by user, show only unhandled, and mark items "
-        "handled. Requires companion.wellbeing.crisis_audit. The content is "
-        "sensitive — keep it to supervisors or compliance roles.",
-        "危机 审计 自伤 极端 安全 留痕 处置 crisis",
+        "客户安全预警是什么",
+        "What the Customer Safety Alerts page is",
+        "「客户安全预警」（原「危机审计」）记录 AI 在客户消息里识别到自伤、绝望等危机"
+        "信号的时刻：谁、什么时候、AI 怎么兜底、有没有叫人。可按客户搜索、只看未处理，"
+        "逐条「标记已处理」。页面顶部若出现红条「危机留痕未开启」，点一键开启即可"
+        "（同时开启人工升级：严重事件点亮工作台「需人工」红徽标并置顶会话）。"
+        "内容敏感，只有主管/合规角色可见。",
+        "Customer Safety Alerts (formerly Crisis audit) records the moments the AI "
+        "detected self-harm or despair signals in a customer's messages: who, when, "
+        "how the AI applied its safety net, and whether a human was called. Search "
+        "by customer, show only unhandled, mark items handled. If a red banner says "
+        "logging is off, use the one-click enable (it also turns on human escalation: "
+        "severe events light the red workbench badge and pin the conversation). "
+        "Sensitive — visible to supervisors/compliance only.",
+        "危机 审计 自伤 极端 安全 预警 留痕 处置 crisis safety",
         "/crisis-audit",
     ),
     (

@@ -1246,7 +1246,8 @@ def test_tr_localizes_by_request_lang():
     assert tr(zh_req, "err.case.not_found", case_id="C3") == "Case C3 不存在"
     assert tr(en_req, "err.ec.tools_disabled") == "E-commerce tools are not enabled"
     assert tr(zh_req, "err.tg.save_config_failed") == "保存配置失败"
-    assert tr(en_req, "err.ca.event_not_found") == "Event not found or crisis audit is not enabled"
+    # 2026-09-05 #185：「危机审计」→「客户安全预警」人话化，文案随之改
+    assert tr(en_req, "err.ca.event_not_found") == "Event not found or safety-alert logging is not enabled"
     # P43b：messenger_rpa——{dep}/{field}/{key} 参数化归一 + 复用 op_failed/service_not_started
     assert tr(zh_req, "err.rpa.dep_not_injected", dep="state_store") == "state_store 未注入"
     assert tr(en_req, "err.rpa.dep_not_injected", dep="messenger_rpa state_store") == \

@@ -162,6 +162,7 @@ _BASELINE = """
 /api/conversations/active	GET
 /api/copilot/query	POST
 /api/crisis-events	GET
+/api/crisis-events/enable	POST
 /api/crisis-events/{event_id}/handle	POST
 /api/data-purge	POST
 /api/episodic-memory	GET

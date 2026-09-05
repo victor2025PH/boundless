@@ -227,7 +227,7 @@ def register_health_routes(app, ctx) -> None:
                             "title": f"{unhandled} 条未处理危机",
                             "body": body,
                             "action_url": "/crisis-audit?only_unhandled=1",
-                            "action_label": "危机审计",
+                            "action_label": "客户安全预警",
                         })
             except Exception:
                 pass

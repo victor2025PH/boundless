@@ -209,8 +209,8 @@ NAV_ITEMS = {
                          help="nav_monetization",
                          cmd_keys="monetization revenue 变现 营收 订阅 客户营收 变现营收 customer"),
     "crisis_audit": dict(key="crisis_audit", path="/crisis-audit", icon="alert-triangle",
-                         badge="badge-crisis", label_key="crisis_audit", label_zh="危机审计",
-                         help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险"),
+                         badge="badge-crisis", label_key="crisis_audit", label_zh="客户安全预警",
+                         help="nav_crisis_audit", cmd_keys="crisis 危机 审计 风险 安全 预警"),
     "audit": dict(key="audit", path="/audit", icon="clipboard", label_key="audit",
                   label_zh="操作记录", help="nav_audit", cmd_keys="audit 审计 记录 操作"),
     # 账号资产中心（账号资产保全 P1，2026-08-19）：封号场景「资产可见→可导出→可迁移」
@@ -386,7 +386,7 @@ NAV_GROUPS_FULL = [
 # 定位（2026-08-03 精简）：简洁模式＝值班/看店视角（坐席+店主每天要碰的），
 # 完整模式＝配置/运维/增长视角。真机矩阵五项、人设工作室与分析/审计/记账类页
 # 只在完整模式渲染；URL 不封（书签/深链仍可达），命令面板按 simple 标注兜底可搜。
-# 危机审计刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
+# 客户安全预警（原危机审计）刻意留在折叠区：红色徽标是简洁模式用户唯一的危机可见通道，安全项不藏。
 SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
                "reply_settings", "escalation"]
 # usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」

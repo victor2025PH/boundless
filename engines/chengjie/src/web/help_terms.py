@@ -296,12 +296,12 @@ HELP_TERMS: dict = {
         "usage_en": "Search a user → review memory entries → fix wrong memories or delete stale ones"
     },
     "nav_crisis_audit": {
-        "zh": "危机审计",
-        "en": "Crisis Audit",
-        "desc": "危机安全链事件留痕：高危消息的识别、处理过程与复盘记录",
-        "desc_en": "Audit trail of the crisis-safety chain: how high-risk messages were detected, handled and reviewed",
-        "usage": "关注未处理事件 → 查看上下文 → 标记处理结果",
-        "usage_en": "Watch unhandled events → inspect context → mark the outcome"
+        "zh": "客户安全预警",
+        "en": "Customer Safety Alerts",
+        "desc": "AI 在客户消息里识别到自伤、绝望等危机信号时的记录：谁、什么时候、AI 怎么兜底、有没有叫人",
+        "desc_en": "Records of moments when the AI detected self-harm or despair signals in a customer's messages: who, when, how the AI applied its safety net, and whether a human was called",
+        "usage": "先确认留痕已开启 → 关注未处理事件 → 查看上下文 → 标记处理结果",
+        "usage_en": "Make sure logging is on → watch unhandled events → inspect context → mark the outcome"
     },
     "nav_voice_eval": {
         "zh": "声音评测",

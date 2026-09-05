@@ -580,6 +580,14 @@ vision:
 
 companion:
   enabled: true
+  # ── 客户安全预警出厂开（老板决策 D7，2026-09-05，#185）──
+  # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；此前留痕(crisis_audit)与
+  # 人工升级(crisis_escalation)出厂关 → severe 命中不记录、不叫任何人（桌面包没配
+  # webhook，升级同时点亮工作台「需人工」徽标 + 置顶 + 落案例，不依赖外部通道）。
+  wellbeing:
+    crisis_audit: true
+    crisis_escalation: true
+    escalate_after: 1
   # 今日话题包：RSS 抓当日新鲜事，冷场/被问起/主动开场时注入 1-3 条自然聊起
   # v1.005：话题源参数对齐生产（公网 RSS 可直达；人设专属源随人设 lin_xiaoyu 走）
   daily_topics:

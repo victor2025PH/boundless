@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ (i18n or {}).get('ca_s001', "危机审计") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
-{% block page_title %}{{ (i18n or {}).get('ca_s001', "危机审计") }}{% endblock %}
+{% block title %}{{ (i18n or {}).get('ca_s020', "客户安全预警") }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('ca_s020', "客户安全预警") }}{% endblock %}
 {% block head %}
 <style>
 .ca-filters{display:flex;flex-wrap:wrap;gap:.6rem;align-items:flex-end;margin-bottom:1rem}
@@ -42,6 +42,17 @@
 .ca-modal h3{margin:0 0 .75rem;font-size:1rem}
 .ca-modal textarea{width:100%;min-height:72px;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);color:var(--t)}
 .ca-modal-actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem}
+/* #185（2026-09-05）三档空态：audit_off 红条不可与「好消息」长一个样 */
+.ca-banner{display:flex;gap:.8rem;align-items:flex-start;padding:.85rem 1rem;border-radius:10px;margin-bottom:.9rem;font-size:.84rem;line-height:1.5}
+.ca-banner.off{background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.45);color:var(--t)}
+.ca-banner.warn{background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.45);color:var(--t)}
+.ca-banner .ca-banner-ic{font-size:1.25rem;line-height:1.2}
+.ca-banner .ca-banner-title{font-weight:700;margin-bottom:.15rem}
+.ca-banner .ca-banner-body{color:var(--t2)}
+.ca-banner .ca-banner-act{margin-left:auto;align-self:center;white-space:nowrap}
+.ca-sub{font-size:.8rem;color:var(--t2);margin:-.2rem 0 .8rem}
+.ca-legend{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;font-size:.76rem;color:var(--t2);margin-bottom:.9rem}
+.ca-legend .ca-legend-t{color:var(--t3);font-weight:600}
 </style>
 {% endblock %}
 {% block content %}
@@ -50,14 +61,21 @@
 <div class="card fa">
   <h2>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-    {{ (i18n or {}).get('ca_s002', "危机事件审计") }}
-    <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">R4→R6→R8 {{ (i18n or {}).get('ca_s003', "安全链留痕 · 需开启") }} companion.wellbeing.crisis_audit</span>
+    {{ (i18n or {}).get('ca_s020', "客户安全预警") }}
   </h2>
+  <p class="ca-sub">{{ (i18n or {}).get('ca_s021', "AI 会在每条进站消息上识别自伤、绝望等危机信号；命中后记录在这里，需要时叫人接手。") }}</p>
+  <div id="ca-banner"></div>
+  <div class="ca-legend">
+    <span class="ca-legend-t">{{ (i18n or {}).get('ca_s024', "状态说明") }}</span>
+    <span><span class="badge-lv severe">{{ (i18n or {}).get('ca_s025', "关注") }}</span> {{ (i18n or {}).get('ca_s026', "AI 识别到危机信号（严重 / 偏高）") }}</span>
+    <span><span class="badge-flag ok">{{ (i18n or {}).get('ca_s027', "已兜底") }}</span> {{ (i18n or {}).get('ca_s028', "AI 原本的回复触到安全红线，已替换为安全回复") }}</span>
+    <span><span class="badge-flag on">{{ (i18n or {}).get('ca_s029', "已升级") }}</span> {{ (i18n or {}).get('ca_s030', "已叫人：工作台红色「需人工」徽标 + 会话置顶 + 案例跟进") }}</span>
+  </div>
   <div class="ca-summary" id="ca-summary"></div>
   <div class="ca-filters">
     <div class="f-grp">
-      <label class="f-lbl">{{ (i18n or {}).get('ca_s004', "筛选用户") }} ID</label>
-      <input type="text" id="ca-prefix" placeholder="user_id {{ (i18n or {}).get('ca_s005', '前缀') }}" class="f-input">
+      <label class="f-lbl">{{ (i18n or {}).get('ca_s022', "按客户搜索") }}</label>
+      <input type="text" id="ca-prefix" placeholder="{{ (i18n or {}).get('ca_s023', '客户 ID（输入开头几位即可）') }}" class="f-input">
     </div>
     <div class="f-grp">
       <label class="f-lbl">{{ (i18n or {}).get('em_s014', "条数") }}</label>
@@ -75,12 +93,12 @@
       <thead>
         <tr>
           <th style="width:56px">ID</th>
-          <th style="min-width:120px">{{ (i18n or {}).get('cases_user', "用户") }}</th>
-          <th style="width:72px">{{ (i18n or {}).get('ap_s023', "等级") }}</th>
+          <th style="min-width:120px">{{ (i18n or {}).get('cases_user', "客户") }}</th>
+          <th style="width:72px">{{ (i18n or {}).get('ca_s032', "风险") }}</th>
           <th style="width:90px">{{ (i18n or {}).get('wa_s053', "类别") }}</th>
           <th>{{ (i18n or {}).get('rpa_js_summary', "摘要") }}</th>
-          <th style="width:56px">{{ (i18n or {}).get('ca_s007', "连击") }}</th>
-          <th style="width:120px">{{ (i18n or {}).get('ca_s008', "标记") }}</th>
+          <th style="width:72px">{{ (i18n or {}).get('ca_s033', "连续命中") }}</th>
+          <th style="width:150px">{{ (i18n or {}).get('ca_s031', "状态") }}</th>
           <th style="width:150px">{{ (i18n or {}).get('time', "时间") }}</th>
           <th style="width:88px">{{ (i18n or {}).get('ov_js_th_action', "操作") }}</th>
         </tr>
@@ -111,12 +129,72 @@ function esc(s) {
 }
 function lvBadge(lv) {
   var cls = (lv === 'severe') ? 'severe' : ((lv === 'elevated') ? 'elevated' : 'other');
-  return '<span class="badge-lv ' + cls + '">' + esc(lv || '—') + '</span>';
+  var label = (lv === 'severe') ? window.T('ca_js030') : ((lv === 'elevated') ? window.T('ca_js031') : esc(lv || '—'));
+  return '<span class="badge-lv ' + cls + '" title="' + esc(lv || '') + '">' + label + '</span>';
+}
+/* 类别码 → 人话（认不出的原样显示，别把未知码吞成「—」） */
+function catLabel(cat) {
+  var m = { self_harm: 'ca_js032', despair: 'ca_js033', audio_distress: 'ca_js034' };
+  return m[cat] ? window.T(m[cat]) : esc(cat || '—');
 }
 function flagBadge(on, labelOn, labelOff) {
   return on
     ? '<span class="badge-flag on">' + labelOn + '</span>'
     : '<span class="badge-flag ok">' + labelOff + '</span>';
+}
+
+/* #185 三档空态的横幅（表格上方，与空态正文一起渲染；has_events 时也保留 audit_off 红条——
+   历史事件看得见 ≠ 现在还在记）。 */
+function caRenderBanner(d) {
+  var el = document.getElementById('ca-banner');
+  if (!el) return;
+  /* 红条按开关而不是按空态判：留痕关着但库里还有历史 → 表格照常展示历史，
+     红条仍要在（现在没人在记，别让历史事件冒充「被保护着」）。旧后端无 audit_on 字段
+     （undefined）不亮红，由正文 unknown 档兜。 */
+  if (d && (d.state === 'audit_off' || d.audit_on === false)) {
+    el.innerHTML = '<div class="ca-banner off" role="alert" data-state="audit_off">'
+      + '<div class="ca-banner-ic">🚨</div>'
+      + '<div><div class="ca-banner-title">' + window.T('ca_js020') + '</div>'
+      + '<div class="ca-banner-body">' + window.T('ca_js021') + '</div></div>'
+      + (caCanHandle ? '<div class="ca-banner-act"><button type="button" class="btn btn-p btn-sm" id="ca-enable-btn" onclick="caEnableAudit(true)">' + window.T('ca_js022') + '</button></div>' : '')
+      + '</div>';
+    return;
+  }
+  if (d && d.audit_on && d.escalation_on === false) {
+    el.innerHTML = '<div class="ca-banner warn" data-state="escalation_off">'
+      + '<div class="ca-banner-ic">⚠️</div>'
+      + '<div><div class="ca-banner-body">' + window.T('ca_js026') + '</div></div>'
+      + (caCanHandle ? '<div class="ca-banner-act"><button type="button" class="btn btn-s btn-sm" id="ca-enable-btn" onclick="caEnableAudit(true)">' + window.T('ca_js027') + '</button></div>' : '')
+      + '</div>';
+    return;
+  }
+  el.innerHTML = '';
+}
+
+/* 一键开启留痕（+人工升级）：写 overlay 保注释 → 即时生效 → 重载列表 */
+async function caEnableAudit(withEscalation) {
+  var btn = document.getElementById('ca-enable-btn');
+  var st = document.getElementById('ca-status');
+  if (btn) btn.disabled = true;
+  try {
+    var res = await apiFetch('/api/crisis-events/enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ escalation: withEscalation !== false })
+    }, {timeoutMs: 30000});
+    if (!res.ok) {
+      var msg = '';
+      try { msg = (await res.json()).detail || ''; } catch (e) {}
+      st.textContent = window.T('ca_js024') + ' ' + res.status + (msg ? ' · ' + msg : '');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    st.textContent = window.T('ca_js023');
+    caLoad();
+  } catch (e) {
+    st.textContent = window.T('ca_js024') + ': ' + e;
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function caLoad() {
@@ -137,31 +215,44 @@ async function caLoad() {
     const d = await res.json();
     const items = d.items || [];
     const unhandled = d.unhandled_total || 0;
+    /* 旧后端（无 state 字段）按「未知」处理：不亮红条也不说好消息 */
+    const state = (typeof d.state === 'string') ? d.state : 'unknown';
+    caRenderBanner(d);
     summary.innerHTML =
       '<div class="ca-pill">'+window.T('ca_js001')+' <strong>' + (d.count || items.length) + '</strong> '+window.T('dash.items')+'</div>' +
       '<div class="ca-pill' + (unhandled > 0 ? ' warn' : '') + '">'+window.T('ca_js002')+' <strong>' + unhandled + '</strong></div>';
     st.textContent = window.T('ca_js003');
     if (!items.length) {
-      /* 空态分两种（2026-08-18 P1）：无筛选的空 = 「安全体检」好消息（生产常态
-         是 0 危机事件，裸空表看着像页面坏了）；带用户前缀筛选的空 = 普通无匹配。 */
-      if (!prefix) {
-        var histBtn = onlyUnhandled
-          ? '<div style="margin-top:.7rem"><button type="button" class="btn btn-s btn-sm" onclick="caShowAll()">' + window.T('ca_js011') + '</button></div>'
-          : '';
-        body.innerHTML = '<tr><td colspan="9" style="padding:2.4rem 1rem;text-align:center">'
+      /* 空态三档（#185 2026-09-05）：
+         - audit_off：红条已在上方，正文只说「未开启」，**绝不**出现「好消息」；
+         - audit_on_empty（无筛选）：留痕开着且近 N 天 0 事件 = 真好消息；
+         - 带客户筛选 / 仅未处理但历史有货：普通无匹配 + 「查看已处理历史」。 */
+      var histBtn = onlyUnhandled
+        ? '<div style="margin-top:.7rem"><button type="button" class="btn btn-s btn-sm" onclick="caShowAll()">' + window.T('ca_js011') + '</button></div>'
+        : '';
+      if (state === 'audit_off') {
+        body.innerHTML = '<tr><td colspan="9" style="padding:2.4rem 1rem;text-align:center" data-empty="audit_off">'
+          + '<div style="font-size:1.7rem;line-height:1">🚨</div>'
+          + '<div style="font-weight:600;margin:.45rem 0 .25rem;color:var(--red)">' + window.T('ca_js020') + '</div>'
+          + '<div style="font-size:.8rem;color:var(--t3);max-width:520px;margin:0 auto">' + window.T('ca_js021') + '</div>'
+          + '</td></tr>';
+      } else if (!prefix && state === 'audit_on_empty') {
+        body.innerHTML = '<tr><td colspan="9" style="padding:2.4rem 1rem;text-align:center" data-empty="audit_on_empty">'
           + '<div style="font-size:1.7rem;line-height:1">🛡️</div>'
-          + '<div style="font-weight:600;margin:.45rem 0 .25rem">' + window.T('ca_js010') + '</div>'
+          + '<div style="font-weight:600;margin:.45rem 0 .25rem">' + window.Tf('ca_js025', {n: d.window_days || 30}) + '</div>'
           + '<div style="font-size:.8rem;color:var(--t3);max-width:520px;margin:0 auto">' + window.T('ca_js012') + '</div>'
-          + histBtn + '</td></tr>';
+          + '</td></tr>';
+      } else if (!prefix && state === 'unknown') {
+        body.innerHTML = '<tr><td colspan="9" style="padding:2rem;color:var(--t3);text-align:center" data-empty="unknown">' + window.T('ca_js028') + '</td></tr>';
       } else {
-        body.innerHTML = '<tr><td colspan="9" style="padding:2rem;color:var(--t3)">'+window.T('em_js001')+'</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" style="padding:2rem;color:var(--t3);text-align:center" data-empty="no_match">'+window.T('em_js001') + histBtn + '</td></tr>';
       }
       return;
     }
     body.innerHTML = items.map(function(it) {
       var ts = it.created_at ? window.wsFmtDateTime(it.created_at) : '—';
-      var flags = flagBadge(it.escalated, window.T('ca_js006'), window.T('ca_js004')) +
-        flagBadge(it.safety_override, window.T('db_js_090'), '—');
+      var flags = flagBadge(it.escalated, window.T('ca_s029'), window.T('ca_js004')) +
+        (it.safety_override ? '<span class="badge-flag ok">' + window.T('ca_s027') + '</span>' : '');
       var handledInfo = it.handled
         ? esc(it.handled_by || '—') + (it.note ? '<br><span style="color:var(--t3);font-size:.72rem">' + esc(it.note) + '</span>' : '')
         : '<span style="color:var(--amber);font-weight:600">'+window.T('base.pill.sla_normal')+'</span>';
@@ -177,7 +268,7 @@ async function caLoad() {
         '<td>' + it.id + '</td>' +
         '<td class="mono">' + esc(it.user_id) + '</td>' +
         '<td>' + lvBadge(it.level) + '</td>' +
-        '<td class="mono">' + esc(it.category || '—') + '</td>' +
+        '<td title="' + esc(it.category || '') + '">' + catLabel(it.category) + '</td>' +
         '<td>' + esc(it.excerpt) + '</td>' +
         '<td>' + (it.streak || 1) + '</td>' +
         '<td>' + flags + '</td>' +

@@ -309,7 +309,8 @@ _CHROME_NAV_TARGET_IDS = ("care", "learner", "crisis_audit")
 _CHROME_NAV_BILINGUAL = [
     ("主动关怀", "Proactive Care"),
     ("学习队列", "Learning Queue"),
-    ("危机审计", "Crisis Audit"),
+    # 2026-09-05 #185：页名人话化「危机审计」→「客户安全预警」（老板决策 D7）
+    ("客户安全预警", "Customer Safety Alerts"),
 ]
 
 

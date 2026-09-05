@@ -71,7 +71,9 @@ PAGE_PERMISSIONS = {
     "export":     {ROLE_MASTER},
     "cases":      {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER},
     "episodic":   {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER},
-    "crisis_audit": {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER},
+    # 客户安全预警（原危机审计）：高敏内容（客户原话摘要）——只给主管/合规看，viewer 不放
+    # （2026-09-05 #185，隐私顾虑靠角色门 + 摘要 ≤120 字，而不是靠关掉留痕）
+    "crisis_audit": {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR},
     "care":       {ROLE_MASTER, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_VIEWER},
     "monetization": {ROLE_MASTER, ROLE_ADMIN},   # 营收/变现数据：仅主帐号+管理员
     "line_rpa":   {ROLE_MASTER, ROLE_ADMIN, ROLE_VIEWER},

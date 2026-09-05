@@ -909,6 +909,14 @@ class HealthWatchdog:
         except Exception:
             logger.debug("接管超时巡检异常（已忽略）", exc_info=True)
 
+        # 危机升级 → 工作台落点桥（#185 D7 2026-09-05）：R8 此前只走 webhook，
+        # 桌面包没配 ⇒ severe 升级没人被叫到。首 tick 装落库监听器（推），之后
+        # 每 tick 补扫水位以上的升级事件（扫）→ 需人工徽标 + 置顶 + 案例三落点。
+        try:
+            self._check_crisis_escalation_bridge()
+        except Exception:
+            logger.debug("危机升级桥巡检异常（已忽略）", exc_info=True)
+
         # 内嵌网页端选择器持续失配（2026-08-10）：登录态好着、页面也在，但注入脚本抓
         # 不到气泡/输入框＝官方改版了。与上面「会话不健康」正交（那个重登、这个改选择器）。
         try:
@@ -6129,6 +6137,49 @@ class HealthWatchdog:
 
     def _skill_manager(self):
         return getattr(getattr(self._app, "state", self._app), "skill_manager", None)
+
+    def _crisis_bridge(self):
+        """危机升级桥（#185）：懒建单例，store 延迟解析（bootstrap 顺序无关）。"""
+        br = getattr(self, "_crisis_escalation_bridge", None)
+        if br is None:
+            from src.companion.wellbeing_escalation_bridge import CrisisEscalationBridge
+            br = CrisisEscalationBridge(self._inbox)
+            self._crisis_escalation_bridge = br
+        return br
+
+    def _check_crisis_escalation_bridge(self) -> None:
+        """R8 升级 → 工作台徽标/置顶/案例（#185 D7）。
+
+        - 首 tick 装 ``crisis_event_store`` 落库监听器（推路径，零延迟）；
+        - 每 tick 补扫 skill_manager 危机库中水位以上的升级事件（扫路径，
+          兜「事件先于监听器」窄窗；首扫只立水位，不追溯历史）。
+        随 ``companion.wellbeing.enabled``（默认开）；无 inbox store 时监听器照装
+        （事件来时再解析），扫描跳过。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        wb = (((cfg.get("companion") or {}).get("wellbeing") or {})
+              if isinstance(cfg, dict) else {})
+        if not wb.get("enabled", True):
+            return
+        bridge = self._crisis_bridge()
+        if bridge.install():
+            # 首装心跳（一次性 INFO）：审计工具据此判「该巡检活着」
+            logger.info("危机升级桥已装载：severe+escalated 事件 → 工作台徽标/置顶/案例")
+        sm = self._skill_manager()
+        if sm is None:
+            tg = getattr(getattr(self._app, "state", self._app), "telegram_client", None)
+            sm = getattr(tg, "skill_manager", None) if tg is not None else None
+        crisis_store = getattr(sm, "_crisis_store", None) if sm is not None else None
+        if crisis_store is None or self._inbox() is None:
+            return
+        results = bridge.sweep(crisis_store)
+        bridged = sum(1 for r in (results or []) if r.get("bridged"))
+        # 累计计数（metrics 可读；静默死掉时此数停涨即为信号）
+        self.total_crisis_bridge_swept = getattr(self, "total_crisis_bridge_swept", 0) + len(results or [])
+        self.total_crisis_bridge_applied = getattr(self, "total_crisis_bridge_applied", 0) + bridged
+        if bridged:
+            logger.info("危机升级桥补扫：%d 条升级事件已点亮工作台（累计 %d）",
+                        bridged, self.total_crisis_bridge_applied)
 
     def _check_memory_key_drift(self, *, now: Optional[float] = None) -> None:
         """记忆 key 漂移巡检：裸 key（无 ``platform:`` 前缀）复发即告警。
