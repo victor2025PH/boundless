@@ -93,8 +93,23 @@ def register_auth_user_routes(
 
     def _users_page_ctx(request: Request, *, msg: str = "", msg_ok: bool = True) -> dict:
         actor = _actor_role(request)
+        users = user_store.list_users()
+        # #186「登录：从未」与 8 条活跃会话矛盾：last_login 只由账号密码登录写，令牌直登的
+        # 主帐号历史上永远空 → 用该用户最近一次会话的创建时间兜底（仍空才显「从未」）。
+        try:
+            sess_map = user_store.last_session_login_map()
+        except Exception:
+            sess_map = {}
+        for u in users:
+            if not u.get("last_login"):
+                fb = sess_map.get(str(u.get("username") or ""))
+                if not fb and str(u.get("role") or "") == ROLE_MASTER:
+                    fb = sess_map.get("admin")   # 令牌直登记在常量用户名 "admin" 下
+                if fb:
+                    u["last_login"] = fb
+                    u["last_login_from_session"] = True
         return {
-            "users": user_store.list_users(),
+            "users": users,
             "role_labels": ROLE_LABELS,
             "msg": msg,
             "msg_ok": msg_ok,
@@ -145,7 +160,14 @@ def register_auth_user_routes(
                 request, error=tr(request, "err.auth.bad_credentials"), next_raw=next))
         # legacy token login（S6：恒定时间比较，防时序侧信道）
         if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
-            jti = user_store.create_session("admin", ROLE_MASTER, ip, ua)
+            # #186：桌面壳每次启动都走这里 → 同设备旧会话随新登录作废（只留最近一条），
+            # 并给主帐号记 last_login（此前令牌直登不经 verify()，用户卡永远「登录：从未」）。
+            jti = user_store.create_session("admin", ROLE_MASTER, ip, ua,
+                                            replace_same_device=True)
+            try:
+                user_store.mark_login("admin", fallback_role=ROLE_MASTER)
+            except Exception:
+                pass
             request.session["auth"] = token
             request.session["role"] = ROLE_MASTER
             request.session["username"] = "admin"

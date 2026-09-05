@@ -67,6 +67,18 @@ ZH = {
     "err.team.test_too_frequent": "测试太频繁，请 30 秒后再试",
     "err.team.no_alert_channel": "告警渠道未接通（无可用的 Telegram 机器人），请先在告警渠道面板接通",
     "err.team.test_send_fail": "测试发送失败：{reason}。常见原因：该号还没给机器人发过消息（先私聊机器人任意一句），或 Chat ID 填错",
+    # ── #186（2026-09-05）：页面口径人话化 + 会话回收说明 + 用量单位 ──
+    "us_account_note": "这里管理的是智聊本身的操作员账号（谁能登录这个后台 / 桌面端），不是你的 Telegram、WhatsApp、LINE 等聊天平台账号——那些在「接入」页管理。",
+    "us_never_login": "从未",
+    "us_login_from_session_t": "按最近一次登录会话的时间",
+    "tq_chars_unit": "字符",
+    "us_sess_title": "已登录的设备",
+    "us_sess_hint": "同一台设备重复启动只保留最近一条；超过 7 天没动的登录自动失效",
+    "us_dev_desktop": "智聊桌面端",
+    "us_dev_this": "这台设备",
+    "us_sess_operator": "操作员",
+    "us_sess_tech": "技术信息",
+    "us_sess_since": "登录于：",
 }
 
 EN = {
@@ -123,4 +135,16 @@ EN = {
     "err.team.test_too_frequent": "Too frequent — try again in 30 seconds",
     "err.team.no_alert_channel": "Alert channel not connected (no usable Telegram bot) — connect it in the alert channels panel first",
     "err.team.test_send_fail": "Test send failed: {reason}. Most common causes: this chat never messaged the bot (DM it once first), or the chat ID is wrong",
+    # ── #186 (2026-09-05): plain-language page copy + session recycling note + usage unit ──
+    "us_account_note": "These are ChatX's own operator accounts (who can sign in to this console / the desktop app) — not your Telegram, WhatsApp or LINE chat accounts; those live on the Channels page.",
+    "us_never_login": "never",
+    "us_login_from_session_t": "Based on the most recent sign-in session",
+    "tq_chars_unit": "chars",
+    "us_sess_title": "Signed-in devices",
+    "us_sess_hint": "Restarting the same device keeps only the latest entry; sign-ins idle for over 7 days expire automatically",
+    "us_dev_desktop": "ChatX desktop",
+    "us_dev_this": "this device",
+    "us_sess_operator": "Operator",
+    "us_sess_tech": "Technical details",
+    "us_sess_since": "Signed in: ",
 }

@@ -288,30 +288,94 @@ class WebUserStore:
         self._conn.commit()
 
     # ── Session 管理 ──────────────────────────────────────────
+    # #186（2026-09-05）僵尸会话：桌面壳每次启动走 auth_token 直登 → 每次 INSERT 一行、
+    # 旧行永不 revoke（壳从不 /logout），用户管理页「活跃会话」一天长一条。两道回收：
+    #   ① 同设备换新（create_session(replace_same_device=True)）：同 (username, ip, ua)
+    #      的旧活跃行随新登录作废，只留最近一条——只在令牌直登路径开（浏览器多机同 NAT
+    #      同 UA 的账号密码登录不敢一刀切）；
+    #   ② 空闲过期：last_seen 超过 SESSION_IDLE_DAYS 的会话 touch 拒绝、列表不显、懒标
+    #      revoked；超过 SESSION_PRUNE_DAYS 的行在登录时物理清理。
+    SESSION_IDLE_DAYS = 7
+    SESSION_PRUNE_DAYS = 30
+
+    @staticmethod
+    def _cutoff(days: float) -> str:
+        """与 created_at/last_seen 同格式（本地时间字串，可直接字典序比较）。"""
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - days * 86400))
+
+    def _expire_idle_locked(self) -> int:
+        """空闲过期懒标记（调用方持锁）。返回本次标记条数。"""
+        cur = self._conn.execute(
+            "UPDATE web_sessions SET revoked=1 WHERE revoked=0 AND last_seen < ?",
+            (self._cutoff(self.SESSION_IDLE_DAYS),),
+        )
+        return int(cur.rowcount or 0)
 
     def create_session(self, username: str, role: str, ip: str = "",
-                       user_agent: str = "") -> str:
-        """创建新 session 记录，返回 jti（唯一 session 标识符）"""
+                       user_agent: str = "", *, replace_same_device: bool = False) -> str:
+        """创建新 session 记录，返回 jti（唯一 session 标识符）。
+
+        ``replace_same_device=True``：同 (username, ip, user_agent) 的其余活跃会话
+        随本次登录作废（同一台设备重复启动只保留最近一条）。
+        """
         import uuid as _uuid
         jti = _uuid.uuid4().hex
         now = time.strftime("%Y-%m-%d %H:%M:%S")
+        ua = (user_agent or "")[:200]
         with self._lock:
             self._conn.execute(
                 "INSERT INTO web_sessions(jti,username,role,ip,user_agent,created_at,last_seen)"
                 " VALUES(?,?,?,?,?,?,?)",
-                (jti, username, role, ip[:64], (user_agent or "")[:200], now, now),
+                (jti, username, role, ip[:64], ua, now, now),
             )
+            if replace_same_device:
+                self._conn.execute(
+                    "UPDATE web_sessions SET revoked=1 WHERE revoked=0 AND jti<>? "
+                    "AND username=? AND ip=? AND user_agent=?",
+                    (jti, username, ip[:64], ua),
+                )
+            try:
+                self._expire_idle_locked()
+                self._conn.execute(
+                    "DELETE FROM web_sessions WHERE last_seen < ?",
+                    (self._cutoff(self.SESSION_PRUNE_DAYS),),
+                )
+            except sqlite3.OperationalError:
+                pass  # 回收失败不阻断登录
             self._conn.commit()
         return jti
 
+    def mark_login(self, username: str, *, fallback_role: str = "") -> bool:
+        """记 last_login（令牌直登不走 verify()，此前主帐号永远「登录：从未」）。
+
+        ``username`` 不存在且给了 ``fallback_role`` → 记到该角色的账号上（令牌直登的
+        用户名是常量 "admin"，主帐号实际用户名可能不是它）。返回是否更新了行。
+        """
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE web_users SET last_login=? WHERE username=?", (now, username))
+            n = int(cur.rowcount or 0)
+            if not n and fallback_role:
+                cur = self._conn.execute(
+                    "UPDATE web_users SET last_login=? WHERE role=?", (now, fallback_role))
+                n = int(cur.rowcount or 0)
+            self._conn.commit()
+        return n > 0
+
     def touch_session(self, jti: str) -> bool:
-        """更新 session 最后活跃时间，返回该 session 是否有效"""
+        """更新 session 最后活跃时间，返回该 session 是否有效（空闲超 SESSION_IDLE_DAYS 视为失效）"""
         with self._lock:
             try:
                 row = self._conn.execute(
-                    "SELECT revoked FROM web_sessions WHERE jti=?", (jti,)
+                    "SELECT revoked, last_seen FROM web_sessions WHERE jti=?", (jti,)
                 ).fetchone()
                 if not row or row["revoked"]:
+                    return False
+                if str(row["last_seen"] or "") and str(row["last_seen"]) < self._cutoff(self.SESSION_IDLE_DAYS):
+                    self._conn.execute(
+                        "UPDATE web_sessions SET revoked=1 WHERE jti=?", (jti,))
+                    self._conn.commit()
                     return False
                 self._conn.execute(
                     "UPDATE web_sessions SET last_seen=? WHERE jti=?",
@@ -355,7 +419,7 @@ class WebUserStore:
             self._conn.commit()
 
     def list_sessions(self, include_revoked: bool = False) -> List[Dict]:
-        """列出所有活跃 session（按最后活跃时间倒序）"""
+        """列出所有活跃 session（按最后活跃时间倒序；空闲过期的先懒标 revoked 再列）"""
         sql = (
             "SELECT jti,username,role,ip,user_agent,created_at,last_seen,revoked "
             "FROM web_sessions "
@@ -363,8 +427,22 @@ class WebUserStore:
             + "ORDER BY last_seen DESC LIMIT 100"
         )
         with self._lock:
+            try:
+                if self._expire_idle_locked():
+                    self._conn.commit()
+            except sqlite3.OperationalError:
+                pass
             rows = self._conn.execute(sql).fetchall()
         return [dict(r) for r in rows]
+
+    def last_session_login_map(self) -> Dict[str, str]:
+        """{username: 最近一次会话 created_at}（含已作废行）——给用户卡「登录」栏兜底：
+        令牌直登历史上不记 last_login，主帐号明明天天在用却显示「从未」（#186）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT username, MAX(created_at) AS ts FROM web_sessions GROUP BY username"
+            ).fetchall()
+        return {str(r["username"]): str(r["ts"] or "") for r in rows if r["ts"]}
 
     def cleanup_old_sessions(self, days: int = 30):
         """清理超过 N 天未活跃的 session"""

@@ -70,6 +70,8 @@
   <div>
     <h1>{{ (i18n or {}).get('users', "用户管理") }}</h1>
     <p style="font-size:.82rem;color:var(--t3);margin-top:.2rem">{{ (i18n or {}).get('us_s003', "管理后台帐号、角色与权限") }}</p>
+    {# #186：页面没说这是智聊操作员账号——用户把它当成聊天平台账号来读 #}
+    <p style="font-size:.78rem;color:var(--t2);margin-top:.35rem;line-height:1.5;padding:.4rem .6rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);max-width:720px">ℹ {{ (i18n or {}).get('us_account_note', "这里管理的是智聊本身的操作员账号（谁能登录这个后台 / 桌面端），不是你的 Telegram、WhatsApp、LINE 等聊天平台账号——那些在「接入」页管理。") }}</p>
   </div>
 </div>
 
@@ -95,7 +97,7 @@
     </div>
     <div class="u-meta">
       <span>{{ (i18n or {}).get('dash.btn.create', "创建") }}: {{ u.created_at[:10] if u.created_at else '-' }}</span>
-      <span>{{ (i18n or {}).get('login_btn', "登录") }}: {{ u.last_login[:10] if u.last_login else '从未' }}</span>
+      <span title="{{ (i18n or {}).get('us_login_from_session_t', '按最近一次登录会话的时间') if u.last_login_from_session else '' }}">{{ (i18n or {}).get('login_btn', "登录") }}: {{ u.last_login[:10] if u.last_login else (i18n or {}).get('us_never_login', '从未') }}</span>
     </div>
     <!-- 本月用量行：/api/users/char-usage 回填后显示；端点未装载（重启前）保持隐藏 -->
     <div class="u-usage" data-user="{{ u.username }}" style="display:none">
@@ -141,8 +143,8 @@
 <div style="margin-top:2rem">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
     <div>
-      <h2 style="font-size:1rem;font-weight:700;margin-bottom:.15rem">🖥 {{ (i18n or {}).get('dash.wl.active_convs', "活跃会话") }}</h2>
-      <p style="font-size:.78rem;color:var(--t3)">{{ (i18n or {}).get('us_s007', "当前登录中的所有设备，可踢出指定会话") }}</p>
+      <h2 style="font-size:1rem;font-weight:700;margin-bottom:.15rem">🖥 {{ (i18n or {}).get('us_sess_title', "已登录的设备") }}</h2>
+      <p style="font-size:.78rem;color:var(--t3)">{{ (i18n or {}).get('us_s007', "当前登录中的所有设备，可踢出指定会话") }} · {{ (i18n or {}).get('us_sess_hint', "同一台设备重复启动只保留最近一条；超过 7 天没动的登录自动失效") }}</p>
     </div>
     <div style="display:flex;gap:.5rem">
       <button class="btn btn-s btn-sm" onclick="loadSessions()">{{ (i18n or {}).get('dash.refresh', "刷新") }}</button>
@@ -249,6 +251,12 @@
    fallback（test_sealed_pages_no_cjk_in_own_scripts），故兜底用英文。 */
 const TQ={
   unlimited: {{ (i18n or {}).get('tq_unlimited', 'Unlimited') | tojson }},
+  charsUnit: {{ (i18n or {}).get('tq_chars_unit', 'chars') | tojson }},
+  devDesktop: {{ (i18n or {}).get('us_dev_desktop', 'ChatX desktop') | tojson }},
+  devThis: {{ (i18n or {}).get('us_dev_this', 'this device') | tojson }},
+  sessOperator: {{ (i18n or {}).get('us_sess_operator', 'Operator') | tojson }},
+  sessTech: {{ (i18n or {}).get('us_sess_tech', 'Technical details') | tojson }},
+  sessSince: {{ (i18n or {}).get('us_sess_since', 'Signed in: ') | tojson }},
   delConfirm: {{ (i18n or {}).get('tq_js_del_confirm', 'Danger: type the username {name} to confirm deletion') | tojson }},
   delMismatch: {{ (i18n or {}).get('tq_js_del_mismatch', 'Username mismatch, cancelled') | tojson }},
   quotaSaved: {{ (i18n or {}).get('tq_js_quota_saved', 'Quota saved') | tojson }},
@@ -345,7 +353,8 @@ async function loadCharUsage(){
       var st=a.status||{};
       el.style.display='';
       var q=st.quota||0;
-      el.querySelector('.u-usage-txt').textContent=fmtChars(st.used||0)+' / '+(q>0?fmtChars(q):TQ.unlimited);
+      // #186：用量带单位（字符），额度不限时写「不限」
+      el.querySelector('.u-usage-txt').textContent=fmtChars(st.used||0)+' '+TQ.charsUnit+' / '+(q>0?fmtChars(q)+' '+TQ.charsUnit:TQ.unlimited);
       el.querySelector('.u-usage-bar i').style.width=(q>0?Math.min(100,st.pct||0):0)+'%';
       var b=el.querySelector('.u-usage-badge');
       if(st.level==='over'||st.level==='warn'){b.textContent=(st.level==='over'?TQ.lvOver:TQ.lvWarn);b.className='u-usage-badge badge b-r'}
@@ -496,20 +505,33 @@ async function loadSessions(){
     const d=await r.json();
     const sessions=d.sessions||[];
     if(!sessions.length){el.innerHTML='<div style="color:var(--t3);font-size:.85rem;grid-column:1/-1">'+window.T('us_js004')+'</div>';return;}
+    // #186：人话优先——设备名 + 操作员 + 最后活跃；master/127.0.0.1/UA 这类技术标注收进「技术信息」折叠
+    const esc=function(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')};
     el.innerHTML=sessions.map(s=>{
       const ua=s.user_agent||'';
-      const device=ua.includes('Mobile')||ua.includes('Android')?'📱 '+window.T('us_js005'):ua.includes('Chrome')?'🖥 Chrome':ua.includes('Firefox')?'🦊 Firefox':ua.includes('Safari')?'🍎 Safari':'💻 '+window.T('us_js006');
+      const isDesktop=/Electron|ChatX|zhiliao|telegram-ai-desktop/i.test(ua);
+      const device=isDesktop?'🖥 '+TQ.devDesktop
+        :(ua.includes('Mobile')||ua.includes('Android'))?'📱 '+window.T('us_js005')
+        :ua.includes('Firefox')?'🦊 Firefox':ua.includes('Edg/')?'🌐 Edge':ua.includes('Chrome')?'🌐 Chrome':ua.includes('Safari')?'🍎 Safari':'💻 '+window.T('us_js006');
       const isCurrent=s.is_current;
       const lastSeen=s.last_seen||s.created_at||'';
+      const roleLabel=window.T('role_'+(s.role||''),s.role||'');
+      const localIp=!s.ip||s.ip==='127.0.0.1'||s.ip==='::1';
       return `<div style="background:var(--card);border:${isCurrent?'2px solid var(--p)':'1px solid var(--bd)'};border-radius:var(--r);padding:.9rem 1rem">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
           <span style="font-size:.85rem;font-weight:700">${device}</span>
-          ${isCurrent?'<span style="font-size:.68rem;padding:.1rem .45rem;background:var(--ps);color:var(--p);border-radius:20px;font-weight:600">'+window.T('msg_js_265')+'</span>':''}
+          ${isCurrent?'<span style="font-size:.68rem;padding:.1rem .45rem;background:var(--ps);color:var(--p);border-radius:20px;font-weight:600">'+window.T('msg_js_265')+' · '+esc(TQ.devThis)+'</span>':''}
         </div>
-        <div style="font-size:.75rem;color:var(--t2);margin-bottom:.3rem">${window.T('kb_js_148')}<b>${s.username}</b> · ${s.role||''}</div>
-        <div style="font-size:.72rem;color:var(--t3);margin-bottom:.3rem">IP: ${s.ip||'—'}</div>
-        <div style="font-size:.72rem;color:var(--t3);margin-bottom:.5rem">${window.T('us_js010')}${lastSeen.slice(0,16)}</div>
-        ${!isCurrent?`<button class="btn btn-d" style="font-size:.72rem;padding:.25rem .6rem" onclick="revokeSession('${s.jti}',this)">${window.T('us_js009')}</button>`:''}
+        <div style="font-size:.75rem;color:var(--t2);margin-bottom:.3rem">${esc(TQ.sessOperator)} <b>@${esc(s.username)}</b> · ${esc(roleLabel)}</div>
+        <div style="font-size:.72rem;color:var(--t3);margin-bottom:.3rem">${window.T('us_js010')}${esc(lastSeen.slice(0,16))}</div>
+        <details style="margin-bottom:.5rem"><summary style="cursor:pointer;font-size:.68rem;color:var(--t3)">${esc(TQ.sessTech)}</summary>
+          <div style="font-size:.68rem;color:var(--t3);line-height:1.6;margin-top:.2rem;word-break:break-all">
+            ${esc(TQ.sessSince)}${esc((s.created_at||'').slice(0,16))}<br>
+            IP: ${esc(s.ip||'—')}${localIp?' (local)':''} · role: ${esc(s.role||'')}<br>
+            UA: ${esc(ua||'—')}<br>
+            id: ${esc(s.jti_display||'')}
+          </div></details>
+        ${!isCurrent?`<button class="btn btn-d" style="font-size:.72rem;padding:.25rem .6rem" onclick="revokeSession('${esc(s.jti)}',this)">${window.T('us_js009')}</button>`:''}
       </div>`;
     }).join('');
   }catch(ex){el.innerHTML='<div style="color:var(--red);font-size:.85rem">'+window.T('rpa_load_failed')+'</div>';}
