@@ -8019,6 +8019,15 @@ async function loadAutosendMedia(){
     var promiseFul = Number(im.promise_fulfilled||0) + Number(im.promise_fulfilled_async||0);
     var promiseRet = Number(im.promise_retracted||0) + Number(im.promise_fulfill_failed||0);
     var promiseWarn = promiseDet > 0 && promiseRet > promiseFul;
+    // #171 「已发」假声明守卫（J-1 A，image_autosend.sent_claim_*）：AI 说「刚发了/你该收到了」
+    // 而近 30 分钟没真发——检出 / 补成真发 / 改成如实文本。三数全零＝这行不出现（站内惯例）。
+    var scDet = Number(im.sent_claim_detected||0), scFul = Number(im.sent_claim_fulfilled||0), scRet = Number(im.sent_claim_retracted||0);
+    var scRow = (scDet + scFul + scRet) > 0
+      ? '<div class="muted" id="asmSentClaimRow" style="font-size:12px;margin-top:4px;color:'+((scRet>scFul&&scDet>0)?'var(--th-ink-amber5,#92400e)':'inherit')+'">'
+        + window.T('ov2_asm_sent_claim')+': '+window.T('ov2_asm_sc_detected')+' '+fmt(scDet)
+        + ' · '+window.T('ov2_asm_sc_fulfilled')+' '+fmt(scFul)
+        + ' · '+window.T('ov2_asm_sc_retracted')+' '+fmt(scRet)+'</div>'
+      : '';
     var imgInflight = Number(im.gen_inflight||0);
     // no_edge 策略命中：克隆不可达(7852_unready)/拒发 edge(edge_rejected) → 降级文字，量化用户影响
     var noEdgeDown = Number(vfc['7852_unready']||0) + Number(vfc['edge_rejected']||0);
@@ -8055,6 +8064,7 @@ async function loadAutosendMedia(){
       + (im.last_failure_detail?(' ('+String(im.last_failure_detail).replace(/</g,'&lt;')+')'): '')
       + (promiseWarn?(' &nbsp;|&nbsp; <span style="color:var(--th-ink-amber5,#92400e)">'+window.T('ov2_asm_promise_warn')+'</span>'): '')
       + '</div>'
+      + scRow
       + (vFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'
         + window.T('ov2_asm_voice_fb_dist')+': '+vFbParts.join(' · ')+'</div>' : '')
       + (imgFbParts.length? '<div class="muted" style="font-size:12px;margin-top:4px;">'

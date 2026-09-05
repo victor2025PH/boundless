@@ -1263,3 +1263,51 @@ def test_region_quote_card_i18n_keys_bilingual():
     for k in keys:
         assert ZH.get(k), k
         assert EN.get(k), k
+
+
+# ── 「🔊 B 线自动媒体」卡「AI 说「已发」但没发」行（K-3 C / #171，2026-09-05）─────
+
+def test_autosend_media_sent_claim_row_renders_and_hides_on_zero():
+    """#171 J-1 A 落了 `image_autosend.sent_claim_{detected,fulfilled,retracted}` 三键进
+    autosend-status.worker.image，ops 卡当时没加行。这里钉：三键都读、三数全零不出现
+    （站内零命中隐藏惯例）、撤回多于补发亮琥珀。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1]
+           / "src" / "web" / "templates" / "ops_overview.html").read_text(
+               encoding="utf-8")
+    fn = src[src.index("async function loadAutosendMedia()"):
+             src.index("async function loadPromiseTrend()")]
+    for k in ("sent_claim_detected", "sent_claim_fulfilled", "sent_claim_retracted"):
+        assert "im." + k in fn, k
+    # 零命中隐藏：三数之和 >0 才拼这行，否则空串
+    assert "(scDet + scFul + scRet) > 0" in fn
+    assert 'id="asmSentClaimRow"' in fn
+    assert "+ scRow" in fn
+    # 检出了却改口多于补发 → 琥珀（与承诺行同色阶）
+    assert "(scRet>scFul&&scDet>0)?'var(--th-ink-amber5,#92400e)'" in fn
+    for k in ("ov2_asm_sent_claim", "ov2_asm_sc_detected",
+              "ov2_asm_sc_fulfilled", "ov2_asm_sc_retracted"):
+        assert "window.T('" + k + "')" in fn, k
+
+
+def test_autosend_media_sent_claim_i18n_keys_bilingual():
+    from src.web.i18n_packs.ops_overview_page import EN, ZH
+
+    keys = ("ov2_asm_sent_claim", "ov2_asm_sc_detected",
+            "ov2_asm_sc_fulfilled", "ov2_asm_sc_retracted")
+    for k in keys:
+        assert ZH.get(k), k
+        assert EN.get(k), k
+
+
+def test_sent_claim_metrics_reach_autosend_status_image_segment():
+    """数据源钉：`record_sent_claim_event` 写的键必须出现在 `metrics_snapshot()`（= autosend-status
+    的 worker.image 段），否则卡片读的是空气。"""
+    from src.inbox import image_autosend as IA
+
+    IA.record_sent_claim_event("detected")
+    IA.record_sent_claim_event("retracted")
+    snap = IA.metrics_snapshot()
+    assert int(snap.get("sent_claim_detected") or 0) >= 1
+    assert int(snap.get("sent_claim_retracted") or 0) >= 1
