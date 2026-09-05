@@ -8550,6 +8550,9 @@ async function _loadThreadBody(c,silent,key){
     // 视图会跳回最近 100 条（「历史记录丢了」体感的直接根因）。把比本页窗口更旧的
     // 已载消息保留在头部；仅本页窗口内的消息以服务端为准（编辑/撤回随刷新收敛）。
     const _fresh=d.messages||[];
+    // #188：本轮之前已知的服务端消息 id（判「这一轮新冒出来的出站行」用）
+    const _prevIds=new Set();
+    threadMsgs.forEach(m=>{ if(m&&!m._optimistic&&m.message_id) _prevIds.add(String(m.message_id)); });
     let _keptOlder=[];
     if(silent && threadMsgs.length && _fresh.length){
       const _freshOldestTs=Number(_fresh[0].ts||0);
@@ -8578,8 +8581,28 @@ async function _loadThreadBody(c,silent,key){
       _threadOldestTs=d.oldest_ts || (threadMsgs[0]&&threadMsgs[0].ts) || null;
     }
     // 乐观消息若尚未出现在服务器响应里，继续附在末尾展示
+    // #188 显示层去重竞态（J-4，2026-09-05，钧实录「手动发送气泡短暂双显，手机端一条」）：
+    // 发送 POST 在途期间恰有一轮静默轮询 → 服务端已镜像出站行，但其 text 可能与乐观稿
+    // 不逐字相等（服务端翻译 / 分条 / 口语层 / 引用前缀）或 ts 跨旧的 10s 窗（坐席机
+    // 时钟偏差）→ 旧判据不认 → 真气泡 + 「发送中」乐观气泡同屏，直到成功回调收敛。
+    // 补两条：① 文本比对归一化空白 + 窗放宽到 60s；② 有在途 POST（带 _retryBody）
+    // 的乐观稿，只要本轮**新冒出**（上一快照没有）的出站行落在 60s 窗内就视为回执
+    // ——同一坐席同一会话同时只会有一条在途 POST。命中 ② 不删对象只标 _shadowed
+    // （renderMessages 跳过），失败路径仍能把它翻成 _failed+重发。
+    const _normT=s=>String(s||'').replace(/\s+/g,' ').trim();
     prevOptimistic.forEach(opt=>{
-      const confirmed=threadMsgs.some(m=>m.text===opt.text&&m.direction==='out'&&Math.abs((m.ts||0)-(opt.ts||0))<10);
+      const _ot=_normT(opt.text);
+      let confirmed=threadMsgs.some(m=>m&&m.direction==='out'&&!m._optimistic
+        &&_normT(m.text)===_ot&&Math.abs((m.ts||0)-(opt.ts||0))<60);
+      if(!confirmed && opt._retryBody && !opt._failed){
+        const shadowedBy=threadMsgs.some(m=>m&&m.direction==='out'&&!m._optimistic&&m.message_id
+          &&!_prevIds.has(String(m.message_id))&&Math.abs((m.ts||0)-(opt.ts||0))<60);
+        if(shadowedBy){
+          opt._shadowed=true; threadMsgs.push(opt);
+          try{ if(typeof _uiBeacon==='function') _uiBeacon('send_opt_shadowed'); }catch(_){}
+          return;
+        }
+      }
       if(!confirmed) threadMsgs.push(opt);
     });
     // v2：读着的会话新入站渲染即视为已读（水位跟进，2s 防抖，仅选中+页面可见）
@@ -13036,6 +13059,9 @@ function renderMessages(c, msgs, opts={}){
     </div>`);
   }
   msgs.forEach((m,_mi)=>{
+    // #188：被服务端回执遮蔽的在途乐观稿不画（对象仍留在 threadMsgs，失败路径翻
+    // _failed 后 _optimistic=false 自然重新可见）
+    if(m&&m._optimistic&&m._shadowed) return;
     // 稳定 key：message_id（乐观消息为 _opt_N 临时 id）；缺失回落序号，重复加后缀防串
     let _ukey=String(m.message_id||'')||('idx_'+_mi);
     while(_seenKeys.has(_ukey)) _ukey+='~';
