@@ -85,7 +85,10 @@ class TestFreshInstall:
         assert (data / "config" / "voice_refs" / "lin_xiaoyu.wav").exists()
         assert (data / "config" / "persona_albums" / "lin_xiaoyu" / "beach_a_01.jpg").exists()
         assert (data / "assets" / "voices" / "lin_xiaoyu" / "prerendered" / "abcd1234.ogg").exists()
-        assert (data / "config" / "knowledge_base.db").exists()
+        # J-9 #184：即使旧种子目录里还躺着 knowledge_base.db（本夹具刻意保留），
+        # 首启也绝不拷进用户数据区——厂商 KB 快照不进用户知识库。
+        assert not (data / "config" / "knowledge_base.db").exists()
+        assert (data / "config" / "persona_bio.db").exists()
 
     def test_media_db_paths_absolutized(self, tmp_path, monkeypatch):
         seed = _make_seed(tmp_path)

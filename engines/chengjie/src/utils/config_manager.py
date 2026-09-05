@@ -253,12 +253,13 @@ class ConfigManager:
     # 内测包（v1.001 起）把生产机资产暂存进 resources/seed-data/（见
     # desktop/build/stage_internal_assets.py），首启播种到用户数据区。标准包没有
     # 该目录、服务器部署没有 AITR_SEED_DATA_DIR → 整条链 no-op，行为零变化。
+    # ⚠ config/knowledge_base.db 已从清单移除（J-9 #184，2026-09-05）：即使旧种子目录里
+    # 还躺着生产 KB 快照，首启也不再拷进用户数据区——厂商产品话术不进用户知识库。
     _SEED_ASSET_ITEMS = (
         "config/profiles_runtime.yaml",
         "config/voice_refs",
         "config/prerender_lines",
         "config/persona_albums",
-        "config/knowledge_base.db",
         "config/persona_bio.db",
         "config/persona_media.db",
         "assets/voices",

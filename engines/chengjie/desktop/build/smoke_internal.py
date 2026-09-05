@@ -146,8 +146,23 @@ def main() -> int:  # noqa: PLR0915
                       if p.is_file()) \
             if (data_dir / "config" / "persona_albums").is_dir() else 0
         ok(f"相册文件 {n_album} 个", n_album >= counts.get("album_files", 50))
-        for db in ("knowledge_base.db", "persona_bio.db", "persona_media.db"):
+        for db in ("persona_bio.db", "persona_media.db"):
             ok(f"{db} 已播种", (data_dir / "config" / db).exists())
+        # J-9 #184：KB 不随包。首启后端自建库只应有系统话术 + 格式示例（source∈system），
+        # 出现 source=vendor 行＝旧种子链没断干净。
+        kb = data_dir / "config" / "knowledge_base.db"
+        if kb.exists():
+            try:
+                con = sqlite3.connect(str(kb))
+                try:
+                    n_vendor = int(con.execute(
+                        "SELECT COUNT(*) FROM kb_entries WHERE COALESCE(source,'user')='vendor'"
+                    ).fetchone()[0])
+                finally:
+                    con.close()
+            except Exception:  # noqa: BLE001
+                n_vendor = -1
+            ok(f"KB 无厂商预置条目（vendor={n_vendor}）", n_vendor == 0)
 
         media_db = data_dir / "config" / "persona_media.db"
         if media_db.exists():

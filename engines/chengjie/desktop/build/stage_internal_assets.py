@@ -15,8 +15,9 @@ resources/seed-data/，后端首启由 ConfigManager._ensure_seeded_extras 播�
     config/prerender_lines/**       ← 预渲染台词库
     config/persona_albums/**        ← 人设相册（剔除 tmp_selfies 运行时产物）
     assets/voices/**                ← 预渲染语音成品（sha1 键 + sidecar + _ref.json 指纹）
-    config/knowledge_base.db        ← KB（SQLite backup 快照，活库零写事务）
-    config/persona_bio.db           ← 人设深度资料（同上）
+    （config/knowledge_base.db 自 2026-09-05 J-9 #184 起**不再随包**：生产 KB 是厂商
+      自家产品话术，随包＝污染用户知识库；首装示例由后端首启播种）
+    config/persona_bio.db           ← 人设深度资料（SQLite backup 快照，活库零写事务）
     config/persona_media.db         ← 相册注册表（同上 + file_path 归一为相对路径 +
                                        清空发送账本——那是生产客户的会话数据）
     seed-manifest.json              ← 清点（after-pack / smoke_internal 消费）
@@ -477,21 +478,17 @@ def main() -> int:
             problems.append(f"缺 {src}")
 
     # 4) SQLite 快照
-    for name in ("knowledge_base.db", "persona_bio.db", "persona_media.db"):
+    #    knowledge_base.db **刻意不带**（J-9 #184，2026-09-05）：生产机 KB 里 ~105 条是
+    #    厂商自家产品/售卖话术，随包出门＝用户首装知识库被污染、AI 对客推销厂商产品。
+    #    首装 KB 由后端首启播 3 条格式示例（seed_kb_format_examples）；after-pack 把
+    #    seed-data/config/knowledge_base.db 列入 FORBIDDEN 反向断言。
+    for name in ("persona_bio.db", "persona_media.db"):
         src = source / "config" / name
         if src.exists():
             _sqlite_snapshot(src, out / "config" / name)
         else:
             problems.append(f"缺 {src}")
-
-    kb = out / "config" / "knowledge_base.db"
-    if kb.exists():
-        con = sqlite3.connect(str(kb))
-        try:
-            counts["kb_entries"] = int(
-                con.execute("SELECT COUNT(*) FROM kb_entries").fetchone()[0])
-        finally:
-            con.close()
+    counts["kb_entries"] = 0
 
     media_db = out / "config" / "persona_media.db"
     if media_db.exists():
@@ -506,7 +503,6 @@ def main() -> int:
         "voice_ref_files": 3,
         "prerendered_files": 100,
         "album_files": 50,
-        "kb_entries": 50,
         "media_rows": 20,
     }
     for key, floor in floors.items():

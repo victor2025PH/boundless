@@ -126,6 +126,10 @@ const FORBIDDEN = [
     "本机 Messenger 浏览器 profile 与 cookie（含已登录的 Facebook 会话）",
   ],
   [path.join("services", "messenger-web", "logs"), "本机运行日志"],
+  // J-9 #184（2026-09-05）：生产机 KB 快照曾随内测包出门，用户首装就多出 ~110 条
+  // 厂商自家产品说明污染知识库、AI 对客推销厂商产品。KB 不再随任何形态的包走——
+  // 首启由后端播 3 条格式示例（kb_store.seed_kb_format_examples，source=system，停用态）。
+  [path.join("seed-data", "config", "knowledge_base.db"), "生产机知识库快照（厂商产品条目污染用户 KB）"],
 ];
 
 // 内测/定制包随包数据种子。判据与 stage_internal_assets.py 的产出一一对应：
@@ -143,7 +147,7 @@ const SEED_REQUIRED = [
   [path.join("config", "voice_refs"), "克隆参考音"],
   [path.join("config", "persona_albums"), "人设相册"],
   [path.join("config", "persona_media.db"), "相册注册表"],
-  [path.join("config", "knowledge_base.db"), "知识库"],
+  // knowledge_base.db 已从种子清单移除并列入 FORBIDDEN（J-9 #184）
   [path.join("config", "persona_bio.db"), "人设资料库"],
   [path.join("config", "prerender_lines"), "预渲染台词库"],
   [path.join("assets", "voices"), "预渲染语音成品"],
