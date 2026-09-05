@@ -1165,6 +1165,16 @@ details.cp-more .info-row:first-of-type{margin-top:6px;}
 /* 可复制值（脱敏标识等）：hover 显复制意图，点击复制完整值 */
 .iv-copy{cursor:pointer;border-bottom:1px dashed color-mix(in srgb,var(--text-tiny) 55%,transparent);}
 .iv-copy:hover{color:var(--accent);border-bottom-color:var(--accent);}
+/* #174 客户卡电话：默认掩码（`iv-phone` 点击/回车揭示，再点收起），旁挂独立复制小按钮
+   复制完号——「看全号」与「复制」是两个动作，各自一个入口，不让点值时猜是复制还是揭示。
+   揭示态用 accent 色标出「当前显示的是全号」，切会话整卡重建自然回掩码。 */
+/* info-row 是 space-between 三件套（label / 值 / 复制钮）时，auto 外边距把空白吃在值前，值+钮贴右成组 */
+.iv-phone{user-select:none;letter-spacing:.2px;margin-left:auto;}
+.iv-phone.iv-phone-shown{color:var(--accent);border-bottom-style:solid;user-select:text;}
+.iv-copy-btn{appearance:none;border:0;background:transparent;color:var(--text-tiny);cursor:pointer;
+  font:inherit;font-size:12px;line-height:1;padding:0 2px;margin-left:4px;flex:none;border-radius:4px;}
+.iv-copy-btn:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);}
+.info-row .iv-phone+.iv-copy-btn{align-self:center;}
 /* 统一空态：不再一句灰字裸奔 */
 .cp-empty{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-tiny);padding:2px 0;}
 .cp-empty .ui-ic{opacity:.6;}

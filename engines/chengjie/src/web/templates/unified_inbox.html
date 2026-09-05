@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905a">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905b">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -16720,6 +16720,23 @@ function _copyIdent(el){
   _toast(window.T('inbox.info.copied'));
 }
 window._copyIdent=_copyIdent;   // 内联 onclick 引用 → 必须全局可达（哑按钮门禁）
+/* #174（决策 D2＝点击揭示）：客户卡电话默认掩码；点一次显示全号、再点收起。
+   只切 textContent 不重渲染整卡（会话面板其它行不受影响）；换会话 loadInfoSidebar
+   整块重建自然回到掩码态（揭示态不跨会话残留）。 */
+function _togglePhoneReveal(el){
+  if(!el) return;
+  var full=el.getAttribute('data-full')||'', masked=el.getAttribute('data-masked')||'';
+  var shown=el.getAttribute('data-shown')==='1';
+  if(shown){
+    el.textContent=masked; el.setAttribute('data-shown','0');
+    el.title=window.T('inbox.info.phone_reveal_t'); el.classList.remove('iv-phone-shown');
+  }else{
+    el.textContent=full||masked; el.setAttribute('data-shown','1');
+    el.title=window.T('inbox.info.phone_hide_t'); el.classList.add('iv-phone-shown');
+  }
+  try{ if(typeof _uiBeacon==='function') _uiBeacon(shown?'info_phone_hide':'info_phone_reveal'); }catch(_){}
+}
+window._togglePhoneReveal=_togglePhoneReveal;   // 内联 onclick/onkeydown 引用 → 全局可达
 
 /* F2：资料面板「身份英雄卡」——平台无关的统一渲染器。吃 {name,chat_key,platform,avatar_url,
    username,account_*}，复用列表/会话头同一 _peerAvatarImg（懒代理 + onerror 回落首字母），
@@ -16747,7 +16764,9 @@ async function loadInfoSidebar(c){
   // 三层重组第 1 层「身份条」：英雄卡 + 高价值行（电话/等待/CRM/AI 摘要）直出；
   // 低频字段（平台/账号/标识/归档态）收进「详细资料」折叠；标识脱敏、点击复制完整值。
   const rows=document.getElementById('cust-info-rows');
-  const _phone=c.phone?`<div class="info-row"><span class="info-label">${window.T('inbox.info.phone')}</span><span class="info-val">${esc(_maskPhone(c.phone))}</span></div>`:'';
+  // #174（决策 D2）：电话默认掩码、点号码揭示全号（再点收起）、⧉ 复制全号——
+  // 顶栏全显 vs 客户卡掩码「同页两口径」收口为「掩码是默认态、全号一点可达」。
+  const _phone=c.phone?`<div class="info-row"><span class="info-label">${window.T('inbox.info.phone')}</span><span class="info-val iv-copy iv-phone" role="button" tabindex="0" data-full="${esc(c.phone)}" data-masked="${esc(_maskPhone(c.phone))}" data-shown="0" onclick="_togglePhoneReveal(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_togglePhoneReveal(this);}" title="${esc(window.T('inbox.info.phone_reveal_t'))}">${esc(_maskPhone(c.phone))}</span><button type="button" class="iv-copy-btn" data-copy="${esc(c.phone)}" onclick="_copyIdent(this)" title="${esc(window.T('inbox.info.phone_copy_t'))}" aria-label="${esc(window.T('inbox.info.phone_copy_t'))}">⧉</button></div>`:'';
   const _ident=c.chat_key?`<div class="info-row"><span class="info-label">${window.T('inbox.info.identifier')}</span><span class="info-val iv-copy" style="font-size:11px;" data-copy="${esc(c.chat_key)}" onclick="_copyIdent(this)" title="${window.T('inbox.info.copy_t')}">${esc(_maskIdentifier(c.chat_key))}</span></div>`:'';
   const _acct=(c.account_label||c.account_id)?`<div class="info-row"><span class="info-label">${window.T('inbox.info.account')}</span><span class="info-val">${esc(c.account_label||c.account_id)}</span></div>`:'';
   rows.innerHTML=`
