@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905c">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905d">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -945,6 +945,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 </span>
               </div>
               <div class="cdraft-body" id="cdraft-body" onclick="acceptComposerDraft()" title="点击填入输入框" data-i18n-title="inbox.cdraft.body_t" tabindex="0"></div>
+              <!-- K-3 B（#183 #177，J-10 交办）：这条草稿用了哪几条 AI 记忆（/api/episodic-memory/used，
+                   与草稿所回复的入站 id 对账；旧后端 404 / 本轮没用记忆 → 容器留空不占位） -->
+              <div class="mem-chips" id="cdraft-mem"></div>
             </div>
             <!-- 身份可视化：回复区身份条（以哪个人设 · 哪个号回复；未绑人设=黄色警示）。
                  2026-08-17 起可点击=直达工具箱人设卡（_identBarJump，含键盘 Enter/Space） -->
@@ -15436,6 +15439,7 @@ async function _loadDraftsBody(c){
         ${dr.peer_last_text?`<div class="draft-peer-mini">${esc(dr.peer_last_text)}</div>`:''}
         <div class="draft-text-mini">${esc(dr.draft_text||dr.text||'')}</div>
         ${blocked?`<div class="draft-block-hint">${esc(blockTip)}</div>`:''}
+        <div class="mem-chips" data-mem-draft="${esc(dr.draft_id||'')}" data-mem-created="${esc(dr.created_ts||'')}"></div>
         <div class="draft-acts">
           ${sendBtn}
           <button class="btn-reject" onclick="rejectDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.reject')}</button>
@@ -15444,6 +15448,8 @@ async function _loadDraftsBody(c){
         </div>
       </div>`;
     }).join('');
+    // K-3 B：草稿到手后再取「本轮用了哪几条记忆」（record_recall 在生成前写入，此时批次已在）
+    try{ _memChipsFillAll(items, c, drafts); }catch(_){}
   }catch(e){ console.warn('loadDrafts error',e); }
 }
 
@@ -15504,6 +15510,163 @@ function useDraftText(txt){
   document.getElementById('reply-ta').focus();
 }
 
+/* ===== K-3 B（#183 #177，J-10 A3 交办）：草稿旁「本轮用了 N 条记忆」chips =====
+   契约（发版对账_v1.0.74_J10「交 J-4」，不改接口）：
+     GET /api/episodic-memory/used?conversation_id=<platform:acct:chat>&limit=1
+       → {ok, count, batches:[{batch_id, ts, chain, inbound_msg_id, conversation_id,
+          items:[{id, content, source:user_stated|ai_inferred, tier, review_reason,
+                  impact:high|normal, source_quote, source_ts, status, …} | {id, deleted:true}]}]}
+     POST /api/episodic-memory/{id}/ignore  → 「不再使用」（软删，可在 AI 记忆页维护区恢复）
+   取 batches[0]；对账两道：① batch.inbound_msg_id 与会话流里最新入站气泡 data-mid 一致
+   （不一致＝别的轮次，不渲染，避免串轮）；② 草稿 created_ts 不早于批次 ts（老稿不配新批）。
+   旧后端 404 → 本会话期不再请求、整块不出现。零内联 handler：全部走容器事件委托。 */
+var _memUsed={cid:'',ts:0,batch:null,inflight:null,unsupported:false};
+var _MEM_USED_TTL_MS=15000;
+function _memConvId(c){
+  if(!c) return '';
+  return String(c.conversation_id||((c.platform||'')+':'+(c.account_id||'default')+':'+(c.chat_key||'')));
+}
+async function _memUsedBatch(c){
+  const cid=_memConvId(c);
+  if(!cid||_memUsed.unsupported) return null;
+  const now=Date.now();
+  if(_memUsed.cid===cid && (now-_memUsed.ts)<_MEM_USED_TTL_MS) return _memUsed.batch;
+  if(_memUsed.cid===cid && _memUsed.inflight) return _memUsed.inflight;
+  const p=(async()=>{
+    try{
+      const r=await apiFetch('/api/episodic-memory/used?conversation_id='+enc(cid)+'&limit=1',{},{timeoutMs:12000});
+      if(r.status===404){ _memUsed.unsupported=true; return null; }   // 旧后端（1.0.74 前）：整块不出现
+      if(!r.ok) return null;
+      const d=await r.json();
+      const b=(d&&d.ok&&Number(d.count)>0&&Array.isArray(d.batches)&&d.batches.length)?d.batches[0]:null;
+      _memUsed.cid=cid; _memUsed.ts=Date.now(); _memUsed.batch=b;
+      return b;
+    }catch(_){ return null; }
+    finally{ if(_memUsed.cid===cid) _memUsed.inflight=null; }
+  })();
+  _memUsed.cid=cid; _memUsed.inflight=p;
+  return p;
+}
+function _memUsedInvalidate(){ _memUsed.ts=0; _memUsed.batch=null; }
+/* 会话流里最新一条入站气泡的 store message_id（与 record_recall 的 inbound_msg_id 同源）。 */
+function _memLatestInboundMid(){
+  const area=document.getElementById('msg-area'); if(!area) return '';
+  const rows=area.querySelectorAll('.msg-row.in[data-mid]');
+  for(let i=rows.length-1;i>=0;i--){ const v=rows[i].getAttribute('data-mid')||''; if(v) return v; }
+  return '';
+}
+function _memBatchMatchesDraft(b, dr){
+  if(!b||!Array.isArray(b.items)) return false;
+  const bmid=String(b.inbound_msg_id||'');
+  const lastIn=_memLatestInboundMid();
+  if(bmid && lastIn && bmid!==lastIn) return false;          // 批次属于别的轮次
+  const bts=Number(b.ts)||0, cts=Number(dr&&dr.created_ts)||0;
+  if(bts && cts && cts < bts-5) return false;                  // 老稿子不配新批次
+  return true;
+}
+function _memVisibleItems(b){
+  return ((b&&b.items)||[]).filter(it=>it && !it.deleted && String(it.status||'active')!=='ignored' && String(it.content||'').trim());
+}
+function _memChipsHtml(b){
+  const items=_memVisibleItems(b);
+  if(!items.length) return '';
+  const li=items.map(it=>{
+    const high=String(it.impact||'')==='high';
+    const inferred=String(it.source||'')==='ai_inferred';
+    const dotCls=high?'mem-dot high':(inferred?'mem-dot inferred':'mem-dot ok');
+    const dotTip=high?window.T('inbox.mem.high_impact'):(inferred?window.T('inbox.mem.src_inferred'):window.T('inbox.mem.src_stated'));
+    const review=String(it.review_reason||'').trim()?`<span class="mem-chip-review">${window.T('inbox.mem.need_review')}</span>`:'';
+    const q=String(it.source_quote||'').trim();
+    const quote=q?`<button type="button" class="mem-chip-quote" data-mem-quote="${esc(q)}" data-mem-qts="${esc(it.source_ts||'')}" title="${esc(window.T('inbox.mem.quote_t'))}">“${esc(q.length>40?q.slice(0,40)+'…':q)}”</button>`:'';
+    return `<li class="mem-chip" data-mem-id="${esc(it.id)}">
+      <span class="${dotCls}" title="${esc(dotTip)}"></span>
+      <span class="mem-chip-txt">${esc(it.content)}</span>${review}${quote}
+      <button type="button" class="mem-chip-ignore" data-mem-id="${esc(it.id)}" title="${esc(window.T('inbox.mem.ignore_t'))}">${window.T('inbox.mem.ignore')}</button>
+    </li>`;
+  }).join('');
+  return `<details class="mem-chips-box" data-mem-batch="${esc(b.batch_id||'')}">
+    <summary class="mem-chips-sum"><span class="mem-chips-n">${esc(window.Tf('inbox.mem.used_n',{n:items.length}))}</span><span class="mem-chips-caret">▾</span></summary>
+    <ul class="mem-chips-list">${li}</ul>
+  </details>`;
+}
+async function _memChipsAttach(el, dr, c){
+  if(!el) return;
+  const did=String((dr&&dr.draft_id)||'');
+  if(!dr||!did){ el.innerHTML=''; el.removeAttribute('data-mem-draft'); return; }
+  if(el.getAttribute('data-mem-draft')===did && el.firstChild) return;   // 同一条草稿已挂过
+  el.setAttribute('data-mem-draft',did);
+  el.innerHTML='';
+  const b=await _memUsedBatch(c);
+  if(!el.isConnected || el.getAttribute('data-mem-draft')!==did) return;
+  if(!b || !_memBatchMatchesDraft(b, dr)) return;
+  el.innerHTML=_memChipsHtml(b);
+}
+function _memChipsFillAll(root, c, drafts){
+  if(!root) return;
+  const byId={}; (drafts||[]).forEach(d=>{ if(d&&d.draft_id) byId[String(d.draft_id)]=d; });
+  root.querySelectorAll('.mem-chips[data-mem-draft]').forEach(el=>{
+    const dr=byId[el.getAttribute('data-mem-draft')||''];
+    if(dr) _memChipsAttach(el, dr, c);
+  });
+}
+/* 「不再使用」：软删后该 chip 立即消失，N 同步减；空了整块收起。403＝角色无写权限，如实提示。 */
+async function _memChipIgnore(id, btn){
+  if(!id) return;
+  if(btn){ btn.disabled=true; }
+  try{
+    const r=await apiFetch('/api/episodic-memory/'+enc(id)+'/ignore',{method:'POST'},{timeoutMs:60000});
+    if(r.status===403){ _toast(window.T('inbox.mem.ignore_forbidden'),'#b45309'); if(btn) btn.disabled=false; return; }
+    if(!r.ok){ _toast(window.T('inbox.mem.ignore_fail'),'#b91c1c'); if(btn) btn.disabled=false; return; }
+    _memUsedInvalidate();
+    document.querySelectorAll('.mem-chip[data-mem-id="'+String(id).replace(/"/g,'')+'"]').forEach(li=>{
+      const box=li.closest('.mem-chips-box');
+      li.remove();
+      if(!box) return;
+      const left=box.querySelectorAll('.mem-chip').length;
+      const nEl=box.querySelector('.mem-chips-n');
+      if(left<=0){ const host=box.parentElement; box.remove(); if(host) host.innerHTML=''; }
+      else if(nEl) nEl.textContent=window.Tf('inbox.mem.used_n',{n:left});
+    });
+    _toast(window.T('inbox.mem.ignore_ok'),'#0f9d75');
+  }catch(_){ _toast(window.T('inbox.mem.ignore_fail'),'#b91c1c'); if(btn) btn.disabled=false; }
+}
+/* 「来源原话 → 定位」：在已加载的会话流里按 source_ts ±60s 找正文含 source_quote 前 20 字的入站气泡，
+   滚动 + 高亮 2s（复用 _flashMsgEl）；source_ts 缺失时放宽到全部已加载入站气泡。没加载到 → toast，
+   不做历史回拉（原话可能在很早以前，回拉几十页只为高亮一句不值）。 */
+function _memLocateQuote(quote, sourceTs){
+  const q=String(quote||'').trim().slice(0,20);
+  if(!q){ _toast(window.T('inbox.mem.locate_miss'),'#b45309'); return false; }
+  const area=document.getElementById('msg-area');
+  const ts0=Number(sourceTs)||0;
+  let hit=null;
+  if(area){
+    const rows=Array.prototype.slice.call(area.querySelectorAll('.msg-row.in'));
+    const has=r=>{ const b=r.querySelector('.msg-bubble'); return !!(b && (b.textContent||'').indexOf(q)>=0); };
+    if(ts0>0){
+      hit=rows.find(r=>{ const t=Number(r.getAttribute('data-ts'))||0; return t>0 && Math.abs(t-ts0)<=60 && has(r); })||null;
+    }
+    if(!hit && !(ts0>0)) hit=rows.find(has)||null;
+  }
+  if(hit){ _flashMsgEl(hit); return true; }
+  _toast(window.T('inbox.mem.locate_miss'),'#b45309');
+  return false;
+}
+/* 事件委托：chips 由 innerHTML 拼出、按钮零内联 handler（J-7 C 门禁：引号/JSON 不进 on* 属性） */
+document.addEventListener('click',function(e){
+  const t=e.target;
+  if(!t||!t.closest) return;
+  const ig=t.closest('.mem-chips .mem-chip-ignore');
+  if(ig){ e.preventDefault(); e.stopPropagation(); _memChipIgnore(ig.getAttribute('data-mem-id')||'', ig); return; }
+  const qb=t.closest('.mem-chips .mem-chip-quote');
+  if(qb){ e.preventDefault(); e.stopPropagation(); _memLocateQuote(qb.getAttribute('data-mem-quote')||'', qb.getAttribute('data-mem-qts')||''); return; }
+  // <summary> 里点开/收起不冒泡到 cdraft-body 的「采用」（chips 在 body 外，但保险起见截断）
+  const sm=t.closest('.mem-chips .mem-chips-sum');
+  if(sm){ e.stopPropagation(); }
+});
+window._memChipsAttach=_memChipsAttach; window._memChipsFillAll=_memChipsFillAll;
+window._memChipIgnore=_memChipIgnore; window._memLocateQuote=_memLocateQuote;
+window._memUsedBatch=_memUsedBatch; window._memBatchMatchesDraft=_memBatchMatchesDraft;
+
 /* ===== 二期：Composer 一体化 AI 草稿条 =====
    渐进式（对标 Zendesk 2026 auto-assist composer）：
    - 输入框为空 → 展开卡（全文可读，Tab/点击采用，Esc 忽略）
@@ -15520,7 +15683,9 @@ function _cdraftRender(){
   if(!bar) return;
   const d=_cdraft.draft;
   if(!d || !selectedChat || selectedChat.read_only || selectedChat.can_send===false){
-    bar.classList.remove('show','slim'); return;
+    bar.classList.remove('show','slim');
+    try{ const _mm=document.getElementById('cdraft-mem'); if(_mm){ _mm.innerHTML=''; _mm.removeAttribute('data-mem-draft'); } }catch(_){}
+    return;
   }
   const ta=document.getElementById('reply-ta');
   const typing=!!(ta && ta.value.trim());
@@ -15539,6 +15704,8 @@ function _cdraftRender(){
     if(_cdraft.count>1){ n.style.display=''; n.textContent=window.Tf('inbox.cdraft.n',{n:_cdraft.count}); }
     else n.style.display='none';
   }
+  // K-3 B：草稿条底部挂「本轮用了 N 条记忆」chips（同一条草稿不重复取数）
+  try{ _memChipsAttach(document.getElementById('cdraft-mem'), d, selectedChat); }catch(_){}
 }
 async function _refreshComposerDraft(c){
   if(!c || !c.chat_key){ _cdraft.draft=null; _cdraftRender(); return; }

@@ -1056,6 +1056,30 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .draft-block-chip{font-size:10.5px;font-weight:700;border-radius:6px;padding:1px 5px;background:var(--bdg-danger-bg);color:var(--bdg-danger-ink);border:1px solid color-mix(in srgb,var(--bdg-danger-ink) 35%,transparent);white-space:nowrap;cursor:help;}
 .draft-block-hint{font-size:11px;line-height:1.5;color:var(--bdg-danger-ink);background:var(--bdg-danger-bg);border-radius:6px;padding:4px 7px;margin:4px 0 2px;}
 .tiny-btn.is-suggested{border-color:var(--green);color:var(--green);font-weight:700;}
+/* K-3 B（#183 #177）：草稿旁「本轮用了 N 条记忆」chips。容器空＝不占位（旧后端 404 / 本轮没用记忆 /
+   批次不属于这条草稿）。色点语义与 AI 记忆页一致：客户说的绿 / AI 推断琥珀 / 高影响红。 */
+.mem-chips:empty{display:none;}
+.mem-chips{margin:4px 0 2px;}
+.cdraft-bar .mem-chips{padding:0 10px 6px;}
+.cdraft-bar.slim .mem-chips{display:none;}
+.mem-chips-box{font-size:11px;color:var(--text-sub);}
+.mem-chips-sum{list-style:none;display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:1px 7px;border-radius:999px;border:1px solid var(--border);background:var(--bg-soft);user-select:none;}
+.mem-chips-sum::-webkit-details-marker{display:none;}
+.mem-chips-sum:hover{border-color:var(--green);color:var(--text-main);}
+.mem-chips-caret{font-size:10px;opacity:.7;transition:transform .15s;}
+.mem-chips-box[open] .mem-chips-caret{transform:rotate(180deg);}
+.mem-chips-list{list-style:none;margin:5px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;}
+.mem-chip{display:flex;align-items:flex-start;gap:6px;padding:3px 6px;border-radius:7px;background:var(--bg-soft);line-height:1.45;}
+.mem-chip .mem-dot{flex:none;width:7px;height:7px;border-radius:50%;margin-top:5px;background:var(--green);}
+.mem-chip .mem-dot.inferred{background:var(--tk-amber-ink);}
+.mem-chip .mem-dot.high{background:var(--red);box-shadow:0 0 0 2px color-mix(in srgb,var(--red) 25%,transparent);}
+.mem-chip-txt{flex:1;min-width:0;color:var(--text-main);word-break:break-word;}
+.mem-chip-review{flex:none;font-size:10px;font-weight:700;padding:0 5px;border-radius:5px;background:var(--bdg-danger-bg);color:var(--bdg-danger-ink);white-space:nowrap;}
+.mem-chip-quote{flex:none;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;color:var(--text-sub);background:transparent;border:none;border-bottom:1px dashed var(--border);padding:0;cursor:pointer;}
+.mem-chip-quote:hover{color:var(--text-main);border-bottom-color:var(--text-sub);}
+.mem-chip-ignore{flex:none;font-size:10.5px;padding:0 6px;height:18px;line-height:16px;border-radius:6px;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-sub);cursor:pointer;}
+.mem-chip-ignore:hover{border-color:var(--red);color:var(--red);}
+.mem-chip-ignore:disabled{opacity:.5;cursor:not-allowed;}
 
 /* 右侧业务助手侧栏（与桌面端 copilot 同源组件）。
    2026-08-17 四形态：宽屏 expanded / rail / hidden（状态机 _cpApplyPanelMode）；
