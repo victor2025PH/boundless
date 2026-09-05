@@ -194,18 +194,48 @@ def test_ai_client_parses_structured_and_legacy_fact_json():
         _parse_memory_facts_json = AIClient._parse_memory_facts_json
 
     s = _Stub()
-    raw = ('```json\n{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter"},'
-           '{"text":"客户25岁","quote":"I\'m 25"},"客户住在宿务",'
+    raw = ('```json\n{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter","confidence":0.95},'
+           '{"text":"客户25岁","quote":"I\'m 25","confidence":"1.7"},"客户住在宿务",'
+           '{"fact":"客户是护士","evidence":"night shifts","confidence":"abc"},'
            '{"fact":"用户称呼助手为小美","evidence":"hi 小美"}]}\n```')
     items = s._parse_memory_fact_items(raw)
     assert items == [
-        {"fact": "客户有一个女儿", "evidence": "I have a daughter"},
-        {"fact": "客户25岁", "evidence": "I'm 25"},
-        {"fact": "客户住在宿务", "evidence": ""},     # 旧格式 → 无引文（护栏按 no_evidence 丢）
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter", "confidence": 0.95},
+        {"fact": "客户25岁", "evidence": "I'm 25", "confidence": 1.0},   # 越界钳到 [0,1]
+        {"fact": "客户住在宿务", "evidence": ""},     # 旧格式 → 无引文（护栏按 no_evidence 丢）、无置信
+        {"fact": "客户是护士", "evidence": "night shifts"},              # 脏置信 → 不带
     ]                                                   # 助手身份事实被过滤
-    assert s._parse_memory_facts_json(raw) == ["客户有一个女儿", "客户25岁", "客户住在宿务"]
+    assert s._parse_memory_facts_json(raw) == ["客户有一个女儿", "客户25岁", "客户住在宿务", "客户是护士"]
     assert s._parse_memory_fact_items("not json") == []
     assert s._parse_memory_fact_items('{"facts": "x"}') == []
+
+
+def test_ai_client_confidence_passes_grounding_and_tags_low_confidence(tmp_path):
+    """J-10 二期：置信随事实穿过护栏 → add_fact(confidence=) → 低置信进例外队列。"""
+    from src.ai.ai_client import AIClient
+    from src.utils.episodic_memory_store import EpisodicMemoryStore
+
+    class _Stub:
+        logger = __import__("logging").getLogger("t")
+        _ground_extracted_fact_items = AIClient._ground_extracted_fact_items
+        _ground_extracted_facts = AIClient._ground_extracted_facts
+
+    out = _Stub()._ground_extracted_fact_items([
+        {"fact": "客户是护士", "evidence": "night shifts at the hospital", "confidence": 0.55},
+        {"fact": "客户有一个女儿", "evidence": "I have a daughter", "confidence": 0.95},
+        {"fact": "客户想去大阪玩", "evidence": "想去大阪玩", "confidence": 0.9},
+    ], "I work night shifts at the hospital and I have a daughter")
+    assert [f["fact"] for f in out["facts"]] == ["客户是护士", "客户有一个女儿"]
+    assert out["facts"][0]["confidence"] == 0.55 and out["facts"][1]["confidence"] == 0.95
+    st = EpisodicMemoryStore(tmp_path / "m.db")
+    try:
+        low = st.add_fact("k", "客户是护士", source="ai_inferred", confidence=0.55)
+        hi = st.add_fact("k", "客户喜欢喝美式咖啡", source="ai_inferred", confidence=0.95)
+        q = {i["id"]: i for i in st.review_queue(user_id="k")}
+        assert low in q and q[low]["review_reason"] == "low_confidence"
+        assert hi not in q
+    finally:
+        st.close()
 
 
 def test_extract_prompt_pins_evidence_rule():
@@ -216,6 +246,7 @@ def test_extract_prompt_pins_evidence_rule():
     assert "引文铁律" in src
     assert "evidence" in src and "逐字" in src
     assert "不能取自 ASSISTANT" in src or "不得取自 ASSISTANT" in src
+    assert "confidence" in src and "【置信】" in src   # J-10 二期：数值置信
 
 
 def test_grounding_eval_gate():

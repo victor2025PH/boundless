@@ -4029,8 +4029,8 @@ class AIClient(LoggerMixin):
         "我叫", "我的名字", "bot叫", "AI叫",
     )
 
-    def _parse_memory_fact_items(self, raw: str) -> List[Dict[str, str]]:
-        """Parse model output → ``[{"fact", "evidence"}]``.
+    def _parse_memory_fact_items(self, raw: str) -> List[Dict[str, Any]]:
+        """Parse model output → ``[{"fact", "evidence", "confidence"?}]``.
 
         J-10 A1：新格式 ``{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter"}]}``；
         旧格式 ``{"facts":["..."]}`` 仍可解析（evidence 为空 → 接地护栏按 ``no_evidence``
@@ -4049,16 +4049,28 @@ class AIClient(LoggerMixin):
         facts = obj.get("facts") if isinstance(obj, dict) else None
         if not isinstance(facts, list):
             return []
-        out: List[Dict[str, str]] = []
+        out: List[Dict[str, Any]] = []
         for x in facts:
+            conf: Optional[float] = None
             if isinstance(x, dict):
                 s = str(x.get("fact") or x.get("text") or x.get("content") or "").strip()
                 ev = str(x.get("evidence") or x.get("quote") or "").strip()
+                # J-10 二期：数值置信（原话直接陈述 ≥0.85 / 语境推断 0.5–0.7）→ 例外队列
+                # low_confidence 判据的输入；缺省 None（store 按默认 0.8 处理＝不触发）。
+                cv = x.get("confidence")
+                if cv is not None:
+                    try:
+                        conf = max(0.0, min(1.0, float(cv)))
+                    except (TypeError, ValueError):
+                        conf = None
             else:
                 s, ev = str(x).strip(), ""
             if 2 <= len(s) <= 500:
                 if not any(kw in s for kw in self._MEMORY_IDENTITY_FILTERS):
-                    out.append({"fact": s, "evidence": ev[:200]})
+                    item: Dict[str, Any] = {"fact": s, "evidence": ev[:200]}
+                    if conf is not None:
+                        item["confidence"] = conf
+                    out.append(item)
             if len(out) >= 6:
                 break
         return out
@@ -4132,8 +4144,12 @@ class AIClient(LoggerMixin):
             "【主语无歧义铁律】每条事实的主语必须显式写「客户」且方向唯一，"
             "如「客户自称X」「客户希望被称呼为X」；禁止「用户称呼自己为X」"
             "这类「自己」指代不清的双解句式。"
+            # J-10 二期：数值置信——LLM 自己最清楚这条是「原话直说」还是「结合语境推出来的」，
+            # 低置信的进例外队列让人看一眼（不阻断记录）。
+            "【置信】每条附 confidence（0～1）：原话直接陈述该事实 ≥0.85；需要结合语境推断"
+            "（如从「夜班很累」推出「客户是护士」）0.5～0.7；再低就不要输出。"
             "输出严格为一行 JSON，不要 markdown："
-            '{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter"}]} '
+            '{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter","confidence":0.95}]} '
             "facts 为 0～4 条，fact 是中文短句，evidence 是 USER 消息里的逐字原文；无则 []。"
         )
         usr = f"USER:\n{u[:2000]}\n\nASSISTANT:\n{a[:2000]}"
@@ -4205,10 +4221,20 @@ class AIClient(LoggerMixin):
         try:
             from src.ai.memory_grounding import ground_fact_items
             kept, dropped = ground_fact_items(items, user_msg)
-            out["facts"] = [
-                {"fact": str(k.get("text") or ""), "evidence": str(k.get("evidence") or "")}
-                for k in kept if k.get("text")
-            ]
+            # ground_fact_items 只回 text/evidence；置信按事实文本回填（J-10 二期）
+            conf_by_fact: Dict[str, float] = {
+                str(it.get("fact") or ""): float(it["confidence"])
+                for it in items if isinstance(it, dict) and it.get("confidence") is not None
+            }
+            out["facts"] = []
+            for k in kept:
+                if not k.get("text"):
+                    continue
+                row: Dict[str, Any] = {"fact": str(k.get("text") or ""),
+                                       "evidence": str(k.get("evidence") or "")}
+                if row["fact"] in conf_by_fact:
+                    row["confidence"] = conf_by_fact[row["fact"]]
+                out["facts"].append(row)
             out["dropped"] = [
                 {"fact": str(d.get("text") or ""), "evidence": str(d.get("evidence") or ""),
                  "reason": str(d.get("reason") or "")}

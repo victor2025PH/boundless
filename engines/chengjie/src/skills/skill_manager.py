@@ -5525,7 +5525,9 @@ class SkillManager(LoggerMixin):
             # J-10 A1（#183）：LLM 抽取走引文级接地——每条事实带客户原话逐字引文
             # ``evidence``（原语言），护栏只核引文 → 外语客户的中文事实不再整条被丢。
             # 引文即 source_quote（比整句更准的溯源）；无引文时回退整句。
-            facts_llm: List[Tuple[str, str]] = []
+            # J-10 二期：三元组多带 LLM 数值置信（None＝模型没给）→ add_fact(confidence=)
+            # 由 memory_review 判 low_confidence 进例外队列。
+            facts_llm: List[Tuple[str, str, Optional[float]]] = []
             grounding_dropped: List[Dict[str, Any]] = []
             cooldown = float(ex.get("cooldown_seconds", 20))
             now = time.time()
@@ -5538,23 +5540,25 @@ class SkillManager(LoggerMixin):
                 if callable(_ext_facts):
                     _res = await _ext_facts(mu, reply) or {}
                     facts_llm = [
-                        (str(it.get("fact") or ""), str(it.get("evidence") or ""))
+                        (str(it.get("fact") or ""), str(it.get("evidence") or ""),
+                         (float(it["confidence"]) if it.get("confidence") is not None else None))
                         for it in (_res.get("facts") or [])
                         if isinstance(it, dict) and it.get("fact")
                     ]
                     grounding_dropped = list(_res.get("dropped") or [])
                 else:
                     facts_llm = [
-                        (str(f), "")
+                        (str(f), "", None)
                         for f in (await self.ai_client.extract_memory_bullets(mu, reply) or [])
                     ]
                 self._memory_llm_last[key] = time.time()
 
-            for f, _ev in facts_llm:
+            for f, _ev, _conf in facts_llm:
                 # R12：LLM 抽取是对话推断/概括 → ai_inferred（晋升/推翻 stable 需更高置信）
                 rid = self._episodic_store.add_fact(
                     key, f, "llm", source="ai_inferred",
                     source_quote=(_ev.strip()[:200] or _prov_quote), source_ts=_prov_ts,
+                    confidence=_conf,   # J-10 二期
                 )
                 await self._episodic_patch_embedding(rid, f)
 
