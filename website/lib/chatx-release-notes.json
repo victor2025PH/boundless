@@ -1,5 +1,85 @@
 [
   {
+    "version": "1.0.74",
+    "date": "2026-09-06",
+    "title": {
+      "zh": "AI 不再谎称已发图 · LINE 视频 100MB 且不再误判过期 · 目标为什么没推进写在卡上 · AI 记忆页重做 · 新号先人审 · 未读数字点得开",
+      "en": "No more phantom 'photo sent' · LINE video 100 MB and no false expiry · goals explain why they stall · AI Memory page rebuilt · new accounts start in review · clickable unread"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "AI 不再谎称「已发过照片」：说「刚发了」之前会对照近 30 分钟真发记录，没发过就改口或补发；陪聊人设不再漏出「my assistant / 开户资料 / 团队会联系你」这类客服腔。",
+        "人工接管期间坐席替人设说过的话（如「我有个女儿」）进 AI 记忆并持久；人设答应过的事进「承诺账本」，AI 记忆页能看到「AI 答应过还没做」。",
+        "AI 记忆页重做：「待确认」积压改成例外队列，只有冲突 / 高影响 / 低置信 / 人设自身 / 承诺五类才需要你看一眼；健康卡五格；每位客户的记忆可导出；英文客户的事实不再因为语言不同被漏记。",
+        "工作目标为什么没推进现在看得见：目标卡按引擎真实状态显示、不能出手时点名原因；限时目标按真正出手的次数算进度；工作链卡片有「让路暂停 / 失败原因」解释行。",
+        "新登录账号在你确认接管方式之前一律先人审，不再自动套默认人设；账号栏出「未选人设」引导。",
+        "LINE 媒体：收视频不再 4 分钟就判「已过期」，真过期才提示请客户重发；发视频上限从 25MB 放到 100MB；收长视频不再被 20MB 上限拒下；语音按钮灰着会说明具体原因。",
+        "发图 / 发贴纸后端无响应时改黄字「结果未知」并自动刷消息流，不再红字误导你重发；手动发送不再短暂显示两条。",
+        "账号栏未读数字点得开、条数与数字一致并可一键清零；归档里的未读有常驻入口，可一键取消归档。",
+        "翻译记忆里缓存的引擎废话（如「好的，请发送需要翻译的内容」）会被自动清掉重译。",
+        "知识库首装不再预置厂商产品条目，存量自动标「厂商预置」并从对客检索排除；后台新增「知识库接通性」卡。",
+        "「客户安全预警」页（原危机审计）留痕与人工升级默认开启，严重事件点亮工作台徽标并置顶会话；手动加关怀分「客户的事 / 到点发这句话」两档，不再把操作指令当客户事件。",
+        "人设工作室：历史质检点得开、不再弹「/admin/voice-eval 打不开」、备货 tab 改「上线准备」、相册 tab 试触发置顶、页头不再截断；用户管理页不再堆积僵尸会话；「default —」幽灵账号行不再出现；WhatsApp 客户卡电话默认掩码、点击查看全号；批量挂链按钮能弹出输入层。",
+        "WhatsApp 边车：被限制（403）的账号不再无限重连刷日志；DNS 解析失败短退避重试并在连接提示里说明；配对时长可见。",
+        "全自动模式下客户提到敏感词不再导致 AI 停手，触发到风险只做后台记录（老板决策）。"
+      ],
+      "en": [
+        "The AI no longer claims it \"already sent a photo\": before saying so it checks the last 30 minutes of real sends and rewrites or actually sends; companion personas no longer leak support-desk phrasing such as \"my assistant will reach out\" or \"account details / onboarding guide\".",
+        "What an agent says on the persona's behalf during manual takeover (e.g. \"I have a daughter\") now enters the AI memory and persists; promises the persona made land in a promise ledger, and the AI Memory page shows \"promised but not yet done\".",
+        "AI Memory page rebuilt: the \"pending confirmation\" backlog becomes an exception queue — only conflicts / high-impact facts / low confidence / persona self-facts / promises need your eyes; five-tile health card; per-customer export; facts from English-speaking customers are no longer dropped because of the language mismatch.",
+        "Why a work goal is not progressing is now visible: the goal card reflects the engine's real state and names the blocker; timed goals track progress by real actions taken; chain cards explain \"yielded / failed (reason)\".",
+        "Newly logged-in accounts stay in review mode until you confirm the takeover mode; no more auto-assigned default persona — the account bar shows a \"no persona selected\" prompt instead.",
+        "LINE media: incoming videos are no longer declared \"expired\" after 4 minutes (only a real expiry asks the customer to resend); outbound video limit raised from 25 MB to 100 MB; long inbound videos are no longer rejected by the 20 MB cap; a greyed voice button now says exactly why.",
+        "When the backend gives no response on photo / sticker send, the bubble turns amber \"result unknown\" and the thread refreshes instead of a misleading red failure; manual sends no longer flash twice.",
+        "The unread number on the account bar is clickable, matches the list exactly and can be cleared in one click; unread items hidden in archived chats get a permanent entry point with one-click unarchive.",
+        "Engine chatter cached in translation memory (e.g. \"OK, please send the text to translate\") is purged and re-translated automatically.",
+        "Knowledge base: fresh installs no longer ship vendor product entries; existing ones are tagged \"vendor preset\" and excluded from customer-facing retrieval; new \"knowledge base connectivity\" ops card.",
+        "\"Customer Safety Alerts\" page (formerly crisis audit): logging and human escalation on by default, severe events light the workbench badge and pin the conversation; manual care now has two modes (\"something about the customer\" / \"send exactly this at that time\") so an operator instruction is never mistaken for a customer event.",
+        "Persona studio: history QA opens, no more \"/admin/voice-eval failed to open\" popup, stock tab renamed \"launch readiness\", album tab trial trigger moved to the top, header no longer truncates; user management no longer piles up zombie sessions; the ghost \"default —\" account row is gone; WhatsApp customer card masks the phone number by default (click to reveal); bulk chain-attach button opens an in-page input.",
+        "WhatsApp sidecar: accounts blocked by WhatsApp (403) stop reconnecting forever; DNS failures retry with a short backoff and the connection hint says so; pairing duration is visible.",
+        "In full-auto mode, a customer mentioning a sensitive word no longer makes the AI stop; risk triggers are only logged in the background (owner decision)."
+      ]
+    }
+  },
+  {
+    "version": "1.0.73",
+    "date": "2026-09-04",
+    "title": {
+      "zh": "未读可点 · 黄点绑人设 · 双向称呼 · 全自动不再扣稿 · 撤回不再被提起 · 语音积压不再把后端打死",
+      "en": "Clickable unread · yellow-dot persona bind · two-way names · full-auto no longer holds drafts · withdrawn lines stay quiet · inbound voice no longer kills the backend"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "账号栏未读数字可点：点开弹出的就是这个数字对应的会话，点一行即打开；有具体账号时还可「全部标已读」。",
+        "账号黄点绑人设：黄点表示该号还没绑人设。直接点黄点打开账号抽屉，在人设一栏选好保存。",
+        "双向称呼：打开会话右侧资料卡，填「我怎么叫对方 / 对方怎么叫我」，失焦即保存，之后回复按这个称呼。",
+        "全自动就是全自动：自动回复不再因「高风险」扣稿转人工，触发只后台记台账；坐席自己点发送也不会被二次拦住。",
+        "删掉的消息不再被 AI 主动提起：客户撤回的内容工作台同步删除，回复里也不会再主动提那句话。",
+        "人设目录不再串味也不再全黑：推品按当前人设过滤，绑了人设的货能推出来。",
+        "收件箱右上角不再弹出悬浮副驾清单（原先多余的那块已去掉）。",
+        "后端启动后遇到语音积压不再因文件句柄耗尽自杀：入站语音转录加了并发闸，异常退出后壳会自动把后端拉起来。"
+      ],
+      "en": [
+        "Unread badge on the account bar is clickable: the popover lists exactly the conversations that number counts; click a row to open. For a specific account you can also Mark all read.",
+        "Yellow-dot persona bind: a yellow dot means the account has no persona. Click it to open the account drawer and pick a persona.",
+        "Two-way address names: in the conversation info card, fill \"what I call them / what they call me\"; it saves on blur and later replies use those names.",
+        "Full-auto stays full-auto: auto-replies are no longer held for \"high risk\"—triggers are logged in the back-office ledger only. Agent-typed send is not blocked either.",
+        "Withdrawn messages are not brought up again: deletions sync to the workspace, and replies will not volunteer the withdrawn line.",
+        "Catalog no longer mixes personas or goes dark: product picks follow the current persona, so bound SKUs actually surface.",
+        "The floating copilot tear list in the inbox corner is gone.",
+        "Inbound voice bursts no longer crash the backend on Windows FD limits: transcription is concurrency-capped, and the shell respawns the backend after an abnormal exit."
+      ]
+    }
+  },
+  {
     "version": "1.0.71",
     "date": "2026-09-02",
     "title": {
