@@ -894,6 +894,36 @@ _MEDIA_FETCH_INFLIGHT: set = set()
 _MEDIA_FETCH_MAX_CONCURRENT = 3
 
 
+def _line_find_recent_message(client: Any, chat_key: str, pmid: str,
+                              limit: int = 100) -> Optional[Dict[str, Any]]:
+    """LINE fetch-media 重试：在 worker 最近消息里找 ``id == pmid`` 的**真消息**。
+
+    Letter Sealing 媒体的对象定位（SID/OID/chunks）只在真消息体里，用空壳
+    fake 调 ``download_line_media`` 永远拉不到（#172 / J-3 交办）。同步 API（走
+    线程池调用）；任何异常/形态不符一律返回 None 让调用方回落 fake——本函数
+    绝不能把一次「找真消息」的失败变成整条重试链的失败。
+    """
+    if not chat_key or not pmid:
+        return None
+    fn = getattr(client, "get_recent_messages", None)
+    if not callable(fn):
+        return None
+    try:
+        raw = fn(chat_key, int(limit))
+    except Exception:
+        logger.debug("[protocol] line fetch-media 取真消息失败", exc_info=True)
+        return None
+    rows: List[Dict[str, Any]] = []
+    if isinstance(raw, dict) and isinstance(raw.get("messages"), list):
+        rows = [m for m in raw["messages"] if isinstance(m, dict)]
+    elif isinstance(raw, list):
+        rows = [m for m in raw if isinstance(m, dict)]
+    for m in rows:
+        if str(m.get("id") or "").strip() == pmid:
+            return m
+    return None
+
+
 def tg_cooldown_snapshot() -> Dict[str, float]:
     """当前处于断网冷却中的 TG 账号 → 剩余秒数（供 ops「平台会话健康」卡可视化）。
 
@@ -3332,16 +3362,36 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "busy"}
 
         _MEDIA_FETCH_INFLIGHT.add(message_id)
+        dl_out: Dict[str, Any] = {}
         try:
             from src.integrations.line_media import download_line_media
-            fake = {"id": pmid, "contentType": ct, "contentMetadata": {}}
+            # #172 / J-3 交办（2026-09-05）：Letter Sealing 媒体的对象定位要
+            # SID/OID/chunks（全在真消息的 contentMetadata / chunks 里），空壳
+            # fake 永远拉不到 → 先从 worker 端拿最近消息找同 id 的真行，找到就
+            # 原样传（含 createdTime 让龄判定有依据）；找不到才回落 fake，并把
+            # createdTime 设成行 ts*1000（否则 404 时 age=-1 无从区分过期/未到）。
+            real_msg = await asyncio.to_thread(
+                _line_find_recent_message, client,
+                str(conv.get("chat_key") or ""), pmid)
+            if real_msg is not None:
+                msg = dict(real_msg)
+                msg.setdefault("contentType", ct)
+                msg.setdefault("contentMetadata", {})
+            else:
+                msg = {"id": pmid, "contentType": ct, "contentMetadata": {}}
+                try:
+                    _ts = float(row.get("ts") or 0)
+                except (TypeError, ValueError):
+                    _ts = 0.0
+                if _ts > 0:
+                    msg["createdTime"] = str(int(_ts * 1000))
             try:
                 # OBS GET 是同步 requests → 丢线程；不占 worker 的 _api_lock——
                 # 下载不取 reqSeq，与接收线程内的入站下载同一并发语义。
                 mt, mr = await asyncio.wait_for(
                     asyncio.to_thread(
-                        download_line_media, client, fake,
-                        str(account_id or ""), cfg=mcfg),
+                        download_line_media, client, msg,
+                        str(account_id or ""), cfg=mcfg, out=dl_out),
                     timeout=60.0)
             except (TimeoutError, asyncio.TimeoutError):
                 return {"ok": False, "reason": "timeout"}
@@ -3359,8 +3409,15 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             pass
         if not mr:
-            # miss 细因已由 download_line_media 记 WARNING + line_media_stats
-            return {"ok": False, "reason": "download_failed"}
+            # miss 细因已由 download_line_media 记 WARNING + line_media_stats；
+            # 这里把 out.reason（not_found / expired / e2ee_no_key / too_large…）
+            # 透传给前端「拉取失败，点击重试」按钮做 tooltip（旧口径 download_failed
+            # 保留在 reason 字段作兜底，细因走 miss_reason，前端旧版不受影响）。
+            return {"ok": False, "reason": "download_failed",
+                    "miss_reason": str(dl_out.get("reason") or ""),
+                    "expired": bool(dl_out.get("expired")),
+                    "retryable": bool(dl_out.get("retryable")),
+                    "real_message": real_msg is not None}
         store.update_message_media(
             cid, media_type=mt, media_ref=mr, message_id=message_id)
         # 转写/识别回填（#101 P2，best-effort）：救活的语音坐席要能读、AI 要能看——

@@ -9438,7 +9438,21 @@ async function fetchMsgMedia(msgId){
     const map={disabled:(plat==='line'?'inbox.media.fetch_disabled_line':'inbox.media.fetch_disabled'),
       oversize:'inbox.media.fetch_oversize',
       message_not_found:'inbox.media.fetch_gone',no_media:'inbox.media.fetch_gone'};
-    if(btn){ btn.disabled=false; btn.textContent=window.T(map[String(d.reason||'')]||'inbox.media.fetch_failed'); }
+    if(btn){
+      btn.disabled=false;
+      btn.textContent=window.T(map[String(d.reason||'')]||'inbox.media.fetch_failed');
+      // #172 / J-3 交办：LINE 端点回 miss_reason（not_found / expired / pending /
+      // encoding / e2ee_no_key / e2ee_decrypt_failed / too_large…）→ 悬停能读到
+      // 「为什么拉不到、该等还是让客户重发」；旧后端无字段＝不改 title。
+      const mr=String(d.miss_reason||'');
+      if(mr){
+        const mm={expired:'inbox.media.miss_expired',not_found:'inbox.media.miss_not_found',
+          pending:'inbox.media.miss_pending',encoding:'inbox.media.miss_encoding',
+          e2ee_no_key:'inbox.media.miss_e2ee_no_key',e2ee_decrypt_failed:'inbox.media.miss_e2ee_decrypt'};
+        btn.title=mm[mr]?window.T(mm[mr]):window.Tf('inbox.media.miss_other',{reason:mr});
+        if(mr==='expired') btn.textContent=window.T('inbox.media.miss_expired_btn');
+      }
+    }
   }catch(_){
     if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.media.fetch_failed'); }
   }

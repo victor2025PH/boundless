@@ -318,7 +318,7 @@ def test_line_fetch_happy_path_backfills_row(line_rig, monkeypatch):
     import src.integrations.line_media as LM
     seen = {}
 
-    def _dl(client, message, account_id, *, cfg=None):
+    def _dl(client, message, account_id, *, cfg=None, out=None):
         seen["msg"] = dict(message)
         seen["acct"] = account_id
         seen["client"] = client
@@ -328,8 +328,13 @@ def test_line_fetch_happy_path_backfills_row(line_rig, monkeypatch):
     mid = _ingest_line_row(line_rig.store)
     d = _lpost(line_rig, mid).json()
     assert d["ok"] is True and d["media_ref"] == _LURL
-    # 回取用行上的 platform_msg_id + 按 media_type 推的 contentType（voice→3）
-    assert seen["msg"] == {"id": LMSGID, "contentType": 3, "contentMetadata": {}}
+    # 回取用行上的 platform_msg_id + 按 media_type 推的 contentType（voice→3）；
+    # 假 client 无 get_recent_messages → 回落 fake，并带行 ts 推的 createdTime
+    # （#172：龄判定才有依据，404 不会被误判成「已过期」）
+    msg = seen["msg"]
+    assert msg["id"] == LMSGID and msg["contentType"] == 3
+    assert msg["contentMetadata"] == {}
+    assert str(msg.get("createdTime") or "").isdigit()
     assert seen["acct"] == LACCT
     assert seen["client"] is line_rig.worker.client, "必须用运行中 worker 的 client"
     row = line_rig.store.get_message(mid)
@@ -360,9 +365,55 @@ def test_line_fetch_download_failure_leaves_row_untouched(line_rig, monkeypatch)
     import src.integrations.line_media as LM
     monkeypatch.setattr(LM, "download_line_media", lambda *a, **k: ("voice", ""))
     mid = _ingest_line_row(line_rig.store)
-    assert _lpost(line_rig, mid).json() == {"ok": False,
-                                            "reason": "download_failed"}
+    d = _lpost(line_rig, mid).json()
+    assert d["ok"] is False and d["reason"] == "download_failed"
+    # J-3 交办：miss 细因透传（假下载器没写 out → 空串；旧口径 reason 不变）
+    assert d["miss_reason"] == "" and d["real_message"] is False
     assert line_rig.store.get_message(mid)["media_ref"] == ""
+
+
+def test_line_fetch_uses_real_message_when_worker_has_it(line_rig, monkeypatch):
+    """#172 / J-3 交办：Letter Sealing 媒体要 SID/OID/chunks——worker 最近消息里
+    有同 id 真消息就原样传给 download_line_media，不再用空壳 fake；miss 时把
+    out.reason 透传成 miss_reason（前端重试按钮 tooltip）。"""
+    import src.integrations.line_media as LM
+    real = {"id": LMSGID, "contentType": 3, "createdTime": "1757000000000",
+            "contentMetadata": {"SID": "s1", "OID": "o1", "e2eeVersion": "2"},
+            "chunks": ["k1", "k2"]}
+    other = {"id": "1", "contentType": 1, "text": "hi"}
+    line_rig.worker.client = SimpleNamespace(
+        tag="okline",
+        get_recent_messages=lambda box, n: [other, real] if box == LPEER else [])
+    seen = {}
+
+    def _dl(client, message, account_id, *, cfg=None, out=None):
+        seen["msg"] = message
+        if out is not None:
+            out.update({"reason": "e2ee_no_key", "retryable": True,
+                        "expired": False})
+        return "voice", ""
+
+    monkeypatch.setattr(LM, "download_line_media", _dl)
+    mid = _ingest_line_row(line_rig.store)
+    d = _lpost(line_rig, mid).json()
+    assert seen["msg"]["chunks"] == ["k1", "k2"], "必须传真消息（含 chunks）"
+    assert seen["msg"]["contentMetadata"]["SID"] == "s1"
+    assert d == {"ok": False, "reason": "download_failed",
+                 "miss_reason": "e2ee_no_key", "expired": False,
+                 "retryable": True, "real_message": True}
+
+
+def test_line_find_recent_message_is_soft():
+    """找真消息的任何失败都回 None（回落 fake），绝不炸整条重试链。"""
+    f = uar._line_find_recent_message
+    assert f(SimpleNamespace(), "U1", "9") is None                    # 无方法
+    boom = SimpleNamespace(get_recent_messages=lambda *a: 1 / 0)
+    assert f(boom, "U1", "9") is None                                 # 抛异常
+    weird = SimpleNamespace(get_recent_messages=lambda *a: "nope")
+    assert f(weird, "U1", "9") is None                                # 形态不符
+    ok = SimpleNamespace(get_recent_messages=lambda *a: {"messages": [{"id": 9}]})
+    assert f(ok, "U1", "9") == {"id": 9}                              # dict 包裹形态
+    assert f(ok, "", "9") is None and f(ok, "U1", "") is None
 
 
 def test_line_fetch_backfills_transcript(line_rig, monkeypatch):
