@@ -23,7 +23,7 @@
 | **J-6** | WhatsApp 边车稳定性（Node） | #181 + 403 无限重连 + ENOTFOUND + Bad MAC | $150 | 已完成（代码侧，未重启边车/实例） | A 403 终态 `aefd9a94`（连续 2 轮 403 停自动重连 + `/reconnect` 30min 解锁冷却 + `postStatus("forbidden")` + ops 卡 ⛔/解锁重连）/ B `4e9b2c2b`（close `reason_class` dns/net/server/forbidden/… ——ENOTFOUND 从 408 里分出来；`/health.reason_10m` 滚动窗；DNS 短退避 3s×10 不烧预算；`pairing_ms`+`hint_code=dns_retry`；Python `[rc:]` 解析聚合/Prom/ops KPI）/ C `ed20b1a0`（**新** `bad-mac-heal.js`：同对端连续 3 次 Bad MAC → `deleteSession` 让 libsignal 重建，30min 不重删，绝不全量 resync；`/health.bad_mac` + `[bm:]` 快照到 Python + ops KPI）；Node 63/63、Python 指定集 493 passed | 交 J-4：B-2 坐席可见 DNS 提示（后端 `hint_code` 已就绪，`whatsapp_baileys_login.py` 透传 + `unified_inbox.html` 文案两行，见落点表）；值守：① 重启窗装载 `platform_session_health.py` + 重启 117 边车；② `test_alert_delivery_e2e` 红 `phantom_unread_alert` 属他线 `health_watchdog.py` 未提交；③ #181 三项真机待核（钧机包 00:20–00:25 段 / 装机后 `pairing_ms` / skuio 24h `forbidden`） | `发版对账_v1.0.74_J6.md` | ~$95 |
 | **J-7** | 人设工作室体验与报错 | #189 #190 #191 #192 #193 #186（+#178/#179 若 J-4 未做） | $150 | 未开工（**J-4 已于 08:4x 释放 personas.html / persona_routes.py**，#178/#179 已由 J-4 做掉，可整批开工） | | | `发版对账_v1.0.74_J7.md` | |
 | **J-8** | 陪伴安全 + 关怀语义 | #185（P1）#182 | $190 | **进行中**（A 完成，B 开工） | A #185 `256e3380`（三档空态 + 一键开启 overlay 保注释 + cloud_light/desktop.internal 出厂开 + R8 桥 `wellbeing_escalation_bridge.py` 徽标/置顶/案例 + 页名「客户安全预警」人话化 + viewer 不可见；三件 crisis 评测全绿，skill_manager 零改动） | B #182；值守：下个重启窗装载 `.py`（桥 / enable 路由 / 角色门）；88MP86 回访口径见落点表 | `发版对账_v1.0.74_J8.md` | ~$70 |
-| **J-9** | 知识库隔离 + 检索自检 | #184 | $150 | 未开工 | | | `发版对账_v1.0.74_J9.md` | |
+| **J-9** | 知识库隔离 + 检索自检 | #184（+#187 误读关单的「用户 KB 是否为空」读数） | $150 | **已完成**（代码侧，未重启；模板/i18n 已热更） | A `0d8d667e`（`kb_entries.source` user/import/system/vendor + 一次性回填 template_key→system / 厂商类目→vendor + `search()` 两段过滤硬排除 vendor 不占 top_k、桌面默认排除 / `AITR_KB_EXCLUDE_VENDOR` 覆写 + `health()` + `purge_by_source()` fail-closed + 零反馈 `satisfaction_rate=None` + 首装 3 条停用格式示例）/ B `0732f230`（`/api/kb/entries?source=` + `POST /api/kb/entries/purge-source` + `GET /api/kb/health` + sandbox `include_vendor`；KB 页来源筛选/厂商徽标/提示条一键清空/「暂无反馈」；zh_hant 再生；路由基线 +2）/ C `3ba163ae`（首装不再拷 `knowledge_base.db`：config_manager 种子清单 / stage_internal_assets / after-pack **FORBIDDEN** / smoke 断言无 vendor）/ D `92c14e2d`（厂商产品说明迁 `howto_pack` 3 条，价格不写）/ E `d74f6c89`（ops「📚 知识库接通性」卡 + 独立 pack `kb_health_ops.py` + `/knowledge?source=vendor` 深链 + ui-build `20260905-1445`）；`skill_manager.py` **零改动**只读核对（L2098 `search()` 不传 include_vendor ⇒ 走桌面默认排除；命中记账复用 L2359 `log_query`）；`test_kb_source_isolation` 26 例 + `test_ops_overview` 101 passed；模板/i18n 门禁 339 passed | 值守：① 22:30 窗装载 `kb_store/kb_routes/kb_importer/kb_starter/config_manager/howto_pack`，装后 `GET /api/kb/health` 应 `entries_vendor≈110, vendor_excluded=false`（zhiliao 服务器部署不排除是预期，**别在 zhiliao 点一键清空**）；② skuio/钧装 1.0.74 后看 ops 📚 卡「用户条目」——预期 0 + 黄字「用户知识库为空」＝对「KB 零贡献」的正面回答（不是检索坏，是没自己的知识）；③ `hits=-` 是风控字段的解释已写进卡底注 + howto `kb-vendor-preset` | `发版对账_v1.0.74_J9.md` | ~$85 |
 
 状态取值：`未开工` / `进行中` / `已完成` / `部分完成(等下一账号)` / `阻塞(原因)`
 
@@ -46,7 +46,7 @@
 
 ```
 J-1 ─ J-2 ─ J-3 ─ J-4 ─ J-5   全部独立，可同时开（J-1/J-2/J-3 已完成代码侧）
-J-6（Node 边车）─ J-8（wellbeing/care）─ J-9（KB）  三条互不重叠，可立即开
+J-6（Node 边车）─ J-8（wellbeing/care）─ J-9（KB）  三条互不重叠（J-6 / J-9 已完成代码侧）
 J-7（人设工作室）：J-4 已做完 #178 `ed1b746e` / #179 `17230974` 并释放 personas.html / persona_routes.py，可整批开工
 D1b（J-2 追加）仍在改 goals/** + cp-goal.js + unified_inbox.html 的 ?v= 行 → J-4 改 unified_inbox.html 前先看意向板
 J-8 加 wellbeing 两键的 cloud_light.yaml / config.desktop.internal.yaml：D1b 在同文件 goals 段有未提交 hunk → 用 tools/stage_hunks.py 只提交自己的
@@ -78,6 +78,7 @@ J-8 加 wellbeing 两键的 cloud_light.yaml / config.desktop.internal.yaml：D1
 ## 值守收尾清单（不开对话，值守自己做）
 
 - [ ] **12:30 重启窗装载 zhiliao**（`restart_preflight` → `restart_instance.ps1 -Instance zhiliao`）：J-1/J-2/J-3/D1b 全部 `.py` 才生效；装完用 88MP86 复盘口径核 #166（`[goal-inject]` 行）、#177（真机「我有个女儿」→ 下轮草稿含「你亲口说过」块）。
+- [ ] **22:30 窗一并装载 J-9 六个 `.py`**（`kb_store/kb_routes/kb_importer/kb_starter/config_manager/howto_pack`）；装后 `GET /api/kb/health` 应回 `entries_vendor≈110, vendor_excluded=false`——zhiliao 是服务器部署、厂商条目是它自己的业务语料，**不要在 zhiliao 点「一键清空厂商预置」**；skuio/钧装 1.0.74 后读 ops「📚 知识库接通性」卡按 `发版对账_v1.0.74_J9.md`「回答 skuio」四条判词。
 - [ ] skuio 机 1.0.74 装完跑 `python tools/xlate_memory_purge.py --db %APPDATA%\telegram-ai-desktop\data\config\translation_memory.db --apply`（J-1 C 交办；不跑也会在命中时自愈）。
 - [ ] LINE 入站缺省 `DEFAULT_INBOUND_MAX_BYTES` 20MB → 32–40MB（J-3 C 发现：服务端转码件 100MB→27.5MB 会被拒下）；一行常量 + 一条测试，`line_media.py`。
 - [ ] `config.example.yaml`：`companion.media_promise_guard.sent_claim.{enabled,window_min}`（J-1 A）与 `inbox.workflows.auto_start.max_per_tick: 5`（J-2 B）两处**文档键**——等 D1b 收工后再加（该文件他在改）。
