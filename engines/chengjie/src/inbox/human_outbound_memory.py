@@ -294,6 +294,12 @@ def on_human_outbound(
                 record_self_state(ctx, body, now=ts)
             except Exception:
                 pass
+            # 2b) J-10 二期：坐席替人设做的承诺（「明天给你打电话」）进承诺账本，author=human
+            try:
+                from src.utils.memory_promises import record_promises
+                record_promises(ctx, body, author="human", now=ts)
+            except Exception:
+                pass
             # 3) 人设自述事实 → 接地护栏 → 持久 log
             facts = _grounded(extract_self_facts(body), body)
             if facts:

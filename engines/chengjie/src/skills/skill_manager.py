@@ -11211,6 +11211,14 @@ class SkillManager(LoggerMixin):
             record_self_state(user_context, reply)
         except Exception:
             pass
+        # J-10 二期（#177/#171）：出站承诺账本——「明天给你打电话 / 下次拍给你看」这类
+        # 第一人称跨天承诺记进 _promise_log（bounded、随 ContextStore 持久），档案抽屉
+        # 「承诺过」按 open/overdue/done 展示。只记账、不注入 prompt；零阻断。
+        try:
+            from src.utils.memory_promises import record_promises
+            record_promises(user_context, reply, author="ai")
+        except Exception:
+            pass
 
         # Fix D: sanitize reply before persisting (any failure must NOT break the pipeline)
         try:

@@ -776,6 +776,40 @@ def register_episodic_identity_routes(app, ctx) -> None:
                    old_val=f"[{kind}] {text[:160]}")
         return {"ok": True, "deleted": {"kind": kind, "text": text[:160]}, "context_key": key}
 
+    @app.post("/api/episodic-memory/self-log/mark-done")
+    async def api_episodic_self_log_mark_done(request: Request):
+        """J-10 二期：坐席点「已兑现」。Body ``{memory_key|conversation_id, kind: "promise", ts, text}``。
+        媒体类承诺由真发记录自动结清，这里给电话/见面/口头约定这类系统看不见的兑现。"""
+        _api_write("episodic_memory")(request)
+        sm = _get_sm()
+        if not sm:
+            raise HTTPException(status_code=503, detail=tr(request, "err.epi.bot_not_ready"))
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        mk = str(body.get("memory_key") or "").strip()[:200]
+        conv = str(body.get("conversation_id") or "").strip()[:200]
+        kind = str(body.get("kind") or "promise").strip()[:32]
+        text = str(body.get("text") or "")[:400]
+        if not mk and not conv:
+            raise HTTPException(status_code=400, detail=tr(
+                request, "err.ws.field_required", field="memory_key"))
+        from src.utils.memory_self_log import mark_self_experience_done
+        ctx, key = _self_log_ctx(sm, mk, conv)
+        if ctx is None or not mark_self_experience_done(ctx, kind, body.get("ts"), text):
+            raise HTTPException(status_code=404, detail=tr(request, "err.epi.record_not_found"))
+        cs = getattr(sm, "_context_store", None)
+        try:
+            if cs is not None and key:
+                cs.mark_dirty(key)
+                cs.flush(key)
+        except Exception:
+            pass
+        _audit_epi(request, "episodic_promise_done", key or mk or conv, new_val=text[:160])
+        return {"ok": True, "done": {"kind": kind, "text": text[:160]}, "context_key": key}
+
     @app.post("/api/episodic-memory/backfill")
     async def api_episodic_memory_backfill(
         request: Request, limit: int = 20, prefix: str = "", force: bool = False

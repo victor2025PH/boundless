@@ -25,7 +25,8 @@ KIND_HUMAN_SAID = "human_said"
 KIND_AI_STATE = "ai_state"
 KIND_MEDIA_SENT = "media_sent"
 KIND_PROMISE_PENDING = "promise_pending"
-KINDS = (KIND_HUMAN_SAID, KIND_AI_STATE, KIND_MEDIA_SENT, KIND_PROMISE_PENDING)
+KIND_PROMISE = "promise"          # J-10 二期：承诺账本（memory_promises），带 status open/overdue/done
+KINDS = (KIND_HUMAN_SAID, KIND_AI_STATE, KIND_MEDIA_SENT, KIND_PROMISE_PENDING, KIND_PROMISE)
 
 # 各类对应的 user_context 键（删除时按 kind 找回那份日志）
 _LOG_KEYS = {
@@ -101,6 +102,12 @@ def collect_self_experience(
                 out.append({"kind": KIND_PROMISE_PENDING, "ts": _f(st.get("ts")),
                             "text": subj or pk, "media_kind": pk,
                             "source": str(st.get("source") or "")})
+        # J-10 二期：跨天承诺账本（open / overdue / done）
+        try:
+            from src.utils.memory_promises import promise_entries
+            out.extend(promise_entries(ctx, now=now))
+        except Exception:
+            pass
     except Exception:
         return out
     out.sort(key=lambda x: -float(x.get("ts") or 0))
@@ -120,6 +127,9 @@ def delete_self_experience_entry(
             user_context.pop(_PENDING_KEY, None)
             return True
         return False
+    if k == KIND_PROMISE:
+        from src.utils.memory_promises import delete_promise
+        return delete_promise(user_context, ts, text)
     key = _LOG_KEYS.get(k)
     if not key:
         return False
@@ -138,7 +148,15 @@ def delete_self_experience_entry(
     return False
 
 
+def mark_self_experience_done(user_context: Optional[Dict[str, Any]], kind: str, ts: Any, text: str) -> bool:
+    """「已兑现」：目前只有承诺账本条目有状态。调用方负责 ``mark_dirty/flush``。"""
+    if str(kind or "") != KIND_PROMISE:
+        return False
+    from src.utils.memory_promises import mark_promise_done
+    return mark_promise_done(user_context, ts, text)
+
+
 __all__ = [
-    "KIND_HUMAN_SAID", "KIND_AI_STATE", "KIND_MEDIA_SENT", "KIND_PROMISE_PENDING", "KINDS",
-    "collect_self_experience", "delete_self_experience_entry",
+    "KIND_HUMAN_SAID", "KIND_AI_STATE", "KIND_MEDIA_SENT", "KIND_PROMISE_PENDING", "KIND_PROMISE",
+    "KINDS", "collect_self_experience", "delete_self_experience_entry", "mark_self_experience_done",
 ]

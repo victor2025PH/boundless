@@ -794,12 +794,33 @@ async function _emDrvLoadSelf(key,convId){
       var ago=it.ts?_emAgo(it.ts):null;
       var kindLabel=window.T('em_self_kind_'+String(it.kind||''))||String(it.kind||'');
       var extra=(it.kind==='media_sent'&&it.scene)?' · '+_emEsc(it.scene):'';
-      var del=emCanDelete?'<button type="button" class="btn-del" data-i="'+i+'" style="margin-left:auto">'+_emEsc(window.T('em_self_delete'))+'</button>':'';
+      // J-10 二期：承诺账本——状态徽标（未兑现红 / 超期灰红 / 已兑现绿）+「已兑现」按钮
+      var badgeCls=(it.kind==='promise_pending')?'inferred':'stated';
+      var status='';
+      if(it.kind==='promise'){
+        var st=String(it.status||'open');
+        badgeCls=(st==='done')?'stated':'inferred';
+        var stCls=(st==='done')?'badge-tier stable':((st==='overdue')?'badge-review hi':'badge-review');
+        status='<span class="'+stCls+'" style="text-transform:none">'+_emEsc(window.T('em_self_status_'+st)||st)+'</span>'
+          +(it.author==='human'?'<span class="badge-ignored" title="'+_emEsc(window.T('em_self_by_human'))+'">👤</span>':'');
+      }
+      var done=(emCanDelete&&it.kind==='promise'&&it.status!=='done')?'<button type="button" class="btn-ok" data-done="'+i+'">'+_emEsc(window.T('em_self_mark_done'))+'</button>':'';
+      var del=emCanDelete?'<button type="button" class="btn-del" data-i="'+i+'"'+(done?'':' style="margin-left:auto"')+'>'+_emEsc(window.T('em_self_delete'))+'</button>':'';
       return '<div class="em-drv-row" data-self-i="'+i+'"><div class="c">'+_emEsc(it.text||'')+'</div>'
-        +'<div class="m"><span class="badge-src '+(it.kind==='promise_pending'?'inferred':'stated')+'">'+_emEsc(kindLabel)+'</span>'
-        +(ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'')+extra+'<span class="sp"></span>'+del+'</div></div>';
+        +'<div class="m"><span class="badge-src '+badgeCls+'">'+_emEsc(kindLabel)+'</span>'+status
+        +(ago?'<span title="'+_emEsc(ago.abs)+'" style="cursor:help">'+_emEsc(ago.rel)+'</span>':'')+extra+'<span class="sp"></span>'+done+del+'</div></div>';
     }).join('');
     sec.hidden=false;
+    Array.prototype.forEach.call(bd.querySelectorAll('button[data-done]'),function(b){
+      b.addEventListener('click',async function(){
+        var it=items[parseInt(b.getAttribute('data-done'),10)]; if(!it)return;
+        b.disabled=true;
+        var body={memory_key:key,kind:it.kind,ts:it.ts,text:it.text}; if(convId)body.conversation_id=convId;
+        var r=await apiFetch('/api/episodic-memory/self-log/mark-done',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(r&&r.ok){_emDrvLoadSelf(key,convId);}
+        else{b.disabled=false;alert(window.T('ov_js_req_fail')+': '+(r?r.status:''));}
+      });
+    });
     Array.prototype.forEach.call(bd.querySelectorAll('button[data-i]'),function(b){
       b.addEventListener('click',function(){
         var it=items[parseInt(b.getAttribute('data-i'),10)]; if(!it)return;
