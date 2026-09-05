@@ -325,25 +325,27 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return view
 
     def _attach_sprint_live(view, store):
-        """活跃冲刺目标 → 调度透明化字段（P3 2026-08-30）：
+        """活跃目标 → 调度透明化字段（P3 2026-08-30；D1b 自然档同挂）：
         ``sprint_live: {ticker_on, beats_used, next_phase_ts, nudgeable}``——
-        卡上「第X拍 · 下一主动拍≈xx:xx / 引擎未开」状态行的数据源。
-        非冲刺/非活跃零开销直通；best-effort 绝不抛。"""
+        卡上「下一次跟进≈xx:xx / 引擎未开」状态行的数据源。
+        非活跃零开销直通；立即推进按钮只属冲刺；best-effort 绝不抛。"""
         try:
             if not isinstance(view, dict):
                 return view
-            if str(view.get("pace") or "natural") == "natural":
-                return view
             if str(view.get("status")) != "active":
                 return view
+            from src.companion.goals.pace import is_sprint
             from src.companion.goals.service import (
                 resolve_goals_cfg,
                 sprint_engine_status,
             )
             from src.companion.goals.sprint_ticker import (
+                next_daily_ts,
                 next_phase_ts,
                 parse_sprint_cfg,
             )
+            pace = str(view.get("pace") or "natural")
+            sprint = is_sprint(pace)
             scfg = parse_sprint_cfg(resolve_goals_cfg(_cfg_root()))
             goal_like = {
                 "start_ts": view.get("start_ts"),
@@ -351,13 +353,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             }
             beats = store.list_actions(str(view.get("goal_id") or ""),
                                        limit=120)
-            # #166：ticker_on 必须是**整条链有效**（sprint 开 + 派发终点 care 开且非
-            # dry_run + 本平台在白名单），不是 sprint.enabled 一个开关——否则卡上
-            # 「下一主动拍≈HH:MM」就是在承诺一条 care dry_run 只拟稿不真发的拍。
+            # #166：ticker_on 必须是**整条链有效**，不是 sprint.enabled 一个开关。
+            # D1b P0-3：自然档走同一字段（daily 拍），nudgeable 仍只属冲刺。
             es = sprint_engine_status(
                 _cfg_root(), platform=str(view.get("platform") or ""))
-            ticker_on = bool(es.get("sprint_effective"))
-            blockers = list(es.get("sprint_blockers") or [])
+            if sprint:
+                ticker_on = bool(es.get("sprint_effective"))
+                blockers = list(es.get("sprint_blockers") or [])
+            else:
+                ticker_on = bool(es.get("natural_auto_effective"))
+                blockers = list(es.get("natural_auto_blockers") or [])
             # D1b P0-4：卡片只在**运行时闸也全过**时承诺「下一主动拍≈HH:MM」——
             # 引擎配置全绿但会话在 review 档 / 对方 opt-out / 危机窗内，ticker 照样
             # 一条都不排，此前卡上却一直挂着时间承诺。运行时闸与 ticker 同一函数。
@@ -385,17 +390,21 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 b in blockers for b in ("platform", "no_conversation",
                                         "no_inbox", "automation_mode",
                                         "crisis", "optout"))
+            if live_ok:
+                nxt = (next_phase_ts(goal_like, scfg) if sprint
+                       else next_daily_ts(scfg))
+            else:
+                nxt = 0
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
                 "ticker_enabled": bool(scfg.get("enabled")),
                 "blockers": blockers,
                 "runtime": runtime,
                 "beats_used": len(beats),
-                "next_phase_ts": round(
-                    next_phase_ts(goal_like, scfg), 1) if live_ok else 0,
-                # 立即推进按钮显隐：auto 档 + 引擎开 + 运行时闸全过（档位/危机等
-                # 硬闸在路由内再查一遍——按钮只是入口不是授权）
+                "next_phase_ts": round(float(nxt or 0), 1) if live_ok else 0,
+                # 立即推进按钮只属冲刺：auto 档 + 引擎开 + 运行时闸全过
                 "nudgeable": live_ok
+                and sprint
                 and str(view.get("autonomy") or "") == "auto",
             }
         except Exception:

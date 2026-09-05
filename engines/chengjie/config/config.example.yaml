@@ -4648,6 +4648,14 @@ health_watchdog:
     enabled: true
     stall_min: 10                     # 心跳停走超过 N 分钟判停摆（tick=60s → 缺 10 拍）
     interval_min: 240                 # 重提间隔；心跳恢复自动补发恢复通知
+  # D1b P0-5：自动推进「有货零真发」（与 scan_loop 心跳停走正交）。引擎配置能发、
+  # 库里有够老的 auto 目标，近 24h 却没有 care_sent / beat_sent —— 卡片可能仍写着
+  # 下一拍时间。引擎没开 / 目标太新 / 已有真发 → 静默。同走 scan_stall 别名。
+  goal_sprint_liveness:
+    enabled: true
+    min_active: 2                     # 至少几条 auto 目标才判（避免单条试跑误报）
+    min_age_hours: 4                  # 最老目标至少这么老（给排拍+派发留窗口）
+    interval_min: 240                 # 重提间隔；近窗有真发后补恢复通知
   # 停泊态草稿卡死回收（默认开；P1 2026-08-09 状态机泄漏修复）：enriching（人设产线
   # 补全中）正常几秒内翻 pending，补全协程的失败/异常/调度失败三层都有兜底——唯独
   # **进程重启**没有任何一层接得住：停泊行永久卡死，且 auto_generate_draft 的幂等保护

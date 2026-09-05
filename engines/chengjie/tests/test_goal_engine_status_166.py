@@ -300,6 +300,27 @@ def test_sprint_live_ticker_on_requires_effective_chain(monkeypatch):
     assert live4["nudgeable"] is False and live4["next_phase_ts"] == 0
 
 
+def test_sprint_live_natural_auto_promises_daily_not_nudge(monkeypatch):
+    """自然档 auto：引擎绿时卡片也挂 sprint_live，承诺下一拍，但不亮立即推进。"""
+    import src.integrations.protocol_bridge as pb
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: _StubInbox())
+    c = _client(_cfg(
+        goals={"sprint": {"enabled": True, "dry_run": False,
+                          "platforms": ["telegram", "whatsapp", "line"]}},
+        care={"enabled": True, "dry_run": True}))
+    r = c.post("/api/goals", json={
+        "template": "engagement_reactivate", "conversation_id": CONV,
+        "autonomy": "auto"})
+    assert r.status_code == 200, r.text
+    g = c.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()["goal"]
+    live = g["sprint_live"]
+    assert live["ticker_on"] is True
+    assert live["nudgeable"] is False
+    assert live["blockers"] == []
+    assert live["next_phase_ts"] > 0
+    assert g.get("pace") in ("", "natural") or g.get("pace") == "natural"
+
+
 def test_preflight_route_end_to_end(monkeypatch):
     """GET /api/goals/{id}/preflight（D1b P0-4）：三层合一 + HH:MM 友好串 +
     404 语义；进程层在无 app.state 挂载时为 None（不当 blocker）。"""
@@ -369,6 +390,7 @@ def test_cp_goal_ui_consumes_engine_truth_in_both_trees():
         "inbox.goal.meta.beats", 'bt.progress_kind === "time"',
         "inbox.goal.sprint.engine_blocked", "inbox.goal.autonomy.auto_note_sprint_off",
         "inbox.goal.autonomy.auto_ineffective_t",
+        "gl-status-dot", "gl-status",
     ):
         assert needle in js, f"cp-goal.js 缺 #166 接线: {needle}"
     from src.web.i18n_packs import goals as g

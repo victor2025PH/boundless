@@ -747,6 +747,9 @@ class HealthWatchdog:
         self.total_goal_orders_settled: int = 0
         # 流失挽回扫描（goals winback）：小时级节流。默认关。
         self._last_goal_winback_ts: float = 0.0
+        # D1b P0-5：自动推进有货零真发（与 scan_loop 心跳停走正交）
+        self._goal_sprint_stall_alerted: float = 0.0
+        self.total_goal_sprint_stall_alerts: int = 0
         self.last_check_ts: float = 0.0
         self.last_light: str = "green"
 
@@ -1239,6 +1242,12 @@ class HealthWatchdog:
             self._check_goal_winback()
         except Exception:
             logger.debug("流失挽回巡检异常（已忽略）", exc_info=True)
+
+        # D1b P0-5：引擎说能发、库里有够老的 auto 目标，24h 却零真发。
+        try:
+            self._check_goal_sprint_liveness()
+        except Exception:
+            logger.debug("自动推进真发巡检异常（已忽略）", exc_info=True)
 
         # 运维卫生：按保留期清理已关闭事件（每日节流一次）。
         try:
@@ -5829,6 +5838,96 @@ class HealthWatchdog:
                 summary.get("candidates"), summary.get("swept"),
                 summary.get("created"), summary.get("skipped"),
                 summary.get("budget_hit"))
+
+    def _check_goal_sprint_liveness(self, *, now: Optional[float] = None) -> None:
+        """自动推进有货零真发（D1b P0-5，2026-09-05）。
+
+        与 ``_check_scan_loop_stall`` 正交：那个盯 ticker/dispatcher **心跳停走**；
+        这个盯「配置能发 + 库里有够老的 auto 目标 + 24h 零 ``care_sent`` /
+        ``beat_sent``」——线程活着但一条都没出去（会话全是人审档 / 排拍后被吞 /
+        代码没装载）。引擎没开、目标太新、已经有真发 → 静默。
+        配置 ``health_watchdog.goal_sprint_liveness.{enabled,min_active,
+        min_age_hours,interval_min}``（默认开 / 2 / 4 / 240）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return
+        lr = ((cfg.get("health_watchdog") or {}).get("goal_sprint_liveness")
+              or {})
+        if not isinstance(lr, dict):
+            lr = {}
+        if not bool(lr.get("enabled", True)):
+            return
+        from src.companion.goals.service import (
+            get_configured_store,
+            sprint_engine_status,
+        )
+        from src.companion.goals.liveness import (
+            collect_send_liveness,
+            stall_verdict,
+        )
+        es = sprint_engine_status(cfg)
+        if not es.get("sprint_effective"):
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            min_active = int(lr.get("min_active", 2) or 2)
+        except (TypeError, ValueError):
+            min_active = 2
+        try:
+            min_age_h = float(lr.get("min_age_hours", 4) or 4)
+        except (TypeError, ValueError):
+            min_age_h = 4.0
+        try:
+            interval_min = float(lr.get("interval_min", 240) or 240)
+        except (TypeError, ValueError):
+            interval_min = 240.0
+        store = get_configured_store(
+            cfg, getattr(self._config_manager, "config_path", None))
+        snap = collect_send_liveness(store, now=ts)
+        kind = stall_verdict(
+            es, snap, min_active=min_active,
+            min_age_sec=max(0.0, min_age_h) * 3600.0)
+        alerted_at = float(getattr(self, "_goal_sprint_stall_alerted", 0) or 0)
+        if not kind:
+            if alerted_at:
+                self._goal_sprint_stall_alerted = 0.0
+                logger.info(
+                    "goal_sprint_liveness recovered: auto=%s sent_24h=%s",
+                    snap.get("active_auto"), snap.get("sent_24h"))
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("scan_loop_stall_alert", {
+                        "loop": "goal_sprint_sends",
+                        "recovered": True,
+                        "rate_key": "scan_stall:goal_sprint_sends:recovered",
+                    })
+                except Exception:
+                    logger.debug("goal_sprint_liveness recovery 发布失败",
+                                 exc_info=True)
+            return
+        if alerted_at and (ts - alerted_at) < interval_min * 60.0:
+            return
+        self._goal_sprint_stall_alerted = ts
+        self.total_goal_sprint_stall_alerts += 1
+        logger.info(
+            "goal_sprint_liveness stalled: auto=%s sent_24h=%s oldest_h=%.1f "
+            "——引擎能发但 24h 零真发，卡片可能仍写着下一拍",
+            snap.get("active_auto"), snap.get("sent_24h"),
+            float(snap.get("oldest_age_sec") or 0) / 3600.0)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("scan_loop_stall_alert", {
+                "loop": "goal_sprint_sends",
+                "active_auto": snap.get("active_auto"),
+                "sent_24h": snap.get("sent_24h"),
+                "oldest_hours": round(
+                    float(snap.get("oldest_age_sec") or 0) / 3600.0, 1),
+                "reminder": bool(alerted_at),
+                "rate_key": "scan_stall:goal_sprint_sends",
+            })
+        except Exception:
+            logger.debug("goal_sprint_liveness 告警发布失败", exc_info=True)
 
     def _check_license_quota(self, *, now: Optional[float] = None) -> None:
         """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。

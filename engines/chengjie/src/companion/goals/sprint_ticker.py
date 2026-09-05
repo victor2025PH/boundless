@@ -502,6 +502,20 @@ def next_phase_ts(goal: Dict[str, Any], cfg: Dict[str, Any],
     return 0.0
 
 
+def next_daily_ts(cfg: Optional[Dict[str, Any]] = None,
+                  now: Optional[float] = None) -> float:
+    """自然档下一拍时刻：今天窗口起点（若还没到）或明天窗口起点。"""
+    n = float(now if now is not None else time.time())
+    try:
+        w0, _w1 = (cfg or {}).get("natural_window") or DEFAULT_NATURAL_WINDOW
+        lt = time.localtime(n)
+        day0 = n - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+        cand = day0 + int(w0) * 3600
+        return cand if cand > n else cand + 86400.0
+    except Exception:
+        return 0.0
+
+
 def load_optout_mutes(config_path: Any) -> Dict[str, dict]:
     """opt-out 静默注册表（与 proactive_topic 同文件；读失败=空表）。"""
     try:
@@ -761,12 +775,8 @@ def preflight_goal(
                     goal, cfg=cfg, now=n,
                     last_inbound_ts=rg["last_in"],
                     last_outbound_ts=rg["last_out"]) is not None
-                # 自然档：下一拍＝今天窗口内（若还没到窗口）或明天窗口起点
-                lt = time.localtime(n)
-                w0, _w1 = cfg.get("natural_window") or DEFAULT_NATURAL_WINDOW
-                day0 = n - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
-                cand = day0 + int(w0) * 3600
-                out["next_due"] = cand if cand > n else cand + 86400
+                # 自然档：下一拍＝今天窗口起点（若还没到）或明天窗口起点
+                out["next_due"] = next_daily_ts(cfg, now=n)
         except Exception:
             out["next_due"] = 0.0
     return out
@@ -1014,6 +1024,7 @@ __all__ = [
     "due_phase",
     "load_optout_mutes",
     "next_phase_ts",
+    "next_daily_ts",
     "parse_goal_care_norm",
     "parse_sprint_cfg",
     "phase_directive",

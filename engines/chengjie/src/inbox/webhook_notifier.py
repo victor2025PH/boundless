@@ -1558,37 +1558,63 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                        "workflow_autorun": "工作链推进",
                        # D1b P0-5：自动推进的两条腿
                        "goal_sprint": "目标冲刺推进器（自动推进排拍）",
-                       "care_dispatch": "主动派发循环（自动推进真发）"}
+                       "care_dispatch": "主动派发循环（自动推进真发）",
+                       "goal_sprint_sends": "自动推进真发（有货却 24h 零出站）"}
         _loop_impact = {
             "goal_scan": "目标完成不被发现/提醒不发",
             "workflow_autorun": "工作链步骤不推进",
             "goal_sprint": "「自动推进」目标一拍都不排——卡片仍写着下一拍时间",
             "care_dispatch": "已排好的主动拍/约定回访一条都不发出去",
+            "goal_sprint_sends": "库里有够老的自动跟进目标，24 小时却一条都没发出去",
         }
         _lk = str(data.get("loop") or "")
         _ln = _loop_names.get(_lk, _lk or "?")
         if data.get("recovered"):
             title = f"✅ 常备循环已恢复：{_ln}"
-            text = "**状态**: 心跳恢复跳动\n[📊 查看运营总览](/admin/ops)"
+            if _lk == "goal_sprint_sends":
+                text = (
+                    "**状态**: 近窗已有真发出站（care_sent / beat_sent）\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
+            else:
+                text = "**状态**: 心跳恢复跳动\n[📊 查看运营总览](/admin/ops)"
         else:
             _sm = float(data.get("stalled_min") or 0)
             _mounted = data.get("mounted")
             prefix = "⏰" if data.get("reminder") else "🚨"
-            if _mounted is False:
-                _cause = "循环未挂载（bootstrap 启动失败/旧进程）"
-            elif data.get("running") is False:
-                _cause = "循环 task 已退出（异常崩溃，非「慢」）"
+            if _lk == "goal_sprint_sends":
+                _auto = int(data.get("active_auto") or 0)
+                _sent = int(data.get("sent_24h") or 0)
+                _oh = float(data.get("oldest_hours") or 0)
+                _cause = (
+                    f"引擎能发，{_auto} 条自动跟进目标最老 {_oh:.0f}h，"
+                    f"近 24h 真发 {_sent} 条"
+                )
+                _imp = _loop_impact.get(_lk, "静默失效，不修没人会替你发现")
+                title = f"{prefix} 自动推进有货零真发：{_auto} 条目标 24h 未出手"
+                text = (
+                    f"**判定**: {_cause}\n"
+                    f"**影响**: {_imp}——卡片可能仍写着下一拍时间\n"
+                    "**处置**: 看会话是否全是人审档、排拍后是否被派发吞掉、"
+                    "本次改动是否已装载进实例\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
             else:
-                _cause = "心跳停走（事件循环卡死/异常退出）"
-            _imp = _loop_impact.get(
-                _lk, "静默失效，不修没人会替你发现")
-            title = f"{prefix} 常备循环停摆：{_ln}（{_sm:.0f} 分钟无心跳）"
-            text = (
-                f"**判定**: {_cause}\n"
-                f"**影响**: {_imp}——静默失效，不修没人会替你发现\n"
-                "**处置**: 查 app.log 里循环启动行与异常栈；重启实例可临时恢复\n"
-                "[📊 查看运营总览](/admin/ops)"
-            )
+                if _mounted is False:
+                    _cause = "循环未挂载（bootstrap 启动失败/旧进程）"
+                elif data.get("running") is False:
+                    _cause = "循环 task 已退出（异常崩溃，非「慢」）"
+                else:
+                    _cause = "心跳停走（事件循环卡死/异常退出）"
+                _imp = _loop_impact.get(
+                    _lk, "静默失效，不修没人会替你发现")
+                title = f"{prefix} 常备循环停摆：{_ln}（{_sm:.0f} 分钟无心跳）"
+                text = (
+                    f"**判定**: {_cause}\n"
+                    f"**影响**: {_imp}——静默失效，不修没人会替你发现\n"
+                    "**处置**: 查 app.log 里循环启动行与异常栈；重启实例可临时恢复\n"
+                    "[📊 查看运营总览](/admin/ops)"
+                )
 
     elif event_type == "goal_miss_alert":
         _n = int(data.get("count") or 0)

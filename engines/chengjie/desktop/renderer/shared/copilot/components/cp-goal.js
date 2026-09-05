@@ -400,7 +400,15 @@
       /* 冲刺调度状态行 + 立即推进（P3 2026-08-30） */
       .gl-sprint-line { display:flex; gap:6px; align-items:center; justify-content:space-between;
                         font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
-                        margin-top:2px; }
+                        margin-top:2px; flex:1; min-width:0; }
+      /* D1b：统一状态行。blocked=中性虚线；live=绿点。临期警示仍只在 meta urgent。 */
+      .gl-status { display:flex; gap:6px; align-items:flex-start; margin-top:2px; }
+      .gl-status-dot { flex:0 0 auto; width:6px; height:6px; margin-top:5px; border-radius:50%;
+                       background:var(--cp-text-tiny,#94a3b8); }
+      .gl-status.live .gl-status-dot { background:var(--cp-ok,#16a34a); }
+      .gl-status.blocked { padding:2px 6px 3px; border:1px dashed var(--cp-border,#cbd5e1);
+                           border-radius:6px; }
+      .gl-status.blocked .gl-status-dot { background:var(--cp-text-tiny,#94a3b8); }
       /* #166 引擎真相：auto 档但推进器不能真出手 → 标签打叉 + 卡上一行说清为什么
          （不再只在建目标表单里提一次；「自动推进 · 进行中」不能是空头承诺） */
       .gl-tag.off { border-style:dashed; color:var(--cp-warn,#b45309);
@@ -1120,10 +1128,10 @@
           ` title="${esc(this.t(urgent ? "inbox.goal.meta.urgent_t" : "inbox.goal.deadline.edit_t"))}">` +
           `${urgent ? "\u23F3 " : ""}${esc(dayTxt)} · ${esc(pctTxt)}${esc(beatsTxt)}` +
           `<span class="gl-meta-pen" aria-hidden="true">\u270E</span></button>`;
-      // 冲刺调度状态行（P3 2026-08-30）：把推进器的时刻表摊开给坐席——
-      // 「已推进几拍 · 下一主动拍几点 / 引擎没开只等对方开口」+ 手动加速入口。
+      // 调度状态行（P3 2026-08-30；D1b 自然档也走 sprint_live）：
+      // 「已推进几拍 · 下一次跟进几点 / 引擎没开只等对方开口」+ 冲刺手动加速。
       let sprintLine = "";
-      const live = (isSprint && g.status === "active"
+      const live = (g.status === "active"
         && g.sprint_live && typeof g.sprint_live === "object")
         ? g.sprint_live : null;
       if (live) {
@@ -1157,10 +1165,13 @@
           ? `<button type="button" class="gl-nudge" data-act="sprint_nudge">` +
             `${esc(this.t("inbox.goal.sprint.nudge_btn"))}</button>`
           : "";
-        sprintLine = `<div class="gl-sprint-line"><span>${esc(bits.join(" · "))}</span>${nudge}</div>`;
+        const stCls = (!live.ticker_on || (Array.isArray(live.blockers) && live.blockers.length))
+          ? "blocked" : "live";
+        sprintLine = `<div class="gl-status ${stCls}"><span class="gl-status-dot" aria-hidden="true"></span>` +
+          `<div class="gl-sprint-line"><span>${esc(bits.join(" · "))}</span>${nudge}</div></div>`;
       }
-      // #166：auto 档而引擎不能真出手 → 卡身一行说清（限时档由 sprintLine 的
-      // engine_off 已覆盖，不重复；自然档此前完全没有这一行）
+      // #166：auto 档而引擎不能真出手 → 卡身一行说清（sprintLine 已点名 ticker
+      // 关闸时不重复；运行时闸由 sprintLine 的 engine_blocked 覆盖）
       const engineNote = (engOff && !(live && !live.ticker_on))
         ? `<div class="gl-engine-note">\u26A0 ${esc(this.t("inbox.goal.engine.card_off", { why: engWhy }))}</div>`
         : "";
@@ -2758,9 +2769,9 @@
        数据源：卡片走 for-conversation 的 engine（按本会话平台判白名单），表单走
        /api/goals/templates 的 caps；两者字段同名。返回 {on, blockers} 或 null
        （旧后端缺字段＝不猜，维持中性文案）。
-       限时档（today/session）看 sprint_effective（sprint 开 + 派发终点 care 开且非
-       dry_run + 平台在白名单）；自然档看 natural_auto_effective（bridge 开 +
-       proactive_topic 开且非 dry_run）。老字段 sprint_enabled/bridge_enabled 作回落。 */
+       限时档看 sprint_effective（sprint 开 + 非 dry_run + 平台白名单；D1b 起
+       care 开关不再入闸）。自然档看 natural_auto_effective（优先 sprint 的
+       natural_daily，否则回落 bridge + proactive_topic）。老字段作回落。 */
     _autoEngine(pace, src) {
       const e = src || (this._d && this._d.engine)
         || (this._templates && this._templates.caps) || null;

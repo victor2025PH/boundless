@@ -508,6 +508,13 @@ _EMITTED_ALERTS = [
      {"loop": "care_dispatch", "stalled_min": 12.0, "ticks": 3,
       "last_tick_ts": 1786246575.0, "mounted": True, "running": True,
       "reminder": False, "rate_key": "scan_stall:care_dispatch"}),
+    ("scan_stall", "scan_loop_stall_alert",
+     {"loop": "goal_sprint_sends", "active_auto": 3, "sent_24h": 0,
+      "oldest_hours": 8.5, "reminder": False,
+      "rate_key": "scan_stall:goal_sprint_sends"}),
+    ("scan_stall", "scan_loop_stall_alert",
+     {"loop": "goal_sprint_sends", "recovered": True,
+      "rate_key": "scan_stall:goal_sprint_sends:recovered"}),
     # 内嵌网页端选择器失配（2026-08-10）：三类症状文案各不相同（元素找不到 vs
     # 找到了取不出内容 vs 取不到消息 id），全过一遍防某一支渲染成空文案。
     ("inject_health", "inject_health_alert",

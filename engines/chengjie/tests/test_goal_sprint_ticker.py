@@ -299,6 +299,19 @@ def _noon(day_offset=0):
 _DCFG = parse_sprint_cfg({"sprint": {"enabled": True}})
 
 
+def test_next_daily_ts_today_or_tomorrow():
+    from src.companion.goals.sprint_ticker import next_daily_ts
+    # 窗口起点 10:00：9:00 → 今天 10:00；12:00 → 明天 10:00
+    lt = time.localtime(NOW)
+    day0 = NOW - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+    nine = day0 + 9 * 3600
+    noon = day0 + 12 * 3600
+    nxt_am = next_daily_ts(_DCFG, now=nine)
+    nxt_pm = next_daily_ts(_DCFG, now=noon)
+    assert abs(nxt_am - (day0 + 10 * 3600)) < 2
+    assert abs(nxt_pm - (day0 + 10 * 3600 + 86400)) < 2
+
+
 def test_due_daily_basic_and_day_zero_skip():
     from src.companion.goals.sprint_ticker import due_daily
     n = _noon()
