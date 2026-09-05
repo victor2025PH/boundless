@@ -2393,6 +2393,13 @@ companion:
     # 告警阈值校准提供真实分布。关闭时零 IO。
     trend_log: false
     trend_retention_days: 90
+    # #171「已发」假声明守卫（J-1 A，2026-09-05）：AI 说「我刚发了 / 你该收到了 / 我再发一次」
+    # 这类过去时声明，判据＝本会话近 window_min 分钟内媒体**真发**账本（_media_sent_log）——
+    # 近窗真发过＝真话放行；没发过＝先尝试补发成真图，补不了改成如实文本。
+    # 观测：autosend-status image 段 sent_claim_detected/fulfilled/retracted（ops「B 线自动媒体」卡一行）。
+    sent_claim:
+      enabled: true
+      window_min: 30
   # 时空接轨守卫（默认开）：人设当地墙钟 vs 出站时段问候/错城「我在 X」。
   # 2026-07 实录：温哥华人设时间行被二次换算成近似 UTC+8 正午 → LLM 说「下午好」；
   # 根因已在 persona_now 幂等修复，本守卫作出站第二道防线（句级剥离，可关）。
@@ -2680,6 +2687,15 @@ memory:
   # 与 vector.enabled 任一为真即会给事实落 embedding（覆盖率跟随需求）。
   consolidation:
     semantic_dedup: false     # 开启近义合并（阈值见代码默认 0.92，可按嵌入模型校准）
+    # J-10 A2（决策 D8）：第二条晋升路径——刚记住(raw)的事实满 days 天无冲突、且被回复用过
+    # ≥ min_recalls 次 → 自动转正 stable（不再等坐席逐条确认）。写 false 关闭该路径。
+    auto_promote:
+      days: 7
+      min_recalls: 1
+  # J-10 A2：例外队列打标阈值——抽取时 LLM 给的置信低于此值的事实标 low_confidence 进
+  # 「需要你看」队列（原话直说 ≥0.85 / 语境推断 0.5–0.7）。
+  review:
+    low_confidence_threshold: 0.6
   # R19：AI 推断采纳率告警（仪表盘 /api/alert-status 的 memory_adoption 项）
   # 采纳率持续偏低 = AI 推断在产噪声、白占坐席精力 → warn 提示调高 inferred_min_hits。
   adoption_alert:
@@ -3325,6 +3341,10 @@ inbox:
     inbound_merge:
       enabled: false
       window_sec: 8
+      # 语音条单独静默窗（K-3 F，2026-09-05）：录一条语音 10–20s 是常态，8s 窗每条都到点、
+      # 各自拟稿再被 fresh-guard 放弃＝白烧 LLM（88MP86 实录 30+ 次）。窗内最新一条是语音
+      # （[语音] 占位 / media_type=voice）才用本窗；不低于 window_sec；仍受 max_wait_sec 约束。
+      voice_window_sec: 15
       max_wait_sec: 25
       max_texts: 6
     # ⭐ 防复读：草稿/回复与「最近 N 条已发回复」相似度 >threshold → 换角度重生一次。
@@ -4115,7 +4135,8 @@ platform_login:
       # 群聊媒体默认不下载：群与私聊共用同一条 okline 接收线程，热闹的群会把下载耗时
       # 叠到私聊 AI 回复的延迟上（私聊才是 AI 与营收所在）。关＝群维持占位行为。
       groups: false
-      inbound_max_bytes: 20971520   # 20MB：自报超限不下载；自报缺失则下完超限即丢
+      inbound_max_bytes: 33554432   # 32MB（2026-09-05 由 20MB 提高：LINE 服务端把 100MB 源视频转码成
+                                    #   27.5MB 下发，20MB 会拒下＝发得出收不到）；自报超限不下载；自报缺失则下完超限即丢
       outbound_max_bytes: 20971520  # 20MB
   zalo:
     # ── Zalo 个人号扫码登录（zca-js Node 边车，2026-08）──────────────────────────
