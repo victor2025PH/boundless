@@ -290,10 +290,10 @@ HELP_TERMS: dict = {
     "nav_episodic": {
         "zh": "AI 记忆",
         "en": "AI Memory",
-        "desc": "查看与校正 AI 对每个用户的情景记忆，保证长期对话不「失忆」、不记错",
-        "desc_en": "Inspect and correct the AI's episodic memory about each user, so long-running chats stay consistent",
-        "usage": "搜索用户 → 查看记忆条目 → 修正错误记忆或删除过期信息",
-        "usage_en": "Search a user → review memory entries → fix wrong memories or delete stale ones"
+        "desc": "AI 记得你每一位客户：聊天里客户说过的事会自动记下、下次回复时用上；这里看它记了什么、对不对，只有少数「需要你看一眼」的例外要你处理",
+        "desc_en": "The AI remembers every customer: things they say in chat are stored automatically and used in later replies. Check what it remembers and whether it's right; only a few exceptions need a look",
+        "usage": "看「今日需处理」→ 打开一位客户看记忆时间线 → 确认属实 / 编辑 / 不再使用",
+        "usage_en": "Check \"to handle today\" → open a customer's memory timeline → confirm / edit / stop using"
     },
     "nav_crisis_audit": {
         "zh": "客户安全预警",
@@ -1234,6 +1234,38 @@ HELP_TERMS: dict = {
         "desc_en": "When a customer states their birthday it is captured into AI memory - including date-less phrasings like \"today is my birthday\" (recorded as today); the AI's own questions are never miscaptured",
         "usage": "「AI 记忆」页搜索该客户可查看/修正生日条目",
         "usage_en": "Search the customer on the AI Memory page to view or correct the birthday entry"
+    },
+    "acct_unread_badge": {
+        "zh": "账号未读数字",
+        "en": "Account unread badge",
+        "desc": "账号栏上的未读数字可以点开：弹出的就是徽标同一口径的那几条会话，点一行直达该会话；也可一键把这一号全部标已读",
+        "desc_en": "The unread number on an account chip is clickable: the popover lists the same conversations the badge counts; click a row to open it, or mark the whole account read",
+        "usage": "点账号头像旁的未读数字 → 在浮层里点会话打开，或点「全部标已读」",
+        "usage_en": "Click the unread number beside an account → open a conversation from the popover, or tap Mark all read"
+    },
+    "acct_no_persona_dot": {
+        "zh": "未绑人设黄点",
+        "en": "Unbound-persona yellow dot",
+        "desc": "账号栏黄色小点表示该号还没绑人设，回复会走默认配置；点黄点会打开账号抽屉并进入该号详情，可当场绑定",
+        "desc_en": "A yellow dot on an account means no persona is bound and replies fall back to defaults; click it to open the account drawer on that account and bind a persona",
+        "usage": "点账号旁的黄点 → 在账号详情里选人设并保存",
+        "usage_en": "Click the yellow dot → pick a persona in the account detail panel and save"
+    },
+    "conv_address_names": {
+        "zh": "双向称呼",
+        "en": "Address names",
+        "desc": "每个会话可单独设定「我怎么叫对方 / 对方怎么叫我」；空着则沿用人设默认称呼，填空串等于明确不用爱称",
+        "desc_en": "Each conversation can set how you address the peer and how they address you; blank inherits the persona defaults, an explicit empty string clears a nickname",
+        "usage": "打开会话 → 右栏「客户关系」身份区两个输入框，改完失焦即保存",
+        "usage_en": "Open a conversation → Customer tab identity fields; changes save on blur"
+    },
+    "autosend_shadow": {
+        "zh": "全自动放行",
+        "en": "Full-auto release",
+        "desc": "全自动就是全自动：自动回复不再因「高风险」扣稿转人工，触发只后台记台账；坐席自己点发送也不会被二次拦住",
+        "desc_en": "Full-auto stays full-auto: drafts are not held for high risk; triggers are ledger-only, and agent-typed send is not blocked",
+        "usage": "保持会话为全自动即可；风险记录只在运营总览/影子台账，坐席侧零拦截",
+        "usage_en": "Leave the conversation on full-auto; risk hits land in the ops ledger only"
     }
 }
 
