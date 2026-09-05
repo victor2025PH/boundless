@@ -704,6 +704,22 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 logger.debug("notify-status self_bound skipped", exc_info=True)
         # P3：摸底要点出境开关回显（接通面板据此渲染当前档位）
         out["include_profile"] = bool(ncfg.get("include_profile"))
+        # J-4 G（2026-09-05）：「达成推送未接通 / 扫描未开」是只有内部运维能处置的
+        # 配置 nag——桌面包（client 形态）用户与非管理角色都无处下手，卡上常驻黄字
+        # 只制造焦虑。服务端给出抑制旗标（形态判定单源 ui_visibility.is_client_flavor
+        # + 角色与 notify-config 写权限同集），cp-goal 据此不渲染 warn 行；push_covered
+        # 的绿字仍照常（那是正面信息）。放在 API 里而非模板属性：cp-goal 也跑在桌面壳
+        # 的静态 copilot/app.html（无 Jinja），只有接口能把形态真相送到那儿。
+        try:
+            from src.web.ui_visibility import is_client_flavor
+            _client = bool(is_client_flavor(cfg))
+        except Exception:
+            _client = False
+        try:
+            _role = str(request.session.get("role", "") or "")
+        except Exception:
+            _role = ""
+        out["nag_suppressed"] = bool(_client or _role in _NOTIFY_CFG_DENY_ROLES)
         return out
 
     # 完成推送设置的可写白名单（P3 2026-08-18）：路径硬编码防任意键注入——

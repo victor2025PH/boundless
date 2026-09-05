@@ -1043,6 +1043,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 getattr(config_manager, "config", None)))
         except Exception:
             context.setdefault("ui_vis", {})
+        # 部署形态旗标（J-4 G 2026-09-05）：client 形态（桌面包 AITR_DESKTOP_MODE /
+        # app.desktop_mode / ui_visibility.flavor=client）→ 模板据此不渲染只有内部
+        # 运维能处置的 nag（首个消费方 _alertlink_connect.html 的「告警通道未接通」）。
+        # 判定单源 ui_visibility.is_client_flavor（与导航隐藏同口径）；异常回落
+        # False＝不隐藏，与 resolve_ui_flavor 的 fail-internal 方向一致。
+        try:
+            from src.web.ui_visibility import is_client_flavor
+            context.setdefault("ui_client_flavor", bool(is_client_flavor(
+                getattr(config_manager, "config", None))))
+        except Exception:
+            context.setdefault("ui_client_flavor", False)
 
         # 坐席规模：单人部署藏「认领/释放」协作原语（B13）；藏而不废，API 不封。
         context.setdefault("ws_multi_seat", _multi_seat_now())

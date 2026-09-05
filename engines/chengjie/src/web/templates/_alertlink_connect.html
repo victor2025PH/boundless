@@ -19,6 +19,11 @@
     权限：master/operator（工作台）或 can_manage_ops（ops 页）才渲染——坐席无法写
     渠道，对他们弹「接通」只会制造无能为力的焦虑。 -#}
 {% set _al_admin = (user_role|default('') in ('master', 'operator')) or (can_manage_ops|default(false)) %}
+{#- J-4 G（2026-09-05）：桌面包（ui_visibility client 形态＝AITR_DESKTOP_MODE / app.desktop_mode
+    / ui_visibility.flavor=client）不出「告警通道未接通」胶囊与每日卡片——坐席机用户既没有
+    bot token 也没有处置权，这条 nag 对他们是无能为力的焦虑；只关横幅模式（含 5min 轮询），
+    弹窗本体保留给 ops 页 / 显式 CTA 按需打开。旗标由 admin.py 上下文注入（ui_client_flavor）。 -#}
+{% set alertlink_banner = (alertlink_banner|default(false)) and not (ui_client_flavor|default(false)) %}
 {% if _al_admin %}
 {% if alertlink_banner|default(false) %}
 <!-- 实施75：告警链路未接通横幅退役——右下胶囊（琥珀）+ 每日一次卡片提示

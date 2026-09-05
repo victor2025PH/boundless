@@ -1461,7 +1461,13 @@
     _notifyRowInner(st) {
       const esc = (s) => this.esc(s);
       if (!st) return "";
+      // J-4 G（2026-09-05）：服务端 nag_suppressed（桌面包 client 形态 / 非管理角色）
+      // → 「扫描未开 / 推送未接通」黄字整行不渲染（返回 "" ＝行保持 hidden）；
+      // 这两条 nag 只有内部运维能处置，对坐席机用户是常驻的无能为力。push_covered
+      // 的绿字（正面信息）不受影响。旧后端缺字段＝undefined＝旧行为。
+      const nag = !st.nag_suppressed;
       if (!st.notify_enabled) {
+        if (!nag) return "";
         return `<span class="gl-notify-warn" title="${esc(this.t("inbox.goal.notify.scan_off_t"))}">` +
           `${esc(this.t("inbox.goal.notify.scan_off"))}</span>`;
       }
@@ -1482,6 +1488,7 @@
       }
       // 渠道未订阅「目标达成」：给能开接通弹窗的角色一个直达按钮（宿主
       // wsAlertlinkOpen 只对 master/operator 渲染——坐席只看提示不受挫）
+      if (!nag) return "";
       const canConnect = typeof root.wsAlertlinkOpen === "function";
       return `<span class="gl-notify-warn" title="${esc(this.t("inbox.goal.notify.push_off_t"))}">` +
         `${esc(this.t("inbox.goal.notify.push_off"))}</span>` +
