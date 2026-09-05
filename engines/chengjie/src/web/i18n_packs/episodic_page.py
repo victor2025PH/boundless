@@ -212,6 +212,13 @@ ZH = {
     "em_promises_kind_meet": "见面/陪伴",
     "em_promises_kind_send": "发东西",
     "em_promises_kind_generic": "口头约定",
+    "em_review_reason_high_impact_short": "高影响",
+    "em_impact_cat_money": "金钱",
+    "em_impact_cat_meet": "见面",
+    "em_impact_cat_address": "地址",
+    "em_impact_cat_health": "健康",
+    "em_impact_cat_identity": "证件/账号",
+    "em_impact_cat_family": "家人",
 }
 
 EN = {
@@ -425,4 +432,11 @@ EN = {
     "em_promises_kind_meet": "meet/company",
     "em_promises_kind_send": "send something",
     "em_promises_kind_generic": "verbal arrangement",
+    "em_review_reason_high_impact_short": "High impact",
+    "em_impact_cat_money": "money",
+    "em_impact_cat_meet": "meeting",
+    "em_impact_cat_address": "address",
+    "em_impact_cat_health": "health",
+    "em_impact_cat_identity": "ID/account",
+    "em_impact_cat_family": "family",
 }

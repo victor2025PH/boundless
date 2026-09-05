@@ -502,9 +502,16 @@ class SkillManager(LoggerMixin):
                 self._episodic_store = EpisodicMemoryStore(_epath)
                 self.logger.info("情景记忆已启用: %s", _epath)
                 # J-10 A2：例外打标阈值透传（memory.review.low_confidence_threshold，默认 0.6）
-                _rv_thr = (self._memory_cfg.get("review") or {}).get("low_confidence_threshold")
+                _rv_cfg = self._memory_cfg.get("review") or {}
+                _rv_thr = _rv_cfg.get("low_confidence_threshold")
                 if _rv_thr is not None:
                     self._episodic_store.low_confidence_threshold = float(_rv_thr)
+                # J-10 三期：高影响类别「只标红不进队列」（memory.review.high_impact_no_queue:
+                # [family, ...]；默认空＝D8 原表六类都进队列）
+                _no_q = _rv_cfg.get("high_impact_no_queue")
+                if isinstance(_no_q, (list, tuple, set)):
+                    self._episodic_store.high_impact_no_queue = tuple(
+                        str(x).strip().lower() for x in _no_q if str(x).strip())
                 # P8：启动时 observe-only 扫一轮，ops 去重卡立刻有读数
                 try:
                     _obs = self._episodic_store.observe_dedup_all_users()

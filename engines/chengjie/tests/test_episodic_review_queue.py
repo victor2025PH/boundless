@@ -60,6 +60,37 @@ def test_classify_five_classes_and_normal():
     assert classify_fact("客户可能喜欢猫", source="ai_inferred")[0] == REVIEW_LOW_CONFIDENCE
 
 
+def test_high_impact_categories_and_no_queue_knob(store: EpisodicMemoryStore):
+    """J-10 三期：六类命名 + memory.review.high_impact_no_queue（只标红不进队列）。"""
+    from src.utils.memory_review import high_impact_categories
+    assert high_impact_categories("客户有一个女儿") == ["family"]
+    assert high_impact_categories("客户答应下周五转账 2000 元") == ["money"]
+    assert high_impact_categories("客户的女儿下周来见我，要 500 块路费") == ["money", "meet", "family"]
+    assert high_impact_categories("客户喜欢喝美式咖啡") == []
+    # 默认：家人也进队列（D8 原表）
+    assert classify_fact("客户有一个女儿") == (REVIEW_HIGH_IMPACT, "high")
+    # 只有 family 命中 → 免进队列，但仍标红；混着金钱仍进
+    assert classify_fact("客户有一个女儿", high_impact_no_queue=("family",)) == ("", "high")
+    assert classify_fact("客户的女儿要 500 块路费", high_impact_no_queue=["family"]) == (REVIEW_HIGH_IMPACT, "high")
+    # 其他原因不受影响：家人 + 承诺 → commitment；家人 + 低置信 → low_confidence（impact 仍 high）
+    assert classify_fact("客户答应下周带女儿来", high_impact_no_queue=("family",)) == (REVIEW_COMMITMENT, "high")
+    assert classify_fact("客户可能有个女儿", source="ai_inferred", high_impact_no_queue=("family",)) == (
+        REVIEW_LOW_CONFIDENCE, "high")
+    # store 侧开关 + 行字段 impact_categories
+    uid = "k-knob"
+    a = store.add_fact(uid, "客户有一个女儿")
+    store.high_impact_no_queue = ("family",)
+    b = store.add_fact(uid, "客户有一个儿子")
+    c = store.add_fact(uid, "客户的儿子生病住院了")
+    rows = {r["id"]: r for r in store.list_rows(prefix=uid)}
+    assert rows[a]["review_reason"] == REVIEW_HIGH_IMPACT and rows[a]["impact_categories"] == ["family"]
+    assert rows[b]["review_reason"] == "" and rows[b]["impact"] == "high" and rows[b]["impact_categories"] == ["family"]
+    assert rows[c]["review_reason"] == REVIEW_HIGH_IMPACT and rows[c]["impact_categories"] == ["health", "family"]
+    assert [i["id"] for i in store.review_queue(user_id=uid)] == [a, c] or \
+        {i["id"] for i in store.review_queue(user_id=uid)} == {a, c}
+    assert rows[a]["impact_categories"] and store.list_rows(prefix="nobody") == []
+
+
 # ── 入库打标 + 冲突并列 ─────────────────────────────────────────────────────
 def test_add_fact_tags_and_explicit_override(store: EpisodicMemoryStore):
     uid = "k1"

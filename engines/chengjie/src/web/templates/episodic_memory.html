@@ -411,7 +411,12 @@ function _emStateBadges(it) {
   var rv = '';
   if (it.review_reason) {
     var rl = window.T('em_review_reason_' + it.review_reason) || String(it.review_reason);
+    var catsB = _emImpactCats(it); if (catsB) rl += '（' + catsB + '）';
     rv = '<span class="badge-review' + (it.impact === 'high' ? ' hi' : '') + '" style="cursor:help" title="' + _emEsc(rl) + '">' + _emEsc(window.T('em_review_badge')) + '</span>';
+  } else if (it.impact === 'high') {
+    // J-10 三期：高影响类被配置为「只标红不进队列」→ 只给红点提示类别，不说「需要你看」
+    var catsO = _emImpactCats(it);
+    rv = '<span class="badge-review" style="cursor:help;opacity:.75" title="' + _emEsc(window.T('em_review_reason_high_impact_short') + (catsO ? ': ' + catsO : '')) + '">●</span>';
   }
   var ig = (it.status === 'ignored') ? '<span class="badge-ignored">' + _emEsc(window.T('em_ignore')) + '</span>' : '';
   return src + tier + rv + ig;
@@ -1372,11 +1377,19 @@ function emToggleQueue() {
   q.hidden = !q.hidden;
   if (!q.hidden) { _emQueueLoad(); q.scrollIntoView && q.scrollIntoView({behavior: 'smooth', block: 'nearest'}); }
 }
+/* J-10 三期：高影响原因带类别（「高影响：家人 / 金钱」），让坐席一眼知道为什么 */
+function _emImpactCats(it) {
+  var cats = (it && it.impact_categories) || [];
+  if (!cats.length) return '';
+  return cats.map(function(c) { return window.T('em_impact_cat_' + c) || c; }).join(' / ');
+}
 function _emQueueItemHtml(it) {
   var r = String(it.review_reason || '');
   var name = _emRowName(it);
   var ask = window.T('em_review_ask_' + r) || '';
   var reason = window.T('em_review_reason_' + r) || r;
+  var cats = _emImpactCats(it);
+  if (cats) reason = (r === 'high_impact') ? (window.T('em_review_reason_high_impact_short') + ': ' + cats) : (reason + ' · ' + cats);
   var when = it.created_at ? _emAgo(it.created_at) : null;
   var head = '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.72rem;color:var(--t3)">'
     + '<span class="badge-review' + (it.impact === 'high' ? ' hi' : '') + '">' + _emEsc(reason) + '</span>'

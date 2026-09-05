@@ -464,7 +464,8 @@ class EpisodicMemoryStore:
         try:
             rr_auto, imp_auto = classify_fact(
                 content, source=source, confidence=confidence, author=author,
-                low_confidence_threshold=self._low_conf_threshold())
+                low_confidence_threshold=self._low_conf_threshold(),
+                high_impact_no_queue=tuple(getattr(self, "high_impact_no_queue", ()) or ()))
             if review_reason is None:
                 rr = rr_auto
                 # 同槽 stable 冲突＝最高优先级（数据态判定，文本四类让位）
@@ -540,9 +541,12 @@ class EpisodicMemoryStore:
 
     @staticmethod
     def _row_to_dict(r: Tuple[Any, ...]) -> Dict[str, Any]:
+        _cats: List[str] = []
         try:
-            from src.utils.memory_review import timeline_group
+            from src.utils.memory_review import high_impact_categories, timeline_group
             _grp = timeline_group(str(r[2] or ""))
+            # J-10 三期：哪一类高影响（页面「高影响（家人）」用；纯展示，不进判定）
+            _cats = high_impact_categories(str(r[2] or "")) if str(r[13] or "normal") == "high" else []
         except Exception:  # pragma: no cover - 防御
             _grp = "other"
         return {
@@ -564,6 +568,7 @@ class EpisodicMemoryStore:
             "status": str(r[11] or "active"),
             "review_reason": str(r[12] or ""),
             "impact": str(r[13] or "normal"),
+            "impact_categories": _cats,
             "conflict_group": str(r[14] or ""),
             "recall_count": int(r[15] or 0),
             "last_recalled_ts": float(r[16] or 0),

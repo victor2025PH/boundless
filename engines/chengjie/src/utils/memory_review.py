@@ -16,7 +16,7 @@ D8：客户说的事实**自动记**，不设人审闸；人审只做**例外**�
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 REVIEW_CONFLICT = "conflict"
 REVIEW_HIGH_IMPACT = "high_impact"
@@ -38,36 +38,52 @@ STATUSES: Tuple[str, ...] = (STATUS_ACTIVE, STATUS_IGNORED)
 # LLM 置信低于此值 → low_confidence（memory.review.low_confidence_threshold 可配）
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.6
 
-_HIGH_IMPACT_RE = re.compile(
-    # 金钱
-    r"转账|汇款|借钱|还钱|欠钱|欠款|贷款|房贷|车贷|工资|月薪|年薪|收入|投资|理财|存款|"
-    r"块钱|多少钱|\d+\s*(?:元|块|万|美元|美金|刀|披索|泰铢|日元|韩元|欧元|英镑)|"
-    r"\b(?:money|cash|transfer|remit|loan|debt|salary|wage|income|invest|savings|"
-    r"pesos?|dollars?|usd|php|rmb|thb|jpy|krw|eur|gbp)\b|[$€£₱฿]\s*\d|\d\s*[$€£₱฿]|"
-    # 见面
-    r"见面|约见|见一面|来见我|去见你|来找我|去找你|来看我|去看你|接机|机场|订机票|买机票|飞过来|飞过去|"
-    r"\b(?:meet(?:ing)?\s+(?:up|you|me|in\s+person)|meet\b|visit(?:ing)?\s+(?:you|me)|"
-    r"come\s+over|fly(?:ing)?\s+(?:to|over)|see\s+you\s+in\s+person|airport|flight\s+to)|"
+# J-10 三期：高影响词表按类命名——同一套词，拆成 6 类各自可查；
+# ``memory.review.high_impact_no_queue: [family]`` 这类配置可把某几类降为「只标红不进队列」
+# （D8 原表六类都进队列＝默认行为；读数后再按类收窄，不用改代码）。
+HIGH_IMPACT_CATEGORIES: Tuple[str, ...] = ("money", "meet", "address", "health", "identity", "family")
+_HIGH_IMPACT_CATEGORY_RES: Dict[str, "re.Pattern[str]"] = {
+    "money": re.compile(
+        r"转账|汇款|借钱|还钱|欠钱|欠款|贷款|房贷|车贷|工资|月薪|年薪|收入|投资|理财|存款|"
+        r"块钱|多少钱|\d+\s*(?:元|块|万|美元|美金|刀|披索|泰铢|日元|韩元|欧元|英镑)|"
+        r"\b(?:money|cash|transfer|remit|loan|debt|salary|wage|income|invest|savings|"
+        r"pesos?|dollars?|usd|php|rmb|thb|jpy|krw|eur|gbp)\b|[$€£₱฿]\s*\d|\d\s*[$€£₱฿]",
+        re.IGNORECASE),
+    "meet": re.compile(
+        r"见面|约见|见一面|来见我|去见你|来找我|去找你|来看我|去看你|接机|机场|订机票|买机票|飞过来|飞过去|"
+        r"\b(?:meet(?:ing)?\s+(?:up|you|me|in\s+person)|meet\b|visit(?:ing)?\s+(?:you|me)|"
+        r"come\s+over|fly(?:ing)?\s+(?:to|over)|see\s+you\s+in\s+person|airport|flight\s+to)",
+        re.IGNORECASE),
     # 地址（门牌级，不含城市级「住在上海」）
-    r"地址|住址|门牌|街道|小区|公寓|房号|几号楼|\d+\s*(?:号楼|单元|栋|室)|"
-    r"\b(?:address|street|apartment|apt\.?|unit\s*\d|block\s*\d|zip\s*code|postal)\b|"
-    # 健康
-    r"生病|病了|住院|手术|癌症|肿瘤|抑郁|焦虑症|医院|诊断|化疗|吃药|服药|怀孕|流产|"
-    r"糖尿病|高血压|心脏病|哮喘|艾滋|HIV|自杀|自残|"
-    r"\b(?:hospital|surgery|cancer|tumou?r|depress(?:ed|ion)|anxiety|pregnan(?:t|cy)|"
-    r"miscarriage|diagnos(?:ed|is)|medication|chemo|diabet(?:es|ic)|sick|illness|disease|"
-    r"therapy|suicid(?:e|al)|self-?harm)\b|"
-    # 身份证件 / 账号
-    r"身份证|护照|签证|证件|银行卡|卡号|账号|帐号|密码|社保|户口|"
-    r"\b(?:passport|visa|id\s*card|national\s*id|bank\s*account|account\s*number|"
-    r"password|pin\s*code|ssn|driver'?s?\s*licen[cs]e)\b|"
-    # 家庭成员
-    r"女儿|儿子|孩子|小孩|闺女|老公|老婆|丈夫|妻子|前夫|前妻|父母|爸爸|妈妈|母亲|父亲|"
-    r"兄弟|姐妹|哥哥|弟弟|姐姐|妹妹|爷爷|奶奶|外公|外婆|孙子|孙女|"
-    r"\b(?:daughters?|sons?|kids?|children|child|husband|wife|ex-?husband|ex-?wife|"
-    r"parents?|mother|father|mom|mum|dad|brothers?|sisters?|siblings?|grand(?:ma|pa|mother|father|son|daughter))\b",
-    re.IGNORECASE,
-)
+    "address": re.compile(
+        r"地址|住址|门牌|街道|小区|公寓|房号|几号楼|\d+\s*(?:号楼|单元|栋|室)|"
+        r"\b(?:address|street|apartment|apt\.?|unit\s*\d|block\s*\d|zip\s*code|postal)\b",
+        re.IGNORECASE),
+    "health": re.compile(
+        r"生病|病了|住院|手术|癌症|肿瘤|抑郁|焦虑症|医院|诊断|化疗|吃药|服药|怀孕|流产|"
+        r"糖尿病|高血压|心脏病|哮喘|艾滋|HIV|自杀|自残|"
+        r"\b(?:hospital|surgery|cancer|tumou?r|depress(?:ed|ion)|anxiety|pregnan(?:t|cy)|"
+        r"miscarriage|diagnos(?:ed|is)|medication|chemo|diabet(?:es|ic)|sick|illness|disease|"
+        r"therapy|suicid(?:e|al)|self-?harm)\b",
+        re.IGNORECASE),
+    "identity": re.compile(
+        r"身份证|护照|签证|证件|银行卡|卡号|账号|帐号|密码|社保|户口|"
+        r"\b(?:passport|visa|id\s*card|national\s*id|bank\s*account|account\s*number|"
+        r"password|pin\s*code|ssn|driver'?s?\s*licen[cs]e)\b",
+        re.IGNORECASE),
+    "family": re.compile(
+        r"女儿|儿子|孩子|小孩|闺女|老公|老婆|丈夫|妻子|前夫|前妻|父母|爸爸|妈妈|母亲|父亲|"
+        r"兄弟|姐妹|哥哥|弟弟|姐姐|妹妹|爷爷|奶奶|外公|外婆|孙子|孙女|"
+        r"\b(?:daughters?|sons?|kids?|children|child|husband|wife|ex-?husband|ex-?wife|"
+        r"parents?|mother|father|mom|mum|dad|brothers?|sisters?|siblings?|grand(?:ma|pa|mother|father|son|daughter))\b",
+        re.IGNORECASE),
+}
+
+
+def high_impact_categories(content: str) -> List[str]:
+    """命中的高影响类别（按 HIGH_IMPACT_CATEGORIES 顺序），无 → []。"""
+    t = str(content or "")
+    return [c for c in HIGH_IMPACT_CATEGORIES if _HIGH_IMPACT_CATEGORY_RES[c].search(t)]
 
 _COMMITMENT_RE = re.compile(
     r"承诺|答应|约好|说好|约定|保证|发誓|一定会|"
@@ -133,7 +149,7 @@ def timeline_group(content: str) -> str:
 
 
 def is_high_impact(content: str) -> bool:
-    return bool(_HIGH_IMPACT_RE.search(str(content or "")))
+    return bool(high_impact_categories(content))
 
 
 def is_commitment(content: str) -> bool:
@@ -170,21 +186,28 @@ def classify_fact(
     confidence: Optional[float] = None,
     author: str = "",
     low_confidence_threshold: float = DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+    high_impact_no_queue: Iterable[str] = (),
 ) -> Tuple[str, str]:
     """→ ``(review_reason, impact)``；不需要人看时 review_reason 为空串。
 
     优先级（单一原因）：self_fact > commitment > high_impact > low_confidence。
     ``conflict`` 由 store 在查到同槽 stable 时覆盖为最高优先级。impact 与原因独立：
     命中敏感词表即 ``high``（页面标红），哪怕原因是别的。
+
+    J-10 三期 ``high_impact_no_queue``：这些类别（如 ``family``）只标红、不因高影响进队列——
+    命中的类别**全部**落在该集合里才免进；混着金钱/健康等仍进。默认空＝六类都进（D8 原表）。
     """
     text = str(content or "")
-    impact = IMPACT_HIGH if is_high_impact(text) else IMPACT_NORMAL
+    cats = high_impact_categories(text)
+    impact = IMPACT_HIGH if cats else IMPACT_NORMAL
     if is_self_fact(text, author):
         return REVIEW_SELF_FACT, impact
     if is_commitment(text):
         return REVIEW_COMMITMENT, impact
-    if impact == IMPACT_HIGH:
-        return REVIEW_HIGH_IMPACT, impact
+    if cats:
+        skip = {str(c).strip().lower() for c in (high_impact_no_queue or ()) if str(c).strip()}
+        if any(c not in skip for c in cats):
+            return REVIEW_HIGH_IMPACT, impact
     low = False
     if confidence is not None:
         try:
@@ -202,7 +225,7 @@ __all__ = [
     "REVIEW_CONFLICT", "REVIEW_HIGH_IMPACT", "REVIEW_LOW_CONFIDENCE",
     "REVIEW_SELF_FACT", "REVIEW_COMMITMENT", "REVIEW_REASONS",
     "IMPACT_HIGH", "IMPACT_NORMAL", "STATUS_ACTIVE", "STATUS_IGNORED", "STATUSES",
-    "DEFAULT_LOW_CONFIDENCE_THRESHOLD", "TIMELINE_GROUPS",
-    "is_high_impact", "is_commitment", "is_hedged", "is_self_fact", "classify_fact",
-    "timeline_group",
+    "DEFAULT_LOW_CONFIDENCE_THRESHOLD", "TIMELINE_GROUPS", "HIGH_IMPACT_CATEGORIES",
+    "is_high_impact", "high_impact_categories", "is_commitment", "is_hedged", "is_self_fact",
+    "classify_fact", "timeline_group",
 ]
