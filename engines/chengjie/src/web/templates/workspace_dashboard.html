@@ -300,6 +300,9 @@
   function _rowLbl(icon,key){ return '<span style="display:inline-flex;align-items:center;gap:5px;">'+(typeof uiIcon==='function'?uiIcon(icon,13):'')+T(key)+'</span>'; }
   function stageLabel(k){ return window.T('dash.stage.'+k, k); }
   function esc(s){return CRMW.esc(s);}
+  /* 内联 on*="fn(…)" 的字符串实参：JSON 字面量再做属性转义（裸 JSON.stringify 的双引号会把
+     双引号属性截断 → 点击即 SyntaxError，#191 同类）。 */
+  function jsArg(v){ return JSON.stringify(String(v==null?'':v)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
   function card(num,lbl,warn,scope){
     var attr = scope? ' class="db-card db-click" onclick="window.__dbDetail(\''+scope+'\')"' : ' class="db-card"';
     return '<div'+attr+'><div class="db-num'+(warn&&num?' warn':'')+'">'+num+'</div><div class="db-lbl">'+esc(lbl)+'</div></div>';
@@ -1440,16 +1443,16 @@
       var afrt=d.agent_frt||[];
       document.getElementById('db-agent-frt').innerHTML= afrt.length? ('<div class="db-row" style="font-size:11px;color:var(--tk-text-muted);"><span>'+T('dash.col.agent')+'</span><span>'+T('dash.af.responded')+'</span><span>'+T('dash.af.avg_dur')+'</span><span>'+T('dash.af.attain')+'</span></div>'+afrt.map(function(a){
         var rc = a.attain_rate>=80?'var(--tk-ok-ink)':(a.attain_rate>=50?'var(--tk-warn-ink)':'var(--tk-danger-ink)');
-        return '<div class="db-row db-click" onclick="window.__dbAgentDetail('+JSON.stringify(a.agent_id||'')+')"><span>'+esc(a.agent_name||a.agent_id)+'</span>'
+        return '<div class="db-row db-click" onclick="window.__dbAgentDetail('+jsArg(a.agent_id||'')+')"><span>'+esc(a.agent_name||a.agent_id)+'</span>'
           +'<span>'+a.responded+'</span><span>'+fmtDur(a.avg_sec)+'</span>'
           +'<span style="color:'+rc+';font-weight:600;">'+a.attain_rate+'%</span>'
-          +(IS_SUP?('<a href="#" onclick="window.__dbAgentReport(event,'+JSON.stringify(a.agent_id||'')+')" title="'+T('dash.af.export_csv')+'" style="text-decoration:none;color:var(--tk-brand);">'+uiIcon('download',13)+'</a>'):'')+'</div>';
+          +(IS_SUP?('<a href="#" onclick="window.__dbAgentReport(event,'+jsArg(a.agent_id||'')+')" title="'+T('dash.af.export_csv')+'" style="text-decoration:none;color:var(--tk-brand);">'+uiIcon('download',13)+'</a>'):'')+'</div>';
       }).join('')) : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.af.empty')+'</span>';
       var sba=d.sla_by_agent||[];
       document.getElementById('db-sla-agents').innerHTML= sba.length? sba.map(function(a){
         var crit=a.critical||0, brk=a.breaching||0, wait=a.waiting||0;
         var tag = crit? ('<span style="color:var(--tk-danger-ink);font-weight:700;">'+Tf('dash.sa.critical',{n:crit})+'</span>') : (brk? ('<span style="color:var(--tk-warn-ink);font-weight:700;">'+Tf('dash.sa.breaching',{n:brk})+'</span>') : '');
-        return '<div class="db-row db-click" onclick="window.__dbDetail(\'waiting\','+JSON.stringify(a.agent_id||'')+')"><span>'+esc(a.agent_name||T('dash.sa.unclaimed'))+'</span>'
+        return '<div class="db-row db-click" onclick="window.__dbDetail(\'waiting\','+jsArg(a.agent_id||'')+')"><span>'+esc(a.agent_name||T('dash.sa.unclaimed'))+'</span>'
           +'<span style="color:var(--tk-text-muted);">'+Tf('dash.sa.waiting',{n:wait})+(brk?(' · '):'')+'</span>'
           +'<span>'+tag+'</span></div>';
       }).join('') : '<span style="color:var(--tk-text-muted);font-size:13px;">'+T('dash.sa.empty')+'</span>';

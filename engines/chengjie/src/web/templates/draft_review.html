@@ -185,6 +185,9 @@ function setFilter(s,p,l){
   load();
 }
 function esc(t){ var d=document.createElement('div'); d.textContent=t||''; return d.innerHTML; }
+/* 内联 on*="fn(…)" 的字符串实参：JSON 字面量再做属性转义（esc 走 textContent 不转双引号，
+   裸 JSON.stringify 的双引号会把双引号属性截断 → 点击即 SyntaxError，#191 同类）。 */
+function jsArg(v){ return JSON.stringify(String(v==null?'':v)).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 
 // K1/K2 toast（复用 workspace_base CRMW；降级为原生 alert 兜底）
 function _drToast(msg, style, dur, icon){
@@ -470,7 +473,7 @@ function toggleCopilot(bodyId, peerEncoded, headerEl){
         +'<div class="dr-suggest-btns">'
         +d.suggestions.map(function(s){
           return '<button class="dr-suggest-btn" title="'+esc(s.title||'')+'" '
-            +'onclick="fillDraft(\'edit-'+editBoxIdx+'\','+JSON.stringify(s.text||'')+')">'+esc(s.title||s.style)+'</button>';
+            +'onclick="fillDraft(\'edit-'+editBoxIdx+'\','+jsArg(s.text||'')+')">'+esc(s.title||s.style)+'</button>';
         }).join('')
         +'</div></div>';
     }
@@ -493,7 +496,7 @@ function toggleCopilot(bodyId, peerEncoded, headerEl){
           +d.template_suggestions.map(function(t){
             return '<button class="dr-suggest-btn" style="border-color:var(--th-bd-blue5,#3b82f6);color:var(--th-ink-blue7,#1d4ed8);" '
               +'title="'+esc(t.content||'')+'" '
-              +'onclick="fillDraft(\'edit-'+editBoxIdx+'\','+JSON.stringify(t.content||'')+');'
+              +'onclick="fillDraft(\'edit-'+editBoxIdx+'\','+jsArg(t.content||'')+');'
               +'apiFetch(\'/api/reply-templates/'+encodeURIComponent(t.id||'')+'/use\',{method:\'POST\'}).catch(function(){});">'
               +esc(t.title||t.scene)+'</button>';
           }).join('')
@@ -615,7 +618,7 @@ function toggleTrans(bodyId, draftId, headerEl){
         +'</div>'
         +'<div class="dr-trans-text">'+esc(d.translated)+'</div>'
         +'<button class="dr-btn btn-approve" style="font-size:12px;padding:4px 12px;" '
-        +'onclick="resolveWithTranslation(\''+esc(draftId)+'\','+JSON.stringify(d.translated)+',this)">'+window.T('draft.trans.send')+'</button>';
+        +'onclick="resolveWithTranslation(\''+esc(draftId)+'\','+jsArg(d.translated)+',this)">'+window.T('draft.trans.send')+'</button>';
     }).catch(function(){
       body.innerHTML='<span style="color:var(--th-ink-red5,#b91c1c);font-size:11px;">'+window.T('draft.trans.req_fail')+'</span>';
       body.removeAttribute('data-loaded');
@@ -909,7 +912,7 @@ function _loadTplList(bid, draftId, search){
       return;
     }
     listEl.innerHTML=d.templates.map(function(t){
-      return '<div class="dr-tpl-item" onclick="applyTpl(\''+esc(t.id)+'\','+JSON.stringify(t.content)+',\''+esc(draftId)+'\')" title="'+window.T('draft.tpl.apply_t')+'">'
+      return '<div class="dr-tpl-item" onclick="applyTpl(\''+esc(t.id)+'\','+jsArg(t.content)+',\''+esc(draftId)+'\')" title="'+window.T('draft.tpl.apply_t')+'">'
         +'<div class="dr-tpl-item-title">'+esc(t.title)+'</div>'
         +'<div class="dr-tpl-item-content">'+esc(t.content)+'</div>'
         +'</div>';
