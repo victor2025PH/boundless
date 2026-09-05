@@ -290,6 +290,12 @@ ok(/^Caption "\$\(cxCaption\)"\r?$/m.test(outsideMacros) && /^UninstallCaption "
 {
   const enStr = (key) => { const m = new RegExp('LangString\\s+' + key + '\\s+\\$\\{LANG_ENGLISH\\}\\s+"((?:[^"\\\\]|\\\\.|\\$\\")*)"').exec(header); return m ? m[1] : ""; };
   ok(enStr("cxKeepDetail").length > 0 && enStr("cxKeepDetail").length <= 150, "cxKeepDetail 英文超过 150 字符会在 18u（两行）标签里被截（当前 " + enStr("cxKeepDetail").length + "）");
+  // 完成页正文不许再写官网地址：页面底部的 MUI_FINISHPAGE_LINK 已经是它（隔离用户实装截图：同一行出现两次）
+  for (const key of ["cxFinText", "cxUnFinText", "cxUnFinWipedTail", "cxUnFinLeftTail", "cxInsFinWiped", "cxInsFinLeft"]) {
+    for (const m of header.matchAll(new RegExp('LangString\\s+' + key + '\\s+\\$\\{LANG_\\w+\\}\\s+"([^"]*)"', "g"))) {
+      ok(!/bd2026\.cc/.test(m[1]), key + " 正文含官网地址，与完成页底部链接重复: " + m[1].slice(0, 40));
+    }
+  }
   for (const line of enStr("cxWelText").split("$\\r$\\n")) {
     // 实测：53 字符一行放得下，58 字符折行（195u 宽 YaHei UI 9pt）
     if (line.startsWith("-  ")) ok(line.length <= 54, "欢迎页英文 bullet 超过一行会折行错位: " + line);

@@ -146,7 +146,12 @@ alwaysApply: false
 
 改 `installer.nsh` 前先读其头部 C1-C5 注释；「保留哪些数据」文案与
 `restore_chatx_accounts_node.ps1` keep-list 互为镜像（两边有交叉注释）。
-卸载器实弹测试**禁止在 117 跑**（会真卸本机在用坐席端），用沙箱或坐席机发版流程验证。
+卸载器实弹测试**禁止用本机账号在 117 跑**（会真卸本机在用坐席端）。要实弹就走隔离测试用户：
+`build\smoke_uninstall.ps1 -Setup <包>` 跑静默通道矩阵（C1/C2/C3/C5），
+`build\smoke_installer_ui.ps1 -Setup <包>` 跑交互向导全程（装到完成页、卸载走「彻底删除」到完成页，
+每页出 PNG；免抢焦点，绝不启动 app）。两者都需要管理员，用 **Windows PowerShell 5.1** 跑；从 pwsh 7
+的终端里启动 powershell.exe 前要把 `PSModulePath` 清成 5.1 的两条路径，否则 5.1 会去加载 pwsh 7 的
+`Microsoft.PowerShell.Security` 模块直接失败（2026-09-05 实锤）。
 
 ## 安装器界面/品牌层（desktop >= 1.0.74，2026-09-05）
 

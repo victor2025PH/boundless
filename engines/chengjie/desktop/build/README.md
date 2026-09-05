@@ -41,6 +41,8 @@ npm run dist:win:fresh
 clean 形态的向导带琥珀「内测版」角标（`*-internal.bmp` 变体）与品牌栏后缀，缺文件按内测处理，
 所以对外干净包必须走 `npm run dist:win:clean`。页面流、颜色令牌、字体、DPI 等全在
 `installer.nsh` 顶部注释与 `.cursor/rules/chatx-desktop-install.mdc`「安装器界面/品牌层」一节。
+改完 `installer.nsh` 用隔离测试用户实弹：`build\smoke_uninstall.ps1`（静默通道契约）+
+`build\smoke_installer_ui.ps1`（交互向导全程截图），都需管理员、用 Windows PowerShell 5.1 跑。
 
 **新鲜度门禁（2026-08-08）**：`predist` / `predist:win` 会跑
 `python build/check_backend_freshness.py`。`build:backend` 成功后在
