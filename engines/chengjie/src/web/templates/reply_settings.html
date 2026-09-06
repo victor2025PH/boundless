@@ -936,6 +936,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     </table>
     </div>
     <p class="rps-hint" style="margin:.6rem 0 0">{{ (i18n or {}).get('rps_plat_prio', "生效优先级：人设覆写 > 平台覆写 > 全局默认。「档位封顶」列是只降不升的上限（会话显式档位仍最优先、只会被压低不会被抬高）；其余列是普通覆写。") }}</p>
+    </details>
   </div>
 
   <!-- 内容与风格全局默认（P0-style，2026-08-02）：人设未显式设置时的兜底层 -->
@@ -1611,26 +1612,31 @@ function rpsPlatRow(p){
   var vmin = (d.min_sec === undefined || d.min_sec === null) ? '' : d.min_sec;
   var vmax = (d.max_sec === undefined || d.max_sec === null) ? '' : d.max_sec;
   var vad = (d.adaptive === undefined || d.adaptive === null) ? '' : (d.adaptive ? '1' : '0');
+  var gMin = rpsGlobalVal('rps-min'), gMax = rpsGlobalVal('rps-max');
+  var gFlags = {adaptive: 'rps-adaptive', mark_read: 'rps-markread', typing: 'rps-typing'};
+  var gVoiceSel = document.getElementById('rps-voice-mode');
+  var gVoice = gVoiceSel ? (gVoiceSel.options[gVoiceSel.selectedIndex] || {}).text || '' : '';
   function flagCell(key, th){
     var st = (caps && caps[p]) ? (caps[p][key] || {}) : null;
-    var dis = !!(st && st.state === 'unsupported');
+    var known = !!(RPS_PLAT_KNOWN_UNSUPPORTED[p] && RPS_PLAT_KNOWN_UNSUPPORTED[p][key]);
+    var dis = known || !!(st && st.state === 'unsupported');
     var cur = (f[key] === undefined || f[key] === null) ? '' : (f[key] ? '1' : '0');
     return '<td data-th="' + rpsEsc(th) + '">' + rpsPlatSelect(key,
       [{v: '1', t: RPS_I18N.xOn}, {v: '0', t: RPS_I18N.xOff}],
-      cur, RPS_I18N.poFollow, dis, RPS_I18N.platUnsupported) + '</td>';
+      dis ? '' : cur, dis ? RPS_I18N.platUnsupported : rpsFollowLabel(rpsGlobalVal(gFlags[key])), dis, RPS_I18N.platUnsupported) + '</td>';
   }
   return '<tr data-plat-row="' + rpsEsc(p) + '">'
     + '<td class="rps-plat-name">' + rpsEsc(RPS_PLAT_NAMES[p] || p) + '</td>'
     + '<td data-th="' + rpsEsc(RPS_I18N.platColCap) + '">' + rpsPlatSelect('cap',
         RPS_MODE_VALUES.map(function(m){ return {v: m, t: RPS_I18N.modeNames[m] || m}; }),
         rpsPlatState.modes[p] || '', RPS_I18N.platCapNone) + '</td>'
-    + '<td data-th="' + rpsEsc(RPS_I18N.poMin) + '"><input type="number" min="0" max="600" step="0.5" data-plat="min_sec" value="' + rpsEsc(vmin) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
-    + '<td data-th="' + rpsEsc(RPS_I18N.poMax) + '"><input type="number" min="0" max="600" step="0.5" data-plat="max_sec" value="' + rpsEsc(vmax) + '" placeholder="' + rpsEsc(RPS_I18N.poFollow) + '"></td>'
-    + '<td data-th="' + rpsEsc(RPS_I18N.poAdaptive) + '">' + rpsPlatSelect('adaptive', [{v: '1', t: '✓'}, {v: '0', t: '✕'}], vad, RPS_I18N.poFollow) + '</td>'
+    + '<td data-th="' + rpsEsc(RPS_I18N.poMin) + '"><input type="number" min="0" max="600" step="0.5" data-plat="min_sec" value="' + rpsEsc(vmin) + '" placeholder="' + rpsEsc(rpsFollowLabel(gMin)) + '"></td>'
+    + '<td data-th="' + rpsEsc(RPS_I18N.poMax) + '"><input type="number" min="0" max="600" step="0.5" data-plat="max_sec" value="' + rpsEsc(vmax) + '" placeholder="' + rpsEsc(rpsFollowLabel(gMax)) + '"></td>'
+    + '<td data-th="' + rpsEsc(RPS_I18N.poAdaptive) + '">' + rpsPlatSelect('adaptive', [{v: '1', t: '✓'}, {v: '0', t: '✕'}], vad, rpsFollowLabel(rpsGlobalVal('rps-adaptive'))) + '</td>'
     + flagCell('mark_read', RPS_I18N.obsRead) + flagCell('typing', RPS_I18N.obsTyping)
     + '<td data-th="' + rpsEsc(RPS_I18N.platColVoice) + '">' + rpsPlatSelect('voice',
         RPS_VT_VALUES.map(function(t){ return {v: t, t: RPS_I18N.vtShort[t] || t}; }),
-        rpsPlatState.voices[p] || '', RPS_I18N.poFollow) + '</td>'
+        rpsPlatState.voices[p] || '', rpsFollowLabel(gVoice)) + '</td>'
     + '</tr>';
 }
 
