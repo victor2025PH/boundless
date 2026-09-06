@@ -27437,6 +27437,9 @@ Object.assign(window, {
   setAccountFilter, toggleAccountOnlineOnly, toggleGhostAccounts, renameAcct,
   _acChipKey,                       // P3：rail 键盘导航（Enter/Space 激活 + 左右移焦）
   _openAcctUnreadPop, _openAcctPersonaBind, _closeAcctUnreadPop, _saveAddrNames,
+  // L-3 A #207（2026-09-06）：会话头「需人工」原因条两按钮（内联 onclick）——落地时漏挂 window，
+  // L-7 收口哑按钮门禁（test_inbox_inline_handlers_exported）抓出补挂
+  _handoffBarGo, _handoffBarAck,
   // P0 账号视角增强（2026-07-29）：溢出箭头 / 账号总览下拉（开关+选择+键盘）
   _acNudge, toggleAcctPicker, _acPickChoose, _acPickKey, _copyViewLink,
   // Account Dock（20260817-0055 批）：四个内联 handler 落地时漏挂 window（哑按钮
