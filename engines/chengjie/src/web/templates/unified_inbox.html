@@ -724,8 +724,10 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
       <!-- 移动端返回按钮 -->
       <div class="back-btn-mobile" onclick="closeMobileChat()" data-i18n="inbox.back_mobile">← 返回会话列表</div>
 
-      <!-- 顶部 header（方案 C：极简单行——头像+名字+平台 / 档位 / 待审 / 助手；
-           标签·认领·自动运行·搁置·归档等会话运维项统一收进右侧业务助手「会话」分区 #conv-ops） -->
+      <!-- 顶部 header（方案 C：极简单行——头像+名字+平台 / 档位 / 待审 / 助手）。
+           #206（M-4 D，D-M7，2026-09-06）：右侧工具箱「会话工具」整块已撤——标签 / 搁置 / 归档 /
+           删除会话在会话行右键 · ⋯ 菜单（_convCtxOpenForKey）与 E / S 快捷键；「全自动运行中」
+           状态卡迁入「AI 状态」弹层（#ai-diag-overlay 顶部）；认领按钮回到这里。 -->
       <div class="chat-header" id="chat-header">
         <div class="chat-header-avatar" id="hdr-avatar"></div>
         <div class="chat-header-info">
@@ -736,6 +738,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           <!-- 对方机器人守卫 P1：检出/疑似徽章 + 点击一键覆写（confirm 流）。
                默认隐藏，loadBotFlag 按会话行 peer_is_bot/bot_score 控显。 -->
           <span class="hdr-bot-chip" id="hdr-bot-badge" style="display:none;" onclick="toggleBotFlagOverride()"></span>
+          {# 认领状态紧凑按钮（多坐席；B13 单坐席不渲染）：#206 自被撤的「会话工具」卡迁回头部，
+             renderClaimBanner 控显/文案/点击（释放 / 接管），缺元素本就 return。 #}
+          {% if ws_multi_seat is not defined or ws_multi_seat %}<button class="hdr-btn claim-hdr-btn" id="claim-hdr-btn" style="display:none;"></button>{% endif %}
           <!-- 双面板融合 P0（2026-08-13）：驾驶权徽章（surface_fusion.enabled 且平台可
                内嵌时显示；点击切换「工作台/原生页」自动化持有者）+「原生页打开」深链
                （仅桌面壳内显示，经壳把官方网页标签切到并定位同一会话）。
@@ -861,6 +866,19 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
             <span style="flex:1;" data-i18n="inbox.diag.title">🩺 AI 回复状态体检</span>
             <button class="hdr-btn" onclick="openAiDiag()" data-i18n="inbox.diag.recheck">重新体检</button>
             <button class="hdr-btn" onclick="closeAiDiag()" data-i18n="inbox.diag.close">关闭</button>
+          </div>
+          <!-- #206（M-4 D）「全自动运行中」状态卡：自被撤的右侧「会话工具」卡迁到 AI 状态弹层顶部
+               （它说的是 AI 状态，不是会话运维）。display 仍由 _syncAutoUi 按档位控（仅全自动档显示），
+               今日自动发/拦截由 _loadAutoStats 填；记录 / 参数 / 暂停三动作原样。 -->
+          <div class="auto-safety-bar" id="auto-safety-bar" style="margin:10px 12px 0;">
+            <span class="asb-dot"></span>
+            <span class="asb-label" style="display:inline-flex;align-items:center;gap:4px;"><span data-ui-icon="rocket" data-size="13"></span><span data-i18n="inbox.asb.running">全自动运行中</span></span>
+            <span class="asb-stats" id="auto-safety-stats"></span>
+            <span class="asb-spacer"></span>
+            <button type="button" class="asb-btn" onclick="_openAutoLog()" title="查看本会话今日自动发送与拦截记录" data-i18n="inbox.asb.log" data-i18n-title="inbox.asb.log_t">记录</button>
+            <!-- P0-style 深链：回复速度/长度/风格的集中设置页（此前收件箱与设置页零链接=「找不到」工单根因） -->
+            <a class="asb-btn" id="asb-tune-link" style="text-decoration:none;display:inline-block" href="/reply-settings" target="_blank" rel="noopener" title="调整全自动回复的速度、内容长度与风格（全局设置页）" data-i18n="inbox.asb.tune" data-i18n-title="inbox.asb.tune_t">参数</a>
+            <button type="button" class="asb-btn asb-pause" onclick="pauseAutoMode()" title="暂停全自动，回到上次使用的人工档位" data-i18n="inbox.asb.pause" data-i18n-title="inbox.asb.pause_t">暂停</button>
           </div>
           <div id="ai-diag-body" style="overflow:auto;"></div>
           <div id="ai-diag-foot" style="display:none;align-items:center;gap:8px;padding:8px 16px;border-top:1px solid var(--tk-border);">
@@ -1435,42 +1453,16 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 </button>
                 <div class="cp-card-bd"><cp-xlate-tools id="ws-cp-xlate"></cp-xlate-tools></div>
               </section>
+              {# #206（M-4 D，D-M7，SJTRJY / 52RAGZ 用户确认）：「会话工具」组 + #conv-ops「会话」卡整块删除——
+                 标签 / 归档 / 删除与会话行右键 · ⋯ 菜单完全重复、两个「删除」语义不明、「+加标签」下拉被卡体裁切、
+                 折叠区本身是空壳。去处：标签 / 搁置 / 归档 / 清空记录 / 删除会话 → 会话行 ⋯ 菜单（_convCtxOpenForKey，
+                 标签编辑早已是浮层）；「全自动运行中」状态卡 → AI 状态弹层顶部（#ai-diag-overlay）；认领按钮 → 会话头部。
+                 工具箱只留 翻译 / 语音克隆发送 / 人设绑定 / AI 生成图片（M-5 C 处置）。清单 panel-manifest.js 已把
+                 convops 收成 app 独有。 #}
               <div class="cp-tool-group cp-need-conv-lbl" data-i18n="inbox.cpg.tools.session">会话工具</div>
-              <!-- 方案 C：会话运维迁入工具箱 tab -->
-              <section class="cp-card collapsed" id="conv-ops" data-cp-need-conv="1" data-cp-card="convops">
-                <button type="button" class="cp-card-hd" data-cp-toggle="convops">
-                  <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="folder"></span><span data-i18n="inbox.convops.title">会话</span></span>
-                  <span class="cp-card-pill" id="convops-pill"></span>
-                  <span class="cp-tear-btn" role="button" tabindex="0" title="撕出为悬浮小窗" data-i18n-title="inbox.cp.tear_t" onclick="_cpTearOut('convops',event)"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/><rect x="13" y="4" width="7" height="6" rx="1"/></svg></span>
-                  <span class="cp-card-chev" aria-hidden="true"></span>
-                </button>
-                <div class="cp-card-bd">
-                  {# 单坐席部署（B13）不渲染认领按钮；renderClaimBanner 对缺元素本就 return #}
-                  {% if ws_multi_seat is not defined or ws_multi_seat %}<button class="hdr-btn claim-hdr-btn" id="claim-hdr-btn" style="display:none;"></button>{% endif %}
-                  <div class="auto-safety-bar" id="auto-safety-bar">
-                    <span class="asb-dot"></span>
-                    <span class="asb-label" style="display:inline-flex;align-items:center;gap:4px;"><span data-ui-icon="rocket" data-size="13"></span><span data-i18n="inbox.asb.running">全自动运行中</span></span>
-                    <span class="asb-stats" id="auto-safety-stats"></span>
-                    <span class="asb-spacer"></span>
-                    <button type="button" class="asb-btn" onclick="_openAutoLog()" title="查看本会话今日自动发送与拦截记录" data-i18n="inbox.asb.log" data-i18n-title="inbox.asb.log_t">记录</button>
-                    <!-- P0-style 深链：回复速度/长度/风格的集中设置页（此前收件箱与设置页零链接=「找不到」工单根因） -->
-                    <a class="asb-btn" id="asb-tune-link" style="text-decoration:none;display:inline-block" href="/reply-settings" target="_blank" rel="noopener" title="调整全自动回复的速度、内容长度与风格（全局设置页）" data-i18n="inbox.asb.tune" data-i18n-title="inbox.asb.tune_t">参数</a>
-                    <button type="button" class="asb-btn asb-pause" onclick="pauseAutoMode()" title="暂停全自动，回到上次使用的人工档位" data-i18n="inbox.asb.pause" data-i18n-title="inbox.asb.pause_t">暂停</button>
-                  </div>
-                  <div class="conv-ops-tags">
-                    <span class="conv-ops-lbl"><span class="cp-card-ic" data-cp-ic="tag"></span><span data-i18n="inbox.convops.tags">标签</span></span>
-                    <div class="hdr-tags-row" id="hdr-tags-row" style="position:relative;"></div>
-                  </div>
-                  <div class="conv-ops-actions">
-                    <button class="archive-btn convops-btn" id="snooze-btn" onclick="snoozeConv()" title="稍后处理（搁置）" data-i18n-title="inbox.snooze.btn_t"><span class="co-ico" data-ui-icon="clock" data-size="14"></span><span data-i18n="inbox.snooze.btn_short">搁置</span></button>
-                    <button class="archive-btn convops-btn" id="archive-btn" onclick="toggleArchive()" title="归档会话" data-i18n-title="inbox.archive_conv_t"><span class="co-ico" data-ui-icon="archive" data-size="14"></span><span data-i18n="inbox.conv.archive_short">归档</span></button>
-                    <button class="archive-btn convops-btn" id="conv-delete-btn" onclick="deleteConv()" style="color:var(--tk-danger-ink,#b91c1c);" title="删除会话（仅删本机聊天记录，不动对方与手机端；不可恢复）" data-i18n-title="inbox.convdel.btn_t"><span class="co-ico" data-ui-icon="trash" data-size="14"></span><span data-i18n="inbox.convdel.btn">删除</span></button>
-                  </div>
-                </div>
-              </section>
               <!-- 2026-08-17 工具箱重组：语音克隆/人设绑定自回复台迁入（低频工具与配置归
                    工具箱，回复台聚焦拟稿）；组件与折叠记忆键不变，坐席折叠偏好无缝延续。
-                   空态说明书写「选中会话后解锁」，故与会话运维同挂 data-cp-need-conv。 -->
+                   空态说明书写「选中会话后解锁」，故挂 data-cp-need-conv。 -->
               <section class="cp-card collapsed" data-cp-need-conv="1" data-cp-card="voice">
                 <button type="button" class="cp-card-hd" data-cp-toggle="voice">
                   <span class="cp-card-ttl"><span class="cp-card-ic" data-cp-ic="mic"></span><span data-i18n="inbox.cp.h.voice">语音克隆 / 发送</span></span>
@@ -15460,6 +15452,8 @@ async function openAiDiag(){
   if(!ov||!body) return;
   ov.style.display='flex';
   if(foot) foot.style.display='none';
+  // #206：弹层顶部的「全自动运行中」状态卡按当前档位显隐 + 刷今日自动发/拦截（_syncAutoUi 内已含 _loadAutoStats）
+  try{ _syncAutoUi(); }catch(_){}
   // 静态骨架占位（结论头 + 两张卡的轮廓），避免「白屏一闪」
   body.innerHTML='<div style="padding:14px 12px;">'
     +'<div style="height:36px;border-radius:10px;background:var(--tk-surface-2);margin-bottom:10px;"></div>'
