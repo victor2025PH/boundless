@@ -398,11 +398,28 @@ class AccountOrchestrator:
     async def _loop(self) -> None:
         while self._running:
             try:
+                await self._revive_expired_line()
                 await self.sync()
                 await self.tick()
             except Exception:
                 logger.debug("[orchestrator] 监督步异常", exc_info=True)
             await self._sleep(self._interval)
+
+    async def _revive_expired_line(self) -> None:
+        """被标 ``worker:expired`` 的 LINE 号：用 session 文件续 token，成活即回 online。
+
+        2026-09-06：这些号绝大多数不是 refresh token 死了，而是 okline 续期请求缺头必败
+        被误判（见 line_token_refresh 模块头）——refresh token 有效期一年，实测过期 35 天
+        仍可续回。放在 sync() 前：续成的号本轮就进期望集被拉起。网络 IO 丢线程池，
+        真死的号在模块内按指数退避（≤12h 一次），不会每 15s 白打网关。
+        """
+        if get_worker_factory("line", "protocol") is None:
+            return
+        try:
+            from src.integrations.line_token_refresh import revive_expired_line_accounts
+            await asyncio.to_thread(revive_expired_line_accounts, self._registry, self._config)
+        except Exception:
+            logger.debug("[orchestrator] LINE expired 复活扫描异常", exc_info=True)
 
     async def stop_loop(self) -> None:
         self._running = False
@@ -2121,6 +2138,19 @@ class LineProtocolWorker:
         self._recv_hold_until: float = 0.0
         self._recv_hold_timer: Optional[threading.Timer] = None
         self._recv_last_error: str = ""
+        # 接收线程停止旗（2026-09-06）：stop() 只 close() client 是关不掉接收循环的——
+        # okline 的 signer 属性会在下一轮 SSE 重连时自动重启 Node 桥，于是账号被
+        # 翻 offline 后「尸体」receiver 还在对网关轮回一整天（09-05 实录：06:56 翻
+        # offline，接收轮回数一路涨到 20:46 重启）。重登后新旧两条 SSE 同时挂着，
+        # 网关只投一条，等于新号收不到消息。
+        self._recv_stop = threading.Event()
+        # LINE access token 保活（2026-09-06，7 天必掉线根因修复，见 line_token_refresh）：
+        # token JWT 恒 7 天到期，okline 自带的续期请求缺头必败 → 到期即被判死下线。
+        # 现由本 worker 的保活线程按 exp 提前续期（剩 <48h），续期后拉取兜底重建 client。
+        self._token_stop = threading.Event()
+        self._token_thread: Optional[threading.Thread] = None
+        self._token_refreshes: int = 0
+        self._token_last_error: str = ""
         # 出站媒体能力**按开关绑定**，而不是写成普通方法——因为 owns_media() 的判据就是
         # ``hasattr(worker, "send_media")``。写成普通方法即等于「LINE 恒有发媒体能力」，
         # 会把自拍/相册/克隆语音/命理 K 线在 LINE 上一次性全部放开（逆向协议发媒体有
@@ -2153,6 +2183,22 @@ class LineProtocolWorker:
             raise RuntimeError(f"缺少 LINE session tokens: {path}")
         from okline import OkLine
         self.client = OkLine.from_tokens_file(path)
+        # token 续期（2026-09-06）：① 换掉 okline 的 401 钩子（原版不带 X-Line-Access
+        # 头、续期必败）；② 启动即按 JWT exp 判断，快到期/已过期先续再起收发——应用停
+        # 了几天再开，token 多半已过 7 天，不续就是起来即死。只有网关明说
+        # REQUEST_NEED_LOGIN 才判「需重新扫码」；网络类失败照常起 worker，保活线程
+        # 与 RPC 119 路径会继续重试。
+        from src.integrations.line_token_refresh import ensure_fresh_token, install_refresh_hook
+        install_refresh_hook(self.client, path)
+        _tok = await asyncio.to_thread(ensure_fresh_token, self.client, path, reason="start")
+        if _tok.get("refreshed"):
+            self._token_refreshes += 1
+        elif _tok.get("relogin"):
+            self._token_last_error = str(_tok.get("error") or "")[:200]
+            self._report_relogin_required()
+            raise RuntimeError("LINE 登录凭据已失效（refresh token 被网关拒绝），需重新扫码")
+        elif _tok.get("due") and not _tok.get("skipped"):
+            self._token_last_error = str(_tok.get("error") or "")[:200]
         # HTTP 423 病理修复（2026-09-02，skuio 客户机实锤）：新 client 的 _reqseq
         # 从 0 起，而服务端去重键是 (reqSeq, 消息内容)——应用重启后媒体占位（内容
         # 彼此相同）撞上一轮进程的历史 reqSeq 被判重 → 返回旧 id → OBS 上传 423 →
@@ -2169,6 +2215,7 @@ class LineProtocolWorker:
         self._loop = asyncio.get_running_loop()
         self._start_receiver_with_hold()
         self._start_pull_sync(path)
+        self._start_token_keeper(path)
         self.state = "running"
         self.detail = ""
         # 存量名单同步刻意放在 running 之后且**不 await**：前端在线态就看编排器 state，
@@ -2474,6 +2521,10 @@ class LineProtocolWorker:
         self._recv_state = "running"
         self._recv_hold_until = 0.0
         self._recv_hold_timer = None
+        # 每条接收线程一面自己的停止旗：stop() 置位后，网关下一次正常关流（~10s）
+        # 循环即退出，不再重连——见 __init__ 处 _recv_stop 注释。
+        stop_evt = threading.Event()
+        self._recv_stop = stop_evt
 
         @bot.on_message
         def _on_msg(ctx: Any) -> None:  # noqa: ANN401
@@ -2502,12 +2553,14 @@ class LineProtocolWorker:
             from src.integrations.line_recv_supervisor import LineRecvSupervisor
             sup = LineRecvSupervisor()
             try:
-                while True:
+                while not stop_evt.is_set():
                     started = time.time()
                     clean = True
                     try:
                         bot.run(reconnect=False)
                     except Exception as exc:  # noqa: BLE001
+                        if stop_evt.is_set():
+                            break  # worker 已停：关流抛出的异常不记失败、不重连
                         clean = False
                         self._recv_last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                         logger.warning(
@@ -2535,8 +2588,8 @@ class LineProtocolWorker:
                         break
                     if verdict["streak"] == 0:
                         self._maybe_reset_recv_giveup()
-                    if verdict["sleep_sec"] > 0:
-                        time.sleep(verdict["sleep_sec"])
+                    if verdict["sleep_sec"] > 0 and stop_evt.wait(verdict["sleep_sec"]):
+                        break
             except Exception:
                 logger.debug("[line-worker] receiver 监督循环异常退出", exc_info=True)
             finally:
@@ -2608,6 +2661,50 @@ class LineProtocolWorker:
             self._pull_thread.start()
         except Exception:
             logger.debug("[line-worker] pull_sync 启动失败（忽略）", exc_info=True)
+
+    # ── access token 保活（2026-09-06，见 line_token_refresh 模块头） ──────────────
+
+    #: 保活线程检查间隔：只是本地解 JWT 看 exp，很便宜；真上网续期另有 48h 提前量 + 10min 冷却
+    _TOKEN_CHECK_SEC = 60.0
+
+    def _maybe_refresh_token(self, tokens_file: str, *, reason: str = "periodic") -> Dict[str, Any]:
+        """到期前续 access token；续成后让拉取兜底重建 client 跟上新 token。绝不抛。"""
+        try:
+            from src.integrations.line_token_refresh import ensure_fresh_token
+            res = ensure_fresh_token(self.client, tokens_file, reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[line-worker] token 保活异常 account=%s", self.account_id, exc_info=True)
+            return {"due": False, "refreshed": False, "error": str(exc)[:200]}
+        if res.get("refreshed"):
+            self._token_refreshes += 1
+            self._token_last_error = ""
+            if self._pull_sync is not None:
+                try:
+                    self._pull_sync.reset_client()
+                except Exception:  # noqa: BLE001
+                    logger.debug("[line-worker] pull_sync 重建 client 失败（忽略）", exc_info=True)
+        elif res.get("relogin"):
+            self._token_last_error = str(res.get("error") or "")[:200]
+            self._report_relogin_required()
+        elif res.get("due") and not res.get("skipped"):
+            self._token_last_error = str(res.get("error") or "")[:200]
+        return res
+
+    def _start_token_keeper(self, tokens_file: str) -> None:
+        """独立 daemon 线程周期调用 ``_maybe_refresh_token``（不搭拉取兜底的车：那是可关的开关）。"""
+        stop_evt = threading.Event()
+        self._token_stop = stop_evt
+
+        def _run() -> None:
+            while not stop_evt.wait(self._TOKEN_CHECK_SEC):
+                if self.state != "running" or self.client is None:
+                    break
+                self._maybe_refresh_token(tokens_file)
+
+        t = threading.Thread(target=_run, daemon=True,
+                             name=f"line-token-{self.account_id[:8]}")
+        self._token_thread = t
+        t.start()
 
     def _report_relogin_required(self) -> None:
         """LINE 登录凭据过期 → 显式告警（客户报障点名「系统没弹提醒」的缺失面）。
@@ -3069,8 +3166,10 @@ class LineProtocolWorker:
         self.state = "stopped"
         try:
             self._pull_stop.set()
+            self._token_stop.set()
+            self._recv_stop.set()
         except Exception:
-            logger.debug("[line-worker] pull_stop 置位失败（忽略）", exc_info=True)
+            logger.debug("[line-worker] 停止旗置位失败（忽略）", exc_info=True)
         try:
             t = self._recv_hold_timer
             if t is not None:
@@ -3085,6 +3184,15 @@ class LineProtocolWorker:
                 self.client.close()
         except Exception:
             pass
+
+    def _token_exp(self) -> float:
+        """当前 access token 的到期时刻（epoch 秒；读不到 → 0）。"""
+        try:
+            from src.integrations.line_token_refresh import access_token_expiry
+            tokens = getattr(getattr(self.client, "transport", None), "tokens", None)
+            return round(access_token_expiry(getattr(tokens, "access_token", None)), 1)
+        except Exception:  # noqa: BLE001
+            return 0.0
 
     def _recv_holding(self) -> bool:
         """receiver 正处于 #180 的延后拉起窗（Timer 在走、还没到点）。"""
@@ -3117,7 +3225,11 @@ class LineProtocolWorker:
                "recv_state": self._recv_state,
                "recv_hold_until": round(self._recv_hold_until, 1),
                "recv_giveup_streak": int(rec.get("streak") or 0),
-               "recv_last_error": self._recv_last_error}
+               "recv_last_error": self._recv_last_error,
+               # 2026-09-06 token 保活观测：exp 快到而 refreshes 不涨 = 续期链坏了
+               "token_exp": self._token_exp(),
+               "token_refreshes": self._token_refreshes,
+               "token_last_error": self._token_last_error}
         # impl85 阶段1：拉取兜底观测（pulled_total>0 = SSE 流确实在漏消息）
         if self._pull_sync is not None:
             try:

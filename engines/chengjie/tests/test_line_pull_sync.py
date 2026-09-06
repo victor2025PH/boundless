@@ -196,6 +196,11 @@ def test_sse_alive_keeps_fallback_dormant(tmp_path):
 
 # ── token 自愈 ───────────────────────────────────────────────────────────────
 
+def _refresh_result(ok: bool, relogin: bool = False, error: str = "") -> dict:
+    return {"ok": ok, "source": "network", "exp": 0.0, "rotated": False,
+            "relogin": relogin, "error": error}
+
+
 def test_token_stale_refreshes_once_and_retries(tmp_path, monkeypatch):
     c = FakeClient()
     c.boxes = [_box(PEER, "100")]
@@ -207,9 +212,10 @@ def test_token_stale_refreshes_once_and_retries(tmp_path, monkeypatch):
     def fake_refresh(client):
         refreshed.append(client)
         client.rev_exc = None                       # 刷新后 RPC 恢复
-        return True
+        return _refresh_result(True)
 
-    monkeypatch.setattr("src.integrations.line_pull_sync.refresh_client_token", fake_refresh)
+    monkeypatch.setattr(
+        "src.integrations.line_pull_sync.refresh_client_token_result", fake_refresh)
     res = s.tick()
     assert res["status"] == "initialized"
     assert len(refreshed) == 1
@@ -231,38 +237,70 @@ def test_relogin_error_reports_cooldown_and_no_rpc_inside(tmp_path):
     assert s.stats()["relogin_required"] is True
 
 
-def test_refresh_failure_downgrades_to_relogin(tmp_path, monkeypatch):
+def test_refresh_rejected_by_gateway_downgrades_to_relogin(tmp_path, monkeypatch):
+    """只有网关明说 REQUEST_NEED_LOGIN（refresh token 真死）才判「需重新扫码」。"""
     c = FakeClient()
     c.rev_exc = FakeLineError("Access token refresh required", code=119)
     s, _ = _sync(tmp_path, c)
     monkeypatch.setattr(
-        "src.integrations.line_pull_sync.refresh_client_token", lambda cl: False)
+        "src.integrations.line_pull_sync.refresh_client_token_result",
+        lambda cl: _refresh_result(False, relogin=True, error="REQUEST_NEED_LOGIN code=10004"))
     assert s.tick()["status"] == "relogin_required"
+    assert s.stats()["relogin_required"] is True
 
 
-def test_refresh_client_token_unhooks_during_refresh():
-    """刷新期间必须摘掉 401 钩子（okline 刷新失败递归风暴的断环点），完了要装回。"""
+def test_refresh_transient_failure_does_not_mark_relogin(tmp_path, monkeypatch):
+    """2026-09-05 事故：续期请求缺陷/网络失败曾被当成 refresh token 死亡 → 号被判死下线。
+    非终局失败只冷却重试，绝不 relogin_required。"""
+    c = FakeClient()
+    c.rev_exc = FakeLineError("Access token refresh required", code=119)
+    s, _ = _sync(tmp_path, c)
+    monkeypatch.setattr(
+        "src.integrations.line_pull_sync.refresh_client_token_result",
+        lambda cl: _refresh_result(False, relogin=False, error="LineTransportError: timeout"))
+    res = s.tick()
+    assert res["status"] == "token_stale"
+    assert "timeout" in res.get("error", "")
+    assert s.stats()["relogin_required"] is False
+    assert c.calls["close"] == 1                      # 丢 client，下轮从文件重建
+
+
+def test_refresh_client_token_uses_x_line_access_header_and_unhooks():
+    """续期请求必须带 X-Line-Access（require_auth=True）——okline 原版不带此头，网关
+    一律回 REQUEST_NEED_LOGIN（2026-09-06 本机实测）；期间摘掉 401 钩子防递归，完了装回；
+    回写 session 文件只改两个 token 字段（e2ee/certificate 原样）。"""
     seen = {}
 
-    class FakeAuth:
-        def __init__(self, t): self._t = t
-        def refresh_access_token(self):
-            seen["hook_during"] = self._t._refresh_hook
+    class FakeTokens:
+        access_token = "old.access.token"
+        refresh_token = "RT-OLD"
 
     class FakeTransport:
-        def __init__(self): self._refresh_hook = "ORIG"
+        def __init__(self):
+            self._refresh_hook = "ORIG"
+            self.tokens = FakeTokens()
+
+        def post_json(self, path, body, **kw):
+            seen["path"] = path
+            seen["body"] = body
+            seen["kw"] = kw
+            seen["hook_during"] = self._refresh_hook
+            return {"accessToken": "new.access.token", "refreshToken": "RT-NEW"}
 
     class FakeCli:
         def __init__(self):
             self.transport = FakeTransport()
-            self.auth = FakeAuth(self.transport)
-        def save_tokens(self): seen["saved"] = True
 
     cli = FakeCli()
     assert refresh_client_token(cli) is True
+    assert seen["path"] == "/api/auth/tokenRefresh"
+    assert seen["body"] == {"refreshToken": "RT-OLD"}
+    assert seen["kw"].get("require_auth") is True
+    assert seen["kw"].get("allow_refresh") is False
     assert seen["hook_during"] is None
     assert cli.transport._refresh_hook == "ORIG"
-    assert seen.get("saved") is True
+    assert cli.transport.tokens.access_token == "new.access.token"
+    assert cli.transport.tokens.refresh_token == "RT-NEW"
 
 
 # ── 状态持久化 / 位点回退 / 新盒子 ────────────────────────────────────────────

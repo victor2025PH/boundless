@@ -21,11 +21,14 @@
      （默认 90s）本兜底完全不动——SSE 恢复健康时零双路负载。
   5. **token 腐化自愈**（同一事故链的第二个坑，本机 Uk4bhj 实锤）：RPC 抛
      code=119「Access token refresh required」时 okline **不会**自动刷新（它只认
-     HTTP 401），本模块显式刷新一次并回写会话文件（刷新期间摘掉 transport 的
-     401 钩子——okline 的刷新失败路径存在递归风暴，实测 RecursionError）；
-     refresh token 也失效（code=10004 REQUEST_NEED_LOGIN）→ 上报
+     HTTP 401），本模块显式刷新一次并回写会话文件。刷新走
+     ``line_token_refresh.refresh_line_tokens``（2026-09-06）：okline 自带的
+     ``refresh_access_token`` 不带 ``X-Line-Access`` 头、网关一律回
+     REQUEST_NEED_LOGIN——此前每一次「刷新失败」都是这个请求缺陷，却被当成
+     「refresh token 也死了」上报 expired，把 7 天到期的号一个个判死（详见该模块头）。
+     现在只有网关**明说** REQUEST_NEED_LOGIN（code=10004）才上报
      ``platform_session_health``（status=expired，接通坐席横幅/ops 卡/watchdog
-     告警链——「凭据过期系统不提醒」正是本次客户报障点名的缺失），并进长冷却。
+     告警链）并进长冷却；网络等非终局失败只冷却重试，不判死。
 
 状态落盘：``<tokens>.pullsync.json``（原子写；坏文件/缺文件 → 按未初始化重来，
 最坏效果=重新锚定当前水位，绝不重复投递已去重的消息）。
@@ -46,6 +49,12 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from src.integrations.line_token_refresh import (
+    is_relogin_error,
+    is_token_stale_error,
+    refresh_line_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,49 +89,22 @@ def resolve_line_pull_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# ── okline 异常分类（duck-typed：不 import okline，测试可用假异常） ──────────────
+# ── token 续期（判定函数与实现收口在 line_token_refresh：worker 保活线程 / 复活扫描 /
+# OBS 下载同一套；这里保留同名导出给既有调用方与门禁） ────────────────────────────
 
-def is_token_stale_error(exc: BaseException) -> bool:
-    """RPC 报「access token 需刷新」（LINE Thrift code=119，非 HTTP 401）。"""
-    code = getattr(exc, "code", None)
-    if code == 119:
-        return True
-    msg = str(exc).lower()
-    return "token refresh required" in msg or "access token refresh" in msg
+def refresh_client_token_result(client: Any) -> Dict[str, Any]:
+    """显式续期 access token 并回写会话文件（带 X-Line-Access 头；绝不抛）。
 
-
-def is_relogin_error(exc: BaseException) -> bool:
-    """refresh token 也失效＝只能重新扫码（LINE code=10004 REQUEST_NEED_LOGIN）。"""
-    code = getattr(exc, "code", None)
-    if code == 10004:
-        return True
-    return "request_need_login" in str(exc).lower()
+    返回 ``line_token_refresh.refresh_line_tokens`` 的结果 dict：``ok`` 成功；
+    ``relogin=True`` 是网关明说 REQUEST_NEED_LOGIN（refresh token 真死，只能重新扫码），
+    其余失败（网络/网关抖动）调用方应冷却重试而不是判死。
+    """
+    return refresh_line_tokens(client, reason="rpc119")
 
 
 def refresh_client_token(client: Any) -> bool:
-    """显式刷新 access token 并回写会话文件；失败返回 False（绝不抛）。
-
-    刷新期间摘掉 ``transport._refresh_hook``：okline 的 tokenRefresh 请求自身
-    ``allow_refresh=True``，若服务端回 401 会「刷新触发刷新」递归到
-    RecursionError（2026-08-29 实测）——钩子置空即断环。
-    """
-    transport = getattr(client, "transport", None)
-    hook = getattr(transport, "_refresh_hook", None) if transport is not None else None
-    try:
-        if transport is not None:
-            transport._refresh_hook = None
-        client.auth.refresh_access_token()
-        try:
-            client.save_tokens()
-        except Exception:  # noqa: BLE001 —— 刷新成功但落盘失败：本进程内仍可用
-            logger.debug("[line-pull] 刷新后回写会话文件失败（忽略）", exc_info=True)
-        return True
-    except Exception:  # noqa: BLE001
-        logger.debug("[line-pull] tokenRefresh 失败", exc_info=True)
-        return False
-    finally:
-        if transport is not None:
-            transport._refresh_hook = hook
+    """布尔薄封装（``line_media`` OBS 下载 401 路径等只关心成败的调用方）。"""
+    return bool(refresh_client_token_result(client).get("ok"))
 
 
 # ── 归一化（网关响应形态防御：dict 包裹 / 裸 list 都见过） ─────────────────────
@@ -276,6 +258,12 @@ class LinePullSync:
             logger.debug("[line-pull] client close 失败（忽略）", exc_info=True)
         self._client = None
 
+    def reset_client(self) -> None:
+        """丢掉当前 client，下轮 tick 从会话文件重建（worker 主连接续期后调用：
+        本实例内存里还是旧 token，重建即跟上文件里的新 token）。线程安全。"""
+        with self._lock:
+            self._drop_client()
+
     def close(self) -> None:
         self._drop_client()
 
@@ -318,7 +306,9 @@ class LinePullSync:
                 return self._done("token_stale")
             self._refresh_attempt_ts = now
             client = self._client
-            if client is not None and refresh_client_token(client):
+            res = (refresh_client_token_result(client) if client is not None
+                   else {"ok": False, "relogin": False, "error": "no client"})
+            if res.get("ok"):
                 logger.info("[line-pull] access token 已刷新 mid=%s", self._self_mid[:12])
                 try:
                     return self._pull_once()
@@ -327,10 +317,21 @@ class LinePullSync:
                         return self._handle_auth_error(exc2)
                     logger.debug("[line-pull] 刷新后重试仍失败", exc_info=True)
                     return self._done("error", error=str(exc2)[:200])
-            # 刷新失败：多半 refresh token 也死了 → 按需重新登录处理
-            self.relogin_until = self._now() + _RELOGIN_COOLDOWN_SEC
+            if res.get("relogin"):
+                # 网关明说 REQUEST_NEED_LOGIN：refresh token 真死，只能重新扫码
+                self.relogin_until = self._now() + _RELOGIN_COOLDOWN_SEC
+                self._drop_client()
+                logger.warning(
+                    "[line-pull] access token 过期且 refresh token 已失效（%s），需重新扫码 mid=%s",
+                    res.get("error") or "-", self._self_mid[:12])
+                return self._done("relogin_required")
+            # 非终局失败（网络/网关抖动/桥故障）：冷却后再试，**不**判死——2026-09-05 前
+            # 正是把 okline 请求缺陷造成的必败当成「refresh token 死了」，才把 7 天到期
+            # 的号一个个标成 expired。丢 client 让下轮从文件重建（worker 侧可能已续期）。
+            logger.warning("[line-pull] access token 续期失败（%s），%.0fs 后重试 mid=%s",
+                           res.get("error") or "-", _REFRESH_COOLDOWN_SEC, self._self_mid[:12])
             self._drop_client()
-            return self._done("relogin_required")
+            return self._done("token_stale", error=str(res.get("error") or "")[:200])
         return None
 
     # ── 拉取核心 ─────────────────────────────────────────────────────────────
@@ -455,6 +456,8 @@ __all__ = [
     "LinePullSync",
     "resolve_line_pull_cfg",
     "refresh_client_token",
+    "refresh_client_token_result",
+    "refresh_line_tokens",
     "is_token_stale_error",
     "is_relogin_error",
     "box_id_of",
