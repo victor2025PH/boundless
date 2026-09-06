@@ -8,6 +8,7 @@
 
 台账 213 单：未关闭 69 = **49 张代码已进 1.0.74 待验**（K-5 ④⑤ 未走）+ **20 张真未修 #194–#213**（09-05 漏立单 28 份报告 + 09-06 复测新发现）。两条系统性缺口：① 内测机走干净包，「出厂开」种子没到（D1 自动推进 / D7 危机留痕在两机仍关）；② 桌面包带内网 GPU/STT 默认地址 → 熔断回落是多项质量问题共同上游。
 **L-6 服务端两件 + L-5 先开**（当天见效），L-1…L-4 并行，L-7 在 L-5 后。目标版本 1.0.75。
+**09-06 13:5x 收口态**：七线全部收工；zhiliao 11:45 已装载；**1.0.75 两渠道已发布**（公共 clean / 内测 smart），坐席两台已装、yunsheng 自更中、两台内测机等手装；69 单已标 fixed、两位内测人回访已发（skuio mid 1251/1252 · 钧 1253）；台账 214 单（#214 新：主动关怀 dry_run 静默，待老板定线）。
 
 ## 进度表
 
@@ -19,7 +20,7 @@
 | **L-4** | 后台可见性分层 | #197 #198 #212 #200 #201 #199 #211 | $150 | **收工（09-06 1x:xx）**；.py 十余处待重启装载，模板 / i18n 已热更（`ui_client_hide` 缺席按不藏，中间态自洽） | A `395acee7`（CLIENT_HIDDEN 加 help/strategies/singing/voice_eval + PARTNER_ONLY 三条 settings 深链 + flavor 三层 + 开发者模式 + 侧栏「研发/代理商」角标）/ F `b5d146bd`（#201：噪音不入队 + 私事→客户记忆不进 KB + source=learner + 通过已选 ≤20 须确认 + BM25 不再假 99% + 译文 + 存量一次性清标）/ B `5512c0a6`（#197：三卡用户版隐藏 + 徽标与授权卡同源读 plan_source + 演示仅空工作区 409 + 功能总览人话）/ G `a4f453da`（#199 #211：`_client_tier_upgrading.html` 横幅 + 操作面收起 + 唱歌能力位资产门禁 409）/ C `f9edb52b`（#198：整页收起 + 「机器人斜杠命令（旧）」标范围 + 培训入口存在性 + `_page_error.html` 人话 404）/ D `e180d1b1`（#212：整页收起）/ E `d6942318`（#200：语音单一下拉 + 引擎状态 / 缓冲语并入人审默认关 / 删人设 ID 秒数表（既有覆写保留）/ 平台表折叠 + 实际值灰字 + LINE 打字硬禁）；新 87 例全绿，邻接门禁全绿。**开发者模式 flag（L-2 读）**：session 键 `developer_mode`（仅 `dev_unlocked` 同真时生效；`/developer` 页「开发者模式」卡开关 → `POST /api/developer/developer-mode`；退出登录 / `/developer/logout` 即关，不落 overlay）。模板全局：`ui_flavor`（client/partner/internal）、`ui_developer_mode`（bool）、**`ui_client_hide`**（bool＝client 形态且未开开发者模式→该藏的都藏；L-2 三处「开发者模式可见」写 `{% if not ui_client_hide %}`）。纯函数：`src.web.ui_visibility.client_hide_active(cfg, developer_mode)`；nav：`get_nav_context(cfg, developer_mode=)`。 | 装载后真机验收（口径见落点表「交 L-7」）；**待老板 4 条**（D 三档预设 / override 徽标 / partner 是否藏 bug_tickets / 歌房资产不齐运行时视为关）；**交 L-2**：语音总闸运行时硬门禁 + 人设工作室「快/中/慢」；**交 L-5**：代理商机 `flavor: partner` 怎么落；P3：`kb_miss_log` 客户维度 / 缓冲语人设口吻；既有失败 `test_workspace_sidebar` 5 例（HEAD 同样红）留 L-7 | `发版对账_v1.0.75_L4.md` | ≈$120 |
 | **L-5** | 内测渠道与出厂默认 | #166残 #185残 | $100 | **已完成**（09-06 09:5x） | A 三键升 feature_registry **A 类基线**（真正能到存量 clean 升级机的载体）+ desktop.min 种子 + example 同值 true `64f40009` / C 种子缺席 WARNING（桌面态）`d5d30095` / **B 选 B1**：渠道烘进包（smart=`npm run dist:win` → `dist/latest-internal.yml`，app-update.yml 指 `downloads/internal/`；clean 不变）+ `publish_chatx.ps1 -Channel internal` + fleet `edition` 列 `a924426f` `85612834`；内测渠道已上架 1.0.74 smart（VPS+R2），**yunsheng 已切 `smart/internal` 并实锤壳拉内测 feed**（nginx 09:24:38） | D 交 L-7：1.0.75 两包分发 `publish -Channel internal`；kouxing/lianbei 推 `dist\` smart 即切；两台内测机**手装一次** `dl/downloads/internal/ChatX-Setup-1.0.75.exe` 切渠道（无 SSH）；验收清单+回访文案见落点表 §5。`duty_evidence probe` 标 clean 未做（信标只传 ERROR 级）→ 方案定死交 L-7（落点表 §5.4 diag 元数据三处小改）。老板拍板后追加：**lite 独立渠道已做**（`-Channel lite`，未实弹打包）。⚠ `a924426f` 误含 L-3 已暂存 8 文件（内容已在 HEAD，L-3 无需重提，见落点表 §6） | `发版对账_v1.0.75_L5.md` | ≈$70 |
 | **L-6** | 通道与服务端 | #213 #195 内网外泄 secret_key | $120 | **收工（09-06 11:5x）**；A 服务端 + 网关**已生效**，B/C/D `.py` 待装载，模板 / i18n 已热更 | A `3cca7d84`：176/140 两台中继 `qwen3-vl:8b-instruct` **就地** `PARAMETER num_ctx 8192`（原 4k 版留 `-orig4k` 回滚点；实测 Ollama `/v1` 忽略 `options.num_ctx`，Modelfile 是唯一生效点；「新 tag + 网关指向」在 140 会与 LAN 直连的 4k 版互挤显存故弃）+ 网关 `vision_ctx_overflow` 识别 + 管理员 TG 告警（30 分钟节流）+ website 10:51 已部署；「智谱令牌过期」实为设备令牌 `cx.…` 被误当智谱 key 送出去——`_zhipu_credentials` 修掉，识图失败三档人话（未配置 / 忙 / 无文字）替代「识别翻译不可用」；4753 tokens 等价复现两机 200 / B `7c3e6e45`：新 `utils/desktop_mode.is_desktop_client` 单一闸，STT 140:7854 / 改写 173 / 看门狗 LAN GPU 巡检桌面态不再指向内网，`apply_hosted_asr` 网关接管时摘内网备级，语音失败人话，`embedding_status()` 三态口 / D `e56b72a0`（⚠ 兄弟线代提，内容一致）：桌面首启随机 `secret_key` 写 `config.local.yaml`，`[SECURITY]` 改绑不再触发，开发者页密钥行显真实状态 / C `2d804c5f`：贴纸 `.tgs/.webm/.webp` 三态落盘 + `<stem>.thumb.webp` 缩略图 + 工作台三态渲染 + 识图走缩略图；新测 65 例 + 邻接 ≈1050 例过；⚠ `d05c9fe2 fix(line)` 曾带走本线错位暂存的 `errors.py` 8 行（HEAD 一度 SyntaxError），`3cca7d84` 已修正 | 装载后真机核：#213 钧机今天即可验（服务端已生效）；#195 请钧**再收一次**动图 + 视频贴纸；skuio 机 3h 无 LAN GPU toast；两机首启无 `[SECURITY]`。交 L-3 C（infra toast 收窄）/ L-4 F（`embedding_status`）/ L-2（`test_avatar_voice` 两红是 `a3216231` 契约变更未更新用例）/ 运维（machines.json 说 198 是识图单点、隧道实通 176/140，口径对不上） | `发版对账_v1.0.75_L6.md` | ≈$95 |
-| **L-7** | 值守登记链 + K-5 收口 | 流程 + 49 单 + 61 单回访 | $100 | 未开工 | | A 报告自动立单 / B 每日对账 / C smalltalk + 序号哨兵 / D K-5 ④⑤ | `发版对账_v1.0.75_L7.md` | |
+| **L-7** | 值守登记链 + K-5 收口 + 1.0.75 全批收口 | 流程 + 49 单 + 20 单 + 回访 | $120 | **收工（09-06 13:5x）** | A `085cd14b`（兄弟线整树提交带走，内容本线）+ `5f6f3916` + `392d60de`：`tools/duty_auto_ticket.py` 报告到达 → #N / 关联码 / 同人 30 分钟主题 → 挂单，否则新立；回执改「收到 <码>（主题）→ 已立/已挂 #N」；真机 12:37–12:49 三份报告全部 2 分钟回单号（FX5YRE→#196 mid 1248 / M2SHYA→新 #214 mid 1249 / 9YYD44→#214 mid 1254）；85 份历史报告补 ticket.txt / **B** `d1fcae8c`：`duty_reconcile --reports` + 计划任务 DutyReportsReconcile 08:00；首跑 96 份报告 12 份未挂单 → 全部挂上 96/96 / **C** `b7e9ef5d`：`INFO_REQUEST_WORDS` + 吗/么 问句 → `request_for_info` 事件 + 值守告警不再静默；序号哨兵收割前查 inbox `direction='out'` 剔本账号 API 出站（`seq_gap_own`），P1 误报根除；webhook 认识新 kind；29 + 178 passed，**已装载** / **E**：preflight GO → 11:45 zhiliao 装载（14s，0 ERROR）→ 全量 75/25339（0 功能性回归；13 新红全门禁层，3 条顺手消化 `22ffee95` 含 **#207 两按钮漏挂 window 代 L-3 修**）→ gate 7/797 → release `df4797e2`（bump 1.0.75 / 繁体 16382 / changelog 14 条 / ui-build 1246）→ smart 590 MB + clean 495 MB 两包冒烟全过 → publish 公共 + 内测两渠道 → 官网 deploy → kouxing / lianbei 1.075 smart/internal → 群播 mid 1250 + 频道 152 / **D**：69 单 fixed（`ledger_fix`，不轰炸）→ skuio C6EFRS 46 项 1.0.75 版对账两条 mid 1251/1252 + 钧一条 mid 1253 → 65 单记账；合并表 `发版对账_v1.0.75.md`；症状族 +4 层 + 新族 7 | yunsheng 4h 内自更核 1.075；两台内测机手装后核三样；老积压 61 单补充汇总草稿已备（`.ops\duty_0906\r_*_backlog_1075.txt`）明天发；#214（关怀 dry_run 静默）待老板定线；10 条门禁债交回 L-1(3)/L-2(2)/L-4(4)/L-3(1)；L-4 四问待老板 | `发版对账_v1.0.75_L7.md` | ≈$100 |
 
 ## 老板拍板记录
 
@@ -29,13 +30,13 @@
 
 - 2026-09-06 09:4x / D-L1 补充（L-5 提出的待拍板项） / 老板：「需要拍板的按你的建议去做」→ **lite 定制档也建独立更新渠道**（`latest-lite.yml` / `downloads/lite/`，与 internal 同法烘进包），已做；「版本旁标 clean/smart」按 L-5 落点表 §5.4 的 diag 元数据方案交 L-7 直接执行。
 
-## 全批收口（L-7 或最后收工的对话做）
+## 全批收口（L-7 09-06 11:10–13:5x 做完；细节 `发版对账_v1.0.75.md` / `_L7.md`）
 
-- [ ] 七条落点表齐 → 合并 `docs/发版对账_v1.0.75.md`（照 1.0.74 骨架：单号 → commit → 验收口径）
-- [ ] `restart_preflight` → zhiliao 装载 → 全量回归 + gate_sweep
-- [ ] 1.0.75 打包（**smart + clean 两包**，L-5 定内测机装哪包）→ 坐席三台 → publish → 两机装载核版本
-- [ ] 台账：新单标 fixed（只经端点 / `duty_ledger_fix`）；回访两份汇总 + 逐单验收口径
-- [ ] `docs/值守症状族对账单.md` 更新；本总账每行填「已花」
+- [x] 七条落点表齐（L-6 落点表由 L-6 自补，四件 commit 已核在 HEAD）→ 合并 `docs/发版对账_v1.0.75.md`（单号 → commit → 验收口径 + 13 新红归属 + 发布动作 10 步）
+- [x] `restart_preflight` 11:38 GO → zhiliao 11:45:26 装载（14s，0 ERROR，八新端点全非 404）→ 全量回归 75/25339/36（0 功能性回归）+ gate_sweep 7/797（1 预存 + 6 门禁债交回）
+- [x] 1.0.75 打包 smart 590 MB（内测渠道）+ clean 495 MB（公共）→ publish 两渠道 + 官网 → 坐席 kouxing / lianbei 1.075 smart/internal（yunsheng 自更中）→ 两台内测机**等手装**（回访已带链接，装后核 L-5 §5.2 三样）
+- [x] 台账：49 + 20 = 69 单 fixed（`duty_ledger_fix`，不轰炸）；回访 skuio 两条（C6EFRS 46 项 1.0.75 版对账）+ 钧一条，65 单记账；老积压 61 单补充汇总草稿交下一班
+- [x] `docs/值守症状族对账单.md` 更新（族 4 +3 层 / 族 5 +1 层 / 新族 7）；本总账 L-7 行「已花」已填（其余行由各线自填）
 
 ## 开对话话术（每条一段，整块复制）
 
