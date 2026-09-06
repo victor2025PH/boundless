@@ -110,15 +110,18 @@ def test_purge_episodic_groups_by_chat_key(tmp_path: Path):
     st.add_fact("telegram:acct:777", "用户住在上海", "llm", source_quote="我住在上海哦")
     rows = [
         {"conversation_id": "telegram:acct:555", "direction": "in", "text": "我住在北京哦"},
-        {"conversation_id": "telegram:acct:777", "direction": "out", "text": "我住在上海哦"},  # 出站不算
+        # M-1 C #219 起出站行也记账，但进**己方撤回**账本（own_quotes_for），不进对端账本
+        {"conversation_id": "telegram:acct:777", "direction": "out", "text": "我住在上海哦"},
     ]
-    assert pdp.purge_episodic(st, rows) == 1
-    # 事实两边都留着（不再物理删）；只给入站那条记账
+    assert pdp.purge_episodic(st, rows) == 2
+    # 事实两边都留着（不再物理删）；入站那条进对端账本、出站那条进己方账本
     assert {r["content"] for r in st.list_rows(limit=10)} == {"用户住在北京", "用户住在上海"}
     assert quotes_for("telegram:acct:555") == ["我住在北京哦"]
     assert quotes_for("telegram:acct:777") == []
+    from src.inbox.withdrawn_cite import own_quotes_for
+    assert own_quotes_for("telegram:acct:777") == ["我住在上海哦"]
     reset_ledger()
-    assert pdp.purge_episodic(None, rows) == 1  # 账本不依赖 store
+    assert pdp.purge_episodic(None, rows) == 2  # 账本不依赖 store
 
 
 # ── ② A 线上下文历史 ─────────────────────────────────────────────────────────

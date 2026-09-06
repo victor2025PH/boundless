@@ -3500,6 +3500,41 @@ class InboxStore:
                 self._conn.commit()
         return n
 
+    def revoke_own_by_platform_msg_ids(
+        self, platform: str, account_id: str, platform_msg_ids: List[str], *,
+        chat_key: str = "",
+    ) -> int:
+        """M-1 C #219（2026-09-06）：**己方**在手机端删掉的消息 → 出站行标 ``revoked=1``。
+
+        Telegram 的 ``UpdateDeleteMessages`` 只带裸 id，此前 ``report_deleted_messages``
+        把命中的行不分方向一律按「对端删除」软删（deleted_by=peer，前台消失）——己方
+        撤回的语义不同：客户侧没有了，但工作台该**灰显「你撤回了一条消息」**而不是消失，
+        AI 侧则要从上下文/记忆剔除。故与 ``mark_message_revoked``（worker 上报的撤回）
+        同一列：``revoked=1``，UI 既有渲染直接吃；``list_recent_messages`` AI 口径剔除
+        revoked 行。只动 ``direction='out'`` 且未撤回的行；本账号 / 可选 chat_key 收窄，
+        与软删同一定位口径。返回标记条数。
+        """
+        plat = str(platform or "").lower()
+        aid = str(account_id or "")
+        ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
+        if not plat or not ids:
+            return 0
+        like_prefix = f"{plat}:{aid}:{str(chat_key)}" if chat_key else f"{plat}:{aid}:"
+        n = 0
+        with self._lock:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                cur = self._conn.execute(
+                    f"UPDATE messages SET revoked = 1"
+                    f" WHERE revoked = 0 AND direction = 'out'"
+                    f" AND platform_msg_id IN ({ph}) AND conversation_id LIKE ?",
+                    [*chunk, like_prefix + "%"])
+                n += int(cur.rowcount or 0)
+            if n:
+                self._conn.commit()
+        return n
+
     def select_live_by_platform_msg_ids(
         self, platform: str, account_id: str, platform_msg_ids: List[str], *,
         chat_key: str = "",
@@ -3835,7 +3870,10 @@ class InboxStore:
         实时两条链都按时间顺序落库，所以它是并列组的正确次序。
         """
         limit = max(1, min(500, int(limit or 50)))
-        del_sql = (" AND NOT (deleted_at > 0 AND deleted_by = 'peer')"
+        # M-1 C #219：平台侧已撤回的行（revoked=1——己方手机端删除同步 / worker 上报
+        # 撤回）同样**不进 AI 口径**：客户侧已经没有那句话，AI 再接着聊就是对空气说话。
+        # UI 口径（include_deleted=False）仍给出——前端按 revoked 灰显「已撤回」。
+        del_sql = (" AND NOT (deleted_at > 0 AND deleted_by = 'peer') AND revoked = 0"
                    if include_deleted else " AND deleted_at = 0")
         with self._lock:
             if before_ts is not None:

@@ -196,6 +196,51 @@ _MIRROR_MEDIA_DEFAULT_MAX_MB = 5.0
 # 或轮询循环；超时退化为「无归档的媒体行」（media_type 在、ref 空），消息不丢。
 _MIRROR_MEDIA_DL_TIMEOUT_SEC = 30.0
 
+# M-1 C #219：删除同步 RawUpdateHandler 的独立 group。pyrogram dispatcher 对每个 group
+# 只跑第一个命中的 handler（命中即 break）；已读回执 handler 在 group 0 吃掉全部 raw 更新，
+# 同组注册的删除 handler 永远轮不到——必须另起一组。
+_DELETE_SYNC_HANDLER_GROUP = 7
+# 轮询对账兜底（M-1 C）：本地比会话 top_message 更新、且已存在 ≥ 这么久的行才算「服务端
+# 已删」——刚发出的消息与 get_dialogs 快照之间有竞态窗口，别把它误标撤回。
+_DELETE_RECON_MIN_AGE_SEC = 90.0
+
+
+def find_deleted_by_top(rows: Any, top_id: Any, *, now: float,
+                        min_age_sec: float = _DELETE_RECON_MIN_AGE_SEC) -> List[str]:
+    """轮询对账（M-1 C #219，纯函数）：会话服务端 ``top_message.id`` 已知，本地却还有
+    **id 更大**且未撤回/未软删、投递成功、存在超过 ``min_age_sec`` 的消息行 → 这些行在
+    服务端已不存在（多为己方在手机端删了最新几条），返回其 platform_msg_id 列表。
+
+    只认纯数字 id（``h:<hash>`` 兜底键不参与）；``status`` 为 failed/resent 的失败留痕
+    本就没发出去，不算。实时 ``UpdateDeleteMessages`` 是主路径，本函数是丢事件 / 重启期
+    的兜底：只能发现「最新几条被删」（更早的被删不会改变 top），够覆盖 #219 形态。
+    """
+    try:
+        top = int(top_id or 0)
+    except (TypeError, ValueError):
+        return []
+    if top <= 0:
+        return []
+    out: List[str] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        pmid = str(r.get("platform_msg_id") or "").strip()
+        if not pmid.isdigit() or int(pmid) <= top:
+            continue
+        if int(r.get("revoked") or 0) or float(r.get("deleted_at") or 0) > 0:
+            continue
+        if str(r.get("status") or "") in ("failed", "resent"):
+            continue
+        try:
+            ts = float(r.get("ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if ts <= 0 or (now - ts) < float(min_age_sec):
+            continue
+        out.append(pmid)
+    return out
+
 
 def parse_mirror_outgoing_media_cfg(pf_cfg: Any) -> Tuple[bool, int, frozenset]:
     """解析 ``telegram.poll_fallback.mirror_outgoing_media``（出站镜像要不要连媒体本体一起归档）。
@@ -1145,18 +1190,30 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                         if isinstance(update, _raw2.types.UpdateDeleteMessages):
                             mids = [str(m) for m in (getattr(update, "messages", None) or [])]
                             if mids:
+                                # M-1 C #219：删除事件落 INFO（此前只有命中时才有日志，
+                                # 「零删除事件」无法与「事件到了没对上」区分）
+                                self.logger.info(
+                                    "[mirror] 收到删除更新 ids=%s（私聊/小群，裸 id 全账号反查）",
+                                    ",".join(mids[:8]) + ("…" if len(mids) > 8 else ""))
                                 report_deleted_messages("telegram", _acct_d, mids)
                         elif isinstance(update, _raw2.types.UpdateDeleteChannelMessages):
                             chid = getattr(update, "channel_id", None)
                             mids = [str(m) for m in (getattr(update, "messages", None) or [])]
                             if chid is not None and mids:
+                                self.logger.info(
+                                    "[mirror] 收到频道删除更新 channel=%s ids=%s",
+                                    chid, ",".join(mids[:8]) + ("…" if len(mids) > 8 else ""))
                                 report_deleted_messages(
                                     "telegram", _acct_d, mids,
                                     chat_key=f"-100{int(chid)}")
                     except Exception:
                         self.logger.debug("[mirror] 删除同步处理失败", exc_info=True)
 
-                self.client.add_handler(_RUH(_on_deleted))
+                # M-1 C #219 根因：pyrogram 同一 group 内**只跑第一个命中的 handler**（dispatcher
+                # 对每个 group 命中即 break），而上面的已读回执 RawUpdateHandler 已在 group 0
+                # 对所有 raw 更新都「命中」——本删除 handler 注册在同组从未被调用过（skuio 机
+                # 14:03–14:16 零删除事件的真正原因）。放独立 group 让两个 raw handler 都跑。
+                self.client.add_handler(_RUH(_on_deleted), group=_DELETE_SYNC_HANDLER_GROUP)
             except Exception:
                 self.logger.debug("[mirror] 注册删除同步处理器失败", exc_info=True)
 
@@ -1814,6 +1871,15 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 msg = getattr(dialog, "top_message", None)
                 if msg is None:
                     continue
+                # M-1 C #219 对账兜底：本地有比服务端 top_message 更新的行 → 服务端已删
+                # （己方手机端删了最新几条 / 实时删除更新丢失）→ 走同一删除同步入口。
+                # 零额外 RPC（只读本地库），任何异常不影响轮询主流程。
+                try:
+                    self._reconcile_deleted_by_top(
+                        getattr(chat, "id", 0),
+                        getattr(msg, "id", 0) or getattr(msg, "message_id", 0))
+                except Exception:
+                    self.logger.debug("[轮询兜底] 删除对账失败（已忽略）", exc_info=True)
                 if getattr(msg, "outgoing", False):
                     # 我们自己发的（含已回复）→ **绝不进 AI 管道**。flag 开时额外镜像
                     # 进工作台（老板/运营用手机 App 亲自回复的场景），随后照旧跳过。
@@ -1884,6 +1950,42 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
         if processed:
             self.logger.info("[轮询兜底] 本轮处理 %d 条新进站私聊", processed)
         return scanned
+
+    def _reconcile_deleted_by_top(self, chat_id: Any, top_id: Any) -> int:
+        """轮询对账兜底（M-1 C #219）：见 ``find_deleted_by_top``。镜像关 / store 缺席 /
+        top 未变 → 0。命中 → ``report_deleted_messages``（出站行标撤回、入站行软删、
+        记忆/上下文剔除、SSE）+ INFO 留痕。返回处理条数。"""
+        if not getattr(self, "_mirror_inbox", False) or not chat_id or not top_id:
+            return 0
+        try:
+            top = int(top_id)
+        except (TypeError, ValueError):
+            return 0
+        seen = getattr(self, "_delete_recon_top", None)
+        if seen is None:
+            seen = {}
+            self._delete_recon_top = seen
+        if seen.get(str(chat_id)) == top:
+            return 0   # 该会话 top 未变，上一轮已对过账
+        seen[str(chat_id)] = top
+        if len(seen) > 4096:
+            seen.clear()
+        from src.integrations.protocol_bridge import (
+            get_inbox_store, report_deleted_messages,
+        )
+        store = get_inbox_store()
+        if store is None or not hasattr(store, "list_recent_messages"):
+            return 0
+        acct = str(getattr(self, "account_id", "default") or "default")
+        cid = f"telegram:{acct}:{chat_id}"
+        rows = store.list_recent_messages(cid, limit=20) or []
+        stale = find_deleted_by_top(rows, top, now=time.time())
+        if not stale:
+            return 0
+        self.logger.info(
+            "[轮询兜底] 删除对账：chat=%s 服务端 top=%s，本地更新的 %d 条已不在服务端 → 同步撤回/删除 ids=%s",
+            chat_id, top, len(stale), ",".join(stale[:8]))
+        return int(report_deleted_messages("telegram", acct, stale, chat_key=str(chat_id)) or 0)
 
     def _is_system_chat(self, chat_id: Any) -> bool:
         """是否为「不属于任何客户」的系统会话：Saved Messages（自己和自己）/ Telegram 服务号。

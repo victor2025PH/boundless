@@ -11,6 +11,11 @@
 3. **A 线上下文**把匹配的 user 条换成占位，不删轮次。
 B 线 ``list_recent_messages`` 默认仍剔 peer 软删行（属 store.py，本条不能改）——
 注入层用账本 hint 补「知道但不提」。
+
+M-1 C #219（2026-09-06）**己方**手机端删除同一入口：出站行由 store 标 ``revoked=1``
+（工作台灰显「你撤回了」、B 线 AI 口径剔除），这里补 A 线：assistant 历史条换占位、
+``last_reply`` / ``recent_replies`` / ``_human_said_log`` 剔除、己方撤回账本
+（``own_quotes_for`` → 注入「不得再接着聊」）。
 """
 
 from __future__ import annotations
@@ -74,13 +79,13 @@ def key_has_component(memory_key: str, chat_key: str) -> bool:
     return ck in re.split(r"[:_]", mk)
 
 
-def inbound_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """只留客户侧（direction=in）且正文够长的被删行——AI 自己发的被删了不进记忆。"""
+def _rows_with_quote(rows: Iterable[Dict[str, Any]], direction: str) -> List[Dict[str, Any]]:
+    want_out = direction == "out"
     out: List[Dict[str, Any]] = []
     for r in rows or []:
         if not isinstance(r, dict):
             continue
-        if str(r.get("direction") or "in") != "in":
+        if (str(r.get("direction") or "in") == "out") != want_out:
             continue
         q = normalize_quote(r.get("text"))
         if len(q) < MIN_TEXT_LEN:
@@ -91,10 +96,22 @@ def inbound_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def inbound_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """只留客户侧（direction=in）且正文够长的被删行。"""
+    return _rows_with_quote(rows, "in")
+
+
+def own_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """只留**己方**（direction=out）且正文够长的被删行（M-1 C #219：己方手机端撤回）。"""
+    return _rows_with_quote(rows, "out")
+
+
 def purge_episodic(episodic_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
     """记忆侧：记下撤回原文，**不删**情景事实。返回新记账条数。
 
-    ``episodic_store`` 保留形参以兼容旧调用方；现网不再调 ``delete_by_source_quotes``。
+    对端行进 ``quotes_for`` 账本（知道但不提）；己方行（M-1 C）进 ``own_quotes_for``
+    账本（不得再接着聊）。``episodic_store`` 保留形参以兼容旧调用方；现网不再调
+    ``delete_by_source_quotes``。
     """
     n = 0
     try:
@@ -109,32 +126,90 @@ def purge_episodic(episodic_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
                 n += 1
         except Exception:
             logger.debug("[peer-delete] withdrawn ledger failed cid=%s", cid, exc_info=True)
+    for r in own_rows(rows):
+        cid = str(r.get("conversation_id") or "").strip()
+        q = str(r.get("_quote") or r.get("text") or "")
+        try:
+            if record_withdrawn(cid, q, own=True):
+                n += 1
+        except Exception:
+            logger.debug("[own-delete] withdrawn ledger failed cid=%s", cid, exc_info=True)
     return n
 
 
-def purge_context_history(context_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
-    """A 线对话上下文：匹配的 user 条换成占位（不删轮次）。返回改动数。"""
-    if context_store is None or not hasattr(context_store, "peek"):
-        return 0
-    try:
-        from src.inbox.withdrawn_cite import PLACEHOLDER
-    except Exception:
-        PLACEHOLDER = "（对方已撤回一条消息，不得主动引用其内容）"
-
-    changed = 0
+def _ctx_keys_for(conversation_id: str) -> List[str]:
+    _plat, acct, ck = split_conversation_id(str(conversation_id or ""))
+    if not ck:
+        return []
     try:
         from src.utils.context_store import make_context_key
     except Exception:
+        return []
+    keys: List[str] = []
+    for k in (make_context_key(ck, acct), ck):
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+
+def _redact_own_in_ctx(ctx: Dict[str, Any], quote: str, placeholder: str) -> bool:
+    """己方撤回（M-1 C #219）在 A 线上下文里的四个落点：assistant 历史条 → 占位；
+    ``last_reply`` → 占位；``recent_replies``（防复读账本）剔除；``_human_said_log``
+    （#177 人工自述记忆）剔除。返回是否改动。"""
+    touched = False
+    hist = ctx.get("_conversation_history")
+    if isinstance(hist, list):
+        new_hist = []
+        for m in hist:
+            if (isinstance(m, dict)
+                    and str(m.get("role") or "") == "assistant"
+                    and quotes_match(m.get("content"), quote)):
+                mm = dict(m)
+                mm["content"] = placeholder
+                mm["_withdrawn_own"] = True
+                new_hist.append(mm)
+                touched = True
+            else:
+                new_hist.append(m)
+        if touched:
+            ctx["_conversation_history"] = new_hist
+    if quotes_match(ctx.get("last_reply"), quote):
+        ctx["last_reply"] = placeholder
+        touched = True
+    rr = ctx.get("recent_replies")
+    if isinstance(rr, list):
+        kept = [x for x in rr if not quotes_match(
+            x.get("text") if isinstance(x, dict) else x, quote)]
+        if len(kept) != len(rr):
+            ctx["recent_replies"] = kept
+            touched = True
+    hs = ctx.get("_human_said_log")
+    if isinstance(hs, list):
+        kept = [x for x in hs if not (isinstance(x, dict) and (
+            quotes_match(x.get("text"), quote) or quotes_match(x.get("sent_text"), quote)
+            or quotes_match(x.get("fact"), quote)))]
+        if len(kept) != len(hs):
+            ctx["_human_said_log"] = kept
+            touched = True
+    return touched
+
+
+def purge_context_history(context_store: Any, rows: Iterable[Dict[str, Any]]) -> int:
+    """A 线对话上下文：对端行→匹配的 user 条换成占位；己方行（M-1 C）→ assistant 条换
+    占位 + last_reply/recent_replies/_human_said_log 剔除（不删轮次）。返回改动数。"""
+    if context_store is None or not hasattr(context_store, "peek"):
         return 0
-    for r in inbound_rows(rows):
-        _plat, acct, ck = split_conversation_id(str(r.get("conversation_id") or ""))
-        if not ck:
-            continue
-        keys: List[str] = []
-        for k in (make_context_key(ck, acct), ck):
-            if k and k not in keys:
-                keys.append(k)
-        for key in keys:
+    try:
+        from src.inbox.withdrawn_cite import OWN_PLACEHOLDER, PLACEHOLDER
+    except Exception:
+        PLACEHOLDER = "（对方已撤回一条消息，不得主动引用其内容）"
+        OWN_PLACEHOLDER = "（你已撤回一条消息，不得再提其内容或接着这个话头聊）"
+
+    changed = 0
+    work: List[Tuple[Dict[str, Any], bool]] = (
+        [(r, False) for r in inbound_rows(rows)] + [(r, True) for r in own_rows(rows)])
+    for r, is_own in work:
+        for key in _ctx_keys_for(str(r.get("conversation_id") or "")):
             try:
                 ctx = context_store.peek(key)
             except Exception:
@@ -142,32 +217,36 @@ def purge_context_history(context_store: Any, rows: Iterable[Dict[str, Any]]) ->
             if not isinstance(ctx, dict):
                 continue
             touched = False
-            hist = ctx.get("_conversation_history")
-            if isinstance(hist, list):
-                new_hist = []
-                for m in hist:
-                    if (isinstance(m, dict)
-                            and str(m.get("role") or "") == "user"
-                            and quotes_match(m.get("content"), r["_quote"])):
-                        mm = dict(m)
-                        mm["content"] = PLACEHOLDER
-                        mm["_withdrawn"] = True
-                        new_hist.append(mm)
-                        touched = True
-                    else:
-                        new_hist.append(m)
-                if touched:
-                    ctx["_conversation_history"] = new_hist
-            if quotes_match(ctx.get("last_message"), r["_quote"]):
-                ctx["last_message"] = PLACEHOLDER
-                touched = True
+            if is_own:
+                touched = _redact_own_in_ctx(ctx, r["_quote"], OWN_PLACEHOLDER)
+            else:
+                hist = ctx.get("_conversation_history")
+                if isinstance(hist, list):
+                    new_hist = []
+                    for m in hist:
+                        if (isinstance(m, dict)
+                                and str(m.get("role") or "") == "user"
+                                and quotes_match(m.get("content"), r["_quote"])):
+                            mm = dict(m)
+                            mm["content"] = PLACEHOLDER
+                            mm["_withdrawn"] = True
+                            new_hist.append(mm)
+                            touched = True
+                        else:
+                            new_hist.append(m)
+                    if touched:
+                        ctx["_conversation_history"] = new_hist
+                if quotes_match(ctx.get("last_message"), r["_quote"]):
+                    ctx["last_message"] = PLACEHOLDER
+                    touched = True
             if touched:
                 changed += 1
                 try:
                     context_store.mark_dirty(key)
                     context_store.flush(key)
                 except Exception:
-                    logger.debug("[peer-delete] ctx flush failed key=%s", key, exc_info=True)
+                    logger.debug("[%s] ctx flush failed key=%s",
+                                 "own-delete" if is_own else "peer-delete", key, exc_info=True)
     return changed
 
 
@@ -191,7 +270,7 @@ def purge_for_deleted_rows(skill_manager: Any, rows: Iterable[Dict[str, Any]]) -
 
 __all__ = [
     "MIN_TEXT_LEN", "QUOTE_MAX",
-    "inbound_rows", "key_has_component", "normalize_quote",
+    "inbound_rows", "own_rows", "key_has_component", "normalize_quote",
     "purge_context_history", "purge_episodic", "purge_for_deleted_rows",
     "quotes_match", "split_conversation_id",
 ]

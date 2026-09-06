@@ -779,17 +779,19 @@ def apply_inbound_enrichments(
         pass
     try:
         from src.inbox.withdrawn_cite import (
-            build_withdrawn_hint, quotes_for, redact_history)
+            build_withdrawn_hint, own_quotes_for, quotes_for, redact_history)
         _cid = str(
             user_context.get("conversation_id")
             or user_context.get("chat_id") or "").strip()
         _qs = quotes_for(_cid)
-        if _qs:
-            _wh = build_withdrawn_hint(_qs, inbound=t)
+        # M-1 C #219：己方在手机端删掉的消息——AI 不得再接着那个话头聊
+        _oqs = own_quotes_for(_cid)
+        if _qs or _oqs:
+            _wh = build_withdrawn_hint(_qs, inbound=t, own_quotes=_oqs)
             if _wh:
                 hints.append(_wh)
             if isinstance(history, list) and history:
-                history[:] = redact_history(history, _qs)
+                history[:] = redact_history(history, _qs, _oqs)
     except Exception:
         pass
     if hints:

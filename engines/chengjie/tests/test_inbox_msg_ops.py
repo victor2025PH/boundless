@@ -297,7 +297,10 @@ def test_revoke_telegram_happy_path(tmp_path, monkeypatch):
     assert d["ok"] is True and d["revoked"] == 1
     assert orch.calls == [("telegram", "8244899900", "5433982810",
                            ["5001"], True)]
-    row = [m for m in store.list_recent_messages(CID, limit=50)
+    # M-1 C #219 起：revoked 行不进 AI 口径（默认 include_deleted=True 剔除），UI 口径仍给（灰显）
+    assert [m for m in store.list_recent_messages(CID, limit=50)
+            if m["platform_msg_id"] == "5001"] == []
+    row = [m for m in store.list_recent_messages(CID, limit=50, include_deleted=False)
            if m["platform_msg_id"] == "5001"][0]
     assert row["revoked"] == 1
 

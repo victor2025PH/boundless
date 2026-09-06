@@ -2318,6 +2318,16 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "bad_request"}
         cid = f"{plat}:{acct}:{ck}"
         ok = False
+        # M-1 C #219：撤回前先取原文（方向 + 正文），标撤回后交记忆清理钩子——WhatsApp /
+        # Messenger 边车上报的撤回（含己方在手机端删自己的消息）此前只灰显气泡，AI 侧的
+        # A 线上下文 / 撤回账本零处置；与 Telegram 裸 id 路径（report_deleted_messages）同一钩子。
+        _rows_before = []
+        if op == "revoke" and hasattr(store, "select_live_by_platform_msg_ids"):
+            try:
+                _rows_before = list(store.select_live_by_platform_msg_ids(
+                    plat, acct, [target_id], chat_key=ck) or [])
+            except Exception:
+                _rows_before = []
         try:
             if op == "revoke":
                 ok = store.mark_message_revoked(cid, target_id)
@@ -2326,6 +2336,19 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     cid, target_id, str((body or {}).get("text") or ""))
         except Exception:
             logger.debug("[protocol] 消息编辑/撤回落库失败", exc_info=True)
+        if ok and op == "revoke" and _rows_before:
+            try:
+                from src.integrations.protocol_bridge import get_deleted_memory_purger
+                _fn = get_deleted_memory_purger()
+                if _fn is not None:
+                    _purged = dict(_fn(_rows_before) or {})
+                    logger.info(
+                        "[protocol] 撤回同步 platform=%s conv=%s target=%s direction=%s "
+                        "记忆账本=%s 上下文剔除=%s", plat, cid, target_id,
+                        str(_rows_before[0].get("direction") or "?"),
+                        _purged.get("memory", 0), _purged.get("context", 0))
+            except Exception:
+                logger.debug("[protocol] 撤回关联记忆清理失败", exc_info=True)
         if ok:
             try:
                 from src.integrations.shared.event_bus import get_event_bus

@@ -681,6 +681,10 @@ def report_deleted_messages(
     不主动提」改为「删了就不该再影响 AI」（残留错误内容会污染后续每一轮）。
     发 ``messages_deleted`` SSE 让所有工作台窗口即时同步。best-effort：返回软删条数，
     异常/未就绪返回 0。
+
+    M-1 C #219（2026-09-06）：命中**出站**行＝己方在手机端删了自己发的消息 → 标
+    ``revoked=1``（灰显「你撤回了」+ AI 口径剔除），而非按对端删除软删消失；返回值
+    改为「对端软删 + 己方撤回」合计。
     """
     ids = [str(i) for i in (platform_msg_ids or []) if str(i or "").strip()]
     if not ids:
@@ -696,24 +700,44 @@ def report_deleted_messages(
     except Exception:
         logger.debug("[protocol_bridge] 对端删除同步取原文失败", exc_info=True)
         rows = []
-    try:
-        n = int(store.soft_delete_by_platform_msg_ids(
-            platform, account_id, ids, chat_key=str(chat_key or ""),
-            deleted_by="peer"))
-    except Exception:
-        logger.debug("[protocol_bridge] 对端删除同步软删失败", exc_info=True)
-        return 0
-    if n:
+    # M-1 C #219：裸 id 反查**不再只当对端删除**——命中出站行＝己方在别的端删了自己的
+    # 消息：标 revoked（工作台灰显「你撤回了一条消息」，AI 口径剔除），不软删不消失；
+    # 入站行照旧按对端删除软删。两类都交记忆清理钩子（rows 带 direction，purge 按方向分治）。
+    own_ids = [str(r.get("platform_msg_id") or "") for r in rows
+               if str(r.get("direction") or "in") == "out"]
+    own_ids = [i for i in own_ids if i]
+    peer_ids = [i for i in ids if i not in set(own_ids)]
+    n_own = 0
+    if own_ids and hasattr(store, "revoke_own_by_platform_msg_ids"):
+        try:
+            n_own = int(store.revoke_own_by_platform_msg_ids(
+                platform, account_id, own_ids, chat_key=str(chat_key or "")))
+        except Exception:
+            logger.debug("[protocol_bridge] 己方删除同步标撤回失败", exc_info=True)
+            n_own = 0
+    n = 0
+    if peer_ids:
+        try:
+            n = int(store.soft_delete_by_platform_msg_ids(
+                platform, account_id, peer_ids, chat_key=str(chat_key or ""),
+                deleted_by="peer"))
+        except Exception:
+            logger.debug("[protocol_bridge] 对端删除同步软删失败", exc_info=True)
+            n = 0
+    total = n + n_own
+    if total:
         purged: Dict[str, Any] = {}
         fn = _deleted_memory_purger
         if fn is not None and rows:
             try:
                 purged = dict(fn(rows) or {})
             except Exception:
-                logger.debug("[protocol_bridge] 对端删除关联记忆清理失败", exc_info=True)
+                logger.debug("[protocol_bridge] 删除关联记忆清理失败", exc_info=True)
         logger.info(
-            "[protocol_bridge] 对端删除同步 platform=%s acct=%s 软删=%d 记忆清理=%s 上下文剔除=%s",
-            str(platform or "").lower(), str(account_id or ""), n,
+            "[protocol_bridge] 删除同步 platform=%s acct=%s chat=%s ids=%s 对端软删=%d "
+            "己方撤回=%d 记忆账本=%s 上下文剔除=%s",
+            str(platform or "").lower(), str(account_id or ""), str(chat_key or "-"),
+            ",".join(ids[:8]) + ("…" if len(ids) > 8 else ""), n, n_own,
             purged.get("memory", 0), purged.get("context", 0))
         try:
             from src.integrations.shared.event_bus import get_event_bus
@@ -721,12 +745,18 @@ def report_deleted_messages(
                 "platform": str(platform or "").lower(),
                 "account_id": str(account_id or ""),
                 "chat_key": str(chat_key or ""),
-                "op": "peer_delete", "count": n,
+                "op": ("peer_delete" if not n_own else
+                       "own_revoke" if not n else "delete_sync"),
+                "count": total, "peer_deleted": n, "own_revoked": n_own,
                 "memory_purged": int(purged.get("memory", 0) or 0),
                 "context_purged": int(purged.get("context", 0) or 0)})
         except Exception:
             logger.debug("[protocol_bridge] 删除同步 SSE 发布失败", exc_info=True)
-    return n
+    else:
+        # 删除更新到了但本地一条都没对上（多为本会话从未镜像 / 早已处理）——留 DEBUG 便于对时
+        logger.debug("[protocol_bridge] 删除同步零命中 platform=%s acct=%s ids=%s",
+                     str(platform or "").lower(), str(account_id or ""), ids[:8])
+    return total
 
 
 def tg_peer_to_chat_key(peer: Any) -> str:
