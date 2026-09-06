@@ -275,6 +275,30 @@ def _merge_orchestrator_status(
                     v[_sk] = _sv
             if registry_keys is not None:
                 v["removable"] = pkey in registry_keys or k in registry_keys
+            # M-2 A2/B（#232 / D-M1）：账号级「通道连接真相」+ 登录门禁快照下沉到账号
+            # 条目——账号栏「已连接 / 未连接（需重新登录）/ 重连中」、冷静期倒计时、
+            # 「通道异常已暂停自动发送」红标、「登录后默认半自动待确认」全部从这里读，
+            # 与发送闸（channel_send_block_reason）/ 封顶层（gate_caps）同一数据源。
+            try:
+                from src.integrations.platform_session_health import (
+                    channel_connection_state,
+                )
+                _cs = channel_connection_state(
+                    str(v.get("platform") or ""),
+                    str(v.get("account_id") or "default"))
+                v["channel_state"] = str(_cs.get("state") or "unknown")
+                v["channel_reason"] = str(_cs.get("reason") or "")
+                v["channel_detail"] = str(_cs.get("detail") or "")[:120]
+                v["channel_since"] = float(_cs.get("since") or 0.0)
+            except Exception:
+                logger.debug("[chats] 通道连接真相求值失败 key=%s", k, exc_info=True)
+            try:
+                from src.inbox.account_channel_gate import account_snapshot
+                v["gate"] = account_snapshot(
+                    str(v.get("platform") or ""),
+                    str(v.get("account_id") or "default"), config=cfg)
+            except Exception:
+                logger.debug("[chats] 账号门禁快照失败 key=%s", k, exc_info=True)
             if _sess_key is not None:
                 try:
                     _sk = _sess_key(

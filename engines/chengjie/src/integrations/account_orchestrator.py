@@ -451,6 +451,24 @@ class AccountOrchestrator:
             return m.worker
         return None
 
+    def managed_state(self, platform: str, account_id: str) -> Optional[Dict[str, Any]]:
+        """受管 worker 的连接态摘要（M-2 A2 ``channel_connection_state`` 读口）。
+
+        ``None``＝该账号不在管（未托管 / 已 stopped 的幽灵不算）。``gave_up``＝
+        连败达 MAX_RESTARTS 熔断等人工——对通道真相而言这已是「未连接」而非「重连中」。
+        """
+        m = self._managed.get(account_key(platform, account_id))
+        if m is None or m.state == "stopped":
+            return None
+        backoff = max(0.0, float(m.backoff_until or 0.0) - self._now())
+        return {
+            "state": str(m.state or ""), "restarts": int(m.restarts or 0),
+            "last_error": str(m.last_error or "")[:160],
+            "backoff_sec": int(round(backoff)),
+            "gave_up": bool(m.state == "error" and m.restarts >= MAX_RESTARTS),
+            "updated_at": float(m.updated_at or 0.0),
+        }
+
     def owns_media(self, platform: str, account_id: str) -> bool:
         """该账号是否有运行中、且支持发送媒体的 worker。"""
         m = self._managed.get(account_key(platform, account_id))
@@ -1716,6 +1734,7 @@ class MessengerWebWorker:
         self.account_id = str(account.get("account_id") or "")
         self.state = "stopped"
         self.detail = ""
+        self._absent_since = 0.0   # M-2：边车「未列出该账号」的起点（宽限判 needs_login）
 
     def _base(self) -> str:
         from src.integrations.messenger_web_login import service_base_url
@@ -1835,19 +1854,67 @@ class MessengerWebWorker:
         from src.integrations.messenger_web_login import _get_json
         try:
             res = await _get_json(f"{self._base()}/accounts")
-            for a in (res.get("accounts") or []):
-                if str(a.get("account_id") or "") != self.account_id:
-                    continue
-                # 假健康修复（P0-2）：Node /accounts 现带 logged_in（轮询周期性
-                # pageLoggedIn 复检）。status=authorized 但登录态已丢（cookie 失效
-                # 停在登录页）→ 判不健康，让编排器进入 error/告警，而非带病待命。
-                if a.get("logged_in") is False:
-                    self.detail = "session listed but not logged in (cookie expired?)"
-                    return False
-                return True
+        except Exception as ex:  # noqa: BLE001
+            # 边车进程不可达（重启中 / 崩了）≠ 登录态丢失：不上报 needs_login，
+            # 让编排器按退避重启（UI 显「重连中」），别把坐席往「重新登录」上引。
+            self.detail = f"sidecar unreachable: {str(ex)[:80]}"
             return False
-        except Exception:
+        for a in (res.get("accounts") or []):
+            if str(a.get("account_id") or "") != self.account_id:
+                continue
+            # 假健康修复（P0-2）：Node /accounts 现带 logged_in（轮询周期性
+            # pageLoggedIn 复检）。status=authorized 但登录态已丢（cookie 失效
+            # 停在登录页）→ 判不健康，让编排器进入 error/告警，而非带病待命。
+            if a.get("logged_in") is False:
+                self.detail = "session listed but not logged in (cookie expired?)"
+                self._report_probe("needs_login", self.detail,
+                                   login_id=str(a.get("login_id") or ""))
+                return False
+            self.detail = ""
+            self._absent_since = 0.0
+            # M-2 A2/A3（#232）：探测通过＝「登录完成」的唯一判据 → 回报健康表
+            # authorized（带 login_id：同档案重推不触发登录冷静期；换档案＝真重登）。
+            # 后端重启后健康表为空，边车只在转移时 push——没有这一步，账号栏
+            # 永远不知道通道其实是通的 / 不通的。
+            self._report_probe("authorized", "probe ok",
+                               login_id=str(a.get("login_id") or ""))
+            return True
+        # 边车在线但**没有**该账号的已授权会话（ZGKVQB 实锤：13:55 重启 restored 0，
+        # 界面「已登录」两小时、收得到发不出、每条 500 静默）。持续超过宽限
+        # （边车开机 restore 要拉浏览器、注快照、等 Messenger connected，几十秒内
+        # 「还没列出来」是正常过程，边车 worker.restoring>0 期间也不判）才是确定性的
+        # 「需重新登录」：上报 needs_login → 注册表 offline(worker:needs_login) →
+        # 账号栏「需重新登录」/ 断线卡片 / 看门狗催办 / 自动与手动发送闸全部点亮。
+        now = time.time()
+        if not getattr(self, "_absent_since", 0.0):
+            self._absent_since = now
+        restoring = 0
+        try:
+            restoring = int(((res or {}).get("worker") or {}).get("restoring") or 0)
+        except (TypeError, ValueError):
+            restoring = 0
+        absent_for = now - float(self._absent_since or now)
+        if restoring > 0 or absent_for < self.ABSENT_GRACE_SEC:
+            self.detail = (f"sidecar has no authorized session yet "
+                           f"(absent {absent_for:.0f}s, restoring={restoring})")
             return False
+        self.detail = "sidecar has no authorized session for this account (restored 0? needs re-login)"
+        self._report_probe("needs_login", self.detail)
+        return False
+
+    #: 「边车没列出该账号」持续多久才判 needs_login（开机 restore / 自愈重拉窗口内不判）
+    ABSENT_GRACE_SEC = 90.0
+
+    def _report_probe(self, status: str, detail: str, *, login_id: str = "") -> None:
+        """健康探测结果 → 健康表（best-effort；record 自带同态去重，15s 一次不刷屏）。"""
+        try:
+            from src.integrations.platform_session_health import (
+                report_session_transition,
+            )
+            report_session_transition("messenger", self.account_id, status,
+                                      detail=detail, login_id=login_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("[messenger] 探测结果上报健康表失败", exc_info=True)
 
     def status(self) -> Dict[str, Any]:
         return {"type": "messenger_web", "account_id": self.account_id,

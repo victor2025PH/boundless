@@ -851,6 +851,14 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .acct-chip.ac-loggedout.active{opacity:.95;}
 .acct-chip .ac-out-tag{background:color-mix(in srgb,#f59e0b 22%,transparent);color:var(--th-ink-amber7,#b45309);}
 .acct-chip.active .ac-out-tag{background:color-mix(in srgb,#f59e0b 30%,transparent);color:inherit;}
+/* M-2 A2/B（#232 / D-M1，2026-09-06）：通道真相 + 账号门禁标签。
+   未连接 / 通道异常降级 = 红（发不出去 / 自动已停，要人动手）；重连中 = 中性带旋转点；
+   冷静期 = 琥珀（刚登录，只起草，等你过目）。chip 头像点随「通道通不通」而非「worker 在不在跑」。 */
+.acct-chip .ac-chan-off,.acct-chip .ac-gate-deg{background:color-mix(in srgb,#dc2626 16%,transparent);color:var(--th-ink-red7,#b91c1c);}
+.acct-chip.active .ac-chan-off,.acct-chip.active .ac-gate-deg{background:color-mix(in srgb,#dc2626 26%,transparent);color:inherit;}
+.acct-chip.ac-chanoff{opacity:.8;}
+.acct-chip .ac-chan-rec{display:inline-flex;align-items:center;gap:3px;}
+.acct-chip .ac-gate-cool{background:color-mix(in srgb,#f59e0b 18%,transparent);color:var(--th-ink-amber7,#b45309);}
 /* 工具区齿轮（打开账号管理抽屉） */
 .ac-gear{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);cursor:pointer;transition:border-color .15s,color .15s;flex:0 0 auto;padding:0;}
 .ac-gear:hover{border-color:var(--pc,var(--accent,#6b8af8));color:var(--pc,var(--accent,#6b8af8));}

@@ -86,6 +86,8 @@ ZH = {
     "err.inbox.send_blocked_session": "该平台会话已掉线，消息无法送达，请在账号管理里重新登录。",
     "err.inbox.send_blocked_generic": "发送被安全护栏拦截（{reason}），消息未送出。",
     "err.inbox.send_not_delivered": "消息未送达：{msg}",
+    # M-2 A2（#232）：通道未连接（边车没有该账号会话 / 已登出 / 放弃重连）——自动与手动同一闸
+    "err.inbox.channel_disconnected": "该账号 {platform} 会话未建立，消息不会发出——请先重新登录该账号",
     # 实施86 域B-1（工单 #21/#23/#49）：发送失败三类人话（与失败留痕气泡
     # inbox.failr.* 同一分类口径，映射在 send_failure_class.FAILURE_CLASS_I18N）
     "err.inbox.sendfail.rate_limited": "触发平台发送限频，系统已自动退避降速，稍后自动恢复——这条消息已留痕，可稍后一键重发",
@@ -231,6 +233,8 @@ EN = {
     "err.inbox.send_blocked_session": "The platform session is offline; the message cannot be delivered. Re-login from account management.",
     "err.inbox.send_blocked_generic": "Blocked by a safety guard ({reason}); the message was not sent.",
     "err.inbox.send_not_delivered": "Message not delivered: {msg}",
+    # M-2 A2 (#232): channel not connected (sidecar has no session / logged out / gave up) — same gate for auto and manual
+    "err.inbox.channel_disconnected": "This account's {platform} session is not established; the message will not be sent — re-login the account first",
     # impl86 domain B-1 (tickets #21/#23/#49): three-way human-readable send failures
     "err.inbox.sendfail.rate_limited": "Platform rate limit hit — sending is auto-throttled and recovers shortly; the message is kept and can be resent with one click",
     "err.inbox.sendfail.platform_block": "This account is temporarily blocked from sending by the platform (auto-frozen for protection; lifts automatically) — the message is kept for resend",

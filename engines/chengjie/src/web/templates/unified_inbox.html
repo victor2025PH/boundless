@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906c">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906d">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -2375,6 +2375,10 @@ function _accountsForPlatform(p){
       map[id].inbox_hint=String(a.inbox_hint||'');
       map[id].stall_since=Number(a.stall_since)||0;
     }
+    // M-2 A2/B（#232 / D-M1）：通道连接真相（connected/disconnected/reconnecting/unknown）
+    // + 账号门禁快照（冷静期 / 降级红标 / 登录后待确认）——chip 标签与会话横幅同源
+    if(a.channel_state){ map[id].channel_state=String(a.channel_state); map[id].channel_reason=String(a.channel_reason||''); map[id].channel_detail=String(a.channel_detail||''); }
+    if(a.gate && typeof a.gate==='object') map[id].gate=a.gate;
     // platform_status.unread/attn 与 unread/attnByAccount 同源（P6/P8 enrich）；有则先铺底
     if(useSrv && a.unread!=null) map[id].unread=Number(a.unread)||0;
     if(useSrvAttn && a.attn!=null) map[id].attn=Number(a.attn)||0;
@@ -2495,11 +2499,31 @@ function buildAccountChips(){
     if(loggedOut) tip+=` · ${window.T('inbox.acct.out_tag_t')}`;
     if(a.inbox_stalled) tip+=` · ${window.T('inbox.acct.stall_tag_t')}`;
     if(!ghost&&meta.persona_id) tip+=` · ${window.Tf('inbox.ident.persona_t',{persona:meta.persona_name||meta.persona_id})}`;
-    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}${loggedOut?' ac-loggedout':''}${a.inbox_stalled?' ac-stall':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
-      <span class="ac-av ${a.running?'on':'off'}" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
+    // M-2 A2/B：通道真相 + 账号门禁标签（优先级：已退出 > 未连接 > 重连中 > 通道异常降级 > 冷静期 > 半死 > 历史）
+    const chanOff=!ghost&&!loggedOut&&a.channel_state==='disconnected';
+    const chanRec=!ghost&&!loggedOut&&a.channel_state==='reconnecting';
+    const g=a.gate||{};
+    const gDeg=!ghost&&!loggedOut&&!!g.degraded;
+    const gCool=!ghost&&!loggedOut&&Number(g.cooldown_remaining_s||0)>0;
+    if(chanOff) tip+=` · ${window.T('inbox.chan.tag_off_t')}`;
+    else if(chanRec) tip+=` · ${window.T('inbox.chan.tag_rec_t')}`;
+    else tip+=` · ${window.T('inbox.chan.tag_on_t')}`;
+    if(gDeg) tip+=` · ${window.T('inbox.gate.tag_degraded_t')}`;
+    if(gCool) tip+=` · ${window.Tf('inbox.gate.tag_cooldown_t',{m:Math.max(1,Math.ceil(Number(g.cooldown_remaining_s||0)/60))})}`;
+    if(!gDeg&&!gCool&&g.login_pending_confirm) tip+=` · ${window.T('inbox.gate.tag_semi_t')}`;
+    let stTag='';
+    if(loggedOut) stTag=`<span class="ac-ghost-tag ac-out-tag">${window.T('inbox.acct.out_tag')}</span>`;
+    else if(chanOff) stTag=`<span class="ac-ghost-tag ac-out-tag ac-chan-off">${window.T('inbox.chan.tag_off')}</span>`;
+    else if(chanRec) stTag=`<span class="ac-ghost-tag ac-chan-rec"><span class="acct-chip-spin"></span>${window.T('inbox.chan.tag_rec')}</span>`;
+    else if(gDeg) stTag=`<span class="ac-ghost-tag ac-out-tag ac-gate-deg">${window.T('inbox.gate.tag_degraded')}</span>`;
+    else if(gCool) stTag=`<span class="ac-ghost-tag ac-gate-cool">${window.Tf('inbox.gate.tag_cooldown',{m:Math.max(1,Math.ceil(Number(g.cooldown_remaining_s||0)/60))})}</span>`;
+    else if(a.inbox_stalled) stTag=`<span class="ac-ghost-tag ac-stall-tag">${window.T('inbox.acct.stall_tag')}</span>`;
+    else if(ghost) stTag=`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`;
+    html+=`<div class="acct-chip ${accountFilter===a.account_id?'active':''}${ghost?' ac-ghost':''}${loggedOut?' ac-loggedout':''}${a.inbox_stalled?' ac-stall':''}${chanOff?' ac-chanoff':''}" role="button" tabindex="0" onclick="setAccountFilter('${esc(a.account_id)}')" onkeydown="_acChipKey(event)" title="${esc(tip)}">
+      <span class="ac-av ${(a.running&&!chanOff)?'on':'off'}" style="background:${avBg};">${avInner}<span class="ac-st ${(a.running&&!chanOff)?'on':'off'}" aria-hidden="true"></span></span>
       <span class="ac-name">${esc(nm)}</span>
       ${noPersona?`<span class="conv-nopersona-dot" data-ac-nopersona="1" data-plat="${esc(platFilter)}" data-aid="${esc(a.account_id)}" title="${esc(window.T('inbox.ident.no_persona_t'))}"></span>`:''}
-      ${loggedOut?`<span class="ac-ghost-tag ac-out-tag">${window.T('inbox.acct.out_tag')}</span>`:(a.inbox_stalled?`<span class="ac-ghost-tag ac-stall-tag">${window.T('inbox.acct.stall_tag')}</span>`:(ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''))}
+      ${stTag}
       ${_acUnreadBadge(a.unread,a.attn,platFilter,a.account_id)}</div>`;
   });
   // 「仅历史」账号折叠开关（有历史账号且未开「仅在线」时展示）——留在滚动区（就地展开语义）；
@@ -7715,11 +7739,50 @@ function _applyReadOnly(c){
   if(tools){ tools.style.opacity=ro?'.45':''; tools.style.pointerEvents=ro?'none':''; }
   _paintAcctBanner(c);
 }
+/* M-2 A2/B（#232 / D-M1）：按 (platform, account_id) 取 platform_status 条目——账号栏 chip、
+   会话横幅、发送前置检查共用同一份「通道真相 + 门禁快照」。取不到返回 {}（旧后端/未托管）。 */
+function _acctInfo(p,aid){
+  const want=String(aid||'default');
+  let hit=null;
+  Object.values(platformStatus||{}).forEach(a=>{
+    if(hit) return;
+    if((a.platform||'web')!==p) return;
+    if(String(a.account_id||'default')!==want) return;
+    hit=a;
+  });
+  return hit||{};
+}
+function _acctChannelState(c){ return String((c&&_acctInfo(c.platform,c.account_id).channel_state)||''); }
+function _acctGate(c){ const a=c?_acctInfo(c.platform,c.account_id):{}; return (a&&a.gate&&typeof a.gate==='object')?a.gate:{}; }
+/* 「通道异常，已暂停自动发送」红标的人工确认出路：用户看过/修好后点「恢复自动」→ 服务端清降级。 */
+async function _gateClearDegraded(p,aid,btn){
+  if(btn) btn.disabled=true;
+  try{
+    const r=await apiFetch('/api/unified-inbox/automation/account-gate',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:p,account_id:aid,action:'clear_degraded'})},{timeoutMs:20000});
+    const d=await r.json();
+    if(!r.ok||!d.ok) throw new Error('gate clear failed');
+    _toast(window.T('inbox.gate.degraded_cleared'),'#16a34a');
+    try{ await loadChats(); }catch(_){}
+    if(selectedChat) _paintAcctBanner(selectedChat);
+  }catch(_){ _toast(window.T('inbox.gate.op_fail'),'#dc2626'); if(btn) btn.disabled=false; }
+}
 function _paintAcctBanner(c){
   const banner=document.getElementById('acct-out-banner');
   if(!banner) return;
   const ro=!!(c && (c.read_only || c.can_send===false));
   const out=!!(c && c.account_status==='offline');
+  // M-2 A2：通道未连接（边车没有该账号会话 / 放弃重连）——不论会话行怎么写，先说真话：
+  // 「该账号会话未建立，消息不会发出」+ 重新登录出路；自动与手动发送闸在服务端同一判定。
+  if(c && !ro && _acctChannelState(c)==='disconnected'){
+    const cta=(c.platform==='messenger')
+      ?`<button type="button" class="aob-btn" onclick="reloginMessengerAcct('${esc(c.account_id||'')}',this)">${esc(window.T('inbox.ro.relogin_btn'))}</button>`
+      :`<button type="button" class="aob-btn" onclick="openDrawer()">${esc(window.T('inbox.ro.manage_btn'))}</button>`;
+    banner.className='acct-out-banner warn';
+    banner.innerHTML=`<span class="aob-txt">${esc(window.Tf('inbox.chan.banner_off',{platform:platName(c.platform)}))}</span>${cta}`;
+    banner.style.display='flex';
+    return;
+  }
   if(ro){
     let cta='';
     if(out){
@@ -7740,6 +7803,31 @@ function _paintAcctBanner(c){
     banner.className='acct-out-banner warn';
     const txt=pinCase?window.T('inbox.ro.banner_stall_pin'):window.T('inbox.ro.banner_stall_e2ee');
     banner.innerHTML=`<span class="aob-txt">${esc(txt)}</span>${cta}`;
+    banner.style.display='flex';
+    return;
+  }
+  // M-2 A2：通道重连中（编排器 worker 退避重启窗）——信息条，不给重登按钮（多半自己会好）
+  if(c && _acctChannelState(c)==='reconnecting'){
+    banner.className='acct-out-banner info';
+    banner.innerHTML=`<span class="aob-txt">${esc(window.Tf('inbox.chan.banner_rec',{platform:platName(c.platform)}))}</span>`;
+    banner.style.display='flex';
+    return;
+  }
+  // M-2 B（D-M1 ⑦）：同账号连续 3 次发送失败 → 已自动降半自动，红条 + 「恢复自动」需人确认
+  const _g=c?_acctGate(c):{};
+  if(c && _g.degraded){
+    const cta=`<button type="button" class="aob-btn" onclick="_gateClearDegraded('${esc(c.platform)}','${esc(c.account_id||'default')}',this)">${esc(window.T('inbox.gate.degraded_clear_btn'))}</button>`;
+    banner.className='acct-out-banner warn';
+    banner.innerHTML=`<span class="aob-txt">${esc(window.Tf('inbox.gate.banner_degraded',{n:Number(_g.fail_streak||3)}))}</span>${cta}`;
+    banner.style.display='flex';
+    return;
+  }
+  // M-2 B（D-M1 ③）：登录/重登后冷静期——只起草不投递，请过目积压草稿
+  if(c && Number(_g.cooldown_remaining_s||0)>0){
+    const m=Math.max(1,Math.ceil(Number(_g.cooldown_remaining_s)/60));
+    const cta=`<button type="button" class="aob-btn" onclick="_openAiDraftPanel()">${esc(window.T('inbox.gate.cooldown_btn'))}</button>`;
+    banner.className='acct-out-banner info';
+    banner.innerHTML=`<span class="aob-txt">${esc(window.Tf('inbox.gate.banner_cooldown',{m:m}))}</span>${cta}`;
     banner.style.display='flex';
     return;
   }
@@ -13626,13 +13714,27 @@ let _mediaXhr=null;        // 在途 XHR（取消用）
 const _MEDIA_QUEUE_MAX=6;
 function _fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
 function _mediaIconFor(t){ t=String(t||''); if(t.indexOf('audio/')===0) return uiIcon('music',16); if(t.indexOf('video/')===0) return uiIcon('film',16); return uiIcon('file',16); }
-function _mediaCapMb(){ const c=_sendCapsLast; const v=c&&Number(c.media_max_mb); return (v&&v>0)?v:25; }
+// M-3 A（#227，D-M5 上限同源）：按文件类别取上限——视频读 send-caps.video_max_mb（后端
+// 临时压 50MB 的那个数，与路由 413 同一函数），其余读 media_max_mb；都拿不到才退 25。
+function _mediaCapMb(file){
+  const c=_sendCapsLast||{};
+  const isVideo=!!(file&&String(file.type||'').indexOf('video/')===0);
+  const v=Number(isVideo&&c.video_max_mb>0?c.video_max_mb:c.media_max_mb);
+  return (v&&v>0)?v:25;
+}
 function _syncPendingMedia(){ _pendingMedia=_mediaQueue.length?_mediaQueue[0]:null; }
 function _stageMedia(file){
   if(!file) return;
   if(!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
-  const capMb=_mediaCapMb();
-  if(file.size>capMb*1024*1024){ _toast(window.Tf('inbox.file.too_large_mb',{mb:capMb}),'#dc2626'); return; }
+  const capMb=_mediaCapMb(file);
+  if(file.size>capMb*1024*1024){
+    // 四分类②「超过上限」：文案带实际大小与上限；拦截落 renderer 日志（带 error 字样，
+    // zl_collect 的 renderer 过滤词是 error/failed——没这两个词的 console 行值守根本看不到）
+    const sizeMb=(file.size/1048576).toFixed(1);
+    _toast(window.Tf('inbox.file.too_large_detail',{size:sizeMb,mb:capMb}),'#dc2626');
+    try{ console.warn('[media] rejected error=too_large name='+(file.name||'')+' size='+sizeMb+'MB cap='+capMb+'MB platform='+(selectedChat.platform||'')); }catch(_){}
+    return;
+  }
   if(_mediaQueue.length>=_MEDIA_QUEUE_MAX){ _toast(window.Tf('inbox.file.queued_n',{n:_mediaQueue.length}),'#b45309'); return; }
   const url=(file.type&&file.type.indexOf('image/')===0)?URL.createObjectURL(file):'';
   // cmid 在暂存时生成一次、随件终身（0902 钧机实锤：此前每次提交现造新键，后端重启
@@ -13705,17 +13807,29 @@ function _xhrSendMedia(item,caption){
   // XHR 而非 fetch：upload.onprogress 是坐席「25MB 视频干等 5 分钟」焦虑的解药，
   // fetch 的上传进度（duplex 流）浏览器支持面不齐。5min 上限同旧口径。
   return new Promise(function(resolve,reject){
-    const fd=new FormData();
-    fd.append('platform', selectedChat.platform);
-    fd.append('account_id', selectedChat.account_id||'default');
-    fd.append('chat_key', selectedChat.chat_key);
-    fd.append('caption', caption||'');
-    if(!item.cmid) item.cmid=_newClientMsgId();
-    fd.append('client_msg_id', item.cmid);   // P0 幂等键：随件固定，重试同键（见 _stageMedia）
-    fd.append('file', item.file);
+    if(!item.cmid) item.cmid=_newClientMsgId();   // P0 幂等键：随件固定，重试同键（见 _stageMedia）
+    const meta={platform:selectedChat.platform, account_id:selectedChat.account_id||'default',
+      chat_key:selectedChat.chat_key, caption:caption||'', client_msg_id:item.cmid};
     const xhr=new XMLHttpRequest();
     _mediaXhr=xhr;
-    xhr.open('POST','/api/unified-inbox/send-media');
+    // M-3 A（#227）：后端声明 media_stream_upload → **裸流**上传：body 就是文件本体、元数据走
+    // query。服务端不再先把整个 multipart 卷进临时文件再复制，而是边收边落盘、拿到
+    // Content-Length 就能按上限精确 413。老后端（无该键）仍走 multipart。
+    const stream=!!(_sendCapsLast&&_sendCapsLast.media_stream_upload);
+    let body;
+    if(stream){
+      const q=Object.keys(meta).map(k=>encodeURIComponent(k)+'='+encodeURIComponent(meta[k]));
+      q.push('name='+encodeURIComponent(item.file.name||'file.bin'));
+      xhr.open('POST','/api/unified-inbox/send-media?'+q.join('&'));
+      xhr.setRequestHeader('Content-Type', item.file.type||'application/octet-stream');
+      body=item.file;
+    } else {
+      const fd=new FormData();
+      Object.keys(meta).forEach(k=>fd.append(k, meta[k]));
+      fd.append('file', item.file);
+      xhr.open('POST','/api/unified-inbox/send-media');
+      body=fd;
+    }
     xhr.timeout=300000;
     xhr.upload.onprogress=function(ev){
       if(!ev.lengthComputable) return;
@@ -13729,7 +13843,7 @@ function _xhrSendMedia(item,caption){
     xhr.onerror=function(){ reject(new Error('net')); };
     xhr.ontimeout=function(){ reject(new Error('timeout')); };
     xhr.onabort=function(){ resolve({status:0, d:{aborted:true}}); };
-    xhr.send(fd);
+    xhr.send(body);
   });
 }
 let _mediaSending=false;
@@ -13985,6 +14099,14 @@ async function sendMsg(){
     }
   }
 
+  // M-2 A2（#232）：通道未连接（账号栏已标「未连接」）→ 不发、不出乐观气泡、原文留在
+  // 输入框；服务端同一闸（channel_send_block_reason）兜底。避免「点了 ✓ 客户没收到」。
+  if(_acctChannelState(selectedChat)==='disconnected'){
+    _paintAcctBanner(selectedChat);
+    showHint(window.Tf('inbox.chan.banner_off',{platform:platName(selectedChat.platform)}));
+    try{ _uiBeacon('send_blk_channel_disconnected'); }catch(_){}
+    return;
+  }
   btn.disabled=true;
   _sendInFlight=true;          // 与 btn.disabled 同生共死；下方 finally 位置统一清
   btn.textContent=window.T('inbox.msg.sending');   // composer P2：在途期显式「发送中…」
@@ -14008,6 +14130,7 @@ async function sendMsg(){
 
   let _guard409=null;   // P0-198：服务端护栏 409 详情（收尾解锁后再弹确认）
   let _sentOk=false;    // composer P2：成功微反馈判据（仅 d.ok 置位）
+  let _sentReceipt='';  // M-2 A1：'delivered'（平台回执 ✓）/ 'queued'（RPA 入队）/ ''（已提交，无回执语义）
   try{
     const body={
       platform: selectedChat.platform,
@@ -14038,6 +14161,9 @@ async function sendMsg(){
     const d=await r.json();
     if(d.ok){
       _sentOk=true;   // composer P2：成功微反馈
+      // M-2 A1（#232）：✓ 只认平台/边车回执 delivered===true；RPA 入队 → 「已排队发送」；
+      // 旧后端无字段 → 「已提交」。此前一律「✓ 已发送」＝乐观显示非边车回执。
+      _sentReceipt=(d.delivered===true||(d.result&&d.result.delivered===true))?'delivered':((d.queued||(d.result&&d.result.queued))?'queued':'');
       _copilotApplyMeta=null;
       if(body.reply_to && d.quote_applied===false){
         try{ showHint(window.T('inbox.toast.quote_dropped')); }catch(_){}
@@ -14083,7 +14209,17 @@ async function sendMsg(){
       // P0-198：服务端护栏 409（语言错配 / 近重复）→ 记下守卫详情，待收尾解锁后
       // 弹确认框（保持「置位→清零」单点收尾结构，异常路径也能解锁发送按钮）。
       const det=d&&d.detail;
-      if(r.status===409 && det && typeof det==='object' && det.code==='send_blocked'){
+      if(det && typeof det==='object' && det.code==='channel_disconnected'){
+        // M-2 A2：服务端判通道未连接 → 移除乐观气泡 + 原文回填 + 横幅（重登出路）
+        threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
+        renderMessages(selectedChat, threadMsgs, {silent:true});
+        if(!ta.value.trim()){ ta.value=_origText||text; try{ _onReplyInput(ta.value); }catch(_){} }
+        try{ const ai=_acctInfo(selectedChat.platform,selectedChat.account_id); if(ai) ai.channel_state='disconnected'; }catch(_){}
+        _paintAcctBanner(selectedChat);
+        showHint(String(det.message||window.Tf('inbox.chan.banner_off',{platform:platName(selectedChat.platform)})));
+        try{ _uiBeacon('send_blk_channel_disconnected_srv'); }catch(_){}
+        try{ loadChats(); }catch(_){}
+      } else if(r.status===409 && det && typeof det==='object' && det.code==='send_blocked'){
         // P0 2026-08-12 护栏拦截显式反馈（额度/急停/放量/授权/会话掉线）：
         // 移除乐观气泡（拦截重试也会被拦，failed+重发按钮是误导）+ 原文回填
         // 输入框（绝不丢稿）+ 横幅即时点亮 + hint。刻意无「强发」出路——
@@ -14137,10 +14273,12 @@ async function sendMsg(){
   if(_sentOk){
     // composer P2 成功微反馈：「✓ 已发送」绿底 1.2s 后复位。dataset.flash 令牌：
     // 期间坐席再次发送/进入预览态 → 入口处已清令牌 → 本定时器失配即放弃，绝不覆盖新态。
+    // M-2 A1：✓ 只给平台回执（delivered）；入队显「已排队发送」；无回执语义显「已提交」。
     const _tok=String(Date.now());
     btn.dataset.flash=_tok;
-    btn.textContent=window.T('inbox.msg.sent_flash');
-    btn.style.background='var(--tk-emerald,#10b981)';
+    btn.textContent=_sentReceipt==='delivered'?window.T('inbox.msg.sent_flash')
+      :(_sentReceipt==='queued'?window.T('inbox.msg.sent_queued'):window.T('inbox.msg.sent_submitted'));
+    btn.style.background=_sentReceipt==='delivered'?'var(--tk-emerald,#10b981)':'var(--tk-amber,#d97706)';
     setTimeout(function(){
       try{
         if(btn.dataset.flash!==_tok) return;

@@ -539,6 +539,50 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "cancelled_l2": int(cancelled or 0),
         }
 
+    @app.post("/api/unified-inbox/automation/account-gate")
+    async def api_unified_inbox_automation_account_gate(
+        request: Request, _=Depends(api_auth),
+    ):
+        """M-2 B（D-M1 ⑦）账号级门禁人工出路。Body ``{platform, account_id, action}``：
+
+        - ``clear_degraded``：坐席确认通道已修好 → 解除「通道异常，已暂停自动发送」红标
+          （连续失败计数归零；自动投递重新放开）；
+        - ``end_cooldown``：坐席已过目积压 → 提前结束登录冷静期；
+        - ``snapshot``：只读快照（账号菜单渲染用）。
+        """
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").lower()
+        account_id = str((body or {}).get("account_id") or "default")
+        action = str((body or {}).get("action") or "snapshot").lower()
+        if not platform:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="platform"))
+        from src.inbox.account_channel_gate import (
+            account_snapshot, clear_degraded, end_cooldown,
+        )
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        changed = False
+        if action == "clear_degraded":
+            changed = clear_degraded(platform, account_id, actor=operator)
+        elif action == "end_cooldown":
+            changed = end_cooldown(platform, account_id)
+            if changed:
+                logger.info("[channel_gate] %s:%s 冷静期由 %s 提前结束",
+                            platform, account_id, operator)
+        elif action != "snapshot":
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="action"))
+        _cm = getattr(request.app.state, "config_manager", None)
+        _cfg = (getattr(_cm, "config", None) or {}) if _cm else {}
+        return {"ok": True, "platform": platform, "account_id": account_id,
+                "action": action, "changed": bool(changed),
+                "gate": account_snapshot(platform, account_id, config=_cfg)}
+
     @app.post("/api/unified-inbox/automation/bulk-downgrade")
     async def api_unified_inbox_automation_bulk_downgrade(
         request: Request, _=Depends(api_auth),

@@ -41,6 +41,9 @@ HEALTHY_STATUSES = frozenset({"authorized"})
 # 翻转；记录仍保留（by_status 可观测「坐席放弃了几次登录」）。2026-08-14 事故：
 # 放弃登录曾报 expired → 幽灵 login_id 挂横幅 3+ 小时无人能懂。
 ABANDONED_STATUS = "abandoned"
+# M-2（D-M1）：从这些状态回到 authorized ＝ 人重新认证过（真重登 → 登录冷静期）；
+# failed / blocked / forbidden 的恢复是通道自愈或平台解限，不算登录。
+LOGIN_RECOVERY_STATUSES = frozenset({"needs_login", "logged_out", "expired"})
 
 # 「登录尝试幽灵」TTL：不健康且**从未绑定真实账号**（key 的账号段==临时 login_id，
 # 即上报时 account_id 为空只能拿 login_id 顶位）的记录，超时即清——这类 key 没有
@@ -278,6 +281,12 @@ class PlatformSessionHealth:
         with self._lock:
             sess = self._sessions.get(self._key(platform, account_id))
             return bool(sess and str(sess.get("status")) in UNHEALTHY_STATUSES)
+
+    def session_status(self, platform: str, account_id: str) -> Dict[str, Any]:
+        """该会话最近一次上报的快照副本（未上报过 → ``{}``）。M-2 A2 通道真相读口。"""
+        with self._lock:
+            sess = self._sessions.get(self._key(platform, account_id))
+            return dict(sess) if sess else {}
 
     def _sweep_login_ghosts_locked(self, now: float) -> None:
         """清理超龄「登录尝试幽灵」（须持锁调用）。
@@ -980,6 +989,22 @@ def report_session_transition(
         plat, acct, st, detail=detail, login_id=login_id)
     if trans.get("superseded"):
         mark_superseded_accounts(plat, trans["superseded"], acct)
+    # M-2（D-M1 / #233）：authorized ＝ 通道就绪的唯一确定信号 → ① 账号级登录门禁
+    # 判「真实登录」（新 login_id / 从不健康恢复 → 冷静期 + 登录后默认半自动）；
+    # ② 重置自动投递退避（「登录成功即解锁」）。同 login_id 重推（边车/后端重启、
+    # WA 自动重连）在 note_login 内部按 False 落空，不会把在跑的号拖进冷静期。
+    if st in HEALTHY_STATUSES:
+        try:
+            from src.inbox.account_channel_gate import note_login, reset_backoff
+            # 从「要人重新认证」的状态恢复＝真重登（needs_login/logged_out/expired）；
+            # 从 failed（瞬时故障）/ blocked / forbidden（平台限制）恢复不是登录，
+            # 不开冷静期——WA 网络抖动重连一天几十次，按登录算就永远在冷静期。
+            _relogin = (bool(trans.get("recovered"))
+                        and str(trans.get("prev") or "") in LOGIN_RECOVERY_STATUSES)
+            note_login(plat, acct, login_id=login_id, force=_relogin)
+            reset_backoff(plat, acct, why=f"session {st}")
+        except Exception:
+            logger.debug("[session_health] 登录门禁登记失败（忽略）", exc_info=True)
     try:
         from src.integrations.account_registry import get_account_registry
         _reg = get_account_registry()
@@ -1019,6 +1044,121 @@ def report_session_transition(
         except Exception:
             logger.debug("[session_health] 会话健康告警发布失败", exc_info=True)
     return trans
+
+
+# ── M-2 A2（#232，2026-09-06）：账号级「通道连接真相」单一出口 ─────────────────
+#: 由外部边车 / 编排器 worker 保活连接的平台——「已登录」必须以边车会话在场为准，
+#: 注册表 online 只是「期望在线」。协议直连（telegram 主客户端）不在此列：其连接
+#: 真相是 pyrogram 自身，编排器 worker 状态即可。
+SIDECAR_PLATFORMS = frozenset({"messenger", "whatsapp", "zalo", "instagram", "line"})
+
+#: 连接态词汇（前端账号栏 / 会话头部 / 发送闸共用）
+CHANNEL_CONNECTED = "connected"
+CHANNEL_DISCONNECTED = "disconnected"
+CHANNEL_RECONNECTING = "reconnecting"
+CHANNEL_UNKNOWN = "unknown"
+
+#: 阻止发送的机器可读原因码（前端据此出人话 + 显「重新登录」出路）
+SEND_BLOCK_CHANNEL_DISCONNECTED = "channel_disconnected"
+
+
+def channel_connection_state(platform: str, account_id: str, *,
+                             now: Optional[float] = None) -> Dict[str, Any]:
+    """账号通道此刻到底通不通（#232 CW6RP4「智聊界面已登录与边车会话脱节」的解药）。
+
+    返回 ``{state, reason, detail, since}``：
+
+    - ``disconnected``：注册表 offline/removed（运营登出 / 自灭 / 停用）；或健康表
+      最近一次上报为不健康（needs_login / expired / logged_out / failed / blocked /
+      forbidden——含编排器 ``healthy()`` 探到边车没有该账号会话时上报的 needs_login）；
+      或编排器 worker 连败放弃（restarts ≥ MAX_RESTARTS）。
+    - ``reconnecting``：编排器 worker 处于 error/starting 退避重启窗（通道短暂不可用）。
+    - ``connected``：健康表 authorized，或 worker running 且健康表无不健康记录。
+    - ``unknown``：无任何登记（未托管的 RPA / 主协议号 / 测试）——调用方**不拦**。
+
+    只读、零 IO 抛出面：任何一层取数失败按该层不表态，最终至少返回 unknown。
+    """
+    plat = str(platform or "").strip().lower()
+    acct = str(account_id or "").strip()
+    ts = time.time() if now is None else float(now)
+    out: Dict[str, Any] = {"state": CHANNEL_UNKNOWN, "reason": "", "detail": "",
+                           "since": 0.0}
+    if not plat or not acct:
+        return out
+    # ① 注册表持久事实（peek：只读现有单例，纯单测 / 无编排器部署绝不隐式建库）
+    try:
+        from src.integrations.account_registry import peek_account
+        row = peek_account(plat, acct) or {}
+        rst = str(row.get("status") or "")
+        if rst in ("offline", "removed"):
+            reason = str((row.get("meta") or {}).get("offline_reason") or rst)
+            out.update(state=CHANNEL_DISCONNECTED, reason=f"registry:{rst}",
+                       detail=reason[:120],
+                       since=float(row.get("updated_at") or 0.0))
+            return out
+    except Exception:
+        pass
+    # ② 健康表（Node push / 编排器探测上报）
+    sess: Dict[str, Any] = {}
+    try:
+        sess = get_platform_session_health().session_status(plat, acct)
+    except Exception:
+        sess = {}
+    sst = str(sess.get("status") or "")
+    if sst in UNHEALTHY_STATUSES:
+        out.update(state=CHANNEL_DISCONNECTED, reason=sst,
+                   detail=str(sess.get("detail") or "")[:120],
+                   since=float(sess.get("unhealthy_since") or sess.get("ts") or ts))
+        return out
+    # ③ 编排器 worker 状态
+    m: Optional[Dict[str, Any]] = None
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is not None and hasattr(orch, "managed_state"):
+            m = orch.managed_state(plat, acct)
+    except Exception:
+        m = None
+    if m:
+        mstate = str(m.get("state") or "")
+        if mstate in ("error", "starting", "stopping"):
+            if bool(m.get("gave_up")):
+                out.update(state=CHANNEL_DISCONNECTED, reason="worker_gave_up",
+                           detail=str(m.get("last_error") or "")[:120],
+                           since=float(m.get("updated_at") or ts))
+            else:
+                out.update(state=CHANNEL_RECONNECTING, reason=f"worker_{mstate}",
+                           detail=str(m.get("last_error") or "")[:120],
+                           since=float(m.get("updated_at") or ts))
+            return out
+        if mstate == "running":
+            out.update(state=CHANNEL_CONNECTED, reason="worker_running",
+                       detail=str(sess.get("detail") or "")[:120],
+                       since=float(sess.get("ts") or m.get("updated_at") or 0.0))
+            return out
+    # ④ 健康表 authorized（无编排器 / worker 已停但边车仍在）
+    if sst in HEALTHY_STATUSES:
+        out.update(state=CHANNEL_CONNECTED, reason="session_authorized",
+                   since=float(sess.get("ts") or 0.0))
+        return out
+    return out
+
+
+def channel_send_block_reason(platform: str, account_id: str, *,
+                              now: Optional[float] = None) -> Dict[str, Any]:
+    """发送前问一句「通道通不通」：``{"reason": "" | channel_disconnected, "state": …}``。
+
+    只在 **disconnected** 时拦（确定性事实：边车没会话 / 已登出 / 放弃重连）——
+    reconnecting 不拦（发出去会诚实地 5xx 失败并留痕，比在重连窗口一律拒发更少误伤）；
+    unknown 不拦（未托管形态本函数不表态）。自动链与手动链**同一判定**：
+    UE7VM3 ③「未连接时禁止自动投递并阻止手动发送」。
+    """
+    cs = channel_connection_state(platform, account_id, now=now)
+    out = dict(cs)
+    out["state_reason"] = str(cs.get("reason") or "")
+    out["reason"] = (SEND_BLOCK_CHANNEL_DISCONNECTED
+                     if cs.get("state") == CHANNEL_DISCONNECTED else "")
+    return out
 
 
 # B63-②（实施64 P1-4，`_314`/`_322`）：发送失败里的**会话性** reason_code →
@@ -1062,4 +1202,7 @@ __all__ = [
     "channel_alert_mute_until", "channel_alert_muted", "set_channel_alert_mute",
     "mark_account_disabled", "CHANDOWN_MUTE_META_KEY", "DISABLED_OFFLINE_REASON",
     "UNHEALTHY_STATUSES", "HEALTHY_STATUSES", "ABANDONED_STATUS",
+    "channel_connection_state", "channel_send_block_reason", "SIDECAR_PLATFORMS",
+    "CHANNEL_CONNECTED", "CHANNEL_DISCONNECTED", "CHANNEL_RECONNECTING", "CHANNEL_UNKNOWN",
+    "SEND_BLOCK_CHANNEL_DISCONNECTED",
 ]

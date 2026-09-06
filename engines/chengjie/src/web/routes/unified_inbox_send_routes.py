@@ -308,6 +308,20 @@ def _raise_if_account_blocked(request: Request, platform: str, account_id: str) 
         raise HTTPException(409, tr(request, "err.inbox.account_removed"))
     if blk == "offline":
         raise HTTPException(409, tr(request, "err.inbox.account_offline"))
+    # M-2 A2（#232）：注册表还 online 但通道其实没通（边车没有该账号会话 / worker
+    # 放弃重连）→ 媒体 / 贴纸 / 语音三条人工链与文本链同一闸（send_via_adapters 内
+    # 另判文本链）。结构化 detail 让前端画横幅 + 重登出路。fail-open：判定异常放行。
+    try:
+        from src.integrations.platform_session_health import channel_send_block_reason
+        _cb = channel_send_block_reason(platform, account_id)
+    except Exception:
+        _cb = {}
+    if _cb.get("reason"):
+        raise HTTPException(503, {
+            "code": "channel_disconnected",
+            "platform": platform, "account_id": account_id,
+            "message": tr(request, "err.inbox.channel_disconnected", platform=platform),
+        })
 
 
 # ── 发送护栏可见化（P0 2026-08-12，修「额度拦截被包成 ok:true 静默吞掉」）────
@@ -977,8 +991,18 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             _trace_failed_manual_send(
                 request, platform, account_id, chat_key, text,
                 getattr(ex, "reason_code", "") or ex.detail)
+            # M-2 A2（#232）：通道未连接 → 结构化 detail（前端画「该账号会话未建立，
+            # 请重新登录」横幅 + 重登出路，而不是一条裸 toast）
+            _rc = str(getattr(ex, "reason_code", "") or "")
+            if _rc == "channel_disconnected":
+                raise HTTPException(ex.status_code, {
+                    "code": "channel_disconnected",
+                    "platform": platform, "account_id": account_id,
+                    "message": tr(request, "err.inbox.channel_disconnected",
+                                  platform=platform),
+                })
             raise HTTPException(ex.status_code, _humanize_send_failure(
-                request, ex.detail, getattr(ex, "reason_code", "")))
+                request, ex.detail, _rc))
         except Exception as _send_ex:
             _dedup.release(_dedup_scope, _client_msg_id)
             _track_failed("send_exception")
@@ -1104,9 +1128,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     _ibx_rs.mark_message_resent(_resend_of)
             except Exception:
                 logger.debug("[send] 失败留痕改标 resent 失败（已忽略）", exc_info=True)
+        # M-2 A1（#232）：把「有没有拿到平台回执」显式交给前端——delivered=True 才闪 ✓，
+        # queued（RPA 入队）显「已排队发送」，其余按「已提交」。此前前端只看 ok。
+        _delivered = (result.get("delivered") if isinstance(result, dict) else None)
+        _queued = bool(isinstance(result, dict) and result.get("queued"))
         return {
             "ok": True,
             "result": result,
+            "delivered": (True if _delivered is True else (False if _delivered is False else None)),
+            "queued": _queued,
             "original_text": original_text,
             "sent_text": text,
             "translation": translation_info,

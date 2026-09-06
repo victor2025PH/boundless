@@ -152,7 +152,11 @@ async def _send_via_rpa_queue(
             raise ChannelSendError(400, str(ex))
         except Exception as ex:
             raise ChannelSendError(502, f"{platform} 入队发送失败: {ex}")
-        res = {"delivered": True, "queued": True, "item_id": int(item_id)}
+        # M-2 A1（#232）：入队 ≠ 送达。此前恒 delivered=True 让路由/前端把「排进 RPA
+        # 队列」当成平台回执打 ✓。改为 delivered=None（未知，等 RPA runner 真发）+
+        # queued=True：下游「显式 False 才算失败」的判定不受影响，前端按 queued 显
+        # 「已排队发送」而非 ✓。
+        res = {"delivered": None, "queued": True, "item_id": int(item_id)}
         _writeback_outbound(platform, account_id, chat_key, text, res)
         return res
     sender = getattr(target, "send_to_chat", None)
@@ -908,6 +912,27 @@ async def send_via_adapters(
     """
     platform = str(platform or "").lower()
     _origin = str(origin or "auto")
+    # M-2 A2（#232，UE7VM3 ③）：通道未连接（边车没有该账号会话 / 已登出 / worker
+    # 放弃重连）→ **自动与手动同一闸**拒发，503 + reason_code=channel_disconnected，
+    # 前端据此出「该账号 Messenger 会话未建立，请重新登录」+ 重登出路。此前编排器
+    # worker 处于 error 时 owns()=False → 直接回落下面的适配器直打边车 → 每条 500
+    # 静默（15:44 七连发的入口正是这里）。reconnecting / unknown 不拦（fail-open）。
+    try:
+        from src.integrations.platform_session_health import channel_send_block_reason
+        _blk = channel_send_block_reason(platform, account_id)
+        if _blk.get("reason"):
+            logger.warning(
+                "[send] 通道未连接拒发 %s:%s origin=%s state=%s reason=%s detail=%s",
+                platform, account_id, _origin, _blk.get("state"),
+                _blk.get("reason"), str(_blk.get("detail") or "")[:80])
+            raise ChannelSendError(
+                503, f"channel_disconnected: {platform}:{account_id} "
+                     f"{_blk.get('reason')} ({_blk.get('detail') or ''})",
+                reason_code=str(_blk.get("reason")))
+    except ChannelSendError:
+        raise
+    except Exception:
+        logger.debug("[send] 通道连接判定异常（放行）", exc_info=True)
     try:
         from src.integrations.account_orchestrator import get_orchestrator
         orch = get_orchestrator()
