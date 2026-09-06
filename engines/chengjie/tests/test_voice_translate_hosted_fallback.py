@@ -176,12 +176,29 @@ def _hosted_cfg():
             "voice_recognition": _hosted_vr_gateway_first()}
 
 
-def test_route_message_media_voice_uses_hosted_derive(monkeypatch):
-    """B27 主链回归钉：audio_pipeline 关 + 托管 ASR 在 → 语音消息翻译走网关派生
-    配置真转写（此前此形态直接 asr_disabled）。"""
+class _FakeWsTranscriber:
+    """工作台 voice_transcriber 替身（M-5 D 起工具箱默认复用它）。"""
+    last_error = ""
+
+    async def transcribe_voice_message(self, path, language="zh"):
+        return "hello world"
+
+
+def _patch_workspace(monkeypatch, seen):
+    def _fake_ws(full_cfg):
+        seen.append(dict((full_cfg or {}).get("voice_recognition") or {}))
+        return _FakeWsTranscriber()
+    monkeypatch.setattr("src.ai.voice_translate.workspace_transcriber", _fake_ws)
+
+
+def test_route_message_media_voice_uses_workspace_transcriber(monkeypatch):
+    """B27 主链回归钉（M-5 D #225 改口径）：audio_pipeline 关 + 托管 ASR 在 → 语音
+    消息翻译**复用工作台 voice_transcriber**（同入口同配置，含 apply_hosted_asr 注入
+    形状）真转写；此前此形态直接 asr_disabled（B27 前）/ 另起 audio_pipeline 派生
+    客户端（B27，5NXHUW 实录两链两套配置一超时一成功）。"""
     monkeypatch.setenv("AITR_HOSTED_AI_KEY", TOKEN)
     seen = []
-    _patch_transcriber(monkeypatch, seen)
+    _patch_workspace(monkeypatch, seen)
     fd, path = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     with open(path, "wb") as f:
@@ -192,23 +209,43 @@ def test_route_message_media_voice_uses_hosted_derive(monkeypatch):
             json={"media_ref": path, "media_type": "voice"}).json()
         assert r.get("reason") != "asr_disabled"
         assert r.get("transcript") == "hello world"
-        assert seen and seen[0]["backend"] == "openai"
-        assert seen[0]["base_url"] == GW and seen[0]["api_key"] == TOKEN
+        assert r.get("asr_chain") == "workspace"
+        assert seen and seen[0]["base_url"] == GW and seen[0]["_hosted_asr"] is True
+        assert r["received"]["bytes"] == 9
     finally:
         os.remove(path)
 
 
-def test_route_translate_voice_uses_hosted_derive(monkeypatch):
-    """B27 报障入口（翻译工具上传语音）同口径。"""
+def test_route_translate_voice_uses_workspace_transcriber(monkeypatch):
+    """B27 报障入口（翻译工具上传语音）同口径 + 回显已收到多少。"""
     monkeypatch.setenv("AITR_HOSTED_AI_KEY", TOKEN)
     seen = []
-    _patch_transcriber(monkeypatch, seen)
+    _patch_workspace(monkeypatch, seen)
     r = _client(_hosted_cfg()).post(
         "/api/unified-inbox/translate-voice",
         json={"audio_b64": base64.b64encode(b"OggS fake").decode(),
               "target_lang": "zh"}).json()
     assert r.get("reason") != "asr_disabled"
     assert r.get("transcript") == "hello world"
+    assert r.get("asr_chain") == "workspace" and seen
+    assert r["received"]["bytes"] == 9 and r["received"]["container"] == "ogg"
+
+
+def test_route_translate_voice_derive_still_used_when_workspace_absent(monkeypatch):
+    """B27 派生路径保留为回落：voice_recognition 未启用（工作台没 transcriber）但托管
+    标记在 → 仍按 resolve_effective_audio_cfg 派生网关配置走 AudioPipeline。"""
+    monkeypatch.setenv("AITR_HOSTED_AI_KEY", TOKEN)
+    seen = []
+    _patch_transcriber(monkeypatch, seen)
+    cfg = {"audio_pipeline": {"enabled": False},
+           "voice_recognition": {**_hosted_vr_gateway_first(), "enabled": False}}
+    r = _client(cfg).post(
+        "/api/unified-inbox/translate-voice",
+        json={"audio_b64": base64.b64encode(b"OggS fake").decode(),
+              "target_lang": "zh"}).json()
+    assert r.get("reason") != "asr_disabled"
+    assert r.get("transcript") == "hello world"
+    assert r.get("asr_chain") == "pipeline"
     assert seen and seen[0]["_derived_hosted_asr"] is True
 
 

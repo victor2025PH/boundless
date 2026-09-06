@@ -79,6 +79,12 @@ class VoiceTranscriber:
         # 记，避免重复计数）；独立使用时（无级联）由基类自记。幻觉丢弃则不论层级都记。
         self._asr_chained_child = False
 
+        # M-5 D（#225）：最近一次失败的原因串（``TypeName: msg`` / ``file_not_found`` /
+        # ``empty_result``…）。本类的公有口径是「失败 → None」，工具箱链要把「超时 /
+        # 被拒 / 不可达 / 格式」说给用户听，只有 None 不够——每次转写开头清空，
+        # 失败分支写入；级联转录器把各级的串拼起来。纯观测字段，不改任何判定。
+        self.last_error: str = ""
+
         self.logger.info(f"语音转录服务初始化，临时目录: {self.temp_dir}")
 
     async def transcribe_voice_message(self, voice_file_path: str, language: str = "zh") -> Optional[str]:
@@ -92,16 +98,19 @@ class VoiceTranscriber:
         Returns:
             转录的文本，如果失败返回None
         """
+        self.last_error = ""
         try:
             # 检查文件是否存在
             if not os.path.exists(voice_file_path):
                 self.logger.error(f"语音文件不存在: {voice_file_path}")
+                self.last_error = "file_not_found"
                 return None
 
             # 检查文件大小
             file_size = os.path.getsize(voice_file_path)
             if file_size > self.max_file_size:
                 self.logger.warning(f"语音文件过大: {file_size} bytes > {self.max_file_size} limit")
+                self.last_error = f"file_too_large: {file_size} > {self.max_file_size}"
                 return None
 
             # 调用具体实现
@@ -114,6 +123,7 @@ class VoiceTranscriber:
                 if self.hallucination_guard and looks_like_asr_hallucination(text):
                     self.logger.warning(f"语音转录疑似幻觉，已丢弃: {text[:60]}")
                     self._record_asr(hallucination=True)
+                    self.last_error = "no_speech: hallucination_guard"
                     return None
                 self.logger.info(f"语音转录成功: {text[:100]}...")
                 if not self._asr_chained_child:
@@ -123,10 +133,13 @@ class VoiceTranscriber:
                 self.logger.warning("语音转录返回空结果")
                 if not self._asr_chained_child:
                     self._record_asr(ok=False)
+                if not self.last_error:
+                    self.last_error = "empty_result"
                 return None
 
         except Exception as e:
             self.logger.error(f"语音转录失败: {e}")
+            self.last_error = f"{type(e).__name__}: {e}"
             return None
 
     def _record_asr(self, *, ok: bool = False, level: int = 0,
@@ -366,6 +379,7 @@ class OpenAITranscriber(VoiceTranscriber):
                 api_key = str(os.environ.get("AITR_HOSTED_AI_KEY") or "").strip()
                 if not api_key:
                     self.logger.warning("托管转写：设备令牌尚未就绪（AITR_HOSTED_AI_KEY 空）")
+                    self.last_error = "hosted_token_missing: AITR_HOSTED_AI_KEY empty"
                     return None
 
             # 客户端复用（支持 OpenAI 兼容端点：Groq / SiliconFlow / 本地等）。
@@ -391,9 +405,11 @@ class OpenAITranscriber(VoiceTranscriber):
 
         except ImportError:
             self.logger.error("OpenAI库未安装，请运行: pip install openai")
+            self.last_error = "missing dependency: openai"
             return None
         except Exception as e:
             self.logger.error(f"OpenAI转录失败: {e}")
+            self.last_error = f"{type(e).__name__}: {e}"
             return None
 
 class AvatarWhisperTranscriber(VoiceTranscriber):
@@ -638,15 +654,21 @@ class FallbackTranscriber(VoiceTranscriber):
         self, voice_file_path: str, language: str = "zh"
     ) -> Optional[str]:
         last_err: Optional[Exception] = None
+        self.last_error = ""
+        errs = []   # M-5 D：各级失败原因（工具箱链据此分类「超时/被拒/不可达」）
         for idx, t in enumerate(self._chain):
             try:
                 text = await t.transcribe_voice_message(voice_file_path, language)
             except Exception as e:  # noqa: BLE001 - 逐级兜底，绝不抛给理解链
                 last_err = e
+                errs.append(f"{t.__class__.__name__}: {type(e).__name__}: {e}")
                 self.logger.warning(
                     f"转录器 {t.__class__.__name__} 异常，尝试回落下一级: {e}"
                 )
                 continue
+            if not text:
+                errs.append(f"{t.__class__.__name__}: "
+                            f"{getattr(t, 'last_error', '') or 'empty_result'}")
             if text:
                 # level=idx：0=主 ASR 直接成功；>=1=回落级成功（降级信号，按胜出 provider 归类）。
                 # 只记一次、且用胜出转录器类名（非本级 Fallback 类名）。
@@ -662,6 +684,7 @@ class FallbackTranscriber(VoiceTranscriber):
             )
         if last_err is not None:
             self.logger.error(f"全部转录器失败，最后错误: {last_err}")
+        self.last_error = " | ".join(errs)[:600] or "empty_result"
         try:
             from src.ai.asr_stats import get_asr_stats
             get_asr_stats().record(ok=False)

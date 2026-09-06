@@ -235,14 +235,24 @@ def _attach_vision_failure_message(request: Request, out: dict) -> dict:
 def _attach_asr_failure_message(request: Request, out: dict) -> dict:
     """语音识别翻译失败时补人话 ``message``（L-6 B：转录返空不再只显「识别翻译不可用」）。
 
-    ``asr_failed`` / ``asr_error``＝转写链全部失败（桌面版只剩网关 ASR 一级，失败就是
-    「服务暂不可用」）；``no_speech``＝转写成功但没听出内容。翻译侧失败不动。
+    ``asr_failed`` / ``asr_error``＝转写链全部失败；``no_speech``＝转写成功但没听出
+    内容；``upload_failed``＝收件核查没过。翻译侧失败不动。
+    M-5 D（#225）：带 ``asr_code``（timeout / rejected / unavailable / format /
+    upload_failed / no_speech）时按 ``err.asr.<code>`` 取文案——超时说超时、被拒说
+    被拒，不再一律「服务不可用」（5NXHUW 原话）。
     """
     if not isinstance(out, dict) or out.get("ok") or out.get("message"):
         return out
     reason = str(out.get("reason") or "")
-    key = {"asr_failed": "err.asr.unavailable", "asr_error": "err.asr.unavailable",
-           "no_speech": "err.asr.no_speech"}.get(reason)
+    key = ""
+    code = str(out.get("asr_code") or "").strip().lower()
+    if code and reason in ("asr_failed", "asr_error", "no_speech", "upload_failed"):
+        from src.ai.audio_pipeline_intake import asr_error_i18n_key
+        key = asr_error_i18n_key(code)
+    if not key:
+        key = {"asr_failed": "err.asr.unavailable", "asr_error": "err.asr.unavailable",
+               "no_speech": "err.asr.no_speech",
+               "upload_failed": "err.asr.upload_failed"}.get(reason, "")
     if not key:
         return out
     try:
@@ -250,6 +260,42 @@ def _attach_asr_failure_message(request: Request, out: dict) -> dict:
     except Exception:
         logger.debug("asr failure message attach failed", exc_info=True)
     return out
+
+
+def _toolbox_asr_intake(request: Request, path: str) -> tuple:
+    """工具箱音频落盘核查（M-5 D）→ ``(received, fail_response|None)``。
+
+    0 字节 / 容器头认不出 → 直接报「文件未正确接收」（不再让 ASR 先超时再猜）；
+    通过则返回给前端回显的 ``received``（字节数 + 能算出的秒数）。"""
+    from src.ai.audio_pipeline_intake import (
+        ASR_UPLOAD_FAILED,
+        probe_audio_file,
+        received_summary,
+    )
+    probe = probe_audio_file(path)
+    received = received_summary(probe)
+    if probe.get("ok"):
+        return received, None
+    logger.warning("[toolbox_asr] upload_failed reason=%s bytes=%s path=%s",
+                   probe.get("reason"), probe.get("bytes"), path)
+    fail = {"ok": False, "reason": "upload_failed", "asr_code": ASR_UPLOAD_FAILED,
+            "intake_reason": str(probe.get("reason") or ""), "received": received}
+    return received, _attach_asr_failure_message(request, fail)
+
+
+def _log_toolbox_asr(chain: str, received: dict, out: dict, *, src: str) -> None:
+    """一行说清这次工具箱转写走了哪条链、收了多少、结果如何（5NXHUW 值守只能看到
+    audio_pipeline 的 dur=0 猜「文件没收到」——这里把收件量与链名写死在同一行）。"""
+    try:
+        logger.info(
+            "[toolbox_asr] src=%s chain=%s bytes=%s dur=%s ok=%s reason=%s code=%s "
+            "model=%s latency=%sms",
+            src, chain or "-", (received or {}).get("bytes"),
+            (received or {}).get("duration_sec"), bool(out.get("ok")),
+            out.get("reason") or "", out.get("asr_code") or "",
+            out.get("asr_model") or "", out.get("asr_latency_ms") or "")
+    except Exception:
+        pass
 
 
 def register_translate_routes(app, *, api_auth) -> None:
@@ -1041,9 +1087,8 @@ def register_translate_routes(app, *, api_auth) -> None:
 
         from src.ai.voice_translate import (
             VoiceTranslateService,
-            build_audio_transcribe_fn,
             decode_audio_to_temp,
-            resolve_effective_audio_cfg,
+            resolve_toolbox_transcribe,
         )
 
         body = await request.json()
@@ -1052,17 +1097,18 @@ def register_translate_routes(app, *, api_auth) -> None:
         source_lang = str(body.get("source_lang") or "")
         style = str(body.get("style") or "chat")
 
-        # B27（2026-08-21）：audio_pipeline 关（客户包死默认）但托管 ASR 已接入
-        # → 派生网关转写配置（resolve_effective_audio_cfg 单一事实源，三条翻译
-        # 路由同口径）；报错文案人话化——配置键绝不出现在用户界面。
+        # P4：srt=true（上传口勾字幕需求）→ ASR opt-in 分段时间戳；默认路径零变化
+        _want_srt = bool(body.get("srt"))
+        # M-5 D（#225）：工具箱与工作台同一入口同一配置——默认复用 voice_transcriber
+        # （含 apply_hosted_asr 网关接管），只有要分段（SRT）且 audio_pipeline 开着才
+        # 走 AudioPipeline（B27 派生的托管配置仍在 resolve_effective_audio_cfg 里）。
         cm = getattr(request.app.state, "config_manager", None)
-        audio_cfg = {}
         try:
             full = getattr(cm, "config", None) or {}
-            audio_cfg = resolve_effective_audio_cfg(full)
+            _chain, _tr_fn = resolve_toolbox_transcribe(full, want_segments=_want_srt)
         except Exception:
-            audio_cfg = {}
-        if not audio_cfg.get("enabled", False):
+            _chain, _tr_fn = "", None
+        if _tr_fn is None:
             return {"ok": False, "reason": "asr_disabled",
                     "message": tr(request, "err.inbox.xl_asr_unavailable")}
 
@@ -1075,16 +1121,19 @@ def register_translate_routes(app, *, api_auth) -> None:
         if path is None:
             return {"ok": False, "reason": reason, "message": f"音频无效：{reason}"}
         try:
-            # P4：srt=true（上传口勾字幕需求）→ ASR opt-in 分段时间戳；默认路径零变化
-            _want_srt = bool(body.get("srt"))
-            svc = VoiceTranslateService(
-                _get_translation_service(request),
-                build_audio_transcribe_fn(audio_cfg, want_segments=_want_srt),
-            )
+            # 收件核查：0 字节 / 头不对 → 「文件未正确接收」；通过则回显收到多少秒
+            _received, _fail = _toolbox_asr_intake(request, path)
+            if _fail is not None:
+                _log_toolbox_asr(_chain, _received, _fail, src="upload")
+                return _fail
+            svc = VoiceTranslateService(_get_translation_service(request), _tr_fn)
             _v_res = await svc.translate_voice(
                 path, target_lang=target_lang, source_lang=source_lang, style=style,
                 want_segments=_want_srt,
             )
+            _v_res["received"] = _received
+            _v_res["asr_chain"] = _chain
+            _log_toolbox_asr(_chain, _received, _v_res, src="upload")
             # 坐席字符计量（P1）：真正送进翻译引擎的是转写文本，按其长度记——
             # 与 translate-image 的 ocr_text 口径同源；ASR 失败/无语音不记。
             if _v_res.get("ok"):
@@ -1471,8 +1520,7 @@ def register_translate_routes(app, *, api_auth) -> None:
 
             from src.ai.voice_translate import (
                 VoiceTranslateService,
-                build_audio_transcribe_fn,
-                resolve_effective_audio_cfg,
+                resolve_toolbox_transcribe,
             )
             cm = getattr(request.app.state, "config_manager", None)
             try:
@@ -1480,14 +1528,14 @@ def register_translate_routes(app, *, api_auth) -> None:
             except Exception:
                 _full_cfg = {}
             # B27：托管 ASR 回落 + 人话报错（与 translate-voice 同口径）
-            audio_cfg = resolve_effective_audio_cfg(_full_cfg)
-            if not audio_cfg.get("enabled", False):
+            # M-5 D（#225）：语音分支与工作台 voice_transcriber 同入口；视频分支要分段
+            # （SRT）仍取 AudioPipeline（resolve 内部按 want_segments 选链）
+            _chain, _tr_fn = resolve_toolbox_transcribe(
+                _full_cfg, want_segments=(kind == "video"))
+            if _tr_fn is None:
                 return {"ok": False, "reason": "asr_disabled",
                         "message": tr(request, "err.inbox.xl_asr_unavailable")}
-            svc = VoiceTranslateService(
-                _get_translation_service(request),
-                build_audio_transcribe_fn(audio_cfg),
-            )
+            svc = VoiceTranslateService(_get_translation_service(request), _tr_fn)
             # P2（2026-08-18）：视频 → 抽音轨 → 同一条 ASR+翻译链（media.video_translate 闸默认关）
             if kind == "video":
                 from src.ai.video_translate import VideoTranslateService, resolve_video_cfg
@@ -1496,10 +1544,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                     return {"ok": False, "reason": "video_disabled",
                             "message": tr(request, "err.inbox.xl_video_unavailable")}
                 # P3：视频链 opt-in 分段时间戳（SRT 地基；老 176 服务优雅降级空列表）
-                _vseg_svc = VoiceTranslateService(
-                    _get_translation_service(request),
-                    build_audio_transcribe_fn(audio_cfg, want_segments=True),
-                )
+                _vseg_svc = svc
                 out = await VideoTranslateService(
                     _vseg_svc, max_minutes=_vc["max_minutes"],
                 ).translate_video(
@@ -1512,12 +1557,20 @@ def register_translate_routes(app, *, api_auth) -> None:
                     record_request_chars(
                         request, "translation", len(str(out.get("transcript") or "")))
                 return out
+            _received, _fail = _toolbox_asr_intake(request, path)
+            if _fail is not None:
+                _fail["media_kind"] = "voice"
+                _log_toolbox_asr(_chain, _received, _fail, src="message")
+                return _fail
             out = await svc.translate_voice(
                 path, target_lang=target_lang, source_lang=source_lang, style=style,
             )
             out["media_kind"] = "voice"
             out["from_upload"] = False
             out["from_remote"] = _tmp_download is not None
+            out["received"] = _received
+            out["asr_chain"] = _chain
+            _log_toolbox_asr(_chain, _received, out, src="message")
             # 坐席字符计量（P1）：与 translate-voice 上传路径同口径（转写文本长度）
             if out.get("ok"):
                 record_request_chars(

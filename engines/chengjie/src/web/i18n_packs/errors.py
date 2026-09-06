@@ -144,6 +144,12 @@ ZH = {
     # 工作台语音「识别翻译」失败原因（2026-09-06 L-6 B，原一律「识别翻译不可用」/返空）
     "err.asr.unavailable": "转录服务暂不可用，稍后重试",
     "err.asr.no_speech": "未识别到语音内容",
+    # 工具箱音频转录失败分类（2026-09-06 M-5 D #225：超时不再一律说成「不可用」）
+    "err.asr.timeout": "转录超时（服务响应太慢），请稍后重试；音频较长可先剪短",
+    "err.asr.rejected": "转录服务拒绝了本次请求（授权或配额问题），请联系客服",
+    "err.asr.format": "音频格式无法识别，请换成 mp3 / m4a / ogg / wav 后重试",
+    "err.asr.upload_failed": "文件未正确接收（内容为空或已损坏），请重新上传",
+    "err.asr.unknown": "转录失败，请重试；连续失败请联系客服",
 }
 
 EN = {
@@ -289,4 +295,9 @@ EN = {
     # Workbench voice "recognize + translate" failure reasons (2026-09-06 L-6 B)
     "err.asr.unavailable": "Transcription service is temporarily unavailable, please retry shortly",
     "err.asr.no_speech": "No speech recognized in the audio",
+    "err.asr.timeout": "Transcription timed out (the service responded too slowly) — retry shortly; trim long audio first",
+    "err.asr.rejected": "The transcription service rejected this request (authorization or quota) — contact support",
+    "err.asr.format": "Unrecognized audio format — convert to mp3 / m4a / ogg / wav and retry",
+    "err.asr.upload_failed": "The file was not received correctly (empty or corrupted) — upload it again",
+    "err.asr.unknown": "Transcription failed — retry; contact support if it keeps failing",
 }

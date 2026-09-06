@@ -355,13 +355,20 @@
           : await client.xlateVoice({ audioB64: b64, targetLang: target });
         if (tok !== this._tok) return;
         this._busy = false;
-        if (!d || !d.ok) { this._err(this._failMsg(d)); return; }
+        // M-5 D（#225）：语音上传后回显「已收到 x 秒音频」——落盘核查过了才有这行；
+        // 失败也带（转录超时 ≠ 文件没收到，两件事分开说）
+        const recv = (!img && d && d.received) ? this._receivedLine(d.received) : "";
+        if (!d || !d.ok) {
+          this._err(this._failMsg(d));
+          if (recv) this._status(recv);
+          return;
+        }
         const tr = d.translation || {};
         const trText = tr.translated_text || tr.translated || tr.text || "";
         const src = img ? (d.ocr_text || "") : (d.transcript || "");
         const srcTag = !img && d.asr_language ? " · " + d.asr_language : "";
         this._texts = { r1: trText };
-        this._status("");
+        this._status(recv);
         let html = '<div class="xt-seg"><span class="lbl">' +
           this.esc(this.t(img ? "cp.xlate.src_ocr" : "cp.xlate.src_transcript") + srcTag) +
           '</span><div class="val">' + this.esc(src) + "</div></div>";
@@ -388,6 +395,13 @@
     _failMsg(d) {
       const r = (d && (d.message || d.error || d.reason)) || "";
       return r ? this.tf("cp.xlate.fail", { r: String(r) }) : this.t("cp.xlate.net_err");
+    }
+    /* 后端 received={bytes,duration_sec}：算得出秒数说秒，算不出说 KB（都不是就不说） */
+    _receivedLine(recv) {
+      const sec = Number(recv && recv.duration_sec);
+      if (isFinite(sec) && sec > 0) return this.tf("cp.xlate.received_audio", { s: sec.toFixed(1) });
+      const kb = Math.round((Number(recv && recv.bytes) || 0) / 1024);
+      return kb > 0 ? this.tf("cp.xlate.received_audio_kb", { kb: String(kb) }) : "";
     }
 
     /* ── 多线路对照 ── */

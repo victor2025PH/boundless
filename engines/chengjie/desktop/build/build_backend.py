@@ -62,6 +62,11 @@ DATAS = [
     # WP-1：部署能力预设档（cloud_light 等；纯 YAML，门禁保证零内网 IP）。
     # launcher 注入 AITR_DEPLOY_PROFILE 后，首启由 ConfigManager 播种进 overlay。
     (REPO / "config" / "profiles", "config/profiles"),
+    # M-5 D（#225，2026-09-06）：真探针夹具（asr_probe.wav 16k 单声道 + 逐字稿 sidecar，
+    # ~133KB）。true_probe 用 parents[2]/assets/probe 定位＝冻结后 <_MEIPASS>/assets/probe；
+    # 此前漏打 → 客户机每 10 分钟 WARNING「asr/ser 域缺夹具，该域不参与探针」，转录
+    # 健康从未被真探（5NXHUW 实录）。
+    (REPO / "assets" / "probe", "assets/probe"),
 ]
 
 # 集团底座 platform/ 下被引擎**按文件路径**加载的瘦模块。它们在引擎目录之外，

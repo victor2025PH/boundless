@@ -1699,6 +1699,9 @@
       "cp.xlate.prog_interrupted": "进度连接中断，请重试",
       "cp.xlate.need_text": "请先输入文本",
       "cp.xlate.too_large": "文件过大（上限 {mb}MB）",
+      // M-5 D（#225）：语音上传落盘核查通过后的回显（转录超时 ≠ 文件没收到）
+      "cp.xlate.received_audio": "已收到 {s} 秒音频",
+      "cp.xlate.received_audio_kb": "已收到 {kb} KB 音频",
       "cp.xlate.no_client": "客户端未就绪，请刷新面板重试",
       "cp.xlate.fail": "处理失败：{r}",
       "cp.xlate.net_err": "网络错误，请重试"
@@ -1750,6 +1753,8 @@
       "cp.xlate.prog_interrupted": "Progress stream interrupted — please retry",
       "cp.xlate.need_text": "Enter some text first",
       "cp.xlate.too_large": "File too large (max {mb}MB)",
+      "cp.xlate.received_audio": "Received {s} s of audio",
+      "cp.xlate.received_audio_kb": "Received {kb} KB of audio",
       "cp.xlate.no_client": "Client not ready — refresh this panel and retry",
       "cp.xlate.fail": "Failed: {r}",
       "cp.xlate.net_err": "Network error — please retry"
