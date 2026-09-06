@@ -373,7 +373,7 @@
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
-<link rel="stylesheet" href="/static/workspace/sticker-panel.css?v=20260817b">
+<link rel="stylesheet" href="/static/workspace/sticker-panel.css?v=20260906m3">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 <!-- Messenger 应用内登录（表单中继）视图模型 + 渲染器 + driveTick 编排；仅 interactive_login 开启时被 pollConnect 调用 -->
 <script src="/static/workspace/connect_relay.js?v=20260824e"></script>
@@ -7613,6 +7613,7 @@ function selectChat(key){
   // 同会话重选（深链/通知重复打开）不动输入框——坐席可能正打字。
   if(selectedKey!==key){
     try{ _convDraftSwap(c); }catch(_){}
+    try{ _mediaQueueSwap(c); }catch(_){}   // #228：待发附件同样按会话交换（切走保留、切回恢复）
     _gbarOpen=false;
     _mentionChatKey=''; _mentionMembers=[]; _mentionNameMap={};
   }
@@ -13709,9 +13710,33 @@ let _sendSeq=0; // 防止乱序
 // _pendingMedia 恒为队首（sendMsg / Esc 处理等旧引用零改动）；体积上限改随
 // send-caps.media_max_mb（与服务端 413 同源），不再硬编码 25MB。
 let _pendingMedia=null;
-let _mediaQueue=[];        // [{file,url,id,state:'queued'|'sending'|'failed'}]
+let _mediaQueue=[];        // 当前会话的队列 [{file,url,id,state:'queued'|'sending'|'failed',convKey,target}]
 let _mediaXhr=null;        // 在途 XHR（取消用）
 const _MEDIA_QUEUE_MAX=6;
+// M-3 C（#228，V9DZ5S 实锤）：队列此前是全局变量——LINE 会话里发失败的附件切到 WhatsApp
+// 会话仍挂在输入框上方，点发送就发给另一个客户。改为按 convKey 存：切走保留、切回恢复，
+// _mediaQueue 永远只是「当前会话那一份」的引用（各处 push/shift/splice 零改动）。
+// 文字草稿早已按会话隔离（_convDraftSwap，sessionStorage），只有媒体队列漏了。
+const _mediaQueues={};
+function _mediaQueueSwap(next){
+  // 与 _convDraftSwap 同位调用：selectedChat 仍是旧会话。在途上传的那一件仍属旧会话
+  // （item.convKey），_doSendMedia 结束时按它归位，这里只交换引用。
+  try{
+    if(selectedChat){
+      const k=convKey(selectedChat);
+      if(_mediaQueue.length) _mediaQueues[k]=_mediaQueue; else delete _mediaQueues[k];
+    }
+  }catch(_){}
+  const nk=next?convKey(next):'';
+  _mediaQueue=(nk&&_mediaQueues[nk])||[];
+  if(nk) _mediaQueues[nk]=_mediaQueue;
+  _syncPendingMedia(); _renderMediaBar();
+}
+function _mediaTargetLabel(it){
+  const t=(it&&it.target)||{};
+  const plat=(typeof PN!=='undefined'&&PN[t.platform])||t.platform||'';
+  return plat+(t.name?(' · '+t.name):'');
+}
 function _fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
 function _mediaIconFor(t){ t=String(t||''); if(t.indexOf('audio/')===0) return uiIcon('music',16); if(t.indexOf('video/')===0) return uiIcon('film',16); return uiIcon('file',16); }
 // M-3 A（#227，D-M5 上限同源）：按文件类别取上限——视频读 send-caps.video_max_mb（后端
@@ -13739,7 +13764,12 @@ function _stageMedia(file){
   const url=(file.type&&file.type.indexOf('image/')===0)?URL.createObjectURL(file):'';
   // cmid 在暂存时生成一次、随件终身（0902 钧机实锤：此前每次提交现造新键，后端重启
   // 窗内响应丢了 → 坐席点重试＝服务端眼里全新一件 → 双发；同键重试才吃得到 send_dedup）
-  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId()});
+  // #228：入队即钉死归属（会话键 + 平台·客户名），附件条据此标「发往 LINE · Kevin」，
+  // _doSendMedia 发送前再核一次「附件所属会话 == 当前会话」。
+  const ck=convKey(selectedChat);
+  if(!_mediaQueues[ck]) _mediaQueues[ck]=_mediaQueue;
+  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId(),
+    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''}});
   _syncPendingMedia();
   _renderMediaBar();
   const ta=document.getElementById('reply-ta'); if(ta) ta.focus();
@@ -13767,9 +13797,23 @@ function _renderMediaBar(){
     const fi=document.getElementById('send-media-file'); if(fi) fi.value='';
     return;
   }
-  bar.innerHTML=`<div class="mpb-items">${_mediaQueue.map(_mediaItemHtml).join('')}</div>`
+  // #228：条头明示去向（取队首归属；队列按会话隔离后全队同一去向）+ 失败件一键清除
+  const _tgt=_mediaTargetLabel(_mediaQueue[0]);
+  const _nFailed=_mediaQueue.filter(it=>it.state==='failed').length;
+  bar.innerHTML=`<div class="mpb-head"><span class="mpb-target" title="${esc(_tgt)}">${esc(window.Tf('inbox.media.target_to',{target:_tgt}))}</span>`
+    +(_nFailed?`<button type="button" class="tiny-btn mpb-clear-failed" data-mpi-clear-failed="1">${esc(window.Tf('inbox.media.clear_failed_n',{n:_nFailed}))}</button>`:'')
+    +`</div><div class="mpb-items">${_mediaQueue.map(_mediaItemHtml).join('')}</div>`
     +`<button type="button" class="qrb-x" data-mpi-cancel="1" title="${window.T('inbox.media.cancel')}" aria-label="cancel media">\u2715</button>`;
   bar.style.display='flex';
+}
+function _clearFailedMedia(){
+  const keep=[];
+  for(const it of _mediaQueue){
+    if(it.state==='failed'){ if(it.url){ try{ URL.revokeObjectURL(it.url); }catch(_){} } }
+    else keep.push(it);
+  }
+  _mediaQueue.length=0; for(const it of keep) _mediaQueue.push(it);   // 原地改：保持 _mediaQueues 里的引用
+  _syncPendingMedia(); _renderMediaBar();
 }
 function _cancelMedia(){
   // 清全部队列（Esc / 条右上 ✕）；在途上传一并中止（abort 后服务端只收半个
@@ -13777,7 +13821,8 @@ function _cancelMedia(){
   try{ if(_mediaXhr) _mediaXhr.abort(); }catch(_){}
   _mediaXhr=null;
   for(const it of _mediaQueue){ if(it.url){ try{ URL.revokeObjectURL(it.url); }catch(_){} } }
-  _mediaQueue=[]; _syncPendingMedia(); _renderMediaBar();
+  _mediaQueue.length=0;   // 原地清（#228：_mediaQueues 里存的是同一引用，重新赋值会留下幽灵队列）
+  _syncPendingMedia(); _renderMediaBar();
 }
 function _removeMediaItem(id){
   const idx=_mediaQueue.findIndex(x=>x.id===id);
@@ -13791,7 +13836,9 @@ document.addEventListener('click',function(e){
   const x=e.target&&e.target.closest?e.target.closest('[data-mpi-x]'):null;
   if(x){ e.preventDefault(); _removeMediaItem(x.getAttribute('data-mpi-x')); return; }
   const c=e.target&&e.target.closest?e.target.closest('[data-mpi-cancel]'):null;
-  if(c){ e.preventDefault(); _cancelMedia(); }
+  if(c){ e.preventDefault(); _cancelMedia(); return; }
+  const cf=e.target&&e.target.closest?e.target.closest('[data-mpi-clear-failed]'):null;
+  if(cf){ e.preventDefault(); _clearFailedMedia(); }
 });
 function sendMediaFile(input){
   const fs=Array.prototype.slice.call((input&&input.files)||[]);
@@ -13803,13 +13850,14 @@ function _mediaProg(id,pct,subTxt){
   if(p) p.style.width=Math.max(0,Math.min(100,pct))+'%';
   if(subTxt!==undefined){ const s=document.querySelector(`[data-mpi-sub="${id}"]`); if(s) s.textContent=subTxt; }
 }
-function _xhrSendMedia(item,caption){
+function _xhrSendMedia(item,caption,chatArg){
   // XHR 而非 fetch：upload.onprogress 是坐席「25MB 视频干等 5 分钟」焦虑的解药，
   // fetch 的上传进度（duplex 流）浏览器支持面不齐。5min 上限同旧口径。
   return new Promise(function(resolve,reject){
     if(!item.cmid) item.cmid=_newClientMsgId();   // P0 幂等键：随件固定，重试同键（见 _stageMedia）
-    const meta={platform:selectedChat.platform, account_id:selectedChat.account_id||'default',
-      chat_key:selectedChat.chat_key, caption:caption||'', client_msg_id:item.cmid};
+    const chat=chatArg||selectedChat;   // #228：发往点发送那一刻的会话，不读上传途中可能已切换的全局
+    const meta={platform:chat.platform, account_id:chat.account_id||'default',
+      chat_key:chat.chat_key, caption:caption||'', client_msg_id:item.cmid};
     const xhr=new XMLHttpRequest();
     _mediaXhr=xhr;
     // M-3 A（#227）：后端声明 media_stream_upload → **裸流**上传：body 就是文件本体、元数据走
@@ -13854,12 +13902,23 @@ async function _doSendMedia(caption){
   const bar=document.getElementById('media-preview-bar');
   if(bar){ bar.classList.remove('failed'); bar.classList.add('sending'); }
   let sent=0, aborted=false;
-  while(_mediaQueue.length){
-    const item=_mediaQueue[0];
-    item.state='sending'; item.sentTs=Date.now(); item.convKey=convKey(selectedChat); _renderMediaBar();
+  // #228：整趟发送钉在**点发送那一刻**的会话与它的队列上。上传中坐席切了会话，
+  // _mediaQueueSwap 会把 _mediaQueue 换成新会话那份——若这里继续读全局变量，
+  // shift 掉的就是别人的附件、发去的也是别人的会话。
+  const chat=selectedChat, q=_mediaQueue, ck=convKey(chat);
+  while(q.length){
+    const item=q[0];
+    // 发送前校验：附件所属会话必须就是当前会话（队列已按会话隔离，这是最后一道闸）
+    if(item.convKey&&item.convKey!==ck){
+      item.state='failed'; item.errClass='wrong_conv'; item.failTs=Date.now(); _renderMediaBar();
+      _toast(window.Tf('inbox.media.wrong_conv',{target:_mediaTargetLabel(item)}),'#dc2626');
+      try{ console.warn('[media] rejected error=wrong_conv item_conv='+item.convKey+' current='+ck); }catch(_){}
+      break;
+    }
+    item.state='sending'; item.sentTs=Date.now(); item.convKey=ck; _renderMediaBar();
     let res=null;
     const _t0=Date.now();
-    try{ res=await _xhrSendMedia(item, sent===0?(caption||''):''); }
+    try{ res=await _xhrSendMedia(item, sent===0?(caption||''):'', chat); }
     catch(_e){
       res=null;
       // #164（2026-09-05）：无 HTTP 响应此前前端侧零痕迹——值守拿包只见后端「无
@@ -13874,7 +13933,7 @@ async function _doSendMedia(caption){
       // d.duplicate=同键重试命中服务端幂等（上次其实发出去了、只是响应丢了）→ 也算成功
       sent++;
       if(item.url){ try{ URL.revokeObjectURL(item.url); }catch(_){} }
-      _mediaQueue.shift(); _syncPendingMedia(); _renderMediaBar();
+      q.shift(); _syncPendingMedia(); _renderMediaBar();
       continue;
     }
     // 失败停队列：失败件与其后队列原地保留（转红 + 重试提示），修正后再点发送。
@@ -13912,10 +13971,12 @@ async function _doSendMedia(caption){
   if(bar) bar.classList.remove('sending');
   if(aborted) _toast(window.T('inbox.file.canceled'),'#64748b');
   if(sent>0){
-    const ta=document.getElementById('reply-ta'); if(ta) ta.value='';
+    // 发送期间切了会话：输入框里已是新会话的草稿，不清；线程刷新只刷当前视图
+    if(selectedChat===chat){ const ta=document.getElementById('reply-ta'); if(ta) ta.value=''; }
     _toast(sent===1?window.T('inbox.media.sent'):window.Tf('inbox.file.sent_n',{n:sent}),'#0f9d75');
-    try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
+    try{ if(selectedChat===chat){ await loadThread(chat,true); } await loadChats(); }catch(_){}
   }
+  if(selectedChat!==chat){ try{ if(!q.length) delete _mediaQueues[ck]; }catch(_){} _renderMediaBar(); }
   _mediaSending=false;
 }
 

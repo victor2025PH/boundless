@@ -146,6 +146,12 @@ html[data-stk-on="1"] .msg-sticker-wrap:hover .stk-collect-btn{display:inline-fl
 .msg-media-imgwrap:hover .mfc-dl{display:inline-flex;}
 
 /* ── 媒体预览条：多文件队列 + 进度 ──────────────────────── */
+/* M-3 C（#228）：条头「发往 平台 · 客户」+ 失败件一键清除；队列按会话隔离后全队同一去向 */
+.mpb-head{flex:0 0 auto;display:flex;flex-direction:column;gap:3px;margin-right:8px;max-width:150px;min-width:0;}
+.mpb-target{font-size:10.5px;font-weight:700;color:var(--tk-ok-ink,#059669);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mpb-clear-failed{font-size:10px;padding:0 6px;height:18px;line-height:16px;align-self:flex-start;
+  color:var(--tk-danger-ink,#b91c1c);border-color:var(--tk-danger,#dc2626);}
 .mpb-items{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;padding:2px 0;}
 .mpb-item{position:relative;flex:0 0 auto;display:flex;align-items:center;gap:6px;
   max-width:190px;border:1px solid var(--tk-border,#e2e8f0);border-radius:9px;
