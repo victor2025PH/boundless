@@ -3105,6 +3105,21 @@ html.ws-wall-on .msg-area .msg-ts{
 /* 标题行窄窗防溢出：标题文字先让位（已有省略号规则），分段控件/多选按钮不被压扁 */
 .list-title{min-width:0;}
 .list-pane-seg.inline,.batch-toggle{flex-shrink:0;}
+/* #230（M-4 C）多选专用工具条：进入多选后标题行整体让位——标题 / 会话·联系人分段 / 值守胶囊 /
+   多选图标全部隐去，只剩「已选 N 项 ｜ 归档 · 标签 · 删除 ｜ ✕」。按钮 nowrap + flex:none，
+   300px 最窄侧栏下（55+1+3×~46+26+间距 ≈ 240px）不折行；✕ 靠右（margin-left:auto）。 */
+.list-title.batch-on #list-title-main,.list-title.batch-on .list-pane-seg,.list-title.batch-on .standby-wrap,.list-title.batch-on .batch-toggle{display:none;}
+.list-batch-bar{display:none;flex:1;min-width:0;align-items:center;gap:6px;}
+.list-title.batch-on .list-batch-bar{display:flex;}
+.list-batch-bar .lbb-count{flex:none;font-size:12px;font-weight:700;color:var(--accent,#1e8cf2);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.list-batch-bar .lbb-sep{flex:none;width:1px;height:14px;background:var(--border);}
+.list-batch-bar .lbb-btn{flex:none;appearance:none;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-main);font:inherit;font-size:11.5px;font-weight:600;line-height:1.5;padding:2px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.list-batch-bar .lbb-btn:hover{color:var(--accent,#1e8cf2);border-color:var(--accent,#1e8cf2);}
+.list-batch-bar .lbb-btn:disabled{opacity:.45;cursor:not-allowed;color:var(--text-sub);border-color:var(--border);}
+.list-batch-bar .lbb-btn.lbb-danger{color:var(--tk-danger-ink,#b91c1c);}
+.list-batch-bar .lbb-btn.lbb-danger:hover{border-color:var(--tk-danger,#e11d48);color:var(--tk-danger-ink,#b91c1c);}
+.list-batch-bar .lbb-x{flex:none;margin-left:auto;appearance:none;border:1px solid var(--border);background:var(--bg-elev);color:var(--text-sub);width:26px;height:24px;padding:0;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
+.list-batch-bar .lbb-x:hover{color:var(--accent,#1e8cf2);border-color:var(--accent,#1e8cf2);}
 
 /* ═════ P1（2026-08-11）：「更多」菜单升格统一筛选面板 + 会话行窄屏压平 ═════
    面板＝分组（状态/目标推进/标签/排序）+ 组内计数 + 即点即生效（沿用原单击语义，无暂存层）+

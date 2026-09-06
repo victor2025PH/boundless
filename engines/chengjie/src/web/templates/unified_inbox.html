@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906e">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906f">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -495,8 +495,22 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           </div>
         </span>
         {% endif %}
-        <!-- P23: 多选切换按钮 -->
+        <!-- P23: 多选切换按钮。#230（M-4 C）：进入多选后不再把图标换成「✕ 退出多选」文字
+             （icon-only 26px 宽 → 折成三行不可辨），图标不动、只切 active/title；退出走下方工具条的 ✕。 -->
         <button class="batch-toggle icon-only" id="batch-toggle-btn" onclick="toggleBatchMode()" title="多选批量操作" data-i18n-title="inbox.batch.toggle_t"><svg class="ui-ic" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <!-- #230（M-4 C，4A4FAQ）多选专用工具条：进入多选后标题行整体切换为
+             「已选 N 项 ｜ 归档 · 标签 · 删除 ｜ ✕」，替换「会话 / 联系人」分段与值守胶囊
+             （.list-title.batch-on 控显）。按钮 nowrap + flex:none，最窄侧栏不再折行；
+             删除按钮仅在服务端 msg-ops meta 允许（can_delete_conv，与右键菜单同门）时出现。
+             底部 #batch-action-bar 保留（取消归档 / 搁置 / 分配 等次级动作）。 -->
+        <div class="list-batch-bar" id="list-batch-bar" role="toolbar" hidden>
+          <span class="lbb-count" id="lbb-count"></span>
+          <span class="lbb-sep" aria-hidden="true"></span>
+          <button type="button" class="lbb-btn" id="lbb-archive" onclick="batchArchive(true)" disabled title="归档所选会话" data-i18n="inbox.bab.archive" data-i18n-title="inbox.batch.archive_t">归档</button>
+          <button type="button" class="lbb-btn" id="lbb-tag" onclick="batchTagPrompt()" disabled title="给所选会话打标签" data-i18n="inbox.convops.tags" data-i18n-title="inbox.batch.tag_t">标签</button>
+          <button type="button" class="lbb-btn lbb-danger" id="lbb-delete" onclick="batchDeletePrompt()" disabled style="display:none;" title="删除所选会话（仅删本机聊天记录，不动对方与手机端；不可恢复）" data-i18n="inbox.convdel.btn" data-i18n-title="inbox.batch.del_t">删除</button>
+          <button type="button" class="lbb-x" onclick="toggleBatchMode()" title="退出多选" data-i18n-title="inbox.batch.exit_t"><svg class="ui-ic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
       </div>
       <!-- 一期美化：今日 KPI 条迁至右侧空态「今日概览」卡（列表黄金区留给会话本身） -->
       <div class="search-row">
@@ -12382,8 +12396,16 @@ function toggleBatchMode(){
   const btn = document.getElementById('batch-toggle-btn');
   const bar = document.getElementById('batch-action-bar');
   if(items) items.classList.toggle('batch-mode', _batchMode);
-  if(btn){ btn.textContent = _batchMode ? window.T('inbox.batch.exit') : window.T('inbox.batch.toggle'); btn.classList.toggle('active', _batchMode); }
+  // #230：图标按钮只切 active / title（旧版把 textContent 换成「✕ 退出多选」，26px 宽折成三行）
+  if(btn){ btn.classList.toggle('active', _batchMode); btn.title = window.T(_batchMode ? 'inbox.batch.exit_t' : 'inbox.batch.toggle_t'); }
   if(bar) bar.classList.toggle('visible', false);
+  // #230：标题行切换为专用工具条「已选 N 项 ｜ 归档 · 标签 · 删除 ｜ ✕」
+  const lt = document.querySelector('.list-title');
+  if(lt) lt.classList.toggle('batch-on', _batchMode);
+  const lbb = document.getElementById('list-batch-bar');
+  if(lbb) lbb.hidden = !_batchMode;
+  const del = document.getElementById('lbb-delete');
+  if(del) del.style.display = (_msgOpsMeta && _msgOpsMeta.can_delete_conv) ? '' : 'none';   // 与右键菜单同门
   _updateBabCount();
 }
 
@@ -12393,6 +12415,36 @@ function _updateBabCount(){
   const n = _batchSelected.size;
   if(cnt) cnt.textContent = window.Tf('inbox.bab.count',{n:n});
   if(bar) bar.classList.toggle('visible', _batchMode && n > 0);
+  const lc = document.getElementById('lbb-count');
+  if(lc) lc.textContent = window.Tf('inbox.bab.count',{n:n});
+  ['lbb-archive','lbb-tag','lbb-delete'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled = !(n > 0); });
+}
+
+/* #230 批量删除会话：与右键菜单「删除会话」同一端点（仅删本机记录 + 防复活墓碑，对方/手机端不动），
+   一次确认、逐条调用（选择集通常 ≤ 几十条，免新增批量路由），成功的即时从列表消失。 */
+async function batchDeletePrompt(){
+  if(!_batchSelected.size) return;
+  if(!(_msgOpsMeta && _msgOpsMeta.can_delete_conv)){ _toast(window.T('inbox.convdel.denied'),'#b45309'); return; }
+  const cids=[..._batchSelected];
+  const ok=await _appConfirm(window.Tf('inbox.batch.del_confirm',{n:cids.length}),
+    {title:window.T('inbox.convdel.title'),iconName:'trash',tone:'danger',
+     okText:window.T('inbox.convdel.okbtn')});
+  if(!ok) return;
+  const rs=await Promise.allSettled(cids.map(cid=>
+    apiFetch('/api/unified-inbox/conversations/delete',
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid})},
+      {timeoutMs:60000}).then(r=>r.json().then(d=>({ok:r.ok&&d&&d.ok})).catch(()=>({ok:false})))));
+  let n=0;
+  rs.forEach((res,i)=>{
+    if(!(res.status==='fulfilled'&&res.value&&res.value.ok)) return;
+    n++;
+    const c=allChats.find(x=>x.conversation_id===cids[i]);
+    if(c) _convVanishLocal(convKey(c));
+  });
+  const f=cids.length-n;
+  _toast(f?window.Tf('inbox.batch.deleted_part',{n:n,f:f}):window.Tf('inbox.batch.deleted_n',{n:n}), f?'#b45309':'#16a34a');
+  toggleBatchMode();
+  applyFilters();
 }
 
 function _toggleBatchItem(cid, checked){
