@@ -139,6 +139,9 @@ foreach ($t in $Targets) {
         $note = ('SMART ON PUBLIC FEED (next update = clean pkg; reinstall smart from downloads/internal/ to switch) ' + $note).Trim()
       }
       if ($fl -eq 'clean' -and $ch -eq 'internal') { $note = ('CLEAN ON INTERNAL FEED (will pick up smart pkg next update) ' + $note).Trim() }
+      # lite has its own channel since 2026-09-06 (boss: do as recommended); a lite install still on
+      # the public feed is the same trap as smart/public -- next update turns it into the clean pkg.
+      if ($fl -eq 'lite' -and $ch -ne 'lite') { $note = ('LITE ON ' + $ch.ToUpper() + ' FEED (next update = ' + $(if ($ch -eq 'internal') { 'smart' } else { 'clean' }) + ' pkg; reinstall lite from downloads/lite/ to switch) ' + $note).Trim() }
     }
   }
   Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5,-17} {6}" -f $t, $backend, $ver, $disk, $disp, $edition, $note)

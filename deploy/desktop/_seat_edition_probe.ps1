@@ -12,9 +12,10 @@
 #             shipped since 1.0.24); cross-checked with resources/seed-data presence.
 #   channel = what it will FOLLOW : resources/app-update.yml (electron-updater's runtime
 #             config) -> internal when channel=latest-internal / url ...downloads/internal/,
-#             public when it points at the plain downloads/ root.
+#             lite when channel=latest-lite / url ...downloads/lite/ (boss 2026-09-06: lite gets
+#             its own channel too), public when it points at the plain downloads/ root.
 # Output (one line):
-#   "EDITION flavor=<internal|clean|lite|?> seed=<1|0> channel=<internal|public|?> ver=<x.y.z|?>"
+#   "EDITION flavor=<internal|clean|lite|?> seed=<1|0> channel=<internal|lite|public|?> ver=<x.y.z|?>"
 $ErrorActionPreference = 'SilentlyContinue'
 $res = Join-Path $env:LOCALAPPDATA 'Programs\telegram-ai-desktop\resources'
 if (-not (Test-Path $res)) { Write-Output 'EDITION flavor=? seed=0 channel=? ver=? (not installed)'; exit 0 }
@@ -37,6 +38,7 @@ try {
   $au = Get-Content (Join-Path $res 'app-update.yml') -Raw -Encoding UTF8
   if ($au) {
     if ($au -match '(?m)^\s*channel:\s*latest-internal\s*$' -or $au -match '/downloads/internal/') { $channel = 'internal' }
+    elseif ($au -match '(?m)^\s*channel:\s*latest-lite\s*$' -or $au -match '/downloads/lite/') { $channel = 'lite' }
     elseif ($au -match '(?m)^\s*url:\s*\S+') { $channel = 'public' }
   }
 } catch { }

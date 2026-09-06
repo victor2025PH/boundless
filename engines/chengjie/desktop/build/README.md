@@ -70,6 +70,7 @@ domains/platform 走与全量构建同一套暂存清洗（隐私/机密剔除�
 |---|---|---|---|---|
 | smart（内测，随包 seed-data） | `npm run dist:win` / `dist:win:smart` / `dist:win:fresh` | `dist/` | `latest-internal.yml` | `https://bd2026.cc/downloads/internal/` |
 | clean（对外干净包） | `npm run dist:win:clean` | `dist-clean/` | `latest.yml` | `https://bd2026.cc/downloads/` |
+| lite（定制精简档：2 人设 + 2 克隆音，计量不封顶） | `npm run dist:win:lite` | `dist-lite/` | `latest-lite.yml` | `https://bd2026.cc/downloads/lite/` |
 
 发布：`website/scripts/publish_chatx.ps1 -DistDir dist-clean`（公共渠道，老流程不变）+
 `publish_chatx.ps1 -DistDir dist -Channel internal`（只写 VPS/R2 的 `downloads/internal/`，
@@ -77,8 +78,11 @@ domains/platform 走与全量构建同一套暂存清洗（隐私/机密剔除�
 `latest.yml`，不带 `-Channel internal` 去发它会在第一步就失败——K-5 那次「内测机点更新拿到
 干净包、出厂种子整体 no-op」的形态不会再发生。内测机切渠道＝手装一次 smart 包（此后自动更新
 只走 internal）；`deploy/desktop/chatx_fleet_status.ps1` 的 `edition` 列读包内 build-info /
-app-update.yml，一眼看出每台机器装的形态与跟的渠道。`dist:win:lite` 仍用公共 `latest.yml`
-（定制档更新策略未拍板，装 lite 的机器点更新会拿到 clean 包——有客户装 lite 前先定）。
+app-update.yml，一眼看出每台机器装的形态与跟的渠道。lite 同理有自己的渠道
+（`publish_chatx.ps1 -DistDir dist-lite -Channel lite`；2026-09-06 老板「需要拍板的按建议做」——
+此前 lite 跟公共 `latest.yml`，装 lite 的机器点更新会变成 clean 包；09-06 前装的 lite 包不带
+channel，客户要手装一次新 lite 包切渠道）。三条渠道互斥：每种构建只生成自己那一个 yml，
+发错渠道在 publish 第一步就被拒。
 
 ## 运行时行为（生命周期）
 

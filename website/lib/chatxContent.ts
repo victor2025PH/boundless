@@ -32,6 +32,12 @@ export const CHATX_RELEASE_BASE = "/downloads";
 export const CHATX_INTERNAL_RELEASE_BASE = "/downloads/internal";
 export const CHATX_INTERNAL_UPDATE_MANIFEST = `${CHATX_INTERNAL_RELEASE_BASE}/latest-internal.yml`;
 
+/** lite 定制档渠道（2026-09-06 老板「需要拍板的按建议做」）：`npm run dist:win:lite` 出的包
+ *  烘入 `publish.channel=latest-lite`，自动更新只在 `/downloads/lite/` 内走——此前 lite 跟公共
+ *  渠道，客户点更新会被换成 clean 包。同样不渲染、不进 JSON-LD/manifest。 */
+export const CHATX_LITE_RELEASE_BASE = "/downloads/lite";
+export const CHATX_LITE_UPDATE_MANIFEST = `${CHATX_LITE_RELEASE_BASE}/latest-lite.yml`;
+
 export const CHATX = {
   download: {
     // ⚠ 这几个字段不只是页面兜底文案：它们同时进 SoftwareApplication JSON-LD（见本文件末

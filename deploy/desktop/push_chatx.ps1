@@ -78,6 +78,8 @@ Say ("sha256: " + $sha)
 $setupDir = Split-Path -Parent $Setup
 if (Test-Path (Join-Path $setupDir 'latest-internal.yml')) {
   Say "channel: internal (smart build w/ seed-data; installed app auto-updates from downloads/internal/latest-internal.yml)"
+} elseif (Test-Path (Join-Path $setupDir 'latest-lite.yml')) {
+  Say "channel: lite (custom lite build; installed app auto-updates from downloads/lite/latest-lite.yml)"
 } elseif (Test-Path (Join-Path $setupDir 'latest.yml')) {
   Say "channel: public (installed app auto-updates from downloads/latest.yml -- a smart build here means its NEXT update turns it into the clean package)"
 } else {

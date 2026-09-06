@@ -28,26 +28,29 @@
 #   pwsh website/scripts/publish_chatx.ps1 -DryRun            # verify the build is publishable
 #   pwsh website/scripts/publish_chatx.ps1                    # publish (asks to confirm)
 #
-# TWO CHANNELS (L-5 / boss decision D-L1, 2026-09-06). K-5 shipped 1.0.74 by publishing the CLEAN
+# THREE CHANNELS (L-5 / boss decision D-L1, 2026-09-06). K-5 shipped 1.0.74 by publishing the CLEAN
 # build (dist-clean) as the public latest.yml; the two internal testers clicked "update" and got the
 # clean package, so the smart package's seed-data (and every "factory-on" decision riding in it)
 # never reached them. Fix = the channel is a property of the PACKAGE, baked in at build time:
 #   public   : dist-clean\latest.yml            -> <RemoteDir>/            (default, unchanged flow)
 #   internal : dist\latest-internal.yml         -> <RemoteDir>/internal/   (-Channel internal)
-# The smart build (npm run dist:win) is built with publish.channel=latest-internal +
-# publish.url=.../downloads/internal/, so its dist dir has NO latest.yml -> publishing it without
-# -Channel internal fails at step 1 (cannot be shipped as the public package by accident), and the
-# installed app's resources/app-update.yml keeps it on the internal feed forever after.
-# Internal mode never touches public pointers: no latest.yml, no manifest.json, no
-# announcements.json, no public pruning. Everything lives under downloads/internal/ (VPS + R2).
+#   lite     : dist-lite\latest-lite.yml        -> <RemoteDir>/lite/       (-Channel lite; boss 2026-09-06
+#              "do as recommended": the lite custom build must not auto-update into the clean package)
+# Non-public builds are built with publish.channel=latest-<channel> + publish.url=.../downloads/<channel>/,
+# so their dist dir has NO latest.yml -> publishing them without -Channel fails at step 1 (cannot be
+# shipped as the public package by accident), and the installed app's resources/app-update.yml keeps
+# it on its own feed forever after. Non-public modes never touch public pointers: no latest.yml, no
+# public manifest.json, no announcements.json, no public pruning. Everything lives under
+# downloads/<channel>/ (VPS + R2).
 #
 #   pwsh website/scripts/publish_chatx.ps1 -DistDir dist -Channel internal -DryRun
 #   pwsh website/scripts/publish_chatx.ps1 -DistDir dist -Channel internal -Yes
+#   pwsh website/scripts/publish_chatx.ps1 -DistDir dist-lite -Channel lite -Yes
 
 param(
     [string]$Version    = "",                                   # default: read from dist/latest*.yml
     [string]$DistDir    = "D:\boundless\engines\chengjie\desktop\dist",
-    [ValidateSet("public", "internal")]
+    [ValidateSet("public", "internal", "lite")]
     [string]$Channel    = "public",
     [int]   $Keep       = 3,
     [switch]$DryRun,
@@ -69,20 +72,23 @@ $GenManifest  = Join-Path $PSScriptRoot "gen-chatx-manifest.ps1"
 $PublicDownloadsDir = Join-Path (Split-Path -Parent $PSScriptRoot) "public\downloads"
 
 # Channel-derived layout. Every later step uses ONLY these (no hardcoded "latest.yml"/root paths),
-# so the internal channel is fully namespaced and the public channel is byte-for-byte the old flow.
-$Internal = ($Channel -eq "internal")
+# so every non-public channel is fully namespaced and the public channel is byte-for-byte the old flow.
+# $Internal = "not the public channel" (internal or lite) — the name predates the lite channel.
+$AllChannels = @("public", "internal", "lite")
+$Internal = ($Channel -ne "public")
 if ($Internal) {
-    $YmlName      = "latest-internal.yml"                 # electron-builder: publish.channel=latest-internal
-    $DownloadsDir = Join-Path $PublicDownloadsDir "internal"
-    $RemoteDir    = "$RemoteDir/internal"
-    $R2Path       = "r2:avatarhub/downloads/internal"
-    $PublicBase   = "$SiteUrl/downloads/internal"
+    $YmlName      = "latest-$Channel.yml"                 # electron-builder: publish.channel=latest-<channel>
+    $DownloadsDir = Join-Path $PublicDownloadsDir $Channel
+    $RemoteDir    = "$RemoteDir/$Channel"
+    $R2Path       = "r2:avatarhub/downloads/$Channel"
+    $PublicBase   = "$SiteUrl/downloads/$Channel"
 } else {
     $YmlName      = "latest.yml"
     $DownloadsDir = $PublicDownloadsDir
     $R2Path       = "r2:avatarhub/downloads"
     $PublicBase   = "$SiteUrl/downloads"
 }
+function YmlOf([string]$ch) { if ($ch -eq "public") { "latest.yml" } else { "latest-$ch.yml" } }
 
 # R2 mirror tooling (aligned across build hosts, 2026-08-10):
 #   conf:   env RCLONE_R2_CONF  ->  176 avatarhub secrets  ->  monorepo deploy\secrets (117)
@@ -110,14 +116,17 @@ function Ok([string]$m)   { Write-Host "[OK] $m" -ForegroundColor Green }
 # -- 1. locate + parse dist/<channel yml> (authoritative for version/size/sha) ------
 $distYml = Join-Path $DistDir $YmlName
 if (-not (Test-Path $distYml)) {
-    # Channel interlock: the OTHER channel's yml sitting there means this dist dir was built for the
-    # other channel (smart builds emit latest-internal.yml only; clean builds emit latest.yml only).
-    $otherYml = if ($Internal) { "latest.yml" } else { "latest-internal.yml" }
-    if (Test-Path (Join-Path $DistDir $otherYml)) {
-        if ($Internal) {
-            Fail "$DistDir holds a PUBLIC-channel build ($otherYml, no $YmlName) - refusing to publish it as internal. Smart/internal builds come from 'npm run dist:win' (publish.channel=latest-internal); clean builds go out WITHOUT -Channel internal."
-        } else {
-            Fail "$DistDir holds an INTERNAL-channel (smart, seed-data) build ($otherYml, no latest.yml) - refusing to publish it as the public package. Public releases come from dist-clean ('npm run dist:win:clean'); to feed the internal channel add -Channel internal."
+    # Channel interlock: another channel's yml sitting there means this dist dir was built for THAT
+    # channel (each build emits exactly one yml: latest.yml / latest-internal.yml / latest-lite.yml).
+    foreach ($other in ($AllChannels | Where-Object { $_ -ne $Channel })) {
+        $otherYml = YmlOf $other
+        if (Test-Path (Join-Path $DistDir $otherYml)) {
+            $hint = switch ($other) {
+                "public"   { "clean builds ('npm run dist:win:clean') go out WITHOUT -Channel" }
+                "internal" { "smart/internal builds come from 'npm run dist:win' and ship with -Channel internal" }
+                "lite"     { "lite builds come from 'npm run dist:win:lite' and ship with -Channel lite" }
+            }
+            Fail "$DistDir holds a $($other.ToUpper())-channel build ($otherYml, no $YmlName) - refusing to publish it as '$Channel'. $hint."
         }
     }
     Fail "no $YmlName in $DistDir (did the build run?)"
@@ -174,7 +183,7 @@ if ($DryRun) {
 # version comes from the clean publish.
 $AnnLocal = Join-Path $DownloadsDir "announcements.json"
 $PublishAnnouncement = (-not $NoAnnouncement) -and (-not $Internal)
-if ($Internal -and -not $NoAnnouncement) { Info "internal channel: announcements.json untouched (feed is global, customers must not see the smart release)" }
+if ($Internal -and -not $NoAnnouncement) { Info "$Channel channel: announcements.json untouched (feed is global; only the public clean release announces)" }
 if ($PublishAnnouncement) {
     $notesText = $Notes
     if (-not $notesText -and $NotesFile) {
@@ -320,7 +329,7 @@ else {
     }
 }
 Write-Host ""
-if ($Internal) {
+if ($Channel -eq "internal") {
     # Internal channel: no changelog page, no broadcast. What operators need next is the one-time
     # switch URL for machines still on the public channel (they can never auto-update INTO the
     # internal channel; installing one smart package flips their app-update.yml, then it sticks).
@@ -329,6 +338,14 @@ if ($Internal) {
     Write-Host "    $PublicBase/ChatX-Setup-$Version.exe    （R2 加速入口：$SiteUrl/dl/downloads/internal/ChatX-Setup-$Version.exe）" -ForegroundColor Cyan
     Write-Host "  核对：deploy\desktop\chatx_fleet_status.ps1 的 edition/channel 列应显示 smart / internal。" -ForegroundColor Cyan
     Write-Host "  不要广播、不要写 changelog：同版本的对外说明随 clean 包的公共 publish 走。" -ForegroundColor Yellow
+} elseif ($Channel -eq "lite") {
+    # Lite channel: the custom lite build (2 personas / 2 cloned voices / metered-not-capped) now
+    # updates only within its own channel. Customers on a lite install before 2026-09-06 were on the
+    # public feed (would have turned clean on the next update) -> hand them this installer once.
+    Write-Host "[next] lite 渠道已就位：装过**本渠道出的** lite 包的机器自检更新走 $PublicBase/$YmlName，不会再被公共渠道更新成 clean 包。" -ForegroundColor Cyan
+    Write-Host "  09-06 之前装的 lite 包不带 channel（跟公共渠道）：客户要**手装一次**这个包切渠道，之后自动更新只跟 lite 渠道：" -ForegroundColor Cyan
+    Write-Host "    $PublicBase/ChatX-Setup-$Version.exe    （R2 加速入口：$SiteUrl/dl/downloads/lite/ChatX-Setup-$Version.exe）" -ForegroundColor Cyan
+    Write-Host "  核对：deploy\desktop\chatx_fleet_status.ps1 的 edition 列应显示 lite/lite。不要广播、不要写 changelog。" -ForegroundColor Yellow
 } else {
     # Changelog reminder (every release must grow /download/chatx/releases; gate:content check 6 enforces).
     $notesArg = if ($NotesFile) { $NotesFile } else { "<notes.txt>" }
@@ -340,7 +357,7 @@ if ($Internal) {
     # channel @hykj7 — a channel post auto-forwards into the group. Broadcasting with target=both
     # posts the SAME announcement into the group a second time. Always use target=channel.
     Write-Host "[next] 广播只发频道（target=channel）：群 @hykjz 已链接频道自动转发，双发=群里重复刷屏（老板两次点名）。" -ForegroundColor Yellow
-    Write-Host "[next] 同版本的内测 smart 包另发内测渠道：publish_chatx.ps1 -DistDir <desktop>\dist -Channel internal -Yes（不碰公共指针）。" -ForegroundColor Cyan
+    Write-Host "[next] 同版本的内测 smart 包另发内测渠道：publish_chatx.ps1 -DistDir <desktop>\dist -Channel internal -Yes（不碰公共指针）；lite 定制包同理 -DistDir <desktop>\dist-lite -Channel lite。" -ForegroundColor Cyan
 }
 if ($DryRun) { Ok "DRYRUN complete - build v$Version is publishable [$Channel]; re-run without -DryRun to ship" }
 else { Ok "published v$Version [$Channel]" }
