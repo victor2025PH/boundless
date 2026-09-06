@@ -297,9 +297,12 @@ def test_tts_voice_clone_command_no_inject_for_non_qwen_wrapper(tmp_path, monkey
     asyncio.run(run())
 
 
-def test_tts_falls_back_to_edge_when_network_backend_fails(tmp_path, monkeypatch):
-    """coqui_http 等网络后端连不上时（如 LAN 主机离线 / WinError 10060），
-    应自动回落到 edge_tts 出声，而不是把 URLError 硬抛给用户。"""
+def test_tts_clone_network_failure_degrades_to_text_not_edge(tmp_path, monkeypatch):
+    """coqui_http 等**克隆**后端连不上时（LAN 主机离线 / WinError 10060）：
+
+    L-2 #205（D-L4，2026-09-06）改契约——克隆声是人设身份，引擎离线**不换声**：
+    ok=False + degrade_to_text，edge 一次都不许被调用（旧契约「回落 edge 出声」
+    让男人设 steven 对客户发出了默认女声）。原始错误仍透出在 primary_error。"""
     import asyncio
     from src.ai.tts_pipeline import TTSPipeline
 
@@ -334,11 +337,13 @@ def test_tts_falls_back_to_edge_when_network_backend_fails(tmp_path, monkeypatch
             },
         })
         rv = await p.synthesize("你好")
-        assert rv.ok is True
-        assert rv.provider == "edge_tts"
-        assert rv.extra.get("fallback_from") == "coqui_http"
+        assert rv.ok is False
+        assert rv.provider != "edge_tts"
+        assert rv.extra.get("fallback_blocked") == "clone_engine_offline"
+        assert rv.extra.get("degrade_to_text") is True
+        assert rv.error.startswith("clone_engine_offline:")
         assert "WinError 10060" in rv.extra.get("primary_error", "")
-        assert calls["coqui"] == 1 and calls["edge"] == 1
+        assert calls["coqui"] == 1 and calls["edge"] == 0
 
     asyncio.run(run())
 

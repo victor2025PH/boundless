@@ -128,7 +128,9 @@ async function _playVoicePreview(pid, btn) {
       body: JSON.stringify({text: text, persona_id: pid}),
     });
     const d = await r.json().catch(function(){ return {}; });
-    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.error || d.detail || ('HTTP ' + r.status));
+    // L-2 #205：后端按失败分类给了人话（message：引擎离线 / 无同类预置声）就优先显示，
+    // 而不是裸错误码；引擎离线时这里只提示、不播任何替代声音。
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
     if (_vpBtn !== btn) return;   // 期间用户点了别的卡片
     btn.classList.remove('loading'); btn.classList.add('playing'); btn.textContent = '■';
     _vpAudio = new Audio(d.url || d.audio_url);

@@ -253,6 +253,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return tr(request, "err.voice.hub_source_down")
         if reason == "profile_not_ready":
             return tr(request, "err.voice.profile_not_ready")
+        # L-2 #205（D-L4）：克隆引擎离线不换声 / 无同类预置声 → 试听同样提示
+        # 「引擎离线」而不是放别人的声音（V85TY9 第二次点击听到默认女声）。
+        if reason == "clone_engine_offline":
+            return tr(request, "err.voice.clone_engine_offline")
+        if reason == "no_matching_voice":
+            return tr(request, "err.voice.no_matching_voice")
         return ""
 
     async def _redispatch_garbled_to_edge(

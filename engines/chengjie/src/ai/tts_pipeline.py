@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from src.ai.voice_profile_guard import CLONE_BACKENDS
+
 logger = logging.getLogger(__name__)
 
 
@@ -444,6 +446,12 @@ def classify_voice_error(err: Optional[str]) -> str:
         return "hub_source_down"
     if any(m in e for m in _VOICE_ERR_NOT_READY_MARKERS):
         return "profile_not_ready"
+    # L-2 #205（D-L4）：克隆引擎离线不换声 / 无同语种同性别预置声——两者都是
+    # 「本条没出声、已改发文字」，坐席该做的是等引擎恢复或给人设换声，不是重试。
+    if e.startswith("clone_engine_offline:"):
+        return "clone_engine_offline"
+    if "no_voice_for(" in e or "edge_voice_unresolved(" in e:
+        return "no_matching_voice"
     return ""
 
 
@@ -714,7 +722,14 @@ _EDGE_VOICE_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]+)+$")
 _EDGE_VOICE_DEFAULT = "zh-CN-XiaoxiaoNeural"
 
 
-def safe_edge_voice(voice: Any, fallback: str = _EDGE_VOICE_DEFAULT) -> str:
+def _edge_voice_wellformed(v: str) -> bool:
+    return bool(v) and v.endswith("Neural") and bool(_EDGE_VOICE_RE.match(v))
+
+
+def safe_edge_voice(
+    voice: Any, fallback: str = _EDGE_VOICE_DEFAULT, *,
+    gender: str = "", lang: str = "",
+) -> str:
     """B62（2026-08-23）：edge_tts 音色白形校验——克隆名绝不透传。
 
     托管机上人设绑着克隆音色（voice=登记名如 ``steven``），克隆引擎不可用
@@ -722,12 +737,32 @@ def safe_edge_voice(voice: Any, fallback: str = _EDGE_VOICE_DEFAULT) -> str:
     ``ValueError: Invalid voice 'Steven'`` 裸抛到 UI（``_312`` 实录）。
     形不合法 → 映射到合法通用音色（fallback 自身不合法再落内置缺省），
     纯函数可单测。
+
+    L-2 #205（2026-09-06，D-L4）：映射**必须看人设性别/语种**。旧行为无差别落
+    ``fallback``（配置缺省 ``zh-CN-XiaoxiaoNeural`` 女声）——男人设 steven 引擎
+    离线时客户听到女声（V85TY9 / ERS5QQ）。给了 ``gender`` 时：
+    - 优先在目录（edge_voice_catalog）里找 **同语种同性别**；语种取 ``lang``，
+      缺则取 fallback 的语种前缀，再缺按中文；
+    - 找不到同类 → **返回空串**（调用方据此改发文字，绝不放别人的声音）。
+    未给 gender ＝ 旧契约原样（既有调用方零行为变更）。
     """
     v = str(voice or "").strip()
-    if v and v.endswith("Neural") and _EDGE_VOICE_RE.match(v):
+    if _edge_voice_wellformed(v):
         return v
     fb = str(fallback or "").strip()
-    if fb and fb.endswith("Neural") and _EDGE_VOICE_RE.match(fb):
+    gd = str(gender or "").strip().lower()
+    if gd:
+        try:
+            from src.ai.edge_voice_catalog import (
+                edge_voice_lang, normalize_gender, pick_edge_voice)
+            gd = normalize_gender(gd)
+        except Exception:   # pragma: no cover - 目录模块缺失时退回旧契约
+            gd = ""
+        if gd:
+            lg = (str(lang or "").strip() or edge_voice_lang(v)
+                  or edge_voice_lang(fb) or "zh")
+            return pick_edge_voice(lg, gd)
+    if _edge_voice_wellformed(fb):
         return fb
     return _EDGE_VOICE_DEFAULT
 
@@ -850,6 +885,14 @@ class TTSPipeline:
         self.rvc = cfg.get("rvc") if isinstance(cfg.get("rvc"), dict) else {}
         # 人设 id（由 resolve_voice_cfg 注入）：预渲染语音命中层的查找键。
         self.persona_id = str(cfg.get("persona_id") or "").strip()
+        # 人设性别 / 语种（persona_voice 注入，L-2 #205）：兜底选声必须同语种同性别，
+        # 判不出性别（空）→ 兜底沿用语种缺省声（旧行为）。
+        try:
+            from src.ai.edge_voice_catalog import normalize_gender as _ng
+            self.persona_gender = _ng(cfg.get("persona_gender"))
+        except Exception:
+            self.persona_gender = ""
+        self.persona_lang = str(cfg.get("persona_lang") or "").strip().lower()
         # 生效音色来源标签（resolve_effective_voice_context 注入，#137/#140）：
         # 「人设X/全局/会话覆盖」——每次合成的强制 INFO 行消费。
         self.voice_source = str(cfg.get("voice_source") or "").strip()
@@ -1667,6 +1710,26 @@ class TTSPipeline:
         fb = self.fallback_backend
         if (self.fallback_on_error and fb and fb != primary_backend
                 and not _is_non_fallback_error(err)):
+            # ── L-2 #205（D-L4，2026-09-06）：克隆态**引擎失败**绝不换声 ──
+            # 男人设 steven 的 avatar_clone 冷启动/不可达 → 旧链回落 edge 缺省
+            # 女声直接发给客户（V85TY9 / ERS5QQ「运行时兜底默认音色」）。克隆声
+            # 是人设身份的一部分，引擎离线时**改发文字**，由调用方（autosend /
+            # voice_reply / 试听）按 ok=False + degrade_to_text 处置并提示「语音
+            # 引擎离线，本条已改发文字」。两条**刻意改道**不在此列、照旧走下方
+            # 兜底：语种闸（克隆念不了这门语言，#161 保护性改标准声）与 Token
+            # 钱包耗尽（计费降级）——但兜底音色同样要过下方同性别同语种选声。
+            if (primary_backend in CLONE_BACKENDS
+                    and not _lang_blocked and not _token_skip_clone):
+                logger.info(
+                    "[tts-fallback] 克隆引擎失败不换声 → 改发文字 persona=%s "
+                    "backend=%s err=%s（D-L4：禁回落预置声）",
+                    self.persona_id or "-", primary_backend, err)
+                rv.extra["fallback_blocked"] = "clone_engine_offline"
+                rv.extra["degrade_to_text"] = True
+                rv.extra["primary_error"] = err
+                rv.error = f"clone_engine_offline:{err}"
+                rv.latency_ms = int((time.monotonic() - t0) * 1000)
+                return rv
             # 冷却期内的「缓存命中不可达」是已知稳态 → DEBUG，避免主机长时间离线时
             # 每次语音合成都刷 WARNING；首次探测失败（刚写入缓存）仍按 WARNING 记。
             _cached_dead = "tts_host_unreachable_cached:" in (err or "")
@@ -1674,16 +1737,31 @@ class TTSPipeline:
                 "[tts] backend '%s' failed (%s) → 回落 '%s'", primary_backend, err, fb)
             fb_fmt = "mp3" if fb == "edge_tts" else self.format
             fb_out = out.with_suffix(f".{fb_fmt}")
-            # 语种闸拦下时兜底音色对齐文本语种（配置默认 zh 兜底声念泰文与怪声
-            # 同罪）；无映射维持配置值（edge 分支的 safe_edge_voice 仍兜非法名）。
+            # 兜底音色选择（L-2 #205）：语种取「语种闸拦下的文本语种 > 人设语种 >
+            # 主音色/兜底音色的语种前缀 > 中文」，性别取人设性别；目录里找不到
+            # **同语种同性别** → 不出声改发文字（配置默认 zh 女声念泰文、念男人设
+            # 与怪声同罪）。性别未知 → 该语种缺省声（与 EDGE_VOICE_BY_LANG 同一把）。
             fb_voice = self.fallback_voice
-            if _lang_blocked and fb == "edge_tts":
-                try:
-                    from src.ai.lang_voice_route import default_edge_voice_for_lang
-                    fb_voice = (default_edge_voice_for_lang(_lang_blocked)
-                                or self.fallback_voice)
-                except Exception:
-                    fb_voice = self.fallback_voice
+            if fb == "edge_tts":
+                fb_voice = self._pick_fallback_edge_voice(_lang_blocked)
+                if not fb_voice:
+                    logger.info(
+                        "[tts-fallback] 无同语种同性别预置声可兜底 → 改发文字 "
+                        "persona=%s gender=%s lang=%s err=%s",
+                        self.persona_id or "-", self.persona_gender or "?",
+                        _lang_blocked or self.persona_lang or "?", err)
+                    rv.extra["fallback_blocked"] = "no_matching_voice"
+                    rv.extra["degrade_to_text"] = True
+                    rv.extra["primary_error"] = err
+                    rv.error = (f"{err} | fallback(edge_tts):no_voice_for("
+                                f"gender={self.persona_gender or '?'},"
+                                f"lang={_lang_blocked or self.persona_lang or '?'})")
+                    rv.latency_ms = int((time.monotonic() - t0) * 1000)
+                    return rv
+                logger.info(
+                    "[tts-fallback] 主后端 %s 失败（%s）→ edge 兜底音色 %s "
+                    "persona=%s gender=%s", primary_backend, err, fb_voice,
+                    self.persona_id or "-", self.persona_gender or "?")
             fb_err = await self._run_backend(
                 rv, rv.text, fb_out, fb_voice, fb, fb_fmt,
                 _cap(timeout_sec),
@@ -1721,8 +1799,19 @@ class TTSPipeline:
         if backend == "edge_tts":
             # B62：克隆名/任意非法音色绝不透传给 edge（ValueError 裸抛 UI 的根子）；
             # 映射记进 extra，预览层据此明示「本条用通用音色」。
+            # L-2 #205：映射按人设性别/语种选；同类找不到 → 不出声（改发文字）。
             _eff = str(voice or self.voice or "").strip()
-            voice = safe_edge_voice(_eff, self.fallback_voice)
+            voice = safe_edge_voice(
+                _eff, self.fallback_voice,
+                gender=self.persona_gender, lang=self._fallback_lang_hint())
+            if not voice:
+                logger.info(
+                    "[tts-fallback] edge 音色 '%s' 不合法且无同语种同性别替代 "
+                    "→ 改发文字 persona=%s gender=%s",
+                    _eff, self.persona_id or "-", self.persona_gender)
+                rv.extra["degrade_to_text"] = True
+                rv.extra["fallback_blocked"] = "no_matching_voice"
+                return f"edge_voice_unresolved({_eff}|gender={self.persona_gender})"
             if _eff and voice != _eff:
                 rv.extra["voice_mapped_from"] = _eff
                 rv.voice = voice
@@ -1770,6 +1859,45 @@ class TTSPipeline:
         if bool(vp.get("enabled", False)):
             return str(vp.get("backend") or self.backend).strip().lower()
         return self.backend
+
+    def _fallback_lang_hint(self, text_lang: str = "") -> str:
+        """兜底选声的语种：文本语种（语种闸拦下的）> 人设语种 > 主音色 / 兜底音色前缀。"""
+        try:
+            from src.ai.edge_voice_catalog import edge_voice_lang, normalize_lang
+            for cand in (text_lang, self.persona_lang):
+                lg = normalize_lang(cand)
+                if lg:
+                    return lg
+            for v in (self.voice, self.fallback_voice):
+                lg = edge_voice_lang(v)
+                if lg:
+                    return lg
+        except Exception:
+            pass
+        return ""
+
+    def _pick_fallback_edge_voice(self, text_lang: str = "") -> str:
+        """edge 兜底音色（L-2 #205）：同语种同性别；性别未知取语种缺省声；找不到空串。
+
+        性别未知且语种也判不出 → 沿用配置 ``fallback_voice``（旧行为，既有部署
+        零变更）；性别已知则**必须**过目录，目录里没有该语种的同性别声 → 空串
+        （调用方改发文字）。
+        """
+        lg = self._fallback_lang_hint(text_lang) or "zh"
+        if not self.persona_gender:
+            if text_lang:
+                try:
+                    from src.ai.lang_voice_route import default_edge_voice_for_lang
+                    return (default_edge_voice_for_lang(text_lang)
+                            or self.fallback_voice)
+                except Exception:
+                    return self.fallback_voice
+            return self.fallback_voice
+        try:
+            from src.ai.edge_voice_catalog import pick_edge_voice
+            return pick_edge_voice(lg, self.persona_gender)
+        except Exception:
+            return ""
 
     def _clone_t2s_enabled(self) -> bool:
         """繁→简发音输入转换开关（默认开；opt-out ``avatar_voice.clone_t2s: false``）。
@@ -3727,9 +3855,14 @@ class TTSPipeline:
             except Exception:
                 kwargs = {}
         # B62 最后防线：任何绕过 _run_backend 的调用同样不许把克隆名喂给 edge。
-        communicate = edge_tts.Communicate(
-            text, safe_edge_voice(voice or self.voice, self.fallback_voice),
-            **kwargs)
+        # L-2 #205：同样按人设性别选替代；无同类 → 抛错（调用方改发文字），不放别人的声音。
+        _v = safe_edge_voice(
+            voice or self.voice, self.fallback_voice,
+            gender=self.persona_gender, lang=self._fallback_lang_hint())
+        if not _v:
+            raise RuntimeError(
+                f"edge_voice_unresolved({voice or self.voice}|gender={self.persona_gender})")
+        communicate = edge_tts.Communicate(text, _v, **kwargs)
         await communicate.save(str(out))
 
 

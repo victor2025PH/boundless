@@ -140,8 +140,12 @@ async def test_minicpm_clone_neutral_no_instructions(tmp_path, monkeypatch):
 
 
 # ── 回落 / 硬失败 ────────────────────────────────────────────────────────────
-async def test_minicpm_clone_unreachable_falls_back_to_edge(tmp_path, monkeypatch):
-    """主机不可达且 cloud_fallback → 端到端回落 edge 出声（绝不卡死出站）。"""
+async def test_minicpm_clone_unreachable_degrades_to_text_not_edge(tmp_path, monkeypatch):
+    """主机不可达且 cloud_fallback → **不换声**改发文字（L-2 #205 / D-L4，2026-09-06）。
+
+    旧契约「端到端回落 edge 出声」让克隆人设在引擎离线时对客户发出通用声
+    （steven 男人设变女声实锤）；现在克隆态引擎失败 ok=False + degrade_to_text，
+    edge 零调用，调用方改发文字并提示引擎离线。"""
     vcc.reset_health_cache()
     vcc.reset_load_state()
     monkeypatch.setattr(vcc.VoiceCloneClient, "health_ok", lambda self, **kw: False)
@@ -158,10 +162,11 @@ async def test_minicpm_clone_unreachable_falls_back_to_edge(tmp_path, monkeypatc
     monkeypatch.setattr(TTSPipeline, "_edge_tts", fake_edge)
     p = _mc_pipeline(tmp_path, fallback=True)
     rv = await p.synthesize("你好")
-    assert rv.ok is True
-    assert rv.provider == "edge_tts"
-    assert rv.extra.get("fallback_from") == "minicpm_clone"
-    assert edge["n"] == 1
+    assert rv.ok is False
+    assert rv.extra.get("fallback_blocked") == "clone_engine_offline"
+    assert rv.extra.get("degrade_to_text") is True
+    assert rv.extra.get("primary_error") == "minicpm_clone_unreachable"
+    assert edge["n"] == 0
 
 
 async def test_minicpm_clone_unreachable_hard_fail_without_fallback(tmp_path, monkeypatch):

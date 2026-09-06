@@ -154,6 +154,9 @@ def resolve_voice_cfg(
 
         # ── Layer 2: config.yaml per-persona voice_profile ──
         quirks_str = ""
+        # 人设性别（L-2 #205）：TTSPipeline 兜底选声必须同性别，随 cfg 注入；
+        # 缺失＝性别未知（兜底沿用语种缺省声，旧行为）。
+        gender_str = ""
         if persona_id:
             personas_cfg = full_config.get("personas") or {}
             profiles = personas_cfg.get("profiles") or []
@@ -163,6 +166,7 @@ def resolve_voice_cfg(
                 if p.get("id") != persona_id:
                     continue
                 quirks_str = str(p.get("quirks") or "").strip()
+                gender_str = str(p.get("gender") or "").strip()
                 vp = p.get("voice_profile")
                 if not isinstance(vp, dict):
                     break
@@ -181,11 +185,14 @@ def resolve_voice_cfg(
                     if _merge_voice_profile(merged, p_rt.get("voice_profile") or {}):
                         _voice_layer = f"persona:{persona_id}"
                     quirks_str = str(p_rt.get("quirks") or quirks_str).strip()
+                    gender_str = str(p_rt.get("gender") or gender_str).strip()
             except Exception:
                 pass
 
         if merged:   # 空配置仍返回 {}（既有契约：调用方以空 dict 判「无语音配置」）
             merged["voice_source_layer"] = _voice_layer
+            if gender_str:
+                merged["persona_gender"] = gender_str
 
         # 顶层音色占位串同样视同未设置（全局 voice_reply.voice 也可能被存成
         # "___"）——留着会被 TTSPipeline/路由当真实音色消费。
@@ -434,6 +441,10 @@ def resolve_effective_voice_context(
                     voice_cfg, resolved_persona.get("voice_profile") or {}):
                 voice_cfg["voice_source_layer"] = (
                     f"persona:{resolved_id}" if resolved_id else "persona:inline")
+            # 人设性别随行（L-2 #205 兜底同性别选声）；resolve_voice_cfg 已注入时不覆盖
+            _g = str(resolved_persona.get("gender") or "").strip()
+            if _g and voice_cfg and not voice_cfg.get("persona_gender"):
+                voice_cfg["persona_gender"] = _g
         # #93（2026-09-01 女王会话实锤）：克隆档「齐备但 enabled 键缺失」修补。
         # TTSPipeline._effective_backend 只认 enabled=true——克隆四件套（克隆
         # backend + 参考音/speaker + 授权）都在、唯独 enabled 键在某次 merge/
