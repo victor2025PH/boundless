@@ -26,6 +26,14 @@
   ``kb_gate.lexical_overlap_ok`` 实词重叠门、不与 vendor 预置条目比对；
 - 存量：首次装载对 pending 草稿做一次性清标（噪音自动拒、假重复重算、补 private_kinds），
   ``kb_meta`` 键 ``TRIAGE_BACKFILL_META_KEY`` 幂等。
+
+2026-09-06 M-5 E（#220，DMS45P / RJF9N7）：
+- 语种按**文字系统**判（``query_lang`` → translation_service.detect_language：假名即 ja、
+  谚文即 ko、泰文即 th、越南声调即 vi，再才看汉字）——日语条目不再因含汉字被当中文跳过
+  翻译；路由把真实检测结果当「原语」回给页面；
+- 同题草稿**合并**：save_drafts 对已有 pending 同键条目累加 hit_count 不再新建；存量并列
+  待审的同题一次性合并（``merge_duplicate_pending``，其余标 rejected +
+  ``reviewed_by=system:m5_dup_merge``，``kb_meta`` 键 ``DUP_MERGE_BACKFILL_META_KEY`` 幂等）。
 """
 
 import asyncio
@@ -67,6 +75,54 @@ _NAME_HINT_RE = re.compile(
 PRIVATE_KINDS: Tuple[str, ...] = (
     "name", "money", "meet", "address", "identity", "family", "health", "commitment",
 )
+
+# ── M-5 E（#220，2026-09-06）：语种按文字系统判 + 重复待审合并 ────────────────
+#: 重复合并存量清理幂等键（kb_meta）
+DUP_MERGE_BACKFILL_META_KEY = "learner_dup_merge_m5"
+#: 系统合并的重复条目 reviewed_by 标记（「已拒绝」页可追溯）
+DUP_MERGE_REVIEWER = "system:m5_dup_merge"
+#: 判「原文是不是中文」用的兜底脚本表（translation_service 不可导入时）：
+#: 假名 / 谚文 / 泰文 / 越南声调字母任一出现即**不是**中文——不再按汉字比例判
+_SCRIPT_NON_ZH_RE = re.compile(
+    r"[\u3040-\u30ff]|[\uac00-\ud7af]|[\u0e01-\u0e3a\u0e40-\u0e4e]|"
+    r"[\u0103\u0102\u0111\u0110\u01a1\u01a0\u01b0\u01af\u1ea0-\u1ef9]")
+_CJK_ONLY_RE = re.compile(r"[\u4e00-\u9fff]")
+# 归一化查重键：去首尾空白/全半角标点/大小写/连续空白（「そっか、…のね…」与「そっか…のね」同键）
+_QKEY_STRIP_RE = re.compile(
+    r"[\s!-/:-@\[-`{-~\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
+    r"…—～·]+")
+
+
+def query_lang(text: str) -> str:
+    """学习条目原文的语种（ISO 639-1；判不出 ``unknown``）。
+
+    **按文字系统判**（DMS45P：日语「そっか、向こうはもう物語の世界に戻るのね」含汉字，
+    页面按汉字比例当中文 → 源语=目标语跳过翻译）：复用 ``translation_service.
+    detect_language``（脚本块优先：假名→ja、谚文→ko、泰文→th、越南声调→vi，再才看
+    汉字），与 M-1 B 出站语言判定同一函数；导入失败时按本模块兜底表判非中文脚本。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return "unknown"
+    try:
+        from src.ai.translation_service import detect_language
+        return str(detect_language(t) or "unknown")
+    except Exception:
+        if _SCRIPT_NON_ZH_RE.search(t):
+            return "other"
+        return "zh" if _CJK_ONLY_RE.search(t) else "unknown"
+
+
+def needs_translation(text: str) -> bool:
+    """原文要不要补中文译文：非中文、且判得出语种（表情/数字串 unknown 不译）。"""
+    lang = query_lang(text)
+    return lang not in ("zh", "unknown")
+
+
+def normalize_query_key(text: str) -> str:
+    """待审去重键：小写 + 去标点空白。同题不同标点/空格的条目视为同一条。"""
+    t = str(text or "").strip().lower()
+    return _QKEY_STRIP_RE.sub("", t)
 
 
 class LearnerApproveError(Exception):
@@ -207,6 +263,7 @@ class DailyLearner:
         self._memory_writer: Optional[Callable[[str, str, str], Optional[Dict]]] = None
         self._ensure_table()
         self._triage_backfill_once()
+        self._dup_merge_backfill_once()
         global _LAST_INSTANCE
         _LAST_INSTANCE = self
 
@@ -567,12 +624,47 @@ class DailyLearner:
             _logger.error("AI 生成草稿失败: %s", e)
             return []
 
+    def _pending_key_index(self, c) -> Dict[str, str]:
+        """归一化查重键 → 最早一条 pending 草稿 id（同键多条时留最早）。"""
+        idx: Dict[str, str] = {}
+        try:
+            rows = c.execute(
+                "SELECT id, query FROM kb_drafts WHERE status='pending' "
+                "ORDER BY created_at ASC, id ASC").fetchall()
+        except sqlite3.OperationalError:
+            return idx
+        for r in rows:
+            k = normalize_query_key(r["query"])
+            if k and k not in idx:
+                idx[k] = r["id"]
+        return idx
+
     def save_drafts(self, drafts: List[Dict]) -> int:
-        """保存草稿到数据库，自动标记与现有 KB 的重复。"""
+        """保存草稿到数据库，自动标记与现有 KB 的重复。
+
+        M-5 E（#220）：同题（归一化后同键）已有 pending 草稿 → **合并**进那一条
+        （hit_count 累加），不再并列第二条待审——此前只有手动喂料查同题，定时采集
+        两轮各生成一份（RJF9N7：同一日语条目出现两次都标「重复」）。
+        """
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         saved = 0
+        merged = 0
         with self._conn() as c:
+            key_idx = self._pending_key_index(c)
             for d in drafts:
+                qkey = normalize_query_key(d.get("query", ""))
+                if qkey and qkey in key_idx:
+                    try:
+                        c.execute(
+                            "UPDATE kb_drafts SET hit_count = hit_count + ? "
+                            "WHERE id=? AND status='pending'",
+                            (max(1, int(d.get("hit_count", 1) or 1)), key_idx[qkey]))
+                        merged += 1
+                        _logger.info("草稿同题合并进 %s（M-5 #220）: %s",
+                                     key_idx[qkey], str(d.get("query", ""))[:60])
+                    except sqlite3.Error:
+                        _logger.debug("同题合并失败（忽略）", exc_info=True)
+                    continue
                 draft_id = str(uuid.uuid4())[:8]
                 triggers = d.get("triggers", [])
                 if isinstance(triggers, list):
@@ -604,9 +696,74 @@ class DailyLearner:
                         _logger.info("草稿 %s 疑似重复: KB=%s score=%.2f",
                                      draft_id, dup_eid, dup_score)
                     saved += 1
+                    if qkey:
+                        key_idx[qkey] = draft_id   # 同批第二份同题也合并
                 except sqlite3.IntegrityError:
                     pass
+        if merged:
+            _logger.info("本轮 %d 条同题草稿已合并进既有待审（M-5 #220）", merged)
         return saved
+
+    def merge_duplicate_pending(self, *, reviewer: str = DUP_MERGE_REVIEWER) -> Dict:
+        """把**已并列待审**的同题草稿合并为一条（M-5 E #220）。
+
+        同键多条：留最早那条（hit_count 累加各份、译文 query_zh 取任一非空），其余标
+        ``rejected`` + ``reviewed_by=system:m5_dup_merge``（「已拒绝」页可追溯，不删数据）。
+        返回 ``{"groups": 同题组数, "merged": 被合并条数}``；纯 DB 幂等操作。
+        """
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        stats = {"groups": 0, "merged": 0}
+        with self._conn() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT id, query, hit_count, query_zh FROM kb_drafts WHERE status='pending' "
+                "ORDER BY created_at ASC, id ASC").fetchall()]
+            groups: Dict[str, List[Dict]] = {}
+            for r in rows:
+                k = normalize_query_key(r.get("query", ""))
+                if k:
+                    groups.setdefault(k, []).append(r)
+            for k, items in groups.items():
+                if len(items) < 2:
+                    continue
+                stats["groups"] += 1
+                keep, rest = items[0], items[1:]
+                extra_hits = sum(max(1, int(x.get("hit_count") or 1)) for x in rest)
+                zh = str(keep.get("query_zh") or "") or next(
+                    (str(x.get("query_zh") or "") for x in rest if x.get("query_zh")), "")
+                c.execute(
+                    "UPDATE kb_drafts SET hit_count = hit_count + ?, query_zh=? WHERE id=?",
+                    (extra_hits, zh[:400], keep["id"]))
+                for x in rest:
+                    c.execute(
+                        "UPDATE kb_drafts SET status='rejected', reviewed_by=?, reviewed_at=? "
+                        "WHERE id=? AND status='pending'",
+                        (reviewer, now, x["id"]))
+                    stats["merged"] += 1
+        if stats["merged"]:
+            _logger.info("学习队列同题待审合并（M-5 #220）: %s", stats)
+        return stats
+
+    def _dup_merge_backfill_once(self) -> None:
+        """存量并列待审的同题草稿一次性合并（kb_meta 幂等；无 meta 能力时每次构造都跑，
+        纯 DB 幂等）。任何异常只记 debug，绝不影响构造。"""
+        try:
+            getter = getattr(self._kb, "get_meta", None)
+            if callable(getter) and getter(DUP_MERGE_BACKFILL_META_KEY):
+                return
+        except Exception:
+            pass
+        stats: Dict = {}
+        try:
+            stats = self.merge_duplicate_pending()
+        except Exception:
+            _logger.debug("学习队列同题合并存量清理失败（忽略）", exc_info=True)
+        try:
+            setter = getattr(self._kb, "set_meta", None)
+            if callable(setter):
+                setter(DUP_MERGE_BACKFILL_META_KEY, json.dumps(
+                    {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **stats}, ensure_ascii=False))
+        except Exception:
+            pass
 
     async def run_daily_learn(self, domain_context: str = "",
                               min_miss_count: Optional[int] = None,

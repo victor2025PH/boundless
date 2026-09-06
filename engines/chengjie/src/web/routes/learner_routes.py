@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,31 @@ from src.utils.daily_learner import (APPROVE_BATCH_LIMIT, DailyLearner,
                                      LearnerApproveError, resolve_learner_ai)
 from src.utils.domain_policy import effective_domain_name
 from src.web.web_i18n import tr
+
+logger = logging.getLogger("ai_chat_assistant.learner_routes")
+
+# M-5 E（#220）：「原语」人话（zh 界面用中文名，其余回落 translation_service.LANG_NAMES
+# 英文名，再回落语种码）。只收学习队列常见语种；判不出的码原样显示不猜。
+_LANG_LABELS_ZH = {
+    "zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "th": "泰语", "vi": "越南语",
+    "id": "印尼语", "ms": "马来语", "tl": "他加禄语", "es": "西班牙语", "pt": "葡萄牙语",
+    "fr": "法语", "de": "德语", "it": "意大利语", "ru": "俄语", "ar": "阿拉伯语",
+    "hi": "印地语", "tr": "土耳其语", "km": "高棉语", "he": "希伯来语", "el": "希腊语",
+    "yue": "粤语", "zh-tw": "繁体中文", "unknown": "未识别", "other": "其他",
+}
+
+
+def _lang_label(code: str, ui_lang: str = "zh") -> str:
+    c = str(code or "").strip().lower()
+    if not c:
+        return ""
+    if str(ui_lang or "zh").lower().startswith("zh"):
+        return _LANG_LABELS_ZH.get(c, c)
+    try:
+        from src.ai.translation_service import LANG_NAMES
+        return LANG_NAMES.get(c, c)
+    except Exception:
+        return c
 
 
 def register_learner_routes(app, ctx):
@@ -294,10 +320,15 @@ def register_learner_routes(app, ctx):
     # ── L-4 F（#201）：外语原文 → 中文译文（复用入站翻译服务的缓存/翻译记忆） ──
     @app.post("/api/learner/drafts/translate")
     async def api_learner_translate(request: Request, _=Depends(_api_auth)):
-        """Body ``{ids:[…]}``（≤50）→ ``{translations:{id: zh}}``。
+        """Body ``{ids:[…]}``（≤50）→ ``{translations:{id: zh}, src_langs:{id: code},
+        src_lang_labels:{id: 人话}, skipped:{id: zh|identity|no_body}, failed:{id: reason}}``。
 
-        已有 ``query_zh`` 的直接回；中文原文（identity）不落库不回；引擎失败静默跳过
-        （best-effort：译文缺席不阻塞审核）。译文写回 ``kb_drafts.query_zh`` 下次列表直出。
+        已有 ``query_zh`` 的直接回；中文原文（identity）不落库；译文写回
+        ``kb_drafts.query_zh`` 下次列表直出。
+        M-5 E（#220）：① 源语言**按文字系统**判（``daily_learner.query_lang`` →
+        detect_language，假名即 ja），并显式作 ``source_lang`` 传给翻译服务（引擎 prompt
+        不再让模型自己猜）；② 真实检测结果随 ``src_langs`` 回页面当「原语」；③ 失败不再
+        静默——``failed`` 带原因，页面标「未译 · 重试」而不是留空。
         """
         learner = _get_learner()
         if not learner:
@@ -307,9 +338,20 @@ def register_learner_routes(app, ctx):
         except Exception:
             body = {}
         ids = [str(i) for i in ((body or {}).get("ids") or []) if str(i).strip()][:50]
-        out = {}
+        out: dict = {}
+        src_langs: dict = {}
+        skipped: dict = {}
+        failed: dict = {}
+        ui_lang = str(getattr(getattr(request, "state", None), "ui_lang", "") or "zh")
+
+        def _pack():
+            return {"ok": True, "translations": out, "src_langs": src_langs,
+                    "src_lang_labels": {k: _lang_label(v, ui_lang) for k, v in src_langs.items()},
+                    "skipped": skipped, "failed": failed}
+
         if not ids:
-            return {"ok": True, "translations": out}
+            return _pack()
+        from src.utils.daily_learner import query_lang
         svc = None
         try:
             from src.web.routes.unified_inbox_services import _get_translation_service
@@ -320,22 +362,39 @@ def register_learner_routes(app, ctx):
             d = learner.get_draft(did)
             if not d:
                 continue
+            q = str(d.get("query") or "")
+            lang = query_lang(q)
+            src_langs[did] = lang
             if d.get("query_zh"):
                 out[did] = d["query_zh"]
                 continue
+            if lang == "zh":
+                skipped[did] = "zh"
+                continue
+            if lang == "unknown":
+                skipped[did] = "no_body"
+                continue
             if svc is None:
+                failed[did] = "translation_service_unavailable"
                 continue
             try:
-                res = await svc.translate(str(d.get("query") or ""), target_lang="zh",
-                                          style="chat")
-            except Exception:
-                continue
-            if not getattr(res, "ok", False):
+                res = await svc.translate(q, target_lang="zh", source_lang=lang, style="chat")
+            except Exception as exc:  # noqa: BLE001
+                failed[did] = f"{type(exc).__name__}"
                 continue
             if str(getattr(res, "provider", "") or "") == "identity":
-                continue  # 本就是中文，无需译文
+                skipped[did] = "identity"   # 本就是中文 / 无可译正文
+                continue
+            if not getattr(res, "ok", False):
+                failed[did] = str(getattr(res, "error", "") or "engine_failed")[:80]
+                continue
             zh = str(getattr(res, "translated_text", "") or "").strip()
-            if zh and zh != str(d.get("query") or "").strip():
+            if zh and zh != q.strip():
                 learner.set_translation(did, zh)
                 out[did] = zh
-        return {"ok": True, "translations": out}
+            else:
+                failed[did] = "empty_translation"
+        if failed:
+            logger.info("[learner] 译文失败 %d 条（页面标未译可重试）: %s",
+                        len(failed), dict(list(failed.items())[:5]))
+        return _pack()

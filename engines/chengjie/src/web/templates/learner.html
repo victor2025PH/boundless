@@ -162,6 +162,11 @@
 /* L-4 F（#201）：译文行 / 私事徽章 / 「相似度未计算」 */
 .draft-zh{font-size:.8rem;color:var(--t2);margin:.1rem 0 .25rem;padding-left:.2rem}
 .draft-zh b{color:var(--t3);font-weight:600;margin-right:.3rem}
+/* M-5 E（#220）：译文行「原语：日语」标注 + 未译态（失败不留空） */
+.draft-zh .zh-src{font-style:normal;color:var(--t3);margin-left:.45rem;font-size:.74rem}
+.draft-zh .zh-untranslated{color:var(--th-ink-red6,#b91c1c)}
+.draft-zh .zh-retry{margin-left:.35rem;padding:0 .45rem;font-size:.72rem;line-height:1.4}
+.draft-zh.zh-failed{border-left:2px solid var(--th-ink-red6,#b91c1c);padding-left:.4rem}
 .priv-badge{display:inline-flex;align-items:center;gap:.2rem;font-size:.68rem;padding:.12rem .45rem;border-radius:4px;font-weight:700;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed);flex-shrink:0;cursor:help}
 .dup-badge.dup-uncomputed{background:var(--input);color:var(--t3)}
 .mem-badge{display:inline-flex;align-items:center;font-size:.72rem;padding:.2rem .5rem;border-radius:4px;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed)}
@@ -392,7 +397,7 @@ function renderDrafts(drafts){
         ${hasDup?'<span class="dup-badge'+(d.dup_score>0?'':' dup-uncomputed')+'" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+esc(dupPct)+'</span>':''}
         ${d.status!=='pending'?'<span class="status-badge status-'+d.status+'">'+(d.status==='approved'?window.T('msg_js_1928'):window.T('draft.tab.rejected'))+'</span>':''}
       </div>
-      <div class="draft-zh" data-zh-for="${d.id}"${d.query_zh?'':' style="display:none"'}><b>${window.T('lr4_zh_label')}</b><span>${esc(d.query_zh||'')}</span></div>
+      <div class="draft-zh" data-zh-for="${d.id}"${d.query_zh?'':' style="display:none"'}><b>${window.T('lr4_zh_label')}</b><span>${esc(d.query_zh||'')}</span><em class="zh-src" data-zh-src-for="${d.id}"></em></div>
       ${hasDup?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+esc(dupPct)+' · '+esc(dupMethod)+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
       <div class="draft-title"><b>${esc(d.title)}</b> · ${esc(d.category)}</div>
       <div class="draft-triggers">${triggers}</div>
@@ -422,12 +427,23 @@ function _privBadge(d){
   return '<span class="priv-badge" title="'+window.T('lr4_private_tip')+'">🔒 '+window.T('lr4_private_badge')+' · '+esc(names)+'</span>';
 }
 
-/* L-4 F（#201）：外语原文补中文译文——复用入站翻译缓存，缺则后端按需翻一次并写回草稿行 */
-function _fillTranslations(drafts){
+/* L-4 F（#201）：外语原文补中文译文——复用入站翻译缓存，缺则后端按需翻一次并写回草稿行。
+   M-5 E（#220）：① 要不要请求译文**按文字系统**判——此前「含任何汉字就当中文」把
+   「そっか、向こうはもう物語の世界に戻るのね」（假名+汉字）整条跳过；现在只有
+   「纯汉字 + 标点数字」才不请求，其余交后端 detect_language 定夺（后端 zh/identity 会回 skipped）；
+   ② 译文行带「原语：日语」（后端真实检测结果，不再靠猜）；③ 失败不留空：标「未译 · 翻译失败」+ 重试。 */
+function _needsTranslation(d){
+  if(d.query_zh)return false;
+  const q=String(d.query||'').trim();
+  if(!q)return false;
+  if(/[\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u0590-\u05FF\u0370-\u03FF\u1780-\u17FF]/.test(q))return true;   // 假名/谚文/泰文/西里尔/阿拉伯/天城/希伯来/希腊/高棉：不是中文
+  if(/^[\u4e00-\u9fff\s\d\p{P}\p{S}]*$/u.test(q))return false;   // 纯汉字 + 标点数字 → 中文，不请求
+  return /[A-Za-z\u00C0-\u024F\u1EA0-\u1EF9]/.test(q);           // 拉丁（含越南声调）
+}
+function _fillTranslations(drafts,onlyIds){
   const need=(drafts||[]).filter(function(d){
-    if(d.query_zh)return false;
-    const q=String(d.query||'');
-    return !/[\u4e00-\u9fff]/.test(q)&&/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\uAC00-\uD7AF]/.test(q);
+    if(onlyIds&&onlyIds.indexOf(d.id)<0)return false;
+    return onlyIds?true:_needsTranslation(d);
   }).map(function(d){return d.id;});
   if(!need.length)return;
   apiFetch('/api/learner/drafts/translate',{
@@ -435,16 +451,51 @@ function _fillTranslations(drafts){
     body:JSON.stringify({ids:need.slice(0,50)})
   },{timeoutMs:60000}).then(function(r){return r.json();}).then(function(d){
     const tr=(d&&d.translations)||{};
+    const labels=(d&&d.src_lang_labels)||{};
+    const failed=(d&&d.failed)||{};
     Object.keys(tr).forEach(function(id){
       const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
       if(!row)return;
       const span=row.querySelector('span');
       if(span)span.textContent=tr[id];
+      row.classList.remove('zh-failed');
+      const src=row.querySelector('[data-zh-src-for]');
+      if(src)src.textContent=labels[id]?window.Tf('lr5_src_lang',{lang:labels[id]}):'';
       row.style.display='';
       if(window.__learnerDrafts&&window.__learnerDrafts[id])window.__learnerDrafts[id].query_zh=tr[id];
     });
-  }).catch(function(){});
+    Object.keys(failed).forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span){
+        span.innerHTML='<span class="zh-untranslated" title="'+esc(String(failed[id]||''))+'">'+esc(window.T('lr5_untranslated'))+'</span> '
+          +'<button type="button" class="btn-sm zh-retry" onclick="retryTranslate(\''+esc(id)+'\',this)">'+esc(window.T('lr5_retry'))+'</button>';
+      }
+      const src=row.querySelector('[data-zh-src-for]');
+      if(src)src.textContent=labels[id]?window.Tf('lr5_src_lang',{lang:labels[id]}):'';
+      row.classList.add('zh-failed');
+      row.style.display='';
+    });
+  }).catch(function(){
+    /* 请求整体失败（网络/超时）：把本批全标「未译 · 重试」，绝不留空 */
+    need.forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span)span.innerHTML='<span class="zh-untranslated">'+esc(window.T('lr5_untranslated'))+'</span> '
+        +'<button type="button" class="btn-sm zh-retry" onclick="retryTranslate(\''+esc(id)+'\',this)">'+esc(window.T('lr5_retry'))+'</button>';
+      row.classList.add('zh-failed');
+      row.style.display='';
+    });
+  });
 }
+function retryTranslate(id,btn){
+  if(btn){btn.disabled=true;btn.textContent=window.T('lr5_retrying');}
+  const d=(window.__learnerDrafts&&window.__learnerDrafts[id])||{id:id};
+  _fillTranslations([d],[id]);
+}
+window.retryTranslate=retryTranslate;
 
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
