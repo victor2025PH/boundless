@@ -195,6 +195,10 @@ body{font-family:var(--bl-font-sans,'Montserrat','Inter','PingFang SC','Microsof
 /* P3 档位锁定项：压暗 + 锁标（点击进会员中心升级引导） */
 .sb-nav a.nav-locked{opacity:.5}
 .sb-nav a.nav-locked:hover{opacity:.8}
+.nav-tier{margin-left:auto;font-size:.6rem;font-weight:700;line-height:1;padding:.14rem .34rem;border-radius:5px;letter-spacing:.02em;flex-shrink:0}
+.nav-tier-internal{background:rgba(217,119,6,.14);color:var(--th-ink-amber7,#b45309)}
+.nav-tier-partner{background:rgba(139,92,246,.14);color:var(--th-ink-violet6,#7c3aed)}
+.sidebar.collapsed .nav-tier{display:none}
 .nav-lock-ico{margin-left:auto;flex-shrink:0;opacity:.85}
 .sidebar.collapsed .nav-lock-ico{display:none}
 /* P3 顶栏档位徽章（feature_gate 开启时渲染） */
@@ -619,6 +623,10 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
       {%- endif %}
       {%- if it.badge %}
       <span class="sb-badge" id="{{ it.badge }}"></span>
+      {%- endif %}
+      {%- if it.tier %}
+      {#- 开发者模式（L-4 A）：client 形态下本应被藏的项回归时带 tier 注解，角标提醒「客户看不到这个」 -#}
+      <span class="nav-tier nav-tier-{{ it.tier }}" title="{{ (i18n or {}).get('nav_tier_tip', '客户版不显示此项（开发者模式可见）') }}">{% if it.tier == 'partner' %}{{ (i18n or {}).get('nav_tier_partner', '代理商') }}{% else %}{{ (i18n or {}).get('nav_tier_internal', '研发') }}{% endif %}</span>
       {%- endif %}
     </a>
     {%- endif %}
@@ -1577,7 +1585,7 @@ function _diffLines(oldL, newL){
     if(done||window.AssistantBall) return;
     done=true;
     var s=document.createElement('script');
-    s.src='/assistant-shared/assistant-ball.js?v=20260831a';
+    s.src='/assistant-shared/assistant-ball.js?v=20260905b';
     s.onload=function(){
       if(window.AssistantBall) window.AssistantBall.init({
         shell:'admin',
@@ -1586,7 +1594,7 @@ function _diffLines(oldL, newL){
       });
       /* 实施58 P0：教学模式姊妹模块（独立文件；缺席/404=静默零痕迹） */
       var s2=document.createElement('script');
-      s2.src='/assistant-shared/assistant-teach.js?v=20260828b';
+      s2.src='/assistant-shared/assistant-teach.js?v=20260905b';
       s2.onload=function(){
         if(window.XZTeach) window.XZTeach.init({
           shell:'admin',
@@ -1596,7 +1604,7 @@ function _diffLines(oldL, newL){
       document.head.appendChild(s2);
       /* 实施58 P2：「替我做」智能体+流星执行秀（后端未装载=入口如实待装） */
       var s3=document.createElement('script');
-      s3.src='/assistant-shared/assistant-agent.js?v=20260831c';
+      s3.src='/assistant-shared/assistant-agent.js?v=20260905b';
       s3.onload=function(){
         if(window.XZAgent) window.XZAgent.init({
           shell:'admin',

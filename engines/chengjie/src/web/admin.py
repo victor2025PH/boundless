@@ -1026,11 +1026,37 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         context.setdefault("domain_web_pages", domain_web_pages)
         context.setdefault("domain_dashboard_widgets", domain_dashboard_widgets)
 
+        # ── 部署形态 + 开发者模式（L-4 A 2026-09-06，D-L2）────────────
+        # ui_flavor：client / partner / internal（ui_visibility.resolve_ui_flavor）；
+        # ui_developer_mode：session 级（/developer 密码闸内开关，退出即关）；
+        # ui_client_hide：client 形态且未开开发者模式＝「用户版隐藏」生效——模板藏
+        # 研发/代理商面（settings 三卡、help/strategies/singing/voice_eval 页内入口、
+        # L-2 人设页三处）都读这一个布尔，与下方导航剔除同口径。异常回落
+        # internal / False（fail-internal：不误藏内部机器的入口）。
+        _ui_flavor, _ui_dev_mode, _ui_client_hide = "internal", False, False
+        try:
+            from src.web.ui_visibility import (client_hide_active,
+                                               resolve_developer_mode,
+                                               resolve_ui_flavor)
+            _ui_cfg = getattr(config_manager, "config", None)
+            _ui_flavor = resolve_ui_flavor(_ui_cfg)
+            try:
+                _ui_dev_mode = resolve_developer_mode(request.session)
+            except Exception:
+                _ui_dev_mode = False
+            _ui_client_hide = client_hide_active(_ui_cfg, _ui_dev_mode)
+        except Exception:
+            pass
+        context.setdefault("ui_flavor", _ui_flavor)
+        context.setdefault("ui_developer_mode", _ui_dev_mode)
+        context.setdefault("ui_client_hide", _ui_client_hide)
+
         # ── 侧栏导航单源数据(nav_schema)──────────────────────
         # 融合实例 P1/P3：传 config 让档位锁定项渲染锁标（gate 关 = 静态全量，零变化）
         from src.web.nav_schema import get_nav_context
         for _k, _v in get_nav_context(
-                getattr(config_manager, "config", None)).items():
+                getattr(config_manager, "config", None),
+                developer_mode=_ui_dev_mode).items():
             context.setdefault(_k, _v)
 
         # ── 内部功能界面显隐(ui_visibility 单源，2026-08-14)────────

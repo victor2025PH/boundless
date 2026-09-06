@@ -44,6 +44,10 @@
   .wsb-nav a > span{overflow:hidden;text-overflow:ellipsis;}
   .wsb-nav a.wsb-locked{opacity:.5;}
   .wsb-nav a.wsb-locked:hover{opacity:.8;}
+  .wsb-tier{margin-left:auto;font-size:.58rem;font-weight:700;line-height:1;padding:.12rem .3rem;border-radius:5px;flex-shrink:0;}
+  .wsb-tier-internal{background:rgba(217,119,6,.14);color:var(--th-ink-amber7,#b45309);}
+  .wsb-tier-partner{background:rgba(139,92,246,.14);color:var(--th-ink-violet6,#7c3aed);}
+  .wsb-side.collapsed .wsb-tier{display:none;}
   .wsb-lock{margin-left:auto;flex-shrink:0;opacity:.85;}
   .wsb-foot{border-top:1px solid var(--tk-border);padding:8px;display:flex;
     align-items:center;gap:6px;}
@@ -105,6 +109,9 @@
     <a href="{{ it.path }}" data-nav="schema"{% if it.target %} target="{{ it.target }}"{% endif %}{% if _on %} class="active"{% endif %} title="{{ _lbl }}">
       {{ nav_icons[it.icon]|safe }}
       <span>{{ _lbl }}{% if it.external %} ↗{% endif %}</span>
+      {%- if it.tier %}
+      <span class="wsb-tier wsb-tier-{{ it.tier }}">{% if it.tier == 'partner' %}{{ (i18n or {}).get('nav_tier_partner', '代理商') }}{% else %}{{ (i18n or {}).get('nav_tier_internal', '研发') }}{% endif %}</span>
+      {%- endif %}
     </a>
     {%- endif %}
   {%- endmacro %}

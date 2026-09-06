@@ -259,6 +259,15 @@ ZH = {
     "err.uiv.dev_locked": "开发者工具未解锁",
     "err.uiv.unknown_key": "未知显隐键：{name}",
     "err.uiv.write_failed": "写入失败（配置覆盖层不可写）",
+    # ── 开发者模式（L-4 A 2026-09-06，D-L2）──
+    "dv_devmode_title": "开发者模式（客户机看研发面）",
+    "dv_devmode_flavor": "当前形态",
+    "dv_devmode_flavor_client": "用户版（client）",
+    "dv_devmode_flavor_partner": "代理商版（partner）",
+    "dv_devmode_flavor_internal": "研发版（internal）",
+    "dv_devmode_sub": "用户版（client）会隐藏研发页（帮助 / 回复策略 / 歌房 / 声音评测 / 实时日志 / 开发者工具 / 报障工单）和代理商面（白标 / 演示数据 / 授权）。打开后这些项带「研发 / 代理商」角标回到侧栏与页面；只对当前登录会话生效，退出登录自动关闭。",
+    "dv_devmode_cb": "在本机显示被用户版隐藏的项",
+    "dv_devmode_na": "当前不是用户版形态，所有项本就可见，无需开启。",
 }
 
 EN = {
@@ -519,4 +528,13 @@ EN = {
     "err.uiv.dev_locked": "Developer tools not unlocked",
     "err.uiv.unknown_key": "Unknown visibility key: {name}",
     "err.uiv.write_failed": "Write failed (config overlay not writable)",
+    # ── Developer mode (L-4 A 2026-09-06, D-L2) ──
+    "dv_devmode_title": "Developer mode (see dev surfaces on a client machine)",
+    "dv_devmode_flavor": "Current edition",
+    "dv_devmode_flavor_client": "Client edition (client)",
+    "dv_devmode_flavor_partner": "Partner edition (partner)",
+    "dv_devmode_flavor_internal": "Internal edition (internal)",
+    "dv_devmode_sub": "The client edition hides developer pages (Help / Reply strategies / Singing room / Voice eval / Live logs / Developer tools / Bug tickets) and partner surfaces (white-label / demo data / license). Turning this on brings them back with a \"Dev / Partner\" tag in the sidebar and on pages; it applies to this login session only and switches off automatically at logout.",
+    "dv_devmode_cb": "Show client-hidden items on this machine",
+    "dv_devmode_na": "This is not the client edition — everything is already visible, nothing to enable.",
 }

@@ -332,8 +332,10 @@ _AUDIENCE_DECLARED = frozenset({
     "import", "knowledge", "learner", "line_rpa", "logs", "membership",
     "messenger_rpa", "monetization", "ops", "personal_settings", "personas",
     "relations_health", "reply_settings", "rpa_overview", "settings",
-    # singing（演唱线，2026-08-29 代表态）：陪伴向最终用户功能页，按客户可见
-    # 归档；若演唱线判定应藏运维面，请改加 nav_schema.CLIENT_HIDDEN_ITEM_IDS。
+    # 代理商面深链（L-4 A 2026-09-06）：PARTNER_ONLY_ITEM_IDS，client 形态剔除
+    "settings_brand", "settings_demo", "settings_license",
+    # singing / voice_eval / help / strategies：2026-09-06 L-4 A（D-L6）改判客户
+    # 形态隐藏（空壳 / 研发调参面），已加进 nav_schema.CLIENT_HIDDEN_ITEM_IDS。
     "singing", "strategies",
     "strategy_analytics", "telegram", "templates", "usage_center", "users",
     "voice_eval", "whatsapp_rpa", "work_goal", "workspace", "ws_aiq", "ws_boards",

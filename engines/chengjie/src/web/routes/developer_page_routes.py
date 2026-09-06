@@ -58,4 +58,7 @@ def register_developer_page_routes(app, ctx) -> None:
     async def developer_logout(request: Request):
         _require_auth(request)
         request.session.pop("dev_unlocked", None)
+        # 开发者模式（L-4 A）随密码闸一起关：它只在 dev_unlocked 为真时生效，
+        # 这里顺手清掉，避免下次解锁时上一个人留下的视角直接回来。
+        request.session.pop("developer_mode", None)
         return RedirectResponse("/developer", status_code=303)

@@ -107,11 +107,15 @@ def test_cmd_extra_only_low_freq_tools_left():
     # diff（版本对比）2026-08-18 随上游 /templates 同例降出侧栏：快照只在保存
     # 话术模板/回复策略等旧配置流时产生，不用那些编辑流的部署里是常驻空页；
     # 审计页/仪表盘「可回滚」深链与 /api/rollback 全保留，命令面板仍可搜。
+    # settings_brand / settings_license / settings_demo（2026-09-06 L-4 A，
+    # PARTNER_ONLY_ITEM_IDS）：系统设置页三张代理商卡的深链——侧栏常驻入口是
+    # 「系统设置」本体，深链只给代理商 Ctrl+K 直达；client 形态整组剔除。
     assert set(CMD_EXTRA_ITEMS) == {
         "templates", "import", "work_goal", "diff", "strategy_analytics",
         "funnel", "ws_queue", "ws_perf", "ws_aiq", "ws_roi",
+        "settings_brand", "settings_license", "settings_demo",
     }, (
-        "命令面板专属清单＝低频工具 + 页群单页直达；页群单页有 ws_boards/"
+        "命令面板专属清单＝低频工具 + 页群单页直达 + 代理商深链；页群单页有 ws_boards/"
         "analytics 常驻侧栏入口 + 页内 Tab，不是 2026-08-14 的孤儿化回退")
 
 

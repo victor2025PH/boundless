@@ -44,19 +44,37 @@ simple=True 的既有哲学一致）：
                   ``tools/cockpit_usage_report.py`` 的观测窗因此中止——重新开启
                   后 ck_* 埋点自然续上，别拿藏起来这段的零点击当「没人用」的证据。
 
-部署形态（flavor，2026-08-20 实施49 P1-6）：布尔键之外还有一个**形态维度**——
-同一份代码既跑内部服务器（117 双实例，运维/开发天天用），也跑客户桌面包
-（skuio 那类最终用户）。客户形态下「实时日志 / 开发者工具」这类运维页出现在
-侧栏只会制造「这是给我用的吗」的困惑（B6 原话：不该对用户开放），而内部部署
-必须原样保留。故：
+部署形态（flavor，2026-08-20 实施49 P1-6；2026-09-06 L-4 A 加代理商层）：布尔键
+之外还有一个**形态维度**——同一份代码既跑内部服务器（117 双实例，运维/开发天天
+用），也跑客户桌面包（skuio 那类最终用户）。客户形态下「实时日志 / 开发者工具」
+这类运维页出现在侧栏只会制造「这是给我用的吗」的困惑（B6 原话：不该对用户开放），
+而内部部署必须原样保留。故：
 
-- ``resolve_ui_flavor(config)`` → ``"client"`` | ``"internal"``；
-- 判定序＝显式配置 ``ui_visibility.flavor``（client/internal，运维可写死）→
+- ``resolve_ui_flavor(config)`` → ``"client"`` | ``"partner"`` | ``"internal"``
+  （三层：用户版 ⊂ 代理商版 ⊂ 研发版；D-L2 / D-L7 2026-09-06）；
+- 判定序＝显式配置 ``ui_visibility.flavor``（三值之一，运维/发版脚本可写死）→
   桌面模式（``AITR_DESKTOP_MODE`` env 或 ``app.desktop_mode``，与
   ``env_probe._is_desktop_mode`` 同口径）→ 否则 internal（服务器部署零变化）；
-- 消费方＝nav_schema（客户形态剔 logs/developer 导航面）。**藏而不废**：
-  ``/logs`` ``/developer`` 的 URL 与 API 一律不封（开发者页本就有密码闸），
-  内部人员在客户机上仍可直接敲地址进去。
+- 消费方＝nav_schema（client 形态剔 ``CLIENT_HIDDEN_ITEM_IDS`` 运维/研发面 +
+  ``PARTNER_ONLY_ITEM_IDS`` 代理商面）、admin.py ``_enrich_context``（模板全局
+  ``ui_flavor`` / ``ui_client_flavor`` / ``ui_developer_mode`` / ``ui_client_hide``）。
+  **藏而不废**：``/logs`` ``/developer`` ``/help`` 等 URL 与 API 一律不封
+  （开发者页本就有密码闸），内部人员在客户机上仍可直接敲地址进去。
+
+开发者模式（developer_mode，2026-09-06 L-4 A / D-L2）：内部人在**客户机**上需要
+看被 client 形态藏掉的项（排障 / 演示 / 给代理商配白标），不该靠改配置文件。
+故：
+
+- 载体＝**session 键** ``developer_mode``（不是 overlay 键——落盘会让客户机
+  永久变成研发面；session 随退出登录一起消失＝「退出自动关」）；
+- 前提＝同一 session 里 ``dev_unlocked`` 为真（``/developer`` 密码闸）；
+  ``POST /developer/logout`` 或密码闸失效时本键即作废，不必单独清；
+- 写入口单一＝``POST /api/developer/developer-mode``（ui_visibility_routes，
+  须登录 + dev 解锁）；
+- 消费方＝nav_schema ``get_nav_context(cfg, developer_mode=True)``（被藏项回归
+  并带 ``tier`` 注解 → 侧栏「研发 / 代理商」角标）+ 模板全局
+  ``ui_developer_mode`` / ``ui_client_hide``（L-2 人设页三处「开发者模式可见」
+  读 ``ui_client_hide``：真＝client 形态且未开开发者模式＝该藏的都藏）。
 
 坐席规模（seat_mode，2026-08-20 实施49 P1-6 / 反馈 B13）：第三个维度——**数据**
 驱动而非配置驱动。「认领/释放」是多坐席协作原语（认领＝这个客户我跟，防两个人
@@ -129,8 +147,15 @@ def is_visible(config: Any, key: str) -> bool:
 
 # ── 部署形态 ─────────────────────────────────────────────────────────────────
 FLAVOR_CLIENT = "client"
+FLAVOR_PARTNER = "partner"
 FLAVOR_INTERNAL = "internal"
 FLAVOR_KEY = "flavor"
+# 三层（低 → 高）：用户版 / 代理商版 / 研发版。上层看得见下层的一切。
+FLAVOR_TIERS = (FLAVOR_CLIENT, FLAVOR_PARTNER, FLAVOR_INTERNAL)
+
+# 开发者模式：session 键名（写入口 ui_visibility_routes；读 resolve_developer_mode）
+DEVELOPER_MODE_KEY = "developer_mode"
+DEV_UNLOCKED_KEY = "dev_unlocked"
 
 _TRUTHY = ("1", "true", "yes", "on")
 
@@ -154,17 +179,17 @@ def _desktop_mode(config: Any) -> bool:
 
 
 def resolve_ui_flavor(config: Any = None) -> str:
-    """部署形态 → ``client`` | ``internal``。纯判定，异常一律回落 internal。
+    """部署形态 → ``client`` | ``partner`` | ``internal``。纯判定，异常一律回落 internal。
 
     回落方向刻意与布尔键相反（那边 fail-hidden，这里 fail-**internal**＝不隐藏）：
     读不到配置时把运维页藏掉会让内部机器突然缺入口，而多显示一个入口对客户只是
-    噪音——两害相权，宁可少藏。
+    噪音——两害相权，宁可少藏。``partner`` 只能显式配置（桌面信号只推出 client）。
     """
     try:
         section = (config or {}).get(CONFIG_SECTION) if isinstance(config, dict) else None
         if isinstance(section, dict):
             raw = str(section.get(FLAVOR_KEY) or "").strip().lower()
-            if raw in (FLAVOR_CLIENT, FLAVOR_INTERNAL):
+            if raw in FLAVOR_TIERS:
                 return raw
         return FLAVOR_CLIENT if _desktop_mode(config) else FLAVOR_INTERNAL
     except Exception:
@@ -173,6 +198,30 @@ def resolve_ui_flavor(config: Any = None) -> str:
 
 def is_client_flavor(config: Any = None) -> bool:
     return resolve_ui_flavor(config) == FLAVOR_CLIENT
+
+
+def resolve_developer_mode(session: Any = None) -> bool:
+    """开发者模式是否生效：session 里 ``developer_mode`` 与 ``dev_unlocked`` 同真。
+
+    只读 session、不读配置——这是「人」的临时状态而非部署属性；任何异常回落
+    False（关着比开着安全：开发者模式会把研发面放回客户机侧栏）。
+    """
+    try:
+        if session is None:
+            return False
+        return bool(session.get(DEVELOPER_MODE_KEY, False)) and \
+            bool(session.get(DEV_UNLOCKED_KEY, False))
+    except Exception:
+        return False
+
+
+def client_hide_active(config: Any = None, developer_mode: bool = False) -> bool:
+    """「用户版隐藏」是否生效＝client 形态 **且** 未开开发者模式。
+
+    模板全局 ``ui_client_hide`` 与 nav_schema 剔除判定共用这一个口径，
+    保证侧栏藏了的页，页内入口 / 卡片同样藏；开发者模式一开两面同时回来。
+    """
+    return is_client_flavor(config) and not bool(developer_mode)
 
 
 # ── 坐席规模（认领/释放这类协作原语的开关）──────────────────────────────────

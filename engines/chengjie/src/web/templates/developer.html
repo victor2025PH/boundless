@@ -320,6 +320,32 @@
         <div class="save-bar"><span class="save-result" id="dvuiv-res"></span></div>
       </div>
 
+      <!-- 🧪 开发者模式（L-4 A 2026-09-06，D-L2）：client 形态（客户桌面包）把研发面 /
+           代理商面从侧栏与页内藏掉；内部人在客户机排障时在这里临时打开——只写 session，
+           退出登录 / 锁回开发者工具即自动关，不落配置文件。判定单源 ui_visibility.py。 -->
+      <div class="f-row" id="dv-devmode-row">
+        <div class="f-lbl">🧪 {{ (i18n or {}).get('dv_devmode_title', "开发者模式（客户机看研发面）") }}</div>
+        <div class="f-hint">
+          {% set _fl = ui_flavor or 'internal' %}
+          {{ (i18n or {}).get('dv_devmode_flavor', "当前形态") }}：<b>{% if _fl == 'client' %}{{ (i18n or {}).get('dv_devmode_flavor_client', "用户版（client）") }}{% elif _fl == 'partner' %}{{ (i18n or {}).get('dv_devmode_flavor_partner', "代理商版（partner）") }}{% else %}{{ (i18n or {}).get('dv_devmode_flavor_internal', "研发版（internal）") }}{% endif %}</b>。
+          {{ (i18n or {}).get('dv_devmode_sub', "用户版（client）会隐藏研发页（帮助 / 回复策略 / 歌房 / 声音评测 / 实时日志 / 开发者工具 / 报障工单）和代理商面（白标 / 演示数据 / 授权）。打开后这些项带「研发 / 代理商」角标回到侧栏与页面；只对当前登录会话生效，退出登录自动关闭。") }}
+        </div>
+        <label style="display:flex;align-items:flex-start;gap:.55rem;cursor:pointer;margin:.5rem 0">
+          <input type="checkbox" id="dv-devmode-cb" style="margin-top:.2rem"
+                 {% if ui_developer_mode %}checked{% endif %}
+                 {% if (ui_flavor or 'internal') != 'client' %}disabled{% endif %}
+                 onchange="dvDevModeToggle(this)">
+          <span>
+            <b style="font-size:.85rem">{{ (i18n or {}).get('dv_devmode_cb', "在本机显示被用户版隐藏的项") }}</b>
+            <span class="ai-pill" id="dv-devmode-pill" style="margin-left:.4rem">{{ (i18n or {}).get('dv_uiv_on' if ui_developer_mode else 'dv_uiv_off', '') }}</span>
+            {% if (ui_flavor or 'internal') != 'client' %}
+            <br><span style="font-size:.75rem;color:var(--t2)">{{ (i18n or {}).get('dv_devmode_na', "当前不是用户版形态，所有项本就可见，无需开启。") }}</span>
+            {% endif %}
+          </span>
+        </label>
+        <div class="save-bar"><span class="save-result" id="dv-devmode-res"></span></div>
+      </div>
+
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
       {% set vp = voice_ai.get('voice_profile', {}) if voice_ai else {} %}
       <div class="f-row">
@@ -1280,6 +1306,35 @@ async function dvUivToggle(key, el){
     const pill = document.getElementById('dvuiv-pill-' + key);
     if(pill) pill.textContent = window.T(want ? 'dv_uiv_on' : 'dv_uiv_off');
     if(res){ res.textContent = window.T('dv_uiv_js_saved'); res.className = 'save-result ok'; setTimeout(()=>{ res.textContent = ''; }, 4000); }
+  }catch(e){
+    el.checked = !want;
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
+}
+
+// ── 开发者模式（L-4 A）：只写 session；成功后整页刷新让侧栏立刻按新视角重渲染 ──
+async function dvDevModeToggle(el){
+  const res = document.getElementById('dv-devmode-res');
+  const want = !!el.checked;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/developer-mode', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({on: want}),
+    }, {timeoutMs: 15000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      el.checked = !want;
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      return;
+    }
+    const pill = document.getElementById('dv-devmode-pill');
+    if(pill) pill.textContent = window.T(d.developer_mode ? 'dv_uiv_on' : 'dv_uiv_off');
+    if(res){ res.textContent = window.T('dv_uiv_js_saved'); res.className = 'save-result ok'; }
+    setTimeout(function(){ location.reload(); }, 400);
   }catch(e){
     el.checked = !want;
     if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }

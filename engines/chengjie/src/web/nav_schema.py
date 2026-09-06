@@ -25,6 +25,9 @@ base.html 的完整/简洁两种模式、命令面板(Ctrl+K)页面项、渠道�
 - feature  = 授权档位功能名(licensing/feature_gate.py 注册表;gate 默认关 = 全量渲染
              零变化;P3 起锁定项渲染为「锁标 + 跳会员中心」升级引导(locked=True 注解,
              base.html nav_item 宏消费);命令面板仍直接隐藏锁定项(跳转列表无升级语义)
+- tier     = 开发者模式注解(get_nav_context 输出侧,非声明侧):client 形态开了开发者
+             模式后,本应被藏的项带 tier="internal"/"partner" 回归,侧栏渲染
+             「研发 / 代理商」角标(base.html / _ws_sidebar.html 消费)
 - cmd_keys = 命令面板搜索别名(含旧菜单名/同义词,保证改名或术语分裂后老用户仍搜得到)
 - simple   = 命令面板「简洁模式」可见性覆写(默认按是否在 SIMPLE_CORE/SIMPLE_MORE 推导;
              CMD_EXTRA_ITEMS 的项不在简洁清单里 → 不显式声明 simple=True 就只在完整
@@ -336,6 +339,18 @@ CMD_EXTRA_ITEMS = {
     # ── 工作台主管看板五页：2026-08-14 曾因顶栏「更多」删除收进命令面板当孤儿；
     #    2026-08-16 管理面改造升格正式侧栏入口；2026-08-18 P1 收成 ws_boards
     #    页群入口 + 页内 Tab（用量看板不动，仍在「用量与计费」组）。
+    # ── 代理商面深链（2026-09-06 L-4 A，PARTNER_ONLY_ITEM_IDS）：系统设置页三张
+    #    商业卡的 Ctrl+K 直达（settings.html hash 深链自动展开定位）。key 与系统设置
+    #    同为 settings（与 escalation 同例），显隐只能按 path 剔。
+    "settings_brand": dict(key="settings", path="/settings#brand", icon="palette",
+                           label_key="nav_settings_brand", label_zh="品牌 / 白标",
+                           cmd_keys="brand 品牌 白标 logo 主题色 署名 oem whitelabel"),
+    "settings_license": dict(key="settings", path="/settings#license", icon="award",
+                             label_key="nav_settings_license", label_zh="授权 / 激活",
+                             cmd_keys="license 授权 激活 到期 旗舰 社区 activation"),
+    "settings_demo": dict(key="settings", path="/settings#demo", icon="film",
+                          label_key="nav_settings_demo", label_zh="试用 / 演示数据",
+                          cmd_keys="demo 演示 示例 试用 铺数据 演示数据 seed"),
 }
 
 DOMAIN_SENTINEL = "__domain_pages__"
@@ -404,7 +419,26 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
 # 有密码闸）——内部人员在客户机上直接敲地址仍可进。
 # 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
 # bug_tickets（实施81）＝我方报障群值守的处置台，客户部署没有报障群值守语义。
-CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets")
+# 2026-09-06 L-4 A（D-L2 / D-L6，#197 #198 #212 #199 #211）扩容：
+# - help        帮助中心＝TG 时代斜杠命令表 + 培训演示 404（docs/training 未随包）；
+# - strategies  回复策略＝大模型调参面板直出（Temperature / Max Tokens / 意图映射）；
+# - singing     歌房：曲库 0 / 声库 0 的空壳，客户求歌会建单进失败；
+# - voice_eval  声音评测：只有消费端没有生产端。
+# 「学习队列 learner」刻意不在此列（D-L5 先止血不隐藏，入口本就在简洁模式「更多」）。
+# 三层形态里 partner（代理商版）与 internal 都看得见这些项——本表只对 client 生效。
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets",
+                          "help", "strategies", "singing", "voice_eval")
+
+# 代理商版才显（D-L7）：白标 / 演示数据 / 授权激活是代理商 / OEM 的商业面，终端
+# 用户看到「可改产品名去厂商署名」＝白送，「一键铺假会话」在全自动账号下会真发。
+# 三项是 settings.html 三张卡的命令面板深链（卡片本体由模板按 ui_client_hide 同口径
+# 藏）。client 形态剔除；partner / internal 保留；开发者模式一开随 CLIENT_HIDDEN 回归。
+PARTNER_ONLY_ITEM_IDS = ("settings_brand", "settings_license", "settings_demo")
+
+# 开发者模式下被藏项回归时打的 tier 注解（base.html / _ws_sidebar.html 渲染角标）：
+# 内部研发面 → "internal"（角标「研发」）；代理商面 → "partner"（角标「代理商」）。
+NAV_TIER_INTERNAL = "internal"
+NAV_TIER_PARTNER = "partner"
 
 # ── 页群（2026-08-18 P1）：侧栏一个入口 + 页内 Tab 互切 ─────────────────────
 # 「合并看板/漏斗」刻意不做模板级合并：各页 JS 与数据装载互不相干，真合页＝
@@ -526,7 +560,11 @@ def _monetization_product_on(config) -> bool:
         return False
 
 
-def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
+def _partner_paths():
+    return {CMD_EXTRA_ITEMS[i]["path"] for i in PARTNER_ONLY_ITEM_IDS}
+
+
+def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) -> dict:
     """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
 
     - matrix_nav 关 → 剔真机矩阵五项（侧栏完整模式组 / 简洁上下文导航
@@ -538,17 +576,22 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
     - monetization.enabled 关 → 剔「客户营收」（空页不占侧栏）。例外：该项
       已被 feature_gate 打 ``locked=True`` 时留下——锁标升级面是档位契约，
       不能被产品开关顺手藏掉。
-    - **形态＝client** → 剔「实时日志 / 开发者工具」（2026-08-20 实施49 P1-6，
-      内测反馈 B6：运维页不该对最终用户开放）。这两项是形态维度而非布尔键：
-      内部服务器部署必须原样保留，所以判定走 ``resolve_ui_flavor`` 而不是
-      再造两个默认 False 的键（那会让 117 双实例也跟着丢入口）。「运营总览」
-      刻意**不**在此列——老板要的经营读数就在那页，藏了等于砍功能。
+    - **形态＝client** → 剔 ``CLIENT_HIDDEN_ITEM_IDS``（运维/研发面）与
+      ``PARTNER_ONLY_ITEM_IDS``（代理商面；2026-08-20 实施49 P1-6 起步，
+      2026-09-06 L-4 A 扩容 + 加代理商层）。形态是维度而非布尔键：内部服务器
+      部署必须原样保留，所以判定走 ``resolve_ui_flavor`` 而不是再造默认 False
+      的键（那会让 117 双实例也跟着丢入口）。「运营总览」刻意**不**在此列——
+      老板要的经营读数就在那页，藏了等于砍功能。
+    - **开发者模式**（``developer_mode=True``，session 级，见 ui_visibility）→
+      client 形态下上两表**不剔**，改为打 ``tier`` 注解（"internal" / "partner"），
+      侧栏渲染「研发 / 代理商」角标——内部人在客户机排障能看见全貌，又一眼分得
+      清哪些是客户看不到的。partner / internal 形态本就全显，注解不打。
     两键全关 → 组内无真实项，整组消失（防空标题）。URL 刻意不封（藏而不废，
     与 simple=True 深链哲学一致）；判定异常回落「隐藏」——内部功能读不到
     配置时藏起来比露出来安全。
 
-    ⚠ 剔除按 **key 或 path** 两个维度：escalation 与「系统设置」共用
-    ``key="settings"``（它就是那页的深链），只能靠 path 区分，按 key 剔会把
+    ⚠ 剔除按 **key 或 path** 两个维度：escalation / 三条代理商深链与「系统设置」
+    共用 ``key="settings"``（它们就是那页的深链），只能靠 path 区分，按 key 剔会把
     完整模式的系统设置项一起干掉。
     """
     flags = {}
@@ -561,8 +604,15 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
         flags = {}
     hidden_ids = set()
     hidden_paths = set()
+    tier_ids: dict = {}
+    tier_paths: dict = {}
     if client_flavor:
-        hidden_ids |= set(CLIENT_HIDDEN_ITEM_IDS)
+        if developer_mode:
+            tier_ids = {i: NAV_TIER_INTERNAL for i in CLIENT_HIDDEN_ITEM_IDS}
+            tier_paths = {p: NAV_TIER_PARTNER for p in _partner_paths()}
+        else:
+            hidden_ids |= set(CLIENT_HIDDEN_ITEM_IDS)
+            hidden_paths |= _partner_paths()
     if not flags.get("matrix_nav", False):
         hidden_ids |= set(MATRIX_ITEM_IDS)
     if not flags.get("group_show", False):
@@ -571,7 +621,7 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
         hidden_paths.add(NAV_ITEMS["escalation"]["path"])
     if not _monetization_product_on(config):
         hidden_paths.add(NAV_ITEMS["monetization"]["path"])
-    if not (hidden_ids or hidden_paths):
+    if not (hidden_ids or hidden_paths or tier_ids or tier_paths):
         return ctx
 
     _mo_path = NAV_ITEMS["monetization"]["path"]
@@ -582,10 +632,20 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
             return False
         return (it.get("key") in hidden_ids) or (it.get("path") in hidden_paths)
 
+    def _tier(it):
+        return tier_paths.get(it.get("path")) or tier_ids.get(it.get("key"))
+
     def _drop_hidden(items):
-        return [it for it in items
-                if it == DOMAIN_SENTINEL
-                or not (isinstance(it, dict) and _hidden(it))]
+        out = []
+        for it in items:
+            if it == DOMAIN_SENTINEL or not isinstance(it, dict):
+                out.append(it)
+                continue
+            if _hidden(it):
+                continue
+            t = _tier(it)
+            out.append(dict(it, tier=t) if t else it)
+        return out
 
     groups = []
     for g in ctx["nav_groups"]:
@@ -603,7 +663,7 @@ def _apply_ui_visibility(ctx: dict, config: dict) -> dict:
     )
 
 
-def get_nav_context(config: dict = None) -> dict:
+def get_nav_context(config: dict = None, developer_mode: bool = False) -> dict:
     """供 admin.py _enrich_context 与渲染类测试注入模板上下文。
 
     不传 config → 返回静态全量(进程内单例,零变化——渲染类测试/无配置场景
@@ -612,7 +672,8 @@ def get_nav_context(config: dict = None) -> dict:
     ② ui_visibility.matrix_nav / group_show / ai_settings(缺省隐藏真机矩阵五项、
       群脉导播台与简洁模式「人工转接」项，开发者页按键开启后回归) +
       monetization.enabled（缺省隐藏客户营收；档位锁定项保留锁标升级面）+
-      部署形态（client＝桌面包剔实时日志/开发者工具）。
+      部署形态（client＝桌面包剔 CLIENT_HIDDEN / PARTNER_ONLY 两表；
+      ``developer_mode=True`` 时两表不剔改打 tier 注解，见 _apply_ui_visibility）。
     视图每次重建(列表极小,开销可忽略)。
     """
     if config is None:
@@ -634,4 +695,4 @@ def get_nav_context(config: dict = None) -> dict:
             nav_matrix_items=_mark_locked(ctx["nav_matrix_items"], locked),
             nav_cmd_items=_drop_locked(ctx["nav_cmd_items"], locked),
         )
-    return _apply_ui_visibility(ctx, config)
+    return _apply_ui_visibility(ctx, config, developer_mode=bool(developer_mode))
