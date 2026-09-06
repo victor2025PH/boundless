@@ -13503,8 +13503,12 @@ function _stageMedia(file){
 function _mediaItemHtml(it){
   const img=it.url?`<img src="${it.url}" alt="">`:`<span class="mpi-ico">${_mediaIconFor(it.file.type)}</span>`;
   // netFail=没拿到 HTTP 响应（后端重启窗/断网）：结果**未知**而非确定失败，措辞不同，
-  // 且 _reconcileGhostMediaFailures 会按对话记录自动对账清掉真送达的（E2 幽灵报障）
-  const sub=it.state==='failed'?window.T(it.netFail?'inbox.media.retry_hint_unknown':'inbox.media.retry_hint'):_fmtBytes(it.file.size);
+  // 且 _reconcileGhostMediaFailures 会按对话记录自动对账清掉真送达的（E2 幽灵报障）。
+  // #194：按失败瞬间记下的真相二选一——真在重启冷却/断连 → 「后台重启中」；否则
+  // 「没拿到发送结果（网络/大文件超时）」。这是无响应的**唯一**提示面（toast 已撤）。
+  const sub=it.state==='failed'
+    ?window.T(it.netFail?(it.unknownRestart?'inbox.media.retry_hint_unknown':'inbox.media.send_result_unknown'):'inbox.media.retry_hint')
+    :_fmtBytes(it.file.size);
   return `<span class="mpb-item${it.state==='sending'?' sending':''}${it.state==='failed'?' failed':''}" data-mpi="${it.id}">${img}`
     +`<span class="mpi-meta"><span class="mpi-name" title="${esc(it.file.name||'')}">${esc(it.file.name||window.T('inbox.media.file_default'))}</span>`
     +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span></span>`
@@ -13621,7 +13625,11 @@ async function _doSendMedia(caption){
     // res==null（无 HTTP 响应：后端重启窗/断网）＝结果**未知**——0902 钧机 SY8TGE 实锤
     // 该时段文件全部送达，红提示却赖着不走 → 标 netFail，交 _reconcileGhostMediaFailures
     // 在后端恢复/线程刷新后按对话记录对账自动清除；措辞也按「未知」不按「失败」。
-    item.state='failed'; item.netFail=!res; item.failTs=Date.now(); _renderMediaBar();
+    item.state='failed'; item.netFail=!res; item.failTs=Date.now();
+    // #194（L-1 D，2026-09-06）：无响应时记下「此刻后端是否真在重启冷却/断连」，附件条
+    // 按真相措辞——不在重启窗就不说「后台重启」（9N97AY 实锤：后台并没在重启）。
+    if(!res){ try{ item.unknownRestart=_mediaBackendUnstable(); }catch(_){ item.unknownRestart=false; } }
+    _renderMediaBar();
     const d=(res&&res.d)||{};
     if(res&&res.status===501){
       _toast(window.T('inbox.media.unsupported'),'#b45309');
@@ -13638,7 +13646,10 @@ async function _doSendMedia(caption){
       // 后端，也可能进了响应丢了）。无响应一律按未知，对账清幽灵。
       // #164 J-4 C（2026-09-05）钉死口径：红字只留给后端**明确返回**的失败
       // （上面带 res 的分支）；fetch TypeError / abort / 超时 = 结果未知 = 黄字。
-      _toast(window.T('inbox.media.send_fail_net_restart'),'#b45309');
+      // #194 L-1 D（2026-09-06）：提示只留**附件条内联一处**（_mediaItemHtml 按
+      // item.unknownRestart 分「后台重启中」/「没拿到发送结果」两句），此处不再叠一条
+      // 同义 toast——9N97AY 实锤：附件条 + 右下 toast 同时说「后台重启」，而后台并没在重启。
+      try{ _uiBeacon(item.unknownRestart?'media_unknown_restart':'media_unknown_net'); }catch(_){}
     }
     break;
   }
@@ -27571,5 +27582,5 @@ document.addEventListener('keydown',function(e){
      网格/管理弹层 + 气泡收藏委托（data-stk-collect）。外挂组件零内联 handler；
      flag（inbox.stickers.enabled）关闭时不注入任何 UI。必须排在上方 wsEmojiOpen
      定义之后（包装依赖其已存在）。 -->
-<script src="/static/workspace/sticker-panel.js?v=20260904a"></script>
+<script src="/static/workspace/sticker-panel.js?v=20260906a"></script>
 {% endblock %}

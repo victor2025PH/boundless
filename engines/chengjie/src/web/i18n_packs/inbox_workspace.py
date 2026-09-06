@@ -1709,7 +1709,9 @@ ZH = {
     "inbox.media.img_alt": "图片",
     "inbox.media.photo": "📷 图片消息",
     "inbox.media.retry_hint": "发送失败，点发送重试",
-    "inbox.media.retry_hint_unknown": "后台刚重启，结果未知；已自动核对对话记录，确认没发出再点发送重试",
+    # #194（L-1 D）：无响应两句按真相二选一（附件条内联是唯一提示面，toast 已撤）
+    "inbox.media.retry_hint_unknown": "后台重启中，结果未知；恢复后会自动核对对话记录，确认没发出再点发送重试",
+    "inbox.media.send_result_unknown": "没拿到发送结果（可能是网络或文件较大超时）；已自动核对对话记录，确认没发出再点发送重试",
     "inbox.media.ghost_cleared": "✅ 后台已恢复：{n} 个「发送失败」实为误报，文件已送达，提示已清除",
     "inbox.media.send_fail_net": "❌ 媒体发送失败（网络/服务异常）",
     "inbox.media.send_fail_net_restart": "⚠ 后台重启中，媒体发送结果未知——恢复后会自动核对，别急着重发",
@@ -4469,7 +4471,9 @@ EN = {
     "inbox.media.img_alt": "Image",
     "inbox.media.photo": "📷 Photo message",
     "inbox.media.retry_hint": "Send failed — click Send to retry",
-    "inbox.media.retry_hint_unknown": "Backend just restarted, result unknown — the chat log is checked automatically; click Send to retry only if it never arrived",
+    # #194 (L-1 D): no-response wording picks one of two truths (inline strip is the only prompt; toast removed)
+    "inbox.media.retry_hint_unknown": "Backend is restarting, result unknown — the chat log is checked automatically once it's back; click Send to retry only if it never arrived",
+    "inbox.media.send_result_unknown": "No send result received (network hiccup or a large file timing out) — the chat log is checked automatically; click Send to retry only if it never arrived",
     "inbox.media.ghost_cleared": "✅ Backend is back: {n} \"send failed\" notice(s) were false alarms — the files were delivered; cleared",
     "inbox.media.send_fail_net": "❌ Media send failed (network/service error)",
     "inbox.media.send_fail_net_restart": "⚠ Backend is restarting — media send result unknown; it will be reconciled automatically once it's back, don't resend yet",

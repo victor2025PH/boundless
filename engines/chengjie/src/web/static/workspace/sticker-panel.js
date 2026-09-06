@@ -320,7 +320,12 @@
         failToast(d, r.status);
       }
     }).catch(function () {
-      toast(T('inbox.media.send_fail_net_restart'), '#b45309');
+      // 无 HTTP 响应＝结果未知（#164）。#194：按真相措辞——后端真在重启冷却/断连
+      // （unified_inbox 的 _mediaBackendUnstable）才说「后台重启中」，否则说
+      // 「没拿到发送结果」。贴纸没有附件条，toast 是它唯一的提示面。
+      var restarting = false;
+      try { restarting = (typeof window._mediaBackendUnstable === 'function') && !!window._mediaBackendUnstable(); } catch (_) { }
+      toast(T(restarting ? 'inbox.media.send_fail_net_restart' : 'inbox.media.send_result_unknown'), '#b45309');
     }).then(function () {
       S.sending = false;
       if (cell) cell.classList.remove('busy');
