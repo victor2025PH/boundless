@@ -88,9 +88,9 @@
      此前这里写死 zh:en 三元——繁体坐席会被硬塞英文副驾（zh_hant P3 修复）。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = window.WS_LANG || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260905b"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260907a"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260905b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260907a"></script>
 {% endif %}
 <script src="/copilot/client/copilot-client.js?v=20260830y"></script>
 <script src="/copilot/sidebar-chrome.js?v=20260828b"></script>
@@ -102,9 +102,9 @@
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
 <script src="/copilot/components/cp-voice.js?v=20260905b"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
-<script src="/copilot/components/cp-goal.js?v=20260905d"></script>
+<script src="/copilot/components/cp-goal.js?v=20260907a"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
-<script src="/copilot/components/cp-image.js?v=20260828b"></script>
+<script src="/copilot/components/cp-image.js?v=20260907a"></script>
 <script src="/copilot/components/cp-nurture.js?v=20260828b"></script>
 {% endblock %}
 {% block content %}
@@ -28042,6 +28042,9 @@ Object.assign(window, {
   acceptComposerDraft, dismissComposerDraft, _cdraftHdClick, _cdraftExpand, _openAiDraftPanel,   // 二期：composer 草稿条
   // 批量操作
   batchArchive, batchTagPrompt, batchAssignPrompt, batchSnoozePrompt,
+  batchDeletePrompt,   // M-4 C #230 多选工具条「删除」（静态 onclick；M-6 1.0.76 收口门禁扫出的漏挂，跨线补接）
+  // M-2 B D-M1：账号菜单批量切档 / 账号门禁降级后「恢复自动」（innerHTML 生成 onclick；同上跨线补接）
+  _acctBulkMode, _gateClearDegraded,
   // 会话头 / 移动端
   closeMobileChat, toggleAiDraft, toggleInfoSidebar, toggleArchive, snoozeConv, unsnoozeConv, setMode, pauseAutoMode,
   _toggleGbar,   // P1 2026-08-20：群资料条展开（innerHTML onclick）

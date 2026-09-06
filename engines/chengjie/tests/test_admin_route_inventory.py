@@ -1888,6 +1888,15 @@ _ADDITIONS_2026_09_06_BURIED_MARK_READ = """
 """
 _BASELINE += _ADDITIONS_2026_09_06_BURIED_MARK_READ
 
+# 2026-09-06 M-2 B（D-M1 登录默认半自动）：账号级批量切档 + 账号门禁（冷静期 / 降级 /
+# 退避 / 未连接）读写——unified_inbox_stored_read_routes.py L567 / L611。
+# M-2 收工未登记，M-6 收口 preflight 抓出后代登记（清单即门禁台账，非业务代码）。
+_ADDITIONS_2026_09_06_M2_ACCOUNT_GATE = """
+/api/unified-inbox/automation/account-gate	POST
+/api/unified-inbox/automation/account-bulk	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_06_M2_ACCOUNT_GATE
+
 
 def _parse_baseline():
     expected = set()
