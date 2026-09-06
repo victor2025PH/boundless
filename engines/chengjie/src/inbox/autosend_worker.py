@@ -311,6 +311,11 @@ class AutosendWorker:
         self.total_skipped_already_sent: int = 0
         # B41：通道互斥仲裁取消的跟进链稿数（同会话同批常规稿在场，链稿让位）
         self.total_skipped_mutex: int = 0
+        # M-2（D-M1 / #232 / #233）：账号级通道门禁扣住次数（每 tick 重扫会重复计，
+        # 是「扣留中」活动信号）/ 账号因连续失败被降半自动的次数 / 门禁日志节流表
+        self.total_skipped_channel_gate: int = 0
+        self.total_account_degraded: int = 0
+        self._gate_log_ts: Dict[str, float] = {}
         # B41 投递权登记表（实例级，人工/自动两条投递链共用——见 deliver_once 模块
         # docstring 的作用域论证）
         self._deliver_once = DeliverOnceRegistry()
@@ -429,6 +434,65 @@ class AutosendWorker:
                     conv, reason)
         except Exception:
             logger.debug("[AutosendWorker] 死 peer 登记失败（已忽略）", exc_info=True)
+
+    # ── M-2 账号级通道门禁（D-M1 / #232 / #233，2026-09-06）────────────────────
+    def _account_gate_hold(self, platform: str, account_id: str) -> str:
+        """该账号此刻自动投递是否该扣住：cooldown / degraded / backoff / disconnected / ""。
+
+        冷静期 = 登录/重登后 10 分钟只起草；degraded = 连续 3 次真实失败已降半自动
+        （要人确认）；backoff = 边车 send_backoff/account_blocked 水位未过（#233：
+        退避期内自动不再改期重投续命）；disconnected = 通道未连接（#232）。
+        同账号同原因 60s 只落一条 INFO。判定异常一律放行（门禁不能成为回复链故障点）。
+        """
+        plat = str(platform or "")
+        acct = str(account_id or "default")
+        if not plat or not acct:
+            return ""
+        reason = ""
+        try:
+            from src.inbox.account_channel_gate import hold_reason
+            reason = hold_reason(plat, acct)
+            if not reason:
+                from src.integrations.platform_session_health import (
+                    channel_connection_state,
+                )
+                if channel_connection_state(plat, acct).get("state") == "disconnected":
+                    reason = "disconnected"
+        except Exception:
+            logger.debug("[AutosendWorker] 账号门禁判定异常（放行）", exc_info=True)
+            return ""
+        if not reason:
+            return ""
+        key = f"{plat}:{acct}:{reason}"
+        now = time.time()
+        if now - self._gate_log_ts.get(key, 0.0) >= 60.0:
+            self._gate_log_ts[key] = now
+            logger.info(
+                "[AutosendWorker] guard=channel_gate 账号 %s:%s 自动投递扣住（%s）——"
+                "草稿留 pending 待人过目/通道恢复后接续（D-M1 / #232 / #233）",
+                plat, acct, reason)
+        return reason
+
+    def _account_gate_note(self, item: Dict[str, Any], *, ok: bool,
+                           error_kind: str = "", retry_after_ms: int = 0) -> None:
+        """投递结果记进账号门禁：成功清连续失败/退避；失败计连续失败（退避类只记水位）。
+
+        连续 3 次真实失败 → gate 内部降半自动 + 红标（封顶层 channel_degraded 生效，
+        本 worker 下一 tick 起按 _account_gate_hold 扣住）。best-effort 绝不抛。
+        """
+        try:
+            from src.inbox.account_channel_gate import note_send_fail, note_send_ok
+            plat = str(item.get("platform") or "")
+            acct = str(item.get("account_id") or "default")
+            if ok:
+                note_send_ok(plat, acct, manual=False)
+                return
+            res = note_send_fail(plat, acct, error_kind=error_kind,
+                                 retry_after_ms=int(retry_after_ms or 0))
+            if res.get("degraded_now"):
+                self.total_account_degraded += 1
+        except Exception:
+            logger.debug("[AutosendWorker] 账号门禁记账失败（忽略）", exc_info=True)
 
     def _conv_send_blocked(self, conv: str) -> bool:
         """该会话是否处于发送封禁冷却窗口内（到期自动清理并允许重探）。
@@ -1365,6 +1429,8 @@ class AutosendWorker:
                     retry_after_ms=int(res.get("retry_after_ms") or 0))
             _delivered_ok = True
             self.total_delivered += 1
+            # M-2：真实送达 → 账号门禁清连续失败 / 退避（通道显然通了）
+            self._account_gate_note(item, ok=True)
             # #88：自动投递送达成功 → 清 dead-peer 标（黄条解除 + 自动回复恢复）
             self._dead_peer_clear(_conv_id_g)
             # #207：AI 回上了 → 摘「AI 没能回」类「需人工」标（dup_guard_blocked 等；
@@ -1423,6 +1489,14 @@ class AutosendWorker:
                                    _conv, exc_info=True)
             _plat = item.get("platform", "?")
             _permanent = _is_permanent_send_error(str(exc))
+            # M-2（D-M1 ⑦ / #233）：账号门禁记账——真实失败计连续失败（3 次 → 降半自动
+            # + 红标）；边车退避类（send_backoff / account_blocked）只记账号级退避水位、
+            # 不计失败（通道自保不是新故障）。translate_hold 是我方翻译链扣留，不算通道失败。
+            if not str(exc).startswith("translate_hold"):
+                self._account_gate_note(
+                    item, ok=False,
+                    error_kind=str(getattr(exc, "error_kind", "") or ""),
+                    retry_after_ms=int(getattr(exc, "retry_after_ms", 0) or 0))
             # 跨链共享登记（gated）：注销/被拉黑/无权限这类**永久**不可达写进
             # 共享表，A 线 sender 与 proactive 立即同步受益；peer 失效等可自愈类
             # 由 registry 按「非永久」忽略，仍只走下面的本地会话冷却。
@@ -1674,6 +1748,18 @@ class AutosendWorker:
                         exc_info=True)
                 self.total_skipped_blocked += 1
                 continue
+            # M-2 账号级通道门禁（D-M1 / #232 / #233，2026-09-06）：登录冷静期 / 连续失败
+            # 降级 / 边车退避 / 通道未连接 → **留 pending 不投递**（不 resolve 不取消：
+            # 冷静期内它们就是「积压待你过目」，账号栏与草稿面板可见可批可拒；通道
+            # 恢复且门禁解除后下一 tick 自然接续）。判定单点＝account_channel_gate +
+            # platform_session_health（与封顶层 gate_caps / 账号栏快照同源）。fail-open：
+            # 判定异常一律放行；同账号同原因 60s 只落一条 INFO 防刷屏。
+            if self._send_callback is not None:
+                _ag_hold = self._account_gate_hold(
+                    str(d.get("platform") or ""), str(d.get("account_id") or "default"))
+                if _ag_hold:
+                    self.total_skipped_channel_gate += 1
+                    continue
             # 驾驶权互斥锁（surface_fusion P0，2026-08-13，默认关）：该账号的
             # 自动化持有者是「原生面板」→ 工作台自动链让位，取消本稿防双发
             # （语义与 send_blocked 同族：cancel 防堆积；切回 workspace 托管后
@@ -2055,6 +2141,9 @@ class AutosendWorker:
             # 涨了说明真拦到了双投/双答（去日志看 guard=deliver_once/channel_mutex）
             "total_skipped_already_sent": self.total_skipped_already_sent,
             "total_skipped_mutex": self.total_skipped_mutex,
+            # M-2：账号级通道门禁扣住次数（冷静期/降级/退避/未连接）+ 降级发生次数
+            "total_skipped_channel_gate": self.total_skipped_channel_gate,
+            "total_account_degraded": self.total_account_degraded,
             "deliver_once": self._deliver_once.stats_snapshot(),
             "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
             "total_human_deliver_errors": self.total_human_deliver_errors,
