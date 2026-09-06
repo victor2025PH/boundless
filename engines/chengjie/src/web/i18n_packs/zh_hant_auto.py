@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-05 23:35:20 · OpenCC s2twp + 術語釘 · 16160 鍵（源 zh 全量 16161）
+生成: 2026-09-06 10:34:15 · OpenCC s2twp + 術語釘 · 16377 鍵（源 zh 全量 16378）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -4555,6 +4555,22 @@ ZH_HANT = {
     'dv_cc_sub': '主 Key 失效（欠費/被封）時自動切換備用 Key，全部失敗才落本地模型。備用 Key 餘額每小時巡檢、每日探活，異常會彈窗提醒。',
     # ── dv_cc_title ──
     'dv_cc_title': '雲端憑證體檢 / 備用 Key 池',
+    # ── dv_devmode_cb ──
+    'dv_devmode_cb': '在本機顯示被使用者版隱藏的項',
+    # ── dv_devmode_flavor ──
+    'dv_devmode_flavor': '當前形態',
+    # ── dv_devmode_flavor_client ──
+    'dv_devmode_flavor_client': '使用者版（client）',
+    # ── dv_devmode_flavor_internal ──
+    'dv_devmode_flavor_internal': '研發版（internal）',
+    # ── dv_devmode_flavor_partner ──
+    'dv_devmode_flavor_partner': '代理商版（partner）',
+    # ── dv_devmode_na ──
+    'dv_devmode_na': '當前不是使用者版形態，所有項本就可見，無需開啟。',
+    # ── dv_devmode_sub ──
+    'dv_devmode_sub': '使用者版（client）會隱藏研發頁（幫助 / 回覆策略 / 歌房 / 聲音評測 / 實時日誌 / 開發者工具 / 報障工單）和代理商面（白標 / 演示資料 / 授權）。開啟後這些項帶「研發 / 代理商」角標回到側欄與頁面；只對當前登入會話生效，退出登入自動關閉。',
+    # ── dv_devmode_title ──
+    'dv_devmode_title': '開發者模式（客戶機看研發面）',
     # ── dv_js001 ──
     'dv_js001': '雲端 DeepSeek 模式',
     # ── dv_js002 ──
@@ -5519,6 +5535,7 @@ ZH_HANT = {
     'err.case.not_found': 'Case {case_id} 不存在',
     'err.chat_test.rate_limited': '試聊太頻繁，請稍後再試（每分鐘上限 {n} 次）',
     'err.cp.user_msg_reply_required': 'user_message 和 correct_reply 不能為空',
+    'err.demo.workspace_not_empty': '工作區已有真實資料（會話 {c} · 賬號 {a}），演示資料只能在沒有真實賬號的空工作區鋪——全自動賬號會把示例會話當真客戶發出去',
     'err.docmsg.read_failed': '檔案讀取失敗',
     'err.docmsg.too_large': '檔案過大（上限 10MB）',
     'err.docmsg.unsupported_ext': '文件翻譯支援 .docx / .xlsx / .pptx / .pdf / .srt / .vtt',
@@ -5714,9 +5731,15 @@ ZH_HANT = {
     'err.kb.vec_all_done': '所有條目已完成向量化，無需重新處理',
     'err.kb.vec_running': '向量化任務正在執行中',
     'err.learner.ai_unavailable': 'AI 引擎不可用，無法生成草稿（已有草稿仍可正常稽核）',
+    'err.learner.batch_limit': '一次最多透過 {n} 條，請分批',
+    'err.learner.confirm_required': '需要二次確認後才能批次入庫',
     'err.learner.feed_query_required': '請填寫要學習的問題',
     'err.learner.feed_query_too_long': '問題過長（最多 200 字）',
+    'err.learner.ids_required': '請先勾選要透過的條目',
     'err.learner.kb_unavailable': '知識庫不可用，學習功能暫停',
+    'err.learner.memory_unavailable': 'AI 記憶儲存未就緒，客戶私事條目暫時無法透過',
+    'err.learner.memory_write_failed': '寫入客戶 AI 記憶失敗，請稍後重試',
+    'err.learner.private_no_customer': '這條含客戶私事，但找不到它來自哪個客戶會話，不能進共享知識庫；請拒絕，或在該客戶的工作台裡手動寫入記憶',
     'err.lic.activate_invalid': '授權碼無效或已失效（狀態：{state}），未寫入',
     'err.lic.chars_exhausted': '字元額度已用盡，翻譯/語音合成已暫停，請續費或更換授權',
     'err.lic.feature_locked': '當前授權檔位未包含此功能，請升級套餐後使用',
@@ -5776,6 +5799,14 @@ ZH_HANT = {
     'err.persona.save_unavailable': 'ConfigManager.save_personas 不可用',
     'err.persona.scan_q_required': '內容排查需要提供關鍵詞 q',
     'err.persona.stale_rev': '該人設在你編輯期間已被其他視窗或同事修改（或刪除），為防覆蓋他人改動已拒絕儲存',
+    'err.persona.voice_clone_backend_not_clone': '語音配置需修正：引擎「{detail}」不是克隆引擎，與「用我上傳的錄音」不匹配',
+    'err.persona.voice_clone_missing_reference': '語音配置需修正：選了「用我上傳的錄音」但還沒有錄音。請先在語音頁上傳參考錄音，或改選「用預置聲」/「不發語音」',
+    'err.persona.voice_clone_reference_file_missing': '語音配置需修正：克隆聲的參考錄音檔案不存在（{detail}）。請重新上傳錄音，或改選「用預置聲」/「不發語音」',
+    'err.persona.voice_clone_with_preset_voice': '語音配置需修正：克隆聲不能搭配預置音色名「{detail}」。要用這把預置聲請改選「用預置聲」；要用克隆聲請清掉音色名',
+    'err.persona.voice_invalid_mode': '語音配置需修正：語音方式只能是「用我上傳的錄音」「用預置聲」「不發語音」三者之一',
+    'err.persona.voice_preset_backend_is_clone': '語音配置需修正：選了「用預置聲」但引擎是克隆引擎「{detail}」。請重新選一把預置聲',
+    'err.persona.voice_preset_voice_missing': '語音配置需修正：選了「用預置聲」但還沒挑音色。請按語言·性別選一把並試聽',
+    'err.persona.voice_preset_voice_unknown': '語音配置需修正：音色「{detail}」不在可用預置聲列表裡。請從列表裡重新選一把',
     'err.pmedia.bad_body': '請求體格式錯誤',
     'err.pmedia.bad_content': '檔案內容校驗未透過（{why}）：檔案可能已損壞，請換一份原圖重試',
     'err.pmedia.ext_not_allowed': '不支援的檔案型別：{ext}（圖片支援 jpg/png/webp/gif，影片支援 mp4/mov/webm/m4v）',
@@ -5909,6 +5940,7 @@ ZH_HANT = {
     'err.sf.platform_required': '缺少 platform 引數',
     'err.sf.readonly': '只讀賬號無權切換駕駛權',
     'err.sf.write_failed': '駕駛權寫入失敗，請稍後重試',
+    'err.singing.assets_missing': '資產不齊（曲庫 {t} 首 · 聲庫 {v} 個），無法開啟唱歌能力；如需開通請聯絡客服',
     'err.singing.audio_missing': '成品音訊缺失',
     'err.singing.bad_id': '無效 id',
     'err.singing.bad_key': '不允許的配置鍵',
@@ -5989,6 +6021,10 @@ ZH_HANT = {
     'err.uiv.dev_locked': '開發者工具未解鎖',
     'err.uiv.unknown_key': '未知顯隱鍵：{name}',
     'err.uiv.write_failed': '寫入失敗（配置覆蓋層不可寫）',
+    'err.vision.busy': '識圖服務忙，稍後重試',
+    'err.vision.no_text': '圖中未識別到文字',
+    'err.vision.unconfigured': '識圖服務未配置',
+    'err.voice.clone_engine_offline': '語音引擎離線，本條未出聲、已按文書處理。為保人設聲音一致，不會改用其他音色；引擎恢復後自動恢復克隆聲',
     'err.voice.consent_required': '請先確認已獲得聲音所有者授權（勾選授權確認後再登記）',
     'err.voice.dst_persona_not_found': '目標人設 {dst_id} 不存在',
     'err.voice.engine_missing': '語音引擎未接入：請聯絡官方開通託管語音，或檢查語音引擎配置',
@@ -5997,6 +6033,7 @@ ZH_HANT = {
     'err.voice.hub_source_down': '該音色的聲源（hub 音色檔）暫不可用；為保音色一致已拒絕用替代聲線頂包。可改選「系統通用音色」或其他 🎤 就緒音色，或稍後重試',
     'err.voice.media_ref_invalid': 'media_ref 不是有效的會話媒體引用',
     'err.voice.media_ref_not_found': '該語音訊息的音訊存檔不存在（可能已被清理），請下載後改用檔案上傳',
+    'err.voice.no_matching_voice': '沒有與該人設同語種、同性別的預置聲可用，本條未出聲、已按文書處理。請到人設「語音」頁為它挑一把預置聲',
     'err.voice.persona_not_found': '人設 {persona_id} 不存在',
     'err.voice.profile_not_ready': '該音色登記不完整（缺授權確認或參考音訊），無法合成。請在語音面板重新登記該音色，或改選其他就緒音色',
     'err.voice.ref_file_required': 'file（參考音訊）必填',
@@ -6087,6 +6124,8 @@ ZH_HANT = {
     'export': '匯出',
     # ── export_config ──
     'export_config': '匯出配置',
+    # ── fc_dep_client_generic ──
+    'fc_dep_client_generic': '需要配套服務，開通請聯絡客服',
     # ── fc_dep_embedding ──
     'fc_dep_embedding': '嵌入端點（ai.embedding_base_url）',
     # ── fc_dep_translation_any ──
@@ -6150,7 +6189,7 @@ ZH_HANT = {
     # ── fc_f_xlate_conf_d ──
     'fc_f_xlate_conf_d': '低置信譯文自動切換後備引擎擇優',
     # ── fc_hint ──
-    'fc_hint': '開關寫入 config.local.yaml 並即時生效；「未開放」能力的交付形態由部署方決定。',
+    'fc_hint': '開關即時生效；「需要配套服務」「即將開放」的能力如需開通請聯絡客服。',
     # ── fc_js_disable ──
     'fc_js_disable': '關閉',
     # ── fc_js_enable ──
@@ -6158,31 +6197,31 @@ ZH_HANT = {
     # ── fc_js_fail ──
     'fc_js_fail': '操作失敗：',
     # ── fc_js_missing ──
-    'fc_js_missing': '缺：',
+    'fc_js_missing': '需要：',
     # ── fc_meta_plan ──
     'fc_meta_plan': '當前檔位',
     # ── fc_meta_version ──
     'fc_meta_version': '版本',
     # ── fc_rsn_lan ──
-    'fc_rsn_lan': '需自建 GPU / 區域網服務，交付形態待定',
+    'fc_rsn_lan': '需要配套的語音 / 識圖服務，開通請聯絡客服',
     # ── fc_rsn_pending ──
-    'fc_rsn_pending': '待產品 / 合規拍板',
+    'fc_rsn_pending': '即將開放，開放時間以官方通知為準',
     # ── fc_rsn_risk ──
-    'fc_rsn_risk': '涉賬號風險行為，需運營明確開閘',
+    'fc_rsn_risk': '涉及賬號安全，需要運營確認後開通',
     # ── fc_rsn_upgrade ──
     'fc_rsn_upgrade': '需 {plan} 及以上檔位',
     # ── fc_state_available ──
     'fc_state_available': '可開啟',
     # ── fc_state_locked ──
-    'fc_state_locked': '未開放',
+    'fc_state_locked': '即將開放',
     # ── fc_state_needs_dep ──
-    'fc_state_needs_dep': '缺依賴',
+    'fc_state_needs_dep': '需要配套服務',
     # ── fc_state_needs_upgrade ──
     'fc_state_needs_upgrade': '需升級',
     # ── fc_state_on ──
     'fc_state_on': '已開啟',
     # ── fc_sub ──
-    'fc_sub': '全部能力一張表：已開啟 / 可開啟 / 缺依賴 / 未開放——不再有裝了卻看不見的功能',
+    'fc_sub': '全部能力一張表：已開啟 / 可開啟 / 需要配套服務 / 即將開放——不再有裝了卻看不見的功能',
     # ── fc_title ──
     'fc_title': '功能總覽',
     # ── fe ──
@@ -7067,7 +7106,9 @@ ZH_HANT = {
     # ── hp_s015 ──
     'hp_s015': '複製指令',
     # ── hp_sec_scripts ──
-    'hp_sec_scripts': '話術管理',
+    'hp_sec_scripts': '機器人斜槓命令（舊）',
+    # ── hp_sec_scripts_scope ──
+    'hp_sec_scripts_scope': '僅適用於 Telegram 主號的 Bot 指令模式（在群裡或私聊裡對機器人輸入的斜槓命令）；收件箱、人設與三端 RPA 不使用這些指令——話術請去「知識庫 / 話術模板」維護。',
     # ── im_js001 ──
     'im_js001': '增量合併匯入',
     # ── im_js002 ──
@@ -7452,6 +7493,7 @@ ZH_HANT = {
     'inbox.acct.unread_mark_fail': '清未讀失敗，請稍後重試',
     'inbox.acct.unread_mark_ok': '已清未讀',
     'inbox.acct.unread_open_t': '點開看是哪幾條未讀',
+    'inbox.acct.unread_pop_hint': '角標數字就是下面這幾條：點開任一條，或點「全部標已讀」即可清零。歸檔會話裡的未讀不計入角標，看列表上方的琥珀橫幅。',
     'inbox.acct.unread_pop_title': '未讀會話',
     'inbox.acct.view_chats': '檢視該賬號會話',
     'inbox.acct.viewing': '正在檢視：{label}',
@@ -7596,12 +7638,15 @@ ZH_HANT = {
     'inbox.bulk.sop_none': '當前篩選沒有可掛的私聊會話',
     'inbox.bulk.sop_none_eligible': '篩選結果裡沒有符合條件的會話（都在途或近期掛過）',
     'inbox.bulk.sop_pick': '將從當前篩選的 {n} 個私聊中掛載。輸入鏈編號：',
+    'inbox.buried.banner': '有 {n} 條未讀在已歸檔會話裡（最久 {h} 小時）',
+    'inbox.buried.banner_nohours': '有 {n} 條未讀在已歸檔會話裡',
     'inbox.buried.hint': '歸檔中還有 {n} 條未讀',
     'inbox.buried.unarch': '取消歸檔這 {n} 條',
     'inbox.buried.unarch_fail': '取消歸檔失敗，請稍後重試',
     'inbox.buried.unarch_none': '當前視角下沒有可取消歸檔的被埋會話',
     'inbox.buried.unarch_ok': '已取消歸檔 {n} 條會話，它們已回到預設檢視',
     'inbox.buried.unarch_t': '把這些歸檔著卻有未讀的會話一鍵浮回預設檢視（可撤銷）',
+    'inbox.buried.view_each': '逐條檢視',
     'inbox.caps.backoff_in': '約 {n} 秒後重試',
     'inbox.caps.needs_public_url': '官方通道發媒體需先配置公網媒體 URL——開啟「渠道接入」嚮導填寫（IG/LINE 共用）',
     'inbox.caps.no_media': '該平台賬號暫不支援收件箱直髮媒體（需協議多開且線上）',
@@ -9058,7 +9103,17 @@ ZH_HANT = {
     'inbox.grp.title': '👥 群組動態',
     'inbox.grp.unmute': '取消靜音',
     'inbox.grp.unpin': '取消置頂',
+    'inbox.handoff.ai_muted_t': '此會話掛著「需人工」標，AI 徽標暫降灰——處理完摘標後恢復',
+    'inbox.handoff.bar': '需人工：{why}——{when} 由{src}打標',
+    'inbox.handoff.bar_ack': '我知道了（摘標）',
+    'inbox.handoff.bar_ack_fail': '摘標失敗，請稍後重試',
+    'inbox.handoff.bar_ack_ok': '已摘掉「需人工」標',
+    'inbox.handoff.bar_ack_t': '只摘掉「需人工」標，不改會話其它狀態',
+    'inbox.handoff.bar_generic': '需人工：此會話被標記需人工處理（未記錄原因）',
+    'inbox.handoff.bar_go': '去回覆台處理',
+    'inbox.handoff.bar_go_t': '游標落到輸入框，回一條即自動摘標',
     'inbox.handoff.r_circuit_open': 'AI 服務熔斷保護中',
+    'inbox.handoff.r_crisis': '客戶訊息觸發危機升級，需要人看一眼',
     'inbox.handoff.r_dup_guard_blocked': '近重複攔截：AI 回覆與剛發過的內容相近未發出，客戶在等回覆',
     'inbox.handoff.r_empty_reply': 'AI 生成了空回覆',
     'inbox.handoff.r_generate_error': 'AI 生成出錯',
@@ -9205,10 +9260,11 @@ ZH_HANT = {
     'inbox.media.miss_pending': '對方還在上傳中，稍後重試',
     'inbox.media.photo': '📷 圖片訊息',
     'inbox.media.retry_hint': '傳送失敗，點傳送重試',
-    'inbox.media.retry_hint_unknown': '後台剛重啟，結果未知；已自動核對對話記錄，確認沒發出再點傳送重試',
+    'inbox.media.retry_hint_unknown': '後台重啟中，結果未知；恢復後會自動核對對話記錄，確認沒發出再點傳送重試',
     'inbox.media.send_fail_net': '❌ 媒體傳送失敗（網路/服務異常）',
     'inbox.media.send_fail_net_restart': '⚠ 後台重啟中，媒體傳送結果未知——恢復後會自動核對，別急著重發',
     'inbox.media.send_fail_status': '媒體傳送失敗（{status}）',
+    'inbox.media.send_result_unknown': '沒拿到傳送結果（可能是網路或檔案較大超時）；已自動核對對話記錄，確認沒發出再點傳送重試',
     'inbox.media.sending': '📤 傳送中：{name}',
     'inbox.media.sent': '✅ 媒體已傳送',
     'inbox.media.sticker': '😊 貼紙',
@@ -9551,6 +9607,7 @@ ZH_HANT = {
     'inbox.search.ph_contact': '搜尋聯絡人…',
     'inbox.search.ph_msg': '搜尋訊息內容…',
     'inbox.send': '傳送',
+    'inbox.send.bubbles_sent': '✓ 已拆 {n} 條發出——客戶手機與工作台都是 {n} 條',
     'inbox.send.force_confirm': '仍要傳送嗎？',
     'inbox.send.resend_suppressed': '✓ 原訊息其實已經發出去了（剛才是超時誤報），本次重發已自動取消——客戶不會收到重複的話',
     'inbox.send.slow_confirmed': '✓ 已發出（本次傳送確認較慢，請勿重發）',
@@ -10273,6 +10330,8 @@ ZH_HANT = {
     'kb2_src_all': '全部來源',
     # ── kb2_src_import ──
     'kb2_src_import': '批次匯入',
+    # ── kb2_src_learner ──
+    'kb2_src_learner': '學習佇列學來的',
     # ── kb2_src_system ──
     'kb2_src_system': '系統話術/示例',
     # ── kb2_src_tip ──
@@ -11069,6 +11128,10 @@ ZH_HANT = {
     'ks_tf_added_skip': '新增 {added} 條，跳過 {skipped} 條已存在',
     # ── ks_tf_packcount ──
     'ks_tf_packcount': '{n} 條起步話術',
+    # ── l4_upgrading_body ──
+    'l4_upgrading_body': '此功能正在升級，暫不對使用者版開放；如需開通請聯絡客服。',
+    # ── l4_upgrading_title ──
+    'l4_upgrading_title': '功能升級中',
     # ── lang_current ──
     'lang_current': '簡體中文',
     # ── lang_switch ──
@@ -11515,6 +11578,56 @@ ZH_HANT = {
     'lr2_svc_err': '學習服務暫不可用',
     # ── lr2_view_entry ──
     'lr2_view_entry': '檢視知識庫條目',
+    # ── lr4_approve_selected ──
+    'lr4_approve_selected': '透過已選（{n}）',
+    # ── lr4_approved_mem ──
+    'lr4_approved_mem': '已寫入該客戶 AI 記憶（客戶私事不進共享知識庫）',
+    # ── lr4_confirm_note ──
+    'lr4_confirm_note': '入庫後會影響所有會話的 AI 回答；標「客戶私事」的條目不進共享知識庫，只寫入該客戶的 AI 記憶。',
+    # ── lr4_confirm_ok ──
+    'lr4_confirm_ok': '確認透過',
+    # ── lr4_confirm_title ──
+    'lr4_confirm_title': '確認將以下 {n} 條入庫？',
+    # ── lr4_dest_kb ──
+    'lr4_dest_kb': '知識庫',
+    # ── lr4_dest_memory ──
+    'lr4_dest_memory': '該客戶 AI 記憶',
+    # ── lr4_dup_bm25 ──
+    'lr4_dup_bm25': '文字匹配',
+    # ── lr4_dup_uncomputed ──
+    'lr4_dup_uncomputed': '相似度未計算',
+    # ── lr4_failed_private ──
+    'lr4_failed_private': '{n} 條未透過（客戶私事無法歸屬客戶或記憶未就緒）',
+    # ── lr4_limit_hint ──
+    'lr4_limit_hint': '一次最多透過 {n} 條',
+    # ── lr4_limit_over ──
+    'lr4_limit_over': '一次最多透過 {n} 條，其餘 {x} 條請下一批再透過',
+    # ── lr4_mem_written ──
+    'lr4_mem_written': '已寫入該客戶 AI 記憶（未進知識庫）',
+    # ── lr4_private_badge ──
+    'lr4_private_badge': '客戶私事',
+    # ── lr4_private_kind_address ──
+    'lr4_private_kind_address': '地址',
+    # ── lr4_private_kind_commitment ──
+    'lr4_private_kind_commitment': '約定',
+    # ── lr4_private_kind_family ──
+    'lr4_private_kind_family': '家人',
+    # ── lr4_private_kind_health ──
+    'lr4_private_kind_health': '健康',
+    # ── lr4_private_kind_identity ──
+    'lr4_private_kind_identity': '證件/賬號',
+    # ── lr4_private_kind_meet ──
+    'lr4_private_kind_meet': '見面',
+    # ── lr4_private_kind_money ──
+    'lr4_private_kind_money': '金額',
+    # ── lr4_private_kind_name ──
+    'lr4_private_kind_name': '人名',
+    # ── lr4_private_tip ──
+    'lr4_private_tip': '含人名 / 金額 / 地點 / 約定等客戶私事——透過後寫入該客戶的 AI 記憶，不進共享知識庫（防跨客戶串記憶）',
+    # ── lr4_select_hint ──
+    'lr4_select_hint': '勾選要透過的條目，再點「透過已選」',
+    # ── lr4_zh_label ──
+    'lr4_zh_label': '譯文',
     # ── lr_batch_approved ──
     'lr_batch_approved': '已批次透過 {n} 條',
     # ── lr_batch_result ──
@@ -11857,12 +11970,18 @@ ZH_HANT = {
     'mb_perpetual': '永久有效',
     # ── mb_plan_basic ──
     'mb_plan_basic': '基礎版',
+    # ── mb_plan_basic_override ──
+    'mb_plan_basic_override': '基礎版（廠商自營）',
     # ── mb_plan_community ──
     'mb_plan_community': '社群版',
     # ── mb_plan_flagship ──
     'mb_plan_flagship': '旗艦版',
+    # ── mb_plan_flagship_override ──
+    'mb_plan_flagship_override': '旗艦版（廠商自營）',
     # ── mb_plan_pro ──
     'mb_plan_pro': '專業版',
+    # ── mb_plan_pro_override ──
+    'mb_plan_pro_override': '專業版（廠商自營）',
     # ── mb_plan_src_community ──
     'mb_plan_src_community': '未啟用授權',
     # ── mb_plan_src_license ──
@@ -14217,6 +14336,18 @@ ZH_HANT = {
     'nav_grp_toggle_hint': '點選摺疊/展開分組',
     # ── nav_personal_settings ──
     'nav_personal_settings': '個人設定',
+    # ── nav_settings_brand ──
+    'nav_settings_brand': '品牌 / 白標',
+    # ── nav_settings_demo ──
+    'nav_settings_demo': '試用 / 演示資料',
+    # ── nav_settings_license ──
+    'nav_settings_license': '授權 / 啟用',
+    # ── nav_tier_internal ──
+    'nav_tier_internal': '研發',
+    # ── nav_tier_partner ──
+    'nav_tier_partner': '代理商',
+    # ── nav_tier_tip ──
+    'nav_tier_tip': '客戶版不顯示此項（開發者模式可見）',
     # ── nav_usage_center ──
     'nav_usage_center': '用量與額度',
     # ── nav_voice_eval ──
@@ -14258,6 +14389,7 @@ ZH_HANT = {
     'ntf.rc_capsule': '維護預熱中 · 約 {n} 分鐘',
     'ntf.rc_notif': '系統完成了一次維護，預熱約 {n} 分鐘，期間偶發載入慢屬正常。',
     'ntf.rc_toast': '系統剛完成維護，正在預熱，約 {n} 分鐘後恢復最佳狀態；期間偶發載入慢屬正常，無需重新整理。',
+    'ntf.summary_n': '有 {n} 項需要注意 ›',
     'ntf.type_sys': '系統狀態',
     # ── operator ──
     'operator': '操作人',
@@ -18908,6 +19040,12 @@ ZH_HANT = {
     'ov_zero_none_avail': '還沒有接入任何渠道服務。Telegram 請到渠道頁配置；LINE / Messenger / WhatsApp 屬真機自動化，需在「真機裝置」連線手機後啟用。',
     # ── ov_zero_none_running ──
     'ov_zero_none_running': '有 {n} 個渠道服務可用，但當前都未執行 —— 可在下方渠道卡上點「啟動」。',
+    # ── pe_back ──
+    'pe_back': '返回',
+    # ── pe_body ──
+    'pe_body': '這個頁面需要的內容還沒有隨本版本一起安裝；如需開通請聯絡客服。',
+    # ── pe_title ──
+    'pe_title': '頁面暫不可用',
     # ── personas ──
     'personas': '人設工作室',
     # ── pf_ai ──
@@ -19311,6 +19449,22 @@ ZH_HANT = {
     'psn_back': '返回',
     # ── psn_backup ──
     'psn_backup': '備份',
+    # ── psn_backup_all ──
+    'psn_backup_all': '備份全部人設',
+    # ── psn_backup_desc ──
+    'psn_backup_desc': '人設儲存後立即生效並自動落盤，日常無需操作。備份用於換機遷移、誤刪找回或在多台機器間同步；恢復前會先預覽「新增 N · 覆蓋 N」再確認。',
+    # ── psn_backup_done ──
+    'psn_backup_done': '已下載備份：{n} 個人設，含 {a} 個人設的相簿引用清單',
+    # ── psn_backup_master_only ──
+    'psn_backup_master_only': '備份與恢復由主賬號操作；如需遷移人設，請聯絡主賬號。',
+    # ── psn_backup_single_hint ──
+    'psn_backup_single_hint': '單個人設：卡片右上「匯出」',
+    # ── psn_backup_sub ──
+    'psn_backup_sub': '備份到檔案 · 從備份恢復 · 換機遷移',
+    # ── psn_backup_title ──
+    'psn_backup_title': '人裝置份與遷移',
+    # ── psn_backup_working ──
+    'psn_backup_working': '正在打包人設…',
     # ── psn_behav_claim_chip ──
     'psn_behav_claim_chip': '認領了！',
     # ── psn_behav_fail ──
@@ -19332,9 +19486,9 @@ ZH_HANT = {
     # ── psn_bind_sub ──
     'psn_bind_sub': '輸入 Chat ID 並選擇人設，建立精準繫結關係',
     # ── psn_bio_cov_gap ──
-    'psn_bio_cov_gap': '（缺 {miss} 塊向量，建議點「補齊向量」）',
+    'psn_bio_cov_gap': '（還有 {miss} 段 AI 查不到，點「讓 AI 能檢索這份傳記」補齊）',
     # ── psn_bio_coverage ──
-    'psn_bio_coverage': '向量 {emb}/{chunks} · 句向量 {sents} · 實體別名 {aliases} 鍵',
+    'psn_bio_coverage': '檢索索引已就緒 {emb}/{chunks} 段 · 逐句 {sents} · 名字別名 {aliases}',
     # ── psn_bio_del_bound_confirm ──
     'psn_bio_del_bound_confirm': '仍要強制刪除該傳記庫存嗎？',
     # ── psn_bio_del_confirm ──
@@ -19378,29 +19532,33 @@ ZH_HANT = {
     # ── psn_bio_probe_score_t ──
     'psn_bio_probe_score_t': '關鍵詞 {kw} · 語義 {sem}',
     # ── psn_bio_probe_sub ──
-    'psn_bio_probe_sub': '輸入客戶可能問的問題，看看會命中哪些資料片段',
+    'psn_bio_probe_sub': '輸入客戶可能問的問題，看看 AI 會從傳記裡查到哪些片段',
     # ── psn_bio_probe_title ──
-    'psn_bio_probe_title': '檢索自測',
+    'psn_bio_probe_title': '試試 AI 能查到什麼',
     # ── psn_bio_probe_topk ──
     'psn_bio_probe_topk': '返回片段數',
     # ── psn_bio_reembed_btn ──
-    'psn_bio_reembed_btn': '補齊向量',
+    'psn_bio_reembed_btn': '讓 AI 能檢索這份傳記',
     # ── psn_bio_reembed_busy ──
-    'psn_bio_reembed_busy': '補齊任務繁忙，請稍後再試',
+    'psn_bio_reembed_busy': '後台正忙，請稍後再點一次',
     # ── psn_bio_reembed_done ──
-    'psn_bio_reembed_done': '向量已補齊：{updated} 段 · 新增 {sents} 句',
+    'psn_bio_reembed_done': '檢索索引已補齊：{updated} 段 · 新增 {sents} 句。AI 現在能查到整份傳記了',
     # ── psn_bio_reembed_embed_off ──
-    'psn_bio_reembed_embed_off': '嵌入服務不可用，向量未補齊（檢索仍按關鍵詞退化執行）',
+    'psn_bio_reembed_embed_off': '檢索服務暫不可用，本次沒有補上；已建好的索引仍可用，稍後再點一次即可',
     # ── psn_bio_reembed_fail ──
-    'psn_bio_reembed_fail': '向量補齊失敗',
+    'psn_bio_reembed_fail': '檢索索引補齊失敗',
+    # ── psn_bio_reembed_full_note ──
+    'psn_bio_reembed_full_note': '索引齊全，無需補齊',
+    # ── psn_bio_reembed_full_tip ──
+    'psn_bio_reembed_full_tip': '檢索索引已齊全（每一段都能被 AI 查到），無需補齊',
     # ── psn_bio_reembed_no_stock ──
-    'psn_bio_reembed_no_stock': '該人設尚未入庫長傳記，先入庫再補向量',
+    'psn_bio_reembed_no_stock': '該人設還沒有入庫長傳記，先入庫再建索引',
     # ── psn_bio_reembed_nothing ──
-    'psn_bio_reembed_nothing': '向量已是最新，無需補齊',
+    'psn_bio_reembed_nothing': '檢索索引已齊全，無需補齊',
     # ── psn_bio_reembed_running ──
-    'psn_bio_reembed_running': '正在補齊向量…',
+    'psn_bio_reembed_running': '正在建立檢索索引…',
     # ── psn_bio_reembed_tip ──
-    'psn_bio_reembed_tip': '給缺語義向量的段落和句子補嵌。早於向量預計算上線入庫的傳記會靜默退化成純關鍵詞檢索，補一次即可恢復精度。',
+    'psn_bio_reembed_tip': '給還沒建索引的段落和句子建索引。早期入庫的傳記 AI 只能按關鍵詞粗查，補一次就能按意思精確查到。',
     # ── psn_bio_stashed ──
     'psn_bio_stashed': '長傳記已入庫（{n} 段）',
     # ── psn_bound_chats ──
@@ -19571,6 +19729,12 @@ ZH_HANT = {
     'psn_export_import_profiles': '匯出 / 匯入 Profiles',
     # ── psn_export_json ──
     'psn_export_json': '匯出 JSON',
+    # ── psn_export_one ──
+    'psn_export_one': '匯出',
+    # ── psn_export_one_done ──
+    'psn_export_one_done': '已下載「{name}」的備份檔案',
+    # ── psn_export_one_t ──
+    'psn_export_one_t': '匯出這個人設為 JSON 備份檔案（可在別的機器「從備份恢復」）',
     # ── psn_export_rules_t ──
     'psn_export_rules_t': '匯出規則為 JSON',
     # ── psn_field_diff ──
@@ -19725,6 +19889,46 @@ ZH_HANT = {
     'psn_ite_hint': 'Enter 新增 · Esc 關閉 · × 刪除',
     # ── psn_ite_ph ──
     'psn_ite_ph': '輸入標籤，Enter 確認…',
+    # ── psn_ji_applied ──
+    'psn_ji_applied': '已填充 {n} 個欄位（30 秒內可撤銷）',
+    # ── psn_ji_cancel ──
+    'psn_ji_cancel': '取消',
+    # ── psn_ji_col_field ──
+    'psn_ji_col_field': '欄位',
+    # ── psn_ji_col_new ──
+    'psn_ji_col_new': '匯入後',
+    # ── psn_ji_col_old ──
+    'psn_ji_col_old': '當前值',
+    # ── psn_ji_confirm ──
+    'psn_ji_confirm': '確認填充勾選欄位',
+    # ── psn_ji_confirm_hint ──
+    'psn_ji_confirm_hint': '填充只改表單，點「儲存」才落庫；30 秒內可撤銷。',
+    # ── psn_ji_confirm_q ──
+    'psn_ji_confirm_q': '確認用匯入值覆蓋 {n} 個欄位？\n{fields}',
+    # ── psn_ji_dev_tag ──
+    'psn_ji_dev_tag': '開發者',
+    # ── psn_ji_hint ──
+    'psn_ji_hint': '只填充你勾選的欄位；填充後 30 秒內可撤銷；仍需點「儲存」才落庫。',
+    # ── psn_ji_not_object ──
+    'psn_ji_not_object': '已拒絕：貼上的內容不是一份人設物件（需要形如 {"name": …} 的 JSON）。',
+    # ── psn_ji_nothing ──
+    'psn_ji_nothing': 'JSON 裡沒有可填充的欄位。',
+    # ── psn_ji_parse_preview ──
+    'psn_ji_parse_preview': '解析並預覽',
+    # ── psn_ji_pick_none ──
+    'psn_ji_pick_none': '沒有勾選任何欄位。',
+    # ── psn_ji_serving_warn ──
+    'psn_ji_serving_warn': '這個人設正在服務 {n} 個賬號/會話——填充並儲存後客戶側立即生效，請逐欄位核對。',
+    # ── psn_ji_unchanged ──
+    'psn_ji_unchanged': '（無變化）',
+    # ── psn_ji_undo ──
+    'psn_ji_undo': '撤銷',
+    # ── psn_ji_undo_expired ──
+    'psn_ji_undo_expired': '撤銷視窗已過（30 秒）。未儲存的話直接關閉抽屜即可放棄。',
+    # ── psn_ji_undone ──
+    'psn_ji_undone': '已撤銷本次填充，表單恢復為填充前的值。',
+    # ── psn_ji_unknown_fields ──
+    'psn_ji_unknown_fields': '已拒絕：JSON 裡有人設檔案不認識的欄位（{fields}）。請檢查是不是粘錯了內容。',
     # ── psn_js_001 ──
     'psn_js_001': '編輯人設',
     # ── psn_js_002 ──
@@ -20535,6 +20739,10 @@ ZH_HANT = {
     'psn_name_ph': '小靈',
     # ── psn_new_profile ──
     'psn_new_profile': '新建人設',
+    # ── psn_not_bound ──
+    'psn_not_bound': '未繫結',
+    # ── psn_not_bound_t ──
+    'psn_not_bound_t': '沒有任何賬號或會話在用這個人設；點「應用到…」繫結後才會對客戶生效。不影響資料完善度',
     # ── psn_not_live ──
     'psn_not_live': '未啟用',
     # ── psn_not_live_t ──
@@ -20821,6 +21029,34 @@ ZH_HANT = {
     'psn_reply_length': '回覆長度',
     # ── psn_reset ──
     'psn_reset': '重置',
+    # ── psn_restore_add_h ──
+    'psn_restore_add_h': '將新增：',
+    # ── psn_restore_bad_json ──
+    'psn_restore_bad_json': '這個檔案不是合法的 JSON，無法恢復。',
+    # ── psn_restore_bad_shape ──
+    'psn_restore_bad_shape': '這個檔案不是人裝置份（缺少 profiles 列表）。',
+    # ── psn_restore_confirm ──
+    'psn_restore_confirm': '確認恢復',
+    # ── psn_restore_confirm_q ──
+    'psn_restore_confirm_q': '確認恢復？新增 {add} 個、覆蓋 {over} 個已有人設。',
+    # ── psn_restore_done ──
+    'psn_restore_done': '已恢復：新增 {add} · 覆蓋 {over}',
+    # ── psn_restore_from ──
+    'psn_restore_from': '從備份恢復…',
+    # ── psn_restore_invalid ──
+    'psn_restore_invalid': '{n} 條無法識別（缺 id 或不是人設物件），會跳過。',
+    # ── psn_restore_note ──
+    'psn_restore_note': '只新增/覆蓋備份裡出現的人設，其餘不動；覆蓋前的版本可在編輯器「撤銷」裡找回。',
+    # ── psn_restore_over_h ──
+    'psn_restore_over_h': '將覆蓋 {n} 個已有人設（同 ID）——它們當前的內容會被備份裡的版本替換：',
+    # ── psn_restore_previewing ──
+    'psn_restore_previewing': '正在核對備份內容…',
+    # ── psn_restore_summary ──
+    'psn_restore_summary': '{file}：新增 {add} · 覆蓋 {over}',
+    # ── psn_restore_warnings ──
+    'psn_restore_warnings': '{n} 條帶提醒（有未知欄位或語音配置需修正），恢復後請到編輯器核對。',
+    # ── psn_restore_working ──
+    'psn_restore_working': '正在恢復…',
     # ── psn_retire_text_suffix ──
     'psn_retire_text_suffix': '（舊設定已刪除：這不屬於現在的你，絕不認領；歷史訊息裡的相關說法一律作廢）',
     # ── psn_retired_conflict_warn ──
@@ -20925,6 +21161,12 @@ ZH_HANT = {
     'psn_select_target_profile': '（選擇目標 profile）',
     # ── psn_serving ──
     'psn_serving': '服務中',
+    # ── psn_serving_default_t ──
+    'psn_serving_default_t': '同時是全域性預設人設',
+    # ── psn_serving_split ──
+    'psn_serving_split': '服務中 {a} 個賬號 · {c} 個會話',
+    # ── psn_serving_split_t ──
+    'psn_serving_split_t': '賬號預設繫結 {a} 個（含執行時登錄檔與配置檔案）· 會話級繫結 {c} 個',
     # ── psn_sf_all ──
     'psn_sf_all': '全部',
     # ── psn_sf_bound ──
@@ -21099,6 +21341,8 @@ ZH_HANT = {
     'psn_switch_now': '立即切換',
     # ── psn_switch_to_profile ──
     'psn_switch_to_profile': '切換為 Profile',
+    # ── psn_sync_dev_h ──
+    'psn_sync_dev_h': '開發者：同步到 personas.yaml（研發遷移殘留，執行不依賴它）',
     # ── psn_sync_now_yaml ──
     'psn_sync_now_yaml': '立即同步 yaml',
     # ── psn_sync_to_yaml ──
@@ -21174,15 +21418,15 @@ ZH_HANT = {
     # ── psn_use_default ──
     'psn_use_default': '（使用預設人設）',
     # ── psn_vc_bound ──
-    'psn_vc_bound': '已繫結克隆音色：{voice}',
+    'psn_vc_bound': '已登記錄音：{voice}',
     # ── psn_vc_enrolled_synced ──
     'psn_vc_enrolled_synced': '克隆音色已登記並掛載到本人設：{backend}',
     # ── psn_vc_h ──
     'psn_vc_h': '克隆音色（跟隨人設）',
     # ── psn_vc_none ──
-    'psn_vc_none': '未繫結克隆音色——在下方登記即可',
+    'psn_vc_none': '尚未上傳錄音——在下方登記即可',
     # ── psn_vc_not_ready ──
-    'psn_vc_not_ready': '（未就緒：參考音缺失或未授權，請重新登記）',
+    'psn_vc_not_ready': '登記未就緒（缺參考錄音或未授權），請重新上傳登記',
     # ── psn_vc_preserved ──
     'psn_vc_preserved': '已保留本人設的克隆音色登記（表單裡的空語音設定不會覆蓋它）',
     # ── psn_vc_purge_q ──
@@ -21196,7 +21440,7 @@ ZH_HANT = {
     # ── psn_vc_unbind_ok ──
     'psn_vc_unbind_ok': '已解綁',
     # ── psn_vc_unbind_q ──
-    'psn_vc_unbind_q': '解綁人設 {pid} 的克隆音色？解綁後回落預設音色。',
+    'psn_vc_unbind_q': '解綁人設 {pid} 的克隆音色？解綁後請為該人設重新選擇語音方式（不會自動改用預設聲）。',
     # ── psn_verify_clean ──
     'psn_verify_clean': '✅ 驗證透過：人設指令（完整版+精簡版）已不含「{terms}」；撤銷釘子在場',
     # ── psn_verify_leak ──
@@ -21205,6 +21449,58 @@ ZH_HANT = {
     'psn_verify_no_pin': '提示：撤銷清單為空——歷史視窗內客戶舊話題可能誘導復讀，建議對刪除詞「加入撤銷清單」',
     # ── psn_verify_pin_age ──
     'psn_verify_pin_age': '撤銷釘子 {n} 條（最老 {days} 天）；歷史視窗滾出後可考慮清理過老條目',
+    # ── psn_vm_clone ──
+    'psn_vm_clone': '用我上傳的錄音（克隆聲）',
+    # ── psn_vm_clone_sub ──
+    'psn_vm_clone_sub': '在下方上傳參考錄音登記；引擎離線時改發文字，不會換成別的聲音',
+    # ── psn_vm_dev_h ──
+    'psn_vm_dev_h': '開發者：手動指定引擎 / 音色 ID',
+    # ── psn_vm_dev_note ──
+    'psn_vm_dev_note': '這裡的改動會覆蓋上方三態的結果；儲存時同樣過合法性校驗。',
+    # ── psn_vm_err_clone_no_ref ──
+    'psn_vm_err_clone_no_ref': '選了「用我上傳的錄音」但還沒有錄音：請先在語音頁上傳參考錄音，或改選「用預置聲」/「不發語音」。',
+    # ── psn_vm_err_pick_mode ──
+    'psn_vm_err_pick_mode': '請先在語音頁選擇發聲方式（克隆聲 / 預置聲 / 不發語音）。',
+    # ── psn_vm_err_preset_pick ──
+    'psn_vm_err_preset_pick': '選了「用預置聲」但還沒挑音色：請按語言 · 性別選一把並試聽。',
+    # ── psn_vm_gender ──
+    'psn_vm_gender': '性別',
+    # ── psn_vm_gender_any ──
+    'psn_vm_gender_any': '不限',
+    # ── psn_vm_lang ──
+    'psn_vm_lang': '語言',
+    # ── psn_vm_no_voice_for_filter ──
+    'psn_vm_no_voice_for_filter': '該語言暫無此性別的預置聲，換個篩選試試',
+    # ── psn_vm_off ──
+    'psn_vm_off': '不發語音',
+    # ── psn_vm_off_sub ──
+    'psn_vm_off_sub': '這個人設只回文字（新建人設預設）',
+    # ── psn_vm_pick_first ──
+    'psn_vm_pick_first': '先在列表裡選一把音色再試聽',
+    # ── psn_vm_preset ──
+    'psn_vm_preset': '用預置聲',
+    # ── psn_vm_preset_sub ──
+    'psn_vm_preset_sub': '按語言 · 性別挑一把現成的聲音，可試聽',
+    # ── psn_vm_preview ──
+    'psn_vm_preview': '試聽',
+    # ── psn_vm_st_clone_fix_mizuki ──
+    'psn_vm_st_clone_fix_mizuki': '配置需修正：引擎是克隆聲但沒有錄音，填的又是預置音色名「{voice}」。要用這把預置聲請改選「用預置聲」；要用克隆聲請先在下方上傳錄音。',
+    # ── psn_vm_st_clone_need_upload ──
+    'psn_vm_st_clone_need_upload': '配置需修正：還沒有錄音。請在下方上傳參考錄音完成登記，或改選「用預置聲」/「不發語音」。',
+    # ── psn_vm_st_clone_ok ──
+    'psn_vm_st_clone_ok': '已繫結克隆聲：{file}',
+    # ── psn_vm_st_clone_stray_voice ──
+    'psn_vm_st_clone_stray_voice': '配置需修正：克隆聲不能搭配預置音色名「{voice}」。要用這把預置聲請改選「用預置聲」；要用克隆聲請重新點選「用我上傳的錄音」再儲存，音色名會被清掉。',
+    # ── psn_vm_st_inherit ──
+    'psn_vm_st_inherit': '沿用全域性語音設定（未單獨指定音色）。建議為這個人設明確選一把預置聲，避免全域性設定變動時聲音跟著變。',
+    # ── psn_vm_st_off ──
+    'psn_vm_st_off': '此人設不發語音，客戶只會收到文字。',
+    # ── psn_vm_st_preset ──
+    'psn_vm_st_preset': '預置聲：{lang} · {gender} · {name}',
+    # ── psn_vm_st_preset_pick ──
+    'psn_vm_st_preset_pick': '請按語言 · 性別選一把音色並試聽',
+    # ── psn_vm_voice ──
+    'psn_vm_voice': '音色',
     # ── psn_voice_backend ──
     'psn_voice_backend': '語音 backend',
     # ── psn_voice_clone_cmd ──
@@ -21938,7 +22234,7 @@ ZH_HANT = {
     # ── rps_bub_enabled ──
     'rps_bub_enabled': '啟用分條傳送',
     # ── rps_bub_enabled_hint ──
-    'rps_bub_enabled_hint': '關閉＝整條一次發出（預設）。開啟後長回覆按句子邊界拆條，媒體/語音回覆不受影響。',
+    'rps_bub_enabled_hint': '關閉＝整條一次發出（出廠預設）。開啟後只有草稿裡有顯式換行的長回覆才會按行拆條，短回覆永遠整條；媒體/語音回覆不受影響。',
     # ── rps_bub_gap ──
     'rps_bub_gap': '條間思考停頓（秒）',
     # ── rps_bub_gap_hint ──
@@ -21955,10 +22251,16 @@ ZH_HANT = {
     'rps_bub_maxgap': '單個間隔封頂（秒）',
     # ── rps_bub_maxgap_hint ──
     'rps_bub_maxgap_hint': '停頓 + 打字合計不超過這個值——長句不至於讓客戶乾等。',
+    # ── rps_bub_nl_only ──
+    'rps_bub_nl_only': '僅顯式換行才拆',
+    # ── rps_bub_nl_only_hint ──
+    'rps_bub_nl_only_hint': '開（預設）＝只按草稿裡的顯式換行成條，一行一條、沒有換行就整條發出；關＝退回演算法切句（逐句 / 按句界打包）。總長不到 80（中文字數；英文約 320 字元）的短回覆無論如何都不拆。',
     # ── rps_bub_per_sent ──
     'rps_bub_per_sent': '逐句拆條',
     # ── rps_bub_per_sent_hint ──
-    'rps_bub_per_sent_hint': '開＝每句一條（碎句感更強）；關＝按長度均衡打包 2-3 條（預設）。',
+    'rps_bub_per_sent_hint': '演算法切句檔的子選項（需先關掉「僅顯式換行才拆」）：開＝每句一條（碎句感更強、最像機器）；關＝按長度均衡打包 2-3 條（預設）。',
+    # ── rps_bub_risk ──
+    'rps_bub_risk': '⚠ 拆條會形成固定節奏，客戶可能據此識別 AI（已有付費客戶被識破的實錄）；同一人設跨平台也應保持一致。建議關閉。',
     # ── rps_bub_speed ──
     'rps_bub_speed': '打字手速（秒/字元）',
     # ── rps_bub_speed_cjk ──
@@ -22225,8 +22527,12 @@ ZH_HANT = {
     'rps_guard_unlimited': '不限額',
     # ── rps_holding_hint ──
     'rps_holding_hint': '需人工審批的訊息（L3）先回「稍等我看看哈~」，避免客戶被已讀不回',
+    # ── rps_holding_hint2 ──
+    'rps_holding_hint2': '等人工審批的訊息先按客戶語言回一句安全的緩衝語（如「稍等我看看」的對應語種），避免客戶被已讀不回；同一客戶 30 分鐘內只發一次，危機場景不發。預設關。',
     # ── rps_holding_label ──
     'rps_holding_label': '待人審訊息先發一句緩衝語',
+    # ── rps_holding_label2 ──
+    'rps_holding_label2': '人審期先發一句緩衝語',
     # ── rps_holding_title ──
     'rps_holding_title': '人審期緩衝話術',
     # ── rps_human_title ──
@@ -22399,6 +22705,10 @@ ZH_HANT = {
     'rps_plat_hint': '按聊天軟體微調：留空 / 選「跟隨全域性」的格子全部繼承上方全域性值。不支援的能力格已按平台實況禁用。',
     # ── rps_plat_prio ──
     'rps_plat_prio': '生效優先順序：人設覆寫 > 平台覆寫 > 全域性預設。「檔位封頂」列是隻降不升的上限（會話顯式檔位仍最優先、只會被壓低不會被抬高）；其餘列是普通覆寫。',
+    # ── rps_plat_sum ──
+    'rps_plat_sum': '{n} 格已覆寫',
+    # ── rps_plat_sum_none ──
+    'rps_plat_sum_none': '全部跟隨全域性',
     # ── rps_plat_title ──
     'rps_plat_title': '平台專家覆寫',
     # ── rps_plat_unsupported ──
@@ -22417,12 +22727,18 @@ ZH_HANT = {
     'rps_po_extra_note': '該人設另有 YAML 手調引數（儲存時會保留）',
     # ── rps_po_follow ──
     'rps_po_follow': '跟隨全域性',
+    # ── rps_po_follow_val ──
+    'rps_po_follow_val': '跟隨全域性（{v}）',
     # ── rps_po_hint ──
     'rps_po_hint': '不同人設可以有不同打位元組奏（急性子快、慢熱型慢）。留空的格子跟隨上方全域性值；表裡沒有的人設全按全域性。',
+    # ── rps_po_kept ──
+    'rps_po_kept': '{n} 個人設已有自定義節奏（{list}），繼續生效；修改請到人設工作室。',
     # ── rps_po_max ──
     'rps_po_max': '最慢（秒）',
     # ── rps_po_min ──
     'rps_po_min': '最快（秒）',
+    # ── rps_po_moved ──
+    'rps_po_moved': '每個人設的打位元組奏（快 / 中 / 慢）請到「人設工作室」對應人設裡設定；這裡不再按人設 ID 填秒數。',
     # ── rps_po_persona ──
     'rps_po_persona': '人設 ID',
     # ── rps_po_title ──
@@ -22687,10 +23003,26 @@ ZH_HANT = {
     'rps_val_emoji_rich': '較多',
     # ── rps_val_moderate ──
     'rps_val_moderate': '適中',
+    # ── rps_vm_off ──
+    'rps_vm_off': '關閉',
     # ── rps_voice_enabled ──
     'rps_voice_enabled': '啟用語音回覆',
     # ── rps_voice_enabled_hint ──
     'rps_voice_enabled_hint': '全自動鏈路按觸發方式把部分回覆以克隆聲語音發出',
+    # ── rps_voice_engine_off ──
+    'rps_voice_engine_off': '引擎離線',
+    # ── rps_voice_engine_on ──
+    'rps_voice_engine_on': '引擎線上',
+    # ── rps_voice_mode ──
+    'rps_voice_mode': '語音回覆',
+    # ── rps_voice_mode_hint ──
+    'rps_voice_mode_hint': '「關閉」是所有語音路徑的總閘：主動關懷、自動問候、人設語音設定只能在這個範圍內收窄，不能繞過它出聲。其餘三檔決定全自動鏈路什麼時候用人設聲線回語音。',
+    # ── rps_voice_risk_engine_offline ──
+    'rps_voice_risk_engine_offline': '所選聲線引擎離線',
+    # ── rps_voice_risk_timing_out ──
+    'rps_voice_risk_timing_out': '語音服務超時熔斷中',
+    # ── rps_voice_risk_unreachable ──
+    'rps_voice_risk_unreachable': '語音服務連不上',
     # ── rps_voice_title ──
     'rps_voice_title': '語音回覆',
     # ── rps_voice_trigger ──
@@ -23275,6 +23607,8 @@ ZH_HANT = {
     'section_usage_billing': '用量與計費',
     # ── section_workbench ──
     'section_workbench': '工作台',
+    # ── set_demo_blocked ──
+    'set_demo_blocked': '工作區已有真實資料（會話 {c} · 賬號 {a}），演示資料只能在空工作區鋪',
     # ── set_dirty ──
     'set_dirty': '● 有未儲存的修改',
     # ── set_js_001 ──
@@ -23479,6 +23813,10 @@ ZH_HANT = {
     'set_js_100': '線索/轉化',
     # ── set_js_p01 ──
     'set_js_p01': '✓ 已儲存（{n} 項）',
+    # ── set_lic_no_file ──
+    'set_lic_no_file': '未檢測到授權檔案',
+    # ── set_lic_sub_l4 ──
+    'set_lic_sub_l4': '授權狀態以授權檔案為準；右上角檔位徽標與本卡同源',
     # ── set_s001 ──
     'set_s001': '與轉接設定',
     # ── set_s002 ──
@@ -24203,6 +24541,10 @@ ZH_HANT = {
     'sf.pilot.switched': '駕駛權已切換',
     'sf.pilot.t': '該賬號的自動化持有者。同一賬號同一時刻只有一處在自動傳送——工作台託管＝AI 全自動在統一收件箱；原生頁託管＝工作台自動鏈讓位。點選切換。',
     'sf.pilot.workspace': '託管：工作台',
+    # ── sg_assets_missing ──
+    'sg_assets_missing': '曲庫 {t} 首 · 聲庫 {v} 個 · 備貨 {s} 段：資產不齊，唱歌能力不可開啟（開著會讓客戶求歌建單進失敗）；如需開通請聯絡客服。',
+    # ── sg_assets_on_missing ──
+    'sg_assets_on_missing': '⚠ 唱歌能力已開啟但資產不齊（曲庫 {t} 首 · 聲庫 {v} 個 · 備貨 {s} 段）：客戶求歌會建單進失敗。建議先關閉，或聯絡客服補齊資產。',
     # ── sg_col_persona ──
     'sg_col_persona': '人設',
     # ── sg_col_voice ──
@@ -25637,6 +25979,8 @@ ZH_HANT = {
     'us_sess_tech': '技術資訊',
     # ── us_sess_title ──
     'us_sess_title': '已登入的裝置',
+    # ── user_menu_t ──
+    'user_menu_t': '賬號選單：修改密碼 / 切換語言 / 退出',
     # ── users ──
     'users': '使用者管理',
     # ── veval_blind ──
@@ -26313,16 +26657,38 @@ ZH_HANT = {
     'wf_bulk_btn': '📤 批次掛鏈',
     # ── wf_bulk_btn_tip ──
     'wf_bulk_btn_tip': '按篩選結果給一批客戶啟動本鏈；先預覽再確認',
+    # ── wf_bulk_cancel ──
+    'wf_bulk_cancel': '取消',
     # ── wf_bulk_confirm ──
     'wf_bulk_confirm': '{n} 個會話將啟動本鏈（沉默≥{d}天），繼續？',
     # ── wf_bulk_done ──
     'wf_bulk_done': '已為 {n} 個會話啟動本鏈',
+    # ── wf_bulk_done_undo ──
+    'wf_bulk_done_undo': '已掛 {n} 個（15 秒內可撤銷）',
     # ── wf_bulk_fail ──
     'wf_bulk_fail': '批次啟動失敗',
     # ── wf_bulk_none ──
     'wf_bulk_none': '沒有符合條件的會話',
+    # ── wf_bulk_ok ──
+    'wf_bulk_ok': '確認掛鏈',
+    # ── wf_bulk_preview ──
+    'wf_bulk_preview': '符合條件 {n} · 將掛 {w} · 跳過 {s}',
+    # ── wf_bulk_preview_fail ──
+    'wf_bulk_preview_fail': '預覽暫不可用，確認後仍按服務端實際命中掛鏈',
     # ── wf_bulk_prompt ──
     'wf_bulk_prompt': '給沉默≥N天的客戶批次掛上本鏈（每次最多 50 個；自動剔除在途/7天內已掛過的）。輸入沉默天數：',
+    # ── wf_bulk_prompt_hint ──
+    'wf_bulk_prompt_hint': '給沉默≥N 天的客戶批次掛上本鏈（每次最多 50 個；在途或 7 天內已掛過的會自動跳過）。下方實時顯示會命中多少客戶。',
+    # ── wf_bulk_prompt_title ──
+    'wf_bulk_prompt_title': '批次掛上本鏈：客戶沉默滿幾天？',
+    # ── wf_bulk_undo ──
+    'wf_bulk_undo': '撤銷',
+    # ── wf_bulk_undo_done ──
+    'wf_bulk_undo_done': '已撤銷 {n} 個剛掛上的鏈',
+    # ── wf_bulk_undo_partial ──
+    'wf_bulk_undo_partial': '撤銷 {n} 個，{f} 個失敗（可能已開始執行）',
+    # ── wf_bulk_unit_days ──
+    'wf_bulk_unit_days': '天',
     # ── wf_chain_auto_badge ──
     'wf_chain_auto_badge': '自動推進',
     # ── wf_chain_disabled ──
@@ -26891,7 +27257,14 @@ ZH_HANT = {
     'ws.banner.name.restartcool': '維護視窗',
     'ws.banner.name.session': '登入狀態',
     'ws.cap.denied_msg': '當前賬號未開通此能力（許可權閘已攔截）。如需使用請聯絡管理員開通。',
+    'ws.chandown.cancel': '取消',
     'ws.chandown.close_t': '關閉本條提醒：本次會話內同一事件不再彈出；通道圖示仍會標示該賬號離線，恢復線上後自動消失',
+    'ws.chandown.disable_btn': '標為已停用',
+    'ws.chandown.disable_confirm': '把 {who} 標為已停用？系統將停止拉起它、不再提醒斷線，賬號欄灰顯；登入憑據保留，之後在「賬號管理」重新登入一次即恢復。',
+    'ws.chandown.disable_denied': '標為已停用需要管理許可權，請聯絡管理員處理；您可以先選「不再提醒此賬號」',
+    'ws.chandown.disable_fail': '標為已停用失敗：{err}',
+    'ws.chandown.disable_ok': '{who} 已標為已停用：不再提醒，賬號欄灰顯；需要時到「賬號管理」重新登入即恢復',
+    'ws.chandown.disable_old_backend': '服務端尚未裝載本功能（等待重啟生效）；您可以先選「不再提醒此賬號」',
     'ws.chandown.dismiss_t': '暫時隱藏（24 小時內或狀態變化前不再顯示）',
     'ws.chandown.dur_dh': '{d} 天 {h} 小時',
     'ws.chandown.dur_hm': '{h} 小時 {m} 分鐘',
@@ -26902,7 +27275,14 @@ ZH_HANT = {
     'ws.chandown.logout_denied': '登出需要管理許可權，請聯絡管理員處理',
     'ws.chandown.logout_fail': '登出失敗：{err}',
     'ws.chandown.logout_ok': '已登出，提醒將停止；如需繼續使用請到「賬號管理」重新接入。',
+    'ws.chandown.mute_acct': '不再提醒此賬號',
+    'ws.chandown.mute_acct_t': '只靜默這個賬號的斷線提醒（記在伺服器，換電腦也不再彈）；其它賬號掉線照常提醒。重新登入該賬號後可再收提醒',
+    'ws.chandown.mute_forever_ok': '已不再提醒 {who} 的斷線；通道圖示仍會標示其離線狀態',
+    'ws.chandown.mute_hours_ok': '{who} 的斷線提醒已靜默 {h} 小時',
+    'ws.chandown.options': '處理 ›',
+    'ws.chandown.options_t': '開啟出路：去重連 / 標為已停用 / 登出 / 1 小時 / 24 小時 / 不再提醒此賬號',
     'ws.chandown.profile_gone': '該賬號在本伺服器已沒有登入檔案（可能已在其他電腦登入，或登入視窗已被其他賬號使用）。可點「登出該賬號」停止提醒；需要繼續使用請到「賬號管理」重新接入。',
+    'ws.chandown.reconnect_btn': '去重連',
     'ws.chandown.relogin_btn': '重新登入',
     'ws.chandown.relogin_denied': '當前賬號無權觸發重登，請通知管理員處理',
     'ws.chandown.relogin_fail': '觸發重登失敗：{err}（請聯絡管理員）',
@@ -26912,6 +27292,7 @@ ZH_HANT = {
     'ws.chandown.relogin_trace_sb': '有同事',
     'ws.chandown.snooze1h': '1 小時內別再提醒',
     'ws.chandown.snooze1h_t': '暫緩 1 小時：期間新的掉線或狀態變化仍會立即提醒',
+    'ws.chandown.snooze24h': '24 小時內別再提醒',
     'ws.chandown.text': '{plat} 通道已離線 {n} 分鐘，客戶訊息可能積壓——請通知管理員檢查連線',
     'ws.chandown.text2': '{plat} 通道（{who}）已斷線 {dur}，客戶訊息可能積壓——可嘗試重新登入，或聯絡管理員處理',
     'ws.chandown.waiting': '聯絡伺服器中… {s}s',
