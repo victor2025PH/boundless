@@ -1078,6 +1078,73 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             "usage_7d_total": usage_total,
         }
 
+    def _album_refs(pids: list) -> dict:
+        """相册引用清单（L-2 #202 备份随附；只列条目不带二进制，读不到按空计）。"""
+        out: dict = {}
+        try:
+            from src.companion.persona_media_store import get_persona_media_store
+            st = get_persona_media_store()
+        except Exception:
+            return out
+        for pid in pids:
+            try:
+                items = st.list(str(pid)) or []
+            except Exception:
+                items = []
+            refs = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                fp = str(it.get("file_path") or "")
+                refs.append({
+                    "media_id": it.get("media_id") or it.get("id"),
+                    "media_type": it.get("media_type") or "photo",
+                    "file": fp.replace("\\", "/").rsplit("/", 1)[-1] if fp else "",
+                    "scene": it.get("scene") or "",
+                    "caption": it.get("caption") or "",
+                    "tags": it.get("tags") or [],
+                })
+            if refs:
+                out[str(pid)] = refs
+        return out
+
+    # 必须注册在 ``/api/personas/profiles/{profile_id}`` 之前：FastAPI 按注册顺序匹配，
+    # 旧位置（{profile_id} 之后）让 GET .../export 一直被当成 id="export" → 404
+    # （L-2 #202 接备份按钮时才暴露；此前没有任何入口调它）。
+    @app.get("/api/personas/profiles/export")
+    async def api_profiles_export(request: Request, pid: str = "", _=Depends(auth_dep)):
+        """备份导出（L-2 #202「人设备份与迁移」）。
+
+        - 不带 ``pid``：全部人设（master only），信封 ``{format, version, exported_at,
+          count, profiles: [...], album_refs: {pid: [...]}}``——``profiles`` / ``count`` 两键
+          与旧契约一致；
+        - ``?pid=<id>``：单个人设（卡片菜单「导出单个人设」，写权限即可）。
+        相册只随附引用清单（文件名 / 场景 / 说明），二进制不进 JSON。
+        """
+        import time as _t
+        from src.utils.persona_manager import PersonaManager
+        pm = PersonaManager.get_instance()
+        pid = str(pid or "").strip()
+        if pid:
+            _check_write_role(request)
+            p = pm.get_persona_by_id(pid)
+            if p is None:
+                raise HTTPException(404, f"Profile '{pid}' not found")
+            profiles = [dict(p, id=pid)]
+        else:
+            _check_master_role(request)
+            profiles = [dict(p, id=_pid) for _pid, p in pm._profile_personas.items()]
+        for p in profiles:
+            p.pop("_mrpa_source", None)
+        return {
+            "format": "chatx-personas-backup",
+            "version": 1,
+            "exported_at": _t.strftime("%Y-%m-%dT%H:%M:%S%z", _t.localtime()),
+            "count": len(profiles),
+            "profiles": profiles,
+            "album_refs": _album_refs([p["id"] for p in profiles]),
+        }
+
     @app.get("/api/personas/profiles/{profile_id}")
     async def api_profile_get(profile_id: str, request: Request, _=Depends(auth_dep)):
         from src.utils.persona_manager import PersonaManager, profile_rev
@@ -1485,61 +1552,80 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         from src.utils.persona_manager import known_persona_top_keys
         return {"ok": True, "keys": known_persona_top_keys()}
 
-    @app.get("/api/personas/profiles/export")
-    async def api_profiles_export(request: Request, _=Depends(auth_dep)):
-        """Export all profiles as a JSON list (master only)."""
-        _check_master_role(request)
-        from src.utils.persona_manager import PersonaManager
-        pm = PersonaManager.get_instance()
-        profiles = [
-            dict(p, id=pid)
-            for pid, p in pm._profile_personas.items()
-        ]
-        return {"profiles": profiles, "count": len(profiles)}
-
     @app.post("/api/personas/profiles/import")
-    async def api_profiles_import(request: Request, _=Depends(auth_dep)):
-        """Import profiles from a JSON list (master only).
+    async def api_profiles_import(request: Request, dry_run: int = 0, _=Depends(auth_dep)):
+        """从备份恢复 / 批量导入（master only）。
 
-        Body: {profiles: [...], mode: 'merge'|'replace'}
-        merge (default): add/overwrite individual profiles, keep others.
-        replace: clear all profiles then load the new list.
+        Body: ``{profiles: [...], mode: 'merge'|'replace'}``（备份信封整份贴进来也行——
+        只读 ``profiles`` 键）。``?dry_run=1`` 或 body ``dry_run: true``（L-2 #202）→ 只算不写：
+        ``{dry_run: true, add: N, overwrite: N, add_ids, overwrite_ids, invalid: [...],
+        warnings: [...]}``，前端据此出「新增 N · 覆盖 N」预览 + 确认。
+        merge（缺省）：逐个新增/覆盖，其余不动；replace：先清空再装载（危险，前端不暴露）。
         """
         _check_master_role(request)
         data = await request.json()
         profiles_in = data.get("profiles")
         mode = data.get("mode", "merge")
+        dry = bool(dry_run) or bool(data.get("dry_run"))
         if not isinstance(profiles_in, list):
             raise HTTPException(400, "profiles must be a JSON array")
         if mode not in ("merge", "replace"):
             raise HTTPException(400, "mode must be 'merge' or 'replace'")
-        from src.utils.persona_manager import PersonaManager
+        from src.utils.persona_manager import PersonaManager, known_persona_top_keys
         pm = PersonaManager.get_instance()
+        known = set(known_persona_top_keys())
+        valid: list = []
+        invalid: list = []
+        warnings: list = []
+        for i, entry in enumerate(profiles_in):
+            if not isinstance(entry, dict):
+                invalid.append({"index": i, "reason": "not_object"})
+                continue
+            pid = str(entry.get("id") or "").strip()
+            if not pid:
+                invalid.append({"index": i, "reason": "missing_id", "name": str(entry.get("name") or "")})
+                continue
+            unknown = sorted(k for k in entry.keys() if k not in known and not str(k).startswith("_"))
+            if unknown:
+                warnings.append({"id": pid, "unknown_keys": unknown})
+            try:
+                from src.ai.voice_tristate import split_problems, validate_voice_profile
+                _verr, _ = split_problems(validate_voice_profile(entry.get("voice_profile"), check_files=False))
+                if _verr:
+                    warnings.append({"id": pid, "voice_problems": [x.get("code") for x in _verr]})
+            except Exception:
+                pass
+            valid.append((pid, entry))
+        existing_ids = set(pm.list_profile_ids())
+        add_ids = [pid for pid, _e in valid if pid not in existing_ids]
+        overwrite_ids = [pid for pid, _e in valid if pid in existing_ids]
+        if dry:
+            return {"ok": True, "dry_run": True, "mode": mode,
+                    "add": len(add_ids), "overwrite": len(overwrite_ids),
+                    "add_ids": add_ids, "overwrite_ids": overwrite_ids,
+                    "names": {pid: str(e.get("name") or pid) for pid, e in valid},
+                    "invalid": invalid, "warnings": warnings,
+                    "would_delete": (sorted(existing_ids - set(overwrite_ids))
+                                     if mode == "replace" else [])}
         if mode == "replace":
             for pid in list(pm._profile_personas.keys()):
                 pm.delete_profile(pid)
         imported = 0
-        errors = []
-        for entry in profiles_in:
-            if not isinstance(entry, dict):
-                errors.append("skipped non-dict entry")
-                continue
-            pid = str(entry.get("id") or "").strip()
-            if not pid:
-                errors.append("skipped entry without id")
-                continue
+        for pid, entry in valid:
             pm.upsert_profile(pid, entry)
             imported += 1
-        try:
-            cm = getattr(request.app.state, "config_manager", None) or config_manager
-            pm.persist_profiles(cm)
-        except Exception:
-            pass
+        _persisted, _persist_warn = _persist_with_status(pm, request)
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "profiles_import",
-                          f"mode={mode} imported={imported} errors={len(errors)}")
-        return {"ok": True, "imported": imported, "mode": mode, "errors": errors}
+                          f"mode={mode} imported={imported} add={len(add_ids)} "
+                          f"overwrite={len(overwrite_ids)} invalid={len(invalid)}"
+                          + ("" if _persisted else " persisted=0"))
+        errors = [f"skipped index {x['index']}: {x['reason']}" for x in invalid]
+        return {"ok": True, "imported": imported, "mode": mode, "errors": errors,
+                "add": len(add_ids), "overwrite": len(overwrite_ids),
+                "invalid": invalid, "warnings": warnings,
+                "persisted": _persisted, "persist_warning": _persist_warn}
 
     # ── P5-D: Canonical config sync ──────────────────────────
 

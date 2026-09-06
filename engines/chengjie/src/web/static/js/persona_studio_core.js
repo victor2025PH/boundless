@@ -296,6 +296,8 @@ function renderProfileList(profiles) {
       + '<button onclick="event.stopPropagation();editProfile(\'' + pidSafe + '\')">' + window.T('psn_js_355') + '</button>'
       + '<button class="btn-copy" onclick="event.stopPropagation();_copyProfileId(\'' + pidSafe + '\')" title="' + window.T('psn_js_356') + '">ID</button>'
       + '<button class="btn-clone" onclick="event.stopPropagation();_cloneProfile(\'' + pidSafe + '\')" title="' + window.T('psn_js_357') + '">' + window.T('psn_js_358') + '</button>'
+      // L-2 #202：导出单个人设（JSON 备份文件，可在别的机器「从备份恢复」）
+      + '<button class="btn-export" onclick="event.stopPropagation();pbExportOne(\'' + pidSafe + '\')" title="' + window.T('psn_export_one_t') + '">' + window.T('psn_export_one') + '</button>'
       + promoteBtn + '</div>'
       + '<div class="pcard-top">'
       + '<div class="pcard-av-wrap"><div class="pcard-av" style="background:' + color + '">' + avInner + '</div>' + ring + '</div>'
@@ -403,7 +405,9 @@ function _renderDashboard(d) {
   const bf = d.bindings || {};
   document.getElementById('hs-profiles').textContent  = pf.count != null ? pf.count : '—';
   document.getElementById('hs-bindings').textContent  = bf.count != null ? bf.count : (Object.keys(bf).length || '—');
-  document.getElementById('hs-unsynced').textContent  = pf.unsynced != null ? pf.unsynced : '—';
+  // L-2 #202：「未同步草稿」（personas.yaml 研发迁移残留）用户版不渲染该格 → 判空
+  var _hsUnsynced = document.getElementById('hs-unsynced');
+  if (_hsUnsynced) _hsUnsynced.textContent = pf.unsynced != null ? pf.unsynced : '—';
 
   let platCount = 0;
   if (d.tg_accounts && d.tg_accounts.length)   platCount++;
@@ -439,7 +443,7 @@ function _renderDashboard(d) {
   const utextEl  = document.getElementById('unsync-text');
   const u = pf.unsynced || 0;
   const lastSync = d.last_sync_at ? window.wsFmtDateTime(d.last_sync_at) : window.T('psn_js_009');
-  if (u > 0 && unsyncEl && __USER_ROLE === 'master') {
+  if (u > 0 && unsyncEl && __USER_ROLE === 'master' && window.__PSN_DEV_FACE !== false) {
     unsyncEl.classList.add('show');
     if (utextEl) utextEl.textContent = u + window.T('psn_js_010') + lastSync + '）';
   } else if (unsyncEl) { unsyncEl.classList.remove('show'); }

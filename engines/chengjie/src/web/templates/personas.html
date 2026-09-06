@@ -604,7 +604,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="hero-stat"><div class="hero-stat-val" id="hs-profiles">—</div><div class="hero-stat-lbl">{{ (i18n or {}).get('psn_hs_profiles','人设 Profiles') }}</div></div>
     <div class="hero-stat"><div class="hero-stat-val" id="hs-bindings">—</div><div class="hero-stat-lbl">{{ (i18n or {}).get('psn_tab_bindings','会话绑定') }}</div></div>
     <div class="hero-stat"><div class="hero-stat-val" id="hs-platforms">—</div><div class="hero-stat-lbl">{{ (i18n or {}).get('psn_hs_platforms','接入平台') }}</div></div>
-    <div class="hero-stat"><div class="hero-stat-val" id="hs-unsynced" style="font-size:.95rem;padding-top:.18rem">—</div><div class="hero-stat-lbl">{{ (i18n or {}).get('psn_hs_unsynced','未同步草稿') }}</div></div>
+    {% if not ui_client_hide|default(false) %}<div class="hero-stat"><div class="hero-stat-val" id="hs-unsynced" style="font-size:.95rem;padding-top:.18rem">—</div><div class="hero-stat-lbl">{{ (i18n or {}).get('psn_hs_unsynced','未同步草稿') }}</div></div>{% endif %}
   </div>
 
   <!-- P19-2: Current active persona bar -->
@@ -804,24 +804,41 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
   {# profile-editor shell kept for JS compat #}
   <div id="profile-editor" style="display:none"></div>
 
-  {% if user_role == 'master' %}
+  {# L-2 #202（29BAG6/E42974）：「导出 / 导入 Profiles（主账号专属）」只有一个「同步到 personas.yaml」
+     ——后端启动 config=0 canonical=0 runtime=14，yaml 是研发迁移残留、不按不影响运行。改为「人设备份与
+     迁移」：备份全部 / 从备份恢复（先预览新增 N · 覆盖 N）/ 卡片菜单导出单个；yaml 同步收进开发者区
+     （client 形态且未开开发者模式不渲染）；子账号进入只给灰字提示，不再整块消失。 #}
   <details class="ps-card" id="export-import-card" style="margin-top:1.6rem">
     <summary class="export-summary">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-      {{ (i18n or {}).get('psn_export_import_profiles','导出 / 导入 Profiles') }}
-      <span class="summary-hint">{{ (i18n or {}).get('psn_master_only','（主帐号专属）') }}</span>
+      {{ (i18n or {}).get('psn_backup_title','人设备份与迁移') }}
+      <span class="summary-hint">{{ (i18n or {}).get('psn_backup_sub','备份到文件 · 从备份恢复 · 换机迁移') }}</span>
     </summary>
-    <div style="margin-top:.9rem">
-      {# 导出/导入 JSON 的哑按钮（exportProfiles/importProfiles，从未定义）已删；随之移除只服务它们的
-         导入模式下拉与 JSON 文本框——后者的 id=import-json/import-status 与上方真面板 #import-panel 重复
-         （getElementById 只命中第一个 → DOM id 碰撞）。真正可用的批量导入见 #import-panel。此卡保留「同步到 yaml」。 #}
-      <button class="btn btn-sm" id="sync-config-btn" onclick="syncToConfig()"
-        title="{{ (i18n or {}).get('psn_sync_to_yaml_t','将当前运营人设推送到 personas.yaml（可 git 追踪）') }}"
-        style="background:var(--th-bg-blue10,rgba(59,130,246,.1));border-color:var(--th-bd-blue30,rgba(59,130,246,.3));color:var(--th-ink-blue5,#1d4ed8)">⭐ {{ (i18n or {}).get('psn_sync_to_yaml','同步到 personas.yaml') }}</button>
-      <div id="sync-config-status" class="tts-status" style="margin-top:.6rem"></div>
+    <div style="margin-top:.9rem" id="pb-body">
+      <div style="font-size:.76rem;color:var(--t2);line-height:1.55;margin-bottom:.6rem">{{ (i18n or {}).get('psn_backup_desc','人设保存后立即生效并自动落盘，日常无需操作。备份用于换机迁移、误删找回或在多台机器间同步；恢复前会先预览「新增 N · 覆盖 N」再确认。') }}</div>
+      {% if user_role == 'master' %}
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn btn-sm" id="pb-backup-btn" onclick="pbBackupAll()">⬇ {{ (i18n or {}).get('psn_backup_all','备份全部人设') }}</button>
+        <label class="btn btn-sm" style="cursor:pointer;margin:0">⬆ {{ (i18n or {}).get('psn_restore_from','从备份恢复…') }}<input type="file" id="pb-restore-file" accept=".json,application/json" style="display:none" onchange="pbPickRestore(this)"></label>
+        <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('psn_backup_single_hint','单个人设：卡片右上「导出」') }}</span>
+      </div>
+      {% else %}
+      <div style="font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('psn_backup_master_only','备份与恢复由主账号操作；如需迁移人设，请联系主账号。') }}</div>
+      {% endif %}
+      <div id="pb-restore-preview" class="ji-preview" style="display:none"></div>
+      <div id="pb-status" class="tts-status" style="margin-top:.5rem"></div>
+      {% if user_role == 'master' and not ui_client_hide|default(false) %}
+      <details class="pe-dev-voice" id="pb-dev-yaml">
+        <summary>🛠 {{ (i18n or {}).get('psn_sync_dev_h','开发者：同步到 personas.yaml（研发迁移残留，运行不依赖它）') }}</summary>
+        <div style="margin-top:.45rem">
+          <button class="btn btn-sm" id="sync-config-btn" onclick="syncToConfig()"
+            title="{{ (i18n or {}).get('psn_sync_to_yaml_t','将当前运营人设推送到 personas.yaml（可 git 追踪）') }}">⭐ {{ (i18n or {}).get('psn_sync_to_yaml','同步到 personas.yaml') }}</button>
+          <div id="sync-config-status" class="tts-status" style="margin-top:.6rem"></div>
+        </div>
+      </details>
+      {% endif %}
     </div>
   </details>
-  {% endif %}
 
 </div>
 </div>{# close tab-profiles #}
@@ -2467,9 +2484,9 @@ async function refreshStatus() {
       `<span class="src-badge ${sbClass[k]}">${sbLabels[k]} <strong>${sb[k]}</strong></span>`
     ).join(' ');
 
-    // P7-D: unsync warning
+    // P7-D: unsync warning（L-2 #202：yaml 同步是研发迁移残留，用户版不再提示）
     let unsyncHtml = '';
-    const unsyncN = d.unsynced_studio_count || 0;
+    const unsyncN = window.__PSN_DEV_FACE ? (d.unsynced_studio_count || 0) : 0;
     if (unsyncN > 0) {
       const syncTs = d.canonical_last_sync_ts || 0;
       const syncLabel = d.canonical_last_sync
@@ -2479,7 +2496,7 @@ async function refreshStatus() {
         <span style="font-size:.78rem;color:var(--th-ink-amber6,#92400e)">⚠️ <strong>${unsyncN}</strong> ${window.T('psn_js_342')} — ${syncLabel}</span>
         <button class="btn btn-sm" style="font-size:.7rem;padding:.18rem .55rem;background:var(--th-bg-blue10,rgba(59,130,246,.1));border-color:var(--th-bd-blue30,rgba(59,130,246,.3));color:var(--th-ink-blue5,#1d4ed8);flex-shrink:0" onclick="syncToConfig()">${window.T('psn_js_343')}</button>
       </div>`;
-    } else if (d.canonical_last_sync) {
+    } else if (d.canonical_last_sync && window.__PSN_DEV_FACE) {
       unsyncHtml = `<div style="font-size:.74rem;color:var(--t2);margin-bottom:.4rem">✓ personas.yaml ${window.T('psn_js_344')} — ${d.canonical_last_sync}</div>`;
     }
 
@@ -3540,6 +3557,107 @@ async function syncToConfig() {
   }
 }
 
+// ── L-2 #202：人设备份与迁移（备份全部 / 从备份恢复预览+确认 / 导出单个）──────────
+function _pbStatus(txt, cls) {
+  var st = document.getElementById('pb-status');
+  if (!st) return;
+  st.textContent = txt || ''; st.className = 'tts-status' + (cls ? ' ' + cls : '');
+}
+function _pbDownload(obj, filename) {
+  var blob = new Blob([JSON.stringify(obj, null, 2)], {type: 'application/json'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(function () { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) {} }, 1500);
+}
+function _pbStamp() {
+  var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+async function pbBackupAll() {
+  var btn = document.getElementById('pb-backup-btn');
+  if (btn) btn.disabled = true;
+  _pbStatus(window.T('psn_backup_working'));
+  try {
+    var r = await apiFetch('/api/personas/profiles/export', {}, {timeoutMs: 60000});
+    if (r.status === 403) { _pbStatus(window.T('psn_backup_master_only'), 'err'); return; }
+    var d = await r.json();
+    if (!r.ok || !d.profiles) throw new Error(d.detail || ('HTTP ' + r.status));
+    _pbDownload(d, 'chatx-personas-' + _pbStamp() + '.json');
+    var albums = Object.keys(d.album_refs || {}).length;
+    _pbStatus('✓ ' + window.Tf('psn_backup_done', {n: String(d.count || d.profiles.length), a: String(albums)}), 'ok');
+  } catch (e) { _pbStatus(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function pbExportOne(pid) {
+  try {
+    var r = await apiFetch('/api/personas/profiles/export?pid=' + encodeURIComponent(pid), {}, {timeoutMs: 30000});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.profiles) throw new Error(d.detail || ('HTTP ' + r.status));
+    var nm = (d.profiles[0] && d.profiles[0].name) || pid;
+    _pbDownload(d, 'chatx-persona-' + String(pid).replace(/[^\w.-]+/g, '_') + '-' + _pbStamp() + '.json');
+    _toast(window.Tf('psn_export_one_done', {name: nm}), 'ok');
+  } catch (e) { _toast(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+}
+var _pbPending = null;   // {profiles, preview}
+function pbPickRestore(input) {
+  var f = input && input.files && input.files[0];
+  if (!f) return;
+  var reader = new FileReader();
+  reader.onload = async function () {
+    try { input.value = ''; } catch (e) {}
+    var box = document.getElementById('pb-restore-preview');
+    var parsed;
+    try { parsed = JSON.parse(String(reader.result || '')); } catch (e) { _pbStatus(window.T('psn_restore_bad_json'), 'err'); return; }
+    var profiles = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.profiles) ? parsed.profiles : null);
+    if (!profiles) { _pbStatus(window.T('psn_restore_bad_shape'), 'err'); return; }
+    _pbStatus(window.T('psn_restore_previewing'));
+    try {
+      var r = await apiFetch('/api/personas/profiles/import?dry_run=1', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({profiles: profiles, mode: 'merge', dry_run: true})}, {timeoutMs: 60000});
+      if (r.status === 403) { _pbStatus(window.T('psn_backup_master_only'), 'err'); return; }
+      var d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      _pbPending = {profiles: profiles, preview: d};
+      var names = d.names || {};
+      var li = function (ids) { return ids.map(function (id) { return '<li><b>' + _esc(names[id] || id) + '</b> <span style="color:var(--t3)">' + _esc(id) + '</span></li>'; }).join(''); };
+      var html = '<div style="font-size:.78rem;font-weight:600;margin-bottom:.3rem">' + _esc(window.Tf('psn_restore_summary', {file: f.name, add: String(d.add), over: String(d.overwrite)})) + '</div>';
+      if (d.add) html += '<div style="font-size:.72rem;color:var(--t2)">' + _esc(window.T('psn_restore_add_h')) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.add_ids) + '</ul>';
+      if (d.overwrite) html += '<div class="ji-warn">' + _esc(window.Tf('psn_restore_over_h', {n: String(d.overwrite)})) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.overwrite_ids) + '</ul>';
+      if (d.invalid && d.invalid.length) html += '<div style="font-size:.72rem;color:var(--t3)">' + _esc(window.Tf('psn_restore_invalid', {n: String(d.invalid.length)})) + '</div>';
+      if (d.warnings && d.warnings.length) html += '<div style="font-size:.72rem;color:var(--th-ink-amber7,#b45309)">' + _esc(window.Tf('psn_restore_warnings', {n: String(d.warnings.length)})) + '</div>';
+      html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="pbConfirmRestore()"' + ((d.add + d.overwrite) ? '' : ' disabled') + '>' + _esc(window.T('psn_restore_confirm')) + '</button>'
+        + '<button type="button" class="btn btn-sm" onclick="pbCancelRestore()">' + _esc(window.T('psn_ji_cancel')) + '</button>'
+        + '<span style="font-size:.7rem;color:var(--t3)">' + _esc(window.T('psn_restore_note')) + '</span></div>';
+      if (box) { box.innerHTML = html; box.style.display = ''; }
+      _pbStatus('');
+    } catch (e) { _pbStatus(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+  };
+  reader.readAsText(f, 'utf-8');
+}
+function pbCancelRestore() {
+  _pbPending = null;
+  var box = document.getElementById('pb-restore-preview');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+async function pbConfirmRestore() {
+  if (!_pbPending) return;
+  var pv = _pbPending.preview || {};
+  if (!confirm(window.Tf('psn_restore_confirm_q', {add: String(pv.add || 0), over: String(pv.overwrite || 0)}))) return;
+  _pbStatus(window.T('psn_restore_working'));
+  try {
+    var r = await apiFetch('/api/personas/profiles/import', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({profiles: _pbPending.profiles, mode: 'merge'})}, {timeoutMs: 120000});
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+    _pbStatus('✓ ' + window.Tf('psn_restore_done', {add: String(d.add || 0), over: String(d.overwrite || 0)}), 'ok');
+    if (d.persist_warning) _toast(window.T('psn_persist_warn'), 'err', 9000);
+    pbCancelRestore();
+    loadProfileList(); refreshStatus();
+  } catch (e) { _pbStatus(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+}
+window.pbExportOne = pbExportOne;
+
 // ── Core globals ─────────────────────────────────────────────────────────────
 let _editingProfileId = null;
 let _allProfiles = [];
@@ -3552,6 +3670,8 @@ let _lastStatusTs = 0;
 var _faceRefs = {};
 // P0 改版：会话角色（master 才看到"未同步草稿"等内部指标）
 var __USER_ROLE = {{ (user_role or '')|tojson }};
+// L-2（D-L2）：研发面是否可见＝非 client 形态或已开开发者模式（ui_client_hide 为 L-4 模板全局）
+window.__PSN_DEV_FACE = {{ 'false' if ui_client_hide|default(false) else 'true' }};
 // P1：抽屉"试聊/应用到…"按钮随编辑态显隐（与删除按钮同步）
 function _toggleP1DrawerBtns(show) {
   var d = show ? 'inline-flex' : 'none';
