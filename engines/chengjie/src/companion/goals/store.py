@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from src.companion.goals.templates import (
     AUTONOMY_LEVELS,
@@ -129,6 +129,15 @@ class GoalStore:
         self._conn.row_factory = sqlite3.Row
         return self
 
+    # M-7 A（#236）：事件表追溯列——beat_sent/beat_blocked/beat_injected 要能回答
+    # 「发到哪个会话 / 哪条消息 / 说了什么」。ALTER ADD COLUMN 幂等（缺列才补），
+    # 存量库零迁移脚本；既有事件行三列为空串，语义不变。
+    _EVENT_TRACE_COLUMNS = (
+        ("conversation_id", "TEXT NOT NULL DEFAULT ''"),
+        ("message_id", "TEXT NOT NULL DEFAULT ''"),
+        ("text_head", "TEXT NOT NULL DEFAULT ''"),
+    )
+
     def _init_db(self) -> None:
         if self._db_path != ":memory:":
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +147,20 @@ class GoalStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(self._DDL)
+        self._migrate_event_trace_columns()
         self._conn.commit()
+
+    def _migrate_event_trace_columns(self) -> None:
+        try:
+            have = {
+                str(r[1]) for r in self._conn.execute(
+                    "PRAGMA table_info(goal_events)").fetchall()}
+            for col, ddl in self._EVENT_TRACE_COLUMNS:
+                if col not in have:
+                    self._conn.execute(
+                        f"ALTER TABLE goal_events ADD COLUMN {col} {ddl}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("goal_events trace column migration skipped: %s", e)
 
     def close(self) -> None:
         with self._lock:
@@ -1685,30 +1707,90 @@ class GoalStore:
         return out
 
     # ── events ──────────────────────────────────────────────────────────────
-    def add_event(self, goal_id: str, kind: str, detail: str = "") -> None:
+    def add_event(
+        self, goal_id: str, kind: str, detail: str = "", *,
+        conversation_id: str = "", message_id: str = "", text_head: str = "",
+        now: Optional[float] = None,
+    ) -> None:
+        """记一条目标事件。M-7 A：三个追溯字段可选（会话 / 平台消息 id / 正文头
+        ≤120 字），旧调用方三参签名不变。"""
         try:
             with self._lock:
                 self._conn.execute(
-                    "INSERT INTO goal_events (goal_id, kind, detail, ts)"
-                    " VALUES (?,?,?,?)",
+                    "INSERT INTO goal_events (goal_id, kind, detail, ts,"
+                    " conversation_id, message_id, text_head)"
+                    " VALUES (?,?,?,?,?,?,?)",
                     (str(goal_id or ""), str(kind or "note"),
-                     str(detail or "")[:400], _now()),
+                     str(detail or "")[:400],
+                     float(now if now is not None else _now()),
+                     str(conversation_id or "")[:120],
+                     str(message_id or "")[:120],
+                     str(text_head or "")[:120]),
                 )
                 self._conn.commit()
         except Exception as e:  # noqa: BLE001
             logger.debug("add_event failed: %s", e)
 
-    def list_events(self, goal_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_events(
+        self, goal_id: str, *, limit: int = 50,
+        kinds: Optional[Iterable[str]] = None, since_ts: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """按时间倒序取事件。``kinds`` 非空 → 只取这些 kind（M-7：拍清单 /
+        看门狗读数不再被别的事件挤出窗口）；``since_ts>0`` → 只取其后的。"""
         lim = max(1, min(int(limit or 50), 300))
+        sql = ("SELECT id, goal_id, kind, detail, ts, conversation_id,"
+               " message_id, text_head FROM goal_events WHERE goal_id = ?")
+        args: List[Any] = [str(goal_id or "")]
+        ks = [str(k) for k in (kinds or ()) if str(k or "").strip()]
+        if ks:
+            sql += f" AND kind IN ({','.join('?' * len(ks))})"
+            args.extend(ks)
+        if float(since_ts or 0) > 0:
+            sql += " AND ts >= ?"
+            args.append(float(since_ts))
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+        args.append(lim)
         try:
-            rows = self._conn.execute(
-                "SELECT id, goal_id, kind, detail, ts FROM goal_events"
-                " WHERE goal_id = ? ORDER BY ts DESC LIMIT ?",
-                (str(goal_id or ""), lim),
-            ).fetchall()
+            rows = self._conn.execute(sql, tuple(args)).fetchall()
         except Exception:
             return []
         return [dict(r) for r in rows]
+
+    def last_event(
+        self, goal_id: str, kind: str, *, detail_prefix: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """最近一条指定 kind（可按 detail 前缀过滤）的事件；无 → None。
+        M-7 A：``beat_blocked`` 按「目标×槽位×原因」去重用（跨重启仍不重复记）。"""
+        sql = ("SELECT id, goal_id, kind, detail, ts, conversation_id,"
+               " message_id, text_head FROM goal_events"
+               " WHERE goal_id = ? AND kind = ?")
+        args: List[Any] = [str(goal_id or ""), str(kind or "")]
+        pre = str(detail_prefix or "")
+        if pre:
+            sql += " AND detail LIKE ? ESCAPE '\\'"
+            args.append(pre.replace("\\", "\\\\").replace("%", "\\%")
+                        .replace("_", "\\_") + "%")
+        sql += " ORDER BY ts DESC, id DESC LIMIT 1"
+        try:
+            row = self._conn.execute(sql, tuple(args)).fetchone()
+        except Exception:
+            return None
+        return dict(row) if row else None
+
+    def set_event_message_id(self, event_id: int, message_id: str) -> bool:
+        """给事件补平台消息 id（拍清单反查到出站消息后回填，下次直读）。"""
+        try:
+            with self._lock:
+                c = self._conn.execute(
+                    "UPDATE goal_events SET message_id = ? WHERE id = ?"
+                    " AND (message_id = '' OR message_id IS NULL)",
+                    (str(message_id or "")[:120], int(event_id)),
+                )
+                self._conn.commit()
+                return c.rowcount > 0
+        except Exception as e:  # noqa: BLE001
+            logger.debug("set_event_message_id failed: %s", e)
+            return False
 
 
 _singleton: Optional["GoalStore"] = None

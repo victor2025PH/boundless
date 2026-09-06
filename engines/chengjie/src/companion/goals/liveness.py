@@ -2,23 +2,59 @@
 
 进程心跳停走已由 ``_check_scan_loop_stall`` 盯 ticker/dispatcher。
 本模块盯另一面：引擎配置说能发、库里有足够老的 auto 目标，但 24h 内
-``care_sent`` / ``beat_sent`` 一条都没有——卡上仍可能写着「下一次跟进」，
+``beat_sent`` 一条都没有——卡上仍可能写着「下一次跟进」，
 实际一条都没出去（会话全是人审档 / 排拍后派发吞了 / 代码没装载）。
 
 只减误报：引擎没开、目标太新、已经有真发，一律不算停摆。
+
+M-7（#236，2026-09-07）两处改口径：
+- ``SENT_KINDS`` 只剩 ``beat_sent``。此前同时数 ``care_sent``，而 care 真发钩子
+  每次都把两种事件各写一条 → 一次真发计 2（skuio 机 14:01 ``sent_24h=4`` 实为
+  两次）。goal_link 到期关怀现在也补写 ``beat_sent``（detail=care:link），单一
+  kind 覆盖全部主动出手；卡片「已推进 N 拍」与本模块同表同 kind。
+- 读事件按 kind 过滤（``list_events(kinds=...)``）——``beat_injected`` /
+  ``beat_blocked`` 事件多了以后，40 行窗口不再把真发挤出去。
+- 新增单目标粒度 ``goal_stall_verdict``：卡片红字 + 看门狗带 goal_id/会话。
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 
-SENT_KINDS = ("care_sent", "beat_sent")
+SENT_KINDS = ("beat_sent",)
+
+# 单目标 stalled 判据窗口（秒）：有排期却 24h 零真发
+GOAL_STALL_WINDOW_SEC = 86400.0
+# 新目标宽限：建目标当天（<24h）不判 stalled——自然档主动拍从第二天起才排
+GOAL_STALL_MIN_AGE_SEC = 86400.0
+
+
+def _count_sent_since(store: Any, gid: str, since_ts: float) -> int:
+    try:
+        evs = store.list_events(gid, limit=300, kinds=SENT_KINDS,
+                                since_ts=since_ts) or []
+    except TypeError:
+        # 旧 store 签名（无 kinds/since_ts）——回落全读再过滤
+        try:
+            evs = [e for e in (store.list_events(gid, limit=300) or [])
+                   if str((e or {}).get("kind") or "") in SENT_KINDS
+                   and float((e or {}).get("ts") or 0) >= since_ts]
+        except Exception:
+            evs = []
+    except Exception:
+        evs = []
+    return len(evs)
 
 
 def collect_send_liveness(store: Any, *, now: float,
                           lookback_sec: float = 86400.0) -> Dict[str, Any]:
-    """活跃 auto 目标盘点 + 近窗真发条数。读失败回空快照，绝不抛。"""
+    """活跃 auto 目标盘点 + 近窗真发条数。读失败回空快照，绝不抛。
+
+    M-7：附 ``stalled_goals``——逐目标 ``goal_stall_verdict`` 为 stalled 的
+    ``{goal_id, conversation_id, title}`` 清单（看门狗告警点名到目标）。"""
     out: Dict[str, Any] = {
         "active_auto": 0, "sent_24h": 0, "oldest_age_sec": 0.0,
+        "stalled_goals": [],
     }
     try:
         goals = store.list_goals(status="active", limit=200) or []
@@ -27,6 +63,7 @@ def collect_send_liveness(store: Any, *, now: float,
     sent = 0
     oldest = 0.0
     auto_n = 0
+    stalled = []
     for g in goals:
         if not isinstance(g, dict):
             continue
@@ -42,22 +79,18 @@ def collect_send_liveness(store: Any, *, now: float,
         gid = str(g.get("goal_id") or "")
         if not gid:
             continue
-        try:
-            evs = store.list_events(gid, limit=40) or []
-        except Exception:
-            evs = []
-        for ev in evs:
-            if str((ev or {}).get("kind") or "") not in SENT_KINDS:
-                continue
-            try:
-                ts = float((ev or {}).get("ts") or 0)
-            except (TypeError, ValueError):
-                ts = 0.0
-            if ts >= now - lookback_sec:
-                sent += 1
+        n_sent = _count_sent_since(store, gid, now - lookback_sec)
+        sent += n_sent
+        if goal_stall_verdict(g, sent_in_window=n_sent, now=now) == "stalled":
+            stalled.append({
+                "goal_id": gid,
+                "conversation_id": str(g.get("conversation_id") or ""),
+                "title": str(g.get("title") or "")[:40],
+            })
     out["active_auto"] = auto_n
     out["sent_24h"] = sent
     out["oldest_age_sec"] = oldest
+    out["stalled_goals"] = stalled
     return out
 
 
@@ -85,4 +118,53 @@ def stall_verdict(
     return "stalled"
 
 
-__all__ = ["SENT_KINDS", "collect_send_liveness", "stall_verdict"]
+def goal_stall_verdict(
+    goal: Any,
+    *,
+    sent_in_window: int,
+    now: Optional[float] = None,
+    window_sec: float = GOAL_STALL_WINDOW_SEC,
+    min_age_sec: float = GOAL_STALL_MIN_AGE_SEC,
+) -> Optional[str]:
+    """单目标粒度（M-7 D #236）：auto 档、活跃、建了 ≥24h、期限未到、近 24h 零
+    ``beat_sent`` → ``"stalled"``；否则 None。纯函数、绝不抛。
+
+    与全局 ``stall_verdict`` 的区别：那边要 ≥2 个 auto 目标才敢判（防单目标误报
+    拉响全局告警）；这边是给**这一张卡**用的——BABY BEAR 一个目标 4 天 0 拍，
+    全局判据永远够不着它。引擎配置层的闸（sprint 关 / 平台不在白名单）由调用方
+    另判，这里只看「该出手却没出手」。"""
+    if not isinstance(goal, dict):
+        return None
+    if str(goal.get("autonomy") or "") != "auto":
+        return None
+    if str(goal.get("status") or "active") != "active":
+        return None
+    n = float(now if now is not None else time.time())
+    try:
+        born = float(goal.get("created_at") or goal.get("start_ts") or 0)
+    except (TypeError, ValueError):
+        born = 0.0
+    if born <= 0 or (n - born) < float(min_age_sec):
+        return None
+    try:
+        deadline = float(goal.get("deadline_ts") or 0)
+    except (TypeError, ValueError):
+        deadline = 0.0
+    if deadline > 0 and n >= deadline:
+        return None
+    try:
+        if int(sent_in_window or 0) > 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return "stalled"
+
+
+__all__ = [
+    "GOAL_STALL_MIN_AGE_SEC",
+    "GOAL_STALL_WINDOW_SEC",
+    "SENT_KINDS",
+    "collect_send_liveness",
+    "goal_stall_verdict",
+    "stall_verdict",
+]

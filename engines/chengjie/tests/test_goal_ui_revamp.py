@@ -76,7 +76,7 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260905" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移）
+    assert "cp-goal.js?v=20260907b" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；M-7 A）
 
 
 def test_goal_sprint_pace_ui(goal_js: str):
@@ -291,12 +291,21 @@ def test_goal_created_next_hint(goal_js: str):
 
 
 def test_goal_progress_timeline(goal_js: str):
-    """「AI 做了什么」进展时间线：懒取 /api/goals/{id} 拍史（后端接口 P3 起就有，
-    坐席端首次消费——修「建完目标 AI 做了什么完全不可见」）。"""
+    """「AI 做了什么」进展时间线：M-7 A（#236）起懒取 /api/goals/{id}/beats 每一拍清单
+    （主动发出 / 回复带方向 / 被拦下 + 原因 / 投递真相 / 跳到消息），不再读 goal_actions
+    拍史——修「卡片写已推进 2 拍，会话里一条目标消息都看不见」。"""
     assert "prog_toggle" in goal_js
     assert "goal_progress_open" in goal_js
     assert "_loadProgress" in goal_js
-    assert "inbox.goal.beat." in goal_js
+    assert '"/beats"' in goal_js
+    assert "inbox.goal.beatk." in goal_js
+    assert "inbox.goal.beatst." in goal_js
+    assert "inbox.goal.blocked." in goal_js
+    assert 'data-act="beat_jump"' in goal_js
+    assert "cp-goal-jump-message" in goal_js
+    # 状态行「已推进 N 拍」可点开清单；「今天被拦 N 次」并排
+    assert 'class="gl-beats-btn" data-act="prog_toggle"' in goal_js
+    assert "inbox.goal.sprint.blocked_today" in goal_js
 
 
 def test_goal_templates_endpoint_exposes_caps():

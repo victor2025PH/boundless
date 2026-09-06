@@ -38,7 +38,10 @@ def test_collect_counts_auto_and_recent_sends():
 
     gid = [g for g in gs.list_goals(status="active")
            if g.get("autonomy") == "auto"][0]["goal_id"]
-    gs.add_event(gid, "care_sent", "ok")
+    # M-7（#236）：care 钩子每次真发同时写 beat_sent + care_sent，看门狗只数
+    # beat_sent 一种——一次真发只计 1（skuio 机 sent_24h=4 实为 2 次的双计修掉）
+    gs.add_event(gid, "beat_sent", "daily:auto care#7")
+    gs.add_event(gid, "care_sent", "每日主动拍已发出")
     snap2 = collect_send_liveness(gs, now=NOW)
     assert snap2["sent_24h"] == 1
 

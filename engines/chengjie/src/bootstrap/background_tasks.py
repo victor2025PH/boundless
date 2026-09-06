@@ -291,21 +291,41 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                     from src.companion.goals.store import peek_goal_store
                     gstore = peek_goal_store()
                     if gstore is not None:
+                        # M-7 A（#236）：beat_sent 带会话 + care 行 id——拍清单据 care#
+                        # 反查话术快照（care 表 sent_text，hook 之后才写）与 deferred
+                        # 投递真相（note=deferred:<row>）；此处拿不到正文，不硬塞。
+                        _conv = str(item.get("contact_key") or "")
+                        _cid = item.get("id") or item.get("care_id") or 0
                         if kind == "sprint":
                             # 冲刺主动拍（P0 2026-08-30）：落拍行+beat_sent+计数
-                            record_sprint_beat_sent(gstore, gid, int(arg))
+                            record_sprint_beat_sent(
+                                gstore, gid, int(arg),
+                                conversation_id=_conv, care_id=_cid)
                             gstore.add_event(
                                 gid, "care_sent",
-                                f"冲刺拍 p{int(arg)} 已发出：{topic}")
+                                f"冲刺拍 p{int(arg)} 已发出：{topic}",
+                                conversation_id=_conv)
                         elif kind == "daily":
                             # 自然档每日主动拍（D1b P0-3）：今日拍行落 sent
-                            record_natural_beat_sent(gstore, gid, str(arg))
+                            record_natural_beat_sent(
+                                gstore, gid, str(arg),
+                                conversation_id=_conv, care_id=_cid)
                             gstore.add_event(
                                 gid, "care_sent",
-                                f"每日主动拍已发出：{topic}")
+                                f"每日主动拍已发出：{topic}",
+                                conversation_id=_conv)
                         else:
+                            # impl84 goal_link 到期关怀：也是目标驱动的一次主动出手——
+                            # 记一条 beat_sent（detail=care:link）让看门狗/拍清单只数
+                            # beat_sent 一种 kind 就够（care_sent 保留为人话时间线）
                             gstore.add_event(
-                                gid, "care_sent", f"到期关怀已发出：{topic}")
+                                gid, "beat_sent",
+                                f"care:link care#{int(_cid or 0)}"
+                                if _cid else "care:link",
+                                conversation_id=_conv)
+                            gstore.add_event(
+                                gid, "care_sent", f"到期关怀已发出：{topic}",
+                                conversation_id=_conv)
             except Exception:
                 assistant.logger.debug("care→goal 发出回执失败（忽略）", exc_info=True)
 

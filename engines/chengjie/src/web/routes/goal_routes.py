@@ -438,12 +438,22 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                        else next_daily_ts(scfg))
             else:
                 nxt = 0
+            # M-7 A（#236）：卡片「已推进 N 拍」与看门狗 sent_24h 同一口径——都数
+            # gstore 事件 beat_sent（主动真发），不再数 goal_actions 行（那里
+            # consumed=回复链顺势带方向，用户在会话里看不到一条独立消息，却被
+            # 写成「已推进 2 拍」）。trace 摘要（sent/injected/blocked/today）给
+            # 卡片并排展示「主动 N · 顺势 M · 今天被拦 Z」，不用二次请求。
+            from src.companion.goals.service import build_beats_trace
+            trace = build_beats_trace(store, dict(view))
+            tsum = trace.get("summary") or {}
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
                 "ticker_enabled": bool(scfg.get("enabled")),
                 "blockers": blockers,
                 "runtime": runtime,
-                "beats_used": len(beats),
+                "beats_used": int(tsum.get("sent") or 0),
+                "beats_actions": len(beats),
+                "trace": tsum,
                 "next_phase_ts": round(float(nxt or 0), 1) if live_ok else 0,
                 # 立即推进按钮只属冲刺：auto 档 + 引擎开 + 运行时闸全过
                 "nudgeable": live_ok
@@ -1381,6 +1391,36 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             "actions": actions,
             "events": store.list_events(goal_id, limit=50),
         }
+
+    @app.get("/api/goals/{goal_id}/beats")
+    async def goals_beats(
+        request: Request, goal_id: str, _auth=Depends(auth_dep)
+    ):
+        """M-7 A（#236 = #166 族第五次）：目标「每一拍」清单——第 N 拍 / 时刻 /
+        会话 / 说了什么 / 相位 / 状态（已投递 · 排队中 · 失败 · 被拦 + 原因 ·
+        首拍待预览）+ 可跳转的平台消息行 id。数据源只有目标事件表（与看门狗
+        ``goal_sprint_liveness`` 同一表同一 kind），卡片「已推进 N 拍」点开看的就是
+        这份。只读；viewer 照常可读。"""
+        svc = _require_enabled(request)
+        store = _store(svc)
+        goal = store.get_goal(goal_id)
+        if goal is None:
+            raise HTTPException(404, tr(request, "err.goals.not_found"))
+        try:
+            care_store = getattr(app.state, "care_schedule_store", None)
+        except Exception:
+            care_store = None
+        try:
+            outbox = getattr(app.state, "deferred_outbox_store", None)
+        except Exception:
+            outbox = None
+        out = svc.build_beats_trace(
+            store, goal, care_store=care_store, outbox_store=outbox,
+            inbox_store=_inbox_store())
+        out["title"] = str(goal.get("title") or "")
+        out["status"] = str(goal.get("status") or "")
+        out["conversation_id"] = str(goal.get("conversation_id") or "")
+        return out
 
     @app.post("/api/goals/{goal_id}/update")
     async def goals_update(

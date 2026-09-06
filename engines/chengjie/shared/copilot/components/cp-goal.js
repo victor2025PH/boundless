@@ -795,7 +795,32 @@
                     color:var(--cp-ok,#0f9d75); }
       .gl-prog-st.st-skipped,.gl-prog-st.st-blocked { color:var(--cp-text-tiny,#94a3b8); }
       .gl-prog-tx { flex:1 1 auto; min-width:0; color:var(--cp-text,#374151);
-                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }`;
+                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      /* M-7 A（#236）：状态行里可点的「已推进 N 拍 / 今天被拦 N 次」+ 每一拍清单行 */
+      .gl-beats-btn { background:transparent; border:none; padding:0; cursor:pointer; font:inherit;
+                      color:inherit; text-decoration:underline dotted; text-underline-offset:2px; }
+      .gl-beats-btn:hover { color:var(--cp-accent,#4f46e5); }
+      .gl-beats-btn.warn { color:var(--cp-warn,#b45309); }
+      .gl-beat { display:flex; gap:6px; align-items:baseline; font-size:var(--cp-fs-tiny,11px);
+                 padding:3px 0; border-bottom:1px dashed var(--cp-border,#e2e8f0); flex-wrap:wrap; }
+      .gl-beat:last-child { border-bottom:none; }
+      .gl-beat-time { flex:0 0 auto; color:var(--cp-text-tiny,#94a3b8); font-variant-numeric:tabular-nums; }
+      .gl-beat-kind { flex:0 0 auto; font-weight:600; color:var(--cp-text-dim,#64748b); }
+      .gl-beat.kind-sent .gl-beat-kind { color:var(--cp-ok,#0f9d75); }
+      .gl-beat.kind-blocked .gl-beat-kind,.gl-beat.st-failed .gl-beat-kind { color:var(--cp-warn,#b45309); }
+      .gl-beat-st { flex:0 0 auto; padding:0 6px; border-radius:99px;
+                    background:var(--cp-track,#e2e8f0); color:var(--cp-text-dim,#64748b); }
+      .gl-beat.st-sent .gl-beat-st { background:color-mix(in srgb,var(--cp-ok,#0f9d75) 14%,transparent);
+                                     color:var(--cp-ok,#0f9d75); }
+      .gl-beat.st-failed .gl-beat-st,.gl-beat.st-expired .gl-beat-st,.gl-beat.st-blocked .gl-beat-st {
+                    background:color-mix(in srgb,var(--cp-warn,#b45309) 14%,transparent);
+                    color:var(--cp-warn,#b45309); }
+      .gl-beat-phase { flex:0 0 auto; color:var(--cp-text-tiny,#94a3b8); font-family:ui-monospace,monospace; }
+      .gl-beat-tx { flex:1 1 100%; min-width:0; color:var(--cp-text,#374151);
+                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .gl-beat-other { flex:0 0 auto; color:var(--cp-text-tiny,#94a3b8); font-style:italic; }
+      .gl-beat-jump { flex:0 0 auto; background:transparent; border:none; padding:0; cursor:pointer;
+                      font-size:inherit; color:var(--cp-accent,#4f46e5); text-decoration:underline; }`;
     }
 
     /* ── 数据 ── */
@@ -1136,29 +1161,48 @@
         ? g.sprint_live : null;
       if (live) {
         const bits = [];
+        // M-7 A（#236）：N 只数「主动真发」（后端 sprint_live.beats_used 读 beat_sent
+        // 事件，与看门狗同口径）；可点开每一拍。顺势带入回复次数与「今天被拦」并排
+        // 说清——「已推进 2 拍」到底是两条消息还是两次顺势带入，不再让人猜。
         const bn = parseInt(live.beats_used, 10) || 0;
-        if (bn > 0) bits.push(this.t("inbox.goal.sprint.beats", { n: bn }));
+        const tr = (live.trace && typeof live.trace === "object") ? live.trace : null;
+        if (bn > 0) {
+          bits.push(`<button type="button" class="gl-beats-btn" data-act="prog_toggle" ` +
+            `title="${esc(this.t("inbox.goal.sprint.beats_t"))}">` +
+            `${esc(this.t("inbox.goal.sprint.beats", { n: bn }))}</button>`);
+        }
+        if (tr) {
+          const inj = parseInt(tr.injected, 10) || 0;
+          if (inj > 0) bits.push(esc(this.t("inbox.goal.sprint.injected", { n: inj })));
+          const td = (tr.today && typeof tr.today === "object") ? tr.today : {};
+          const bl = parseInt(td.blocked, 10) || 0;
+          if (bl > 0) {
+            const why = this._blockedWhy(td.blocked_by);
+            bits.push(`<button type="button" class="gl-beats-btn warn" data-act="prog_toggle">` +
+              `${esc(this.t("inbox.goal.sprint.blocked_today", { n: bl, why }))}</button>`);
+          }
+        }
         if (!live.ticker_on) {
           // #166：sprint 开着却被派发终点（care 关闸/dry_run）或平台白名单拦住 →
           // 点名原因，不再一律说「引擎未开启」（说错原因＝运维去翻错开关）
           const blk = Array.isArray(live.blockers) ? live.blockers : [];
-          bits.push((live.ticker_enabled && blk.length)
+          bits.push(esc((live.ticker_enabled && blk.length)
             ? this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(blk) })
-            : this.t("inbox.goal.sprint.engine_off"));
+            : this.t("inbox.goal.sprint.engine_off")));
         } else if (Array.isArray(live.blockers) && live.blockers.length) {
           // D1b P0-4：引擎配置全绿但**运行时闸**没过（会话人审档 / 危机窗 / opt-out /
           // 读不到收件箱）→ 点名原因。此前落到「等对方开口」——坐席以为在等客户，
           // 其实推进器一条都不会排。
-          bits.push(this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(live.blockers) }));
+          bits.push(esc(this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(live.blockers) })));
         } else {
           const nts = parseFloat(live.next_phase_ts) || 0;
           if (nts > Date.now() / 1000) {
             const nd = new Date(nts * 1000);
             const hhmm = ("0" + nd.getHours()).slice(-2) + ":" +
               ("0" + nd.getMinutes()).slice(-2);
-            bits.push(this.t("inbox.goal.sprint.next_beat", { t: hhmm }));
+            bits.push(esc(this.t("inbox.goal.sprint.next_beat", { t: hhmm })));
           } else {
-            bits.push(this.t("inbox.goal.sprint.engine_wait"));
+            bits.push(esc(this.t("inbox.goal.sprint.engine_wait")));
           }
         }
         const nudge = live.nudgeable
@@ -1168,7 +1212,7 @@
         const stCls = (!live.ticker_on || (Array.isArray(live.blockers) && live.blockers.length))
           ? "blocked" : "live";
         sprintLine = `<div class="gl-status ${stCls}"><span class="gl-status-dot" aria-hidden="true"></span>` +
-          `<div class="gl-sprint-line"><span>${esc(bits.join(" · "))}</span>${nudge}</div></div>`;
+          `<div class="gl-sprint-line"><span>${bits.join(" · ")}</span>${nudge}</div></div>`;
       }
       // #166：auto 档而引擎不能真出手 → 卡身一行说清（sprintLine 已点名 ticker
       // 关闸时不重复；运行时闸由 sprintLine 的 engine_blocked 覆盖）
@@ -1776,7 +1820,66 @@
       }
     }
 
-    /* ── 「AI 做了什么」进展时间线（拍史；懒取 + 每目标缓存）── */
+    /* ── 「AI 做了什么」＝每一拍清单（M-7 A #236；懒取 /api/goals/{id}/beats + 每目标缓存）──
+       此前读 goal_actions 拍史（planned/consumed…），用户看不出「到底有没有发出去一条消息」。
+       现在每行＝一拍：第 N 拍 · 时刻 · 主动发出/回复带方向/被拦下/待预览 · 说了什么 ·
+       投递真相（已投递/排队中/发送失败）· 可跳到那条消息；被拦的写明被什么拦。 */
+
+    _blockedWhy(byMap) {
+      const m = (byMap && typeof byMap === "object") ? byMap : {};
+      const keys = Object.keys(m).sort((a, b) => (m[b] || 0) - (m[a] || 0)).slice(0, 2);
+      return keys.map((k) => this._blockedLabel(k)).join("、");
+    }
+
+    _blockedLabel(reason) {
+      const r = String(reason || "").trim();
+      if (!r) return this.t("inbox.goal.blocked.unknown");
+      if (r.indexOf("preview:") === 0) return this.t("inbox.goal.blocked.first_send_preview");
+      const v = this.t("inbox.goal.blocked." + r);
+      return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : r;
+    }
+
+    _fmtBeatTime(ts) {
+      const t = parseFloat(ts) || 0;
+      if (!t) return "";
+      const d = new Date(t * 1000);
+      const now = new Date();
+      const hhmm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+      const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+      return sameDay ? hhmm : `${("0" + (d.getMonth() + 1)).slice(-2)}-${("0" + d.getDate()).slice(-2)} ${hhmm}`;
+    }
+
+    _renderBeatRow(b, curConv) {
+      const esc = (s) => this.esc(s);
+      const kind = ({ sent: 1, injected: 1, blocked: 1, preview: 1 })[String(b.kind)] ? String(b.kind) : "sent";
+      const st = String(b.status || "");
+      const stLabel = st ? this.t("inbox.goal.beatst." + st) : "";
+      const stTxt = (stLabel && String(stLabel).indexOf("inbox.goal.") !== 0) ? stLabel : st;
+      const head = kind === "sent" && b.n
+        ? this.t("inbox.goal.beats.n", { n: parseInt(b.n, 10) || 0 })
+        : this.t("inbox.goal.beatk." + kind);
+      let tx = String(b.text_head || "");
+      if (kind === "blocked") tx = this._blockedLabel(b.reason) + (tx ? `：${tx}` : "");
+      else if (kind === "preview") tx = this._blockedLabel("first_send_preview") + (tx ? `：${tx}` : "");
+      else if (kind === "sent" && st === "failed" && b.reason) tx = (tx ? tx + " · " : "") + String(b.reason);
+      const short = tx.length > 72 ? tx.slice(0, 72) + "\u2026" : tx;
+      const other = (b.conversation_id && curConv && b.conversation_id !== curConv)
+        ? `<span class="gl-beat-other" title="${esc(b.conversation_id)}">${esc(this.t("inbox.goal.beats.other_conv"))}</span>`
+        : "";
+      const jump = (kind === "sent" && st === "sent" && (b.message_id || b.conversation_id))
+        ? `<button type="button" class="gl-beat-jump" data-act="beat_jump" data-conv="${esc(b.conversation_id || "")}"` +
+          ` data-mid="${esc(b.message_id || "")}" data-ts="${esc(String(b.sent_at || b.ts || ""))}">` +
+          `${esc(this.t("inbox.goal.beats.jump"))}</button>`
+        : "";
+      const phase = String(b.phase || "");
+      return `<div class="gl-beat kind-${kind} st-${esc(st)}">` +
+        `<span class="gl-beat-time">${esc(this._fmtBeatTime(b.sent_at || b.ts))}</span>` +
+        `<span class="gl-beat-kind">${esc(head)}</span>` +
+        (stTxt ? `<span class="gl-beat-st">${esc(stTxt)}</span>` : "") +
+        (phase && kind === "sent" ? `<span class="gl-beat-phase">${esc(phase)}</span>` : "") +
+        `<span class="gl-beat-tx" title="${esc(tx)}">${esc(short)}</span>${other}${jump}</div>`;
+    }
 
     _renderProgress() {
       const esc = (s) => this.esc(s);
@@ -1790,17 +1893,10 @@
       } else if (this._progErr) {
         body = `<div class="gl-errline" data-act="prog_retry">${esc(this.t("inbox.goal.progress.err"))}</div>`;
       } else {
-        const rows = (this._progRows || []).slice(0, 7).map((a) => {
-          const st = String(a.status || "planned");
-          const stKey = ({ planned: 1, consumed: 1, sent: 1, skipped: 1, blocked: 1 })[st] ? st : "planned";
-          const day = String(a.day || "").slice(5);
-          const intent = intentDisp(a);
-          const short = intent.length > 46 ? intent.slice(0, 46) + "\u2026" : intent;
-          return `<div class="gl-prog-row"><span class="gl-prog-day">${esc(day)}</span>` +
-            `<span class="gl-prog-st st-${esc(stKey)}">${esc(this.t("inbox.goal.beat." + stKey))}</span>` +
-            `<span class="gl-prog-tx" title="${esc(intent)}">${esc(short)}</span></div>`;
-        }).join("");
-        body = rows || `<div class="gl-hint">${esc(this.t("inbox.goal.progress.empty"))}</div>`;
+        const curConv = String((this._d && this._d.goal && this._d.goal.conversation_id) || this._lastCid || "");
+        const rows = (this._progRows || []).slice().reverse().slice(0, 12)
+          .map((b) => this._renderBeatRow(b, curConv)).join("");
+        body = rows || `<div class="gl-hint">${esc(this.t("inbox.goal.beats.empty"))}</div>`;
       }
       return `<div class="gl-prog open"><button type="button" class="gl-prog-btn" data-act="prog_toggle">` +
         `\u25BE ${esc(this.t("inbox.goal.progress.hide"))}</button>${body}</div>`;
@@ -1818,16 +1914,31 @@
       this._rerender();
       let res = null;
       try {
-        res = await this._api("/api/goals/" + encodeURIComponent(g.goal_id));
+        res = await this._api("/api/goals/" + encodeURIComponent(g.goal_id) + "/beats");
       } catch (_e) { res = null; }
       this._progLoading = false;
-      if (res && res.ok && res.data && Array.isArray(res.data.actions)) {
+      if (res && res.ok && res.data && Array.isArray(res.data.beats)) {
         this._progGoalId = g.goal_id;
-        this._progRows = res.data.actions.filter((a) => a && a.intent);
+        this._progRows = res.data.beats;
       } else {
         this._progErr = true;
       }
       this._rerender();
+    }
+
+    /* 跳到那条消息：宿主监听 cp-goal-jump-message（unified_inbox / copilot app.html
+       接入后滚到消息行）；没接的宿主回落到 window.__wsScrollToMessage / 只切会话。 */
+    _jumpBeat(el) {
+      const conv = String(el.getAttribute("data-conv") || "");
+      const mid = String(el.getAttribute("data-mid") || "");
+      const ts = parseFloat(el.getAttribute("data-ts")) || 0;
+      _beacon("goal_beat_jump");
+      this.emit("cp-goal-jump-message", { conversation_id: conv, message_id: mid, ts });
+      try {
+        if (typeof window.__wsScrollToMessage === "function") {
+          window.__wsScrollToMessage(conv, mid, ts);
+        }
+      } catch (_e) { /* 宿主无此钩子 */ }
     }
 
     _renderProducts(g) {
@@ -3749,6 +3860,7 @@
         return;
       }
       if (act === "prog_retry") { await this._loadProgress(true); return; }
+      if (act === "beat_jump") { this._jumpBeat(el); return; }
       if (act === "create") { await this._create(el); return; }
       if (act === "pause" || act === "resume") { await this._status(act); return; }
       if (act === "cancel") {

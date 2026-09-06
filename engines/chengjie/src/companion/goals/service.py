@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.companion.goals import store as goal_store_mod
 from src.companion.goals.context_block import goal_view_block
@@ -1575,6 +1575,21 @@ def build_block_for_chat(
         if action is not None and str(action.get("status")) == "planned":
             store.mark_action(
                 str(action.get("action_id")), "consumed", detail=chain)
+            # M-7 A（#236）：这一槽位的方向第一次被织进拟稿 → 落一条可追溯事件
+            # （每槽位一次，不按每稿刷）。拍清单据此把「回复带方向」与「主动真发」
+            # 并排列出——卡片上「已推进 2 拍」到底是两条主动消息还是两次顺势带入，
+            # 用户能看见。
+            try:
+                store.add_event(
+                    str(goal.get("goal_id") or ""), "beat_injected",
+                    f"{chain}:{str(action.get('day') or '')}"[:60],
+                    conversation_id=conversation_id
+                    or f"{platform}:{account_id}:{chat_key}",
+                    text_head=str((view.get("today") or {}).get("intent")
+                                  or "")[:120],
+                    now=now)
+            except Exception:
+                logger.debug("beat_injected event skipped", exc_info=True)
         get_goal_stats().record_injected(chain)
         return block
     except Exception as exc:  # noqa: BLE001
@@ -2320,8 +2335,247 @@ def settle_order_ref(
     return out
 
 
+# ── M-7 A（#236）：每拍可追溯 ────────────────────────────────────────────────
+
+# 拍清单读的事件种类（``beat_sent`` 主动真发 / ``beat_injected`` 回复链带方向 /
+# ``beat_blocked`` 想出手被拦 / product_guard 的两种拦下）——白名单查询，别的事件
+# （created/updated/miss_notified…）再多也挤不掉拍。
+BEAT_TRACE_KINDS = (
+    "beat_sent", "beat_injected", "beat_blocked",
+    "goal_no_product", "first_send_preview",
+)
+
+_DEFERRED_STATUS_MAP = {
+    "sent": "sent", "pending": "queued", "failed": "failed",
+    "expired": "expired", "cancelled": "cancelled",
+}
+
+
+def _parse_beat_detail(detail: str) -> Tuple[str, int]:
+    """``sprint:p1 care#12`` → ("sprint:p1", 12)；无 care# → (detail, 0)。"""
+    s = str(detail or "").strip()
+    care_id = 0
+    if " care#" in s:
+        head, _, tail = s.rpartition(" care#")
+        try:
+            care_id = int(tail.strip())
+            s = head
+        except ValueError:
+            care_id = 0
+    return s, care_id
+
+
+def _resolve_outbox_row(care_row: Dict[str, Any], outbox_store: Any) -> Dict[str, Any]:
+    """care 行 ``note=deferred:<row>`` → deferred_outbox 行（投递真相）。"""
+    note = str((care_row or {}).get("note") or "")
+    if not note.startswith("deferred:") or outbox_store is None:
+        return {}
+    try:
+        rid = int(note.split(":", 1)[1].strip())
+    except (TypeError, ValueError):
+        return {}
+    try:
+        rows = outbox_store.get_by_ids([rid]) or {}
+        return dict(rows.get(rid) or {})
+    except Exception:
+        return {}
+
+
+def _find_outbound_message_id(
+    inbox_store: Any, conversation_id: str, text: str, around_ts: float,
+    *, window_sec: float = 1800.0,
+) -> str:
+    """按「同会话 + 出站 + 正文相同/同头 + 时刻邻近」找平台消息行 id（跳转用）。
+    找不到 → ""。best-effort，绝不抛。"""
+    if inbox_store is None or not conversation_id or not str(text or "").strip():
+        return ""
+    try:
+        msgs = inbox_store.list_recent_messages(conversation_id, limit=60) or []
+    except Exception:
+        return ""
+    want = str(text or "").strip()
+    head = want[:40]
+    best = ""
+    best_dt = None
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("direction") or "") != "out":
+            continue
+        body = str(m.get("text") or m.get("content") or "").strip()
+        if not body:
+            continue
+        if body != want and not (head and body.startswith(head)):
+            continue
+        try:
+            ts = float(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if around_ts > 0 and ts > 0 and abs(ts - around_ts) > window_sec:
+            continue
+        dt = abs(ts - around_ts) if (around_ts > 0 and ts > 0) else 0.0
+        if best_dt is None or dt < best_dt:
+            best_dt = dt
+            best = str(m.get("message_id") or m.get("platform_msg_id") or "")
+    return best
+
+
+def build_beats_trace(
+    store: Any,
+    goal: Dict[str, Any],
+    *,
+    care_store: Any = None,
+    outbox_store: Any = None,
+    inbox_store: Any = None,
+    now: Optional[float] = None,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """目标「每一拍」清单 + 汇总（``GET /api/goals/{id}/beats`` / 卡片展开共用）。
+
+    数据源只有 gstore 事件（与看门狗 ``collect_send_liveness`` 同一表同一 kind），
+    卡片上的 N 与看门狗的 sent_24h 从此一个口径。每一拍：
+    - ``sent``：主动真发（``beat_sent``）。经 ``care#`` 反查 care 行拿话术快照
+      （``sent_text``）与 ``note=deferred:<row>`` → deferred_outbox 行 → 真投递状态
+      （sent / queued / failed / expired）；投出去的再按正文+时刻在 inbox 里找
+      出站消息行 id（``message_id``，找到即回填事件列，下次直读）。
+    - ``injected``：客户来消息时把方向织进拟稿（``beat_injected``，每槽位记一次）。
+    - ``blocked``：到点想出手被闸拦下（``beat_blocked`` + product_guard 两种）。
+    - ``preview``：首条真发进 L1 草稿待坐席过目（``first_send_preview``）。
+    绝不抛：任何反查失败只让该拍少几个字段。
+    """
+    n = float(now if now is not None else time.time())
+    gid = str((goal or {}).get("goal_id") or "")
+    out: Dict[str, Any] = {
+        "goal_id": gid, "beats": [],
+        "summary": {"sent": 0, "delivered": 0, "injected": 0, "blocked": 0,
+                    "preview": 0, "blocked_by": {}, "today": {
+                        "sent": 0, "injected": 0, "blocked": 0,
+                        "blocked_by": {}}},
+    }
+    if not gid:
+        return out
+    try:
+        events = store.list_events(gid, limit=limit, kinds=BEAT_TRACE_KINDS) or []
+    except Exception:
+        events = []
+    lt = time.localtime(n)
+    day0 = n - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+    conv_default = str((goal or {}).get("conversation_id") or "")
+    beats: List[Dict[str, Any]] = []
+    n_sent = 0
+    summ = out["summary"]
+    today = summ["today"]
+    for ev in reversed(events):            # list_events 倒序 → 时间正序
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("kind") or "")
+        try:
+            ts = float(ev.get("ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        item: Dict[str, Any] = {
+            "event_id": ev.get("id"), "ts": round(ts, 1),
+            "conversation_id": str(ev.get("conversation_id") or conv_default),
+            "text_head": str(ev.get("text_head") or ""),
+            "message_id": str(ev.get("message_id") or ""),
+            "phase": "", "reason": "", "status": "", "care_id": 0,
+        }
+        is_today = ts >= day0
+        if kind == "beat_sent":
+            n_sent += 1
+            item["kind"] = "sent"
+            item["n"] = n_sent
+            phase, care_id = _parse_beat_detail(ev.get("detail"))
+            item["phase"] = phase
+            item["care_id"] = care_id
+            item["status"] = "queued"
+            care_row: Dict[str, Any] = {}
+            if care_store is not None and care_id > 0:
+                try:
+                    care_row = dict(care_store.get(care_id) or {})
+                except Exception:
+                    care_row = {}
+            if care_row:
+                if not item["text_head"]:
+                    item["text_head"] = str(care_row.get("sent_text") or "")[:120]
+                if str(care_row.get("status") or "") == "skipped":
+                    # 入队后又被守卫/坐席拦下（note 带原因）
+                    item["status"] = "blocked"
+                    item["reason"] = str(care_row.get("note") or "")[:60]
+                ob = _resolve_outbox_row(care_row, outbox_store)
+                if ob:
+                    item["status"] = _DEFERRED_STATUS_MAP.get(
+                        str(ob.get("status") or ""), item["status"])
+                    if not item["text_head"]:
+                        item["text_head"] = str(ob.get("reply_text") or "")[:120]
+                    try:
+                        sa = float(ob.get("sent_at") or 0)
+                    except (TypeError, ValueError):
+                        sa = 0.0
+                    if sa > 0:
+                        item["sent_at"] = round(sa, 1)
+                    if item["status"] == "failed":
+                        item["reason"] = str(ob.get("error") or "")[:80]
+                    if item["status"] == "sent" and not item["message_id"]:
+                        mid = _find_outbound_message_id(
+                            inbox_store, item["conversation_id"],
+                            str(ob.get("reply_text") or care_row.get("sent_text") or ""),
+                            sa or ts)
+                        if mid:
+                            item["message_id"] = mid
+                            try:
+                                store.set_event_message_id(int(ev.get("id")), mid)
+                            except Exception:
+                                pass
+            summ["sent"] += 1
+            if item["status"] == "sent":
+                summ["delivered"] += 1
+            if is_today:
+                today["sent"] += 1
+        elif kind == "beat_injected":
+            item["kind"] = "injected"
+            item["phase"] = "reply"
+            item["status"] = "injected"
+            item["reason"] = str(ev.get("detail") or "")[:60]
+            summ["injected"] += 1
+            if is_today:
+                today["injected"] += 1
+        elif kind == "beat_blocked":
+            item["kind"] = "blocked"
+            det = str(ev.get("detail") or "")
+            reason, _, slot = det.partition("@")
+            item["reason"] = reason.strip() or "unknown"
+            item["phase"] = slot.strip()
+            item["status"] = "blocked"
+        elif kind == "goal_no_product":
+            item["kind"] = "blocked"
+            item["reason"] = "goal_no_product"
+            item["status"] = "blocked"
+            item["text_head"] = str(ev.get("detail") or "")[:120]
+        elif kind == "first_send_preview":
+            item["kind"] = "preview"
+            item["reason"] = "first_send_preview"
+            item["status"] = "preview_pending"
+            item["text_head"] = str(ev.get("detail") or "")[:120]
+            summ["preview"] += 1
+        else:
+            continue
+        if item["kind"] == "blocked":
+            summ["blocked"] += 1
+            summ["blocked_by"][item["reason"]] = (
+                summ["blocked_by"].get(item["reason"], 0) + 1)
+            if is_today:
+                today["blocked"] += 1
+                today["blocked_by"][item["reason"]] = (
+                    today["blocked_by"].get(item["reason"], 0) + 1)
+        beats.append(item)
+    out["beats"] = beats
+    return out
+
+
 __all__ = [
     "AGENDA_STATES",
+    "BEAT_TRACE_KINDS",
     "DEFAULT_DB_NAME",
     "NEGATIVE_EMOTIONS",
     "WON_META_NOTE_MAX",
@@ -2331,6 +2585,7 @@ __all__ = [
     "agenda_sort_key",
     "agenda_state_match",
     "beat_feedback_state",
+    "build_beats_trace",
     "build_block_for_chat",
     "catalog_guard_facts",
     "discovery_gap_for_goal",

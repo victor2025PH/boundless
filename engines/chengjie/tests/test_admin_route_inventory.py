@@ -1285,6 +1285,14 @@ _ADDITIONS_2026_09_05_GOALS_PREFLIGHT = """
 """
 _BASELINE += _ADDITIONS_2026_09_05_GOALS_PREFLIGHT
 
+# M-7 A 2026-09-07（#236 = #166 族第五次）：目标「每一拍」清单——主动真发（经 care 行
+# 反查话术与 deferred 投递真相 + 出站消息 id 可跳转）/ 回复链带方向 / 想出手被拦及
+# 原因 / 首拍待预览；卡片「已推进 N 拍」点开读的就是它，与看门狗 sent_24h 同口径。
+_ADDITIONS_2026_09_07_GOALS_BEATS = """
+/api/goals/{goal_id}/beats	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_07_GOALS_BEATS
+
 # 实施91（小智线 impl88）PC 受控机管理三端点——**代登记**（2026-08-30 晚：
 # 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住老板点名的发版重启；
 # 语义归属仍是小智线，端点行为以其实现为准，见 .ops NOTE_from_goals_sprint_*）。

@@ -351,20 +351,36 @@ def natural_source_text(goal: Dict[str, Any],
     return (f"日常推进「{title[:40]}」；本拍：" + intent)[:160]
 
 
+def _beat_trace_detail(base: str, care_id: Any) -> str:
+    """``beat_sent`` detail：既有前缀（``sprint:pN`` / ``daily:auto``）不变，
+    有 care 行 id 就追加 `` care#<id>``——拍清单据此反查 care 表的话术快照与
+    deferred 投递真相（M-7 A #236：事件此前只有相位，发了什么/到没到无从追）。"""
+    try:
+        cid = int(care_id or 0)
+    except (TypeError, ValueError):
+        cid = 0
+    return f"{base} care#{cid}" if cid > 0 else base
+
+
 def record_natural_beat_sent(
     gstore: Any, goal_id: str, day: str, *, now: Optional[float] = None,
+    conversation_id: str = "", care_id: Any = 0, text_head: str = "",
 ) -> bool:
     """自然档每日主动拍真发成功（care sent_hook 调）→ 今日拍行落 ``sent``
     （已有 planned 行则直接改状态；没有则以通用意图新建）+ 事件 + 计数。绝不抛。
 
     与回复链的当日拍**共用同一日键**：主动拍发出后，回复链本日再命中同目标
     会看到 ``sent`` 行而不再重拍——「一天一拍」跨两条链成立。
+    M-7 A：``conversation_id`` / ``care_id`` / ``text_head`` 落进事件追溯列。
     """
     try:
         n = float(now if now is not None else time.time())
         gid = str(goal_id or "")
         d = str(day or "").strip()
-        if not gid or not d or gstore.get_goal(gid) is None:
+        if not gid or not d:
+            return False
+        goal = gstore.get_goal(gid)
+        if goal is None:
             return False
         row = gstore.get_action(gid, d)
         if row is None:
@@ -374,7 +390,11 @@ def record_natural_beat_sent(
         elif str(row.get("status") or "") not in ("consumed", "sent"):
             gstore.mark_action(str(row.get("action_id") or ""), "sent",
                                detail="daily:auto")
-        gstore.add_event(gid, "beat_sent", "daily:auto")
+        gstore.add_event(
+            gid, "beat_sent", _beat_trace_detail("daily:auto", care_id),
+            conversation_id=str(conversation_id
+                                or goal.get("conversation_id") or ""),
+            text_head=str(text_head or ""), now=n)
         try:
             from src.companion.goals.stats import get_goal_stats
             get_goal_stats().record_sprint_sent()
@@ -388,6 +408,7 @@ def record_natural_beat_sent(
 
 def record_sprint_beat_sent(
     gstore: Any, goal_id: str, phase: int, *, now: Optional[float] = None,
+    conversation_id: str = "", care_id: Any = 0, text_head: str = "",
 ) -> bool:
     """冲刺拍真发成功（care sent_hook 调）→ 落拍行 + 事件 + 计数。
 
@@ -396,6 +417,7 @@ def record_sprint_beat_sent(
     会优先显示最近的主动拍，混流时序有已知偏差，接受）。status 直落 ``sent``
     ——它计入 ``count_engaged_since`` 的未回退避口径（主动拍连发无回应该
     推高退避，这是节奏语义不是骚扰刹车）。绝不抛。
+    M-7 A：``conversation_id`` / ``care_id`` / ``text_head`` 落进事件追溯列。
     """
     try:
         n = float(now if now is not None else time.time())
@@ -428,7 +450,12 @@ def record_sprint_beat_sent(
         gstore.upsert_action(
             str(goal_id), day, intent=intent, push_level=push,
             status="sent", detail=f"sprint:p{int(phase)}", now=n)
-        gstore.add_event(str(goal_id), "beat_sent", f"sprint:p{int(phase)}")
+        gstore.add_event(
+            str(goal_id), "beat_sent",
+            _beat_trace_detail(f"sprint:p{int(phase)}", care_id),
+            conversation_id=str(conversation_id
+                                or goal.get("conversation_id") or ""),
+            text_head=str(text_head or ""), now=n)
         try:
             from src.companion.goals.stats import get_goal_stats
             get_goal_stats().record_sprint_sent()
@@ -437,6 +464,47 @@ def record_sprint_beat_sent(
         return True
     except Exception:
         logger.debug("record_sprint_beat_sent failed", exc_info=True)
+        return False
+
+
+# 拦下原因 → 人话（拍清单 / 卡片「今天 X 次想出手，被 Y 拦下」共用；i18n 键在
+# goals.py ``goal.blocked.<reason>``，这里只是键名清单与回落文案）
+BLOCKED_REASONS = (
+    "silence", "min_gap", "pace_cap", "platform", "automation_mode",
+    "crisis", "optout", "no_conversation", "no_inbox", "autonomy",
+    "goal_no_product", "first_send_preview", "dedup",
+)
+
+
+def record_beat_blocked(
+    gstore: Any, goal_id: str, reason: str, *, slot: str,
+    conversation_id: str = "", now: Optional[float] = None,
+) -> bool:
+    """「想出手但被闸拦下」落事件 ``beat_blocked``（M-7 A #236）。
+
+    detail=``<reason>@<slot>``（slot＝冲刺相位 ``pN`` / 自然档日键 ``dYYYY-MM-DD``
+    / 回复链 ``inject``）。**按目标×原因×槽位去重**（查最近一条同前缀事件）——
+    ticker 每 120s 一轮，同一相位被同一道闸拦住只记一次，跨重启也不重复；
+    换了相位/换了原因才再记。绝不抛。返回是否新记了一条。"""
+    try:
+        gid = str(goal_id or "")
+        r = str(reason or "").strip() or "unknown"
+        s = str(slot or "").strip() or "-"
+        if not gid:
+            return False
+        detail = f"{r}@{s}"
+        last = gstore.last_event(gid, "beat_blocked", detail_prefix=detail)
+        if last is not None:
+            return False
+        goal = gstore.get_goal(gid) or {}
+        gstore.add_event(
+            gid, "beat_blocked", detail,
+            conversation_id=str(conversation_id
+                                or goal.get("conversation_id") or ""),
+            now=now)
+        return True
+    except Exception:
+        logger.debug("record_beat_blocked failed", exc_info=True)
         return False
 
 
@@ -854,6 +922,41 @@ class SprintGoalTicker:
             "last_skips": dict(self.last_skips),
         }
 
+    @staticmethod
+    def _note_pace_block(
+        gstore: Any, g: Dict[str, Any], gid: str, conv: str, *,
+        sprint: bool, cfg: Dict[str, Any], relaxed: Dict[str, Any],
+        now: float, last_in: float, last_out: float,
+        today_row: Optional[Dict[str, Any]],
+    ) -> None:
+        """安全闸全过、但 ``not_due``：区分「相位/日键没到」（不算想出手，不记）
+        与「到点了被沉默闸 / 出站间隔闸拦住」（记 ``beat_blocked`` silence /
+        min_gap，按槽位去重）。M-7 A #236：BABY BEAR 这类白天一直在聊的会话，
+        自然档 6h 沉默闸每天都拦、卡上却只写「自动推进」——现在拦一次留一条。"""
+        try:
+            if sprint:
+                p = due_phase(g, cfg=relaxed, now=now)
+                slot = f"p{p}" if p is not None else ""
+                sil = float(cfg.get("silence_min_sec") or 0)
+                gap = float(cfg.get("min_gap_sec") or 0)
+            else:
+                d = due_daily(g, cfg=relaxed, now=now, today_action=today_row)
+                slot = f"d{d}" if d else ""
+                sil = float(cfg.get("natural_silence_min_sec") or 0)
+                gap = float(cfg.get("natural_min_gap_sec") or 0)
+            if not slot:
+                return
+            reason = ""
+            if sil > 0 and last_in > 0 and (now - last_in) < sil:
+                reason = "silence"
+            elif gap > 0 and last_out > 0 and (now - last_out) < gap:
+                reason = "min_gap"
+            if reason:
+                record_beat_blocked(gstore, gid, reason, slot=slot,
+                                    conversation_id=conv, now=now)
+        except Exception:
+            logger.debug("note_pace_block failed", exc_info=True)
+
     # ── 主扫描 ────────────────────────────────────────────────────────────
     def run_once(self, *, now: Optional[float] = None) -> Dict[str, Any]:
         n = float(now if now is not None else time.time())
@@ -886,6 +989,14 @@ class SprintGoalTicker:
                 inbox = None
         mutes = self._optout_mutes()
         natural_daily = bool(cfg.get("natural_daily", True))
+        # 松闸副本：只看相位/日键到没到，不看沉默/出站间隔——用来判断「本来想
+        # 出手」（M-7 A：被安全闸拦下时也要知道这一拍是不是到点了，否则每 tick
+        # 都记一条「被拦」就是刷屏，不到点被拦不算「想出手」）
+        relaxed = dict(cfg)
+        relaxed["silence_min_sec"] = 0.0
+        relaxed["min_gap_sec"] = 0.0
+        relaxed["natural_silence_min_sec"] = 0.0
+        relaxed["natural_min_gap_sec"] = 0.0
         scheduled = 0
         for g in goals:
             try:
@@ -895,6 +1006,22 @@ class SprintGoalTicker:
                 summary["scanned"] += 1
                 gid = str(g.get("goal_id") or "")
                 conv = str(g.get("conversation_id") or "").strip()
+                today_row = None
+                if not sprint:
+                    try:
+                        from src.companion.goals.planner import day_key
+                        today_row = gstore.get_action(gid, day_key(n))
+                    except Exception:
+                        today_row = None
+
+                def _due_slot_relaxed() -> str:
+                    """到点的槽位（忽略节奏闸）；未到点 → ""。"""
+                    if sprint:
+                        p = due_phase(g, cfg=relaxed, now=n)
+                        return f"p{p}" if p is not None else ""
+                    d = due_daily(g, cfg=relaxed, now=n, today_action=today_row)
+                    return f"d{d}" if d else ""
+
                 # 运行时闸（D1b P0-4 起与 preflight 同一函数：卡片/预检说「能出手」
                 # 与 ticker 真出手用同一套判定，不再各算一套）
                 rg = goal_runtime_gates(
@@ -902,6 +1029,11 @@ class SprintGoalTicker:
                     emotion_gate=self._emotion_gate, stop_on_fail=True)
                 if rg["skip"]:
                     _skip(rg["skip"])
+                    _slot = _due_slot_relaxed()
+                    if _slot:
+                        record_beat_blocked(
+                            gstore, gid, str(rg["skip"]), slot=_slot,
+                            conversation_id=conv, now=n)
                     continue
                 last_in, last_out = rg["last_in"], rg["last_out"]
                 if sprint:
@@ -910,6 +1042,10 @@ class SprintGoalTicker:
                         last_inbound_ts=last_in, last_outbound_ts=last_out)
                     if phase is None:
                         _skip("not_due")
+                        self._note_pace_block(
+                            gstore, g, gid, conv, sprint=True, cfg=cfg,
+                            relaxed=relaxed, now=n, last_in=last_in,
+                            last_out=last_out, today_row=None)
                         continue
                     tnorm = phase_norm(gid, phase)
                     topic = (str(g.get("title") or "").strip() or "限时推进")[:40]
@@ -919,16 +1055,15 @@ class SprintGoalTicker:
                 else:
                     # D1b P0-3 自然档每日一拍：与回复链共用今日拍行（consumed/
                     # sent 即让位），窗口内一日一发。
-                    try:
-                        from src.companion.goals.planner import day_key
-                        today_row = gstore.get_action(gid, day_key(n))
-                    except Exception:
-                        today_row = None
                     day = due_daily(
                         g, cfg=cfg, now=n, last_inbound_ts=last_in,
                         last_outbound_ts=last_out, today_action=today_row)
                     if day is None:
                         _skip("not_due")
+                        self._note_pace_block(
+                            gstore, g, gid, conv, sprint=False, cfg=cfg,
+                            relaxed=relaxed, now=n, last_in=last_in,
+                            last_out=last_out, today_row=today_row)
                         continue
                     tnorm = daily_norm(gid, day)
                     topic = (str(g.get("title") or "").strip() or "日常推进")[:40]
@@ -1018,10 +1153,13 @@ class SprintGoalTicker:
 
 
 __all__ = [
+    "BLOCKED_REASONS",
     "DEFAULT_PHASE_POINTS",
     "PHASE_DIRECTIVES",
     "SprintGoalTicker",
     "due_phase",
+    "record_beat_blocked",
+    "record_natural_beat_sent",
     "load_optout_mutes",
     "next_phase_ts",
     "next_daily_ts",
