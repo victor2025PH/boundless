@@ -4,12 +4,29 @@
 # PowerShell/python 循环都活不过几分钟），而计划任务由 Windows 拉起，会话断了也照跑。
 # 单轮逻辑全在 tools/duty_watch_loop.py（--once）：VPS 新包自动下载解包、群消息与
 # mid 跳号、bug_events 全 kind、工单 max(id)，增量写 .ops\duty_watch_loop.log。
-# 只读+只下载，绝不发消息。ASCII-only（PS5.1 GBK 陷阱）。
+# watch_loop 只读+只下载，绝不发消息；本 tick 唯一的发送面是第二步 duty_channel_reminder（见下）。
+# ASCII-only（PS5.1 GBK 陷阱）。
 #
-# 安装：schtasks /Create /TN DutyWatchTick /SC MINUTE /MO 2 /F ^
-#   /TR "powershell -NoProfile -ExecutionPolicy Bypass -File D:\boundless\tools\duty_watch_tick.ps1"
+# 安装（2026-09-04 起必须经 run_hidden.vbs）：交互式分钟任务直指 powershell.exe，
+# 控制台窗口在 -WindowStyle Hidden 生效前就已创建，本任务又没带该参数 → 每 2 分钟
+# 在桌面上真开一个蓝窗、停留约 40 秒（python 跑完才关）。用 wscript(GUI 宿主) 拉起
+# 才是零闪烁；117 只剩 32 位 wscript，故 SysWOW64 + Sysnative 配对，见该 vbs 头部。
+#   Execute  : C:\Windows\SysWOW64\wscript.exe
+#   Arguments: //B //Nologo "D:\workspace\boundless\deploy\instances\run_hidden.vbs"
+#              C:\Windows\Sysnative\WindowsPowerShell\v1.0\powershell.exe
+#              -NoProfile -ExecutionPolicy Bypass -File D:\boundless\tools\duty_watch_tick.ps1
+# 触发器：SC MINUTE /MO 2，Interactive/Administrator。旧任务 XML 备份在
+# D:\chengjie-instances\.ops\task_backups_20260904\
+#
+# 2026-09-06 boss rule: testers must submit bugs via Cursor field-agent report, not the group.
+# Second step below (tools/duty_channel_reminder.py) is the ONLY sender on this tick:
+# it replies once per reporter per 6h when the bot sees a group bug submission, and
+# posts a "received <code>" receipt for newly downloaded reports. Runs after the loop so
+# the loop's freshly downloaded codes are in its state. Own log: .ops\duty_channel_reminder.log
 $ErrorActionPreference = "SilentlyContinue"
 $py = "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe"
 $env:PYTHONIOENCODING = "utf-8"
 & $py "D:\boundless\tools\duty_watch_loop.py" --once 2>&1 |
     Out-File "D:\chengjie-instances\.ops\duty_watch_tick.out.log" -Encoding utf8
+& $py "D:\boundless\tools\duty_channel_reminder.py" 2>&1 |
+    Out-File "D:\chengjie-instances\.ops\duty_channel_reminder.out.log" -Encoding utf8

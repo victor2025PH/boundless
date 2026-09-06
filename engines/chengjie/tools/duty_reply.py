@@ -20,7 +20,12 @@ scp 到 117 执行：Bearer token 明文复制在 10+ 个一次性脚本里、``
 3. 带 ``--ticket`` 时优先走产品端点 ``POST /api/admin/bug-intake/{id}/reply``
    （@报障人 + 工单号 footer + note 回写全在服务端）；端点未装载（旧引擎/
    重启前）自动回落 ``/api/unified-inbox/send`` + 本地直写工单 note——
-   重启前后同一条命令。
+   重启前后同一条命令。**带 ``--reply-to`` 时直接走 send 路径**（/reply 端点
+   不支持引用回复；此前 ``--ticket`` + ``--reply-to`` 会把引用静默丢掉），
+   工单 note 照样本地回写。⚠ 引用只在编排器 worker 的协议发送路径生效
+   （``channel_adapters.send_via_adapters``）；报障群支持号 6834964252 走
+   TelegramClient 适配器回落，**引用会被丢掉**（0906 实测 mid 1224）——
+   对报障群要「对应到哪条」请在正文首行自己写时间/主题。
 4. send 路由会触发「接管即静音」（会话被切 manual）→ 默认按值守 SOP 拨回
    ``auto_ai``（confirm_group 显式带上；``--no-restore`` 可跳过）。
 5. 每次发送追加 JSONL 台账 ``<数据根>/logs/duty_replies.jsonl``（谁/何时/
@@ -201,7 +206,7 @@ def main() -> int:
     ap.add_argument("--no-mention", action="store_true",
                     help="产品端点路径不 @报障人")
     ap.add_argument("--reply-to", type=int, default=0,
-                    help="引用回复的消息 id（仅 send 回落路径支持）")
+                    help="引用回复的消息 id（走 send 路径；带 --ticket 时 note 仍回写）")
     ap.add_argument("--account", default=DEFAULT_ACCOUNT)
     ap.add_argument("--base", default=DEFAULT_BASE)
     ap.add_argument("--data-root", default="")
@@ -281,8 +286,9 @@ def main() -> int:
     path_used = ""
     ok = False
     note = ""
-    # ① 产品端点（工单上下文齐备时优先；旧引擎 404 → 回落）
-    if args.ticket:
+    # ① 产品端点（工单上下文齐备时优先；旧引擎 404 → 回落）。--reply-to 要引用
+    #    原消息，/reply 端点做不到 → 直接走 ②（note 在 ② 里本地回写）。
+    if args.ticket and not args.reply_to:
         body: Dict[str, Any] = {"text": text,
                                 "mention": (not args.no_mention)}
         if args.status:
