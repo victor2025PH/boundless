@@ -1,32 +1,140 @@
-# net_probe_117.ps1 — 117 网线体检探针（实施71 2026-08-27：网线更换前后对比取证）
-# 计划任务 Boundless-net-probe-117 每 5 分钟一拍：物理网卡协商速率 + 三段 ping
-# （网关=线本身 / 176=局域网段 / VPS=公网出口）。判读：换新线后 link 应从
-# 100 Mbps 回到 1 Gbps；任一段 <5/5 = 该段有丢包。网线验收通过后本任务可删：
-#   schtasks /Delete /TN Boundless-net-probe-117 /F
-$ErrorActionPreference = "SilentlyContinue"
-$log = "D:\chengjie-instances\.ops\net_probe_117.log"
-if ((Test-Path $log) -and ((Get-Item $log).Length -gt 2MB)) { Move-Item $log "$log.1" -Force }
-$ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$nic = Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Select-Object -First 1
-$parts = @("link=" + $(if ($nic) { $nic.LinkSpeed } else { "down" }))
-$gw = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Select-Object -First 1).NextHop
-# ping.exe 而非 Test-Connection（pwsh7 的 Test-Connection 对 176 给过 10/10 的误导性
-# 成功，原生 ping 实测 176 恒 100% loss——176 防火墙本就不回 ICMP，属特性非故障，
-# 2026-08-27 06:25 三口径鉴别定案）。故 ICMP 腿只测 网关（网线判据本体）+ VPS（公网
-# 出口）；176 用下方 TCP 业务口作判据。
-foreach ($t in @($gw, "165.154.233.121")) {
-  if (-not $t) { continue }
-  $out = & ping.exe -n 5 -w 1500 $t 2>$null | Out-String
-  $ok = if ($out -match "Received = (\d+)") { $Matches[1] }
-        elseif ($out -match "已接收 = (\d+)") { $Matches[1] } else { "0" }
-  $parts += "${t}=$ok/5"
+﻿# net_probe_117.ps1 — 117 网络监控探针 v2（2026-09-03 重写；v1 见 git 历史）
+# 计划任务 Boundless-net-probe-117 每 1 分钟一拍，输出两处（目录 D:\chengjie-instances\.ops）：
+#   net_probe_117.log         每拍一行状态快照（有线/无线/默认路由/三段 ping/176 业务口）
+#   net_probe_117_events.log  只记「变化」：有线链路起落或速率变化、网关/公网通断、掉电重启(Kernel-Power 41)
+# 判读口径：
+#   wired=Disconnected/0bps  = 有线口无载波（网线/对端口/网卡 PHY 三者之一）
+#   wired=Up 但速率 100 Mbps = 千兆链路劣化（线芯/接触/PHY 边缘状态）
+#   gw ok 而 pub 0           = 局域网通、出口断 → 路由器 WAN/光猫/运营商
+#   gw 0 且 wifi 仍 connected = 路由器本体失联
+#   POWER-LOSS               = 上一轮到本轮之间发生过非正常关机（掉电/死机/长按电源强制重启），不是网络故障本身
+#   SELF-HEAL                = 无线「假在线」（connected、信号满格、但网关连续 ≥2 拍不通）→ 自动重启无线网卡
+#                              2026-09-04 实录 12:09-12:16 / 12:44-12:48 两次，此前只能整机强制重启
+# v1 的 ping 列在计划任务下恒 0/5：文件无 BOM 被 PS5.1 按 GBK 读，中文正则失配。v2 改用 .NET Ping，与语言无关。
+# 本文件必须以 UTF-8 with BOM 保存（计划任务用的是 powershell 5.1）。
+$ErrorActionPreference = 'SilentlyContinue'
+$dir   = 'D:\chengjie-instances\.ops'
+$log   = Join-Path $dir 'net_probe_117.log'
+$evlog = Join-Path $dir 'net_probe_117_events.log'
+$stateFile = Join-Path $dir 'net_probe_117.state.json'
+if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+foreach ($f in @($log, $evlog)) {
+  if ((Test-Path $f) -and ((Get-Item $f).Length -gt 5MB)) { Move-Item $f "$f.1" -Force }
 }
-# TCP 业务口径（176 ollama）：比 ICMP 更贴近真实调用路径
+$now = Get-Date
+$ts  = $now.ToString('yyyy-MM-dd HH:mm:ss')
+
+# ---- 上一轮状态 ----
+$prev = $null
+if (Test-Path $stateFile) { try { $prev = Get-Content $stateFile -Raw | ConvertFrom-Json } catch { $prev = $null } }
+
+# ---- 有线口（板载 Realtek GbE；按描述选，不依赖「以太网」这个会随重装变化的名字）----
+$wired = Get-NetAdapter -Physical | Where-Object { $_.InterfaceDescription -match 'Realtek.*GbE|Realtek PCIe GbE' } | Select-Object -First 1
+if ($wired) {
+  $wst = Get-NetAdapterStatistics -Name $wired.Name
+  $wiredState = "{0}/{1}" -f $wired.Status, ($wired.LinkSpeed -replace '\s+', '')
+  $wiredStr = "wired={0} rxErr={1} rxB={2}" -f $wiredState, $wst.ReceivedPacketErrors, $wst.ReceivedBytes
+} else {
+  $wiredState = 'ABSENT'
+  $wiredStr = 'wired=ABSENT(设备不在列——PCIe 掉卡或被禁用)'
+}
+
+# ---- 无线（USB 棒子）----
+$wifi = Get-NetAdapter -Physical | Where-Object { $_.InterfaceDescription -match 'WiFi|Wireless|WLAN|802\.11' -and $_.Status -eq 'Up' } | Select-Object -First 1
+$ssid = '-'; $sig = '-'
+if ($wifi) {
+  $wl = netsh wlan show interfaces | Out-String
+  if ($wl -match 'SSID\s*:\s*(\S+)') { $ssid = $Matches[1] }
+  if ($wl -match '(\d{1,3})%') { $sig = $Matches[1] + '%' }
+  $wifiStr = "wifi={0}@{1}/{2} sig={3}" -f $wifi.Status, $ssid, ($wifi.LinkSpeed -replace '\s+', ''), $sig
+} else {
+  $wifiStr = 'wifi=down'
+}
+
+# ---- 默认路由：取 (RouteMetric+InterfaceMetric) 最小的那条，避开 ZeroTier 的 9999 兜底路由 ----
+$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
+  Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1
+$gw = $null; $routeStr = 'route=none'
+if ($route) { $gw = $route.NextHop; $routeStr = "route={0}via{1}" -f $route.InterfaceAlias, $gw }
+
+# ---- ping（.NET，不依赖语言）----
+function Probe-Ping([string]$ip, [int]$n = 3) {
+  if (-not $ip) { return @{ ok = 0; avg = -1 } }
+  $p = New-Object System.Net.NetworkInformation.Ping
+  $ok = 0; $sum = 0
+  for ($i = 0; $i -lt $n; $i++) {
+    try { $r = $p.Send($ip, 1000); if ($r.Status -eq 'Success') { $ok++; $sum += $r.RoundtripTime } } catch {}
+  }
+  $avg = -1; if ($ok -gt 0) { $avg = [int]($sum / $ok) }
+  return @{ ok = $ok; avg = $avg }
+}
+$pgw  = Probe-Ping $gw
+$ppub = Probe-Ping '223.5.5.5'
+$pvps = Probe-Ping '165.154.233.121'
+
+# ---- 176 业务口（TCP，176 不回 ICMP 属特性）----
+$tcpOk = $false
 try {
   $c = New-Object Net.Sockets.TcpClient
-  $ar = $c.BeginConnect("192.168.0.176", 11434, $null, $null)
+  $ar = $c.BeginConnect('192.168.0.176', 11434, $null, $null)
   $tcpOk = $ar.AsyncWaitHandle.WaitOne(2000) -and $c.Connected
   $c.Close()
-  $parts += "tcp176:11434=" + $(if ($tcpOk) { "ok" } else { "FAIL" })
-} catch { $parts += "tcp176:11434=FAIL" }
-Add-Content -Path $log -Value ("[$ts] " + ($parts -join "  "))
+} catch { $tcpOk = $false }
+
+# ---- 掉电/死机重启检测：上一轮之后有没有 Kernel-Power 41 ----
+$powerLoss = @()
+$sinceT = $now.AddMinutes(-3)
+if ($prev -and $prev.ts) { try { $sinceT = [datetime]$prev.ts } catch {} }
+$kp = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41; StartTime = $sinceT } -ErrorAction SilentlyContinue
+foreach ($e in $kp) { $powerLoss += $e.TimeCreated.ToString('MM-dd HH:mm:ss') }
+
+# ---- 写快照 ----
+$line = "[{0}] {1}  {2}  {3}  gw={4}/3({5}ms) pub={6}/3({7}ms) vps={8}/3({9}ms) tcp176={10}" -f `
+  $ts, $wiredStr, $wifiStr, $routeStr, $pgw.ok, $pgw.avg, $ppub.ok, $ppub.avg, $pvps.ok, $pvps.avg, $(if ($tcpOk) { 'ok' } else { 'FAIL' })
+if ($powerLoss.Count -gt 0) { $line += "  POWER-LOSS-REBOOT@" + ($powerLoss -join ',') }
+# 显式 UTF8：PS5.1 的 Add-Content 默认 ANSI(GBK)，pwsh7/编辑器按 UTF-8 读会变乱码
+Add-Content -Path $log -Value $line -Encoding UTF8
+
+# ---- 变化才写 events ----
+$cur = [ordered]@{
+  ts = $ts; wired = $wiredState; ssid = $ssid; wifiUp = [bool]$wifi
+  gwUp = ($pgw.ok -gt 0); pubUp = ($ppub.ok -gt 0); tcp176 = $tcpOk; gw = $gw
+}
+$events = @()
+
+# ---- 无线假在线自愈：wifi 仍 Up、默认路由在局域网网关上、但网关与公网连续两拍全 0 ----
+# 有线口在的话不动（真出口是有线）；只重启无线适配器（~5s 重连），不碰整机。10 分钟内最多一次防抖。
+$zombieN = 0; if ($prev -and $prev.zombieN) { $zombieN = [int]$prev.zombieN }
+$lastHeal = $null; if ($prev -and $prev.lastHeal) { try { $lastHeal = [datetime]$prev.lastHeal } catch {} }
+$wiredCarrier = ($wired -and $wired.Status -eq 'Up')
+$zombie = ($wifi -and -not $wiredCarrier -and $gw -match '^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)' -and $pgw.ok -eq 0 -and $ppub.ok -eq 0)
+if ($zombie) { $zombieN++ } else { $zombieN = 0 }
+if ($zombieN -ge 2 -and (-not $lastHeal -or ($now - $lastHeal).TotalMinutes -ge 10)) {
+  $wifiName = $wifi.Name
+  try {
+    Restart-NetAdapter -Name $wifiName -Confirm:$false -ErrorAction Stop
+    $events += "SELF-HEAL: wifi '{0}' 假在线（connected 但网关/公网连续 {1} 拍不通）→ 已 Restart-NetAdapter" -f $wifiName, $zombieN
+  } catch {
+    $events += "SELF-HEAL-FAILED: Restart-NetAdapter '{0}' 失败：{1}" -f $wifiName, $_.Exception.Message
+  }
+  $lastHeal = $now; $zombieN = 0
+}
+$cur.zombieN = $zombieN
+if ($lastHeal) { $cur.lastHeal = $lastHeal.ToString('yyyy-MM-dd HH:mm:ss') }
+
+if (-not $prev) {
+  $events += "probe v2 started: $line"
+} else {
+  if ($prev.wired -ne $cur.wired)   { $events += "WIRED {0} -> {1}" -f $prev.wired, $cur.wired }
+  if ([bool]$prev.wifiUp -ne $cur.wifiUp -or $prev.ssid -ne $cur.ssid) { $events += "WIFI {0}/{1} -> {2}/{3}" -f $prev.wifiUp, $prev.ssid, $cur.wifiUp, $cur.ssid }
+  if ([bool]$prev.gwUp -ne $cur.gwUp)   { $events += "GATEWAY {0} -> {1} (gw={2})" -f $(if ($prev.gwUp) {'reachable'} else {'LOST'}), $(if ($cur.gwUp) {'reachable'} else {'LOST'}), $gw }
+  if ([bool]$prev.pubUp -ne $cur.pubUp) { $events += "INTERNET {0} -> {1}" -f $(if ($prev.pubUp) {'reachable'} else {'LOST'}), $(if ($cur.pubUp) {'reachable'} else {'LOST'}) }
+  if ([bool]$prev.tcp176 -ne $cur.tcp176) { $events += "TCP176 {0} -> {1}" -f $(if ($prev.tcp176) {'ok'} else {'FAIL'}), $(if ($cur.tcp176) {'ok'} else {'FAIL'}) }
+  if ($prev.gw -ne $cur.gw) { $events += "DEFAULT-GW {0} -> {1}" -f $prev.gw, $cur.gw }
+  $gapMin = ($now - [datetime]$prev.ts).TotalMinutes
+  if ($gapMin -gt 3) { $events += ("PROBE-GAP {0:N0} min（上一拍 {1}；机器关机/重启/任务未跑）" -f $gapMin, $prev.ts) }
+}
+foreach ($pl in $powerLoss) { $events += "POWER-LOSS-REBOOT: Kernel-Power 41 @ $pl（非正常关机后开机：掉电/死机/长按电源强制重启，非网络故障本身）" }
+foreach ($e in $events) { Add-Content -Path $evlog -Value ("[{0}] {1}" -f $ts, $e) -Encoding UTF8 }
+
+$cur | ConvertTo-Json -Compress | Set-Content -Path $stateFile -Encoding UTF8
