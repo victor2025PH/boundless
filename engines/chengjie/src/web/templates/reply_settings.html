@@ -378,6 +378,13 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       </label>
     </div>
     <div class="rps-hint" id="rps-master-note" style="display:none;margin:.5rem 0 0"></div>
+    <!-- L-4 E（#200）：人审期缓冲话术并入本卡——只有拟稿人审（含混合）时出现，默认关。
+         开关本体是隐藏的 #rps-holding（高级组承接旧 id，参与收集/回填），这里是它的可见镜像。 -->
+    <div class="rps-row" id="rps-holding-row" style="display:none;margin-top:.5rem;border-top:1px dashed var(--bd)">
+      <span class="rps-row-label">🕊️ {{ (i18n or {}).get('rps_holding_label2', "人审期先发一句缓冲语") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-holding-ui" onchange="rpsHoldingMirror(this)"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_holding_hint2', "等人工审批的消息先按客户语言回一句安全的缓冲语（如「稍等我看看」的对应语种），避免客户被已读不回；同一客户 30 分钟内只发一次，危机场景不发。默认关。") }}</span>
+    </div>
     <!-- P3 状态行：AI 在干活的证据（周代发数）+ 额度余量 + 暂停原因（人话+出路）。
          任一数据源缺席该段静默缺席，绝不摆空架子。 -->
     <div class="rps-hint" id="rps-master-status" style="display:none;margin:.5rem 0 0"></div>
@@ -905,8 +912,13 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
   <!-- 平台专家覆写（P1，2026-08-03）：平台 × 旋钮 矩阵。JS 按后端快照是否
        含平台字段控显（旧进程隐藏整卡，防「前端造出后端不认的键」假脏） -->
   <div class="rps-card" id="rps-sec-plat" style="display:none">
-    <h3>🧭 {{ (i18n or {}).get('rps_plat_title', "平台专家覆写") }}
-      <span class="rps-chip" data-hot-chip="inbox.auto_draft.platform_modes"></span></h3>
+    <!-- L-4 E（#200）：专家表默认折叠进「高级参数」（skuio 实录默认展开满屏矩阵）；
+         「跟随全局」格灰字显示实际生效的全局值；LINE 无打字指示，打字格按实况禁用。 -->
+    <details class="rps-guard-adv" id="rps-plat-fold">
+    <summary><h3 style="display:inline;margin:0">🧭 {{ (i18n or {}).get('rps_plat_title', "平台专家覆写") }}
+      <span class="rps-chip" data-hot-chip="inbox.auto_draft.platform_modes"></span>
+      <span class="rps-chip" style="background:var(--input);color:var(--t3)">{{ (i18n or {}).get('rps_bub_adv', "高级参数") }}</span></h3>
+      <span class="rps-adv-sum" id="rps-plat-sum" style="margin-left:.6rem"></span></summary>
     <p class="rps-hint">{{ (i18n or {}).get('rps_plat_hint', "按聊天软件微调：留空 / 选「跟随全局」的格子全部继承上方全局值。不支持的能力格已按平台实况禁用。") }}</p>
     <div class="rps-plat-wrap">
     <table class="rps-po-table rps-plat-table">
@@ -974,55 +986,43 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span class="rps-adv-sum" id="rps-adv-sum"></span>
     </summary>
 
-    <!-- 语音回复 -->
-    <div class="rps-card">
+    <!-- 语音回复（L-4 E #200，2026-09-06）：「启用开关 + 触发方式」两层曾互相打架
+         （开了开关触发选「从不」＝看着开着却永不出声），合并为单一下拉；底层两键
+         inbox.l2_autosend.voice.enabled / .trigger 原样保留（后端契约与日志 disabled vs
+         never 的区分不变），由下拉驱动隐藏控件写入。旁边显引擎在线/离线（/api/voice/effective-config）。 -->
+    <div class="rps-card" id="rps-sec-voice">
       <h3>🎙️ {{ (i18n or {}).get('rps_voice_title', "语音回复") }}
-        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.voice.enabled"></span></h3>
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.voice.enabled"></span>
+        <span class="rps-chip" id="rps-voice-engine" style="display:none"></span></h3>
       <div class="rps-row" style="border-top:none">
-        <span class="rps-row-label">{{ (i18n or {}).get('rps_voice_enabled', "启用语音回复") }}</span>
-        <label class="rps-switch"><input type="checkbox" id="rps-voice" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-        <span class="rps-row-hint">{{ (i18n or {}).get('rps_voice_enabled_hint', "全自动链路按触发方式把部分回复以克隆声语音发出") }}</span>
-      </div>
-      <div class="rps-row">
-        <span class="rps-row-label">{{ (i18n or {}).get('rps_voice_trigger', "触发方式") }}</span>
-        <select class="rps-select" id="rps-voice-trigger" onchange="rpsMarkDirty()">
-          <option value="never">{{ (i18n or {}).get('rps_vt_never', "从不") }}</option>
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_voice_mode', "语音回复") }}</span>
+        <select class="rps-select" id="rps-voice-mode" onchange="rpsVoiceModeChange(this)">
+          <option value="off">{{ (i18n or {}).get('rps_vm_off', "关闭") }}</option>
           <option value="always">{{ (i18n or {}).get('rps_vt_always', "总是") }}</option>
           <option value="when_peer_voice">{{ (i18n or {}).get('rps_vt_when_peer_voice', "对方发语音才回语音") }}</option>
           <option value="smart">{{ (i18n or {}).get('rps_vt_smart', "智能（按情绪 / 亲密度评分）") }}</option>
         </select>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_voice_mode_hint', "「关闭」是所有语音路径的总闸：主动关怀、自动问候、人设语音设置只能在这个范围内收窄，不能绕过它出声。其余三档决定全自动链路什么时候用人设声线回语音。") }}</span>
       </div>
+      <!-- 底层两键（隐藏，仍参与收集/回填/脏检测；旧脚本按 id 取值零改动） -->
+      <input type="checkbox" id="rps-voice" hidden aria-hidden="true" tabindex="-1">
+      <select id="rps-voice-trigger" hidden aria-hidden="true" tabindex="-1">
+        <option value="never">never</option><option value="always">always</option>
+        <option value="when_peer_voice">when_peer_voice</option><option value="smart">smart</option>
+      </select>
     </div>
 
-    <!-- 缓冲话术 -->
-    <div class="rps-card">
-      <h3>🕊️ {{ (i18n or {}).get('rps_holding_title', "人审期缓冲话术") }}
-        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.holding.enabled"></span></h3>
-      <div class="rps-row" style="border-top:none">
-        <span class="rps-row-label">{{ (i18n or {}).get('rps_holding_label', "待人审消息先发一句缓冲语") }}</span>
-        <label class="rps-switch"><input type="checkbox" id="rps-holding" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-        <span class="rps-row-hint">{{ (i18n or {}).get('rps_holding_hint', "需人工审批的消息（L3）先回「稍等我看看哈~」，避免客户被已读不回") }}</span>
-      </div>
-    </div>
+    <!-- 缓冲话术已并入上方「AI 接管」卡（L-4 E #200：仅拟稿人审时出现）；这里只留隐藏控件承接旧 id -->
+    <input type="checkbox" id="rps-holding" hidden aria-hidden="true" tabindex="-1" onchange="rpsMarkDirty()">
 
-    <!-- 按人设覆写节奏（P1） -->
-    <div class="rps-card">
+    <!-- 按人设覆写节奏（L-4 E #200）：「人设 ID + 秒数」表删除——用户不该填人设 ID；
+         已存在的覆写继续生效（保存不改动它们），编辑入口迁人设工作室「快 / 中 / 慢」三档（L-2 下一批）。 -->
+    <div class="rps-card" id="rps-sec-po">
       <h3>🎭 {{ (i18n or {}).get('rps_po_title', "按人设覆写节奏") }}
         <span class="rps-chip" data-hot-chip="inbox.l2_autosend.deliver_delay.persona_overrides"></span></h3>
-      <p class="rps-hint">{{ (i18n or {}).get('rps_po_hint', "不同人设可以有不同打字节奏（急性子快、慢热型慢）。留空的格子跟随上方全局值；表里没有的人设全按全局。") }}</p>
-      <table class="rps-po-table">
-        <thead><tr>
-          <th>{{ (i18n or {}).get('rps_po_persona', "人设 ID") }}</th>
-          <th>{{ (i18n or {}).get('rps_po_min', "最快（秒）") }}</th>
-          <th>{{ (i18n or {}).get('rps_po_max', "最慢（秒）") }}</th>
-          <th>{{ (i18n or {}).get('rps_po_adaptive', "自适应") }}</th>
-          <th></th>
-        </tr></thead>
-        <tbody id="rps-po-body"></tbody>
-      </table>
-      <div class="rps-po-empty" id="rps-po-empty" style="display:none">{{ (i18n or {}).get('rps_po_empty', "暂无覆写——全部人设使用全局节奏") }}</div>
-      <button class="rps-po-add" onclick="rpsPoAdd()">{{ (i18n or {}).get('rps_po_add', "＋ 添加人设覆写") }}</button>
-      <datalist id="rps-po-personas"></datalist>
+      <p class="rps-hint" id="rps-po-pointer">{{ (i18n or {}).get('rps_po_moved', "每个人设的打字节奏（快 / 中 / 慢）请到「人设工作室」对应人设里设置；这里不再按人设 ID 填秒数。") }}
+        <a href="/personas" style="color:var(--p);font-weight:600">{{ (i18n or {}).get('personas', "人设工作室") }} →</a></p>
+      <p class="rps-hint" id="rps-po-count" style="display:none;margin-top:.3rem"></p>
     </div>
   </details>
 </div>
@@ -1252,6 +1252,18 @@ var RPS_I18N = {
   pvResult: {{ (i18n or {}).get('rps_pv_result', "本次抽样 {s} 秒送达")|tojson }},
   pvSpeedup: {{ (i18n or {}).get('rps_pv_speedup', "{x}× 加速")|tojson }},
   advSum: {{ (i18n or {}).get('rps_adv_sum', "语音 {v} · 缓冲 {h} · 人设覆写 {n}")|tojson }},
+  /* L-4 E（#200） */
+  poKept: {{ (i18n or {}).get('rps_po_kept', "{n} 个人设已有自定义节奏（{list}），继续生效；修改请到人设工作室。")|tojson }},
+  poFollowVal: {{ (i18n or {}).get('rps_po_follow_val', "跟随全局（{v}）")|tojson }},
+  voiceEngineOn: {{ (i18n or {}).get('rps_voice_engine_on', "引擎在线")|tojson }},
+  voiceEngineOff: {{ (i18n or {}).get('rps_voice_engine_off', "引擎离线")|tojson }},
+  voiceRisk: {
+    unreachable: {{ (i18n or {}).get('rps_voice_risk_unreachable', "语音服务连不上")|tojson }},
+    engine_offline: {{ (i18n or {}).get('rps_voice_risk_engine_offline', "所选声线引擎离线")|tojson }},
+    timing_out: {{ (i18n or {}).get('rps_voice_risk_timing_out', "语音服务超时熔断中")|tojson }}
+  },
+  platSum: {{ (i18n or {}).get('rps_plat_sum', "{n} 格已覆写")|tojson }},
+  platSumNone: {{ (i18n or {}).get('rps_plat_sum_none', "全部跟随全局")|tojson }},
   scoreLabel: {{ (i18n or {}).get('rps_score_label', "拟人度 {n}")|tojson }},
   scoreNatural: {{ (i18n or {}).get('rps_score_natural', "自然")|tojson }},
   scoreMid: {{ (i18n or {}).get('rps_score_mid', "一般")|tojson }},
@@ -1577,6 +1589,21 @@ function rpsPlatSelect(attr, options, cur, followLabel, disabled, title){
   return h + '</select>';
 }
 
+/* L-4 E（#200）：平台实况兜底——LINE 没有「输入中」指示（协议层不存在），能力矩阵探测不到
+   （M43ZWH：LINE 打字格仍可选），这里按产品事实硬禁；其余仍以 platform_caps 为准。 */
+var RPS_PLAT_KNOWN_UNSUPPORTED = {line: {typing: true}};
+
+/* 「跟随全局」格灰字显示实际生效的全局值（此前只写「跟随全局」四个字，用户不知道跟随的是几秒） */
+function rpsGlobalVal(id){
+  var el = document.getElementById(id);
+  if (!el) return '';
+  if (el.type === 'checkbox') return el.checked ? RPS_I18N.xOn : RPS_I18N.xOff;
+  return String(el.value || '');
+}
+function rpsFollowLabel(val){
+  return val === '' || val === undefined || val === null ? RPS_I18N.poFollow : RPS_I18N.poFollowVal.replace('{v}', val);
+}
+
 function rpsPlatRow(p){
   var d = rpsPlatState.delays[p] || {};
   var f = rpsPlatState.flags[p] || {};
@@ -1753,6 +1780,9 @@ function rpsFill(values){
     rpsFieldSet(def, values[def.path]);
   });
   rpsPoRender(values[RPS_PO_KEY] || {});
+  rpsVoiceModeSync();       // L-4 E：单一下拉跟随底层两键
+  rpsHoldingRowSync();      // L-4 E：缓冲语镜像跟随本体
+  rpsPlatSummary();
   rpsPaceRefresh();
   rpsBubEst();
   rpsGuardSyncUnlimited();
@@ -1909,16 +1939,31 @@ function rpsPoRow(pid, entry){
     + '</tr>';
 }
 
+/* L-4 E（#200）：人设覆写表已从本页删除——existing overrides 原样保留并回传（保存不改它们），
+   页面只显「N 个人设有自定义节奏」。rps-po-body 不在 DOM 时走这条；表若被别的模板重新
+   放回（如内部形态需要），旧逐行逻辑仍在下方原样可用。 */
+var rpsPoStored = {};
 function rpsPoRender(map){
+  rpsPoStored = JSON.parse(JSON.stringify(map || {}));
   var body = document.getElementById('rps-po-body');
   var pids = Object.keys(map || {}).sort();
+  if (!body){
+    var cnt = document.getElementById('rps-po-count');
+    if (cnt){
+      cnt.style.display = pids.length ? '' : 'none';
+      cnt.textContent = pids.length ? RPS_I18N.poKept.replace('{n}', pids.length).replace('{list}', pids.slice(0, 6).join(', ') + (pids.length > 6 ? '…' : '')) : '';
+    }
+    return;
+  }
   body.innerHTML = pids.map(function(pid){ return rpsPoRow(pid, map[pid]); }).join('');
-  document.getElementById('rps-po-empty').style.display = pids.length ? 'none' : '';
+  var emp = document.getElementById('rps-po-empty');
+  if (emp) emp.style.display = pids.length ? 'none' : '';
 }
 
 function rpsPoCollect(){
   // 空 pid 行忽略；重复 pid 置 dup 标志由保存口拦截
   var out = {}; rpsPoDupFlag = false;
+  if (!document.getElementById('rps-po-body')) return JSON.parse(JSON.stringify(rpsPoStored || {}));
   document.querySelectorAll('#rps-po-body tr').forEach(function(tr){
     var pid = (tr.querySelector('[data-po="pid"]').value || '').trim();
     if (!pid) return;
@@ -1937,6 +1982,7 @@ function rpsPoCollect(){
 
 function rpsPoAdd(){
   var body = document.getElementById('rps-po-body');
+  if (!body) return;   // L-4 E：表已删，入口迁人设工作室
   body.insertAdjacentHTML('beforeend', rpsPoRow('', {}));
   document.getElementById('rps-po-empty').style.display = 'none';
   var last = body.lastElementChild;
@@ -2290,6 +2336,7 @@ var rpsMasterBusy = false;
 function rpsMasterRender(mode){
   var boxes = document.querySelectorAll('#rps-master input[name="rps-master"]');
   boxes.forEach(function(i){ i.checked = (i.value === mode); });
+  rpsHoldingRowSync(mode);   // L-4 E：缓冲语行只在拟稿人审（含混合）时出现
   var note = document.getElementById('rps-master-note');
   if (note){
     if (mode === 'custom'){ note.style.display = ''; note.textContent = RPS_I18N.masterCustom; }
@@ -2915,6 +2962,80 @@ function rpsAdvSummary(){
     .replace('{v}', v && v.checked ? RPS_I18N.xOn : RPS_I18N.xOff)
     .replace('{h}', h && h.checked ? RPS_I18N.xOn : RPS_I18N.xOff)
     .replace('{n}', n);
+}
+
+/* ── L-4 E（#200）：语音单一下拉 ⇄ 底层两键（enabled / trigger）──────────────
+   模式 = !enabled → off；trigger==never → off（开着开关却「从不」＝事实上关，按 off 显示）；
+   否则 = trigger。选 off 只翻 enabled=false、trigger 保留（后端日志据此区分 disabled 与 never）；
+   选其他档 enabled=true + trigger=该档。 */
+function rpsVoiceModeSync(){
+  var sel = document.getElementById('rps-voice-mode');
+  var en = document.getElementById('rps-voice');
+  var tr = document.getElementById('rps-voice-trigger');
+  if (!sel || !en || !tr) return;
+  var mode = (!en.checked || tr.value === 'never') ? 'off' : (tr.value || 'when_peer_voice');
+  if (!Array.prototype.some.call(sel.options, function(o){ return o.value === mode; })) mode = 'off';
+  sel.value = mode;
+}
+function rpsVoiceModeChange(sel){
+  var en = document.getElementById('rps-voice');
+  var tr = document.getElementById('rps-voice-trigger');
+  if (!en || !tr) return;
+  var mode = sel.value || 'off';
+  if (mode === 'off'){ en.checked = false; }
+  else { en.checked = true; tr.value = mode; }
+  rpsMarkDirty();
+  rpsAdvSummary();
+  if (typeof rpsScoreUpdate === 'function') rpsScoreUpdate();
+}
+window.rpsVoiceModeChange = rpsVoiceModeChange;
+
+/* 引擎状态（在线 / 离线）：复用 /api/voice/effective-config（与真发同源解析）；
+   任何失败静默不显——这是提示不是阻断，别用红字吓人。 */
+function rpsVoiceEngineStatus(){
+  var chip = document.getElementById('rps-voice-engine');
+  if (!chip || typeof apiFetch !== 'function') return;
+  apiFetch('/api/voice/effective-config?platform=telegram').then(function(r){ return r.json(); }).then(function(d){
+    if (!d || d.ok === false){ chip.style.display = 'none'; return; }
+    var risk = String(d.hub_risk || '');
+    var online = (d.ready !== false) && !risk;
+    chip.style.display = '';
+    chip.textContent = online ? RPS_I18N.voiceEngineOn : (RPS_I18N.voiceEngineOff + (risk ? ' · ' + (RPS_I18N.voiceRisk[risk] || risk) : ''));
+    chip.style.background = online ? 'rgba(16,185,129,.14)' : 'rgba(245,158,11,.14)';
+    chip.style.color = online ? 'var(--green,#059669)' : 'var(--amber,#b45309)';
+    chip.title = String(d.backend || d.effective_backend || '');
+  }).catch(function(){ chip.style.display = 'none'; });
+}
+
+/* 人审期缓冲语：可见镜像 #rps-holding-ui ⇄ 隐藏本体 #rps-holding；只在拟稿人审（含混合）时出现 */
+function rpsHoldingMirror(cb){
+  var real = document.getElementById('rps-holding');
+  if (real){ real.checked = !!cb.checked; }
+  rpsMarkDirty();
+  rpsAdvSummary();
+}
+window.rpsHoldingMirror = rpsHoldingMirror;
+function rpsHoldingRowSync(mode){
+  var row = document.getElementById('rps-holding-row');
+  var ui = document.getElementById('rps-holding-ui');
+  var real = document.getElementById('rps-holding');
+  if (!row) return;
+  if (mode !== undefined) row.setAttribute('data-master', String(mode || ''));
+  var m = row.getAttribute('data-master') || '';
+  row.style.display = (m === 'suggest' || m === 'custom') ? '' : 'none';
+  if (ui && real) ui.checked = !!real.checked;
+}
+
+/* 平台专家表摘要（折叠不失明）：有几格覆写 */
+function rpsPlatSummary(){
+  var el = document.getElementById('rps-plat-sum');
+  if (!el) return;
+  var n = 0;
+  try {
+    var c = rpsPlatCollect();
+    n = Object.keys(c.modes).length + Object.keys(c.delays).length + Object.keys(c.flags).length + Object.keys(c.voices).length;
+  } catch (e) { n = 0; }
+  el.textContent = n ? RPS_I18N.platSum.replace('{n}', n) : RPS_I18N.platSumNone;
 }
 
 /* ── 拟人度评分（P2）：延迟区间/自适应/已读/输入中/语音 五因子加权，随表单实时刷新。
@@ -3844,5 +3965,11 @@ rpsMasterStatus();
 rpsFactorsLoad();
 rpsPoLoadPersonas();
 rpsExplainLoad();
+rpsVoiceEngineStatus();   // L-4 E：语音引擎在线/离线 chip
+/* L-4 E：平台专家表任何改动刷新折叠摘要（事件委托，动态行零内联 handler） */
+(function(){
+  var pb = document.getElementById('rps-plat-body');
+  if (pb){ pb.addEventListener('change', function(){ rpsPlatSummary(); }); pb.addEventListener('input', function(){ rpsPlatSummary(); }); }
+})();
 </script>
 {% endblock %}

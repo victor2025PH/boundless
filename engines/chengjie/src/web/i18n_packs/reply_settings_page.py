@@ -578,6 +578,22 @@ ZH = {
     "rps_bub_budget": "全部间隔总预算（秒）",
     "rps_bub_budget_hint": "出厂 40 秒＝手动发送防前端超时的护栏（典型 2 个间隔约 14 秒，触不到）；0＝不设上限。超预算按比例压缩、保节奏形状。",
     "rps_bub_js_est": "条间隔估算：中文短句约 {zh} · 英文一句约 {en}（不含随机抖动）",
+    # ── L-4 E（#200，2026-09-06）：语音单一下拉 / 缓冲语并入人审 / 人设覆写表迁移 / 平台表折叠 ──
+    "rps_voice_mode": "语音回复",
+    "rps_vm_off": "关闭",
+    "rps_voice_mode_hint": "「关闭」是所有语音路径的总闸：主动关怀、自动问候、人设语音设置只能在这个范围内收窄，不能绕过它出声。其余三档决定全自动链路什么时候用人设声线回语音。",
+    "rps_voice_engine_on": "引擎在线",
+    "rps_voice_engine_off": "引擎离线",
+    "rps_voice_risk_unreachable": "语音服务连不上",
+    "rps_voice_risk_engine_offline": "所选声线引擎离线",
+    "rps_voice_risk_timing_out": "语音服务超时熔断中",
+    "rps_holding_label2": "人审期先发一句缓冲语",
+    "rps_holding_hint2": "等人工审批的消息先按客户语言回一句安全的缓冲语（如「稍等我看看」的对应语种），避免客户被已读不回；同一客户 30 分钟内只发一次，危机场景不发。默认关。",
+    "rps_po_moved": "每个人设的打字节奏（快 / 中 / 慢）请到「人设工作室」对应人设里设置；这里不再按人设 ID 填秒数。",
+    "rps_po_kept": "{n} 个人设已有自定义节奏（{list}），继续生效；修改请到人设工作室。",
+    "rps_po_follow_val": "跟随全局（{v}）",
+    "rps_plat_sum": "{n} 格已覆写",
+    "rps_plat_sum_none": "全部跟随全局",
 }
 
 EN = {
@@ -1135,4 +1151,20 @@ EN = {
     "rps_bub_budget": "Total gap budget (sec)",
     "rps_bub_budget_hint": "Default 40s = guard for manual sends against frontend timeouts (a typical 2-gap reply totals ~14s and never hits it); 0 = no ceiling. Gaps compress proportionally when exceeded, preserving rhythm shape.",
     "rps_bub_js_est": "Estimated gap: short Chinese sentence ≈ {zh} · English sentence ≈ {en} (excl. random jitter)",
+    # -- L-4 E (#200, 2026-09-06) --
+    "rps_voice_mode": "Voice replies",
+    "rps_vm_off": "Off",
+    "rps_voice_mode_hint": "\"Off\" is the master gate for every voice path: proactive care, auto-greetings and per-persona voice settings can only narrow it, never bypass it. The other three options decide when the autopilot answers in the persona's voice.",
+    "rps_voice_engine_on": "Engine online",
+    "rps_voice_engine_off": "Engine offline",
+    "rps_voice_risk_unreachable": "voice service unreachable",
+    "rps_voice_risk_engine_offline": "selected voice engine offline",
+    "rps_voice_risk_timing_out": "voice service timing out (circuit open)",
+    "rps_holding_label2": "Send a holding line while awaiting review",
+    "rps_holding_hint2": "Messages waiting for human approval first get a safe holding line in the customer's language (the local equivalent of \"give me a moment\") so they are not left on read; at most once per customer per 30 minutes, never in crisis scenarios. Off by default.",
+    "rps_po_moved": "Set each persona's typing pace (fast / medium / slow) inside Persona Studio; this page no longer takes persona IDs and seconds.",
+    "rps_po_kept": "{n} personas already have a custom pace ({list}); they stay in effect — edit them in Persona Studio.",
+    "rps_po_follow_val": "Follow global ({v})",
+    "rps_plat_sum": "{n} cells overridden",
+    "rps_plat_sum_none": "All following global",
 }
