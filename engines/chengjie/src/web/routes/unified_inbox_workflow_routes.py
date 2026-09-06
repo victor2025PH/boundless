@@ -640,22 +640,32 @@ def register_workflow_routes(app, *, api_auth) -> None:
                 conv = None
             if conv and str(conv.get("chat_type") or "private") == "private":
                 rows.append({"conversation_id": cid})
+        # #209 预览三数：matched=符合筛选的去重会话 / skipped=在途或 7 天内挂过 /
+        # eligible=可挂；candidates 仍按 limit 截断（真落地上限不变），但计数扫全量
+        # ——弹层要能如实告诉坐席「符合 N · 将挂 min(N,50) · 跳过 M」。
+        matched = 0
+        skipped = 0
+        eligible = 0
         for r in rows:
             cid = str(r.get("conversation_id") or "")
             if not cid or cid in seen:
                 continue
             seen.add(cid)
+            matched += 1
             try:
                 if store.has_running_chain(cid, chain_id):
+                    skipped += 1
                     continue
                 if store.chain_started_since(
                         cid, chain_id, now - _BULK_REFIRE_GUARD_SEC):
+                    skipped += 1
                     continue
             except Exception:
+                skipped += 1
                 continue
-            candidates.append(cid)
-            if len(candidates) >= limit:
-                break
+            eligible += 1
+            if len(candidates) < limit:
+                candidates.append(cid)
         dry = bool(body.get("dry_run", True))
         if dry:
             sample = []
@@ -664,22 +674,29 @@ def register_workflow_routes(app, *, api_auth) -> None:
                 sample.append({"conversation_id": cid,
                                "display_name": str(conv.get("display_name") or "")})
             return {"ok": True, "dry_run": True,
-                    "candidates": len(candidates), "sample": sample}
+                    "candidates": len(candidates), "sample": sample,
+                    "matched": matched, "eligible": eligible, "skipped": skipped,
+                    "limit": limit}
         agent = str(request.session.get("username") or "")
         started = 0
+        exec_ids: list = []
         for cid in candidates:
             try:
-                store.start_chain_execution(
+                ex_id = store.start_chain_execution(
                     chain_id, cid, {"bulk": True, "agent": agent},
                     schedule_first_step=True)
                 started += 1
+                if ex_id:
+                    exec_ids.append(str(ex_id))
                 _goal_chain_event(request, cid, "chain_started",
                                   str(chain.get("name") or chain_id))
             except Exception:
                 logger.debug("bulk-start 单条失败（已跳过）%s", cid,
                              exc_info=True)
+        # exec_ids 供前端「已挂 N 个（可撤销）」逐条 POST chain-executions/{id}/cancel
         return {"ok": True, "dry_run": False, "started": started,
-                "candidates": len(candidates)}
+                "candidates": len(candidates), "exec_ids": exec_ids,
+                "matched": matched, "eligible": eligible, "skipped": skipped}
 
     @app.get("/api/workspace/journey-funnel")
     async def api_journey_funnel(request: Request, days: int = 14):

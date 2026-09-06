@@ -79,6 +79,33 @@ def _has_business_context(text: str) -> bool:
     )
 
 
+# ── 交易 / 收据 / 购买 / 媒体请求（#208 L-1 C，2026-09-06）────────────────────
+# FTK6S7：「I want to buy vitamins」「Send me the receipt」被标 greeting → 走问候
+# 技能（S1 秒回 / 寒暄 prompt），答非所问。带请求动作或钱物名词的句子不是寒暄，
+# 哪怕开头是 hi。词表偏保守（只收明确的请求/交易语），防误伤真寒暄。
+_REQUEST_CONTEXT_ZH: tuple[str, ...] = (
+    "买", "购买", "下单", "收据", "发票", "付款", "付钱", "转账", "汇款", "多少钱", "价格",
+    "报价", "发我", "给我发", "发给我", "发一下", "发张", "照片", "视频", "语音", "自拍",
+    "打电话", "视频通话", "收款", "银行", "账号", "余额", "充值", "提现",
+)
+_REQUEST_CONTEXT_EN_RE = re.compile(
+    r"\b(buy|buying|purchase|purchasing|order|checkout|receipt|invoice|pay|paid|payment|"
+    r"price|pricing|cost|how much|transfer|deposit|withdraw|refund|"
+    r"send (?:me|us|it|the|a|your)|give me|show me|share (?:me|the|your)|"
+    r"photo|photos|picture|pictures|pic|pics|selfie|video|voice note|call me|"
+    r"gcash|paypal|bank|account number|money|cash|wallet|vitamins?)\b",
+    re.I,
+)
+
+
+def has_request_context(text: str) -> bool:
+    """含交易 / 收据 / 购买 / 媒体请求语——不是寒暄，不得判 greeting。"""
+    raw = text or ""
+    if any(x in raw for x in _REQUEST_CONTEXT_ZH):
+        return True
+    return bool(_REQUEST_CONTEXT_EN_RE.search(f" {raw.lower()} "))
+
+
 def is_greeting_message(text: str, *, max_len: int = 56) -> bool:
     """
     是否主要为寒暄问候（用于意图=greeting）。
@@ -88,6 +115,8 @@ def is_greeting_message(text: str, *, max_len: int = 56) -> bool:
     if not raw or len(raw) > max_len:
         return False
     if _has_business_context(raw):
+        return False
+    if has_request_context(raw):
         return False
     tl = raw.lower()
     if is_standalone_zai_query(raw):

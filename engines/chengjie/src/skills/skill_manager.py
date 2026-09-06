@@ -34,7 +34,9 @@ from src.utils.channel_status_format import (
     format_live_channel_status_text,
     is_channel_disabled,
 )
-from src.utils.greeting_lexicon import is_greeting_message, merge_greeting_substrings
+from src.utils.greeting_lexicon import (
+    has_request_context, is_greeting_message, merge_greeting_substrings,
+)
 from src.utils.logger import LoggerMixin
 from src.ai.ai_client import AIClient
 from src.skills.base import Skill
@@ -2715,6 +2717,10 @@ class SkillManager(LoggerMixin):
                     self.logger.debug(
                         "%s[fabrication_guard] 守卫异常（放行原文）",
                         log_prefix, exc_info=True)
+                # 5c2d. 近况陈述编造守卫（#208 L-1 C）：往事守卫管「我们过去…」，这条管
+                # 「我此刻…」——无来源的天气/地点行程/正在做的事句级剥离（FTK6S7）。
+                reply = self._apply_status_fabrication_guard(
+                    reply, user_context, text, log_prefix=log_prefix, source="a_line")
 
             # 5c3. 带货链接纪律守卫（P4）：soft/hold 日 LLM 从历史复读出官网
             # 下单链 → 按当日 CTA 档确定性剥离（读 _goal_cta 后即焚）。
@@ -3579,6 +3585,14 @@ class SkillManager(LoggerMixin):
                     self.logger.debug(
                         "%s[fabrication_guard] 守卫异常（放行原文）",
                         log_prefix, exc_info=True)
+                # 9b3. 近况陈述编造守卫（#208 L-1 C）：与 A 线 5c2d 同一入口同一口径——
+                # B 线草稿经人审/autosend 发出，「刚散完步这边下着小雨」在坐席眼里只是
+                # 自然寒暄，没人会核对档案里有没有雨（FTK6S7 正是 B 线 autosend）。
+                _before_st = reply
+                reply = self._apply_status_fabrication_guard(
+                    reply, user_context, text, log_prefix=log_prefix, source="b_line")
+                if reply != _before_st:
+                    _metric("fabrication_status_strip")
 
             # 9c. 时空接轨守卫（2026-08-02 补缺口）：此前只接 A 线——B 线草稿
             # 经人审/autosend 发出的文本没有任何时段/星期/错城剥离，跨时区
@@ -3846,11 +3860,18 @@ class SkillManager(LoggerMixin):
         if any(m in text_lower for m in _question_markers):
             return 'direct_chat'
 
+        # #208（L-1 C，2026-09-06）：带交易 / 收据 / 购买 / 媒体请求语（「I want to buy
+        # vitamins」「Send me the receipt」）→ 直聊接话：不进 greeting（S1 秒回 / 寒暄
+        # prompt 答非所问，FTK6S7），也不进 small_talk（S5 可能静默不回）。
+        if has_request_context(raw):
+            return 'direct_chat'
         if len(text_lower) <= 10:
             return 'direct_chat'
         if len(text_lower) < 20:
             return 'small_talk'
-        return 'greeting'
+        # ≥20 字、无问号、无业务词的陈述句此前兜底判 greeting——greeting 自此只由
+        # is_greeting_message 的寒暄词库正向判定，长陈述按直聊接话。
+        return 'direct_chat'
 
 
     def _select_skill(self, intent: str, user_context: Dict[str, Any]) -> Optional['Skill']:
@@ -10250,6 +10271,64 @@ class SkillManager(LoggerMixin):
             return pg if isinstance(pg, dict) else {}
         except Exception:
             return {}
+
+    def _apply_status_fabrication_guard(
+        self, reply: str, user_context: Dict[str, Any], user_text: str = "",
+        *, log_prefix: str = "", source: str = "a_line",
+    ) -> str:
+        """近况陈述编造守卫（#208 L-1 C，2026-09-06）：剥无来源的自指「天气 / 地点·行程 /
+        正在做的事」句。与 media_promise_guard / persona_guard 同层，确定性最后防线。
+
+        FTK6S7：档案无雨、无天气源、记忆 0 条，问候却答「Just got back from a walk, the
+        rain's light here」，且编造进历史后被当事实反复提。来源池 = 人设档案（background /
+        role / hobbies / schedule / specific_memories / likes）+ 天气源 + 场景状态 + 记忆 /
+        摘要 + 客户入站；**AI 自己的历史句不算来源**。剥空 → 如实回落原文（应答不能失语，
+        计数 + WARNING 让它被看见）。子开关 companion.fabrication_guard.status.enabled
+        （默认开）。任何异常放行原文。
+        """
+        if not reply:
+            return reply
+        try:
+            cfg = self.config.config if hasattr(self.config, "config") else {}
+            _fg = (((cfg or {}).get("companion") or {}).get("fabrication_guard") or {})
+            _st = (_fg.get("status") or {}) if isinstance(_fg, dict) else {}
+            if isinstance(_st, dict) and _st.get("enabled") is False:
+                return reply
+            from src.utils.proactive_fabrication_guard import (
+                build_status_evidence,
+                persona_status_facts,
+                record_fabrication_guard,
+                strip_status_claims,
+            )
+            ev = build_status_evidence(user_context, user_text)
+            pid = str((user_context or {}).get("account_persona_id") or "").strip()
+            if pid:
+                try:
+                    from src.utils.persona_manager import PersonaManager
+                    _pf = persona_status_facts(
+                        PersonaManager.get_instance().get_persona_by_id(pid))
+                    if _pf:
+                        ev["texts"].append(_pf)
+                except Exception:
+                    pass
+            new_text, info = strip_status_claims(reply, ev)
+            record_fabrication_guard(info, source=source)
+            if info.get("status_stripped"):
+                self.logger.info(
+                    "%s[fabrication_guard] 无来源近况陈述（%s），剥离 %d 句%s：%r",
+                    log_prefix, "/".join(info.get("status_cats") or []),
+                    len(info["status_stripped"]),
+                    "（剥空→回落原文）" if info.get("all_stripped") else "",
+                    info["status_stripped"][:2])
+                if info.get("all_stripped"):
+                    self.logger.warning(
+                        "%s[fabrication_guard] 整条回复都是无来源近况陈述，原文放行待观测：%r",
+                        log_prefix, str(reply)[:120])
+            return new_text
+        except Exception:
+            self.logger.debug(
+                "%s[fabrication_guard] 近况守卫异常（放行原文）", log_prefix, exc_info=True)
+            return reply
 
     def _apply_world_clock_guard(
         self, reply: str, user_context: Dict[str, Any], log_prefix: str = "",

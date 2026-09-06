@@ -803,6 +803,8 @@ _BASELINE = """
 /api/workspace/ai-runtime-status	GET
 /api/workspace/ai-weekly-brief	GET
 /api/workspace/hosted-quota	GET
+/api/workspace/channel-alert/mute	POST
+/api/workspace/channel-alert/disable	POST
 /api/companion/proactive/preview	GET
 /api/companion/capabilities	GET
 /api/companion/capabilities/delivery-calibration	GET

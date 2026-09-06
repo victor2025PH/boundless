@@ -14,39 +14,69 @@
    · resolve(string)＝用户确认（含空串）；resolve(null)＝取消 / Esc / 点背板；
    · 同时只允许一个弹层在场：第二次调用会先把前一个按取消收掉；
    · 打开即聚焦输入框并全选默认值；Enter 确认、Esc 取消；
-   · opts = { ok, cancel, placeholder, type }（type 默认 "text"，可传 "number"）；
-     按钮文案未传时按页面语言给 zh/en 缺省（不依赖任何 i18n 系统，App 宿主
-     与 Jinja 壳都能用）。
-   · 样式只用 --cp-、--tk-、--p 主题变量 + 中性回落值，不引入新的品牌色字面量。
-   静态门禁 tests/test_no_bare_prompt.py 禁止模板与共享组件再出现原生 prompt 调用。 */
+   · opts = { ok, cancel, placeholder, type, hint, min, max, step, preview }
+     - type 默认 "text"，可传 "number"；number 且给了 min/max → 渲染 −/+ 步进器
+       并把值夹在 [min,max]（越界回弹，不让「0 天」「999 天」直接过闸）；
+     - hint：标题下方一行说明（次级色，不再和标题争同一行）；
+     - preview(value) → string | Promise<string>：值变化后（120ms 去抖）实时渲染预览行
+       （#209「符合条件 N · 将挂 min(N,50) · 跳过 M」），抛错/返回空即隐藏；
+     - 按钮文案未传时按页面语言给 zh/en 缺省（不依赖任何 i18n 系统，App 宿主
+       与 Jinja 壳都能用）。
+   · 主题（#209 YD2SMM：工作台壳白底压深色主题）：三宿主各自的令牌都读——
+     copilot App `--cp-*`、工作台壳 `--tk-surface/--tk-text/--tk-border/--tk-brand`、
+     经典后台壳 `--card/--t/--bd/--p`、收件箱 `--bg-panel/--text-main/--border/--accent`，
+     最后才是中性回落值；不引入新的品牌色字面量。
+   静态门禁 tests/test_no_bare_prompt.py 禁止模板与共享组件再出现原生 prompt 调用；
+   tests/test_ui_prompt_theme_209.py 钉令牌链与步进/预览契约。 */
 (function () {
   "use strict";
   if (typeof window === "undefined" || typeof window.uiPrompt === "function") return;
 
   var STYLE_ID = "ui-prompt-style";
+  /* 令牌链：cp（App 宿主）→ tk（工作台壳）→ 经典壳 → 收件箱 → 中性回落 */
+  var SURFACE = "var(--cp-surface,var(--tk-surface,var(--card,var(--bg-panel,#fff))))";
+  var TEXT = "var(--cp-text,var(--tk-text,var(--t,var(--text-main,#111827))))";
+  var MUTED = "var(--cp-text-dim,var(--tk-text-muted,var(--t2,var(--text-sub,#6b7280))))";
+  var BORDER = "var(--cp-border,var(--tk-border,var(--bd,var(--border,#d1d5db))))";
+  var INPUT_BG = "var(--cp-bg,var(--tk-surface-2,var(--input,var(--bg-soft,var(--tk-surface,var(--card,#fff))))))";
+  var BRAND = "var(--p,var(--tk-brand,var(--cp-accent,var(--accent,#1e8cf2))))";
   var CSS =
     ".uip-backdrop{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;" +
     "justify-content:center;background:rgba(15,23,42,.45);padding:16px;box-sizing:border-box;}" +
-    ".uip-card{width:min(420px,100%);background:var(--cp-surface,var(--tk-bg-card,var(--bg-card,#fff)));" +
-    "color:var(--cp-text,var(--tk-text,var(--text,#111827)));border:1px solid var(--cp-border,var(--tk-border,#e5e7eb));" +
-    "border-radius:12px;box-shadow:0 18px 48px rgba(0,0,0,.28);padding:16px 16px 12px;box-sizing:border-box;" +
-    "font:inherit;font-size:14px;line-height:1.5;}" +
-    ".uip-title{margin:0 0 10px;font-size:14px;font-weight:600;white-space:pre-wrap;word-break:break-word;}" +
-    ".uip-input{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:8px 10px;" +
-    "border:1px solid var(--cp-border,var(--tk-border,#d1d5db));border-radius:8px;" +
-    "background:var(--cp-bg,var(--tk-bg,#fff));color:inherit;outline:none;}" +
-    ".uip-input:focus{border-color:var(--p,var(--tk-brand,#1e8cf2));" +
-    "box-shadow:0 0 0 3px color-mix(in srgb,var(--p,var(--tk-brand,#1e8cf2)) 22%,transparent);}" +
+    ".uip-card{width:min(440px,100%);background:" + SURFACE + ";color:" + TEXT + ";" +
+    "border:1px solid " + BORDER + ";border-radius:12px;box-shadow:0 18px 48px rgba(0,0,0,.28);" +
+    "padding:16px 16px 12px;box-sizing:border-box;font:inherit;font-size:14px;line-height:1.5;}" +
+    ".uip-title{margin:0 0 6px;font-size:14px;font-weight:600;white-space:pre-wrap;word-break:break-word;}" +
+    ".uip-hint{margin:0 0 10px;font-size:12.5px;line-height:1.5;color:" + MUTED + ";white-space:pre-wrap;word-break:break-word;}" +
+    ".uip-row{display:flex;align-items:center;gap:6px;}" +
+    ".uip-input{display:block;flex:1 1 auto;width:100%;min-width:0;box-sizing:border-box;font:inherit;font-size:14px;" +
+    "padding:8px 10px;border:1px solid " + BORDER + ";border-radius:8px;background:" + INPUT_BG + ";color:" + TEXT + ";" +
+    "outline:none;caret-color:" + BRAND + ";}" +
+    ".uip-input::placeholder{color:" + MUTED + ";opacity:.85;}" +
+    ".uip-input:focus{border-color:" + BRAND + ";box-shadow:0 0 0 3px color-mix(in srgb," + BRAND + " 22%,transparent);}" +
+    ".uip-input[type=number]{text-align:center;-moz-appearance:textfield;}" +
+    ".uip-input[type=number]::-webkit-outer-spin-button,.uip-input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}" +
+    ".uip-step{appearance:none;flex:0 0 36px;height:36px;font:inherit;font-size:18px;line-height:1;border-radius:8px;cursor:pointer;" +
+    "border:1px solid " + BORDER + ";background:" + INPUT_BG + ";color:" + TEXT + ";}" +
+    ".uip-step:hover{border-color:" + BRAND + ";}" +
+    ".uip-step:disabled{opacity:.4;cursor:default;}" +
+    ".uip-unit{flex:0 0 auto;font-size:13px;color:" + MUTED + ";}" +
+    ".uip-preview{margin:10px 0 0;min-height:18px;font-size:12.5px;line-height:1.5;color:" + MUTED + ";white-space:pre-wrap;}" +
+    ".uip-preview:empty{display:none;}" +
+    ".uip-preview.busy{opacity:.7;}" +
     ".uip-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;}" +
     ".uip-btn{appearance:none;font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer;" +
-    "border:1px solid var(--cp-border,var(--tk-border,#d1d5db));background:transparent;color:inherit;}" +
+    "border:1px solid " + BORDER + ";background:transparent;color:" + TEXT + ";opacity:1;}" +
     ".uip-btn:hover{background:color-mix(in srgb,currentColor 8%,transparent);}" +
-    ".uip-btn.ok{background:var(--p,var(--tk-brand,#1e8cf2));border-color:var(--p,var(--tk-brand,#1e8cf2));color:#fff;}" +
+    ".uip-btn.ok{background:" + BRAND + ";border-color:" + BRAND + ";color:#fff;}" +
     ".uip-btn.ok:hover{filter:brightness(.92);}" +
-    ".uip-btn:focus-visible{outline:2px solid var(--p,var(--tk-brand,#1e8cf2));outline-offset:2px;}";
+    ".uip-btn.ok:disabled{opacity:.5;cursor:default;filter:none;}" +
+    ".uip-btn:focus-visible{outline:2px solid " + BRAND + ";outline-offset:2px;}";
 
   function ensureStyle() {
-    if (document.getElementById(STYLE_ID)) return;
+    var old = document.getElementById(STYLE_ID);
+    if (old && old.textContent === CSS) return;
+    if (old && old.parentNode) old.parentNode.removeChild(old);
     var st = document.createElement("style");
     st.id = STYLE_ID;
     st.textContent = CSS;
@@ -59,6 +89,11 @@
     return /^zh/i.test(String(lang));
   }
 
+  function num(v, d) {
+    var n = Number(v);
+    return isFinite(n) ? n : d;
+  }
+
   var _active = null; // { close: fn }
 
   function uiPrompt(title, def, opts) {
@@ -69,6 +104,11 @@
       var zh = isZh();
       var okLabel = opts.ok || (zh ? "\u786e\u5b9a" : "OK");
       var cancelLabel = opts.cancel || (zh ? "\u53d6\u6d88" : "Cancel");
+      var isNumber = (opts.type || "text") === "number";
+      var hasRange = isNumber && (opts.min != null || opts.max != null);
+      var lo = opts.min != null ? num(opts.min, -Infinity) : -Infinity;
+      var hi = opts.max != null ? num(opts.max, Infinity) : Infinity;
+      var step = Math.abs(num(opts.step, 1)) || 1;
 
       var back = document.createElement("div");
       back.className = "uip-backdrop";
@@ -83,13 +123,56 @@
       h.textContent = title == null ? "" : String(title);
       card.appendChild(h);
 
+      if (opts.hint) {
+        var hint = document.createElement("div");
+        hint.className = "uip-hint";
+        hint.textContent = String(opts.hint);
+        card.appendChild(hint);
+      }
+
+      var row = document.createElement("div");
+      row.className = "uip-row";
       var input = document.createElement("input");
       input.className = "uip-input";
-      input.type = opts.type || "text";
+      input.type = isNumber ? "number" : (opts.type || "text");
       input.value = def == null ? "" : String(def);
       if (opts.placeholder) input.placeholder = String(opts.placeholder);
       input.setAttribute("autocomplete", "off");
-      card.appendChild(input);
+      if (isNumber) {
+        if (opts.min != null) input.min = String(lo);
+        if (opts.max != null) input.max = String(hi);
+        input.step = String(step);
+        input.inputMode = "numeric";
+      }
+      var bMinus = null, bPlus = null;
+      if (hasRange) {
+        bMinus = document.createElement("button");
+        bMinus.type = "button"; bMinus.className = "uip-step"; bMinus.textContent = "\u2212";
+        bMinus.setAttribute("aria-label", "-");
+        bPlus = document.createElement("button");
+        bPlus.type = "button"; bPlus.className = "uip-step"; bPlus.textContent = "+";
+        bPlus.setAttribute("aria-label", "+");
+        row.appendChild(bMinus);
+        row.appendChild(input);
+        row.appendChild(bPlus);
+      } else {
+        row.appendChild(input);
+      }
+      if (opts.unit) {
+        var unit = document.createElement("span");
+        unit.className = "uip-unit";
+        unit.textContent = String(opts.unit);
+        row.appendChild(unit);
+      }
+      card.appendChild(row);
+
+      var preview = null;
+      if (typeof opts.preview === "function") {
+        preview = document.createElement("div");
+        preview.className = "uip-preview";
+        preview.setAttribute("aria-live", "polite");
+        card.appendChild(preview);
+      }
 
       var actions = document.createElement("div");
       actions.className = "uip-actions";
@@ -101,29 +184,104 @@
       card.appendChild(actions);
       back.appendChild(card);
 
+      function clamp(v) {
+        var n = num(v, NaN);
+        if (!isFinite(n)) return null;
+        if (n < lo) n = lo;
+        if (n > hi) n = hi;
+        return n;
+      }
+      function current() {
+        if (!isNumber) return input.value;
+        var n = clamp(input.value);
+        return n == null ? "" : String(n);
+      }
+      function syncSteppers() {
+        if (!hasRange) return;
+        var n = clamp(input.value);
+        bMinus.disabled = (n != null && n <= lo);
+        bPlus.disabled = (n != null && n >= hi);
+        bOk.disabled = (n == null);
+      }
+      var previewSeq = 0, previewTimer = null;
+      function runPreview() {
+        if (!preview) return;
+        var v = current();
+        var seq = ++previewSeq;
+        preview.classList.add("busy");
+        var out;
+        try { out = opts.preview(v); } catch (_e) { out = ""; }
+        Promise.resolve(out).then(function (txt) {
+          if (seq !== previewSeq) return;
+          preview.classList.remove("busy");
+          preview.textContent = txt == null ? "" : String(txt);
+        }, function () {
+          if (seq !== previewSeq) return;
+          preview.classList.remove("busy");
+          preview.textContent = "";
+        });
+      }
+      function schedulePreview() {
+        if (!preview) return;
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(runPreview, 120);
+      }
+      function bump(d) {
+        var n = clamp(input.value);
+        if (n == null) n = isFinite(lo) ? lo : 0;
+        n = clamp(n + d * step);
+        input.value = String(n);
+        syncSteppers();
+        schedulePreview();
+      }
+
       var done = false;
       var prevFocus = document.activeElement;
       function close(val) {
         if (done) return;
         done = true;
+        if (previewTimer) clearTimeout(previewTimer);
+        previewSeq++;
         document.removeEventListener("keydown", onKey, true);
         if (back.parentNode) back.parentNode.removeChild(back);
         if (_active && _active.close === close) _active = null;
         try { if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus(); } catch (_e) {}
         resolve(val);
       }
+      function confirmValue() {
+        if (isNumber) {
+          var n = clamp(input.value);
+          if (n == null) { try { input.focus(); } catch (_e) {} return; }
+          close(String(n));
+          return;
+        }
+        close(input.value);
+      }
       function onKey(ev) {
         if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(null); }
-        else if (ev.key === "Enter" && ev.target === input) { ev.preventDefault(); ev.stopPropagation(); close(input.value); }
+        else if (ev.key === "Enter" && ev.target === input) { ev.preventDefault(); ev.stopPropagation(); confirmValue(); }
+        else if (hasRange && ev.target === input && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
+          ev.preventDefault(); bump(ev.key === "ArrowUp" ? 1 : -1);
+        }
       }
-      bOk.addEventListener("click", function () { close(input.value); });
+      bOk.addEventListener("click", confirmValue);
       bCancel.addEventListener("click", function () { close(null); });
       back.addEventListener("mousedown", function (ev) { if (ev.target === back) close(null); });
       card.addEventListener("mousedown", function (ev) { ev.stopPropagation(); });
+      input.addEventListener("input", function () { syncSteppers(); schedulePreview(); });
+      input.addEventListener("blur", function () {
+        if (!isNumber) return;
+        var n = clamp(input.value);
+        if (n != null && String(n) !== input.value) { input.value = String(n); syncSteppers(); schedulePreview(); }
+      });
+      if (bMinus) bMinus.addEventListener("click", function () { bump(-1); });
+      if (bPlus) bPlus.addEventListener("click", function () { bump(1); });
       document.addEventListener("keydown", onKey, true);
 
       _active = { close: close };
       (document.body || document.documentElement).appendChild(back);
+      syncSteppers();
+      runPreview();
       try { input.focus(); input.select(); } catch (_e) {}
     });
   }

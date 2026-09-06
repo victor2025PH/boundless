@@ -263,6 +263,295 @@ def strip_fabricated_sentences(
     return (new_text, info)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 近况陈述编造守卫（#208 L-1 C，2026-09-06）—— 天气 / 地点·行程 / 正在做的事
+#
+# FTK6S7 全链：客户 15:03 一句问候 → 15:04「Just got back from a walk, the rain's
+# light here」——档案无雨、无天气源、KB 跳过、记忆 0 条。编造进 _conversation_history
+# 后被 FACT_LOCK（事实一致）当成事实反复提。这是与「编造往事」同族的另一半：
+# 往事守卫管「我们过去…」，本守卫管「我此刻…」。
+#
+# 处置口径与往事守卫一致（应答不能失语；漏拦优于误伤）：
+#   - 只看**自指**的近况陈述句（我/这边/here/I'm/Just got back…）；问对方的
+#     （"Is it raining there?"）不算；
+#   - 来源池 = 人设档案（bio 块）/ 天气源 / 场景状态 / 长期记忆 / 摘要 / 客户入站
+#     （本条 + 上一条 + 历史里 **user 侧**）。**AI 自己的历史句不算来源**——那正是
+#     编造自我强化的通道；
+#   - 天气源在场 → 天气类整体视为有据（AI 拿到的是真数据，措辞偏差不算编造）；
+#     场景状态在场 → 地点/行程/活动类整体有据；否则按类别词 + 内容 token 宽松重叠；
+#   - 命中且无据 → 句级剥离；剥空 → 如实回落原文并标 all_stripped（调用方可换
+#     无叙事问候）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STATUS_CATEGORY_RES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    ("weather", re.compile(
+        r"(下雨|下着雨|小雨|大雨|暴雨|雨天|雨停|下雪|飘雪|好热|太热|热死|好冷|冷死|降温|"
+        r"天气|放晴|晴天|阴天|刮风|大风|台风|起雾|闷热|凉快|暖和|"
+        r"\brain(?:ing|y|ed|s)?\b|\bdrizzl\w*|\bpouring\b|\bsnow(?:ing|y)?\b|\bsunny\b|"
+        r"\bcloudy\b|\bwindy\b|\bstorm\w*|\bweather\b|\bhumid\b|\bfreezing\b|"
+        r"\bscorching\b|\bchilly\b|\bmuggy\b|\bdegrees\b|\d{1,2}\s?°)", re.I)),
+    ("trip", re.compile(
+        r"(刚回来|刚到家|刚到|在路上|出门了|刚出门|去了一趟|去了|飞到|落地|在机场|出差|"
+        r"旅行|旅游|回老家|搬家|在车上|在地铁|在高铁|"
+        r"just got back|just got home|just came back|got back from|heading (?:to|out|home|over)|"
+        r"on my way|at the airport|on a trip|travel(?:ing|ling)|just landed|just arrived|"
+        r"out of town|on the road|in the car|on the train|road trip)", re.I)),
+    ("activity", re.compile(
+        r"(刚跑完|刚健身|健身房|散步|遛狗|刚吃|在吃|做饭|煮饭|刚洗完|洗澡|在忙|加班|开会|"
+        r"上班中|刚下班|刚醒|刚起|躺着|在做|逛街|买菜|刷剧|跑步|瑜伽|"
+        r"just finished|just had|just ate|having (?:lunch|dinner|breakfast|coffee|a coffee)|"
+        r"cooking|grabbing|at the gym|(?:a|my|from a|for a) walk|jog(?:ging)?|workout|"
+        r"working late|in a meeting|just woke|shopping|binge|at work|off work)", re.I)),
+)
+
+# 自指（我在陈述自己的近况）；含「Just got back…」这类省略主语的英文口语
+_STATUS_SELF_RE = re.compile(
+    r"(我|咱|这边|这里|\bhere\b|\bi\b|\bi'm\b|\bi’m\b|\bim\b|\bi've\b|\bi’ve\b|\bme\b|\bmy\b|"
+    r"^\s*(?:just|got|heading|on my|been|came|finished|had)\b)", re.I)
+# 第二人称（问对方近况）：无自指 + 有第二人称 → 不是自述
+_STATUS_PEER_RE = re.compile(r"(你|您|\byou\b|\byour\b|\bu\b|\bthere\?)", re.I)
+# 以疑问词/助动词开头的英文句＝在问对方（"Is it raining where you are?"），即便句中有 I
+_STATUS_QUESTION_LEAD_RE = re.compile(
+    r"^\s*(?:is|are|was|were|do|does|did|have|has|had|will|would|can|could|should|"
+    r"how|what|where|when|why|which|who)\b", re.I)
+# 近况守卫的句切分：CJK 句读处必切；拉丁 .!?; 仅后随空白才切（"3.5" / "U.S." 不误切）。
+# 刻意不用往事守卫的 _SENT_SPLIT_RE（它不认英文句号，"…rain's light here. How are
+# you?" 会整段当一句问句放行——FTK6S7 原句正是这个形态）。
+_STATUS_SENT_SPLIT_RE = re.compile(r"(?<=[。！？；\n])|(?<=[.!?;])(?=\s)")
+
+# 来源池里「类别级」有据的键：天气源在场 → weather 有据；场景状态在场 → trip/activity 有据
+_WEATHER_SOURCE_KEYS: Tuple[str, ...] = (
+    "_persona_weather_note", "_persona_weather_hook", "_persona_weather_snap",
+)
+_SCENE_SOURCE_KEYS: Tuple[str, ...] = ("_current_scene_note",)
+# 人设档案 / 记忆类文本源（token 级 + 类别词级宽松匹配）
+_STATUS_TEXT_SOURCE_KEYS: Tuple[str, ...] = (
+    "_persona_bio_block", "_persona_place_label",
+    "_episodic_memory_text", "_conversation_summary", "last_message",
+)
+
+
+def _status_hits(sentence: str) -> List[str]:
+    """句子命中的近况类别（weather/trip/activity），空=不是近况陈述。"""
+    s = str(sentence or "")
+    if not s.strip():
+        return []
+    return [name for name, rx in _STATUS_CATEGORY_RES if rx.search(s)]
+
+
+def is_self_status_claim(sentence: str) -> List[str]:
+    """是否为**自指**的近况陈述；返回命中的类别列表（空=否）。
+
+    问对方近况（"Is it raining there?" / "你那边下雨了吗"）不算：无自指 + 有第二人称
+    或以问号收尾 → 排除。宁可漏拦不误伤。
+    """
+    s = str(sentence or "").strip()
+    cats = _status_hits(s)
+    if not cats:
+        return []
+    has_self = bool(_STATUS_SELF_RE.search(s))
+    is_question = s.endswith(("?", "？"))
+    if not has_self:
+        # 无自指：问句 / 带第二人称 → 在问对方；否则（"Weather's nice today."）保守视为自述
+        return [] if (is_question or _STATUS_PEER_RE.search(s)) else cats
+    if is_question and _STATUS_QUESTION_LEAD_RE.match(s):
+        # 疑问词开头的问句（"Is it raining where you are?"）→ 问对方，即便句中有 I
+        return []
+    # 自指陈述（含「我这边下雨了，你那边呢？」这类先陈述再反问）→ 近况陈述
+    return cats
+
+
+def build_status_evidence(user_context: Optional[dict], user_text: str = "") -> dict:
+    """近况陈述的来源池：``{"weather": bool, "scene": bool, "texts": [..]}``。
+
+    texts 只收**非 AI 侧**：人设档案 / 记忆 / 摘要 / 客户本条 + 上一条 + 历史里
+    role==user 的条目。assistant 侧与 last_reply 刻意不收——AI 自己编过一次不能
+    成为下一次的依据（FTK6S7「编造进历史后反复提」的闭环就断在这）。
+    """
+    ctx = user_context if isinstance(user_context, dict) else {}
+    out: dict = {"weather": False, "scene": False, "texts": []}
+    for k in _WEATHER_SOURCE_KEYS:
+        v = ctx.get(k)
+        if (isinstance(v, str) and v.strip()) or (isinstance(v, dict) and v):
+            out["weather"] = True
+            if isinstance(v, dict):
+                out["texts"].append(" ".join(str(x) for x in v.values() if x))
+            else:
+                out["texts"].append(v.strip())
+    for k in _SCENE_SOURCE_KEYS:
+        v = ctx.get(k)
+        if isinstance(v, str) and v.strip():
+            out["scene"] = True
+            out["texts"].append(v.strip())
+    ut = str(user_text or "").strip()
+    if ut:
+        out["texts"].append(ut)
+    for k in _STATUS_TEXT_SOURCE_KEYS:
+        v = ctx.get(k)
+        if isinstance(v, str) and v.strip():
+            out["texts"].append(v.strip())
+    hist = ctx.get("_conversation_history")
+    if isinstance(hist, (list, tuple)):
+        for item in list(hist)[-12:]:
+            if isinstance(item, str) and item.strip():
+                out["texts"].append(item.strip())      # 无角色信息 → 宽收
+            elif isinstance(item, dict):
+                role = str(item.get("role") or "user").lower()
+                if role in ("assistant", "model", "ai", "system"):
+                    continue
+                for kk in _HISTORY_TEXT_KEYS:
+                    vv = item.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        out["texts"].append(vv.strip())
+    return out
+
+
+def persona_status_facts(persona: Optional[dict]) -> str:
+    """人设档案里能给「近况」作依据的字段拼成一段文本（纯函数）。
+
+    只收 prompt 也在消费的人生素材（persona_manager.PROMPT_CONSUMED_FIELDS 同源）：
+    background / role / context.hobbies / context.schedule / context.specific_memories /
+    tastes.likes。档案写了「每天傍晚散步」「在咖啡店上班」，AI 说 walk / at work 就有据。
+    """
+    p = persona if isinstance(persona, dict) else {}
+    if not p:
+        return ""
+    parts: List[str] = []
+
+    def _add(v) -> None:
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                _add(x)
+        elif isinstance(v, dict):
+            for x in v.values():
+                _add(x)
+
+    _add(p.get("background"))
+    _add(p.get("role"))
+    ctx = p.get("context") or {}
+    if isinstance(ctx, dict):
+        _add(ctx.get("hobbies"))
+        _add(ctx.get("schedule"))
+        _add(ctx.get("specific_memories"))
+    tastes = p.get("tastes") or {}
+    if isinstance(tastes, dict):
+        _add(tastes.get("likes"))
+    return "\n".join(parts)
+
+
+def _lenient_overlap(a: str, b: str) -> bool:
+    """内容 token 宽松重叠：CJK bigram 交集，或拉丁词按 4 字前缀互配（rain/raining）。"""
+    a_bi, a_lat = _content_tokens(str(a or ""))
+    b_bi, b_lat = _content_tokens(str(b or ""))
+    if a_bi & b_bi:
+        return True
+    for x in a_lat:
+        xs = x.lower()
+        for y in b_lat:
+            ys = y.lower()
+            if xs == ys:
+                return True
+            if len(xs) >= 4 and len(ys) >= 4 and (xs.startswith(ys[:4]) or ys.startswith(xs[:4])):
+                return True
+    return False
+
+
+def _status_claim_grounded(sentence: str, cats: List[str], evidence: dict) -> bool:
+    """这句近况陈述有没有来源。类别级（天气源/场景）优先，其次类别词在档案/记忆/入站
+    里出现过（跨语言也算：档案写「喜欢散步」→ 英文说 walk 有据），最后内容 token 宽松重叠。"""
+    ev = evidence if isinstance(evidence, dict) else {}
+    if "weather" in cats and ev.get("weather"):
+        return True
+    if ({"trip", "activity"} & set(cats)) and ev.get("scene"):
+        return True
+    texts = [str(t) for t in (ev.get("texts") or []) if str(t).strip()]
+    if not texts:
+        return False
+    blob = "\n".join(texts)
+    for name, rx in _STATUS_CATEGORY_RES:
+        if name in cats and rx.search(blob):
+            return True
+    return _lenient_overlap(sentence, blob)
+
+
+def strip_status_claims(text: str, evidence: Optional[dict] = None) -> Tuple[str, dict]:
+    """应答出站守卫：剥掉**无来源**的自指近况陈述句（天气/地点·行程/正在做的事）。
+
+    Returns:
+        ``(处理后文本, info)``；info＝``{status_stripped: [被剥句], status_cats: [...],
+        all_stripped: bool}``。剥空 → 如实回落原文 + all_stripped=True（调用方决定换
+        无叙事问候还是照发被观测）。
+    """
+    src = str(text or "")
+    info: dict = {"status_stripped": [], "status_cats": [], "all_stripped": False}
+    if not src.strip():
+        return (src, info)
+    ev = evidence if isinstance(evidence, dict) else {"weather": False, "scene": False, "texts": []}
+    kept: List[str] = []
+    dropped: List[str] = []
+    cats_all: List[str] = []
+    for part in _STATUS_SENT_SPLIT_RE.split(src):
+        cats = is_self_status_claim(part) if part.strip() else []
+        if cats and not _status_claim_grounded(part, cats, ev):
+            dropped.append(part.strip())
+            cats_all.extend(c for c in cats if c not in cats_all)
+        else:
+            kept.append(part)
+    if not dropped:
+        return (src, info)
+    info["status_stripped"] = dropped
+    info["status_cats"] = cats_all
+    new_text = "".join(kept).strip()
+    if not new_text:
+        info["all_stripped"] = True
+        return (src, info)
+    return (new_text, info)
+
+
+_HISTORY_STATUS_NOTE_ZH = (
+    "【近况说明】你之前在对话里提过的天气 / 地点行程 / 正在做的事，没有人设档案或对方"
+    "原话作依据，只当随口一说：本条不要延续、不要展开、不要追加新细节；对方若追问就"
+    "简短带过。没有依据时只问候、不叙述近况。"
+)
+_HISTORY_STATUS_NOTE_EN = (
+    "Any weather / whereabouts / what-you-were-doing you mentioned earlier had no basis in "
+    "the persona profile or the other person's words — treat it as an offhand remark: do not "
+    "continue it, elaborate on it or add new details; if asked, brush past it briefly."
+)
+
+
+def history_status_claim_note(user_context: Optional[dict]) -> str:
+    """AI 自己历史句里含**无来源**近况陈述 → 返回注入 prompt 的说明行（否则空串）。
+
+    与 FACT_LOCK（事实一致）不冲突：不要求改口，只禁止把随口一说当事实**延续/展开**。
+    """
+    ctx = user_context if isinstance(user_context, dict) else {}
+    ai_texts: List[str] = []
+    hist = ctx.get("_conversation_history")
+    if isinstance(hist, (list, tuple)):
+        for item in list(hist)[-12:]:
+            if isinstance(item, dict) and str(item.get("role") or "").lower() in (
+                    "assistant", "model", "ai"):
+                for kk in _HISTORY_TEXT_KEYS:
+                    vv = item.get(kk)
+                    if isinstance(vv, str) and vv.strip():
+                        ai_texts.append(vv.strip())
+    lr = ctx.get("last_reply")
+    if isinstance(lr, str) and lr.strip():
+        ai_texts.append(lr.strip())
+    if not ai_texts:
+        return ""
+    ev = build_status_evidence(ctx, "")
+    for t in ai_texts:
+        for part in _STATUS_SENT_SPLIT_RE.split(t):
+            cats = is_self_status_claim(part) if part.strip() else []
+            if cats and not _status_claim_grounded(part, cats, ev):
+                return _HISTORY_STATUS_NOTE_ZH + "\n" + _HISTORY_STATUS_NOTE_EN
+    return ""
+
+
 # 进程级轻量计数（零依赖零 IO；将来接看板只需读 fabrication_counters()）
 _COUNTERS: dict = {}
 
@@ -273,14 +562,17 @@ def record_fabrication_guard(info: Optional[dict], *, source: str = "unknown") -
         return
     bucket = _COUNTERS.setdefault(
         str(source or "unknown"),
-        {"strip": 0, "suspect": 0, "all_stripped": 0},
+        {"strip": 0, "suspect": 0, "all_stripped": 0, "status_strip": 0},
     )
+    bucket.setdefault("status_strip", 0)
     if info.get("stripped"):
         bucket["strip"] += 1
     if info.get("suspect"):
         bucket["suspect"] += 1
     if info.get("all_stripped"):
         bucket["all_stripped"] += 1
+    if info.get("status_stripped"):
+        bucket["status_strip"] += 1
 
 
 def fabrication_counters() -> dict:
@@ -294,6 +586,11 @@ __all__ = [
     "build_reply_evidence",
     "build_precise_evidence",
     "strip_fabricated_sentences",
+    "is_self_status_claim",
+    "build_status_evidence",
+    "persona_status_facts",
+    "strip_status_claims",
+    "history_status_claim_note",
     "record_fabrication_guard",
     "fabrication_counters",
 ]

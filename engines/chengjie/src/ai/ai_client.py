@@ -3618,6 +3618,17 @@ class AIClient(LoggerMixin):
         _scene_note = (context.get("_current_scene_note") or "").strip()
         if _scene_note and _is_companion:
             prompt_parts.append(_scene_note)
+        # #208（L-1 C）：历史里 AI 自己说过的近况（天气/行程/正在做的事）若无来源，
+        # 标为「随口一说」——不延续、不展开、不追加细节。FACT_LOCK 只禁改口，这里只禁
+        # 把编造当事实滚雪球（FTK6S7：编造进 _conversation_history 后被反复提）。
+        if _is_companion:
+            try:
+                from src.utils.proactive_fabrication_guard import history_status_claim_note
+                _hs_note = history_status_claim_note(context)
+                if _hs_note:
+                    prompt_parts.append(_hs_note)
+            except Exception:
+                pass
         # 已发媒体日志（防"我没发过照片"失忆抵赖 +「上次那张」指涉可答）。
         _media_sent = (context.get("_media_sent_note") or "").strip()
         if _media_sent and _is_companion:
@@ -4736,6 +4747,18 @@ class AIClient(LoggerMixin):
         ),
     }
 
+    # #208（L-1 C，2026-09-06）问候不编事实：FTK6S7 客户一句 hi，AI 答「Just got back
+    # from a walk, the rain's light here」——档案无雨、无天气源、记忆 0 条。近况要有出处：
+    # 人设档案写明的日常 / 本会话或记忆里对方说过的事；没有就只问候不叙事。
+    # 出口另有确定性守卫（proactive_fabrication_guard.strip_status_claims）兜底。
+    GREETING_NO_FABRICATION_LINE = (
+        "【问候不编事实】不得编造天气、所在地点、行程、正在做或刚做完的事；只能引用人设"
+        "档案写明的日常，或本会话 / 记忆里对方自己说过的事；没有依据就只问候、接话，"
+        "不叙述近况。Do not invent weather, whereabouts, trips or what you were just doing; "
+        "mention such things only if they come from the persona profile or from what the other "
+        "person said—otherwise just greet, no life-update."
+    )
+
     def _get_intent_prompt(self, intent: str) -> Optional[str]:
         """获取意图特定的补充提示（追加到系统提示末尾，非替换）"""
         try:
@@ -4750,9 +4773,13 @@ class AIClient(LoggerMixin):
                 "**严禁**使用「有什么可以帮您/帮您的吗」「需要什么服务」「请问有什么可以」"
                 "等柜台话术。用一两句像女友/好友微信：如「在呀」「嗯嗯我在～」「找我呀？」「怎么啦」；"
                 "用户只发「在」「在吗」时要**短、自然、不重复同一句**，不要接业务办理暗示。"
-                "Match the user's language."
+                "Match the user's language. "
+                + self.GREETING_NO_FABRICATION_LINE
             )
-        return self._INTENT_SUPPLEMENTS.get(intent)
+        sup = self._INTENT_SUPPLEMENTS.get(intent)
+        if intent == "greeting" and sup:
+            return sup + self.GREETING_NO_FABRICATION_LINE
+        return sup
 
     async def should_reply_by_context(
         self,

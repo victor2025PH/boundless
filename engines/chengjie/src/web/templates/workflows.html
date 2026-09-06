@@ -25,6 +25,8 @@
   .wf-panel{display:none;} .wf-panel.active{display:block;}
   .wf-section{background:var(--wf-surface);border:1px solid var(--wf-bd);border-radius:12px;padding:16px;margin-bottom:16px;}
   .wf-section h3{margin:0 0 12px;font-size:15px;color:var(--wf-ink-h);display:flex;justify-content:space-between;align-items:center;}
+  /* #209：标题右侧的操作结果槽为空时不占位——flex gap 会给空 span 留一格「幽灵空元素」（YD2SMM） */
+  #seed-msg:empty{display:none;}
   .wf-table{width:100%;border-collapse:collapse;font-size:13px;}
   .wf-table th{background:var(--wf-surface-2);padding:8px 10px;text-align:left;font-weight:600;color:var(--wf-ink);border-bottom:2px solid var(--wf-bd);}
   .wf-table td{padding:8px 10px;border-bottom:1px solid var(--wf-bd-soft);vertical-align:middle;}
@@ -642,35 +644,66 @@ WF.toggleDealEngineAuto=function(){
 // #173（2026-09-05）：原生 prompt 在 Electron 渲染进程直接抛 → 按钮「点了没反应」；
 // 改走页内弹层 window.uiPrompt（_win_unique.html 引入 /copilot/ui-prompt.js），
 // 弹层缺席时如实提示而不是静默死。
+// #209（L-3 D，YD2SMM）：弹层换主题令牌 + 天数步进器（默认 3，1–90；链自带 silence_days 优先）
+// + 确认前实时预览「符合 N · 将挂 min(N,50) · 跳过 M」（复用 bulk 端点 dry_run）+ 确认即落地
+// （不再二次原生 confirm）+ 结果「已挂 N 个（可撤销）」逐条 cancel 撤回。
 WF.bulkStart=function(chainId){
   var c=(_chainsCache||[]).find(function(x){return x.chain_id===chainId;});
-  var defDays=(c&&c.trigger_conditions&&c.trigger_conditions.silence_days)||7;
-  if(typeof window.uiPrompt!=='function'){
-    var m0=document.getElementById('seed-msg');
-    if(m0){m0.textContent=window.T('wf_bulk_fail');m0.style.color='var(--wf-err)';}
-    return;
-  }
-  window.uiPrompt(window.T('wf_bulk_prompt'),String(defDays),{type:'number'}).then(function(days){
-  if(days==null)return;
-  days=Number(days)||0;
-  if(days<=0)return;
+  var defDays=Number(c&&c.trigger_conditions&&c.trigger_conditions.silence_days)||3;
+  defDays=Math.min(90,Math.max(1,Math.round(defDays)));
   var msg=document.getElementById('seed-msg');
-  function _say(text,color){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){msg.textContent='';},6000); }
+  function _say(text,color,keepMs){ if(!msg)return; msg.textContent=text; msg.style.color=color; setTimeout(function(){ if(msg.textContent===text) msg.textContent=''; },keepMs||6000); }
+  if(typeof window.uiPrompt!=='function'){ _say(window.T('wf_bulk_fail'),'var(--wf-err)'); return; }
   var url='/api/workspace/workflow-chains/'+encodeURIComponent(chainId)+'/bulk-start';
-  apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({silent_days_min:days,limit:50,dry_run:true})}, {timeoutMs: 60000})
-    .then(function(r){return r.json();}).then(function(d){
-      if(!d||!d.ok){_say(window.T('wf_bulk_fail'),'var(--wf-err)');return;}
-      var n=Number(d.candidates)||0;
-      if(!n){_say(window.T('wf_bulk_none'),'var(--wf-ink-soft)');return;}
-      if(!confirm(window.Tf('wf_bulk_confirm',{n:n,d:days})))return;
-      apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({silent_days_min:days,limit:50,dry_run:false})}, {timeoutMs: 60000})
-        .then(function(r){return r.json();}).then(function(d2){
-          if(d2&&d2.ok){_say(window.Tf('wf_bulk_done',{n:d2.started||0}),'var(--wf-ok)');WF.loadChains();}
-          else _say(window.T('wf_bulk_fail'),'var(--wf-err)');
-        }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
-    }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
+  function _dry(days){
+    return apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({silent_days_min:days,limit:50,dry_run:true})}, {timeoutMs: 60000})
+      .then(function(r){return r.json();});
+  }
+  window.uiPrompt(window.T('wf_bulk_prompt_title'),String(defDays),{
+    type:'number', min:1, max:90, step:1, unit:window.T('wf_bulk_unit_days'),
+    hint:window.T('wf_bulk_prompt_hint'),
+    ok:window.T('wf_bulk_ok'), cancel:window.T('wf_bulk_cancel'),
+    preview:function(v){
+      var days=Number(v)||0; if(days<=0) return '';
+      return _dry(days).then(function(d){
+        if(!d||!d.ok) return window.T('wf_bulk_preview_fail');
+        var matched=Number(d.matched!=null?d.matched:d.candidates)||0;
+        var will=Number(d.candidates)||0;
+        var skipped=Number(d.skipped)||0;
+        if(!matched) return window.T('wf_bulk_none');
+        return window.Tf('wf_bulk_preview',{n:matched,w:will,s:skipped});
+      }).catch(function(){ return window.T('wf_bulk_preview_fail'); });
+    }
+  }).then(function(days){
+    if(days==null)return;
+    days=Number(days)||0;
+    if(days<=0)return;
+    apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({silent_days_min:days,limit:50,dry_run:false})}, {timeoutMs: 60000})
+      .then(function(r){return r.json();}).then(function(d2){
+        if(!d2||!d2.ok){ _say(window.T('wf_bulk_fail'),'var(--wf-err)'); return; }
+        var n=Number(d2.started)||0;
+        WF.loadChains();
+        if(!n){ _say(window.T('wf_bulk_none'),'var(--wf-ink-soft)'); return; }
+        var ids=Array.isArray(d2.exec_ids)?d2.exec_ids.slice():[];
+        _say(window.Tf('wf_bulk_done',{n:n}),'var(--wf-ok)',15000);
+        // 可撤销：右下卡片带「撤销」——逐条取消刚挂上的执行（服务端只认 running/paused）
+        if(ids.length && window.AITRNotify){
+          AITRNotify.notify({severity:'success', text:window.Tf('wf_bulk_done_undo',{n:n}), center:false, ttlMs:15000,
+            actions:[{label:window.T('wf_bulk_undo'), onClick:function(){
+              var done=0, fail=0;
+              Promise.all(ids.map(function(id){
+                return apiFetch('/api/workspace/chain-executions/'+encodeURIComponent(id)+'/cancel',
+                  {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'bulk_undo'})},{timeoutMs:30000})
+                  .then(function(r){ if(r.ok) done++; else fail++; }).catch(function(){ fail++; });
+              })).then(function(){
+                _say(fail?window.Tf('wf_bulk_undo_partial',{n:done,f:fail}):window.Tf('wf_bulk_undo_done',{n:done}), fail?'var(--wf-err)':'var(--wf-ok)');
+                WF.loadChains();
+              });
+            }}]});
+        }
+      }).catch(function(){_say(window.T('wf_bulk_fail'),'var(--wf-err)');});
   });
 };
 WF.toggleDealEngine=function(){
