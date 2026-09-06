@@ -209,6 +209,29 @@ def _lookup_stored_media(request: Request, conversation_id: str, message_id: str
     return "", ""
 
 
+def _attach_vision_failure_message(request: Request, out: dict) -> dict:
+    """图片识别翻译失败时补人话 ``message``（#213：前端没有 message 就一律「识别翻译不可用」）。
+
+    只处理识图侧失败（``no_text`` / ``ocr_error``）：按 ``ocr_tag`` 归成 未配置 / 忙 / 无文字
+    三档（``vision_failure_reason``），并带 ``vision_reason`` 机器码给排障。翻译侧失败
+    （``translation.ok=False``）已有自己的 error 字段，不动。
+    """
+    if not isinstance(out, dict) or out.get("ok") or out.get("message"):
+        return out
+    reason = str(out.get("reason") or "")
+    if reason not in ("no_text", "ocr_error"):
+        return out
+    try:
+        from src.vision_client import vision_failure_reason
+        code = "busy" if reason == "ocr_error" else vision_failure_reason(
+            str(out.get("ocr_tag") or ""))
+        out["vision_reason"] = code
+        out["message"] = tr(request, f"err.vision.{code}")
+    except Exception:
+        logger.debug("vision failure message attach failed", exc_info=True)
+    return out
+
+
 def register_translate_routes(app, *, api_auth) -> None:
     """挂载全部翻译端点（文本 + 媒体集群）。"""
 
@@ -984,7 +1007,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             if _img_res.get("ok"):
                 record_request_chars(
                     request, "translation", len(str(_img_res.get("ocr_text") or "")))
-            return _img_res
+            return _attach_vision_failure_message(request, _img_res)
         finally:
             try:
                 _os.remove(path)
@@ -1424,7 +1447,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                             ms=int((_ix_mono() - _ix_t0) * 1000))
                     except Exception:
                         pass
-                return out
+                return _attach_vision_failure_message(request, out)
 
             from src.ai.voice_translate import (
                 VoiceTranslateService,

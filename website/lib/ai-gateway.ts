@@ -57,6 +57,69 @@ const VISION_MODEL_CANONICAL = (
 const RELAY_COOLDOWN_MS = Number(process.env.VISION_RELAY_COOLDOWN_MS || 60000);
 const _relayCooldown = new Map<string, number>();
 
+/**
+ * 识图请求期望的上下文窗口（#213，2026-09-06）。
+ *
+ * 钧机 1.0.74 实锤：识图 prompt + 一张图 ≈ 4170–4181 tokens，而 Ollama 缺省 num_ctx=4096
+ * → 中继回 400 `exceed_context_size_error`，所有走网关的识图必败。
+ *
+ * **生效点在中继机的 Modelfile**（176/140 的 `qwen3-vl:8b-instruct` 已 `PARAMETER num_ctx 8192`，
+ * 原 4k 版留作 `qwen3-vl:8b-instruct-orig4k` 回滚点）——Ollama 0.31/0.32 的 OpenAI 兼容层
+ * **忽略** 请求体里的 `options`（2026-09-06 实测：带 options.num_ctx=8192 发 /v1，`ollama ps`
+ * 的 CONTEXT 仍 4096；引擎侧 vision_client.py 2026-08-15 也记过同一结论）。这里仍随请求
+ * 声明 `options.num_ctx`：一是把期望值写进线上契约、Ollama 若日后放开即自动生效，二是
+ * `visionContextOverflow()` 用它和中继回报的 n_ctx 对照，Modelfile 参数被谁重拉丢掉时
+ * 告警能直接说出「中继 n_ctx=4096 < 期望 8192」。
+ */
+export const VISION_NUM_CTX = Number(process.env.VISION_NUM_CTX || 8192);
+
+export type VisionContextOverflow = {
+  n_prompt_tokens: number | null;
+  n_ctx: number | null;
+  expected_ctx: number;
+};
+
+/**
+ * 识别中继的「上下文超限」400（Ollama 形状：`exceed_context_size_error` /
+ * "request (N tokens) exceeds the available context size (M tokens)"）。非该错误返回 null。
+ */
+export function visionContextOverflow(status: number, bodyText: string): VisionContextOverflow | null {
+  if (status !== 400) return null;
+  const t = String(bodyText || "");
+  if (!/exceed_context_size_error|exceeds the available context size/i.test(t)) return null;
+  const num = (re: RegExp): number | null => {
+    const m = re.exec(t);
+    return m ? Number(m[1]) : null;
+  };
+  return {
+    n_prompt_tokens: num(/"n_prompt_tokens"\s*:\s*(\d+)/) ?? num(/request \((\d+) tokens\)/i),
+    n_ctx: num(/"n_ctx"\s*:\s*(\d+)/) ?? num(/context size \((\d+) tokens\)/i),
+    expected_ctx: VISION_NUM_CTX,
+  };
+}
+
+/** 上下文超限告警节流：同一进程 30 分钟最多推一条（一张图失败会连着重试，别刷屏）。 */
+export const VISION_OVERFLOW_ALERT_GAP_MS = Number(process.env.VISION_OVERFLOW_ALERT_GAP_MS || 30 * 60 * 1000);
+let _lastOverflowAlertAt = 0;
+
+export function shouldAlertVisionOverflow(now = Date.now()): boolean {
+  if (now - _lastOverflowAlertAt < VISION_OVERFLOW_ALERT_GAP_MS) return false;
+  _lastOverflowAlertAt = now;
+  return true;
+}
+
+/** 识图中继请求体：model 改写为规范 VLM + 声明期望 num_ctx（见 VISION_NUM_CTX 注释）。 */
+export function buildVisionPayload(body: Record<string, unknown>): Record<string, unknown> {
+  const prior = body.options && typeof body.options === "object" ? (body.options as Record<string, unknown>) : {};
+  return {
+    ...body,
+    model: VISION_MODEL_CANONICAL,
+    stream: false,
+    max_tokens: clampMaxTokens(body.max_tokens),
+    options: { ...prior, num_ctx: VISION_NUM_CTX },
+  };
+}
+
 function orderedRelays(): string[] {
   const now = Date.now();
   const fresh: string[] = [];
@@ -93,12 +156,7 @@ export async function proxyVision(
   const relays = orderedRelays();
   if (!relays.length) throw new Error("no_vision_relay");
   // 中继是 Ollama /v1（keyless）；model 统一改写成规范 VLM（两机都装 → 可互换）
-  const payload = {
-    ...body,
-    model: VISION_MODEL_CANONICAL,
-    stream: false,
-    max_tokens: clampMaxTokens(body.max_tokens),
-  };
+  const payload = buildVisionPayload(body);
   let lastErr: unknown = null;
   for (const base of relays) {
     try {

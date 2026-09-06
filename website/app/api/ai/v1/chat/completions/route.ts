@@ -9,12 +9,56 @@ import {
   proxyChatCompletions,
   proxyVision,
   quotaSnapshot,
+  shouldAlertVisionOverflow,
   verifyDeviceToken,
+  visionContextOverflow,
   visionRelayEnabled,
+  type VisionContextOverflow,
 } from "@/lib/ai-gateway";
+import { getAdminChats } from "@/lib/admin-store";
+import { card } from "@/lib/tg-card";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * 识图中继回「上下文超限」400 → 推管理员 TG（#213）。否则 prompt 又长了 / 中继 Modelfile
+ * 被重拉丢了 num_ctx，只会在客户机日志里烂掉，没人知道。节流见 shouldAlertVisionOverflow。
+ */
+async function alertVisionOverflow(ovf: VisionContextOverflow, mid: string): Promise<void> {
+  try {
+    if (!shouldAlertVisionOverflow()) return;
+    const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+    if (!token) return;
+    const chats = await getAdminChats();
+    if (!chats.length) return;
+    const msg = card({
+      sev: "warn",
+      cat: "算力",
+      title: "识图网关：请求超出中继上下文窗口，识图 400",
+      body: [
+        `请求 ${ovf.n_prompt_tokens ?? "?"} tokens > 中继 n_ctx ${ovf.n_ctx ?? "?"}（网关期望 ${ovf.expected_ctx}）`,
+        ovf.n_ctx !== null && ovf.n_ctx < ovf.expected_ctx
+          ? "中继模型的 num_ctx 低于期望：多半是 qwen3-vl:8b-instruct 被重拉、Modelfile 的 PARAMETER num_ctx 丢了（176/140 各 ollama show 核对）"
+          : "中继窗口已是期望值仍超限：识图 prompt 变长了，收 prompt 或抬 VISION_NUM_CTX + Modelfile",
+        `触发机器指纹：${mid}；30 分钟内只推一条`,
+      ].join("\n"),
+      source: "官网 AI 网关 /api/ai/v1",
+      rawTag: "vision_ctx_overflow",
+    });
+    await Promise.allSettled(
+      chats.map((chat) =>
+        fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chat, text: msg, disable_web_page_preview: true }),
+        })
+      )
+    );
+  } catch {
+    /* 告警失败不影响主链路 */
+  }
+}
 
 /**
  * OpenAI-compatible：POST /api/ai/v1/chat/completions
@@ -101,6 +145,17 @@ export async function POST(req: NextRequest) {
       if (typeof c === "string") outChars = c.length;
     } catch {
       /* ignore */
+    }
+
+    if (vision) {
+      const ovf = visionContextOverflow(upstream.status, text);
+      if (ovf) {
+        void logGateway({
+          ev: "vision_ctx_overflow", mid: claims.mid,
+          n_prompt_tokens: ovf.n_prompt_tokens, n_ctx: ovf.n_ctx, expected_ctx: ovf.expected_ctx,
+        });
+        void alertVisionOverflow(ovf, claims.mid);
+      }
     }
 
     // 只对成功响应计费（上游 5xx/超时不该消耗用户额度）

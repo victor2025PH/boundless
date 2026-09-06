@@ -132,13 +132,13 @@ ZH = {
     "err.docmsg.unsupported_ext": "文档翻译支持 .docx / .xlsx / .pptx / .pdf / .srt / .vtt",
     "err.docmsg.too_large": "文件过大（上限 10MB）",
     "err.docmsg.read_failed": "文件读取失败",
-}
-
-EN = {
     # 工作台图片「识别翻译」失败原因拆分（2026-09-06 L-6 #213，原一律「识别翻译不可用」）
     "err.vision.unconfigured": "识图服务未配置",
     "err.vision.busy": "识图服务忙，稍后重试",
     "err.vision.no_text": "图中未识别到文字",
+}
+
+EN = {
     # KB source isolation (2026-09-05 J-9 #184)
     "err.kb.purge_source_invalid": "Only vendor / system / import entries can be purged in bulk",
     # Toolbox "AI Image" / "Smart Nurturing" (2026-08-21)
@@ -269,8 +269,8 @@ EN = {
     "err.docmsg.unsupported_ext": "Document translation supports .docx / .xlsx / .pptx / .pdf / .srt / .vtt",
     "err.docmsg.too_large": "File too large (max 10MB)",
     "err.docmsg.read_failed": "Failed to read the file",
-}
     # Workbench image "recognize + translate" failure reasons (2026-09-06 L-6 #213)
     "err.vision.unconfigured": "Image recognition is not configured",
     "err.vision.busy": "Image recognition is busy, please retry shortly",
     "err.vision.no_text": "No text recognized in the image",
+}

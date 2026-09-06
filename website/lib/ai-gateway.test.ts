@@ -107,6 +107,36 @@ async function main() {
   assert.equal(typeof vs.enabled, "boolean");
   assert.ok(vs.canonical_model.length > 0);
 
+  // ── 识图 num_ctx（#213，2026-09-06）：钧机实锤 prompt+图 ≈ 4170 tokens > Ollama 缺省 4096 ──
+  // 期望窗口必须装得下实测请求并留余量；随请求声明 options.num_ctx（生效点是中继 Modelfile，
+  // 见 VISION_NUM_CTX 注释——这里钉的是线上契约不被回退）。
+  assert.ok(gw.VISION_NUM_CTX >= 8192, `VISION_NUM_CTX=${gw.VISION_NUM_CTX} 装不下实测 4181 tokens 的识图请求余量`);
+  const vp = gw.buildVisionPayload({
+    model: "qwen2.5vl:7b", max_tokens: 700, messages: [], options: { temperature: 0 },
+  }) as { model: string; stream: boolean; options: { num_ctx: number; temperature: number } };
+  assert.equal(vp.model, vs.canonical_model);          // 客户端自报模型一律改写为规范 VLM
+  assert.equal(vp.stream, false);
+  assert.equal(vp.options.num_ctx, gw.VISION_NUM_CTX);
+  assert.equal(vp.options.temperature, 0);            // 客户端 options 保留，只补 num_ctx
+  // 中继 400 形状识别（诊断包 MG65CT 原文）：解析 n_prompt_tokens / n_ctx；其它 400 与非 400 不误报
+  const relay400 = JSON.stringify({ error: { code: 400,
+    message: "request (4170 tokens) exceeds the available context size (4096 tokens), try increasing it",
+    type: "exceed_context_size_error", n_prompt_tokens: 4170, n_ctx: 4096 } });
+  const ovf = gw.visionContextOverflow(400, relay400);
+  assert.ok(ovf);
+  assert.equal(ovf!.n_prompt_tokens, 4170);
+  assert.equal(ovf!.n_ctx, 4096);
+  assert.equal(ovf!.expected_ctx, gw.VISION_NUM_CTX);
+  const ovf2 = gw.visionContextOverflow(400, "request (4181 tokens) exceeds the available context size (4096 tokens)");
+  assert.ok(ovf2 && ovf2.n_prompt_tokens === 4181 && ovf2.n_ctx === 4096);
+  assert.equal(gw.visionContextOverflow(400, JSON.stringify({ error: { message: "bad image" } })), null);
+  assert.equal(gw.visionContextOverflow(200, relay400), null);
+  // 告警节流：首条放行，间隔内第二条压掉，过了间隔再放
+  const t0 = Date.now();
+  assert.equal(gw.shouldAlertVisionOverflow(t0), true);
+  assert.equal(gw.shouldAlertVisionOverflow(t0 + 60_000), false);
+  assert.equal(gw.shouldAlertVisionOverflow(t0 + gw.VISION_OVERFLOW_ALERT_GAP_MS + 1), true);
+
   // ── 嵌入中继（P0-1，B126 根因）：沿用识图隧道 + 字符估算 + 计额下限 ──
   // 「enabled」是这条路由的生死开关：为 false 时 route 直接回 503，而
   // 503 与 404-HTML 的区别正是本次修复的全部意义（客户端能解析成 JSON 错误）。

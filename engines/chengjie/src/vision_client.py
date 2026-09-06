@@ -108,13 +108,36 @@ def _record_vision_stats(tag: str, ok: bool, latency_ms: int) -> None:
         pass
 
 
+_OPENAI_COMPAT_PROVIDERS = ("openai_compatible", "ollama", "openai", "local")
+
+
+def _looks_like_zhipu_key(value: Any) -> bool:
+    """一个 api_key 值能不能当智谱 key 用：排除占位符、ollama 假 key 与官网网关设备令牌。
+
+    ``cx.`` 前缀＝hosted_gateway 注入到 ``vision.api_key`` 的**设备令牌**（#213 钧机实锤：
+    它被当成智谱 key 送去 open.bigmodel.cn → 401「令牌已过期或验证不正确」，日志看起来像
+    「智谱令牌过期」，其实是拿我们的令牌去敲别人的门——既泄露令牌又白等一轮超时）。
+    """
+    k = str(value or "").strip()
+    if not k or k in ("YOUR_ZHIPU_API_KEY", "ollama"):
+        return False
+    if k.startswith("cx."):
+        return False
+    return True
+
+
 def _zhipu_credentials(global_vision: dict, merged: dict) -> Optional[Dict[str, str]]:
-    """从全局 vision 或合并配置中取智谱 key（排除占位符与 ollama）。支持 zhipu_api_key 专用于回退。"""
+    """从全局 vision 或合并配置中取智谱 key。支持 zhipu_api_key 专用于回退。
+
+    ``api_key`` 只在该段 provider 是智谱（缺省）时才算智谱 key：provider 为 OpenAI 兼容
+    （ollama / 网关）时它是那条端点自己的鉴权值（example 配置的契约就是「与 Ollama 并存
+    时智谱 key 放 zhipu_api_key，api_key 可填 ollama」），拿去当智谱 key 只会 401。
+    """
     gv = global_vision if isinstance(global_vision, dict) else {}
     m = merged if isinstance(merged, dict) else {}
     for d in (gv, m):
         zk = (d.get("zhipu_api_key") or "").strip()
-        if zk and zk not in ("YOUR_ZHIPU_API_KEY",):
+        if _looks_like_zhipu_key(zk):
             model = (
                 d.get("zhipu_model")
                 or gv.get("model")
@@ -123,11 +146,55 @@ def _zhipu_credentials(global_vision: dict, merged: dict) -> Optional[Dict[str, 
             )
             return {"api_key": zk, "model": str(model)}
     for d in (gv, m):
+        prov = str(d.get("provider") or "zhipu").strip().lower()
+        if prov in _OPENAI_COMPAT_PROVIDERS:
+            continue
         k = (d.get("api_key") or "").strip()
-        if k and k not in ("YOUR_ZHIPU_API_KEY", "ollama"):
+        if _looks_like_zhipu_key(k):
             model = gv.get("model") or m.get("model") or "glm-4v-flash"
             return {"api_key": k, "model": str(model)}
     return None
+
+
+def classify_vision_error(exc: BaseException) -> str:
+    """把端点异常归成少数几类（进 debug tag 的 ``failed:<kind>`` 段，供人话文案与观测）。"""
+    s = str(exc or "").lower()
+    name = type(exc).__name__.lower()
+    if "context size" in s or "exceed_context_size" in s or "context length" in s:
+        return "context_overflow"
+    if "401" in s or "403" in s or "unauthorized" in s or "authentication" in s:
+        return "auth"
+    if "429" in s or "rate limit" in s or "quota" in s:
+        return "rate_limited"
+    if "timeout" in name or "timed out" in s or "timeout" in s:
+        return "timeout"
+    if "connect" in name or "connection" in s or "unreachable" in s or "refused" in s:
+        return "unreachable"
+    if any(code in s for code in ("500", "502", "503", "504", "relay_5")):
+        return "upstream"
+    return "error"
+
+
+def vision_failure_reason(tag: str) -> str:
+    """把 fallback 链 debug tag 归成用户可读的三个原因码（#213 工作台「识别翻译不可用」拆分）。
+
+    ``unconfigured``＝没有可用后端（init 失败 / 无 key）；``busy``＝有后端但调用失败
+    （超时 / 不可达 / 上下文超限 / 上游 5xx / 鉴权）；``no_text``＝后端正常答复但没识出
+    内容。任一段是 ``*_failed:*`` 即 busy——「服务在但没答成」比「图里没字」更接近真相。
+    """
+    t = str(tag or "").strip().lower()
+    if not t:
+        return "busy"
+    segs = [s for s in t.split("|") if s]
+    if any("_failed" in s for s in segs):
+        return "busy"
+    tried = [s for s in segs if s not in ("no_cloud_fallback",)]
+    if tried and all(
+        s in ("vision_client_init_fail", "ollama_unavailable", "zhipu_init_fail")
+        for s in tried
+    ):
+        return "unconfigured"
+    return "no_text"
 
 
 def _vision_base_urls(cfg: dict) -> List[str]:
@@ -301,6 +368,9 @@ class VisionClient:
         self._oa_sync: Any = None  # OpenAI sync client（首端点，向后兼容）
         self._oa_endpoints: List[Tuple[str, Any]] = []  # [(base_url, OpenAI client)]
         self._backend: str = "zhipu"
+        # 最近一次描述调用的失败类别（classify_vision_error 输出；""＝没失败或只是空答）。
+        # 端点循环把「全部端点抛异常」和「端点通但模型空答」区分开，fallback 链据此打 tag。
+        self.last_fail: str = ""
         self.logger = logging.getLogger(__name__)
 
     def _get_zhipu(self) -> Optional[Any]:
@@ -537,6 +607,9 @@ class VisionClient:
         endpoints = healthy + cooling
         empty_failovers_left = 1 if allow_empty_failover else 0
         empty_failover_used = False
+        self.last_fail = ""
+        answered = False      # 任一端点返回过响应（哪怕空答）→ 整链按「空答」而非「失败」计
+        last_exc_kind = ""
         for i, (url, cli) in enumerate(endpoints):
             try:
                 resp = cli.chat.completions.create(
@@ -549,8 +622,14 @@ class VisionClient:
                 )
             except Exception as e:
                 _mark_url_bad(url)
-                self.logger.warning("Vision 端点 %s 调用失败(切换下一端点): %s", url, e)
+                last_exc_kind = classify_vision_error(e)
+                self.logger.warning("Vision 端点 %s 调用失败(切换下一端点, %s): %s",
+                                    url, last_exc_kind, e)
+                if not answered:
+                    self.last_fail = last_exc_kind
                 continue
+            answered = True
+            self.last_fail = ""
             if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
                 out = getattr(resp.choices[0].message, "content", None)
                 if out and isinstance(out, str) and out.strip():
@@ -582,6 +661,7 @@ class VisionClient:
             return None
         model = self.config.get("model", "glm-4v-flash")
         timeout = int(self.config.get("timeout", 30))
+        self.last_fail = ""
         default_prompt = (
             "请按以下格式描述，便于作为查单依据使用。"
             "1) 银行/账单类型：哪个银行或支付渠道（如 EasyPaisa、银行转账、平台订单等）。"
@@ -611,7 +691,8 @@ class VisionClient:
                     return content.strip()[:2000]
             return None
         except Exception as e:
-            self.logger.warning(f"智谱 Vision 调用失败: {e}")
+            self.last_fail = classify_vision_error(e)
+            self.logger.warning("智谱 Vision 调用失败(%s): %s", self.last_fail, e)
             return None
 
     async def describe_image(
@@ -659,13 +740,22 @@ class VisionClient:
         image_path: str,
         prompt: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
-        """Ollama/OpenAI 兼容端优先 → 空/失败回退智谱（原 fallback 语义，逐字保留）。"""
+        """Ollama/OpenAI 兼容端优先 → 空/失败回退智谱（原 fallback 语义，逐字保留）。
+
+        tag 语义（#213 起区分「失败」与「空答」）：``ollama_failed:<kind>`` / ``zhipu_failed:<kind>``
+        ＝端点全部抛异常（kind 见 classify_vision_error）；``ollama_empty`` / ``zhipu_empty``
+        ＝端点通、模型没答出内容。前缀不变，``_backend_from_tag`` 归因照旧。
+        """
         if not _wants_openai_primary(merged):
             vc = cls(merged)
             if not vc.initialize():
                 return None, "vision_client_init_fail"
             txt = await vc.describe_image(image_path, prompt=prompt)
-            return txt, "zhipu_only" if vc._backend == "zhipu" else "vision_ok"
+            if vc._backend != "zhipu":
+                return txt, "vision_ok"
+            if not (txt or "").strip() and vc.last_fail:
+                return None, f"zhipu_failed:{vc.last_fail}"
+            return txt, "zhipu_only"
 
         vc_o = cls(merged)
         ollama_ok = vc_o.initialize()
@@ -674,7 +764,14 @@ class VisionClient:
             txt = await vc_o.describe_image(
                 image_path, prompt=prompt,
                 allow_empty_failover=_empty_retry_enabled(merged))
-        dbg = "ollama_unavailable" if not ollama_ok else ("ollama_empty" if not (txt or "").strip() else "ollama_ok")
+        if not ollama_ok:
+            dbg = "ollama_unavailable"
+        elif (txt or "").strip():
+            dbg = "ollama_ok"
+        elif vc_o.last_fail:
+            dbg = f"ollama_failed:{vc_o.last_fail}"
+        else:
+            dbg = "ollama_empty"
 
         if (txt or "").strip():
             return txt.strip(), dbg
@@ -688,7 +785,9 @@ class VisionClient:
 
         creds = _zhipu_credentials(gv, merged)
         if not creds:
-            return None, dbg if not ollama_ok else "ollama_empty_no_zhipu_key"
+            if not ollama_ok or dbg.startswith("ollama_failed"):
+                return None, dbg
+            return None, "ollama_empty_no_zhipu_key"
 
         zcfg = {
             **merged,
@@ -703,6 +802,8 @@ class VisionClient:
         ztxt = await vc_z.describe_image(image_path, prompt=prompt)
         if (ztxt or "").strip():
             return ztxt.strip(), f"{dbg}|zhipu_fallback"
+        if vc_z.last_fail:
+            return None, f"{dbg}|zhipu_failed:{vc_z.last_fail}"
         return None, f"{dbg}|zhipu_empty"
 
     @classmethod
