@@ -38,7 +38,7 @@ DANGEROUS_EXTS = frozenset({
 # 不 import：protocol_bridge 依赖较重，守卫要保持零依赖可测）。
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
 _AUDIO_EXTS = frozenset({".ogg", ".opus", ".mp3", ".m4a", ".wav", ".amr", ".aac"})
-_VIDEO_EXTS = frozenset({".mp4", ".mov", ".webm"})
+_VIDEO_EXTS = frozenset({".mp4", ".mov", ".webm", ".m4v"})
 
 
 def sniff_media_kind(data: bytes) -> str:

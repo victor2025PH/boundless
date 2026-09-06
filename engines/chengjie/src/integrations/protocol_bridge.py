@@ -232,7 +232,69 @@ def media_paths(platform: str, name: str, ext: str) -> Tuple[Path, str]:
 
 _OUT_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _OUT_AUDIO_EXT = {".ogg", ".opus", ".mp3", ".m4a", ".wav", ".amr", ".aac"}
-_OUT_VIDEO_EXT = {".mp4", ".mov", ".webm"}
+_OUT_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
+
+#: M-3 B（#229 #231，D-M4，2026-09-06）：视频出站**容器口径**，路由与 send-caps 前端
+#: 白名单同源。``.mp4`` / ``.webm`` 直发；``.mov`` / ``.m4v``（iPhone 默认 QuickTime）
+#: 落盘后经随包 ffmpeg **换封装**为 .mp4 再发（``-c copy`` 不重编码，秒级；四平台里
+#: LINE 只收 MP4、WA/Messenger 对 QuickTime 容器播放不稳，统一转掉最省事）；机器上
+#: 没有 ffmpeg 时路由 415 拒收、前端在**选文件时**就拒绝并写明——绝不再进队列复用
+#: 「结果未知」。其它扩展名（.avi/.mkv…）本就归 document 按文件发，不在本口径内。
+OUT_VIDEO_NATIVE_EXT = frozenset({".mp4", ".webm"})
+OUT_VIDEO_TRANSCODE_EXT = frozenset({".mov", ".m4v"})
+
+
+def video_transcode_available() -> bool:
+    """随包/PATH 上有 ffmpeg 即可做 MOV→MP4 换封装（send-caps 下发给前端决定拒/收）。"""
+    try:
+        from src.utils.ffmpeg_resolver import ffmpeg_path
+        return bool(ffmpeg_path())
+    except Exception:
+        return False
+
+
+def remux_video_to_mp4(src_path: str, dst_path: str, *, timeout_sec: int = 180) -> Tuple[bool, str]:
+    """同步阻塞：QuickTime 容器 → MP4。成功 ``(True, "")``，失败 ``(False, reason)``。
+
+    第一遍 ``-c copy``（视频/音频流原样换容器）；MP4 容纳不了的音轨（iPhone 偶见
+    PCM/ALAC）第二遍只转音频为 AAC、视频仍 copy。两遍都失败返回 ``ffmpeg_failed:<stderr>``
+    ——调用方拒收并让坐席自己转 MP4。调用方负责放线程池 + 清理 src/dst。
+    """
+    try:
+        from src.utils.ffmpeg_resolver import ffmpeg_path
+        ff = ffmpeg_path()
+    except Exception:
+        ff = None
+    if not ff:
+        return False, "ffmpeg_missing"
+    import subprocess
+    _flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    attempts = (
+        ["-c", "copy"],
+        ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"],
+    )
+    last_err = ""
+    for codec_args in attempts:
+        cmd = [ff, "-y", "-v", "error", "-i", str(src_path),
+               "-map", "0:v:0", "-map", "0:a?", *codec_args,
+               "-movflags", "+faststart", str(dst_path)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=timeout_sec, creationflags=_flags)
+        except subprocess.TimeoutExpired:
+            last_err = "timeout"
+            continue
+        except Exception as exc:  # noqa: BLE001
+            last_err = f"{type(exc).__name__}: {str(exc)[:120]}"
+            continue
+        if r.returncode == 0 and os.path.isfile(dst_path) and os.path.getsize(dst_path) > 0:
+            return True, ""
+        last_err = (r.stderr or "").strip()[:200] or f"rc={r.returncode}"
+        try:
+            os.remove(dst_path)
+        except OSError:
+            pass
+    return False, f"ffmpeg_failed:{last_err}"
 
 
 def media_type_from_ext(ext: str) -> str:

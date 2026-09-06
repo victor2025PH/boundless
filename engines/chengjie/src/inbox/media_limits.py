@@ -48,6 +48,41 @@ PLATFORM_MEDIA_CAP_MB: Dict[str, int] = {
 _CAP_MIN_MB = 1
 _CAP_MAX_MB = 2048
 
+#: D-M5「先压后放」（M-3 A，2026-09-06）：视频在流式上传落地并过 12 次真机矩阵之前，
+#: 临时压到实测可用值 50MB（平台表 LINE 100 / TG 200 保留不动，只对 kind=video 取
+#: min）。运营可用 ``inbox.media.video_limit_mb`` 覆写；写 0 / 负数＝不压（回到平台表）。
+#: 放回时机：M-6 拿到四平台 98MB 真机送达证据后把本默认改回 0。
+DEFAULT_VIDEO_CAP_MB = 50
+
+
+def video_cap_mb(config: Optional[Dict[str, Any]]) -> int:
+    """视频类临时压顶（MB）；0＝不压。绝不抛。"""
+    try:
+        v = (((config or {}).get("inbox") or {}).get("media") or {}).get("video_limit_mb")
+    except Exception:
+        v = None
+    if v is None:
+        return DEFAULT_VIDEO_CAP_MB
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return DEFAULT_VIDEO_CAP_MB
+    return 0 if n <= 0 else min(_CAP_MAX_MB, n)
+
+
+def media_cap_mb_for(config: Optional[Dict[str, Any]], platform: str, kind: str) -> int:
+    """按平台 + 媒体类别的出站体积上限（MB）——路由 413 与 send-caps 下发共用的唯一口。
+
+    ``kind`` 是 protocol_bridge.media_type_from_ext 的口径（image/audio/video/document）；
+    只有 video 吃 D-M5 压顶，其余类别＝平台上限。
+    """
+    cap = platform_media_cap_mb(config, platform)
+    if str(kind or "").lower() == "video":
+        vc = video_cap_mb(config)
+        if vc > 0:
+            cap = min(cap, vc)
+    return cap
+
 
 def _limits_section(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     try:

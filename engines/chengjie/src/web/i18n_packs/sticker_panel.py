@@ -65,6 +65,7 @@ ZH = {
     "inbox.file.queued_n": "{n} 个文件待发送",
     "inbox.file.remove": "移除",
     "inbox.file.too_large_mb": "文件超过该平台上限（{mb} MB）",
+    "inbox.file.too_large_detail": "文件 {size} MB 超过上限 {mb} MB，请换更小的文件或压缩后再选",
     "inbox.file.sent_n": "已发送 {n} 个文件",
     "inbox.file.part_failed": "部分文件发送失败",
 }
@@ -125,6 +126,7 @@ EN = {
     "inbox.file.queued_n": "{n} files queued",
     "inbox.file.remove": "Remove",
     "inbox.file.too_large_mb": "File exceeds this platform's limit ({mb} MB)",
+    "inbox.file.too_large_detail": "File is {size} MB, over the {mb} MB limit — pick a smaller file or compress it first",
     "inbox.file.sent_n": "{n} files sent",
     "inbox.file.part_failed": "Some files failed to send",
 }

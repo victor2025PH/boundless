@@ -733,7 +733,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         ("/api/unified-inbox/translate-image", 12 * 1024 * 1024),
     ):
         _BODY_LIMIT_OVERRIDES.setdefault(_mp, _mlim)
-    _BODY_LIMIT_EXEMPT_PREFIXES: tuple = tuple(web_cfg.get("max_body_exempt_prefixes", []))
+    # M-3 A（#227 #229 #231，2026-09-06）：收件箱媒体上传口**代码级豁免**本闸。
+    # 事故链：send-media 是 multipart 文件上传，却一直吃 2MB 全局默认——任何 >2MB 的
+    # 图/视频在路由跑起来之前就被这里 413 + Connection:close，浏览器还在推 body 时连接
+    # 被掐（本机复现 ConnectionAbortedError 10053 / 10054），XHR 只见 onerror、后端零
+    # `[send-media]` 记录 → 坐席看到「结果未知」。98MB 视频、5MB .MOV 三平台全灭都是它，
+    # 不是格式、不是网络。该路由自带按平台/按类别的流式体积闸（media_limits，413 带
+    # 实际大小与上限），比这里的一刀切更准，故豁免而非改上限。
+    _BODY_LIMIT_CODE_EXEMPT_PREFIXES: tuple = ("/api/unified-inbox/send-media",)
+    _BODY_LIMIT_EXEMPT_PREFIXES: tuple = (
+        tuple(web_cfg.get("max_body_exempt_prefixes", []))
+        + _BODY_LIMIT_CODE_EXEMPT_PREFIXES)
     # P25-B / P26-D: 413 攻击信号防抖 — 用通用 AuditThrottle
     from src.utils.audit_throttle import AuditThrottle as _AuditThrottle
     _body_oversize_throttle = _AuditThrottle(window_sec=5.0, max_keys=4096)
@@ -816,6 +826,42 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         full_body = b"".join(body_chunks)
         request._receive = make_replay_receive(request._receive, full_body)
         return await call_next(request)
+
+    # ── M-3 A（#227）Web 层访问日志：大请求 / 慢请求 / 被拒请求一行落痕 ────────
+    # 8YNDKE 实锤：98MB 上传期间「后端零记录」——被上面 body 闸掐掉的请求不进任何路由，
+    # 日志里就像没发生过。这里在闸**外侧**（后注册＝外层）记：路径 / 声明大小 / 耗时 /
+    # 状态码，只对「值得看」的请求出声（体 ≥1MB、耗时 ≥3s、或 413/415/499/5xx），
+    # 普通 GET 轮询零噪音。挂在 logger.info（生产默认级别）而非 debug。
+    _ACCESS_LOG_MIN_BYTES = 1024 * 1024
+    _ACCESS_LOG_SLOW_SEC = 3.0
+    _ACCESS_LOG_STATUSES = {413, 415, 499}
+
+    @app.middleware("http")
+    async def upload_access_log_middleware(request: Request, call_next):
+        _t0 = time.perf_counter()
+        try:
+            _cl = int(request.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            _cl = 0
+        status = 0
+        try:
+            response = await call_next(request)
+            status = int(getattr(response, "status_code", 0) or 0)
+            return response
+        except BaseException:
+            status = 500
+            raise
+        finally:
+            _dt = time.perf_counter() - _t0
+            if (_cl >= _ACCESS_LOG_MIN_BYTES or _dt >= _ACCESS_LOG_SLOW_SEC
+                    or status in _ACCESS_LOG_STATUSES or status >= 500):
+                try:
+                    logger.info(
+                        "[http] %s %s size=%.1fMB %.2fs %s ip=%s",
+                        request.method, request.url.path, _cl / (1024 * 1024), _dt,
+                        status or "-", request.client.host if request.client else "?")
+                except Exception:
+                    pass
 
     # RBAC user store
     from src.utils.web_user_store import (WebUserStore, ROLE_MASTER, ROLE_ADMIN,

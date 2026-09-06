@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -182,6 +183,7 @@ def _deny_capability(request: Request, perm: str) -> None:
 # send-caps.media_max_mb 拿到同一数字做上传前预检（两端同源，不各写一套）。
 from src.inbox.media_limits import (  # noqa: E402
     describe_over_cap as _describe_over_cap,
+    media_cap_mb_for as _media_cap_mb_for,
     platform_media_cap_mb as _media_cap_mb,
 )
 
@@ -625,6 +627,282 @@ async def _deliver_bubble_parts(
             sent, len(parts), platform, str(chat_key)[:24],
             [m or "-" for m in message_ids])
     return first_result, sent, message_ids
+
+
+# ── send-media 流式实现（M-3 A #227 / B #229 #231，2026-09-06）──────────────────
+#: 超限时最多再吞多少字节让浏览器**读得到** 413——服务端一响应就关连接的话，浏览器还在
+#: 推 body，只会看到连接被重置（onerror，无状态码），坐席看到的就又是「结果未知」。
+#: 前端已按同源上限预检，超限请求本就罕见；256MB 以内顺手吞完（本机回环秒级），更大的
+#: 直接响应，接受它可能表现为网络错误。
+_SEND_MEDIA_DRAIN_MAX = 256 * 1024 * 1024
+_SEND_MEDIA_WRITE_BUF = 1024 * 1024
+
+
+async def _drain_stream(chunks: Any, max_bytes: int) -> int:
+    """读掉并丢弃剩余请求体（上限 max_bytes），返回吞掉的字节数。任何异常吞掉即停。"""
+    n = 0
+    try:
+        async for c in chunks:
+            n += len(c)
+            if n >= max_bytes:
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    return n
+
+
+def _too_large_exc(request: Request, size_bytes: int, cap_mb: int) -> HTTPException:
+    """413 文案：知道实际大小就带「X MB 超过 Y MB（超出 Z）」，不知道就只报上限。"""
+    _ov = _describe_over_cap(size_bytes, cap_mb)
+    _key = ("err.inbox.file_too_large_detail" if _ov["size"] > 0
+            else "err.inbox.file_too_large_mb")
+    return HTTPException(413, tr(
+        request, _key, mb=cap_mb, cap=cap_mb, size=_ov["size"], over=_ov["over"]))
+
+
+async def _send_media_streamed(request: Request, meta: Dict[str, str], filename: str,
+                               chunks: Any, *, declared: int, t0: float, mode: str):
+    """把一个异步字节流当作出站媒体：校验 → 流式落盘（线程池写）→ 可选换封装 → 投递。
+
+    ``chunks`` 是 ``bytes`` 的异步迭代器（裸流＝request.stream()；multipart＝UploadFile
+    分块读）。每条退出路径都落一行 ``[send-media] ...`` 带 reason / 大小 / 耗时——8YNDKE
+    的「后端零记录」以后不会再发生在路由这一层。
+    """
+    from src.integrations.protocol_bridge import (
+        OUT_VIDEO_TRANSCODE_EXT, media_paths, media_type_from_ext,
+        remux_video_to_mp4, video_transcode_available,
+    )
+    from starlette.concurrency import run_in_threadpool
+
+    platform = str(meta.get("platform") or "").lower()
+    account_id = str(meta.get("account_id") or "default")
+    chat_key = str(meta.get("chat_key") or "")
+    caption = str(meta.get("caption") or "")
+    _client_msg_id = str(meta.get("client_msg_id") or "").strip()
+    _fname = str(filename or "")[:80]
+    _ext = (os.path.splitext(str(filename or ""))[1] or ".bin").lower()
+    mtype = media_type_from_ext(_ext)
+    _decl_mb = declared / (1024 * 1024) if declared else 0.0
+    logger.info(
+        "[send-media] request platform=%s acct=%s chat=%s file=%s kind=%s declared=%.1fMB mode=%s",
+        platform, account_id, chat_key, _fname, mtype, _decl_mb, mode)
+
+    def _rejected(reason: str, extra: str = "") -> None:
+        logger.info("[send-media] rejected reason=%s platform=%s file=%s declared=%.1fMB %.2fs %s",
+                    reason, platform, _fname, _decl_mb, time.perf_counter() - t0, extra)
+
+    # 能力权限（2026-08-16）：发媒体受 chat.send_media 闸（媒体不耗字符额度）
+    try:
+        _deny_capability(request, "chat.send_media")
+        _raise_if_account_blocked(request, platform, account_id)
+    except HTTPException:
+        _rejected("capability_or_blocked")
+        raise
+
+    from src.integrations.account_orchestrator import get_orchestrator
+    orch = get_orchestrator()
+    _cap = media_capability_or_none(orch, platform, account_id)
+    if not _cap.get("owns"):
+        _rejected("unsupported_account", f"caps_reason={_cap.get('reason') or ''}")
+        raise _media_unsupported_exc(request, _cap, platform=platform, kind="media")
+    # 护栏预检（P0 2026-08-12）：此时尚未读文件/落盘/占幂等位，被拦零清理
+    _gate_ex = _send_gate_exc(request, platform, account_id, chat_key, owned=True)
+    if _gate_ex is not None:
+        _rejected("send_gate")
+        raise _gate_ex
+
+    _config = (getattr(getattr(request.app.state, "config_manager", None),
+                       "config", None) or {})
+    # 上限同源（D-M5）：按平台 + 类别（视频临时压 50MB），与 send-caps 下发前端的是同一函数
+    _cap_mb = _media_cap_mb_for(_config, platform, mtype)
+    _cap_bytes = _cap_mb * 1024 * 1024
+    if declared and declared > _cap_bytes:
+        # 裸流：Content-Length 就是文件大小，传完之前就能给出精确的 413
+        _drained = await _drain_stream(chunks, min(declared, _SEND_MEDIA_DRAIN_MAX))
+        _rejected("too_large", f"cap={_cap_mb}MB drained={_drained / (1024 * 1024):.1f}MB")
+        raise _too_large_exc(request, declared, _cap_mb)
+
+    # 视频容器口径（D-M4）：.mov/.m4v 无 ffmpeg 时在读文件之前就拒，前端同源白名单
+    _needs_remux = mtype == "video" and _ext in OUT_VIDEO_TRANSCODE_EXT
+    if _needs_remux and not video_transcode_available():
+        await _drain_stream(chunks, min(declared or _SEND_MEDIA_DRAIN_MAX, _SEND_MEDIA_DRAIN_MAX))
+        _rejected("video_format_unsupported", "ffmpeg_missing")
+        raise HTTPException(415, tr(request, "err.inbox.video_format_unsupported", ext=_ext))
+
+    # 头部 64KB：内容守卫看魔数（前 16 字节），多读一点让空文件/截断件也能判
+    head = b""
+    _it = chunks.__aiter__()
+    while len(head) < 64 * 1024:
+        try:
+            c = await _it.__anext__()
+        except StopAsyncIteration:
+            break
+        head += c
+    if not head:
+        _rejected("empty_file")
+        raise HTTPException(400, tr(request, "err.inbox.empty_file"))
+
+    # P0 2026-08-17：出站内容守卫——危险扩展名黑名单 + magic bytes 与扩展名大类一致性
+    from src.inbox.media_guard import validate_outbound_media
+    _mg = validate_outbound_media(str(filename or ""), head)
+    if not _mg["ok"]:
+        _mg_key = {
+            "ext_forbidden": "err.inbox.media_ext_forbidden",
+            "executable_content": "err.inbox.media_exec_content",
+        }.get(str(_mg["reason"]), "err.inbox.media_magic_mismatch")
+        await _drain_stream(_it, _SEND_MEDIA_DRAIN_MAX)
+        _rejected("content_guard", f"guard={_mg['reason']} detected={_mg['detected'] or '?'}")
+        raise HTTPException(415, tr(request, _mg_key))
+
+    # P0 幂等键（与文本 send 同口径；置于全部校验之后、真发送之前）
+    from src.inbox.send_dedup import get_send_dedup
+    _dedup = get_send_dedup()
+    _dedup_scope = f"media:{platform}:{account_id}:{chat_key}"
+    if not _dedup.reserve(_dedup_scope, _client_msg_id):
+        await _drain_stream(_it, _SEND_MEDIA_DRAIN_MAX)
+        logger.info("[send-media] 幂等去重命中，拒绝重复发送 scope=%s id=%s",
+                    _dedup_scope, _client_msg_id[:16])
+        return {"ok": True, "duplicate": True}
+
+    import secrets as _secrets
+    _base = f"out_{account_id}_{_secrets.token_hex(6)}"
+    _dest, url = media_paths(platform, _base, _ext)
+    local = str(_dest)
+
+    def _cleanup(path: str, why: str) -> None:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            # 删不掉不该挡住给坐席的回执，但也不能无声：反复失败会慢性占盘
+            logger.warning("[send-media] %s后临时文件未能删除 path=%s", why, path, exc_info=True)
+
+    # 流式落盘：收到的块攒到 1MB 再经线程池写盘——磁盘慢/杀软扫描都不占事件循环
+    _size = 0
+    _overflow = False
+    _t_recv0 = time.perf_counter()
+    try:
+        _fh = await run_in_threadpool(open, local, "wb")
+        try:
+            _buf = bytearray(head)
+            _size = len(head)
+            if _size > _cap_bytes:
+                _overflow = True
+            while not _overflow:
+                if len(_buf) >= _SEND_MEDIA_WRITE_BUF:
+                    await run_in_threadpool(_fh.write, bytes(_buf))
+                    _buf = bytearray()
+                try:
+                    c = await _it.__anext__()
+                except StopAsyncIteration:
+                    break
+                _size += len(c)
+                if _size > _cap_bytes:
+                    _overflow = True
+                    break
+                _buf += c
+            if _buf and not _overflow:
+                await run_in_threadpool(_fh.write, bytes(_buf))
+        finally:
+            await run_in_threadpool(_fh.close)
+    except Exception as ex:  # noqa: BLE001
+        _dedup.release(_dedup_scope, _client_msg_id)
+        _cleanup(local, "上传失败")
+        _rejected("recv_error", f"received={_size / (1024 * 1024):.1f}MB err={type(ex).__name__}")
+        raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
+    _t_recv = time.perf_counter() - _t_recv0
+    if _overflow:
+        _dedup.release(_dedup_scope, _client_msg_id)
+        _cleanup(local, "超限拒收")
+        _drained = await _drain_stream(_it, _SEND_MEDIA_DRAIN_MAX)
+        # 流式闸中途停下时只知道「超了」：有 Content-Length 就报它，没有就只报上限
+        _rejected("too_large", f"cap={_cap_mb}MB received={_size / (1024 * 1024):.1f}MB "
+                               f"drained={_drained / (1024 * 1024):.1f}MB")
+        raise _too_large_exc(request, declared if mode == "stream" else 0, _cap_mb)
+
+    # D-M4：QuickTime 容器 → MP4（线程池里跑 ffmpeg，-c copy 秒级）
+    _t_remux = 0.0
+    if _needs_remux:
+        _t_x0 = time.perf_counter()
+        _mp4_dest, _mp4_url = media_paths(platform, _base, ".mp4")
+        _ok, _why = await run_in_threadpool(remux_video_to_mp4, local, str(_mp4_dest))
+        _t_remux = time.perf_counter() - _t_x0
+        _cleanup(local, "换封装")
+        if not _ok:
+            _dedup.release(_dedup_scope, _client_msg_id)
+            _cleanup(str(_mp4_dest), "换封装失败")
+            _rejected("video_transcode_failed", f"why={_why[:160]} remux={_t_remux:.2f}s")
+            raise HTTPException(415, tr(request, "err.inbox.video_transcode_failed", ext=_ext))
+        local, url = str(_mp4_dest), _mp4_url
+        logger.info("[send-media] 已换封装 %s→.mp4 file=%s size=%.1fMB remux=%.2fs",
+                    _ext, _fname, _size / (1024 * 1024), _t_remux)
+
+    # P0 2026-08-17：文档无配文 → 用原始文件名作收件箱镜像文本（气泡/会话
+    # 预览显示「report.pdf」而非空行；只影响坐席台可读文本，不发给客户）。
+    _inbox_text = None
+    if mtype == "document" and not caption.strip():
+        _inbox_text = os.path.basename(str(filename or "")) or None
+    _send_agent = _session_agent(request)
+    _t_disp0 = time.perf_counter()
+    try:
+        try:
+            res = await orch.send_media(
+                platform, account_id, chat_key,
+                media_path=local, media_url=url, media_type=mtype,
+                caption=caption, inbox_text=_inbox_text, origin="manual")
+        except TypeError:
+            # 旧签名（无 origin/inbox_text kwarg，测试假编排器常见）→ 回落
+            res = await orch.send_media(
+                platform, account_id, chat_key,
+                media_path=local, media_url=url, media_type=mtype,
+                caption=caption)
+    except Exception as ex:  # noqa: BLE001
+        _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
+        _rejected("dispatch_error", f"err={type(ex).__name__}:{str(ex)[:120]} "
+                                    f"recv={_t_recv:.2f}s dispatch={time.perf_counter() - _t_disp0:.2f}s")
+        raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
+    _t_disp = time.perf_counter() - _t_disp0
+    # P0 2026-08-12：拦截/未送达显式回执（同文本路由；防 ok:true 静默吞）
+    _undeliv = _result_undelivered(res)
+    if _undeliv:
+        _dedup.release(_dedup_scope, _client_msg_id)
+        _rejected("undelivered", f"kind={_undeliv} err={str(res.get('error') or res.get('blocked') or '')[:80]} "
+                                 f"recv={_t_recv:.2f}s dispatch={_t_disp:.2f}s")
+        if _undeliv == "blocked":
+            raise _send_blocked_exc(
+                request, platform, account_id, chat_key,
+                reason=str(res.get("blocked") or ""))
+        raise HTTPException(502, tr(
+            request, "err.inbox.send_not_delivered",
+            msg=str(res.get("error") or res.get("error_kind") or "")))
+    cid = _conv_id(platform, account_id, chat_key)
+    try:
+        ibx = _inbox_store(request)
+        if ibx is not None:
+            ibx.record_agent_send(
+                cid, _send_agent["agent_id"],
+                agent_name=_send_agent.get("display_name", ""))
+            # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI
+            # （source=takeover，供横幅/自动接回识别）。
+            from src.inbox.takeover_rearm import record_agent_takeover
+            record_agent_takeover(ibx, cid)
+    except Exception:
+        logger.debug("record_agent_send(media) 失败", exc_info=True)
+    # #88：媒体送达成功=可达铁证 → 清 dead-peer 陈旧标（与文本路由同口径）
+    try:
+        from src.ops.dead_peer_registry import clear_on_delivery
+        if clear_on_delivery(platform, chat_key):
+            logger.info(
+                "[send-media] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）", cid)
+    except Exception:
+        pass
+    logger.info(
+        "[send-media] ok platform=%s chat=%s file=%s kind=%s size=%.1fMB recv=%.2fs remux=%.2fs "
+        "dispatch=%.2fs total=%.2fs mode=%s",
+        platform, chat_key, _fname, mtype, _size / (1024 * 1024), _t_recv, _t_remux, _t_disp,
+        time.perf_counter() - t0, mode)
+    return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
 
 
 def register_send_routes(app, *, api_auth, page_auth) -> None:
@@ -1194,189 +1472,48 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
     async def api_unified_inbox_send_media(request: Request, _=Depends(page_auth)):
         """M6⑥：坐席从收件箱发送媒体（图片/语音/视频/文件）。
 
-        multipart: file + platform/account_id/chat_key/caption。
+        两种请求体（M-3 A #227，2026-09-06）：
+        - **裸流**（新前端）：``Content-Type`` 非 multipart，body 就是文件本体，元数据走
+          query（platform / account_id / chat_key / caption / name / client_msg_id）。
+          边收边落盘，Web 层不解析、不缓冲；``Content-Length`` 一到手就按上限预检并 413
+          （带实际大小），不用等文件传完。
+        - **multipart**（旧前端 / 脚本 / 测试）：Starlette 先把整个文件卷进临时文件，路由
+          再复制一遍——两次落盘、路由在文件传完之前看不到请求。保留兼容，不再演进。
         仅 protocol 账号（编排器接管、在线）支持；其它平台返回 501（走各自 RPA 发送）。
         发送成功后媒体以 /static URL 回写线程，坐席侧立即可见。
         """
-        form = await request.form()
-        platform = str(form.get("platform") or "").lower()
-        account_id = str(form.get("account_id") or "default")
-        chat_key = str(form.get("chat_key") or "")
-        caption = str(form.get("caption") or "")
-        upload = form.get("file")
-        if not chat_key or upload is None or not getattr(upload, "filename", ""):
-            raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
-        logger.info(
-            "[send-media] request platform=%s acct=%s chat=%s file=%s",
-            platform, account_id, chat_key,
-            str(getattr(upload, "filename", "") or "")[:80],
-        )
-        # 能力权限（2026-08-16）：发媒体受 chat.send_media 闸（媒体不耗字符额度）
-        _deny_capability(request, "chat.send_media")
-        _raise_if_account_blocked(request, platform, account_id)
+        _t0 = time.perf_counter()
+        _ctype = str(request.headers.get("content-type") or "").lower()
+        _meta_keys = ("platform", "account_id", "chat_key", "caption", "client_msg_id")
+        if _ctype.startswith("multipart/"):
+            form = await request.form()
+            upload = form.get("file")
+            meta = {k: str(form.get(k) or "") for k in _meta_keys}
+            filename = str(getattr(upload, "filename", "") or "") if upload is not None else ""
+            if not meta["chat_key"] or not filename:
+                raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
 
-        from src.integrations.account_orchestrator import get_orchestrator
-        orch = get_orchestrator()
-        _cap = media_capability_or_none(orch, platform, account_id)
-        if not _cap.get("owns"):
-            raise _media_unsupported_exc(request, _cap, platform=platform, kind="media")
-        # 护栏预检（P0 2026-08-12）：此时尚未读文件/落盘/占幂等位，被拦零清理
-        _gate_ex = _send_gate_exc(
-            request, platform, account_id, chat_key, owned=True)
-        if _gate_ex is not None:
-            raise _gate_ex
-
-        # P3 2026-08-17：体积上限按平台/配置（默认仍 25MB）+ **流式落盘**——
-        # 旧实现 upload.read() 把整个文件读进内存做 len() 校验，上限放宽到
-        # 100MB+ 后每次上传都是一记内存尖峰；改为读头部验魔数、其余按 1MB
-        # 分块直写目的文件，峰值内存恒定，超限中途即停（删残件 + 413）。
-        _cap_mb = _media_cap_mb(
-            (getattr(getattr(request.app.state, "config_manager", None),
-                     "config", None) or {}), platform)
-        head = await upload.read(64 * 1024)
-        if not head:
-            raise HTTPException(400, tr(request, "err.inbox.empty_file"))
-
-        # P0 2026-08-17：出站内容守卫——危险扩展名黑名单 + magic bytes 与
-        # 扩展名大类一致性（媒体产物验证纪律的出站版：伪装件在上传口拦下，
-        # 而不是让平台 API 在发送侧晦涩失败）。魔数只看前 16 字节，head 足够。
-        from src.inbox.media_guard import validate_outbound_media
-        _mg = validate_outbound_media(str(upload.filename or ""), head)
-        if not _mg["ok"]:
-            _mg_key = {
-                "ext_forbidden": "err.inbox.media_ext_forbidden",
-                "executable_content": "err.inbox.media_exec_content",
-            }.get(str(_mg["reason"]), "err.inbox.media_magic_mismatch")
-            logger.info(
-                "[send-media] 内容守卫拒绝 file=%s reason=%s detected=%s",
-                str(upload.filename or "")[:80], _mg["reason"],
-                _mg["detected"] or "?")
-            raise HTTPException(415, tr(request, _mg_key))
-
-        # P0 幂等键（与文本 send 同口径；置于全部校验之后、真发送之前）
-        from src.inbox.send_dedup import get_send_dedup
-        _client_msg_id = str(form.get("client_msg_id") or "").strip()
-        _dedup = get_send_dedup()
-        _dedup_scope = f"media:{platform}:{account_id}:{chat_key}"
-        if not _dedup.reserve(_dedup_scope, _client_msg_id):
-            logger.info(
-                "[send-media] 幂等去重命中，拒绝重复发送 scope=%s id=%s",
-                _dedup_scope, _client_msg_id[:16])
-            return {"ok": True, "duplicate": True}
-
-        import secrets as _secrets
-        from src.integrations.protocol_bridge import (
-            media_paths, media_type_from_ext,
-        )
-        _ext = os.path.splitext(str(upload.filename or ""))[1] or ".bin"
-        mtype = media_type_from_ext(_ext)
-        _dest, url = media_paths(
-            platform, f"out_{account_id}_{_secrets.token_hex(6)}", _ext)
-        local = str(_dest)
-        _cap_bytes = _cap_mb * 1024 * 1024
-        _size = 0
-        _overflow = False
-        try:
-            with open(_dest, "wb") as _fh:
-                _fh.write(head)
-                _size = len(head)
+            async def _form_chunks():
                 while True:
-                    _chunk = await upload.read(1024 * 1024)
-                    if not _chunk:
-                        break
-                    _size += len(_chunk)
-                    if _size > _cap_bytes:
-                        _overflow = True
-                        break
-                    _fh.write(_chunk)
-        except Exception as ex:  # noqa: BLE001
-            _dedup.release(_dedup_scope, _client_msg_id)
-            try:
-                os.remove(local)
-            except Exception:
-                # 删不掉不该挡住给坐席的 502，但也不能无声：这是上传失败路径上的
-                # 落盘残留，单个文件可达 10MB(图)/50MB(视频)，反复失败会慢性占盘。
-                logger.warning("[send-media] 上传失败后临时文件未能删除 path=%s", local,
-                               exc_info=True)
-            raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
-        if _overflow:
-            _dedup.release(_dedup_scope, _client_msg_id)
-            try:
-                os.remove(local)
-            except Exception:
-                logger.warning("[send-media] 超限拒收后临时文件未能删除 path=%s", local,
-                               exc_info=True)
-            # #169：文案带实际大小与差值。流式落盘超限即停，此刻不知道总大小，
-            # 拿 Content-Length（multipart 整体）当近似值——对几十 MB 的文件，
-            # 表单包裹开销是千分位噪音；拿不到就 size=0（文案退化为只报上限）。
-            try:
-                _decl = int(request.headers.get("content-length") or 0)
-            except (TypeError, ValueError):
-                _decl = 0
-            _ov = _describe_over_cap(_decl, _cap_mb)
-            logger.info("[send-media] 超限拒收 platform=%s cap=%sMB declared=%sMB file=%s",
-                        platform, _cap_mb, _ov["size"], str(upload.filename or "")[:80])
-            _key = ("err.inbox.file_too_large_detail" if _ov["size"] > 0
-                    else "err.inbox.file_too_large_mb")
-            raise HTTPException(413, tr(
-                request, _key,
-                mb=_cap_mb, cap=_cap_mb, size=_ov["size"], over=_ov["over"]))
+                    c = await upload.read(1024 * 1024)
+                    if not c:
+                        return
+                    yield c
 
-        # P0 2026-08-17：文档无配文 → 用原始文件名作收件箱镜像文本（气泡/会话
-        # 预览显示「report.pdf」而非空行；只影响坐席台可读文本，不发给客户）。
-        _inbox_text = None
-        if mtype == "document" and not caption.strip():
-            _inbox_text = os.path.basename(str(upload.filename or "")) or None
-        _send_agent = _session_agent(request)
+            # multipart 整体长度含表单包裹，不拿来做精确预检；超限由流式闸兜底
+            return await _send_media_streamed(
+                request, meta, filename, _form_chunks(), declared=0, t0=_t0, mode="multipart")
+        q = request.query_params
+        meta = {k: str(q.get(k) or "") for k in _meta_keys}
+        filename = str(q.get("name") or "")
+        if not meta["chat_key"] or not filename:
+            raise HTTPException(400, tr(request, "err.inbox.file_chat_empty"))
         try:
-            try:
-                res = await orch.send_media(
-                    platform, account_id, chat_key,
-                    media_path=local, media_url=url, media_type=mtype,
-                    caption=caption, inbox_text=_inbox_text, origin="manual")
-            except TypeError:
-                # 旧签名（无 origin/inbox_text kwarg，测试假编排器常见）→ 回落
-                res = await orch.send_media(
-                    platform, account_id, chat_key,
-                    media_path=local, media_url=url, media_type=mtype,
-                    caption=caption)
-        except Exception as ex:  # noqa: BLE001
-            _dedup.release(_dedup_scope, _client_msg_id)  # 失败释放：同 id 重试可再发
-            raise HTTPException(502, tr(request, "err.inbox.media_send_failed", err=ex))
-        # P0 2026-08-12：拦截/未送达显式回执（同文本路由；防 ok:true 静默吞）
-        _undeliv = _result_undelivered(res)
-        if _undeliv:
-            _dedup.release(_dedup_scope, _client_msg_id)
-            if _undeliv == "blocked":
-                raise _send_blocked_exc(
-                    request, platform, account_id, chat_key,
-                    reason=str(res.get("blocked") or ""))
-            raise HTTPException(502, tr(
-                request, "err.inbox.send_not_delivered",
-                msg=str(res.get("error") or res.get("error_kind") or "")))
-        cid = _conv_id(platform, account_id, chat_key)
-        try:
-            ibx = _inbox_store(request)
-            if ibx is not None:
-                ibx.record_agent_send(
-                    cid, _send_agent["agent_id"],
-                    agent_name=_send_agent.get("display_name", ""))
-                # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI
-                # （source=takeover，供横幅/自动接回识别）。
-                from src.inbox.takeover_rearm import record_agent_takeover
-                record_agent_takeover(ibx, cid)
-        except Exception:
-            logger.debug("record_agent_send(media) 失败", exc_info=True)
-        # #88：媒体送达成功=可达铁证 → 清 dead-peer 陈旧标（与文本路由同口径）
-        try:
-            from src.ops.dead_peer_registry import clear_on_delivery
-            if clear_on_delivery(platform, chat_key):
-                logger.info(
-                    "[send-media] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
-                    cid)
-        except Exception:
-            pass
-        return {"ok": True, "result": res, "media_ref": url, "media_type": mtype}
+            _declared = int(request.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            _declared = 0
+        return await _send_media_streamed(
+            request, meta, filename, request.stream(), declared=_declared, t0=_t0, mode="stream")
 
     @app.get("/api/unified-inbox/media-download")
     async def api_unified_inbox_media_download(
@@ -2066,6 +2203,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         voice_mode = "composer" if can_voice else "none"
         if not can_voice and _rpa_auto_voice_enabled(request, plat, acc):
             voice_mode = "auto_only"
+        _caps_cfg = (getattr(getattr(request.app.state, "config_manager", None),
+                             "config", None) or {})
+        from src.integrations.protocol_bridge import (
+            OUT_VIDEO_NATIVE_EXT as _OUT_VIDEO_NATIVE_EXT,
+            OUT_VIDEO_TRANSCODE_EXT as _OUT_VIDEO_TRANSCODE_EXT,
+            video_transcode_available as _video_transcode_available,
+        )
         # P1.5 分条能力探测：配置开 + （非 orch_only 或编排器拥有）才亮气泡 chip。
         # 群聊判定在发送时按 chat_key 再守一道（caps 无 chat_key 维度）。
         _bubbles_on = False
@@ -2099,9 +2243,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "bubbles": _bubbles_on, "bubbles_max_parts": _bubbles_max,
             # P3 2026-08-17：该平台出站媒体体积上限（MB）——前端上传前预检与
             # 服务端 413 同源（_media_cap_mb），不再各写一套 25MB 常量。
-            "media_max_mb": _media_cap_mb(
-                (getattr(getattr(request.app.state, "config_manager", None),
-                         "config", None) or {}), plat),
+            "media_max_mb": _media_cap_mb(_caps_cfg, plat),
+            # M-3 A（D-M5）：视频类临时压顶（默认 50MB），与路由 413 同一函数；
+            # 前端按文件类别二选一预检。
+            "video_max_mb": _media_cap_mb_for(_caps_cfg, plat, "video"),
+            # M-3 B（D-M4）：视频容器白名单同源——native 直发；transcode 由后端换封装为
+            # MP4（仅 ffmpeg 可用时非空）；两组之外的视频扩展名前端选文件即拒。
+            "video_exts": sorted(_OUT_VIDEO_NATIVE_EXT),
+            "video_transcode_exts": (sorted(_OUT_VIDEO_TRANSCODE_EXT)
+                                     if _video_transcode_available() else []),
+            # 裸流上传口（新前端据此走 body=file + query 元数据；旧后端无此键＝仍走 multipart）
+            "media_stream_upload": True,
         }
         # #73-③（0830 UDEKBY）可见面：该会话 peer 挂着 dead-peer 标时坐席必须
         # 看得见「自动回复已对此人停用+原因」——此前 AI 静默跳过、坐席零感知。
