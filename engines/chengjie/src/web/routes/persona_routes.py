@@ -11,10 +11,36 @@ Endpoints:
 """
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from src.web.web_i18n import tr
 
 _ROLE_VIEWER = "viewer"
 _ROLE_MASTER = "master"
+
+# L-2 #205 语音三态校验问题码 → i18n 键（errors_stock ``err.persona.voice_*``）
+_VOICE_PROBLEM_KEYS = {
+    "clone_missing_reference": "err.persona.voice_clone_missing_reference",
+    "clone_reference_file_missing": "err.persona.voice_clone_reference_file_missing",
+    "clone_with_preset_voice": "err.persona.voice_clone_with_preset_voice",
+    "clone_backend_not_clone": "err.persona.voice_clone_backend_not_clone",
+    "preset_backend_is_clone": "err.persona.voice_preset_backend_is_clone",
+    "preset_voice_missing": "err.persona.voice_preset_voice_missing",
+    "preset_voice_unknown": "err.persona.voice_preset_voice_unknown",
+    "invalid_mode": "err.persona.voice_invalid_mode",
+}
+
+
+def _voice_problem_text(request, problems) -> str:
+    """三态校验问题清单 → 一段人话（多条用「；」连接），给 400 的 detail。"""
+    parts = []
+    for p in problems or []:
+        code = str((p or {}).get("code") or "")
+        key = _VOICE_PROBLEM_KEYS.get(code, "err.persona.voice_invalid_mode")
+        try:
+            parts.append(tr(request, key, detail=str((p or {}).get("detail") or "")))
+        except Exception:
+            parts.append(code)
+    return "；".join(x for x in parts if x) or "voice_profile invalid"
 
 
 def _save_binding_patch(cm, patch) -> bool:
@@ -1286,6 +1312,36 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             store_data = dict(store_data)
             store_data.pop("_mrpa_source", None)
             took_over_mrpa = True
+        # ── L-2 #205 语音三态（D-L4）：新建人设默认「不发语音」；保存校验拦非法
+        # 组合（克隆无录音 / 克隆 + 预置声名 / 预置声不在合法表），给人话原因，
+        # 存量非法档（Mizuki：avatar_clone + ja-JP-NanamiNeural）保存时提示修正、
+        # 不静默改。校验只看落库后的 voice_profile（表单没碰语音也会拦——这正是
+        # 「提示修正」的入口，坐席按提示去语音页选一次即可）。
+        _vwarn: list = []
+        try:
+            from src.ai.voice_tristate import (
+                apply_new_persona_voice_default, split_problems,
+                validate_voice_profile)
+            if not did_merge and pm.get_persona_by_id(profile_id) is None:
+                store_data = apply_new_persona_voice_default(store_data)
+            _vprob, _vwarn = split_problems(validate_voice_profile(
+                store_data.get("voice_profile") if isinstance(store_data, dict) else None))
+        except Exception:
+            _plog.debug("[persona] 语音三态校验跳过", exc_info=True)
+            _vprob, _vwarn = [], []
+        if _vprob:
+            _codes = [p.get("code", "") for p in _vprob]
+            _plog.warning("[persona] #205 语音配置校验拒绝保存 persona=%s problems=%s",
+                          profile_id, ",".join(_codes))
+            return JSONResponse(status_code=400, content={
+                "ok": False,
+                "detail": _voice_problem_text(request, _vprob),
+                "voice_problems": _vprob,
+                "voice_tab": True,
+            })
+        if _vwarn:
+            _plog.info("[persona] #205 语音配置警告 persona=%s warnings=%s",
+                       profile_id, ",".join(p.get("code", "") for p in _vwarn))
         # 复活检测（P2 期，2026-08-04）：落库内容与撤销锚词打架 → **只警不拦**
         # （响应带清单 + 审计留痕）。这是对「删除管线 × 生成/导入管线互不知情」
         # （2026-08-02 批量丰富把已删的猫内容再生回档案）的通用写边界契约：
@@ -1319,7 +1375,10 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                 "persisted": _persisted, "persist_warning": _persist_warn,
                 "retired_conflicts": _rconf,
                 # #149：被守卫保留的克隆档键（前端据此提示「克隆音色已保留」）
-                "voice_profile_preserved": _vp_preserved}
+                "voice_profile_preserved": _vp_preserved,
+                # L-2 #205：可保存但值得提醒的语音配置问题（如参考录音本机不在）
+                "voice_warnings": [
+                    {**w, "message": _voice_problem_text(request, [w])} for w in _vwarn]}
 
     @app.delete("/api/personas/profiles/{profile_id}")
     async def api_profile_delete(profile_id: str, request: Request, _=Depends(auth_dep)):

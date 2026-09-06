@@ -1250,7 +1250,12 @@ class PersonaManager:
                 "name": p.get("name") or pid,
                 "role": p.get("role") or "",
                 "tags": list(p.get("tags") or []),
-                "has_voice": bool(vp.get("enabled") or vp.get("voice") or vp.get("backend")),
+                # L-2 #205 三态：显式「不发语音」→ 卡片无试听键；其余沿旧判据
+                "has_voice": (
+                    str(vp.get("voice_mode") or "").strip().lower() != "off"
+                    and bool(vp.get("enabled") or vp.get("voice") or vp.get("backend"))
+                ),
+                "voice_mode": str(vp.get("voice_mode") or "").strip().lower(),
                 # personality 可能是 dict/字符串/None；normalize 会把字符串收敛成
                 # {"style": <strip 后原文>}，故 dict 分支须看值是否有实质内容
                 # （{} 与 {"style": ""} 都算未配置 → False）

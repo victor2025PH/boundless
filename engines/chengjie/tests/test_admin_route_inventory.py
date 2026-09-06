@@ -886,6 +886,7 @@ _BASELINE = """
 /api/voice/effective-config	GET
 /api/voice/enroll	POST
 /api/voice/persona-audit	GET
+/api/voice/preset-catalog	GET
 /api/voice/profiles	GET
 /api/voice/profiles/{persona_id}	DELETE
 /api/voice/purge	POST

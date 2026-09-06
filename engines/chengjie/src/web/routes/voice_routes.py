@@ -917,6 +917,17 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 out["message"] = _msg
         return out
 
+    @app.get("/api/voice/preset-catalog")
+    async def api_voice_preset_catalog(request: Request, _=Depends(api_auth)):
+        """预置声目录（L-2 #205）：人设语音页「用预置声」选择器的数据源。
+
+        语种表 + 全部 Edge 音色（id / lang / gender / name）+ OpenAI 音色表，与
+        ``persona_routes`` 保存校验、``tts_pipeline`` 兜底选声同一份目录
+        （edge_voice_catalog）——选得到的一定存得进、兜得住。
+        """
+        from src.ai.edge_voice_catalog import catalog_payload
+        return {"ok": True, **catalog_payload()}
+
     @app.get("/api/voice/effective-config")
     async def api_voice_effective_config(request: Request, platform: str = "telegram",
                                          persona_id: str = "", chat_key: str = "",

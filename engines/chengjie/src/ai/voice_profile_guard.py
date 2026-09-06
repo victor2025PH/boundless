@@ -141,8 +141,13 @@ def protect_registered_clone_patch(
         return patch_vp, []
     preserved: List[str] = []
     out = dict(patch_vp)
+    # L-2 #205：显式三态 clone 的补丁允许把 ``voice`` 清空——克隆档上残留的预置声名
+    # （Mizuki 形态 ``avatar_clone + ja-JP-NanamiNeural``）正是要清的东西，不是「登记结果」。
+    _explicit_clone = str(out.get("voice_mode") or "").strip().lower() == "clone"
     for k in _IDENTITY_KEYS:
         if k not in out:
+            continue
+        if k == "voice" and _explicit_clone:
             continue
         v = out[k]
         empty = v is None or (isinstance(v, str) and not v.strip())

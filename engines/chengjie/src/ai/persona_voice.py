@@ -91,8 +91,11 @@ def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> bool:
     # 全局克隆档不被半成品人设配置覆盖（#137/#140）。
     vp = _strip_voice_placeholders(vp)
     # Ignore empty UI placeholders such as {backend:"", voice:""}.
+    # voice_mode（L-2 #205 三态）算「真配置」：{voice_mode: off} 必须盖过全局层，
+    # 否则新建人设的「不发语音」会被全局克隆档顶掉。
     if not any(vp.get(k) for k in (
         "enabled", "backend", "voice", "speaker_id", "reference_audio_path",
+        "voice_mode",
     )):
         return False
     base_vp = dict(merged.get("voice_profile") or {})

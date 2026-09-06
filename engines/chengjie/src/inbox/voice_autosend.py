@@ -533,6 +533,20 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         logger.debug("[voice_autosend] resolve_voice_cfg 失败", exc_info=True)
         _set_synth_failure("resolve_voice_failed")
         return None, meta
+    # L-2 #205 三态「不发语音」（D-L4 新建人设缺省）：合成前就判文字，不打引擎、
+    # 不算合成失败（metrics 原因=persona_voice_off，与引擎故障分开看）。
+    if str((voice_cfg.get("voice_profile") or {}).get("voice_mode") or "").lower() == "off":
+        meta["voice_mode"] = "off"
+        _set_synth_failure("persona_voice_off")
+        logger.info("[voice_autosend] 人设设为不发语音 → 文字 pid=%s", persona_id)
+        return None, meta
+    # L-2 #205 三态「不发语音」：合成前直接回落文字（不进语言路由/快检/TTS，
+    # metrics 原因独立成桶，别与「合成失败」混在一起）。
+    if (voice_cfg.get("voice_profile") or {}).get("voice_mode") == "off":
+        meta["voice_mode"] = "off"
+        _set_synth_failure("persona_voice_off")
+        logger.info("[voice_autosend] 人设设为不发语音 pid=%s → 文字", persona_id)
+        return None, meta
     # 语言路由（粤语→粤语音色 + follow_text 音色跟随文本语种）：主动选择而非
     # 兜底降级 → 免受 no_edge 拒发/快检。必须在 preflight 之前：路由命中后
     # backend 已非克隆类，"克隆不可达"快检自然放行。

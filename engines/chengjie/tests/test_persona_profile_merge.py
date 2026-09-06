@@ -95,7 +95,9 @@ def _rich_persona():
             },
         },
         "boundaries": {"topics_to_avoid": ["政治", "赌博博彩推广", "成人内容"]},
-        "voice_profile": {"backend": "avatar_clone",
+        # L-2 #205（2026-09-06）：样例改成合法预置态——「克隆引擎 + 预置声名」自此被
+        # 保存校验拒绝（Mizuki 形态），本文件只测富字段经 merge 保留，与语音无关。
+        "voice_profile": {"backend": "edge_tts",
                           "voice": "zh-CN-XiaoxiaoNeural"},
     }
 

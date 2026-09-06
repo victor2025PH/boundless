@@ -1001,6 +1001,17 @@ class TTSPipeline:
         """
         from src.ai.voice_emotion import NEUTRAL, coerce_emotion, derive_emotion
 
+        # ── L-2 #205 三态「不发语音」（D-L4 新建人设缺省）：单点判据，任何链路
+        # （autosend / voice_reply / 试听 / 主动触达）都在此收口 → 调用方改发文字。
+        if self.voice_profile.get("voice_mode") == "off":
+            _rv = TTSResult(
+                ok=False, text=str(text or ""), provider=self._effective_backend(),
+                voice=voice or self._effective_voice(), format=self.format,
+                error="persona_voice_off")
+            _rv.extra["degrade_to_text"] = True
+            _rv.extra["voice_mode"] = "off"
+            return _rv
+
         # 合成前清洗：剔除 emoji + 换行折成停顿，防克隆 TTS 在换行/emoji 处截断音频
         # （「语音念一半就断」的根因）。
         # 2026-07-15 收紧：清洗后为空 = 全 emoji/符号（如尾条只剩"💭 ✨"）——旧行为

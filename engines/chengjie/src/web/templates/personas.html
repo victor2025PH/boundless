@@ -160,6 +160,21 @@
 /* ── Draft banner ───────────────────────────────────────────────────────── */
 .draft-banner{display:none;align-items:center;gap:.3rem;padding:.36rem .65rem;border-radius:7px;background:color-mix(in srgb, var(--p,#1e8cf2) 6%, transparent);border:1px solid color-mix(in srgb, var(--p,#1e8cf2) 20%, transparent);font-size:.76rem;color:var(--t2);margin-bottom:.55rem;flex-wrap:wrap}
 /* ── JSON import expander ────────────────────────────────────────────────── */
+/* L-2 #205 语音三态单选 + 状态行 + 开发者区 */
+.vmode-row{display:flex;flex-direction:column;gap:.35rem;margin-top:.15rem}
+.vmode-opt{display:flex;align-items:flex-start;gap:.5rem;padding:.45rem .6rem;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:.78rem;line-height:1.35}
+.vmode-opt:hover{border-color:var(--th-ink-blue5,#1d4ed8)}
+.vmode-opt input{margin-top:.2rem;flex:none}
+.vmode-opt b{display:block;font-weight:600}
+.vmode-opt small{display:block;color:var(--t2);font-size:.7rem;margin-top:.1rem}
+.vmode-opt:has(input:checked){border-color:var(--th-ink-blue5,#1d4ed8);background:var(--th-bg-slate1,#f1f5f9)}
+.vmode-status{font-size:.74rem;line-height:1.5;margin-top:.45rem;padding:.4rem .55rem;border-radius:6px;background:var(--th-bg-slate1,#f1f5f9);color:var(--t2)}
+.vmode-status:empty{display:none}
+.vmode-status.ok{color:var(--th-ink-green7,#15803d)}
+.vmode-status.warn{color:var(--th-ink-amber7,#b45309)}
+.vmode-status.err{color:var(--th-ink-red7,#b91c1c);background:var(--th-bg-red1,#fee2e2)}
+.pe-dev-voice{border-top:1px dashed var(--bd);margin-top:.6rem;padding-top:.5rem}
+.pe-dev-voice summary{font-size:.72rem;color:var(--t3);cursor:pointer;user-select:none}
 .json-import-wrap{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
 .json-import-wrap summary{font-size:.74rem;color:var(--t2);cursor:pointer;user-select:none;list-style:none}
 .json-import-wrap summary::-webkit-details-marker{display:none}
@@ -1231,20 +1246,46 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         {{ (i18n or {}).get('psn_voice_config','语音配置（voice_profile）') }}
       </div>
-      <div class="ps-row">
-        <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_backend','语音 backend') }}</label>
-          <select id="pe-vp-backend">
-            <option value="">{{ (i18n or {}).get('psn_inherit_global','继承全局') }}</option>
-            <option value="edge_tts">{{ (i18n or {}).get('psn_edge_tts_free','Edge TTS（免费）') }}</option>
-            <option value="openai">OpenAI TTS</option>
-            <option value="voice_clone_command">{{ (i18n or {}).get('psn_voice_clone_cmd','声音克隆（命令）') }}</option>
+      <!-- L-2 #205（D-L4，2026-09-06）语音三态：用户只选「怎么发声」，引擎由系统决定
+           （克隆 → 登记来源的克隆引擎；预置 → Edge）。旧「语音 BACKEND 五选一 + 手填
+           VOICE ID」是研发面直出（8CE7U3/5QMZ5E），收进下方开发者区（用户版隐藏）。 -->
+      <div class="vmode-row" id="pe-vmode-row" role="radiogroup">
+        <label class="vmode-opt"><input type="radio" name="pe-vmode" value="clone" onchange="_vmOnChange()"><span><b>🎤 {{ (i18n or {}).get('psn_vm_clone','用我上传的录音（克隆声）') }}</b><small>{{ (i18n or {}).get('psn_vm_clone_sub','在下方上传参考录音登记；引擎离线时改发文字，不会换成别的声音') }}</small></span></label>
+        <label class="vmode-opt"><input type="radio" name="pe-vmode" value="preset" onchange="_vmOnChange()"><span><b>🔊 {{ (i18n or {}).get('psn_vm_preset','用预置声') }}</b><small>{{ (i18n or {}).get('psn_vm_preset_sub','按语言 · 性别挑一把现成的声音，可试听') }}</small></span></label>
+        <label class="vmode-opt"><input type="radio" name="pe-vmode" value="off" onchange="_vmOnChange()"><span><b>🔇 {{ (i18n or {}).get('psn_vm_off','不发语音') }}</b><small>{{ (i18n or {}).get('psn_vm_off_sub','这个人设只回文字（新建人设默认）') }}</small></span></label>
+      </div>
+      <div id="pe-vmode-status" class="vmode-status"></div>
+      <div id="pe-preset-picker" class="ps-row" style="display:none;margin-top:.45rem">
+        <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_lang','语言') }}</label><select id="pe-preset-lang" onchange="_presetFilterChanged()"></select></div>
+        <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_gender','性别') }}</label>
+          <select id="pe-preset-gender" onchange="_presetFilterChanged()">
+            <option value="">{{ (i18n or {}).get('psn_vm_gender_any','不限') }}</option>
+            <option value="female">{{ (i18n or {}).get('psn_pf_gender_f','女') }}</option>
+            <option value="male">{{ (i18n or {}).get('psn_pf_gender_m','男') }}</option>
           </select>
         </div>
-        <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="{{ (i18n or {}).get('psn_voice_id_eg','例：zh-CN-XiaoxiaoNeural') }}"></div>
+        <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_voice','音色') }}</label><select id="pe-preset-voice" onchange="_presetVoiceChanged()"></select></div>
+        <div class="field-row" style="justify-content:flex-end"><label>&nbsp;</label><button type="button" class="btn btn-sm" id="pe-preset-preview" onclick="_presetPreview()">▶ {{ (i18n or {}).get('psn_vm_preview','试听') }}</button></div>
       </div>
-      <!-- 克隆绑定锁提示：voice_profile.backend ∈ 克隆家族时显示（_vpSyncBackendUi 托管） -->
+      <!-- 开发者区：原 backend / Voice ID 手填（含「声音克隆(命令)」通道）。client 形态且未开
+           开发者模式（ui_client_hide）→ 隐藏但保留元素（三态 JS 仍把结果同步进来）。 -->
+      <details class="pe-dev-voice" id="pe-vp-dev" {% if ui_client_hide|default(false) %}style="display:none"{% endif %}>
+        <summary>🛠 {{ (i18n or {}).get('psn_vm_dev_h','开发者：手动指定引擎 / 音色 ID') }}</summary>
+        <div class="ps-row" style="margin-top:.4rem">
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_backend','语音 backend') }}</label>
+            <select id="pe-vp-backend">
+              <option value="">{{ (i18n or {}).get('psn_inherit_global','继承全局') }}</option>
+              <option value="edge_tts">{{ (i18n or {}).get('psn_edge_tts_free','Edge TTS（免费）') }}</option>
+              <option value="openai">OpenAI TTS</option>
+              <option value="voice_clone_command">{{ (i18n or {}).get('psn_voice_clone_cmd','声音克隆（命令）') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_voice_id','音色 / Voice ID') }}</label><input id="pe-vp-voice" type="text" placeholder="{{ (i18n or {}).get('psn_voice_id_eg','例：zh-CN-XiaoxiaoNeural') }}"></div>
+        </div>
+        <div style="font-size:.7rem;color:var(--t3);margin-top:.3rem;line-height:1.5">{{ (i18n or {}).get('psn_vm_dev_note','这里的改动会覆盖上方三态的结果；保存时同样过合法性校验。') }}</div>
+      </details>
+      <!-- 克隆绑定锁提示（开发者区手动改走克隆引擎时显示） -->
       <div id="pe-vp-clone-hint" style="display:none;font-size:.74rem;color:var(--th-ink-amber7,#b45309);margin-top:.5rem;line-height:1.5">🔒 {{ (i18n or {}).get('psn_vp_clone_bound','该人设已绑定克隆音色（由收件箱的语音登记弹层写入）。改成其他选项＝不再用克隆声；改动后请先试听确认再保存。') }}</div>
-      <div style="font-size:.74rem;color:var(--t2);margin-top:.5rem;line-height:1.5">💡 {{ (i18n or {}).get('psn_voice_hint','留空则继承域级默认人设的语音设置') }}</div>
       <!-- #189：台词库（预渲染缓存）从编辑器移出——用户侧只留这一句；入库入口在 ops「🎙️ AvatarHub 语音」卡 -->
       <div style="font-size:.7rem;color:var(--t3);margin-top:.3rem;line-height:1.5">{{ (i18n or {}).get('psn_voice_prerender_note','常用短句会在夜间自动预合成以加快发送，无需维护。') }}</div>
       <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
@@ -1885,8 +1926,7 @@ async function _cloneProfile(pid) {
     document.getElementById('pe-forbidden-phrases').value = (spk.forbidden_phrases || []).join(', ');
     document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
     const vp = p.voice_profile || {};
-    _vpSyncBackendUi(vp.backend || '');
-    document.getElementById('pe-vp-voice').value = vp.voice || '';
+    _vmLoad(vp, false);   // 复制人设：语音三态随源人设（克隆登记不随复制，状态行会提示需修正）
     _loadVoiceQuality();   // 克隆=新档（无 pid）→ 体检行回空态，防残留上一人设读数
     document.getElementById('pe-delete-btn').style.display = 'none';
     document.getElementById('pe-undo-btn').style.display = 'none';
@@ -4199,7 +4239,8 @@ function _gotoScan() {
 // 不在下拉的静态 option 里：直接 select.value=xxx 会落空 → 保存把 backend 顶成
 // ''＝克隆绑定被静默解除（与 gender 下拉同病，见 _pfSetGender 的先例）。
 // 修法同款：装载时动态补 option；克隆后端另出锁提示行 + 保存前改选确认。
-var _VP_CLONE_BACKENDS = {avatar_clone: 1, voice_clone_lan: 1, minicpm_clone: 1, voice_clone_command: 1};
+var _VP_CLONE_BACKENDS = {avatar_clone: 1, voice_clone_lan: 1, minicpm_clone: 1, voice_clone_command: 1, coqui_http: 1};
+var _VP_PRESET_BACKENDS = {edge_tts: 1, openai: 1, elevenlabs: 1};
 var _vpLoadedBackend = '';   // 装载时的 backend（保存护栏判「是否从克隆改走」）
 function _vpToggleCloneHint(backend) {
   var hint = document.getElementById('pe-vp-clone-hint');
@@ -4208,22 +4249,264 @@ function _vpToggleCloneHint(backend) {
 function _vpSyncBackendUi(backend) {
   var val = String(backend || '');
   _vpLoadedBackend = val;
-  var sel = document.getElementById('pe-vp-backend');
-  if (sel) {
-    if (val && !Array.prototype.some.call(sel.options, function (o) { return o.value === val; })) {
-      var opt = document.createElement('option');
-      opt.value = val;
-      opt.textContent = (_VP_CLONE_BACKENDS[val] ? window.T('psn_vp_clone_label') + ' · ' : '') + val;
-      sel.appendChild(opt);
-    }
-    sel.value = val;
-  }
+  _vpSetDevBackend(val);
   _vpToggleCloneHint(val);
+}
+function _vpSetDevBackend(val) {
+  var sel = document.getElementById('pe-vp-backend');
+  if (!sel) return;
+  if (val && !Array.prototype.some.call(sel.options, function (o) { return o.value === val; })) {
+    var opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = (_VP_CLONE_BACKENDS[val] ? window.T('psn_vp_clone_label') + ' · ' : '') + val;
+    sel.appendChild(opt);
+  }
+  sel.value = val;
 }
 (function () {
   var sel = document.getElementById('pe-vp-backend');
-  if (sel) sel.addEventListener('change', function () { _vpToggleCloneHint(sel.value); });
+  if (sel) sel.addEventListener('change', function () { _vpToggleCloneHint(sel.value); _vmDevTouched = true; _vmRenderStatus(); });
+  var inp = document.getElementById('pe-vp-voice');
+  if (inp) inp.addEventListener('input', function () { _vmDevTouched = true; });
 })();
+
+// ── L-2 #205 语音三态（D-L4）────────────────────────────────────────────────
+// 前端镜像 src/ai/voice_tristate.derive_voice_mode：显式 voice_mode 优先；登记齐备的
+// 克隆档 → clone；克隆引擎但无录音（Mizuki 形态）→ clone + 需修正；预置引擎 / 只填
+// 音色名 → preset；什么都没填 → preset + inherit_global（沿用全局，D-L4「其余→预置声
+// 并标注」，不写回、不静默迁移）。保存产出的 voice_profile 补丁只在用户动过三态或
+// 音色时才改动，否则原样回传装载值。
+var _vmLoaded = {mode: '', basis: '', vp: {}};   // 装载态（保存对比基线）
+var _vmTouched = false;                         // 用户动过三态/音色
+var _vmDevTouched = false;                      // 用户动过开发者区手填
+var _vmCatalog = null;                          // /api/voice/preset-catalog 缓存
+var _vmCatalogPromise = null;
+function _vmHasIdentity(vp) {
+  var ref = String(vp.reference_audio_path || '').trim(), spk = String(vp.speaker_id || '').trim();
+  var alnum = function (s) { return /[A-Za-z0-9\u4e00-\u9fff]/.test(s); };
+  return (ref && alnum(ref)) || (spk && alnum(spk));
+}
+function _vmInferCloneBackend(vp) {
+  var b = String(vp.backend || '').trim().toLowerCase();
+  if (_VP_CLONE_BACKENDS[b]) return b;
+  var src = String(vp.source || '').toLowerCase();
+  if (src === 'avatar_zeroshot') return 'avatar_clone';
+  if (src === 'lan_zeroshot') return 'voice_clone_lan';
+  if (vp.command_args || vp.voice_profile_json_path) return 'voice_clone_command';
+  return '';
+}
+function _vmDerive(vp) {
+  vp = (vp && typeof vp === 'object') ? vp : {};
+  var m = String(vp.voice_mode || '').trim().toLowerCase();
+  if (m === 'clone' || m === 'preset' || m === 'off') return {mode: m, basis: 'explicit'};
+  var backend = String(vp.backend || '').trim().toLowerCase();
+  var voice = String(vp.voice || '').trim();
+  if (vp.enabled === false && !backend && !voice) return {mode: 'off', basis: 'disabled'};
+  var cloneB = backend || _vmInferCloneBackend(vp);
+  if (_VP_CLONE_BACKENDS[cloneB] && _vmHasIdentity(vp) && vp.enabled !== false) return {mode: 'clone', basis: 'registered_clone'};
+  if (_VP_CLONE_BACKENDS[cloneB]) return {mode: 'clone', basis: 'clone_backend'};
+  if (_VP_PRESET_BACKENDS[backend]) return {mode: 'preset', basis: 'preset_backend'};
+  if (voice) return {mode: 'preset', basis: 'preset_voice'};
+  return {mode: 'preset', basis: 'inherit_global'};
+}
+function _vmMode() {
+  var el = document.querySelector('input[name="pe-vmode"]:checked');
+  return el ? el.value : '';
+}
+function _vmSetMode(mode) {
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="pe-vmode"]'), function (r) { r.checked = (r.value === mode); });
+}
+function _vmLoadCatalog() {
+  if (_vmCatalog) return Promise.resolve(_vmCatalog);
+  if (_vmCatalogPromise) return _vmCatalogPromise;
+  _vmCatalogPromise = apiFetch('/api/voice/preset-catalog').then(function (r) { return r.ok ? r.json() : {}; })
+    .then(function (d) { _vmCatalog = (d && d.edge_voices) ? d : {languages: [], edge_voices: [], openai_voices: []}; return _vmCatalog; })
+    .catch(function () { _vmCatalog = {languages: [], edge_voices: [], openai_voices: []}; return _vmCatalog; });
+  return _vmCatalogPromise;
+}
+function _vmVoiceMeta(voice) {
+  voice = String(voice || '').trim();
+  if (!voice || !_vmCatalog) return null;
+  for (var i = 0; i < _vmCatalog.edge_voices.length; i++) if (_vmCatalog.edge_voices[i].id === voice) return _vmCatalog.edge_voices[i];
+  for (var j = 0; j < (_vmCatalog.openai_voices || []).length; j++) {
+    if (_vmCatalog.openai_voices[j].id === voice.toLowerCase()) return {id: voice.toLowerCase(), lang: '', gender: _vmCatalog.openai_voices[j].gender, name: 'OpenAI · ' + voice, backend: 'openai'};
+  }
+  return null;
+}
+function _vmLangLabel(code) {
+  if (!_vmCatalog) return code;
+  for (var i = 0; i < _vmCatalog.languages.length; i++) if (_vmCatalog.languages[i].code === code) return _vmCatalog.languages[i].label;
+  return code;
+}
+function _vmGenderLabel(g) {
+  return g === 'male' ? window.T('psn_pf_gender_m') : (g === 'female' ? window.T('psn_pf_gender_f') : '');
+}
+// 预置声选择器：语言 → 性别 → 音色（目录来自 /api/voice/preset-catalog，与后端校验/兜底同源）
+function _presetRender(selectedVoice) {
+  var langSel = document.getElementById('pe-preset-lang'), genSel = document.getElementById('pe-preset-gender'), vSel = document.getElementById('pe-preset-voice');
+  if (!langSel || !genSel || !vSel || !_vmCatalog) return;
+  var meta = _vmVoiceMeta(selectedVoice);
+  if (!langSel.options.length) {
+    _vmCatalog.languages.forEach(function (l) { var o = document.createElement('option'); o.value = l.code; o.textContent = l.label; langSel.appendChild(o); });
+  }
+  if (meta && meta.lang) { langSel.value = meta.lang; genSel.value = meta.gender || ''; }
+  else if (!langSel.value) {
+    // 缺省语言跟人设语言/性别字段走（档案 tab），没有就中文
+    var pl = String(((_loadedProfile || {}).language) || (document.getElementById('pe-language') || {}).value || 'zh').toLowerCase().split('-')[0];
+    langSel.value = Array.prototype.some.call(langSel.options, function (o) { return o.value === pl; }) ? pl : 'zh';
+    var pg = String((document.getElementById('pe-pf-gender') || {}).value || '');
+    if (pg === 'male' || pg === 'female') genSel.value = pg;
+  }
+  var lang = langSel.value, gen = genSel.value;
+  vSel.innerHTML = '';
+  var rows = _vmCatalog.edge_voices.filter(function (v) { return (!lang || v.lang === lang) && (!gen || v.gender === gen); });
+  if (meta && meta.backend === 'openai') rows = [meta].concat(rows);
+  if (!rows.length) { var e = document.createElement('option'); e.value = ''; e.textContent = window.T('psn_vm_no_voice_for_filter'); vSel.appendChild(e); return; }
+  rows.forEach(function (v) {
+    var o = document.createElement('option'); o.value = v.id;
+    o.textContent = (v.lang ? _vmLangLabel(v.lang) + ' · ' : '') + _vmGenderLabel(v.gender) + ' · ' + v.name;
+    vSel.appendChild(o);
+  });
+  if (selectedVoice && Array.prototype.some.call(vSel.options, function (o) { return o.value === selectedVoice; })) vSel.value = selectedVoice;
+}
+function _presetFilterChanged() { _presetRender(''); _vmTouched = true; _presetVoiceChanged(); }
+function _presetVoiceChanged() {
+  _vmTouched = true;
+  var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+  var meta = _vmVoiceMeta(v);
+  _vpSetDevBackend(meta && meta.backend === 'openai' ? 'openai' : 'edge_tts');
+  var inp = document.getElementById('pe-vp-voice'); if (inp) inp.value = v;
+  _vmRenderStatus();
+  try { _markDrawerDirty({target: document.getElementById('pe-preset-voice')}); } catch (_e) {}
+}
+var _presetAudio = null;
+async function _presetPreview() {
+  var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+  var btn = document.getElementById('pe-preset-preview');
+  if (!v) { _toast(window.T('psn_vm_pick_first'), 'err'); return; }
+  if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
+  var meta = _vmVoiceMeta(v) || {};
+  var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
+  var text = _fmt(window.T('psn_voice_preview_text', '你好呀，我是{name}，很高兴认识你！'), {name: nm});
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    // 试听只认「这把预置声」：voice_cfg_override 显式覆盖 backend/voice、压掉全局克隆档，
+    // 不带 persona_id（避免被人设克隆档接管）；Edge 走 fast 档（常热、秒回）
+    var isOpenai = meta.backend === 'openai';
+    var r = await apiFetch('/api/voice/tts-test', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text, fast: !isOpenai, format: 'mp3',
+        voice_cfg_override: {backend: isOpenai ? 'openai' : 'edge_tts', voice: v, voice_profile: {enabled: false}}})});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
+    _presetAudio = new Audio(d.url || d.audio_url);
+    _presetAudio.onended = _presetAudio.onerror = function () { _presetAudio = null; };
+    _presetAudio.play().catch(function () {});
+  } catch (e) {
+    _toast(_fmt(window.T('psn_voice_preview_fail', '试听失败：{err}'), {err: (e && e.message) || e}), 'err');
+  } finally { if (btn) { btn.disabled = false; btn.textContent = '▶ ' + window.T('psn_vm_preview'); } }
+}
+function _vmRefName(vp) { var r = String((vp || {}).reference_audio_path || ''); return r ? r.split(/[\\/]/).pop() : ''; }
+// 状态行：按实际类型给绑定文案（「已绑定克隆声：<录音文件名>」/「预置声：日语 · 女 · 七海」），
+// 非法组合红字「配置需修正」——Mizuki（avatar_clone + ja-JP-NanamiNeural，无录音）在此现形。
+function _vmRenderStatus() {
+  var st = document.getElementById('pe-vmode-status'); if (!st) return;
+  var picker = document.getElementById('pe-preset-picker');
+  var mode = _vmMode(), vp = _vmLoaded.vp || {}, txt = '', cls = '';
+  if (picker) picker.style.display = (mode === 'preset') ? '' : 'none';
+  if (mode === 'clone') {
+    var hasId = _vmHasIdentity(vp) && !!_vmInferCloneBackend(vp);
+    var vName = String(vp.voice || '').trim();
+    var presetish = vName && (/Neural$/.test(vName) || !!_vmVoiceMeta(vName));
+    if (hasId && !presetish) { txt = window.Tf('psn_vm_st_clone_ok', {file: _vmRefName(vp) || vp.speaker_id || ''}); cls = 'ok'; }
+    else if (hasId && presetish) { txt = window.Tf('psn_vm_st_clone_stray_voice', {voice: vName}); cls = 'err'; }
+    else if (presetish) { txt = window.Tf('psn_vm_st_clone_fix_mizuki', {voice: vName}); cls = 'err'; }
+    else { txt = window.T('psn_vm_st_clone_need_upload'); cls = 'err'; }
+  } else if (mode === 'preset') {
+    var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+    var meta = _vmVoiceMeta(v);
+    if (meta) { txt = window.Tf('psn_vm_st_preset', {lang: meta.lang ? _vmLangLabel(meta.lang) : 'OpenAI', gender: _vmGenderLabel(meta.gender), name: meta.name}); cls = 'ok'; }
+    else if (_vmLoaded.basis === 'inherit_global' && !_vmTouched) { txt = window.T('psn_vm_st_inherit'); cls = 'warn'; }
+    else { txt = window.T('psn_vm_st_preset_pick'); cls = 'warn'; }
+  } else if (mode === 'off') { txt = window.T('psn_vm_st_off'); cls = ''; }
+  st.textContent = txt; st.className = 'vmode-status' + (cls ? ' ' + cls : '');
+}
+// 装载：从 voice_profile 推导三态 → 单选 / 选择器 / 开发者区同步。isNew=新建 → off（D-L4）
+function _vmLoad(vp, isNew) {
+  vp = (vp && typeof vp === 'object') ? vp : {};
+  _vmLoaded = {vp: JSON.parse(JSON.stringify(vp)), mode: '', basis: ''};
+  _vmTouched = false; _vmDevTouched = false;
+  var d = isNew ? {mode: 'off', basis: 'new_default'} : _vmDerive(vp);
+  _vmLoaded.mode = d.mode; _vmLoaded.basis = d.basis;
+  _vmSetMode(d.mode);
+  _vpSyncBackendUi(vp.backend || '');
+  var inp = document.getElementById('pe-vp-voice'); if (inp) inp.value = vp.voice || '';
+  _vmLoadCatalog().then(function () {
+    _presetRender(d.mode === 'preset' ? (vp.voice || '') : '');
+    _vmRenderStatus();
+  });
+  _vmRenderStatus();
+}
+function _vmOnChange() {
+  _vmTouched = true;
+  var mode = _vmMode(), vp = _vmLoaded.vp || {};
+  if (mode === 'clone') { _vpSetDevBackend(_vmInferCloneBackend(vp) || 'avatar_clone'); var i1 = document.getElementById('pe-vp-voice'); if (i1) i1.value = ''; }
+  else if (mode === 'preset') {
+    _vmLoadCatalog().then(function () {
+      _presetRender((document.getElementById('pe-preset-voice') || {}).value || vp.voice || '');
+      var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+      var meta = _vmVoiceMeta(v);
+      _vpSetDevBackend(meta && meta.backend === 'openai' ? 'openai' : 'edge_tts');
+      var i2 = document.getElementById('pe-vp-voice'); if (i2) i2.value = v;
+      _vmRenderStatus();
+    });
+  } else { _vpSetDevBackend(''); var i3 = document.getElementById('pe-vp-voice'); if (i3) i3.value = ''; }
+  _vpToggleCloneHint((document.getElementById('pe-vp-backend') || {}).value || '');
+  _vmRenderStatus();
+  try { _markDrawerDirty({target: document.getElementById('pe-vmode-row')}); } catch (_e) {}
+}
+// 保存前客户端校验（后端 persona_routes 同规则再拦一次）：返回人话原因或 ''
+function _vmValidate() {
+  var mode = _vmMode(), vp = _vmLoaded.vp || {};
+  var devB = String((document.getElementById('pe-vp-backend') || {}).value || '').toLowerCase();
+  var devV = String((document.getElementById('pe-vp-voice') || {}).value || '').trim();
+  if (_vmDevTouched) {   // 开发者区手填：只做确定性错配拦截（旧护栏）
+    if (devB === 'openai' && /neural$/i.test(devV)) return window.T('psn_vp_bad_combo_openai');
+    if (_VP_CLONE_BACKENDS[devB] && devV && (/Neural$/.test(devV) || _vmVoiceMeta(devV))) return window.Tf('psn_vm_st_clone_stray_voice', {voice: devV});
+    return '';
+  }
+  if (mode === 'clone') {
+    if (!_vmHasIdentity(vp) || !_vmInferCloneBackend(vp)) return window.T('psn_vm_err_clone_no_ref');
+  } else if (mode === 'preset') {
+    var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+    if (!v && !(_vmLoaded.basis === 'inherit_global' && !_vmTouched)) return window.T('psn_vm_err_preset_pick');
+  } else if (!mode) return window.T('psn_vm_err_pick_mode');
+  return '';
+}
+// 保存补丁：没动过 → 原样回传装载值（不静默迁移存量）；动过 → 按三态产出
+function _vmCollectPatch() {
+  var vp = _vmLoaded.vp || {};
+  var devB = String((document.getElementById('pe-vp-backend') || {}).value || '');
+  var devV = String((document.getElementById('pe-vp-voice') || {}).value || '').trim();
+  if (_vmDevTouched) {   // 开发者区显式手填 = 旧契约（backend/voice 直写），三态跟随推导
+    var p0 = {backend: devB, voice: devV};
+    if (_VP_CLONE_BACKENDS[devB]) p0.voice_mode = 'clone';
+    else if (_VP_PRESET_BACKENDS[devB] || devV) p0.voice_mode = 'preset';
+    return p0;
+  }
+  var mode = _vmMode();
+  if (!_vmTouched || !mode) {
+    var keep = {};
+    if (vp.backend !== undefined) keep.backend = vp.backend;
+    if (vp.voice !== undefined) keep.voice = vp.voice;
+    if (vp.voice_mode !== undefined) keep.voice_mode = vp.voice_mode;
+    return keep;
+  }
+  if (mode === 'off') return {voice_mode: 'off'};
+  if (mode === 'clone') return {voice_mode: 'clone', backend: _vmInferCloneBackend(vp) || 'avatar_clone', voice: '', enabled: true};
+  var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+  var meta = _vmVoiceMeta(v);
+  return {voice_mode: 'preset', backend: (meta && meta.backend === 'openai') ? 'openai' : 'edge_tts', voice: v};
+}
 
 function _fillDrawerFields(p) {
   // 换档案装载：清掉上一个人设的删除提示横幅与排查残余（防串味）
@@ -4247,8 +4530,8 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
   document.getElementById('pe-deny-ai').checked = !!(ident.deny_ai || p.deny_ai);
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
-  _vpSyncBackendUi(vp.backend || '');
-  document.getElementById('pe-vp-voice').value = vp.voice || '';
+  // L-2 #205：语音三态装载（新建态 = 空对象 → 默认「不发语音」，D-L4）
+  _vmLoad(vp, !p || !Object.keys(p).length);
   _fillProfileTabFields(p, _persObj);
   _loadVoiceQuality();
 }
@@ -4596,18 +4879,20 @@ async function saveProfile() {
     }
   }
 
-  // ── 语音组合护栏（2026-08-14）：明显错配在保存前拦，别等线上合成才炸 ──
-  // ① openai + *Neural（Edge 音色）＝确定性错配 → 硬拦；
-  // ② edge_tts + 非 Neural 自由文本＝大概率无效（会回落默认声）→ confirm 放行；
-  // ③ 装载时是克隆后端、现在改走别家 → confirm（防手滑解绑克隆声，撤销成本高）。
-  var _vpB = (document.getElementById('pe-vp-backend') || {}).value || '';
-  var _vpV = ((document.getElementById('pe-vp-voice') || {}).value || '').trim();
-  if (_vpB === 'openai' && /neural$/i.test(_vpV)) {
-    _toast(window.T('psn_vp_bad_combo_openai'), 'err'); _restoreBtn(false); return;
+  // ── 语音三态护栏（L-2 #205，2026-09-06；后端 persona_routes 同规则再拦）──
+  // 克隆无录音 / 克隆 + 预置声名 / 预置声未选 → 硬拦并跳到语音页；
+  // 装载时是克隆声、现在改走预置/不发 → confirm（防手滑解绑克隆声，撤销成本高）。
+  var _vmErr = _vmValidate();
+  if (_vmErr) {
+    _toast(_vmErr, 'err', 8000); _restoreBtn(false);
+    try { switchDTab('voice'); } catch (_e) {}
+    return;
   }
-  if (_vpB === 'edge_tts' && _vpV && !/neural$/i.test(_vpV)
-      && !confirm(window.T('psn_vp_bad_combo_edge'))) { _restoreBtn(false); return; }
-  if (_vpLoadedBackend && _VP_CLONE_BACKENDS[_vpLoadedBackend] && _vpB !== _vpLoadedBackend
+  var _vpPatch = _vmCollectPatch();
+  var _vpB = String(_vpPatch.backend || (_vmLoaded.vp || {}).backend || '');
+  if (_vmLoaded.mode === 'clone' && _vmTouched && _vmMode() !== 'clone'
+      && !confirm(window.T('psn_vp_clone_unbind_confirm'))) { _restoreBtn(false); return; }
+  if (_vmDevTouched && _vpLoadedBackend && _VP_CLONE_BACKENDS[_vpLoadedBackend] && _vpB !== _vpLoadedBackend
       && !confirm(window.T('psn_vp_clone_unbind_confirm'))) { _restoreBtn(false); return; }
 
   var tags = (document.getElementById('pe-tags').value || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
@@ -4632,10 +4917,7 @@ async function saveProfile() {
       deny_ai: document.getElementById('pe-deny-ai').checked,
       claim_human: document.getElementById('pe-claim-human').checked,
     },
-    voice_profile: {
-      backend: document.getElementById('pe-vp-backend').value,
-      voice: document.getElementById('pe-vp-voice').value.trim(),
-    },
+    voice_profile: _vpPatch,
   };
   // C2 线：「档案」页签全字段并入 patch；personality 三补充做形态特殊融合——
   // 对象形态直接并子键；字符串形态且三补充有值时升级为 {style: 原字符串, ...}。
@@ -4692,6 +4974,13 @@ async function saveProfile() {
         _toast(window.T('psn_vc_preserved'), 'ok', 6000);
         if (typeof peVcAfterEnrolled === 'function') { try { peVcAfterEnrolled(pid); } catch (_e) {} }
       }
+      // L-2 #205：语音配置警告（可保存但要提醒，如参考录音本机不在）→ 语音页状态行黄字 + toast
+      if (d.voice_warnings && d.voice_warnings.length) {
+        var _vwMsg = d.voice_warnings.map(function (w) { return w.message || w.code; }).join('；');
+        _toast(_vwMsg, 'err', 9000);
+        var _vws = document.getElementById('pe-vmode-status');
+        if (_vws) { _vws.textContent = _vwMsg; _vws.className = 'vmode-status warn'; }
+      }
       // 2026-08-04：复活检测——新内容与撤销清单打架（生成/导入管线把删过的设定又写回来）
       if (d.retired_conflicts && d.retired_conflicts.length) {
         var _ctSet = {};
@@ -4717,7 +5006,15 @@ async function saveProfile() {
       _refreshQuizBlock();          // C2 线：新建保存后进入「编辑已有」态，考题区可见
       _stashPendingBioDoc(pid);     // C2 线：向导解析原文入长传记库（无 pending 则只刷状态行）
     } else {
-      if (st) { st.textContent = window.T('psn_js_064') + (d.detail || ''); st.className = 'tts-status err'; }
+      var _detail = (typeof d.detail === 'string') ? d.detail : JSON.stringify(d.detail || '');
+      if (st) { st.textContent = window.T('psn_js_064') + _detail; st.className = 'tts-status err'; }
+      // L-2 #205：服务端语音三态校验拒绝 → 跳到语音页 + 状态行红字（存量非法档在此提示修正）
+      if (d.voice_problems && d.voice_problems.length) {
+        _toast(_detail, 'err', 10000);
+        try { switchDTab('voice'); } catch (_e) {}
+        var _vst = document.getElementById('pe-vmode-status');
+        if (_vst) { _vst.textContent = _detail; _vst.className = 'vmode-status err'; }
+      }
       _restoreBtn(false);
     }
   } catch(e) {
@@ -4873,6 +5170,7 @@ function _saveDraft() {
     claim_human: !!(document.getElementById('pe-claim-human') || {}).checked,
     vp_backend: (document.getElementById('pe-vp-backend') || {}).value || '',
     vp_voice: (document.getElementById('pe-vp-voice') || {}).value || '',
+    vp_mode: (typeof _vmMode === 'function' && _vmTouched) ? _vmMode() : '',
     _ts: Date.now(),
   };
   try { localStorage.setItem(_draftKey(), JSON.stringify(draft)); } catch(e) {}
@@ -4919,6 +5217,14 @@ function _applyDraft() {
     'pe-vp-backend': draft.vp_backend, 'pe-vp-voice': draft.vp_voice,
   };
   Object.entries(fMap).forEach(function(e) { var el = document.getElementById(e[0]); if (el) el.value = e[1] || ''; });
+  // L-2 #205：草稿里的语音三态（只在用户动过时才存）→ 恢复单选并按新态刷选择器/状态行
+  if (draft.vp_mode && typeof _vmSetMode === 'function') {
+    _vmSetMode(draft.vp_mode); _vmTouched = true;
+    _vmLoadCatalog().then(function () {
+      if (draft.vp_mode === 'preset') _presetRender(draft.vp_voice || '');
+      _vmRenderStatus();
+    });
+  }
   if (draft.reply_length) { _setOptCard('rl-cards', draft.reply_length); document.getElementById('pe-reply-length').value = draft.reply_length; }
   if (draft.emoji_level) { _setOptCard('el-cards', draft.emoji_level); document.getElementById('pe-emoji-level').value = draft.emoji_level; }
   var daiEl = document.getElementById('pe-deny-ai'); if (daiEl) daiEl.checked = !!draft.deny_ai;
@@ -8144,9 +8450,14 @@ async function peVcSync(pid){
     for (var i = 0; i < rows.length; i++) {
       if (String(rows[i].persona_id) === _peVcPid) { row = rows[i]; break; }
     }
-    if (row && row.is_clone) {
-      st.textContent = window.Tf('psn_vc_bound', {voice: row.voice || ''})
-        + (row.ready ? '' : (' ' + window.T('psn_vc_not_ready')));
+    /* L-2 #205: label by what is actually there (recording file), never by voice-id text --
+       Mizuki (avatar_clone + ja-JP-NanamiNeural, no recording) used to read "bound: ja-JP-NanamiNeural". */
+    var _refName = (typeof _vmRefName === 'function' && _vmLoaded && _vmLoaded.vp) ? _vmRefName(_vmLoaded.vp) : '';
+    if (row && row.is_clone && row.ready) {
+      st.textContent = window.Tf('psn_vc_bound', {voice: _refName || row.speaker_id || row.voice || ''});
+      if (ub) ub.style.display = '';
+    } else if (row && row.is_clone) {
+      st.textContent = window.T('psn_vc_not_ready');
       if (ub) ub.style.display = '';
     } else {
       st.textContent = window.T('psn_vc_none');
@@ -8193,9 +8504,9 @@ async function peVcAfterEnrolled(pid, announce){
       _loadedProfile = JSON.parse(JSON.stringify(p));
     }
     if (d.rev) _loadedRev = d.rev;
-    if (typeof _vpSyncBackendUi === 'function') _vpSyncBackendUi(vp.backend || '');
-    var vEl = document.getElementById('pe-vp-voice');
-    if (vEl) vEl.value = vp.voice || '';
+    /* L-2 #205: enrollment writes voice_mode=clone -> reload tri-state (radio/status/dev fields) */
+    if (typeof _vmLoad === 'function') _vmLoad(vp, false);
+    else if (typeof _vpSyncBackendUi === 'function') _vpSyncBackendUi(vp.backend || '');
     if (typeof _refreshAdvPanel === 'function') { try { _refreshAdvPanel(); } catch (_e) {} }
     if (announce && vp.backend) {
       _toast(window.Tf('psn_vc_enrolled_synced', {backend: String(vp.backend)}), 'ok', 5000);
