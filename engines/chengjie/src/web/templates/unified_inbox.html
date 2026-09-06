@@ -13748,9 +13748,34 @@ function _mediaCapMb(file){
   return (v&&v>0)?v:25;
 }
 function _syncPendingMedia(){ _pendingMedia=_mediaQueue.length?_mediaQueue[0]:null; }
+// M-3 B（#229 #231，D-M4）：视频容器白名单与后端**同源**——send-caps.video_exts 直发、
+// video_transcode_exts 由后端落盘后 ffmpeg 换封装成 MP4（机器没 ffmpeg 时该表为空 → .MOV
+// 在**选文件时**就拒绝并写明，绝不进队列去复用「结果未知」）。老后端没下发这两个键 → 不判
+// （模板热更新先于后端重启，中间态必须自洽）。
+const _VIDEO_EXT_KNOWN=['.mp4','.mov','.webm','.m4v','.avi','.mkv','.wmv','.flv','.3gp','.mpg','.mpeg','.ts','.mts','.hevc'];
+function _videoFormatVerdict(file){
+  const c=_sendCapsLast||{};
+  if(!Array.isArray(c.video_exts)) return {ok:true,transcode:false,ext:''};
+  const name=String((file&&file.name)||''); const m=name.match(/\.[a-z0-9]+$/i);
+  const ext=m?m[0].toLowerCase():'';
+  const isVideo=String((file&&file.type)||'').indexOf('video/')===0||_VIDEO_EXT_KNOWN.indexOf(ext)>=0;
+  if(!isVideo) return {ok:true,transcode:false,ext:ext};
+  if(c.video_exts.indexOf(ext)>=0) return {ok:true,transcode:false,ext:ext};
+  const tr=Array.isArray(c.video_transcode_exts)?c.video_transcode_exts:[];
+  if(tr.indexOf(ext)>=0) return {ok:true,transcode:true,ext:ext};
+  return {ok:false,transcode:false,ext:ext||(file.type||'?')};
+}
 function _stageMedia(file){
   if(!file) return;
   if(!selectedChat){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
+  const vf=_videoFormatVerdict(file);
+  if(!vf.ok){
+    // 四分类①「格式不支持」：当场拒绝 + 写明能发什么；拦截落 renderer 日志（带 error 字样）
+    const exts=((_sendCapsLast&&_sendCapsLast.video_exts)||['.mp4']).map(e=>e.replace('.','').toUpperCase()).join('/');
+    _toast(window.Tf('inbox.media.video_fmt_reject',{ext:vf.ext.toUpperCase(),ok:exts}),'#dc2626');
+    try{ console.warn('[media] rejected error=unsupported_format name='+(file.name||'')+' ext='+vf.ext+' mime='+(file.type||'')+' platform='+(selectedChat.platform||'')+' transcode_exts='+JSON.stringify((_sendCapsLast&&_sendCapsLast.video_transcode_exts)||[])); }catch(_){}
+    return;
+  }
   const capMb=_mediaCapMb(file);
   if(file.size>capMb*1024*1024){
     // 四分类②「超过上限」：文案带实际大小与上限；拦截落 renderer 日志（带 error 字样，
@@ -13769,9 +13794,10 @@ function _stageMedia(file){
   const ck=convKey(selectedChat);
   if(!_mediaQueues[ck]) _mediaQueues[ck]=_mediaQueue;
   _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId(),
-    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''}});
+    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''},transcode:!!vf.transcode});
   _syncPendingMedia();
   _renderMediaBar();
+  if(vf.transcode) _toast(window.Tf('inbox.media.will_transcode_toast',{ext:vf.ext.toUpperCase()}),'#0f9d75');
   const ta=document.getElementById('reply-ta'); if(ta) ta.focus();
 }
 function _mediaItemHtml(it){
@@ -13782,7 +13808,7 @@ function _mediaItemHtml(it){
   // 「没拿到发送结果（网络/大文件超时）」。这是无响应的**唯一**提示面（toast 已撤）。
   const sub=it.state==='failed'
     ?window.T(it.netFail?(it.unknownRestart?'inbox.media.retry_hint_unknown':'inbox.media.send_result_unknown'):'inbox.media.retry_hint')
-    :_fmtBytes(it.file.size);
+    :(_fmtBytes(it.file.size)+(it.transcode&&it.state!=='sending'?(' · '+window.T('inbox.media.will_transcode')):''));
   return `<span class="mpb-item${it.state==='sending'?' sending':''}${it.state==='failed'?' failed':''}" data-mpi="${it.id}">${img}`
     +`<span class="mpi-meta"><span class="mpi-name" title="${esc(it.file.name||'')}">${esc(it.file.name||window.T('inbox.media.file_default'))}</span>`
     +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span></span>`
