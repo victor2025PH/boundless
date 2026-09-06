@@ -351,6 +351,24 @@ def lan_gpu_probe_targets(config: Dict[str, Any]) -> List[str]:
     return out
 
 
+def lan_gpu_remind_enabled(config: Dict[str, Any]) -> bool:
+    """LAN GPU 巡检的开关判定（纯函数）——桌面客户机默认关（L-6 B，2026-09-06）。
+
+    「本地冗余归零」是办公室集群的运维概念：176/140 挂了、坐席只感到慢一拍、运维必须
+    知道。装在客户机上的桌面包却也带着同一套巡检：内测种子留下的 LAN 端点
+    （``avatar_voice.colloquial.llm_endpoints`` 的 173/198 等）在客户家里永远探不通 →
+    每 30 分钟一条红 toast「LAN GPU 不可达 本地冗余归零」（skuio 机 C6EFRS 实锤），
+    而客户机上根本不存在「本地冗余」这回事。桌面态：``health_watchdog.lan_gpu_remind
+    .enabled`` **显式** true 才开（内部坐席机想看可自己开）；服务器/办公室部署默认开不变。
+    """
+    lr = (((config or {}).get("health_watchdog") or {}).get("lan_gpu_remind")
+          or {}) if isinstance(config, dict) else {}
+    if "enabled" in lr:
+        return bool(lr.get("enabled"))
+    from src.utils.desktop_mode import is_desktop_client
+    return not is_desktop_client(config)
+
+
 def probe_lan_gpu_host(root: str, *, timeout: float = 3.0) -> Dict[str, Any]:
     """探一台 LAN GPU 主机的 Ollama ``/api/version``（无缓存，调用方自控频率）。"""
     result: Dict[str, Any] = {"url": root, "reachable": False}
@@ -4893,12 +4911,13 @@ class HealthWatchdog:
         目标清单派生自配置（``lan_gpu_probe_targets``），按主机去重、只认私网；
         云端部署无 LAN 端点 → 空清单天然静默。探针 ``/api/version`` 零模型加载
         毫秒级；宕机主机 3s 超时封顶（每 tick 最多 3s×N，与音频探针同量级）。
-        配置 ``health_watchdog.lan_gpu_remind.{enabled,after_min,interval_min}``（默认开）。
+        配置 ``health_watchdog.lan_gpu_remind.{enabled,after_min,interval_min}``（服务器
+        默认开；桌面客户机默认关，见 ``lan_gpu_remind_enabled``）。
         """
         cfg = getattr(self._config_manager, "config", None) or {}
         lr = (((cfg.get("health_watchdog") or {}).get("lan_gpu_remind"))
               or {}) if isinstance(cfg, dict) else {}
-        if not lr.get("enabled", True):
+        if not lan_gpu_remind_enabled(cfg if isinstance(cfg, dict) else {}):
             return
         targets = lan_gpu_probe_targets(cfg if isinstance(cfg, dict) else {})
         if not targets:

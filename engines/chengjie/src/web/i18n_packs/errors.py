@@ -136,6 +136,9 @@ ZH = {
     "err.vision.unconfigured": "识图服务未配置",
     "err.vision.busy": "识图服务忙，稍后重试",
     "err.vision.no_text": "图中未识别到文字",
+    # 工作台语音「识别翻译」失败原因（2026-09-06 L-6 B，原一律「识别翻译不可用」/返空）
+    "err.asr.unavailable": "转录服务暂不可用，稍后重试",
+    "err.asr.no_speech": "未识别到语音内容",
 }
 
 EN = {
@@ -273,4 +276,7 @@ EN = {
     "err.vision.unconfigured": "Image recognition is not configured",
     "err.vision.busy": "Image recognition is busy, please retry shortly",
     "err.vision.no_text": "No text recognized in the image",
+    # Workbench voice "recognize + translate" failure reasons (2026-09-06 L-6 B)
+    "err.asr.unavailable": "Transcription service is temporarily unavailable, please retry shortly",
+    "err.asr.no_speech": "No speech recognized in the audio",
 }

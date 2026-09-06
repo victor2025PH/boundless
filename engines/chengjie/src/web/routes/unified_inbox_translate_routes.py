@@ -232,6 +232,26 @@ def _attach_vision_failure_message(request: Request, out: dict) -> dict:
     return out
 
 
+def _attach_asr_failure_message(request: Request, out: dict) -> dict:
+    """语音识别翻译失败时补人话 ``message``（L-6 B：转录返空不再只显「识别翻译不可用」）。
+
+    ``asr_failed`` / ``asr_error``＝转写链全部失败（桌面版只剩网关 ASR 一级，失败就是
+    「服务暂不可用」）；``no_speech``＝转写成功但没听出内容。翻译侧失败不动。
+    """
+    if not isinstance(out, dict) or out.get("ok") or out.get("message"):
+        return out
+    reason = str(out.get("reason") or "")
+    key = {"asr_failed": "err.asr.unavailable", "asr_error": "err.asr.unavailable",
+           "no_speech": "err.asr.no_speech"}.get(reason)
+    if not key:
+        return out
+    try:
+        out["message"] = tr(request, key)
+    except Exception:
+        logger.debug("asr failure message attach failed", exc_info=True)
+    return out
+
+
 def register_translate_routes(app, *, api_auth) -> None:
     """挂载全部翻译端点（文本 + 媒体集群）。"""
 
@@ -1088,7 +1108,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                     else:
                         # 无分段（老 176 服务 / ASR 缓存命中）→ 显式说清而非静默缺席
                         _v_res["srt_reason"] = "no_segments"
-            return _v_res
+            return _attach_asr_failure_message(request, _v_res)
         finally:
             try:
                 _os.remove(path)
@@ -1502,7 +1522,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             if out.get("ok"):
                 record_request_chars(
                     request, "translation", len(str(out.get("transcript") or "")))
-            return out
+            return _attach_asr_failure_message(request, out)
         finally:
             if _tmp_download:
                 try:

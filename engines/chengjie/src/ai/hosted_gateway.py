@@ -652,6 +652,32 @@ def apply_hosted_voice(cfg: Dict[str, Any], hub_base: str, *,
     return True
 
 
+#: 只在本机进程内跑、不依赖网络端点的转写 provider（LAN 摘除时保留）。
+_LOCAL_ASR_PROVIDERS = ("whisper_local", "faster_whisper", "sensevoice", "sense_voice", "funasr")
+
+
+def _asr_entry_is_lan(entry: Dict[str, Any]) -> bool:
+    """一条 ``voice_recognition.fallback`` 备级是否是内网依赖。
+
+    ``avatar_whisper`` 无显式地址时代码缺省就是内网 140:7854 → 算 LAN；OpenAI 兼容
+    备级看 base_url 是否私网；本机离线转写（whisper_local 等）不算。
+    """
+    if not isinstance(entry, dict):
+        return False
+    prov = str(entry.get("provider") or "").strip().lower()
+    if prov in _LOCAL_ASR_PROVIDERS:
+        return False
+    av = entry.get("avatar") if isinstance(entry.get("avatar"), dict) else {}
+    url = str(av.get("base_url") or entry.get("base_url") or "").strip()
+    if prov in ("avatar_whisper", "avatarhub") and not url:
+        return True
+    if not url or not is_private_endpoint(url):
+        return False
+    # 回环＝本机自带服务（坐席机自跑 qwen3_asr 等），不是「出了内网就死」的依赖，保留
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host not in ("localhost", "127.0.0.1", "::1")
+
+
 def apply_hosted_asr(cfg: Dict[str, Any], gw_base: str, *, gateway_first: bool,
                      auto_enable: bool = False) -> bool:
     """把网关转写接进 ``voice_recognition``（纯内存变更；与 env 回放共用）。
@@ -689,6 +715,26 @@ def apply_hosted_asr(cfg: Dict[str, Any], gw_base: str, *, gateway_first: bool,
         fb = [fb]
     fb = [dict(e) for e in fb if isinstance(e, dict)] if isinstance(fb, list) else []
     fb = [e for e in fb if not e.get("_hosted_asr_entry")]
+    # L-6 B（2026-09-06）：网关接管（LAN 不可达）时，回落链里指向内网的备级
+    # （种子的 AvatarWhisper 140:7854 / LAN OpenAI 兼容 ASR）一并摘掉暂存——
+    # 否则网关转写返空后还要逐级撞死端点吃满连接超时（skuio 机「OpenAI/AvatarWhisper
+    # 双级返空」）。本机常驻的离线转写（whisper_local / faster_whisper / sensevoice）
+    # 不是内网依赖，保留。LAN 复活 → 从 _lan_fallback 还原，可逆。
+    lan_stash = vr.get("_lan_fallback") if isinstance(vr.get("_lan_fallback"), list) else []
+    if gateway_first:
+        lan_entries = [e for e in fb if _asr_entry_is_lan(e)]
+        if lan_entries:
+            merged_stash = list(lan_stash)
+            for e in lan_entries:
+                if e not in merged_stash:
+                    merged_stash.append(e)
+            vr["_lan_fallback"] = merged_stash
+            fb = [e for e in fb if e not in lan_entries]
+    elif lan_stash:
+        for e in lan_stash:
+            if e not in fb:
+                fb.append(e)
+        vr.pop("_lan_fallback", None)
     if gateway_first:
         vr["provider"] = "openai_compatible"
         vr["base_url"] = gw

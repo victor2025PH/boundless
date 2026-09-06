@@ -4992,6 +4992,34 @@ class AIClient(LoggerMixin):
             self._embed_fail_streak = 0
             self._embed_unreachable_until = 0.0
 
+    def embedding_status(self) -> Dict[str, Any]:
+        """嵌入能力当前三态（L-6 B，2026-09-06；供学习队列等下游把「相似度未计算」与
+        「真重复」分开——L-4 F 的接口）。
+
+        ``unconfigured``＝根本没有可用的嵌入路径（无模型名 / 无端点且无对话客户端可回落）；
+        ``circuit_open``＝配置了但连续失败进入冷却窗（``until`` 为窗口截止时间戳）；
+        ``ready``＝可发请求（不保证成功）。``endpoints`` 只报地址不报密钥。
+        """
+        now = time.time()
+        until = float(self._embed_unreachable_until or 0.0)
+        if self._use_openai_compat:
+            model = (self._embedding_model or "").strip()
+            endpoints = [u for u, _ in self._embed_clients_ordered()]
+            if not model or model.lower() in ("none", "off", "disabled") or not endpoints:
+                return {"state": "unconfigured", "model": model, "endpoints": endpoints,
+                        "fail_streak": 0, "until": 0.0}
+        else:
+            endpoints = ["gemini"] if self.client else []
+            model = (self._embedding_model or "").strip()
+            if not endpoints or not model:
+                return {"state": "unconfigured", "model": model, "endpoints": endpoints,
+                        "fail_streak": 0, "until": 0.0}
+        if until and now < until:
+            return {"state": "circuit_open", "model": model, "endpoints": endpoints,
+                    "fail_streak": int(self._embed_fail_streak), "until": until}
+        return {"state": "ready", "model": model, "endpoints": endpoints,
+                "fail_streak": int(self._embed_fail_streak), "until": 0.0}
+
     #: 熔断日志里异常文本的截断长度（见 _embed_exc_brief 的「为什么」）
     _EMBED_EXC_BRIEF_CHARS = 220
 

@@ -410,9 +410,13 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         av = config.get('avatar') if isinstance(config.get('avatar'), dict) else {}
-        self.base_url = str(
-            av.get('base_url') or config.get('base_url')
-            or 'http://192.168.0.140:7854').rstrip('/')
+        # L-6 B（2026-09-06）：内网 STT 地址只是**办公室部署**的缺省——桌面客户机上它永远
+        # 探不通，每条语音白吃一次连接超时后返空（skuio 机「转录双级返空」的第二级）。
+        # 桌面态未显式配置 → 空串＝未配置，_transcribe_impl 直接让位下一级（网关 ASR）。
+        from src.utils.desktop_mode import lan_default_or_empty
+        self.base_url = lan_default_or_empty(
+            av.get('base_url') or config.get('base_url'),
+            'http://192.168.0.140:7854').rstrip('/')
         # #161（2026-09-03 钧机 22:54）：开发机路径不再当内置默认——客户机上它
         # 恒不存在，令牌解析却看起来「配过了」，AvatarHub STT 二级回落遂静默失败
         # （上一级刚把「타 타 타」判幻觉丢弃，这一级没接住＝整条转写链断）。
@@ -431,8 +435,10 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
                 or config.get('max_no_speech_prob') or 0.85)
         except (TypeError, ValueError):
             self.max_no_speech_prob = 0.85
+        self._unconfigured_warned = False
         self.logger.info(
-            f"AvatarHub Whisper STT 转录服务初始化 endpoint={self.base_url}")
+            "AvatarHub Whisper STT 转录服务初始化 endpoint=%s",
+            self.base_url or "(未配置：桌面版不带内网缺省地址)")
 
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
         from src.ai.avatar_voice import (
@@ -442,6 +448,14 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
             resolve_service_token,
             warn_token_missing_once,
         )
+
+        if not self.base_url:
+            if not self._unconfigured_warned:
+                self._unconfigured_warned = True
+                self.logger.warning(
+                    "AvatarHub STT 未配置端点（桌面版不再默认指向内网 192.168.0.140:7854），"
+                    "本级让位；语音转写由网关 ASR 负责")
+            return None
 
         token = resolve_service_token(self.token_file)
         if not token:

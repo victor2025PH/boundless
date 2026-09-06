@@ -1443,10 +1443,13 @@ class AvatarVoiceClient:
         self.boot_task_7852: str = str(boot.get("emotion_tts") or "EmotionTTS_Boot")
         self.boot_task_7858: str = str(boot.get("qwen3_tts") or "Qwen3TTS_Boot")
         self.boot_cooldown_sec: float = float(cfg.get("boot_cooldown_sec") or 120.0)
-        # C：远端 Whisper STT
+        # C：远端 Whisper STT。L-6 B（2026-09-06）：内网缺省只对办公室部署成立——桌面
+        # 客户机上未显式配置 → 空串＝未配置，stt()/translate()/stt_health() 直接让位
+        # （不再对 192.168.0.140 白吃连接超时；客户机转写走网关 ASR）。
+        from src.utils.desktop_mode import lan_default_or_empty
         stt = cfg.get("stt") if isinstance(cfg.get("stt"), dict) else {}
-        self.stt_base_url: str = str(
-            stt.get("base_url") or "http://192.168.0.140:7854").rstrip("/")
+        self.stt_base_url: str = lan_default_or_empty(
+            stt.get("base_url"), "http://192.168.0.140:7854").rstrip("/")
         # #161：不再把开发机路径当内置默认——客户机上它恒不存在，却让所有令牌
         # 解析看起来「配过了」。空串＝未配置，由 resolve_service_token 走网关
         # 设备令牌 → 开发机兜底路径两级回落（本机部署行为不变）。
@@ -1546,7 +1549,10 @@ class AvatarVoiceClient:
             f"{self.qwen_base_url}/health", ok_keys=("status", "model_loaded"))
 
     def stt_health(self) -> Dict[str, Any]:
-        """远端 STT(7854) 健康明细 {reachable, models_loaded}（/health 无需令牌）。"""
+        """远端 STT(7854) 健康明细 {reachable, models_loaded}（/health 无需令牌）。
+        未配置端点（桌面态）→ 不探，直接 {reachable: False, unconfigured: True}。"""
+        if not self.stt_base_url:
+            return {"reachable": False, "models_loaded": False, "unconfigured": True}
         return self._probe(
             f"{self.stt_base_url}/health", ok_keys=("ok", "loaded"))
 
@@ -1904,6 +1910,8 @@ class AvatarVoiceClient:
         """
         if not audio_bytes:
             return None
+        if not self.stt_base_url:
+            return None            # 未配置（桌面态无内网缺省）→ 让调用方降级/走网关
         token = resolve_service_token(self.stt_token_file)
         if not token:
             warn_token_missing_once("STT", self.stt_token_file)
@@ -1941,7 +1949,7 @@ class AvatarVoiceClient:
         本方法仅作跨机工具能力保留（如未来集群侧协作需要）。
         """
         t = str(text or "").strip()
-        if not t:
+        if not t or not self.stt_base_url:
             return None
         token = resolve_service_token(self.stt_token_file)
         if not token:

@@ -262,6 +262,31 @@ def observe_region_output(config, reply: str, *, context=None, region: str = "")
         return []
 
 
+_REWRITE_UNCONFIGURED_LOGGED = False
+
+
+def rewrite_backend_available(config) -> bool:
+    """L4 改写后端是否可用（L-6 B，2026-09-06）。
+
+    包内缺省后端是办公室内网 ``192.168.0.173``（qwen14b，同 LAN 零 API 费）——桌面客户机
+    上永远探不通，开了 ``rewrite`` 就等于每条回复白吃一次超时再直通。桌面态必须显式
+    配 ``ai.spoken_style.rewrite_llm`` 才算「已配置」；未配置 → False（调用方原句直通），
+    每进程只提示一次。非桌面部署行为不变。
+    """
+    global _REWRITE_UNCONFIGURED_LOGGED
+    c = _cfg(config)
+    if str(c.get("rewrite_llm") or "").strip():
+        return True
+    from src.utils.desktop_mode import is_desktop_client
+    if not is_desktop_client(config):
+        return True
+    if not _REWRITE_UNCONFIGURED_LOGGED:
+        _REWRITE_UNCONFIGURED_LOGGED = True
+        logger.info("spoken_style L4 改写：桌面版未配置 ai.spoken_style.rewrite_llm"
+                    "（不再默认指向内网 192.168.0.173），改写跳过、原句直通")
+    return False
+
+
 async def rewrite_reply(config, reply: str, role: str = "", *, context=None) -> str:
     """L4：口语化改写（本地小模型整段重写句子架构，事实锁把关；失败/超时/拒绝=原句直通）。
 
@@ -280,6 +305,8 @@ async def rewrite_reply(config, reply: str, role: str = "", *, context=None) -> 
         observe_region_output(config, reply, context=context)
     c = _cfg(config)
     if not c.get("rewrite", False):
+        return reply
+    if not rewrite_backend_available(config):
         return reply
     role = str(role or c.get("role") or "")
     if not role or not _is_zh(reply):
