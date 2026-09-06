@@ -358,13 +358,102 @@ def tg_media_meta(message: Any) -> Optional[Tuple[str, str]]:
         return "video", ".mp4"
     if getattr(message, "animation", None):
         return "video", ".mp4"
-    if getattr(message, "sticker", None):
-        return "sticker", ".webp"
+    stk = getattr(message, "sticker", None)
+    if stk is not None:
+        return "sticker", sticker_ext(stk)
     doc = getattr(message, "document", None)
     if doc is not None:
         fn = getattr(doc, "file_name", "") or ""
         return "document", (os.path.splitext(fn)[1] or ".bin")
     return None
+
+
+#: 贴纸三态扩展名（#195）：动图 .tgs（gzip Lottie JSON）/ 视频 .webm / 静态 .webp。
+STICKER_EXT_ANIMATED = ".tgs"
+STICKER_EXT_VIDEO = ".webm"
+STICKER_EXT_STATIC = ".webp"
+#: 动图/视频贴纸旁落的静态缩略图后缀（与主文件同 stem：``<stem>.thumb.webp``）。
+STICKER_THUMB_SUFFIX = ".thumb.webp"
+
+
+def sticker_ext(sticker: Any) -> str:
+    """pyrogram Sticker → 落盘扩展名（#195）。
+
+    此前一律 ``.webp``：动图贴纸（``is_animated``，Lottie gzip）与视频贴纸（``is_video``，
+    VP9 webm）被存成 .webp → 前端 ``<img>`` 渲染不了＝破图，识图拿到非图片字节也失败
+    （钧 B990 实锤）。按真实容器落盘，前端/识图各按扩展名分流。
+    """
+    if getattr(sticker, "is_animated", False):
+        return STICKER_EXT_ANIMATED
+    if getattr(sticker, "is_video", False):
+        return STICKER_EXT_VIDEO
+    return STICKER_EXT_STATIC
+
+
+def sticker_thumb_path(path: Any) -> Optional[str]:
+    """动图/视频贴纸对应的静态缩略图本地路径（存在才返回；静态 .webp 贴纸返回自身）。
+
+    供识图侧取「可看的那张图」：``.tgs`` / ``.webm`` 本体不是位图，识图要用旁落的
+    ``<stem>.thumb.webp``；没有缩略图 → None（调用方跳过识图、只用 emoji 语义）。
+    """
+    p = str(path or "")
+    if not p:
+        return None
+    low = p.lower()
+    if low.endswith(STICKER_EXT_STATIC) and not low.endswith(STICKER_THUMB_SUFFIX):
+        return p if os.path.isfile(p) else None
+    if low.endswith((STICKER_EXT_ANIMATED, STICKER_EXT_VIDEO)):
+        stem = p[: -len(os.path.splitext(p)[1])]
+        thumb = stem + STICKER_THUMB_SUFFIX
+        return thumb if os.path.isfile(thumb) else None
+    return p if os.path.isfile(p) else None
+
+
+def _write_sticker_thumb(raw: bytes, dest: Path) -> bool:
+    """把 Telegram 缩略图字节（多为 JPEG/WebP）统一转成真 WebP 落到 dest；PIL 缺失时原样写。"""
+    if not raw:
+        return False
+    try:
+        import io
+        from PIL import Image as _Image
+        img = _Image.open(io.BytesIO(raw))
+        img.load()
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA")
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=85)
+        dest.write_bytes(buf.getvalue())
+        return True
+    except Exception:
+        try:
+            dest.write_bytes(raw)
+            return True
+        except Exception:
+            logger.debug("[protocol_bridge] 贴纸缩略图落盘失败", exc_info=True)
+            return False
+
+
+async def _download_sticker_thumb(message: Any, sticker: Any, dest_main: Path) -> str:
+    """动图/视频贴纸：额外下载 ``sticker.thumbs[0]`` 作静态缩略图，落 ``<stem>.thumb.webp``。
+
+    返回缩略图本地路径（失败/无缩略图 → ""）。绝不抛：缩略图是锦上添花，主文件已落。
+    """
+    thumbs = getattr(sticker, "thumbs", None) or []
+    thumb = thumbs[0] if thumbs else None
+    file_id = getattr(thumb, "file_id", None) if thumb is not None else None
+    client = getattr(message, "_client", None)
+    if not file_id or client is None:
+        return ""
+    try:
+        stem = str(dest_main)[: -len(dest_main.suffix)] if dest_main.suffix else str(dest_main)
+        dest = Path(stem + STICKER_THUMB_SUFFIX)
+        raw = await client.download_media(file_id, in_memory=True)
+        data = raw.getvalue() if hasattr(raw, "getvalue") else (bytes(raw) if raw else b"")
+        if _write_sticker_thumb(data, dest):
+            return str(dest)
+    except Exception:
+        logger.debug("[protocol_bridge] 贴纸缩略图下载失败（忽略）", exc_info=True)
+    return ""
 
 
 def tg_media_file_size(message: Any) -> int:
@@ -408,6 +497,10 @@ async def download_tg_media(
         dest, url = media_paths("telegram", f"{account_id}_{mid}", ext)
         path = await message.download(file_name=str(dest))
         if path:
+            if kind == "sticker" and ext in (STICKER_EXT_ANIMATED, STICKER_EXT_VIDEO):
+                # #195：动图/视频贴纸本体不是位图 → 旁落静态缩略图（前端 .tgs 用它显示、
+                # 识图两种都用它），文件名约定 <stem>.thumb.webp，前端按 media_ref 推导。
+                await _download_sticker_thumb(message, getattr(message, "sticker", None), dest)
             return kind, url
     except Exception:
         logger.debug("[protocol_bridge] tg 媒体下载失败", exc_info=True)

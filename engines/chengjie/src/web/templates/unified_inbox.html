@@ -9759,7 +9759,23 @@ function _renderMediaContent(m){
     // 2026-08-17 表情包主线：128px 透明底 + 悬停「收藏入包」（data-stk-collect 由
     // sticker-panel.js 委托处理；按钮显隐由 html[data-stk-on] CSS 门控——flag 未开
     // 时不可见不可点，仅 protocol_media 归档贴纸可收藏，CDN 引用不出按钮）。
+    // #195（2026-09-06 L-6 C）：按落盘扩展名三态——.webm 视频贴纸用 <video> 自动循环；
+    // .tgs 动图贴纸本体是 Lottie，不引 lottie 库，显示服务端旁落的 <stem>.thumb.webp
+    // 静态缩略图 + 「动图贴纸」角标（缩略图缺失 → 占位）；.webp 原样 <img>。
+    // 收藏入包只对静态位图开放（tgs/webm 塞进表情包会破包）。
     if(ref){
+      const _low=String(ref).toLowerCase().split('?')[0];
+      const _badge=`<span class="msg-sticker-badge" style="position:absolute;left:4px;bottom:4px;font-size:10px;line-height:1;padding:2px 5px;border-radius:8px;background:rgba(0,0,0,.55);color:#fff;pointer-events:none;">${window.T('inbox.media.sticker_animated')}</span>`;
+      if(/\.webm$/.test(_low)){
+        return `<span class="msg-sticker-wrap" style="position:relative;display:inline-block;"><video class="msg-media-sticker" src="${esc(ref)}" autoplay loop muted playsinline preload="metadata" aria-label="${window.T('inbox.media.sticker_alt')}"></video>${_badge}</span>`;
+      }
+      if(/\.tgs$/.test(_low)){
+        const _thumb=ref.replace(/\.tgs$/i,'.thumb.webp');
+        const _phText=window.T('inbox.media.sticker')+' · '+window.T('inbox.media.sticker_animated');
+        // 缩略图缺失（老包 / 下载失败）→ 整体换成占位行，不留破图
+        const _onerr="this.parentNode.replaceWith(Object.assign(document.createElement('div'),{className:'msg-media-placeholder',textContent:this.dataset.ph}))";
+        return `<span class="msg-sticker-wrap" style="position:relative;display:inline-block;"><img class="msg-media-sticker" src="${esc(_thumb)}" data-ph="${esc(_phText)}" loading="lazy" alt="${window.T('inbox.media.sticker_alt')}" onerror="${_onerr}">${_badge}</span>`;
+      }
       const _cbtn=ref.indexOf('/static/protocol_media/')===0
         ?`<button type="button" class="stk-collect-btn" data-stk-collect="${esc(ref)}" title="${window.T('inbox.stk.collect')}">\uff0b</button>`
         :'';

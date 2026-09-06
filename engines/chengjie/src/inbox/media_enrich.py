@@ -552,7 +552,16 @@ async def enrich_inbound_media_text(
 
         desc = ""
         try:
-            if mt in _IMAGE_KINDS:
+            if mt == "sticker":
+                # #195：动图 .tgs / 视频 .webm 本体不是位图——识图用旁落的静态缩略图；
+                # 没有缩略图就跳过（不再把 gzip/webm 字节喂给 VLM 白失败一轮）。
+                from src.integrations.protocol_bridge import sticker_thumb_path
+                still = sticker_thumb_path(local)
+                if still:
+                    desc = await _describe_image(still, cfg)
+                else:
+                    logger.debug("[media_enrich] 贴纸无静态缩略图，跳过识图 ref=%s", media_ref)
+            elif mt in _IMAGE_KINDS:
                 desc = await _describe_image(local, cfg)
             elif mt in _VOICE_KINDS:
                 desc = await _transcribe_voice(local, cfg, voice_transcriber)
