@@ -74,6 +74,12 @@ UserClockProvider = Callable[[dict], Any]
 # 两者耦合＝桌面种子 care dry_run:true 让所有冲刺目标卡写「自动推进」却一拍不发。
 # None/异常/非 goal 行 → {}（全默认，旧行为）。
 GoalRowPolicy = Callable[[dict], dict]
+# profile_provider：(item dict) -> 客户档案 dict（M-1 A #218，2026-09-06：
+# {country, residence, language, known_since, known_days, display_name}）。LLM 档
+# 拟稿必注入（【客户档案】块）并在出稿后过 ``check_care_reply``：与档案矛盾
+# （把本地人当外国人 / 老客当新客）→ 拦下 skip；首次真发 / 含地名 / 含人名 →
+# 强制预览（行留 pending 待运营确认）。None/异常 → 空档案（只剩强制预览判定）。
+ProfileProvider = Callable[[dict], dict]
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -150,10 +156,14 @@ _GOAL_SPRINT_PROMPT = """你是「{ai_name}」，正在和对方私聊。你们�
 
 
 def _compose_extra_blocks(persona_line: str = "", memory_block: str = "",
-                          goal_block: str = "") -> str:
-    """拟稿增强块（实施84 P0-2）：人设口吻 / 长期记忆 / 工作目标背景。
-    全空 → ""（prompt 与旧版逐字一致，零 token 开销）。"""
+                          goal_block: str = "", profile_block: str = "") -> str:
+    """拟稿增强块（实施84 P0-2）：人设口吻 / 长期记忆 / 工作目标背景 /
+    客户档案（M-1 A #218）。全空 → ""（prompt 与旧版逐字一致，零 token 开销）。
+    档案块排最前：它是硬事实，LLM 读到风格/记忆之前先知道对方是谁。"""
     parts = []
+    pb = str(profile_block or "").strip()
+    if pb:
+        parts.append(f"\n{pb}")
     p = str(persona_line or "").strip()
     if p:
         parts.append(f"\n【你的说话风格（保持这个人的口吻）】\n{p}")
@@ -245,9 +255,13 @@ def build_care_prompt(
     persona_line: str = "",
     memory_block: str = "",
     goal_block: str = "",
+    profile_block: str = "",
 ) -> str:
     """由一条 care_schedule 行构造派发 prompt（危机主题自动切「克制陪伴」专线；
     ``topic_norm=goal:*`` 的排期行切「目标推进」专线）。
+
+    ``profile_block``（M-1 A #218）＝客户档案硬事实块（``care_profile.profile_block``），
+    派发与预览同源注入；危机专线同样不吃（克制陪伴不引用任何事实）。
 
     P2 2026-08-01 抽出为公共函数：派发器与 ``/api/care/schedule/{sid}/preview``
     预览端点共用——「先看后发」看到的就是真发同一句 prompt 口径，预判与行为
@@ -275,7 +289,7 @@ def build_care_prompt(
             memory_block = ""
     extra_blocks = _compose_extra_blocks(
         persona_line=persona_line, memory_block=memory_block,
-        goal_block=goal_block)
+        goal_block=goal_block, profile_block=profile_block)
     is_goal_care = str(item.get("topic_norm") or "").startswith(
         GOAL_CARE_NORM_PREFIX)
     # 冲刺相位行（goal:{gid}:p{n}）→ 限时推进专线；解析失败回落普通目标行
@@ -386,6 +400,8 @@ class CareDispatcher:
         user_clock_provider: Optional[UserClockProvider] = None,
         dry_resample_hours: float = 24.0,
         goal_row_policy: Optional[GoalRowPolicy] = None,
+        profile_provider: Optional[ProfileProvider] = None,
+        reply_gates: Optional[bool] = None,
     ) -> None:
         self._store = store
         self._ai = ai_client
@@ -419,6 +435,17 @@ class CareDispatcher:
         self._user_clock_provider = user_clock_provider
         # P0 2026-08-30 冲刺推进器：goal:* 行豁免策略（None=旧行为）
         self._goal_row_policy = goal_row_policy
+        # M-1 A #218：客户档案 provider（LLM 档注入 + 事实校验）；None=空档案。
+        # ``reply_gates``＝LLM 出稿三态闸（档案矛盾拦 / 首次真发·地名·人名强制预览）：
+        # None=跟随 provider 是否注入（生产 background_tasks 恒注入 → 恒开；旧调用方 /
+        # 未注入档案的单测保持旧行为）；True/False 显式钉死。
+        self._profile_provider = profile_provider
+        self._reply_gates = (bool(reply_gates) if reply_gates is not None
+                             else profile_provider is not None)
+        # M-1 A #214：dry_run 唯一真值 = 实时配置；构造参数只是启动快照。记住上一 tick
+        # 的有效值，翻转时打一行 INFO——「启动行 dry_run=True 而 14:00 真发了」这类
+        # 状态漂移此前在日志里零痕迹。
+        self._last_effective_dry: Optional[bool] = None
         # 实施84 P0-4：dry 语义改「不消费待办」后，同一条待办每 tick 都会再到期
         # ——重拟冷却防止每 5 分钟烧一次 LLM（可经实时配置 dry_resample_hours 调）。
         self._dry_resample_hours = max(0.0, float(dry_resample_hours))
@@ -443,17 +470,27 @@ class CareDispatcher:
     def is_running(self) -> bool:
         return bool(self._task and not self._task.done())
 
+    def effective_dry_run(self) -> bool:
+        """dry_run **唯一真值源**（M-1 A #214）：实时配置有值取实时，否则取构造参数。
+
+        面板 / ``/api/care/health`` / ``/api/care/plan`` / 「立即发」响应 / 派发判定
+        全部读这一个方法，不再各自读一份配置快照——12:43「到点了下轮巡检就处理」
+        与 14:03 真发出去这种面板与行为不一致，根源就是三处各读各的。
+        """
+        cfg = self._live_cfg()
+        if cfg is None:
+            return bool(self._dry_run)
+        return bool(cfg.get("dry_run", False))
+
     def health_snapshot(self) -> dict:
         """链路自检用只读快照（无敏感字段）。"""
-        cfg = self._live_cfg()
-        dry = self._dry_run if cfg is None else bool(cfg.get("dry_run", False))
         return {
             "running": self.is_running(),
             "interval_sec": self._interval,
             "last_tick_ts": self.last_tick_ts,
             "last_tick_scheduled": self.last_tick_scheduled,
             "last_tick_gated": self.last_tick_gated,
-            "dry_run_effective": dry,
+            "dry_run_effective": self.effective_dry_run(),
         }
 
     async def start(self) -> None:
@@ -513,6 +550,11 @@ class CareDispatcher:
                     return 0
                 goal_only = True
             self._dry_run = bool(cfg.get("dry_run", False))
+            if self._last_effective_dry is not None and self._last_effective_dry != self._dry_run:
+                logger.info(
+                    "[care_dispatcher] dry_run 实时值变化 %s → %s（配置热重载；"
+                    "面板/日志/派发同读此值）", self._last_effective_dry, self._dry_run)
+            self._last_effective_dry = self._dry_run
             try:
                 # 「0=不限」语义：0/负值＝本 tick 不截断（旧 max(1,…) 会把 0 静默钉成 1）。
                 self._max_per_tick = max(0, int(cfg.get("max_per_tick", self._max_per_tick)))
@@ -596,6 +638,23 @@ class CareDispatcher:
             logger.debug("care prompt_extras_provider 异常（忽略）", exc_info=True)
             return {}
 
+    def customer_profile(self, item: dict) -> dict:
+        """客户档案（M-1 A #218）。公开方法：预览路由与派发同源。provider 未注入 /
+        异常 → 空档案 dict（``care_profile.empty_profile``），绝不抛。"""
+        from src.contacts.care_profile import empty_profile
+        if self._profile_provider is None:
+            return empty_profile()
+        try:
+            out = self._profile_provider(dict(item))
+            if not isinstance(out, dict):
+                return empty_profile()
+            base = empty_profile()
+            base.update(out)
+            return base
+        except Exception:
+            logger.debug("care profile_provider 异常（按空档案）", exc_info=True)
+            return empty_profile()
+
     async def _dispatch_one(self, item: dict, now: float) -> bool:
         sid = int(item["id"])
         contact_key = str(item.get("contact_key") or "")
@@ -606,6 +665,11 @@ class CareDispatcher:
 
         if not chat_key or not platform:
             self._mark_skipped(sid, "missing platform/chat_key")
+            return False
+
+        # M-1 A #218：处于「待运营确认」态的行（LLM 拟稿命中强制预览）不再派发，
+        # 等面板上「就这样发 / 改一改再发 / 跳过」或逾期过期。不烧 LLM、不 mark。
+        if CareScheduleStore.hold_reason(item):
             return False
 
         # 对方机器人/自家账号守卫（P1 2026-08-03）：给 bot 发关怀是纯空转 + 向平台
@@ -689,6 +753,9 @@ class CareDispatcher:
             if not reply:
                 self._mark_skipped(sid, "verbatim_empty")
                 return False
+            logger.info(
+                "[care-gen] id=%s contact=%s mode=verbatim dry=%s text=%r",
+                sid, contact_key, dry, reply[:160])
         else:
             context_block = ""
             if self._context_provider is not None and not is_crisis_care:
@@ -713,18 +780,37 @@ class CareDispatcher:
 
             # 实施84 P0-2：拟稿增强块（人设口吻/记忆要点/目标背景）；危机专线不吃
             extras = {} if is_crisis_care else self.prompt_extras(item)
+            # M-1 A #218：客户档案（国籍/居住地/相识时长/语言）必注入 + 出稿事实校验。
+            # 危机专线不注入（克制陪伴不引用事实），但矛盾校验仍跑（同样不该把老客当新客）。
+            profile = self.customer_profile(item)
+            from src.contacts.care_profile import check_care_reply, profile_block
+            pblock = "" if is_crisis_care else profile_block(profile)
 
             prompt = build_care_prompt(
                 item, context_block=context_block, recent_sent=recent_sent,
                 ai_name=self._ai_name, lang=self._default_lang, now=now,
                 persona_line=str(extras.get("persona_line") or ""),
                 memory_block=str(extras.get("memory_block") or ""),
-                goal_block=str(extras.get("goal_block") or ""))
+                goal_block=str(extras.get("goal_block") or ""),
+                profile_block=pblock)
             try:
                 reply = (await self._ai.chat(prompt) or "").strip()
             except Exception:
                 logger.warning("care LLM 失败 id=%s", sid, exc_info=True)
                 return False  # 留 pending，下个 tick 重试
+            # M-1 A #218 ④：care 生成落日志——输入原文 / 注入了哪些字段 / 输出 / 走了哪档。
+            # 此前 care 生成零上下文日志，事故只能靠客户端截图倒推。
+            logger.info(
+                "[care-gen] id=%s contact=%s mode=%s dry=%s topic=%r source=%r "
+                "profile=%s ctx_chars=%d memory=%s goal=%s persona=%s reply=%r",
+                sid, contact_key,
+                ("crisis" if is_crisis_care else "goal" if is_goal_care else "event"),
+                dry, topic[:60], str(item.get("source_text") or "")[:80],
+                {k: profile.get(k) for k in ("country", "residence", "language",
+                                             "known_since", "known_days") if profile.get(k)},
+                len(context_block), bool(extras.get("memory_block")),
+                bool(extras.get("goal_block")), bool(extras.get("persona_line")),
+                reply[:200])
             if not reply or len(reply) < 4:
                 self._mark_skipped(sid, "llm_empty")
                 return False
@@ -738,6 +824,37 @@ class CareDispatcher:
             reply = await self._avoid_disliked(prompt, reply, sid)
             if not reply:
                 return False
+
+            # M-1 A #218 ②③：事实校验 + 强制预览。与档案矛盾（本地人当外国人 / 老客当
+            # 新客）→ 拦下 skip 并留原因；首次对该客户真发 / 含地名 / 含人名 → 不发，
+            # 草稿留 pending 待运营确认（dry 档只是看质量，不拦——样本要流动）。
+            if self._reply_gates and not dry:
+                first_send = True
+                try:
+                    if hasattr(self._store, "has_real_sent"):
+                        first_send = not self._store.has_real_sent(contact_key)
+                except Exception:
+                    first_send = True
+                verdict = check_care_reply(reply, profile, first_real_send=first_send)
+                if verdict["verdict"] == "block":
+                    logger.warning(
+                        "[care-gen] id=%s contact=%s 拟稿与客户档案矛盾 → 拦下不发 reason=%s "
+                        "reply=%r profile=%s", sid, contact_key, verdict["reason"],
+                        reply[:120], {k: profile.get(k) for k in ("country", "residence",
+                                                                  "known_since", "known_days")})
+                    self._mark_skipped(sid, verdict["reason"])
+                    return False
+                if verdict["verdict"] == "preview":
+                    if hasattr(self._store, "mark_hold_for_preview"):
+                        self._store.mark_hold_for_preview(
+                            sid, sent_text=reply, reason=verdict["reason"], now=now)
+                        logger.info(
+                            "[care-gen] id=%s contact=%s 强制预览 → 留待运营确认 reason=%s",
+                            sid, contact_key, verdict["reason"])
+                        return False
+                    logger.warning(
+                        "[care-gen] id=%s store 不支持 hold（旧版），强制预览退化为放行 reason=%s",
+                        sid, verdict["reason"])
 
         # O3 改进②：发送时刻命中 quiet_hours → 顺延到结束（而非跳过）。
         # 实施84 P0-6：能解析出客户时钟时按**对方当地时间**判安静窗（provider
@@ -806,7 +923,11 @@ class CareDispatcher:
             logger.warning("care send_callback 失败 id=%s", sid, exc_info=True)
             return False  # 留 pending 重试
         if not row_id:
+            logger.info("[care-gen] id=%s decision=gated（deferred 队列未接收，留 pending）", sid)
             return False  # enqueue 失败（如 gate 拦）→ 留 pending
+        logger.info(
+            "[care-gen] id=%s contact=%s decision=enqueued deferred=%s send_in_min=%d",
+            sid, contact_key, int(row_id), int(max(0.0, defer_until - now) / 60))
         # P3：真发成功 → 触达落共享账本（outreach_log），对预算/周报可见。
         # 绝不影响已完成的发送（best-effort）。
         if self._sent_hook is not None:
@@ -860,6 +981,10 @@ class CareDispatcher:
             return {"ok": False, "reason": "send_failed"}
         if not row_id:
             return {"ok": False, "reason": "gated"}
+        logger.info(
+            "[care-gen] id=%s contact=%s mode=manual decision=enqueued deferred=%s "
+            "held=%r text=%r", sid, contact_key, int(row_id),
+            CareScheduleStore.hold_reason(item) or "", body[:160])
         if self._sent_hook is not None:
             try:
                 self._sent_hook(dict(item))

@@ -249,9 +249,11 @@ def _post(c, url, body):
 
 
 def test_route_add_guard_blocks_instruction_then_confirm_passes(client):
+    """M-1 A #218（D-M2）起：缺省 mode=verbatim（意图守卫只管 event 档）；event 档还须
+    ``preview_confirmed``（见 test_care_verbatim_default_218），这里显式带上只验守卫。"""
     c, app = client
     base = {"contact_key": "tg:u1", "platform": "telegram", "account_id": "default",
-            "chat_key": "u1", "due_in_hours": 24}
+            "chat_key": "u1", "due_in_hours": 24, "mode": "event", "preview_confirmed": True}
     r = _post(c, "/api/care/schedule", dict(base, topic="主动问候对方早上好"))
     assert r["ok"] is False and r["reason"] == "looks_like_instruction"
     assert r["suggest_mode"] == "verbatim"
@@ -288,6 +290,7 @@ def test_route_preview_event_has_understanding_and_filtered_memory(client):
     r = _post(c, "/api/care/schedule", {
         "contact_key": "tg:u1", "platform": "telegram", "account_id": "default",
         "chat_key": "u1", "due_in_hours": 2, "topic": "下周三考试",
+        "mode": "event", "preview_confirmed": True,
     })
     p = _post(c, f"/api/care/schedule/{r['id']}/preview", {})
     assert p["ok"] is True and p["mode"] == "event"

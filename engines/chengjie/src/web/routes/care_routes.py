@@ -79,6 +79,115 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         conf = getattr(cm, "config", None) or {}
         return dict((conf.get("companion") or {}).get("proactive_care") or {})
 
+    def _dispatcher(request: Request):
+        engine = getattr(request.app.state, "care_engine", None) or {}
+        return engine.get("dispatcher") if isinstance(engine, dict) else None
+
+    def _effective_dry_run(request: Request) -> bool:
+        """dry_run 唯一真值（M-1 A #214）：派发器在场读 ``effective_dry_run()``（与派发
+        判定同一个方法），否则退回实时配置。面板 / health / plan / 立即发 全走这里。"""
+        disp = _dispatcher(request)
+        if disp is not None and hasattr(disp, "effective_dry_run"):
+            try:
+                return bool(disp.effective_dry_run())
+            except Exception:
+                logger.debug("care effective_dry_run 读取失败（回落配置）", exc_info=True)
+        return bool(_care_cfg(request).get("dry_run", False))
+
+    def _hold_reason(item: dict) -> str:
+        try:
+            from src.contacts.care_schedule import CareScheduleStore
+            return CareScheduleStore.hold_reason(item)
+        except Exception:
+            return ""
+
+    async def _render_event_preview(request: Request, item: dict) -> dict:
+        """LLM 档「先看后发」共用体（M-1 A #218）：预览端点与「排上」前置预览同源。
+
+        与派发同一 ``build_care_prompt``（含客户档案块 / 增强块 / 负样本）→ LLM →
+        ``check_care_reply`` 三态判定。只生成、不落状态。返回 ``{ok, preview, reason,
+        profile, check}``，绝不抛。``item`` 可以是尚未入库的候选行（无 id）。
+        """
+        ai = getattr(request.app.state, "ai_client", None)
+        if ai is None:
+            return {"ok": False, "reason": "ai_missing"}
+        from src.contacts.care_dispatcher import build_care_prompt
+        from src.contacts.care_profile import (
+            build_customer_profile, check_care_reply, profile_block,
+        )
+        store = _store(request)
+        contact_key = str(item.get("contact_key") or "")
+        context_block = ""
+        inbox = getattr(request.app.state, "inbox_store", None)
+        if inbox is not None:
+            try:
+                msgs = inbox.list_recent_messages(contact_key, limit=8) or []
+                context_block = "\n".join(
+                    t for t in (str(m.get("text") or "").strip() for m in msgs) if t
+                )[:800]
+            except Exception:
+                context_block = ""
+        cm = _cm(request)
+        ai_name = "她"
+        try:
+            ai_name = str((cm.get_ai_config() or {}).get("ai_name") or "她")
+        except Exception:
+            ai_name = "她"
+        _recent_sent = []
+        try:
+            _recent_sent = store.recent_sent_texts(contact_key, limit=4)
+        except Exception:
+            _recent_sent = []
+        disp = _dispatcher(request)
+        _extras = {}
+        profile = {}
+        try:
+            if disp is not None and hasattr(disp, "prompt_extras"):
+                _extras = disp.prompt_extras(item) or {}
+        except Exception:
+            _extras = {}
+        try:
+            if disp is not None and hasattr(disp, "customer_profile"):
+                profile = disp.customer_profile(item) or {}
+            else:
+                cstore = getattr(request.app.state, "contacts_store", None)
+                profile = build_customer_profile(
+                    item, inbox_store=inbox, contacts_store=cstore)
+        except Exception:
+            profile = {}
+        prompt = build_care_prompt(
+            item, context_block=context_block,
+            recent_sent=_recent_sent, ai_name=ai_name,
+            persona_line=str(_extras.get("persona_line") or ""),
+            memory_block=str(_extras.get("memory_block") or ""),
+            goal_block=str(_extras.get("goal_block") or ""),
+            profile_block=profile_block(profile))
+        try:
+            text = (await ai.chat(prompt) or "").strip()
+        except Exception:
+            logger.debug("care preview LLM 失败 contact=%s", contact_key, exc_info=True)
+            return {"ok": False, "reason": "llm_error"}
+        if not text:
+            return {"ok": False, "reason": "llm_empty"}
+        first_send = True
+        try:
+            if hasattr(store, "has_real_sent"):
+                first_send = not store.has_real_sent(contact_key)
+        except Exception:
+            first_send = True
+        check = check_care_reply(text, profile, first_real_send=first_send)
+        logger.info(
+            "[care-gen] id=%s contact=%s mode=preview topic=%r profile=%s reply=%r verdict=%s/%s",
+            item.get("id") or "-", contact_key, str(item.get("topic") or "")[:60],
+            {k: profile.get(k) for k in ("country", "residence", "language",
+                                         "known_since", "known_days") if profile.get(k)},
+            text[:200], check.get("verdict"), check.get("reason"))
+        return {"ok": True, "preview": text, "reason": "",
+                "profile": {k: profile.get(k) for k in
+                            ("country", "residence", "language", "known_since",
+                             "known_days", "display_name")},
+                "check": check}
+
     # ── P2：48h 回复率（效果回流）。逐条查会话消息 → 60s 进程内缓存防健康轮询打库 ──
     _effect_memo = {"ts": 0.0, "data": {}}
 
@@ -275,7 +384,7 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         return {
             "ok": True,
             "enabled": enabled,
-            "dry_run": bool(care_cfg.get("dry_run", False)),
+            "dry_run": _effective_dry_run(request),
             "capture": {
                 "config_on": enabled and bool(care_cfg.get("capture", True)),
                 "wired": bool(engine.get("capture_wired", False)),
@@ -314,7 +423,8 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         comp = (conf.get("companion") or {})
         care_cfg = dict(comp.get("proactive_care") or {})
         enabled = bool(care_cfg.get("enabled", False))
-        dry_run = bool(care_cfg.get("dry_run", False))
+        # M-1 A #214：dry_run 单一真值（与派发器判定同源），面板不再各读一份配置快照
+        dry_run = _effective_dry_run(request)
         llm_cfg = dict(care_cfg.get("llm_extract") or {})
         mdef = dict(comp.get("multiplatform_deferred") or {})
 
@@ -454,6 +564,10 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "platform": str(it.get("platform") or ""),
             "chat_key": str(it.get("chat_key") or ""),
             "topic": str(it.get("topic") or ""),
+            # M-1 A #218：verbatim/event 分界 + 「待运营确认」态（LLM 拟稿命中强制预览）
+            "topic_norm": str(it.get("topic_norm") or ""),
+            "hold_reason": _hold_reason(it),
+            "hold_text": (str(it.get("sent_text") or "") if _hold_reason(it) else ""),
             "source_text": str(it.get("source_text") or ""),
             "due_at": float(it.get("due_at") or 0),
             "sentiment": str(it.get("sentiment") or "neutral"),
@@ -499,6 +613,7 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
                 "lights": lights,
                 "overall": engine_overall(lights, enabled=enabled, dry_run=dry_run),
                 "last_tick_ts": float(dispatch.get("last_tick_ts") or 0),
+                "interval_sec": float(dispatch.get("interval_sec") or 0),
                 "dispatch_skip": str(engine.get("dispatcher_skip") or ""),
             },
             "digest": {
@@ -631,18 +746,25 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.post("/api/care/schedule")
     async def api_care_schedule_add(request: Request, _=Depends(api_auth)):
-        """运营手动加一条关怀（AI 没抽到的约定）。body：
+        """运营手动加一条关怀。body：
         {contact_key, platform, account_id, chat_key, topic, due_at?|due_in_hours?,
-         source_text?, sentiment?}。手动可信 → confidence=1.0，不受阈值/去重拦截。"""
+         source_text?, sentiment?, mode?, preview_confirmed?}。手动可信 → confidence=1.0，
+        不受阈值/去重拦截。
+
+        M-1 A #218（D-M2）：**默认 verbatim**（到点原样发这句话，不经 LLM）；
+        ``mode=event``（让 AI 润色/自然关心）必须先预览确认——未带
+        ``preview_confirmed=true`` 的 event 请求**不入队**，回 ``reason=preview_required``
+        + 预览稿 + 「我理解为」+ 档案校验结果，前端确认后带标志重发。"""
         from src.contacts.care_commitment import CareCommitment
-        from src.contacts.care_intent import detect_instruction_intent
+        from src.contacts.care_intent import care_understanding, detect_instruction_intent
 
         body = await request.json()
         contact_key = str(body.get("contact_key") or "").strip()
         topic = str(body.get("topic") or "").strip()
         # J-8 #182 两种类型：event＝客户的事（AI 自然关心，经 LLM）；
-        # verbatim＝到点原文直发（零 LLM）。缺省 event 保旧调用方语义。
-        mode = str(body.get("mode") or "event").strip().lower()
+        # verbatim＝到点原文直发（零 LLM）。M-1 A（D-M2）：缺省改 **verbatim**——
+        # 用户填的是要发的话，不是「客户说过的事」。
+        mode = str(body.get("mode") or "verbatim").strip().lower()
         if mode not in ("event", "verbatim"):
             return {"ok": False, "reason": "bad_mode"}
         if not contact_key or not topic:
@@ -684,7 +806,32 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             )
             if not rid:
                 return {"ok": False, "reason": "add_failed", "message": "写入失败"}
+            logger.info("[care-gen] id=%s contact=%s mode=verbatim decision=enqueued_by_operator "
+                        "text=%r", rid, contact_key, text[:160])
             return {"ok": True, "id": rid, "mode": "verbatim"}
+
+        # M-1 A #218：AI 档必须先看后排。候选行（未入库）走与派发同源的预览体。
+        if not bool(body.get("preview_confirmed")):
+            cand = {
+                "id": 0, "contact_key": contact_key,
+                "platform": str(body.get("platform") or ""),
+                "account_id": str(body.get("account_id") or "default"),
+                "chat_key": str(body.get("chat_key") or ""),
+                "topic": topic, "topic_norm": "",
+                "source_text": str(body.get("source_text") or "")[:160],
+                "due_at": due_at, "event_at": due_at,
+            }
+            pv = await _render_event_preview(request, cand)
+            out = {"ok": False, "reason": "preview_required", "mode": "event",
+                   "preview": str(pv.get("preview") or ""),
+                   "preview_reason": str(pv.get("reason") or ""),
+                   "profile": pv.get("profile") or {},
+                   "check": pv.get("check") or {}}
+            try:
+                out["understanding"] = care_understanding(cand, now=now)
+            except Exception:
+                out["understanding"] = {}
+            return out
 
         commitment = CareCommitment(
             due_at=due_at, event_at=due_at, topic=topic,
@@ -701,6 +848,8 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         )
         if not rid:
             return {"ok": False, "reason": "add_failed", "message": "写入失败（可能重复）"}
+        logger.info("[care-gen] id=%s contact=%s mode=event decision=enqueued_after_preview "
+                    "topic=%r", rid, contact_key, topic[:80])
         return {"ok": True, "id": rid, "mode": "event"}
 
     @app.post("/api/care/intent-check")
@@ -764,12 +913,27 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
 
     @app.post("/api/care/schedule/{sid}/send-now")
     async def api_care_schedule_send_now(sid: int, request: Request, _=Depends(api_auth)):
-        """立即发：把 due_at 提前到当前 → 下个派发 tick 即到期处理（仍走全套发送护栏）。"""
+        """立即发：把 due_at 提前到当前 → 下个派发 tick 即到期处理（仍走全套发送护栏）。
+
+        M-1 A #214：响应如实带 ``dry_run``（当前为模拟运行 → 下轮只拟稿不真发）与
+        ``held``（该行正待运营确认 → 提前到期也不会自动发，得点「就这样发」）；
+        前端据此提示，不再「点了没反应」。"""
         store = _store(request)
+        item = store.get(int(sid)) or {}
         ok = store.bring_forward(int(sid))
         if not ok:
             return {"ok": False, "reason": "not_pending", "message": "待办不存在或非 pending"}
-        return {"ok": True, "due_now": int(sid)}
+        dry = _effective_dry_run(request)
+        held = _hold_reason(item)
+        disp = _dispatcher(request)
+        interval = 0.0
+        try:
+            interval = float(getattr(disp, "_interval", 0) or 0) if disp is not None else 0.0
+        except Exception:
+            interval = 0.0
+        logger.info("[care-gen] id=%s decision=bring_forward dry_run=%s held=%r", sid, dry, held)
+        return {"ok": True, "due_now": int(sid), "dry_run": dry, "held": held,
+                "interval_sec": interval}
 
     @app.post("/api/care/schedule/{sid}/reschedule")
     async def api_care_schedule_reschedule(sid: int, request: Request, _=Depends(api_auth)):
@@ -822,60 +986,21 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": True, "id": int(sid), "mode": "verbatim",
                     "preview": str(understanding.get("source_text") or ""),
                     "understanding": understanding}
-        ai = getattr(request.app.state, "ai_client", None)
-        if ai is None:
-            return {"ok": False, "reason": "ai_missing", "understanding": understanding}
-        from src.contacts.care_dispatcher import build_care_prompt
-
-        context_block = ""
-        inbox = getattr(request.app.state, "inbox_store", None)
-        if inbox is not None:
-            try:
-                msgs = inbox.list_recent_messages(
-                    str(item.get("contact_key") or ""), limit=8) or []
-                context_block = "\n".join(
-                    t for t in (str(m.get("text") or "").strip() for m in msgs) if t
-                )[:800]
-            except Exception:
-                context_block = ""
-        cm = _cm(request)
-        ai_name = "她"
-        try:
-            ai_name = str((cm.get_ai_config() or {}).get("ai_name") or "她")
-        except Exception:
-            ai_name = "她"
-        # B110④ 预览=派发同源：负样本块同样进预览 prompt（缺方法/读失败按空）
-        _recent_sent = []
-        try:
-            _recent_sent = store.recent_sent_texts(
-                str(item.get("contact_key") or ""), limit=4)
-        except Exception:
-            _recent_sent = []
-        # 实施84 P0-2 预览=派发同源：增强块（人设/记忆/目标）经派发器公开方法
-        # 取同一份 provider——预览看到的就是真发的口径。派发器缺席按空（旧口径）。
-        _extras = {}
-        try:
-            engine = getattr(request.app.state, "care_engine", None) or {}
-            disp = engine.get("dispatcher")
-            if disp is not None and hasattr(disp, "prompt_extras"):
-                _extras = disp.prompt_extras(item) or {}
-        except Exception:
-            _extras = {}
-        prompt = build_care_prompt(
-            item, context_block=context_block,
-            recent_sent=_recent_sent, ai_name=ai_name,
-            persona_line=str(_extras.get("persona_line") or ""),
-            memory_block=str(_extras.get("memory_block") or ""),
-            goal_block=str(_extras.get("goal_block") or ""))
-        try:
-            text = (await ai.chat(prompt) or "").strip()
-        except Exception:
-            logger.debug("care preview LLM 失败 sid=%s", sid, exc_info=True)
-            return {"ok": False, "reason": "llm_error", "understanding": understanding}
-        if not text:
-            return {"ok": False, "reason": "llm_empty", "understanding": understanding}
-        return {"ok": True, "id": int(sid), "mode": "event", "preview": text,
-                "understanding": understanding}
+        # M-1 A #218：处于「待运营确认」态的行 → 预览就是派发器已拟好并扣下的那稿
+        # （不再重新烧 LLM；运营看到的即将要发的原稿），带 hold_reason 供前端标注。
+        held = _hold_reason(item)
+        if held and str(item.get("sent_text") or "").strip():
+            return {"ok": True, "id": int(sid), "mode": "event", "held": held,
+                    "preview": str(item.get("sent_text") or ""),
+                    "understanding": understanding}
+        # 与派发同源的预览体（客户档案块 / 增强块 / 负样本 / 档案校验三态），见 _render_event_preview
+        pv = await _render_event_preview(request, dict(item))
+        if not pv.get("ok"):
+            return {"ok": False, "reason": str(pv.get("reason") or "llm_error"),
+                    "understanding": understanding}
+        return {"ok": True, "id": int(sid), "mode": "event", "preview": pv.get("preview"),
+                "understanding": understanding, "profile": pv.get("profile") or {},
+                "check": pv.get("check") or {}}
 
     # ── 实施84 P0-5：全部主动消息统一时间线（来源标注）────────────────────────
     _TL_RITUAL_NOTES = ("ritual", "milestone")

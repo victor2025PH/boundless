@@ -152,6 +152,20 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
 .cs6-und .warn{color:var(--amber)}
 .cs6-edit{width:100%;min-height:64px;margin-top:.35rem;font-size:.8rem;resize:vertical}
 .cs6-edit-ops{display:flex;gap:.4rem;align-items:center;margin-top:.3rem;font-size:.72rem}
+/* M-1 A #218：AI 润色先预览 / 待确认 / 到点状态 */
+.cs7-pv{margin:.5rem 0 .2rem;padding:.55rem .75rem;border:1px solid var(--bd);border-radius:8px;background:var(--bg2,rgba(99,102,241,.05));font-size:.8rem}
+.cs7-pv .ttl{font-weight:600;color:var(--t1);margin-bottom:.3rem}
+.cs7-pv .tx{white-space:pre-wrap;line-height:1.5;padding:.4rem .55rem;border-radius:6px;background:var(--bg);border:1px dashed var(--bd);margin:.3rem 0}
+.cs7-pv .meta{font-size:.72rem;color:var(--t3);margin:.2rem 0}
+.cs7-pv .warn{font-size:.74rem;color:var(--red,#dc2626);margin:.25rem 0}
+.cs7-pv .info{font-size:.74rem;color:var(--amber);margin:.25rem 0}
+.cs7-pv .ops{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem}
+.cs7-held{display:inline-block;font-size:.66rem;font-weight:600;padding:.08rem .45rem;border-radius:4px;background:rgba(245,158,11,.16);color:#b45309;margin-left:.3rem;vertical-align:middle}
+.cs7-held-box{margin:.35rem 0;padding:.4rem .6rem;border-left:3px solid var(--amber);background:rgba(245,158,11,.08);border-radius:0 6px 6px 0;font-size:.78rem}
+.cs7-held-box .lead{font-size:.7rem;color:var(--t3);margin-bottom:.15rem}
+.cs7-held-box .why{font-size:.68rem;color:var(--t3);margin-top:.2rem}
+.cs7-status{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.72rem;color:var(--t2);margin:-.2rem 0 .45rem}
+.cs7-status.dry{color:var(--amber)}
 /* ── P0 2026-08-03 历史可读性：名字链接 / 投递真相 / 回复徽标 / 话术展开 ── */
 .cs4-sub{color:var(--t3);font-size:.72rem;margin-top:.15rem}
 .cs4-rp,.cs4-dv{display:inline-block;font-size:.72rem;font-weight:600;padding:.12rem .45rem;border-radius:4px;background:var(--input);color:var(--t3)}/* 内距对齐 badge-st，同格并排不跳高 */
@@ -227,8 +241,9 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
     <div id="cs-plan"></div>
 
     <details class="cs3-fold" id="cs-add-details">
-      <summary>{{ (i18n or {}).get('cs3_add_toggle', "＋ 补一条关怀（AI 没听到的约定）") }}</summary>
-      <div class="cs-addp" id="cs-add-panel">
+      <summary>{{ (i18n or {}).get('cs7_add_toggle', "＋ 补一条关怀（到点发一句话）") }}</summary>
+      <!-- M-1 A #218（D-M2）：默认档=原文直发（用户填的是要发的话）；「让 AI 润色」可选且必须先预览确认 -->
+      <div class="cs-addp kind-verbatim" id="cs-add-panel">
         <div class="cs-p-row">
           <span class="cs-p-lb">{{ (i18n or {}).get('cs2_add_who', "给谁") }}</span>
           <div class="cs-p-main">
@@ -249,12 +264,12 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
         <div class="cs-p-row">
           <span class="cs-p-lb">{{ (i18n or {}).get('cs6_add_kind', "类型") }}</span>
           <div class="cs-p-main cs-chips" id="cs-p-kinds">
-            <button type="button" class="cs-chip on" data-kind="event" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs6_kind_event_t', 'AI 会以人设口吻自然关心客户的这件事（经 LLM 拟稿）') }}">{{ (i18n or {}).get('cs6_kind_event', "客户的事（AI 自然关心）") }}</button>
-            <button type="button" class="cs-chip" data-kind="verbatim" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs6_kind_verbatim_t', '到点原样发出你写的这句话，不经 AI 改写') }}">{{ (i18n or {}).get('cs6_kind_verbatim', "到点发这句话（原文直发）") }}</button>
+            <button type="button" class="cs-chip on" data-kind="verbatim" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs6_kind_verbatim_t', '到点原样发出你写的这句话，不经 AI 改写') }}">{{ (i18n or {}).get('cs6_kind_verbatim', "到点发这句话（原文直发）") }}</button>
+            <button type="button" class="cs-chip" data-kind="event" onclick="csKindChip(this)" title="{{ (i18n or {}).get('cs7_kind_event_t', 'AI 会结合客户档案与近期对话改写成一句关怀；必须先看预览、确认后才排上') }}">{{ (i18n or {}).get('cs7_kind_event', "让 AI 润色（先预览再排上）") }}</button>
           </div>
         </div>
         <div class="cs-p-row">
-          <span class="cs-p-lb" id="cs-p-what-lb">{{ (i18n or {}).get('cs6_add_what_event', "客户的什么事") }}</span>
+          <span class="cs-p-lb" id="cs-p-what-lb">{{ (i18n or {}).get('cs6_add_what_verbatim', "要发的话") }}</span>
           <div class="cs-p-main cs-chips" id="cs-p-topics">
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_interview', "面试") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_followup', "复查") }}</button>
@@ -262,7 +277,7 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_birthday', "生日") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_trip', "旅行") }}</button>
             <button type="button" class="cs-chip" onclick="csTopicChip(this)">{{ (i18n or {}).get('cs2_topic_move', "搬家") }}</button>
-            <input type="text" id="cs-p-topic" class="f-input" oninput="_csIntentWatch()" placeholder="{{ (i18n or {}).get('cs2_add_topic_ph', '或自己填：面试 / 复查 / 提车 …') }}">
+            <input type="text" id="cs-p-topic" class="f-input" oninput="_csIntentWatch()" placeholder="{{ (i18n or {}).get('cs6_add_text_ph', '到点原样发出的整句话，例如：早上好呀，今天也要加油～') }}">
             <div id="cs-p-intent" class="cs6-intent" style="display:none">
               <span id="cs-p-intent-txt"></span>
               <button type="button" class="cs-act p" onclick="csIntentSwitch()">{{ (i18n or {}).get('cs6_intent_switch', "改为「到点发这句话」") }}</button>
@@ -285,6 +300,8 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
             <span id="cs-p-msg"></span>
           </div>
         </div>
+        <!-- M-1 A #218：AI 润色档「先看后排」——后端 preview_required 回预览稿 + 档案 + 校验，确认才入队 -->
+        <div id="cs-p-preview" class="cs7-pv" style="display:none"></div>
       </div>
     </details>
 
@@ -614,23 +631,41 @@ function _csFarChip(it){
 }
 /* J-8 #182：原文直发行按 topic_norm 前缀识别（与后端 is_verbatim_care 同一分界） */
 function _csIsVerbatim(it){return String(it&&it.topic_norm||'').indexOf('verbatim:')===0;}
+/* M-1 A #218：强制预览原因码 → 人话（后端 hold_reason / check.reason） */
+function _csPvReason(code){
+  var c=String(code||'').replace(/^profile_contradiction:/,'');
+  var k='cs7_pv_reason_'+c;
+  var t=window.T(k);
+  return (t&&t!==k)?t:c;
+}
 function _csCardHtml(it){
   var name=_csItemName(it);
   var vb=_csIsVerbatim(it);
+  var held=String(it.hold_reason||'');
   var q=it.source_text
     ? '<div class="q"><span class="ql">'+window.T(vb?'cs6_card_verbatim_q':'cs2_card_quote')+'</span>「'+esc(it.source_text)+'」</div>'
     : '';
+  /* 待运营确认：派发器已拟好但扣下的那稿（首次真发 / 含地名 / 含人名），点头才发 */
+  var heldBox=held
+    ? '<div class="cs7-held-box"><div class="lead">'+esc(window.T('cs7_held_lead'))+'</div>'+
+      '<div>'+esc(it.hold_text||'')+'</div>'+
+      '<div class="why">'+esc(window.Tf('cs7_held_why',{reason:_csPvReason(held)}))+'</div></div>'
+    : '';
+  var heldBtn=held
+    ? '<button type="button" class="cs-act p" onclick="csHeldSend('+it.id+')">'+window.T('cs7_held_send')+'</button>'
+    : '<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>';
   return '<div class="cs3-card">'+
     '<div class="hd">'+_csAvaLetter(name)+
       '<span class="nm">'+esc(name)+'</span>'+
       '<span class="pf">'+esc(it.platform||'')+'</span>'+
-      '<span class="tp">'+esc(it.topic||'—')+(vb?'<span class="cs6-vb" title="'+esc(window.T('cs6_kind_verbatim_t'))+'">'+esc(window.T('cs6_vb_badge'))+'</span>':'')+'</span>'+
+      '<span class="tp">'+esc(it.topic||'—')+(vb?'<span class="cs6-vb" title="'+esc(window.T('cs6_kind_verbatim_t'))+'">'+esc(window.T('cs6_vb_badge'))+'</span>':'')+
+        (held?'<span class="cs7-held">'+esc(window.T('cs7_held_badge'))+'</span>':'')+'</span>'+
       '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csFarChip(it)+'</span>'+
-    '</div>'+q+
+    '</div>'+q+heldBox+
     '<div class="pv" id="cs-pv-'+it.id+'"></div>'+
     '<div class="ops">'+
-      '<button type="button" class="cs-act" id="cs-pvbtn-'+it.id+'" onclick="csPreview('+it.id+')">'+window.T('cs2_preview_btn')+'</button>'+
-      '<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>'+
+      '<button type="button" class="cs-act" id="cs-pvbtn-'+it.id+'" onclick="csPreview('+it.id+')">'+window.T(held?'cs6_edit_btn':'cs2_preview_btn')+'</button>'+
+      heldBtn+
       '<button type="button" class="cs-act" onclick="csResched('+it.id+')">'+window.T('cs3_act_resched')+'</button>'+
       '<button type="button" class="cs-act" onclick="csSkip('+it.id+')">'+window.T('cs3_act_skip')+'</button>'+
     '</div>'+
@@ -654,14 +689,45 @@ function _csRenderPlan(d){
     return;
   }
   var labels={overdue:'cs2_group_due',today:'cs2_group_today',tomorrow:'cs2_group_tmr',week:'cs2_group_week',later:'cs2_group_later'};
+  var eng=d.engine||{};
   var html='';
   groups.forEach(function(g){
     html+='<div class="cs3-group '+esc(g.key)+'">'+
       '<div class="cs3-group-h">'+window.T(labels[g.key]||'cs2_group_later')+' · '+g.items.length+'</div>'+
+      (g.key==='overdue'?_csOverdueStatusHtml(eng,g.items):'')+
       g.items.map(_csCardHtml).join('')+
       '</div>';
   });
   box.innerHTML=html;
+}
+/* M-1 A #214：到期组不再只写「下轮巡检就处理」——按引擎真实状态说话：
+   模拟运行中（到点只拟稿不真发 + 一键开真发）/ 排队中（≤N 分钟）/ 全部待确认。 */
+function _csOverdueStatusHtml(eng,items){
+  var allHeld=items.length>0&&items.every(function(it){return !!it.hold_reason;});
+  if(eng.dry_run){
+    return '<div class="cs7-status dry"><span>⏸ '+esc(window.T('cs7_status_dry'))+'</span>'+
+      '<button type="button" class="cs-act p" onclick="csEngine(\'go_live\')">'+esc(window.T('cs7_status_dry_btn'))+'</button></div>';
+  }
+  if(allHeld){
+    return '<div class="cs7-status"><span>✋ '+esc(window.T('cs7_status_held'))+'</span></div>';
+  }
+  var n=Math.max(1,Math.ceil((Number(eng.interval_sec)||600)/60));
+  return '<div class="cs7-status"><span>⏳ '+esc(window.Tf('cs7_status_queue',{n:n}))+'</span></div>';
+}
+/* 待确认行「就这样发」：把派发器扣下的原稿经 send-text（deliver_text）送出站队列 */
+async function csHeldSend(id){
+  var it=null;
+  try{(_csPlan.groups||[]).forEach(function(g){(g.items||[]).forEach(function(x){if(x.id===id)it=x;});});}catch(_){}
+  var text=String((it&&it.hold_text)||'').trim();
+  if(!text){csPreview(id);return;}
+  if(!confirm(window.T('cs7_held_confirm')))return;
+  try{
+    var r=await apiFetch('/api/care/schedule/'+id+'/send-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})},{timeoutMs:60000});
+    var d=await r.json();
+    if(!d.ok){alert(window.T('cs6_edit_fail')+(d.reason||r.status));return;}
+    csPlanLoad();
+    _csHistReload();
+  }catch(e){alert(window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80));}
 }
 
 /* ── 拟稿（dry）/ 最近已发（live） ── */
@@ -877,14 +943,34 @@ async function csEditSend(id){
   }catch(e){if(msg){msg.style.color='var(--red)';msg.textContent=window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80);}}
 }
 async function csSendNow(id){
-  if(!confirm(window.T('cs_js003')))return;
+  /* M-1 A #214：模拟运行中「立即发」不再静默——先说清「不会真发」，做完也如实回话 */
+  var dry=!!(_csPlan&&_csPlan.engine&&_csPlan.engine.dry_run);
+  if(!confirm(window.T(dry?'cs7_sendnow_dry_confirm':'cs_js003')))return;
   try{
     var res=await apiFetch('/api/care/schedule/'+id+'/send-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
     var d=await res.json();
     if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.message||d.reason));return;}
+    var n=Math.max(1,Math.ceil((Number(d.interval_sec)||600)/60));
+    var hint=d.dry_run?window.T('cs7_sendnow_dry_done')
+      :(d.held?window.T('cs7_sendnow_held_done'):window.Tf('cs7_sendnow_done',{n:n}));
+    _csHint(hint);
     csPlanLoad();
     _csHistReload();
   }catch(e){alert(e);}
+}
+var _csHintEl=null;
+function _csHint(msg){
+  try{
+    if(!_csHintEl){
+      _csHintEl=document.createElement('div');
+      _csHintEl.style.cssText='position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99991;max-width:min(480px,calc(100vw - 32px));padding:10px 16px;border-radius:10px;background:rgba(15,23,42,.92);color:#fff;font-size:13px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35);display:none';
+      document.body.appendChild(_csHintEl);
+    }
+    _csHintEl.textContent=String(msg||'');
+    _csHintEl.style.display='block';
+    clearTimeout(_csHintEl._t);
+    _csHintEl._t=setTimeout(function(){_csHintEl.style.display='none';},6000);
+  }catch(_){alert(msg);}
 }
 function csResched(id){
   var row=document.getElementById('cs-rs-'+id);
@@ -1056,8 +1142,9 @@ function csTopicChip(el){
   el.classList.add('on');
   document.getElementById('cs-p-topic').value=el.textContent.trim();
 }
-/* ── J-8 #182：类型切换 + 意图守卫（前端就地判，后端 add 端点同一判定源二次拦） ── */
-var _csKind='event',_csIntentTimer=null,_csIntentKeep=false;
+/* ── J-8 #182：类型切换 + 意图守卫（前端就地判，后端 add 端点同一判定源二次拦） ──
+   M-1 A #218（D-M2）：默认档改 verbatim——用户填的是要发的话，不是「客户说过的事」。 */
+var _csKind='verbatim',_csIntentTimer=null,_csIntentKeep=false;
 /* 与后端 detect_instruction_intent 同口径的**轻量**前置判（零往返即时提示）；
    拿不准的交给 /api/care/intent-check 复核。字面量用 \u 转义：script 内 CJK 门禁不豁免。 */
 var _CS_LEAD_VERBS=['\u95ee\u5019','\u4e3b\u52a8\u95ee\u5019','\u63d0\u9192','\u544a\u8bc9','\u53d1','\u8bf4','\u795d','\u95ee\u95ee','\u95ee\u4e00\u4e0b','\u8ddf\u4ed6','\u8ddf\u5979','\u7ed9\u4ed6','\u7ed9\u5979','\u56de\u590d','\u8054\u7cfb','greet','remind','tell','send','say','wish','ask'];
@@ -1080,6 +1167,7 @@ function csKindChip(el){
   var inp=document.getElementById('cs-p-topic');
   if(inp)inp.placeholder=window.T(_csKind==='verbatim'?'cs6_add_text_ph':'cs2_add_topic_ph');
   _csIntentKeep=false;
+  if(typeof _csPvHide==='function')_csPvHide();
   _csIntentWatch();
 }
 function _csIntentShow(on){
@@ -1130,6 +1218,47 @@ function _csDueAt(kind){
   }
   return d.getTime()/1000;
 }
+function _csAddPayload(topic,mode){
+  var payload={
+    contact_key:_csSel.conversation_id,
+    platform:_csSel.platform||'',
+    account_id:_csSel.account_id||'default',
+    chat_key:_csSel.chat_key||'',
+    topic:topic,
+    mode:mode
+  };
+  if(mode==='verbatim')payload.text=topic;
+  else if(_csIntentKeep)payload.confirm_event=true;
+  if(_csWhen==='custom'){payload.due_in_hours=parseFloat(document.getElementById('cs-p-hours').value||'24');}
+  else if(_csWhen==='h24'){payload.due_in_hours=24;}
+  else{payload.due_at=_csDueAt(_csWhen);}
+  return payload;
+}
+function _csPvHide(){var p=document.getElementById('cs-p-preview');if(p){p.style.display='none';p.innerHTML='';}}
+/* M-1 A #218：AI 润色档「先看后排」——后端回 preview_required（预览稿 + 已注入档案 + 校验三态），
+   运营确认才带 preview_confirmed 重发；与档案矛盾的稿被拦，只能改原文直发或改写。 */
+function _csPvShow(d,topic){
+  var p=document.getElementById('cs-p-preview');if(!p)return;
+  var prof=d.profile||{},bits=[];
+  if(prof.country||prof.residence)bits.push(prof.residence||prof.country);
+  if(prof.known_since)bits.push(prof.known_since);
+  else if(Number(prof.known_days)>0)bits.push(prof.known_days+'d');
+  if(prof.language)bits.push(prof.language);
+  var check=d.check||{},verdict=String(check.verdict||'pass');
+  var und=_csUnderstandingHtml(d.understanding);
+  var h='<div class="ttl">'+esc(window.T('cs7_pv_title'))+'</div>'+und;
+  h+='<div class="tx">'+esc(d.preview||'')+'</div>';
+  h+='<div class="meta">'+(bits.length?esc(window.T('cs7_pv_profile'))+esc(bits.join(' · ')):esc(window.T('cs7_pv_profile_none')))+'</div>';
+  if(verdict==='block')h+='<div class="warn">'+esc(window.Tf('cs7_pv_check_block',{reason:_csPvReason(check.reason)}))+'</div>';
+  else if(verdict==='preview')h+='<div class="info">'+esc(window.Tf('cs7_pv_check_preview',{reason:_csPvReason(check.reason)}))+'</div>';
+  h+='<div class="ops">'+
+    (verdict==='block'?'':'<button type="button" class="btn btn-p" onclick="_csAddSubmit(\'event\',true)">'+esc(window.T('cs7_pv_confirm'))+'</button>')+
+    '<button type="button" class="cs-act p" onclick="_csAddSubmit(\'verbatim\',false)">'+esc(window.T('cs7_pv_verbatim'))+'</button>'+
+    '<button type="button" class="cs-act" onclick="_csPvHide()">'+esc(window.T('cs7_pv_cancel'))+'</button>'+
+    '</div>';
+  p.innerHTML=h;p.style.display='';
+  p._topic=topic;
+}
 async function csAdd2(){
   var msg=document.getElementById('cs-p-msg');
   var topic=(document.getElementById('cs-p-topic').value||'').trim();
@@ -1137,22 +1266,19 @@ async function csAdd2(){
     msg.style.color='var(--amber)';msg.textContent=window.T('cs2_add_need');
     return;
   }
-  var payload={
-    contact_key:_csSel.conversation_id,
-    platform:_csSel.platform||'',
-    account_id:_csSel.account_id||'default',
-    chat_key:_csSel.chat_key||'',
-    topic:topic,
-    mode:_csKind
-  };
-  if(_csKind==='verbatim')payload.text=topic;
-  else if(_csIntentKeep)payload.confirm_event=true;
-  if(_csWhen==='custom'){payload.due_in_hours=parseFloat(document.getElementById('cs-p-hours').value||'24');}
-  else if(_csWhen==='h24'){payload.due_in_hours=24;}
-  else{payload.due_at=_csDueAt(_csWhen);}
+  _csPvHide();
+  await _csAddSubmit(_csKind,false);
+}
+async function _csAddSubmit(mode,confirmed){
+  var msg=document.getElementById('cs-p-msg');
+  var pv=document.getElementById('cs-p-preview');
+  var topic=(document.getElementById('cs-p-topic').value||'').trim()||(pv&&pv._topic)||'';
+  if(!_csSel||!topic){msg.style.color='var(--amber)';msg.textContent=window.T('cs2_add_need');return;}
+  var payload=_csAddPayload(topic,mode);
+  if(mode==='event'&&confirmed)payload.preview_confirmed=true;
   msg.style.color='var(--t3)';msg.textContent='…';
   try{
-    var res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},{timeoutMs:60000});
+    var res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},{timeoutMs:90000});
     var d=await res.json();
     if(!d.ok&&d.reason==='looks_like_instruction'){
       /* 后端守卫拦下：不入队，把切换提示亮出来让运营决定 */
@@ -1160,8 +1286,15 @@ async function csAdd2(){
       _csIntentShow(true);
       return;
     }
+    if(!d.ok&&d.reason==='preview_required'){
+      msg.textContent='';
+      if(!d.preview){msg.style.color='var(--red)';msg.textContent=window.T('cs7_pv_fail')+(d.preview_reason||'');return;}
+      _csPvShow(d,topic);
+      return;
+    }
     if(!d.ok){msg.style.color='var(--red)';msg.textContent=window.T('cs2_add_fail')+(d.message||d.reason||'');return;}
-    msg.style.color='var(--green)';msg.textContent=window.T(_csKind==='verbatim'?'cs6_add_ok_verbatim':'cs2_add_ok');
+    _csPvHide();
+    msg.style.color='var(--green)';msg.textContent=window.T(mode==='verbatim'?'cs6_add_ok_verbatim':'cs7_add_ok_event');
     _csIntentKeep=false;_csIntentShow(false);
     document.getElementById('cs-p-topic').value='';
     document.getElementById('cs-p-topics').querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});

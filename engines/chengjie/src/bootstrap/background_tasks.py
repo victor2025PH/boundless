@@ -382,6 +382,18 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             assistant.logger.debug("goal product_guard 接线失败（退回裸 send）",
                                    exc_info=True)
 
+        def _care_profile(item: dict) -> dict:
+            """客户档案（M-1 A #218）：inbox 会话 / conv_meta 用户时钟国家 / contacts 档案
+            → {country, residence, language, known_since, known_days, display_name}。
+            全部 best-effort，任一源缺失即该字段为空。"""
+            from src.contacts.care_profile import build_customer_profile
+            try:
+                cstore = getattr(getattr(assistant, "contacts", None), "store", None)
+            except Exception:
+                cstore = None
+            return build_customer_profile(
+                item, inbox_store=assistant.inbox_store, contacts_store=cstore)
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client,
             send_callback=_care_send_guarded,
@@ -401,13 +413,17 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             prompt_extras_provider=_care_prompt_extras,
             user_clock_provider=_care_user_clock,
             goal_row_policy=_goal_row_policy,
+            profile_provider=_care_profile,
         )
         await dispatcher.start()
         assistant._care_dispatcher = dispatcher
         if web_app is not None:
             engine_state["dispatcher"] = dispatcher
+        # M-1 A #214：这行只是**启动快照**；dry_run 唯一真值 = dispatcher.effective_dry_run()
+        # （实时配置），翻转时 care_dispatcher 另打一行「dry_run 实时值变化」。
         assistant.logger.info(
-            "✅ proactive_care 派发循环已常备（interval=%ss, enabled=%s, dry_run=%s）",
+            "✅ proactive_care 派发循环已常备（interval=%ss, enabled=%s, dry_run=%s ← 启动快照，"
+            "实时值以 /api/care/health 与「dry_run 实时值变化」日志为准）",
             cfg.get("interval_sec", 600), bool(cfg.get("enabled", False)),
             bool(cfg.get("dry_run", False)))
 

@@ -507,6 +507,55 @@ class CareScheduleStore:
             logger.debug("care_schedule mark_dry_sampled failed: %s", e)
             return False
 
+    # ── M-1 A（#218，2026-09-06）：LLM 拟稿强制预览 → 行留 pending 待运营确认 ─────
+    HOLD_NOTE_PREFIX = "hold:"
+
+    @classmethod
+    def hold_reason(cls, item: Any) -> str:
+        """该 pending 行是否处于「待运营确认」态（note=``hold:<reason>``）→ 原因码；否则 ""。"""
+        try:
+            n = str((item or {}).get("note") or "")
+        except Exception:
+            return ""
+        if not n.startswith(cls.HOLD_NOTE_PREFIX):
+            return ""
+        return n[len(cls.HOLD_NOTE_PREFIX):].strip()
+
+    def mark_hold_for_preview(self, sid: int, *, sent_text: str, reason: str,
+                              now: Optional[float] = None) -> bool:
+        """LLM 拟稿命中「首次真发 / 含地名 / 含人名」→ **不发**，草稿快照落 ``sent_text``、
+        ``note=hold:<reason>``，行保持 pending：派发器此后跳过该行，直到运营在面板上
+        「就这样发 / 改一改再发」（``deliver_text`` → mark_sent）或跳过 / 逾期过期。
+        刻意**不**碰 ``dry_sampled_at``：held 行不该混进试运行审核队列（那是 👍/👎
+        质量评审，这里是「发不发」的人工确认，两个动作两个入口）。"""
+        r = str(reason or "").strip()[:80] or "preview"
+        try:
+            with self._lock:
+                n = float(now if now is not None else time.time())
+                cur = self._conn.execute(
+                    "UPDATE care_schedule SET note = ?, sent_text = ?,"
+                    " updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (self.HOLD_NOTE_PREFIX + r, str(sent_text or "")[:2000], n, int(sid)))
+                self._conn.commit()
+                return bool(cur.rowcount)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule mark_hold_for_preview failed: %s", e)
+            return False
+
+    def has_real_sent(self, contact_key: str) -> bool:
+        """该联系人此前是否**真发**过关怀（sent 且 note 以 deferred:/manual: 开头；
+        dry_run 消费式旧行不算）。首次真发 → LLM 拟稿强制预览。异常按「已发过」
+        （fail-open：预览是保守动作，判不出时不该把每条都扣下）。"""
+        try:
+            row = self._conn.execute(
+                "SELECT 1 FROM care_schedule WHERE contact_key = ? AND status = 'sent'"
+                " AND (note LIKE 'deferred:%' OR note LIKE 'manual:%') LIMIT 1",
+                (str(contact_key),),
+            ).fetchone()
+            return row is not None
+        except Exception:
+            return True
+
     def backfill_sent_text(self, sid: int, text: str) -> bool:
         """存量回填：只补 sent 行的**空**快照（工具用；已有快照不覆盖，幂等安全）。
 

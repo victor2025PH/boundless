@@ -580,7 +580,197 @@ def fabrication_counters() -> dict:
     return {k: dict(v) for k, v in _COUNTERS.items()}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# M-1 A（#214 #218，2026-09-06）：「与客户档案矛盾」守卫 —— 出站内容正确性第三条腿
+#
+# 实锤：运营给菲律宾本地客户（相识一年）排了一条关怀，LLM 改写成「How are you
+# finding life in the Philippines?」真发出去——把本地人当成刚到菲律宾的外国人、把老
+# 客当成新客。前两条守卫（编造共同回忆 / 无来源近况）都不盖这类错：句子里没有
+# 「你以前」也没有 AI 自己的近况，它是**与已知档案矛盾**。
+#
+# 判据只吃两类硬事实（宁可漏拦不误伤）：
+#   ① 客户的国家/居住地 C（档案 country / residence）：文案对 C 用「外来者框架」
+#      （life in C / moved to C / 在 C 的生活习惯吗 / 去 C 好玩吗 …）→ 矛盾；
+#   ② 相识时长 ≥30 天：文案用「初识框架」（nice to meet you / 很高兴认识你 /
+#      初次见面 …）→ 矛盾。
+# 档案缺字段 → 对应判据不参与；档案全空 → 恒不拦。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 极简 gazetteer：ISO-2 → (中文名/城市, 英文名/城市, 民族称谓)。只收对客业务高频地区
+# （东南亚 + 主要英语国 + 东亚），够用即可；未收录的地名只是不参与判定。
+PLACE_GAZETTEER: dict = {
+    "PH": (("菲律宾", "马尼拉", "宿务", "宿雾", "达沃"),
+           ("philippines", "manila", "cebu", "davao", "quezon"),
+           ("filipino", "filipina", "pinoy", "pinay")),
+    "TH": (("泰国", "曼谷", "清迈", "普吉", "芭提雅"),
+           ("thailand", "bangkok", "chiang mai", "phuket", "pattaya"), ("thai",)),
+    "VN": (("越南", "河内", "胡志明", "岘港"),
+           ("vietnam", "hanoi", "ho chi minh", "saigon", "da nang"), ("vietnamese",)),
+    "ID": (("印尼", "印度尼西亚", "雅加达", "巴厘"),
+           ("indonesia", "jakarta", "bali", "surabaya"), ("indonesian",)),
+    "MY": (("马来西亚", "吉隆坡", "槟城"),
+           ("malaysia", "kuala lumpur", "penang", "johor"), ("malaysian",)),
+    "SG": (("新加坡",), ("singapore",), ("singaporean",)),
+    "KH": (("柬埔寨", "金边"), ("cambodia", "phnom penh", "siem reap"), ("cambodian", "khmer")),
+    "MM": (("缅甸", "仰光"), ("myanmar", "burma", "yangon"), ("burmese",)),
+    "LA": (("老挝", "万象"), ("laos", "vientiane"), ("laotian", "lao")),
+    "JP": (("日本", "东京", "大阪", "京都"),
+           ("japan", "tokyo", "osaka", "kyoto"), ("japanese",)),
+    "KR": (("韩国", "首尔", "釜山"), ("korea", "seoul", "busan"), ("korean",)),
+    "CN": (("中国", "北京", "上海", "深圳", "广州", "成都"),
+           ("china", "beijing", "shanghai", "shenzhen", "guangzhou", "chengdu"), ("chinese",)),
+    "HK": (("香港",), ("hong kong", "hongkong"), ()),
+    "TW": (("台湾", "台北", "高雄"), ("taiwan", "taipei", "kaohsiung"), ("taiwanese",)),
+    "IN": (("印度", "孟买", "新德里", "班加罗尔"),
+           ("india", "mumbai", "delhi", "bangalore", "bengaluru"), ("indian",)),
+    "PK": (("巴基斯坦", "卡拉奇"), ("pakistan", "karachi", "lahore"), ("pakistani",)),
+    "BD": (("孟加拉", "达卡"), ("bangladesh", "dhaka"), ("bangladeshi",)),
+    "NP": (("尼泊尔", "加德满都"), ("nepal", "kathmandu"), ("nepali", "nepalese")),
+    "AE": (("阿联酋", "迪拜", "阿布扎比"), ("dubai", "abu dhabi", "uae", "emirates"), ("emirati",)),
+    "SA": (("沙特", "利雅得"), ("saudi", "riyadh", "jeddah"), ("saudi",)),
+    "TR": (("土耳其", "伊斯坦布尔"), ("turkey", "türkiye", "istanbul", "ankara"), ("turkish",)),
+    "EG": (("埃及", "开罗"), ("egypt", "cairo"), ("egyptian",)),
+    "NG": (("尼日利亚", "拉各斯"), ("nigeria", "lagos", "abuja"), ("nigerian",)),
+    "ZA": (("南非", "约翰内斯堡", "开普敦"),
+           ("south africa", "johannesburg", "cape town"), ("south african",)),
+    "US": (("美国", "纽约", "洛杉矶", "旧金山", "加州"),
+           ("america", "the states", "the us", "usa", "new york", "los angeles",
+            "san francisco", "california", "texas", "florida", "chicago"), ("american",)),
+    "CA": (("加拿大", "多伦多", "温哥华"), ("canada", "toronto", "vancouver", "montreal"), ("canadian",)),
+    "GB": (("英国", "伦敦", "曼彻斯特"),
+           ("england", "britain", "the uk", "london", "manchester"), ("british", "english")),
+    "AU": (("澳洲", "澳大利亚", "悉尼", "墨尔本"),
+           ("australia", "sydney", "melbourne", "brisbane", "perth"), ("australian", "aussie")),
+    "NZ": (("新西兰", "奥克兰"), ("new zealand", "auckland"), ("kiwi",)),
+    "DE": (("德国", "柏林", "慕尼黑"), ("germany", "berlin", "munich"), ("german",)),
+    "FR": (("法国", "巴黎"), ("france", "paris"), ("french",)),
+    "ES": (("西班牙", "马德里", "巴塞罗那"), ("spain", "madrid", "barcelona"), ("spanish",)),
+    "IT": (("意大利", "罗马", "米兰"), ("italy", "rome", "milan"), ("italian",)),
+    "RU": (("俄罗斯", "莫斯科"), ("russia", "moscow"), ("russian",)),
+    "BR": (("巴西", "圣保罗", "里约"), ("brazil", "sao paulo", "rio"), ("brazilian",)),
+    "MX": (("墨西哥",), ("mexico", "mexico city", "cancun"), ("mexican",)),
+}
+
+_COUNTRY_NAME_TO_CODE: dict = {}
+for _code, (_zh, _en, _dem) in PLACE_GAZETTEER.items():
+    for _n in (*_zh, *_en, *_dem, _code.lower()):
+        _COUNTRY_NAME_TO_CODE.setdefault(str(_n).lower(), _code)
+
+
+def normalize_country_code(value: str) -> str:
+    """任意国家/城市/民族写法（『菲律宾』/『Philippines』/『Cebu』/『PH』/『Filipino』）→ ISO-2；
+    认不出 → ""。"""
+    v = str(value or "").strip().lower()
+    if not v:
+        return ""
+    if v in _COUNTRY_NAME_TO_CODE:
+        return _COUNTRY_NAME_TO_CODE[v]
+    # 自由文本（「菲律宾宿务」「Cebu, Philippines」）：按最长名称子串命中
+    best = ""
+    best_len = 0
+    for name, code in _COUNTRY_NAME_TO_CODE.items():
+        if len(name) <= best_len:
+            continue
+        if _name_in_text(name, v):
+            best, best_len = code, len(name)
+    return best
+
+
+def _name_in_text(name: str, low_text: str) -> bool:
+    """地名是否出现在（已小写的）文本里：拉丁名按词边界，CJK 名按子串。"""
+    n = str(name or "").lower()
+    if not n:
+        return False
+    if re.search(r"[a-z]", n):
+        return re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", low_text) is not None
+    return n in low_text
+
+
+def place_mentions(text: str) -> List[str]:
+    """文案里提到的国家/地区（ISO-2 列表，去重保序）。只认 gazetteer 内地名；
+    民族称谓（Filipino）也算提到该国。"""
+    low = str(text or "").lower()
+    if not low:
+        return []
+    out: List[str] = []
+    for code, (zh, en, dem) in PLACE_GAZETTEER.items():
+        for n in (*zh, *en, *dem):
+            if _name_in_text(n, low):
+                if code not in out:
+                    out.append(code)
+                break
+    return out
+
+
+# 「外来者框架」：把对方当成**刚到 / 旅居 / 造访** C 的人才会说的话。
+_OUTSIDER_FRAME_EN = re.compile(
+    r"\b(life in|living in|live in|moved? to|moving to|settl(?:e|ed|ing) in|"
+    r"getting used to|adjust(?:ed|ing)? to|adapt(?:ed|ing)? to|"
+    r"how (?:do|are|did) you (?:like|find|finding|enjoy|enjoying)|finding life|"
+    r"how(?:'s| is) (?:life|it) (?:in|over there)|welcome to|enjoy(?:ing)? your (?:time|stay)|"
+    r"your (?:stay|trip|visit|time) (?:in|to)|(?:been|going|went|travel(?:l)?ing|flying|fly) to|"
+    r"visit(?:ing)?|vacation in|holiday in|arrive[ds]? in|landed in|there yet)\b",
+    re.IGNORECASE,
+)
+_OUTSIDER_FRAME_ZH = (
+    "的生活怎么样", "生活怎么样", "生活习惯", "习惯那边", "适应那边", "适应了吗", "习惯了吗",
+    "刚到", "刚去", "来到", "去了", "到了吗", "旅行", "旅游", "度假", "出差", "好玩吗", "玩得",
+    "那边天气", "那边怎么样", "在那边", "过去了", "飞过去", "落地",
+)
+
+# 「初识框架」：只对刚认识的人说的话。
+_NEW_ACQ_EN = re.compile(
+    r"\b(nice|glad|pleased|great|lovely|good) to (?:finally )?meet you\b|"
+    r"\bpleasure to meet you\b|\bfirst time (?:we|to) (?:talk|chat|speak)|"
+    r"\bwe just met\b|\bnew friend\b|\bgetting to know you\b|\bjust started talking\b",
+    re.IGNORECASE,
+)
+_NEW_ACQ_ZH = ("很高兴认识你", "认识你很高兴", "初次见面", "刚认识", "新朋友", "第一次聊",
+               "初次聊", "很高兴认识您", "第一次跟你聊", "刚加你")
+
+_KNOWN_SINCE_MIN_DAYS = {"recent": 0, "months": 60, "halfyear": 180, "years": 365}
+
+
+def known_days_from_profile(profile: Optional[dict]) -> int:
+    """档案 → 相识天数下限（known_days 显式值优先，其次 known_since 档位；未知 → 0）。"""
+    prof = profile or {}
+    try:
+        d = int(float(prof.get("known_days") or 0))
+    except (TypeError, ValueError):
+        d = 0
+    ks = str(prof.get("known_since") or "").strip().lower()
+    return max(d, _KNOWN_SINCE_MIN_DAYS.get(ks, 0))
+
+
+def detect_profile_contradiction(text: str, profile: Optional[dict]) -> Tuple[bool, str]:
+    """出站文案是否与客户档案矛盾。返回 ``(是否矛盾, 原因码)``。
+
+    原因码：``local_as_foreigner``（把 C 的本地人当外来者）/ ``old_as_new``（把老客当
+    新客）/ ``""``。``profile`` 键：``country`` / ``residence``（任意写法，内部归一
+    ISO-2）、``known_since``（recent/months/halfyear/years）、``known_days``。
+    纯函数、绝不抛；档案缺字段即该判据不参与。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return (False, "")
+    prof = profile or {}
+    home = (normalize_country_code(str(prof.get("residence") or ""))
+            or normalize_country_code(str(prof.get("country") or "")))
+    if home and home in place_mentions(t):
+        if _OUTSIDER_FRAME_EN.search(t) or any(k in t for k in _OUTSIDER_FRAME_ZH):
+            return (True, "local_as_foreigner")
+    if known_days_from_profile(prof) >= 30:
+        if _NEW_ACQ_EN.search(t) or any(k in t for k in _NEW_ACQ_ZH):
+            return (True, "old_as_new")
+    return (False, "")
+
+
 __all__ = [
+    "PLACE_GAZETTEER",
+    "normalize_country_code",
+    "place_mentions",
+    "known_days_from_profile",
+    "detect_profile_contradiction",
     "past_claim_markers_hit",
     "detect_fabricated_memory",
     "build_reply_evidence",
