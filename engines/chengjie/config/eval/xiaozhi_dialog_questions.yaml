@@ -60,3 +60,16 @@ questions:
   - tag: resume_deliver_gate
     q: "收件箱提示「全局已暂停真发」，自动回复不发了怎么恢复？"
     must_any: ["恢复真发", "横幅", "主管"]
+  # ── v1.0.73 发版批（I-2 三项入口 + 全自动影子档）──
+  - tag: acct_unread_open
+    q: "未读数字怎么点？账号栏上的未读数字点开能看到哪几条会话？"
+    must_any: ["未读", "账号", "会话"]
+  - tag: bind_persona_yellow
+    q: "账号黄点怎么绑人设？黄色小点是什么意思？"
+    must_any: ["人设", "黄", "账号"]
+  - tag: set_address_names
+    q: "怎么设称呼？怎么让 AI 知道我怎么叫客户、客户怎么叫我？"
+    must_any: ["称呼", "客户", "保存"]
+  - tag: autosend_shadow
+    q: "全自动就是全自动吗？高风险稿还会被扣住不发吗？"
+    must_any: ["放行", "台账", "不拦", "全自动"]

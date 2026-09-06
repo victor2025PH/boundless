@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-03 02:16:32 · OpenCC s2twp + 術語釘 · 15785 鍵（源 zh 全量 15786）
+生成: 2026-09-05 23:35:20 · OpenCC s2twp + 術語釘 · 16160 鍵（源 zh 全量 16161）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -2503,10 +2503,38 @@ ZH_HANT = {
     'ca_js011': '檢視已處理歷史',
     # ── ca_js012 ──
     'ca_js012': '危機識別守衛在每條進站訊息上執行；一旦命中會在這裡留痕，並點亮側欄紅色徽標。',
+    # ── ca_js020 ──
+    'ca_js020': '危機留痕未開啟',
+    # ── ca_js021 ──
+    'ca_js021': '識別和安全回覆仍在生效，但事件不會被記錄、也不會通知任何人。開啟後：命中即記錄在這裡，嚴重情況點亮工作台紅色徽標並置頂會話。',
+    # ── ca_js022 ──
+    'ca_js022': '一鍵開啟留痕與人工升級',
+    # ── ca_js023 ──
+    'ca_js023': '已開啟，正在重新整理…',
+    # ── ca_js024 ──
+    'ca_js024': '開啟失敗',
+    # ── ca_js025 ──
+    'ca_js025': '留痕已開啟：近 {n} 天無危機事件',
+    # ── ca_js026 ──
+    'ca_js026': '人工升級未開啟：嚴重事件只會記錄，不會叫人。',
+    # ── ca_js027 ──
+    'ca_js027': '開啟人工升級',
+    # ── ca_js028 ──
+    'ca_js028': '留痕狀態未知（後端未就緒）',
+    # ── ca_js030 ──
+    'ca_js030': '嚴重',
+    # ── ca_js031 ──
+    'ca_js031': '偏高',
+    # ── ca_js032 ──
+    'ca_js032': '自傷風險',
+    # ── ca_js033 ──
+    'ca_js033': '絕望情緒',
+    # ── ca_js034 ──
+    'ca_js034': '語音痛苦訊號',
     # ── ca_s001 ──
-    'ca_s001': '危機審計',
+    'ca_s001': '客戶安全預警',
     # ── ca_s002 ──
-    'ca_s002': '危機事件審計',
+    'ca_s002': '客戶安全預警事件',
     # ── ca_s003 ──
     'ca_s003': '安全鏈留痕 · 需開啟',
     # ── ca_s004 ──
@@ -2525,6 +2553,34 @@ ZH_HANT = {
     'ca_s010': '處置備註（可選）：已電話聯絡 / 已轉人工 / …',
     # ── ca_s011 ──
     'ca_s011': '確認處置',
+    # ── ca_s020 ──
+    'ca_s020': '客戶安全預警',
+    # ── ca_s021 ──
+    'ca_s021': 'AI 會在每條進站訊息上識別自傷、絕望等危機訊號；命中後記錄在這裡，需要時叫人接手。',
+    # ── ca_s022 ──
+    'ca_s022': '按客戶搜尋',
+    # ── ca_s023 ──
+    'ca_s023': '客戶 ID（輸入開頭幾位即可）',
+    # ── ca_s024 ──
+    'ca_s024': '狀態說明',
+    # ── ca_s025 ──
+    'ca_s025': '關注',
+    # ── ca_s026 ──
+    'ca_s026': 'AI 識別到危機訊號（嚴重 / 偏高）',
+    # ── ca_s027 ──
+    'ca_s027': '已兜底',
+    # ── ca_s028 ──
+    'ca_s028': 'AI 原本的回覆觸到安全紅線，已替換為安全回覆',
+    # ── ca_s029 ──
+    'ca_s029': '已升級',
+    # ── ca_s030 ──
+    'ca_s030': '已叫人：工作台紅色「需人工」徽標 + 會話置頂 + 案例跟進',
+    # ── ca_s031 ──
+    'ca_s031': '狀態',
+    # ── ca_s032 ──
+    'ca_s032': '風險',
+    # ── ca_s033 ──
+    'ca_s033': '連續命中',
     # ── ca_tf_evt_user ──
     'ca_tf_evt_user': '事件 #{id} · 使用者 {user}',
     # ── cancel ──
@@ -2982,7 +3038,7 @@ ZH_HANT = {
     # ── confirm ──
     'confirm': '確認',
     # ── crisis_audit ──
-    'crisis_audit': '危機審計',
+    'crisis_audit': '客戶安全預警',
     # ── crmw ──
     'crmw.unit.day': '{n}天',
     'crmw.unit.hour': '{n}時',
@@ -3352,6 +3408,60 @@ ZH_HANT = {
     'cs5_tl_title': '全部主動訊息（近 7 天）',
     # ── cs5_tl_total ──
     'cs5_tl_total': '共 {n} 條',
+    # ── cs6_add_guarded ──
+    'cs6_add_guarded': '沒排上：這一欄像要發的話，請確認型別',
+    # ── cs6_add_kind ──
+    'cs6_add_kind': '型別',
+    # ── cs6_add_ok_verbatim ──
+    'cs6_add_ok_verbatim': '已排上，到點原文直髮',
+    # ── cs6_add_text_ph ──
+    'cs6_add_text_ph': '到點原樣發出的整句話，例如：早上好呀，今天也要加油～',
+    # ── cs6_add_what_event ──
+    'cs6_add_what_event': '客戶的什麼事',
+    # ── cs6_add_what_verbatim ──
+    'cs6_add_what_verbatim': '要發的話',
+    # ── cs6_card_verbatim_q ──
+    'cs6_card_verbatim_q': '到點發',
+    # ── cs6_edit_btn ──
+    'cs6_edit_btn': '改一改再發',
+    # ── cs6_edit_confirm ──
+    'cs6_edit_confirm': '按改後的內容發出，並把這條關懷標為已發？',
+    # ── cs6_edit_empty ──
+    'cs6_edit_empty': '先填要發的話',
+    # ── cs6_edit_fail ──
+    'cs6_edit_fail': '傳送失敗：',
+    # ── cs6_edit_hint ──
+    'cs6_edit_hint': '手改的終稿不經 AI，走同一條出站佇列（安靜時段照常順延）',
+    # ── cs6_edit_ok ──
+    'cs6_edit_ok': '已交出站佇列',
+    # ── cs6_edit_send ──
+    'cs6_edit_send': '按改後的發出',
+    # ── cs6_ghost_verbatim ──
+    'cs6_ghost_verbatim': '到點原樣發出',
+    # ── cs6_intent_hint ──
+    'cs6_intent_hint': '這看起來像一句要發出去的話 / 給 AI 的指令，不像客戶的事。按「客戶的事」排上，AI 會當成客戶要去做這件事來關心（可能不是你要的）。',
+    # ── cs6_intent_keep ──
+    'cs6_intent_keep': '就是客戶的事',
+    # ── cs6_intent_switch ──
+    'cs6_intent_switch': '改為「到點發這句話」',
+    # ── cs6_kind_event ──
+    'cs6_kind_event': '客戶的事（AI 自然關心）',
+    # ── cs6_kind_event_t ──
+    'cs6_kind_event_t': 'AI 會以人設口吻自然關心客戶的這件事（經 AI 擬稿）',
+    # ── cs6_kind_verbatim ──
+    'cs6_kind_verbatim': '到點發這句話（原文直髮）',
+    # ── cs6_kind_verbatim_t ──
+    'cs6_kind_verbatim_t': '到點原樣發出你寫的這句話，不經 AI 改寫',
+    # ── cs6_und_event ──
+    'cs6_und_event': '客戶{when}有「{topic}」這件事，AI 到點自然關心一句',
+    # ── cs6_und_instr_warn ──
+    'cs6_und_instr_warn': '這條更像一句要發的話，而不是客戶的事——AI 會把它當客戶要去做的事來關心。要改的話：跳過這條，重新按「到點發這句話」排上。',
+    # ── cs6_und_lead ──
+    'cs6_und_lead': '我理解為：',
+    # ── cs6_und_verbatim ──
+    'cs6_und_verbatim': '{when}到點，把這句話原樣發給客戶',
+    # ── cs6_vb_badge ──
+    'cs6_vb_badge': '原文',
     # ── cs_js001 ──
     'cs_js001': '立即發',
     # ── cs_js002 ──
@@ -4237,6 +4347,8 @@ ZH_HANT = {
     'draft.act.reject': '✗ 拒絕',
     'draft.ai_draft': 'AI 草稿：',
     'draft.audit_link': '檢視審計日誌 →',
+    'draft.back_chat': '返回聊天',
+    'draft.back_chat_title': '返回聊天（坐席工作台）',
     'draft.bulk.approve': '批次批准',
     'draft.bulk.confirm': '{label} 選中的 {n} 條草稿？',
     'draft.bulk.done': '完成：傳送 {sent} 條，失敗 {errors} 條',
@@ -4303,7 +4415,7 @@ ZH_HANT = {
     'draft.pf.escalated': '已升級',
     'draft.pf.followup_overdue': '跟進逾期',
     'draft.pf.funnel': '漏斗：',
-    'draft.pf.go_crisis': '前往危機審計 →',
+    'draft.pf.go_crisis': '前往客戶安全預警 →',
     'draft.pf.latest': '最新：',
     'draft.pf.memory': '記憶畫像',
     'draft.pf.msg_n': '訊息：{n} 條',
@@ -4945,6 +5057,14 @@ ZH_HANT = {
     'em_bulk_none': '沒有內容含「{q}」的記憶條目',
     # ── em_bulk_title ──
     'em_bulk_title': '按內容關鍵詞批次刪除記憶：先預覽數量、確認後刪除，全程計入審計',
+    # ── em_conflict_pair ──
+    'em_conflict_pair': '衝突中',
+    # ── em_drop_evidence_mismatch ──
+    'em_drop_evidence_mismatch': '原話對不上',
+    # ── em_drop_fact_unanchored ──
+    'em_drop_fact_unanchored': '事實和原話無關',
+    # ── em_drop_no_evidence ──
+    'em_drop_no_evidence': '沒給出原話',
     # ── em_edit ──
     'em_edit': '編輯',
     # ── em_edit_dup ──
@@ -4957,6 +5077,14 @@ ZH_HANT = {
     'em_edit_tip': '改正這條記憶的內容——儲存即視為人工核實（AI 推斷隨之轉正）',
     # ── em_edit_title ──
     'em_edit_title': '編輯記憶',
+    # ── em_export ──
+    'em_export': '匯出',
+    # ── em_export_csv ──
+    'em_export_csv': '匯出 CSV',
+    # ── em_export_tip ──
+    'em_export_tip': '把這位客戶的全部記憶（含人設說過/承諾過）匯出為 JSON 檔案；匯出會記入審計',
+    # ── em_hard_delete ──
+    'em_hard_delete': '徹底刪除',
     # ── em_id_ago_day ──
     'em_id_ago_day': '{n} 天前',
     # ── em_id_ago_hour ──
@@ -4968,37 +5096,37 @@ ZH_HANT = {
     # ── em_id_approx_tip ──
     'em_id_approx_tip': '按裸 ID 唯一匹配到的會話（近似識別）',
     # ── em_id_batch_ok ──
-    'em_id_batch_ok': '全部確認屬實',
+    'em_id_batch_ok': '同類全部確認',
     # ── em_id_batch_ok_body ──
-    'em_id_batch_ok_body': '將把 TA 的 {n} 條 AI 推斷升格為「使用者明說」（進入穩定層），並逐條記入審計。',
+    'em_id_batch_ok_body': '將把 TA 的 {n} 條「需要你看一眼」的記憶確認為屬實（進入已確認層），並逐條記入審計。',
     # ── em_id_cleanup ──
     'em_id_cleanup': '清理未識別',
     # ── em_id_cleanup_body ──
-    'em_id_cleanup_body': '將刪除當前篩選可見的 {n} 條「未識別」記憶（多為已刪除會話或測試資料的孤兒鍵）。逐條落審計，刪除後不可恢復。',
+    'em_id_cleanup_body': '將刪除當前篩選可見的 {n} 條「找不到對應客戶」的記憶（多為已刪除會話或測試資料的孤兒鍵）。逐條落審計，刪除後不可恢復。',
     # ── em_id_cleanup_stale ──
-    'em_id_cleanup_stale': '清理過期',
+    'em_id_cleanup_stale': '清理已過時',
     # ── em_id_cleanup_stale_body ──
-    'em_id_cleanup_stale_body': '將刪除當前篩選可見的 {n} 條「過期層」記憶（已被記憶整固降級）。逐條落審計，刪除後不可恢復。',
+    'em_id_cleanup_stale_body': '將刪除當前篩選可見的 {n} 條「已過時」記憶（已被更新的事實取代）。逐條落審計，刪除後不可恢復。',
     # ── em_id_confirm ──
     'em_id_confirm': '確認屬實',
     # ── em_id_confirm_fail ──
     'em_id_confirm_fail': '確認失敗',
     # ── em_id_confirm_tip ──
-    'em_id_confirm_tip': '把這條 AI 推斷確認為事實（升格為「使用者明說」並進入穩定層）',
+    'em_id_confirm_tip': '確認這條記憶屬實（記為「客戶說的」並進入已確認層）',
     # ── em_id_copied ──
     'em_id_copied': '已複製',
     # ── em_id_copy_tip ──
     'em_id_copy_tip': '複製原始記憶鍵',
     # ── em_id_del_hint ──
-    'em_id_del_hint': '刪除後不可恢復，操作會記入審計日誌。',
+    'em_id_del_hint': '徹底刪除後不可恢復，操作會記入審計日誌。日常請用「不再使用」（可恢復）。',
     # ── em_id_del_title ──
-    'em_id_del_title': '刪除這條記憶？',
+    'em_id_del_title': '徹底刪除這條記憶？',
     # ── em_id_drawer_span ──
     'em_id_drawer_span': '最早 {a} · 最新 {b}',
     # ── em_id_drawer_title ──
-    'em_id_drawer_title': '使用者記憶檔案',
+    'em_id_drawer_title': '客戶記憶檔案',
     # ── em_id_empty_hint ──
-    'em_id_empty_hint': 'AI 會在與客戶聊天時自動學習長期記憶；也可能是當前篩選條件太窄。',
+    'em_id_empty_hint': 'AI 會在聊天裡自動記住客戶說過的事。先開啟一位客戶 →',
     # ── em_id_filter_tip ──
     'em_id_filter_tip': '點選檢視 TA 的全部記憶',
     # ── em_id_group ──
@@ -5026,13 +5154,13 @@ ZH_HANT = {
     # ── em_id_open_conv ──
     'em_id_open_conv': '在收件箱開啟會話',
     # ── em_id_pending_n ──
-    'em_id_pending_n': '{n} 條待確認',
+    'em_id_pending_n': '{n} 條需要你看一眼',
     # ── em_id_pending_tip ──
-    'em_id_pending_tip': '點選檢視全部待確認推斷',
+    'em_id_pending_tip': '點選檢視需要你看一眼的記憶',
     # ── em_id_person_n ──
     'em_id_person_n': '{n} 條記憶',
     # ── em_id_persons_n ──
-    'em_id_persons_n': '{n} 位使用者',
+    'em_id_persons_n': '{n} 位客戶',
     # ── em_id_ph ──
     'em_id_ph': '暱稱 / 使用者名稱 / 手機號 / 內容關鍵詞 / 使用者ID',
     # ── em_id_ph_short ──
@@ -5040,7 +5168,7 @@ ZH_HANT = {
     # ── em_id_resolved_n ──
     'em_id_resolved_n': '已識別',
     # ── em_id_search ──
-    'em_id_search': '搜尋使用者 / 記憶內容',
+    'em_id_search': '搜尋客戶 / 記憶內容',
     # ── em_id_shown ──
     'em_id_shown': '篩選後顯示 {n} 條',
     # ── em_id_sort ──
@@ -5058,25 +5186,51 @@ ZH_HANT = {
     # ── em_id_tier ──
     'em_id_tier': '層級',
     # ── em_id_tier_raw ──
-    'em_id_tier_raw': '原始',
+    'em_id_tier_raw': '剛記住',
     # ── em_id_tier_stable ──
-    'em_id_tier_stable': '穩定',
+    'em_id_tier_stable': '已確認',
     # ── em_id_tier_stale ──
-    'em_id_tier_stale': '過期',
+    'em_id_tier_stale': '已過時',
     # ── em_id_uncat ──
     'em_id_uncat': '未分類',
     # ── em_id_unresolved ──
-    'em_id_unresolved': '未識別',
+    'em_id_unresolved': '找不到對應客戶',
     # ── em_id_unresolved_tip ──
     'em_id_unresolved_tip': '在收件箱會話裡找不到對應的人（歷史鍵或會話已刪除），顯示原始記憶鍵',
     # ── em_id_user ──
-    'em_id_user': '使用者',
+    'em_id_user': '客戶',
     # ── em_id_view_group ──
     'em_id_view_group': '按人分組',
     # ── em_id_view_list ──
     'em_id_view_list': '列表',
     # ── em_id_working ──
     'em_id_working': '處理中 {done}/{total}…',
+    # ── em_ignore ──
+    'em_ignore': '不再使用',
+    # ── em_ignore_body ──
+    'em_ignore_body': 'AI 以後不再把這條當作對方的事：「{t}」。資料保留，可在頁尾「維護 › 已不再使用」裡恢復。',
+    # ── em_ignore_tip ──
+    'em_ignore_tip': 'AI 以後不再提這件事（不刪資料，可在頁尾「維護」區恢復）',
+    # ── em_ignore_title ──
+    'em_ignore_title': '不再使用這條記憶？',
+    # ── em_ignored_empty ──
+    'em_ignored_empty': '沒有被標記為「不再使用」的記憶',
+    # ── em_ignored_load ──
+    'em_ignored_load': '檢視已不再使用',
+    # ── em_ignored_view ──
+    'em_ignored_view': '已不再使用的記憶',
+    # ── em_impact_cat_address ──
+    'em_impact_cat_address': '地址',
+    # ── em_impact_cat_family ──
+    'em_impact_cat_family': '家人',
+    # ── em_impact_cat_health ──
+    'em_impact_cat_health': '健康',
+    # ── em_impact_cat_identity ──
+    'em_impact_cat_identity': '證件/賬號',
+    # ── em_impact_cat_meet ──
+    'em_impact_cat_meet': '見面',
+    # ── em_impact_cat_money ──
+    'em_impact_cat_money': '金錢',
     # ── em_js001 ──
     'em_js001': '無記錄',
     # ── em_js002 ──
@@ -5084,9 +5238,9 @@ ZH_HANT = {
     # ── em_js003 ──
     'em_js003': '無向量',
     # ── em_js004 ──
-    'em_js004': '穩定',
+    'em_js004': '已確認',
     # ── em_js005 ──
-    'em_js005': '已棄',
+    'em_js005': '已過時',
     # ── em_js006 ──
     'em_js006': '刪除記憶',
     # ── em_js007 ──
@@ -5107,32 +5261,142 @@ ZH_HANT = {
     'em_js014': '天暫無確認記錄',
     # ── em_js015 ──
     'em_js015': '每日確認量',
+    # ── em_kpi_accuracy ──
+    'em_kpi_accuracy': '抽檢準確率 {p}',
+    # ── em_kpi_accuracy_tip ──
+    'em_kpi_accuracy_tip': '坐席已判過的記憶裡確認屬實的比例＝確認 /（確認 + 不再使用/刪除），近 {d} 天；還沒看的不算；判過少於 5 條時不顯示',
+    # ── em_kpi_confirmed ──
+    'em_kpi_confirmed': '已確認 {n}',
+    # ── em_kpi_customers ──
+    'em_kpi_customers': '覆蓋 {u} 位客戶',
+    # ── em_kpi_dropped ──
+    'em_kpi_dropped': '有 {n} 條因無法核對原話未記錄',
+    # ── em_kpi_dropped_lb ──
+    'em_kpi_dropped_lb': '條因無法核對原話未記錄（近 {d} 天）',
+    # ── em_kpi_dropped_tip ──
+    'em_kpi_dropped_tip': 'AI 抽出來的事在客戶原話裡找不到對應的話，為防記錯沒有存（寧可漏記）。原因分佈：{r}',
+    # ── em_kpi_funnel ──
+    'em_kpi_funnel': '近 {d} 天：AI 抽出 {c} 條候選 → 核對原話透過 {k} 條入庫 → 需要你看 {p} 條',
+    # ── em_kpi_new7 ──
+    'em_kpi_new7': '近 {d} 天新增 {x}',
+    # ── em_kpi_promises_lb ──
+    'em_kpi_promises_lb': '件 AI 答應過還沒做（{o} 件已超 7 天）',
+    # ── em_kpi_promises_tip ──
+    'em_kpi_promises_tip': 'AI（或坐席替人設）說過「明天給你打電話 / 下次拍給你看」這類承諾，還沒兌現的數量；點開逐條處理',
+    # ── em_kpi_remembered ──
+    'em_kpi_remembered': 'AI 已記住 {n} 件事',
+    # ── em_kpi_remembered_lb ──
+    'em_kpi_remembered_lb': 'AI 已記住的事',
+    # ── em_kpi_remembered_sub ──
+    'em_kpi_remembered_sub': '覆蓋 {u} 位客戶 · 近 {d} 天新增 {x} · 已確認 {s}',
+    # ── em_kpi_used ──
+    'em_kpi_used': '近 {d} 天回覆時用上 {n} 輪',
+    # ── em_kpi_used_lb ──
+    'em_kpi_used_lb': '輪迴複用上了記憶（近 {d} 天）',
+    # ── em_maint_tip ──
+    'em_maint_tip': '運維工具：補全向量 / 清理孤兒鍵 / 清理已過時 / 演示打碼 / 批次刪除 / 恢復已不再使用——日常用不到',
+    # ── em_maint_title ──
+    'em_maint_title': '維護',
+    # ── em_more ──
+    'em_more': '更多',
+    # ── em_privacy_line ──
+    'em_privacy_line': '記憶只儲存在你自己的系統資料庫，不經第三方；金錢 / 見面 / 地址 / 健康 / 證件類預設需你確認；隨時可編輯、不再使用或徹底刪除。',
+    # ── em_promises_age ──
+    'em_promises_age': '說了 {n} 天',
+    # ── em_promises_empty ──
+    'em_promises_empty': '沒有未兌現的承諾 ✓',
+    # ── em_promises_hint ──
+    'em_promises_hint': '該跟進的人工跟進；已經做了的點「已兌現」；不該記的刪掉。媒體類真發出後會自動結清。',
+    # ── em_promises_kind_call ──
+    'em_promises_kind_call': '打電話',
+    # ── em_promises_kind_generic ──
+    'em_promises_kind_generic': '口頭約定',
+    # ── em_promises_kind_media ──
+    'em_promises_kind_media': '發照片/語音',
+    # ── em_promises_kind_meet ──
+    'em_promises_kind_meet': '見面/陪伴',
+    # ── em_promises_kind_send ──
+    'em_promises_kind_send': '發東西',
+    # ── em_promises_open_customer ──
+    'em_promises_open_customer': '開啟客戶',
+    # ── em_promises_title ──
+    'em_promises_title': 'AI 答應過還沒做',
+    # ── em_promises_title_n ──
+    'em_promises_title_n': 'AI 答應過還沒做 {n} 件 · 超 7 天 {o} 件',
+    # ── em_restore ──
+    'em_restore': '恢復',
+    # ── em_review_action_fail ──
+    'em_review_action_fail': '操作失敗',
+    # ── em_review_ask_commitment ──
+    'em_review_ask_commitment': '這個約定要記住嗎？',
+    # ── em_review_ask_conflict ──
+    'em_review_ask_conflict': '兩條說法衝突，保留哪條？',
+    # ── em_review_ask_high_impact ──
+    'em_review_ask_high_impact': '這類事記錯代價大，看一眼對不對',
+    # ── em_review_ask_low_confidence ──
+    'em_review_ask_low_confidence': '像是這樣嗎？',
+    # ── em_review_ask_self_fact ──
+    'em_review_ask_self_fact': '這是人設的設定，還是客戶的事？',
+    # ── em_review_badge ──
+    'em_review_badge': '需要你看',
+    # ── em_review_batch_same ──
+    'em_review_batch_same': '本客戶的「{r}」全部確認（{n}）',
+    # ── em_review_collapse ──
+    'em_review_collapse': '收起',
+    # ── em_review_empty ──
+    'em_review_empty': '今天沒有需要你處理的記憶 ✓',
+    # ── em_review_is_customer ──
+    'em_review_is_customer': '是客戶的事',
+    # ── em_review_keep_this ──
+    'em_review_keep_this': '保留這條',
+    # ── em_review_open_all ──
+    'em_review_open_all': '檢視全部',
+    # ── em_review_reason_commitment ──
+    'em_review_reason_commitment': '承諾 / 約定',
+    # ── em_review_reason_conflict ──
+    'em_review_reason_conflict': '和已確認的記憶衝突',
+    # ── em_review_reason_high_impact ──
+    'em_review_reason_high_impact': '高影響（金錢 / 見面 / 地址 / 健康 / 證件 / 家人）',
+    # ── em_review_reason_high_impact_short ──
+    'em_review_reason_high_impact_short': '高影響',
+    # ── em_review_reason_low_confidence ──
+    'em_review_reason_low_confidence': 'AI 不太確定',
+    # ── em_review_reason_self_fact ──
+    'em_review_reason_self_fact': '像是人設自己的事',
+    # ── em_review_remember ──
+    'em_review_remember': '記住這個約定',
+    # ── em_review_target ──
+    'em_review_target': '目標：日均少於 5 件——超過說明自動規則要調',
+    # ── em_review_title ──
+    'em_review_title': '今日需處理',
+    # ── em_review_title_n ──
+    'em_review_title_n': '今日需處理 {n} 件',
     # ── em_s001 ──
     'em_s001': 'AI 記憶 ·',
     # ── em_s002 ──
-    'em_s002': '記憶校正質量',
+    'em_s002': 'AI 記憶健康',
     # ── em_s003 ──
-    'em_s003': '坐席把 AI 推斷確認為事實的採納情況（近',
+    'em_s003': '自動記住 → 核對原話 → 入庫 → 確認，每一層的讀數（近',
     # ── em_s004 ──
     'em_s004': '已採納（確認數）',
     # ── em_s005 ──
-    'em_s005': '待確認推斷',
+    'em_s005': '需要你看一眼',
     # ── em_s006 ──
-    'em_s006': '採納率（近似）',
+    'em_s006': '抽檢準確率',
     # ── em_s007 ──
     'em_s007': '庫內 AI 推斷累計',
     # ── em_s008 ──
-    'em_s008': '使用者長期記憶條目',
+    'em_s008': 'AI 記得的事',
     # ── em_s009 ──
-    'em_s009': '向量檢索與關鍵詞融合注入模型時使用',
+    'em_s009': 'AI 記得你每一位客戶——聊天裡客戶說過的事會自動記下，下次回覆時用上',
     # ── em_s010 ──
     'em_s010': '篩選',
     # ── em_s011 ──
     'em_s011': '使用者 id 或 群',
     # ── em_s012 ──
-    'em_s012': '使用者明說',
+    'em_s012': '客戶說的',
     # ── em_s013 ──
-    'em_s013': '推斷',
+    'em_s013': '推斷的',
     # ── em_s014 ──
     'em_s014': '條數',
     # ── em_s015 ──
@@ -5142,17 +5406,77 @@ ZH_HANT = {
     # ── em_s017 ──
     'em_s017': '內容',
     # ── em_s018 ──
-    'em_s018': '來源/層級',
+    'em_s018': '誰說的 / 狀態',
     # ── em_s019 ──
     'em_s019': '向量',
     # ── em_s020 ──
     'em_s020': '載入」',
+    # ── em_self_by_human ──
+    'em_self_by_human': '坐席替人設說的',
+    # ── em_self_delete ──
+    'em_self_delete': '刪除這條記錄',
+    # ── em_self_delete_body ──
+    'em_self_delete_body': '刪除後 AI 不再把這條當作自己說過/做過的事：「{t}」',
+    # ── em_self_kind_ai_state ──
+    'em_self_kind_ai_state': 'AI 自述近況',
+    # ── em_self_kind_human_said ──
+    'em_self_kind_human_said': '坐席替人設說過',
+    # ── em_self_kind_media_sent ──
+    'em_self_kind_media_sent': '發過',
+    # ── em_self_kind_promise ──
+    'em_self_kind_promise': '承諾過',
+    # ── em_self_kind_promise_pending ──
+    'em_self_kind_promise_pending': '承諾待兌現',
+    # ── em_self_mark_done ──
+    'em_self_mark_done': '已兌現',
+    # ── em_self_none ──
+    'em_self_none': '還沒有人設自己的經歷記錄',
+    # ── em_self_status_done ──
+    'em_self_status_done': '已兌現',
+    # ── em_self_status_open ──
+    'em_self_status_open': '未兌現',
+    # ── em_self_status_overdue ──
+    'em_self_status_overdue': '超過 7 天未兌現',
+    # ── em_self_tip ──
+    'em_self_tip': 'AI（或人工接管時的坐席）以人設身份對這位客戶說過的自己的事、發過的東西、還沒兌現的承諾——只展示，不參與記憶抽取',
+    # ── em_self_title ──
+    'em_self_title': '人設說過 / 承諾過',
     # ── em_semantics_hint ──
-    'em_semantics_hint': '列表中所有條目都會參與 AI 記憶召回；「確認屬實」＝人工核實（推斷轉正入穩定層），「編輯」＝改正後儲存（視為人工核實），「刪除」＝立即移出、不再參與回覆。',
+    'em_semantics_hint': '客戶說過的事會自動記住並參與 AI 回覆；只有「需要你看一眼」的例外（衝突 / 高影響 / 低置信 / 人設的事 / 承諾）才請你處理。「確認屬實」＝人工核實；「編輯」＝改正後儲存；「不再使用」＝AI 不再提這件事（可恢復）；徹底刪除在「更多」裡。',
     # ── em_src_quote_none ──
     'em_src_quote_none': '早期條目未記錄來源原話',
     # ── em_src_quote_tip ──
     'em_src_quote_tip': '抽取自對方原話：「{q}」',
+    # ── em_tl_basic ──
+    'em_tl_basic': '基本資訊',
+    # ── em_tl_event ──
+    'em_tl_event': '近期事件與約定',
+    # ── em_tl_family ──
+    'em_tl_family': '關係與家人',
+    # ── em_tl_last_used ──
+    'em_tl_last_used': '上次用在 {t}',
+    # ── em_tl_never_used ──
+    'em_tl_never_used': '還沒用過',
+    # ── em_tl_other ──
+    'em_tl_other': '其他',
+    # ── em_tl_pref ──
+    'em_tl_pref': '偏好與習慣',
+    # ── em_tl_used ──
+    'em_tl_used': '用過 {n} 次',
+    # ── em_used_chain_direct ──
+    'em_used_chain_direct': '直接回復',
+    # ── em_used_chain_inbox ──
+    'em_used_chain_inbox': '收件箱擬稿',
+    # ── em_used_deleted ──
+    'em_used_deleted': '（已刪除）',
+    # ── em_used_none ──
+    'em_used_none': '這位客戶的記憶還沒被 AI 用過',
+    # ── em_used_round ──
+    'em_used_round': '{t} · 用了 {n} 條',
+    # ── em_used_tip ──
+    'em_used_tip': 'AI 最近幾輪迴復時真正帶進提示詞的記憶（按輪次，最新在前）',
+    # ── em_used_title ──
+    'em_used_title': '最近被用',
     # ── enable ──
     'enable': '啟用',
     # ── episodic ──
@@ -5188,7 +5512,9 @@ ZH_HANT = {
     'err.auth.user_pass_required': '使用者名稱和密碼不能為空',
     'err.auth.wrong_current_pwd': '當前密碼錯誤',
     'err.bug.shot_not_found': '該截圖不存在（工單可能沒有附件，或檔案已被清理）',
-    'err.ca.event_not_found': '事件不存在或危機審計未啟用',
+    'err.ca.config_unavailable': '配置管理器未就緒，無法寫入開關',
+    'err.ca.enable_failed': '開啟失敗：{msg}',
+    'err.ca.event_not_found': '事件不存在或客戶安全預警留痕未開啟',
     'err.case.claimed_by_other': '案例已由 {name} 認領',
     'err.case.not_found': 'Case {case_id} 不存在',
     'err.chat_test.rate_limited': '試聊太頻繁，請稍後再試（每分鐘上限 {n} 次）',
@@ -5311,6 +5637,7 @@ ZH_HANT = {
     'err.inbox.empty_file': '空檔案',
     'err.inbox.file_chat_empty': 'file 和 chat_key 不能為空',
     'err.inbox.file_too_large': '檔案過大（上限 25MB）',
+    'err.inbox.file_too_large_detail': '檔案 {size} MB 超過該平台體積上限 {cap} MB（超出 {over} MB，請壓縮後重發）',
     'err.inbox.file_too_large_mb': '檔案超過該平台體積上限（{mb} MB）',
     'err.inbox.gate_exempt_cfg_na': '配置系統未就緒，暫時無法寫入白名單，請稍後再試',
     'err.inbox.gate_exempt_failed': '白名單寫入失敗：{msg}',
@@ -5327,8 +5654,10 @@ ZH_HANT = {
     'err.inbox.media_ext_forbidden': '該檔案型別（可執行/指令碼）禁止傳送',
     'err.inbox.media_magic_mismatch': '檔案內容與副檔名不符，已拒絕傳送（請檢查檔案是否損壞或被改名）',
     'err.inbox.media_not_found': '媒體檔案不存在或已被清理',
+    'err.inbox.media_reconnecting': '{platform} 通道正在重連（{state}），稍後再試',
     'err.inbox.media_send_failed': '媒體傳送失敗: {err}',
     'err.inbox.media_unsupported': '該賬號不支援從收件箱傳送媒體（需 protocol 多開且線上）',
+    'err.inbox.media_unsupported_platform': '該平台賬號暫不支援從工作台傳送媒體',
     'err.inbox.near_duplicate': '與 {age} 秒前剛發出的內容高度相似，疑似重複傳送',
     'err.inbox.send_blocked_banned': '該賬號已被標記為封禁/受限，傳送已停止，請人工核查。',
     'err.inbox.send_blocked_canary': '該賬號不在分批放量名單內，傳送已暫停（放量控制中）。',
@@ -5353,9 +5682,11 @@ ZH_HANT = {
     'err.inbox.tts_failed': '語音合成失敗: {err}',
     'err.inbox.voice_lang_mismatch': '文字語種（{lang}）與可用音色不匹配，已取消語音（請改發文字或配置該語種音色）',
     'err.inbox.voice_peer_privacy': '對方在 Telegram 隱私設定裡限制了接收語音訊息，語音發不進去——請改發文字或圖片（這不是系統故障）。',
+    'err.inbox.voice_reconnecting': '{platform} 通道正在重連（{state}），稍後再試',
     'err.inbox.voice_save_failed': '語音儲存失敗: {err}',
     'err.inbox.voice_send_failed': '語音傳送失敗: {err}',
     'err.inbox.voice_unsupported': '該賬號不支援從收件箱傳送語音（需 protocol 多開且線上）',
+    'err.inbox.voice_unsupported_platform': '該平台賬號暫不支援從工作台傳送語音',
     'err.inbox.xl_asr_unavailable': '語音轉寫服務未接入，暫時無法處理語音內容。請確認應用已完成啟用；若仍不行請聯絡客服開通',
     'err.inbox.xl_video_unavailable': '影片翻譯功能未開通，請聯絡客服開通',
     'err.ish.bad_pair': '配對引數無效或身份服務不可用',
@@ -5374,6 +5705,7 @@ ZH_HANT = {
     'err.kb.import_bad_format': '無效的匯入格式',
     'err.kb.msg_reply_empty': 'user_message 和 ai_reply 不能為空',
     'err.kb.no_update_fields': '未提供可更新的欄位',
+    'err.kb.purge_source_invalid': '只能整批清空 vendor / system / import 來源的條目',
     'err.kb.query_empty': 'query 不能為空',
     'err.kb.question_empty': 'question 不能為空',
     'err.kb.skill_mgr_unloaded': 'skill_manager 未載入，請確認 bot 正在執行',
@@ -7114,6 +7446,13 @@ ZH_HANT = {
     'inbox.acct.t': '賬號線上狀態來自賬號登錄檔：停用/掉線的賬號不會自動收發，重啟程式也不會自動拉起（防止誤拉被風控的號），需人工恢復上線。',
     'inbox.acct.today_convs': '今日 {n} 會話',
     'inbox.acct.unnamed_t': '點選給該賬號起個名字，列表角標就不再是一串數字',
+    'inbox.acct.unread_empty': '這一號現在沒有未讀',
+    'inbox.acct.unread_loading': '載入中…',
+    'inbox.acct.unread_mark': '全部標已讀',
+    'inbox.acct.unread_mark_fail': '清未讀失敗，請稍後重試',
+    'inbox.acct.unread_mark_ok': '已清未讀',
+    'inbox.acct.unread_open_t': '點開看是哪幾條未讀',
+    'inbox.acct.unread_pop_title': '未讀會話',
     'inbox.acct.view_chats': '檢視該賬號會話',
     'inbox.acct.viewing': '正在檢視：{label}',
     'inbox.acct.web_health_t': '網頁版標籤注入健康：{s}',
@@ -7258,10 +7597,20 @@ ZH_HANT = {
     'inbox.bulk.sop_none_eligible': '篩選結果裡沒有符合條件的會話（都在途或近期掛過）',
     'inbox.bulk.sop_pick': '將從當前篩選的 {n} 個私聊中掛載。輸入鏈編號：',
     'inbox.buried.hint': '歸檔中還有 {n} 條未讀',
+    'inbox.buried.unarch': '取消歸檔這 {n} 條',
+    'inbox.buried.unarch_fail': '取消歸檔失敗，請稍後重試',
+    'inbox.buried.unarch_none': '當前視角下沒有可取消歸檔的被埋會話',
+    'inbox.buried.unarch_ok': '已取消歸檔 {n} 條會話，它們已回到預設檢視',
+    'inbox.buried.unarch_t': '把這些歸檔著卻有未讀的會話一鍵浮回預設檢視（可撤銷）',
+    'inbox.caps.backoff_in': '約 {n} 秒後重試',
     'inbox.caps.needs_public_url': '官方通道發媒體需先配置公網媒體 URL——開啟「渠道接入」嚮導填寫（IG/LINE 共用）',
     'inbox.caps.no_media': '該平台賬號暫不支援收件箱直髮媒體（需協議多開且線上）',
+    'inbox.caps.no_send_media': '該平台 worker 線上但未開放發媒體（如 LINE 需開 platform_login.line.media.outbound）',
+    'inbox.caps.no_send_voice': '該平台 worker 線上但未開放發語音（如 LINE 需開 platform_login.line.media.outbound）',
     'inbox.caps.no_voice': '該平台賬號暫不支援收件箱直髮語音（需協議多開且線上）',
+    'inbox.caps.no_worker': '該賬號未被協議 worker 託管（未登入或該平台無 worker），工作台不能直髮媒體/語音',
     'inbox.caps.voice_auto_only': '該會話由 RPA 託管：語音僅支援裝置端自動傳送（voice_output），坐席不能在此手動直髮',
+    'inbox.caps.worker_not_running': '該賬號的協議 worker 正在重連（{state}），稍後再試',
     'inbox.caps.zalo_api_no_media': 'Zalo OA API 不支援發圖/語音（官方能力限制）；此賬號只能發文字',
     'inbox.casebar.close_case': '結案',
     'inbox.casebar.closed_ok': '已結案，案例頁已銷賬',
@@ -8170,6 +8519,8 @@ ZH_HANT = {
     'inbox.effcap.identity_pending_t': '這個登入位被檢測到換了賬號（{acct}），身份尚未人工確認：會話按「{mode}」執行——AI 照常擬稿，人確認後再發，且不會自動掛人設。這是防「AI 用錯身份對客戶開口」的閘。解除：主管在運維總覽「🪪 登入身份決議」卡里點「確認轉正」（≤60 秒生效）。',
     'inbox.effcap.own_fleet_peer': '🏠 對端是自有號 · 轉人審',
     'inbox.effcap.own_fleet_peer_t': '對面（{peer}）是登記在冊的自有賬號（在另一台機器上運營）。兩台機器的 AI 互相自動回覆會無限燒算力，在平台風控眼裡還是兩個號互刷，所以這條會話按「{mode}」執行。要放開：從 companion.own_fleet.extra 裡摘掉該登記。',
+    'inbox.effcap.persona_unselected': '🎭 未選人設 · 轉人審',
+    'inbox.effcap.persona_unselected_t': '該賬號（{acct}）還沒有選定人設：新登入的賬號不再自動掛預設人設，選定前會話按「{mode}」執行——AI 照常擬稿，人確認後再發，不會以任何身份代答。解除：在賬號欄點該賬號 →「選擇人設」（或人設頁繫結），選定後本層自動消失（≤60 秒生效）。',
     'inbox.effcap.platform': '🚧 平台封頂 · 轉人審',
     'inbox.effcap.platform_t': '本平台被運營降級（inbox.auto_draft.platform_modes），會話實際按「{mode}」執行：AI 擬稿、人審後發。恢復全自動需運營移除該平台的封頂配置。',
     'inbox.effcap.reconnect_backlog': '🔌 斷線補收窗 · 轉人審',
@@ -8323,7 +8674,10 @@ ZH_HANT = {
     'inbox.goal.alias_note': '也叫工作計劃',
     'inbox.goal.autonomy.auto': '自動推進',
     'inbox.goal.autonomy.auto_hint': '順勢建議之外，若系統開啟了「主動觸達」，AI 還會按日程主動發起推進',
+    'inbox.goal.autonomy.auto_ineffective_t': '「自動推進」未生效：{why}。AI 只在對方來訊息時順勢推進；點選切換自治檔',
     'inbox.goal.autonomy.auto_note_off': '當前未開啟主動觸達：AI 只在對方來訊息時順勢推進，不會自己主動發訊息',
+    'inbox.goal.autonomy.auto_note_sprint_off': '自動跟進未生效：目標只在客戶來訊息時帶方向，不會按時間表主動出手',
+    'inbox.goal.autonomy.auto_note_why': '{note}（{why}）',
     'inbox.goal.autonomy.observe': '只觀察',
     'inbox.goal.autonomy.observe_hint': '只跟蹤進度，不影響 AI 回覆（僅想先看看資料時用）',
     'inbox.goal.autonomy.suggest': '順勢建議',
@@ -8380,6 +8734,26 @@ ZH_HANT = {
     'inbox.goal.due.tomorrow_t': '明天到期：可提前今天收口，或延長給足空間',
     'inbox.goal.empty_illust_alt': '設定工作目標',
     'inbox.goal.empty_lead': '為這段關係設一個工作目標，AI 會按里程碑分天推進',
+    'inbox.goal.engine.blk.automation_mode': '本會話不在「AI 全自動」檔——人審/手動會話不自發',
+    'inbox.goal.engine.blk.autonomy': '本目標不是「自動推進」檔',
+    'inbox.goal.engine.blk.bridge_disabled': '日常跟進橋未開啟',
+    'inbox.goal.engine.blk.care_disabled': '主動關懷派發未開啟',
+    'inbox.goal.engine.blk.care_dry_run': '主動關懷處於試執行：只擬稿不真發',
+    'inbox.goal.engine.blk.crisis': '對方處於危機情緒窗，主動拍暫停',
+    'inbox.goal.engine.blk.dispatcher_not_running': '派發迴圈未在執行',
+    'inbox.goal.engine.blk.goal_not_active': '目標已不是進行中',
+    'inbox.goal.engine.blk.goals_disabled': '目標功能未啟用',
+    'inbox.goal.engine.blk.natural_daily_off': '日常跟進的每日一拍未開啟',
+    'inbox.goal.engine.blk.no_conversation': '目標未繫結會話',
+    'inbox.goal.engine.blk.no_inbox': '讀不到收件箱（fail-closed 不自發）',
+    'inbox.goal.engine.blk.optout': '對方說過別再發（opt-out 靜默中）',
+    'inbox.goal.engine.blk.platform': '這個聊天渠道暫不支援自動跟進',
+    'inbox.goal.engine.blk.proactive_disabled': '主動觸達未開啟',
+    'inbox.goal.engine.blk.proactive_dry_run': '主動觸達處於試執行：只擬稿不真發',
+    'inbox.goal.engine.blk.sprint_disabled': '自動跟進未開啟',
+    'inbox.goal.engine.blk.sprint_dry_run': '自動跟進處於試執行：只擬稿不真發',
+    'inbox.goal.engine.blk.ticker_not_running': '自動跟進執行緒未在執行',
+    'inbox.goal.engine.card_off': '「自動推進」未生效（{why}）：AI 不會主動發訊息，只在對方來訊息時順勢推進',
     'inbox.goal.err': '工作目標載入失敗',
     'inbox.goal.err_retry': '載入失敗，點選重試',
     'inbox.goal.extend_2h': '+2 小時',
@@ -8400,7 +8774,7 @@ ZH_HANT = {
     'inbox.goal.form.arc_today_1': '接住話頭',
     'inbox.goal.form.arc_today_2': '給出明確提案',
     'inbox.goal.form.arc_today_3': '今天要個答覆',
-    'inbox.goal.form.auto_note_help': '如需開啟，請管理員在系統設定裡開啟「主動觸達」。',
+    'inbox.goal.form.auto_note_help': '請管理員在系統設定裡開啟「自動跟進」。',
     'inbox.goal.form.autonomy': 'AI 參與度（自治檔）',
     'inbox.goal.form.autosave_note': '輸入自動暫存中',
     'inbox.goal.form.back': '返回',
@@ -8474,6 +8848,8 @@ ZH_HANT = {
     'inbox.goal.hero.draft_t': '按今日意圖生成草稿到回覆台',
     'inbox.goal.hero.feedback': '去反饋',
     'inbox.goal.hero.hold': '第{day}/{total}天 · 今日讓路',
+    'inbox.goal.hero.last_skip': '上輪未按目標推進：{reason}',
+    'inbox.goal.hero.last_skip_t': '最近一次 AI 生成時目標沒有進入指令，原因見此。目標卡顯示的天數/進度只是時間推算，不代表 AI 真的在推進。',
     'inbox.goal.hero.set': '為 TA 設個工作目標 →',
     'inbox.goal.hint_got_it': '知道了',
     'inbox.goal.hold.emotion': '對方情緒低落，今日讓路',
@@ -8481,6 +8857,8 @@ ZH_HANT = {
     'inbox.goal.hold.pace_cap': '本段節奏拍數已用完，等對方再開口或明天再推',
     'inbox.goal.hold.silent': '連發未回，已熔斷讓路',
     'inbox.goal.last_label': '上個目標：',
+    'inbox.goal.meta.beats': '動作 {n}/{m} 拍',
+    'inbox.goal.meta.time_pct': '時間 {pct}%',
     'inbox.goal.meta.urgent_t': '臨期且進度落後：剩餘時間不足兩成、進度未過半——點此可延期',
     'inbox.goal.more_menu': '更多',
     'inbox.goal.ms_current': '當前：{name}',
@@ -8591,6 +8969,16 @@ ZH_HANT = {
     'inbox.goal.signal.buying': '客戶像是在問價/要購買方式（{v}）——趁熱開個限時目標？',
     'inbox.goal.signal.dismiss': '先不',
     'inbox.goal.signal.open_btn': '開今天收口',
+    'inbox.goal.skip.beat_rejected': '今日拍已被駁回',
+    'inbox.goal.skip.disabled': '目標功能未啟用',
+    'inbox.goal.skip.empty_block': '今日無可推進內容',
+    'inbox.goal.skip.hold': '今日讓路（客戶情緒/節奏）',
+    'inbox.goal.skip.inactive': '目標已到期或非活躍',
+    'inbox.goal.skip.inject_disabled': '目標註入已關閉',
+    'inbox.goal.skip.no_engine': '本輪未走統一引擎',
+    'inbox.goal.skip.observe': '目標為「僅觀察」檔',
+    'inbox.goal.skip.outcome_auto_settled': '已自動結算達成',
+    'inbox.goal.skip.unknown': '未知',
     'inbox.goal.slots.miss_t': '還沒聊到「{label}」',
     'inbox.goal.slots.src.agent': '人工確認',
     'inbox.goal.slots.src.auto': '自動採集',
@@ -8598,11 +8986,12 @@ ZH_HANT = {
     'inbox.goal.slots.stale_t': '這條資訊已超過 90 天未更新，建議聊天裡順口再確認',
     'inbox.goal.slots.title': '摸底進度',
     'inbox.goal.sprint.beats': '已推進 {n} 拍',
-    'inbox.goal.sprint.engine_off': '推進引擎未開啟：僅對方開口才推進',
+    'inbox.goal.sprint.engine_blocked': '自動跟進已開但還不能出手：{why}',
+    'inbox.goal.sprint.engine_off': '自動跟進未開啟：僅對方開口才推進',
     'inbox.goal.sprint.engine_wait': '等對方回覆中；到點未回會主動出手',
     'inbox.goal.sprint.jump_btn': '暫停當前目標，插入衝刺',
     'inbox.goal.sprint.jump_note': '長線目標暫停讓路，衝刺結束自動恢復',
-    'inbox.goal.sprint.next_beat': '下一主動拍 ≈ {t}',
+    'inbox.goal.sprint.next_beat': '下一次跟進 ≈ {t}',
     'inbox.goal.sprint.nudge_btn': '⚡ 立即推進',
     'inbox.goal.sprint.nudge_ok': '已排入主動拍，約 1-2 分鐘內發出',
     'inbox.goal.stage.contacted': '已聯絡',
@@ -8711,8 +9100,12 @@ ZH_HANT = {
     'inbox.imgask.preset_doc2': '把圖裡的關鍵欄位逐字列出來',
     'inbox.imgask.send': '問',
     'inbox.info.account': '賬號',
+    'inbox.info.addr_fail': '稱呼儲存失敗',
+    'inbox.info.addr_saved': '稱呼已儲存',
     'inbox.info.ai_summary': 'AI 摘要',
     'inbox.info.archived': '📦 已歸檔',
+    'inbox.info.call_peer': '我怎麼叫對方',
+    'inbox.info.call_peer_ph': '未填則沿用人設稱呼',
     'inbox.info.copied': '已複製',
     'inbox.info.copy_t': '點選複製完整標識',
     'inbox.info.identifier': '標識',
@@ -8720,7 +9113,12 @@ ZH_HANT = {
     'inbox.info.name_pending': '真實暱稱待獲取（當前顯示賬號標識）',
     'inbox.info.nickname': '暱稱',
     'inbox.info.no_data': '暫無資料',
+    'inbox.info.peer_calls_you': '對方怎麼叫我',
+    'inbox.info.peer_calls_you_ph': '未填則沿用人設被稱呼',
     'inbox.info.phone': '電話',
+    'inbox.info.phone_copy_t': '複製完整號碼',
+    'inbox.info.phone_hide_t': '點選收起為掩碼',
+    'inbox.info.phone_reveal_t': '點選顯示完整號碼（再點收起）',
     'inbox.info.platform': '平台',
     'inbox.info.status': '狀態',
     'inbox.info.username': '使用者名稱',
@@ -8797,6 +9195,14 @@ ZH_HANT = {
     'inbox.media.file_generic': '📎 媒體檔案',
     'inbox.media.ghost_cleared': '✅ 後台已恢復：{n} 個「傳送失敗」實為誤報，檔案已送達，提示已清除',
     'inbox.media.img_alt': '圖片',
+    'inbox.media.miss_e2ee_decrypt': '加密媒體解密校驗失敗，可重試；持續失敗請報運維',
+    'inbox.media.miss_e2ee_no_key': '加密媒體（Letter Sealing）本裝置無解金鑰，無法回取；可請客戶關閉 Letter Sealing 後重發',
+    'inbox.media.miss_encoding': 'LINE 服務端轉碼中（影片/音訊），稍後重試',
+    'inbox.media.miss_expired': 'LINE 服務端已過期（原件超儲存期），需請客戶重發',
+    'inbox.media.miss_expired_btn': '已過期，請客戶重發',
+    'inbox.media.miss_not_found': '服務端暫未找到物件（可能還沒同步到），稍後可重試',
+    'inbox.media.miss_other': '拉取失敗：{reason}',
+    'inbox.media.miss_pending': '對方還在上傳中，稍後重試',
     'inbox.media.photo': '📷 圖片訊息',
     'inbox.media.retry_hint': '傳送失敗，點傳送重試',
     'inbox.media.retry_hint_unknown': '後台剛重啟，結果未知；已自動核對對話記錄，確認沒發出再點傳送重試',
@@ -8817,6 +9223,18 @@ ZH_HANT = {
     'inbox.media.voice_noaudio': '無音訊存檔',
     'inbox.media.voice_noaudio_t': '這條語音沒有可回放的音訊歸檔：它早於歸檔功能上線（2026-07-31），或傳送當時歸檔失敗——音訊發完即清理，只留下文字記錄',
     'inbox.media.voice_tx_t': '語音內容（轉寫）',
+    'inbox.mem.high_impact': '高影響（金錢 / 見面 / 地址 / 健康 / 證件 / 家人）',
+    'inbox.mem.ignore': '不再使用',
+    'inbox.mem.ignore_fail': '操作失敗，請稍後再試',
+    'inbox.mem.ignore_forbidden': '你的角色沒有修改 AI 記憶的許可權',
+    'inbox.mem.ignore_ok': '已不再使用',
+    'inbox.mem.ignore_t': '以後回覆不再用這條（可在「AI 記憶」頁維護區恢復）',
+    'inbox.mem.locate_miss': '這條原話在更早的歷史裡',
+    'inbox.mem.need_review': '需要你看',
+    'inbox.mem.quote_t': '點選定位到客戶說這句話的那條訊息',
+    'inbox.mem.src_inferred': 'AI 推斷的',
+    'inbox.mem.src_stated': '客戶說的',
+    'inbox.mem.used_n': '本輪用了 {n} 條記憶',
     'inbox.mob.bar': '平台與常用工具',
     'inbox.mob.more': '更多',
     'inbox.mode.auto': '🚀 全自動',
@@ -9587,6 +10005,8 @@ ZH_HANT = {
     'inbox.vp.pause': '暫停',
     'inbox.vp.play': '播放',
     'inbox.vp.seek': '拖動跳轉播放位置',
+    'inbox.wa.hint_dns_retry': '網路解析 WhatsApp 伺服器失敗 {n} 次，正在重試（DNS 問題，檢查本機網路/代理）',
+    'inbox.wa.st_dns_retry': '正在重試連線',
     'inbox.wf.drawer_close': '關閉',
     'inbox.wf.drawer_title': '跟進 SOP（工作鏈）管理',
     'inbox.xl.adv': '高階：引擎 / 預設語言 / 我的語言',
@@ -9847,6 +10267,46 @@ ZH_HANT = {
     'kb2_sandbox_try': '沙盒試一句',
     # ── kb2_sandbox_try_tip ──
     'kb2_sandbox_try_tip': '儲存前先到沙盒用觸發詞試一次命中效果（不發訊息）',
+    # ── kb2_sat_none ──
+    'kb2_sat_none': '暫無反饋',
+    # ── kb2_src_all ──
+    'kb2_src_all': '全部來源',
+    # ── kb2_src_import ──
+    'kb2_src_import': '批次匯入',
+    # ── kb2_src_system ──
+    'kb2_src_system': '系統話術/示例',
+    # ── kb2_src_tip ──
+    'kb2_src_tip': '按條目來源篩選',
+    # ── kb2_src_user ──
+    'kb2_src_user': '我建的',
+    # ── kb2_src_vendor ──
+    'kb2_src_vendor': '系統預置·廠商產品',
+    # ── kb2_src_vendor_badge ──
+    'kb2_src_vendor_badge': '廠商預置',
+    # ── kb2_src_vendor_tip ──
+    'kb2_src_vendor_tip': '隨安裝包預置的廠商自家產品說明，不是你的知識；桌面模式下對客回覆不會用到',
+    # ── kb2_vendor_excluded ──
+    'kb2_vendor_excluded': '對客回覆已排除它們。',
+    # ── kb2_vendor_later ──
+    'kb2_vendor_later': '稍後',
+    # ── kb2_vendor_lead ──
+    'kb2_vendor_lead': '檢測到',
+    # ── kb2_vendor_lead2 ──
+    'kb2_vendor_lead2': '條廠商隨包預置的產品說明（不是你的知識）。',
+    # ── kb2_vendor_none ──
+    'kb2_vendor_none': '沒有廠商預置條目',
+    # ── kb2_vendor_not_excluded ──
+    'kb2_vendor_not_excluded': '當前部署對客回覆仍會用到它們。',
+    # ── kb2_vendor_purge ──
+    'kb2_vendor_purge': '一鍵清空',
+    # ── kb2_vendor_purge_confirm ──
+    'kb2_vendor_purge_confirm': '確定刪除全部 {n} 條廠商預置條目？只刪 source=廠商預置 的條目，你自建/匯入的知識不受影響。',
+    # ── kb2_vendor_purge_fail ──
+    'kb2_vendor_purge_fail': '清空失敗，請稍後重試',
+    # ── kb2_vendor_purged ──
+    'kb2_vendor_purged': '已清空 {n} 條廠商預置條目',
+    # ── kb2_vendor_view ──
+    'kb2_vendor_view': '檢視',
     # ── kb_js_001 ──
     'kb_js_001': '暫無知識條目，點選',
     # ── kb_js_002 ──
@@ -14042,6 +14502,8 @@ ZH_HANT = {
     'ov2_as_xz_tasks_d': '（✓{ok} 確{cf} 撤{un} 🎤{vg}）',
     # ── ov2_as_xz_teach ──
     'ov2_as_xz_teach': '教學 開/點/問',
+    # ── ov2_ashadow_hint ──
+    'ov2_ashadow_hint': '2026-09-04 起風險扣稿全放行，觸發只寫台賬；這裡是程序口徑（重啟清零），一個月資料的權威口徑在 logs/autosend_shadow/*.jsonl，讀數用 tools/autosend_shadow_report.py。stop_contact / self_harm 已即時推值守群（別名 autosend_shadow）：客戶叫停後 AI 仍在發＝騷擾＝封號風險，需人工介入止損。',
     # ── ov2_asm_clone_fb ──
     'ov2_asm_clone_fb': '克隆回落',
     # ── ov2_asm_fallback ──
@@ -14072,6 +14534,14 @@ ZH_HANT = {
     'ov2_asm_raced': '多開競態攔截',
     # ── ov2_asm_retry ──
     'ov2_asm_retry': '重試',
+    # ── ov2_asm_sc_detected ──
+    'ov2_asm_sc_detected': '檢出',
+    # ── ov2_asm_sc_fulfilled ──
+    'ov2_asm_sc_fulfilled': '補發',
+    # ── ov2_asm_sc_retracted ──
+    'ov2_asm_sc_retracted': '撤回改口',
+    # ── ov2_asm_sent_claim ──
+    'ov2_asm_sent_claim': 'AI 說「已發」但沒發',
     # ── ov2_asm_trend_ful ──
     'ov2_asm_trend_ful': '兌現',
     # ── ov2_asm_trend_rate ──
@@ -14968,6 +15438,8 @@ ZH_HANT = {
     'ov2_hid_why_other': '整卡隱藏以免空卡佔版面，不是故障。',
     # ── ov2_hid_why_wait ──
     'ov2_hid_why_wait': '能力已接入，還沒有可展示的資料。有流量後會自動出現。',
+    # ── ov2_hidb_ashadow ──
+    'ov2_hidb_ashadow': '舊規則本會扣、現已放行的稿子數：零＝沒有敏感話題觸發；有量看命中詞 Top，判「真該攔」還是「正則誤傷」。',
     # ── ov2_hidb_bazi ──
     'ov2_hidb_bazi': '命理技能：聊運勢時給真排盤，詳批可變現。',
     # ── ov2_hidb_buried ──
@@ -15282,6 +15754,38 @@ ZH_HANT = {
     'ov2_js071': '英文回覆發 en），防中文聲紋按拼音念英文 garble；糾正率越高說明多語客戶越多。',
     # ── ov2_js072 ──
     'ov2_js072': '合成語言均與預設一致（多為中文回覆），暫無糾正。',
+    # ── ov2_js_ash_by_reason ──
+    'ov2_js_ash_by_reason': '按原因',
+    # ── ov2_js_ash_col_count ──
+    'ov2_js_ash_col_count': '次數',
+    # ── ov2_js_ash_col_hit ──
+    'ov2_js_ash_col_hit': '命中詞',
+    # ── ov2_js_ash_col_outcome ──
+    'ov2_js_ash_col_outcome': '去向',
+    # ── ov2_js_ash_col_reason ──
+    'ov2_js_ash_col_reason': '原因',
+    # ── ov2_js_ash_harm ──
+    'ov2_js_ash_harm': '自傷 self_harm',
+    # ── ov2_js_ash_last ──
+    'ov2_js_ash_last': '最近一次',
+    # ── ov2_js_ash_outcomes ──
+    'ov2_js_ash_outcomes': '放行後的去向',
+    # ── ov2_js_ash_pending ──
+    'ov2_js_ash_pending': '待終局',
+    # ── ov2_js_ash_sent ──
+    'ov2_js_ash_sent': '已送達 / 已終局',
+    # ── ov2_js_ash_stop ──
+    'ov2_js_ash_stop': '客戶叫停 stop_contact',
+    # ── ov2_js_ash_today ──
+    'ov2_js_ash_today': '今日',
+    # ── ov2_js_ash_top_hits ──
+    'ov2_js_ash_top_hits': '命中詞 Top10（哪個正則在響）',
+    # ── ov2_js_ash_total ──
+    'ov2_js_ash_total': '累計放行（本會被扣）',
+    # ── ov2_js_ash_warm_note ──
+    'ov2_js_ash_warm_note': '計數含磁碟台賬回填（近 3 天）+ 本程序增量；跨月累計與逐稿回溯用 tools/autosend_shadow_report.py。',
+    # ── ov2_js_ash_werr ──
+    'ov2_js_ash_werr': '台賬落盤失敗（資料在丟，查 logs/autosend_shadow 目錄可寫性）',
     # ── ov2_js_asr_attempts ──
     'ov2_js_asr_attempts': '轉錄請求數',
     # ── ov2_js_asr_empty ──
@@ -15804,6 +16308,10 @@ ZH_HANT = {
     'ov2_js_pma_top': '命中最高（Top 8）',
     # ── ov2_js_ps_abandoned ──
     'ov2_js_ps_abandoned': '登入放棄(次)',
+    # ── ov2_js_ps_bad_mac ──
+    'ov2_js_ps_bad_mac': 'Bad MAC 解密失敗 / 已自愈 / 連擊中對端',
+    # ── ov2_js_ps_bad_mac_tip ──
+    'ov2_js_ps_bad_mac_tip': 'libsignal 解密失敗計數（各賬號最新快照求和）。同一對端連續 N 條失敗即刪除其 Signal 會話讓下一條訊息重建（自愈），30 分鐘內不重刪。自愈數長期不漲而失敗數持續漲＝對端裝置側問題，不是本機。',
     # ── ov2_js_ps_code_stale ──
     'ov2_js_ps_code_stale': 'worker 程式碼待重啟',
     # ── ov2_js_ps_col_detail ──
@@ -15814,12 +16322,20 @@ ZH_HANT = {
     'ov2_js_ps_col_status': '狀態',
     # ── ov2_js_ps_col_time ──
     'ov2_js_ps_col_time': '上報時間',
+    # ── ov2_js_ps_forbidden ──
+    'ov2_js_ps_forbidden': '403 受限/被封（已停自動重連）',
+    # ── ov2_js_ps_forbidden_cooldown ──
+    'ov2_js_ps_forbidden_cooldown': '該賬號仍在 403 終態冷卻期內（預設 30 分鐘）：邊車未重連。請稍後再試，或換號重新配對。',
+    # ── ov2_js_ps_forbidden_tip ──
+    'ov2_js_ps_forbidden_tip': 'WhatsApp 連續多輪返回 403 forbidden：賬號被限制或封禁，邊車已停止自動重連（再連只會繼續吃 403 刷日誌）。出路：申訴解封后點「解鎖重連」；或換號在 WhatsApp 頻道頁重新掃碼配對。',
     # ── ov2_js_ps_funnel ──
     'ov2_js_ps_funnel': '半死漏斗(進→重登→恢復)',
     # ── ov2_js_ps_hint ──
     'ov2_js_ps_hint': '由 messenger-web 等外部 worker 在登入/掉線/放棄自愈時主動推送。🔴＝該賬號已無法自動收發；🟡 入站半死＝側欄有未讀但讀不到（常見 E2EE 金鑰丟失，需在**伺服器**完整重登，cookie 快照不夠）。重登成功會自動轉 🟢。告警渠道可訂閱 platform_session / inbox_stall 事件。',
     # ── ov2_js_ps_none ──
     'ov2_js_ps_none': '暫無會話狀態上報（外部 worker 未推送或全部健康）',
+    # ── ov2_js_ps_reason_class ──
+    'ov2_js_ps_reason_class': '掉線原因分類（dns=本機解析/代理）',
     # ── ov2_js_ps_relogin ──
     'ov2_js_ps_relogin': '重新登入',
     # ── ov2_js_ps_relogin_fail ──
@@ -15844,6 +16360,10 @@ ZH_HANT = {
     'ov2_js_ps_uforced': '盲區強制讀取(次)',
     # ── ov2_js_ps_unhealthy ──
     'ov2_js_ps_unhealthy': '掉線會話',
+    # ── ov2_js_ps_unlock ──
+    'ov2_js_ps_unlock': '解鎖重連',
+    # ── ov2_js_ps_unlock_ok ──
+    'ov2_js_ps_unlock_ok': '已解鎖，重連中…',
     # ── ov2_js_safe_adopt ──
     'ov2_js_safe_adopt': '草稿採納率',
     # ── ov2_js_safe_alert_open ──
@@ -15956,6 +16476,34 @@ ZH_HANT = {
     'ov2_js_xlf_slow': '慢(≥3s)',
     # ── ov2_js_xlf_title ──
     'ov2_js_xlf_title': '坐席體感：批次補譯耗時分桶（14 天，收件箱前端埋點）',
+    # ── ov2_kbh_embedded ──
+    'ov2_kbh_embedded': '已向量化',
+    # ── ov2_kbh_empty_user ──
+    'ov2_kbh_empty_user': '使用者知識庫為空——AI 擬稿只能靠人設與對話上下文，去 /knowledge 新增你自己的條目',
+    # ── ov2_kbh_feedback ──
+    'ov2_kbh_feedback': '反饋滿意率 {p}%（{n} 條）',
+    # ── ov2_kbh_feedback_none ──
+    'ov2_kbh_feedback_none': '反饋：暫無',
+    # ── ov2_kbh_hint ──
+    'ov2_kbh_hint': '命中＝kb_gate 真把條目注入 prompt 的次數（kb_query_log，滾動 7 天）；日誌裡的 hits=- 是風控關鍵詞欄位，與知識庫無關。',
+    # ── ov2_kbh_hits7 ──
+    'ov2_kbh_hits7': '近 7 天注入命中',
+    # ── ov2_kbh_last_hit ──
+    'ov2_kbh_last_hit': '最近一次注入 prompt：{t}',
+    # ── ov2_kbh_line ──
+    'ov2_kbh_line': '知識庫：使用者條目 {u} / 近 7 天命中 {h}（檢索 {q} 次）',
+    # ── ov2_kbh_never ──
+    'ov2_kbh_never': '近 7 天沒有任何知識條目進過 prompt',
+    # ── ov2_kbh_user ──
+    'ov2_kbh_user': '使用者條目',
+    # ── ov2_kbh_vendor ──
+    'ov2_kbh_vendor': '廠商預置',
+    # ── ov2_kbh_vendor_excluded ──
+    'ov2_kbh_vendor_excluded': '廠商預置 {n} 條已從對客檢索硬排除（不看啟用/停用），可在 /knowledge 一鍵清空',
+    # ── ov2_kbh_vendor_included ──
+    'ov2_kbh_vendor_included': '⚠ 廠商預置 {n} 條正參與對客檢索（伺服器部署預設；桌面應為排除）',
+    # ── ov2_kbh_zero_hits ──
+    'ov2_kbh_zero_hits': '有 {u} 條使用者條目卻 7 天零命中：觸發詞是否貼近客戶原話？向量化 {e}/{u}',
     # ── ov2_ks_active ──
     'ov2_ks_active': '生效作用域',
     # ── ov2_ks_auto ──
@@ -16482,6 +17030,38 @@ ZH_HANT = {
     'ov2_rl_unans': '零回覆（超10分鐘沒人回）',
     # ── ov2_rl_unans_short ──
     'ov2_rl_unans_short': '零回覆',
+    # ── ov2_rq_applied ──
+    'ov2_rq_applied': 'worker 回執已引用',
+    # ── ov2_rq_banned ──
+    'ov2_rq_banned': '禁用詞命中 / 觀測條數',
+    # ── ov2_rq_fallback ──
+    'ov2_rq_fallback': '去引用重發',
+    # ── ov2_rq_inject ──
+    'ov2_rq_inject': '地區塊注入（TW/HK）· 解析來源',
+    # ── ov2_rq_note ──
+    'ov2_rq_note': '地區檔只在 zh-TW/zh-HK 人設或「發→zh-tw/yue」會話注入，zh-CN 存量 prompt 逐字不變；禁用詞/簡體字只觀測不改文字，命中率高再決定要不要 L4 重寫。引用回覆：未回覆入站 ≥2 且最相關候選過地板才引用，single_inbound=單條入站（正常，不引用），low_relevance 佔比高＝地板可下調。卡上為程序口徑（重啟清零）；跨重啟讀數與閾值/L4 判詞用 python tools/region_quote_gray_report.py（讀 logs/i4_gray）。',
+    # ── ov2_rq_off ──
+    'ov2_rq_off': '未開',
+    # ── ov2_rq_on ──
+    'ov2_rq_on': '已開',
+    # ── ov2_rq_quote ──
+    'ov2_rq_quote': '引用決策：引用 / 決策次數',
+    # ── ov2_rq_script ──
+    'ov2_rq_script': '繁體檔漏簡體 / 觀測條數',
+    # ── ov2_rq_skipped ──
+    'ov2_rq_skipped': '不引用原因分佈',
+    # ── ov2_rq_src_default ──
+    'ov2_rq_src_default': '全域性預設',
+    # ── ov2_rq_src_dialect ──
+    'ov2_rq_src_dialect': '粵語音色',
+    # ── ov2_rq_src_location ──
+    'ov2_rq_src_location': '居住地',
+    # ── ov2_rq_src_outbound ──
+    'ov2_rq_src_outbound': '會話發→',
+    # ── ov2_rq_src_persona ──
+    'ov2_rq_src_persona': '人設欄位',
+    # ── ov2_rq_thr ──
+    'ov2_rq_thr': '閾值 未回覆條數 / 相關性地板',
     # ── ov2_rtv_active ──
     'ov2_rtv_active': '進行中 / 峰值',
     # ── ov2_rtv_alert_hint ──
@@ -16680,6 +17260,8 @@ ZH_HANT = {
     'ov2_s_ai_quality': 'AI 質量',
     # ── ov2_s_alertlink ──
     'ov2_s_alertlink': '告警鏈路（最後一公里自檢）',
+    # ── ov2_s_ashadow ──
+    'ov2_s_ashadow': '風險放行影子台賬（#160：舊規則本會扣、現已放行）',
     # ── ov2_s_asmedia ──
     'ov2_s_asmedia': 'B 線自動媒體（autosend 語音克隆 / 發圖兌現）',
     # ── ov2_s_asr ──
@@ -16746,6 +17328,8 @@ ZH_HANT = {
     'ov2_s_irst': '例項重啟冷卻（智聊/通譯 · 防連環殺）',
     # ── ov2_s_ishadow ──
     'ov2_s_ishadow': '跨平台身份影子（只發現 · 不寫關聯）',
+    # ── ov2_s_kbh ──
+    'ov2_s_kbh': '知識庫接通性（使用者條目 / 近 7 天注入命中）',
     # ── ov2_s_ksguard ──
     'ov2_s_ksguard': '緊急停發（生效急停 / 一鍵解除）',
     # ── ov2_s_lident ──
@@ -16792,6 +17376,8 @@ ZH_HANT = {
     'ov2_s_refg': '邀請裂變（免費額度增長引擎）',
     # ── ov2_s_rlat ──
     'ov2_s_rlat': '回覆時延 SLO（客戶等了多久才被回 · 24h 首答 p50/p95）',
+    # ── ov2_s_rq ──
+    'ov2_s_rq': '地區語氣檔 · 自動鏈引用回覆（I-4 #40/#37）',
     # ── ov2_s_rtvoice ──
     'ov2_s_rtvoice': '實時語音通話（接通率 / 時長 / 結束通話原因 / 主機健康）',
     # ── ov2_s_rtvoice_alert ──
@@ -18388,6 +18974,8 @@ ZH_HANT = {
     'pma_adopt': '採納',
     # ── pma_adopt_all ──
     'pma_adopt_all': '全部採納',
+    # ── pma_adv ──
+    'pma_adv': '高階：配文 / 權重 / 關係門檻',
     # ── pma_ai_btn ──
     'pma_ai_btn': '🤖 AI 補標',
     # ── pma_ai_cover ──
@@ -18448,6 +19036,10 @@ ZH_HANT = {
     'pma_del_confirm': '確定刪除這個媒體？（會同時刪掉檔案）',
     # ── pma_deleted ──
     'pma_deleted': '已刪除',
+    # ── pma_discard_all ──
+    'pma_discard_all': '放棄改動',
+    # ── pma_discard_confirm ──
+    'pma_discard_confirm': '放棄 {n} 張卡片的未儲存改動？',
     # ── pma_drop_hint ──
     'pma_drop_hint': '也可把圖片/影片拖進這裡',
     # ── pma_dup_skip ──
@@ -18468,6 +19060,8 @@ ZH_HANT = {
     'pma_f_flag': '敏感/待複核',
     # ── pma_f_nohit ──
     'pma_f_nohit': '零命中',
+    # ── pma_f_notrg ──
+    'pma_f_notrg': '缺觸發詞',
     # ── pma_f_off ──
     'pma_f_off': '未啟用',
     # ── pma_f_photo ──
@@ -18510,8 +19104,16 @@ ZH_HANT = {
     'pma_load_fail': '載入失敗：',
     # ── pma_loading ──
     'pma_loading': '載入中…',
+    # ── pma_more ──
+    'pma_more': '載入更多（還有 {n}）',
     # ── pma_near_dup_warn ──
     'pma_near_dup_warn': '「{name}」與庫裡已有素材高度相似（指紋距離 {d}）——已入庫，請確認是否重複',
+    # ── pma_need_trg_ph ──
+    'pma_need_trg_ph': '填觸發詞：客戶說到什麼就發這張（逗號分隔）',
+    # ── pma_need_trg_toast ──
+    'pma_need_trg_toast': '已上傳 {n} 個素材——請給它們填觸發詞；AI 識別完成後卡片上會出現建議詞，點一下即可採納',
+    # ── pma_notrg_n ──
+    'pma_notrg_n': '{n} 個缺觸發詞（不填＝只在泛化要圖時隨機發）',
     # ── pma_photo ──
     'pma_photo': '圖片',
     # ── pma_pool_generic ──
@@ -18522,6 +19124,8 @@ ZH_HANT = {
     'pma_pool_none': '無命中（不會自動發）',
     # ── pma_retag_one ──
     'pma_retag_one': '🔍 重新識別',
+    # ── pma_save_all ──
+    'pma_save_all': '儲存 {n} 處改動',
     # ── pma_save_btn ──
     'pma_save_btn': '儲存',
     # ── pma_save_fail ──
@@ -18530,6 +19134,8 @@ ZH_HANT = {
     'pma_saved': '已儲存',
     # ── pma_saved_auto ──
     'pma_saved_auto': '已自動儲存 ✓',
+    # ── pma_saved_n ──
+    'pma_saved_n': '已儲存 {n} 處改動',
     # ── pma_saving ──
     'pma_saving': '儲存中…',
     # ── pma_search_ph ──
@@ -18584,6 +19190,10 @@ ZH_HANT = {
     'pma_triggers_label': '觸發詞',
     # ── pma_triggers_ph ──
     'pma_triggers_ph': '觸發詞（逗號分隔，可選）',
+    # ── pma_unsaved_dropped ──
+    'pma_unsaved_dropped': '相簿有 {n} 處改動未儲存，已隨切換人設作廢',
+    # ── pma_unsaved_n ──
+    'pma_unsaved_n': '{n} 張卡片有改動未儲存',
     # ── pma_upload_fail ──
     'pma_upload_fail': '失敗',
     # ── pma_upload_label ──
@@ -18924,7 +19534,7 @@ ZH_HANT = {
     # ── psn_dtab_preview ──
     'psn_dtab_preview': '預覽',
     # ── psn_dtab_stock ──
-    'psn_dtab_stock': '備貨',
+    'psn_dtab_stock': '上線準備',
     # ── psn_dtab_style ──
     'psn_dtab_style': '風格',
     # ── psn_dtab_voice ──
@@ -18989,6 +19599,10 @@ ZH_HANT = {
     'psn_global_defaults_hint': '長度 / emoji 不設定時，會跟隨「自動回覆設定」頁的全域性預設；此處顯式選擇永遠優先。',
     # ── psn_global_defaults_link ──
     'psn_global_defaults_link': '檢視全域性預設 →',
+    # ── psn_gr_leave_confirm ──
+    'psn_gr_leave_confirm': '「全域性規則」有未儲存的改動。\n\n確定 = 放棄改動並離開；取消 = 留在本頁先儲存。',
+    # ── psn_gr_leave_stay ──
+    'psn_gr_leave_stay': '已留在本頁：全域性規則還有未儲存的改動，請先儲存或放棄',
     # ── psn_hp_all_good ──
     'psn_hp_all_good': '全部健康，無需處理 🎉',
     # ── psn_hp_apply ──
@@ -20129,6 +20743,8 @@ ZH_HANT = {
     'psn_quiz_hist_judged_tip': '關鍵詞判錯、LLM 裁判改判為對的題數；持續走高說明判分越來越依賴兜底',
     # ── psn_quiz_hist_loading ──
     'psn_quiz_hist_loading': '載入中…',
+    # ── psn_quiz_hist_open_fail ──
+    'psn_quiz_hist_open_fail': '這份報告暫時打不開（資料不完整或服務未響應），可稍後再試',
     # ── psn_quiz_hist_sum ──
     'psn_quiz_hist_sum': '共 {n} 次 · 均分 {avg} · 最近 {last}',
     # ── psn_quiz_hist_title ──
@@ -20393,38 +21009,40 @@ ZH_HANT = {
     'psn_src_published_t': '已固化到 personas.yaml（可 git 追蹤的規範定義）',
     # ── psn_start_import ──
     'psn_start_import': '開始匯入',
-    # ── psn_stock_add_fail ──
-    'psn_stock_add_fail': '入庫失敗：',
+    # ── psn_stock_adv_sub ──
+    'psn_stock_adv_sub': '說話指紋是口語層的研發配置，不影響能否上線；常用短句的預合成快取已從這裡移出（運營總覽「AvatarHub 語音」卡可入庫）。',
+    # ── psn_stock_adv_title ──
+    'psn_stock_adv_title': '高階（運營）',
+    # ── psn_stock_bind_accounts ──
+    'psn_stock_bind_accounts': '已應用到 {n} 個賬號',
+    # ── psn_stock_bind_chats ──
+    'psn_stock_bind_chats': '{n} 個會話單獨繫結',
+    # ── psn_stock_bind_default ──
+    'psn_stock_bind_default': '全域性預設人設',
+    # ── psn_stock_bind_none ──
+    'psn_stock_bind_none': '還沒有賬號在用這個人設——不應用到賬號，它不會對任何客戶說話',
     # ── psn_stock_done ──
-    'psn_stock_done': '🎉 全部就緒，該人設開箱即用',
+    'psn_stock_done': '🎉 全部就緒，這個人設可以開始接客',
     # ── psn_stock_go_album ──
     'psn_stock_go_album': '去相簿備貨',
+    # ── psn_stock_go_album_enable ──
+    'psn_stock_go_album_enable': '去開啟照片能力',
+    # ── psn_stock_go_apply ──
+    'psn_stock_go_apply': '應用到賬號…',
     # ── psn_stock_go_voice ──
     'psn_stock_go_voice': '去語音頁',
-    # ── psn_stock_lines_add ──
-    'psn_stock_lines_add': '入庫',
-    # ── psn_stock_lines_added ──
-    'psn_stock_lines_added': '已入庫，夜間任務會自動渲染成預渲染語音',
-    # ── psn_stock_lines_common ──
-    'psn_stock_lines_common': '共享',
-    # ── psn_stock_lines_note ──
-    'psn_stock_lines_note': '台詞庫只用於語音提速（夜間預合成克隆聲，命中同句零延遲發成品音訊），不會教 AI 主動說這些話——想讓 AI 學會話術/知識，請用知識庫或人設檔案。',
-    # ── psn_stock_lines_own ──
-    'psn_stock_lines_own': '專屬',
-    # ── psn_stock_lines_ph ──
-    'psn_stock_lines_ph': '輸入一條該人設常用短句（≤60 字），今晚自動渲染成聲',
     # ── psn_stock_load_fail ──
     'psn_stock_load_fail': '載入失敗：',
     # ── psn_stock_missing ──
-    'psn_stock_missing': '未備',
+    'psn_stock_missing': '待完成',
     # ── psn_stock_na ──
     'psn_stock_na': '不適用',
-    # ── psn_stock_pack_missing ──
-    'psn_stock_pack_missing': 'spoken_style 包未隨部署，本行不計入完成度',
     # ── psn_stock_pending_restart ──
-    'psn_stock_pending_restart': '備貨聚合端點將隨下次服務重啟生效，屆時再來看這頁',
+    'psn_stock_pending_restart': '此項將隨下次服務重啟生效，屆時再來看這頁',
     # ── psn_stock_photos_off ──
-    'psn_stock_photos_off': '該人設發圖能力已關（capabilities.photos=false），不計入完成度',
+    'psn_stock_photos_off': '照片能力未開啟，本行不計入（開了再備相簿）',
+    # ── psn_stock_photos_off_stocked ──
+    'psn_stock_photos_off_stocked': '已有 {n} 張素材在等開關',
     # ── psn_stock_print_copied ──
     'psn_stock_print_copied': '已複製（也可直接在此編輯後點「儲存到本例項」）',
     # ── psn_stock_print_copy ──
@@ -20442,23 +21060,23 @@ ZH_HANT = {
     # ── psn_stock_profile_fields_missing ──
     'psn_stock_profile_fields_missing': '建議補齊欄位：',
     # ── psn_stock_ready ──
-    'psn_stock_ready': '已備',
+    'psn_stock_ready': '已就緒',
     # ── psn_stock_row_album ──
     'psn_stock_row_album': '相簿',
-    # ── psn_stock_row_lines ──
-    'psn_stock_row_lines': '台詞庫',
+    # ── psn_stock_row_binding ──
+    'psn_stock_row_binding': '繫結賬號',
     # ── psn_stock_row_print ──
     'psn_stock_row_print': '說話指紋',
     # ── psn_stock_row_profile ──
     'psn_stock_row_profile': '檔案',
     # ── psn_stock_row_voice ──
-    'psn_stock_row_voice': '音色',
+    'psn_stock_row_voice': '聲音',
     # ── psn_stock_shared ──
     'psn_stock_shared': '共享池',
     # ── psn_stock_sub ──
-    'psn_stock_sub': '（檔案 / 克隆音色 / 相簿 / 台詞庫 / 說話指紋——缺的這裡給入口；全✓＝該人設開箱即用）',
+    'psn_stock_sub': '（檔案 / 聲音 / 相簿 / 繫結賬號——缺的這裡給入口；全✓＝這個人設可以開始接客）',
     # ── psn_stock_title ──
-    'psn_stock_title': '備貨就緒度',
+    'psn_stock_title': '上線準備',
     # ── psn_stock_transcript_missing ──
     'psn_stock_transcript_missing': '缺逐字稿（強情緒通道將被強制中性保音色）',
     # ── psn_stock_transcript_ok ──
@@ -20469,6 +21087,10 @@ ZH_HANT = {
     'psn_stock_voice_clone': '克隆聲',
     # ── psn_stock_voice_no_ref ──
     'psn_stock_voice_no_ref': '缺參考音（去語音頁登記克隆聲）',
+    # ── psn_stock_voice_none ──
+    'psn_stock_voice_none': '還沒配聲音（繼承全域性預設）',
+    # ── psn_stock_voice_off ──
+    'psn_stock_voice_off': '已選不發語音，本行不計入',
     # ── psn_studio_title ──
     'psn_studio_title': '人設工作室',
     # ── psn_switch_all_plat ──
@@ -20499,6 +21121,10 @@ ZH_HANT = {
     'psn_tag': '標籤',
     # ── psn_tag_input_ph ──
     'psn_tag_input_ph': '輸入標籤名…',
+    # ── psn_tags_less ──
+    'psn_tags_less': '收起標籤',
+    # ── psn_tags_more ──
+    'psn_tags_more': '更多 {n} 個標籤',
     # ── psn_th_name ──
     'psn_th_name': '名稱',
     # ── psn_th_role ──
@@ -20591,6 +21217,8 @@ ZH_HANT = {
     'psn_voice_id': '音色 / Voice ID',
     # ── psn_voice_id_eg ──
     'psn_voice_id_eg': '例：zh-CN-XiaoxiaoNeural',
+    # ── psn_voice_prerender_note ──
+    'psn_voice_prerender_note': '常用短句會在夜間自動預合成以加快傳送，無需維護。',
     # ── psn_voice_preview_fail ──
     'psn_voice_preview_fail': '試聽失敗：{err}',
     # ── psn_voice_preview_t ──
@@ -24781,6 +25409,8 @@ ZH_HANT = {
     'tp_s022': '鍵名',
     # ── tp_s023 ──
     'tp_s023': '每行寫一條',
+    # ── tq_chars_unit ──
+    'tq_chars_unit': '字元',
     # ── tq_js_del_confirm ──
     'tq_js_del_confirm': '危險操作：輸入使用者名稱 {name} 以確認刪除',
     # ── tq_js_del_mismatch ──
@@ -24937,6 +25567,12 @@ ZH_HANT = {
     'uq_warnbar_cta': '點選檢視',
     # ── uq_warnbar_text ──
     'uq_warnbar_text': '字元額度已用 {pct}%（{used}/{quota}）',
+    # ── us_account_note ──
+    'us_account_note': '這裡管理的是智聊本身的操作員賬號（誰能登入這個後台 / 桌面端），不是你的 Telegram、WhatsApp、LINE 等聊天平台賬號——那些在「接入」頁管理。',
+    # ── us_dev_desktop ──
+    'us_dev_desktop': '智聊桌面端',
+    # ── us_dev_this ──
+    'us_dev_this': '這台裝置',
     # ── us_js001 ──
     'us_js001': '角色已更新',
     # ── us_js002 ──
@@ -24959,6 +25595,10 @@ ZH_HANT = {
     'us_js010': '最後活躍：',
     # ── us_kicked_n ──
     'us_kicked_n': '已踢出 {n} 個裝置',
+    # ── us_login_from_session_t ──
+    'us_login_from_session_t': '按最近一次登入會話的時間',
+    # ── us_never_login ──
+    'us_never_login': '從未',
     # ── us_s001 ──
     'us_s001': '使用者管理',
     # ── us_s002 ──
@@ -24987,6 +25627,16 @@ ZH_HANT = {
     'us_s013': '至少 6 位',
     # ── us_s014 ──
     'us_s014': '只讀觀察員',
+    # ── us_sess_hint ──
+    'us_sess_hint': '同一台裝置重複啟動只保留最近一條；超過 7 天沒動的登入自動失效',
+    # ── us_sess_operator ──
+    'us_sess_operator': '操作員',
+    # ── us_sess_since ──
+    'us_sess_since': '登入於：',
+    # ── us_sess_tech ──
+    'us_sess_tech': '技術資訊',
+    # ── us_sess_title ──
+    'us_sess_title': '已登入的裝置',
     # ── users ──
     'users': '使用者管理',
     # ── veval_blind ──
@@ -25661,6 +26311,8 @@ ZH_HANT = {
     'wf_bs_show': '環節明細',
     # ── wf_bulk_btn ──
     'wf_bulk_btn': '📤 批次掛鏈',
+    # ── wf_bulk_btn_tip ──
+    'wf_bulk_btn_tip': '按篩選結果給一批客戶啟動本鏈；先預覽再確認',
     # ── wf_bulk_confirm ──
     'wf_bulk_confirm': '{n} 個會話將啟動本鏈（沉默≥{d}天），繼續？',
     # ── wf_bulk_done ──
