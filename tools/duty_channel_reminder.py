@@ -10,8 +10,10 @@
      不要贴群」。同一报障人 6 小时内只提醒一次（连发 20 张图也只提醒一次）；bot 已立单则带
      --ticket（@报障人 + 工单 footer），否则正文自带称呼。
   ② 报告回执：watch_loop 新下载到的 field-agent 报告（report 类；verify / 远程 diag 不发）→
-     群里回一条「收到 <码>（<主题>）」，同一轮多份合并成一条。没有这条，把人推去 Cursor 就是
-     再演一次 09-05 的零回音（52 份报告只立 29 份）。**不自动立单**——挂单/立单归 L-7 A。
+     群里回一条「收到 <码>（<主题>）→ 已立/已挂 #N」，同一轮多份合并成一条。没有这条，把人推去
+     Cursor 就是再演一次 09-05 的零回音（52 份报告只立 29 份）。
+     单号来自 tools/duty_auto_ticket.py（L-7 A，2026-09-06）：回执前先跑它的判定+落库，
+     结果接进同一条回执；它失败/超时就回落成无单号的「收到 <码>」，绝不因它丢回执。
 
 护栏：
   - 首次运行只初始化水位（event_id = 当前 max；receipted = 已下载全部码），不回放历史；
@@ -65,11 +67,12 @@ DEFAULT_REMIND = (
     "为什么：群里的图我们只能看现象；Cursor 报告自带那一刻的日志、运行状态和你助手的分析，"
     "是能直接查根因的证据——之前 28 份报告漏立单，也是两条渠道并行、我们只盯了群造成的。\n"
     "怎么做：对 Cursor 说一句现象（例如「批量挂链弹层看不清，跑 report」），它会打包上传并给你一个 6 位码；"
-    "复验旧问题就在里面带上单号 #N。报告到达后群里会自动回一条「收到 <码>」，值守立单/挂单后再回单号；"
+    "复验旧问题就在里面带上单号 #N。报告到达后群里会自动回一条「收到 <码>，已立/已挂 #N」；"
     "群里只用来回答我们的追问。\n"
     "你刚发的这条{ticket_clause}。"
 )
-DEFAULT_RECEIPT = "{name} 报告已收到：{items}。已入值守队列，立单/挂单后回单号；不必再在群里贴同一件。"
+DEFAULT_RECEIPT = ("{name} 报告已收到：{items}。不必再在群里贴同一件；"
+                   "复验请对着单号看我们发的验收清单，进展会按单回访。")
 
 
 def log(msg: str) -> None:
@@ -233,6 +236,27 @@ def check_group_submissions(st: dict, *, cooldown_h: float, dry_run: bool,
 
 # ── ② 报告回执 ───────────────────────────────────────────────────────────────
 
+def _auto_ticket(code: str, *, dry_run: bool) -> Optional[dict]:
+    """tools/duty_auto_ticket.auto_ticket 的防御性包装：模块缺失/异常都只记日志。"""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import duty_auto_ticket as dat  # noqa: E402
+        return dat.auto_ticket(code, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001
+        log(f"auto_ticket {code} unavailable: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _receipt_item(code: str, topic: str, res: Optional[dict]) -> str:
+    try:
+        import duty_auto_ticket as dat  # noqa: E402
+        return dat.receipt_item(code, topic, res)
+    except Exception:
+        return f"{code}（{topic}）"
+
+
 def _report_head(code: str) -> Optional[Tuple[str, str, str]]:
     """(kind, fp4, note) —— 非 report 类返回 kind 供跳过；目录不存在返回 None。"""
     d = DIAG / code
@@ -269,12 +293,17 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
                 continue
             kind, fp4, note = head
             receipted.add(code)
-            if kind != "report":
+            if kind not in ("report", "verify"):
                 log(f"pack {code} kind={kind} — 不回执")
+                continue
+            # L-7 A：先挂单/立单，单号接进这条回执（工具自身失败 → res=None → 无单号回执）
+            res = _auto_ticket(code, dry_run=dry_run)
+            if kind == "verify" and not (res and res.get("ticket")):
+                log(f"pack {code} kind=verify 无 #N — 不回执")
                 continue
             owner = FP_OWNER.get(fp4, f"机器 {fp4}*")
             topic = re.sub(r"^【[^】]+】", "", note).strip()[:36] or "（无备注）"
-            by_owner.setdefault(owner, []).append(f"{code}（{topic}）")
+            by_owner.setdefault(owner, []).append(_receipt_item(code, topic, res))
         for owner, items in by_owner.items():
             tpl = read_template(TEXT_RECEIPT, DEFAULT_RECEIPT)
             text = tpl.replace("{name}", owner).replace("{items}", "、".join(items))
