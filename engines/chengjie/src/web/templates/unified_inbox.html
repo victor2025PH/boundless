@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906a">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906b">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -605,15 +605,17 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
             </div>
           </span>
         </div>
-        {# #142 被埋会话界面化：主徽标剔除归档未读后，「归档中还有 N 条未读」在这里
-           常驻可见（0 条不占版面）——点击直达归档视图。内容由 _renderBuriedHint 填充。 #}
-        <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
-             onclick="_gotoBuriedArchive()"
-             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
       </div>
       <div class="filter-summary" id="filter-summary"></div>
       </div><!-- /.list-header-body -->
     </div><!-- /.list-header -->
+    {# #142 被埋会话界面化 → #170（L-3 B）挪出 .list-header-body：那块列表一滚（>72px）整体折起，
+       入口随之消失，skuio 用了一夜没找到。现在它是 list-header 的**兄弟**节点——不折叠、
+       常驻直到归零（0 条不占版面）。文案「有 N 条未读在已归档会话里（最久 X 小时）」+
+       「取消归档这 N 条」/「逐条查看」，内容由 _renderBuriedHint 填充。 #}
+    <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
+         onclick="_gotoBuriedArchive()"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
     <!-- Phase 16: 标签概览 strip -->
     <div class="tag-strip collapsed" id="tag-strip"></div>
 
@@ -2533,7 +2535,14 @@ async function _openAcctUnreadPop(plat,aid,anchor){
       rows+=`<button type="button" class="acup-row" data-cid="${esc(cid)}"><span class="acup-name">${esc(nm)}</span><span class="acup-txt">${esc(txt)}</span></button>`;
     });
     const mark=aid?`<button type="button" class="acup-mark" data-acup-mark="1">${esc(window.T('inbox.acct.unread_mark'))}</button>`:'';
-    pop.innerHTML='<div class="acup-hd"><span>'+esc(window.T('inbox.acct.unread_pop_title'))+'</span>'+mark+'</div><div class="acup-bd">'+(rows||('<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>'))+'</div>';
+    // #170（L-3 B）入口引导：浮层前 3 次出现带一行说明——角标数字＝这几条、怎么清零、
+    // 归档里的未读不在此（看列表上方横幅）。本机 localStorage 计数，之后不再占位。
+    let hint='';
+    try{
+      const k='ws_acup_hint_n', seen=parseInt(localStorage.getItem(k)||'0',10)||0;
+      if(seen<3 && rows){ hint='<div class="acup-hint">'+esc(window.T('inbox.acct.unread_pop_hint'))+'</div>'; localStorage.setItem(k,String(seen+1)); }
+    }catch(_){}
+    pop.innerHTML='<div class="acup-hd"><span>'+esc(window.T('inbox.acct.unread_pop_title'))+'</span>'+mark+'</div>'+hint+'<div class="acup-bd">'+(rows||('<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>'))+'</div>';
     pop.querySelectorAll('.acup-row').forEach(function(btn){
       btn.addEventListener('click',function(){
         const cid=btn.getAttribute('data-cid')||'';
@@ -5083,10 +5092,14 @@ function _renderBuriedHint(st){
     // 的根因是归档态会话不在默认视图、点开也未必落在同一账号；一键把它们浮回默认
     // 视图才是可行动的出路（取消归档是安全方向，走 _undoToast 可撤）。
     const convs=st?Math.max(0,Number(st.convs)||0):0;
+    // L-3 B：文案带「最久 X 小时」（与看门狗被埋告警同口径；/api/admin/buried-conversations
+    // 节流探一次，未到手先不带小时数）——用户能从这行读出「有人等了多久」。
+    const hrs=_buriedOldestHours();
+    const txt=hrs>0?window.Tf('inbox.buried.banner',{n:n,h:hrs}):window.Tf('inbox.buried.banner_nohours',{n:n});
     el.innerHTML=`<span class="bh-ic">${uiIcon('archive',12)}</span>`
-      +`<span class="bh-txt">${esc(window.Tf('inbox.buried.hint',{n:n}))}</span>`
+      +`<span class="bh-txt">${esc(txt)}</span>`
       +(convs?`<button type="button" class="bh-unarch" data-bh-unarch="1" title="${esc(window.T('inbox.buried.unarch_t'))}">${esc(window.Tf('inbox.buried.unarch',{n:convs}))}</button>`:'')
-      +`<span class="bh-go">${esc(window.T('inbox.arch.foot_go'))}</span>`;
+      +`<span class="bh-go">${esc(window.T('inbox.buried.view_each'))}</span>`;
     el.title=window.Tf('inbox.filter.buried_t',{n:st.convs});
     el.style.display='';
     const ub=el.querySelector('[data-bh-unarch]');
@@ -5095,6 +5108,26 @@ function _renderBuriedHint(st){
       _unarchiveBuried(ub);
     });
   }catch(_){ el.style.display='none'; }
+}
+/* #170：被埋会话「最久多少小时」——DB 级权威端点节流探测（5 分钟一次；0 条时不探），
+   到手后重绘一次横幅。失败静默（少一个数字，不少入口）。 */
+var _buriedOldest={h:0,ts:0,busy:false};
+function _buriedOldestHours(){
+  try{
+    const now=Date.now();
+    if(!_buriedOldest.busy && now-_buriedOldest.ts>300000){
+      _buriedOldest.busy=true; _buriedOldest.ts=now;
+      apiFetch('/api/admin/buried-conversations', undefined, {timeoutMs:15000}).then(r=>r.ok?r.json():null).then(function(d){
+        _buriedOldest.busy=false;
+        if(!d||!Array.isArray(d.rows)) return;
+        let oldest=0; const t=Date.now()/1000;
+        d.rows.forEach(function(x){ const lt=Number(x&&x.last_ts)||0; if(lt>0) oldest=Math.max(oldest,(t-lt)/3600); });
+        const h=Math.floor(oldest);
+        if(h!==_buriedOldest.h){ _buriedOldest.h=h; try{ _renderBuriedHint(_buriedStats()); }catch(_){} }
+      }).catch(function(){ _buriedOldest.busy=false; });
+    }
+  }catch(_){}
+  return _buriedOldest.h||0;
 }
 /* #170 一键取消归档当前视角（平台/账号筛选）下全部被埋会话。
    会话清单以 /api/admin/buried-conversations 为权威（DB 级，与 HealthWatchdog

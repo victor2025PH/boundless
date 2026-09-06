@@ -912,6 +912,8 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .ac-unread-pop{position:fixed;z-index:80;min-width:240px;max-width:360px;max-height:70vh;overflow:auto;background:var(--bg-panel,#fff);border:1px solid var(--border,#e2e8f0);border-radius:10px;box-shadow:0 12px 36px rgba(0,0,0,.18);padding:8px 0;font-size:12px;}
 .ac-unread-pop .acup-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 12px 8px;font-weight:700;color:var(--text-main);}
 .ac-unread-pop .acup-bd{padding:0 4px 4px;}
+/* #170 首次引导行（前 3 次出现）：琥珀低调说明，与被埋横幅同色族 */
+.ac-unread-pop .acup-hint{margin:0 8px 6px;padding:5px 8px;border-radius:7px;font-size:11.5px;line-height:1.45;color:var(--th-ink-amber7,#92400e);background:color-mix(in srgb,#d97706 9%,transparent);border:1px dashed color-mix(in srgb,#d97706 40%,transparent);}
 .ac-unread-pop .acup-row{display:block;width:100%;text-align:left;border:0;background:transparent;padding:7px 12px;cursor:pointer;color:var(--text-main);}
 .ac-unread-pop .acup-row:hover{background:var(--bg-soft,#f8fafc);}
 .ac-unread-pop .acup-name{display:block;font-weight:600;}

@@ -506,6 +506,7 @@ class HealthWatchdog:
         weekly_interval_sec: float = 604800.0,
         daily_report_enabled: bool = False,
         daily_interval_sec: float = 86400.0,
+        surface_in_ui: bool = True,
     ) -> None:
         self._app = app
         self._config_manager = config_manager
@@ -532,6 +533,15 @@ class HealthWatchdog:
         self.total_daily_reports: int = 0
         # 默认只对 fail（red）告警；warn 噪音大，可显式开
         self._alert_on_warn = bool(alert_on_warn)
+        # #170：alert_on_warn 只管**外部** webhook 要不要收黄灯；「坐席在工作台里
+        # 看得见」是另一回事——被埋会话 8 个 86h 在 alert_on_warn=False 下只写日志，
+        # 用户翻不到。surface_in_ui（默认开，配置 health_watchdog.surface_in_ui 可关）
+        # 把这类「客户在等」的巡检结论写进工作台通知中心（进程级 notif_queue，按 id
+        # 合并、归零即撤），与 webhook 通道正交。
+        self._surface_in_ui = bool(surface_in_ui)
+        self._ui_surfaced: Dict[str, bool] = {}
+        # 启动一次性卫生扫描（#207 已消化的「需人工」标 / #170 已删会话的孤儿未读）
+        self._hygiene_done = False
         self._stop_evt = asyncio.Event()
         self._running = False
         self._last_sig: Optional[str] = None
@@ -762,8 +772,8 @@ class HealthWatchdog:
     async def run(self) -> None:
         self._running = True
         self._stop_evt.clear()
-        logger.info("HealthWatchdog 已启动（interval=%.0fs alert_on_warn=%s）",
-                    self._interval, self._alert_on_warn)
+        logger.info("HealthWatchdog 已启动（interval=%.0fs alert_on_warn=%s surface_in_ui=%s）",
+                    self._interval, self._alert_on_warn, self._ui_surface_enabled())
         # 启动后稍等，避开冷启动期的瞬时 fail（worker 尚未 running）
         try:
             await asyncio.wait_for(self._stop_evt.wait(), timeout=min(60.0, self._interval))
@@ -822,6 +832,13 @@ class HealthWatchdog:
 
     def _tick(self) -> None:
         self._evaluate_health()
+
+        # 启动一次性卫生扫描（首 tick 跑一次；store 未就绪则下 tick 再试）
+        if not self._hygiene_done:
+            try:
+                self._startup_hygiene()
+            except Exception:
+                logger.debug("启动卫生扫描异常（已忽略）", exc_info=True)
 
         # E3：计费异常巡检（超席位/超额），独立去抖，经 D3 通道外发。
         try:
@@ -3072,6 +3089,93 @@ class HealthWatchdog:
                             if isinstance(cfg, dict) else {}).get("enforce")) else "关闭（软提醒）",
             [(e["username"], e["pct"]) for e in over[:3]])
 
+    def _startup_hygiene(self) -> None:
+        """进程启动后跑一次的状态卫生（#207 / #170）：把「界面上还亮着、现场早已过去」
+        的残标清掉，并落 INFO 让值守知道清了什么。
+
+        - #207：带「需人工」且客户消息已被消化（末条为出站且晚于打标）→ 自动摘
+          （只摘 ``dup_guard_blocked`` 等「AI 没能回」类系统标，crisis/人工标不动）；
+          Loki 会话（dup 拦截 02:57 打标，AI 11:24 回上，红标挂到次日）装载后即消。
+        - #170：已删除（有墓碑）的会话仍带 unread 计数＝孤儿未读——徽标口径早已
+          剔除它们，但旧口径/第三方读数仍会算进去，归零一次并落日志。
+        store 未就绪 → 保持未完成，下 tick 再试。
+        """
+        store = self._inbox()
+        if store is None:
+            return
+        self._hygiene_done = True
+        try:
+            from src.integrations.protocol_autoreply import sweep_stale_needs_human
+            res = sweep_stale_needs_human(store)
+            if res.get("cleared"):
+                logger.info("启动卫生扫描：「需人工」已消化自动摘标 %d 个（保留 %d）",
+                            res.get("cleared", 0), res.get("kept", 0))
+        except Exception:
+            logger.debug("启动卫生扫描（需人工）失败（已忽略）", exc_info=True)
+        try:
+            from src.inbox.unread_aggregate import purge_orphan_unread
+            n = purge_orphan_unread(store)
+            if n:
+                logger.info("启动卫生扫描：已删会话残留的孤儿未读归零 %d 个会话", n)
+        except Exception:
+            logger.debug("启动卫生扫描（孤儿未读）失败（已忽略）", exc_info=True)
+
+    def _ui_surface_enabled(self) -> bool:
+        """surface_in_ui 生效值：构造参数为底，配置 ``health_watchdog.surface_in_ui`` 可覆写。"""
+        try:
+            cfg = getattr(self._config_manager, "config", None) or {}
+            hw = (cfg.get("health_watchdog") or {}) if isinstance(cfg, dict) else {}
+            if isinstance(hw, dict) and "surface_in_ui" in hw:
+                return bool(hw.get("surface_in_ui"))
+        except Exception:
+            pass
+        # 测试/旧路径经 __new__ 绕过 __init__ 构造 → 缺属性按默认开
+        return bool(getattr(self, "_surface_in_ui", True))
+
+    def _surface_ui_status(self, sid: str, text: str, *, clear: bool = False) -> bool:
+        """把巡检结论写进工作台通知中心（#170「上屏」路径）。
+
+        与 ``POST /api/workspace/notifications/sys-status`` 同一队列同一合并语义
+        （``app.state.notif_queue``，type=sys_status，按 ``data.id`` 只留最新一条；
+        上限 200）。``clear=True`` ＝状态归零，撤掉该 id 的条目。页面刷新 / SSE 重连
+        经 GET /api/workspace/notifications 回放 → 铃铛可见，不依赖 webhook。
+        任何异常吞掉（这是可见性增益路径，不能反噬巡检）。
+        """
+        if not sid or not self._ui_surface_enabled():
+            return False
+        surfaced = getattr(self, "_ui_surfaced", None)
+        if surfaced is None:
+            surfaced = self._ui_surfaced = {}
+        try:
+            state = getattr(self._app, "state", self._app)
+            nq = getattr(state, "notif_queue", None)
+            if nq is None:
+                if clear:
+                    return False
+                nq = []
+                state.notif_queue = nq
+            nq[:] = [
+                n for n in nq
+                if not ((n or {}).get("type") == "sys_status"
+                        and str(((n or {}).get("data") or {}).get("id") or "") == sid)
+            ]
+            if clear:
+                surfaced.pop(sid, None)
+                return True
+            nq.append({
+                "type": "sys_status",
+                "data": {"id": sid, "text": str(text or "")[:300],
+                         "source": "health_watchdog"},
+                "_notif_ts": int(time.time() * 1000),
+            })
+            if len(nq) > 200:
+                del nq[:-200]
+            surfaced[sid] = True
+            return True
+        except Exception:
+            logger.debug("巡检结论写通知中心失败（已忽略）", exc_info=True)
+            return False
+
     def _check_buried_conversations(self, *, now: Optional[float] = None) -> None:
         """归档着、却有未读入站的会话 → 主动轰人（P0-198）。
 
@@ -3111,6 +3215,9 @@ class HealthWatchdog:
             return
 
         if len(rows) < min_count:
+            # #170：归零即撤通知中心条目（不论 webhook 那边有没有报过）
+            if not rows and (getattr(self, "_ui_surfaced", None) or {}).get("buried_conv"):
+                self._surface_ui_status("buried_conv", "", clear=True)
             if self._bc_alerted and not rows:
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
@@ -3123,10 +3230,6 @@ class HealthWatchdog:
                     logger.debug("buried_conv recovery 发布失败（忽略）", exc_info=True)
                 self._bc_alerted = False
                 self._bc_last_remind = 0.0
-            return
-
-        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
-        if self._bc_alerted and ts - self._bc_last_remind < interval_sec:
             return
 
         total_unread = 0
@@ -3148,6 +3251,18 @@ class HealthWatchdog:
                     auto_n += 1
             except (TypeError, ValueError):
                 pass
+        # #170 上屏：每 tick 刷新通知中心条目（按 id 合并＝常驻一条、持续时长跟着走），
+        # 与下方 webhook 的 4h 重提节流**无关**——用户在工作台里随时能看到现状；
+        # 处置入口指向收件箱筛选条「归档中还有 N 条未读 → 取消归档这 N 条」。
+        self._surface_ui_status(
+            "buried_conv",
+            f"有 {total_unread} 条未读在 {len(rows)} 个已归档会话里（最久 {oldest_h:.0f} 小时）"
+            "——收件箱筛选条「归档中还有 N 条未读」可一键取消归档或逐条查看")
+
+        interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
+        if self._bc_alerted and ts - self._bc_last_remind < interval_sec:
+            return
+
         # 人工/自动分开报：处置完全不同——人工归档要找那个人问清楚是不是误操作，
         # 自动归档说明策略把活跃会话判死了（该调 idle_hours 或干脆关掉）。
         samples = [str(r.get("conversation_id") or "") for r in rows[:5]]
@@ -6824,6 +6939,7 @@ class HealthWatchdog:
             "running": self._running,
             "interval_sec": self._interval,
             "alert_on_warn": self._alert_on_warn,
+            "surface_in_ui": self._ui_surface_enabled(),
             "total_alerts": self.total_alerts,
             "total_recoveries": self.total_recoveries,
             "total_billing_alerts": self.total_billing_alerts,

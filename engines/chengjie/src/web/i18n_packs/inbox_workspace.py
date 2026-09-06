@@ -1495,6 +1495,11 @@ ZH = {
     "inbox.filter.buried_t": "归档里有 {n} 个会话还有未读消息（客户在等，默认视图看不到）",
     # #142 被埋会话界面化：筛选条下常驻入口（徽标已剔归档未读，这里是它们的去处）
     "inbox.buried.hint": "归档中还有 {n} 条未读",
+    # #170（L-3 B）：被埋横幅挪出可折叠筛选头、常驻直到归零；文案带「最久多少小时」
+    "inbox.buried.banner": "有 {n} 条未读在已归档会话里（最久 {h} 小时）",
+    "inbox.buried.banner_nohours": "有 {n} 条未读在已归档会话里",
+    "inbox.buried.view_each": "逐条查看",
+    "inbox.acct.unread_pop_hint": "角标数字就是下面这几条：点开任一条，或点「全部标已读」即可清零。归档会话里的未读不计入角标，看列表上方的琥珀横幅。",
     # #170 一键取消归档被埋会话（当前平台/账号视角下全部；可撤回）
     "inbox.buried.unarch": "取消归档这 {n} 条",
     "inbox.buried.unarch_t": "把这些归档着却有未读的会话一键浮回默认视图（可撤销）",
@@ -4252,6 +4257,11 @@ EN = {
     "inbox.filter.buried_t": "{n} archived conversation(s) still have unread messages "
                              "(customers waiting, hidden from default views)",
     "inbox.buried.hint": "{n} unread in archive",
+    # #170 (L-3 B): buried banner moved out of the collapsible filter header; persistent until zero; carries "oldest N hours"
+    "inbox.buried.banner": "{n} unread message(s) sit in archived conversations (oldest {h} h)",
+    "inbox.buried.banner_nohours": "{n} unread message(s) sit in archived conversations",
+    "inbox.buried.view_each": "View one by one",
+    "inbox.acct.unread_pop_hint": "The badge number is exactly these conversations: open any of them or click \"Mark all read\" to clear it. Unread in archived conversations is not counted here — see the amber banner above the list.",
     "inbox.buried.unarch": "Unarchive these {n}",
     "inbox.buried.unarch_t": "Bring these archived-but-unread conversations back to the default view (undoable)",
     "inbox.buried.unarch_ok": "Unarchived {n} conversation(s); they are back in the default view",

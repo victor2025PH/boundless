@@ -242,4 +242,33 @@ def phantom_unread_report(store: Any) -> Dict[str, Any]:
     return out
 
 
-__all__ = ["phantom_unread_report", "unread_conversations", "unread_maps"]
+def purge_orphan_unread(store: Any) -> int:
+    """孤儿未读归零（#170 修法 4，启动时跑一次）：会话**已删除**（有墓碑）却仍带
+    ``unread>0``——徽标口径（``_LISTABLE``）早已剔除它们，但旧全库口径 /
+    ``phantom_unread_report`` 的差额 / 第三方读数还会把它算进「未读」。
+
+    只动墓碑会话（删除是坐席的明示决定，未读计数对它没有任何行动价值），
+    「一条可见消息都没有」的占位会话**不动**——那是历史尚未回流的正常中间态，
+    回流后未读应当照常亮起。返回归零的会话数；异常 → 0（卫生路径绝不抛）。
+    """
+    if store is None:
+        return 0
+    try:
+        with store._lock:                                    # noqa: SLF001
+            cur = store._conn.execute(                       # noqa: SLF001
+                "UPDATE conversations SET unread = 0 "
+                "WHERE unread > 0 AND EXISTS (SELECT 1 FROM conversation_tombstones t "
+                "WHERE t.conversation_id = conversations.conversation_id)")
+            n = int(cur.rowcount or 0)
+            if n:
+                store._conn.commit()                         # noqa: SLF001
+        if n:
+            logger.info("[unread_aggregate] 孤儿未读归零：%d 个已删会话的 unread 清 0", n)
+        return n
+    except Exception:
+        logger.debug("[unread_aggregate] 孤儿未读归零失败（忽略）", exc_info=True)
+        return 0
+
+
+__all__ = ["phantom_unread_report", "purge_orphan_unread", "unread_conversations",
+           "unread_maps"]
