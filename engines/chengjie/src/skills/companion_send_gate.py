@@ -83,6 +83,22 @@ def gate_decision(
     send_gate_status / account_signals / 前端 fam 判定已同步；新消费方一律
     用「in {daily_cap, warmup_cap}」判断，勿只认单值。
     """
+    # outbound.unlimited_mode：**预热期已满**的账号日额度是业务上限 → 放开
+    # （target_cap 顶到哨兵值，over_cap 扣分随之消失，不会因「超额」把健康灯
+    # 拖红再被 health_red 拦——那是同一条业务上限的连锁，不是风控信号）。
+    # 预热期内账号仍按爬坡额度走（新号安全项），banned / health_red（限频、
+    # 失败、代理、改资料等真风控信号）任何模式下都不放。
+    unlimited_past_warmup = False
+    orig_target_cap = int(target_cap)
+    try:
+        from src.ops.outbound_policy import UNLIMITED_CAP, is_unlimited
+        if is_unlimited():
+            age_days = float(signals.get("age_days") or 0.0)
+            if age_days >= float(max(1, int(warmup_ramp_days))):
+                unlimited_past_warmup = True
+                target_cap = UNLIMITED_CAP
+    except Exception:
+        unlimited_past_warmup = False
     health = account_health(
         signals,
         target_cap=target_cap,
@@ -104,6 +120,16 @@ def gate_decision(
         reason, allowed = "daily_cap", False
     else:
         reason, allowed = "ok", True
+    try:
+        from src.ops.outbound_policy import record_block, record_unlimited_bypass
+        if not allowed:
+            record_block("safety" if reason != "daily_cap" else "business",
+                         f"send_gate_{reason}")
+        elif unlimited_past_warmup and sends_today >= max(0, orig_target_cap - reserve):
+            # 只在「按原配置本会被拦」时才计一次 bypass，读数＝真实放行量
+            record_unlimited_bypass("send_gate_daily_cap")
+    except Exception:
+        pass
 
     return {
         "allowed": allowed,

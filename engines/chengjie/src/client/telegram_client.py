@@ -109,6 +109,15 @@ def _metrics():
         return None
 
 
+def _note_outbound_block(layer: str, reason: str) -> None:
+    """P5 拦截统一计数（src/ops/outbound_policy）：本该回但被闸门吞掉记一笔。绝不抛。"""
+    try:
+        from src.ops.outbound_policy import record_block
+        record_block(layer, reason, platform="telegram")
+    except Exception:
+        pass
+
+
 # Telegram 官方通知号等「非人」固定 id。它们是货真价实的 PRIVATE 会话且
 # outgoing=False，会一路穿过出站守卫落进 AI 管道——让 AI 对着 Telegram 官方回话既
 # 荒唐又白烧 token。
@@ -857,6 +866,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 if self._rate_limiter.enabled:
                     allowed, reason = self._rate_limiter.allow(uid, message.chat.id)
                     if not allowed:
+                        _note_outbound_block("business", f"rate_limit_{reason}")
                         if self._rate_limiter.check_auto_ban(uid):
                             self.logger.warning("[私聊] 用户 %s 触发自动封禁", uid)
                         else:
@@ -865,6 +875,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
                 # ── 自动封禁检查 ──
                 if self._rate_limiter.is_banned(uid):
+                    _note_outbound_block("business", "rate_limit_banned")
                     self.logger.debug("[私聊] 用户 %s 在封禁名单中，静默忽略", uid)
                     return
 
@@ -991,6 +1002,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     uid = str(getattr(getattr(message, 'from_user', None), 'id', 0))
                     allowed, reason = self._rate_limiter.allow(uid, message.chat.id)
                     if not allowed:
+                        _note_outbound_block("business", f"rate_limit_{reason}")
                         self.logger.info("[群消息] 跳过: 限流 user=%s chat=%s reason=%s", uid, message.chat.id, reason)
                         return
 
@@ -1844,9 +1856,11 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 uid = str(getattr(from_user, "id", 0))
                 if self._rate_limiter.enabled:
                     if self._rate_limiter.is_banned(uid):
+                        _note_outbound_block("business", "rate_limit_banned")
                         continue
                     allowed, _reason = self._rate_limiter.allow(uid, _cid)
                     if not allowed:
+                        _note_outbound_block("business", f"rate_limit_{_reason}")
                         continue
                 # 处理前先 claim 去重（防并发/下一轮在回复落地前重入造成重复回复；
                 # 与私聊实时 handler 抢同一把 claim——谁先到谁处理，另一路静默跳过）
@@ -3237,6 +3251,18 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             _rl_last = self._auto_reply_ts.get(_rl_key)
             _cd_left = cooldown_remaining(_rl_cfg, _rl_last, _rl_now)
             if _cd_left > 0:
+                # outbound.unlimited_mode：回复冷却属业务频控 → 放行（连续回复
+                # 上限 max_consecutive_replies 是防机器人对轰的安全刹车，**不**短路）。
+                try:
+                    from src.ops.outbound_policy import (
+                        is_unlimited as _ou, record_unlimited_bypass as _oub)
+                    if _ou():
+                        _oub("reply_logic_cooldown")
+                        _cd_left = 0.0
+                except Exception:
+                    pass
+            if _cd_left > 0:
+                _note_outbound_block("business", "reply_logic_cooldown")
                 self.logger.info(
                     "[回复逻辑] 冷却中，跳过自动回复 chat=%s user=%s 剩余 %.0f 秒",
                     chat_id, user_id, _cd_left)
@@ -3260,6 +3286,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # 静默超复位窗口 → 生效计数已归零，落地回字典（防陈旧计数粘住）
                 self._auto_reply_streak[_rl_key] = _rl_eff
             if _rl_hit:
+                _note_outbound_block("safety", "reply_logic_streak")
                 self.logger.info(
                     "[回复逻辑] 连续自动回复已达上限(%d 条)，暂停回复 chat=%s user=%s"
                     "（静默 30 分钟后自动复位）",
@@ -3296,6 +3323,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 except Exception:
                     _skip = None
                 if _skip and _skip.get("reason") == "cooldown":
+                    _note_outbound_block("business", "skill_cooldown")
                     self._defer_swallowed_inbound(
                         chat_id, getattr(message, 'id', 0),
                         float(_skip.get("retry_after") or 0.0),

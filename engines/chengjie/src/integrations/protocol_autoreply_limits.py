@@ -25,6 +25,23 @@ logger = logging.getLogger(__name__)
 _HOUR = 3600.0
 _DAY = 86400.0
 
+
+def _note_block(layer: str, reason: str) -> None:
+    """拦截统一计数（outbound_policy P5）。软依赖，绝不抛。"""
+    try:
+        from src.ops.outbound_policy import record_block
+        record_block(layer, reason)
+    except Exception:
+        pass
+
+
+def _note_bypass(reason: str) -> None:
+    try:
+        from src.ops.outbound_policy import record_unlimited_bypass
+        record_unlimited_bypass(reason)
+    except Exception:
+        pass
+
 _SEND_DDL = """
 CREATE TABLE IF NOT EXISTS account_sends (
     account_key TEXT NOT NULL,
@@ -171,14 +188,31 @@ class AutoReplyLimiter:
         now = now if now is not None else time.time()
         h_limit = self.hourly if hourly is None else int(hourly or 0)
         d_limit = self.daily if daily is None else int(daily or 0)
+        # outbound.unlimited_mode：时/日额度属业务频控 → 归 0（=不限）；
+        # 断路器（基础设施连败）是安全刹车，任何模式都拦。
+        unlimited = False
+        try:
+            from src.ops.outbound_policy import is_unlimited
+            unlimited = bool(is_unlimited())
+        except Exception:
+            unlimited = False
         with self._lock:
             ou = self._open_until.get(account_key, 0.0)
             if ou and now < ou:
+                _note_block("safety", "protocol_circuit_open")
                 return False, "circuit_open"
+            if unlimited:
+                if h_limit or d_limit:
+                    hour, day = self._counts(account_key, now)
+                    if (h_limit and hour >= h_limit) or (d_limit and day >= d_limit):
+                        _note_bypass("protocol_quota")
+                return True, "ok"
             hour, day = self._counts(account_key, now)
             if h_limit and hour >= h_limit:
+                _note_block("business", "protocol_quota_hour")
                 return False, "quota_hour"
             if d_limit and day >= d_limit:
+                _note_block("business", "protocol_quota_day")
                 return False, "quota_day"
             return True, "ok"
 

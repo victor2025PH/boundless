@@ -4211,6 +4211,25 @@ bug_intake:
   # 硬压制（防公示里的 bug 词被自己登记成新工单）。
   bot_send: true
 
+# ── 出站策略单一开关（2026-09-04）──────────────────────────────────
+# unlimited_mode: true ＝「有 token 就全自动发」——一键短路所有**业务频控**层：
+#   skill 冷却四桶 / S5 概率静默 / 入站限速 / 主动触达叠加降频（自适应节奏、
+#   未回退避、回复率反哺、已读分流、未回消息墙、每 tick 名额、checkin 效能门控、
+#   变体守卫改「重写一次仍雷同→照发」）/ care 联系人预算 / handoff 日配额 /
+#   自拍与生活照日预算 / life_share 周配额 / RPA 日上限。
+# **不短路安全刹车**：Kill-Switch / 金丝雀 / 风控 FloodWait / 账号冷启动预热
+#   (cold_start) / companion_send_gate 健康红灯 / 对方机器人判定 / 危机情绪闸 /
+#   会话不健康快败 / 授权与 token 余额（token_ledger.enforce）——这些是账号与
+#   账单的保险丝，要关请各自显式关。
+# 刻意保留的「节奏」（不是限制）：proactive_topic.min_silent_hours / cooldown_hours
+#   （同一个人 24h 内不重复主动）与安静时段（对方的凌晨）。
+# 观测：/api/workspace/metrics.outbound_policy + Prom outbound_blocked_total{layer,reason}
+#   ——「AI 为什么没发」从翻日志变成看数：layer=business 的拦截在 unlimited 下应归零。
+# 全仓「0=不限」语义由 src/ops/outbound_policy.business_cap 统一：任何日上限
+#   配 0 就是不限（旧代码里 max(1,cap)/or 6 那类把 0 改成默认值的写法已清）。
+outbound:
+  unlimited_mode: false
+
 companion_send_gate:
   enabled: false
   target_cap: 15        # 养熟后的单号日发上限

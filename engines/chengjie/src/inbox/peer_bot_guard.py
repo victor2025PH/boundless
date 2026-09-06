@@ -414,6 +414,15 @@ _NEAR_LIMIT_NUM = 4
 _NEAR_LIMIT_DEN = 5
 
 
+def _unlimited_outbound() -> bool:
+    """``outbound.unlimited_mode`` 读数（软依赖：模块缺席/异常＝False＝旧行为）。"""
+    try:
+        from src.ops.outbound_policy import is_unlimited
+        return bool(is_unlimited())
+    except Exception:
+        return False
+
+
 def evaluate(
     recent_messages: List[Dict[str, Any]],
     cfg: Dict[str, Any],
@@ -475,6 +484,17 @@ def evaluate(
             return Verdict(True, "instant_echo", "review",
                            f"秒回×同文 连续{echo}次", score=h_score)
     budget = int(cfg.get("daily_reply_budget") or 0)
+    if budget > 0 and not budget_relieved and _unlimited_outbound():
+        # outbound.unlimited_mode：对**真人**（未判定 bot）的日预算是业务频控 →
+        # 视同已救济；已判定 bot（peer_override==1）保留预算——那是「防对面
+        # LLM 无限对轰烧钱」的安全刹车，不随业务开关关闭。
+        if int(peer_override or 0) != 1:
+            budget_relieved = True
+            try:
+                from src.ops.outbound_policy import record_unlimited_bypass
+                record_unlimited_bypass("peer_daily_budget")
+            except Exception:
+                pass
     if budget > 0 and not budget_relieved:
         # 分子优先走台账口径（auto_out_today＝自动链轮次，由调用方从
         # peer_reply_ledger 取）；台账不可用（旧 store / 纯函数测试）回落
@@ -489,6 +509,12 @@ def evaluate(
             # 已判定 bot 或超硬顶 → 全停（拟稿也停，防对面 LLM 无限烧钱）。
             soft = (int(peer_override or 0) != 1
                     and sent < budget * _SOFT_BUDGET_HARD_MULT)
+            try:
+                from src.ops.outbound_policy import record_block
+                record_block("business" if soft else "safety",
+                             "peer_daily_budget")
+            except Exception:
+                pass
             return Verdict(True, "daily_budget", "",
                            f"今日自动回复{sent}轮 ≥ 预算{budget}"
                            + ("（软停·转人审）" if soft else "（硬停）"),
@@ -689,6 +715,11 @@ def budget_flags(
     limit = int(cfg.get("daily_reply_budget") or 0)
     enabled = bool(cfg.get("enabled")) and limit > 0
     used_n = max(0, int(used or 0))
+    unlimited = enabled and _unlimited_outbound()
+    if unlimited:
+        # 与 evaluate() 的真人分支同口径：unlimited_mode 下真人预算视同救济，
+        # 横幅/设置页不再显示「触顶/接近」（已判定 bot 的硬停不在本状态位表达）。
+        relieved = True
     exhausted = bool(enabled and not relieved and used_n >= limit)
     near = bool(enabled and not relieved and not exhausted
                 and used_n * _NEAR_LIMIT_DEN >= limit * _NEAR_LIMIT_NUM)
@@ -701,6 +732,7 @@ def budget_flags(
         "hard_stopped": bool(
             exhausted and used_n >= limit * _SOFT_BUDGET_HARD_MULT),
         "near": near,
+        "unlimited": bool(unlimited),
     }
 
 

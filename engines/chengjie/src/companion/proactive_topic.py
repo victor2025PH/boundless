@@ -646,7 +646,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 _bo = parse_no_reply_backoff_cfg(_pt)
                 _rp = parse_response_pacing_cfg(_pt)
                 _ra = parse_read_aware_cfg(_pt)
-                return {
+                _live = {
                     "min_silent_hours": float(_pt.get("min_silent_hours", 24)),
                     "cooldown_hours": float(_pt.get("cooldown_hours", 72)),
                     "max_per_tick": int(_pt.get("max_per_tick", 3)),
@@ -659,8 +659,21 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "read_aware_cfg": _ra if _ra.get("enabled") else None,
                     "wall_cfg": _parse_wall_cfg(_pt),
                 }
+                # outbound.unlimited_mode（2026-09-04）：一键关掉叠加降频层
+                # （自适应/退避/反哺/已读分流/未回墙/每 tick 名额），保留
+                # min_silent/cooldown 节奏与安静时段。预览与真发同口径。
+                from src.ops.outbound_policy import proactive_live_overrides
+                return proactive_live_overrides(_live, _c)
             except Exception:
                 return {}
+
+        def _unlimited() -> bool:
+            """outbound.unlimited_mode 实时值（业务频控层短路判据；异常=关）。"""
+            try:
+                from src.ops.outbound_policy import is_unlimited
+                return is_unlimited(getattr(assistant.config, "config", None) or {})
+            except Exception:
+                return False
         # P3 媒体形态反哺（默认关，overlay 开）：voice/photo 概率按分形态回复率
         # 相对 text 基线自校准（只换形态不换总量；min_intimacy 等护栏全不动）。
         from src.companion.proactive_media_feedback import (
@@ -1593,7 +1606,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
             # 最终仍是裸 checkin → 按两臂回复率差距的比例本日跳过（crc32(cid#日)
             # 确定性——15min tick 重掷会把「跳过」磨成「延迟」）。预览走同一
             # _opener，看板与真发口径天然一致。
-            if _mg_on and str((op or {}).get("mode") or "") == "gentle_checkin":
+            if (_mg_on and not _unlimited()
+                    and str((op or {}).get("mode") or "") == "gentle_checkin"):
                 try:
                     _sp = float(
                         (_mode_gate_snapshot() or {}).get("skip_prob") or 0.0)
@@ -2328,10 +2342,25 @@ async def maybe_start_companion_proactive(assistant) -> None:
             _p_cfg0 = cfg.get("photo") if isinstance(cfg.get("photo"), dict) else {}
             if _p_cfg0.get("enabled", False):
                 from src.integrations.rpa_base.daily_cap import DailyCapTracker
+                # 「0=不限」（2026-09-04）：旧写法 ``or 6`` 把显式 0 改回 6/天；
+                # 现只有键缺失才取默认 6，0/负数=不限（tracker 自身 0=不限）。
+                _raw_cap = _p_cfg0.get("daily_cap", 6)
                 _photo_cap = DailyCapTracker(
-                    daily_cap=int(_p_cfg0.get("daily_cap", 6) or 6))
+                    daily_cap=int(6 if _raw_cap is None else _raw_cap))
         except Exception:
             _photo_cap = None
+
+        def _photo_cap_blocks() -> bool:
+            """生活照日预算是否拦本条：unlimited_mode 实时短路（业务层）。"""
+            if _photo_cap is None:
+                return False
+            try:
+                from src.ops.outbound_policy import is_unlimited
+                if is_unlimited():
+                    return False
+            except Exception:
+                pass
+            return bool(_photo_cap.would_exceed(1))
 
         async def _plan_photo(plan):
             """生活照预决策（Phase17：文案-场景对齐）——在**生成文案之前**决定
@@ -2355,7 +2384,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
             if not _pok:
                 _media_skip("photo", _pwhy)
                 return None
-            if _photo_cap is not None and _photo_cap.would_exceed(1):
+            if _photo_cap_blocks():
                 _media_skip("photo", "daily_cap")
                 return None
             _cfg_root = assistant.config.config or {}
@@ -2653,6 +2682,18 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             retry, _avoid + [text],
                             threshold=_sim_threshold) is None:
                         text = retry
+                    elif _unlimited():
+                        # unlimited_mode：变体守卫从「拦」降为「重写一次仍雷同→照发」
+                        # （用重写稿，至少不是逐字复读）；记 bypass 供 P5 观测。
+                        text = retry or text
+                        try:
+                            from src.ops.outbound_policy import record_unlimited_bypass
+                            record_unlimited_bypass("proactive_variety")
+                        except Exception:
+                            pass
+                        assistant.logger.info(
+                            "[proactive] 变体守卫放行(unlimited) cid=%s：重写仍雷同，照发",
+                            plan.get("conversation_id"))
                     else:
                         _cd_store.mark_attempt(
                             plan["conversation_id"], time.time())

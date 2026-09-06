@@ -24,6 +24,13 @@ from typing import Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# 「不限」哨兵：daily_cap<=0 或 outbound.unlimited_mode 时 effective_cap 返回它
+# （与 global_remaining 同刻度）。单一事实源在 outbound_policy，此处 re-export。
+try:
+    from src.ops.outbound_policy import UNLIMITED_CAP
+except Exception:  # pragma: no cover - 极端装配态兜底
+    UNLIMITED_CAP = 10 ** 9
+
 
 @dataclass
 class LimitDecision:
@@ -51,7 +58,10 @@ class AccountLimiter:
         age_days_fn: Optional[Callable[[str], Optional[float]]] = None,
     ) -> None:
         self._store = store
-        self._daily_cap = max(1, int(daily_cap))
+        # 「0=不限」全仓单一语义（2026-09-04）：旧写法 max(1, cap) 把 0 悄悄改成
+        # 1/天——运营配 0 想放开，结果比默认还严。0 → 账号级不限额（仍计数，
+        # 便于看板与告警阈值观测）。
+        self._daily_cap = max(0, int(daily_cap))
         self._global_cap = max(0, int(global_cap))
         # M7：预热爬坡——effective_cap = warmup_cap(age) ≤ daily_cap。
         # 仅当 warmup_enabled 且 age_days_fn 给出有效天龄时生效；否则恒回退 daily_cap。
@@ -83,35 +93,60 @@ class AccountLimiter:
 
         预热关闭/无天龄信息 → 恒为配置 ``daily_cap``（行为不变）。
         预热开启且能取到天龄 → ``min(daily_cap, warmup_cap(age))``，新号更低、随天龄爬坡。
+
+        「0=不限」/ ``outbound.unlimited_mode``：账号级业务日上限视为
+        ``UNLIMITED_CAP``（10**9）。**预热爬坡是账号安全层，unlimited 下仍生效**
+        ——新号仍按 start_cap→ramp 爬坡（目标值取 UNLIMITED，即预热期满后不限）。
         """
+        base = self._daily_cap
+        try:
+            from src.ops.outbound_policy import business_cap
+            base = business_cap(base)
+        except Exception:
+            pass
+        if base <= 0:
+            base = UNLIMITED_CAP
         if not self._warmup_enabled or self._age_days_fn is None:
-            return self._daily_cap
+            return base
         try:
             age = self._age_days_fn(account_id)
         except Exception:
             logger.debug("age_days_fn 取天龄失败，回退 daily_cap (acc=%s)", account_id,
                          exc_info=True)
-            return self._daily_cap
+            return base
         if age is None:
-            return self._daily_cap
+            return base
         from src.skills.account_health import warmup_cap
         ramped = warmup_cap(
-            age, self._daily_cap,
+            age, base,
             start_cap=self._warmup_start_cap, ramp_days=self._warmup_ramp_days,
         )
-        return min(self._daily_cap, max(0, ramped))
+        return min(base, max(0, ramped))
+
+    def is_unlimited(self, account_id: str) -> bool:
+        """账号级日上限当前是否为「不限」（0 配置或 unlimited_mode，且不在预热爬坡中）。"""
+        return self.effective_cap(account_id) >= UNLIMITED_CAP
 
     def remaining_for(self, account_id: str, *, now: Optional[int] = None) -> int:
         day = self._utc_day(now)
         used = self._store.get_account_handoff_counter(account_id, day)
         return max(0, self.effective_cap(account_id) - used)
 
+    def _eff_global_cap(self) -> int:
+        """全域日上限（0=不限；unlimited_mode 下恒 0）。"""
+        try:
+            from src.ops.outbound_policy import business_cap
+            return business_cap(self._global_cap)
+        except Exception:
+            return max(0, int(self._global_cap))
+
     def global_remaining(self, *, now: Optional[int] = None) -> int:
-        if self._global_cap <= 0:
-            return 10 ** 9    # 相当于无限
+        gcap = self._eff_global_cap()
+        if gcap <= 0:
+            return UNLIMITED_CAP    # 相当于无限
         day = self._utc_day(now)
         used = self._store.sum_account_handoff_counters(day)
-        return max(0, self._global_cap - used)
+        return max(0, gcap - used)
 
     def get_counts(self, account_id: str, *, now: Optional[int] = None) -> dict:
         day = self._utc_day(now)
@@ -139,9 +174,10 @@ class AccountLimiter:
         """
         day = self._utc_day(now)
         # 全域优先判
-        if self._global_cap > 0:
+        gcap = self._eff_global_cap()
+        if gcap > 0:
             global_used = self._store.sum_account_handoff_counters(day)
-            if global_used >= self._global_cap:
+            if global_used >= gcap:
                 return LimitDecision(
                     ok=False, reason="global_cap_exceeded",
                     remaining_today=0,
@@ -151,9 +187,10 @@ class AccountLimiter:
         eff_cap = self.effective_cap(account_id)
         acct_used = self._store.get_account_handoff_counter(account_id, day)
         if acct_used >= eff_cap:
+            _configured = self._daily_cap if self._daily_cap > 0 else UNLIMITED_CAP
             return LimitDecision(
                 ok=False,
-                reason="warmup_cap_exceeded" if eff_cap < self._daily_cap
+                reason="warmup_cap_exceeded" if eff_cap < _configured
                 else "account_cap_exceeded",
                 remaining_today=0,
                 account_count_today=acct_used,
@@ -161,7 +198,7 @@ class AccountLimiter:
         # 扣
         new_count = self._store.incr_account_handoff_counter(account_id, day)
         global_used_after = self._store.sum_account_handoff_counters(day) \
-            if self._global_cap > 0 else 0
+            if gcap > 0 else 0
         logger.info("AccountLimiter reserved: acc=%s day=%s count=%d/%d",
                     account_id, day, new_count, eff_cap)
         # W4-Cap-Alert：阈值跨越检测（stateless——仅看 old→new 区间，按 effective cap）

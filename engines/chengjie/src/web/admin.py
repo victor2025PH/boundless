@@ -1468,6 +1468,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             lambda: getattr(config_manager, "config", None) or {})
     except Exception:
         pass
+    # 出站策略单一开关 outbound.unlimited_mode（2026-09-04）：与合规读取面同范式，
+    # skill 冷却 / S5 概率 / 主动触达叠加降频 / 各日配额消费点惰性读实时配置。
+    try:
+        from src.ops.outbound_policy import (
+            set_config_provider as _set_outbound_cfg_provider,
+        )
+
+        _set_outbound_cfg_provider(
+            lambda: getattr(config_manager, "config", None) or {})
+    except Exception:
+        pass
 
 
     # ── C1-1 白标品牌设置 API ──────────────────────────────

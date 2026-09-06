@@ -740,6 +740,14 @@ def should_degrade_action(action: str, *, lic_status: Any = None,
         funded = bal["active_granted"] > 0 or bal["expired_lost"] > 0
         if funded and bal["balance"] <= 0:
             record_shadow(f"enforce_degrade_{action}")
+            # 统一拦截视图（P5）：额度层「降级」也算一笔——unlimited_mode 放开了
+            # 业务频控后，「有 token 才走付费路径」就是剩下的唯一节流点，得可见。
+            try:
+                from src.ops.outbound_policy import record_block
+
+                record_block("tok", f"degrade_{action}")
+            except Exception:
+                pass
             return True
         return False
     except Exception:

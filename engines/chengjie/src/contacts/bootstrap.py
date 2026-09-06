@@ -597,9 +597,11 @@ def _safe_init_limiter(store, contacts_cfg: Dict[str, Any]):
         thresholds = list(alert_cfg.get("thresholds_pct") or [])
         if not bool(alert_cfg.get("enabled", False)):
             thresholds = []
+        # daily_cap：缺省 15；显式 0 = 不限（`or 15` 会把 0 吞成 15，P2-1 语义统一）
+        _raw_cap = contacts_cfg.get("daily_cap")
         return AccountLimiter(
             store,
-            daily_cap=int(contacts_cfg.get("daily_cap") or 15),
+            daily_cap=15 if _raw_cap is None else int(_raw_cap),
             global_cap=int(contacts_cfg.get("global_cap") or 0),
             alert_thresholds_pct=thresholds,
         )

@@ -448,7 +448,10 @@ def plan_daily_rituals(
         })
 
     plans.sort(key=lambda p: p["intimacy"], reverse=True)
-    return plans[: max(0, int(max_per_tick))]
+    # 「0=不限」语义（与 plan_proactive_sends 同口径）：max_per_tick<=0 不截断。
+    # 旧实现 ``plans[:0]`` 会把「不限」变成「全不发」。
+    cap = int(max_per_tick or 0)
+    return plans if cap <= 0 else plans[:cap]
 
 
 __all__ = [

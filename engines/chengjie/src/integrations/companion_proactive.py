@@ -451,7 +451,13 @@ def plan_proactive_sends(
             reverse=True)
     else:
         plans.sort(key=lambda p: p["silent_hours"], reverse=True)
-    return plans[: max(0, int(max_per_tick))]
+    # 「0=不限」（2026-09-04）：max_per_tick<=0 不截断（旧写法 [:0] 把 0 变成
+    # 「一条都不发」——与全仓「0=不限」语义相反）。
+    try:
+        _cap = int(max_per_tick)
+    except (TypeError, ValueError):
+        _cap = 0
+    return plans if _cap <= 0 else plans[:_cap]
 
 
 class JsonCooldownStore:

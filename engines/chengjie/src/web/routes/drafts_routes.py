@@ -1637,6 +1637,13 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 出站拦截统一计数（P5：业务频控/安全刹车/额度 三层 × 原因 + unlimited_mode 放行数）
+        try:
+            from src.ops.outbound_policy import blocked_snapshot as _ob_snapshot
+            metrics["outbound_blocked"] = _ob_snapshot()
+        except Exception:
+            pass
+
         # 坐席手动出图漏斗（尝试/成功/失败码分布/时延/相册秒发占比，2026-08-22 P1）
         try:
             from src.web.image_gen_stats import get_image_gen_stats
@@ -2112,6 +2119,13 @@ def register_metrics_route(app, *, api_auth):
             try:
                 from src.licensing.token_ledger import dump_prom as _tok_dump_prom
                 buf.write(_tok_dump_prom())
+            except Exception:
+                pass
+
+            # 出站拦截统一计数（outbound_blocked_total{layer,reason} + unlimited_mode 开关/放行数）
+            try:
+                from src.ops.outbound_policy import dump_prom as _ob_dump_prom
+                buf.write(_ob_dump_prom())
             except Exception:
                 pass
 

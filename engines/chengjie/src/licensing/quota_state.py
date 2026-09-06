@@ -272,6 +272,16 @@ def collect_quota_state(
             state["forecast"] = forecast_exhaustion(rem, daily)
     except Exception:
         logger.debug("[quota_state] forecast 失败（置空）", exc_info=True)
+    # 出站拦截视图（P3-2）：额度四表都说「有钱」而 AI 还是不回，答案多半在
+    # 业务频控/安全刹车层——把 outbound_policy 的拦截计数并进同一份「为什么
+    # 不干活」快照。展示数据不参与 verdict；层名用 tok 非 token（防泄漏门禁）。
+    state["outbound"] = None
+    try:
+        from src.ops.outbound_policy import blocked_brief
+
+        state["outbound"] = blocked_brief()
+    except Exception:
+        logger.debug("[quota_state] outbound 快照失败（置空）", exc_info=True)
     return state
 
 

@@ -313,11 +313,21 @@ class LineRpaService:
                     pass
                 continue
 
-            # daily_cap 守门
+            # daily_cap 守门（业务日上限：0=不限 / outbound.unlimited_mode 归 0）
             _cap = int(self._merged_cfg.get("daily_cap") or 0)
+            try:
+                from src.ops.outbound_policy import business_cap as _bc
+                _cap = int(_bc(_cap))
+            except Exception:
+                _cap = max(0, _cap)
             if _cap > 0:
                 _today_sent = int((self._state.run_stats(24.0) or {}).get("sent") or 0)
                 if _today_sent >= _cap:
+                    try:
+                        from src.ops.outbound_policy import record_block as _rb
+                        _rb("business", "line_rpa_daily_cap", platform="line")
+                    except Exception:
+                        pass
                     _secs_to_midnight = 86400 - (int(time.time()) % 86400)
                     logger.info(
                         "LINE RPA daily_cap=%d reached (sent=%d), sleeping %ds to midnight",

@@ -77,9 +77,16 @@ def budget_allows(
     - ``last_touch_ts``：该联系人最近一次主动触达（0=从未）。
     - ``touches_today``：本地今日已触达次数（**不含**本次）。
     规则任一违反 → False；cfg.enabled=False / 阈值为 0 → 对应规则不启用。
+    ``outbound.unlimited_mode``（实时读 provider）→ 恒放行（联系人预算属业务频控）。
     """
     if not cfg.enabled:
         return True
+    try:
+        from src.ops.outbound_policy import is_unlimited
+        if is_unlimited():
+            return True
+    except Exception:
+        pass
     n = float(now if now is not None else time.time())
     if cfg.min_gap_hours > 0 and last_touch_ts > 0:
         if (n - float(last_touch_ts)) < cfg.min_gap_hours * 3600.0:

@@ -433,6 +433,8 @@ def life_share_allowed(
       - 近 7 天分享次数 < max_per_week；
       - 距上次分享 ≥ min_gap_hours。
     两者皆满足才允许。空历史 → 允许。纯函数。
+    「0=不限」（2026-09-04）：``max_per_week<=0`` 不限周频；``min_gap_hours<=0``
+    不限间隔（旧实现 ``len >= 0`` 恒真＝配 0 反而全拦）。
     """
     try:
         now_ts = now.timestamp()
@@ -441,13 +443,23 @@ def life_share_allowed(
     ts = [float(t) for t in (recent_shares or []) if isinstance(t, (int, float))]
     if not ts:
         return True
-    week_ago = now_ts - 7 * 86400
-    recent_week = [t for t in ts if t >= week_ago]
-    if len(recent_week) >= int(max_per_week):
-        return False
-    last = max(ts)
-    if (now_ts - last) < float(min_gap_hours) * 3600:
-        return False
+    try:
+        _mpw = int(max_per_week)
+    except (TypeError, ValueError):
+        _mpw = 0
+    if _mpw > 0:
+        week_ago = now_ts - 7 * 86400
+        recent_week = [t for t in ts if t >= week_ago]
+        if len(recent_week) >= _mpw:
+            return False
+    try:
+        _gap = float(min_gap_hours)
+    except (TypeError, ValueError):
+        _gap = 0.0
+    if _gap > 0:
+        last = max(ts)
+        if (now_ts - last) < _gap * 3600:
+            return False
     return True
 
 

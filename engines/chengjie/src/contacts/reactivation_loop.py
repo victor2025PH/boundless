@@ -143,7 +143,8 @@ class ReactivationLoop:
         # 非 messenger 渠道经 send_callback 路由到多平台 deferred 队列（main.py 接线）。
         _pri = [str(p).strip() for p in (platform_priority or ["messenger"]) if str(p).strip()]
         self._platform_priority = _pri or ["messenger"]
-        self._max_per_tick = max(1, int(max_per_tick))
+        # 「0=不限」：max_per_tick<=0 ＝ 本 tick 不截断（旧 max(1,…) 把 0 钉成 1）
+        self._max_per_tick = max(0, int(max_per_tick))
         self._interval = max(60.0, float(interval_sec))
         self._skip_if_no_episodic = bool(skip_if_no_episodic)
         # ★ W2-D4.6：dry_run = 只生成消息+log，不真 enqueue 也不 mark_sent
@@ -177,6 +178,10 @@ class ReactivationLoop:
         if self._first_run_grace_sec <= 0:
             return self._max_per_tick
         if time.time() - self._started_ts < self._first_run_grace_sec:
+            # 启动宽限期的保守起步是防「一波打挤」的账号安全项：即便 max_per_tick=0
+            # （不限）也收窄到 first_run_max_per_tick，宽限期过后再放开。
+            if self._max_per_tick <= 0:
+                return self._first_run_max_per_tick
             return min(self._max_per_tick, self._first_run_max_per_tick)
         return self._max_per_tick
 
@@ -240,7 +245,7 @@ class ReactivationLoop:
         random.shuffle(cands)  # 不要总按 updated_at 顺序，错开发送时间
         scheduled = 0
         eff_cap = self._effective_max_per_tick()
-        for c in cands[:eff_cap]:
+        for c in (cands if eff_cap <= 0 else cands[:eff_cap]):
             try:
                 if await self._schedule_one(c):
                     scheduled += 1

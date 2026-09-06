@@ -2062,7 +2062,12 @@ class SkillManager(LoggerMixin):
                 _tp = context.get('_trigger_path')
                 if context.get('triggered_by_mention') or _tp:
                     self.logger.info(f"{log_prefix}触发���={_tp or 'mention'}，跳�?S5 概率�€�?")
+                elif self._outbound_unlimited():
+                    # outbound.unlimited_mode：S5 概率静默属业务频控，一键放行
+                    self._record_outbound_bypass("s5_probability")
+                    self.logger.info(f"{log_prefix}策略 {strategy_id} S5 概率 {rp} 已被 unlimited_mode 放行")
                 elif random.random() > rp:
+                    self._record_outbound_block("business", "s5_probability", context)
                     self.logger.warning(f"{log_prefix}策略 {strategy_id} 静默跳过 (概率 {rp})")
                     return None
 
@@ -3923,7 +3928,52 @@ class SkillManager(LoggerMixin):
         取最大而非首个失败桶：补答调度按该值重试，若只看首桶，重试时可能
         撞上更长的另一桶（如 per_content 120s > per_user 60s）——而水位闸
         只给一次重试机会，撞掉就永久沉默。四个桶均为纯读，无副作用。
+
+        ``outbound.unlimited_mode``（2026-09-04）：四桶冷却属业务频控 → 恒 0
+        放行；本会被拦的次数记 bypass 供 P5 观测（先算再判，观测口径不失真）。
         """
+        remaining = self._cooldown_remaining_raw(
+            text, user_id, chat_id=chat_id, account_id=account_id,
+            chat_scope=chat_scope)
+        if remaining > 0 and self._outbound_unlimited():
+            self._record_outbound_bypass("skill_cooldown")
+            return 0.0
+        return remaining
+
+    # ── outbound.unlimited_mode 读取面 + 拦截计数（src/ops/outbound_policy）──
+    @staticmethod
+    def _outbound_unlimited() -> bool:
+        try:
+            from src.ops.outbound_policy import is_unlimited
+            return is_unlimited()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _record_outbound_bypass(reason: str) -> None:
+        try:
+            from src.ops.outbound_policy import record_unlimited_bypass
+            record_unlimited_bypass(reason)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _record_outbound_block(layer: str, reason: str, context: Any = None) -> None:
+        try:
+            from src.ops.outbound_policy import record_block
+            pf = ""
+            if isinstance(context, dict):
+                pf = str(context.get("channel") or context.get("platform") or "")
+            record_block(layer, reason, platform=pf)
+        except Exception:
+            pass
+
+    def _cooldown_remaining_raw(
+        self, text: str, user_id: str, chat_id: Any = '',
+        account_id: str = "",
+        chat_scope: str = "",
+    ) -> float:
+        """四桶冷却原始计算（不看 unlimited_mode），供 ``_cooldown_remaining`` 包装。"""
         current_time = time.time()
         user_context = self._get_user_context(
             user_id, account_id=account_id, chat_scope=chat_scope)
@@ -6190,8 +6240,18 @@ class SkillManager(LoggerMixin):
                 _st = get_deep_persona_store()
                 _cid = str(contact_key or "")
                 if _st is not None and _cid:
-                    _mpw = int(_dp.get("life_share_max_per_week", 2) or 2)
-                    _gap = float(_dp.get("life_share_min_gap_hours", 48) or 48)
+                    # 「0=不限」：键缺失才取默认；显式 0 = 不限（旧 ``or 2`` 会把 0 改回 2）。
+                    _mpw_raw = _dp.get("life_share_max_per_week", 2)
+                    _gap_raw = _dp.get("life_share_min_gap_hours", 48)
+                    _mpw = int(2 if _mpw_raw is None else _mpw_raw)
+                    _gap = float(48 if _gap_raw is None else _gap_raw)
+                    # outbound.unlimited_mode：周配额/间隔属业务频控，一键放开
+                    try:
+                        from src.ops.outbound_policy import is_unlimited as _ou
+                        if _ou():
+                            _mpw, _gap = 0, 0.0
+                    except Exception:
+                        pass
                     if not life_share_allowed(
                         _st.get_life_shares(_cid), _now,
                         max_per_week=_mpw, min_gap_hours=_gap,
