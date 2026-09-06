@@ -389,9 +389,11 @@ def _bubbles_client(monkeypatch, sent_log, *, owns=True):
     import src.web.routes.unified_inbox_send_routes as sr
 
     async def _fake_send_via(request, platform, account_id, chat_key, text,
-                             adapters, *, reply_to=None, mentions=None):
+                             adapters, *, reply_to=None, mentions=None,
+                             origin="manual"):
         sent_log.append({"text": text, "reply_to": reply_to})
-        return {"delivered": True,
+        # message_id 逐条递增：#210 B 响应体 bubbles.message_ids 与镜像行同键
+        return {"delivered": True, "message_id": f"m{len(sent_log)}",
                 "conversation_id": f"{platform}:{account_id}:{chat_key}"}
 
     monkeypatch.setattr(sr, "send_via_adapters", _fake_send_via)
@@ -423,7 +425,9 @@ def test_send_bubbles_splits_newlines_first_part_carries_reply_to(monkeypatch):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["ok"] is True
-    assert d["bubbles"] == {"parts_total": 3, "parts_sent": 3}
+    # #210 B：响应体带每条的平台 message_id（== 工作台镜像行 platform_msg_id）
+    assert d["bubbles"] == {"parts_total": 3, "parts_sent": 3,
+                            "message_ids": ["m1", "m2", "m3"]}
     assert [s["text"] for s in sent] == ["第一句", "第二句", "第三句"]
     assert sent[0]["reply_to"] and sent[1]["reply_to"] is None \
         and sent[2]["reply_to"] is None

@@ -3755,6 +3755,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             min_tail_chars=int(_bcfg_bub["min_tail_chars"]),
                             min_total_chars=int(_bcfg_bub["min_total_chars"]),
                             per_sentence=bool(_bcfg_bub.get("per_sentence")),
+                            explicit_newline_only=bool(_bcfg_bub.get(
+                                "explicit_newline_only", True)),
                         )
                         if len(_cand_bub) >= 2:
                             # 保留组（2026-08-09，A 线对齐 B 线 holdout）：可拆条的
@@ -3774,6 +3776,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                     len(_cand_bub), chat_id)
                             else:
                                 _bubble_chunks = _cand_bub
+                        elif _cand_bub and _cand_bub[0] != reply_final:
+                            # 拆不出第二条（#210 短回复门 / 无显式换行）：纯函数已把
+                            # 多行折成单段——整条路径发它，不让「每行一句」合同的
+                            # 换行原样漏进一条消息（2026-08-08 被投诉形态）。
+                            reply_final = _cand_bub[0]
+                            sent_text_for_context = reply_final
                 except Exception:
                     self.logger.debug(
                         "[reply_bubbles] A线分条判定失败，回落原路径", exc_info=True)

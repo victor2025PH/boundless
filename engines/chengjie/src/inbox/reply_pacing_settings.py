@@ -59,6 +59,10 @@ BUBBLE_CJK_PER_CHAR_DEFAULT = 0.22
 BUBBLE_LATIN_PER_CHAR_DEFAULT = 0.15
 BUBBLE_MAX_GAP_DEFAULT = 12.0
 BUBBLE_TOTAL_BUDGET_DEFAULT = 40.0
+# 拆条形态 1.0.75 收紧（#210 / D-L3）：仅显式换行才拆 + 短回复门 80（加权）。
+# 与 reply_split.DEFAULT_EXPLICIT_NEWLINE_ONLY / DEFAULT_MIN_TOTAL_CHARS 同值。
+BUBBLE_EXPLICIT_NEWLINE_ONLY_DEFAULT = True
+BUBBLE_MIN_TOTAL_CHARS_DEFAULT = 80
 
 # path -> {type, hot, default, (choices | lo/hi)}
 # default 与消费方代码内缺省一致（config 缺键时快照展示的值必须是真实行为）。
@@ -260,8 +264,22 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "inbox.reply_style.bubbles.per_sentence": {
         "type": "bool", "default": False, "hot": True,
     },
+    # ── 1.0.75 收紧（#210 / D-L3，2026-09-06）：拆与不拆只由草稿显式换行决定，
+    # 算法切句（逐句/句界打包）降为显式关掉本键才进的兜底档；短回复门抬到 80
+    # （加权：CJK 80 字 / 英文 ≈320 字符），两句英文永远整条。消费方三链逐次
+    # 投递现读 parse_bubbles_cfg → hot=True。default 与 reply_split 同值（门禁钉住）。
+    "inbox.reply_style.bubbles.explicit_newline_only": {
+        "type": "bool", "default": BUBBLE_EXPLICIT_NEWLINE_ONLY_DEFAULT,
+        "hot": True,
+    },
+    "inbox.reply_style.bubbles.min_total_chars": {
+        "type": "int", "lo": 0, "hi": 500,
+        "default": BUBBLE_MIN_TOTAL_CHARS_DEFAULT, "hot": True,
+    },
     # 真实缺省是动态的（per_sentence 开且未显式配 → 5，否则 3）——快照用哨兵
     # None 表示「跟随模式」，effective_values 二次求值（bootstrap 哨兵同手法）。
+    # 刻意**不**进平台覆写表（OVERRIDE_EDITABLE_KEYS 只有延迟三键）：同一人设在
+    # TG/WA 的消息形态必须一致，平台层只许调延迟不许改条数（#210 跨平台识破）。
     "inbox.reply_style.bubbles.max_parts": {
         "type": "int", "lo": 1, "hi": 5, "default": None, "hot": True,
     },
@@ -1343,6 +1361,7 @@ __all__ = [
     "BUBBLE_GAP_LO_DEFAULT", "BUBBLE_GAP_HI_DEFAULT",
     "BUBBLE_CJK_PER_CHAR_DEFAULT", "BUBBLE_LATIN_PER_CHAR_DEFAULT",
     "BUBBLE_MAX_GAP_DEFAULT", "BUBBLE_TOTAL_BUDGET_DEFAULT",
+    "BUBBLE_EXPLICIT_NEWLINE_ONLY_DEFAULT", "BUBBLE_MIN_TOTAL_CHARS_DEFAULT",
     "sanitize_patch", "cross_validate", "nested_patch",
     "effective_values", "field_meta", "gate_status", "build_snapshot",
     "split_hot_pending", "merged_delay_block", "merged_persona_overrides",

@@ -842,8 +842,10 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-row" style="border-top:none">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_bub_enabled', "启用分条发送") }}</span>
       <label class="rps-switch"><input type="checkbox" id="rps-bub-enabled" onchange="rpsMarkDirty();rpsBubEst()"><span class="rps-slider"></span></label>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_bub_enabled_hint', "关闭＝整条一次发出（默认）。开启后长回复按句子边界拆条，媒体/语音回复不受影响。") }}</span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_bub_enabled_hint', "关闭＝整条一次发出（出厂默认）。开启后只有草稿里有显式换行的长回复才会按行拆条，短回复永远整条；媒体/语音回复不受影响。") }}</span>
     </div>
+    <!-- #210 / D-L3（2026-09-06）：拆条节奏被客户识破 AI 的实录 → 开关旁常驻风险提示 -->
+    <p class="rps-hint" style="margin:.15rem 0 .35rem;color:var(--warn,#b45309)">{{ (i18n or {}).get('rps_bub_risk', "⚠ 拆条会形成固定节奏，客户可能据此识别 AI（已有付费客户被识破的实录）；同一人设跨平台也应保持一致。建议关闭。") }}</p>
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_bub_gap', "条间思考停顿（秒）") }}
         <span class="rps-chip" data-hot-chip="inbox.reply_style.bubbles.gap_sec_lo"></span></span>
@@ -862,10 +864,18 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-est" id="rps-bub-est" style="display:none"></div>
     <details class="rps-guard-adv">
       <summary>{{ (i18n or {}).get('rps_bub_adv', "高级参数（拆条方式与打字手速）") }}</summary>
+      <!-- 仅显式换行才拆（#210 / D-L3）：后端白名单未装载该键（旧进程）时整行隐藏，
+           防「前端造出后端不认的键」假脏 / 保存被拒（feat:"bub_nl" 探测） -->
+      <div class="rps-row" id="rps-bub-nl-row" style="display:none">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_bub_nl_only', "仅显式换行才拆") }}
+          <span class="rps-chip" data-hot-chip="inbox.reply_style.bubbles.explicit_newline_only"></span></span>
+        <label class="rps-switch"><input type="checkbox" id="rps-bub-nlonly" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bub_nl_only_hint', "开（默认）＝只按草稿里的显式换行成条，一行一条、没有换行就整条发出；关＝退回算法切句（逐句 / 按句界打包）。总长不到 80（中文字数；英文约 320 字符）的短回复无论如何都不拆。") }}</span>
+      </div>
       <div class="rps-row">
         <span class="rps-row-label">{{ (i18n or {}).get('rps_bub_per_sent', "逐句拆条") }}</span>
         <label class="rps-switch"><input type="checkbox" id="rps-bub-persent" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bub_per_sent_hint', "开＝每句一条（碎句感更强）；关＝按长度均衡打包 2-3 条（默认）。") }}</span>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bub_per_sent_hint', "算法切句档的子选项（需先关掉「仅显式换行才拆」）：开＝每句一条（碎句感更强、最像机器）；关＝按长度均衡打包 2-3 条（默认）。") }}</span>
       </div>
       <div class="rps-row">
         <span class="rps-row-label">{{ (i18n or {}).get('rps_bub_max_parts', "最多拆几条") }}</span>
@@ -1375,7 +1385,10 @@ var RPS_I18N = {
     "inbox.work_schedule.off_hours.generate_drafts": {{ (i18n or {}).get('rps_ws_gendrafts', "休息期仍拟稿")|tojson }},
     "inbox.work_schedule.off_hours.catch_up": {{ (i18n or {}).get('rps_ws_catchup', "复班补觉回复")|tojson }},
     "inbox.work_schedule.off_hours.catch_up_regenerate_hours": {{ (i18n or {}).get('rps_ws_regenh', "重拟阈值（小时）")|tojson }},
-    "inbox.work_schedule.accounts": {{ (i18n or {}).get('rps_ws_acct_title', "账号班表覆写")|tojson }}
+    "inbox.work_schedule.accounts": {{ (i18n or {}).get('rps_ws_acct_title', "账号班表覆写")|tojson }},
+    "inbox.reply_style.bubbles.enabled": {{ (i18n or {}).get('rps_bub_enabled', "启用分条发送")|tojson }},
+    "inbox.reply_style.bubbles.per_sentence": {{ (i18n or {}).get('rps_bub_per_sent', "逐句拆条")|tojson }},
+    "inbox.reply_style.bubbles.explicit_newline_only": {{ (i18n or {}).get('rps_bub_nl_only', "仅显式换行才拆")|tojson }}
   }
 };
 
@@ -1390,6 +1403,7 @@ var rpsWsEnabled = false;   // 后端是否已装载 work_schedule 白名单（�
 var rpsFloorsEnabled = false; // 后端是否已装载连发/秒回地板白名单（P1；旧进程隐藏该组）
 var rpsGuardEnabled = false;  // 后端是否已装载回复额度守卫白名单（P0-guard；旧进程隐藏整卡）
 var rpsBubEnabled = false;    // 后端是否已装载消息分条白名单（P0-bub；旧进程隐藏整卡）
+var rpsBubNlEnabled = false;  // 「仅显式换行才拆」键是否已装载（#210 1.0.75；错位期隐藏该行）
 var rpsGuardAdvEnabled = false; // 高级参数键是否已装载（P1；未装载时折叠区回落只读行）
 var rpsGuardBusy = false;     // 豁免/撤销请求在途互斥（防连点双写）
 var rpsSgEnabled = false;     // 后端是否已装载发送额度闸门白名单（2026-08-29；旧进程卡可见但表单 pending）
@@ -1702,7 +1716,9 @@ RPS_FIELD_DEFS.push(
   {path: "inbox.reply_style.bubbles.per_char_sec", kind: "float", el: "rps-bub-pcs", feat: "bub"},
   {path: "inbox.reply_style.bubbles.latin_per_char_sec", kind: "float", el: "rps-bub-latin", feat: "bub"},
   {path: "inbox.reply_style.bubbles.max_gap_sec", kind: "float", el: "rps-bub-maxgap", feat: "bub"},
-  {path: "inbox.reply_style.bubbles.total_budget_sec", kind: "float", el: "rps-bub-budget", feat: "bub"}
+  {path: "inbox.reply_style.bubbles.total_budget_sec", kind: "float", el: "rps-bub-budget", feat: "bub"},
+  // #210 / D-L3（1.0.75）：独立探测——bub 已装载但本键未装载的错位期不收集/不回填
+  {path: "inbox.reply_style.bubbles.explicit_newline_only", kind: "check", el: "rps-bub-nlonly", feat: "bub_nl"}
 );
 RPS_DEFS_BY_PATH = {};
 RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
@@ -1715,6 +1731,7 @@ function rpsCollect(){
     else if (def.feat === "guard"){ if (!rpsGuardEnabled) return; }   // 旧后端：守卫字段不参与
     else if (def.feat === "guard_adv"){ if (!rpsGuardAdvEnabled) return; } // 守卫高级组独立探测
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }       // 旧后端：分条字段不参与
+    else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }  // 错位期：仅显式换行键不参与
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }   // 旧后端：发送闸门字段不参与
     else if (def.kind === "virtual" && !rpsPlatEnabled) return; // 旧后端：平台字段不参与
     out[def.path] = rpsFieldGet(def);
@@ -1730,6 +1747,7 @@ function rpsFill(values){
     else if (def.feat === "guard"){ if (!rpsGuardEnabled) return; }
     else if (def.feat === "guard_adv"){ if (!rpsGuardAdvEnabled) return; }
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }
+    else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }
     else if (def.kind === "virtual" && !rpsPlatEnabled) return;
     rpsFieldSet(def, values[def.path]);
@@ -3599,6 +3617,10 @@ async function rpsLoad(){
     rpsBubEnabled = !!((d.meta || {})["inbox.reply_style.bubbles.enabled"]);
     var bubCard = document.getElementById('rps-sec-bub');
     if (bubCard) bubCard.style.display = rpsBubEnabled ? '' : 'none';
+    // 仅显式换行才拆（#210 1.0.75）：键级独立探测，未装载时该行隐藏
+    rpsBubNlEnabled = rpsBubEnabled && !!((d.meta || {})["inbox.reply_style.bubbles.explicit_newline_only"]);
+    var bubNlRow = document.getElementById('rps-bub-nl-row');
+    if (bubNlRow) bubNlRow.style.display = rpsBubNlEnabled ? '' : 'none';
     // 新账号接管确认（P0 2026-08-30）：独立端点异步装载，缺席/关闭整卡隐藏
     rpsAmLoad();
     rpsFill(rpsBaseline);

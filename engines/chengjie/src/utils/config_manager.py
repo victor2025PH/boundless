@@ -413,6 +413,10 @@ class ConfigManager:
             # 同样必须在 _validate_config 之前——理由同上）。
             self._ensure_deploy_profile()
 
+            # #210 / D-L3（1.0.75）：拆条形态存量热修——逐句拆条的老配置收紧为
+            # 「仅显式换行才拆」，不等运营手动关（skuio 机实锤）。幂等、永不抛。
+            self._migrate_bubbles_1075()
+
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
             # 无需改随包 example（server 端口/令牌保持 canonical）。开发/server 态无 env→零影响。
@@ -649,6 +653,57 @@ class ConfigManager:
                 self.logger.warning("产品基线补齐写入失败（忽略，功能保持关闭）")
         except Exception as exc:
             self.logger.warning("产品基线补齐异常（忽略）: %s", exc)
+
+    # 逐句拆条 → 仅显式换行才拆 的一次性迁移标记键（写进 overlay 即视为「用户已表态」）
+    _BUBBLES_NL_KEY = "explicit_newline_only"
+
+    def bubbles_migration_patch(self) -> Optional[Dict[str, Any]]:
+        """#210 / D-L3 存量热修的判定核心（纯读，供 ``_migrate_bubbles_1075`` 与测试）。
+
+        合并视图（config+overlay）里 ``inbox.reply_style.bubbles.per_sentence`` 为真
+        **且** ``explicit_newline_only`` 从未被写过 → 返回要写进 overlay 的 patch：
+        ``per_sentence=false`` + ``explicit_newline_only=true``。后者同时是幂等标记
+        ——之后运营无论把它改成什么，都算「已表态」，本迁移不再插手；运营显式写了
+        ``explicit_newline_only: false`` 想回逐句档也被尊重。其余情形返回 None。
+        """
+        try:
+            inbox = self.config.get("inbox")
+            rs = inbox.get("reply_style") if isinstance(inbox, dict) else None
+            bub = rs.get("bubbles") if isinstance(rs, dict) else None
+            if not isinstance(bub, dict):
+                return None
+            if self._BUBBLES_NL_KEY in bub:
+                return None
+            if not bool(bub.get("per_sentence", False)):
+                return None
+            return {"inbox": {"reply_style": {"bubbles": {
+                "per_sentence": False, self._BUBBLES_NL_KEY: True}}}}
+        except Exception:
+            return None
+
+    def _migrate_bubbles_1075(self) -> None:
+        """拆条形态 1.0.75 收紧的存量热修（#210，老板决策 D-L3，2026-09-06）。
+
+        82BF95：skuio 机 overlay 里 ``bubbles.per_sentence=true`` 把两句英文短回复拆成
+        6–15s 固定两拍，客户当场识破 AI。新默认（reply_split）已是「仅显式换行才拆 +
+        短回复永不拆」，但存量 overlay 显式写着 ``per_sentence: true`` 会一直压过默认
+        ——本方法把它迁成关，并写入 ``explicit_newline_only: true`` 作幂等标记。
+        写入面＝overlay（``save_overlay_patch`` 保注释 + 即时深合并进内存），主
+        config.yaml 不动；每次 load()/热重载都会再判一次，标记在场即 no-op；永不抛。
+        """
+        try:
+            patch = self.bubbles_migration_patch()
+            if not patch:
+                return
+            if self.save_overlay_patch(patch):
+                self.logger.warning(
+                    "拆条已按 1.0.75 默认收紧：inbox.reply_style.bubbles.per_sentence "
+                    "true→false，仅草稿显式换行才拆、短回复不拆（#210 / D-L3）；"
+                    "如确需逐句拆条，请在自动回复设置页显式关闭「仅显式换行才拆」")
+            else:
+                self.logger.warning("拆条收紧迁移写入 overlay 失败（忽略，本次按旧配置跑）")
+        except Exception as exc:
+            self.logger.warning("拆条收紧迁移异常（忽略）: %s", exc)
 
     def _ensure_deploy_profile(self) -> None:
         """部署能力预设档首启播种（WP-1 纯云起步档，2026-08）。

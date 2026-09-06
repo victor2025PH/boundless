@@ -1924,6 +1924,8 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                         min_tail_chars=int(_bcfg["min_tail_chars"]),
                         min_total_chars=int(_bcfg["min_total_chars"]),
                         per_sentence=bool(_bcfg.get("per_sentence")),
+                        explicit_newline_only=bool(
+                            _bcfg.get("explicit_newline_only", True)),
                     )
                     if len(_split) >= 2:
                         _hp = float(_bcfg.get("holdout_pct") or 0.0)
@@ -1942,6 +1944,11 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                             _parts = [_cp(str(text or "")) or str(text or "")]
                         else:
                             _parts = _split
+                    elif _split:
+                        # 拆不出第二条（#210 短回复门 / 无显式换行）：用纯函数给的
+                        # 单条——它已把多行折成单段，不让「每行一句」合同的换行
+                        # 原样漏进一条消息里。
+                        _parts = [_split[0]]
             except Exception:
                 _assistant_ref.logger.debug(
                     "[reply_bubbles] 拆条失败，回落单条", exc_info=True)

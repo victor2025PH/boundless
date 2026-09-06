@@ -105,6 +105,10 @@ def test_parse_bubbles_cfg_defaults_and_clamp():
     assert cfg["orch_only"] is True
     assert cfg["skip_groups"] is True
     assert cfg["holdout_pct"] == 0.0
+    # #210 / D-L3（1.0.75）出厂三件：逐句关、仅显式换行才拆、短回复门 80（加权）
+    assert cfg["per_sentence"] is False
+    assert cfg["explicit_newline_only"] is True
+    assert cfg["min_total_chars"] == 80
     # holdout 夹界 0..0.5（保留组是测量工具，不允许配成"多数用户拿差体验"）
     hi = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {"holdout_pct": 0.9}}}})
     assert hi["holdout_pct"] == 0.5
@@ -144,13 +148,18 @@ def test_split_short_text_stays_single():
 
 
 def test_split_fallback_sentence_pack():
-    """无换行的长段 → 句级打包兜底（复用 pack_voice_parts）。"""
+    """无换行的长段 → 句级打包兜底（1.0.75 起需显式关掉 explicit_newline_only）。"""
     text = "今天天气真好呀！我们下午去喝茶吧。你觉得怎么样呢？"
     parts = split_reply_parts(
         text, max_parts=3, max_chars=20, min_total_chars=0, min_tail_chars=0,
+        explicit_newline_only=False,
     )
     assert len(parts) >= 2
     assert "".join(parts).replace(" ", "") == text.replace(" ", "")
+    # 出厂默认（仅显式换行才拆）：同一段没有换行 → 整条
+    assert split_reply_parts(
+        text, max_parts=3, max_chars=20, min_total_chars=0, min_tail_chars=0,
+    ) == [text]
 
 
 def test_split_preserves_url_atomic():
@@ -309,7 +318,8 @@ def test_english_long_multi_sentence_splits_only_at_sentence_end():
             "truffle rice cakes with an Asian twist. What about you, do you "
             "usually cook or order takeout?")
     parts = split_reply_parts(text, max_parts=3, max_chars=30,
-                              min_total_chars=0, min_tail_chars=4)
+                              min_total_chars=0, min_tail_chars=4,
+                              explicit_newline_only=False)
     assert len(parts) >= 2
     for p in parts:
         # 每段必须以句末标点（可带 emoji）收尾——绝无句中断裂
@@ -330,17 +340,20 @@ def test_cjk_overlong_single_sentence_soft_comma_fallback():
     """CJK 主导的超长单句（>1.6×预算）才放开逗号级软切；英文永不逗号切。"""
     text = "今天我们去了很多地方玩得特别开心，先是去了海边看日出，然后又去山上野餐，最后还在老街吃了好多小吃真的太满足了"
     parts = split_reply_parts(text, max_parts=3, max_chars=20,
-                              min_total_chars=0, min_tail_chars=4)
+                              min_total_chars=0, min_tail_chars=4,
+                              explicit_newline_only=False)
     assert len(parts) >= 2
     assert "".join(parts) == text
 
 
 def test_short_english_reply_stays_single():
-    """min_total 门槛按加权长度：英文短回复不再装样子拆条。"""
+    """min_total 门槛按加权长度：英文短回复不再装样子拆条。
+
+    2026-09-06 起单条出口折成自然单段（换行不得漏进一条消息）。"""
     text = "Sounds good!\nSee you then 😄"
     parts = split_reply_parts(text, max_parts=3, max_chars=60,
                               min_total_chars=24, min_tail_chars=4)
-    assert parts == [text.strip()] or parts == ["Sounds good!\nSee you then 😄"]
+    assert parts == ["Sounds good! See you then 😄"]
 
 
 # ── 2026-08-03（198 实锤二）：A 线接线必须认 ConfigManager ──────────────────
@@ -531,3 +544,149 @@ def test_plan_gaps_short_lists():
     from src.inbox.reply_split import plan_bubble_gaps
     assert plan_bubble_gaps([]) == []
     assert plan_bubble_gaps(["只有一条"]) == []
+
+
+# ── 2026-09-06（#210 / D-L3，82BF95 实锤）：拆条止血——出厂关 / 仅显式换行才拆 /
+# 短回复永不拆。客户原话「huge difference between your typing here on TG and
+# WhatsApp」：两句英文被逐句拆成 6–15s 固定两拍，是 AI 被识破的直接形态。
+
+
+_SCEYA_REPLY = ("I guess you just bring out a different side of me here. "
+                "But it's still me, just a little more relaxed with you.")
+
+
+def test_defaults_synced_between_constants_and_parse_cfg():
+    from src.inbox.reply_split import (
+        DEFAULT_EXPLICIT_NEWLINE_ONLY, DEFAULT_MIN_TOTAL_CHARS,
+    )
+    d = parse_bubbles_cfg({})
+    assert DEFAULT_EXPLICIT_NEWLINE_ONLY is True
+    assert DEFAULT_MIN_TOTAL_CHARS == 80
+    assert d["explicit_newline_only"] is DEFAULT_EXPLICIT_NEWLINE_ONLY
+    assert d["min_total_chars"] == DEFAULT_MIN_TOTAL_CHARS
+    # 显式 false（运营明确要回算法档）必须被尊重
+    off = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {
+        "explicit_newline_only": False}}}})
+    assert off["explicit_newline_only"] is False
+
+
+def test_two_sentence_english_reply_never_split_by_default():
+    """事故原句（~105 字符 / 加权 ≈26）：出厂缺省下整条单发。"""
+    d = parse_bubbles_cfg({"inbox": {"reply_style": {"bubbles": {"enabled": True}}}})
+    parts = split_reply_parts(
+        _SCEYA_REPLY,
+        max_parts=d["max_parts"], max_chars=d["max_chars"],
+        min_tail_chars=d["min_tail_chars"], min_total_chars=d["min_total_chars"],
+        per_sentence=d["per_sentence"],
+        explicit_newline_only=d["explicit_newline_only"],
+    )
+    assert parts == [_SCEYA_REPLY]
+    # 两句英文 60 字符（验收口径）同样不拆
+    short2 = "Sounds good to me. See you tomorrow at the usual place then!"
+    assert len(short2) <= 62
+    assert split_reply_parts(short2) == [short2]
+
+
+def test_short_reply_gate_applies_to_per_sentence_too():
+    """skuio 机实况：per_sentence=true / max_parts=2——旧版逐句绕过短回复门，
+    现在短回复门先于一切模式生效，即便运营显式回到算法档也不再拆两句英文。"""
+    parts = split_reply_parts(
+        _SCEYA_REPLY, max_parts=2, per_sentence=True,
+        explicit_newline_only=False,       # 算法档
+    )
+    assert parts == [_SCEYA_REPLY]
+    # 同一句在旧口径（min_total_chars=24 且逐句）下会被拆成两条——钉住这就是被修掉的行为
+    legacy = split_reply_parts(
+        _SCEYA_REPLY, max_parts=2, per_sentence=True,
+        min_total_chars=24, explicit_newline_only=False,
+    )
+    assert len(legacy) == 2
+
+
+def test_explicit_blank_line_splits_when_long_enough():
+    """草稿显式空行 → 拆（总长过门槛）；每行原样成条，零字符丢失。"""
+    p1 = ("今天下午的会开得比想象中久，一屋子人围着一份预算表来回改了三遍，"
+          "散场的时候外面天都黑了，走出大楼那一刻真的松了口气。")
+    p2 = ("你那边呢，忙完了没？要是还没吃饭就别再拖了，先去吃点热的，"
+          "等你回来再慢慢跟我说今天发生的事。")
+    text = f"{p1}\n\n{p2}"
+    parts = split_reply_parts(text)
+    assert parts == [p1, p2]
+    # 单换行（LLM 换行合同）同样算显式换行
+    assert split_reply_parts(f"{p1}\n{p2}") == [p1, p2]
+
+
+def test_long_paragraph_without_newline_stays_single_by_default():
+    """没有显式换行的长段（多句、远超门槛）出厂缺省整条；显式关掉才走算法切句。"""
+    text = ("今天下午的会开得比想象中久。一屋子人围着一份预算表来回改了三遍。"
+            "散场的时候外面天都黑了，走出大楼那一刻真的松了口气。"
+            "你那边呢，忙完了没？要是还没吃饭就别再拖了，先去吃点热的。"
+            "等你回来再慢慢跟我说今天发生的事吧。")
+    assert split_reply_parts(text, max_parts=3) == [text]
+    algo = split_reply_parts(text, max_parts=3, explicit_newline_only=False)
+    assert len(algo) >= 2 and "".join(algo).replace(" ", "") == text.replace(" ", "")
+
+
+def test_explicit_mode_keeps_overlong_line_whole():
+    """explicit_newline_only 下行就是条：超长行不再被句界重切，条数 == 行数。"""
+    long_line = ("这一行故意写得很长很长，里面有好几句话。第一句说完了。第二句也说完了。"
+                 "第三句还在继续说，直到远远超过默认的六十字预算才停下来。")
+    tail = "然后这是第二行。"
+    parts = split_reply_parts(f"{long_line}\n{tail}", max_chars=20,
+                              min_total_chars=0, min_tail_chars=0)
+    assert parts == [long_line, tail]
+    # 算法档下同一输入会把超长行再按句界打包成更多条
+    algo = split_reply_parts(f"{long_line}\n{tail}", max_chars=20,
+                             min_total_chars=0, min_tail_chars=0,
+                             explicit_newline_only=False)
+    assert len(algo) > 2
+
+
+def test_parts_never_carry_embedded_newlines():
+    """bubbles 开时拟稿是「每行一句」合同：短回复不拆、或 max_parts 并入末条时，
+    多行绝不能原样漏进一条消息（2026-08-08「always 2 parts」形态）——每条都折成
+    自然单段，调用方拿到什么就发什么。"""
+    # 短回复门挡下的多行草稿 → 单条且无换行
+    two_lines = "I guess you just bring out a different side of me here.\nBut it's still me."
+    parts = split_reply_parts(two_lines)
+    assert parts == ["I guess you just bring out a different side of me here. But it's still me."]
+    # CJK 裸边界补「，」（collapse_paragraphs 口径）
+    assert split_reply_parts("今天好累\n想你了") == ["今天好累，想你了"]
+    # 5 行 × max_parts=3：并入末条的多行（含 >40 字的长行 → 旧版用 \n 连接）也不带换行
+    lines = ["今天路过那家咖啡店买了杯燕麦拿铁味道特别好。",
+             "顺便帮你也看了下你说的那款蛋糕还有货。",
+             "下午的会议临时取消了所以提前回家了，路上看到夕阳特别美还拍了好几张照片想发给你看。",
+             "晚点发给你看看你肯定喜欢。",
+             "对了周末有空吗，想约你去那家新开的店坐坐。"]
+    out = split_reply_parts("\n".join(lines), max_parts=3, min_total_chars=0,
+                            min_tail_chars=0)
+    assert len(out) == 3
+    for p in out:
+        assert "\n" not in p, p
+    # 句末标点边界直接续接（collapse_paragraphs 口径）→ 内容零丢失
+    assert "".join(out) == "".join(lines)
+
+
+def test_delivery_chains_consume_single_part_result():
+    """三链在「拆不出第二条」时必须改发纯函数给的单条（已折叠），否则折叠白做。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src"
+    manual = (root / "web/routes/unified_inbox_send_routes.py").read_text(encoding="utf-8")
+    assert "elif _cand and _cand[0] != text:" in manual and "text = _cand[0]" in manual
+    bline = (root / "inbox/autosend_helpers.py").read_text(encoding="utf-8")
+    assert "_parts = [_split[0]]" in bline
+    aline = (root / "client/telegram_client.py").read_text(encoding="utf-8")
+    assert "reply_final = _cand_bub[0]" in aline
+
+
+def test_delivery_chains_pass_explicit_newline_only():
+    """三条投递链（手动 send 路由 / B 线 autosend / A 线 telegram_client）调
+    split_reply_parts 时必须透传 explicit_newline_only（否则纯函数缺省虽为 True，
+    运营显式关掉也不会生效）。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src"
+    for rel in ("web/routes/unified_inbox_send_routes.py",
+                "inbox/autosend_helpers.py",
+                "client/telegram_client.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert 'explicit_newline_only=bool(' in src, rel

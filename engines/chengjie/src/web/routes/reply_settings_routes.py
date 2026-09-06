@@ -63,8 +63,14 @@ def _audit_path(config_manager):
     return (Path(base).parent / "reply_settings_audit.jsonl") if base else None
 
 
-def _append_audit(config_manager, *, actor, changes, old_values) -> None:
-    """开关变更审计（best-effort，绝不影响保存结果）。"""
+def _append_audit(config_manager, *, actor, changes, old_values,
+                  audit_store=None) -> None:
+    """开关变更审计（best-effort，绝不影响保存结果）。
+
+    双落：本页专用 ``reply_settings_audit.jsonl``（逐键 old/new 全量）+ 系统
+    ``audit_store``（/audit 页可查「谁/何时改了哪些键」）。#210 实锤：skuio 机
+    的拆条开关被谁打开无从追溯——此前本页保存只落旁路 jsonl，不进审计页。
+    """
     try:
         p = _audit_path(config_manager)
         if p is None:
@@ -78,6 +84,20 @@ def _append_audit(config_manager, *, actor, changes, old_values) -> None:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         logger.debug("写自动回复设置审计失败（忽略）", exc_info=True)
+    if audit_store is None or not hasattr(audit_store, "log"):
+        return
+    try:
+        keys = sorted(str(k) for k in changes)
+        audit_store.log(
+            str(actor or "web"), "reply_settings_save",
+            ",".join(keys)[:200],
+            json.dumps({k: old_values.get(k) for k in keys},
+                       ensure_ascii=False, default=str)[:2000],
+            json.dumps({k: changes[k] for k in keys},
+                       ensure_ascii=False, default=str)[:2000],
+        )
+    except Exception:
+        logger.debug("写系统审计失败（忽略）", exc_info=True)
 
 
 def register_reply_settings_routes(
@@ -530,7 +550,9 @@ def register_reply_settings_routes(
             except Exception:
                 actor = "web"
         _append_audit(config_manager, actor=actor, changes=clean,
-                      old_values=old_values)
+                      old_values=old_values,
+                      audit_store=getattr(getattr(request.app, "state", None),
+                                          "audit_store", None))
 
         snap = build_snapshot(getattr(config_manager, "config", None) or {})
         snap.update({"applied_live": live, "needs_restart": pending})

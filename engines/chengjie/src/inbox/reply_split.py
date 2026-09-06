@@ -53,6 +53,20 @@ DEFAULT_LATIN_PER_CHAR_SEC = 0.15
 DEFAULT_MAX_GAP_SEC = 12.0
 DEFAULT_TOTAL_BUDGET_SEC = 40.0
 
+# ── 拆条形态「1.0.75 收紧」（#210，D-L3，2026-09-06）──────────────────────────
+# 82BF95 实锤：付费用户的客户因为「TG 上打字方式和 WhatsApp 差别很大」识破 AI
+# ——逐句拆条（per_sentence）+ 24 字加权门槛让两句英文短回复也被拆成 6–15s 的
+# 固定两拍，成了机器节奏。老板拍板三条：出厂关；**仅草稿显式换行才拆**（算法切句
+# 只作兜底且默认关）；**短回复永不拆**。
+#   - explicit_newline_only=True：只认草稿里的显式换行（LLM 换行合同 / 坐席手写
+#     多行）；无换行的整段绝不再按句界切开，逐句模式也不再行内二次切句。
+#   - min_total_chars=80（加权）：CJK 80 字 / 英文 ≈320 字符以下一律整条——
+#     「I guess you just bring out a different side of me here. But it's still
+#     me…」这种两句话（加权 ≈26）永远单条发出。
+# reply_pacing_settings.FIELDS 的同名 default 必须与此同值（门禁钉住）。
+DEFAULT_MIN_TOTAL_CHARS = 80
+DEFAULT_EXPLICIT_NEWLINE_ONLY = True
+
 # 句子边界：CJK 句末标点后天然可断；拉丁 .!? 只在后随空白时算句界
 # （防 3.5 / example.com / U.S. 之类被误切）。句中逗号/空格**绝不**再作硬切点
 # ——切不出句界就整句保留，宁可长一条也不把一句话说一半。
@@ -214,6 +228,7 @@ def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     holdout = min(0.5, max(0.0, _f("holdout_pct", 0.0)))
     # per_sentence（2026-08-07 运营拍板）：全自动回复「每句一条」而非按 max_chars 打包
     # 多句成段。开时 split_reply_parts 走逐句成条（仍受 max_parts 封顶、超短尾并入）。
+    # 1.0.75 起默认关且受 explicit_newline_only 约束（开着也只按显式换行成条）。
     per_sentence = bool(bubbles.get("per_sentence", False))
     # 逐句模式默认放宽条数：3 条常把 4-5 句并回段落，与「每句一条」相悖；未显式配 max_parts
     # 时逐句默认 5（硬上限），显式配了则尊重运营。
@@ -221,11 +236,15 @@ def parse_bubbles_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     return {
         "enabled": bool(bubbles.get("enabled", False)),
         "per_sentence": per_sentence,
+        # 仅显式换行才拆（D-L3）：显式 false ＝运营明确要回算法切句（兜底档）
+        "explicit_newline_only": bool(bubbles.get(
+            "explicit_newline_only", DEFAULT_EXPLICIT_NEWLINE_ONLY)),
         "holdout_pct": holdout,
         "max_parts": _i("max_parts", default_max_parts, lo=1, hi=5),
         "max_chars": _i("max_chars", 60, lo=20, hi=300),
         "min_tail_chars": _i("min_tail_chars", 4, lo=0, hi=40),
-        "min_total_chars": _i("min_total_chars", 24, lo=0, hi=500),
+        "min_total_chars": _i("min_total_chars", DEFAULT_MIN_TOTAL_CHARS,
+                              lo=0, hi=500),
         "gap_sec_lo": gap_lo,
         "gap_sec_hi": gap_hi,
         "per_char_sec": max(0.0, _f("per_char_sec", DEFAULT_PER_CHAR_SEC)),
@@ -371,19 +390,24 @@ def _cap_part_count(parts: List[str], max_parts: int) -> List[str]:
 
 
 def _from_newlines(text: str, max_parts: int, max_chars: int,
-                   min_tail_chars: int) -> Optional[List[str]]:
+                   min_tail_chars: int, *,
+                   pack_overlong: bool = True) -> Optional[List[str]]:
     """LLM 换行合同路径：≥2 非空行 → 按行成条；超长行再**句界**打包。
 
     2026-07-31 起超长行不再走语音侧 ``pack_voice_parts``（那是 TTS 切块逻辑，
     会在逗号/空格处硬切凑长度）；改 ``_pack_text_parts``（句界打包 + 加权长度），
     英文行不会再被拦腰切开。
+
+    ``pack_overlong=False``（explicit_newline_only 模式）：行就是条，超长行也
+    原样整行一条——拆与不拆只由草稿里的显式换行决定，算法不再插手。
     """
     lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
     if len(lines) < 2:
         return None
     expanded: List[str] = []
     for ln in lines:
-        if weighted_len(ln) <= max_chars or _is_atomic_chunk(ln):
+        if (not pack_overlong or weighted_len(ln) <= max_chars
+                or _is_atomic_chunk(ln)):
             expanded.append(ln)
             continue
         try:
@@ -430,23 +454,63 @@ def split_reply_parts(
     max_parts: int = 3,
     max_chars: int = 60,
     min_tail_chars: int = 4,
-    min_total_chars: int = 24,
+    min_total_chars: int = DEFAULT_MIN_TOTAL_CHARS,
     per_sentence: bool = False,
+    explicit_newline_only: bool = DEFAULT_EXPLICIT_NEWLINE_ONLY,
 ) -> List[str]:
     """把回复拆成 1..max_parts 条短消息文本。
 
     优先级：
       1. 空 → ``[]``
-      2. 总长（加权）< min_total_chars → 单条（短回复不装样子拆）
+      2. 总长（加权）< min_total_chars → 单条（**短回复永不拆**，所有模式一致）
       3. LLM 换行合同（≥2 行）→ 按行
-      4. 否则 ``_pack_text_parts`` 句界打包兜底（只在句末标点断，绝不句中硬切）
-      5. 异常 / 切不出第二条 → ``[原文]``
+      4. ``explicit_newline_only``（默认开）→ 到此为止：无显式换行就整条发
+      5. 兜底档（显式关掉 explicit_newline_only 才进）：逐句成条 / 句界打包
+      6. 异常 / 切不出第二条 → 单条
     纯函数、防御式。
+
+    **每一条都不含换行**（2026-09-06）：bubbles 开时拟稿合同是「每行一句」，
+    决定不拆（短回复）或被 max_parts 并入末条的多行若原样发出，就是「一条消息带
+    结构化换行」——2026-08-08 客户实锤「why always 2 parts」的形态，比拆条更糟。
+    故单条出口 / 并行末条一律 ``collapse_paragraphs`` 折成自然单段（与 RPA
+    ``human_pacing`` / 桌面桥 / 协议直发链同款收口），调用方拿到什么就发什么。
 
     2026-07-31（198 实锤）：长度判定全部改**加权长度**（CJK=1.0/其它=0.25），
     英文文本不再套用中文刻度被 60 字符拦腰切开；兜底打包从语音侧
     ``pack_voice_parts``（逗号/空格硬切）换成句界打包。
+    2026-09-06（#210 / D-L3）：短回复门对逐句模式同样生效（旧版逐句绕过它，
+    两句英文短回复也被拆成固定两拍＝82BF95 客户识破 AI 的直接形态）；算法切句
+    降为显式 opt-in 的兜底档。
     """
+    parts = _split_reply_parts_raw(
+        text, max_parts=max_parts, max_chars=max_chars,
+        min_tail_chars=min_tail_chars, min_total_chars=min_total_chars,
+        per_sentence=per_sentence, explicit_newline_only=explicit_newline_only,
+    )
+    out: List[str] = []
+    for p in parts:
+        s = str(p or "")
+        if "\n" in s:
+            try:
+                s = collapse_paragraphs(s) or s
+            except Exception:
+                pass
+        if s.strip():
+            out.append(s)
+    return out
+
+
+def _split_reply_parts_raw(
+    text: str,
+    *,
+    max_parts: int,
+    max_chars: int,
+    min_tail_chars: int,
+    min_total_chars: int,
+    per_sentence: bool,
+    explicit_newline_only: bool,
+) -> List[str]:
+    """``split_reply_parts`` 的切分核心（条内可能残留换行，由外层折叠）。"""
     t = str(text or "").strip()
     if not t:
         return []
@@ -457,18 +521,24 @@ def split_reply_parts(
     if max_parts <= 1:
         return [t]
 
+    # 短回复永不拆——放在一切模式之前（D-L3）。
+    if min_total_chars and weighted_len(t) < min_total_chars:
+        return [t]
+
+    # 仅显式换行才拆（出厂默认）：草稿自己分了行（LLM 换行合同 / 坐席多行）就
+    # 按行成条，行就是条（超长行不再被句界重切）；没有换行＝整条发出。
+    if explicit_newline_only:
+        lined = _from_newlines(t, max_parts, max_chars, min_tail_chars,
+                               pack_overlong=False)
+        return lined if (lined and len(lined) >= 2) else [t]
+
+    # ── 以下为算法切句兜底档（需显式 explicit_newline_only=false）──
     # 逐句模式（运营「每句一条」）：整段是原子块不拆；否则每句独占一条。
-    # 刻意**不**套 min_total_chars（那是"太短不值得拆"的字数闸，与"每句一条"相悖，
-    # 且英文按加权长度会被误判为短）；过短/单句由 _sentence_parts 的 min_tail 合并 +
-    # 「不足两条→整段」自然兜住，不会把「好的。嗯。」拆碎。
     if per_sentence:
         if _is_atomic_chunk(t) and len(t.split()) <= 3:
             return [t]
         sp = _sentence_parts(t, max_parts=max_parts, min_tail_chars=min_tail_chars)
         return sp if len(sp) >= 2 else [t]
-
-    if min_total_chars and weighted_len(t) < min_total_chars:
-        return [t]
 
     lined = _from_newlines(t, max_parts, max_chars, min_tail_chars)
     if lined and len(lined) >= 2:

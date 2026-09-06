@@ -186,7 +186,9 @@ def split_message(text: str, cfg: PacingConfig) -> List[str]:
     if cfg.split_mode == "length":
         parts = _split_by_length(text, cfg.split_max_parts, cfg.split_max_chars)
         return parts if parts else [text]
-    # sentence（默认）
+    # sentence（默认）。RPA 链有自己的 pacing 配置面（运营在此显式选了「按句」），
+    # 故显式走 reply_split 的算法切句档——inbox.reply_style.bubbles 的
+    # explicit_newline_only 出厂收紧（#210 / D-L3）只管编排器三链，不改本链语义。
     try:
         from src.inbox.reply_split import split_reply_parts
         parts = split_reply_parts(
@@ -195,6 +197,7 @@ def split_message(text: str, cfg: PacingConfig) -> List[str]:
             max_chars=cfg.split_max_chars,
             min_tail_chars=4,
             min_total_chars=0,
+            explicit_newline_only=False,
         )
     except Exception:
         logger.debug("[human_pacing] reply_split 委托失败，回落 legacy 切分",

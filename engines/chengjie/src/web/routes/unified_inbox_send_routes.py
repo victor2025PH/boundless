@@ -508,7 +508,13 @@ async def _deliver_bubble_parts(
 
     语义对齐语音 split_send / autosend 分条：仅首条带 reply_to；条间
     typing + 思考/打字延迟；首条失败原样抛出（外层释放幂等键），中途失败
-    已发算数、剩余丢弃。返回 (首条 result, 实发条数)。
+    已发算数、剩余丢弃。返回 (首条 result, 实发条数, 各条 message_id 列表)。
+
+    镜像口径（#210 B，2026-09-06）：每条都独立走 ``send_via_adapters`` → 编排器
+    ``send`` 成功即按**那一条的文本 + 平台 message_id** 落一行出站镜像——工作台
+    行数 == 客户手机条数是这里的不变量（test_bubbles_mirror_per_part 钉住）；
+    本函数**不**再为原稿整段补任何一行。``message_ids`` 回给响应体 / 日志，供
+    「工作台条数与手机不一致」类报障直接对账。
     """
     from src.inbox.reply_split import plan_bubble_gaps
     _orch = None
@@ -536,6 +542,7 @@ async def _deliver_bubble_parts(
         _gaps = []
     first_result = None
     sent = 0
+    message_ids: list = []
     for i, part in enumerate(parts):
         if i > 0:
             # 条间「想（静默）→ 打字（挂正在输入续挂）」：与 autosend/A 线同一
@@ -596,7 +603,14 @@ async def _deliver_bubble_parts(
         if i == 0:
             first_result = res
         sent += 1
-    return first_result, sent
+        message_ids.append(
+            str(res.get("message_id") or "") if isinstance(res, dict) else "")
+    if sent:
+        logger.info(
+            "[send] 气泡分条已发 %d/%d 条（工作台按条镜像）platform=%s chat=%s ids=%s",
+            sent, len(parts), platform, str(chat_key)[:24],
+            [m or "-" for m in message_ids])
+    return first_result, sent, message_ids
 
 
 def register_send_routes(app, *, api_auth, page_auth) -> None:
@@ -915,22 +929,31 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         min_tail_chars=int(_bubble_cfg["min_tail_chars"]),
                         min_total_chars=int(_bubble_cfg["min_total_chars"]),
                         per_sentence=bool(_bubble_cfg.get("per_sentence")),
+                        explicit_newline_only=bool(
+                            _bubble_cfg.get("explicit_newline_only", True)),
                     )
                     if len(_cand) >= 2:
                         _bubble_parts = _cand
+                    elif _cand and _cand[0] != text:
+                        # 坐席开了分条 chip 但拆不出第二条（#210 短回复门）：发纯函数
+                        # 折叠后的单段，不把多行原样塞进一条消息（2026-08-08 形态）
+                        text = _cand[0]
             except Exception:
                 logger.debug("[send] 气泡分条判定失败，整段发送", exc_info=True)
         _bubbles_info: Optional[Dict[str, Any]] = None
         try:
             if _bubble_parts:
-                result, _bub_sent = await _deliver_bubble_parts(
+                result, _bub_sent, _bub_ids = await _deliver_bubble_parts(
                     request, platform, account_id, chat_key,
                     _bubble_parts, _INBOX_ADAPTERS,
                     reply_to=_reply_to, bcfg=_bubble_cfg,
                 )
+                # message_ids：与工作台镜像行的 platform_msg_id 同值，前端/报障
+                # 可直接对账「手机 N 条 == 工作台 N 行」（#210 B）
                 _bubbles_info = {
                     "parts_total": len(_bubble_parts),
                     "parts_sent": _bub_sent,
+                    "message_ids": list(_bub_ids or []),
                 }
                 try:
                     from src.inbox.reply_split import record_bubble_send

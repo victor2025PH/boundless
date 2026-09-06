@@ -492,16 +492,41 @@ class TestBubblePacing:
             ("BUBBLE_LATIN_PER_CHAR_DEFAULT", "DEFAULT_LATIN_PER_CHAR_SEC"),
             ("BUBBLE_MAX_GAP_DEFAULT", "DEFAULT_MAX_GAP_SEC"),
             ("BUBBLE_TOTAL_BUDGET_DEFAULT", "DEFAULT_TOTAL_BUDGET_SEC"),
+            ("BUBBLE_MIN_TOTAL_CHARS_DEFAULT", "DEFAULT_MIN_TOTAL_CHARS"),
         ):
             assert getattr(rps, mirror) == pytest.approx(
                 getattr(rsp, truth)), mirror
+        assert (rps.BUBBLE_EXPLICIT_NEWLINE_ONLY_DEFAULT
+                is rsp.DEFAULT_EXPLICIT_NEWLINE_ONLY is True)
         real = parse_bubbles_cfg({})
         for short in ("enabled", "per_sentence", "gap_sec_lo", "gap_sec_hi",
                       "per_char_sec", "latin_per_char_sec", "max_gap_sec",
-                      "total_budget_sec"):
+                      "total_budget_sec", "explicit_newline_only",
+                      "min_total_chars"):
             spec = rps.FIELDS[self._P + short]
             assert spec["default"] == pytest.approx(real[short]), short
             assert spec["hot"] is True, short
+
+    def test_bubble_1075_factory_defaults(self):
+        """#210 / D-L3：出厂关 + 仅显式换行才拆 + 短回复门 80；平台覆写表**不许**
+        携带条数键（同一人设跨平台形态一致，平台层只调延迟）。"""
+        vals = rps.effective_values({})
+        assert vals[self._P + "enabled"] is False
+        assert vals[self._P + "per_sentence"] is False
+        assert vals[self._P + "explicit_newline_only"] is True
+        assert vals[self._P + "min_total_chars"] == 80
+        assert "max_parts" not in rps.OVERRIDE_EDITABLE_KEYS
+        _, errs = rps.sanitize_patch({
+            "inbox.l2_autosend.deliver_delay.platform_overrides": {
+                "telegram": {"max_parts": 2}}})
+        assert errs and errs[0]["code"] == "bad_override_key"
+        # 白名单能接受运营显式回算法档 / 调门槛
+        clean, errs2 = rps.sanitize_patch({
+            self._P + "explicit_newline_only": False,
+            self._P + "min_total_chars": 120})
+        assert errs2 == []
+        assert clean[self._P + "explicit_newline_only"] is False
+        assert clean[self._P + "min_total_chars"] == 120
 
     def test_bubble_max_parts_sentinel(self):
         # 缺键：打包模式缺省 3；逐句模式缺省 5；显式值优先
