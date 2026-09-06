@@ -13709,33 +13709,9 @@ let _sendSeq=0; // 防止乱序
 // _pendingMedia 恒为队首（sendMsg / Esc 处理等旧引用零改动）；体积上限改随
 // send-caps.media_max_mb（与服务端 413 同源），不再硬编码 25MB。
 let _pendingMedia=null;
-let _mediaQueue=[];        // 当前会话的队列 [{file,url,id,state:'queued'|'sending'|'failed',convKey,target}]
+let _mediaQueue=[];        // [{file,url,id,state:'queued'|'sending'|'failed'}]
 let _mediaXhr=null;        // 在途 XHR（取消用）
 const _MEDIA_QUEUE_MAX=6;
-// M-3 C（#228，V9DZ5S 实锤）：队列此前是全局变量——LINE 会话里发失败的附件切到 WhatsApp
-// 会话仍挂在输入框上方，点发送就发给另一个客户。改为按 convKey 存：切走保留、切回恢复，
-// _mediaQueue 永远只是「当前会话那一份」的引用（各处 push/shift/splice 零改动）。
-// 文字草稿早已按会话隔离（_convDraftSwap，sessionStorage），只有媒体队列漏了。
-const _mediaQueues={};
-function _mediaQueueSwap(next){
-  // 与 _convDraftSwap 同位调用：selectedChat 仍是旧会话。在途上传的那一件仍属旧会话
-  // （item.convKey），_doSendMedia 结束时按它归位，这里只交换引用。
-  try{
-    if(selectedChat){
-      const k=convKey(selectedChat);
-      if(_mediaQueue.length) _mediaQueues[k]=_mediaQueue; else delete _mediaQueues[k];
-    }
-  }catch(_){}
-  const nk=next?convKey(next):'';
-  _mediaQueue=(nk&&_mediaQueues[nk])||[];
-  if(nk) _mediaQueues[nk]=_mediaQueue;
-  _syncPendingMedia(); _renderMediaBar();
-}
-function _mediaTargetLabel(it){
-  const t=(it&&it.target)||{};
-  const plat=(typeof PN!=='undefined'&&PN[t.platform])||t.platform||'';
-  return plat+(t.name?(' · '+t.name):'');
-}
 function _fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
 function _mediaIconFor(t){ t=String(t||''); if(t.indexOf('audio/')===0) return uiIcon('music',16); if(t.indexOf('video/')===0) return uiIcon('film',16); return uiIcon('file',16); }
 // M-3 A（#227，D-M5 上限同源）：按文件类别取上限——视频读 send-caps.video_max_mb（后端
@@ -13763,12 +13739,7 @@ function _stageMedia(file){
   const url=(file.type&&file.type.indexOf('image/')===0)?URL.createObjectURL(file):'';
   // cmid 在暂存时生成一次、随件终身（0902 钧机实锤：此前每次提交现造新键，后端重启
   // 窗内响应丢了 → 坐席点重试＝服务端眼里全新一件 → 双发；同键重试才吃得到 send_dedup）
-  // #228：入队即钉死归属（会话键 + 平台·客户名），附件条据此标「发往 LINE · Kevin」，
-  // _doSendMedia 发送前再核一次「附件所属会话 == 当前会话」。
-  const ck=convKey(selectedChat);
-  if(!_mediaQueues[ck]) _mediaQueues[ck]=_mediaQueue;
-  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId(),
-    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''}});
+  _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId()});
   _syncPendingMedia();
   _renderMediaBar();
   const ta=document.getElementById('reply-ta'); if(ta) ta.focus();
