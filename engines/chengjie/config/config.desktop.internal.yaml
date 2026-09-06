@@ -134,7 +134,8 @@ inbox:
   # v1.005：接管自动接回（坐席手动出站触发的 manual 静默 30min 后 AI 自动接回；
   # 显式选的手动/风控降档不动——「全自动」承诺的闭环，防会话被无感钉死 manual）
   takeover_rearm:
-    enabled: true
+    # D-M9（1.0.76）：手动是粘的——全局自动接回默认关；坐席切手动时可单独选「30 分钟后接回」（takeover_opt_from）
+    enabled: false
     after_minutes: 30
   # v1.005：工作流自动推进（目标自动挂载 + 每日/每 tick 预算）
   workflows:

@@ -310,12 +310,37 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                     "chat_type": _chat_type,
                     "message": tr(request, "err.ws.group_confirm_required"),
                 })
+        # D-M9（M-2 E #223）：切手动三选——缺省「一直手动」（source=human，粘性，sweep 不碰）；
+        # body.rearm="30m" ＝坐席显式要「30 分钟后接回」→ 来源改 takeover_opt_from:<接管前档>，
+        # sweep 对它恒生效（不受全局 takeover_rearm 开关约束）；「离开会话时接回」由前端在切换
+        # 会话时再调本端点恢复，不落服务端状态。
+        _rearm = str(body.get("rearm") or "").strip().lower()
+        _prev_explicit = None
+        if mode == "manual" and _rearm in ("30m", "rearm30"):
+            try:
+                _st0 = _inbox_store(request)
+                if _st0 is not None:
+                    _prev_explicit = _st0.get_automation_mode_if_set(cid)
+            except Exception:
+                _prev_explicit = None
         cancelled = _write_automation_mode(request, cid, mode)
+        rearm_source = ""
+        if mode == "manual" and _rearm in ("30m", "rearm30"):
+            try:
+                from src.inbox.takeover_rearm import opt_in_rearm_source
+                _st1 = _inbox_store(request)
+                if _st1 is not None:
+                    rearm_source = opt_in_rearm_source(_prev_explicit)
+                    _st1.set_automation_mode(cid, "manual", source=rearm_source)
+            except Exception:
+                logger.debug("[automation] 30 分钟接回来源写入失败（保持一直手动）", exc_info=True)
+                rearm_source = ""
         return {
             "ok": True,
             "conversation_id": cid,
             "mode": mode,
             "cancelled_l2": int(cancelled or 0),
+            "rearm_source": rearm_source,
         }
 
     @app.get("/api/unified-inbox/why-no-reply")

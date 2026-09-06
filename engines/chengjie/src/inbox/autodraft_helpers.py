@@ -1047,15 +1047,28 @@ def make_auto_draft_cb(
         # 须在 companion 双轨判定之前解析——仅 auto_ai 时 A 线直发、System Z 让位；
         # review/manual 时 A 线停、System Z 拟稿（或静音），否则 UI「手动」无效。
         mode = cfg.mode
+        # M-2 E（#235）：记下「会话显式档 / 账号层档」两个事实，L1 原因推导要用
+        _l1_explicit = None
+        _l1_account_layer = None
         try:
             cid = str(conv.get("conversation_id") or "")
             if cid and store is not None:
+                try:
+                    _l1_explicit = store.get_automation_mode_if_set(cid)
+                except Exception:
+                    _l1_explicit = None
                 if app_config is not None:
                     from src.inbox.automation_mode import (
+                        _account_mode_layer,
                         maybe_bootstrap_automation_mode,
                     )
                     mode = maybe_bootstrap_automation_mode(
                         store, cid, app_config)
+                    if _l1_explicit is None:
+                        try:
+                            _l1_account_layer = _account_mode_layer(cid, app_config)
+                        except Exception:
+                            _l1_account_layer = None
                 else:
                     explicit = store.get_automation_mode_if_set(cid)
                     if explicit is not None:
@@ -1159,9 +1172,34 @@ def make_auto_draft_cb(
                 note_auto_reply(store, str(conv.get("conversation_id") or ""))
         except Exception:
             logger.debug("[AutoDraft] 预算台账计数失败（忽略）", exc_info=True)
+        # M-2 E（#235 / D-M10）：这条稿若是 L1（mode≠auto_ai），先把「为什么要人确认」
+        # 算成原因码登记到进程注册表——drafts.py 的 L1 日志行（D-M10 唯一许可的一行）
+        # 从这里 peek；草稿落库后再写审计行 + 按 draft_id 登记（重启后 /api/drafts 仍可读）。
+        _l1_reason = ""
+        try:
+            from src.inbox.l1_reason import derive_l1_reason, note as _l1_note
+            _l1_reason = derive_l1_reason(
+                mode=mode, caps_applied=_caps_applied, conv=conv, store=store,
+                peer_text=str(text or ""), explicit_mode=_l1_explicit,
+                account_layer=_l1_account_layer)
+            if _l1_reason:
+                _l1_note(str(conv.get("conversation_id") or ""), _l1_reason)
+        except Exception:
+            _l1_reason = ""
         draft_id = draft_svc.auto_generate_draft(
             conv, text, automation_mode=mode, enrich=cfg.enrich
         )
+        if draft_id and _l1_reason:
+            try:
+                from src.inbox.l1_reason import note as _l1_note2
+                _l1_note2(str(draft_id), _l1_reason)
+                if store is not None and hasattr(store, "record_draft_audit"):
+                    store.record_draft_audit(
+                        draft_id, autopilot_level="L1", action="l1_reason",
+                        agent_id="autodraft", reason=_l1_reason,
+                        conversation_id=str(conv.get("conversation_id") or ""))
+            except Exception:
+                logger.debug("[AutoDraft] L1 原因登记失败（忽略）", exc_info=True)
         # #142 可见事件：这条稿被真发总闸拦下（会话档全自动、总闸关 → 只写
         # 不发）。落 draft_audit_log（审计页/会话近期决策可查）；每条被拦稿
         # 一行＝与事实等量，不刷屏。best-effort，绝不影响拟稿主链。

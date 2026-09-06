@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906f">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906g">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -973,6 +973,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 <span class="cd-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg></span>
                 <span data-i18n="inbox.cdraft.ready">AI 草稿已就绪</span>
                 <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
+                <span class="cdraft-reason" id="cdraft-reason" style="display:none;" title="为什么这条要你确认" data-i18n-title="inbox.l1r.chip_t"></span>
                 <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
                 <span class="cdraft-acts">
                   <button type="button" class="cdraft-btn primary" onclick="acceptComposerDraft()" title="填入输入框，可编辑后发送" data-i18n-title="inbox.cdraft.accept_t"><span data-i18n="inbox.cdraft.accept">采用</span><kbd>Tab</kbd></button>
@@ -3302,7 +3303,7 @@ async function _acctBulkMode(ev,pl,aid,mode,btn){
       _toast(window.Tf('inbox.acct.bulk_nochange',{mode:label}),'#64748b');
       return;
     }
-    const yes=await _appConfirm(msg,{title:window.Tf('inbox.acct.bulk_title',{mode:label}),iconName:(mode==='auto_ai'?'bolt':'shield'),tone:(mode==='auto_ai'?'danger':'default'),okText:window.T('inbox.acct.bulk_ok')});
+    const yes=await _appConfirm(msg,{title:window.Tf('inbox.acct.bulk_title',{mode:label}),iconName:(mode==='auto_ai'?'zap':'shield'),tone:(mode==='auto_ai'?'danger':'default'),okText:window.T('inbox.acct.bulk_ok')});
     if(!yes) return;
     const res=await post(true);
     _toast(window.Tf('inbox.acct.bulk_done',{mode:label,n:Number(res.changed||0),c:Number(res.cancelled_l2||0)}),mode==='auto_ai'?'#2563eb':'#64748b');
@@ -4920,8 +4921,44 @@ window.addEventListener('hashchange', function(){
 /* ===== 过滤 ===== */
 /* P2：claimed 双入口（主行 chip + 面板状态组）——窄屏主行滚出时「筛选▾」按钮靠本表点亮激活态 */
 const _FTAB_MORE=new Set(['waiting','snoozed','archived','removed','claimed']);
-const _QUEUE_FILTERS=new Set(['sla','claimed','snoozed','waiting','done','attn']);
+const _QUEUE_FILTERS=new Set(['sla','claimed','snoozed','waiting','done','attn','auto']);
 function _isQueueFilter(f){ return _QUEUE_FILTERS.has(f); }
+/* ===== M-2 E（#223，Q6Y856）：「N 个会话全自动」——顶栏胶囊的数据源与页内筛选接口 =====
+   顶栏 #ws-l2auto 此前是「本页打开以来 AI 自动处理 N 条」的累计数，坐席把它当成了账号级
+   开关。改为：数字＝当前列表里 automation_mode=auto_ai 的会话数（wsAutoConvCount），
+   点击＝页内筛选只看这些会话（wsFilterAutoConversations，chatFilter='auto'）。
+   胶囊 DOM/主题/溢出归 M-4 B；本处只定行为与接口，并在收件箱页内把胶囊接到这两个函数。 */
+function wsAutoConvCount(){
+  let n=0;
+  (allChats||[]).forEach(c=>{ if(c&&!c.archived&&!_isRemovedRow(c)&&!_isLoggedOutRow(c)&&c.automation_mode==='auto_ai') n++; });
+  return n;
+}
+function wsFilterAutoConversations(){
+  if(_contactsMode) setListPane('conv');
+  if(_histView){ _histView=null; _histRows=null; _histKey=''; try{ _syncHistBanner(); }catch(_){} }
+  if(_convScope!=='private') setConvScope('private');
+  chatFilter=(chatFilter==='auto')?'all':'auto';
+  _persistChatFilter(chatFilter);
+  try{ _syncFtabUI(document.querySelector('.ftab[data-f="all"]')); }catch(_){}
+  applyFilters();
+  try{ _uiBeacon('auto_pill_filter_'+(chatFilter==='auto'?'on':'off')); }catch(_){}
+}
+window.wsAutoConvCount=wsAutoConvCount;
+window.wsFilterAutoConversations=wsFilterAutoConversations;
+/* 壳层胶囊 #ws-l2auto 的**文案**由本页改写为「全自动会话 N」（N＝当前 auto_ai 会话数）；
+   点击已由 M-4 B 在 workspace_base.html 接到 window.wsFilterAutoConversations（本处不再重复挂
+   监听，双绑会两次切换等于没切）。胶囊不存在（非工作台壳）→ 静默 no-op。DOM/主题/溢出归 M-4。 */
+function _syncAutoConvPill(){
+  const el=document.getElementById('ws-l2auto');
+  if(!el) return;
+  const n=wsAutoConvCount();
+  const ic=(typeof window._pillIc==='function')?window._pillIc('bot'):'';
+  el.innerHTML=ic+'<span class="ws-pill-lb">'+esc(window.T('base.pill.autoconv'))+'</span><span class="ws-pill-n">'+n+'</span>';
+  el.title=window.Tf('base.pill.autoconv_t',{n:n});
+  el.style.display=n>0?'':'none';
+  el.classList.toggle('is-active', chatFilter==='auto');
+}
+window._syncAutoConvPill=_syncAutoConvPill;
 
 function setConvScope(scope, el){
   if(_contactsMode) setListPane('conv');
@@ -5554,6 +5591,7 @@ function _renderFilterSummary(){
      待回复/搁置中/归档/已移除（折叠在菜单里，chip 是它们唯一的在屏指示）。 */
   if(chatFilter==='claimed') chips.push({label:window.T('inbox.filter.claimed'), tabEcho:true, clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
   else if(chatFilter==='done') chips.push({label:window.T('inbox.stat.done'), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
+  else if(chatFilter==='auto') chips.push({label:window.Tf('inbox.fs.auto',{n:wsAutoConvCount()}), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});   // M-2 E（#223）
   else if(chatFilter==='unread'||chatFilter==='sla'||chatFilter==='attn') chips.push({label:window.T(_fLbl[chatFilter]||('inbox.filter.'+chatFilter)), tabEcho:true, clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
   else if(_FTAB_MORE.has(chatFilter)&&chatFilter!=='removed'){
     chips.push({label:window.T(_fLbl[chatFilter]||chatFilter), clear:()=>{ setFilter('all', document.querySelector('.ftab[data-f="all"]')); }});
@@ -5834,6 +5872,7 @@ function applyFilters(){
       if(chatFilter==='snoozed' && !_isSnoozed(c)) return false;
       if(chatFilter==='waiting' && (!((c.unanswered_sec||0)>0) || _isSnoozed(c))) return false;
       if(chatFilter==='done' && !_isFunnelDone(c)) return false;
+      if(chatFilter==='auto' && c.automation_mode!=='auto_ai') return false;   // M-2 E（#223）
       if(_goalAgendaFilter && !_goalAgendaMatch(c.conversation_id, _goalAgendaFilter)) return false;
       return true;
     });
@@ -5852,6 +5891,7 @@ function applyFilters(){
       // 搁置中的会话有专属 tab 可找回，不会丢。
       if(chatFilter==='waiting' && (!((c.unanswered_sec||0)>0) || _isSnoozed(c))) return false;
       if(chatFilter==='done' && !_isFunnelDone(c)) return false;
+      if(chatFilter==='auto' && c.automation_mode!=='auto_ai') return false;   // M-2 E（#223）「N 个会话全自动」页内筛选
       if(_goalAgendaFilter && !_goalAgendaMatch(c.conversation_id, _goalAgendaFilter)) return false;
       return true;
     });
@@ -5860,6 +5900,7 @@ function applyFilters(){
   _pinSelectedRow();
   renderConvList();
   updateTotalBadge();
+  try{ _syncAutoConvPill(); }catch(_){}   // M-2 E：顶栏「N 个会话全自动」随列表刷新
   if(typeof _updatePaneBadges==='function') _updatePaneBadges();   // 会话|联系人 段计数
   _updateFilterCounts();
   _renderFilterSummary();
@@ -7682,6 +7723,7 @@ function selectChat(key){
   // 同会话重选（深链/通知重复打开）不动输入框——坐席可能正打字。
   if(selectedKey!==key){
     try{ _convDraftSwap(c); }catch(_){}
+    try{ _manualOnLeaveCheck(c); }catch(_){}   // M-2 E（D-M9）：上一会话若选「离开会话时接回」→ 恢复档位
     try{ _mediaQueueSwap(c); }catch(_){}   // #228：待发附件同样按会话交换（切走保留、切回恢复）
     _gbarOpen=false;
     _mentionChatKey=''; _mentionMembers=[]; _mentionNameMap={};
@@ -12329,6 +12371,8 @@ function _appConfirm(message, opts){
     var altHtml=opts.altText
       ?('<button type="button" class="app-confirm-btn alt" data-act="alt">'+esc(opts.altText)+'</button>')
       :'';
+    // M-2 E（D-M9）：第四键 alt2（三选场景：一直手动 / 30 分钟后接回 / 离开会话时接回），回传 'alt2'
+    if(opts.alt2Text) altHtml+='<button type="button" class="app-confirm-btn alt" data-act="alt2">'+esc(opts.alt2Text)+'</button>';
     card.innerHTML='<div class="app-confirm-title">'+_cfmIc+' '+esc(opts.title||window.T('inbox.confirm.title'))+'</div>'+
       '<div class="app-confirm-msg">'+esc(message||'')+'</div>'+chkHtml+
       '<div class="app-confirm-acts">'+
@@ -12351,6 +12395,8 @@ function _appConfirm(message, opts){
     card.querySelector('[data-act="cancel"]').onclick=function(){ done(false); };
     var altb=card.querySelector('[data-act="alt"]');
     if(altb) altb.onclick=function(){ done('alt'); };
+    var alt2b=card.querySelector('[data-act="alt2"]');
+    if(alt2b) alt2b.onclick=function(){ done('alt2'); };
     mask.onclick=function(e){ if(e.target===mask) done(false); };
     document.addEventListener('keydown',onKey);
     mask.appendChild(card); document.body.appendChild(mask);
@@ -15245,7 +15291,8 @@ function _renderEffChip(){
   // 从 compute_mode_caps 反查，漏一层即红。
   var EFFCAP_LAYERS=['warmup','platform','business_line',
     'identity_pending','reconnect_backlog','own_fleet_peer','deliver_paused',
-    'persona_unselected'];   // #156 ④b（对话 B 后端层 933da0f8，I-2 补坐席文案 + 白名单）
+    'persona_unselected',   // #156 ④b（对话 B 后端层 933da0f8，I-2 补坐席文案 + 白名单）
+    'login_cooldown','channel_degraded','channel_disconnected'];   // M-2（D-M1 / #232）账号级门禁三层
   var layer=(EFFCAP_LAYERS.indexOf(String(cap.layer||''))>=0)?String(cap.layer):'generic';
   var effLabel='';
   try{ effLabel=_modeLabel(e.mode); }catch(_){ effLabel=String(e.mode||''); }
@@ -15267,13 +15314,41 @@ function _renderEffChip(){
     tip=window.Tf('inbox.effcap.deliver_paused_t',{mode:effLabel});
   }else if(layer==='persona_unselected'){
     tip=window.Tf('inbox.effcap.persona_unselected_t',{acct:String(cap.detail||''),mode:effLabel});
+  }else if(layer==='login_cooldown'){
+    var leftM=Math.max(1,Math.ceil(((Number(cap.until_ts)||0)*1000-Date.now())/60000));
+    tip=window.Tf('inbox.effcap.login_cooldown_t',{m:leftM,mode:effLabel});
+  }else if(layer==='channel_degraded'){
+    tip=window.Tf('inbox.effcap.channel_degraded_t',{mode:effLabel});
+  }else if(layer==='channel_disconnected'){
+    tip=window.Tf('inbox.effcap.channel_disconnected_t',{detail:String(cap.detail||''),mode:effLabel});
   }else{
     tip=window.Tf('inbox.effcap.generic_t',{mode:effLabel,layer:String(cap.layer||'')});
   }
   el.textContent=window.T('inbox.effcap.'+layer);
   el.title=tip;
   el.style.display='inline-flex';
+  try{ _syncModeScopeLabels(); }catch(_){}
 }
+/* M-2 E（#223 #235）：会话头部档位下拉标明作用域「本会话：…」（Q6Y856：下拉「全自动」像账号级
+   开关）；半自动显「（待确认 N）」；全自动被封顶（冷静期 / 未连接 / 降级 …）时显
+   「本会话：全自动 → 实际半自动（待确认 N）」，不再只亮「全自动」自相矛盾（8TV32T）。 */
+var _pendingDraftN=0;
+function _syncModeScopeLabels(){
+  var sel=document.getElementById('mode-select'); if(!sel) return;
+  var eff=(_effState&&_effState.effective_mode)||'';
+  var capped=(sel.value==='auto_ai'&&eff&&eff!=='auto_ai'&&_effState&&_effState.caps&&_effState.caps.length);
+  var n=_pendingDraftN|0;
+  var pend=n>0?window.Tf('inbox.mode.pending_n',{n:n}):'';
+  Array.prototype.forEach.call(sel.options,function(o){
+    var v=o.value;
+    if(v==='manual') o.textContent=window.T('inbox.mode.scope_manual');
+    else if(v==='review') o.textContent=window.T('inbox.mode.scope_review')+pend;
+    else if(v==='multi_choice') o.textContent=window.T('inbox.mode.scope_multi')+pend;
+    else if(v==='auto_ai') o.textContent=capped?window.Tf('inbox.mode.scope_auto_capped',{pend:pend}):window.T('inbox.mode.scope_auto');
+  });
+  sel.title=window.T('inbox.mode.select_scope_t');
+}
+window._syncModeScopeLabels=_syncModeScopeLabels;
 // ── #142（2026-09-02）真发总闸应急态可见化：全局醒目横幅 + 会话级拦截提示 ──
 // 此前总闸关着只有档位胶囊旁一个小标签（#140 实锤：用户以为自动回复坏了）。
 // 全局横幅数据随 /chats 轮询（deliver_paused_meta），会话提示随 /automation
@@ -15822,34 +15897,83 @@ function _applyLocalAutomationMode(c, mode){
     if(el && typeof _syncHandlerBadge==='function') _syncHandlerBadge(el, c);
   }catch(_){}
 }
-async function setMode(mode){
+/* ===== M-2 E（D-M9 / #223）手动粘性：切手动三选 =====
+   一直手动（默认，source=human，程序永不接回）/ 30 分钟后接回（服务端 takeover_opt_from）/
+   离开会话时接回（前端记住，切走会话时恢复到接管前档位）。Q6Y856 13:11 实锤：坐席明确切手动，
+   30 分钟后被程序改回全自动——覆盖了人的明确意图。 */
+var _manualOnLeave={};   // convKey → {prev, platform, account_id, chat_key}
+async function _pickManualStickiness(){
+  var r=await _appConfirm(window.T('inbox.mode.sticky_msg'),{
+    title:window.T('inbox.mode.sticky_title'), iconName:'user', tone:'primary',
+    okText:window.T('inbox.mode.sticky_forever'),
+    altText:window.T('inbox.mode.sticky_30m'),
+    alt2Text:window.T('inbox.mode.sticky_on_leave'),
+    cancelText:window.T('inbox.bab.cancel')});
+  if(r===true) return 'sticky';
+  if(r==='alt') return 'rearm30';
+  if(r==='alt2') return 'on_leave';
+  return null;
+}
+/* 切走会话时：上一会话若选了「离开会话时接回」→ 恢复到接管前档位（fire-and-forget，失败静默留手动） */
+function _manualOnLeaveCheck(next){
+  if(!selectedChat) return;
+  var key=convKey(selectedChat);
+  if(next && convKey(next)===key) return;
+  var rec=_manualOnLeave[key]; if(!rec) return;
+  delete _manualOnLeave[key];
+  var target=(rec.prev&&rec.prev!=='manual')?rec.prev:'review';
+  apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({platform:rec.platform,account_id:rec.account_id||'default',chat_key:rec.chat_key,mode:target})},{timeoutMs:20000})
+    .then(function(r){ if(r&&r.ok){ try{ _applyLocalAutomationMode(rec,target); }catch(_){} try{ _toast(window.Tf('inbox.mode.on_leave_restored',{mode:_modeLabel(target)}),'#64748b'); }catch(_){} } })
+    .catch(function(){});
+}
+async function setMode(mode, opts){
+  opts=opts||{};
   var prev=_lastAutomationMode;
+  var sel=document.getElementById('mode-select');
+  // D-M9：切到手动先问粘性（缺省一直手动）；取消则下拉回滚
+  if(mode==='manual' && prev!=='manual' && !opts.rearm && selectedChat){
+    var choice=await _pickManualStickiness();
+    if(!choice){ if(sel) sel.value=prev; return; }
+    opts.rearm=choice;
+  }
   if(mode==='auto_ai' && prev!=='auto_ai'){
     _saveAutoPrevMode(selectedChat, prev);
   }
-  var sel=document.getElementById('mode-select');
   if(sel) sel.value=mode;
   _lastAutomationMode=mode;
   _syncAutoUi();
   if(!selectedChat) return;
   try{
+    var _body={platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode};
+    if(mode==='manual' && opts.rearm==='rearm30') _body.rearm='30m';
     var r=await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode})}, {timeoutMs: 60000});
+      body:JSON.stringify(_body)}, {timeoutMs: 60000});
     var d={}; try{ d=await r.json(); }catch(_){ d={}; }
     // P0 2026-08-09 群聊上全自动需显式确认（AI 会在群里自动发言）：
     // 服务端 409 code=group_confirm_required → confirm 后带 confirm_group 重试。
     if(r.status===409 && d && d.detail && d.detail.code==='group_confirm_required'){
       if(!confirm(window.T('inbox.mode.group_confirm'))) throw new Error('group confirm cancelled');
+      _body.confirm_group=true;
       r=await apiFetch('/api/unified-inbox/automation',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,mode,confirm_group:true})}, {timeoutMs: 60000});
+        body:JSON.stringify(_body)}, {timeoutMs: 60000});
       d={}; try{ d=await r.json(); }catch(_){ d={}; }
     }
     if(!r.ok || d.ok===false) throw new Error((d&&(d.detail&&d.detail.message||d.detail))||'save failed');
+    if(mode==='manual'){
+      var _k=convKey(selectedChat);
+      if(opts.rearm==='on_leave') _manualOnLeave[_k]={prev:prev,platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key};
+      else delete _manualOnLeave[_k];
+      try{ _uiBeacon('mode_manual_'+String(opts.rearm||'sticky')); }catch(_){}
+    }
     _applyLocalAutomationMode(selectedChat, mode);
     // 档位变了 → 旧封顶胶囊立即失效，异步按服务端真值重渲（防串显）
     _effState=null; _renderEffChip();
     try{ _refreshConvStatus(selectedChat); }catch(_){}
     var tip=window.Tf('inbox.mode.saved_to',{mode:_modeLabel(mode)});
+    if(mode==='manual'){   // D-M9：把粘性选择说出来
+      tip+=' · '+window.T(opts.rearm==='rearm30'?'inbox.mode.sticky_30m':(opts.rearm==='on_leave'?'inbox.mode.sticky_on_leave':'inbox.mode.sticky_forever'));
+    }
     if(d.cancelled_l2>0){
       tip+=' · '+window.Tf('inbox.mode.cancelled_l2',{n:d.cancelled_l2});
     }
@@ -15913,6 +16037,7 @@ function _syncAutoUi(){
   var sel=document.getElementById('mode-select'); if(!sel) return;
   var mode=sel.value;
   sel.classList.toggle('auto-on', mode==='auto_ai');
+  try{ _syncModeScopeLabels(); }catch(_){}   // M-2 E（#223）：作用域文案 + 待确认 N
   var ai=document.getElementById('ai-toggle-btn');
   if(ai){
     var show=(mode==='review'||mode==='multi_choice');
@@ -16074,10 +16199,12 @@ async function _loadDraftsBody(c){
       const sendBtn=blocked
         ? `<button class="btn-approve" disabled title="${esc(blockTip)}" style="opacity:.45;cursor:not-allowed;">${window.T('inbox.draft_mini.send')}</button>`
         : `<button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>`;
+      const l1txt=_l1ReasonText(dr);   // M-2 E（#235）：L1 原因 chip
       return `<div class="draft-card-mini">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
           <span class="risk ${riskClass}">${esc(dr.autopilot_level||'?')}</span>
           <span class="unsent-badge" title="${esc(window.T('inbox.draft_mini.unsent_t'))}">${esc(window.T('inbox.draft_mini.unsent'))}</span>
+          ${l1txt?`<span class="draft-l1r-chip" title="${esc(window.T('inbox.l1r.chip_t'))}">${esc(l1txt)}</span>`:''}
           ${ageTxt?`<span class="draft-age-chip${blocked?' is-stale':''}" title="${esc(window.T('inbox.draft_mini.age_t'))}">${esc(ageTxt)}</span>`:''}
           ${blocked?`<span class="draft-block-chip" title="${esc(blockTip)}">${esc(blocked==='replied'?window.T('inbox.draft_mini.chip_replied'):window.T('inbox.draft_mini.chip_stale'))}</span>`:''}
           <span style="font-size:11px;color:var(--text-sub);">${esc(dr.peer_name||dr.chat_name||'')}</span>
@@ -16320,6 +16447,20 @@ window._memUsedBatch=_memUsedBatch; window._memBatchMatchesDraft=_memBatchMatche
    - 无草稿/已忽略 → 隐藏。采用后进入输入框可编辑，发送成功即 cancel 掉
      pending 草稿（生命周期闭环，避免待审队列残留已人工处理的草稿）。 */
 var _cdraft={draft:null, count:0, adoptedId:'', dismissed:{}};
+/* M-2 E（#235）：L1 原因码 → 人话（服务端 /api/drafts 的 l1_reason，由 autodraft 推导登记）。
+   未知码回落通用「需要你确认」；非 L1 草稿不显。 */
+var _L1R_KEYS={cooldown:'inbox.l1r.cooldown',no_persona:'inbox.l1r.no_persona',lang_unknown:'inbox.l1r.lang_unknown',
+  first_contact:'inbox.l1r.first_contact',weak_evidence:'inbox.l1r.weak_evidence',channel_disconnected:'inbox.l1r.channel_disconnected',
+  channel_degraded:'inbox.l1r.channel_degraded',deliver_paused:'inbox.l1r.deliver_paused',warmup:'inbox.l1r.warmup',
+  platform_cap:'inbox.l1r.platform_cap',manual_review:'inbox.l1r.manual_review',account_default:'inbox.l1r.account_default',
+  global_default:'inbox.l1r.global_default'};
+function _l1ReasonText(d){
+  if(!d||String(d.autopilot_level||'')!=='L1') return '';
+  const code=String(d.l1_reason||'');
+  const k=_L1R_KEYS[code];
+  return k?window.T(k):(code?window.Tf('inbox.l1r.other',{code:code}):window.T('inbox.l1r.generic'));
+}
+window._l1ReasonText=_l1ReasonText;
 function _cdraftDismissedSet(cid){
   if(!_cdraft.dismissed[cid]) _cdraft.dismissed[cid]=new Set();
   return _cdraft.dismissed[cid];
@@ -16344,6 +16485,12 @@ function _cdraftRender(){
     const lv=String(d.autopilot_level||'');
     if(lv){ risk.style.display=''; risk.textContent=lv; risk.className='cdraft-risk '+(lv==='L4'?'rl4':lv==='L3'?'rl3':''); }
     else risk.style.display='none';
+  }
+  // M-2 E（#235）：L1「为什么要你确认」原因（刚重登冷静期 / 未绑人设 / 客户语言未定 / 客户首条 / 证据不足 …）
+  const rs=document.getElementById('cdraft-reason');
+  if(rs){
+    const txt=_l1ReasonText(d);
+    if(txt){ rs.style.display=''; rs.textContent=txt; } else rs.style.display='none';
   }
   const n=document.getElementById('cdraft-n');
   if(n){
@@ -21575,6 +21722,8 @@ function _openSlash(){
 }
 /* 顶部「待审」徽标计数 */
 function _setPendingBadge(n){
+  _pendingDraftN=Number(n)||0;                       // M-2 E：会话头部「半自动（待确认 N）」同源
+  try{ _syncModeScopeLabels(); }catch(_){}
   var b=document.getElementById('ai-pending-badge');
   if(!b) return;
   if(n>0){ b.textContent=n>99?'99+':String(n); b.style.display='inline-block'; }

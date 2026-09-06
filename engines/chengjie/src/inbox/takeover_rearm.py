@@ -43,22 +43,47 @@ logger = logging.getLogger(__name__)
 TAKEOVER_SOURCE = "takeover"
 _TAKEOVER_FROM_PREFIX = "takeover_from:"
 REARM_SOURCE = "rearm"
+# D-M9（M-2 E，2026-09-06）：坐席切手动时**显式选**「30 分钟后接回」写的来源——与全局
+# takeover_rearm 开关无关，sweep 对它恒生效。默认（一直手动 / 手动发送触发的接管）
+# 走 human / takeover_from:*，全局开关默认关 → 手动是粘的（Q6Y856 13:11 实锤：坐席
+# 明确切手动，30 分钟后被程序改回全自动）。
+TAKEOVER_OPT_PREFIX = "takeover_opt_from:"
 
 
 def is_takeover_source(source: Any) -> bool:
     """该 source 是否为「坐席出站接管」写入（自动接回只认它）。"""
     s = str(source or "")
-    return s == TAKEOVER_SOURCE or s.startswith(_TAKEOVER_FROM_PREFIX)
+    return (s == TAKEOVER_SOURCE or s.startswith(_TAKEOVER_FROM_PREFIX)
+            or s.startswith(TAKEOVER_OPT_PREFIX))
+
+
+def is_rearm_opt_in_source(source: Any) -> bool:
+    """坐席显式选了「30 分钟后接回」（D-M9 三选之一）——全局开关关着也要接回。"""
+    return str(source or "").startswith(TAKEOVER_OPT_PREFIX)
 
 
 def takeover_prev_mode(source: Any) -> str:
     """从 takeover source 解出接管前档位；无记录/不合法 → 空串。"""
     s = str(source or "")
-    if s.startswith(_TAKEOVER_FROM_PREFIX):
-        prev = s[len(_TAKEOVER_FROM_PREFIX):].strip().lower()
-        if prev in AUTOMATION_MODES:
-            return prev
+    for pref in (_TAKEOVER_FROM_PREFIX, TAKEOVER_OPT_PREFIX):
+        if s.startswith(pref):
+            prev = s[len(pref):].strip().lower()
+            if prev in AUTOMATION_MODES:
+                return prev
+            return ""
     return ""
+
+
+def opt_in_rearm_source(prev_mode: Any) -> str:
+    """坐席显式选「30 分钟后接回」时写入的 source。
+
+    接管前有显式非 manual 档位 → 编进来源（接回到它）；无显式档 / 本就 manual → 后缀留空，
+    接回时按 ``rearm_restore_mode`` 回全局默认（D-M1 后＝review）。
+    """
+    prev = str(prev_mode or "").strip().lower()
+    if prev not in AUTOMATION_MODES or prev == "manual":
+        prev = ""
+    return f"{TAKEOVER_OPT_PREFIX}{prev}"
 
 
 def record_agent_takeover(store: Any, conversation_id: str) -> str:
@@ -158,11 +183,15 @@ def rearm_state(
     cfg = takeover_rearm_cfg(config)
     ts = float(meta.get("updated_at") or 0.0)
     restore = rearm_restore_mode(meta.get("source"), config)
+    # D-M9：坐席显式选的「30 分钟后接回」不受全局开关约束（横幅说的＝sweep 做的）
+    _opt = is_rearm_opt_in_source(meta.get("source"))
     out: Dict[str, Any] = {
-        "enabled": bool(cfg["enabled"]) and bool(restore),
+        "enabled": (bool(cfg["enabled"]) or _opt) and bool(restore),
         "after_minutes": cfg["after_minutes"],
         "taken_at": ts,
         "restore_mode": restore,
+        "opt_in": _opt,
+        "sticky": (not bool(cfg["enabled"])) and not _opt,   # 手动是粘的（默认）
     }
     if out["enabled"] and ts > 0:
         out["eta_ts"] = round(ts + cfg["after_minutes"] * 60.0, 1)
@@ -187,7 +216,9 @@ def sweep_takeover_rearm(
         "enabled": cfg["enabled"], "scanned": 0, "restored": 0,
         "restored_cids": [],
     }
-    if not cfg["enabled"] or store is None:
+    # D-M9（M-2 E）：全局关（默认）时只接回坐席**显式选**了「30 分钟后接回」的会话
+    # （source=takeover_opt_from:*）；手动发送触发的接管 / 下拉「一直手动」保持粘性。
+    if store is None:
         return out
     if not hasattr(store, "list_takeover_manual"):
         return out
@@ -198,6 +229,8 @@ def sweep_takeover_rearm(
     except Exception:
         logger.debug("[takeover_rearm] 扫描失败（忽略）", exc_info=True)
         return out
+    if not cfg["enabled"]:
+        rows = [r for r in rows if is_rearm_opt_in_source((r or {}).get("source"))]
     out["scanned"] = len(rows)
     for row in rows:
         cid = str((row or {}).get("conversation_id") or "")
@@ -231,7 +264,10 @@ def sweep_takeover_rearm(
 __all__ = [
     "TAKEOVER_SOURCE",
     "REARM_SOURCE",
+    "TAKEOVER_OPT_PREFIX",
     "is_takeover_source",
+    "is_rearm_opt_in_source",
+    "opt_in_rearm_source",
     "takeover_prev_mode",
     "record_agent_takeover",
     "takeover_rearm_cfg",

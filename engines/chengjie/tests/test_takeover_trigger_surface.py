@@ -37,7 +37,9 @@ _MODE_WRITER_ALLOWLIST = {
     "src/companion/standby_mode.py":                       "全局待机模式（运营开关）",
     "src/web/routes/unified_inbox_aggregate.py":           "坐席下拉框显式选档（source=human）",
     "src/web/routes/unified_inbox_account_routes.py":      "垃圾会话预置 manual（新会话预建）",
-    "src/web/routes/unified_inbox_stored_read_routes.py":  "主管一键批量降档（显式应急）",
+    "src/web/routes/unified_inbox_stored_read_routes.py":  "主管一键批量降档（显式应急）+ D-M9 切手动「30 分钟后接回」来源改写（显式选项）",
+    "src/inbox/account_bulk_mode.py":                      "M-2 B（D-M1 ②）账号菜单「此账号全部会话 → 手动/半自动/全自动」——坐席显式操作 + 二次确认，全自动唯一开启口",
+    "src/inbox/account_mode_onboarding.py":                "J-2 C（#63 #167）新账号接管方式确认后对齐系统落档行（align_account_conversations，只动 bootstrap/standby/account_mode 来源）——运营显式决策",
     "src/web/routes/cases_routes.py":                      "工单结案勾「转人工」（显式勾选）",
     "src/web/routes/web_chat_routes.py":                   "网站访客会话默认档（新会话预建）",
 }

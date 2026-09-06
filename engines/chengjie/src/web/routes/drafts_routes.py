@@ -140,6 +140,27 @@ def register_drafts_routes(app, *, api_auth):
                     d["approve_blocked"] = svc.approve_block_reason(d)
                 except Exception:
                     d["approve_blocked"] = ""
+        # M-2 E（#235）：L1「为什么要人确认」原因码——进程注册表优先（autodraft 拟稿时登记），
+        # 重启后回落草稿审计行 action=l1_reason（record_draft_audit）。非 L1 不查。
+        try:
+            from src.inbox.l1_reason import peek as _l1_peek
+            _store = getattr(svc, "_store", None)
+            for d in drafts:
+                if str(d.get("autopilot_level") or "") != "L1":
+                    continue
+                _did = str(d.get("draft_id") or "")
+                _r = _l1_peek(_did) or _l1_peek(str(d.get("conversation_id") or ""))
+                if not _r and _store is not None and hasattr(_store, "list_draft_audit"):
+                    try:
+                        for _a in (_store.list_draft_audit(draft_id=_did, limit=10) or []):
+                            if str(_a.get("action") or "") == "l1_reason" and _a.get("reason"):
+                                _r = str(_a.get("reason"))
+                                break
+                    except Exception:
+                        _r = ""
+                d["l1_reason"] = _r
+        except Exception:
+            logger.debug("[drafts] L1 原因富集失败（忽略）", exc_info=True)
         return {"ok": True, "count": len(drafts), "drafts": drafts}
 
     @app.get("/api/drafts/stats")

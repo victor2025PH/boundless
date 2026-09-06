@@ -892,6 +892,8 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .ac-pick-row .apr-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
 .ac-pick-row .apr-name{display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ac-pick-row .apr-sub{font-size:11px;color:var(--text-tiny);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* M-2 E（#235）：发前确认（L1）原因 chip——composer 草稿条 + 会话内待审草稿卡同款 */
+.cdraft-reason,.draft-l1r-chip{font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,#f59e0b 16%,transparent);color:var(--th-ink-amber7,#b45309);white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}
 /* M-2 B（D-M1 ②）：账号菜单行内「此账号全部会话 → 手动 / 半自动 / 全自动」+ 门禁提示 */
 .ac-pick-row .apr-modes{display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap;}
 .ac-pick-row .apr-modes-lbl{font-size:10px;color:var(--text-tiny);white-space:nowrap;}

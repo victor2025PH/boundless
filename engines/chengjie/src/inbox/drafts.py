@@ -1179,6 +1179,7 @@ class DraftService:
                 (_sh.hold_reason if _sh else "-"),
                 ("|".join(_sh.risk_hits[:4]) if _sh and _sh.risk_hits else "-"),
             )
+            if autopilot == "L1": logger.info("auto_generate_draft L1 conv=%s draft_id=%s reason=%s", conv_id, draft_id, __import__("src.inbox.l1_reason", fromlist=["peek"]).peek(conv_id) or "-")  # D-M10（M-2 E #235）：level=L1 带 reason=（cooldown/no_persona/lang_unknown/first_contact/weak_evidence/…），原因由 autodraft_helpers 推导登记，本行只读不改判定
             # G1：向事件总线发布 draft_created，供 SSE 实时通知坐席工作台
             try:
                 from src.integrations.shared.event_bus import get_event_bus
