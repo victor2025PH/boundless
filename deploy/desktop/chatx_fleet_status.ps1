@@ -16,6 +16,16 @@
 # when the app/backend is closed (yesterday's numbers are still on disk).
 # Also prints resources/build-info.json provenance when present (1.0.24+).
 #
+# edition column (L-5 / D-L1, 2026-09-06): "<flavor>/<channel>" from
+# _seat_edition_probe.ps1 -- flavor = what is installed (internal=smart with
+# seed-data | clean | lite, from resources/build-info.json), channel = which
+# update feed the installed app follows (resources/app-update.yml: internal =
+# downloads/internal/latest-internal.yml, public = downloads/latest.yml).
+# K-5 lesson: the seats were pushed the smart 1.0.74 while the public feed
+# carried the clean 1.0.74 -- same version string, different package, and
+# the next "update" click would silently turn a smart seat into a clean one.
+# "internal/public" is exactly that trap and gets flagged in the note.
+#
 # ASCII-only (PS 5.1 GBK lesson). Read-only w.r.t. seat state: copies the DB
 # to the seat's temp dir, never touches the live file or any process.
 #
@@ -34,8 +44,8 @@ $ErrorActionPreference = 'Continue'
 # a PS session) -- normalize so both calling styles behave identically.
 $Targets = @($Targets | ForEach-Object { "$_".Split(',') } |
   ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5}" -f 'node', 'backend', 'app/version', 'diskGB', 'display', 'note')
-Write-Output ('-' * 86)
+Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5,-17} {6}" -f 'node', 'backend', 'app/version', 'diskGB', 'display', 'edition', 'note')
+Write-Output ('-' * 104)
 
 foreach ($t in $Targets) {
   $note = ''
@@ -112,7 +122,26 @@ foreach ($t in $Targets) {
       if ($lhWorst -lt 800) { $note = ('SMALL DESKTOP (toolbar may not fit; run set_seat_scale.ps1) ' + $note).Trim() }
     }
   }
-  Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5}" -f $t, $backend, $ver, $disk, $disp, $note)
+  # 5. edition = installed flavor / followed update channel (probe file, same scp+run
+  #    pattern as the display probe; see _seat_edition_probe.ps1 header).
+  $edition = ''
+  $edSrc = Join-Path $PSScriptRoot '_seat_edition_probe.ps1'
+  if (Test-Path $edSrc) {
+    scp -o ConnectTimeout=6 $edSrc ($t + ':C:/Windows/Temp/_seat_edition_probe.ps1') 2>$null | Out-Null
+    $edRaw = ssh -o ConnectTimeout=6 $t 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\_seat_edition_probe.ps1' 2>$null
+    if ("$edRaw".Trim() -match '^EDITION flavor=(\S+) seed=(\d) channel=(\S+)') {
+      $fl = $Matches[1]; $sd = [int]$Matches[2]; $ch = $Matches[3]
+      $flShow = if ($fl -eq 'internal') { 'smart' } else { $fl }
+      $edition = ($flShow + '/' + $ch)
+      if ($fl -eq 'internal' -and $sd -eq 0) { $edition += '!' ; $note = ('SMART BUILD-INFO BUT NO seed-data (half-shipped package?) ' + $note).Trim() }
+      if ($fl -eq 'internal' -and $ch -eq 'public') {
+        # The K-5 trap: smart install still on the public feed -> next update turns it clean.
+        $note = ('SMART ON PUBLIC FEED (next update = clean pkg; reinstall smart from downloads/internal/ to switch) ' + $note).Trim()
+      }
+      if ($fl -eq 'clean' -and $ch -eq 'internal') { $note = ('CLEAN ON INTERNAL FEED (will pick up smart pkg next update) ' + $note).Trim() }
+    }
+  }
+  Write-Output ("{0,-16} {1,-10} {2,-24} {3,7} {4,-15} {5,-17} {6}" -f $t, $backend, $ver, $disk, $disp, $edition, $note)
 }
 
 if (-not $Telemetry) { return }

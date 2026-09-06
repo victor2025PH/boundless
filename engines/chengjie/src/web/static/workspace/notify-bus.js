@@ -37,6 +37,17 @@
  * onDismiss=函数时胶囊同样带 ✕，但静默语义交还调用方（如 chandown 按「异常集合
  * 签名」记 sessionStorage——同事件本会话不再弹、新事故照常弹），总线不落 LS；
  * 与 dismissMs 可并存（都传则两种记账都执行）。dismissTitle = ✕ 的 tooltip 文案。
+ *
+ * 告警归拢 + 分级（#196，L-3 C，2026-09-06）：
+ *   - 同 domKey 再报 → **原地更新**（换文案、×N 计数、重置停留），不再拆掉重建
+ *     ——「只更新持续时长不重弹」；
+ *   - 右下角**同时最多 1 张告警卡**（severity warn/error 且进了通知中心的卡）：
+ *     第二项不同告警到来时两张一起折成一张汇总卡「有 N 项需要注意 ›」，点开进
+ *     通知中心；操作结果（center:false，如 chandown-op）与 info/success 不参与折叠；
+ *   - opts.tier 'customer'|'channel'|'infra'|'quality'：后两级默认只进通知中心不弹
+ *     （opts.forceToast=true 可覆写）。客户在等 > 通道断线 > 基础设施 > 质量黄灯。
+ *   - 汇总文案由宿主经 AITRNotify.setSummaryText(fn(n)) 注入（本文件不做 i18n），
+ *     缺省英文。
  */
 (function(){
   'use strict';
@@ -76,17 +87,57 @@
     return wrap;
   }
 
+  /* ── #196 归拢状态 ── */
+  var SUMMARY_KEY = '__summary';
+  var _folded = 0;                 /* 汇总卡代表的告警项数（关闭汇总卡即清零） */
+  var _summaryText = function(n){ return n + ' item' + (n === 1 ? '' : 's') + ' need attention \u203a'; };
+  var LOW_TIERS = { infra:1, quality:1 };
+
+  function _isAlertCard(o){
+    /* 参与归拢的判据：告警级 + 进了通知中心（用户折起后仍能在中心找到全文） */
+    return (o.severity === 'warn' || o.severity === 'error') && o.center !== false
+      && o.domKey !== SUMMARY_KEY;
+  }
+  function _liveAlertCards(wrap){
+    var out = [], all = wrap.querySelectorAll('[data-ntf-alert="1"]');
+    for(var i = 0; i < all.length; i++){
+      if(all[i].getAttribute('data-ntf-domkey') !== SUMMARY_KEY) out.push(all[i]);
+    }
+    return out;
+  }
+  function _showSummary(wrap, n){
+    _folded = n;
+    var live = wrap.querySelector('[data-ntf-domkey="' + SUMMARY_KEY + '"]');
+    var text = _summaryText(n);
+    if(live && live.__ntfUpdate){ live.__ntfUpdate(text, n); return live; }
+    return _cardToast({ severity: 'warn', text: text, domKey: SUMMARY_KEY, center: false,
+                        ttlMs: 30000, _summary: true, onClick: _openCenter,
+                        onClose: function(){ _folded = 0; } });
+  }
+
   /* 卡片渲染器：带按钮/置顶/同键去重的 toast（也是 CRMW 缺席时纯文本的兜底）。
      视觉对齐 .tk-toast 家族：深底、圆角、左缘语义色条。 */
   function _cardToast(o){
     var wrap = _cardWrap();
     var aggCount = 1;
+    var isAlert = _isAlertCard(o);
     if(o.domKey){
       var live = wrap.querySelector('[data-ntf-domkey="' + o.domKey + '"]');
       if(live){
-        /* #53-④ 同类聚合：存活卡片被同键再报 → 计数 +1（关闭即清零） */
+        /* #53-④ 同类聚合 → #196 原地更新：同键再报换文案 + ×N，**不重弹**（旧实现
+           拆掉重建＝视觉上每小时「又弹一次」，50+ 次即由此来） */
         aggCount = (parseInt(live.getAttribute('data-ntf-count') || '1', 10) || 1) + 1;
+        if(live.__ntfUpdate){ live.__ntfUpdate(String(o.text || ''), aggCount); return live; }
         try{ live.remove(); }catch(_e){}
+      }
+    }
+    if(isAlert){
+      /* 同屏最多 1 张告警卡：已有别的告警在场 → 一起折成汇总卡（全文都在通知中心） */
+      var others = _liveAlertCards(wrap);
+      var hasSummary = !!wrap.querySelector('[data-ntf-domkey="' + SUMMARY_KEY + '"]');
+      if(others.length || hasSummary){
+        for(var k = 0; k < others.length; k++){ try{ others[k].remove(); }catch(_e2){} }
+        return _showSummary(wrap, (hasSummary ? _folded : others.length) + 1);
       }
     }
     var t = document.createElement('div');
@@ -95,6 +146,7 @@
       t.setAttribute('data-ntf-domkey', String(o.domKey));
       t.setAttribute('data-ntf-count', String(aggCount));
     }
+    if(isAlert) t.setAttribute('data-ntf-alert', '1');
     t.style.cssText = 'max-width:360px;background:#232429;color:#fff;padding:10px 14px;'
       + 'border-radius:10px;font-size:13px;line-height:1.5;pointer-events:auto;'
       + 'box-shadow:0 6px 18px rgba(0,0,0,.28);border-left:3px solid '
@@ -104,15 +156,28 @@
     var msg = document.createElement('span');
     msg.style.cssText = 'flex:1 1 auto;';
     msg.textContent = String(o.text || '');
-    row.appendChild(msg);
-    if(aggCount > 1){
-      var cnt = document.createElement('span');
-      cnt.setAttribute('data-ntf-agg', '1');
-      cnt.textContent = '\u00d7' + aggCount;
-      cnt.style.cssText = 'flex:0 0 auto;background:rgba(255,255,255,.18);'
-        + 'border-radius:9px;padding:0 7px;font-size:11.5px;font-weight:700;line-height:1.6;';
-      row.appendChild(cnt);
+    if(typeof o.onClick === 'function'){
+      /* 整卡可点（汇总卡「有 N 项需要注意 ›」→ 通知中心） */
+      msg.style.cursor = 'pointer';
+      msg.setAttribute('role', 'button');
+      msg.tabIndex = 0;
+      msg.addEventListener('click', function(){ _close(); try{ o.onClick(); }catch(_e){} });
+      msg.addEventListener('keydown', function(e){
+        if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); _close(); try{ o.onClick(); }catch(_e){} }
+      });
     }
+    row.appendChild(msg);
+    var cnt = document.createElement('span');
+    cnt.setAttribute('data-ntf-agg', '1');
+    cnt.style.cssText = 'flex:0 0 auto;background:rgba(255,255,255,.18);'
+      + 'border-radius:9px;padding:0 7px;font-size:11.5px;font-weight:700;line-height:1.6;';
+    function _paintCount(n){
+      cnt.textContent = '\u00d7' + n;
+      cnt.style.display = (n > 1 && !o._summary) ? '' : 'none';
+      t.setAttribute('data-ntf-count', String(n));
+    }
+    _paintCount(aggCount);
+    row.appendChild(cnt);
     var x = document.createElement('button');
     x.type = 'button';
     x.textContent = '\u2715';
@@ -122,12 +187,27 @@
     x.addEventListener('click', function(){ _close(); });
     row.appendChild(x);
     t.appendChild(row);
+    var acts = o.actions || [];
     var timer = null;
     function _close(){
       if(timer){ clearTimeout(timer); timer = null; }
       try{ t.remove(); }catch(_e){}
+      try{ if(typeof o.onClose === 'function') o.onClose(); }catch(_e2){}
     }
-    var acts = o.actions || [];
+    function _arm(){
+      if(timer){ clearTimeout(timer); timer = null; }
+      if(o.sticky) return;
+      var ttl = (o.ttlMs && o.ttlMs > 0) ? o.ttlMs
+        : (acts.length ? 15000 : (o.severity === 'error' ? 8000 : 6000));
+      timer = setTimeout(_close, ttl);
+    }
+    /* #196 原地更新：同键再报只换文案 + 计数 + 重置停留（卡片 DOM 不动＝不重弹） */
+    t.__ntfUpdate = function(text, n){
+      msg.textContent = String(text || '');
+      _paintCount(n);
+      _arm();
+    };
+    t.__ntfClose = _close;
     if(acts.length){
       var bar = document.createElement('div');
       bar.style.cssText = 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;';
@@ -137,6 +217,7 @@
           var b = document.createElement('button');
           b.type = 'button';
           b.textContent = String(a.label);
+          if(a.title) b.title = String(a.title);
           b.style.cssText = 'border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.12);'
             + 'color:#fff;border-radius:7px;padding:3px 12px;font-size:12px;font-weight:600;cursor:pointer;';
           b.addEventListener('click', function(){
@@ -152,18 +233,17 @@
       t.appendChild(bar);
     }
     wrap.appendChild(t);
-    if(!o.sticky){
-      var ttl = (o.ttlMs && o.ttlMs > 0) ? o.ttlMs
-        : (acts.length ? 15000 : (o.severity === 'error' ? 8000 : 6000));
-      timer = setTimeout(_close, ttl);
-    }
+    _arm();
     return t;
   }
 
   function _toast(opts){
     if(!opts.text) return;
     var hasActs = !!(opts.actions && opts.actions.length);
-    if(!hasActs && !opts.sticky && !opts.domKey && window.CRMW && window.CRMW.toast){
+    /* #196：告警级（warn/error 且进中心）一律走卡片路径——只有卡片路径能做同键原地
+       更新与「同屏最多一张」折叠；info/success 短提示仍交 CRMW 轻 toast。 */
+    if(!hasActs && !opts.sticky && !opts.domKey && !_isAlertCard(opts)
+       && window.CRMW && window.CRMW.toast){
       try{
         window.CRMW.toast(String(opts.text), SEV_COLOR[opts.severity] || '');
         _syncToastOffset();
@@ -204,10 +284,13 @@
       if(prev && (Date.now() - prev) < ttl) return false;
       _lsSet(k, String(Date.now()));
     }
-    if(opts.ttlMs !== 0){
+    /* #196 分级：基础设施（GPU/Embedding/官网连通）/ 质量黄灯 默认只进通知中心不弹；
+       客户在等 / 通道断线 照常弹。forceToast=true 可覆写（调用方明确要打断时）。 */
+    var lowTier = !!(opts.tier && LOW_TIERS[String(opts.tier)]) && !opts.forceToast;
+    if(opts.ttlMs !== 0 && !lowTier){
       _toast({ text: opts.text, severity: opts.severity || 'info',
                actions: opts.actions, sticky: !!opts.sticky,
-               domKey: opts.domKey, ttlMs: opts.ttlMs });
+               domKey: opts.domKey, ttlMs: opts.ttlMs, center: opts.center });
     }
     if(opts.center !== false) _center(opts.centerId || opts.dedupKey, opts.centerText || opts.text);
     return true;
@@ -219,6 +302,11 @@
     if(!wrap) return;
     var live = wrap.querySelector('[data-ntf-domkey="' + domKey + '"]');
     if(live){ try{ live.remove(); }catch(_e){} }
+  }
+
+  /* #196：宿主注入汇总卡文案（fn(n) → string；本总线不做 i18n） */
+  function setSummaryText(fn){
+    if(typeof fn === 'function') _summaryText = fn;
   }
 
   var _SEV_ALIAS = { ok:'success', err:'error', error:'error', success:'success',
@@ -452,6 +540,7 @@
   window.AITRNotify = {
     notify: notify,
     dismiss: dismiss,
+    setSummaryText: setSummaryText,
     alert: uxAlert,
     confirm: uxConfirm,
     ongoing: {

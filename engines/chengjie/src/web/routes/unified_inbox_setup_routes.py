@@ -160,8 +160,8 @@ def _channel_health_snapshot() -> Dict[str, Any]:
     """
     try:
         from src.integrations.platform_session_health import (
-            ensure_seeded_from_registry, get_platform_session_health,
-            session_expected_online,
+            channel_alert_muted, ensure_seeded_from_registry,
+            get_platform_session_health, session_expected_online,
         )
         ensure_seeded_from_registry()
         now = time.time()
@@ -177,6 +177,10 @@ def _channel_health_snapshot() -> Dict[str, Any]:
             if st == "logged_out":
                 continue
             if not session_expected_online(key):
+                continue
+            # #196：坐席选了「不再提醒此账号」/「24 小时」→ 服务端静默（换机不丢），
+            # 快照直接不给前端；「标为已停用」走 expected_online=False 在上一行已剔。
+            if channel_alert_muted(key, now):
                 continue
             platform, _, account_id = str(key).partition(":")
             since = (float(sess.get("unhealthy_since") or 0.0)
@@ -788,6 +792,75 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": True, **out}
         except Exception:
             return {"ok": True, "enabled": False}
+
+    @app.post("/api/workspace/channel-alert/mute")
+    async def api_workspace_channel_alert_mute(request: Request):
+        """#196 断线提醒按账号静默（服务端落注册表 meta，换机不丢）。
+
+        body ``{platform, account_id, hours}``：``hours`` 缺省/``null``/``"forever"``＝
+        不再提醒此账号；``<=0``＝取消静默；否则静默 N 小时。任意登录坐席可用——
+        这是提醒偏好不是账号状态；账号不在注册表（config/适配器来源）→ ``stored=false``
+        由前端回落本机 localStorage。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").strip().lower()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            return {"ok": False, "error": tr(request, "err.ws.field_required",
+                                              field="platform/account_id")}
+        raw_hours = (body or {}).get("hours", None)
+        hours: Optional[float]
+        if raw_hours is None or str(raw_hours).strip().lower() in ("", "forever", "never"):
+            hours = None
+        else:
+            try:
+                hours = float(raw_hours)
+            except (TypeError, ValueError):
+                hours = None
+        from src.integrations.platform_session_health import set_channel_alert_mute
+        until = set_channel_alert_mute(plat, acct, hours=hours)
+        return {"ok": True, "platform": plat, "account_id": acct,
+                "until": until, "stored": bool(until != 0.0 or (hours is not None and hours <= 0))}
+
+    @app.post("/api/workspace/channel-alert/disable")
+    async def api_workspace_channel_alert_disable(request: Request):
+        """#196「标为已停用」：账号进 offline + operator:disabled——看门狗跳过、横幅不亮、
+        账号栏灰显；凭据不清，重新登录一次即归位。主管权限（改的是账号状态）。
+        """
+        api_auth(request)
+        _require_supervisor(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").strip().lower()
+        acct = str((body or {}).get("account_id") or "").strip()
+        if not plat or not acct:
+            return {"ok": False, "error": tr(request, "err.ws.field_required",
+                                              field="platform/account_id")}
+        actor = ""
+        try:
+            actor = str(request.session.get("username") or "")
+        except Exception:
+            actor = ""
+        # 先停 worker（best-effort）：停用了还让编排器反复重连＝红噪音源头不断
+        try:
+            from src.integrations.account_orchestrator import (
+                account_key, get_orchestrator,
+            )
+            cfg = (config_manager.config if config_manager is not None else {}) or {}
+            await get_orchestrator(cfg).stop_account(account_key(plat, acct))
+        except Exception:
+            logger.debug("[channel-alert] 停用前停 worker 失败（忽略）", exc_info=True)
+        from src.integrations.platform_session_health import mark_account_disabled
+        ok = mark_account_disabled(plat, acct, actor=actor)
+        if not ok:
+            return {"ok": False, "error": tr(request, "err.ws.account_not_in_registry")}
+        return {"ok": True, "platform": plat, "account_id": acct, "status": "disabled"}
 
     @app.get("/api/workspace/ai-runtime-status")
     async def api_workspace_ai_runtime_status(request: Request):

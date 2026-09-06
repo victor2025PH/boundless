@@ -69,6 +69,20 @@ $sz = [math]::Round((Get-Item $Setup).Length / 1MB, 1)
 $sha = (Get-FileHash $Setup -Algorithm SHA256).Hash
 Say ("setup: {0} ({1} MB)" -f (Split-Path -Leaf $Setup), $sz)
 Say ("sha256: " + $sha)
+# Which update channel this installer will follow once installed (L-5 / D-L1, 2026-09-06):
+# electron-builder writes the channel yml next to the exe -- latest-internal.yml = smart build
+# (publish.channel=latest-internal, auto-updates from downloads/internal/), latest.yml = clean /
+# public build. K-5 pushed the smart 1.0.74 to the seats while the public feed carried the clean
+# one; from now on the seats' next update stays smart ONLY if the pushed package is the internal-
+# channel build. Say it out loud so the operator sees it before the disruptive install step.
+$setupDir = Split-Path -Parent $Setup
+if (Test-Path (Join-Path $setupDir 'latest-internal.yml')) {
+  Say "channel: internal (smart build w/ seed-data; installed app auto-updates from downloads/internal/latest-internal.yml)"
+} elseif (Test-Path (Join-Path $setupDir 'latest.yml')) {
+  Say "channel: public (installed app auto-updates from downloads/latest.yml -- a smart build here means its NEXT update turns it into the clean package)"
+} else {
+  Say "channel: unknown (no latest*.yml beside the installer)"
+}
 
 # --- 1.5 disk preflight (2026-08-13 lesson: .198 was down to 2.5 GB free ------
 # mid-rollout because every release had parked another 476 MB setup in the stage

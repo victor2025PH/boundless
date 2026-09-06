@@ -820,6 +820,101 @@ def session_expected_online(key: str) -> bool:
     return False
 
 
+#: #196：按账号静默断线提醒的注册表 meta 键（-1＝不再提醒此账号；>0＝静默到该 epoch 秒；
+#: 0/缺省＝不静默）。存服务端而非只存浏览器 localStorage——坐席换机/换浏览器不丢。
+CHANDOWN_MUTE_META_KEY = "chandown_mute_until"
+#: #196「标为已停用」落的 offline_reason 前缀：不以 worker: 开头 → session_expected_online
+#: 判 False → 横幅不亮、看门狗不催；重新登录归位时随 offline_reason 一并清掉。
+DISABLED_OFFLINE_REASON = "operator:disabled"
+
+
+def channel_alert_mute_until(key: str) -> float:
+    """会话键（``platform:account_id``）的断线提醒静默水位：-1 永久 / 0 无 / epoch 秒。"""
+    plat, _, acct = str(key or "").partition(":")
+    if not plat or not acct:
+        return 0.0
+    try:
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get(plat, acct) or {}
+        return float((row.get("meta") or {}).get(CHANDOWN_MUTE_META_KEY) or 0)
+    except Exception:
+        return 0.0
+
+
+def channel_alert_muted(key: str, now: Optional[float] = None) -> bool:
+    """断线提醒是否被按账号静默（#196）。到期的静默自然失效，不用清。"""
+    until = channel_alert_mute_until(key)
+    if until < 0:
+        return True
+    if until <= 0:
+        return False
+    ts = time.time() if now is None else float(now)
+    return until > ts
+
+
+def set_channel_alert_mute(platform: str, account_id: str, *,
+                           hours: Optional[float], now: Optional[float] = None) -> float:
+    """写按账号静默（#196）：``hours=None`` ＝永久（-1）；``hours<=0`` ＝取消静默；
+    否则静默到 now+hours。返回落盘的水位；账号不在注册表 → 0（无处可存，调用方回落本机）。"""
+    plat = str(platform or "").lower()
+    acct = str(account_id or "")
+    if not plat or not acct:
+        return 0.0
+    ts = time.time() if now is None else float(now)
+    if hours is None:
+        until = -1.0
+    elif float(hours) <= 0:
+        until = 0.0
+    else:
+        until = ts + float(hours) * 3600.0
+    try:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+        if reg.get(plat, acct) is None:
+            return 0.0
+        reg.upsert(plat, acct, meta={CHANDOWN_MUTE_META_KEY: until}, merge_meta=True)
+    except Exception:
+        logger.debug("[session_health] 断线静默落盘失败（忽略）", exc_info=True)
+        return 0.0
+    logger.info("[session_health] 断线提醒静默 %s:%s until=%s", plat, acct,
+                "forever" if until < 0 else (f"{until:.0f}" if until else "cleared"))
+    return until
+
+
+def mark_account_disabled(platform: str, account_id: str, *, actor: str = "") -> bool:
+    """#196「标为已停用」：注册表 status=offline + offline_reason=operator:disabled。
+
+    效果链全走既有判据：``session_expected_online`` → False（横幅不亮 / 看门狗不催）；
+    收件箱账号栏按 offline 灰显；编排器不再拉起（offline 不在活跃集）。凭据**不清**
+    ——与登出不同，停用是「先别管它」，重新登录一次即归位（归位路径清 offline_reason）。
+    账号不在注册表 → False。
+    """
+    plat = str(platform or "").lower()
+    acct = str(account_id or "")
+    if not plat or not acct:
+        return False
+    try:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+        if reg.get(plat, acct) is None:
+            return False
+        reg.upsert(plat, acct, status="offline",
+                   meta={"offline_reason": DISABLED_OFFLINE_REASON,
+                         "disabled_at": time.time(), "disabled_by": str(actor or "")[:48]},
+                   merge_meta=True)
+    except Exception:
+        logger.debug("[session_health] 标停用落盘失败（忽略）", exc_info=True)
+        return False
+    try:
+        get_platform_session_health().record(plat, acct, "logged_out",
+                                             detail="operator disabled")
+    except Exception:
+        logger.debug("[session_health] 标停用同步健康表失败（忽略）", exc_info=True)
+    logger.info("[session_health] 账号标为已停用 %s:%s by=%s（看门狗跳过 / 横幅不亮 / 账号栏灰显）",
+                plat, acct, actor or "?")
+    return True
+
+
 def mark_superseded_accounts(platform: str, accounts: Any,
                              new_account: str) -> None:
     """身份接替的注册表落盘（best-effort，绝不抛）。
@@ -964,5 +1059,7 @@ __all__ = [
     "ensure_seeded_from_registry", "report_session_transition",
     "note_send_auth_failure", "mark_superseded_accounts",
     "session_expected_online",
+    "channel_alert_mute_until", "channel_alert_muted", "set_channel_alert_mute",
+    "mark_account_disabled", "CHANDOWN_MUTE_META_KEY", "DISABLED_OFFLINE_REASON",
     "UNHEALTHY_STATUSES", "HEALTHY_STATUSES", "ABANDONED_STATUS",
 ]

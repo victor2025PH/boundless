@@ -18,8 +18,19 @@ export interface Cx<T = string> {
 }
 
 /** 下载源基址：与 desktop/package.json 的 electron-updater publish url 指向同一目录
- *  （同源，官网下载版与客户端自动更新版一致）。 */
+ *  （同源，官网下载版与客户端自动更新版一致）。**这是对外 clean 包渠道**：`latest.yml` /
+ *  `manifest.json` / `announcements.json` 都在这一层，本页与自动更新只认它。 */
 export const CHATX_RELEASE_BASE = "/downloads";
+
+/** 内测渠道指针（L-5 / 老板决策 D-L1，2026-09-06）：smart 包（随包 seed-data 的内测形态）
+ *  的自动更新源在 `/downloads/internal/`，更新清单叫 `latest-internal.yml`（electron-builder
+ *  `publish.channel=latest-internal` 烘进包内 `resources/app-update.yml`，由 `npm run dist:win`
+ *  出包、`website/scripts/publish_chatx.ps1 -Channel internal` 上架）。
+ *  **刻意不在任何页面渲染、不进 JSON-LD、不进 manifest**：它不是客户下载物；写在这里只为
+ *  把两条渠道的布局钉在同一个事实源旁边，改路径时两边一起改（`/dl/downloads/internal/...`
+ *  同样走 R2 分流，见 lib/mirror.ts DL_PREFIXES）。 */
+export const CHATX_INTERNAL_RELEASE_BASE = "/downloads/internal";
+export const CHATX_INTERNAL_UPDATE_MANIFEST = `${CHATX_INTERNAL_RELEASE_BASE}/latest-internal.yml`;
 
 export const CHATX = {
   download: {

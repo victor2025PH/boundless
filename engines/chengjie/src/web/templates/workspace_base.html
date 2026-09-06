@@ -755,7 +755,7 @@
 <script src="/static/workspace/crm-widgets.js?v=20260702a"></script>
 <!-- 实施75：统一通知总线（右下 toast + 系统状态胶囊 + 消息中心留痕）。
      顶部横幅体系冻结增量：新状态一律走 AITRNotify，勿再注册 wsBanner 横幅。 -->
-<script src="/static/workspace/notify-bus.js?v=20260830a"></script>
+<script src="/static/workspace/notify-bus.js?v=20260906a"></script>
 <!-- 三期：⌘K 命令面板（页面导航/会话跳转/动作；自包含模块，样式自注入） -->
 <script src="/static/workspace/cmdk.js?v=20260820a"></script>
 <!-- WP-7 坐席新手任务卡已随新手引导整体退役（2026-08-31）。 -->
@@ -1853,14 +1853,143 @@
       _chanLogoutBusy = false;
     }
   }
-  /* 实施75 batch3：渲染面＝右下胶囊（每轮更新时长/痕迹）+ 签名首现卡片（三出路）。
+  /* ── #196（L-3 C）按账号静默：本机镜像（即时生效）+ 服务端注册表 meta（换机不丢，
+     快照直接不再返回该账号）。-1＝不再提醒此账号；>0＝静默到该毫秒时刻。 */
+  var CHAN_MUTE_KEY = 'ws_chandown_mute';
+  var _chanCur = null;   // 当前异常快照 {first, sig, text, hint, stale}，供胶囊「处理 ›」重开卡片
+  function _chanAcctKey(s){ return String((s && s.platform) || '') + ':' + String((s && s.account_id) || ''); }
+  function _chanMuteMap(){
+    try{ return JSON.parse(localStorage.getItem(CHAN_MUTE_KEY) || '{}') || {}; }catch(_e){ return {}; }
+  }
+  function _chanMutedLocal(s){
+    var v = Number(_chanMuteMap()[_chanAcctKey(s)] || 0);
+    return v < 0 || v > Date.now();
+  }
+  function _chanMuteLocal(s, ms){
+    try{
+      var m = _chanMuteMap();
+      m[_chanAcctKey(s)] = (ms < 0) ? -1 : (Date.now() + ms);
+      localStorage.setItem(CHAN_MUTE_KEY, JSON.stringify(m));
+    }catch(_e){}
+  }
+  /* hours=null → 不再提醒此账号；否则静默 N 小时。先落本机立即熄灭，再同步服务端。 */
+  async function _chanMuteAcct(first, hours){
+    var who = _chanLabel(first);
+    _chanMuteLocal(first, hours == null ? -1 : hours * 3600000);
+    AITRNotify.ongoing.clear('chandown');
+    AITRNotify.dismiss('chandown');
+    _chanStick(hours == null ? window.Tf('ws.chandown.mute_forever_ok', {who: who})
+                             : window.Tf('ws.chandown.mute_hours_ok', {who: who, h: String(hours)}),
+               8000, 'success');
+    try{
+      await window.apiFetch('/api/workspace/channel-alert/mute', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform: first.platform, account_id: first.account_id,
+                              hours: hours == null ? 'forever' : hours}),
+      }, {timeoutMs: 15000});
+    }catch(_e){ /* 旧后端无此路由：本机静默已生效 */ }
+  }
+  /* 「标为已停用」：账号进 offline+operator:disabled（看门狗跳过 / 横幅不亮 / 账号栏灰显），
+     凭据不清，重新登录一次即归位。主管权限；旧后端 404 如实提示。 */
+  var _chanDisableBusy = false;
+  async function _chanDisable(first){
+    if(_chanDisableBusy) return;
+    var who = _chanLabel(first);
+    var ok = await AITRNotify.confirm(window.Tf('ws.chandown.disable_confirm', {who: who}),
+      {okText: window.T('ws.chandown.disable_btn'), cancelText: window.T('ws.chandown.cancel'), danger: true});
+    if(!ok) return;
+    _chanDisableBusy = true;
+    try{
+      var r = await window.apiFetch('/api/workspace/channel-alert/disable', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform: first.platform, account_id: first.account_id}),
+      }, {timeoutMs: 30000});
+      if(r.status === 403){
+        _chanStick(window.T('ws.chandown.disable_denied'), 300000, 'warn');
+      }else if(r.status === 404){
+        _chanStick(window.T('ws.chandown.disable_old_backend'), 300000, 'warn');
+      }else if(r.ok){
+        var j = null; try{ j = await r.json(); }catch(_e){}
+        if(j && j.ok === false){
+          _chanStick(window.Tf('ws.chandown.disable_fail', {err: String(j.error || '').slice(0, 160)}), 300000, 'error');
+        }else{
+          _chanStick(window.Tf('ws.chandown.disable_ok', {who: who}), 600000, 'success');
+          // 旧健康表下一轮轮询才翻；本机先按签名暂缓让胶囊即刻熄灭
+          if(_chanLastSig) _chanSnooze(_chanLastSig, 86400000);
+          AITRNotify.ongoing.clear('chandown');
+          AITRNotify.dismiss('chandown');
+        }
+      }else{
+        var msg = 'http ' + r.status;
+        try{ var j2 = await r.json(); if(j2 && j2.detail) msg = String(j2.detail).slice(0, 160); }catch(_e2){}
+        _chanStick(window.Tf('ws.chandown.disable_fail', {err: msg}), 300000, 'error');
+      }
+    }catch(e){
+      _chanStick(window.Tf('ws.chandown.disable_fail',
+        {err: String((e && e.message) || e).slice(0, 120)}), 300000, 'error');
+    }finally{
+      _chanDisableBusy = false;
+    }
+  }
+  /* 「去重连」：messenger/whatsapp 走凭据级直重登；其它平台去收件箱账号抽屉该账号详情
+     （在收件箱页直开，否则跳收件箱）。 */
+  function _chanReconnect(first){
+    if(_chanReloginable(first)){ _chanRelogin(first); return; }
+    try{
+      if(typeof window.openDrawer === 'function' && typeof window.openAcctDetail === 'function'){
+        window.openDrawer();
+        setTimeout(function(){ try{ window.openAcctDetail(String(first.platform || ''), String(first.account_id || '')); }catch(_e){} }, 60);
+        return;
+      }
+    }catch(_e){}
+    if(!(window.__wsGoHome && window.__wsGoHome({}))) location.href = '/workspace';
+  }
+  /* 五条出路（#196 修法 1）：去重连 / 标为已停用 / 登出 / 1 小时 / 24 小时 / 不再提醒此账号 */
+  function _chanExitActions(first, sig){
+    return [
+      {label: window.T('ws.chandown.reconnect_btn'), onClick: function(){ _chanReconnect(first); }},
+      {label: window.T('ws.chandown.disable_btn'), onClick: function(){ _chanDisable(first); }},
+      {label: window.T('ws.chandown.logout_btn'), onClick: function(){ _chanLogout(first); }},
+      {label: window.T('ws.chandown.snooze1h'), title: window.T('ws.chandown.snooze1h_t'), onClick: function(){
+        _chanSnooze(sig, 3600000);
+        AITRNotify.ongoing.clear('chandown');
+      }},
+      {label: window.T('ws.chandown.snooze24h'), title: window.T('ws.chandown.dismiss_t'), onClick: function(){
+        if(_chanLastSig) _chanSnooze(_chanLastSig, 86400000);
+        AITRNotify.ongoing.clear('chandown');
+      }},
+      {label: window.T('ws.chandown.mute_acct'), title: window.T('ws.chandown.mute_acct_t'), onClick: function(){ _chanMuteAcct(first, null); }},
+    ];
+  }
+  function _chanShowCard(cur, force){
+    if(!cur) return;
+    var sig = cur.sig;
+    var o = {
+      severity: cur.stale ? 'warn' : 'error',
+      text: cur.text + cur.hint,
+      /* 首现按签名 4h 去重；胶囊「处理 ›」显式重开时跳过去重且不再写中心（force） */
+      dedupKey: 'chandown:' + sig, dedupTtlMs: 4 * 3600000,
+      domKey: 'chandown',
+      centerId: 'chandown',
+      tier: 'channel',
+      actions: _chanExitActions(cur.first, sig)
+    };
+    if(force){ delete o.dedupKey; o.center = false; }
+    AITRNotify.notify(o);
+  }
+  /* 实施75 batch3：渲染面＝右下胶囊（每轮更新时长/痕迹）+ 签名首现卡片（出路卡）。
      >48h 陈旧降档（downMin >= 2880）由胶囊 tone error→warn 承载（原 .stale 语义：
-     红色只留给真紧急）；签名暂缓/接替清账/期望在线矩阵等生命周期机制原样。 */
+     红色只留给真紧急）；签名暂缓/接替清账/期望在线矩阵等生命周期机制原样。
+     #196：胶囊动作从「1 小时内别再提醒」改为「处理 ›」重开出路卡（1h/24h/不再提醒此账号/
+     去重连/标为已停用/登出 全在卡上）；按账号静默的本机镜像先于服务端快照生效。 */
   function _renderChanDown(ch){
     if(!window.AITRNotify) return;
-    var list = (ch && ch.unhealthy) || [];
+    var list = ((ch && ch.unhealthy) || []).filter(function(s){ return !_chanMutedLocal(s); });
     if(!list.length){
       _chanLastSig = '';
+      _chanCur = null;
       // #143：通道恢复在线 → 清会话级关闭标记（再次掉线=新事件，照常提醒）
       try{ sessionStorage.removeItem(CHAN_CLOSE_KEY); }catch(_e){}
       AITRNotify.ongoing.clear('chandown');
@@ -1882,7 +2011,7 @@
     var names = list.map(_chanLabel).join(' · ');
     var hint = (list.length > 1)
       ? (' ' + window.Tf('ws.chandown.hint',
-          {count: String(ch.count || list.length), list: names}))
+          {count: String(list.length), list: names}))
       : '';
     /* 状态中心 v2：服务端重登痕迹（45min 内新鲜才显示）——多坐席值守时
        「已有人触发过重登」全员可见，防同一个号被两个人各触发一遍。 */
@@ -1897,45 +2026,25 @@
              || window.T('ws.chandown.relogin_trace_sb'),
       });
     }
+    _chanCur = {first: first, sig: sig, text: text, hint: hint, stale: stale};
     AITRNotify.ongoing.set('chandown', {
       text: text + hint,
       tone: stale ? 'warn' : 'error',
       title: window.T('ntf.capsule_title'),
       // #143：✕ = 本会话内关闭本签名（不走总线 dismissMs 的按-id 定时静默——
-      // 那会把静默期内**新账号掉线**一并藏掉）；另给 1h 暂缓出路（复用签名暂缓存储）。
+      // 那会把静默期内**新账号掉线**一并藏掉）。
+      // #196：胶囊动作＝「处理 ›」重开出路卡（原「1 小时」也在卡上，不再是唯一出口）。
       dismissTitle: window.T('ws.chandown.close_t'),
       onDismiss: function(){ _chanClose(sig); },
       action: {
-        label: window.T('ws.chandown.snooze1h'),
-        title: window.T('ws.chandown.snooze1h_t'),
-        onClick: function(){
-          _chanSnooze(sig, 3600000);
-          AITRNotify.ongoing.clear('chandown');
-        }
+        label: window.T('ws.chandown.options'),
+        title: window.T('ws.chandown.options_t'),
+        onClick: function(){ _chanShowCard(_chanCur, true); }
       }
     });
     if(_chanNotifiedSig !== sig){
       _chanNotifiedSig = sig;
-      var acts = [];
-      if(_chanReloginable(first)){
-        acts.push({label: window.T('ws.chandown.relogin_btn'),
-                   onClick: function(){ _chanRelogin(first); }});
-      }
-      acts.push({label: window.T('ws.chandown.logout_btn'),
-                 onClick: function(){ _chanLogout(first); }});
-      acts.push({label: window.T('ws.chandown.dismiss_t'),
-                 onClick: function(){
-                   if(_chanLastSig) _chanSnooze(_chanLastSig, 86400000);
-                   AITRNotify.ongoing.clear('chandown');
-                 }});
-      AITRNotify.notify({
-        severity: stale ? 'warn' : 'error',
-        text: text + hint,
-        dedupKey: 'chandown:' + sig, dedupTtlMs: 4 * 3600000,
-        domKey: 'chandown',
-        centerId: 'chandown',
-        actions: acts
-      });
+      _chanShowCard(_chanCur, false);
     }
   }
   // Phase4: shared soft-cool flag for inbox loadThread adaptive timeout/retry.
@@ -2028,7 +2137,8 @@
     });
     if(ep === 'start'){
       var msg = window.Tf('ws.sitelink.card', {site: String(sl.site || '')});
-      AITRNotify.notify({severity: 'warn', text: msg,
+      // #196 分级：基础设施类默认只进通知中心（胶囊仍常驻），不再抢右下角
+      AITRNotify.notify({severity: 'warn', text: msg, tier: 'infra',
         centerId: 'sitelink', centerText: msg});
     }
   }
@@ -2148,9 +2258,11 @@
             title: window.T('ntf.capsule_title')
           });
           if(dgEp === 'start'){
+            // #196 分级：AI 降级属基础设施类 → 只进通知中心（琥珀胶囊仍常驻可见）
             AITRNotify.notify({
               severity: 'warn',
               text: window.T('ws.aidegrade.text'),
+              tier: 'infra',
               centerId: 'aidegrade',
               centerText: window.T('ws.aidegrade.text')
             });
@@ -2195,6 +2307,12 @@
       }
     }
   }
+  // #196 归拢：汇总卡文案由宿主注入（总线不做 i18n）——「有 N 项需要注意 ›」
+  try{
+    if(window.AITRNotify && AITRNotify.setSummaryText){
+      AITRNotify.setSummaryText(function(n){ return window.Tf('ntf.summary_n', {n: String(n)}); });
+    }
+  }catch(_e){}
   _wsAiDegradePoll();
   _scheduleAiDegradePoll(60000);
 })();
