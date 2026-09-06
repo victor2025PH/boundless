@@ -159,12 +159,41 @@ _PROBE_TTL_SEC = 60.0
 _probe_cache: Dict[str, Any] = {"ts": 0.0, "url": "", "models": None}
 
 
+def probe_log_line(url: str, models: Optional[Dict[str, List[str]]],
+                   took_ms: int = 0) -> str:
+    """出图服务探测结果的日志行（M-5 C / #226：探测此前只在内存里，backend.log
+    3h 零记录，值守无从判「服务不存在 vs 前端没探」）。host 只取 netloc，
+    不带路径；未配 url ＝ ``host=- ok=None``（未配置≠不可达）。"""
+    try:
+        host = urllib.parse.urlsplit(str(url or "")).netloc or "-"
+    except Exception:
+        host = str(url or "-")
+    if not url:
+        return f"[image_gen] probe host=- ok=None reason=unconfigured"
+    ok = models is not None
+    ck = len((models or {}).get("ckpts") or []) if ok else 0
+    un = len((models or {}).get("unets") or []) if ok else 0
+    return (f"[image_gen] probe host={host} ok={ok} ckpts={ck} unets={un} "
+            f"took={int(took_ms)}ms")
+
+
 def _cached_probe(url: str) -> Optional[Dict[str, List[str]]]:
     now = time.time()
     if (_probe_cache["url"] == url
             and now - float(_probe_cache["ts"]) < _PROBE_TTL_SEC):
         return _probe_cache["models"]
+    t0 = time.time()
     models = probe_comfy_models(url)
+    took = int((time.time() - t0) * 1000)
+    # 首次 / 换地址 / 可达性翻转 → INFO（值守要看的就是这几行）；同态续探 → DEBUG
+    prev_models = _probe_cache.get("models")
+    first = float(_probe_cache.get("ts") or 0) <= 0 or _probe_cache.get("url") != url
+    flipped = (prev_models is None) != (models is None)
+    line = probe_log_line(url, models, took)
+    if first or flipped:
+        logger.info(line)
+    else:
+        logger.debug(line)
     _probe_cache.update({"ts": now, "url": url, "models": models})
     return models
 
@@ -477,6 +506,25 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
     def _out_dir() -> Path:
         return Path(str(_provider_cfg().get("out_dir") or "tmp_selfies"))
 
+    def _client_hide(request: Request) -> bool:
+        """「用户版隐藏」是否生效（M-5 C / #226 / D-M7）：与模板全局
+        ``ui_client_hide`` 同口径＝client 形态且未开开发者模式（L-4 A）。
+        异常按不藏（内部机器多出一块面板只是噪音）。"""
+        try:
+            from src.web.ui_visibility import (
+                client_hide_active,
+                resolve_developer_mode,
+            )
+            try:
+                sess = request.session
+            except Exception:
+                sess = None
+            return bool(client_hide_active(_root_cfg(), resolve_developer_mode(sess)))
+        except Exception:
+            return False
+
+    _dev_state_logged = {"done": False}
+
     # ── GET /api/image/config：卡片初始化（人设列表 + 引擎 + 开关）────────────
     @app.get("/api/image/config")
     async def api_image_config(request: Request, _=Depends(auth_dep)):
@@ -496,6 +544,33 @@ def register_image_gen_routes(app, auth_dep, audit_store=None, config_manager=No
                 })
         except Exception:
             logger.debug("image config 人设列表失败", exc_info=True)
+        if _client_hide(request):
+            # M-5 C（#226 / D-M7）：用户版＝「开发中」态。X6MDC5 实录：面板报「出图
+            # 服务器不可达…联系运维」+ 额度 0/20，本机从未成功出图——框架完整但
+            # 服务不存在。用户版不探内网出图服务（L-6 B 同一原则）、不下发引擎/
+            # 尺寸/提示词/场景词，只留相册存货直发兜底；partner / internal /
+            # 开发者模式走下面原面板。
+            if not _dev_state_logged["done"]:
+                _dev_state_logged["done"] = True
+                logger.info("[image_gen] probe skipped: user edition dev_state "
+                            "(render server not probed; album-only panel)")
+            return {
+                "ok": True,
+                "enabled": True,
+                "dev_state": True,
+                "engines": [],
+                "engines_info": [],
+                "comfy_ok": None,
+                "default_engine": "",
+                "personas": personas,
+                "default_persona": str(_provider_cfg().get("default_album_key") or ""),
+                "jobs_api": False,
+                "album_pick": True,
+                "scene_hints": False,
+                "busy_signal": False,
+                "daily_quota": 0,
+                "quota_used": 0,
+            }
         mcfg = _manual_cfg()
         engines = _engine_list()
         # 部署态探测（TTL 60s）：未装模型的引擎前端置灰；ComfyUI 不可达时

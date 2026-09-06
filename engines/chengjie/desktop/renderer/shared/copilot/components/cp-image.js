@@ -203,6 +203,7 @@
     }
     _maybeRefetchConfig(force) {
       if (!this._cfg || this._busy) return;   // 生成中不打扰（也别浪费探针）
+      if (this._isDevState()) return;         // 开发中态没有状态块可续，也不探服务
       const now = Date.now();
       if (!force && now - (this._cfgTs || 0) < CFG_TTL_MS) return;
       this._cfgTs = now;
@@ -236,6 +237,16 @@
       if (!d.enabled) { this._renderDisabled(this.t("cp.image.disabled")); return; }
       this._cfg = d;
       this._cfgTs = Date.now();
+      // M-5 C（#226 / D-M7）：用户版「开发中」态——后端不下发引擎/探测，面板只留
+      // 人话说明 + 相册存货直发；生成表单整块不渲染（没有可用的服务就不摆按钮）。
+      if (d.dev_state) {
+        this._persona = String(d.default_persona || ((d.personas || [])[0] || {}).id || "");
+        this._jobsApi = false;
+        this._albumPick = !!d.album_pick;
+        this._renderDevState();
+        this._loadStock();
+        return;
+      }
       this._deploy = {};
       (d.engines_info || []).forEach((x) => {
         if (x && x.id) this._deploy[x.id] = x.deployed;
@@ -298,6 +309,30 @@
     _renderDisabled(msg) {
       this._render('<div class="im-hint">' + this.esc(msg || "") + "</div>");
     }
+    /* 用户版「开发中」态（M-5 C）：顶部一句人话 + 人设选择（相册按人设分）+ 相册
+       存货条置顶（有货即「点一下直接发送」）+ 结果区（发送/下载）。不出引擎/尺寸/
+       提示词/场景词/生成按钮/额度行；不出「联系运维」。 */
+    _renderDevState() {
+      const esc = (s) => this.esc(s);
+      const cfg = this._cfg || {};
+      const personas = cfg.personas || [];
+      const pOpts = personas.map((p) =>
+        '<option value="' + esc(p.id) + '"' + (p.id === this._persona ? " selected" : "") + ">" +
+        esc(p.name || p.id) + "</option>").join("");
+      const html =
+        '<div class="im-note" data-role="devstate">' + esc(this.t("cp.image.dev_state")) + "</div>" +
+        '<div data-role="stock"></div>' +
+        (personas.length
+          ? '<div class="im-row"><span class="lbl">' + esc(this.t("cp.image.persona")) + '</span>' +
+            '<select data-role="persona">' + pOpts + "</select></div>"
+          : "") +
+        '<div class="im-status" data-role="status"></div>' +
+        '<div data-role="out"></div>' +
+        '<div class="im-hint">' + esc(this.t("cp.image.dev_state_hint")) + "</div>";
+      this._render(html);
+      this._wire();
+    }
+    _isDevState() { return !!(this._cfg && this._cfg.dev_state); }
 
     /* ── 顶部预警区（2026-08-28 收口）───────────────────────────────────
        分层：① 全引擎未部署=红（坐席自己救不了，必须找运维）② 服务不可达=黄
@@ -618,7 +653,7 @@
     }
 
     async _generate() {
-      if (this._busy) return;
+      if (this._busy || this._isDevState()) return;
       const prompt = this._val("prompt");
       if (!prompt) { this._err(this.t("cp.image.prompt_empty")); return; }
       const client = this._cl();
@@ -845,7 +880,7 @@
         '<button type="button" class="primary" data-act="send"' + (this._hasCtx() ? "" : " disabled") + '>' +
         svg("send", 12) + " " + esc(this.t("cp.image.send")) + "</button>" +
         (isAlbum ? "" : '<button type="button" data-act="save">' + svg("album", 12) + " " + esc(this.t("cp.image.save_album")) + "</button>") +
-        '<button type="button" data-act="redo">' + svg("redo", 12) + " " + esc(this.t("cp.image.redo")) + "</button>" +
+        (this._isDevState() ? "" : '<button type="button" data-act="redo">' + svg("redo", 12) + " " + esc(this.t("cp.image.redo")) + "</button>") +
         '<button type="button" data-act="dl">' + svg("dl", 12) + " " + esc(this.t("cp.image.download")) + "</button>" +
         "</div>" +
         (this._hasCtx() ? "" : '<div class="im-hint">' + esc(this.t("cp.image.need_conv_send")) + "</div>") +
