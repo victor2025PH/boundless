@@ -125,12 +125,13 @@ async def test_115_media_placeholder_short_circuits_before_engine():
 # ── 服务级拦截 ──────────────────────────────────────────────────────────
 
 async def test_service_intercepts_refusal_and_falls_back():
+    # M-1 B #234 起单字符（"1"）不进引擎（identity 早退），改用能到引擎的短句验拦截
     svc = TranslationService(ai_client=None)
     svc._router = EngineRouter([_StubEngine("ai", out=_PROD_REFUSAL)])
-    res = await svc.translate("1", target_lang="en", source_lang="zh")
+    res = await svc.translate("ok ok", target_lang="en", source_lang="zh")
     assert res.ok is False
     assert res.error == "engine_refusal"
-    assert res.translated_text == "1"   # 回落原文，绝不把客套话给到调用方当译文
+    assert res.translated_text == "ok ok"   # 回落原文，绝不把客套话给到调用方当译文
 
 
 async def test_service_refusal_never_enters_translation_memory():
@@ -146,7 +147,7 @@ async def test_service_refusal_never_enters_translation_memory():
     svc = TranslationService(ai_client=None)
     svc._router = EngineRouter([_StubEngine("ai", out=_PROD_REFUSAL)])
     svc._memory_store = _Mem()
-    res = await svc.translate("1", target_lang="en", source_lang="zh")
+    res = await svc.translate("ok ok", target_lang="en", source_lang="zh")
     assert res.ok is False and calls["put"] == 0
 
 

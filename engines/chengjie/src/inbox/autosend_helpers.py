@@ -1214,10 +1214,21 @@ def build_autosend_translate_cb(assistant, web_app):
             _ts = getattr(web_app.state, "translation_service", None)
             if _ts is None:
                 return str(item.get("text", ""))
+            # M-1 B #234（D-M3）：目标语言五级决策需要「客户档案语言」（contacts 店）与
+            # 「人设对外默认语言」（实时配置 → 会话绑定人设）两级的数据源；缺席即该级跳过。
+            try:
+                _cstore = getattr(getattr(assistant, "contacts", None), "store", None)
+            except Exception:
+                _cstore = None
+            try:
+                _cfg_root = assistant.config.config or {}
+            except Exception:
+                _cfg_root = {}
             _out = await _tot(
                 item, translation_service=_ts,
                 store=assistant.inbox_store,
-                source_lang=_src, style=_style, gate_only=_go)
+                source_lang=_src, style=_style, gate_only=_go,
+                contacts_store=_cstore, cfg_root=_cfg_root)
             return _guard_translated_lang_mix(
                 assistant, str(item.get("text", "")), _out)
 

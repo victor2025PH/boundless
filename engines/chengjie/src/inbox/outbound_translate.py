@@ -10,17 +10,17 @@
     零副作用、可单测，路由/worker 只做薄适配。
   - ``translate_outbound_text`` 是「译 + 记录 + 降级回落」的可复用闭包体，依赖通过参数注入
     （translation_service / store），单测可塞 fake。
-  - **一般不阻塞投递**：异常 / 不可译 / 译文与原文相同 → 回落发原文，保证全自动链路不断。
-    **唯一例外（2026-07-31，198 实锤）**：待发文本含 CJK 而客户语言是非 CJK 语种时，
-    「回落发原文」＝把中文原样发给外语客户＝人设当场穿帮——比不发更糟。该冲突下翻译
-    不可用时返回 ``None``（HOLD 信号），由 worker 转成投递失败走既有审计/提醒链。
+  - **无兜底纪律（2026-08-17 起，D-M3 2026-09-06 收口）**：翻译失败 / 校验失败 /
+    目标语言判不出 → 一律返回 ``None``（HOLD 信号，原因挂 ``item["_xlate_hold"]``），
+    由 worker 转成投递失败走审计/提醒链，**任何情况不发原文、不落到操作员语言 zh**。
+    目标语言由 ``resolve_outbound_lang`` 五级单点决策（手动 > 档案 > 消息 > 出站历史 > 人设）。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +303,185 @@ def _detect_source(translation_service: Any, text: str) -> str:
         return ""
 
 
+# ── M-1 B（#234，D-M3，2026-09-06）：目标语言决策单一函数 ─────────────────────────
+# 事故：Messenger 客户发 "Hi"，账号数据清除后会话语言记忆清零、单句 "Hi" 判不出 en →
+# 目标语言落空 → 走「目标未知→发原文」→ 中文草稿直投外国客户。修法：目标语言按
+# 「会话手动翻译设置 > 客户档案语言 > 客户消息文字系统 > 人设对外默认语言 > 全无」
+# 五级单点决策；全无 → 返回 ""（调用方 HOLD，禁止自动投递，绝不落到操作员界面语言）。
+_SCRIPT_RES = (
+    ("ja", re.compile(r"[\u3040-\u30ff]")),                 # 假名（先于汉字：日文夹汉字）
+    ("ko", re.compile(r"[\uac00-\ud7af\u1100-\u11ff]")),    # 谚文
+    ("th", re.compile(r"[\u0e00-\u0e7f]")),                 # 泰文
+    ("zh", re.compile(r"[\u4e00-\u9fff\uf900-\ufaff]")),    # 汉字
+    ("ru", re.compile(r"[\u0400-\u04ff]")),                 # 西里尔
+    ("ar", re.compile(r"[\u0600-\u06ff]")),                 # 阿拉伯
+    ("he", re.compile(r"[\u0590-\u05ff]")),                 # 希伯来
+    ("hi", re.compile(r"[\u0900-\u097f]")),                 # 天城文
+    ("el", re.compile(r"[\u0370-\u03ff]")),                 # 希腊
+)
+_LATIN_SCRIPT_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
+_VIET_MARK_RE = re.compile(r"[ăâđêôơưĂÂĐÊÔƠƯạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]")
+# 拉丁字母书写的语种（人设对外语言是其中之一时，拉丁单句按人设语言兜底而非恒 en）
+_LATIN_LANGS = {"en", "es", "pt", "fr", "de", "it", "nl", "id", "ms", "tl", "vi", "tr",
+                "pl", "sv", "da", "no", "fi", "cs", "ro", "hu"}
+
+
+def script_language(text: str, *, latin_default: str = "en") -> str:
+    """单句按**文字系统**判语种（纯函数）：假名→ja、谚文→ko、泰文→th、汉字→zh、西里尔→ru、
+    阿拉伯→ar、希伯来→he、天城文→hi、希腊→el；拉丁字母→越南语变音符→vi，否则
+    ``latin_default``（人设对外语言为拉丁语种时用它，否则 en）。无任何文字 → ""。
+
+    与 ``detect_language``（统计检测，单词 "Hi" 判不出）互补：这是 D-M3 第三级
+    「客户消息文字系统」的兜底口径——「客户用拉丁字母跟我说话，回英文/人设语言」
+    比「判不出就发中文」正确得多。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return ""
+    counts = {code: len(rx.findall(t)) for code, rx in _SCRIPT_RES}
+    latin = len(_LATIN_SCRIPT_RE.findall(t))
+    best_code, best_n = "", 0
+    for code, n in counts.items():
+        if n > best_n:
+            best_code, best_n = code, n
+    if counts.get("ja", 0) > 0 and best_code == "zh":
+        best_code = "ja"   # 假名在场即日文（日文汉字比例常高于假名）
+    if best_n > 0 and best_n >= latin:
+        return best_code
+    if latin > 0:
+        if _VIET_MARK_RE.search(t):
+            return "vi"
+        ld = normalize_target(latin_default)
+        return ld if ld in _LATIN_LANGS else "en"
+    return ""
+
+
+def persona_default_lang(cfg_root: Any, platform: str, account_id: str, chat_key: str) -> str:
+    """人设「回复语言」（persona.language：'' 跟随对方 / zh / en / th…）→ 归一语种码；
+    未绑定人设 / 跟随对方 / 任何异常 → ""。这是 D-M3 第四级「人设/账号对外默认语言」。"""
+    try:
+        if not isinstance(cfg_root, dict) or not cfg_root:
+            return ""
+        from src.ai.persona_voice import resolve_effective_persona_id
+        from src.utils.persona_manager import PersonaManager
+        pid = resolve_effective_persona_id(
+            cfg_root, str(platform or ""), str(account_id or "default"), str(chat_key or ""))
+        if not pid:
+            return ""
+        p = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+        return normalize_target(str(p.get("language") or ""))
+    except Exception:
+        logger.debug("[outbound_translate] 人设对外语言读取失败", exc_info=True)
+        return ""
+
+
+def _profile_language(store: Any, contacts_store: Any, conversation_id: str) -> str:
+    """客户档案语言（D-M3 第二级）＝ contacts.language_hint（运营/导入显式写的），
+    经 conversations.contact_id 反查；任一环缺失 → ""。刻意**不**把自动检测落库的
+    ``conversations.language`` 当档案——那是消息证据的持久化，归第三级。"""
+    if store is None or contacts_store is None or not conversation_id:
+        return ""
+    try:
+        conv = store.get_conversation(conversation_id) or {}
+    except Exception:
+        return ""
+    contact_id = str((conv or {}).get("contact_id") or "").strip()
+    if not contact_id or not hasattr(contacts_store, "get_contact"):
+        return ""
+    try:
+        c = contacts_store.get_contact(contact_id)
+    except Exception:
+        return ""
+    lang = normalize_target(str(getattr(c, "language_hint", "") or ""))
+    return lang
+
+
+def _latest_inbound_text(store: Any, conversation_id: str) -> str:
+    """最近一条有正文的入站消息（文字系统兜底用）；取不到 → ""。"""
+    if store is None or not conversation_id or not hasattr(store, "list_recent_messages"):
+        return ""
+    try:
+        rows = store.list_recent_messages(conversation_id, limit=_LANG_VOTE_WINDOW) or []
+    except Exception:
+        return ""
+    for m in reversed(rows):
+        if not isinstance(m, dict) or str(m.get("direction") or "in") == "out":
+            continue
+        text = str(m.get("text") or "").strip()
+        if not text or (text.startswith("[") and text.endswith("]") and " " not in text):
+            continue
+        return text
+    return ""
+
+
+def resolve_outbound_lang(
+    conversation_id: str,
+    *,
+    store: Any = None,
+    detect: Any = None,
+    contacts_store: Any = None,
+    cfg_root: Any = None,
+    platform: str = "",
+    account_id: str = "",
+    chat_key: str = "",
+) -> Tuple[str, str]:
+    """出站目标语言**单点决策**（D-M3）。返回 ``(语种码, decided_by)``；判不出 →
+    ``("", "")``，调用方必须 HOLD（转半自动 / 禁止自动投递），**不得**回落 zh。
+
+    decided_by ∈ ``manual``（会话「发→X」显式设置）/ ``profile``（contacts 档案语言）/
+    ``message``（客户消息证据：末尾 burst 强证据 > 加权多数决 > 持久 conversations.language）/
+    ``message_script``（单句文字系统兜底：拉丁→en/人设拉丁语、假名→ja…）/
+    ``outbound_history``（我们一直在用什么语言聊）/ ``persona``（人设对外默认语言）。
+    """
+    cid = str(conversation_id or "")
+    if not cid:
+        return "", ""
+    if platform == "" or chat_key == "":
+        parts = cid.split(":", 2)
+        if len(parts) == 3:
+            platform = platform or parts[0]
+            account_id = account_id or parts[1]
+            chat_key = chat_key or parts[2]
+    # ① 会话级手动翻译设置（'auto' = 跟客户语言 → 继续往下判）
+    manual = ""
+    try:
+        if store is not None and hasattr(store, "get_outbound_lang_if_set"):
+            manual = str(store.get_outbound_lang_if_set(cid) or "").strip().lower()
+    except Exception:
+        manual = ""
+    if manual and manual != "auto":
+        t = normalize_target(manual)
+        if t:
+            return t, "manual"
+    # ② 客户档案语言
+    prof = _profile_language(store, contacts_store, cid)
+    if prof:
+        return prof, "profile"
+    # ③ 客户消息：统计证据 → 文字系统兜底
+    if detect is None:
+        try:
+            from src.ai.translation_service import detect_language as detect
+        except Exception:
+            detect = None
+    msg = normalize_target(_conv_language(store, cid, detect=detect))
+    if msg:
+        return msg, "message"
+    persona = persona_default_lang(cfg_root, platform, account_id, chat_key)
+    latest = _latest_inbound_text(store, cid)
+    if latest:
+        sc = script_language(latest, latin_default=persona or "en")
+        if sc:
+            return sc, "message_script"
+    # ③′ 出站历史参照（客户零证据但我们一直在用某语言聊）
+    hist = normalize_target(_outbound_history_language(store, cid, detect))
+    if hist:
+        return hist, "outbound_history"
+    # ④ 人设 / 账号对外默认语言
+    if persona:
+        return persona, "persona"
+    return "", ""
+
+
 def _outbound_history_language(store: Any, conversation_id: str, detect: Any) -> str:
     """「我们最近**已投递**的消息是什么语言」——客户证据缺位时的独立参照（P1-198）。
 
@@ -453,6 +632,26 @@ def parse_outbound_lang_gate_cfg(config: Any) -> Dict[str, Any]:
     return {"enabled": bool(lg.get("enabled", True))}
 
 
+def _mark_hold(item: Dict[str, Any], reason: str, *, target: str = "",
+               decided_by: str = "") -> None:
+    """把 HOLD 原因挂回 item（M-1 B #234）：worker 据此把失败原因写成
+    ``translate_hold:<reason>``（lang_unknown → 客户语言未知转人工；其余 → 翻译失败
+    待确认），面板/审计/铃铛都能看到「为什么没发」。返回值仍是 None（旧调用方零变化）。"""
+    try:
+        item["_xlate_hold"] = {"reason": str(reason or "hold"), "target": str(target or ""),
+                               "decided_by": str(decided_by or "")}
+    except Exception:
+        pass
+
+
+def _log_decision(cid: str, target: str, decided_by: str, action: str,
+                  reason: str = "") -> None:
+    logger.info(
+        "[xlate] outbound conv=%s target=%s decided_by=%s action=%s%s",
+        cid, target or "-", decided_by or "-", action,
+        (" reason=" + reason) if reason else "")
+
+
 async def translate_outbound_text(
     item: Dict[str, Any],
     *,
@@ -461,6 +660,8 @@ async def translate_outbound_text(
     source_lang: str = _DEFAULT_SOURCE,
     style: str = "chat",
     gate_only: bool = False,
+    contacts_store: Any = None,
+    cfg_root: Any = None,
 ) -> Optional[str]:
     """把一条待投递文本译成会话客户语言；记录出向译文映射。**自带「已是客户语言则跳过」护栏**。
 
@@ -484,9 +685,12 @@ async def translate_outbound_text(
     gate_only=True 时本函数只做「语言硬闸」：非 CJK 冲突一律原样放行（尊重运营
     关闭常规翻译的决定），CJK 冲突则照常抢救翻译 / HOLD。
 
-    **客户证据缺位的独立参照（P1-198）**：目标语言判不出（新客户只发过贴纸/语气词）
-    而待发文本含 CJK 时，改用「我们最近已投递消息的语言」当参照——已发历史是客户
-    实际收到的地面真相，与本轮生成决策完全解耦；参照也缺位才盲发（并计数观测）。
+    **目标语言单点决策（M-1 B #234，D-M3，2026-09-06）**：``resolve_outbound_lang`` 五级
+    （会话手动 > 客户档案 > 客户消息证据/文字系统 > 出站历史 > 人设对外语言）；**全无 →
+    HOLD**（``item["_xlate_hold"]={"reason":"lang_unknown"}``，返回 None）——旧「目标未知→
+    发原文」拆除：15:44 Messenger 实锤就是这条路把中文直投给只说了一句 "Hi" 的客户。
+    任何路径不得落到操作员界面语言 zh。校验失败（含 target_lang_mismatch）同样 HOLD 并
+    带原因，worker 标「翻译失败待确认」，不发原文。
     """
     text = str(item.get("text") or "")
     cid = str(item.get("conversation_id") or "")
@@ -497,10 +701,8 @@ async def translate_outbound_text(
 
     _detect = getattr(translation_service, "detect_language", None)
     # B67（实施67 P1-8）：会话级「发→X」显式设置最优先——用户声明的意图不依赖
-    # 检测/投票（`_337` 实锤：检测判不出目标时中文盲发英文客户）。具体语种=钉死
-    # 目标；'auto'=显式要求跟客户语言（走既有投票，但意图升级见下）；未设置=
-    # 旧行为零变化。显式意图在场时 gate_only 升级为完整翻译——「发→英」开着
-    # 却只拦 CJK 冲突＝手动才译的旧断链换个姿势复发。
+    # 检测/投票；具体语种=钉死目标；'auto'=显式要求跟客户语言。显式意图在场时
+    # gate_only 升级为完整翻译——「发→英」开着却只拦 CJK 冲突＝手动才译的旧断链复发。
     explicit = ""
     try:
         if store is not None and cid and hasattr(store, "get_outbound_lang_if_set"):
@@ -508,34 +710,30 @@ async def translate_outbound_text(
                 store.get_outbound_lang_if_set(cid) or "").strip().lower()
     except Exception:
         explicit = ""
-    if explicit and explicit != "auto":
-        explicit = normalize_target(explicit)   # zh-CN→zh；非法值归 ''
-    if explicit and explicit != "auto":
-        target = explicit
-        gate_only = False
-    else:
-        # 会话目标语言用「最近入站消息加权多数决」（detect 取自同一
-        # translation_service，与入站落库检测同源），比 conversations.language
-        # 单值抗偶发外语翻转。
-        target = normalize_target(_conv_language(store, cid, detect=_detect))
-        if explicit == "auto":
-            gate_only = False
+    target, decided_by = resolve_outbound_lang(
+        cid, store=store, detect=_detect, contacts_store=contacts_store,
+        cfg_root=cfg_root, platform=str(item.get("platform") or ""),
+        account_id=str(item.get("account_id") or ""),
+        chat_key=str(item.get("chat_key") or ""))
+    if explicit:
+        gate_only = False   # 显式设置（含 auto）在场 → 完整翻译
+    text_cjk = cjk_substantial(text)
+    if not target:
+        # D-M3：目标语言全无 → 转半自动，禁止自动投递（曾是 no_target_sent 盲发）
+        _gate_record("held_lang_unknown", conversation_id=cid)
+        _mark_hold(item, "lang_unknown")
+        _report_block_safe(cid, "", "lang_unknown")
+        _log_decision(cid, "", "", "hold", "lang_unknown")
+        logger.warning(
+            "[outbound_translate] 客户语言判不出（手动/档案/消息/人设全无）→ HOLD 不发，"
+            "转人工确认 conv=%s cjk=%s", cid, text_cjk)
+        return None
+
     # 冲突判定用「实质性 CJK」口径（cjk_substantial）：英文消息引用个别中文
     # 专名不算冲突（生产实锤误伤面，见函数 docstring）。
-    text_cjk = cjk_substantial(text)
-    if not target and text_cjk:
-        # 独立参照：我们一直在用什么语言聊（出站历史投票，非 CJK 才有冲突语义）
-        ref = normalize_target(_outbound_history_language(store, cid, _detect))
-        if ref and not lang_is_cjk(ref):
-            target = ref
-    if not target:
-        if text_cjk:
-            # CJK 文本盲发（客户证据 + 出站参照双缺位）——计数观测，别静默
-            _gate_record("no_target_sent", conversation_id=cid)
-        return text  # 目标语言未知 → 不翻译（发原文）
-
     cjk_conflict = text_cjk and not lang_is_cjk(target)
     if gate_only and not cjk_conflict:
+        _log_decision(cid, target, decided_by, "pass_gate_only")
         return text  # 硬闸模式：无冲突不翻译（运营已关闭常规出站翻译），免source检测
     detected = _detect_source(translation_service, text)
     if cjk_conflict:
@@ -548,6 +746,7 @@ async def translate_outbound_text(
         # 覆盖主动触达已 in-lang 的消息）
         eff_source = detected or normalize_target(source_lang) or source_lang
         if eff_source == target:
+            _log_decision(cid, target, decided_by, "pass_same_lang")
             return text
 
     # 实施93b URL 保护：翻译前把 URL 换成引擎几乎必然原样保留的占位 token，
@@ -574,7 +773,9 @@ async def translate_outbound_text(
             "[outbound_translate] 翻译调用失败 → HOLD 不发（无兜底纪律）"
             "target=%s conv=%s", target, cid, exc_info=True)
         _gate_record("held", conversation_id=cid, target=target)
+        _mark_hold(item, "translate_exception", target=target, decided_by=decided_by)
         _report_block_safe(cid, target, "translate_exception")
+        _log_decision(cid, target, decided_by, "hold", "translate_exception")
         return None
 
     translated = str(getattr(res, "translated_text", "") or "")
@@ -598,15 +799,22 @@ async def translate_outbound_text(
                 or (translated == text_masked and not _same_text_ok)
                 or (cjk_conflict and cjk_substantial(translated)))
     if degraded:
+        # D-M3：校验失败（含 target_lang_mismatch / identity 回显 / 引擎拒绝）一律拦下，
+        # 原因挂回 item → worker 标「翻译失败待确认」，任何情况不发原文。
+        _why = (err or ("cjk_residue" if (cjk_conflict and cjk_substantial(translated))
+                        else "translate_degraded"))
         logger.warning(
             "[outbound_translate] 译文不可用(provider=%s err=%s) → HOLD 不发"
-            "（无兜底纪律）target=%s conv=%s",
-            provider or "-", err or "-", target, cid)
+            "（无兜底纪律）target=%s decided_by=%s conv=%s",
+            provider or "-", err or "-", target, decided_by or "-", cid)
         _gate_record("held", conversation_id=cid, target=target)
+        _mark_hold(item, _why, target=target, decided_by=decided_by)
         _report_block_safe(cid, target, err or "translate_degraded")
+        _log_decision(cid, target, decided_by, "hold", _why)
         return None
     if _url_map:
         translated = _restore_urls(translated, _url_map)
+    _log_decision(cid, target, decided_by, "translated")
 
     if cjk_conflict and gate_only:
         # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的
@@ -634,6 +842,9 @@ __all__ = [
     "parse_outbound_translate_cfg",
     "normalize_target",
     "peer_language_hint",
+    "persona_default_lang",
+    "resolve_outbound_lang",
+    "script_language",
     "should_translate",
     "translate_outbound_text",
     "vote_language",

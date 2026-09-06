@@ -97,6 +97,29 @@ def _is_permanent_send_error(err: str) -> bool:
         return False
 
 
+def _translate_hold_message(item: Dict[str, Any]) -> str:
+    """出站翻译 HOLD 的失败原因文案（M-1 B #234，D-M3）。
+
+    ``outbound_translate`` 把原因挂在 ``item["_xlate_hold"]``：
+    - ``lang_unknown`` → 「客户语言未知，转人工确认」（手动/档案/消息/人设全无，D-M3
+      要求转半自动、禁止自动投递——绝不落到操作员界面语言 zh）；
+    - 其余（``target_lang_mismatch`` / ``engine_refusal`` / ``provider_unavailable`` /
+      ``cjk_residue`` …）→ 「翻译失败待确认」，不发原文。
+    旧回调（不挂原因）→ 通用文案。前缀 ``translate_hold:<reason>`` 稳定，供审计 /
+    失败留痕气泡 / M-2 E 原因字段直接消费。
+    """
+    hold = item.get("_xlate_hold") if isinstance(item, dict) else None
+    reason = str((hold or {}).get("reason") or "").strip() if isinstance(hold, dict) else ""
+    if reason == "lang_unknown":
+        return ("translate_hold:lang_unknown: 客户语言判不出（无手动设置/档案/消息证据/"
+                "人设默认），已转人工确认，不自动投递（D-M3）")
+    if reason:
+        tgt = str((hold or {}).get("target") or "-")
+        return (f"translate_hold:{reason}: 翻译失败待确认（target={tgt}），"
+                "已拦截不发原文（无兜底纪律）")
+    return "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）"
+
+
 class AutosendWorker:
     """L2 草稿定时自动发后台任务。
 
@@ -885,9 +908,10 @@ class AutosendWorker:
                 # None = HOLD（无兜底纪律 2026-08-17：翻译失败一律不发原文，
                 # 回调内部已收口全部失败面；回调自身异常同按 HOLD）。走投递
                 # 失败链（审计+坐席铃铛），翻译链恢复后人工/重试补投。
+                # M-1 B #234（D-M3）：原因随失败链透出——lang_unknown（客户语言判不出，
+                # 转人工确认）/ 校验失败（含 target_lang_mismatch，翻译失败待确认）。
                 if _tx is None:
-                    raise RuntimeError(
-                        "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）")
+                    raise RuntimeError(_translate_hold_message(item))
                 if _tx:
                     if _tx != send_text:
                         self.total_translated += 1
@@ -1173,9 +1197,10 @@ class AutosendWorker:
                         "[AutosendWorker] 出站翻译回调异常 → HOLD 不发 conv=%s",
                         item.get("conversation_id", "?"), exc_info=True)
                     _tx = None
+                # M-1 B #234（D-M3）：HOLD 原因随失败链透出（lang_unknown 转人工 /
+                # target_lang_mismatch 等校验失败标「翻译失败待确认」），任何情况不发原文。
                 if _tx is None:
-                    raise RuntimeError(
-                        "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）")
+                    raise RuntimeError(_translate_hold_message(item))
                 if _tx:
                     if _tx != send_text:
                         self.total_translated += 1

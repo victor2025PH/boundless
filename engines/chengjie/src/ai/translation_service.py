@@ -376,6 +376,12 @@ class TranslationService:
         # 带配文的「[图片] 今天拍的」不命中（占位后还有正文），照常翻译。
         if re.fullmatch(r"\[[^\[\]]{1,24}\]", src_text.strip()):
             return TranslationResult(src_text, src_text, source, target, True, provider="identity")
+        # M-1 B #234（D-M3）：表情 / 单字符 / 纯标点数字**不进翻译器**。这类输入没有可译
+        # 正文，LLM 引擎只能原样回显或客套一句 → 被 _output_lang_sane 判成
+        # target_lang_mismatch（15:37–15:53 实录 30 余条 src_len=1 mismatch 刷屏），出站链
+        # 再把它当「翻译失败」处理。identity 早退与占位同口径：入站不渲染译文行、出站放行。
+        if _no_translatable_body(src_text):
+            return TranslationResult(src_text, src_text, source, target, True, provider="identity")
         if source == target:
             # #139-3 粤语旁路（2026-09-02）：detect 对粤语恒回 zh（实施89 契约），
             # zh→zh 的 identity 短路曾把粤语消息原样吐回（996 图：『我今朝早起身
@@ -738,6 +744,27 @@ _SCRIPT_RE: Tuple[Tuple[str, "re.Pattern"], ...] = (
 _VI_RE = re.compile(r"[\u0103\u0102\u0111\u0110\u01a1\u01a0\u01b0\u01af\u1ea0-\u1ef9]")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
+
+# 「有可译正文」的文字系统字符（拉丁含扩展 / 希腊 / 西里尔 / 希伯来 / 阿拉伯 / 天城 /
+# 泰 / 高棉 / 假名 / 汉字 / 谚文）。与 outbound_translate._TRANSLATABLE_RE 同口径。
+_SCRIPT_BODY_RE = re.compile(
+    r"[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF\u0590-\u05FF"
+    r"\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u1780-\u17FF\u3040-\u30FF"
+    r"\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]")
+
+
+def _no_translatable_body(text: str) -> bool:
+    """表情 / 纯标点数字 / 单字符 → True（不该进翻译器）。M-1 B #234。
+
+    单字符含单个汉字（「好」「嗯」）：孤字无上下文，引擎回显或客套的概率远高于给出
+    有用译文，且 15:37–15:53 实录 30 余条 ``src_len=1 … target_lang_mismatch`` 全是它。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return True
+    if not _SCRIPT_BODY_RE.search(t):
+        return True
+    return len(t) <= 1
 
 # 拉丁语种关键词（小写子串匹配）。es 置于首位以保持既有行为；
 # 仅收录足够独特、不会成为英文常用词子串的词，避免误判。

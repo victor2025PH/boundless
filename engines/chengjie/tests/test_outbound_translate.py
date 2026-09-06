@@ -139,13 +139,17 @@ async def test_skip_when_same_language():
 
 
 @pytest.mark.asyncio
-async def test_skip_when_language_unknown():
+async def test_hold_when_language_unknown():
+    """M-1 B #234（D-M3，2026-09-06）：目标语言全无（无手动/档案/消息/人设）→ **HOLD**
+    （None + item["_xlate_hold"].reason=lang_unknown），不再回落发原文——旧行为正是
+    15:44 Messenger「Hi」客户收到中文的那条路。"""
     ts = _FakeTS(_FakeRes("x"))
-    store = _FakeStore(language="")      # 会话语言未知 → 回落原文
+    store = _FakeStore(language="")      # 会话语言未知
+    item = {"conversation_id": "x1", "text": "你好"}
     out = await translate_outbound_text(
-        {"conversation_id": "x1", "text": "你好"},
-        translation_service=ts, store=store, source_lang="zh")
-    assert out == "你好"
+        item, translation_service=ts, store=store, source_lang="zh")
+    assert out is None
+    assert item["_xlate_hold"]["reason"] == "lang_unknown"
     assert ts.calls == []
 
 
@@ -306,14 +310,15 @@ async def test_explicit_auto_follows_customer_language():
 
 
 @pytest.mark.asyncio
-async def test_no_explicit_keeps_legacy_behavior():
-    """未设置（store 无该设置/旧 store 无该方法）→ 行为与旧版逐位一致。"""
+async def test_no_explicit_and_no_evidence_holds():
+    """未设置「发→X」且客户零证据 → D-M3 起 HOLD（lang_unknown），不再盲发原文。"""
     ts = _FakeTS(_FakeRes("x"))
     store = _FakeStoreExplicit(language="", outbound_lang="")
+    item = {"conversation_id": "x1", "text": "你好"}
     out = await translate_outbound_text(
-        {"conversation_id": "x1", "text": "你好"},
-        translation_service=ts, store=store, source_lang="zh")
-    assert out == "你好"          # 目标未知照旧盲发（观测计数，不误 HOLD）
+        item, translation_service=ts, store=store, source_lang="zh")
+    assert out is None
+    assert item["_xlate_hold"]["reason"] == "lang_unknown"
     assert ts.calls == []
 
 
