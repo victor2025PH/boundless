@@ -5967,18 +5967,26 @@ async function _loadBioStatus() {
             + '</span>';
         }
       }
+      // L-2 #206（2VKZKC）：索引齐全（emb ≥ chunks）→ 按钮灰掉并注明，不再可点；
+      // 结果提示改为按钮旁内联、不自动消失（旧 toast 被底部按钮栏遮住且 1-2s 就没了）。
+      var _idxFull = (meta.emb_chunks != null && meta.chunks != null
+                      && Number(meta.emb_chunks) >= Number(meta.chunks));
       el.innerHTML = '📚 ' + _escHtml(window.Tf('psn_bio_meta', {
           chunks: String(meta.chunks != null ? meta.chunks : '—'),
           chars: String(meta.chars != null ? meta.chars : '—'),
         }))
         + cov
         + ' <button type="button" class="btn btn-sm btn-xs" id="pe-bio-reembed-btn"'
-        + ' title="' + _escAttr(String(window.T('psn_bio_reembed_tip'))) + '"'
+        + (_idxFull ? ' disabled' : '')
+        + ' title="' + _escAttr(String(_idxFull ? window.T('psn_bio_reembed_full_tip') : window.T('psn_bio_reembed_tip'))) + '"'
         + ' onclick="_reembedBioDoc()">🧩 ' + _escHtml(window.T('psn_bio_reembed_btn')) + '</button>'
         + ' <button class="btn btn-sm btn-danger btn-xs" onclick="_deleteBioDoc()">' + _escHtml(window.T('psn_delete')) + '</button>'
         + '<span id="pe-bio-reembed-note" class="pf-hint"></span>';
       if (meta.preview) el.title = String(meta.preview);
-      _bioReembedSyncBusy();    // J1 线：行被重绘后恢复「补齐中」的禁用态
+      if (_idxFull && !(_bioReembedLastNote && _bioReembedLastNote.pid === pid)) {
+        _bioReembedLastNote = {pid: pid, msg: window.T('psn_bio_reembed_full_note'), kind: 'info'};
+      }
+      _bioReembedSyncBusy();    // J1 线：行被重绘后恢复「补齐中」的禁用态 + 内联结果
       _refreshBioProbe(meta);   // I4 线：已入库才露出检索自测
     } else {
       el.innerHTML = '<span style="color:var(--t3)">' + _escHtml(window.T('psn_bio_none')) + '</span>';
@@ -6017,17 +6025,26 @@ async function _deleteBioDocReq(pid, force) {
 var _bioReembedBusy = false;
 var _BIO_REEMBED_POLL_MS = 1500;
 var _BIO_REEMBED_MAX_POLLS = 320;   // ≈8min：真实文档数百个单元逐个打嵌入端点
+// L-2 #206：最近一次结果（按人设记），行重绘后仍内联显示、不自动消失；换人设即清
+var _bioReembedLastNote = null;     // {pid, msg, kind}
 
 function _bioReembedSyncBusy() {
   var btn = document.getElementById('pe-bio-reembed-btn');
-  if (btn) btn.disabled = !!_bioReembedBusy;
+  if (btn && _bioReembedBusy) btn.disabled = true;
   var note = document.getElementById('pe-bio-reembed-note');
-  if (note) note.textContent = _bioReembedBusy ? window.T('psn_bio_reembed_running') : '';
+  if (!note) return;
+  if (_bioReembedBusy) { note.textContent = window.T('psn_bio_reembed_running'); note.style.color = ''; return; }
+  var ln = _bioReembedLastNote;
+  if (ln && ln.pid === _editingProfileId && ln.msg) {
+    note.textContent = ln.msg;
+    note.style.color = ln.kind === 'err' ? 'var(--th-ink-red7,#b91c1c)'
+      : (ln.kind === 'ok' ? 'var(--th-ink-green7,#15803d)' : '');
+  } else { note.textContent = ''; note.style.color = ''; }
 }
 function _bioReembedEnd(msg, kind) {
   _bioReembedBusy = false;
+  if (msg) _bioReembedLastNote = {pid: _editingProfileId, msg: msg, kind: kind || 'info'};
   _bioReembedSyncBusy();
-  if (msg) _toast(msg, kind || 'info');
   _loadBioStatus();
 }
 async function _reembedBioDoc() {

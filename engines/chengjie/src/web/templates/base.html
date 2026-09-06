@@ -743,8 +743,13 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
         </div>
       </div>
       <div class="user-menu" id="user-menu">
-        <button class="user-btn" onclick="toggleUserMenu(event)">
-          <div class="user-avatar">{{ (username or 'A')[:1]|upper }}</div>
+        {#- L-2 #192 残（E42974「页头右上孤立 7 ▾」）：窄窗（≤860px）隐藏用户名后按钮只剩
+            头像首字符 + 箭头，用户名以数字开头时看起来像个计数。加悬浮提示与无障碍标签把它说清；
+            头像换图标待截图确认后再做。 -#}
+        <button class="user-btn" onclick="toggleUserMenu(event)"
+                title="{{ display_name or username or 'Admin' }} · {{ (i18n or {}).get('user_menu_t','账号菜单：修改密码 / 切换语言 / 退出') }}"
+                aria-label="{{ (i18n or {}).get('user_menu_t','账号菜单：修改密码 / 切换语言 / 退出') }}">
+          <div class="user-avatar" aria-hidden="true">{{ (username or 'A')[:1]|upper }}</div>
           <span class="uname">{{ username or 'Admin' }}</span>
           <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
