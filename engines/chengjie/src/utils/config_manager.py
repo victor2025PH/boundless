@@ -426,6 +426,10 @@ class ConfigManager:
             # 「仅显式换行才拆」，不等运营手动关（skuio 机实锤）。幂等、永不抛。
             self._migrate_bubbles_1075()
 
+            # D-M1（1.0.76，M-2 B）：登录默认半自动——存量桌面机全局 auto_ai 种子 →
+            # review + bootstrap 关；用户在 overlay 里显式写过的档位不动（三态）。
+            self._migrate_login_default_semi_1076()
+
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
             # 无需改随包 example（server 端口/令牌保持 canonical）。开发/server 态无 env→零影响。
@@ -767,6 +771,63 @@ class ConfigManager:
                 self.logger.warning("拆条收紧迁移写入 overlay 失败（忽略，本次按旧配置跑）")
         except Exception as exc:
             self.logger.warning("拆条收紧迁移异常（忽略）: %s", exc)
+
+    # D-M1 幂等标记键（写进 overlay 即视为「1.0.76 登录默认半自动已迁过」）
+    _LOGIN_SEMI_KEY = "login_default_semi"
+
+    def login_default_semi_patch(self) -> Optional[Dict[str, Any]]:
+        """D-M1（M-2 B，2026-09-06）存量热修的判定核心（纯读，供迁移与测试）。
+
+        三态：
+        - overlay 里 ``inbox.auto_draft.automation_mode`` **显式写过**（用户在设置页选过
+          档位，含选过 auto_ai）→ 用户已表态 → ``None`` 不动；
+        - 合并视图里已有标记 ``login_default_semi`` → 已迁过 → ``None``；
+        - 其余（全局档位来自 config.yaml 种子快照 ``auto_ai`` / 缺省）→ 返回要写进 overlay
+          的 patch：``automation_mode=review`` + ``bootstrap_automation_mode=false`` +
+          标记 ``login_default_semi=true``。此后用户改回 auto_ai 也被尊重（标记在场）。
+        """
+        try:
+            inbox = self.config.get("inbox")
+            ad = inbox.get("auto_draft") if isinstance(inbox, dict) else None
+            if isinstance(ad, dict) and self._LOGIN_SEMI_KEY in ad:
+                return None
+            path = self._overlay_path()
+            if path.exists():
+                with open(path, "r", encoding="utf-8") as f:
+                    overlay = yaml.safe_load(f) or {}
+                o_ad = (((overlay or {}).get("inbox") or {}).get("auto_draft") or {})
+                if isinstance(o_ad, dict) and "automation_mode" in o_ad:
+                    return None
+            return {"inbox": {"auto_draft": {
+                "automation_mode": "review",
+                "bootstrap_automation_mode": False,
+                self._LOGIN_SEMI_KEY: True}}}
+        except Exception:
+            return None
+
+    def _migrate_login_default_semi_1076(self) -> None:
+        """D-M1 存量热修：桌面态把全局默认 ``auto_ai`` 收成 ``review``（半自动只起草）+
+        关 ``bootstrap_automation_mode``；全自动改为按账号在账号菜单显式开启并确认。
+
+        只动桌面态（AITR_DESKTOP_MODE）——服务器实例的全局值随 config.yaml 本身改动，
+        其 overlay 不由本方法代写。写入面＝overlay（保注释 + 即时深合并进内存）；
+        会话行里已显式写过的 ``auto_ai`` **一律不动**（老会话不动，老板原话）。永不抛。
+        """
+        try:
+            if not self._env_truthy("AITR_DESKTOP_MODE"):
+                return
+            patch = self.login_default_semi_patch()
+            if not patch:
+                return
+            if self.save_overlay_patch(patch):
+                self.logger.warning(
+                    "全局自动化档位已按 1.0.76 默认收成半自动：inbox.auto_draft.automation_mode "
+                    "→ review，bootstrap_automation_mode → false（D-M1）。已在全自动的老会话不变；"
+                    "全自动请在收件箱账号菜单按账号开启「此账号全部会话 → 全自动」并确认")
+            else:
+                self.logger.warning("登录默认半自动迁移写入 overlay 失败（忽略，本次按旧配置跑）")
+        except Exception as exc:
+            self.logger.warning("登录默认半自动迁移异常（忽略）: %s", exc)
 
     def _ensure_deploy_profile(self) -> None:
         """部署能力预设档首启播种（WP-1 纯云起步档，2026-08）。

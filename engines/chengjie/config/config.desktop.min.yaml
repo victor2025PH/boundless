@@ -93,8 +93,10 @@ inbox:
   # 机器人）。这里给一个保守的拟人区间，让「下载即用」的默认体验就是像真人。
   # 设置页「回复节奏」滑杆改写的也是这个键（三条发送链单一节奏源），用户随时可覆盖。
   auto_draft:
-    automation_mode: auto_ai
-    bootstrap_automation_mode: true
+    # D-M1（1.0.76）：登录默认半自动——全局 review 只起草，全自动按账号在账号菜单显式开启并确认；
+    # 登录/重登后 10 分钟冷静期只起草（login_gate 缺省开）。老会话已写的 auto_ai 不动。
+    automation_mode: review
+    bootstrap_automation_mode: false
     # 识别失败降级诚实自动回（实施56 P1，2026-08-22 拍板「不要再有小问题掐断
     # 全自动」）：图片/语音没识别出来时不扣留回复，AI 自然承认没看清并温和追问
     # （绝不装懂）。服务器实例代码默认关（维持 08-17 无兜底纪律），客户包默认开。

@@ -294,6 +294,19 @@ def compute_mode_caps(
     except Exception:
         pass
 
+    # ── ⑧⑨⑩ 账号级通道门禁封顶（M-2，2026-09-06：D-M1 / #232）──────────────────
+    # ⑧ login_cooldown：登录/重登后 10 分钟只起草（until_ts 可倒计时）；
+    # ⑨ channel_degraded：同账号连续 3 次真实发送失败 → 只起草，需人确认解除；
+    # ⑩ channel_disconnected：边车没有该账号会话 / 已登出 / worker 放弃 → 只起草。
+    # 三层都封 review：草稿照拟（level=L1 reason=cooldown/…），AutosendWorker 不投递，
+    # 胶囊/会话头部显「半自动（待确认 N）」——「通道没准备好就开火」的放大器在此拆除。
+    # 判定单点在 account_channel_gate.gate_caps（worker 闸 / 账号栏快照同源）；fail-open。
+    try:
+        from src.inbox.account_channel_gate import gate_caps
+        caps.extend(gate_caps(plat, acct, config=config, now=now))
+    except Exception:
+        pass
+
     # ── ⑦ 全局真发暂停封顶（#12 2026-08-30，钧 0830 01:54 实锤）────────────────
     # 拟稿-投递链平台（非 telegram）的「全自动」在 l2_autosend worker/deliver
     # 任一关闭时实际只拟稿零投递——此前档位徽标仍亮全自动绿标＝对人撒谎

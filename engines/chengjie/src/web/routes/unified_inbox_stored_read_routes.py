@@ -583,6 +583,52 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 "action": action, "changed": bool(changed),
                 "gate": account_snapshot(platform, account_id, config=_cfg)}
 
+    @app.post("/api/unified-inbox/automation/account-bulk")
+    async def api_unified_inbox_automation_account_bulk(
+        request: Request, _=Depends(api_auth),
+    ):
+        """M-2 B（D-M1 ② / UE7VM3 ④）账号级批量切档：「此账号全部会话 → 手动/半自动/全自动」。
+
+        Body ``{platform, account_id, mode, confirm?: bool}``：
+        - ``confirm`` 缺省/False → **干跑**：返回 ``total / will_change / override_individual /
+          skipped_groups / already``，前端据此弹「将对 N 个会话开启，覆盖 M 个个别设置」；
+        - ``confirm=True`` → 落地：写会话行（source=account_bulk）+ 账号级决策（新会话跟随）
+          + 登录门禁确认（登录后默认半自动到此为止）；升 auto_ai 时群/频道跳过。
+        全自动只能经本端点按账号显式开启；逐会话下拉仍可单独调。
+        """
+        body = await request.json()
+        platform = str(body.get("platform") or "").lower()
+        account_id = str(body.get("account_id") or "default")
+        mode = str(body.get("mode") or "").lower()
+        confirm = bool(body.get("confirm"))
+        if not platform:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="platform"))
+        if mode not in AUTOMATION_MODES:
+            raise HTTPException(400, tr(request, "err.ws.unsupported_automation_mode", mode=mode))
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        from src.inbox.account_bulk_mode import (
+            account_mode_summary, apply_account_bulk, plan_account_bulk,
+        )
+        from src.inbox.account_channel_gate import account_snapshot
+        _cm = getattr(request.app.state, "config_manager", None)
+        _cfg = (getattr(_cm, "config", None) or {}) if _cm else {}
+        if not confirm:
+            plan = plan_account_bulk(store, platform, account_id, mode)
+            plan.pop("targets", None)
+            return {"ok": True, "dry_run": True, **plan,
+                    "gate": account_snapshot(platform, account_id, config=_cfg),
+                    "summary": account_mode_summary(store, platform, account_id)}
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        res = apply_account_bulk(store, platform, account_id, mode,
+                                 actor=operator, config=_cfg)
+        return {"ok": True, "dry_run": False, **res,
+                "summary": account_mode_summary(store, platform, account_id)}
+
     @app.post("/api/unified-inbox/automation/bulk-downgrade")
     async def api_unified_inbox_automation_bulk_downgrade(
         request: Request, _=Depends(api_auth),

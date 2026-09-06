@@ -130,12 +130,29 @@ def _account_mode_layer(
 
     新登录账号在运营确认「全自动/拟稿人审/关闭」前默认 review；确认后按所选。
     层级：会话显式 > 账号级 > 全局。功能关/异常 → None（完全旧行为）。
+
+    M-2 D-M1（2026-09-06）叠一层「登录后账号默认半自动」：账号最近一次真实登录 /
+    重登晚于用户上一次按账号显式选档 → 本层至少 review（onboarding 决策若更保守
+    如 manual 则保留）。不写会话行——会话显式 auto_ai 仍在上一层胜出（老会话不动）。
     """
+    mode: Optional[str] = None
     try:
         from src.inbox.account_mode_onboarding import account_mode_from_cid
-        return account_mode_from_cid(conversation_id, config)
+        mode = account_mode_from_cid(conversation_id, config)
     except Exception:
-        return None
+        mode = None
+    try:
+        parts = str(conversation_id or "").split(":", 2)
+        if len(parts) >= 3 and parts[1]:
+            from src.inbox.account_channel_gate import gate_cfg, login_default_mode
+            if gate_cfg(config)["enabled"]:
+                ld = login_default_mode(parts[0], parts[1])
+                if ld:
+                    if mode is None or mode == "auto_ai" or mode == "multi_choice":
+                        mode = ld
+    except Exception:
+        pass
+    return mode
 
 
 def bootstrap_enabled_from_config(config: Optional[Dict[str, Any]]) -> bool:

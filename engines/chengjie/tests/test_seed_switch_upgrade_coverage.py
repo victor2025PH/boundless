@@ -80,11 +80,8 @@ _EXEMPT: Dict[str, str] = {
     "inbox.l2_autosend.enabled":
         "代码默认已 True：bootstrap/web_app.py 装配 worker 处取 "
         "_as_cfg.get('enabled', True)，升级安装天然不缺",
-    "inbox.auto_draft.bootstrap_automation_mode":
-        "代码默认等效 True：automation_mode.bootstrap_enabled_from_config 缺省"
-        "＝「全局档位为 auto_ai 即开」，而 global_automation_mode_from_config "
-        "缺省恰为 auto_ai——升级安装不写该键也按同语义生效；种子显式写出只为"
-        "交付承诺文档化",
+    # inbox.auto_draft.bootstrap_automation_mode：1.0.76 D-M1（M-2 B）种子改 false
+    # （登录默认半自动，全自动按账号显式开），不再是 true 开关，条目按本文件规则移除。
     "inbox.l2_autosend.deliver":
         "**刻意不静默补齐**（与 A 类基线机制的关键区别）：把正在人审运行的存量"
         "部署无声翻成全自动不可接受。升级可达路径＝①收件箱主管首开的一次性提示"

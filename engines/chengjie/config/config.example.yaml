@@ -3275,9 +3275,20 @@ inbox:
                               #   上限 60。配套盲断言闸门（无描述图片轮的回复断言画面
                               #   内容→整稿换诚实追问）无开关常开。
                               #   客户桌面包种子/基线默认 true，服务器实例默认 false。
-    automation_mode: auto_ai  # review | auto_ai — 决定 L2/L3 分界
+    automation_mode: review   # review | auto_ai — 决定 L2/L3 分界
                               # review:   low→L1, medium→L3, high→L4（无 L2 自动发）
                               # auto_ai:  low→L2, medium→L3, high→L4（L2 由 AutosendWorker 自动发）
+                              # D-M1（1.0.76）：默认 review——全自动按账号在收件箱账号菜单
+                              #   显式开启并确认；会话行已显式写过的 auto_ai 不受影响。
+    bootstrap_automation_mode: false  # D-M1：新会话首条入站不再自动持久化全局档（跟随账号级决策）
+    # 账号级登录门禁（M-2，2026-09-06；判定 src/inbox/account_channel_gate.py）：
+    #   登录/重登 → cooldown_sec 内只起草不投递（草稿 L1 reason=cooldown，账号栏列积压）；
+    #   同账号连续 fail_streak_limit 次真实发送失败 → 自动降半自动 + 红标，需人确认恢复；
+    #   边车 send_backoff 期间自动投递不重试（手动独立放行）。缺省全开。
+    login_gate:
+      enabled: true
+      cooldown_sec: 600
+      fail_streak_limit: 3
     skip_platforms: []        # 跳过指定平台不生成草稿，如: [line, messenger]
     platform_modes: {}        # ⭐ 平台档位封顶（比 skip_platforms 更细的受控降级）：
                               #   某平台发送链路不稳/未接通时降档而非全关——如

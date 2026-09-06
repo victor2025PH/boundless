@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906d">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906e">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -3245,12 +3245,75 @@ function _renderAcctPicker(){
     rows+=`<div class="ac-pick-row ${accountFilter===aid?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${accountFilter===aid}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}')" onkeydown="_acPickKey(event,'${esc(aid)}')">
       <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
       <div class="apr-main"><span class="apr-name">${esc(nm)}${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}</span>
-      ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}</div>
+      ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}${_acPickModeCtl(platFilter,aid,a)}</div>
       ${_acUnreadBadge(a.unread,a.attn,platFilter,aid)}</div>`;
   });
   // P4: 底部「复制视角链接」——总览已是信息面，附带分享出口比另开菜单更贴
   rows+=_acPickFootHtml();
   _acPickMount(rows);
+}
+/* ===== M-2 B（D-M1 ② / UE7VM3 ④）账号菜单「此账号全部会话 → 手动 / 半自动 / 全自动」 =====
+   全自动只能在这里按账号显式开启：先干跑（POST account-bulk 不带 confirm）拿 N/M/群数，
+   弹确认「将对 N 个会话开启，覆盖 M 个个别设置」，再 confirm 落地。门禁提示同行显示
+   （冷静期剩余 / 通道异常降级 / 登录后待确认）。ghost（仅历史）账号不给控件。 */
+function _acPickModeCtl(pl,aid,a){
+  if(!a||!a.paired) return '';
+  const g=(a.gate&&typeof a.gate==='object')?a.gate:{};
+  let hint='';
+  if(g.degraded) hint=`<span class="apr-gate warn">${esc(window.T('inbox.gate.tag_degraded'))}</span>`;
+  else if(Number(g.cooldown_remaining_s||0)>0) hint=`<span class="apr-gate">${esc(window.Tf('inbox.gate.tag_cooldown',{m:Math.max(1,Math.ceil(Number(g.cooldown_remaining_s)/60))}))}</span>`;
+  else if(g.login_pending_confirm) hint=`<span class="apr-gate">${esc(window.T('inbox.gate.semi_pending'))}</span>`;
+  const b=(mode,key)=>`<button type="button" class="apr-mode-btn m-${mode}" onclick="_acctBulkMode(event,'${esc(pl)}','${esc(aid)}','${mode}',this)" title="${esc(window.Tf('inbox.acct.bulk_t',{mode:window.T(key)}))}">${esc(window.T(key))}</button>`;
+  return `<span class="apr-modes" onclick="event.stopPropagation()"><span class="apr-modes-lbl">${esc(window.T('inbox.acct.bulk_lbl'))}</span>${b('manual','inbox.acct.bulk_manual')}${b('review','inbox.acct.bulk_semi')}${b('auto_ai','inbox.acct.bulk_auto')}${hint}</span>`;
+}
+async function _acctBulkMode(ev,pl,aid,mode,btn){
+  if(ev){ try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){} }
+  const post=async (confirm)=>{
+    const r=await apiFetch('/api/unified-inbox/automation/account-bulk',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:pl,account_id:aid,mode:mode,confirm:!!confirm})},{timeoutMs:60000});
+    let d={}; try{ d=await r.json(); }catch(_){ d={}; }
+    if(!r.ok||d.ok===false) throw new Error((d&&(d.detail&&d.detail.message||d.detail))||'bulk failed');
+    return d;
+  };
+  if(btn) btn.disabled=true;
+  try{
+    const plan=await post(false);
+    const label=window.T(mode==='auto_ai'?'inbox.acct.bulk_auto':(mode==='manual'?'inbox.acct.bulk_manual':'inbox.acct.bulk_semi'));
+    let msg=window.Tf('inbox.acct.bulk_confirm',{mode:label,n:Number(plan.will_change||0),m:Number(plan.override_individual||0),total:Number(plan.total||0)});
+    if(mode==='auto_ai'&&Number(plan.skipped_groups||0)>0) msg+='\n'+window.Tf('inbox.acct.bulk_skip_groups',{k:Number(plan.skipped_groups||0)});
+    const g=plan.gate||{};
+    if(mode==='auto_ai'&&Number(g.cooldown_remaining_s||0)>0) msg+='\n'+window.Tf('inbox.acct.bulk_cooldown_note',{m:Math.max(1,Math.ceil(Number(g.cooldown_remaining_s)/60))});
+    if(mode==='auto_ai'&&g.degraded) msg+='\n'+window.T('inbox.acct.bulk_degraded_note');
+    if(Number(plan.will_change||0)===0&&!(mode==='auto_ai'&&g.login_pending_confirm)){
+      _toast(window.Tf('inbox.acct.bulk_nochange',{mode:label}),'#64748b');
+      return;
+    }
+    const yes=await _appConfirm(msg,{title:window.Tf('inbox.acct.bulk_title',{mode:label}),iconName:(mode==='auto_ai'?'bolt':'shield'),tone:(mode==='auto_ai'?'danger':'default'),okText:window.T('inbox.acct.bulk_ok')});
+    if(!yes) return;
+    const res=await post(true);
+    _toast(window.Tf('inbox.acct.bulk_done',{mode:label,n:Number(res.changed||0),c:Number(res.cancelled_l2||0)}),mode==='auto_ai'?'#2563eb':'#64748b');
+    try{ _uiBeacon('acct_bulk_'+mode); }catch(_){}
+    try{
+      (typeof allChats!=='undefined'?allChats:[]).forEach(function(c){
+        if(c&&(c.platform||'web')===pl&&String(c.account_id||'default')===String(aid)){
+          if(mode!=='auto_ai'||!isGroupConv(c)) c.automation_mode=mode;
+        }
+      });
+      if(selectedChat&&(selectedChat.platform||'web')===pl&&String(selectedChat.account_id||'default')===String(aid)){
+        const sel=document.getElementById('mode-select');
+        if(sel&&(mode!=='auto_ai'||!isGroupConv(selectedChat))){ sel.value=mode; _lastAutomationMode=mode; _syncAutoUi(); }
+        try{ _refreshConvStatus(selectedChat); }catch(_){}
+      }
+      if(typeof applyFilters==='function') applyFilters();
+    }catch(_){}
+    closeAcctPicker();
+    try{ await loadChats(); }catch(_){}
+    try{ if(typeof window.loadStandbyMode==='function') window.loadStandbyMode(); }catch(_){}
+  }catch(e){
+    _toast(window.T('inbox.acct.bulk_fail'),'#b91c1c');
+  }finally{
+    if(btn) btn.disabled=false;
+  }
 }
 /* dock 模式总览：全平台账号分组清单（分组头不占 .ac-pick-row 计数——「行数=总览计数+1」不变量沿用） */
 function _renderAcctPickerDock(){
@@ -3285,7 +3348,7 @@ function _renderAcctPickerDock(){
       rows+=`<div class="ac-pick-row ${sel?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${sel}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}','${esc(pl)}')" onkeydown="_acPickKey(event,'${esc(aid)}','${esc(pl)}')">
         <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
         <div class="apr-main"><span class="apr-name">${esc(nm)}${ghost?`<span class="ac-ghost-tag">${window.T('inbox.acct.ghost_tag')}</span>`:''}</span>
-        ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}</div>
+        ${subBits.length?`<span class="apr-sub">${subBits.join(' \u00b7 ')}</span>`:''}${_acPickModeCtl(pl,aid,a)}</div>
         ${_acUnreadBadge(a.unread,a.attn,pl,aid)}</div>`;
     });
   });

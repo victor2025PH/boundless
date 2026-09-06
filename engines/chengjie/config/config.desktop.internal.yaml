@@ -105,10 +105,12 @@ inbox:
     enabled: true
   auto_draft:
     enabled: true
-    # v1.004：对齐生产机 auto_ai（此前 review 人审档）——「与本机一致」口径 2026-08-04 拍板
-    automation_mode: auto_ai
-    # v1.005：首条入站自动持久化 auto_ai（与生产机一致，防 store 默认 review 口径分裂）
-    bootstrap_automation_mode: true
+    # v1.004 曾对齐生产机 auto_ai；1.0.76 D-M1（2026-09-06）改回 review：登录默认半自动只起草，
+    # 全自动按账号在收件箱账号菜单显式开启并确认；登录/重登后 10 分钟冷静期（login_gate）。
+    # 老会话已写的 auto_ai 不动。
+    automation_mode: review
+    # D-M1：首条入站不再自动持久化全局档（新会话跟随账号级决策，不钉死会话行）
+    bootstrap_automation_mode: false
     skip_group_chats: true
     # v1.005：群聊自动驾驶白名单平台（与生产一致；仅 telegram 群走群回逻辑）
     group_autopilot_platforms:
