@@ -540,6 +540,45 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             logger.debug("sprint recap attach skipped", exc_info=True)
         return view
 
+    def _attach_settlement(view, store, *, now=None):
+        """终态目标 → ``settlement``（M-7 C #236：到期那一刻落库的结算摘要）+
+        ``settled_recent``（done_at 在 7 天内：卡片显「已到期 · 查看结算」）。
+        非终态 / 无摘要零开销直通；best-effort 绝不抛。"""
+        try:
+            if not isinstance(view, dict):
+                return view
+            if str(view.get("status")) not in ("done", "failed", "expired"):
+                return view
+            import time as _t
+            from src.companion.goals.notify import (
+                SETTLEMENT_VISIBLE_SEC,
+                read_settlement,
+            )
+            n = float(now if now is not None else _t.time())
+            done_at = float(view.get("done_at") or 0)
+            view["settled_recent"] = bool(
+                done_at > 0 and (n - done_at) <= SETTLEMENT_VISIBLE_SEC)
+            s = read_settlement(store, str(view.get("goal_id") or ""))
+            if s is not None:
+                view["settlement"] = s
+        except Exception:
+            logger.debug("settlement attach skipped", exc_info=True)
+        return view
+
+    def _recent_terminal_for_conv(store, conv: str, *, exclude_gid: str = ""):
+        """同会话最近一条终态目标（可排除当前目标）；无 → None。"""
+        try:
+            for g in store.list_goals(limit=30) or []:
+                if str(g.get("conversation_id") or "") != conv:
+                    continue
+                if exclude_gid and str(g.get("goal_id") or "") == exclude_gid:
+                    continue
+                if str(g.get("status") or "") in ("done", "failed", "expired"):
+                    return g
+        except Exception:
+            return None
+        return None
+
     @app.get("/api/goals/for-conversation")
     async def goals_for_conversation(
         request: Request, conversation_id: str = "", _auth=Depends(auth_dep)
@@ -560,8 +599,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             last = recent[0] if recent else None
             out = {
                 "goal": None,
-                "last": _attach_sprint_recap(_attach_notified(
-                    svc.goal_view(last, lang=_lang(request)), store), store)
+                "last": _attach_settlement(_attach_sprint_recap(_attach_notified(
+                    svc.goal_view(last, lang=_lang(request)), store), store), store)
                 if last else None,
             }
             # P1（2026-08-29）买家信号：无目标的会话近窗在问价/要购买方式
@@ -591,9 +630,29 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # settle-on-read 可能本轮刚转终态（限时目标到期）——复盘字段同样要附
         view = _attach_tier(_attach_beats(_attach_sprint_live(
             _attach_sprint_recap(view, store), store), store), request)
+        # M-7 C（#236）：新目标刚建、上一个同会话目标 7 天内刚到期 → 带上它的结算
+        # （卡片一行「上一个目标 X 拍 / 结果，已结算」——用户 02:2x 重建后卡片回
+        # 「起步」，以为引擎重置了）
+        prev_settled = None
+        try:
+            prev = _recent_terminal_for_conv(
+                store, conv, exclude_gid=str(view.get("goal_id") or ""))
+            if prev is not None:
+                pv = _attach_settlement(
+                    svc.goal_view(prev, lang=lang), store)
+                if pv.get("settled_recent"):
+                    prev_settled = {
+                        "goal_id": str(prev.get("goal_id") or ""),
+                        "title": str(prev.get("title") or pv.get("template_name") or ""),
+                        "status": str(prev.get("status") or ""),
+                        "done_at": float(prev.get("done_at") or 0),
+                        "settlement": pv.get("settlement"),
+                    }
+        except Exception:
+            logger.debug("prev_settled attach skipped", exc_info=True)
         # #166：卡片带引擎真相（按本会话平台判白名单）——「自动推进」档在引擎
         # 不能真出手时卡上要说清，不能只在建目标表单里说一次
-        return {"goal": view, "last": None,
+        return {"goal": view, "last": None, "prev_settled": prev_settled,
                 "engine": svc.sprint_engine_status(
                     _cfg_root(), platform=str(view.get("platform") or platform))}
 
@@ -1368,10 +1427,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if goal is None:
             raise HTTPException(404, tr(request, "err.goals.not_found"))
         lang = _lang(request)
-        view = _attach_tier(
+        view = _attach_settlement(_attach_tier(
             (_refreshed_view(svc, store, goal, lang=lang)
              if str(goal.get("status")) == "active"
-             else svc.goal_view(goal, lang=lang)), request)
+             else svc.goal_view(goal, lang=lang)), request), store)
         actions = store.list_actions(goal_id, limit=30)
         # i18n P0：拍史逐行附英文展示态（同池反查；匹配不到=""=前端回落中文）。
         # 「What AI did」时间线读的就是这批行。
@@ -1834,6 +1893,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except Exception:
             pass
         goal = store.get_goal(goal_id)
+        # M-7 C（#236）：人工标终态也留一份结算摘要（卡片「查看结算」同源），
+        # 但不推铃铛——人自己点的，不是引擎静默到期
+        if new_status == "done" and goal is not None:
+            try:
+                from src.companion.goals.notify import settle_and_notify
+                settle_and_notify(store, goal, cfg_root=_cfg_root(),
+                                  inbox_store=_inbox_store(), notify=False)
+            except Exception:
+                logger.debug("manual settle summary skipped", exc_info=True)
         # P5 留存环：手动标成交（线下收款等）与订单回流同权——成交即续期
         # （manual=True：只有带 catalog 能力的模板才有「续费」语义）
         if new_status == "done" and goal is not None:

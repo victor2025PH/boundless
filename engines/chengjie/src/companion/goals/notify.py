@@ -38,12 +38,22 @@ logger = logging.getLogger("src.companion.goals.notify")
 
 NOTIFIED_EVENT_KIND = "completed_notified"
 MISS_EVENT_KIND = "miss_notified"
+# M-7 C（#236）：到期 / 失守 / 完成当刻的结算摘要（事件 detail=紧凑 JSON）+ 工作台事件
+SETTLEMENT_EVENT_KIND = "settlement"
+SETTLED_ALERT = "goal_settled_alert"
+SETTLEMENT_VISIBLE_SEC = 7 * 86400.0
 
 __all__ = [
     "AUTO_CREATED_BY",
     "MISS_EVENT_KIND",
     "NOTIFIED_EVENT_KIND",
+    "SETTLED_ALERT",
+    "SETTLEMENT_EVENT_KIND",
+    "SETTLEMENT_VISIBLE_SEC",
     "build_completion_payload",
+    "build_settlement",
+    "read_settlement",
+    "settle_and_notify",
     "build_slots_brief",
     "resolve_agent_push_target",
     "resolve_extra_push_targets",
@@ -702,6 +712,190 @@ def scan_miss_digest(
     except Exception:
         logger.debug("scan_miss_digest failed", exc_info=True)
     return out
+
+
+# ── M-7 C（#236）：到期结算不静默 ────────────────────────────────────────────
+# skuio 机 09-07：BABY BEAR 原目标（09-03 设 3 天 + 延 1 天）静默到期——自然档不进
+# scan_sprint_miss（只收 today/session），进 scan_miss_digest 又卡「3 条或 24h」门槛，
+# 且 goal_miss_alert 只到 webhook、工作台通知中心不认；用户重建后卡片 last=None，
+# 上一目标的结局从卡上消失。这里：目标在 settle-on-read / 定时结算翻成终态的**那一
+# 刻**生成结算摘要 → 事件 ``settlement``（幂等）+ ``goal_settled_alert``（SSE + 铃铛，
+# 不经聚合门槛）。日报/webhook 的 goal_miss_alert 链路不动。
+
+def _reason_code(
+    *, status: str, sent: int, injected: int, blocked_by: Dict[str, int],
+    engine_blockers: List[str], replies: int,
+) -> str:
+    """未执行 / 结局的主因（一个码，前端按 i18n 渲染成一句话）。优先级：
+    引擎层没生效 > 被安全/节奏闸拦住 > 只顺势带了方向没主动出手 > 从没排上 >
+    出手了客户没回 > 出手了客户有回但没达成。done 单列。"""
+    if status == "done":
+        return "done"
+    if engine_blockers:
+        return "engine:" + engine_blockers[0]
+    if blocked_by:
+        top = max(blocked_by.items(), key=lambda kv: kv[1])[0]
+        return "blocked:" + str(top)
+    if sent <= 0 and injected > 0:
+        return "steered_only"
+    if sent <= 0:
+        return "never_due"
+    if replies <= 0:
+        return "no_reply"
+    return "no_signal"
+
+
+def build_settlement(
+    store: GoalStore,
+    goal: Dict[str, Any],
+    *,
+    cfg_root: Any = None,
+    inbox_store: Any = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """结算摘要（纯读，不写库）：计划 X 拍 / 实际 Y 拍（其中投递成功 Z）/ 顺势带方向
+    N 次 / 被拦 M 次及原因 / 客户回应 R 条 / 主因码。绝不抛。"""
+    n = float(now if now is not None else time.time())
+    gid = str((goal or {}).get("goal_id") or "")
+    out: Dict[str, Any] = {
+        "v": 1, "status": str((goal or {}).get("status") or ""),
+        "planned": 0, "sent": 0, "injected": 0, "blocked": 0,
+        "blocked_by": {}, "replies": 0, "reason": "", "at": round(n, 1),
+    }
+    if not gid:
+        return out
+    try:
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        from src.companion.goals.service import (
+            build_beats_trace,
+            sprint_engine_status,
+        )
+        from src.companion.goals.sprint_ticker import parse_sprint_cfg
+        start = float(goal.get("start_ts") or goal.get("created_at") or 0)
+        deadline = float(goal.get("deadline_ts") or 0)
+        done_at = float(goal.get("done_at") or 0) or n
+        pace = resolve_pace(goal)
+        if is_sprint(pace):
+            try:
+                pts = parse_sprint_cfg(resolve_goals_cfg(cfg_root)).get(
+                    "phase_points") or (0.0, 0.45, 0.75)
+            except Exception:
+                pts = (0.0, 0.45, 0.75)
+            out["planned"] = len(pts)
+        else:
+            span = (deadline - start) if (deadline > start > 0) else 0.0
+            out["planned"] = max(1, int(round(span / 86400.0))) if span > 0 else 0
+        tr = build_beats_trace(store, goal, now=n)
+        s = tr.get("summary") or {}
+        out["sent"] = int(s.get("sent") or 0)
+        out["injected"] = int(s.get("injected") or 0)
+        out["blocked"] = int(s.get("blocked") or 0)
+        bb = dict(s.get("blocked_by") or {})
+        out["blocked_by"] = dict(sorted(bb.items(), key=lambda kv: -kv[1])[:3])
+        replies = 0
+        count_fn = getattr(inbox_store, "count_inbound_between", None) \
+            if inbox_store is not None else None
+        if callable(count_fn):
+            try:
+                replies = int(count_fn(str(goal.get("conversation_id") or ""),
+                                       start, done_at) or 0)
+            except Exception:
+                replies = 0
+        out["replies"] = replies
+        eng_block: List[str] = []
+        try:
+            if cfg_root is not None and str(goal.get("autonomy") or "") == "auto":
+                es = sprint_engine_status(
+                    cfg_root, platform=str(goal.get("platform") or "")) or {}
+                eng_block = list(
+                    (es.get("sprint_blockers") if is_sprint(pace)
+                     else es.get("natural_auto_blockers")) or [])
+        except Exception:
+            eng_block = []
+        out["reason"] = _reason_code(
+            status=out["status"], sent=out["sent"], injected=out["injected"],
+            blocked_by=out["blocked_by"], engine_blockers=eng_block,
+            replies=replies)
+    except Exception:
+        logger.debug("build_settlement failed", exc_info=True)
+    return out
+
+
+def read_settlement(store: GoalStore, goal_id: str) -> Optional[Dict[str, Any]]:
+    """已落库的结算摘要（``settlement`` 事件 detail JSON）；无 → None。绝不抛。"""
+    try:
+        ev = store.last_event(str(goal_id or ""), SETTLEMENT_EVENT_KIND)
+        if not ev:
+            return None
+        d = json.loads(str(ev.get("detail") or "{}"))
+        if not isinstance(d, dict):
+            return None
+        d.setdefault("at", float(ev.get("ts") or 0))
+        return d
+    except Exception:
+        return None
+
+
+def settle_and_notify(
+    store: GoalStore,
+    goal: Dict[str, Any],
+    *,
+    cfg_root: Any = None,
+    inbox_store: Any = None,
+    publish: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+    now: Optional[float] = None,
+    notify: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """终态那一刻：写 ``settlement`` 事件（每目标一次，幂等）+ 发 ``goal_settled_alert``
+    （expired / failed 才推——done 已有 goal_completed_alert；``notify=False``＝人工
+    标终态只记摘要不推铃铛）。**不经** notify 的 3 条 / 24h 聚合门槛，也不受
+    ``notify.enabled`` 闸（这不是外推日报，是工作台自己的账）。返回摘要；已结算过 /
+    非终态 / 异常 → None。绝不抛。"""
+    try:
+        gid = str((goal or {}).get("goal_id") or "")
+        status = str((goal or {}).get("status") or "")
+        if not gid or status not in ("expired", "failed", "done"):
+            return None
+        if store.last_event(gid, SETTLEMENT_EVENT_KIND) is not None:
+            return None
+        n = float(now if now is not None else time.time())
+        summary = build_settlement(
+            store, goal, cfg_root=cfg_root, inbox_store=inbox_store, now=n)
+        conv = str(goal.get("conversation_id") or "")
+        store.add_event(
+            gid, SETTLEMENT_EVENT_KIND,
+            json.dumps(summary, ensure_ascii=False, separators=(",", ":"))[:400],
+            conversation_id=conv, now=n)
+        logger.info(
+            "[goal-settle] goal=%s conv=%s status=%s planned=%s sent=%s injected=%s "
+            "blocked=%s replies=%s reason=%s title=%r",
+            gid, conv, status, summary.get("planned"), summary.get("sent"),
+            summary.get("injected"), summary.get("blocked"), summary.get("replies"),
+            summary.get("reason"), str(goal.get("title") or "")[:30])
+        if notify and status in ("expired", "failed"):
+            names = _display_names(inbox_store, [conv]) if conv else {}
+            tid = str(goal.get("template") or "")
+            template = get_template(tid) or {}
+            payload = {
+                "goal_id": gid,
+                "conversation_id": conv,
+                "contact_name": names.get(conv, ""),
+                "title": str(goal.get("title") or ""),
+                "template_name": str(template.get("name_zh") or tid),
+                "status": status,
+                "platform": str(goal.get("platform") or ""),
+                "account_id": str(goal.get("account_id") or ""),
+                "settlement": summary,
+                "rate_key": f"goal_settled:{gid}",
+            }
+            if publish is None:
+                from src.integrations.shared.event_bus import get_event_bus
+                publish = get_event_bus().publish
+            publish(SETTLED_ALERT, payload)
+        return summary
+    except Exception:
+        logger.debug("settle_and_notify failed", exc_info=True)
+        return None
 
 
 # ── 常备扫描循环（P2 2026-08-09 重构）────────────────────────────────────────

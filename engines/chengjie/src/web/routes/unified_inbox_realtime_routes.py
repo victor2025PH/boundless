@@ -80,6 +80,10 @@ _SSE_EVENT_TYPES = frozenset({
     "ops_report",
     # P0 2026-08-09：营销目标达成（goals.notify 扫描器发布）——工作台 toast + 铃铛
     "goal_completed_alert",
+    # M-7 C 2026-09-07（#236）：目标到期/失守当刻的结算摘要（goals.notify.settle_and_notify
+    # 发布，每目标一次、不经 3 条/24h 日报聚合）——此前只有 webhook 的 goal_miss_alert，
+    # 工作台永远看不到「你的目标到期了、X 拍 / Y 完成、没出手是因为…」
+    "goal_settled_alert",
     # P3 2026-08-17：peer_bot_guard 判定告警（服务端每会话每日至多一次）。
     # 前端只消费 reason=daily_budget → 触顶中央弹窗（workspace_base __wsBudgetPop），
     # 修「预算熔断发生时坐席不开着那个会话就零感知」的盲区；其余 reason 前端暂忽略。
@@ -111,6 +115,7 @@ _NOTIF_EVENT_TYPES = frozenset({
     "orchestrator_worker_alert",
     "ops_report",
     "goal_completed_alert",
+    "goal_settled_alert",
     "cta_clicked",
 })
 
@@ -161,6 +166,7 @@ _NOTIF_TYPE_I18N: Dict[str, tuple] = {
     "orchestrator_worker_alert": ("base.notif.type_orch_worker", "base.notif.orch_worker_sub"),
     "ops_report": ("base.notif.type_ops_report", "base.notif.ops_report_sub"),
     "goal_completed_alert": ("base.notif.type_goal_done", "base.notif.goal_done_sub"),
+    "goal_settled_alert": ("base.notif.type_goal_settled", "base.notif.goal_settled_sub"),
     "cta_clicked": ("base.notif.type_cta_click", "base.notif.cta_sub"),
 }
 

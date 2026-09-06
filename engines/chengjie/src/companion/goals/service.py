@@ -470,6 +470,17 @@ def refresh_goal(
                     and res["status"] in ("done", "failed", "expired")):
                 stats.record_terminal(res["status"])
             goal = store.get_goal(gid) or goal
+            # M-7 C（#236）：到期/失守/完成的**那一刻**结算——摘要落事件 + 工作台
+            # 事件（不经日报聚合门槛）。best-effort，绝不拖垮结算主路。
+            if (res["status"] != old_status
+                    and res["status"] in ("done", "failed", "expired")):
+                try:
+                    from src.companion.goals.notify import settle_and_notify
+                    settle_and_notify(
+                        store, goal, cfg_root=cfg_root,
+                        inbox_store=inbox_store, now=n)
+                except Exception:
+                    logger.debug("settle_and_notify skipped", exc_info=True)
             # P7 回流再转化：挽回目标在此转 done（=对方回话）→ 顺势起转化目标。
             # 门控在 maybe_spawn_reconvert 内（created_by/开关），非挽回目标零开销。
             if res["status"] == "done" and old_status == "active":

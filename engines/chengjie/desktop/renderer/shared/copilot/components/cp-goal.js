@@ -820,7 +820,17 @@
                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .gl-beat-other { flex:0 0 auto; color:var(--cp-text-tiny,#94a3b8); font-style:italic; }
       .gl-beat-jump { flex:0 0 auto; background:transparent; border:none; padding:0; cursor:pointer;
-                      font-size:inherit; color:var(--cp-accent,#4f46e5); text-decoration:underline; }`;
+                      font-size:inherit; color:var(--cp-accent,#4f46e5); text-decoration:underline; }
+      /* M-7 C（#236）：到期结算摘要 + 「上一个目标已结算」行 */
+      .gl-settle { margin:var(--cp-gap-xs,4px) 0; }
+      .gl-settle-btn { background:transparent; border:none; cursor:pointer; padding:2px 0;
+                       font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
+      .gl-settle-btn:hover { color:var(--cp-accent,#4f46e5); }
+      .gl-settle-line { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#374151); margin:2px 0; }
+      .gl-settle-why { font-size:var(--cp-fs-tiny,11px); color:var(--cp-warn,#b45309); margin:0 0 4px;
+                       padding-left:8px; border-left:2px solid var(--cp-warn,#b45309); }
+      .gl-prev-settled { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b);
+                         margin:2px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }`;
     }
 
     /* ── 数据 ── */
@@ -861,6 +871,7 @@
         this._progRows = null;
         this._progLoading = false;
         this._progErr = false;
+        this._settleOpen = "";
         // 草稿：内存态随会话复位；sessionStorage 里按 cid 各存各的，切回来还能续写
         this._formDraft = null;
         this._formBaseline = null;
@@ -1003,8 +1014,10 @@
 
     _lastLine(last) {
       if (!last) return "";
+      // M-7 C（#236）：上一个目标 7 天内到期 → 「已到期 · 查看结算」跟在结果后面
       return `<div class="gl-last"><span>${this.esc(this.t("inbox.goal.last_label"))}</span>` +
-        `<span>${this.esc(last.title || last.template_name || "")}</span>${this._statusBadge(last.status)}</div>`;
+        `<span>${this.esc(last.title || last.template_name || "")}</span>${this._statusBadge(last.status)}</div>` +
+        this._settlementHtml(last);
     }
 
     _emptyIllust() {
@@ -1224,7 +1237,10 @@
       const retiredNote = g.template_retired
         ? `<div class="gl-engine-note">\u26A0 ${esc(this.t("inbox.goal.template_retired"))}</div>`
         : "";
-      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote + retiredNote +
+      // M-7 C（#236）：新目标刚建、上一个同会话目标 7 天内刚到期 → 一行「上一个目标
+      // 已结算：出手 X 拍，原因」（用户重建后卡片回「起步」，以为引擎被重置）
+      const prevSettled = this._prevSettledHtml();
+      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote + retiredNote + prevSettled +
         (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
       if (isSprint && g.status === "active") this._armSprintTick();
 
@@ -1902,10 +1918,12 @@
         `\u25BE ${esc(this.t("inbox.goal.progress.hide"))}</button>${body}</div>`;
     }
 
-    async _loadProgress(force) {
+    async _loadProgress(force, gidOverride) {
+      // gidOverride（M-7 C）：终态卡/空态「查看结算」里看上一个目标的每一拍
       const g = this._d && this._d.goal;
-      if (!g || !g.goal_id) return;
-      if (!force && this._progGoalId === g.goal_id && Array.isArray(this._progRows)) {
+      const gid = String(gidOverride || (g && g.goal_id) || "");
+      if (!gid) return;
+      if (!force && this._progGoalId === gid && Array.isArray(this._progRows)) {
         this._rerender();
         return;
       }
@@ -1914,11 +1932,11 @@
       this._rerender();
       let res = null;
       try {
-        res = await this._api("/api/goals/" + encodeURIComponent(g.goal_id) + "/beats");
+        res = await this._api("/api/goals/" + encodeURIComponent(gid) + "/beats");
       } catch (_e) { res = null; }
       this._progLoading = false;
       if (res && res.ok && res.data && Array.isArray(res.data.beats)) {
-        this._progGoalId = g.goal_id;
+        this._progGoalId = gid;
         this._progRows = res.data.beats;
       } else {
         this._progErr = true;
@@ -2119,12 +2137,67 @@
       // 疑似达成补录（P2/P3 2026-08-30）：到期前检出过联系方式信号但没人点确认
       // → expired 不是终审——「补录成交」走 expired→done 迁移（与迟到订单复活同哲学）
       const revive = this._reviveBarHtml(g);
+      // M-7 C（#236）：到期/失守/达成的结算摘要（7 天内可见）——不再静默消失
+      const settle = this._settlementHtml(g);
       return `<div class="${done ? "gl-term-done" : "gl-term"}">` +
         `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
-        `${this._statusBadge(g.status)}</div>` + facts + rawResult + revive + hint +
+        `${this._statusBadge(g.status)}</div>` + facts + rawResult + settle + revive + hint +
         `<div class="acts gl-acts">${chain}` +
         `<button class="primary" data-act="open_form">${esc(this.t("inbox.goal.again_btn"))}</button></div>` +
         `</div>` + this._notifyRowHtml();
+    }
+
+    /* ── M-7 C（#236）：到期结算——终态卡 / 空态「上一个目标」/ 新目标卡「上一个已结算」共用 ── */
+
+    _settleReasonText(s) {
+      const r = String((s && s.reason) || "");
+      if (!r) return this.t("inbox.goal.settle.reason.unknown");
+      if (r.indexOf("blocked:") === 0) {
+        return this.t("inbox.goal.settle.reason.blocked", { why: this._blockedLabel(r.slice(8)) });
+      }
+      if (r.indexOf("engine:") === 0) {
+        return this.t("inbox.goal.settle.reason.engine", { why: this._engineWhy([r.slice(7)]) });
+      }
+      const v = this.t("inbox.goal.settle.reason." + r);
+      return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : this.t("inbox.goal.settle.reason.unknown");
+    }
+
+    _settlementHtml(g) {
+      const esc = (s) => this.esc(s);
+      const s = g && g.settlement && typeof g.settlement === "object" ? g.settlement : null;
+      if (!s || !g.settled_recent) return "";
+      const n = (k) => (s[k] != null ? parseInt(s[k], 10) || 0 : 0);
+      const done = String(g.status) === "done";
+      const openKey = String(g.goal_id || "");
+      const open = this._settleOpen === openKey;
+      const btn = `<button type="button" class="gl-settle-btn" data-act="settle_toggle" data-gid="${esc(openKey)}">` +
+        `${open ? "\u25BE " + esc(this.t("inbox.goal.settle.hide"))
+                : "\u25B8 " + esc(this.t(done ? "inbox.goal.settle.view_done" : "inbox.goal.settle.view"))}</button>`;
+      if (!open) return `<div class="gl-settle">${btn}</div>`;
+      const line = this.t("inbox.goal.settle.line", {
+        planned: n("planned"), sent: n("sent"), injected: n("injected"),
+        blocked: n("blocked"), replies: n("replies"),
+      });
+      return `<div class="gl-settle open">${btn}` +
+        `<div class="gl-settle-line">${esc(line)}</div>` +
+        `<div class="gl-settle-why">${esc(this._settleReasonText(s))}</div>` +
+        `<button type="button" class="gl-beats-btn" data-act="prog_toggle_gid" data-gid="${esc(openKey)}">` +
+        `${esc(this.t("inbox.goal.progress.show"))}</button>` +
+        (this._progGoalId === openKey && this._progOpen ? this._renderProgress() : "") +
+        `</div>`;
+    }
+
+    _prevSettledHtml() {
+      const p = this._d && this._d.prev_settled;
+      if (!p || !p.settlement) return "";
+      const esc = (s) => this.esc(s);
+      const s = p.settlement;
+      return `<div class="gl-prev-settled" title="${esc(this.t("inbox.goal.settle.line", {
+        planned: s.planned || 0, sent: s.sent || 0, injected: s.injected || 0,
+        blocked: s.blocked || 0, replies: s.replies || 0 }))}">` +
+        `\u2713 ${esc(this.t("inbox.goal.settle.prev", {
+          title: String(p.title || "").slice(0, 24), sent: s.sent || 0,
+          why: this._settleReasonText(s) }))}</div>`;
     }
 
     _reviveBarHtml(g) {
@@ -3859,8 +3932,24 @@
         }
         return;
       }
-      if (act === "prog_retry") { await this._loadProgress(true); return; }
+      if (act === "prog_retry") { await this._loadProgress(true, this._progGoalId || ""); return; }
       if (act === "beat_jump") { this._jumpBeat(el); return; }
+      if (act === "settle_toggle") {
+        // M-7 C：结算摘要展开/收起（按目标 id 记，切目标自然收起）
+        const gid = String(el.getAttribute("data-gid") || "");
+        this._settleOpen = (this._settleOpen === gid) ? "" : gid;
+        if (this._settleOpen) _beacon("goal_settlement_open");
+        this._rerender();
+        return;
+      }
+      if (act === "prog_toggle_gid") {
+        const gid = String(el.getAttribute("data-gid") || "");
+        if (this._progOpen && this._progGoalId === gid) { this._progOpen = false; this._rerender(); return; }
+        this._progOpen = true;
+        _beacon("goal_progress_open");
+        await this._loadProgress(false, gid);
+        return;
+      }
       if (act === "create") { await this._create(el); return; }
       if (act === "pause" || act === "resume") { await this._status(act); return; }
       if (act === "cancel") {

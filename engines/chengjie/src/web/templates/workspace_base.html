@@ -3620,7 +3620,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
       // 消息默认不进铃铛（隐私 + 噪音；会话列表未读才是它的家），开关随
       // GET /api/workspace/notifications 的 customer_messages 回传（服务端队列与
       // 前端 live 写入同一开关两面生效）；系统/需人工类事件不受影响。
-      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert','cta_clicked'].indexOf(msg.type)>=0){
+      if(msg && ['inbox_message','draft_sla_breach','draft_backlog_summary','draft_reassigned','conversation_assigned','anomaly_alert','sla_alert','escalation','queue_alert','stage_advance','stage_advance_pending','stage_downgrade','stage_reunion','stage_sync','workflow_step','workflow_execution_completed','workflow_execution_failed','workflow_execution_cancelled','goal_completed_alert','goal_settled_alert','cta_clicked'].indexOf(msg.type)>=0){
         if(msg.type!=='inbox_message' || window.__wsNotifCenterCustomerMsgs===true){
           if(window.__wsNotif) window.__wsNotif.add(msg);
         }
@@ -3741,6 +3741,20 @@ window._pillChainFail=window._pillChainFail||function(fn){
             if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_gd.conversation_id); return; }
             try{ sessionStorage.setItem('ws_focus_conv',_gd.conversation_id); }catch(_){}
             if(window.__wsGoHome&&window.__wsGoHome({cid:_gd.conversation_id})) return;
+            if(location.pathname!=='/workspace') wsNav('/workspace');
+          };
+        }
+      }
+      // M-7 C 2026-09-07（#236）：目标到期/失守当刻结算 — toast（点击跳该会话看结算）
+      if(msg && msg.type==='goal_settled_alert' && msg.data && !_sseSettling()){
+        var _gs=msg.data, _gsS=_gs.settlement||{};
+        var _gsEl=CRMW.toast(window.Tf('base.sse.goal_settled',{name:(_gs.contact_name||_gs.chat_key||'?'),title:(_gs.title||_gs.template_name||''),planned:(_gsS.planned!=null?_gsS.planned:'?'),sent:(_gsS.sent!=null?_gsS.sent:'?')}),'#64748b','clock');
+        if(_gsEl && _gs.conversation_id){
+          _gsEl.style.cursor='pointer';
+          _gsEl.onclick=function(){
+            if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_gs.conversation_id); return; }
+            try{ sessionStorage.setItem('ws_focus_conv',_gs.conversation_id); }catch(_){}
+            if(window.__wsGoHome&&window.__wsGoHome({cid:_gs.conversation_id})) return;
             if(location.pathname!=='/workspace') wsNav('/workspace');
           };
         }
@@ -3885,6 +3899,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
     escalation:     { iconName:'bell', bg:'#ede9fe', label:window.T('base.notif.type_escalation'), accent:'#7c3aed' },
     conv_note:      { iconName:'users', bg:'#ede9fe', label:window.T('base.notif.type_conv_note'), accent:'#7c3aed' },
     goal_completed_alert:{ iconName:'star', bg:'#fef9c3', label:window.T('base.notif.type_goal_done'), accent:'#ca8a04' },
+    goal_settled_alert:{ iconName:'clock', bg:'#f1f5f9', label:window.T('base.notif.type_goal_settled'), accent:'#64748b' },
     cta_clicked:    { iconName:'star', bg:'#ffedd5', label:window.T('base.notif.type_cta_click'), accent:'#b45309' },
     bot_peer_alert: { iconName:'pause', bg:'#fee2e2', label:window.T('base.notif.type_budget_hit'), accent:'#dc2626' },
     sys_status:     { iconName:'gear', bg:'#e0e7ff', label:window.T('ntf.type_sys'), accent:'#6366f1' },
@@ -3968,6 +3983,12 @@ window._pillChainFail=window._pillChainFail||function(fn){
       sub = window.Tf('base.notif.mention_sub',{name:(d.agent_name||d.agent_id||'?'),text:(d.body||'').slice(0,40)});
     } else if(n.type==='goal_completed_alert'){
       sub = window.Tf('base.notif.goal_done_sub',{name:(d.contact_name||d.chat_key||'?'),title:(d.title||d.template_name||'').slice(0,40)});
+    } else if(n.type==='goal_settled_alert'){
+      var _gsd=d.settlement||{}, _gsr=String(_gsd.reason||''), _gsw='';
+      if(_gsr.indexOf('blocked:')===0){ _gsw=window.Tf('inbox.goal.settle.reason.blocked',{why:_gsr.slice(8)}); }
+      else if(_gsr.indexOf('engine:')===0){ _gsw=window.Tf('inbox.goal.settle.reason.engine',{why:_gsr.slice(7)}); }
+      else { _gsw=window.T('inbox.goal.settle.reason.'+(_gsr||'unknown')); }
+      sub = window.Tf('base.notif.goal_settled_sub',{name:(d.contact_name||d.chat_key||'?'),title:(d.title||d.template_name||'').slice(0,40),planned:(_gsd.planned!=null?_gsd.planned:'?'),sent:(_gsd.sent!=null?_gsd.sent:'?'),why:_gsw});
     } else if(n.type==='cta_clicked'){
       sub = window.Tf('base.notif.cta_sub',{target:(d.target_name||d.target_id||'?')});
     } else if(n.type==='bot_peer_alert'){
@@ -4246,7 +4267,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
         var n = JSON.parse(jsonStr);
         var d = n.data || {};
         // 新消息/升级/SLA/转派/@提及 → 定位会话：已在收件箱直接选中，否则跳回工作台
-        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='bot_peer_alert'||n.type==='cta_clicked') && d.conversation_id){
+        if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='goal_settled_alert'||n.type==='bot_peer_alert'||n.type==='cta_clicked') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
           if(!(window.__wsGoHome&&window.__wsGoHome({cid:d.conversation_id}))) wsNav('/workspace');
