@@ -292,6 +292,15 @@ class ConfigManager:
         try:
             seed = self._seed_extras_dir()
             if not seed:
+                # L-5 C（2026-09-06）：种子缺席可见。两台内测机走应用内更新拿的是 clean 包
+                # （无 resources/seed-data），整条链静默 no-op → 「出厂开」决策没落地却
+                # 无迹可寻。桌面态每次启动一行 WARNING（服务器实例无 AITR_DESKTOP_MODE
+                # 不打）；诊断包 app.log 一眼分清装的是哪种包。默认值本体已由
+                # feature_registry A 类基线补齐，本行只是可见性，不改行为。
+                if self._env_truthy("AITR_DESKTOP_MODE"):
+                    self.logger.warning(
+                        "随包种子缺席（clean 包，无 resources/seed-data）：内测 overlay 种子"
+                        "不会应用；出厂默认由产品基线（feature_registry A 类）补齐")
                 return
             import shutil
             config_dir = target.parent
