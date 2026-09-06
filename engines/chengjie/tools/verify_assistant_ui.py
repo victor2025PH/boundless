@@ -473,16 +473,34 @@ def _run_admin_chat(page, ck: Checker) -> None:
     ck.check("A3c 首问 history 为空数组",
              ev("() => Array.isArray(window.__api.queries[0].history) && "
                 "window.__api.queries[0].history.length === 0"))
-    # A3d 复制按钮（与 🔊 并排）+ 点击出 ✓ 反馈
+    # V2（2026-09-05 视觉体系 v2）：思考占位「就地落定」——回答落地后不得残留
+    # pending/live 运行态类，也不得残留 asb-th-* 占位 id（v1 是删节点重建，
+    # v2 是同一节点换形态；两者都会让本断言绿，但残留任一运行态类即红）。
+    ck.check("V2a 回答落地后无 pending/live 残留、占位 id 已摘",
+             ev("() => !document.querySelector('.asb-msg.pending,.asb-msg.live') && "
+                "document.querySelectorAll('[id^=\"asb-th-\"]').length === 0"))
+    ck.check("V2b 标题栏状态短句在场且非空",
+             ev("() => { var s = document.querySelector('.asb-hd-st'); "
+                "return !!s && s.textContent.trim().length > 0; }"))
+    ck.check("V2c 球体立体光环（前后两半 × 两条）在场",
+             ev("() => document.querySelectorAll('.asb-ball .asb-ring').length === 4 && "
+                "!!document.querySelector('.asb-ball .asb-orb')"))
+    ck.check("V2d 图标已线性化：反馈行/复制/播报键内是 SVG 而非 emoji 文本",
+             ev("() => { var fb = document.querySelector('.asb-fb'); if (!fb) return false; "
+                "var bs = fb.querySelectorAll('button'); if (!bs.length) return false; "
+                "for (var i = 0; i < bs.length; i++) { if (!bs[i].querySelector('svg.asb-i')) "
+                "return false; } return true; }"))
+    # A3d 复制按钮（与播报键并排）+ 点击出 ✓ 反馈
+    # v2（2026-09-05）起图标是线性 SVG 不再是 emoji 文本：成功态以 data-ok 属性
+    # + .ok 类表达（1.2s 后自撤），断言改读属性而不是 textContent。
     ck.check("A3d 复制按钮在场",
              ev("() => !!document.querySelector('[data-act=\"copy\"]')"))
     page.click('[data-act="copy"]')
     page.wait_for_timeout(150)
     ck.check("A3e 复制点击出 ✓ 反馈",
-             ev("() => document.querySelector('[data-act=\"copy\"]')"
-                ".textContent.indexOf('✓') > -1 || "
-                "document.querySelector('[data-act=\"copy\"]')"
-                ".textContent.indexOf('📋') > -1"))
+             ev("() => { var b = document.querySelector('[data-act=\"copy\"]'); "
+                "return !!b && (b.getAttribute('data-ok') === '1' || "
+                "b.classList.contains('ok') || !!b.querySelector('svg')); }"))
     # A3f 输入框 autosize：多行内容 → 高度增长
     ck.check("A3f 输入框随内容长高",
              ev("() => { var i = document.querySelector('.asb-in'); "

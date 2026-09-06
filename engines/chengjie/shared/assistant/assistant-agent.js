@@ -20,11 +20,11 @@
   'use strict';
   if (window.XZAgent) { return; }
 
-  var VER = '20260831c';
+  var VER = '20260905b';
 
   var I18N = {
     zh: {
-      row_btn: '🤖 替我做 · 一句话交给小智',
+      row_btn: '替我做 · 一句话交给小智',
       row_hint: '规划后逐步执行，改设置前必先确认',
       mode_t: '一句话交给小智',
       mode_d: '在下面说一件要我做的事，我会先出计划再逐步执行。',
@@ -34,7 +34,7 @@
          代替设计——点这一行就能看到状态，不该让用户去别处找。 */
       pair_card_t: '用手机指挥',
       pair_card_d: '扫码一次，之后躺着用语音派活',
-      start_btn: '⚡ 说出你要我做的事',
+      start_btn: '说出你要我做的事',
       hist_all: '全部 →',
       /* 空态即引导（P1-3）：新用户在这里最需要「能让我做什么」 */
       ex_t: '想让我做什么？点一个试试：',
@@ -51,11 +51,11 @@
       plan_empty2: '想知道我能做什么？点下面任意一件试试：',
       sa_online: '已连接 · 电脑在线',
       sa_off: '连接中断 · 看看电脑开着没',
-      hist_btn: '📜 做过什么',
+      hist_btn: '做过什么',
       hist_title: '小智做过什么',
       hist_empty: '还没有操作记录',
       op_apply: '改了',
-      op_undo: '↩ 撤销了',
+      op_undo: '撤销了',
       ask_ph: '回答小智的问题…',
       ask_send: '发送',
       say_fb: '按下面步骤执行：',
@@ -78,10 +78,10 @@
       pc_saw_tree: '在「{w}」里看到 {n} 个可操作的地方',
       pc_saw_shot: '截了张图存证（只本地留存、没外传）',
       pc_saw_fail: '这台电脑没看成',
-      cf_apply: '✅ 确认应用',
+      cf_apply: '确认应用',
       cf_skip: '跳过这步',
       cf_hint: '改动可撤销；不确认不会写入',
-      undo: '↩ 撤销',
+      undo: '撤销',
       undone: '已撤销',
       hot_worker: '已热更生效',
       hot_restart: '写入成功（重启窗后全量生效）',
@@ -92,11 +92,11 @@
       diag_line: '结论：',
       diag_warn: '，需关注 ',
       diag_warn2: ' 项',
-      stop: '⏹ 停止',
+      stop: '停止',
       stopped: '已停止，剩余步骤未执行',
       done_line: '全部完成',
       done_part: '执行结束（部分步骤未成功）',
-      replay: '🔁 再看一遍',
+      replay: '再看一遍',
       resume: '继续上次任务…',
       net_err: '网络异常，请重试',
       mic_title: '语音说目标（点击开始，再点结束）',
@@ -104,14 +104,14 @@
       mic_busy: '转写中…',
       mic_fail: '语音转写失败，请改用文字',
       mic_denied: '麦克风不可用（桌面版可用）',
-      tts_on: '🔊 播报：开',
-      tts_off: '🔇 播报：关',
+      tts_on: '播报：开',
+      tts_off: '播报：关',
       say_confirm: '这一步需要你确认',
       nav_on_pc: '该页请在电脑上看（手机端已跳过）',
-      pair_btn: '📱 手机操控',
+      pair_btn: '手机操控',
       pair_title: '手机扫码操控',
       pair_hint: '同 WiFi 下用手机相机扫码即用；二维码 2 分钟内有效、单次核销',
-      pair_regen: '↻ 重新生成',
+      pair_regen: '重新生成',
       pair_sessions: '已连接的手机',
       pair_none: '暂无',
       pair_kick: '踢下线',
@@ -119,10 +119,10 @@
       pair_url: '或手机浏览器打开：',
       pair_lan_down: '局域网入口未就绪：手机现在打不开这个地址。请点「重新生成」；仍不行就把电脑与手机连同一 WiFi（不要用流量）。',
       pair_lan_bind: '本机后端仅监听本机回环（旧版绑定方式）：升级智聊到最新版后局域网入口会自动放开，届时再扫码。',
-      pair_fw_btn: '🛡️ 手机打不开？一键放行防火墙',
+      pair_fw_btn: '手机打不开？一键放行防火墙',
       pair_fw_hint: '同一 WiFi 下手机仍打不开时，多半是 Windows 防火墙拦了入站——点这里放行（会弹一次系统授权）。',
       pair_fw_busy: '正在放行防火墙…（请在系统弹窗里点「是」）',
-      pair_fw_ok: '✅ 防火墙已放行，手机重扫二维码试试',
+      pair_fw_ok: '防火墙已放行，手机重扫二维码试试',
       pair_fw_cancelled: '已取消（系统授权未通过）',
       pair_fw_fail: '放行失败，请以管理员手动放行 backend.exe 的入站，或联系支持',
       pc_title: '电脑操控',
@@ -136,14 +136,14 @@
       pc_look: '看看这台',
       pc_kick: '踢下线',
       pc_restore: '恢复',
-      pc_lv: '💻 电脑·只读',
-      pc_fail_hint: '想让我看电脑？点标题栏的 💻 先开启/配置',
+      pc_lv: '电脑·只读',
+      pc_fail_hint: '想让我看电脑？点标题栏的「电脑」图标先开启/配置',
       pc_look_goal: '看看{m}现在开着什么',
       pc_trust_grant: '授信免确认',
       pc_trusted: '信任中',
       pc_trust_left: '剩{n}分',
       pc_untrust: '取消信任',
-      fl_start: '✅ 开始',
+      fl_start: '开始',
       fl_no: '取消',
       fl_step_confirm: '确认要做的事',
       fl_step_preflight: '连通预检',
@@ -158,18 +158,18 @@
       fl_fail: '登录失败',
       fl_timeout: '等待超时，已取消本次登录',
       fl_next_t: '下一步：',
-      fl_next_persona: '🎭 去绑人设',
-      fl_next_reply: '⚙️ 设回复模式',
+      fl_next_persona: '去绑人设',
+      fl_next_reply: '设回复模式',
     },
     en: {
-      row_btn: '🤖 Do it for me',
+      row_btn: 'Do it for me',
       row_hint: 'Plans first; settings need your confirm',
       mode_t: 'Tell me in one sentence',
       mode_d: 'Say what you need below — I draft a plan, then run it step by step.',
       recent_t: 'Recently done',
       pair_card_t: 'Drive it from your phone',
       pair_card_d: 'Scan once, then dictate tasks from anywhere',
-      start_btn: '⚡ Tell me what to do',
+      start_btn: 'Tell me what to do',
       hist_all: 'All →',
       ex_t: 'Not sure? Tap one to try:',
       p_title: 'Do it for me',
@@ -182,11 +182,11 @@
       plan_empty2: 'Want to see what I can do? Tap one:',
       sa_online: 'Connected · PC online',
       sa_off: 'Disconnected · is the PC on?',
-      hist_btn: '📜 History',
+      hist_btn: 'History',
       hist_title: 'What the assistant did',
       hist_empty: 'No operations yet',
       op_apply: 'changed',
-      op_undo: '↩ undid',
+      op_undo: 'undid',
       ask_ph: 'Answer the question…',
       ask_send: 'Send',
       say_fb: 'Executing these steps:',
@@ -206,10 +206,10 @@
       pc_saw_tree: 'Found {n} controls in "{w}"',
       pc_saw_shot: 'Screenshot saved (kept locally, not sent)',
       pc_saw_fail: "Couldn't inspect that PC",
-      cf_apply: '✅ Apply',
+      cf_apply: 'Apply',
       cf_skip: 'Skip',
       cf_hint: 'Reversible; nothing is written until you confirm',
-      undo: '↩ Undo',
+      undo: 'Undo',
       undone: 'Undone',
       hot_worker: 'Hot-applied',
       hot_restart: 'Written (fully effective after restart window)',
@@ -221,11 +221,11 @@
       diag_line: 'Verdict: ',
       diag_warn: ', attention items: ',
       diag_warn2: '',
-      stop: '⏹ Stop',
+      stop: 'Stop',
       stopped: 'Stopped; remaining steps not executed',
       done_line: 'All done',
       done_part: 'Finished (some steps failed)',
-      replay: '🔁 Replay',
+      replay: 'Replay',
       resume: 'Resuming previous task…',
       net_err: 'Network error, please retry',
       mic_title: 'Speak the goal (click to start/stop)',
@@ -233,14 +233,14 @@
       mic_busy: 'Transcribing…',
       mic_fail: 'Transcription failed, please type',
       mic_denied: 'Microphone unavailable (works in desktop app)',
-      tts_on: '🔊 Voice: on',
-      tts_off: '🔇 Voice: off',
+      tts_on: 'Voice: on',
+      tts_off: 'Voice: off',
       say_confirm: 'This step needs your confirmation',
       nav_on_pc: 'View that page on the PC (skipped on phone)',
-      pair_btn: '📱 Phone control',
+      pair_btn: 'Phone control',
       pair_title: 'Scan to control from phone',
       pair_hint: 'Scan with the phone camera on the same WiFi; QR valid 2 min, single use',
-      pair_regen: '↻ Regenerate',
+      pair_regen: 'Regenerate',
       pair_sessions: 'Connected phones',
       pair_none: 'None',
       pair_kick: 'Kick',
@@ -248,10 +248,10 @@
       pair_url: 'Or open in the phone browser: ',
       pair_lan_down: 'LAN entrance is down — the phone cannot open this address. Tap Regenerate; keep phone and PC on the same WiFi (not cellular).',
       pair_lan_bind: 'The backend only listens on loopback (legacy binding): upgrade ChatX to the latest version and the LAN entrance opens automatically.',
-      pair_fw_btn: '🛡️ Phone can\u2019t open it? Allow through firewall',
+      pair_fw_btn: 'Phone can\u2019t open it? Allow through firewall',
       pair_fw_hint: 'If the phone still cannot open the address on the same WiFi, Windows Firewall is likely blocking inbound — click to allow (one system prompt).',
       pair_fw_busy: 'Allowing through firewall… (click "Yes" in the system prompt)',
-      pair_fw_ok: '✅ Firewall allowed — rescan the QR on your phone',
+      pair_fw_ok: 'Firewall allowed — rescan the QR on your phone',
       pair_fw_cancelled: 'Cancelled (system authorization declined)',
       pair_fw_fail: 'Failed — allow inbound for backend.exe manually as admin, or contact support',
       pc_title: 'PC control',
@@ -265,14 +265,14 @@
       pc_look: 'Look at this PC',
       pc_kick: 'Kick',
       pc_restore: 'Restore',
-      pc_lv: '💻 PC · read-only',
-      pc_fail_hint: 'Want me to look at your PC? Tap 💻 in the title bar to enable/set up',
+      pc_lv: 'PC · read-only',
+      pc_fail_hint: 'Want me to look at your PC? Tap the PC icon in the title bar to enable/set up',
       pc_look_goal: 'show me what is open on {m}',
       pc_trust_grant: 'Trust (no-confirm)',
       pc_trusted: 'Trusted',
       pc_trust_left: '{n}min left',
       pc_untrust: 'Revoke trust',
-      fl_start: '✅ Start',
+      fl_start: 'Start',
       fl_no: 'Cancel',
       fl_step_confirm: 'Confirm the goal',
       fl_step_preflight: 'Preflight',
@@ -287,8 +287,8 @@
       fl_fail: 'Login failed',
       fl_timeout: 'Timed out, login canceled',
       fl_next_t: 'Next: ',
-      fl_next_persona: '🎭 Bind a persona',
-      fl_next_reply: '⚙️ Reply settings',
+      fl_next_persona: 'Bind a persona',
+      fl_next_reply: 'Reply settings',
     },
   };
 
@@ -327,6 +327,53 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
                "'": '&#39;' }[c];
     });
+  }
+  /* ── 单色线性图标子集（v2 2026-09-05，与 assistant-ball.js 同规格：24 网格、
+     1.8 描边、currentColor）——替掉 🤖⚡📜📱💻🛡✅↩⏹🔁🔊🔇🎤🎭⚙ 等 emoji。
+     步骤状态字形 ○➤✓✗▷⏸ 刻意保留为文本：球按 .ic 的 ✓✗▷ 数进度（门禁钉住）。 */
+  var ICONS = {
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    bolt: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02' +
+      'A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02' +
+      'A1 1 0 0 0 11 14z"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>' +
+      '<path d="M12 7v5l4 2"/>',
+    phone: '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
+    monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/>' +
+      '<path d="M12 17v4"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6' +
+      'a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5' +
+      'a1 1 0 0 1 1 1z"/>',
+    undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1' +
+      '-5.5 5.5H11"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/>' +
+      '<path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+    speaker: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>' +
+      '<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+    mute: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>',
+    mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>' +
+      '<path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>' +
+      '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>' +
+      '<path d="M8 16H3v5"/>',
+    user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+    sliders: '<path d="M21 4h-3"/><path d="M11 4H3"/><path d="M21 12h-9"/><path d="M5 12H3"/>' +
+      '<path d="M21 20h-5"/><path d="M9 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/>' +
+      '<path d="M16 18v4"/>',
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 ' +
+      '1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    spark: '<path fill="currentColor" stroke="none" d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6' +
+      'l-1.7-4.6L6 9.3l4.3-1.7L12 3z"/><path fill="currentColor" stroke="none" opacity=".85" ' +
+      'd="M18.5 14l.9 2.3 2.1.8-2.1.8-.9 2.3-.9-2.3-2.1-.8 2.1-.8.9-2.3z"/>',
+  };
+  function ic(name, cls) {
+    return '<svg class="asb-i' + (cls ? ' ' + cls : '') +
+      '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"' +
+      ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (ICONS[name] || '') + '</svg>';
   }
   function beacon(action) {
     try {
@@ -368,88 +415,138 @@
 /* P0-3 2026-08-27（与 assistant-teach.js 同批同理）：虚线→实线+柔和底
    （「没做完」观感），hint 独占整行不再截断。两文件规格必须保持一致，
    否则同一面板里两行入口长得不一样。 */
-'.xza-panel{position:fixed;z-index:10006;width:320px;max-width:calc(100vw - 20px);' +
-'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.26);padding:.7rem .8rem;' +
-'right:14px;bottom:80px;font-size:.8rem;animation:xzaUp .18s ease}' +
-'@keyframes xzaUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}' +
-'.xza-p-t{font-weight:700;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem}' +
+/* 图标度量与球同一份（手机 standalone 页无球，本模块自带；重复定义无害） */
+'.asb-i{width:1em;height:1em;flex-shrink:0;display:inline-block;vertical-align:-.16em}' +
+'button>.asb-i+span{margin-left:.3em}' +
+/* v2（2026-09-05）：输入面板 / 任务卡 / 配对弹层统一玻璃壳（--xz-glass + backdrop
+   模糊 + 顶部高光 + 分层阴影）、16px 圆角；字号地板 ≥ .75rem；主按钮蓝→紫渐变；
+   流星彗头/拖尾的 CSS 回落色改光谱令牌（运行时仍取样球面，回落只在取样失败时）。 */
+'.xza-panel{position:fixed;z-index:10006;width:330px;max-width:calc(100vw - 20px);' +
+'background:var(--xz-glass,var(--xz-bg,#fff));color:var(--xz-txt,#111);' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:16px;box-shadow:var(--xz-sh-key,0 12px 40px rgba(0,0,0,.26)),' +
+'var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08)),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3);' +
+'padding:.75rem .85rem;right:14px;bottom:80px;font-size:.82rem;animation:xzaUp .2s ease}' +
+'@keyframes xzaUp{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}' +
+'.xza-p-t{font-weight:700;font-size:.9rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.45rem}' +
+'.xza-p-t>.asb-i{color:var(--xz-accent,#4f6ef7);font-size:1.1rem}' +
 '.xza-p-t .x{margin-left:auto;border:none;background:none;cursor:pointer;' +
-'color:var(--xz-muted,#888);font-size:.9rem;padding:.1rem .3rem}' +
-'.xza-panel textarea{width:100%;box-sizing:border-box;resize:none;min-height:54px;' +
-'border:1px solid var(--xz-bd,#ddd);border-radius:9px;background:var(--xz-input,#f6f7f9);' +
-'color:var(--xz-txt,#111);font-family:inherit;font-size:.8rem;padding:.45rem .55rem;outline:none}' +
-'.xza-panel textarea:focus{border-color:var(--xz-accent,#4f6ef7)}' +
-'.xza-p-row{display:flex;gap:.4rem;margin-top:.5rem;align-items:center}' +
-'.xza-p-row .na{font-size:.68rem;color:#d97706}' +
-'.xza-run{border:none;border-radius:9px;background:var(--xz-accent,#4f6ef7);color:#fff;' +
-'cursor:pointer;font-family:inherit;font-size:.78rem;font-weight:600;padding:.4rem .9rem}' +
-'.xza-run:disabled{opacity:.5;cursor:default}' +
-'.xza-mic{border:1px solid var(--xz-bd,#ddd);border-radius:9px;background:var(--xz-input,#f6f7f9);' +
-'cursor:pointer;font-size:.9rem;padding:.34rem .5rem;font-family:inherit}' +
-'.xza-mic.rec{background:#ef4444;border-color:#ef4444;animation:xzaRec 1.2s ease-in-out infinite}' +
+'color:var(--xz-muted,#888);font-size:1rem;width:30px;height:30px;padding:0;border-radius:50%;' +
+'display:inline-flex;align-items:center;justify-content:center;transition:background .15s ease}' +
+'.xza-p-t .x+.x{margin-left:0}' +
+'.xza-p-t .x:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.xza-panel textarea{width:100%;box-sizing:border-box;resize:none;min-height:58px;' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);border-radius:12px;' +
+'background:var(--xz-input,#f6f7f9);color:var(--xz-txt,#111);font-family:inherit;' +
+'font-size:.86rem;line-height:1.5;padding:.55rem .7rem;outline:none;transition:box-shadow .2s ease}' +
+'.xza-panel textarea:focus{border-color:var(--xz-accent,#4f6ef7);' +
+'box-shadow:0 0 0 3px color-mix(in srgb,var(--xz-accent,#4f6ef7) 18%,transparent)}' +
+'.xza-p-row{display:flex;gap:.45rem;margin-top:.55rem;align-items:center}' +
+'.xza-p-row .na{font-size:.75rem;color:#b45309}' +
+'.xza-run{border:none;border-radius:10px;background:var(--xz-accent,#4f6ef7);' +
+'background-image:linear-gradient(145deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));color:#fff;' +
+'cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600;padding:.48rem 1rem;' +
+'display:inline-flex;align-items:center;gap:.35em;' +
+'box-shadow:0 6px 14px -8px var(--xz-tint,rgba(79,110,247,.5));transition:filter .15s ease}' +
+'.xza-run:hover{filter:brightness(1.06)}' +
+'.xza-run:disabled{opacity:.5;cursor:default;filter:none}' +
+'.xza-mic{position:relative;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:50%;width:36px;height:36px;padding:0;background:var(--xz-input,#f6f7f9);' +
+'color:var(--xz-txt,#333);cursor:pointer;font-size:1rem;font-family:inherit;' +
+'display:inline-flex;align-items:center;justify-content:center}' +
+'.xza-mic.rec{color:#ef4444;border-color:#ef4444;animation:xzaRec 1.2s ease-in-out infinite}' +
 '@keyframes xzaRec{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4)}' +
 '50%{box-shadow:0 0 0 7px rgba(239,68,68,0)}}' +
 '.xza-snd{border:none;background:none;cursor:pointer;color:var(--xz-muted,#888);' +
-'font-size:.68rem;font-family:inherit;padding:.1rem .35rem;border-radius:6px}' +
-'.xza-snd:hover{background:var(--xz-input,#f3f4f6)}' +
-'.xza-card{position:fixed;z-index:10004;width:330px;max-width:calc(100vw - 20px);' +
-'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.28);right:14px;bottom:80px;' +
-'font-size:.78rem;display:flex;flex-direction:column;max-height:70vh;animation:xzaUp .18s ease}' +
-'.xza-c-hd{display:flex;align-items:center;gap:.4rem;padding:.55rem .7rem;' +
-'border-bottom:1px solid var(--xz-bd,#ddd);font-weight:700}' +
+'font-size:.75rem;font-family:inherit;padding:.2rem .5rem;border-radius:999px;' +
+'display:inline-flex;align-items:center;gap:.3em}' +
+'.xza-snd:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.xza-card{position:fixed;z-index:10004;width:340px;max-width:calc(100vw - 20px);' +
+'background:var(--xz-glass,var(--xz-bg,#fff));color:var(--xz-txt,#111);' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:16px;box-shadow:var(--xz-sh-key,0 12px 40px rgba(0,0,0,.28)),' +
+'var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08)),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3);' +
+'right:14px;bottom:80px;font-size:.8rem;display:flex;flex-direction:column;max-height:70vh;' +
+'animation:xzaUp .2s ease}' +
+'.xza-c-hd{display:flex;align-items:center;gap:.45rem;padding:.6rem .75rem;' +
+'border-bottom:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent);font-weight:700;' +
+'font-size:.88rem}' +
+'.xza-c-hd>.asb-i{color:var(--xz-accent,#4f6ef7);font-size:1.1rem}' +
 '.xza-c-hd .stop{margin-left:auto;border:1px solid #ef4444;background:rgba(239,68,68,.08);' +
-'color:#ef4444;border-radius:8px;cursor:pointer;font-family:inherit;font-size:.7rem;' +
-'font-weight:700;padding:.2rem .55rem}' +
+'color:#ef4444;border-radius:999px;cursor:pointer;font-family:inherit;font-size:.75rem;' +
+'font-weight:700;padding:.25rem .65rem;display:inline-flex;align-items:center;gap:.3em}' +
 '.xza-c-hd .x{border:none;background:none;cursor:pointer;color:var(--xz-muted,#888);' +
-'font-size:.9rem;padding:.1rem .3rem}' +
-'.xza-c-bd{padding:.5rem .7rem;overflow-y:auto;display:flex;flex-direction:column;gap:.4rem}' +
-'.xza-say{color:var(--xz-muted,#667);font-size:.74rem}' +
-'.xza-step{border:1px solid var(--xz-bd,#e5e7eb);border-radius:10px;padding:.4rem .55rem}' +
-'.xza-st-hd{display:flex;align-items:center;gap:.4rem}' +
-'.xza-st-hd .ic{flex-shrink:0;width:1.1em;text-align:center}' +
+'font-size:1rem;width:30px;height:30px;padding:0;border-radius:50%;display:inline-flex;' +
+'align-items:center;justify-content:center}' +
+'.xza-c-hd .x:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.xza-c-bd{padding:.55rem .75rem;overflow-y:auto;display:flex;flex-direction:column;gap:.45rem}' +
+'.xza-say{color:var(--xz-muted,#667);font-size:.78rem;line-height:1.5}' +
+'.xza-step{border:1px solid color-mix(in srgb,var(--xz-bd,#e5e7eb) 85%,transparent);' +
+'border-radius:12px;padding:.48rem .6rem;background:var(--xz-bg,#fff);' +
+'box-shadow:inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));transition:border-color .2s ease}' +
+'.xza-st-hd{display:flex;align-items:center;gap:.45rem}' +
+/* 步骤状态字形保留文本（球数 ✓✗▷ 算进度），只按状态上色 */
+'.xza-st-hd .ic{flex-shrink:0;width:1.2em;text-align:center;font-weight:700;' +
+'color:var(--xz-muted,#999)}' +
+'.xza-step[data-st="ok"] .ic{color:#059669}' +
+'.xza-step[data-st="fail"] .ic{color:#dc2626}' +
+'.xza-step[data-st="cur"] .ic,.xza-step[data-st="wait"] .ic{color:var(--xz-accent,#4f6ef7)}' +
 '.xza-st-hd .lb{flex:1;min-width:0;font-weight:600;overflow:hidden;' +
 'text-overflow:ellipsis;white-space:nowrap}' +
-'.xza-st-hd .lv{flex-shrink:0;font-size:.62rem;border-radius:999px;padding:.06rem .4rem;' +
+'.xza-st-hd .lv{flex-shrink:0;font-size:.72rem;border-radius:999px;padding:.08rem .5rem;' +
 'background:var(--xz-input,#eef);color:var(--xz-muted,#667)}' +
-'.xza-st-note{font-size:.7rem;color:var(--xz-muted,#667);margin-top:.2rem;word-break:break-word}' +
-'.xza-st.cur{border-color:var(--xz-accent,#4f6ef7);box-shadow:0 0 0 2px rgba(79,110,247,.15)}' +
+'.xza-st-note{font-size:.76rem;color:var(--xz-muted,#667);margin-top:.25rem;word-break:break-word;' +
+'line-height:1.5}' +
+'.xza-st.cur{border-color:var(--xz-accent,#4f6ef7);' +
+'box-shadow:0 0 0 2px color-mix(in srgb,var(--xz-accent,#4f6ef7) 15%,transparent)}' +
 '.xza-st.fail{border-color:rgba(239,68,68,.5)}' +
-'.xza-cf{margin-top:.35rem;border-top:1px dashed var(--xz-bd,#ddd);padding-top:.35rem}' +
-'.xza-cf-d{font-size:.72rem;margin:.12rem 0;display:flex;gap:.35rem;align-items:baseline}' +
-'.xza-cf-d code{background:rgba(127,127,127,.14);border-radius:4px;padding:.02rem .3rem;' +
-'font-size:.68rem}' +
+'.xza-cf{margin-top:.4rem;border-top:1px dashed color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'padding-top:.4rem}' +
+'.xza-cf-d{font-size:.78rem;margin:.15rem 0;display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap}' +
+'.xza-cf-d code{background:rgba(127,127,127,.14);border-radius:5px;padding:.04rem .35rem;' +
+'font-size:.75rem}' +
 '.xza-cf-d .arr{color:var(--xz-accent,#4f6ef7);font-weight:700}' +
-'.xza-cf-row{display:flex;gap:.4rem;margin-top:.35rem;align-items:center}' +
-'.xza-cf-row button{border:1px solid var(--xz-bd,#ddd);border-radius:8px;cursor:pointer;' +
-'font-family:inherit;font-size:.72rem;padding:.26rem .6rem;background:var(--xz-input,#f5f6f8);' +
-'color:var(--xz-txt,#333)}' +
-'.xza-cf-row button.pri{background:var(--xz-accent,#4f6ef7);border-color:var(--xz-accent,#4f6ef7);' +
-'color:#fff;font-weight:700}' +
-'.xza-cf-hint{font-size:.64rem;color:var(--xz-muted,#999);margin-top:.25rem}' +
-'.xza-undo{border:1px dashed var(--xz-bd,#ccc);background:none;border-radius:7px;' +
-'cursor:pointer;font-family:inherit;font-size:.68rem;padding:.14rem .45rem;' +
-'color:var(--xz-muted,#667);margin-top:.25rem}' +
+'.xza-cf-row{display:flex;gap:.45rem;margin-top:.4rem;align-items:center;flex-wrap:wrap}' +
+'.xza-cf-row button{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);' +
+'border-radius:10px;cursor:pointer;font-family:inherit;font-size:.78rem;padding:.35rem .7rem;' +
+'background:var(--xz-input,#f5f6f8);color:var(--xz-txt,#333);display:inline-flex;' +
+'align-items:center;gap:.35em;transition:border-color .15s ease,filter .15s ease}' +
+'.xza-cf-row button:hover{border-color:var(--xz-accent,#4f6ef7)}' +
+'.xza-cf-row button.pri{background:var(--xz-accent,#4f6ef7);' +
+'background-image:linear-gradient(145deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));' +
+'border-color:transparent;color:#fff;font-weight:700;' +
+'box-shadow:0 6px 14px -8px var(--xz-tint,rgba(79,110,247,.5))}' +
+'.xza-cf-row button.pri:hover{filter:brightness(1.06)}' +
+'.xza-cf-hint{font-size:.75rem;color:var(--xz-muted,#999);margin-top:.3rem;display:flex;' +
+'align-items:flex-start;gap:.3em;line-height:1.5}' +
+'.xza-cf-hint .asb-i{flex-shrink:0;margin-top:.15em;color:#059669}' +
+'.xza-cf-hint .asb-i-warn{color:#b45309}' +
+'.xza-undo{border:1px solid color-mix(in srgb,var(--xz-bd,#ccc) 90%,transparent);background:none;' +
+'border-radius:999px;cursor:pointer;font-family:inherit;font-size:.75rem;padding:.2rem .6rem;' +
+'color:var(--xz-muted,#667);margin-top:.3rem;display:inline-flex;align-items:center;gap:.3em;' +
+'transition:border-color .15s ease,color .15s ease}' +
 '.xza-undo:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
-'.xza-ft{padding:.45rem .7rem;border-top:1px solid var(--xz-bd,#ddd);display:flex;' +
-'gap:.4rem;align-items:center;font-size:.72rem}' +
-'.xza-ft .rep{border:1px solid var(--xz-bd,#ddd);background:none;border-radius:8px;' +
-'cursor:pointer;font-family:inherit;font-size:.7rem;padding:.2rem .5rem;' +
-'color:var(--xz-txt,#333)}' +
+'.xza-ft{padding:.5rem .75rem;border-top:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent);' +
+'display:flex;gap:.4rem;align-items:center;font-size:.78rem}' +
+'.xza-ft .rep{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);background:none;' +
+'border-radius:999px;cursor:pointer;font-family:inherit;font-size:.76rem;padding:.25rem .65rem;' +
+'color:var(--xz-txt,#333);display:inline-flex;align-items:center;gap:.3em}' +
 '.xza-head{position:fixed;z-index:10007;width:20px;height:20px;border-radius:50%;' +
-'pointer-events:none;background:linear-gradient(135deg,#4f6ef7,#8b5cf6);' +
-'box-shadow:0 0 14px 4px rgba(99,102,241,.65),0 0 30px 8px rgba(139,92,246,.35)}' +
+'pointer-events:none;background:linear-gradient(135deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));' +
+'box-shadow:0 0 14px 4px var(--xz-tint,rgba(99,102,241,.65)),' +
+'0 0 30px 8px color-mix(in srgb,var(--xz-rb-3,#8b5cf6) 35%,transparent)}' +
 '.xza-trail{position:fixed;z-index:10005;width:7px;height:7px;border-radius:50%;' +
-'pointer-events:none;background:linear-gradient(135deg,#4f6ef7,#8b5cf6);opacity:.75;' +
-'transition:opacity .5s ease,transform .5s ease}' +
+'pointer-events:none;background:linear-gradient(135deg,var(--xz-rb-1,#22d3ee),var(--xz-rb-3,#8b5cf6));' +
+'opacity:.75;transition:opacity .5s ease,transform .5s ease}' +
 '.xza-pulse{animation:xzaPulse .7s ease}' +
-'@keyframes xzaPulse{0%{box-shadow:0 0 0 0 rgba(99,102,241,.55)}' +
-'100%{box-shadow:0 0 0 16px rgba(99,102,241,0)}}' +
+'@keyframes xzaPulse{0%{box-shadow:0 0 0 0 var(--xz-tint,rgba(99,102,241,.55))}' +
+'100%{box-shadow:0 0 0 16px transparent}}' +
 '.xza-qr{text-align:center;padding:.3rem 0}' +
-'.xza-qr img{width:190px;height:190px;border-radius:10px;background:#fff;' +
+'.xza-qr img{width:190px;height:190px;border-radius:12px;background:#fff;' +
 'border:1px solid var(--xz-bd,#ddd)}' +
-'.xza-qr .qh{font-size:.68rem;color:var(--xz-muted,#888);margin-top:.3rem}' +
+'.xza-qr .qh{font-size:.75rem;color:var(--xz-muted,#888);margin-top:.35rem}' +
 '.xza-pin{font-size:1.5rem;font-weight:800;text-align:center;' +
 'letter-spacing:.22em;color:var(--xz-accent,#4f6ef7);padding:.2rem 0}' +
 '.xza-pwd-row{display:flex;gap:.4rem;margin:.4rem 0 .1rem}' +
@@ -463,7 +560,7 @@
 'font-size:.7rem;padding:.22rem .6rem;max-width:100%;overflow:hidden;' +
 'text-overflow:ellipsis;white-space:nowrap}' +
 '.xza-chips button:hover{background:rgba(79,110,247,.1)}' +
-'.xza-sa-dot{display:flex;align-items:center;gap:6px;font-size:.68rem;color:#9aa3c0}' +
+'.xza-sa-dot{display:flex;align-items:center;gap:6px;font-size:.75rem;color:#9aa3c0}' +
 '.xza-sa-dot i{width:8px;height:8px;border-radius:50%;background:#22c55e;' +
 'box-shadow:0 0 8px rgba(34,197,94,.8);flex-shrink:0}' +
 '.xza-sa-dot.off i{background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,.8)}' +
@@ -471,52 +568,61 @@
 '.xza-sa-dot em{font-style:normal}' +
 '.xza-hist{display:flex;flex-direction:column;max-height:72vh}' +
 '.xza-hist .hist-list{overflow-y:auto;margin-top:.35rem;min-height:60px}' +
-'.hist-row{border-top:1px dashed var(--xz-bd,#ddd);padding:.42rem 0;font-size:.74rem}' +
-'.hist-row.ud{opacity:.72}' +
-'.hist-row .hr-meta{font-size:.62rem;color:var(--xz-muted,#999);margin-top:.15rem}' +
+'.hist-row{border-top:1px dashed color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'padding:.48rem 0;font-size:.8rem;line-height:1.5}' +
+/* 撤销记录用文字色降级而不是 opacity——透明度叠什么底变什么色，对比度不可控 */
+'.hist-row.ud{color:var(--xz-muted,#777)}' +
+'.hist-row .hr-meta{font-size:.75rem;color:var(--xz-muted,#999);margin-top:.15rem}' +
 '.hist-row .hr-main{word-break:break-word}' +
-/* standalone（手机操控页）：输入面板钉底、任务卡占上方，全宽拇指优先 */
+/* standalone（手机操控页）：输入面板钉底、任务卡占上方，全宽拇指优先。
+   手机上关掉 backdrop 模糊（GPU 预算）——玻璃退成实底。 */
 '.xza-sa .xza-panel{left:8px;right:8px;bottom:calc(30px + env(safe-area-inset-bottom));' +
-'width:auto;max-width:none}' +
-'.xza-sa .xza-panel textarea{min-height:64px;font-size:.9rem}' +
-'.xza-sa .xza-run{font-size:.9rem;padding:.5rem 1.1rem}' +
-'.xza-sa .xza-mic{font-size:1.05rem;padding:.44rem .62rem}' +
+'width:auto;max-width:none;background:var(--xz-bg,#fff);' +
+'-webkit-backdrop-filter:none;backdrop-filter:none}' +
+'.xza-sa .xza-panel textarea{min-height:64px;font-size:.95rem}' +
+'.xza-sa .xza-run{font-size:.92rem;padding:.55rem 1.1rem}' +
+'.xza-sa .xza-mic{font-size:1.1rem;width:42px;height:42px}' +
 '.xza-sa .xza-card{left:8px;right:8px;bottom:auto;top:96px;width:auto;' +
-'max-width:none;max-height:52vh}' +
+'max-width:none;max-height:52vh;background:var(--xz-bg,#fff);' +
+'-webkit-backdrop-filter:none;backdrop-filter:none}' +
 '.xza-pair{position:fixed;z-index:10008;left:50%;top:50%;transform:translate(-50%,-50%);' +
-'width:320px;max-width:calc(100vw - 24px);background:var(--xz-bg,#fff);' +
-'color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);border-radius:14px;' +
-'box-shadow:0 16px 48px rgba(0,0,0,.35);padding:.8rem .9rem;font-size:.78rem;' +
-'animation:xzaUp .18s ease}' +
+'width:330px;max-width:calc(100vw - 24px);background:var(--xz-glass,var(--xz-bg,#fff));' +
+'color:var(--xz-txt,#111);border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:16px;box-shadow:var(--xz-sh-key,0 16px 48px rgba(0,0,0,.35)),' +
+'inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'-webkit-backdrop-filter:blur(16px) saturate(1.3);backdrop-filter:blur(16px) saturate(1.3);' +
+'padding:.85rem .95rem;font-size:.82rem;animation:xzaUp .2s ease}' +
 '.xza-pair img{display:block;margin:.5rem auto;width:200px;height:200px;' +
-'border-radius:8px;background:#fff}' +
-'.xza-pair .url{font-size:.64rem;color:var(--xz-muted,#888);word-break:break-all;' +
-'margin:.3rem 0}' +
-'.xza-pair .ses{border-top:1px dashed var(--xz-bd,#ddd);margin-top:.5rem;' +
-'padding-top:.45rem}' +
-'.xza-pair .ses-row{display:flex;align-items:center;gap:.4rem;font-size:.7rem;' +
-'margin:.2rem 0}' +
+'border-radius:12px;background:#fff}' +
+'.xza-pair .url{font-size:.75rem;color:var(--xz-muted,#888);word-break:break-all;' +
+'margin:.35rem 0}' +
+'.xza-pair .ses{border-top:1px dashed color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'margin-top:.55rem;padding-top:.5rem}' +
+'.xza-pair .ses b{font-size:.78rem}' +
+'.xza-pair .ses-row{display:flex;align-items:center;gap:.45rem;font-size:.76rem;' +
+'margin:.25rem 0}' +
 '.xza-pair .ses-row .ua{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
 'white-space:nowrap;color:var(--xz-muted,#777)}' +
 '.xza-pair .ses-row button{border:1px solid #ef4444;color:#ef4444;background:none;' +
-'border-radius:7px;cursor:pointer;font-family:inherit;font-size:.66rem;' +
-'padding:.1rem .4rem}' +
+'border-radius:999px;cursor:pointer;font-family:inherit;font-size:.75rem;' +
+'padding:.15rem .55rem}' +
+'.xza-hint{font-size:.76rem;color:var(--xz-muted,#888);line-height:1.5}' +
 /* 电脑操控 runner 步专属视觉（实施91 P1-1）：青色设备轴 + 机器徽标，
    和普通查询/带路一眼区分（美术视角：跨设备高权限动作需可辨识语义色）。 */
 '.xza-step.xza-st--pc{border-left:3px solid var(--xz-device,#0891b2)}' +
-'.xza-pcmac{flex-shrink:0;font-size:.62rem;border-radius:999px;padding:.06rem .4rem;' +
+'.xza-pcmac{flex-shrink:0;font-size:.72rem;border-radius:999px;padding:.08rem .5rem;' +
 'background:rgba(8,145,178,.12);color:var(--xz-device,#0891b2);font-weight:600}' +
-'.xza-pc-note{font-size:.7rem;color:var(--xz-muted,#888);line-height:1.5;' +
-'background:rgba(8,145,178,.08);border-radius:8px;padding:.4rem .55rem;margin:.1rem 0 .4rem}' +
-'.xza-pc-row{display:flex;align-items:center;gap:.4rem;font-size:.74rem;margin:.25rem 0}' +
+'.xza-pc-note{font-size:.76rem;color:var(--xz-muted,#888);line-height:1.5;' +
+'background:rgba(8,145,178,.08);border-radius:10px;padding:.45rem .6rem;margin:.1rem 0 .45rem}' +
+'.xza-pc-row{display:flex;align-items:center;gap:.45rem;font-size:.78rem;margin:.3rem 0;flex-wrap:wrap}' +
 '.xza-pc-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-'.xza-pc-row .st{flex-shrink:0;font-size:.64rem;border-radius:999px;padding:.05rem .4rem}' +
+'.xza-pc-row .st{flex-shrink:0;font-size:.72rem;border-radius:999px;padding:.08rem .5rem}' +
 '.xza-pc-row .st.on{background:rgba(34,197,94,.14);color:#16a34a}' +
 '.xza-pc-row .st.off{background:rgba(148,163,184,.18);color:var(--xz-muted,#888)}' +
 '.xza-pc-row .st.trust{background:rgba(8,145,178,.14);color:var(--xz-device,#0891b2)}' +
-'.xza-pc-row button{border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
-'color:var(--xz-txt,#333);border-radius:7px;cursor:pointer;font-family:inherit;' +
-'font-size:.66rem;padding:.1rem .45rem}' +
+'.xza-pc-row button{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);' +
+'background:var(--xz-bg,#fff);color:var(--xz-txt,#333);border-radius:999px;cursor:pointer;' +
+'font-family:inherit;font-size:.75rem;padding:.15rem .55rem}' +
 '.xza-pc-row button.look{border-color:var(--xz-device,#0891b2);color:var(--xz-device,#0891b2)}' +
 '@media(prefers-reduced-motion:reduce){.xza-panel,.xza-card,.xza-pair{animation:none}}';
     var st = document.createElement('style');
@@ -564,22 +670,23 @@
          色），核心能力与手机通道视觉权重相同，且**核心卡没有按钮、次要卡
          有按钮** → 视觉引导指向次要功能（老板实录「版面太碎没有重点」）。 */
       '<div class="asb-md-hero asb-md-hero--pri">' +
-      '<div class="asb-md-t">⚡ <span>' + esc(t('mode_t')) + '</span></div>' +
+      '<div class="asb-md-t">' + ic('bolt') + '<span>' + esc(t('mode_t')) + '</span></div>' +
       '<div class="asb-md-d">' + esc(t('mode_d')) + '</div>' +
       '<div class="asb-md-row">' +
-      '<button type="button" class="asb-md-go" data-xza="mode-start">' +
-      esc(t('start_btn')) + '</button></div>' +
-      '<div class="asb-md-safe">🛡 ' + esc(t('row_hint')) + '</div></div>' +
+      '<button type="button" class="asb-md-go" data-xza="mode-start">' + ic('bolt') +
+      '<span>' + esc(t('start_btn')) + '</span></button></div>' +
+      '<div class="asb-md-safe">' + ic('shield') + '<span>' + esc(t('row_hint')) +
+      '</span></div></div>' +
       /* ② 最近做过：标题行自带「全部 →」文字链，取代原来独占一行的次要
-         按钮（原「📜 做过什么」与上方空态「还没有操作记录」语义重复）。 */
-      '<div class="asb-md-hd"><div class="asb-md-t">📜 <span>' +
+         按钮（原「做过什么」与上方空态「还没有操作记录」语义重复）。 */
+      '<div class="asb-md-hd"><div class="asb-md-t">' + ic('history') + '<span>' +
       esc(t('recent_t')) + '</span></div>' +
       '<button type="button" class="asb-md-lnk" data-xza="mode-hist">' +
       esc(t('hist_all')) + '</button></div>' +
       '<div class="asb-md-list xza-recent"><div class="asb-empty">…</div></div>' +
       /* ③ 手机指挥降级为一行次要入口（通道≠能力） */
       '<button type="button" class="asb-md-sub" data-xza="mode-pair">' +
-      '<span class="asb-md-sub-i">📱</span>' +
+      '<span class="asb-md-sub-i">' + ic('phone') + '</span>' +
       '<span class="asb-md-sub-x"><b>' + esc(t('pair_card_t')) + '</b>' +
       '<i>' + esc(t('pair_card_d')) + '</i></span>' +
       '<span class="asb-md-sub-go">›</span></button>';
@@ -648,8 +755,8 @@
             '<span class="w">' + esc(when) + '</span>' +
             (it.undoable
               ? '<button type="button" class="xza-undo" data-xza="recent-undo"' +
-                ' data-undo="' + esc(it.undo_id) + '">' + esc(t('undo')) +
-                '</button>'
+                ' data-undo="' + esc(it.undo_id) + '">' + ic('undo') + '<span>' +
+                esc(t('undo')) + '</span></button>'
               : '') + '</div>';
         }
         list.innerHTML = h;
@@ -797,14 +904,15 @@
     p.className = 'xza-panel';
     applyVars(p);
     p.innerHTML = '' +
-      '<div class="xza-p-t">🤖 <span>' + esc(t('p_title')) + '</span>' +
+      '<div class="xza-p-t">' + ic('spark') + '<span>' + esc(t('p_title')) + '</span>' +
       '<button type="button" class="x" data-xza="hist" title="' +
       esc(t('hist_title')) + '" aria-label="' + esc(t('hist_title')) +
-      '">🕘</button>' +
-      '<button type="button" class="x" data-xza="close">✕</button></div>' +
+      '">' + ic('history') + '</button>' +
+      '<button type="button" class="x" data-xza="close" aria-label="' +
+      esc(t('p_close')) + '">' + ic('x') + '</button></div>' +
       '<textarea placeholder="' + esc(t('p_ph')) + '"></textarea>' +
       '<div class="xza-p-row"><button type="button" class="xza-run" ' +
-      'data-xza="run">' + esc(t('p_run')) + '</button>' +
+      'data-xza="run">' + ic('bolt') + '<span>' + esc(t('p_run')) + '</span></button>' +
       '<span class="na" style="display:none">' + esc(t('p_na')) +
       '</span></div>';
     document.body.appendChild(p);
@@ -825,7 +933,8 @@
       mic.className = 'xza-mic';
       mic.setAttribute('data-xza', 'mic');
       mic.title = t('mic_title');
-      mic.textContent = '🎤';
+      mic.setAttribute('aria-label', t('mic_title'));
+      mic.innerHTML = ic('mic');
       row.insertBefore(mic, row.firstChild.nextSibling);
     });
     p.addEventListener('click', function (ev) {
@@ -926,9 +1035,9 @@
     var m = document.createElement('div');
     m.className = 'xza-pair xza-hist';
     applyVars(m);
-    m.innerHTML = '<div class="xza-p-t">📜 <span>' + esc(t('hist_title')) +
-      '</span><button type="button" class="x" data-xza="hist-close">✕' +
-      '</button></div>' +
+    m.innerHTML = '<div class="xza-p-t">' + ic('history') + '<span>' + esc(t('hist_title')) +
+      '</span><button type="button" class="x" data-xza="hist-close" aria-label="' +
+      esc(t('p_close')) + '">' + ic('x') + '</button></div>' +
       '<div class="hist-list"><div class="xza-say">…</div></div>';
     document.body.appendChild(m);
     S.hist = m;
@@ -985,7 +1094,8 @@
             ('0' + d.getHours()).slice(-2) + ':' +
             ('0' + d.getMinutes()).slice(-2);
           var line = it.op === 'undo'
-            ? esc(t('op_undo')) + ' ' + esc(it.label || it.action_label || '') +
+            ? ic('undo') + ' ' + esc(t('op_undo')) + ' ' +
+              esc(it.label || it.action_label || '') +
               (it.new_h ? ' → ' + esc(it.new_h) : '')
             : esc(it.label || it.action_label || '') + '：' + esc(it.old_h) +
               ' → <b>' + esc(it.new_h) + '</b>';
@@ -995,8 +1105,8 @@
             esc(it.actor || '') + '</div>' +
             (it.undoable
               ? '<button type="button" class="xza-undo" data-xza="hist-undo"' +
-                ' data-undo="' + esc(it.undo_id) + '">' + esc(t('undo')) +
-                '</button>'
+                ' data-undo="' + esc(it.undo_id) + '">' + ic('undo') + '<span>' +
+                esc(t('undo')) + '</span></button>'
               : '') +
             '</div>';
         }
@@ -1020,17 +1130,16 @@
     var m = document.createElement('div');
     m.className = 'xza-pair';
     applyVars(m);
-    m.innerHTML = '<div class="xza-p-t">📱 <span>' + esc(t('pair_title')) +
-      '</span><button type="button" class="x" data-xza="pair-close">✕' +
-      '</button></div>' +
-      '<div style="font-size:.7rem;color:var(--xz-muted,#888)">' +
-      esc(t('pair_hint')) + '</div>' +
+    m.innerHTML = '<div class="xza-p-t">' + ic('phone') + '<span>' + esc(t('pair_title')) +
+      '</span><button type="button" class="x" data-xza="pair-close" aria-label="' +
+      esc(t('p_close')) + '">' + ic('x') + '</button></div>' +
+      '<div class="xza-hint">' + esc(t('pair_hint')) + '</div>' +
       '<div class="qrbox"><div class="xza-say" style="text-align:center;' +
       'padding:1.2rem 0">…</div></div>' +
       '<div class="xza-p-row">' +
-      '<button type="button" class="xza-run" data-xza="pair-regen">' +
-      esc(t('pair_regen')) + '</button></div>' +
-      '<div class="ses"><b style="font-size:.72rem">' +
+      '<button type="button" class="xza-run" data-xza="pair-regen">' + ic('refresh') +
+      '<span>' + esc(t('pair_regen')) + '</span></button></div>' +
+      '<div class="ses"><b>' +
       esc(t('pair_sessions')) + '</b><div class="ses-list"></div></div>';
     document.body.appendChild(m);
     S.pair = m;
@@ -1073,10 +1182,11 @@
       var fwBtn = '';
       try {
         if (window.__chatxShell && typeof window.__chatxShell.pairLanFix === 'function') {
-          fwBtn = '<div class="xza-say" style="margin-top:.5rem;font-size:.72rem;opacity:.85">' +
+          fwBtn = '<div class="xza-say" style="margin-top:.5rem">' +
             esc(t('pair_fw_hint')) + '</div>' +
-            '<div style="margin-top:.3rem"><button type="button" data-xza="pair-fw">' +
-            esc(t('pair_fw_btn')) + '</button></div>';
+            '<div class="xza-cf-row" style="margin-top:.3rem">' +
+            '<button type="button" data-xza="pair-fw">' + ic('shield') + '<span>' +
+            esc(t('pair_fw_btn')) + '</span></button></div>';
         }
       } catch (e) { fwBtn = ''; }
       box.innerHTML = (lanMsg
@@ -1094,7 +1204,7 @@
     beacon('asb_pair_fw_fix');
     var note = document.createElement('div');
     note.className = 'xza-say';
-    note.style.cssText = 'margin-top:.3rem;font-size:.72rem';
+    note.style.cssText = 'margin-top:.3rem';
     note.textContent = t('pair_fw_busy');
     if (btn) { btn.disabled = true; btn.parentNode.appendChild(note); }
     window.__chatxShell.pairLanFix().then(function (r) {
@@ -1156,12 +1266,11 @@
     var m = document.createElement('div');
     m.className = 'xza-pair';
     applyVars(m);
-    m.innerHTML = '<div class="xza-p-t">💻 <span>' + esc(t('pc_title')) +
-      '</span><button type="button" class="x" data-xza="pc-close">✕' +
-      '</button></div>' +
+    m.innerHTML = '<div class="xza-p-t">' + ic('monitor') + '<span>' + esc(t('pc_title')) +
+      '</span><button type="button" class="x" data-xza="pc-close" aria-label="' +
+      esc(t('p_close')) + '">' + ic('x') + '</button></div>' +
       '<div class="xza-pc-note">' + esc(t('pc_readonly')) + '</div>' +
-      '<div style="font-size:.7rem;color:var(--xz-muted,#888)">' +
-      esc(t('pc_hint')) + '</div>' +
+      '<div class="xza-hint">' + esc(t('pc_hint')) + '</div>' +
       '<div class="ses"><div class="pc-list"><div class="xza-say" ' +
       'style="text-align:center;padding:1rem 0">…</div></div></div>';
     document.body.appendChild(m);
@@ -1330,14 +1439,15 @@
     var pwdKeep = '';
     var pwdOld = S.card.querySelector('.xza-pwd-row input');
     if (pwdOld) { pwdKeep = String(pwdOld.value || ''); }
-    var html = '<div class="xza-c-hd">🤖 <span>' + esc(t('p_title')) +
+    var html = '<div class="xza-c-hd">' + ic('spark') + '<span>' + esc(t('p_title')) +
       '</span>' +
       '<button type="button" class="xza-snd" data-xza="tts" ' +
-      'style="margin-left:auto">' + esc(t(ttsOn() ? 'tts_on' : 'tts_off')) +
-      '</button>' +
-      (S.running ? '<button type="button" class="stop" data-xza="stop">' +
-        esc(t('stop')) + '</button>'
-        : '<button type="button" class="x" data-xza="close-card">✕</button>') +
+      'style="margin-left:auto">' + ic(ttsOn() ? 'speaker' : 'mute') + '<span>' +
+      esc(t(ttsOn() ? 'tts_on' : 'tts_off')) + '</span></button>' +
+      (S.running ? '<button type="button" class="stop" data-xza="stop">' + ic('stop') +
+        '<span>' + esc(t('stop')) + '</span></button>'
+        : '<button type="button" class="x" data-xza="close-card" aria-label="' +
+          esc(t('p_close')) + '">' + ic('x') + '</button>') +
       '</div><div class="xza-c-bd">';
     html += '<div class="xza-say">' + esc(task.say || t('say_fb')) + '</div>';
     if (task.ask && !task.flow) {
@@ -1365,8 +1475,8 @@
         html += '<div class="xza-cf"><div class="xza-cf-d"><b>' +
           esc(fv.confirm_text || '') + '</b></div>' +
           '<div class="xza-cf-row">' +
-          '<button type="button" class="pri" data-xza="fl-yes">' +
-          esc(t('fl_start')) + '</button>' +
+          '<button type="button" class="pri" data-xza="fl-yes">' + ic('check') + '<span>' +
+          esc(t('fl_start')) + '</span></button>' +
           '<button type="button" data-xza="fl-no">' + esc(t('fl_no')) +
           '</button></div></div>';
       }
@@ -1380,12 +1490,12 @@
       /* 完成后的下一步引导（老板原话「完成后还可以继续下一步的操作引导」）：
          手机 standalone 隐藏——目标页是桌面后台页 */
       if (task.finished && task.allOk && !S.standalone) {
-        html += '<div class="xza-cf-row"><span style="font-size:.7rem;' +
-          'color:var(--xz-muted,#888)">' + esc(t('fl_next_t')) + '</span>' +
-          '<button type="button" data-xza="fl-next" data-goto="/personas">' +
-          esc(t('fl_next_persona')) + '</button>' +
+        html += '<div class="xza-cf-row"><span class="xza-hint">' + esc(t('fl_next_t')) +
+          '</span>' +
+          '<button type="button" data-xza="fl-next" data-goto="/personas">' + ic('user') +
+          '<span>' + esc(t('fl_next_persona')) + '</span></button>' +
           '<button type="button" data-xza="fl-next" data-goto="/reply-settings">' +
-          esc(t('fl_next_reply')) + '</button></div>';
+          ic('sliders') + '<span>' + esc(t('fl_next_reply')) + '</span></button></div>';
       }
     }
     for (var i = 0; i < task.steps.length; i++) {
@@ -1397,7 +1507,8 @@
       var lvTxt = isPc ? t('pc_lv') : lvHuman(s.level);
       var macBadge = (isPc && s.runner && s.runner.machine)
         ? '<span class="xza-pcmac">@' + esc(s.runner.machine) + '</span>' : '';
-      html += '<div class="' + cls + '" data-idx="' + i + '">' +
+      html += '<div class="' + cls + '" data-idx="' + i + '" data-st="' +
+        esc(String(s.status || 'pending')) + '">' +
         '<div class="xza-st-hd"><span class="ic">' + stIcon(s.status) +
         '</span><span class="lb">' + esc(s.label || s.action) + '</span>' +
         macBadge +
@@ -1430,19 +1541,21 @@
             (Number(s.confirm.align.groups) > 0
               ? t('cf_align_g').replace('{g}', String(s.confirm.align.groups))
               : '');
-          html += '<div class="xza-cf-hint">⚠ ' + esc(alTxt) + '</div>';
+          html += '<div class="xza-cf-hint">' + ic('alert', 'asb-i-warn') + '<span>' +
+            esc(alTxt) + '</span></div>';
         }
         html += '<div class="xza-cf-row">' +
-          '<button type="button" class="pri" data-xza="cf-apply">' +
-          esc(t('cf_apply')) + '</button>' +
+          '<button type="button" class="pri" data-xza="cf-apply">' + ic('check') +
+          '<span>' + esc(t('cf_apply')) + '</span></button>' +
           '<button type="button" data-xza="cf-skip">' + esc(t('cf_skip')) +
           '</button></div>' +
-          '<div class="xza-cf-hint">' + esc(t('cf_hint')) + '</div></div>';
+          '<div class="xza-cf-hint">' + ic('shield') + '<span>' + esc(t('cf_hint')) +
+          '</span></div></div>';
       }
       if (s.undo_id && !s.undone) {
         html += '<button type="button" class="xza-undo" data-xza="undo" ' +
-          'data-undo="' + esc(s.undo_id) + '" data-idx="' + i + '">' +
-          esc(t('undo')) + '</button>';
+          'data-undo="' + esc(s.undo_id) + '" data-idx="' + i + '">' + ic('undo') +
+          '<span>' + esc(t('undo')) + '</span></button>';
       }
       html += '</div>';
     }
@@ -1452,7 +1565,8 @@
         esc(task.allOk ? t('done_line') : t('done_part')) + '</span>' +
         (task.flow ? ''
           : '<button type="button" class="rep" data-xza="replay" ' +
-            'style="margin-left:auto">' + esc(t('replay')) + '</button>') +
+            'style="margin-left:auto">' + ic('repeat') + '<span>' + esc(t('replay')) +
+            '</span></button>') +
         '</div>';
     }
     S.card.innerHTML = html;
@@ -2286,7 +2400,11 @@
       if (window.AssistantBall &&
           typeof window.AssistantBall.registerMode === 'function') {
         S.claimed = window.AssistantBall.registerMode('agent', {
-          order: 30, icon: '⚡', labelKey: 'mode_agent', mount: mountMode,
+          /* iconName＝球内置线性图标名（v2.1 起 registerMode 优先按它解析）；
+             icon 仍传 emoji 给不识别 iconName 的旧球缓存当回退，不然它会把
+             'bolt' 当文本渲染进页签 */
+          order: 30, icon: '⚡', iconName: 'bolt', labelKey: 'mode_agent',
+          mount: mountMode,
           composer: {
             ph: function () { return t('p_ph'); },
             submit: function (goal) {

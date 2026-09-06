@@ -15,6 +15,17 @@
  * idle/hint/listening/thinking/alert + success 爆闪；三档画质与运行期
  * 调速详见文内「Orb 引擎」段注释——改球体视觉/动效前先读那段。
  *
+ * 视觉体系 v2「智连光带」（2026-09-05）：一条青→智连蓝→紫的光带只在小智活动
+ * 时出现于四处——球的立体光环（前后遮挡两半）/ 面板边缘泛光（听·想·说）/
+ * 生成中的 AI 气泡描边（pending 光雾 → live 光标 → settle 落定，同一节点换形态）
+ * / 语音波形三条彩色正弦。令牌 --xz-rb-*、玻璃/高光/阴影见 injectCss 顶部注释；
+ * 图标全部为内置线性 SVG（ICONS + ic()），三个 assistant-*.js 各留子集。
+ * 动效三级降级：prefers-reduced-motion → 安静档 lv0/1（asb-lv* 同时挂球与面板）
+ * → 运行期 EMA 第二档 .asb-lite；空闲态面板内零动效。
+ * v2.1（同日）：状态色走 @property --xz-core 色变量（hue-rotate 退场，画布粒子
+ * 与之同源 orbStateRgb）；光谱两端由品牌色 OKLCH 相对推导（白标换主色整条光带
+ * 跟转，@supports 回落令牌）；registerMode 收 iconName；默认摆放避让宿主浮球。
+ *
  * 线协议（与 assistant_routes.py 钉死）：
  *   POST /api/assistant/query  → ndjson: {ev:meta,sources,report_hint} →
  *                                 {ev:delta,text} → {ev:done,qa_id,answered}
@@ -27,7 +38,7 @@
   'use strict';
   if (window.AssistantBall) { return; }
 
-  var VER = '20260829c';
+  var VER = '20260905b';
   var I18N = {
     zh: {
       name: '小智 · AI 助手', open_aria: '打开 AI 助手', close: '关闭',
@@ -50,10 +61,11 @@
       input_ph: '输入问题，回车发送…', send: '发送',
       thinking: '思考中…', searching: '检索帮助库…',
       src_title: '来源', goto: '带我去', helpful: '有帮助吗',
+      fb_up: '有帮助', fb_down: '没帮助',
       fb_thanks: '已记录，谢谢反馈', retry: '重试',
       stop_t: '停止生成', stopped_gen: '已停止',
       copy_t: '复制回答',
-      to_report: '🐞 这像是故障？一键转报障',
+      to_report: '这像是故障？一键转报障',
       rp_ph: '一句话描述遇到的问题（必填，≥5 字）…',
       rp_shot_hint: '截图：在此面板直接 Ctrl+V 粘贴，或',
       rp_shot_pick: '选择图片', rp_shot_del: '移除截图',
@@ -73,10 +85,10 @@
       mic_fail: '语音转写失败，请改用文字输入',
       nudge_text: '页面好像出了点问题，需要我帮你报障吗？',
       nudge_go: '帮我报障', nudge_prefill: '页面脚本错误：',
-      shot_page: '📷 截当前页', shot_busy: '截取中…',
-      an_title: '圈出问题 · 涂掉敏感信息', an_rect: '🟥 圈选',
-      an_mosaic: '▦ 马赛克', an_undo: '↩ 撤销', an_ok: '✔ 用这张',
-      an_cancel: '✕ 取消',
+      shot_page: '截当前页', shot_busy: '截取中…',
+      an_title: '圈出问题 · 涂掉敏感信息', an_rect: '圈选',
+      an_mosaic: '马赛克', an_undo: '撤销', an_ok: '用这张',
+      an_cancel: '取消',
       mine_empty: '还没有提交过报障',
       mine_refresh: '刷新', mine_fixed_note: '开发者留言',
       /* 状态键与后端 bug_intake.VALID_STATUSES 一一对应（门禁钉住）。
@@ -100,7 +112,7 @@
          此时说「网络异常」是在冤枉用户的网络（他会去重启路由器），必须
          如实说是我们没出话。 */
       err_nostream: '小智没能把回答送出来（服务端中断）。可以重试，或直接报障。',
-      err_report: '🐞 报障',
+      err_report: '报障',
       thinking_long: '正在问 AI（通常 5-30 秒）',
       /* 拒答不该是死路（2026-08-29 老板实录「回复的内容没一点帮助」）：
          答不上来时给几条**确定答得上**的问法，比只留一句「不知道」有用。 */
@@ -113,6 +125,11 @@
       resize_aria: '调整面板大小（方向键，Shift 加速，Esc 复位）',
       move_hint: '拖动移动 · 双击复位',
       reset_geo: '恢复默认大小和位置',
+      /* 标题栏状态短句（v2 2026-09-05）：与球的状态机一一对应，球是余光信号，
+         这一行是明确信号——「小智在干什么」终于有字可读。 */
+      hd_idle: '随时可问', hd_hint: '有新进展', hd_listening: '在听…',
+      hd_thinking: '思考中', hd_live: '回答中', hd_speaking: '播报中',
+      hd_teach: '教学中', hd_agent: '执行中', hd_alert: '页面有异常',
     },
     en: {
       name: 'AI Assistant', open_aria: 'Open AI assistant', close: 'Close',
@@ -133,10 +150,11 @@
       input_ph: 'Type a question…',
       send: 'Send', thinking: 'Thinking…', searching: 'Searching help…',
       src_title: 'Sources', goto: 'Take me there', helpful: 'Helpful?',
+      fb_up: 'Helpful', fb_down: 'Not helpful',
       fb_thanks: 'Recorded, thanks', retry: 'Retry',
       stop_t: 'Stop generating', stopped_gen: 'Stopped',
       copy_t: 'Copy answer',
-      to_report: '🐞 Looks like a bug? File a report',
+      to_report: 'Looks like a bug? File a report',
       rp_ph: 'Describe the issue in one sentence (min 5 chars)…',
       rp_shot_hint: 'Screenshot: paste (Ctrl+V) into this panel, or',
       rp_shot_pick: 'choose image', rp_shot_del: 'Remove screenshot',
@@ -155,10 +173,10 @@
       mic_fail: 'Transcription failed, please type instead',
       nudge_text: 'This page seems to have a problem — want me to file it?',
       nudge_go: 'File a report', nudge_prefill: 'Page script error: ',
-      shot_page: '📷 Capture this page', shot_busy: 'Capturing…',
-      an_title: 'Box the issue · mosaic sensitive info', an_rect: '🟥 Box',
-      an_mosaic: '▦ Mosaic', an_undo: '↩ Undo', an_ok: '✔ Use it',
-      an_cancel: '✕ Cancel',
+      shot_page: 'Capture this page', shot_busy: 'Capturing…',
+      an_title: 'Box the issue · mosaic sensitive info', an_rect: 'Box',
+      an_mosaic: 'Mosaic', an_undo: 'Undo', an_ok: 'Use it',
+      an_cancel: 'Cancel',
       mine_empty: 'No reports yet',
       mine_refresh: 'Refresh', mine_fixed_note: 'Developer note',
       st_new: 'Open', st_confirmed: 'Confirmed', st_in_progress: 'In progress',
@@ -175,7 +193,7 @@
       rate_hint: 'Too fast, try again later',
       err_nostream: 'I could not deliver an answer (server cut the stream). '
         + 'Retry, or file a report.',
-      err_report: '🐞 Report',
+      err_report: 'Report',
       thinking_long: 'Asking the AI (usually 5-30s)',
       suggest_t: 'These I can answer — try one:',
       suggest_near_t: 'Did you mean:',
@@ -184,6 +202,9 @@
       resize_aria: 'Resize panel (arrow keys, Shift to speed up, Esc to reset)',
       move_hint: 'Drag to move · double-click to reset',
       reset_geo: 'Restore default size and position',
+      hd_idle: 'Ready', hd_hint: 'Something new', hd_listening: 'Listening…',
+      hd_thinking: 'Thinking', hd_live: 'Answering', hd_speaking: 'Speaking',
+      hd_teach: 'Teaching', hd_agent: 'Working', hd_alert: 'Page issue detected',
     },
   };
 
@@ -249,30 +270,119 @@
 '--xz-muted:var(--t3,var(--tk-text-muted,#888));' +
 '--xz-bd:var(--bd,var(--tk-border,#ddd));' +
 '--xz-hover:var(--sb-hover,rgba(17,24,39,.05))}' +
+/* ── 「智连光带」令牌（2026-09-05 视觉体系 v2）────────────────────────────
+   光带 = 小智在活动。一条从品牌蓝推导的三色光带（青→智连蓝→紫，全部取
+   宿主 --tk-cyan/--tk-violet，admin 壳无此二令牌时落到同值字面量），只在
+   球环 / 面板边缘 / 生成中的气泡 / 语音波形四处出现，且每处都映射一个真实
+   状态（空闲时面板内零动效）。--xz-a 走 @property 才能让 conic 角度被
+   animation 补间；不支持的宿主自然退化为静态渐变（仍然好看，只是不流动）。
+   注意 :root 上只放**色停** --xz-rb-stops，不放整条 conic——自定义属性里的
+   var() 在声明处即解析，若把 `from var(--xz-a)` 写进 :root 令牌，各使用点再
+   动画自己的 --xz-a 也换不动角度（首版即踩）。使用点一律写
+   `conic-gradient(from var(--xz-a),var(--xz-rb-stops))`。
+   玻璃/高光/阴影/着色投影是「立体化」的四层纵深：L0 环境光（面板外沿泛光、
+   球的带色接触阴影）→ L1 玻璃壳 → L2 气泡（带色投影 + 顶部高光）→ L3 光带。
+   亮暗差异只走 .asb-dark 一个类（由 ORB 亮度探测同步），不写两壳成对暗色
+   选择器（frontend-theme.mdc 纪律）。 */
+'@property --xz-a{syntax:"<angle>";inherits:false;initial-value:0deg}' +
+/* 状态核心色（v2.1 2026-09-05）：球面/标题核/光晕/接触阴影全部吃 --xz-core，
+   状态类只改这一个变量。注册成 <color> 是为了能被 transition 补间——v1/v2.0 用
+   filter:hue-rotate 换色，矩阵近似把品牌蓝转成青时会偏绿、转琥珀时偏橄榄，
+   且白标换了主色角度全错；现在每个状态直接指到光谱令牌或语义色。 */
+'@property --xz-core{syntax:"<color>";inherits:true;initial-value:#4f6ef7}' +
+':root{' +
+'--xz-rb-1:var(--tk-cyan,#22d3ee);' +
+'--xz-rb-2:var(--xz-accent);' +
+'--xz-rb-3:var(--tk-violet,#8b5cf6);' +
+/* 对称色停（青→蓝→紫→蓝→青）：conic 0°/360° 接缝处颜色相同，环上没有硬边 */
+'--xz-rb-stops:var(--xz-rb-1),var(--xz-rb-2),var(--xz-rb-3),var(--xz-rb-2),var(--xz-rb-1);' +
+'--xz-ribbon-l:linear-gradient(90deg,var(--xz-rb-1),var(--xz-rb-2),var(--xz-rb-3));' +
+'--xz-glass:color-mix(in srgb,var(--xz-bg) 86%,transparent);' +
+'--xz-hl:rgba(255,255,255,.6);' +
+'--xz-sh-key:0 24px 60px -18px rgba(15,27,45,.32);' +
+'--xz-sh-amb:0 2px 8px rgba(15,27,45,.08);' +
+'--xz-tint:color-mix(in srgb,var(--xz-accent) 55%,transparent);' +
+'--xz-ease:cubic-bezier(.22,1,.36,1)}' +
+/* 白标推导（v2.1）：光谱两端不再取固定的 --tk-cyan/--tk-violet，而是从品牌色
+   在 OKLCH 里相对推导——青 = 品牌色 L+.23、C×.77、h−42°；紫 = L+.04、C×1.26、
+   h+39°（两组系数按智连蓝 #0d76d9 → #22d3ee / #8b5cf6 反算，默认品牌下与原色
+   肉眼无差；白标换主色后整条光带随之转向，不再出现「绿色品牌配紫色光带」）。
+   L 用 min() 封顶防止暗壳 400 级 accent 推出近白的青。相对色语法 Chromium 119+ /
+   Safari 16.4+，老浏览器落回上面的令牌/字面量。 */
+'@supports (color:oklch(from red l c h)){:root{' +
+'--xz-rb-1:oklch(from var(--xz-accent) min(.92,calc(l + .23)) calc(c * .77) calc(h - 42));' +
+'--xz-rb-3:oklch(from var(--xz-accent) min(.86,calc(l + .04)) calc(c * 1.26) calc(h + 39))}}' +
+'.asb-dark{--xz-hl:rgba(255,255,255,.09);' +
+'--xz-glass:color-mix(in srgb,var(--xz-bg) 80%,transparent);' +
+'--xz-sh-key:0 24px 60px -18px rgba(0,0,0,.65);--xz-sh-amb:0 2px 8px rgba(0,0,0,.35)}' +
 '.asb-wrap{position:fixed;z-index:9998;font-family:inherit}' +
 '.asb-ball{width:46px;height:46px;border-radius:50%;border:none;cursor:pointer;' +
 'display:flex;align-items:center;justify-content:center;background:transparent;color:#fff;' +
-'transition:transform .18s;position:relative;padding:0;z-index:2}' +
+'transition:transform .18s;position:relative;padding:0;z-index:2;' +
+'--xz-core:var(--xz-accent,#4f6ef7)}' +
 '.asb-ball:hover{transform:scale(1.07)}' +
 '.asb-ball svg{width:24px;height:24px;pointer-events:none}' +
-/* 活体能量核：径向底盘(品牌色随 --xz-accent)+两层旋转极光(伪元素,纯合成器动画)。
-   状态换色统一走 filter:hue-rotate（可过渡动画、不换渐变；白标 accent 自动跟随）。 */
+/* 状态 → 核心色（球与面板同一张表；面板上的 .asb-hd-core / 状态短句跟着走）：
+   听=青(rb-1)、想=紫(rb-3)、说=靛(蓝紫各半)、做=蓝紫(偏蓝)、教=青蓝、
+   警=琥珀(语义警示色)、成=翠绿(语义成功色)。 */
+'.asb-ball.st-listening,.asb-panel.st-listening{--xz-core:var(--xz-rb-1,#22d3ee)}' +
+'.asb-ball.st-thinking,.asb-panel.st-thinking{--xz-core:var(--xz-rb-3,#8b5cf6)}' +
+'.asb-ball.st-speaking,.asb-panel.st-speaking{' +
+'--xz-core:color-mix(in srgb,var(--xz-rb-2,#4f6ef7) 45%,var(--xz-rb-3,#8b5cf6))}' +
+'.asb-ball.st-agent,.asb-panel.st-agent{' +
+'--xz-core:color-mix(in srgb,var(--xz-rb-2,#4f6ef7) 65%,var(--xz-rb-3,#8b5cf6))}' +
+'.asb-ball.st-teach,.asb-panel.st-teach{' +
+'--xz-core:color-mix(in srgb,var(--xz-rb-1,#22d3ee) 60%,var(--xz-rb-2,#4f6ef7))}' +
+'.asb-ball.st-alert,.asb-panel.st-alert{--xz-core:var(--tk-amber,#f59e0b)}' +
+'.asb-ball.okflash{--xz-core:var(--tk-emerald,#10b981)}' +
+/* 活体能量核 v2（2026-09-05 立体化）：球面 = 核心色径向底 + 左上镜面高光 +
+   右下明暗交界（inset 阴影）+ 1px 边缘光 + 带核心色的接触阴影；内层极光铺智连
+   光谱（v1 的紫/靛/粉字面量退场——那是市面通用「AI 紫」，与面板的智连蓝同屏
+   两套色板）。极光/白鞘沿用 transform 旋转（blur 层只能转不能重画，合成器零帧）。 */
 '.asb-orb{position:absolute;inset:0;border-radius:50%;overflow:hidden;' +
-'background:radial-gradient(circle at 32% 28%,#93a7ff 0%,var(--xz-accent,#4f6ef7) 46%,#181a3d 100%);' +
-'box-shadow:0 4px 16px rgba(0,0,0,.26),inset 0 0 8px rgba(255,255,255,.14);' +
-'transition:filter .5s ease,box-shadow .4s ease,transform .18s ease-out}' +
+'background:radial-gradient(circle at 31% 25%,rgba(255,255,255,.9) 0,rgba(255,255,255,.28) 11%,' +
+'rgba(255,255,255,0) 30%),' +
+'radial-gradient(circle at 42% 38%,color-mix(in srgb,var(--xz-core) 70%,#fff) 0%,' +
+'var(--xz-core) 44%,color-mix(in srgb,var(--xz-core) 40%,#0b1020) 100%);' +
+'box-shadow:inset -7px -9px 16px rgba(0,0,0,.38),inset 0 0 0 1px rgba(255,255,255,.2),' +
+'0 10px 22px -6px color-mix(in srgb,var(--xz-core) 55%,transparent);' +
+'transition:--xz-core .5s ease,box-shadow .4s ease,transform .18s ease-out}' +
 '.asb-orb::before{content:"";position:absolute;inset:-38%;border-radius:50%;' +
-'background:conic-gradient(from 10deg,rgba(139,92,246,0) 0deg,rgba(139,92,246,.9) 78deg,' +
-'rgba(34,211,238,.8) 150deg,rgba(139,92,246,0) 222deg,rgba(236,72,153,.6) 300deg,' +
-'rgba(139,92,246,0) 360deg);filter:blur(7px);animation:asbSpin 9s linear infinite}' +
+'background:conic-gradient(from 10deg,transparent 0deg,var(--xz-rb-1,#22d3ee) 70deg,' +
+'transparent 150deg,var(--xz-rb-3,#8b5cf6) 230deg,transparent 320deg);' +
+'opacity:.75;filter:blur(7px);animation:asbSpin 9s linear infinite}' +
 '.asb-orb::after{content:"";position:absolute;inset:-22%;border-radius:50%;' +
-'background:conic-gradient(from 200deg,rgba(255,255,255,0) 0deg,rgba(255,255,255,.55) 42deg,' +
+'background:conic-gradient(from 200deg,rgba(255,255,255,0) 0deg,rgba(255,255,255,.5) 42deg,' +
 'rgba(255,255,255,0) 92deg);filter:blur(5px);animation:asbSpin 5.5s linear infinite reverse}' +
 '@keyframes asbSpin{to{transform:rotate(360deg)}}' +
+/* 立体光环（Siri 线圈的 3D 版）：一条倾斜的光带环绕球体，拆成前后两半——
+   上半在球后、下半在球前（rotateX 正角把下缘转向观者），DOM 顺序 + clip-path
+   各取一半即成真实遮挡；环带本身在环平面内自转（transform，合成器）。
+   第二条更细、反向倾斜的环只在 lv2 出现＝「多彩线圈交织」。状态只改转速、
+   环宽与亮度；空闲 12s 慢转。 */
+'.asb-ring{position:absolute;inset:-7px;border-radius:50%;pointer-events:none;' +
+'transform:rotateX(68deg) rotateZ(-22deg);opacity:.78;' +
+'transition:opacity .5s ease,inset .4s ease}' +
+'.asb-ring.back{clip-path:inset(0 0 50% 0)}' +
+'.asb-ring.front{clip-path:inset(50% 0 0 0);z-index:3}' +
+'.asb-ring::before{content:"";position:absolute;inset:0;border-radius:50%;padding:2.4px;' +
+'background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 12s linear infinite}' +
+'.asb-ring.r2{transform:rotateX(64deg) rotateZ(38deg);inset:-4px;opacity:.55;display:none}' +
+'.asb-ring.r2::before{padding:1.6px;animation-duration:17s;animation-direction:reverse}' +
+'.asb-lv2 .asb-ring.r2{display:block}' +
+'.asb-ball.st-listening .asb-ring,.asb-ball.st-thinking .asb-ring,.asb-ball.st-speaking .asb-ring,' +
+'.asb-ball.st-agent .asb-ring,.asb-ball.st-teach .asb-ring{opacity:1}' +
+'.asb-ball.st-listening .asb-ring{inset:-9px}' +
+'.asb-ball.st-listening .asb-ring::before{padding:3.2px;animation-duration:4.5s}' +
+'.asb-ball.st-thinking .asb-ring::before,.asb-ball.st-agent .asb-ring::before{animation-duration:2.6s}' +
+'.asb-ball.st-speaking .asb-ring::before,.asb-ball.st-teach .asb-ring::before{animation-duration:4s}' +
+'.asb-ball.st-alert .asb-ring{opacity:.35}' +
 '.asb-glow{position:absolute;inset:-7px;border-radius:50%;pointer-events:none;' +
-'background:radial-gradient(circle,rgba(99,102,241,.42) 0%,rgba(99,102,241,0) 70%);' +
-'filter:blur(4px);animation:asbBreath 7s ease-in-out infinite}' +
-'@keyframes asbBreath{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.05);opacity:.95}}' +
+'background:radial-gradient(circle,color-mix(in srgb,var(--xz-core) 55%,transparent) 0%,transparent 70%);' +
+'filter:blur(4px);animation:asbBreath 7s ease-in-out infinite;transition:--xz-core .5s ease}' +
+'@keyframes asbBreath{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.05);opacity:.9}}' +
 '.asb-ic{position:relative;z-index:3;display:flex;align-items:center;justify-content:center;' +
 'text-shadow:0 1px 4px rgba(0,0,0,.35)}' +
 '.asb-ping{position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--xz-accent,#4f6ef7);' +
@@ -283,22 +393,21 @@
 'background:radial-gradient(circle,rgba(251,191,36,.28) 20%,rgba(245,158,11,.62) 100%)}' +
 '.asb-ball.st-alert .asb-alertfx{animation:asbAmber 2.1s ease-in-out infinite}' +
 '@keyframes asbAmber{0%,100%{opacity:0}18%,42%{opacity:1}30%{opacity:.35}}' +
-'.asb-ball.st-alert .asb-orb{filter:hue-rotate(96deg) saturate(1.1)}' +
-'.asb-ball.st-listening .asb-orb{filter:hue-rotate(-54deg) saturate(1.3) brightness(1.07);' +
-'box-shadow:0 4px 20px rgba(34,211,238,.4)}' +
+/* 各状态的动效节奏（颜色已由上面的 --xz-core 表接管） */
+'.asb-ball.st-listening .asb-orb{box-shadow:inset -7px -9px 16px rgba(0,0,0,.38),' +
+'inset 0 0 0 1px rgba(255,255,255,.2),0 6px 22px -4px color-mix(in srgb,var(--xz-core) 60%,transparent)}' +
 '.asb-ball.st-listening .asb-orb::before{animation-duration:3.6s}' +
-'.asb-ball.st-thinking .asb-orb{filter:hue-rotate(26deg) saturate(1.25)}' +
 '.asb-ball.st-thinking .asb-orb::before{animation-duration:1.7s}' +
 '.asb-ball.st-thinking .asb-glow{animation:asbBreath 1.7s ease-in-out infinite}' +
-'.asb-ball.st-speaking .asb-orb{filter:hue-rotate(-18deg) saturate(1.25) brightness(1.06)}' +
 '.asb-ball.st-speaking .asb-glow{animation:asbBreath 2.2s ease-in-out infinite}' +
-'.asb-ball.st-agent .asb-orb{filter:hue-rotate(-32deg) saturate(1.2)}' +
+'.asb-ball.okflash .asb-orb{filter:brightness(1.12) saturate(1.2)}' +
+/* 琥珀/翠绿是语义色，青紫极光叠上去会混成橄榄——这两态把极光压到几乎不见 */
+'.asb-ball.st-alert .asb-orb::before,.asb-ball.okflash .asb-orb::before{opacity:.12}' +
+'.asb-orb::before{transition:opacity .5s ease}' +
 '.asb-sweep{position:absolute;inset:-5px;border-radius:50%;pointer-events:none;opacity:0;' +
-'background:conic-gradient(from 0deg,rgba(34,211,238,0) 0deg,rgba(34,211,238,.55) 40deg,' +
-'rgba(34,211,238,0) 80deg);filter:blur(1px)}' +
+'background:conic-gradient(from 0deg,transparent 0deg,color-mix(in srgb,var(--xz-rb-1,#22d3ee) 55%,transparent) 40deg,' +
+'transparent 80deg);filter:blur(1px)}' +
 '.asb-ball.st-teach .asb-sweep{opacity:1;animation:asbSpin 3s linear infinite}' +
-'.asb-ball.st-teach .asb-orb{filter:hue-rotate(-60deg) saturate(1.15)}' +
-'.asb-ball.okflash .asb-orb{filter:hue-rotate(-120deg) saturate(1.5) brightness(1.12)}' +
 '@keyframes asbPulse{0%,100%{box-shadow:0 4px 16px rgba(0,0,0,.22)}' +
 '50%{box-shadow:0 4px 26px rgba(99,102,241,.55)}}' +
 '.asb-fx{position:absolute;left:50%;top:50%;width:168px;height:168px;' +
@@ -306,18 +415,18 @@
 /* 画质档/减动效：lv0=静态+透明度脉冲；系统 reduced-motion 同语义（旋转必杀，
    opacity 脉冲保留=Apple 同款状态灯降级） */
 '.asb-lv0 .asb-orb::before,.asb-lv0 .asb-orb::after,.asb-lv0 .asb-glow,' +
-'.asb-lv0 .asb-sweep{animation:none}' +
+'.asb-lv0 .asb-sweep,.asb-lv0 .asb-ring::before{animation:none}' +
 '.asb-lv0 .asb-ball.st-hint .asb-ping{animation:none}' +
 '.asb-lv0 .asb-ball.st-alert .asb-alertfx{animation:asbFade 2.2s ease-in-out infinite}' +
 '.asb-lv0 .asb-ball.st-thinking .asb-orb{animation:asbFade 1.8s ease-in-out infinite}' +
 '@keyframes asbFade{0%,100%{opacity:1}50%{opacity:.62}}' +
 '@media (prefers-reduced-motion:reduce){' +
-'.asb-orb::before,.asb-orb::after,.asb-glow,.asb-ping,.asb-sweep{animation:none!important}' +
+'.asb-orb::before,.asb-orb::after,.asb-glow,.asb-ping,.asb-sweep,.asb-ring::before{animation:none!important}' +
 '.asb-ball.st-thinking .asb-orb{animation:asbFade 1.8s ease-in-out infinite}' +
 '}' +
 '.asb-hero{display:none;padding:.25rem .8rem 0;flex-shrink:0}' +
 '.asb-hero.on{display:block}' +
-'.asb-hero canvas{width:100%;height:38px;display:block}' +
+'.asb-hero canvas{width:100%;height:44px;display:block}' +
 '.asb-fbq{display:flex;gap:.35rem;align-items:center}' +
 '.asb-fb .asb-say.on{background:var(--xz-accent,#4f6ef7);color:#fff;' +
 'border-color:var(--xz-accent,#4f6ef7)}' +
@@ -327,12 +436,42 @@
 /* box-sizing 是拖拽的**正确性前提**，不是风格偏好：rect.width 含 1px 边框而
    style.width 默认写 content-box，两者差 2px。存 rect / 写 style 形成闭环后
    每拖一次就胖 2px（实测 382→384→386…），几十次后面板自己长满屏。 */
-'.asb-panel{position:fixed;z-index:9999;box-sizing:border-box;width:380px;' +
-'max-width:calc(100vw - 24px);' +
-'height:min(560px,78vh);display:none;flex-direction:column;overflow:hidden;' +
-'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.24);animation:asbUp .18s ease}' +
-'.asb-panel.open{display:flex}' +
+/* ── 面板壳 v2（2026-09-05）：玻璃 + 分层阴影 + 边缘泛光 ─────────────────
+   根节点自身透明，底/边/高光/backdrop 模糊全放在 ::after（z-1），泛光放在
+   ::before（z-2）——固定定位的面板本身就是层叠上下文，负 z 子层会画在根背景
+   **之上**，只有把「背景」也做成子层，泛光才能真的躲到玻璃后面（隔着 14%
+   的玻璃透进来一点，正是想要的「光从边缘渗进来」）。overflow 由 hidden 改
+   visible：泛光与八向手柄都长在盒外；直属子级没有会越过圆角的背景，滚动由
+   .asb-body 自己的 overflow-y 承担。泛光只在听/想/说三态亮，steps(120) 把
+   模糊层重画压到 20fps——它是软光，不需要 60fps。 */
+'.asb-panel{position:fixed;z-index:9999;box-sizing:border-box;width:392px;' +
+'max-width:calc(100vw - 24px);--xz-core:var(--xz-accent,#4f6ef7);' +
+'height:min(600px,78vh);display:none;flex-direction:column;overflow:visible;' +
+'background:transparent;color:var(--xz-txt,#111);border:none;' +
+'border-radius:20px;box-shadow:var(--xz-sh-key,0 12px 40px rgba(0,0,0,.24)),' +
+'var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08))}' +
+/* 入场动画挂一次性 .asb-in（开面板加、结束即摘）而不是常驻在 .asb-panel 上：
+   常驻时每次拖拽的 .asb-moving{animation:none} 一撤，动画就从头重播；且带
+   scale 的入场期内 getBoundingClientRect 读到的是缩放中的尺寸，若此时开始
+   拖动会把 378.6×557.9 固化成自定义几何（探针 G2b 实锤）。 */
+'.asb-panel.asb-in{animation:asbUp .26s var(--xz-ease,ease)}' +
+'.asb-panel::after{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;' +
+'pointer-events:none;box-sizing:border-box;background:var(--xz-glass,var(--xz-bg,#fff));' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'box-shadow:inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3)}' +
+'.asb-panel::before{content:"";position:absolute;inset:-2px;border-radius:22px;z-index:-2;' +
+'pointer-events:none;background:conic-gradient(from var(--xz-a),var(--xz-rb-stops));' +
+'filter:blur(14px);opacity:0;transition:opacity .5s ease}' +
+/* 动画只挂在亮着的三态上：opacity:0 的层若也在补间角度，每步都会白白重画 */
+'.asb-panel.st-listening::before,.asb-panel.st-thinking::before,.asb-panel.st-speaking::before{' +
+'opacity:.5;animation:asbRibbon 6s steps(120) infinite}' +
+'.asb-panel.asb-dark.st-listening::before,.asb-panel.asb-dark.st-thinking::before,' +
+'.asb-panel.asb-dark.st-speaking::before{opacity:.85}' +
+'.asb-panel.asb-lite::before,.asb-panel.asb-lv0::before,.asb-panel.asb-lv1::before{display:none}' +
+'.asb-panel.open,.asb-panel.closing{display:flex}' +
+'.asb-panel.closing{animation:asbDown .16s ease forwards;pointer-events:none}' +
+'@keyframes asbDown{to{opacity:0;transform:translateY(6px) scale(.98)}}' +
 /* ── 自由拖拽/缩放（P1 2026-08-29，老板：「要能随意拖拉位置和放大放小」）──
    面板原本死锚在球的对角象限，读长回答只能在 380x560 的小窗里滚。
    拖动期禁掉过渡与动画：否则每帧都在补间，跟手感会糊。 */
@@ -352,292 +491,524 @@
 '.asb-rs.sw{bottom:-3px;left:-3px;width:16px;height:16px;cursor:nesw-resize;z-index:7}' +
 '.asb-rs.se{bottom:-3px;right:-3px;width:16px;height:16px;cursor:nwse-resize;z-index:7}' +
 /* 右下角给一个看得见的抓手暗示——不画的话没人知道可以缩放 */
-'.asb-rs.se::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;' +
-'height:8px;border-right:2px solid var(--xz-bd,#ddd);' +
-'border-bottom:2px solid var(--xz-bd,#ddd);border-radius:0 0 3px 0}' +
+'.asb-rs.se::after{content:"";position:absolute;right:7px;bottom:7px;width:7px;' +
+'height:7px;border-right:2px solid var(--xz-muted,#bbb);' +
+'border-bottom:2px solid var(--xz-muted,#bbb);border-radius:0 0 3px 0;opacity:.6}' +
 '.asb-rs:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
 /* 吸附提示：贴边命中时描边一下，让「吸住了」有反馈 */
-'.asb-panel.asb-snapped{box-shadow:0 12px 40px rgba(0,0,0,.24),' +
+'.asb-panel.asb-snapped{box-shadow:var(--xz-sh-key,0 12px 40px rgba(0,0,0,.24)),' +
 '0 0 0 2px var(--xz-accent,#4f6ef7)}' +
 '.asb-hd-rst{border:none;background:none;color:var(--xz-muted,#888);' +
-'cursor:pointer;font-size:.85rem;padding:.2rem .4rem;border-radius:8px;' +
-'line-height:1;flex-shrink:0}' +
+'cursor:pointer;font-size:.95rem;width:30px;height:30px;padding:0;border-radius:50%;' +
+'line-height:1;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}' +
 '.asb-hd-rst:hover{background:var(--xz-hover,rgba(0,0,0,.05));' +
 'color:var(--xz-txt,#111)}' +
 '.asb-hd-rst[hidden]{display:none}' +
-'@keyframes asbUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}' +
+'@keyframes asbUp{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}' +
 '.asb-hd{display:flex;align-items:center;gap:.5rem;padding:.6rem .8rem;' +
-'border-bottom:1px solid var(--xz-bd,#ddd);flex-shrink:0}' +
-'.asb-hd-ic{width:26px;height:26px;border-radius:50%;flex-shrink:0;' +
-'background:linear-gradient(135deg,var(--xz-accent,#4f6ef7),#8b5cf6);display:flex;' +
-'align-items:center;justify-content:center;color:#fff;transition:filter .5s ease}' +
-'.asb-hd-ic svg{width:15px;height:15px}' +
-/* 面板头像迷你核：镜像球的状态色（同一隐喻，球↔面板视觉连续） */
-'.asb-panel.st-listening .asb-hd-ic{filter:hue-rotate(-54deg) saturate(1.3)}' +
-'.asb-panel.st-thinking .asb-hd-ic{filter:hue-rotate(26deg) saturate(1.25)}' +
-'.asb-panel.st-alert .asb-hd-ic{filter:hue-rotate(96deg) saturate(1.15)}' +
-'.asb-hd-name{font-weight:700;font-size:.88rem;flex:1;min-width:0;overflow:hidden;' +
-'text-overflow:ellipsis;white-space:nowrap}' +
+'border-bottom:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent);flex-shrink:0}' +
+/* 标题栏迷你光核（v2）：与球同一套球面 shading + 一条细光环，状态色相镜像球
+   （同一隐喻，球↔面板视觉连续）；名字下方一行状态短句由 syncOrb 写入——
+   「小智在干什么」第一次有了明确的文字信号，不再只靠球的色差。 */
+'.asb-hd-ic{position:relative;width:26px;height:26px;border-radius:50%;flex-shrink:0;' +
+'display:flex;align-items:center;justify-content:center;color:#fff;isolation:isolate}' +
+'.asb-hd-core{position:absolute;inset:0;border-radius:50%;z-index:-1;' +
+'background:radial-gradient(circle at 31% 25%,rgba(255,255,255,.9) 0,rgba(255,255,255,.28) 11%,' +
+'rgba(255,255,255,0) 30%),' +
+'radial-gradient(circle at 42% 38%,color-mix(in srgb,var(--xz-core) 70%,#fff) 0%,' +
+'var(--xz-core) 44%,color-mix(in srgb,var(--xz-core) 40%,#0b1020) 100%);' +
+'box-shadow:inset -4px -5px 9px rgba(0,0,0,.36),inset 0 0 0 1px rgba(255,255,255,.2),' +
+'0 4px 10px -3px color-mix(in srgb,var(--xz-core) 55%,transparent);transition:--xz-core .5s ease}' +
+'.asb-hd-ring{position:absolute;inset:-4px;border-radius:50%;pointer-events:none;' +
+'transform:rotateX(68deg) rotateZ(-22deg);opacity:.8;z-index:1}' +
+'.asb-hd-ring::before{content:"";position:absolute;inset:0;border-radius:50%;padding:1.5px;' +
+'background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 12s linear infinite}' +
+'.asb-hd-ic svg{width:14px;height:14px;position:relative;z-index:2;' +
+'filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}' +
+'.asb-panel.st-listening .asb-hd-ring::before{animation-duration:4.5s}' +
+'.asb-panel.st-thinking .asb-hd-ring::before,.asb-panel.st-agent .asb-hd-ring::before{' +
+'animation-duration:2.6s}' +
+'.asb-panel.st-speaking .asb-hd-ring::before,.asb-panel.st-teach .asb-hd-ring::before{' +
+'animation-duration:4s}' +
+'.asb-panel.asb-lv0 .asb-hd-ring::before{animation:none}' +
+'.asb-hd-name{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2}' +
+'.asb-hd-name b{font-weight:700;font-size:.86rem;overflow:hidden;text-overflow:ellipsis;' +
+'white-space:nowrap}' +
+'.asb-hd-st{font-style:normal;font-size:.75rem;font-weight:500;color:var(--xz-muted,#888);' +
+'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .3s ease}' +
+/* 状态句取当前核心色（压 28% 文字色保对比度；琥珀警示态用 ink 级别的深琥珀） */
+'.asb-panel.st-listening .asb-hd-st,.asb-panel.st-thinking .asb-hd-st,' +
+'.asb-panel.st-speaking .asb-hd-st,.asb-panel.st-agent .asb-hd-st,' +
+'.asb-panel.st-teach .asb-hd-st{color:color-mix(in srgb,var(--xz-core) 72%,var(--xz-txt,#111))}' +
+'.asb-panel.st-alert .asb-hd-st{color:var(--tk-warn-ink,#b45309)}' +
 '.asb-x{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
-'font-size:1rem;padding:.2rem .45rem;border-radius:8px;line-height:1}' +
-'.asb-x:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
+'font-size:1.05rem;width:30px;height:30px;padding:0;border-radius:50%;line-height:1;' +
+'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;' +
+'transition:background .15s ease,color .15s ease}' +
+'.asb-x:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.asb-x:focus-visible,.asb-hd-pair:focus-visible,.asb-hd-pc:focus-visible,' +
+'.asb-hd-rst:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
+/* 图标态：说明用 */
+'.asb-i-ok{color:#059669}' +
+'.asb-spin{animation:asbSpin 1s linear infinite}' +
+'.asb-msg--sys{font-size:.8rem;color:var(--xz-muted,#888);display:inline-flex;' +
+'align-items:center;gap:.35em}' +
 /* ── 模式条（实施73 P1-1）：三大功能升格为一级导航 ──────────────────────
    段控 + 滑块指示器；只有一个模式在册（兄弟组件缺席）时整条隐藏 `.solo`，
    退化成旧的「纯问答面板」而不是留一个点不动的空段控。 */
 '.asb-modes{position:relative;display:flex;gap:.2rem;flex-shrink:0;' +
-'margin:.5rem .8rem .15rem;padding:.2rem;border-radius:12px;' +
-'background:var(--xz-input,#f3f4f6)}' +
+'margin:.55rem .85rem .2rem;padding:.22rem;border-radius:14px;' +
+'background:color-mix(in srgb,var(--xz-input,#f3f4f6) 80%,transparent)}' +
 '.asb-modes.solo{display:none}' +
-'.asb-modes-ind{position:absolute;top:.2rem;bottom:.2rem;left:0;border-radius:10px;' +
-'background:var(--xz-bg,#fff);box-shadow:0 1px 4px rgba(0,0,0,.16);z-index:0;' +
-'pointer-events:none;transition:transform .18s ease,width .18s ease}' +
+/* 滑块带当前模式的色调投影（问答=蓝、教学=青、替我做=紫）——三大能力第一次
+   有了颜色编码，与球在各态的色相偏移同一套语言（data-cur 由 syncModes 写） */
+'.asb-modes-ind{position:absolute;top:.22rem;bottom:.22rem;left:0;border-radius:11px;' +
+'background:var(--xz-bg,#fff);box-shadow:0 1px 4px rgba(0,0,0,.14),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'z-index:0;pointer-events:none;transition:transform .22s var(--xz-ease,ease),width .22s var(--xz-ease,ease),' +
+'box-shadow .3s ease}' +
+'.asb-modes[data-cur="chat"] .asb-modes-ind{box-shadow:0 2px 8px -2px color-mix(in srgb,var(--xz-rb-2,#4f6ef7) 45%,transparent),' +
+'inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-modes[data-cur="teach"] .asb-modes-ind{box-shadow:0 2px 8px -2px color-mix(in srgb,var(--xz-rb-1,#22d3ee) 55%,transparent),' +
+'inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-modes[data-cur="agent"] .asb-modes-ind{box-shadow:0 2px 8px -2px color-mix(in srgb,var(--xz-rb-3,#8b5cf6) 50%,transparent),' +
+'inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
 '.asb-mode{position:relative;z-index:1;flex:1;border:none;background:none;' +
-'cursor:pointer;font-family:inherit;font-size:.78rem;font-weight:600;' +
-'color:var(--xz-muted,#888);padding:.42rem .3rem;border-radius:10px;display:flex;' +
-'align-items:center;justify-content:center;gap:.28rem;white-space:nowrap}' +
-'.asb-mode i{font-style:normal;font-size:.92rem;line-height:1}' +
+'cursor:pointer;font-family:inherit;font-size:.8rem;font-weight:600;' +
+'color:var(--xz-muted,#888);padding:.48rem .3rem;border-radius:11px;display:flex;' +
+'align-items:center;justify-content:center;gap:.32rem;white-space:nowrap;' +
+'transition:color .2s ease}' +
+'.asb-mode i{font-style:normal;font-size:1rem;line-height:1;display:inline-flex}' +
 '.asb-mode[aria-checked="true"]{color:var(--xz-txt,#111)}' +
+'.asb-modes[data-cur="chat"] .asb-mode[aria-checked="true"] i{color:var(--xz-rb-2,#4f6ef7)}' +
+'.asb-modes[data-cur="teach"] .asb-mode[aria-checked="true"] i{' +
+'color:color-mix(in srgb,var(--xz-rb-1,#22d3ee) 70%,var(--xz-txt,#111))}' +
+'.asb-modes[data-cur="agent"] .asb-mode[aria-checked="true"] i{color:var(--xz-rb-3,#8b5cf6)}' +
 '.asb-mode:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
 '@media (prefers-reduced-motion:reduce){.asb-modes-ind{transition:none}}' +
 /* ── 次级页签行（P1-5）：报障 · 我的 · 常问 · ⚙ ───────────────────────── */
-'.asb-subtabs{display:flex;gap:.08rem;align-items:center;flex-shrink:0;' +
-'padding:.28rem .55rem .38rem;border-top:1px solid var(--xz-bd,#ddd)}' +
+'.asb-subtabs{display:flex;gap:.15rem;align-items:center;flex-shrink:0;' +
+'padding:.35rem .6rem .45rem;border-top:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent)}' +
 '.asb-sub{border:none;background:none;cursor:pointer;font-family:inherit;' +
-'font-size:.7rem;color:var(--xz-muted,#888);padding:.24rem .5rem;border-radius:7px}' +
-'.asb-sub:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
-'.asb-sub.cur{background:var(--xz-input,#f3f4f6);color:var(--xz-accent,#4f6ef7);' +
-'font-weight:600}' +
+'font-size:.76rem;color:var(--xz-muted,#888);padding:.3rem .62rem;border-radius:999px;' +
+'transition:background .15s ease,color .15s ease}' +
+'.asb-sub:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.asb-sub.cur{background:color-mix(in srgb,var(--xz-accent,#4f6ef7) 12%,transparent);' +
+'color:var(--xz-accent,#4f6ef7);font-weight:600}' +
+'.asb-sub--ic{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;' +
+'justify-content:center;font-size:1rem}' +
 '.asb-sub-sp{flex:1}' +
 /* ── 标题栏手机操控（P1-2）：通道不是第四种能力，故不占模式条 ─────────── */
 '.asb-hd-pair{position:relative;border:none;background:none;cursor:pointer;' +
-'font-size:.95rem;padding:.2rem .4rem;border-radius:8px;line-height:1;' +
-'color:var(--xz-muted,#888)}' +
-'.asb-hd-pair:hover{background:var(--xz-input,#f3f4f6)}' +
-'.asb-hd-pair i{position:absolute;right:2px;bottom:2px;width:7px;height:7px;' +
+'font-size:1rem;width:30px;height:30px;padding:0;border-radius:50%;line-height:1;' +
+'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;' +
+'color:var(--xz-muted,#888);transition:background .15s ease,color .15s ease}' +
+'.asb-hd-pair:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.asb-hd-pair i{position:absolute;right:3px;bottom:3px;width:8px;height:8px;' +
 'border-radius:50%;background:var(--xz-muted,#bbb);border:1.5px solid var(--xz-bg,#fff)}' +
 '.asb-hd-pair.on{color:var(--xz-txt,#111)}' +
-'.asb-hd-pair.on i{background:#22c55e}' +
+'.asb-hd-pair.on i{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.7)}' +
 /* ── 标题栏电脑操控（实施91 P1-1）：与手机键同族的通道式入口，enabled 才显 ── */
 '.asb-hd-pc{position:relative;border:none;background:none;cursor:pointer;' +
-'font-size:.95rem;padding:.2rem .4rem;border-radius:8px;line-height:1;' +
-'color:var(--xz-muted,#888)}' +
+'font-size:1rem;width:30px;height:30px;padding:0;border-radius:50%;line-height:1;' +
+'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;' +
+'color:var(--xz-muted,#888);transition:background .15s ease,color .15s ease}' +
 '.asb-hd-pc[hidden]{display:none}' +
-'.asb-hd-pc:hover{background:var(--xz-input,#f3f4f6)}' +
-'.asb-hd-pc i{position:absolute;right:2px;bottom:2px;width:7px;height:7px;' +
+'.asb-hd-pc:hover{background:var(--xz-hover,rgba(0,0,0,.05));color:var(--xz-txt,#111)}' +
+'.asb-hd-pc i{position:absolute;right:3px;bottom:3px;width:8px;height:8px;' +
 'border-radius:50%;background:var(--xz-muted,#bbb);border:1.5px solid var(--xz-bg,#fff)}' +
 '.asb-hd-pc.on{color:var(--xz-txt,#111)}' +
-'.asb-hd-pc.on i{background:#22c55e}' +
+'.asb-hd-pc.on i{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.7)}' +
 /* ── 模式内容通用卡（球提供，教学/替我做挂载时直接复用＝三个模式一套度量） */
-'.asb-md{display:flex;flex-direction:column;gap:.5rem}' +
-'.asb-md-hero{border:1px solid var(--xz-bd,#ddd);border-radius:12px;' +
-'background:var(--xz-input,#f7f7f9);padding:.65rem .7rem;display:flex;' +
-'flex-direction:column;gap:.42rem}' +
-'.asb-md-t{font-size:.8rem;font-weight:700;display:flex;align-items:center;gap:.35rem}' +
-'.asb-md-d{font-size:.7rem;color:var(--xz-muted,#888);line-height:1.55}' +
-'.asb-md-go{border:none;border-radius:10px;background:var(--xz-accent,#4f6ef7);' +
-'color:#fff;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600;' +
-'padding:.55rem .9rem}' +
-'.asb-md-go.off{background:#ef4444}' +
-'.asb-md-row{display:flex;gap:.35rem;flex-wrap:wrap}' +
-'.asb-md-b{border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
-'color:var(--xz-txt,#333);border-radius:9px;cursor:pointer;font-family:inherit;' +
-'font-size:.74rem;padding:.32rem .6rem}' +
+'.asb-md{display:flex;flex-direction:column;gap:.6rem}' +
+'.asb-md-hero{position:relative;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 80%,transparent);' +
+'border-radius:14px;background:color-mix(in srgb,var(--xz-input,#f7f7f9) 70%,var(--xz-bg,#fff));' +
+'padding:.75rem .8rem;display:flex;flex-direction:column;gap:.5rem;' +
+'box-shadow:inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-md-t{font-size:.86rem;font-weight:700;display:flex;align-items:center;gap:.4rem}' +
+'.asb-md-t .asb-i{color:var(--xz-accent,#4f6ef7);font-size:1.05rem}' +
+'.asb-md-d{font-size:.78rem;color:var(--xz-muted,#888);line-height:1.6}' +
+/* 主按钮：background 声明保留 accent 实色（门禁钉），再叠一层蓝→紫渐变 */
+'.asb-md-go{border:none;border-radius:12px;background:var(--xz-accent,#4f6ef7);' +
+'background-image:linear-gradient(145deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));' +
+'color:#fff;cursor:pointer;font-family:inherit;font-size:.84rem;font-weight:600;' +
+'padding:.6rem 1rem;display:inline-flex;align-items:center;justify-content:center;gap:.4em;' +
+'box-shadow:0 8px 18px -10px var(--xz-tint,rgba(79,110,247,.5));' +
+'transition:transform .15s ease,filter .15s ease}' +
+'.asb-md-go:hover{filter:brightness(1.06)}' +
+'.asb-md-go:active{transform:scale(.98)}' +
+'.asb-md-go.off{background:#ef4444;background-image:none}' +
+'.asb-md-row{display:flex;gap:.4rem;flex-wrap:wrap}' +
+'.asb-md-b{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);' +
+'background:var(--xz-bg,#fff);color:var(--xz-txt,#333);border-radius:10px;cursor:pointer;' +
+'font-family:inherit;font-size:.78rem;padding:.4rem .7rem;display:inline-flex;' +
+'align-items:center;gap:.35em;transition:border-color .15s ease,color .15s ease}' +
 '.asb-md-b:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
-'.asb-md-safe{font-size:.68rem;color:var(--xz-muted,#888);line-height:1.55}' +
+'.asb-md-safe{font-size:.75rem;color:var(--xz-muted,#888);line-height:1.6;display:flex;' +
+'align-items:flex-start;gap:.35em}' +
+'.asb-md-safe .asb-i{flex-shrink:0;margin-top:.18em;color:#059669}' +
 /* ── 主次分层（P1-2，2026-08-28）──────────────────────────────────────────
    此前「替我做」两张卡共用 .asb-md-hero＝同边框同底色同 padding，于是核心
    能力与手机通道视觉权重相同，整屏零焦点（老板实录：版面太碎没有重点）。
    现在：主卡＝accent 左轴 + 提亮标题 + 唯一实心主按钮（.asb-md-go，样式表
    里早已定义却从没被调用过）；次要入口降级为一行 .asb-md-sub。 */
-'.asb-md-hero--pri{border-color:transparent;' +
-'border-left:3px solid var(--xz-accent,#4f6ef7);background:var(--xz-bg,#fff);' +
-'box-shadow:0 1px 6px rgba(0,0,0,.10)}' +
-'.asb-md-hero--pri .asb-md-t{font-size:.9rem}' +
-'.asb-md-hero--pri .asb-md-d{font-size:.74rem;color:var(--xz-txt,#333)}' +
+/* 主卡：白玻璃 + 三色渐变左轴（伪元素，卡自身圆角靠 overflow 裁） */
+'.asb-md-hero--pri{border-color:color-mix(in srgb,var(--xz-bd,#ddd) 60%,transparent);' +
+'background:var(--xz-bg,#fff);overflow:hidden;' +
+'box-shadow:var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08)),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-md-hero--pri::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;' +
+'background:linear-gradient(180deg,var(--xz-rb-1,#22d3ee),var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6))}' +
+'.asb-md-hero--pri .asb-md-t{font-size:.94rem}' +
+'.asb-md-hero--pri .asb-md-d{font-size:.8rem;color:var(--xz-txt,#333)}' +
 '.asb-md-hd{display:flex;align-items:center;gap:.4rem}' +
 '.asb-md-hd .asb-md-t{flex:1;min-width:0}' +
 '.asb-md-lnk{border:none;background:none;cursor:pointer;font-family:inherit;' +
-'font-size:.7rem;color:var(--xz-accent,#4f6ef7);padding:.1rem .2rem}' +
+'font-size:.76rem;color:var(--xz-accent,#4f6ef7);padding:.15rem .3rem;border-radius:6px}' +
 '.asb-md-lnk:hover{text-decoration:underline}' +
-'.asb-md-sub{display:flex;align-items:center;gap:.5rem;width:100%;' +
-'text-align:left;box-sizing:border-box;border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:10px;background:none;cursor:pointer;font-family:inherit;' +
-'padding:.45rem .55rem;color:var(--xz-txt,#333)}' +
-'.asb-md-sub:hover{border-color:var(--xz-accent,#4f6ef7)}' +
-'.asb-md-sub-i{font-size:1rem;line-height:1;flex-shrink:0}' +
-'.asb-md-sub-x{flex:1;min-width:0;display:flex;flex-direction:column;gap:.1rem}' +
-'.asb-md-sub-x b{font-size:.78rem;font-weight:600}' +
-'.asb-md-sub-x i{font-style:normal;font-size:.68rem;color:var(--xz-muted,#888)}' +
+'.asb-md-sub{display:flex;align-items:center;gap:.55rem;width:100%;' +
+'text-align:left;box-sizing:border-box;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:12px;background:none;cursor:pointer;font-family:inherit;' +
+'padding:.55rem .65rem;color:var(--xz-txt,#333);transition:border-color .15s ease,background .15s ease}' +
+'.asb-md-sub:hover{border-color:var(--xz-accent,#4f6ef7);background:var(--xz-hover,rgba(0,0,0,.03))}' +
+'.asb-md-sub-i{font-size:1.15rem;line-height:1;flex-shrink:0;display:inline-flex;' +
+'color:var(--xz-accent,#4f6ef7)}' +
+'.asb-md-sub-x{flex:1;min-width:0;display:flex;flex-direction:column;gap:.12rem}' +
+'.asb-md-sub-x b{font-size:.82rem;font-weight:600}' +
+'.asb-md-sub-x i{font-style:normal;font-size:.75rem;color:var(--xz-muted,#888)}' +
 '.asb-md-sub-go{color:var(--xz-muted,#bbb);flex-shrink:0;font-size:1rem;' +
-'line-height:1}' +
+'line-height:1;display:inline-flex}' +
 /* 示例任务（P1-3）：空态是新用户最需要引导的位置，不该只说「还没有记录」。
    点一条＝填进输入框并聚焦（不自动提交——替我做会改设置，得让人先看清）。 */
-'.asb-md-ex{display:flex;flex-direction:column;gap:.3rem}' +
-'.asb-md-ex-t{font-size:.68rem;color:var(--xz-muted,#888)}' +
+'.asb-md-ex{display:flex;flex-direction:column;gap:.35rem}' +
+'.asb-md-ex-t{font-size:.75rem;color:var(--xz-muted,#888)}' +
 /* 模式状态行（实施73 P2-1）：一句「本页 N 处可讲解」就是进入模式的理由。
    0 处/词典未就绪时同一行改说实话，所以做成中性底色而非成绩单绿。 */
-'.asb-md-stat{font-size:.72rem;line-height:1.5;color:var(--xz-txt,#333);' +
-'background:var(--xz-bg,#fff);border:1px solid var(--xz-bd,#e5e7eb);' +
-'border-radius:9px;padding:.34rem .55rem}' +
-'.asb-md-stat b{color:var(--xz-accent,#4f6ef7);font-size:.86rem;' +
+'.asb-md-stat{font-size:.78rem;line-height:1.5;color:var(--xz-txt,#333);' +
+'background:var(--xz-bg,#fff);border:1px solid color-mix(in srgb,var(--xz-bd,#e5e7eb) 85%,transparent);' +
+'border-radius:10px;padding:.4rem .6rem}' +
+'.asb-md-stat b{color:var(--xz-accent,#4f6ef7);font-size:.92rem;' +
 'padding:0 .12rem}' +
 '.asb-md-stat[data-n="0"],.asb-md-stat[data-n="-1"],' +
 '.asb-md-stat[data-n="-2"]{color:var(--xz-muted,#888)}' +
 '.asb-md-list{display:flex;flex-direction:column}' +
-'.asb-md-li{display:flex;align-items:center;gap:.4rem;font-size:.72rem;' +
-'border-top:1px solid var(--xz-bd,#eee);padding:.34rem 0}' +
+'.asb-md-li{display:flex;align-items:center;gap:.45rem;font-size:.78rem;' +
+'border-top:1px solid color-mix(in srgb,var(--xz-bd,#eee) 80%,transparent);padding:.42rem 0}' +
 '.asb-md-li .m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
 'white-space:nowrap}' +
-'.asb-md-li .w{color:var(--xz-muted,#888);font-size:.66rem;flex-shrink:0}' +
+'.asb-md-li .w{color:var(--xz-muted,#888);font-size:.75rem;flex-shrink:0;' +
+'font-variant-numeric:tabular-nums}' +
 /* ── 常问面板（P1-6） ─────────────────────────────────────────────────── */
 '.asb-faq-s{display:flex;gap:.35rem}' +
-'.asb-faq-s input{flex:1;border:1px solid var(--xz-bd,#ddd);border-radius:10px;' +
-'background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);font-family:inherit;' +
-'font-size:.78rem;padding:.4rem .6rem;outline:none}' +
-'.asb-faq-s input:focus{border-color:var(--xz-accent,#4f6ef7)}' +
-'.asb-faq-g{font-size:.66rem;color:var(--xz-muted,#888);margin:.3rem 0 .05rem}' +
-'.asb-faq-i{display:flex;align-items:center;gap:.4rem;width:100%;text-align:left;' +
-'border:1px solid var(--xz-bd,#ddd);background:var(--xz-bg,#fff);' +
-'color:var(--xz-txt,#333);border-radius:9px;cursor:pointer;font-family:inherit;' +
-'font-size:.75rem;padding:.36rem .55rem;box-sizing:border-box}' +
+'.asb-faq-s input{flex:1;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:12px;background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);font-family:inherit;' +
+'font-size:.82rem;padding:.5rem .75rem;outline:none;transition:box-shadow .2s ease}' +
+'.asb-faq-s input:focus{border-color:var(--xz-accent,#4f6ef7);' +
+'box-shadow:0 0 0 3px color-mix(in srgb,var(--xz-accent,#4f6ef7) 18%,transparent)}' +
+'.asb-faq-g{font-size:.75rem;color:var(--xz-muted,#888);margin:.35rem 0 .1rem;font-weight:600}' +
+'.asb-faq-i{display:flex;align-items:center;gap:.45rem;width:100%;text-align:left;' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);background:var(--xz-bg,#fff);' +
+'color:var(--xz-txt,#333);border-radius:10px;cursor:pointer;font-family:inherit;' +
+'font-size:.8rem;padding:.45rem .65rem;box-sizing:border-box;transition:border-color .15s ease}' +
 '.asb-faq-i:hover{border-color:var(--xz-accent,#4f6ef7)}' +
 '.asb-faq-i .q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
 'white-space:nowrap}' +
-'.asb-faq-i .n{font-size:.64rem;color:var(--xz-muted,#888);flex-shrink:0}' +
-'.asb-body{flex:1;overflow-y:auto;padding:.7rem .8rem;display:flex;' +
-'flex-direction:column;gap:.55rem}' +
-'.asb-chips{display:flex;flex-wrap:wrap;gap:.35rem}' +
-'.asb-chips-t{font-size:.68rem;color:var(--xz-muted,#888);width:100%}' +
-'.asb-chip{border:1px solid var(--xz-bd,#ddd);background:var(--xz-input,#f7f7f9);' +
-'color:var(--xz-txt,#333);border-radius:999px;padding:.22rem .6rem;font-size:.74rem;' +
+'.asb-faq-i .n{font-size:.75rem;color:var(--xz-muted,#888);flex-shrink:0}' +
+'.asb-body{flex:1;overflow-y:auto;padding:.75rem .85rem;display:flex;' +
+'flex-direction:column;gap:.6rem;scrollbar-width:thin}' +
+'.asb-chips{display:flex;flex-wrap:wrap;gap:.4rem}' +
+'.asb-chips-t{font-size:.75rem;color:var(--xz-muted,#888);width:100%}' +
+'.asb-chip{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'background:color-mix(in srgb,var(--xz-input,#f7f7f9) 70%,var(--xz-bg,#fff));' +
+'color:var(--xz-txt,#333);border-radius:999px;padding:.3rem .75rem;font-size:.78rem;' +
 'cursor:pointer;font-family:inherit;max-width:100%;overflow:hidden;' +
-'text-overflow:ellipsis;white-space:nowrap}' +
-'.asb-chip:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
-'.asb-msg{max-width:92%;padding:.5rem .7rem;border-radius:12px;font-size:.82rem;' +
-'line-height:1.55;word-break:break-word}' +
-'.asb-msg.user{align-self:flex-end;background:var(--xz-accent,#4f6ef7);color:#fff;' +
-'border-bottom-right-radius:4px}' +
-'.asb-msg.ai{align-self:flex-start;background:var(--xz-input,#f3f4f6);' +
-'color:var(--xz-txt,#111);border-bottom-left-radius:4px}' +
+'text-overflow:ellipsis;white-space:nowrap;transition:border-color .15s ease,color .15s ease,background .15s ease}' +
+'.asb-chip:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7);' +
+'background:color-mix(in srgb,var(--xz-accent,#4f6ef7) 8%,var(--xz-bg,#fff))}' +
+/* ── 气泡系统 v2（2026-09-05）────────────────────────────────────────────
+   形态：16px 圆角 + 6px 尾角；AI 侧玻璃底 + 顶部 1px 高光 + 环境阴影；用户侧
+   品牌渐变 + 带色投影 + 对角高光。用户底比 accent 略深（88%→66% 混 #0b1020）
+   不是审美偏好，是对比度：workspace 的 --tk-brand #1e8cf2 直接铺底时白字只有
+   3.45:1（v1 一直如此），压深后主体区 ≥4.5:1；暗壳 accent 是 400 级更浅，
+   .asb-dark 再压到 66%→48%。
+   状态是同一节点的形态变化（pending → live → settle → 无），不再删节点重建：
+   pending = 光雾 + 细光带流动 2.4s；live = 光带 3.6s + 渐变光标；settle = 光带
+   减速凝成静态细线再淡出（2.2s），完成信号就是这一下「落定」。
+   运行态类只加在 DOM 上，chatHistory 里的字符串永远干净（restore 后静态）。
+   光带只动 --xz-a 与 opacity；blur 层的 filter 值恒定，旋转由角度补间承担，
+   合成器即可完成；外发光仅 lv2 且非 .asb-lite。 */
+'.asb-msg{position:relative;isolation:isolate;max-width:88%;padding:.6rem .85rem;' +
+'border-radius:16px;font-size:.86rem;line-height:1.6;word-break:break-word;' +
+'transition:border-color .6s ease}' +
+'.asb-new{animation:asbBubbleIn .28s var(--xz-ease,ease) both}' +
+'@keyframes asbBubbleIn{from{opacity:0;transform:translateY(8px) scale(.97)}' +
+'to{opacity:1;transform:none}}' +
+'.asb-msg.user{align-self:flex-end;color:#fff;border-bottom-right-radius:6px;' +
+'transform-origin:100% 100%;' +
+'background:linear-gradient(160deg,color-mix(in srgb,var(--xz-accent,#4f6ef7) 88%,#0b1020),' +
+'color-mix(in srgb,var(--xz-accent,#4f6ef7) 66%,#0b1020));' +
+'box-shadow:0 10px 22px -12px var(--xz-tint,rgba(79,110,247,.5)),' +
+'inset 0 1px 0 rgba(255,255,255,.28)}' +
+'.asb-dark .asb-msg.user{background:linear-gradient(160deg,' +
+'color-mix(in srgb,var(--xz-accent,#4f6ef7) 66%,#0b1020),' +
+'color-mix(in srgb,var(--xz-accent,#4f6ef7) 48%,#0b1020))}' +
+'.asb-msg.user::after{content:"";position:absolute;inset:0;border-radius:inherit;' +
+'pointer-events:none;z-index:-1;background:linear-gradient(115deg,rgba(255,255,255,0) 42%,' +
+'rgba(255,255,255,.13) 50%,rgba(255,255,255,0) 58%)}' +
+'.asb-msg.ai{align-self:flex-start;transform-origin:0 100%;' +
+'background:color-mix(in srgb,var(--xz-input,#f3f4f6) 70%,var(--xz-bg,#fff));' +
+'color:var(--xz-txt,#111);border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 75%,transparent);' +
+'border-bottom-left-radius:6px;' +
+'box-shadow:var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08)),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-msg.ai.pending,.asb-msg.ai.live{border-color:transparent}' +
+/* 光带描边：伪元素铺 conic，mask 挖掉内容盒只留 1.5px 环＝一条贴边流动的光带 */
+'.asb-msg.ai.pending::before,.asb-msg.ai.live::before,.asb-msg.ai.settle::before,' +
+'.asb-msg.ai.asb-greet::before{content:"";' +
+'position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;z-index:-1;' +
+'background:conic-gradient(from var(--xz-a),var(--xz-rb-stops));' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;' +
+'animation:asbRibbon 3.6s linear infinite}' +
+'.asb-msg.ai.pending::before{animation-duration:2.4s}' +
+'.asb-msg.ai.settle::before{animation:asbSettle 2.2s var(--xz-ease,ease) forwards}' +
+/* 签名时刻：首次开面板（无历史）光带绕问候气泡扫一圈即熄——一次性、1.1s，
+   安静档/减动效不播 */
+'.asb-msg.ai.asb-greet::before{animation:asbGreet 1.1s var(--xz-ease,ease) forwards}' +
+'@keyframes asbRibbon{to{--xz-a:360deg}}' +
+'@keyframes asbSettle{0%{--xz-a:0deg;opacity:1}45%{--xz-a:250deg;opacity:.9}' +
+'100%{--xz-a:290deg;opacity:0}}' +
+'@keyframes asbGreet{0%{--xz-a:0deg;opacity:0}20%{opacity:1}100%{--xz-a:400deg;opacity:0}}' +
+/* 外发光（lv2）：同一条 conic 再铺一层，mask 只留外圈 8px 带并模糊——光只在
+   气泡外侧呼吸，正文区域始终干净 */
+'.asb-lv2 .asb-msg.ai.pending::after,.asb-lv2 .asb-msg.ai.live::after{content:"";' +
+'position:absolute;inset:-8px;border-radius:22px;padding:8px;pointer-events:none;z-index:-2;' +
+'background:conic-gradient(from var(--xz-a),var(--xz-rb-stops));filter:blur(6px);opacity:.28;' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;' +
+'animation:asbRibbon 3.6s linear infinite}' +
+'.asb-dark .asb-msg.ai.pending::after,.asb-dark .asb-msg.ai.live::after{opacity:.42}' +
+'.asb-lite .asb-msg.ai::after{display:none}' +
+/* 思考光雾：三团着色模糊圆斑只做 transform 补间，裁在气泡内 */
+'.asb-mesh{position:absolute;inset:0;border-radius:inherit;overflow:hidden;' +
+'pointer-events:none;z-index:-1;opacity:.45}' +
+'.asb-dark .asb-mesh{opacity:.32}' +
+'.asb-mesh i{position:absolute;width:64%;padding-top:64%;border-radius:50%;filter:blur(14px);' +
+'left:-22%;top:-45%;background:var(--xz-rb-1,#22d3ee);' +
+'animation:asbBlob 5s ease-in-out infinite alternate}' +
+'.asb-mesh i:nth-child(2){left:38%;top:-35%;background:var(--xz-rb-2,#4f6ef7);' +
+'animation-duration:6.4s;animation-delay:-2s}' +
+'.asb-mesh i:nth-child(3){left:8%;top:15%;background:var(--xz-rb-3,#8b5cf6);' +
+'animation-duration:7.2s;animation-delay:-4s}' +
+'@keyframes asbBlob{from{transform:translate(0,0) scale(1)}to{transform:translate(38%,28%) scale(1.25)}}' +
+'.asb-lv0 .asb-mesh,.asb-lv1 .asb-mesh,.asb-lite .asb-mesh{display:none}' +
+'.asb-tick{display:inline-block;margin-left:.45em;font-size:.75rem;color:var(--xz-muted,#888);' +
+'font-variant-numeric:tabular-nums}' +
+/* 流式光标：渐变小块随 token 到达闪动，回答落定即撤 */
+'.asb-msg.ai.live .asb-txt::after{content:"";display:inline-block;width:.42em;height:1em;' +
+'margin-left:.12em;vertical-align:-.14em;border-radius:2px;' +
+'background:var(--xz-ribbon-l,var(--xz-accent,#4f6ef7));animation:asbCaret .9s ease-in-out infinite}' +
+'@keyframes asbCaret{50%{opacity:.15}}' +
+/* 安静档/减动效：光带静止成渐变细线，光雾与光标撤掉，入场无位移 */
+'.asb-lv0 .asb-msg.ai.pending::before,.asb-lv0 .asb-msg.ai.live::before,' +
+'.asb-lv0 .asb-msg.ai.settle::before,.asb-lv0 .asb-new,.asb-lv0 .asb-txt::after{animation:none}' +
+'.asb-lv0 .asb-msg.ai.asb-greet::before{display:none}' +
+'@media (prefers-reduced-motion:reduce){' +
+'.asb-msg.ai.pending::before,.asb-msg.ai.live::before,.asb-msg.ai.settle::before,' +
+'.asb-msg.ai::after,.asb-mesh i,.asb-txt::after,.asb-new,.asb-panel,.asb-panel::before,' +
+'.asb-panel.closing{animation:none!important}' +
+'.asb-mesh,.asb-msg.ai.asb-greet::before{display:none}}' +
 /* 错误气泡视觉降级（P2）：原满饱和红描边 + #dc2626 文字在暗色壳里既刺眼
    又对比度不足；改左色条保语义、正文回 --xz-txt 保可读。 */
 '.asb-msg.err{align-self:flex-start;background:rgba(239,68,68,.09);' +
 'color:var(--xz-txt,#111);border:none;border-left:3px solid #ef4444;' +
-'border-radius:4px 12px 12px 4px}' +
+'border-radius:6px 16px 16px 6px}' +
 '.asb-msg code{background:rgba(127,127,127,.16);padding:.05rem .3rem;' +
-'border-radius:4px;font-size:.76rem}' +
-'.asb-sref{color:var(--xz-accent,#4f6ef7);font-weight:600;font-size:.72rem}' +
-'.asb-srcs{align-self:flex-start;display:flex;flex-direction:column;gap:.3rem;' +
+'border-radius:4px;font-size:.78rem}' +
+'.asb-sref{color:var(--xz-accent,#4f6ef7);font-weight:600;font-size:.75rem}' +
+'.asb-srcs{align-self:flex-start;display:flex;flex-direction:column;gap:.35rem;' +
 'max-width:92%}' +
-'.asb-srcs-t{font-size:.66rem;color:var(--xz-muted,#888)}' +
+'.asb-srcs-t{font-size:.75rem;color:var(--xz-muted,#888)}' +
 /* 依据徽标（2026-08-29）：产品事实卡＝中性；通用知识＝琥珀提示色，因为那句
    话不是产品承诺，视觉上必须与「有文档依据」区分得开。用 color-mix 取宿主
    accent/warn，不引入新色值（品牌令牌纪律）。 */
-'.asb-basis{align-self:flex-start;font-size:.66rem;color:var(--xz-muted,#888);' +
-'border-left:2px solid var(--xz-bd,#ddd);padding:.05rem .45rem;line-height:1.5}' +
+'.asb-basis{align-self:flex-start;font-size:.75rem;color:var(--xz-muted,#888);' +
+'border-left:2px solid var(--xz-bd,#ddd);padding:.08rem .5rem;line-height:1.5}' +
 '.asb-basis.gen{color:#b45309;border-left-color:#f59e0b;' +
-'background:rgba(245,158,11,.08);border-radius:0 6px 6px 0}' +
-'.asb-src{display:flex;align-items:center;gap:.4rem;border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:9px;padding:.3rem .55rem;font-size:.72rem;color:var(--xz-txt,#333);' +
-'background:var(--xz-bg,#fff)}' +
-'.asb-src .n{color:var(--xz-accent,#4f6ef7);font-weight:700;flex-shrink:0}' +
+'background:rgba(245,158,11,.08);border-radius:0 8px 8px 0}' +
+/* 来源卡：索引徽标依次取光谱三色（S1 青 / S2 蓝 / S3 紫），与正文 [S1] 引用同色系 */
+'.asb-src{display:flex;align-items:center;gap:.45rem;' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:10px;padding:.38rem .6rem;font-size:.78rem;color:var(--xz-txt,#333);' +
+'background:var(--xz-bg,#fff);box-shadow:inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-src .n{--src-c:var(--xz-rb-2,#4f6ef7);display:inline-flex;align-items:center;' +
+'justify-content:center;height:18px;padding:0 .45em;border-radius:999px;font-size:.68rem;' +
+'font-weight:700;flex-shrink:0;color:color-mix(in srgb,var(--src-c) 70%,var(--xz-txt,#111));' +
+'background:color-mix(in srgb,var(--src-c) 16%,transparent)}' +
+'.asb-src:nth-of-type(1) .n{--src-c:var(--xz-rb-1,#22d3ee)}' +
+'.asb-src:nth-of-type(3) .n{--src-c:var(--xz-rb-3,#8b5cf6)}' +
 '.asb-src .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.asb-src a{color:var(--xz-accent,#4f6ef7);text-decoration:none;flex-shrink:0;' +
-'font-size:.7rem;cursor:pointer}' +
-'.asb-fb{align-self:flex-start;display:flex;gap:.35rem;align-items:center;' +
-'font-size:.7rem;color:var(--xz-muted,#888)}' +
-'.asb-fb button{border:1px solid var(--xz-bd,#ddd);background:none;border-radius:7px;' +
-'cursor:pointer;padding:.12rem .45rem;font-size:.75rem;font-family:inherit}' +
-'.asb-fb button:hover{border-color:var(--xz-accent,#4f6ef7)}' +
+'font-size:.75rem;cursor:pointer;font-weight:600}' +
+/* 反馈行：28px 圆形图标按钮（v1 是 .75rem 的 emoji 文本按钮，命中面积不到 24px） */
+'.asb-fb{align-self:flex-start;display:flex;gap:.4rem;align-items:center;' +
+'font-size:.75rem;color:var(--xz-muted,#888)}' +
+'.asb-fb button{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'background:none;border-radius:50%;width:28px;height:28px;padding:0;' +
+'cursor:pointer;font-size:.9rem;font-family:inherit;color:var(--xz-muted,#888);' +
+'display:inline-flex;align-items:center;justify-content:center;' +
+'transition:border-color .15s ease,color .15s ease,background .15s ease}' +
+'.asb-fb button:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7);' +
+'background:color-mix(in srgb,var(--xz-accent,#4f6ef7) 10%,transparent)}' +
 '.asb-fb button:disabled{opacity:.45;cursor:default}' +
-'.asb-act{align-self:flex-start;border:1px dashed var(--xz-bd,#ddd);background:none;' +
-'border-radius:9px;cursor:pointer;padding:.3rem .6rem;font-size:.74rem;' +
-'color:var(--xz-txt,#333);font-family:inherit}' +
+'.asb-fb button.ok{color:#059669;border-color:#059669}' +
+'.asb-fb button:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
+/* 出路按钮：v1 是虚线胶囊（设计系统里虚线＝占位/未完成语义），改实线 */
+'.asb-act{align-self:flex-start;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);' +
+'background:var(--xz-bg,#fff);border-radius:10px;cursor:pointer;padding:.38rem .7rem;' +
+'font-size:.78rem;color:var(--xz-txt,#333);font-family:inherit;display:inline-flex;' +
+'align-items:center;gap:.35em;transition:border-color .15s ease,color .15s ease}' +
 '.asb-act:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
 /* 错误动作成组（P0-4）：.asb-act 自带 align-self:flex-start，两个按钮直接
    并列会各占一行；套一层 flex 让「重试 / 报障」读起来是一组出路。 */
 '.asb-err-acts{align-self:flex-start;display:flex;gap:.35rem;flex-wrap:wrap}' +
 '.asb-err-acts .asb-act{align-self:auto}' +
-'.asb-ft{display:flex;gap:.45rem;padding:.55rem .8rem;border-top:1px solid var(--xz-bd,#ddd);' +
+/* 线性图标通用度量：随字号、随文字色 */
+'.asb-i{width:1em;height:1em;flex-shrink:0;display:inline-block;vertical-align:-.16em}' +
+'button>.asb-i+span,button>.asb-i+b{margin-left:.3em}' +
+/* ── 输入区 v2 ────────────────────────────────────────────────────────────
+   聚焦时描边换成光谱渐变细线（padding-box/border-box 双层背景），外加 3px 品牌
+   色光环；发送键改 40px 圆形渐变按钮（箭头图标），生成期变停止键并绕一圈与
+   气泡同源的光带环；麦克风录音时红点保住「正在录音」的强约定，电平环走光谱。 */
+'.asb-ft{display:flex;gap:.5rem;padding:.6rem .8rem;' +
+'border-top:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent);' +
 'flex-shrink:0;align-items:flex-end}' +
-'.asb-in{flex:1;resize:none;border:1px solid var(--xz-bd,#ddd);border-radius:10px;' +
-'background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);font-family:inherit;' +
-'font-size:.82rem;padding:.45rem .6rem;max-height:132px;min-height:36px;' +
-'overflow-y:auto;outline:none}' +
-'.asb-in:focus{border-color:var(--xz-accent,#4f6ef7)}' +
-'.asb-send{border:none;border-radius:10px;background:var(--xz-accent,#4f6ef7);color:#fff;' +
-'cursor:pointer;font-family:inherit;font-size:.8rem;font-weight:600;' +
-'padding:.5rem .85rem;flex-shrink:0}' +
-'.asb-send:disabled{opacity:.5;cursor:default}' +
-'.asb-mic{border:1px solid var(--xz-bd,#ddd);border-radius:10px;background:var(--xz-input,#f7f7f9);' +
-'cursor:pointer;font-size:.95rem;padding:.42rem .55rem;flex-shrink:0;font-family:inherit}' +
-'.asb-mic.rec{background:#ef4444;border-color:#ef4444;animation:asbPulse 1.2s ease-in-out infinite}' +
+'.asb-in{flex:1;resize:none;border:1px solid transparent;border-radius:14px;' +
+'background:linear-gradient(var(--xz-input,#f7f7f9),var(--xz-input,#f7f7f9)) padding-box,' +
+'linear-gradient(color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent),' +
+'color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent)) border-box;' +
+'color:var(--xz-txt,#111);font-family:inherit;' +
+'font-size:.86rem;line-height:1.5;padding:.55rem .8rem;max-height:132px;min-height:40px;' +
+'overflow-y:auto;outline:none;box-sizing:border-box;transition:box-shadow .2s ease}' +
+'.asb-in:focus{background:linear-gradient(var(--xz-input,#f7f7f9),var(--xz-input,#f7f7f9)) padding-box,' +
+'var(--xz-ribbon-l,var(--xz-accent,#4f6ef7)) border-box;' +
+'box-shadow:0 0 0 3px color-mix(in srgb,var(--xz-accent,#4f6ef7) 18%,transparent)}' +
+'.asb-in::placeholder{color:var(--xz-muted,#888)}' +
+'.asb-send{border:none;border-radius:12px;background:var(--xz-accent,#4f6ef7);color:#fff;' +
+'cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600;' +
+'padding:.55rem 1rem;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;' +
+'gap:.35em;box-shadow:0 6px 14px -8px var(--xz-tint,rgba(79,110,247,.5));' +
+'transition:transform .15s ease,filter .15s ease}' +
+'.asb-send:hover{filter:brightness(1.06)}' +
+'.asb-send:active{transform:scale(.96)}' +
+'.asb-send:disabled{opacity:.5;cursor:default;transform:none;filter:none}' +
+'.asb-send:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:2px}' +
+/* 对话输入区的圆形发送键：蓝→紫渐变，箭头图标 */
+'.asb-send.asb-send--ic{position:relative;width:40px;height:40px;padding:0;border-radius:50%;' +
+'background:linear-gradient(145deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));' +
+'font-size:1.05rem}' +
+'.asb-send.asb-send--ic .asb-i{width:1.15em;height:1.15em}' +
+/* 生成期：停止键 + 绕一圈流动光带（与气泡光带同源） */
+'.asb-send.asb-send--ic.busy{background:color-mix(in srgb,var(--xz-txt,#111) 72%,var(--xz-bg,#fff))}' +
+'.asb-send.asb-send--ic.busy::before{content:"";position:absolute;inset:-3px;border-radius:50%;' +
+'padding:2px;background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 2.4s linear infinite}' +
+'.asb-lv0 .asb-send.busy::before{animation:none}' +
+'.asb-mic{position:relative;width:40px;height:40px;border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:50%;background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#333);' +
+'cursor:pointer;font-size:1.05rem;padding:0;flex-shrink:0;font-family:inherit;' +
+'display:inline-flex;align-items:center;justify-content:center;transition:border-color .2s ease}' +
+'.asb-mic:hover{border-color:var(--xz-accent,#4f6ef7);color:var(--xz-accent,#4f6ef7)}' +
+'.asb-mic.rec{color:#ef4444;border-color:transparent}' +
+'.asb-mic.rec::after{content:"";position:absolute;right:6px;top:6px;width:8px;height:8px;' +
+'border-radius:50%;background:#ef4444;animation:asbCaret 1s ease-in-out infinite}' +
+'.asb-mic.rec::before{content:"";position:absolute;inset:-3px;border-radius:50%;padding:2px;' +
+'background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
+'-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
+'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 3s linear infinite}' +
+'.asb-lv0 .asb-mic.rec::before{animation:none}' +
+/* 报障页等处的 .asb-mic 复用为普通胶囊按钮（截当前页）：不是圆形 */
+'.asb-mic.asb-mic--pill{width:auto;height:auto;border-radius:10px;padding:.4rem .7rem;' +
+'font-size:.8rem;gap:.35em}' +
 '.asb-an{position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.72);display:flex;' +
 'flex-direction:column;align-items:center;justify-content:center;gap:.6rem}' +
 '.asb-an-bar{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;justify-content:center}' +
 '.asb-an-bar span{color:#fff;font-size:.78rem;margin-right:.4rem}' +
 '.asb-an-bar button{border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.12);' +
-'color:#fff;border-radius:8px;cursor:pointer;font-family:inherit;font-size:.78rem;' +
-'padding:.32rem .7rem}' +
+'color:#fff;border-radius:10px;cursor:pointer;font-family:inherit;font-size:.8rem;' +
+'padding:.38rem .8rem;display:inline-flex;align-items:center;gap:.35em}' +
 '.asb-an-bar button.on{background:var(--xz-accent,#4f6ef7);border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-an-bar button.pri{background:#059669;border-color:#059669}' +
 '.asb-an canvas{max-width:94vw;max-height:78vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.5);' +
 'cursor:crosshair;background:#fff}' +
 '.asb-tools{display:flex;gap:.3rem;flex-wrap:wrap;padding:.4rem .8rem .55rem;' +
 'border-top:1px solid var(--xz-bd,#ddd);flex-shrink:0}' +
 /* ⚙ 面板里复用同一批工具键，但那里它是内容不是底栏，去掉分隔线与内缩 */
-'.asb-body .asb-tools{border-top:none;padding:.1rem 0;gap:.35rem}' +
-'.asb-tool{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
-'font-size:.68rem;font-family:inherit;padding:.18rem .4rem;border-radius:6px}' +
-'.asb-tool:hover{background:var(--xz-input,#f3f4f6);color:var(--xz-txt,#111)}' +
-'.asb-rp{display:flex;flex-direction:column;gap:.55rem}' +
-'.asb-rp textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:10px;background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);' +
-'font-family:inherit;font-size:.82rem;padding:.5rem .6rem;outline:none;box-sizing:border-box}' +
-'.asb-rp textarea:focus{border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-body .asb-tools{border-top:none;padding:.1rem 0;gap:.4rem}' +
+'.asb-tool{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);background:none;' +
+'color:var(--xz-muted,#888);cursor:pointer;display:inline-flex;align-items:center;gap:.3em;' +
+'font-size:.76rem;font-family:inherit;padding:.3rem .6rem;border-radius:999px;' +
+'transition:border-color .15s ease,color .15s ease,background .15s ease}' +
+'.asb-tool:hover{background:var(--xz-hover,rgba(0,0,0,.04));color:var(--xz-txt,#111);' +
+'border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-rp{display:flex;flex-direction:column;gap:.6rem}' +
+'.asb-rp textarea{width:100%;min-height:88px;resize:vertical;' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:12px;background:var(--xz-input,#f7f7f9);color:var(--xz-txt,#111);' +
+'font-family:inherit;font-size:.86rem;line-height:1.5;padding:.55rem .75rem;outline:none;' +
+'box-sizing:border-box;transition:box-shadow .2s ease}' +
+'.asb-rp textarea:focus{border-color:var(--xz-accent,#4f6ef7);' +
+'box-shadow:0 0 0 3px color-mix(in srgb,var(--xz-accent,#4f6ef7) 18%,transparent)}' +
 /* 提交成功后的预期管理行：比正文淡、比正文小，但必须可读（不用 opacity 调灰） */
-'.asb-rp-next{display:inline-block;margin:.25rem 0;font-size:.72rem;' +
+'.asb-rp-next{display:inline-block;margin:.25rem 0;font-size:.76rem;' +
 'line-height:1.5;color:var(--xz-muted,#888)}' +
-'.asb-rp-shot{font-size:.74rem;color:var(--xz-muted,#888)}' +
+'.asb-rp-shot{font-size:.78rem;color:var(--xz-muted,#888);line-height:1.8}' +
 '.asb-rp-shot a{color:var(--xz-accent,#4f6ef7);cursor:pointer;text-decoration:underline}' +
 '.asb-rp-thumb{position:relative;width:120px}' +
-'.asb-rp-thumb img{width:120px;border-radius:8px;border:1px solid var(--xz-bd,#ddd);display:block}' +
-'.asb-rp-thumb button{position:absolute;top:-7px;right:-7px;width:20px;height:20px;' +
-'border-radius:50%;border:none;background:#ef4444;color:#fff;font-size:.7rem;' +
-'cursor:pointer;line-height:1}' +
-'.asb-env{border:1px solid var(--xz-bd,#ddd);border-radius:9px;font-size:.7rem}' +
-'.asb-env summary{padding:.35rem .55rem;cursor:pointer;color:var(--xz-muted,#888)}' +
-'.asb-env div{padding:0 .55rem .45rem;color:var(--xz-muted,#888);line-height:1.5}' +
-'.asb-tk{border:1px solid var(--xz-bd,#ddd);border-radius:10px;padding:.5rem .6rem;' +
-'font-size:.76rem;display:flex;flex-direction:column;gap:.2rem}' +
-'.asb-tk-hd{display:flex;align-items:center;gap:.4rem}' +
-'.asb-tk-hd .id{color:var(--xz-muted,#888);font-size:.68rem;flex-shrink:0}' +
+'.asb-rp-thumb img{width:120px;border-radius:10px;border:1px solid var(--xz-bd,#ddd);display:block}' +
+'.asb-rp-thumb button{position:absolute;top:-8px;right:-8px;width:22px;height:22px;' +
+'border-radius:50%;border:none;background:#ef4444;color:#fff;font-size:.75rem;' +
+'cursor:pointer;line-height:1;display:inline-flex;align-items:center;justify-content:center;' +
+'box-shadow:0 2px 6px rgba(0,0,0,.25)}' +
+'.asb-env{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:10px;font-size:.75rem}' +
+'.asb-env summary{padding:.4rem .6rem;cursor:pointer;color:var(--xz-muted,#888)}' +
+'.asb-env div{padding:0 .6rem .5rem;color:var(--xz-muted,#888);line-height:1.55}' +
+'.asb-tk{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);border-radius:12px;' +
+'padding:.55rem .65rem;font-size:.8rem;display:flex;flex-direction:column;gap:.25rem;' +
+'background:var(--xz-bg,#fff);box-shadow:inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6))}' +
+'.asb-tk-hd{display:flex;align-items:center;gap:.45rem}' +
+'.asb-tk-hd .id{color:var(--xz-muted,#888);font-size:.75rem;flex-shrink:0;' +
+'font-variant-numeric:tabular-nums}' +
 '.asb-tk-hd .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' +
 'font-weight:600}' +
-'.asb-st{flex-shrink:0;font-size:.64rem;border-radius:999px;padding:.1rem .45rem;' +
+'.asb-tk-meta{font-size:.75rem;color:var(--xz-muted,#888)}' +
+'.asb-st{flex-shrink:0;font-size:.72rem;border-radius:999px;padding:.12rem .5rem;' +
 'font-weight:600;background:var(--xz-input,#f3f4f6);color:var(--xz-muted,#666)}' +
 '.asb-st.fixed{background:rgba(16,185,129,.15);color:#059669}' +
 '.asb-st.verified{background:rgba(99,102,241,.14);color:#6366f1}' +
-'.asb-tk-note{font-size:.7rem;color:#059669}' +
+'.asb-tk-note{font-size:.76rem;color:#059669}' +
 '.asb-mine-bar{display:flex;justify-content:flex-end}' +
 /* 空态 padding 1.2rem→.7rem（P2）：380x560 面板里固定件已吃掉约 29%，
    一句「还没有记录」独占 62px 会把真正该被看见的引导挤下去。 */
-'.asb-empty{color:var(--xz-muted,#888);font-size:.78rem;text-align:center;padding:.7rem 0}' +
+'.asb-empty{color:var(--xz-muted,#888);font-size:.8rem;text-align:center;padding:.7rem 0}' +
 '.asb-live .tip-toggle{display:none!important}' +
 '.asb-spot{position:fixed;z-index:10000;pointer-events:none;border:3px solid var(--xz-accent,#4f6ef7);' +
 'border-radius:12px;box-shadow:0 0 0 100vmax rgba(15,23,42,.38),0 0 22px rgba(99,102,241,.65);' +
 'animation:asbSpotIn .3s ease}' +
 '@keyframes asbSpotIn{from{opacity:0;transform:scale(1.12)}to{opacity:1;transform:none}}' +
 '.asb-nudge{position:fixed;z-index:9999;display:flex;align-items:center;gap:.5rem;max-width:300px;' +
-'padding:.55rem .7rem;background:var(--xz-bg,#fff);color:var(--xz-txt,#111);' +
-'border:1px solid var(--xz-bd,#ddd);border-left:3px solid #ef4444;border-radius:12px;' +
-'box-shadow:0 8px 28px rgba(0,0,0,.22);font-size:.78rem;line-height:1.45;animation:asbUp .25s ease}' +
+'padding:.6rem .75rem;background:var(--xz-bg,#fff);color:var(--xz-txt,#111);' +
+'border:1px solid var(--xz-bd,#ddd);border-left:3px solid #ef4444;border-radius:14px;' +
+'box-shadow:var(--xz-sh-key,0 8px 28px rgba(0,0,0,.22));font-size:.8rem;line-height:1.45;' +
+'animation:asbUp .25s ease}' +
 '.asb-nudge button{border:1px solid var(--xz-bd,#ddd);background:var(--xz-input,#f7f7f9);' +
-'color:var(--xz-txt,#333);border-radius:8px;cursor:pointer;font-family:inherit;font-size:.74rem;' +
-'padding:.25rem .55rem;flex-shrink:0}' +
+'color:var(--xz-txt,#333);border-radius:9px;cursor:pointer;font-family:inherit;font-size:.76rem;' +
+'padding:.3rem .6rem;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}' +
 '.asb-nudge [data-n="go"]{background:var(--xz-accent,#4f6ef7);border-color:var(--xz-accent,#4f6ef7);color:#fff}' +
 '@media(max-width:480px){' +
 '.asb-panel{left:8px!important;right:8px!important;width:auto;bottom:72px!important;' +
-'top:auto!important;height:min(560px,72vh)}' +
+'top:auto!important;height:min(600px,72vh)}' +
 '}';
     var st = document.createElement('style');
     st.id = 'asb-style';
@@ -651,6 +1022,80 @@
     ' fill="currentColor"/>' +
     '<path d="M18.5 14l.9 2.3 2.1.8-2.1.8-.9 2.3-.9-2.3-2.1-.8 2.1-.8.9-2.3z"' +
     ' fill="currentColor" opacity=".85"/></svg>';
+
+  /* ── 单色线性图标集（v2 2026-09-05）────────────────────────────────────────
+     24 网格、1.8 描边、圆头圆角、currentColor——替掉全部 emoji 图标。emoji 由
+     操作系统字体渲染（Windows 是 Segoe 彩色 emoji），粗细/基线/配色都不受主题
+     控制，同一排按钮里 🔊📋👍 各长各的；换成线性 SVG 后随文字色、随主题、随
+     hover 一起变。三个 assistant-*.js 各留一份所需子集（独立 IIFE，复制是被迫的）。
+     注意 SVG 属性名不得含 `on***=` 形态（零内联 handler 门禁按正则扫全文）。 */
+  var ICONS = {
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>' +
+      '<path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
+    send: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    speaker: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>' +
+      '<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>' +
+      '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+    up: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8' +
+      'A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2' +
+      'a3.13 3.13 0 0 1 3 3.88Z"/>',
+    down: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8' +
+      'A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22' +
+      'a3.13 3.13 0 0 1-3-3.88Z"/>',
+    bug: '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>' +
+      '<path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>' +
+      '<path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>' +
+      '<path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/>' +
+      '<path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/>' +
+      '<path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>',
+    camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9' +
+      'a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>' +
+      '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>' +
+      '<path d="M8 16H3v5"/>',
+    sliders: '<path d="M21 4h-3"/><path d="M11 4H3"/><path d="M21 12h-9"/><path d="M5 12H3"/>' +
+      '<path d="M21 20h-5"/><path d="M9 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/>' +
+      '<path d="M16 18v4"/>',
+    phone: '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
+    monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/>' +
+      '<path d="M12 17v4"/>',
+    expand: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>',
+    chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+    cap: '<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08' +
+      'a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/>' +
+      '<path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+    bolt: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02' +
+      'A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02' +
+      'A1 1 0 0 0 11 14z"/>',
+    undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1' +
+      '-5.5 5.5H11"/>',
+    square: '<rect x="3" y="3" width="18" height="18" rx="2"/>',
+    grid: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/>' +
+      '<path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+    play: '<path d="M6 3l14 9-14 9z"/>',
+    keyboard: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/>' +
+      '<path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/>' +
+      '<path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M7 16h10"/>',
+    command: '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12' +
+      'a3 3 0 1 0-3-3"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77' +
+      'a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94' +
+      'l-3.76 3.76z"/>',
+    bulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2' +
+      ' 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+    ok: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  };
+  function ic(name, cls) {
+    return '<svg class="asb-i' + (cls ? ' ' + cls : '') +
+      '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"' +
+      ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (ICONS[name] || '') + '</svg>';
+  }
 
   /* ────────────────────────────────── Orb 引擎（2026-08-23 实施59 未来感形态）
    * 「活体能量核」：球=状态灯。状态机 idle/hint/listening/thinking/alert +
@@ -749,6 +1194,15 @@
     syncOrb();
   }
 
+  /* 标题栏状态短句：状态机每次跃迁写一次；流式首 token 到达时由 readNdjson
+     直接改成「回答中」（busy 未变、状态机不跃迁，所以不会被这里覆写）。 */
+  function setHdStatus(key) {
+    var el = $panel ? $panel.querySelector('.asb-hd-st') : null;
+    if (!el) { return; }
+    var txt = t(key);
+    if (el.textContent !== txt) { el.textContent = txt; }
+  }
+
   function syncOrb() {
     if (!$ball) { return; }
     var st = orbCompute();
@@ -759,6 +1213,7 @@
         $ball.classList.toggle(c, ORB_STATES[i] === st);
         if ($panel) { $panel.classList.toggle(c, ORB_STATES[i] === st); }
       }
+      setHdStatus('hd_' + st);
       if (st === 'listening' && !ORB.listenSeen) {
         ORB.listenSeen = true;
         orbBeacon('asb_orb_listen');
@@ -807,20 +1262,60 @@
       ORB.ctx = ORB.cv.getContext('2d');
     }
     if (!ORB.ctx) { return; }
-    try {
-      /* 主题亮暗决定合成模式：暗底加色发光(lighter)/亮底普通叠加防洗白 */
-      var bg = getComputedStyle($panel || document.body).backgroundColor || '';
-      var m = bg.match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
-      ORB.dark = m
-        ? ((+m[1] * 299 + +m[2] * 587 + +m[3] * 114) / 1000) < 140
-        : true;
-    } catch (e) { ORB.dark = true; }
+    /* 主题亮暗决定合成模式：暗底加色发光(lighter)/亮底普通叠加防洗白 */
+    syncDark();
     ORB.cv.style.display = 'block';
     ORB.on = true;
     ORB.last = 0;
     ORB.ema = 16.7;
     ORB.degT0 = (window.performance || Date).now();
     ORB.raf = requestAnimationFrame(orbFrame);
+  }
+
+  /* 亮暗探测（v2 起球/面板/画布共用）：读 --xz-bg 落到 rgb 的真实值，而不是
+     面板自身背景——面板底自 v2 起是 color-mix 玻璃，computed 会序列化成
+     color(srgb …)，老正则会漏配成「恒暗」，亮色壳的画布就会用 lighter 洗白。
+     探针挂在球容器（恒 display），面板收起时也算得准。 */
+  var _probe = null;
+  function probeDark() {
+    try {
+      if (!_probe) {
+        _probe = document.createElement('span');
+        _probe.setAttribute('aria-hidden', 'true');
+        _probe.style.cssText = 'position:absolute;width:0;height:0;' +
+          'overflow:hidden;pointer-events:none;background:var(--xz-bg,#fff)';
+      }
+      ($wrap || document.body).appendChild(_probe);
+      var bg = getComputedStyle(_probe).backgroundColor || '';
+      _probe.remove();
+      var m = bg.match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/);
+      if (m && !(m[4] != null && parseFloat(m[4]) === 0)) {
+        return ((+m[1] * 299 + +m[2] * 587 + +m[3] * 114) / 1000) < 140;
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+  function syncDark() {
+    _rbCache = null;  /* 主题/令牌可能变了：画布光谱色重取 */
+    ORB.dark = probeDark();
+    if ($wrap) { $wrap.classList.toggle('asb-dark', ORB.dark); }
+    if ($panel) { $panel.classList.toggle('asb-dark', ORB.dark); }
+  }
+
+  /* 动效档类同时挂球容器与面板：面板是 body 直属兄弟节点，只挂 $wrap 的话
+     `.asb-lv0 .asb-msg…` 这类面板侧降级选择器永远命不中——安静档就只安静了
+     球，气泡与边缘光照旧在动（v2 之前面板没有动效，所以没暴露）。
+     .asb-lite 只在调速器第二档（降回纯 CSS）才挂：第一档是「砍半粒子」的温和
+     降级，若它也关掉光雾/外发光/边缘光，一次 1.6s 的页面卡顿（切标签、大页加载）
+     就会让面板效果整个会话消失——无头截图实测就是这么触发的。 */
+  function applyLevelClass() {
+    var els = [$wrap, $panel];
+    for (var i = 0; i < els.length; i++) {
+      if (!els[i]) { continue; }
+      els[i].classList.remove('asb-lv0', 'asb-lv1', 'asb-lv2');
+      els[i].classList.add('asb-lv' + ORB.lvl);
+      els[i].classList.toggle('asb-lite', ORB.degStep > 1);
+    }
   }
 
   function orbStop() {
@@ -902,10 +1397,11 @@
       orbRipple(now);
     }
     if (ORB.micEl) {
-      /* 录音按钮实时电平圈：「看得见被听见」 */
+      /* 录音按钮实时电平圈：「看得见被听见」——v2 走光谱蓝（红点已承担
+         「正在录音」语义，电平环不必再红） */
       ORB.micEl.style.boxShadow = '0 0 0 ' +
-        (2 + ORB.level * 9).toFixed(1) + 'px rgba(239,68,68,' +
-        (0.16 + ORB.level * 0.24).toFixed(2) + ')';
+        (2 + ORB.level * 9).toFixed(1) + 'px rgba(' + orbRibbonRgb()[1] + ',' +
+        (0.14 + ORB.level * 0.26).toFixed(2) + ')';
     }
   }
   function orbRipple(now) {
@@ -1140,6 +1636,7 @@
         ORB.degT0 = ts;
         ORB.degStep++;
         ORB.ema = 16.7;
+        applyLevelClass();  /* 面板同步进 .asb-lite：关外发光/光雾 */
         if (ORB.degStep > 1) {
           orbBeacon('asb_orb_degrade_css');
           orbStop();
@@ -1178,28 +1675,114 @@
     var k = ORB.dpr || 1;
     var cssW = box.clientWidth - 18;
     if (cssW < 60) { return; }
-    var bw = Math.round(cssW * k), bh = Math.round(38 * k);
+    var bw = Math.round(cssW * k), bh = Math.round(44 * k);
     if (cv.width !== bw) { cv.width = bw; }
     if (cv.height !== bh) { cv.height = bh; }
     var c = cv.getContext('2d');
     if (!c) { return; }
     c.clearRect(0, 0, bw, bh);
-    var col = st === 'listening'
-      ? (ORB.dark ? '103,232,249' : '8,145,178')
-      : (ORB.dark ? '167,139,250' : '109,40,217');
-    var NB = 44;
-    var step = bw / NB;
+    /* v2：三条交织的多彩正弦光带（Siri 波形语法）。每条吃一个频带（低/中/高）
+       定振幅，两端用 sin^1.4 包络收细，沿 x 铺光谱渐变（三条各自错相），暗底
+       lighter 叠色发光、亮底普通叠加。无分析器（能力缺失/夹具）走合成波保住
+       「在听/在说」的反馈语义。 */
+    var rb = orbRibbonRgb();
     var mid = bh / 2;
-    var now = (window.performance || Date).now();
-    for (var i = 0; i < NB; i++) {
-      var v = ORB.an
-        ? (ORB.au[2 + ((i * 94 / NB) | 0)] / 255)
-        : (0.28 + 0.26 * Math.sin(now / 150 + i * 0.9));
-      v = Math.min(1, v * 1.3);
-      var h = Math.max(1.6 * k, v * (mid - 2 * k));
-      c.fillStyle = 'rgba(' + col + ',' + (0.3 + 0.6 * v).toFixed(3) + ')';
-      c.fillRect(i * step + step * 0.22, mid - h, step * 0.56, h * 2);
+    var t = ((window.performance || Date).now()) / 1000;
+    var lv = Math.max(0, Math.min(1, ORB.level || 0));
+    var bands = ORB.an
+      ? [ORB.bass, ORB.mid, ORB.treb]
+      : [0.32 + 0.22 * Math.sin(t * 1.9), 0.3 + 0.2 * Math.sin(t * 2.6 + 1.1),
+         0.26 + 0.18 * Math.sin(t * 3.3 + 2.3)];
+    var waves = [
+      { f: 1.5, sp: 2.1, w: 2.2, a: 0.95, amp: 1.0, ord: [0, 1, 2] },
+      { f: 2.2, sp: -1.6, w: 1.6, a: 0.7, amp: 0.78, ord: [2, 0, 1] },
+      { f: 3.0, sp: 2.8, w: 1.2, a: 0.5, amp: 0.58, ord: [1, 2, 0] },
+    ];
+    c.globalCompositeOperation = ORB.dark ? 'lighter' : 'source-over';
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
+    var stepX = Math.max(2, 3 * k);
+    for (var w = 0; w < waves.length; w++) {
+      var wv = waves[w];
+      var band = Math.max(0, Math.min(1, bands[w] * 1.4 + lv * 0.35));
+      var A = (mid - 3 * k) * (0.12 + 0.88 * band) * wv.amp;
+      var g = c.createLinearGradient(0, 0, bw, 0);
+      g.addColorStop(0, 'rgb(' + rb[wv.ord[0]] + ')');
+      g.addColorStop(0.5, 'rgb(' + rb[wv.ord[1]] + ')');
+      g.addColorStop(1, 'rgb(' + rb[wv.ord[2]] + ')');
+      c.strokeStyle = g;
+      c.globalAlpha = wv.a;
+      c.lineWidth = wv.w * k;
+      c.beginPath();
+      for (var x = 0; x <= bw; x += stepX) {
+        var u = x / bw;
+        var env = Math.pow(Math.sin(Math.PI * u), 1.4);
+        var y = mid + Math.sin(u * Math.PI * 2 * wv.f + t * wv.sp) * A * env;
+        if (x === 0) { c.moveTo(x, y); } else { c.lineTo(x, y); }
+      }
+      c.stroke();
     }
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
+  }
+
+  /* 状态粒子色与 CSS 的 --xz-core 表同源：听=rb-1、做=rb-2、想/说=rb-3。
+     亮底压暗 28%（亮色粒子铺白底看不见），暗底提亮 18%（lighter 合成下更透亮）。 */
+  function orbStateRgb(st) {
+    var rb = orbRibbonRgb();
+    var base = st === 'listening' ? rb[0] : (st === 'agent' ? rb[1] : rb[2]);
+    var p = base.split(',');
+    var k = ORB.dark ? 1.18 : 0.72;
+    var out = [];
+    for (var i = 0; i < 3; i++) {
+      out.push(Math.max(0, Math.min(255, Math.round(+p[i] * k))));
+    }
+    return out.join(',');
+  }
+
+  /* 光谱三色的 rgb 分量（画布用）：从 --xz-rb-* 经探针元素落到 computed color，
+     宿主令牌换色/切主题后由 syncDark 清缓存。取不到时回落三个字面量。 */
+  var _rbCache = null, _cvt = null;
+  /* 任意 CSS 颜色 → "r,g,b"：经 1×1 画布落成像素字节。白标推导后 computed color
+     是 oklch(…) 字串（Chromium 对非 sRGB 色不转 rgb 序列化），正则解析会漏配；
+     画布的颜色解析器和 CSS 同一套，oklch/color-mix 都吃得下。非法色让 fillStyle
+     保持初始黑（#000000），据此判失败回落。 */
+  function cssToRgb(str) {
+    try {
+      if (!_cvt) {
+        _cvt = document.createElement('canvas');
+        _cvt.width = 1;
+        _cvt.height = 1;
+      }
+      var c = _cvt.getContext('2d', { willReadFrequently: true });
+      if (!c) { return null; }
+      c.fillStyle = '#000000';
+      c.fillStyle = str;
+      if (c.fillStyle === '#000000') { return null; }
+      c.clearRect(0, 0, 1, 1);
+      c.fillRect(0, 0, 1, 1);
+      var d = c.getImageData(0, 0, 1, 1).data;
+      return d[0] + ',' + d[1] + ',' + d[2];
+    } catch (e) { return null; }
+  }
+  function orbRibbonRgb() {
+    if (_rbCache) { return _rbCache; }
+    var out = ['34,211,238', '79,110,247', '139,92,246'];
+    try {
+      var host = $panel || $wrap || document.body;
+      var p = document.createElement('span');
+      p.setAttribute('aria-hidden', 'true');
+      p.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+      host.appendChild(p);
+      for (var i = 1; i <= 3; i++) {
+        p.style.color = 'var(--xz-rb-' + i + ')';
+        var rgb = cssToRgb(getComputedStyle(p).color || '');
+        if (rgb) { out[i - 1] = rgb; }
+      }
+      p.remove();
+    } catch (e) { /* 回落字面量 */ }
+    _rbCache = out;
+    return out;
   }
 
   function orbDraw(ts, d, st) {
@@ -1246,7 +1829,7 @@
     }
 
     if (st === 'listening') {
-      var colL = ORB.dark ? '103,232,249' : '8,145,178';
+      var colL = orbStateRgb(st);
       for (i = 0; i < ORB.rings.length; i++) {
         var rg = ORB.rings[i];
         if (rg.a > 0.01) {
@@ -1279,7 +1862,7 @@
 
     if (st === 'speaking') {
       /* 播报：径向均衡条——声音的形状直接长在核缘（TTS 频谱驱动） */
-      var colS = ORB.dark ? '167,139,250' : '109,40,217';
+      var colS = orbStateRgb(st);
       var NB = 24;
       ctx.lineCap = 'round';
       ctx.lineWidth = 2 * k;
@@ -1304,7 +1887,7 @@
 
     if (st === 'agent') {
       /* 代办进行时：3 颗彗星顺行 + 进度弧（orbMode('agent',true,p) 才画弧） */
-      var colA = ORB.dark ? '147,197,253' : '29,78,216';
+      var colA = orbStateRgb(st);
       var rA = 31 * k * (0.5 + 0.5 * ORB.bloom);
       if (ORB.agentP >= 0) {
         ctx.strokeStyle = 'rgba(' + colA + ',.5)';
@@ -1329,7 +1912,7 @@
     }
 
     /* thinking：紫色星系旋涡（椭圆轨道），流式 delta 到达即加速 */
-    var colT = ORB.dark ? '196,181,253' : '124,58,237';
+    var colT = orbStateRgb(st);
     var spd = 1 + ORB.pulse * 2.2;
     for (i = 0; i < n; i++) {
       ORB.pa[i] += (0.018 + 0.02 * ORB.ps[i]) * spd * d;
@@ -1349,7 +1932,18 @@
 
   function orbInit() {
     ORB.lvl = orbLevel();
-    $wrap.classList.add('asb-lv' + ORB.lvl);
+    applyLevelClass();
+    syncDark();
+    /* 两壳都在 <html> 上切 data-theme / data-cp-theme：主题一换，玻璃/高光/
+       画布合成模式立即跟随，不必等下一次开面板 */
+    try {
+      if (window.MutationObserver) {
+        new MutationObserver(function () { syncDark(); }).observe(
+          document.documentElement,
+          { attributes: true,
+            attributeFilter: ['data-theme', 'data-cp-theme', 'class'] });
+      }
+    } catch (e0) { /* ignore */ }
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) { orbStop(); } else { syncOrb(); }
     });
@@ -1431,6 +2025,9 @@
     return c;
   }
   function currentBox() {
+    /* 先掐掉入场动画再量：动画期内 rect 带着 scale/translate，量出来是假几何 */
+    if (_inT) { clearTimeout(_inT); _inT = 0; }
+    $panel.classList.remove('asb-in');
     var r = $panel.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
   }
@@ -1454,16 +2051,45 @@
     }
     /* 面板锚在球的对角象限，贴边自适应 */
     var r = $ball.getBoundingClientRect();
-    var pw = Math.min(380, window.innerWidth - 24);
-    var ph = Math.min(560, window.innerHeight * 0.78);
+    var pw = Math.min(392, window.innerWidth - 24);
+    var ph = Math.min(600, window.innerHeight * 0.78);
     var left = r.left + r.width / 2 < window.innerWidth / 2
       ? r.left : r.right - pw;
     left = Math.min(Math.max(left, 12), window.innerWidth - pw - 12);
     var top = r.top + r.height / 2 < window.innerHeight / 2
       ? r.bottom + 10 : r.top - ph - 10;
     top = Math.min(Math.max(top, 12), window.innerHeight - ph - 12);
+    left = avoidHostFabs(left, top, pw, ph);
     $panel.style.left = left + 'px';
     $panel.style.top = top + 'px';
+  }
+
+  /* 让开宿主的悬浮小圆钮（v2.1）：老板截图里面板右缘压着一颗宿主浮球。只在
+     默认摆放时生效（用户自己拖过的位置一律尊重）；判据刻意收窄——body 直属、
+     position:fixed、24–80px 的可点击小件、不是小智自家的（.asb-/.xza-/.xzt-）、
+     且与拟放位置相交——命中则把面板整体左移到它左侧 8px；左移会顶到 12px 边界
+     时放弃避让（宁可重叠也不把面板挤出屏）。 */
+  function avoidHostFabs(left, top, pw, ph) {
+    try {
+      var kids = document.body.children;
+      for (var i = 0; i < kids.length; i++) {
+        var el = kids[i];
+        if (!el || el === $wrap || el === $panel || el.nodeType !== 1) { continue; }
+        var cls = String(el.className || '');
+        if (/(^|\s)(asb|xza|xzt)-/.test(cls)) { continue; }
+        var cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' || cs.pointerEvents === 'none' ||
+            cs.visibility === 'hidden' || cs.display === 'none') { continue; }
+        var b = el.getBoundingClientRect();
+        if (b.width < 24 || b.width > 80 || b.height < 24 || b.height > 80) { continue; }
+        var hit = b.left < left + pw && b.right > left && b.top < top + ph &&
+          b.bottom > top;
+        if (!hit) { continue; }
+        var nl = b.left - 8 - pw;
+        if (nl >= 12) { left = nl; }
+      }
+    } catch (e) { /* 避让只是礼貌，失败就按原位放 */ }
+    return left;
   }
 
   /* ── 拖拽/缩放引擎 ─────────────────────────────────────────────────────
@@ -1670,9 +2296,15 @@
     $ball.setAttribute('aria-label', t('open_aria'));
     $ball.setAttribute('aria-haspopup', 'dialog');
     $ball.setAttribute('aria-expanded', 'false');
+    /* 层序即遮挡：后半环 → 球面 → 状态层 → 前半环（z3）→ 图标（z3，靠树序
+       压在环上）→ 角标。r2 是 lv2 才显示的第二条细环。 */
     $ball.innerHTML = '<span class="asb-glow"></span>' +
+      '<span class="asb-ring back" aria-hidden="true"></span>' +
+      '<span class="asb-ring back r2" aria-hidden="true"></span>' +
       '<span class="asb-orb"></span><span class="asb-alertfx"></span>' +
       '<span class="asb-sweep"></span><span class="asb-ping"></span>' +
+      '<span class="asb-ring front" aria-hidden="true"></span>' +
+      '<span class="asb-ring front r2" aria-hidden="true"></span>' +
       '<span class="asb-ic">' + ICON_SPARK + '</span>' +
       '<span class="asb-dot"></span>';
     $wrap.appendChild($ball);
@@ -1739,11 +2371,34 @@
 
   /* src='ext' = 程序化开面板（教学/代办线投问），不计入「人点开了球」的
      分母——混进去会让打开率虚高，而打开率正是本批要建立的基线。 */
+  var _closeT = 0, _inT = 0;
   function togglePanel(force, src) {
     var wasOpen = S.open;
     S.open = force != null ? !!force : !S.open;
     if (!S.open && REC) { stopRec(true); }
+    /* open 类同步切（门禁与外部都按它判「面板是否开着」）；关闭的 160ms 淡出
+       由 .closing 单独承担：它只负责把 display 撑住到动画结束，安静档跳过。 */
+    if (_closeT) {
+      clearTimeout(_closeT);
+      _closeT = 0;
+      $panel.classList.remove('closing');
+    }
     $panel.classList.toggle('open', S.open);
+    if (_inT) { clearTimeout(_inT); _inT = 0; $panel.classList.remove('asb-in'); }
+    if (S.open && !wasOpen && ORB.lvl > 0) {
+      $panel.classList.add('asb-in');
+      _inT = setTimeout(function () {
+        _inT = 0;
+        $panel.classList.remove('asb-in');
+      }, 300);
+    }
+    if (!S.open && wasOpen && ORB.lvl > 0) {
+      $panel.classList.add('closing');
+      _closeT = setTimeout(function () {
+        _closeT = 0;
+        $panel.classList.remove('closing');
+      }, 170);
+    }
     $ball.setAttribute('aria-expanded', S.open ? 'true' : 'false');
     if (S.open && !wasOpen) {
       beacon(src === 'ext' ? 'asb_open_ext' : 'asb_open');
@@ -1752,6 +2407,7 @@
       placePanel();
       /* 面板隐藏时 offsetWidth 恒 0 → 滑块只能在开的这一刻定位 */
       syncModes();
+      if (!wasOpen) { greetSweep(); }
       loadPair();
       loadPc();
       if (S.tab === 'mine') { loadTickets(); }
@@ -1760,6 +2416,16 @@
         setTimeout(function () { inp.focus(); }, 60);
       }
     }
+  }
+
+  /* 签名时刻：面板从关到开、还没有对话历史时，光带绕问候气泡扫一圈。只在
+     饱满档播（lv2），一次 1.1s；有历史的重开不播——它是「你好」不是常驻装饰。 */
+  function greetSweep() {
+    if (ORB.lvl < 2 || S.tab !== 'chat' || chatHistory.length) { return; }
+    var hello = $panel.querySelector('.asb-body .asb-msg.ai');
+    if (!hello || hello.classList.contains('pending')) { return; }
+    hello.classList.add('asb-greet');
+    setTimeout(function () { hello.classList.remove('asb-greet'); }, 1250);
   }
 
   /* 教学/代办线投问：球开合走 pointerup 不是 click，HTMLElement.click()
@@ -1800,12 +2466,14 @@
   var MODES = {};
   var MODE_ORDER = [];
   var SUBTABS = ['report', 'mine', 'faq', 'set'];
+  var MODE_ICONS = { chat: 'chat', teach: 'cap', agent: 'bolt' };
 
   function defineMode(id, def) {
     if (!MODES[id]) { MODE_ORDER.push(id); }
     MODES[id] = {
       id: id,
       icon: String(def.icon || ''),
+      iconName: String(def.iconName || ''),
       label: typeof def.label === 'function' ? def.label : null,
       labelKey: String(def.labelKey || ''),
       order: Number(def.order) || 50,
@@ -1856,27 +2524,29 @@
 
   function renderPanel() {
     if (!MODES.chat) {
-      defineMode('chat', { order: 10, icon: '💬', labelKey: 'mode_chat',
+      defineMode('chat', { order: 10, icon: 'chat', labelKey: 'mode_chat',
                            mount: mountChat });
     }
     $panel.innerHTML = '' +
       '<div class="asb-hd" tabindex="0" title="' + esc(t('move_hint')) + '">' +
-      '<span class="asb-hd-ic">' + ICON_SPARK + '</span>' +
-      '<span class="asb-hd-name">' + esc(dispName()) + '</span>' +
+      '<span class="asb-hd-ic" aria-hidden="true"><i class="asb-hd-core"></i>' +
+      '<i class="asb-hd-ring"></i>' + ICON_SPARK + '</span>' +
+      '<span class="asb-hd-name"><b>' + esc(dispName()) + '</b>' +
+      '<em class="asb-hd-st">' + esc(t('hd_idle')) + '</em></span>' +
       /* 复位入口做成**看得见的按钮**而不是只靠双击：双击这类手势发现性极差
          （没人知道可以双击），且在指针捕获场景下浏览器未必合成 dblclick。
          只在几何被改过时出现——没自定义过就没有「复位」可言，常驻只是噪音。 */
       '<button type="button" class="asb-hd-rst" data-act="rstgeo" hidden' +
       ' title="' + esc(t('reset_geo')) + '" aria-label="' +
-      esc(t('reset_geo')) + '">⤢</button>' +
+      esc(t('reset_geo')) + '">' + ic('expand') + '</button>' +
       '<button type="button" class="asb-hd-pair" data-act="pair" title="' +
       esc(t('pair_off')) + '" aria-label="' + esc(t('pair_t')) +
-      '">📱<i aria-hidden="true"></i></button>' +
+      '">' + ic('phone') + '<i aria-hidden="true"></i></button>' +
       '<button type="button" class="asb-hd-pc" data-act="pc" hidden title="' +
       esc(t('pc_off')) + '" aria-label="' + esc(t('pc_t')) +
-      '">💻<i aria-hidden="true"></i></button>' +
+      '">' + ic('monitor') + '<i aria-hidden="true"></i></button>' +
       '<button type="button" class="asb-x" data-act="close" aria-label="' +
-      esc(t('close')) + '">✕</button></div>' +
+      esc(t('close')) + '">' + ic('x') + '</button></div>' +
       '<div class="asb-modes" role="radiogroup" aria-label="' +
       esc(t('modes_aria')) + '"></div>' +
       '<div class="asb-body" aria-live="polite"></div>' +
@@ -1923,9 +2593,15 @@
     var html = '<span class="asb-modes-ind" aria-hidden="true"></span>';
     for (var i = 0; i < MODE_ORDER.length; i++) {
       var m = MODES[MODE_ORDER[i]];
+      /* 图标解析顺序（v2.1）：iconName（姊妹组件指名的内置线性图标）→ icon 本身
+         恰是图标名（球自带模式）→ 按模式 id 查表（旧缓存的姊妹组件只传 emoji）
+         → 最后才把 icon 当 emoji 文本渲染 */
+      var icon = ICONS[m.iconName] ? ic(m.iconName)
+        : (ICONS[m.icon] ? ic(m.icon)
+          : (MODE_ICONS[m.id] ? ic(MODE_ICONS[m.id]) : (m.icon ? esc(m.icon) : '')));
       html += '<button type="button" class="asb-mode" role="radio" ' +
         'aria-checked="false" tabindex="-1" data-mode="' + esc(m.id) + '">' +
-        (m.icon ? '<i aria-hidden="true">' + esc(m.icon) + '</i>' : '') +
+        (icon ? '<i aria-hidden="true">' + icon + '</i>' : '') +
         '<span>' + esc(modeLabel(m)) + '</span></button>';
     }
     box.innerHTML = html;
@@ -1947,6 +2623,8 @@
     }
     var ind = box.querySelector('.asb-modes-ind');
     if (!ind) { return; }
+    /* 当前模式写到容器上：滑块投影与图标按模式取色（问答蓝/教学青/替我做紫） */
+    box.setAttribute('data-cur', cur ? S.tab : '');
     /* 面板未开时 offsetWidth 恒 0——滑块位置在 togglePanel 打开时补算 */
     if (!cur || !cur.offsetWidth) { ind.style.opacity = '0'; return; }
     ind.style.opacity = '1';
@@ -1983,8 +2661,9 @@
     html += '<button type="button" class="asb-sub" data-tab="faq">' +
       esc(t('tab_faq')) + '</button>' +
       '<span class="asb-sub-sp"></span>' +
-      '<button type="button" class="asb-sub" data-tab="set" title="' +
-      esc(t('set_t')) + '" aria-label="' + esc(t('set_t')) + '">⚙</button>';
+      '<button type="button" class="asb-sub asb-sub--ic" data-tab="set" title="' +
+      esc(t('set_t')) + '" aria-label="' + esc(t('set_t')) + '">' + ic('sliders') +
+      '</button>';
     box.innerHTML = html;
     syncSubtabs();
   }
@@ -2098,26 +2777,26 @@
     if (typeof window.toggleTermTips === 'function' ||
         document.querySelector('.tip-toggle')) {
       var on = localStorage.getItem('tipOn') !== '0';
-      html += '<button type="button" class="asb-tool" data-act="tips">' +
-        esc(on ? t('tools_tips_on') : t('tools_tips_off')) + '</button>';
+      html += '<button type="button" class="asb-tool" data-act="tips">' + ic('bulb') +
+        '<span>' + esc(on ? t('tools_tips_on') : t('tools_tips_off')) + '</span></button>';
     }
     if (typeof window.startTour === 'function') {
-      html += '<button type="button" class="asb-tool" data-act="tour">▶ ' +
-        esc(t('tools_tour')) + '</button>';
+      html += '<button type="button" class="asb-tool" data-act="tour">' + ic('play') +
+        '<span>' + esc(t('tools_tour')) + '</span></button>';
     }
     if (typeof window.openShortcuts === 'function') {
-      html += '<button type="button" class="asb-tool" data-act="keys">⌨ ' +
-        esc(t('tools_keys')) + '</button>';
+      html += '<button type="button" class="asb-tool" data-act="keys">' + ic('keyboard') +
+        '<span>' + esc(t('tools_keys')) + '</span></button>';
     }
     if (typeof window.openCmdPalette === 'function') {
-      html += '<button type="button" class="asb-tool" data-act="cmd">' +
-        esc(t('tools_cmd')) + ' (Ctrl+K)</button>';
+      html += '<button type="button" class="asb-tool" data-act="cmd">' + ic('command') +
+        '<span>' + esc(t('tools_cmd')) + ' (Ctrl+K)</span></button>';
     }
     /* 「上传诊断给客服」（实施49 P1-9 的独立诊断上传面板）——帮助球退役后
        由助手面板接住这个入口，防止孤儿化。 */
     if (typeof window.openSupportPanel === 'function') {
-      html += '<button type="button" class="asb-tool" data-act="support">🧰 ' +
-        esc(t('tools_support')) + '</button>';
+      html += '<button type="button" class="asb-tool" data-act="support">' + ic('wrench') +
+        '<span>' + esc(t('tools_support')) + '</span></button>';
     }
     /* orb 动效档切换（安静模式）：写 localStorage，reduced-motion 恒压到 lv0 */
     html += '<button type="button" class="asb-tool" data-act="orb-fx">' +
@@ -2164,8 +2843,8 @@
     if (tab === 'faq') { renderFaq(body); return; }
     if (tab === 'set') { renderSettings(body); return; }
     body.innerHTML = '<div class="asb-mine-bar">' +
-      '<button type="button" class="asb-tool" data-act="mine-refresh">↻ ' +
-      esc(t('mine_refresh')) + '</button></div>' +
+      '<button type="button" class="asb-tool" data-act="mine-refresh">' + ic('refresh') +
+      '<span>' + esc(t('mine_refresh')) + '</span></button></div>' +
       '<div class="asb-mine-list"><div class="asb-empty">…</div></div>';
     loadTickets();
   }
@@ -2189,10 +2868,11 @@
       ((isChat && voiceOn())
         ? '<button type="button" class="asb-mic" data-act="mic" ' +
           'title="' + esc(t('mic_title')) + '" aria-label="' +
-          esc(t('mic_title')) + '">🎤</button>'
+          esc(t('mic_title')) + '">' + ic('mic') + '</button>'
         : '') +
-      '<button type="button" class="asb-send" data-act="send">' +
-      esc(t('send')) + '</button></div>';
+      '<button type="button" class="asb-send asb-send--ic" data-act="send" title="' +
+      esc(t('send')) + '" aria-label="' + esc(t('send')) + '">' + ic('send') +
+      '</button></div>';
   }
 
   function composerPh(mode) {
@@ -2458,11 +3138,9 @@
   function pushChat(html) {
     chatHistory.push(html);
     if (chatHistory.length > 60) { chatHistory.shift(); }
-    var body = $panel.querySelector('.asb-body');
-    if (S.tab === 'chat' && body) {
-      body.insertAdjacentHTML('beforeend', html);
-      body.scrollTop = body.scrollHeight;
-    }
+    /* 入场动画类只加在刚插入的 DOM 节点上（字符串保持干净）：restoreChat
+       重绘整段历史时不会整屏重播一遍入场 */
+    pushChatDom(html);
     saveChatStore();
   }
 
@@ -2476,18 +3154,24 @@
     S.busy = v;
     $ball.classList.toggle('busy', v);
     syncOrb();
-    var btn = $panel.querySelector('.asb-send');
+    /* 只认对话输入区的圆形发送键：报障页的提交键也叫 .asb-send，v1 在用户
+       生成期切去报障页时会把「提交报障」改成停止符 */
+    var btn = $panel.querySelector('.asb-send.asb-send--ic');
     if (!btn) { return; }
     if (v && S.abortCtl) {
       /* 生成期发送键变「停止」（问答链可中断；转写等短请求维持旧禁用态） */
       btn.disabled = false;
-      btn.textContent = '⏹';
+      btn.innerHTML = ic('stop');
+      btn.classList.add('busy');
       btn.title = t('stop_t');
+      btn.setAttribute('aria-label', t('stop_t'));
       btn.setAttribute('data-act', 'stop-gen');
     } else {
       btn.disabled = v;
-      btn.textContent = t('send');
-      btn.title = '';
+      btn.innerHTML = ic('send');
+      btn.classList.remove('busy');
+      btn.title = t('send');
+      btn.setAttribute('aria-label', t('send'));
       btn.setAttribute('data-act', 'send');
     }
   }
@@ -2509,8 +3193,13 @@
     } catch (e0) { S.abortCtl = null; }
     pushChat('<div class="asb-msg user">' + esc(q) + '</div>');
     var thinkId = 'asb-th-' + Date.now();
-    pushChat('<div class="asb-msg ai" id="' + thinkId + '">' +
-      esc(t('searching')) + '</div>');
+    /* 思考占位（v2）：光雾 + 文案 + 计秒三件分开放。计秒 aria-hidden——
+       .asb-body 是 aria-live 区域，v1 每秒改一次整段文字，读屏用户每秒听一遍
+       「思考中 N 秒」。文案只在 3s/8s 两个节点变化且同值不重写。 */
+    pushChat('<div class="asb-msg ai pending" id="' + thinkId + '" aria-busy="true">' +
+      '<span class="asb-mesh" aria-hidden="true"><i></i><i></i><i></i></span>' +
+      '<span class="asb-txt">' + esc(t('searching')) + '</span>' +
+      '<span class="asb-tick" aria-hidden="true"></span></div>');
     setBusy(true);
 
     /* 2026-08-21 老板拍板：不设秒数限制（50s abort 移除）；改为思考气泡
@@ -2525,8 +3214,11 @@
       /* 8 秒后换成带预期的文案（P1-4）：qa_log 里存过 latency_ms=37638 的
          真实案例，长静默期用户需要知道「这是正常的」，而不是猜是否卡死。 */
       if (s >= 3) {
-        el.textContent = (s >= 8 ? t('thinking_long') : t('thinking')) +
-          ' ' + s + 's';
+        var tx = el.querySelector('.asb-txt');
+        var tk = el.querySelector('.asb-tick');
+        var phrase = s >= 8 ? t('thinking_long') : t('thinking');
+        if (tx && tx.textContent !== phrase) { tx.textContent = phrase; }
+        if (tk) { tk.textContent = s + 's'; }
       }
     }, 1000);
     fetch('/api/assistant/query', {
@@ -2557,11 +3249,13 @@
       if (S.aborted || (e && e.name === 'AbortError')) {
         /* 用户主动停止：已吐的内容保留成正式气泡，不算错误 */
         var el0 = document.getElementById(thinkId);
+        var tx0 = el0 ? (el0.querySelector('.asb-txt') || el0) : null;
         var live = (el0 && el0.getAttribute('data-live') === '1')
-          ? String(el0.textContent || '') : '';
+          ? String(tx0.textContent || '') : '';
         replaceThinking(thinkId,
           (live ? '<div class="asb-msg ai">' + mdLite(live) + '</div>' : '') +
-          '<div class="asb-msg ai">⏹ ' + esc(t('stopped_gen')) + '</div>');
+          '<div class="asb-msg ai asb-msg--sys">' + ic('stop') + ' ' +
+          esc(t('stopped_gen')) + '</div>');
         return;
       }
       replaceThinking(thinkId,
@@ -2580,23 +3274,78 @@
      复用既有 to-report 链（切报障页 + 预填问题原文），零新后端零新键位。 */
   function errActionsHtml(q) {
     return '<div class="asb-err-acts">' +
-      '<button type="button" class="asb-act" data-act="retry">↻ ' +
-      esc(t('retry')) + '</button>' +
+      '<button type="button" class="asb-act" data-act="retry">' + ic('refresh') +
+      '<span>' + esc(t('retry')) + '</span></button>' +
       '<button type="button" class="asb-act" data-act="to-report" data-q="' +
-      esc(String(q || S.lastQ || '')) + '">' + esc(t('err_report')) +
-      '</button></div>';
+      esc(String(q || S.lastQ || '')) + '">' + ic('bug') + '<span>' +
+      esc(t('err_report')) + '</span></button></div>';
   }
 
+  /* 就地落定（v2）：思考占位不再「删节点再 push」——那会闪一下、滚动跳一下、
+     动画状态全丢。现在同一节点换形态：结果 HTML 的第一个 .asb-msg 写进占位
+     节点（AI 回答进入 settle：光带减速凝成细线再淡出，这一下就是完成信号），
+     其余节点（依据标注/来源卡/反馈行/出路）依次插在它后面并各自入场。
+     chatHistory 同索引替换字符串，与 DOM 顺序一致；字符串里没有运行态类。 */
   function replaceThinking(thinkId, html) {
     var el = document.getElementById(thinkId);
-    /* 同步 chatHistory：thinking 占位是最后一条 */
+    var found = false;
     for (var i = chatHistory.length - 1; i >= 0; i--) {
       if (chatHistory[i].indexOf(thinkId) !== -1) {
-        chatHistory.splice(i, 1); break;
+        chatHistory[i] = html;
+        found = true;
+        break;
       }
     }
-    if (el) { el.remove(); }
-    pushChat(html);
+    if (!found) { chatHistory.push(html); }
+    saveChatStore();
+    if (!el) {
+      /* 占位不在 DOM（用户切去了别的页签）：字符串已换，回到问答页 restore
+         即是答案；当前就在问答页却找不到节点属异常，直接追加兜底 */
+      var body0 = $panel.querySelector('.asb-body');
+      if (S.tab === 'chat' && body0) {
+        body0.insertAdjacentHTML('beforeend', html);
+        body0.scrollTop = body0.scrollHeight;
+      }
+      return;
+    }
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var first = tmp.firstElementChild;
+    if (!first || !first.classList.contains('asb-msg')) {
+      el.remove();
+      pushChatDom(html);
+      return;
+    }
+    var isAi = first.classList.contains('ai');
+    el.className = first.className + (isAi ? ' settle' : '');
+    el.removeAttribute('id');
+    el.removeAttribute('aria-busy');
+    el.removeAttribute('data-live');
+    el.innerHTML = first.innerHTML;
+    var anchor = el;
+    var rest = tmp.children;
+    while (rest.length > 1) {
+      var n = rest[1];
+      n.classList.add('asb-new');
+      anchor.insertAdjacentElement('afterend', n);
+      anchor = n;
+    }
+    var body = el.closest('.asb-body');
+    if (body) { body.scrollTop = body.scrollHeight; }
+    if (isAi) {
+      setTimeout(function () { el.classList.remove('settle'); }, 2300);
+    }
+  }
+
+  /* 只往 DOM 追加（不入历史）——replaceThinking 的兜底分支用 */
+  function pushChatDom(html) {
+    var body = $panel.querySelector('.asb-body');
+    if (S.tab !== 'chat' || !body) { return; }
+    var before = body.lastElementChild;
+    body.insertAdjacentHTML('beforeend', html);
+    var n = before ? before.nextElementSibling : body.firstElementChild;
+    while (n) { n.classList.add('asb-new'); n = n.nextElementSibling; }
+    body.scrollTop = body.scrollHeight;
   }
 
   /* 统一渲染：事件数组（JSON 一次到达或 ndjson 逐行收齐后）→ 消息气泡 */
@@ -2639,8 +3388,8 @@
         var path = String(s.path || '');
         var linkable = path &&
           (S.shell === 'admin' || path.indexOf('/workspace') === 0);
-        html += '<div class="asb-src"><span class="n">[S' + (j + 1) +
-          ']</span><span class="tt">' + esc(s.title || '') + '</span>' +
+        html += '<div class="asb-src"><span class="n">S' + (j + 1) +
+          '</span><span class="tt">' + esc(s.title || '') + '</span>' +
           (linkable ? '<a data-goto="' + esc(path) + '" data-anchor="' +
             esc(String(s.anchor || '')) + '">' +
             esc(t('goto')) + ' →</a>' : '') + '</div>';
@@ -2650,19 +3399,22 @@
     var sayBtn = answer
       ? '<button type="button" class="asb-say" data-act="say" data-say="' +
         esc(sayPrep(answer)) + '" title="' + esc(t('say_t')) +
-        '" aria-label="' + esc(t('say_t')) + '">🔊</button>'
+        '" aria-label="' + esc(t('say_t')) + '">' + ic('speaker') + '</button>'
       : '';
     var copyBtn = answer
       ? '<button type="button" class="asb-say" data-act="copy" title="' +
         esc(t('copy_t')) + '" aria-label="' + esc(t('copy_t')) +
-        '">📋</button>'
+        '">' + ic('copy') + '</button>'
       : '';
     if (done && done.answered && done.qa_id) {
       html += '<div class="asb-fb" data-qa="' + esc(String(done.qa_id)) +
         '">' + sayBtn + copyBtn +
         '<span class="asb-fbq"><span>' + esc(t('helpful')) + '</span>' +
-        '<button type="button" data-fb="up">👍</button>' +
-        '<button type="button" data-fb="down">👎</button></span></div>';
+        '<button type="button" data-fb="up" title="' + esc(t('fb_up')) +
+        '" aria-label="' + esc(t('fb_up')) + '">' + ic('up') + '</button>' +
+        '<button type="button" data-fb="down" title="' + esc(t('fb_down')) +
+        '" aria-label="' + esc(t('fb_down')) + '">' + ic('down') +
+        '</button></span></div>';
     } else if (sayBtn) {
       html += '<div class="asb-fb">' + sayBtn + copyBtn + '</div>';
     }
@@ -2674,7 +3426,8 @@
        （noBasis 已在上面来源渲染前算好。） */
     if (reportOn() && ((meta && meta.report_hint) || noBasis)) {
       html += '<button type="button" class="asb-act" data-act="to-report" ' +
-        'data-q="' + esc(q) + '">' + esc(t('to_report')) + '</button>';
+        'data-q="' + esc(q) + '">' + ic('bug') + '<span>' + esc(t('to_report')) +
+        '</span></button>';
     }
     /* 报障是「这可能是故障」的出路；下面这排是「你现在就能得到答案」的出路。
        两者并存：答不上来的原因多半是语料没覆盖，而不是坏了。 */
@@ -2698,7 +3451,10 @@
     var evs = [];
     var live = '';
     var th = document.getElementById(thinkId);
-    if (th) { th.textContent = t('thinking'); }
+    if (th) {
+      var thx = th.querySelector('.asb-txt');
+      if (thx) { thx.textContent = t('thinking'); } else { th.textContent = t('thinking'); }
+    }
     function handleLine(line) {
       line = line.trim();
       if (!line) { return; }
@@ -2712,8 +3468,21 @@
         ORB.pulse = 1;  /* 思考旋涡随 token 到达加速：把流本身可视化 */
         var el = document.getElementById(thinkId);
         if (el) {
-          el.setAttribute('data-live', '1');  /* 通知计秒 ticker 让位 */
-          el.textContent = live;
+          if (el.getAttribute('data-live') !== '1') {
+            /* 首个 token：pending → live——光雾与计秒撤下，光带放慢、光标亮起 */
+            el.setAttribute('data-live', '1');  /* 通知计秒 ticker 让位 */
+            el.classList.remove('pending');
+            el.classList.add('live');
+            var mesh = el.querySelector('.asb-mesh');
+            if (mesh) { mesh.remove(); }
+            var tk = el.querySelector('.asb-tick');
+            if (tk) { tk.remove(); }
+            setHdStatus('hd_live');
+          }
+          var tx = el.querySelector('.asb-txt');
+          /* 流式也走 mdLite（先转义再加粗）：v1 直写 textContent，生成期满屏裸
+             星号，落定那一刻才突然变粗——现在边生成边有格式 */
+          if (tx) { tx.innerHTML = mdLite(live); } else { el.textContent = live; }
           var body = el.closest('.asb-body');
           if (body) { body.scrollTop = body.scrollHeight; }
         }
@@ -2855,8 +3624,14 @@
     var txt = node ? String(node.innerText || '').trim() : '';
     if (!txt) { return; }
     var flash = function () {
-      btn.textContent = '✓';
-      setTimeout(function () { btn.textContent = '📋'; }, 1200);
+      btn.innerHTML = ic('check');
+      btn.classList.add('ok');
+      btn.setAttribute('data-ok', '1');
+      setTimeout(function () {
+        btn.innerHTML = ic('copy');
+        btn.classList.remove('ok');
+        btn.removeAttribute('data-ok');
+      }, 1200);
     };
     var legacy = function () {
       try {
@@ -2900,7 +3675,7 @@
   }
   function sayReset() {
     var b = $panel ? $panel.querySelector('[data-act="say"].on') : null;
-    if (b) { b.classList.remove('on'); b.textContent = '🔊'; }
+    if (b) { b.classList.remove('on'); b.innerHTML = ic('speaker'); }
   }
   function sayStop() {
     if (SAY.el) {
@@ -2915,7 +3690,7 @@
     sayStop();
     SAY.busy = true;
     btn.disabled = true;
-    btn.textContent = '…';
+    btn.innerHTML = ic('refresh', 'asb-spin');
     fetch('/api/voice/tts-test', {
       method: 'POST',
       headers: csrfHeaders({ 'Content-Type': 'application/json' }),
@@ -2939,7 +3714,7 @@
         SAY.el.src = url;
         orbSpeakStart(SAY.el);
         btn.classList.add('on');
-        btn.textContent = '⏹';
+        btn.innerHTML = ic('stop');
         orbBeacon('asb_orb_say');
         return SAY.el.play();
       });
@@ -2950,7 +3725,7 @@
     }).then(function () {
       SAY.busy = false;
       btn.disabled = false;
-      if (!btn.classList.contains('on')) { btn.textContent = '🔊'; }
+      if (!btn.classList.contains('on')) { btn.innerHTML = ic('speaker'); }
     });
   }
 
@@ -2960,8 +3735,9 @@
       '<textarea maxlength="1000" class="asb-rp-desc" placeholder="' +
       esc(t('rp_ph')) + '"></textarea>' +
       '<div class="asb-rp-shot">' +
-      '<button type="button" class="asb-mic" data-act="shot-page">' +
-      esc(t('shot_page')) + '</button>　' + esc(t('rp_shot_hint')) + ' ' +
+      '<button type="button" class="asb-mic asb-mic--pill" data-act="shot-page">' +
+      ic('camera') + '<span>' + esc(t('shot_page')) + '</span></button>　' +
+      esc(t('rp_shot_hint')) + ' ' +
       '<a data-act="pick-shot">' + esc(t('rp_shot_pick')) + '</a>' +
       '<input type="file" accept="image/png,image/jpeg" class="asb-rp-file" ' +
       'style="display:none"></div>' +
@@ -2996,7 +3772,7 @@
     box.innerHTML = S.shotB64
       ? '<div class="asb-rp-thumb"><img alt="screenshot" src="' + S.shotB64 +
         '"><button type="button" data-act="del-shot" aria-label="' +
-        esc(t('rp_shot_del')) + '">✕</button></div>'
+        esc(t('rp_shot_del')) + '">' + ic('x') + '</button></div>'
       : '';
   }
 
@@ -3026,7 +3802,12 @@
   function capturePage() {
     var btn = $panel.querySelector('[data-act="shot-page"]');
     if (btn && btn.disabled) { return; }
-    if (btn) { btn.disabled = true; btn.textContent = t('shot_busy'); }
+    var btnLabel = function (txt) {
+      if (!btn) { return; }
+      var sp = btn.querySelector('span');
+      if (sp) { sp.textContent = txt; } else { btn.textContent = txt; }
+    };
+    if (btn) { btn.disabled = true; btnLabel(t('shot_busy')); }
     loadVendor().then(function (h2c) {
       /* 隐藏助手自身（不重渲染面板，保住已输入的描述文字） */
       $panel.style.visibility = 'hidden';
@@ -3054,7 +3835,7 @@
     }).then(function () {
       $panel.style.visibility = '';
       $wrap.style.visibility = '';
-      if (btn) { btn.disabled = false; btn.textContent = t('shot_page'); }
+      if (btn) { btn.disabled = false; btnLabel(t('shot_page')); }
     });
   }
   function openAnnotate(src) {
@@ -3063,15 +3844,16 @@
     var bar = document.createElement('div');
     bar.className = 'asb-an-bar';
     bar.innerHTML = '<span>' + esc(t('an_title')) + '</span>' +
-      '<button type="button" data-tool="rect" class="on">' +
-      esc(t('an_rect')) + '</button>' +
-      '<button type="button" data-tool="mosaic">' + esc(t('an_mosaic')) +
-      '</button>' +
-      '<button type="button" data-tool="undo">' + esc(t('an_undo')) +
-      '</button>' +
-      '<button type="button" data-tool="ok">' + esc(t('an_ok')) + '</button>' +
-      '<button type="button" data-tool="cancel">' + esc(t('an_cancel')) +
-      '</button>';
+      '<button type="button" data-tool="rect" class="on">' + ic('square') +
+      '<span>' + esc(t('an_rect')) + '</span></button>' +
+      '<button type="button" data-tool="mosaic">' + ic('grid') + '<span>' +
+      esc(t('an_mosaic')) + '</span></button>' +
+      '<button type="button" data-tool="undo">' + ic('undo') + '<span>' +
+      esc(t('an_undo')) + '</span></button>' +
+      '<button type="button" data-tool="ok" class="pri">' + ic('check') + '<span>' +
+      esc(t('an_ok')) + '</span></button>' +
+      '<button type="button" data-tool="cancel">' + ic('x') + '<span>' +
+      esc(t('an_cancel')) + '</span></button>';
     var cv = document.createElement('canvas');
     cv.width = src.width;
     cv.height = src.height;
@@ -3177,7 +3959,8 @@
         ta.value = '';
         S.shotB64 = '';
         renderShot();
-        out.innerHTML = '<div class="asb-msg ai">✅ ' + esc(t('rp_ok')) +
+        out.innerHTML = '<div class="asb-msg ai">' + ic('ok', 'asb-i-ok') + ' ' +
+          esc(t('rp_ok')) +
           esc(String(j.ticket_id)) +
           (j.dup ? ' ' + esc(t('rp_dup')) : '') + '<br>' +
           '<span class="asb-rp-next">' + esc(t('rp_next')) + '</span><br>' +
@@ -3240,7 +4023,7 @@
           '<span class="tt">' + esc(String(tk.title || '')) + '</span>' +
           '<span class="asb-st ' + esc(st) + '">' + esc(stLabel(st)) +
           '</span></div>' +
-          '<div style="font-size:.64rem;color:var(--xz-muted,#888)">' +
+          '<div class="asb-tk-meta">' +
           esc(d.toLocaleString()) +
           (Number(tk.report_count || 1) > 1
             ? ' · ×' + esc(String(tk.report_count)) : '') + '</div>' +
@@ -3405,12 +4188,9 @@
       try {
         localStorage.setItem('asb_orb_lvl', calmNext ? '1' : '2');
       } catch (e5) { /* ignore */ }
-      $wrap.classList.remove('asb-lv0');
-      $wrap.classList.remove('asb-lv1');
-      $wrap.classList.remove('asb-lv2');
       ORB.degStep = 0;
       ORB.lvl = orbLevel();
-      $wrap.classList.add('asb-lv' + ORB.lvl);
+      applyLevelClass();
       orbBeacon(ORB.lvl < 2 ? 'asb_orb_calm_on' : 'asb_orb_calm_off');
       renderTools();
       syncOrb();
@@ -3485,7 +4265,7 @@
     n.innerHTML = '<span>' + esc(t('nudge_text')) + '</span>' +
       '<button type="button" data-n="go">' + esc(t('nudge_go')) + '</button>' +
       '<button type="button" data-n="x" aria-label="' + esc(t('close')) +
-      '">✕</button>';
+      '">' + ic('x') + '</button>';
     document.body.appendChild(n);
     var r = $wrap.getBoundingClientRect();
     n.style.right = Math.max(10, window.innerWidth - r.right) + 'px';
@@ -3576,8 +4356,9 @@
        ——黏性模式参与正常优先级；真实信号（听/说/想）永远压过它。 */
     orbMode: orbMode,
     /* 模式认领（实施73 P1-1）：姊妹组件在自己 init 时把「教学 / 替我做」
-       挂成一级模式；def = {order, icon, labelKey|label, mount(el, api),
-       unmount?, composer?:{ph, submit(text)}}。缺席即该模式不出现。 */
+       挂成一级模式；def = {order, icon, iconName?, labelKey|label, mount(el, api),
+       unmount?, composer?:{ph, submit(text)}}。iconName（v2.1）指名球内置线性
+       图标；icon 保留 emoji 作旧球回退。缺席即该模式不出现。 */
     registerMode: registerMode,
     /* 开面板 + 投问（教学模式「详细讲讲」）：勿对 .asb-ball 调 click() */
     open: function () { togglePanel(true); },
@@ -3586,5 +4367,7 @@
     _orbForce: function (st) { ORB.force = st || ''; syncOrb(); },
     _orbState: function () { return ORB.state; },
     _orbLevel: function () { return ORB.lvl; },
-    _orbBurst: orbBurst };
+    _orbBurst: orbBurst,
+    /* 光谱三色的 rgb（画布同源）：白标推导是否真的到了画布，门禁/演示页读这里 */
+    _ribbonRgb: orbRibbonRgb };
 })();

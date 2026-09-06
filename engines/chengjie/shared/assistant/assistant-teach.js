@@ -25,31 +25,31 @@
   'use strict';
   if (window.XZTeach) { return; }
 
-  var VER = '20260828b';
+  var VER = '20260905b';
 
   var I18N = {
     zh: {
       mode_t: '点哪学哪',
       mode_d: '开着它在页面上点任何按钮，小智就地讲这是什么、怎么用。',
-      row_btn: '🎓 开始点哪学哪',
-      row_btn_on: '🎓 教学中 · 点此退出',
+      row_btn: '开始点哪学哪',
+      row_btn_on: '教学中 · 点此退出',
       row_hint: '进入后点击页面任意位置看讲解，不会真的执行',
       banner: '教学模式：点击页面上任何元素看讲解（不会真的执行）',
       banner_exit: '退出教学（Esc）',
-      banner_page: '📖 教我这个页',
+      banner_page: '教我这个页',
       ask_page1: '教学模式提问：页面「',
       ask_page2: '」最重要的三件事是什么？分别在哪里点、怎么用？',
-      tour_btn: '🧭 带我走一遍',
+      tour_btn: '带我走一遍',
       tour_next: '下一个 →',
       tour_prev: '← 上一个',
-      tour_done: '✅ 逛完了',
+      tour_done: '逛完了',
       tour_none: '这页还没备好导览词条，先让小智讲讲整页吧',
       stat_wait: '正在准备讲解词典…',
       stat_n1: '本页 ',
       stat_n2: ' 处可讲解',
       stat_zero: '本页暂时没有可讲解的控件——用「教我这个页」让小智整体讲一遍',
       stat_off: '讲解词典这会儿取不到，点哪学哪仍可用（讲通用说明）',
-      bub_ask: '🤖 让小智详细讲讲',
+      bub_ask: '让小智详细讲讲',
       bub_close: '知道了',
       bub_safe: '教学模式下点击不会真的执行，放心探索',
       bub_zone: '这个区域',
@@ -65,18 +65,18 @@
       mode_t: 'Click to learn',
       mode_d: 'Turn it on, click any control on the page, and the assistant '
         + 'explains what it is and how to use it.',
-      row_btn: '🎓 Start click-to-learn',
-      row_btn_on: '🎓 Teaching · click to exit',
+      row_btn: 'Start click-to-learn',
+      row_btn_on: 'Teaching · click to exit',
       row_hint: 'Click anything on the page for an explanation; nothing is executed',
       banner: 'Teach mode: click any element for an explanation (nothing is executed)',
       banner_exit: 'Exit (Esc)',
-      banner_page: '📖 Teach this page',
+      banner_page: 'Teach this page',
       ask_page1: 'Teach-mode question: on page "',
       ask_page2: '", what are the three most important things and how do I use each?',
-      tour_btn: '🧭 Walk me through',
+      tour_btn: 'Walk me through',
       tour_next: 'Next →',
       tour_prev: '← Back',
-      tour_done: '✅ Done',
+      tour_done: 'Done',
       tour_none: 'No tour entries for this page yet — ask the assistant instead',
       stat_wait: 'Loading the explanation dictionary…',
       stat_n1: '',
@@ -85,7 +85,7 @@
         + '"Teach this page" for a whole-page walkthrough',
       stat_off: 'The dictionary is unreachable right now; click-to-learn still '
         + 'works with generic explanations',
-      bub_ask: '🤖 Ask the assistant',
+      bub_ask: 'Ask the assistant',
       bub_close: 'Got it',
       bub_safe: 'Clicks are intercepted in teach mode — explore safely',
       bub_zone: 'This area',
@@ -125,40 +125,88 @@
     } catch (e) { /* best-effort */ }
   }
 
+  /* ── 单色线性图标子集（v2 2026-09-05，与 assistant-ball.js 同规格：24 网格、
+     1.8 描边、currentColor）——替掉 🎓📖🧭✅🤖 等 emoji；spark 是填充的 Logo 星。 */
+  var ICONS = {
+    cap: '<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08' +
+      'a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/>' +
+      '<path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+    book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 ' +
+      '4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+    compass: '<circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 ' +
+      '1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6' +
+      'a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5' +
+      'a1 1 0 0 1 1 1z"/>',
+    spark: '<path fill="currentColor" stroke="none" d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6' +
+      'l-1.7-4.6L6 9.3l4.3-1.7L12 3z"/><path fill="currentColor" stroke="none" opacity=".85" ' +
+      'd="M18.5 14l.9 2.3 2.1.8-2.1.8-.9 2.3-.9-2.3-2.1-.8 2.1-.8.9-2.3z"/>',
+  };
+  function ic(name, cls) {
+    return '<svg class="asb-i' + (cls ? ' ' + cls : '') +
+      '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"' +
+      ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (ICONS[name] || '') + '</svg>';
+  }
+
   /* ── 样式（--xz-* 局部令牌；init 按壳映射同源 token＝与球自动同色） ── */
   function injectCss() {
     if (document.getElementById('xzt-style')) { return; }
     var css = '' +
+/* 图标度量与球同一份（球缺席时本模块自带，重复定义无害） */
+'.asb-i{width:1em;height:1em;flex-shrink:0;display:inline-block;vertical-align:-.16em}' +
+'button>.asb-i+span{margin-left:.3em}' +
+/* v2：横幅走光谱（蓝→紫）与带色投影；讲解气泡改玻璃壳 + 顶部高光 + 分层阴影，
+   字号地板 ≥ .75rem（.66/.72 的说明文字对 8 小时坐席是真实疲劳源）。 */
 '.xzt-banner{position:fixed;top:10px;left:50%;transform:translateX(-50%);' +
 'z-index:10005;display:flex;align-items:center;gap:.6rem;max-width:92vw;' +
-'padding:.45rem .9rem;border-radius:999px;font-size:.78rem;color:#fff;' +
-'background:linear-gradient(135deg,var(--xz-accent,#4f6ef7),#8b5cf6);' +
-'box-shadow:0 6px 24px rgba(79,110,247,.45);animation:xztIn .22s ease}' +
+'padding:.5rem 1rem;border-radius:999px;font-size:.8rem;color:#fff;' +
+'background:linear-gradient(135deg,var(--xz-rb-2,var(--xz-accent,#4f6ef7)),var(--xz-rb-3,#8b5cf6));' +
+'box-shadow:0 10px 28px -8px var(--xz-tint,rgba(79,110,247,.45)),inset 0 1px 0 rgba(255,255,255,.28);' +
+'animation:xztIn .22s ease}' +
 '@keyframes xztIn{from{opacity:0;transform:translate(-50%,-6px)}' +
 'to{opacity:1;transform:translate(-50%,0)}}' +
 '.xzt-banner button{border:1px solid rgba(255,255,255,.55);background:rgba(255,255,255,.14);' +
-'color:#fff;border-radius:999px;cursor:pointer;font-family:inherit;font-size:.72rem;' +
-'padding:.16rem .6rem;flex-shrink:0}' +
+'color:#fff;border-radius:999px;cursor:pointer;font-family:inherit;font-size:.76rem;' +
+'padding:.22rem .7rem;flex-shrink:0;display:inline-flex;align-items:center;gap:.3em;' +
+'transition:background .15s ease}' +
 '.xzt-banner button:hover{background:rgba(255,255,255,.26)}' +
 '.xzt-hover{position:fixed;z-index:10003;pointer-events:none;' +
 'border:2px dashed var(--xz-accent,#4f6ef7);border-radius:8px;' +
 'background:rgba(79,110,247,.08);transition:all .06s linear;display:none}' +
-'.xzt-bubble{position:fixed;z-index:10006;width:290px;max-width:calc(100vw - 20px);' +
-'background:var(--xz-bg,#fff);color:var(--xz-txt,#111);border:1px solid var(--xz-bd,#ddd);' +
-'border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,.26);padding:.6rem .7rem;' +
-'font-size:.78rem;line-height:1.5;animation:xztIn2 .16s ease}' +
+'.xzt-bubble{position:fixed;z-index:10006;width:300px;max-width:calc(100vw - 20px);' +
+'background:var(--xz-glass,var(--xz-bg,#fff));color:var(--xz-txt,#111);' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'border-radius:16px;box-shadow:var(--xz-sh-key,0 12px 36px rgba(0,0,0,.26)),' +
+'var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08)),inset 0 1px 0 var(--xz-hl,rgba(255,255,255,.6));' +
+'-webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);' +
+'padding:.7rem .8rem;font-size:.82rem;line-height:1.55;animation:xztIn2 .16s ease}' +
 '@keyframes xztIn2{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}' +
 '.xzt-bub-t{display:flex;align-items:center;gap:.4rem;font-weight:700;' +
-'font-size:.8rem;margin-bottom:.3rem;word-break:break-all}' +
+'font-size:.86rem;margin-bottom:.35rem;word-break:break-all}' +
+'.xzt-bub-t .asb-i{color:var(--xz-accent,#4f6ef7);font-size:1.05rem;flex-shrink:0}' +
+'.xzt-bub-n{margin-left:auto;font-weight:500;font-size:.75rem;color:var(--xz-muted,#999);' +
+'font-variant-numeric:tabular-nums}' +
 '.xzt-bub-b{color:var(--xz-txt,#333);word-break:break-word;max-height:150px;overflow-y:auto}' +
-'.xzt-bub-u{margin-top:.3rem;color:var(--xz-muted,#777);font-size:.72rem}' +
-'.xzt-bub-row{display:flex;gap:.4rem;margin-top:.55rem}' +
-'.xzt-bub-row button{border:1px solid var(--xz-bd,#ddd);border-radius:8px;cursor:pointer;' +
-'font-family:inherit;font-size:.74rem;padding:.3rem .6rem;background:var(--xz-input,#f5f6f8);' +
-'color:var(--xz-txt,#333)}' +
-'.xzt-bub-row button.pri{background:var(--xz-accent,#4f6ef7);border-color:var(--xz-accent,#4f6ef7);' +
-'color:#fff;font-weight:600}' +
-'.xzt-bub-safe{margin-top:.45rem;font-size:.66rem;color:var(--xz-muted,#999)}' +
+'.xzt-bub-u{margin-top:.35rem;color:var(--xz-muted,#777);font-size:.76rem}' +
+'.xzt-bub-row{display:flex;gap:.4rem;margin-top:.6rem;align-items:center}' +
+'.xzt-bub-row button{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 90%,transparent);' +
+'border-radius:10px;cursor:pointer;font-family:inherit;font-size:.78rem;padding:.38rem .7rem;' +
+'background:var(--xz-input,#f5f6f8);color:var(--xz-txt,#333);display:inline-flex;' +
+'align-items:center;gap:.35em;transition:border-color .15s ease,filter .15s ease}' +
+'.xzt-bub-row button:hover{border-color:var(--xz-accent,#4f6ef7)}' +
+'.xzt-bub-row button.pri{background:var(--xz-accent,#4f6ef7);' +
+'background-image:linear-gradient(145deg,var(--xz-rb-2,#4f6ef7),var(--xz-rb-3,#8b5cf6));' +
+'border-color:transparent;color:#fff;font-weight:600;' +
+'box-shadow:0 6px 14px -8px var(--xz-tint,rgba(79,110,247,.5))}' +
+'.xzt-bub-row button.pri:hover{filter:brightness(1.06)}' +
+'.xzt-bub-row button.ic{width:30px;height:30px;padding:0;border-radius:50%;' +
+'justify-content:center;margin-left:auto;background:none}' +
+'.xzt-bub-safe{margin-top:.5rem;font-size:.75rem;color:var(--xz-muted,#999);' +
+'display:flex;align-items:flex-start;gap:.35em}' +
+'.xzt-bub-safe .asb-i{color:#059669;flex-shrink:0;margin-top:.15em}' +
 /* P0-3 2026-08-27：① 虚线边框在设计系统里是「占位/拖放区」语义，用在主打
    功能上＝看起来没做完、没人敢点 → 改实线 + --xz-input 柔和底（跟随主题，
    不写死色值）；② hint 原为 nowrap+ellipsis，把「不会真的执行任何操作」这句
@@ -207,21 +255,22 @@
     S.modeEl = el;
     el.innerHTML =
       '<div class="asb-md-hero">' +
-      '<div class="asb-md-t">🎓 <span>' + esc(t('mode_t')) + '</span></div>' +
+      '<div class="asb-md-t">' + ic('cap') + '<span>' + esc(t('mode_t')) + '</span></div>' +
       '<div class="asb-md-d">' + esc(t('mode_d')) + '</div>' +
       /* P2-1 状态行：由 syncStat 填内容（词典异步下发，这里先留空壳） */
       '<div class="asb-md-stat" data-n="-1"></div>' +
       '<button type="button" class="asb-md-go' + (S.on ? ' off' : '') +
-      '" data-xzt="mode-go">' +
-      esc(t(S.on ? 'row_btn_on' : 'row_btn')) + '</button>' +
+      '" data-xzt="mode-go">' + ic(S.on ? 'x' : 'cap') + '<span>' +
+      esc(t(S.on ? 'row_btn_on' : 'row_btn')) + '</span></button>' +
       '<div class="asb-md-row">' +
-      '<button type="button" class="asb-md-b" data-xzt="mode-tour">' +
-      esc(t('tour_btn')) + '</button>' +
-      '<button type="button" class="asb-md-b" data-xzt="mode-page">' +
-      esc(t('banner_page')) + '</button></div>' +
+      '<button type="button" class="asb-md-b" data-xzt="mode-tour">' + ic('compass') +
+      '<span>' + esc(t('tour_btn')) + '</span></button>' +
+      '<button type="button" class="asb-md-b" data-xzt="mode-page">' + ic('book') +
+      '<span>' + esc(t('banner_page')) + '</span></button></div>' +
       /* 安全承诺全文常驻（不再是被省略号吃掉半句的一行 hint）——
          「会不会真的点下去」正是没人敢开教学模式的第一顾虑。 */
-      '<div class="asb-md-safe">🛡 ' + esc(t('row_hint')) + '</div>' +
+      '<div class="asb-md-safe">' + ic('shield') + '<span>' + esc(t('row_hint')) +
+      '</span></div>' +
       '</div>';
     applyVars(el);
     el.addEventListener('click', function (ev) {
@@ -428,15 +477,16 @@
           : '')
       : esc(t('bub_generic'));
     bub.innerHTML = '' +
-      '<div class="xzt-bub-t">🎓 <span>' +
+      '<div class="xzt-bub-t">' + ic('cap') + '<span>' +
       esc(term ? term.title : label) + '</span></div>' +
       '<div class="xzt-bub-b">' + body + '</div>' +
       '<div class="xzt-bub-row">' +
-      '<button type="button" class="pri" data-xzt="ask">' +
-      esc(t('bub_ask')) + '</button>' +
+      '<button type="button" class="pri" data-xzt="ask">' + ic('spark') + '<span>' +
+      esc(t('bub_ask')) + '</span></button>' +
       '<button type="button" data-xzt="close">' + esc(t('bub_close')) +
       '</button></div>' +
-      '<div class="xzt-bub-safe">' + esc(t('bub_safe')) + '</div>';
+      '<div class="xzt-bub-safe">' + ic('shield') + '<span>' + esc(t('bub_safe')) +
+      '</span></div>';
     document.body.appendChild(bub);
     S.bubble = bub;
     /* 定位：优先元素下方，越界翻上方，水平钳制视口 */
@@ -578,7 +628,7 @@
     if (n === -2) { return esc(t('stat_off')); }
     if (n < 0) { return esc(t('stat_wait')); }
     if (n === 0) { return esc(t('stat_zero')); }
-    return '🧭 ' + esc(t('stat_n1')) + '<b>' + n + '</b>' + esc(t('stat_n2'));
+    return ic('compass') + ' ' + esc(t('stat_n1')) + '<b>' + n + '</b>' + esc(t('stat_n2'));
   }
   /* beacon 只能带 action 带不了数字 → 分三桶落。ops 里按页看
      asb_teach_cov_0 的分布，就是「该给哪页补词条」的采购清单。
@@ -617,8 +667,8 @@
       applyVars(bub);
       bub.innerHTML = '<div class="xzt-bub-b">' + esc(t('tour_none')) +
         '</div><div class="xzt-bub-row">' +
-        '<button type="button" class="pri" data-xzt="ask">' +
-        esc(t('bub_ask')) + '</button>' +
+        '<button type="button" class="pri" data-xzt="ask">' + ic('spark') + '<span>' +
+        esc(t('bub_ask')) + '</span></button>' +
         '<button type="button" data-xzt="close">' + esc(t('bub_close')) +
         '</button></div>';
       document.body.appendChild(bub);
@@ -669,9 +719,8 @@
     bub.className = 'xzt-bubble';
     applyVars(bub);
     bub.innerHTML = '' +
-      '<div class="xzt-bub-t">🧭 <span>' + esc(term.title) + '</span>' +
-      '<span style="margin-left:auto;font-weight:400;font-size:.66rem;' +
-      'color:var(--xz-muted,#999)">' + (TOUR.idx + 1) + ' / ' +
+      '<div class="xzt-bub-t">' + ic('compass') + '<span>' + esc(term.title) + '</span>' +
+      '<span class="xzt-bub-n">' + (TOUR.idx + 1) + ' / ' +
       TOUR.items.length + '</span></div>' +
       '<div class="xzt-bub-b">' + esc(term.desc || '') +
       (term.usage
@@ -683,9 +732,10 @@
         ? '<button type="button" data-xzt="tprev">' + esc(t('tour_prev')) +
           '</button>'
         : '') +
-      '<button type="button" class="pri" data-xzt="tnext">' +
-      esc(t(last ? 'tour_done' : 'tour_next')) + '</button>' +
-      '<button type="button" data-xzt="tend">✕</button></div>';
+      '<button type="button" class="pri" data-xzt="tnext">' + (last ? ic('check') : '') +
+      '<span>' + esc(t(last ? 'tour_done' : 'tour_next')) + '</span></button>' +
+      '<button type="button" class="ic" data-xzt="tend" aria-label="' +
+      esc(t('banner_exit')) + '">' + ic('x') + '</button></div>';
     document.body.appendChild(bub);
     S.bubble = bub;
     /* 定位与讲解气泡同策略：目标下方，越界翻上方 */
@@ -780,12 +830,12 @@
     banner.className = 'xzt-banner';
     applyVars(banner);
     banner.innerHTML = '<span>' + esc(t('banner')) + '</span>' +
-      '<button type="button" data-xzt="btour">' + esc(t('tour_btn')) +
-      '</button>' +
-      '<button type="button" data-xzt="bpage">' + esc(t('banner_page')) +
-      '</button>' +
-      '<button type="button" data-xzt="bexit">' + esc(t('banner_exit')) +
-      '</button>';
+      '<button type="button" data-xzt="btour">' + ic('compass') + '<span>' +
+      esc(t('tour_btn')) + '</span></button>' +
+      '<button type="button" data-xzt="bpage">' + ic('book') + '<span>' +
+      esc(t('banner_page')) + '</span></button>' +
+      '<button type="button" data-xzt="bexit">' + ic('x') + '<span>' +
+      esc(t('banner_exit')) + '</span></button>';
     banner.querySelector('[data-xzt="bexit"]')
       .addEventListener('click', stop);
     banner.querySelector('[data-xzt="bpage"]')
@@ -834,7 +884,10 @@
       if (window.AssistantBall &&
           typeof window.AssistantBall.registerMode === 'function') {
         S.claimed = window.AssistantBall.registerMode('teach', {
-          order: 20, icon: '🎓', labelKey: 'mode_teach', mount: mountMode,
+          /* iconName＝球内置线性图标名（v2.1 起 registerMode 优先按它解析）；
+             icon 仍传 emoji 给不识别 iconName 的旧球缓存当回退 */
+          order: 20, icon: '🎓', iconName: 'cap', labelKey: 'mode_teach',
+          mount: mountMode,
         });
       }
       if (!S.claimed && ++tries < 20) { setTimeout(poll, 500); }

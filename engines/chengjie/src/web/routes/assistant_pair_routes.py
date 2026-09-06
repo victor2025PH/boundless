@@ -37,7 +37,7 @@ from src.web.routes.assistant_routes import _assistant_cfg, _session_user
 
 logger = logging.getLogger(__name__)
 
-_AGENT_JS_VER = "20260831c"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
+_AGENT_JS_VER = "20260905b"  # 与 shared/assistant/assistant-agent.js VER 同步（门禁钉）
 
 
 def _lan_ip() -> str:
@@ -109,16 +109,26 @@ def _qr_data_uri(url: str) -> str:
 
 def _mobile_page_html(lang: str, uname: str, ver: str) -> str:
     zh = not str(lang or "").lower().startswith("en")
+    # 标题前的 Logo 星与 assistant-ball.js 的 ICON_SPARK 同形（v2.1 起手机页也不再
+    # 用 emoji 当图标——🤖 由系统字体渲染，iOS/安卓两套长相）。
+    spark = (
+        "<svg viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" aria-hidden=\"true\" "
+        "style=\"vertical-align:-.2em;margin-right:.35em;color:#54a7f5\">"
+        "<path fill=\"currentColor\" d=\"M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6"
+        "l-1.7-4.6L6 9.3l4.3-1.7L12 3z\"/>"
+        "<path fill=\"currentColor\" opacity=\".85\" d=\"M18.5 14l.9 2.3 2.1.8-2.1.8"
+        "-.9 2.3-.9-2.3-2.1-.8 2.1-.8.9-2.3z\"/></svg>"
+    )
     tt = {
         "title": "小智 · 手机操控" if zh else "Assistant · Mobile Control",
-        "hd": "🤖 小智手机操控" if zh else "🤖 Mobile Control",
+        "hd": spark + ("小智手机操控" if zh else "Mobile Control"),
         "who": ("已连接：" if zh else "Connected: ") + (uname or "-"),
         "hint": ("一句话交给小智：改设置前会先出确认卡，改完可撤销。"
                  if zh else
                  "Tell the assistant your goal; settings need confirm and "
                  "are undoable."),
-        "ime": ("提示：点手机键盘上的 🎤 也能语音输入"
-                if zh else "Tip: the keyboard mic also does voice input"),
+        "ime": ("提示：点手机键盘上的麦克风键也能语音输入"
+                if zh else "Tip: the keyboard mic key also does voice input"),
         "a2hs": ("常用请「添加到主屏幕」：iPhone＝Safari 分享→添加到主屏幕；"
                  "安卓＝浏览器菜单→安装应用/添加到主屏幕"
                  if zh else
@@ -145,7 +155,7 @@ def _mobile_page_html(lang: str, uname: str, ver: str) -> str:
         "<style>body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',"
         "sans-serif;background:#0d1020;color:#e6e9f5;min-height:100vh}"
         ".xzm-hd{padding:14px 16px 6px;display:flex;flex-direction:column;gap:4px}"
-        ".xzm-hd b{font-size:1.05rem}"
+        ".xzm-hd b{font-size:1.05rem;display:inline-flex;align-items:center}"
         ".xzm-hd .who{font-size:.72rem;color:#9aa3c0}"
         ".xzm-hint{margin:0 16px;padding:.55rem .7rem;border:1px solid #2a3152;"
         "border-radius:10px;font-size:.76rem;color:#b9c1de;background:#141a33}"
