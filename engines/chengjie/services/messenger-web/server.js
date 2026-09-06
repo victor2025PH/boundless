@@ -51,7 +51,7 @@ import {
   pickUnreadForced, classifyRequestsScan, sentRingPush, sentRingHit, echoTextHit,
   classifyComposerBlock, pickManualOutMirror,
   inferGroupFromInboundSenders, updateSenderRoster,
-  sendFailureBackoffMs,
+  sendFailureBackoffMs, manualProbeDecision,
   ariaDatetimeToEpoch,
 } from "./msg_ops.js";
 import {
@@ -2496,6 +2496,13 @@ async function promoteIfLoggedIn(loginId, entry) {
     logger.info({ loginId, accountId: entry.accountId }, "Messenger connected");
     entry._loginId = loginId;
     _recoveryAttempts.delete(loginId); // 成功授权 → 清零自愈退避计数
+    // M-2 C/D（#233）：登录成功 / 通道恢复 → 重置发送退避（此前 context 自愈重拉后旧 entry
+    // 的 streak 随 entry 丢弃、但同一登录档案在 Python 侧仍被当作退避中；这里显式清并落行）。
+    if ((entry._sendFailStreak || 0) || (entry._sendBackoffUntil || 0) > Date.now()) {
+      logger.info({ loginId, streak: entry._sendFailStreak || 0 }, "send backoff reset on (re)authorization");
+    }
+    noteSendSuccess(entry);
+    entry._manualProbeAt = 0;
     const _srt = _slowRetryTimers.get(loginId); // 已恢复 → 撤掉排队中的慢重试
     if (_srt) { clearTimeout(_srt); _slowRetryTimers.delete(loginId); }
     await saveCookies(loginId, entry.context); // 落盘会话级 cookie，扛住重启
@@ -2742,6 +2749,8 @@ async function startLogin(loginId, proxyUrl, isRestore = false, interactive = fa
     // B65：窗口模式随 entry 走——授权后自动隐藏（maybeAutoHideAfterLogin）与登录期
     // stage 前置顶都只对可见 headed 窗口生效，offscreen/headless 不折腾。
     windowMode: launch.mode,
+    // M-2 D：restore 拉起的会话在 /accounts.worker.pending 里可辨（Python 探测不误判需重登）
+    _isRestore: !!isRestore,
   };
   sessions.set(loginId, entry);
 
@@ -2871,33 +2880,55 @@ async function startLogin(loginId, proxyUrl, isRestore = false, interactive = fa
   return entry;
 }
 
-/** 恢复磁盘上已持久化的所有账号 profile（开机/主动调用，幂等）。 */
+/** 恢复磁盘上已持久化的所有账号 profile（开机/主动调用，幂等）。
+ *
+ *  M-2 D（#232，2026-09-06）：`restored 0 persisted Messenger session(s)` 此前是一行孤零零的
+ *  结论，没人知道是「目录空 / 有目录没 cookie 快照 / 拉起失败」哪一种（ZGKVQB 实锤：13:55
+ *  重启 restored 0 后两小时零日志，账号界面却显示已登录）。现在每个目录的去向各落一条，
+ *  汇总带 sessions_dir + 四个计数；并发恢复期间 `_restoring` 计数暴露在 /accounts.worker，
+ *  Python 探测据此在 restore 进行中不误判 needs_login。 */
+let _restoring = 0;
 async function restoreAll() {
   let dirs = [];
+  let readErr = "";
   try {
     dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory()).map((d) => d.name);
-  } catch (_) {
+  } catch (e) {
     dirs = [];
+    readErr = String((e && e.code) || e);
   }
-  let restored = 0;
-  for (const loginId of dirs) {
-    if (sessions.has(loginId)) continue;
-    // 没有 cookie 快照 = 从没登录成功过（saveCookies 只在授权后写）。这种空壳目录多半是
-    // 「发起接入又取消」留下的，拉起来也只会停在登录页，白弹一个窗口再盯 10 分钟。
-    // cancel 时的 purge 偶尔会因文件仍被占用而放弃，这里兜底再清一次。
-    if (!fs.existsSync(cookiesPath(loginId))) {
-      logger.info({ loginId }, "skip restore: never authorized (no cookie snapshot) → purging shell profile");
-      purgeProfile(loginId);
-      continue;
+  let restored = 0, noCookies = 0, failed = 0, alreadyLive = 0;
+  _restoring += 1;
+  try {
+    for (const loginId of dirs) {
+      if (sessions.has(loginId)) { alreadyLive += 1; continue; }
+      // 没有 cookie 快照 = 从没登录成功过（saveCookies 只在授权后写）。这种空壳目录多半是
+      // 「发起接入又取消」留下的，拉起来也只会停在登录页，白弹一个窗口再盯 10 分钟。
+      // cancel 时的 purge 偶尔会因文件仍被占用而放弃，这里兜底再清一次。
+      if (!fs.existsSync(cookiesPath(loginId))) {
+        noCookies += 1;
+        logger.info({ loginId }, "skip restore: never authorized (no cookie snapshot) → purging shell profile");
+        purgeProfile(loginId);
+        continue;
+      }
+      try {
+        await startLogin(loginId, "", true);
+        restored += 1;
+        logger.info({ loginId }, "restore: session launched from persisted profile (watching for auto-auth)");
+      } catch (e) {
+        failed += 1;
+        logger.warn({ e, loginId, message: String((e && e.message) || e) }, "restore session failed");
+      }
     }
-    try {
-      await startLogin(loginId, "", true);
-      restored += 1;
-    } catch (e) {
-      logger.warn({ e, loginId }, "restore session failed");
-    }
+  } finally {
+    _restoring = Math.max(0, _restoring - 1);
   }
+  // 汇总行：restored=0 时一眼看出是哪种零（目录空 / 全是空壳 / 全部拉起失败 / 目录读不了）
+  logger[(dirs.length && restored === 0) ? "warn" : "info"]({
+    sessions_dir: SESSIONS_DIR, dirs: dirs.length, restored, no_cookies: noCookies,
+    failed, already_live: alreadyLive, read_error: readErr || undefined,
+  }, "restoreAll summary");
   return restored;
 }
 
@@ -4110,7 +4141,17 @@ app.get("/accounts", (_req, res) => {
     }
   }
   // worker 段：boot_ts / code_fp / code_stale（磁盘内容指纹 ≠ 在跑指纹=改了没重启）。
-  res.json({ accounts, worker: workerCodeInfo() });
+  // M-2 D：restoring（开机/主动 restore 正在进行）+ pending（拉起了但还没授权的会话数与
+  // 状态）——Python healthy() 据此把「还在恢复」与「根本没有该账号会话」分开判。
+  const pending = [];
+  for (const [id, e] of sessions.entries()) {
+    if (e.status !== "authorized") {
+      pending.push({ login_id: id, status: String(e.status || ""),
+                     account_id: String(e.accountId || ""), is_restore: !!e._isRestore });
+    }
+  }
+  res.json({ accounts, worker: { ...workerCodeInfo(), restoring: _restoring,
+                                 pending_count: pending.length, pending } });
 });
 
 /** composer 缺席时的页面探针快照（诊断用，best-effort 绝不抛）。
@@ -4234,13 +4275,25 @@ async function recoverComposerOnce(entry, page, jid) {
 app.post("/accounts/:id/send", async (req, res) => {
   const entry = findByAccount(req.params.id);
   if (!entry || !entry.page) {
-    return res.status(404).json({ ok: false, error: "account not connected" });
+    // M-2 D（#232）：这一行此前静默——ZGKVQB「restored 0 后两小时零日志」的直接原因之一。
+    // 收得到（Python 侧历史/同步还在）发不出（边车没有该账号的已授权会话）必须留痕。
+    logger.warn({ accountId: String(req.params.id || ""),
+      known: [...sessions.entries()].map(([id, e]) => `${id}:${e.status}:${e.accountId || "-"}`),
+      restoring: _restoring }, "send: account not connected (no authorized session) → 404");
+    // 文案里带 not_logged_in 标记：Python note_send_auth_failure 据此立刻登记 needs_login
+    // （账号栏「需重新登录」不必等编排器下一轮探测）。
+    return res.status(404).json({ ok: false, delivered: false, reason_code: "not_logged_in",
+      error: "account not connected (not_logged_in: no authorized session in sidecar; re-login required)" });
   }
   const jid = String((req.body && req.body.jid) || "");
   const text = String((req.body && req.body.text) || "");
   if (!jid || !text) {
     return res.status(400).json({ ok: false, error: "jid and text required" });
   }
+  // M-2 C（#233）：手动发送与自动投递分开配额、手动优先——body.manual=true（Python 人工
+  // 路由透传）在 send_backoff 窗内放行**一次**探测性发送（成功即 noteSendSuccess 解锁，
+  // 失败照常续退避）。account_blocked（平台临时封锁）不放行：那是平台说的不许发。
+  const isManual = !!(req.body && (req.body.manual === true || req.body.manual === 1));
   // P3：send 进每账号写操作互斥（与 /react 串行；等锁超时 fail-open 回无锁旧行为）
   const _opRelease = await acquireAccountOp(entry, "send");
   try {
@@ -4248,13 +4301,25 @@ app.post("/accounts/:id/send", async (req, res) => {
     // 正是风控反噬的燃料），上游拿 reason_code 决定改期而不是立刻再投。
     const gate = sendGateCheck(entry);
     if (!gate.ok) {
-      return res.status(gate.code).json({
-        ok: false, delivered: false, reason_code: gate.reason,
-        retry_after_ms: gate.retryAfterMs,
-        error: gate.reason === "account_blocked"
-          ? "account temporarily blocked by platform (auto-frozen)"
-          : "send backoff active after consecutive failures",
-      });
+      // 每个退避窗放行一次人工探测（纯函数 msg_ops.manualProbeDecision，有单测）
+      const probeOk = manualProbeDecision({
+        manual: isManual, gateReason: gate.reason, backoffUntil: entry._sendBackoffUntil || 0,
+        streak: entry._sendFailStreak || 1, lastProbeAt: entry._manualProbeAt || 0,
+      }).allow;
+      if (probeOk) {
+        entry._manualProbeAt = Date.now();
+        logger.warn({ loginId: entry._loginId, jid, streak: entry._sendFailStreak,
+          backoffLeftMs: gate.retryAfterMs }, "send: manual probe allowed through send_backoff (manual-first, once per window)");
+      } else {
+        return res.status(gate.code).json({
+          ok: false, delivered: false, reason_code: gate.reason,
+          retry_after_ms: gate.retryAfterMs, manual: isManual,
+          error: gate.reason === "account_blocked"
+            ? "account temporarily blocked by platform (auto-frozen)"
+            : (isManual ? "send backoff active; manual probe already used this window"
+                        : "send backoff active after consecutive failures"),
+        });
+      }
     }
     const t0 = Date.now();
     const page = entry.page;
@@ -4439,9 +4504,13 @@ app.post("/accounts/:id/send", async (req, res) => {
     res.json({ ok: true, delivered: true, message_id: outMsgId, accepted, sent: true,
       verified: !!rb.found, quoted: quoteApplied });
   } catch (e) {
-    logger.error({ e }, "send failed");
+    // M-2 D：Playwright 错误对象经 pino 序列化只剩 {log:[...],name:"Error"}（K9CY6R 实录），
+    // message / jid / 是否手动 一并落行；响应体带 reason_code=exception 供 Python 分类。
+    logger.error({ e, jid, manual: isManual, message: String((e && e.message) || e).slice(0, 300),
+      loginId: entry._loginId }, "send failed");
     noteSendFailure(entry, "exception");
-    res.status(500).json({ ok: false, delivered: false, error: String(e) });
+    res.status(500).json({ ok: false, delivered: false, reason_code: "exception",
+      error: String((e && e.message) || e).slice(0, 300) });
   } finally {
     _opRelease();
   }

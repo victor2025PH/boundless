@@ -15,8 +15,29 @@ import {
   pickUnreadForced, classifyRequestsScan, sentRingPush, sentRingHit, echoTextHit,
   classifyComposerBlock, pickManualOutMirror,
   inferGroupFromInboundSenders, updateSenderRoster,
-  sendFailureBackoffMs,
+  sendFailureBackoffMs, manualProbeDecision,
 } from "./msg_ops.js";
+
+test("manualProbeDecision：M-2 C #233 退避窗内人工探测每窗一次；自动/平台封锁不放行", () => {
+  const now = 1_000_000;
+  // streak=2 → 窗长 10s；到期 now+7s → 窗起点 now-3s
+  const base = { gateReason: "send_backoff", backoffUntil: now + 7000, streak: 2 };
+  // 自动链：不放行
+  assert.equal(manualProbeDecision({ ...base, manual: false, lastProbeAt: 0 }).allow, false);
+  // 人工首探：放行；窗起点算对
+  const d1 = manualProbeDecision({ ...base, manual: true, lastProbeAt: 0 });
+  assert.equal(d1.allow, true);
+  assert.equal(d1.windowStart, now - 3000);
+  // 本窗已探过（lastProbeAt 晚于窗起点）→ 不再放行
+  assert.equal(manualProbeDecision({ ...base, manual: true, lastProbeAt: now - 1000 }).allow, false);
+  // 新窗（失败续退避：streak=3 → 20s，到期 now+20s → 起点 now）→ 上次探测早于起点 → 再放行一次
+  assert.equal(manualProbeDecision({ manual: true, gateReason: "send_backoff",
+    backoffUntil: now + 20000, streak: 3, lastProbeAt: now - 1000 }).allow, true);
+  // 平台临时封锁：人也不能撞
+  assert.equal(manualProbeDecision({ ...base, manual: true, gateReason: "account_blocked" }).allow, false);
+  // 脏输入不抛
+  assert.equal(manualProbeDecision({}).allow, false);
+});
 
 test("B80 normalizeTsLabelForId：跨日时间表述漂移归一到稳定时钟（防镜像重复）", async () => {
   const { normalizeTsLabelForId, synthMsgId } = await import("./msg_ops.js");

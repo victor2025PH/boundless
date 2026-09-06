@@ -838,6 +838,23 @@ export function sendFailureBackoffMs(streak, { baseMs = 5000, capMs = 300000 } =
 }
 
 /**
+ * M-2 C（#233，2026-09-06）：退避窗内是否放行一次**人工**探测性发送（纯函数）。
+ *
+ * K9CY6R 实锤：自动重投与坐席手发共用同一把 send_backoff 锁 → 手发也 429，坐席只能
+ * 切手动静默两分钟。规则：仅 ``manual`` 且 gate 原因是 ``send_backoff``（连败自保）时，
+ * 每个退避窗放行一次——窗起点＝到期时刻 − 本档退避长度，上次探测早于起点即本窗未用。
+ * ``account_blocked``（平台「你已被暂时阻止」）**不放行**：那是平台说的不许发，人也不能撞。
+ * 返回 { allow, windowStart }。
+ */
+export function manualProbeDecision({ manual = false, gateReason = "", backoffUntil = 0,
+                                      streak = 1, lastProbeAt = 0 } = {}) {
+  const windowStart = (Number(backoffUntil) || 0) - sendFailureBackoffMs(Math.max(1, Number(streak) || 1));
+  const allow = !!manual && String(gateReason) === "send_backoff"
+    && (Number(lastProbeAt) || 0) < windowStart;
+  return { allow, windowStart };
+}
+
+/**
  * 打开线程副作用清单（可执行决策，不只是注释）。
  *
  * Messenger 打开线程 = FB 侧标已读。任何「为探测/回填而打开」的路径必须先过这里。
