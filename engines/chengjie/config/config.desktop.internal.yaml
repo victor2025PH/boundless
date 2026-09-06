@@ -76,12 +76,16 @@ web_admin:
 inbox:
   enabled: true
   realtime_poll_sec: 3
-  # 多句分条回复（与生产机对齐）：base 已开 bubbles.enabled，这里补齐节奏参数
+  # 多句分条回复——2026-09-06 老板决策 D-L3（#210，82BF95 实锤）：内测机同样**出厂关**、
+  # 逐句关、仅显式换行才拆。此前这里 enabled+per_sentence 双开正是 skuio 机 overlay 里
+  # 「谁打开的无记录」那组值的来源（内测种子播进 config.local.yaml）。运营要开就在
+  # 自动回复设置页开（开后也只按草稿显式换行拆、短回复永不拆）。节奏参数保留：
+  # 开闸即同档。
   reply_style:
     bubbles:
-      enabled: true
-      # 每句一条（2026-08-07 运营拍板）：全自动回复按句子分条发，不按 max_chars 回包成段。
-      per_sentence: true
+      enabled: false
+      per_sentence: false
+      explicit_newline_only: true
       max_parts: 5          # 逐句可能多于 3 句；封顶 5（余量并入末条）
       max_chars: 60         # per_sentence 下不再用它回包，仅留作回落
       # v1.005：条间节奏对齐生产实测值（4-11s 按字符长度伸缩，真人打字手速口径；

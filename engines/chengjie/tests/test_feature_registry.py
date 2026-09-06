@@ -68,9 +68,11 @@ def test_baseline_patch_only_fills_missing():
     # 不再一律为 True：contacts.mode 声明 "lite"，按 True 断言会把档位型基线判错）
     patch = baseline_patch({})
     assert patch == product_baseline_values()
+    # 2026-09-06 D-L3（#210 L-1）：bubbles 由 A 降 B——拆条出厂关，不再进基线补齐
+    assert "inbox.reply_style.bubbles.enabled" not in patch
+    assert by_key("inbox.reply_style.bubbles.enabled").cls == "B"
     assert set(patch) == {"companion.goals.enabled",
                           "companion.deep_persona.enabled",
-                          "inbox.reply_style.bubbles.enabled",
                           "avatar_voice._hosted_auto",
                           "voice_recognition._hosted_auto",
                           "vision._hosted_auto",

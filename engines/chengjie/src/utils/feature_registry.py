@@ -106,11 +106,6 @@ FEATURES: Tuple[Feature, ...] = (
         note="深度人设分层注入：master flag 见 ai_client（各层软降级，零硬依赖）；"
              "2026-07-31 拍板升 A"),
     Feature(
-        key="inbox.reply_style.bubbles.enabled", cls="A", slug="bubbles",
-        baseline=True,
-        note="多句分条回复（reply_split.parse_bubbles_cfg 总闸；真发仍逐条前端"
-             "opt-in，默认开安全）；2026-07-31 拍板升 A"),
-    Feature(
         key="avatar_voice._hosted_auto", cls="A", slug="hosted_voice_auto",
         baseline=True, show=False,
         note="托管语音预授权标记（2026-08-19 报障群实测「客户与语音引擎零通路」）："
@@ -240,6 +235,15 @@ FEATURES: Tuple[Feature, ...] = (
         note="客户安全预警人工升级（#185 D7）：severe 命中点亮工作台「需人工」徽标 + "
              "置顶会话 + 落案例，不依赖外部 webhook；纯软件零依赖"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
+    # 2026-09-06 老板决策 D-L3（#210，82BF95 付费客户的客户识破 AI）：拆条**出厂关**
+    # ——2026-07-31 升 A 的「默认开安全」前提（真发仍逐条前端 opt-in）在 08 月三链
+    # 自动拆条接线后已不成立；A 类基线曾让每台桌面机首启被 _ensure_baseline 补成
+    # true（skuio 机 enabled=true 的来源）。降 B：默认关、客户可在自动回复设置页
+    # 自助开（开后也只按草稿显式换行拆、短回复永不拆，见 reply_split）。
+    Feature(
+        key="inbox.reply_style.bubbles.enabled", cls="B", slug="bubbles",
+        note="多句分条回复（reply_split.parse_bubbles_cfg 总闸）：零依赖纯软件；"
+             "2026-09-06 D-L3 出厂关——拆条节奏可被客户用来识别 AI（82BF95）"),
     Feature(
         key="memory.vector.enabled", cls="B", slug="memvec",
         requires=("embedding",),

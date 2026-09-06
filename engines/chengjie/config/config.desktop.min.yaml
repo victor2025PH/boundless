@@ -121,11 +121,15 @@ inbox:
       # 窗口）。代码默认 0=关（老部署行为不变），种子显式开=「下载即用像真人」。
       min_gap_sec: 8
       min_residual_sec: 2
-  # 产品基线（A 类，2026-07-31 拍板）：多句分条回复总闸。真发仍逐条由坐席在
-  # 发送框 opt-in（气泡 chip），默认开只是让这个选项存在，零风险。
+  # 多句分条回复总闸——2026-09-06 老板决策 D-L3（#210）：**出厂关**。2026-07-31 升 A
+  # 类时的前提「真发仍逐条由坐席 opt-in」在 8 月三条自动链接线后已不成立：固定的
+  # 拆条节奏被付费客户的客户当场识破 AI（82BF95「huge difference between your typing
+  # here on TG and WhatsApp」）。已降 B 类：默认关，客户可在自动回复设置页自助开——
+  # 开后也只按草稿显式换行拆、短回复永不拆（reply_split 1.0.75 口径）。
   reply_style:
     bubbles:
-      enabled: true
+      enabled: false
+      explicit_newline_only: true
   # 接管自动接回（2026-08-09 .198/.104 事故沉淀）：坐席手动发一条消息会触发
   # 「接管即静音」（会话切 manual 停 AI，防人机抢话）——此前**没有任何恢复机制**，
   # 实测会话被钉死 manual 27 小时，坐席全程不知道是自己关掉了 AI。本段=桌面版

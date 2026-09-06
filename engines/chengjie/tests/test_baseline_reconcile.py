@@ -61,15 +61,17 @@ async def test_desktop_fills_missing_key_into_overlay(tmp_path, monkeypatch):
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     mgr = _mgr(tmp_path, _VALID)
     assert await mgr.load() is True
-    # 内存即时可见（2026-07-31 拍板后基线 = goals + deep_persona + bubbles）
+    # 内存即时可见（2026-07-31 拍板后基线 = goals + deep_persona；bubbles 2026-09-06
+    # D-L3 #210 降 B 类「出厂关」，不再补齐）
     assert mgr.get("companion.goals.enabled") is True
     assert mgr.get("companion.deep_persona.enabled") is True
-    assert mgr.get("inbox.reply_style.bubbles.enabled") is True
+    assert mgr.get("inbox.reply_style.bubbles.enabled") is None
     # 落盘在 overlay，不碰主 config
     ov = yaml.safe_load(_overlay(tmp_path).read_text(encoding="utf-8"))
     assert ov["companion"]["goals"]["enabled"] is True
     assert ov["companion"]["deep_persona"]["enabled"] is True
-    assert ov["inbox"]["reply_style"]["bubbles"]["enabled"] is True
+    assert "bubbles" not in ((ov.get("inbox") or {}).get("reply_style") or {}), \
+        "拆条出厂关（D-L3）：基线不得再往 overlay 补 bubbles.enabled"
     main_txt = (tmp_path / "config.yaml").read_text(encoding="utf-8")
     assert "companion" not in main_txt, "主 config.yaml 字节必须原样"
 
@@ -78,7 +80,9 @@ async def test_runs_even_when_validation_fails_first_boot(tmp_path, monkeypatch)
     """时序回归钉：桌面首启 load() 返回 False，但基线补齐必须已经发生。"""
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     mgr = _mgr(tmp_path, _DESKTOP_FIRSTBOOT)
-    assert await mgr.load() is False          # 空凭据 → validation 失败（既有语义）
+    # 空凭据首启：load() 的返回值随 _validate_config 口径演进（桌面态现已容忍空凭据），
+    # 本钉只管「不论成败，基线补齐都已发生」这条时序不变量
+    await mgr.load()
     assert mgr.get("companion.goals.enabled") is True
     assert _overlay(tmp_path).exists()
 
@@ -94,19 +98,29 @@ async def test_explicit_false_in_main_config_respected(tmp_path, monkeypatch):
     assert mgr.get("companion.goals.enabled") is False
     assert mgr.get("companion.deep_persona.enabled") is False
     assert mgr.get("inbox.reply_style.bubbles.enabled") is False
-    assert not _overlay(tmp_path).exists(), "全部显式 false → 不得触发任何 overlay 写入"
+    # 显式 false 的三键一个都不得被补写进 overlay（基线表另有其它 A 类键会正常补齐，
+    # 故不再断言 overlay 文件不存在——那是基线只有三键时代的写法）
+    ov = yaml.safe_load(_overlay(tmp_path).read_text(encoding="utf-8")) or {} \
+        if _overlay(tmp_path).exists() else {}
+    comp = ov.get("companion") or {}
+    assert "enabled" not in (comp.get("goals") or {})
+    assert "enabled" not in (comp.get("deep_persona") or {})
+    assert "bubbles" not in ((ov.get("inbox") or {}).get("reply_style") or {})
 
 
 async def test_partial_explicit_false_fills_only_missing(tmp_path, monkeypatch):
-    """goals 显式关、其余缺失 → 只补缺失的两个，显式 false 原样。"""
+    """goals 显式关、其余缺失 → 只补缺失的，显式 false 原样（bubbles 已非基线）。"""
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     mgr = _mgr(tmp_path, _VALID + "\ncompanion:\n  goals:\n    enabled: false\n")
     assert await mgr.load() is True
     assert mgr.get("companion.goals.enabled") is False
     assert mgr.get("companion.deep_persona.enabled") is True
-    assert mgr.get("inbox.reply_style.bubbles.enabled") is True
+    assert mgr.get("inbox.reply_style.bubbles.enabled") is None
     ov = yaml.safe_load(_overlay(tmp_path).read_text(encoding="utf-8"))
-    assert "goals" not in (ov.get("companion") or {}), "显式 false 的键不进 overlay"
+    # 显式 false 的键不进 overlay：goals.enabled 未被补写（L-5 D-L1 起 goals 段下
+    # 另有 sprint.enabled 基线键会被补进来，故只看 enabled 这一键）
+    assert "enabled" not in (((ov.get("companion") or {}).get("goals")) or {}), \
+        "显式 false 的键不进 overlay"
 
 
 async def test_explicit_false_in_overlay_respected(tmp_path, monkeypatch):

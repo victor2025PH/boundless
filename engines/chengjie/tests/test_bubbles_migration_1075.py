@@ -36,13 +36,25 @@ def _dig(doc, path: str):
     return node
 
 
+def _legacy_base_text() -> str:
+    """老种子快照＝skuio 机的 config.yaml 形态：1.0.75 前的桌面 min 种子写的是
+    ``bubbles: {enabled: true}``、没有 explicit_newline_only（升级安装不重写主 config，
+    所以存量机器的基座永远是它）。用当前种子去掉新键 / 还原 enabled 来模拟。"""
+    cfg = yaml.safe_load(DESKTOP_MIN.read_text(encoding="utf-8"))
+    bub = ((cfg.get("inbox") or {}).get("reply_style") or {}).get("bubbles")
+    if isinstance(bub, dict):
+        bub.pop("explicit_newline_only", None)
+        bub["enabled"] = True
+    return yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)
+
+
 def _mk_manager(tmp_path: Path, monkeypatch, *, overlay: dict | None,
                 desktop: bool = False):
     from src.utils.config_manager import ConfigManager
 
     cfg_path = tmp_path / "config" / "config.yaml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(DESKTOP_MIN.read_text(encoding="utf-8"), encoding="utf-8")
+    cfg_path.write_text(_legacy_base_text(), encoding="utf-8")
     if overlay is not None:
         (cfg_path.parent / "config.local.yaml").write_text(
             yaml.safe_dump(overlay, allow_unicode=True, sort_keys=False),
@@ -86,7 +98,7 @@ def test_skuio_overlay_is_migrated_and_idempotent(tmp_path, monkeypatch, caplog)
     assert ov == {"enabled": True, "per_sentence": False, "max_parts": 2,
                   "explicit_newline_only": True}
     # 主 config.yaml 一个字不动
-    assert cfg_path.read_text(encoding="utf-8") == DESKTOP_MIN.read_text(encoding="utf-8")
+    assert cfg_path.read_text(encoding="utf-8") == _legacy_base_text()
 
     # 幂等：再 load（＝热重载路径）overlay 字节不变、不再告警
     before = (cfg_path.parent / "config.local.yaml").read_bytes()
@@ -138,6 +150,22 @@ def test_no_per_sentence_means_zero_write(tmp_path, monkeypatch):
     asyncio.run(cm2.load())
     assert _dig(_overlay_of(cfg2), "inbox.reply_style.bubbles") == {
         "enabled": True, "per_sentence": False}
+
+
+def test_factory_off_single_answer_across_registry_and_seeds():
+    """D-L3「出厂关」三处只允许一个答案：feature_registry 降 B（不再基线补 true）、
+    桌面 min 种子 / 内测种子 enabled:false（内测种子逐句也关）——任一处回潮即红。"""
+    from src.utils.feature_registry import by_key, product_baseline_values
+
+    f = by_key("inbox.reply_style.bubbles.enabled")
+    assert f is not None and f.cls == "B" and f.baseline is not True
+    assert "inbox.reply_style.bubbles.enabled" not in product_baseline_values()
+    for name in ("config.desktop.min.yaml", "config.desktop.internal.yaml"):
+        doc = yaml.safe_load((ENGINE_ROOT / "config" / name).read_text(encoding="utf-8")) or {}
+        bub = _dig(doc, "inbox.reply_style.bubbles") or {}
+        assert bub.get("enabled") is False, f"{name}: 拆条必须出厂关（D-L3）"
+        assert bub.get("per_sentence", False) is False, f"{name}: 逐句拆条必须关"
+        assert bub.get("explicit_newline_only", True) is True, name
 
 
 def test_server_instance_migrates_too(tmp_path, monkeypatch, caplog):
