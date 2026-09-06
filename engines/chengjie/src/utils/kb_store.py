@@ -47,9 +47,11 @@ KB_CATEGORIES = list(_DEFAULT_KB_CATEGORIES)
 # ── 条目来源（J-9 #184：厂商产品知识与用户知识隔离）──────────────
 # user   ＝ 用户在 KB 页手工建的；import ＝ 批量导入器写入的；
 # system ＝ 系统话术种子（template_key 非空）与首装示例；
-# vendor ＝ 厂商自家产品/售卖话术（随内测包 knowledge_base.db 带进来的那 105 条）。
+# vendor ＝ 厂商自家产品/售卖话术（随内测包 knowledge_base.db 带进来的那 105 条）；
+# learner＝ 学习队列审核通过入库的（L-4 F #201 2026-09-06：与手建 user 分开，
+#          「AI 学来的」可按来源筛查/回滚，检索面与 user 完全同权）。
 # 对客检索在桌面模式下**硬排除** vendor（不靠 enabled 标志），管理端仍可查看/清空。
-KB_SOURCES = ("user", "import", "system", "vendor")
+KB_SOURCES = ("user", "import", "system", "vendor", "learner")
 KB_SOURCE_DEFAULT = "user"
 # 厂商 KB 的分类集合（zhiliao conversion 域专有，不在 _DEFAULT_KB_CATEGORIES 内，
 # 故按分类回填不会误伤默认分类下的用户条目）。

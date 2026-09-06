@@ -25,6 +25,8 @@ ZH = {
     "kb2_src_import": "批量导入",
     "kb2_src_system": "系统话术/示例",
     "kb2_src_vendor": "系统预置·厂商产品",
+    # L-4 F（#201）：学习队列审核通过入库的条目单列一档，可筛可回滚
+    "kb2_src_learner": "学习队列学来的",
     "kb2_src_vendor_badge": "厂商预置",
     "kb2_src_vendor_tip": "随安装包预置的厂商自家产品说明，不是你的知识；桌面模式下对客回复不会用到",
     "kb2_vendor_lead": "检测到",
@@ -59,6 +61,7 @@ EN = {
     "kb2_src_import": "Bulk import",
     "kb2_src_system": "System scripts / examples",
     "kb2_src_vendor": "Preset · vendor products",
+    "kb2_src_learner": "Learned via learning queue",
     "kb2_src_vendor_badge": "Vendor preset",
     "kb2_src_vendor_tip": "Vendor product notes bundled with the installer — not your knowledge; excluded from customer replies in desktop mode",
     "kb2_vendor_lead": "Found",

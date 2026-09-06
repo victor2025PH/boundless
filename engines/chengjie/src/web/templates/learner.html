@@ -86,8 +86,9 @@
       <option value="time">{{ (i18n or {}).get('lr_s013', "排序") }}: {{ (i18n or {}).get('lr_s017', "最新时间") }}</option>
     </select>
     <div style="flex:1"></div>
-    <button class="btn btn-sm btn-green" onclick="approveAll()" id="btn-approve-all" style="display:none">
-      {{ (i18n or {}).get('lr_s018', "全部通过") }}
+    <!-- L-4 F（#201）：「全部通过」→「通过已选（N）」——只通过勾选的、每批 ≤20、二次确认弹层列明将入库条目 -->
+    <button class="btn btn-sm btn-green" onclick="approveSelected()" id="btn-approve-all" style="display:none" title="{{ (i18n or {}).get('lr4_select_hint', "勾选要通过的条目，再点「通过已选」") }}">
+      <span id="btn-approve-all-label">{{ (i18n or {}).get('lr4_approve_selected', "通过已选（{n}）")|replace('{n}', '0') }}</span>
     </button>
   </div>
 
@@ -95,9 +96,10 @@
   <div id="batch-bar" style="display:none;padding:.5rem 1rem;background:var(--th-bg-brand06,rgba(91,124,246,.06));border-bottom:1px solid var(--th-bd-brand18,rgba(91,124,246,.18));font-size:.82rem;align-items:center;gap:.6rem">
     <input type="checkbox" id="batch-all" onchange="toggleAllChecks(this.checked)" style="margin-right:.3rem">
     <span id="batch-count">0</span> {{ (i18n or {}).get('lr_s019', "条已选") }}
-    <button class="btn btn-sm btn-green" onclick="batchAction('approve')" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
+    <button class="btn btn-sm btn-green" onclick="approveSelected()" style="margin-left:.5rem">✔ {{ (i18n or {}).get('lr_s020', "批量通过") }}</button>
     <button class="btn btn-sm btn-red" onclick="batchAction('reject')">✖ {{ (i18n or {}).get('draft.bulk.reject', "批量拒绝") }}</button>
     <button class="btn btn-sm" onclick="clearBatch()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+    <span style="color:var(--t3);font-size:.74rem;margin-left:auto">{{ (i18n or {}).get('lr4_limit_hint', "一次最多通过 {n} 条")|replace('{n}', '20') }}</span>
   </div>
   <div id="drafts-container" style="min-height:200px">
     <div style="padding:3rem;text-align:center;color:var(--t3)">{{ (i18n or {}).get('msg_js_1047', "加载中") }}...</div>
@@ -139,7 +141,34 @@
   </div>
 </div>
 
+<!-- L-4 F（#201）：通过已选的二次确认弹层——列出将入库的条目，私事条目单独标明去处 -->
+<div id="approve-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--th-bg-scrim50,rgba(0,0,0,.5));backdrop-filter:blur(4px)">
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--s2);padding:1.25rem 1.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
+      <h3 style="margin:0;font-size:1.05rem" id="approve-modal-title">{{ (i18n or {}).get('lr4_confirm_title', "确认将以下 {n} 条入库？")|replace('{n}', '0') }}</h3>
+      <button onclick="closeApproveModal()" style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--t3)">&times;</button>
+    </div>
+    <p style="font-size:.78rem;color:var(--t2);margin:0 0 .6rem;line-height:1.55">{{ (i18n or {}).get('lr4_confirm_note', "入库后会影响所有会话的 AI 回答；标「客户私事」的条目不进共享知识库，只写入该客户的 AI 记忆。") }}</p>
+    <div id="approve-modal-list" style="flex:1;overflow-y:auto;border:1px solid var(--bd);border-radius:var(--r-sm);font-size:.8rem"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.8rem;align-items:center">
+      <span id="approve-modal-hint" style="font-size:.74rem;color:var(--t3);margin-right:auto"></span>
+      <button class="btn btn-outline" onclick="closeApproveModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      <button class="btn btn-primary" id="approve-modal-ok" onclick="confirmApproveSelected()">{{ (i18n or {}).get('lr4_confirm_ok', "确认通过") }}</button>
+    </div>
+  </div>
+</div>
+
 <style>
+/* L-4 F（#201）：译文行 / 私事徽章 / 「相似度未计算」 */
+.draft-zh{font-size:.8rem;color:var(--t2);margin:.1rem 0 .25rem;padding-left:.2rem}
+.draft-zh b{color:var(--t3);font-weight:600;margin-right:.3rem}
+.priv-badge{display:inline-flex;align-items:center;gap:.2rem;font-size:.68rem;padding:.12rem .45rem;border-radius:4px;font-weight:700;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed);flex-shrink:0;cursor:help}
+.dup-badge.dup-uncomputed{background:var(--input);color:var(--t3)}
+.mem-badge{display:inline-flex;align-items:center;font-size:.72rem;padding:.2rem .5rem;border-radius:4px;background:rgba(139,92,246,.12);color:var(--purple,#7c3aed)}
+.apm-row{display:flex;gap:.5rem;align-items:flex-start;padding:.45rem .7rem;border-bottom:1px solid var(--bd)}
+.apm-row:last-child{border-bottom:none}
+.apm-row .apm-q{flex:1;min-width:0}
+.apm-row .apm-t{color:var(--t3);font-size:.74rem;margin-top:.1rem}
 .row{display:flex;gap:.75rem;flex-wrap:wrap}
 .col-4{flex:1;min-width:120px}
 .draft-card{padding:1rem;border-bottom:1px solid var(--bd);transition:background .15s}
@@ -290,7 +319,9 @@ async function loadStats(){
     document.getElementById('stat-rejected').textContent=d.rejected||0;
     var dupEl=document.getElementById('stat-dup');
     if(dupEl)dupEl.textContent=d.dup_flagged||0;
+    if(typeof d.approve_limit==='number'&&d.approve_limit>0)window.__learnerApproveLimit=d.approve_limit;
     document.getElementById('btn-approve-all').style.display=(d.pending>0&&currentFilter==='pending')?'':'none';
+    _syncApproveSelectedBtn();
     _renderStatusbar(d);
   }catch(e){
     _setStatVals('—');
@@ -335,13 +366,20 @@ function renderDrafts(drafts){
   }
   const srcLabels={miss:window.T('kb_s083'),negative_feedback:window.T('lr_js008'),weak_hit:window.T('lr_js009'),manual:window.T('lr2_src_manual')};
   let html='';
+  window.__learnerDrafts={};
   drafts.forEach(d=>{
+    window.__learnerDrafts[d.id]=d;
     const src=srcLabels[d.source]||d.source;
     const triggers=(d.triggers||'').split(',').filter(Boolean).map(t=>'<span>'+t.trim()+'</span>').join('');
     const conf=d.confidence||0;
     const confCls=conf>=75?'conf-high':conf>=40?'conf-mid':'conf-low';
     const confLabel=conf>=75?'✔️':conf>=40?'⚠️':'❓';
     const showCheck=d.status==='pending';
+    /* L-4 F（#201）：查重标以 dup_entry_id 为准；BM25 文本命中 dup_score=0 → 「相似度未计算」，不再显 99% */
+    const hasDup=!!(d.dup_entry_id)||d.dup_score>0;
+    const dupPct=d.dup_score>0?(Math.round(d.dup_score*100)+'%'):window.T('lr4_dup_uncomputed');
+    const dupMethod=d.dup_method==='bm25'?window.T('lr4_dup_bm25'):(d.dup_method||'auto');
+    const isMem=String(d.entry_id||'').indexOf('mem:')===0;
     html+=`<div class="draft-card" data-id="${d.id}">
       <div class="draft-header">
         ${showCheck?'<input type="checkbox" class="draft-check" value="'+d.id+'" onchange="updateBatch()">':''}
@@ -349,11 +387,13 @@ function renderDrafts(drafts){
         <span class="draft-query">${esc(d.query)}</span>
         <span class="draft-count">${d.hit_count}${window.T('kb_js_174')}</span>
         ${d.source_ref?_srcRefHtml(d.source_ref):''}
+        ${_privBadge(d)}
         <span class="conf-badge ${confCls}" title="AI${window.T('lr_s015')}">${confLabel} ${conf}</span>
-        ${d.dup_score>0?'<span class="dup-badge" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+Math.round(d.dup_score*100)+'%</span>':''}
+        ${hasDup?'<span class="dup-badge'+(d.dup_score>0?'':' dup-uncomputed')+'" title="'+window.T('lr_js010')+'">⚠ '+window.T('lr_s012')+' '+esc(dupPct)+'</span>':''}
         ${d.status!=='pending'?'<span class="status-badge status-'+d.status+'">'+(d.status==='approved'?window.T('msg_js_1928'):window.T('draft.tab.rejected'))+'</span>':''}
       </div>
-      ${d.dup_score>0?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+Math.round(d.dup_score*100)+'% · '+(d.dup_method||'auto')+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
+      <div class="draft-zh" data-zh-for="${d.id}"${d.query_zh?'':' style="display:none"'}><b>${window.T('lr4_zh_label')}</b><span>${esc(d.query_zh||'')}</span></div>
+      ${hasDup?'<div class="dup-warn"><span class="dup-title">⚠ '+window.T('lr_js011')+':</span> <span class="dup-link" onclick="window.open(\'/knowledge#entry-'+d.dup_entry_id+'\',\'_blank\')">['+esc(d.dup_entry_id)+'] '+esc(d.dup_entry_title)+'</span><span class="dup-score">('+esc(dupPct)+' · '+esc(dupMethod)+')</span>'+(d.status==='pending'?'<button class="dup-recheck" onclick="recheckDup(\''+d.id+'\',this)">🔄 '+window.T('db_s050')+'</button>':'')+'</div>':''}
       <div class="draft-title"><b>${esc(d.title)}</b> · ${esc(d.category)}</div>
       <div class="draft-triggers">${triggers}</div>
       ${d.example_reply?'<div class="draft-reply">'+esc(d.example_reply)+'</div>':''}
@@ -364,11 +404,46 @@ function renderDrafts(drafts){
           <button class="btn-sm btn-red" onclick="rejectDraft('${d.id}')">${window.T('rpa_js_act_reject')}</button>
           <button class="btn-sm" onclick="editDraft('${d.id}')">${window.T('edit')}</button>
         `:''}
-        ${(d.status==='approved'&&d.entry_id)?'<a class="btn-sm" href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener">📖 '+window.T('lr2_view_entry')+'</a>':''}
+        ${(d.status==='approved'&&d.entry_id&&!isMem)?'<a class="btn-sm" href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener">📖 '+window.T('lr2_view_entry')+'</a>':''}
+        ${(d.status==='approved'&&isMem)?'<span class="mem-badge">🧠 '+window.T('lr4_mem_written')+'</span>':''}
       </div>
     </div>`;
   });
   c.innerHTML=html;
+  _syncApproveSelectedBtn();
+  _fillTranslations(drafts);
+}
+
+/* L-4 F（#201）：私事徽章（含人名/金额/地点/约定等 → 通过后写该客户记忆，不进共享 KB） */
+function _privBadge(d){
+  const kinds=String(d.private_kinds||'').split(',').filter(Boolean);
+  if(!kinds.length)return '';
+  const names=kinds.map(function(k){return window.T('lr4_private_kind_'+k);}).join(' / ');
+  return '<span class="priv-badge" title="'+window.T('lr4_private_tip')+'">🔒 '+window.T('lr4_private_badge')+' · '+esc(names)+'</span>';
+}
+
+/* L-4 F（#201）：外语原文补中文译文——复用入站翻译缓存，缺则后端按需翻一次并写回草稿行 */
+function _fillTranslations(drafts){
+  const need=(drafts||[]).filter(function(d){
+    if(d.query_zh)return false;
+    const q=String(d.query||'');
+    return !/[\u4e00-\u9fff]/.test(q)&&/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF\uAC00-\uD7AF]/.test(q);
+  }).map(function(d){return d.id;});
+  if(!need.length)return;
+  apiFetch('/api/learner/drafts/translate',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ids:need.slice(0,50)})
+  },{timeoutMs:60000}).then(function(r){return r.json();}).then(function(d){
+    const tr=(d&&d.translations)||{};
+    Object.keys(tr).forEach(function(id){
+      const row=document.querySelector('.draft-zh[data-zh-for="'+id+'"]');
+      if(!row)return;
+      const span=row.querySelector('span');
+      if(span)span.textContent=tr[id];
+      row.style.display='';
+      if(window.__learnerDrafts&&window.__learnerDrafts[id])window.__learnerDrafts[id].query_zh=tr[id];
+    });
+  }).catch(function(){});
 }
 
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -470,11 +545,12 @@ async function approveDraft(id){
       var t=window.T('lr_js018');
       /* 学习闭环补链（实施49 P0-4）：入库后直接给出正式条目的去处，
          「审完不知道去哪看」是内测里最常见的断链。 */
-      if(d.entry_id)t+=' · <a href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+window.T('lr2_view_entry')+'</a>';
+      if(d.target==='memory')t=window.T('lr4_approved_mem');
+      else if(d.entry_id)t+=' · <a href="'+_kbEntryHref(d.entry_id)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+window.T('lr2_view_entry')+'</a>';
       showToast(t,'success',d.entry_id?8000:3500);
     }
     loadDrafts();
-  }catch(e){if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error')}
+  }catch(e){if(typeof showToast==='function')showToast((e&&e.message&&!/^HTTP /.test(e.message))?e.message:window.T('ov_js_op_fail'),'error')}
 }
 
 async function rejectDraft(id){
@@ -485,14 +561,81 @@ async function rejectDraft(id){
   }catch(e){}
 }
 
-async function approveAll(){
-  if(!confirm(window.T('lr_js019')))return;
+/* ── L-4 F（#201）：「通过已选（N）」+ 二次确认弹层 ──────────────────────
+   旧「全部通过」一键把 166 条无确认灌进共享 KB 是 P1 事故；现在：只通过勾选的、
+   每批 ≤ approve_limit（后端 20）、弹层逐条列出将入库内容（私事条目标明去客户记忆），
+   确认后才带 confirm=1 调 approve-all。 */
+window.__learnerApproveLimit=20;
+function _syncApproveSelectedBtn(){
+  const btn=document.getElementById('btn-approve-all');
+  const lbl=document.getElementById('btn-approve-all-label');
+  if(!btn||!lbl)return;
+  const n=getSelectedIds().length;
+  lbl.textContent=window.Tf('lr4_approve_selected',{n:n});
+  btn.disabled=n===0;
+  btn.style.opacity=n===0?'.55':'';
+}
+function approveSelected(){
+  const ids=getSelectedIds();
+  if(!ids.length){
+    if(typeof showToast==='function')showToast(window.T('lr4_select_hint'),'info');
+    return;
+  }
+  const limit=window.__learnerApproveLimit||20;
+  const use=ids.slice(0,limit);
+  const list=document.getElementById('approve-modal-list');
+  const rows=use.map(function(id){
+    const d=(window.__learnerDrafts||{})[id]||{};
+    const kinds=String(d.private_kinds||'').split(',').filter(Boolean);
+    const dest=kinds.length?'<span class="priv-badge">🔒 '+window.T('lr4_private_badge')+' → '+window.T('lr4_dest_memory')+'</span>':'<span class="status-badge status-approved">→ '+window.T('lr4_dest_kb')+'</span>';
+    return '<div class="apm-row"><div class="apm-q"><div><b>'+esc(d.title||'')+'</b> · '+esc(d.query||id)+'</div>'
+      +(d.query_zh?'<div class="apm-t">'+esc(d.query_zh)+'</div>':'')
+      +(d.example_reply?'<div class="apm-t">↳ '+esc(String(d.example_reply).slice(0,120))+'</div>':'')
+      +'</div>'+dest+'</div>';
+  }).join('');
+  list.innerHTML=rows;
+  document.getElementById('approve-modal-title').textContent=window.Tf('lr4_confirm_title',{n:use.length});
+  const hint=document.getElementById('approve-modal-hint');
+  hint.textContent=ids.length>limit?window.Tf('lr4_limit_over',{n:limit,x:ids.length-limit}):'';
+  const modal=document.getElementById('approve-modal');
+  modal.dataset.ids=JSON.stringify(use);
+  modal.style.display='block';
+}
+function closeApproveModal(){
+  const modal=document.getElementById('approve-modal');
+  if(modal){modal.style.display='none';modal.dataset.ids='';}
+}
+async function confirmApproveSelected(){
+  const modal=document.getElementById('approve-modal');
+  let ids=[];
+  try{ids=JSON.parse(modal.dataset.ids||'[]');}catch(e){ids=[];}
+  if(!ids.length){closeApproveModal();return;}
+  const ok=document.getElementById('approve-modal-ok');
+  if(ok)ok.disabled=true;
   try{
-    const r=await apiFetch('/api/learner/drafts/approve-all',{method:'POST'}, {timeoutMs: 60000});
-    const d=await r.json();
-    if(typeof showToast==='function')showToast(window.Tf('lr_batch_approved', {n: d.approved}),'success');
+    const r=await apiFetch('/api/learner/drafts/approve-all',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ids:ids,confirm:1})
+    }, {timeoutMs: 120000});
+    const d=await r.json().catch(function(){return {}});
+    if(!r.ok||d.ok===false){
+      if(typeof showToast==='function')showToast(d.detail||window.T('ov_js_op_fail'),'error');
+      return;
+    }
+    if(typeof showToast==='function'){
+      let msg=window.Tf('lr_batch_approved',{n:d.approved||0});
+      const fr=d.failed_reasons||{};
+      const nf=Object.keys(fr).length;
+      if(nf)msg+=' · '+window.Tf('lr4_failed_private',{n:nf});
+      showToast(msg,nf?'warning':'success',nf?8000:3500);
+    }
+    closeApproveModal();
     loadDrafts();
-  }catch(e){}
+  }catch(e){
+    if(typeof showToast==='function')showToast(window.T('ov_js_op_fail'),'error');
+  }finally{
+    if(ok)ok.disabled=false;
+  }
 }
 
 function editDraft(id){
@@ -534,6 +677,7 @@ function updateBatch(){
   const bar=document.getElementById('batch-bar');
   bar.style.display=ids.length?'flex':'none';
   document.getElementById('batch-count').textContent=ids.length;
+  _syncApproveSelectedBtn();
 }
 function toggleAllChecks(on){
   document.querySelectorAll('.draft-check').forEach(cb=>{cb.checked=on});
@@ -545,10 +689,12 @@ function clearBatch(){
   if(bar)bar.style.display='none';
   const ba=document.getElementById('batch-all');
   if(ba)ba.checked=false;
+  _syncApproveSelectedBtn();
 }
 async function batchAction(action){
   const ids=getSelectedIds();
   if(!ids.length)return;
+  if(action==='approve'){approveSelected();return;}  /* 通过一律走确认弹层（L-4 F） */
   const label=action==='approve'?window.T('lr_s008'):window.T('rpa_js_act_reject');
   if(!confirm(window.Tf('lr_confirm_batch', {n: ids.length, label: label})))return;
   try{

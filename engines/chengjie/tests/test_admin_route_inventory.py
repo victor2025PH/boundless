@@ -293,6 +293,7 @@ _BASELINE = """
 /api/learner/drafts/{draft_id}/approve	POST
 /api/learner/drafts/{draft_id}/recheck-dup	POST
 /api/learner/drafts/{draft_id}/reject	POST
+/api/learner/drafts/translate	POST
 /api/learner/feed	POST
 /api/learner/run	POST
 /api/learner/stats	GET
@@ -631,6 +632,7 @@ _BASELINE = """
 /api/desktop/ui-flags	GET
 /api/developer/ui-visibility	GET
 /api/developer/ui-visibility	POST
+/api/developer/developer-mode	POST
 /api/telegram/log-tail	GET
 /api/telegram/recent-contacts	GET
 /api/telegram/settings	GET

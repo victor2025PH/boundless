@@ -12,22 +12,131 @@
 - 素材收集出**漏斗计数**（总量/占位符/非问题样式/低于门槛/已有草稿），
   每次运行落 kb_meta（learner_last_run），页面可自解释"为什么是 0"。
 - 新增手动喂料 feed_and_learn（运营把没答好的问题直接入队，AI 可用时当场生成）。
+
+2026-09-06 L-4 F（#201 止血四件，D-L5——重做为「案例学习」另立批，这里只止血）：
+- 「全部通过」→ 只能通过**已选**且每批 ≤ ``APPROVE_BATCH_LIMIT``（路由层还要 confirm=1）；
+- 入队收窄：寒暄 / 任何「[」开头的媒体占位 / 「语音消息-下载失败」类系统文本 / 表情
+  标点串不入队（``is_noise_query``）；素材只收「问题样式」的事实类提问；
+- 译文：``query_zh`` 列缓存外语原文的中文译文（路由层按需翻一次，复用翻译服务缓存）；
+- 私事分流：含人名 / 地点 / 金额 / 见面·日期约定（复用 J-10 ``memory_review`` 词表）的
+  条目标 ``private_kinds``，通过后写入**该客户** AI 记忆（``set_memory_writer``）而
+  **不进共享 KB**；进 KB 的条目 ``source=learner``（接 J-9 ``kb_entries.source``）；
+- 相似度：BM25 文本命中不再折算成「99%」——只有触发词 Jaccard 是真相似度；BM25 命中
+  记 ``dup_method=bm25`` / ``dup_score=0``（页面显「相似度未计算」），且必须过
+  ``kb_gate.lexical_overlap_ok`` 实词重叠门、不与 vendor 预置条目比对；
+- 存量：首次装载对 pending 草稿做一次性清标（噪音自动拒、假重复重算、补 private_kinds），
+  ``kb_meta`` 键 ``TRIAGE_BACKFILL_META_KEY`` 幂等。
 """
 
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
-from src.utils.kb_gate import is_system_placeholder, looks_like_kb_query
+from src.utils.kb_gate import (is_system_placeholder, lexical_overlap_ok,
+                               looks_like_kb_query)
 
 _logger = logging.getLogger("ai_chat_assistant.DailyLearner")
 
 LAST_RUN_META_KEY = "learner_last_run"
+
+# ── L-4 F（#201）止血常量 ──────────────────────────────────────────────────
+#: 一次最多通过多少条（路由 approve-all / batch approve 同口径）
+APPROVE_BATCH_LIMIT = 20
+#: 存量清标幂等键（kb_meta）
+TRIAGE_BACKFILL_META_KEY = "learner_triage_backfill_l4"
+#: 系统文本片段（不分大小写）：出现即视为噪音，不入队
+_NOISE_FRAGMENTS = (
+    "下载失败", "转写失败", "识别失败", "语音消息", "语音訊息", "voice message",
+    "download failed", "transcribe failed", "[translate:",
+)
+# 只有表情 / 标点 / 空白（无任何字母、数字、汉字）
+_NO_CONTENT_RE = re.compile(r"^[^\w\u4e00-\u9fff]*$")
+# 人名线索（J-10 词表没有人名类，这里补最窄的一组「自报姓名」句式）
+_NAME_HINT_RE = re.compile(
+    r"我叫|叫我|我的名字|名字是|我姓|"
+    r"\b(?:my\s+name\s+is|call\s+me|i\s*am|i'm|this\s+is)\s+[A-Z][a-z]{1,15}\b",
+    re.IGNORECASE,
+)
+#: private_kinds 取值（顺序即页面标签顺序）
+PRIVATE_KINDS: Tuple[str, ...] = (
+    "name", "money", "meet", "address", "identity", "family", "health", "commitment",
+)
+
+
+class LearnerApproveError(Exception):
+    """审核通过被拒的结构化原因（路由层转人话）。
+
+    reason ∈ private_no_customer（私事条目没有可归属的客户会话）/
+    memory_unavailable（记忆存储未就绪）/ memory_write_failed。
+    """
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def is_noise_query(text: str) -> bool:
+    """寒暄 / 媒体占位 / 系统文本 / 纯表情标点 → 不值得学（#201 入队收窄）。
+
+    比 ``kb_gate.is_system_placeholder`` 更宽：**任何**「[」「【」开头的文本都算占位
+    （skuio 机实录「语音消息-下载失败」没带方括号也进了队列——按片段再兜一层）；
+    寒暄复用 ``greeting_lexicon.is_greeting_message``（L-1 归属文件，只 import 不改）。
+    """
+    t = str(text or "").strip()
+    if len(t) < 2:
+        return True
+    if t.startswith(("[", "【")) or is_system_placeholder(t):
+        return True
+    low = t.lower()
+    if any(f in low for f in _NOISE_FRAGMENTS):
+        return True
+    if _NO_CONTENT_RE.match(t):
+        return True
+    try:
+        from src.utils.greeting_lexicon import is_greeting_message
+        if is_greeting_message(t):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def is_fact_question(text: str) -> bool:
+    """事实类提问＝有「知识提问」样式且不是噪音——入队的最低门槛。"""
+    t = str(text or "").strip()
+    return bool(t) and not is_noise_query(t) and looks_like_kb_query(t)
+
+
+def private_kinds(text: str) -> List[str]:
+    """条目里的「客户私事」类别（空＝可进共享 KB）。
+
+    复用 J-10 记忆例外词表：金钱 / 见面 / 地址 / 证件 / 家人 / 健康 六类 + 承诺约定；
+    人名靠最窄的自报姓名句式。命中即分流到该客户记忆——共享 KB 里出现「Maria 下周三
+    来马尼拉见我」会让别的客户被复述别人的私事（#201 跨客户串记忆）。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return []
+    kinds: List[str] = []
+    if _NAME_HINT_RE.search(t):
+        kinds.append("name")
+    try:
+        from src.utils.memory_review import high_impact_categories, is_commitment
+        for c in high_impact_categories(t):
+            if c in PRIVATE_KINDS and c not in kinds:
+                kinds.append(c)
+        if is_commitment(t) and "commitment" not in kinds:
+            kinds.append("commitment")
+    except Exception:
+        pass
+    return [k for k in PRIVATE_KINDS if k in kinds]
 
 # 进程内最近构造的学习器（value_report 周报段 peek 用——与 peek_goal_store 同纪律：
 # 消费方只探测既有单例绝不新建，新建会凭空造一个空 drafts 库把「零学习」误报成事实）。
@@ -93,7 +202,11 @@ class DailyLearner:
                 raise ValueError("DailyLearner 需要 db_path 或带 db_path 属性的 kb_store")
             db_path = Path(kb_db).parent / "knowledge_base.db"
         self._db_path = db_path
+        # L-4 F：私事条目通过后的去处（conversation_id, content, quote）→ dict|None，
+        # 由路由层注入（它才拿得到 skill_manager / 记忆存储）；None＝私事不可通过。
+        self._memory_writer: Optional[Callable[[str, str, str], Optional[Dict]]] = None
         self._ensure_table()
+        self._triage_backfill_once()
         global _LAST_INSTANCE
         _LAST_INSTANCE = self
 
@@ -105,6 +218,10 @@ class DailyLearner:
         """AI 客户端晚绑定（启动顺序/热接入后补挂，缓存实例即刻恢复生成能力）。"""
         if ai_client is not None:
             self._ai = ai_client
+
+    def set_memory_writer(self, fn) -> None:
+        """注入「写入该客户 AI 记忆」的回调（L-4 F 私事分流）。"""
+        self._memory_writer = fn if callable(fn) else None
 
     _MIGRATION_CONFIDENCE = (
         "ALTER TABLE kb_drafts ADD COLUMN confidence INTEGER DEFAULT 0",
@@ -120,6 +237,12 @@ class DailyLearner:
     _MIGRATION_TRACE = (
         "ALTER TABLE kb_drafts ADD COLUMN source_ref TEXT DEFAULT ''",
         "ALTER TABLE kb_drafts ADD COLUMN entry_id TEXT DEFAULT ''",
+    )
+    # L-4 F（#201）：译文缓存 / 私事类别 / 查重方法（bm25=相似度未计算）
+    _MIGRATION_TRIAGE = (
+        "ALTER TABLE kb_drafts ADD COLUMN query_zh TEXT DEFAULT ''",
+        "ALTER TABLE kb_drafts ADD COLUMN private_kinds TEXT DEFAULT ''",
+        "ALTER TABLE kb_drafts ADD COLUMN dup_method TEXT DEFAULT ''",
     )
 
     def _ensure_table(self):
@@ -151,7 +274,71 @@ class DailyLearner:
                 except sqlite3.OperationalError:
                     pass
             conn.commit()
+        # migration: triage columns (query_zh / private_kinds / dup_method)
+        if "private_kinds" not in cols:
+            for sql in self._MIGRATION_TRIAGE:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
+            conn.commit()
         conn.close()
+
+    def _triage_backfill_once(self) -> None:
+        """存量 pending 草稿一次性清标（#201：skuio 机 166 待审 / 165 假重复 99%）。
+
+        ① 噪音（寒暄 / 占位 / 系统文本）直接标 rejected（reviewed_by=system:l4_noise，
+           「已拒绝」页仍可见可追溯）；② 带查重标的按新口径重算（BM25 折算的 99% 清掉，
+           只留真触发词重叠或过了实词门的文本命中）；③ 补 private_kinds。
+        幂等：kb_meta 键；kb 无 meta 能力（旧 mock）时每次构造都跑——纯 DB 幂等操作，
+        代价可忽略。任何异常只记 debug，绝不影响构造。
+        """
+        try:
+            getter = getattr(self._kb, "get_meta", None)
+            if callable(getter) and getter(TRIAGE_BACKFILL_META_KEY):
+                return
+        except Exception:
+            pass
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        stats = {"noise_rejected": 0, "dup_recalced": 0, "dup_cleared": 0, "private_tagged": 0}
+        try:
+            with self._conn() as c:
+                rows = [dict(r) for r in c.execute(
+                    "SELECT * FROM kb_drafts WHERE status='pending'").fetchall()]
+            for d in rows:
+                q = str(d.get("query") or "")
+                if is_noise_query(q):
+                    with self._conn() as c:
+                        c.execute(
+                            "UPDATE kb_drafts SET status='rejected', reviewed_by=?, "
+                            "reviewed_at=? WHERE id=? AND status='pending'",
+                            ("system:l4_noise", now, d["id"]))
+                    stats["noise_rejected"] += 1
+                    continue
+                if d.get("dup_entry_id") or (d.get("dup_score") or 0) > 0:
+                    before = bool(d.get("dup_entry_id"))
+                    dup = self.recheck_duplicate(d["id"])
+                    stats["dup_recalced"] += 1
+                    if before and not dup:
+                        stats["dup_cleared"] += 1
+                if not (d.get("private_kinds") or ""):
+                    kinds = private_kinds(q)
+                    if kinds:
+                        with self._conn() as c:
+                            c.execute("UPDATE kb_drafts SET private_kinds=? WHERE id=?",
+                                      (",".join(kinds), d["id"]))
+                        stats["private_tagged"] += 1
+            if any(stats.values()):
+                _logger.info("学习队列存量清标（L-4 #201）: %s", stats)
+        except Exception:
+            _logger.debug("学习队列存量清标失败（忽略）", exc_info=True)
+        try:
+            setter = getattr(self._kb, "set_meta", None)
+            if callable(setter):
+                setter(TRIAGE_BACKFILL_META_KEY, json.dumps(
+                    {"ts": now, **stats}, ensure_ascii=False))
+        except Exception:
+            pass
 
     def _conn(self):
         c = sqlite3.connect(str(self._db_path))
@@ -187,13 +374,17 @@ class DailyLearner:
         min_miss_count = funnel["min_miss_count"]
 
         # 来源 1：高频未命中（filter 后可用名额变少，top_k 放宽到 100）
+        # L-4 F（#201）入队收窄：占位符 / 寒暄 / 系统文本（is_noise_query）计入
+        # miss_placeholder 一档不入队；再要「问题样式」（事实类提问）；再过 cnt 门槛
+        # （min_miss_count 默认 2 ＝ 至少被问两次；miss_log 不记客户身份，
+        # 「≥2 个不同客户」暂以 ≥2 次代替，见落点表待办）。
         miss_stats = self._kb.get_miss_stats(top_k=100)
         for m in miss_stats:
             q = m["query"].strip()
             if q.startswith("[TRANSLATE:"):
                 continue  # 翻译缺口标记走独立管线，不计入学习漏斗
             funnel["miss_total"] += 1
-            if is_system_placeholder(q):
+            if is_noise_query(q):
                 funnel["miss_placeholder"] += 1
                 continue
             if not looks_like_kb_query(q):
@@ -218,7 +409,8 @@ class DailyLearner:
             for fb in feedbacks:
                 if fb.get("score", 0) <= 0 and not fb.get("added_to_examples"):
                     q = fb.get("user_message", "").strip()
-                    if q and not is_system_placeholder(q) and q not in seen_queries:
+                    # 负反馈＝「AI 答错/被改写」的直接证据，不要求 cnt 门槛，但仍不收噪音
+                    if q and not is_noise_query(q) and q not in seen_queries:
                         funnel["feedback_material"] += 1
                         materials.append({
                             "source": "negative_feedback",
@@ -239,7 +431,7 @@ class DailyLearner:
             for s in suggestions:
                 if s.get("source") == "weak_hit":
                     q = s.get("query", "").strip()
-                    if q and not is_system_placeholder(q) and q not in seen_queries:
+                    if q and is_fact_question(q) and q not in seen_queries:
                         funnel["weak_hits"] += 1
                         materials.append({
                             "source": "weak_hit",
@@ -389,20 +581,24 @@ class DailyLearner:
                 dup_eid = dup["entry_id"] if dup else ""
                 dup_etitle = dup["entry_title"] if dup else ""
                 dup_score = dup["score"] if dup else 0
+                dup_method = str(dup.get("method", "") or "") if dup else ""
+                kinds = ",".join(private_kinds(d.get("query", "")))
                 try:
                     c.execute(
                         "INSERT INTO kb_drafts "
                         "(id,source,query,hit_count,category,title,triggers,"
                         "example_reply,ai_reasoning,status,created_at,confidence,"
-                        "dup_entry_id,dup_entry_title,dup_score,source_ref) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "dup_entry_id,dup_entry_title,dup_score,source_ref,"
+                        "dup_method,private_kinds) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (draft_id, d["source"], d["query"], d.get("hit_count", 1),
                          d.get("category", ""), d.get("title", ""),
                          triggers, d.get("example_reply", ""),
                          d.get("ai_reasoning", ""), "pending", now,
                          d.get("confidence", 0),
                          dup_eid, dup_etitle, dup_score,
-                         str(d.get("source_ref", "") or "")[:120])
+                         str(d.get("source_ref", "") or "")[:120],
+                         dup_method, kinds)
                     )
                     if dup:
                         _logger.info("草稿 %s 疑似重复: KB=%s score=%.2f",
@@ -581,18 +777,69 @@ class DailyLearner:
         dup_eid = dup["entry_id"] if dup else ""
         dup_etitle = dup["entry_title"] if dup else ""
         dup_score = dup["score"] if dup else 0
+        dup_method = str(dup.get("method", "") or "") if dup else ""
         with self._conn() as c:
             c.execute(
-                "UPDATE kb_drafts SET dup_entry_id=?, dup_entry_title=?, dup_score=? WHERE id=?",
-                (dup_eid, dup_etitle, dup_score, draft_id)
+                "UPDATE kb_drafts SET dup_entry_id=?, dup_entry_title=?, dup_score=?, "
+                "dup_method=? WHERE id=?",
+                (dup_eid, dup_etitle, dup_score, dup_method, draft_id)
             )
         return dup
 
+    @staticmethod
+    def _draft_private_kinds(draft: Dict) -> List[str]:
+        raw = str(draft.get("private_kinds") or "")
+        return [k for k in raw.split(",") if k.strip()]
+
+    @staticmethod
+    def _draft_conversation_id(draft: Dict) -> str:
+        ref = str(draft.get("source_ref") or "").strip()
+        return ref[5:] if ref.startswith("conv:") else ""
+
+    def set_translation(self, draft_id: str, query_zh: str) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE kb_drafts SET query_zh=? WHERE id=?",
+                      (str(query_zh or "")[:400], draft_id))
+
     def approve_draft(self, draft_id: str, operator: str = "") -> Optional[str]:
-        """审核通过：将草稿入库为正式知识条目"""
+        """审核通过。
+
+        - 普通条目 → 入库为正式知识条目（``source=learner``，接 J-9 来源字段），返回 KB
+          entry_id；
+        - 「客户私事」条目（``private_kinds`` 非空）→ **不进共享 KB**，写入该客户的 AI
+          记忆（``source_ref=conv:…`` 定位客户；记忆写入回调由路由注入），返回
+          ``mem:<记忆键>``；没有可归属的客户或记忆存储未就绪 → 抛
+          ``LearnerApproveError``（路由转人话），草稿保持 pending。
+        草稿不存在 / 非 pending → None（旧契约）。
+        """
         draft = self.get_draft(draft_id)
         if not draft or draft["status"] != "pending":
             return None
+
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        kinds = self._draft_private_kinds(draft)
+        if kinds:
+            conv = self._draft_conversation_id(draft)
+            if not conv:
+                raise LearnerApproveError("private_no_customer", ",".join(kinds))
+            if self._memory_writer is None:
+                raise LearnerApproveError("memory_unavailable", ",".join(kinds))
+            try:
+                res = self._memory_writer(conv, str(draft.get("query") or ""),
+                                          str(draft.get("query") or ""))
+            except Exception as e:  # noqa: BLE001 - 记忆层异常统一转结构化原因
+                raise LearnerApproveError("memory_write_failed", str(e)[:120])
+            if not isinstance(res, dict) or not res.get("key"):
+                raise LearnerApproveError("memory_write_failed", ",".join(kinds))
+            mem_ref = f"mem:{res['key']}"
+            with self._conn() as c:
+                c.execute(
+                    "UPDATE kb_drafts SET status='approved', reviewed_by=?, "
+                    "reviewed_at=?, entry_id=? WHERE id=?",
+                    (operator, now, mem_ref, draft_id))
+            _logger.info("草稿 %s（客户私事 %s）已写入客户记忆 %s，未进 KB",
+                         draft_id, ",".join(kinds), res["key"])
+            return mem_ref
 
         triggers = draft.get("triggers", "")
         if isinstance(triggers, str):
@@ -605,9 +852,9 @@ class DailyLearner:
             "example_reply_zh": draft.get("example_reply", ""),
             "reply_mode": "ai_strict",
             "enabled": True,
+            "source": "learner",
         })
 
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with self._conn() as c:
             # entry_id 同步落草稿行（融合 P2）：与 kb_query_log.matched_entry_id
             # 对账的钥匙——「学了有没有用」从此可回访。
@@ -630,21 +877,34 @@ class DailyLearner:
             )
         return True
 
-    def approve_all_pending(self, operator: str = "") -> int:
-        """一键全部通过"""
-        drafts = self.list_drafts(status="pending", limit=200)
-        count = 0
-        for d in drafts:
-            if self.approve_draft(d["id"], operator):
-                count += 1
-        return count
+    def approve_all_pending(self, operator: str = "",
+                            draft_ids: Optional[List[str]] = None) -> int:
+        """通过**已选**（L-4 F #201：不再一键清空整队列）。
+
+        ``draft_ids`` 必填且 ≤ ``APPROVE_BATCH_LIMIT``；旧调用（不传 ids）一律 0——
+        skuio 机 166 条一键入共享 KB 无确认正是本单的 P1 事故，不给回退口。
+        """
+        if not draft_ids:
+            return 0
+        ids = [str(i) for i in draft_ids][:APPROVE_BATCH_LIMIT]
+        return int(self.batch_action(ids, "approve", operator=operator)["approved"])
 
     def batch_action(self, draft_ids: List[str], action: str, operator: str = "") -> Dict:
-        """A2: 批量通过或拒绝指定草稿"""
+        """A2: 批量通过或拒绝指定草稿。
+
+        L-4 F：通过每批 ≤ ``APPROVE_BATCH_LIMIT``（超出的进 ``skipped``）；私事条目
+        通过失败带原因进 ``failed_reasons``（拒绝不设上限——清噪音不该被卡）。
+        """
         approved = 0
         rejected = 0
-        failed = []
-        for did in draft_ids:
+        failed: List[str] = []
+        failed_reasons: Dict[str, str] = {}
+        skipped: List[str] = []
+        ids = [str(i) for i in (draft_ids or [])]
+        if action == "approve" and len(ids) > APPROVE_BATCH_LIMIT:
+            skipped = ids[APPROVE_BATCH_LIMIT:]
+            ids = ids[:APPROVE_BATCH_LIMIT]
+        for did in ids:
             try:
                 if action == "approve":
                     if self.approve_draft(did, operator):
@@ -654,20 +914,36 @@ class DailyLearner:
                 elif action == "reject":
                     self.reject_draft(did, operator)
                     rejected += 1
+            except LearnerApproveError as e:
+                failed.append(did)
+                failed_reasons[did] = e.reason
             except Exception:
                 failed.append(did)
-        return {"approved": approved, "rejected": rejected, "failed": failed}
+        out = {"approved": approved, "rejected": rejected, "failed": failed}
+        if failed_reasons:
+            out["failed_reasons"] = failed_reasons
+        if skipped:
+            out["skipped"] = skipped
+            out["limit"] = APPROVE_BATCH_LIMIT
+        return out
 
     def stats(self) -> Dict:
         with self._conn() as c:
             pending = c.execute("SELECT COUNT(*) FROM kb_drafts WHERE status='pending'").fetchone()[0]
             approved = c.execute("SELECT COUNT(*) FROM kb_drafts WHERE status='approved'").fetchone()[0]
             rejected = c.execute("SELECT COUNT(*) FROM kb_drafts WHERE status='rejected'").fetchone()[0]
+            # L-4 F：查重标以 dup_entry_id 为准（BM25 文本命中 dup_score=0 但仍是标）
             dup_flagged = c.execute(
-                "SELECT COUNT(*) FROM kb_drafts WHERE status='pending' AND dup_score > 0"
+                "SELECT COUNT(*) FROM kb_drafts WHERE status='pending' "
+                "AND (dup_score > 0 OR IFNULL(dup_entry_id,'') <> '')"
+            ).fetchone()[0]
+            private_pending = c.execute(
+                "SELECT COUNT(*) FROM kb_drafts WHERE status='pending' "
+                "AND IFNULL(private_kinds,'') <> ''"
             ).fetchone()[0]
         out = {"pending": pending, "approved": approved, "rejected": rejected,
-               "dup_flagged": dup_flagged}
+               "dup_flagged": dup_flagged, "private_pending": private_pending,
+               "approve_limit": APPROVE_BATCH_LIMIT}
         # 未命中池现存量（排除翻译标记）——状态条用，坏了不影响主数据
         try:
             with self._kb._conn() as c:
@@ -817,8 +1093,13 @@ class DailyLearner:
     def check_duplicate(self, draft: Dict) -> Optional[Dict]:
         """
         Multi-layer duplicate check against existing KB (no API calls).
-        Layer 1: Trigger set overlap (Jaccard ≥ 0.4)
-        Layer 2: BM25 text search score (≥ 8.0)
+        Layer 1: Trigger set overlap (Jaccard ≥ 0.4) —— score 是真相似度（0–1）
+        Layer 2: BM25 text search（≥ 8.0）—— L-4 F（#201）起：
+          - 不与 vendor 预置条目比对（skuio 机 165 条「99%」全撞在厂商播种语料上）；
+          - 命中还要过 ``kb_gate.lexical_overlap_ok`` 实词重叠门（BM25 原始分 14–292，
+            任何常用字重叠都能过 8.0 阈值）；
+          - **不再把 BM25 分折算成百分比**（``min(score/15, 0.99)`` 就是那个恒 99%）：
+            score 记 0、method=bm25，页面显「文本匹配 · 相似度未计算」。
         Returns {entry_id, entry_title, score, method} or None.
         """
         # Build search text from draft fields
@@ -839,20 +1120,29 @@ class DailyLearner:
         if best_trigger_match and best_trigger_match["score"] >= self._DUP_TRIGGER_THRESHOLD:
             return best_trigger_match
 
-        # Layer 2: BM25 search
+        # Layer 2: BM25 search（不含 vendor；旧 mock 不认 include_vendor 时回落旧签名）
         try:
-            result = self._kb.search(search_text, top_k=3)
-            entries = result.get("entries", [])
-            if entries:
-                top = entries[0]
+            try:
+                result = self._kb.search(search_text, top_k=3, include_vendor=False)
+            except TypeError:
+                result = self._kb.search(search_text, top_k=3)
+            entries = (result or {}).get("entries", []) if isinstance(result, dict) else []
+            probe = f"{draft_title} {draft_query}".strip() or search_text
+            for top in entries:
+                if str(top.get("source") or "") == "vendor":
+                    continue
                 bm25_score = top.get("_score", 0)
-                if bm25_score >= self._DUP_BM25_THRESHOLD:
-                    return {
-                        "entry_id": top["id"],
-                        "entry_title": top.get("title", ""),
-                        "score": round(min(bm25_score / 15.0, 0.99), 2),
-                        "method": "bm25",
-                    }
+                if bm25_score < self._DUP_BM25_THRESHOLD:
+                    break
+                ok, _why = lexical_overlap_ok(probe, top)
+                if not ok:
+                    continue
+                return {
+                    "entry_id": top["id"],
+                    "entry_title": top.get("title", ""),
+                    "score": 0.0,
+                    "method": "bm25",
+                }
         except Exception as e:
             _logger.debug("check_duplicate BM25 search error: %s", e)
 
