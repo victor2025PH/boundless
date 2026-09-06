@@ -19,7 +19,7 @@
 | **M-4** | 工作台第三轮 | #222 #221 #230 #206补 | $150 | **收工**（09-07 01:1x） | A `b9ea59f3`（角标 = 当前 scope 内能点开的未读 + 悬浮「另有 群/频道/归档」+ `/account-unread?scope=` 同 WHERE + 群/频道视图说明条 + 看门狗 `[buried] startup_sweep` 72h 存量清扫 + 横幅「全部标已读」+ 被埋计数口径统一）/ B `898715ac`+修正 `4358ca4b`（`wsNav`/`wsNavUrl` 带 ?theme=&lang=，30 处裸导航替换 + window 捕获相位链接改写 + `__wsGoHome` 补 url；胶囊页内筛选钩子 **`window.wsFilterAutoConversations()`**（接口名，行为归 M-2 E，缺席回落带 theme 跳收件箱）；徽标改回「旗舰版」override 进悬浮（闭 L-4 待老板②）；顶栏收缩四档；主题分段控件本就在头像菜单）/ D `198d1e17`（会话工具整块删除、状态卡迁 AI 状态弹层、认领回头部、manifest convops app-only）/ C `dfa46687`（多选工具条「已选 N ｜ 归档·标签·删除 ｜ ✕」+ 批量删除同门同端点）；新测 38 例绿。⚠ B 提交误卷 M-3 C 两处在途 hunk，`4358ca4b` 已只在 index 回退、工作树未动（M-3 随后自提）。.py 四处待装载（`unread_aggregate` / `health_watchdog` / `unified_inbox_read_routes` / `unified_inbox_account_routes`） | 无（三档顶栏截图装机后取；`unified_inbox.html` 剩 4 处裸 `location.href=` 在 M-2/M-3 热区，ratchet 天花板 4，谁动谁改） | `发版对账_v1.0.76_M4.md` | ≈$95 |
 | **M-5** | 产品清理与上游 | #217 #224 #226 #225 #220 | $120 | **收工**（09-07 01:1x；`.py` 待装载，模板/i18n/copilot 组件已热更） | A `b5c24bc8` 转化成交类目 client 隐藏（`/templates` 不下发 + 新建 403 + 存量卡标下线）+ `goals/product_guard.py` 无产品禁报价/开户/支付（`goal_no_product` 拦截）+ 首拍进 L1（`reason=goal_first_send`）/ C `169bcb6e` 出图 client `dev_state` 开发中态 + `[image_gen] probe` 落日志 + 去「联系运维」/ D `40249ce5` 工具箱转录默认复用工作台 `voice_transcriber` + 收件核查 `received` + `err.asr.*` 六分类 + DATAS 补 `assets/probe` / E `1090c4cf` 学习队列 `query_lang` 按文字系统 + 原语真实标注 + 未译标「重试」+ 同题合并 / B `0a19204e` 养号 `summary` 判词与计数同口径 + 灰置原因就地 + 三阶段人话说明 / A 追问①② `d55f8ebb`（老板拍板）生命周期自建用户版也闸 + 回复链注入块加「产品边界」行（首拍预览不扩到回复链；出图措辞不分两套） | 交 M-6：三个宿主的 `?v=` bump（宿主文件归 M-2/3/4）、#225 夹具随 1.0.76 打包才生效、`zh_hant_auto.py` 再生 | `发版对账_v1.0.76_M5.md` | ≈$100 |
 | **M-7** | 目标引擎可追溯与真出手（09-07 02:5x 追加） | #236（#166 族第五次） | $150 | 未开工 | | §2 取证四问 / A 每拍可追溯 / B 注入不断档 + 日志无死角 / C 到期结算不静默 / D 卡片说真话 + 单目标 stalled | `发版对账_v1.0.76_M7.md`（1.0.76 已发则 `_v1.0.77_M7`） | |
-| **M-6** | 值守收口 | 钧 #215 + 22 单 + 1.0.76 | $100 | 进行中（23:03 起；A/B/C 等 M-1…M-5） | 基线核完（水位干净、#214–#235 全 new、钧未回 1285）；yunsheng exe 已自更 1.0.75 但后端 DOWN | A 钧 #215 定性回访（等 M-3 日志）/ B 22 单验收口径回访 + 46 行对账表 1.0.76 版 / C 1.0.76 装载·两包·两渠道·装机·台账 | `发版对账_v1.0.76_M6.md` | ~$8 |
+| **M-6** | 值守收口 | 钧 #215 + 22 单 + 1.0.76 | $100 | **收工**（09-07 04:2x；1.0.76 三渠道已发、坐席三台 1.076、回访四条已发、20 单 fixed + 记账） | C：01:54 zhiliao 装载（16s）+ Messenger 边车重启（`restoreAll summary restored=1`）；全量回归 79/25637（新红 9 全门禁/旧断言/域外副作用，0 拦发版，归属落点表 §4.1）；gate_sweep 10/794（新红 3：M-2 E `takeover_rearm` 未登记 + **三哑按钮** `_acctBulkMode`/`_gateClearDegraded`/`batchDeletePrompt` 代补暴露 `527700d8`，同 commit 代登记 M-2 B 两端点路由清单 + M-5 交办 `cp-*.js?v=`）；release `6403463d`（bump / 五值 496 MB sha 82dec80a… / changelog 11 条 / 繁体 16539 / ui-build 0300）；三包 smart 590.8M / clean 519.6M / **lite 522.9M 首次实弹**；publish 公共 + internal + lite 全 OK、官网 gate:content 6/6 + deploy OK；坐席 **三台 UP 1.076 smart/internal**（yunsheng 后端随重装恢复）；播报群 mid 1289 / 频道 msg 153；`update_hint` 已设。A：钧日志包仍未到 → 不钉根因、钉「两支都在 1.0.76 关掉，装后重发即结」mid 1292，#215 保持 confirmed。B：对账表 1.0.76 版 + 21 单口径 skuio mid 1290/1291、钧 mid 1293；20 单 dry-run→apply fixed、`duty_notify_summary` 记账 20；#216 因 02:27 新单 #236 反证**不标 verified**（随 M-7）。症状族：新立族 8 通道真相/登录默认 + 族 2/4/5 补层；合并 `发版对账_v1.0.76.md` | 交下一班：两机装 1.0.76 后核六样；钧日志包到后补 a/b 并流转 #215；61 单 8 月老积压回访（`r_*_backlog_1075.txt`，今日配额已用）；`dist-lite\latest.yml` 残留可删。交回各线：回归新红 9 条（M-1 B ×5 含文档翻译单字不译副作用 / M-1 C / M-2 A 重发幂等裁决顺序 / M-2 E / M-4 B）；M-3 交办其它 8 上传口同吃 2MB 闸 → 1.0.77 立单 | `发版对账_v1.0.76_M6.md` | ≈$75 |
 
 ## 老板拍板记录
 
@@ -29,8 +29,8 @@
 
 ## 全批收口（M-6 做）
 
-- [ ] 六条落点表齐 → 合并 `docs/发版对账_v1.0.76.md`
-- [ ] `restart_preflight` → zhiliao 装载 → 全量回归 + gate_sweep
-- [ ] 1.0.76 两包 → 坐席三台 → publish internal + lite + clean 三渠道（L-5 落点表）→ 两机核版本
-- [ ] 台账：#214–#235 按落点表标 fixed（dry-run 先过目）；回访两份；对账表重跑 `tmp/mapping_c6efrs.py`
-- [ ] `docs/值守症状族对账单.md` 更新（新族：通道真相 / 登录默认）
+- [x] 六条落点表齐 → 合并 `docs/发版对账_v1.0.76.md`（09-07 04:1x）
+- [x] `restart_preflight`（01:53 GO，首跑 NO-GO 两项已消化）→ zhiliao 装载 01:54:03 + Messenger 边车 01:54:47 → 全量回归 79/25637（0 拦发版）+ gate_sweep 10/794（三哑按钮代补 `527700d8`）
+- [x] 1.0.76 三包（smart / clean / lite）→ publish 公共 + internal + lite 三渠道 + 官网 deploy → 坐席三台 1.076 smart/internal → 两机核版本 **交下一班**（两机在内测渠道自更或手装，六样核对项见 M-6 表）
+- [x] 台账：20 单标 fixed（dry-run 过目 → apply；#215 保持 confirmed 等日志包，#216 随 #236 / M-7 不标 verified）；回访 skuio 2 条（mid 1290 / 1291）+ 钧 2 条（mid 1292 / 1293）；对账表 1.0.76 版 `tmp/mapping_c6efrs_1076.py`（三档：已验 ✓ / 1.0.76 再修 / 口径不变合并行）；`duty_notify_summary` 记账 20
+- [x] `docs/值守症状族对账单.md` 更新：**新立族 8 通道真相 / 登录默认**（5 层）+ 族 2 +7（#234）/ 族 4 +19–21（#227 #229 #231 #228）/ 族 5 +5–6（#218 #214 / #217）
