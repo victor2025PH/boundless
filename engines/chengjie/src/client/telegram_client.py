@@ -3860,6 +3860,13 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     sent_text_for_context = (
                         "\n\n".join(_sent_chunks) if _sent_chunks
                         else "\n\n".join(chunks))
+                    # #210 B：一行汇总「实发几条」。逐条的「已回复消息」日志按条打，
+                    # 报障按关键词摘日志时只见第一句（82BF95 实录）——这里把条数
+                    # 与总条数钉在一行，工作台行数（_send_reply 逐条镜像）应与之一致。
+                    self.logger.info(
+                        "[reply_bubbles] A线已拆 %d/%d 条发出（工作台按条镜像）chat=%s%s",
+                        len(_sent_chunks), len(chunks), chat_id,
+                        " interrupted" if _bubbles_interrupted else "")
                     try:
                         from src.inbox.reply_split import record_bubble_send
                         record_bubble_send(
