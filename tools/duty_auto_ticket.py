@@ -115,7 +115,14 @@ def parse_report_head(code: str, diag_root: Path = DIAG) -> Optional[Dict[str, A
     head0 = lines[0] if lines else ""
     m0 = re.search(r"field-agent:([\w-]+):(\w+)", head0)
     agent = m0.group(1) if m0 else ""
-    kind = m0.group(2).lower() if m0 else ("verify" if "verify" in md.name else "report")
+    if m0:
+        kind = m0.group(2).lower()
+    elif "verify" in md.name:
+        kind = "verify"
+    elif "selfcheck" in md.name or "probe" in md.name:
+        kind = "selfcheck"          # 09-02 首装自检 / 值守探针，不是报障
+    else:
+        kind = "report"
     head1 = lines[1] if len(lines) > 1 else ""
     fp = re.search(r"fp:\s*([A-Z0-9-]{4,})", head1)
     app = re.search(r"app:\s*([\d.]+)", head1)
@@ -490,6 +497,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--code", default="", help="只处理这一份（忽略已登记状态时配 --force）")
     ap.add_argument("--force", action="store_true", help="配 --code：忽略既有 ticket.txt 重新判定")
+    ap.add_argument("--attach", type=int, default=0,
+                    help="配 --code：值守人工指定挂到 #N（每日对账「未挂单」的处置口，跳过自动判定）")
     ap.add_argument("--backfill-index", action="store_true",
                     help="历史报告只补 ticket.txt（既有映射），不写库不发消息")
     a = ap.parse_args()
@@ -499,7 +508,7 @@ def main() -> int:
         return 0
     if a.code:
         code = a.code.strip().upper()
-        if a.force:
+        if a.force or a.attach:
             head = parse_report_head(code)
             if head is None:
                 log(f"{code} 目录不存在")
@@ -507,7 +516,15 @@ def main() -> int:
             con = sqlite3.connect(f"file:{(DATA / 'config' / 'bug_intake.db').as_posix()}?mode=ro",
                                   uri=True, timeout=5)
             try:
-                dec = decide(head, con, _ledger_rows(DATA), known_codes())
+                if a.attach:
+                    main_id = _resolve_dup(con, a.attach)
+                    if not main_id:
+                        log(f"#{a.attach} 不存在")
+                        return 1
+                    dec = {"action": "attach", "ticket": main_id, "refs": [main_id],
+                           "reason": f"值守人工指定挂 #{main_id}（每日对账处置）"}
+                else:
+                    dec = decide(head, con, _ledger_rows(DATA), known_codes())
             finally:
                 con.close()
             res = apply(head, dec, dry_run=a.dry_run)

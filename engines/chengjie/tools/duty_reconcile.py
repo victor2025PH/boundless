@@ -21,6 +21,16 @@
 
 工具只做「提案 + 显式批准执行」，不做静默批量——匹配是词面近似，最后一眼
 永远留给人。
+
+``--reports``（L-7 B，2026-09-06）：**报告 ↔ 工单**每日对账——tmp_diag 下每份 Cursor
+field-agent 报告（report / verify 类）必须挂在某张单上（``<码>/ticket.txt`` / 取证台账
+``received.diag`` / 工单正文含码 三处任一）。09-05 28 份报告没人立单、没人回，就是因为
+两本账从没对过。输出「未挂单报告 N 份」逐份列时间 / 码 / 机器 / note；``--alert`` 且 N>0
+→ 经 tools/duty_alert 推值守。计划任务 DutyReportsReconcile 每日 08:00 跑（deploy/duty/
+run_duty_reports_reconcile.ps1）。只读，不写库不发群。
+
+    python tools/duty_reconcile.py --reports                    # 全部历史报告
+    python tools/duty_reconcile.py --reports --since 20260902 --alert
 """
 from __future__ import annotations
 
@@ -29,6 +39,7 @@ import json
 import re
 import sqlite3
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -39,6 +50,8 @@ from scripts._data_root import resolve_data_roots  # noqa: E402
 
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = ENGINE_ROOT.parent.parent / "docs"
+DIAG_DIR = ENGINE_ROOT.parent.parent / "tmp_diag"
+AUTO_TICKET_TOOL = ENGINE_ROOT.parent.parent / "tools" / "duty_auto_ticket.py"
 DEFAULT_LEDGERS = (
     "实施49_内测反馈集中修复与页面优化_四视角方案_2026-08.md",
     "实施64_0823值守报障批次集中修复_1.0.52指令_2026-08.md",
@@ -203,6 +216,102 @@ def apply_fixed(base: str, token: str, ticket_id: int, fix_note: str) -> tuple:
         return False, {"error": str(e)[:200]}
 
 
+# ── 报告 ↔ 工单（L-7 B）────────────────────────────────────────────────────
+
+def _load_auto_ticket_mod():
+    """复用 tools/duty_auto_ticket 的报告头解析 / ticket.txt 读取（单一事实源，不复制）。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("duty_auto_ticket", AUTO_TICKET_TOOL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+def load_code_links(db_path: Path, ledger_path: Path, codes: Set[str]) -> Dict[str, Set[int]]:
+    """报告码 → 提过它的工单集合：取证台账 received.diag ∪ 工单标题/正文含码。只读。"""
+    links: Dict[str, Set[int]] = {}
+    if ledger_path.is_file():
+        for ln in ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                r = json.loads(ln)
+            except Exception:
+                continue
+            c = str(r.get("diag") or "").upper()
+            if c in codes and r.get("ticket"):
+                links.setdefault(c, set()).add(int(r["ticket"]))
+    if db_path.is_file():
+        con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)
+        try:
+            code_re = re.compile(r"\b([A-Z0-9]{6})\b")
+            for tid, title, body in con.execute("SELECT id, title, body FROM bug_tickets"):
+                for c in set(code_re.findall(f"{title or ''}\n{body or ''}")):
+                    if c in codes:
+                        links.setdefault(c, set()).add(int(tid))
+        finally:
+            con.close()
+    return links
+
+
+def reconcile_reports(diag_dir: Path, db_path: Path, ledger_path: Path, *,
+                      since: str = "") -> Dict[str, Any]:
+    """扫 tmp_diag：每份 report/verify 类报告 → 挂在哪张单（ticket.txt / 台账 / 正文）。
+
+    返回 {total, linked, unlinked: [{code, time, fp4, kind, note}], by_kind}。``since``＝
+    YYYYMMDD（按报告头时间过滤；无头时间的旧包按目录 mtime）。
+    """
+    dat = _load_auto_ticket_mod()
+    codes = dat.known_codes(diag_dir)
+    links = load_code_links(db_path, ledger_path, codes)
+    out: Dict[str, Any] = {"total": 0, "linked": 0, "unlinked": [], "by_kind": {}}
+    for code in sorted(codes):
+        head = dat.parse_report_head(code, diag_dir)
+        if not head or head["kind"] not in ("report", "verify"):
+            continue
+        stamp = (head.get("time") or "").replace("-", "").replace(":", "").replace(" ", "-")[:15]
+        if not stamp:
+            try:
+                stamp = time.strftime("%Y%m%d-%H%M%S",
+                                      time.localtime((diag_dir / code).stat().st_mtime))
+            except Exception:
+                stamp = "00000000-000000"
+        if since and stamp[:8] < since[:8]:
+            continue
+        out["total"] += 1
+        out["by_kind"][head["kind"]] = out["by_kind"].get(head["kind"], 0) + 1
+        tt = dat.read_ticket_txt(code, diag_dir) or {}
+        linked_by = []
+        if int(tt.get("ticket") or 0) > 0:
+            linked_by.append(f"ticket.txt→#{tt['ticket']}")
+        if links.get(code):
+            linked_by.append("台账/正文→" + ",".join(f"#{t}" for t in sorted(links[code])[:4]))
+        if head["kind"] == "verify" and not linked_by:
+            linked_by.append("verify 不立单（只记复验）")
+        if tt.get("action") == "summary" and not linked_by:
+            linked_by.append("ticket.txt:summary（总表，值守人工对）")
+        if linked_by:
+            out["linked"] += 1
+            continue
+        out["unlinked"].append({
+            "code": code, "time": head.get("time") or stamp, "fp4": head.get("fp4") or "",
+            "kind": head["kind"], "note": (head.get("note") or "")[:80],
+        })
+    return out
+
+
+def render_reports(res: Dict[str, Any], *, since: str = "") -> str:
+    n = len(res["unlinked"])
+    kinds = " ".join(f"{k}×{v}" for k, v in sorted(res["by_kind"].items()))
+    head = (f"[报告↔工单] 报告 {res['total']} 份（{kinds}）"
+            + (f" 自 {since} 起" if since else "")
+            + f" · 已挂单 {res['linked']} · **未挂单 {n} 份**")
+    lines = [head]
+    for u in res["unlinked"]:
+        lines.append(f"  {u['time']}  {u['code']}  {u['fp4'] or '????'}  [{u['kind']}]  {u['note'] or '（无备注）'}")
+    if n:
+        lines.append("  处置：python tools/duty_auto_ticket.py --code <码> --force --dry-run → 去掉 --dry-run 挂/立")
+    return "\n".join(lines)
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -216,10 +325,32 @@ def main() -> int:
     ap.add_argument("--apply", default="",
                     help='显式批准，逗号分隔 "41=B114,34=B116"——标 fixed 并'
                          "触发自动群回访（真发消息！）")
+    ap.add_argument("--reports", action="store_true",
+                    help="L-7 B：报告↔工单对账（tmp_diag 每份报告必须挂单），只读")
+    ap.add_argument("--since", default="", help="配 --reports：只看 YYYYMMDD 起的报告")
+    ap.add_argument("--alert", action="store_true",
+                    help="配 --reports：未挂单 >0 时经 tools/duty_alert 推值守")
+    ap.add_argument("--diag-dir", default="", help="配 --reports：tmp_diag 根（默认仓库 tmp_diag）")
     args = ap.parse_args()
 
     data_root = resolve_data_roots(args.data_root)[0]
     db = Path(data_root) / "config" / "bug_intake.db"
+
+    if args.reports:
+        diag_dir = Path(args.diag_dir) if args.diag_dir else DIAG_DIR
+        res = reconcile_reports(diag_dir, db, Path(data_root) / "logs" / "duty_evidence.jsonl",
+                                since=args.since)
+        text = render_reports(res, since=args.since)
+        _out(json.dumps(res, ensure_ascii=False, indent=1) if args.json else text)
+        if args.alert and res["unlinked"]:
+            try:
+                from tools.duty_alert import deliver
+                ok, note = deliver("[值守·报告对账] " + text[:1500])
+                _out(f"[alert] {'ok' if ok else 'FAIL'} {note}")
+            except Exception as exc:  # noqa: BLE001
+                _out(f"[alert] FAIL {type(exc).__name__}: {exc}")
+        return 0 if not res["unlinked"] else 3
+
     if not db.is_file():
         _out(f"[skip] 无工单台账（{db}）")
         return 0
