@@ -56,6 +56,11 @@
 {% endblock %}
 {% block content %}
 {% set active="strategies" %}
+{# L-4 D（#212，D-L2）：本页是大模型调参面板（Temperature / Max Tokens / 上下文轮数 / 意图→策略
+   映射），1.0.74 只折叠了参数仍对用户版直出。用户版整页收起 + 「功能升级中」横幅；partner /
+   internal 与开发者模式原面板不变。「稳重/均衡/活泼 × 简短/适中/详细」预设档待老板拍板后再做。 #}
+{% include "_client_tier_upgrading.html" %}
+<div id="st-root" class="{% if ui_client_hide %}l4-locked{% endif %}">
 
 {% if ui_mode == 'simple' %}
 <div class="simple-guide" style="background:linear-gradient(135deg,var(--th-bg-brand06,rgba(91,124,246,.06)),var(--th-bg-amber06,rgba(245,158,11,.06)));border:1px solid var(--th-bd-brand15,rgba(91,124,246,.15));border-radius:10px;padding:.7rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:var(--t2);display:flex;align-items:flex-start;gap:.6rem">
@@ -258,6 +263,7 @@
     </div>
   </details>
 </details>
+</div>
 
 <script>
 function markDirty(sid){
