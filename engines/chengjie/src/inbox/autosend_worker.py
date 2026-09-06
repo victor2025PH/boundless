@@ -315,6 +315,7 @@ class AutosendWorker:
         # 是「扣留中」活动信号）/ 账号因连续失败被降半自动的次数 / 门禁日志节流表
         self.total_skipped_channel_gate: int = 0
         self.total_account_degraded: int = 0
+        self.total_retry_gated: int = 0   # #233：改期到点但账号仍在退避/门禁 → 再排不重投
         self._gate_log_ts: Dict[str, float] = {}
         # B41 投递权登记表（实例级，人工/自动两条投递链共用——见 deliver_once 模块
         # docstring 的作用域论证）
@@ -472,6 +473,18 @@ class AutosendWorker:
                 "草稿留 pending 待人过目/通道恢复后接续（D-M1 / #232 / #233）",
                 plat, acct, reason)
         return reason
+
+    def _account_gate_wait(self, platform: str, account_id: str) -> float:
+        """门禁扣住的重投再排多久：退避/冷静期剩余取大，降级/未连接按 30s 复查（夹 5–900s）。"""
+        try:
+            from src.inbox.account_channel_gate import (
+                backoff_remaining, cooldown_remaining,
+            )
+            wait = max(backoff_remaining(platform, account_id),
+                       cooldown_remaining(platform, account_id), 30.0)
+        except Exception:
+            wait = 30.0
+        return max(5.0, min(900.0, float(wait))) * (0.9 + 0.2 * random.random())
 
     def _account_gate_note(self, item: Dict[str, Any], *, ok: bool,
                            error_kind: str = "", retry_after_ms: int = 0) -> None:
@@ -1145,7 +1158,23 @@ class AutosendWorker:
                     self._retry_queue.remove(r)
                 except ValueError:
                     continue
-                deliver_now.append(r["item"])
+                # M-2 C（#233，K9CY6R）：改期到点的重投先过账号门禁——边车退避水位未过
+                # （或冷静期 / 降级 / 未连接）→ 不投，按剩余水位再排。此前 13s/23s 改期
+                # 一到点就重投 → 撞上仍在退避的边车或再次 500 → 边车 streak 续命 → 手动
+                # 也 429；退避只由「真实成功 / 登录成功 / 健康探测通过」解锁，不由重试撞。
+                _rit = r.get("item") or {}
+                if self._send_callback is not None:
+                    _hold = self._account_gate_hold(
+                        str(_rit.get("platform") or ""),
+                        str(_rit.get("account_id") or "default"))
+                    if _hold:
+                        r["next_ts"] = _rt_now + self._account_gate_wait(
+                            str(_rit.get("platform") or ""),
+                            str(_rit.get("account_id") or "default"))
+                        self._retry_queue.append(r)
+                        self.total_retry_gated += 1
+                        continue
+                deliver_now.append(_rit)
         if self._send_callback is not None and deliver_now:
             # 并行投递（2026-08-09，默认关）：拟人节奏上线后单条投递可占
             # 30-54s（deliver_delay）+ 至多 75s（分条间隔）——串行循环下并发
@@ -2144,6 +2173,7 @@ class AutosendWorker:
             # M-2：账号级通道门禁扣住次数（冷静期/降级/退避/未连接）+ 降级发生次数
             "total_skipped_channel_gate": self.total_skipped_channel_gate,
             "total_account_degraded": self.total_account_degraded,
+            "total_retry_gated": self.total_retry_gated,
             "deliver_once": self._deliver_once.stats_snapshot(),
             "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
             "total_human_deliver_errors": self.total_human_deliver_errors,

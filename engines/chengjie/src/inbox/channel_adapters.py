@@ -406,11 +406,16 @@ class MessengerInboxAdapter:
     async def _send_web(self, cfg: Dict[str, Any], account_id: str,
                         chat_key: str, text: str) -> Dict[str, Any]:
         from src.integrations.messenger_web_login import _post_json, service_base_url
+        from src.inbox.send_context import is_manual_send
         base = service_base_url(cfg)
+        # M-2 C（#233）：人工发送带 manual=true → 边车 send_backoff 窗内放行一次探测
+        _payload: Dict[str, Any] = {"jid": chat_key, "text": text}
+        if is_manual_send():
+            _payload["manual"] = True
         try:
             res = await _post_json(
                 f"{base}/accounts/{account_id}/send",
-                {"jid": chat_key, "text": text},
+                _payload,
             )
         except ChannelSendError:
             raise
@@ -911,6 +916,21 @@ async def send_via_adapters(
     该额度闸约束（enforcement 面不在本函数扩大）。
     """
     platform = str(platform or "").lower()
+    _origin = str(origin or "auto")
+    # M-2 C（#233）：人工路径在本 await 链内打「manual」标——边车载荷组装处据此带
+    # manual=true，send_backoff 窗内放行一次探测性发送（手动独立于自动退避锁、优先）。
+    from src.inbox.send_context import manual_send_scope
+    with manual_send_scope(_origin == "manual"):
+        return await _send_via_adapters_inner(
+            request, platform, account_id, chat_key, text, adapters,
+            reply_to=reply_to, mentions=mentions, origin=_origin)
+
+
+async def _send_via_adapters_inner(
+    request: Any, platform: str, account_id: str, chat_key: str, text: str,
+    adapters: List[ChannelAdapter], *, reply_to: Any = None, mentions: Any = None,
+    origin: str = "auto",
+) -> Dict[str, Any]:
     _origin = str(origin or "auto")
     # M-2 A2（#232，UE7VM3 ③）：通道未连接（边车没有该账号会话 / 已登出 / worker
     # 放弃重连）→ **自动与手动同一闸**拒发，503 + reason_code=channel_disconnected，

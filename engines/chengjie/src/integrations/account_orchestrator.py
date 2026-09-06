@@ -1778,6 +1778,14 @@ class MessengerWebWorker:
                 "text": str(reply_to.get("text") or ""),
                 "id": str(reply_to.get("id") or ""),
             }
+        # M-2 C（#233）：人工发送独立于自动退避锁——带 manual=true，边车 send_backoff
+        # 窗内放行一次探测性发送（成功即解锁；account_blocked 平台封锁不放行）。
+        try:
+            from src.inbox.send_context import is_manual_send
+            if is_manual_send():
+                payload["manual"] = True
+        except Exception:
+            pass
         try:
             res = await _post_json(
                 f"{self._base()}/accounts/{self.account_id}/send",

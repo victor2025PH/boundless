@@ -287,6 +287,30 @@ def _isolated_account_registry(tmp_path):
         ar._registry = old
 
 
+@pytest.fixture(autouse=True)
+def _isolated_account_channel_gate(tmp_path, monkeypatch):
+    """账号级通道门禁（M-2，``src/inbox/account_channel_gate``）按测试隔离。
+
+    门禁状态（登录冷静期 / 连续失败降级 / 退避水位）落 ``config_dir()/
+    account_channel_gate.json``——conftest 顶部把数据根指到**进程级** tmp，于是同一
+    次 pytest 里前面的用例让假账号 ``telegram:tg1`` 连败三次，后面的用例就会撞上
+    「已降级 → L2 扣住」（2026-09-06 实测 test_autosend_send_block 串味）。这里把落盘
+    路径改到每测试独立 tmp 并清进程内缓存；测试自行 setenv AITR_DATA_DIR 的仍按其设定。
+    """
+    try:
+        import src.inbox.account_channel_gate as gate
+    except Exception:
+        yield
+        return
+    p = tmp_path / "_test_account_channel_gate.json"
+    monkeypatch.setattr(gate, "_state_path", lambda: p)
+    gate._reset_for_tests()
+    try:
+        yield
+    finally:
+        gate._reset_for_tests()
+
+
 @pytest.fixture()
 def auth_client(client, config_dir):
     """
