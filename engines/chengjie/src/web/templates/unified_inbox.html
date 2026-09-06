@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906c">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -616,6 +616,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
     <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
          onclick="_gotoBuriedArchive()"
          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
+    {# #222（M-4 A）群/频道视图说明条：AutoDraft skip_group_chats 开着时，群/频道只收不回、
+       未读天然堆积且不计入账号角标——说清楚，坐席才不会把它当成幽灵未读。内容由 _renderScopeNote 填充。 #}
+    <div class="buried-hint scope-note" id="scope-note" style="display:none;" aria-live="polite"></div>
     <!-- Phase 16: 标签概览 strip -->
     <div class="tag-strip collapsed" id="tag-strip"></div>
 
@@ -2129,6 +2132,49 @@ let attnByAccount=null;      // {"telegram:aid": N, ...}
 /* #142 被埋会话界面化：归档中的有效未读全库聚合（主徽标已剔归档，这份驱动
    「归档中还有 N 条未读」入口）。null=旧后端/未抵达 → 回落窗口内推导。 */
 let archivedUnreadByAccount=null;   // {"telegram:aid": {convs:N, unread:M}, ...}
+/* #222 口径统一（M-4 A）：四桶明细 {"telegram:aid": {private,group,channel,archived}}。
+   角标数字＝当前列表 scope（_convScope）内的未读：私聊视图读 private（＝unreadByAccount），
+   群 / 频道视图读对应桶；悬浮明细列出其余桶。null=旧后端 → 角标保持私聊口径、无明细。 */
+let unreadBreakdownByAccount=null;
+let _aiSkipGroups=null;   // 服务端 inbox.auto_draft.skip_group_chats（null=未知 → 不出说明）
+function _scopedAcctUnread(k){
+  if(_convScope!=='private' && unreadBreakdownByAccount){
+    const b=unreadBreakdownByAccount[k];
+    return b?(Number(b[_convScope])||0):0;
+  }
+  return Number(unreadByAccount&&unreadByAccount[k])||0;
+}
+/* 角标悬浮明细：「角标＝<当前视图>未读；另有 群 N / 频道 N / 归档 N；点开看是哪几条」。
+   aid 为空＝该平台「全部账号」chip，各号求和。 */
+function _acUnreadBreakdown(plat,aid){
+  if(!unreadBreakdownByAccount) return null;
+  const sum={private:0,group:0,channel:0,archived:0};
+  let hit=false;
+  Object.keys(unreadBreakdownByAccount).forEach(k=>{
+    if(k.indexOf(plat+':')!==0) return;
+    if(aid && k!==plat+':'+aid) return;
+    const v=unreadBreakdownByAccount[k]||{};
+    ['private','group','channel','archived'].forEach(f=>{ sum[f]+=Math.max(0,Number(v[f])||0); });
+    hit=true;
+  });
+  return hit?sum:null;
+}
+function _acUnreadOthersText(b){
+  if(!b) return '';
+  const parts=[];
+  if(_convScope!=='private') parts.push(window.Tf('inbox.acct.bd_private',{n:b.private}));
+  if(_convScope!=='group') parts.push(window.Tf('inbox.acct.bd_group',{n:b.group}));
+  if(_convScope!=='channel') parts.push(window.Tf('inbox.acct.bd_channel',{n:b.channel}));
+  parts.push(window.Tf('inbox.acct.bd_archived',{n:b.archived}));
+  return window.Tf('inbox.acct.bd_others',{list:parts.join(' / ')});
+}
+function _acUnreadTitle(plat,aid){
+  const base=window.T('inbox.acct.unread_open_t');
+  const b=_acUnreadBreakdown(plat,aid);
+  if(!b) return base;
+  return window.Tf('inbox.acct.bd_title',{scope:window.T('inbox.acct.bd_scope_'+_convScope)})
+    +'\n'+_acUnreadOthersText(b)+'\n'+base;
+}
 /* P0 账号真相单源（2026-08-17）：服务端 accounts_summary 全库账号名录
    [{platform,account_id,status,paired,unread,attn,conv_count,last_ts}]；
    status ∈ online/connecting/error/offline/logged_out/removed/history_only。
@@ -2351,9 +2397,16 @@ function _accountsForPlatform(p){
       map[id]=map[id]||{account_id:id,running:false,unread:0,count:0,paired:false,attn:0};
       return map[id];
     };
-    if(useSrv) Object.keys(unreadByAccount).forEach(k=>{
-      if(k.indexOf(pref)===0) seed(k).unread=Number(unreadByAccount[k])||0;
-    });
+    if(useSrv){
+      // #222：角标数＝当前列表 scope 内的未读（群/频道视图读对应桶，见 _scopedAcctUnread）
+      const keys=new Set(Object.keys(unreadByAccount));
+      if(unreadBreakdownByAccount) Object.keys(unreadBreakdownByAccount).forEach(k=>keys.add(k));
+      keys.forEach(k=>{ if(k.indexOf(pref)===0) seed(k).unread=_scopedAcctUnread(k); });
+      if(_convScope!=='private' && unreadBreakdownByAccount){
+        // platform_status.unread 铺底的是私聊口径；非私聊视图下没进四桶的号一律归零
+        Object.keys(map).forEach(id=>{ if(!keys.has(pref+id)) map[id].unread=0; });
+      }
+    }
     if(useSrvAttn) Object.keys(attnByAccount).forEach(k=>{
       if(k.indexOf(pref)===0) seed(k).attn=Number(attnByAccount[k])||0;
     });
@@ -2491,7 +2544,8 @@ function _acUnreadBadge(unread,attn,plat,aid){
   if(attn>0) return `<span class="ac-unread attn"${attrs} title="${esc(window.Tf('inbox.acct.attn_t',{n:attn}))}">${attn>99?'99+':attn}</span>`;
   if(!unread) return '';
   const n=unread>99?'99+':unread;
-  return `<span class="ac-unread"${attrs} title="${esc(window.T('inbox.acct.unread_open_t'))}">${n}</span>`;
+  // #222：悬浮明细「角标＝当前视图未读；另有 群 N / 频道 N / 归档 N」（无四桶时只留原句）
+  return `<span class="ac-unread"${attrs} title="${esc(plat?_acUnreadTitle(plat,aid):window.T('inbox.acct.unread_open_t'))}">${n}</span>`;
 }
 function _closeAcctUnreadPop(){
   const p=document.getElementById('ac-unread-pop');
@@ -2522,7 +2576,9 @@ async function _openAcctUnreadPop(plat,aid,anchor){
     if(top+220>window.innerHeight) top=Math.max(8, r.top-226);
     pop.style.left=left+'px'; pop.style.top=top+'px'; pop.style.width=w+'px';
   }catch(_){}
-  const q='/api/unified-inbox/account-unread?platform='+encodeURIComponent(plat||'')+'&account_id='+encodeURIComponent(aid||'');
+  // #222：浮层与角标同一份 WHERE——按当前列表 scope 取明细（群视图点角标看到的就是群未读）
+  const scope=_convScope||'private';
+  const q='/api/unified-inbox/account-unread?platform='+encodeURIComponent(plat||'')+'&account_id='+encodeURIComponent(aid||'')+'&scope='+encodeURIComponent(scope);
   try{
     const res=await apiFetch(q);
     const d=await res.json();
@@ -2542,7 +2598,11 @@ async function _openAcctUnreadPop(plat,aid,anchor){
       const k='ws_acup_hint_n', seen=parseInt(localStorage.getItem(k)||'0',10)||0;
       if(seen<3 && rows){ hint='<div class="acup-hint">'+esc(window.T('inbox.acct.unread_pop_hint'))+'</div>'; localStorage.setItem(k,String(seen+1)); }
     }catch(_){}
-    pop.innerHTML='<div class="acup-hd"><span>'+esc(window.T('inbox.acct.unread_pop_title'))+'</span>'+mark+'</div>'+hint+'<div class="acup-bd">'+(rows||('<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>'))+'</div>';
+    // #222：标题带当前视图名（非私聊时），下方一行「另有 群 N / 频道 N / 归档 N」
+    const ttl=window.T('inbox.acct.unread_pop_title')+(scope!=='private'?(' · '+window.T('inbox.acct.bd_scope_'+scope)):'');
+    const others=_acUnreadOthersText(_acUnreadBreakdown(plat,aid));
+    const bdl=others?('<div class="acup-bdl">'+esc(others)+'</div>'):'';
+    pop.innerHTML='<div class="acup-hd"><span>'+esc(ttl)+'</span>'+mark+'</div>'+bdl+hint+'<div class="acup-bd">'+(rows||('<div class="acup-empty">'+esc(window.T('inbox.acct.unread_empty'))+'</div>'))+'</div>';
     pop.querySelectorAll('.acup-row').forEach(function(btn){
       btn.addEventListener('click',function(){
         const cid=btn.getAttribute('data-cid')||'';
@@ -5079,7 +5139,21 @@ function _buriedStats(){
    主徽标默认剔除归档未读（与列表默认视图同口径）后，这些未读不能彻底隐身——
    这行就是 HealthWatchdog「被埋会话」告警的界面化：不轰炸、不闪烁，有则常驻、
    读完自动消失，点击直达归档视图。归档/已移除视图内不显示（已经在看了）。 */
+/* #222：群/频道视图说明条——只在 AutoDraft 明确跳过群（服务端 ai_skip_groups=true）时出现，
+   不猜；搜索 / 历史视角不出（那两个语义是「查」）。 */
+function _renderScopeNote(){
+  const el=document.getElementById('scope-note');
+  if(!el) return;
+  try{
+    const show=(_convScope==='group'||_convScope==='channel') && _aiSkipGroups===true && !_histView && !searchQ;
+    if(!show){ el.style.display='none'; el.innerHTML=''; return; }
+    el.innerHTML=`<span class="bh-ic">${uiIcon('bot',12)}</span><span class="bh-txt">${esc(window.T('inbox.scope.ai_skip_note'))}</span>`;
+    el.title=window.T('inbox.scope.ai_skip_note_t');
+    el.style.display='';
+  }catch(_){ el.style.display='none'; }
+}
 function _renderBuriedHint(st){
+  _renderScopeNote();
   const el=document.getElementById('buried-hint');
   if(!el) return;
   try{
@@ -5099,6 +5173,9 @@ function _renderBuriedHint(st){
     el.innerHTML=`<span class="bh-ic">${uiIcon('archive',12)}</span>`
       +`<span class="bh-txt">${esc(txt)}</span>`
       +(convs?`<button type="button" class="bh-unarch" data-bh-unarch="1" title="${esc(window.T('inbox.buried.unarch_t'))}">${esc(window.Tf('inbox.buried.unarch',{n:convs}))}</button>`:'')
+      // #222 存量清理入口：装载清扫只清 >72h 的人工归档存量，剩下的由坐席在这里定夺——
+      // 「取消归档」是请回来继续跟，「全部标已读」是确认不再跟进（与打开会话同一水位机制）
+      +`<button type="button" class="bh-unarch bh-read" data-bh-read="1" title="${esc(window.T('inbox.buried.read_t'))}">${esc(window.T('inbox.buried.read_all'))}</button>`
       +`<span class="bh-go">${esc(window.T('inbox.buried.view_each'))}</span>`;
     el.title=window.Tf('inbox.filter.buried_t',{n:st.convs});
     el.style.display='';
@@ -5107,7 +5184,51 @@ function _renderBuriedHint(st){
       ev.preventDefault(); ev.stopPropagation();   // 不触发外层「查看」跳转
       _unarchiveBuried(ub);
     });
+    const rb=el.querySelector('[data-bh-read]');
+    if(rb) rb.addEventListener('click',function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      _markBuriedRead(rb);
+    });
   }catch(_){ el.style.display='none'; }
+}
+/* #222 被埋未读一键标已读（当前平台/账号视角）：POST /buried-mark-read 与横幅、主徽标同一份
+   WHERE（私聊 + 有效未读 + 归档），推已读水位永不回弹。成功后本地把该视角的归档未读聚合
+   清零（服务端下一拍校正）并 loadChats 对账。busy 互斥防连点。 */
+var _markBuriedBusy=false;
+async function _markBuriedRead(btn){
+  if(_markBuriedBusy) return;
+  _markBuriedBusy=true;
+  if(btn){ btn.disabled=true; btn.classList.add('busy'); }
+  try{ _uiBeacon('iflt_buried_read'); }catch(_){}
+  try{
+    const body={platform:platFilter==='all'?'':platFilter, account_id:accountFilter==='all'?'':accountFilter};
+    const r=await apiFetch('/api/unified-inbox/buried-mark-read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const out=r&&r.ok?await r.json():null;
+    if(!out||!out.ok) throw new Error('buried_mark_read_failed');
+    const n=Number(out.cleared)||0;
+    if(archivedUnreadByAccount){
+      Object.keys(archivedUnreadByAccount).forEach(k=>{
+        const i=k.indexOf(':'); const p=i>=0?k.slice(0,i):k, a=i>=0?k.slice(i+1):'default';
+        if(body.platform && p!==body.platform) return;
+        if(body.account_id && a!==body.account_id) return;
+        delete archivedUnreadByAccount[k];
+      });
+    }
+    (allChats||[]).forEach(c=>{
+      if(!c||!c.archived||!((c.unread||0)>0)||isGroupConv(c)) return;
+      if(body.platform && (c.platform||'web')!==body.platform) return;
+      if(body.account_id && (c.account_id||'default')!==body.account_id) return;
+      c.unread=0;
+    });
+    applyFilters();
+    _toast(n?window.Tf('inbox.buried.read_ok',{n:n}):window.T('inbox.buried.unarch_none'));
+    try{ loadChats(); }catch(_){}
+  }catch(_){
+    _toast(window.T('inbox.buried.read_fail'),'#dc2626');
+  }finally{
+    _markBuriedBusy=false;
+    if(btn){ btn.disabled=false; btn.classList.remove('busy'); }
+  }
 }
 /* #170：被埋会话「最久多少小时」——DB 级权威端点节流探测（5 分钟一次；0 条时不探），
    到手后重绘一次横幅。失败静默（少一个数字，不少入口）。 */
@@ -7048,6 +7169,11 @@ async function _loadChatsBody(){
     if(d.attn_by_account && typeof d.attn_by_account==='object'){
       attnByAccount=d.attn_by_account;   // P8：近窗 attn（旧后端无此字段 → 保持窗口口径）
     }
+    // #222：四桶明细（空 dict 也是有效值＝各桶全 0；键缺失＝旧后端/聚合失败 → 保持上一轮）
+    if(d.unread_breakdown_by_account && typeof d.unread_breakdown_by_account==='object'){
+      unreadBreakdownByAccount=d.unread_breakdown_by_account;
+    }
+    if(typeof d.ai_skip_groups==='boolean') _aiSkipGroups=d.ai_skip_groups;
     if(Array.isArray(d.accounts_summary) && d.accounts_summary.length){
       acctSummary=d.accounts_summary;    // P0 账号真相单源（旧后端无此字段 → 客户端推导）
     }

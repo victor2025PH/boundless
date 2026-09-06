@@ -3137,6 +3137,31 @@ class HealthWatchdog:
                 logger.info("启动卫生扫描：已删会话残留的孤儿未读归零 %d 个会话", n)
         except Exception:
             logger.debug("启动卫生扫描（孤儿未读）失败（已忽略）", exc_info=True)
+        # #222 修法 3：存量被埋一次性清理——「人工归档 + 无入站 > 72h」的被埋未读
+        # 标已读（坐席明示收尾、客户此后再没开口，横幅挂着只剩噪音；skuio 机
+        # 7→8→9 个 / 100h 就是这批）。<72h 的仍留给横幅；自动归档的不动。
+        # 配置 health_watchdog.buried_conv_remind.sweep_hours（默认 72；0=关）。
+        try:
+            hours = self._buried_sweep_hours()
+            if hours > 0:
+                from src.inbox.unread_aggregate import sweep_buried_unread
+                n = sweep_buried_unread(store, min_idle_sec=hours * 3600.0,
+                                        manual_only=True, reason="startup_sweep")
+                if n:
+                    logger.info("启动卫生扫描：[buried] startup_sweep cleared %d"
+                                "（人工归档且无入站 > %.0fh 的被埋未读已标已读）", n, hours)
+        except Exception:
+            logger.debug("启动卫生扫描（被埋存量）失败（已忽略）", exc_info=True)
+
+    def _buried_sweep_hours(self) -> float:
+        """启动清扫的「无入站」门槛小时数（``buried_conv_remind.sweep_hours``，默认 72）。"""
+        try:
+            cfg = getattr(self._config_manager, "config", None) or {}
+            br = (((cfg.get("health_watchdog") or {}).get("buried_conv_remind"))
+                  or {}) if isinstance(cfg, dict) else {}
+            return max(0.0, float(br.get("sweep_hours", 72) or 0))
+        except Exception:
+            return 72.0
 
     def _ui_surface_enabled(self) -> bool:
         """surface_in_ui 生效值：构造参数为底，配置 ``health_watchdog.surface_in_ui`` 可覆写。"""
@@ -3226,11 +3251,22 @@ class HealthWatchdog:
         min_count = max(1, int(br.get("min_count", 1) or 1))
         min_unread = max(1, int(br.get("min_unread", 1) or 1))
         ts = float(now if now is not None else time.time())
+        # #222 口径统一：优先走 unread_aggregate.buried_conversations（私聊 + 有效
+        # 未读 + 可见消息，与工作台横幅 / 主徽标同一份 WHERE）——旧口径 raw
+        # unread>=1 把 skip_groups 只进不出的群 / 频道也算成「客户在等」，被埋 9 个
+        # 与横幅 N 条各说各话。None（旧 store / 查询没跑成）才回落 list_buried_archived。
+        rows = None
         try:
-            rows = store.list_buried_archived(min_unread=min_unread, limit=100) or []
+            from src.inbox.unread_aggregate import buried_conversations
+            rows = buried_conversations(store, min_unread=min_unread, limit=100)
         except Exception:
-            logger.debug("被埋会话巡检取数失败（忽略）", exc_info=True)
-            return
+            rows = None
+        if rows is None:
+            try:
+                rows = store.list_buried_archived(min_unread=min_unread, limit=100) or []
+            except Exception:
+                logger.debug("被埋会话巡检取数失败（忽略）", exc_info=True)
+                return
 
         if len(rows) < min_count:
             # #170：归零即撤通知中心条目（不论 webhook 那边有没有报过）

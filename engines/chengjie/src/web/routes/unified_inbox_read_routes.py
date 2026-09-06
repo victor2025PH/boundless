@@ -450,6 +450,20 @@ def _badge_include_archived(config_manager) -> bool:
         return False
 
 
+def _ai_skip_groups(config_manager) -> bool:
+    """``inbox.auto_draft.skip_group_chats``（#222：群/频道是否被 AutoDraft 跳过）。
+
+    前端群/频道视图据此显示「AI 不处理群消息，未读不计入账号角标」说明；读失败
+    按 False（宁可不说明，不说错）。与 autodraft_helpers 读同一键。
+    """
+    try:
+        cfg = (getattr(config_manager, "config", None) or {})
+        return bool((((cfg.get("inbox") or {}).get("auto_draft") or {})
+                     .get("skip_group_chats", False)))
+    except Exception:
+        return False
+
+
 def _archived_unread_map(store: Any) -> Dict[str, Dict[str, int]]:
     """归档中的有效未读聚合 → ``{"platform:account_id": {convs, unread}}``。
 
@@ -960,11 +974,24 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
                 store, crit_sec=_sla_cfg(request)["crit"])
         except Exception:
             logger.debug("[chats] attn 聚合失败", exc_info=True)
+        # #222 口径统一：角标旁悬浮明细四桶（private / group / channel / archived）
+        # ——主徽标仍只数私聊，但「群组 11 / 频道 2 / 归档 16」里各藏了多少未读要
+        # 让坐席一眼看到；群视图角标直接读 group 桶。None＝聚合没跑成 → 不带字段。
+        unread_breakdown_by_account: Optional[Dict[str, Dict[str, int]]] = None
+        try:
+            from src.inbox.unread_aggregate import unread_breakdown
+            unread_breakdown_by_account = unread_breakdown(store)
+        except Exception:
+            logger.debug("[chats] 未读四桶明细失败", exc_info=True)
         # 已退出/已移除：聊天页完全不展示 → 平台徽章 + 账号级未读/attn 一并剔除
         # （历史未读仍在 store，同号重登后自然回显）。
         try:
             _dead = {f"{p}:{a}" for (p, a) in _account_status_map(request)}
             if _dead:
+                if unread_breakdown_by_account:
+                    unread_breakdown_by_account = {
+                        k: v for k, v in unread_breakdown_by_account.items()
+                        if k not in _dead}
                 for _k in list(unread_by_account):
                     if _k not in _dead:
                         continue
@@ -1017,6 +1044,13 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             # 消费；旧前端不识此键零影响，空 dict=无归档未读/旧 store。
             "archived_unread_by_account": archived_unread_by_account,
             "attn_by_account": attn_by_account,
+            # #222：四桶明细（键 plat:aid → {private, group, channel, archived}）；
+            # 聚合失败时不带字段，前端保持上一轮 / 无明细。
+            **({"unread_breakdown_by_account": unread_breakdown_by_account}
+               if unread_breakdown_by_account is not None else {}),
+            # #222：AutoDraft 是否跳过群/频道（inbox.auto_draft.skip_group_chats）
+            # ——前端据此在群/频道视图给「AI 不处理群消息」说明，不猜。
+            "ai_skip_groups": _ai_skip_groups(config_manager),
             # P0 账号名录（全库口径；空列表=聚合失败，前端回落客户端推导）
             "accounts_summary": accounts_summary,
             # #12（2026-08-30）：全局真发暂停旗标（非空字符串=原因）。行级「AI」
@@ -1144,7 +1178,7 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
     @app.get("/api/unified-inbox/account-unread")
     async def api_unified_inbox_account_unread(
         request: Request, platform: str, account_id: str = "",
-        limit: int = 200,
+        limit: int = 200, scope: str = "private",
     ):
         """账号栏那个数字**具体是哪几条**（#159 幽灵未读，2026-09-03 G4BYWH）。
 
@@ -1155,7 +1189,8 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         （POST mark-account-read，同一水位机制）。
 
         query: ``platform``（必填）、``account_id``（空=该平台全部账号）、
-        ``limit``（缺省 200，上限 500）。
+        ``limit``（缺省 200，上限 500）、``scope``（#222：private | group |
+        channel，与列表视图同名；缺省 private＝主徽标口径）。
         """
         api_auth(request)
         plat = str(platform or "").strip().lower()
@@ -1166,21 +1201,54 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         store = _inbox_store(request)
         if store is None:
             raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        from src.inbox.unread_aggregate import normalize_scope
+        sc = normalize_scope(scope)
         try:
             from src.inbox.unread_aggregate import unread_conversations
             convs = unread_conversations(
-                store, plat, acct, limit=limit,
+                store, plat, acct, limit=limit, scope=sc,
                 include_archived=_badge_include_archived(config_manager))
         except Exception:
             logger.debug("[inbox] account-unread 明细失败 %s:%s", plat, acct,
                          exc_info=True)
             convs = []
         return {
-            "ok": True, "platform": plat, "account_id": acct,
+            "ok": True, "platform": plat, "account_id": acct, "scope": sc,
             "conversations": convs,
             "unread_total": sum(int(c.get("unread") or 0) for c in convs),
             "count": len(convs),
         }
+
+    @app.post("/api/unified-inbox/buried-mark-read")
+    async def api_unified_inbox_buried_mark_read(request: Request):
+        """被埋会话（归档着却有未读）一键标已读（#222 修法 3 的手动半边）。
+
+        看门狗装载时只清「人工归档 + 无入站 > 72h」的存量；<72h 的留给横幅由
+        坐席定夺——「取消归档」是把它们请回来，「标已读」是确认不再跟进。两者
+        都在横幅上，缺后者时坐席只能逐条点开 N 个归档会话。口径与横幅 / 主徽标
+        同一份 WHERE（``unread_aggregate.buried_conversations``，私聊 + 有效未读），
+        与逐会话 mark-read 同一水位机制，永不回弹。
+        body: ``{platform?, account_id?}``（空＝全部）。返回 ``{ok, cleared}``。
+        """
+        api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        plat = str((body or {}).get("platform") or "").strip().lower()
+        acct = str((body or {}).get("account_id") or "").strip()
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.svc.inbox_not_ready"))
+        try:
+            from src.inbox.unread_aggregate import sweep_buried_unread
+            n = sweep_buried_unread(store, platform=plat, account_id=acct,
+                                    reason="banner_mark_read")
+        except Exception:
+            logger.debug("[inbox] buried-mark-read 失败 %s:%s", plat, acct,
+                         exc_info=True)
+            n = 0
+        return {"ok": True, "cleared": int(n), "platform": plat, "account_id": acct}
 
     @app.post("/api/unified-inbox/mark-account-read")
     async def api_unified_inbox_mark_account_read(request: Request):

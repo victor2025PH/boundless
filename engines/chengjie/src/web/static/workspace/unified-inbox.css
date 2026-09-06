@@ -3601,6 +3601,17 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .buried-hint .bh-unarch:hover{background:#b45309;border-color:#b45309;}
 .buried-hint .bh-unarch:disabled,.buried-hint .bh-unarch.busy{opacity:.55;cursor:progress;}
 .buried-hint .bh-unarch+.bh-go{margin-left:0;}
+/* #222（M-4 A）横幅第二个动作「全部标已读」：描边款与实心「取消归档」分层（前者是
+   「确认不再跟进」，后者是「请回来继续跟」），两枚并排时只有第一枚吃 margin-left:auto。 */
+.buried-hint .bh-unarch+.bh-unarch{margin-left:0;}
+.buried-hint .bh-read{background:transparent;color:#b45309;}
+.buried-hint .bh-read:hover{background:color-mix(in srgb,#d97706 15%,transparent);color:#92400e;border-color:#b45309;}
+/* #222 群/频道视图说明条：复用被埋横幅骨架，但它是说明不是提醒——灰基调、不可点、悬停不亮。 */
+.buried-hint.scope-note{cursor:default;color:var(--text-muted,#6b7280);border-color:var(--border);background:var(--bg-soft,transparent);user-select:text;}
+.buried-hint.scope-note:hover{border-color:var(--border);background:var(--bg-soft,transparent);}
+.buried-hint.scope-note .bh-txt{font-weight:500;white-space:normal;}
+/* #222 角标浮层「另有 群 N / 频道 N / 归档 N」明细行 */
+.ac-unread-pop .acup-bdl{margin:0 8px 6px;font-size:11px;line-height:1.4;color:var(--text-muted,#6b7280);}
 
 /* 当前会话钉住（实施49 P0-1）：被补回列表的那一行——它不属于当前筛选口径，
    用虚线左沿 + 轻微降饱和标出「特意为你留着的」，同时保证选中态高亮仍压得住

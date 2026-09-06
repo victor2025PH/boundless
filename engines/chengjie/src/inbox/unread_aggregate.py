@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,35 @@ _PRIVATE_ONLY = (
     "LOWER(c.chat_key) LIKE '%:group:%' "
     "OR LOWER(c.chat_key) LIKE '%:room:%'))"
 )
+
+#: 群 / 频道桶（#222 第三轮，2026-09-06 FF5PGS）：skuio 机 steven 号角标 5、私聊
+#: 列表零未读，同号群组 11 / 频道 2 / 归档 16——坐席看到一个数字却不知道它数的
+#: 是哪一类。三桶与 ``_PRIVATE_ONLY`` 互补：legacy 群启发式（chat_type 仍顶着
+#: 'private'/'' 的 Telegram 负号 / LINE :group: :room:）归进 group 桶，与前端
+#: ``store_row_to_chat → infer_chat_type`` 对同一行的判定一致（否则「角标算群、
+#: 列表算私聊」又是两套口径）。AutoDraft ``skip_group_chats=True`` 时群/频道只进
+#: 不出天然堆积，所以它们**永不进主徽标**，只在悬浮明细 / 群视图角标里单列。
+_GROUP_ONLY = (
+    "(c.chat_type = 'group' OR (c.chat_type IN ('private', '') AND ("
+    "(c.platform = 'telegram' AND c.chat_key GLOB '-[0-9]*') "
+    "OR (c.platform = 'line' AND (LOWER(c.chat_key) LIKE '%:group:%' "
+    "OR LOWER(c.chat_key) LIKE '%:room:%')))))"
+)
+_CHANNEL_ONLY = "c.chat_type = 'channel'"
+
+#: 视图 scope → WHERE。键与前端 ``_convScope``（private | group | channel）同名：
+#: 角标数字 = 当前列表 scope 内的未读，浮层 ``/account-unread?scope=`` 同一份 WHERE。
+SCOPE_WHERE: Dict[str, str] = {
+    "private": _PRIVATE_ONLY,
+    "group": _GROUP_ONLY,
+    "channel": _CHANNEL_ONLY,
+}
+
+
+def normalize_scope(scope: Any) -> str:
+    """未知 / 空 scope 一律回落 private（主徽标口径），绝不抛。"""
+    s = str(scope or "").strip().lower()
+    return s if s in SCOPE_WHERE else "private"
 
 #: 有效未读的判据（unread>0 且入站闸门 ts 晚于已读水位，闸门=last_in_ts，
 #: 0 回落 last_ts）。与 store.effective_unread / normalizer._effective_unread_from_row
@@ -107,14 +137,15 @@ def _rows(store: Any, sql: str, params: List[Any]) -> List[Any]:
 
 
 def unread_maps(
-    store: Any, *, include_archived: bool = False,
+    store: Any, *, include_archived: bool = False, scope: str = "private",
 ) -> Optional[Tuple[Dict[str, int], Dict[str, int]]]:
     """按清单口径聚合有效未读 → ``(by_account, by_platform)``；失败返回 None。
 
     ``by_account`` 键＝``platform:account_id``；``by_platform`` 为各账号合计。
     只返回 >0 的桶（零未读账号省略，调用方按 0 处理）。
     ``include_archived=True``＝``inbox.badge.include_archived`` 显式回退旧口径
-    （归档未读也计入主徽标）。
+    （归档未读也计入主徽标）。``scope``（#222）＝private | group | channel，
+    与前端列表 scope 同名；缺省 private＝主徽标口径不变。
 
     **两个空 dict 与 None 是两件事**：前者＝这台机器此刻确实一条未读都没有
     （#159 的正解形态：旧口径说 7、清单口径说 0，就该显示 0），后者＝聚合本身
@@ -130,7 +161,7 @@ def unread_maps(
         f"COALESCE(SUM({_EFFECTIVE_UNREAD}), 0) AS n "
         "FROM conversations c "
         "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-        f"WHERE {_PRIVATE_ONLY} AND {_LISTABLE}"
+        f"WHERE {SCOPE_WHERE[normalize_scope(scope)]} AND {_LISTABLE}"
     )
     if not include_archived:
         sql += " AND COALESCE(m.archived, 0) = 0"
@@ -153,14 +184,15 @@ def unread_maps(
 
 def unread_conversations(
     store: Any, platform: str, account_id: str, *,
-    include_archived: bool = False, limit: int = 200,
+    include_archived: bool = False, limit: int = 200, scope: str = "private",
 ) -> List[Dict[str, Any]]:
     """该账号「算进徽标」的那 N 条会话（数字可点直达的数据源）。
 
     #159 的另一半：坐席看到 7 却找不到那 7 条，只能怀疑系统在骗人。徽标既然
     是个数字，就该能点开看见它数的是谁——本函数与 :func:`unread_maps` 用**同一
     份 WHERE**（差别只在 SUM vs 明细），所以「点进去看到的条数」与徽标恒等；
-    对不上就是真 bug，而不是两套口径各说各话。
+    对不上就是真 bug，而不是两套口径各说各话。``scope`` 与 :func:`unread_maps`
+    同义（#222：群视图里点角标看到的就是群未读）。
 
     返回按未读数降序、其次最近活跃：``[{conversation_id, platform, account_id,
     chat_key, display_name, unread, last_ts, last_text}]``。异常 → 空列表。
@@ -179,7 +211,8 @@ def unread_conversations(
         f"{_EFFECTIVE_UNREAD} AS eff "
         "FROM conversations c "
         "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
-        f"WHERE {_PRIVATE_ONLY} AND {_LISTABLE} AND c.platform = ?"
+        f"WHERE {SCOPE_WHERE[normalize_scope(scope)]} AND {_LISTABLE} "
+        "AND c.platform = ?"
     )
     params: List[Any] = [p]
     if a:
@@ -205,6 +238,158 @@ def unread_conversations(
         "last_ts": float(r["last_ts"] or 0.0),
         "last_text": str(r["last_text"] or ""),
     } for r in rows]
+
+
+#: 明细四桶：private / group / channel 为**未归档**有效未读；archived 为私聊口径的
+#: 归档未读（与 ``sum_archived_unread_by_account`` / 被埋横幅同一全集）。
+BREAKDOWN_KEYS = ("private", "group", "channel", "archived")
+
+
+def unread_breakdown(store: Any) -> Optional[Dict[str, Dict[str, int]]]:
+    """按账号拆「角标旁悬浮明细」四桶 → ``{"plat:aid": {private, group, channel,
+    archived}}``；失败返回 None（调用方不带该字段，前端回落无明细）。
+
+    #222 口径统一的另一半：主徽标只数私聊，但坐席看到「群组 11 / 频道 2 /
+    已归档 16」却不知道哪里还有未读——一次 GROUP BY 把四桶都算出来，前端悬浮
+    「含群 N / 频道 N / 归档 N」，群视图角标直接读 group 桶。全部走 ``_LISTABLE``
+    （墓碑 / 零可见消息剔除），与主徽标同一闸门。只返回至少一桶 >0 的账号。
+    """
+    if store is None:
+        return None
+    arch0 = "COALESCE(m.archived, 0) = 0"
+
+    def _bucket(where: str, archived: str, alias: str) -> str:
+        return (f"COALESCE(SUM(CASE WHEN {where} AND {archived} "
+                f"THEN {_EFFECTIVE_UNREAD} ELSE 0 END), 0) AS {alias}")
+
+    sql = (
+        "SELECT c.platform AS p, c.account_id AS a, "
+        + ", ".join([
+            _bucket(_PRIVATE_ONLY, arch0, "n_private"),
+            _bucket(_GROUP_ONLY, arch0, "n_group"),
+            _bucket(_CHANNEL_ONLY, arch0, "n_channel"),
+            _bucket(_PRIVATE_ONLY, "COALESCE(m.archived, 0) = 1", "n_archived"),
+        ])
+        + " FROM conversations c "
+        "LEFT JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
+        f"WHERE {_LISTABLE} GROUP BY c.platform, c.account_id "
+        "HAVING n_private > 0 OR n_group > 0 OR n_channel > 0 OR n_archived > 0"
+    )
+    try:
+        rows = _rows(store, sql, [])
+    except Exception:
+        logger.debug("[unread_aggregate] 未读四桶明细聚合失败", exc_info=True)
+        return None
+    out: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        key = f"{str(r['p'] or 'web')}:{str(r['a'] or 'default')}"
+        out[key] = {
+            "private": int(r["n_private"] or 0),
+            "group": int(r["n_group"] or 0),
+            "channel": int(r["n_channel"] or 0),
+            "archived": int(r["n_archived"] or 0),
+        }
+    return out
+
+
+def buried_conversations(
+    store: Any, *, min_unread: int = 1, limit: int = 100,
+    platform: str = "", account_id: str = "",
+) -> Optional[List[Dict[str, Any]]]:
+    """「被埋会话」（归档着却有有效未读）清单——**与横幅 / 主徽标同一口径**。
+
+    #222 第三轮：看门狗此前走 ``store.list_buried_archived``（全表 raw
+    ``unread>=1``，含群 / 频道 / 墓碑 / 零可见消息行），而工作台横幅走
+    ``sum_archived_unread_by_account``（私聊 + 有效未读）——「被埋 9 个」与横幅
+    「N 条」各说各话。本函数把被埋清单收进同一份 WHERE：私聊 + ``_LISTABLE`` +
+    archived=1 + 有效未读；群 / 频道 skip_groups 只进不出的堆积不再被当成「客户
+    在等」。行形状兼容 ``list_buried_archived``（多带 chat_type / last_in_ts）。
+    返回 None＝查询没跑成（调用方回落旧口径）；[]＝确实没有被埋。
+    """
+    if store is None:
+        return None
+    try:
+        n = max(1, int(min_unread))
+    except (TypeError, ValueError):
+        n = 1
+    try:
+        cap = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        cap = 100
+    sql = (
+        "SELECT c.conversation_id, c.platform, c.account_id, c.chat_key, "
+        "c.display_name, c.chat_type, c.last_ts, c.last_in_ts, c.last_text, "
+        f"{_EFFECTIVE_UNREAD} AS eff, m.archived_at, m.auto_archived_at "
+        "FROM conversations c "
+        "JOIN conversation_meta m ON m.conversation_id = c.conversation_id "
+        f"WHERE {_PRIVATE_ONLY} AND {_LISTABLE} AND COALESCE(m.archived, 0) = 1"
+    )
+    params: List[Any] = []
+    p = str(platform or "").strip().lower()
+    a = str(account_id or "").strip()
+    if p:
+        sql += " AND c.platform = ?"
+        params.append(p)
+    if a:
+        sql += " AND c.account_id = ?"
+        params.append(a)
+    sql += " AND eff >= ? ORDER BY eff DESC, c.last_ts DESC LIMIT ?"
+    params += [n, cap]
+    try:
+        rows = _rows(store, sql, params)
+    except Exception:
+        logger.debug("[unread_aggregate] 被埋会话清单失败", exc_info=True)
+        return None
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["unread"] = int(d.pop("eff", 0) or 0)
+        out.append(d)
+    return out
+
+
+def sweep_buried_unread(
+    store: Any, *, min_idle_sec: float = 0.0, manual_only: bool = False,
+    platform: str = "", account_id: str = "", now: Optional[float] = None,
+    limit: int = 500, reason: str = "startup_sweep",
+) -> int:
+    """把被埋未读标已读（推已读水位，与打开会话同一机制，永不回弹）。
+
+    两个调用方（#222 修法 3）：
+    - 看门狗启动一次：``min_idle_sec=72h, manual_only=True``——「人工归档 + 无入站
+      > 72h」＝坐席明示收尾、客户此后再没开口的存量，横幅挂着只剩噪音；<72h 的
+      仍留给 L-3 B 横幅（客户可能刚开口）。自动归档的不动：那是策略把活跃会话
+      判死，该调 ``idle_hours`` 而不是替它清账。
+    - 横幅「全部标已读」：``min_idle_sec=0``，按当前平台 / 账号视角清。
+    「无入站」按 ``last_in_ts``（0 回落 ``last_ts``）算。返回清掉的会话数；
+    任何异常 → 0（卫生路径绝不抛）。日志 ``[buried] <reason> cleared N``。
+    """
+    if store is None or not hasattr(store, "mark_conversation_read"):
+        return 0
+    rows = buried_conversations(store, min_unread=1, limit=limit,
+                                platform=platform, account_id=account_id)
+    if not rows:
+        return 0
+    ts = float(now if now is not None else time.time())
+    idle = max(0.0, float(min_idle_sec or 0))
+    cleared = 0
+    for r in rows:
+        try:
+            if manual_only and float(r.get("auto_archived_at") or 0) > 0:
+                continue
+            gate = float(r.get("last_in_ts") or 0) or float(r.get("last_ts") or 0)
+            if idle > 0 and (gate <= 0 or ts - gate < idle):
+                continue
+            if store.mark_conversation_read(str(r.get("conversation_id") or "")):
+                cleared += 1
+        except Exception:
+            logger.debug("[buried] 标已读失败 %s（忽略）", r.get("conversation_id"),
+                         exc_info=True)
+    if cleared:
+        logger.info("[buried] %s cleared %d（人工归档=%s, 无入站>%.0fh, scope=%s:%s）",
+                    reason, cleared, manual_only, idle / 3600.0,
+                    platform or "*", account_id or "*")
+    return cleared
 
 
 def phantom_unread_report(store: Any) -> Dict[str, Any]:
@@ -270,5 +455,6 @@ def purge_orphan_unread(store: Any) -> int:
         return 0
 
 
-__all__ = ["phantom_unread_report", "purge_orphan_unread", "unread_conversations",
-           "unread_maps"]
+__all__ = ["BREAKDOWN_KEYS", "SCOPE_WHERE", "buried_conversations", "normalize_scope",
+           "phantom_unread_report", "purge_orphan_unread", "sweep_buried_unread",
+           "unread_breakdown", "unread_conversations", "unread_maps"]

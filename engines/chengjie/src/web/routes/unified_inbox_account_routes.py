@@ -5881,10 +5881,19 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         store = getattr(app.state, "inbox_store", None)
         if store is None or not hasattr(store, "list_buried_archived"):
             return {"supported": False, "count": 0, "rows": []}
+        # #222 口径统一：与看门狗 / 工作台横幅同走 unread_aggregate.buried_conversations
+        # （私聊 + 有效未读 + 可见消息）；None 才回落 store 旧口径。
+        rows = None
         try:
-            rows = store.list_buried_archived(min_unread=1, limit=50) or []
-        except Exception as exc:
-            return {"supported": True, "error": str(exc), "count": 0, "rows": []}
+            from src.inbox.unread_aggregate import buried_conversations
+            rows = buried_conversations(store, min_unread=1, limit=50)
+        except Exception:
+            rows = None
+        if rows is None:
+            try:
+                rows = store.list_buried_archived(min_unread=1, limit=50) or []
+            except Exception as exc:
+                return {"supported": True, "error": str(exc), "count": 0, "rows": []}
         out = []
         total_unread = 0
         for r in rows:

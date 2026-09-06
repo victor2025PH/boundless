@@ -1880,6 +1880,14 @@ _ADDITIONS_2026_09_05_CARE_VERBATIM = """
 """
 _BASELINE += _ADDITIONS_2026_09_05_CARE_VERBATIM
 
+# 2026-09-06 M-4 A #222 幽灵未读第三轮：被埋（归档着却有未读）会话一键标已读——
+# 横幅第二动作，与横幅 / 主徽标同一份 WHERE（unread_aggregate.buried_conversations），
+# 装载清扫只清「人工归档 + 无入站 > 72h」的存量，<72h 的由坐席在此定夺。
+_ADDITIONS_2026_09_06_BURIED_MARK_READ = """
+/api/unified-inbox/buried-mark-read	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_06_BURIED_MARK_READ
+
 
 def _parse_baseline():
     expected = set()
