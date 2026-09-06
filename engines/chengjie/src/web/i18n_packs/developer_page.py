@@ -268,6 +268,9 @@ ZH = {
     "dv_devmode_sub": "用户版（client）会隐藏研发页（帮助 / 回复策略 / 歌房 / 声音评测 / 实时日志 / 开发者工具 / 报障工单）和代理商面（白标 / 演示数据 / 授权）。打开后这些项带「研发 / 代理商」角标回到侧栏与页面；只对当前登录会话生效，退出登录自动关闭。",
     "dv_devmode_cb": "在本机显示被用户版隐藏的项",
     "dv_devmode_na": "当前不是用户版形态，所有项本就可见，无需开启。",
+    # ── Session 密钥状态（L-6 D 2026-09-06：桌面首启自动生成随机 secret_key）──
+    "dv_secret_set": "已自动生成，留空保留",
+    "dv_secret_default": "仍是出厂默认值（桌面版首启会自动生成）",
 }
 
 EN = {
@@ -537,4 +540,7 @@ EN = {
     "dv_devmode_sub": "The client edition hides developer pages (Help / Reply strategies / Singing room / Voice eval / Live logs / Developer tools / Bug tickets) and partner surfaces (white-label / demo data / license). Turning this on brings them back with a \"Dev / Partner\" tag in the sidebar and on pages; it applies to this login session only and switches off automatically at logout.",
     "dv_devmode_cb": "Show client-hidden items on this machine",
     "dv_devmode_na": "This is not the client edition — everything is already visible, nothing to enable.",
+    # ── Session secret state (L-6 D 2026-09-06: desktop first boot auto-generates a random secret_key) ──
+    "dv_secret_set": "Auto-generated; leave empty to keep",
+    "dv_secret_default": "Still the factory default (desktop edition generates one on first boot)",
 }

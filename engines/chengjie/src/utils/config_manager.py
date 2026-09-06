@@ -431,6 +431,10 @@ class ConfigManager:
             # 无需改随包 example（server 端口/令牌保持 canonical）。开发/server 态无 env→零影响。
             self._apply_env_overrides()
 
+            # L-6 D（1.0.75）：桌面首启随机 web_admin.secret_key（同样必须在 _validate_config
+            # 之前；桌面首启凭据为空时下方会提前 return）。
+            self._ensure_web_secret_key()
+
             # 验证配置
             if not self._validate_config():
                 return False
@@ -448,6 +452,56 @@ class ConfigManager:
             return False
         except Exception as e:
             self.logger.error(f"加载配置文件失败: {e}")
+            return False
+
+    #: 出厂/example 的 session 密钥占位值——公开常量，签名 session 可被伪造。
+    DEFAULT_WEB_SECRET = "change-me-in-production"
+
+    @classmethod
+    def web_secret_is_default(cls, secret: Any) -> bool:
+        """``web_admin.secret_key`` 是否仍是默认/占位（空、出厂常量、YOUR_*/CHANGE_ME 类占位）。"""
+        s = str(secret or "").strip()
+        if not s or s == cls.DEFAULT_WEB_SECRET:
+            return True
+        up = s.upper()
+        return any(m in up for m in ("CHANGE_ME", "CHANGE-ME", "YOUR_", "PLACEHOLDER"))
+
+    def _ensure_web_secret_key(self) -> bool:
+        """桌面首启：``web_admin.secret_key`` 仍为默认 → 生成随机密钥写入 config.local.yaml
+        （用户不可见，与 auth_token 的自动轮换同待遇），内存即时生效。返回本次是否生成。
+
+        背景（L-6 D，2026-09-06）：两台内测机每次 boot 都有
+        ``[SECURITY] 检测到默认 secret_key 且绑定非本地地址 0.0.0.0 → 改绑 127.0.0.1``——
+        桌面壳按 #57 的决策把后端放到 0.0.0.0 供手机扫码配对，bootstrap 的 fail-safe 又因
+        默认 secret 把它扳回回环，「局域网入口未就绪」由此而来。桌面态没有人会去手填
+        secret_key，自动生成是唯一合理默认；服务器部署（无 AITR_DESKTOP_MODE）保持原
+        fail-safe 语义，手写默认值仍会被改绑并告警。幂等：已是随机值即 no-op；写盘失败
+        本进程仍用内存随机值（不再改绑；重启后再补写）。永不抛。
+        """
+        try:
+            from src.utils.desktop_mode import is_desktop_client
+            if not is_desktop_client(self.config):
+                return False
+            web = self.config.get("web_admin")
+            if not isinstance(web, dict):
+                web = {}
+                self.config["web_admin"] = web
+            if not self.web_secret_is_default(web.get("secret_key")):
+                return False
+            import secrets as _secrets
+            new_secret = _secrets.token_urlsafe(48)      # 64 字符，≥ 32 字节熵
+            web["secret_key"] = new_secret
+            ok = self.save_overlay_patch({"web_admin": {"secret_key": new_secret}})
+            # save_overlay_patch 成功时已把 overlay 合并回内存；失败则保留上面的内存值
+            if str(web.get("secret_key") or "") != new_secret:
+                web["secret_key"] = new_secret
+            self.logger.info(
+                "桌面首启：web_admin.secret_key 为默认值，已自动生成随机密钥%s（用户无需配置；"
+                "Web 后台不再因默认密钥改绑 127.0.0.1）",
+                "并写入 config.local.yaml" if ok else "（写入 config.local.yaml 失败，仅本次进程生效）")
+            return True
+        except Exception as exc:
+            self.logger.warning("自动生成 web_admin.secret_key 失败（忽略）: %s", exc)
             return False
 
     @staticmethod

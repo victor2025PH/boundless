@@ -55,6 +55,23 @@ def classify_web_serve_outcome(
     return f"web 服务异常终止: {exc!r}"
 
 
+def insecure_default_secret_exposed(secret: Any, host: Any, *, allow_insecure: str | None = None) -> bool:
+    """S2/S4 fail-safe 判定（纯函数）：出厂默认 session 密钥 + 绑定非本地地址 → True（应改绑回环）。
+
+    语义与 2026-09 前的内联判定**逐字相同**：只认字面 ``change-me-in-production``（键缺失按
+    默认算；空串/其它值不触发——服务器实例既有行为不变）。``allow_insecure`` 缺省读 env
+    ``ALLOW_INSECURE``；为 "1" 时永不触发（运维显式放行）。
+    """
+    from src.utils.config_manager import ConfigManager
+
+    flag = os.getenv("ALLOW_INSECURE") if allow_insecure is None else allow_insecure
+    if str(flag or "") == "1":
+        return False
+    exposed = str(host or "") not in ("127.0.0.1", "::1", "localhost", "")
+    value = ConfigManager.DEFAULT_WEB_SECRET if secret is None else str(secret)
+    return exposed and value == ConfigManager.DEFAULT_WEB_SECRET
+
+
 def handle_web_fatal(assistant: Any, reason: str, web_port: int, *, _exit=os._exit) -> None:
     """web 管理后台致命失败的处置：默认整进程立刻退出（幽灵纵深防御）。
 
@@ -994,9 +1011,8 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
             web_host = web_cfg.get("host", "127.0.0.1")
             # S2/S4 fail-safe：默认 secret_key + 绑定非本地地址 = 危险暴露（session 可伪造）。
             # 除非显式 ALLOW_INSECURE=1，否则降级绑回 127.0.0.1 并告警（不 crash 整进程）。
-            _secret = str(web_cfg.get("secret_key", "change-me-in-production"))
-            _exposed = str(web_host) not in ("127.0.0.1", "::1", "localhost", "")
-            if _secret == "change-me-in-production" and _exposed and os.getenv("ALLOW_INSECURE") != "1":
+            # 桌面态走不到这里：ConfigManager._ensure_web_secret_key 首启已随机生成（L-6 D）。
+            if insecure_default_secret_exposed(web_cfg.get("secret_key"), web_host):
                 assistant.logger.error(
                     "[SECURITY] 检测到默认 secret_key 且绑定非本地地址 %s；为防不安全暴露，"
                     "Web 后台改绑 127.0.0.1。请配置随机 web_admin.secret_key，或设 ALLOW_INSECURE=1。",

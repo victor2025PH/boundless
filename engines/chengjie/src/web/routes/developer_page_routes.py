@@ -28,6 +28,14 @@ def register_developer_page_routes(app, ctx) -> None:
         page_ctx: dict = {"dev_unlocked": dev_unlocked, "dev_error": ""}
         if dev_unlocked:
             cfg = config_manager.config or {}
+            wb = cfg.get("web_admin", {}) if isinstance(cfg.get("web_admin"), dict) else {}
+            # L-6 D：Session 密钥行显真实状态（桌面首启已自动生成 / 仍是默认值），
+            # 不再一律「留空保留原值」占位——值本身绝不进模板。
+            try:
+                from src.utils.config_manager import ConfigManager
+                secret_default = ConfigManager.web_secret_is_default(wb.get("secret_key"))
+            except Exception:
+                secret_default = True
             page_ctx.update({
                 "ai": cfg.get("ai", {}),
                 "voice_ai": (
@@ -35,7 +43,8 @@ def register_developer_page_routes(app, ctx) -> None:
                     if isinstance(cfg.get("messenger_rpa"), dict)
                     else {}
                 ),
-                "wb": cfg.get("web_admin", {}),
+                "wb": wb,
+                "wb_secret_state": "default" if secret_default else "set",
                 "tg": cfg.get("telegram", {}),
                 "notif": cfg.get("notifications", cfg.get("webhook", {})),
             })

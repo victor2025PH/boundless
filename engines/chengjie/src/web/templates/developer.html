@@ -473,7 +473,7 @@
         <label class="f-lbl">Session {{ (i18n or {}).get('dv_s057', "密钥（Secret Key）") }}<span class="badge-opt">{{ (i18n or {}).get('dv_s016', "保密") }}</span></label>
         <div class="masked-row">
           <input class="f-inp" type="password" id="wb-secret_key"
-            placeholder="{{ (i18n or {}).get('dv_s056', '留空保留原值') }}">
+            placeholder="{% if wb_secret_state == 'set' %}{{ (i18n or {}).get('dv_secret_set', '已自动生成，留空保留') }}{% else %}{{ (i18n or {}).get('dv_secret_default', '仍是出厂默认值（桌面版首启会自动生成）') }}{% endif %}">
           <button type="button" class="show-btn" onclick="toggleMask('wb-secret_key',this)">{{ (i18n or {}).get('dv_s018', "显示") }}</button>
         </div>
         <div class="f-hint">{{ (i18n or {}).get('dv_s058', "用于加密 Cookie，修改会导致所有会话失效（需重新登录）") }}</div>
