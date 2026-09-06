@@ -1049,9 +1049,11 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         else:
             ids = pm.list_profile_ids()
             profiles = {pid: pm.get_persona_by_id(pid) for pid in ids}
-        summary = pm.list_profiles_summary() if not tag else [
-            s for s in pm.list_profiles_summary() if s["id"] in set(ids)
-        ]
+        # L-2 #204：绑定胶囊四源同口径（注册表 + config 各平台 persona_ids + PM 会话 + 全局默认）
+        _cm = getattr(request.app.state, "config_manager", None) or config_manager
+        _full_cfg = getattr(_cm, "config", None) if _cm is not None else None
+        _summary_all = pm.list_profiles_summary(_full_cfg if isinstance(_full_cfg, dict) else None)
+        summary = _summary_all if not tag else [s for s in _summary_all if s["id"] in set(ids)]
         # 近7日使用量注入（usage_7d）：Studio 列表据此看出「哪些人设真的在产出回复」。
         # 统计属旁路能力，异常一律吞掉——列表本体不能因它挂。
         # usage_7d_default = 未绑定具名 profile、走域默认/兜底人设的回复条数（__default__ 键）；

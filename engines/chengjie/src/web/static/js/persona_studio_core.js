@@ -216,10 +216,24 @@ function renderProfileList(profiles) {
     var initial = _profileInitial(p.name);
     var srcInfo = _SRC[p.source] || ['src-config', p.source || '?', ''];
     var srcBadge = '<span class="src-badge ' + srcInfo[0] + '" title="' + (srcInfo[2] || '').replace(/"/g, '&quot;') + '">' + srcInfo[1] + '</span>';
-    // 服务状态胶囊：绑定数>0 = 服务中，否则灰色未启用（不再计入完善度）
-    var livePill = p.binding_count > 0
-      ? '<span class="live-pill on">● ' + window.T('psn_serving') + ' ' + p.binding_count + '</span>'
-      : '<span class="live-pill off" title="' + window.T('psn_not_live_t') + '">○ ' + window.T('psn_not_live') + '</span>';
+    // 服务状态胶囊（L-2 #204，QRHNGM）：与后端 collect_binding_usage 四源同口径——
+    // 「● 服务中 a 个账号 · c 个会话」；账号与会话皆 0 才灰，文案「未绑定」（不是「未启用」，
+    // 人设本身没有开关，只有绑没绑）。旧 summary（无 binding_accounts）回落 binding_count。
+    var _bAcc = Number(p.binding_accounts), _bChat = Number(p.binding_chats);
+    var _hasSplit = !isNaN(_bAcc) && !isNaN(_bChat) && (p.binding_accounts !== undefined);
+    var _bTotal = _hasSplit ? (_bAcc + _bChat) : (Number(p.binding_count) || 0);
+    var livePill;
+    if (_bTotal > 0) {
+      var _servingTxt = _hasSplit
+        ? window.Tf('psn_serving_split', {a: String(_bAcc), c: String(_bChat)})
+        : (window.T('psn_serving') + ' ' + _bTotal);
+      var _servingTip = _hasSplit
+        ? window.Tf('psn_serving_split_t', {a: String(_bAcc), c: String(_bChat)}) + (p.binding_default ? ' · ' + window.T('psn_serving_default_t') : '')
+        : '';
+      livePill = '<span class="live-pill on" title="' + _servingTip.replace(/"/g, '&quot;') + '">● ' + _servingTxt + '</span>';
+    } else {
+      livePill = '<span class="live-pill off" title="' + window.T('psn_not_bound_t') + '">○ ' + window.T('psn_not_bound') + '</span>';
+    }
     // P2：近7日活跃火苗(usage_7d 来自后端 summary,无数据不显示)
     var usagePill = (p.usage_7d || 0) > 0
       ? '<span class="usage-pill" title="' + window.T('psn_usage_pill_t') + '">🔥 ' + (p.usage_7d > 999 ? '999+' : p.usage_7d) + '</span>'

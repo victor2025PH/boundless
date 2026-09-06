@@ -1248,18 +1248,40 @@ class PersonaManager:
         """Return all registered profile ids."""
         return list(self._profile_personas.keys())
 
-    def list_profiles_summary(self) -> List[Dict[str, Any]]:
+    def list_profiles_summary(self, full_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Return a lightweight summary list for the Studio profile browser.
 
-        Each entry: {id, name, role, tags, has_voice, has_history, binding_count}
+        Each entry: {id, name, role, tags, has_voice, has_history, binding_count,
+        binding_accounts, binding_chats, binding_default}
+
+        L-2 #204（QRHNGM）：``binding_count`` 旧口径只数会话级绑定（``_chat_personas`` +
+        ``_chat_bindings``），账号注册表 ``persona_ids``（「应用到 → 账号默认」写的就是它）
+        不算——steven 绑了 TG 账号，卡片仍显「未启用」。现在与 K-2 ``collect_binding_usage``
+        四源同口径：``binding_accounts``（账号数 a）/ ``binding_chats``（会话数 c）/
+        ``binding_default``；``binding_count = a + c`` 保住旧筛选/排序/健康面板的 ``>0`` 判据。
+        ``full_config`` 供 config 层各平台 ``persona_ids``（路由层喂）；缺省只读注册表 + PM。
         """
         result = []
+        try:
+            from src.companion.persona_stock import collect_binding_usage_map
+            usage_map = collect_binding_usage_map(self, full_config)
+        except Exception:
+            logger.debug("[persona] 绑定用量聚合失败，回落会话级计数", exc_info=True)
+            usage_map = None
         for pid, p in self._profile_personas.items():
             vp = p.get("voice_profile") or {}
-            bc = (
-                sum(1 for cp in self._chat_personas.values() if cp.get("id") == pid)
-                + sum(1 for ref_pid in self._chat_bindings.values() if ref_pid == pid)  # P4
-            )
+            if usage_map is not None:
+                u = usage_map.get(pid) or {}
+                b_acc = int(u.get("account_count") or 0)
+                b_chat = int(u.get("chat_count") or 0)
+                b_default = bool(u.get("is_default"))
+            else:
+                b_acc, b_default = 0, False
+                b_chat = (
+                    sum(1 for cp in self._chat_personas.values() if cp.get("id") == pid)
+                    + sum(1 for ref_pid in self._chat_bindings.values() if ref_pid == pid)  # P4
+                )
+            bc = b_acc + b_chat
             # P6: derive source — mrpa flag takes precedence over _profile_sources
             source = "mrpa" if p.get("_mrpa_source") else self._profile_sources.get(pid, "studio")
             entry = {
@@ -1290,6 +1312,9 @@ class PersonaManager:
                     if self._profile_history.get(pid) else ""
                 ),
                 "binding_count": bc,
+                "binding_accounts": b_acc,
+                "binding_chats": b_chat,
+                "binding_default": b_default,
                 "source": source,           # P6: 'config'|'canonical'|'runtime'|'studio'|'mrpa'
                 "is_mrpa_source": bool(p.get("_mrpa_source")),  # P6: convenience flag
             }

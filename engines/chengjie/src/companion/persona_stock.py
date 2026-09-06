@@ -152,22 +152,27 @@ def _cfg_account_pids(cfg: Dict[str, Any], section: str) -> Dict[str, Set[str]]:
     return out
 
 
-def collect_binding_usage(persona_id: str, pm: Any = None,
-                          full_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """该人设被哪些地方用着（只读；任一源读失败按 0 计，绝不抛）。
+def _empty_usage() -> Dict[str, Any]:
+    return {"account_count": 0, "chat_count": 0, "is_default": False, "accounts": []}
 
-    返回 ``{account_count, chat_count, is_default, accounts: [(platform, account_id)…≤8]}``。
-    源与 ``/api/personas/status.profiles_in_use`` 同一组：运行时注册表各平台
-    ``meta.persona_ids``（removed 行跳过）、config 各平台 ``persona_ids``、
-    PersonaManager 会话绑定（引用式 ``_profile_ref`` / 内联 ``id``）、全局默认人设。
+
+def collect_binding_usage_map(pm: Any = None,
+                              full_config: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """四源一次扫完 → ``{persona_id: usage}``（L-2 #204：人设卡片胶囊按 N 个人设批量取）。
+
+    与 ``collect_binding_usage`` 同一组源、同一语义（后者即本函数按 pid 取值）：
+    运行时注册表各平台 ``meta.persona_ids``（removed 行跳过）、config 各平台
+    ``persona_ids``、PersonaManager 会话绑定（引用式 ``_profile_ref`` / 内联 ``id``）、
+    全局默认人设。任一源读失败按 0 计，绝不抛。
     """
-    pid = str(persona_id or "").strip()
     cfg = full_config if isinstance(full_config, dict) else {}
-    seen: Set[tuple] = set()
-    chat_count = 0
-    is_default = False
-    if not pid:
-        return {"account_count": 0, "chat_count": 0, "is_default": False, "accounts": []}
+    seen: Dict[str, Set[tuple]] = {}
+    chats: Dict[str, int] = {}
+    default_pid = ""
+
+    def _acc(pid: str, plat: str, aid: str) -> None:
+        seen.setdefault(pid, set()).add((plat, aid))
+
     try:
         from src.integrations.account_registry import get_account_registry, parse_persona_ids
         reg = get_account_registry()
@@ -176,41 +181,61 @@ def collect_binding_usage(persona_id: str, pm: Any = None,
                 if str(row.get("status") or "") == "removed":
                     continue
                 aid = str(row.get("account_id") or "").strip()
-                if aid and pid in parse_persona_ids(row.get("meta")):
-                    seen.add((plat, aid))
+                if not aid:
+                    continue
+                for pid in parse_persona_ids(row.get("meta")):
+                    if str(pid or "").strip():
+                        _acc(str(pid).strip(), plat, aid)
     except Exception:
         logger.debug("[persona_stock] 账号注册表读取失败（按 0 计）", exc_info=True)
     for section, plat in (("telegram", "telegram"), ("whatsapp_rpa", "whatsapp"),
                           ("messenger_rpa", "messenger")):
         for aid, pids in _cfg_account_pids(cfg, section).items():
-            if pid in pids:
-                seen.add((plat, aid))
+            for pid in pids:
+                _acc(pid, plat, aid)
     if pm is not None:
         try:
             for v in (pm.get_all_chat_bindings() or {}).values():
                 if not isinstance(v, dict):
                     continue
-                if str(v.get("_profile_ref") or "") == pid or str(v.get("id") or "") == pid:
-                    chat_count += 1
+                ref = str(v.get("_profile_ref") or "").strip() or str(v.get("id") or "").strip()
+                if ref:
+                    chats[ref] = chats.get(ref, 0) + 1
         except Exception:
             pass
         try:
             dom = getattr(pm, "_domain_persona", None)
-            if isinstance(dom, dict) and str(dom.get("id") or "") == pid:
-                is_default = True
+            if isinstance(dom, dict) and str(dom.get("id") or ""):
+                default_pid = str(dom.get("id"))
             elif not dom:
                 dflt = pm.get_persona("")
-                if isinstance(dflt, dict) and str(dflt.get("id") or "") == pid:
-                    is_default = True
+                if isinstance(dflt, dict):
+                    default_pid = str(dflt.get("id") or "")
         except Exception:
             pass
-    accounts = sorted(seen)
-    return {
-        "account_count": len(accounts),
-        "chat_count": chat_count,
-        "is_default": is_default,
-        "accounts": [list(a) for a in accounts[:8]],
-    }
+    out: Dict[str, Dict[str, Any]] = {}
+    for pid in set(seen) | set(chats) | ({default_pid} if default_pid else set()):
+        accounts = sorted(seen.get(pid, set()))
+        out[pid] = {
+            "account_count": len(accounts),
+            "chat_count": int(chats.get(pid, 0)),
+            "is_default": pid == default_pid,
+            "accounts": [list(a) for a in accounts[:8]],
+        }
+    return out
+
+
+def collect_binding_usage(persona_id: str, pm: Any = None,
+                          full_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """该人设被哪些地方用着（只读；任一源读失败按 0 计，绝不抛）。
+
+    返回 ``{account_count, chat_count, is_default, accounts: [(platform, account_id)…≤8]}``。
+    源与 ``/api/personas/status.profiles_in_use`` 同一组（见 ``collect_binding_usage_map``）。
+    """
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return _empty_usage()
+    return dict(collect_binding_usage_map(pm, full_config).get(pid) or _empty_usage())
 
 
 def collect_stock_readiness(
