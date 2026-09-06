@@ -51,9 +51,11 @@ TEXT_REMIND = OPS / "channel_reminder_text.txt"
 TEXT_RECEIPT = OPS / "channel_receipt_text.txt"
 GROUP_ID = "4345824259"   # 报障群 chat_key 去负号（inbox conversation_id 模糊匹配用）
 
-# 受控报障人：群里提交 → 提醒走 Cursor。老板 0906 指令只点了 skuio；钧要加就补一行。
+# 受控报障人：群里提交 → 提醒走 Cursor（同时是无人值守时的受理回执）。老板 0906 指令先点了
+# skuio；0906 22:3x 钧 13:39 三条群提交 9 小时无人回（bot 只静默立了 #215）→ 钧也加进来。
 REMIND_REPORTERS: Dict[str, str] = {
     "8942577244": "skuio 花无缺",
+    "8852939166": "钧 JUN",
 }
 # 机器指纹前缀 → 报障人（报告回执用；zl_collect 报告头 `fp: DC8F-…`）
 FP_OWNER: Dict[str, str] = {
