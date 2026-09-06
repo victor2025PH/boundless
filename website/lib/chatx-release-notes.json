@@ -1,5 +1,51 @@
 [
   {
+    "version": "1.0.75",
+    "date": "2026-09-06",
+    "title": {
+      "zh": "分条发送出厂关 · 问候不编事实 · 人设语音三态且不换声 · 人设备份与迁移 · 需人工自动摘标 · 断线卡六出口 · 后台按给谁看分层 · 学习队列止血 · 桌面包剥离内网默认 · 贴纸不破图",
+      "en": "Splitting off by default · greetings don't invent facts · tri-state persona voice, no voice swap · persona backup & migration · needs-human auto-clears · six-exit disconnect card · audience-layered console · learning-queue triage · no intranet defaults in desktop · stickers render"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "分条发送出厂关：新装机默认不拆、基线不再自动打开；短回复永不拆；开着分条也只在长回复有显式换行时按行拆；工作台条数与客户手机一致，发送成功提示「已拆 N 条发出」。",
+        "问候不再编造天气 / 行程 / 正在做的事：没有来源的近况陈述出站前被剥掉，历史里随口一说也不再滚成「事实」；「Send me the receipt」这类请求不再被当问候秒回。",
+        "发媒体后台无响应只出一处提示（附件条内联），只有后台真在重启时才说「重启中」，否则说「没拿到发送结果，已自动核对对话记录」。",
+        "人设语音改为三选一：用我上传的录音（克隆声）/ 用预置声（按语言·性别筛选可试听）/ 不发语音；非法组合保存时提示修正不再静默改；克隆引擎失败不再换成默认女声，改发文字并提示；预置声兜底同语种同性别；新建人设默认不发语音。",
+        "人设工作室：底部改「人设备份与迁移」（备份全部 / 从备份恢复先预览 / 导出单个）；JSON 导入对用户不可见、内部版预览勾选二次确认 30 秒可撤销；卡片胶囊「服务中 N 个账号 · M 个会话」与账号侧同源，「应用到→账号默认」也算；「补齐向量」改人话、索引齐全时灰掉、结果不再被底栏遮住。",
+        "「需人工」标在 AI 自动回复成功时自动摘掉，会话头有红色原因条与「去回复台处理 / 我知道了」入口，红标与 AI 蓝标不再同亮；归档里的未读横幅常驻列表上方不随滚动折叠，同时进通知中心，第一次点角标带一行引导。",
+        "断线卡片六个出口（去重连 / 标为已停用 / 登出 / 1 小时 / 24 小时 / 不再提醒此账号），静音换电脑不丢；同一告警刷新只改文字不重弹，多项告警折成一张「有 N 项需要注意」；基础设施类告警只进通知中心不再弹窗。",
+        "SOP「批量挂链」弹层随主题不再灰字看不清，天数框预填 3 带 −/+ 步进、越界回弹，输入即预览「符合 N · 将挂 X · 跳过 M」，确认后 15 秒内可撤销。",
+        "后台按「给谁看」分层：用户版不再显示品牌白标 / 演示数据 / 授权三卡，帮助中心 / 回复策略 / 歌房 / 声音评测四页收起显「功能升级中，如需开通请联系客服」；右上档位徽标与授权卡同一口径；内部人可在开发者页临时打开「开发者模式」看全，退出登录自动关。",
+        "学习队列止血：寒暄 / 系统占位文本不再入队（存量自动进「已拒绝」页）；「全部通过」改「通过已选（N）」加二次确认、每批最多 20 条；「疑似重复」不再假 99%；外语条目带中文译文；含人名 / 金额 / 约定的客户私事通过后写该客户 AI 记忆、不进共享知识库。",
+        "自动回复高级设置：语音回复只剩一个下拉（关闭 / 总是 / 对方发语音才回 / 智能）旁显引擎在线状态；缓冲语并入「AI 接管」卡只在拟稿人审下出现；删掉「人设 ID + 秒数」表；平台专家覆写默认折叠、「跟随全局」显示实际生效值。",
+        "桌面包不再带办公室内网默认地址（语音转写 / 口语改写 / LAN GPU 巡检），客户机不再每 30 分钟红字「LAN GPU 不可达」、转录不再白等两级超时；桌面首启自动生成随机管理密钥，手机扫码的局域网入口不再因出厂密钥退回本机回环。",
+        "客户发来的动图 / 视频贴纸不再破图：按真实格式落盘，视频贴纸会动、动图显缩略图并带角标；识图失败提示具体原因（服务未配置 / 服务忙 / 图上无文字），识图网关上下文放大到 8192 不再拒绝长请求。",
+        "出厂默认真正落到每台机器：「目标自动推进」与「客户安全预警留痕 / 升级」不论装哪个包首启都补开（你手动关过的不动）；内测版有独立更新渠道，装一次内测安装包以后自动更新只跟内测渠道；报障群新规：bug 请让本机 Cursor 提交报告，报告到达自动回单号。"
+      ],
+      "en": [
+        "Message splitting ships OFF by default (fresh installs never split, the baseline no longer turns it on); short replies are never split; even when enabled, only long replies with explicit line breaks are split by line; the workbench shows the same number of bubbles as the customer's phone and confirms \"sent as N messages\".",
+        "Greetings no longer invent weather, whereabouts or \"what I'm doing\": unsourced status claims are stripped before sending and a casual remark in history no longer snowballs into a \"fact\"; requests like \"Send me the receipt\" are no longer answered as greetings.",
+        "When a media send gets no backend response there is exactly one hint (inline on the attachment bar); it only says \"backend restarting\" when that is actually true, otherwise \"no send result received, the conversation was re-checked automatically\".",
+        "Persona voice is now a three-way choice: my uploaded recording (cloned voice) / a preset voice (filter by language and gender, preview) / no voice; invalid combinations are flagged on save instead of being silently rewritten; a failing clone engine no longer falls back to the default female voice — the reply goes out as text with a notice; preset fallback keeps language and gender; new personas default to \"no voice\".",
+        "Persona Studio: the footer becomes \"Persona backup & migration\" (back up all / restore from backup with preview / export one); JSON import is hidden from end users and, for internal builds, requires a preview, checkbox confirmation and offers a 30-second undo; the card pill \"serving N accounts · M chats\" now matches the account side (account-default bindings count); \"rebuild embeddings\" speaks plain language, greys out when complete, and its result is no longer hidden behind the footer.",
+        "The \"needs human\" tag is cleared automatically once the AI replies successfully; the conversation header shows a red reason bar with \"handle in reply desk / got it\"; the red tag and the blue AI badge no longer light up together; the archived-unread banner sits permanently above the list (no longer collapses on scroll) and also lands in the notification center, with a one-line guide the first time you tap the badge.",
+        "The disconnect card offers six exits (reconnect / mark disabled / sign out / 1 h / 24 h / never remind for this account) and mutes survive a machine change; the same alert refreshing only updates its text instead of re-popping; multiple alerts fold into one \"N items need attention\" card; infrastructure-class alerts go to the notification center only.",
+        "The SOP \"bulk attach chain\" dialog follows the theme (no more unreadable grey text), the day field is prefilled with 3 with −/+ steppers and clamps out-of-range values, shows a live preview \"N match · X will be attached · M skipped\", and can be undone within 15 seconds.",
+        "The admin console is now layered by audience: the user edition hides the brand/white-label, demo-data and license cards and collapses Help, Reply Strategy, Karaoke and Voice Evaluation behind \"Feature upgrading — contact support to enable\"; the plan badge and the license card say the same thing; internal staff can temporarily switch on \"Developer mode\" from the developer page (auto-off on logout).",
+        "Learning queue triage: greetings and system placeholders no longer enter the queue (existing ones move to \"rejected\"); \"Approve all\" becomes \"Approve selected (N)\" with a confirmation, max 20 per batch; \"possible duplicate\" no longer shows a fake 99%; foreign-language items carry a Chinese translation; customer-private items (names, amounts, appointments) are written to that customer's AI memory instead of the shared knowledge base.",
+        "Auto-reply advanced settings: voice reply is a single dropdown (off / always / only when they send voice / smart) with the engine's online state next to it; the holding phrase moved into the \"AI takeover\" card and only appears in draft-review mode; the \"persona ID + seconds\" table is gone; per-platform expert overrides are collapsed by default and \"follow global\" shows the value actually in effect.",
+        "The desktop build no longer ships the office intranet as a default (speech-to-text, colloquial rewrite, LAN GPU probe), so customer machines stop showing a red \"LAN GPU unreachable\" toast every 30 minutes and transcription no longer waits through two connection timeouts; first launch generates a random admin secret so the LAN entry for phone QR login no longer falls back to loopback because of the factory key.",
+        "Animated and video stickers from customers no longer render as broken images: they are stored in their real container, video stickers play, animated ones show a thumbnail with a badge; image-recognition failures explain the actual cause (not configured / busy / no text in image) and the recognition gateway's context grows to 8192 so long requests are no longer rejected.",
+        "Factory defaults now really reach every machine: \"goal auto-progress\" and \"customer safety alert logging / escalation\" are switched on at first launch of 1.0.75 whichever package you install (settings you turned off by hand are left alone); the internal-test edition has its own update channel — install the internal package once and auto-update stays on that channel; bug-group rule: report bugs through your local Cursor agent, and the arrival receipt now carries the ticket number."
+      ]
+    }
+  },
+  {
     "version": "1.0.74",
     "date": "2026-09-06",
     "title": {

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-06 10:34:15 · OpenCC s2twp + 術語釘 · 16377 鍵（源 zh 全量 16378）
+生成: 2026-09-06 11:49:25 · OpenCC s2twp + 術語釘 · 16382 鍵（源 zh 全量 16383）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -4905,6 +4905,10 @@ ZH_HANT = {
     'dv_s_reject_default': '親，抱歉，我們不接受私聊處理問題，請在群內聯絡我或者@我，我將竭誠為您服務。',
     # ── dv_saved_n ──
     'dv_saved_n': '✓ 已儲存（{n} 項）',
+    # ── dv_secret_default ──
+    'dv_secret_default': '仍是出廠預設值（桌面版首啟會自動生成）',
+    # ── dv_secret_set ──
+    'dv_secret_set': '已自動生成，留空保留',
     # ── dv_sg_b1a ──
     'dv_sg_b1a': '需人工：',
     # ── dv_sg_b1b ──
@@ -5512,6 +5516,8 @@ ZH_HANT = {
     'err.acct.tg_busy_full_sync': '該賬號正在深度同步，等它完成後再同步聊天記錄',
     'err.acct.tg_client_cooling': '該賬號連線剛出過錯，正在冷卻，請一兩分鐘後再試',
     'err.acct.tg_client_unavailable': '該賬號客戶端未就緒（離線或未登入），無法同步聊天記錄',
+    'err.asr.no_speech': '未識別到語音內容',
+    'err.asr.unavailable': '轉錄服務暫不可用，稍後重試',
     'err.asset.claim_failed': '認領失敗：{reason}',
     'err.asset.conv_not_found': '會話不存在：{cid}',
     'err.asset.same_account': '新舊賬號不能相同',
@@ -9269,6 +9275,7 @@ ZH_HANT = {
     'inbox.media.sent': '✅ 媒體已傳送',
     'inbox.media.sticker': '😊 貼紙',
     'inbox.media.sticker_alt': '貼紙',
+    'inbox.media.sticker_animated': '動圖貼紙',
     'inbox.media.too_large': '檔案過大（上限 25MB）',
     'inbox.media.type_chatshot': '聊天截圖',
     'inbox.media.type_doc': '單據',
