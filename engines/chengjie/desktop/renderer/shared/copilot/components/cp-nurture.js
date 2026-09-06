@@ -84,6 +84,7 @@
       this._folds = this._readFolds();  // 分区折叠态（localStorage 记忆）
       this._acctShowAll = false;        // 账号长列表「显示全部」（会话内，不记忆）
       this._goliveArm = false;  // go_live 内联确认态
+      this._explainOpen = false;  // M-5 B：三阶段人话说明展开态（默认收成一行入口）
       this.shadowRoot.addEventListener("change", (e) => this._onFieldChange(e));
     }
 
@@ -130,6 +131,24 @@
       .nt-intro { font-size:var(--cp-fs-tiny,11px); line-height:1.55; padding:7px 9px; border-radius:8px;
         margin-bottom:8px; background:var(--cp-accent-bg,rgba(99,102,241,.08)); color:var(--cp-text,#1e293b);
         border:1px solid var(--cp-accent-weak,rgba(99,102,241,.25)); }
+      /* M-5 B（#224）：需关注点名行 / 三阶段人话说明 / 灰置原因 */
+      .nt-att { display:flex; flex-wrap:wrap; gap:4px 8px; margin:-2px 0 8px; font-size:var(--cp-fs-tiny,11px); }
+      .nt-att-row { color:var(--cp-text-dim,#64748b); }
+      .nt-att-row .why { color:var(--cp-warn-ink,#b45309); margin-left:4px; }
+      .nt-att-row.more { color:var(--cp-text-tiny,#94a3b8); }
+      .nt-explain { margin:0 0 8px; border:1px dashed var(--cp-border,#e2e8f0); border-radius:8px; padding:4px 8px; }
+      .nt-explain.open { background:var(--cp-surface-2,#f8fafc); padding-bottom:7px; }
+      .nt-explain-hd { font:inherit; font-size:var(--cp-fs-tiny,11px); color:var(--cp-accent,#6366f1);
+        background:none; border:0; padding:2px 0; cursor:pointer; text-align:left; }
+      .nt-ex-row { display:flex; gap:6px; font-size:var(--cp-fs-tiny,11px); line-height:1.5;
+        color:var(--cp-text,#1e293b); margin-top:4px; }
+      .nt-ex-row .no { flex-shrink:0; width:16px; height:16px; border-radius:50%; display:inline-flex;
+        align-items:center; justify-content:center; font-size:10px; font-weight:700;
+        background:var(--cp-accent-bg,rgba(99,102,241,.12)); color:var(--cp-accent,#6366f1); margin-top:1px; }
+      .nt-ex-fact { font-size:var(--cp-fs-tiny,11px); line-height:1.5; color:var(--cp-text-dim,#64748b);
+        margin-top:4px; padding-left:22px; }
+      .nt-why { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin:4px 0 0; line-height:1.5; }
+      .nt-why[hidden] { display:none; }
       .nt-note { font-size:var(--cp-fs-tiny,11px); line-height:1.5; padding:6px 8px; border-radius:7px;
         margin-top:6px; background:var(--cp-warn-bg,#fffbeb); color:var(--cp-warn-ink,#b45309);
         border:1px solid var(--cp-warn-border,#fde68a); }
@@ -373,13 +392,19 @@
       const eng = d.engine || {};
       const canW = this._canWrite();
       const accounts = d.accounts || [];
-      const active = lc.active || 0;
-      const warming = lc.warming || 0;
-      const risk = (lc.restricted || 0) + (lc.banned || 0);
+      // M-5 B（#224）：判词与三个数字**同一口径**——后端 summary（需关注 = 健康灯
+      // amber/red ∪ 生命周期 offline/restricted/banned/pending；正常 = 总数 − 需关注；
+      // 判词由同一集合推出）。此前判词读 fleet_light、数字读 lifecycle，「有账号需要
+      // 留意」配「10 正常 / 0 需关注」自相矛盾（断线 3 天的号两边都不算）。
+      // 旧后端无 summary → 回落旧口径（缺字段不猜）。
+      const sm = (d.summary && typeof d.summary === "object") ? d.summary : null;
+      const active = sm ? (sm.normal || 0) : (lc.active || 0);
+      const warming = sm ? (sm.warming || 0) : (lc.warming || 0);
+      const risk = sm ? (sm.attention || 0) : ((lc.restricted || 0) + (lc.banned || 0));
 
       // 机群概览：健康大灯 + 一句话判词 + 三个有语境数字
       const fleet = d.fleet || {};
-      const light = String(fleet.fleet_light || fleet.light || "").toLowerCase();
+      const light = String((sm && sm.verdict) || fleet.fleet_light || fleet.light || "").toLowerCase();
       const lcls = light === "green" ? "g" : light === "amber" ? "a" : light === "red" ? "r" : "u";
       const verdict = this.t("cp.nurture.verdict_" +
         (light === "green" ? "green" : light === "amber" ? "amber" : light === "red" ? "red" : "unknown"));
@@ -389,6 +414,14 @@
         '<div class="nt-kpi"' + (hint ? ' title="' + esc(hint) + '"' : "") + ">" +
         '<div class="n' + (cls ? " " + cls : "") + '">' + n + "</div>" +
         '<div class="l" title="' + esc(hint || label) + '">' + esc(label) + "</div></div>";
+      // 「需关注」是哪几个号、为什么：点名而不只给数字（悬浮 + 展开时一行小字）
+      const attList = (sm && Array.isArray(sm.attention_list)) ? sm.attention_list : [];
+      const attLine = attList.map((x) => {
+        const nm = (x.label && String(x.label)) || this._short(String(x.key || "").split(":").pop() || "");
+        const why = (x.reasons || []).map((r) => this._attReason(r)).filter(Boolean).slice(0, 2).join("；");
+        return nm + (why ? "：" + why : "");
+      }).join("\n");
+      const riskHint = risk ? (this.t("cp.nurture.risk_hint") + (attLine ? "\n" + attLine : "")) : this.t("cp.nurture.risk_hint");
       // 折叠时标题行接过灯 + 判词：概览这块的全部价值就是这一句，不能只剩标题
       const ovFolded = this._isFolded("overview");
       const overview =
@@ -400,11 +433,21 @@
           '<span class="nt-light ' + lcls + '"></span>' +
           '<span class="nt-verdict" title="' + esc(verdict) + '">' + esc(verdict) + "</span></div>" +
           '<div class="nt-sum">' +
-          kpi(active, this.t("cp.nurture.active"), "") +
+          kpi(active, this.t("cp.nurture.active"), "", this.t("cp.nurture.active_hint")) +
           kpi(warming, this.t("cp.nurture.warming"), warming ? "warm" : "",
             this.t("cp.nurture.warming_hint")) +
-          kpi(risk, this.t("cp.nurture.risk"), risk ? "bad" : "") +
-          "</div>");
+          kpi(risk, this.t("cp.nurture.risk"), risk ? "bad" : "", riskHint) +
+          "</div>" +
+          (attList.length
+            ? '<div class="nt-att">' + attList.slice(0, 4).map((x) => {
+              const nm = (x.label && String(x.label)) || this._short(String(x.key || "").split(":").pop() || "");
+              const why = (x.reasons || []).map((r) => this._attReason(r)).filter(Boolean).slice(0, 1).join("");
+              return '<span class="nt-att-row">' + esc(nm) + (why ? '<span class="why">' + esc(why) + "</span>" : "") + "</span>";
+            }).join("") + (attList.length > 4
+              ? '<span class="nt-att-row more">' + esc(this.t("cp.nurture.golive_more", { n: attList.length - 4 })) + "</span>" : "") +
+            "</div>"
+            : "") +
+          this._explainHtml(d));
 
       const ro = canW ? "" : '<div class="nt-ro">' + esc(this.t("cp.nurture.readonly")) + "</div>";
       // intro 横幅：引擎暂停期常驻 DOM（nurtured>0 时 hidden）——保存后 _syncCounts
@@ -498,9 +541,13 @@
           // 零启用方案时模拟运行必然空转（调度器只为 enabled 账号出计划）→ 禁用 +
           // 悬浮提示指路第 1 步，不给「点了没反应」的死路按钮。
           const needPlan = !(nurtured > 0);
+          // M-5 B（#224）：灰置原因不能只藏在悬浮 title 里（6TGCPC：「模拟运行灰置但未提示
+          // 需先在账号方案开启养护」）——按钮下方一行小字就地写明，_syncCounts 同步隐现
           btns = '<div class="nt-eng-btns"><button type="button" class="primary" data-act="eng" data-eng="enable_dry" data-role="eng-try"' +
             (needPlan ? ' disabled title="' + esc(this.t("cp.nurture.eng_try_need_plan")) + '"' : "") + ">" +
-            esc(this.t("cp.nurture.eng_try")) + "</button></div>";
+            esc(this.t("cp.nurture.eng_try")) + "</button></div>" +
+            '<div class="nt-why" data-role="eng-try-why"' + (needPlan ? "" : " hidden") + ">" +
+            esc(this.t("cp.nurture.eng_try_need_plan")) + "</div>";
         } else if (dry) {
           btns = '<div class="nt-eng-btns"><button type="button" class="primary" data-act="golive-ask">' +
             esc(this.t("cp.nurture.eng_golive")) + "</button>" +
@@ -716,6 +763,12 @@
       if (act === "golive-no") { _beacon("ntr_golive_cancel"); this._goliveArm = false; this._renderAll(); return; }
       if (act === "golive-yes") { _beacon("ntr_golive_confirm"); this._goliveArm = false; this._saveEngine("go_live"); return; }
       if (act === "fold") { this._toggleFold(el.getAttribute("data-fold")); return; }
+      if (act === "explain-toggle") {
+        this._explainOpen = !this._explainOpen;
+        _beacon(this._explainOpen ? "ntr_explain_open" : "ntr_explain_close");
+        this._renderAll();
+        return;
+      }
       if (act === "acct-all" || act === "acct-less") {
         this._acctShowAll = (act === "acct-all");
         _beacon(this._acctShowAll ? "ntr_acct_show_all" : "ntr_acct_show_less");
@@ -849,6 +902,57 @@
         if (n > 0) tryBtn.removeAttribute("title");
         else tryBtn.setAttribute("title", this.t("cp.nurture.eng_try_need_plan"));
       }
+      const why = this.shadowRoot.querySelector('[data-role="eng-try-why"]');
+      if (why) why.hidden = n > 0;
+    }
+
+    /* M-5 B（#224）：「需关注」原因人话——生命周期机器码 stage_* 走 i18n，
+       account_health 的原因本就是整句人话原样显示 */
+    _attReason(r) {
+      const s = String(r || "");
+      if (!s) return "";
+      if (s.indexOf("stage_") === 0) return this._tt("cp.nurture.att_" + s, s.slice(6));
+      if (s === "amber" || s === "red") return this.t("cp.nurture.att_light_" + s);
+      return s;
+    }
+
+    /* M-5 B（#224 / 6TGCPC）：三阶段人话说明——记录 → 模拟 → 自动 各做什么、动作清单、
+       频率上限、失败回退。数字全部来自后端 explain（scheduler 常量 + 当前配置），
+       文案里不写死；旧后端缺 explain → 只出三阶段描述不出数字。默认折叠成一行入口。 */
+    _explainHtml(d) {
+      const esc = (s) => this.esc(s);
+      const ex = (d && d.explain && typeof d.explain === "object") ? d.explain : {};
+      const open = !!this._explainOpen;
+      const head = '<button type="button" class="nt-explain-hd" data-act="explain-toggle" aria-expanded="' +
+        (open ? "true" : "false") + '">' + (open ? "▾ " : "▸ ") + esc(this.t("cp.nurture.explain_hd")) + "</button>";
+      if (!open) return '<div class="nt-explain">' + head + "</div>";
+      const cad = ex.cadence || {};
+      const prof = (k) => {
+        const c = cad[k] || {};
+        return (c.daily_budget != null && c.min_gap_min != null)
+          ? this.t("cp.nurture.explain_prof", { name: this._tt("cp.nurture.prof_" + k, k), n: c.daily_budget, gap: c.min_gap_min })
+          : "";
+      };
+      const profs = ["conservative", "balanced", "aggressive"].map(prof).filter(Boolean).join("；");
+      const hours = Array.isArray(ex.hours) && ex.hours.length ? ex.hours.join(" / ") : "";
+      const behs = Array.isArray(ex.behaviors) && ex.behaviors.length
+        ? ex.behaviors.map((b) => this._tt("cp.nurture.beh_" + b, b)).join(" / ") : "";
+      const rb = ex.risk_backoff || {};
+      const rows = [
+        ["1", this.t("cp.nurture.explain_s1")],
+        ["2", this.t("cp.nurture.explain_s2")],
+        ["3", this.t("cp.nurture.explain_s3")],
+      ].map((r) => '<div class="nt-ex-row"><span class="no">' + r[0] + "</span><span>" + esc(r[1]) + "</span></div>").join("");
+      const facts = [
+        behs ? this.t("cp.nurture.explain_actions", { list: behs }) : "",
+        profs ? this.t("cp.nurture.explain_limits", { profs: profs }) : "",
+        hours ? this.t("cp.nurture.explain_hours", { hours: hours }) : "",
+        (rb.enabled && rb.flood_threshold != null)
+          ? this.t("cp.nurture.explain_backoff", { f: rb.flood_threshold, e: rb.error_threshold })
+          : this.t("cp.nurture.explain_backoff_generic"),
+        this.t("cp.nurture.explain_default_off"),
+      ].filter(Boolean).map((s) => '<div class="nt-ex-fact">' + esc(s) + "</div>").join("");
+      return '<div class="nt-explain open">' + head + rows + facts + "</div>";
     }
 
     _ago(ts) {

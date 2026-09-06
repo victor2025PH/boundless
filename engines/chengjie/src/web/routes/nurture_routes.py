@@ -30,6 +30,94 @@ _PROFILES = ("conservative", "balanced", "aggressive")
 _BEHAVIOR_KEYS = ("browse", "read", "react", "self_chat")
 _ENGINE_ACTIONS = ("enable_dry", "go_live", "pause")
 
+# M-5 B（#224）：生命周期里「需要人留意」的阶段（scheduler 的 _SKIP_STAGES 同集：这些号
+# 引擎本就不排动作，面板也得把它们算进「需关注」，而不是只数 restricted+banned）
+_ATTENTION_STAGES = ("offline", "restricted", "banned", "pending")
+_RED_STAGES = ("banned", "restricted")
+
+
+def attention_fields(item: Dict[str, Any], fleet_row: Any) -> Dict[str, Any]:
+    """单账号「要不要留意 + 为什么」（纯函数）。
+
+    ``fleet_row``＝account_health 的 ``{light, reasons, score}``（可 None）；
+    ``item["stage"]``＝lifecycle_stage。返回 ``light / health_reasons / attention /
+    attention_reasons``：reasons 里健康灯给的是人话（account_health 已是中文句），
+    生命周期给机器码 ``stage_<stage>``（前端本地化）。
+    """
+    fl = fleet_row if isinstance(fleet_row, dict) else {}
+    light = str(fl.get("light") or "")
+    reasons = [str(r) for r in (fl.get("reasons") or []) if str(r).strip()]
+    stage = str((item or {}).get("stage") or "").lower()
+    why: List[str] = []
+    if light in ("amber", "red"):
+        why.extend(reasons or [light])
+    if stage in _ATTENTION_STAGES:
+        why.append(f"stage_{stage}")
+    return {
+        "light": light,
+        "health_reasons": reasons,
+        "attention": bool(why),
+        "attention_reasons": why,
+    }
+
+
+def fleet_summary(accounts: List[Dict[str, Any]], lifecycle: Dict[str, Any]) -> Dict[str, Any]:
+    """机群概览的**同源**判词与数字（纯函数）：
+
+    ``normal + attention == total``；``verdict``：无账号 unknown / 任一 red 灯或
+    banned·restricted → red / 有需关注 → amber / 否则 green。判词与三个数字不再各算各的。
+    """
+    total = len(accounts or [])
+    att = [a for a in (accounts or []) if a.get("attention")]
+    red = any(
+        str(a.get("light") or "") == "red"
+        or str(a.get("stage") or "").lower() in _RED_STAGES
+        for a in (accounts or []))
+    if not total:
+        verdict = "unknown"
+    elif red:
+        verdict = "red"
+    elif att:
+        verdict = "amber"
+    else:
+        verdict = "green"
+    return {
+        "total": total,
+        "normal": total - len(att),
+        "warming": int((lifecycle or {}).get("warming") or 0),
+        "attention": len(att),
+        "attention_list": [
+            {"key": str(a.get("nurture_key") or ""), "label": str(a.get("label") or ""),
+             "reasons": list(a.get("attention_reasons") or [])}
+            for a in att[:12]
+        ],
+        "verdict": verdict,
+    }
+
+
+def nurture_explain_facts(ncfg: Dict[str, Any]) -> Dict[str, Any]:
+    """三阶段人话说明用的事实（纯函数，数字取自 scheduler 常量 + 当前配置，不写死在文案里）。"""
+    try:
+        from src.nurture.nurture_scheduler import (
+            PROFILE_CADENCE,
+            parse_hours_windows,
+            parse_risk_backoff_cfg,
+        )
+        cadence = {k: dict(v) for k, v in PROFILE_CADENCE.items()}
+        windows = parse_hours_windows(ncfg or {})
+        rb = parse_risk_backoff_cfg(ncfg or {})
+    except Exception:
+        cadence, windows, rb = {}, [], {}
+    self_chat_on = bool(((ncfg or {}).get("self_chat") or {}).get("enabled", False))
+    return {
+        "cadence": cadence,
+        "hours": ["%d-%d" % (a, b) for a, b in (windows or [])],
+        "behaviors": ["online", "read", "browse", "react"] + (["self_chat"] if self_chat_on else []),
+        "self_chat_enabled": self_chat_on,
+        "risk_backoff": rb,
+        "skip_stages": list(_ATTENTION_STAGES),
+    }
+
 
 def register_nurture_routes(app, auth_dep, audit_store=None, config_manager=None,
                             page_auth=None):
@@ -157,6 +245,13 @@ def register_nurture_routes(app, auth_dep, audit_store=None, config_manager=None
         # is_canary（P1 2026-08-22 试点 UI 化）：前端按此渲染「试点」chip；
         # 旧前端忽略该字段零影响，旧后端缺字段=前端 fail-hidden 不出 chip。
         accts_out: List[Dict[str, Any]] = []
+        # M-5 B（#224 / 6TGCPC）：健康灯按账号并入——此前「机群概览」判词读 fleet_light
+        # （account_health 的 amber/red），三个数字却读 lifecycle（restricted+banned 才算
+        # 「需关注」），于是「有账号需要留意」配「10 正常 / 0 需关注」自相矛盾；断线 3 天
+        # 的号（stage=offline）两边都不算。这里把判词与计数收成同一口径：
+        # 需关注 = 健康灯 amber/red ∪ 生命周期 offline/restricted/banned/pending。
+        fleet_rows = ((overview.get("fleet") or {}).get("accounts") or [])
+        light_by_id = {str(x.get("account_id") or ""): x for x in fleet_rows if isinstance(x, dict)}
         for a in (overview.get("accounts") or []):
             key = _acct_key(a.get("platform"), a.get("account_id"))
             item = dict(a)
@@ -164,8 +259,10 @@ def register_nurture_routes(app, auth_dep, audit_store=None, config_manager=None
             item["nurture_plan"] = _plan_for(key)
             item["label"] = labels.get(key, "")
             item["is_canary"] = key in canary
+            item.update(attention_fields(item, light_by_id.get(str(a.get("account_id") or ""))))
             accts_out.append(item)
         nurtured = sum(1 for a in accts_out if a["nurture_plan"]["enabled"])
+        summary = fleet_summary(accts_out, overview.get("lifecycle") or {})
         eng = _engine_snapshot(request)
         # 配置防呆（P2）：检出 go_live 常见误配，前端/CLI 照单提示。registry_keys=
         # 机群在册号（accts_out 来自 fleet_overview 全量注册表）→ 可查陈旧配置号。
@@ -191,6 +288,11 @@ def register_nurture_routes(app, auth_dep, audit_store=None, config_manager=None
             "accounts": accts_out,
             "total": int(overview.get("total") or 0),
             "nurtured": nurtured,
+            # M-5 B：判词 + 三个数字同一口径（前端优先读它；旧前端忽略零影响）
+            "summary": summary,
+            # M-5 B：三阶段人话说明的事实源（档位日预算 / 最小间隔 / 活动时段 / 行为清单 /
+            # 风险退避阈值）——文案在前端拼，数字从这里来，不写死
+            "explain": nurture_explain_facts(ncfg),
             "engine": eng,
             "warnings": warnings,
             "executor_ready": bool(eng.get("running", False)),
