@@ -50,6 +50,10 @@
 </style>
 {% endblock %}
 {% block content %}
+{# L-4 G（#211，D-L6）：用户版直达 URL → 「功能升级中」横幅 + 评测操作面收起（只有消费端没有生产端，
+   不补生产入口）；partner / internal 与开发者模式原页不变。 #}
+{% include "_client_tier_upgrading.html" %}
+<div id="vev-root" class="{% if ui_client_hide %}l4-locked{% endif %}">
 <div class="vev-sub">{{ (i18n or {}).get('veval_sub', '生产同款克隆链出样 · 评分即时保存 · 盲听可隐藏人设信息防先入为主') }}</div>
 <div class="vev-bar">
   <div class="vev-sum" id="vev-sum"></div>
@@ -58,9 +62,12 @@
 <div class="vev-prog"><i id="vev-pbar"></i></div>
 <div id="vev-list">{{ (i18n or {}).get('veval_loading', '加载中…') }}</div>
 <div id="vev-cands"></div>
+</div>
 <script>
 (function(){
   var API = '/api/admin/voice-eval';
+  var root = document.getElementById('vev-root');
+  if(root && root.classList.contains('l4-locked')) return;  /* L-4 G：用户版收起，不拉评测数据 */
   var I = {
     emotion: {{ ((i18n or {}).get('veval_emotion', '情绪'))|tojson }},
     scoreChip: {{ ((i18n or {}).get('veval_score_chip', '声纹相似度'))|tojson }},

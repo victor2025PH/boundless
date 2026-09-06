@@ -80,7 +80,10 @@
 </style>
 {% endblock %}
 {% block content %}
-<div class="sg-wrap" id="sg-root">
+{# L-4 G（#199，D-L6）：用户版直达 URL → 顶部「功能升级中」横幅 + 原操作面整体收起（l4-locked）；
+   partner / internal 与开发者模式原页不变。侧栏入口已由 nav_schema.CLIENT_HIDDEN_ITEM_IDS 剔除。 #}
+{% include "_client_tier_upgrading.html" %}
+<div class="sg-wrap{% if ui_client_hide %} l4-locked{% endif %}" id="sg-root">
 
   <div class="sg-card">
     <div class="sg-hero">
@@ -93,6 +96,8 @@
       <div id="sg-health" class="sg-stats" style="gap:.4rem"></div>
     </div>
     <div class="sg-hint" style="margin-top:.45rem">{{ (i18n or {}).get('sg_enabled_hint', "开＝客户点名要听时用人设唱歌嗓清唱一段；关＝回落正常文字聊天") }}</div>
+    <!-- L-4 G（#199）：资产不齐（曲库 0 / 声库 0）时能力位不可开启并写明原因；已开着则红字警示 -->
+    <div class="sg-hint" id="sg-assets-warn" style="display:none;margin-top:.4rem;color:var(--amber,#b45309);font-weight:600"></div>
     <details style="margin-top:.6rem">
       <summary class="sg-hint" style="cursor:pointer">⚙️ {{ (i18n or {}).get('sg_switch_title', "护栏参数") }}</summary>
       <div class="sg-grid" id="sg-switches" style="margin-top:.6rem">
@@ -232,9 +237,13 @@
     'supply_ok': (i18n or {}).get('sg_supply_ok', '成功'),
     'supply_fail': (i18n or {}).get('sg_supply_fail', '没过质检'),
     'supply_empty': (i18n or {}).get('sg_supply_empty', '还没有产出记录'),
+    'assets_missing': (i18n or {}).get('sg_assets_missing', '曲库 {t} 首 · 声库 {v} 个 · 备货 {s} 段：资产不齐，唱歌能力不可开启（开着会让客户求歌建单进失败）；如需开通请联系客服。'),
+    'assets_on_missing': (i18n or {}).get('sg_assets_on_missing', '⚠ 唱歌能力已开启但资产不齐（曲库 {t} 首 · 声库 {v} 个 · 备货 {s} 段）：客户求歌会建单进失败。建议先关闭，或联系客服补齐资产。'),
   }|tojson }};
   var OV = null;
   var busy = false;
+  // L-4 G（D-L6）：用户版整页收起时不发任何 API（横幅已说明原因）
+  var LOCKED = !!(document.getElementById('sg-root') && document.getElementById('sg-root').classList.contains('l4-locked'));
   // feat 探测（reply-settings 守卫卡同款语义）：P3-1 新端点（retry/delete/
   // supply）可能晚于本模板热更装载——旧后端时隐藏对应按钮，绝不摆死按钮。
   var FEAT = {orders_v2: false};
@@ -348,9 +357,23 @@
     }
   }
 
+  /* L-4 G（#199）：资产不齐 → 能力位不可开启并写明原因；已开着 → 红字警示可关不可再开 */
+  function renderAssetsGuard(cfg){
+    var warn = document.getElementById('sg-assets-warn');
+    var en = document.getElementById('sg-cfg-enabled');
+    var a = (OV && OV.assets) || null;
+    if(!warn || !en || !a){ if(warn) warn.style.display = 'none'; return; }
+    var fill = function(s){ return String(s).replace('{t}', a.songs_enabled || 0).replace('{v}', a.voices_ok || 0).replace('{s}', a.stock_files || 0); };
+    if(a.ready){ warn.style.display = 'none'; en.disabled = false; return; }
+    warn.style.display = '';
+    if(cfg && cfg.enabled){ warn.textContent = fill(SG.assets_on_missing); en.disabled = false; }
+    else { warn.textContent = fill(SG.assets_missing); en.disabled = true; }
+  }
+
   function renderConfig(cfg){
     var en = document.getElementById('sg-cfg-enabled');
     if(en) en.checked = !!cfg.enabled;
+    renderAssetsGuard(cfg);
     ['daily_cap','cooldown_hours','repeat_window_days'].forEach(function(k){
       var i = document.getElementById('sg-cfg-'+k);
       if(i && cfg[k] !== undefined && cfg[k] !== null) i.value = cfg[k];
@@ -648,6 +671,7 @@
   window.sgSupplyLoad = sgSupplyLoad;
 
   function sgLoad(){
+    if(LOCKED) return;
     fetch('/api/singing/overview', {credentials:'same-origin'})
       .then(function(r){ return r.json(); })
       .then(function(d){
@@ -678,7 +702,12 @@
     }
     busy = true;
     post('/api/singing/config', {key: key, value: !!cb.checked})
-      .then(function(r){ toast(r.ok ? SG.saved : SG.save_fail); if(!r.ok) cb.checked = !cb.checked; else sgOrdersLoad(); })
+      .then(function(r){
+        /* 409 资产不齐（L-4 G）：后端 detail 已是人话，原样转告 */
+        toast(r.ok ? SG.saved : ((r.j && r.j.detail) || SG.save_fail));
+        if(!r.ok) cb.checked = !cb.checked;
+        else { if(OV && OV.config) OV.config[key] = !!cb.checked; renderAssetsGuard(OV && OV.config); sgOrdersLoad(); }
+      })
       .catch(function(){ toast(SG.save_fail); cb.checked = !cb.checked; })
       .finally(function(){ busy = false; });
   }

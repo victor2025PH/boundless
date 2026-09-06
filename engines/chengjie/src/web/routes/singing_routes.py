@@ -80,6 +80,35 @@ def register_singing_routes(app, api_auth, config_manager=None):
         except Exception:
             return {}
 
+    def _assets_summary(scfg: Dict[str, Any]) -> Dict[str, Any]:
+        """L-4 G（#199）：唱歌能力的资产盘点——曲库（启用曲目）/ 声库（锚定音在场）/ 备货段。
+
+        ``ready`` = 至少一首启用曲目 **且** 至少一个可用声库；备货 0 只警示不拦（工厂夜里
+        才渲）。skuio 机实录：曲库 0 / 声库 0 而开关开着 → 客户求歌建单进失败。
+        """
+        out = {"songs_enabled": 0, "voices": 0, "voices_ok": 0, "stock_files": 0,
+               "ready": False}
+        try:
+            tdir = templates_dir(scfg)
+            tpls = load_song_manifest(tdir)
+            out["songs_enabled"] = sum(1 for t in tpls if t.enabled)
+            voices = load_voices(tdir)
+            out["voices"] = len(voices)
+            out["voices_ok"] = sum(1 for v in voices if (tdir / v["anchor"]).is_file())
+            sroot = stock_root(scfg)
+            n = 0
+            if sroot.is_dir():
+                for pdir in sroot.iterdir():
+                    sdir = pdir / "songs"
+                    if sdir.is_dir():
+                        n += sum(1 for f in sdir.iterdir()
+                                 if f.suffix.lower() in (".ogg", ".wav", ".mp3"))
+            out["stock_files"] = n
+        except Exception:
+            logger.debug("[singing] 资产盘点失败（按不齐）", exc_info=True)
+        out["ready"] = out["songs_enabled"] > 0 and out["voices_ok"] > 0
+        return out
+
     @app.get("/api/singing/overview")
     async def api_singing_overview(request: Request, _=Depends(api_auth)):
         cfg = _cfg()
@@ -142,6 +171,7 @@ def register_singing_routes(app, api_auth, config_manager=None):
             "persona_names": {pid: names.get(pid, pid) for pid in pids},
             "matrix": matrix,
             "stats": singing_status_snapshot(cfg),
+            "assets": _assets_summary(scfg),
         }
 
     def _serve_audio(path: Path):
@@ -198,6 +228,14 @@ def register_singing_routes(app, api_auth, config_manager=None):
         except (TypeError, ValueError):
             raise HTTPException(400, tr(request, "err.singing.bad_value",
                                         "bad value"))
+        # L-4 G（#199）：资产不齐（无启用曲目 / 无可用声库）不许开唱歌能力——开着只会让
+        # 客户求歌建单进失败。关闭与其他护栏参数不拦。
+        if key == "enabled" and value:
+            assets = _assets_summary(resolve_singing_cfg(_cfg()))
+            if not assets["ready"]:
+                raise HTTPException(409, tr(
+                    request, "err.singing.assets_missing",
+                    t=assets["songs_enabled"], v=assets["voices_ok"]))
         ok, msg = config_manager.set_overlay_flag(
             f"companion.singing.{key}", value)
         if not ok:
