@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{#- 页面级人话错误页（L-4 C #198，2026-09-06）：页面路由（非 API）出错时不再把 {"detail": …}
+    原始 JSON 甩给浏览器——skuio 点「打开培训演示」看到一屏 JSON 以为系统坏了。
+    上下文：error_title / error_message / back_href / back_label（均可缺省）。状态码由路由决定。 -#}
+{% block title %}{{ error_title|default((i18n or {}).get('pe_title', "页面暂不可用")) }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ error_title|default((i18n or {}).get('pe_title', "页面暂不可用")) }}{% endblock %}
+{% block content %}
+<div style="max-width:640px;margin:2.5rem auto;padding:1.4rem 1.6rem;border:1px solid var(--bd);border-radius:14px;background:var(--card);text-align:center">
+  <div style="font-size:2rem;line-height:1;margin-bottom:.6rem">🚧</div>
+  <h2 style="margin:0 0 .5rem;font-size:1.1rem;color:var(--t)">{{ error_title|default((i18n or {}).get('pe_title', "页面暂不可用")) }}</h2>
+  <p style="margin:0 0 1rem;color:var(--t2);font-size:.9rem;line-height:1.65">{{ error_message|default((i18n or {}).get('pe_body', "这个页面需要的内容还没有随本版本一起安装；如需开通请联系客服。")) }}</p>
+  <a href="{{ back_href|default('/') }}" class="btn btn-p btn-sm" style="text-decoration:none">{{ back_label|default((i18n or {}).get('pe_back', "返回")) }}</a>
+</div>
+{% endblock %}

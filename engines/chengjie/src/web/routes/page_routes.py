@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from src.web.web_i18n import tr
 
@@ -40,13 +40,25 @@ def register_page_routes(app, ctx) -> None:
         return templates.TemplateResponse(request, "help.html", {
             "request": request,
             "help_sections": get_help_sections(),
+            # L-4 C（#198）：培训演示入口做存在性检测——docs/training 不随桌面包，
+            # 文件不在就不渲染按钮，而不是让用户点进 404
+            "training_available": _TRAINING_SLIDES_PATH.is_file(),
         })
 
     @app.get("/training", response_class=HTMLResponse)
     async def training_slides_page(request: Request, _=Depends(_page_auth)):
-        """客服培训用全屏 HTML 幻灯片（需登录）。"""
+        """客服培训用全屏 HTML 幻灯片（需登录）。
+
+        L-4 C（#198）：文件缺席时渲染人话错误页（_page_error.html，404），不再把
+        ``{"detail": …}`` 原始 JSON 甩给浏览器（skuio 实录以为系统坏了）。
+        """
         if not _TRAINING_SLIDES_PATH.is_file():
-            raise HTTPException(status_code=404, detail=tr(request, "err.page.training_not_found"))
+            return templates.TemplateResponse(request, "_page_error.html", {
+                "error_title": tr(request, "hp_s006"),
+                "error_message": tr(request, "err.page.training_not_found"),
+                "back_href": "/help",
+                "back_label": tr(request, "hp_s000"),
+            }, status_code=404)
         html = _TRAINING_SLIDES_PATH.read_text(encoding="utf-8")
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

@@ -28,7 +28,13 @@ ZH = {
     "hp_s013": "示例",
     "hp_s014": "权限",
     "hp_s015": "复制指令",
-    "hp_sec_scripts": "话术管理",
+    # L-4 C（#198）：原「话术管理」是 TG 时代 Bot 斜杠命令表，改名 + 标注适用范围
+    "hp_sec_scripts": "机器人斜杠命令（旧）",
+    "hp_sec_scripts_scope": "仅适用于 Telegram 主号的 Bot 指令模式（在群里或私聊里对机器人输入的斜杠命令）；收件箱、人设与三端 RPA 不使用这些指令——话术请去「知识库 / 话术模板」维护。",
+    # 页面级人话错误页（_page_error.html）
+    "pe_title": "页面暂不可用",
+    "pe_body": "这个页面需要的内容还没有随本版本一起安装；如需开通请联系客服。",
+    "pe_back": "返回",
 }
 
 EN = {
@@ -58,5 +64,9 @@ EN = {
     "hp_s013": "Example",
     "hp_s014": "Access",
     "hp_s015": "Copy command",
-    "hp_sec_scripts": "Script management",
+    "hp_sec_scripts": "Bot slash commands (legacy)",
+    "hp_sec_scripts_scope": "Only for the Telegram main account's bot-command mode (slash commands typed to the bot in groups or DMs); the inbox, personas and the three RPA channels do not use them — maintain scripts under Knowledge base / Script templates instead.",
+    "pe_title": "Page unavailable",
+    "pe_body": "The content this page needs was not installed with this build; contact support to enable it.",
+    "pe_back": "Back",
 }
