@@ -1739,13 +1739,18 @@ companion:
     # R6 事后兜底：回复自身鼓励自伤("那就去死吧") → 整段覆盖为温柔安全兜底（红线，随 enabled 默认开）。
     # 资源保障：severe 危机且回复未提求助时强制补一句热线（默认关，避免每条都附显机械）。
     crisis_resource_assurance: false
-    # R8 危机人工接管：severe 连续命中 ≥ escalate_after → 触发 escalation_needed webhook 告警
-    # （category=crisis）让真人介入。默认关（需配 webhook_settings.json + 真人值守）。
-    crisis_escalation: false
+    # R8 危机人工接管：severe 连续命中 ≥ escalate_after → 触发 escalation_needed 告警
+    # （category=crisis）让真人介入：桌面包点亮工作台「需人工」徽标 + 置顶会话 + 落案例，
+    # 配了 webhook_settings.json 的部署再多发一路 webhook。
+    # 出厂开（老板决策 D7 #185 2026-09-05 → D-L1 2026-09-06 进基础配置；此前默认关，
+    # 只在 cloud_light / 内测种子里开，走 clean 包升级的机器一直没拿到）。
+    # 与 feature_registry A 类基线同值：桌面存量安装由 _ensure_baseline 补齐，显式 false 尊重。
+    crisis_escalation: true
     escalate_after: 1        # severe 连击达到此值即告警（1=首次 severe 即告警）
     # R9 审计落库：severe/elevated 危机事件落 bot.db 的 crisis_event 表（时间/等级/连击/
-    # 是否升级/是否触发兜底/短摘要 ≤120 字），供复盘/合规/人工处置追踪。默认关（含隐私敏感数据）。
-    crisis_audit: false
+    # 是否升级/是否触发兜底/短摘要 ≤120 字），供复盘/合规/人工处置追踪。
+    # 出厂开（同上 D7）：只存 ≤120 字短摘要不存全文，隐私靠页面角色门（主管/合规）而非关闭。
+    crisis_audit: true
   # Phase O 主动关怀引擎：从入站消息抽取「时间约定/未来事件」（你说周五面试…），到点由 AI
   # 主动发一条引用具体事的关心消息。复用 reactivation 的 deferred 发送队列（享 gate/pacing/
   # quiet_hours/kill-switch）。把「沉默才捞」升级为「记得你说的事、到点主动关心」。默认全关。
@@ -2489,15 +2494,19 @@ companion:
     planner:
       backoff_after_unanswered: 2   # 对方未回期间已带目标发过 N 拍 → 退避纯陪伴日（力度 none）
       halt_after_unanswered: 4      # 达 N 拍仍未回 → 完全 hold（目标块不再注入，彻底让路）
-    # P0 2026-08-30 冲刺推进器（默认关）：限时目标（pace=today/session）的时间驱动
+    # P0 2026-08-30 冲刺推进器：限时目标（pace=today/session）的时间驱动
     #   主动拍——此前限时档只有「对方开口才拍」一条通道（bridge 拒 sprint 上主动
     #   顺风车，且 proactive 沉默阈值 12-48h 在 2-12h 窗口内永不放行），客户沉默
     #   ＝到期必 expired。开启后按剩余时间相位（开场/跟进/收口）把主动拍排进
     #   care 派发管线（LLM 拟稿引用目标背景 + deferred 队列投递）。
     #   只作用于 autonomy=auto 的冲刺目标 + auto_ai 档会话；危机情绪/opt-out/
     #   对端 bot/平台白名单等安全闸绝不豁免。
+    #   出厂开（老板决策 D1 #166 2026-09-05 → D-L1 2026-09-06 进基础配置；此前默认关，
+    #   只在 cloud_light / 内测种子里开——两台内测机走 clean 包升级，1.0.74 启动仍
+    #   enabled=False、卡片却写「自动推进」）。与 feature_registry A 类基线同值：桌面
+    #   存量安装由 _ensure_baseline 补进 overlay，用户显式 false 不动。
     sprint:
-      enabled: false
+      enabled: true
       interval_sec: 120          # 扫描周期（秒）
       max_per_tick: 6            # 每轮最多排入几条主动拍（全实例）
       phase_points: [0.0, 0.45, 0.75]   # 相位点（占目标总时长比例）：开场/跟进/收口

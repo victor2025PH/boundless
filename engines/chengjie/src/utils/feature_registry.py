@@ -217,6 +217,28 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=True, show=False,
         note="跨平台档案（来源平台/那边的昵称/聊过的话题域 → _origin_block 注入）："
              "纯本地表 + 随包 AI 链，坐席右栏卡的后端；关着就只剩一张报错的卡"),
+    # ── 老板决策 D1 / D7（2026-09-05）→ D-L1「出厂开进基础配置，客户版也开」
+    # （2026-09-06 L-5）。此前两项只写在 cloud_light（仅全新安装播种）与内测种子
+    # config.desktop.internal.yaml（只进 smart 包）里：两台内测机走应用内更新拿的
+    # 是 clean 包 + 升级安装 → 两条播种路都不经过，1.0.74 启动仍 sprint.enabled=False、
+    # 危机留痕关。进 A 类基线 = _ensure_baseline 在**存量安装**首启补进 overlay
+    # （合并视图缺键才补；用户显式 false 永远尊重），不再依赖装的是哪种包。
+    Feature(
+        key="companion.goals.sprint.enabled", cls="A", slug="goal_sprint",
+        baseline=True, show=False,
+        note="工作目标冲刺推进器（#166 D1）：限时目标选「自动推进」后按相位排主动拍，"
+             "派发走 care 管线全套护栏（silence_min/min_gap/危机/opt-out/平台白名单/"
+             "仅 auto_ai 会话）；纯软件零 LAN 依赖。show=False：UI 面是目标卡自身"),
+    Feature(
+        key="companion.wellbeing.crisis_audit", cls="A", slug="crisis_audit",
+        baseline=True, show=False,
+        note="客户安全预警留痕（#185 D7）：severe/elevated 危机事件落本地库短摘要"
+             "（≤120 字），页面才有数据可看；隐私靠角色门不靠关闭。纯本地 SQLite"),
+    Feature(
+        key="companion.wellbeing.crisis_escalation", cls="A", slug="crisis_escalation",
+        baseline=True, show=False,
+        note="客户安全预警人工升级（#185 D7）：severe 命中点亮工作台「需人工」徽标 + "
+             "置顶会话 + 落案例，不依赖外部 webhook；纯软件零依赖"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     Feature(
         key="memory.vector.enabled", cls="B", slug="memvec",

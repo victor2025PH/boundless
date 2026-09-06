@@ -88,7 +88,14 @@ def test_baseline_patch_only_fills_missing():
                           # 1.0.50 发布说明宣传了小智、包里开关却是关的）
                           "assistant.enabled",
                           "assistant.agent.enabled",
-                          "assistant.vision.enabled"}
+                          "assistant.vision.enabled",
+                          # 2026-09-06 L-5 D-L1：老板决策 D1（#166 冲刺推进器）/
+                          # D7（#185 客户安全预警留痕+升级）出厂开进基线——此前只在
+                          # cloud_light（仅全新安装）与内测种子（仅 smart 包）里，
+                          # 走 clean 包升级的内测机两条路都没经过
+                          "companion.goals.sprint.enabled",
+                          "companion.wellbeing.crisis_audit",
+                          "companion.wellbeing.crisis_escalation"}
     assert patch["contacts.mode"] == "lite"
     # 显式 false = 用户决定，绝不覆盖；其余缺失键照补
     part = baseline_patch({"companion": {"goals": {"enabled": False}}})
@@ -97,7 +104,11 @@ def test_baseline_patch_only_fills_missing():
     # 全部已表态（开/关混合）→ 零 patch
     assert baseline_patch({
         "companion": {"goals": {"enabled": True,
-                                "notify": {"enabled": True}},
+                                "notify": {"enabled": True},
+                                # L-5 D-L1 三键：一关两开＝显式表态都不被覆盖
+                                "sprint": {"enabled": False}},
+                      "wellbeing": {"crisis_audit": True,
+                                    "crisis_escalation": False},
                       "deep_persona": {"enabled": False}},
         "inbox": {"reply_style": {"bubbles": {"enabled": True}},
                   "auto_draft": {"media_degrade_reply": True},
@@ -116,6 +127,29 @@ def test_baseline_patch_only_fills_missing():
         "assistant": {"enabled": True, "agent": {"enabled": False},
                       "vision": {"enabled": True}},
     }) == {}
+
+
+def test_baseline_patch_l5_factory_defaults_respect_explicit_false():
+    """L-5 D-L1（2026-09-06）：sprint / crisis_audit / crisis_escalation 三键
+    是 A 类基线——缺键补 True；用户显式写过 false（例如运营刻意关掉留痕）的
+    机器一个字都不动（_ensure_baseline 三态语义）。"""
+    trio = ("companion.goals.sprint.enabled",
+            "companion.wellbeing.crisis_audit",
+            "companion.wellbeing.crisis_escalation")
+    full = baseline_patch({})
+    assert all(full[k] is True for k in trio)
+    # 模拟 skuio 机 1.0.74 clean 包升级态：goals/wellbeing 段存在但三键缺失 → 全补
+    cfg = {"companion": {"goals": {"enabled": True},
+                         "wellbeing": {"enabled": True}}}
+    part = baseline_patch(cfg)
+    assert all(part[k] is True for k in trio)
+    # 显式 false 全部尊重；其中一键缺失仍单独补
+    cfg = {"companion": {"goals": {"sprint": {"enabled": False}},
+                         "wellbeing": {"crisis_audit": False}}}
+    part = baseline_patch(cfg)
+    assert "companion.goals.sprint.enabled" not in part
+    assert "companion.wellbeing.crisis_audit" not in part
+    assert part["companion.wellbeing.crisis_escalation"] is True
 
 
 def test_as_nested():

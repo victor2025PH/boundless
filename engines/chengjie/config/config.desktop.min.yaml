@@ -203,6 +203,22 @@ companion:
     # 却无处可开——种子哲学反例，出厂即开。
     notify:
       enabled: true
+    # 冲刺推进器出厂开（老板决策 D1 #166，2026-09-05；D-L1 2026-09-06 进基础配置）：
+    # 限时目标选「自动推进」后按相位排主动拍。此前只写在 cloud_light（仅全新安装）
+    # 与内测种子（仅 smart 包）——走 clean 包升级的机器两条路都不经过，卡片写着
+    # 「自动推进」引擎却没开。现为 feature_registry A 类：新装随本种子、存量升级由
+    # _ensure_baseline 补齐；安全闸全部沿用代码默认（silence_min/min_gap/危机/
+    # opt-out/平台白名单/仅 auto_ai 会话）。
+    sprint:
+      enabled: true
+  # 客户安全预警出厂开（老板决策 D7 #185，2026-09-05；D-L1 2026-09-06 进基础配置）：
+  # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；留痕（crisis_audit）与
+  # 人工升级（crisis_escalation）此前出厂关 → severe 命中不记录、不叫任何人，页面
+  # 却像正常空表。桌面包升级不依赖 webhook：点亮工作台「需人工」徽标 + 置顶 + 落案例。
+  # 隐私靠角色门（页面只给主管/合规看）+ 摘要 ≤120 字，而不是靠关掉。同为 A 类基线。
+  wellbeing:
+    crisis_audit: true
+    crisis_escalation: true
   # 深度人设分层注入（2026-07-31 拍板升 A）：纯 prompt 层增强，各层软降级。
   deep_persona:
     enabled: true
