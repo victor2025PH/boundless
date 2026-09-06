@@ -454,6 +454,7 @@ _BASELINE = """
 /api/personas/profiles/{profile_id}/retire-verify	POST
 /api/personas/profiles/{profile_id}/revert	POST
 /api/personas/registry-account/{platform}/{account_id}/assign-profile	POST
+/api/personas/schema-keys	GET
 /api/personas/selfie-gate	GET
 /api/personas/selfie-gate	POST
 /api/personas/status	GET

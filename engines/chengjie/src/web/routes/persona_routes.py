@@ -1476,6 +1476,13 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         count = pm.load_profiles_from_config(cfg)
         return {"ok": True, "loaded": count}
 
+    @app.get("/api/personas/schema-keys")
+    async def api_personas_schema_keys(request: Request, _=Depends(auth_dep)):
+        """人设档案合法顶层键（L-2 #203）：编辑器「从 JSON 导入字段」的闸——含未知
+        顶层键的 JSON 直接拒绝填充，防误粘别的东西整体覆盖服务中人设（WYGNJ2）。"""
+        from src.utils.persona_manager import known_persona_top_keys
+        return {"ok": True, "keys": known_persona_top_keys()}
+
     @app.get("/api/personas/profiles/export")
     async def api_profiles_export(request: Request, _=Depends(auth_dep)):
         """Export all profiles as a JSON list (master only)."""

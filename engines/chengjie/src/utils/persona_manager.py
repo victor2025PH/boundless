@@ -115,6 +115,23 @@ PROMPT_EXEMPT_FIELDS = frozenset({
 # 新字段两边都没登记即红（见 tests/test_persona_prompt_chain.py）。
 PERSONA_SCHEMA_FIELDS = PROMPT_CONSUMED_FIELDS | PROMPT_EXEMPT_FIELDS
 
+# 顶层键之外、schema 表没登记但真实档案/表单在用的键（quirks 进 persona_voice 口头禅；
+# language 进档案页；capabilities 已按子键登记，这里补顶层；时间戳是导出/备份元数据）。
+_EXTRA_TOP_KEYS = frozenset({
+    "quirks", "language", "capabilities", "emotion", "temper", "avatar",
+    "created_at", "updated_at",
+})
+
+
+def known_persona_top_keys() -> List[str]:
+    """人设档案合法的**顶层**键（L-2 #203 JSON 导入闸的「未知字段直接拒绝」判据）。
+
+    单一事实源＝prompt 数据链登记表（PERSONA_SCHEMA_FIELDS 的首段）∪ 上面几个补充键。
+    有序、去重；``_`` 开头的内部键（``_mrpa_source``）不对外暴露。
+    """
+    keys = {f.split(".", 1)[0] for f in PERSONA_SCHEMA_FIELDS} | set(_EXTRA_TOP_KEYS)
+    return sorted(k for k in keys if k and not k.startswith("_"))
+
 # emoji_level 别名归一：低/中档历史上写法不一（low/medium 曾整档静默失效——
 # chen_meiling=low、su_wan=medium 在旧 if/elif 链里一个分支都不命中）。
 _EMOJI_LEVEL_ALIASES = {

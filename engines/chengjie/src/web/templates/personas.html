@@ -178,6 +178,18 @@
 .json-import-wrap{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
 .json-import-wrap summary{font-size:.74rem;color:var(--t2);cursor:pointer;user-select:none;list-style:none}
 .json-import-wrap summary::-webkit-details-marker{display:none}
+/* L-2 #203：折叠态必须看得出是折叠的（原先隐藏了三角标记，标题像常驻区块） */
+.json-import-wrap summary::before{content:'▸ ';font-size:.7rem}
+.json-import-wrap[open] summary::before{content:'▾ '}
+.ji-dev-tag{font-size:.62rem;border:1px solid var(--bd);border-radius:999px;padding:0 .4rem;color:var(--t3);margin-left:.3rem;vertical-align:middle}
+.ji-preview{margin-top:.5rem;border:1px solid var(--bd);border-radius:8px;padding:.5rem .6rem;font-size:.74rem}
+.ji-preview table{width:100%;border-collapse:collapse;font-size:.72rem}
+.ji-preview th,.ji-preview td{text-align:left;vertical-align:top;padding:.25rem .35rem;border-bottom:1px solid var(--bd)}
+.ji-preview td.ji-val{font-family:monospace;font-size:.68rem;white-space:pre-wrap;word-break:break-all;max-width:18rem}
+.ji-preview .ji-old{color:var(--t3);text-decoration:line-through}
+.ji-preview .ji-new{color:var(--th-ink-green7,#15803d)}
+.ji-preview .ji-warn{color:var(--th-ink-red7,#b91c1c);font-weight:600;margin:.25rem 0 .4rem}
+.ji-preview .ji-actions{display:flex;gap:.4rem;margin-top:.5rem;align-items:center;flex-wrap:wrap}
 /* ── C 线：结构化 personality 只读区 + 高级字段只读面板 + 卡片完整度徽标 ── */
 #pe-personality-extras{display:none;margin-top:.32rem;padding:.45rem .6rem;background:var(--input);border:1px solid var(--bd);border-radius:8px}
 .pe-px-row{font-size:.72rem;color:var(--t2);margin:.14rem 0;line-height:1.55}
@@ -1073,15 +1085,24 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     </div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_personality_style','性格 / 风格') }}</label><textarea id="pe-personality" rows="5" placeholder="{{ (i18n or {}).get('psn_personality_ph','温柔体贴，喜欢用撒娇语气…') }}"></textarea><span id="pe-pers-notice" class="pers-notice">✓ {{ (i18n or {}).get('psn_pers_structured','结构化人设：此处仅编辑说话风格 style，特质等字段随保存原样保留') }}</span><div id="pe-personality-extras"></div></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_tag','标签') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-tags" type="text" placeholder="holiday, vip, companion"></div>
-    <details class="json-import-wrap">
-      <summary>&#128203; {{ (i18n or {}).get('psn_json_import_field','从 JSON 导入字段…') }}</summary>
+    {% if not ui_client_hide|default(false) %}
+    <!-- L-2 #203（WYGNJ2/5EFS2A）：JSON 导入与高级字段 JSON 是研发面——client 形态且未开
+         开发者模式（ui_client_hide，L-4 契约）整块不渲染；内部/开发者模式下折叠常闭，且
+         「解析并填充」改为「解析并预览」→ 逐字段对照勾选 → 二次确认 → 30s 可撤销。 -->
+    <details class="json-import-wrap" id="pe-json-import-wrap">
+      <summary>&#128203; {{ (i18n or {}).get('psn_json_import_field','从 JSON 导入字段…') }} <span class="ji-dev-tag">{{ (i18n or {}).get('psn_ji_dev_tag','开发者') }}</span></summary>
       <div class="field-row" style="margin-top:.5rem">
         <label>{{ (i18n or {}).get('psn_paste_profile_json','粘贴 profile JSON') }}</label>
         <textarea id="pe-json-import" rows="4" placeholder='{"name":"...","role":"...","personality":"...","tags":["vip"]}'></textarea>
       </div>
-      <button class="btn btn-sm" onclick="_importFromJson()" style="margin-top:.28rem">{{ (i18n or {}).get('psn_parse_fill','解析并填充') }}</button>
+      <div style="display:flex;gap:.4rem;align-items:center;margin-top:.28rem;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm" onclick="_importFromJson()">{{ (i18n or {}).get('psn_ji_parse_preview','解析并预览') }}</button>
+        <span style="font-size:.7rem;color:var(--t3)">{{ (i18n or {}).get('psn_ji_hint','只填充你勾选的字段；填充后 30 秒内可撤销；仍需点「保存」才落库。') }}</span>
+      </div>
+      <div id="pe-ji-preview" class="ji-preview" style="display:none"></div>
     </details>
-    <details id="pe-adv-panel" style="display:none">
+    {% endif %}
+    <details id="pe-adv-panel" style="display:none" {% if ui_client_hide|default(false) %}data-client-hidden="1"{% endif %}>
       <summary>&#128230; {{ (i18n or {}).get('psn_adv_title','高级字段（随保存原样保留）') }} <span id="pe-adv-badge"></span></summary>
       <pre id="pe-adv-body"></pre>
       <div style="margin-top:.35rem">
@@ -3736,13 +3757,14 @@ function _renderPersonalityExtras(persObj) {
 }
 
 // ── C 线：高级字段只读面板 — _loadedProfile 里「表单未管理」的字段可见化 ─────────
+// L-2 #203（5EFS2A）：voice_profile 整棵子树由语音 tab 三态表单接管、capabilities 由相册 tab
+// 「可发照片」开关接管——两者不再以原始 JSON 直出；其余未知字段后台静默保留（保存时原样回传）。
 var _ADV_MANAGED_TOP = ['id','name','role','tags','personality','speaking','identity','voice_profile',
-  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes'];
+  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities'];
 var _ADV_MANAGED_SUB = {
   personality: ['style','quirks','humor','temperament'],
   speaking: ['reply_length','emoji_level','forbidden_phrases','openers'],
   identity: ['deny_ai','claim_human'],
-  voice_profile: ['backend','voice'],
   names: ['full_western','english','nickname','usage_notes'],
   context: ['hobbies','specific_memories','emotional_triggers'],
   tastes: ['likes','dislikes','opinions'],
@@ -3751,6 +3773,8 @@ var _ADV_MANAGED_SUB = {
 function _refreshAdvPanel() {
   var panel = document.getElementById('pe-adv-panel');
   if (!panel) return;
+  // client 形态且未开开发者模式：高级字段 JSON 对用户不可见（值仍随保存原样保留）
+  if (panel.getAttribute('data-client-hidden') === '1') { panel.style.display = 'none'; panel.open = false; _advPatch = null; return; }
   var body = document.getElementById('pe-adv-body');
   var badge = document.getElementById('pe-adv-badge');
   var extra = {};
@@ -5239,23 +5263,152 @@ function _dismissDraft() {
 }
 
 // ── P15: JSON import ─────────────────────────────────────────────────────────
-function _importFromJson() {
+// L-2 #203（2026-09-06，WYGNJ2/5EFS2A）：旧「解析并填充」一键整体覆盖 _loadedProfile +
+// 表单，误粘 + 误点 + 保存 = 服务中人设被整体替换。现在：解析 → 拒绝非法 JSON / 未知
+// 顶层键 → 逐字段对照预览（旧值 → 新值，可勾选）→ 服务中人设红字警示 → 二次确认 →
+// 只并入勾选字段 → 30s 撤销（客户端快照；落库后的撤销仍走 /revert 历史栈）。
+// 纯函数核心（tests/test_persona_json_import_guard.py 用 node 直接跑两个标记之间的段）
+// [ji-core-begin]
+function _jiParse(raw, knownKeys) {
+  var p;
+  try { p = JSON.parse(String(raw || '')); } catch (e) { return {ok: false, error: 'invalid_json', detail: String(e && e.message || e)}; }
+  if (p && typeof p === 'object' && !Array.isArray(p) && p.persona && typeof p.persona === 'object') p = p.persona;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return {ok: false, error: 'not_object'};
+  var keys = Object.keys(p);
+  if (!keys.length) return {ok: false, error: 'empty'};
+  var unknown = [];
+  if (knownKeys && knownKeys.length) {
+    keys.forEach(function (k) { if (knownKeys.indexOf(k) === -1) unknown.push(k); });
+  }
+  if (unknown.length) return {ok: false, error: 'unknown_fields', unknown: unknown};
+  return {ok: true, persona: p};
+}
+function _jiSame(a, b) { try { return JSON.stringify(a) === JSON.stringify(b); } catch (e) { return a === b; } }
+function _jiDiff(loaded, incoming) {
+  loaded = (loaded && typeof loaded === 'object') ? loaded : {};
+  var rows = [];
+  Object.keys(incoming || {}).forEach(function (k) {
+    if (k === 'id') return;   // id 由抽屉自己管（新建可填、编辑只读）
+    var oldV = loaded[k], newV = incoming[k];
+    var has = Object.prototype.hasOwnProperty.call(loaded, k);
+    rows.push({key: k, old: has ? oldV : undefined, 'new': newV, changed: !has || !_jiSame(oldV, newV)});
+  });
+  return rows;
+}
+function _jiApply(loaded, incoming, selectedKeys) {
+  var out = JSON.parse(JSON.stringify((loaded && typeof loaded === 'object') ? loaded : {}));
+  (selectedKeys || []).forEach(function (k) {
+    if (!Object.prototype.hasOwnProperty.call(incoming || {}, k) || k === 'id') return;
+    out[k] = JSON.parse(JSON.stringify(incoming[k]));
+  });
+  return out;
+}
+// [ji-core-end]
+var _jiKnownKeys = null;
+var _jiPending = null;          // {persona, rows}
+var _jiUndo = null;             // {profile, ts}
+var _jiUndoTimer = null;
+function _jiLoadKnownKeys() {
+  if (_jiKnownKeys) return Promise.resolve(_jiKnownKeys);
+  return apiFetch('/api/personas/schema-keys').then(function (r) { return r.ok ? r.json() : {}; })
+    .then(function (d) { _jiKnownKeys = (d && d.keys && d.keys.length) ? d.keys : _ADV_MANAGED_TOP.slice(); return _jiKnownKeys; })
+    .catch(function () { _jiKnownKeys = _ADV_MANAGED_TOP.slice(); return _jiKnownKeys; });
+}
+function _jiFmt(v) {
+  if (v === undefined) return '—';
+  if (typeof v === 'string') return v.length > 160 ? v.slice(0, 160) + '…' : v;
+  try { var s = JSON.stringify(v); return s.length > 160 ? s.slice(0, 160) + '…' : s; } catch (e) { return String(v); }
+}
+function _jiServing() {
+  var pid = _editingProfileId;
+  if (!pid) return 0;
+  var p = (_allProfiles || []).find(function (x) { return x.id === pid; });
+  return p ? (Number(p.binding_count) || 0) : 0;
+}
+async function _importFromJson() {
   var ta = document.getElementById('pe-json-import');
+  var box = document.getElementById('pe-ji-preview');
   var raw = ta ? ta.value.trim() : '';
   if (!raw) { _toast(window.T('psn_js_155'), 'err'); return; }
-  try {
-    var p = JSON.parse(raw);
-    if (p.persona) p = p.persona;
-    // C 线：导入的富键成为保存基底（否则保存时未映射进表单的字段全部丢失）
-    _loadedProfile = JSON.parse(JSON.stringify(p));
-    _fillDrawerFields(p);
-    _refreshAdvPanel();
-    var idEl = document.getElementById('pe-id');
-    if (idEl && !idEl.readOnly && p.id) idEl.value = p.id;
-    if (ta) ta.value = '';
-    _markDrawerDirty({target: document.getElementById('pe-name')});
-    _toast(window.T('psn_js_156'), 'ok');
-  } catch(e) { _toast(window.T('psn_js_157') + e.message, 'err'); }
+  var known = await _jiLoadKnownKeys();
+  var res = _jiParse(raw, known);
+  if (!res.ok) {
+    var msg = res.error === 'unknown_fields'
+      ? window.Tf('psn_ji_unknown_fields', {fields: res.unknown.join(', ')})
+      : (res.error === 'invalid_json' ? (window.T('psn_js_157') + (res.detail || '')) : window.T('psn_ji_not_object'));
+    _toast(msg, 'err', 8000);
+    if (box) { box.style.display = ''; box.innerHTML = '<div class="ji-warn">' + _esc(msg) + '</div>'; }
+    return;
+  }
+  var rows = _jiDiff(_loadedProfile, res.persona);
+  if (!rows.length) { _toast(window.T('psn_ji_nothing'), 'err'); return; }
+  _jiPending = {persona: res.persona, rows: rows};
+  var serving = _jiServing();
+  var html = '';
+  if (serving > 0) html += '<div class="ji-warn">⚠ ' + _esc(window.Tf('psn_ji_serving_warn', {n: String(serving)})) + '</div>';
+  html += '<table><thead><tr><th></th><th>' + _esc(window.T('psn_ji_col_field')) + '</th><th>' + _esc(window.T('psn_ji_col_old')) + '</th><th>' + _esc(window.T('psn_ji_col_new')) + '</th></tr></thead><tbody>';
+  rows.forEach(function (r, i) {
+    html += '<tr><td><input type="checkbox" class="ji-pick" data-i="' + i + '"' + (r.changed ? ' checked' : '') + '></td>'
+      + '<td><b>' + _esc(r.key) + '</b>' + (r.changed ? '' : ' <span style="color:var(--t3)">' + _esc(window.T('psn_ji_unchanged')) + '</span>') + '</td>'
+      + '<td class="ji-val ji-old">' + _esc(_jiFmt(r.old)) + '</td>'
+      + '<td class="ji-val ji-new">' + _esc(_jiFmt(r['new'])) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="_jiConfirm()">' + _esc(window.T('psn_ji_confirm')) + '</button>'
+    + '<button type="button" class="btn btn-sm" onclick="_jiCancel()">' + _esc(window.T('psn_ji_cancel')) + '</button>'
+    + '<span style="font-size:.7rem;color:var(--t3)">' + _esc(window.T('psn_ji_confirm_hint')) + '</span></div>';
+  if (box) { box.innerHTML = html; box.style.display = ''; }
+}
+function _jiCancel() {
+  _jiPending = null;
+  var box = document.getElementById('pe-ji-preview');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+function _jiConfirm() {
+  if (!_jiPending) return;
+  var picks = Array.prototype.filter.call(document.querySelectorAll('#pe-ji-preview .ji-pick'), function (c) { return c.checked; })
+    .map(function (c) { return _jiPending.rows[Number(c.dataset.i)].key; });
+  if (!picks.length) { _toast(window.T('psn_ji_pick_none'), 'err'); return; }
+  var serving = _jiServing();
+  var q = window.Tf('psn_ji_confirm_q', {n: String(picks.length), fields: picks.join(', ')});
+  if (serving > 0) q += '\n\n' + window.Tf('psn_ji_serving_warn', {n: String(serving)});
+  if (!confirm(q)) return;
+  // 撤销快照：整份 _loadedProfile（含未进表单的富字段）
+  _jiUndo = {profile: _loadedProfile ? JSON.parse(JSON.stringify(_loadedProfile)) : null, ts: Date.now()};
+  var merged = _jiApply(_loadedProfile, _jiPending.persona, picks);
+  // C 线：导入的富键成为保存基底（否则保存时未映射进表单的字段全部丢失）
+  _loadedProfile = merged;
+  _fillDrawerFields(merged);
+  _refreshAdvPanel();
+  var idEl = document.getElementById('pe-id');
+  if (idEl && !idEl.readOnly && _jiPending.persona.id) idEl.value = _jiPending.persona.id;
+  var ta = document.getElementById('pe-json-import'); if (ta) ta.value = '';
+  _jiCancel();
+  _markDrawerDirty({target: document.getElementById('pe-name')});
+  _jiShowUndoToast(picks.length);
+}
+function _jiShowUndoToast(n) {
+  var wrap = document.getElementById('toast-wrap');
+  if (!wrap) { _toast(window.T('psn_js_156'), 'ok'); return; }
+  var el = document.createElement('div');
+  el.className = 'toast ok';
+  el.innerHTML = _esc(window.Tf('psn_ji_applied', {n: String(n)})) + ' <button type="button" class="btn btn-sm" style="margin-left:.5rem" onclick="_jiUndoApply()">' + _esc(window.T('psn_ji_undo')) + '</button>';
+  wrap.appendChild(el);
+  clearTimeout(_jiUndoTimer);
+  _jiUndoTimer = setTimeout(function () { try { el.remove(); } catch (e) {} _jiUndo = null; }, 30000);
+  el._jiEl = true;
+}
+function _jiUndoApply() {
+  if (!_jiUndo) { _toast(window.T('psn_ji_undo_expired'), 'err'); return; }
+  var snap = _jiUndo.profile;
+  _jiUndo = null;
+  clearTimeout(_jiUndoTimer);
+  var wrap = document.getElementById('toast-wrap');
+  if (wrap) Array.prototype.forEach.call(wrap.children, function (c) { if (c._jiEl) { try { c.remove(); } catch (e) {} } });
+  _loadedProfile = snap ? JSON.parse(JSON.stringify(snap)) : null;
+  _fillDrawerFields(snap || {});
+  _refreshAdvPanel();
+  _toast(window.T('psn_ji_undone'), 'ok');
 }
 
 // ── C 线：文档导入向导（PSDocImport；配合 B 线 /api/personas/import-doc/*）────
