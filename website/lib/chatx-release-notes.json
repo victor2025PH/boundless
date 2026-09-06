@@ -1,5 +1,45 @@
 [
   {
+    "version": "1.0.76",
+    "date": "2026-09-07",
+    "title": {
+      "zh": "关怀原文直发 · 出站语言闸 · 发送真相与登录默认半自动 · 发媒体 2MB 闸真根因 · 附件按会话隔离 · 工作台第三轮 · 转化成交类目下线 · 多语种学习队列",
+      "en": "Verbatim care · outbound language gate · send truth and semi-auto login default · 2 MB media cap root cause · per-conversation attachments · workbench round three · conversion goals retired · multilingual learning queue"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "主动关怀止血：「补一条关怀」默认原文直发（你写什么发什么，不经 AI）；要 AI 润色须先看预览再排；AI 稿先对着客户档案（国籍 / 居住地 / 相识时长）核一遍，判错直接拦下；首次对某位客户真发、带地名或人名的到点前先留给你点头；「模拟 / 真发」只剩一个真值，面板直接写明，模拟中点「立即发」会先提示不会真发。",
+        "出站语言闸：目标语言按「会话手动翻译设置 > 客户档案语言 > 客户消息文字系统 > 人设 / 账号默认语言」决定，判不出就不自动发、转人工并写明原因；只发了一句 Hi 的客户按字母表判英文，不再中文直投外国客户；翻译校验失败一律拦下不发原文；表情 / 单字不再进翻译器。",
+        "己方删除同步：你在手机端删掉自己发的消息，工作台该条灰显「已撤回」，AI 不会再接着那句话聊，也不会把它记成你说过的事（Telegram 本版，LINE 下版）。",
+        "发送真相：发送 ✓ 只在拿到平台 / 边车回执后才亮；账号栏对没连上的号标红「未连接」，会话上方红条提示重新登录，此时自动投递与手动发送被同一闸拦下、原文保留；Messenger 边车恢复会话逐个落日志，404 / 500 不再静默。",
+        "登录默认半自动：任何账号登录 / 重登 / 清数据重登后 10 分钟内只起草不投递（账号栏琥珀「冷静期」）；账号默认半自动，全自动要在账号总览按账号显式开启并确认「将对 N 个会话开启」；同账号连续 3 次真实发送失败自动降半自动并红标；已在全自动的老会话不动。",
+        "退避与手动优先：平台退避期间自动链不再每十几秒反复重投续命；坐席手动发送在退避窗内每窗放行一次，成功即解锁；重新登录成功 / 健康探测通过即清退避。",
+        "发前确认原因可见 + 作用域说清：待确认草稿写明原因（刚登录冷静期 / 账号未选人设 / 客户语言未定 / 客户首条来信 / 消息太短·证据不足 / 通道未连接）；会话头部下拉全部带「本会话：」，账号级切档在账号总览做；顶栏胶囊改「全自动会话 N」点击即筛选；切手动默认一直手动，30 分钟接回改为可选。",
+        "发媒体真根因修好：后台一道旧的 2MB 请求闸把大文件一律掐断、前端只能显「结果未知」——本版豁免并改流式上传：50MB 以内视频、平台上限内图片能从工作台发出，超上限的选文件时就写明「文件 X MB 超过上限 Y MB」，上传期间工作台不再转圈；.MOV 选文件时就判（有转码组件的机器自动转 MP4，没有当场拒绝写明）；待发附件跟着会话走、附件条写明「发往 平台 · 客户」、发错会话会拦下；错误提示分四类（格式不支持 / 超过上限 / 发送失败并给原因 / 后台无响应自动重试）。",
+        "工作台第三轮：角标 = 私聊里能点开的未读数，群 / 频道单列，旧的被埋未读一次性清掉；顶栏「自动(N)」点一下页内筛选，不再整页刷新、不再变浅色，主题开关移到头像菜单，徽标改回「旗舰版」，窄窗按三档收缩；多选有专用工具条；右侧「会话工具」整块撤掉，标签 / 归档 / 删除在会话行与 ⋯ 菜单，AI 状态弹层显示全自动运行摘要。",
+        "产品清理：用户版「工作目标」不再有「转化成交」类目（四张预置下线，已建的标「模板已下线」）；目标没绑产品时 AI 主动消息里出现报价 / 开户 / 支付话术整条不发；任一目标的第一条引擎主动消息先进草稿审批；养号面板判词与数字同口径、灰置原因就地可见、附三阶段人话说明；「AI 生成图片」改为开发中态（相册照片可直接发）。",
+        "上游与学习队列：工具箱语音转录并入工作台客户语音同一条链，失败按超时 / 拒绝 / 格式 / 坏文件分说，转录探针夹具随包；学习队列日 / 韩 / 泰 / 越条目都出译文并标真实原语，未译显「翻译失败 + 重试」不留空，同一题目不再两份并列待审。"
+      ],
+      "en": [
+        "Proactive care, stopped bleeding: \"Add a care message\" now sends your text verbatim by default (no AI rewrite); AI polishing requires a preview first; AI drafts are checked against the customer profile (nationality / residence / how long you've known them) and blocked when they get it wrong; the first real send to a customer, or any text naming a place or person, waits for your nod; \"simulation / real send\" has a single source of truth shown on the panel, and \"Send now\" in simulation warns before doing nothing.",
+        "Outbound language gate: target language is decided by \"conversation manual translation setting > customer profile language > script of the customer's message > persona / account default\"; when undecidable the message is held for a human with the reason shown instead of auto-sent; a customer who only said \"Hi\" is treated as English, never Chinese by default; failed translation checks are always held (original text is never sent); emoji and single characters no longer go through the translator.",
+        "Own-deletion sync: delete your own message on the phone and the workbench greys it out as \"recalled\"; the AI stops continuing from it and does not remember it as something you said (Telegram now, LINE next).",
+        "Send truth: the ✓ only lights up after the platform / sidecar confirms delivery; accounts with no live session are flagged \"Not connected\" in the account bar with a red banner asking to log in again, and both auto and manual sends are blocked by the same gate with your text preserved; Messenger sidecar session restores are logged one by one and 404 / 500 are no longer silent.",
+        "Login defaults to semi-auto: after any login / re-login / clear-data re-login the account only drafts for 10 minutes (amber \"cooling\" badge); accounts default to semi-auto and full-auto must be enabled per account from the account overview with a \"this will enable N conversations\" confirmation; 3 consecutive real send failures on an account downgrade it to semi-auto with a red flag; conversations already on full-auto are left as they are.",
+        "Backoff with manual priority: during platform backoff the auto chain no longer re-queues every few seconds; a manual send is let through once per backoff window and unlocks on success; a successful re-login or health probe clears the backoff.",
+        "Pre-send review reasons and clear scope: pending drafts state why they wait (cooling after login / no persona on account / customer language unknown / first message from customer / too short, weak evidence / channel not connected); the conversation header dropdown is prefixed \"This conversation:\", account-level switching lives in the account overview; the top-bar pill reads \"Full-auto conversations N\" and filters on click; switching to manual stays manual by default, the 30-minute hand-back is now optional.",
+        "Media sending, real root cause fixed: an old global 2 MB request cap was cutting off large uploads so the front end could only say \"result unknown\"; this release exempts the media route and streams uploads, so videos up to 50 MB and images within platform limits go out from the workbench, oversized files are refused at file pick with \"X MB exceeds the Y MB limit\", and the workbench no longer freezes during uploads; .MOV is judged at file pick (auto-converted to MP4 where the transcoder ships, otherwise refused with a clear message); pending attachments stay with their conversation, the attachment chip shows \"To platform · customer\", and wrong-conversation sends are blocked; errors are split into four classes (unsupported format / over limit / send failed with reason / backend unresponsive, retrying).",
+        "Workbench round three: the badge equals the unread you can actually open, groups / channels are listed separately and stale buried unread is cleared once; the top-bar \"Auto (N)\" pill filters in place without reloading or switching theme, the theme toggle moves into the avatar menu, the badge reads \"Flagship\" again and the bar collapses in three steps on narrow windows; multi-select has its own toolbar; the right-hand \"conversation tools\" block is removed with tag / archive / delete on the row and the ⋯ menu, and the AI status popover shows the full-auto summary.",
+        "Product cleanup: the client edition no longer offers the \"Conversion\" goal category (four presets retired, existing ones marked \"template retired\"); when a goal has no product bound, any proactive message with pricing / account opening / payment wording is dropped whole; the first engine-initiated message of any goal goes through draft review; the nurture panel's verdict matches its numbers, disabled reasons are shown in place with a plain three-stage explainer; \"AI image generation\" is shown as in development (album photos can still be sent).",
+        "Upstream and learning queue: toolbox voice transcription now shares the workbench customer-voice chain, failures are split into timeout / rejected / format / corrupt file, and the probe fixtures ship in the package; learning-queue entries in Japanese / Korean / Thai / Vietnamese get translations with the real source language, untranslated ones show \"translation failed + retry\" instead of blank, and duplicate topics are merged."
+      ]
+    }
+  },
+  {
     "version": "1.0.75",
     "date": "2026-09-06",
     "title": {

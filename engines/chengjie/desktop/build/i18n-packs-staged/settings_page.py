@@ -415,6 +415,11 @@ ZH = {
     "set_s304": "粘贴授权码（license key）",
     "set_s305": "激活成功即写入 config/license.key 并立即生效；无效或过期的授权码不会写入。授权码由厂商离线签发，本系统不保存签发私钥。",
     "set_s306": "激活授权",
+    # ── L-4 B（#197 / D-L7）：授权口径同源 + 演示数据仅空工作区 ──
+    "set_lic_sub_l4": "授权状态以授权文件为准；右上角档位徽标与本卡同源",
+    "set_lic_no_file": "未检测到授权文件",
+    "set_demo_blocked": "工作区已有真实数据（会话 {c} · 账号 {a}），演示数据只能在空工作区铺",
+    "err.demo.workspace_not_empty": "工作区已有真实数据（会话 {c} · 账号 {a}），演示数据只能在没有真实账号的空工作区铺——全自动账号会把示例会话当真客户发出去",
 }
 
 EN = {
@@ -829,4 +834,9 @@ EN = {
     "set_s304": "Paste license key",
     "set_s305": "On success the key is written to config/license.key and takes effect immediately; invalid or expired keys are never written. Keys are issued offline by the vendor — this system never holds the signing private key.",
     "set_s306": "Activate",
+    # -- L-4 B (#197 / D-L7): license wording shares one source; demo data only on an empty workspace --
+    "set_lic_sub_l4": "License status follows the license file; the plan badge in the top bar reads the same source",
+    "set_lic_no_file": "no license file detected",
+    "set_demo_blocked": "This workspace already has real data ({c} conversations · {a} accounts); demo data can only be seeded into an empty workspace",
+    "err.demo.workspace_not_empty": "This workspace already has real data ({c} conversations · {a} accounts). Demo data can only be seeded into an empty workspace with no real accounts — a fully automatic account would treat the sample conversations as real customers and send to them",
 }

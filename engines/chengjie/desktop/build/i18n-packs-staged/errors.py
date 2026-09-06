@@ -86,6 +86,8 @@ ZH = {
     "err.inbox.send_blocked_session": "该平台会话已掉线，消息无法送达，请在账号管理里重新登录。",
     "err.inbox.send_blocked_generic": "发送被安全护栏拦截（{reason}），消息未送出。",
     "err.inbox.send_not_delivered": "消息未送达：{msg}",
+    # M-2 A2（#232）：通道未连接（边车没有该账号会话 / 已登出 / 放弃重连）——自动与手动同一闸
+    "err.inbox.channel_disconnected": "该账号 {platform} 会话未建立，消息不会发出——请先重新登录该账号",
     # 实施86 域B-1（工单 #21/#23/#49）：发送失败三类人话（与失败留痕气泡
     # inbox.failr.* 同一分类口径，映射在 send_failure_class.FAILURE_CLASS_I18N）
     "err.inbox.sendfail.rate_limited": "触发平台发送限频，系统已自动退避降速，稍后自动恢复——这条消息已留痕，可稍后一键重发",
@@ -135,6 +137,19 @@ ZH = {
     "err.docmsg.unsupported_ext": "文档翻译支持 .docx / .xlsx / .pptx / .pdf / .srt / .vtt",
     "err.docmsg.too_large": "文件过大（上限 10MB）",
     "err.docmsg.read_failed": "文件读取失败",
+    # 工作台图片「识别翻译」失败原因拆分（2026-09-06 L-6 #213，原一律「识别翻译不可用」）
+    "err.vision.unconfigured": "识图服务未配置",
+    "err.vision.busy": "识图服务忙，稍后重试",
+    "err.vision.no_text": "图中未识别到文字",
+    # 工作台语音「识别翻译」失败原因（2026-09-06 L-6 B，原一律「识别翻译不可用」/返空）
+    "err.asr.unavailable": "转录服务暂不可用，稍后重试",
+    "err.asr.no_speech": "未识别到语音内容",
+    # 工具箱音频转录失败分类（2026-09-06 M-5 D #225：超时不再一律说成「不可用」）
+    "err.asr.timeout": "转录超时（服务响应太慢），请稍后重试；音频较长可先剪短",
+    "err.asr.rejected": "转录服务拒绝了本次请求（授权或配额问题），请联系客服",
+    "err.asr.format": "音频格式无法识别，请换成 mp3 / m4a / ogg / wav 后重试",
+    "err.asr.upload_failed": "文件未正确接收（内容为空或已损坏），请重新上传",
+    "err.asr.unknown": "转录失败，请重试；连续失败请联系客服",
 }
 
 EN = {
@@ -224,6 +239,8 @@ EN = {
     "err.inbox.send_blocked_session": "The platform session is offline; the message cannot be delivered. Re-login from account management.",
     "err.inbox.send_blocked_generic": "Blocked by a safety guard ({reason}); the message was not sent.",
     "err.inbox.send_not_delivered": "Message not delivered: {msg}",
+    # M-2 A2 (#232): channel not connected (sidecar has no session / logged out / gave up) — same gate for auto and manual
+    "err.inbox.channel_disconnected": "This account's {platform} session is not established; the message will not be sent — re-login the account first",
     # impl86 domain B-1 (tickets #21/#23/#49): three-way human-readable send failures
     "err.inbox.sendfail.rate_limited": "Platform rate limit hit — sending is auto-throttled and recovers shortly; the message is kept and can be resent with one click",
     "err.inbox.sendfail.platform_block": "This account is temporarily blocked from sending by the platform (auto-frozen for protection; lifts automatically) — the message is kept for resend",
@@ -271,4 +288,16 @@ EN = {
     "err.docmsg.unsupported_ext": "Document translation supports .docx / .xlsx / .pptx / .pdf / .srt / .vtt",
     "err.docmsg.too_large": "File too large (max 10MB)",
     "err.docmsg.read_failed": "Failed to read the file",
+    # Workbench image "recognize + translate" failure reasons (2026-09-06 L-6 #213)
+    "err.vision.unconfigured": "Image recognition is not configured",
+    "err.vision.busy": "Image recognition is busy, please retry shortly",
+    "err.vision.no_text": "No text recognized in the image",
+    # Workbench voice "recognize + translate" failure reasons (2026-09-06 L-6 B)
+    "err.asr.unavailable": "Transcription service is temporarily unavailable, please retry shortly",
+    "err.asr.no_speech": "No speech recognized in the audio",
+    "err.asr.timeout": "Transcription timed out (the service responded too slowly) — retry shortly; trim long audio first",
+    "err.asr.rejected": "The transcription service rejected this request (authorization or quota) — contact support",
+    "err.asr.format": "Unrecognized audio format — convert to mp3 / m4a / ogg / wav and retry",
+    "err.asr.upload_failed": "The file was not received correctly (empty or corrupted) — upload it again",
+    "err.asr.unknown": "Transcription failed — retry; contact support if it keeps failing",
 }

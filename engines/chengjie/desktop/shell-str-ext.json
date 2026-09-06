@@ -52,7 +52,12 @@
   "err.audio_fetch": "音訊拉取失敗 {status}",
   "err.empty_audio": "空音訊",
   "camp.credited_title": "充值已到賬 🎉",
-  "camp.credited_body": "+{n} 已入賬，工作台額度已更新，感謝支援！"
+  "camp.credited_body": "+{n} 已入賬，工作台額度已更新，感謝支援！",
+  "unload.title": "有未儲存的改動",
+  "unload.msg": "這個頁面有未儲存的改動。",
+  "unload.detail": "離開會丟失這些改動；留下可以先儲存。",
+  "unload.leave": "離開",
+  "unload.stay": "留下"
  },
  "vi": {},
  "th": {},

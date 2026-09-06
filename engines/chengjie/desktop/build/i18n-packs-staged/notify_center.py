@@ -23,6 +23,8 @@ ZH = {
     "ntf.ongoing_hdr": "进行中",
     # batch3：通道离线重登等待卡（原横幅按钮上的逐秒计时改为一次性等待卡）
     "ntf.chan_relogin_wait": "已请求重新登录，正在联系服务器…（最长约 1 分钟，结果会在右下角提示）",
+    # #196（L-3 C）：右下角同屏最多一张告警卡，第二项到来即折成汇总卡，点开进通知中心
+    "ntf.summary_n": "有 {n} 项需要注意 ›",
 }
 
 EN = {
@@ -35,4 +37,5 @@ EN = {
     "ntf.ai_recovered": "Cloud AI has recovered — reply speed is back to normal.",
     "ntf.ongoing_hdr": "Ongoing",
     "ntf.chan_relogin_wait": "Re-login requested — contacting the server… (up to ~1 min; the result will appear at the bottom right)",
+    "ntf.summary_n": "{n} items need attention ›",
 }

@@ -37,6 +37,14 @@ ZH = {
     "nav_grp_toggle_hint": "点击折叠/展开分组",
     # 页群 Tab 条(_cluster_tabs.html)的无障碍标签
     "nav_cluster_aria": "相关页面",
+    # 开发者模式角标(L-4 A 2026-09-06):client 形态下被藏项回归时的 tier 标签
+    "nav_tier_internal": "研发",
+    "nav_tier_partner": "代理商",
+    "nav_tier_tip": "客户版不显示此项（开发者模式可见）",
+    # 代理商面深链(CMD_EXTRA_ITEMS.settings_*,PARTNER_ONLY_ITEM_IDS)
+    "nav_settings_brand": "品牌 / 白标",
+    "nav_settings_license": "授权 / 激活",
+    "nav_settings_demo": "试用 / 演示数据",
 }
 
 EN = {
@@ -68,4 +76,10 @@ EN = {
     "nav.dot.goto": "Open channel page",
     "nav_grp_toggle_hint": "Click to collapse/expand this section",
     "nav_cluster_aria": "Related pages",
+    "nav_tier_internal": "Dev",
+    "nav_tier_partner": "Partner",
+    "nav_tier_tip": "Hidden in the client edition (visible in developer mode)",
+    "nav_settings_brand": "Brand / White-label",
+    "nav_settings_license": "License / Activation",
+    "nav_settings_demo": "Trial / Demo data",
 }

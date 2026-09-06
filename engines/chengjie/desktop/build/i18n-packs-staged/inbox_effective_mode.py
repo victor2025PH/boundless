@@ -62,6 +62,16 @@ ZH = {
                                      "：AI 只写草稿、不会自动发出。要恢复这类会话的"
                                      "自动发送：设置 → 自动回复设置 → AI 接管 选"
                                      "「全自动」。Telegram 私聊不受此闸影响。",
+    # ── M-2（2026-09-06，D-M1 / #232）：账号级通道门禁三层（判定 account_channel_gate.gate_caps）──
+    "inbox.effcap.login_cooldown": "🕒 刚登录冷静期 · 只起草",
+    "inbox.effcap.login_cooldown_t": "该账号刚登录/重登：{m} 分钟内 AI 只起草不投递（草稿进「发前确认」等你过目），"
+                                     "防「通道没准备好就批量开火」。到点自动恢复，本会话按「{mode}」执行。",
+    "inbox.effcap.channel_degraded": "🚫 通道异常 · 已暂停自动",
+    "inbox.effcap.channel_degraded_t": "该账号连续多次发送失败，系统已自动降为半自动（按「{mode}」执行：只起草不投递）。"
+                                       "处理好后在会话横幅点「恢复自动」解除。",
+    "inbox.effcap.channel_disconnected": "🔌 通道未连接 · 只起草",
+    "inbox.effcap.channel_disconnected_t": "该账号的平台会话未建立（{detail}）：消息发不出去，AI 只起草（按「{mode}」执行）。"
+                                           "请先重新登录该账号。",
     "inbox.effcap.generic": "⚠️ 系统封顶",
     "inbox.effcap.generic_t": "会话实际执行档位为「{mode}」（来源：{layer}）。",
 }
@@ -136,6 +146,17 @@ EN = {
                                      "Settings → Auto-reply → AI takeover → "
                                      "Full-auto. Telegram DMs are not affected by "
                                      "this gate.",
+    "inbox.effcap.login_cooldown": "🕒 Post-login cooldown · drafts only",
+    "inbox.effcap.login_cooldown_t": "This account just logged in: for {m} min the AI only drafts (drafts wait in "
+                                     "Pre-send check) so a not-yet-ready channel is never fired at in bulk. Lifts "
+                                     "automatically; this conversation runs as \"{mode}\" meanwhile.",
+    "inbox.effcap.channel_degraded": "🚫 Channel fault · auto paused",
+    "inbox.effcap.channel_degraded_t": "Several consecutive send failures on this account; auto was downgraded "
+                                       "(runs as \"{mode}\": drafts only). Once fixed, click “Resume auto” in the "
+                                       "conversation banner.",
+    "inbox.effcap.channel_disconnected": "🔌 Channel not connected · drafts only",
+    "inbox.effcap.channel_disconnected_t": "This account's platform session is not established ({detail}): messages "
+                                           "cannot go out, the AI only drafts (runs as \"{mode}\"). Re-login first.",
     "inbox.effcap.generic": "⚠️ System cap",
     "inbox.effcap.generic_t": "This conversation actually runs as \"{mode}\" "
                               "(source: {layer}).",
