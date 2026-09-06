@@ -93,6 +93,12 @@ def test_title_from_note_strips_tag_and_caps_80(dat):
     assert len(dat.title_from_note(long)) <= 80
     # 首句太短并上第二句
     assert "：" in dat.title_from_note("复验。批量挂链弹层文字灰度过低几乎看不清")
+    # 0906 12:47 实锤（#214）：英文引句里的 ? 不是句尾——不能把标题切成「…‘kim」
+    t2 = dat.title_from_note("主动关怀未发送：Kxhm(telegram)‘kim? are you at cebu now?’到点 12:43:41 显示‘到点了，下轮巡检就处理’；skuio 13:39:52 待发")
+    assert "are you at cebu now" in t2 and "下轮巡检就处理" in t2      # 切在全角「；」，不切在引句内的 ?
+    assert t2.startswith("主动关怀未发送") and len(t2) <= 80 and "待发" not in t2
+    # ASCII 句号/问号后接中文才切
+    assert dat.title_from_note("Sceya said hi. 然后 AI 编了天气") == "Sceya said hi"
 
 
 # ── 判定：三类 note ─────────────────────────────────────────────────────────
@@ -134,6 +140,27 @@ def test_decide_attach_by_known_code_via_ledger_body_or_ticket_txt(dat, tmp_path
     _write_report(diag, "N3N3N3", "补证 T3T3T3 再传一份日志")
     dec3 = dat.decide(_head(dat, diag, "N3N3N3"), con, ledger, codes, diag)
     assert dec3["action"] == "attach" and dec3["ticket"] == 202
+
+
+def test_decide_multiple_codes_prefers_open_then_newest(dat, tmp_path):
+    """0906 12:49 实锤：9YYD44 写「关联 ZQ4ASK / 9K6G7W / M2SHYA」，首码 ZQ4ASK 指向已修的 #182，
+    M2SHYA 是 2 分钟前刚立的开放单 #214——该挂 #214。"""
+    con = _mk_db(tmp_path / "b.db")
+    _ticket(con, 182, "主动关怀意图反转", status="fixed")
+    _ticket(con, 214, "主动关怀未发送")
+    diag = tmp_path / "diag"
+    for c in ("ZQ4ASK", "M2SHYA"):
+        _write_report(diag, c, "旧")
+    ledger = [{"ticket": 182, "event": "received", "diag": "ZQ4ASK"},
+              {"ticket": 214, "event": "received", "diag": "M2SHYA"}]
+    _write_report(diag, "9YYD44", "【BUG·主动关怀不发送】根因：dry_run=True … 关联 ZQ4ASK / 9K6G7W / M2SHYA")
+    dec = dat.decide(_head(dat, diag, "9YYD44"), con, ledger, {"ZQ4ASK", "M2SHYA", "9YYD44"}, diag)
+    assert dec["action"] == "attach" and dec["ticket"] == 214 and dec["via_code"] == "M2SHYA"
+    # 全是已修单 → 取 id 最大的那张
+    con.execute("UPDATE bug_tickets SET status='fixed' WHERE id=214")
+    con.commit()
+    dec2 = dat.decide(_head(dat, diag, "9YYD44"), con, ledger, {"ZQ4ASK", "M2SHYA", "9YYD44"}, diag)
+    assert dec2["ticket"] == 214
 
 
 def test_decide_attach_same_reporter_recent_topic_else_new(dat, tmp_path):
@@ -206,3 +233,8 @@ def test_reminder_wires_auto_ticket_into_receipt():
     assert "_receipt_item(code, topic, res)" in src
     assert 'kind == "verify" and not (res and res.get("ticket"))' in src
     assert "不自动立单" not in src.split('"""', 2)[1]   # 模块 docstring 不再声称不立单
+    # 0906 12:49：回执发失败（409 近重复）不得算已回执——发成功才 receipted.update，否则下一轮重试
+    body = src.split("def check_new_reports", 1)[1]
+    assert "if send_group(text, 0, dry_run=dry_run):" in body
+    assert "receipted.update(owner_codes.get(owner, []))" in body
+    assert "下一轮重试" in body

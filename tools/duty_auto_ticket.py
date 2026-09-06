@@ -61,7 +61,8 @@ _TICKET_RE = re.compile(r"#\s*(\d{1,4})\b")
 _ATTACH_PREFIX_RE = re.compile(r"^\s*(?:【\s*(?:复现|复验|补证|关联)|复验\s|补证\s|关联\s)")
 _SUMMARY_RE = re.compile(r"^\s*【\s*汇总")
 _LEAD_TAG_RE = re.compile(r"^\s*【[^】]{1,24}】\s*")
-_SENT_SPLIT_RE = re.compile(r"[。！？；;!?\n]|(?<=[^\d])[.](?=\s)")
+# 全角标点 / 换行必切；ASCII ?!;. 只在其后是句尾或中文（不是英文引句里的 "kim? are you…"）才切
+_SENT_SPLIT_RE = re.compile(r"[。！？；\n]|[!?;.](?=\s*(?:$|[\u4e00-\u9fff【（]))")
 
 
 def log(msg: str) -> None:
@@ -258,8 +259,17 @@ def tickets_for_code(con: sqlite3.Connection, code: str, ledger: List[Dict[str, 
         if main:
             st = con.execute("SELECT status FROM bug_tickets WHERE id=?", (main,)).fetchone()
             resolved[main] = str(st[0] if st else status)
-    open_first = sorted(resolved, key=lambda t: (resolved[t] in ("closed", "verified"), -t))
-    return open_first
+    return sorted(resolved, key=lambda t: (_status_rank(resolved[t]), -t))
+
+
+def _status_rank(status: str) -> int:
+    """挂单优先级：开放单 0 → 已修待验 1 → 已验/已关 2（同级 id 大优先）。"""
+    s = str(status or "")
+    if s in ("closed", "verified"):
+        return 2
+    if s == "fixed":
+        return 1
+    return 0
 
 
 def reporter_recent_tickets(con: sqlite3.Connection, reporter_id: str, ts: float,
@@ -296,14 +306,21 @@ def decide(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str,
     if valid_refs:
         return {"action": "attach", "ticket": valid_refs[0],
                 "reason": f"note 带 #{valid_refs[0]}", "refs": valid_refs}
-    # ② 已知报告码（含 复现/复验/补证/关联 前缀的显式意图）
+    # ② 已知报告码（含 复现/复验/补证/关联 前缀的显式意图）。多个码 → 汇总候选单，
+    #    开放单优先、再 id 大优先（0906 12:49 实锤：9YYD44 写「关联 ZQ4ASK / 9K6G7W / M2SHYA」，
+    #    按首码挂到了已修的 #182，其实是 2 分钟前 M2SHYA 刚立的 #214 的根因补证）
     mentioned = [c for c in dict.fromkeys(_CODE_RE.findall(note)) if c in codes and c != code]
+    pool: Dict[int, str] = {}
     for c in mentioned:
-        cands = tickets_for_code(con, c, ledger, diag_root)
-        if cands:
-            return {"action": "attach", "ticket": cands[0],
-                    "reason": f"关联报告 {c} → #{cands[0]}", "refs": [cands[0]],
-                    "via_code": c}
+        for t in tickets_for_code(con, c, ledger, diag_root):
+            pool.setdefault(t, c)
+    if pool:
+        st = {t: (con.execute("SELECT status FROM bug_tickets WHERE id=?", (t,)).fetchone() or ("",))[0]
+              for t in pool}
+        best = sorted(pool, key=lambda t: (_status_rank(st[t]), -t))[0]
+        return {"action": "attach", "ticket": best,
+                "reason": f"关联报告 {pool[best]} → #{best}", "refs": [best],
+                "via_code": pool[best]}
     # ③ 同报障人 30 分钟内群里立的单，主题词重叠
     rep = FP_REPORTER.get(str(head.get("fp4") or ""), ("", ""))[0]
     best, best_sim = 0, 0.0

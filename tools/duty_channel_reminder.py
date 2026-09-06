@@ -287,28 +287,36 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
         if not pending:
             return
         by_owner: Dict[str, List[str]] = {}
+        owner_codes: Dict[str, List[str]] = {}
         for code in pending:
             head = _report_head(code)
             if head is None:          # 还没解包完，下一轮再看
                 continue
             kind, fp4, note = head
-            receipted.add(code)
             if kind not in ("report", "verify"):
+                receipted.add(code)
                 log(f"pack {code} kind={kind} — 不回执")
                 continue
             # L-7 A：先挂单/立单，单号接进这条回执（工具自身失败 → res=None → 无单号回执）
             res = _auto_ticket(code, dry_run=dry_run)
             if kind == "verify" and not (res and res.get("ticket")):
+                receipted.add(code)
                 log(f"pack {code} kind=verify 无 #N — 不回执")
                 continue
             owner = FP_OWNER.get(fp4, f"机器 {fp4}*")
             topic = re.sub(r"^【[^】]+】", "", note).strip()[:36] or "（无备注）"
             by_owner.setdefault(owner, []).append(_receipt_item(code, topic, res))
+            owner_codes.setdefault(owner, []).append(code)
         for owner, items in by_owner.items():
             tpl = read_template(TEXT_RECEIPT, DEFAULT_RECEIPT)
             text = tpl.replace("{name}", owner).replace("{items}", "、".join(items))
-            log(f"RECEIPT {owner}: {len(items)} 份")
-            send_group(text, 0, dry_run=dry_run)
+            log(f"RECEIPT {owner}: {len(items)} 份 {owner_codes.get(owner)}")
+            # 发成功才算已回执；失败（0906 12:49 实锤：连发两份同题报告，第二条回执被
+            # send 的 120 秒近重复守卫 409 拒掉）留到下一轮重发，报告不会零回音
+            if send_group(text, 0, dry_run=dry_run):
+                receipted.update(owner_codes.get(owner, []))
+            else:
+                log(f"receipt for {owner_codes.get(owner)} not sent — 下一轮重试")
         if not dry_run:
             st["receipted"] = sorted(receipted)[-400:]
     except Exception as exc:  # noqa: BLE001
