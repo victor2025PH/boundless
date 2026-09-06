@@ -403,7 +403,15 @@ def collect_intervention_queue(
     counts: Dict[str, int] = {}
     for it in items:
         counts[it["kind"]] = counts.get(it["kind"], 0) + 1
-    return {"items": items, "counts": counts, "sources": sources}
+    out: Dict[str, Any] = {"items": items, "counts": counts, "sources": sources}
+    # #207：「需人工」按打标原因分列（dup_guard_blocked / crisis / manual …），
+    # 让看板能回答「这些红标是 AI 没回上还是真要人判断」；取数失败不影响主体。
+    try:
+        from src.integrations.protocol_autoreply import needs_human_by_reason
+        out["needs_human_by_reason"] = needs_human_by_reason(store, limit=scan_limit)
+    except Exception:
+        logger.debug("[cockpit] 需人工按原因分列失败（忽略）", exc_info=True)
+    return out
 
 
 def cockpit_snapshot(store: Any, config: Optional[Dict[str, Any]] = None,

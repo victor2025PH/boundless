@@ -780,8 +780,13 @@ def publish_alert(kind: str, payload: Dict[str, Any], detail: str = "",
     return sent
 
 
-def clear_needs_human(store: Any, conversation_id: str) -> bool:
-    """坐席接管（人工发出消息）后清除 HANDOFF_TAG。返回是否真的清除了。"""
+def clear_needs_human(store: Any, conversation_id: str, *,
+                      actor: str = "agent_send") -> bool:
+    """清除 HANDOFF_TAG（坐席人工发消息 / 自动摘标 / 会话头「我知道了」）。返回是否真的清除了。
+
+    #207：打标/摘标都落 INFO——「谁 / 何时 / 为何」三要素齐；此前摘标零日志，
+    Loki 会话的红标挂了 30 小时，日志里连一条「为什么还挂着」都翻不出来。
+    """
     if store is None or not conversation_id:
         return False
     try:
@@ -790,6 +795,12 @@ def clear_needs_human(store: Any, conversation_id: str) -> bool:
         return False
     if HANDOFF_TAG not in tags:
         return False
+    meta: Dict[str, Any] = {}
+    try:
+        if hasattr(store, "get_handoff_meta"):
+            meta = dict(store.get_handoff_meta(conversation_id) or {})
+    except Exception:
+        meta = {}
     try:
         store.set_conv_tags(conversation_id, [t for t in tags if t != HANDOFF_TAG])
     except Exception:
@@ -801,7 +812,153 @@ def clear_needs_human(store: Any, conversation_id: str) -> bool:
     except Exception:
         logger.debug("[protocol-autoreply] handoff_meta 清除失败（忽略）",
                      exc_info=True)
+    logger.info(
+        "[needs_human] 摘标 conv=%s by=%s（原因=%s 打标于=%s 打标方=%s）",
+        conversation_id, actor or "?", meta.get("reason") or "-",
+        _fmt_meta_ts(meta.get("ts")), meta.get("source") or "-")
     return True
+
+
+def _fmt_meta_ts(ts: Any) -> str:
+    try:
+        t = float(ts or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if t <= 0:
+        return "-"
+    return time.strftime("%m-%d %H:%M", time.localtime(t))
+
+
+#: #207 自动摘标白名单——全是「AI 当时没能回上」类原因：AI 之后成功回复 / 客户消息
+#: 已被消化，标就失去了存在理由。high_risk（内容风险）、crisis:*（R8 危机，wellbeing
+#: 打的）、坐席手打（source≠system / 无元数据）**不在此列**：那些是要人看一眼的判断，
+#: 机器回上一句不能替人拍板。
+HANDOFF_AUTO_CLEAR_REASONS = frozenset({
+    "dup_guard_blocked", "empty_reply", "generate_error", "send_error",
+    "quota_hour", "quota_day", "circuit_open", "off_hours",
+})
+
+
+def handoff_auto_clearable(meta: Any) -> bool:
+    """「需人工」元数据是否属于可由系统自动摘除的一类（纯判定，可单测）。
+
+    无元数据＝来历不明（实施74 之前的旧标 / 坐席经标签面板手打）→ 一律保留。
+    """
+    if not isinstance(meta, dict) or not meta:
+        return False
+    if str(meta.get("source") or "system") != "system":
+        return False
+    return str(meta.get("reason") or "") in HANDOFF_AUTO_CLEAR_REASONS
+
+
+def auto_clear_needs_human(store: Any, conversation_id: str, *,
+                           trigger: str = "") -> bool:
+    """AI 成功回上一条 / 客户消息已消化 → 摘掉「AI 没能回」类系统标（#207）。
+
+    触发面：``autosend_worker`` 投递成功、``protocol_autoreply`` 直发成功、
+    启动扫描（``sweep_stale_needs_human``）。只摘 :func:`handoff_auto_clearable`
+    判真的标；其余原样保留并 debug 留痕。绝不抛。
+    """
+    if store is None or not conversation_id:
+        return False
+    try:
+        tags = list(store.get_conv_tags(conversation_id) or [])
+    except Exception:
+        return False
+    if HANDOFF_TAG not in tags:
+        return False
+    meta: Dict[str, Any] = {}
+    try:
+        if hasattr(store, "get_handoff_meta"):
+            meta = dict(store.get_handoff_meta(conversation_id) or {})
+    except Exception:
+        meta = {}
+    if not handoff_auto_clearable(meta):
+        logger.debug(
+            "[needs_human] 保留 conv=%s trigger=%s（原因=%s 打标方=%s 不属自动摘除类）",
+            conversation_id, trigger, meta.get("reason") or "-",
+            meta.get("source") or "-")
+        return False
+    return clear_needs_human(store, conversation_id,
+                             actor=f"system:{trigger or 'auto'}")
+
+
+def sweep_stale_needs_human(store: Any, *, now: Optional[float] = None,
+                            limit: int = 300) -> Dict[str, int]:
+    """启动一次性扫描：带「需人工」且**客户消息已被消化**的会话自动摘标（#207）。
+
+    「消化」判据＝会话最后一条是**出站**且晚于打标时刻（AI/人已经回上了，客户
+    不再在等）。只处理 :func:`handoff_auto_clearable` 判真的标。归档会话不在
+    ``list_tagged_conversations`` 结果里（它本就只列未归档行），无需另判。
+    返回 ``{scanned, cleared, kept}``；任何取数失败按 0 处理，绝不抛。
+    """
+    out = {"scanned": 0, "cleared": 0, "kept": 0}
+    if store is None or not hasattr(store, "list_tagged_conversations"):
+        return out
+    try:
+        rows = list(store.list_tagged_conversations(HANDOFF_TAG, limit=limit) or [])
+    except Exception:
+        logger.debug("[needs_human] 启动扫描取数失败（忽略）", exc_info=True)
+        return out
+    if not rows:
+        return out
+    cids = [str(r.get("conversation_id") or "") for r in rows]
+    dirs: Dict[str, Dict[str, Any]] = {}
+    try:
+        if hasattr(store, "last_message_dirs"):
+            dirs = store.last_message_dirs([c for c in cids if c]) or {}
+    except Exception:
+        dirs = {}
+    for cid in cids:
+        if not cid:
+            continue
+        out["scanned"] += 1
+        meta: Dict[str, Any] = {}
+        try:
+            if hasattr(store, "get_handoff_meta"):
+                meta = dict(store.get_handoff_meta(cid) or {})
+        except Exception:
+            meta = {}
+        last = dirs.get(cid) or {}
+        consumed = (str(last.get("direction") or "") == "out"
+                    and float(last.get("ts") or 0) >= float(meta.get("ts") or 0))
+        if handoff_auto_clearable(meta) and consumed:
+            if clear_needs_human(store, cid, actor="system:startup_sweep"):
+                out["cleared"] += 1
+                continue
+        out["kept"] += 1
+    if out["cleared"] or out["kept"]:
+        logger.info(
+            "[needs_human] 启动扫描：带标 %d 个，已消化自动摘 %d，保留 %d",
+            out["scanned"], out["cleared"], out["kept"])
+    return out
+
+
+def needs_human_by_reason(store: Any, *, limit: int = 300) -> Dict[str, int]:
+    """ops 看板用：「需人工」计数按原因分列（#207 修法 4）。
+
+    键＝``handoff_meta.reason``（crisis:* 归并为 ``crisis``；无元数据＝``manual``）。
+    """
+    out: Dict[str, int] = {}
+    if store is None or not hasattr(store, "list_tagged_conversations"):
+        return out
+    try:
+        rows = list(store.list_tagged_conversations(HANDOFF_TAG, limit=limit) or [])
+    except Exception:
+        return out
+    for r in rows:
+        cid = str(r.get("conversation_id") or "")
+        meta: Dict[str, Any] = {}
+        try:
+            if cid and hasattr(store, "get_handoff_meta"):
+                meta = dict(store.get_handoff_meta(cid) or {})
+        except Exception:
+            meta = {}
+        reason = str(meta.get("reason") or "") if meta else "manual"
+        if reason.startswith("crisis"):
+            reason = "crisis"
+        out[reason or "manual"] = out.get(reason or "manual", 0) + 1
+    return out
 
 
 def tag_needs_human(store: Any, payload: Dict[str, Any], *,
@@ -842,6 +999,9 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
     except Exception:
         logger.debug("[protocol-autoreply] handoff_meta 写入失败（忽略）",
                      exc_info=True)
+    logger.info("[needs_human] 打标 conv=%s reason=%s source=%s auto_clearable=%s",
+                cid, reason or "-", source or "system",
+                handoff_auto_clearable({"reason": reason, "source": source}))
     return True
 
 
@@ -1320,7 +1480,18 @@ def build_reply_hook(app: Any) -> Callable[[Dict[str, Any]], Awaitable[None]]:
                     reason=str((res or {}).get("reason") or ""),
                     source="system",
                 )
+            elif res.get("sent"):
+                # #207：AI 直发成功＝「AI 没能回」类的标失去理由 → 自动摘
+                #（crisis / high_risk / 人工标由 auto_clear 内部判定保留）
+                from src.inbox.normalizer import conv_id as _cid_fn
+                auto_clear_needs_human(
+                    getattr(app.state, "inbox_store", None),
+                    _cid_fn(str(payload.get("platform") or ""),
+                            str(payload.get("account_id") or ""),
+                            str(payload.get("chat_key") or "")),
+                    trigger="autoreply_sent",
+                )
         except Exception:
-            logger.debug("[protocol-autoreply] 转人工打标失败", exc_info=True)
+            logger.debug("[protocol-autoreply] 转人工打标/摘标失败", exc_info=True)
 
     return hook

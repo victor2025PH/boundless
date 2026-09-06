@@ -2099,6 +2099,14 @@ button.fleet-cell:disabled{cursor:default;}
 .acct-out-banner.info .aob-btn:hover{background:color-mix(in srgb,var(--tk-brand,#1e8cf2) 15%,var(--bg-panel,#fff));}
 .acct-out-banner .aob-btn.danger{border-color:color-mix(in srgb,#dc2626 45%,transparent);color:var(--tk-danger-ink,#b91c1c);}
 .acct-out-banner .aob-btn.danger:hover{background:color-mix(in srgb,#dc2626 12%,var(--bg-panel,#fff));}
+/* #207「需人工」原因条：与列表 chip 同一红族（tk-handoff），淡红底 + 两枚出路按钮 */
+.acct-out-banner.handoff{background:color-mix(in srgb,#dc2626 9%,var(--bg-panel,#fff));border:1px solid color-mix(in srgb,#dc2626 32%,transparent);color:var(--th-ink-red7,#b91c1c);}
+.acct-out-banner.handoff .aob-btn{border-color:color-mix(in srgb,#dc2626 45%,transparent);color:var(--tk-danger-ink,#b91c1c);}
+.acct-out-banner.handoff .aob-btn:hover{background:color-mix(in srgb,#dc2626 12%,var(--bg-panel,#fff));}
+.acct-out-banner.handoff .aob-btn.primary{background:var(--tk-danger-ink,#b91c1c);color:var(--th-ink-inverse,#fff);border-color:transparent;}
+.acct-out-banner.handoff .aob-btn.primary:hover{filter:brightness(1.08);}
+/* #207 互斥：会话挂「需人工」时，AI 已回/全自动等自动化徽标降灰（两个红蓝同亮＝界面说谎） */
+.conv-item.has-handoff .conv-handler.h-ai,.conv-item.has-handoff .conv-done-tick{opacity:.38;filter:saturate(.25);}
 /* 会话行「新客户请求」chip：翠绿正面调（区别于琥珀「已退出」/红「风控」——这是好消息） */
 .conv-req-chip{display:inline-block;padding:0 5px;border-radius:6px;font-size:11px;font-weight:700;background:color-mix(in srgb,var(--tk-emerald,#10b981) 18%,transparent);color:var(--tk-ok-ink,#15803d);vertical-align:middle;line-height:15px;margin-left:2px;white-space:nowrap;}
 .conv-tag-chip.archived{background:var(--bg-soft);color:#64748b;}

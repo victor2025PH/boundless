@@ -1342,6 +1342,14 @@ class AutosendWorker:
             self.total_delivered += 1
             # #88：自动投递送达成功 → 清 dead-peer 标（黄条解除 + 自动回复恢复）
             self._dead_peer_clear(_conv_id_g)
+            # #207：AI 回上了 → 摘「AI 没能回」类「需人工」标（dup_guard_blocked 等；
+            # crisis / high_risk / 人工标由 auto_clear 内部判定保留）。best-effort。
+            try:
+                from src.integrations.protocol_autoreply import auto_clear_needs_human
+                auto_clear_needs_human(getattr(self._svc, "_store", None),
+                                       _conv_id_g, trigger="autosend_delivered")
+            except Exception:
+                logger.debug("[AutosendWorker] 自动摘「需人工」失败（忽略）", exc_info=True)
             # B41：成功投递补写 DB sent_at（best-effort）——跨重启的「已投过」
             # 证据 + 价值周报的 inbox 投递计数从此有真值。
             try:

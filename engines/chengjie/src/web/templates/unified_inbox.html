@@ -369,7 +369,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260905d">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906a">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -5951,7 +5951,8 @@ function _buildConvItemDom(c, isSel){
   const claimedMine = !!(c.conversation_id && claimMap[c.conversation_id]
                          && claimMap[c.conversation_id].agent_id===MY_AGENT().id);
   const div=document.createElement('div');
-  div.className=`conv-item ${isSel?'selected':''} ${slaClass} ${c.unread>0?'has-unread':''} ${riskN>0?'risk-blocked':''} ${acctOut?'acct-out':''} ${_isHandledConv(c)?'conv-handled':''}`.replace(/\s+/g,' ').trim();
+  // #207 互斥：挂「需人工」时 AI/已回徽标由 CSS 降灰（has-handoff），红蓝不同亮
+  div.className=`conv-item ${isSel?'selected':''} ${slaClass} ${c.unread>0?'has-unread':''} ${riskN>0?'risk-blocked':''} ${acctOut?'acct-out':''} ${_isHandledConv(c)?'conv-handled':''} ${_convNeedsHuman(c)?'has-handoff':''}`.replace(/\s+/g,' ').trim();
   div.dataset.key=key;
   div.dataset.cid=cid;
   // P3 a11y: 会话条可 Tab 聚焦 + Enter/Space 打开（读屏播报联系人名）
@@ -7595,8 +7596,60 @@ function _paintAcctBanner(c){
     banner.style.display='flex';
     return;
   }
+  // #207（L-3 A）：带「需人工」标的会话 → 原因条（为何/何时/谁打的）+ 两条出路。
+  // 此前红标只在列表 chip 悬停可解释，点进会话什么都没有（BJZFSX：Loki 红标挂 30h）。
+  if(c && c.conversation_id && _convNeedsHuman(c)){
+    const cid=esc(c.conversation_id);
+    const cta=`<button type="button" class="aob-btn primary" onclick="_handoffBarGo()" title="${esc(window.T('inbox.handoff.bar_go_t'))}">${esc(window.T('inbox.handoff.bar_go'))}</button>`
+      +`<button type="button" class="aob-btn" onclick="_handoffBarAck('${cid}',this)" title="${esc(window.T('inbox.handoff.bar_ack_t'))}">${esc(window.T('inbox.handoff.bar_ack'))}</button>`;
+    banner.className='acct-out-banner handoff';
+    banner.innerHTML=`<span class="aob-txt">${esc(_handoffBarText(c))}</span>${cta}`;
+    banner.style.display='flex';
+    return;
+  }
   banner.style.display='none';
   banner.innerHTML='';
+}
+/* #207 原因条文案：查表取原因（crisis:* 归并 crisis），无元数据走 generic。 */
+function _handoffBarText(c){
+  const hm=(c&&c.handoff_meta)||null;
+  if(!hm||!hm.ts) return window.T('inbox.handoff.bar_generic');
+  const raw=String(hm.reason||'');
+  const rk=_HANDOFF_REASON_KEYS[raw]||(raw.indexOf('crisis')===0?'inbox.handoff.r_crisis':'');
+  const why=rk?window.T(rk):(raw||'-');
+  const src=window.T(String(hm.source||'system')==='system'?'inbox.handoff.src_system':'inbox.handoff.src_manual');
+  return window.Tf('inbox.handoff.bar',{when:fmtTs(hm.ts),src:src,why:why});
+}
+function _handoffBarGo(){
+  try{ _uiBeacon('handoff_bar_go'); }catch(_){}
+  const ta=document.getElementById('reply-ta');
+  if(ta){ try{ ta.scrollIntoView({block:'nearest'}); }catch(_){} try{ ta.focus(); }catch(_){} }
+}
+/* 「我知道了（摘标）」：走既有 PUT /tags（服务端同清 handoff_meta），本地即时对账并重绘。 */
+async function _handoffBarAck(cid,btn){
+  if(!cid) return;
+  try{ _uiBeacon('handoff_bar_ack'); }catch(_){}
+  if(btn){ btn.disabled=true; }
+  try{
+    const cur=(selectedChat&&String(selectedChat.conversation_id||'')===String(cid))?(selectedChat.conv_tags||[]):[];
+    const next=cur.filter(t=>String(t).indexOf(_NEEDS_HUMAN_TAG)<0);
+    const r=await apiFetch('/api/workspace/conv/'+encodeURIComponent(cid)+'/tags',{
+      method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({tags:next})});
+    const out=r.ok?await r.json():null;
+    if(!out||!out.ok) throw new Error('tags_put_failed');
+    if(selectedChat&&String(selectedChat.conversation_id||'')===String(cid)){
+      selectedChat.conv_tags=next; delete selectedChat.handoff_meta;
+      _paintAcctBanner(selectedChat);
+    }
+    const row=(allChats||[]).find(x=>String(x.conversation_id||'')===String(cid));
+    if(row){ row.conv_tags=next; delete row.handoff_meta; }
+    _toast(window.T('inbox.handoff.bar_ack_ok'));
+    try{ applyFilters(); }catch(_){}
+    try{ loadChats(); }catch(_){}
+  }catch(_){
+    _toast(window.T('inbox.handoff.bar_ack_fail'),'#dc2626');
+    if(btn){ btn.disabled=false; }
+  }
 }
 /* Messenger 消息请求显式处置：accept=转正（非破坏）；decline=删除请求（弹确认后带
    confirm:true 走真删）。成功后本地即时清标记重绘（服务端已同步撤库标记）。 */
@@ -13802,6 +13855,11 @@ async function sendMsg(){
       _copilotApplyMeta=null;
       if(body.reply_to && d.quote_applied===false){
         try{ showHint(window.T('inbox.toast.quote_dropped')); }catch(_){}
+      }
+      // #210 B：分条发出时明示实际条数——线程按条镜像（每条自带 message_id），
+      // 行数应与客户手机一致；坐席不必再猜「工作台一条、手机几条」
+      if(d.bubbles && Number(d.bubbles.parts_sent||0)>=2){
+        try{ showHint(window.Tf('inbox.send.bubbles_sent',{n:d.bubbles.parts_sent})); }catch(_){}
       }
       // P0：记录出向「实发译文 → 原文/质量」，供 thread 重载后回显中文原文副行。
       try{

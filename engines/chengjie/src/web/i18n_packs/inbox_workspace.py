@@ -2040,6 +2040,17 @@ ZH = {
     "inbox.handoff.r_off_hours": "非营业时段",
     # #144（0902）：出站近重复守卫拦下 AI 回复且没救回、客户在等 → 进待处理并说明原因
     "inbox.handoff.r_dup_guard_blocked": "近重复拦截：AI 回复与刚发过的内容相近未发出，客户在等回复",
+    # #207（L-3 A）：打开带「需人工」标的会话 → 顶部原因条（为何/何时/谁打的 + 两条出路）
+    "inbox.handoff.r_crisis": "客户消息触发危机升级，需要人看一眼",
+    "inbox.handoff.bar": "需人工：{why}——{when} 由{src}打标",
+    "inbox.handoff.bar_generic": "需人工：此会话被标记需人工处理（未记录原因）",
+    "inbox.handoff.bar_go": "去回复台处理",
+    "inbox.handoff.bar_go_t": "光标落到输入框，回一条即自动摘标",
+    "inbox.handoff.bar_ack": "我知道了（摘标）",
+    "inbox.handoff.bar_ack_t": "只摘掉「需人工」标，不改会话其它状态",
+    "inbox.handoff.bar_ack_ok": "已摘掉「需人工」标",
+    "inbox.handoff.bar_ack_fail": "摘标失败，请稍后重试",
+    "inbox.handoff.ai_muted_t": "此会话挂着「需人工」标，AI 徽标暂降灰——处理完摘标后恢复",
     "inbox.ctx.rm_tag_t": "点一下直接摘掉这个标签",
     "inbox.dpick.studio": "去工坊深编",
     "inbox.dpick.studio_t": "把勾选的短句填入输入框，并打开右栏「回复工坊」做改语言/改语气等深度编辑",
@@ -2121,6 +2132,8 @@ ZH = {
     # A1（#148 文本件）：重发被服务端按原件 id 判为「原件其实已发出/仍在途」而压制
     "inbox.send.resend_suppressed": "✓ 原消息其实已经发出去了（刚才是超时误报），本次重发已自动取消——客户不会收到重复的话",
     "inbox.send.slow_confirmed": "✓ 已发出（本次发送确认较慢，请勿重发）",
+    # #210 B：分条发出时明示实际条数（工作台按条镜像，行数应与客户手机一致）
+    "inbox.send.bubbles_sent": "✓ 已拆 {n} 条发出——客户手机与工作台都是 {n} 条",
     "inbox.send.status_unknown": "发送状态未知：消息可能已在路上，请稍后刷新会话确认，暂时不要重发",
     "inbox.sidebar.resize_t": "拖动调节侧栏宽度（双击恢复默认）",
     "inbox.skel.acct_loading": "正在加载 {name} 的会话…",
@@ -4778,6 +4791,17 @@ EN = {
     "inbox.handoff.r_circuit_open": "AI service circuit breaker is open",
     "inbox.handoff.r_off_hours": "outside business hours",
     "inbox.handoff.r_dup_guard_blocked": "near-duplicate guard: the AI reply was too close to what was just sent and was withheld; the customer is waiting",
+    # #207 (L-3 A): opening a conversation tagged needs-human → reason bar on top (why / when / who + two exits)
+    "inbox.handoff.r_crisis": "the customer's message triggered a crisis escalation; a human should take a look",
+    "inbox.handoff.bar": "Needs human: {why} — tagged {when} by {src}",
+    "inbox.handoff.bar_generic": "Needs human: this conversation is flagged for human handling (no reason recorded)",
+    "inbox.handoff.bar_go": "Reply now",
+    "inbox.handoff.bar_go_t": "Focus the composer; sending one reply clears the tag automatically",
+    "inbox.handoff.bar_ack": "Got it (clear tag)",
+    "inbox.handoff.bar_ack_t": "Only removes the needs-human tag; nothing else about the conversation changes",
+    "inbox.handoff.bar_ack_ok": "Needs-human tag cleared",
+    "inbox.handoff.bar_ack_fail": "Failed to clear the tag, please retry",
+    "inbox.handoff.ai_muted_t": "This conversation carries a needs-human tag, so the AI badge is dimmed until the tag is cleared",
     "inbox.ctx.rm_tag_t": "Click to remove this tag directly",
     "inbox.dpick.studio": "Deep-edit in Studio",
     "inbox.dpick.studio_t": "Put the ticked lines into the composer and open the Reply Studio on the right for language/tone deep edits",
@@ -4859,6 +4883,8 @@ EN = {
     # A1 (#148, text half): resend suppressed — the original was already sent / still in flight
     "inbox.send.resend_suppressed": "✓ The original message did go out (the earlier failure was a timeout false alarm); this resend was cancelled automatically — the customer won't get a duplicate",
     "inbox.send.slow_confirmed": "✓ Sent (delivery confirmation was slow — do not resend)",
+    # #210 B: bubble split — show the real count (thread mirrors one row per bubble)
+    "inbox.send.bubbles_sent": "✓ Sent as {n} bubbles — the customer's phone and this thread both show {n}",
     "inbox.send.status_unknown": "Delivery status unknown: the message may still be on its way. Refresh the conversation shortly before deciding to resend.",
     "inbox.sidebar.resize_t": "Drag to resize sidebar (double-click to reset)",
     "inbox.skel.acct_loading": "Loading conversations for {name}…",
