@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("GoalSprintTicker")
+logger = logging.getLogger("src.companion.goals.sprint_ticker")
 
 _DAY = 86400.0
 

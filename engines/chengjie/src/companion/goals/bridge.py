@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger("GoalBridge")
+logger = logging.getLogger("src.companion.goals.bridge")
 
 
 def bridge_enabled(cfg_root: Any) -> bool:

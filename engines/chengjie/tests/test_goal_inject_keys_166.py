@@ -167,7 +167,7 @@ def test_build_block_injects_with_placeholder_account_like_draft_chain(caplog):
     """端到端：拟稿链形态（conv + account='default'）→ build_block_for_chat 命中并注入。"""
     _seed()
     ctx = {}
-    with caplog.at_level(logging.INFO, logger="GoalService"):
+    with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
         blk = build_block_for_chat(
             _cfg(), platform=_PLAT, chat_key=_CK, account_id="default",
             conversation_id=_CONV, user_context=ctx, chain="draft",
@@ -184,7 +184,7 @@ def test_build_block_injects_with_placeholder_account_like_draft_chain(caplog):
 def test_no_goal_with_conv_logs_info_with_all_keys(caplog):
     get_goal_store(":memory:")
     ctx = {}
-    with caplog.at_level(logging.INFO, logger="GoalService"):
+    with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
         blk = build_block_for_chat(
             _cfg(), platform=_PLAT, chat_key=_CK, account_id=_ACCT,
             conversation_id=_CONV, user_context=ctx, chain="draft",
@@ -202,7 +202,7 @@ def test_no_goal_with_conv_logs_info_with_all_keys(caplog):
 
 def test_no_goal_info_throttled_per_conversation(caplog):
     get_goal_store(":memory:")
-    with caplog.at_level(logging.INFO, logger="GoalService"):
+    with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
         for _ in range(5):
             build_block_for_chat(
                 _cfg(), platform=_PLAT, chat_key=_CK, account_id=_ACCT,
@@ -224,24 +224,30 @@ def test_no_goal_info_throttled_per_conversation(caplog):
     assert sum(1 for m in infos if "conv=" + f"{_PLAT}:{_ACCT}:other" in m) == 1
 
 
-def test_no_goal_without_conv_stays_debug(caplog):
-    """主动链/系统调用没有会话 id → 仍 DEBUG（避免无键日志刷屏）。"""
+def test_no_goal_without_conv_logs_info_with_triple_key(caplog):
+    """M-7 B（#236）改口径：主动链/系统调用没有会话 id 也打 INFO——键回落三元组，
+    仍按「原因|键」60s 节流，不刷屏。此前 DEBUG 是死角。"""
     get_goal_store(":memory:")
-    with caplog.at_level(logging.DEBUG, logger="GoalService"):
+    with caplog.at_level(logging.DEBUG, logger="src.companion.goals.service"):
         build_block_for_chat(
             _cfg(), platform="telegram", chat_key="nobody", account_id="",
             conversation_id="", user_context={}, chain="reply")
-    recs = [r for r in caplog.records if "no_goal" in r.getMessage()]
-    assert recs and all(r.levelno == logging.DEBUG for r in recs)
+    recs = [r for r in caplog.records if "reason=no_goal" in r.getMessage()]
+    assert recs and all(r.levelno == logging.INFO for r in recs)
+    assert "conv=telegram::nobody" in recs[0].getMessage()
+    assert "chain=reply" in recs[0].getMessage()
 
 
-def test_disabled_stays_debug(caplog):
-    with caplog.at_level(logging.DEBUG, logger="GoalService"):
+def test_disabled_logs_info(caplog):
+    """M-7 B（#236）：disabled 不再 DEBUG——「配置态启动日志已可见」的假设在桌面机
+    多次重启 + 诊断包只取最近 3h 时不成立。"""
+    with caplog.at_level(logging.DEBUG, logger="src.companion.goals.service"):
         build_block_for_chat(
             _cfg({"enabled": False}), platform=_PLAT, chat_key=_CK,
             account_id=_ACCT, conversation_id=_CONV, user_context={})
-    recs = [r for r in caplog.records if "skip=disabled" in r.getMessage()]
-    assert recs and all(r.levelno == logging.DEBUG for r in recs)
+    recs = [r for r in caplog.records if "reason=disabled" in r.getMessage()]
+    assert recs and all(r.levelno == logging.INFO for r in recs)
+    assert f"conv={_CONV}" in recs[0].getMessage()
 
 
 def test_store_find_active_goal_exception_logs_warning(caplog):
@@ -255,7 +261,7 @@ def test_store_find_active_goal_exception_logs_warning(caplog):
             pass
 
     store._conn = _Boom()  # type: ignore[assignment]
-    with caplog.at_level(logging.WARNING, logger="GoalStore"):
+    with caplog.at_level(logging.WARNING, logger="src.companion.goals.store"):
         assert store.find_active_goal(
             conversation_id=_CONV, platform=_PLAT, chat_key=_CK,
             account_id=_ACCT) is None
@@ -274,7 +280,7 @@ def test_build_block_internal_exception_logs_warning_with_class(caplog, monkeypa
 
     monkeypatch.setattr(service, "refresh_goal", _boom)
     ctx = {}
-    with caplog.at_level(logging.WARNING, logger="GoalService"):
+    with caplog.at_level(logging.WARNING, logger="src.companion.goals.service"):
         blk = build_block_for_chat(
             _cfg(), platform=_PLAT, chat_key=_CK, account_id=_ACCT,
             conversation_id=_CONV, user_context=ctx, chain="draft",
@@ -296,7 +302,7 @@ def test_build_block_internal_exception_throttles_stack(caplog, monkeypatch):
         raise KeyError("planner exploded")
 
     monkeypatch.setattr(service, "refresh_goal", _boom)
-    with caplog.at_level(logging.WARNING, logger="GoalService"):
+    with caplog.at_level(logging.WARNING, logger="src.companion.goals.service"):
         for _ in range(3):
             build_block_for_chat(
                 _cfg(), platform=_PLAT, chat_key=_CK, account_id=_ACCT,

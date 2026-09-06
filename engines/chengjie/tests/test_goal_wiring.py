@@ -451,7 +451,8 @@ def test_discovery_all_slots_filled_completes_goal():
     sm._inject_goal_context(ctx, platform="telegram", chat_key="d3",
                             conversation_id="telegram:default:d3")
     assert "_goal_block" not in ctx            # 目标已达成，不再推进
-    assert ctx["_goal_inject_meta"]["reason"] == "inactive"
+    # M-7 B（#236）：当轮翻终态原因直说（goal_done / goal_expired / goal_failed）
+    assert ctx["_goal_inject_meta"]["reason"] == "goal_done"
     g = store.get_goal(goal["goal_id"])
     assert g["status"] == "done" and g["result"] == "slots_filled"
     assert float(g["progress"]) == 1.0

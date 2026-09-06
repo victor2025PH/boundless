@@ -63,7 +63,10 @@ def test_store_event_trace_columns_migrate_and_roundtrip():
     # kinds 过滤 + since_ts
     only = gs.list_events(gid, kinds=("beat_sent",))
     assert [e["kind"] for e in only] == ["beat_sent"]
-    assert gs.list_events(gid, kinds=("beat_sent",), since_ts=NOW + 10) == []
+    assert gs.list_events(gid, kinds=("beat_sent",),
+                          since_ts=float(sent["ts"]) + 1.0) == []
+    assert len(gs.list_events(gid, kinds=("beat_sent",),
+                              since_ts=float(sent["ts"]) - 1.0)) == 1
     # message_id 回填只填空的
     assert gs.set_event_message_id(int(plain["id"]), "m1") is True
     assert gs.set_event_message_id(int(plain["id"]), "m2") is False

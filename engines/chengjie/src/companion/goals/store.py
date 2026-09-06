@@ -28,7 +28,7 @@ from src.companion.goals.templates import (
     GOAL_STATUSES,
 )
 
-logger = logging.getLogger("GoalStore")
+logger = logging.getLogger("src.companion.goals.store")
 
 # 每会话同时活跃目标数上限的硬兜底（配置可更小；防误操作建一堆互相打架的目标）
 MAX_ACTIVE_PER_CONVERSATION = 3
@@ -220,7 +220,18 @@ class GoalStore:
         except Exception as e:  # noqa: BLE001
             logger.debug("create_goal failed: %s", e)
             return None
-        self.add_event(gid, "created", tmpl)
+        self.add_event(gid, "created", tmpl, conversation_id=str(conversation_id or ""))
+        # M-7 B（#236）：目标状态变更每次一行 [goal-state] INFO（创建 / 状态 / 里程碑 /
+        # 期限 / 自治档）。skuio 复报「近 3h 无目标创建/重置日志，无法判断深化→起步是
+        # 用户重建还是引擎重置」——事件其实一直在写，只是没有一行日志、且本包 logger
+        # 此前不在 src.* 落盘命名空间。所有建目标路径（路由 / 批量 / auto_create /
+        # 留存 / 挽回 / 再转化）都经这里，一处落日志全覆盖。
+        logger.info(
+            "[goal-state] created goal=%s conv=%s template=%s autonomy=%s "
+            "deadline_days=%.2f by=%s title=%r",
+            gid, str(conversation_id or "") or f"{platform}:{account_id}:{chat_key}",
+            tmpl, auto, ((dl - n) / 86400.0) if dl > 0 else 0.0,
+            str(created_by or "") or "-", str(title or "")[:30])
         return self.get_goal(gid)
 
     def update_goal_fields(self, goal_id: str, **fields: Any) -> bool:
@@ -257,10 +268,25 @@ class GoalStore:
                     tuple(vals),
                 )
                 self._conn.commit()
-                return c.rowcount > 0
+                ok = c.rowcount > 0
         except Exception as e:  # noqa: BLE001
             logger.debug("update_goal_fields failed: %s", e)
             return False
+        # M-7 B（#236）：状态类字段变更落一行 [goal-state]（progress/params/title 的
+        # 日常刷新不打，防刷屏）。是谁改的由调用方在 goal_events 里写 detail
+        # （status:…:manual / :deadline / milestone a->b），这里只保证「变了」可见。
+        if ok:
+            keys = {"status", "milestone_idx", "deadline_ts", "autonomy"}
+            hit = {k: fields[k] for k in fields if k in keys}
+            if hit:
+                try:
+                    logger.info(
+                        "[goal-state] updated goal=%s %s",
+                        str(goal_id or ""),
+                        " ".join(f"{k}={v}" for k, v in sorted(hit.items())))
+                except Exception:
+                    pass
+        return ok
 
     # ── goals：读 ───────────────────────────────────────────────────────────
     @staticmethod

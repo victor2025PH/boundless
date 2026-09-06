@@ -28,7 +28,7 @@ from src.companion.goals.templates import (
     pick_sprint_intent,
 )
 
-logger = logging.getLogger("GoalService")
+logger = logging.getLogger("src.companion.goals.service")
 
 _DAY = 86400.0
 
@@ -39,10 +39,13 @@ NEGATIVE_EMOTIONS = frozenset(
 
 DEFAULT_DB_NAME = "marketing_goals.db"
 
-# #166（2026-09-05）注入口「无目标 / 异常」可见性节流：同一会话 10 分钟内只落
-# 一行 INFO/WARNING（拟稿链每条入站都走注入口，高频会话不节流＝刷屏）。
-# 键 = 会话 id；有上限防长期运行撑爆（超限一次性清空重来，宁可多打一行）。
-_INJECT_LOG_THROTTLE_SEC = 600.0
+# #166（2026-09-05）注入口「无目标 / 异常」可见性节流：同一会话内只落一行
+# INFO/WARNING（拟稿链每条入站都走注入口，高频会话不节流＝刷屏）。
+# M-7 B（#236）：600s → 60s。skuio 机 3h 59 稿零行的真因是 logger 名不在 src.*
+# 命名空间（见 logger 定义处），节流本身没错；但 10 分钟一行在「目标到期→重建」
+# 这种分钟级操作面前太粗，60s 既够诊断包逐稿归因又不刷屏。
+# 键 = 原因|会话 id；有上限防长期运行撑爆（超限一次性清空重来，宁可多打一行）。
+_INJECT_LOG_THROTTLE_SEC = 60.0
 _INJECT_LOG_CAP = 4000
 _inject_log_seen: Dict[str, float] = {}
 
@@ -61,6 +64,24 @@ def _inject_log_allowed(key: str, now: Optional[float] = None) -> bool:
         return True
     except Exception:
         return True
+
+
+def _last_goal_hint(store: Any, conversation_id: str) -> str:
+    """no_goal 日志行的尾注：该会话最近一条**终态**目标（M-7 B）。
+    「刚到期所以查无目标」与「从没建过」在诊断包里必须能分辨。查不到/异常 → ""。"""
+    try:
+        if store is None or not conversation_id:
+            return ""
+        recent = [g for g in (store.list_goals(limit=30) or [])
+                  if str(g.get("conversation_id") or "") == str(conversation_id)]
+        if not recent:
+            return " last_goal=none"
+        g = recent[0]
+        return (f" last_goal={str(g.get('goal_id') or '')[:12]}"
+                f" status={g.get('status')}"
+                f" done_at={int(float(g.get('done_at') or 0))}")
+    except Exception:
+        return ""
 
 
 def resolve_inject_lookup_keys(
@@ -490,9 +511,28 @@ def refresh_goal(
             cap = (effective_beat_cap(pace, overrides=scfg, mode=sprint_mode)
                    if sprint else 0)
             if cap and n_existing >= cap:
-                stats.record_hold("pace_cap")
-                out["hold"] = "pace_cap"
-                return out
+                # M-7 B（#236 取证问 4）：拍数上限**只管主动出手**。全仓只有这里读
+                # cap，而它此前把客户来消息时的顺势带方向也一并掐断——「白天 2/1 拍」
+                # 超额后 AI 回复里连方向都没了，卡上却写着自动推进。现在：
+                # - inbound_turn（reply/draft 链，客户刚说话）→ 不 hold，照常带方向
+                #   （不再新开计数拍：复用/新建当日槽只为让块有「今日意图」）；
+                # - 主动链 / 系统调用 → 仍 hold=pace_cap，并记 beat_blocked(pace_cap@槽)
+                #   （按槽位去重），卡片「今天被拦 N 次」能看见。
+                if not inbound_turn:
+                    stats.record_hold("pace_cap")
+                    out["hold"] = "pace_cap"
+                    try:
+                        from src.companion.goals.sprint_ticker import (
+                            record_beat_blocked,
+                        )
+                        record_beat_blocked(
+                            store, gid, "pace_cap", slot=day,
+                            conversation_id=str(goal.get("conversation_id") or ""),
+                            now=n)
+                    except Exception:
+                        logger.debug("pace_cap beat_blocked skipped", exc_info=True)
+                    return out
+                out["cap_reached"] = True
             engaged = store.count_engaged_since(gid, signals.last_inbound_ts)
             # 坐席驳回回流（P2）：近窗 beat_rejected 事件 → planner 降档/退避
             try:
@@ -1087,38 +1127,53 @@ def build_block_for_chat(
         # 日志零痕迹——诊断包里翻遍找不到「这一轮目标为什么没进 prompt」。有目标
         # 却未注入是坐席最需要知道的事：早退原因一律 INFO 落日志。
         # #166（0905 skuio 88MP86：9.5h 零 [goal-inject] 行，右栏卡却显示目标进行中）：
-        # no_goal 此前恒 DEBUG＝「拟稿链到底用什么键查、查到没」在诊断包里不可证。
-        # 现在：有会话 id 的 no_goal 升 INFO 并带**全部查找键**，按会话 10 分钟节流
-        # （无会话 id 的系统/主动链调用仍 DEBUG）；disabled 保持 DEBUG（配置态，
-        # 启动日志已可见）。
+        # no_goal 升 INFO 并带**全部查找键**。
+        # M-7 B（#236，0907 skuio 第五次复报：3h 59 稿零行）：真因是本模块 logger 名
+        # "GoalService" 不在 src.* 命名空间、INFO 从源头被 root=WARNING 丢掉——已改名。
+        # 顺手把口径钉死：**每一稿一行**（自动链 / 手动链 / 主动链同口径）：
+        # - disabled / no_goal 同为 INFO，按「原因|会话」60s 节流（不再有 DEBUG 死角；
+        #   无会话 id 的系统调用也打，键回落三元组）；
+        # - no_goal 附带该会话最近一条终态目标（goal=… status=expired done_at=…）——
+        #   「到期了→查无目标」与「从没建过」在日志里必须能分辨；
+        # - 目标刚被本轮 settle-on-read 翻成终态 → reason=goal_expired / goal_done /
+        #   goal_failed（不再是笼统的 inactive）。
         try:
-            if reason == "disabled":
-                logger.debug("[goal-inject] skip=%s conv=%s", reason, _conv_label())
+            key = conversation_id or f"{platform}:{account_id}:{chat_key}"
+            if reason in ("disabled", "inject_disabled"):
+                if _inject_log_allowed(f"{reason}|{key}", now):
+                    logger.info(
+                        "[goal-inject] NOT injected reason=%s conv=%s plat=%s "
+                        "chat_key=%s acct=%s chain=%s（同会话 %ds 内不重复）",
+                        reason, key, platform, chat_key, account_id or "-",
+                        chain, int(_INJECT_LOG_THROTTLE_SEC))
             elif reason == "no_goal":
-                if conversation_id and _inject_log_allowed(
-                        f"no_goal|{conversation_id}", now):
+                if _inject_log_allowed(f"no_goal|{key}", now):
                     logger.info(
                         "[goal-inject] NOT injected reason=no_goal conv=%s plat=%s "
-                        "chat_key=%s acct=%s chain=%s（同会话 10 分钟内不重复）",
-                        conversation_id, platform, chat_key, account_id or "-",
-                        chain)
-                else:
-                    logger.debug("[goal-inject] skip=no_goal conv=%s", _conv_label())
+                        "chat_key=%s acct=%s chain=%s%s（同会话 %ds 内不重复）",
+                        key, platform, chat_key, account_id or "-", chain,
+                        _last_goal_hint(extra.get("_store"), key),
+                        int(_INJECT_LOG_THROTTLE_SEC))
             elif injected:
                 logger.info(
-                    "[goal-inject] injected conv=%s goal=%s ms=%s push=%s intent=%s",
-                    conversation_id or f"{platform}:{account_id}:{chat_key}",
+                    "[goal-inject] injected conv=%s goal=%s status=active ms=%s "
+                    "push=%s chain=%s intent=%s",
+                    key,
                     str(extra.get("goal_id") or "")[:12],
                     extra.get("milestone_idx", "-"),
                     extra.get("push_level", "-"),
+                    chain,
                     str(extra.get("intent") or "")[:40])
             else:
                 logger.info(
-                    "[goal-inject] NOT injected reason=%s%s conv=%s goal=%s title=%r",
+                    "[goal-inject] NOT injected reason=%s%s conv=%s goal=%s status=%s "
+                    "chain=%s title=%r",
                     reason,
                     (f"({extra['hold_reason']})" if extra.get("hold_reason") else ""),
-                    conversation_id or f"{platform}:{account_id}:{chat_key}",
+                    key,
                     str(extra.get("goal_id") or "")[:12],
+                    str(extra.get("status") or "active"),
+                    chain,
                     str(extra.get("title") or "")[:30])
         except Exception:
             pass
@@ -1150,7 +1205,10 @@ def build_block_for_chat(
                 conversation_id=conversation_id,
                 user_context=user_context, now=now)
         if goal is None:
-            _note_meta(False, "no_goal")
+            _note_meta(False, "no_goal", _store=store)
+            if isinstance(user_context, dict):
+                # _store 只给日志用，不透传到 API 的 goal_applied
+                (user_context.get("_goal_inject_meta") or {}).pop("_store", None)
             return None
         # P1 达成信号（2026-08-29）：自定义目标在要联系方式、对方本条真给了
         # → 记 outcome_signal（params+事件，右栏卡出「像是达成了」提示行）。
@@ -1340,11 +1398,18 @@ def build_block_for_chat(
             store, cfg_root, goal, inbox_store=inbox_store,
             negative_emotion=neg, now=now,
             inbound_turn=bool(str(inbound_text or "").strip()))
-        if res.get("hold") or str((res.get("goal") or {}).get("status")) != "active":
+        _st_after = str((res.get("goal") or {}).get("status") or "active")
+        if res.get("hold") or _st_after != "active":
+            # M-7 B：本轮 settle-on-read 刚把目标翻成终态 → 原因直说 goal_expired /
+            # goal_done / goal_failed（09-07 BABY BEAR 原目标就是这样静默到期的）
+            _reason = "hold" if res.get("hold") else (
+                f"goal_{_st_after}" if _st_after in ("expired", "done", "failed")
+                else "inactive")
             _note_meta(
-                False, "hold" if res.get("hold") else "inactive",
+                False, _reason,
                 hold_reason=str(res.get("hold") or ""),
                 goal_id=str(goal.get("goal_id") or ""),
+                status=_st_after,
                 title=str(goal.get("title") or ""))
             return None
         action = res.get("action")

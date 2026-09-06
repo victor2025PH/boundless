@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from . import offers as offers_mod
 
-logger = logging.getLogger("SiteCatalog")
+logger = logging.getLogger("src.companion.goals.site_catalog")
 
 DEFAULT_CATALOG_PATH = "config/site_catalog.yaml"
 DEFAULT_MAX_CHARS = 620

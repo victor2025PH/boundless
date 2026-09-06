@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 from src.ai.memory_grounding import fact_grounded_in_user_msg
 from src.companion.goals.profile_slots import fill_rates, get_slot, missing_slots
 
-logger = logging.getLogger("GoalProfileLLM")
+logger = logging.getLogger("src.companion.goals.profile_llm")
 
 # 过接地但仍是 LLM 猜的——画像卡/注入行标「待确认」，不是丢弃。
 LLM_PENDING_SRC = "llm_pending"

@@ -23,7 +23,7 @@ from src.companion.goals.notify import result_kind, triage_missed
 from src.companion.goals.store import GoalStore
 from src.companion.goals.templates import get_template
 
-logger = logging.getLogger("GoalReport")
+logger = logging.getLogger("src.companion.goals.report")
 
 _DAY = 86400.0
 

@@ -34,7 +34,7 @@ from src.companion.goals.service import (
 from src.companion.goals.store import GoalStore
 from src.companion.goals.templates import get_template
 
-logger = logging.getLogger("GoalNotify")
+logger = logging.getLogger("src.companion.goals.notify")
 
 NOTIFIED_EVENT_KIND = "completed_notified"
 MISS_EVENT_KIND = "miss_notified"

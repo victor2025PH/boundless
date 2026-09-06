@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
-logger = logging.getLogger("GoalOrderPull")
+logger = logging.getLogger("src.companion.goals.order_pull")
 
 # 结算认可的订单状态：钱到账（paid）或已开通（activated）才算成交
 SETTLE_STATUSES = frozenset(("paid", "activated"))

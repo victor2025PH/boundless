@@ -19,7 +19,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 REASONS = ("hold", "inactive", "observe", "beat_rejected", "empty_block",
            "outcome_auto_settled", "inject_disabled", "disabled", "no_engine",
-           "unknown")
+           "unknown",
+           # M-7 B（#236）：settle-on-read 当轮翻终态 → 原因直说
+           "goal_expired", "goal_done", "goal_failed")
 
 
 def test_note_meta_logs_not_injected(caplog):
@@ -27,12 +29,13 @@ def test_note_meta_logs_not_injected(caplog):
     src = inspect.getsource(service.build_block_for_chat)
     assert "[goal-inject] NOT injected reason=" in src
     assert "[goal-inject] injected conv=" in src
-    # #166（2026-09-05）改口径：有会话 id 的 no_goal 升 INFO 带全部查找键、按会话
-    # 10 分钟节流（skuio 88MP86 实锤：右栏卡有目标、拟稿链 9.5h 零 goal-inject 行
-    # ＝no_goal 恒 DEBUG 让「用什么键查、查到没」不可证）；无会话 id 仍 DEBUG，
-    # disabled 仍 DEBUG。行为细节由 tests/test_goal_inject_keys_166.py 钉住。
-    assert 'reason == "no_goal"' in src and "logger.debug(\"[goal-inject] skip=" in src
+    # #166（2026-09-05）：有会话 id 的 no_goal 升 INFO 带全部查找键 + 节流。
+    # M-7 B（2026-09-07 #236）再改口径：**没有 DEBUG 死角**——disabled / no_goal 都
+    # INFO（按「原因|会话」60s 节流），到期当轮 reason=goal_expired。真因是本包 logger
+    # 曾用根级名在生产里 INFO 全丢，见 tests/test_goal_inject_no_silence_236.py。
+    assert 'reason == "no_goal"' in src and 'logger.debug("[goal-inject] skip=' not in src
     assert "reason=no_goal conv=%s plat=%s" in src and "_inject_log_allowed(" in src
+    assert 'f"goal_{_st_after}"' in src
 
 
 def test_frontend_consumes_goal_applied():
