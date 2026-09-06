@@ -31,6 +31,8 @@ ZH = {
         "想立即结束请用「标成交」或「放弃」",
     "err.goals.deadline_terminal": "目标已结束，期限不可再改",
     "err.goals.pace_not_allowed": "这个模板不支持限时节奏，请用自然天推进",
+    # M-5 A（#217 / D-M6）：用户版不再有「转化成交」类目
+    "err.goals.template_retired_client": "该模板已下线，请改用「自定义目标」描述你的推进方向",
 
     # ── 客户画像卡（cp-goal 内嵌画像区；P1 双轨槽位） ─────────────────────
     "inbox.goal.profile.title": "客户画像",
@@ -349,6 +351,8 @@ ZH = {
     "inbox.goal.autonomy.auto_note_why": "{note}（{why}）",
     "inbox.goal.autonomy.auto_ineffective_t": "「自动推进」未生效：{why}。AI 只在对方来消息时顺势推进；点击切换自治档",
     "inbox.goal.engine.card_off": "「自动推进」未生效（{why}）：AI 不会主动发消息，只在对方来消息时顺势推进",
+    # M-5 A（#217）：用户版存量「转化成交」目标卡
+    "inbox.goal.template_retired": "该模板已下线，建议改用「自定义目标」；目标没绑产品时 AI 不会编报价/开户话术",
     "inbox.goal.meta.time_pct": "时间 {pct}%",
     "inbox.goal.meta.beats": "动作 {n}/{m} 拍",
     "inbox.goal.engine.blk.goals_disabled": "目标功能未启用",
@@ -603,6 +607,8 @@ EN = {
         "This goal has ended; its deadline can no longer be changed",
     "err.goals.pace_not_allowed":
         "This template does not support a sprint pace — use the natural-day cadence",
+    "err.goals.template_retired_client":
+        "This template has been retired — describe your direction with a Custom goal instead",
 
     # ── Customer profile card (embedded in cp-goal; P1 dual tracks) ───────
     "inbox.goal.profile.title": "Customer profile",
@@ -915,6 +921,7 @@ EN = {
     "inbox.goal.autonomy.auto_note_why": "{note} ({why})",
     "inbox.goal.autonomy.auto_ineffective_t": "“Auto advance” is not in effect: {why}. AI only advances when they message you; click to cycle autonomy",
     "inbox.goal.engine.card_off": "“Auto advance” is not in effect ({why}): AI won't initiate — it only advances when they message you",
+    "inbox.goal.template_retired": "This template has been retired — consider a Custom goal instead; without a bound product the AI will not invent prices or sign-up talk",
     "inbox.goal.meta.time_pct": "time {pct}%",
     "inbox.goal.meta.beats": "{n}/{m} beats",
     "inbox.goal.engine.blk.goals_disabled": "goals feature disabled",

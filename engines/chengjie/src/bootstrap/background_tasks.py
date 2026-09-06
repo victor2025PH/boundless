@@ -349,8 +349,42 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             except Exception:
                 return {}
 
+        # M-5 A（#217 / D-M6 2026-09-06）：目标行出站硬规则套在 send_callback 外——
+        # 无产品目标禁报价/开户/支付话术（goal_no_product 拦截）+ 目标首条真发进
+        # L1 草稿预览（reason=goal_first_send）。非 goal 行原样透传；包装失败退回
+        # 裸 _care_send（守卫自身故障不该让 care 全链哑火）。
+        _care_send_guarded = _care_send
+        try:
+            from src.companion.goals.product_guard import wrap_care_send
+
+            def _catalog_probe() -> bool:
+                """官网产品目录里是否真有货（acquire/retention 空 product_id ＝
+                按画像自动选品，目录空则是空壳）。"""
+                try:
+                    from src.companion.goals import site_catalog as _sc
+                    cat = _sc.load_catalog(_sc.catalog_path(
+                        assistant.config.config or {},
+                        getattr(assistant.config, "config_path", None)))
+                    return bool((cat or {}).get("products"))
+                except Exception:
+                    return False
+
+            def _goal_store_getter():
+                from src.companion.goals.store import peek_goal_store
+                return peek_goal_store()
+
+            _care_send_guarded = wrap_care_send(
+                _care_send, care_store=care_store,
+                goal_store_getter=_goal_store_getter,
+                inbox_store_getter=lambda: assistant.inbox_store,
+                catalog_probe=_catalog_probe)
+        except Exception:
+            assistant.logger.debug("goal product_guard 接线失败（退回裸 send）",
+                                   exc_info=True)
+
         dispatcher = CareDispatcher(
-            store=care_store, ai_client=assistant.ai_client, send_callback=_care_send,
+            store=care_store, ai_client=assistant.ai_client,
+            send_callback=_care_send_guarded,
             context_provider=_care_context, proactive_allowed=proactive_paywall,
             already_discussed=_care_already_discussed,
             ai_name=ai_name,

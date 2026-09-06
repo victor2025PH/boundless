@@ -1175,7 +1175,12 @@
       const engineNote = (engOff && !(live && !live.ticker_on))
         ? `<div class="gl-engine-note">\u26A0 ${esc(this.t("inbox.goal.engine.card_off", { why: engWhy }))}</div>`
         : "";
-      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote +
+      // M-5 A（#217）：用户版存量「转化成交」目标——模板已下线（新建入口已收起），
+      // 目标不删，卡上说清建议改自定义目标；后端缺键（partner / internal）零渲染
+      const retiredNote = g.template_retired
+        ? `<div class="gl-engine-note">\u26A0 ${esc(this.t("inbox.goal.template_retired"))}</div>`
+        : "";
+      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote + retiredNote +
         (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
       if (isSprint && g.status === "active") this._armSprintTick();
 

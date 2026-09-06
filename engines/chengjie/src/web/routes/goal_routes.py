@@ -126,6 +126,47 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except Exception:
             return "zh"
 
+    def _client_hide(request: Request) -> bool:
+        """「用户版隐藏」是否生效（M-5 A / #217 / D-M6）：与模板全局
+        ``ui_client_hide`` 同一口径＝client 形态且未开开发者模式（L-4 A）。
+        任何异常按不藏（fail-open：内部机器少藏一项只是噪音，藏错让坐席缺入口）。"""
+        try:
+            from src.web.ui_visibility import (
+                client_hide_active,
+                resolve_developer_mode,
+            )
+            try:
+                sess = request.session
+            except Exception:
+                sess = None
+            return bool(client_hide_active(_cfg_root(), resolve_developer_mode(sess)))
+        except Exception:
+            return False
+
+    def _deny_hidden_template(request: Request, template_id: str) -> None:
+        """用户版不建「转化成交」类目目标（#217）：藏了入口还放 API 建＝旧前端
+        「上次用过」/ 脚本仍能把 AI 拉去推销智聊。partner / internal / 开发者
+        模式不拦；存量目标不受影响（只闸新建）。"""
+        from src.companion.goals.templates import is_client_hidden_template
+        if _client_hide(request) and is_client_hidden_template(template_id):
+            raise HTTPException(
+                403, tr(request, "err.goals.template_retired_client"))
+
+    def _attach_tier(view, request: Request):
+        """用户版：存量「转化成交」目标卡标 ``template_retired=True``（#217，
+        「该模板已下线，建议改用自定义目标」）。非 client / 其他类目不加键
+        （前端缺键＝不渲染）；best-effort 绝不抛。"""
+        if not isinstance(view, dict):
+            return view
+        try:
+            from src.companion.goals.templates import is_client_hidden_template
+            if (_client_hide(request)
+                    and is_client_hidden_template(str(view.get("template") or ""))):
+                view["template_retired"] = True
+        except Exception:
+            logger.debug("attach tier flag skipped", exc_info=True)
+        return view
+
     def _refreshed_view(svc, store, goal, *, lang: str) -> Dict[str, Any]:
         res = svc.refresh_goal(store, _cfg_root(), goal, inbox_store=_inbox_store())
         return svc.goal_view(
@@ -277,7 +318,9 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         es = _svc().sprint_engine_status(
             _cfg_root(), platform=str(request.query_params.get("platform") or ""))
         return {
-            "templates": list_templates(),
+            # M-5 A（#217 / D-M6）：用户版不下发「转化成交」类目（四张预置），
+            # partner / internal / 开发者模式照旧——与 L-4 ui_client_hide 同口径
+            "templates": list_templates(client_hide=_client_hide(request)),
             "autonomy_levels": list(AUTONOMY_LEVELS),
             "statuses": list(GOAL_STATUSES),
             "caps": {
@@ -536,8 +579,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 store, lang=lang),
             store)
         # settle-on-read 可能本轮刚转终态（限时目标到期）——复盘字段同样要附
-        view = _attach_beats(_attach_sprint_live(
-            _attach_sprint_recap(view, store), store), store)
+        view = _attach_tier(_attach_beats(_attach_sprint_live(
+            _attach_sprint_recap(view, store), store), store), request)
         # #166：卡片带引擎真相（按本会话平台判白名单）——「自动推进」档在引擎
         # 不能真出手时卡上要说清，不能只在建目标表单里说一次
         return {"goal": view, "last": None,
@@ -820,6 +863,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         tmpl = get_template(template_id)
         if tmpl is None:
             raise HTTPException(400, tr(request, "err.goals.template_unknown"))
+        _deny_hidden_template(request, template_id)
         raw_targets = body.get("targets")
         if not isinstance(raw_targets, list) or not raw_targets:
             raise HTTPException(400, tr(request, "err.goals.batch_targets_required"))
@@ -1167,9 +1211,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         views = []
         for g in goals:
             if str(g.get("status")) == "active":
-                views.append(_refreshed_view(svc, store, g, lang=lang))
+                views.append(_attach_tier(
+                    _refreshed_view(svc, store, g, lang=lang), request))
             else:
-                views.append(svc.goal_view(g, lang=lang))
+                views.append(_attach_tier(svc.goal_view(g, lang=lang), request))
         return {"goals": views, "summary": store.summary()}
 
     @app.post("/api/goals")
@@ -1190,6 +1235,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         tmpl = get_template(template_id)
         if tmpl is None:
             raise HTTPException(400, tr(request, "err.goals.template_unknown"))
+        _deny_hidden_template(request, template_id)
 
         conv = str(body.get("conversation_id") or "").strip()
         platform = str(body.get("platform") or "").strip()
@@ -1294,7 +1340,9 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except Exception:
             logger.debug("goal auto-attach skipped", exc_info=True)
         out = {"ok": True,
-               "goal": _refreshed_view(svc, store, goal, lang=_lang(request))}
+               "goal": _attach_tier(
+                   _refreshed_view(svc, store, goal, lang=_lang(request)),
+                   request)}
         if attached:
             out["auto_attached_chain"] = attached
         return out
@@ -1310,9 +1358,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if goal is None:
             raise HTTPException(404, tr(request, "err.goals.not_found"))
         lang = _lang(request)
-        view = (_refreshed_view(svc, store, goal, lang=lang)
-                if str(goal.get("status")) == "active"
-                else svc.goal_view(goal, lang=lang))
+        view = _attach_tier(
+            (_refreshed_view(svc, store, goal, lang=lang)
+             if str(goal.get("status")) == "active"
+             else svc.goal_view(goal, lang=lang)), request)
         actions = store.list_actions(goal_id, limit=30)
         # i18n P0：拍史逐行附英文展示态（同池反查；匹配不到=""=前端回落中文）。
         # 「What AI did」时间线读的就是这批行。

@@ -524,6 +524,26 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
 }
 
 
+# M-5 A（#217 / D-M6，2026-09-06）：用户版（client 形态且未开开发者模式）
+# 整个「转化成交」类目不下发——四张预置里两张是厂商卖智聊软件的销售剧本
+# （acquire_and_convert / retention_expand），两张是无产品字段的空壳
+# （conversion_unlock / conversion_subscribe）；冲刺引擎 1.0.75 已真发，留着
+# 就是让 AI 向陪聊客户推销智聊。partner / internal 照旧；存量目标不删（卡片标
+# 「模板已下线」）。按 kind 判而非点名 id：新增同类模板自动归入。
+CLIENT_HIDDEN_KINDS = ("conversion",)
+
+
+def is_client_hidden_template(template_id: str) -> bool:
+    """该模板是否属于用户版隐藏类目（未知模板 → False，交上游按「未知」处理）。"""
+    t = TEMPLATES.get(str(template_id or "").strip())
+    return bool(t) and str(t.get("kind") or "") in CLIENT_HIDDEN_KINDS
+
+
+def client_hidden_template_ids() -> List[str]:
+    return [tid for tid, t in TEMPLATES.items()
+            if str(t.get("kind") or "") in CLIENT_HIDDEN_KINDS]
+
+
 def template_ids() -> List[str]:
     return list(TEMPLATES.keys())
 
@@ -532,15 +552,18 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
     return TEMPLATES.get(str(template_id or "").strip())
 
 
-def list_templates() -> List[Dict[str, Any]]:
+def list_templates(*, client_hide: bool = False) -> List[Dict[str, Any]]:
     """API/UI 消费的公开形状（含 id；不含 intents 内部池）。
 
     ``push_curve``（P24）随形状导出——建目标向导第二步的「AI 会怎么推进」
     节奏预览据此给每段里程碑标推进力度（不提销售/顺势/可直说）。
+    ``client_hide=True``（M-5 A）→ 剔 :data:`CLIENT_HIDDEN_KINDS` 类目。
     """
     out: List[Dict[str, Any]] = []
     from src.companion.goals.pace import sprint_ok as _sprint_ok
     for tid, t in TEMPLATES.items():
+        if client_hide and str(t.get("kind") or "") in CLIENT_HIDDEN_KINDS:
+            continue
         out.append({
             "id": tid,
             "name_zh": t["name_zh"],
@@ -751,12 +774,15 @@ __all__ = [
     "AUTONOMY_LEVELS",
     "CARE_INTENTS",
     "CARE_PAIRS",
+    "CLIENT_HIDDEN_KINDS",
     "GOAL_STATUSES",
     "PUSH_LEVELS",
     "STAGE_ORDER",
     "TEMPLATES",
+    "client_hidden_template_ids",
     "get_template",
     "intent_en_for",
+    "is_client_hidden_template",
     "list_templates",
     "milestone_count",
     "milestone_label",
