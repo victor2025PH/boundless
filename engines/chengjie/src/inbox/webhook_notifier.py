@@ -634,6 +634,16 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"#{data.get('seen_mid', '?')}\n"
                 "补拉结果看日志 `[bug_intake] 序号哨兵` / 手动 gap-probe 可复核"
             )
+        elif str(data.get("kind") or "") == "request_for_info":
+            # L-7 C（2026-09-06）：报障人向值守要清单/进度/答复——AI 不接（不许编台账），
+            # 值守人工答；此前判闲聊静默无痕（0906 ev#753「先列出41张单以及修复的结果」）。
+            title = "📋 报障群有人要清单/进度/答复（AI 未接，值守人工答）"
+            text = (
+                f"**群**: {data.get('chat_id', '?')}\n"
+                f"**用户**: {data.get('reporter', '?')}\n"
+                f"**原话**: {str(data.get('text') or '')[:160]}\n"
+                "用 `tools/duty_reply.py` 回；清单/进度类先查台账再答"
+            )
         else:
             _sev = str(data.get("severity") or "?")
             title = (f"{'🚨' if _sev == 'P0' else '🐞'} 报障群新工单 "

@@ -58,7 +58,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,30 @@ P1_WORDS = (
 # _contains_mention_of_self 认不出 @username，这里按显示名兜住）。
 ENGAGE_EXTRA = ("智聊支持", "官方支持", "客服", "支持人员")
 
+# L-7 C（2026-09-06）：报障人**向值守要东西**的请求语——清单 / 进度 / 修复了什么 /
+# 对账 / changelog / 什么时候修 / 修好了吗。0906 00:45 skuio「先列出41张单以及修复的
+# 结果」判 other → smalltalk_suppressed（ev#753）无痕，他随后自己做了 44 项总表。
+# 这类话 AI 不该编清单（数据在台账里，人来答），但也绝不能静默：记 request_for_info
+# 事件 + 推值守告警。「列表」刻意不进表（「会话列表不刷新」是 bug 词先命中；
+# 「这个列表好看」是闲聊）。
+INFO_REQUEST_WORDS = (
+    "列出", "清单", "进度", "修复了什么", "修了什么", "哪些修了", "哪些已修", "哪些修复",
+    "修复结果", "修复情况", "修复进度", "修复状态", "对账", "总表", "汇总",
+    "changelog", "release note", "更新日志", "发版说明", "什么时候修", "何时修",
+    "什么时候发", "何时发版", "修好了吗", "修复了吗", "修了吗", "修好了没", "有没有修",
+)
+
+
+def is_info_request(text: str) -> bool:
+    """报障群里「向值守要清单/进度/答复」的话：请求词命中，或 ≥6 字且以 吗/么/嘛
+    收尾的问句（0906 04:07 钧「那个表情在客户手机上会动吗」无问号 → other → 静默 ev#810）。"""
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    if any(w in t for w in INFO_REQUEST_WORDS):
+        return True
+    return len(t) >= 6 and t.rstrip("。！!～~ ").endswith(("吗", "么", "嘛"))
+
 _COLLECT_TTL_DEFAULT_MIN = 30
 
 # ── 进程态（限频 / 收集窗 / 计数器）────────────────────────────────────────────
@@ -183,6 +207,12 @@ _STATS: Dict[str, int] = {
     # C1-②（#123 族，2026-09-02）：群消息序号哨兵——跳号告警次数 / 补拉回来的
     # 真消息数 / 核实为空（已删/服务消息）的缺号数
     "seq_gap": 0, "seq_gap_filled": 0, "seq_gap_empty": 0,
+    # L-7 C（2026-09-06）：序号哨兵收割时核实为**本账号 API 出站**的号（镜像在
+    # inbox messages direction='out'，TelegramClient 收不到自己的 update）→ 不告警不补拉
+    "seq_gap_own": 0,
+    # L-7 C：报障人向值守要清单/进度/修复结果（0906 00:45「先列出41张单以及修复的结果」
+    # 被判闲聊静默 ev#753）→ 记事件 + 推值守告警，不再无痕
+    "request_for_info": 0,
 }
 _DB_CONN: Optional[sqlite3.Connection] = None
 # J-5 E-2：本方账号群发消息 → 其文中 #N 工单号（"<chat>:<mid>" → [tid,...]）。
@@ -1175,6 +1205,50 @@ def note_group_msg_seq(config: Optional[Dict[str, Any]], chat_id: Any,
         return []
 
 
+def _own_outbound_mids(config: Optional[Dict[str, Any]], account_id: str,
+                       chat_id: str, ids: List[int]) -> Set[int]:
+    """L-7 C（2026-09-06）：``ids`` 里哪些是**本账号经 API 发出的群消息**。
+
+    0906 03:43 实锤：值守用支持号经 ``/api/unified-inbox/send`` 发出 mid 1224，
+    TelegramClient 收不到自己 API 出站的 update → 1225 到达时 1224 成「洞」→ 宽限期后
+    P1 ``seq_gap`` 告警 + 云端补拉（拉回的是自己那条）。出站在成功路径一定镜像进
+    inbox ``messages``（direction='out'，conversation_id = platform:account:chat），
+    这里只读 inbox.db 核一遍即可；任何异常返回空集＝退回旧行为（宁可多告警不漏告警）。
+    """
+    try:
+        want = sorted({int(i) for i in ids if int(i) > 0})
+        if not want or not str(account_id or "").strip():
+            return set()
+        raw = str(((config or {}).get("inbox") or {}).get("db_path") or "").strip()
+        if raw:
+            db = Path(raw)
+        else:
+            from src.licensing.data_paths import config_dir
+            db = Path(config_dir()) / "inbox.db"
+        if not db.is_file():
+            return set()
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=3)
+        try:
+            conv = f"telegram:{str(account_id).strip()}:{str(chat_id).strip()}"
+            q = ",".join("?" for _ in want)
+            rows = con.execute(
+                "SELECT platform_msg_id FROM messages WHERE conversation_id=?"
+                " AND direction='out' AND CAST(platform_msg_id AS INTEGER) IN ("
+                + q + ")", [conv, *want]).fetchall()
+        finally:
+            con.close()
+        own: Set[int] = set()
+        for (pmid,) in rows:
+            try:
+                own.add(int(pmid))
+            except (TypeError, ValueError):
+                continue
+        return own
+    except Exception:
+        logger.debug("[bug_intake] 序号哨兵 自发消息核查失败（按旧行为告警）", exc_info=True)
+        return set()
+
+
 def due_seq_gaps(config: Optional[Dict[str, Any]],
                  now: Optional[float] = None,
                  grace_sec: Optional[float] = None,
@@ -1185,6 +1259,8 @@ def due_seq_gaps(config: Optional[Dict[str, Any]],
     每个洞只会被收割一次（从 pending 摘除）；补拉结果经 ``seq_gap_backfilled``
     记账。``account_id`` 非 None ＝只收割该账号的洞（同进程多 worker 各自收割
     各自的，别把别人的洞摘走却不补）。非报障群配置（已关闭）→ 清空状态返回空。
+    L-7 C：收割前先剔掉本账号自己 API 出站的号（``_own_outbound_mids``）——只记
+    ``seq_gap_own`` 事件，不告警不补拉；剔完为空的洞整组静默。
     """
     out: List[Dict[str, Any]] = []
     try:
@@ -1218,6 +1294,20 @@ def due_seq_gaps(config: Optional[Dict[str, Any]],
                     "last_mid": int(st.get("last_mid") or 0),
                 })
         for item in harvested:
+            own = _own_outbound_mids(config, item["account_id"], item["chat_id"],
+                                     item["missing_ids"])
+            if own:
+                own_ids = sorted(own)
+                _bump("seq_gap_own", len(own_ids))
+                _record_event(item["chat_id"], "seq_gap_own", "",
+                              f"own={','.join(str(i) for i in own_ids)} last={item['last_mid']}")
+                logger.info(
+                    "[bug_intake] 序号哨兵 缺号为本账号出站 chat=%s acct=%s 号=%s（不告警不补拉）",
+                    item["chat_id"], item["account_id"] or "-",
+                    ",".join(str(i) for i in own_ids[:20]))
+                item["missing_ids"] = [i for i in item["missing_ids"] if i not in own]
+                if not item["missing_ids"]:
+                    continue
             ids = item["missing_ids"]
             _bump("seq_gap")
             _record_event(
@@ -1443,6 +1533,18 @@ def trigger_verdict(config: Optional[Dict[str, Any]], chat_id: Any,
         if is_direct:
             _bump("engaged")
             return True
+        # L-7 C：向值守要清单/进度/答复 ≠ 闲聊——AI 不接（不许编台账），但记事件
+        # + 推值守告警（每用户 10 分钟去抖），值守人工答。
+        if is_info_request(t):
+            _bump("request_for_info")
+            _record_event(cid, "request_for_info", sender_id, t[:200])
+            if _rate_ok(f"q:{cid}:{sender_id}", 1, ts, window_sec=600.0):
+                _rate_mark(f"q:{cid}:{sender_id}", ts)
+                _publish_alert("request_for_info", {
+                    "chat_id": cid, "reporter": str(sender_id),
+                    "text": t[:200], "severity": "P2",
+                    "rate_key": f"bug_intake:request_for_info:{cid}:{sender_id}"})
+            return False
         # 报障群不陪聊：非报障、非点名一律静默。
         # J-5 D：记事件（此前无痕——0904 五句漏网报障连一条痕迹都没有，值守
         # 面板从这里就能盯「被静默的都是什么」，词表缺口照单补）。
@@ -1821,6 +1923,7 @@ __all__ = [
     "list_pending_notify",
     "note_screenshot", "trigger_verdict", "observe_group_message",
     "dump_stats", "reset_state_for_tests", "VALID_STATUSES",
+    "is_info_request", "INFO_REQUEST_WORDS",
     "note_group_msg_seq", "due_seq_gaps", "seq_gap_backfilled",
     "seq_grace_sec", "seq_sentinel_snapshot",
     "list_events", "DUTY_VISIBLE_EVENT_KINDS",
