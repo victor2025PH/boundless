@@ -122,6 +122,78 @@
   try{ if(window.matchMedia){ window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',function(){ if(pref()==='auto'){ window.cpApplyTheme(); window.cpSyncThemeSeg&&window.cpSyncThemeSeg(); } }); } }catch(_){}
 })();
 </script>
+<script>
+/* ── 站内导航主题安全助手 wsNav（#221，M-4 B，2026-09-06 4KEJ63 / Y8Z47B）──────────
+   事故：桌面壳 webview 地址是 /workspace?lang=zh&theme=dark，顶栏「自动 (N)」胶囊是
+   href="/workspace" 的整页链接 → 点一下整页重载、丢掉 ?theme= → 按 auto 渲染成浅色，
+   还掐断进行中的 loadChats/loadThread。修法**不是**把 theme 持久化（上方不变量①：
+   ?theme= 是窗口级钉子，写 localStorage 会翻掉同 profile 其它窗口），而是站内导航
+   一律带上当前 URL 的 ?theme= 与 lang=——钉释放过的窗口由 sessionStorage(PIN_OFF)
+   接管，带钉的 URL 不会再盖回用户的选择，所以「原样携带」永远安全。
+   三个入口：
+   · wsNavUrl(url)：只补当前 URL 里有、目标里没有的 theme / lang（外链 / 已带者不动）；
+   · wsNav(url)：location.href = wsNavUrl(url)——模板里的 JS 导航一律走它，裸
+     location.href= 由 tests/test_ws_nav_theme_safe_221.py 只减不增；
+   · window 捕获相位点击拦截：同源 <a href>（无 target/download/修饰键）在导航前改写
+     href——比 _win_unique 的 document 捕获监听更早，所以 __wsGoHome 读到的已是带
+     theme 的地址。另把 __wsGoHome 的默认 url 也补齐（它自带 opts.url 语义）。 */
+(function(){
+  var CARRY=['theme','lang'];
+  function navUrl(url){
+    try{
+      var s=String(url==null?'':url);
+      if(!s) return s;
+      if(/^(javascript|mailto|tel|blob|data):/i.test(s)) return s;
+      var cur=new URLSearchParams(location.search);
+      var u=new URL(s, location.href);
+      if(u.origin!==location.origin) return s;      /* 外链不动 */
+      var touched=false;
+      CARRY.forEach(function(k){
+        var v=cur.get(k);
+        if(v && !u.searchParams.has(k)){ u.searchParams.set(k,v); touched=true; }
+      });
+      if(!touched) return s;
+      return u.pathname+u.search+u.hash;
+    }catch(_){ return url; }
+  }
+  window.wsNavUrl=window.wsNavUrl||navUrl;
+  window.wsNav=window.wsNav||function(url){ location.href=window.wsNavUrl(url); };
+  /* 同源链接点击：window 捕获相位先于 document 捕获（_win_unique 的 /workspace 去重
+     拦截器）——它读 a.getAttribute('href') 时已带 theme/lang。只在当前 URL 真有这两个
+     参数时动手（纯浏览器无钉 → 零改写）。 */
+  window.addEventListener('click',function(ev){
+    try{
+      if(ev.defaultPrevented) return;
+      if(ev.button!==0||ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey) return;
+      var a=(ev.target&&ev.target.closest)?ev.target.closest('a[href]'):null;
+      if(!a||a.hasAttribute('download')) return;
+      var tgt=(a.getAttribute('target')||'').toLowerCase();
+      if(tgt&&tgt!=='_self') return;
+      var href=a.getAttribute('href')||'';
+      if(!href||href.charAt(0)==='#') return;
+      var nu=window.wsNavUrl(href);
+      if(nu!==href) a.setAttribute('href',nu);
+    }catch(_){}
+  },true);
+  /* __wsGoHome（_win_unique）默认目标 /workspace[?conv=]：补成带 theme/lang 的地址。
+     _win_unique 在 <head> 更早处已同步挂好真实现（iframe 内为桩），此处包一层即可。 */
+  try{
+    var _g=window.__wsGoHome;
+    if(typeof _g==='function' && !_g.__wsNavWrapped){
+      var w=function(opts){
+        opts=opts||{};
+        if(!opts.url){
+          var cid=String(opts.cid||'');
+          opts.url=window.wsNavUrl('/workspace'+(cid?('?conv='+encodeURIComponent(cid)):''));
+        }
+        return _g(opts);
+      };
+      w.__wsNavWrapped=true;
+      window.__wsGoHome=w;
+    }
+  }catch(_){}
+})();
+</script>
 <!-- 外观引擎升为全工作台装载（2026-08-14）：夜间定时/漫游此前只在收件箱生效，
      其它工作台页裸写 cp_theme 会被引擎盖回。引擎在无挂载点的页面只做主题治理
      （CSS 变量对无消费方页面无副作用）。unified_inbox 自己的那份 script 标签已
@@ -330,8 +402,17 @@
   .ws-plan-pro{background:rgba(139,92,246,.22);border-color:rgba(167,139,250,.5);color:#ddd6fe;}
   .ws-plan-flagship{background:rgba(245,158,11,.22);border-color:rgba(251,191,36,.55);color:#fde68a;}
   @media (max-width:760px){ .ws-plan-pill{display:none;} }
+  /* #221（M-4 B）顶栏右侧收缩规则——顺序：① ≤1280 行动药丸组让位（min-width:0 裁切）
+     ② ≤1180 药丸只留图标（既有）③ ≤1100 徽标文字→皇冠图标 ④ ≤1024 用户名收起；
+     铃铛 / 徽标 / 头像永不被推出右缘（flex-shrink:0 + 药丸组先缩）。 */
+  .ws-pills{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+  .ws-plan-pill .ws-plan-ic{display:none;align-items:center;}
+  .ws-plan-pill .ws-plan-lb{max-width:9em;overflow:hidden;text-overflow:ellipsis;}
+  @media (max-width:1280px){ .ws-pills{min-width:0;overflow:hidden;flex-shrink:1;} }
+  @media (max-width:1100px){ .ws-plan-pill .ws-plan-lb{display:none;} .ws-plan-pill .ws-plan-ic{display:inline-flex;} .ws-plan-pill{padding:0 7px;} }
+  @media (max-width:1024px){ .ws-user-name{display:none;} }
   .ws-user-wrap{position:relative;flex-shrink:0;}
-  .ws-user-btn{display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 8px;border-radius:8px;border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 18%, transparent);user-select:none;white-space:nowrap;}
+  .ws-user-btn{display:flex;align-items:center;gap:7px;cursor:pointer;padding:4px 8px;border-radius:8px;border:1px solid color-mix(in srgb, var(--chrome-ink,#fff) 18%, transparent);user-select:none;white-space:nowrap;min-width:34px;}
   .ws-user-btn:hover{background:color-mix(in srgb, var(--chrome-ink,#fff) 12%, transparent);}
   .ws-user-ava{width:24px;height:24px;border-radius:50%;background:var(--tk-brand,#1e8cf2);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
   .ws-user-name{font-size:13px;color:var(--chrome-ink-dim,#e2e8f0);max-width:120px;overflow:hidden;text-overflow:ellipsis;}
@@ -874,17 +955,26 @@
   <span class="ws-spacer"></span>
   <!-- 「升级/无人接管」数据并入下方「严重超时」药丸：此元素仅留作数据载体，不再单独展示 -->
   <a id="ws-esc" style="display:none;" data-i18n-title="base.pill.esc_t" title="无人接管的严重超时会话"></a>
+  {#- 药丸组容器（#221 M-4 B 顶栏收缩规则）：右侧真正不许被挤出窗口的是 铃铛 / 徽标 / 头像，
+      宽度不足时先让这组「行动药丸」收缩裁切（≤1280 起 min-width:0 + overflow:hidden），
+      而不是把末尾元素推出右缘（7E3XKR：徽标文案加长后主题/头像只露一半）。药丸各自的
+      display 仍由 JS _setPill 控制，容器只管让位。 -#}
+  <span class="ws-pills" id="ws-pills">
   <!-- 行动告警药丸：固定形状、永不换行，点击直接下钻处理 -->
   <a class="ws-pill sev" id="ws-sla" data-i18n-title="base.pill.sla_t" title="需要处理的会话（超时未回复 / 还没人接）"></a>
   <a class="ws-pill review-l4" id="ws-l4-badge" href="/workspace/drafts" data-i18n-title="base.pill.l4_t" title="AI 写好的回复，发出前需要人确认（L4 需主管放行）· 点击进入草稿审批台"></a>
   <!-- B65 降噪：L2（低风险+全自动档）草稿不再逐条 toast——AutosendWorker 秒级消化、无需人动手，
-       逐条弹只会淹没真正要人的 L1/L3/L4。改记这颗安静的累计胶囊（本页打开以来），点击进收件箱。 -->
-  <a class="ws-pill l2auto" id="ws-l2auto" href="/workspace" data-i18n-title="base.pill.l2auto_t" title="AI 已自动拟稿并将自动发送的回复（本页打开以来累计）· 点击打开收件箱"></a>
+       逐条弹只会淹没真正要人的 L1/L3/L4。改记这颗安静的累计胶囊（本页打开以来）。
+       #221（M-4 B）：点击不再整页导航（整页重载会丢 ?theme= 变浅色、掐断进行中请求）——
+       收件箱页内由 window.wsFilterAutoConversations()（M-2 E 定义：筛出全自动会话）接管；
+       不在收件箱 / 钩子缺席时才经 __wsGoHome 去重后用 wsNav 跳收件箱（带 theme/lang）。href 保留给 CmdK 采集与无 JS 兜底。 -->
+  <a class="ws-pill l2auto" id="ws-l2auto" href="/workspace" onclick="return window.wsAutoPillClick&&window.wsAutoPillClick(event)" data-i18n-title="base.pill.l2auto_t" title="AI 已自动拟稿并将自动发送的回复（本页打开以来累计）· 点击筛出全自动会话"></a>
   <a class="ws-pill task" id="ws-followup" href="/workspace/tasks" data-i18n-title="base.pill.followup_t" title="到期待跟进任务"></a>
   <!-- 字符额度 / 首启体验档徽章（P2）：额度用尽会让翻译与 AI 草稿直接停摆，而坐席是
        第一个撞上的人。只让主管在会员中心看得到，等于让一线在毫无预警下发现「AI 不干活了」。
        无额度授权（不限量 / 社区且体验档未启用）时整个徽章隐藏。 -->
   <a class="ws-pill quota" id="ws-quota" href="/membership" data-i18n-title="base.pill.quota_t" title="剩余字符额度 · 点击进入会员中心"></a>
+  </span>
   <!-- P24: 通知铃铛（事件流 / 回溯，不与上方告警药丸重复堆数字） -->
   <span class="ws-notif-btn" id="ws-notif-btn" role="button" tabindex="0" data-i18n-title="base.notif_t" title="通知中心" style="display:inline-flex;align-items:center;">
     <span data-ui-icon="bell" data-size="16"></span><span class="ws-notif-badge" id="ws-notif-badge"></span>
@@ -923,12 +1013,19 @@
   {#- 档位徽章（融合实例 P4b）：feature_gate 开启才渲染（plan_badge 由 admin._enrich_context
       全局注入,gate 关=None=零变化）。主管可点进会员中心；坐席不可点（/membership 不在
       坐席页面白名单,渲染成纯标识防 302 死链）。配色与 base.html plan-badge 同族。 -#}
+  {#- D-M8（#221 M-4 B）：徽标正文只显短档名「旗舰版」（mb_plan_<plan>）；plan_override 的
+      「（厂商自营）」措辞进悬浮提示（label_key 仍由 feature_gate.badge_label_key 给出，授权卡
+      与 /api/admin/license 口径不变）。窄屏收缩：≤1100 只留皇冠图标（.ws-plan-ic）。
+      同时闭 L-4 待老板②：有 override 的内测机徽标不受影响＝仍显「旗舰版」。 -#}
   {% if plan_badge %}
     {% set _pb_cls = 'ws-plan-pill ws-plan-' ~ plan_badge.plan %}
+    {% set _pb_short_key = 'mb_plan_' ~ plan_badge.plan %}
+    {% set _pb_short = (i18n or {}).get(_pb_short_key, plan_badge.plan) %}
+    {% set _pb_full = (i18n or {}).get(plan_badge.label_key, _pb_short) %}
     {% if user_role in ('master', 'operator') %}
-  <a class="{{ _pb_cls }}" href="/membership" data-i18n-title="base.plan_badge_t" title="当前授权档位 · 点击进入会员中心">{{ (i18n or {}).get(plan_badge.label_key, plan_badge.plan) }}</a>
+  <a class="{{ _pb_cls }}" href="/membership" data-plan-full="{{ _pb_full }}" title="{{ _pb_full }} · {{ (i18n or {}).get('base.plan_badge_t', '当前授权档位 · 点击进入会员中心') }}"><span class="ws-plan-ic" data-ui-icon="crown" data-size="12" aria-hidden="true"></span><span class="ws-plan-lb">{{ _pb_short }}</span></a>
     {% else %}
-  <span class="{{ _pb_cls }}" data-i18n-title="base.plan_badge_ro_t" title="当前系统授权档位">{{ (i18n or {}).get(plan_badge.label_key, plan_badge.plan) }}</span>
+  <span class="{{ _pb_cls }}" data-plan-full="{{ _pb_full }}" title="{{ _pb_full }} · {{ (i18n or {}).get('base.plan_badge_ro_t', '当前系统授权档位') }}"><span class="ws-plan-ic" data-ui-icon="crown" data-size="12" aria-hidden="true"></span><span class="ws-plan-lb">{{ _pb_short }}</span></span>
     {% endif %}
   {% endif %}
   <!-- 用户菜单：状态 / 今日概览 / 设置 / 退出 收纳，降低顶栏密度 -->
@@ -1279,7 +1376,7 @@
       severity:'warn', text:TXT,
       dedupKey:'aiguide', dedupTtlMs:24*3600000, centerId:'aiguide',
       actions:[
-        {label:CTA, onClick:function(){ location.href='/workspace/setup#ai'; }},
+        {label:CTA, onClick:function(){ wsNav('/workspace/setup#ai'); }},
         {label:DIS, onClick:function(){ try{ localStorage.setItem('ws_aiguide_dismissed','1'); }catch(_){ } }}
       ]
     });
@@ -1432,7 +1529,7 @@
       text: stText,
       dedupKey: 'aitrial:'+state, dedupTtlMs: 6*3600000,
       centerId: 'aitrial',
-      actions: [{label: TXT_CTA, onClick: function(){ location.href='/membership'; }}]
+      actions: [{label: TXT_CTA, onClick: function(){ wsNav('/membership'); }}]
     });
   }
   function _pollQuota(){
@@ -1448,7 +1545,7 @@
       severity:'info', text:TXT_INTRO,
       dedupKey:'aitrial-intro', dedupTtlMs:7*86400000, centerId:'aitrial-intro',
       actions:[
-        {label:TXT_CTA, onClick:function(){ location.href='/membership'; }},
+        {label:TXT_CTA, onClick:function(){ wsNav('/membership'); }},
         {label:TXT_DISMISS, onClick:function(){ try{ localStorage.setItem('ws_aitrial_dismissed','1'); }catch(_){ } }}
       ]
     });
@@ -1507,7 +1604,7 @@
       text: textStr,
       dedupKey: 'uqw:' + lvl, dedupTtlMs: 24 * 3600000,
       centerId: 'uqw',
-      actions: [{label: CTA, onClick: function(){ location.href = '/workspace/usage'; }}]
+      actions: [{label: CTA, onClick: function(){ wsNav('/workspace/usage'); }}]
     });
   }
   async function _tick(){
@@ -1944,7 +2041,7 @@
         return;
       }
     }catch(_e){}
-    if(!(window.__wsGoHome && window.__wsGoHome({}))) location.href = '/workspace';
+    if(!(window.__wsGoHome && window.__wsGoHome({}))) wsNav('/workspace');
   }
   /* 五条出路（#196 修法 1）：去重连 / 标为已停用 / 登出 / 1 小时 / 24 小时 / 不再提醒此账号 */
   function _chanExitActions(first, sig){
@@ -2214,11 +2311,11 @@
     });
     if(ep === 'start'){
       var acts = [{label: window.T('ws.delivblock.queue_link'), onClick: function(){
-        if(!(window.__wsGoHome && window.__wsGoHome({}))) location.href = '/workspace';
+        if(!(window.__wsGoHome && window.__wsGoHome({}))) wsNav('/workspace');
       }}];
       if(window.__wsDelivCanFix){
         acts.push({label: window.T('ws.delivblock.fix_link'), onClick: function(){
-          location.href = '/reply-settings#rps-sec-gates';
+          wsNav('/reply-settings#rps-sec-gates');
         }});
       }
       acts.push({label: window.T('sup.cta.banner'), onClick: function(){
@@ -2877,7 +2974,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
         __wsQuotaWall.armWatch();
       }});
     }else{
-      acts.push({label:window.T('ws.quotawall.view'), onClick:function(){ location.href='/membership'; }});
+      acts.push({label:window.T('ws.quotawall.view'), onClick:function(){ wsNav('/membership'); }});
     }
     AITRNotify.notify({severity:'warn', text:text, centerId:'quotalow', actions:acts});
   }
@@ -3125,7 +3222,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
     if(btn){
       var row=e.target.closest('.ws-drill-item'); var cid=row&&row.getAttribute('data-cid'); if(!cid) return;
       var act=btn.getAttribute('data-act');
-      if(act==='open'){ try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ } if(typeof window.__wsFocusConv==='function'){ _toggleSlaPanel(false); window.__wsFocusConv(cid); } else if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))){ location.href='/workspace'; } return; }
+      if(act==='open'){ try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ } if(typeof window.__wsFocusConv==='function'){ _toggleSlaPanel(false); window.__wsFocusConv(cid); } else if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))){ wsNav('/workspace'); } return; }
       if(act==='claim'){
         btn.disabled=true; btn.textContent='…';
         apiFetch('/api/workspace/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid})}, {timeoutMs: 60000})
@@ -3181,9 +3278,9 @@ window._pillChainFail=window._pillChainFail||function(fn){
   }
   if(escBadge){
     escBadge.addEventListener('click',function(){
-      if(!_escItems.length){ location.href='/workspace/dash'; return; }
+      if(!_escItems.length){ wsNav('/workspace/dash'); return; }
       try{ sessionStorage.setItem('ws_focus_conv', _escItems[0].conversation_id); }catch(_){ }
-      if(!(window.__wsGoHome&&window.__wsGoHome({cid:_escItems[0].conversation_id}))) location.href='/workspace';
+      if(!(window.__wsGoHome&&window.__wsGoHome({cid:_escItems[0].conversation_id}))) wsNav('/workspace');
     });
   }
   refreshEsc(); setInterval(refreshEsc, 30000);
@@ -3335,6 +3432,18 @@ window._pillChainFail=window._pillChainFail||function(fn){
   // 「AI 正在替你干活」的体感，持久口径在 ops-overview / autosend-status。
   var _l2AutoPill=document.getElementById('ws-l2auto');
   var _l2AutoN=0;
+  /* #221（M-4 B）胶囊点击＝页内筛选，不整页导航：收件箱页挂 window.wsFilterAutoConversations
+     （接口名写进 M 批总账，行为定义归 M-2 E）即调用；其它页 / 钩子缺席 → __wsGoHome 去重 +
+     wsNav 带 theme/lang。内联 onclick 消费 → 挂 window。 */
+  window.wsAutoPillClick=function(ev){
+    try{
+      if(ev&&ev.preventDefault) ev.preventDefault();
+      try{ window.__thmBcn&&window.__thmBcn('pill_l2auto_click'); }catch(_){}
+      if(typeof window.wsFilterAutoConversations==='function'){ window.wsFilterAutoConversations(); return false; }
+      if(!(window.__wsGoHome&&window.__wsGoHome({}))) wsNav('/workspace');
+      return false;
+    }catch(_){ return false; }
+  };
   function _l2AutoBump(dc){
     _l2AutoN++;
     if(!_l2AutoPill) return;
@@ -3434,7 +3543,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
           if(_toastEl){
             // 需要人工审批 → 点击 toast 跳转草稿审批页
             _toastEl.style.cursor='pointer';
-            _toastEl.onclick=function(){ location.href='/workspace/drafts'; };
+            _toastEl.onclick=function(){ wsNav('/workspace/drafts'); };
           }
         }
         // 刷新顶栏草稿角标
@@ -3449,7 +3558,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
             var _brEl=CRMW.toast(
               window.Tf('base.sse.draft_sla',{text:(_br.peer_text_preview||_br.draft_id||'').slice(0,40),min:(_br.wait_min||'?'),lvl:(_br.autopilot_level||'')}),
               '#b91c1c','clock');
-            if(_brEl){ _brEl.style.cursor='pointer'; _brEl.onclick=function(){ location.href='/workspace/drafts'; }; }
+            if(_brEl){ _brEl.style.cursor='pointer'; _brEl.onclick=function(){ wsNav('/workspace/drafts'); }; }
           }
           try{ document.dispatchEvent(new CustomEvent('draft_sla_breach',{detail:_br})); }catch(_){}
           refreshL4();
@@ -3464,7 +3573,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
           if(_ccEl){ _ccEl.style.cursor='pointer'; _ccEl.onclick=function(){
             if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cc.conversation_id); return; }
             try{ sessionStorage.setItem('ws_focus_conv', _cc.conversation_id); }catch(_){}
-            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_cc.conversation_id}))) location.href='/workspace';
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_cc.conversation_id}))) wsNav('/workspace');
           }; }
         }
       } else if(msg && msg.type==='draft_reassigned' && msg.data){
@@ -3490,7 +3599,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
               if(_cid && typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cid); return; }
               if(_cid){ try{ sessionStorage.setItem('ws_focus_conv',_cid); }catch(_){} }
               if(window.__wsGoHome&&window.__wsGoHome({cid:_cid})) return;
-              if(location.pathname.indexOf('/workspace')!==0 || location.pathname!=='/workspace') location.href='/workspace';
+              if(location.pathname.indexOf('/workspace')!==0 || location.pathname!=='/workspace') wsNav('/workspace');
             };
           }
         }
@@ -3502,7 +3611,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
             var _bsEl=CRMW.toast(
               window.Tf('base.sse.draft_backlog',{n:(_bs.count!=null?_bs.count:'?')}),
               '#b45309','inbox');
-            if(_bsEl){ _bsEl.style.cursor='pointer'; _bsEl.onclick=function(){ location.href='/workspace/drafts'; }; }
+            if(_bsEl){ _bsEl.style.cursor='pointer'; _bsEl.onclick=function(){ wsNav('/workspace/drafts'); }; }
           }
           try{ document.dispatchEvent(new CustomEvent('draft_backlog_summary',{detail:_bs})); }catch(_){}
         }
@@ -3534,7 +3643,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
                 if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_cn.conversation_id); return; }
                 try{ sessionStorage.setItem('ws_focus_conv',_cn.conversation_id); }catch(_){}
                 if(window.__wsGoHome&&window.__wsGoHome({cid:_cn.conversation_id})) return;
-                if(location.pathname!=='/workspace') location.href='/workspace';
+                if(location.pathname!=='/workspace') wsNav('/workspace');
               };
             }
           }
@@ -3555,7 +3664,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
             _acEl.style.cursor='pointer';
             _acEl.onclick=function(){
               try{ sessionStorage.setItem('ws_focus_conv',_ac.conversation_id); }catch(_){}
-              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ac.conversation_id}))) location.href='/workspace';
+              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ac.conversation_id}))) wsNav('/workspace');
             };
           }
         }
@@ -3568,7 +3677,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
           _sapEl.style.cursor='pointer';
           _sapEl.onclick=function(){
             try{ sessionStorage.setItem('ws_focus_conv',_sap.conversation_id); }catch(_){}
-            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_sap.conversation_id}))) location.href='/workspace';
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_sap.conversation_id}))) wsNav('/workspace');
           };
         }
       }
@@ -3618,7 +3727,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
           _wsEl.style.cursor='pointer';
           _wsEl.onclick=function(){
             try{ sessionStorage.setItem('ws_focus_conv',_ws.conversation_id); }catch(_){}
-            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ws.conversation_id}))) location.href='/workspace';
+            if(!(window.__wsGoHome&&window.__wsGoHome({cid:_ws.conversation_id}))) wsNav('/workspace');
           };
         }
       }
@@ -3632,7 +3741,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
             if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(_gd.conversation_id); return; }
             try{ sessionStorage.setItem('ws_focus_conv',_gd.conversation_id); }catch(_){}
             if(window.__wsGoHome&&window.__wsGoHome({cid:_gd.conversation_id})) return;
-            if(location.pathname!=='/workspace') location.href='/workspace';
+            if(location.pathname!=='/workspace') wsNav('/workspace');
           };
         }
       }
@@ -3653,7 +3762,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
             _qaEl.style.cursor='pointer';
             _qaEl.onclick=function(){
               try{ sessionStorage.setItem('ws_focus_conv',_qa.conversation_id); }catch(_){}
-              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_qa.conversation_id}))) location.href='/workspace';
+              if(!(window.__wsGoHome&&window.__wsGoHome({cid:_qa.conversation_id}))) wsNav('/workspace');
             };
           }
         }
@@ -3674,7 +3783,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
               _toastEl.style.cursor='pointer';
               _toastEl.onclick=function(){
                 try{ sessionStorage.setItem('ws_focus_conv',_d.conversation_id); }catch(_){}
-                if(!(window.__wsGoHome&&window.__wsGoHome({cid:_d.conversation_id}))) location.href='/workspace';
+                if(!(window.__wsGoHome&&window.__wsGoHome({cid:_d.conversation_id}))) wsNav('/workspace');
               };
             }
           }
@@ -4140,14 +4249,14 @@ window._pillChainFail=window._pillChainFail||function(fn){
         if((n.type==='inbox_message'||n.type==='escalation'||n.type==='sla_alert'||n.type==='conversation_assigned'||n.type==='conv_note'||n.type==='goal_completed_alert'||n.type==='bot_peer_alert'||n.type==='cta_clicked') && d.conversation_id){
           if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(d.conversation_id); _toggle(); return; }
           try{ sessionStorage.setItem('ws_focus_conv', d.conversation_id); }catch(_){}
-          if(!(window.__wsGoHome&&window.__wsGoHome({cid:d.conversation_id}))) location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({cid:d.conversation_id}))) wsNav('/workspace');
         } else if(n.type==='conversation_assigned'){
           // 批量转派（无单一会话）→ 回工作台看「我的」
-          if(!(window.__wsGoHome&&window.__wsGoHome({})) && location.pathname!=='/workspace') location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({})) && location.pathname!=='/workspace') wsNav('/workspace');
         } else if(n.type==='draft_sla_breach'||n.type==='draft_backlog_summary'||n.type==='draft_reassigned'){
-          location.href='/workspace/drafts';
+          wsNav('/workspace/drafts');
         } else if(n.type==='sla_alert'){
-          if(!(window.__wsGoHome&&window.__wsGoHome({}))) location.href='/workspace';
+          if(!(window.__wsGoHome&&window.__wsGoHome({}))) wsNav('/workspace');
         }
       }catch(_){}
       _toggle();
@@ -4249,7 +4358,7 @@ window.__wsNotify = (function(){
       // 已在工作台收件箱 → 直接定位该会话；其它页 → 交接给既有坐席窗口或跳回工作台
       if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(cid); return; }
       try{ sessionStorage.setItem('ws_focus_conv', cid); }catch(_){}
-      if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace';
+      if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) wsNav('/workspace');
     };
     if(mode==='toast'){ _toastGo(title, body, go); return; }
     if(mode==='desktop'){ if(!_desktop('💬 '+title, body, go)) _toastGo(title, body, go); return; }
@@ -4639,7 +4748,7 @@ window.__wsMultiWin = (function(){
   /* ── 预算触顶中央弹窗（peer_bot_guard daily_budget → SSE bot_peer_alert）──
      服务端每会话每日至多一次；本地再按 会话×日 localStorage 去抖（SSE 重连
      重放 / 多页并存）。「查看会话」走 __wsFocusConv / __wsGoHome 既有习语
-     （勿裸 location.href='/workspace'——nav 去重 ratchet 门禁点名）。 */
+     （勿裸跳 /workspace——无论 location.href 还是 wsNav，nav 去重 ratchet 门禁都点名）。 */
   function _budgetDayKey(){
     var t=new Date();
     return String(t.getFullYear())+('0'+(t.getMonth()+1)).slice(-2)+('0'+t.getDate()).slice(-2);
@@ -4682,7 +4791,7 @@ window.__wsMultiWin = (function(){
       btns.push({label:window.T('inbox.budget.pop_view_btn'),tone:'ghost',onClick:function(){
         try{ sessionStorage.setItem('ws_focus_conv',cid); }catch(_){ }
         if(typeof window.__wsFocusConv==='function'){ window.__wsFocusConv(cid); return; }
-        if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) location.href='/workspace';
+        if(!(window.__wsGoHome&&window.__wsGoHome({cid:cid}))) wsNav('/workspace');
       }});
       btns.push({label:window.T('inbox.budget.pop_later_btn'),tone:'ghost',focus:true});
       open({

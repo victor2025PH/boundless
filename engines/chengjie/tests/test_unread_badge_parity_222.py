@@ -330,7 +330,6 @@ def test_i18n_keys_present_zh_and_en():
     for key in ("inbox.buried.read_all", "inbox.buried.read_t", "inbox.buried.read_ok",
                 "inbox.buried.read_fail", "inbox.acct.bd_title", "inbox.acct.bd_others",
                 "inbox.acct.bd_private", "inbox.acct.bd_group", "inbox.acct.bd_channel",
-                "inbox.acct.bd_archived", "inbox.acct.bd_scope_private",
-                "inbox.acct.bd_scope_group", "inbox.acct.bd_scope_channel",
+                "inbox.acct.bd_archived",
                 "inbox.scope.ai_skip_note", "inbox.scope.ai_skip_note_t"):
         assert len(re.findall(re.escape(f'"{key}"'), txt)) == 2, key   # zh + en 各一

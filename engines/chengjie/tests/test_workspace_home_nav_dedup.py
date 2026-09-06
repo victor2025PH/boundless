@@ -22,8 +22,10 @@ from pathlib import Path
 
 TPL = Path(__file__).resolve().parents[1] / "src" / "web" / "templates"
 
-# JS 直跳精确 /workspace（不含 /workspace/xxx 子页——子页导航不产生第二个坐席）
-_BARE_NAV = re.compile(r"location\.href\s*=\s*['\"]/workspace['\"]")
+# JS 直跳精确 /workspace（不含 /workspace/xxx 子页——子页导航不产生第二个坐席）。
+# M-4 B（#221）起站内导航走 wsNav(url)（带 ?theme=/lang= 的 location.href 包装）——
+# 它同样是原地导航，同样要带 __wsGoHome 守卫，否则换个写法就绕过了本门禁。
+_BARE_NAV = re.compile(r"(?:location\.href\s*=\s*|wsNav\(\s*)['\"]/workspace['\"]")
 
 # 已接线的模板（workspace_base 的 SSE/铃铛兜底 + 四个带回跳的子页）。
 # 刻意不含 unified_inbox.html：它本身就是坐席页（/workspace），其内部跳转
