@@ -168,6 +168,9 @@ html[data-stk-on="1"] .msg-sticker-wrap:hover .stk-collect-btn{display:inline-fl
 .mpb-item .mpi-x:hover{color:var(--tk-danger-ink,#b91c1c);}
 .mpb-item.sending{border-color:var(--tk-brand,#2563eb);}
 .mpb-item.failed{border-color:var(--tk-danger,#dc2626);}
+/* M-3 D 四分类④：无响应（结果未知/重试中）是黄不是红——红只留给后端明确返回的失败 */
+.mpb-item.failed.unknown{border-color:var(--tk-warn,#d97706);}
+.mpb-item.failed.unknown .mpi-sub{color:var(--tk-warn-ink,#b45309);}
 .mpb-item .mpi-prog{position:absolute;left:0;bottom:0;height:2px;width:0;
   background:var(--tk-brand,#2563eb);border-radius:0 0 9px 9px;transition:width .15s;}
 

@@ -373,7 +373,7 @@
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
-<link rel="stylesheet" href="/static/workspace/sticker-panel.css?v=20260906m3">
+<link rel="stylesheet" href="/static/workspace/sticker-panel.css?v=20260906m3b">
 <script src="/static/workspace/inbox-messages.js?v=20260720b"></script>
 <!-- Messenger 应用内登录（表单中继）视图模型 + 渲染器 + driveTick 编排；仅 interactive_login 开启时被 pollConnect 调用 -->
 <script src="/static/workspace/connect_relay.js?v=20260824e"></script>
@@ -13798,10 +13798,21 @@ function _mediaItemHtml(it){
   // 且 _reconcileGhostMediaFailures 会按对话记录自动对账清掉真送达的（E2 幽灵报障）。
   // #194：按失败瞬间记下的真相二选一——真在重启冷却/断连 → 「后台重启中」；否则
   // 「没拿到发送结果（网络/大文件超时）」。这是无响应的**唯一**提示面（toast 已撤）。
-  const sub=it.state==='failed'
-    ?window.T(it.netFail?(it.unknownRestart?'inbox.media.retry_hint_unknown':'inbox.media.send_result_unknown'):'inbox.media.retry_hint')
-    :(_fmtBytes(it.file.size)+(it.transcode&&it.state!=='sending'?(' · '+window.T('inbox.media.will_transcode')):''));
-  return `<span class="mpb-item${it.state==='sending'?' sending':''}${it.state==='failed'?' failed':''}" data-mpi="${it.id}">${img}`
+  // M-3 D 四分类：格式 / 上限 / 后端明确失败 / 无响应（无响应再按「重试中 · 后台在但没发出去 ·
+  // 重启窗 · 结果未知」四态措辞）；串会话拦截（#228）单列。
+  let sub;
+  if(it.state!=='failed'){
+    sub=_fmtBytes(it.file.size)+(it.transcode&&it.state!=='sending'?(' · '+window.T('inbox.media.will_transcode')):'');
+  } else if(it.errClass==='format'){ sub=window.T('inbox.media.err_format_hint');
+  } else if(it.errClass==='too_large'){ sub=window.T('inbox.media.err_too_large_hint');
+  } else if(it.errClass==='wrong_conv'){ sub=window.Tf('inbox.media.wrong_conv_hint',{target:_mediaTargetLabel(it)});
+  } else if(it.netFail){
+    if(it.retrying) sub=window.T(it.unknownRestart?'inbox.media.retry_hint_unknown':'inbox.media.no_response_retrying');
+    else if(it.errClass==='not_sent') sub=window.T('inbox.media.not_sent_alive');
+    else sub=window.T(it.unknownRestart?'inbox.media.retry_hint_unknown':'inbox.media.send_result_unknown');
+  } else { sub=window.T('inbox.media.retry_hint'); }
+  const cls=(it.state==='sending'?' sending':'')+(it.state==='failed'?(' failed'+(it.netFail?' unknown':'')):'');
+  return `<span class="mpb-item${cls}" data-mpi="${it.id}">${img}`
     +`<span class="mpi-meta"><span class="mpi-name" title="${esc(it.file.name||'')}">${esc(it.file.name||window.T('inbox.media.file_default'))}</span>`
     +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span></span>`
     +`<button type="button" class="mpi-x" data-mpi-x="${it.id}" title="${window.T('inbox.file.remove')}">\u2715</button>`
@@ -13959,18 +13970,25 @@ async function _doSendMedia(caption){
     // 该时段文件全部送达，红提示却赖着不走 → 标 netFail，交 _reconcileGhostMediaFailures
     // 在后端恢复/线程刷新后按对话记录对账自动清除；措辞也按「未知」不按「失败」。
     item.state='failed'; item.netFail=!res; item.failTs=Date.now();
+    // M-3 D 四分类（GAJ5T2 ④）：格式不支持(415) / 超过上限(413) / 后端明确失败(其余有状态码)
+    // / 后台无响应(无 HTTP 结果)。附件条与 toast 按类各说各的、各给各的下一步，不再一句兜底。
+    item.errClass=!res?'no_response':(res.status===415?'format':(res.status===413?'too_large':'failed'));
     // #194（L-1 D，2026-09-06）：无响应时记下「此刻后端是否真在重启冷却/断连」，附件条
     // 按真相措辞——不在重启窗就不说「后台重启」（9N97AY 实锤：后台并没在重启）。
-    if(!res){ try{ item.unknownRestart=_mediaBackendUnstable(); }catch(_){ item.unknownRestart=false; } }
+    if(!res){ try{ item.unknownRestart=_mediaBackendUnstable(); }catch(_){ item.unknownRestart=false; } item.retrying=!item.autoRetried; }
     _renderMediaBar();
     const d=(res&&res.d)||{};
+    const _md=(d.detail&&typeof d.detail==='object')?(d.detail.message||''):(d.detail||'');
     if(res&&res.status===501){
       _toast(window.T('inbox.media.unsupported'),'#b45309');
     } else if(res&&res.status===409&&d.detail&&typeof d.detail==='object'&&d.detail.code==='send_blocked'){
       try{ _noteGateBlock(d.detail); }catch(_){}
       _toast(String(d.detail.message||window.T('inbox.gate.hint_blocked')),'#b45309');
+    } else if(res&&(res.status===415||res.status===413)){
+      // ①格式 / ②上限：服务端 detail 已写明能发什么 / 超了多少，原话给坐席；落 renderer 日志
+      _toast((res.status===415?window.T('inbox.media.err_format'):window.T('inbox.media.err_too_large'))+(_md?('：'+_md):''),'#dc2626');
+      try{ console.warn('[send-media] rejected error='+item.errClass+' status='+res.status+' name='+(item.file&&item.file.name||'')+' size='+(item.file?item.file.size:0)+' detail='+String(_md).slice(0,120)); }catch(_){}
     } else if(res){
-      const _md=(d.detail&&typeof d.detail==='object')?(d.detail.message||''):(d.detail||'');
       _toast('❌ '+(_md||d.message||window.Tf('inbox.media.send_fail_status',{status:res.status})),'#dc2626');
     } else {
       // res==null = 浏览器没拿到 HTTP 响应。桌面包后端自启/自杀不走
@@ -13982,7 +14000,11 @@ async function _doSendMedia(caption){
       // #194 L-1 D（2026-09-06）：提示只留**附件条内联一处**（_mediaItemHtml 按
       // item.unknownRestart 分「后台重启中」/「没拿到发送结果」两句），此处不再叠一条
       // 同义 toast——9N97AY 实锤：附件条 + 右下 toast 同时说「后台重启」，而后台并没在重启。
+      // M-3 D（#227 A4）：④后台无响应 → 附件条「后台暂时无响应，正在自动重试」，后台探活
+      // 后同 cmid 自动重试一次（服务端幂等兜双发）；探活成功但上传仍发不出去 → 是请求没
+      // 离开浏览器（文件不可读/被改动），措辞改「请重新选择文件」，不再赖「网络或文件较大」。
       try{ _uiBeacon(item.unknownRestart?'media_unknown_restart':'media_unknown_net'); }catch(_){}
+      if(!item.autoRetried){ item.autoRetried=true; try{ _mediaAutoRetry(item,q,chat); }catch(_){} }
     }
     break;
   }
@@ -14026,6 +14048,52 @@ function _mediaBackendUnstable(){
     if(rc&&(rc.active||rc.quiet)&&(!rc.until||Date.now()<rc.until)) return true;
   }catch(_){}
   return false;
+}
+/* M-3 D（#227 A4 / 四分类④）：无响应后的探活 + 自动重试。
+   探活打 send-caps（最轻的鉴权 GET）：能回任何 HTTP 状态＝后台在。
+   - 后台在 → 先按对话记录对账（可能已送达），没证据就同 cmid 自动重试**一次**（服务端
+     send_dedup 兜双发）；重试仍无响应＝请求根本没离开浏览器（文件不可读/被改动）→ 标
+     not_sent，措辞「请重新选择文件」。
+   - 后台一直不在（最多等 60s）→ 退回「结果未知」措辞，交 _reconcileGhostMediaFailures 在
+     恢复时对账。全程只改附件条内联文案，不弹 toast（#194 单一提示面）。 */
+async function _probeBackendAlive(chat){
+  try{
+    const c=chat||selectedChat||{};
+    const r=await apiFetch('/api/unified-inbox/send-caps?platform='+encodeURIComponent(c.platform||'')
+      +'&account_id='+encodeURIComponent(c.account_id||'default'), undefined, {timeoutMs:4000});
+    return !!r;
+  }catch(_){ return false; }
+}
+async function _mediaAutoRetry(item,q,chat){
+  const _sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const _gone=()=>(q.indexOf(item)<0||item.state!=='failed');
+  const _rerender=()=>{ if(selectedChat===chat){ try{ _renderMediaBar(); }catch(_){} } };
+  let alive=false;
+  for(let i=0;i<12;i++){
+    alive=await _probeBackendAlive(chat);
+    if(alive||_gone()) break;
+    await _sleep(5000);
+  }
+  if(_gone()) return;
+  if(!alive){
+    item.retrying=false; item.errClass='no_response'; _rerender();
+    try{ console.warn('[send-media] auto-retry skipped error=backend_unreachable cmid='+(item.cmid||'')); }catch(_){}
+    return;
+  }
+  try{ if(selectedChat===chat&&_reconcileGhostMediaFailures('retry')>0) return; }catch(_){}
+  if(_gone()) return;
+  if(selectedChat!==chat||_mediaSending){
+    // 坐席已切走 / 另一趟发送在途：不替人做主，留「后台正常但没发出」由他回来点发送
+    item.retrying=false; item.errClass='not_sent'; _rerender(); return;
+  }
+  try{ console.warn('[send-media] auto-retry once after no-response cmid='+(item.cmid||'')+' backend_alive=true'); }catch(_){}
+  const ta=document.getElementById('reply-ta');
+  await _doSendMedia(ta?ta.value.trim():'');
+  if(_gone()) return;
+  // 还在 failed：这一轮 _doSendMedia 已按结果重分类；仍无响应且后台在 → 请求没离开浏览器
+  if(item.netFail){ item.retrying=false; item.errClass='not_sent'; _rerender();
+    try{ console.warn('[send-media] upload failed twice with backend alive error=not_sent name='+(item.file&&item.file.name||'')+' size='+(item.file?item.file.size:0)+' cmid='+(item.cmid||'')); }catch(_){}
+  }
 }
 function _reconcileGhostMediaFailures(reason){
   const ghosts=_mediaQueue.filter(it=>it&&it.state==='failed'&&it.netFail);
@@ -27946,5 +28014,5 @@ document.addEventListener('keydown',function(e){
      网格/管理弹层 + 气泡收藏委托（data-stk-collect）。外挂组件零内联 handler；
      flag（inbox.stickers.enabled）关闭时不注入任何 UI。必须排在上方 wsEmojiOpen
      定义之后（包装依赖其已存在）。 -->
-<script src="/static/workspace/sticker-panel.js?v=20260906a"></script>
+<script src="/static/workspace/sticker-panel.js?v=20260906m3"></script>
 {% endblock %}

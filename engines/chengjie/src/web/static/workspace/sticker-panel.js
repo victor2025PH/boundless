@@ -68,7 +68,11 @@
     return 'stk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
   function failToast(d, status) {
-    toast(detailMsg(d) || ('HTTP ' + status), '#dc2626');
+    // M-3 D 四分类同口径（与 unified_inbox 附件条一致）：415 格式 / 413 上限 前缀点名，
+    // 其余照服务端 detail；无响应在各调用点的 catch 里按「结果未知」措辞。
+    var pre = status === 415 ? T('inbox.media.err_format') : (status === 413 ? T('inbox.media.err_too_large') : '');
+    var msg = detailMsg(d) || ('HTTP ' + status);
+    toast(pre ? (pre + '：' + msg) : msg, '#dc2626');
   }
 
   /* ── 数据 ─────────────────────────────────────────────── */
