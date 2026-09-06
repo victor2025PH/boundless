@@ -92,6 +92,19 @@ def register_feature_center_routes(app, auth_dep, config_manager=None):
     def _dep_labels(request: Request, codes) -> list:
         return [tr(request, f"fc_dep_{c}") for c in codes]
 
+    def _client_hide(request: Request, cfg: Dict[str, Any]) -> bool:
+        """L-4 B（#197）：用户版（client 形态且未开开发者模式）不显研发状态细节——
+        依赖码 / 配置键名（ai.embedding_base_url 一类）只对内部形态与开发者模式显示。"""
+        try:
+            from src.web.ui_visibility import client_hide_active, resolve_developer_mode
+            try:
+                dev = resolve_developer_mode(request.session)
+            except Exception:
+                dev = False
+            return client_hide_active(cfg, dev)
+        except Exception:
+            return False
+
     def _item(request: Request, f, cfg: Dict[str, Any]) -> Dict[str, Any]:
         state = feature_state(f, cfg)
         extra = ""
@@ -104,9 +117,12 @@ def register_feature_center_routes(app, auth_dep, config_manager=None):
                 state = "needs_upgrade"
                 extra = tr(request, "fc_rsn_upgrade", plan=lock_plan)
         if state == "needs_dep":
-            joined = ", ".join(_dep_labels(request, missing_deps(f, cfg)))
-            prefix = tr(request, "fc_js_missing")
-            extra = f"{prefix}{joined}"
+            if _client_hide(request, cfg):
+                extra = tr(request, "fc_dep_client_generic")
+            else:
+                joined = ", ".join(_dep_labels(request, missing_deps(f, cfg)))
+                prefix = tr(request, "fc_js_missing")
+                extra = f"{prefix}{joined}"
         elif state == "locked":
             extra = tr(request, f"fc_rsn_{f.reason}")
         return {

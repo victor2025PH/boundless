@@ -14,6 +14,10 @@ ZH = {
     "mb_plan_basic": "基础版",
     "mb_plan_pro": "专业版",
     "mb_plan_flagship": "旗舰版",
+    # L-4 B（#197）：plan_override 生效且无授权文件时顶栏徽标的措辞（与授权卡同源）
+    "mb_plan_basic_override": "基础版（厂商自营）",
+    "mb_plan_pro_override": "专业版（厂商自营）",
+    "mb_plan_flagship_override": "旗舰版（厂商自营）",
     # 顶栏徽章 / nav 锁标提示
     "mb_badge_tip": "当前授权档位 · 点击进入会员中心",
     "mb_locked_tip": "当前套餐未包含，点击查看升级",
@@ -230,6 +234,9 @@ EN = {
     "mb_plan_basic": "Basic",
     "mb_plan_pro": "Pro",
     "mb_plan_flagship": "Flagship",
+    "mb_plan_basic_override": "Basic (vendor-operated)",
+    "mb_plan_pro_override": "Pro (vendor-operated)",
+    "mb_plan_flagship_override": "Flagship (vendor-operated)",
     "mb_badge_tip": "Current plan · open membership center",
     "mb_locked_tip": "Not in your current plan — click to see upgrades",
     "mb_cur_plan": "Current plan",

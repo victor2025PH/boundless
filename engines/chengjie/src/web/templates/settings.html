@@ -23,6 +23,10 @@
    保 DOM 只加 class：卡内 JS（savePrompt / he-* 初始化）按 id 取元素，删 DOM 会炸；
    URL/API 照旧可用（藏而不废），开发者工具开该键即回归。 */
 .set-uiv-hide{display:none!important}
+/* L-4 B（#197 / D-L7）：代理商面（品牌白标 / 授权 / 演示数据）在用户版整卡不渲染可见；
+   与 nav_schema.PARTNER_ONLY_ITEM_IDS 同口径（ui_client_hide），开发者模式一开即回来。
+   刻意不给 hash 深链「就地揭示」——这是商业结构面，不是被藏的功能开关。 */
+.set-tier-hide{display:none!important}
 .set-uiv-empty{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);
   padding:1.15rem 1.35rem;font-size:.84rem;color:var(--t2);line-height:1.7}
 .set-uiv-empty strong{color:var(--t)}
@@ -284,8 +288,11 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
+  {# L-4 B（#197 / D-L7）：品牌白标 / 授权 / 演示数据 = 代理商版才可见（PARTNER_ONLY）。
+     ui_client_hide 缺席（旧后端 / 渲染类测试）按 falsy＝不藏，与 admin.py fail-internal 一致。 #}
+  {% set _tier_hide = ' set-tier-hide' if ui_client_hide else '' %}
   <!-- ══ C1-1 品牌 / 白标 ═══════════════════════════════════════ -->
-  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}{{ _tier_hide }}" id="card-brand">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-violet5,#8b5cf6),var(--th-bg-violet7,#6d28d9))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21l2.3-7.4-6-4.6h7.6z"/></svg>
@@ -388,23 +395,20 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
-  <!-- ══ P0-4/C4 授权（P0-IA 起为只读状态卡：激活/续费/加量已整合进会员中心） ══ -->
-  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
+  <!-- ══ P0-4/C4 授权（只读状态卡；L-4 B #197：措辞与顶栏徽标同源，以授权文件为准） ══ -->
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}{{ _tier_hide }}" id="card-license">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-emerald5,#10b981),var(--th-bg-emerald6,#059669))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
       </div>
       <div>
         <div class="acc-title">{{ (i18n or {}).get('set_s302', "授权 / 激活") }} <span id="lic-state-tag" style="font-size:.68rem;padding:.12rem .45rem;border-radius:5px;background:var(--input);color:var(--t2);font-weight:600;vertical-align:middle;margin-left:.4rem"></span></div>
-        <div class="acc-sub">{{ (i18n or {}).get('mb_lic_settings_sub', "授权状态一览；激活 / 续费 / 加量包已整合进会员中心") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('set_lic_sub_l4', "授权状态以授权文件为准；右上角档位徽标与本卡同源") }}</div>
       </div>
       <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
     <div class="acc-body" id="body-license">
       <div id="lic-cur" style="font-size:.82rem;color:var(--t2);margin-bottom:.9rem;line-height:1.7"></div>
-      <div class="f-hint" style="margin-bottom:.9rem;padding:.6rem .8rem;background:var(--ps);border-radius:8px;border:1px solid var(--p);line-height:1.6">
-        {{ (i18n or {}).get('mb_lic_moved_hint', "粘贴激活、购买续费、兑换加量包现已统一在「会员中心」办理。") }}
-      </div>
       <a href="/membership#mb-activate" style="display:inline-block;padding:.5rem 1.2rem;border:0;border-radius:8px;background:var(--p);color:var(--th-ink-inverse,#fff);font-weight:600;text-decoration:none;">{{ (i18n or {}).get('mb_open_membership', "前往会员中心") }}</a>
     </div>
   </div>
@@ -413,6 +417,26 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
     function g(id){return document.getElementById(id);}
     function stLabel(s){var m={active:'db_js_001',grace:'db_js_002',expired:'db_js_003',unlicensed:'db_js_004',invalid:'db_js_005',unavailable:'db_js_006'};return window.T(m[s]||'db_js_004');}
     function planName(p){return {community:window.T('db_js_007'),basic:window.T('db_js_008'),pro:window.T('db_js_009'),flagship:window.T('db_js_010')}[p]||p||'—';}
+    /* L-4 B（#197 / D-L7）：一句话口径 = 徽标口径。
+       - 授权文件生效（plan_source=license）→「旗舰版 · 剩余 N 天」；
+       - 厂商自营覆写（override，内测种子）且无文件 →「旗舰版（厂商自营）· 未检测到授权文件」；
+       - 其余 →「社区模式」（过期/无效再补状态）。旧后端没有 plan_source 时按 state 回落。 */
+    function headline(d){
+      var src=d.plan_source||(d.licensed?'license':'community');
+      var eff=d.effective_plan||d.plan||'community';
+      if(src==='license'||d.licensed){
+        var s=planName(d.plan||eff);
+        if(d.days_left!=null&&d.days_left>=0) s+=' · '+window.T('set_js_099')+' '+d.days_left;
+        if(d.state==='grace') s+=' · '+window.T('db_js_002');
+        return s;
+      }
+      if(src==='override'&&eff!=='community'){
+        return planName(eff)+'（'+window.T('mb_plan_src_override')+'）· '+window.T('set_lic_no_file');
+      }
+      var c=window.T('db_js_004');
+      if(d.state==='expired'||d.state==='invalid'||d.state==='unavailable') c+=' · '+stLabel(d.state);
+      return c;
+    }
     function render(d){
       var tag=g('lic-state-tag');
       if(tag){
@@ -421,10 +445,9 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         tag.style.color=(d.state==='active'?'#059669':'var(--t2)');
       }
       var cur=g('lic-cur'); if(!cur) return;
-      var parts=[window.T('set_js_094')+'：'+stLabel(d.state)+' · '+planName(d.plan)];
+      var parts=[window.T('set_js_094')+'：'+headline(d)];
       if(d.trial) parts.push(window.T('db_js_lic_trial'));
       if(d.customer) parts.push(window.T('set_js_095')+'：'+d.customer);
-      if(d.days_left!=null&&d.days_left>=0&&d.state!=='unlicensed') parts.push(window.T('set_js_099')+'：'+d.days_left);
       if(d.quota&&d.quota.included_chars>0){
         parts.push(window.T('db_js_lic_chars')+'：'+((d.quota.used_chars||0).toLocaleString())+' / '+(d.quota.included_chars.toLocaleString()));
       }
@@ -439,8 +462,8 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
-  <!-- ══ C1-2 试用 / 演示数据 ═══════════════════════════════════ -->
-  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}">
+  <!-- ══ C1-2 试用 / 演示数据（L-4 B / D-L7：代理商版才可见；后端只允许空工作区铺）══ -->
+  <div class="acc{% if ui_mode == 'simple' %} set-simple-hide{% endif %}{{ _tier_hide }}" id="card-demo">
     <div class="acc-hd" onclick="toggleAcc(this)">
       <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-cyan5,#06b6d4),var(--th-bg-cyan6,#0891b2))">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -473,6 +496,14 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
         var tag=g('demo-tag');
         if(d.present){ g('demo-status').textContent=window.T('set_js_007')+fmt(d.counts); if(tag) tag.textContent=window.T('set_js_008'); }
         else { g('demo-status').textContent=window.T('set_js_009'); if(tag) tag.textContent=''; }
+        /* L-4 B（D-L7）：只有「无真实账号的空工作区」才能铺——已有真实会话/账号时后端拒铺，
+           这里把按钮灰掉并写明原因（全自动账号下铺假会话会真发出去）。 */
+        var seedBtn=g('demo-seed-btn');
+        if(seedBtn&&d.seed_allowed===false){
+          seedBtn.disabled=true; seedBtn.style.opacity='.55';
+          seedBtn.title=window.Tf('set_demo_blocked',{c:(d.real_conversations||0),a:(d.real_accounts||0)});
+          if(!d.present){ g('demo-status').textContent=window.T('set_js_009')+' · '+window.Tf('set_demo_blocked',{c:(d.real_conversations||0),a:(d.real_accounts||0)}); }
+        }
       }).catch(function(){ g('demo-status').textContent=window.T('msg_js_010'); });
     }
     window.demoSeed=function(){

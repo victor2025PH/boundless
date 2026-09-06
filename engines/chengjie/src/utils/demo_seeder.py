@@ -54,10 +54,42 @@ _DISPOSITIONS = [
 ]
 
 
-def demo_status(inbox, contacts_store=None) -> Dict[str, Any]:
-    """当前 demo 数据现状（present + 计数；含 contacts 漏斗演示数据）。"""
+def real_workspace_footprint(inbox, account_registry=None) -> Dict[str, int]:
+    """真实（非 demo）会话数 + 已接入的真实账号数（L-4 B / D-L7「仅空工作区可铺」判据）。
+
+    只用既有只读口：会话总数走 ``count_conversations_older_than(9e15)``（不改 store），
+    减去 demo 命名空间；账号走 AccountRegistry.list()。任一读不到按 0（不误拦）。
+    """
+    convs = 0
+    accts = 0
+    try:
+        if inbox is not None and hasattr(inbox, "count_conversations_older_than"):
+            total = int(inbox.count_conversations_older_than(9e15) or 0)
+            demo = int((inbox.count_demo(DEMO_PREFIX) or {}).get("conversations", 0)) \
+                if hasattr(inbox, "count_demo") else 0
+            convs = max(0, total - demo)
+    except Exception:
+        logger.debug("demo 真实会话计数失败（已忽略）", exc_info=True)
+    try:
+        if account_registry is not None and hasattr(account_registry, "list"):
+            accts = len([a for a in (account_registry.list() or [])
+                         if not str((a or {}).get("account_id") or "").startswith("demo")])
+    except Exception:
+        logger.debug("demo 真实账号计数失败（已忽略）", exc_info=True)
+    return {"real_conversations": convs, "real_accounts": accts}
+
+
+def seed_allowed(inbox, account_registry=None) -> bool:
+    """D-L7：演示数据只对「无真实账号的空工作区」开放——有真实会话或真实账号即不许铺
+    （全自动账号下铺进去的假会话会被当成真客户真发出去）。"""
+    fp = real_workspace_footprint(inbox, account_registry)
+    return fp["real_conversations"] == 0 and fp["real_accounts"] == 0
+
+
+def demo_status(inbox, contacts_store=None, account_registry=None) -> Dict[str, Any]:
+    """当前 demo 数据现状（present + 计数；含 contacts 漏斗演示数据 + 是否允许铺）。"""
     if inbox is None or not hasattr(inbox, "count_demo"):
-        return {"available": False, "present": False, "counts": {}}
+        return {"available": False, "present": False, "counts": {}, "seed_allowed": False}
     counts = dict(inbox.count_demo(DEMO_PREFIX))
     if contacts_store is not None and hasattr(contacts_store, "count_demo_funnel"):
         try:
@@ -65,7 +97,11 @@ def demo_status(inbox, contacts_store=None) -> Dict[str, Any]:
         except Exception:
             logger.debug("demo 漏斗计数失败（已忽略）", exc_info=True)
     present = any(int(v or 0) > 0 for v in counts.values())
-    return {"available": True, "present": present, "counts": counts}
+    fp = real_workspace_footprint(inbox, account_registry)
+    out = {"available": True, "present": present, "counts": counts,
+           "seed_allowed": fp["real_conversations"] == 0 and fp["real_accounts"] == 0}
+    out.update(fp)
+    return out
 
 
 def seed_demo(inbox, *, days: int = 14, kb_store=None, config_manager=None,

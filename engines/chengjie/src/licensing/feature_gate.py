@@ -180,6 +180,19 @@ def feature_for_api_path(path: str) -> Optional[str]:
     return best[1] if best else None
 
 
+def badge_label_key(plan: str, source: str) -> str:
+    """顶栏档位徽标的 i18n 键（L-4 B #197 / D-L7：与系统设置「授权」卡同源措辞）。
+
+    ``plan_override`` 生效（source=override）且不是 community → ``mb_plan_<plan>_override``
+    （「旗舰版（厂商自营）」），否则 ``mb_plan_<plan>``。内测种子的 flagship 覆写不再
+    裸显「旗舰版」——授权卡同时读 plan_source，两面从此一致。
+    """
+    p = str(plan or "community").strip().lower() or "community"
+    if str(source or "") == "override" and p != "community":
+        return f"mb_plan_{p}_override"
+    return f"mb_plan_{p}"
+
+
 def gate_snapshot(config: Optional[dict] = None, status: Any = None) -> Dict[str, Any]:
     """状态快照（会员中心 / ops 读数用，无敏感字段）。"""
     try:

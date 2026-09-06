@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +33,35 @@ def _kb(config_manager):
         return None
 
 
+def _account_registry():
+    try:
+        from src.integrations.account_registry import get_account_registry
+        return get_account_registry()
+    except Exception:
+        return None
+
+
 def register_demo_routes(app, *, api_auth, config_manager=None) -> None:
     @app.get("/api/admin/demo")
     async def api_admin_demo_status(request: Request):
         api_auth(request)
         from src.utils.demo_seeder import demo_status
-        st = demo_status(_inbox(request), contacts_store=_contacts(request))
+        st = demo_status(_inbox(request), contacts_store=_contacts(request),
+                         account_registry=_account_registry())
         st["ok"] = True
         return st
 
     @app.post("/api/admin/demo/seed")
     async def api_admin_demo_seed(request: Request):
+        """L-4 B（#197 / D-L7）：只有「无真实账号的空工作区」才允许铺演示数据——
+        有真实会话/账号时 409（全自动账号会把假会话当真客户真发）。清空不设限。"""
         api_auth(request)
-        from src.utils.demo_seeder import seed_demo
+        from src.utils.demo_seeder import real_workspace_footprint, seed_demo
+        fp = real_workspace_footprint(_inbox(request), _account_registry())
+        if fp["real_conversations"] > 0 or fp["real_accounts"] > 0:
+            from src.web.web_i18n import tr
+            raise HTTPException(409, tr(request, "err.demo.workspace_not_empty",
+                                        c=fp["real_conversations"], a=fp["real_accounts"]))
         try:
             body = await request.json()
         except Exception:

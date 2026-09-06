@@ -1085,15 +1085,22 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         context.setdefault("ws_multi_seat", _multi_seat_now())
 
         # ── 档位徽章(P3)：仅 feature_gate 开启时出现在顶栏,默认部署零变化 ──
+        # L-4 B（#197 / D-L7）授权口径同源：徽标与系统设置「授权」卡、/api/admin/license
+        # 都读 gate_snapshot 的 plan + plan_source。plan_override（内测种子 flagship）
+        # 生效而无授权文件时，徽标不再裸显「旗舰版」，改 mb_plan_<plan>_override
+        # （「旗舰版（厂商自营）」）——两面从此说同一句话。
         try:
-            from src.licensing.feature_gate import effective_plan as _fg_plan
+            from src.licensing.feature_gate import badge_label_key as _fg_lk
             from src.licensing.feature_gate import gate_enabled as _fg_on
+            from src.licensing.feature_gate import gate_snapshot as _fg_snap
             _fg_cfg = getattr(config_manager, "config", None)
             if _fg_on(_fg_cfg):
-                _plan = _fg_plan(_fg_cfg)
+                _snap = _fg_snap(_fg_cfg)
+                _plan = str(_snap.get("plan") or "community")
+                _src = str(_snap.get("plan_source") or "community")
                 context.setdefault(
                     "plan_badge",
-                    {"plan": _plan, "label_key": f"mb_plan_{_plan}"})
+                    {"plan": _plan, "label_key": _fg_lk(_plan, _src), "source": _src})
             else:
                 # 显式占位 None：templates 是模块级单例，多次 create_app 会层层
                 # 叠 i18n_render 包装（测试常态）——条件性缺席的键会被旧 app 闭包

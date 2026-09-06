@@ -343,6 +343,24 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("[license] topup-trend 读取失败", exc_info=True)
             return {"ok": True, "days": [], "total_n": 0, "total_chars": 0}
 
+    def _plan_meta(st) -> dict:
+        """L-4 B（#197 / D-L7）：生效档位 + 来源，与顶栏徽标同源（feature_gate.gate_snapshot）。
+
+        skuio 机实录：系统设置卡「授权：社区模式（未检测到授权文件）」与右上「旗舰版」互矛盾
+        ——右上读 plan_override（内测种子 flagship），卡只读授权文件。两面都改读同一快照：
+        ``effective_plan`` + ``plan_source``（license / override / community），页面据此措辞。
+        """
+        try:
+            from src.licensing.feature_gate import gate_snapshot
+            cfg = getattr(config_manager, "config", None) if config_manager is not None else None
+            snap = gate_snapshot(cfg if isinstance(cfg, dict) else None, st)
+            return {"effective_plan": snap.get("plan", "community"),
+                    "plan_source": snap.get("plan_source", "community"),
+                    "gate_enabled": bool(snap.get("enabled", False))}
+        except Exception:
+            return {"effective_plan": "community", "plan_source": "community",
+                    "gate_enabled": False}
+
     @app.get("/api/admin/license")
     async def api_admin_license(request: Request):
         api_auth(request)
@@ -352,6 +370,7 @@ def register_license_routes(app, *, api_auth, config_manager=None) -> None:
             st = get_license_manager().status()
             data = st.to_dict()
             data["quota"] = _quota_snapshot()
+            data.update(_plan_meta(st))
             data["ok"] = True
             return data
         except Exception as e:  # pragma: no cover - 异常兜底
