@@ -443,3 +443,112 @@ def test_background_tasks_wires_guard():
         encoding="utf-8")
     assert "wrap_care_send(" in src
     assert "send_callback=_care_send_guarded" in src
+
+
+# ── 追问①（老板拍板：闸）：用户版后台生命周期自建也不建已下线模板 ──────────
+
+def _client_cfg(**goals_extra):
+    goals = {"enabled": True, "db_path": ":memory:"}
+    goals.update(goals_extra)
+    return {"companion": {"goals": goals}, "ui_visibility": {"flavor": "client"}}
+
+
+def test_lifecycle_template_blocked_only_on_client_for_hidden_kind():
+    assert pg.lifecycle_template_blocked(_client_cfg(), "acquire_and_convert") is True
+    assert pg.lifecycle_template_blocked(_client_cfg(), "retention_expand") is True
+    assert pg.lifecycle_template_blocked(_client_cfg(), "engagement_reactivate") is False
+    assert pg.lifecycle_template_blocked(_client_cfg(), "custom") is False
+    for flavor in ("partner", "internal"):
+        cfg = _client_cfg()
+        cfg["ui_visibility"]["flavor"] = flavor
+        assert pg.lifecycle_template_blocked(cfg, "acquire_and_convert") is False
+    assert pg.lifecycle_template_blocked({}, "acquire_and_convert") is False   # 服务器部署零变化
+
+
+def test_auto_create_skips_conversion_template_on_client(monkeypatch):
+    from src.companion.goals import service as svc
+    store = get_goal_store(":memory:")
+
+    class _PM:
+        def get_persona_with_tier(self, chat_id, acct_pid):
+            return {"id": "su_wan"}, "account"
+
+    import src.utils.persona_manager as pm
+    monkeypatch.setattr(pm.PersonaManager, "get_instance", staticmethod(lambda: _PM()))
+    ac = {"enabled": True, "personas": ["su_wan"], "template": "acquire_and_convert"}
+    # client 形态：不建（默认转化模板已下线）
+    g = svc.maybe_auto_create_goal(store, _client_cfg(auto_create=ac), platform="telegram",
+                                   chat_key="900", account_id="a1",
+                                   conversation_id="telegram:a1:900",
+                                   user_context={"chat_id": "900"})
+    assert g is None and store.list_goals(limit=5) == []
+    # 同配置 internal 形态照建（引擎行为对内部部署零变化）
+    cfg = _client_cfg(auto_create=ac)
+    cfg["ui_visibility"]["flavor"] = "internal"
+    g2 = svc.maybe_auto_create_goal(store, cfg, platform="telegram", chat_key="900",
+                                    account_id="a1", conversation_id="telegram:a1:900",
+                                    user_context={"chat_id": "900"})
+    assert g2 is not None and g2["template"] == "acquire_and_convert"
+    # client 形态改用非隐藏模板（custom）仍能自建
+    ac2 = dict(ac, template="custom")
+    g3 = svc.maybe_auto_create_goal(store, _client_cfg(auto_create=ac2), platform="telegram",
+                                    chat_key="901", account_id="a1",
+                                    conversation_id="telegram:a1:901",
+                                    user_context={"chat_id": "901"})
+    assert g3 is not None and g3["template"] == "custom"
+
+
+def test_retention_and_reconvert_skip_on_client():
+    from src.companion.goals import service as svc
+    store = get_goal_store(":memory:")
+    base = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
+                             chat_key="100", template="acquire_and_convert",
+                             autonomy="auto", deadline_days=10, created_by="winback_auto")
+    store.update_goal_fields(base["goal_id"], status="done")
+    base = store.get_goal(base["goal_id"])
+    cfg = _client_cfg(retention={"enabled": True,
+                                 "winback": {"enabled": True, "reconvert": {"enabled": True}}})
+    assert svc.maybe_create_retention_goal(store, cfg, base, plan="pro") is None
+    assert svc.maybe_spawn_reconvert(store, cfg, base) is None
+    assert len(store.list_goals(limit=10)) == 1
+    cfg["ui_visibility"]["flavor"] = "internal"
+    assert svc.maybe_spawn_reconvert(store, cfg, base) is not None
+
+
+# ── 追问②（老板拍板：不扩首拍预览到回复链；无产品禁报价补进注入块） ──────
+
+def test_no_product_prompt_rule_and_block_wiring():
+    from src.companion.goals.context_block import build_goal_block, goal_view_block
+    rule = pg.no_product_prompt_rule(_goal("conversion_unlock", {}))
+    assert rule == pg.NO_PRODUCT_PROMPT_LINE and "不得报价" in rule
+    assert pg.no_product_prompt_rule(_goal("conversion_unlock", {"item_id": "bazi"})) == ""
+    assert pg.no_product_prompt_rule(_goal("acquire_and_convert", {}),
+                                     catalog_has_products=True) == ""
+    # 注入块：有产品边界行 → 该行在纪律行之前且不被截掉；direct 力度降 soft
+    blk = build_goal_block(title="付费解锁转化", milestone_label="顺势开价", milestone_idx=2,
+                           day_index=8, total_days=14,
+                           intent="对方兴致好时自然提到「它」可以看得更深入，顺势说明解锁方式",
+                           push_level="direct", product_rule=rule, max_chars=360)
+    lines = blk.split("\n")
+    assert pg.NO_PRODUCT_PROMPT_LINE in lines
+    assert lines.index(pg.NO_PRODUCT_PROMPT_LINE) < len(lines) - 1     # 纪律行仍在最后
+    assert "只在话题自然贴近时轻轻带到" in blk and "可以直说" not in blk
+    # 无规则 → 块逐字与旧版一致（零回归）
+    old = build_goal_block(title="t", milestone_label="m", milestone_idx=0, day_index=1,
+                           total_days=14, intent="x", push_level="direct")
+    assert old == build_goal_block(title="t", milestone_label="m", milestone_idx=0, day_index=1,
+                                   total_days=14, intent="x", push_level="direct",
+                                   product_rule="")
+    assert "可以直说" in old
+    view = {"title": "t", "milestone_label": "m", "milestone_idx": 0, "day_index": 1,
+            "total_days": 14, "today": {"intent": "x", "push_level": "soft"}}
+    assert pg.NO_PRODUCT_PROMPT_LINE in goal_view_block(view, product_rule=rule)
+
+
+def test_inject_wires_product_rule_and_meta():
+    src = (REPO / "src" / "companion" / "goals" / "service.py").read_text(encoding="utf-8")
+    assert "no_product_prompt_rule(" in src
+    assert "product_rule=product_rule," in src
+    assert "no_product=bool(product_rule)," in src
+    for creator in ('"auto_create"', '"retention_auto"', '"winback_auto"', '"reconvert_auto"'):
+        assert f"_lifecycle_template_blocked(cfg_root, " in src and creator in src

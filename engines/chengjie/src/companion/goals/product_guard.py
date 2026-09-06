@@ -92,6 +92,40 @@ NO_PRODUCT_REASON = "goal_no_product"
 
 # ── 纯函数 ───────────────────────────────────────────────────────────────────
 
+def lifecycle_template_blocked(cfg_root: Any, template_id: str) -> bool:
+    """用户版（client 形态）后台生命周期自建（auto_create / retention_auto /
+    winback_auto / reconvert_auto）是否也该拦住该模板（M-5 A 追问①，老板拍板：闸）。
+
+    路由层的 `_client_hide` 看 session 开发者模式；后台没有 session，只按部署形态判
+    （开发者模式是「人」的临时状态，不该让引擎在客户机上自己建出「已下线」模板）。
+    partner / internal / 非隐藏类目 → False。判不出（导入失败）→ False，不误拦。
+    """
+    try:
+        from src.companion.goals.templates import is_client_hidden_template
+        from src.web.ui_visibility import is_client_flavor
+        return bool(is_client_flavor(cfg_root) and is_client_hidden_template(template_id))
+    except Exception:
+        logger.debug("lifecycle_template_blocked failed (treat as allowed)", exc_info=True)
+        return False
+
+
+def no_product_prompt_rule(goal: Optional[Dict[str, Any]], *,
+                           catalog_has_products: bool = False) -> str:
+    """回复链目标注入块用的「产品边界」一行（M-5 A 追问②：首拍预览不扩到回复链，
+    但无产品禁报价这条硬规则要让顺势推进也吃到——prompt 级，与出站拦截同一判定）。
+    目标绑了产品 → ""（不加行）。"""
+    if goal_product_binding(goal, catalog_has_products=catalog_has_products)["bound"]:
+        return ""
+    return NO_PRODUCT_PROMPT_LINE
+
+
+# 注入块里的产品边界行（与 context_block 的纪律行同为安全语义，超长不丢）
+NO_PRODUCT_PROMPT_LINE = (
+    "【产品边界】本目标没有绑定具体产品：不得报价、不得给价格/付款方式/开户或注册链接/"
+    "引导页，只做关系与铺垫；对方问到价格或购买方式就如实说需要再确认，绝不编造。"
+)
+
+
 def goal_product_binding(
     goal: Optional[Dict[str, Any]], *, catalog_has_products: bool = False,
 ) -> Dict[str, Any]:
@@ -381,6 +415,7 @@ __all__ = [
     "FIRST_SEND_EVENT",
     "FIRST_SEND_REASON",
     "NO_PRODUCT_EVENT",
+    "NO_PRODUCT_PROMPT_LINE",
     "NO_PRODUCT_REASON",
     "PRODUCT_PARAM_KEYS",
     "build_first_send_draft",
@@ -388,5 +423,7 @@ __all__ = [
     "first_send_pending",
     "goal_product_binding",
     "guard_goal_outbound",
+    "lifecycle_template_blocked",
+    "no_product_prompt_rule",
     "wrap_care_send",
 ]

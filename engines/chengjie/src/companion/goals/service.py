@@ -959,6 +959,8 @@ def maybe_auto_create_goal(
         tmpl = get_template(template_id)
         if tmpl is None:
             return None
+        if _lifecycle_template_blocked(cfg_root, template_id, "auto_create"):
+            return None
         conv_id = str(conversation_id or "").strip()
         if not conv_id and platform and account_id and chat_key:
             conv_id = f"{platform}:{account_id}:{chat_key}"
@@ -1402,6 +1404,26 @@ def build_block_for_chat(
 
         suppress = bool(str(uc.get("_bazi_block") or "").strip())
         view = goal_view(res["goal"], res.get("action"), now=now)
+        # M-5 A（#217 / D-M6，追问②）：首拍预览不扩到回复链，但「无产品禁报价」要让
+        # 客户来消息时的顺势推进也吃到——目标未绑产品（参数空 / 目录无货 / custom 没写
+        # 卖什么）→ 注入块加一行产品边界（prompt 级），direct/close 力度降 soft。
+        # 与出站拦截 wrap_care_send 同一判定函数 goal_product_binding。
+        product_rule = ""
+        try:
+            from src.companion.goals.product_guard import no_product_prompt_rule
+            _cat_has = False
+            if template.get("catalog"):
+                try:
+                    from src.companion.goals import site_catalog as _sc
+                    _cat = _sc.load_catalog(_sc.catalog_path(
+                        cfg_root, getattr(config_obj, "config_path", None)))
+                    _cat_has = bool((_cat or {}).get("products"))
+                except Exception:
+                    _cat_has = False
+            product_rule = no_product_prompt_rule(
+                res.get("goal") or goal, catalog_has_products=_cat_has)
+        except Exception:
+            product_rule = ""
         # P27 意图×缺口合流（gap_in_intent 模板=摸底）：缺口并进今日意图——
         # 「今日意图」是 opener 转向与主动桥唯一携带的载荷，独立缺口行到不了
         # 那两处；合流后取消独立行防同块重复。none 力度日不合（「今天只陪伴」
@@ -1422,6 +1444,7 @@ def build_block_for_chat(
             profile_gap=profile_gap,
             profile_facts=profile_facts,
             note_suffix=note_suffix,
+            product_rule=product_rule,
         )
         if not block:
             _note_meta(False, "empty_block",
@@ -1438,6 +1461,7 @@ def build_block_for_chat(
             intent=str(_beat.get("intent") or ""),
             milestone_idx=int(view.get("milestone_idx") or 0),
             profile_gap=gap_for_meta,
+            no_product=bool(product_rule),
         )
         if gap_patch:
             try:
@@ -1583,6 +1607,27 @@ def build_block_for_chat(
 # 生命周期自动目标的 created_by 集合（churn_reason 采集门控：只在这些
 # 会话里「为什么没续」才是真流失信号，普通获客会话不采）
 _LIFECYCLE_CREATORS = ("retention_auto", "winback_auto", "reconvert_auto")
+
+# M-5 A 追问①（#217，老板拍板：闸）：用户版（client 形态）后台生命周期自建也不许建
+# 「已下线」类目的模板——否则 auto_create / retention / reconvert 一开就建出一张
+# 用户版建不了、卡上标「已下线」的转化目标，冲刺引擎照样拿它推销。按 (creator,
+# template) 每进程只记一次 INFO，不刷屏（这些开关默认全关，命中本就少）。
+_LIFECYCLE_BLOCK_LOGGED: set = set()
+
+
+def _lifecycle_template_blocked(cfg_root: Any, template_id: str, creator: str) -> bool:
+    try:
+        from src.companion.goals.product_guard import lifecycle_template_blocked
+        blocked = lifecycle_template_blocked(cfg_root, template_id)
+    except Exception:
+        return False
+    if blocked:
+        key = (str(creator), str(template_id))
+        if key not in _LIFECYCLE_BLOCK_LOGGED:
+            _LIFECYCLE_BLOCK_LOGGED.add(key)
+            logger.info("[goal-auto] 用户版已下线模板 %s：%s 自建跳过（#217 D-M6，"
+                        "改用自定义目标或 partner/internal 形态）", template_id, creator)
+    return blocked
 
 
 def _account_persona(cfg_root: Any, platform: str, account_id: str) -> str:
@@ -1893,6 +1938,8 @@ def maybe_create_retention_goal(
         tmpl = get_template(template_id)
         if tmpl is None:
             return None
+        if _lifecycle_template_blocked(cfg_root, template_id, "retention_auto"):
+            return None
         n = float(now if now is not None else time.time())
         # 上单 plan 反查产品（续费选品钉死在买过的那款 + 标题带产品名自证）
         p = str(plan or "").strip()
@@ -1969,6 +2016,8 @@ def run_winback_scan(
                              or "engagement_reactivate").strip()
         wb_tmpl = get_template(wb_template_id)
         if wb_tmpl is None:
+            return summary
+        if _lifecycle_template_blocked(cfg_root, wb_template_id, "winback_auto"):
             return summary
         budget = max(1, int(wb.get("max_per_day", 10) or 10))
         day_start = time.mktime(time.strptime(
@@ -2101,6 +2150,8 @@ def maybe_spawn_reconvert(
         template_id = str(rc.get("template") or "acquire_and_convert").strip()
         tmpl = get_template(template_id)
         if tmpl is None:
+            return None
+        if _lifecycle_template_blocked(cfg_root, template_id, "reconvert_auto"):
             return None
         n = float(now if now is not None else time.time())
         p = str((base_goal.get("params") or {}).get("last_plan") or "").strip()

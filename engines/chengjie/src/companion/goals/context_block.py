@@ -60,8 +60,9 @@ def build_goal_block(
     profile_facts: str = "",
     remaining_sec: Optional[float] = None,
     max_chars: int = DEFAULT_MAX_CHARS,
+    product_rule: str = "",
 ) -> Optional[str]:
-    """组 3-6 行目标块。无标题（无目标）→ None。
+    """组 3-7 行目标块。无标题（无目标）→ None。
 
     ``profile_gap``（可选）：摸底段本轮**唯一**缺口（一个未填槽的 ask 短语），
     出一行硬约束采集指令——像朋友闲聊，不要像查户口，一轮只问一个。
@@ -70,6 +71,9 @@ def build_goal_block(
     可见、从没进过 prompt）。
     ``profile_facts``（可选，P9a）：已采画像事实一行（「称呼:阿龙｜业务痛点:
     客服人手」——此前只驱动选品，LLM 看不到原值）。
+    ``product_rule``（可选，M-5 A #217 D-M6）：目标未绑产品时的「产品边界」行
+    （``product_guard.no_product_prompt_rule``）——安全语义，与纪律行同级不丢；
+    有它时 direct/close 力度降 soft（没货可推就没有「可以直说/明确报价」）。
     超长丢弃顺序：档案行（每轮 nice-to-have）→ 背景行 → 缺口行 → 截意图。
     """
     t = str(title or "").strip()
@@ -80,6 +84,9 @@ def build_goal_block(
         lvl = "soft"
     if suppress_push and lvl in ("direct", "close"):
         lvl = "soft"        # 同轮已有其他变现引导：双线推销降档
+    rule = str(product_rule or "").strip().replace("\n", " ")
+    if rule and lvl in ("direct", "close"):
+        lvl = "soft"        # 没绑产品：「可以直说 / 明确报价」无货可指，降回顺势带到
 
     mi_disp = max(0, int(milestone_idx)) + 1
     n_total = max(1, int(milestone_total or 4))
@@ -123,13 +130,16 @@ def build_goal_block(
     if gap:
         lines.append(
             f"【画像缺口】像朋友闲聊，不要像查户口，一轮只问一个：{gap}")
+    if rule:
+        lines.append(rule)
     # 限时档（remaining_sec 有值）用冲刺纪律：敷衍可再试，拒绝/低落仍放下
     lines.append(_DISCIPLINE_SPRINT if used_remaining else _DISCIPLINE)
     block = "\n".join(lines)
-    cap = max(120, int(max_chars or DEFAULT_MAX_CHARS))
+    # 产品边界行是安全语义：有它时上限按其长度放宽，保证与纪律行一起不被截掉
+    cap = max(120, int(max_chars or DEFAULT_MAX_CHARS)) + (len(rule) + 1 if rule else 0)
     if len(block) > cap:
         # 超长丢弃顺序：客户档案行 → 背景行 → 画像缺口行 → 截意图行
-        # （标题与纪律行是安全语义，不能丢；档案是每轮 nice-to-have——
+        # （标题、产品边界与纪律行是安全语义，不能丢；档案是每轮 nice-to-have——
         # 名字等事实通常也在记忆上下文里，最先让位）
         if facts and len(block) > cap:
             lines = [ln for ln in lines if not ln.startswith("【客户档案】")]
@@ -158,12 +168,14 @@ def goal_view_block(
     profile_facts: str = "",
     note_suffix: str = "",
     max_chars: int = DEFAULT_MAX_CHARS,
+    product_rule: str = "",
 ) -> Optional[str]:
     """从 service.goal_view 输出的视图字典组块（路由/注入共用的便捷口）。
 
     ``note_suffix``（P9b）：拼在 params.note 后的动态背景补充（流失原因
     应对策略「应对：聊性价比…」——采集常发生在目标创建**之后**，静态 note
     写死会错过；这里按当轮画像现值拼，无 note 时独立成背景行）。
+    ``product_rule``（M-5 A）：见 :func:`build_goal_block`。
     """
     if not isinstance(view, dict):
         return None
@@ -191,6 +203,7 @@ def goal_view_block(
         profile_facts=profile_facts,
         remaining_sec=rem,
         max_chars=max_chars,
+        product_rule=product_rule,
     )
 
 
