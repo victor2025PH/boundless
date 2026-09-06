@@ -21,8 +21,12 @@
 # 2026-09-06 boss rule: testers must submit bugs via Cursor field-agent report, not the group.
 # Second step below (tools/duty_channel_reminder.py) is the ONLY sender on this tick:
 # it replies once per reporter per 6h when the bot sees a group bug submission, and
-# posts a "received <code>" receipt for newly downloaded reports. Runs after the loop so
-# the loop's freshly downloaded codes are in its state. Own log: .ops\duty_channel_reminder.log
+# posts a "received <code> -> ticket #N" receipt for newly downloaded reports. Runs after
+# the loop so the loop's freshly downloaded codes are in its state. Own log: .ops\duty_channel_reminder.log
+# L-7 A (2026-09-06 11:xx): before each receipt the reminder calls tools/duty_auto_ticket.py
+# (attach by #N / linked code / same-reporter-30min topic, else create a ticket); it writes
+# tmp_diag\<code>\ticket.txt + duty_evidence.jsonl + bug_events and returns the ticket number
+# for the receipt text. Own log: .ops\duty_auto_ticket.log. It never sends messages itself.
 $ErrorActionPreference = "SilentlyContinue"
 $py = "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe"
 $env:PYTHONIOENCODING = "utf-8"
