@@ -61,6 +61,25 @@ domains/platform 走与全量构建同一套暂存清洗（隐私/机密剔除�
 一键智能档：`npm run dist:win:smart`＝先试增量刷新，被拒/失败自动落
 `build:backend`（含冒烟），然后 `dist:win`——不确定改动范围时用它最省心。
 
+**两包两渠道（L-5 2026-09-06，老板决策 D-L1）**：smart / clean 两种包各自有独立的
+自动更新渠道，渠道**烘在包里**（electron-builder 把 `publish.{url,channel}` 写进
+`resources/app-update.yml`，electron-updater 运行时只认这份文件），装了哪种包就永远
+跟哪条渠道，不需要坐席机上任何配置：
+
+| 形态 | 命令 | 产物目录 | 更新 yml | 更新源 |
+|---|---|---|---|---|
+| smart（内测，随包 seed-data） | `npm run dist:win` / `dist:win:smart` / `dist:win:fresh` | `dist/` | `latest-internal.yml` | `https://bd2026.cc/downloads/internal/` |
+| clean（对外干净包） | `npm run dist:win:clean` | `dist-clean/` | `latest.yml` | `https://bd2026.cc/downloads/` |
+
+发布：`website/scripts/publish_chatx.ps1 -DistDir dist-clean`（公共渠道，老流程不变）+
+`publish_chatx.ps1 -DistDir dist -Channel internal`（只写 VPS/R2 的 `downloads/internal/`，
+不碰公共 `latest.yml` / `manifest.json` / 公告 feed）。天然互锁：smart 产物目录里**没有**
+`latest.yml`，不带 `-Channel internal` 去发它会在第一步就失败——K-5 那次「内测机点更新拿到
+干净包、出厂种子整体 no-op」的形态不会再发生。内测机切渠道＝手装一次 smart 包（此后自动更新
+只走 internal）；`deploy/desktop/chatx_fleet_status.ps1` 的 `edition` 列读包内 build-info /
+app-update.yml，一眼看出每台机器装的形态与跟的渠道。`dist:win:lite` 仍用公共 `latest.yml`
+（定制档更新策略未拍板，装 lite 的机器点更新会拿到 clean 包——有客户装 lite 前先定）。
+
 ## 运行时行为（生命周期）
 
 - 启动：先探活 `backend.base_url/login`——**已在跑则复用、不重复拉起**（对「先手动起后端」零回归）；
