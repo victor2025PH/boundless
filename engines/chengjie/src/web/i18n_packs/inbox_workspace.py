@@ -285,6 +285,8 @@ ZH = {
     "inbox.acct.note_line": "真机接入（adb 设备）或协议扫码",
     "inbox.acct.note_instagram": "官方 API 接入：填 Facebook 开发者应用的主页凭证即可，无需扫码",
     "inbox.acct.note_zalo": "官方 API 接入：填 Zalo OA access token 即可，无需扫码；客服消息限 7 天互动窗",
+    # QQ 机器人（QQ 开放平台官方 API，2026-09-07）：与「QQ 协议登录」是两个独立渠道
+    "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -480,6 +482,7 @@ ZH = {
     "inbox.caps.no_voice": "该平台账号暂不支持收件箱直发语音（需协议多开且在线）",
     "inbox.caps.voice_auto_only": "该会话由 RPA 托管：语音仅支持设备端自动发送（voice_output），坐席不能在此手动直发",
     "inbox.caps.zalo_api_no_media": "Zalo OA API 不支持发图/语音（官方能力限制）；此账号只能发文字",
+    "inbox.caps.qqbot_media_pending": "QQ 机器人发图/语音（file_info 上传 + silk 转码）属下一批次；此账号目前只能发文字",
     "inbox.caps.needs_public_url": "官方通道发媒体需先配置公网媒体 URL——打开「渠道接入」向导填写（IG/LINE 共用）",
     "inbox.caps.no_worker": "该账号未被协议 worker 托管（未登录或该平台无 worker），工作台不能直发媒体/语音",
     "inbox.caps.no_send_media": "该平台 worker 在线但未开放发媒体（如 LINE 需开 platform_login.line.media.outbound）",
@@ -1037,6 +1040,10 @@ ZH = {
     "inbox.connect.win_note_zalo":
         "「7 天互动窗」＝Zalo OA 客服消息政策：用户最后一次互动后 7 天内可主动发消息，"
         "超窗需等对方再次发起。这是平台规则，不是本系统限制。",
+    "inbox.connect.win_note_qqbot":
+        "「被动回复窗口」＝QQ 开放平台机器人政策：单聊每条来话 60 分钟内最多回 4 条、"
+        "群 @ 消息 5 分钟内最多 5 条；用户不再说话就不能再发（主动消息已于 2025-04 收敛）。"
+        "群里默认只收 @机器人 的消息。这是平台规则，不是本系统限制。",
     "inbox.connect.win_note_whatsapp":
         "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
         "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
@@ -1196,6 +1203,9 @@ ZH = {
         "Zalo 走官方 OA API 接入：在「接入向导」里填好 OA 凭证即自动上线，无需扫码。",
     "inbox.connect.instr_zalo_web":
         "用手机 Zalo：右上角 ＋ → 扫码（QR），扫描本窗口二维码。登录成功后本窗口会自动确认。",
+    "inbox.connect.instr_qqbot":
+        "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
+        "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2048,6 +2058,7 @@ ZH = {
     "inbox.plat.web_desc": "网站访客渠道 · 实时会话 · 引流转化",
     "inbox.plat.whatsapp_desc": "Web 扫码接入 · 支持多账号 · 媒体收发",
     "inbox.plat.zalo_desc": "Zalo OA 官方 API 接入 · 客服消息（7 天互动窗）· 填凭证即用（无扫码）",
+    "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
     "inbox.plat_pause.multi": "AI 出多选草稿，人工挑选发送",
@@ -3199,6 +3210,7 @@ EN = {
     "inbox.acct.note_line": "Real-device onboarding (adb) or protocol QR",
     "inbox.acct.note_instagram": "Official API onboarding: paste the Page credentials of your Facebook developer app — no QR needed",
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
+    "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3393,6 +3405,7 @@ EN = {
     "inbox.caps.no_voice": "This platform account can’t send voice from the inbox (requires multi-account protocol & online)",
     "inbox.caps.voice_auto_only": "This conversation is RPA-managed: voice goes out automatically on the device (voice_output); agents can’t send voice manually here",
     "inbox.caps.zalo_api_no_media": "Zalo OA API can’t send image/voice (platform limit); this account is text-only",
+    "inbox.caps.qqbot_media_pending": "QQ Bot image/voice sending (file_info upload + silk transcoding) lands in the next batch; this account is text-only for now",
     "inbox.caps.needs_public_url": "Official media needs a public media URL — open Channel Setup and fill it (shared by IG/LINE)",
     "inbox.caps.no_worker": "This account isn’t managed by a protocol worker (not logged in / no worker for this platform); media & voice can’t be sent from the workspace",
     "inbox.caps.no_send_media": "The worker is online but outbound media is not enabled for this platform (e.g. LINE needs platform_login.line.media.outbound)",
@@ -3942,6 +3955,12 @@ EN = {
         "The “7-day window” is Zalo OA customer-service policy: you can message a user within "
         "7 days of their last interaction; after that, wait for them to message first. "
         "A platform rule, not a limit of this system.",
+    "inbox.connect.win_note_qqbot":
+        "The “passive reply window” is QQ Open Platform bot policy: at most 4 replies within "
+        "60 minutes per inbound private message, and 5 within 5 minutes per group @-message; "
+        "once the user stops talking you cannot send (proactive messages were retired in "
+        "2025-04). In groups the bot only receives @-mentions by default. A platform rule, "
+        "not a limit of this system.",
     "inbox.connect.win_note_whatsapp":
         "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
         "of the user's last message; outside the window only pre-approved template messages can "
@@ -4102,6 +4121,10 @@ EN = {
     "inbox.connect.instr_zalo_web":
         "On your phone’s Zalo: top-right ＋ → Scan QR, then scan the code in this window. "
         "This window confirms automatically once login succeeds.",
+    "inbox.connect.instr_qqbot":
+        "QQ Bot connects via the QQ Open Platform official API: save the AppID / AppSecret in "
+        "the Setup Wizard and it goes online automatically — no QR scan. Production requires an "
+        "IP allowlist on the Open Platform; use the sandbox first while testing.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -4925,6 +4948,7 @@ EN = {
     "inbox.plat.web_desc": "Website visitor channel · live chat · conversion",
     "inbox.plat.whatsapp_desc": "QR web login · multi-account · media send/receive",
     "inbox.plat.zalo_desc": "Zalo OA official API · CS messages (7-day window) · credentials only (no QR)",
+    "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",
     "inbox.plat_pause.multi": "AI proposes multiple drafts; a human picks one to send",

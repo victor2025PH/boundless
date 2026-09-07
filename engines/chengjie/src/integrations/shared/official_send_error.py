@@ -1,6 +1,6 @@
 """官方通道发送错误统一分类（确定性纯函数）。
 
-各官方 API（WhatsApp Cloud / Messenger / Instagram / LINE / Zalo）发送失败时返回的错误
+各官方 API（WhatsApp Cloud / Messenger / Instagram / LINE / Zalo / QQ 机器人）发送失败时返回的错误
 **五花八门**（HTTP 状态码 + 各家私有 error.code），此前各 send 助手只把它打包成不透明的
 ``"HTTP 4xx: ..."`` 字符串就吞掉——结果**客服窗口过期、token 失效、限速**等都长一个样，
 回复没送达却**无人知晓、无法分流**。本模块把它们归一成一张**跨平台错误类型表**，让上层
@@ -9,8 +9,9 @@
 设计同 ``src.ops.ban_signal.classify``（封号信号分类）：**纯函数、零网络、可注入假响应单测**。
 
 kind 取值：
-- ``window_expired``     ：超出平台「客服会话窗口」（WA 24h / IG·FB 24h / Zalo cs 7d）——
-                           自由文本被拒，需模板/标签/人工跟进（**不是封号**）。
+- ``window_expired``     ：超出平台「客服会话窗口」（WA 24h / IG·FB 24h / Zalo cs 7d /
+                           QQ 机器人被动回复 60min·4 条）——自由文本被拒，需模板/标签/
+                           人工跟进或等客户再说话（**不是封号**）。
 - ``invalid_token``      ：access token 失效/过期/权限不足——需重配凭证。
 - ``rate_limited``       ：触发限速/配额——退避重试。
 - ``recipient_unavailable``：收件人不可达（停用/拉黑/不在实验组）——放弃该条。
@@ -73,6 +74,23 @@ _ZALO_CODES = {
     -211: "invalid_token",
 }
 
+# QQ 开放平台机器人 API v2（body 顶层 {"message","code","err_code","trace_id"}）。
+# 官方只公开了少数码（流式消息文档：50001 内部错误 / 50002 频率限制 / 40007 前缀不可改），
+# 其余按文本关键词兜底——被动窗口用尽（msg_id 过期/回复次数）、IP 白名单、限频是三类
+# 最常见且处置完全不同的失败，必须分开。
+_QQBOT_CODES = {
+    50001: "transient",
+    50002: "rate_limited",
+    40007: "unsupported",
+}
+_QQBOT_IP_TEXT = re.compile(r"白名单|whitelist|ip\s*(?:not\s*)?(?:allow|in)", re.IGNORECASE)
+_QQBOT_RATE_TEXT = re.compile(r"频率|频控|限频|too many|rate limit|qps|qpm", re.IGNORECASE)
+_QQBOT_TOKEN_TEXT = re.compile(r"token|鉴权|unauthorized|authorization|appid|app_?secret",
+                               re.IGNORECASE)
+_QQBOT_WINDOW_TEXT = re.compile(
+    r"msg_?id|msg_?seq|event_?id|主动消息|推送消息|被动|过期|expired|回复次数|次数",
+    re.IGNORECASE)
+
 
 def _http_fallback(status: Optional[int]) -> str:
     """无法按平台码归类时，用 HTTP 状态兜底。"""
@@ -106,6 +124,11 @@ def _dig_error(body: Any) -> Dict[str, Any]:
         return out
     if "error" in body and not isinstance(err, dict):  # Zalo 风格：{"error": -213, "message": "..."}
         out["code"] = err
+        out["message"] = str(body.get("message") or "")
+        return out
+    if "code" in body and not isinstance(body.get("code"), dict):
+        # QQ 开放平台风格：{"message": "...", "code": 50002, "err_code": 50002, "trace_id": "..."}
+        out["code"] = body.get("code") if body.get("code") is not None else body.get("err_code")
         out["message"] = str(body.get("message") or "")
         return out
     return out
@@ -171,6 +194,20 @@ def classify_official_send_error(
     elif plat == "zalo":
         if code in _ZALO_CODES:
             kind = _ZALO_CODES[code]
+    elif plat == "qqbot":
+        if code in _QQBOT_CODES:
+            kind = _QQBOT_CODES[code]
+        elif text:
+            # 顺序即优先级：白名单/鉴权是「凭证与部署」问题，限频是「退避」问题，
+            # 窗口是「等客户再说话」问题——三者处置互斥，先判特异性高的。
+            if _QQBOT_IP_TEXT.search(text):
+                kind = "invalid_token"
+            elif _QQBOT_RATE_TEXT.search(text):
+                kind = "rate_limited"
+            elif _QQBOT_TOKEN_TEXT.search(text):
+                kind = "invalid_token"
+            elif _QQBOT_WINDOW_TEXT.search(text):
+                kind = "window_expired"
 
     # 平台码没命中 → 文本关键词兜底（窗口/token）
     if kind == "unknown" and text:

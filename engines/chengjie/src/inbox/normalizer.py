@@ -169,6 +169,11 @@ def infer_chat_type(
         low = ck.lower()
         if ":group:" in low or ":room:" in low or low.startswith(("line:group:", "line:room:")):
             return "group"
+    if plat in ("qqbot", "qq"):
+        # QQ 两平台的 chat_key 自描述：``qqbot:group:<group_openid>`` / ``qqbot:c2c:<openid>``；
+        # ``qq:group:<群号>`` / ``qq:friend:<QQ号>`` / ``qq:temp:<QQ号>``（临时会话按私聊）。
+        if ":group:" in ck.lower():
+            return "group"
     return "private"
 
 

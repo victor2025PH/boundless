@@ -2015,13 +2015,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 <script>
 (function(){
 /* ===== 常量 ===== */
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',web:'#3b82f6'};
-const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',web:'🌐'};
-const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',web:'Web'};
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',web:'#3b82f6'};
+const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',web:'🌐'};
+const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',web:'Web'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
-// IG/Zalo 为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
+// IG/Zalo/QQ 机器人为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
 // 仅有图标没有后端的平台（X/Signal/WeChat/Viber）刻意不进此表——展示了也没有接入路径。
-const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo'];
+const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot'];
 const PLAT_DESC = {
   telegram:window.T('inbox.plat.telegram_desc'),
   line:window.T('inbox.plat.line_desc'),
@@ -2029,6 +2029,7 @@ const PLAT_DESC = {
   messenger:window.T('inbox.plat.messenger_desc'),
   instagram:window.T('inbox.plat.instagram_desc'),
   zalo:window.T('inbox.plat.zalo_desc'),
+  qqbot:window.T('inbox.plat.qqbot_desc'),
   web:window.T('inbox.plat.web_desc'),
 };
 // 各平台接入方式一句话说明（账号抽屉空状态 note 行）：登录形态不同，别让「扫码」心智一刀切
@@ -2040,6 +2041,7 @@ const PLAT_NOTE = {
   messenger:window.T('inbox.acct.msg_server_note'),
   instagram:window.T('inbox.acct.note_instagram'),
   zalo:window.T('inbox.acct.note_zalo'),
+  qqbot:window.T('inbox.acct.note_qqbot'),
 };
 const PLAT_STATE_LABEL = {on:window.T('inbox.pstate.on'),off:window.T('inbox.pstate.off'),none:window.T('inbox.pstate.none')};
 const PLAT_STATE_COLOR = {on:'#16a34a',off:'#dc2626',none:'#94a3b8'};
@@ -8097,6 +8099,7 @@ function _capsDenyTitle(caps, kind){
   // 能读到「Zalo API 不发图」或「去向导填公网媒体 URL」，而不是猜。
   const r=caps&&caps.caps_reason?String(caps.caps_reason):'';
   if(r==='zalo_api_no_media') return window.T('inbox.caps.zalo_api_no_media');
+  if(r==='qqbot_media_pending') return window.T('inbox.caps.qqbot_media_pending');
   if(r==='needs_public_url') return window.T('inbox.caps.needs_public_url');
   // #180 三分因（J-3 交办，2026-09-05）：send-caps 带 caps_reason/worker_state/backoff_sec
   // ——「worker 没托管 / worker 在但不发媒体 / worker 在重连（还要等 N 秒）」是三件
@@ -25954,6 +25957,7 @@ const _OFFICIAL_CONSOLE={
   messenger:'https://developers.facebook.com/apps/',
   whatsapp:'https://developers.facebook.com/apps/',
   line:'https://developers.line.biz/console/',
+  qqbot:'https://q.qq.com/',
 };
 // 准备清单：让用户点「去接入向导」之前就知道要带什么材料、去哪拿、大约多久。
 // 字段 chip 标必填/可选/已填；win_note_<platform> 键存在时附平台政策注释（如 7 天窗）。
@@ -27986,8 +27990,8 @@ async function init(){
     const _connect=String(_q.get('connect')||'').toLowerCase().trim();
     const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
     const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
-    // Instagram/Zalo 无扫码态，openConnect → 模式选 → credentials → /workspace/setup
-    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo']);
+    // Instagram/Zalo/QQ 机器人无扫码态，openConnect → 模式选 → credentials → /workspace/setup
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot']);
     if(_wantDrawer && typeof openDrawer==='function'){
       openDrawer();
       if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){

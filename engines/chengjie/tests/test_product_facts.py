@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.assistant.product_facts import (  # noqa: E402
+    CHANNEL_PLATFORM_KEYS,
     SUPPORTED_CHANNELS,
     UNSUPPORTED_CHANNELS,
     facts_fingerprint,
@@ -34,20 +35,28 @@ def test_claimed_channels_exist_in_code():
        （Zalo / Instagram 都有边车实现）。拿话术当真相会把漏报固化。
     所以方向是单向的：事实卡 ⊆ 代码能力。反过来（代码有而卡里没写）不算错，
     那只是还没对外介绍。
+
+    「代码能力」= worker 平台（ACTION_PLATFORMS）∪ 官方 API 平台（OFFICIAL_PLATFORMS）
+    ——QQ 机器人（2026-09-07）只有官方形态、不在 worker 表里，但出站/入站都是真实现。
+    叫法对不上平台键的（「QQ 机器人」→ qqbot）经 CHANNEL_PLATFORM_KEYS 显式登记。
     """
     from src.assistant.actions import ACTION_PLATFORMS
+    from src.integrations.official_api_worker import OFFICIAL_PLATFORMS
 
-    known = {p.lower() for p in ACTION_PLATFORMS}
+    known = {p.lower() for p in ACTION_PLATFORMS} | {p.lower() for p in OFFICIAL_PLATFORMS}
     # 网页聊天不是 worker 平台（它是本产品自己的页面），单独放行
     web_aliases = {"官网网页聊天", "web", "网页"}
     for ch in SUPPORTED_CHANNELS:
         if ch in web_aliases:
             continue
-        key = ch.lower().replace("facebook ", "").strip()
+        key = CHANNEL_PLATFORM_KEYS.get(ch) or ch.lower().replace("facebook ", "").strip()
         assert key in known, (
-            f"事实卡声称支持「{ch}」，但 actions.ACTION_PLATFORMS 里没有它"
+            f"事实卡声称支持「{ch}」，但 ACTION_PLATFORMS ∪ OFFICIAL_PLATFORMS 里没有它"
             f"（现有 {sorted(known)}）——助手声称的能力必须在代码里真实存在"
         )
+    for ch, key in CHANNEL_PLATFORM_KEYS.items():
+        assert ch in SUPPORTED_CHANNELS, f"登记了叫法映射却不在支持清单里：{ch}"
+        assert key in known, f"叫法映射指向了不存在的平台键：{ch} → {key}"
 
 
 def test_unsupported_list_covers_the_common_asks():

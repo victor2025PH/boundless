@@ -3759,6 +3759,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_zalo.getLogger("admin").debug("Zalo Webhook 注册跳过", exc_info=True)
 
+    # ── QQ 机器人（QQ 开放平台官方 API）Webhook（2026-09-07 QQ 双轨·官方轨） ──
+    # WebSocket 网关由编排器里的 QQBotOfficialWorker 拉起；这里只挂 HTTPS 回调
+    # （op=13 验证 + 事件推送验签）并注入 SkillManager 取法供自答回落。
+    try:
+        from src.integrations.qq_official import register_qqbot_routes
+
+        register_qqbot_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_qqbot
+
+        _log_qqbot.getLogger("admin").debug("QQ 机器人 Webhook 注册跳过", exc_info=True)
+
     # ── LINE RPA（个人号自动聊天）Web 管理页 + REST ──
     try:
         from src.web.routes.line_rpa_routes import register_line_rpa_routes

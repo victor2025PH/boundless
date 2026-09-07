@@ -42,6 +42,10 @@ SUPPORTED_PLATFORMS = (
     "telegram", "line", "whatsapp", "messenger", "web",
     # 纯官方 API 渠道（mode=official，凭证经 /workspace/setup 接入向导配置）
     "instagram", "zalo",
+    # QQ 机器人（QQ 开放平台官方 API，2026-09-07）：与「QQ 协议登录」（platform=qq，
+    # 个人号）是两个独立平台——身份空间（openid vs QQ 号）/ 合规归属（主站 vs 准入区）/
+    # 图标都不同，刻意不合成一个平台的两种方式。
+    "qqbot",
 )
 
 # 登录方式（mode）：协议多开 / 网页隔离 / 真机RPA / 官方 API / 手机号验证码
@@ -232,6 +236,8 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     # 纯官方 API 渠道：没有「自己账号扫码」形态，凭证经接入向导（/workspace/setup）
     "instagram": {"modes": ["official"], "default": "official"},
     "zalo": {"modes": ["official"], "default": "official"},
+    # QQ 机器人：只有官方形态（AppID/AppSecret 经向导）；个人号扫码是另一个平台 qq
+    "qqbot": {"modes": ["official"], "default": "official"},
 }
 
 # 个人号扫码登录（web/qr 边车）可**增量**补给这些原本纯官方的渠道。刻意不写进上面的
@@ -265,6 +271,10 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
     "web": "网页客服为服务端原生渠道，无需扫码登录。",
     "instagram": "Instagram 走官方 API 接入：在「接入向导」里填好 Meta 凭证即自动上线，无需扫码。",
     "zalo": "Zalo 走官方 OA API 接入：在「接入向导」里填好 OA 凭证即自动上线，无需扫码。",
+    "qqbot": (
+        "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
+        "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。"
+    ),
 }
 
 # 上表的 i18n 键（英文坐席不该看到中文指引）。仅在指引取自上表（即 provider 没给
@@ -278,6 +288,7 @@ PLATFORM_INSTRUCTION_KEYS: Dict[str, str] = {
     "messenger": "inbox.connect.instr_messenger",
     "instagram": "inbox.connect.instr_instagram",
     "zalo": "inbox.connect.instr_zalo",
+    "qqbot": "inbox.connect.instr_qqbot",
 }
 
 

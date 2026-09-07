@@ -37,9 +37,23 @@ from typing import Any, Dict
 # 把这个漏报固化成「小智也说不支持」，所以这里以代码为准；话术那边属产品/销售
 # 侧决策，已在交付说明里点名。
 SUPPORTED_CHANNELS = ("Telegram", "WhatsApp", "LINE", "Facebook Messenger",
-                      "Instagram", "Zalo", "官网网页聊天")
-# 明确**不支持**的平台：说不支持比含糊其辞有用得多，也防销售侧谎称支持
-UNSUPPORTED_CHANNELS = ("微信", "QQ", "淘宝", "抖音", "小红书")
+                      "Instagram", "Zalo", "QQ 机器人", "官网网页聊天")
+# 事实卡里的渠道叫法 → 代码平台键（门禁 test_product_facts 据此核对「声称的能力在代码里
+# 真实存在」；能按小写/去 "Facebook " 前缀直接对上的不必登记）。
+CHANNEL_PLATFORM_KEYS = {"QQ 机器人": "qqbot"}
+# 明确**不支持**的平台：说不支持比含糊其辞有用得多，也防销售侧谎称支持。
+# 「QQ 个人号」＝用自己的 QQ 号登录那条路（协议登录），与已支持的「QQ 机器人」（QQ 开放
+UNSUPPORTED_CHANNELS = ("微信", "QQ 个人号", "淘宝", "抖音", "小红书")
+# 已支持渠道的边界说明（常驻注入；用户问「QQ 机器人能主动发消息吗」这类必须答得准）
+_CHANNEL_CAVEATS_ZH = (
+    "QQ 机器人（QQ 开放平台官方 API）只能被动回复：单聊每条来话 60 分钟内最多回 4 条、"
+    "群里默认只收 @机器人 的消息、不支持主动消息；发图/语音属下一批次。"
+)
+_CHANNEL_CAVEATS_EN = (
+    "QQ Bot (QQ Open Platform official API) is passive-only: at most 4 replies within "
+    "60 minutes per inbound private message, groups only deliver @-mentions by default, "
+    "no proactive messages; image/voice sending lands in the next batch."
+)
 
 _FACTS_ZH = f"""【本产品是什么】
 「智聊 ChatX」＝聚合多平台的 AI 聊天客服/获客系统：把多个平台的账号聚到一个
@@ -49,6 +63,7 @@ _FACTS_ZH = f"""【本产品是什么】
 （声音克隆）、幻颜 FaceX（图片视频换脸）、幻影 LiveX（直播换脸换声）。
 
 【支持的聊天渠道】{"、".join(SUPPORTED_CHANNELS)}。
+【渠道边界】{_CHANNEL_CAVEATS_ZH}
 【暂不支持】{"、".join(UNSUPPORTED_CHANNELS)}等国内平台——如实说明即可，
 不要为了让答案好听而谎称支持；用户如果需要，可以让他把需求提给产品团队评估。
 
@@ -68,6 +83,7 @@ ReachX outreach, ChatX this product, VoiceX voice cloning, FaceX face swap,
 LiveX live avatar).
 
 [Supported chat channels] {", ".join(SUPPORTED_CHANNELS)}.
+[Channel limits] {_CHANNEL_CAVEATS_EN}
 [Not supported] {", ".join(UNSUPPORTED_CHANNELS)} and other China-domestic
 platforms - say so honestly, never claim support to make an answer nicer.
 
@@ -95,4 +111,4 @@ def facts_fingerprint() -> Dict[str, Any]:
 
 
 __all__ = ["product_facts_block", "facts_fingerprint",
-           "SUPPORTED_CHANNELS", "UNSUPPORTED_CHANNELS"]
+           "SUPPORTED_CHANNELS", "UNSUPPORTED_CHANNELS", "CHANNEL_PLATFORM_KEYS"]

@@ -21,7 +21,9 @@
 3. **连续失败降级**（D-M1 ⑦ / UE7VM3 ⑦）：同账号连续 ``fail_streak_limit``（默认 3）
    次真实发送失败 → 降半自动 + 账号红标「通道异常，已暂停自动发送」；边车退避 429
    （``send_backoff`` / ``account_blocked``）**不计**连续失败——那是通道自保不是新的
-   失败。恢复后**需用户确认**（``clear_degraded``）才重新放开，不自动解除。
+   失败；平台消息窗口 / 配额政策拒发（``window_expired``，QQ 机器人被动窗口 / WA·FB
+   24h / Zalo 7d）同样**不计**——通道是通的，只是这条按规则此刻不能发。恢复后
+   **需用户确认**（``clear_degraded``）才重新放开，不自动解除。
 4. **退避锁手动优先**（#233）：边车报 ``send_backoff`` → 记账号级 ``backoff_until``，
    autosend 在此之前不再改期重投（不续命）；手动发送独立于该锁（由 Node 侧 manual
    probe 放行一次）；登录成功 / 健康探测通过 → ``reset_backoff``。
@@ -54,6 +56,11 @@ COOLDOWN_SEC_DEFAULT = 600.0
 FAIL_STREAK_LIMIT_DEFAULT = 3
 #: 边车「通道自保」类败因：不计连续失败、只记退避水位
 BACKOFF_ERROR_KINDS = frozenset({"send_backoff", "account_blocked"})
+#: 平台「消息窗口 / 配额」政策拒发（``official_send_error`` 的 ``window_expired``：WA 24h /
+#: IG·FB 24h / Zalo cs 7d / QQ 机器人被动回复 60min·4 条）：通道本身是通的，只是这条
+#: 消息按平台规则此刻不能发——**不计**连续失败、不记退避（2026-09-07 QQ 官方轨接入时
+#: 收口：否则一条主动关怀被窗口拦 3 次就把好端端的机器人降成半自动 + 红标「通道异常」）。
+POLICY_ERROR_KINDS = frozenset({"window_expired"})
 #: 退避水位夹取（秒）：边车 retry_after_ms 缺失时按下限；超长冻结按上限（超过就该人来看）
 _BACKOFF_MIN_SEC = 5.0
 _BACKOFF_MAX_SEC = 15 * 60.0
@@ -303,6 +310,8 @@ def note_send_fail(platform: str, account_id: str, *, error_kind: str = "",
 
     - 边车退避类（``send_backoff`` / ``account_blocked``）→ 只记 ``backoff_until``，
       **不计**连续失败（#233：退避期重试不计失败）；
+    - 平台政策拒发（``POLICY_ERROR_KINDS``，如 ``window_expired``）→ 只记
+      ``last_policy_block_ts/kind``，**不计**连续失败、不记退避（通道是通的）；
     - 其余 → ``fail_streak += 1``，达阈值首次进入降级（``degraded_now=True``）。
     """
     key = account_key(platform, account_id)
@@ -315,6 +324,15 @@ def note_send_fail(platform: str, account_id: str, *, error_kind: str = "",
     with _lock:
         data = _load_state()
         rec = _acct(data, key)
+        if kind in POLICY_ERROR_KINDS:
+            rec["last_policy_block_ts"] = ts
+            rec["last_policy_block_kind"] = kind[:48]
+            out["streak"] = int(rec.get("fail_streak") or 0)
+            out["degraded"] = bool(_f(rec, "degraded_since"))
+            out["backoff_until"] = _f(rec, "backoff_until")
+            out["policy_block"] = True
+            _persist_state(data)
+            return out
         if kind in BACKOFF_ERROR_KINDS:
             wait = float(retry_after_ms or 0) / 1000.0
             wait = min(_BACKOFF_MAX_SEC, max(_BACKOFF_MIN_SEC, wait))
@@ -487,7 +505,7 @@ def _reset_for_tests() -> None:
 
 __all__ = [
     "COOLDOWN_SEC_DEFAULT", "FAIL_STREAK_LIMIT_DEFAULT", "BACKOFF_ERROR_KINDS",
-    "DEGRADED_REASON_FAIL_STREAK",
+    "POLICY_ERROR_KINDS", "DEGRADED_REASON_FAIL_STREAK",
     "gate_cfg", "account_key",
     "note_login", "cooldown_remaining", "end_cooldown",
     "confirm_account_mode", "login_default_mode", "login_pending_confirm",

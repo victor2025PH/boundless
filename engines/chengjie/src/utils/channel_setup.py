@@ -228,6 +228,38 @@ CHANNELS: List[Channel] = [
         ],
     ),
     Channel(
+        id="qqbot",
+        name="QQ 机器人",
+        enable_key="qqbot.enabled",
+        official_platform="qqbot",
+        # account_id 口径 = qqbot.app_id（qq_official.register_qqbot_routes 入站镜像同源）
+        official_account_id_key="qqbot.app_id",
+        console_url="https://q.qq.com/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入 QQ 开放平台机器人（官方 API）：填好 AppID / AppSecret 即可收发单聊与群 @ 消息。"
+            "与「QQ 协议登录」（用你自己的 QQ 号）是两个独立渠道。"
+        ),
+        api_intro=(
+            "去 q.qq.com 创建机器人拿 AppID / AppSecret；默认 WebSocket 直连（免公网），"
+            "正式环境须在开放平台填 IP 白名单，联调可先勾「沙箱」。"
+            "注意：官方机器人只能被动回复（单聊每条来话 60 分钟内最多 4 条、群 5 分钟 5 条），"
+            "不支持主动消息；发图/语音属下一批次，界面会自动置灰。"
+        ),
+        fields=[
+            Field("qqbot.app_id", "AppID",
+                  help="QQ 开放平台 → 机器人 → 开发设置 里的 AppID（机器人 ID）"),
+            Field("qqbot.app_secret", "AppSecret", secret=True,
+                  help="同页 AppSecret；用于换取 access_token 与 Webhook 验签"),
+            Field("qqbot.sandbox", "沙箱环境", required=False, type="bool",
+                  help="true=沙箱（只收沙箱配置里的群/单聊事件，提审前联调用）；上线后改 false"),
+            Field("qqbot.connect_mode", "连接方式", required=False,
+                  help="websocket（默认，单机免公网，需 IP 白名单）或 webhook（需公网 HTTPS 回调）"),
+            Field("qqbot.webhook_path", "Webhook 路径", required=False,
+                  help="仅 webhook 方式用；默认 /qqbot/webhook，开放平台回调地址填 https://<域名>/qqbot/webhook"),
+        ],
+    ),
+    Channel(
         id="zalo",
         name="Zalo",
         enable_key="zalo.enabled",

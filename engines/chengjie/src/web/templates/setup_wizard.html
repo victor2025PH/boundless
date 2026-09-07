@@ -341,7 +341,7 @@ function _swDeepLink(){
 
 /* 官方渠道开通漏斗埋点（unavail_shown → wizard_open → saved → online；
    经 /api/telemetry/ui-event 通用通道，ops 侧按 prefix=official_setup_ 查趋势） */
-var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1};
+var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1,qqbot:1};
 function _swBeacon(action){
   try{
     var body=JSON.stringify({page:'/workspace/setup', action:String(action||'')});
@@ -354,7 +354,7 @@ function _swBeacon(action){
    /api/admin/official-webhook-status（5s；仅官方折叠区展开且页面可见时才打接口），
    平台的 verify 握手一落地立即翻绿。路由未装载（等实例重启）→ 30s 慢轮询静默等，
    装载后自动恢复；接口不可用绝不报错打扰填表。 */
-var REACH_PLATS={instagram:1,zalo:1,messenger:1,whatsapp:1};
+var REACH_PLATS={instagram:1,zalo:1,messenger:1,whatsapp:1,qqbot:1};
 var _swReachTimer=null, _swReachEvery=5000;
 function _swReachAge(s){
   if(s==null||s<0) return '';

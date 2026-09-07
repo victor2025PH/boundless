@@ -83,6 +83,9 @@ _IMPLEMENTED_MODES = {
     ("instagram", "official"), ("zalo", "official"),
     ("line", "official"), ("messenger", "official"),
     ("whatsapp", "official"),
+    # QQ 机器人（QQ 开放平台，2026-09-07）：独立平台，唯一形态 official；
+    # 个人号协议登录是另一个平台 qq（见 qq_milky / qq_protocol_login）。
+    ("qqbot", "official"),
 }
 
 
