@@ -38,6 +38,7 @@ PLATFORM_LABEL = {
     "line": "LINE",
     "zalo": "Zalo",
     "instagram": "Instagram",
+    "douyin": "抖音",
 }
 
 

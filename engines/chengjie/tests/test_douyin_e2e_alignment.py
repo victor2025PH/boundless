@@ -22,8 +22,8 @@ CFG = {"platform_login": {"douyin": {"mock_enabled": True, "mock_echo_delay_sec"
 
 
 @pytest.fixture()
-def douyin_ready(app, monkeypatch, tmp_path):
-    monkeypatch.delitem(ao._WORKER_FACTORIES, "douyin:web", raising=False)
+def douyin_ready(app, tmp_path):
+    ao._WORKER_FACTORIES.pop("douyin:web", None)   # pop 而非 monkeypatch.delitem（后者收尾会恢复）
     from src.inbox.store import InboxStore
     # 完整 app 的 inbox_store 由 main.py 生命周期挂载；测试里按其它收件箱用例同款手挂
     app.state.inbox_store = InboxStore(tmp_path / "inbox_e2e.db")
@@ -40,6 +40,8 @@ def douyin_ready(app, monkeypatch, tmp_path):
         yield w
     finally:
         orch._managed.pop(key, None)
+        # 工厂显式摘除：否则泄漏到 test_platform_matrix（「编排器注册了 douyin:web 但矩阵没有」）
+        ao._WORKER_FACTORIES.pop("douyin:web", None)
 
 
 def _ingest(client, text: str, msg_id: str, ts: float | None = None):

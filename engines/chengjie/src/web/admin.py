@@ -3771,6 +3771,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_qqbot.getLogger("admin").debug("QQ 机器人 Webhook 注册跳过", exc_info=True)
 
+    # ── 抖音官方通道（小程序 IM）Webhook（实施96 P1-1 骨架；douyin.enabled 为真才挂） ──
+    # 验签 sha1(secret+body) + verify_webhook challenge 回显 + 幂等 + 进私 30 秒问候快路径；
+    # 入站按 make_message 形状 emit_incoming → 收件箱 / System Z / B 线全部复用，不在此自答。
+    try:
+        from src.integrations.douyin_official import register_douyin_routes
+
+        register_douyin_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_douyin
+
+        _log_douyin.getLogger("admin").debug("抖音 Webhook 注册跳过", exc_info=True)
+
     # ── LINE RPA（个人号自动聊天）Web 管理页 + REST ──
     try:
         from src.web.routes.line_rpa_routes import register_line_rpa_routes

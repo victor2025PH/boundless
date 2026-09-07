@@ -176,6 +176,9 @@ _RECV_MEDIA_TRUTH = {
     "instagram:web": False,
     # 2026-09-07 QQ 协议登录（Milky）：图/语音/视频段的 temp_url 随 media_type 进 payload
     "qq:protocol": True,
+    # 2026-09-08 抖音官方（实施96 P1-1）：webhook 把 message_type=image/video 映射成 media_type
+    # 进 payload（平台不下发媒体本体，只有占位 + 类型；AI 可知「客户发了图」）
+    "douyin:official": True,
 }
 
 
@@ -401,6 +404,8 @@ _RECV_GROUP_TRUTH = {
     "instagram:web": True,
     # QQ 协议登录：Milky 事件自带 message_scene=group（硬事实），handler 显式 chat_type="group"
     "qq:protocol": True,
+    # 抖音官方：im_group_receive_msg 事件（硬事实）→ handler 显式 chat_type="group" + 群会话键
+    "douyin:official": True,
 }
 
 

@@ -60,7 +60,8 @@ def test_link_detector_has_no_obvious_false_positives():
 def test_douyin_media_whitelist():
     assert cp.media_block_reason("douyin", "image") == ""
     assert cp.media_block_reason("douyin", "image/png") == ""
-    assert cp.media_block_reason("douyin", "video") == ""
+    # 视频只能按 item_id 分享账号自己发布的作品，上传的视频文件平台不收
+    assert cp.media_block_reason("douyin", "video") == f"{cp.REASON_MEDIA_DENIED}:video"
     assert cp.media_block_reason("douyin", "voice") == f"{cp.REASON_MEDIA_DENIED}:voice"
     assert cp.media_block_reason("douyin", "sticker") == f"{cp.REASON_MEDIA_DENIED}:sticker"
     assert cp.media_block_reason("douyin", "") == f"{cp.REASON_MEDIA_DENIED}:unknown"

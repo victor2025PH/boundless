@@ -23,11 +23,13 @@ class _Reg:
 
 
 @pytest.fixture(autouse=True)
-def _clean_factory(monkeypatch):
-    monkeypatch.delitem(ao._WORKER_FACTORIES, "douyin:web", raising=False)
+def _clean_factory():
+    # 用 pop 而不是 monkeypatch.delitem：后者在 teardown 里删掉的键会被 monkeypatch 自己的
+    # 收尾**恢复**回去 → 工厂泄漏到 test_platform_matrix（「编排器注册了 douyin:web 但矩阵没有」）
+    ao._WORKER_FACTORIES.pop("douyin:web", None)
     pb.register_inbox_sink(None)
     yield
-    monkeypatch.delitem(ao._WORKER_FACTORIES, "douyin:web", raising=False)
+    ao._WORKER_FACTORIES.pop("douyin:web", None)
     pb.register_inbox_sink(None)
 
 

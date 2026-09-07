@@ -1147,6 +1147,13 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
         register_douyin_mock_worker(config)
     except Exception:
         logger.debug("[orchestrator] 注册抖音演示 worker 失败", exc_info=True)
+    # 抖音官方通道（小程序 IM，mode=official；实施96 P1-1 骨架）：douyin.enabled 为真才注册——
+    # 有状态（24h 回复凭据 / 进私快路径 / 令牌续期），故独立模块而非 OfficialApiWorker 分支
+    try:
+        from src.integrations.douyin_official import register_douyin_official_worker
+        register_douyin_official_worker(config)
+    except Exception:
+        logger.debug("[orchestrator] 注册抖音官方 worker 失败", exc_info=True)
     try:
         from src.integrations.line_protocol_login import (
             protocol_enabled as line_enabled, is_okline_available,

@@ -4950,6 +4950,21 @@ compliance:
 #   tiktok:
 #     media_types: [image]        # 注册地禁媒体时可设 []
 
+# ── 抖音官方通道（小程序 IM；实施96 P1-1 骨架；src/integrations/douyin_official.py）──────────
+# 企业主体小程序上线 + 能力实验室（私信/群管理、图片上传 tool.image.upload）到位后填凭证并开 enabled；
+# 经营者账号（account_id＝经营者 open_id）扫码授权后把 access_token / refresh_token /
+# access_expires_at / refresh_expires_at / renew_count 写入注册表 meta，worker 自动续期
+# （access 15 天到期前 1 天刷、refresh 30 天到期前 3 天续、续满 5 次后提醒重新扫码授权）。
+# webhook：控制台「Webhooks」填 https://<公网域名>/webhook/douyin，验签 sha1(client_secret+body)，
+# 订阅 im_receive_msg / im_send_msg / im_enter_direct_msg。未开启：不注册 worker、不挂 webhook。
+# douyin:
+#   enabled: false
+#   client_key: ""
+#   client_secret: ""             # 同时用于 webhook 验签
+#   webhook_path: /webhook/douyin
+#   enter_greeting: "您好，很高兴为您服务，请问想了解哪方面？"   # 进私事件 30 秒内即刻问候（禁外链）
+#   enter_greeting_enabled: true
+
 # ── 抖音演示 worker（实施96 P0-3；src/integrations/douyin_mock_worker.py）───────────────
 # 资质到位前把「收件箱 / 拟稿 / 策略拦截 / 出站镜像」整条链跑通的假传输。**默认关**，生产零痕迹；
 # 开着时注册 (douyin, web) 工厂并登记演示账号 douyin:demo 为 online。它不是抖音接入：能力矩阵与

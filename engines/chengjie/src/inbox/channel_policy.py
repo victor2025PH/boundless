@@ -85,11 +85,12 @@ UNLIMITED = ChannelPolicy(platform="*", note="未登记平台：无限制（零�
 _POLICIES: Dict[str, ChannelPolicy] = {
     # 抖音小程序 IM（2025-05-08 版文档）：文本 ≤1000 字、禁外部 URL；24h 内 ≤6 条；
     # 进私事件 30s 内 ≤3 条；无按钮（问题引导卡是独立消息类型，不是按钮）；行为指纹严 → enforce。
+    # 媒体只有图片：视频消息只能按 item_id 分享账号自己已发布的作品，上传的视频文件发不了。
     "douyin": ChannelPolicy(
         platform="douyin", max_text_len=1000, links=LINKS_DENY,
         reply_window_sec=24 * 3600.0, per_window_cap=6, reserve_for_manual=1,
         enter_scene_window_sec=30.0, enter_scene_cap=3, max_bubbles=2,
-        media_types=frozenset({"image", "video"}), buttons=False, risk_policy_mode="enforce",
+        media_types=frozenset({"image"}), buttons=False, risk_policy_mode="enforce",
         note="抖音开放平台 /im/send/msg/ 规则（2026-09 核实）",
     ),
     # TikTok Business Messaging（2026-09 核实）：文本 ≤6000；48h ≤10 条；用户先发；图片按地区
