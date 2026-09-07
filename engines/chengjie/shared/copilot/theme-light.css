@@ -48,6 +48,8 @@
      暗色主题下浅色实心底=白块，配近白 --cp-text 直接不可读
      （cp-persona 选中卡实锤事故）。亮色值恒=迁移前字面量（零视觉回归）。 */
   --cp-ok-bg: #ecfdf5;
+  /* ok-border=成功态描边（cp-voice 结论行 .pv-verdict.ok，N-4 B）；与 warn-border 同档：亮色取 emerald-200 */
+  --cp-ok-border: #a7f3d0;
   --cp-warn-bg: #fffbeb;
   --cp-warn-border: #fde68a;
   --cp-warn-ink: #b45309;
