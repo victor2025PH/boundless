@@ -181,6 +181,12 @@ def blocked_reason_key(reason: str) -> str:
         return "session"
     # 实施96 P0-3：渠道出站策略（平台侧会拒收）——外链 / 字数 / 媒体类型分三条人话，
     # 其余策略原因归 policy 族；与 channel_policy.REASON_* 前缀同源
+    if r.startswith("policy_window_no_inbound"):
+        return "policy_window_no_inbound"
+    if r.startswith("policy_window_expired"):
+        return "policy_window_expired"
+    if r.startswith("policy_window_"):
+        return "policy_window_quota"   # exhausted / reserved_for_manual：都是「本轮条数」问题
     if r.startswith("policy_link_denied"):
         return "policy_link"
     if r.startswith("policy_text_too_long"):

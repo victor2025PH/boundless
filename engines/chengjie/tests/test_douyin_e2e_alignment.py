@@ -105,6 +105,38 @@ def test_douyin_inbound_list_thread_send_roundtrip(auth_client, app, douyin_read
     msgs = r.json().get("messages") or []
     assert any(m.get("direction") == "out" and "99 元" in str(m.get("text")) for m in msgs)
 
+    # 6) send-caps 带 chat_key → 回复窗快照（倒计时 / 剩余条数）+ 气泡上限按平台封顶到 2
+    r = auth_client.get("/api/unified-inbox/send-caps",
+                        params={"platform": "douyin", "account_id": ACCT, "chat_key": CHAT})
+    assert r.status_code == 200, r.text
+    caps = r.json()
+    rw = caps.get("reply_window") or {}
+    assert rw.get("cap") == 6 and rw.get("sent") == 1 and rw.get("remaining") == 5
+    assert rw.get("remaining_sec") > 23 * 3600 and rw.get("manual_allowed") is True
+    assert caps.get("bubbles_max_parts") <= 2
+
+    # 7) 24h 内 6 条配额：再发 5 条成功，第 7 条 409 policy_window_exhausted（人话说清等客户再发言）
+    for i in range(5):
+        r = auth_client.post("/api/unified-inbox/send", json={
+            "platform": "douyin", "account_id": ACCT, "chat_key": CHAT,
+            "text": f"补充说明 {i}", "skip_translate": True})
+        assert r.status_code == 200, (i, r.text)
+    r = auth_client.post("/api/unified-inbox/send", json={
+        "platform": "douyin", "account_id": ACCT, "chat_key": CHAT,
+        "text": "第七条", "skip_translate": True})
+    assert r.status_code == 409, r.text
+    d = r.json().get("detail") or r.json()
+    assert d.get("reason") == "policy_window_exhausted"
+    assert "配额" in str(d.get("message")) or "allowance" in str(d.get("message")).lower()
+    assert len(w.sent) == 6
+    # 客户再发言 → 配额重置，又能发
+    assert _ingest(auth_client, "还有优惠吗", "dy-in-2").status_code == 200
+    r = auth_client.post("/api/unified-inbox/send", json={
+        "platform": "douyin", "account_id": ACCT, "chat_key": CHAT,
+        "text": "有的，今天下单再减 10", "skip_translate": True})
+    assert r.status_code == 200, r.text
+    assert len(w.sent) == 7
+
 
 def test_douyin_gets_the_same_server_side_capabilities(app, douyin_ready):
     """其它平台「自动享有」的服务端能力，对抖音会话逐项核对（平台无关 = 已对齐）。"""
@@ -126,6 +158,22 @@ def test_douyin_gets_the_same_server_side_capabilities(app, douyin_ready):
     # 渠道策略：抖音有声明，其它平台无限制
     from src.inbox.channel_policy import policy_for, UNLIMITED
     assert policy_for("douyin").max_text_len == 1000 and policy_for("telegram") is UNLIMITED
+
+
+def test_registry_json_served_and_inbox_falls_back_to_it(auth_client):
+    """收件箱前端：PC/PN 手写表没有的平台回落到 /static/platform_registry.json（品牌色 + 正名）。"""
+    r = auth_client.get("/static/platform_registry.json")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    by_id = {p["id"]: p for p in data["platforms"]}
+    assert by_id["douyin"]["color"] == "#FE2C55" and by_id["douyin"]["name"] == "Douyin"
+    assert by_id["tiktok"]["region_aware"] is True
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "src/web/templates/unified_inbox.html").read_text(
+        encoding="utf-8")
+    assert "fetch('/static/platform_registry.json'" in html
+    assert "function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)" in html
+    assert "function platName(p){ return PN[p]||(_PREG[p]&&_PREG[p].name)" in html
 
 
 def test_douyin_planned_status_is_honest_in_login_modes(auth_client, app):

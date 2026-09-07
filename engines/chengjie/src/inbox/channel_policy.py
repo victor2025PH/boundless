@@ -204,11 +204,13 @@ def has_link(text: Any) -> bool:
 
 
 def text_block_reason(platform: Any, text: Any, *, mode: str = "",
-                      config: Optional[Dict[str, Any]] = None) -> str:
+                      config: Optional[Dict[str, Any]] = None,
+                      first_message: bool = False) -> str:
     """平台硬规则拦截：超长 → ``policy_text_too_long:<len>/<max>``；禁链命中 → ``policy_link_denied``。
 
     只判**平台会拒收**的事（与风险/敏感词无关），所以人工与自动同守；空串＝放行。
-    ``first_message_deny`` 需要轮次状态，本无状态层按放行处理（由窗口执行器接管）。
+    ``first_message_deny``（TikTok 端内风控：给陌生人的**第一条**带链即拦）由调用方传
+    ``first_message=True``（``window_guard.is_first_message`` 从收件箱事实推导）才生效。
     """
     try:
         pol = policy_for(platform, mode, config)
@@ -216,6 +218,8 @@ def text_block_reason(platform: Any, text: Any, *, mode: str = "",
         if pol.max_text_len is not None and pol.max_text_len > 0 and len(s) > pol.max_text_len:
             return f"{REASON_TEXT_TOO_LONG}:{len(s)}/{pol.max_text_len}"
         if pol.links == LINKS_DENY and has_link(s):
+            return REASON_LINK_DENIED
+        if pol.links == LINKS_FIRST_MESSAGE_DENY and first_message and has_link(s):
             return REASON_LINK_DENIED
         return ""
     except Exception:

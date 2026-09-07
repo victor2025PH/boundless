@@ -2223,6 +2223,12 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 getattr(request.app.state, "config_manager", None),
                 "config", None) or {})
             _bubbles_max = int(_bc["max_parts"])
+            # 实施96：按渠道策略封顶（抖音 ≤2、qqbot 1），与发送路由的实际拆条同源
+            try:
+                from src.inbox.reply_split import cap_max_parts_for_platform
+                _bubbles_max = cap_max_parts_for_platform(_bubbles_max, plat)
+            except Exception:
+                pass
             _owns = False
             try:
                 from src.integrations.account_orchestrator import get_orchestrator
@@ -2258,6 +2264,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 裸流上传口（新前端据此走 body=file + query 元数据；旧后端无此键＝仍走 multipart）
             "media_stream_upload": True,
         }
+        # 实施96：平台回复窗 / 每轮配额快照（抖音 24h·6、TikTok 48h·10…）——前端画倒计时与
+        # 「本轮剩余 N 条」，与发送口的 window_guard 判定同源；非窗口平台不带此键。
+        if chat_key:
+            try:
+                from src.inbox.window_guard import snapshot as _wg_snapshot
+                _rw = _wg_snapshot(plat, acc, chat_key, store=_inbox_store(request),
+                                   config=_caps_cfg)
+                if _rw:
+                    out["reply_window"] = _rw
+            except Exception:
+                logger.debug("send-caps reply_window 快照跳过", exc_info=True)
         # #73-③（0830 UDEKBY）可见面：该会话 peer 挂着 dead-peer 标时坐席必须
         # 看得见「自动回复已对此人停用+原因」——此前 AI 静默跳过、坐席零感知。
         # chat_key 为可选新参（旧前端不传=响应形状不变）。

@@ -186,8 +186,20 @@ def _managed(orch, platform, account_id, worker):
                                      mode="web", worker=worker, state="running")
 
 
+@pytest.fixture()
+def _no_store():
+    """本文件只测静态规则：把收件箱 store getter 钉成 None → window_guard 无事实可读即放行
+    （窗口执行器自身在 test_window_guard 里用真 store 测）。"""
+    from src.integrations import protocol_bridge as pb
+    pb.register_inbox_store_getter(lambda: None)
+    pb.register_inbox_sink(None)
+    yield
+    pb.register_inbox_store_getter(None)
+    pb.register_inbox_sink(None)
+
+
 @pytest.mark.asyncio
-async def test_orchestrator_send_blocked_by_channel_policy():
+async def test_orchestrator_send_blocked_by_channel_policy(_no_store):
     from src.integrations import account_orchestrator as ao
     from src.integrations import protocol_bridge as pb
     orch = ao.AccountOrchestrator(config={})
@@ -210,7 +222,7 @@ async def test_orchestrator_send_blocked_by_channel_policy():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_send_media_blocked_by_channel_policy(tmp_path):
+async def test_orchestrator_send_media_blocked_by_channel_policy(tmp_path, _no_store):
     from src.integrations import account_orchestrator as ao
     from src.integrations import protocol_bridge as pb
     orch = ao.AccountOrchestrator(config={})

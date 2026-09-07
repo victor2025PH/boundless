@@ -650,6 +650,13 @@ class AccountOrchestrator:
                 logger.warning("[orchestrator] 渠道策略拦截媒体 %s:%s → peer=%s (%s)",
                                platform, account_id, chat_key, _cp_reason)
                 return {"delivered": False, "blocked": _cp_reason}
+            from src.inbox.window_guard import send_block_reason as _wg_block
+            _wg_reason = _wg_block(platform, account_id, chat_key, origin=str(origin or "auto"),
+                                   config=self._config)
+            if _wg_reason:
+                logger.warning("[orchestrator] 回复窗/配额拦截媒体 %s:%s → peer=%s (%s, origin=%s)",
+                               platform, account_id, chat_key, _wg_reason, origin)
+                return {"delivered": False, "blocked": _wg_reason}
         except Exception:
             logger.debug("[orchestrator] 渠道媒体策略判定异常（放行）", exc_info=True)
         # #143（0902，接 #64/#106/#133）：媒体 caption 与文本同过出站语种收口——
@@ -844,12 +851,28 @@ class AccountOrchestrator:
         # 自动同守，因为拒收的是平台不是我们（抖音 1000 字 + 禁 HTTP 链接会直接报
         # 28001038）。未登记平台零成本放行（channel_policy 默认无限制）。
         try:
-            from src.inbox.channel_policy import text_block_reason as _cp_text_block
-            _cp_reason = _cp_text_block(platform, text, config=self._config)
+            from src.inbox.channel_policy import (
+                LINKS_FIRST_MESSAGE_DENY as _CP_FIRST_DENY, policy_for as _cp_policy_for,
+                text_block_reason as _cp_text_block)
+            _first_msg = False
+            if _cp_policy_for(platform, config=self._config).links == _CP_FIRST_DENY:
+                from src.inbox.window_guard import is_first_message as _wg_first
+                _first_msg = _wg_first(platform, account_id, chat_key)
+            _cp_reason = _cp_text_block(platform, text, config=self._config,
+                                        first_message=_first_msg)
             if _cp_reason:
                 logger.warning("[orchestrator] 渠道策略拦截 %s:%s → peer=%s (%s, origin=%s)",
                                platform, account_id, chat_key, _cp_reason, origin)
                 return {"delivered": False, "blocked": _cp_reason}
+            # 回复窗 / 每轮配额（抖音 24h·6 条、TikTok 48h·10 条…）：从收件箱事实现算，
+            # 人工可用满、自动链给坐席留预留条数；微信客服由 kf_window_guard 记账，这里让路。
+            from src.inbox.window_guard import send_block_reason as _wg_block
+            _wg_reason = _wg_block(platform, account_id, chat_key, origin=str(origin or "auto"),
+                                   config=self._config)
+            if _wg_reason:
+                logger.warning("[orchestrator] 回复窗/配额拦截 %s:%s → peer=%s (%s, origin=%s)",
+                               platform, account_id, chat_key, _wg_reason, origin)
+                return {"delivered": False, "blocked": _wg_reason}
         except Exception:
             logger.debug("[orchestrator] 渠道策略判定异常（放行）", exc_info=True)
         # #97/#105/#106（实施91）：出站收口点守卫三连——L2 autosend / 主动触达 /

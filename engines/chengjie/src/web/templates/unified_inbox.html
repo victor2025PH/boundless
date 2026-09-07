@@ -2226,9 +2226,24 @@ function fmtWait(sec){
   return window.Tf('inbox.dur.hour',{n:Math.floor(sec/3600)});
 }
 function avatarInitial(name){ return (name||'?').trim().charAt(0).toUpperCase(); }
-function platColor(p){ return PC[p]||'#6b7280'; }
+// 实施96 P0（2026-09-08）：PC/PN 手写表没有的平台（抖音 / TikTok 等新渠道）回落到平台注册表
+// 产物 /static/platform_registry.json（src/integrations/platform_registry.py 导出，单一事实源）。
+// 异步加载，到达前仍走旧回落（灰底 + 裸 id），到达后列表/头部/标签重绘即换成品牌色与正名。
+var _PREG = {};
+(function(){
+  try {
+    fetch('/static/platform_registry.json', {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if (!j || !Array.isArray(j.platforms)) return;
+        j.platforms.forEach(function(s){ if (s && s.id) _PREG[s.id] = {color: s.color, name: s.name}; });
+      })
+      .catch(function(){});
+  } catch (e) {}
+})();
+function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)||'#6b7280'; }
 function platIcon(p,size){ return (window.platformIconSVG)?window.platformIconSVG(p,{size:size||18}):(PI[p]||'💬'); }
-function platName(p){ return PN[p]||p; }
+function platName(p){ return PN[p]||(_PREG[p]&&_PREG[p].name)||p; }
 /* P2: 每联系人确定性渐变头像色（同一联系人恒定同色，扫列表更易区分；平台身份仍由右下角标承载） */
 const _AV_GRAD=[['#60a5fa','#2563eb'],['#38bdf8','#0284c7'],['#34d399','#059669'],['#a78bfa','#7c3aed'],['#f472b6','#db2777'],['#fbbf24','#d97706'],['#22d3ee','#0891b2'],['#818cf8','#4f46e5'],['#fb7185','#e11d48'],['#2dd4bf','#0d9488'],['#c084fc','#9333ea'],['#4ade80','#16a34a']];
 function _avatarGrad(seed){
