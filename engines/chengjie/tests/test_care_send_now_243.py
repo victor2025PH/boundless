@@ -625,12 +625,162 @@ def test_route_plan_items_carry_eta_and_template_shows_it():
     assert "_csEtaHtml(it)" in tpl and "cs8_eta_quiet" in tpl and "cs8_eta_jitter" in tpl
 
 
+# ── D：deferred 队列随后端启动常备 + enabled 只做入队热闸 + 出队/每拍日志 ──────
+class _Log:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *a, **k):
+        self.lines.append(msg % a if a else msg)
+
+    warning = debug = info
+
+
+class _QAssistant:
+    """ensure_deferred_outbox / _enqueue_deferred_outbox 需要的最小 assistant 面。"""
+
+    def __init__(self, tmp_path, enabled: bool):
+        class _Cfg:
+            pass
+        self.config = _Cfg()
+        self.config.config = {"companion": {"multiplatform_deferred": {
+            "enabled": enabled, "interval_sec": 120, "quiet_start_hour": 0, "quiet_end_hour": 0}}}
+        self.config.config_path = str(tmp_path / "config.yaml")
+        self._deferred_outbox_dispatcher = None
+        self._web_app = None
+        self.logger = _Log()
+        self.inbox_store = None
+        self.telegram_client = None
+
+    async def _maybe_translate_outbound(self, platform, account_id, chat_key, text):
+        return text
+
+    # main.py 的两个方法原样搬来（绑定到本 stub），钉住它们对 ensure/accepting 的用法
+    def _ensure_deferred_outbox(self):
+        from src.bootstrap.background_tasks import ensure_deferred_outbox
+        return ensure_deferred_outbox(self)
+
+    def _enqueue_deferred_outbox(self, channel, account_id, chat_name, reply,
+                                 defer_until, reason, staleness_sec, extra) -> int:
+        from src.bootstrap.background_tasks import deferred_outbox_accepting
+        if not deferred_outbox_accepting(self):
+            return 0
+        dispatcher = self._ensure_deferred_outbox()
+        if dispatcher is None:
+            return 0
+        return dispatcher._store.enqueue(
+            platform=str(channel), account_id=str(account_id or "default"),
+            chat_key=str(chat_name), reply_text=str(reply), defer_until=float(defer_until),
+            reason=str(reason or ""), staleness_sec=float(staleness_sec), extra=extra or {})
+
+
+async def test_deferred_queue_is_built_and_started_even_when_flag_off(tmp_path):
+    """复刻 13:14 启动态：enabled=False → 队列仍建、drain loop 仍起；入队被热闸挡（返 0）。"""
+    a = _QAssistant(tmp_path, enabled=False)
+    disp = a._ensure_deferred_outbox()
+    try:
+        assert disp is not None and disp.is_running() is True         # 懒建路径也 start
+        assert any("drain_loop=running" in ln and "accepting=False" in ln for ln in a.logger.lines)
+        assert a._enqueue_deferred_outbox("telegram", "7092595256", "6088992099", TEXT,
+                                          NOW, "care:verbatim", 86400, {"care": True}) == 0
+        assert disp._store.count() == 0
+        # 15:27 页面开闸（运行时改内存配置）→ 下一条直接入队，且 loop 早就在跑
+        a.config.config["companion"]["multiplatform_deferred"]["enabled"] = True
+        rid = a._enqueue_deferred_outbox("telegram", "7092595256", "6088992099", TEXT,
+                                         NOW, "care:verbatim", 86400, {"care": True, "care_id": 1})
+        assert rid == 1 and disp.is_running() is True
+        assert a._ensure_deferred_outbox() is disp                    # 幂等
+    finally:
+        await disp.stop()
+
+
+async def test_deferred_queue_drains_care_row_after_runtime_enable(tmp_path):
+    """16:34:52 入队 → 到点必有人 drain（此前零协程）；投递结果 [care-deferred] 落日志。"""
+    a = _QAssistant(tmp_path, enabled=True)
+    sent = []
+    disp = a._ensure_deferred_outbox()
+    try:
+        async def _sender(account_id, chat_key, text):
+            sent.append(text)
+            return True
+        disp.register_sender("telegram", _sender)
+        rid = a._enqueue_deferred_outbox("telegram", "7092595256", "6088992099", TEXT,
+                                         NOW, "care:verbatim", 86400, {"care": True, "care_id": 1})
+        assert rid == 1
+        assert await disp.run_once(now=NOW + 1) == 1 and sent == [TEXT]
+        assert disp._store.get(rid)["status"] == "sent"
+    finally:
+        await disp.stop()
+
+
+def test_ensure_started_without_running_loop_is_safe():
+    d = DeferredDispatcher(store=DeferredOutboxStore(":memory:"),
+                           kill_switch_check=lambda p, a: (False, "", ""))
+    assert d.ensure_started() is False and d.is_running() is False
+
+
+async def test_care_loop_logs_every_tick_and_enabled_flip(caplog):
+    """G7KEUT：「2.5h 零 tick 日志」→ 每拍一行；enabled 翻转一行；不当场发要写 defer_why。"""
+    s, rid = _verbatim_store(due_offset=-60)
+    q = _Queue("ok")
+    live = {"enabled": False, "dry_run": False}
+    d = _disp(s, q, live=live)
+    with caplog.at_level(logging.INFO, logger="src.contacts.care_dispatcher"):
+        assert await d.run_once(now=NOW) == 0                         # 13:14 关闸空转
+        live["enabled"] = True                                        # 15:27 开闸
+        assert await d.run_once(now=NOW + 600) == 1                   # 下一拍派出
+        assert await d.run_once(now=NOW + 1200) == 0                  # 无事可派也写一行
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("首拍 enabled=False" in m for m in msgs)
+    assert any("enabled 实时值变化 False → True" in m for m in msgs)
+    ticks = [m for m in msgs if m.startswith("[care_dispatcher] tick now=")]
+    assert len(ticks) >= 2
+    assert any("due=1 dispatched=1" in m and "'enqueued': 1" in m for m in ticks)
+    assert any("due=0 dispatched=0" in m for m in ticks)
+    assert any("decision=enqueued" in m and "defer_why=none" in m for m in msgs)  # 原文行零错峰
+
+
+def test_delivery_light_breaks_when_queue_flag_on_but_loop_dead():
+    from src.contacts.care_advisor import build_lights
+    base = dict(enabled=True, dry_run=False, capture_wired=True, capture_config_on=True,
+                dispatch_running=True, multiplatform_deferred=True)
+    assert build_lights(**base)["delivery"] == "ready"                       # 旧后端不知道
+    assert build_lights(**base, delivery_running=True)["delivery"] == "ready"
+    assert build_lights(**base, delivery_running=False)["delivery"] == "broken"   # 09-07 事故态
+    assert build_lights(**dict(base, multiplatform_deferred=False),
+                        delivery_running=False)["delivery"] == "off"
+
+
+def test_routes_expose_queue_running():
+    c, store, q = _client("ok")
+    h = c.get("/api/care/health").json()
+    assert h["delivery"]["queue_running"] is None                     # 测试 app 未挂 dispatcher
+    c.app.state.deferred_outbox_dispatcher = q.disp
+    assert c.get("/api/care/health").json()["delivery"]["queue_running"] is False
+    from src.web.routes.deferred_outbox_routes import register_deferred_outbox_routes
+
+    def _auth(request: Request):
+        return True
+    register_deferred_outbox_routes(c.app, api_auth=_auth)
+    st = c.get("/api/deferred-outbox/status").json()
+    assert st["enabled"] is True and st["running"] is False and st["accepting"] is False
+    c.app.state.config_manager.config["companion"]["multiplatform_deferred"] = {"enabled": True}
+    assert c.get("/api/deferred-outbox/status").json()["accepting"] is True
+
+
 # ── 静态钉 ──────────────────────────────────────────────────────────────────
 def test_background_tasks_wires_deliver_now_and_loop():
     src = (_REPO / "src" / "bootstrap" / "background_tasks.py").read_text(encoding="utf-8")
     assert "deliver_now=_care_deliver_now" in src
     assert 'engine_state["loop"] = asyncio.get_running_loop()' in src
     assert "messenger_rpa_queue" in src
+    # D：ensure 不再按开关早退（旧 `if not cfg.get("enabled", False): return None` 必须消失）
+    seg = src[src.index("def ensure_deferred_outbox"):src.index("async def warmup_embeddings")]
+    assert 'if not cfg.get("enabled", False):' not in seg
+    assert "ensure_started()" in seg
+    main_src = (_REPO / "main.py").read_text(encoding="utf-8")
+    assert "deferred_outbox_accepting(self)" in main_src
+    assert "多平台 deferred 队列未启用" not in main_src        # 启动期不再因关闸跳过 start
 
 
 def test_template_send_now_button_is_debounced_and_reports():

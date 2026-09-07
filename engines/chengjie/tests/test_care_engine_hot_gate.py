@@ -157,7 +157,9 @@ def test_health_shape_when_disabled():
     assert d["ok"] is True and d["enabled"] is False and d["dry_run"] is False
     assert d["capture"] == {"config_on": False, "wired": False}
     assert d["dispatch"]["running"] is False
-    assert d["delivery"] == {"multiplatform_deferred": False, "messenger_rpa": False}
+    # N-1 D（#243）：多带 queue_running（drain loop 活没活；后端不知道 → None）
+    assert d["delivery"] == {"multiplatform_deferred": False, "messenger_rpa": False,
+                             "queue_running": None}
     assert d["activity"]["summary"]["pending"] == 0
 
 

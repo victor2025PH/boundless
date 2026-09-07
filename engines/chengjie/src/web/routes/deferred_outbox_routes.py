@@ -52,6 +52,7 @@ def register_deferred_outbox_routes(app, *, api_auth) -> None:
 
         senders = []
         paused = []
+        running = None
         dispatcher = getattr(request.app.state, "deferred_outbox_dispatcher", None)
         if dispatcher is not None:
             try:
@@ -62,9 +63,24 @@ def register_deferred_outbox_routes(app, *, api_auth) -> None:
                 paused = dispatcher.paused_platforms()
             except Exception:
                 paused = []
+            # N-1 D（#243）：drain loop 活没活单独一个字段——队列「就绪」≠ 有人出货
+            try:
+                running = bool(dispatcher.is_running()) if hasattr(dispatcher, "is_running") else None
+            except Exception:
+                running = None
+        accepting = None
+        try:
+            cm = getattr(request.app.state, "config_manager", None)
+            conf = getattr(cm, "config", None) or {}
+            accepting = bool(((conf.get("companion") or {}).get("multiplatform_deferred") or {})
+                             .get("enabled", False))
+        except Exception:
+            accepting = None
         return {
             "ok": True,
             "enabled": True,
+            "running": running,
+            "accepting": accepting,
             "stats": stats,
             "senders": senders,
             "paused": paused,

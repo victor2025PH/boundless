@@ -459,6 +459,8 @@ class CareDispatcher:
         # 的有效值，翻转时打一行 INFO——「启动行 dry_run=True 而 14:00 真发了」这类
         # 状态漂移此前在日志里零痕迹。
         self._last_effective_dry: Optional[bool] = None
+        # N-1 D #243：enabled 同款——15:27:31 运行时开闸后循环看到了没有，此前零日志。
+        self._last_effective_enabled: Optional[bool] = None
         # 实施84 P0-4：dry 语义改「不消费待办」后，同一条待办每 tick 都会再到期
         # ——重拟冷却防止每 5 分钟烧一次 LLM（可经实时配置 dry_resample_hours 调）。
         self._dry_resample_hours = max(0.0, float(dry_resample_hours))
@@ -548,6 +550,10 @@ class CareDispatcher:
         配置热闸：注入 cfg_provider 时每 tick 先读实时配置——enabled=false 直接空转
         （**不碰 store、零副作用**，「默认关」语义与旧的不启动等价）；dry_run/max_per_tick
         同步跟随实时值，overlay 热重载后下一 tick 即生效。
+
+        N-1 D（#243）：**每拍一行** ``[care_dispatcher] tick`` INFO（enabled / dry / 到期 N /
+        派出 K / 各原因计数），关闸空转拍只在 enabled 翻转时打——此前无事可派的拍一个字
+        都不写，「循环活没活、开闸后看到没看到」从日志答不出来（G7KEUT）。
         """
         n = float(now if now is not None else time.time())
         self.last_tick_ts = n
@@ -556,7 +562,16 @@ class CareDispatcher:
         # 管的是「约定回访」这类 care 自己的业务，不是冲刺推进器的开关。
         goal_only = False
         if cfg is not None:
-            if not cfg.get("enabled", False):
+            _enabled = bool(cfg.get("enabled", False))
+            if self._last_effective_enabled is not None and self._last_effective_enabled != _enabled:
+                logger.info("[care_dispatcher] enabled 实时值变化 %s → %s（配置热重载；"
+                            "下一拍起%s派发 care 行）", self._last_effective_enabled, _enabled,
+                            "开始" if _enabled else "停止")
+            elif self._last_effective_enabled is None:
+                logger.info("[care_dispatcher] 首拍 enabled=%s dry_run=%s interval=%ss",
+                            _enabled, bool(cfg.get("dry_run", False)), self._interval)
+            self._last_effective_enabled = _enabled
+            if not _enabled:
                 self.last_tick_gated = True
                 self.last_tick_scheduled = 0
                 if self._goal_row_policy is None:
@@ -588,25 +603,45 @@ class CareDispatcher:
         except Exception:
             logger.debug("care_dispatcher expire_overdue 异常", exc_info=True)
         _cap = int(self._max_per_tick or 0)
-        due = self._store.list_due(
+        due_all = self._store.list_due(
             now=n, limit=(_cap * 4) if _cap > 0 else self._UNLIMITED_TICK_FETCH)
+        due = due_all
         if goal_only:
             # care 关闸：只放冲刺 live 行，其余到期行原样留 pending（care 开闸后
             # 仍按期发出、逾期由 expire_overdue 正常收口——与 dry 语义同款「不消费」）
-            due = [it for it in (due or []) if self._goal_live(it)]
+            due = [it for it in (due_all or []) if self._goal_live(it)]
         if not due:
             self.last_tick_scheduled = 0
+            if not goal_only:
+                logger.info("[care_dispatcher] tick now=%.0f enabled=True dry=%s due=0 dispatched=0",
+                            n, bool(self._dry_run))
+            elif due_all:
+                logger.info("[care_dispatcher] tick now=%.0f enabled=False due=%d gated=%d"
+                            "（care 关闸：到期行留 pending 不派）", n, len(due_all), len(due_all))
             return 0
         scheduled = 0
+        outcomes: Dict[str, int] = {}
+        capped = 0
         for item in due:
             if _cap > 0 and scheduled >= _cap:
-                break
+                capped += 1
+                continue
+            res: Dict[str, Any] = {}
             try:
-                if await self._dispatch_one(item, n):
+                if await self._dispatch_one(item, n, result=res):
                     scheduled += 1
             except Exception:
                 logger.debug("care dispatch_one 异常 id=%s", item.get("id"), exc_info=True)
+                res.setdefault("decision", "error")
+            key = str(res.get("decision") or ("sent" if res.get("row_id") else "pending"))
+            if res.get("reason") and key in ("skipped", "failed"):
+                key = f"{key}:{res['reason']}"
+            outcomes[key] = outcomes.get(key, 0) + 1
         self.last_tick_scheduled = scheduled
+        logger.info(
+            "[care_dispatcher] tick now=%.0f enabled=%s dry=%s due=%d dispatched=%d "
+            "outcomes=%s%s", n, not goal_only, bool(self._dry_run), len(due), scheduled,
+            outcomes, (" capped=%d（max_per_tick=%d，下一拍继续）" % (capped, _cap)) if capped else "")
         return scheduled
 
     def _goal_policy(self, item: dict) -> dict:
@@ -812,6 +847,7 @@ class CareDispatcher:
             _last_dry = float(item.get("dry_sampled_at") or 0)
             if (_last_dry > 0
                     and (now - _last_dry) < self._dry_resample_hours * 3600.0):
+                _r(decision="dry_cooldown")
                 return False
 
         # K2b：变现配额门控——免费用户主动关怀超额 → 跳过（gate 关时回调返 True 不拦）。
@@ -992,11 +1028,16 @@ class CareDispatcher:
                 _jit = (float(gp_jit[0]), float(gp_jit[1]))
             except (TypeError, ValueError):
                 _jit = self._jitter
+        # N-1 D：「不当场发而入 deferred」必须说清为什么晚——none（到点即发）/ jitter（错峰）/
+        # quiet_hours（安静时段顺延）；进 decision=enqueued 那行日志的 defer_why=。
+        defer_why = "none"
         if manual:
             # N-1 A（D-N4 ①③）：运营亲手点「立即发」——零错峰、不做安静时段顺延，
             # 现在就是现在。安全型闸（急停 / 无 sender）由投递层守。
             defer_until = now
         else:
+            if not is_verbatim:
+                defer_why = "jitter"
             # N-1 C（D-N4 ③）：错峰抖动只给**自动生成**的关怀（防一批到期同秒齐发像
             # 机器）；运营指定「到点发这句话」的原文行，到点就是到点，零偏移。
             # 安静时段顺延对原文行保留（J-8 #182 口径），卡片经 projected_send_window 明示。
@@ -1004,9 +1045,12 @@ class CareDispatcher:
             # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
             # 用户拍板的全力档自担深夜打扰）；普通行为不变
             if not goal_policy.get("ignore_quiet"):
+                _before_quiet = defer_until
                 defer_until = shift_out_of_quiet_hours(
                     defer_until, start_hour=self._quiet_start,
                     end_hour=self._quiet_end, clock=_clock)
+                if defer_until > _before_quiet:
+                    defer_why = "quiet_hours"
         _r(text=reply, defer_until=defer_until)
 
         if dry:
@@ -1065,9 +1109,13 @@ class CareDispatcher:
                 self._store.mark_send_failed(sid, "queue_unavailable", now=now)
             return False  # enqueue 失败（如 gate 拦）→ 留 pending
         _r(row_id=int(row_id))
+        if not manual:
+            _r(decision="enqueued")
         logger.info(
-            "[care-gen] id=%s contact=%s decision=enqueued deferred=%s send_in_min=%d manual=%s",
-            sid, contact_key, int(row_id), int(max(0.0, defer_until - now) / 60), manual)
+            "[care-gen] id=%s contact=%s decision=enqueued deferred=%s send_in_min=%d "
+            "defer_why=%s manual=%s（队列 drain 到点投递，不当场发）",
+            sid, contact_key, int(row_id), int(max(0.0, defer_until - now) / 60),
+            defer_why, manual)
 
         if manual:
             # N-1 A：入队后当场投这一行。钩子缺席（messenger 浏览器队列 / 旧接线）

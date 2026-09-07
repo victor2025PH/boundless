@@ -295,6 +295,7 @@ ZH = {
     "cs8_eta_jitter": "错峰",
     "cs8_eta_quiet": "安静时段顺延",
     "cs8_eta_t": "到点后会再按错峰 / 安静时段算实际出手时刻；「到点发这句话」的原文行不错峰",
+    "cs8_delivery_broken": "队列开着但没在出货（drain loop 未运行，重启后端可恢复）",
 }
 
 EN = {
@@ -565,4 +566,5 @@ EN = {
     "cs8_eta_jitter": "staggered",
     "cs8_eta_quiet": "deferred past quiet hours",
     "cs8_eta_t": "After it is due, the actual send time still follows staggering / quiet hours; verbatim items are never staggered",
+    "cs8_delivery_broken": "Queue is on but nothing is draining it (drain loop not running; restart the backend)",
 }

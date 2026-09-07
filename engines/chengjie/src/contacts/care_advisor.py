@@ -84,11 +84,16 @@ def build_lights(
     dispatch_skip: str = "",
     multiplatform_deferred: bool = False,
     messenger_rpa: bool = False,
+    delivery_running: Optional[bool] = None,
 ) -> Dict[str, str]:
     """四灯状态码（engine/capture/dispatch/delivery），前端 i18n 渲染文案。
 
     与旧前端 csHealth 的判定逐条同语义——单一事实源移到后端，方案接口和
     引擎室灯条读同一份，不再各算一套。
+
+    ``delivery_running``（N-1 D #243）：多平台 deferred 队列的 drain loop 是否真在跑。
+    开关开着而 loop 没起（skuio 09-07 16:34–16:53 的状态）→ ``delivery=broken``——
+    此前这灯只看配置开关，队列里没人出货它照样亮绿。None＝后端不知道（旧实例）→ 旧口径。
     """
     capture = ("ok" if capture_config_on else "standby") if capture_wired else "broken"
     if dispatch_running:
@@ -97,6 +102,8 @@ def build_lights(
         dispatch = "ai_missing" if dispatch_skip == "ai_missing" else "broken"
     if enabled and dry_run:
         delivery = "dry"
+    elif multiplatform_deferred and delivery_running is False:
+        delivery = "broken"
     elif multiplatform_deferred or messenger_rpa:
         delivery = "ready"
     else:

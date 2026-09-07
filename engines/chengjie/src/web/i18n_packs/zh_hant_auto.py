@@ -3529,6 +3529,8 @@ ZH_HANT = {
     'cs7_status_held': '待你確認後才發',
     # ── cs7_status_queue ──
     'cs7_status_queue': '排隊中：下輪巡檢（≤{n} 分鐘）處理',
+    # ── cs8_delivery_broken ──
+    'cs8_delivery_broken': '佇列開著但沒在出貨（drain loop 未執行，重啟後端可恢復）',
     # ── cs8_dry_sampled ──
     'cs8_dry_sampled': '模擬執行中：已按這條擬稿留樣，沒有真發給客戶（要真發請先「開啟真發」）',
     # ── cs8_eta ──

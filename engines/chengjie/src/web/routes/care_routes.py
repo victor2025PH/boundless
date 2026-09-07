@@ -83,6 +83,16 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         engine = getattr(request.app.state, "care_engine", None) or {}
         return engine.get("dispatcher") if isinstance(engine, dict) else None
 
+    def _queue_running(request: Request):
+        """多平台 deferred 队列 drain loop 是否在跑（N-1 D #243）：True/False；后端不知道 → None。"""
+        qd = getattr(request.app.state, "deferred_outbox_dispatcher", None)
+        if qd is None or not hasattr(qd, "is_running"):
+            return None
+        try:
+            return bool(qd.is_running())
+        except Exception:
+            return None
+
     def _effective_dry_run(request: Request) -> bool:
         """dry_run 唯一真值（M-1 A #214）：派发器在场读 ``effective_dry_run()``（与派发
         判定同一个方法），否则退回实时配置。面板 / health / plan / 立即发 全走这里。"""
@@ -414,6 +424,8 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "delivery": {
                 "multiplatform_deferred": bool(mdef.get("enabled", False)),
                 "messenger_rpa": bool(engine.get("messenger_rpa", False)),
+                # N-1 D：队列 drain loop 真在跑吗（开关开着而 loop 没起＝09-07 事故态）
+                "queue_running": _queue_running(request),
             },
             "activity": {
                 "captured_24h": store.count_created_since(now - 86400.0),
@@ -621,6 +633,7 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             dispatch_skip=str(engine.get("dispatcher_skip") or ""),
             multiplatform_deferred=bool(mdef.get("enabled", False)),
             messenger_rpa=bool(engine.get("messenger_rpa", False)),
+            delivery_running=_queue_running(request),
         )
         effect = _effect_cached(request, store)
         captured_24h = store.count_created_since(now - 86400.0)

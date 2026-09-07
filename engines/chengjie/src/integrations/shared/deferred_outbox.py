@@ -497,6 +497,8 @@ class DeferredDispatcher:
             return
         self._stop_evt = asyncio.Event()
         self._task = asyncio.create_task(self._loop(), name="deferred_outbox")
+        logger.info("[deferred_outbox] drain loop 已启动 interval=%ss senders=%s",
+                    self._interval, self.registered_platforms())
 
     async def stop(self) -> None:
         if self._stop_evt:

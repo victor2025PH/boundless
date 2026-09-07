@@ -647,7 +647,12 @@ class AIChatAssistant:
 
         作为 care/reactivation send_callback 的非 messenger 分支：队列关或不可用 → 返回 0
         （上层据此 mark_skipped/failed，与原「return 0」语义一致，零破坏）。
+        N-1 D（#243）：「关」＝``companion.multiplatform_deferred.enabled`` 实时值为 False
+        （入队热闸）；队列本体与 drain loop 随后端启动常备，不再因启动期关闸而缺席。
         """
+        from src.bootstrap.background_tasks import deferred_outbox_accepting
+        if not deferred_outbox_accepting(self):
+            return 0
         dispatcher = self._ensure_deferred_outbox()
         if dispatcher is None:
             return 0
@@ -662,16 +667,24 @@ class AIChatAssistant:
             return 0
 
     async def _maybe_start_deferred_outbox(self) -> None:
-        """启动多平台 deferred 队列 drain loop（默认关）。"""
+        """启动多平台 deferred 队列 drain loop——**常备**（N-1 D #243）。
+
+        旧行为：``multiplatform_deferred.enabled=false`` 时整段 return，运行时开闸后
+        再没人 start（skuio 09-07 16:34:52 入队、16:47:52 预计出队零动作的根因）。
+        现在 store + dispatcher + drain loop 无条件起，``enabled`` 只做入队热闸
+        （见 ``_enqueue_deferred_outbox``）——关闸时队列空转零副作用。
+        """
         try:
+            from src.bootstrap.background_tasks import deferred_outbox_accepting
             dispatcher = self._ensure_deferred_outbox()
             if dispatcher is None:
-                self.logger.info(
-                    "多平台 deferred 队列未启用"
-                    "（companion.multiplatform_deferred.enabled=false）")
+                self.logger.warning("多平台 deferred 队列初始化失败，drain loop 未启动")
                 return
             await dispatcher.start()
-            self.logger.info("✅ 多平台 deferred 队列 drain loop 已启动")
+            self.logger.info(
+                "✅ 多平台 deferred 队列 drain loop 已启动（常备；accepting=%s ← "
+                "companion.multiplatform_deferred.enabled 实时读，关闸只是不收新消息）",
+                deferred_outbox_accepting(self))
         except Exception:
             self.logger.warning("多平台 deferred 队列启动跳过", exc_info=True)
 

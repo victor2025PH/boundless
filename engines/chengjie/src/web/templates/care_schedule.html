@@ -870,6 +870,7 @@ function _csRenderLights(d){
   if(L.dispatch==='ok'&&eng.last_tick_ts){dpTxt+=' · '+window.T('cs2_last_tick')+' '+_csRel(eng.last_tick_ts);}
   out.push(_csLight(dp[0], window.T('cs2_light_dispatch'), dpTxt));
   var dvMap={dry:['a',window.T('cs2_delivery_dry')],ready:['g',window.T('cs2_delivery_ready')],
+    broken:['r',window.T('cs8_delivery_broken')],   /* N-1 D：开关开着但队列 drain loop 没在跑 */
     off:[eng.enabled&&!eng.dry_run?'r':'',window.T('cs2_delivery_off')]};
   var dv=dvMap[L.delivery]||['',esc(L.delivery||'—')];
   out.push(_csLight(dv[0], window.T('cs2_light_delivery'), dv[1]));

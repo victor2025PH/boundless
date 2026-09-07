@@ -902,21 +902,42 @@ async def maybe_start_reactivation_loop(assistant) -> None:
         assistant.logger.debug("reactivation_loop 启动异常", exc_info=True)
 
 
-def ensure_deferred_outbox(assistant):
-    """惰性建/起多平台 deferred 队列（非 messenger 主动消息走此队列）。
+def deferred_outbox_accepting(assistant) -> bool:
+    """多平台 deferred 队列**是否接收入队**（``companion.multiplatform_deferred.enabled``
+    实时值，N-1 D #243）。开关只管「收不收新消息」，不再管队列建不建 / drain loop 起不起。"""
+    try:
+        comp = (assistant.config.config.get("companion") or {})
+        return bool((comp.get("multiplatform_deferred") or {}).get("enabled", False))
+    except Exception:
+        return False
 
-    返回 dispatcher（已 start），或 None（功能关/不可用）。幂等：重复调用复用同一实例。
+
+def ensure_deferred_outbox(assistant):
+    """建多平台 deferred 队列（非 messenger 主动消息走此队列）并保证 drain loop 在跑。
+
+    N-1 D（#243，2026-09-08）改造：**不再以 ``multiplatform_deferred.enabled`` 决定建不建**
+    ——旧行为「关闸时返回 None、开闸后首次入队才懒建」有两个洞：① 启动期关闸 →
+    ``_maybe_start_deferred_outbox`` 直接 return，运行时开闸后没人再 start；② 懒建路径
+    只建不 start。skuio 09-07 实录：13:14 启动 enabled=False，15:27 页面开真发，16:34:52
+    首条关怀入队同秒队列「已就绪」，预计 16:47:52 出队——**没有任何协程在 drain**，直到
+    进程重启。现在：store + dispatcher 随后端启动即建（幂等），``enabled`` 退化为
+    ``_enqueue_deferred_outbox`` 的**入队热闸**（关＝不收新消息、已入队的照常 drain）；
+    懒建路径也 ``ensure_started()``。返回 dispatcher，或 None（初始化异常）。
     sender 用编排器 `orch.send(platform,account,chat_key,text)` 统一投递（编排器已
     路由到对应平台 worker 并回写收件箱出站镜像）；worker 未就绪 → 抛 NotReady 推后重试。
     messenger 不走此队列（保留既有 runner deferred 路径）。
     """
     if assistant._deferred_outbox_dispatcher is not None:
-        return assistant._deferred_outbox_dispatcher
+        disp = assistant._deferred_outbox_dispatcher
+        try:
+            if hasattr(disp, "ensure_started"):
+                disp.ensure_started()
+        except Exception:
+            assistant.logger.debug("deferred_outbox ensure_started 异常", exc_info=True)
+        return disp
     try:
         comp = (assistant.config.config.get("companion") or {})
         cfg = (comp.get("multiplatform_deferred") or {})
-        if not cfg.get("enabled", False):
-            return None
         from src.integrations.shared.deferred_outbox import (
             DeferredDispatcher, DeferredOutboxStore, DeferredSenderNotReady,
         )
@@ -1020,9 +1041,18 @@ def ensure_deferred_outbox(assistant):
         if assistant._web_app is not None:
             assistant._web_app.state.deferred_outbox_store = store
             assistant._web_app.state.deferred_outbox_dispatcher = dispatcher
+        # 懒建路径（首次入队时才走到这里）也必须让 drain loop 跑起来；启动期由
+        # ``_maybe_start_deferred_outbox`` await start()，这里同步 ensure 是幂等兜底。
+        started = False
+        try:
+            started = bool(dispatcher.ensure_started())
+        except Exception:
+            assistant.logger.debug("deferred_outbox ensure_started 异常", exc_info=True)
         assistant.logger.info(
-            "✅ 多平台 deferred 队列已就绪（platforms=%s interval=%ss）",
-            platforms, cfg.get("interval_sec", 120))
+            "✅ 多平台 deferred 队列已就绪（platforms=%s interval=%ss drain_loop=%s "
+            "accepting=%s ← 入队热闸 companion.multiplatform_deferred.enabled 实时读）",
+            platforms, cfg.get("interval_sec", 120),
+            "running" if started else "pending_start", bool(cfg.get("enabled", False)))
         return dispatcher
     except Exception:
         assistant.logger.warning("多平台 deferred 队列初始化失败（非 messenger 主动消息将被丢弃）",
