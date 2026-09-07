@@ -1905,6 +1905,18 @@ _ADDITIONS_2026_09_06_M2_ACCOUNT_GATE = """
 """
 _BASELINE += _ADDITIONS_2026_09_06_M2_ACCOUNT_GATE
 
+# 2026-09-07 N-3（#241 #240 域包错配与预置清理）：A 业务域单一真值读写（开发者页下拉，
+# `01837c2b`）/ B 陪伴域「+ 自定义标签」读写（`4331c851`）/ E 系统预置支付话术一键清除
+# （`d46b62a9`）。N-3 收工未登记，N-5 收口 preflight 抓出后代登记（清单即门禁台账，非业务代码）。
+_ADDITIONS_2026_09_07_N3_BUSINESS_DOMAIN = """
+/api/developer/business-domain	GET
+/api/developer/business-domain	POST
+/api/goals/custom-slots	GET
+/api/goals/custom-slots	POST
+/api/kb/entries/purge-payment-seeds	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_07_N3_BUSINESS_DOMAIN
+
 
 def _parse_baseline():
     expected = set()

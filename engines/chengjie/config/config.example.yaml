@@ -4,6 +4,14 @@
 # Active domain pack (directory name under domains/)
 domain: payment
 
+# 业务域单一真值（N-3 #241 / D-N1，2026-09-08）：companion = 陪伴运营 / sales = 业务·销售。
+# Domain hook / KB 分类 / 目标模板库 / 客户摸底槽位 / 客户画像 schema / 系统话术种子全部读它
+# （陪伴域不注册 ConversionDomainHook、不下发「转化成交」模板、摸底标签用陪伴集、不预置 GXP 支付话术）。
+# 缺省按部署形态推导（桌面客户机 → companion，服务器 / payment 等业务包 → sales）并写进 overlay；
+# 也可在后台开发者页「业务域」下拉改。注意它**不是** domain（域包名）：陪伴 system prompt / 人设
+# 仍住在 conversion 域包里，改这里不要动上面的 domain。
+# business_domain: sales
+
 # Telegram API配置 (从 https://my.telegram.org 获取)
 telegram:
   api_id: "YOUR_API_ID"           # 示例: "1234567"
@@ -2278,8 +2286,11 @@ companion:
     #   手动「补标/重新打标」端点不受本闸（运营显式动作，与回填 CLI 同语义）。
     #   打标单工位串行（不与聊天链抢 GPU）；VLM 不可达=该条 tag_status=failed，
     #   上传本身永不受阻。
+    #   1.0.77 起**默认开**（N-2 C #238 / 老板决策 D-N3，2026-09-07）：144 张零触发词 =
+    #   AI 发图只能随机；识图端点放行官网网关（hosted_vision 注入那一条），不可达时前端
+    #   引导条明说「识图服务暂不可用」而不是静默 0/N。要关：enabled: false。
     # album_ai:
-    #   enabled: false
+    #   enabled: true          # 1.0.77 默认；false = 关闭上传自动识别（手动「AI 补标」仍可用）
     #   auto_on_upload: true   # 随 enabled：上传成功即排队打标
     #   max_batch: 200         # 一次「整册补标」的条目上限
     #   # 语义召回·影子（实施90 阶段二，独立于上面的打标闸）：触发词字面 miss 时

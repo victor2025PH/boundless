@@ -61,6 +61,10 @@
 #       相册档（backend=album）已全量可用，生成档属生产机专属能力。
 
 domain: conversion
+# 业务域单一真值（N-3 #241 / D-N1，2026-09-08）：内测机是陪伴运营机——Domain hook / KB 分类 /
+# 目标模板 / 摸底槽位 / 画像 schema / 话术种子全读它；缺省时按「桌面客户机」推导也是 companion，
+# 这里显式写死，升级机「只补缺失键」一样拿到。**不是** domain（域包名）——别改上面那行。
+business_domain: companion
 
 brand:
   company_name: 无界科技
