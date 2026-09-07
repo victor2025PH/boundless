@@ -1117,6 +1117,13 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
                             lambda acc, cfg: InstagramWebWorker(acc, cfg))
     except Exception:
         logger.debug("[orchestrator] 注册 instagram web worker 失败", exc_info=True)
+    # 抖音演示 worker（实施96 P0-3；仅 platform_login.douyin.mock_enabled=true 时注册——
+    # 假传输真链路，供资质到位前跑通收件箱/拟稿/策略层/美化；不是抖音接入）
+    try:
+        from src.integrations.douyin_mock_worker import register_douyin_mock_worker
+        register_douyin_mock_worker(config)
+    except Exception:
+        logger.debug("[orchestrator] 注册抖音演示 worker 失败", exc_info=True)
     try:
         from src.integrations.line_protocol_login import (
             protocol_enabled as line_enabled, is_okline_available,
