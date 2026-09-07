@@ -1917,6 +1917,15 @@ _ADDITIONS_2026_09_07_N3_BUSINESS_DOMAIN = """
 """
 _BASELINE += _ADDITIONS_2026_09_07_N3_BUSINESS_DOMAIN
 
+# 实施97 微信 PC 副驾线 B 第三轮：桥接驱动进程存活心跳（`unified_inbox_desktop_routes.py`
+# `api_desktop_heartbeat` + `desktop_bridge_presence.py`）——**代登记**（2026-09-08 05:5x，N-5 收口：
+# 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住 1.0.77 发版重启；同 08-30 小智线三端点
+# 先例。语义归属仍是实施97 线，端点行为以其实现为准；若该线改名 / 撤掉，请一并改这行）。
+_ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT = """
+/api/desktop/heartbeat	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT
+
 
 def _parse_baseline():
     expected = set()
