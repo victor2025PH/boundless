@@ -708,6 +708,13 @@ def register_voice_routes(app, api_auth, config_manager=None):
             "voice_translated": bool(_xl.get("translated")),
             "spoken_text": (spoken_text if _xl.get("translated") else ""),
             "target_lang": (_vt if _xl.get("translated") else ""),
+            # #250（N-4 C，additive）：'auto' 解析出的**有效目标语**，不论最终译没译
+            # ——中文客户 + 中文文本走 identity 不译时 target_lang 为空，前端把基准
+            # 记成 'auto' 再与会话语言 'zh' 比对 → 生成一结束就「试听已过期」（钧机
+            # 两次都是这么灰掉发送的）。有了它，前端基准 = 服务端真值，只有目标语
+            # 真的变了才过期。解析不出（会话语言未知）为空串。
+            "target_lang_resolved": str(_vt or ""),
+            "xl_reason": str(_xl.get("reason") or ""),
             "bytes": preview_path.stat().st_size if preview_path.is_file() else 0,
             "voice_meta": {
                 "persona_id": voice_ctx.get("persona_id") or "",

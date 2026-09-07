@@ -184,4 +184,21 @@ const STATES = ["stale", "blocked", "ok", "unverified"];
     eq(`canSend 与 state 一致 ${sp}/${si}/${st}`, r.canSend, r.state === "ok" || r.state === "unverified");
   }));
 
+// ── xlBaseline（#250 N-4 C）：译声过期基准 = 服务端有效目标语，不是字面 'auto' ────
+ok("xlBaseline 挂在类上", typeof Cls.xlBaseline === "function");
+// 钧机形态：跟随翻译开（auto）、中文客户中文文本 → identity 不译；新后端回 target_lang_resolved=zh
+eq("钧机形态：identity 不译、服务端解析 zh → 基准 zh（与会话语言同值，不过期）",
+   Cls.xlBaseline({ voice_translated: false, target_lang: "", target_lang_resolved: "zh" }, "auto", "zh"), "zh");
+eq("旧后端缺 target_lang_resolved → 用客户端已知会话语言",
+   Cls.xlBaseline({ voice_translated: false, target_lang: "" }, "auto", "zh"), "zh");
+eq("旧后端 + 会话语言未知 → ''（_isStale 回落 'auto'，双侧未知视为未变）",
+   Cls.xlBaseline({ voice_translated: false }, "auto", null), "");
+eq("服务端解析不出（no_target）→ ''", Cls.xlBaseline({ target_lang_resolved: "" }, "auto", "zh"), "");
+eq("确已翻译 → 真实译向优先", Cls.xlBaseline({ voice_translated: true, target_lang: "ja", target_lang_resolved: "ja" }, "auto", "zh"), "ja");
+eq("显式目标语 + identity 不译（旧后端）→ 该语种", Cls.xlBaseline({ voice_translated: false }, "en", "zh"), "en");
+eq("显式目标语 + 新后端 → 服务端真值", Cls.xlBaseline({ voice_translated: false, target_lang_resolved: "en" }, "en", "zh"), "en");
+eq("开关关 → ''（发送不译，与任何会话语言都无关）", Cls.xlBaseline({ target_lang_resolved: "zh" }, "", "zh"), "");
+eq("大小写归一", Cls.xlBaseline({ voice_translated: false, target_lang_resolved: "ZH" }, "AUTO", "zh"), "zh");
+eq("空回包不炸", Cls.xlBaseline(null, "auto", "zh"), "zh");
+
 console.log(`cp-voice-speech-verdict.test.js: ${pass} passed`);

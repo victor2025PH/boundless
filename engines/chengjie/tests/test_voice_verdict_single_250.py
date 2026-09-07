@@ -198,6 +198,35 @@ def test_node_pure_gate_passes():
     assert "passed" in r.stdout
 
 
+# ── C：试听过期只由真实变更触发 ──────────────────────────────────────────────────
+
+def test_tts_test_returns_resolved_target_even_when_not_translated():
+    src = _ROUTES.read_text(encoding="utf-8")
+    body = _seg(src, "async def _run_tts_preview(", "@app.post(\"/api/voice/tts-test\")")
+    assert '"target_lang_resolved": str(_vt or "")' in body, "identity 不译时前端也要拿到有效目标语"
+    assert '"xl_reason": str(_xl.get("reason") or "")' in body
+    # 旧字段语义不变（translated 才带 target_lang；老前端零感知）
+    assert '"target_lang": (_vt if _xl.get("translated") else "")' in body
+
+
+def test_stale_baseline_is_effective_target_not_literal_auto():
+    js = _js()
+    gen = _seg(js, "async _genTts() {", "static selectionMismatch(")
+    assert "this._previewXlEff = CpVoice.xlBaseline(d, xlt, this._effConvLang)" in gen
+    assert 'd.voice_translated)\n        ? String(d.target_lang || "").toLowerCase() : ""' not in gen, \
+        "#121 的「未译=空串」写法必须退场（钧机过期误报的根）"
+    fn = _seg(js, "static xlBaseline(d, xlt, effConvLang) {", "static panelVerdict(o) {")
+    assert 'typeof d.target_lang_resolved === "string"' in fn
+    assert 'return String(effConvLang || "").toLowerCase();' in fn
+    # 过期判定仍只看三件事：文字 / 音色 / 有效目标语（生成完成、切会话、重绘都不在其中）
+    stale = _seg(js, "_isStale() {", "/* 结果区状态单出口")
+    assert "this._text() !== this._previewText" in stale
+    assert '(this._persona || "") !== this._previewPersona' in stale
+    assert "curEff !== baseEff" in stale
+    render = _seg(js, "_render() {", "_enrollHtml() {")
+    assert "this._previewText = null;" in render, "切会话 / 重绘 = 预览整体清空，不是标过期"
+
+
 # ── 人设页体检行：同源回填 ───────────────────────────────────────────────────────
 
 def test_persona_page_voice_check_row_renders_same_verdict_source():

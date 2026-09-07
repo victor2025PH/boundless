@@ -58,6 +58,10 @@ P0 2026-08-05 随「预览清不掉 / 生成入口迷失 / 连点双发」修复
       0831 起 .pv-note{display:flex} 架空 hidden、红条橙条恒常可见的病根就钉在这里；
       阻发结论行内自带「重新生成」
   V27（#250 N-4 C 前置）过期时发送钮整个让位、主按钮是「重新生成」；解除后回位
+  V28（#250 N-4 C）过期只由真实变更触发：中文客户 + 中文文本 identity 不译（服务端
+      voice_translated=false）→ 生成完成不过期；关跟随翻译才过期、拨回原状解除；会话
+      语言异步回填同值 / refreshXl 不过期；旧后端缺 target_lang_resolved 同样不过期；
+      双侧未知不过期，之后解析出**不同**语种（发送会真的改译）才过期
 
 用法::
 
@@ -764,6 +768,68 @@ def run(page, ck: Checker, dlg) -> None:
       sel.value = '';
       sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     }""")
+
+    # V28（#250 N-4 C，钧机 1258/1315）：中文客户 + 中文文本 → 服务端 'auto' 解析成 zh、
+    # identity 不译（voice_translated=false / target_lang=''）。旧逻辑把基准记成 'auto'
+    # 与会话语言 'zh' 一比即「过期」，生成一结束发送就灰。修后：只有目标语真变才过期。
+    ev("() => { q('.preview [data-act=\"clear-preview\"]').click(); }")
+    ev("""() => {
+      window.__origVoiceTts = window.__stubClient.voiceTts;
+      window.__xlResolved = 'zh';          // 服务端 target_lang_resolved；undefined=旧后端缺键
+      window.__stubClient.voiceTts = async (args) => {
+        const d = await window.__origVoiceTts(args);
+        d.voice_translated = false; d.spoken_text = ''; d.target_lang = '';
+        if (window.__xlResolved !== undefined) d.target_lang_resolved = window.__xlResolved;
+        d.voice_meta.speech = 'voiced'; d.voice_meta.speech_basis = 'transcript+energy';
+        return d;
+      };
+      window.__el._effConvLang = 'zh';     // effective-config 已回 conv_lang=zh
+      // 钧机默认档：「跟随翻译发声」开（V21 的一键出路曾把它关掉，这里拨回开）
+      const cb = q('[data-role="xlfollow"]');
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    ev("() => setText('尽量提前确定一下 乔金16号需要离境一趟')")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    args = ev("window.__calls.tts[window.__calls.tts.length-1]")
+    ck.check("V28 钧机形态：跟随翻译开（请求带 auto）、同语种不译 → 生成完成不过期、结论 ok、发送可点",
+             args.get("target_lang") == "auto" and (not s["boxStale"]) and s["verdictState"] == "ok"
+             and s["sendDisabled"] is False and s["sendHidden"] is False,
+             f"xl={args.get('target_lang')} stale={s['boxStale']} verdict={s['verdictState']} sendDisabled={s['sendDisabled']}")
+    ev("""() => {
+      const cb = q('[data-role="xlfollow"]');
+      cb.checked = false;
+      cb.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    ck.check("V28 真的关掉跟随翻译 → 过期（真实变更仍触发）", s["boxStale"] and s["verdictState"] == "stale")
+    ev("""() => {
+      const cb = q('[data-role="xlfollow"]');
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    }""")
+    s = ev("snap()")
+    ck.check("V28 开关拨回原状 → 过期解除（设置没有净变化）", not s["boxStale"])
+    ev("() => { window.__el._effConvLang = 'zh'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V28 会话语言异步回填同值 / 面板刷新 → 不过期", not s["boxStale"])
+    # 旧后端（无 target_lang_resolved）：客户端已知会话语言即基准，同样不过期
+    ev("() => { window.__xlResolved = undefined; q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    ck.check("V28 旧后端缺 target_lang_resolved：以客户端会话语言为基准，不过期",
+             (not s["boxStale"]) and s["sendDisabled"] is False)
+    # 会话语言双侧未知 → 不过期；之后解析出另一种语言（发送会真的改译）→ 过期
+    ev("() => { window.__xlResolved = ''; window.__el._effConvLang = ''; q('.preview [data-act=\"tts\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    ck.check("V28 客户语言双侧未知 → 不过期", not s["boxStale"])
+    ev("() => { window.__el._effConvLang = 'ja'; window.__el.refreshXl(); }")
+    s = ev("snap()")
+    ck.check("V28 之后解析出不同语种（发送会改译）→ 过期属实", s["boxStale"])
+    ev("() => { window.__stubClient.voiceTts = window.__origVoiceTts; window.__el._effConvLang = null; }")
 
 
 def main() -> int:

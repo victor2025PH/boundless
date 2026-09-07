@@ -943,10 +943,11 @@
       this._previewPersona = persona;
       this._previewFilename = String((d && d.filename) || "");
       this._previewXl = xlt;
-      // #121：记服务端真实译向（voice_translated 才有；未译=空串——之后会话
-      // 语言被解析出来时 curEff 会变，届时标过期是**正确**的：再发会变成译声）
-      this._previewXlEff = (d && d.voice_translated)
-        ? String(d.target_lang || "").toLowerCase() : "";
+      // #250（N-4 C）：译声基准 = 服务端**有效目标语**（不论译没译），见 xlBaseline。
+      // #121 时只记「voice_translated 才有目标语、未译=空串」，于是中文客户 + 中文
+      // 文本（identity 不译）的基准被当成 'auto'，与会话语言 'zh' 一比就「过期」——
+      // 钧机两次生成一结束发送就灰，用户什么都没改。
+      this._previewXlEff = CpVoice.xlBaseline(d, xlt, this._effConvLang);
       const _vm = ((d && d.voice_meta) || {});
       const fb = _vm.fallback_from || _vm.voice_mapped_from;
       /* 回落原因分支（P0 2026-08-31 提示风暴复盘）：服务端 fallback_reason
@@ -1074,6 +1075,28 @@
      *    ok      → ok    「已核有声，可发送」（服务端 voiced）
      *    unverified → info「未能核验（服务端无证据）—— 请先听一遍再发」（可发送）
      *  四态互斥、恒返回其一：同一时刻面板只可能出现一个结论。 */
+    /** 译声维度的过期基准（#250 N-4 C，纯函数）：这条试听生成时的**有效目标语**。
+     *  d=tts-test 回包；xlt=点击时刻的目标语设置（'' 关 / 'auto' / 显式语种）；
+     *  effConvLang=点击时刻已知的会话客户语言（effective-config，可为 null/''）。
+     *  规则：
+     *    关（''）                       → ''（发送不译）
+     *    服务端确已翻译                 → d.target_lang（真实译向）
+     *    服务端回了 target_lang_resolved → 照单（新后端：'auto' 解析结果，identity 不译
+     *                                     时也在；解析不出为 ''）
+     *    显式语种（旧后端）             → 该语种（identity 不译也是它）
+     *    'auto'（旧后端）               → 客户端已知的会话语言（服务端没译＝目标语
+     *                                     与原文同语种或未知，发送时解析同样的值）
+     *  之后 _isStale 用它与当前有效目标语比：只有目标语**真的变了**才过期；
+     *  生成完成、会话语言异步回填、面板重绘都不会翻它。 */
+    static xlBaseline(d, xlt, effConvLang) {
+      const raw = String(xlt || "").trim().toLowerCase();
+      if (!raw) return "";
+      if (d && d.voice_translated) return String(d.target_lang || "").toLowerCase();
+      if (d && typeof d.target_lang_resolved === "string") return d.target_lang_resolved.toLowerCase();
+      if (raw !== "auto") return raw;
+      return String(effConvLang || "").toLowerCase();
+    }
+
     static panelVerdict(o) {
       const inp = o || {};
       const speech = String(inp.speech || "").toLowerCase();
@@ -1519,7 +1542,11 @@
        宿主「我的消息 →」偏好异步加载会让 _xlTarget 从 'auto' 变成 'en'，而服务端
        试听时早已按 'en' 念（d.target_lang 真值）：坐席什么都没改，raw 比对却把
        试听常亮成过期。'auto' 双侧未解析时同样视为未变。真实的目标语切换
-       （en→ja / 开↔关）仍照常标过期。 */
+       （en→ja / 开↔关）仍照常标过期。
+       #250（钧机 1258/1315，N-4 C）：#121 只补了「译了」那一侧——「没译」（identity：
+       客户中文、文本中文）时基准仍是空串 → 回落 'auto'，与会话语言 'zh' 一比即过期，
+       生成一结束发送就灰。基准改由 xlBaseline 取服务端有效目标语（新后端
+       target_lang_resolved / 旧后端用客户端已知会话语言），只有目标语真变才过期。 */
     _xlEffective() {
       const raw = this._xlTarget();          // '' | 'auto' | 显式语种
       if (!raw) return "";
