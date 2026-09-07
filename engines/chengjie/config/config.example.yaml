@@ -4926,6 +4926,37 @@ compliance:
 # 页面保持旧帮助球行为，全站零可见变化。
 # 语料灌库：python -m scripts.seed_product_help --apply（幂等，重跑=增量；
 # 从引擎根跑需设 AITR_DATA_DIR 指向实例数据根）。
+# ── 渠道出站策略层（实施96 P0-3，2026-09-07；src/inbox/channel_policy.py + src/inbox/window_guard.py）──
+# 「这个平台允许我们怎么发」的单一声明处：字数上限 / 外链 / 回复时间窗 / 每轮条数 / 人工预留 /
+# 气泡上限 / 媒体类型 / 风险策略档位。默认值内置在代码（抖音 1000 字·禁链·24h/6 条·预留 1·2 气泡·
+# 仅图/视频·enforce；TikTok 6000 字·48h/10 条·首条禁链；微信客服 48h/5；QQ 机器人 60min/4；
+# WhatsApp 官方 24h 窗），未登记平台一律无限制（零行为变化）。本块只做**数值覆写**，不新增语义。
+# 接线点：编排器 send/send_media（字数/外链/媒体拒收 + 回复窗/配额，从收件箱事实现算不另记账）、
+# reply_split.cap_max_parts_for_platform（气泡封顶）、autosend_policy.decide(platform=)（按平台覆写
+# shadow/enforce）、send-caps?chat_key= 的 reply_window 快照（UI 倒计时 / 剩余条数）。
+# 微信客服的窗口由 src/inbox/kf_window_guard.py 记账执行（有平台关窗事件），数值与此同源、门禁钉住。
+# channel_policy:
+#   douyin:
+#     max_text_len: 1000
+#     links: deny                 # allow | deny | first_message_deny
+#     per_window_cap: 6
+#     reserve_for_manual: 1
+#     max_bubbles: 2
+#     risk_policy_mode: enforce   # "" | shadow | enforce
+#   tiktok:
+#     media_types: [image]        # 注册地禁媒体时可设 []
+
+# ── 抖音演示 worker（实施96 P0-3；src/integrations/douyin_mock_worker.py）───────────────
+# 资质到位前把「收件箱 / 拟稿 / 策略拦截 / 出站镜像」整条链跑通的假传输。**默认关**，生产零痕迹；
+# 开着时注册 (douyin, web) 工厂并登记演示账号 douyin:demo 为 online。它不是抖音接入：能力矩阵与
+# 事实卡都不认它。
+# platform_login:
+#   douyin:
+#     mock_enabled: false
+#     mock_echo_delay_sec: 1.5    # 发送后多久造一条「客户回声」入站；<0 关闭回声
+#     mock_auto_account: true
+#     mock_account_id: demo
+
 assistant:
   enabled: false               # 总闸（新子系统默认关；灰度实例经 overlay 开）
   name: ""                     # 助手显示名（白标位；空=按 site_name 组合默认名）
