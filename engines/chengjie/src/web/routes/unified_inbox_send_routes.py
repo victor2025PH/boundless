@@ -198,7 +198,8 @@ from src.inbox.media_limits import (  # noqa: E402
 # 返回体是 dict（前端 d.detail.message 已兼容），带 reason/state/backoff_sec 供媒体按钮
 # 灰态 tooltip 同源（unified_inbox.html 属 J-4，落点写进结束报告）。
 _PLATFORM_LABEL = {"line": "LINE", "whatsapp": "WhatsApp", "telegram": "Telegram",
-                   "messenger": "Messenger", "instagram": "Instagram", "zalo": "Zalo"}
+                   "messenger": "Messenger", "instagram": "Instagram", "zalo": "Zalo",
+                   "qq": "QQ", "qqbot": "QQ Bot"}
 
 
 def media_capability_or_none(orch: Any, platform: str, account_id: str) -> Dict[str, Any]:

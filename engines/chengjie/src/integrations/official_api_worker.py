@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -456,6 +456,25 @@ class QQBotOfficialWorker(OfficialApiWorker):
         self.detail = f"gateway not ready: {getattr(gw, 'last_error', '') or 'reconnecting'}"
         return bool(getattr(gw, "last_event_ts", 0) and
                     time.time() - float(gw.last_event_ts) < 600)
+
+    async def delete_messages(self, chat_key: str, message_ids: List[str],
+                              *, revoke: bool = True) -> Dict[str, Any]:
+        """撤回机器人自己发的消息（编排器 ``delete_messages`` 统一签名；平台限 2 分钟内）。
+        QQ 只有「对所有人撤回」一种语义，``revoke`` 仅为统一签名。逐条调用，单条失败不阻断。"""
+        from src.integrations.qq_official import qqbot_recall_message
+        ok_n, last_err = 0, ""
+        for mid in (message_ids or []):
+            if not str(mid or "").strip():
+                continue
+            res = await qqbot_recall_message(chat_key, str(mid), config=self.config,
+                                             meta=_meta(self.account))
+            if res.get("ok"):
+                ok_n += 1
+            else:
+                last_err = str(res.get("error") or res.get("error_kind") or "")[:120]
+        if ok_n <= 0:
+            return {"ok": False, "reason": last_err or "recall_failed"}
+        return {"ok": True, "deleted": ok_n}
 
     def status(self) -> Dict[str, Any]:
         out = super().status()

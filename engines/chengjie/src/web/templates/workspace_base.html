@@ -1108,7 +1108,7 @@
   var sh=window.__chatxShell;
   if(!sh || typeof sh.stripReady!=='function') return;   // 非桌面壳 / 旧壳（无 P2 能力）
   var readySent=false;
-  var PLAT_COLOR={telegram:'#2aabee',whatsapp:'#25d366',messenger:'#a334fa',instagram:'#e1306c',zalo:'#0068ff',x:'#111827',line:'#06c755'};
+  var PLAT_COLOR={telegram:'#2aabee',whatsapp:'#25d366',messenger:'#a334fa',instagram:'#e1306c',zalo:'#0068ff',x:'#111827',line:'#06c755',qq:'#1ebafc',qqbot:'#1e63ff'};
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   // health 词表与壳 railBadge dot 同源同义；查表（勿拼键，键覆盖门禁可 grep）
   var HEALTH_I18N={on:'inbox.acct.web_inj_on',warn:'inbox.acct.web_inj_warn',off:'inbox.acct.web_inj_off',idle:'inbox.acct.web_inj_idle'};

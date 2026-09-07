@@ -71,6 +71,7 @@ _PLATFORM_LABELS = {
     "whatsapp": "WhatsApp",
     "instagram": "Instagram",
     "zalo": "Zalo",
+    "qq": "QQ",
 }
 
 _REACTIVATION_PROMPT = """你是「{ai_name}」，正在和对方在 {platform_label} 上私聊。

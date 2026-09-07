@@ -165,6 +165,10 @@ def register_msgops_routes(app, *, api_auth, config_manager=None) -> None:
                 "messenger": False,
                 "zalo": False,
                 "instagram": False,
+                # QQ 两端都能撤回自己发的消息（平台限约 2 分钟）：个人号走 Milky
+                # recall_*_message，机器人走开放平台 DELETE /v2/.../messages/{id}
+                "qq": True,
+                "qqbot": True,
             },
             "edit_platforms": {"whatsapp": wa_ok},
             # 「清空时连对方设备一起删」能力（both_sides）：仅 Telegram 私聊

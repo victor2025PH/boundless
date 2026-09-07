@@ -632,6 +632,40 @@ async def qqbot_send_text(
     return out
 
 
+async def qqbot_recall_message(
+    chat_key: str, message_id: str, *, config: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """撤回机器人自己发出的一条消息（平台限发出后 2 分钟内）。永不抛。
+
+    ``DELETE /v2/users/{openid}/messages/{id}`` / ``DELETE /v2/groups/{group_openid}/messages/{id}``
+    （单聊/群聊接口分开，与发送同一套 chat_key 自描述前缀选路）。
+    """
+    cfg = qqbot_cfg(config)
+    creds = creds_from(config, meta)
+    if not creds["app_id"] or not creds["app_secret"]:
+        return {"ok": False, "error": "qqbot 缺少 app_id/app_secret", "error_kind": "invalid_token"}
+    kind, openid = parse_chat_key(chat_key)
+    mid = str(message_id or "").strip()
+    if not openid or not mid:
+        return {"ok": False, "error": "empty openid/message_id", "error_kind": "unsupported"}
+    token = await get_token_manager().get(creds["app_id"], creds["app_secret"])
+    if not token:
+        return {"ok": False, "error": "access_token unavailable", "error_kind": "invalid_token"}
+    url = f"{_messages_url(api_base(cfg), kind, openid)}/{mid}"
+    status, data = await _http_json("DELETE", url, headers=auth_headers(token))
+    if status in (200, 204):
+        return {"ok": True}
+    out: Dict[str, Any] = {"ok": False, "error": f"HTTP {status}: {str(data)[:200]}"}
+    try:
+        from src.integrations.shared.official_send_error import classify_official_send_error
+        out["error_kind"] = classify_official_send_error(
+            PLATFORM, status=status, body=data, error_text=str(data)[:300])["kind"]
+    except Exception:
+        out["error_kind"] = "unknown"
+    return out
+
+
 # ── 入站处理（Webhook 与 WS 网关共用） ────────────────────────────────────────
 
 _skill_manager_getter: Optional[Callable[[], Any]] = None
@@ -1058,6 +1092,6 @@ __all__ = [
     "PassiveReplyLedger", "get_passive_ledger", "reset_for_tests",
     "extract_qqbot_events", "attachment_media",
     "sign_validation", "verify_webhook_signature",
-    "qqbot_send_text", "handle_qqbot_event", "register_skill_manager_getter",
+    "qqbot_send_text", "qqbot_recall_message", "handle_qqbot_event", "register_skill_manager_getter",
     "QQBotGateway", "register_qqbot_routes",
 ]

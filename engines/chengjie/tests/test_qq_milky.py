@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -247,12 +248,20 @@ async def test_worker_ingest_inbound_private_and_group(monkeypatch):
     monkeypatch.setattr(PB, "maybe_auto_reply", fake_auto)
     w = _worker(_FakeHttp({}))
     w._loop = asyncio.get_running_loop()
+    persist_calls: List[Any] = []
+
+    async def fake_persist(media_type, url, seq, *, file_name=""):
+        persist_calls.append((media_type, url, seq))
+        return ""   # 落盘失败 → 兜底保留临时 URL
+    w._persist_media = fake_persist
     w._handle_event({"time": 1, "self_id": 10001, "event_type": "message_receive", "data": {
         "message_scene": "friend", "peer_id": 42, "sender_id": 42, "message_seq": 9, "time": 1,
         "segments": [{"type": "text", "data": {"text": "你好"}},
                      {"type": "image", "data": {"resource_id": "r", "temp_url": "https://cdn/p.jpg"}}],
         "friend": {"user_id": 42, "nickname": "阿强", "remark": ""}}})
-    await asyncio.sleep(0)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert persist_calls == [("image", "https://cdn/p.jpg", 9)]
     assert len(emitted) == 1
     p = emitted[0]
     assert p["platform"] == "qq" and p["chat_key"] == "qq:friend:42" and p["name"] == "阿强"
@@ -293,6 +302,10 @@ async def test_worker_send_text_media_read_and_group_admin(tmp_path):
         "mark_message_as_read": {},
         "kick_group_member": {},
         "set_group_name": {},
+        "upload_private_file": {"file_id": "F1"},
+        "upload_group_file": {"file_id": "F2"},
+        "recall_private_message": {},
+        "recall_group_message": (200, {"status": "failed", "retcode": -500, "message": "too late"}),
     })
     w = _worker(http)
     r = await w.send("qq:friend:42", "hi", reply_to={"id": "9"})
@@ -307,7 +320,25 @@ async def test_worker_send_text_media_read_and_group_admin(tmp_path):
     img.write_bytes(b"\x89PNG" * 4)
     rm = await w.send_media("qq:friend:42", media_path=str(img), media_type="image", caption="看")
     assert rm["delivered"] is True and http.calls[-1]["payload"]["message"][1]["type"] == "image"
-    assert (await w.send_media("qq:friend:42", media_path=str(img), media_type="file"))["error_kind"] == "not_supported"
+    # 文件类：Milky 无文件消息段 → 走 upload_*_file；配文另发一条文本
+    doc = tmp_path / "报价.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+    rf = await w.send_media("qq:friend:42", media_path=str(doc), media_type="document", caption="报价单")
+    assert rf["delivered"] is True and rf["file_id"] == "F1" and rf["caption_delivered"] is True
+    up = [c for c in http.calls if c["url"].endswith("/api/upload_private_file")][-1]["payload"]
+    assert up["user_id"] == 42 and up["file_name"] == "报价.pdf" and up["file_uri"].startswith("base64://")
+    assert http.calls[-1]["payload"] == {"user_id": 42, "message": [{"type": "text", "data": {"text": "报价单"}}]}
+    rg_ = await w.send_media("qq:group:999", media_path=str(doc), media_type="file")
+    assert rg_["delivered"] is True and rg_["file_id"] == "F2"
+    assert http.calls[-1]["payload"]["parent_folder_id"] == "/" and http.calls[-1]["payload"]["group_id"] == 999
+    assert (await w.send_media("qq:friend:42", media_path=str(img), media_type="location"))["error_kind"] == "not_supported"
+    # 撤回（编排器 delete_messages 契约）：message_id=message_seq；私聊成功、群聊被拒如实回 reason
+    rr = await w.delete_messages("qq:friend:42", ["100", "x"])
+    assert rr == {"ok": True, "deleted": 1}
+    assert http.calls[-1]["payload"] == {"user_id": 42, "message_seq": 100}
+    rr2 = await w.delete_messages("qq:group:999", ["200"])
+    assert rr2["ok"] is False and "too late" in rr2["reason"]
+    assert (await w.delete_messages("qq:temp:5", ["1"]))["ok"] is False
     # 已读：只认记过的入站 seq
     assert await w.mark_read("qq:friend:42") is False
     w._last_in_seq["qq:friend:42"] = 9
@@ -379,8 +410,11 @@ async def test_worker_event_stream_reconnects_then_stops(monkeypatch):
     w._loop = asyncio.get_running_loop()
     w._stop = asyncio.Event()
     task = asyncio.create_task(w._run_events())
-    # 首轮含 protocol_bridge 等惰性 import（冷启 ~150ms），预算放宽到 0.5s 防 CI 抖动误红
-    await asyncio.sleep(0.5)
+    # 首轮含 protocol_bridge 等惰性 import（冷启 ~150ms+，机器忙时更久）：轮询到第二轮连接
+    # 发生为止（上限 5s），不用固定 sleep 赌时序
+    deadline = time.time() + 5.0
+    while rounds["n"] < 2 and time.time() < deadline:
+        await asyncio.sleep(0.02)
     w._stop.set()
     task.cancel()
     try:

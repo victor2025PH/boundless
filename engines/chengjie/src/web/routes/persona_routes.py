@@ -2117,7 +2117,7 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
     # #61 的 TG registry 分支同一写法：meta.persona_ids+persona_id 双键、
     # merge_meta=True 铁律（整块替换会抹掉 session_string，2026-07-23 实锤）。
     _REGISTRY_ASSIGN_PLATFORMS = {"line", "whatsapp", "messenger",
-                                  "zalo", "instagram"}
+                                  "zalo", "instagram", "qq", "qqbot"}
 
     @app.post("/api/personas/registry-account/{platform}/{account_id}/assign-profile")
     async def api_registry_assign_profile(

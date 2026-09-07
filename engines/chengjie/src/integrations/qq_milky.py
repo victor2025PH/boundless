@@ -50,6 +50,10 @@ DEFAULT_MILKY_URL = "http://127.0.0.1:3000"
 #: 出站媒体内联 base64 的体积上限（协议端可能在另一台机器，file:// 路径不可达；小文件走 base64
 #: 更稳；超限回落 file://（要求协议端与本进程同机））
 INLINE_MEDIA_MAX_BYTES = 15 * 1024 * 1024
+#: 入站媒体落盘上限 / 拉取超时：Milky 给的是**临时 URL**（QQ CDN，会过期），与 LINE /
+#: 微信客服同口径先落 ``protocol_media`` 根再入库，坐席回看、AI 识图/转写才不会踩到失效链接。
+INBOUND_MEDIA_MAX_BYTES = 50 * 1024 * 1024
+INBOUND_MEDIA_TIMEOUT_SEC = 20.0
 #: Milky ``retcode``：协议端未登录
 RETCODE_NOT_LOGGED_IN = -403
 #: QQ 头像 CDN（公开规则，按 QQ 号取）
@@ -240,6 +244,35 @@ class MilkyClient:
 _FACE_PLACEHOLDER = "[表情]"
 
 
+def _first_media_seg(segments: Any) -> Optional[Dict[str, Any]]:
+    """首个媒体段（图/语音/视频/文件）——决定入站是否要走「先落盘再入库」路径。"""
+    for seg in (segments or []):
+        if isinstance(seg, dict) and str(seg.get("type") or "") in ("image", "record", "video", "file"):
+            return seg
+    return None
+
+
+_CTYPE_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+    "image/bmp": ".bmp", "audio/silk": ".silk", "audio/amr": ".amr", "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mp4": ".m4a",
+    "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+}
+_KIND_DEFAULT_EXT = {"image": ".jpg", "sticker": ".gif", "voice": ".amr", "video": ".mp4"}
+
+
+def _media_ext(media_type: str, content_type: str, url: str) -> str:
+    """落盘扩展名：Content-Type 优先 → URL 后缀 → 按媒体大类缺省。"""
+    ct = str(content_type or "").split(";", 1)[0].strip().lower()
+    if ct in _CTYPE_EXT:
+        return _CTYPE_EXT[ct]
+    path = str(url or "").split("?", 1)[0]
+    ext = os.path.splitext(path)[1].lower()
+    if 1 < len(ext) <= 5 and ext[1:].isalnum():
+        return ext
+    return _KIND_DEFAULT_EXT.get(str(media_type or ""), ".bin")
+
+
 def render_segments(segments: Any, self_id: Optional[int] = None) -> Dict[str, Any]:
     """Milky ``IncomingSegment[]`` → 收件箱可用形态（纯函数）。
 
@@ -283,7 +316,8 @@ def render_segments(segments: Any, self_id: Optional[int] = None) -> Dict[str, A
                                    "video": "[视频]"}[kind])
         elif t == "file":
             item = {"media_type": "file", "url": "", "resource_id": str(d.get("file_id") or ""),
-                    "file_name": str(d.get("file_name") or "")}
+                    "file_name": str(d.get("file_name") or ""),
+                    "file_hash": str(d.get("file_hash") or "")}
             if not media:
                 media.append(item)
             text_parts.append(f"[文件] {item['file_name']}".rstrip())
@@ -505,7 +539,11 @@ class QQPersonalWorker:
         if et == "message_receive":
             msg = normalize_message_event(ev)
             if msg is not None and str(msg.get("sender_id") or "") != str(self.uin or ""):
-                self._ingest_inbound(msg)
+                if self._loop is not None and _first_media_seg(msg.get("segments")) is not None:
+                    # 带媒体：先落盘再入库（与 LINE 同序——AI 识图/转写与坐席回看都拿稳定链接）
+                    self._schedule(self._ingest_with_media(msg))
+                else:
+                    self._ingest_inbound(msg)
             return
         if et == "bot_offline":
             reason = str(((ev.get("data") or {}).get("reason")) or "offline")
@@ -530,7 +568,72 @@ class QQPersonalWorker:
         except Exception:
             logger.debug("[qq-milky] %s 失败", api, exc_info=True)
 
-    def _ingest_inbound(self, msg: Dict[str, Any]) -> None:
+    async def _ingest_with_media(self, msg: Dict[str, Any]) -> None:
+        """带媒体的入站：把临时 URL 落到 ``protocol_media`` 根后再入库；拉不到就用临时 URL 兜底。
+        文件段没有临时 URL，先向协议端换下载链接（``get_*_file_download_url``）。"""
+        rendered = render_segments(msg.get("segments"), self_id=self.uin)
+        media = (rendered.get("media") or [{}])[0]
+        media_type = str(media.get("media_type") or "")
+        url = str(media.get("url") or "")
+        if media_type == "file" and not url:
+            url = await self._file_download_url(msg, media)
+        local = await self._persist_media(media_type, url, msg.get("seq"),
+                                          file_name=str(media.get("file_name") or ""))
+        self._ingest_inbound(msg, media_ref_override=local or url)
+
+    async def _file_download_url(self, msg: Dict[str, Any], media: Dict[str, Any]) -> str:
+        file_id = str(media.get("resource_id") or "")
+        pid = _int_or_none(msg.get("peer_id"))
+        if not file_id or pid is None:
+            return ""
+        scene = str(msg.get("scene") or "friend")
+        try:
+            if scene == "group":
+                data = await self.client.call("get_group_file_download_url",
+                                              {"group_id": pid, "file_id": file_id})
+            else:
+                params: Dict[str, Any] = {"user_id": pid, "file_id": file_id}
+                if media.get("file_hash"):
+                    params["file_hash"] = str(media["file_hash"])
+                data = await self.client.call("get_private_file_download_url", params)
+            return str(data.get("download_url") or "")
+        except Exception:
+            logger.debug("[qq-milky] 取文件下载链接失败 file_id=%s", file_id, exc_info=True)
+            return ""
+
+    async def _persist_media(self, media_type: str, url: str, seq: Any, *,
+                             file_name: str = "") -> str:
+        """下载入站媒体 → ``/static/protocol_media/qq/<账号>_<seq>.<ext>``；失败返回空串（不抛）。"""
+        if not url.startswith(("http://", "https://")):
+            return ""
+        try:
+            import aiohttp
+            from src.integrations.protocol_bridge import media_paths
+            buf = bytearray()
+            tmo = aiohttp.ClientTimeout(total=INBOUND_MEDIA_TIMEOUT_SEC)
+            async with aiohttp.ClientSession(timeout=tmo) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        return ""
+                    ctype = str(resp.headers.get("Content-Type") or "")
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        buf += chunk
+                        if len(buf) > INBOUND_MEDIA_MAX_BYTES:
+                            logger.info("[qq-milky] 入站媒体超限跳过落盘 %s bytes>%d",
+                                        media_type, INBOUND_MEDIA_MAX_BYTES)
+                            return ""
+            if not buf:
+                return ""
+            dest, static_url = media_paths(
+                PLATFORM, f"{self.account_id}_{seq if seq is not None else int(time.time())}",
+                _media_ext(media_type, ctype, file_name or url))
+            dest.write_bytes(bytes(buf))
+            return static_url
+        except Exception:
+            logger.debug("[qq-milky] 入站媒体落盘失败 type=%s", media_type, exc_info=True)
+            return ""
+
+    def _ingest_inbound(self, msg: Dict[str, Any], *, media_ref_override: str = "") -> None:
         """入站消息统一投递口（best-effort 绝不抛）：渲染消息段 → 落库 → 自动回复。"""
         try:
             from src.integrations.protocol_bridge import (
@@ -547,7 +650,7 @@ class QQPersonalWorker:
             rendered = render_segments(msg.get("segments"), self_id=self.uin)
             media = (rendered.get("media") or [{}])[0] if rendered.get("media") else {}
             media_type = str(media.get("media_type") or "")
-            media_ref = str(media.get("url") or "")
+            media_ref = media_ref_override or str(media.get("url") or "")
             text = str(rendered.get("text") or "")
             if not text and media_type:
                 text = {"image": "[图片]", "sticker": "[贴纸]", "voice": "[语音]",
@@ -620,11 +723,13 @@ class QQPersonalWorker:
 
     async def send_media(self, chat_key: str, *, media_path: str, media_type: str,
                          caption: str = "") -> Dict[str, Any]:
-        """出站图/语音/视频（协议端负责 silk 转码与上传）。文件类 Milky 无消息段 → not_supported。"""
+        """出站图/语音/视频（协议端负责 silk 转码与上传）；文件类走 ``upload_*_file``（无消息段）。"""
         scene, peer = parse_chat_key(chat_key)
         pid = _int_or_none(peer)
         if pid is None or scene == "temp":
             return {"delivered": False, "error_kind": "unsupported", "error": f"bad target: {chat_key}"}
+        if str(media_type or "").lower() in ("document", "file"):
+            return await self._send_file(scene, pid, media_path, caption=caption)
         try:
             segs = build_media_segments(media_type, media_path, caption=caption)
         except ValueError as ex:
@@ -646,6 +751,36 @@ class QQPersonalWorker:
                     "error_kind": "transient"}
         return {"delivered": True, "message_id": str(data.get("message_seq") or "")}
 
+    async def _send_file(self, scene: str, pid: int, media_path: str, *,
+                         caption: str = "") -> Dict[str, Any]:
+        """文件类出站：Milky 无「文件」消息段，走 ``upload_private_file`` / ``upload_group_file``；
+        配文（若有）另发一条文本（与 TG/WA「文件 + 说明」的观感一致）。"""
+        try:
+            uri = media_uri(media_path)
+        except OSError as ex:
+            return {"delivered": False, "error_kind": "unsupported", "error": f"media unreadable: {ex}"}
+        file_name = os.path.basename(str(media_path or "")) or "file"
+        if scene == "group":
+            api, params = "upload_group_file", {"group_id": pid, "file_uri": uri,
+                                                "file_name": file_name, "parent_folder_id": "/"}
+        else:
+            api, params = "upload_private_file", {"user_id": pid, "file_uri": uri,
+                                                  "file_name": file_name}
+        try:
+            data = await self.client.call(api, params, timeout=300.0)
+        except MilkyError as ex:
+            return {"delivered": False, "error": str(ex)[:200],
+                    "error_kind": "invalid_token" if ex.not_logged_in else "unknown"}
+        except Exception as ex:  # noqa: BLE001
+            return {"delivered": False, "error": f"qq {api} failed: {str(ex)[:160]}",
+                    "error_kind": "transient"}
+        out: Dict[str, Any] = {"delivered": True, "message_id": str(data.get("file_id") or ""),
+                               "file_id": str(data.get("file_id") or "")}
+        if str(caption or "").strip():
+            cap = await self.send(make_chat_key(scene, pid), str(caption).strip())
+            out["caption_delivered"] = bool(cap.get("delivered"))
+        return out
+
     async def mark_read(self, chat_key: str) -> bool:
         """已读回执：标到该会话末条入站 seq（重启后未收过消息的会话不猜，返回 False）。"""
         seq = self._last_in_seq.get(str(chat_key or ""))
@@ -662,6 +797,34 @@ class QQPersonalWorker:
         except Exception:
             logger.debug("[qq-milky] mark_read 失败", exc_info=True)
             return False
+
+    async def delete_messages(self, chat_key: str, message_ids: List[str],
+                              *, revoke: bool = True) -> Dict[str, Any]:
+        """撤回若干条自己发出的消息（编排器 ``delete_messages`` 统一签名；message_id=message_seq）。
+
+        QQ 只有「撤回＝对所有人」一种语义（约 2 分钟时限，超时协议端/服务端拒绝），
+        ``revoke`` 形参仅为统一签名。逐条调用，单条失败不阻断其余。
+        """
+        scene, peer = parse_chat_key(chat_key)
+        pid = _int_or_none(peer)
+        if pid is None or scene == "temp":
+            return {"ok": False, "reason": f"bad target: {chat_key}"}
+        api = "recall_group_message" if scene == "group" else "recall_private_message"
+        key = "group_id" if scene == "group" else "user_id"
+        ok_n, last_err = 0, ""
+        for mid in (message_ids or []):
+            seq = _int_or_none(mid)
+            if seq is None:
+                continue
+            try:
+                await self.client.call(api, {key: pid, "message_seq": seq})
+                ok_n += 1
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)[:120]
+                logger.debug("[qq-milky] %s 失败 seq=%s", api, seq, exc_info=True)
+        if ok_n <= 0:
+            return {"ok": False, "reason": last_err or "recall_failed"}
+        return {"ok": True, "deleted": ok_n}
 
     # ── 群管理（GROUP_ADMIN_METHODS 预留契约名，实现即自动进能力矩阵） ──────────
     async def kick_group_member(self, chat_key: str, user_id: Any,
