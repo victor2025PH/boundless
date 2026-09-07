@@ -6,22 +6,27 @@
 
 与既有 worker 的差别：官方 API 是**无状态 HTTP**（无常驻连接），故 ``start/stop`` 是 no-op，
 ``healthy()`` 只校验凭证齐备。发送复用 G1/G2 的官方 send 助手（已内建 Kill-Switch 守卫）。
+例外：QQ 机器人（``qqbot``）在 WebSocket 模式下有一条常驻网关长连，由子类
+``QQBotOfficialWorker`` 在 ``start()`` 里拉起、``healthy()`` 反映连接态（见该类）。
 
 凭证解析：优先账号 ``meta``（多官方账号），回退到平台级 config 块（单官方账号）：
 - LINE       ：meta.channel_access_token | config.line.channel_access_token
 - Messenger  ：meta.page_access_token    | config.facebook_messenger.page_access_token
 - WhatsApp   ：meta.access_token+phone_number_id | config.whatsapp_cloud.{access_token,phone_number_id}
+- QQ 机器人  ：meta.app_id+app_secret    | config.qqbot.{app_id,app_secret}
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # 编排器接管的官方平台（platform 与 RPA/Kill-Switch 作用域命名保持一致）
-OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo")
+OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot")
 
 
 def _meta(account: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,12 +94,17 @@ class OfficialApiWorker:
                 "message_type": str(m.get("message_type")
                                     or block.get("message_type") or "cs"),
             }
+        if self.platform == "qqbot":
+            from src.integrations.qq_official import creds_from
+            return creds_from(self.config, m)
         return {}
 
     def _creds_ok(self) -> bool:
         c = self._creds()
         if self.platform == "whatsapp":
             return bool(c.get("access_token") and c.get("phone_number_id"))
+        if self.platform == "qqbot":
+            return bool(c.get("app_id") and c.get("app_secret"))
         return bool(c.get("access_token"))
 
     # ── Worker 接口 ──────────────────────────────────────────────────────────
@@ -116,9 +126,26 @@ class OfficialApiWorker:
         return {"type": f"{self.platform}_official", "account_id": self.account_id,
                 "state": self.state, "detail": self.detail}
 
-    async def send(self, chat_key: str, text: str) -> Dict[str, Any]:
-        """chat_key = 收件人标识（接受收件箱前缀形式 ``<plat>:user:<id>`` 或裸标识，自动归一）。"""
+    async def send(self, chat_key: str, text: str,
+                   *, reply_to: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """chat_key = 收件人标识（接受收件箱前缀形式 ``<plat>:user:<id>`` 或裸标识，自动归一）。
+
+        ``reply_to``（编排器按具名形参透传）：仅 QQ 机器人消费——作 ``message_reference``
+        原生引用；其余官方平台无引用语义，收下即忽略（与 LINE worker 的旧行为一致）。
+        """
         c = self._creds()
+        if self.platform == "qqbot":
+            from src.integrations.qq_official import qqbot_send_text
+            _ref = str((reply_to or {}).get("id") or (reply_to or {}).get("msg_id") or "")
+            out = await qqbot_send_text(
+                chat_key, text, config=self.config, meta=_meta(self.account),
+                account_id=self.account_id, reply_to_msg_id=_ref)
+            res = self._result(out, str(((out.get("data") or {}).get("id")) or ""))
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            # 引用回执如实：只有真带了 message_reference 且发成功才让工作台画引用条
+            res["quote_applied"] = bool(out.get("ok") and _ref)
+            return res
         dest = dest_from_chat_key(chat_key)
         if self.platform == "line":
             from src.integrations.line_webhook import line_push
@@ -258,6 +285,12 @@ class OfficialApiWorker:
             # Zalo OA API 无语音消息出站能力（图片/文件另需 upload 流程，暂未接入）。
             return {"delivered": False, "error_kind": "not_supported",
                     "error": "Zalo OA API 暂不支持语音/媒体消息出站"}
+        if self.platform == "qqbot":
+            # QQ 机器人富媒体＝先上传取 file_info 再 msg_type=7 发送，且语音须 silk 转码、
+            # 单聊/群聊上传接口不互通——P2 批次接入；本批如实 not_supported，能力位同步
+            # （official_send_caps 与本分支由门禁双向钉住）。
+            return {"delivered": False, "error_kind": "not_supported",
+                    "error": "QQ 机器人媒体出站（file_info 上传 + silk 转码）尚未接入"}
         return {"delivered": False, "error_kind": "not_supported",
                 "error": f"{self.platform} 官方通道媒体出站暂未接入"}
 
@@ -289,11 +322,13 @@ def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
     本表**必须与 ``send_media`` 的运行时分支一致**，由门禁
     ``tests/test_official_channel_onboarding.py`` 双向钉住（改分支不改这里会红）。
     返回 ``{"can_media": bool, "can_voice": bool, "reason": str}``；reason ∈
-    ``""`` / ``zalo_api_no_media`` / ``needs_public_url``。
+    ``""`` / ``zalo_api_no_media`` / ``needs_public_url`` / ``qqbot_media_pending``。
     """
     p = str(platform or "").lower()
     if p == "zalo":
         return {"can_media": False, "can_voice": False, "reason": "zalo_api_no_media"}
+    if p == "qqbot":
+        return {"can_media": False, "can_voice": False, "reason": "qqbot_media_pending"}
     if p in OFFICIAL_MEDIA_URL_PLATFORMS:
         base = str(
             (((config or {}).get("official_media") or {}).get("public_base_url")) or ""
@@ -325,10 +360,124 @@ def official_enabled(config: Dict[str, Any], platform: str) -> bool:
     # 回退：对应官方通道块自身 enabled 也视为开
     key = {"line": "line", "messenger": "facebook_messenger",
            "whatsapp": "whatsapp_cloud", "instagram": "instagram",
-           "zalo": "zalo"}.get(p)
+           "zalo": "zalo", "qqbot": "qqbot"}.get(p)
     if key and ((config or {}).get(key) or {}).get("enabled"):
         return True
     return False
+
+
+class QQBotOfficialWorker(OfficialApiWorker):
+    """QQ 机器人官方 worker：在 ``OfficialApiWorker`` 之上多跑一条 WS 网关长连。
+
+    - ``connect_mode=websocket``（默认，桌面单机免公网）：``start()`` 拉起
+      ``QQBotGateway.run()`` 后台任务，事件经 ``handle_qqbot_event`` 进统一收件箱；
+      网关自带断线退避重连，故 ``healthy()`` 只在**致命**（4914 下架 / 4915 封禁 /
+      鉴权被拒）或任务意外死亡时报 False——避免与编排器双重监督（同 WhatsApp 的取舍）。
+    - ``connect_mode=webhook``：事件由 ``register_qqbot_routes`` 挂的 HTTPS 回调进来，
+      本 worker 退化为无状态出站，与父类同行为。
+    """
+
+    #: 网关启动后允许「尚未 READY」的宽限（首连 token+gateway+identify 通常 <5s）
+    CONNECT_GRACE_SEC = 90.0
+
+    def __init__(self, account: Dict[str, Any], config: Dict[str, Any]) -> None:
+        super().__init__(account, config)
+        self._gateway: Any = None
+        self._task: Optional[asyncio.Task] = None
+        self._started_at = 0.0
+
+    def _mode(self) -> str:
+        from src.integrations.qq_official import connect_mode, qqbot_cfg
+        return connect_mode(qqbot_cfg(self.config))
+
+    async def start(self) -> None:
+        await super().start()
+        self._started_at = time.time()
+        if self._mode() != "websocket":
+            self.detail = "webhook"
+            return
+        from src.integrations.qq_official import (
+            QQBotGateway, handle_qqbot_event, intents_for, qqbot_cfg,
+        )
+        cfg = qqbot_cfg(self.config)
+        creds = self._creds()
+        account_id = self.account_id
+        meta = _meta(self.account)
+        config = self.config
+
+        async def _on_event(payload: Dict[str, Any]) -> None:
+            # 网关送达也算「平台事件到得了我们」——与 Webhook 同一本可达性台账
+            try:
+                from src.integrations.official_webhook_stats import record_event
+                record_event("qqbot")
+            except Exception:
+                pass
+            await handle_qqbot_event(payload, config=config, account_id=account_id, meta=meta)
+
+        self._gateway = QQBotGateway(
+            app_id=creds["app_id"], app_secret=creds["app_secret"],
+            sandbox=bool(cfg.get("sandbox")), intents=intents_for(cfg), on_event=_on_event)
+        self._task = asyncio.create_task(self._gateway.run())
+        self.detail = "websocket"
+
+    async def stop(self) -> None:
+        if self._gateway is not None:
+            try:
+                self._gateway.stop()
+            except Exception:
+                pass
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        await super().stop()
+
+    async def healthy(self) -> bool:
+        if not await super().healthy():
+            return False
+        if self._mode() != "websocket" or self._gateway is None:
+            return True
+        gw = self._gateway
+        if getattr(gw, "fatal_code", 0):
+            self.detail = str(getattr(gw, "last_error", "") or f"gateway fatal {gw.fatal_code}")
+            return False
+        if self._task is not None and self._task.done():
+            self.detail = "gateway task exited"
+            return False
+        if getattr(gw, "connected", False):
+            self.detail = "websocket"
+            return True
+        # 未连上：宽限期内算健康（首连/重连在途），超期仍未 READY 才如实报不健康
+        if time.time() - self._started_at <= self.CONNECT_GRACE_SEC:
+            return True
+        self.detail = f"gateway not ready: {getattr(gw, 'last_error', '') or 'reconnecting'}"
+        return bool(getattr(gw, "last_event_ts", 0) and
+                    time.time() - float(gw.last_event_ts) < 600)
+
+    def status(self) -> Dict[str, Any]:
+        out = super().status()
+        out["connect_mode"] = self._mode()
+        if self._gateway is not None:
+            try:
+                out["gateway"] = self._gateway.status()
+            except Exception:
+                pass
+        try:
+            from src.integrations.qq_official import get_passive_ledger
+            out["passive_ledger"] = get_passive_ledger().snapshot()
+        except Exception:
+            pass
+        return out
+
+
+def official_worker_factory(platform: str):
+    """按平台选 worker 类：qqbot 走带 WS 网关的子类，其余用无状态基类。"""
+    if str(platform or "").lower() == "qqbot":
+        return lambda acc, cfg: QQBotOfficialWorker(acc, cfg)
+    return lambda acc, cfg: OfficialApiWorker(acc, cfg)
 
 
 def register_official_workers(config: Dict[str, Any]) -> None:
@@ -339,15 +488,15 @@ def register_official_workers(config: Dict[str, Any]) -> None:
     for platform in OFFICIAL_PLATFORMS:
         try:
             if official_enabled(config, platform) and get_worker_factory(platform, "official") is None:
-                register_worker(platform, "official",
-                                lambda acc, cfg: OfficialApiWorker(acc, cfg))
+                register_worker(platform, "official", official_worker_factory(platform))
                 logger.info("[orchestrator] 官方 worker 已注册: %s:official", platform)
         except Exception:
             logger.debug("[orchestrator] 注册 %s official worker 失败", platform, exc_info=True)
 
 
 __all__ = [
-    "OfficialApiWorker", "official_enabled", "official_pipeline_enabled",
+    "OfficialApiWorker", "QQBotOfficialWorker", "official_worker_factory",
+    "official_enabled", "official_pipeline_enabled",
     "register_official_workers", "dest_from_chat_key", "OFFICIAL_PLATFORMS",
     "OFFICIAL_MEDIA_URL_PLATFORMS", "official_send_caps",
 ]
