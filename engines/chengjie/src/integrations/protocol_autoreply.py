@@ -74,12 +74,13 @@ def _default_risk(text: str) -> str:
         return "low"
 
 
-def _risk_policy_decide(reply: str):
+def _risk_policy_decide(reply: str, platform: str = ""):
     """AI 稿高风险 → 经 autosend_policy.decide 单一入口（#160 v2）。
 
     本链是「无人值守直发」，等价于 auto_ai 会话；入站侧不在这里判（生成前已由
     SkillManager 处理），所以 peer_risk 固定 low、只带 reply_risk=high。命中词用
-    ``keyword_risk_hits`` 补齐（注入的 risk_fn 只回档位）。
+    ``keyword_risk_hits`` 补齐（注入的 risk_fn 只回档位）。``platform``（实施96 P0-3）
+    让渠道策略层按平台覆写 shadow/enforce（抖音等声明 enforce 的平台不走影子放行）。
     """
     from src.inbox.autosend_policy import decide as _decide
     hits: list = []
@@ -90,7 +91,7 @@ def _risk_policy_decide(reply: str):
         hits = []
     return _decide(
         peer_risk="low", peer_reasons=[], reply_risk="high", reply_reasons=["keyword"],
-        risk_hits=hits, automation_mode="auto_ai",
+        risk_hits=hits, automation_mode="auto_ai", platform=str(platform or ""),
     )
 
 
@@ -563,7 +564,7 @@ async def run_autoreply(
     if risk == "high":
         _decision = None
         try:
-            _decision = _risk_policy_decide(reply)
+            _decision = _risk_policy_decide(reply, platform=str(platform or ""))
         except Exception:
             logger.debug("[protocol-autoreply] policy decide 异常（按 enforce 旧行为）", exc_info=True)
         if _decision is None or _decision.level != "L2":

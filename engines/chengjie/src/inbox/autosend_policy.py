@@ -192,8 +192,14 @@ def decide(
     risk_hits: Iterable[str] = (),
     automation_mode: str = "review",
     policy_mode: Optional[str] = None,
+    platform: str = "",
 ) -> Decision:
     """Decision = (level, hold_reason, shadow)。
+
+    ``platform``（实施96 P0-3，可选）：未显式传 ``policy_mode`` 时，先问渠道策略层
+    ``channel_policy.risk_policy_mode(platform)``——抖音/TikTok 这类以行为指纹与内容合规
+    为主判据的平台声明 ``enforce``，全局 shadow 档对它们不生效；未声明的平台跟全局，
+    不传 platform 逐字节旧行为。
 
     - 非 ``auto_ai`` 档（review / manual / multi_choice）：用户显式选的人审/手动档，
       **先于风险层**返回该档位（L1/L0/L1），``shadow=None``——不是风险触发的挂起，
@@ -204,6 +210,12 @@ def decide(
                                   enforce 档：would_hold_level + hold_reason，shadow=None。
     """
     mode = normalize_automation_mode(automation_mode)
+    if not policy_mode and platform:
+        try:
+            from src.inbox.channel_policy import risk_policy_mode as _cp_risk_mode
+            policy_mode = _cp_risk_mode(platform) or None
+        except Exception:
+            policy_mode = None
     pm = normalize_policy_mode(policy_mode) if policy_mode else current_policy_mode()
     peer_reasons_l = [str(r) for r in (peer_reasons or [])]
     reply_reasons_l = [str(r) for r in (reply_reasons or [])]

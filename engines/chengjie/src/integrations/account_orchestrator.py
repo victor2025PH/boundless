@@ -641,6 +641,17 @@ class AccountOrchestrator:
                 "[orchestrator] 媒体发送被护栏拦截 %s:%s → peer=%s (%s, origin=%s)",
                 platform, account_id, chat_key, _reason, origin)
             return {"delivered": False, "blocked": _reason}
+        # 实施96 P0-3：渠道媒体类型白名单（抖音私信只收图/视频；未登记平台不限）。
+        # 明确返回 blocked 而不是静默降级发文字——让上层的「媒体承诺兑现链」按失败处理。
+        try:
+            from src.inbox.channel_policy import media_block_reason as _cp_media_block
+            _cp_reason = _cp_media_block(platform, media_type, config=self._config)
+            if _cp_reason:
+                logger.warning("[orchestrator] 渠道策略拦截媒体 %s:%s → peer=%s (%s)",
+                               platform, account_id, chat_key, _cp_reason)
+                return {"delivered": False, "blocked": _cp_reason}
+        except Exception:
+            logger.debug("[orchestrator] 渠道媒体策略判定异常（放行）", exc_info=True)
         # #143（0902，接 #64/#106/#133）：媒体 caption 与文本同过出站语种收口——
         # 此前守卫只罩 send()，主动发图的配文（autosend/承诺兑现/相册秒发）从
         # send_media 出门零防护，「手机里存的这张…」中文配文直达英文客户。
@@ -829,6 +840,18 @@ class AccountOrchestrator:
                 "[orchestrator] 发送被护栏拦截 %s:%s → peer=%s (%s, origin=%s)",
                 platform, account_id, chat_key, _reason, origin)
             return {"delivered": False, "blocked": _reason}
+        # 实施96 P0-3：渠道出站硬规则（平台侧**会拒收**的：字数上限 / 禁外链）——人工与
+        # 自动同守，因为拒收的是平台不是我们（抖音 1000 字 + 禁 HTTP 链接会直接报
+        # 28001038）。未登记平台零成本放行（channel_policy 默认无限制）。
+        try:
+            from src.inbox.channel_policy import text_block_reason as _cp_text_block
+            _cp_reason = _cp_text_block(platform, text, config=self._config)
+            if _cp_reason:
+                logger.warning("[orchestrator] 渠道策略拦截 %s:%s → peer=%s (%s, origin=%s)",
+                               platform, account_id, chat_key, _cp_reason, origin)
+                return {"delivered": False, "blocked": _cp_reason}
+        except Exception:
+            logger.debug("[orchestrator] 渠道策略判定异常（放行）", exc_info=True)
         # #97/#105/#106（实施91）：出站收口点守卫三连——L2 autosend / 主动触达 /
         # 关怀 / 唤醒等全部**自动链**经编排器出门前统一过检：①混语确定性剥除
         # （0830 击穿实锤：deferred 链英文文案不经出稿口也不触发翻译出口，

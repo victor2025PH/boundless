@@ -1214,9 +1214,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     cfg=_bubble_cfg, platform=platform, chat_key=chat_key,
                     orch_owns=_orch_owns,
                 ):
+                    from src.inbox.reply_split import cap_max_parts_for_platform
                     _cand = split_reply_parts(
                         text,
-                        max_parts=int(_bubble_cfg["max_parts"]),
+                        max_parts=cap_max_parts_for_platform(
+                            int(_bubble_cfg["max_parts"]), platform),
                         max_chars=int(_bubble_cfg["max_chars"]),
                         min_tail_chars=int(_bubble_cfg["min_tail_chars"]),
                         min_total_chars=int(_bubble_cfg["min_total_chars"]),

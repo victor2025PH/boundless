@@ -632,6 +632,17 @@ def plan_bubble_gaps(
     return gaps
 
 
+def cap_max_parts_for_platform(max_parts: int, platform: str) -> int:
+    """全局 ``bubbles.max_parts`` 按渠道策略封顶（实施96 P0-3：抖音一轮 ≤2 条——
+    24h 内只有 6 条配额，拆 3 条＝半轮配额；声明 1 条的平台如 qqbot 由此封成
+    单段，``split_reply_parts(max_parts=1)`` 自然不拆）。未登记平台原值返回。"""
+    try:
+        from src.inbox.channel_policy import cap_max_parts
+        return cap_max_parts(platform, int(max_parts))
+    except Exception:
+        return max(1, int(max_parts or 1))
+
+
 def should_split_for_delivery(
     *,
     cfg: Dict[str, Any],

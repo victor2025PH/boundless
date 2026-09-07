@@ -179,6 +179,16 @@ def blocked_reason_key(reason: str) -> str:
         return "license"
     if r.startswith("session_unhealthy"):
         return "session"
+    # 实施96 P0-3：渠道出站策略（平台侧会拒收）——外链 / 字数 / 媒体类型分三条人话，
+    # 其余策略原因归 policy 族；与 channel_policy.REASON_* 前缀同源
+    if r.startswith("policy_link_denied"):
+        return "policy_link"
+    if r.startswith("policy_text_too_long"):
+        return "policy_len"
+    if r.startswith("policy_media_type_denied"):
+        return "policy_media"
+    if r.startswith("policy_"):
+        return "policy"
     return "generic"
 
 
