@@ -102,7 +102,7 @@
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
 <script src="/copilot/components/cp-voice.js?v=20260905b"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
-<script src="/copilot/components/cp-goal.js?v=20260907d"></script>
+<script src="/copilot/components/cp-goal.js?v=20260907e"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
 <script src="/copilot/components/cp-image.js?v=20260907a"></script>
 <script src="/copilot/components/cp-nurture.js?v=20260828b"></script>
@@ -17265,6 +17265,7 @@ window.addEventListener('message', function(e){
     // App 内归档/搁置/暂停 → 刷会话列表，行状态与右栏动作对齐（P1-4 第二刀）
     if(m.kind==='archive'||m.kind==='snooze'){ try{ if(typeof loadChats==='function') loadChats(); }catch(_){} }
   }
+  else if(m.type==='cp-goal-jump-message'){ if(m.conversation_id){ try{ window.__wsFocusConv(String(m.conversation_id), m.message_id?String(m.message_id):undefined); }catch(_){} } } // M-7 A（#236）目标卡「查看消息」→ 与通知中心点击同源
 });
 try{ document.addEventListener('DOMContentLoaded', function(){
   var tb=document.getElementById('ws-cp-app-toggle'); if(tb) tb.style.opacity=WS_USE_APP?'1':'.6';
@@ -18821,6 +18822,7 @@ function _cpPipHandleAppMsg(m){
   if(m.type==='cp-fill'){ var ta=document.getElementById('reply-ta'); if(ta&&m.text){ ta.value=m.text; ta.focus(); } }
   else if(m.type==='cp-send'){ var ta2=document.getElementById('reply-ta'); if(ta2&&m.text){ ta2.value=m.text; if(typeof sendMsg==='function') sendMsg(); } }
   else if(m.type==='cp-convops-changed'){ if(m.kind==='archive'||m.kind==='snooze'){ try{ if(typeof loadChats==='function') loadChats(); }catch(_){} } }
+  else if(m.type==='cp-goal-jump-message'){ if(m.conversation_id){ try{ window.__wsFocusConv(String(m.conversation_id), m.message_id?String(m.message_id):undefined); }catch(_){} } } // M-7 A（#236）PiP 多窗同口径
 }
 /* ── shell 模式（Electron 原生置顶窗）───────────────────────────────────────
    开/喂食全走 __chatxShell.copilotPip；回吐（app 消息 + 窗关闭）由 inbox-preload

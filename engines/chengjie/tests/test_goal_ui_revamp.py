@@ -76,7 +76,9 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260907d" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；M-7 D）
+    assert "cp-goal.js?v=20260907e" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；M-7 对齐修正）
+    # M-7 A（#236）：目标卡「查看消息」经 iframe 桥 cp-goal-jump-message → 宿主 __wsFocusConv（与通知中心点击同源）
+    assert "m.type==='cp-goal-jump-message'" in inbox_html
 
 
 def test_goal_sprint_pace_ui(goal_js: str):

@@ -1989,19 +1989,22 @@
       this._rerender();
     }
 
-    /* 跳到那条消息：宿主监听 cp-goal-jump-message（unified_inbox / copilot app.html
-       接入后滚到消息行）；没接的宿主回落到 window.__wsScrollToMessage / 只切会话。 */
+    /* 跳到那条消息——与工作台既有跳转口径对齐（通知中心点击 / ?conv=&mid= 深链同源）：
+       同文档宿主（unified_inbox 直挂 cp-goal）→ window.__wsFocusConv(conv, mid)：选中会话 +
+       翻页找到气泡滚动高亮；iframe 宿主（copilot/app.html 多窗）→ 事件 cp-goal-jump-message
+       由 app.html 桥 postMessage 给父窗口，父窗口同样落到 __wsFocusConv。 */
     _jumpBeat(el) {
       const conv = String(el.getAttribute("data-conv") || "");
       const mid = String(el.getAttribute("data-mid") || "");
       const ts = parseFloat(el.getAttribute("data-ts")) || 0;
       _beacon("goal_beat_jump");
-      this.emit("cp-goal-jump-message", { conversation_id: conv, message_id: mid, ts });
+      let handled = false;
       try {
-        if (typeof window.__wsScrollToMessage === "function") {
-          window.__wsScrollToMessage(conv, mid, ts);
+        if (typeof root.__wsFocusConv === "function") {
+          handled = root.__wsFocusConv(conv, mid || undefined) !== false;
         }
-      } catch (_e) { /* 宿主无此钩子 */ }
+      } catch (_e) { handled = false; }
+      if (!handled) this.emit("cp-goal-jump-message", { conversation_id: conv, message_id: mid, ts });
     }
 
     _renderProducts(g) {

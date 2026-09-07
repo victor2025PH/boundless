@@ -346,7 +346,11 @@ def test_card_frontend_states_and_watchdog_names_goal():
         assert k in gp.ZH and k in gp.EN
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        assert "cp-goal.js?v=20260907d" in (REPO / host).read_text(encoding="utf-8"), host
+        assert "cp-goal.js?v=20260907e" in (REPO / host).read_text(encoding="utf-8"), host
+    # 「查看消息」对齐：组件回落宿主 __wsFocusConv；iframe 宿主 app.html 桥 postMessage（双树一致）
+    assert "root.__wsFocusConv" in js
+    for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html"):
+        assert 'addEventListener("cp-goal-jump-message"' in (REPO / host).read_text(encoding="utf-8"), host
 
 
 def test_watchdog_names_stalled_goal_throttles_and_recovers():

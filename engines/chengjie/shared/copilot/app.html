@@ -235,7 +235,7 @@
   <script src="/copilot/components/cp-kb.js?v=20260818d"></script>
   <script src="/copilot/components/cp-persona.js?v=20260822a"></script>
   <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
-  <script src="/copilot/components/cp-goal.js?v=20260907d"></script>
+  <script src="/copilot/components/cp-goal.js?v=20260907e"></script>
   <script src="/copilot/components/cp-chain-exec.js?v=20260905b"></script>
   <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
   <script src="/copilot/components/cp-accounts.js?v=20260818d"></script>
@@ -782,6 +782,18 @@
       // 会话运维状态变化 → 桥给宿主（网页宿主刷会话列表；归档/搁置后行状态才对得上）
       document.addEventListener("cp-convops-changed", function (e) {
         post("cp-convops-changed", { kind: ((e && e.detail) || {}).kind || "" });
+      });
+      // M-7 A（#236）：目标卡「每一拍 → 查看消息」→ 桥给宿主父窗口（宿主落到
+      // window.__wsFocusConv(conv, mid)：选中会话 + 滚动高亮气泡，与通知中心点击同源）
+      document.addEventListener("cp-goal-jump-message", function (e) {
+        var det = (e && e.detail) || {};
+        if (det.conversation_id) {
+          post("cp-goal-jump-message", {
+            conversation_id: String(det.conversation_id || ""),
+            message_id: String(det.message_id || ""),
+            ts: det.ts || 0
+          });
+        }
       });
       // 跨面板联动刷新(沿用原协议) + 执行结果反馈（对齐网页宿主 P1-198：
       // ok→轻提示；fail→优先显示服务端如实报的原因，而不是笼统「执行失败」）
