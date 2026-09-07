@@ -929,6 +929,8 @@ ZH = {
     "psn_quiz_trend_t": "近 14 天考题分数走势（左旧右新）",
     "psn_ready_all_done": "资料齐全，可以上线 🎉",
     "psn_ready_avatar": "头像（锁脸照）",
+    # #238（N-2 C）：完善向导纳入「相册未打标 / 缺触发词」
+    "psn_wiz_album_trg": "相册有 {n} 张缺触发词（去相册 tab 点「AI 补标」或采纳建议词）",
     "psn_ready_binding": "应用到会话 / 账号",
     "psn_ready_fix": "去补全",
     "psn_ready_name": "名字",
@@ -2099,6 +2101,7 @@ EN = {
     "psn_quiz_trend_t": "Quiz score trend over the last 14 days (oldest to newest)",
     "psn_ready_all_done": "Profile complete — ready to go live 🎉",
     "psn_ready_avatar": "Avatar (face reference)",
+    "psn_wiz_album_trg": "{n} album photo(s) lack trigger words (open the Album tab and click \"AI tag all\" or adopt suggestions)",
     "psn_ready_binding": "Applied to chats / accounts",
     "psn_ready_fix": "Fix",
     "psn_ready_name": "Name",

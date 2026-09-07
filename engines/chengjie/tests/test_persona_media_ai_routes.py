@@ -74,7 +74,10 @@ def test_upload_strips_exif_makes_thumb_and_phash(client):
     item = r.json()["item"]
     assert len(item["phash"]) == 16
     assert item["thumb_url"].endswith(".thumb.webp")
-    assert item["tag_status"] == ""            # album_ai 默认关：不排队
+    # #238 后 album_ai 默认开，但该夹具无 vision 端点 → 识图打不动：不排必败任务、条目留 untagged、原因回给前端
+    assert item["tag_status"] == ""
+    body = r.json()
+    assert body["autotag"] is False and body["vision_ready"] is False and body["vision_reason"] == "no_endpoint"
     assert item["auto_meta"]["exif"]["month"] == 1
     assert item["auto_meta"]["exif"]["year"] == 2026
     # 落盘原图必须已剥 EXIF；缩略图文件真实存在
@@ -108,8 +111,10 @@ def test_list_ai_summary(client):
     ai = d["ai"]
     assert ai["untagged"] == 2 and ai["tagged"] == 0
     assert ai["thumbs_missing"] == 0           # 上传即生成缩略图
-    assert ai["enabled"] is False
-    assert "batch_active" in ai
+    # #238 D-N3：默认开；该夹具无 vision 端点 → vision_ready=False + reason，前端据此明说而不是显示 0/N
+    assert ai["enabled"] is True and ai["auto_on_upload"] is True
+    assert ai["vision_ready"] is False and ai["vision_reason"] == "no_endpoint"
+    assert "batch_active" in ai and "last_error" in ai
 
 
 def test_upload_schedules_autotag_when_enabled(tmp_path, monkeypatch):
@@ -121,17 +126,21 @@ def test_upload_schedules_autotag_when_enabled(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(pmr._auto_tag, "schedule_tag",
                         lambda st, mid, vcfg, **kw: calls.append(mid) or True)
+    # 识图就绪（探针不发网络；私网端点 + 客户端可建）→ 上传排队打标
+    monkeypatch.setattr(pmr._auto_tag, "vision_probe", lambda vcfg: {"ready": True, "reason": ""})
     app = FastAPI()
     pmr.register_persona_media_routes(
         app, auth_dep=lambda: True,
         config_manager=_CfgMgr({"companion": {"selfie": {"album_ai": {
-            "enabled": True}}}, "vision": {"base_urls": ["http://x/v1"]}}))
+            "enabled": True}}}, "vision": {"base_urls": ["http://192.168.0.140:11434/v1"]}}))
     try:
         c = TestClient(app)
         r = _upload(c, _jpeg_bytes(seed=4))
-        item = r.json()["item"]
+        body = r.json()
+        item = body["item"]
         assert item["tag_status"] == "pending"
         assert calls == [item["id"]]
+        assert body["autotag"] is True and body["vision_ready"] is True
     finally:
         reset_persona_media_store()
         pm.delete_profile("lin")

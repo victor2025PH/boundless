@@ -42,10 +42,14 @@ def _good_json(**over):
     return json.dumps(base, ensure_ascii=False)
 
 
-def test_resolve_album_ai_cfg_defaults_off():
+def test_resolve_album_ai_cfg_defaults_on_since_d_n3():
+    """#238 D-N3（2026-09-07）：上传即自动识别默认开——此前默认关＝skuio 144 张全部 autotag=False。
+    运营显式 enabled: false 仍受尊重。"""
     c = resolve_album_ai_cfg({})
-    assert c["enabled"] is False and c["auto_on_upload"] is True
+    assert c["enabled"] is True and c["auto_on_upload"] is True
     assert c["face_check"] is True
+    off = resolve_album_ai_cfg({"companion": {"selfie": {"album_ai": {"enabled": False}}}})
+    assert off["enabled"] is False
     c2 = resolve_album_ai_cfg({"companion": {"selfie": {"album_ai": {
         "enabled": True, "auto_on_upload": False, "max_batch": "50",
         "face_check": False}}}})

@@ -13,14 +13,16 @@
 2. **保守**：VLM 答 unknown / 低置信 / 解析失败一律不落维度标签；地点标签只收
    「EXIF GPS（上传时抽的结论级提示）> VLM 高置信地标」；季节以**画面证据**
    为准（客户看到什么就是什么），EXIF 拍摄月只在画面无证据时补位。
-3. **隐私**：本路径强制 LAN VisionClient（provider 钉 openai_compatible +
-   ``vision.base_urls``），真人素材照绝不出内网——没有 LAN 端点＝打标失败，
-   **绝不**回落云端视觉。
+3. **隐私**：本路径只走**自家 GPU**——LAN VisionClient（provider 钉 openai_compatible +
+   ``vision.base_urls`` 私网端点），或 ``hosted_gateway`` 注入的官网网关
+   （``vision._hosted_vision`` 标记；bd2026.cc → 隧道 → 同一批 176/140，D-N3 2026-09-07：
+   外网客户机识图走官网网关）。真人素材照**绝不**回落第三方云端视觉；两者都没有＝打标失败。
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -42,9 +44,11 @@ _TRIGGER_MAX_N = 6
 
 
 def resolve_album_ai_cfg(cfg: Any) -> Dict[str, Any]:
-    """``companion.selfie.album_ai`` 配置（新子系统按约定默认关）。
+    """``companion.selfie.album_ai`` 配置。
 
-    - ``enabled``（默认 **False**）：上传即自动打标的总闸；
+    - ``enabled``（默认 **True**，D-N3 2026-09-07 #238）：上传即自动打标的总闸。此前默认 False
+      ＝ skuio 144 张全部 ``autotag=False``、AI 发图只能随机（K5XHJ2 325 张同病）；识图走自家 GPU
+      （LAN 或官网网关），成本可接受。运营要关请显式 ``enabled: false``；
     - ``auto_on_upload``（默认 True，受 enabled 闸）：上传成功后排队打标；
     - ``max_batch``（默认 200）：一次「补标」批任务的条目上限；
     - ``face_check``（默认 True）：打标时顺带与锁脸基准照做同人比对——
@@ -62,7 +66,7 @@ def resolve_album_ai_cfg(cfg: Any) -> Dict[str, Any]:
     except (TypeError, ValueError):
         max_batch = 200
     return {
-        "enabled": bool(a.get("enabled", False)),
+        "enabled": bool(a.get("enabled", True)),
         "auto_on_upload": bool(a.get("auto_on_upload", True)),
         "max_batch": max(1, max_batch),
         "face_check": bool(a.get("face_check", True)),
@@ -384,6 +388,14 @@ _STATS: Dict[str, Any] = {
     "last_error": "", "last_ts": 0.0,
 }
 _VISION_CACHE: Dict[str, Any] = {"fp": "", "client": None}
+# 识图端点熔断（#238）：一次 vlm_unavailable 后 _VLM_COOLDOWN_SEC 内后续任务直接判 failed，
+# 不再逐条打死端点——否则 144 张上传排队的 144 个任务会在单工位上把 60s 超时跑满两个多小时，
+# 期间「AI 补标」也排不进去。到点自动放行一条探路，成功即恢复。
+_VLM_COOLDOWN_SEC = 90.0
+_VLM_DOWN_UNTIL = 0.0
+VISION_REASON_NO_ENDPOINT = "no_endpoint"        # 无私网端点、也无官网网关注入 → 识图未配置
+VISION_REASON_INIT_FAILED = "client_init_failed"  # 端点在但 VisionClient 起不来
+VISION_REASON_COOLDOWN = "unreachable"            # 刚失败过、熔断中（端点不可达）
 
 
 def _get_executor() -> ThreadPoolExecutor:
@@ -427,18 +439,39 @@ def _is_private_url(url: Any) -> bool:
         return False
 
 
+def _is_hosted_gateway_url(url: Any, vision_cfg: Any) -> bool:
+    """官网网关端点（D-N3）：仍是自家 GPU（bd2026.cc → 117 → VPS 隧道 → 176/140），不是第三方云。
+
+    只在 ``hosted_gateway.ensure_hosted_vision`` / ``ConfigManager._apply_hosted_vision_env``
+    打了 ``_hosted_vision`` 标记、且 URL 就是它们注入的那一条（== ``base_url`` 或 env
+    ``AITR_HOSTED_VISION_BASE_URL``，https + ``/api/ai/v1``）时放行——任何别的公网域名仍一律拒绝。
+    """
+    if not (isinstance(vision_cfg, dict) and vision_cfg.get("_hosted_vision")):
+        return False
+    u = str(url or "").strip().rstrip("/")
+    if not u.startswith("https://") or not u.endswith("/api/ai/v1"):
+        return False
+    injected = {
+        str(vision_cfg.get("base_url") or "").strip().rstrip("/"),
+        (os.environ.get("AITR_HOSTED_VISION_BASE_URL") or "").strip().rstrip("/"),
+    }
+    injected.discard("")
+    return u in injected
+
+
 def _lan_vision_cfg(vision_cfg: Any) -> Optional[Dict[str, Any]]:
-    """强制 LAN 形态的 vision 配置；无 LAN 端点返回 None（隐私硬闸）。
+    """强制「自家 GPU」形态的 vision 配置；无私网端点也无官网网关注入返回 None（隐私硬闸）。
 
     2026-08-30 生产实锤加固：实例 vision 是聊天识图的调优形态——``base_urls``
     里混着**云端点**（siliconflow）且 176 的 ``endpoint_timeouts`` 压到 3s。
     直接透传＝① 慢一点的打标调用被 3s 掐死，② 掐死后 failover 把真人素材照
-    送云（隐私硬线被配置形态击穿）。故这里**按 host 过滤只留私网端点**、
-    剥掉分端点超时并给打标专用宽超时（60s，批处理不赶时间）。
+    送云（隐私硬线被配置形态击穿）。故这里**按 host 过滤只留私网端点**（+ D-N3
+    官网网关注入的那一条，见 ``_is_hosted_gateway_url``）、剥掉分端点超时并给打标
+    专用宽超时（60s，批处理不赶时间）。
     """
     c = dict(vision_cfg) if isinstance(vision_cfg, dict) else {}
     urls = c.get("base_urls") or ([c["base_url"]] if c.get("base_url") else [])
-    lan = [u for u in urls if _is_private_url(u)]
+    lan = [u for u in urls if _is_private_url(u) or _is_hosted_gateway_url(u, c)]
     if not lan:
         return None
     c["provider"] = "openai_compatible"
@@ -476,15 +509,59 @@ def _get_vision_client(vision_cfg: Any) -> Optional[Any]:
         return None
 
 
+def _vlm_cooling(now: Optional[float] = None) -> bool:
+    with _LOCK:
+        return (now if now is not None else time.time()) < _VLM_DOWN_UNTIL
+
+
+def _vlm_mark_down(now: Optional[float] = None) -> None:
+    global _VLM_DOWN_UNTIL
+    with _LOCK:
+        _VLM_DOWN_UNTIL = (now if now is not None else time.time()) + _VLM_COOLDOWN_SEC
+
+
+def _vlm_mark_up() -> None:
+    global _VLM_DOWN_UNTIL
+    with _LOCK:
+        _VLM_DOWN_UNTIL = 0.0
+
+
+def vision_probe(vision_cfg: Any) -> Dict[str, Any]:
+    """识图能不能打（配置层 + 熔断层，**不发网络请求**）→ ``{ready, reason}``（#238）。
+
+    上传 / 补标路由据此决定要不要排任务，前端据此把「识图服务暂不可用」说出来而不是显示 0/144：
+    - ``no_endpoint``：无私网端点也无官网网关注入（识图未配置 / 纯云形态）；
+    - ``client_init_failed``：端点在、VisionClient 起不来；
+    - ``unreachable``：刚有任务 vlm_unavailable、熔断冷却中（真不可达要靠任务结果，这里只报最近结论）。
+    """
+    if _lan_vision_cfg(vision_cfg) is None:
+        return {"ready": False, "reason": VISION_REASON_NO_ENDPOINT}
+    if _vlm_cooling():
+        return {"ready": False, "reason": VISION_REASON_COOLDOWN}
+    if _get_vision_client(vision_cfg) is None:
+        return {"ready": False, "reason": VISION_REASON_INIT_FAILED}
+    return {"ready": True, "reason": ""}
+
+
 def _vision_describe(vision_cfg: Any, image_path: str, prompt: str) -> Optional[str]:
+    if _vlm_cooling():
+        return None
     client = _get_vision_client(vision_cfg)
     if client is None:
         return None
     try:
-        return client.describe_image_sync(str(image_path), prompt)
+        out = client.describe_image_sync(str(image_path), prompt)
     except Exception:
         logger.debug("[media_auto_tag] VLM 调用失败", exc_info=True)
+        _vlm_mark_down()
         return None
+    if out is None and str(getattr(client, "last_fail", "") or ""):
+        # 端点循环全部抛异常（VisionClient 内部已吞、last_fail 记 kind）＝不可达 → 熔断；
+        # 单张图转码失败 / 模型空答（last_fail 为空）不算端点问题，不熔断。
+        _vlm_mark_down()
+    elif out is not None:
+        _vlm_mark_up()
+    return out
 
 
 def _row_image_path(row: Dict[str, Any]) -> str:
@@ -750,9 +827,15 @@ def run_batch(
             continue
         todo.append(r)
     todo = todo[: max(1, int(limit))]
+    # #238：识图打不动（无端点 / 起不来 / 熔断中）→ 资产补齐照做、打标一条不排，
+    # 把 vision_ready=False + reason 明说出去；否则前端只看到「已排 144」然后全部 failed。
+    probe = vision_probe(vision_cfg) if describe is None else {"ready": True, "reason": ""}
+    if not probe.get("ready"):
+        todo = []
     with _LOCK:
         if _BATCH_ACTIVE and not inline:
-            return {"ok": True, "queued": 0, "assets": 0, "batch_active": True}
+            return {"ok": True, "queued": 0, "assets": 0, "batch_active": True,
+                    "vision_ready": bool(probe.get("ready")), "vision_reason": probe.get("reason") or ""}
         _BATCH_ACTIVE = True
 
     def _job() -> None:
@@ -771,28 +854,31 @@ def run_batch(
             with _LOCK:
                 _BATCH_ACTIVE = False
 
+    vision_out = {"vision_ready": bool(probe.get("ready")),
+                  "vision_reason": probe.get("reason") or ""}
     if inline:
         _job()
-        return {"ok": True, "queued": len(todo), "assets": len(assets),
-                "batch_active": False}
+        return dict({"ok": True, "queued": len(todo), "assets": len(assets),
+                     "batch_active": False}, **vision_out)
     try:
         _get_executor().submit(_job)
     except Exception:
         with _LOCK:
             _BATCH_ACTIVE = False
         return {"ok": False, "error": "executor_failed"}
-    return {"ok": True, "queued": len(todo), "assets": len(assets),
-            "batch_active": True}
+    return dict({"ok": True, "queued": len(todo), "assets": len(assets),
+                 "batch_active": True}, **vision_out)
 
 
 def reset_for_tests() -> None:
-    """测试钩子：清执行器/批互斥/统计（生产勿用）。"""
-    global _EXECUTOR, _BATCH_ACTIVE
+    """测试钩子：清执行器/批互斥/统计/熔断（生产勿用）。"""
+    global _EXECUTOR, _BATCH_ACTIVE, _VLM_DOWN_UNTIL
     with _LOCK:
         if _EXECUTOR is not None:
             _EXECUTOR.shutdown(wait=True)
         _EXECUTOR = None
         _BATCH_ACTIVE = False
+        _VLM_DOWN_UNTIL = 0.0
         for k in ("queued", "done", "failed", "skipped"):
             _STATS[k] = 0
         _STATS["last_error"] = ""
@@ -801,6 +887,8 @@ def reset_for_tests() -> None:
 
 __all__ = [
     "TAG_PENDING", "TAG_TAGGED", "TAG_FAILED", "TAG_SKIPPED",
+    "VISION_REASON_NO_ENDPOINT", "VISION_REASON_INIT_FAILED", "VISION_REASON_COOLDOWN",
+    "vision_probe",
     "resolve_album_ai_cfg", "build_auto_tag_prompt", "parse_auto_tag_response",
     "build_face_check_prompt", "parse_face_check_response",
     "hard_reject", "derive_tags", "detect_tag_conflicts", "build_auto_meta",

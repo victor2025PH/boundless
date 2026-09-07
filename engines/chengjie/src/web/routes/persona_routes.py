@@ -1070,6 +1070,28 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
             usage_total = int(sum(_uc.values()))
         except Exception:
             pass
+        # #238（N-2 C）：完整度纳入「相册未打标」——有相册却没触发词的人设分数下调，卡片徽标 /
+        # 抽屉完善向导据 album_* 三个数提示「去相册 tab 点 AI 补标」。旁路能力：媒体库只 peek
+        # 不懒建（测试 CWD 不写库），任何异常吞掉不影响列表。
+        try:
+            from src.companion.persona_media_store import peek_persona_media_store
+            from src.utils.persona_completeness import persona_completeness
+            _mst = peek_persona_media_store()
+            if _mst is not None:
+                for _s in summary:
+                    _items = _mst.list(str(_s["id"])) or []
+                    if not _items:
+                        continue
+                    _with_trg = sum(1 for _it in _items if (_it.get("triggers") or []))
+                    _untagged = sum(1 for _it in _items if str(_it.get("tag_status") or "") != "tagged")
+                    _s["album_total"] = len(_items)
+                    _s["album_no_triggers"] = len(_items) - _with_trg
+                    _s["album_untagged"] = _untagged
+                    _p = profiles.get(_s["id"]) or pm.get_persona_by_id(_s["id"]) or {}
+                    _s["completeness"] = int(persona_completeness(
+                        _p, album={"total": len(_items), "with_triggers": _with_trg})["score"])
+        except Exception:
+            pass
         return {
             "profiles": profiles,
             "ids": ids,

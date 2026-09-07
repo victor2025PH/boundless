@@ -45,6 +45,24 @@ _TOTAL_WEIGHT = sum(FIELD_WEIGHTS.values())
 _MEMORIES_FULL_AT = 5
 _TAGS_MIN = 3
 
+# #238（N-2 C）：相册纳入完整度——有相册却没触发词＝AI 发图只能随机（F35X38 144 张 / K5XHJ2 325 张）。
+# 相册不在人设 dict 里，调用方从媒体库取 ``{"total", "with_triggers"}`` 传进来；没相册（total=0）
+# 或没传＝不参与评分（权重不进分母），不因「没备货相册」扣分。
+ALBUM_KEY = "album.triggers"
+ALBUM_WEIGHT = 4
+_ALBUM_FULL_RATIO = 0.9
+
+
+def _album_credit(album: Any) -> float:
+    total = int(_dict_get(album, "total") or 0)
+    ready = int(_dict_get(album, "with_triggers") or 0)
+    if total <= 0:
+        return -1.0   # 不参与
+    ratio = max(0.0, min(1.0, ready / float(total)))
+    if ratio >= _ALBUM_FULL_RATIO:
+        return 1.0
+    return 0.5 if ratio > 0 else 0.0
+
 
 def _has_content(v: Any) -> bool:
     """递归判「有实质内容」：空串/空容器/None → False；数字/True → True。"""
@@ -125,12 +143,14 @@ def _field_credit(persona: Dict[str, Any], key: str) -> float:
     return 1.0 if _has_content(persona.get(key)) else 0.0
 
 
-def persona_completeness(persona: dict) -> dict:
+def persona_completeness(persona: dict, album: Any = None) -> dict:
     """人设完整度评分。
 
     返回 ``{"score": int 0-100, "filled": [...], "missing": [...]}``：
     - ``filled``：有内容（含半分档）的点路径键；
     - ``missing``：完全没填且权重 >= 4 的缺口（重点提示项，轻量字段不啰嗦）。
+    ``album``（可选）：``{"total": N, "with_triggers": M}``——N>0 时 ``album.triggers`` 参与评分
+    （≥90% 有触发词满分、部分半分、零分进 missing）；N=0 / 不传＝不参与。
     """
     if not isinstance(persona, dict):
         persona = {}
@@ -138,6 +158,7 @@ def persona_completeness(persona: dict) -> dict:
     earned = 0.0
     filled: List[str] = []
     missing: List[str] = []
+    total_weight = _TOTAL_WEIGHT
     for key, weight in FIELD_WEIGHTS.items():
         try:
             credit = _field_credit(persona, key)
@@ -149,5 +170,17 @@ def persona_completeness(persona: dict) -> dict:
         elif weight >= 4:
             missing.append(key)
 
-    score = int(round(earned / _TOTAL_WEIGHT * 100)) if _TOTAL_WEIGHT else 0
+    try:
+        album_credit = _album_credit(album) if isinstance(album, dict) else -1.0
+    except Exception:
+        album_credit = -1.0
+    if album_credit >= 0:
+        total_weight += ALBUM_WEIGHT
+        if album_credit > 0:
+            earned += ALBUM_WEIGHT * album_credit
+            filled.append(ALBUM_KEY)
+        else:
+            missing.append(ALBUM_KEY)
+
+    score = int(round(earned / total_weight * 100)) if total_weight else 0
     return {"score": score, "filled": filled, "missing": missing}

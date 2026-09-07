@@ -195,7 +195,14 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                 ai["thumbs_missing"] += 1
         snap = _auto_tag.stats_snapshot()
         ai["batch_active"] = bool(snap.get("batch_active"))
-        ai["enabled"] = bool(_album_ai_cfg().get("enabled"))
+        _aicfg = _album_ai_cfg()
+        ai["enabled"] = bool(_aicfg.get("enabled"))
+        ai["auto_on_upload"] = bool(_aicfg.get("enabled")) and bool(_aicfg.get("auto_on_upload"))
+        # #238：识图能不能打 + 最近一次失败原因——前端据此说「识图服务暂不可用」而不是显示 0/144
+        probe = _auto_tag.vision_probe(_vision_cfg())
+        ai["vision_ready"] = bool(probe.get("ready"))
+        ai["vision_reason"] = str(probe.get("reason") or "")
+        ai["last_error"] = str(snap.get("last_error") or "")
         return {"items": items, "stats": st.stats(str(pid)), "ai": ai}
 
     @app.post("/api/personas/{pid}/speech-print")
@@ -372,7 +379,11 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         except Exception:
             actor = ""
         aicfg = _album_ai_cfg()
-        will_tag = bool(aicfg.get("enabled")) and bool(aicfg.get("auto_on_upload"))
+        want_tag = bool(aicfg.get("enabled")) and bool(aicfg.get("auto_on_upload"))
+        # #238（D-N3）：想打标但识图打不动（无端点 / 起不来 / 熔断中）→ 不排必败任务、条目留
+        # untagged 让之后「AI 补标」only_missing 能捞回来，并把原因回给前端明说。
+        probe = _auto_tag.vision_probe(_vision_cfg()) if want_tag else {"ready": False, "reason": ""}
+        will_tag = want_tag and bool(probe.get("ready"))
         row = st.add(
             str(pid), mtype, str(fpath), url, thumb_url=thumb_url,
             triggers=_as_str_list(form.get("triggers")),
@@ -392,13 +403,16 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             _auto_tag.schedule_tag(st, mid, _vision_cfg(),
                                    face_ref=_face_ref_for_tagging(pid, aicfg))
         logger.info("[pmedia] 上传 pid=%s type=%s id=%s bytes=%d dur=%dms "
-                    "phash=%s neardup=%s autotag=%s",
+                    "phash=%s neardup=%s autotag=%s vision=%s",
                     pid, mtype, mid, len(data), duration_ms,
                     "y" if phash else "n",
-                    (near_dup or {}).get("id", "-"), will_tag)
+                    (near_dup or {}).get("id", "-"), will_tag,
+                    "ready" if probe.get("ready") else (probe.get("reason") or ("off" if not want_tag else "-")))
         _audit(request, "pmedia_upload", f"pid={pid} id={mid}",
                f"type={mtype} bytes={len(data)}")
-        out = {"ok": True, "item": row}
+        out = {"ok": True, "item": row, "autotag": will_tag,
+               "vision_ready": bool(probe.get("ready")) if want_tag else None,
+               "vision_reason": str(probe.get("reason") or "") if want_tag else ""}
         if near_dup:
             out["near_dup"] = near_dup
         return out
@@ -531,6 +545,10 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         _audit(request, "pmedia_retag_all", f"pid={pid}",
                f"queued={res.get('queued')} assets={res.get('assets')} "
                f"only_missing={only_missing}")
+        # #238：补标点击必落 backend.log（F35X38：13:31–13:44 零条补标日志，无法判断用户点过没有）
+        logger.info("[pmedia] 补标 pid=%s queued=%s assets=%s only_missing=%s vision=%s",
+                    pid, res.get("queued"), res.get("assets"), only_missing,
+                    "ready" if res.get("vision_ready", True) else (res.get("vision_reason") or "-"))
         return res
 
     @app.post("/api/personas/{pid}/media/{mid}/retag")

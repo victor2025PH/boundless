@@ -2878,6 +2878,78 @@ async function pmaLoad() {
   } catch (e) { body.textContent = window.T('pma_load_fail') + e; }
 }
 
+/* #238（F35X38 / D-N3）：识别进度 / 识图不可达 / 未识别 / 缺触发词 / 锚脸 五态常驻引导条。
+   此前上传完只有一条 6s toast + 摘要「144 个缺触发词」，用户看不出该干什么；识图没跑时页面显示
+   「AI 已识别 0/144」也没说为什么。这里按状态只讲一句话 + 内嵌下一步按钮。 */
+var _pmaFaceExists = null;   // null=未知 / true / false（pmaFaceLoad 回填）
+function _pmaVisionWhy(reason) {
+  if (reason === 'no_endpoint') return window.T('pma_ai_why_no_endpoint');
+  if (reason === 'client_init_failed') return window.T('pma_ai_why_init_failed');
+  return window.T('pma_ai_why_unreachable');
+}
+function _pmaRenderGuide() {
+  const box = document.getElementById('pma-guide');
+  if (!box || !_pmaState) return;
+  const items = _pmaState.items || [];
+  const ai = _pmaState.ai || {};
+  if (!items.length || typeof ai.tagged !== 'number') { box.innerHTML = ''; box.style.display = 'none'; return; }
+  const total = items.length;
+  const pending = Number(ai.pending || 0);
+  const done = Number(ai.tagged || 0) + Number(ai.failed || 0) + Number(ai.skipped || 0);
+  const untagged = Number(ai.untagged || 0);
+  const failed = Number(ai.failed || 0);
+  const noTrg = items.filter(function (it) { return !(_pmaItemView(it).triggers || []).length; }).length;
+  const rows = [];
+  if (pending > 0 || ai.batch_active) {
+    const pct = total ? Math.round(done / total * 100) : 0;
+    rows.push({ cls: 'info', html: '<progress max="100" value="' + pct + '" style="width:120px;height:8px;vertical-align:middle;margin-right:.4rem"></progress>'
+      + _pmaEsc(window.Tf('pma_guide_progress', { done: String(done), total: String(total), pending: String(pending) })) });
+  } else if (ai.vision_ready === false && (untagged > 0 || failed > 0)) {
+    rows.push({ cls: 'err', html: '⛔ ' + _pmaEsc(window.Tf('pma_guide_vision_down', { why: _pmaVisionWhy(ai.vision_reason), n: String(untagged + failed) }))
+      + ' ' + _pmaEsc(window.T('pma_guide_vision_retry'))
+      + ' <button class="btn btn-xs" onclick="pmaRetagAll()">' + window.T('pma_ai_btn') + '</button>' });
+  } else if (failed > 0) {
+    const why = ai.last_error === 'parse' ? window.T('pma_guide_failed_why_parse') : (ai.last_error === 'vlm_unavailable' ? window.T('pma_guide_failed_why_vlm') : '');
+    rows.push({ cls: 'warn', html: '⚠ ' + _pmaEsc(window.Tf('pma_guide_failed_n', { n: String(failed), why: why }))
+      + ' <button class="btn btn-xs" onclick="pmaRetagAll()">' + window.T('pma_guide_retry_btn') + '</button>' });
+  } else if (untagged > 0) {
+    rows.push({ cls: 'warn', html: '✨ ' + _pmaEsc(window.Tf('pma_guide_untagged_n', { n: String(untagged) }))
+      + ' <button class="btn btn-xs btn-primary" onclick="pmaRetagAll()">' + window.T('pma_ai_btn') + '</button>' });
+  } else if (noTrg > 0) {
+    rows.push({ cls: 'warn', html: '⚠ ' + _pmaEsc(window.Tf('pma_guide_notrg_n', { n: String(noTrg) }))
+      + ' <button class="btn btn-xs" onclick="_pmaSetFilter(\'notrg\')">' + window.T('pma_guide_notrg_btn') + '</button>' });
+  }
+  if (_pmaFaceExists === false) {
+    rows.push({ cls: 'info', html: '🧑 ' + _pmaEsc(window.T('pma_guide_face_missing'))
+      + ' <button class="btn btn-xs" onclick="_pmaFacePick()">' + window.T('pma_guide_face_btn') + '</button>' });
+  }
+  if (!rows.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+  const color = { err: 'var(--th-ink-red7,#b91c1c)', warn: 'var(--th-ink-amber7,#b45309)', info: 'var(--t2)' };
+  box.innerHTML = rows.map(function (r) {
+    return '<div class="pma-guide-row" data-kind="' + r.cls + '" style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;font-size:.74rem;color:' + color[r.cls] + ';padding:.15rem 0">' + r.html + '</div>';
+  }).join('');
+  box.style.display = '';
+}
+/* 轮询只刷 AI 计数 + 引导条 + 摘要，不整页重绘（用户可能正在卡片里打触发词；识别完成数变了且
+   焦点不在卡片输入框时才重绘网格让 ✨ 建议词冒出来）。 */
+async function _pmaRefreshAi() {
+  const pid = _pmaPid();
+  if (!pid || !_pmaState) return;
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media');
+    if (!r.ok) return;
+    const d = await r.json();
+    const prevTagged = Number((_pmaState.ai || {}).tagged || 0);
+    _pmaState.items = d.items || []; _pmaState.stats = d.stats || {}; _pmaState.ai = d.ai || {};
+    _pmaRenderGuide();
+    const cover = document.getElementById('pma-ai-cover');
+    if (cover) cover.textContent = window.Tf('pma_ai_cover', { done: String(_pmaState.ai.tagged || 0), total: String(_pmaState.items.length) });
+    const ae = document.activeElement;
+    const typing = !!(ae && ae.closest && ae.closest('.pma-card') && /^(INPUT|TEXTAREA)$/.test(ae.tagName || ''));
+    if (Number(_pmaState.ai.tagged || 0) !== prevTagged && !typing) _pmaRenderGrid();
+  } catch (e) { /* 下一轮再试 */ }
+}
+
 // ── face_ref 锁脸基准照（PuLID 参考；生成链按 face_ref.* 约定名读取）────────────
 async function pmaFaceLoad() {
   const box = document.getElementById('pma-faceref');
@@ -2887,6 +2959,8 @@ async function pmaFaceLoad() {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/face-ref');
     if (!r.ok) { box.style.display = 'none'; return; }
     const d = await r.json();
+    _pmaFaceExists = !!d.exists;
+    _pmaRenderGuide();   // #238：锚脸未设 → 引导条补一行
     let inner = '<div style="font-weight:600;font-size:.78rem;margin-bottom:.3rem">'
       + window.T('pma_faceref_title')
       + ' <span style="font-weight:400;color:var(--t2);font-size:.68rem">' + window.T('pma_faceref_hint') + '</span></div>'
@@ -3098,7 +3172,9 @@ function _pmaRender(body, items, stats, photosOn, gate) {
     + '<button class="btn btn-sm btn-primary" onclick="_pmaPick()">＋ ' + window.T('pma_upload_label') + '</button>'
     + aiBtn
     + '<span id="pma-up-status" class="pma-status"></span>'
-    + '</div>';
+    + '</div>'
+    // #238：五态引导条（进度 / 识图不可达 / 未识别 / 缺触发词 / 锚脸），_pmaRenderGuide 按状态填
+    + '<div id="pma-guide" style="display:none;padding:.35rem .6rem;margin:.1rem 0 .55rem;border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
   // 试触发 + 搜索筛选：吸顶（.dpane 是滚动容器），命中时滚到并高亮命中卡
   const filters = [['all', 'pma_f_all'], ['notrg', 'pma_f_notrg'], ['nohit', 'pma_f_nohit'], ['off', 'pma_f_off'],
     ['untagged', 'pma_f_untagged'], ['photo', 'pma_f_photo'], ['video', 'pma_f_video']];
@@ -3125,12 +3201,13 @@ function _pmaRender(body, items, stats, photosOn, gate) {
       + '<span>🎬 ' + (stats.video || 0) + '</span>'
       + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span>'
       + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
-      + (typeof ai.tagged === 'number' && items.length ? '<span>' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
+      + (typeof ai.tagged === 'number' && items.length ? '<span id="pma-ai-cover">' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
       + '</div>';
   }
   body.innerHTML = capbar + faceref + uploader + test + summary
     + '<div id="pma-grid-wrap" style="' + dim + '"></div>'
     + '<div id="pma-savebar"></div>';
+  _pmaRenderGuide();
   _pmaRenderGrid();
   _pmaRenderSaveBar();
 }
@@ -3353,6 +3430,7 @@ async function pmaRetagAll() {
   const pid = _pmaPid();
   if (!pid) return;
   const st = document.getElementById('pma-up-status');
+  try { console.info('[pma] retag-all click pid=' + pid); } catch (e) {}
   try {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/retag-all', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ only_missing: true }),
@@ -3361,6 +3439,14 @@ async function pmaRetagAll() {
     if (!r.ok) { if (st) st.textContent = window.T('pma_ai_fail') + r.status; return; }
     const d = await r.json();
     const n = (d && d.queued) || 0;
+    // #238：识图打不动 → 明说原因（此前回「已排队 144」然后全部 failed、页面显示 0/144）
+    if (d && d.vision_ready === false) {
+      const msg = window.Tf('pma_ai_novision', { why: _pmaVisionWhy(d.vision_reason) });
+      if (st) st.textContent = msg;
+      _toast(_pmaEsc(msg), 'err', 8000);
+      if (_pmaState) { _pmaState.ai = Object.assign({}, _pmaState.ai || {}, { vision_ready: false, vision_reason: d.vision_reason || '' }); _pmaRenderGuide(); }
+      return;
+    }
     if (st) st.textContent = n ? window.Tf('pma_ai_queued', { n: String(n) }) : window.T('pma_ai_queued_zero');
     if (n) { _pmaPollLeft = 20; _pmaMaybePollAi(true); }
   } catch (e) { if (st) st.textContent = window.T('pma_ai_fail') + e; }
@@ -3376,19 +3462,27 @@ async function pmaRetagOne(mid) {
     await pmaLoad();
   } catch (e) { _toast(window.T('pma_ai_fail') + e, 'err'); }
 }
+var _pmaPollSince = 0;
 function _pmaMaybePollAi(force) {
   if (_pmaPollTimer) { clearTimeout(_pmaPollTimer); _pmaPollTimer = null; }
   const ai = (_pmaState && _pmaState.ai) || {};
-  const busy = !!(ai.pending || ai.batch_active);
-  if (!force && !busy) { _pmaPollLeft = 0; return; }
-  if (!force && _pmaPollLeft <= 0) return;
-  if (_pmaPollLeft <= 0) _pmaPollLeft = 20;
+  const pending = Number(ai.pending || 0);
+  const busy = !!(pending || ai.batch_active);
+  if (!force && !busy) { _pmaPollLeft = 0; _pmaPollSince = 0; return; }
+  if (!force && _pmaPollLeft <= 0) { _pmaPollSince = 0; return; }
+  // #238：144 张排队时 20 轮 × 4s 只够 80s，进度条会在识别中途停更——有剩余就按剩余量续命
+  //（每张最多 3 轮）；墙钟 90 分钟兜底，防执行器卡死时无限轮询。
+  if (force || !_pmaPollSince) _pmaPollSince = Date.now();
+  if (Date.now() - _pmaPollSince > 90 * 60 * 1000) { _pmaPollLeft = 0; _pmaPollSince = 0; return; }
+  _pmaPollLeft = Math.max(_pmaPollLeft, Math.min(600, 20 + pending * 3));
+  const every = pending > 20 ? 6000 : 4000;
   _pmaPollTimer = setTimeout(async function () {
     _pmaPollTimer = null;
     _pmaPollLeft--;
     if (!_albumLoaded || !_pmaPid()) return;
-    await pmaLoad();   // pmaLoad 末尾会按 ai.pending 决定是否继续
-  }, 4000);
+    await _pmaRefreshAi();   // 只刷计数/引导条，不整页重绘
+    _pmaMaybePollAi();       // 按最新 ai.pending 决定是否继续
+  }, every);
 }
 
 function _pmaPick() {
@@ -3403,33 +3497,50 @@ async function pmaUpload() {
   if (!pid || !inp || !inp.files || !inp.files.length) return;
   const trgEl = document.getElementById('pma-up-trg');
   const trg = trgEl ? trgEl.value : '';
-  let ok = 0, fail = 0;
+  const wasEmpty = !(((_pmaState || {}).items || []).length);   // #238：首次上传 → 引导设锚脸
+  const before = new Set(((_pmaState || {}).items || []).map(function (x) { return String(x.id); }));
+  let ok = 0, fail = 0, tagQueued = 0, visionDown = '';
+  const total = inp.files.length;
+  let i = 0;
   for (const f of inp.files) {
-    if (st) st.textContent = window.T('pma_uploading') + ' ' + f.name;
+    i++;
+    if (st) st.textContent = window.T('pma_uploading') + ' ' + i + '/' + total + ' ' + f.name;
     const fd = new FormData();
     fd.append('file', f);
     if (trg && trg.trim()) fd.append('triggers', trg.trim());
     try {
       // 单文件可到 50M 视频 + 服务端 ffprobe/封面探针 → 5min 预算
       const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media', { method: 'POST', body: fd }, { timeoutMs: 300000 });
-      if (r.ok) { ok++; } else { fail++; }
+      if (r.ok) {
+        ok++;
+        // #238：后端每条回 autotag / vision_ready / vision_reason（旧后端无字段＝按 0 计）
+        try { const d = await r.json(); if (d && d.autotag) tagQueued++; if (d && d.vision_ready === false) visionDown = d.vision_reason || 'unreachable'; } catch (e) {}
+      } else { fail++; }
     } catch (e) { fail++; }
   }
   inp.value = '';
-  if (st) st.textContent = window.T('pma_upload_ok') + ' ' + ok + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
-  const before = new Set(((_pmaState || {}).items || []).map(function (x) { return String(x.id); }));
+  let done = window.T('pma_upload_ok') + ' ' + ok + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
+  if (ok && tagQueued) done = window.Tf('pma_up_done_ai', { ok: String(ok), n: String(tagQueued) }) + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
+  else if (ok && visionDown) done = window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) }) + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
+  if (st) st.textContent = done;
   await pmaLoad();
+  if (ok && visionDown) _toast(_pmaEsc(window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) })), 'err', 9000);
   // #190「触发词全空」：上传完引导填触发词——新卡没触发词就切到「缺触发词」筛选、
   // 聚焦第一张的输入框；AI 建议 chips 会在识别完成后（轮询）出现在卡上。
+  // #238：AI 已在识别时不催手填（建议词马上来），改提示看进度；识图不可达时上面已报错。
   if (ok && !(trg && trg.trim())) {
     const fresh = ((_pmaState || {}).items || []).filter(function (x) { return !before.has(String(x.id)) && !(x.triggers || []).length; });
-    if (fresh.length) {
+    if (fresh.length && tagQueued) {
+      _toast(_pmaEsc(window.Tf('pma_up_ai_running_toast', { n: String(tagQueued) })), 'info', 7000);
+    } else if (fresh.length && !visionDown) {
       _pmaSetFilter('notrg');
       _toast(window.Tf('pma_need_trg_toast', { n: String(fresh.length) }), 'info', 6000);
       const first = document.querySelector('.pma-card[data-mid="' + String(fresh[0].id).replace(/"/g, '\\"') + '"] .pma-trg');
       if (first) { try { first.focus(); first.scrollIntoView({ block: 'center' }); } catch (e) {} }
     }
   }
+  // #238：首次上传且没有锚脸基准照 → 引导设置（引导条常驻，这里再给一条 toast 点破）
+  if (ok && wasEmpty && _pmaFaceExists === false) _toast(_pmaEsc(window.T('pma_up_first_face_toast')), 'info', 9000);
 }
 
 async function pmaDeleteItem(mid) {
@@ -7977,6 +8088,10 @@ function _updateCompletionWizard(p) {
   // P0 改版：绑定不再计入完善度，改为头像（锁脸照）+10%
   if (!_pHasFaceRef(p))
     items.push({label: window.T('psn_ready_avatar'), field: null, tab: 'album', score: 10});
+  // #238（N-2 C）：完整度纳入「相册未打标」——列表摘要带 album_no_triggers（后端已按相册下调 completeness）
+  var _sum = (_allProfiles || []).find(function (s) { return s && s.id === (p.id || _editingProfileId); });
+  if (_sum && Number(_sum.album_no_triggers) > 0)
+    items.push({label: window.Tf('psn_wiz_album_trg', {n: String(_sum.album_no_triggers)}), field: null, tab: 'album', score: 5});
   if (!items.length) { wiz.style.display = 'none'; return; }
   wiz.style.display = '';
   wiz.innerHTML = window.T('psn_js_293') + score + window.T('psn_js_294')
