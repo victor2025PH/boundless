@@ -228,12 +228,28 @@ async def check_messenger_reachable(config: Dict[str, Any]) -> bool:
         return False
 
 
+async def check_qq_milky_reachable(config: Dict[str, Any]) -> bool:
+    """探测 QQ 协议端（Milky）：``get_impl_info`` 有回即可达（Milky 无 /health；未登录也算
+    「协议端在」——登没登录由 get_login_info / worker 另判）。best-effort。"""
+    from src.integrations.qq_milky import MilkyClient, MilkyError, service_base_url, service_token
+    client = MilkyClient(service_base_url(config), service_token(config), timeout=5.0)
+    try:
+        await client.call("get_impl_info")
+        return True
+    except MilkyError as ex:
+        # 协议端在但拒绝（token 不对 / 未登录 / 不支持该 API）——服务本身可达
+        return ex.retcode in (-403, -401, -404)
+    except Exception:
+        return False
+
+
 # sidecar 探测结果缓存：{platform: (ts, ok)}。接入弹窗每次打开都要一份可达性，
 # 不缓存就是每次开弹窗多付两次 HTTP 往返（服务挂着时还要等满超时）。
 _SERVICE_PROBE_CACHE: Dict[str, Any] = {}
 _SERVICE_PROBES = {
     "whatsapp": lambda cfg: check_whatsapp_reachable(cfg),
     "messenger": lambda cfg: check_messenger_reachable(cfg),
+    "qq": lambda cfg: check_qq_milky_reachable(cfg),
 }
 
 

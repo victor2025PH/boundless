@@ -71,6 +71,9 @@ WORKERS: List[Tuple[str, str, str, str]] = [
      "ZaloPersonalWorker"),
     ("instagram", "web", "src.integrations.account_orchestrator",
      "InstagramWebWorker"),
+    # 2026-09-07 QQ 双轨·准入区轨：QQ 协议登录（个人号，经用户自装协议端的 Milky 接口）。
+    # QQ 机器人（qqbot）是 official 族、一个类服务多平台，与其它官方通道一样不进本表。
+    ("qq", "protocol", "src.integrations.qq_milky", "QQPersonalWorker"),
 ]
 
 #: 入站接线点：矩阵行 key → 站点。两种形态：
@@ -94,6 +97,8 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
     "messenger:web": ("js", "services/messenger-web/server.js"),
     "zalo:web": ("js", "services/zalo-personal/server.js"),
     "instagram:web": ("js", "services/instagram-web/server.js"),
+    # Python 侧直接持有 Milky 事件流，payload 在 _ingest_inbound 构造（AST 判定）
+    "qq:protocol": ("src.integrations.qq_milky", "QQPersonalWorker._ingest_inbound"),
 }
 
 #: 已知**由配置开关决定**的格子：(platform, mode, capability) → 开关路径。
@@ -108,6 +113,7 @@ SWITCHED_CAPABILITIES: Dict[Tuple[str, str, str], str] = {
 #: 结构判定不了、且**不是我们没接而是对面没有**的能力——写清楚免得反复被问。
 HARD_LIMITS: Dict[Tuple[str, str], str] = {
     ("line", "typing"): "okline 无 typing/presence 端点（协议层不可做，非未接）",
+    ("qq", "typing"): "Milky 协议（1.3）无输入状态 API（协议层不可做，非未接）",
 }
 
 

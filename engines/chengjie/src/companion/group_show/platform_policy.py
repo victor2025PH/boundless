@@ -63,6 +63,8 @@ __all__ = [
 #: 它与编排器 worker 集合一致。
 KNOWN_PLATFORMS: Tuple[str, ...] = (
     "telegram", "whatsapp", "line", "messenger", "zalo", "instagram",
+    # QQ 协议登录（个人号，Milky；2026-09-07）——未登记风险策略 → _FALLBACK_RISK 禁真发
+    "qq",
 )
 
 #: 未在 :data:`DEFAULT_PLATFORM_RISK` 显式登记的平台走这条兜底——**禁真发**。

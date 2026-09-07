@@ -86,6 +86,8 @@ _IMPLEMENTED_MODES = {
     # QQ 机器人（QQ 开放平台，2026-09-07）：独立平台，唯一形态 official；
     # 个人号协议登录是另一个平台 qq（见 qq_milky / qq_protocol_login）。
     ("qqbot", "official"),
+    # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；默认关、准入区）
+    ("qq", "protocol"),
 }
 
 
@@ -151,6 +153,15 @@ def service_probe_targets(config: Dict[str, Any]) -> Dict[str, str]:
             targets["instagram"] = ig_url(config)
     except Exception:  # noqa: BLE001
         logger.debug("[readiness] 解析 instagram sidecar 地址失败", exc_info=True)
+    try:
+        # QQ 协议端（用户自装，Milky 接口）：探 get_impl_info 而非 /health（Milky 无 /health）
+        from src.integrations.qq_milky import (
+            protocol_enabled as qq_on, service_base_url as qq_url,
+        )
+        if qq_on(config):
+            targets["qq"] = qq_url(config)
+    except Exception:  # noqa: BLE001
+        logger.debug("[readiness] 解析 qq 协议端地址失败", exc_info=True)
     return targets
 
 
@@ -253,6 +264,23 @@ def _sidecar_blockers(
     return out
 
 
+def _qq_protocol_blockers(
+    config: Dict[str, Any], service_ok: Optional[bool],
+) -> List[Dict[str, Any]]:
+    """QQ 协议登录（个人号）：开关 + 协议端可达性。
+
+    协议端（NapCat / LLOneBot / Lagrange.Milky）由用户自装——「开关没开」的处置不是翻开关
+    而是先装协议端、填 Milky 地址/Token，故归 needs_server_setup（与 Zalo/IG 个人号同口径）。
+    """
+    from src.integrations.qq_milky import protocol_enabled, service_base_url
+    out: List[Dict[str, Any]] = []
+    if not protocol_enabled(config):
+        out.append(_blocker(BLOCK_NEEDS_SERVER_SETUP, svc="qq-milky"))
+    elif service_ok is False:
+        out.append(_blocker(BLOCK_SERVICE_DOWN, svc="qq-milky", url=service_base_url(config)))
+    return out
+
+
 def _official_blockers(platform: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """official 模式（Instagram/Zalo 官方 API）：凭证与开关就绪判定。
 
@@ -326,6 +354,8 @@ def diagnose_mode(
                     blockers += _telegram_protocol_blockers(config)
                 elif platform == "line":
                     blockers += _line_protocol_blockers(config)
+                elif platform == "qq":
+                    blockers += _qq_protocol_blockers(config, service_ok)
                 elif (platform, mode) in _SIDECAR_MODES:
                     blockers += _sidecar_blockers(platform, config, service_ok)
             except Exception:  # noqa: BLE001

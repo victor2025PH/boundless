@@ -89,7 +89,9 @@ _VL_EMOJI = {
 # 平台键域与 reply_pacing_settings.PLATFORMS 同源（本模块保持零依赖，
 # 一致性由 tests/test_assistant_actions.py 钉住）。
 ACTION_PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo",
-                    "instagram")
+                    "instagram",
+                    # QQ 协议登录（个人号，Milky；2026-09-07）：有状态 worker，进能力矩阵
+                    "qq")
 
 # ── 注册表 ────────────────────────────────────────────────────────────────
 # level: L0 查询 / L1 导航 / L2 可逆设置。

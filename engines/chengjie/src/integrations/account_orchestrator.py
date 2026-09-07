@@ -1104,6 +1104,14 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
                             lambda acc, cfg: LineProtocolWorker(acc, cfg))
     except Exception:
         logger.debug("[orchestrator] 注册 line protocol worker 失败", exc_info=True)
+    # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；2026-09-07 QQ 双轨·准入区轨）
+    try:
+        from src.integrations.qq_milky import QQPersonalWorker, protocol_enabled as qq_enabled
+        if qq_enabled(config) and get_worker_factory("qq", "protocol") is None:
+            register_worker("qq", "protocol",
+                            lambda acc, cfg: QQPersonalWorker(acc, cfg))
+    except Exception:
+        logger.debug("[orchestrator] 注册 qq protocol worker 失败", exc_info=True)
     # 官方 API 出站 worker（LINE/Messenger/WhatsApp Cloud，mode=official；G 延伸）
     try:
         from src.integrations.official_api_worker import register_official_workers

@@ -4195,6 +4195,18 @@ platform_login:
     web_enabled: false
     # instagram-web Playwright Node 微服务地址（见 services/instagram-web/）。默认本机 8793。
     web_url: "http://127.0.0.1:8793"
+  qq:
+    # ── QQ 协议登录（个人号；platform=qq，2026-09-07 QQ 双轨·准入区轨）────────────────
+    # 用你自己的 QQ 号收发：协议端（NapCat / LLOneBot / Lagrange.Milky，任选）由用户**自装**
+    # （许可证原因不随包分发），本进程只做 Milky 应用端：POST {milky_url}/api/… + GET /event。
+    # QQ 号的扫码在协议端自己的 WebUI 里完成；收件箱「新增 QQ」只做连通 + 确认（login_kind=device）。
+    # 能力与 Telegram 协议号相当（文字/图/语音/视频/已读/群全量/踢人改名），无「正在输入」（Milky 无此 API）。
+    # ⚠ 非官方接入（腾讯 ToS 之外）、有风控风险，默认关且不进桌面默认开表：开启前①用小号②固定 IP。
+    # QQ 机器人（官方开放平台）是另一个平台 qqbot，见顶层 qqbot: 块。
+    protocol_enabled: false
+    milky_url: "http://127.0.0.1:3000"   # 协议端 Milky 服务地址（NapCat/LLOneBot/Lagrange 设置里可查）
+    milky_token: ""                      # 协议端 access_token（强烈建议设置）
+    auto_accept_friend: false            # 收到好友申请是否自动同意
   # 官方 API 出站 worker（mode=official）：让 companion/autoreply 主管道经官方通道发
   # （LINE Messaging / Messenger Send / WhatsApp Cloud），与 RPA/Baileys 按账号并存。
   # 凭证优先读账号 meta，回退到对应通道块（line / facebook_messenger / whatsapp_cloud）。

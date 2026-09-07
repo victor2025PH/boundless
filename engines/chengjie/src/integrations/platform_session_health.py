@@ -1050,7 +1050,9 @@ def report_session_transition(
 #: 由外部边车 / 编排器 worker 保活连接的平台——「已登录」必须以边车会话在场为准，
 #: 注册表 online 只是「期望在线」。协议直连（telegram 主客户端）不在此列：其连接
 #: 真相是 pyrogram 自身，编排器 worker 状态即可。
-SIDECAR_PLATFORMS = frozenset({"messenger", "whatsapp", "zalo", "instagram", "line"})
+SIDECAR_PLATFORMS = frozenset({"messenger", "whatsapp", "zalo", "instagram", "line",
+                               # QQ 协议登录：连接由用户自装的协议端（Milky）保活，worker 只监督
+                               "qq"})
 
 #: 连接态词汇（前端账号栏 / 会话头部 / 发送闸共用）
 CHANNEL_CONNECTED = "connected"

@@ -43,7 +43,9 @@ TONE_HINT_MAXLEN = 120
 # 2026-08-19：zalo/instagram 个人号 worker 进能力矩阵 → 键域同步扩（两平台的
 # 节奏/档位/班表覆写自此可配；拟人开关受 validate_platform_flags_caps 的能力
 # 校验约束——两平台无 mark_read/typing，开了会被如实提示不支持）。
-PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram")
+# 2026-09-07：qq（协议登录个人号，Milky）进能力矩阵 → 键域同步扩（typing 是协议层硬限制，
+# 开了会被 validate_platform_flags_caps 如实提示不支持）。
+PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq")
 # 平台拟人开关覆写的可编辑键（platform_humanize 条目白名单）
 HUMANIZE_FLAG_KEYS = ("mark_read", "typing")
 

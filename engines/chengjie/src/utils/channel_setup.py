@@ -228,6 +228,32 @@ CHANNELS: List[Channel] = [
         ],
     ),
     Channel(
+        id="qq",
+        name="QQ",
+        # 启用开关 = 协议登录开关本身：填好协议端地址即视为 opt-in（非官方接入，默认关）
+        enable_key="platform_login.qq.protocol_enabled",
+        login_required=True,
+        login_platform="qq",
+        # 这是「用你自己的 QQ 号」那条路（准入区，非官方接入）；官方机器人是另一张卡 qqbot
+        login_notice_key="inbox.connect.notice_unofficial",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "用你自己的 QQ 号收发消息：先在电脑/服务器上装一个 QQ 协议端（NapCat / LLOneBot / "
+            "Lagrange，任选其一，均支持 Milky 协议），在它的界面里扫码登录 QQ，再把它的 Milky "
+            "服务地址填到这里。与「QQ 机器人」（官方开放平台）是两个独立渠道。"
+        ),
+        api_intro=(
+            "协议端不随本软件分发（许可证原因），请按各项目文档安装并开启 Milky 服务；"
+            "建议使用小号 + 固定 IP。填好地址后到工作台「账号 → 新增 QQ」确认接入。"
+        ),
+        fields=[
+            Field("platform_login.qq.milky_url", "协议端 Milky 地址",
+                  help="协议端 Milky 服务的 http 地址，如 http://127.0.0.1:3000（NapCat/LLOneBot/Lagrange 均在其设置里可查）"),
+            Field("platform_login.qq.milky_token", "协议端 Token", secret=True, required=False,
+                  help="协议端 Milky 服务设置的 access_token（强烈建议设置；留空=协议端未设 token）"),
+        ],
+    ),
+    Channel(
         id="qqbot",
         name="QQ 机器人",
         enable_key="qqbot.enabled",

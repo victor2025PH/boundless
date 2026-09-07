@@ -174,6 +174,8 @@ _RECV_MEDIA_TRUTH = {
     "line:protocol": True,
     "zalo:web": False,
     "instagram:web": False,
+    # 2026-09-07 QQ 协议登录（Milky）：图/语音/视频段的 temp_url 随 media_type 进 payload
+    "qq:protocol": True,
 }
 
 
@@ -397,6 +399,8 @@ _RECV_GROUP_TRUTH = {
     "line:protocol": True,
     "zalo:web": True,
     "instagram:web": True,
+    # QQ 协议登录：Milky 事件自带 message_scene=group（硬事实），handler 显式 chat_type="group"
+    "qq:protocol": True,
 }
 
 
@@ -539,6 +543,10 @@ def test_group_admin_reflects_worker_methods():
         if r is None or not r["available"]:
             continue
         assert r["group_admin"] == [], "%s 长出群管理方法了？更新真相与文档" % key
+    # 2026-09-07 QQ 协议登录（Milky）：kick_group_member / set_group_name 按预留契约名实现
+    qq = m.get("qq:protocol")
+    if qq is not None and qq["available"]:
+        assert set(qq["group_admin"]) == {"踢人", "改名"}
 
 
 def test_group_columns_documented():

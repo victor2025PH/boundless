@@ -134,6 +134,11 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
             _ln_reg(cfg)
         except Exception:
             logger.debug("注册 line protocol provider 失败", exc_info=True)
+        try:
+            from src.integrations.qq_protocol_login import maybe_register as _qq_reg
+            _qq_reg(cfg)
+        except Exception:
+            logger.debug("注册 qq protocol provider 失败", exc_info=True)
 
     def _persist_login_account(platform: str, account_id: str, sess: Any) -> None:
         """登录成功后把账号 + mode + 代理 + 指纹 + 备注落库，并把代理标记为已分配。"""

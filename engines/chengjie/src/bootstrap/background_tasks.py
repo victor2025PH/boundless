@@ -990,6 +990,9 @@ def ensure_deferred_outbox(assistant):
         )
         platforms = cfg.get("platforms") or [
             "telegram", "line", "whatsapp", "instagram", "zalo",
+            # QQ 协议登录（个人号，Milky）可主动触达；QQ 机器人（qqbot）刻意不在缺省表——
+            # 官方被动窗口外发不出去，进队列只会被账本拦成 window_expired
+            "qq",
         ]
         for p in platforms:
             dispatcher.register_sender(str(p), _make_sender(str(p)))

@@ -287,6 +287,8 @@ ZH = {
     "inbox.acct.note_zalo": "官方 API 接入：填 Zalo OA access token 即可，无需扫码；客服消息限 7 天互动窗",
     # QQ 机器人（QQ 开放平台官方 API，2026-09-07）：与「QQ 协议登录」是两个独立渠道
     "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
+    # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；准入区）：与「QQ 机器人」是两个独立渠道
+    "inbox.acct.note_qq": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -833,6 +835,9 @@ ZH = {
     "inbox.connect.mode_d_protocol": "服务端协议直连，单机可挂大量账号，最省资源",
     "inbox.connect.mode_l_web": "网页扫码",
     "inbox.connect.mode_d_web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
+    # QQ 协议登录（个人号；协议端 NapCat / LLOneBot / Lagrange 经 Milky 接口）：扫码在协议端里完成，本窗口只确认
+    "inbox.connect.mode_l_qq_protocol": "扫码登录（协议端）",
+    "inbox.connect.mode_d_qq_protocol": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码登录，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
     # Zalo 个人号扫码（zca-js 边车）：与官方 OA 并列的第二路，能力更全
     "inbox.connect.mode_l_zalo_web": "扫码登录（个人号）",
     "inbox.connect.mode_d_zalo_web": "用你自己的 Zalo 账号扫码登录，可收发文字/图片/语音/贴纸；建议搭配小号与独立代理使用",
@@ -1206,6 +1211,14 @@ ZH = {
     "inbox.connect.instr_qqbot":
         "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
         "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。",
+    "inbox.connect.instr_qq":
+        "请在你自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制台里用手机 QQ 扫码登录；"
+        "登录完成后本窗口会自动确认并把该 QQ 号接入。",
+    "inbox.connect.instr_qq_setup":
+        "未配置 QQ 协议端地址：请先到接入向导「QQ」卡填好协议端 Milky 地址（与 Token），再回来接入。",
+    "inbox.connect.instr_qq_down":
+        "无法连接 QQ 协议端：请确认 NapCat / LLOneBot / Lagrange 已启动、Milky 服务地址与 Token 正确，"
+        "然后点「重新开始」。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2059,6 +2072,7 @@ ZH = {
     "inbox.plat.whatsapp_desc": "Web 扫码接入 · 支持多账号 · 媒体收发",
     "inbox.plat.zalo_desc": "Zalo OA 官方 API 接入 · 客服消息（7 天互动窗）· 填凭证即用（无扫码）",
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
+    "inbox.plat.qq_desc": "QQ 个人号（协议登录）· 用你自己的 QQ 号 · 文字/图片/语音/视频 · 需自装协议端（NapCat / LLOneBot / Lagrange）",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
     "inbox.plat_pause.multi": "AI 出多选草稿，人工挑选发送",
@@ -3211,6 +3225,7 @@ EN = {
     "inbox.acct.note_instagram": "Official API onboarding: paste the Page credentials of your Facebook developer app — no QR needed",
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
     "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
+    "inbox.acct.note_qq": "Your own QQ account: scan the QR in your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3735,6 +3750,9 @@ EN = {
     "inbox.connect.mode_d_protocol": "Direct protocol connection; run many accounts on one machine, lightest on resources",
     "inbox.connect.mode_l_web": "Web QR",
     "inbox.connect.mode_d_web": "Isolated browser + the platform’s web QR code; broad compatibility, more human-like",
+    # QQ protocol login (personal account; NapCat / LLOneBot / Lagrange via Milky): the scan happens inside the endpoint, this window only confirms
+    "inbox.connect.mode_l_qq_protocol": "Scan to log in (protocol endpoint)",
+    "inbox.connect.mode_d_qq_protocol": "Your own QQ account: scan the QR inside your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
     # Zalo personal-account QR (zca-js sidecar): a second path alongside the official OA — fuller capability
     "inbox.connect.mode_l_zalo_web": "Scan to log in (personal account)",
     "inbox.connect.mode_d_zalo_web": "Log in by scanning with your own Zalo account; send/receive text, images, voice and stickers. Works best with a secondary account plus a dedicated proxy.",
@@ -4125,6 +4143,16 @@ EN = {
         "QQ Bot connects via the QQ Open Platform official API: save the AppID / AppSecret in "
         "the Setup Wizard and it goes online automatically — no QR scan. Production requires an "
         "IP allowlist on the Open Platform; use the sandbox first while testing.",
+    "inbox.connect.instr_qq":
+        "Scan the QR with your phone's QQ inside your self-hosted QQ protocol endpoint "
+        "(NapCat / LLOneBot / Lagrange WebUI or console); once logged in, this window confirms "
+        "automatically and connects that QQ account.",
+    "inbox.connect.instr_qq_setup":
+        "No QQ protocol endpoint configured: fill the Milky address (and token) on the “QQ” card "
+        "in the Setup Wizard first, then come back to connect.",
+    "inbox.connect.instr_qq_down":
+        "Cannot reach the QQ protocol endpoint: make sure NapCat / LLOneBot / Lagrange is running "
+        "and the Milky address / token are correct, then click “Start over”.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -4949,6 +4977,7 @@ EN = {
     "inbox.plat.whatsapp_desc": "QR web login · multi-account · media send/receive",
     "inbox.plat.zalo_desc": "Zalo OA official API · CS messages (7-day window) · credentials only (no QR)",
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
+    "inbox.plat.qq_desc": "QQ personal account (protocol login) · your own QQ number · text / image / voice / video · needs a self-hosted protocol endpoint (NapCat / LLOneBot / Lagrange)",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",
     "inbox.plat_pause.multi": "AI proposes multiple drafts; a human picks one to send",

@@ -46,6 +46,8 @@ SUPPORTED_PLATFORMS = (
     # 个人号）是两个独立平台——身份空间（openid vs QQ 号）/ 合规归属（主站 vs 准入区）/
     # 图标都不同，刻意不合成一个平台的两种方式。
     "qqbot",
+    # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；默认关、准入区）
+    "qq",
 )
 
 # 登录方式（mode）：协议多开 / 网页隔离 / 真机RPA / 官方 API / 手机号验证码
@@ -194,6 +196,25 @@ PLATFORM_MODE_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
             "notice_severity": "info",
         },
     },
+    # QQ 协议登录（个人号；2026-09-07 QQ 双轨·准入区轨）：QQ 号的扫码在用户自装的协议端
+    # （NapCat / LLOneBot / Lagrange.Milky）WebUI 里完成，本窗口只做连通 + 确认 →
+    # login_kind=device（「去设备上完成登录，本窗口等账号上线」正是这个心智，不必造新形态）。
+    # 通用 protocol 文案是「服务端协议直连，单机可挂大量账号」——对 QQ 不成立，覆盖掉。
+    # 非官方接入 → notice_unofficial（小号 + 固定 IP 的正向建议口径）；未开开关/协议端未起
+    # 归「需服务器端配置」。
+    "qq": {
+        "protocol": {
+            "label": "扫码登录（协议端）",
+            "desc": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码登录，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
+            "label_key": "inbox.connect.mode_l_qq_protocol",
+            "desc_key": "inbox.connect.mode_d_qq_protocol",
+            "caps": ("human", "compat"),
+            "unavailable_reason_code": REASON_NEEDS_SERVER_SETUP,
+            "login_kind": "device",
+            "notice_key": "inbox.connect.notice_unofficial",
+            "notice_severity": "info",
+        },
+    },
     # Telegram 手机号验证码：与 protocol 扫码并列的第二形态（login_kind=phone_code）。
     # 默认关、桌面种子/升级表可开；风险高于扫码，notice 正向建议小号+代理（同 Zalo 口径）。
     "telegram": {
@@ -238,6 +259,8 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     "zalo": {"modes": ["official"], "default": "official"},
     # QQ 机器人：只有官方形态（AppID/AppSecret 经向导）；个人号扫码是另一个平台 qq
     "qqbot": {"modes": ["official"], "default": "official"},
+    # QQ 协议登录：只有 protocol 形态（扫码在用户自装的协议端里完成，本窗口等账号上线）
+    "qq": {"modes": ["protocol"], "default": "protocol"},
 }
 
 # 个人号扫码登录（web/qr 边车）可**增量**补给这些原本纯官方的渠道。刻意不写进上面的
@@ -275,6 +298,10 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
         "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
         "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。"
     ),
+    "qq": (
+        "请在你自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制台里用手机 QQ 扫码登录；"
+        "登录完成后本窗口会自动确认并把该 QQ 号接入。"
+    ),
 }
 
 # 上表的 i18n 键（英文坐席不该看到中文指引）。仅在指引取自上表（即 provider 没给
@@ -289,6 +316,7 @@ PLATFORM_INSTRUCTION_KEYS: Dict[str, str] = {
     "instagram": "inbox.connect.instr_instagram",
     "zalo": "inbox.connect.instr_zalo",
     "qqbot": "inbox.connect.instr_qqbot",
+    "qq": "inbox.connect.instr_qq",
 }
 
 
