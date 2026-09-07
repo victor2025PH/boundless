@@ -72,6 +72,8 @@ class DomainPack:
         self.web_pages: List[dict] = []
         self.web_dashboard_widgets: List[dict] = []
         self.web_routes_enabled: bool = False
+        # N-3 #241：装配时解析的业务域（companion / sales）——hook 类与 KB 分类变体按它选
+        self.business_domain: str = ""
 
     def __repr__(self):
         return f"<DomainPack '{self.name}' v{self.version}>"
@@ -114,6 +116,10 @@ class DomainLoader:
             return None
 
         pack = DomainPack(domain_name, domain_dir, manifest)
+        # N-3 #241（D-N1）：业务域单一真值——同一个域包按「这台机器做什么生意」装不同物料
+        # （陪伴域不注册 ConversionDomainHook、KB 分类不含销售 / 命理类）。解析一次，登记为
+        # 进程级 active，供拿不到配置句柄的纯函数消费方（profile_slots / kb_store 种子）读。
+        pack.business_domain = self._resolve_business_domain(config_manager)
 
         self._load_skills(pack, skill_base_class, ai_client, config_manager)
         self._load_config(pack)
@@ -132,7 +138,27 @@ class DomainLoader:
             pack.hook_class.__name__ if pack.hook_class else "none",
             bool(pack.persona),
         )
+        try:
+            from src.utils.business_domain import describe
+            logger.info(describe(
+                hook_name=pack.hook_class.__name__ if pack.hook_class else "none",
+                pack=domain_name))
+        except Exception:
+            logger.debug("business_domain describe failed", exc_info=True)
         return pack
+
+    @staticmethod
+    def _resolve_business_domain(config_manager) -> str:
+        """配置 → 业务域（显式 business_domain 优先；缺省按部署形态推导**并写入 overlay
+        一次**，从此显式、可在后台改），并登记进程级 active。
+        任何异常回落 sales（＝旧行为：整包物料原样装），绝不让业务域解析拖垮域包装载。"""
+        try:
+            from src.utils.business_domain import ensure_business_domain
+            bd, _persisted = ensure_business_domain(config_manager)
+            return bd
+        except Exception:
+            logger.debug("business_domain resolve failed", exc_info=True)
+            return "sales"
 
     def get(self, domain_name: str) -> Optional[DomainPack]:
         return self._loaded.get(domain_name)
@@ -206,6 +232,15 @@ class DomainLoader:
             return
 
         categories_path = pack.root / kb_section.get("categories", "kb/categories.yaml")
+        # N-3 #241：manifest ``kb.categories_by_business_domain.<bd>`` 给出按业务域的分类
+        # 变体文件（陪伴域不要「产品价值 / 转化话术 / 异议处理 / 命理」）；没给该域 → 主文件。
+        variants = kb_section.get("categories_by_business_domain")
+        if isinstance(variants, dict) and pack.business_domain:
+            alt = variants.get(pack.business_domain)
+            if alt and (pack.root / str(alt)).exists():
+                categories_path = pack.root / str(alt)
+                logger.debug("Domain '%s': KB categories variant for business_domain=%s: %s",
+                             pack.name, pack.business_domain, alt)
         if categories_path.exists():
             try:
                 with open(categories_path, "r", encoding="utf-8") as f:
@@ -305,6 +340,18 @@ class DomainLoader:
                 return
 
         from src.hooks.base import DomainHook
+        # N-3 #241：hooks.py 可声明 ``HOOKS_BY_BUSINESS_DOMAIN = {"companion": Cls, "sales": Cls}``
+        # ——同一个域包按业务域注册不同 hook（陪伴域下不再出现 ConversionDomainHook）。
+        # 没声明 / 该域没给 → 旧行为：模块里第一个 DomainHook 子类。
+        by_bd = getattr(mod, "HOOKS_BY_BUSINESS_DOMAIN", None)
+        if isinstance(by_bd, dict) and pack.business_domain:
+            cand = by_bd.get(pack.business_domain)
+            if (isinstance(cand, type) and issubclass(cand, DomainHook)
+                    and cand is not DomainHook):
+                pack.hook_class = cand
+                logger.debug("Domain '%s': hook class %s (business_domain=%s)",
+                             pack.name, cand.__name__, pack.business_domain)
+                return
         for attr_name in dir(mod):
             obj = getattr(mod, attr_name)
             if (isinstance(obj, type)

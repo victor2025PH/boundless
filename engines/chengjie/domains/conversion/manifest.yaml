@@ -10,6 +10,10 @@ config_files:
 
 kb:
   categories: kb/categories.yaml
+  # N-3 #241：按业务域的分类变体——陪伴运营（business_domain=companion）不装
+  # 「产品价值 / 转化话术 / 异议处理 / 命理」，装陪伴知识库分类；销售域仍用上面主文件
+  categories_by_business_domain:
+    companion: kb/categories.companion.yaml
   seeds: kb/seeds.yaml
 
 prompts:

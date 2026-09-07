@@ -15,6 +15,15 @@
 #     AITR_WEB_PORT / AITR_WEB_TOKEN 环境变量覆盖（serve↔talk 强一致）；此处的静态默认
 #     与桌面壳 config.json 缺省（127.0.0.1:18799 / admin）对齐，无 env 时也能直连。
 
+# 业务域（N-3 #241 / 老板决策 D-N1，2026-09-08）——这台机器做什么生意的**单一真值**：
+#   companion = 陪伴运营（桌面客户包出厂值）；sales = 业务 / 销售（zhiliao 生产那类售卖机器人）。
+# Domain hook / KB 分类 / 目标模板库 / 客户摸底槽位 / 客户画像 schema / 系统话术种子全部读它：
+#   陪伴域不注册 ConversionDomainHook、不下发「转化成交」模板、摸底标签是陪伴集（称呼 / 坐标 /
+#   职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产）、KB 不预置 GXP 支付话术。
+# 缺省时按部署形态推导（桌面客户机 → companion）并写进 overlay；要改在后台「工作目标」设置里改。
+# 注意：这**不是** domain（域包名）——陪伴 system prompt / 人设仍在 conversion 域包里，别改 domain。
+business_domain: companion
+
 # Telegram 协议号（桌面模式默认不用；留空 = 跳过协议客户端初始化，收件箱/翻译不受影响）
 #
 # ⚠ 本段是本文件里**唯一**的 telegram 键（2026-08-28 合并）：原先文件末尾另有一个

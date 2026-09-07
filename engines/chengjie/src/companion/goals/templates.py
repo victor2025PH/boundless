@@ -532,6 +532,32 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
 # 「模板已下线」）。按 kind 判而非点名 id：新增同类模板自动归入。
 CLIENT_HIDDEN_KINDS = ("conversion",)
 
+# N-3 #241（D-N1，2026-09-08）：把 M-5 A 的「用户版隐藏」升成**域级规则**——业务域是
+# 陪伴（business_domain=companion）的部署，无论 client / partner / internal / 开发者模式，
+# 「转化成交」类目一律不下发、不许新建；销售域照旧只受 client_hide 约束。
+COMPANION_HIDDEN_KINDS = ("conversion",)
+
+
+def hidden_template_kinds(*, client_hide: bool = False,
+                          business_domain: str = "") -> tuple:
+    """当前请求该藏的模板类目集合（M-5 用户版 ∪ N-3 陪伴域）。"""
+    kinds: List[str] = []
+    if str(business_domain or "").strip().lower() == "companion":
+        kinds.extend(COMPANION_HIDDEN_KINDS)
+    if client_hide:
+        kinds.extend(k for k in CLIENT_HIDDEN_KINDS if k not in kinds)
+    return tuple(kinds)
+
+
+def is_hidden_template(template_id: str, *, client_hide: bool = False,
+                       business_domain: str = "") -> bool:
+    """该模板在当前形态 + 业务域下是否被藏（未知模板 → False，交上游按「未知」处理）。"""
+    t = TEMPLATES.get(str(template_id or "").strip())
+    if not t:
+        return False
+    return str(t.get("kind") or "") in hidden_template_kinds(
+        client_hide=client_hide, business_domain=business_domain)
+
 
 def is_client_hidden_template(template_id: str) -> bool:
     """该模板是否属于用户版隐藏类目（未知模板 → False，交上游按「未知」处理）。"""
@@ -552,17 +578,21 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
     return TEMPLATES.get(str(template_id or "").strip())
 
 
-def list_templates(*, client_hide: bool = False) -> List[Dict[str, Any]]:
+def list_templates(*, client_hide: bool = False,
+                   business_domain: str = "") -> List[Dict[str, Any]]:
     """API/UI 消费的公开形状（含 id；不含 intents 内部池）。
 
     ``push_curve``（P24）随形状导出——建目标向导第二步的「AI 会怎么推进」
     节奏预览据此给每段里程碑标推进力度（不提销售/顺势/可直说）。
-    ``client_hide=True``（M-5 A）→ 剔 :data:`CLIENT_HIDDEN_KINDS` 类目。
+    ``client_hide=True``（M-5 A）→ 剔 :data:`CLIENT_HIDDEN_KINDS` 类目；
+    ``business_domain="companion"``（N-3 #241）→ 剔 :data:`COMPANION_HIDDEN_KINDS`。
     """
     out: List[Dict[str, Any]] = []
     from src.companion.goals.pace import sprint_ok as _sprint_ok
+    hidden = hidden_template_kinds(
+        client_hide=client_hide, business_domain=business_domain)
     for tid, t in TEMPLATES.items():
-        if client_hide and str(t.get("kind") or "") in CLIENT_HIDDEN_KINDS:
+        if hidden and str(t.get("kind") or "") in hidden:
             continue
         out.append({
             "id": tid,
@@ -775,14 +805,17 @@ __all__ = [
     "CARE_INTENTS",
     "CARE_PAIRS",
     "CLIENT_HIDDEN_KINDS",
+    "COMPANION_HIDDEN_KINDS",
     "GOAL_STATUSES",
     "PUSH_LEVELS",
     "STAGE_ORDER",
     "TEMPLATES",
     "client_hidden_template_ids",
     "get_template",
+    "hidden_template_kinds",
     "intent_en_for",
     "is_client_hidden_template",
+    "is_hidden_template",
     "list_templates",
     "milestone_count",
     "milestone_label",

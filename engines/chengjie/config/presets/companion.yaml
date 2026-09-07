@@ -13,7 +13,11 @@
 #   companion_send_gate（预热爬坡）已默认开，不要关——它是不烧号的最后一道闸。
 # ─────────────────────────────────────────────────────────────────────
 
+# 域包仍是 conversion（陪伴 system prompt / 「线上陪伴」人设都在这个包里）；
+# 业务域 companion 让 hook / KB 分类 / 目标模板 / 摸底槽位 / 画像 schema / 话术种子全走陪伴集
+# （N-3 #241 / D-N1）。
 domain: conversion
+business_domain: companion
 
 ai:
   provider: openai_compatible

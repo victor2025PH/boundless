@@ -143,25 +143,38 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except Exception:
             return False
 
+    def _business_domain() -> str:
+        """业务域单一真值（N-3 #241 / D-N1）：companion / sales。读配置（显式键或
+        部署形态推导），异常按 sales（＝旧行为，不多藏）。"""
+        try:
+            from src.utils.business_domain import resolve_business_domain
+            return resolve_business_domain(_cfg_root())
+        except Exception:
+            return "sales"
+
+    def _template_hidden(request: Request, template_id: str) -> bool:
+        """模板在「当前形态 + 业务域」下是否被藏：M-5 用户版隐藏 ∪ N-3 陪伴域隐藏。"""
+        from src.companion.goals.templates import is_hidden_template
+        return is_hidden_template(
+            template_id, client_hide=_client_hide(request),
+            business_domain=_business_domain())
+
     def _deny_hidden_template(request: Request, template_id: str) -> None:
-        """用户版不建「转化成交」类目目标（#217）：藏了入口还放 API 建＝旧前端
-        「上次用过」/ 脚本仍能把 AI 拉去推销智聊。partner / internal / 开发者
-        模式不拦；存量目标不受影响（只闸新建）。"""
-        from src.companion.goals.templates import is_client_hidden_template
-        if _client_hide(request) and is_client_hidden_template(template_id):
+        """用户版 / 陪伴域不建「转化成交」类目目标（#217 / #241）：藏了入口还放 API
+        建＝旧前端「上次用过」/ 脚本仍能把 AI 拉去推销智聊。销售域的 partner /
+        internal / 开发者模式不拦；存量目标不受影响（只闸新建）。"""
+        if _template_hidden(request, template_id):
             raise HTTPException(
                 403, tr(request, "err.goals.template_retired_client"))
 
     def _attach_tier(view, request: Request):
-        """用户版：存量「转化成交」目标卡标 ``template_retired=True``（#217，
-        「该模板已下线，建议改用自定义目标」）。非 client / 其他类目不加键
-        （前端缺键＝不渲染）；best-effort 绝不抛。"""
+        """用户版 / 陪伴域：存量「转化成交」目标卡标 ``template_retired=True``（#217，
+        「该模板已下线，建议改用自定义目标」）。其他类目不加键（前端缺键＝不渲染）；
+        best-effort 绝不抛。"""
         if not isinstance(view, dict):
             return view
         try:
-            from src.companion.goals.templates import is_client_hidden_template
-            if (_client_hide(request)
-                    and is_client_hidden_template(str(view.get("template") or ""))):
+            if _template_hidden(request, str(view.get("template") or "")):
                 view["template_retired"] = True
         except Exception:
             logger.debug("attach tier flag skipped", exc_info=True)
@@ -317,10 +330,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # 前端据此把「自动推进」灰掉并说清为什么，不再兜售引擎不执行的事。
         es = _svc().sprint_engine_status(
             _cfg_root(), platform=str(request.query_params.get("platform") or ""))
+        bd = _business_domain()
         return {
             # M-5 A（#217 / D-M6）：用户版不下发「转化成交」类目（四张预置），
-            # partner / internal / 开发者模式照旧——与 L-4 ui_client_hide 同口径
-            "templates": list_templates(client_hide=_client_hide(request)),
+            # partner / internal / 开发者模式照旧——与 L-4 ui_client_hide 同口径；
+            # N-3 A（#241 / D-N1）：陪伴业务域一律不下发（域级规则，形态无关）
+            "templates": list_templates(
+                client_hide=_client_hide(request), business_domain=bd),
+            # 业务域随模板库下发：前端画像分组 / 「标成交」字段 / 摸底 chips 据此渲染
+            "business_domain": bd,
             "autonomy_levels": list(AUTONOMY_LEVELS),
             "statuses": list(GOAL_STATUSES),
             "caps": {

@@ -98,12 +98,17 @@ def lifecycle_template_blocked(cfg_root: Any, template_id: str) -> bool:
 
     路由层的 `_client_hide` 看 session 开发者模式；后台没有 session，只按部署形态判
     （开发者模式是「人」的临时状态，不该让引擎在客户机上自己建出「已下线」模板）。
-    partner / internal / 非隐藏类目 → False。判不出（导入失败）→ False，不误拦。
+    N-3 #241（D-N1）：业务域是陪伴（business_domain=companion）时同样拦——域级规则，
+    与形态无关。销售域的 partner / internal / 非隐藏类目 → False。
+    判不出（导入失败）→ False，不误拦。
     """
     try:
-        from src.companion.goals.templates import is_client_hidden_template
+        from src.companion.goals.templates import is_hidden_template
+        from src.utils.business_domain import resolve_business_domain
         from src.web.ui_visibility import is_client_flavor
-        return bool(is_client_flavor(cfg_root) and is_client_hidden_template(template_id))
+        return is_hidden_template(
+            template_id, client_hide=is_client_flavor(cfg_root),
+            business_domain=resolve_business_domain(cfg_root))
     except Exception:
         logger.debug("lifecycle_template_blocked failed (treat as allowed)", exc_info=True)
         return False

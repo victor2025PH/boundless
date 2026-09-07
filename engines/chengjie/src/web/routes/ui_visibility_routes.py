@@ -11,9 +11,13 @@
   D-L2）：**只写 session**（``developer_mode``），不落 overlay——客户机上的临时
   排障视角，退出登录 / ``/developer/logout`` 即自动关；读口径见
   ``ui_visibility.resolve_developer_mode``。
+- ``GET / POST /api/developer/business-domain`` —— 业务域单一真值（N-3 #241 /
+  D-N1，2026-09-08）：companion（陪伴运营）/ sales（销售）。POST 写顶层
+  ``business_domain`` 进 overlay 并刷新进程级 active——模板库 / 摸底槽位 / 画像
+  schema / KB 种子即时跟随；Domain hook 与 KB 分类是启动期装配，重启后跟随。
 
-写入口单一：只有本路由写 ``ui_visibility.*`` 与 session ``developer_mode``；
-每次写落 INFO 审计行。
+写入口单一：只有本路由写 ``ui_visibility.*`` / ``business_domain`` 与 session
+``developer_mode``；每次写落 INFO 审计行。
 """
 
 from __future__ import annotations
@@ -107,3 +111,63 @@ def register_ui_visibility_routes(app, auth_dep, config_manager=None) -> None:
             "developer_mode": resolve_developer_mode(request.session),
             "flavor": resolve_ui_flavor(_cfg_root()),
         }
+
+    # ── 业务域（N-3 #241 / D-N1）────────────────────────────────────────────
+    def _bd_view() -> Dict[str, Any]:
+        from src.utils.business_domain import (
+            BUSINESS_DOMAINS,
+            active_business_domain,
+            business_domain_label,
+            explicit_business_domain,
+            infer_business_domain,
+        )
+        cfg = _cfg_root()
+        explicit = explicit_business_domain(cfg)
+        return {
+            "ok": True,
+            "business_domain": active_business_domain(cfg),
+            "explicit": explicit,
+            "inferred": infer_business_domain(cfg),
+            "options": [
+                {"id": bd, "label_zh": business_domain_label(bd, "zh"),
+                 "label_en": business_domain_label(bd, "en")}
+                for bd in BUSINESS_DOMAINS],
+        }
+
+    @app.get("/api/developer/business-domain")
+    async def get_business_domain(request: Request, _auth=Depends(auth_dep)):
+        _require_dev(request)
+        return _bd_view()
+
+    @app.post("/api/developer/business-domain")
+    async def set_business_domain(
+        request: Request,
+        payload: Dict[str, Any] = Body(...),
+        _auth=Depends(auth_dep),
+    ):
+        _require_dev(request)
+        from src.utils.business_domain import (
+            BUSINESS_DOMAIN_KEY,
+            normalize_business_domain,
+            set_active_business_domain,
+        )
+        want = normalize_business_domain((payload or {}).get("business_domain"))
+        if not want:
+            raise HTTPException(400, tr(request, "err.uiv.bad_business_domain",
+                                        name=str((payload or {}).get("business_domain") or "")))
+        setter = getattr(config_manager, "set_overlay_flag", None)
+        if not callable(setter):
+            raise HTTPException(500, tr(request, "err.uiv.write_failed"))
+        ok, _msg = setter(BUSINESS_DOMAIN_KEY, want)
+        if not ok:
+            raise HTTPException(500, tr(request, "err.uiv.write_failed"))
+        set_active_business_domain(want)
+        actor = ""
+        try:
+            actor = request.session.get("username", "")
+        except Exception:
+            pass
+        logger.info("business_domain = %s (by %s)", want, actor or "?")
+        out = _bd_view()
+        out["restart_required"] = True   # Domain hook / KB 分类是启动期装配
+        return out

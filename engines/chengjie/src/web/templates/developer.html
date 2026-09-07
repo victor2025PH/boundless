@@ -346,6 +346,23 @@
         <div class="save-bar"><span class="save-result" id="dv-devmode-res"></span></div>
       </div>
 
+      <!-- 🧭 业务域（N-3 #241 / D-N1，2026-09-08）：这台机器做什么生意的单一真值。
+           陪伴 = 不注册 ConversionDomainHook / 不下发「转化成交」模板 / 摸底槽位与画像走陪伴集
+           / KB 不预置支付话术；销售 = 旧行为。值经 GET /api/developer/business-domain 拉取
+           （不依赖模板上下文——模板热更新先于重启，端点缺席时整块提示「重启后可用」）。 -->
+      <div class="f-row" id="dv-bd-row">
+        <div class="f-lbl">🧭 {{ (i18n or {}).get('dv_bd_title', "业务域（这台机器做什么生意）") }}</div>
+        <div class="f-hint">{{ (i18n or {}).get('dv_bd_sub', "陪伴：工作目标不出现「转化成交」类目，客户摸底 / 画像用陪伴标签集（称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产），知识库不预置支付话术。销售：保留商机标签（痛点 / 平台 / 团队 / 预算 / 决策 / 上线）与成交字段。改动写 config.local.yaml；模板 / 标签 / 画像即时生效，Domain hook 与知识库分类重启后跟随。") }}</div>
+        <div style="display:flex;align-items:center;gap:.6rem;margin:.5rem 0;flex-wrap:wrap">
+          <select id="dv-bd-sel" style="min-width:12rem" disabled onchange="dvBdChange(this)">
+            <option value="">{{ (i18n or {}).get('dv_bd_loading', "读取中…") }}</option>
+          </select>
+          <span class="ai-pill" id="dv-bd-pill"></span>
+          <span style="font-size:.75rem;color:var(--t2)" id="dv-bd-src"></span>
+        </div>
+        <div class="save-bar"><span class="save-result" id="dv-bd-res"></span></div>
+      </div>
+
       <div style="height:1px;background:var(--bd);margin:1rem 0"></div>
       {% set vp = voice_ai.get('voice_profile', {}) if voice_ai else {} %}
       <div class="f-row">
@@ -1342,6 +1359,62 @@ async function dvDevModeToggle(el){
     el.disabled = false;
   }
 }
+
+// ── 业务域（N-3 #241）：端点自取当前值；缺端点（旧进程）→ 整块提示重启后可用 ──
+function dvBdRender(d){
+  const sel = document.getElementById('dv-bd-sel');
+  const pill = document.getElementById('dv-bd-pill');
+  const src = document.getElementById('dv-bd-src');
+  if(!sel) return;
+  const lang = (document.documentElement.getAttribute('lang') || 'zh').toLowerCase();
+  const opts = Array.isArray(d.options) ? d.options : [];
+  sel.innerHTML = opts.map(function(o){
+    const lab = lang.indexOf('en') === 0 ? (o.label_en || o.id) : (o.label_zh || o.id);
+    return '<option value="' + o.id + '"' + (o.id === d.business_domain ? ' selected' : '') + '>' + lab + '</option>';
+  }).join('');
+  sel.disabled = false;
+  if(pill) pill.textContent = d.business_domain || '';
+  if(src) src.textContent = d.explicit ? window.T('dv_bd_src_explicit') : window.T('dv_bd_src_inferred');
+}
+async function dvBdLoad(){
+  const sel = document.getElementById('dv-bd-sel');
+  if(!sel) return;
+  try{
+    const r = await apiFetch('/api/developer/business-domain', {}, {timeoutMs: 15000});
+    if(r.status === 404){ sel.innerHTML = '<option value="">' + window.T('dv_bd_restart_needed') + '</option>'; return; }
+    const d = await r.json();
+    if(!r.ok || !d.ok){ sel.innerHTML = '<option value="">' + window.T('dv_uiv_js_fail') + '</option>'; return; }
+    dvBdRender(d);
+  }catch(e){
+    sel.innerHTML = '<option value="">' + window.T('dv_uiv_js_fail') + '</option>';
+  }
+}
+async function dvBdChange(el){
+  const res = document.getElementById('dv-bd-res');
+  const want = el.value;
+  if(!want) return;
+  el.disabled = true;
+  if(res){ res.textContent = window.T('ov_js_saving'); res.className = 'save-result'; }
+  try{
+    const r = await apiFetch('/api/developer/business-domain', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({business_domain: want}),
+    }, {timeoutMs: 15000});
+    const d = await r.json();
+    if(!r.ok || !d.ok){
+      if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + (d.detail || ''); res.className = 'save-result err'; }
+      await dvBdLoad();
+      return;
+    }
+    dvBdRender(d);
+    if(res){ res.textContent = window.T('dv_bd_saved_restart'); res.className = 'save-result ok'; }
+  }catch(e){
+    if(res){ res.textContent = window.T('dv_uiv_js_fail') + '：' + e.message; res.className = 'save-result err'; }
+  }finally{
+    el.disabled = false;
+  }
+}
+document.addEventListener('DOMContentLoaded', function(){ try{ dvBdLoad(); }catch(_e){} });
 
 (function(){
   const box = document.getElementById('dvcc-pool-list');
