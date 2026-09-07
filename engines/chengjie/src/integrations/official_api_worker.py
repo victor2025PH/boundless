@@ -143,8 +143,9 @@ class OfficialApiWorker:
             res = self._result(out, str(((out.get("data") or {}).get("id")) or ""))
             if out.get("blocked"):
                 res["blocked"] = str(out["blocked"])
-            # 引用回执如实：只有真带了 message_reference 且发成功才让工作台画引用条
-            res["quote_applied"] = bool(out.get("ok") and _ref)
+            # 引用回执如实：只有真带了 message_reference（qqbot.message_reference 开启）
+            # 且发成功才让工作台画引用条——开放平台文档标该字段「暂未支持」，默认不带
+            res["quote_applied"] = bool(out.get("ok") and out.get("quoted"))
             return res
         dest = dest_from_chat_key(chat_key)
         if self.platform == "line":
@@ -286,11 +287,17 @@ class OfficialApiWorker:
             return {"delivered": False, "error_kind": "not_supported",
                     "error": "Zalo OA API 暂不支持语音/媒体消息出站"}
         if self.platform == "qqbot":
-            # QQ 机器人富媒体＝先上传取 file_info 再 msg_type=7 发送，且语音须 silk 转码、
-            # 单聊/群聊上传接口不互通——P2 批次接入；本批如实 not_supported，能力位同步
-            # （official_send_caps 与本分支由门禁双向钉住）。
-            return {"delivered": False, "error_kind": "not_supported",
-                    "error": "QQ 机器人媒体出站（file_info 上传 + silk 转码）尚未接入"}
+            # 图/视频：公网 URL → /files 换 file_info → msg_type=7 被动发送（qq_official）；
+            # 语音须 silk、文件类平台暂不开放 → not_supported（official_send_caps 同口径）。
+            from src.integrations.qq_official import qqbot_send_media
+            out = await qqbot_send_media(
+                chat_key, media_type=mt, media_path=media_path, media_url=media_url,
+                caption=caption, config=self.config, meta=_meta(self.account),
+                account_id=self.account_id)
+            res = self._result(out, str(((out.get("data") or {}).get("id")) or ""))
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            return res
         return {"delivered": False, "error_kind": "not_supported",
                 "error": f"{self.platform} 官方通道媒体出站暂未接入"}
 
@@ -328,7 +335,15 @@ def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
     if p == "zalo":
         return {"can_media": False, "can_voice": False, "reason": "zalo_api_no_media"}
     if p == "qqbot":
-        return {"can_media": False, "can_voice": False, "reason": "qqbot_media_pending"}
+        # 图/视频走 /files 上传（只收公网 URL，与 LINE/IG 同一份 public_base_url）；语音须
+        # silk 编码本机没有 → 永远 False。reason 沿用 ``qqbot_media_pending`` 键（前端灰态
+        # 文案已按「语音待接、图/视频可发」改写；换键名要动 unified_inbox.html 的映射）。
+        base = str(
+            (((config or {}).get("official_media") or {}).get("public_base_url")) or ""
+        ).strip()
+        if not base:
+            return {"can_media": False, "can_voice": False, "reason": "needs_public_url"}
+        return {"can_media": True, "can_voice": False, "reason": "qqbot_media_pending"}
     if p in OFFICIAL_MEDIA_URL_PLATFORMS:
         base = str(
             (((config or {}).get("official_media") or {}).get("public_base_url")) or ""

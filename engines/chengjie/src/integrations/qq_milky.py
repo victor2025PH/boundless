@@ -58,6 +58,7 @@ INBOUND_MEDIA_TIMEOUT_SEC = 20.0
 RETCODE_NOT_LOGGED_IN = -403
 #: QQ 头像 CDN（公开规则，按 QQ 号取）
 AVATAR_URL_FMT = "https://q1.qlogo.cn/g?b=qq&nk={uin}&s=640"
+GROUP_AVATAR_URL_FMT = "https://p.qlogo.cn/gh/{gid}/{gid}/640"
 
 
 # ── 配置 ─────────────────────────────────────────────────────────────────────
@@ -89,6 +90,12 @@ def auto_accept_friend(config: Dict[str, Any]) -> bool:
 def avatar_url_for(uin: Any) -> str:
     s = str(uin or "").strip()
     return AVATAR_URL_FMT.format(uin=s) if s.isdigit() else ""
+
+
+def group_avatar_url_for(group_id: Any) -> str:
+    """群头像 CDN（公开规则）；群会话的头像应是群自己的，不是最近发言人的。"""
+    s = str(group_id or "").strip()
+    return GROUP_AVATAR_URL_FMT.format(gid=s) if s.isdigit() else ""
 
 
 # ── chat_key ─────────────────────────────────────────────────────────────────
@@ -407,7 +414,7 @@ def normalize_message_event(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "ts": float(d.get("time") or ev.get("time") or time.time()),
         "segments": list(d.get("segments") or []),
         "name": name, "sender_name": sender_name,
-        "avatar_url": avatar_url_for(sender if scene == "group" else peer),
+        "avatar_url": group_avatar_url_for(peer) if scene == "group" else avatar_url_for(peer),
         "group_name": str(group.get("group_name") or ""),
         "self_id": _int_or_none(ev.get("self_id")),
     }

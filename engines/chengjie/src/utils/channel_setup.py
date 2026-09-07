@@ -270,7 +270,7 @@ CHANNELS: List[Channel] = [
             "去 q.qq.com 创建机器人拿 AppID / AppSecret；默认 WebSocket 直连（免公网），"
             "正式环境须在开放平台填 IP 白名单，联调可先勾「沙箱」。"
             "注意：官方机器人只能被动回复（单聊每条来话 60 分钟内最多 4 条、群 5 分钟 5 条），"
-            "不支持主动消息；发图/语音属下一批次，界面会自动置灰。"
+            "不支持主动消息；发图/视频需要下面的公网媒体 URL（平台只收 URL 拉取），语音须 silk 编码暂不支持。"
         ),
         fields=[
             Field("qqbot.app_id", "AppID",
@@ -283,6 +283,10 @@ CHANNELS: List[Channel] = [
                   help="websocket（默认，单机免公网，需 IP 白名单）或 webhook（需公网 HTTPS 回调）"),
             Field("qqbot.webhook_path", "Webhook 路径", required=False,
                   help="仅 webhook 方式用；默认 /qqbot/webhook，开放平台回调地址填 https://<域名>/qqbot/webhook"),
+            Field("official_media.public_base_url", "公网媒体 URL（IG/LINE/QQ 机器人共用）",
+                  required=False,
+                  help="发图/视频用：本服务的公网 https 地址（如经隧道/反代暴露的 "
+                       "https://bot.example.com），开放平台按 URL 拉取。留空则此机器人仅能发文字。"),
         ],
     ),
     Channel(

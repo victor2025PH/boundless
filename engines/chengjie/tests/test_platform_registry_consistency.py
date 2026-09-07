@@ -104,7 +104,8 @@ def test_shared_media_url_field_matches_worker_read_path():
                   ).read_text(encoding="utf-8")
     assert '"official_media"' in worker_src
     assert '"public_base_url"' in worker_src
-    # 两张卡（instagram / line）都得摆：只摆一张，走另一条路的运营看不见它
+    # 凡是「媒体只按公网 URL 拉取」的官方通道都得摆这张卡：只摆一张，走另一条路的运营看不见它。
+    # QQ 机器人 /files 上传接口同样只收 URL（file_data 文档标「暂未支持」）。
     holders = {ch.id for ch in CHANNELS
                if any(f.key == "official_media.public_base_url" for f in ch.fields)}
-    assert holders == {"instagram", "line"}, holders
+    assert holders == {"instagram", "line", "qqbot"}, holders

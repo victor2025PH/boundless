@@ -41,7 +41,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -433,6 +435,53 @@ def attachment_media(att: Dict[str, Any]) -> Tuple[str, str]:
     return mt, url
 
 
+#: 入站附件落盘上限 / 拉取超时（开放平台 CDN 链接带签名会过期，先落地再入库）
+INBOUND_MEDIA_MAX_BYTES = 50 * 1024 * 1024
+INBOUND_MEDIA_TIMEOUT_SEC = 20.0
+_CTYPE_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+    "audio/silk": ".silk", "audio/amr": ".amr", "audio/mpeg": ".mp3", "audio/ogg": ".ogg",
+    "video/mp4": ".mp4", "application/pdf": ".pdf",
+}
+_KIND_DEFAULT_EXT = {"image": ".jpg", "voice": ".silk", "video": ".mp4", "file": ".bin"}
+
+
+async def persist_inbound_media(media_type: str, url: str, *, name: str) -> str:
+    """下载入站附件 → ``/static/protocol_media/qqbot/<name>.<ext>``；失败返回空串（不抛）。"""
+    if not str(url or "").startswith(("http://", "https://")):
+        return ""
+    try:
+        import aiohttp
+
+        from src.integrations.protocol_bridge import media_paths
+        buf = bytearray()
+        tmo = aiohttp.ClientTimeout(total=INBOUND_MEDIA_TIMEOUT_SEC)
+        async with aiohttp.ClientSession(timeout=tmo) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return ""
+                ctype = str(resp.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    buf += chunk
+                    if len(buf) > INBOUND_MEDIA_MAX_BYTES:
+                        logger.info("[qqbot] 入站附件超限跳过落盘 %s > %d", media_type,
+                                    INBOUND_MEDIA_MAX_BYTES)
+                        return ""
+        if not buf:
+            return ""
+        ext = _CTYPE_EXT.get(ctype)
+        if not ext:
+            uext = os.path.splitext(str(url).split("?", 1)[0])[1].lower()
+            ext = uext if 1 < len(uext) <= 5 and uext[1:].isalnum() else \
+                _KIND_DEFAULT_EXT.get(str(media_type or ""), ".bin")
+        dest, static_url = media_paths(PLATFORM, name, ext)
+        dest.write_bytes(bytes(buf))
+        return static_url
+    except Exception:
+        logger.debug("[qqbot] 入站附件落盘失败 type=%s", media_type, exc_info=True)
+        return ""
+
+
 def extract_qqbot_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """把网关/Webhook 的一条 Dispatch payload 归一成内部事件列表（纯函数）。
 
@@ -559,63 +608,31 @@ def _messages_url(base: str, kind: str, openid: str) -> str:
     return f"{base}/v2/users/{openid}/messages"
 
 
-async def qqbot_send_text(
-    chat_key: str, text: str, *, config: Dict[str, Any],
-    meta: Optional[Dict[str, Any]] = None, account_id: str = "official",
-    reply_to_msg_id: str = "", check_kill_switch: bool = True,
-    ledger: Optional[PassiveReplyLedger] = None,
-) -> Dict[str, Any]:
-    """经 QQ 开放平台发文字。永不抛。
+def _files_url(base: str, kind: str, openid: str) -> str:
+    """富媒体上传口（单聊/群聊各一套，file_info 不互通）。"""
+    if kind == "group":
+        return f"{base}/v2/groups/{openid}/files"
+    return f"{base}/v2/users/{openid}/files"
 
-    返回 ``{"ok", "data"|"error", "error_kind", "retriable", "anchor"}``。被动锚点由账本
-    分配：无锚点且 ``passive_only`` → ``ok=False, error_kind=window_expired,
-    blocked=qq_passive_window``（上层按窗口过期分流：转人工 / 等下次来话，不重试）。
-    """
-    cfg = qqbot_cfg(config)
-    if check_kill_switch:
-        try:
-            from src.integrations.shared.rpa_send_guard import rpa_send_blocked
-            blocked, scope = rpa_send_blocked(PLATFORM, account_id or "official")
-            if blocked:
-                logger.warning("[qqbot][kill-switch] 冻结发送，跳过（scope=%s）", scope)
-                return {"ok": False, "error": f"kill_switch:{scope}", "error_kind": "blocked"}
-        except Exception:
-            pass
-    text = _truncate(text)
-    if not text:
-        return {"ok": True, "data": {"skipped": "empty"}}
-    creds = creds_from(config, meta)
-    if not creds["app_id"] or not creds["app_secret"]:
-        return {"ok": False, "error": "qqbot 缺少 app_id/app_secret",
-                "error_kind": "invalid_token", "retriable": False}
-    kind, openid = parse_chat_key(chat_key)
-    if not openid:
-        return {"ok": False, "error": "empty openid", "error_kind": "unsupported",
-                "retriable": False}
-    led = ledger if ledger is not None else get_passive_ledger()
-    anchor = led.reserve(chat_key if str(chat_key).startswith(PLATFORM + ":")
-                         else make_chat_key(kind, openid))
-    if anchor is None and passive_only(cfg):
-        return {"ok": False, "error": "no passive reply anchor (QQ passive window exhausted)",
-                "error_kind": "window_expired", "blocked": "qq_passive_window",
-                "retriable": False}
-    token = await get_token_manager().get(creds["app_id"], creds["app_secret"])
-    if not token:
-        return {"ok": False, "error": "access_token unavailable",
-                "error_kind": "invalid_token", "retriable": False}
-    body: Dict[str, Any] = {"content": text, "msg_type": 0}
-    if anchor:
-        body.update(anchor)
-    if reply_to_msg_id:
-        body["message_reference"] = {"message_id": str(reply_to_msg_id)}
-    status, data = await _http_json(
-        "POST", _messages_url(api_base(cfg), kind, openid),
-        headers=auth_headers(token), payload=body)
-    if status == 200 and isinstance(data, dict) and not data.get("code"):
-        return {"ok": True, "data": data, "anchor": anchor or {}}
+
+def _kill_switch_hit(account_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        from src.integrations.shared.rpa_send_guard import rpa_send_blocked
+        blocked, scope = rpa_send_blocked(PLATFORM, account_id or "official")
+        if blocked:
+            logger.warning("[qqbot][kill-switch] 冻结发送，跳过（scope=%s）", scope)
+            return {"ok": False, "error": f"kill_switch:{scope}", "error_kind": "blocked"}
+    except Exception:
+        pass
+    return None
+
+
+def _classified_failure(status: int, data: Any, *, app_id: str, anchor: Optional[Dict[str, Any]],
+                        what: str) -> Dict[str, Any]:
+    """HTTP 非 200 → 统一失败体（error_kind/retriable 由官方错误分类器给出）。"""
     if status in (401, 403):
         # token 失效/白名单：下次重取 token（白名单类错误重取也无用，但无害）
-        get_token_manager().invalidate(creds["app_id"])
+        get_token_manager().invalidate(app_id)
     out: Dict[str, Any] = {"ok": False, "error": f"HTTP {status}: {str(data)[:200]}",
                            "data": data, "anchor": anchor or {}}
     try:
@@ -627,9 +644,214 @@ async def qqbot_send_text(
     except Exception:
         out["error_kind"] = "unknown"
         out["retriable"] = False
-    logger.warning("[qqbot] 发送失败 HTTP %s kind=%s: %s", status, out.get("error_kind"),
+    logger.warning("[qqbot] %s失败 HTTP %s kind=%s: %s", what, status, out.get("error_kind"),
                    str(data)[:200])
     return out
+
+
+async def _send_prelude(
+    chat_key: str, *, config: Dict[str, Any], meta: Optional[Dict[str, Any]],
+    account_id: str, check_kill_switch: bool, ledger: Optional[PassiveReplyLedger],
+    reserve: bool = True,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """文字/富媒体发送共用的前置：开关 → 凭证 → chat_key → 被动锚点 → token。
+
+    返回 ``(error_or_None, ctx)``；``ctx`` = {cfg, creds, kind, openid, chat_key, led, anchor, token}。
+    ``reserve=False`` 只校验窗口余量不占用（富媒体要先上传再占锚点，上传失败不白烧一条）。
+    """
+    cfg = qqbot_cfg(config)
+    if check_kill_switch:
+        hit = _kill_switch_hit(account_id)
+        if hit is not None:
+            return hit, {}
+    creds = creds_from(config, meta)
+    if not creds["app_id"] or not creds["app_secret"]:
+        return {"ok": False, "error": "qqbot 缺少 app_id/app_secret",
+                "error_kind": "invalid_token", "retriable": False}, {}
+    kind, openid = parse_chat_key(chat_key)
+    if not openid:
+        return {"ok": False, "error": "empty openid", "error_kind": "unsupported",
+                "retriable": False}, {}
+    led = ledger if ledger is not None else get_passive_ledger()
+    ck = chat_key if str(chat_key).startswith(PLATFORM + ":") else make_chat_key(kind, openid)
+    anchor: Optional[Dict[str, Any]] = None
+    if reserve:
+        anchor = led.reserve(ck)
+        exhausted = anchor is None
+    else:
+        exhausted = int(led.status(ck).get("remaining") or 0) <= 0
+    if exhausted and passive_only(cfg):
+        return {"ok": False, "error": "no passive reply anchor (QQ passive window exhausted)",
+                "error_kind": "window_expired", "blocked": "qq_passive_window",
+                "retriable": False}, {}
+    token = await get_token_manager().get(creds["app_id"], creds["app_secret"])
+    if not token:
+        return {"ok": False, "error": "access_token unavailable",
+                "error_kind": "invalid_token", "retriable": False}, {}
+    return None, {"cfg": cfg, "creds": creds, "kind": kind, "openid": openid,
+                  "chat_key": ck, "led": led, "anchor": anchor, "token": token}
+
+
+async def qqbot_send_text(
+    chat_key: str, text: str, *, config: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None, account_id: str = "official",
+    reply_to_msg_id: str = "", check_kill_switch: bool = True,
+    ledger: Optional[PassiveReplyLedger] = None,
+) -> Dict[str, Any]:
+    """经 QQ 开放平台发文字。永不抛。
+
+    返回 ``{"ok", "data"|"error", "error_kind", "retriable", "anchor", "quoted"}``。被动锚点由
+    账本分配：无锚点且 ``passive_only`` → ``ok=False, error_kind=window_expired,
+    blocked=qq_passive_window``（上层按窗口过期分流：转人工 / 等下次来话，不重试）。
+
+    ``reply_to_msg_id``：开放平台文档标 ``message_reference``「暂未支持」，默认**不带**
+    （带了整条可能被拒），``qqbot.message_reference: true`` 才附加；``quoted`` 如实回是否附加了。
+    """
+    text = _truncate(text)
+    if not text:
+        return {"ok": True, "data": {"skipped": "empty"}}
+    err, ctx = await _send_prelude(chat_key, config=config, meta=meta, account_id=account_id,
+                                   check_kill_switch=check_kill_switch, ledger=ledger)
+    if err is not None:
+        return err
+    body: Dict[str, Any] = {"content": text, "msg_type": 0}
+    if ctx["anchor"]:
+        body.update(ctx["anchor"])
+    quoted = False
+    if reply_to_msg_id and bool(ctx["cfg"].get("message_reference")):
+        body["message_reference"] = {"message_id": str(reply_to_msg_id)}
+        quoted = True
+    status, data = await _http_json(
+        "POST", _messages_url(api_base(ctx["cfg"]), ctx["kind"], ctx["openid"]),
+        headers=auth_headers(ctx["token"]), payload=body)
+    if status == 200 and isinstance(data, dict) and not data.get("code"):
+        return {"ok": True, "data": data, "anchor": ctx["anchor"] or {}, "quoted": quoted}
+    return _classified_failure(status, data, app_id=ctx["creds"]["app_id"], anchor=ctx["anchor"],
+                               what="发送")
+
+
+# ── 富媒体出站（图/视频；语音须 silk、文件类平台暂不开放） ──────────────────────
+#: 开放平台 file_type：1 图片（png/jpg）、2 视频（mp4）、3 语音（silk）、4 文件（暂不开放）
+QQBOT_FILE_TYPES = {"image": 1, "video": 2, "voice": 3}
+_QQBOT_IMAGE_EXT = (".png", ".jpg", ".jpeg")
+_QQBOT_VIDEO_EXT = (".mp4",)
+#: 上传接口只收公网 URL（``file_data`` 文档标「暂未支持」），与 LINE/IG 官方通道同一份配置
+PUBLIC_BASE_URL_KEY = "official_media.public_base_url"
+
+
+def public_media_url(config: Dict[str, Any], media_url: str) -> str:
+    """``/static/...`` → 公网 https 绝对 URL（``official_media.public_base_url`` 前缀）；
+    已是绝对 URL 原样返回；未配置 → 空串（调用方回 ``no_public_url``）。"""
+    u = str(media_url or "").strip()
+    if u.lower().startswith(("http://", "https://")):
+        return u
+    base = str((((config or {}).get("official_media") or {}).get("public_base_url")) or "").strip()
+    if not base or not u:
+        return ""
+    return base.rstrip("/") + "/" + u.lstrip("/")
+
+
+def prepare_qqbot_media(media_type: str, media_path: str, media_url: str) -> Dict[str, Any]:
+    """把工作台的媒体归一成开放平台能收的形态。
+
+    返回 ``{"ok": True, "kind": image|video, "path", "url"}`` 或
+    ``{"ok": False, "error_kind": "not_supported", "error": 人话}``。
+    - 图片仅 png/jpg：其它格式（webp/gif/bmp…）用 Pillow 转成 PNG 落 ``protocol_media/qqbot``
+      再发（转失败如实 not_supported）；
+    - 视频仅 mp4（.mov/.m4v 在编排器层已换封装成 mp4，这里不再转）；
+    - 语音须 silk 编码（本机无编码器）、文件类平台「暂不开放」→ not_supported。
+    """
+    mt = str(media_type or "").strip().lower()
+    mt = {"photo": "image", "img": "image", "picture": "image", "audio": "voice", "gif": "image",
+          "animation": "video"}.get(mt, mt)
+    path = str(media_path or "")
+    ext = os.path.splitext(path.split("?", 1)[0])[1].lower()
+    if mt in ("voice", "record"):
+        return {"ok": False, "error_kind": "not_supported",
+                "error": "QQ 机器人语音须 silk 编码，暂未接入（可改发文字）"}
+    if mt in ("document", "file"):
+        return {"ok": False, "error_kind": "not_supported",
+                "error": "QQ 开放平台文件类富媒体暂不开放（file_type=4）"}
+    if mt == "video":
+        if ext not in _QQBOT_VIDEO_EXT:
+            return {"ok": False, "error_kind": "not_supported",
+                    "error": f"QQ 机器人视频仅支持 mp4（收到 {ext or '未知'}）"}
+        return {"ok": True, "kind": "video", "path": path, "url": str(media_url or "")}
+    if mt in ("image", "sticker"):
+        if ext in _QQBOT_IMAGE_EXT:
+            return {"ok": True, "kind": "image", "path": path, "url": str(media_url or "")}
+        try:
+            from PIL import Image
+
+            from src.integrations.protocol_bridge import media_paths
+            dest, url = media_paths(PLATFORM, f"conv_{secrets.token_hex(6)}", ".png")
+            with Image.open(path) as im:
+                im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(dest, "PNG")
+            return {"ok": True, "kind": "image", "path": str(dest), "url": url, "converted": True}
+        except Exception as ex:  # noqa: BLE001
+            return {"ok": False, "error_kind": "not_supported",
+                    "error": f"QQ 机器人图片仅支持 png/jpg，转码失败: {str(ex)[:80]}"}
+    return {"ok": False, "error_kind": "not_supported",
+            "error": f"QQ 机器人不支持的媒体类型: {mt or '未知'}"}
+
+
+async def qqbot_upload_media(
+    kind: str, openid: str, *, file_type: int, url: str, token: str, cfg: Dict[str, Any],
+) -> Tuple[int, Any]:
+    """``POST /v2/users|groups/{id}/files``（``srv_send_msg=false``：只换 file_info，不占主动频次）。"""
+    return await _http_json(
+        "POST", _files_url(api_base(cfg), kind, openid), headers=auth_headers(token),
+        payload={"file_type": int(file_type), "url": url, "srv_send_msg": False}, timeout=60.0)
+
+
+async def qqbot_send_media(
+    chat_key: str, *, media_type: str, media_path: str, media_url: str, config: Dict[str, Any],
+    caption: str = "", meta: Optional[Dict[str, Any]] = None, account_id: str = "official",
+    check_kill_switch: bool = True, ledger: Optional[PassiveReplyLedger] = None,
+) -> Dict[str, Any]:
+    """图/视频出站：归一格式 → 公网 URL → 上传换 file_info → ``msg_type=7`` 被动发送。永不抛。
+
+    次序刻意是「先上传、再占锚点」：上传失败（格式/拉取失败 304082/304083）不白烧被动窗口
+    的一条额度。``content`` 带配文（平台要求非空，无配文填一个空格）。
+    """
+    prep = prepare_qqbot_media(media_type, media_path, media_url)
+    if not prep.get("ok"):
+        return {"ok": False, "error": prep["error"], "error_kind": prep["error_kind"],
+                "retriable": False}
+    err, ctx = await _send_prelude(chat_key, config=config, meta=meta, account_id=account_id,
+                                   check_kill_switch=check_kill_switch, ledger=ledger,
+                                   reserve=False)
+    if err is not None:
+        return err
+    pub = public_media_url(config, prep["url"])
+    if not pub:
+        return {"ok": False, "error_kind": "no_public_url", "retriable": False,
+                "error": f"QQ 机器人富媒体需公网 https URL（配 {PUBLIC_BASE_URL_KEY}）"}
+    status, data = await qqbot_upload_media(
+        ctx["kind"], ctx["openid"], file_type=QQBOT_FILE_TYPES[prep["kind"]], url=pub,
+        token=ctx["token"], cfg=ctx["cfg"])
+    if not (status == 200 and isinstance(data, dict) and data.get("file_info")):
+        out = _classified_failure(status, data, app_id=ctx["creds"]["app_id"], anchor=None,
+                                  what="富媒体上传")
+        out["stage"] = "upload"
+        return out
+    anchor = ctx["led"].reserve(ctx["chat_key"])
+    if anchor is None and passive_only(ctx["cfg"]):
+        return {"ok": False, "error": "no passive reply anchor (QQ passive window exhausted)",
+                "error_kind": "window_expired", "blocked": "qq_passive_window",
+                "retriable": False}
+    body: Dict[str, Any] = {"msg_type": 7, "media": {"file_info": data["file_info"]},
+                            "content": _truncate(caption) or " "}
+    if anchor:
+        body.update(anchor)
+    status, sent = await _http_json(
+        "POST", _messages_url(api_base(ctx["cfg"]), ctx["kind"], ctx["openid"]),
+        headers=auth_headers(ctx["token"]), payload=body)
+    if status == 200 and isinstance(sent, dict) and not sent.get("code"):
+        return {"ok": True, "data": sent, "anchor": anchor or {}, "file_uuid": data.get("file_uuid"),
+                "converted": bool(prep.get("converted"))}
+    return _classified_failure(status, sent, app_id=ctx["creds"]["app_id"], anchor=anchor,
+                               what="富媒体发送")
 
 
 async def qqbot_recall_message(
@@ -743,12 +965,16 @@ async def _handle_message(
     # 官方事件不带昵称（隐私）：私聊会话名留空 → 身份层回落裸 openid（如实缺名，
     # 由 AI 顺势问称呼 / 坐席备注补齐——实施方案 P2-6）；群会话同理不把发言人当会话名。
     name = ""
-    # 媒体先镜像占位（坐席可见可接管；与 IG/Zalo 官方链同语义）
-    for m in ev.get("media") or []:
+    # 媒体：先把开放平台的临时 CDN 链接落到 protocol_media 根（会过期；坐席回看/AI 识图要稳定
+    # 链接），拉不到就用原链接兜底占位（与 IG/Zalo 官方链同语义）
+    for i, m in enumerate(ev.get("media") or []):
+        url = str(m.get("url") or "")
+        local = await persist_inbound_media(
+            m["media_type"], url, name=f"{account_id}_{ev['msg_id'] or int(time.time())}_{i}")
         mirror_inbound_media(
             platform=PLATFORM, account_id=account_id, chat_key=chat_key,
             media_type=m["media_type"], name=name, msg_id=ev["msg_id"],
-            media_ref=m.get("url") or "")
+            media_ref=local or url)
     text = str(ev.get("text") or "")
     if not text:
         return
@@ -1092,6 +1318,7 @@ __all__ = [
     "PassiveReplyLedger", "get_passive_ledger", "reset_for_tests",
     "extract_qqbot_events", "attachment_media",
     "sign_validation", "verify_webhook_signature",
-    "qqbot_send_text", "qqbot_recall_message", "handle_qqbot_event", "register_skill_manager_getter",
+    "qqbot_send_text", "qqbot_send_media", "qqbot_recall_message", "prepare_qqbot_media",
+    "public_media_url", "QQBOT_FILE_TYPES", "handle_qqbot_event", "register_skill_manager_getter",
     "QQBotGateway", "register_qqbot_routes",
 ]

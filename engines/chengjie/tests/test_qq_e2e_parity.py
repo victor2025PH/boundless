@@ -400,6 +400,8 @@ class FakeQQOpen:
         self.token = "TOKEN1"
         self.sent: List[Dict[str, Any]] = []
         self.deleted: List[str] = []
+        self.uploads: List[Dict[str, Any]] = []
+        self.media_hits = 0
         self.identify: Optional[Dict[str, Any]] = None
         self.pending: List[Dict[str, Any]] = []
         self.ws_clients: List[web.WebSocketResponse] = []
@@ -410,8 +412,11 @@ class FakeQQOpen:
         app.router.add_get("/ws", self._ws)
         app.router.add_post("/v2/users/{openid}/messages", self._send)
         app.router.add_post("/v2/groups/{gid}/messages", self._send)
+        app.router.add_post("/v2/users/{openid}/files", self._upload)
+        app.router.add_post("/v2/groups/{gid}/files", self._upload)
         app.router.add_delete("/v2/users/{openid}/messages/{mid}", self._delete)
         app.router.add_delete("/v2/groups/{gid}/messages/{mid}", self._delete)
+        app.router.add_get("/media/{name}", self._media)
         self._runner = web.AppRunner(app)
         self.base = ""
 
@@ -488,12 +493,28 @@ class FakeQQOpen:
         self.deleted.append(request.path)
         return web.Response(status=200)
 
+    async def _upload(self, request: web.Request) -> web.Response:
+        if not self._authed(request):
+            return web.json_response({"code": 11244, "message": "auth"}, status=401)
+        body = await request.json()
+        body["_path"] = request.path
+        self.uploads.append(body)
+        if str(body.get("url") or "").endswith("unreachable.png"):
+            return web.json_response({"code": 304082, "message": "upload media info fail"})
+        return web.json_response({"file_uuid": f"FU{len(self.uploads)}",
+                                  "file_info": f"FI{len(self.uploads)}", "ttl": 0})
 
-def _c2c_event(seq: int, text: str, *, openid: str = "OPENID_A") -> Dict[str, Any]:
+    async def _media(self, request: web.Request) -> web.Response:
+        self.media_hits += 1
+        return web.Response(body=JPEG, content_type="image/jpeg")
+
+
+def _c2c_event(seq: int, text: str, *, openid: str = "OPENID_A",
+               attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     ts = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
     return {"op": 0, "s": seq, "t": "C2C_MESSAGE_CREATE", "id": f"EV{seq}", "d": {
         "id": f"IN{seq}", "content": text, "timestamp": ts,
-        "author": {"user_openid": openid, "id": openid}, "attachments": []}}
+        "author": {"user_openid": openid, "id": openid}, "attachments": attachments or []}}
 
 
 @pytest.fixture
@@ -548,18 +569,26 @@ async def test_qqbot_end_to_end_gateway_inbox_passive_window_and_recall(qqopen, 
         assert w.status()["passive_ledger"]["chats"] == 1
         assert get_passive_ledger().status("qqbot:c2c:OPENID_A")["remaining"] == 4
 
-        # 编排器出站：被动回复带 msg_id/msg_seq 1..4，第 5 条被账本拦成 window_expired（不打 API）
+        # 编排器出站：被动回复带 msg_id/msg_seq。两层窗口判定叠着走、数值同源（60 min / 4）：
+        # ① 编排器里的通用 window_guard（channel_policy，从收件箱事实现算）——自动链只用 3 条，
+        #    第 4 条留给坐席；② 我方账本（按来话 msg_id 锚点 fail-closed）——第 5 条到 worker 也拦。
         orch = ao.AccountOrchestrator()
         _managed(orch, w, "qqbot", qqopen.app_id, "official")
         assert orch.owns("qqbot", qqopen.app_id) is True
-        for i in range(1, 5):
+        for i in range(1, 4):
             r = await orch.send("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", f"回复{i}")
             assert r["delivered"] is True, r
             body = qqopen.sent[-1]
             assert body["_path"] == "/v2/users/OPENID_A/messages"
             assert body["content"] == f"回复{i}" and body["msg_id"] == "IN2" and body["msg_seq"] == i
-        r5 = await orch.send("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", "回复5")
-        assert r5["delivered"] is False and r5.get("blocked") == "qq_passive_window"
+        r4a = await orch.send("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", "回复4")
+        assert r4a["delivered"] is False and r4a["blocked"] == "policy_window_reserved_for_manual"
+        r4 = await orch.send("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", "回复4", origin="manual")
+        assert r4["delivered"] is True and qqopen.sent[-1]["msg_seq"] == 4
+        r5 = await orch.send("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", "回复5", origin="manual")
+        assert r5["delivered"] is False and r5["blocked"] == "policy_window_exhausted"
+        r5w = await w.send("qqbot:c2c:OPENID_A", "回复5")   # 绕过编排器直到 worker：账本自身也 fail-closed
+        assert r5w["delivered"] is False and r5w["blocked"] == "qq_passive_window"
         assert len(qqopen.sent) == 4
         outs = [x for x in store.list_messages(convs[0]["conversation_id"]) if x["direction"] == "out"]
         assert [x["text"] for x in outs] == ["回复1", "回复2", "回复3", "回复4"]
@@ -581,13 +610,54 @@ async def test_qqbot_end_to_end_gateway_inbox_passive_window_and_recall(qqopen, 
         rr = await orch.delete_messages("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", ["OUT5"])
         assert rr == {"ok": True, "deleted": 1}
         assert qqopen.deleted == ["/v2/users/OPENID_A/messages/OUT5"]
-        # 媒体：官方富媒体这批未接，owns_media 为真但 send_media 明确回 not_supported（前端灰态有话说）
+        # ── 富媒体 ──
         from src.integrations.official_api_worker import official_send_caps
-        caps = official_send_caps("qqbot", cfg)
-        assert caps["can_media"] is False and caps["reason"] == "qqbot_media_pending"
-        rm = await w.send_media("qqbot:c2c:OPENID_A", media_path=str(tmp_path / "x.png"),
-                                media_type="image")
-        assert rm["delivered"] is False and rm["error_kind"] == "not_supported"
+        # 未配公网媒体 URL：能力位诚实、运行时同口径 no_public_url（按钮灰态有话说）
+        assert official_send_caps("qqbot", cfg) == {
+            "can_media": False, "can_voice": False, "reason": "needs_public_url"}
+        pic = tmp_path / "out.jpg"
+        pic.write_bytes(JPEG)
+        rm0 = await w.send_media("qqbot:c2c:OPENID_A", media_path=str(pic), media_type="image",
+                                 media_url="/static/protocol_media/qqbot/out.jpg")
+        assert rm0["delivered"] is False and rm0["error_kind"] == "no_public_url"
+        # 配上公网 URL（同 LINE/IG 的 official_media.public_base_url）→ 图片经编排器出站：
+        # /files 换 file_info → msg_type=7 + 被动锚点；语音仍诚实不可（silk）
+        cfg["official_media"] = {"public_base_url": "https://bot.example.com"}
+        assert official_send_caps("qqbot", cfg) == {
+            "can_media": True, "can_voice": False, "reason": "qqbot_media_pending"}
+        remaining = get_passive_ledger().status("qqbot:c2c:OPENID_A")["remaining"]
+        rm = await orch.send_media("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A",
+                                   media_path=str(pic), media_url="/static/protocol_media/qqbot/out.jpg",
+                                   media_type="image", caption="给您看下", origin="manual")
+        assert rm["delivered"] is True, rm
+        up = qqopen.uploads[-1]
+        assert up["_path"] == "/v2/users/OPENID_A/files"
+        assert up == {"file_type": 1, "url": "https://bot.example.com/static/protocol_media/qqbot/out.jpg",
+                      "srv_send_msg": False, "_path": up["_path"]}
+        body = qqopen.sent[-1]
+        assert body["msg_type"] == 7 and body["media"] == {"file_info": "FI1"}
+        assert body["content"] == "给您看下" and body["msg_id"] == "IN3" and body["msg_seq"] == 2
+        assert get_passive_ledger().status("qqbot:c2c:OPENID_A")["remaining"] == remaining - 1
+        outs2 = [x for x in store.list_messages(convs[0]["conversation_id"]) if x["direction"] == "out"]
+        assert outs2[-1]["media_type"] == "image" and outs2[-1]["media_ref"].endswith("/out.jpg")
+        # 上传被平台拒（304082 拉取失败）：如实失败且不白烧锚点
+        bad = tmp_path / "unreachable.png"
+        bad.write_bytes(b"\x89PNG")
+        before = get_passive_ledger().status("qqbot:c2c:OPENID_A")["remaining"]
+        rb = await w.send_media("qqbot:c2c:OPENID_A", media_path=str(bad), media_type="image",
+                                media_url="/static/x/unreachable.png")
+        assert rb["delivered"] is False and rb["error_kind"] != "window_expired"
+        assert get_passive_ledger().status("qqbot:c2c:OPENID_A")["remaining"] == before
+        # 入站附件：开放平台 CDN 临时链接先落 protocol_media 再入库（稳定链接，AI 识图可用）
+        n_before = len(seen)
+        await qqopen.push(_c2c_event(4, "", attachments=[{
+            "content_type": "image/jpeg", "url": f"{qqopen.base}/media/in.jpg",
+            "filename": "in.jpg", "size": len(JPEG)}]))
+        assert await _wait(lambda: len(seen) > n_before)
+        att = [c for c in seen[n_before:] if c.get("media_type") == "image"][0]
+        assert att["media_ref"].startswith("/static/protocol_media/qqbot/") and qqopen.media_hits == 1
+        local = pb.protocol_media_root() / "qqbot" / att["media_ref"].rsplit("/", 1)[1]
+        assert local.is_file() and local.read_bytes() == JPEG
         # token 只取一次（缓存）
         assert qqopen.token_calls == 1
     finally:

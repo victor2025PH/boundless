@@ -182,7 +182,8 @@ def test_normalize_message_event_scenes():
     m = M.normalize_message_event(ev)
     assert m["scene"] == "group" and m["peer_id"] == "999" and m["sender_id"] == "42"
     assert m["name"] == "测试群" and m["sender_name"] == "强哥" and m["seq"] == 5
-    assert m["avatar_url"].endswith("nk=42&s=640")
+    # 群会话头像是群自己的（不是最近发言人的）
+    assert m["avatar_url"] == "https://p.qlogo.cn/gh/999/999/640"
     fr = M.normalize_message_event({"event_type": "message_receive", "data": {
         "message_scene": "friend", "peer_id": 42, "sender_id": 42, "message_seq": 1,
         "segments": [], "friend": {"user_id": 42, "nickname": "阿强", "remark": "客户A"}}})

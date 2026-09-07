@@ -82,6 +82,11 @@ _QQBOT_CODES = {
     50001: "transient",
     50002: "rate_limited",
     40007: "unsupported",
+    # 官方「发送消息」文档常见错误码（2026-09 核对）：22009 msg limit exceed＝被动回复超频/超额
+    # （平台政策，归窗口族：不计账号连败）；304082/304083＝富媒体资源拉取/转换失败（文档明言「请重试」）
+    22009: "window_expired",
+    304082: "transient",
+    304083: "transient",
 }
 _QQBOT_IP_TEXT = re.compile(r"白名单|whitelist|ip\s*(?:not\s*)?(?:allow|in)", re.IGNORECASE)
 _QQBOT_RATE_TEXT = re.compile(r"频率|频控|限频|too many|rate limit|qps|qpm", re.IGNORECASE)

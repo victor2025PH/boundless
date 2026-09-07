@@ -288,12 +288,18 @@ async def test_send_uses_passive_anchor_and_endpoint(monkeypatch, token_ok):
     assert req["headers"]["Authorization"] == "QQBot TOKEN"
     assert req["payload"]["msg_type"] == 0 and req["payload"]["content"] == "你好"
     assert req["payload"]["msg_id"] == "IN1" and req["payload"]["msg_seq"] == 1
-    assert req["payload"]["message_reference"] == {"message_id": "IN1"}
+    # 开放平台文档标 message_reference「暂未支持」：默认不带、quoted=False；显式开才附加
+    assert "message_reference" not in req["payload"] and out["quoted"] is False
+    out2 = await Q.qqbot_send_text("qqbot:c2c:U1", "再来", config=_cfg(message_reference=True),
+                                   reply_to_msg_id="IN1", check_kill_switch=False, ledger=led)
+    assert out2["quoted"] is True
+    assert sent[1]["payload"]["message_reference"] == {"message_id": "IN1"}
+    assert sent[1]["payload"]["msg_seq"] == 2
     # 群走群接口；沙箱换域名
     led.note_inbound("qqbot:group:G1", "GIN", group=True)
     await Q.qqbot_send_text("qqbot:group:G1", "hey", config=_cfg(sandbox=True),
                             check_kill_switch=False, ledger=led)
-    assert sent[1]["url"] == f"{Q.QQBOT_SANDBOX_API_BASE}/v2/groups/G1/messages"
+    assert sent[2]["url"] == f"{Q.QQBOT_SANDBOX_API_BASE}/v2/groups/G1/messages"
 
 
 async def test_send_classifies_platform_errors(monkeypatch, token_ok):
@@ -334,6 +340,12 @@ def test_classify_qqbot_error_text_heuristics():
     assert tok["kind"] == "invalid_token"
     tr = classify_official_send_error("qqbot", status=500, body={"message": "服务内部错误", "code": 50001})
     assert tr["kind"] == "transient" and tr["retriable"] is True
+    # 官方文档常见码：22009 超频=窗口族（不计连败）；304082/304083 富媒体拉取失败=可重试
+    lim = classify_official_send_error("qqbot", status=200, body={"message": "msg limit exceed", "code": 22009})
+    assert lim["kind"] == "window_expired"
+    for c in (304082, 304083):
+        m = classify_official_send_error("qqbot", status=200, body={"message": "upload media info fail", "code": c})
+        assert m["kind"] == "transient" and m["retriable"] is True, c
     # 顶层 code 的挖取不影响 Zalo / Graph 风格
     z = classify_official_send_error("zalo", status=200, body={"error": -213, "message": "x"})
     assert z["kind"] == "window_expired"
@@ -559,15 +571,20 @@ async def test_worker_send_routes_to_qqbot_and_marks_quote(monkeypatch):
                         reply_to_msg_id="", check_kill_switch=True, ledger=None):
         calls.append({"chat_key": chat_key, "text": text, "ref": reply_to_msg_id,
                       "account_id": account_id})
-        return {"ok": True, "data": {"id": "OUT9"}}
+        # 引用是否真附加由 qqbot_send_text 如实回（默认关：文档标「暂未支持」）
+        return {"ok": True, "data": {"id": "OUT9"},
+                "quoted": bool(reply_to_msg_id and config["qqbot"].get("message_reference"))}
 
     monkeypatch.setattr(Q, "qqbot_send_text", fake_send)
     w = official_worker_factory("qqbot")({"platform": "qqbot", "account_id": "APP", "meta": {}}, _cfg())
     res = await w.send("qqbot:c2c:U1", "hi", reply_to={"id": "IN1", "text": "q"})
-    assert res["delivered"] is True and res["message_id"] == "OUT9" and res["quote_applied"] is True
+    assert res["delivered"] is True and res["message_id"] == "OUT9" and res["quote_applied"] is False
     assert calls[0]["ref"] == "IN1" and calls[0]["account_id"] == "APP"
-    res2 = await w.send("qqbot:c2c:U1", "hi")
-    assert res2["quote_applied"] is False
+    w2 = official_worker_factory("qqbot")({"platform": "qqbot", "account_id": "APP", "meta": {}},
+                                          _cfg(message_reference=True))
+    res2 = await w2.send("qqbot:c2c:U1", "hi", reply_to={"id": "IN1"})
+    assert res2["quote_applied"] is True
+    assert (await w2.send("qqbot:c2c:U1", "hi"))["quote_applied"] is False
 
 
 async def test_worker_send_blocked_surfaces_window_kind(monkeypatch):
@@ -581,13 +598,120 @@ async def test_worker_send_blocked_surfaces_window_kind(monkeypatch):
     assert res["blocked"] == "qq_passive_window"
 
 
-async def test_qqbot_media_caps_agree_with_runtime():
+async def test_qqbot_media_caps_agree_with_runtime(monkeypatch, token_ok, tmp_path):
+    # 未配公网媒体 URL：能力位诚实为「需公网 URL」，运行时同口径 no_public_url（图片格式合法也不行）
     caps = official_send_caps("qqbot", {})
-    assert caps["can_media"] is False and caps["can_voice"] is False
-    assert caps["reason"] == "qqbot_media_pending"
+    assert caps == {"can_media": False, "can_voice": False, "reason": "needs_public_url"}
     w = OfficialApiWorker({"platform": "qqbot", "account_id": "APP", "meta": {}}, _cfg())
-    out = await w.send_media("qqbot:c2c:U1", media_path="x.jpg", media_type="image")
-    assert out["delivered"] is False and out["error_kind"] == "not_supported"
+    led = Q.get_passive_ledger()
+    led.note_inbound("qqbot:c2c:U1", "IN1")
+    img = tmp_path / "x.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xd9")
+    out = await w.send_media("qqbot:c2c:U1", media_path=str(img), media_type="image",
+                             media_url="/static/protocol_media/qqbot/x.jpg")
+    assert out["delivered"] is False and out["error_kind"] == "no_public_url"
+    # 配了公网 URL：图/视频可发、语音仍不可（silk）；reason 沿用前端已映射的键
+    cfg = _cfg()
+    cfg["official_media"] = {"public_base_url": "https://bot.example.com/"}
+    caps2 = official_send_caps("qqbot", cfg)
+    assert caps2 == {"can_media": True, "can_voice": False, "reason": "qqbot_media_pending"}
+    w2 = OfficialApiWorker({"platform": "qqbot", "account_id": "APP", "meta": {}}, cfg)
+    voice = await w2.send_media("qqbot:c2c:U1", media_path=str(tmp_path / "v.ogg"), media_type="voice")
+    assert voice["delivered"] is False and voice["error_kind"] == "not_supported"
+    doc = await w2.send_media("qqbot:c2c:U1", media_path=str(tmp_path / "a.pdf"), media_type="document")
+    assert doc["delivered"] is False and doc["error_kind"] == "not_supported"
+
+
+async def test_send_media_uploads_then_sends_msg_type_7(monkeypatch, token_ok, tmp_path):
+    """图片出站：/files（公网 URL, srv_send_msg=false）→ file_info → /messages msg_type=7 + 锚点；
+    上传失败不占锚点；webp 先转 png；窗口耗尽时连上传都不做。"""
+    reqs: List[Dict[str, Any]] = []
+
+    async def fake_http(method, url, *, headers=None, payload=None, timeout=20.0):
+        reqs.append({"method": method, "url": url, "payload": payload})
+        if url.endswith("/files"):
+            if payload["url"].endswith("bad.png"):
+                return 200, {"code": 304082, "message": "upload media info fail"}
+            return 200, {"file_uuid": "FU1", "file_info": "FI-BLOB", "ttl": 0}
+        return 200, {"id": "OUTM", "timestamp": 1}
+
+    monkeypatch.setattr(Q, "_http_json", fake_http)
+    cfg = _cfg()
+    cfg["official_media"] = {"public_base_url": "https://bot.example.com"}
+    led = Q.PassiveReplyLedger()
+    led.note_inbound("qqbot:c2c:U1", "IN1")
+    img = tmp_path / "p.jpg"
+    img.write_bytes(b"\xff\xd8\xff\xd9")
+    out = await Q.qqbot_send_media(
+        "qqbot:c2c:U1", media_type="image", media_path=str(img),
+        media_url="/static/protocol_media/qqbot/p.jpg", caption="看这张", config=cfg,
+        check_kill_switch=False, ledger=led)
+    assert out["ok"] is True and out["data"]["id"] == "OUTM" and out["file_uuid"] == "FU1"
+    up, msg = reqs[0], reqs[1]
+    assert up["url"] == f"{Q.QQBOT_API_BASE}/v2/users/U1/files"
+    assert up["payload"] == {"file_type": 1, "url": "https://bot.example.com/static/protocol_media/qqbot/p.jpg",
+                             "srv_send_msg": False}
+    assert msg["url"] == f"{Q.QQBOT_API_BASE}/v2/users/U1/messages"
+    assert msg["payload"] == {"msg_type": 7, "media": {"file_info": "FI-BLOB"}, "content": "看这张",
+                              "msg_id": "IN1", "msg_seq": 1}
+    assert led.status("qqbot:c2c:U1")["remaining"] == 3
+    # 无配文 → content 填一个空格（平台要求非空）；群走群上传口 + file_type=2（mp4）
+    led.note_inbound("qqbot:group:G1", "GIN", group=True)
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    out2 = await Q.qqbot_send_media("qqbot:group:G1", media_type="video", media_path=str(vid),
+                                    media_url="/static/x/v.mp4", config=cfg,
+                                    check_kill_switch=False, ledger=led)
+    assert out2["ok"] is True
+    assert reqs[2]["url"].endswith("/v2/groups/G1/files") and reqs[2]["payload"]["file_type"] == 2
+    assert reqs[3]["payload"]["content"] == " " and reqs[3]["payload"]["msg_id"] == "GIN"
+    # 上传失败：如实回失败且**没占**锚点
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"\x89PNG")
+    before = led.status("qqbot:c2c:U1")["remaining"]
+    out3 = await Q.qqbot_send_media("qqbot:c2c:U1", media_type="image", media_path=str(bad),
+                                    media_url="/static/x/bad.png", config=cfg,
+                                    check_kill_switch=False, ledger=led)
+    assert out3["ok"] is False and out3["stage"] == "upload"
+    assert led.status("qqbot:c2c:U1")["remaining"] == before
+    # webp → 转 png 落 protocol_media/qqbot 再上传（URL 指向转后的文件）
+    from PIL import Image
+    webp = tmp_path / "s.webp"
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(webp, "WEBP")
+    n = len(reqs)
+    out4 = await Q.qqbot_send_media("qqbot:c2c:U1", media_type="image", media_path=str(webp),
+                                    media_url="/static/x/s.webp", config=cfg,
+                                    check_kill_switch=False, ledger=led)
+    assert out4["ok"] is True and out4["converted"] is True
+    conv_url = reqs[n]["payload"]["url"]
+    assert conv_url.startswith("https://bot.example.com/static/protocol_media/qqbot/conv_")
+    assert conv_url.endswith(".png")
+    # 窗口耗尽：上传都不发起，直接 window_expired
+    fresh = Q.PassiveReplyLedger()
+    n = len(reqs)
+    out5 = await Q.qqbot_send_media("qqbot:c2c:U9", media_type="image", media_path=str(img),
+                                    media_url="/static/x/p.jpg", config=cfg,
+                                    check_kill_switch=False, ledger=fresh)
+    assert out5["ok"] is False and out5["error_kind"] == "window_expired" and len(reqs) == n
+
+
+def test_prepare_qqbot_media_formats(tmp_path):
+    ok = Q.prepare_qqbot_media("image", str(tmp_path / "a.JPG"), "/static/a.JPG")
+    assert ok["ok"] and ok["kind"] == "image" and "converted" not in ok
+    assert Q.prepare_qqbot_media("photo", "/x/a.png", "")["kind"] == "image"
+    assert Q.prepare_qqbot_media("video", "/x/a.mp4", "")["kind"] == "video"
+    bad_video = Q.prepare_qqbot_media("video", "/x/a.mov", "")
+    assert bad_video["ok"] is False and bad_video["error_kind"] == "not_supported"
+    for mt in ("voice", "audio", "document", "file", "location"):
+        r = Q.prepare_qqbot_media(mt, "/x/a.bin", "")
+        assert r["ok"] is False and r["error_kind"] == "not_supported", mt
+    # 转码失败（文件不存在）如实 not_supported，不抛
+    r = Q.prepare_qqbot_media("image", str(tmp_path / "missing.webp"), "")
+    assert r["ok"] is False and r["error_kind"] == "not_supported"
+    assert Q.public_media_url({}, "/static/x.png") == ""
+    assert Q.public_media_url({"official_media": {"public_base_url": "https://h/"}},
+                              "/static/x.png") == "https://h/static/x.png"
+    assert Q.public_media_url({}, "https://cdn/x.png") == "https://cdn/x.png"
 
 
 async def test_qqbot_worker_webhook_mode_is_stateless_and_healthy():
@@ -675,6 +799,10 @@ def test_qqbot_channel_fields_match_module_config_reads():
     assert ch.console_url == Q.QQBOT_CONSOLE_URL
     src = (_ROOT / "src" / "integrations" / "qq_official.py").read_text(encoding="utf-8")
     for f in ch.fields:
+        if f.key == Q.PUBLIC_BASE_URL_KEY:
+            # 与 LINE/IG 卡共用的公网媒体 URL（富媒体上传只收 URL）——由 public_media_url 读
+            assert 'get("public_base_url")' in src
+            continue
         block, _, key = f.key.partition(".")
         assert block == "qqbot", f.key
         assert f'cfg.get("{key}")' in src, (

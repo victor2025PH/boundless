@@ -286,6 +286,10 @@ qqbot:
   webhook_path: "/qqbot/webhook" # 仅 webhook 方式用；开放平台回调地址填 https://<域名>/qqbot/webhook
   group_full_messages: false     # 群全量消息（需群管理员在群设置开权限 + 回调勾 GROUP_MESSAGE_CREATE）
   passive_only: true             # 无被动锚点即拒发（默认开；关=尝试主动消息接口，风险自负）
+  message_reference: false       # 引用回复（message_reference）：官方文档标「暂未支持」，默认不带；平台放开后再开
+  # 发图/视频：先 POST /v2/users|groups/{id}/files 换 file_info 再 msg_type=7 发送——开放平台**只按公网
+  # URL 拉取**，须配下方 official_media.public_base_url（与 LINE/IG 共用）；图片 png/jpg（其它格式自动
+  # 转 png）、视频 mp4；语音须 silk 编码暂不支持；文件类平台暂不开放。
 
 # Zalo Official Account OA OpenAPI v3.0（东南亚出海重点区，Phase H）。默认关。
 # ⚠️ cs（客服消息）仅能发给 7 天内与 OA 互动过的用户。
