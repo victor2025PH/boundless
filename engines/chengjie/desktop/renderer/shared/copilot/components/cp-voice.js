@@ -73,6 +73,10 @@
       this._previewFallback = "";
       this._fbConfirmedKey = "";
       this._staleWas = false;
+      // #250（N-4 B）：本条试听的服务端终审（voice_meta.speech / speech_basis）——
+      // 结果区唯一结论行 _syncNotes 的输入之一；与 _silent（含客户端兜底）合成四态。
+      this._previewSpeech = "";
+      this._previewBasis = "";
       this._epoch = 0;
       this._genTimer = null;
       this._hintTimer = null;
@@ -117,6 +121,12 @@
     _css() {
       return `
       :host { display:block; font-size:var(--cp-fs-sm,12px); color:var(--cp-text,#e2e8f0); }
+      /* #250（N-4 B，2026-09-08）：hidden 属性必须压过本样式表里任何作者 display 规则。
+         UA 样式表的 [hidden]{display:none} 级联在作者样式之下——.pv-note{display:flex} /
+         .effline{display:flex} 一写，el.hidden=true 就形同虚设：钧机两张截图里
+         「已核有声 + 疑似无声 + 试听已过期」三条同屏，红条橙条根本没有任何判定点亮它们，
+         只是从 0831 起就没被藏住过（现有门禁只断言 el.hidden，从未看计算样式）。 */
+      [hidden] { display:none !important; }
       svg.ui-ic { pointer-events:none; }  /* Shadow DOM 不吃宿主页样式：图标不抢点击，事件落宿主按钮 */
       .wrap { background:var(--cp-surface-2,#1a2332); border:1px solid var(--cp-border,#2a3544);
               border-radius:var(--cp-radius-sm,8px); padding:8px; }
@@ -186,6 +196,26 @@
                       border-color:var(--cp-accent-border,rgba(84,167,245,.38));
                       color:var(--cp-text,#e2e8f0); }
       .pv-note button { flex:none; margin-left:auto; }
+      /* 单一结论行（#250 N-4 B）：整个结果区只此一处下结论——✅ 可发送 / ❌ 无声或
+         念错（原因 + 重新生成）/ ⚠ 试听已过期（重新生成）/ ℹ 未能核验。四态互斥，
+         同一时刻只渲染一条；「实际使用」行只报事实（人设 / 后端 / 音色），不再下结论。 */
+      .pv-verdict { display:flex; align-items:flex-start; gap:6px; margin-top:6px;
+                    padding:5px 7px; border-radius:6px; font-size:var(--cp-fs-tiny,11px);
+                    border:1px solid transparent; line-height:1.45; }
+      .pv-verdict.ok { background:var(--cp-ok-bg,rgba(22,163,74,.12));
+                       border-color:var(--cp-ok-border,rgba(22,163,74,.38));
+                       color:var(--cp-ok,#16a34a); }
+      .pv-verdict.warn { background:var(--cp-warn-bg,rgba(245,185,69,.12));
+                         border-color:var(--cp-warn-border,rgba(245,185,69,.38));
+                         color:var(--cp-warn-ink,#d97706); }
+      .pv-verdict.err { background:var(--cp-danger-bg,rgba(240,106,106,.14));
+                        border-color:var(--cp-danger,#dc2626);
+                        color:var(--cp-danger,#dc2626); }
+      .pv-verdict.info { background:var(--cp-accent-bg,rgba(84,167,245,.14));
+                         border-color:var(--cp-accent-border,rgba(84,167,245,.38));
+                         color:var(--cp-text,#e2e8f0); }
+      .pv-verdict > span { flex:1; min-width:0; }
+      .pv-verdict button { flex:none; margin-left:auto; }
       canvas[data-role="wave"] { width:100%; height:24px; display:block; margin-top:2px; }
       .cnt { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-tiny,#94a3b8); }
       .cnt.err { color:var(--cp-danger,#dc2626); font-weight:600; }
@@ -325,9 +355,9 @@
         parts.push(this._t("cp.voice.std_voice_note",
           { lang: this._langName(String(m.fallback_lang || "")) }));
       }
-      // #121 三进宫：服务端终审「有声」直接亮在实际使用行——红条谎报的反证
-      // 同屏可见（转写命中/能量在场），坐席不必再靠耳朵和值守对质。
-      if (m.speech === "voiced") parts.push(this._t("cp.voice.m_speech_ok"));
+      // #250（N-4 B）：「✓ 已核有声」不再挂在这一行——终审结论只在结果区唯一结论行
+      // 出现（_syncNotes）。#121 时把它加在这里是为了给红条「作证」，结果成了钧机截图
+      // 里「已核有声 / 疑似无声 / 已过期」三条同屏的一员。实际使用行只报事实。
       if (!parts.length) return "";
       // chip 化（P1-2）：折行时分隔符跟内容走（同音色状态条 eff-bit 方案，
       // 旧 " · " 拼串窄栏折行会行尾悬挂）；原始代号串进 title，不占坐席眼球。
@@ -531,6 +561,8 @@
       this._previewFallback = "";
       this._fbConfirmedKey = "";
       this._staleWas = false;
+      this._previewSpeech = "";
+      this._previewBasis = "";
       this._stopGenTimer();
       if (this._hintTimer) { clearTimeout(this._hintTimer); this._hintTimer = null; }
       const w = this.shadowRoot.querySelector(".wrap");
@@ -834,6 +866,8 @@
       this._silentKind = "";
       this._previewFallback = "";
       this._staleWas = false;
+      this._previewSpeech = "";
+      this._previewBasis = "";
       // 等待态一次成形（计秒只更新 span，别整块重写——否则「取消」按钮每秒被销毁重建）
       box.innerHTML =
         `<span data-role="gen-wait"></span>` +
@@ -951,10 +985,15 @@
         ? `<div class="hint pv-spoken">${this._esc(this._t("cp.voice.spoken_as",
             { lang: this._langName(d.target_lang || "") }))}: <span class="sp-txt">${this._esc(d.spoken_text)}</span></div>`
         : "";
-      /* 状态 banner 槽（P1-3）：回落/无声/过期三种警示统一 pv-note 结构与
-         语义色（过期从 err 红字校正为 warn——它与 stale 边框本就是同一状态，
-         旧版一琥珀一红是双重严重度）；过期 banner 内嵌「重新生成」＝在错误
-         发生点给出路，不必扫回预览头找按钮。 */
+      /* 结果区（#250 N-4 B 重排）：回落说明（info/warn，是「说明」不是结论）+
+         **唯一结论行** `[data-role="verdict"]`（✅ 可发送 / ❌ 无声或念错 / ⚠ 已过期 /
+         ℹ 未能核验，由 _syncNotes 按 CpVoice.panelVerdict 单出口渲染）+ 脚部按钮：
+         过期时主按钮就是「重新生成」（发送钮整个让位，不再是「灰掉的发送」——
+         灰按钮说不出为什么灰、也给不出出路）。旧版红条 + 橙条两个独立 banner
+         各自 hidden、各自为政，且 .pv-note{display:flex} 让 hidden 全部失效——钧机
+         两张截图三条同屏就是这么来的。 */
+      this._previewSpeech = String(_vm.speech || "").toLowerCase();
+      this._previewBasis = String(_vm.speech_basis || "");
       box.innerHTML =
         `<div class="row pv-hd"><span>${this._ic("mic", 12)} ${this._t("cp.voice.preview")}</span>` +
         `<span class="pv-actions">` +
@@ -966,10 +1005,9 @@
         spokenLine +
         this._metaLine(d) +
         fbNote +
-        `<div class="pv-note err" data-role="silent-note" data-detector="v3-server" data-speech="${this._esc(String(_vm.speech || ""))}" hidden><span>${this._esc(this._t(CpVoice.blockNoteKey(_vm.speech)))}</span></div>` +
-        `<div class="pv-note warn" data-role="stale-note" hidden><span>${this._esc(this._t("cp.voice.stale_note"))}</span>` +
-        `<button data-act="tts">${this._t("cp.voice.regen_btn")}</button></div>` +
+        `<div class="pv-verdict" data-role="verdict" data-detector="v4-single" data-state="" data-speech="${this._esc(this._previewSpeech)}" hidden></div>` +
         `<div class="row pv-foot">` +
+        `<button class="primary" data-act="tts" data-role="regen-main" hidden>${this._ic("refresh", 12)} ${this._t("cp.voice.regen_btn")}</button>` +
         `<button class="primary" data-act="send">${this._t("cp.voice.send_btn")}</button></div>`;
       // 服务端已确认无声/念错 → 不等本地解码，立即禁发（消灭「红条未出、发送可点」的空窗）
       if (_vm.speech === "silent" || _vm.speech === "garbled") {
@@ -977,7 +1015,7 @@
         this._silentKind = _vm.speech;
         this._warnBeacon(_vm.speech === "garbled" ? "garbled_server" : "silent_server");
       }
-      this._syncStale();   // 生成期间若已改字/换音色，立即标过期
+      this._syncStale();   // 生成期间若已改字/换音色，立即标过期；同时首绘结论行
       this._sniffSilence(url, _vm, Number(d && d.duration_sec) || 0);   // 有声终审：服务端裁决优先，客户端解码只兜底/画波形
     }
 
@@ -1023,6 +1061,35 @@
       if (s === "garbled") return "cp.voice.garbled_note";
       if (s === "silent") return "cp.voice.silent_note_server";
       return "cp.voice.silent_note";
+    }
+
+    /** 结果区唯一结论（#250 N-4 B，纯函数，desktop/test 常驻门禁）。
+     *  入参：speech=服务端终审（voiced/silent/garbled/unknown/''）；silent=阻发闸
+     *  （服务端 silent/garbled 或客户端兜底判无声）；kind=阻发原因（silent/garbled）；
+     *  stale=试听已过期。出参 {state, level, key, canSend}：
+     *    stale   → warn  「试听已过期 → 重新生成」（过期＝这条产物已不代表当前选择，
+     *                    它身上的有声/无声结论无论真假都只对旧产物成立，先于一切）
+     *    blocked → err   「无声 / 念错 + 原因 + 重新生成」（文案键沿 blockNoteKey：
+     *                    服务端确认无声 / 念错 / 客户端兜底疑似无声 三条各归各）
+     *    ok      → ok    「已核有声，可发送」（服务端 voiced）
+     *    unverified → info「未能核验（服务端无证据）—— 请先听一遍再发」（可发送）
+     *  四态互斥、恒返回其一：同一时刻面板只可能出现一个结论。 */
+    static panelVerdict(o) {
+      const inp = o || {};
+      const speech = String(inp.speech || "").toLowerCase();
+      if (inp.stale) {
+        return { state: "stale", level: "warn", key: "cp.voice.stale_note", canSend: false };
+      }
+      if (inp.silent) {
+        // 文案按**证据来源**分：服务端终审 silent/garbled 用「服务端已确认 / 念错」；
+        // 服务端拿不到证据（unknown/缺键）而由客户端解码兜底判无声 → 只能说「疑似」。
+        const k = (speech === "silent" || speech === "garbled") ? speech : "client";
+        return { state: "blocked", level: "err", key: CpVoice.blockNoteKey(k), canSend: false };
+      }
+      if (speech === "voiced") {
+        return { state: "ok", level: "ok", key: "cp.voice.v_ok", canSend: true };
+      }
+      return { state: "unverified", level: "info", key: "cp.voice.v_unverified", canSend: true };
     }
 
     static speechDecision(meta, sniff, serverSec) {
@@ -1105,7 +1172,7 @@
       if (ep !== this._epoch) return;
       if (buckets) this._drawWave(buckets);
       const verdict = CpVoice.speechDecision(meta, sniff, serverSec);
-      const note = this.shadowRoot.querySelector('[data-role="silent-note"]');
+      const note = this.shadowRoot.querySelector('[data-role="verdict"]');
       if (note) note.setAttribute("data-basis", verdict.basis);
       if (!verdict.silent || this._silent) return;   // 服务端 silent/garbled 已在渲染时禁发，不重复计数
       // 阻发闸（P0 2026-08-31）：红字劝「不要发送」但按钮仍亮蓝可点＝视觉与
@@ -1413,6 +1480,8 @@
       this._silentKind = "";
       this._previewFallback = "";
       this._staleWas = false;
+      this._previewSpeech = "";
+      this._previewBasis = "";
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (box) { box.hidden = true; box.innerHTML = ""; box.classList.remove("stale"); }
       this._syncXlHint();   // 语种改道说明随预览一起消失 → 顶部预告恢复
@@ -1497,18 +1566,41 @@
       const box = this.shadowRoot.querySelector('[data-role="preview"]');
       if (!box || box.hidden) return;
       const stale = this._previewText == null ? false : this._isStale();
-      const silentEl = box.querySelector('[data-role="silent-note"]');
-      const staleEl = box.querySelector('[data-role="stale-note"]');
+      const v = CpVoice.panelVerdict({
+        speech: this._previewSpeech, silent: this._silent,
+        kind: this._silentKind, stale,
+      });
+      const vEl = box.querySelector('[data-role="verdict"]');
+      if (vEl) {
+        /* 唯一结论行（#250）：一个元素、一段文案、一个出路按钮。过期 / 阻发时行内
+           带「重新生成」（在错误发生点给出路）；可发送态不带按钮（发送在脚部）。
+           title 放依据（server-voiced / transcript+energy…）供 F12 与值守对质。 */
+        const withRegen = v.state === "stale" || v.state === "blocked";
+        vEl.className = `pv-verdict ${v.level}`;
+        vEl.setAttribute("data-state", v.state);
+        vEl.setAttribute("data-speech", this._previewSpeech);
+        vEl.setAttribute("data-kind", v.state === "blocked" ? (this._silentKind || "silent") : "");
+        vEl.title = v.state === "ok"
+          ? this._t("cp.voice.v_ok_t", { basis: this._previewBasis || "server-voiced" }) : "";
+        vEl.innerHTML = `<span>${this._esc(this._t(v.key))}</span>`
+          + (withRegen ? `<button data-act="tts">${this._t("cp.voice.regen_btn")}</button>` : "");
+        vEl.hidden = false;
+      }
       const fbEl = box.querySelector('[data-role="fallback-note"]');
-      if (staleEl) staleEl.hidden = !stale;
-      if (silentEl) silentEl.hidden = stale || !this._silent;
-      if (fbEl) fbEl.hidden = this._silent || stale;
+      if (fbEl) fbEl.hidden = this._silent || stale;   // 回落说明让位于结论（单条出口）
       box.classList.toggle("stale", stale);
       const send = box.querySelector('[data-act="send"]');
+      const regen = box.querySelector('[data-role="regen-main"]');
       if (send) {
-        // 无声=真闸门：红字劝「不要发送」而按钮亮蓝可点，视觉与行为自相矛盾
+        // 过期：发送钮整个让位给「重新生成」；阻发：发送钮留着但禁用 + title 说原因
+        // （无声=真闸门：红字劝「不要发送」而按钮亮蓝可点，视觉与行为自相矛盾）
+        send.hidden = stale;
         send.disabled = stale || this._silent || !!this._busy;
         send.title = this._silent ? this._t(this._blockTitleKey()) : "";
+      }
+      if (regen) {
+        regen.hidden = !stale;
+        regen.disabled = !!this._busy;
       }
       this._syncXlHint();   // 语种改道说明可见时顶部预告让位（同因去重）
     }

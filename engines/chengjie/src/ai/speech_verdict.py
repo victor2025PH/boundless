@@ -157,6 +157,64 @@ def speech_verdict(
     }
 
 
+#: 面板级结论（#250 N-4 B）：终审四档 → 面板只可能给出的一个结论。与前端
+#: ``CpVoice.panelVerdict`` 同口径（前端另加「过期」一档，那是客户端状态）。
+VERDICT_BY_SPEECH = {
+    "voiced": "ok",
+    "silent": "block:silent",
+    "garbled": "block:garbled",
+    "unknown": "unverified",
+}
+
+
+def verdict_label(speech: Any) -> str:
+    """``speech`` → 面板级结论标签（``ok`` / ``block:silent`` / ``block:garbled`` /
+    ``unverified``）。未知取值一律按 unverified（宁可让坐席先听一遍）。"""
+    return VERDICT_BY_SPEECH.get(str(speech or "").strip().lower(), "unverified")
+
+
+def format_tts_verdict_line(
+    speech: Optional[Dict[str, Any]],
+    *,
+    persona: Any = "",
+    backend: Any = "",
+    voice: Any = "",
+    duration_sec: Any = 0.0,
+    synth_verify: Optional[Dict[str, Any]] = None,
+    file: Any = "",
+    stage: str = "preview",
+) -> str:
+    """一次合成 = 一行 ``[tts] verdict=…``（#250 N-4 B/E：取证一词抓全）。
+
+    字段顺序固定：``persona backend voice dur speech energy cer verdict``，再跟
+    ``basis transcript_chars file stage``。缺失值统一 ``-``，取证脚本按 ``key=`` 切。
+    """
+    sp = speech if isinstance(speech, dict) else {}
+    sv = synth_verify if isinstance(synth_verify, dict) else {}
+    tag = str(sp.get("speech") or "unknown").strip().lower() or "unknown"
+
+    def _s(v: Any) -> str:
+        t = str(v if v is not None else "").strip()
+        return t if t else "-"
+
+    try:
+        dur = f"{float(duration_sec or 0.0):.1f}"
+    except (TypeError, ValueError):
+        dur = "-"
+    cer_raw = sv.get("cer")
+    try:
+        cer = f"{float(cer_raw):.2f}" if cer_raw is not None else "-"
+    except (TypeError, ValueError):
+        cer = "-"
+    return (
+        f"[tts] verdict={verdict_label(tag)} persona={_s(persona)} backend={_s(backend)} "
+        f"voice={_s(voice)} dur={dur} speech={tag} energy={_s(sp.get('energy') or 'unknown')} "
+        f"cer={cer} basis={_s(sp.get('basis'))} "
+        f"transcript_chars={int(sp.get('transcript_chars') or 0)} "
+        f"file={_s(file)} stage={_s(stage)}"
+    )
+
+
 def judge_preview_speech(
     audio_path: Any,
     audio_format: str,

@@ -147,4 +147,41 @@ eq("空响应不炸", Cls.selectionMismatch("mizuki", null), "");
 eq("resolved 为空（服务端未回填）不误判", Cls.selectionMismatch("mizuki", { ok: true,
   voice_meta: { requested_persona_id: "mizuki", persona_id: "" } }), "");
 
+// ── panelVerdict（#250 N-4 B）：结果区唯一结论，四态互斥 ─────────────────────────
+ok("panelVerdict 挂在类上", typeof Cls.panelVerdict === "function");
+let pv = Cls.panelVerdict({ speech: "voiced", silent: false, kind: "", stale: false });
+eq("钧机形态：服务端 voiced、未过期 → ok", pv.state, "ok");
+eq("ok 用「已核有声，可发送」文案", pv.key, "cp.voice.v_ok");
+eq("ok 可发送", pv.canSend, true);
+pv = Cls.panelVerdict({ speech: "voiced", silent: false, stale: true });
+eq("过期压过一切（含 voiced）→ stale", pv.state, "stale");
+eq("stale 用过期文案", pv.key, "cp.voice.stale_note");
+eq("stale 不可发送（出路=重新生成）", pv.canSend, false);
+pv = Cls.panelVerdict({ speech: "silent", silent: true, kind: "silent", stale: false });
+eq("服务端 silent → blocked", pv.state, "blocked");
+eq("blocked/silent 用服务端确认文案", pv.key, "cp.voice.silent_note_server");
+pv = Cls.panelVerdict({ speech: "garbled", silent: true, kind: "garbled", stale: false });
+eq("服务端 garbled → blocked", pv.state, "blocked");
+eq("blocked/garbled 用念错文案", pv.key, "cp.voice.garbled_note");
+pv = Cls.panelVerdict({ speech: "unknown", silent: true, kind: "silent", stale: false });
+eq("客户端兜底判无声（服务端 unknown）→ blocked", pv.state, "blocked");
+eq("客户端兜底用「疑似无声」文案", pv.key, "cp.voice.silent_note");
+pv = Cls.panelVerdict({ speech: "unknown", silent: false, stale: false });
+eq("服务端 unknown 且客户端无异常 → unverified（可发但提醒先听）", pv.state, "unverified");
+eq("unverified 可发送", pv.canSend, true);
+pv = Cls.panelVerdict({ speech: "", silent: false, stale: false });
+eq("旧后端缺键 → unverified", pv.state, "unverified");
+pv = Cls.panelVerdict({ speech: "silent", silent: true, kind: "silent", stale: true });
+eq("过期 + 无声 → 只报过期（旧产物的无声结论不再有意义）", pv.state, "stale");
+pv = Cls.panelVerdict(null);
+eq("空入参不炸 → unverified", pv.state, "unverified");
+// 四态穷举：任意组合恒返回四态之一，且 canSend 只在 ok/unverified 为真
+const STATES = ["stale", "blocked", "ok", "unverified"];
+[["voiced", false], ["silent", true], ["garbled", true], ["unknown", false], ["unknown", true], ["", false]]
+  .forEach(([sp, si]) => [false, true].forEach((st) => {
+    const r = Cls.panelVerdict({ speech: sp, silent: si, kind: sp === "garbled" ? "garbled" : "silent", stale: st });
+    ok(`四态穷举 ${sp}/${si}/${st} → ${r.state}`, STATES.indexOf(r.state) >= 0);
+    eq(`canSend 与 state 一致 ${sp}/${si}/${st}`, r.canSend, r.state === "ok" || r.state === "unverified");
+  }));
+
 console.log(`cp-voice-speech-verdict.test.js: ${pass} passed`);

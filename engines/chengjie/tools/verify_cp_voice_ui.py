@@ -52,6 +52,12 @@ P0 2026-08-05 随「预览清不掉 / 生成入口迷失 / 连点双发」修复
   V25（#149）过期优先于无声：无声红条亮着时换音色 → 红条让位、过期说明可见
       （KKXSTU 截图「下拉美月／实际使用张景光」被读成选X出Y的成因）；换回原音色
       红条回来；服务端选声失配（reason=voice_selection:*）→ 错误态而非预览
+  V26（#250 N-4 B，钧机 1258/1315 两张截图）结果区**唯一结论行**：服务端 voiced 时
+      整个结果区只有一条 banner（verdict:ok），任何可见元素都不含「疑似无声」，实际
+      使用行不再另下结论；`hidden` 属性必须真能藏住 banner（计算样式 display:none）——
+      0831 起 .pv-note{display:flex} 架空 hidden、红条橙条恒常可见的病根就钉在这里；
+      阻发结论行内自带「重新生成」
+  V27（#250 N-4 C 前置）过期时发送钮整个让位、主按钮是「重新生成」；解除后回位
 
 用法::
 
@@ -183,11 +189,27 @@ window.setText = (t) => {
   ta.value = t;
   ta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
 };
+// #250（N-4 B）：结果区唯一结论行 [data-role="verdict"]，四态 stale/blocked/ok/unverified。
+// 一律读**计算样式**判可见（el.hidden 属性曾被 .pv-note{display:flex} 架空 → 三条同屏）。
+window.vd = () => {
+  const n = window.q('[data-role="verdict"]');
+  if (!n) return { has: false, visible: false, state: '', kind: '', speech: '', basis: '', detector: '', text: '', display: '' };
+  const cs = getComputedStyle(n);
+  return { has: true, visible: !n.hidden && cs.display !== 'none' && n.offsetHeight > 0,
+           state: n.getAttribute('data-state') || '', kind: n.getAttribute('data-kind') || '',
+           speech: n.getAttribute('data-speech') || '', basis: n.getAttribute('data-basis') || '',
+           detector: n.getAttribute('data-detector') || '', text: n.textContent || '',
+           display: cs.display };
+};
+window.visibleBanners = () => window.qa('.preview .pv-verdict, .preview .pv-note')
+  .filter((n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.offsetHeight > 0)
+  .map((n) => (n.getAttribute('data-role') || '') + ':' + (n.getAttribute('data-state') || n.getAttribute('data-reason') || ''));
 window.snap = () => {
   const box = window.q('[data-role="preview"]');
   const main = window.q('[data-role="gen-main"]');
   const send = window.q('[data-act="send"]');
-  const note = window.q('[data-role="stale-note"]');
+  const v = window.vd();
+  const note = (v.has && v.visible && v.state === 'stale') ? window.q('[data-role="verdict"]') : null;
   // P2 2026-08-30：状态/结果提示改写进专用 msg 行（旧 .hint 首匹配会命中可能
   // hidden 的音色状态条 effstatus——提示写进看不见的元素）
   const hint = window.q('[data-role="msg"]');
@@ -199,7 +221,10 @@ window.snap = () => {
     boxStale: !!(box && box.classList.contains('stale')),
     mainLabel: main ? main.textContent : '', mainDisabled: !!(main && main.disabled),
     sendLabel: send ? send.textContent : null, sendDisabled: send ? send.disabled : null,
-    noteVisible: !!(note && !note.hidden),
+    sendHidden: send ? (send.hidden || getComputedStyle(send).display === 'none') : null,
+    regenMainVisible: (() => { const r = window.q('[data-role="regen-main"]'); return !!(r && !r.hidden && getComputedStyle(r).display !== 'none'); })(),
+    noteVisible: !!note,
+    verdictState: v.state, verdictVisible: v.visible,
     hasAudio: !!window.q('.preview audio'),
     hasRegen: !!(box && !box.hidden && window.qa('.preview [data-act="tts"]').length),
     hasClear: !!window.q('.preview [data-act="clear-preview"]'),
@@ -222,11 +247,11 @@ window.waitIdle = async (ms) => {
   }
   return !window.__el._busy;
 };
-window.waitSilent = async (ms) => {   // sniff 是异步 fetch+decode，等红条出现
+window.waitSilent = async (ms) => {   // sniff 是异步 fetch+decode，等结论行转 blocked
   const t0 = Date.now();
   while (Date.now() - t0 < (ms || 3000)) {
-    const n = window.q('[data-role="silent-note"]');
-    if (n && !n.hidden) return true;
+    const v = window.vd();
+    if (v.visible && v.state === 'blocked') return true;
     await new Promise((r) => setTimeout(r, 30));
   }
   return false;
@@ -623,8 +648,7 @@ def run(page, ck: Checker, dlg) -> None:
     ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
     ev("waitIdle()")
     page.wait_for_timeout(400)   # 给 sniff 一拍：正常音频不得亮红条
-    silent_now = ev("() => { const n = q('[data-role=\"silent-note\"]');"
-                    " return !!(n && !n.hidden); }")
+    silent_now = ev("() => vd().visible && vd().state === 'blocked'")
     s = ev("snap()")
     ck.check("V23 重新生成解除阻发", (not silent_now) and s["sendDisabled"] is False,
              f"silent={silent_now} sendDisabled={s['sendDisabled']}")
@@ -639,19 +663,30 @@ def run(page, ck: Checker, dlg) -> None:
     ev("waitIdle()")
     page.wait_for_timeout(700)   # 给本地解码一拍：它必须**不**能翻案
     v24 = ev("""() => {
-      const n = q('[data-role="silent-note"]');
+      const v = vd();
       const meta = q('.preview .hint[title]');
-      return { hidden: !n || n.hidden,
-               detector: n ? (n.getAttribute('data-detector') || '') : '',
-               basis: n ? (n.getAttribute('data-basis') || '') : '',
-               metaText: meta ? meta.textContent : '' };
+      return Object.assign(v, { metaText: meta ? meta.textContent : '', banners: visibleBanners() });
     }""")
     s = ev("snap()")
-    ck.check("V24 服务端 voiced 压过本地静音解码：无红条+可发送",
-             v24["hidden"] and s["sendDisabled"] is False, str(v24))
-    ck.check("V24 红条元素带 v3-server 标记与 server-voiced 依据（F12 可查证）",
-             v24["detector"] == "v3-server" and v24["basis"] == "server-voiced", str(v24))
-    ck.check("V24 实际使用行出「✓ 已核有声」", "已核有声" in v24["metaText"], v24["metaText"])
+    ck.check("V24 服务端 voiced 压过本地静音解码：结论=可发送、无阻发",
+             v24["visible"] and v24["state"] == "ok" and s["sendDisabled"] is False, str(v24))
+    ck.check("V24 结论行带 v4-single 标记与 server-voiced 依据（F12 可查证）",
+             v24["detector"] == "v4-single" and v24["basis"] == "server-voiced", str(v24))
+    ck.check("V24 结论行出「已核有声，可发送」且实际使用行不再另下结论",
+             "已核有声" in v24["text"] and "已核有声" not in v24["metaText"],
+             f"verdict={v24['text']!r} meta={v24['metaText']!r}")
+    ck.check("V26 #250 钧机形态：整个结果区只有一条 banner（无「疑似无声」并列）",
+             v24["banners"] == ["verdict:ok"] and "疑似无声" not in ev(
+                 "() => qa('.preview *').filter(n => n.offsetHeight > 0).map(n => n.textContent).join('|')"),
+             str(v24["banners"]))
+    hidden_css = ev("""() => {
+      const n = q('[data-role="verdict"]');
+      n.hidden = true; const d = getComputedStyle(n).display; const h = n.offsetHeight;
+      n.hidden = false;
+      return { display: d, height: h };
+    }""")
+    ck.check("V26 hidden 属性真能藏住 banner（计算样式 display:none，0831 起的 CSS 病根）",
+             hidden_css["display"] == "none" and hidden_css["height"] == 0, str(hidden_css))
     painted = ev("() => { const c = q('[data-role=\"wave\"]');"
                  " return !!(c && c.getAttribute('data-painted') === '1'); }")
     ck.check("V24 响度包络仍绘制（本地解码只成像不裁决）", painted)
@@ -659,15 +694,13 @@ def run(page, ck: Checker, dlg) -> None:
     ev("() => { q('.preview [data-act=\"tts\"]').click(); }")
     ev("waitIdle()")
     s = ev("snap()")
-    v24b = ev("""() => {
-      const n = q('[data-role="silent-note"]');
-      return { visible: !!(n && !n.hidden), speech: n ? n.getAttribute('data-speech') : '',
-               text: n ? n.textContent : '' };
-    }""")
-    ck.check("V24 服务端 silent：正常音频也直接红条+禁发（不等本地解码）",
-             v24b["visible"] and s["sendDisabled"] is True and v24b["speech"] == "silent",
-             str(v24b))
+    v24b = ev("() => vd()")
+    ck.check("V24 服务端 silent：正常音频也直接阻发（不等本地解码）",
+             v24b["visible"] and v24b["state"] == "blocked" and s["sendDisabled"] is True
+             and v24b["speech"] == "silent" and v24b["kind"] == "silent", str(v24b))
     ck.check("V24 服务端确认文案（区别于本地疑似）", "服务端已确认" in v24b["text"], v24b["text"])
+    ck.check("V26 阻发结论行内带「重新生成」出路",
+             ev("() => !!q('[data-role=\"verdict\"] [data-act=\"tts\"]')"))
     ev("() => { window.__ttsSpeech = ''; }")
 
     # V25（#149）：过期优先于无声——红条亮着时换音色，红条让位、过期说明可见（不再
@@ -683,20 +716,26 @@ def run(page, ck: Checker, dlg) -> None:
       sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     }""")
     s = ev("snap()")
-    silent_vis = ev("() => { const n = q('[data-role=\"silent-note\"]'); return !!(n && !n.hidden); }")
+    silent_vis = ev("() => vd().visible && vd().state === 'blocked'")
     ck.check("V25 换音色后：过期说明可见、红条让位、发送仍禁用",
              s["noteVisible"] and (not silent_vis) and s["sendDisabled"] is True,
              f"stale={s['noteVisible']} silent={silent_vis} sendDisabled={s['sendDisabled']}")
+    ck.check("V27 #250 过期时发送钮让位、主按钮是「重新生成」（不是灰掉的发送）",
+             s["sendHidden"] is True and s["regenMainVisible"]
+             and ev("() => visibleBanners()") == ["verdict:stale"],
+             f"sendHidden={s['sendHidden']} regen={s['regenMainVisible']}")
     ev("""() => {
       const sel = q('[data-role="persona"]');
       sel.value = '';
       sel.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
     }""")
     s = ev("snap()")
-    silent_vis = ev("() => { const n = q('[data-role=\"silent-note\"]'); return !!(n && !n.hidden); }")
+    silent_vis = ev("() => vd().visible && vd().state === 'blocked'")
     ck.check("V25 换回原音色：过期解除、红条回来、仍禁发",
              (not s["noteVisible"]) and silent_vis and s["sendDisabled"] is True,
              f"stale={s['noteVisible']} silent={silent_vis}")
+    ck.check("V27 解除过期后发送钮回位、「重新生成」主按钮收起",
+             s["sendHidden"] is False and (not s["regenMainVisible"]))
     ev("() => { window.__ttsSilent = false; }")
     # 服务端选声失配 → 错误态（带重试/清除），不摆出别人的声音当预览
     ev("""() => {

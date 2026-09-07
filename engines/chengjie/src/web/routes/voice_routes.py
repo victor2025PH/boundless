@@ -628,24 +628,22 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 voice_cfg, spoken_text, result, preview_path, _speech,
                 persona_id=str(voice_ctx.get("persona_id") or ""))
 
-        if _speech.get("speech") == "silent":
-            logger.warning(
-                "[voice/tts-test] 预览产物服务端判无声（energy=%s transcript_chars=%s "
-                "persona=%s file=%s）", _speech.get("energy"),
-                _speech.get("transcript_chars"),
-                voice_ctx.get("persona_id") or "-", preview_path.name)
-        elif _speech.get("speech") == "garbled":
-            logger.warning(
-                "[voice/tts-test] 预览产物服务端判念错且改派 Edge 未成功"
-                "（basis=%s transcript_chars=%s persona=%s file=%s）",
-                _speech.get("basis") or "-", _speech.get("transcript_chars"),
-                voice_ctx.get("persona_id") or "-", preview_path.name)
+        # #250（N-4 B）：一次终审 = 一行 ``[tts] verdict=…``——服务端对这段音频只出
+        # **一个**结论（ok / block:silent / block:garbled / unverified），前端结论行
+        # 与它同源；字段固定 persona backend voice dur speech energy cer verdict，
+        # 钧机取证一词 ``[tts]`` 抓全（旧三条 [voice/tts-test] 各说各话的行合并于此）。
+        from src.ai.speech_verdict import (
+            format_tts_verdict_line, verdict_label as _verdict_label)
+        _vline = format_tts_verdict_line(
+            _speech, persona=voice_ctx.get("persona_id") or persona_id or "",
+            backend=result.provider, voice=result.voice,
+            duration_sec=result.duration_sec,
+            synth_verify=(result.extra or {}).get("synth_verify"),
+            file=preview_path.name, stage="preview")
+        if _speech.get("speech") in ("silent", "garbled"):
+            logger.warning("%s", _vline)
         else:
-            logger.info(
-                "[voice/tts-test] 有声终审 speech=%s basis=%s transcript_chars=%s "
-                "energy=%s file=%s", _speech.get("speech"), _speech.get("basis") or "-",
-                _speech.get("transcript_chars"), _speech.get("energy"),
-                preview_path.name)
+            logger.info("%s", _vline)
 
         # Async cleanup of old files (non-blocking)
         try:
@@ -741,6 +739,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "speech_basis": _speech.get("basis") or "",
                 "transcript_chars": int(_speech.get("transcript_chars") or 0),
                 "energy": _speech.get("energy") or "unknown",
+                # #250（N-4 B，additive）：面板级唯一结论，与 [tts] verdict= 日志同字段
+                # （ok / block:silent / block:garbled / unverified）；人设页体检回填同源。
+                "verdict": _verdict_label(_speech.get("speech")),
             },
         }
 
