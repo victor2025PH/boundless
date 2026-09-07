@@ -560,6 +560,71 @@ def test_route_fallback_without_dispatcher_reports_eta_and_card_state():
     assert items[0]["due_at"] <= _t.time()                    # 已提前到期，进「到期」组
 
 
+# ── C：错峰不作用于人工指定时间 ─────────────────────────────────────────────
+async def test_due_verbatim_row_dispatches_with_zero_jitter_but_event_rows_stagger():
+    """到期派发：原文行 defer_until==now（零错峰）；AI 关怀行仍吃 send_jitter_sec。"""
+    from src.contacts.care_commitment import CareCommitment
+    s = CareScheduleStore(":memory:")
+    vid = s.add_verbatim(contact_key=CONTACT, due_at=NOW - 60, text=TEXT,
+                         platform="telegram", account_id="7092595256", chat_key="6088992099")
+    eid = s.add_commitment(
+        CareCommitment(due_at=NOW - 30, event_at=NOW - 30, topic="面试", sentiment="neutral",
+                       anchor_text="x", source_text="明天面试", confidence=1.0),
+        contact_key="tg:other", platform="telegram", account_id="7092595256", chat_key="1")
+    q = _Queue("ok")
+    d = CareDispatcher(store=s, ai_client=_AI("How did it go?"), send_callback=q.send_callback(),
+                       context_provider=lambda ck: "ctx", send_jitter_sec=(600.0, 600.0),
+                       quiet_start_hour=0, quiet_end_hour=0, max_per_tick=0)
+    assert await d.run_once(now=NOW) == 2
+    rows = {r["chat_key"]: r for r in q.store.list_recent(limit=10)}
+    assert rows["6088992099"]["defer_until"] == NOW              # 原文到点：零偏移
+    assert rows["1"]["defer_until"] == NOW + 600.0               # 自动关怀：错峰
+    assert s.get(vid)["status"] == "sent" and s.get(eid)["status"] == "sent"
+
+
+async def test_deliver_text_manual_rewrite_has_zero_jitter():
+    s, rid = _verbatim_store(due_offset=-60)
+    q = _Queue("ok")
+    d = CareDispatcher(store=s, ai_client=_AI(), send_callback=q.send_callback(),
+                       send_jitter_sec=(60.0, 1200.0), quiet_start_hour=0, quiet_end_hour=0)
+    res = await d.deliver_text(s.get(rid), "改过的话", now=NOW)
+    assert res["ok"] is True and res["defer_until"] == NOW
+
+
+def test_projected_send_window_matches_dispatch_rules():
+    from src.contacts.care_commitment import CareCommitment
+    s = CareScheduleStore(":memory:")
+    due = datetime(2026, 9, 7, 22, 50, 0).timestamp()                  # 22:50，安静窗 23–08
+    vid = s.add_verbatim(contact_key=CONTACT, due_at=due, text=TEXT,
+                         platform="telegram", account_id="7092595256", chat_key="6088992099")
+    eid = s.add_commitment(
+        CareCommitment(due_at=due, event_at=due, topic="面试", sentiment="neutral",
+                       anchor_text="x", source_text="明天面试", confidence=1.0),
+        contact_key="tg:other", platform="telegram", account_id="7092595256", chat_key="1")
+    d = CareDispatcher(store=s, ai_client=_AI(), send_callback=_Queue("ok").send_callback(),
+                       send_jitter_sec=(60.0, 1200.0), quiet_start_hour=23, quiet_end_hour=8)
+    v = d.projected_send_window(s.get(vid))
+    assert v == {"eta_min": due, "eta_max": due, "jitter": False, "quiet_shifted": False}
+    e = d.projected_send_window(s.get(eid))
+    assert e["jitter"] is True and e["quiet_shifted"] is True
+    assert e["eta_min"] == due + 60.0                                   # 22:51 仍在窗外
+    assert datetime.fromtimestamp(e["eta_max"]).hour == 8               # 23:10 → 顺延到 08:00
+    assert d.projected_send_window({"due_at": 0}) == {
+        "eta_min": 0.0, "eta_max": 0.0, "jitter": False, "quiet_shifted": False}
+
+
+def test_route_plan_items_carry_eta_and_template_shows_it():
+    import time as _t
+    c, store, q = _client("ok")
+    due = _t.time() + 3600
+    store.add_verbatim(contact_key=CONTACT, due_at=due, text=TEXT,
+                       platform="telegram", account_id="7092595256", chat_key="6088992099")
+    items = [it for g in c.get("/api/care/plan").json()["groups"] for it in g["items"]]
+    assert items[0]["eta"]["eta_min"] == due and items[0]["eta"]["jitter"] is False
+    tpl = (_REPO / "src" / "web" / "templates" / "care_schedule.html").read_text(encoding="utf-8")
+    assert "_csEtaHtml(it)" in tpl and "cs8_eta_quiet" in tpl and "cs8_eta_jitter" in tpl
+
+
 # ── 静态钉 ──────────────────────────────────────────────────────────────────
 def test_background_tasks_wires_deliver_now_and_loop():
     src = (_REPO / "src" / "bootstrap" / "background_tasks.py").read_text(encoding="utf-8")

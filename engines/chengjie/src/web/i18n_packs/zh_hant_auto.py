@@ -3531,6 +3531,14 @@ ZH_HANT = {
     'cs7_status_queue': '排隊中：下輪巡檢（≤{n} 分鐘）處理',
     # ── cs8_dry_sampled ──
     'cs8_dry_sampled': '模擬執行中：已按這條擬稿留樣，沒有真發給客戶（要真發請先「開啟真發」）',
+    # ── cs8_eta ──
+    'cs8_eta': '預計 {t} 出手（{why}）',
+    # ── cs8_eta_jitter ──
+    'cs8_eta_jitter': '錯峰',
+    # ── cs8_eta_quiet ──
+    'cs8_eta_quiet': '安靜時段順延',
+    # ── cs8_eta_t ──
+    'cs8_eta_t': '到點後會再按錯峰 / 安靜時段算實際出手時刻；「到點發這句話」的原文行不錯峰',
     # ── cs8_fwd_done ──
     'cs8_fwd_done': '已提前到期，預計 {t} 出手',
     # ── cs8_held_now ──

@@ -579,6 +579,15 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             row["display_name"] = names.get(str(row.get("contact_key") or "")) or ""
             return row
 
+        def _eta(it: dict) -> dict:
+            """N-1 C（#243）：到点后实际几点出手（错峰 / 安静时段顺延），与派发同刻度。"""
+            if dispatcher is None or not hasattr(dispatcher, "projected_send_window"):
+                return {}
+            try:
+                return dict(dispatcher.projected_send_window(dict(it)) or {})
+            except Exception:
+                return {}
+
         items = [_with_name({
             "id": int(it.get("id") or 0),
             "contact_key": str(it.get("contact_key") or ""),
@@ -594,6 +603,7 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "forwarded_at": _forwarded_at(it),
             "note": str(it.get("note") or ""),
             "updated_at": float(it.get("updated_at") or 0),
+            "eta": _eta(it),
             "source_text": str(it.get("source_text") or ""),
             "due_at": float(it.get("due_at") or 0),
             "sentiment": str(it.get("sentiment") or "neutral"),

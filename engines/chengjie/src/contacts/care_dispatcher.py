@@ -668,6 +668,55 @@ class CareDispatcher:
             logger.debug("care profile_provider 异常（按空档案）", exc_info=True)
             return empty_profile()
 
+    def projected_send_window(self, item: dict, *, at: Optional[float] = None) -> Dict[str, Any]:
+        """这条待办若在 ``at``（缺省 due_at）被派发，**实际**会几点出手（N-1 C #243，D-N4 ③）。
+
+        与 ``_dispatch_one`` 同一套刻度：人工指定时间的行（verbatim 原文到点）零错峰、
+        goal 行按冲刺策略抖动、其余自动关怀吃 ``send_jitter_sec``；安静时段顺延同源
+        （含客户时钟）。返回 ``{"eta_min", "eta_max", "jitter", "quiet_shifted"}``，
+        卡片据此明示「预计 hh:mm（错峰 / 安静时段顺延）」，不再让人对着 due_at 等。绝不抛。
+        """
+        try:
+            base = float(at if at is not None else (item.get("due_at") or 0))
+        except (TypeError, ValueError):
+            base = 0.0
+        if base <= 0:
+            return {"eta_min": 0.0, "eta_max": 0.0, "jitter": False, "quiet_shifted": False}
+        try:
+            is_goal = str(item.get("topic_norm") or "").startswith(GOAL_CARE_NORM_PREFIX)
+            policy = self._goal_policy(item) if is_goal else {}
+            if is_verbatim_care(item):
+                jit = (0.0, 0.0)
+            else:
+                jit = self._jitter
+                gp_jit = policy.get("jitter")
+                if isinstance(gp_jit, (tuple, list)) and len(gp_jit) == 2:
+                    try:
+                        jit = (float(gp_jit[0]), float(gp_jit[1]))
+                    except (TypeError, ValueError):
+                        jit = self._jitter
+            lo, hi = base + float(jit[0]), base + float(jit[1])
+            if not policy.get("ignore_quiet"):
+                clock = None
+                if self._user_clock_provider is not None:
+                    try:
+                        clock = self._user_clock_provider(dict(item))
+                    except Exception:
+                        clock = None
+                lo2 = shift_out_of_quiet_hours(lo, start_hour=self._quiet_start,
+                                               end_hour=self._quiet_end, clock=clock)
+                hi2 = shift_out_of_quiet_hours(hi, start_hour=self._quiet_start,
+                                               end_hour=self._quiet_end, clock=clock)
+                quiet = (lo2 > lo) or (hi2 > hi)
+                lo, hi = lo2, max(lo2, hi2)
+            else:
+                quiet = False
+            return {"eta_min": lo, "eta_max": hi, "jitter": bool(jit[1] > 0),
+                    "quiet_shifted": bool(quiet)}
+        except Exception:
+            logger.debug("care projected_send_window 异常", exc_info=True)
+            return {"eta_min": base, "eta_max": base, "jitter": False, "quiet_shifted": False}
+
     async def send_now(self, item: dict, *, now: Optional[float] = None) -> Dict[str, Any]:
         """运营「立即发」＝同步直投（N-1 A #243，D-N4 ①）。
 
@@ -948,7 +997,10 @@ class CareDispatcher:
             # 现在就是现在。安全型闸（急停 / 无 sender）由投递层守。
             defer_until = now
         else:
-            defer_until = now + random.uniform(_jit[0], _jit[1])
+            # N-1 C（D-N4 ③）：错峰抖动只给**自动生成**的关怀（防一批到期同秒齐发像
+            # 机器）；运营指定「到点发这句话」的原文行，到点就是到点，零偏移。
+            # 安静时段顺延对原文行保留（J-8 #182 口径），卡片经 projected_send_window 明示。
+            defer_until = now if is_verbatim else now + random.uniform(_jit[0], _jit[1])
             # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
             # 用户拍板的全力档自担深夜打扰）；普通行为不变
             if not goal_policy.get("ignore_quiet"):
@@ -1090,9 +1142,10 @@ class CareDispatcher:
                 _clock = self._user_clock_provider(dict(item))
             except Exception:
                 _clock = None
+        # N-1 C（D-N4 ③）：人工改稿点「发出」是人工时刻——零错峰（此前还加 60–120s
+        # 抖动）；安静时段顺延保留（面板提示语本就写着「安静时段照常顺延」）。
         defer_until = shift_out_of_quiet_hours(
-            n + random.uniform(self._jitter[0], min(self._jitter[1], 120.0)),
-            start_hour=self._quiet_start, end_hour=self._quiet_end, clock=_clock)
+            n, start_hour=self._quiet_start, end_hour=self._quiet_end, clock=_clock)
         try:
             row_id = await self._send(
                 platform, account_id, chat_key, body, defer_until,

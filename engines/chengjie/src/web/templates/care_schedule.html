@@ -172,6 +172,7 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
 .cs8-st.wait{background:rgba(245,158,11,.10);color:var(--amber)}
 .cs8-st.bad{background:rgba(239,68,68,.12);color:var(--red)}
 .cs-act[disabled]{opacity:.55;cursor:progress}
+.cs3-card .due .cs8-eta{display:block;color:var(--amber);font-weight:500}
 /* ── P0 2026-08-03 历史可读性：名字链接 / 投递真相 / 回复徽标 / 话术展开 ── */
 .cs4-sub{color:var(--t3);font-size:.72rem;margin-top:.15rem}
 .cs4-rp,.cs4-dv{display:inline-block;font-size:.72rem;font-weight:600;padding:.12rem .45rem;border-radius:4px;background:var(--input);color:var(--t3)}/* 内距对齐 badge-st，同格并排不跳高 */
@@ -639,6 +640,18 @@ function _csFarChip(it){
 }
 /* J-8 #182：原文直发行按 topic_norm 前缀识别（与后端 is_verbatim_care 同一分界） */
 function _csIsVerbatim(it){return String(it&&it.topic_norm||'').indexOf('verbatim:')===0;}
+/* N-1 C（#243，D-N4 ③）：到点 ≠ 出手——自动关怀有错峰、安静时段会顺延；后端按派发同刻度算出
+   预计窗（eta），偏移超过半分钟就明示「预计 hh:mm（错峰 / 安静时段顺延）」。原文到点行零错峰。 */
+function _csEtaHtml(it){
+  try{
+    var e=(it&&it.eta)||{}; var due=Number(it.due_at)||0;
+    var lo=Number(e.eta_min)||0, hi=Number(e.eta_max)||0;
+    if(!due||!lo||lo-due<30)return '';
+    var t=_csHHMM(lo)+((hi-lo>=60)?'–'+_csHHMM(hi):'');
+    var why=e.quiet_shifted?window.T('cs8_eta_quiet'):(e.jitter?window.T('cs8_eta_jitter'):'');
+    return '<small class="cs8-eta" title="'+esc(window.T('cs8_eta_t'))+'">'+esc(window.Tf('cs8_eta',{t:t,why:why}))+'</small>';
+  }catch(_){return '';}
+}
 /* M-1 A #218：强制预览原因码 → 人话（后端 hold_reason / check.reason） */
 function _csPvReason(code){
   var c=String(code||'').replace(/^profile_contradiction:/,'');
@@ -672,7 +685,7 @@ function _csCardHtml(it){
       '<span class="pf">'+esc(it.platform||'')+'</span>'+
       '<span class="tp">'+esc(it.topic||'—')+(vb?'<span class="cs6-vb" title="'+esc(window.T('cs6_kind_verbatim_t'))+'">'+esc(window.T('cs6_vb_badge'))+'</span>':'')+
         (held?'<span class="cs7-held">'+esc(window.T('cs7_held_badge'))+'</span>':'')+'</span>'+
-      '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csFarChip(it)+'</span>'+
+      '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csEtaHtml(it)+_csFarChip(it)+'</span>'+
     '</div>'+q+heldBox+stLine+
     '<div class="pv" id="cs-pv-'+it.id+'"></div>'+
     '<div class="ops">'+

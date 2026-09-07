@@ -291,6 +291,10 @@ ZH = {
     "cs8_why_deliver_now_error": "同步投递出错，已留在队列稍后重试",
     "cs8_why_timeout": "等待超时",
     "cs8_why_dispatcher_missing": "派发器未就绪（AI 未连接）",
+    "cs8_eta": "预计 {t} 出手（{why}）",
+    "cs8_eta_jitter": "错峰",
+    "cs8_eta_quiet": "安静时段顺延",
+    "cs8_eta_t": "到点后会再按错峰 / 安静时段算实际出手时刻；「到点发这句话」的原文行不错峰",
 }
 
 EN = {
@@ -557,4 +561,8 @@ EN = {
     "cs8_why_deliver_now_error": "synchronous delivery errored; left in queue for retry",
     "cs8_why_timeout": "timed out",
     "cs8_why_dispatcher_missing": "dispatcher not ready (AI not connected)",
+    "cs8_eta": "expected to go out around {t} ({why})",
+    "cs8_eta_jitter": "staggered",
+    "cs8_eta_quiet": "deferred past quiet hours",
+    "cs8_eta_t": "After it is due, the actual send time still follows staggering / quiet hours; verbatim items are never staggered",
 }
