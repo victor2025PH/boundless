@@ -294,6 +294,30 @@ async def test_worker_refreshes_and_renews_tokens(env):
     n = len(tr.calls)
     assert await w.healthy() is False and w.token_state == "needs_reauth"
     assert len(tr.calls) == n  # 不再徒劳打接口
+
+
+async def test_token_state_reports_to_session_health(env):
+    """令牌到期 → 会话健康表记 expired（账号 chip「需重新登录」同一机制）；恢复记 authorized；同态不重报。"""
+    from src.integrations.platform_session_health import get_platform_session_health
+    store, st, tr, api = env
+    h = get_platform_session_health()
+    before = h.total_events
+    now = [1_700_000_000.0]
+    w = _worker(st, api, now=lambda: now[0])
+    await w.start()                                   # ok → authorized
+    assert h.total_events == before + 1
+    await w.healthy()                                 # 同态 → 不重报
+    assert h.total_events == before + 1
+    w.meta.update({"refresh_expires_at": now[0] - 1, "access_expires_at": now[0] - 1})
+    assert await w.healthy() is False                 # needs_reauth → expired
+    assert h.total_events == before + 2
+    sess = h.snapshot().get("sessions", {}) if hasattr(h, "snapshot") else {}
+    row = None
+    for k, v in (sess.items() if isinstance(sess, dict) else []):
+        if k.startswith(f"douyin:{BIZ}"):
+            row = v
+    if row is not None:
+        assert row.get("status") == "expired" and "重新扫码授权" in str(row.get("detail") or "")
     assert w.status()["token_state"] == "needs_reauth"
 
 

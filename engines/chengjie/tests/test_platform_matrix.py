@@ -106,15 +106,22 @@ def test_registered_workers_are_all_in_matrix():
             "instagram": {"web_enabled": True},
         },
     }
-    AO.ensure_builtin_workers(cfg)
-    known = {"%s:%s" % (p, m.split("(")[0]) for p, m, _, _ in PC.WORKERS}
-    for key in AO._WORKER_FACTORIES:
-        platform, _, mode = key.partition(":")
-        if mode == "official":
-            continue  # 官方通道 worker 是另一族（一个类服务多平台），不进本表
-        assert key in known, (
-            "编排器注册了 %s，但 platform_capabilities.WORKERS 里没有它 —— "
-            "矩阵会少一行" % key)
+    # 工厂注册表是进程级全局：本例注册后必须还原，否则泄漏到 test_account_orchestrator
+    # （「line:protocol 无 factory」断言按运行顺序时红时绿——2026-09-08 实录）。
+    snapshot = dict(AO._WORKER_FACTORIES)
+    try:
+        AO.ensure_builtin_workers(cfg)
+        known = {"%s:%s" % (p, m.split("(")[0]) for p, m, _, _ in PC.WORKERS}
+        for key in AO._WORKER_FACTORIES:
+            platform, _, mode = key.partition(":")
+            if mode == "official":
+                continue  # 官方通道 worker 是另一族（一个类服务多平台），不进本表
+            assert key in known, (
+                "编排器注册了 %s，但 platform_capabilities.WORKERS 里没有它 —— "
+                "矩阵会少一行" % key)
+    finally:
+        AO._WORKER_FACTORIES.clear()
+        AO._WORKER_FACTORIES.update(snapshot)
 
 
 # ─────────────────── 入站接线判定 ───────────────────

@@ -104,6 +104,22 @@ def test_normalizer_display_matches_registry():
         assert reg.display_name(p) == name, f"{p}: normalizer {name!r} != 注册表 {reg.display_name(p)!r}"
 
 
+def test_normalizer_falls_back_to_registry_for_unwritten_platforms():
+    """散表收口第一步：手写表没有的平台由注册表补齐（setdefault 只添不改）。"""
+    from src.inbox.normalizer import PLATFORM_DISPLAY, _PLATFORM_MSG_ID_FIELDS, normalize_chat
+    for spec in reg.all_platforms():
+        assert PLATFORM_DISPLAY.get(spec.id) == spec.name, spec.id
+        if spec.msg_id_fields:
+            assert tuple(_PLATFORM_MSG_ID_FIELDS.get(spec.id) or ()) == tuple(spec.msg_id_fields), spec.id
+    assert PLATFORM_DISPLAY["line"] == "LINE" and PLATFORM_DISPLAY["douyin"] == "Douyin"
+    assert _PLATFORM_MSG_ID_FIELDS["line"] == ("message_id", "server_id")  # 手写条目未被改写
+    # 落库时会话的 platform_name 也就不再是 title() 猜出来的 "Qqbot"
+    chat = normalize_chat(platform="douyin", platform_name=PLATFORM_DISPLAY.get("douyin", "douyin".title()),
+                          account_id="a", account_label="a", chat_key="douyin:user:u", name="客",
+                          last_msg="hi", last_ts=1.0)
+    assert chat["platform_name"] == "Douyin"
+
+
 def _codebase_claims_supported() -> set:
     """代码库当前对外声称支持的平台（``platform_login.SUPPORTED_PLATFORMS`` + web）。
 

@@ -604,3 +604,20 @@ def candidate_messages_from_source(source: Dict[str, Any]) -> List[Dict[str, Any
                     ))
             return [m for m in out if m.get("text")]
     return []
+
+
+# ── 实施96 P0（2026-09-08）：注册表兜底 ─────────────────────────────────────────────
+# 上面两张手写表只覆盖历史平台；未手写的平台（抖音 / TikTok / QQ …）此前回落 `title()`
+# （"Qqbot"、"Douyin" 这种半对不对的名字）与「无可信 msg_id 字段」。这里用平台注册表
+# （src/integrations/platform_registry.py，单一事实源）补齐**缺席项**——`setdefault` 只添不改，
+# 手写条目原样保留；散表收口完成后可把手写条目删掉，行为不变。与前端 platColor/platName 回落
+# /static/platform_registry.json 同源。
+try:
+    from src.integrations import platform_registry as _preg
+    for _spec in _preg.all_platforms():
+        PLATFORM_DISPLAY.setdefault(_spec.id, _spec.name)
+        if _spec.msg_id_fields:
+            _PLATFORM_MSG_ID_FIELDS.setdefault(_spec.id, tuple(_spec.msg_id_fields))
+    del _spec
+except Exception:  # 注册表不可用时保持旧行为（回落 title()）
+    pass

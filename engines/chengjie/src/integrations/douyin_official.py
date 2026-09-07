@@ -532,7 +532,29 @@ class DouyinOfficialWorker:
         if self.token_state == "needs_reauth":
             logger.warning("[douyin-official] account=%s 需要重新扫码授权（refresh 过期或续期已满 %d 次）",
                            self.account_id, RENEW_MAX)
+        self._report_session_health()
         return self.token_state
+
+    def _report_session_health(self) -> None:
+        """令牌态 → 会话健康表（M-2 账号 chip「未连接（需重新登录）」/ 横幅禁发 同一套机制）。
+
+        只在状态**变化**时上报，避免每 15 秒巡检刷一条同态事件；``needs_reauth`` 记为
+        ``expired``（LOGIN_RECOVERY_STATUSES 之一，坐席看到的是「需重新登录」出口），恢复记 ``authorized``。
+        """
+        st = self.token_state
+        if st == getattr(self, "_reported_token_state", None):
+            return
+        self._reported_token_state = st
+        try:
+            from src.integrations.platform_session_health import get_platform_session_health
+            h = get_platform_session_health()
+            if st == "needs_reauth":
+                h.record(PLATFORM, self.account_id, "expired",
+                         detail="[rc:other] 抖音授权已到期（refresh 过期或续期已满 5 次），请重新扫码授权")
+            else:
+                h.record(PLATFORM, self.account_id, "authorized")
+        except Exception:
+            logger.debug("[douyin-official] 会话健康上报失败", exc_info=True)
 
     async def _token_step(self, st: str, now: float) -> None:
         try:
