@@ -1051,14 +1051,6 @@ HELP_TERMS: dict = {
         "usage": "接入 Zalo 官方渠道后留意回复时效；窗口内尽快回复可避免会话失联",
         "usage_en": "After connecting the Zalo official channel, reply within the window to avoid losing the conversation"
     },
-    "qqbot_passive_window": {
-        "zh": "QQ 机器人被动回复窗口",
-        "en": "QQ Bot passive reply window",
-        "desc": "QQ 开放平台机器人政策：单聊每条来话 60 分钟内最多回 4 条、群 @ 消息 5 分钟内最多 5 条；用户不再说话就不能再发（主动消息 2025-04 起已收敛）。群里默认只收 @机器人 的消息。不是本系统限制，是平台规则",
-        "desc_en": "QQ Open Platform bot policy: at most 4 replies within 60 minutes per inbound private message and 5 within 5 minutes per group @-message; once the user stops talking you cannot send (proactive messages retired in 2025-04). Groups only deliver @-mentions by default. A platform rule, not a limit of this system",
-        "usage": "QQ 机器人渠道下把要说的话合成一条发；主动关怀 / 沉默回访在该渠道不会真发（窗口外会被本地拦下并标 window_expired）",
-        "usage_en": "On the QQ Bot channel, say it in one message; proactive care / re-engagement will not go out there (blocked locally as window_expired outside the window)"
-    },
     # ── 用户角色 ───
     "role_master": {
         "zh": "主帐号",

@@ -36,16 +36,11 @@ PLATFORM_CONFIG_BLOCKS: Dict[str, str] = {
     "zalo": "zalo",
     "messenger": "facebook_messenger",
     "whatsapp": "whatsapp_cloud",
-    # QQ 机器人：Webhook 模式走本台账（op=13 验证 + 事件推送）；WebSocket 模式下事件由
-    # 网关长连进来，也经 record_event 记「到达」——可达性问的是「平台的事件到得了我们」。
-    "qqbot": "qqbot",
 }
 
-#: 有 GET 验证握手的平台（Meta 系）；Zalo / QQ 机器人无 GET 握手，只看 POST 事件
-#: （QQ 的回调验证是 POST op=13，记作事件到达）。
+#: 有 GET 验证握手的平台（Meta 系）；Zalo 无握手，只看 POST 事件。
 HAS_GET_VERIFY: Dict[str, bool] = {
     "instagram": True, "messenger": True, "whatsapp": True, "zalo": False,
-    "qqbot": False,
 }
 
 #: 各 webhook 注册函数把挂载路径写进 app.state 的属性名（挂载真相 > 配置推断：
@@ -55,7 +50,6 @@ _APP_STATE_ATTRS: Dict[str, str] = {
     "zalo": "zalo_webhook_path",
     "messenger": "fb_webhook_path",
     "whatsapp": "wa_cloud_webhook_path",
-    "qqbot": "qqbot_webhook_path",
 }
 
 #: 常驻挂载平台（2026-08-10 起 messenger 的 register 不再按凭证 early-return）：
@@ -247,8 +241,6 @@ def creds_ok(platform: str, config: Dict[str, Any]) -> bool:
     if platform == "whatsapp":
         return bool(g("phone_number_id") and g("access_token")
                     and g("app_secret") and g("verify_token"))
-    if platform == "qqbot":
-        return bool(g("app_id") and g("app_secret"))
     return False
 
 

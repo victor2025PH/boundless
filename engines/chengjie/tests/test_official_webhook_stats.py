@@ -256,8 +256,6 @@ def test_selfcheck_cli_hot_mounted_messenger(tmp_path):
     ("src/integrations/zalo_webhook.py", "zalo", False),
     ("src/integrations/facebook_webhook.py", "messenger", True),
     ("src/integrations/whatsapp_cloud.py", "whatsapp", True),
-    # QQ 机器人（2026-09-07）：POST op=13 回调验证 + Ed25519 事件验签，无 GET 握手
-    ("src/integrations/qq_official.py", "qqbot", False),
 ])
 def test_webhook_modules_wired(module, platform, expect_verify):
     src = (_ROOT / module).read_text(encoding="utf-8")
@@ -270,7 +268,7 @@ def test_webhook_modules_wired(module, platform, expect_verify):
 
 def test_platform_blocks_cover_all_wired_platforms():
     """埋点用的平台键必须都在 PLATFORM_CONFIG_BLOCKS（否则 collect 永远不展示它）。"""
-    assert set(ows.PLATFORM_CONFIG_BLOCKS) == {"instagram", "zalo", "messenger", "whatsapp", "qqbot"}
+    assert set(ows.PLATFORM_CONFIG_BLOCKS) == {"instagram", "zalo", "messenger", "whatsapp"}
     assert set(ows.HAS_GET_VERIFY) == set(ows.PLATFORM_CONFIG_BLOCKS)
 
 
@@ -324,8 +322,7 @@ def test_setup_wizard_reach_strip_wired():
     assert "async function swReachTick()" in src
     assert "/api/admin/official-webhook-status" in src
     assert "_swReachEvery=30000" in src           # 404 → 慢轮询
-    # 2026-09-07 QQ 机器人加入（Webhook 模式有回调；WS 模式事件同记「到达」台账）
-    assert "REACH_PLATS={instagram:1,zalo:1,messenger:1,whatsapp:1,qqbot:1}" in src
+    assert "REACH_PLATS={instagram:1,zalo:1,messenger:1,whatsapp:1}" in src
     # 判词渲染必须覆盖全部非 disabled 判词（漏一个=该状态下条子空白）
     for v in ("live", "handshake_only", "auth_failing", "not_mounted"):
         assert f"'{v}'" in src, f"缺判词分支 {v}"

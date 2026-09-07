@@ -36,7 +36,7 @@ logger = logging.getLogger("ai_chat_assistant.episodic_identity")
 
 # 与 inbox/CPI 一致的平台命名空间（acct_peer 形态枚举候选用）
 KNOWN_PLATFORMS: Tuple[str, ...] = (
-    "telegram", "whatsapp", "line", "messenger", "instagram", "zalo", "qqbot",
+    "telegram", "whatsapp", "line", "messenger", "instagram", "zalo",
 )
 
 # 群成员键 peer 段：``<gid>_<uid>``（telegram 群 id 可为负数；uid 纯数字）。

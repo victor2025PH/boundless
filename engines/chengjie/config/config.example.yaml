@@ -271,22 +271,6 @@ instagram:
   # ⚠️ 需账号开通「Human Agent」权限，否则回退仍会失败（但已带 error_kind 可观测）。默认关。
   human_agent_fallback: false
 
-# QQ 机器人（QQ 开放平台官方 API v2；platform=qqbot，2026-09-07 QQ 双轨·官方轨）。默认关。
-# 与「QQ 协议登录」（platform=qq，用自己的 QQ 号）是两个独立平台。凭证也可经 /workspace/setup
-# 接入向导填写（写 overlay，保存即自动开通 mode=official 账号行，account_id=app_id）。
-# 平台硬规则：**被动回复窗口**——单聊每条来话 60 分钟内最多回 4 条、群 @ 消息 5 分钟内 5 条；
-# 主动消息 2025-04 起已收敛 → 无锚点时本地 fail-closed（error_kind=window_expired，不计入
-# 账号连续失败）。事件默认只收群 @机器人；正式环境须在开放平台配 IP 白名单（沙箱不受限）。
-qqbot:
-  enabled: false
-  app_id: ""                     # 开放平台 → 机器人 → 开发设置 AppID（机器人 ID）
-  app_secret: ""                 # 同页 AppSecret：换 access_token + Webhook Ed25519 验签
-  sandbox: false                 # true=沙箱环境（只收沙箱配置里的群/单聊事件，提审前联调）
-  connect_mode: websocket        # websocket（默认：网关长连，单机免公网）| webhook（HTTPS 回调）
-  webhook_path: "/qqbot/webhook" # 仅 webhook 方式用；开放平台回调地址填 https://<域名>/qqbot/webhook
-  group_full_messages: false     # 群全量消息（需群管理员在群设置开权限 + 回调勾 GROUP_MESSAGE_CREATE）
-  passive_only: true             # 无被动锚点即拒发（默认开；关=尝试主动消息接口，风险自负）
-
 # Zalo Official Account OA OpenAPI v3.0（东南亚出海重点区，Phase H）。默认关。
 # ⚠️ cs（客服消息）仅能发给 7 天内与 OA 互动过的用户。
 zalo:
