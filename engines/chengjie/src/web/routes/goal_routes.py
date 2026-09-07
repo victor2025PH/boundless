@@ -728,6 +728,9 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # #166：卡片带引擎真相（按本会话平台判白名单）——「自动推进」档在引擎
         # 不能真出手时卡上要说清，不能只在建目标表单里说一次
         return {"goal": view, "last": None, "prev_settled": prev_settled,
+                # N-3 #241：卡片按业务域渲染画像分组 / 「标成交」字段（陪伴 = 「标记达成」
+                # 达成结果 + 备注，不出现产品 / 金额）
+                "business_domain": _business_domain(),
                 "engine": svc.sprint_engine_status(
                     _cfg_root(), platform=str(view.get("platform") or platform))}
 
@@ -758,6 +761,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         d = max(1, min(int(days or 30), 365))
         out = matrix_report(store, days=d, lang=_lang(request))
         out["ok"] = True
+        # N-3 #241（VAQGZY ④）：报表页按域收起金额口径（陪伴域没有「赢单金额」）
+        out["business_domain"] = _business_domain()
         return out
 
     @app.get("/api/goals/report/contacts")
@@ -1159,8 +1164,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             if isinstance(cell, dict) and str(cell.get("v") or "").strip():
                 slots.append(_row(s, extra=True))
         sec = secondary_track(bd)
+        # 画像卡缺口 chips（坐席「拟稿去问」入口）：敏感槽不进——那等于直接问；
+        # 目标勾选了敏感槽走注入链的「多轮自然带出」路径，不经这里
         missing = [m["key"] for m in
-                   missing_slots(fields, track=sec, limit=6, business_domain=bd)]
+                   missing_slots(fields, track=sec, limit=8, business_domain=bd)
+                   if not m.get("sensitive")][:6]
         return {
             "platform": pf, "chat_key": ck,
             "business_domain": bd,

@@ -508,7 +508,9 @@ def test_profile_view_companion_schema_same_as_chips_and_keeps_legacy_values():
     assert [s["key"] for s in extra] == ["budget"] and extra[0]["value"] == "500刀"
     sens = {s["key"] for s in d["slots"] if s.get("sensitive")}
     assert sens == {"income_level", "assets"}
-    assert d["missing"] == PERSONAL and d["missing_bant"] == []
+    # 缺口 chips 不含敏感槽（「拟稿去问」= 直接问；敏感项只走补录 / 注入链自然带出）
+    assert d["missing"] == ["family_status", "marital_status", "residence"]
+    assert d["missing_bant"] == []
     assert d["fill"]["tracks"] == ["relation", "personal"]
     # 保存陪伴槽 → 同形回包
     r = client.post("/api/goals/profile", json={
@@ -582,3 +584,63 @@ def test_i18n_ask_keys_cover_all_slots_and_cp_goal_wires_custom_and_sensitive():
                    'this.t("inbox.goal.form.slot_sensitive_t")', "s.sensitive", ".gl-chip.sens"):
         assert needle in js, needle
     assert "/^[a-z][a-z0-9_]*$/" in js       # 自定义键 x_<hex> 放行
+
+
+# ═══ C 画像 schema 同源 + 「标成交」字段收起（VAQGZY / TN736F）══════════════════
+
+def test_card_and_report_payloads_carry_business_domain():
+    client = _build_client({"business_domain": "companion"})
+    store = get_goal_store(":memory:")
+    d0 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    assert d0 == {"goal": None, "last": None}        # 无目标：旧契约原样（卡片此时不渲染画像/达成表单）
+    g = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
+                          chat_key="100", template="profile_discovery",
+                          params={"slots": "age,family_status"}, autonomy="auto", deadline_days=10)
+    assert g is not None
+    d = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
+    assert d["business_domain"] == "companion"
+    assert [s["key"] for s in d["goal"]["slots_progress"]] == ["age", "family_status"]
+    rep = client.get("/api/goals/report/accounts?days=30").json()
+    assert rep["ok"] is True and rep["business_domain"] == "companion"
+
+
+def test_mark_achieved_meta_outcome_and_note_persist_without_product_amount():
+    from src.companion.goals.service import sanitize_won_meta
+    assert sanitize_won_meta({"outcome": "关系升温", "note": "约了周末见", "junk": 1}) == {
+        "outcome": "关系升温", "note": "约了周末见"}
+    assert sanitize_won_meta({"outcome": "x" * 80})["outcome"] == "x" * 40
+    assert sanitize_won_meta({"product": "p", "amount": "9.5"}) == {"product": "p", "amount": 9.5}
+    client = _build_client({"business_domain": "companion"})
+    store = get_goal_store(":memory:")
+    g = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
+                          chat_key="100", template="relationship_stage", params={},
+                          autonomy="auto", deadline_days=10)
+    r = client.post(f"/api/goals/{g['goal_id']}/status",
+                    json={"action": "done", "meta": {"outcome": "见面", "note": "线下咖啡"}})
+    assert r.status_code == 200 and r.json()["goal"]["status"] == "done"
+    import json as _json
+    metas = [e for e in store.list_events(g["goal_id"]) if e["kind"] == "won_meta"]
+    assert metas and _json.loads(metas[0]["detail"]) == {"outcome": "见面", "note": "线下咖啡"}
+    from src.companion.goals.notify import build_completion_payload
+    p = build_completion_payload(store.get_goal(g["goal_id"]), won_meta={"outcome": "见面"})
+    assert p["outcome"] == "见面" and p["amount"] is None and p["product"] == ""
+
+
+def test_cp_goal_renders_by_domain_and_report_hides_amount():
+    js = (REPO / "shared" / "copilot" / "components" / "cp-goal.js").read_text(encoding="utf-8")
+    for needle in ("_isCompanion()", "_tDomain(", "_wonFieldsHtml()", "_wonChecklistHtml(g)",
+                   'data-ref="won_outcome"', 'data-ref="won_note"', "meta.outcome", "p.tracks",
+                   'trackLabel("extra")', "!s.sensitive", 'this._tDomain("inbox.goal.act.won")'):
+        assert needle in js, needle
+    from src.web.i18n_packs.goals import EN, ZH
+    for key in ("inbox.goal.act.won_c", "inbox.goal.outcome.confirm_c", "inbox.goal.won_meta_title_c",
+                "inbox.goal.won_meta_confirm_c", "inbox.goal.won_meta_outcome", "inbox.goal.won_meta_note",
+                "inbox.goal.won_outcome.warm", "inbox.goal.won_outcome.meet", "inbox.goal.won_outcome.paid",
+                "inbox.goal.won_outcome.other", "inbox.goal.won_checklist_t", "inbox.goal.done.kind.manual_c",
+                "goal_rpt_kind_manual_companion", "goal_rpt_th_won_companion"):
+        assert key in ZH and key in EN, key
+    assert "成交" not in ZH["inbox.goal.act.won_c"] and "成交" not in ZH["inbox.goal.won_meta_title_c"]
+    html = (REPO / "src" / "web" / "templates" / "goal_report.html").read_text(encoding="utf-8")
+    assert "body.gr-companion .gr-amount{display:none;}" in html
+    assert "classList.toggle('gr-companion'" in html
+    assert html.count('class="gr-amount"') >= 2 and 'class="gr-kpi gr-amount"' in html

@@ -40,6 +40,8 @@
   .gr-pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:10px 14px;font-size:12px;color:var(--tk-text-muted,#6b7280);}
   .gr-name{font-weight:600;color:var(--tk-text,#1f2937);}
   .gr-dim{font-size:11px;color:var(--tk-text-muted,#94a3b8);}
+  /* N-3 #241（VAQGZY ④）：陪伴业务域没有「赢单金额」口径——金额 KPI / 列 / 后缀整体收起 */
+  body.gr-companion .gr-amount{display:none;}
   /* 发消息弹层（遮罩恒深属刻意常量；面材/文字随主题） */
   .gr-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:1200;}
   .gr-modal{background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);border:1px solid var(--tk-border,#e5e7eb);border-radius:14px;width:min(480px,92vw);padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.25);}
@@ -97,7 +99,7 @@
     <div class="gr-summary">
       <div class="gr-kpi"><div class="val" id="kpi-done">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_done', "已完成") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-rate">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_done_rate', "完成率") }}</div></div>
-      <div class="gr-kpi"><div class="val" id="kpi-amount">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_won_amount', "赢单金额") }}</div></div>
+      <div class="gr-kpi gr-amount"><div class="val" id="kpi-amount">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_won_amount', "赢单金额") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-active">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_active', "进行中") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-miss">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_miss', "未达成") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-days">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_avg_days', "平均达成天数") }}</div></div>
@@ -113,7 +115,7 @@
         <th>{{ (i18n or {}).get('goal_rpt_th_done', "完成") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_miss', "未达成") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_rate', "完成率") }}</th>
-        <th>{{ (i18n or {}).get('goal_rpt_th_won', "赢单") }}</th>
+        <th class="gr-won-lbl" data-companion="{{ (i18n or {}).get('goal_rpt_th_won_companion', "达成") }}">{{ (i18n or {}).get('goal_rpt_th_won', "赢单") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_avgd', "平均天数") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_top', "主力类型") }}</th>
         <th></th>
@@ -138,7 +140,7 @@
         <th>{{ (i18n or {}).get('goal_rpt_th_status', "状态") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_when', "完成时间") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_kind', "完成方式") }}</th>
-        <th>{{ (i18n or {}).get('goal_rpt_th_amount', "金额") }}</th>
+        <th class="gr-amount">{{ (i18n or {}).get('goal_rpt_th_amount', "金额") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_days', "用时") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_fu', "跟进") }}</th>
         <th>{{ (i18n or {}).get('goal_rpt_th_actions', "操作") }}</th>
@@ -220,6 +222,8 @@ var GR_I18N = {
   fu_no: {{ ((i18n or {}).get('goal_rpt_fu_no', "待跟进"))|tojson }},
   kind_order: {{ ((i18n or {}).get('goal_rpt_kind_order', "订单回流"))|tojson }},
   kind_manual: {{ ((i18n or {}).get('goal_rpt_kind_manual', "人工成交"))|tojson }},
+  kind_manual_sales: {{ ((i18n or {}).get('goal_rpt_kind_manual', "人工成交"))|tojson }},
+  kind_manual_companion: {{ ((i18n or {}).get('goal_rpt_kind_manual_companion', "人工标记达成"))|tojson }},
   kind_auto: {{ ((i18n or {}).get('goal_rpt_kind_auto', "自动结算"))|tojson }},
   st_done: {{ ((i18n or {}).get('goal_rpt_st_done', "已完成"))|tojson }},
   st_active: {{ ((i18n or {}).get('goal_rpt_st_active', "进行中"))|tojson }},
@@ -288,6 +292,14 @@ async function grLoad(){
     document.getElementById('gr-body').style.display='block';
     var d = await r.json();
     var t = d.totals||{};
+    // N-3 #241：陪伴域收起金额口径（KPI / 列 / 后缀），「赢单」列头改「达成」，完成方式改「人工标记」
+    var companion = String(d.business_domain||'') === 'companion';
+    document.body.classList.toggle('gr-companion', companion);
+    GR_I18N.kind_manual = companion ? GR_I18N.kind_manual_companion : GR_I18N.kind_manual_sales;
+    document.querySelectorAll('.gr-won-lbl').forEach(function(el){
+      if(!el.getAttribute('data-sales')) el.setAttribute('data-sales', el.textContent);
+      el.textContent = companion ? (el.getAttribute('data-companion')||el.textContent) : el.getAttribute('data-sales');
+    });
     document.getElementById('kpi-done').textContent = t.done!=null?t.done:'—';
     document.getElementById('kpi-rate').textContent = (t.done_rate!=null&&(t.done+t.failed+t.expired)>0)?Math.round(t.done_rate*100)+'%':'—';
     document.getElementById('kpi-amount').textContent = t.won_amount?('$'+t.won_amount):(t.won?t.won:'—');
@@ -317,7 +329,7 @@ function grRenderAccounts(rows){
       +'<td><b>'+(a.done||0)+'</b></td>'
       +'<td>'+(miss||0)+'</td>'
       +'<td>'+(organic? ('<span class="gr-bar-wrap"><span class="gr-bar" style="width:'+rate+'%"></span></span>'+rate+'%') : '—')+'</td>'
-      +'<td>'+(a.won||0)+(a.won_amount?(' <span class="gr-dim">($'+a.won_amount+')</span>'):'')+'</td>'
+      +'<td>'+(a.won||0)+(a.won_amount?(' <span class="gr-dim gr-amount">($'+a.won_amount+')</span>'):'')+'</td>'
       +'<td>'+(a.avg_days_to_done!=null?a.avg_days_to_done:'—')+'</td>'
       +'<td class="gr-dim">'+esc(a.top_template||'—')+'</td>'
       +'<td><button class="gr-act" onclick="grFilterAccount(\''+esc(a.account_id)+'\')">'+esc(GR_I18N.view_contacts)+'</button></td>'
@@ -391,7 +403,7 @@ function grRenderContactRow(g){
     +'<td>'+grStatusBadge(g.status)+'</td>'
     +'<td>'+(g.status==='done'?grFmtTs(g.done_at):(g.status==='active'?'—':grFmtTs(g.done_at)))+'</td>'
     +'<td class="gr-dim">'+esc(g.status==='done'?grKindTxt(g.result_kind):'—')+'</td>'
-    +'<td>'+(g.amount!=null?('$'+g.amount):'—')+'</td>'
+    +'<td class="gr-amount">'+(g.amount!=null?('$'+g.amount):'—')+'</td>'
     +'<td>'+(g.days_to_done!=null?esc(GR_I18N.days_n.replace('{n}',g.days_to_done)):'—')+'</td>'
     +'<td>'+fu+'</td>'
     +'<td>'

@@ -410,6 +410,8 @@ def build_completion_payload(
         "won": result_kind(goal.get("result")) in ("order", "manual"),
         "amount": meta.get("amount"),
         "product": str(meta.get("product") or ""),
+        # N-3 #241：陪伴域「标记达成」的达成结果标签（关系升温 / 见面 / 转付费陪伴 …）
+        "outcome": str(meta.get("outcome") or ""),
         "days_to_done": days,
         "done_at": done_at,
         # rate_key 按「账号+目标」粒度（2026-08-18 收窄）：每个目标一生只完成一次

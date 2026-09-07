@@ -826,16 +826,19 @@ def agenda_state_match(item: Dict[str, Any], state: str) -> bool:
 # 成交归因 meta 的长度护栏（坐席手填，截断而非拒收——别为了字数卡住成交录入）
 WON_META_PRODUCT_MAX = 80
 WON_META_NOTE_MAX = 200
+WON_META_OUTCOME_MAX = 40
 
 
 def sanitize_won_meta(raw: Any) -> Dict[str, Any]:
-    """坐席「标成交」的可选归因 meta → 消毒后的紧凑 dict（未知键一律丢弃）。
+    """坐席「标成交 / 标记达成」的可选归因 meta → 消毒后的紧凑 dict（未知键一律丢弃）。
 
     - ``product``：卖了什么（截 80 字）
     - ``amount``：金额（**可选**，不逼坐席填；负数/非数/NaN 一律丢弃；
       整数值落成 int 让 JSON 更紧凑）
+    - ``outcome``：达成结果标签（N-3 #241 陪伴域「标记达成」：关系升温 / 见面 /
+      转付费陪伴 / 其他…，截 40 字；销售域也可带）
     - ``note``：备注（截 200 字）
-    非 dict / 三项全空 → ``{}``（调用方据此决定要不要落事件）。绝不抛。
+    非 dict / 各项全空 → ``{}``（调用方据此决定要不要落事件）。绝不抛。
     """
     out: Dict[str, Any] = {}
     if not isinstance(raw, dict):
@@ -844,6 +847,9 @@ def sanitize_won_meta(raw: Any) -> Dict[str, Any]:
         product = str(raw.get("product") or "").strip()[:WON_META_PRODUCT_MAX]
         if product:
             out["product"] = product
+        outcome = str(raw.get("outcome") or "").strip()[:WON_META_OUTCOME_MAX]
+        if outcome:
+            out["outcome"] = outcome
         amount = raw.get("amount")
         if isinstance(amount, bool):
             amount = None                       # True/False 不是金额

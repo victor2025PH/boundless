@@ -498,6 +498,16 @@
       .gl-chip.add { border-style:dashed; color:var(--cp-text-dim,#64748b); background:transparent; }
       .gl-chip.add:hover { color:var(--cp-accent,#4f46e5); }
       .gl-sens-hint { margin-top:3px; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
+      /* N-3 #241：摸底目标「标记达成」前的已采集字段核对清单 */
+      .gl-wc { margin:4px 0 6px; padding:6px 8px; border-radius:8px; background:var(--cp-surface-2,#f8fafc);
+               border:1px solid var(--cp-border,#e2e8f0); }
+      .gl-wc-t { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); margin-bottom:3px; }
+      .gl-wc-row { display:flex; gap:6px; align-items:center; font-size:var(--cp-fs-sm,12px); line-height:1.6; }
+      .gl-wc-row .gl-wc-mark { width:12px; color:var(--cp-text-tiny,#94a3b8); }
+      .gl-wc-row.ok .gl-wc-mark { color:var(--cp-ok,#0f9d75); }
+      .gl-wc-row .gl-wc-lab { color:var(--cp-text-dim,#64748b); }
+      .gl-wc-row .gl-wc-val { color:var(--cp-text,#374151); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .gl-wc-row .gl-link { margin-left:auto; }
       .gl-ask { margin-top:5px; padding:6px 8px; border-radius:8px;
                 background:var(--cp-accent-weak,rgba(79,70,229,.06));
                 border:1px dashed color-mix(in srgb,var(--cp-accent,#4f46e5) 45%,transparent); }
@@ -1338,19 +1348,16 @@
           && g.status === "active" && !this._wonFormOpen) {
         outcome = `<div class="gl-sec gl-outcome">` +
           `<span class="gl-outcome-tx">\uD83C\uDFAF ${esc(this.t("inbox.goal.outcome.contact", { v: String(osig.v) }))}</span>` +
-          `<button type="button" class="primary" data-act="won">${esc(this.t("inbox.goal.outcome.confirm"))}</button></div>`;
+          `<button type="button" class="primary" data-act="won">${esc(this._tDomain("inbox.goal.outcome.confirm"))}</button></div>`;
       }
 
       if (this._wonFormOpen) {
         return `<div class="gl-hdr"><span class="gl-title">${esc(g.title || g.template_name || "")}</span>` +
           `${this._statusBadge(g.status)}</div>` +
-          `<div class="gl-form"><div class="gl-lead">${esc(this.t("inbox.goal.won_meta_title"))}</div>` +
-          `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_product"))}</label>` +
-          `<input data-ref="won_product" autocomplete="off"></div>` +
-          `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_amount"))}</label>` +
-          `<input type="number" step="any" data-ref="won_amount"></div>` +
+          `<div class="gl-form"><div class="gl-lead">${esc(this._tDomain("inbox.goal.won_meta_title"))}</div>` +
+          this._wonChecklistHtml(g) + this._wonFieldsHtml() +
           `<div class="acts gl-acts"><button data-act="won_cancel">${esc(this.t("cp.common.cancel"))}</button>` +
-          `<button class="primary" data-act="won_confirm">${esc(this.t("inbox.goal.won_meta_confirm"))}</button></div></div>`;
+          `<button class="primary" data-act="won_confirm">${esc(this._tDomain("inbox.goal.won_meta_confirm"))}</button></div></div>`;
       }
 
       const paused = g.status === "paused";
@@ -1367,7 +1374,7 @@
           : "") +
         `</span>`;
       const acts = `<div class="acts gl-acts">${flip}${more}` +
-        `<button class="primary gl-win" data-act="won">${esc(this.t("inbox.goal.act.won"))}</button></div>`;
+        `<button class="primary gl-win" data-act="won">${esc(this._tDomain("inbox.goal.act.won"))}</button></div>`;
 
       let createdHint = "";
       if (this._createdHintAutonomy) {
@@ -2036,6 +2043,24 @@
         `<div class="gl-prods">${rows}</div></div>`;
     }
 
+    /* 业务域（N-3 #241）：后端随 for-conversation / templates 下发 business_domain；
+       陪伴 = 画像不渲染商机区、「标成交」改「标记达成」（达成结果 + 备注，无产品 / 金额）。
+       缺键（旧后端）→ 按销售域＝旧行为。 */
+    _isCompanion() {
+      const bd = (this._d && this._d.business_domain)
+        || (this._templates && this._templates.business_domain) || "";
+      return String(bd) === "companion";
+    }
+
+    /* 域感知文案：陪伴域优先取 <key>_c，缺键回落 <key>。 */
+    _tDomain(key) {
+      if (this._isCompanion()) {
+        const v = this.t(key + "_c");
+        if (v && String(v).indexOf("inbox.goal.") !== 0) return String(v);
+      }
+      return this.t(key);
+    }
+
     /* 缺口/表单共用的建议问法（i18n 键尾=profile_slots 注册表 key；
        键缺失=返回 ""，绝不裸奔键名——与 _tmplDesc 同守卫）。 */
     _slotAskText(key) {
@@ -2053,13 +2078,21 @@
         `<span class="gl-fillbar"><span>${esc(label)}</span>` +
         `<span class="bar${cls ? " " + cls : ""}"><i style="width:${pct(val)}%"></i></span>` +
         `<span class="pct">${pct(val)}%</span></span>`;
+      // N-3 #241（TN736F）：画像字段集 = 后端按业务域给的同一份 schema；分组随
+      // p.tracks（销售 关系+商机 / 陪伴 关系+个人情况），旧后端缺键回落 relation+bant。
+      const tracks = (Array.isArray(p.tracks) && p.tracks.length === 2) ? p.tracks : ["relation", "bant"];
+      const sec = String(p.secondary_track || tracks[1] || "bant");
+      const trackLabel = (t) => {
+        const v = this.t("inbox.goal.profile.track." + t);
+        return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : String(t);
+      };
       // 双零不渲染 0% 条（空数字是反激励——与 P19 本周成果 chip 同哲学）；
       // 冷启动由 profile.empty 文案 + 缺口 chips 承担。
-      const hasFill = pct(fill.relation) > 0 || pct(fill.bant) > 0;
+      const hasFill = pct(fill[tracks[0]]) > 0 || pct(fill[sec]) > 0;
       const fillrow = hasFill
         ? `<div class="gl-fillrow">` +
-          bar(this.t("inbox.goal.profile.track.relation"), fill.relation, "") +
-          bar(this.t("inbox.goal.profile.track.bant"), fill.bant, "b2") + `</div>`
+          bar(trackLabel(tracks[0]), fill[tracks[0]], "") +
+          bar(trackLabel(sec), fill[sec], "b2") + `</div>`
         : "";
       const hd = `<div class="gl-prof-hd">` +
         `<span class="gl-prof-t">${esc(this.t("inbox.goal.profile.title"))}</span>` +
@@ -2069,26 +2102,36 @@
 
       if (this._profOpen) {
         // 按轨分组 + 建议问法当 placeholder（空输入框不再让人猜「该填什么」）；
-        // lifecycle 槽（流失原因）随商机组尾，不为一个槽位单开分组。
+        // lifecycle 槽（流失原因）随第二组尾，不为一个槽位单开分组；自定义标签自成一组；
+        // 不在当前域表但有值的存量槽（extra）归「其他已记录」——不丢、可改、可清。
         const grp = (label, slots) => {
           if (!slots.length) return "";
           return `<div class="gl-pf-group">${esc(label)}</div>` + slots.map((s) =>
-            `<div><label class="gl-fl">${esc(s.label)}</label>` +
+            `<div><label class="gl-fl">${esc(s.label)}${s.sensitive ? " \uD83D\uDD12" : ""}</label>` +
             `<input data-prof-key="${esc(s.key)}" value="${esc(s.value || "")}"` +
-            ` placeholder="${esc(this._slotAskText(s.key))}"></div>`).join("");
+            ` placeholder="${esc(this._slotAskText(s.key))}"` +
+            `${s.sensitive ? ` title="${esc(this.t("inbox.goal.profile.sensitive_t"))}"` : ""}></div>`).join("");
         };
         const all = p.slots || [];
-        const rel = all.filter((s) => s.track === "relation");
-        const biz = all.filter((s) => s.track !== "relation");
+        const rel = all.filter((s) => !s.extra && s.track === tracks[0]);
+        const second = all.filter((s) => !s.extra && s.track !== tracks[0] && s.track !== "custom");
+        const custom = all.filter((s) => !s.extra && s.track === "custom");
+        const extra = all.filter((s) => s.extra);
         return `<div class="gl-sec gl-prof">${hd}<div class="gl-prof-form">` +
-          grp(this.t("inbox.goal.profile.track.relation"), rel) +
-          grp(this.t("inbox.goal.profile.track.bant"), biz) + `</div>` +
+          grp(trackLabel(tracks[0]), rel) +
+          grp(trackLabel(sec), second) +
+          grp(trackLabel("custom"), custom) +
+          grp(trackLabel("extra"), extra) + `</div>` +
           `<div class="gl-ferr" data-ref="perr" hidden></div>` +
           `<div class="acts gl-acts"><button class="primary" data-act="prof_save">${esc(this.t("inbox.goal.profile.save"))}</button></div></div>`;
       }
 
       const filled = (p.slots || []).filter((s) => s.value);
-      const missing = (p.slots || []).filter((s) => !s.value && s.track === "bant").slice(0, 3);
+      // 缺口 chips：后端按域给的 missing（陪伴 = 个人情况缺口）；旧后端回落第二轨筛
+      // 敏感槽（收入 / 资产）不出缺口 chip——「拟稿去问」就是直接问；要填走「补录」
+      const missKeys = Array.isArray(p.missing) ? p.missing : null;
+      const missing = (p.slots || []).filter((s) => !s.value && !s.extra && !s.sensitive &&
+        (missKeys ? missKeys.indexOf(s.key) >= 0 : s.track === sec)).slice(0, 3);
       let body = "";
       if (!filled.length && !missing.length) {
         body = `<div class="gl-prof-empty">${esc(this.t("inbox.goal.profile.empty"))}</div>`;
@@ -2136,8 +2179,44 @@
       const k = r.indexOf("order:") === 0 ? "order"
         : (r.indexOf("manual:") === 0 ? "manual" : (r ? "auto" : ""));
       if (!k) return "";
-      const v = this.t("inbox.goal.done.kind." + k);
+      const v = this._tDomain("inbox.goal.done.kind." + k);
       return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : "";
+    }
+
+    /* 「标成交 / 标记达成」表单字段（N-3 #241 VAQGZY ②）：字段来自业务域——
+       陪伴 = 达成结果（关系升温 / 见面 / 转付费陪伴 / 其他）+ 备注；销售 = 产品 + 金额。 */
+    _wonFieldsHtml() {
+      const esc = (s) => this.esc(s);
+      if (this._isCompanion()) {
+        const opts = ["warm", "meet", "paid", "other"].map((k) =>
+          `<option value="${esc(this.t("inbox.goal.won_outcome." + k))}">${esc(this.t("inbox.goal.won_outcome." + k))}</option>`).join("");
+        return `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_outcome"))}</label>` +
+          `<select data-ref="won_outcome"><option value="">${esc(this.t("inbox.goal.won_outcome.none"))}</option>${opts}</select></div>` +
+          `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_note"))}</label>` +
+          `<input data-ref="won_note" autocomplete="off" maxlength="200"></div>`;
+      }
+      return `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_product"))}</label>` +
+        `<input data-ref="won_product" autocomplete="off"></div>` +
+        `<div><label class="gl-fl">${esc(this.t("inbox.goal.won_meta_amount"))}</label>` +
+        `<input type="number" step="any" data-ref="won_amount"></div>`;
+    }
+
+    /* 摸底类目标完成态（VAQGZY ③）：先核对已采集字段清单，缺的可点「补录」——
+       不是产品 / 金额。数据源＝后端 slots_progress（目标卡打勾清单同源）。 */
+    _wonChecklistHtml(g) {
+      const esc = (s) => this.esc(s);
+      const rows = (g && Array.isArray(g.slots_progress)) ? g.slots_progress : [];
+      if (!rows.length) return "";
+      const items = rows.map((s) => {
+        const ok = !!s.filled;
+        return `<div class="gl-wc-row${ok ? " ok" : ""}">` +
+          `<span class="gl-wc-mark">${ok ? "\u2713" : "\u25CB"}</span>` +
+          `<span class="gl-wc-lab">${esc(s.label || s.key)}</span>` +
+          (ok ? `<span class="gl-wc-val">${esc(String(s.value || ""))}</span>`
+            : `<button type="button" class="gl-link" data-act="slot_edit" data-slot="${esc(s.key)}">${esc(this.t("inbox.goal.profile.fill_btn"))}</button>`) +
+          `</div>`;
+      }).join("");
+      return `<div class="gl-wc"><div class="gl-wc-t">${esc(this.t("inbox.goal.won_checklist_t"))}</div>${items}</div>`;
     }
 
     /* 终局卡（2026-08-18 升级）：达成＝收入时刻——金带 + 完成方式/用时 chips +
@@ -4207,6 +4286,8 @@
         _beacon(act === "slot_fill" ? "goal_slot_fill" : "goal_slot_edit");
         this._slotAsk = "";
         this._profOpen = true;
+        // 从「标记达成」核对清单点「补录」过来：先收起达成表单，否则画像编辑区不渲染
+        this._wonFormOpen = false;
         this._rerender();
         if (k) {
           const inp = this.shadowRoot.querySelector(`[data-prof-key="${k}"]`);
@@ -4543,12 +4624,17 @@
       if (action === "done") {
         const product = this._ref("won_product");
         const amount = this._ref("won_amount");
+        const outcome = this._ref("won_outcome");
+        const note = this._ref("won_note");
         const meta = {};
         if (product && String(product.value || "").trim()) meta.product = String(product.value).trim();
         if (amount && String(amount.value || "").trim()) {
           const n = parseFloat(amount.value);
           if (isFinite(n)) meta.amount = n;
         }
+        // 陪伴域「标记达成」：达成结果 + 备注（N-3 #241）
+        if (outcome && String(outcome.value || "").trim()) meta.outcome = String(outcome.value).trim();
+        if (note && String(note.value || "").trim()) meta.note = String(note.value).trim();
         if (Object.keys(meta).length) body.meta = meta;
       }
 
