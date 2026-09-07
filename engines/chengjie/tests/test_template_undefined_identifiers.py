@@ -383,3 +383,223 @@ def test_accepted_not_stale(_ambient):
         if name not in unknown:
             stale.append((rel, name, "已不再命中（修好了？）"))
     assert not stale, f"登记表过期条目，请清理：{stale}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 第二形态：「有定义但够不着」（#237 人设备份恢复 `_esc is not defined`，2026-09-07）
+#
+# 事故：personas.html 的 `_esc(v)` 是 `_exportFilteredCSV()` **体内**的 CSV 转义函数；L-2（09-06）
+# 新写的备份恢复预览 / JSON 导入预览在**全局作用域**直接调 `_esc(...)`——首次真用（skuio 卸载重装后
+# 人设池 0、恢复唯一备份）即 ReferenceError，被 try/catch 吞成「请求失败 _esc is not defined」。
+# 上面的门禁抓不到：它只判「全文件零声明痕迹」，而 `_esc` 全文件是有声明的（任意深度都算）。
+#
+# 不变量（窄而高置信，宁可漏报不误报）：
+#     标识符 NAME 在整个模板里的**唯一**声明痕迹是若干条**嵌套**（花括号深度 > 0）的
+#     `function NAME(` 声明——没有 depth-0 的 function / var / let / const 声明，没有任何裸赋值
+#     `NAME =`、形参、catch 形参、class、for-of 变量、typeof 守卫、window.NAME 访问 / 暴露、
+#     环境全局、宿主内建——则 NAME 只在那些声明所在的**顶层块**（depth 0→1 的花括号区间）内可达；
+#     出现在这些顶层块之外的读取（`NAME(` / `NAME.` / `NAME[`）**必然** ReferenceError。
+#     刻意用「顶层块」而非「最近块」当可达范围：sloppy mode 下块内 function 声明会提升到所在函数
+#     （Annex B），用最近块会误报；顶层块外一定够不着，零误报。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 良性命中 / 待决策真 bug 登记（形如 ("模板相对路径", "标识符"): "原因"）
+_ACCEPTED_SCOPE: dict = {}
+_PENDING_SCOPE: dict = {}
+
+
+def _top_level_ranges(masked: str) -> list:
+    """masked 文本里 depth 0→1 的花括号区间 [(start, end)]（end 为闭括号下标；未闭合取文末）。"""
+    ranges = []
+    depth = 0
+    start = -1
+    for i, c in enumerate(masked):
+        if c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    ranges.append((start, i))
+                    start = -1
+    if start >= 0:
+        ranges.append((start, len(masked)))
+    return ranges
+
+
+def _brace_depths(masked: str) -> list:
+    """depths[i] = 下标 i 处（该字符之前）的花括号深度；一次线性扫描，供多次查表。"""
+    depths = [0] * (len(masked) + 1)
+    depth = 0
+    for i, c in enumerate(masked):
+        depths[i] = depth
+        if c == "{":
+            depth += 1
+        elif c == "}" and depth > 0:
+            depth -= 1
+    depths[len(masked)] = depth
+    return depths
+
+
+def _globalish_names(masked: str, depths: list) -> set:
+    """一个块内、能让 NAME 从任何地方可达（或让我们不敢下结论）的声明痕迹——过度包含。"""
+    names: set = set()
+    for m in _DECL_FUNC_RE.finditer(masked):
+        if m.group(1) and depths[m.start()] == 0:
+            names.add(m.group(1))
+        names |= set(_IDENT_RE.findall(m.group(2)))          # 形参：任何深度都放行
+    for m in _DECL_VARSTMT_RE.finditer(masked):
+        if depths[m.start()] == 0:
+            names |= set(_IDENT_RE.findall(m.group(1)))
+    for m in _DECL_ARROW_RE.finditer(masked):
+        names |= set(_IDENT_RE.findall(m.group(1) or m.group(2) or ""))
+    names |= set(m.group(1) for m in _DECL_CATCH_RE.finditer(masked))
+    names |= set(m.group(1) for m in _DECL_ASSIGN_RE.finditer(masked))   # 裸赋值 = 隐式全局 / 别处 var
+    names |= set(m.group(1) for m in _DECL_CLASS_RE.finditer(masked))
+    names |= set(m.group(1) for m in _DECL_FORLOOP_RE.finditer(masked))
+    names |= set(m.group(1) for m in _TYPEOF_GUARD_RE.finditer(masked))
+    names |= set(m.group(1) for m in _WINDOW_ACCESS_RE.finditer(masked))
+    return names - _KEYWORDS
+
+
+def scan_nested_scope_leaks(html: str, ambient: set = frozenset(), static_globals: set = frozenset()) -> dict:
+    """返回 {标识符: 越界读取次数}：只以嵌套 function 形态声明、却在声明所在顶层块之外被读取。"""
+    html = _strip_html_comments(html)
+    bodies = [_mask_js(_strip_jinja(b)) for b in _script_bodies(html)]
+    if not bodies:
+        return {}
+    globalish: set = set()
+    nested: dict = {}          # name -> [(block_idx, top_range)]
+    reads: dict = {}           # name -> [(block_idx, pos)]
+    for bi, masked in enumerate(bodies):
+        depths = _brace_depths(masked)
+        globalish |= _globalish_names(masked, depths)
+        tops = _top_level_ranges(masked)
+        for m in _DECL_FUNC_RE.finditer(masked):
+            name = m.group(1)
+            if not name or depths[m.start()] == 0:
+                continue
+            top = next((r for r in tops if r[0] <= m.start() <= r[1]), None)
+            if top is not None:
+                nested.setdefault(name, []).append((bi, top))
+        for m in _READ_RE.finditer(masked):
+            reads.setdefault(m.group(1), []).append((bi, m.start()))
+    exposed = window_exposed(html)
+    skip = (globalish | exposed | set(ambient) | set(static_globals) | _HOST_GLOBALS | _KEYWORDS)
+    leaks: dict = {}
+    for name, decls in nested.items():
+        if name in skip:
+            continue
+        out = 0
+        for bi, pos in reads.get(name, []):
+            if not any(bi == dbi and r[0] <= pos <= r[1] for dbi, r in decls):
+                out += 1
+        if out:
+            leaks[name] = out
+    return leaks
+
+
+def test_no_nested_function_read_out_of_scope(_ambient):
+    """全站模板：只在别的函数体内声明的 function，不得在该顶层块之外被调用/读取（#237 形态）。"""
+    violations = {}
+    for tpl in _all_templates():
+        rel = tpl.relative_to(TPL_DIR).as_posix()
+        html = tpl.read_text(encoding="utf-8", errors="replace")
+        leaks = scan_nested_scope_leaks(
+            html,
+            ambient=_ambient,
+            static_globals=local_static_globals(html, STATIC_ROOT),
+        )
+        hits = {
+            n: c for n, c in leaks.items()
+            if (rel, n) not in _ACCEPTED_SCOPE and (rel, n) not in _PENDING_SCOPE
+        }
+        if hits:
+            violations[rel] = hits
+    assert not violations, (
+        "模板 JS 在作用域外读取了只在别的函数体内声明的 function（必然 ReferenceError，#237 形态）：\n"
+        + "\n".join(f"  {k}: {v}" for k, v in sorted(violations.items()))
+        + "\n→ 改用页面全局 helper（如 personas.html 的 _escHtml）/ 把声明提到顶层 / 良性命中登记 _ACCEPTED_SCOPE"
+    )
+
+
+def test_personas_restore_uses_global_escape_237():
+    """#237 回归钉：personas.html 备份恢复 / JSON 导入预览不得再引用 CSV 内部的 _esc。"""
+    html = (TPL_DIR / "personas.html").read_text(encoding="utf-8", errors="replace")
+    leaks = scan_nested_scope_leaks(html)
+    assert "_esc" not in leaks, f"_esc 又在 _exportFilteredCSV 之外被调用了（#237 复发）：{leaks}"
+    body = "".join(_script_bodies(_strip_html_comments(html)))
+    seg = body[body.index("function pbPickRestore"):body.index("window.pbExportOne = pbExportOne")]
+    assert "_escHtml(" in seg and re.search(r"(?<![\w$.])_esc\(", _mask_js(seg)) is None
+    assert "_pbFail(" in seg and "console.error(" in body[body.index("function _pbFail"):body.index("function _pbAlbumRefCount")], \
+        "恢复失败必须 console.error 落 renderer.log（MJGHKQ：错误未落日志）"
+
+
+def test_scope_detector_catches_237_shape():
+    """探测器自证：#237 形态（别的函数体内 function、全局调用）必须被抓到；改成顶层声明即放行。"""
+    broken = """
+    <script>
+    function exportCsv(){
+      function _ghostEsc(v){ return String(v); }
+      return [_ghostEsc(1)].join(',');
+    }
+    function renderPreview(d){ return '<b>' + _ghostEsc(d.name) + '</b>'; }
+    renderPreview({name: 'x'});
+    </script>
+    """
+    hits = scan_nested_scope_leaks(broken)
+    assert hits.get("_ghostEsc") == 1, f"探测器没抓到 #237 形态：{hits}"
+
+    fixed = """
+    <script>
+    function _ghostEsc(v){ return String(v); }
+    function exportCsv(){ return [_ghostEsc(1)].join(','); }
+    function renderPreview(d){ return '<b>' + _ghostEsc(d.name) + '</b>'; }
+    renderPreview({name: 'x'});
+    </script>
+    """
+    assert not scan_nested_scope_leaks(fixed), "顶层声明后不应再报——探测器误报"
+
+
+def test_scope_detector_respects_reachable_shapes():
+    """零误报底线：同顶层块内调用 / 形参同名 / 裸赋值提升 / window 暴露 / typeof 守卫 / 字符串里的同名都不报。"""
+    benign = """
+    <script>
+    (function(){
+      function helper(v){ return v; }
+      function a(){ return helper(1); }
+      if (true) { function hoisted(){ return 1; } }
+      function b(){ return hoisted(); }   // Annex B：同一顶层块（IIFE）内可达
+      a(); b();
+    })();
+    function outer(){ function asParam(x){ return x; } return asParam(1); }
+    function useParam(asParam){ return asParam(2); }
+    function makeG(){ function gImpl(){ return 3; } gFn = gImpl; }
+    function useG(){ return gFn(); }
+    function mk2(){ function exposedInner(){ return 4; } window.exposedInner = exposedInner; }
+    function use2(){ return exposedInner(); }
+    function mk3(){ function maybe(){ return 5; } }
+    function use3(){ return typeof maybe === 'function' ? maybe() : 0; }
+    function mk4(){ function inStr(){ return 6; } return inStr(); }
+    var s = 'inStr(' + "inStr(" + `inStr(`;
+    </script>
+    """
+    assert scan_nested_scope_leaks(benign) == {}, "良性形态被误报——放行集合有缺口"
+
+
+def test_scope_registries_not_stale(_ambient):
+    """_ACCEPTED_SCOPE/_PENDING_SCOPE 防过期。"""
+    stale = []
+    for (rel, name) in list(_ACCEPTED_SCOPE.keys()) + list(_PENDING_SCOPE.keys()):
+        tpl = TPL_DIR / rel
+        if not tpl.exists():
+            stale.append((rel, name, "模板已不存在"))
+            continue
+        html = tpl.read_text(encoding="utf-8", errors="replace")
+        leaks = scan_nested_scope_leaks(
+            html, ambient=_ambient, static_globals=local_static_globals(html, STATIC_ROOT))
+        if name not in leaks:
+            stale.append((rel, name, "已不再命中（修好了？）"))
+    assert not stale, f"作用域登记表过期条目，请清理：{stale}"

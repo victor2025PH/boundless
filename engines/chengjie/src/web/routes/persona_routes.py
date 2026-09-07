@@ -1600,11 +1600,28 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         add_ids = [pid for pid, _e in valid if pid not in existing_ids]
         overwrite_ids = [pid for pid, _e in valid if pid in existing_ids]
         if dry:
+            # #237（N-2 A）「重名预览」：卸载重装后手工重建的 Mizuki / STEVEN 与备份里的可能只是**同名不同 ID**
+            # ——merge 不会覆盖它们而是并存两份。只做顾问字段，不改判定，前端列出让用户自己选保留哪个。
+            existing_names: dict = {}
+            for _eid in existing_ids:
+                _ep = pm.get_persona_by_id(_eid) or {}
+                _nm = str(_ep.get("name") or "").strip().casefold()
+                if _nm:
+                    existing_names.setdefault(_nm, _eid)
+            name_clashes = []
+            for pid, e in valid:
+                if pid in existing_ids:
+                    continue
+                _nm = str(e.get("name") or "").strip().casefold()
+                if _nm and _nm in existing_names:
+                    name_clashes.append({"id": pid, "name": str(e.get("name") or pid),
+                                         "existing_id": existing_names[_nm]})
             return {"ok": True, "dry_run": True, "mode": mode,
                     "add": len(add_ids), "overwrite": len(overwrite_ids),
                     "add_ids": add_ids, "overwrite_ids": overwrite_ids,
                     "names": {pid: str(e.get("name") or pid) for pid, e in valid},
                     "invalid": invalid, "warnings": warnings,
+                    "name_clashes": name_clashes,
                     "would_delete": (sorted(existing_ids - set(overwrite_ids))
                                      if mode == "replace" else [])}
         if mode == "replace":

@@ -3599,7 +3599,24 @@ async function pbExportOne(pid) {
     _toast(window.Tf('psn_export_one_done', {name: nm}), 'ok');
   } catch (e) { _toast(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
 }
-var _pbPending = null;   // {profiles, preview}
+var _pbPending = null;   // {profiles, preview, album_refs}
+/* #237（RN2SKR / MJGHKQ，1.0.76 首次真用即败）：这段预览渲染曾直接调 `_esc(...)`——那是
+   _exportFilteredCSV() 体内的 CSV 转义函数，全局够不着 → ReferenceError 被 catch 吞成「请求失败
+   _esc is not defined」：dry_run 请求其实已发出，预览永不出现、确认无从点起。HTML 转义一律用页面
+   全局 _escHtml。失败三件套：人话（说明备份文件未动、可重试）/ console.error 进 renderer.log /
+   页面内部错误（ReferenceError、TypeError、SyntaxError = 我们的 bug，不是用户文件的错）另报 _feBeacon。 */
+function _pbFail(where, e) {
+  var msg = (e && e.message) || String(e || '');
+  var internal = (e instanceof ReferenceError) || (e instanceof TypeError) || (e instanceof SyntaxError);
+  try { console.error('[persona/backup] ' + where + ' failed: ' + msg, e); } catch (_) {}
+  if (internal) { _feBeacon('pb.' + where, (e && e.name) || 'internal'); msg = window.Tf('psn_restore_internal_err', {msg: msg}); }
+  _pbStatus(window.Tf(where === 'restore' ? 'psn_restore_fail_apply' : 'psn_restore_fail_preview', {msg: msg}), 'err');
+}
+function _pbAlbumRefCount(parsed) {
+  var refs = parsed && !Array.isArray(parsed) ? parsed.album_refs : null;
+  if (!refs || typeof refs !== 'object') return 0;
+  return Object.keys(refs).reduce(function (n, k) { return n + (Array.isArray(refs[k]) ? refs[k].length : 0); }, 0);
+}
 function pbPickRestore(input) {
   var f = input && input.files && input.files[0];
   if (!f) return;
@@ -3618,20 +3635,24 @@ function pbPickRestore(input) {
       if (r.status === 403) { _pbStatus(window.T('psn_backup_master_only'), 'err'); return; }
       var d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-      _pbPending = {profiles: profiles, preview: d};
+      _pbPending = {profiles: profiles, preview: d, album_refs: _pbAlbumRefCount(parsed)};
       var names = d.names || {};
-      var li = function (ids) { return ids.map(function (id) { return '<li><b>' + _esc(names[id] || id) + '</b> <span style="color:var(--t3)">' + _esc(id) + '</span></li>'; }).join(''); };
-      var html = '<div style="font-size:.78rem;font-weight:600;margin-bottom:.3rem">' + _esc(window.Tf('psn_restore_summary', {file: f.name, add: String(d.add), over: String(d.overwrite)})) + '</div>';
-      if (d.add) html += '<div style="font-size:.72rem;color:var(--t2)">' + _esc(window.T('psn_restore_add_h')) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.add_ids) + '</ul>';
-      if (d.overwrite) html += '<div class="ji-warn">' + _esc(window.Tf('psn_restore_over_h', {n: String(d.overwrite)})) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.overwrite_ids) + '</ul>';
-      if (d.invalid && d.invalid.length) html += '<div style="font-size:.72rem;color:var(--t3)">' + _esc(window.Tf('psn_restore_invalid', {n: String(d.invalid.length)})) + '</div>';
-      if (d.warnings && d.warnings.length) html += '<div style="font-size:.72rem;color:var(--th-ink-amber7,#b45309)">' + _esc(window.Tf('psn_restore_warnings', {n: String(d.warnings.length)})) + '</div>';
-      html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="pbConfirmRestore()"' + ((d.add + d.overwrite) ? '' : ' disabled') + '>' + _esc(window.T('psn_restore_confirm')) + '</button>'
-        + '<button type="button" class="btn btn-sm" onclick="pbCancelRestore()">' + _esc(window.T('psn_ji_cancel')) + '</button>'
-        + '<span style="font-size:.7rem;color:var(--t3)">' + _esc(window.T('psn_restore_note')) + '</span></div>';
+      var li = function (ids) { return ids.map(function (id) { return '<li><b>' + _escHtml(names[id] || id) + '</b> <span style="color:var(--t3)">' + _escHtml(id) + '</span></li>'; }).join(''); };
+      var html = '<div style="font-size:.78rem;font-weight:600;margin-bottom:.3rem">' + _escHtml(window.Tf('psn_restore_summary', {file: f.name, add: String(d.add), over: String(d.overwrite)})) + '</div>';
+      if (d.add) html += '<div style="font-size:.72rem;color:var(--t2)">' + _escHtml(window.T('psn_restore_add_h')) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.add_ids) + '</ul>';
+      if (d.overwrite) html += '<div class="ji-warn">' + _escHtml(window.Tf('psn_restore_over_h', {n: String(d.overwrite)})) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">' + li(d.overwrite_ids) + '</ul>';
+      if (d.name_clashes && d.name_clashes.length) {
+        html += '<div class="ji-warn">' + _escHtml(window.Tf('psn_restore_name_clash', {n: String(d.name_clashes.length)})) + '</div><ul style="margin:.15rem 0 .4rem 1rem;font-size:.72rem">'
+          + d.name_clashes.map(function (c) { return '<li><b>' + _escHtml(c.name) + '</b> <span style="color:var(--t3)">' + _escHtml(c.id) + ' ≠ ' + _escHtml(c.existing_id) + '</span></li>'; }).join('') + '</ul>';
+      }
+      if (d.invalid && d.invalid.length) html += '<div style="font-size:.72rem;color:var(--t3)">' + _escHtml(window.Tf('psn_restore_invalid', {n: String(d.invalid.length)})) + '</div>';
+      if (d.warnings && d.warnings.length) html += '<div style="font-size:.72rem;color:var(--th-ink-amber7,#b45309)">' + _escHtml(window.Tf('psn_restore_warnings', {n: String(d.warnings.length)})) + '</div>';
+      html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="pbConfirmRestore()"' + ((d.add + d.overwrite) ? '' : ' disabled') + '>' + _escHtml(window.T('psn_restore_confirm')) + '</button>'
+        + '<button type="button" class="btn btn-sm" onclick="pbCancelRestore()">' + _escHtml(window.T('psn_ji_cancel')) + '</button>'
+        + '<span style="font-size:.7rem;color:var(--t3)">' + _escHtml(window.T('psn_restore_note')) + '</span></div>';
       if (box) { box.innerHTML = html; box.style.display = ''; }
       _pbStatus('');
-    } catch (e) { _pbStatus(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+    } catch (e) { _pbFail('preview', e); }
   };
   reader.readAsText(f, 'utf-8');
 }
@@ -3639,6 +3660,16 @@ function pbCancelRestore() {
   _pbPending = null;
   var box = document.getElementById('pb-restore-preview');
   if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+/* 回执口径（#237）：「已恢复 N 个人设：新增 A · 覆盖 B（，含相册引用 M 条）（，跳过 K 条无法识别）」
+   状态行 + toast 各一份；失败时 _pbPending / 预览框都保留，用户可直接再点「确认恢复」。 */
+function _pbReceipt(d, albumRefs) {
+  var n = Number(d.imported != null ? d.imported : (Number(d.add || 0) + Number(d.overwrite || 0)));
+  var s = window.Tf('psn_restore_receipt', {n: String(n), add: String(d.add || 0), over: String(d.overwrite || 0)});
+  if (albumRefs > 0) s += window.Tf('psn_restore_receipt_album', {m: String(albumRefs)});
+  var skipped = (d.invalid && d.invalid.length) || 0;
+  if (skipped) s += window.Tf('psn_restore_receipt_skipped', {k: String(skipped)});
+  return s;
 }
 async function pbConfirmRestore() {
   if (!_pbPending) return;
@@ -3650,11 +3681,13 @@ async function pbConfirmRestore() {
       body: JSON.stringify({profiles: _pbPending.profiles, mode: 'merge'})}, {timeoutMs: 120000});
     var d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.detail || ('HTTP ' + r.status));
-    _pbStatus('✓ ' + window.Tf('psn_restore_done', {add: String(d.add || 0), over: String(d.overwrite || 0)}), 'ok');
+    var receipt = _pbReceipt(d, _pbPending.album_refs || 0);
+    _pbStatus('✓ ' + receipt, 'ok');
+    _toast(_escHtml(receipt), 'ok', 8000);
     if (d.persist_warning) _toast(window.T('psn_persist_warn'), 'err', 9000);
     pbCancelRestore();
     loadProfileList(); refreshStatus();
-  } catch (e) { _pbStatus(window.T('psn_js_031') + ((e && e.message) || e), 'err'); }
+  } catch (e) { _pbFail('restore', e); }
 }
 window.pbExportOne = pbExportOne;
 
@@ -5457,7 +5490,7 @@ async function _importFromJson() {
       ? window.Tf('psn_ji_unknown_fields', {fields: res.unknown.join(', ')})
       : (res.error === 'invalid_json' ? (window.T('psn_js_157') + (res.detail || '')) : window.T('psn_ji_not_object'));
     _toast(msg, 'err', 8000);
-    if (box) { box.style.display = ''; box.innerHTML = '<div class="ji-warn">' + _esc(msg) + '</div>'; }
+    if (box) { box.style.display = ''; box.innerHTML = '<div class="ji-warn">' + _escHtml(msg) + '</div>'; }
     return;
   }
   var rows = _jiDiff(_loadedProfile, res.persona);
@@ -5465,18 +5498,19 @@ async function _importFromJson() {
   _jiPending = {persona: res.persona, rows: rows};
   var serving = _jiServing();
   var html = '';
-  if (serving > 0) html += '<div class="ji-warn">⚠ ' + _esc(window.Tf('psn_ji_serving_warn', {n: String(serving)})) + '</div>';
-  html += '<table><thead><tr><th></th><th>' + _esc(window.T('psn_ji_col_field')) + '</th><th>' + _esc(window.T('psn_ji_col_old')) + '</th><th>' + _esc(window.T('psn_ji_col_new')) + '</th></tr></thead><tbody>';
+  // #237 同根（L-2 C 同批落地）：此前误调 _exportFilteredCSV 体内的 _esc → 预览一渲染就 ReferenceError
+  if (serving > 0) html += '<div class="ji-warn">⚠ ' + _escHtml(window.Tf('psn_ji_serving_warn', {n: String(serving)})) + '</div>';
+  html += '<table><thead><tr><th></th><th>' + _escHtml(window.T('psn_ji_col_field')) + '</th><th>' + _escHtml(window.T('psn_ji_col_old')) + '</th><th>' + _escHtml(window.T('psn_ji_col_new')) + '</th></tr></thead><tbody>';
   rows.forEach(function (r, i) {
     html += '<tr><td><input type="checkbox" class="ji-pick" data-i="' + i + '"' + (r.changed ? ' checked' : '') + '></td>'
-      + '<td><b>' + _esc(r.key) + '</b>' + (r.changed ? '' : ' <span style="color:var(--t3)">' + _esc(window.T('psn_ji_unchanged')) + '</span>') + '</td>'
-      + '<td class="ji-val ji-old">' + _esc(_jiFmt(r.old)) + '</td>'
-      + '<td class="ji-val ji-new">' + _esc(_jiFmt(r['new'])) + '</td></tr>';
+      + '<td><b>' + _escHtml(r.key) + '</b>' + (r.changed ? '' : ' <span style="color:var(--t3)">' + _escHtml(window.T('psn_ji_unchanged')) + '</span>') + '</td>'
+      + '<td class="ji-val ji-old">' + _escHtml(_jiFmt(r.old)) + '</td>'
+      + '<td class="ji-val ji-new">' + _escHtml(_jiFmt(r['new'])) + '</td></tr>';
   });
   html += '</tbody></table>';
-  html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="_jiConfirm()">' + _esc(window.T('psn_ji_confirm')) + '</button>'
-    + '<button type="button" class="btn btn-sm" onclick="_jiCancel()">' + _esc(window.T('psn_ji_cancel')) + '</button>'
-    + '<span style="font-size:.7rem;color:var(--t3)">' + _esc(window.T('psn_ji_confirm_hint')) + '</span></div>';
+  html += '<div class="ji-actions"><button type="button" class="btn btn-sm btn-primary" onclick="_jiConfirm()">' + _escHtml(window.T('psn_ji_confirm')) + '</button>'
+    + '<button type="button" class="btn btn-sm" onclick="_jiCancel()">' + _escHtml(window.T('psn_ji_cancel')) + '</button>'
+    + '<span style="font-size:.7rem;color:var(--t3)">' + _escHtml(window.T('psn_ji_confirm_hint')) + '</span></div>';
   if (box) { box.innerHTML = html; box.style.display = ''; }
 }
 function _jiCancel() {
@@ -5512,7 +5546,7 @@ function _jiShowUndoToast(n) {
   if (!wrap) { _toast(window.T('psn_js_156'), 'ok'); return; }
   var el = document.createElement('div');
   el.className = 'toast ok';
-  el.innerHTML = _esc(window.Tf('psn_ji_applied', {n: String(n)})) + ' <button type="button" class="btn btn-sm" style="margin-left:.5rem" onclick="_jiUndoApply()">' + _esc(window.T('psn_ji_undo')) + '</button>';
+  el.innerHTML = _escHtml(window.Tf('psn_ji_applied', {n: String(n)})) + ' <button type="button" class="btn btn-sm" style="margin-left:.5rem" onclick="_jiUndoApply()">' + _escHtml(window.T('psn_ji_undo')) + '</button>';
   wrap.appendChild(el);
   clearTimeout(_jiUndoTimer);
   _jiUndoTimer = setTimeout(function () { try { el.remove(); } catch (e) {} _jiUndo = null; }, 30000);
