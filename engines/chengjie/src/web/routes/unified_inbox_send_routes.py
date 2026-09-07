@@ -2264,6 +2264,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 裸流上传口（新前端据此走 body=file + query 元数据；旧后端无此键＝仍走 multipart）
             "media_stream_upload": True,
         }
+        # 实施96：渠道出站策略快照（禁外链 / 字数上限 / 媒体白名单…）——composer 一贴链接就提示，
+        # 与发送口 channel_policy 判定同源；未登记平台不带此键。
+        try:
+            from src.inbox.channel_policy import snapshot as _cp_snapshot
+            _ob = _cp_snapshot(plat, config=_caps_cfg)
+            if _ob and not _ob.get("unlimited"):
+                out["outbound_policy"] = _ob
+        except Exception:
+            logger.debug("send-caps outbound_policy 快照跳过", exc_info=True)
         # 实施96：平台回复窗 / 每轮配额快照（抖音 24h·6、TikTok 48h·10…）——前端画倒计时与
         # 「本轮剩余 N 条」，与发送口的 window_guard 判定同源；非窗口平台不带此键。
         if chat_key:

@@ -178,6 +178,27 @@ def test_registry_json_served_and_inbox_falls_back_to_it(auth_client):
     assert "function platName(p){ return PN[p]||(_PREG[p]&&_PREG[p].name)" in html
 
 
+def test_reply_window_and_policy_hint_wired_in_inbox_ui():
+    """回复窗倒计时 / 本轮剩余 + 禁链即时提示：send-caps 字段 → composer 信息带，i18n 键齐全（zh/en）。"""
+    from pathlib import Path
+    import re
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "src/web/templates/unified_inbox.html").read_text(encoding="utf-8")
+    for needle in ("_renderReplyWindow(d.reply_window||null, c)", "_applyOutboundPolicy(d.outbound_policy||null)",
+                   "function _renderReplyWindow(rw, c)", "function _renderPolicyHint()",
+                   "|| _rwState){"):
+        assert needle in html, needle
+    used = set(re.findall(r"window\.Tf?\('(inbox\.(?:rw|policy)\.[\w]+)'", html))
+    assert {"inbox.rw.open", "inbox.rw.expired", "inbox.rw.no_inbound", "inbox.rw.reserve",
+            "inbox.policy.link_hint", "inbox.policy.len_hint"} <= used
+    from src.web.i18n_packs import reply_window_ui as pack
+    for k in used:
+        assert k in pack.ZH and k in pack.EN, f"i18n 键缺 zh/en：{k}"
+    from src.web.i18n_packs import collect_all
+    zh, en, _ = collect_all()
+    assert zh["inbox.rw.open"].startswith("{plat}") and "{remaining}/{cap}" in en["inbox.rw.open"]
+
+
 def test_douyin_planned_status_is_honest_in_login_modes(auth_client, app):
     """接入向导 / 登录方式：抖音尚未实现 → 必须如实报「规划中」而不是给一张点了没反应的卡。"""
     r = auth_client.get("/api/platforms/douyin/login/modes")

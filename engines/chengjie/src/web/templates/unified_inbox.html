@@ -8162,6 +8162,8 @@ async function _loadSendCaps(c){
   _applySendCaps(null);  // 乐观：先按支持渲染
   _renderDeadPeerNotice(null);   // #73：换会话先清旧条
   _renderTravelNotice(null,null); // #113：换会话先清旧行程条
+  _renderReplyWindow(null,null);  // 实施96：换会话先清旧回复窗条
+  _applyOutboundPolicy(null);
   if(!c||!c.platform) return;
   try{
     const r=await apiFetch(`/api/unified-inbox/send-caps?platform=${encodeURIComponent(c.platform)}&account_id=${encodeURIComponent(c.account_id||'default')}&chat_key=${encodeURIComponent(c.chat_key||'')}`);
@@ -8169,7 +8171,107 @@ async function _loadSendCaps(c){
     if(d&&d.ok) _applySendCaps(d);
     if(d&&d.ok) _renderDeadPeerNotice(d.dead_peer||null);
     if(d&&d.ok) _renderTravelNotice(d.travel_state||null, c);
+    if(d&&d.ok) _renderReplyWindow(d.reply_window||null, c);
+    if(d&&d.ok) _applyOutboundPolicy(d.outbound_policy||null);
   }catch(_){ /* 网络异常：保持乐观，点击时仍有 501 兜底 */ }
+}
+/* 实施96 P0（2026-09-08）：平台回复窗 / 每轮配额可见面——抖音「对方最后一条后 24h 内 ≤6 条」、
+   TikTok「48h ≤10 条」这类硬规则，发送口 window_guard 会拦，但坐席得**先看见**：composer 上方
+   一条信息带：倒计时 + 本轮还可发几条（自动回复给坐席留的预留条数另注）。<2h 或只剩 1 条转橙；
+   超窗 / 对方从未开口灰显说明「等客户再发言」。倒计时按加载时服务端给的剩余秒数本地推算
+   （不受客户端时钟偏差影响），每 30s 重绘不打接口；发送成功后重拉 send-caps 刷新条数。
+   数据源 send-caps.reply_window（src/inbox/window_guard.snapshot），非窗口平台不带此键 → 不渲染。 */
+let _rwTimer=null, _rwState=null;
+function _fmtDur(sec){
+  sec=Math.max(0,Math.floor(sec));
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60);
+  if(h>=48) return window.Tf('inbox.rw.dur_d',{d:Math.floor(h/24),h:h%24});
+  if(h>=1) return window.Tf('inbox.rw.dur_h',{h:h,m:m});
+  if(m>=1) return window.Tf('inbox.rw.dur_m',{m:m});
+  return window.T('inbox.rw.dur_lt1m');
+}
+function _renderReplyWindow(rw, c){
+  try{
+    if(_rwTimer){ clearInterval(_rwTimer); _rwTimer=null; }
+    let el=document.getElementById('rw-notice');
+    if(!rw||!rw.cap){ if(el) el.style.display='none'; _rwState=null; return; }
+    if(!el){
+      const ta=document.getElementById('reply-ta');
+      const host=ta&&ta.parentNode?ta.parentNode:null;
+      if(!host) return;
+      el=document.createElement('div');
+      el.id='rw-notice';
+      el.setAttribute('role','status');
+      el.style.cssText='margin:0 0 .35rem;padding:.4rem .6rem;border-radius:8px;'
+        +'display:flex;align-items:center;gap:8px;font-size:.76rem;line-height:1.45;';
+      host.insertBefore(el, ta);
+    }
+    _rwState={cap:Number(rw.cap||0), sent:Number(rw.sent||0), remaining:Number(rw.remaining||0),
+      reserve:Number(rw.reserve_for_manual||0), noInbound:!!rw.no_inbound,
+      remainingSec:Number(rw.remaining_sec||0), loadedAt:Date.now(),
+      plat:(c&&c.platform)||'', windowH:Math.round(Number(rw.window_sec||0)/3600)};
+    const paint=()=>{
+      const s=_rwState; if(!s||!el) return;
+      const left=s.noInbound?0:Math.max(0,s.remainingSec-(Date.now()-s.loadedAt)/1000);
+      const plat=platName(s.plat);
+      let text, tone;
+      if(s.noInbound){ text=window.Tf('inbox.rw.no_inbound',{plat:plat}); tone='muted'; }
+      else if(left<=0){ text=window.Tf('inbox.rw.expired',{plat:plat,h:s.windowH}); tone='muted'; }
+      else{
+        text=window.Tf('inbox.rw.open',{plat:plat,left:_fmtDur(left),remaining:s.remaining,cap:s.cap});
+        if(s.reserve>0 && s.remaining>0) text+=' · '+window.Tf('inbox.rw.reserve',{n:s.reserve});
+        tone=(left<2*3600||s.remaining<=1)?'warn':'ok';
+      }
+      const bg={ok:'color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent)',
+                warn:'rgba(245,158,11,.12)', muted:'rgba(107,114,128,.10)'}[tone];
+      const bd={ok:'color-mix(in srgb, var(--accent,#1e8cf2) 32%, transparent)',
+                warn:'rgba(245,158,11,.4)', muted:'rgba(107,114,128,.35)'}[tone];
+      el.style.background=bg; el.style.border='1px solid '+bd;
+      el.style.color=tone==='muted'?'var(--text-muted,#6b7280)':'var(--text-main,#0f172a)';
+      el.innerHTML='<span style="flex:none;width:8px;height:8px;border-radius:50%;background:'
+        +(tone==='warn'?'#f59e0b':(tone==='muted'?'#9ca3af':'var(--accent,#1e8cf2)'))+'"></span>'
+        +'<span style="flex:1;min-width:0;">'+esc(text)+'</span>';
+      el.style.display='flex';
+    };
+    paint();
+    _rwTimer=setInterval(paint, 30000);
+  }catch(_){}
+}
+/* 实施96：渠道出站策略可见面——平台禁外链（抖音）时，坐席在 composer 里一贴链接就提示
+   「发送会被拦，改发留资卡/问题引导卡」，而不是点发送才撞 409。数据源 send-caps.outbound_policy
+   （src/inbox/channel_policy.snapshot）；无声明平台不装监听。 */
+let _obPolicy=null, _obHintBound=false;
+const _obLinkRe=/(?:https?:\/\/\S+|www\.\S+|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|cn|net|org|io|me|co|app|shop|tv|cc|xyz|top|vip|info|link|site|online|store)\b)/i;
+function _applyOutboundPolicy(p){
+  _obPolicy=(p&&!p.unlimited)?p:null;
+  const ta=document.getElementById('reply-ta');
+  if(ta && !_obHintBound){ _obHintBound=true; ta.addEventListener('input', _renderPolicyHint); }
+  _renderPolicyHint();
+}
+function _renderPolicyHint(){
+  try{
+    let el=document.getElementById('ob-policy-hint');
+    const ta=document.getElementById('reply-ta');
+    const p=_obPolicy;
+    const txt=ta?String(ta.value||''):'';
+    let msg='';
+    if(p && p.links==='deny' && _obLinkRe.test(txt)) msg=window.Tf('inbox.policy.link_hint',{plat:platName(p.platform||'')});
+    else if(p && p.max_text_len && txt.length>Number(p.max_text_len)) msg=window.Tf('inbox.policy.len_hint',{plat:platName(p.platform||''),n:txt.length,max:p.max_text_len});
+    if(!msg){ if(el) el.style.display='none'; return; }
+    if(!el){
+      const host=ta&&ta.parentNode?ta.parentNode:null;
+      if(!host) return;
+      el=document.createElement('div');
+      el.id='ob-policy-hint';
+      el.setAttribute('role','alert');
+      el.style.cssText='margin:0 0 .35rem;padding:.4rem .6rem;border-radius:8px;font-size:.76rem;'
+        +'line-height:1.45;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.38);'
+        +'color:var(--text-main,#0f172a)';
+      host.insertBefore(el, ta);
+    }
+    el.textContent=msg;
+    el.style.display='block';
+  }catch(_){}
 }
 /* #73-③（0830 UDEKBY 实锤）：dead-peer 可见面——peer 被标不可达时 AI 静默
    跳过而坐席零感知（「AI 怎么不理这位客户」无从排查）。composer 上方常驻
@@ -14524,8 +14626,9 @@ async function sendMsg(){
       // send-caps 让黄条 ≤5s 消失（旧行为要等下次进会话才刷新，坐席看着
       // 「明明发出去了黄条还挂着」以为修复无效）。仅黄条在场时才多这一次请求。
       try{
-        if(document.getElementById('dp-warn')
-           && document.getElementById('dp-warn').style.display!=='none'){
+        if((document.getElementById('dp-warn')
+            && document.getElementById('dp-warn').style.display!=='none')
+           || _rwState){   // 实施96：回复窗条在场 → 送达后重拉，「本轮还可发 N 条」立刻减一
           _loadSendCaps(selectedChat);
         }
       }catch(_){}
