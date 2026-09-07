@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-07 03:00:46 · OpenCC s2twp + 術語釘 · 16539 鍵（源 zh 全量 16540）
+生成: 2026-09-08 06:48:55 · OpenCC s2twp + 術語釘 · 16762 鍵（源 zh 全量 16763）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1895,6 +1895,7 @@ ZH_HANT = {
     'base.notif.f_msg': '訊息',
     'base.notif.f_other': '其它',
     'base.notif.goal_done_sub': '{name} · {title}',
+    'base.notif.goal_settled_sub': '{name} · {title}：計劃 {planned} 拍 / 實際 {sent} 拍 · {why}',
     'base.notif.grp_hdr': '👥 群組動態 {n}',
     'base.notif.health_sub': '{n} 個系統元件異常，部分能力可能降級，詳見運營總覽',
     'base.notif.health_sub_ok': '系統元件已全部恢復正常',
@@ -1928,6 +1929,7 @@ ZH_HANT = {
     'base.notif.type_draft_sla_breach': '草稿超時',
     'base.notif.type_escalation': '升級告警',
     'base.notif.type_goal_done': '目標達成',
+    'base.notif.type_goal_settled': '目標到期結算',
     'base.notif.type_health_alert': '系統健康告警',
     'base.notif.type_inbox_message': '新訊息',
     'base.notif.type_ops_report': '運營報告',
@@ -2054,6 +2056,7 @@ ZH_HANT = {
     'base.sse.esc_assigned': '升級已指派給您：客戶「{name}」{wait}未回覆（{reason}）',
     'base.sse.esc_sup': '升級（指派給 {to}）：客戶「{name}」',
     'base.sse.goal_done': '🎯 目標達成：{name}「{title}」',
+    'base.sse.goal_settled': '📋 目標已到期結算：{name}「{title}」計劃 {planned} 拍 / 實際 {sent} 拍',
     'base.sse.qa_body': '{prefix}：客戶「{name}」已等待 {min}分鐘未回覆',
     'base.sse.qa_crit': '嚴重超時',
     'base.sse.qa_warn': '響應超時',
@@ -3526,6 +3529,82 @@ ZH_HANT = {
     'cs7_status_held': '待你確認後才發',
     # ── cs7_status_queue ──
     'cs7_status_queue': '排隊中：下輪巡檢（≤{n} 分鐘）處理',
+    # ── cs8_delivery_broken ──
+    'cs8_delivery_broken': '佇列開著但沒在出貨（drain loop 未執行，重啟後端可恢復）',
+    # ── cs8_dry_sampled ──
+    'cs8_dry_sampled': '模擬執行中：已按這條擬稿留樣，沒有真發給客戶（要真發請先「開啟真發」）',
+    # ── cs8_dv_pending_eta ──
+    'cs8_dv_pending_eta': '預計 {t}',
+    # ── cs8_eta ──
+    'cs8_eta': '預計 {t} 出手（{why}）',
+    # ── cs8_eta_jitter ──
+    'cs8_eta_jitter': '錯峰',
+    # ── cs8_eta_quiet ──
+    'cs8_eta_quiet': '安靜時段順延',
+    # ── cs8_eta_t ──
+    'cs8_eta_t': '到點後會再按錯峰 / 安靜時段算實際出手時刻；「到點發這句話」的原文行不錯峰',
+    # ── cs8_fwd_done ──
+    'cs8_fwd_done': '已提前到期，預計 {t} 出手',
+    # ── cs8_held_now ──
+    'cs8_held_now': '這條正等你確認——請點「就這樣發」',
+    # ── cs8_note_fwd ──
+    'cs8_note_fwd': '已提前到期',
+    # ── cs8_queued_at ──
+    'cs8_queued_at': '已入隊但暫未發出：{why}，預計 {t} 再試',
+    # ── cs8_send_fail ──
+    'cs8_send_fail': '沒發出去：{why}',
+    # ── cs8_sending ──
+    'cs8_sending': '傳送中…',
+    # ── cs8_sent_at ──
+    'cs8_sent_at': '已發出 {t}',
+    # ── cs8_skipped ──
+    'cs8_skipped': '這條被跳過：{why}',
+    # ── cs8_state_failed ──
+    'cs8_state_failed': '沒發出去：{why} · {t}（可再點「立即發」）',
+    # ── cs8_state_forwarded ──
+    'cs8_state_forwarded': '已提前（{t}）· 預計 {eta} 出手',
+    # ── cs8_state_held ──
+    'cs8_state_held': '待你確認後才發',
+    # ── cs8_state_queued ──
+    'cs8_state_queued': '排隊中 · 預計 {t} 發出（{why}）',
+    # ── cs8_state_scheduled ──
+    'cs8_state_scheduled': '已排 · {t} 到點',
+    # ── cs8_timeout ──
+    'cs8_timeout': '等了 30 秒還沒回音，稍後重新整理看結果（不會重複發）',
+    # ── cs8_why_care ──
+    'cs8_why_care': '到點排隊',
+    # ── cs8_why_deliver_now_error ──
+    'cs8_why_deliver_now_error': '同步投遞出錯，已留在佇列稍後重試',
+    # ── cs8_why_dispatcher_missing ──
+    'cs8_why_dispatcher_missing': '派發器未就緒（AI 未連線）',
+    # ── cs8_why_kill_switch ──
+    'cs8_why_kill_switch': '急停開關生效中',
+    # ── cs8_why_llm_error ──
+    'cs8_why_llm_error': 'AI 擬稿失敗',
+    # ── cs8_why_messenger_rpa_queue ──
+    'cs8_why_messenger_rpa_queue': 'Messenger 走瀏覽器機器人佇列，稍後由它發出',
+    # ── cs8_why_no_sender ──
+    'cs8_why_no_sender': '這個平台還沒有可用的傳送通道',
+    # ── cs8_why_no_sync_path ──
+    'cs8_why_no_sync_path': '已交給傳送佇列，稍後由佇列發出',
+    # ── cs8_why_pacing_min_gap ──
+    'cs8_why_pacing_min_gap': '同賬號剛發過一條，錯開間隔',
+    # ── cs8_why_paused ──
+    'cs8_why_paused': '該平台投遞已被手動暫停',
+    # ── cs8_why_queue_unavailable ──
+    'cs8_why_queue_unavailable': '傳送佇列沒開（請先點「開啟真發」）',
+    # ── cs8_why_quiet_hours ──
+    'cs8_why_quiet_hours': '安靜時段順延',
+    # ── cs8_why_requeued ──
+    'cs8_why_requeued': '運營已重新入隊',
+    # ── cs8_why_send_error ──
+    'cs8_why_send_error': '投遞時出錯',
+    # ── cs8_why_sender_not_ready ──
+    'cs8_why_sender_not_ready': '傳送通道暫未就緒（賬號未登入或正在重連）',
+    # ── cs8_why_sender_returned_false ──
+    'cs8_why_sender_returned_false': '平台沒有接收這條訊息',
+    # ── cs8_why_timeout ──
+    'cs8_why_timeout': '等待超時',
     # ── cs_js001 ──
     'cs_js001': '立即發',
     # ── cs_js002 ──
@@ -4573,6 +4652,20 @@ ZH_HANT = {
     'dv_ai_p_sub': '決定聊天內容走雲端還是本機 GPU。local_only＝嚴格隱私，本地掛了也不回落雲端。需先配好下方「本地兜底」端點（ai.fallback）。',
     # ── dv_ai_p_title ──
     'dv_ai_p_title': '主對話模型位置',
+    # ── dv_bd_loading ──
+    'dv_bd_loading': '讀取中…',
+    # ── dv_bd_restart_needed ──
+    'dv_bd_restart_needed': '後端需重啟後可用',
+    # ── dv_bd_saved_restart ──
+    'dv_bd_saved_restart': '✓ 已儲存；模板 / 標籤 / 畫像已生效，Domain hook 與知識庫分類重啟後跟隨',
+    # ── dv_bd_src_explicit ──
+    'dv_bd_src_explicit': '配置裡顯式設定',
+    # ── dv_bd_src_inferred ──
+    'dv_bd_src_inferred': '按部署形態推導（桌面客戶機 = 陪伴）',
+    # ── dv_bd_sub ──
+    'dv_bd_sub': '陪伴：工作目標不出現「轉化成交」類目，客戶摸底 / 畫像用陪伴標籤集（稱呼 / 座標 / 職業 / 年齡 / 興趣 + 家庭 / 婚戀 / 收入 / 居住 / 資產），知識庫不預置支付話術。銷售：保留商機標籤（痛點 / 平台 / 團隊 / 預算 / 決策 / 上線）與成交欄位。改動寫 config.local.yaml；模板 / 標籤 / 畫像即時生效，Domain hook 與知識庫分類重啟後跟隨。',
+    # ── dv_bd_title ──
+    'dv_bd_title': '業務域（這台機器做什麼生意）',
     # ── dv_cc_btn_add ──
     'dv_cc_btn_add': '新增',
     # ── dv_cc_btn_probe ──
@@ -5674,9 +5767,11 @@ ZH_HANT = {
     'err.goals.batch_too_many': '單次批次最多 {n} 個會話',
     'err.goals.conversation_required': '缺少會話（conversation_id 或 platform+chat_key）',
     'err.goals.create_failed': '目標建立失敗',
+    'err.goals.custom_slot_label_required': '缺少標籤文案（label）或要刪除的標籤鍵（remove）',
+    'err.goals.custom_slot_limit': '自定義標籤最多 {n} 個，先刪掉不用的',
     'err.goals.deadline_past': '目標已進行到第 {day} 天，期限不能少於 {day} 天；想立即結束請用「標成交」或「放棄」',
     'err.goals.deadline_terminal': '目標已結束，期限不可再改',
-    'err.goals.disabled': '營銷目標功能未啟用（companion.goals.enabled）',
+    'err.goals.disabled': '工作目標功能未啟用（companion.goals.enabled）',
     'err.goals.no_beat_today': '今天沒有可反饋的推進安排',
     'err.goals.not_active': '目標不在進行中，無法反饋',
     'err.goals.not_found': '目標不存在',
@@ -5760,6 +5855,13 @@ ZH_HANT = {
     'err.inbox.send_blocked_health': '該賬號健康評分為紅燈，系統已暫停其傳送以保護賬號（近期風控/失敗訊號偏多）。',
     'err.inbox.send_blocked_killswitch': '傳送被急停開關攔截（外發已暫停保護賬號；可能為系統自動風控或管理員手動凍結，解除後自動恢復）。',
     'err.inbox.send_blocked_license': '授權已到期或受限，出站傳送被禁用，請聯絡管理員續期。',
+    'err.inbox.send_blocked_policy': '該平台不接收這條訊息（{reason}），請按平台規則調整後再發。',
+    'err.inbox.send_blocked_policy_len': '超過該平台單條字數上限（{reason}），請拆短或刪減後再發。',
+    'err.inbox.send_blocked_policy_link': '該平台私信不允許帶外部連結，請刪掉連結（抖音可改發留資卡/問題引導卡）。',
+    'err.inbox.send_blocked_policy_media': '該平台私信不支援這種媒體型別（{reason}），請改發圖片或文字。',
+    'err.inbox.send_blocked_policy_window_expired': '距對方最後一條訊息已超過該平台的回覆時間窗，這條發不出去；等客戶再發言後視窗會重新開啟。',
+    'err.inbox.send_blocked_policy_window_no_inbound': '該平台只允許回覆先發訊息的客戶，對方還沒開口，暫時發不了（等客戶進線後再回）。',
+    'err.inbox.send_blocked_policy_window_quota': '本輪可發條數已用完（{reason}），等客戶再發一條後配額才會重置；自動回覆會給你留最後一條人工用。',
     'err.inbox.send_blocked_quota': '該賬號今日傳送額度已用完（{used}/{cap}），為保護賬號安全已暫停傳送。額度按最近 24 小時滾動計算，會隨較早的傳送記錄過期自動恢復；如需立即傳送，請聯絡管理員調整額度或將該客戶加入白名單。',
     'err.inbox.send_blocked_session': '該平台會話已掉線，訊息無法送達，請在賬號管理裡重新登入。',
     'err.inbox.send_flood': '平台判定傳送過於頻繁，賬號被臨時限流——請稍後再試，避免連續快速傳送。',
@@ -6097,6 +6199,7 @@ ZH_HANT = {
     'err.tko.readonly': '只讀賬號無權接管/交還會話',
     'err.tko.start_failed': '接管失敗：{reason}',
     'err.tko.store_unready': '收件箱儲存未就緒',
+    'err.uiv.bad_business_domain': '業務域只能是 companion（陪伴）或 sales（銷售）：{name}',
     'err.uiv.dev_locked': '開發者工具未解鎖',
     'err.uiv.unknown_key': '未知顯隱鍵：{name}',
     'err.uiv.write_failed': '寫入失敗（配置覆蓋層不可寫）',
@@ -6375,7 +6478,7 @@ ZH_HANT = {
     # ── goal_rpt_days_n ──
     'goal_rpt_days_n': '{n} 天',
     # ── goal_rpt_disabled ──
-    'goal_rpt_disabled': '營銷目標功能未啟用（companion.goals.enabled）',
+    'goal_rpt_disabled': '工作目標功能未啟用（companion.goals.enabled）',
     # ── goal_rpt_done ──
     'goal_rpt_done': '已完成',
     # ── goal_rpt_done_rate ──
@@ -6402,6 +6505,8 @@ ZH_HANT = {
     'goal_rpt_kind_auto': '自動結算',
     # ── goal_rpt_kind_manual ──
     'goal_rpt_kind_manual': '人工成交',
+    # ── goal_rpt_kind_manual_companion ──
+    'goal_rpt_kind_manual_companion': '人工標記達成',
     # ── goal_rpt_kind_order ──
     'goal_rpt_kind_order': '訂單迴流',
     # ── goal_rpt_load_fail ──
@@ -6520,6 +6625,8 @@ ZH_HANT = {
     'goal_rpt_th_when': '完成時間',
     # ── goal_rpt_th_won ──
     'goal_rpt_th_won': '贏單',
+    # ── goal_rpt_th_won_companion ──
+    'goal_rpt_th_won_companion': '達成',
     # ── goal_rpt_title ──
     'goal_rpt_title': '目標達成報表',
     # ── goal_rpt_tpl_care ──
@@ -7319,6 +7426,13 @@ ZH_HANT = {
     'inbox.acct.bd_others': '另有：{list}',
     'inbox.acct.bd_private': '私聊 {n}',
     'inbox.acct.bd_title': '角標 = {scope}裡能點開的未讀數',
+    'inbox.acct.bridge_off': '副駕離線 {m} 分',
+    'inbox.acct.bridge_off_t': 'PC 副駕驅動程序已無心跳：新訊息不會進來、回覆不會發出，請在電腦上重啟副駕（tools\\wechat_pc_devlink.ps1）',
+    'inbox.acct.bridge_on': '副駕線上 · {tier}',
+    'inbox.acct.bridge_on_t': 'PC 副駕驅動程序正在讀屏收發（90 秒內有心跳）',
+    'inbox.acct.bridge_tier_auto_reply': '全自動',
+    'inbox.acct.bridge_tier_copilot': '只讀建議',
+    'inbox.acct.bridge_tier_semi': '半自動',
     'inbox.acct.bulk_auto': '全自動',
     'inbox.acct.bulk_confirm': '將對 {n} 個會話開啟「{mode}」（共 {total} 個），其中覆蓋 {m} 個你單獨設定過的會話。',
     'inbox.acct.bulk_cooldown_note': '注意：該賬號剛登入，冷靜期還剩 {m} 分鐘——期間仍只起草不投遞，到點後自動放開。',
@@ -7444,7 +7558,10 @@ ZH_HANT = {
     'inbox.acct.not_connected': '未接入',
     'inbox.acct.note_instagram': '官方 API 接入：填 Facebook 開發者應用的主頁憑證即可，無需掃碼',
     'inbox.acct.note_line': '真機接入（adb 裝置）或協議掃碼',
+    'inbox.acct.note_qq': '用你自己的 QQ 號：在自裝的 QQ 協議端（NapCat / LLOneBot / Lagrange）裡掃碼，本視窗自動確認；可收發文字/圖片/語音/影片，建議小號 + 固定 IP',
+    'inbox.acct.note_qqbot': '官方 API 接入：填 AppID / AppSecret 即可，無需掃碼；只能被動回覆（單聊每條來話 60 分鐘內 4 條），正式環境需 IP 白名單',
     'inbox.acct.note_telegram': '支援手機掃碼 / API 授權直連，多賬號常駐線上',
+    'inbox.acct.note_wechat_kf': '企業微信官方接入：填企微自建應用 CorpID / Secret 即可，無需掃碼；客戶掃客服二維碼即可諮詢（不用加好友）；每輪 48 小時內最多回 5 條，應用需配可信 IP',
     'inbox.acct.note_whatsapp': '手機掃碼關聯登入（需本機連線服務在執行）',
     'inbox.acct.note_zalo': '官方 API 接入：填 Zalo OA access token 即可，無需掃碼；客服訊息限 7 天互動窗',
     'inbox.acct.nth': '賬號{n}',
@@ -7764,6 +7881,7 @@ ZH_HANT = {
     'inbox.caps.no_send_voice': '該平台 worker 線上但未開放發語音（如 LINE 需開 platform_login.line.media.outbound）',
     'inbox.caps.no_voice': '該平台賬號暫不支援收件箱直髮語音（需協議多開且線上）',
     'inbox.caps.no_worker': '該賬號未被協議 worker 託管（未登入或該平台無 worker），工作台不能直髮媒體/語音',
+    'inbox.caps.qqbot_media_pending': 'QQ 機器人語音須 silk 編碼（暫未接入）——此賬號可發圖片（png/jpg）和 mp4 影片，語音請改發文字',
     'inbox.caps.voice_auto_only': '該會話由 RPA 託管：語音僅支援裝置端自動傳送（voice_output），坐席不能在此手動直髮',
     'inbox.caps.worker_not_running': '該賬號的協議 worker 正在重連（{state}），稍後再試',
     'inbox.caps.zalo_api_no_media': 'Zalo OA API 不支援發圖/語音（官方能力限制）；此賬號只能發文字',
@@ -8032,11 +8150,16 @@ ZH_HANT = {
     'inbox.connect.instr_line': '在已連線的裝置 / 投屏端開啟 LINE 登入頁並用手機掃碼；登入成功後本視窗會自動確認。',
     'inbox.connect.instr_line_protocol': '用手機 LINE 掃碼：設定 → 我的賬戶 →「用其他裝置登入 / 登入中的裝置」出示二維碼，用主裝置 LINE 掃描。掃完手機上還要輸一個 6 位驗證碼——請把手機拿在手邊，全程在 2 分鐘內完成。',
     'inbox.connect.instr_messenger': '伺服器上已開啟 Facebook 官方登入視窗，請在該機器上完成登入（賬密 / 2FA）。完成後本視窗會自動確認——本方式不使用二維碼，無需用手機掃描。',
+    'inbox.connect.instr_qq': '請在你自裝的 QQ 協議端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制檯裡用手機 QQ 掃碼登入；登入完成後本視窗會自動確認並把該 QQ 號接入。',
+    'inbox.connect.instr_qq_down': '無法連線 QQ 協議端：請確認 NapCat / LLOneBot / Lagrange 已啟動、Milky 服務地址與 Token 正確，然後點「重新開始」。',
+    'inbox.connect.instr_qq_setup': '未配置 QQ 協議端地址：請先到接入嚮導「QQ」卡填好協議端 Milky 地址（與 Token），再回來接入。',
+    'inbox.connect.instr_qqbot': 'QQ 機器人走 QQ 開放平台官方接入：在「接入嚮導」裡填好 AppID / AppSecret 即自動上線，無需掃碼；正式環境需在開放平台配置 IP 白名單，聯調可先用沙箱。',
     'inbox.connect.instr_telegram': '在 Telegram 手機端：設定 → 裝置 → 關聯桌面裝置，掃描二維碼；或由管理員在裝置端完成新賬號登入。賬號連上後本視窗會自動確認。',
     'inbox.connect.instr_tg_phone': '輸入帶國際區號的手機號（大陸 11 位可自動補 +86），我們會把驗證碼發到 Telegram App 或簡訊。',
     'inbox.connect.instr_tg_phone_code': '驗證碼已發到你的 Telegram App / 簡訊，請輸入後繼續。',
     'inbox.connect.instr_tg_protocol': '用手機 Telegram：設定 → 裝置 → 關聯桌面裝置，掃描二維碼。',
     'inbox.connect.instr_wa_protocol': '用手機 WhatsApp：設定 → 已關聯的裝置 → 關聯新裝置，掃描二維碼。登入憑據僅儲存在本機；二維碼會定時重新整理，請在最新一張碼出現後儘快掃描。',
+    'inbox.connect.instr_wechat_kf': '微信客服走企業微信官方接入：在「接入嚮導」裡填好企微自建應用的 CorpID / Secret 即自動上線，無需掃碼；應用需配可信 IP，客戶掃客服二維碼即可諮詢。',
     'inbox.connect.instr_whatsapp': '掃碼：在裝置 / 投屏端開啟 WhatsApp「關聯裝置」並用手機掃碼；官方 Cloud API：在「接入嚮導」裡填好 Meta 憑證即自動上線。',
     'inbox.connect.instr_zalo': 'Zalo 走官方 OA API 接入：在「接入嚮導」裡填好 OA 憑證即自動上線，無需掃碼。',
     'inbox.connect.instr_zalo_web': '用手機 Zalo：右上角 ＋ → 掃碼（QR），掃描本視窗二維碼。登入成功後本視窗會自動確認。',
@@ -8049,6 +8172,7 @@ ZH_HANT = {
     'inbox.connect.mode_d_official': '平台官方開放介面，最合規穩定；憑證在接入嚮導裡配置，無需掃碼',
     'inbox.connect.mode_d_phone': '輸入手機號收驗證碼登入（可能需兩步驗證密碼）；無法掃自己螢幕時的備選',
     'inbox.connect.mode_d_protocol': '服務端協議直連，單機可掛大量賬號，最省資源',
+    'inbox.connect.mode_d_qq_protocol': '用你自己的 QQ 號：在自裝的 QQ 協議端（NapCat / LLOneBot / Lagrange）裡掃碼登入，本視窗自動確認；可收發文字/圖片/語音/影片，建議小號 + 固定 IP',
     'inbox.connect.mode_d_web': '隔離瀏覽器 + 平台網頁二維碼，相容好、更像真人',
     'inbox.connect.mode_d_zalo_web': '用你自己的 Zalo 賬號掃碼登入，可收發文字/圖片/語音/貼紙；建議搭配小號與獨立代理使用',
     'inbox.connect.mode_l_device': '真機 / 模擬器',
@@ -8057,6 +8181,7 @@ ZH_HANT = {
     'inbox.connect.mode_l_official': '官方 API 接入',
     'inbox.connect.mode_l_phone': '手機號 + 驗證碼',
     'inbox.connect.mode_l_protocol': '掃碼登入',
+    'inbox.connect.mode_l_qq_protocol': '掃碼登入（協議端）',
     'inbox.connect.mode_l_web': '網頁掃碼',
     'inbox.connect.mode_l_zalo_web': '掃碼登入（個人號）',
     'inbox.connect.mode_needs_config': '可開通',
@@ -8271,6 +8396,8 @@ ZH_HANT = {
     'inbox.connect.win_note_instagram': 'Instagram 私信同樣有 24 小時互動窗（獲批的人工坐席標籤可延至 7 天），超窗需等使用者再次發起。',
     'inbox.connect.win_note_line': 'LINE 官方賬號沒有互動窗限制：回覆訊息免費，主動推送計入官方賬號方案的月度訊息額度。',
     'inbox.connect.win_note_messenger': 'Messenger 平台政策：標準訊息窗為使用者最後互動後 24 小時，超窗傳送受平台訊息標籤規則約束。',
+    'inbox.connect.win_note_qqbot': '「被動回覆視窗」＝QQ 開放平台機器人政策：單聊每條來話 60 分鐘內最多回 4 條、群 @ 訊息 5 分鐘內最多 5 條；使用者不再說話就不能再發（主動訊息已於 2025-04 收斂）。群裡預設只收 @機器人 的訊息。這是平台規則，不是本系統限制。',
+    'inbox.connect.win_note_wechat_kf': '「48 小時 / 5 條」＝微信客服政策：客戶每發一條訊息，企業在其後 48 小時內最多回 5 條，客戶再發則重置；超窗/超條的傳送會被平台丟棄。本系統會在用完前自動停發並等客戶回覆，且不拆條、不發緩衝話術。這是平台規則，不是本系統限制。',
     'inbox.connect.win_note_whatsapp': '「24 小時客服窗」＝WhatsApp Cloud API 政策：使用者最後一次發訊息後 24 小時內可自由回覆，超窗只能傳送預先稽核的模板訊息。平台規則，非本系統限制。',
     'inbox.connect.win_note_zalo': '「7 天互動窗」＝Zalo OA 客服訊息政策：使用者最後一次互動後 7 天內可主動發訊息，超窗需等對方再次發起。這是平台規則，不是本系統限制。',
     'inbox.contacts.account': '賬號',
@@ -8851,9 +8978,19 @@ ZH_HANT = {
     'inbox.goal.act.reject_t': '今天不推這個角度（連續駁回會自動放緩節奏，可撤銷）',
     'inbox.goal.act.resume': '恢復',
     'inbox.goal.act.won': '標成交',
+    'inbox.goal.act.won_c': '標記達成',
     'inbox.goal.adopted_mark': '已採納',
     'inbox.goal.again_btn': '再設一個',
     'inbox.goal.alias_note': '也叫工作計劃',
+    'inbox.goal.auto.active': '自動推進中 · 近 24h 已出手 {n} 拍',
+    'inbox.goal.auto.blocked_recent': '上次想出手被攔：{why}',
+    'inbox.goal.auto.cap_reached': '今日主動拍已達上限，明日 {t} 繼續',
+    'inbox.goal.auto.stalled': '已超 24 小時沒出手過（有排期卻一拍未發）{why}',
+    'inbox.goal.auto.stalled_why': '，上次被攔：{why}',
+    'inbox.goal.auto.tag_blocked_t': '「自動推進」檔開著，但現在出不了手：{why}。點選切換自治檔',
+    'inbox.goal.auto.tag_stalled_t': '「自動推進」檔開著，但 24 小時內一拍都沒發出：{why}。點選切換自治檔',
+    'inbox.goal.auto.waiting_first': '等待首拍（預計 {t}）',
+    'inbox.goal.auto.waiting_first_nt': '等待首拍：新目標從第二天白天視窗起才主動出手；客戶來訊息時會順勢帶方向',
     'inbox.goal.autonomy.auto': '自動推進',
     'inbox.goal.autonomy.auto_hint': '順勢建議之外，若系統開啟了「主動觸達」，AI 還會按日程主動發起推進',
     'inbox.goal.autonomy.auto_ineffective_t': '「自動推進」未生效：{why}。AI 只在對方來訊息時順勢推進；點選切換自治檔',
@@ -8872,6 +9009,36 @@ ZH_HANT = {
     'inbox.goal.beat.planned': '已計劃',
     'inbox.goal.beat.sent': '已發出',
     'inbox.goal.beat.skipped': '已跳過',
+    'inbox.goal.beatk.blocked': '被攔下',
+    'inbox.goal.beatk.injected': '回覆帶方向',
+    'inbox.goal.beatk.preview': '待預覽',
+    'inbox.goal.beatk.sent': '主動發出',
+    'inbox.goal.beats.empty': '還沒有任何動作：沒出過手、也沒被攔過。新目標從第二天起才會主動出手；客戶來訊息時會順勢帶方向',
+    'inbox.goal.beats.jump': '檢視訊息',
+    'inbox.goal.beats.n': '第 {n} 拍',
+    'inbox.goal.beats.other_conv': '發到了另一個會話',
+    'inbox.goal.beatst.blocked': '被攔',
+    'inbox.goal.beatst.cancelled': '已取消',
+    'inbox.goal.beatst.expired': '過期未發',
+    'inbox.goal.beatst.failed': '傳送失敗',
+    'inbox.goal.beatst.injected': '已帶入',
+    'inbox.goal.beatst.preview_pending': '待坐席過目',
+    'inbox.goal.beatst.queued': '排隊中',
+    'inbox.goal.beatst.sent': '已投遞',
+    'inbox.goal.blocked.automation_mode': '會話不是全自動檔',
+    'inbox.goal.blocked.autonomy': '目標不是「自動推進」檔',
+    'inbox.goal.blocked.crisis': '對方情緒/危機窗內，讓路',
+    'inbox.goal.blocked.dedup': '該相位已排過一次',
+    'inbox.goal.blocked.first_send_preview': '首條真發先進草稿預覽',
+    'inbox.goal.blocked.goal_no_product': '目標未綁產品，攔下報價/開戶話術',
+    'inbox.goal.blocked.min_gap': '距我方上一條訊息太近',
+    'inbox.goal.blocked.no_conversation': '目標沒繫結會話',
+    'inbox.goal.blocked.no_inbox': '讀不到收件箱',
+    'inbox.goal.blocked.optout': '對方要求停止主動訊息',
+    'inbox.goal.blocked.pace_cap': '今日主動拍數已達上限',
+    'inbox.goal.blocked.platform': '這個聊天渠道不在自動跟進白名單',
+    'inbox.goal.blocked.silence': '對方剛說過話，交給回覆時順勢帶方向',
+    'inbox.goal.blocked.unknown': '未知原因',
     'inbox.goal.cancel_confirm': '確定放棄這個目標？（不可恢復）',
     'inbox.goal.created_next.auto': '已建立。AI 會把「今日拍」帶進回覆；若系統開啟了主動觸達，還會按日程主動跟進。記得每天 👍/👎 反饋。',
     'inbox.goal.created_next.observe': '已建立（只觀察）：AI 回覆不受影響，這張卡只跟蹤進度。',
@@ -8898,6 +9065,7 @@ ZH_HANT = {
     'inbox.goal.done.dur': '用時 {t}',
     'inbox.goal.done.kind.auto': '訊號自動結算',
     'inbox.goal.done.kind.manual': '坐席拍板成交',
+    'inbox.goal.done.kind.manual_c': '坐席標記達成',
     'inbox.goal.done.kind.order': '官網訂單迴流',
     'inbox.goal.done.next_hint': '完成後 48 小時是跟進黃金窗：發個感謝/追加關懷，趁熱推進',
     'inbox.goal.done.pushed': '✓ 已推送提醒',
@@ -9018,6 +9186,12 @@ ZH_HANT = {
     'inbox.goal.form.rec_silent': 'TA 已約 {d} 天沒說話，建議先喚回',
     'inbox.goal.form.recommended': '推薦',
     'inbox.goal.form.scenario': '想達成什麼？',
+    'inbox.goal.form.slot_custom_add': '+ 自定義標籤',
+    'inbox.goal.form.slot_custom_fail': '新增失敗',
+    'inbox.goal.form.slot_custom_prompt': '要了解的資訊叫什麼？（如：家鄉、寵物；≤24 字）',
+    'inbox.goal.form.slot_custom_saving': '新增中…',
+    'inbox.goal.form.slot_custom_t': '自定義標籤——摸底與客戶畫像同步出現',
+    'inbox.goal.form.slot_sensitive_t': '敏感項：預設不勾；勾了 AI 也只會多輪自然帶出，不直接問、不連問',
     'inbox.goal.form.step1_lead': '先選一個場景，下一步會告訴你 AI 打算怎麼推進',
     'inbox.goal.form.summary': '建立後 AI 按上面的節奏自然推進，你隨時可以暫停或換方向',
     'inbox.goal.form.template': '目標模板',
@@ -9074,6 +9248,7 @@ ZH_HANT = {
     'inbox.goal.origin.auto': 'AI 自建',
     'inbox.goal.origin.auto_t': '系統按人設/生命週期自動建立；可在「⋯」裡換方向',
     'inbox.goal.outcome.confirm': '去標成交',
+    'inbox.goal.outcome.confirm_c': '去標記達成',
     'inbox.goal.outcome.contact': '像是達成了：對方留了聯絡方式（{v}）',
     'inbox.goal.outcome.revive': '到期前曾檢出達成訊號（{v}）——疑似已成，補錄成交？',
     'inbox.goal.outcome.revive_btn': '補錄成交',
@@ -9104,15 +9279,20 @@ ZH_HANT = {
     'inbox.goal.prefs_restored': '已預填上次偏好',
     'inbox.goal.products.title': '推薦產品',
     'inbox.goal.profile.ask.age': '大概哪個年齡段',
+    'inbox.goal.profile.ask.assets': '有沒有房車之類的資產（敏感：只順著話頭帶，不直接問）',
     'inbox.goal.profile.ask.authority': '這類事TA能不能拍板',
     'inbox.goal.profile.ask.budget': '在工具上大概願意花多少',
     'inbox.goal.profile.ask.channel': '客戶主要在哪些平台上',
     'inbox.goal.profile.ask.churn_reason': '當初為什麼沒續',
+    'inbox.goal.profile.ask.family_status': '家裡都有誰、平時跟家人怎麼相處',
+    'inbox.goal.profile.ask.income_level': '收入大概什麼水平（敏感：只順著話頭帶，不直接問）',
     'inbox.goal.profile.ask.interests': '平時喜歡做什麼',
     'inbox.goal.profile.ask.location': '人在哪個城市',
+    'inbox.goal.profile.ask.marital_status': '現在是單身還是有伴',
     'inbox.goal.profile.ask.name': '怎麼稱呼',
     'inbox.goal.profile.ask.need': '生意上最頭疼什麼',
     'inbox.goal.profile.ask.occupation': '做什麼生意/工作',
+    'inbox.goal.profile.ask.residence': '現在住在哪、住得怎麼樣',
     'inbox.goal.profile.ask.team_size': '現在幾個人在做',
     'inbox.goal.profile.ask.timeline': '什麼時候想用起來',
     'inbox.goal.profile.ask_btn': '擬稿去問',
@@ -9128,10 +9308,14 @@ ZH_HANT = {
     'inbox.goal.profile.miss_t': '還沒摸清「{label}」——點選生成追問草稿，或手動補錄',
     'inbox.goal.profile.save': '儲存',
     'inbox.goal.profile.saved': '已儲存',
+    'inbox.goal.profile.sensitive_t': '敏感項：AI 只會順著話頭多輪自然帶出，不直接問、不追問',
     'inbox.goal.profile.src.agent': '手錄',
     'inbox.goal.profile.src.auto': '自動',
     'inbox.goal.profile.title': '客戶畫像',
     'inbox.goal.profile.track.bant': '商機',
+    'inbox.goal.profile.track.custom': '自定義',
+    'inbox.goal.profile.track.extra': '其他已記錄',
+    'inbox.goal.profile.track.personal': '個人情況',
     'inbox.goal.profile.track.relation': '關係',
     'inbox.goal.progress.empty': '還沒有推進記錄：從今天起每天會出一條「今日拍」',
     'inbox.goal.progress.err': '進展載入失敗，點選重試',
@@ -9148,12 +9332,29 @@ ZH_HANT = {
     'inbox.goal.rejected_undo': '已駁回 · 明日自動降檔',
     'inbox.goal.remaining': '剩餘 {t}',
     'inbox.goal.set_btn': '設定目標',
+    'inbox.goal.settle.hide': '收起結算',
+    'inbox.goal.settle.line': '計劃 {planned} 拍 · 實際出手 {sent} 拍 · 順勢帶方向 {injected} 次 · 被攔 {blocked} 次 · 客戶回應 {replies} 條',
+    'inbox.goal.settle.prev': '上一個目標「{title}」已結算：出手 {sent} 拍，{why}',
+    'inbox.goal.settle.reason.blocked': '主要被「{why}」攔住',
+    'inbox.goal.settle.reason.done': '已達成',
+    'inbox.goal.settle.reason.engine': '引擎未生效：{why}',
+    'inbox.goal.settle.reason.never_due': '一次都沒排上：新目標從第二天起才主動出手，且只在白天視窗',
+    'inbox.goal.settle.reason.no_reply': '出手了但客戶沒有回應',
+    'inbox.goal.settle.reason.no_signal': '出手了、客戶也回了，但沒出現達成訊號',
+    'inbox.goal.settle.reason.steered_only': '客戶一直在聊，主動拍被沉默閘讓路，只在回覆裡帶了方向',
+    'inbox.goal.settle.reason.unknown': '未執行原因未知',
+    'inbox.goal.settle.title': '結算',
+    'inbox.goal.settle.view': '已到期 · 檢視結算',
+    'inbox.goal.settle.view_done': '已達成 · 檢視結算',
     'inbox.goal.signal.buying': '客戶像是在問價/要購買方式（{v}）——趁熱開個限時目標？',
     'inbox.goal.signal.dismiss': '先不',
     'inbox.goal.signal.open_btn': '開今天收口',
     'inbox.goal.skip.beat_rejected': '今日拍已被駁回',
     'inbox.goal.skip.disabled': '目標功能未啟用',
     'inbox.goal.skip.empty_block': '今日無可推進內容',
+    'inbox.goal.skip.goal_done': '目標已達成，本輪不再推進',
+    'inbox.goal.skip.goal_expired': '目標剛到期，本輪已按到期結算',
+    'inbox.goal.skip.goal_failed': '目標已判失守，本輪不再推進',
     'inbox.goal.skip.hold': '今日讓路（客戶情緒/節奏）',
     'inbox.goal.skip.inactive': '目標已到期或非活躍',
     'inbox.goal.skip.inject_disabled': '目標註入已關閉',
@@ -9168,12 +9369,16 @@ ZH_HANT = {
     'inbox.goal.slots.stale_t': '這條資訊已超過 90 天未更新，建議聊天裡順口再確認',
     'inbox.goal.slots.title': '摸底進度',
     'inbox.goal.sprint.beats': '已推進 {n} 拍',
+    'inbox.goal.sprint.beats_t': '點開看每一拍：幾點、發到哪、說了什麼、有沒有送達',
+    'inbox.goal.sprint.blocked_today': '今天想出手被攔 {n} 次（{why}）',
     'inbox.goal.sprint.engine_blocked': '自動跟進已開但還不能出手：{why}',
     'inbox.goal.sprint.engine_off': '自動跟進未開啟：僅對方開口才推進',
     'inbox.goal.sprint.engine_wait': '等對方回覆中；到點未回會主動出手',
+    'inbox.goal.sprint.injected': '順勢帶入回覆 {n} 次',
     'inbox.goal.sprint.jump_btn': '暫停當前目標，插入衝刺',
     'inbox.goal.sprint.jump_note': '長線目標暫停讓路，衝刺結束自動恢復',
     'inbox.goal.sprint.next_beat': '下一次跟進 ≈ {t}',
+    'inbox.goal.sprint.no_beat_yet': '還沒有主動出手過',
     'inbox.goal.sprint.nudge_btn': '⚡ 立即推進',
     'inbox.goal.sprint.nudge_ok': '已排入主動拍，約 1-2 分鐘內發出',
     'inbox.goal.stage.contacted': '已聯絡',
@@ -9206,13 +9411,23 @@ ZH_HANT = {
     'inbox.goal.today_rejected': '今日推進已駁回，今天只陪伴（明日自動降檔）',
     'inbox.goal.undo': '撤銷',
     'inbox.goal.wins.active_only': 'AI 推進中 {n} 個目標',
-    'inbox.goal.wins.t': '近 7 天工作目標成果（明細在運營總覽「營銷目標」卡）',
+    'inbox.goal.wins.t': '近 7 天工作目標成果（明細在運營總覽「工作目標」卡）',
     'inbox.goal.wins.week': '本週成交 {done} · AI 推進中 {n}',
+    'inbox.goal.won_checklist_t': '已瞭解到的資訊（缺的可先補錄再確認）',
     'inbox.goal.won_confirm': '確定標記為已成交？目標將結束並計入成功。',
     'inbox.goal.won_meta_amount': '金額（可選）',
     'inbox.goal.won_meta_confirm': '確認成交',
+    'inbox.goal.won_meta_confirm_c': '確認達成',
+    'inbox.goal.won_meta_note': '備註（可選）',
+    'inbox.goal.won_meta_outcome': '達成結果（可選）',
     'inbox.goal.won_meta_product': '產品（可選）',
     'inbox.goal.won_meta_title': '標記成交',
+    'inbox.goal.won_meta_title_c': '標記達成',
+    'inbox.goal.won_outcome.meet': '見面',
+    'inbox.goal.won_outcome.none': '— 不填 —',
+    'inbox.goal.won_outcome.other': '其他',
+    'inbox.goal.won_outcome.paid': '轉付費陪伴',
+    'inbox.goal.won_outcome.warm': '關係升溫',
     'inbox.group.fallback_name': '群組',
     'inbox.group.mentioned': '👥 群「{name}」@了你，去看看',
     'inbox.grp.at': '@我',
@@ -9641,8 +9856,11 @@ ZH_HANT = {
     'inbox.plat.none': '未接入賬號',
     'inbox.plat.offline': '平台已斷開',
     'inbox.plat.online': '平台已連線',
+    'inbox.plat.qq_desc': 'QQ 個人號（協議登入）· 用你自己的 QQ 號 · 文字/圖片/語音/影片 · 需自裝協議端（NapCat / LLOneBot / Lagrange）',
+    'inbox.plat.qqbot_desc': 'QQ 開放平台官方機器人 · 單聊 / 群 @ 被動回覆（60 分鐘內 4 條）· 填 AppID/AppSecret 即用（無掃碼）',
     'inbox.plat.telegram_desc': 'MTProto 直連 · 收發文字/圖片/語音 · 實時翻譯',
     'inbox.plat.web_desc': '網站訪客渠道 · 實時會話 · 引流轉化',
+    'inbox.plat.wechat_kf_desc': '微信客服（企業微信官方通道）· 微信使用者掃碼即聊，不用加好友 · 每輪 48 小時內最多回 5 條 · 填企微 CorpID/Secret 即用（無掃碼）',
     'inbox.plat.whatsapp_desc': 'Web 掃碼接入 · 支援多賬號 · 媒體收發',
     'inbox.plat.zalo_desc': 'Zalo OA 官方 API 接入 · 客服訊息（7 天互動窗）· 填憑證即用（無掃碼）',
     'inbox.plat_pause.capped': '自動化檔位已被平台上限限制',
@@ -9650,6 +9868,8 @@ ZH_HANT = {
     'inbox.plat_pause.multi': 'AI 出多選草稿，人工挑選傳送',
     'inbox.plat_pause.review': 'AI 只擬稿，人工稽核後傳送',
     'inbox.plat_pause.skipped': '自動草稿已停用，僅人工回覆',
+    'inbox.policy.len_hint': '已 {n} 字，超過 {plat} 單條上限 {max} 字，傳送會被攔，請拆短',
+    'inbox.policy.link_hint': '{plat} 私信不允許帶外部連結，傳送會被攔——請刪掉連結（抖音可改發留資卡 / 問題引導卡）',
     'inbox.profile.tag.churn_risk': '流失風險',
     'inbox.profile.tag.handoff': '引流中',
     'inbox.profile.tag.has_lead_info': '已留資',
@@ -9773,6 +9993,14 @@ ZH_HANT = {
     'inbox.rt.xl_status_t': '點選設定對話翻譯',
     'inbox.rt.xlate': '翻譯 ▾',
     'inbox.rt.xlate_t': '雙向翻譯 / 圖片翻譯 / 語音翻譯',
+    'inbox.rw.dur_d': '{d} 天 {h} 小時',
+    'inbox.rw.dur_h': '{h} 小時 {m} 分',
+    'inbox.rw.dur_lt1m': '不到 1 分鐘',
+    'inbox.rw.dur_m': '{m} 分鐘',
+    'inbox.rw.expired': '{plat} 回覆窗已關閉（距對方最後一條已超 {h} 小時），等客戶再發言後重新開啟',
+    'inbox.rw.no_inbound': '{plat} 只允許回覆先發訊息的客戶，對方還沒開口，暫時發不了',
+    'inbox.rw.open': '{plat} 回覆窗剩餘 {left} · 本輪還可發 {remaining}/{cap} 條',
+    'inbox.rw.reserve': '自動回覆會給你留 {n} 條',
     'inbox.save': '儲存',
     'inbox.scope.ai_skip_note': 'AI 不處理群 / 頻道訊息（只收不回），這裡的未讀不計入賬號角標',
     'inbox.scope.ai_skip_note_t': '自動擬稿已設定為跳過群聊（inbox.auto_draft.skip_group_chats）。群訊息不是 1:1 客服場景，未讀會自然堆積；需要 AI 處理某個群時，改該項配置。',
@@ -10529,6 +10757,18 @@ ZH_HANT = {
     'kb2_src_vendor_badge': '廠商預置',
     # ── kb2_src_vendor_tip ──
     'kb2_src_vendor_tip': '隨安裝包預置的廠商自家產品說明，不是你的知識；桌面模式下對客回覆不會用到',
+    # ── kb2_syspay_lead ──
+    'kb2_syspay_lead': '知識庫裡還有',
+    # ── kb2_syspay_lead2 ──
+    'kb2_syspay_lead2': '條系統預置的支付話術（GXP 查單 / 回撥 / 匯率選單等）——這是支付外掛用的，陪伴 / 銷售運營用不上，也不是你的知識。',
+    # ── kb2_syspay_none ──
+    'kb2_syspay_none': '沒有系統預置的支付話術',
+    # ── kb2_syspay_purge ──
+    'kb2_syspay_purge': '一鍵清除',
+    # ── kb2_syspay_purge_confirm ──
+    'kb2_syspay_purge_confirm': '確定清除這 {n} 條系統預置支付話術？只刪支付系列（GXP / 訂單 / 費率 / 通道 / 狀態兜底），你自建 / 匯入的知識與其他系統話術不受影響；清除後不會再自動灌回。',
+    # ── kb2_syspay_purged ──
+    'kb2_syspay_purged': '已清除 {n} 條系統預置支付話術',
     # ── kb2_vendor_excluded ──
     'kb2_vendor_excluded': '對客回覆已排除它們。',
     # ── kb2_vendor_later ──
@@ -17654,7 +17894,7 @@ ZH_HANT = {
     # ── ov2_s_gm ──
     'ov2_s_gm': '群成員提取（多號限速拉「發言非管理員」入庫 → 每日控量）',
     # ── ov2_s_goal ──
-    'ov2_s_goal': '營銷目標（坐席端叫工作目標 · 建→拍→注入→終態）',
+    'ov2_s_goal': '工作目標（建→拍→注入→終態）',
     # ── ov2_s_gpuwm ──
     'ov2_s_gpuwm': 'LAN GPU 視訊記憶體水位（Ollama 模型佔用）',
     # ── ov2_s_imgen ──
@@ -19327,12 +19567,20 @@ ZH_HANT = {
     'pma_ai_fail': '補標請求失敗：',
     # ── pma_ai_need_restart ──
     'pma_ai_need_restart': '後端尚未裝載 AI 打標（隨下次重啟生效）',
+    # ── pma_ai_novision ──
+    'pma_ai_novision': '識圖服務暫不可用（{why}），本次沒有排入識別；服務恢復後再點一次「AI 補標」。',
     # ── pma_ai_queued ──
     'pma_ai_queued': '已排隊 {n} 條，後台識別中…（縮圖/指紋一併補齊）',
     # ── pma_ai_queued_zero ──
     'pma_ai_queued_zero': '沒有需要補的條目',
     # ── pma_ai_running ──
     'pma_ai_running': 'AI 識別中…（後台進行，可先做別的）',
+    # ── pma_ai_why_init_failed ──
+    'pma_ai_why_init_failed': '識圖客戶端啟動失敗',
+    # ── pma_ai_why_no_endpoint ──
+    'pma_ai_why_no_endpoint': '未配置可用的識圖端點',
+    # ── pma_ai_why_unreachable ──
+    'pma_ai_why_unreachable': '剛剛連線失敗',
     # ── pma_bond_label ──
     'pma_bond_label': '關係門檻',
     # ── pma_bulk_adopt ──
@@ -19441,6 +19689,30 @@ ZH_HANT = {
     'pma_gate_season': '季節',
     # ── pma_gate_tod ──
     'pma_gate_tod': '時段',
+    # ── pma_guide_face_btn ──
+    'pma_guide_face_btn': '設定錨臉基準照',
+    # ── pma_guide_face_missing ──
+    'pma_guide_face_missing': '錨臉基準照尚未設定——設好後 AI 識別會順帶核對每張是否本人，AI 出圖也更像本人。',
+    # ── pma_guide_failed_n ──
+    'pma_guide_failed_n': '{n} 張識別失敗{why}，可以重試：',
+    # ── pma_guide_failed_why_parse ──
+    'pma_guide_failed_why_parse': '（識圖結果無法解析）',
+    # ── pma_guide_failed_why_vlm ──
+    'pma_guide_failed_why_vlm': '（識圖服務不可達）',
+    # ── pma_guide_notrg_btn ──
+    'pma_guide_notrg_btn': '只看缺觸發詞',
+    # ── pma_guide_notrg_n ──
+    'pma_guide_notrg_n': '{n} 張缺觸發詞：看卡片上的 ✨ 建議詞，點一下即採納；不填的照片只會在泛化要圖時隨機發。',
+    # ── pma_guide_progress ──
+    'pma_guide_progress': 'AI 識別中 {done}/{total}（還剩 {pending} 張）——識別完的卡片會出現 ✨ 建議觸發詞，點一下即採納',
+    # ── pma_guide_retry_btn ──
+    'pma_guide_retry_btn': '🔁 重試識別',
+    # ── pma_guide_untagged_n ──
+    'pma_guide_untagged_n': '{n} 張還沒有 AI 識別——識別後會給出觸發詞建議：',
+    # ── pma_guide_vision_down ──
+    'pma_guide_vision_down': '識圖服務暫不可用（{why}），{n} 張照片沒有自動識別。',
+    # ── pma_guide_vision_retry ──
+    'pma_guide_vision_retry': '服務恢復後點「AI 補標」即可補識別：',
     # ── pma_hits ──
     'pma_hits': '命中',
     # ── pma_load_fail ──
@@ -19537,6 +19809,14 @@ ZH_HANT = {
     'pma_unsaved_dropped': '相簿有 {n} 處改動未儲存，已隨切換人設作廢',
     # ── pma_unsaved_n ──
     'pma_unsaved_n': '{n} 張卡片有改動未儲存',
+    # ── pma_up_ai_running_toast ──
+    'pma_up_ai_running_toast': '已上傳，AI 正在識別 {n} 張並生成觸發詞建議（進度見相簿上方）',
+    # ── pma_up_done_ai ──
+    'pma_up_done_ai': '已上傳 {ok} 張，AI 識別已排隊 {n} 張（進度見下方）',
+    # ── pma_up_done_novision ──
+    'pma_up_done_novision': '已上傳 {ok} 張；識圖服務暫不可用（{why}），沒有自動識別——服務恢復後點「AI 補標」',
+    # ── pma_up_first_face_toast ──
+    'pma_up_first_face_toast': '第一批照片已上傳。建議先設定「錨臉基準照」，AI 識別會據此核對每張是否本人。',
     # ── pma_upload_fail ──
     'pma_upload_fail': '失敗',
     # ── pma_upload_label ──
@@ -21246,16 +21526,30 @@ ZH_HANT = {
     'psn_restore_confirm_q': '確認恢復？新增 {add} 個、覆蓋 {over} 個已有人設。',
     # ── psn_restore_done ──
     'psn_restore_done': '已恢復：新增 {add} · 覆蓋 {over}',
+    # ── psn_restore_fail_apply ──
+    'psn_restore_fail_apply': '恢復未完成：{msg}。已有人設未受影響、備份檔案沒有被改動，可再點一次「確認恢復」。',
+    # ── psn_restore_fail_preview ──
+    'psn_restore_fail_preview': '核對備份失敗：{msg}。備份檔案沒有被改動，可重新選擇檔案再試。',
     # ── psn_restore_from ──
     'psn_restore_from': '從備份恢復…',
+    # ── psn_restore_internal_err ──
+    'psn_restore_internal_err': '頁面內部錯誤（{msg}），已記錄日誌——這不是備份檔案的問題，請把這句話發給技術',
     # ── psn_restore_invalid ──
     'psn_restore_invalid': '{n} 條無法識別（缺 id 或不是人設物件），會跳過。',
+    # ── psn_restore_name_clash ──
+    'psn_restore_name_clash': '{n} 個與現有人設同名但 ID 不同——恢復後會並存兩份（備份裡的 + 你手工重建的），需要的話恢復完再刪掉多餘的那個：',
     # ── psn_restore_note ──
     'psn_restore_note': '只新增/覆蓋備份裡出現的人設，其餘不動；覆蓋前的版本可在編輯器「撤銷」裡找回。',
     # ── psn_restore_over_h ──
     'psn_restore_over_h': '將覆蓋 {n} 個已有人設（同 ID）——它們當前的內容會被備份裡的版本替換：',
     # ── psn_restore_previewing ──
     'psn_restore_previewing': '正在核對備份內容…',
+    # ── psn_restore_receipt ──
+    'psn_restore_receipt': '已恢復 {n} 個人設：新增 {add} · 覆蓋 {over}',
+    # ── psn_restore_receipt_album ──
+    'psn_restore_receipt_album': '，含相簿引用 {m} 條',
+    # ── psn_restore_receipt_skipped ──
+    'psn_restore_receipt_skipped': '，跳過 {k} 條無法識別的條目',
     # ── psn_restore_summary ──
     'psn_restore_summary': '{file}：新增 {add} · 覆蓋 {over}',
     # ── psn_restore_warnings ──
@@ -21622,8 +21916,12 @@ ZH_HANT = {
     'psn_usage_total_suf': '條回覆）',
     # ── psn_use_default ──
     'psn_use_default': '（使用預設人設）',
+    # ── psn_vc_audition_of ──
+    'psn_vc_audition_of': '試聽：{file}',
     # ── psn_vc_bound ──
-    'psn_vc_bound': '已登記錄音：{voice}',
+    'psn_vc_bound': '已登記 {voice}',
+    # ── psn_vc_enrolled_ok ──
+    'psn_vc_enrolled_ok': '已登記 {file}，本人設的語音將用這把聲音。登記已寫入人設並生效，無需再點底部「儲存」（表單裡其它改動仍需儲存）。',
     # ── psn_vc_enrolled_synced ──
     'psn_vc_enrolled_synced': '克隆音色已登記並掛載到本人設：{backend}',
     # ── psn_vc_h ──
@@ -21632,6 +21930,8 @@ ZH_HANT = {
     'psn_vc_none': '尚未上傳錄音——在下方登記即可',
     # ── psn_vc_not_ready ──
     'psn_vc_not_ready': '登記未就緒（缺參考錄音或未授權），請重新上傳登記',
+    # ── psn_vc_persist_note ──
+    'psn_vc_persist_note': '登記成功即寫入人設並立即生效，不需要再點底部「儲存」。',
     # ── psn_vc_preserved ──
     'psn_vc_preserved': '已保留本人設的克隆音色登記（表單裡的空語音設定不會覆蓋它）',
     # ── psn_vc_purge_q ──
@@ -21640,6 +21940,8 @@ ZH_HANT = {
     'psn_vc_req_fail': '請求失敗，請稍後重試',
     # ── psn_vc_sub ──
     'psn_vc_sub': '上傳參考音訊完成登記，音色跟隨本人設生效；「生成語音 / 傳送」在收件箱右欄業務助手。',
+    # ── psn_vc_toast_close ──
+    'psn_vc_toast_close': '關閉',
     # ── psn_vc_unbind_btn ──
     'psn_vc_unbind_btn': '解綁克隆音色',
     # ── psn_vc_unbind_ok ──
@@ -21746,6 +22048,14 @@ ZH_HANT = {
     'psn_vp_dialect_yue': '粵語（人設全程粵語）',
     # ── psn_vp_dialect_yue_hint ──
     'psn_vp_dialect_yue_hint': '粵語人設：文字回覆全程粵語書寫（我哋/嘅/係）；出站語音走本機 CosyVoice3 克隆（人設參考音 + 粵語發音），7852 掛了才回落 Edge 粵語聲。面向粵語客戶的人設才選它。沒有獨立語言模型的方言（閩南語等）不會出現在此列表。',
+    # ── psn_vq_aud_garbled ──
+    'psn_vq_aud_garbled': '最近試聽 {time}：❌ 唸錯（轉寫與文字對不上，克隆聲可能念不了這門語言）',
+    # ── psn_vq_aud_ok ──
+    'psn_vq_aud_ok': '最近試聽 {time}：✅ 已核有聲（{basis}）',
+    # ── psn_vq_aud_silent ──
+    'psn_vq_aud_silent': '最近試聽 {time}：❌ 無聲（服務端確認產物無能量）——請檢查參考錄音或重新登記',
+    # ── psn_vq_aud_unverified ──
+    'psn_vq_aud_unverified': '最近試聽 {time}：ℹ 未能核驗（服務端無轉寫/能量證據），請人工聽一遍',
     # ── psn_vq_line ──
     'psn_vq_line': '聲紋 {score} · 自然度 {naturalness} · {date}',
     # ── psn_vq_low_t ──
@@ -21754,6 +22064,8 @@ ZH_HANT = {
     'psn_vq_none': '暫無體檢資料',
     # ── psn_vq_title ──
     'psn_vq_title': '音色體檢',
+    # ── psn_wiz_album_trg ──
+    'psn_wiz_album_trg': '相簿有 {n} 張缺觸發詞（去相簿 tab 點「AI 補標」或採納建議詞）',
     # ── psn_wiz_back ──
     'psn_wiz_back': '上一步',
     # ── psn_wiz_blank ──

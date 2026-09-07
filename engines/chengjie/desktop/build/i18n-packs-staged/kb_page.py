@@ -40,6 +40,13 @@ ZH = {
     "kb2_vendor_purge_confirm": "确定删除全部 {n} 条厂商预置条目？只删 source=厂商预置 的条目，你自建/导入的知识不受影响。",
     "kb2_vendor_purged": "已清空 {n} 条厂商预置条目",
     "kb2_vendor_purge_fail": "清空失败，请稍后重试",
+    # 系统预置支付话术（N-3 #240 / D-N2，2026-09-08）
+    "kb2_syspay_lead": "知识库里还有",
+    "kb2_syspay_lead2": "条系统预置的支付话术（GXP 查单 / 回调 / 汇率菜单等）——这是支付插件用的，陪伴 / 销售运营用不上，也不是你的知识。",
+    "kb2_syspay_purge": "一键清除",
+    "kb2_syspay_none": "没有系统预置的支付话术",
+    "kb2_syspay_purge_confirm": "确定清除这 {n} 条系统预置支付话术？只删支付系列（GXP / 订单 / 费率 / 通道 / 状态兜底），你自建 / 导入的知识与其他系统话术不受影响；清除后不会再自动灌回。",
+    "kb2_syspay_purged": "已清除 {n} 条系统预置支付话术",
 }
 
 EN = {
@@ -75,4 +82,11 @@ EN = {
     "kb2_vendor_purge_confirm": "Delete all {n} vendor preset entries? Only source=vendor entries are removed; your own / imported knowledge is untouched.",
     "kb2_vendor_purged": "Cleared {n} vendor preset entries",
     "kb2_vendor_purge_fail": "Clear failed, please retry later",
+    # System preset payment scripts (N-3 #240 / D-N2, 2026-09-08)
+    "kb2_syspay_lead": "The knowledge base still holds",
+    "kb2_syspay_lead2": "system-preset payment scripts (GXP order lookup / callbacks / rate menu…) — they belong to the payment plugin; companion / sales operators never use them, and they are not your knowledge.",
+    "kb2_syspay_purge": "Clear them",
+    "kb2_syspay_none": "No system-preset payment scripts",
+    "kb2_syspay_purge_confirm": "Clear these {n} system-preset payment scripts? Only the payment series (GXP / order / rate / channel / status fallbacks) is removed; your own / imported knowledge and other system scripts stay, and they will not be re-seeded.",
+    "kb2_syspay_purged": "Cleared {n} system-preset payment scripts",
 }

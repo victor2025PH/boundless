@@ -268,6 +268,15 @@ ZH = {
     "dv_devmode_sub": "用户版（client）会隐藏研发页（帮助 / 回复策略 / 歌房 / 声音评测 / 实时日志 / 开发者工具 / 报障工单）和代理商面（白标 / 演示数据 / 授权）。打开后这些项带「研发 / 代理商」角标回到侧栏与页面；只对当前登录会话生效，退出登录自动关闭。",
     "dv_devmode_cb": "在本机显示被用户版隐藏的项",
     "dv_devmode_na": "当前不是用户版形态，所有项本就可见，无需开启。",
+    # ── 业务域（N-3 #241 / D-N1 2026-09-08）──
+    "dv_bd_title": "业务域（这台机器做什么生意）",
+    "dv_bd_sub": "陪伴：工作目标不出现「转化成交」类目，客户摸底 / 画像用陪伴标签集（称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产），知识库不预置支付话术。销售：保留商机标签（痛点 / 平台 / 团队 / 预算 / 决策 / 上线）与成交字段。改动写 config.local.yaml；模板 / 标签 / 画像即时生效，Domain hook 与知识库分类重启后跟随。",
+    "dv_bd_loading": "读取中…",
+    "dv_bd_src_explicit": "配置里显式设定",
+    "dv_bd_src_inferred": "按部署形态推导（桌面客户机 = 陪伴）",
+    "dv_bd_restart_needed": "后端需重启后可用",
+    "dv_bd_saved_restart": "✓ 已保存；模板 / 标签 / 画像已生效，Domain hook 与知识库分类重启后跟随",
+    "err.uiv.bad_business_domain": "业务域只能是 companion（陪伴）或 sales（销售）：{name}",
     # ── Session 密钥状态（L-6 D 2026-09-06：桌面首启自动生成随机 secret_key）──
     "dv_secret_set": "已自动生成，留空保留",
     "dv_secret_default": "仍是出厂默认值（桌面版首启会自动生成）",
@@ -540,6 +549,15 @@ EN = {
     "dv_devmode_sub": "The client edition hides developer pages (Help / Reply strategies / Singing room / Voice eval / Live logs / Developer tools / Bug tickets) and partner surfaces (white-label / demo data / license). Turning this on brings them back with a \"Dev / Partner\" tag in the sidebar and on pages; it applies to this login session only and switches off automatically at logout.",
     "dv_devmode_cb": "Show client-hidden items on this machine",
     "dv_devmode_na": "This is not the client edition — everything is already visible, nothing to enable.",
+    # ── Business domain (N-3 #241 / D-N1 2026-09-08) ──
+    "dv_bd_title": "Business domain (what this machine is for)",
+    "dv_bd_sub": "Companion: work goals hide the \"Conversion\" group, customer discovery / profile use the companion tag set (name / location / occupation / age / interests + family / marital / income / residence / assets), and the knowledge base ships no payment scripts. Sales: keeps the opportunity tags (pain point / channels / team / budget / authority / timeline) and the deal fields. Written to config.local.yaml; templates / tags / profile apply immediately, the domain hook and KB categories follow after a restart.",
+    "dv_bd_loading": "Loading…",
+    "dv_bd_src_explicit": "set explicitly in config",
+    "dv_bd_src_inferred": "inferred from deployment form (desktop client = companion)",
+    "dv_bd_restart_needed": "Backend restart required",
+    "dv_bd_saved_restart": "✓ Saved; templates / tags / profile applied, domain hook and KB categories follow after restart",
+    "err.uiv.bad_business_domain": "Business domain must be companion or sales: {name}",
     # ── Session secret state (L-6 D 2026-09-06: desktop first boot auto-generates a random secret_key) ──
     "dv_secret_set": "Auto-generated; leave empty to keep",
     "dv_secret_default": "Still the factory default (desktop edition generates one on first boot)",

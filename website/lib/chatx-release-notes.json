@@ -1,5 +1,39 @@
 [
   {
+    "version": "1.0.77",
+    "date": "2026-09-08",
+    "title": {
+      "zh": "1.0.76 首日复验六件事收口：立即发真投递、备份恢复、相册识别、语音结论、业务域单一来源、目标可追溯",
+      "en": "Fixes from the 1.0.76 day-one re-test: real send-now, backup restore, album AI tagging, single voice verdict, one business-domain setting, traceable goals"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "主动关怀「立即发」点了就发：按钮变「发送中…」、发完卡片写「已发出 几点」，没发出去会写明原因（通道没连 / 急停 / 平台拒收）并留在卡上可再点，再点不会重复发；到点自动那条准点出手（人工指定时间零错峰，卡片写预计出手时刻）；后台发送队列随启动常备、每一拍与每一条出队都落日志，引擎室「发送通道」灯在「开关开着但没在出货」时变红。",
+        "人设备份恢复修好：「从备份恢复…」不再报「_esc is not defined」；恢复前预览「新增 N · 覆盖 N」并列出名字，同名不同 ID 会提示将并存；恢复后回执「已恢复 N 个人设：新增 A · 覆盖 B，含相册引用 M 条」；任何一步失败给人话原因且备份文件不动，日志落 renderer.log。",
+        "相册上传默认 AI 识别：上传即排队识图、进度条「AI 识别中 x/N」，识别完给出触发词建议一键采纳；识图服务不可用时引导条明说原因，不再「0/N」却什么都不说；相册 tab 顶部提示「N 张还没有 AI 识别」与「锚脸基准照尚未设置」，完整度把未打标计入。",
+        "克隆音色登记有反馈：登记成功后 toast 停留 9 秒可关、写明「已登记 xxx.ogg，已写入人设并生效」，语音行常驻「已登记 · ▶ 试听 · 解绑」，试听音频条留在卡上可反复播放；登记本身不再触发「有未保存的修改」。",
+        "业务域单一来源：机器做什么生意（陪伴 / 销售）成为唯一真值，Domain hook / 知识库分类 / 目标模板 / 摸底标签 / 客户画像 / 话术种子全部跟随；陪伴机的客户摸底标签换成 称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭 / 婚恋 / 收入 / 居住 / 资产（收入 / 资产默认不勾、勾了 AI 也只顺着话头带出不直接问），可加自定义标签；客户画像不再出现商机区（之前填过的值在「其他已记录」）；「标成交」改「标记达成」（达成结果 + 备注）；界面与日志里的「营销目标」统一为「工作目标」。",
+        "知识库不再预置支付话术：陪伴机首装不导入 GXP 查单 / 回调 / 汇率 / 费率通道等系统话术；已有的在知识库页顶部横幅一键清除且不会回灌；陪伴域分类不再含命理 / 产品价值 / 转化话术 / 异议处理。",
+        "语音面板只给一个结论：结果区只有一条——可发送 / 无声或念错（附原因 + 重新生成）/ 已过期 / 配置需修正，修复「已核有声」与「疑似无声」同屏、以及同语种不译时生成后误报「试听已过期」；配置有问题的人设点生成直接指路语音页修正；TTS 日志统一 [tts] 前缀便于取证。",
+        "工作目标每一拍可追溯：卡片「已推进 N 拍」点开可见每一拍的时刻 / 发到哪个会话 / 发了什么 / 有没有送达；没出手会写明被什么拦住（对方刚说过话 / 会话不是全自动 / 今日上限…）；新目标 24 小时内显示「等待首拍（预计几点）」而不是「自动推进中」，超 24 小时零出手红字提醒；到期那一刻工作台收到结算通知（计划几拍 / 实际几拍 / 为什么没执行），卡片留 7 天；修复目标引擎日志在生产里被静默丢弃的底层问题。"
+      ],
+      "en": [
+        "Proactive care \"Send now\" really sends: the button turns to \"Sending…\", the card then shows \"Sent at hh:mm\"; if it could not go out the card states why (channel not connected / emergency stop / platform rejected) and stays clickable without duplicating; the scheduled one fires on time (no jitter on operator-set times, the card shows the expected moment); the outbound queue starts with the backend, every tick and every dequeue is logged, and the engine-room \"send channel\" light turns red when the switch is on but nothing ships.",
+        "Persona backup restore fixed: \"Restore from backup…\" no longer fails with \"_esc is not defined\"; a preview lists \"N new · N overwritten\" by name and warns when a same-name persona has a different ID; the receipt reads \"Restored N personas: A new · B overwritten, M album references\"; any failure gives a plain-language reason, leaves the backup file untouched and is logged to renderer.log.",
+        "Album uploads are AI-tagged by default: uploads queue for recognition with a progress bar \"Recognizing x/N\", suggested trigger words can be adopted in one click; when the vision service is unreachable the guide bar says so instead of a silent \"0/N\"; the album tab flags \"N photos not yet recognized\" and \"anchor face photo not set\", and completeness counts untagged photos.",
+        "Clone-voice enrollment gives feedback: a 9-second dismissible toast says \"Enrolled xxx.ogg — saved to the persona and active\", the voice row shows \"Enrolled · ▶ Preview · Unbind\" permanently, the preview player stays on the card, and enrolling no longer triggers \"unsaved changes\".",
+        "Single source of business domain: what the machine is for (companionship / sales) is now one setting that the domain hook, knowledge-base categories, goal templates, discovery slots, customer profile and reply seeds all follow; companion machines get discovery slots Name / Location / Job / Age / Interests + Family / Relationship / Income / Residence / Assets (income and assets unchecked by default and only surfaced naturally, never asked outright), plus custom slots; the profile no longer shows a sales-opportunity block (earlier values live under \"Other recorded\"); \"Mark as won\" becomes \"Mark as achieved\" (outcome + note); \"marketing goals\" is renamed \"work goals\" everywhere.",
+        "No more preseeded payment scripts: companion installs do not import GXP order-lookup / callback / rate scripts; existing ones can be removed in one click from a banner on the knowledge-base page and never come back; companion categories drop fortune-telling / product value / conversion scripts / objection handling.",
+        "Voice panel gives one verdict: the result area shows exactly one line — sendable / silent or misread (with reason + regenerate) / expired / configuration needs fixing — fixing \"verified voiced\" and \"suspected silent\" appearing together and the false \"preview expired\" after generating in the same language; a persona with a broken voice setup is pointed straight to its voice page; TTS logs share the [tts] prefix for forensics.",
+        "Every goal beat is traceable: \"Advanced N beats\" opens to show when each beat happened, to which conversation, what was sent and whether it was delivered; when nothing went out the card says what blocked it (customer just spoke / conversation not on full auto / daily cap…); a new goal shows \"Waiting for first beat (about hh:mm)\" for its first 24 hours instead of \"Auto-advancing\", and turns red after 24 hours with zero sends; at expiry the workbench receives a settlement (planned beats / actual beats / why) kept on the card for 7 days; fixes the underlying issue of goal-engine logs being silently dropped in production."
+      ]
+    }
+  },
+  {
     "version": "1.0.76",
     "date": "2026-09-07",
     "title": {

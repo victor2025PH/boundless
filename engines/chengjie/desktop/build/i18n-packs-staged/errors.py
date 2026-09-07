@@ -85,6 +85,14 @@ ZH = {
     "err.inbox.send_blocked_license": "授权已到期或受限，出站发送被禁用，请联系管理员续期。",
     "err.inbox.send_blocked_session": "该平台会话已掉线，消息无法送达，请在账号管理里重新登录。",
     "err.inbox.send_blocked_generic": "发送被安全护栏拦截（{reason}），消息未送出。",
+    # 实施96 P0-3：渠道出站策略（平台侧会拒收的硬规则）——分三条出人话，别混进「安全护栏」
+    "err.inbox.send_blocked_policy": "该平台不接收这条消息（{reason}），请按平台规则调整后再发。",
+    "err.inbox.send_blocked_policy_link": "该平台私信不允许带外部链接，请删掉链接（抖音可改发留资卡/问题引导卡）。",
+    "err.inbox.send_blocked_policy_len": "超过该平台单条字数上限（{reason}），请拆短或删减后再发。",
+    "err.inbox.send_blocked_policy_media": "该平台私信不支持这种媒体类型（{reason}），请改发图片或文字。",
+    "err.inbox.send_blocked_policy_window_no_inbound": "该平台只允许回复先发消息的客户，对方还没开口，暂时发不了（等客户进线后再回）。",
+    "err.inbox.send_blocked_policy_window_expired": "距对方最后一条消息已超过该平台的回复时间窗，这条发不出去；等客户再发言后窗口会重新打开。",
+    "err.inbox.send_blocked_policy_window_quota": "本轮可发条数已用完（{reason}），等客户再发一条后配额才会重置；自动回复会给你留最后一条人工用。",
     "err.inbox.send_not_delivered": "消息未送达：{msg}",
     # M-2 A2（#232）：通道未连接（边车没有该账号会话 / 已登出 / 放弃重连）——自动与手动同一闸
     "err.inbox.channel_disconnected": "该账号 {platform} 会话未建立，消息不会发出——请先重新登录该账号",
@@ -238,6 +246,13 @@ EN = {
     "err.inbox.send_blocked_license": "License expired or restricted; outbound sending is disabled. Contact an admin to renew.",
     "err.inbox.send_blocked_session": "The platform session is offline; the message cannot be delivered. Re-login from account management.",
     "err.inbox.send_blocked_generic": "Blocked by a safety guard ({reason}); the message was not sent.",
+    "err.inbox.send_blocked_policy": "This platform does not accept this message ({reason}); adjust it to the platform rules and resend.",
+    "err.inbox.send_blocked_policy_link": "This platform's DMs do not allow external links; remove the link (on Douyin, send a lead card / question card instead).",
+    "err.inbox.send_blocked_policy_len": "Over this platform's per-message length limit ({reason}); shorten or split before resending.",
+    "err.inbox.send_blocked_policy_media": "This platform's DMs do not support this media type ({reason}); send an image or text instead.",
+    "err.inbox.send_blocked_policy_window_no_inbound": "This platform only lets you reply to customers who message first; they haven't yet, so this can't be sent (reply once they reach out).",
+    "err.inbox.send_blocked_policy_window_expired": "The platform's reply window since the customer's last message has closed; this can't be delivered until they write again.",
+    "err.inbox.send_blocked_policy_window_quota": "This turn's message allowance is used up ({reason}); it resets when the customer sends another message. Auto-replies leave the last slot for a human.",
     "err.inbox.send_not_delivered": "Message not delivered: {msg}",
     # M-2 A2 (#232): channel not connected (sidecar has no session / logged out / gave up) — same gate for auto and manual
     "err.inbox.channel_disconnected": "This account's {platform} session is not established; the message will not be sent — re-login the account first",
