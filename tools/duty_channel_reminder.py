@@ -259,6 +259,18 @@ def _receipt_item(code: str, topic: str, res: Optional[dict]) -> str:
         return f"{code}（{topic}）"
 
 
+def _order_pending(codes: List[str]) -> List[str]:
+    """同一轮多份新报告按报告时间头升序处理（N-5 D：「关联 X」的报告不能排在 X 之前）。"""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import duty_auto_ticket as dat  # noqa: E402
+        return dat.order_by_report_time(list(codes))
+    except Exception:
+        return list(codes)
+
+
 def _report_head(code: str) -> Optional[Tuple[str, str, str]]:
     """(kind, fp4, note) —— 非 report 类返回 kind 供跳过；目录不存在返回 None。"""
     d = DIAG / code
@@ -281,11 +293,11 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
         codes: List[str] = list(watch.get("codes") or [])
         receipted = set(st.get("receipted") or [])
         if not st.get("receipt_inited"):
-            st["receipted"] = sorted(set(codes))[-400:]
+            st["receipted"] = list(dict.fromkeys(codes))
             st["receipt_inited"] = True
             log(f"receipt 水位初始化 = {len(codes)} 个已下载码（不回放历史）")
             return
-        pending = [c for c in codes if c not in receipted]
+        pending = _order_pending([c for c in codes if c not in receipted])
         if not pending:
             return
         by_owner: Dict[str, List[str]] = {}
@@ -320,7 +332,9 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
             else:
                 log(f"receipt for {owner_codes.get(owner)} not sent — 下一轮重试")
         if not dry_run:
-            st["receipted"] = sorted(receipted)[-400:]
+            # 只记还在 watch 水位里的码（不在水位里的永远不会再成为 pending）；此前
+            # sorted(...)[-400:] 按字母序截，超 400 后早字母的旧码会被挤出 → 重复回执 + 重复立单
+            st["receipted"] = [c for c in codes if c in receipted]
     except Exception as exc:  # noqa: BLE001
         log(f"check_new_reports failed: {type(exc).__name__}: {exc}")
 

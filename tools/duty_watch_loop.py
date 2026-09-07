@@ -116,7 +116,11 @@ def probe_packs(st: dict) -> None:
             log(f"vps probe failed ({why or 'empty'} | retry: {why2 or 'empty'})")
             return
         log(f"vps probe recovered on retry (first: {why or 'empty'})")
-    seen = set(st["codes"])
+    # 水位按「首见顺序」保留、只截最旧的：此前是 sorted 后取尾 200——按字母序截，码总数
+    # 一过 200，以数字开头的新码（3HNCJ7 / 47KNBV，0908 04:51）排在最前被截掉，每 2 分钟被当
+    # NEW PACK 重下重解（rmtree 顺带抹掉 ticket.txt），且永远进不了回执 / 立单链。
+    order = [c for c in dict.fromkeys(st["codes"])]
+    seen = set(order)
     for line in out.splitlines():
         m = _CODE_RE.search(line)
         if not m:
@@ -146,9 +150,10 @@ def probe_packs(st: dict) -> None:
             except Exception as exc:
                 log(f"  unpack failed: {exc}")
             seen.add(code)
+            order.append(code)
         else:
             log("  download FAILED (retry next round)")
-    st["codes"] = sorted(seen)[-200:]
+    st["codes"] = order[-600:]
 
 
 def probe_msgs(st: dict) -> None:

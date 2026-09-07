@@ -182,6 +182,166 @@ def test_decide_attach_same_reporter_recent_topic_else_new(dat, tmp_path):
     assert dec2["action"] == "new" and dec2["ticket"] == 0
 
 
+# ── N-5 D（2026-09-08）：同报障人 90 分钟跟进 → 挂最近单 ───────────────────────
+
+def _attach(con, tid, code, note, when):
+    """模拟 apply() 的挂单副作用：note[:380] 进 body（实体随补录累积）、updated_ts 前移。"""
+    ts = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
+    con.execute("UPDATE bug_tickets SET body=substr(body || char(10) || ?, 1, 4000), updated_ts=? WHERE id=?",
+                (f"[报告 {code}] {note[:380]}", ts, tid))
+    con.commit()
+
+
+def _new(con, dat, tid, code, note, when):
+    ts = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S"))
+    _ticket(con, tid, dat.title_from_note(note), ts=ts, body=f"{note}\n[报告 {code}]")
+
+
+def _replay(dat, con, diag, reports, next_id):
+    """按时间顺序回放一组 (code, when, note)：new → 立单入库；attach → 补录进主单。返回每份的判定。"""
+    out = []
+    codes = set()
+    for code, when, note in reports:
+        _write_report(diag, code, note, when=when, app="1.0.76.0")
+        codes.add(code)
+        dec = dat.decide(_head(dat, diag, code), con, [], codes | {"ZQ4ASK", "9YYD44", "WN4JXJ"}, diag)
+        if dec["action"] == "new":
+            _new(con, dat, next_id, code, note, when)
+            dat.write_ticket_txt(code, {"code": code, "action": "new", "ticket": next_id}, diag)
+            dec = dict(dec, ticket=next_id)
+            next_id += 1
+        elif dec["action"] == "attach":
+            _attach(con, dec["ticket"], code, note, when)
+            dat.write_ticket_txt(code, {"code": code, "action": "attach", "ticket": dec["ticket"]}, diag)
+        out.append((code, dec))
+    return out
+
+
+# 09-07 15:30–16:55 skuio「主动关怀·立即发」十份报告原文（自动链立了 #243–#249 七张单）
+CARE_243 = [
+    ("B5TAA3", "2026-09-07 15:30:17", "主动关怀页面(运行中·真发)：给 Kxhm(Telegram 7092595256)排的原文直发‘what are you doing now kim ?’(计划 16:29)，点‘立即发’按钮后未发出消息"),
+    ("GGUNG4", "2026-09-07 15:35:10", "主动关怀 立即发 复查：15:28:31/50/58 三次 bring_forward 之后，派发循环是否在下一拍(≤5 分钟)真发、发了几次"),
+    ("G7KEUT", "2026-09-07 15:35:41", "核实 13:14 启动时 proactive_care 派发循环状态(enabled/dry_run/interval)，以及 15:27 运行时切开关后循环是否有任何 tick 日志"),
+    ("TXP5G3", "2026-09-07 15:47:08", "主动关怀 立即发 第二次复查(15:46)：15:28 三次 bring_forward 后 18 分钟、跨过 15:34:52/15:44:52 两个 600s 派发拍点，是否有派发/发送记录"),
+    ("5CM8QB", "2026-09-07 15:48:03", "【主动关怀‘立即发’点击后 18 分钟未发出、零反馈、零派发日志】页面 运行中·真发。13:14:52 启动：proactive_care 派发循环已常备(interval=600s, enabled=False, dry_run=False)。15:27:31 用户页面开启 enabled=True，15:27:39 dry_run=False。15:28:22 [care-gen] id=1 contact=telegram:7092595256:6088992099 mode=verbatim decision=enqueued_by_operator text='what are you doing now kim ?'。15:28:31/15:28:50/15:28:58 三次点‘立即发’均记 decision=bring_forward。关联 ZQ4ASK / 9YYD44 / WN4JXJ / B5TAA3 / GGUNG4 / G7KEUT / TXP5G3"),
+    ("NRTDJH", "2026-09-07 16:24:48", "主动关怀页(新版 UI：运行中·真发/关怀方案卡/原文直发)点击‘立即发’后消息未发出：目标 Kxhm telegram(7092595256) 原文‘what are you doing now kim ?’ 原排 16:29:18；核实 16:1x-16:24 是否有 care 派发/立即发请求、投递结果、是否 dry_run、以及是否有新版本启动"),
+    ("WZPMXF", "2026-09-07 16:35:20", "主动关怀 id=1 原定 16:29:18 到期(原文直发 Kxhm telegram 6088992099)，核实 16:25-16:35 派发循环是否到点投递"),
+    ("8VGQDM", "2026-09-07 16:50:21", "主动关怀 id=1 于 16:34:52 enqueued deferred send_in_min=13，核实 16:47-16:50 是否实际投递到 telegram 6088992099"),
+    ("RGPTQF", "2026-09-07 16:53:57", "主动关怀 id=1 deferred 队列(interval=120s) 预计 16:47:52 出手，核实至 16:53 是否有出队/投递记录"),
+    ("FHSZTA", "2026-09-07 16:55:00", "【BUG·主动关怀‘立即发’85 分钟未发出：三层各扣一段】1.0.76 新关怀页 15:27:39 切真发 dry_run=False；15:28:22 [care-gen] id=1 contact=telegram:7092595256:6088992099 mode=verbatim；关联 ZQ4ASK / 9YYD44 / WN4JXJ / NRTDJH / WZPMXF / 8VGQDM / RGPTQF"),
+]
+
+
+def test_replay_243_seven_followups_make_one_ticket(dat, tmp_path):
+    """#243 七连发回放：十份报告只立一单，其余九份全挂 #243（自动链当时立了七张）。"""
+    con = _mk_db(tmp_path / "b.db")
+    diag = tmp_path / "diag"
+    out = _replay(dat, con, diag, CARE_243, next_id=243)
+    by = {c: d for c, d in out}
+    assert by["B5TAA3"]["action"] == "new" and by["B5TAA3"]["ticket"] == 243
+    for code in ("GGUNG4", "G7KEUT", "TXP5G3", "5CM8QB", "NRTDJH", "WZPMXF", "8VGQDM", "RGPTQF", "FHSZTA"):
+        assert by[code]["action"] == "attach" and by[code]["ticket"] == 243, (code, by[code])
+    # 三档各有命中：实体（Kxhm / 7092595256 / id=1）· 跟进词（复查 / 核实 / 第二次）· 关联码
+    assert by["NRTDJH"]["via"] == "entity" and "kxhm" in by["NRTDJH"]["reason"] or "7092595256" in by["NRTDJH"]["reason"]
+    assert by["WZPMXF"]["via"] == "entity" and by["RGPTQF"]["via"] == "entity"
+    assert by["GGUNG4"]["via"] == "marker" and "复查" in by["GGUNG4"]["reason"]
+    assert by["G7KEUT"]["via"] == "marker" and "核实" in by["G7KEUT"]["reason"]
+    assert by["5CM8QB"].get("via_code") and by["FHSZTA"].get("via_code")
+    assert con.execute("SELECT count(*) FROM bug_tickets").fetchone()[0] == 1
+
+
+def test_replay_252_253_and_254_255_pairs(dat, tmp_path):
+    """09-08 00:49 / 00:51：同人 2 分钟「补证：Vanessa(17345893728)×Sinue」应挂 #252（当时立了 #253）；
+    02:04 同分钟 em dash 两份共享 12137839654 应只立一单（当时立了 #254 / #255）。"""
+    con = _mk_db(tmp_path / "b.db")
+    diag = tmp_path / "diag"
+    out = _replay(dat, con, diag, [
+        ("EC7QZM", "2026-09-08 00:49:40", "WhatsApp Vanessa(17345893728) 与 Sinue Alvarez(121****40) 会话：客户 21:02 明说‘Grammar, typing speed, and inconsistencies in situations are obviously handled by an AI assistant, so stop writing to me’，随后‘Never write me again’。取该会话今晚全自动回复链路"),
+        ("K9F7PU", "2026-09-08 00:51:29", "补证：Vanessa(17345893728)×Sinue(12134989840) 21:00-21:04 三次起草的实际发送记录与入站-出站时间差；21:03:38 起草(客户已说 Never write me again)是否仍自动发出"),
+        ("TDNJHQ", "2026-09-08 02:04:00", "统计近 4 小时全部自动回复文本中 em dash(—) 出现频率：WhatsApp evelyn(12137839654)×Martin Tohmasi 00:16/00:40/00:41 三条连续含 —"),
+        ("KT992X", "2026-09-08 02:04:34", "查近 4 小时日志中任何含 em dash 的出站文本记录，及 12137839654 会话 00:16-00:45 起草/发送链路"),
+    ], next_id=252)
+    by = {c: d for c, d in out}
+    assert by["EC7QZM"]["action"] == "new" and by["EC7QZM"]["ticket"] == 252
+    assert by["K9F7PU"]["action"] == "attach" and by["K9F7PU"]["ticket"] == 252 and by["K9F7PU"]["via"] == "entity"
+    # 02:04 距 #252 已 75 分钟且实体不同 → em dash 是新单；34 秒后的第二份同实体 → 挂它
+    assert by["TDNJHQ"]["action"] == "new" and by["TDNJHQ"]["ticket"] == 253
+    assert by["KT992X"]["action"] == "attach" and by["KT992X"]["ticket"] == 253 and "12137839654" in by["KT992X"]["reason"]
+
+
+def test_related_code_pointing_at_fixed_ticket_yields_to_open_same_topic(dat, tmp_path):
+    """MJGHKQ（09-07 13:22）：附带提及的 UE7VM3 / 29BAG6 都指向已修单，而同人 1 分钟前刚立的开放单
+    #237（RN2SKR）才是它说的事——开放同题单优先；跟进词兜底档不参与这条抢占。"""
+    con = _mk_db(tmp_path / "b.db")
+    diag = tmp_path / "diag"
+    t0 = time.mktime(time.strptime("2026-09-07 13:21:12", "%Y-%m-%d %H:%M:%S"))
+    _ticket(con, 202, "人设备份与迁移缺失", status="fixed", ts=t0 - 86400, body="29BAG6")
+    _ticket(con, 232, "Messenger Roselyn Maru 登录后会话显示全自动", status="fixed", ts=t0 - 80000, body="UE7VM3 JV83XM")
+    rn = "人设工作室新版‘人设备份与迁移’：软件卸载重装后人设池为 0 个，用户点击‘从备份恢复…’选择卸载前导出的 chatx-personas-20260907-1301.json，页面报‘请求失败 _esc is not defined’"
+    _ticket(con, 237, dat.title_from_note(rn), ts=t0, body=rn)
+    for c in ("29BAG6", "UE7VM3", "RN2SKR"):
+        _write_report(diag, c, "旧")
+    mj = ("【BUG·1.0.76 人设备份恢复失败】卸载重装(13:14 启动 runtime=0 人设)后，人设工作室新‘人设备份与迁移’→‘从备份恢复…’"
+          "选择卸载前导出的 chatx-personas-20260907-1301.json，界面报‘请求失败 _esc is not defined’。29BAG6 建议的备份/恢复已落地。"
+          "附带发现：①AutoDraft 全局默认 mode=review——UE7VM3/JV83XM 落地。关联 29BAG6 / E42974")
+    _write_report(diag, "MJGHKQ", mj, when="2026-09-07 13:22:28", app="1.0.76.0")
+    codes = {"29BAG6", "UE7VM3", "RN2SKR", "MJGHKQ"}
+    dec = dat.decide(_head(dat, diag, "MJGHKQ"), con, [], codes, diag)
+    assert dec["action"] == "attach" and dec["ticket"] == 237, dec
+    assert "已修/已关 #232" in dec["reason"] and dec["via_code"] == "UE7VM3"
+    # 若同人没有开放同题单（#237 不存在）→ 仍按旧口径挂码指向的最新单 #232
+    con.execute("DELETE FROM bug_tickets WHERE id=237")
+    con.commit()
+    dec2 = dat.decide(_head(dat, diag, "MJGHKQ"), con, [], codes, diag)
+    assert dec2["ticket"] == 232 and dec2["reason"] == "关联报告 UE7VM3 → #232"
+
+
+def test_order_by_report_time_puts_related_after_its_source(dat, tmp_path):
+    diag = tmp_path / "diag"
+    _write_report(diag, "MJGHKQ", "关联 RN2SKR", when="2026-09-07 13:22:28")
+    _write_report(diag, "RN2SKR", "源报告", when="2026-09-07 13:21:12")
+    (diag / "NOPACK").mkdir()                          # 解析不到时间 → 排最后
+    assert dat.order_by_report_time(["MJGHKQ", "NOPACK", "RN2SKR"], diag) == ["RN2SKR", "MJGHKQ", "NOPACK"]
+    src = (TOOL.parent / "duty_channel_reminder.py").read_text(encoding="utf-8")
+    assert "pending = _order_pending(" in src and "order_by_report_time" in src
+
+
+def test_watermarks_never_truncate_alphabetically():
+    """0908 04:51 实锤：watch 水位 sorted(seen)[-200:] 按字母序截，码总数一过 200，以数字开头的新码
+    （3HNCJ7 / 47KNBV）排最前被截掉 → 每 2 分钟重下重解、永远进不了回执 / 立单链。三处水位
+    （watch codes / reminder receipted / auto_ticket handled）都只许按首见顺序截尾或跟随 watch 水位。"""
+    watch = (TOOL.parent / "duty_watch_loop.py").read_text(encoding="utf-8")
+    assert "sorted(seen)[-200:]" not in watch and 'st["codes"] = order[-600:]' in watch
+    assert "order.append(code)" in watch
+    rem = (TOOL.parent / "duty_channel_reminder.py").read_text(encoding="utf-8")
+    assert "sorted(receipted)[-400:]" not in rem and "sorted(set(codes))[-400:]" not in rem
+    assert 'st["receipted"] = [c for c in codes if c in receipted]' in rem
+    auto = TOOL.read_text(encoding="utf-8")
+    assert "sorted(handled)[-400:]" not in auto and "sorted(set(codes))[-400:]" not in auto
+    assert 'st["handled"] = [c for c in codes if c in handled]' in auto
+
+
+def test_followup_marker_and_entities(dat):
+    assert dat.followup_marker("核实 13:14 启动时 proactive_care 派发循环状态") == "核实"
+    assert dat.followup_marker("主动关怀 立即发 复查：15:28:31/50/58 三次") == "复查"
+    assert dat.followup_marker("主动关怀 立即发 第二次复查(15:46)：…").startswith("第二次")
+    assert dat.followup_marker("【补 MKYD7D·文件大小已确认】product_mv_16x9 = 98MB") == "补 MKYD7D"
+    assert dat.followup_marker("补证：Vanessa(17345893728)×Sinue") == "补证"
+    # 正文里的「核实：」不算引导段；【BUG】类新报告不算
+    assert dat.followup_marker("人设工作室新版‘人设备份与迁移’：软件卸载重装后人设池为 0 个。核实：当前版本号") == ""
+    assert dat.followup_marker("【BUG·主动关怀‘立即发’85 分钟未发出：三层各扣一段】") == ""
+    e = dat.note_entities("主动关怀页面(运行中·真发)：给 Kxhm(Telegram 7092595256)排的原文直发")
+    assert {"kxhm", "7092595256"} <= e and "telegram" not in e
+    e2 = dat.note_entities("目标 Kxhm telegram(7092595256) 原文；id=1 contact=telegram:7092595256:6088992099")
+    assert {"kxhm", "7092595256", "6088992099", "id=1", "telegram:7092595256:6088992099"} <= e2
+    e3 = dat.note_entities("WhatsApp Vanessa(17345893728) 与 Sinue Alvarez(121****40) 会话")
+    assert {"vanessa", "17345893728", "sinue alvarez"} <= e3
+    # 日期 / 版本 / 时刻不是实体
+    assert dat.note_entities("chatx-personas-20260907-1301.json 1.0.76.0 16:47:52") == set()
+    # 不同会话不相交
+    assert not (dat.note_entities("evelyn(12137839654)×Martin") & dat.note_entities("Vanessa(17345893728)×Sinue(12134989840)"))
+
+
 def test_decide_verify_and_summary_never_create(dat, tmp_path):
     con = _mk_db(tmp_path / "b.db")
     _ticket(con, 188, "手动发送双显")

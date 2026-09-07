@@ -9,11 +9,25 @@
   ① note 含 ``#N``                              → 挂 #N（dup 链跟到主单）
   ② note 以 【复现 / 【复验 / 复验 <码> / 补证 / 关联 开头，或含已知报告码
                                                 → 挂该码所在单（取证台账 received.diag /
-                                                  工单正文 / 该码目录 ticket.txt 三处反查）
-  ③ 同一报障人 30 分钟内群里已立的单标题与 note 主题词重叠 → 挂那张单
+                                                  工单正文 / 该码目录 ticket.txt 三处反查）；
+                                                  码指向的单已 fixed / closed 而同报障人 90 分钟内
+                                                  有同实体 / 同主题的开放单 → 开放单优先（N-5 D）
+  ③ 同一报障人 **90 分钟内**（建单或最近补录）的开放单里，按三档挂「最近那张」（N-5 D，2026-09-08）：
+     a. **同实体**：会话 id（platform:acct:peer）/ 长数字 id / ``id=N`` / 客户名（Name(digits)）有交集
+     b. **同主题**：note 首句与单标题主题词重叠 ≥ 0.45（L-7 原规则，窗口 30 → 90 分钟）
+     c. **引导段带跟进词**：note 前 40 字到第一个冒号 / 】为止含 复查 / 核实 / 补证 / 复核 / 补 <码> / 第 N 次
+        → 挂该报障人窗口内最近一张开放单（没有实体、没有主题重叠时的兜底）
   ④ 都不命中                                    → 自动新立单（record_bug_ticket；标题＝note
                                                   首句 ≤80 字，正文全文，reporter_version=app）
   ``*:verify`` 报告不立单（带 #N 时只补一条复验记录）；``【汇总`` 总表不立单，推值守人工。
+  挂单时 note 的严重度高于主单 → 抬主单严重度并记 ``auto_severity``（P0 不能埋进 P2 的补录里）。
+  一轮里多份新报告**按报告时间排序**处理（09-07 13:23 实锤：MJGHKQ 比它关联的 RN2SKR 先被处理，
+  RN2SKR 的单还不存在，MJGHKQ 就按另一个附带提及的旧码挂到了已修的 #232）。
+
+为什么要有 ③（N-5 D）：09-07 skuio 15:31–16:55 就「主动关怀·立即发」一件事连发七份报告
+（核实 / 复查 / 第二次复查 / id=1 …），note 首句主题词各不相同、又都没带单号，L-7 的三条规则
+各立了一张新单（#243–#249），回执七个单号；09-08 00:51 / 00:53 同一会话 Vanessa×Sinue 的
+「补证」又立了 #253。跟进类报告的共同点不是标题像，是**同一个人、同一段时间、同一个实体**。
 
 每份报告在 ``tmp_diag/<码>/ticket.txt`` 落一行 JSON 记归属（reports_index / 每日对账读它），
 并同时写取证台账（duty_evidence.jsonl ``received``）+ bug_events（auto_split / auto_attach）。
@@ -52,15 +66,31 @@ FP_REPORTER: Dict[str, Tuple[str, str]] = {
     "DC8F": ("8942577244", "skuio 花无缺"),
     "B990": ("8852939166", "钧 JUN"),
 }
-TOPIC_WINDOW_SEC = 30 * 60
+FOLLOWUP_WINDOW_SEC = 90 * 60      # 同报障人跟进窗口（N-5 D；L-7 原 30 分钟只用于主题相似）
+TOPIC_WINDOW_SEC = FOLLOWUP_WINDOW_SEC
 TOPIC_MIN_SIM = 0.45
 TITLE_MAX = 80
+SEVERITY_RANK = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 
 _CODE_RE = re.compile(r"\b([A-Z0-9]{6})\b")
 _TICKET_RE = re.compile(r"#\s*(\d{1,4})\b")
 _ATTACH_PREFIX_RE = re.compile(r"^\s*(?:【\s*(?:复现|复验|补证|关联)|复验\s|补证\s|关联\s)")
 _SUMMARY_RE = re.compile(r"^\s*【\s*汇总")
 _LEAD_TAG_RE = re.compile(r"^\s*【[^】]{1,24}】\s*")
+# 跟进词（③c）：只看 note 引导段（前 40 字、到第一个冒号 / 】为止），正文里的「核实：…」不算
+_FOLLOWUP_MARK_RE = re.compile(r"复查|核实|补证|复核|补\s*[A-Z0-9]{6}\b|第\s*[一二三四五六七八九十两\d]+\s*次")
+_LEAD_SEG_SPLIT_RE = re.compile(r"[：:】]")
+# 实体（③a）
+_CONV_ID_RE = re.compile(r"\b([a-z]+:\d{5,}:\d{5,})\b")
+_LONG_DIGITS_RE = re.compile(r"(?<![\d.])(\d{8,})(?![\d.])")
+_DATE_LIKE_RE = re.compile(r"^20[2-3]\d{5}$")            # 20260907 这类日期不是实体
+_ID_EQ_RE = re.compile(r"\bid\s*=\s*(\d{1,6})\b")
+# 客户名：Name(digits) / Name telegram(digits) / Name(Telegram digits) / Name telegram digits
+_NAMED_PEER_RE = re.compile(
+    r"([A-Za-z][A-Za-z.'\-]{0,24}(?: [A-Za-z][A-Za-z.'\-]{1,24}){0,2})"
+    r"(?:\s*\(|\s+)\s*(?:telegram|whatsapp|messenger|line|tg|wa)?\s*\(?\s*\+?[\d*]{6,}", re.IGNORECASE)
+_PLATFORM_WORDS = {"telegram", "whatsapp", "messenger", "line", "tg", "wa", "id", "chat", "conv",
+                   "contact", "account", "acct", "mid", "target", "user"}
 # 全角标点 / 换行必切；ASCII ?!;. 只在其后是句尾或中文（不是英文引句里的 "kim? are you…"）才切
 _SENT_SPLIT_RE = re.compile(r"[。！？；\n]|[!?;.](?=\s*(?:$|[\u4e00-\u9fff【（]))")
 
@@ -201,6 +231,102 @@ def topic_similarity(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
+def followup_marker(note: str) -> str:
+    """③c：note 引导段（前 40 字、到第一个冒号 / 】为止）里的跟进词；没有返空串。
+
+    「主动关怀 立即发 复查：15:28…」→ 复查；「核实 13:14 启动时…」→ 核实；「【补 MKYD7D·文件大小
+    已确认】…」→ 补 MKYD7D；「主动关怀 立即发 第二次复查(15:46)：…」→ 第二次。正文里的
+    「…。核实：当前版本号…」不算（引导段早在第一个冒号前结束）。
+    """
+    lead = str(note or "").strip()[:40]
+    seg = _LEAD_SEG_SPLIT_RE.split(lead, 1)[0]
+    m = _FOLLOWUP_MARK_RE.search(seg)
+    return m.group(0) if m else ""
+
+
+def note_entities(text: str) -> Set[str]:
+    """③a：文本里可当「同一个实体」的键，全部小写。
+
+    会话 id（telegram:7092595256:6088992099）/ ≥8 位数字 id（电话 / chat id；排除 20260907
+    这类日期）/ ``id=N`` / 客户名（Kxhm(Telegram 7092595256) · Kxhm telegram(7092595256) ·
+    Vanessa(17345893728)×Sinue(12134989840) · Sinue Alvarez(121****40) → kxhm / vanessa /
+    sinue / sinue alvarez）。平台词 / 「id」等泛词不算名字。会话 id 同时贡献它的两段数字。
+    """
+    s = str(text or "")
+    out: Set[str] = set()
+    for cid in _CONV_ID_RE.findall(s.lower()):
+        out.add(cid)
+        out.update(p for p in cid.split(":")[1:] if len(p) >= 8)
+    for d in _LONG_DIGITS_RE.findall(s):
+        if not _DATE_LIKE_RE.match(d):
+            out.add(d)
+    for n in _ID_EQ_RE.findall(s):
+        out.add(f"id={int(n)}")
+    for raw in _NAMED_PEER_RE.findall(s):
+        words = [w for w in raw.strip().lower().split() if w not in _PLATFORM_WORDS]
+        while words and words[-1] in _PLATFORM_WORDS:
+            words.pop()
+        name = " ".join(words).strip(" .'-")
+        if len(name) >= 2 and not name.isdigit():
+            out.add(name)
+    return out
+
+
+def reporter_window_tickets(con: sqlite3.Connection, reporter_id: str, ts: float,
+                            window: float = FOLLOWUP_WINDOW_SEC) -> List[Dict[str, Any]]:
+    """同报障人、窗口内（建单**或**最近补录）、未并单、未关闭的单，新→旧。"""
+    if not reporter_id or not ts:
+        return []
+    rows = con.execute(
+        "SELECT id, status, title, body FROM bug_tickets WHERE chat_id=? AND reporter_id=? AND dup_of=0"
+        " AND (ABS(created_ts-?)<=? OR ABS(updated_ts-?)<=?)"
+        " AND status NOT IN ('closed','verified') ORDER BY id DESC LIMIT 30",
+        (GROUP, reporter_id, ts, window, ts, window)).fetchall()
+    return [{"id": int(r[0]), "status": str(r[1] or ""), "title": str(r[2] or ""), "body": str(r[3] or "")}
+            for r in rows]
+
+
+def followup_candidate(con: sqlite3.Connection, reporter_id: str, ts: float,
+                       note: str) -> Optional[Dict[str, Any]]:
+    """③：同报障人 90 分钟内该挂的那张单——a 同实体 → b 同主题 → c 引导段跟进词；都没有返 None。
+
+    候选按「开放优先 → id 大优先」；返回 {ticket, reason, rank, via}。纯判定，不写库。
+    """
+    cands = reporter_window_tickets(con, reporter_id, ts)
+    if not cands:
+        return None
+
+    def _pick(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return sorted(rows, key=lambda r: (_status_rank(r["status"]), -r["id"]))[0]
+
+    ents = note_entities(note)
+    if ents:
+        hits = []
+        for r in cands:
+            shared = ents & note_entities(r["title"] + "\n" + r["body"])
+            if shared:
+                hits.append((r, shared))
+        if hits:
+            best, shared = sorted(hits, key=lambda h: (_status_rank(h[0]["status"]), -h[0]["id"]))[0]
+            key = sorted(shared, key=len, reverse=True)[0]
+            return {"ticket": best["id"], "rank": _status_rank(best["status"]), "via": "entity",
+                    "reason": f"90 分钟内同报障人同实体（{key}）单 #{best['id']}"}
+    best_t, best_sim = None, 0.0
+    for r in cands:
+        sim = topic_similarity(str(note or "")[:60], r["title"])
+        if sim > best_sim:
+            best_t, best_sim = r, sim
+    if best_t is not None and best_sim >= TOPIC_MIN_SIM:
+        return {"ticket": best_t["id"], "rank": _status_rank(best_t["status"]), "via": "topic",
+                "reason": f"90 分钟内同报障人同主题单 #{best_t['id']}（相似度 {best_sim:.2f}）"}
+    mark = followup_marker(note)
+    if mark:
+        best = _pick(cands)
+        return {"ticket": best["id"], "rank": _status_rank(best["status"]), "via": "marker",
+                "reason": f"跟进类报告「{mark}」→ 90 分钟内同报障人最近单 #{best['id']}"}
+    return None
+
+
 # ── 反查：报告码 → 工单 ──────────────────────────────────────────────────────
 
 def _ledger_rows(data_root: Path) -> List[Dict[str, Any]]:
@@ -272,17 +398,6 @@ def _status_rank(status: str) -> int:
     return 0
 
 
-def reporter_recent_tickets(con: sqlite3.Connection, reporter_id: str, ts: float,
-                            window: float = TOPIC_WINDOW_SEC) -> List[Tuple[int, str]]:
-    if not reporter_id or not ts:
-        return []
-    rows = con.execute(
-        "SELECT id, title FROM bug_tickets WHERE chat_id=? AND reporter_id=? AND dup_of=0"
-        " AND ABS(created_ts-?)<=? AND status NOT IN ('closed','verified')"
-        " ORDER BY id DESC LIMIT 30", (GROUP, reporter_id, ts, window)).fetchall()
-    return [(int(r[0]), str(r[1] or "")) for r in rows]
-
-
 def decide(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str, Any]],
            codes: Set[str], diag_root: Path = DIAG) -> Dict[str, Any]:
     """规则 ①②③④ 的纯判定：{action: attach|new|verify|summary|skip, ticket, reason, refs}。"""
@@ -306,6 +421,9 @@ def decide(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str,
     if valid_refs:
         return {"action": "attach", "ticket": valid_refs[0],
                 "reason": f"note 带 #{valid_refs[0]}", "refs": valid_refs}
+    # ③ 的候选先算出来：② 里「码指向已修单」要拿它做对照
+    rep = FP_REPORTER.get(str(head.get("fp4") or ""), ("", ""))[0]
+    follow = followup_candidate(con, rep, float(head.get("ts") or 0), note)
     # ② 已知报告码（含 复现/复验/补证/关联 前缀的显式意图）。多个码 → 汇总候选单，
     #    开放单优先、再 id 大优先（0906 12:49 实锤：9YYD44 写「关联 ZQ4ASK / 9K6G7W / M2SHYA」，
     #    按首码挂到了已修的 #182，其实是 2 分钟前 M2SHYA 刚立的 #214 的根因补证）
@@ -318,21 +436,20 @@ def decide(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str,
         st = {t: (con.execute("SELECT status FROM bug_tickets WHERE id=?", (t,)).fetchone() or ("",))[0]
               for t in pool}
         best = sorted(pool, key=lambda t: (_status_rank(st[t]), -t))[0]
+        # 0907 13:23 实锤（MJGHKQ）：附带提及的旧码全指向已修单，而同报障人 1 分钟前刚立的
+        # 开放同题单（RN2SKR → #237）才是它真正说的事 → 开放单优先
+        if _status_rank(st[best]) > 0 and follow and follow["rank"] == 0 and follow["via"] != "marker":
+            return {"action": "attach", "ticket": follow["ticket"],
+                    "reason": f"关联码 {pool[best]} 指向已修/已关 #{best}；{follow['reason']} 优先",
+                    "refs": [follow["ticket"]], "via_code": pool[best]}
         return {"action": "attach", "ticket": best,
                 "reason": f"关联报告 {pool[best]} → #{best}", "refs": [best],
                 "via_code": pool[best]}
-    # ③ 同报障人 30 分钟内群里立的单，主题词重叠
-    rep = FP_REPORTER.get(str(head.get("fp4") or ""), ("", ""))[0]
-    best, best_sim = 0, 0.0
-    for tid, title in reporter_recent_tickets(con, rep, float(head.get("ts") or 0)):
-        sim = topic_similarity(note[:60], title)
-        if sim > best_sim:
-            best, best_sim = tid, sim
-    if best and best_sim >= TOPIC_MIN_SIM:
-        return {"action": "attach", "ticket": best,
-                "reason": f"30 分钟内同报障人群消息单 #{best}（相似度 {best_sim:.2f}）",
-                "refs": [best]}
-    why = "无 #N / 无已知码 / 30 分钟内无同主题单 → 新立单"
+    # ③ 同报障人 90 分钟内：同实体 → 同主题 → 引导段跟进词
+    if follow:
+        return {"action": "attach", "ticket": follow["ticket"], "reason": follow["reason"],
+                "refs": [follow["ticket"]], "via": follow["via"]}
+    why = "无 #N / 无已知码 / 90 分钟内无同实体·同主题·跟进类单 → 新立单"
     if _ATTACH_PREFIX_RE.match(note):
         why = "写的是复验/关联但码对不上任何单 → 新立单（值守复核）"
     return {"action": "new", "ticket": 0, "reason": why, "refs": []}
@@ -361,6 +478,28 @@ def _ledger_received(tid: int, code: str) -> None:
 def _stamp(head: Dict[str, Any]) -> str:
     return (f"[报告 {head['code']} {str(head.get('time') or '')[5:16]}"
             f" app {head.get('app') or '?'} {head.get('fp4') or ''}]")
+
+
+def _lift_severity(bi, tid: int, code: str, note: str, rep_id: str) -> str:
+    """挂单时 note 的严重度高于主单 → 抬主单（只升不降），记 auto_severity 事件；返回新档或空串。"""
+    try:
+        want = str(bi.classify_severity(note) or "P2")
+        con = sqlite3.connect(str(bi._db_path()), timeout=10)
+        try:
+            row = con.execute("SELECT severity FROM bug_tickets WHERE id=?", (tid,)).fetchone()
+            have = str(row[0] if row else "P2")
+            if SEVERITY_RANK.get(want, 0) <= SEVERITY_RANK.get(have, 0):
+                return ""
+            con.execute("UPDATE bug_tickets SET severity=?, updated_ts=? WHERE id=?", (want, time.time(), tid))
+            con.commit()
+        finally:
+            con.close()
+        bi.append_ticket_note(tid, f"[值守自动] 严重度 {have} → {want}（报告 {code} 补录）")
+        bi._record_event(GROUP, "auto_severity", rep_id, f"#{tid} {have}->{want} ← 报告 {code}")
+        return want
+    except Exception as exc:  # noqa: BLE001
+        log(f"{code} lift severity #{tid} failed: {type(exc).__name__}: {exc}")
+        return ""
 
 
 def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[str, Any]:
@@ -398,9 +537,10 @@ def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[s
         tid = res["ticket"]
         bi.append_ticket_note(tid, f"{_stamp(head)} {note[:380]}")
         bi._record_event(GROUP, "auto_attach", rep_id, f"#{tid} ← 报告 {code}（{res['reason']}）")
+        lifted = _lift_severity(bi, tid, code, note, rep_id)
         _ledger_received(tid, code)
         write_ticket_txt(code, row)
-        log(f"{code} attach → #{tid} :: {res['reason']}")
+        log(f"{code} attach → #{tid} :: {res['reason']}" + (f" 严重度抬到 {lifted}" if lifted else ""))
         return res
     # new
     title = title_from_note(note)
@@ -428,6 +568,7 @@ def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[s
         # 标题与 7 天内开放单相似 → record_bug_ticket 自己归并了，等价挂单
         bi.append_ticket_note(tid, f"{_stamp(head)} {note[:380]}")
         bi._record_event(GROUP, "auto_attach", rep_id, f"#{tid} ← 报告 {code}（标题相似自动归并）")
+        _lift_severity(bi, tid, code, note, rep_id)
         res["action"], res["reason"] = "attach", "标题与开放单相似，自动归并"
         log(f"{code} dup-merge → #{tid}")
     _ledger_received(tid, code)
@@ -477,6 +618,20 @@ def receipt_item(code: str, topic: str, res: Optional[Dict[str, Any]]) -> str:
     if act == "summary":
         return f"{base}→ 总表，值守人工逐项对"
     return base
+
+
+def order_by_report_time(codes: List[str], diag_root: Path = DIAG) -> List[str]:
+    """一轮待处理的码按报告 ``time`` 头升序（解析不到的排最后、保持原序）。
+
+    0907 13:23 实锤：MJGHKQ（13:22:28，「关联 … RN2SKR」）排在 RN2SKR（13:21:12）之前被处理，
+    当时 RN2SKR 的单还没立，MJGHKQ 只能按另一个附带提及的旧码挂到已修的 #232。
+    """
+    keyed = []
+    for i, c in enumerate(codes):
+        h = parse_report_head(c, diag_root)
+        ts = float(h.get("ts") or 0) if h else 0.0
+        keyed.append((0 if ts else 1, ts, i, c))
+    return [k[3] for k in sorted(keyed)]
 
 
 def backfill_index(dry_run: bool) -> int:
@@ -554,23 +709,22 @@ def main() -> int:
     watch = _load_json(WATCH_STATE, {})
     codes: List[str] = list(watch.get("codes") or [])
     if not st.get("inited"):
-        st["handled"] = sorted(set(codes))[-400:]
+        st["handled"] = list(dict.fromkeys(codes))
         st["inited"] = True
         if not a.dry_run:
             _save_json(STATE, st)
         log(f"水位初始化 = {len(codes)} 个已下载码（不回放历史；历史归属用 --backfill-index 补）")
         return 0
     handled = set(st.get("handled") or [])
-    for code in codes:
-        if code in handled:
-            continue
+    for code in order_by_report_time([c for c in codes if c not in handled]):
         res = auto_ticket(code, dry_run=a.dry_run)
         if res is None and parse_report_head(code) is None:
             continue            # 还没解包完，下一轮
         handled.add(code)
         log(json.dumps(res, ensure_ascii=False) if res else f"{code} → None")
     if not a.dry_run:
-        st["handled"] = sorted(handled)[-400:]
+        # 与 watch 水位同序、只保留还在水位里的（字母序截尾会挤掉早字母旧码 → 重复立单）
+        st["handled"] = [c for c in codes if c in handled]
         _save_json(STATE, st)
     return 0
 
