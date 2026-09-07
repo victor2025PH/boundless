@@ -28,7 +28,8 @@ import pytest
 from fastapi import FastAPI, Request
 from starlette.testclient import TestClient
 
-from src.companion.goals.store import reset_goal_store
+from src.companion.goals import profile_slots as ps
+from src.companion.goals.store import get_goal_store, reset_goal_store
 from src.companion.goals.templates import (
     COMPANION_HIDDEN_KINDS,
     TEMPLATES,
@@ -58,9 +59,11 @@ def _hermetic(monkeypatch):
     monkeypatch.setattr(pb, "_inbox_store_getter", None)
     monkeypatch.delenv("AITR_DESKTOP_MODE", raising=False)
     bdm.reset_active_business_domain()
+    ps.clear_custom_slots()
     reset_goal_store()
     yield
     bdm.reset_active_business_domain()
+    ps.clear_custom_slots()
     reset_goal_store()
 
 
@@ -325,3 +328,257 @@ def test_developer_route_reads_and_writes_business_domain():
     assert bdm.active_business_domain() == "companion"
     assert c.post("/api/developer/business-domain",
                   json={"business_domain": "junk"}).status_code == 400
+
+
+# ═══ B 陪伴域摸底标签集（D-N1）═══════════════════════════════════════════════
+
+RELATION = ["name", "location", "occupation", "age", "interests"]
+BANT = ["need", "channel", "team_size", "budget", "authority", "timeline"]
+PERSONAL = ["family_status", "marital_status", "income_level", "residence", "assets"]
+
+
+def test_slot_tables_by_domain_and_legacy_registry_untouched():
+    # 旧契约：SLOTS 仍是销售域表（relation + bant + lifecycle = 12）
+    assert [s["key"] for s in ps.SLOTS] == RELATION + BANT + ["churn_reason"]
+    assert [s["key"] for s in ps.PERSONAL_SLOTS] == PERSONAL
+    assert [s["key"] for s in ps.slots_for_domain("companion")] == RELATION + PERSONAL
+    assert [s["key"] for s in ps.slots_for_domain("sales")] == RELATION + BANT + ["churn_reason"]
+    assert ps.tracks_for("companion") == ("relation", "personal")
+    assert ps.tracks_for("sales") == ("relation", "bant")
+    assert ps.secondary_track("companion") == "personal"
+    assert ps.secondary_track("sales") == "bant"
+    # 缺省读进程级 active（装配层登记）
+    bdm.set_active_business_domain("companion")
+    assert [s["key"] for s in ps.slots_for_domain()] == RELATION + PERSONAL
+    bdm.set_active_business_domain("sales")
+    assert ps.secondary_track() == "bant"
+    # 全表都认：陪伴机器上升级前填的 BANT 值仍可读写
+    for k in RELATION + BANT + PERSONAL + ["churn_reason"]:
+        assert ps.get_slot(k) is not None, k
+    assert set(ps.slot_keys("personal")) == set(PERSONAL)
+    assert len(ps.slot_keys("bant")) == 6 and len(ps.slot_keys("relation")) == 5
+
+
+def test_sensitive_slots_default_unchecked_and_prompt_hard_constraint():
+    assert ps.slot_is_sensitive("income_level") and ps.slot_is_sensitive("assets")
+    for k in RELATION + BANT + ["family_status", "marital_status", "residence"]:
+        assert not ps.slot_is_sensitive(k), k
+    # 摸底模板缺省勾选不含敏感项
+    default = TEMPLATES["profile_discovery"]["params"][0]["default"].split(",")
+    assert set(default).isdisjoint({"income_level", "assets"})
+    assert "BANT" not in TEMPLATES["profile_discovery"]["params"][0]["help_zh"]
+    assert "team_size" not in TEMPLATES["profile_discovery"]["params"][0]["help_zh"]
+    # UI 建议问法干净；注入短语带硬约束
+    assert "敏感" not in ps.slot_ask("income_level")
+    assert ps.SENSITIVE_ASK_DISCIPLINE in ps.inject_ask("income_level")
+    assert ps.SENSITIVE_ASK_DISCIPLINE not in ps.inject_ask("family_status")
+    phrase, key, _patch = ps.resolve_inject_gap({}, {}, include=["income_level", "age"])
+    assert key == "income_level" and ps.SENSITIVE_ASK_DISCIPLINE in phrase
+    assert "绝不直接问" in phrase and "绝不追问" in phrase
+    phrase2, key2, _ = ps.resolve_inject_gap({}, {}, include=["age", "assets"])
+    assert key2 == "age" and ps.SENSITIVE_ASK_DISCIPLINE not in phrase2
+    # 陪伴域缺省缺口轨 = personal（不再问「业务痛点、预算档」）
+    hint = ps.gap_hint({}, business_domain="companion")
+    assert "家里" in hint and "头疼" not in hint
+    hint_sales = ps.gap_hint({}, business_domain="sales")
+    assert "头疼" in hint_sales
+    # 敏感槽进 gap_hint 也带约束
+    hint_sens = ps.gap_hint({}, include=["assets"], limit=1)
+    assert ps.SENSITIVE_ASK_DISCIPLINE in hint_sens
+
+
+def test_fill_rates_and_missing_by_domain_keep_all_track_keys():
+    fields = {"family_status": {"v": "有孩子"}, "budget": {"v": "500刀"}}
+    comp = ps.fill_rates(fields, business_domain="companion")
+    assert comp["tracks"] == ["relation", "personal"] and comp["total"] == 10
+    assert comp["personal"] == pytest.approx(2 / 7, abs=0.01)   # weight 2 / (2+2+1+1+1)
+    assert comp["bant"] == pytest.approx(2 / 11, abs=0.01)      # 键恒在（消费方 .get 不炸）
+    assert comp["filled"] == 1                                   # 只数陪伴表
+    sales = ps.fill_rates(fields, business_domain="sales")
+    assert sales["tracks"] == ["relation", "bant"] and sales["total"] == 11
+    assert sales["filled"] == 1
+    miss_c = [m["key"] for m in ps.missing_slots({}, track="", limit=99, business_domain="companion")]
+    assert miss_c == RELATION + PERSONAL
+    miss_s = [m["key"] for m in ps.missing_slots({}, track="", limit=99, business_domain="sales")]
+    assert miss_s == RELATION + BANT
+    assert [m["key"] for m in ps.missing_slots({}, track="personal", limit=99)] == PERSONAL
+
+
+def test_parse_selected_accepts_all_domains_for_legacy_goals():
+    # 陪伴机器上 1.0.76 建的 BANT 摸底目标：勾选仍解析、仍结算（存量不丢）
+    assert ps.parse_selected_slots("age,budget,family_status,x_nope,churn_reason") == [
+        "age", "budget", "family_status"]
+    assert ps.selected_fill_rate({"budget": {"v": "1"}}, ["budget", "assets"]) == 0.5
+
+
+def test_capture_marital_and_family_closed_sets():
+    got = dict(ps.capture_from_text("我现在单身，我一个人住"))
+    assert got["marital_status"] == "单身" and got["family_status"] == "独居"
+    # 宁可漏采：没有第一人称锚的「一个人住」不采
+    assert "family_status" not in dict(ps.capture_from_text("一个人住挺自在的"))
+    assert dict(ps.capture_from_text("我有个女儿今年三岁")).get("family_status") == "有孩子"
+    assert dict(ps.capture_from_text("I'm married and I have two kids"))["marital_status"] == "已婚"
+    assert dict(ps.capture_from_text("我离婚了")).get("marital_status") == "离异"
+    assert dict(ps.capture_from_text("我谈了个男朋友")).get("marital_status") == "恋爱中"
+    # 否定 / 他人 / 泛谈不采；收入资产永不自动采
+    for t in ("我不是单身", "我朋友单身很久了", "你单身吗", "我月薪两万", "我有两套房"):
+        d = dict(ps.capture_from_text(t))
+        assert "marital_status" not in d and "income_level" not in d and "assets" not in d, t
+
+
+def test_custom_slots_registry_and_config_round_trip():
+    k = ps.custom_slot_key("家乡")
+    assert k.startswith("x_") and len(k) == 12 and k == ps.custom_slot_key(" 家乡 ")
+    assert ps.custom_slot_key("") == ""
+    slots = ps.register_custom_slots(["家乡", {"label": "宠物", "ask_zh": "养什么宠物", "sensitive": True}, "", "家乡"])
+    assert [s["label_zh"] for s in slots] == ["家乡", "宠物"]
+    assert ps.get_slot(k)["custom"] is True and ps.get_slot(k)["track"] == "custom"
+    assert ps.slot_is_sensitive(ps.custom_slot_key("宠物"))
+    assert ps.slot_ask(ps.custom_slot_key("宠物")) == "养什么宠物"
+    assert ps.custom_slot_labels() == ["家乡", "宠物"]
+    # 两域槽位表末尾都带自定义；parse / 缺口都认
+    assert [s["key"] for s in ps.slots_for_domain("companion")][-2:] == [k, ps.custom_slot_key("宠物")]
+    assert [s["key"] for s in ps.slots_for_domain("sales")][-2:] == [k, ps.custom_slot_key("宠物")]
+    assert ps.parse_selected_slots(f"age,{k}") == ["age", k]
+    assert [m["key"] for m in ps.missing_slots({}, track="custom", limit=9)] == [k, ps.custom_slot_key("宠物")]
+    assert k in ps.facts_line({k: {"v": "潮汕", "src": "agent"}}) or "家乡:潮汕" in ps.facts_line({k: {"v": "潮汕"}})
+    # 上限 12；坏配置 → 空表
+    ps.register_custom_slots([f"标签{i}" for i in range(20)])
+    assert len(ps.custom_slots()) == 12
+    assert ps.load_custom_slots_from_config({"companion": {"goals": {"custom_slots": "junk"}}}) == []
+    assert [s["label_zh"] for s in ps.load_custom_slots_from_config(
+        {"companion": {"goals": {"custom_slots": ["家乡"]}}})] == ["家乡"]
+
+
+def test_store_accepts_personal_and_custom_slot_values():
+    ps.register_custom_slots(["家乡"])
+    k = ps.custom_slot_key("家乡")
+    store = get_goal_store(":memory:")
+    row = store.upsert_customer_profile("telegram", "u9", {
+        "family_status": "有孩子", "income_level": "中等", k: "潮汕", "bogus": "x"},
+        source="agent", overwrite=True)
+    assert row["fields"]["family_status"]["v"] == "有孩子"
+    assert row["fields"]["income_level"]["v"] == "中等"
+    assert row["fields"][k]["v"] == "潮汕"
+    assert "bogus" not in row["fields"]
+
+
+# ── B 路由：摸底 chips 与画像 schema 同源、按域、存量不丢 ─────────────────────
+
+def _cm_client(cfg_extra=None, flavor="internal"):
+    goals = {"enabled": True, "db_path": ":memory:"}
+    cfg = {"companion": {"goals": goals}, "ui_visibility": {"flavor": flavor}}
+    cfg.update(cfg_extra or {})
+    cm = _CM(cfg)
+    sess = {"role": "", "user": "tester", "username": "tester"}
+    app = FastAPI()
+
+    def auth_dep(request: Request) -> None:
+        request.scope["session"] = dict(sess)
+
+    register_goal_routes(app, auth_dep, cm)
+    return TestClient(app), cm
+
+
+def test_pickers_discovery_slots_follow_domain_with_sensitive_flags():
+    client = _build_client({"business_domain": "companion"})
+    pk = client.get("/api/goals/templates").json()["pickers"]["discovery_slots"]
+    keys = [s["key"] for s in pk]
+    assert keys == RELATION + PERSONAL
+    flags = {s["key"]: s["sensitive"] for s in pk}
+    assert flags["income_level"] is True and flags["assets"] is True and flags["age"] is False
+    client_s = _build_client({"business_domain": "sales"})
+    pk_s = client_s.get("/api/goals/templates").json()["pickers"]["discovery_slots"]
+    assert [s["key"] for s in pk_s] == RELATION + BANT
+
+
+def test_profile_view_companion_schema_same_as_chips_and_keeps_legacy_values():
+    client = _build_client({"business_domain": "companion"})
+    # 升级前（销售表）填过的预算档：不在陪伴表里，但有值 → extra 回显，不丢
+    store = get_goal_store(":memory:")
+    store.upsert_customer_profile("telegram", "u1", {"budget": "500刀", "age": "30岁"},
+                                  source="agent", overwrite=True)
+    d = client.get("/api/goals/profile?platform=telegram&chat_key=u1").json()
+    assert d["business_domain"] == "companion"
+    assert d["tracks"] == ["relation", "personal"] and d["secondary_track"] == "personal"
+    keys = [s["key"] for s in d["slots"]]
+    assert keys[:10] == RELATION + PERSONAL          # 与摸底 chips 同一份表
+    assert "need" not in keys and "team_size" not in keys
+    extra = [s for s in d["slots"] if s.get("extra")]
+    assert [s["key"] for s in extra] == ["budget"] and extra[0]["value"] == "500刀"
+    sens = {s["key"] for s in d["slots"] if s.get("sensitive")}
+    assert sens == {"income_level", "assets"}
+    assert d["missing"] == PERSONAL and d["missing_bant"] == []
+    assert d["fill"]["tracks"] == ["relation", "personal"]
+    # 保存陪伴槽 → 同形回包
+    r = client.post("/api/goals/profile", json={
+        "platform": "telegram", "chat_key": "u1", "fields": {"marital_status": "单身"}})
+    assert r.status_code == 200
+    vals = {s["key"]: s["value"] for s in r.json()["slots"]}
+    assert vals["marital_status"] == "单身" and vals["budget"] == "500刀"
+    assert "marital_status" not in r.json()["missing"]
+
+
+def test_profile_view_sales_shape_unchanged():
+    client = _build_client({"business_domain": "sales"})
+    d = client.get("/api/goals/profile?platform=telegram&chat_key=u2").json()
+    assert [s["key"] for s in d["slots"]] == RELATION + BANT + ["churn_reason"]
+    assert len(d["missing_bant"]) == 6 and d["missing"] == d["missing_bant"]
+    assert d["tracks"] == ["relation", "bant"]
+
+
+def test_custom_slot_endpoints_persist_and_show_everywhere():
+    client, cm = _cm_client({"business_domain": "companion"})
+    r = client.post("/api/goals/custom-slots", json={"label": "家乡"})
+    assert r.status_code == 200
+    body = r.json()
+    k = ps.custom_slot_key("家乡")
+    assert body["added_key"] == k
+    assert cm.writes == [("companion.goals.custom_slots", ["家乡"])]
+    assert [s["key"] for s in body["discovery_slots"]][-1] == k
+    # 幂等：同名不重复
+    client.post("/api/goals/custom-slots", json={"label": "家乡"})
+    assert cm.writes[-1][1] == ["家乡"]
+    # 摸底 chips 与画像卡同步出现
+    pk = client.get("/api/goals/templates").json()["pickers"]["discovery_slots"]
+    assert pk[-1]["key"] == k and pk[-1]["custom"] is True and pk[-1]["label_zh"] == "家乡"
+    d = client.get("/api/goals/profile?platform=telegram&chat_key=u5").json()
+    assert d["slots"][-1]["key"] == k and d["slots"][-1].get("custom") is True
+    # 摸底目标可勾自定义键并结算
+    g = client.post("/api/goals", json={"template": "profile_discovery", "conversation_id": CONV,
+                                         "params": {"slots": f"age,{k}"}}).json()["goal"]
+    assert g["params"]["slots"] in (f"age,{k}", [f"age", k])
+    # 删除
+    r2 = client.post("/api/goals/custom-slots", json={"remove": k})
+    assert r2.status_code == 200 and cm.writes[-1][1] == []
+    assert client.get("/api/goals/custom-slots").json()["custom_slots"] == []
+    assert client.post("/api/goals/custom-slots", json={}).status_code == 400
+
+
+def test_custom_slots_loaded_from_config_at_register():
+    client = _build_client({"business_domain": "companion",
+                            "companion": {"goals": {"enabled": True, "db_path": ":memory:",
+                                                    "custom_slots": ["宠物"]}}})
+    pk = client.get("/api/goals/templates").json()["pickers"]["discovery_slots"]
+    assert pk[-1]["label_zh"] == "宠物" and pk[-1]["key"] == ps.custom_slot_key("宠物")
+
+
+def test_i18n_ask_keys_cover_all_slots_and_cp_goal_wires_custom_and_sensitive():
+    from src.web.i18n_packs.goals import EN, ZH
+    for s in ps.ALL_SLOTS:
+        for lang in (ZH, EN):
+            assert f"inbox.goal.profile.ask.{s['key']}" in lang, s["key"]
+    for key in ("inbox.goal.profile.track.personal", "inbox.goal.profile.track.custom",
+                "inbox.goal.profile.track.extra", "inbox.goal.profile.sensitive_t",
+                "inbox.goal.form.slot_sensitive_t", "inbox.goal.form.slot_custom_add",
+                "inbox.goal.form.slot_custom_prompt", "inbox.goal.form.slot_custom_fail",
+                "err.goals.custom_slot_label_required", "err.goals.custom_slot_limit"):
+        assert key in ZH and key in EN, key
+    js = (REPO / "shared" / "copilot" / "components" / "cp-goal.js").read_text(encoding="utf-8")
+    js2 = (REPO / "desktop" / "renderer" / "shared" / "copilot" / "components" / "cp-goal.js"
+           ).read_text(encoding="utf-8")
+    assert js == js2, "cp-goal.js 双树不一致"
+    for needle in ('data-act="slot_custom_add"', "_addCustomSlot", "/api/goals/custom-slots",
+                   'this.t("inbox.goal.form.slot_sensitive_t")', "s.sensitive", ".gl-chip.sens"):
+        assert needle in js, needle
+    assert "/^[a-z][a-z0-9_]*$/" in js       # 自定义键 x_<hex> 放行

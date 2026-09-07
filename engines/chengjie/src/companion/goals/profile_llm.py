@@ -100,14 +100,18 @@ def looks_worth_extracting(text: str) -> bool:
 
 
 def in_discovery(cfg: Dict[str, Any], fields: Optional[Dict[str, Any]]) -> bool:
-    """BANT 还没填够 → 摸底期（放行口径更松）。"""
+    """第二轨还没填够 → 摸底期（放行口径更松）。第二轨按业务域：销售 BANT /
+    陪伴「个人情况」（N-3 #241；``fill_rates`` 的 ``tracks`` 给出该域两轨）。"""
     try:
         until = float(cfg.get("discovery_until_fill", DEFAULT_DISCOVERY_UNTIL_FILL)
                       or DEFAULT_DISCOVERY_UNTIL_FILL)
     except (TypeError, ValueError):
         until = DEFAULT_DISCOVERY_UNTIL_FILL
     try:
-        return float((fill_rates(fields) or {}).get("bant", 0.0)) < until
+        rates = fill_rates(fields) or {}
+        tracks = rates.get("tracks") or []
+        sec = tracks[1] if len(tracks) > 1 else "bant"
+        return float(rates.get(sec, 0.0)) < until
     except Exception:
         return True
 

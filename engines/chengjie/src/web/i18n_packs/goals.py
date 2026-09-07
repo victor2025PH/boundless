@@ -33,11 +33,19 @@ ZH = {
     "err.goals.pace_not_allowed": "这个模板不支持限时节奏，请用自然天推进",
     # M-5 A（#217 / D-M6）：用户版不再有「转化成交」类目
     "err.goals.template_retired_client": "该模板已下线，请改用「自定义目标」描述你的推进方向",
+    # N-3 #241：自定义摸底标签
+    "err.goals.custom_slot_label_required": "缺少标签文案（label）或要删除的标签键（remove）",
+    "err.goals.custom_slot_limit": "自定义标签最多 {n} 个，先删掉不用的",
 
     # ── 客户画像卡（cp-goal 内嵌画像区；P1 双轨槽位） ─────────────────────
     "inbox.goal.profile.title": "客户画像",
     "inbox.goal.profile.track.relation": "关系",
     "inbox.goal.profile.track.bant": "商机",
+    # N-3 #241：陪伴域第二轨 + 自定义 + 存量回显组
+    "inbox.goal.profile.track.personal": "个人情况",
+    "inbox.goal.profile.track.custom": "自定义",
+    "inbox.goal.profile.track.extra": "其他已记录",
+    "inbox.goal.profile.sensitive_t": "敏感项：AI 只会顺着话头多轮自然带出，不直接问、不追问",
     "inbox.goal.profile.fill": "完成度",
     "inbox.goal.profile.empty": "还没有画像信息，聊天中会自动积累，也可手动补录",
     "inbox.goal.profile.edit": "补录",
@@ -70,6 +78,19 @@ ZH = {
     "inbox.goal.profile.ask.authority": "这类事TA能不能拍板",
     "inbox.goal.profile.ask.timeline": "什么时候想用起来",
     "inbox.goal.profile.ask.churn_reason": "当初为什么没续",
+    # N-3 #241 陪伴域 personal 轨
+    "inbox.goal.profile.ask.family_status": "家里都有谁、平时跟家人怎么相处",
+    "inbox.goal.profile.ask.marital_status": "现在是单身还是有伴",
+    "inbox.goal.profile.ask.income_level": "收入大概什么水平（敏感：只顺着话头带，不直接问）",
+    "inbox.goal.profile.ask.residence": "现在住在哪、住得怎么样",
+    "inbox.goal.profile.ask.assets": "有没有房车之类的资产（敏感：只顺着话头带，不直接问）",
+    # ── 摸底 chips：敏感标 + 自定义标签（N-3 #241） ──────────────────────
+    "inbox.goal.form.slot_sensitive_t": "敏感项：默认不勾；勾了 AI 也只会多轮自然带出，不直接问、不连问",
+    "inbox.goal.form.slot_custom_add": "+ 自定义标签",
+    "inbox.goal.form.slot_custom_prompt": "要了解的信息叫什么？（如：家乡、宠物；≤24 字）",
+    "inbox.goal.form.slot_custom_saving": "添加中…",
+    "inbox.goal.form.slot_custom_fail": "添加失败",
+    "inbox.goal.form.slot_custom_t": "自定义标签——摸底与客户画像同步出现",
 
     # ── 统一收件箱右栏「工作目标」卡（cp-goal 组件） ──────────────────────
     # title 须与 help_terms matchTerm「工作目标」精确相等；括注走 title_hint / alias_note
@@ -677,11 +698,19 @@ EN = {
         "This template does not support a sprint pace — use the natural-day cadence",
     "err.goals.template_retired_client":
         "This template has been retired — describe your direction with a Custom goal instead",
+    # N-3 #241: custom discovery tags
+    "err.goals.custom_slot_label_required": "Missing tag label (label) or tag key to remove (remove)",
+    "err.goals.custom_slot_limit": "At most {n} custom tags — remove one you no longer use",
 
     # ── Customer profile card (embedded in cp-goal; P1 dual tracks) ───────
     "inbox.goal.profile.title": "Customer profile",
     "inbox.goal.profile.track.relation": "Relation",
     "inbox.goal.profile.track.bant": "Opportunity",
+    # N-3 #241: companion second track + custom + legacy-value group
+    "inbox.goal.profile.track.personal": "Personal",
+    "inbox.goal.profile.track.custom": "Custom",
+    "inbox.goal.profile.track.extra": "Also on record",
+    "inbox.goal.profile.sensitive_t": "Sensitive: the AI only surfaces this gradually along the conversation — never asks outright or follows up",
     "inbox.goal.profile.fill": "Fill",
     "inbox.goal.profile.empty": "No profile yet — it accumulates from chat, or add manually",
     "inbox.goal.profile.edit": "Edit",
@@ -712,6 +741,19 @@ EN = {
     "inbox.goal.profile.ask.authority": "whether they can decide",
     "inbox.goal.profile.ask.timeline": "when they want it live",
     "inbox.goal.profile.ask.churn_reason": "why they churned",
+    # N-3 #241 companion personal track
+    "inbox.goal.profile.ask.family_status": "who is in their family and how they get along",
+    "inbox.goal.profile.ask.marital_status": "whether they are single or attached",
+    "inbox.goal.profile.ask.income_level": "roughly their income level (sensitive: surface gradually, never ask outright)",
+    "inbox.goal.profile.ask.residence": "where they live now and how they like it",
+    "inbox.goal.profile.ask.assets": "whether they own property or a car (sensitive: surface gradually, never ask outright)",
+    # ── Discovery chips: sensitive marker + custom tags (N-3 #241) ─────────
+    "inbox.goal.form.slot_sensitive_t": "Sensitive: unchecked by default; even when checked the AI only surfaces it gradually — never asks outright or chains questions",
+    "inbox.goal.form.slot_custom_add": "+ Custom tag",
+    "inbox.goal.form.slot_custom_prompt": "What do you want to learn? (e.g. hometown, pets; ≤24 chars)",
+    "inbox.goal.form.slot_custom_saving": "Adding…",
+    "inbox.goal.form.slot_custom_fail": "Could not add",
+    "inbox.goal.form.slot_custom_t": "Custom tag — appears in discovery and the customer profile alike",
 
     # ── Unified inbox right-rail "Work Goal" card (cp-goal component) ─────
     # title must exact-match help_terms "Work Goal"; parenthetical via title_hint / alias_note

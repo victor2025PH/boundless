@@ -4,10 +4,24 @@
 - **relation 轨**（关系向）：称呼/坐标/职业/兴趣——聊得像朋友的基础。
 - **bant 轨**（商机向，B2B 资格四要素扩展）：痛点 Need / 在用渠道 Channel /
   团队规模 Size / 预算 Budget / 决策角色 Authority / 上线时间 Timeline。
+- **personal 轨**（N-3 #241 陪伴域，D-N1）：家庭状况 / 婚恋状态 / 收入水平 /
+  当前居住地 / 个人资产——陪伴运营要摸的是「TA 是个什么处境的人」，不是商机资格。
+  收入 / 资产标 ``sensitive``：建目标默认不勾，勾了也只许 AI 多轮自然带出、禁止
+  直接问 / 连问（``resolve_inject_gap`` 给缺口短语追加硬约束）。
 - **lifecycle 轨**（P8，采集专用）：流失原因 churn_reason——只在留存/挽回/
   回流会话里确定性采集（service 按 goal.created_by 门控），**不进** TRACKS
   枚举 → 不计填充率、不进 missing_slots("")/LLM 抽取/摸底缺口提示（新客户
   永远不会被问「为什么没续」）；填上后画像卡自动显示、坐席可改。
+- **custom 轨**（N-3 #241）：运营自己加的标签（「+ 自定义标签」），键
+  ``x_<sha1(label)[:10]>``，配置 ``companion.goals.custom_slots`` 持久化，进程内
+  :func:`register_custom_slots` 登记；两个业务域都可用，同步出现在摸底 chips 与画像卡。
+
+**按业务域给槽位表**（N-3 #241）：``SLOTS`` 仍是销售域登记表（relation + bant +
+lifecycle，旧契约不动）；陪伴域 = relation + personal（+ custom）。消费方用
+:func:`slots_for_domain` / :func:`tracks_for` / :func:`secondary_track`，缺省读
+``business_domain.active_business_domain()``。**存量值不丢**：不在当前域表里但已有值
+的槽（如陪伴机器升级前填过的「预算档」）由 ``goal_routes._profile_view`` 以「其他已
+记录」附带显示；``get_slot`` / ``parse_selected_slots`` 对全表都认，旧目标照跑。
 
 设计原则：
 - 槽位登记制：新增槽位只加一条 dict（label/ask_hint/weight），fill_rates /
@@ -27,11 +41,26 @@ from typing import Any, Dict, List, Optional, Tuple
 # C2（I-3）：摸底注入硬约束——LLM 经常把软提示当可忽略。文案钉死这句，
 # 一轮只丢一个未填槽；连问三个字段比不问更糟（用户会当问卷机器人）。
 HARD_ASK_DISCIPLINE = "像朋友闲聊，不要像查户口，一轮只问一个"
+# N-3 #241（D-N1）：敏感槽（收入 / 资产）的追加硬约束——只能顺着对方主动提起的话头
+# 自然带出，绝不直接问、绝不连问、本轮带不出就算（接 I-3 #38「一轮只问一个空槽」）。
+SENSITIVE_ASK_DISCIPLINE = (
+    "这是敏感话题：只能顺着对方自己提起的话头多轮自然带出，绝不直接问、绝不追问，"
+    "本轮带不出就算")
 _ASKED_PARAM = "_gap_asked"
 _ASKED_FP_PARAM = "_gap_asked_fp"
 _ASKED_LAST_PARAM = "_gap_asked_last"
 
 TRACKS = ("relation", "bant")
+# 业务域 → 计填充率 / 进缺口枚举的轨（lifecycle 永不进；custom 随两域）
+TRACKS_BY_DOMAIN: Dict[str, Tuple[str, ...]] = {
+    "sales": ("relation", "bant"),
+    "companion": ("relation", "personal"),
+}
+# 业务域 → 「第二轨」（画像卡缺口 chips / gap_hint 缺省轨）
+SECONDARY_TRACK: Dict[str, str] = {"sales": "bant", "companion": "personal"}
+CUSTOM_TRACK = "custom"
+# 可被勾选 / 枚举为缺口的轨（lifecycle 采集专用，永不进）
+_ENUMERABLE_TRACKS = ("relation", "bant", "personal", CUSTOM_TRACK)
 
 # 槽位登记表（顺序即采集/展示优先级；weight 参与 fill 率加权）
 SLOTS: Tuple[Dict[str, Any], ...] = (
@@ -79,16 +108,166 @@ SLOTS: Tuple[Dict[str, Any], ...] = (
      "ask_zh": "当初为什么没续", "ask_en": "why they churned"},
 )
 
-_SLOT_BY_KEY = {s["key"]: s for s in SLOTS}
+# ── personal 轨（N-3 #241 陪伴域摸底集；老板决策 D-N1）──────────────────────
+# 与 relation 五槽合成陪伴域的摸底标签：称呼 / 坐标 / 职业 / 年龄 / 兴趣 + 家庭状况 /
+# 婚恋状态 / 收入水平 / 当前居住地 / 个人资产。收入 / 资产 sensitive=True：建目标默认
+# 不勾（模板 default 不含），勾了 resolve_inject_gap 追加 SENSITIVE_ASK_DISCIPLINE。
+PERSONAL_SLOTS: Tuple[Dict[str, Any], ...] = (
+    {"key": "family_status", "track": "personal", "weight": 2,
+     "label_zh": "家庭状况", "label_en": "Family",
+     "ask_zh": "家里都有谁、平时跟家人怎么相处", "ask_en": "who is in their family"},
+    {"key": "marital_status", "track": "personal", "weight": 2,
+     "label_zh": "婚恋状态", "label_en": "Relationship status",
+     "ask_zh": "现在是单身还是有伴", "ask_en": "whether they are single or attached"},
+    {"key": "income_level", "track": "personal", "weight": 1, "sensitive": True,
+     "label_zh": "收入水平", "label_en": "Income level",
+     "ask_zh": "收入大概什么水平", "ask_en": "roughly their income level"},
+    {"key": "residence", "track": "personal", "weight": 1,
+     "label_zh": "当前居住地", "label_en": "Current residence",
+     "ask_zh": "现在住在哪、住得怎么样", "ask_en": "where they live now"},
+    {"key": "assets", "track": "personal", "weight": 1, "sensitive": True,
+     "label_zh": "个人资产", "label_en": "Assets",
+     "ask_zh": "有没有房车之类的资产", "ask_en": "whether they own property or a car"},
+)
+
+# 全表（两域 + lifecycle）：get_slot / 入库校验 / facts_line / 存量值回显都认它
+ALL_SLOTS: Tuple[Dict[str, Any], ...] = SLOTS + PERSONAL_SLOTS
+
+_SLOT_BY_KEY = {s["key"]: s for s in ALL_SLOTS}
+
+# ── 自定义标签（N-3 #241 「+ 自定义标签」）──────────────────────────────────
+_CUSTOM_KEY_PREFIX = "x_"
+_CUSTOM_MAX = 12
+_CUSTOM: Dict[str, Dict[str, Any]] = {}
+
+
+def custom_slot_key(label: str) -> str:
+    """标签文案 → 稳定键 ``x_<sha1[:10]>``（同名同键；大小写 / 首尾空白不敏感）。"""
+    lab = str(label or "").strip().casefold()
+    if not lab:
+        return ""
+    return _CUSTOM_KEY_PREFIX + hashlib.sha1(lab.encode("utf-8")).hexdigest()[:10]
+
+
+def is_custom_slot_key(key: str) -> bool:
+    return str(key or "").startswith(_CUSTOM_KEY_PREFIX)
+
+
+def normalize_custom_slot(item: Any) -> Optional[Dict[str, Any]]:
+    """配置项（字符串标签 / dict）→ 槽位 dict；空标签 → None。"""
+    if isinstance(item, dict):
+        label = str(item.get("label_zh") or item.get("label") or "").strip()
+        label_en = str(item.get("label_en") or label).strip()
+        ask_zh = str(item.get("ask_zh") or item.get("ask") or "").strip()
+        ask_en = str(item.get("ask_en") or ask_zh or label_en).strip()
+        sensitive = bool(item.get("sensitive", False))
+    else:
+        label = str(item or "").strip()
+        label_en, ask_zh, ask_en, sensitive = label, "", "", False
+    label = label[:24]
+    if not label:
+        return None
+    return {
+        "key": custom_slot_key(label), "track": CUSTOM_TRACK, "weight": 1,
+        "label_zh": label, "label_en": label_en[:32] or label,
+        "ask_zh": ask_zh[:60] or f"了解一下TA的「{label}」",
+        "ask_en": ask_en[:80] or f"learn their {label_en or label}",
+        "sensitive": sensitive, "custom": True,
+    }
+
+
+def register_custom_slots(items: Any, *, replace: bool = True) -> List[Dict[str, Any]]:
+    """登记自定义槽位（进程级）。``replace=True`` 整表替换（配置是唯一事实源）。
+    上限 ``_CUSTOM_MAX``，超出忽略；键与内置槽撞名不可能（前缀 x_）。返回当前表。"""
+    new: Dict[str, Dict[str, Any]] = {} if replace else dict(_CUSTOM)
+    for it in (items or []) if isinstance(items, (list, tuple)) else []:
+        s = normalize_custom_slot(it)
+        if s is None or s["key"] in new:
+            continue
+        if len(new) >= _CUSTOM_MAX:
+            break
+        new[s["key"]] = s
+    _CUSTOM.clear()
+    _CUSTOM.update(new)
+    return list(_CUSTOM.values())
+
+
+def custom_slots() -> Tuple[Dict[str, Any], ...]:
+    return tuple(_CUSTOM.values())
+
+
+def custom_slot_labels() -> List[str]:
+    """持久化形状（写回配置 ``companion.goals.custom_slots``）。"""
+    return [str(s.get("label_zh") or "") for s in _CUSTOM.values()]
+
+
+def clear_custom_slots() -> None:
+    _CUSTOM.clear()
+
+
+def load_custom_slots_from_config(cfg_root: Any) -> List[Dict[str, Any]]:
+    """``companion.goals.custom_slots``（标签字符串 / dict 列表）→ 登记。坏配置 → 空表。"""
+    try:
+        comp = (cfg_root or {}).get("companion") if isinstance(cfg_root, dict) else None
+        goals = (comp or {}).get("goals") if isinstance(comp, dict) else None
+        raw = (goals or {}).get("custom_slots") if isinstance(goals, dict) else None
+    except Exception:
+        raw = None
+    return register_custom_slots(raw if isinstance(raw, list) else [])
+
+
+# ── 按业务域取槽位表 ─────────────────────────────────────────────────────────
+
+def _bd(business_domain: Optional[str] = None) -> str:
+    """规范化业务域；缺省读进程级 active（装配层登记；测试 / 无配置回落 env 推导）。"""
+    v = str(business_domain or "").strip().lower()
+    if v in TRACKS_BY_DOMAIN:
+        return v
+    try:
+        from src.utils.business_domain import active_business_domain
+        v = active_business_domain()
+    except Exception:
+        v = "sales"
+    return v if v in TRACKS_BY_DOMAIN else "sales"
+
+
+def tracks_for(business_domain: Optional[str] = None) -> Tuple[str, ...]:
+    """该域计填充率 / 进缺口枚举的轨（不含 lifecycle / custom）。"""
+    return TRACKS_BY_DOMAIN[_bd(business_domain)]
+
+
+def secondary_track(business_domain: Optional[str] = None) -> str:
+    """该域的第二轨：销售 bant / 陪伴 personal。"""
+    return SECONDARY_TRACK[_bd(business_domain)]
+
+
+def slots_for_domain(business_domain: Optional[str] = None, *,
+                     include_lifecycle: bool = True,
+                     include_custom: bool = True) -> List[Dict[str, Any]]:
+    """该域的摸底 / 画像槽位表（顺序即展示序）。销售 = relation + bant（+ lifecycle）；
+    陪伴 = relation + personal。custom 两域都附在末尾。"""
+    tracks = set(tracks_for(business_domain))
+    out = [dict(s) for s in ALL_SLOTS if s["track"] in tracks]
+    if include_lifecycle and _bd(business_domain) == "sales":
+        out.extend(dict(s) for s in ALL_SLOTS if s["track"] == "lifecycle")
+    if include_custom:
+        out.extend(dict(s) for s in _CUSTOM.values())
+    return out
+
+
+def slot_is_sensitive(key: str) -> bool:
+    s = get_slot(key)
+    return bool(s and s.get("sensitive"))
 
 
 def slot_keys(track: str = "") -> List[str]:
     t = str(track or "").strip().lower()
-    return [s["key"] for s in SLOTS if not t or s["track"] == t]
+    return [s["key"] for s in ALL_SLOTS if not t or s["track"] == t]
 
 
 def get_slot(key: str) -> Optional[Dict[str, Any]]:
-    return _SLOT_BY_KEY.get(str(key or "").strip().lower())
+    k = str(key or "").strip().lower()
+    return _SLOT_BY_KEY.get(k) or _CUSTOM.get(k)
 
 
 def slot_label(key: str, lang: str = "zh") -> str:
@@ -106,13 +285,19 @@ def _filled(fields: Dict[str, Any], key: str) -> bool:
     return bool(str(v or "").strip())
 
 
-def fill_rates(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """双轨加权填充率。返回 ``{relation, bant: 0..1, filled, total}``。"""
+def fill_rates(fields: Optional[Dict[str, Any]], *,
+               business_domain: Optional[str] = None) -> Dict[str, Any]:
+    """按域双轨加权填充率。返回 ``{relation, bant, personal: 0..1, filled, total,
+    tracks: [该域的两轨]}``——三条轨的键**恒在**（不在该域的轨为 0.0），消费方
+    ``rates.get("bant")`` 永不 KeyError；``filled / total`` 只数该域槽位表。"""
     f = fields or {}
-    out: Dict[str, Any] = {"filled": 0, "total": len(SLOTS)}
-    for track in TRACKS:
+    bd = _bd(business_domain)
+    domain_slots = slots_for_domain(bd, include_lifecycle=False, include_custom=False)
+    out: Dict[str, Any] = {"filled": 0, "total": len(domain_slots),
+                           "tracks": list(TRACKS_BY_DOMAIN[bd])}
+    for track in ("relation", "bant", "personal"):
         got = tot = 0
-        for s in SLOTS:
+        for s in ALL_SLOTS:
             if s["track"] != track:
                 continue
             w = int(s.get("weight") or 1)
@@ -120,7 +305,7 @@ def fill_rates(fields: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             if _filled(f, s["key"]):
                 got += w
         out[track] = round(got / tot, 3) if tot else 0.0
-    out["filled"] = sum(1 for s in SLOTS if _filled(f, s["key"]))
+    out["filled"] = sum(1 for s in domain_slots if _filled(f, s["key"]))
     return out
 
 
@@ -128,13 +313,15 @@ def missing_slots(
     fields: Optional[Dict[str, Any]], *, track: str = "bant", limit: int = 2,
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
+    business_domain: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """按登记顺序取还没填的槽位定义（画像缺口 → 采集提示/UI chips）。
 
-    ``track=""``（全轨枚举，LLM 抽取用）只枚举 TRACKS 内槽位——lifecycle
-    采集专用槽（churn_reason）不进缺口，防被当「该问的问题」推给所有客户。
+    ``track=""``（全轨枚举，LLM 抽取用）只枚举**该业务域**两轨 + custom 槽位——
+    lifecycle 采集专用槽（churn_reason）不进缺口，防被当「该问的问题」推给所有客户。
+    ``track`` 显式给轨名（bant / personal / lifecycle / custom）→ 只看该轨，不分域。
     ``include``（P26）：显式槽位键列表（摸底目标按坐席勾选出缺口，顺序即
-    优先级）；给了 include 时 track 忽略。
+    优先级）；给了 include 时 track 忽略；可勾选轨之外的键（lifecycle）忽略。
     ``exclude``（C2）：已问过但仍空的槽——跳过以免连轮追问同一句；
     全被排除但仍有缺口时回落第一空槽（第二圈，防问完就哑火）。
     """
@@ -155,18 +342,19 @@ def missing_slots(
 
     if include:
         for k in include:
-            s = _SLOT_BY_KEY.get(str(k or "").strip().lower())
-            if s is None or s["track"] not in TRACKS:
+            s = get_slot(k)
+            if s is None or s["track"] not in _ENUMERABLE_TRACKS:
                 continue
             if _take(s):
                 break
     else:
-        for s in SLOTS:
-            if track:
-                if s["track"] != track:
-                    continue
-            elif s["track"] not in TRACKS:
-                continue
+        if track:
+            pool = [s for s in ALL_SLOTS if s["track"] == track]
+            if track == CUSTOM_TRACK:
+                pool = list(_CUSTOM.values())
+        else:
+            pool = slots_for_domain(business_domain, include_lifecycle=False)
+        for s in pool:
             if _take(s):
                 break
     if out:
@@ -176,27 +364,48 @@ def missing_slots(
 
 def gap_hint(fields: Optional[Dict[str, Any]], *, lang: str = "zh",
              limit: int = 2, include: Optional[List[str]] = None,
-             exclude: Optional[List[str]] = None) -> str:
-    """摸底段注入用的缺口短语（如「业务痛点、预算档」）；全齐 → ""。
+             exclude: Optional[List[str]] = None,
+             business_domain: Optional[str] = None) -> str:
+    """摸底段注入用的缺口短语（如「业务痛点、预算档」/ 陪伴域「家庭状况、婚恋状态」）；
+    全齐 → ""。缺省轨 = 该域第二轨（销售 bant / 陪伴 personal）。
 
     ``include``：摸底目标的勾选槽位（缺口只在其中取，配 ``limit=1`` 实现
     「每轮只带一个最高优先缺口」——列表越长 LLM 越想一口气问完）。
+    敏感槽的短语带 :data:`SENSITIVE_ASK_DISCIPLINE`（prompt 硬约束）。
     """
     miss = missing_slots(
-        fields, track=("" if include else "bant"), limit=limit,
-        include=include, exclude=exclude)
+        fields, track=("" if include else secondary_track(business_domain)),
+        limit=limit, include=include, exclude=exclude,
+        business_domain=business_domain)
     if not miss:
         return ""
     k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
-    return "、".join(str(m.get(k) or m.get("label_zh") or m["key"]) for m in miss)
+    return "、".join(_ask_with_sensitivity(m, k) for m in miss)
+
+
+def _ask_with_sensitivity(slot: Dict[str, Any], ask_key: str) -> str:
+    phrase = str(slot.get(ask_key) or slot.get("label_zh") or slot["key"])
+    if slot.get("sensitive"):
+        return f"{phrase}（{SENSITIVE_ASK_DISCIPLINE}）"
+    return phrase
 
 
 def slot_ask(key: str, lang: str = "zh") -> str:
+    """建议问法（UI 用，**不带**敏感约束——那是给 prompt 的，见 :func:`inject_ask`）。"""
     s = get_slot(key)
     if not s:
         return ""
     k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
     return str(s.get(k) or s.get("label_zh") or key)
+
+
+def inject_ask(key: str, lang: str = "zh") -> str:
+    """注入链用的缺口短语：敏感槽追加 :data:`SENSITIVE_ASK_DISCIPLINE`。"""
+    s = get_slot(key)
+    if not s:
+        return ""
+    k = "ask_en" if str(lang).lower().startswith("en") else "ask_zh"
+    return _ask_with_sensitivity(s, k)
 
 
 def inbound_gap_fp(text: str) -> str:
@@ -252,13 +461,14 @@ def resolve_inject_gap(
     last = str(p.get(_ASKED_LAST_PARAM) or "").strip().lower()
     if fp and str(p.get(_ASKED_FP_PARAM) or "") == fp and last:
         if not _filled(fields or {}, last):
-            return slot_ask(last, lang), last, None
+            return inject_ask(last, lang), last, None
     slot = next_unfilled_slot(
         fields, include=include, exclude=asked, track="")
     if not slot:
         return "", "", None
     key = str(slot.get("key") or "")
-    phrase = slot_ask(key, lang)
+    # 敏感槽（收入 / 资产）：短语自带「只能多轮自然带出、禁直接问禁连问」硬约束
+    phrase = inject_ask(key, lang)
     if not fp:
         return phrase, key, None
     new_asked = list(asked)
@@ -281,8 +491,9 @@ def parse_selected_slots(raw: Any) -> List[str]:
     out: List[str] = []
     for it in items:
         k = it.strip().lower()
-        s = _SLOT_BY_KEY.get(k)
-        if s is not None and s["track"] in TRACKS and k not in out:
+        s = get_slot(k)
+        # 全表都认（不按当前域过滤）：陪伴机器升级前建的 BANT 摸底目标照跑，存量不丢
+        if s is not None and s["track"] in _ENUMERABLE_TRACKS and k not in out:
             out.append(k)
     return out
 
@@ -293,7 +504,7 @@ def selected_fill_rate(
     """按坐席勾选槽位算的等权填充率（0..1）；勾选为空 → -1.0（未知，调用方
     按「信号缺失」处理而非当 0 分）。摸底目标（profile_discovery）的
     结算信号源——填一格进一格，全填即达成。"""
-    ks = [k for k in (keys or []) if k in _SLOT_BY_KEY]
+    ks = [k for k in (keys or []) if get_slot(k) is not None]
     if not ks:
         return -1.0
     got = sum(1 for k in ks if _filled(fields or {}, k))
@@ -364,7 +575,8 @@ def facts_line(
     f = fields or {}
     parts: List[str] = []
     used = 0
-    for s in SLOTS:
+    # 全表 + 自定义：已采的事实不分域都进 prompt（陪伴机器上升级前采的「预算档」也算事实）
+    for s in list(ALL_SLOTS) + list(_CUSTOM.values()):
         key = s["key"]
         cell = f.get(key)
         v = str((cell or {}).get("v") or "").strip() if isinstance(
@@ -558,6 +770,22 @@ _INTERESTS_STOP = re.compile(
     re.IGNORECASE)
 _INTERESTS_TRAIL_RE = re.compile(r"(?:啦|哈|呢|哦|喔|嘛|呀|吧|了)+$")
 
+# ── personal 轨确定性采集（N-3 #241）：只收闭集自述，存分类标签不存原文 ─────────
+# 婚恋：第一人称 + 闭集状态词。「我朋友单身」不含「我」紧邻锚不命中；「我不是单身」
+# 含否定不命中（否定不在白名单副词里）。英文只收 I'm single / married / divorced。
+_MARITAL_PATTERNS: Tuple[Tuple[str, re.Pattern], ...] = (
+    ("已婚", re.compile(r"我(?:已经|已)?(?:结婚|结了婚|已婚)|我(?:老公|老婆|太太|先生|丈夫|妻子)(?=[，。,.!！?？\s]|$|[^们])|\bI(?:'m|\s+am)\s+married\b", re.IGNORECASE)),
+    ("离异", re.compile(r"我(?:已经|已)?(?:离婚|离了婚|离异)(?:了)?|\bI(?:'m|\s+am)\s+divorced\b", re.IGNORECASE)),
+    ("恋爱中", re.compile(r"我(?:有|谈了|在谈)(?:个|一个)?(?:男朋友|女朋友|对象|男友|女友)|我(?:在)?恋爱(?:中|了)|\bI(?:'m|\s+am)\s+(?:in a relationship|taken)\b", re.IGNORECASE)),
+    ("单身", re.compile(r"我(?:现在|目前|还|一直)?(?:是)?(?:单身|没(?:有)?(?:男朋友|女朋友|对象)|未婚)(?=[，。,.!！?？~～\s]|$|[^狗])|\bI(?:'m|\s+am)\s+(?:still\s+)?single\b", re.IGNORECASE)),
+)
+# 家庭：孩子 / 独居 / 和父母住——闭集，存标签
+_FAMILY_PATTERNS: Tuple[Tuple[str, re.Pattern], ...] = (
+    ("有孩子", re.compile(r"我(?:有|家有|生了)(?:个|一个|两个|三个|俩)?(?:孩子|小孩|儿子|女儿|娃|宝宝)|我(?:儿子|女儿)(?:今年|都|已经)|\bI have (?:a|two|three|\d) (?:kid|kids|child|children|son|daughter)s?\b", re.IGNORECASE)),
+    ("独居", re.compile(r"我(?:一个人|自己)(?:住|生活|在这)|我独居|\bI live (?:alone|by myself)\b", re.IGNORECASE)),
+    ("和父母住", re.compile(r"我(?:和|跟)(?:爸妈|父母|我妈|我爸|家人)(?:一起)?住|\bI live with my (?:parents|mom|dad|family)\b", re.IGNORECASE)),
+)
+
 
 # ── 槽位值语义体检（#108 实施91，0831 实锤「坐标槽被填 English」）──────────
 # LLM 摘录轨的接地护栏只验「出处」（值确实在原文里）不验「语义」——客户说
@@ -689,6 +917,16 @@ def capture_from_text(text: str) -> List[Tuple[str, str]]:
                 and not _INTERESTS_PRONOUN_RE.search(hobby)):
             _add("interests", hobby)
 
+    # personal 轨（N-3 #241）：婚恋 / 家庭闭集标签。收入 / 资产是敏感槽，**永不**自动采
+    # ——只许坐席手录或 LLM 摘录轨在对方自己说出来时接地。
+    for label, pat in _MARITAL_PATTERNS:
+        if pat.search(t):
+            _add("marital_status", label)
+            break
+    fam = [label for label, pat in _FAMILY_PATTERNS if pat.search(t)]
+    if fam:
+        _add("family_status", "、".join(fam[:2]))
+
     return out
 
 
@@ -742,25 +980,44 @@ def capture_churn_reason(text: str, *, require_anchor: bool = False) -> str:
 
 
 __all__ = [
+    "ALL_SLOTS",
+    "CUSTOM_TRACK",
+    "PERSONAL_SLOTS",
+    "SECONDARY_TRACK",
+    "SENSITIVE_ASK_DISCIPLINE",
     "SLOTS",
     "TRACKS",
+    "TRACKS_BY_DOMAIN",
     "capture_churn_reason",
     "capture_from_text",
     "churn_offer_steer",
     "churn_strategy_hint",
+    "clear_custom_slots",
+    "custom_slot_key",
+    "custom_slot_labels",
+    "custom_slots",
     "facts_line",
     "fill_rates",
     "HARD_ASK_DISCIPLINE",
     "gap_hint",
     "get_slot",
+    "inject_ask",
+    "is_custom_slot_key",
+    "load_custom_slots_from_config",
     "missing_slots",
     "next_unfilled_slot",
+    "normalize_custom_slot",
+    "register_custom_slots",
     "resolve_inject_gap",
+    "secondary_track",
     "slot_ask",
+    "slot_is_sensitive",
+    "slots_for_domain",
     "parse_selected_slots",
     "selected_fill_rate",
     "slot_keys",
     "slot_label",
     "slot_src",
     "slot_value",
+    "tracks_for",
 ]

@@ -298,20 +298,33 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         except Exception:
             logger.debug("pickers: site catalog failed", exc_info=True)
         # P28：摸底模板 slots chips 枚举（与 profile_slots 登记表同源）
+        # N-3 #241：按业务域给表（销售 relation+bant / 陪伴 relation+personal）+ 自定义
+        # 标签；sensitive 随行下发（前端默认不勾 + 锁标 + 提示「只多轮自然带出」）。
         try:
-            from src.companion.goals.profile_slots import SLOTS
-            out["discovery_slots"] = [
-                {"key": str(s.get("key") or ""),
-                 "track": str(s.get("track") or ""),
-                 "label_zh": str(s.get("label_zh") or s.get("key") or ""),
-                 "label_en": str(s.get("label_en") or s.get("label_zh") or s.get("key") or "")}
-                for s in SLOTS
-                if str(s.get("track") or "") in ("relation", "bant")
-                and str(s.get("key") or "")
-            ]
+            out["discovery_slots"] = _discovery_slots()
         except Exception:
             logger.debug("pickers: discovery_slots failed", exc_info=True)
         return out
+
+    def _discovery_slots() -> list:
+        from src.companion.goals.profile_slots import slots_for_domain
+        return [
+            {"key": str(s.get("key") or ""),
+             "track": str(s.get("track") or ""),
+             "label_zh": str(s.get("label_zh") or s.get("key") or ""),
+             "label_en": str(s.get("label_en") or s.get("label_zh") or s.get("key") or ""),
+             "sensitive": bool(s.get("sensitive")),
+             "custom": bool(s.get("custom"))}
+            for s in slots_for_domain(_business_domain(), include_lifecycle=False)
+            if str(s.get("key") or "")
+        ]
+
+    # N-3 #241：自定义标签从配置登记（进程级；service 注入链与本路由共用同一注册表）
+    try:
+        from src.companion.goals.profile_slots import load_custom_slots_from_config
+        load_custom_slots_from_config(_cfg_root())
+    except Exception:
+        logger.debug("custom slots load skipped", exc_info=True)
 
     # ── 静态路径（先注册）────────────────────────────────────────────────────
     @app.get("/api/goals/templates")
@@ -1096,34 +1109,68 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "created": created, "skipped": skipped}
 
     def _profile_view(svc, pf: str, ck: str, lang: str) -> Dict[str, Any]:
-        """画像视图（GET 与 POST 共用同一形状，前端保存后免二次拉取）。"""
+        """画像视图（GET 与 POST 共用同一形状，前端保存后免二次拉取）。
+
+        N-3 #241 / TN736F：画像字段集与摸底 chips **同一份域 schema**
+        （``profile_slots.slots_for_domain``，一处定义两处渲染）。陪伴域 = 关系 +
+        个人情况（+ 自定义），不渲染商机区；**存量不丢**——不在当前域表里但已有值的槽
+        （升级前填的「预算档」等）以 ``extra=True`` 附在末尾，前端归「其他已记录」。
+        """
         from src.companion.goals.profile_slots import (
-            SLOTS,
+            ALL_SLOTS,
             fill_rates,
             missing_slots,
+            secondary_track,
+            slots_for_domain,
+            tracks_for,
         )
+        bd = _business_domain()
         store = _store(svc)
         prof = store.get_customer_profile(pf, ck)
         fields = dict((prof or {}).get("fields") or {})
-        slots = []
-        for s in SLOTS:
+        lab = "label_en" if lang.startswith("en") else "label_zh"
+
+        def _row(s, extra=False):
             key = s["key"]
             cell = fields.get(key) if isinstance(fields.get(key), dict) else {}
-            slots.append({
+            row = {
                 "key": key,
                 "track": s["track"],
-                "label": str(s.get(
-                    "label_en" if lang.startswith("en") else "label_zh") or key),
+                "label": str(s.get(lab) or key),
                 "value": str((cell or {}).get("v") or ""),
                 "src": str((cell or {}).get("src") or ""),
                 "ts": float((cell or {}).get("ts") or 0),
-            })
+            }
+            if s.get("sensitive"):
+                row["sensitive"] = True
+            if s.get("custom"):
+                row["custom"] = True
+            if extra:
+                row["extra"] = True
+            return row
+
+        domain_slots = slots_for_domain(bd)
+        seen = {s["key"] for s in domain_slots}
+        slots = [_row(s) for s in domain_slots]
+        for s in ALL_SLOTS:
+            if s["key"] in seen:
+                continue
+            cell = fields.get(s["key"])
+            if isinstance(cell, dict) and str(cell.get("v") or "").strip():
+                slots.append(_row(s, extra=True))
+        sec = secondary_track(bd)
+        missing = [m["key"] for m in
+                   missing_slots(fields, track=sec, limit=6, business_domain=bd)]
         return {
             "platform": pf, "chat_key": ck,
+            "business_domain": bd,
+            "tracks": list(tracks_for(bd)),
+            "secondary_track": sec,
             "slots": slots,
-            "fill": fill_rates(fields),
-            "missing_bant": [m["key"] for m in
-                             missing_slots(fields, track="bant", limit=6)],
+            "fill": fill_rates(fields, business_domain=bd),
+            "missing": missing,
+            # 旧前端兼容键：销售域 = 商机缺口；陪伴域没有商机轨 → 空
+            "missing_bant": missing if sec == "bant" else [],
             "updated_at": float((prof or {}).get("updated_at") or 0),
         }
 
@@ -1174,6 +1221,66 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         view = _profile_view(svc, pf, ck, _lang(request))
         view["ok"] = True
         return view
+
+    # ── 自定义摸底标签（N-3 #241 「+ 自定义标签」；TN736F ③ 同步出现在画像卡）──
+    _CUSTOM_SLOTS_PATH = "companion.goals.custom_slots"
+
+    @app.get("/api/goals/custom-slots")
+    async def goals_custom_slots_get(request: Request, _auth=Depends(auth_dep)):
+        _require_enabled(request)
+        from src.companion.goals.profile_slots import custom_slots
+        return {"ok": True, "custom_slots": [dict(s) for s in custom_slots()],
+                "discovery_slots": _discovery_slots()}
+
+    @app.post("/api/goals/custom-slots")
+    async def goals_custom_slots_set(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """加 / 删一个自定义标签。``{"label": "家乡"}`` 加；``{"remove": "x_…"}`` 删。
+        持久化到 overlay ``companion.goals.custom_slots``（标签列表，配置是唯一事实源），
+        同时刷进程内注册表——摸底 chips / 画像卡 / 注入链下一次读取即见。"""
+        _require_enabled(request)
+        _deny_viewer(request)
+        from src.companion.goals.profile_slots import (
+            custom_slot_key,
+            custom_slot_labels,
+            custom_slots,
+            get_slot,
+            is_custom_slot_key,
+            register_custom_slots,
+        )
+        body = payload or {}
+        label = str(body.get("label") or "").strip()[:24]
+        remove = str(body.get("remove") or "").strip().lower()
+        labels = custom_slot_labels()
+        if label:
+            if get_slot(custom_slot_key(label)) is not None or any(
+                    l.casefold() == label.casefold() for l in labels):
+                pass  # 已有：幂等
+            elif len(labels) >= 12:
+                raise HTTPException(400, tr(request, "err.goals.custom_slot_limit", n=12))
+            else:
+                labels.append(label)
+        elif remove and is_custom_slot_key(remove):
+            labels = [l for l in labels if custom_slot_key(l) != remove]
+        else:
+            raise HTTPException(400, tr(request, "err.goals.custom_slot_label_required"))
+        setter = getattr(config_manager, "set_overlay_flag", None)
+        if callable(setter):
+            ok, msg = setter(_CUSTOM_SLOTS_PATH, list(labels))
+            if not ok:
+                logger.warning("custom_slots overlay write failed: %s", msg)
+                raise HTTPException(500, tr(request, "err.goals.update_failed"))
+        register_custom_slots(list(labels))
+        actor = ""
+        try:
+            actor = request.session.get("username", "")
+        except Exception:
+            pass
+        logger.info("goals custom_slots = %s (by %s)", labels, actor or "?")
+        return {"ok": True, "custom_slots": [dict(s) for s in custom_slots()],
+                "discovery_slots": _discovery_slots(),
+                "added_key": custom_slot_key(label) if label else ""}
 
     @app.post("/api/goals/order-hook")
     async def goals_order_hook(request: Request, payload: Dict[str, Any]):

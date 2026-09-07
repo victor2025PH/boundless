@@ -492,6 +492,12 @@
       button.gl-chip.miss:hover, .gl-chip.miss.on {
                  color:var(--cp-accent,#4f46e5); border-color:var(--cp-accent,#4f46e5);
                  background:var(--cp-accent-weak,rgba(79,70,229,.08)); }
+      /* N-3 #241：敏感槽（收入 / 资产）锁标；「+ 自定义标签」虚线加号 chip */
+      .gl-chip.sens { border-style:dotted; }
+      .gl-chip.sens::before { content:"\\1F512\\FE0E "; font-size:10px; opacity:.75; }
+      .gl-chip.add { border-style:dashed; color:var(--cp-text-dim,#64748b); background:transparent; }
+      .gl-chip.add:hover { color:var(--cp-accent,#4f46e5); }
+      .gl-sens-hint { margin-top:3px; font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); }
       .gl-ask { margin-top:5px; padding:6px 8px; border-radius:8px;
                 background:var(--cp-accent-weak,rgba(79,70,229,.06));
                 border:1px dashed color-mix(in srgb,var(--cp-accent,#4f46e5) 45%,transparent); }
@@ -2652,11 +2658,14 @@
     }
 
     _parseSlotsCsv(raw) {
+      // 自定义标签键形如 x_3f9a1c…（N-3 #241）——放行数字
       return String(raw || "").split(/[,，\s]+/).map((s) => s.trim().toLowerCase())
-        .filter((s) => /^[a-z_]+$/.test(s));
+        .filter((s) => /^[a-z][a-z0-9_]*$/.test(s));
     }
 
-    /* 摸底目标「要了解的信息」：多选 chips（隐藏域写 CSV，与后端 parse_selected_slots 同口径） */
+    /* 摸底目标「要了解的信息」：多选 chips（隐藏域写 CSV，与后端 parse_selected_slots 同口径）
+       N-3 #241：可选项按业务域由后端 pickers.discovery_slots 给（陪伴 = 关系 + 个人情况）；
+       sensitive 槽默认不勾（模板 default 不含）、带锁标与提示；末尾「+ 自定义标签」。 */
     _slotsPickerHtml(tmpl, p) {
       const esc = (s) => this.esc(s);
       const opts = this._discoverySlotOptions();
@@ -2664,18 +2673,76 @@
       if (!selected.length) selected = ["age", "occupation", "location", "interests"];
       const sel = {};
       selected.forEach((k) => { sel[k] = 1; });
+      let anySens = false;
       const chips = opts.map((s) => {
         const k = String(s.key || "");
         const lab = LANG === "en" ? (s.label_en || s.label_zh || k)
           : (s.label_zh || s.label_en || k);
         const on = !!sel[k];
-        return `<button type="button" class="gl-chip${on ? " on" : ""}" data-act="slot_toggle"` +
-          ` data-slot="${esc(k)}" aria-pressed="${on ? "true" : "false"}">${esc(lab)}</button>`;
+        const sens = !!s.sensitive;
+        if (sens) anySens = true;
+        const tip = sens ? this.t("inbox.goal.form.slot_sensitive_t")
+          : (s.custom ? this.t("inbox.goal.form.slot_custom_t") : "");
+        return `<button type="button" class="gl-chip${on ? " on" : ""}${sens ? " sens" : ""}` +
+          `${s.custom ? " custom" : ""}" data-act="slot_toggle"` +
+          ` data-slot="${esc(k)}" aria-pressed="${on ? "true" : "false"}"` +
+          `${tip ? ` title="${esc(tip)}"` : ""}>${esc(lab)}</button>`;
       }).join("");
+      const addBtn = `<button type="button" class="gl-chip add" data-act="slot_custom_add"` +
+        ` title="${esc(this.t("inbox.goal.form.slot_custom_t"))}">` +
+        `${esc(this.t("inbox.goal.form.slot_custom_add"))}</button>`;
+      const sensHint = anySens
+        ? `<div class="gl-sens-hint">\uD83D\uDD12 ${esc(this.t("inbox.goal.form.slot_sensitive_t"))}</div>` : "";
       return `<div><label class="gl-fl">${esc(this._paramLabel(tmpl.id, p))}</label>` +
         `<input type="hidden" data-param-key="slots" data-ref="slots_val" value="${esc(selected.join(","))}">` +
-        `<div class="gl-chips gl-slotpicks" data-ref="slotpicks">${chips}</div>` +
+        `<div class="gl-chips gl-slotpicks" data-ref="slotpicks">${chips}${addBtn}</div>` +
+        sensHint + `<div class="gl-ferr" data-ref="slot_custom_err" hidden></div>` +
         this._helpHtml(this._paramHelp(tmpl.id, p)) + `</div>`;
+    }
+
+    /* 「+ 自定义标签」：prompt 文案 → POST /api/goals/custom-slots → 后端回整张
+       discovery_slots（配置是唯一事实源）→ 覆盖 pickers → 新键置勾 → 重画 chips。
+       旧后端无端点（404）→ 报「添加失败」，绝不静默。 */
+    async _addCustomSlot() {
+      const label = String((root.prompt && root.prompt(this.t("inbox.goal.form.slot_custom_prompt"), "")) || "").trim();
+      if (!label) return;
+      const err = this._ref("slot_custom_err");
+      const show = (msg) => { if (err) { err.textContent = msg; err.hidden = !msg; } };
+      show(this.t("inbox.goal.form.slot_custom_saving"));
+      let res = null;
+      try {
+        res = await this._api("/api/goals/custom-slots", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label: label.slice(0, 24) }),
+        });
+      } catch (_e) { res = null; }
+      if (!res || !res.ok || !res.data || !Array.isArray(res.data.discovery_slots)) {
+        const detail = res && res.data && (res.data.detail || res.data.error);
+        show(this.t("inbox.goal.form.slot_custom_fail") + (detail ? "：" + detail : ""));
+        return;
+      }
+      show("");
+      if (!this._templates) this._templates = {};
+      if (!this._templates.pickers) this._templates.pickers = {};
+      this._templates.pickers.discovery_slots = res.data.discovery_slots;
+      const key = String(res.data.added_key || "");
+      const hid = this._ref("slots_val");
+      const cur = hid ? this._parseSlotsCsv(hid.value) : [];
+      if (key && cur.indexOf(key) < 0) cur.push(key);
+      // 重画整块 picker（chips 集合变了，不能只 toggle）
+      const wrap = this._ref("slotpicks");
+      if (wrap && wrap.parentElement) {
+        const tmpl = this._tmplById(this._formTid) || this._tmplById("profile_discovery");
+        const pdef = ((tmpl && tmpl.params) || []).find((x) => x.key === "slots") || { key: "slots", default: "" };
+        const holder = document.createElement("div");
+        holder.innerHTML = this._slotsPickerHtml(tmpl || { id: "profile_discovery", params: [] },
+          Object.assign({}, pdef, { default: cur.join(",") }));
+        const fresh = holder.firstElementChild;
+        if (fresh) wrap.parentElement.replaceWith(fresh);
+      }
+      this._draftCapture();
+      _beacon("goal_slot_custom_add");
     }
 
     _syncSlotChips() {
@@ -3858,6 +3925,10 @@
       if (act === "slot_toggle") {
         this._toggleSlotChip((el && el.getAttribute("data-slot")) || "");
         _beacon("goal_slot_toggle");
+        return;
+      }
+      if (act === "slot_custom_add") {
+        this._addCustomSlot();
         return;
       }
       if (act === "switch_discovery") {

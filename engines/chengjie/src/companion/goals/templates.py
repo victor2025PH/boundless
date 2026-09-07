@@ -419,13 +419,13 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
              "default": "age,occupation,location,interests",
              "label_zh": "要了解的信息（逗号分隔槽位键）",
              "label_en": "Slots to learn (comma separated)",
-             "help_zh": "可选：age=年龄 occupation=职业 location=坐标 "
-                        "interests=兴趣 name=称呼 need=痛点 channel=在用平台 "
-                        "team_size=团队规模 budget=预算 authority=决策角色 "
-                        "timeline=上线时间；客户全说出来目标自动标「已达成」",
-             "help_en": "Pick from: age occupation location interests name "
-                        "need channel team_size budget authority timeline; "
-                        "the goal auto-completes when all are learned"},
+             # N-3 #241：可选项按业务域给（销售 = 关系 + 商机；陪伴 = 关系 + 个人情况），
+             # 文案不再点名 BANT 键——chips 就是可选项清单
+             "help_zh": "点上面的标签勾选要了解的信息；带 🔒 的是敏感项（收入 / 资产），"
+                        "AI 只会多轮自然带出、不直接问；客户全说出来目标自动标「已达成」",
+             "help_en": "Tap the chips above to pick what to learn; 🔒 marks sensitive"
+                        " items (income / assets) the AI only surfaces gradually, never"
+                        " asks outright; the goal auto-completes when all are learned"},
             {"key": "note", "type": "string", "default": "",
              "label_zh": "补充方向（可选，给 AI 看）",
              "label_en": "Extra direction (optional)"},
