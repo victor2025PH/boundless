@@ -681,15 +681,32 @@ class CareScheduleStore:
     def cancel(self, sid: int, *, note: str = "") -> bool:
         return self._set_status(sid, "cancelled", note=note)
 
+    # N-1 B（#243，D-N4 ②）：提前到期的行记 note=fwd:<时刻> → 卡片显「已提前（hh:mm）」
+    FWD_NOTE_PREFIX = "fwd:"
+
+    @classmethod
+    def forwarded_at(cls, item: Any) -> float:
+        """该 pending 行若被「提前到期」过 → 提前时刻（epoch）；否则 0。"""
+        try:
+            n = str((item or {}).get("note") or "")
+            if not n.startswith(cls.FWD_NOTE_PREFIX):
+                return 0.0
+            return float(n[len(cls.FWD_NOTE_PREFIX):].strip() or 0)
+        except Exception:
+            return 0.0
+
     def bring_forward(self, sid: int, *, now: Optional[float] = None) -> bool:
-        """把一条 pending 待办的 due_at 提前到 now（运营「立即发」）→ 下个派发 tick 即到期。"""
+        """把一条 pending 待办的 due_at 提前到 now（运营「立即发」的**兜底**路径）→ 下个
+        派发 tick 即到期；同时 ``note=fwd:<now>``（覆盖上次 ``fail:*``，不碰 ``hold:*`` 行
+        ——待确认行由路由层先挡）。A 项的同步直投才是主路径（``CareDispatcher.send_now``）。"""
         n = float(now if now is not None else time.time())
         try:
             with self._lock:
                 cur = self._conn.execute(
-                    "UPDATE care_schedule SET due_at = ?, updated_at = ?"
+                    "UPDATE care_schedule SET due_at = ?, updated_at = ?,"
+                    " note = CASE WHEN note LIKE 'hold:%' THEN note ELSE ? END"
                     " WHERE id = ? AND status = 'pending'",
-                    (n, n, int(sid)),
+                    (n, n, self.FWD_NOTE_PREFIX + str(int(n)), int(sid)),
                 )
                 self._conn.commit()
                 return bool(cur.rowcount)

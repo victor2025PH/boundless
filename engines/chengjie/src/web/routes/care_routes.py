@@ -110,6 +110,15 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             return ""
 
+    def _forwarded_at(item: dict) -> float:
+        """该行被「提前到期」的时刻（note=fwd:<ts>，N-1 B #243）；无 → 0。"""
+        try:
+            from src.contacts.care_schedule import CareScheduleStore
+            return float(CareScheduleStore.forwarded_at(item)) if hasattr(
+                CareScheduleStore, "forwarded_at") else 0.0
+        except Exception:
+            return 0.0
+
     async def _render_event_preview(request: Request, item: dict) -> dict:
         """LLM 档「先看后发」共用体（M-1 A #218）：预览端点与「排上」前置预览同源。
 
@@ -582,6 +591,7 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "hold_text": (str(it.get("sent_text") or "") if _hold_reason(it) else ""),
             # N-1 A/E（#243）：上次「立即发」失败原因 + 行的 note/updated_at（状态机时间戳）
             "fail_reason": _fail_reason(it),
+            "forwarded_at": _forwarded_at(it),
             "note": str(it.get("note") or ""),
             "updated_at": float(it.get("updated_at") or 0),
             "source_text": str(it.get("source_text") or ""),
@@ -950,6 +960,34 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         except asyncio.TimeoutError:
             return None
 
+    async def _bring_forward_fallback(request: Request, store, sid: int, disp, *,
+                                      dry: bool, held: str, interval: float) -> dict:
+        """B 兜底（N-1 #243，D-N4 ②）：``bring_forward`` 置 due_at=now + note=fwd:<ts>，
+        派发器在场（但没有 ``send_now``）→ 立刻在主 loop 补一拍 ``run_once``；
+        响应带 ``eta``（预计出手：立刻补拍成功＝now，否则 now+interval）。"""
+        now = time.time()
+        ok = store.bring_forward(sid, now=now)
+        if not ok:
+            return {"ok": False, "id": sid, "decision": "not_pending", "reason": "not_pending",
+                    "message": "待办不存在或非 pending"}
+        ticked = False
+        scheduled = 0
+        if disp is not None and hasattr(disp, "run_once"):
+            try:
+                n = await _run_on_engine_loop(request, lambda: disp.run_once(), timeout=30.0)
+                ticked = n is not None
+                scheduled = int(n or 0)
+            except Exception:
+                logger.debug("care bring_forward 立即 tick 异常（留给下一拍）", exc_info=True)
+        eta = now if (ticked and scheduled) else (now + interval if interval else now + 600.0)
+        logger.info("[care-gen] id=%s decision=bring_forward due_at=now ticked=%s scheduled=%d "
+                    "dry_run=%s held=%r reason=%s", sid, ticked, scheduled, dry, held,
+                    "dispatcher_missing" if disp is None else "legacy_dispatcher")
+        return {"ok": True, "id": sid, "due_now": sid, "decision": "brought_forward",
+                "reason": "dispatcher_missing" if disp is None else "legacy_dispatcher",
+                "ticked": ticked, "scheduled": scheduled, "dry_run": dry, "held": held,
+                "interval_sec": interval, "eta": eta}
+
     @app.post("/api/care/schedule/{sid}/send-now")
     async def api_care_schedule_send_now(sid: int, request: Request, _=Depends(api_auth)):
         """立即发＝**同步直投**（N-1 A #243，D-N4 ①）：不再只是「提前到期等下一拍」。
@@ -983,15 +1021,10 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             interval = 0.0
         if disp is None or not hasattr(disp, "send_now"):
-            # B 兜底（D-N4 ②）：没有派发器能当场发 → 至少把 due_at 钉到 now，下一拍即到期
-            ok = store.bring_forward(int(sid))
-            logger.info("[care-gen] id=%s decision=bring_forward dry_run=%s held=%r "
-                        "reason=dispatcher_missing", sid, dry, held)
-            return {"ok": bool(ok), "id": int(sid), "due_now": int(sid),
-                    "decision": "brought_forward" if ok else "not_pending",
-                    "reason": "dispatcher_missing", "dry_run": dry, "held": held,
-                    "interval_sec": interval,
-                    "eta": (time.time() + interval) if ok and interval else 0.0}
+            # B 兜底（D-N4 ②）：没有能当场发的派发器 → 至少把 due_at 钉到 now（note=fwd:<ts>，
+            # 卡片显「已提前」），旧派发器在场就**立刻补一拍** run_once，不等下一个 600s。
+            return await _bring_forward_fallback(request, store, int(sid), disp,
+                                                 dry=dry, held=held, interval=interval)
         res = await _run_on_engine_loop(request, lambda: disp.send_now(dict(item)))
         if res is None:
             logger.warning("[care-gen] id=%s decision=send_now:timeout", sid)

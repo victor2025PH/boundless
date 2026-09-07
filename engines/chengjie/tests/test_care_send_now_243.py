@@ -482,6 +482,84 @@ def test_route_send_now_runs_on_engine_loop_when_registered():
         loop.close()
 
 
+# ── B：bring_forward 兜底＝due_at=now + note=fwd + 立刻补一拍 ───────────────
+def test_bring_forward_sets_due_now_and_fwd_note_but_keeps_hold():
+    s, rid = _verbatim_store()
+    s.mark_send_failed(rid, "sender_returned_false", now=NOW - 5)
+    assert s.bring_forward(rid, now=NOW) is True
+    it = s.get(rid)
+    assert it["due_at"] == NOW and it["note"] == "fwd:%d" % int(NOW)
+    assert CareScheduleStore.forwarded_at(it) == float(int(NOW))
+    assert CareScheduleStore.fail_reason(it) == ""            # fail:* 被覆盖
+    assert [r["id"] for r in s.list_due(now=NOW)] == [rid]    # 立刻到期
+    # 待确认行：due_at 提前但 hold 备注保住（路由层本就先挡，这里守 store 语义）
+    s2, rid2 = _verbatim_store()
+    s2.mark_hold_for_preview(rid2, sent_text=TEXT, reason="first_send")
+    assert s2.bring_forward(rid2, now=NOW) is True
+    assert CareScheduleStore.hold_reason(s2.get(rid2)) == "first_send"
+    assert s2.bring_forward(999, now=NOW) is False
+
+
+def test_route_fallback_legacy_dispatcher_ticks_immediately():
+    """派发器在场但没有 send_now（旧类）→ bring_forward 后立刻 run_once，不等 600s。"""
+    import time as _t
+    from src.web.routes.care_routes import register_care_routes
+
+    app = FastAPI()
+    store = CareScheduleStore(":memory:")
+    q = _Queue("ok")
+    ticks = []
+
+    class _Legacy:
+        _interval = 600.0
+
+        def effective_dry_run(self):
+            return False
+
+        def health_snapshot(self):
+            return {"running": True, "interval_sec": 600.0, "last_tick_ts": 0.0}
+
+        async def run_once(self, *, now=None):
+            ticks.append(_t.time())
+            due = store.list_due()
+            for it in due:
+                rid = q.store.enqueue(platform=it["platform"], account_id=it["account_id"],
+                                      chat_key=it["chat_key"], reply_text=it["source_text"],
+                                      defer_until=_t.time(), reason="care:verbatim",
+                                      extra={"care": True, "care_id": it["id"]})
+                store.mark_sent(it["id"], note=f"deferred:{rid}", sent_text=it["source_text"])
+            return len(due)
+
+    app.state.care_schedule_store = store
+    app.state.care_engine = {"dispatcher": _Legacy()}
+    app.state.config_manager = _CM()
+
+    def _auth(request: Request):
+        return True
+    register_care_routes(app, api_auth=_auth, config_manager=app.state.config_manager)
+    c = TestClient(app)
+    rid = store.add_verbatim(contact_key=CONTACT, due_at=_t.time() + 3600, text=TEXT,
+                             platform="telegram", account_id="7092595256", chat_key="6088992099")
+    r = c.post(f"/api/care/schedule/{rid}/send-now", json={}).json()
+    assert r["ok"] is True and r["decision"] == "brought_forward"
+    assert r["reason"] == "legacy_dispatcher" and r["ticked"] is True and r["scheduled"] == 1
+    assert abs(r["eta"] - _t.time()) < 5                      # 立刻补拍成功 → 预计＝现在
+    assert len(ticks) == 1 and store.get(rid)["status"] == "sent"
+
+
+def test_route_fallback_without_dispatcher_reports_eta_and_card_state():
+    import time as _t
+    c, store, q = _client("ok", with_dispatcher=False)
+    rid = store.add_verbatim(contact_key=CONTACT, due_at=_t.time() + 3600, text=TEXT,
+                             platform="telegram", account_id="7092595256", chat_key="6088992099")
+    r = c.post(f"/api/care/schedule/{rid}/send-now", json={}).json()
+    assert r["decision"] == "brought_forward" and r["ticked"] is False
+    assert r["eta"] >= _t.time() + 500                        # 无派发器：预计＝now+interval（缺省 600）
+    items = [it for g in c.get("/api/care/plan").json()["groups"] for it in g["items"]]
+    assert items[0]["forwarded_at"] > 0 and items[0]["note"].startswith("fwd:")
+    assert items[0]["due_at"] <= _t.time()                    # 已提前到期，进「到期」组
+
+
 # ── 静态钉 ──────────────────────────────────────────────────────────────────
 def test_background_tasks_wires_deliver_now_and_loop():
     src = (_REPO / "src" / "bootstrap" / "background_tasks.py").read_text(encoding="utf-8")
