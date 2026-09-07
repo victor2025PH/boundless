@@ -1329,17 +1329,25 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <!-- 音色体检（只读）：夜间探针 voice_similarity 最新读数（声纹/自然度/日期） -->
       <div id="pe-vq-row" style="font-size:.74rem;color:var(--t2);margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;line-height:1.5">
         🩺 {{ (i18n or {}).get('psn_vq_title','音色体检') }}：<span id="pe-vq-line">{{ (i18n or {}).get('psn_vq_none','暂无体检数据') }}</span>
+        {# #239 → N-4：试听终审回填占位。数据钩子＝window.__PSN_VOICE_AUDITION[pid]（{ts, filename, url, voice_meta:{speech, speech_basis, energy, provider, voice, fallback_reason…}}）
+           + document 事件 'persona-voice-audition'（detail 同上），由 peVcPreview 每次试听后发出；N-4 在此渲染「已核有声 / 疑似无声」口径。 #}
+        <span id="pe-vq-audition" data-hook="persona-voice-audition"></span>
       </div>
       <!-- B25-①（实施49 2026-08-21）：克隆音色登记/改绑挪进人设页——「音色跟人走」。
            组件与收件箱右栏同源（<cp-voice mode="enroll">，登记流单源两挂载点，避免双端
            重复维护）；「生成语音 / 发送」需要会话上下文，留在收件箱右栏业务助手。 -->
+      {# #239（R8ECFS，N-2 B）：登记成功后这一行常驻「已登记 STEVEN.ogg · ▶ 试听 · 解绑」——此前登记后
+         预置声选择器（含唯一的 ▶ 试听键）随三态切 clone 而隐藏，四段试听音频无处播放；试听结果同时经
+         window.__PSN_VOICE_AUDITION / 'persona-voice-audition' 事件交给「音色体检」回填（N-4）。 #}
       <div id="pe-vc-card" style="margin-top:.55rem;border-top:1px solid var(--bd);padding-top:.55rem;">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.74rem;">
           <b>🎤 {{ (i18n or {}).get('psn_vc_h','克隆音色（跟随人设）') }}</b>
           <span id="pe-vc-status" style="color:var(--t2);"></span>
+          <button type="button" class="btn btn-sm" id="pe-vc-preview" onclick="peVcPreview()" style="display:none;font-size:.72rem;">▶ {{ (i18n or {}).get('psn_vm_preview','试听') }}</button>
           <button type="button" class="btn btn-sm" id="pe-vc-unbind" onclick="peVcUnbind()" style="display:none;font-size:.72rem;">{{ (i18n or {}).get('psn_vc_unbind_btn','解绑克隆音色') }}</button>
         </div>
-        <div style="font-size:.7rem;color:var(--t2);margin:.3rem 0 .35rem;line-height:1.5">{{ (i18n or {}).get('psn_vc_sub','上传参考音频完成登记，音色跟随本人设生效；「生成语音 / 发送」在收件箱右栏业务助手。') }}</div>
+        <div id="pe-vc-player" style="display:none;margin-top:.35rem;font-size:.72rem;color:var(--t2);"></div>
+        <div style="font-size:.7rem;color:var(--t2);margin:.3rem 0 .35rem;line-height:1.5">{{ (i18n or {}).get('psn_vc_sub','上传参考音频完成登记，音色跟随本人设生效；「生成语音 / 发送」在收件箱右栏业务助手。') }} {{ (i18n or {}).get('psn_vc_persist_note','登记成功即写入人设并立即生效，不需要再点底部「保存」。') }}</div>
         <cp-voice mode="enroll" id="pe-vc-enroll"></cp-voice>
       </div>
     </div>
@@ -1752,6 +1760,9 @@ function switchDTab(id) {
   if (id === 'stock' && !_stockLoaded) { _stockLoaded = true; stockLoad(); }
 }
 function _markDrawerDirty(e) {
+  // #239（R8ECFS ④）：克隆音色登记组件 <cp-voice> 就挂在抽屉里，它的文件/名字输入事件冒泡上来
+  // 曾把抽屉标成「有未保存的修改」——登记是即时落库的独立动作，不属于表单改动，不计脏。
+  if (e && e.target && e.target.closest && e.target.closest('#pe-vc-card')) return;
   var d = document.getElementById('drawer-dirty'); if (d) d.classList.add('show');
   _scheduleDiffUpdate();
   if (e && e.target) {
@@ -4675,7 +4686,7 @@ async function _presetPreview() {
   if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
   var meta = _vmVoiceMeta(v) || {};
   var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
-  var text = _fmt(window.T('psn_voice_preview_text', '你好呀，我是{name}，很高兴认识你！'), {name: nm});
+  var text = window.Tf('psn_voice_preview_text', {name: nm});
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     // 试听只认「这把预置声」：voice_cfg_override 显式覆盖 backend/voice、压掉全局克隆档，
@@ -4690,7 +4701,7 @@ async function _presetPreview() {
     _presetAudio.onended = _presetAudio.onerror = function () { _presetAudio = null; };
     _presetAudio.play().catch(function () {});
   } catch (e) {
-    _toast(_fmt(window.T('psn_voice_preview_fail', '试听失败：{err}'), {err: (e && e.message) || e}), 'err');
+    _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
   } finally { if (btn) { btn.disabled = false; btn.textContent = '▶ ' + window.T('psn_vm_preview'); } }
 }
 function _vmRefName(vp) { var r = String((vp || {}).reference_audio_path || ''); return r ? r.split(/[\\/]/).pop() : ''; }
@@ -8870,17 +8881,28 @@ function _peVcCli(){
   }
   return _peVcClient;
 }
+var _peVcAudio = null;
+var _peVcFile = '';       /* #239: enrolled recording file name for the persistent line / toast */
+function _peVcPlayerHide(){
+  var pl = document.getElementById('pe-vc-player');
+  if (pl) { pl.style.display = 'none'; pl.innerHTML = ''; }
+  if (_peVcAudio) { try { _peVcAudio.pause(); } catch (_e) {} _peVcAudio = null; }
+}
 async function peVcSync(pid){
   var host = document.getElementById('pe-vc-enroll');
   var st = document.getElementById('pe-vc-status');
   var ub = document.getElementById('pe-vc-unbind');
+  var pv = document.getElementById('pe-vc-preview');
   if (!host || !st) return;
+  if (String(pid || '') !== _peVcPid) _peVcPlayerHide();   /* switching persona: drop the other one's audition */
   _peVcPid = String(pid || '');
   host.setAttribute('persona', _peVcPid);
   var c = _peVcCli();
   if (c) host.client = c;   /* setter renders enroll-only mode; idempotent */
   st.textContent = '';
+  _peVcFile = '';
   if (ub) ub.style.display = 'none';
+  if (pv) pv.style.display = 'none';
   if (!c || !_peVcPid || !c.voiceProfiles) return;
   try {
     var d = await c.voiceProfiles();
@@ -8893,8 +8915,10 @@ async function peVcSync(pid){
        Mizuki (avatar_clone + ja-JP-NanamiNeural, no recording) used to read "bound: ja-JP-NanamiNeural". */
     var _refName = (typeof _vmRefName === 'function' && _vmLoaded && _vmLoaded.vp) ? _vmRefName(_vmLoaded.vp) : '';
     if (row && row.is_clone && row.ready) {
-      st.textContent = window.Tf('psn_vc_bound', {voice: _refName || row.speaker_id || row.voice || ''});
+      _peVcFile = _refName || row.speaker_id || row.voice || '';
+      st.textContent = window.Tf('psn_vc_bound', {voice: _peVcFile});
       if (ub) ub.style.display = '';
+      if (pv) pv.style.display = '';   /* #239: persistent "enrolled X · play · unbind" row */
     } else if (row && row.is_clone) {
       st.textContent = window.T('psn_vc_not_ready');
       if (ub) ub.style.display = '';
@@ -8902,6 +8926,53 @@ async function peVcSync(pid){
       st.textContent = window.T('psn_vc_none');
     }
   } catch (_e) { /* status line is best-effort; enrollment stays usable */ }
+}
+/* #239: audition the enrolled clone voice from the persona page (same /api/voice/tts-test the
+   enroll widget uses, resolved by persona_id so the clone profile is what plays). The player
+   stays on the card; the server verdict (voice_meta.speech etc.) is handed to the voice-check
+   row via window.__PSN_VOICE_AUDITION[pid] + 'persona-voice-audition' event -- N-4 renders it. */
+window.__PSN_VOICE_AUDITION = window.__PSN_VOICE_AUDITION || {};
+async function peVcPreview(){
+  var pid = _peVcPid;
+  var btn = document.getElementById('pe-vc-preview');
+  var pl = document.getElementById('pe-vc-player');
+  if (!pid) return;
+  var nm = (document.getElementById('pe-name') || {}).value || pid;
+  var text = window.Tf('psn_voice_preview_text', {name: nm});
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  if (_peVcAudio) { try { _peVcAudio.pause(); } catch (_e) {} _peVcAudio = null; }
+  try {
+    var r = await apiFetch('/api/voice/tts-test', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text, persona_id: pid, format: 'mp3'})}, {timeoutMs: 120000});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
+    var url = d.url || d.audio_url;
+    if (pl) {
+      pl.innerHTML = '<audio controls autoplay src="' + _escAttr(String(url)) + '" style="max-width:100%;height:28px;vertical-align:middle"></audio>'
+        + ' <span style="color:var(--t3)">' + _escHtml(window.Tf('psn_vc_audition_of', {file: _peVcFile || pid})) + '</span>';
+      pl.style.display = '';
+      _peVcAudio = pl.querySelector('audio');
+    }
+    var rec = {ts: Date.now(), persona_id: pid, filename: String(d.filename || ''), url: String(url), voice_meta: d.voice_meta || {}};
+    window.__PSN_VOICE_AUDITION[pid] = rec;
+    try { document.dispatchEvent(new CustomEvent('persona-voice-audition', {detail: rec})); } catch (_e) {}
+  } catch (e) {
+    _toast(_escHtml(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e})), 'err', 6000);
+  } finally { if (btn) { btn.disabled = false; btn.textContent = '▶ ' + window.T('psn_vm_preview'); } }
+}
+/* #239: enrolled toast -- >= 8s, closable, no internal backend name, embedded play. */
+function _peVcToast(msgHtml, dur){
+  var wrap = document.getElementById('toast-wrap');
+  if (!wrap) { _toast(msgHtml, 'ok', dur || 8000); return; }
+  var el = document.createElement('div');
+  el.className = 'toast ok';
+  el.innerHTML = '<span style="font-size:.88rem">✓</span><span>' + msgHtml
+    + ' <button type="button" class="btn btn-xs" onclick="peVcPreview()">▶ ' + _escHtml(window.T('psn_vm_preview')) + '</button></span>'
+    + '<button type="button" class="btn btn-xs" style="margin-left:.4rem" title="' + _escAttr(window.T('psn_vc_toast_close')) + '" aria-label="' + _escAttr(window.T('psn_vc_toast_close')) + '">×</button>';
+  var closeBtn = el.querySelector('button[title]');
+  var timer = setTimeout(function () { try { el.remove(); } catch (_e) {} }, dur || 8000);
+  if (closeBtn) closeBtn.onclick = function () { clearTimeout(timer); try { el.remove(); } catch (_e) {} };
+  wrap.appendChild(el);
 }
 async function peVcUnbind(){
   var pid = _peVcPid;
@@ -8948,7 +9019,10 @@ async function peVcAfterEnrolled(pid, announce){
     else if (typeof _vpSyncBackendUi === 'function') _vpSyncBackendUi(vp.backend || '');
     if (typeof _refreshAdvPanel === 'function') { try { _refreshAdvPanel(); } catch (_e) {} }
     if (announce && vp.backend) {
-      _toast(window.Tf('psn_vc_enrolled_synced', {backend: String(vp.backend)}), 'ok', 5000);
+      /* #239: the enrollment itself is already persisted server-side (voice_profile written) --
+         say so, name the recording (not the backend id), keep it >= 8s and closable. */
+      var _file = (typeof _vmRefName === 'function') ? _vmRefName(vp) : '';
+      _peVcToast(_escHtml(window.Tf('psn_vc_enrolled_ok', {file: _file || pid})), 9000);
     }
   } catch (_e) { /* best-effort: server-side guard still protects the clone profile */ }
   try { peVcSync(pid); } catch (_e) {}

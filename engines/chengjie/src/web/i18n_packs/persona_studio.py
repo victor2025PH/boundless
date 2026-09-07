@@ -1082,7 +1082,12 @@ ZH = {
     # B25-①（2026-08-21）：克隆音色登记/改绑挪进人设页
     "psn_vc_h": "克隆音色（跟随人设）",
     "psn_vc_sub": "上传参考音频完成登记，音色跟随本人设生效；「生成语音 / 发送」在收件箱右栏业务助手。",
-    "psn_vc_bound": "已登记录音：{voice}",
+    "psn_vc_bound": "已登记 {voice}",
+    # #239（N-2 B）：登记后常驻「已登记 X · ▶ 试听 · 解绑」+ 登记即生效明示 + 可关闭 toast
+    "psn_vc_enrolled_ok": "已登记 {file}，本人设的语音将用这把声音。登记已写入人设并生效，无需再点底部「保存」（表单里其它改动仍需保存）。",
+    "psn_vc_persist_note": "登记成功即写入人设并立即生效，不需要再点底部「保存」。",
+    "psn_vc_audition_of": "试听：{file}",
+    "psn_vc_toast_close": "关闭",
     "psn_vc_not_ready": "登记未就绪（缺参考录音或未授权），请重新上传登记",
     "psn_vc_none": "尚未上传录音——在下方登记即可",
     "psn_vc_unbind_btn": "解绑克隆音色",
@@ -2252,7 +2257,11 @@ EN = {
     # B25-1 (2026-08-21): clone-voice enrollment moved onto the persona page
     "psn_vc_h": "Clone voice (follows this persona)",
     "psn_vc_sub": "Upload a reference audio to enroll; the voice follows this persona. \"Generate / send voice\" lives in the inbox right-rail assistant.",
-    "psn_vc_bound": "Recording enrolled: {voice}",
+    "psn_vc_bound": "Enrolled {voice}",
+    "psn_vc_enrolled_ok": "Enrolled {file} — this persona now speaks with that voice. The enrollment is already saved and live; no need to click Save at the bottom (other form edits still need saving).",
+    "psn_vc_persist_note": "A successful enrollment is written to the persona and takes effect immediately — no need to click Save at the bottom.",
+    "psn_vc_audition_of": "Audition: {file}",
+    "psn_vc_toast_close": "Close",
     "psn_vc_not_ready": "Enrollment not ready (reference recording missing or no consent) — please upload and enroll again",
     "psn_vc_none": "No recording uploaded yet — enroll below",
     "psn_vc_unbind_btn": "Unbind clone voice",
