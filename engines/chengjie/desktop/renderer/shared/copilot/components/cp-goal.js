@@ -409,6 +409,13 @@
       .gl-status.blocked { padding:2px 6px 3px; border:1px dashed var(--cp-border,#cbd5e1);
                            border-radius:6px; }
       .gl-status.blocked .gl-status-dot { background:var(--cp-text-tiny,#94a3b8); }
+      /* M-7 D（#236）：stalled=红点红字（24h 有排期零真发）；idle=灰点（等待首拍，不冒充推进中） */
+      .gl-status.stalled { padding:2px 6px 3px; border:1px solid color-mix(in srgb,var(--cp-danger,#dc2626) 45%,transparent);
+                           border-radius:6px; color:var(--cp-danger,#dc2626); }
+      .gl-status.stalled .gl-status-dot { background:var(--cp-danger,#dc2626); }
+      .gl-status.idle .gl-status-dot { background:var(--cp-text-tiny,#94a3b8); }
+      .gl-tag.warn { border-style:dashed; color:var(--cp-danger,#dc2626);
+                     border-color:var(--cp-danger,#dc2626); }
       /* #166 引擎真相：auto 档但推进器不能真出手 → 标签打叉 + 卡上一行说清为什么
          （不再只在建目标表单里提一次；「自动推进 · 进行中」不能是空头承诺） */
       .gl-tag.off { border-style:dashed; color:var(--cp-warn,#b45309);
@@ -1071,11 +1078,27 @@
         ? this._autoEngine(gpace, (this._d && this._d.engine) || null) : null;
       const engOff = !!(engA && !engA.on);
       const engWhy = engOff ? this._engineWhy(engA.blockers) : "";
-      const hint = engOff
-        ? this.t("inbox.goal.autonomy.auto_ineffective_t", { why: engWhy })
-        : (this._autonomyHint(lvl) || this.t("inbox.goal.autonomy_cycle_t"));
-      const tag = `<button type="button" class="gl-tag${engOff ? " off" : ""}" data-act="autonomy_cycle"` +
-        ` title="${esc(hint)}">${esc(this._autonomyLabel(lvl))}${engOff ? " \u26A0" : ""}</button>`;
+      // M-7 D（#236）：⚠ 必须说清是什么——引擎层没生效（engOff）之外，运行时闸拦住
+      // （auto_state=blocked）与单目标 stalled（24h 有排期零真发）也打 ⚠，tooltip 带原因；
+      // 卡身状态行（sprintLine）同源同文案，不再出现「自动推进⚠」却不说 ⚠ 是什么。
+      const liveA = (lvl === "auto" && g.status === "active"
+        && g.sprint_live && typeof g.sprint_live === "object") ? g.sprint_live : null;
+      const aState = liveA ? String(liveA.auto_state || "") : "";
+      const rtWarn = !!(liveA && !engOff && (aState === "blocked" || aState === "stalled"));
+      let hint;
+      if (engOff) {
+        hint = this.t("inbox.goal.autonomy.auto_ineffective_t", { why: engWhy });
+      } else if (rtWarn && aState === "stalled") {
+        const lb = liveA.last_block && liveA.last_block.reason ? this._blockedLabel(liveA.last_block.reason) : "";
+        hint = this.t("inbox.goal.auto.tag_stalled_t", { why: lb || this.t("inbox.goal.blocked.unknown") });
+      } else if (rtWarn) {
+        hint = this.t("inbox.goal.auto.tag_blocked_t", { why: this._engineWhy(liveA.blockers) });
+      } else {
+        hint = this._autonomyHint(lvl) || this.t("inbox.goal.autonomy_cycle_t");
+      }
+      const tagWarn = engOff || rtWarn;
+      const tag = `<button type="button" class="gl-tag${engOff ? " off" : ""}${rtWarn ? " warn" : ""}" data-act="autonomy_cycle"` +
+        ` title="${esc(hint)}">${esc(this._autonomyLabel(lvl))}${tagWarn ? " \u26A0" : ""}</button>`;
       const origin = AUTO_ORIGIN[String(g.created_by || "")]
         ? `<span class="gl-origin" title="${esc(this.t("inbox.goal.origin.auto_t"))}">` +
           `${esc(this.t("inbox.goal.origin.auto"))}</span>`
@@ -1207,25 +1230,47 @@
           // 读不到收件箱）→ 点名原因。此前落到「等对方开口」——坐席以为在等客户，
           // 其实推进器一条都不会排。
           bits.push(esc(this.t("inbox.goal.sprint.engine_blocked", { why: this._engineWhy(live.blockers) })));
-        } else {
+        } else if (String(g.autonomy || "") === "auto") {
+          // M-7 D（#236）：「自动推进中」只在近 24h 真发 ≥1（active）或 24h 内有排期
+          // （waiting_first 带预计时刻）时说；其余按后端 auto_state 三选一说真相——
+          // 今日已达上限明日几点 / 等待首拍 / 被 X 拦住。旧文案「等对方回复中；到点未回
+          // 会主动出手」在 BABY BEAR 上挂了 4 天，一拍没发。
           const nts = parseFloat(live.next_phase_ts) || 0;
-          if (nts > Date.now() / 1000) {
-            const nd = new Date(nts * 1000);
-            const hhmm = ("0" + nd.getHours()).slice(-2) + ":" +
-              ("0" + nd.getMinutes()).slice(-2);
-            bits.push(esc(this.t("inbox.goal.sprint.next_beat", { t: hhmm })));
+          const hhmm = (ts) => {
+            const nd = new Date(ts * 1000);
+            return ("0" + nd.getHours()).slice(-2) + ":" + ("0" + nd.getMinutes()).slice(-2);
+          };
+          const lbWhy = (live.last_block && live.last_block.reason)
+            ? this._blockedLabel(live.last_block.reason) : "";
+          const st = String(live.auto_state || "");
+          if (st === "active") {
+            bits.push(esc(this.t("inbox.goal.auto.active", { n: parseInt(live.sent_24h, 10) || 0 })));
+            if (nts > Date.now() / 1000) bits.push(esc(this.t("inbox.goal.sprint.next_beat", { t: hhmm(nts) })));
+          } else if (st === "cap_reached") {
+            bits.push(esc(this.t("inbox.goal.auto.cap_reached", { t: nts > 0 ? hhmm(nts) : "--:--" })));
+          } else if (st === "stalled") {
+            bits.push(esc(this.t("inbox.goal.auto.stalled", {
+              why: lbWhy ? this.t("inbox.goal.auto.stalled_why", { why: lbWhy }) : "" })));
+          } else if (st === "blocked_recent") {
+            bits.push(esc(this.t("inbox.goal.auto.blocked_recent", { why: lbWhy || this.t("inbox.goal.blocked.unknown") })));
+          } else if (nts > Date.now() / 1000 && nts <= Date.now() / 1000 + 86400) {
+            bits.push(esc(this.t("inbox.goal.auto.waiting_first", { t: hhmm(nts) })));
           } else {
-            bits.push(esc(this.t("inbox.goal.sprint.engine_wait")));
+            bits.push(esc(this.t("inbox.goal.auto.waiting_first_nt")));
           }
         }
         const nudge = live.nudgeable
           ? `<button type="button" class="gl-nudge" data-act="sprint_nudge">` +
             `${esc(this.t("inbox.goal.sprint.nudge_btn"))}</button>`
           : "";
-        const stCls = (!live.ticker_on || (Array.isArray(live.blockers) && live.blockers.length))
-          ? "blocked" : "live";
-        sprintLine = `<div class="gl-status ${stCls}"><span class="gl-status-dot" aria-hidden="true"></span>` +
-          `<div class="gl-sprint-line"><span>${bits.join(" · ")}</span>${nudge}</div></div>`;
+        const aSt = String(live.auto_state || "");
+        const stCls = (!live.ticker_on || (Array.isArray(live.blockers) && live.blockers.length)
+          || aSt === "cap_reached" || aSt === "blocked_recent")
+          ? "blocked" : (aSt === "stalled" ? "stalled" : (aSt === "active" ? "live" : "idle"));
+        if (bits.length || nudge) {
+          sprintLine = `<div class="gl-status ${stCls}"><span class="gl-status-dot" aria-hidden="true"></span>` +
+            `<div class="gl-sprint-line"><span>${bits.join(" · ")}</span>${nudge}</div></div>`;
+        }
       }
       // #166：auto 档而引擎不能真出手 → 卡身一行说清（sprintLine 已点名 ticker
       // 关闸时不重复；运行时闸由 sprintLine 的 engine_blocked 覆盖）

@@ -205,9 +205,11 @@ def test_card_source_and_frontend_wiring():
                    "inbox.goal.settle.view", "inbox.goal.settle.prev",
                    "inbox.goal.settle.reason."):
         assert needle in js, needle
-    for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
-                 "src/web/templates/unified_inbox.html"):
-        assert "cp-goal.js?v=20260907c" in (REPO / host).read_text(encoding="utf-8"), host
+    # 三宿主缓存戳必须一致（具体值由 D 项测试钉住，随批次前移）
+    stamps = {re.search(r"cp-goal\.js\?v=(\w+)", (REPO / host).read_text(encoding="utf-8")).group(1)
+              for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
+                           "src/web/templates/unified_inbox.html")}
+    assert len(stamps) == 1, f"三宿主 cp-goal.js 缓存戳不一致：{stamps}"
 
 
 def test_read_settlement_and_visible_window():
@@ -219,3 +221,161 @@ def test_read_settlement_and_visible_window():
     s = notify.read_settlement(gs, gid)
     assert s and s["status"] == "expired" and float(s["at"]) > 0
     assert notify.SETTLEMENT_VISIBLE_SEC == 7 * 86400.0
+
+
+# ══ M-7 D（#236）：卡片说真话——「自动推进中」显示条件 + 单目标 stalled ═══════════
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402
+from fastapi import FastAPI, Request  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
+
+from src.companion.goals.store import get_goal_store, reset_goal_store  # noqa: E402
+
+
+class _StubInbox:
+    def __init__(self, mode="auto_ai"):
+        self.mode = mode
+
+    def get_automation_mode(self, conv):
+        return self.mode
+
+    def get_conv_meta(self, conv):
+        return {}
+
+    def list_recent_messages(self, conv, limit=10):
+        return []
+
+
+@pytest.fixture
+def card(monkeypatch):
+    """for-conversation 客户端：goals+sprint 开、白名单含 whatsapp、会话 auto_ai。"""
+    import src.integrations.protocol_bridge as pb
+    import src.utils.companion_context as cc
+    from src.web.routes.goal_routes import register_goal_routes
+
+    monkeypatch.setattr(cc, "_REL_PROVIDERS", {})
+    reset_goal_store()
+    stub = {"inbox": _StubInbox()}
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: stub["inbox"])
+    cfg = {"companion": {"goals": {
+        "enabled": True, "db_path": ":memory:",
+        "sprint": {"enabled": True, "dry_run": False,
+                   "platforms": ["telegram", "whatsapp", "line"],
+                   "natural_window": [0, 24]},
+    }, "proactive_care": {"enabled": True, "dry_run": True}}}
+    app = FastAPI()
+
+    def auth_dep(request: Request) -> None:
+        request.scope["session"] = {"role": "", "user": "tester"}
+
+    register_goal_routes(app, auth_dep, SimpleNamespace(config=cfg, config_path=None))
+    c = TestClient(app)
+
+    def _mk(created_ago_sec=0.0, autonomy="auto"):
+        store = get_goal_store(":memory:")
+        g = store.create_goal(
+            conversation_id=CONV, platform="whatsapp", account_id="17345893506",
+            chat_key="13308422244", template="custom", autonomy=autonomy,
+            params={"note": "推进到愿意视频"}, deadline_days=5,
+            now=NOW - created_ago_sec)
+        return store, g["goal_id"]
+
+    def _live():
+        return c.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()["goal"]["sprint_live"]
+
+    yield SimpleNamespace(client=c, mk=_mk, live=_live, stub=stub)
+    reset_goal_store()
+
+
+def test_card_new_goal_shows_waiting_first_not_auto_advancing(card):
+    """新建 24h 内、零真发 → 不得显「自动推进中」：等待首拍（自然档下一拍 ≤24h）。"""
+    card.mk()
+    live = card.live()
+    assert live["auto_state"] == "waiting_first"
+    assert live["sent_24h"] == 0 and live["stalled"] is False
+    assert live["beats_used"] == 0 and live["next_phase_ts"] > 0
+
+
+def test_card_active_only_with_real_send_in_24h(card):
+    store, gid = card.mk(created_ago_sec=2 * 86400)
+    record_natural_beat_sent(store, gid, "2026-09-07", now=NOW - 3600, care_id=3)
+    live = card.live()
+    assert live["auto_state"] == "active"
+    assert live["sent_24h"] == 1 and live["beats_used"] == 1 and live["stalled"] is False
+
+
+def test_card_stalled_when_scheduled_but_zero_sends_24h(card):
+    """BABY BEAR 形态：建了 2 天、引擎绿、会话全自动、零真发 → stalled 红字 + 上次被拦原因。"""
+    store, gid = card.mk(created_ago_sec=2 * 86400)
+    record_beat_blocked(store, gid, "silence", slot="d2026-09-07", now=NOW - 600)
+    live = card.live()
+    assert live["auto_state"] == "stalled" and live["stalled"] is True
+    assert live["last_block"]["reason"] == "silence"
+    assert live["blockers"] == []           # 引擎与运行时闸都绿，问题是没出手
+    assert live["trace"]["today"]["blocked"] >= 1
+
+
+def test_card_cap_reached_and_blocked_states(card):
+    store, gid = card.mk(created_ago_sec=2 * 86400)
+    record_beat_blocked(store, gid, "pace_cap", slot="2026-09-07T10", now=NOW - 60)
+    assert card.live()["auto_state"] == "cap_reached"
+    # 运行时闸没过（会话人审档）→ blocked，且 blockers 点名 automation_mode
+    card.stub["inbox"] = _StubInbox("review")
+    live = card.live()
+    assert live["auto_state"] == "blocked" and live["blockers"] == ["automation_mode"]
+    assert live["stalled"] is False         # 出不了手是闸的事，不算 stalled
+
+
+def test_card_manual_goal_has_no_auto_claim(card):
+    card.mk(autonomy="suggest")
+    live = card.live()
+    assert live["auto_state"] == "manual" and live["stalled"] is False
+
+
+def test_card_frontend_states_and_watchdog_names_goal():
+    js = (REPO / "desktop/renderer/shared/copilot/components/cp-goal.js").read_text(encoding="utf-8")
+    for needle in ("inbox.goal.auto.active", "inbox.goal.auto.cap_reached",
+                   "inbox.goal.auto.waiting_first", "inbox.goal.auto.stalled",
+                   "inbox.goal.auto.blocked_recent", "inbox.goal.auto.tag_stalled_t",
+                   'aSt === "stalled" ? "stalled"', "gl-status.stalled"):
+        assert needle in js, needle
+    assert 'this.t("inbox.goal.sprint.engine_wait")' not in js, "旧的空头承诺文案必须退场"
+    from src.web.i18n_packs import goals as gp
+    for k in ("inbox.goal.auto.active", "inbox.goal.auto.stalled", "inbox.goal.auto.cap_reached"):
+        assert k in gp.ZH and k in gp.EN
+    for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
+                 "src/web/templates/unified_inbox.html"):
+        assert "cp-goal.js?v=20260907d" in (REPO / host).read_text(encoding="utf-8"), host
+
+
+def test_watchdog_names_stalled_goal_throttles_and_recovers():
+    from src.inbox import health_watchdog as hw
+
+    class _Bus2:
+        def __init__(self):
+            self.events = []
+
+        def publish(self, name, payload):
+            self.events.append((name, payload))
+
+    bus = _Bus2()
+    import src.integrations.shared.event_bus as eb
+    orig = eb.get_event_bus
+    eb.get_event_bus = lambda: bus
+    try:
+        w = hw.HealthWatchdog.__new__(hw.HealthWatchdog)
+        stalled = [{"goal_id": "g1", "conversation_id": CONV, "title": "推进到愿意视频"}]
+        w._note_goal_stalled(stalled, now=NOW, interval_min=240)
+        w._note_goal_stalled(stalled, now=NOW + 60, interval_min=240)      # 节流
+        hits = [p for n, p in bus.events if n == "scan_loop_stall_alert"]
+        assert len(hits) == 1
+        assert hits[0]["loop"] == "goal_sprint_goal" and hits[0]["goal_id"] == "g1"
+        assert hits[0]["conversation_id"] == CONV and hits[0]["rate_key"] == "scan_stall:goal:g1"
+        w._note_goal_stalled(stalled, now=NOW + 241 * 60, interval_min=240)  # 过节流窗再提醒
+        hits = [p for n, p in bus.events if n == "scan_loop_stall_alert"]
+        assert len(hits) == 2 and hits[1]["reminder"] is True
+        w._note_goal_stalled([], now=NOW + 300 * 60, interval_min=240)       # 恢复清位
+        assert "g1" not in w._goal_stalled_alerted
+    finally:
+        eb.get_event_bus = orig

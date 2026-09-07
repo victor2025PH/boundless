@@ -444,8 +444,48 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             # 写成「已推进 2 拍」）。trace 摘要（sent/injected/blocked/today）给
             # 卡片并排展示「主动 N · 顺势 M · 今天被拦 Z」，不用二次请求。
             from src.companion.goals.service import build_beats_trace
-            trace = build_beats_trace(store, dict(view))
+            import time as _t
+            _now = _t.time()
+            trace = build_beats_trace(store, dict(view), now=_now)
             tsum = trace.get("summary") or {}
+            tbeats = trace.get("beats") or []
+            sent_24h = sum(
+                1 for b in tbeats
+                if b.get("kind") == "sent" and float(b.get("ts") or 0) >= _now - 86400)
+            last_block = None
+            for b in reversed(tbeats):
+                if b.get("kind") == "blocked":
+                    last_block = {"reason": str(b.get("reason") or ""),
+                                  "ts": float(b.get("ts") or 0)}
+                    break
+            # M-7 D（#236）：卡片「自动推进中」只在 **近 24h 真发 ≥1** 或 **24h 内有排期
+            # 且运行时闸全过** 时成立；否则三选一说真相：今日已达上限（明日 HH:MM）/
+            # 等待首拍（预计 HH:MM）/ 被 X 拦住（原因）。单目标 stalled（建了 ≥24h、
+            # 有排期、零真发）红字点名。auto_state 与 blockers 同源，前端不再自己猜。
+            from src.companion.goals.liveness import goal_stall_verdict
+            is_auto = str(view.get("autonomy") or "") == "auto"
+            stalled = bool(is_auto and ticker_on and live_ok and goal_stall_verdict(
+                dict(view), sent_in_window=sent_24h, now=_now) == "stalled")
+            nxt_f = float(nxt or 0)
+            if not is_auto:
+                auto_state = "manual"
+            elif not ticker_on:
+                auto_state = "off"
+            elif not live_ok:
+                auto_state = "blocked"
+            elif sent_24h >= 1:
+                auto_state = "active"
+            elif (last_block and last_block["reason"] == "pace_cap"
+                    and last_block["ts"] >= _now - 86400):
+                auto_state = "cap_reached"
+            elif stalled:
+                auto_state = "stalled"
+            elif nxt_f > _now and nxt_f <= _now + 86400:
+                auto_state = "waiting_first"
+            elif last_block and last_block["ts"] >= _now - 86400:
+                auto_state = "blocked_recent"
+            else:
+                auto_state = "waiting_first"
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
                 "ticker_enabled": bool(scfg.get("enabled")),
@@ -454,7 +494,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "beats_used": int(tsum.get("sent") or 0),
                 "beats_actions": len(beats),
                 "trace": tsum,
-                "next_phase_ts": round(float(nxt or 0), 1) if live_ok else 0,
+                "sent_24h": int(sent_24h),
+                "last_block": last_block,
+                "stalled": stalled,
+                "auto_state": auto_state,
+                "next_phase_ts": round(nxt_f, 1) if live_ok else 0,
                 # 立即推进按钮只属冲刺：auto 档 + 引擎开 + 运行时闸全过
                 "nudgeable": live_ok
                 and sprint

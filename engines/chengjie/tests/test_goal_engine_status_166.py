@@ -385,7 +385,8 @@ def test_cp_goal_ui_consumes_engine_truth_in_both_trees():
         "_autoEngine(pace, src)", "sprint_effective", "natural_auto_effective",
         "sprint_blockers", "natural_auto_blockers", "_engineWhy(",
         'const off = autoOff && lvl === "auto"', ".gl-auto-card.off",
-        'class="gl-tag${engOff ? " off" : ""}"', "gl-engine-note",
+        # M-7 D（#236）：标签 ⚠ 扩到运行时闸/单目标 stalled（class 多了 warn 段）
+        'class="gl-tag${engOff ? " off" : ""}${rtWarn ? " warn" : ""}"', "gl-engine-note",
         "inbox.goal.engine.card_off", "inbox.goal.meta.time_pct",
         "inbox.goal.meta.beats", 'bt.progress_kind === "time"',
         "inbox.goal.sprint.engine_blocked", "inbox.goal.autonomy.auto_note_sprint_off",

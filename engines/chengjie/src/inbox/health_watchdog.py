@@ -6150,6 +6150,15 @@ class HealthWatchdog:
         store = get_configured_store(
             cfg, getattr(self._config_manager, "config_path", None))
         snap = collect_send_liveness(store, now=ts)
+        # M-7 D（#236）：单目标粒度点名——全局判据要 ≥2 个 auto 目标才响，BABY BEAR
+        # 一个目标 4 天 0 拍永远够不着它。liveness.goal_stall_verdict 已逐目标判过
+        # （建了 ≥24h、期限未到、近 24h 零 beat_sent），这里按目标节流落 INFO + 事件
+        # （带 goal_id / 会话 / 标题），卡片同步红字（sprint_live.stalled）。
+        try:
+            self._note_goal_stalled(snap.get("stalled_goals") or [], now=ts,
+                                    interval_min=interval_min)
+        except Exception:
+            logger.debug("goal stalled 点名异常（已忽略）", exc_info=True)
         kind = stall_verdict(
             es, snap, min_active=min_active,
             min_age_sec=max(0.0, min_age_h) * 3600.0)
@@ -6193,6 +6202,50 @@ class HealthWatchdog:
             })
         except Exception:
             logger.debug("goal_sprint_liveness 告警发布失败", exc_info=True)
+
+    def _note_goal_stalled(self, stalled: list, *, now: float,
+                           interval_min: float = 240.0) -> None:
+        """单目标 stalled 点名（M-7 D #236）：每目标一条 INFO + 一条
+        ``scan_loop_stall_alert``（loop=goal_sprint_goal，带 goal_id/会话/标题），
+        按目标 ``interval_min`` 节流；目标恢复（不再在名单里）时清节流位并记 recovered。"""
+        seen = getattr(self, "_goal_stalled_alerted", None)
+        if not isinstance(seen, dict):
+            seen = {}
+            self._goal_stalled_alerted = seen
+        cur = {str(s.get("goal_id") or ""): s for s in (stalled or [])
+               if isinstance(s, dict) and s.get("goal_id")}
+        # 恢复：上次点过名、这次不在名单 → 记一行 recovered
+        for gid in [g for g in list(seen) if g not in cur]:
+            seen.pop(gid, None)
+            logger.info("goal_sprint_liveness goal_recovered: goal=%s", gid)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            bus = get_event_bus()
+        except Exception:
+            bus = None
+        for gid, s in cur.items():
+            last = float(seen.get(gid) or 0)
+            if last and (now - last) < float(interval_min) * 60.0:
+                continue
+            seen[gid] = now
+            conv = str(s.get("conversation_id") or "")
+            title = str(s.get("title") or "")
+            logger.info(
+                "goal_sprint_liveness goal_stalled: goal=%s conv=%s title=%r "
+                "——有排期但 24h 零真发，卡片已标红",
+                gid, conv, title[:30])
+            if bus is not None:
+                try:
+                    bus.publish("scan_loop_stall_alert", {
+                        "loop": "goal_sprint_goal",
+                        "goal_id": gid,
+                        "conversation_id": conv,
+                        "title": title,
+                        "reminder": bool(last),
+                        "rate_key": f"scan_stall:goal:{gid}",
+                    })
+                except Exception:
+                    logger.debug("goal_stalled 告警发布失败", exc_info=True)
 
     def _check_license_quota(self, *, now: Optional[float] = None) -> None:
         """授权字符额度水位巡检（P4c）：临近触顶提前提醒、触顶点名、恢复报平安。

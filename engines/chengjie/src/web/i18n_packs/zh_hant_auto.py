@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-07 06:56:34 · OpenCC s2twp + 術語釘 · 16602 鍵（源 zh 全量 16603）
+生成: 2026-09-07 22:26:12 · OpenCC s2twp + 術語釘 · 16611 鍵（源 zh 全量 16612）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -8864,6 +8864,15 @@ ZH_HANT = {
     'inbox.goal.adopted_mark': '已採納',
     'inbox.goal.again_btn': '再設一個',
     'inbox.goal.alias_note': '也叫工作計劃',
+    'inbox.goal.auto.active': '自動推進中 · 近 24h 已出手 {n} 拍',
+    'inbox.goal.auto.blocked_recent': '上次想出手被攔：{why}',
+    'inbox.goal.auto.cap_reached': '今日主動拍已達上限，明日 {t} 繼續',
+    'inbox.goal.auto.stalled': '已超 24 小時沒出手過（有排期卻一拍未發）{why}',
+    'inbox.goal.auto.stalled_why': '，上次被攔：{why}',
+    'inbox.goal.auto.tag_blocked_t': '「自動推進」檔開著，但現在出不了手：{why}。點選切換自治檔',
+    'inbox.goal.auto.tag_stalled_t': '「自動推進」檔開著，但 24 小時內一拍都沒發出：{why}。點選切換自治檔',
+    'inbox.goal.auto.waiting_first': '等待首拍（預計 {t}）',
+    'inbox.goal.auto.waiting_first_nt': '等待首拍：新目標從第二天白天視窗起才主動出手；客戶來訊息時會順勢帶方向',
     'inbox.goal.autonomy.auto': '自動推進',
     'inbox.goal.autonomy.auto_hint': '順勢建議之外，若系統開啟了「主動觸達」，AI 還會按日程主動發起推進',
     'inbox.goal.autonomy.auto_ineffective_t': '「自動推進」未生效：{why}。AI 只在對方來訊息時順勢推進；點選切換自治檔',
