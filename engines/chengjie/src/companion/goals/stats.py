@@ -1,9 +1,9 @@
-"""营销目标观测（进程级单例，风格对齐 bazi_stats / avatar_voice_stats）。
+"""工作目标观测（进程级单例，风格对齐 bazi_stats / avatar_voice_stats）。
 
 漏斗五段：建目标 → 每日拍规划（含 hold 分桶）→ 注入生成链（draft/reply/proactive）
 → 主动桥真发 → 生命周期终态（done/failed/expired/cancelled）。
 经 ``/api/workspace/metrics.goals`` + Prometheus ``goals_*`` 导出，
-ops-overview「🎯 营销目标」卡消费。方法绝不抛。
+ops-overview「🎯 工作目标」卡消费。方法绝不抛。
 """
 
 from __future__ import annotations
@@ -394,7 +394,7 @@ class GoalStats:
     def dump_prom(self) -> str:
         with self._lock:
             lines = [
-                "# HELP goals_created_total Marketing goals created",
+                "# HELP goals_created_total Work goals created",
                 "# TYPE goals_created_total counter",
                 f"goals_created_total {self.created}",
                 "# HELP goals_terminal_total Goal terminal outcomes",

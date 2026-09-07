@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""营销目标（marketing goals）域词条：路由错误文案 + 坐席右栏卡 + 看板 UI。
+"""工作目标（work goals；1.0.77 前叫「营销目标」，N-3 #241 统一）域词条：路由错误文案 + 坐席右栏卡 + 看板 UI。
 
 命名约定：
 - ``err.goals.*``   goal_routes.py 的 tr() 错误键
@@ -8,7 +8,7 @@
 
 ZH = {
     # ── goal_routes 错误文案 ──────────────────────────────────────────────
-    "err.goals.disabled": "营销目标功能未启用（companion.goals.enabled）",
+    "err.goals.disabled": "工作目标功能未启用（companion.goals.enabled）",
     "err.goals.readonly": "只读账号不能操作目标",
     "err.goals.conversation_required": "缺少会话（conversation_id 或 platform+chat_key）",
     "err.goals.template_unknown": "未知目标模板",
@@ -505,7 +505,7 @@ ZH = {
     # 本周成果 chip（会话列表 agenda 行；只在有正向数据时出现，0 不示众）
     "inbox.goal.wins.week": "本周成交 {done} · AI 推进中 {n}",
     "inbox.goal.wins.active_only": "AI 推进中 {n} 个目标",
-    "inbox.goal.wins.t": "近 7 天工作目标成果（明细在运营总览「营销目标」卡）",
+    "inbox.goal.wins.t": "近 7 天工作目标成果（明细在运营总览「工作目标」卡）",
     "inbox.goal.today_rejected": "今日推进已驳回，今天只陪伴（明日自动降档）",
     "inbox.goal.reject_confirm": "驳回今日推进？今天将不再带目标内容，连续驳回会自动降低推进力度",
     "inbox.goal.more_menu": "更多",
@@ -632,7 +632,7 @@ ZH = {
     "goal_rpt_empty": "该窗口内没有记录",
     "goal_rpt_loading": "加载中…",
     "goal_rpt_load_fail": "加载失败",
-    "goal_rpt_disabled": "营销目标功能未启用（companion.goals.enabled）",
+    "goal_rpt_disabled": "工作目标功能未启用（companion.goals.enabled）",
 
     # ── 报表页 P1：批量触达 / 后续链 / 导出（2026-08-09） ────────────────────
     "goal_rpt_batch_bar": "已选 {n} 人",
@@ -690,7 +690,7 @@ ZH = {
 }
 
 EN = {
-    "err.goals.disabled": "Marketing goals disabled (companion.goals.enabled)",
+    "err.goals.disabled": "Work goals disabled (companion.goals.enabled)",
     "err.goals.readonly": "Read-only account cannot manage goals",
     "err.goals.conversation_required": "Conversation required (conversation_id or platform+chat_key)",
     "err.goals.template_unknown": "Unknown goal template",
@@ -1300,7 +1300,7 @@ EN = {
     "goal_rpt_empty": "No records in this window",
     "goal_rpt_loading": "Loading…",
     "goal_rpt_load_fail": "Failed to load",
-    "goal_rpt_disabled": "Marketing goals disabled (companion.goals.enabled)",
+    "goal_rpt_disabled": "Work goals disabled (companion.goals.enabled)",
 
     # ── Report page P1: batch outreach / next chain / export (2026-08-09) ───
     "goal_rpt_batch_bar": "{n} selected",

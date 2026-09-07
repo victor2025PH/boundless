@@ -644,3 +644,31 @@ def test_cp_goal_renders_by_domain_and_report_hides_amount():
     assert "body.gr-companion .gr-amount{display:none;}" in html
     assert "classList.toggle('gr-companion'" in html
     assert html.count('class="gr-amount"') >= 2 and 'class="gr-kpi gr-amount"' in html
+
+
+# ═══ D 「营销目标」→「工作目标」（界面 / 路由注册名 / 日志）═════════════════════
+
+def test_no_marketing_goal_wording_in_user_facing_strings():
+    from src.web.i18n_packs import goals as gp
+    from src.web.i18n_packs import ops_overview_page as ov
+    offenders = [k for k, v in gp.ZH.items() if "营销目标" in str(v)]
+    assert offenders == [], offenders
+    offenders_en = [k for k, v in gp.EN.items() if "marketing goal" in str(v).lower()]
+    assert offenders_en == [], offenders_en
+    assert ov.ZH["ov2_s_goal"].startswith("工作目标") and "营销" not in ov.ZH["ov2_s_goal"]
+    assert ov.EN["ov2_s_goal"].startswith("Work goals")
+    src = (REPO / "src" / "web" / "routes" / "goal_routes.py").read_text(encoding="utf-8")
+    assert 'logger.info("工作目标路由已注册（/api/goals*）")' in src
+    assert "营销目标路由已注册" not in src
+    for rel in ("src/web/templates/goal_report.html", "src/web/templates/ops_overview.html"):
+        txt = (REPO / rel).read_text(encoding="utf-8")
+        # 模板回落文案不再出现「营销目标」（注释里说明旧名不算界面字样）
+        visible = [ln for ln in txt.splitlines()
+                   if "营销目标" in ln and not ln.lstrip().startswith(("//", "<!--", "#"))]
+        assert visible == [], (rel, visible)
+    from src.web.help_terms import HELP_TERMS
+    assert "旧叫法" in HELP_TERMS["marketing_goal"]["desc"]
+    assert "「工作目标」卡" in HELP_TERMS["marketing_goal"]["usage"]
+    assert "营销目标" not in HELP_TERMS["goal_beat_today"]["usage"]
+    from src.companion.goals.stats import get_goal_stats
+    assert "Work goals created" in get_goal_stats().dump_prom()

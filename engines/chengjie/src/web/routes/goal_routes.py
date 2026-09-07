@@ -1,4 +1,4 @@
-"""营销目标（marketing goals）后台 API。
+"""工作目标（work goals；1.0.77 前叫「营销目标」，N-3 #241 统一）后台 API。
 
 端点（挂 ``/api/goals*``；静态路径先于 ``{goal_id}`` 注册防吞路由）：
 - ``GET  /api/goals/templates``        —— 模板库（建目标表单用；含里程碑/参数 schema）
@@ -80,7 +80,7 @@ def _find_beat_action(store: Any, goal: Dict[str, Any], body: Any = None):
 
 
 def register_goal_routes(app, auth_dep, config_manager=None):
-    """注册营销目标路由。``config_manager`` 供配置段/库路径解析。"""
+    """注册工作目标路由。``config_manager`` 供配置段/库路径解析。"""
 
     def _cfg_root() -> Dict[str, Any]:
         try:
@@ -2098,7 +2098,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return {"ok": True,
                 "goal": svc.goal_view(goal, lang=_lang(request))}
 
-    logger.info("营销目标路由已注册（/api/goals*）")
+    logger.info("工作目标路由已注册（/api/goals*）")
 
 
 def register_goal_report_page(app, *, page_auth, templates,

@@ -351,40 +351,42 @@ HELP_TERMS: dict = {
         "usage": "看整体漏斗 → 用渠道筛选片定位掉量渠道 → 处理漏斗告警",
         "usage_en": "Review the overall funnel → use channel chips to find the leaking channel → handle funnel alerts"
     },
-    # ── 工作目标（= 工作计划 = 营销目标，同一子系统的三种叫法）───
+    # ── 工作目标（= 工作计划；「营销目标」是 1.0.77 前管理端 / 配置里的旧叫法）───
     # 三个同义词各占一条:tooltip 引擎 matchTerm 是「整元素文本精确相等」,
     # 一条词条只能认领一种屏幕说法,所以同义词只能靠多开 key 覆盖。
+    # N-3 #241（2026-09-08）：界面 / 路由 / 日志统一「工作目标」；「营销目标」词条保留只为
+    # 让搜旧词的人找到卡（词条本身说明它是旧名）。
     "work_goal": {
         "zh": "工作目标",
         "en": "Work Goal",
-        "desc": "为一段客户关系设定的推进目标：选模板（付费解锁/会员订阅/关系推进/沉默唤回/获客转化…）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。转化类与自定义可选「今天收口 / 这轮聊完」限时节奏。也叫「工作计划」，管理端与配置里叫「营销目标」——三个说法是同一个东西。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
-        "desc_en": "A progress goal set for one customer relationship: pick a template (paid unlock / subscription / relationship / reactivation / acquire-and-convert…) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Conversion and custom templates can pick a same-day or this-chat sprint cadence. Also called the \"work plan\"; the admin side and config call it \"marketing goal\" — all three are the same thing. Requires companion.goals.enabled; the whole card is hidden while it is off",
+        "desc": "为一段客户关系设定的推进目标：选模板（关系推进/沉默唤回/客户摸底/自定义…；销售域另有付费解锁/会员订阅/获客转化）+ 期限 + 自治档，AI 按里程碑弧线（多数模板 4 段）分天推进，每天出一次「今日拍」。转化类与自定义可选「今天收口 / 这轮聊完」限时节奏。也叫「工作计划」；1.0.77 之前管理端与配置里曾叫「营销目标」——三个说法是同一个东西，现在界面统一叫「工作目标」（配置键仍是 companion.goals）。需管理员开启 companion.goals.enabled，未开启时整卡不出现",
+        "desc_en": "A progress goal set for one customer relationship: pick a template (relationship / reactivation / profile discovery / custom…; sales deployments also get paid unlock / subscription / acquire-and-convert) plus a deadline and an autonomy level, and the AI advances it day by day along a milestone arc (4 segments in most templates), producing one daily beat. Conversion and custom templates can pick a same-day or this-chat sprint cadence. Also called the \"work plan\"; before 1.0.77 the admin side and config called it \"marketing goal\" — all three are the same thing, and the UI now says \"work goal\" everywhere (the config key is still companion.goals). Requires companion.goals.enabled; the whole card is hidden while it is off",
         "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
         "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "work_plan": {
         "zh": "工作计划",
         "en": "Work Plan",
-        "desc": "「工作目标」的口语叫法，指的是同一张卡：给这段关系定推进目标与期限，AI 按里程碑分天推进并每天出「今日拍」。管理端与配置里同一子系统叫「营销目标」",
-        "desc_en": "The colloquial name for the \"work goal\" — the very same card: set a progress goal and deadline for this relationship, and the AI advances it along milestones with a daily beat. The admin side and config call the same subsystem the \"marketing goal\"",
+        "desc": "「工作目标」的口语叫法，指的是同一张卡：给这段关系定推进目标与期限，AI 按里程碑分天推进并每天出「今日拍」。1.0.77 之前管理端与配置里同一子系统叫「营销目标」，现已统一为「工作目标」",
+        "desc_en": "The colloquial name for the \"work goal\" — the very same card: set a progress goal and deadline for this relationship, and the AI advances it along milestones with a daily beat. Before 1.0.77 the admin side and config called the same subsystem the \"marketing goal\"; it is now \"work goal\" everywhere",
         "usage": "坐席工作台 → 选中会话 → 右栏「客户关系」→「工作目标」卡",
         "usage_en": "Agent Workspace → select a conversation → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "marketing_goal": {
         "zh": "营销目标",
         "en": "Marketing Goal",
-        "desc": "同一子系统在管理端与配置里的名字（配置键 companion.goals，运营总览的「营销目标」卡是只读读数：进行中/今日拍/让路/注入/终态）。坐席端那张可操作的卡叫「工作目标」，运营口语里也叫「工作计划」",
-        "desc_en": "The admin-side and config name for the same subsystem (config key companion.goals; the Ops Overview \"marketing goals\" card is read-only telemetry: active / beats / holds / injections / outcomes). The card agents actually operate is called the \"work goal\", also spoken of as the \"work plan\"",
-        "usage": "只读读数看运营总览的「营销目标」卡；要建目标/改目标去坐席工作台 → 右栏「客户关系」→「工作目标」卡",
-        "usage_en": "For read-only numbers see the \"marketing goals\" card on Ops Overview; to create or change a goal use Agent Workspace → right rail \"Customer\" → the \"Work Goal\" card"
+        "desc": "「工作目标」的旧叫法（1.0.77 之前管理端与配置里这么叫；配置键 companion.goals 不变）。现在界面里统一叫「工作目标」：运营总览的「工作目标」卡是只读读数（进行中/今日拍/让路/注入/终态），坐席端那张可操作的卡也叫「工作目标」，运营口语里叫「工作计划」",
+        "desc_en": "The former name of the \"work goal\" (what the admin side and config called it before 1.0.77; the config key companion.goals is unchanged). The UI now says \"work goal\" everywhere: the Ops Overview \"work goals\" card is read-only telemetry (active / beats / holds / injections / outcomes), and the card agents operate is also the \"work goal\", spoken of as the \"work plan\"",
+        "usage": "只读读数看运营总览的「工作目标」卡；要建目标/改目标去坐席工作台 → 右栏「客户关系」→「工作目标」卡",
+        "usage_en": "For read-only numbers see the \"work goals\" card on Ops Overview; to create or change a goal use Agent Workspace → right rail \"Customer\" → the \"Work Goal\" card"
     },
     "goal_beat_today": {
         "zh": "今日拍",
         "en": "Today's Beat",
         "desc": "目标在「今天」的一次推进安排＝今日意图 + 推进力度（陪伴日：只字不提推进 / 顺势：自然带到 / 可直说：可以直接说）。坐席可采纳或驳回：驳回后今天只陪伴、不带目标内容，且会回流规划器降档——驳回 1 次把「可直说」压到「顺势」，连续 2 次整天退回纯陪伴。对方情绪低落或连发未回时系统自己让路，当天不出拍",
         "desc_en": "One day's push arrangement for a goal: today's intent plus a push level (companion day = never mention the goal / gentle = weave it in naturally / direct OK = say it outright). Agents can adopt or reject it: after a reject the day stays companion-only with no goal content, and the verdict flows back to the planner as a step-down — one reject caps \"direct OK\" down to \"gentle\", two in a row drop the whole day to companion-only. When the contact is feeling low or hasn't replied to several sends, the system yields on its own and plans no beat",
-        "usage": "「工作目标」卡的今日意图行 → 👍 采纳 / 👎 驳回；运营总览「营销目标」卡看今日拍与让路的总数",
-        "usage_en": "On the \"Work Goal\" card, use 👍 adopt / 👎 reject on the today-intent row; the Ops Overview \"marketing goals\" card shows total beats and holds"
+        "usage": "「工作目标」卡的今日意图行 → 👍 采纳 / 👎 驳回；运营总览「工作目标」卡看今日拍与让路的总数",
+        "usage_en": "On the \"Work Goal\" card, use 👍 adopt / 👎 reject on the today-intent row; the Ops Overview \"work goals\" card shows total beats and holds"
     },
     "goal_autonomy": {
         "zh": "自治档",
