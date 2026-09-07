@@ -3533,6 +3533,8 @@ ZH_HANT = {
     'cs8_delivery_broken': '佇列開著但沒在出貨（drain loop 未執行，重啟後端可恢復）',
     # ── cs8_dry_sampled ──
     'cs8_dry_sampled': '模擬執行中：已按這條擬稿留樣，沒有真發給客戶（要真發請先「開啟真發」）',
+    # ── cs8_dv_pending_eta ──
+    'cs8_dv_pending_eta': '預計 {t}',
     # ── cs8_eta ──
     'cs8_eta': '預計 {t} 出手（{why}）',
     # ── cs8_eta_jitter ──
@@ -3557,8 +3559,20 @@ ZH_HANT = {
     'cs8_sent_at': '已發出 {t}',
     # ── cs8_skipped ──
     'cs8_skipped': '這條被跳過：{why}',
+    # ── cs8_state_failed ──
+    'cs8_state_failed': '沒發出去：{why} · {t}（可再點「立即發」）',
+    # ── cs8_state_forwarded ──
+    'cs8_state_forwarded': '已提前（{t}）· 預計 {eta} 出手',
+    # ── cs8_state_held ──
+    'cs8_state_held': '待你確認後才發',
+    # ── cs8_state_queued ──
+    'cs8_state_queued': '排隊中 · 預計 {t} 發出（{why}）',
+    # ── cs8_state_scheduled ──
+    'cs8_state_scheduled': '已排 · {t} 到點',
     # ── cs8_timeout ──
     'cs8_timeout': '等了 30 秒還沒回音，稍後重新整理看結果（不會重複發）',
+    # ── cs8_why_care ──
+    'cs8_why_care': '到點排隊',
     # ── cs8_why_deliver_now_error ──
     'cs8_why_deliver_now_error': '同步投遞出錯，已留在佇列稍後重試',
     # ── cs8_why_dispatcher_missing ──
@@ -3573,10 +3587,16 @@ ZH_HANT = {
     'cs8_why_no_sender': '這個平台還沒有可用的傳送通道',
     # ── cs8_why_no_sync_path ──
     'cs8_why_no_sync_path': '已交給傳送佇列，稍後由佇列發出',
+    # ── cs8_why_pacing_min_gap ──
+    'cs8_why_pacing_min_gap': '同賬號剛發過一條，錯開間隔',
     # ── cs8_why_paused ──
     'cs8_why_paused': '該平台投遞已被手動暫停',
     # ── cs8_why_queue_unavailable ──
     'cs8_why_queue_unavailable': '傳送佇列沒開（請先點「開啟真發」）',
+    # ── cs8_why_quiet_hours ──
+    'cs8_why_quiet_hours': '安靜時段順延',
+    # ── cs8_why_requeued ──
+    'cs8_why_requeued': '運營已重新入隊',
     # ── cs8_why_send_error ──
     'cs8_why_send_error': '投遞時出錯',
     # ── cs8_why_sender_not_ready ──

@@ -296,6 +296,17 @@ ZH = {
     "cs8_eta_quiet": "安静时段顺延",
     "cs8_eta_t": "到点后会再按错峰 / 安静时段算实际出手时刻；「到点发这句话」的原文行不错峰",
     "cs8_delivery_broken": "队列开着但没在出货（drain loop 未运行，重启后端可恢复）",
+    # 卡片状态机（D-N4 ⑥）：已排 → 已提前 → 排队中 → 已发出 / 失败
+    "cs8_state_scheduled": "已排 · {t} 到点",
+    "cs8_state_forwarded": "已提前（{t}）· 预计 {eta} 出手",
+    "cs8_state_queued": "排队中 · 预计 {t} 发出（{why}）",
+    "cs8_state_failed": "没发出去：{why} · {t}（可再点「立即发」）",
+    "cs8_state_held": "待你确认后才发",
+    "cs8_dv_pending_eta": "预计 {t}",
+    "cs8_why_quiet_hours": "安静时段顺延",
+    "cs8_why_pacing_min_gap": "同账号刚发过一条，错开间隔",
+    "cs8_why_requeued": "运营已重新入队",
+    "cs8_why_care": "到点排队",
 }
 
 EN = {
@@ -567,4 +578,14 @@ EN = {
     "cs8_eta_quiet": "deferred past quiet hours",
     "cs8_eta_t": "After it is due, the actual send time still follows staggering / quiet hours; verbatim items are never staggered",
     "cs8_delivery_broken": "Queue is on but nothing is draining it (drain loop not running; restart the backend)",
+    "cs8_state_scheduled": "Scheduled · due {t}",
+    "cs8_state_forwarded": "Brought forward ({t}) · expected around {eta}",
+    "cs8_state_queued": "Queued · expected {t} ({why})",
+    "cs8_state_failed": "Not sent: {why} · {t} (you can hit \"Send now\" again)",
+    "cs8_state_held": "Waiting for your confirmation",
+    "cs8_dv_pending_eta": "expected {t}",
+    "cs8_why_quiet_hours": "deferred past quiet hours",
+    "cs8_why_pacing_min_gap": "spacing out from the previous message on this account",
+    "cs8_why_requeued": "re-queued by operator",
+    "cs8_why_care": "queued for its due time",
 }

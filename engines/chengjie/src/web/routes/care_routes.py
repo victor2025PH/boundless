@@ -1028,10 +1028,25 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         """
         store = _store(request)
         item = store.get(int(sid))
+        dry = _effective_dry_run(request)
+        if (item and str(item.get("status") or "") == "sent"
+                and str(item.get("note") or "").startswith(_DEFERRED_NOTE_PREFIX)):
+            # N-1 E：卡片「排队中」态（已入队、队列行还 pending）再点 → 当场投那一行，不新建
+            disp = _dispatcher(request)
+            if disp is None or not hasattr(disp, "deliver_queued"):
+                return {"ok": False, "id": int(sid), "decision": "not_pending",
+                        "reason": "dispatcher_missing", "dry_run": dry}
+            res = await _run_on_engine_loop(request, lambda: disp.deliver_queued(dict(item)))
+            if res is None:
+                return {"ok": False, "id": int(sid), "decision": "timeout", "reason": "timeout",
+                        "dry_run": dry}
+            res = dict(res or {})
+            res.setdefault("ok", False)
+            res["id"] = int(sid)
+            return res
         if not item or str(item.get("status") or "") != "pending":
             return {"ok": False, "id": int(sid), "decision": "not_pending",
                     "reason": "not_pending", "message": "待办不存在或非 pending"}
-        dry = _effective_dry_run(request)
         held = _hold_reason(item)
         if held:
             logger.info("[care-gen] id=%s decision=send_now:held held=%r", sid, held)

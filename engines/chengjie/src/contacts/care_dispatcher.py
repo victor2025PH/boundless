@@ -752,6 +752,53 @@ class CareDispatcher:
             logger.debug("care projected_send_window 异常", exc_info=True)
             return {"eta_min": base, "eta_max": base, "jitter": False, "quiet_shifted": False}
 
+    async def deliver_queued(self, item: dict, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """卡片「排队中」态再点「立即发」（N-1 E #243）：care 行已 sent（=已入 deferred 队列，
+        note=``deferred:<row>``）但队列行仍 pending（错峰 / 安静时段 / 通道未就绪推后）→
+        直接经 ``deliver_now`` 钩子把**那一行**当场投出，不再新建队列行、不重复发。
+        返回与 ``send_now`` 同 schema；队列行已 sent → ``decision=not_pending reason=already_sent``。
+        """
+        n = float(now if now is not None else time.time())
+        res: Dict[str, Any] = {"ok": False, "decision": "", "reason": "", "text": "",
+                               "row_id": 0, "sent_at": 0.0, "defer_until": 0.0,
+                               "dry_run": self.effective_dry_run(), "held": ""}
+        note = str(item.get("note") or "")
+        if str(item.get("status") or "") != "sent" or not note.startswith("deferred:"):
+            res.update(decision="not_pending", reason="not_queued")
+            return res
+        try:
+            row_id = int(note[len("deferred:"):])
+        except (TypeError, ValueError):
+            res.update(decision="not_pending", reason="bad_note")
+            return res
+        res["row_id"] = row_id
+        res["text"] = str(item.get("sent_text") or "")
+        if self._deliver_now is None:
+            res.update(decision="queued", reason="no_sync_path")
+            return res
+        try:
+            dres = dict(await self._deliver_now(row_id, str(item.get("platform") or "")) or {})
+        except Exception:
+            logger.warning("care deliver_queued 异常 id=%s row=%s", item.get("id"), row_id,
+                           exc_info=True)
+            res.update(decision="queued", reason="deliver_now_error")
+            return res
+        st = str(dres.get("status") or "")
+        if dres.get("delivered"):
+            res.update(ok=True, decision="sent", sent_at=float(dres.get("sent_at") or n))
+        elif st == "pending":
+            res.update(ok=True, decision="queued", reason=str(dres.get("reason") or "queued"),
+                       defer_until=float(dres.get("retry_at") or 0))
+        elif st in ("sent",):
+            res.update(decision="not_pending", reason="already_sent")
+        elif st in ("missing",):
+            res.update(decision="not_pending", reason="row_missing")
+        else:
+            res.update(decision="failed", reason=str(dres.get("reason") or "send_failed"))
+        logger.info("[care-gen] id=%s decision=deliver_queued:%s reason=%r deferred=%s",
+                    item.get("id"), res["decision"], res["reason"], row_id)
+        return res
+
     async def send_now(self, item: dict, *, now: Optional[float] = None) -> Dict[str, Any]:
         """运营「立即发」＝同步直投（N-1 A #243，D-N4 ①）。
 

@@ -675,10 +675,10 @@ function _csCardHtml(it){
   var heldBtn=held
     ? '<button type="button" class="cs-act p" onclick="csHeldSend('+it.id+')">'+window.T('cs7_held_send')+'</button>'
     : '<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>';
-  /* N-1 A（#243）：上次「立即发」没发出去 → 卡片直接写原因（note=fail:*），按钮仍可再点 */
-  var failed=String(it.fail_reason||'');
-  var stLine='<div class="cs8-st'+(failed?' bad':'')+'" id="cs-sn-st-'+it.id+'"'+(failed?'':' style="display:none"')+'>'+
-    (failed?esc(window.Tf('cs8_send_fail',{why:_csWhy(failed)}))+(it.updated_at?' · '+esc(_csHHMM(it.updated_at)):''):'')+'</div>';
+  /* N-1 E（#243，D-N4 ⑥）：卡片状态机——已排（hh:mm）→ 已提前 → 排队中 → 已发出 / 失败，
+     每态带时间戳；pending 卡在这里出前三态 + 失败态，排队中 / 已发出在「最近已发」区块（_csSampleRow）。 */
+  var st=_csCardState(it);
+  var stLine='<div class="cs8-st '+st.cls+'" id="cs-sn-st-'+it.id+'">'+esc(st.label)+'</div>';
   return '<div class="cs3-card">'+
     '<div class="hd">'+_csAvaLetter(name)+
       '<span class="nm">'+esc(name)+'</span>'+
@@ -770,10 +770,17 @@ function _csSampleRow(s){
   }
   var rp=_csReplyBadge(s.reply_state||'');
   var text=String(s.sent_text||'');
+  /* N-1 E：排队中（预计 hh:mm · 卡在哪道护栏）/ 已发出 hh:mm / 失败（原因）——投递真相来自 deferred 队列；
+     排队中的行「立即发」可点（当场投那一行，不新建、不重复） */
+  var st=_csSentState(s);
+  var stHtml=st?'<div class="cs8-st '+st.cls+'" id="cs-sn-st-'+(s.id||0)+'">'+esc(st.label)+
+    (st.code==='queued'&&s.id?' <button type="button" class="cs-act p" data-sendnow="'+s.id+'" onclick="csSendNow('+s.id+')">'+window.T('cs_js001')+'</button>':'')+
+    '</div>':'';
   return '<div class="cs3-sample">'+
     '<div class="hd"><b>'+esc(s.topic||'?')+'</b><span>· '+esc(who)+'</span><span>· '+when+'</span>'+
     (rp?'<span>'+rp+'</span>':'')+
     '<span style="margin-left:auto">'+_csDeliveryHtml(s)+'</span></div>'+
+    stHtml+
     (text?'<div class="tx">'+esc(text)+'</div>':'')+'</div>';
 }
 function _csDayLabel(ts){
@@ -996,6 +1003,35 @@ function _csCardStatus(id,msg,cls){
   el.className='cs8-st '+(cls||'');
   el.textContent=msg||'';
   el.style.display=msg?'':'none';
+}
+/* 状态机（pending 卡）：held → 待确认；fail:* → 失败（原因）；fwd:* → 已提前（预计下一拍）；否则 已排（hh:mm）。
+   「排队中（预计 hh:mm）」「已发出 hh:mm」两态由 deferred 队列真相给出，在「最近已发」区块渲染。 */
+function _csNextTickEta(){
+  try{
+    var eng=(_csPlan&&_csPlan.engine)||{};
+    var iv=Number(eng.interval_sec)||600, last=Number(eng.last_tick_ts)||0, now=Date.now()/1000;
+    var nxt=last?last+iv:now+iv;
+    while(nxt<now)nxt+=iv;
+    return nxt;
+  }catch(_){return Date.now()/1000+600;}
+}
+function _csCardState(it){
+  var held=String(it.hold_reason||''), failed=String(it.fail_reason||''), fwd=Number(it.forwarded_at)||0;
+  if(held)return {code:'held',cls:'wait',label:window.T('cs8_state_held')};
+  if(failed)return {code:'failed',cls:'bad',label:window.Tf('cs8_state_failed',{why:_csWhy(failed),t:_csHHMM(it.updated_at||0)})};
+  if(fwd){
+    var eta=Math.max(Number(it.due_at)||0,_csNextTickEta());
+    return {code:'forwarded',cls:'wait',label:window.Tf('cs8_state_forwarded',{t:_csHHMM(fwd),eta:_csHHMM(eta)})};
+  }
+  return {code:'scheduled',cls:'',label:window.Tf('cs8_state_scheduled',{t:it.due_at?window.wsFmtDateTime(it.due_at,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'})};
+}
+/* 「最近已发」行的投递态 → 状态机后两态：排队中（预计 hh:mm · 原因）/ 已发出 hh:mm / 失败（原因） */
+function _csSentState(s){
+  var dv=s.delivery||{};
+  if(dv.status==='pending')return {code:'queued',cls:'wait',label:window.Tf('cs8_state_queued',{t:_csHHMM(dv.defer_until||0),why:dv.reason?_csWhy(dv.reason):''}).replace(/（）|\(\)/,'')};
+  if(dv.status==='sent')return {code:'sent',cls:'ok',label:window.Tf('cs8_sent_at',{t:_csHHMM(dv.sent_at||s.sent_at||s.ts||0)})};
+  if(dv.status==='failed')return {code:'failed',cls:'bad',label:window.Tf('cs8_send_fail',{why:_csWhy(dv.error||'send_failed')})};
+  return null;
 }
 async function csSendNow(id){
   if(_csSendNowBusy[id])return;
@@ -1475,6 +1511,8 @@ function _csDeliveryHtml(it){
   var h='<span class="cs4-dv '+m[0]+'">'+(m[1]?window.T(m[1]):esc(dv.status))+'</span>';
   if(dv.status==='sent'&&dv.sent_at)h+='<div class="cs4-sub">'+window.wsFmtDateTime(dv.sent_at,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+'</div>';
   else if(dv.status==='failed'&&dv.error)h+='<div class="cs4-sub" title="'+esc(dv.error)+'">'+esc(String(dv.error).slice(0,48))+'</div>';
+  /* N-1 E：排队中给「预计 hh:mm · 卡在哪」——此前只有一枚「排队中」，几点、为什么都没说 */
+  else if(dv.status==='pending'&&dv.defer_until)h+='<div class="cs4-sub">'+esc(window.Tf('cs8_dv_pending_eta',{t:_csHHMM(dv.defer_until)}))+(dv.reason?' · '+esc(_csWhy(dv.reason)):'')+'</div>';
   return h;
 }
 function _csHistWhen(it){
@@ -1505,9 +1543,15 @@ function _csHistRowHtml(it){
     ?'<span class="badge-st dry">'+esc(window.T('cs4_st_dry'))+'</span>'
     :stBadge(it.status);
   var op='';
+  /* N-1 E：「立即发」只在 已排 / 已提前 / 失败可重试 / 排队中 四态可点；待确认行走「就这样发」，已发出 / 已跳过不给按钮 */
+  var _held=String(it.note||'').indexOf('hold:')===0;
+  var _queued=it.status==='sent'&&it.delivery&&it.delivery.status==='pending';
   if(it.status==='pending'){
-    op='<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button> '+
+    op=(_held?'':'<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button> ')+
        '<button type="button" class="cs-act" onclick="csCancel('+it.id+')">'+window.T('ov_js_cancel')+'</button>';
+  }else if(_queued){
+    op='<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>'+
+       (it.sent_text?' <button type="button" class="cs-act" id="cs-ht-btn-'+it.id+'" onclick="csHistText('+it.id+')">'+window.T('cs4_view_text')+'</button>':'');
   }else if(it.sent_text){
     op='<button type="button" class="cs-act" id="cs-ht-btn-'+it.id+'" onclick="csHistText('+it.id+')">'+window.T('cs4_view_text')+'</button>';
   }

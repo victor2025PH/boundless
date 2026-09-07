@@ -768,6 +768,67 @@ def test_routes_expose_queue_running():
     assert c.get("/api/deferred-outbox/status").json()["accepting"] is True
 
 
+# ── E：卡片状态机——排队中再点「立即发」当场投那一行；按钮只在可发态出现 ─────────
+async def test_deliver_queued_sends_the_existing_queue_row_without_duplicating():
+    s, rid = _verbatim_store(due_offset=-60)
+    q = _Queue("not_ready")
+    d = _disp(s, q, live={"enabled": True, "dry_run": False})
+    assert await d.run_once(now=NOW) == 1                       # 到期派发：入队（通道未就绪不影响入队）
+    it = s.get(rid)
+    assert it["status"] == "sent" and it["note"] == "deferred:1"
+    q.mode = "ok"
+    res = await d.deliver_queued(it, now=NOW + 30)              # 排队中再点「立即发」
+    assert res["ok"] is True and res["decision"] == "sent" and res["row_id"] == 1
+    assert res["text"] == TEXT and q.sent == [("7092595256", "6088992099", TEXT)]
+    assert q.store.count() == 1 and q.store.get(1)["status"] == "sent"   # 没新建队列行
+    res2 = await d.deliver_queued(s.get(rid), now=NOW + 60)
+    assert res2["decision"] == "not_pending" and res2["reason"] == "already_sent"
+    assert len(q.sent) == 1
+    # 非排队态 / 坏备注 / 无同步钩子
+    assert (await d.deliver_queued({"status": "pending", "note": ""}))["reason"] == "not_queued"
+    assert (await d.deliver_queued({"status": "sent", "note": "deferred:x"}))["reason"] == "bad_note"
+    d2 = CareDispatcher(store=s, ai_client=_AI(), send_callback=q.send_callback())
+    r3 = await d2.deliver_queued({"status": "sent", "note": "deferred:1", "platform": "telegram"})
+    assert r3["decision"] == "queued" and r3["reason"] == "no_sync_path"
+
+
+def test_route_send_now_on_queued_row_delivers_and_history_shows_states():
+    c, store, q = _client("not_ready")
+    rid = store.add_verbatim(contact_key=CONTACT, due_at=NOW + 3600, text=TEXT,
+                             platform="telegram", account_id="7092595256", chat_key="6088992099")
+    r = c.post(f"/api/care/schedule/{rid}/send-now", json={}).json()
+    assert r["decision"] == "queued"                            # 通道未就绪 → 排队中
+    hist = c.get("/api/care/schedule?status=sent").json()["items"]
+    assert hist[0]["delivery"]["status"] == "pending" and hist[0]["delivery"]["defer_until"] > 0
+    q.mode = "ok"
+    r2 = c.post(f"/api/care/schedule/{rid}/send-now", json={}).json()   # 排队中再点
+    assert r2["ok"] is True and r2["decision"] == "sent" and r2["row_id"] == 1
+    assert q.sent and q.store.count() == 1
+    hist2 = c.get("/api/care/schedule?status=sent").json()["items"]
+    assert hist2[0]["delivery"]["status"] == "sent" and hist2[0]["delivery"]["sent_at"] > 0
+    r3 = c.post(f"/api/care/schedule/{rid}/send-now", json={}).json()
+    assert r3["ok"] is False and r3["decision"] == "not_pending" and r3["reason"] == "already_sent"
+
+
+def test_template_state_machine_and_button_rules():
+    tpl = (_REPO / "src" / "web" / "templates" / "care_schedule.html").read_text(encoding="utf-8")
+    for fn in ("_csCardState", "_csSentState", "_csNextTickEta"):
+        assert "function " + fn in tpl, fn
+    for k in ("cs8_state_scheduled", "cs8_state_forwarded", "cs8_state_queued",
+              "cs8_state_failed", "cs8_state_held", "cs8_dv_pending_eta"):
+        assert k in tpl, k
+    # 历史表：待确认行不出「立即发」；排队中行出「立即发」
+    seg = tpl[tpl.index("function _csHistRowHtml"):tpl.index("function _csHistRender")]
+    assert "_held?'':" in seg and "_queued=" in seg
+    # 最近已发区块：排队中带 data-sendnow 按钮
+    seg2 = tpl[tpl.index("function _csSampleRow"):tpl.index("function _csDayLabel")]
+    assert "st.code==='queued'" in seg2 and 'data-sendnow="' in seg2
+    from src.web.i18n_packs.care_page import EN, ZH
+    for k in ("cs8_state_scheduled", "cs8_state_forwarded", "cs8_state_queued",
+              "cs8_state_failed", "cs8_why_quiet_hours"):
+        assert k in ZH and k in EN, k
+
+
 # ── 静态钉 ──────────────────────────────────────────────────────────────────
 def test_background_tasks_wires_deliver_now_and_loop():
     src = (_REPO / "src" / "bootstrap" / "background_tasks.py").read_text(encoding="utf-8")
