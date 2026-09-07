@@ -542,6 +542,41 @@ class CareScheduleStore:
             logger.debug("care_schedule mark_hold_for_preview failed: %s", e)
             return False
 
+    # ── N-1 A（#243，2026-09-08）：「立即发」永久失败 → 行留 pending、note=fail:<原因> ──
+    FAIL_NOTE_PREFIX = "fail:"
+
+    @classmethod
+    def fail_reason(cls, item: Any) -> str:
+        """该 pending 行上一次「立即发」是否失败（note=``fail:<reason>``）→ 原因码；否则 ""。"""
+        try:
+            n = str((item or {}).get("note") or "")
+        except Exception:
+            return ""
+        if not n.startswith(cls.FAIL_NOTE_PREFIX):
+            return ""
+        return n[len(cls.FAIL_NOTE_PREFIX):].strip()
+
+    def mark_send_failed(self, sid: int, reason: str, *,
+                         now: Optional[float] = None) -> bool:
+        """运营「立即发」投递失败（平台拒收 / 通道异常 / 队列关）：**不消费待办**。
+
+        行保持 pending、``note=fail:<reason>``——卡片据此显「失败（原因）」且「立即发」
+        可再点；到期派发循环下一拍照常重试（行仍到期）。成功发出时 ``mark_sent``
+        覆盖 note。刻意不碰 ``sent_text`` / ``dry_sampled_at``。"""
+        r = str(reason or "").strip()[:120] or "send_failed"
+        try:
+            with self._lock:
+                n = float(now if now is not None else time.time())
+                cur = self._conn.execute(
+                    "UPDATE care_schedule SET note = ?, updated_at = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    (self.FAIL_NOTE_PREFIX + r, n, int(sid)))
+                self._conn.commit()
+                return bool(cur.rowcount)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("care_schedule mark_send_failed failed: %s", e)
+            return False
+
     def has_real_sent(self, contact_key: str) -> bool:
         """该联系人此前是否**真发**过关怀（sent 且 note 以 deferred:/manual: 开头；
         dry_run 消费式旧行不算）。首次真发 → LLM 拟稿强制预览。异常按「已发过」

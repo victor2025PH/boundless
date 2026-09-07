@@ -350,6 +350,20 @@ class DeferredOutboxStore:
                 ).fetchall()
         return [dict(r) for r in rows]
 
+    def get(self, row_id: int) -> Optional[Dict[str, Any]]:
+        """按 id 取单行（``extra`` 已解析为 dict）；不存在/异常 → None。"""
+        try:
+            d = self.get_by_ids([int(row_id)]).get(int(row_id))
+        except Exception:
+            return None
+        if not d:
+            return None
+        try:
+            d["extra"] = json.loads(d.get("extra") or "{}")
+        except Exception:
+            d["extra"] = {}
+        return d
+
     def get_by_ids(self, ids) -> Dict[int, Dict[str, Any]]:
         """按 id 批量取行（care 历史视图反查投递真相/话术用）。
 
@@ -455,6 +469,29 @@ class DeferredDispatcher:
     def paused_platforms(self) -> List[str]:
         return sorted(self._paused)
 
+    def is_running(self) -> bool:
+        """drain loop 是否活着（/api/deferred-outbox/status 与 care health 消费）。"""
+        return bool(self._task and not self._task.done())
+
+    def ensure_started(self) -> bool:
+        """同步入口：当前线程有运行中的事件循环且 drain loop 未起 → 起之（N-1 D #243）。
+
+        懒建路径（``ensure_deferred_outbox`` 在首次入队时才建 dispatcher）此前只
+        建不 start——16:34:52 入队的关怀到 16:47:52 预计出队时没有任何协程在
+        ``drain_due``。返回是否（已）在跑；无运行中 loop（离线工具 / 单测同步调用）
+        返回 False 不抛。
+        """
+        if self.is_running():
+            return True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        self._stop_evt = asyncio.Event()
+        self._task = loop.create_task(self._loop(), name="deferred_outbox")
+        logger.info("[deferred_outbox] drain loop 补启动（懒建路径）interval=%ss", self._interval)
+        return True
+
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
@@ -510,6 +547,32 @@ class DeferredDispatcher:
                              row.get("id"), exc_info=True)
         return sent
 
+    @staticmethod
+    def _care_id(row: Dict[str, Any]) -> int:
+        extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+        try:
+            return int(extra.get("care_id") or 0) if extra.get("care") else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _log_row(self, row: Dict[str, Any], event: str, detail: str = "") -> None:
+        """出队 / 推后 / 失败 / 送达每条落日志（N-1 D #243）。
+
+        关怀行（extra.care=True）统一 ``[care-deferred]`` INFO 前缀——16:47:52
+        「预计出队」到底发生了什么此前在日志里是零字节；非关怀行保持 DEBUG
+        （reactivation 批量不刷屏），既有 INFO 行不动。
+        """
+        cid = self._care_id(row)
+        msg = "%s %s id=%s platform=%s chat=%s%s%s" % (
+            "[care-deferred]" if cid else "[deferred_outbox]", event,
+            row.get("id"), row.get("platform"), row.get("chat_key"),
+            (" care_id=%d" % cid) if cid else "",
+            (" " + detail) if detail else "")
+        if cid:
+            logger.info(msg)
+        else:
+            logger.debug(msg)
+
     async def _dispatch_one(self, row: Dict[str, Any], now: float) -> bool:
         row_id = int(row.get("id") or 0)
         platform = str(row.get("platform") or "")
@@ -519,13 +582,19 @@ class DeferredDispatcher:
         if row_id <= 0 or not platform or not chat_key or not text:
             if row_id > 0:
                 self._store.mark_failed(row_id, "invalid_row")
+                self._log_row(row, "failed", "reason=invalid_row")
             return False
+        self._log_row(row, "dequeued", "due=%.0f late=%.0fs reason=%s" % (
+            float(row.get("defer_until") or 0),
+            max(0.0, now - float(row.get("defer_until") or now)),
+            str(row.get("reason") or "")))
 
         # 1. staleness：错过时机不补发
         created_at = float(row.get("created_at") or 0)
         staleness = float(row.get("staleness_sec") or 0)
         if staleness > 0 and created_at > 0 and (now - created_at) > staleness:
             self._store.mark_expired(row_id, "stale")
+            self._log_row(row, "expired", "reason=stale age=%.0fs" % (now - created_at))
             return False
 
         # 1.4 主动消息（reactivation）发送前活跃复核：调度→真发有 15min-4h defer 窗口，
@@ -559,6 +628,7 @@ class DeferredDispatcher:
         if platform in self._paused:
             self._store.push_until(
                 row_id, now + self._interval, note="paused")
+            self._log_row(row, "pushed", "reason=paused until=%.0f" % (now + self._interval))
             return False
 
         # 2. kill-switch
@@ -572,6 +642,8 @@ class DeferredDispatcher:
                 note=f"kill_switch:{scope}")
             logger.info("[deferred_outbox] kill-switch 阻断 id=%d scope=%s → 推后",
                         row_id, scope)
+            self._log_row(row, "pushed", "reason=kill_switch:%s until=%.0f" % (
+                scope, now + self._ks_backoff))
             return False
 
         # 3. quiet_hours：顺延到安静窗结束
@@ -579,6 +651,7 @@ class DeferredDispatcher:
             now, start_hour=self._quiet_start, end_hour=self._quiet_end)
         if shifted > now:
             self._store.push_until(row_id, shifted, note="quiet_hours")
+            self._log_row(row, "pushed", "reason=quiet_hours until=%.0f" % shifted)
             return False
 
         # 4. pacing：per-(platform,account) 最小间隔
@@ -587,6 +660,8 @@ class DeferredDispatcher:
         if self._min_gap > 0 and last > 0 and (now - last) < self._min_gap:
             self._store.push_until(
                 row_id, last + self._min_gap, note="pacing_min_gap")
+            self._log_row(row, "pushed", "reason=pacing_min_gap until=%.0f" % (
+                last + self._min_gap))
             return False
 
         # 5. sender 查注册表
@@ -595,28 +670,97 @@ class DeferredDispatcher:
             # 未接线 → 不丢，推后等注册（避免一直 drain 同一条）
             self._store.push_until(
                 row_id, now + self._no_sender_backoff, note="no_sender")
+            self._log_row(row, "pushed", "reason=no_sender until=%.0f" % (
+                now + self._no_sender_backoff))
             return False
 
+        return bool((await self._send_row(row, fn, key, now)).get("delivered"))
+
+    async def _send_row(self, row: Dict[str, Any], fn: SenderFn,
+                        key: Tuple[str, str], now: float) -> Dict[str, Any]:
+        """真投递 + 终态落库 + 日志（drain 与 deliver_now 共用；护栏由调用方先过）。
+
+        返回 ``{"delivered", "status": sent|pending|failed, "reason", "retry_at"?}``。
+        """
+        row_id = int(row.get("id") or 0)
+        platform, account_id = key
+        chat_key = str(row.get("chat_key") or "")
+        text = str(row.get("reply_text") or "")
         try:
             ok = bool(await fn(account_id, chat_key, text))
-        except DeferredSenderNotReady:
+        except DeferredSenderNotReady as ex:
             # worker 未就绪等暂态 → 推后重试，不丢、不标失败
-            self._store.push_until(
-                row_id, now + self._no_sender_backoff, note="sender_not_ready")
-            return False
+            until = now + self._no_sender_backoff
+            self._store.push_until(row_id, until, note="sender_not_ready")
+            self._log_row(row, "pushed", "reason=sender_not_ready:%s until=%.0f" % (
+                str(ex)[:80], until))
+            return {"delivered": False, "status": "pending",
+                    "reason": "sender_not_ready:%s" % str(ex)[:80], "retry_at": until}
         except Exception as ex:
-            self._store.mark_failed(row_id, f"{type(ex).__name__}:{ex}")
+            err = f"{type(ex).__name__}:{ex}"
+            self._store.mark_failed(row_id, err)
             logger.debug("deferred sender 异常 id=%d platform=%s",
                          row_id, platform, exc_info=True)
-            return False
+            self._log_row(row, "failed", "reason=%s" % err[:160])
+            return {"delivered": False, "status": "failed", "reason": err[:160]}
         if not ok:
             self._store.mark_failed(row_id, "sender_returned_false")
-            return False
+            self._log_row(row, "failed", "reason=sender_returned_false")
+            return {"delivered": False, "status": "failed", "reason": "sender_returned_false"}
         self._store.mark_sent(row_id, now=now)
         self._last_sent[key] = now
         logger.info("[deferred_outbox] sent id=%d platform=%s chat=%s",
                     row_id, platform, chat_key)
-        return True
+        if self._care_id(row):
+            self._log_row(row, "sent", "sent_at=%.0f" % now)
+        return {"delivered": True, "status": "sent", "sent_at": now}
+
+    async def deliver_now(self, row_id: int, *,
+                          now: Optional[float] = None) -> Dict[str, Any]:
+        """运营「立即发」的同步直投（N-1 A #243，D-N4 ①）：不等 drain tick，当场投这一行。
+
+        与 drain 同一 sender / 同一终态落库；**绕过**错峰（quiet_hours 顺延）、pacing、
+        staleness、活跃复核——这些是自动派发的「别打扰」闸，运营亲手点「立即发」
+        就是要现在发；**不绕过**安全型闸：kill-switch / 运营暂停 / 无 sender。
+        返回 ``{"delivered", "status": sent|pending|failed|missing|<终态>, "reason",
+        "sent_at"?, "retry_at"?}``，绝不抛。暂态（sender 未就绪 / 无 sender / 急停 /
+        暂停）行仍留 pending 且 defer_until 推后——drain loop 之后照常补投，卡片按
+        「排队中（预计 hh:mm）」呈现。
+        """
+        n = float(now if now is not None else time.time())
+        row = self._store.get(int(row_id))
+        if not row:
+            return {"delivered": False, "status": "missing", "reason": "row_missing"}
+        st = str(row.get("status") or "")
+        if st != "pending":
+            return {"delivered": False, "status": st, "reason": "not_pending"}
+        platform = str(row.get("platform") or "")
+        account_id = str(row.get("account_id") or "default") or "default"
+        self._log_row(row, "deliver_now", "reason=%s" % str(row.get("reason") or ""))
+        if platform in self._paused:
+            until = n + self._interval
+            self._store.push_until(int(row_id), until, note="paused")
+            self._log_row(row, "pushed", "reason=paused until=%.0f" % until)
+            return {"delivered": False, "status": "pending", "reason": "paused",
+                    "retry_at": until}
+        try:
+            blocked, scope, _ks_reason = self._ks(platform, account_id)
+        except Exception:
+            blocked, scope = False, ""
+        if blocked:
+            until = n + self._ks_backoff
+            self._store.push_until(int(row_id), until, note=f"kill_switch:{scope}")
+            self._log_row(row, "pushed", "reason=kill_switch:%s until=%.0f" % (scope, until))
+            return {"delivered": False, "status": "pending",
+                    "reason": f"kill_switch:{scope}", "retry_at": until}
+        fn = self._senders.get(platform)
+        if fn is None:
+            until = n + self._no_sender_backoff
+            self._store.push_until(int(row_id), until, note="no_sender")
+            self._log_row(row, "pushed", "reason=no_sender until=%.0f" % until)
+            return {"delivered": False, "status": "pending", "reason": "no_sender",
+                    "retry_at": until}
+        return await self._send_row(row, fn, (platform, account_id), n)
 
 
 __all__ = [

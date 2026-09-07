@@ -101,6 +101,15 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
         except Exception:
             return ""
 
+    def _fail_reason(item: dict) -> str:
+        """上一次「立即发」失败原因（note=fail:*，N-1 A #243）；旧 store 无该方法 → ""。"""
+        try:
+            from src.contacts.care_schedule import CareScheduleStore
+            return CareScheduleStore.fail_reason(item) if hasattr(
+                CareScheduleStore, "fail_reason") else ""
+        except Exception:
+            return ""
+
     async def _render_event_preview(request: Request, item: dict) -> dict:
         """LLM 档「先看后发」共用体（M-1 A #218）：预览端点与「排上」前置预览同源。
 
@@ -311,6 +320,9 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
                     "status": str(d.get("status") or ""),
                     "sent_at": float(d.get("sent_at") or 0),
                     "error": str(d.get("error") or "")[:200],
+                    # N-1 E：排队中的行给「预计 hh:mm」+ 卡在哪道护栏（reason=推后备注）
+                    "defer_until": float(d.get("defer_until") or 0),
+                    "reason": str(d.get("reason") or "")[:80],
                 }
                 r["sent_text"] = str(d.get("reply_text") or "")
 
@@ -568,6 +580,10 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "topic_norm": str(it.get("topic_norm") or ""),
             "hold_reason": _hold_reason(it),
             "hold_text": (str(it.get("sent_text") or "") if _hold_reason(it) else ""),
+            # N-1 A/E（#243）：上次「立即发」失败原因 + 行的 note/updated_at（状态机时间戳）
+            "fail_reason": _fail_reason(it),
+            "note": str(it.get("note") or ""),
+            "updated_at": float(it.get("updated_at") or 0),
             "source_text": str(it.get("source_text") or ""),
             "due_at": float(it.get("due_at") or 0),
             "sentiment": str(it.get("sentiment") or "neutral"),
@@ -911,29 +927,85 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             return {"ok": False, "reason": "not_pending", "message": "待办不存在或非 pending"}
         return {"ok": True, "cancelled": int(sid)}
 
+    async def _run_on_engine_loop(request: Request, coro_factory, *, timeout: float = 30.0):
+        """把协程投到派发器所在的（主）事件循环上执行并等结果（N-1 A #243）。
+
+        web 后台跑在自己的线程/loop；派发器、编排器 worker、deferred 队列都活在主
+        loop——跨 loop 直接 await 会撞 loop 绑定的原语。主 loop 未登记 / 就是当前
+        loop（单测 TestClient）→ 就地 await。超时返回 ``None``（协程继续在主 loop 跑完，
+        终态照常落库，前端刷新即见）。
+        """
+        import asyncio
+        engine = getattr(request.app.state, "care_engine", None) or {}
+        loop = engine.get("loop") if isinstance(engine, dict) else None
+        try:
+            cur = asyncio.get_running_loop()
+        except RuntimeError:
+            cur = None
+        try:
+            if loop is not None and loop is not cur and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
+                return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+            return await asyncio.wait_for(coro_factory(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
     @app.post("/api/care/schedule/{sid}/send-now")
     async def api_care_schedule_send_now(sid: int, request: Request, _=Depends(api_auth)):
-        """立即发：把 due_at 提前到当前 → 下个派发 tick 即到期处理（仍走全套发送护栏）。
+        """立即发＝**同步直投**（N-1 A #243，D-N4 ①）：不再只是「提前到期等下一拍」。
 
-        M-1 A #214：响应如实带 ``dry_run``（当前为模拟运行 → 下轮只拟稿不真发）与
-        ``held``（该行正待运营确认 → 提前到期也不会自动发，得点「就这样发」）；
-        前端据此提示，不再「点了没反应」。"""
+        经派发器 ``send_now``（与到期派发同一条守卫 / 拟稿 / 入队链，再当场投递），
+        **同步返回**结果。``decision``：
+        - ``sent``（``sent_at``）→ 卡片「已发出 hh:mm」；
+        - ``queued``（``reason`` + ``defer_until``）→ 通道未就绪 / 急停 / messenger 浏览器队列
+          等暂态：已入队，drain loop 稍后补投，卡片「排队中（预计 hh:mm）」；
+        - ``dry_sampled`` → 模拟运行中：已拟稿留样，不真发；
+        - ``held`` → 该行待运营确认（``held`` 原因），请点「就这样发」；
+        - ``skipped`` / ``failed`` / ``not_pending`` → 原因码回前端，不静默。
+        派发器缺席（ai 未就绪）→ 退回 B 兜底：``bring_forward`` 置 due_at=now +
+        ``decision=brought_forward``。
+        """
         store = _store(request)
-        item = store.get(int(sid)) or {}
-        ok = store.bring_forward(int(sid))
-        if not ok:
-            return {"ok": False, "reason": "not_pending", "message": "待办不存在或非 pending"}
+        item = store.get(int(sid))
+        if not item or str(item.get("status") or "") != "pending":
+            return {"ok": False, "id": int(sid), "decision": "not_pending",
+                    "reason": "not_pending", "message": "待办不存在或非 pending"}
         dry = _effective_dry_run(request)
         held = _hold_reason(item)
+        if held:
+            logger.info("[care-gen] id=%s decision=send_now:held held=%r", sid, held)
+            return {"ok": False, "id": int(sid), "decision": "held", "reason": "held",
+                    "held": held, "dry_run": dry}
         disp = _dispatcher(request)
         interval = 0.0
         try:
             interval = float(getattr(disp, "_interval", 0) or 0) if disp is not None else 0.0
         except Exception:
             interval = 0.0
-        logger.info("[care-gen] id=%s decision=bring_forward dry_run=%s held=%r", sid, dry, held)
-        return {"ok": True, "due_now": int(sid), "dry_run": dry, "held": held,
-                "interval_sec": interval}
+        if disp is None or not hasattr(disp, "send_now"):
+            # B 兜底（D-N4 ②）：没有派发器能当场发 → 至少把 due_at 钉到 now，下一拍即到期
+            ok = store.bring_forward(int(sid))
+            logger.info("[care-gen] id=%s decision=bring_forward dry_run=%s held=%r "
+                        "reason=dispatcher_missing", sid, dry, held)
+            return {"ok": bool(ok), "id": int(sid), "due_now": int(sid),
+                    "decision": "brought_forward" if ok else "not_pending",
+                    "reason": "dispatcher_missing", "dry_run": dry, "held": held,
+                    "interval_sec": interval,
+                    "eta": (time.time() + interval) if ok and interval else 0.0}
+        res = await _run_on_engine_loop(request, lambda: disp.send_now(dict(item)))
+        if res is None:
+            logger.warning("[care-gen] id=%s decision=send_now:timeout", sid)
+            return {"ok": False, "id": int(sid), "decision": "timeout", "reason": "timeout",
+                    "dry_run": dry, "interval_sec": interval}
+        res = dict(res or {})
+        res.setdefault("ok", False)
+        res["id"] = int(sid)
+        res["interval_sec"] = interval
+        res.setdefault("dry_run", dry)
+        logger.info("[care-gen] id=%s decision=send_now:%s reason=%r dry_run=%s row=%s sent_at=%s",
+                    sid, res.get("decision"), res.get("reason") or "", res.get("dry_run"),
+                    res.get("row_id") or 0, res.get("sent_at") or 0)
+        return res
 
     @app.post("/api/care/schedule/{sid}/reschedule")
     async def api_care_schedule_reschedule(sid: int, request: Request, _=Depends(api_auth)):

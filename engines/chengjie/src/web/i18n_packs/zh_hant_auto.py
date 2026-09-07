@@ -3529,6 +3529,52 @@ ZH_HANT = {
     'cs7_status_held': '待你確認後才發',
     # ── cs7_status_queue ──
     'cs7_status_queue': '排隊中：下輪巡檢（≤{n} 分鐘）處理',
+    # ── cs8_dry_sampled ──
+    'cs8_dry_sampled': '模擬執行中：已按這條擬稿留樣，沒有真發給客戶（要真發請先「開啟真發」）',
+    # ── cs8_fwd_done ──
+    'cs8_fwd_done': '已提前到期，預計 {t} 出手',
+    # ── cs8_held_now ──
+    'cs8_held_now': '這條正等你確認——請點「就這樣發」',
+    # ── cs8_note_fwd ──
+    'cs8_note_fwd': '已提前到期',
+    # ── cs8_queued_at ──
+    'cs8_queued_at': '已入隊但暫未發出：{why}，預計 {t} 再試',
+    # ── cs8_send_fail ──
+    'cs8_send_fail': '沒發出去：{why}',
+    # ── cs8_sending ──
+    'cs8_sending': '傳送中…',
+    # ── cs8_sent_at ──
+    'cs8_sent_at': '已發出 {t}',
+    # ── cs8_skipped ──
+    'cs8_skipped': '這條被跳過：{why}',
+    # ── cs8_timeout ──
+    'cs8_timeout': '等了 30 秒還沒回音，稍後重新整理看結果（不會重複發）',
+    # ── cs8_why_deliver_now_error ──
+    'cs8_why_deliver_now_error': '同步投遞出錯，已留在佇列稍後重試',
+    # ── cs8_why_dispatcher_missing ──
+    'cs8_why_dispatcher_missing': '派發器未就緒（AI 未連線）',
+    # ── cs8_why_kill_switch ──
+    'cs8_why_kill_switch': '急停開關生效中',
+    # ── cs8_why_llm_error ──
+    'cs8_why_llm_error': 'AI 擬稿失敗',
+    # ── cs8_why_messenger_rpa_queue ──
+    'cs8_why_messenger_rpa_queue': 'Messenger 走瀏覽器機器人佇列，稍後由它發出',
+    # ── cs8_why_no_sender ──
+    'cs8_why_no_sender': '這個平台還沒有可用的傳送通道',
+    # ── cs8_why_no_sync_path ──
+    'cs8_why_no_sync_path': '已交給傳送佇列，稍後由佇列發出',
+    # ── cs8_why_paused ──
+    'cs8_why_paused': '該平台投遞已被手動暫停',
+    # ── cs8_why_queue_unavailable ──
+    'cs8_why_queue_unavailable': '傳送佇列沒開（請先點「開啟真發」）',
+    # ── cs8_why_send_error ──
+    'cs8_why_send_error': '投遞時出錯',
+    # ── cs8_why_sender_not_ready ──
+    'cs8_why_sender_not_ready': '傳送通道暫未就緒（賬號未登入或正在重連）',
+    # ── cs8_why_sender_returned_false ──
+    'cs8_why_sender_returned_false': '平台沒有接收這條訊息',
+    # ── cs8_why_timeout ──
+    'cs8_why_timeout': '等待超時',
     # ── cs_js001 ──
     'cs_js001': '立即發',
     # ── cs_js002 ──

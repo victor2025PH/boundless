@@ -20,7 +20,7 @@ import logging
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.contacts.care_schedule import (
     CRISIS_CARE_TOPIC,
@@ -80,6 +80,16 @@ GoalRowPolicy = Callable[[dict], dict]
 # （把本地人当外国人 / 老客当新客）→ 拦下 skip；首次真发 / 含地名 / 含人名 →
 # 强制预览（行留 pending 待运营确认）。None/异常 → 空档案（只剩强制预览判定）。
 ProfileProvider = Callable[[dict], dict]
+# deliver_now：(deferred row_id, platform) -> {"delivered", "status", "reason",
+# "sent_at"?, "retry_at"?}（N-1 A #243，D-N4 ①）：运营「立即发」入队后**当场**投这一行，
+# 不等 drain tick。由 background 侧接到多平台 deferred 队列的
+# ``DeferredDispatcher.deliver_now``；None（旧调用方）或 messenger（浏览器队列，无同步
+# 路径）→ 只入队，按「排队中」回话。
+DeliverNow = Callable[[int, str], Awaitable[dict]]
+
+# 运营「立即发」的决策码（send_now 返回 ``decision``；前端据此渲染卡片状态）
+SEND_NOW_DECISIONS = ("sent", "queued", "dry_sampled", "skipped", "held",
+                      "failed", "not_pending", "missing_route")
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -402,6 +412,7 @@ class CareDispatcher:
         goal_row_policy: Optional[GoalRowPolicy] = None,
         profile_provider: Optional[ProfileProvider] = None,
         reply_gates: Optional[bool] = None,
+        deliver_now: Optional[DeliverNow] = None,
     ) -> None:
         self._store = store
         self._ai = ai_client
@@ -442,6 +453,8 @@ class CareDispatcher:
         self._profile_provider = profile_provider
         self._reply_gates = (bool(reply_gates) if reply_gates is not None
                              else profile_provider is not None)
+        # N-1 A #243：「立即发」同步直投钩子（None=只入队、按排队中回话）
+        self._deliver_now = deliver_now
         # M-1 A #214：dry_run 唯一真值 = 实时配置；构造参数只是启动快照。记住上一 tick
         # 的有效值，翻转时打一行 INFO——「启动行 dry_run=True 而 14:00 真发了」这类
         # 状态漂移此前在日志里零痕迹。
@@ -655,7 +668,39 @@ class CareDispatcher:
             logger.debug("care profile_provider 异常（按空档案）", exc_info=True)
             return empty_profile()
 
-    async def _dispatch_one(self, item: dict, now: float) -> bool:
+    async def send_now(self, item: dict, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """运营「立即发」＝同步直投（N-1 A #243，D-N4 ①）。
+
+        与到期派发**同一条** ``_dispatch_one``（同样的守卫 / 拟稿 / 档案校验 / 入队），
+        差别只有三处：① 不吃 ``proactive_care.enabled`` 灰度门（运营亲手点的，不是
+        自动派发）；② 零错峰、不做安静时段顺延（D-N4 ③：人工指定的时刻就是时刻）；
+        ③ 入队后经 ``deliver_now`` 钩子**当场**投递并把结果带回来，而不是等 drain tick。
+        ``dry_run`` 仍尊重：模拟运行中「立即发」＝立即拟稿留样，不真发（decision=dry_sampled）。
+
+        返回 ``{"ok", "decision", "reason", "text", "row_id", "sent_at", "defer_until",
+        "dry_run", "held"}``，绝不抛；``ok``＝已发出 / 已排队（暂态） / dry 留样。
+        """
+        n = float(now if now is not None else time.time())
+        res: Dict[str, Any] = {"ok": False, "decision": "", "reason": "", "text": "",
+                               "row_id": 0, "sent_at": 0.0, "defer_until": 0.0,
+                               "dry_run": self.effective_dry_run(), "held": ""}
+        try:
+            ok = await self._dispatch_one(dict(item), n, manual=True, result=res)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("care send_now 异常 id=%s", item.get("id"), exc_info=True)
+            res.update(decision="failed", reason=f"error:{type(ex).__name__}")
+            return res
+        if not res.get("decision"):
+            res["decision"] = "sent" if ok else "failed"
+        res["ok"] = res["decision"] in ("sent", "queued", "dry_sampled")
+        return res
+
+    async def _dispatch_one(self, item: dict, now: float, *, manual: bool = False,
+                            result: Optional[Dict[str, Any]] = None) -> bool:
+        def _r(**kw: Any) -> None:
+            if result is not None:
+                result.update(kw)
+
         sid = int(item["id"])
         contact_key = str(item.get("contact_key") or "")
         topic = str(item.get("topic") or "").strip()
@@ -663,13 +708,20 @@ class CareDispatcher:
         platform = str(item.get("platform") or "")
         account_id = str(item.get("account_id") or "default") or "default"
 
+        if manual and str(item.get("status") or "pending") != "pending":
+            _r(decision="not_pending", reason="not_pending")
+            return False
+
         if not chat_key or not platform:
             self._mark_skipped(sid, "missing platform/chat_key")
+            _r(decision="missing_route", reason="missing platform/chat_key")
             return False
 
         # M-1 A #218：处于「待运营确认」态的行（LLM 拟稿命中强制预览）不再派发，
         # 等面板上「就这样发 / 改一改再发 / 跳过」或逾期过期。不烧 LLM、不 mark。
-        if CareScheduleStore.hold_reason(item):
+        _held = CareScheduleStore.hold_reason(item)
+        if _held:
+            _r(decision="held", reason="held", held=_held)
             return False
 
         # 对方机器人/自家账号守卫（P1 2026-08-03）：给 bot 发关怀是纯空转 + 向平台
@@ -679,6 +731,7 @@ class CareDispatcher:
             try:
                 if self._peer_filter(platform, account_id, chat_key):
                     self._mark_skipped(sid, "peer_bot_or_fleet")
+                    _r(decision="skipped", reason="peer_bot_or_fleet")
                     return False
             except Exception:
                 logger.debug("care peer_filter 异常（放行）", exc_info=True)
@@ -697,12 +750,16 @@ class CareDispatcher:
         # P0 2026-08-30：冲刺行豁免策略（只对 goal:* 行征询；异常=全默认）
         goal_policy: dict = self._goal_policy(item) if is_goal_care else {}
         # D1b P0-1：本行的 dry 语义——冲刺 live 行不吃 care 的 dry_run（冲刺自己
-        # 的灰度是 goals.sprint.dry_run，由 policy 决定 live 与否）
-        dry = bool(self._dry_run) and not goal_policy.get("live")
+        # 的灰度是 goals.sprint.dry_run，由 policy 决定 live 与否）。
+        # N-1 A：「立即发」不经 run_once，dry 直接读唯一真值（实时配置）。
+        _dry_base = self.effective_dry_run() if manual else bool(self._dry_run)
+        dry = _dry_base and not goal_policy.get("live")
+        _r(dry_run=bool(dry))
 
         # 实施84 P0-4：dry 语义改「不消费待办」后同一行每 tick 仍到期——重拟
         # 冷却窗内直接静默跳过（不 mark、不烧 LLM；行保持 pending 待真发/过期）。
-        if dry:
+        # 运营「立即发」不吃冷却（人要看现在这稿）。
+        if dry and not manual:
             _last_dry = float(item.get("dry_sampled_at") or 0)
             if (_last_dry > 0
                     and (now - _last_dry) < self._dry_resample_hours * 3600.0):
@@ -714,6 +771,7 @@ class CareDispatcher:
             try:
                 if not self._proactive_allowed(contact_key):
                     self._mark_skipped(sid, "paywall_quota")
+                    _r(decision="skipped", reason="paywall_quota")
                     return False
             except Exception:
                 logger.debug("proactive_allowed 异常（忽略放行）", exc_info=True)
@@ -724,6 +782,7 @@ class CareDispatcher:
             try:
                 if self._already_discussed(contact_key, topic):
                     self._mark_skipped(sid, "already_discussed")
+                    _r(decision="skipped", reason="already_discussed")
                     return False
             except Exception:
                 logger.debug("already_discussed 异常（忽略）", exc_info=True)
@@ -744,6 +803,7 @@ class CareDispatcher:
                 allowed = True
             if not allowed:
                 self._mark_skipped(sid, "contact_budget")
+                _r(decision="skipped", reason="contact_budget")
                 return False
 
         if is_verbatim:
@@ -752,10 +812,11 @@ class CareDispatcher:
             reply = care_verbatim_text(item)
             if not reply:
                 self._mark_skipped(sid, "verbatim_empty")
+                _r(decision="skipped", reason="verbatim_empty")
                 return False
             logger.info(
-                "[care-gen] id=%s contact=%s mode=verbatim dry=%s text=%r",
-                sid, contact_key, dry, reply[:160])
+                "[care-gen] id=%s contact=%s mode=verbatim dry=%s manual=%s text=%r",
+                sid, contact_key, dry, manual, reply[:160])
         else:
             context_block = ""
             if self._context_provider is not None and not is_crisis_care:
@@ -768,6 +829,7 @@ class CareDispatcher:
             if (self._skip_if_no_context and not context_block
                     and not is_crisis_care and not is_goal_care):
                 self._mark_skipped(sid, "no_context")
+                _r(decision="skipped", reason="no_context")
                 return False
 
             # B110④：该联系人最近已发关怀 → 防重负样本（危机专线不吃；读失败按空）
@@ -797,6 +859,9 @@ class CareDispatcher:
                 reply = (await self._ai.chat(prompt) or "").strip()
             except Exception:
                 logger.warning("care LLM 失败 id=%s", sid, exc_info=True)
+                _r(decision="failed", reason="llm_error")
+                if manual and hasattr(self._store, "mark_send_failed"):
+                    self._store.mark_send_failed(sid, "llm_error", now=now)
                 return False  # 留 pending，下个 tick 重试
             # M-1 A #218 ④：care 生成落日志——输入原文 / 注入了哪些字段 / 输出 / 走了哪档。
             # 此前 care 生成零上下文日志，事故只能靠客户端截图倒推。
@@ -813,16 +878,19 @@ class CareDispatcher:
                 reply[:200])
             if not reply or len(reply) < 4:
                 self._mark_skipped(sid, "llm_empty")
+                _r(decision="skipped", reason="llm_empty")
                 return False
             low = reply.lower()
             if any(b.lower() in low for b in _IDENTITY_LEAK):
                 self._mark_skipped(sid, "identity_leak")
+                _r(decision="skipped", reason="identity_leak")
                 return False
 
             # Phase O 质量闭环：与运营 dislike 黑名单话术相似 → 重生成一次，仍相似则跳过
             # （复用 reactivation 同一黑名单：被标记的雷同话术在 care 里同样该避免）
             reply = await self._avoid_disliked(prompt, reply, sid)
             if not reply:
+                _r(decision="skipped", reason="disliked_similarity")
                 return False
 
             # M-1 A #218 ②③：事实校验 + 强制预览。与档案矛盾（本地人当外国人 / 老客当
@@ -843,6 +911,7 @@ class CareDispatcher:
                         reply[:120], {k: profile.get(k) for k in ("country", "residence",
                                                                   "known_since", "known_days")})
                     self._mark_skipped(sid, verdict["reason"])
+                    _r(decision="skipped", reason=verdict["reason"], text=reply)
                     return False
                 if verdict["verdict"] == "preview":
                     if hasattr(self._store, "mark_hold_for_preview"):
@@ -851,6 +920,7 @@ class CareDispatcher:
                         logger.info(
                             "[care-gen] id=%s contact=%s 强制预览 → 留待运营确认 reason=%s",
                             sid, contact_key, verdict["reason"])
+                        _r(decision="held", reason="held", held=verdict["reason"], text=reply)
                         return False
                     logger.warning(
                         "[care-gen] id=%s store 不支持 hold（旧版），强制预览退化为放行 reason=%s",
@@ -873,17 +943,23 @@ class CareDispatcher:
                 _jit = (float(gp_jit[0]), float(gp_jit[1]))
             except (TypeError, ValueError):
                 _jit = self._jitter
-        defer_until = now + random.uniform(_jit[0], _jit[1])
-        # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
-        # 用户拍板的全力档自担深夜打扰）；普通行为不变
-        if not goal_policy.get("ignore_quiet"):
-            defer_until = shift_out_of_quiet_hours(
-                defer_until, start_hour=self._quiet_start,
-                end_hour=self._quiet_end, clock=_clock)
+        if manual:
+            # N-1 A（D-N4 ①③）：运营亲手点「立即发」——零错峰、不做安静时段顺延，
+            # 现在就是现在。安全型闸（急停 / 无 sender）由投递层守。
+            defer_until = now
+        else:
+            defer_until = now + random.uniform(_jit[0], _jit[1])
+            # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
+            # 用户拍板的全力档自担深夜打扰）；普通行为不变
+            if not goal_policy.get("ignore_quiet"):
+                defer_until = shift_out_of_quiet_hours(
+                    defer_until, start_hour=self._quiet_start,
+                    end_hour=self._quiet_end, clock=_clock)
+        _r(text=reply, defer_until=defer_until)
 
         if dry:
-            logger.info("[care DRY] id=%s contact=%s topic=%s reply=%r",
-                        sid, contact_key, topic, reply[:120])
+            logger.info("[care DRY] id=%s contact=%s topic=%s manual=%s reply=%r",
+                        sid, contact_key, topic, manual, reply[:120])
             try:
                 from src.monitoring.metrics_store import get_metrics_store
                 get_metrics_store().record_care_dry_run(sample={
@@ -906,6 +982,7 @@ class CareDispatcher:
                 self._store.mark_dry_sampled(sid, sent_text=reply, now=now)
             else:
                 self._store.mark_sent(sid, note="dry_run", sent_text=reply)
+            _r(decision="dry_sampled")
             return True
 
         try:
@@ -917,17 +994,65 @@ class CareDispatcher:
                 self._staleness,
                 {"care": True, "care_id": sid, "contact_key": contact_key,
                  "topic": topic, "crisis_care": is_crisis_care,
-                 "verbatim": is_verbatim},
+                 "verbatim": is_verbatim, "manual": bool(manual)},
             )
         except Exception:
             logger.warning("care send_callback 失败 id=%s", sid, exc_info=True)
+            _r(decision="failed", reason="send_error")
+            if manual and hasattr(self._store, "mark_send_failed"):
+                self._store.mark_send_failed(sid, "send_error", now=now)
             return False  # 留 pending 重试
         if not row_id:
-            logger.info("[care-gen] id=%s decision=gated（deferred 队列未接收，留 pending）", sid)
+            # N-1 D：不发而留 pending 必给原因——队列关（multiplatform_deferred.enabled=false）
+            # 或 messenger runner 未起，此前只有一句「gated」。
+            logger.info("[care-gen] id=%s contact=%s decision=gated reason=queue_unavailable "
+                        "platform=%s manual=%s（deferred 队列未接收，留 pending）",
+                        sid, contact_key, platform, manual)
+            _r(decision="failed", reason="queue_unavailable")
+            if manual and hasattr(self._store, "mark_send_failed"):
+                self._store.mark_send_failed(sid, "queue_unavailable", now=now)
             return False  # enqueue 失败（如 gate 拦）→ 留 pending
+        _r(row_id=int(row_id))
         logger.info(
-            "[care-gen] id=%s contact=%s decision=enqueued deferred=%s send_in_min=%d",
-            sid, contact_key, int(row_id), int(max(0.0, defer_until - now) / 60))
+            "[care-gen] id=%s contact=%s decision=enqueued deferred=%s send_in_min=%d manual=%s",
+            sid, contact_key, int(row_id), int(max(0.0, defer_until - now) / 60), manual)
+
+        if manual:
+            # N-1 A：入队后当场投这一行。钩子缺席（messenger 浏览器队列 / 旧接线）
+            # → 只入队，按「排队中（预计 defer_until）」如实回话。
+            dres: Dict[str, Any] = {}
+            if self._deliver_now is not None:
+                try:
+                    dres = dict(await self._deliver_now(int(row_id), platform) or {})
+                except Exception:
+                    logger.warning("care deliver_now 异常 id=%s row=%s", sid, row_id,
+                                   exc_info=True)
+                    dres = {"delivered": False, "status": "pending",
+                            "reason": "deliver_now_error"}
+            else:
+                dres = {"delivered": False, "status": "pending", "reason": "no_sync_path"}
+            if dres.get("delivered"):
+                sent_at = float(dres.get("sent_at") or now)
+                _r(decision="sent", sent_at=sent_at)
+                logger.info("[care-gen] id=%s contact=%s decision=sent_now deferred=%s sent_at=%.0f",
+                            sid, contact_key, int(row_id), sent_at)
+            elif str(dres.get("status") or "") == "pending":
+                retry_at = float(dres.get("retry_at") or defer_until or now)
+                _r(decision="queued", reason=str(dres.get("reason") or "queued"),
+                   defer_until=retry_at)
+                logger.info("[care-gen] id=%s contact=%s decision=queued reason=%s retry_at=%.0f "
+                            "deferred=%s", sid, contact_key, dres.get("reason"), retry_at,
+                            int(row_id))
+            else:
+                # 永久失败（平台拒收 / sender 抛错）：队列行已 failed；care 行留 pending
+                # 并记 note=fail:<原因>，卡片显「失败（原因）」且「立即发」可再点。
+                why = str(dres.get("reason") or "send_failed")
+                _r(decision="failed", reason=why)
+                logger.warning("[care-gen] id=%s contact=%s decision=send_failed reason=%s "
+                               "deferred=%s", sid, contact_key, why, int(row_id))
+                if hasattr(self._store, "mark_send_failed"):
+                    self._store.mark_send_failed(sid, why, now=now)
+                return False
         # P3：真发成功 → 触达落共享账本（outreach_log），对预算/周报可见。
         # 绝不影响已完成的发送（best-effort）。
         if self._sent_hook is not None:
@@ -1067,4 +1192,5 @@ class CareDispatcher:
         return ""
 
 
-__all__ = ["CareDispatcher", "build_care_prompt", "shift_out_of_quiet_hours"]
+__all__ = ["CareDispatcher", "build_care_prompt", "shift_out_of_quiet_hours",
+           "SEND_NOW_DECISIONS"]

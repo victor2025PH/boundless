@@ -461,8 +461,10 @@ def test_route_plan_and_sendnow_expose_hold_and_dry_run():
     assert items[0]["hold_reason"] == "first_send"
     assert items[0]["hold_text"] == "Hope the interview went well!"
     assert c.get("/api/care/health").json()["dry_run"] is True
+    # N-1 A（#243）：「立即发」改同步直投——待确认行不发、结构化回 decision=held（要点「就这样发」）
     sn = c.post(f"/api/care/schedule/{sid}/send-now", json={}).json()
-    assert sn["ok"] is True and sn["dry_run"] is True and sn["held"] == "first_send"
+    assert sn["ok"] is False and sn["decision"] == "held"
+    assert sn["dry_run"] is True and sn["held"] == "first_send"
     # 预览端点：held 行直接回派发器扣下的那稿，零 LLM
     pv = c.post(f"/api/care/schedule/{sid}/preview", json={}).json()
     assert pv["ok"] is True and pv["held"] == "first_send"

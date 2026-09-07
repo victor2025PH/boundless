@@ -414,6 +414,18 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             return build_customer_profile(
                 item, inbox_store=assistant.inbox_store, contacts_store=cstore)
 
+        async def _care_deliver_now(row_id: int, platform: str) -> dict:
+            """N-1 A（#243）：「立即发」入队后当场投这一行——接多平台 deferred 队列的
+            ``deliver_now``（同一 sender / 同一终态落库）。messenger 走浏览器 RPA 队列，
+            没有同步路径 → 如实回「排队中」。"""
+            if str(platform) == "messenger":
+                return {"delivered": False, "status": "pending",
+                        "reason": "messenger_rpa_queue"}
+            disp = getattr(assistant, "_deferred_outbox_dispatcher", None)
+            if disp is None or not hasattr(disp, "deliver_now"):
+                return {"delivered": False, "status": "pending", "reason": "no_sync_path"}
+            return await disp.deliver_now(int(row_id))
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client,
             send_callback=_care_send_guarded,
@@ -434,11 +446,18 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             user_clock_provider=_care_user_clock,
             goal_row_policy=_goal_row_policy,
             profile_provider=_care_profile,
+            deliver_now=_care_deliver_now,
         )
         await dispatcher.start()
         assistant._care_dispatcher = dispatcher
         if web_app is not None:
             engine_state["dispatcher"] = dispatcher
+            # N-1 A：派发器/投递 worker 都活在这条（主）loop 上；web 线程的路由
+            # 要「立即发」得把协程投回来（run_coroutine_threadsafe），不能跨 loop await。
+            try:
+                engine_state["loop"] = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
         # M-1 A #214：这行只是**启动快照**；dry_run 唯一真值 = dispatcher.effective_dry_run()
         # （实时配置），翻转时 care_dispatcher 另打一行「dry_run 实时值变化」。
         assistant.logger.info(

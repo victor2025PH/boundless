@@ -166,6 +166,12 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
 .cs7-held-box .why{font-size:.68rem;color:var(--t3);margin-top:.2rem}
 .cs7-status{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.72rem;color:var(--t2);margin:-.2rem 0 .45rem}
 .cs7-status.dry{color:var(--amber)}
+/* ── N-1 A/E（#243）：「立即发」结果 / 卡片状态行（已发出·排队中·失败·已提前） ── */
+.cs8-st{font-size:.74rem;margin:.2rem 0 .3rem;padding:.25rem .55rem;border-radius:6px;background:var(--input);color:var(--t2)}
+.cs8-st.ok{background:rgba(16,185,129,.12);color:var(--green)}
+.cs8-st.wait{background:rgba(245,158,11,.10);color:var(--amber)}
+.cs8-st.bad{background:rgba(239,68,68,.12);color:var(--red)}
+.cs-act[disabled]{opacity:.55;cursor:progress}
 /* ── P0 2026-08-03 历史可读性：名字链接 / 投递真相 / 回复徽标 / 话术展开 ── */
 .cs4-sub{color:var(--t3);font-size:.72rem;margin-top:.15rem}
 .cs4-rp,.cs4-dv{display:inline-block;font-size:.72rem;font-weight:600;padding:.12rem .45rem;border-radius:4px;background:var(--input);color:var(--t3)}/* 内距对齐 badge-st，同格并排不跳高 */
@@ -413,6 +419,8 @@ function _csNote(note){
   if(!n)return '';
   if(n==='dry_run')return window.T('cs2_note_dry');
   if(n.indexOf('deferred:')===0)return window.T('cs2_note_deferred');
+  if(n.indexOf('fail:')===0)return window.Tf('cs8_send_fail',{why:_csWhy(n.slice(5))});
+  if(n.indexOf('fwd:')===0)return window.T('cs8_note_fwd');
   var map={no_context:'cs2_skip_no_context',already_discussed:'cs2_skip_already',
     paywall_quota:'cs2_skip_paywall',identity_leak:'cs2_skip_identity',
     disliked_similarity:'cs2_skip_disliked',llm_empty:'cs2_skip_llm_empty',
@@ -653,7 +661,11 @@ function _csCardHtml(it){
     : '';
   var heldBtn=held
     ? '<button type="button" class="cs-act p" onclick="csHeldSend('+it.id+')">'+window.T('cs7_held_send')+'</button>'
-    : '<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>';
+    : '<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button>';
+  /* N-1 A（#243）：上次「立即发」没发出去 → 卡片直接写原因（note=fail:*），按钮仍可再点 */
+  var failed=String(it.fail_reason||'');
+  var stLine='<div class="cs8-st'+(failed?' bad':'')+'" id="cs-sn-st-'+it.id+'"'+(failed?'':' style="display:none"')+'>'+
+    (failed?esc(window.Tf('cs8_send_fail',{why:_csWhy(failed)}))+(it.updated_at?' · '+esc(_csHHMM(it.updated_at)):''):'')+'</div>';
   return '<div class="cs3-card">'+
     '<div class="hd">'+_csAvaLetter(name)+
       '<span class="nm">'+esc(name)+'</span>'+
@@ -661,7 +673,7 @@ function _csCardHtml(it){
       '<span class="tp">'+esc(it.topic||'—')+(vb?'<span class="cs6-vb" title="'+esc(window.T('cs6_kind_verbatim_t'))+'">'+esc(window.T('cs6_vb_badge'))+'</span>':'')+
         (held?'<span class="cs7-held">'+esc(window.T('cs7_held_badge'))+'</span>':'')+'</span>'+
       '<span class="due">'+_csRel(it.due_at)+'<small>'+(it.due_at?window.wsFmtDateTime(it.due_at):'')+'</small>'+_csFarChip(it)+'</span>'+
-    '</div>'+q+heldBox+
+    '</div>'+q+heldBox+stLine+
     '<div class="pv" id="cs-pv-'+it.id+'"></div>'+
     '<div class="ops">'+
       '<button type="button" class="cs-act" id="cs-pvbtn-'+it.id+'" onclick="csPreview('+it.id+')">'+window.T(held?'cs6_edit_btn':'cs2_preview_btn')+'</button>'+
@@ -942,21 +954,60 @@ async function csEditSend(id){
     _csHistReload();
   }catch(e){if(msg){msg.style.color='var(--red)';msg.textContent=window.T('cs6_edit_fail')+String(e&&e.message||e).slice(0,80);}}
 }
+/* N-1 A（#243，D-N4 ①）：「立即发」＝同步直投。点击即禁用按钮直到返回（三连点只发一条），
+   返回后按 decision 如实回话：已发出 hh:mm / 排队中（原因 + 预计） / 模拟拟稿 / 失败（原因）。 */
+var _csSendNowBusy={};
+function _csHHMM(ts){return ts?window.wsFmtDateTime(ts,{hour:'2-digit',minute:'2-digit'}):'';}
+function _csWhy(code){
+  var c=String(code||'').split(':')[0];
+  var k='cs8_why_'+c;
+  var t=window.T(k);
+  return (t&&t!==k)?t:String(code||'');
+}
+function _csSendNowMsg(d){
+  var dec=String(d.decision||'');
+  if(dec==='sent')return [window.Tf('cs8_sent_at',{t:_csHHMM(d.sent_at)}),'ok'];
+  if(dec==='queued')return [window.Tf('cs8_queued_at',{why:_csWhy(d.reason),t:_csHHMM(d.defer_until)}),'wait'];
+  if(dec==='dry_sampled')return [window.T('cs8_dry_sampled'),'wait'];
+  if(dec==='held')return [window.T('cs8_held_now'),'wait'];
+  if(dec==='brought_forward')return [window.Tf('cs8_fwd_done',{t:_csHHMM(d.eta)}),'wait'];
+  if(dec==='skipped')return [window.Tf('cs8_skipped',{why:_csNote(d.reason)||d.reason}),'bad'];
+  if(dec==='timeout')return [window.T('cs8_timeout'),'bad'];
+  if(dec==='not_pending')return [window.T('cs3_resched_fail').replace(/[:：]\s*$/,''),'bad'];
+  return [window.Tf('cs8_send_fail',{why:_csWhy(d.reason||d.message||dec)}),'bad'];
+}
+function _csCardStatus(id,msg,cls){
+  var el=document.getElementById('cs-sn-st-'+id);
+  if(!el)return;
+  el.className='cs8-st '+(cls||'');
+  el.textContent=msg||'';
+  el.style.display=msg?'':'none';
+}
 async function csSendNow(id){
+  if(_csSendNowBusy[id])return;
   /* M-1 A #214：模拟运行中「立即发」不再静默——先说清「不会真发」，做完也如实回话 */
   var dry=!!(_csPlan&&_csPlan.engine&&_csPlan.engine.dry_run);
   if(!confirm(window.T(dry?'cs7_sendnow_dry_confirm':'cs_js003')))return;
+  _csSendNowBusy[id]=true;
+  var btns=document.querySelectorAll('[data-sendnow="'+id+'"]');
+  btns.forEach(function(b){b.disabled=true;b.dataset.label=b.textContent;b.textContent=window.T('cs8_sending');});
+  _csCardStatus(id,window.T('cs8_sending'),'wait');
+  var d=null;
   try{
     var res=await apiFetch('/api/care/schedule/'+id+'/send-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}, {timeoutMs: 60000});
-    var d=await res.json();
-    if(!d.ok){alert(window.T('ov_js_op_fail_e')+(d.message||d.reason));return;}
-    var n=Math.max(1,Math.ceil((Number(d.interval_sec)||600)/60));
-    var hint=d.dry_run?window.T('cs7_sendnow_dry_done')
-      :(d.held?window.T('cs7_sendnow_held_done'):window.Tf('cs7_sendnow_done',{n:n}));
-    _csHint(hint);
-    csPlanLoad();
-    _csHistReload();
-  }catch(e){alert(e);}
+    d=await res.json();
+  }catch(e){
+    var _to=e&&(e.name==='AbortError'||/timeout|abort/i.test(String(e&&e.message||e)));
+    d={ok:false,decision:_to?'timeout':'failed',reason:String(e&&e.message||e).slice(0,80)};
+  }
+  delete _csSendNowBusy[id];
+  btns.forEach(function(b){b.disabled=false;if(b.dataset.label)b.textContent=b.dataset.label;});
+  var m=_csSendNowMsg(d||{});
+  _csCardStatus(id,m[0],m[1]);
+  _csHint(m[0]);
+  /* 已发出 / 排队中 / 拟稿：卡片会换区块，稍留一拍让人看到回话再刷新 */
+  var delay=(m[1]==='ok'||m[1]==='wait')?1200:0;
+  setTimeout(function(){csPlanLoad();_csHistReload();},delay);
 }
 var _csHintEl=null;
 function _csHint(msg){
@@ -1441,7 +1492,7 @@ function _csHistRowHtml(it){
     :stBadge(it.status);
   var op='';
   if(it.status==='pending'){
-    op='<button type="button" class="cs-act p" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button> '+
+    op='<button type="button" class="cs-act p" data-sendnow="'+it.id+'" onclick="csSendNow('+it.id+')">'+window.T('cs_js001')+'</button> '+
        '<button type="button" class="cs-act" onclick="csCancel('+it.id+')">'+window.T('ov_js_cancel')+'</button>';
   }else if(it.sent_text){
     op='<button type="button" class="cs-act" id="cs-ht-btn-'+it.id+'" onclick="csHistText('+it.id+')">'+window.T('cs4_view_text')+'</button>';
