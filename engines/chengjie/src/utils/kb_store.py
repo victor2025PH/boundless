@@ -1533,6 +1533,12 @@ class KnowledgeBaseStore:
                 f"SELECT COALESCE(source,'{KB_SOURCE_DEFAULT}') AS s, COUNT(*) AS cnt "
                 "FROM kb_entries GROUP BY s"
             ).fetchall()
+            # N-3 #240：存量支付话术种子（GXP 等）计数——KB 页横幅 / 升级提示据此出现
+            _pk = sorted(PAYMENT_SEED_KEYS)
+            sys_pay = c.execute(
+                f"SELECT COUNT(*) FROM kb_entries WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')='system' "
+                f"AND template_key IN ({','.join('?' * len(_pk))})", _pk
+            ).fetchone()[0]
         by_source = {r["s"]: r["cnt"] for r in srcs}
         return {
             "total_entries": total,
@@ -1549,6 +1555,7 @@ class KnowledgeBaseStore:
             "entries_user": by_source.get("user", 0) + by_source.get("import", 0),
             "entries_vendor": by_source.get("vendor", 0),
             "entries_system": by_source.get("system", 0),
+            "entries_system_payment": int(sys_pay or 0),
             "vendor_excluded": vendor_retrieval_excluded(),
         }
 
@@ -1622,6 +1629,9 @@ class KnowledgeBaseStore:
                         c.execute(f"DELETE FROM {tbl} WHERE {col} IN ({ph})", chunk)
                     except sqlite3.OperationalError:
                         pass
+        if src == "system":
+            # N-3 #240：用户显式清空过系统预置 → seed_system_replies 不再灌回
+            self.set_meta(KB_SYSTEM_SEEDS_PURGED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
         self._touch_index()
         return len(ids)
 
@@ -2857,6 +2867,28 @@ def seed_kb_examples(store: "KnowledgeBaseStore", category: str = "all") -> dict
 
 
 # ── E0: 系统话术种子数据 ─────────────────────────────────────
+#
+# N-3 #240（老板决策 D-N2，2026-09-08）：种子**按业务域播**。
+# · 带 ``"domains": ("payment",)`` 的条目（13 条 gxp_* + 订单 / 费率 / 通道 / 状态兜底）只在
+#   payment 域包（支付插件开）播；conversion 域（陪伴 / 销售）**不导入**——skuio ZNW5CN 实锤：
+#   1.0.76 全新安装知识库预置「系统话术·直接」GXP 支付话术 13 条全启用，J-9 只挡了
+#   knowledge_base.db 随包，没挡这里每次启动无条件播的 23 条。
+# · 不带 domains 的通用兜底（全局 / 问候 / 投诉 / 闲聊 / 测试）两域都播；**陪伴域播进去的默认
+#   停用**（enabled=0）——它们是客服腔（「有什么可以帮您的」正是 conversion 人设的禁语），
+#   get_fallback 拿不到就「本轮不回复」（2026-08-15 起的既定口径），运营改成自己的话再启用。
+# · 用户在 KB 页「系统预置 → 一键清空」后打 ``KB_SYSTEM_SEEDS_PURGED_KEY``，之后启动不再灌回
+#   （J-9 的 purge-source 端点早就有 system 口，但清了下次启动又长回来）。
+PAYMENT_SEED_KEYS = frozenset({
+    "order_query_fallback", "order_query_with_number_fallback",
+    "price_check_fallback", "status_check_fallback", "channel_info_fallback",
+    "gxp_ask_intent", "gxp_ask_same_no", "gxp_need_order_no", "gxp_expired",
+    "gxp_ask_what", "gxp_ask_what_with_order", "gxp_hint_query_deposit",
+    "gxp_hint_query_withdraw", "gxp_hint_callback_deposit",
+    "gxp_hint_callback_withdraw", "gxp_hint_mock_callback", "gxp_hint_utr_query",
+    "gxp_request_sent", "gxp_processing_fallback",
+})
+KB_SYSTEM_SEEDS_PURGED_KEY = "kb_system_seeds_purged_v1"
+KB_PAYMENT_SEEDS_PURGED_KEY = "kb_payment_seeds_purged_v1"
 
 SYSTEM_REPLY_SEEDS: List[Dict[str, Any]] = [
     # ── 全局兜底 ──
@@ -3066,10 +3098,53 @@ SYSTEM_REPLY_SEEDS: List[Dict[str, Any]] = [
 ]
 
 
-def seed_system_replies(store: "KnowledgeBaseStore") -> dict:
-    """E0: 将所有硬编码话术 + 模板迁移为 KB 条目（已存在则跳过）"""
-    result = {"added": 0, "skipped": 0, "failed": 0}
+def system_seed_plan(cfg: Any = None, *, business_domain: Optional[str] = None) -> Dict[str, Any]:
+    """本机该播哪些系统话术种子（N-3 #240 / D-N2）。
+
+    返回 ``{"business_domain", "payment", "enabled_default"}``：
+    · ``payment``：支付域包（``effective_domain_name == "payment"``）才播 PAYMENT_SEED_KEYS；
+      给不出配置（admin.py 那路调用没带 cfg）按 False——宁可少播，支付部署的
+      ``kb_registry.get_kb_store(config)`` 路带 cfg，会把缺的补上；
+    · ``enabled_default``：陪伴域 0（客服腔兜底先停用，运营改成自己的话再开），其他 1。
+    绝不抛。
+    """
+    bd = str(business_domain or "").strip().lower()
+    payment = False
+    try:
+        root = cfg if isinstance(cfg, dict) else getattr(cfg, "config", None)
+        if isinstance(root, dict):
+            from src.utils.domain_policy import effective_domain_name
+            payment = effective_domain_name(root) == "payment"
+            if not bd:
+                from src.utils.business_domain import resolve_business_domain
+                bd = resolve_business_domain(root)
+        if not bd:
+            from src.utils.business_domain import active_business_domain
+            bd = active_business_domain()
+    except Exception:
+        pass
+    bd = bd if bd in ("companion", "sales") else "sales"
+    return {"business_domain": bd, "payment": bool(payment),
+            "enabled_default": 0 if bd == "companion" else 1}
+
+
+def seed_system_replies(store: "KnowledgeBaseStore", cfg: Any = None, *,
+                        business_domain: Optional[str] = None) -> dict:
+    """E0: 将所有硬编码话术 + 模板迁移为 KB 条目（已存在则跳过）。
+
+    N-3 #240（D-N2）：按 :func:`system_seed_plan` 过滤——非支付域不播 GXP / 订单 / 费率 /
+    通道 / 状态兜底；陪伴域播进去的默认停用；用户一键清空过系统预置（
+    ``KB_SYSTEM_SEEDS_PURGED_KEY``）或清空过支付话术（``KB_PAYMENT_SEEDS_PURGED_KEY``）
+    的库不再灌回。``cfg`` 可为 ConfigManager / dict / None。
+    """
+    result = {"added": 0, "skipped": 0, "failed": 0, "skipped_domain": 0}
     ensure_kb_seeded_once_meta(store)
+    plan = system_seed_plan(cfg, business_domain=business_domain)
+    result["business_domain"] = plan["business_domain"]
+    if store.get_meta(KB_SYSTEM_SEEDS_PURGED_KEY):
+        return {**result, "skipped": len(SYSTEM_REPLY_SEEDS),
+                "suppressed_purged": True}
+    payment_purged = bool(store.get_meta(KB_PAYMENT_SEEDS_PURGED_KEY))
     with store._conn() as c:
         total_entries = c.execute("SELECT COUNT(*) FROM kb_entries").fetchone()[0]
         existing_keys = {
@@ -3088,14 +3163,45 @@ def seed_system_replies(store: "KnowledgeBaseStore") -> dict:
         if key in existing_keys:
             result["skipped"] += 1
             continue
+        if key in PAYMENT_SEED_KEYS and (not plan["payment"] or payment_purged):
+            result["skipped_domain"] += 1
+            continue
         try:
-            store.add_entry(entry)
+            row = dict(entry)
+            row.setdefault("source", "system")
+            row["enabled"] = int(plan["enabled_default"])
+            store.add_entry(row)
             existing_keys.add(key)
             result["added"] += 1
         except Exception:
             result["failed"] += 1
     ensure_kb_seeded_once_meta(store)
     return result
+
+
+def purge_payment_seeds(store: "KnowledgeBaseStore") -> int:
+    """存量清理（N-3 #240）：删掉 source=system 且 template_key ∈ PAYMENT_SEED_KEYS 的
+    条目（陪伴 / 销售机器上 1.0.76 之前播进去的 GXP 支付话术等），并打
+    ``KB_PAYMENT_SEEDS_PURGED_KEY`` 防下次启动灌回。返回删除数。"""
+    keys = sorted(PAYMENT_SEED_KEYS)
+    ph = ",".join("?" * len(keys))
+    with store._conn() as c:
+        ids = [r[0] for r in c.execute(
+            f"SELECT id FROM kb_entries WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')='system' "
+            f"AND template_key IN ({ph})", keys).fetchall()]
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            cph = ",".join("?" * len(chunk))
+            for tbl, col in (("kb_entries", "id"), ("kb_translations", "entry_id"),
+                             ("kb_entry_versions", "entry_id"), ("kb_entry_images", "entry_id")):
+                try:
+                    c.execute(f"DELETE FROM {tbl} WHERE {col} IN ({cph})", chunk)
+                except sqlite3.OperationalError:
+                    pass
+    store.set_meta(KB_PAYMENT_SEEDS_PURGED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
+    if ids:
+        store._touch_index()
+    return len(ids)
 
 
 # ── 首装格式示例（J-9 #184）───────────────────────────────────────────

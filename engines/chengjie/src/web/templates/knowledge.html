@@ -260,6 +260,18 @@
       <button class="btn btn-s btn-sm" onclick="kbDismissVendorNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
     </span>
   </div>
+  <!-- 系统预置支付话术提示（N-3 #240 / D-N2）：1.0.76 之前每次启动无条件播进库的 GXP 支付
+       话术等（source=system，template_key ∈ PAYMENT_SEED_KEYS）。非支付部署用不上；
+       首渲染按 stats.entries_system_payment，之后 refreshStats → _syncSysPayNotice 维持。 -->
+  <div id="kb-syspay-notice" role="status"
+       style="display:{{ 'flex' if (stats.entries_system_payment or 0) > 0 else 'none' }};align-items:center;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 .2rem;padding:.55rem .8rem;border:1px solid var(--bd);border-left:3px solid var(--amber,#d98c00);border-radius:8px;background:var(--bg2);font-size:.82rem">
+    <span>🧾 {{ (i18n or {}).get('kb2_syspay_lead', "知识库里还有") }} <strong id="kb-syspay-n">{{ stats.entries_system_payment or 0 }}</strong> {{ (i18n or {}).get('kb2_syspay_lead2', "条系统预置的支付话术（GXP 查单 / 回调 / 汇率菜单等）——这是支付插件用的，陪伴 / 销售运营用不上，也不是你的知识。") }}</span>
+    <span style="display:flex;gap:.4rem;margin-left:auto">
+      <button class="btn btn-s btn-sm" onclick="kbShowSystem()">{{ (i18n or {}).get('kb2_vendor_view', "查看") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbPurgePaymentSeeds()" style="color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_syspay_purge', "一键清除") }}</button>
+      <button class="btn btn-s btn-sm" onclick="kbDismissSysPayNotice()">{{ (i18n or {}).get('kb2_vendor_later', "稍后") }}</button>
+    </span>
+  </div>
   <div id="entry-grid" class="entry-grid">
     <div class="empty-state"><p>{{ (i18n or {}).get('dash.loading', "加载中…") }}</p></div>
   </div>
@@ -1611,6 +1623,7 @@ async function refreshStats(){
   document.getElementById('s-sat').textContent=(s.satisfaction_rate==null)
     ? window.T('kb2_sat_none') : (s.satisfaction_rate+'%'+window.T('kb_s010'));
   _syncVendorNotice(s);
+  _syncSysPayNotice(s);
 }
 
 /* ── 厂商预置条目提示 / 一键清空（J-9 #184）──────────────────
@@ -1649,6 +1662,40 @@ async function kbPurgeVendor(){
   await loadEntries(); await refreshStats();
 }
 window.kbShowVendor=kbShowVendor; window.kbDismissVendorNotice=kbDismissVendorNotice; window.kbPurgeVendor=kbPurgeVendor;
+
+/* ── 系统预置支付话术提示 / 一键清除（N-3 #240 / D-N2）────────
+   source=system 且 template_key 属支付系列（GXP 等）。只清这一系列：用户改过的
+   通用兜底与【示例】不动；后端打标后下次启动不再灌回。 */
+function _syncSysPayNotice(s){
+  const box=document.getElementById('kb-syspay-notice');
+  if(!box) return;
+  const n=(s&&s.entries_system_payment)||0;
+  const dismissed=sessionStorage.getItem('kb.sysPayNotice.dismiss')==='1';
+  if(!n||dismissed){ box.style.display='none'; return; }
+  const el=document.getElementById('kb-syspay-n'); if(el) el.textContent=n;
+  box.style.display='flex';
+}
+function kbShowSystem(){
+  const sel=document.getElementById('entry-source'); if(sel){ sel.value='system'; }
+  loadEntries();
+  const grid=document.getElementById('entry-grid'); if(grid) grid.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function kbDismissSysPayNotice(){
+  sessionStorage.setItem('kb.sysPayNotice.dismiss','1');
+  const box=document.getElementById('kb-syspay-notice'); if(box) box.style.display='none';
+}
+async function kbPurgePaymentSeeds(){
+  const s=await api('GET','/api/kb/stats');
+  const n=(s&&s.entries_system_payment)||0;
+  if(!n){ toast(window.T('kb2_syspay_none')); return; }
+  if(!confirm(window.Tf('kb2_syspay_purge_confirm',{n}))) return;
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-payment-seeds',{}); }
+  catch(err){ toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
+  toast(window.Tf('kb2_syspay_purged',{n:(r&&r.count)||0}));
+  await loadEntries(); await refreshStats();
+}
+window.kbShowSystem=kbShowSystem; window.kbDismissSysPayNotice=kbDismissSysPayNotice; window.kbPurgePaymentSeeds=kbPurgePaymentSeeds;
 
 /* ── HTML 转义 ────────────────────────────────────────── */
 function esc(s){

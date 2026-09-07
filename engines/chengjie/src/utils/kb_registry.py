@@ -45,7 +45,8 @@ def get_kb_store(config, *, require_exists: bool) -> Optional[Any]:
 
     try:
         kb = KnowledgeBaseStore(p)
-        r = seed_system_replies(kb)
+        # N-3 #240：带配置播种——按域包（payment 才播 GXP）与业务域（陪伴默认停用）过滤
+        r = seed_system_replies(kb, config)
         if isinstance(r, dict) and r.get("added", 0) > 0:
             _logger.info("KB 系统话术种子数据已迁移: %s", r)
         _STORES[key] = kb

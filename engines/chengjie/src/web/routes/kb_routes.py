@@ -52,6 +52,20 @@ def register_kb_routes(app, ctx):
     except Exception as _exc:  # noqa: BLE001
         logger.warning("KB 首装格式示例播种失败（忽略）: %s", _exc)
 
+    # N-3 #240（D-N2）：升级提示——非支付域的库里还躺着 1.0.76 之前播进去的 GXP 支付话术
+    # → 启动一条 WARNING 点名数量与清理入口（KB 页横幅同源 stats.entries_system_payment）。
+    try:
+        from src.utils.kb_store import system_seed_plan
+        _plan = system_seed_plan(config_manager)
+        _n_pay = int((_kb_store.stats() or {}).get("entries_system_payment") or 0)
+        if _n_pay and not _plan.get("payment"):
+            logger.warning(
+                "KB 存量含 %d 条系统预置支付话术（GXP 等），本机业务域=%s 用不上：知识库页「系统预置」"
+                "横幅一键清除，或 POST /api/kb/entries/purge-payment-seeds",
+                _n_pay, _plan.get("business_domain"))
+    except Exception:
+        logger.debug("KB payment-seed upgrade hint skipped", exc_info=True)
+
     def _run_kb_conflict_checkers(data: dict) -> list:
         """Run all registered KB conflict checkers from domain packs."""
         warnings = []
@@ -133,6 +147,19 @@ def register_kb_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "kb_purge_source", f"{src}:{count} entries")
         return {"ok": True, "source": src, "count": count}
+
+    @app.post("/api/kb/entries/purge-payment-seeds")
+    async def api_kb_purge_payment_seeds(request: Request):
+        """一键清除系统预置里的支付话术系列（N-3 #240 / D-N2）：source=system 且
+        template_key ∈ PAYMENT_SEED_KEYS（13 条 gxp_* + 订单 / 费率 / 通道 / 状态兜底）。
+        只删这一系列，用户改过的通用兜底与【示例】不动；打标后下次启动不灌回。"""
+        _api_auth(request)
+        from src.utils.kb_store import purge_payment_seeds
+        count = purge_payment_seeds(_kb_store)
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_payment_seeds", f"{count} entries")
+        return {"ok": True, "count": count}
 
     @app.get("/api/kb/health")
     async def api_kb_health(request: Request, days: int = 7):
