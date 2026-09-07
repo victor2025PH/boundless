@@ -323,6 +323,22 @@
     _genLabelHtml() {
       return `${this._ic("mic", 13)} ${this._esc(this._t("cp.voice.tts_btn"))}`;
     }
+    /* #250（N-4 D）：「去语音页修正」深链——服务端给 voice_tab（/personas#profile=<id>&tab=voice）
+       优先；缺省按 pid 拼；都没有就到人设工作室首页。与 cp-persona 的 CTA 同口径新开页。 */
+    _cfgFixLink(url, pid) {
+      const href = String(url || "").trim()
+        || (pid ? `/personas#profile=${encodeURIComponent(String(pid))}&tab=voice` : "/personas");
+      return `<a class="cta" data-role="cfg-fix" href="${this._esc(href)}" target="_blank" rel="noopener">`
+        + `${this._esc(this._t("cp.voice.cfg_fix_btn"))}</a>`;
+    }
+    /* 配置问题码 → 人话（cp.voice.cfg_<code> 词条；没登记的原样显示不装懂） */
+    _cfgCodeLabel(code) {
+      const c = String(code || "").trim();
+      if (!c) return "";
+      const k = "cp.voice.cfg_" + c.toLowerCase();
+      const v = this._t(k);
+      return (v && v !== k) ? v : c;
+    }
 
     _metaLine(d) {
       const m = (d && d.voice_meta) || {};
@@ -497,13 +513,29 @@
         }[d.hub_risk] || "";
         const errRisk = d.hub_risk === "unreachable"
           || d.hub_risk === "engine_offline" || d.hub_risk === "timing_out";
+        /* #250（N-4 D）：配置闸预告——人设语音配置非法（克隆无录音 / 预置态挂克隆
+           引擎…）→ 生成前状态行就是红点 + 「配置需修正」+ 详情里人话 + 「去语音页修正」
+           深链；服务端 tts-test 会以同一函数拦下，面板不再进合成再报「疑似无声」。
+           只提示类（残留预置声名、参考音本机不在）→ 详情一行说明，不改点色。 */
+        const cfgBlocked = !!d.voice_config_blocked;
+        const cfgAdvisory = Array.isArray(d.voice_problems)
+          ? d.voice_problems.filter((p) => p && !p.blocking) : [];
         let dot = "ok";
-        if (errRisk || (qual && qual.quality === "critical")) dot = "err";
+        if (cfgBlocked || errRisk || (qual && qual.quality === "critical")) dot = "err";
         else if (riskFullKey || qual || (d.is_clone && !d.ready)) dot = "warn";
         const detParts = [];
         const srcKey = `cp.voice.eff_src_${d.persona_source || ""}`;
         const srcTxt = this._t(srcKey);
         if (srcTxt && srcTxt !== srcKey) detParts.push(`<div>${this._esc(srcTxt)}</div>`);
+        if (cfgBlocked) {
+          detParts.push(`<div class="err" data-role="cfg-problem">`
+            + `${this._esc(d.voice_problem_text || this._t("cp.voice.cfg_blocked_generic"))} `
+            + this._cfgFixLink(d.voice_tab, pid) + `</div>`);
+        } else if (cfgAdvisory.length) {
+          detParts.push(`<div data-role="cfg-advisory">`
+            + `${this._esc(this._t("cp.voice.cfg_advisory", { codes: cfgAdvisory.map((p) => this._cfgCodeLabel(p.code)).join("、") }))} `
+            + this._cfgFixLink(d.voice_tab, pid) + `</div>`);
+        }
         if (riskFullKey) {
           detParts.push(`<div class="${errRisk ? "err" : "warn"}">`
             + `${this._esc(this._t(riskFullKey))}</div>`);
@@ -521,7 +553,10 @@
         const chips = bits.filter(Boolean).map((b) =>
           `<span class="eff-bit">${this._esc(b)}</span>`).join("");
         let riskShort = "";
-        if (riskShortKey) {
+        if (cfgBlocked) {
+          riskShort = `<span class="eff-risk err" data-role="cfg-risk">`
+            + `${this._esc(this._t("cp.voice.eff_s_config"))}</span>`;
+        } else if (riskShortKey) {
           riskShort = `<span class="eff-risk ${errRisk ? "err" : "warn"}">`
             + `${this._esc(this._t(riskShortKey))}</span>`;
         } else if (qual) {
@@ -538,7 +573,8 @@
         box.hidden = false;
         if (det) {
           det.innerHTML = detParts.join("");
-          det.hidden = !(wasOpen && detParts.length);
+          // 配置需修正是「生成前就该看见的出路」：详情自动展开（其余情形保持坐席的开合选择）
+          det.hidden = !((wasOpen || cfgBlocked) && detParts.length);
         }
       } catch (e) {
         if (epoch === this._epoch) { this._hideEffStatus(); this._effVoiceLangs = null; }
@@ -911,9 +947,11 @@
          失配即拒（reason=voice_selection:*）；成功响应也复核 requested==resolved
          ——「选 X 出 Y」宁可报错也绝不把 Y 的声音当 X 的试听摆出来。 */
       const selBad = CpVoice.selectionMismatch(persona, d);
+      const cfgBlocked = CpVoice.configBlocked(d);
       if (reqFail || !url || selBad) {
         // 失败态同样要能清除/重试——错误文案赖着不走与旧预览赖着不走是同一个病
         let msg;
+        let extra = "";
         if (reqFail) {
           msg = this._t("cp.voice.req_fail");
         } else if (selBad) {
@@ -923,6 +961,14 @@
                 { resolved: (d && (d.resolved_persona_id
                     || (d.voice_meta && d.voice_meta.persona_id))) || "-" });
           this._warnBeacon("sel_mismatch");
+        } else if (cfgBlocked) {
+          /* #250（N-4 D）：服务端配置闸拦下＝第三种结论「⚠ 配置需修正」——没进合成，
+             不是「疑似无声」；文案用服务端人话（与人设页保存 400 同词条），出路是
+             「去语音页修正」深链而不是「重试」（重试只会再撞同一道闸）。 */
+          msg = this._t("cp.voice.cfg_blocked",
+            { msg: (d && (d.message || this._cfgCodeLabel(cfgBlocked))) || cfgBlocked });
+          extra = this._cfgFixLink(d && d.voice_tab, (d && d.persona_id) || persona);
+          this._warnBeacon("config");
         } else {
           msg = this._t("cp.voice.gen_fail",
             { msg: (d && (d.message || d.error)) || this._t("cp.voice.tts_unavailable") });
@@ -933,9 +979,10 @@
         this._previewXlEff = "";
         this._previewFallback = "";
         box.innerHTML =
-          `<span class="err">${this._esc(msg)}</span>` +
+          `<span class="${cfgBlocked ? "warn" : "err"}" data-role="gen-error" data-reason="${this._esc(cfgBlocked ? "voice_config" : "")}">${this._esc(msg)}</span>` +
+          (extra ? ` ${extra}` : "") +
           `<div class="row pv-foot">` +
-          `<button data-act="tts">${this._t("cp.voice.retry_btn")}</button>` +
+          (cfgBlocked ? "" : `<button data-act="tts">${this._t("cp.voice.retry_btn")}</button>`) +
           `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button></div>`;
         return;
       }
@@ -1075,6 +1122,14 @@
      *    ok      → ok    「已核有声，可发送」（服务端 voiced）
      *    unverified → info「未能核验（服务端无证据）—— 请先听一遍再发」（可发送）
      *  四态互斥、恒返回其一：同一时刻面板只可能出现一个结论。 */
+    /** 服务端配置闸（#250 N-4 D，纯函数）：tts-test 回 ``reason=voice_config:<code>`` →
+     *  返回问题码（非空＝被拦：不进合成、面板给 ⚠ 配置需修正 + 去语音页）；其余 ""。 */
+    static configBlocked(d) {
+      const r = String((d && d.reason) || "");
+      if (r.indexOf("voice_config:") !== 0) return "";
+      return r.slice("voice_config:".length) || "config";
+    }
+
     /** 译声维度的过期基准（#250 N-4 C，纯函数）：这条试听生成时的**有效目标语**。
      *  d=tts-test 回包；xlt=点击时刻的目标语设置（'' 关 / 'auto' / 显式语种）；
      *  effConvLang=点击时刻已知的会话客户语言（effective-config，可为 null/''）。

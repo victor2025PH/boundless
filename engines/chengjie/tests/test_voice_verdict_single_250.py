@@ -227,6 +227,138 @@ def test_stale_baseline_is_effective_target_not_literal_auto():
     assert "this._previewText = null;" in render, "切会话 / 重绘 = 预览整体清空，不是标过期"
 
 
+# ── D：阈值校准钉住 + 配置非法先拦（存量人设也生效）─────────────────────────────
+
+def _wav_bytes(samples, sr=22050):
+    import array
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(array.array("h", samples).tobytes())
+    return buf.getvalue()
+
+
+def test_energy_floor_calibration_locked():
+    """D-1 阈值校准（本机 86 份真实样本：试听 / 出站语音 / 金标克隆声，服务端地板 0.004
+    与客户端双信号均 0 误判、最安静样本仍有 24.4 dB 余量；金标克隆声要衰减到 −46 dB
+    （峰值 0.0036 ≈ −49 dBFS，实际不可闻）服务端才判无声）。阈值**不改**，这里钉住
+    三组代表样本的判定，防止日后有人「顺手调高」把低能量克隆声误判成无声。"""
+    import array
+    import io
+    import wave
+    from src.ai.avatar_voice import _SILENCE_PEAK_FLOOR, detect_silent_audio
+    assert _SILENCE_PEAK_FLOOR == 0.004
+    gold = (Path(__file__).parent / "fixtures" / "gold_clone_indextts_22k.wav").read_bytes()
+    with wave.open(io.BytesIO(gold)) as w:
+        g = array.array("h")
+        g.frombytes(w.readframes(w.getnframes()))
+        sr = w.getframerate()
+    # 正常克隆声 / 低能量克隆声（−20 / −40 dB）→ 有能量
+    assert detect_silent_audio(gold, "wav") is False
+    for db in (-20, -40):
+        k = 10 ** (db / 20)
+        assert detect_silent_audio(_wav_bytes([int(x * k) for x in g], sr), "wav") is False, db
+    # 真无声 / −70 dBFS 底噪 → 无声
+    assert detect_silent_audio(_wav_bytes([0] * sr, sr), "wav") is True
+    import random
+    random.seed(7)
+    hiss = [int(random.gauss(0, 32768 * 10 ** (-70 / 20))) for _ in range(sr)]
+    assert detect_silent_audio(_wav_bytes(hiss, sr), "wav") is True
+    # 终审：转写命中永远压过能量误读；能量判不了 → unverified 而不是 silent
+    assert speech_verdict({"cer": 0.05, "hyp_chars": 30}, True)["speech"] == "voiced"
+    assert verdict_label(speech_verdict(None, None)["speech"]) == "unverified"
+
+
+def test_synth_gate_blocks_impossible_configs_but_not_working_clone():
+    from src.ai.voice_tristate import BLOCKING_PROBLEM_CODES, synth_gate
+    # skuio 机 Mizuki：avatar_clone + ja-JP-NanamiNeural、无录音 → 必拦（CER=0.719 应克隆未克隆的根）
+    g = synth_gate({"enabled": True, "backend": "avatar_clone", "voice": "ja-JP-NanamiNeural",
+                    "owner_consent": True})
+    assert g["blocked"] is True and g["code"] == "clone_missing_reference"
+    assert {p["code"] for p in g["blocking"]} == {"clone_missing_reference"}
+    # 钧机 Mizuki：有录音 + 残留 zh-CN-XiaoxiaoNeural → 不拦（克隆链不读 voice，声音是对的），只提示
+    g = synth_gate({"enabled": True, "backend": "avatar_clone", "voice": "zh-CN-XiaoxiaoNeural",
+                    "owner_consent": True, "reference_audio_path": "D:/voice/mizuki.wav"})
+    assert g["blocked"] is False and g["code"] == ""
+    assert [p["code"] for p in g["advisory"]] == ["clone_with_preset_voice"]
+    # 齐备克隆档 / 合法预置档 / 不发语音 → 零问题
+    for vp in ({"enabled": True, "backend": "avatar_clone", "owner_consent": True,
+                "reference_audio_path": "D:/voice/ok.wav"},
+               {"voice_mode": "preset", "backend": "edge_tts", "voice": "zh-CN-XiaoxiaoNeural"},
+               {"voice_mode": "off"}, {}, None):
+        g = synth_gate(vp)
+        assert g["blocked"] is False and not g["blocking"] and not g["advisory"], vp
+    # 其余必拦码
+    assert synth_gate({"voice_mode": "preset", "backend": "avatar_clone"})["code"] == "preset_backend_is_clone"
+    assert synth_gate({"voice_mode": "preset", "backend": "edge_tts", "voice": "nope"})["code"] == "preset_voice_unknown"
+    assert synth_gate({"voice_mode": "clone", "backend": "edge_tts",
+                       "reference_audio_path": "x.wav"})["code"] == "clone_backend_not_clone"
+    assert synth_gate({"voice_mode": "weird"})["code"] == "invalid_mode"
+    assert "clone_with_preset_voice" not in BLOCKING_PROBLEM_CODES
+    assert "clone_reference_file_missing" not in BLOCKING_PROBLEM_CODES
+
+
+def test_tts_test_gate_runs_before_synthesis_and_effective_config_previews_it():
+    src = _ROUTES.read_text(encoding="utf-8")
+    body = _seg(src, "async def _run_tts_preview(", "@app.post(\"/api/voice/tts-test\")")
+    gate = body.index("synth_gate(_own_vp, check_files=False)")
+    assert gate < body.index("tts = TTSPipeline(voice_cfg)"), "配置闸必须在合成之前"
+    assert gate < body.index("route_voice_cfg_for_text("), "也在语言路由之前（非法档不该被路由改写后放行）"
+    assert '"reason": f"voice_config:{_gate.get(\'code\')}"' in body
+    assert '"voice_tab": persona_voice_tab_url(_pid)' in body
+    assert "verdict=%s persona=%s backend=%s voice=%s problem=%s detail=%s" in body
+    assert "VERDICT_BLOCK_CONFIG" in body
+    # fast 档 / 坐席显式覆写不判；只判人设自己的档且它正在生效
+    assert "if (not fast and not _explicit_voice_override" in body
+    assert 'str(voice_cfg.get("voice_source_layer") or "").startswith("persona:")' in body
+    # 只提示类进 voice_meta.config_warnings
+    assert '"config_warnings": [' in body
+    # 同步路径把闸的原因翻成与人设页保存 400 同一份人话
+    handler = _seg(src, "@app.post(\"/api/voice/tts-test\")", "@app.get(\"/api/voice/tts-test-jobs/{job_id}\")")
+    assert 'startswith("voice_config:")' in handler and "_voice_problem_text(request, rv.get(\"voice_problems\"))" in handler
+    # effective-config 预告同一函数
+    eff = _seg(src, 'GET /api/voice/effective-config', "@app.get(\"/api/voice/profiles\")") \
+        if 'GET /api/voice/effective-config' in src else _seg(src, "effective-config", "@app.get(\"/api/voice/profiles\")")
+    assert "synth_gate(_own_vp, check_files=False)" in eff
+    for key in ('"voice_problems": voice_problems', '"voice_config_blocked": voice_config_blocked',
+                '"voice_problem_text": voice_problem_text', '"voice_tab": persona_voice_tab_url('):
+        assert key in eff, key
+
+
+def test_persona_voice_tab_url_and_deep_link():
+    from src.web.routes.voice_routes import persona_voice_tab_url
+    assert persona_voice_tab_url("mizuki") == "/personas#profile=mizuki&tab=voice"
+    assert persona_voice_tab_url("a b/c") == "/personas#profile=a%20b%2Fc&tab=voice"
+    assert persona_voice_tab_url("") == "/personas"
+    html = _PERSONAS.read_text(encoding="utf-8")
+    assert r"/^#profile=([^&]+)(?:&tab=(\w+))?$/" in html
+    fn = _seg(html, "function _processHashProfile() {", "// ── P9-1")
+    assert "_pendingHashTab" in fn and "switchDTab(tab)" in fn and "p.then(" in fn
+
+
+def test_panel_config_outcome_wired():
+    js = _js()
+    fn = _seg(js, "static configBlocked(d) {", "static xlBaseline(")
+    assert 'r.indexOf("voice_config:") !== 0' in fn
+    gen = _seg(js, "async _genTts() {", "static selectionMismatch(")
+    assert "const cfgBlocked = CpVoice.configBlocked(d);" in gen
+    assert '"cp.voice.cfg_blocked"' in gen and "_cfgFixLink(d && d.voice_tab" in gen
+    assert '(cfgBlocked ? "" : `<button data-act="tts">' in gen, "配置闸拦下不给「重试」（只会再撞闸）"
+    eff = _seg(js, "async _refreshEffStatus() {", "_render() {")
+    assert "d.voice_config_blocked" in eff and 'data-role="cfg-risk"' in eff
+    assert 'data-role="cfg-problem"' in eff and "(wasOpen || cfgBlocked)" in eff
+    assert 'data-role="cfg-advisory"' in eff
+    txt = _I18N_JS.read_text(encoding="utf-8")
+    for key in ("cp.voice.eff_s_config", "cp.voice.cfg_blocked", "cp.voice.cfg_blocked_generic",
+                "cp.voice.cfg_advisory", "cp.voice.cfg_fix_btn", "cp.voice.cfg_clone_missing_reference",
+                "cp.voice.cfg_clone_with_preset_voice", "cp.voice.cfg_preset_voice_unknown"):
+        assert len(re.findall(r'"%s":' % re.escape(key), txt)) >= 2, key
+
+
 # ── 人设页体检行：同源回填 ───────────────────────────────────────────────────────
 
 def test_persona_page_voice_check_row_renders_same_verdict_source():

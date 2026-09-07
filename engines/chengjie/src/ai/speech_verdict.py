@@ -165,6 +165,9 @@ VERDICT_BY_SPEECH = {
     "garbled": "block:garbled",
     "unknown": "unverified",
 }
+#: 合成前配置闸拦下（#250 N-4 D）：与 speech 四档并列的第五个面板结论——根本没进合成，
+#: 面板给 ⚠ 配置需修正 + 去语音页；日志同样一行 ``[tts] verdict=block:config problem=…``。
+VERDICT_BLOCK_CONFIG = "block:config"
 
 
 def verdict_label(speech: Any) -> str:

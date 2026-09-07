@@ -183,6 +183,49 @@ def split_problems(problems: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]]
     return errs, warns
 
 
+#: 合成前必拦的问题码（#250 N-4 D）：这些组合**不可能出对的声**——进合成只会得到
+#: 「别人的声 / 无声 / 引擎报错」，再被前端当成「疑似无声」；应在面板直接给 ⚠ 并指路
+#: 语音页。skuio 机 Mizuki（``avatar_clone + ja-JP-NanamiNeural``、无录音）＝
+#: ``clone_missing_reference``，合成日志 ``CER=0.719 应克隆未克隆`` 就是这么来的。
+BLOCKING_PROBLEM_CODES = frozenset({
+    "clone_missing_reference",   # 克隆态却没有任何录音 / speaker 身份
+    "clone_backend_not_clone",   # 克隆态挂了非克隆引擎
+    "preset_backend_is_clone",   # 预置态却挂克隆引擎
+    "preset_voice_missing",      # 显式预置态没选音色
+    "preset_voice_unknown",      # 音色名不在引擎合法表
+    "invalid_mode",              # 三态以外的值
+})
+
+#: 只提示不拦：``clone_with_preset_voice``——克隆链（avatar_clone / hub 零样本）根本不读
+#: ``voice``，参考音才驱动音色；钧机 Mizuki 正是「有录音 + 残留 zh-CN-XiaoxiaoNeural」，
+#: 两天五次合成 Whisper 全文转出、CER≈0，声音是对的。保存校验仍按 L-2 A 判 error
+#: （提示清理），但合成前拦它＝把一把好声音关掉。``clone_reference_file_missing`` 是
+#: L-2 A 的 warning（托管 / hub 档参考音在远端），同样只提示。
+
+
+def synth_gate(vp: Any, *, check_files: bool = False) -> Dict[str, Any]:
+    """合成前配置闸（纯函数）：``validate_voice_profile`` 的问题清单分成
+    ``blocking``（必拦）与 ``advisory``（只提示）。
+
+    返回 ``{"blocked", "code", "detail", "blocking", "advisory"}``；``code`` 取第一条必拦
+    问题码（给 ``reason=voice_config:<code>`` 与 ``[tts] verdict=block:config problem=<code>``）。
+    ``check_files`` 缺省关：试听 / 发送链自己会报「参考音文件不在」的具体错，这里不重复。
+    """
+    problems = validate_voice_profile(vp, check_files=check_files)
+    blocking = [p for p in problems
+                if str(p.get("code") or "") in BLOCKING_PROBLEM_CODES
+                and str(p.get("severity") or "error") != "warning"]
+    advisory = [p for p in problems if p not in blocking]
+    first = blocking[0] if blocking else {}
+    return {
+        "blocked": bool(blocking),
+        "code": str(first.get("code") or ""),
+        "detail": str(first.get("detail") or ""),
+        "blocking": blocking,
+        "advisory": advisory,
+    }
+
+
 def apply_new_persona_voice_default(persona: Dict[str, Any]) -> Dict[str, Any]:
     """新建人设：没带任何语音配置 → 写入 ``{voice_mode: off}``（D-L4）。
 
@@ -233,9 +276,10 @@ def binding_summary(vp: Any) -> Dict[str, str]:
 
 
 __all__ = [
+    "BLOCKING_PROBLEM_CODES",
     "DEFAULT_NEW_VOICE_PROFILE", "PRESET_BACKENDS", "VOICE_MODES",
     "VOICE_MODE_CLONE", "VOICE_MODE_OFF", "VOICE_MODE_PRESET",
     "apply_new_persona_voice_default", "binding_summary", "derive_voice_mode",
-    "resolve_clone_backend", "split_problems", "validate_voice_profile",
+    "resolve_clone_backend", "split_problems", "synth_gate", "validate_voice_profile",
     "voice_mode_is_off",
 ]

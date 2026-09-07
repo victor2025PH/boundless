@@ -62,6 +62,10 @@ P0 2026-08-05 随「预览清不掉 / 生成入口迷失 / 连点双发」修复
       voice_translated=false）→ 生成完成不过期；关跟随翻译才过期、拨回原状解除；会话
       语言异步回填同值 / refreshXl 不过期；旧后端缺 target_lang_resolved 同样不过期；
       双侧未知不过期，之后解析出**不同**语种（发送会真的改译）才过期
+  V29（#250 N-4 D）配置非法＝第三种结论「⚠ 配置需修正」：effective-config 带
+      voice_config_blocked → 生成前状态行红点 + 详情自动展开（服务端人话 + 去语音页深链
+      #profile=<id>&tab=voice）；tts-test reason=voice_config:* → 黄字 + 同一深链、
+      无「重试」、无音频、无任何「疑似无声」banner
 
 用法::
 
@@ -830,6 +834,66 @@ def run(page, ck: Checker, dlg) -> None:
     s = ev("snap()")
     ck.check("V28 之后解析出不同语种（发送会改译）→ 过期属实", s["boxStale"])
     ev("() => { window.__stubClient.voiceTts = window.__origVoiceTts; window.__el._effConvLang = null; }")
+
+    # V29（#250 N-4 D）：配置非法 → 第三种结论「⚠ 配置需修正」——生成前状态行红点 +
+    # 「配置需修正」+ 详情自动展开带「去语音页修正」深链；点生成 → 服务端闸拦下
+    # （reason=voice_config:*）→ 黄字 + 同一深链、无「重试」（重试只会再撞闸）、无音频。
+    ev("() => { q('.preview [data-act=\"clear-preview\"]').click(); }")
+    ev("""() => {
+      window.__stubClient.voiceEffectiveConfig = async () => ({
+        ok: true, hub_strict: false, persona_id: 'mizuki', persona_source: 'explicit',
+        backend: 'avatar_clone', voice: 'ja-JP-NanamiNeural', is_clone: true, ready: false,
+        hub_risk: '', conv_lang: 'zh', voice_langs: [],
+        voice_config_blocked: true,
+        voice_problems: [{ code: 'clone_missing_reference', detail: '', severity: 'error', blocking: true }],
+        voice_problem_text: '语音配置需修正：选了「用我上传的录音」但还没有录音。请先在语音页上传参考录音',
+        voice_tab: '/personas#profile=mizuki&tab=voice' });
+    }""")
+    ev("window.__el._refreshEffStatus()")
+    page.wait_for_timeout(150)
+    eff = ev("""() => {
+      const box = q('[data-role="effstatus"]'); const det = q('[data-role="effdetail"]');
+      const link = det ? det.querySelector('[data-role="cfg-fix"]') : null;
+      return { visible: !!(box && !box.hidden && getComputedStyle(box).display !== 'none'),
+               dot: box ? ((box.querySelector('.dot') || {}).className || '') : '',
+               risk: box ? ((box.querySelector('[data-role="cfg-risk"]') || {}).textContent || '') : '',
+               detOpen: !!(det && !det.hidden && getComputedStyle(det).display !== 'none'),
+               detText: det ? det.textContent : '', href: link ? link.getAttribute('href') : '' };
+    }""")
+    ck.check("V29 配置非法：状态行红点 + 「配置需修正」",
+             eff["visible"] and "err" in eff["dot"] and "配置需修正" in eff["risk"], str(eff))
+    ck.check("V29 详情自动展开：服务端人话 + 「去语音页修正」深链（#profile=<id>&tab=voice）",
+             eff["detOpen"] and "还没有录音" in eff["detText"]
+             and eff["href"] == "/personas#profile=mizuki&tab=voice", str(eff))
+    ev("""() => {
+      window.__stubClient.voiceTts = async (args) => {
+        window.__calls.tts.push(JSON.parse(JSON.stringify(args || {})));
+        await new Promise((r) => setTimeout(r, 20));
+        return { ok: false, reason: 'voice_config:clone_missing_reference', error: 'voice_config:clone_missing_reference',
+                 message: '语音配置需修正：选了「用我上传的录音」但还没有录音。请先在语音页上传参考录音',
+                 voice_problems: [{ code: 'clone_missing_reference', severity: 'error' }],
+                 persona_id: 'mizuki', voice_tab: '/personas#profile=mizuki&tab=voice' };
+      };
+    }""")
+    ev(f"() => setText({TEXT_A!r})")
+    ev("() => { q('[data-role=\"gen-main\"]').click(); }")
+    ev("waitIdle()")
+    s = ev("snap()")
+    ge = ev("""() => {
+      const n = q('.preview [data-role="gen-error"]'); const link = q('.preview [data-role="cfg-fix"]');
+      return { has: !!n, reason: n ? n.getAttribute('data-reason') : '', cls: n ? n.className : '',
+               text: n ? n.textContent : '', href: link ? link.getAttribute('href') : '',
+               retry: !!q('.preview [data-act="tts"]'), audio: !!q('.preview audio'),
+               banners: visibleBanners() };
+    }""")
+    ck.check("V29 点生成被闸拦下：⚠ 配置需修正（黄字，服务端人话）、无音频、无「疑似无声」",
+             ge["has"] and ge["reason"] == "voice_config" and "warn" in ge["cls"]
+             and "配置需修正" in ge["text"] and "还没有录音" in ge["text"]
+             and (not ge["audio"]) and ge["banners"] == [], str(ge))
+    ck.check("V29 出路是「去语音页修正」深链而不是「重试」",
+             ge["href"] == "/personas#profile=mizuki&tab=voice" and (not ge["retry"]) and s["hasClear"],
+             str(ge))
+    ev("() => { window.__stubClient.voiceTts = window.__origVoiceTts; delete window.__stubClient.voiceEffectiveConfig; }")
 
 
 def main() -> int:

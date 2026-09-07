@@ -5451,6 +5451,7 @@ var _bindingCache = {};  // chat_id -> {profile_id, profile_name, platform}
 var _loadedProfile = null;  // last-loaded profile data for diff
 var _loadedRev = '';        // P2 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 var _pendingHashProfile = null;  // hash deep-link: #profile=xxx
+var _pendingHashTab = '';        // #250: optional &tab=<dtab> (voice) to land on after the editor opens
 function _draftKey() {
   return _editingProfileId ? 'persona_draft_' + _editingProfileId : 'persona_draft__new';
 }
@@ -7196,10 +7197,16 @@ async function _bulkExport() {
 function _processHashProfile() {
   if (!_pendingHashProfile) return;
   var pid = _pendingHashProfile;
+  var tab = _pendingHashTab;
   _pendingHashProfile = null;
+  _pendingHashTab = '';
   // Switch to profiles tab so the card is visible in background
   switchTab('profiles');
-  editProfile(pid);
+  var p = editProfile(pid);
+  // #250: land on the requested drawer tab (voice) once the editor has loaded the profile
+  if (tab && p && typeof p.then === 'function') {
+    p.then(function () { try { switchDTab(tab); } catch (_e) {} });
+  }
 }
 // ── P9-1: Diff count badge on Preview tab ────────────────────────────────────
 function _scheduleDiffUpdate() {
@@ -8134,8 +8141,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // URL hash deep-link: #profile=<id> opens that profile
   // Load DnD card order from localStorage
   try { var _storedOrd = localStorage.getItem('persona_card_order'); if (_storedOrd) _customOrder = JSON.parse(_storedOrd); } catch(e) {}
-  var _hashM = window.location.hash.match(/^#profile=(.+)$/);
-  if (_hashM) { _pendingHashProfile = decodeURIComponent(_hashM[1]); }
+  // #250 (N-4 D): #profile=<id>&tab=voice — the inbox voice panel's "fix on the Voice tab" link
+  var _hashM = window.location.hash.match(/^#profile=([^&]+)(?:&tab=(\w+))?$/);
+  if (_hashM) { _pendingHashProfile = decodeURIComponent(_hashM[1]); _pendingHashTab = _hashM[2] || ''; }
   _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）
   _initDocImport();                  // C 线：文档导入功能开关探测（旧后端 404 = 保持隐藏）
   _initQuizStatus();                 // C2 线：一致性考题开关探测（false/404 = 整块隐藏）

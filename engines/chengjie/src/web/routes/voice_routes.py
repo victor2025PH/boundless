@@ -64,6 +64,16 @@ _TTS_PREVIEW_DIR = Path("tmp_tts_preview")
 _TTS_PREVIEW_TTL_SEC = 600  # files older than 10 min are cleaned up
 
 
+def persona_voice_tab_url(persona_id: Any) -> str:
+    """人设工作室「语音」页深链（#250 N-4 D：配置需修正时面板一键指路）。
+    ``personas.html`` 认 ``#profile=<id>&tab=voice``（open editor → switchDTab('voice')）。"""
+    from urllib.parse import quote
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return "/personas"
+    return f"/personas#profile={quote(pid, safe='')}&tab=voice"
+
+
 _TTS_PREVIEW_PREFIXES = ("ttspreview-", "line-tts-")
 # P9-D: per-prefix TTL — approval queue files survive longer than quick UI tests
 _TTS_PREVIEW_TTL_BY_PREFIX: Dict[str, float] = {
@@ -463,6 +473,48 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # → 7852) is cold or queued. ``requested_backend`` keeps the pre-swap
         # backend name so the UI can still show what a real send would use.
         fast = bool(body.get("fast"))
+        # 坐席显式覆写 voice/backend/voice_profile ＝ 人工选择（配置闸与语言路由都尊重）
+        _explicit_voice_override = isinstance(cfg_override, dict) and any(
+            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
+
+        # #250（N-4 D）合成前配置闸：人设自己的 voice_profile 是「不可能出对的声」的
+        # 组合（克隆无录音 / 预置态挂克隆引擎 / 音色名不在合法表…）→ 不进合成，直接
+        # 回 ⚠ 配置需修正 + 语音页深链。L-2 A 的三态校验此前只在**保存**时拦，存量
+        # 非法档（skuio Mizuki：avatar_clone + ja-JP-NanamiNeural、无录音）照样进合成 →
+        # 「应克隆未克隆 CER=0.719」→ 前端一片「疑似无声/念错」。残留预置声名而录音
+        # 齐备（钧机 Mizuki）只进 voice_meta.config_warnings 提示，不拦——克隆链不读
+        # voice，声音是对的。fast 档强制 edge、坐席显式覆写音色 → 不判（那不是人设档）。
+        _cfg_advisory: list = []
+        _own_vp = (voice_ctx.get("persona") or {}).get("voice_profile") \
+            if isinstance(voice_ctx.get("persona"), dict) else None
+        if (not fast and not _explicit_voice_override
+                and isinstance(_own_vp, dict) and _own_vp
+                and str(voice_cfg.get("voice_source_layer") or "").startswith("persona:")):
+            try:
+                from src.ai.voice_tristate import synth_gate
+                _gate = synth_gate(_own_vp, check_files=False)
+            except Exception:
+                logger.debug("[tts] 配置闸异常（放行）", exc_info=True)
+                _gate = {"blocked": False, "advisory": []}
+            _cfg_advisory = list(_gate.get("advisory") or [])
+            if _gate.get("blocked"):
+                from src.ai.speech_verdict import VERDICT_BLOCK_CONFIG
+                _pid = str(voice_ctx.get("persona_id") or persona_id or "")
+                logger.warning(
+                    "[tts] verdict=%s persona=%s backend=%s voice=%s problem=%s detail=%s "
+                    "stage=preview", VERDICT_BLOCK_CONFIG, _pid or "-",
+                    str(_own_vp.get("backend") or voice_cfg.get("backend") or "-"),
+                    str(_own_vp.get("voice") or voice_cfg.get("voice") or "-"),
+                    _gate.get("code") or "-", _gate.get("detail") or "-")
+                return {
+                    "ok": False, "fast": fast,
+                    "reason": f"voice_config:{_gate.get('code')}",
+                    "error": (f"voice_config:{_gate.get('code')}"
+                              + (f":{_gate.get('detail')}" if _gate.get("detail") else "")),
+                    "voice_problems": list(_gate.get("blocking") or []),
+                    "persona_id": _pid,
+                    "voice_tab": persona_voice_tab_url(_pid),
+                }
         # 语言路由（P1 2026-08-31 试听=发送契约收口）：send-voice / A 线
         # voice_reply / B 线 autosend 三条出站链都走 route_voice_cfg_for_text
         # （粤语专线、clone_langs 语种→克隆节点改派、edge 音色按语种对齐），
@@ -473,8 +525,6 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # 时尊重人工选择不路由；fast 档（渠道中心秒回预览）本就强制 edge，
         # 刻意不路由。拒发守卫在试听侧同样如实报错——试听能过而发送被拒＝
         # 把失望留到更晚。
-        _explicit_voice_override = isinstance(cfg_override, dict) and any(
-            cfg_override.get(k) for k in ("voice", "backend", "voice_profile"))
         if not fast and not _explicit_voice_override:
             try:
                 from src.ai.lang_voice_route import (
@@ -749,6 +799,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 # #250（N-4 B，additive）：面板级唯一结论，与 [tts] verdict= 日志同字段
                 # （ok / block:silent / block:garbled / unverified）；人设页体检回填同源。
                 "verdict": _verdict_label(_speech.get("speech")),
+                # #250（N-4 D，additive）：配置闸「只提示不拦」的问题（残留预置声名 /
+                # 参考音本机不在）——面板详情区提示去语音页清理，不影响本次结论。
+                "config_warnings": [
+                    {"code": str(p.get("code") or ""), "detail": str(p.get("detail") or ""),
+                     "severity": str(p.get("severity") or "error")}
+                    for p in _cfg_advisory if isinstance(p, dict)],
             },
         }
 
@@ -890,6 +946,13 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # 失败分类 → 本地化人话（additive：error 原样保留，老前端零感知）
         if not rv.get("ok") and rv.get("reason"):
             _msg = _voice_fail_message(request, str(rv.get("reason")))
+            if not _msg and str(rv.get("reason")).startswith("voice_config:"):
+                # #250（N-4 D）：配置闸拦下 → 与人设页保存 400 同一份人话（err.persona.voice_*）
+                try:
+                    from src.web.routes.persona_routes import _voice_problem_text
+                    _msg = _voice_problem_text(request, rv.get("voice_problems"))
+                except Exception:
+                    _msg = ""
             if _msg:
                 rv["message"] = _msg
         return rv
@@ -1098,6 +1161,34 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         request, platform, account_id or "default", chat_key) or ""
                 except Exception:
                     conv_lang = ""
+            # #250（N-4 D，additive）：合成前配置闸的预告——人设自己的 voice_profile
+            # 非法（克隆无录音 / 预置态挂克隆引擎…）→ 面板状态行生成前就给 ⚠ +
+            # 「去语音页修正」深链，与 tts-test 的拦截同一函数（synth_gate）同口径；
+            # 只提示类（残留预置声名）走 advisory。人话与人设页保存 400 同一份词条。
+            voice_problems: list = []
+            voice_problem_text = ""
+            voice_config_blocked = False
+            try:
+                _own_vp = (ctx.get("persona") or {}).get("voice_profile") \
+                    if isinstance(ctx.get("persona"), dict) else None
+                if (isinstance(_own_vp, dict) and _own_vp
+                        and str(voice_cfg.get("voice_source_layer") or "").startswith("persona:")):
+                    from src.ai.voice_tristate import synth_gate
+                    _g = synth_gate(_own_vp, check_files=False)
+                    voice_config_blocked = bool(_g.get("blocked"))
+                    for _p in list(_g.get("blocking") or []):
+                        voice_problems.append({
+                            "code": str(_p.get("code") or ""), "detail": str(_p.get("detail") or ""),
+                            "severity": str(_p.get("severity") or "error"), "blocking": True})
+                    for _p in list(_g.get("advisory") or []):
+                        voice_problems.append({
+                            "code": str(_p.get("code") or ""), "detail": str(_p.get("detail") or ""),
+                            "severity": str(_p.get("severity") or "error"), "blocking": False})
+                    if voice_config_blocked:
+                        from src.web.routes.persona_routes import _voice_problem_text
+                        voice_problem_text = _voice_problem_text(request, _g.get("blocking"))
+            except Exception:
+                logger.debug("[tts] effective-config 配置闸预告异常（忽略）", exc_info=True)
             return {
                 "ok": True,
                 "platform": platform,
@@ -1113,6 +1204,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "reference_audio": os.path.basename(ref) if ref else "",
                 "conv_lang": conv_lang,
                 "voice_langs": voice_langs,
+                "voice_problems": voice_problems,
+                "voice_config_blocked": voice_config_blocked,
+                "voice_problem_text": voice_problem_text,
+                "voice_tab": persona_voice_tab_url(ctx.get("persona_id") or ""),
             }
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "error": str(ex)[:200]}

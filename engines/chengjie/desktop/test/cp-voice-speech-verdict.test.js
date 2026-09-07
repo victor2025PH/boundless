@@ -201,4 +201,13 @@ eq("开关关 → ''（发送不译，与任何会话语言都无关）", Cls.xl
 eq("大小写归一", Cls.xlBaseline({ voice_translated: false, target_lang_resolved: "ZH" }, "AUTO", "zh"), "zh");
 eq("空回包不炸", Cls.xlBaseline(null, "auto", "zh"), "zh");
 
+// ── configBlocked（#250 N-4 D）：服务端配置闸 reason=voice_config:<code> ──────────────
+ok("configBlocked 挂在类上", typeof Cls.configBlocked === "function");
+eq("skuio Mizuki 形态：克隆无录音 → 问题码", Cls.configBlocked({ ok: false, reason: "voice_config:clone_missing_reference" }), "clone_missing_reference");
+eq("码为空也算被拦（config）", Cls.configBlocked({ ok: false, reason: "voice_config:" }), "config");
+eq("其它失败原因不是配置闸", Cls.configBlocked({ ok: false, reason: "lang_mismatch" }), "");
+eq("选声失配不是配置闸（各归各）", Cls.configBlocked({ ok: false, reason: "voice_selection:persona_not_found" }), "");
+eq("成功回包不是配置闸", Cls.configBlocked({ ok: true, voice_meta: {} }), "");
+eq("空回包不炸", Cls.configBlocked(null), "");
+
 console.log(`cp-voice-speech-verdict.test.js: ${pass} passed`);
