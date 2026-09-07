@@ -295,7 +295,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             if not _edge_voice:
                 # 该语种连 Edge 音色都没有 → 没有可改派的目标，保留 garbled
                 logger.warning(
-                    "[voice/tts-test] #161 判念错但语种 '%s' 无 Edge 音色可改派"
+                    "[tts] preview #161 判念错但语种 '%s' 无 Edge 音色可改派"
                     "（persona=%s）→ 保留 garbled 禁发", _lang or "?", persona_id or "-")
                 return speech, result, preview_path
 
@@ -317,7 +317,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 timeout=35.0)
             if not (_fb_result and _fb_result.ok and _fb_result.audio_path):
                 logger.warning(
-                    "[voice/tts-test] #161 念错改派 Edge 合成失败（persona=%s "
+                    "[tts] preview #161 念错改派 Edge 合成失败（persona=%s "
                     "lang=%s err=%s）→ 保留 garbled 禁发", persona_id or "-",
                     _lang, getattr(_fb_result, "error", "") or "-")
                 return speech, result, preview_path
@@ -339,7 +339,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 # 引擎念错；保留改派后的产物（它至少是按语种训练的音色），
                 # 但仍如实标 garbled 交前端禁发，不替坐席打包票。
                 logger.warning(
-                    "[voice/tts-test] #161 改派 Edge 后仍判念错（lang=%s）"
+                    "[tts] preview #161 改派 Edge 后仍判念错（lang=%s）"
                     "→ 保留 garbled 禁发", _lang)
                 return _fb_speech, _fb_result, _fb_path
 
@@ -350,7 +350,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             _fb_result.extra["primary_error"] = f"clone_lang_garbled:{_lang}"
             _fb_result.extra["clone_lang_blocked"] = _lang
             logger.warning(
-                "[voice/tts-test] #161 克隆产物判念错（%s）→ 已改派 Edge 标准声 "
+                "[tts] preview #161 克隆产物判念错（%s）→ 已改派 Edge 标准声 "
                 "%s 重合成（persona=%s）", speech.get("basis") or "-",
                 _edge_voice, persona_id or "-")
             try:
@@ -360,7 +360,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return _fb_speech, _fb_result, _fb_path
         except Exception:
             logger.warning(
-                "[voice/tts-test] #161 念错改派异常 → 保留 garbled 禁发",
+                "[tts] preview #161 念错改派异常 → 保留 garbled 禁发",
                 exc_info=True)
             return speech, result, preview_path
 
@@ -428,7 +428,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 text=spoken_text)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
         except Exception as ex:
-            logger.warning("[voice/tts-test] resolve_voice_cfg failed: %s", ex)
+            logger.warning("[tts] preview resolve_voice_cfg failed: %s", ex)
             voice_cfg = {}
             voice_ctx = {"persona_id": persona_id or "", "persona_source": "error", "emotion": None}
 
@@ -443,7 +443,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             _sel_bad = ""
         if _sel_bad:
             logger.error(
-                "[voice/tts-test] #149 选声失配 reason=%s requested=%s resolved=%s "
+                "[tts] preview #149 选声失配 reason=%s requested=%s resolved=%s "
                 "source=%s → 拒绝合成", _sel_bad, persona_id,
                 voice_ctx.get("persona_id") or "-",
                 (voice_ctx.get("voice_cfg") or {}).get("voice_source") or "-")
@@ -462,7 +462,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # Apply caller override (allows previewing unsaved UI settings)
         if isinstance(cfg_override, dict):
             voice_cfg.update({k: v for k, v in cfg_override.items() if v not in (None, "")})
-            logger.debug("[voice/tts-test] override keys: %s", list(cfg_override))
+            logger.debug("[tts] preview override keys: %s", list(cfg_override))
 
         voice_cfg["enabled"] = True
         if fmt_override:
@@ -538,7 +538,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                                  + _lang_route.split(":", 1)[-1],
                     }
             except Exception:
-                logger.debug("[voice/tts-test] 语言路由异常（忽略）", exc_info=True)
+                logger.debug("[tts] preview 语言路由异常（忽略）", exc_info=True)
         requested_backend = str(voice_cfg.get("backend") or "")
         if fast:
             voice_cfg["backend"] = "edge_tts"
@@ -594,7 +594,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         except Exception as ex:
             _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
             logger.error(
-                "[voice/tts-test] TTS error (persona=%s text_len=%d elapsed=%.1fs): %s",
+                "[tts] preview TTS error (persona=%s text_len=%d elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-", len(text),
                 time.monotonic() - _t0, _exs)
             # B61 观测盲区收口：hosted 客户的真实语音流量大头是试听——此前
@@ -608,7 +608,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         from src.ai.voice_outage import note_voice_attempt
         if not result.ok:
             logger.warning(
-                "[voice/tts-test] synth not ok (persona=%s provider=%s elapsed=%.1fs): %s",
+                "[tts] preview synth not ok (persona=%s provider=%s elapsed=%.1fs): %s",
                 voice_ctx.get("persona_id") or persona_id or "-",
                 result.provider, time.monotonic() - _t0, result.error)
             note_voice_attempt(False, "preview", str(result.error or ""))
@@ -636,11 +636,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     result.extra.setdefault(
                         "primary_error", "clone_not_engaged")
                     logger.warning(
-                        "[voice/tts-test] #93 应克隆未克隆已补标：expected=%s "
+                        "[tts] preview #93 应克隆未克隆已补标：expected=%s "
                         "got=%s persona=%s", _exp_backend, _got,
                         voice_ctx.get("persona_id") or "-")
         except Exception:
-            logger.debug("[voice/tts-test] #93 补标失败（忽略）", exc_info=True)
+            logger.debug("[tts] preview #93 补标失败（忽略）", exc_info=True)
 
         # Rename to our deterministic preview path
         # #121 三进宫（2026-09-02）：后缀按**真实产物格式**命名（result.format），
@@ -681,7 +681,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # #250（N-4 B）：一次终审 = 一行 ``[tts] verdict=…``——服务端对这段音频只出
         # **一个**结论（ok / block:silent / block:garbled / unverified），前端结论行
         # 与它同源；字段固定 persona backend voice dur speech energy cer verdict，
-        # 钧机取证一词 ``[tts]`` 抓全（旧三条 [voice/tts-test] 各说各话的行合并于此）。
+        # 钧机取证一词 ``[tts]`` 抓全（旧三条 [tts] preview 各说各话的行合并于此）。
         from src.ai.speech_verdict import (
             format_tts_verdict_line, verdict_label as _verdict_label)
         _vline = format_tts_verdict_line(
@@ -731,7 +731,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     "xl_provider": _xl.get("provider") or "",
                 })
         except Exception:
-            logger.debug("[voice/tts-test] 复用 sidecar 登记失败（忽略）", exc_info=True)
+            logger.debug("[tts] preview 复用 sidecar 登记失败（忽略）", exc_info=True)
 
         # 回落原因归纳（P0 2026-08-31）：单一归纳口在 lang_voice_route，
         # send-voice 同源消费；失败按「判不出」处理，绝不阻塞试听响应。

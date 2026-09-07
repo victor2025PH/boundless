@@ -359,6 +359,44 @@ def test_panel_config_outcome_wired():
         assert len(re.findall(r'"%s":' % re.escape(key), txt)) >= 2, key
 
 
+# ── E：TTS 日志统一 [tts] 前缀（取证一词抓全）────────────────────────────────────
+
+def test_tts_log_lines_share_single_prefix():
+    files = {
+        "voice_routes": _ROUTES,
+        "tts_pipeline": _ROOT / "src" / "ai" / "tts_pipeline.py",
+        "speech_verdict": _ROOT / "src" / "ai" / "speech_verdict.py",
+        "voice_outbound_xlate": _ROOT / "src" / "ai" / "voice_outbound_xlate.py",
+    }
+    for name, p in files.items():
+        txt = p.read_text(encoding="utf-8")
+        for old in ("[voice/tts-test]", "[tts-fallback]", "[speech_verdict]", "[voice-xlate]"):
+            assert old not in txt, f"{name}: 旧前缀 {old} 仍在"
+    # tts-test 预览段：每条 logger 调用都以 [tts] 开头
+    body = _seg(_ROUTES.read_text(encoding="utf-8"), "async def _run_tts_preview(",
+                "@app.post(\"/api/voice/tts-test\")")
+    msgs = re.findall(r'logger\.(?:info|warning|error|debug)\(\s*\n?\s*"([^"]+)"', body)
+    assert msgs, "预览段应有日志"
+    bad = [m for m in msgs if not (m.startswith("[tts]") or m.startswith("%s"))]
+    assert not bad, bad
+    # 终审模块与回落段同样只此一个前缀
+    sv = files["speech_verdict"].read_text(encoding="utf-8")
+    assert all(m.startswith("[tts]") for m in re.findall(r'logger\.\w+\(\s*\n?\s*"([^"]+)"', sv))
+    pipe = files["tts_pipeline"].read_text(encoding="utf-8")
+    assert pipe.count("[tts] fallback") == 4
+
+
+def test_field_agent_keywords_mention_tts_prefix_and_time_window():
+    for name in ("AGENTS_JUN.md", "AGENTS_SKUIO.md"):
+        p = _ROOT.parents[1] / "deploy" / "field-agent" / name
+        if not p.is_file():
+            pytest.skip(f"{name} 不在本树")
+        txt = p.read_text(encoding="utf-8")
+        assert "克隆声/语音 → `[tts],voice,克隆,音色`" in txt, name
+        assert "[tts] verdict=" in txt, name
+        assert "窗口必须覆盖到出问题那一刻" in txt, name
+
+
 # ── 人设页体检行：同源回填 ───────────────────────────────────────────────────────
 
 def test_persona_page_voice_check_row_renders_same_verdict_source():

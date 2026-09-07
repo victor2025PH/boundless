@@ -1732,7 +1732,7 @@ class TTSPipeline:
             if (primary_backend in CLONE_BACKENDS
                     and not _lang_blocked and not _token_skip_clone):
                 logger.info(
-                    "[tts-fallback] 克隆引擎失败不换声 → 改发文字 persona=%s "
+                    "[tts] fallback 克隆引擎失败不换声 → 改发文字 persona=%s "
                     "backend=%s err=%s（D-L4：禁回落预置声）",
                     self.persona_id or "-", primary_backend, err)
                 rv.extra["fallback_blocked"] = "clone_engine_offline"
@@ -1757,7 +1757,7 @@ class TTSPipeline:
                 fb_voice = self._pick_fallback_edge_voice(_lang_blocked)
                 if not fb_voice:
                     logger.info(
-                        "[tts-fallback] 无同语种同性别预置声可兜底 → 改发文字 "
+                        "[tts] fallback 无同语种同性别预置声可兜底 → 改发文字 "
                         "persona=%s gender=%s lang=%s err=%s",
                         self.persona_id or "-", self.persona_gender or "?",
                         _lang_blocked or self.persona_lang or "?", err)
@@ -1770,7 +1770,7 @@ class TTSPipeline:
                     rv.latency_ms = int((time.monotonic() - t0) * 1000)
                     return rv
                 logger.info(
-                    "[tts-fallback] 主后端 %s 失败（%s）→ edge 兜底音色 %s "
+                    "[tts] fallback 主后端 %s 失败（%s）→ edge 兜底音色 %s "
                     "persona=%s gender=%s", primary_backend, err, fb_voice,
                     self.persona_id or "-", self.persona_gender or "?")
             fb_err = await self._run_backend(
@@ -1817,7 +1817,7 @@ class TTSPipeline:
                 gender=self.persona_gender, lang=self._fallback_lang_hint())
             if not voice:
                 logger.info(
-                    "[tts-fallback] edge 音色 '%s' 不合法且无同语种同性别替代 "
+                    "[tts] fallback edge 音色 '%s' 不合法且无同语种同性别替代 "
                     "→ 改发文字 persona=%s gender=%s",
                     _eff, self.persona_id or "-", self.persona_gender)
                 rv.extra["degrade_to_text"] = True

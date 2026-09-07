@@ -122,7 +122,7 @@ def speech_verdict(
     # 判据，两处口径绝不各写一套）；这里只多加「字节确有能量」这条终审证据。
     if garbled_suspect(sv) and energy is False:
         logger.warning(
-            "[speech_verdict] 转写出字但与送稿无关（%d 字, CER=%.2f, 重合成 %d 次）"
+            "[tts] speech_verdict 转写出字但与送稿无关（%d 字, CER=%.2f, 重合成 %d 次）"
             "且字节有能量 → 判念错（garbled），不得按「有能量」放行",
             hyp_chars, cer, retried)
         return {
@@ -139,7 +139,7 @@ def speech_verdict(
         elif energy is True:
             basis = "transcript(conflict:energy)"
             logger.warning(
-                "[speech_verdict] 转写命中（%d 字, CER=%.2f）但能量探测判无声——"
+                "[tts] speech_verdict 转写命中（%d 字, CER=%.2f）但能量探测判无声——"
                 "以转写为准判有声，能量探测器疑似误读容器", hyp_chars, cer)
         else:
             basis = "transcript"
@@ -234,6 +234,6 @@ def judge_preview_speech(
             from src.ai.avatar_voice import detect_silent_audio
             energy = detect_silent_audio(p.read_bytes(), str(audio_format or ""))
     except Exception:
-        logger.debug("[speech_verdict] 能量检测异常（按判不了处理）", exc_info=True)
+        logger.debug("[tts] speech_verdict 能量检测异常（按判不了处理）", exc_info=True)
         energy = None
     return speech_verdict(synth_verify, energy)

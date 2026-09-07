@@ -201,7 +201,11 @@ _CONTRACT_KEYS = {"ok", "platform", "persona_id", "persona_source",
                   # （lang_voice_route.clone_voice_langs SSOT；空列表=能力未知）。
                   # 字段由 voice_langs 线落地（test_cp_voice_ui_revamp 断言其存在），
                   # 此处为契约集合补登——两门禁曾互相矛盾（一个要求有、一个要求无）。
-                  "voice_langs"}
+                  "voice_langs",
+                  # #250 N-4 D（2026-09-08）：合成前配置闸预告——人设 voice_profile 非法
+                  # （克隆无录音 / 预置态挂克隆引擎…）→ 面板生成前即 ⚠ + 语音页深链；
+                  # 与 tts-test 的拦截同一函数 synth_gate（test_voice_verdict_single_250）。
+                  "voice_problems", "voice_config_blocked", "voice_problem_text", "voice_tab"}
 
 
 def test_effective_config_contract_telegram(client):

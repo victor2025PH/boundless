@@ -58,13 +58,13 @@ powershell -ExecutionPolicy Bypass -File C:\zhiliao-agent\zl_collect.ps1 -Task v
 1. 记下当前时间；如果用户没说清，问（合并成一次，≤2 个点）：哪个平台哪个会话？界面红字原文是什么？
 2. 按症状选 Keywords：
    - 发送失败/发不出 → `send_media,delivered=False,send_timeout,媒体发送失败`
-   - 克隆声/语音 → `tts,voice,克隆,speech_verdict,音色`
+   - 克隆声/语音 → `[tts],voice,克隆,音色`（1.0.77 起合成 / 终审 / 回落 / 配置闸全部带 `[tts]` 前缀，结论行形如 `[tts] verdict=ok|block:silent|block:garbled|block:config persona= backend= voice= dur= speech= energy= cer=`）
    - 不回复/漏回 → `autosend,draft,near_duplicate,dup_guard`
    - 切语言/翻译 → `sendpoint,pin=,lang,xlate`
    - 目标不推进 → `goal-inject,goal`
    - 界面显示 → 让用户截图发群，不必跑脚本
    - 拿不准 → Keywords 留空（只按时间窗抓）
-3. 跑 `-Task report`，Since 取「问题发生到现在的分钟数 + 10」（不超过 180）。
+3. 跑 `-Task report`，Since 取「问题发生到现在的分钟数 + 10」（不超过 180）。**窗口必须覆盖到出问题那一刻**：09-07 钧 21:46 抓「最近 40 分钟」，而语音生成在 18:29 / 21:49，报告里零合成日志不是关键词没命中，是窗口没盖住。
 4. 按 §2 格式给用户**成品发群句**（`<码>：<你写的一句症状>`）并在同一条回复里催他现在就发群。
 
 ## 4. 任务型 B：值守发来「【追证任务】」

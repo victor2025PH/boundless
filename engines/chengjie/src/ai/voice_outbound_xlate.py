@@ -50,7 +50,7 @@ async def resolve_spoken_text(
         res = await translate_service.translate(
             src_text, target_lang=tl, style="chat")
     except Exception:
-        logger.debug("[voice-xlate] 翻译异常（回落念原文）", exc_info=True)
+        logger.debug("[tts] xlate 翻译异常（回落念原文）", exc_info=True)
         meta["reason"] = "translate_error"
         return src_text, meta
     out = (getattr(res, "translated_text", "") or "").strip()
