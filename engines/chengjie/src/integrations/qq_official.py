@@ -435,9 +435,11 @@ def attachment_media(att: Dict[str, Any]) -> Tuple[str, str]:
     return mt, url
 
 
-#: 入站附件落盘上限 / 拉取超时（开放平台 CDN 链接带签名会过期，先落地再入库）
+#: 入站附件落盘上限 / 拉取超时（开放平台 CDN 链接带签名会过期，先落地再入库）。
+#: Webhook 接法下载是在回调请求里同步做的（与其它官方 webhook 同步处理 AI 回复同一口径），
+#: 超时压到 10s 兜住回调响应时长；拉不到退回原链接占位，不丢消息。
 INBOUND_MEDIA_MAX_BYTES = 50 * 1024 * 1024
-INBOUND_MEDIA_TIMEOUT_SEC = 20.0
+INBOUND_MEDIA_TIMEOUT_SEC = 10.0
 _CTYPE_EXT = {
     "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
     "audio/silk": ".silk", "audio/amr": ".amr", "audio/mpeg": ".mp3", "audio/ogg": ".ogg",

@@ -590,6 +590,13 @@ async def test_qqbot_end_to_end_gateway_inbox_passive_window_and_recall(qqopen, 
         r5w = await w.send("qqbot:c2c:OPENID_A", "回复5")   # 绕过编排器直到 worker：账本自身也 fail-closed
         assert r5w["delivered"] is False and r5w["blocked"] == "qq_passive_window"
         assert len(qqopen.sent) == 4
+        # 会话头「本轮剩余 / 倒计时」chip 的数据源（send-caps reply_window）对 qqbot 成立，
+        # 且与账本口径一致：4 条用完、窗口 60 分钟、人工与自动都不能再发
+        from src.inbox.window_guard import snapshot as wg_snapshot
+        rw = wg_snapshot("qqbot", qqopen.app_id, "qqbot:c2c:OPENID_A", store=store)
+        assert rw["cap"] == 4 and rw["window_sec"] == 3600.0 and rw["sent"] == 4 and rw["remaining"] == 0
+        assert rw["manual_allowed"] is False and rw["auto_allowed"] is False and rw["remaining_sec"] > 3500
+        assert wg_snapshot("qq", "10001", "qq:friend:42", store=store) == {}   # 个人号无窗口规则
         outs = [x for x in store.list_messages(convs[0]["conversation_id"]) if x["direction"] == "out"]
         assert [x["text"] for x in outs] == ["回复1", "回复2", "回复3", "回复4"]
         assert [x["platform_msg_id"] for x in outs] == ["OUT1", "OUT2", "OUT3", "OUT4"]
