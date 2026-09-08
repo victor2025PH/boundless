@@ -34,6 +34,7 @@ class GoalStats:
         "deadline_shorten", "deadline_extend",
         "sprint_scheduled", "sprint_sent", "sprint_nudges",
         "sprint_auto_settled",
+        "probe_asked", "probe_missed", "probe_manual",
     )
 
     def __init__(self) -> None:
@@ -92,8 +93,21 @@ class GoalStats:
         self.sprint_sent = 0
         self.sprint_nudges = 0
         self.sprint_auto_settled = 0
+        # O-3 C/E（#236）：摸底硬注入出站校验 asked / missed + 坐席「现在就问一个」
+        self.probe_asked = 0
+        self.probe_missed = 0
+        self.probe_manual = 0
 
     # ── 记录（绝不抛）────────────────────────────────────────────────────────
+    def record_probe(self, result: str) -> None:
+        with self._lock:
+            r = str(result or "")
+            if r == "asked":
+                self.probe_asked += 1
+            elif r == "missed":
+                self.probe_missed += 1
+            elif r == "manual":
+                self.probe_manual += 1
     def record_created(self) -> None:
         with self._lock:
             self.created += 1
@@ -385,6 +399,9 @@ class GoalStats:
                            "sent": self.sprint_sent,
                            "nudges": self.sprint_nudges,
                            "auto_settled": self.sprint_auto_settled},
+                "probe": {"asked": self.probe_asked,
+                          "missed": self.probe_missed,
+                          "manual": self.probe_manual},
             }
             out["active"] = bool(
                 self.created or injected or self.beats_planned
@@ -456,6 +473,11 @@ class GoalStats:
                 f'goals_sprint_total{{kind="sent"}} {self.sprint_sent}',
                 f'goals_sprint_total{{kind="nudge"}} {self.sprint_nudges}',
                 f'goals_sprint_total{{kind="auto_settled"}} {self.sprint_auto_settled}',
+                "# HELP goals_probe_total Discovery probe hard-inject outcomes",
+                "# TYPE goals_probe_total counter",
+                f'goals_probe_total{{result="asked"}} {self.probe_asked}',
+                f'goals_probe_total{{result="missed"}} {self.probe_missed}',
+                f'goals_probe_total{{result="manual"}} {self.probe_manual}',
                 "# HELP goals_retention_created_total Retention goals auto-created on won deals",
                 "# TYPE goals_retention_created_total counter",
                 f"goals_retention_created_total {self.retention_created}",

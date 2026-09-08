@@ -425,8 +425,8 @@ def test_discovery_probe_asks_orders_unfilled_and_skips_filled():
 
 
 def test_inject_block_day1_carries_probe_once():
-    """第 1 天注入块：计划子句被剥、本轮缺口合流一次——块里同一问法只出现一次，
-    暖场段也带问法（旧「不急着问」退场）。"""
+    """第 1 天第一稿注入块：今天还没真问过 → C 段「每日下限」硬行【本轮必问】接管，
+    计划子句被剥、软缺口行让位——块里同一问法只出现一次；旧「不急着问」退场。"""
     service._inject_log_seen.clear()
     gs = GoalStore(":memory:")
     from src.companion.goals.store import reset_goal_store, get_goal_store
@@ -438,7 +438,8 @@ def test_inject_block_day1_carries_probe_once():
             _cfg_obj(), platform=PLAT, chat_key=CK, account_id=ACCT, conversation_id=CONV,
             user_context={}, chain="draft", inbound_text="hi there", now=T_CREATE + 60)
         assert blk and blk.count("人在哪个城市") == 1
-        assert "本轮顺势了解：人在哪个城市" in blk
+        assert "【本轮必问】今天还没问过：人在哪个城市" in blk
+        assert "【画像缺口】" not in blk and "本轮顺势了解" not in blk
         assert "不急着问" not in blk and PROBE_CLAUSE_SEP not in blk
         # 卡片 today.intent（计划层）仍带「今天至少自然问一个：坐标」
         act = store.get_action(store.list_goals(status="active")[0]["goal_id"],
@@ -446,3 +447,223 @@ def test_inject_block_day1_carries_probe_once():
         assert act and f"{PROBE_CLAUSE_SEP}人在哪个城市" in act["intent"]
     finally:
         reset_goal_store()
+
+
+# ══ C 注入变硬：线索词 → 槽位 / 【本轮必问】 / 出站校验 / 下轮重试 ═══════════════
+from src.companion.goals.profile_slots import (  # noqa: E402
+    detect_cues,
+    has_question,
+    pick_probe_target,
+    probe_hard_line,
+    reply_asks_slot,
+)
+from src.companion.goals.service import (  # noqa: E402
+    INJECT_COUNT_PARAM,
+    PROBE_PENDING_PARAM,
+    build_beats_trace,
+    verify_pending_probe,
+)
+
+
+def test_detect_cues_maps_weather_time_work_family():
+    assert detect_cues("it rained here yesterday, so lazy") == [("location", "rain")]
+    assert detect_cues("昨天这里下雨了") == [("location", "下雨")]
+    assert detect_cues("it's morning here, heading to work") == [
+        ("location", "morning here"), ("occupation", "work")]
+    assert detect_cues("my mom is visiting this weekend")[0][0] in ("interests", "family_status")
+    assert ("family_status", "mom") in detect_cues("my mom is visiting this weekend")
+    # 拉丁词按词边界：train 不是 rain、message 不是 age
+    assert detect_cues("took the train, got your message") == []
+    assert detect_cues("") == [] and detect_cues("hello") == []
+    # 只在给定槽里找
+    assert detect_cues("it's raining and I'm at work", slots=["occupation"]) == [("occupation", "work")]
+
+
+def test_reply_asks_slot_requires_question_and_keyword():
+    assert has_question("Which city are you in?") and has_question("你那边是哪个城市呀")
+    assert not has_question("Sounds cozy, enjoy the rain.")
+    assert reply_asks_slot("Rainy days are the best. Which city are you in, by the way?", "location")
+    assert reply_asks_slot("下雨天最适合窝着了～你那边是哪个城市呀", "location")
+    # 有问号没问到坐标 → 不算
+    assert not reply_asks_slot("Rain again? Hope you stayed dry!", "location")
+    # 问到坐标但不是问句 → 不算
+    assert not reply_asks_slot("I love which city you're in.", "location")
+    assert reply_asks_slot("What do you do for a living?", "occupation")
+    assert reply_asks_slot("你平时喜欢做什么呢", "interests")
+    assert not reply_asks_slot("", "location")
+
+
+def test_pick_probe_target_priority_retry_cue_floor():
+    un = ["location", "occupation", "age"]
+    assert pick_probe_target(cues=[("occupation", "work")], unfilled=un, asked_today=False,
+                             retry_slot="location") == ("location", "", "retry")
+    assert pick_probe_target(cues=[("occupation", "work")], unfilled=un, asked_today=True) == (
+        "occupation", "work", "cue")
+    assert pick_probe_target(cues=[], unfilled=un, asked_today=False) == ("location", "", "floor")
+    assert pick_probe_target(cues=[], unfilled=un, asked_today=True) == ("", "", "")     # 不连环追问
+    assert pick_probe_target(cues=[("interests", "gym")], unfilled=un, asked_today=True) == ("", "", "")
+    assert pick_probe_target(cues=[("location", "rain")], unfilled=[], asked_today=False) == ("", "", "")
+    line = probe_hard_line("location", "下雨")
+    assert line.startswith("【本轮必问】") and "下雨" in line and "人在哪个城市" in line
+    assert "一轮只问一个" in line and "必须问出来" in line
+    assert "今天还没问过" in probe_hard_line("occupation")
+
+
+class _ConvInbox:
+    """可追加出站消息的收件箱替身（校验链读 direction=out & ts）。"""
+
+    def __init__(self):
+        self.msgs = []
+
+    def add(self, direction, text, ts):
+        self.msgs.append({"direction": direction, "text": text, "ts": ts})
+
+    def list_recent_messages(self, conv, limit=30):
+        return list(self.msgs)[-limit:]
+
+    def get_conversation(self, conv):
+        return {"last_ts": max((m["ts"] for m in self.msgs), default=0)}
+
+    def get_conv_meta(self, conv):
+        return {}
+
+    def get_automation_mode(self, conv):
+        return "auto_ai"
+
+
+def _fresh_store():
+    from src.companion.goals.store import get_goal_store, reset_goal_store
+    reset_goal_store()
+    service._inject_log_seen.clear()
+    return get_goal_store(":memory:")
+
+
+def _inject(store_cfg, inbox, text, now, chain="draft"):
+    return build_block_for_chat(
+        store_cfg, platform=PLAT, chat_key=CK, account_id=ACCT, conversation_id=CONV,
+        user_context={}, chain=chain, inbound_text=text, inbox_store=inbox, now=now)
+
+
+def test_hm7xba_replay_nine_inbound_at_least_two_location_probes(caplog):
+    """回放 00:11–00:43 九条入站（客户透露时差 / 昨天下雨）：至少 2 条注入块带坐标硬追问；
+    模型没问（出站无问句）→ probe_missed + 下轮同槽重试；问了 → probe_asked + 当日拍 asked:。"""
+    from src.companion.goals.store import reset_goal_store
+    store = _fresh_store()
+    _discovery_goal(store)
+    cfg = _cfg_obj()
+    inbox = _ConvInbox()
+    base = _local(2026, 9, 8, 0, 11)
+    inbound = [
+        "good morning! it's early morning here",          # 时差线索 → location
+        "just woke up, coffee first",
+        "haha yes",
+        "it rained here yesterday, everything is wet",    # 天气线索 → location
+        "ok",
+        "what about you",
+        "nice",
+        "i like that",
+        "talk later",
+    ]
+    # 模型每次都顺着聊、不问（复刻 HM7XBA 九条零问句）
+    ai_replies = [
+        "Early bird! Enjoy your coffee.", "Coffee is life haha.", "Right?",
+        "Rainy days are cozy though.", "Yep.", "I'm good, just chilling.",
+        "Glad you like it.", "Same here.", "Talk soon!",
+    ]
+    hard = 0
+    try:
+        with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
+            for i, (txt, reply) in enumerate(zip(inbound, ai_replies)):
+                t = base + i * 240
+                inbox.add("in", txt, t)
+                blk = _inject(cfg, inbox, txt, t)
+                assert blk
+                if "【本轮必问】" in blk:
+                    hard += 1
+                    assert blk.count("人在哪个城市") == 1
+                    assert "【画像缺口】" not in blk and PROBE_CLAUSE_SEP not in blk
+                inbox.add("out", reply, t + 30)
+        assert hard >= 2, hard
+        gid = store.list_goals(status="active")[0]["goal_id"]
+        g = store.get_goal(gid)
+        # 每次硬注入下一轮都校验出「没问」→ missed 事件；同槽重试
+        missed = store.list_events(gid, kinds=("probe_missed",))
+        assert len(missed) >= 2 and all(e["detail"].startswith("location@") for e in missed)
+        assert not store.list_events(gid, kinds=("probe_asked",))
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("[goal-inject] target=location cue=morning here mode=cue result=pending" in m
+                   for m in msgs)
+        assert any("[goal-inject] target=location cue=morning here result=missed" in m for m in msgs)
+        assert any(" mode=retry result=pending" in m for m in msgs)
+        assert int((g.get("params") or {}).get(INJECT_COUNT_PARAM) or 0) == 9
+        tr = build_beats_trace(store, g, now=base + 3600)
+        assert tr["summary"]["probe_missed"] >= 2 and tr["summary"]["probe_asked"] == 0
+        assert [b for b in tr["beats"] if b["kind"] == "probe"][0]["status"] == "missed"
+        # 第 10 轮：模型终于问了 → asked + 当日拍 detail=asked:location（A 段让位钥匙）+ 今天不再硬追
+        t10 = base + 9 * 240
+        inbox.add("in", "you still there?", t10)
+        blk10 = _inject(cfg, inbox, "you still there?", t10)
+        assert "【本轮必问】" in blk10
+        inbox.add("out", "Here! Btw which city are you in? Sounds like a rainy one 🌧", t10 + 30)
+        t11 = t10 + 240
+        inbox.add("in", "los angeles", t11)
+        with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
+            blk11 = _inject(cfg, inbox, "los angeles", t11)
+        asked = store.list_events(gid, kinds=("probe_asked",))
+        assert len(asked) == 1 and asked[0]["detail"] == "location@-"
+        assert any("[goal-inject] target=location cue=- result=asked" in r.getMessage()
+                   for r in caplog.records)
+        from src.companion.goals.planner import day_key
+        row = store.get_action(gid, day_key(t11))
+        assert row and row["detail"] == "asked:location" and row["status"] == "consumed"
+        assert PROBE_PENDING_PARAM not in (store.get_goal(gid).get("params") or {})
+        # 今天已真问过一次且本轮无新线索 → 不再硬追（软合流照旧带一个缺口，不连环追问）
+        assert blk11 and "【本轮必问】" not in blk11
+    finally:
+        reset_goal_store()
+
+
+def test_verify_pending_probe_states():
+    store = GoalStore(":memory:")
+    g = _discovery_goal(store)
+    gid = g["goal_id"]
+    t0 = _local(2026, 9, 8, 0, 11)
+    store.update_goal_fields(gid, params={**g["params"], PROBE_PENDING_PARAM: {
+        "slot": "location", "cue": "rain", "ts": t0, "mode": "cue"}})
+    g = store.get_goal(gid)
+    # 无 inbox → pending 保留
+    assert verify_pending_probe(store, g, inbox_store=None, now=t0 + 60)["result"] == "pending"
+    inbox = _ConvInbox()
+    inbox.add("out", "Before pending", t0 - 10)           # 早于挂起时刻的出站不算
+    assert verify_pending_probe(store, g, inbox_store=inbox, now=t0 + 60)["result"] == "pending"
+    inbox.add("out", "Cozy!", t0 + 20)
+    inbox.add("out", "Which city are you in?", t0 + 25)   # 拆成两条气泡也要合并判
+    v = verify_pending_probe(store, g, inbox_store=inbox, now=t0 + 60)
+    assert v["result"] == "asked" and v["slot"] == "location" and v["cue"] == "rain"
+    assert PROBE_PENDING_PARAM not in v["patch"]
+    ev = store.list_events(gid, kinds=("probe_asked",))
+    assert ev and ev[0]["text_head"].startswith("Cozy! Which city")
+    # 超 24h → expired 静默丢弃、不记事件
+    store.update_goal_fields(gid, params={**g["params"], PROBE_PENDING_PARAM: {
+        "slot": "occupation", "cue": "", "ts": t0 - 90000}})
+    v2 = verify_pending_probe(store, store.get_goal(gid), inbox_store=inbox, now=t0)
+    assert v2["result"] == "expired" and PROBE_PENDING_PARAM not in v2["patch"]
+    assert not store.list_events(gid, kinds=("probe_missed",))
+    # 无挂起 → none
+    assert verify_pending_probe(store, {"params": {}}, inbox_store=inbox, now=t0)["result"] == "none"
+
+
+def test_hard_line_survives_overflow_and_soft_gap_yields():
+    from src.companion.goals.context_block import build_goal_block
+    line = probe_hard_line("location", "下雨")
+    blk = build_goal_block(
+        title="客户摸底", milestone_label="破冰起步", milestone_idx=0, day_index=1,
+        total_days=3, intent="先把互动热起来" * 30, push_level="soft",
+        profile_gap="人在哪个城市", profile_facts="称呼:Martin" * 10,
+        context_note="备注" * 60, probe_line=line, max_chars=360)
+    assert line in blk                                    # 超长也不丢
+    assert "【画像缺口】" not in blk                        # 有硬行时软行让位
+    assert "【推进纪律】" in blk
+    blk2 = build_goal_block(title="客户摸底", milestone_label="x", milestone_idx=0, day_index=1,
+                            total_days=3, intent="聊", profile_gap="人在哪个城市")
+    assert "【画像缺口】像朋友闲聊，不要像查户口，一轮只问一个：人在哪个城市" in blk2

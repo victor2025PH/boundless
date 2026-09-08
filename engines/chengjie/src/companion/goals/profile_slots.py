@@ -481,6 +481,185 @@ def resolve_inject_gap(
     return phrase, key, patch
 
 
+# ── O-3 C（#236 HM7XBA）：线索词 → 槽位 / 出站问句校验（纯函数，零 IO）──────────
+# 客户本轮提到天气 / 时差 / 早上 → 这是问「人在哪个城市」的天然话头；提到上班 /
+# 加班 → 问职业；提到爸妈 / 孩子 → 问家庭。此前注入只是软建议，模型优先答客户
+# （HM7XBA 九条回复全跟客户话题，客户说「昨天这里下雨」AI 也聊天气，坐标槽仍空）。
+# 词表双语、闭集、只做「话头在哪」的粗判——命中即把该槽定为本轮必问。
+CUE_LEXICON: Dict[str, Tuple[str, ...]] = {
+    "location": (
+        "天气", "下雨", "下雪", "台风", "好热", "好冷", "很热", "很冷", "时差", "这边",
+        "这里", "早上好", "晚上好", "下午好", "现在是早上", "现在是晚上", "凌晨", "城市",
+        "weather", "rain", "raining", "rainy", "snow", "sunny", "hot here", "cold here",
+        "time zone", "timezone", "time difference", "morning here", "evening here",
+        "night here", "it's morning", "it's night", "it's late here", "over here",
+        "where i live", "my city", "in my country",
+    ),
+    "occupation": (
+        "上班", "下班", "加班", "公司", "老板", "客户", "生意", "开店", "出差", "工作",
+        "同事", "项目", "轮班", "工资",
+        "work", "job", "office", "boss", "shift", "business", "client", "meeting",
+        "coworker", "colleague", "deadline", "salary", "commute",
+    ),
+    "age": (
+        "岁", "年龄", "生日", "毕业", "退休", "大学", "上学", "读书", "年轻", "老了",
+        "birthday", "graduat", "retire", "college", "university", "years old",
+        "my age", "getting old", "when i was young", "school",
+    ),
+    "interests": (
+        "喜欢", "爱好", "周末", "电影", "游戏", "健身", "旅行", "音乐", "追剧", "打球",
+        "钓鱼", "做饭", "看书",
+        "hobby", "weekend", "movie", "game", "gaming", "gym", "workout", "travel",
+        "music", "guitar", "cooking", "fishing", "reading", "netflix", "for fun",
+        "love to", "i enjoy",
+    ),
+    "family_status": (
+        "家人", "爸", "妈", "父母", "孩子", "儿子", "女儿", "老公", "老婆", "家里人",
+        "兄弟", "姐妹", "回家",
+        "family", "mom", "dad", "mother", "father", "parents", "kids", "children",
+        "son", "daughter", "wife", "husband", "brother", "sister",
+    ),
+    "marital_status": (
+        "男朋友", "女朋友", "对象", "单身", "结婚", "离婚", "前任", "约会", "相亲",
+        "boyfriend", "girlfriend", "single", "married", "divorce", "my ex",
+        "dating", "date night", "relationship",
+    ),
+    "residence": (
+        "住", "搬家", "房子", "公寓", "租房", "小区", "邻居", "房租",
+        "live in", "moved", "apartment", "house", "rent", "neighborhood",
+        "landlord", "roommate",
+    ),
+    "name": (
+        "叫我", "名字", "怎么称呼", "call me", "my name",
+    ),
+}
+
+# 出站回复里「问到了该槽」的关键词（与问号一起判 asked）——比线索词更窄：只收
+# 问句本身会带的词。校验宁可判 missed 多问一次，不可把没问的当问了。
+SLOT_ASK_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "location": ("哪个城市", "哪里", "哪儿", "哪座城", "坐标", "在哪", "什么地方",
+                 "which city", "where are you", "where do you live", "where you live",
+                 "what city", "which part of", "where in", "whereabouts", "which country",
+                 "where you're", "where are you based", "which state"),
+    "occupation": ("做什么", "什么工作", "哪一行", "做哪行", "工作是", "上班是", "生意",
+                   "职业", "忙什么",
+                   "what do you do", "what kind of work", "your job", "what's your job",
+                   "line of work", "for a living", "what work", "your work", "your business",
+                   "what field", "what industry", "kind of job"),
+    "age": ("多大", "几岁", "年龄", "哪一年", "几零后", "年龄段",
+            "how old", "your age", "what age", "born in", "which year", "what year"),
+    "interests": ("喜欢做什么", "爱好", "平时喜欢", "兴趣", "喜欢什么", "空闲", "闲下来",
+                  "hobby", "hobbies", "for fun", "free time", "what do you like", "into",
+                  "enjoy doing", "spare time", "what do you usually do", "favorite"),
+    "family_status": ("家里", "家人", "父母", "孩子", "家庭",
+                      "family", "kids", "children", "parents", "siblings", "live with"),
+    "marital_status": ("单身", "有对象", "男朋友", "女朋友", "结婚", "有伴",
+                       "single", "married", "boyfriend", "girlfriend", "partner",
+                       "seeing anyone", "taken", "relationship"),
+    "residence": ("住在", "住哪", "住得", "房子", "公寓",
+                  "where do you live", "where you live", "your place", "apartment",
+                  "house", "live alone", "neighborhood"),
+    "name": ("怎么称呼", "叫你", "名字", "how should i call", "what should i call",
+             "your name", "call you"),
+    "income_level": ("收入", "工资", "赚", "income", "salary", "earn", "make a month"),
+    "assets": ("房", "车", "资产", "property", "car", "own a", "assets"),
+}
+
+def _cjk(s: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+
+
+def _contains_term(text_low: str, term: str) -> bool:
+    """中文词直接子串；拉丁词按词边界 + 常见词尾（rain→rained/raining；避免 'rain'
+    命中 'train'、'age' 命中 'message'）。"""
+    t = term.lower()
+    if _cjk(t):
+        return t in text_low
+    return re.search(r"(?<![a-z])" + re.escape(t) + r"(?:s|es|ed|ing|y)?(?![a-z])",
+                     text_low) is not None
+
+
+def detect_cues(text: str, *, slots: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+    """客户本条消息里的线索词 → ``[(slot_key, cue_word), ...]``（按 ``slots`` 顺序，
+    每槽最多一条）。``slots`` 缺省＝全部词表键。纯函数、绝不抛。"""
+    t = str(text or "").strip()
+    if not t or len(t) > 4000:
+        return []
+    low = t.lower()
+    keys = [k for k in (slots or list(CUE_LEXICON)) if k in CUE_LEXICON]
+    out: List[Tuple[str, str]] = []
+    for k in keys:
+        for w in CUE_LEXICON[k]:
+            if _contains_term(low, w):
+                out.append((k, w))
+                break
+    return out
+
+
+def has_question(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if "?" in t or "？" in t:
+        return True
+    # 中文口语问句常不带问号：「你那边现在几点呀」——只认句尾语气词
+    tail = t.rstrip("。.!！~～ ")[-1:] if t.rstrip("。.!！~～ ") else ""
+    return tail in ("吗", "呢", "么", "呀")
+
+
+def reply_asks_slot(text: str, slot_key: str) -> bool:
+    """出站回复是否**真问出**了该槽：有问句 + 带该槽的问法关键词（两者都要）。
+    宁可判 missed（多问一次），不可把没问的当问了。纯函数。"""
+    t = str(text or "")
+    if not has_question(t):
+        return False
+    low = t.lower()
+    kws = SLOT_ASK_KEYWORDS.get(str(slot_key or "").strip().lower(), ())
+    if not kws:
+        s = get_slot(slot_key)
+        kws = tuple(x for x in (str((s or {}).get("label_zh") or ""),
+                                str((s or {}).get("label_en") or "")) if x)
+    return any(_contains_term(low, w) for w in kws)
+
+
+def pick_probe_target(
+    *,
+    cues: List[Tuple[str, str]],
+    unfilled: List[str],
+    asked_today: bool,
+    retry_slot: str = "",
+) -> Tuple[str, str, str]:
+    """本轮「必问」目标决议 → ``(slot_key, cue_word, mode)``；不必问 → ``("", "", "")``。
+
+    优先级：``retry``（上一轮硬注入没问出来，同槽重试）> ``cue``（客户本轮话头对上了
+    某个未填槽）> ``floor``（今天还没真问过一个 → 用轮换到的第一个未填槽兜「每天
+    ≥1」）。已问过一次、没线索 → 不必问（不连环追问）。"""
+    un = [str(k) for k in (unfilled or []) if str(k or "").strip()]
+    if not un:
+        return "", "", ""
+    r = str(retry_slot or "").strip()
+    if r and r in un:
+        cue = next((c for k, c in (cues or []) if k == r), "")
+        return r, cue, "retry"
+    for k, c in (cues or []):
+        if k in un:
+            return k, c, "cue"
+    if not asked_today:
+        return un[0], "", "floor"
+    return "", "", ""
+
+
+def probe_hard_line(slot_key: str, cue: str = "", *, lang: str = "zh") -> str:
+    """注入块的硬约束行（context_block 原样落）：一轮只问一个，但**必须**问。"""
+    ask = inject_ask(slot_key, lang) or slot_label(slot_key, lang) or str(slot_key)
+    c = str(cue or "").strip()
+    if c:
+        return (f"【本轮必问】客户刚提到「{c}」，顺着这个话头接一句，然后**必须**问到：{ask}"
+                f"——本条回复里要有这一个问题（{HARD_ASK_DISCIPLINE}，但这一个必须问出来）")
+    return (f"【本轮必问】今天还没问过：{ask}——本条回复先接住对方的话，再自然带出这一个问题"
+            f"（{HARD_ASK_DISCIPLINE}，但这一个必须问出来）")
+
+
 def parse_selected_slots(raw: Any) -> List[str]:
     """目标 ``params.slots``（逗号/顿号/空白分隔字符串或列表）→ 合法槽位键
     （保序去重；未知键/lifecycle 专用槽忽略）。空 → []。"""

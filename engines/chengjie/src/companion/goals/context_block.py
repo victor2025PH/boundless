@@ -61,11 +61,15 @@ def build_goal_block(
     remaining_sec: Optional[float] = None,
     max_chars: int = DEFAULT_MAX_CHARS,
     product_rule: str = "",
+    probe_line: str = "",
 ) -> Optional[str]:
     """组 3-7 行目标块。无标题（无目标）→ None。
 
     ``profile_gap``（可选）：摸底段本轮**唯一**缺口（一个未填槽的 ask 短语），
     出一行硬约束采集指令——像朋友闲聊，不要像查户口，一轮只问一个。
+    ``probe_line``（可选，O-3 C #236）：「【本轮必问】…」硬约束行（service 按线索词 /
+    每日下限 / 上轮 missed 重试决议后传入）。与纪律行同级：超长**不丢**、上限按其长度
+    放宽；有它时不再出软的【画像缺口】行（一轮只带一个问法）。
     ``context_note``（可选）：目标背景一行（params.note——挽回目标的「老客户
     曾购 X」/ 回流客户的「别当新客户从头摸底」这类战略语境；P7 前只在坐席 UI
     可见、从没进过 prompt）。
@@ -126,8 +130,11 @@ def build_goal_block(
     it = str(intent or "").strip()
     if it:
         lines.append(f"【今日意图】{it}（力度：{_PUSH_LABEL[lvl]}）")
+    probe = str(probe_line or "").strip().replace("\n", " ")
+    if probe:
+        lines.append(probe)
     gap = str(profile_gap or "").strip()
-    if gap:
+    if gap and not probe:
         lines.append(
             f"【画像缺口】像朋友闲聊，不要像查户口，一轮只问一个：{gap}")
     if rule:
@@ -135,8 +142,10 @@ def build_goal_block(
     # 限时档（remaining_sec 有值）用冲刺纪律：敷衍可再试，拒绝/低落仍放下
     lines.append(_DISCIPLINE_SPRINT if used_remaining else _DISCIPLINE)
     block = "\n".join(lines)
-    # 产品边界行是安全语义：有它时上限按其长度放宽，保证与纪律行一起不被截掉
-    cap = max(120, int(max_chars or DEFAULT_MAX_CHARS)) + (len(rule) + 1 if rule else 0)
+    # 产品边界行 / 本轮必问行是硬语义：有它时上限按其长度放宽，保证与纪律行一起不被截掉
+    cap = (max(120, int(max_chars or DEFAULT_MAX_CHARS))
+           + (len(rule) + 1 if rule else 0)
+           + (len(probe) + 1 if probe else 0))
     if len(block) > cap:
         # 超长丢弃顺序：客户档案行 → 背景行 → 画像缺口行 → 截意图行
         # （标题、产品边界与纪律行是安全语义，不能丢；档案是每轮 nice-to-have——
@@ -169,13 +178,14 @@ def goal_view_block(
     note_suffix: str = "",
     max_chars: int = DEFAULT_MAX_CHARS,
     product_rule: str = "",
+    probe_line: str = "",
 ) -> Optional[str]:
     """从 service.goal_view 输出的视图字典组块（路由/注入共用的便捷口）。
 
     ``note_suffix``（P9b）：拼在 params.note 后的动态背景补充（流失原因
     应对策略「应对：聊性价比…」——采集常发生在目标创建**之后**，静态 note
     写死会错过；这里按当轮画像现值拼，无 note 时独立成背景行）。
-    ``product_rule``（M-5 A）：见 :func:`build_goal_block`。
+    ``product_rule``（M-5 A）/ ``probe_line``（O-3 C）：见 :func:`build_goal_block`。
     """
     if not isinstance(view, dict):
         return None
@@ -204,6 +214,7 @@ def goal_view_block(
         remaining_sec=rem,
         max_chars=max_chars,
         product_rule=product_rule,
+        probe_line=probe_line,
     )
 
 
