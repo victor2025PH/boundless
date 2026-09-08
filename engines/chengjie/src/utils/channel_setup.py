@@ -230,7 +230,8 @@ CHANNELS: List[Channel] = [
     Channel(
         id="qq",
         name="QQ",
-        # 启用开关 = 协议登录开关本身：填好协议端地址即视为 opt-in（非官方接入，默认关）
+        # 启用开关 = 协议登录开关本身（准入区，非官方接入，默认关）；连接边车随桌面壳打包，
+        # 用户既不装协议端也不填地址/token——纯扫码。故本卡无 fields，只有「启用 + 登录」。
         enable_key="platform_login.qq.protocol_enabled",
         login_required=True,
         login_platform="qq",
@@ -238,20 +239,14 @@ CHANNELS: List[Channel] = [
         login_notice_key="inbox.connect.notice_unofficial",
         enable_on_ready=["platform_login.orchestrator_enabled"],
         intro=(
-            "用你自己的 QQ 号收发消息：先在电脑/服务器上装一个 QQ 协议端（NapCat / LLOneBot / "
-            "Lagrange，任选其一，均支持 Milky 协议），在它的界面里扫码登录 QQ，再把它的 Milky "
-            "服务地址填到这里。与「QQ 机器人」（官方开放平台）是两个独立渠道。"
+            "用你自己的 QQ 号收发消息：智聊内置连接组件，打开后用手机 QQ 扫码即可接入，"
+            "无需安装其它程序。与「QQ 机器人」（官方开放平台）是两个独立渠道。"
         ),
         api_intro=(
-            "协议端不随本软件分发（许可证原因），请按各项目文档安装并开启 Milky 服务；"
-            "建议使用小号 + 固定 IP。填好地址后到工作台「账号 → 新增 QQ」确认接入。"
+            "首次启用会提示一次风险须知（个人号自动化有被平台风控的风险，建议用小号）；"
+            "确认后到工作台左栏点 QQ → 扫码即用。"
         ),
-        fields=[
-            Field("platform_login.qq.milky_url", "协议端 Milky 地址",
-                  help="协议端 Milky 服务的 http 地址，如 http://127.0.0.1:3000（NapCat/LLOneBot/Lagrange 均在其设置里可查）"),
-            Field("platform_login.qq.milky_token", "协议端 Token", secret=True, required=False,
-                  help="协议端 Milky 服务设置的 access_token（强烈建议设置；留空=协议端未设 token）"),
-        ],
+        fields=[],
     ),
     Channel(
         id="qqbot",

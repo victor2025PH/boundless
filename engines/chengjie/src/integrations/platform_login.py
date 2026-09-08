@@ -204,13 +204,12 @@ PLATFORM_MODE_OVERRIDES: Dict[str, Dict[str, Dict[str, Any]]] = {
     # 归「需服务器端配置」。
     "qq": {
         "protocol": {
-            "label": "扫码登录（协议端）",
-            "desc": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码登录，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
+            "label": "扫码登录",
+            "desc": "用你自己的 QQ 号：手机 QQ 扫本窗口二维码即可接入（智聊内置连接，无需安装其它程序）；可收发文字/图片/语音/视频，建议用小号",
             "label_key": "inbox.connect.mode_l_qq_protocol",
             "desc_key": "inbox.connect.mode_d_qq_protocol",
             "caps": ("human", "compat"),
-            "unavailable_reason_code": REASON_NEEDS_SERVER_SETUP,
-            "login_kind": "device",
+            "login_kind": "qr",
             "notice_key": "inbox.connect.notice_unofficial",
             "notice_severity": "info",
         },
@@ -299,8 +298,8 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
         "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。"
     ),
     "qq": (
-        "请在你自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制台里用手机 QQ 扫码登录；"
-        "登录完成后本窗口会自动确认并把该 QQ 号接入。"
+        "用手机 QQ 扫描本窗口二维码即可接入（智聊内置连接，无需安装其它程序）；"
+        "扫码后在手机上确认，本窗口会自动完成登录。"
     ),
 }
 

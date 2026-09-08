@@ -46,7 +46,10 @@ from src.integrations.platform_login import resolve_login_switch
 logger = logging.getLogger(__name__)
 
 PLATFORM = "qq"
-DEFAULT_MILKY_URL = "http://127.0.0.1:3000"
+#: 智聊自研 QQ 协议边车（services/qq-personal）的默认 Milky 端点——与
+#: ``desktop/sidecar-launcher.js`` SPECS.qq 的端口 8792 同源（端口漂移门禁钉住）。
+#: 用户既不填地址也不填 token：边车随桌面壳打包、由壳自动拉起，扫码即用。
+DEFAULT_MILKY_URL = "http://127.0.0.1:8792"
 #: 出站媒体内联 base64 的体积上限（协议端可能在另一台机器，file:// 路径不可达；小文件走 base64
 #: 更稳；超限回落 file://（要求协议端与本进程同机））
 INLINE_MEDIA_MAX_BYTES = 15 * 1024 * 1024
@@ -87,6 +90,18 @@ def auto_accept_friend(config: Dict[str, Any]) -> bool:
     return bool(_qq_cfg(config).get("auto_accept_friend"))
 
 
+def risk_acknowledged(config: Dict[str, Any]) -> bool:
+    """个人号一次性风险须知是否已确认（``platform_login.qq.risk_acknowledged_at`` > 0）。
+
+    QQ 个人号是非官方接入、有封号风险（见 docs/QQ个人号接入协议与风险须知.md）：登录 provider
+    在扫码前要求先确认，未确认 → 弹一次性协议页而非直接出码。0/缺失＝未确认。
+    """
+    try:
+        return float(_qq_cfg(config).get("risk_acknowledged_at") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def avatar_url_for(uin: Any) -> str:
     s = str(uin or "").strip()
     return AVATAR_URL_FMT.format(uin=s) if s.isdigit() else ""
@@ -96,6 +111,25 @@ def group_avatar_url_for(group_id: Any) -> str:
     """群头像 CDN（公开规则）；群会话的头像应是群自己的，不是最近发言人的。"""
     s = str(group_id or "").strip()
     return GROUP_AVATAR_URL_FMT.format(gid=s) if s.isdigit() else ""
+
+
+async def fetch_login_qrcode(client: "MilkyClient") -> Dict[str, Any]:
+    """向边车拉一张登录二维码（智聊扩展 API ``x_get_login_qrcode``）。
+
+    返回 ``{"qr_image": data-uri, "qr_url": str, "expire_sec": int}``；边车不支持
+    （-404）或未就绪 → ``{}``（调用方回落"设备端等待"文案，绝不抛）。
+    """
+    try:
+        data = await client.call("x_get_login_qrcode")
+    except Exception:  # noqa: BLE001
+        logger.debug("[qq-milky] x_get_login_qrcode 失败", exc_info=True)
+        return {}
+    b64 = str(data.get("qr_png_base64") or "").strip()
+    if not b64:
+        return {}
+    return {"qr_image": "data:image/png;base64," + b64,
+            "qr_url": str(data.get("qr_url") or ""),
+            "expire_sec": int(data.get("expire_sec") or 0)}
 
 
 # ── chat_key ─────────────────────────────────────────────────────────────────
@@ -494,11 +528,12 @@ class QQPersonalWorker:
             self.detail = self.detail or "milky"
         except MilkyError as ex:
             self._health_ok = False
-            self.detail = "协议端已连上但 QQ 未登录（去协议端 WebUI 扫码）" if ex.not_logged_in else str(ex)[:160]
+            # QQ 被踢/掉线：账号栏出「重新登录」（needs_login）——扫码就在本窗口，不指去别处
+            self.detail = "QQ 已离线，需重新扫码登录" if ex.not_logged_in else str(ex)[:160]
             self._report("needs_login" if ex.not_logged_in else "failed", detail=self.detail)
         except Exception as ex:  # noqa: BLE001
             self._health_ok = False
-            self.detail = f"协议端不可达: {str(ex)[:120]}"
+            self.detail = f"连接服务不可达: {str(ex)[:120]}"
         self._health_ts = now
         if self._health_ok and self._task is not None and self._task.done():
             self.detail = "event stream exited"
@@ -506,13 +541,21 @@ class QQPersonalWorker:
         return self._health_ok
 
     def status(self) -> Dict[str, Any]:
-        return {
+        out = {
             "type": "qq_milky", "account_id": self.account_id, "state": self.state,
             "detail": self.detail, "uin": self.uin, "nickname": self.nickname,
             "impl": self.impl, "events_total": self.events_total,
             "last_event_ts": self.last_event_ts, "reconnects": self.reconnects,
             "milky_url": self.client.base_url,
         }
+        # 自研边车的 /health 快照（qq_version / login_state / driver / download_progress）：
+        # 运维面「为什么不在线」一眼能看（真注入 vs mock、QQ 装没装、码等没等到）。
+        # get_impl_info 已在 start() 拿过，这里只补 impl 里没有的三个字段，缺则不出。
+        for k in ("qq_version", "driver", "login_state"):
+            v = self.impl.get(k) if isinstance(self.impl, dict) else None
+            if v not in (None, ""):
+                out[k] = v
+        return out
 
     def _report(self, status: str, *, detail: str = "") -> None:
         try:

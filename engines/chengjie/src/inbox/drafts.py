@@ -1255,41 +1255,6 @@ class DraftService:
             logger.debug("auto_generate_draft 失败", exc_info=True)
             return None
 
-    def _guard_late_reply_excuses(self, reply: str, draft: Dict[str, Any], draft_id: str) -> str:
-        """O-1 E：沉寂 ≥72h 的首回剥编造迟回理由（persona_guard.strip_late_reply_excuses）。
-
-        判不出沉寂（无 store / 无消息行 / 首次接触无出站 → 那不是「迟回」）→ 原稿不动。
-        日志 ``[persona-guard] late_excuse=… action=strip|replace silence=…h draft=…``。
-        """
-        from src.inbox.humanize import silence_before_inbound
-        from src.utils.persona_guard import (
-            LATE_REPLY_SILENCE_HOURS, detect_late_reply_excuses, strip_late_reply_excuses,
-        )
-        if not detect_late_reply_excuses(reply):
-            return reply
-        store = self._store
-        conv = str(draft.get("conversation_id") or "")
-        if store is None or not conv or not hasattr(store, "list_recent_messages"):
-            return reply
-        try:
-            draft_ts = float(draft.get("created_ts") or draft.get("created_at") or 0)
-        except (TypeError, ValueError):
-            draft_ts = 0.0
-        if draft_ts <= 0:
-            return reply
-        rows = store.list_recent_messages(conv, limit=12)
-        silence, _anchor = silence_before_inbound(rows, draft_ts=draft_ts)
-        if silence is None or silence < LATE_REPLY_SILENCE_HOURS * 3600.0:
-            return reply
-        out, rep = strip_late_reply_excuses(reply)
-        if rep.get("action") in ("strip", "replace"):
-            logger.info(
-                "[persona-guard] late_excuse=%s action=%s silence=%.1fh draft=%s",
-                "|".join(str(h) for h in (rep.get("hits") or [])[:4]) or "-",
-                rep.get("action"), silence / 3600.0, draft_id)
-            return out
-        return reply
-
     def enrich_draft(
         self,
         draft_id: str,
@@ -1359,13 +1324,6 @@ class DraftService:
                     _reply_hits = list(_reply_hits) + [str(h) for h in (_rep.get("hits") or [])[:4]]
         except Exception:
             logger.debug("enrich_draft 客服腔守卫异常（放行原稿）", exc_info=True)
-        # O-1 E（#255 8FJDUK ①）：沉寂 ≥72h 后的首回**不编造迟回理由**——AI 不知道这几天发生了
-        # 什么，「buried in work / 手机坏了」都是编的；命中即剥句，剥完为空换如实「刚看到」。
-        # 沉寂判定复用 humanize.silence_before_inbound（本轮入站首条 ↔ 之前最后一条出站）。
-        try:
-            reply = self._guard_late_reply_excuses(reply, draft, draft_id)
-        except Exception:
-            logger.debug("enrich_draft 迟回理由守卫异常（放行原稿）", exc_info=True)
         effective_risk = _max_risk(base_risk, reply_risk)
         # 档位只认 policy：入站风险 + AI 稿风险一起进 decide（shadow 下不降档）。
         # 台账去重：入站侧「本会被扣」已在 auto_generate_draft 落过一行，这里只在

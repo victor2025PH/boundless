@@ -4212,16 +4212,21 @@ platform_login:
     web_url: "http://127.0.0.1:8793"
   qq:
     # ── QQ 协议登录（个人号；platform=qq，2026-09-07 QQ 双轨·准入区轨）────────────────
-    # 用你自己的 QQ 号收发：协议端（NapCat / LLOneBot / Lagrange.Milky，任选）由用户**自装**
-    # （许可证原因不随包分发），本进程只做 Milky 应用端：POST {milky_url}/api/… + GET /event。
-    # QQ 号的扫码在协议端自己的 WebUI 里完成；收件箱「新增 QQ」只做连通 + 确认（login_kind=device）。
+    # 用你自己的 QQ 号收发：智聊**自研连接边车**（services/qq-personal，随桌面壳打包、由壳自动
+    # 拉起）注入本机 QQ 客户端、驱动其内核收发——签名由 QQ 自身完成，不连外部签名服务、不需任何
+    # 第三方 token/审核；对上以 Milky 暴露（默认 127.0.0.1:8792，见 desktop/sidecar-launcher.js）。
+    # 扫码在收件箱弹窗里完成（login_kind=qr）；用户**不需填地址/token**，milky_url/token 仅供
+    # 高级用户指向自建/远端边车时覆盖（缺省即用内置边车）。
     # 能力与 Telegram 协议号相当（文字/图/语音/视频/已读/群全量/踢人改名），无「正在输入」（Milky 无此 API）。
-    # ⚠ 非官方接入（腾讯 ToS 之外）、有风控风险，默认关且不进桌面默认开表：开启前①用小号②固定 IP。
+    # ⚠ 非官方接入（腾讯 ToS 之外）、有风控风险，默认关且不进桌面默认开表：开启前①用小号；首启会弹
+    #    一次性风险须知，确认后写 platform_login.qq.risk_acknowledged_at。
     # QQ 机器人（官方开放平台）是另一个平台 qqbot，见顶层 qqbot: 块。
     protocol_enabled: false
-    milky_url: "http://127.0.0.1:3000"   # 协议端 Milky 服务地址（NapCat/LLOneBot/Lagrange 设置里可查）
-    milky_token: ""                      # 协议端 access_token（强烈建议设置）
+    # 高级覆盖（缺省留空＝用内置边车 127.0.0.1:8792）：指向自建/远端 Milky 边车时才填。
+    milky_url: ""
+    milky_token: ""
     auto_accept_friend: false            # 收到好友申请是否自动同意
+    risk_acknowledged_at: 0              # 一次性风险须知确认时间（epoch；0=未确认，前端首启弹窗写入）
   # 官方 API 出站 worker（mode=official）：让 companion/autoreply 主管道经官方通道发
   # （LINE Messaging / Messenger Send / WhatsApp Cloud），与 RPA/Baileys 按账号并存。
   # 凭证优先读账号 meta，回退到对应通道块（line / facebook_messenger / whatsapp_cloud）。

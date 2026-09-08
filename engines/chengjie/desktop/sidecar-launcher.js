@@ -66,6 +66,24 @@ const SPECS = {
       MSG_RESTORE_ON_BOOT: "1",
     },
   },
+  // QQ 个人号自研连接边车（services/qq-personal）：注入本机 QQ 客户端驱动其内核收发，
+  // 对上暴露 Milky（默认 8792，与 src/integrations/qq_milky.DEFAULT_MILKY_URL 同源）。
+  // 端口经 PORT/QQ_MILKY_PORT，令牌经 QQ_MILKY_TOKEN（buildSidecarEnv 自协商，用户不填）。
+  // 媒体：入站由 qq_milky worker 自己落 protocol_media/qq（不经边车 mediaDir），故无 mediaSubdir。
+  qq: {
+    name: "qq",
+    dirName: "qq-personal",
+    port: 8792,
+    svcId: "qq-personal",
+    logName: "qq-sidecar.log",
+    envKeys: {
+      sessions: "QQ_SESSIONS_DIR",
+    },
+    extraEnv: {
+      QQ_DRIVER: "qqnt",           // 真实注入驱动（未接入时回退 mock 并如实标注，见 ntq/driver.js）
+      QQ_RUNTIME_DIR: "",          // 按需下载的 QQ 运行时目录（buildSidecarEnv 按 dataDir 覆盖）
+    },
+  },
 };
 
 const SIDECAR_ENTRY = "server.js";
@@ -190,6 +208,10 @@ function buildSidecarEnv(spec, o) {
   if (o && o.dataDir) {
     // 会话凭据＝登录成果，必须落用户可写区：写进只读安装目录会让每次重启都要重新登录。
     env[spec.envKeys.sessions] = path.join(String(o.dataDir), `${spec.name}-sessions`);
+    // QQ 边车：按需下载的 QQ 运行时也落用户可写区（安装目录只读，装不进去）。
+    if (spec.name === "qq") {
+      env.QQ_RUNTIME_DIR = path.join(String(o.dataDir), "qq-runtime");
+    }
   }
   if (base) {
     env.PY_INGEST_URL = base + "/api/internal/protocol/ingest";
@@ -456,6 +478,21 @@ function createAllSidecarManagers(deps) {
       const out = {};
       for (const [k, m] of Object.entries(managers)) out[k] = m.getStatus();
       return out;
+    },
+    /**
+     * 重启单个边车（连接弹窗 service_down 时的「重启连接服务」按钮；IPC desktop:sidecar-restart）。
+     * 未知名字 → { ok:false, error }，绝不抛；stop 后清退避计数再 start（用户手动重启＝重新给机会）。
+     */
+    async restart(name, config) {
+      const m = managers[String(name || "")];
+      if (!m) return { ok: false, error: `unknown sidecar: ${name}` };
+      try { m.stop(); } catch (e) { /* 旧进程回收失败不阻断重拉 */ }
+      try {
+        await m.start(config || {});
+        return { ok: true, status: m.getStatus() };
+      } catch (e) {
+        return { ok: false, error: String((e && e.message) || e), status: m.getStatus() };
+      }
     },
   };
 }

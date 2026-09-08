@@ -201,7 +201,7 @@ ok("health URL", healthUrl(WA.port) === `http://127.0.0.1:${WA.port}/health`);
 
 // ── ⑬ svcId 必须与服务端 /health 真回的值一致（新的跨文件漂移点）─────────────
 // 对不上 → 壳把自家边车判成「外来服务」，WhatsApp/Messenger 在客户机上直接报端口冲突。
-for (const spec of [WA, MSG]) {
+for (const spec of [WA, MSG, SPECS.qq]) {
   const src = fs.readFileSync(
     path.join(__dirname, "..", "..", "services", spec.dirName, "server.js"), "utf8");
   ok(`${spec.name} 服务端 /health 真回 svc:"${spec.svcId}"`,
@@ -223,11 +223,17 @@ for (const spec of [WA, MSG]) {
     m.start = async (c) => { started.push(k); return origStart(c); };
   }
   await all.startAll({});
-  ok("startAll 两个边车都被尝试（一个失败不拖累另一个）", started.length === 2);
+  ok("startAll 每个边车都被尝试（一个失败不拖累另一个）", started.length === Object.keys(all.managers).length);
   const st = all.getStatus();
-  ok("状态按边车名分开", "whatsapp" in st && "messenger" in st);
+  ok("状态按边车名分开", "whatsapp" in st && "messenger" in st && "qq" in st);
   ok("缺包时报 absent 而非崩溃",
-    st.whatsapp.status === "absent" && st.messenger.status === "absent");
+    st.whatsapp.status === "absent" && st.messenger.status === "absent" && st.qq.status === "absent");
+  // 单边车重启（连接弹窗「重启连接服务」）：未知名字不抛；已知名字 stop→start 并回状态
+  const bad = await all.restart("nope", {});
+  ok("重启未知边车 → ok:false 不抛", bad.ok === false && /unknown/.test(bad.error));
+  const again = await all.restart("qq", {});
+  ok("重启 qq 边车回状态（缺包仍 absent，但流程走通）",
+    again && again.status && again.status.name === "qq");
   all.stopAll(); // 不该抛
   console.log(`✓ sidecar-launcher: ${pass} 项断言全过`);
 })();

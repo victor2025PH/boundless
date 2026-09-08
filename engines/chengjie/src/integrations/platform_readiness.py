@@ -267,17 +267,23 @@ def _sidecar_blockers(
 def _qq_protocol_blockers(
     config: Dict[str, Any], service_ok: Optional[bool],
 ) -> List[Dict[str, Any]]:
-    """QQ 协议登录（个人号）：开关 + 协议端可达性。
+    """QQ 协议登录（个人号）：开关 + 自研连接边车可达性 + 本机 QQ 是否已安装。
 
-    协议端（NapCat / LLOneBot / Lagrange.Milky）由用户自装——「开关没开」的处置不是翻开关
-    而是先装协议端、填 Milky 地址/Token，故归 needs_server_setup（与 Zalo/IG 个人号同口径）。
+    连接边车（``services/qq-personal``）随桌面壳打包、由壳自动拉起，用户不需自装任何东西，
+    故「开关没开」＝单纯没启用（``BLOCK_NOT_ENABLED``，翻开关即可）。边车起来了但探测到本机
+    未安装 QQ → ``qq_not_installed``（可操作：一键下载 QQ）；边车不可达 → ``service_down``
+    （可操作：重启连接服务）。QQ 安装态由边车 ``/health.qq_installed`` 透出，经
+    ``check_qq_milky_reachable`` 的探测结果传入 ``service_ok`` 之外的 ``qq_installed`` 旁路。
     """
     from src.integrations.qq_milky import protocol_enabled, service_base_url
     out: List[Dict[str, Any]] = []
     if not protocol_enabled(config):
-        out.append(_blocker(BLOCK_NEEDS_SERVER_SETUP, svc="qq-milky"))
+        out.append(_blocker(BLOCK_NOT_ENABLED, svc="qq-personal"))
     elif service_ok is False:
-        out.append(_blocker(BLOCK_SERVICE_DOWN, svc="qq-milky", url=service_base_url(config)))
+        out.append(_blocker(BLOCK_SERVICE_DOWN, svc="qq-personal", url=service_base_url(config)))
+    elif service_ok is None:
+        # 探测未跑（如 diagnose_mode 未传 service_ok）——不误报，交由前端 poll 实时判定
+        pass
     return out
 
 

@@ -284,6 +284,18 @@
   border-color:color-mix(in srgb, var(--tk-amber,#f59e0b) 45%, transparent);color:var(--tk-warn-ink,#b45309);}
 /* 失败遮罩的行动指针副行（主行=哪一环坏了，副行=下一步点哪）：mask 本体是 column flex */
 .connect-qr-mask .cqm-sub{font-size:11px;color:var(--text-sub);max-width:210px;line-height:1.5;}
+/* QQ 个人号一次性风险须知（画进二维码遮罩位）：琥珀左边线 = 「需知情同意」而非故障 */
+.connect-qr-mask .qq-risk{display:flex;flex-direction:column;gap:8px;text-align:left;max-width:300px;
+  padding:12px 14px;border-radius:12px;background:var(--panel-2,var(--panel));
+  border-left:3px solid var(--tk-amber,#f59e0b);font-size:12px;line-height:1.55;color:var(--text);}
+.connect-qr-mask .qq-risk-hd{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px;color:var(--tk-warn-ink,#b45309);}
+.connect-qr-mask .qq-risk-list{margin:0;padding-left:16px;color:var(--text-sub);display:flex;flex-direction:column;gap:4px;}
+.connect-qr-mask .qq-risk-link{font-size:11px;color:var(--accent);text-decoration:underline;align-self:flex-start;}
+.connect-qr-mask .qq-risk-ack{display:flex;align-items:flex-start;gap:6px;font-weight:600;cursor:pointer;}
+.connect-qr-mask .qq-risk-ack input{margin-top:2px;}
+.connect-qr-mask .qq-risk-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px;}
+.connect-qr-mask .qq-risk-go:not([disabled]){background:var(--accent);color:#fff;border-color:var(--accent);}
+.connect-qr-mask .qq-risk-go[disabled]{opacity:.55;cursor:not-allowed;}
 @media (prefers-reduced-motion:reduce){ .connect-pin-bar-fill.low{animation:none;} }
 .connect-pin-bar-fill.low{background:var(--warn);}
 .connect-pin-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;}
@@ -25566,6 +25578,56 @@ function _renderConnectExpired(){
 }
 /* 终态失败统一渲染入口：遮罩/状态行/失败卡/技术详情四件套原子更新（start/poll/code 三条
    路径同走），杜绝「转圈+报错并存」。d 需带 reason_code，可选 cred_source/retry_after_sec/detail。 */
+/* ── QQ 个人号一次性风险须知（reason_code=needs_risk_ack）────────────────────────
+   画进二维码遮罩位：五条要点 + 完整协议链接 + 勾选框 + 「同意并开始扫码」/「改用 QQ 机器人」。
+   勾选前主按钮禁用；同意 → POST /api/platforms/qq/risk-consent → 成功后重新 startConnect
+   （后端此时 risk_acknowledged 为真，直接出码）。全部文案走 window.T（sealed 页禁内联 CJK）。 */
+function _renderQqRiskConsent(maskEl){
+  if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
+  _stopConnectTtl();
+  _setConnectState('warn', window.T('inbox.connect.qq_risk_title'), '');
+  const qimg=document.getElementById('connect-qr-img');
+  if(qimg) qimg.style.display='none';
+  const mask=maskEl||document.getElementById('connect-qr-mask');
+  if(!mask) return;
+  // 显式列键（不拼接）：i18n 静态门禁按字面键核对双语，拼接会被当成半截键判缺
+  const pts=[window.T('inbox.connect.qq_risk_p1'), window.T('inbox.connect.qq_risk_p2'),
+    window.T('inbox.connect.qq_risk_p3'), window.T('inbox.connect.qq_risk_p4'),
+    window.T('inbox.connect.qq_risk_p5')].map(function(t){ return '<li>'+esc(t)+'</li>'; }).join('');
+  mask.style.display='flex';
+  mask.innerHTML=''
+    +'<div class="qq-risk" role="dialog" aria-labelledby="qq-risk-title">'
+    +  '<div class="qq-risk-hd" id="qq-risk-title"><span style="display:inline-flex;">'+uiIcon('alert',20)+'</span><span>'+esc(window.T('inbox.connect.qq_risk_title'))+'</span></div>'
+    +  '<ul class="qq-risk-list">'+pts+'</ul>'
+    +  '<a class="qq-risk-link" href="/help/qq-personal-agreement" target="_blank" rel="noopener">'+esc(window.T('inbox.connect.qq_risk_link'))+'</a>'
+    +  '<label class="qq-risk-ack"><input type="checkbox" id="qq-risk-ack-cb"> <span>'+esc(window.T('inbox.connect.qq_risk_ack'))+'</span></label>'
+    +  '<div class="qq-risk-actions">'
+    +    '<button type="button" class="connect-fail-report qq-risk-go" id="qq-risk-go" disabled>'+esc(window.T('inbox.connect.qq_risk_go'))+'</button>'
+    +    '<button type="button" class="connect-fail-report" id="qq-risk-alt">'+esc(window.T('inbox.connect.qq_risk_alt'))+'</button>'
+    +  '</div>'
+    +'</div>';
+  const cb=mask.querySelector('#qq-risk-ack-cb');
+  const go=mask.querySelector('#qq-risk-go');
+  const alt=mask.querySelector('#qq-risk-alt');
+  if(cb&&go) cb.addEventListener('change',function(){ go.disabled=!cb.checked; });
+  if(go) go.addEventListener('click',async function(){
+    go.disabled=true;
+    _uiBeacon('connect_qq_risk_ack');
+    try{
+      const r=await apiFetch('/api/platforms/qq/risk-consent',{method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},body:'{}'});
+      const j=await r.json().catch(function(){return {};});
+      if(!(r.ok&&j&&j.ok)){ go.disabled=false; showHint(window.T('inbox.connect.hint_failed')); return; }
+    }catch(_){ go.disabled=false; showHint(window.T('inbox.connect.hint_failed')); return; }
+    // 已确认：重新发起（后端此时出码）
+    mask.innerHTML=''; mask.style.display='none';
+    startConnect();
+  });
+  if(alt) alt.addEventListener('click',function(){
+    _uiBeacon('connect_qq_risk_alt');
+    closeConnect(); openConnect('qqbot');
+  });
+}
 function _renderConnectFailure(d){
   d=d||{};
   const rc=String(d.reason_code||'');
@@ -25973,6 +26035,13 @@ async function loadConnectModes(opts){
     if(modes.length===1 && !modes[0].available
         && String(modes[0].login_kind||'')==='credentials'){
       showModeUnavailable(String(modes[0].mode||''), {requick:!!(opts&&opts.recheck)});
+    }
+    // 单方式 && 可用且就绪 && 扫码形态（QQ 个人号：只有一种接法）：「选择」是伪步骤——
+    // 直接进二维码（风险须知/服务未起等由 startConnect 的 reason_code 分支接管）。
+    // 非 recheck 路径才自动跳（recheck 是用户在方式列表上按了重检，别把他弹走）。
+    if(modes.length===1 && modes[0].available && modes[0].ready!==false
+        && String(modes[0].login_kind||'')==='qr' && !(opts&&opts.recheck)){
+      chooseMode(String(modes[0].mode||''));
     }
   }catch(_){
     box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'+window.T('inbox.connect.modes_fail')+'</div>';
@@ -27089,6 +27158,13 @@ async function startConnect(extra){
     }
     if(!r.ok||!d.ok){
       const detail=(d&&(d.detail||d.error))||'';
+      // QQ 个人号一次性风险须知（非官方接入、有封号风险）：后端在未确认时回 needs_risk_ack，
+      // 这里把协议页画进二维码位（勾选同意 → POST risk-consent → 重新 start 出码）。只弹一次：
+      // 确认后 platform_login.qq.risk_acknowledged_at 落盘，之后直接出码。
+      if(String((d&&d.reason_code)||'')==='needs_risk_ack'){
+        _renderQqRiskConsent(maskEl);
+        return;
+      }
       // WA/Messenger 依赖本机 Node 连接服务(sidecar)；连不上时给「服务未运行 + 怎么启动」可操作引导，
       // 而不是甩一句原始错误。识别连接类错误关键词（后端 instruction 也常含服务地址）。
       if(_isSidecarDown(detail)){

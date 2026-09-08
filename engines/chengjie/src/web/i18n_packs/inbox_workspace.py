@@ -288,7 +288,7 @@ ZH = {
     # QQ 机器人（QQ 开放平台官方 API，2026-09-07）：与「QQ 协议登录」是两个独立渠道
     "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；准入区）：与「QQ 机器人」是两个独立渠道
-    "inbox.acct.note_qq": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
+    "inbox.acct.note_qq": "用你自己的 QQ 号：手机 QQ 扫码即接入（智聊内置连接，无需装其它程序）；可收发文字/图片/语音/视频，建议用小号",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -836,8 +836,8 @@ ZH = {
     "inbox.connect.mode_l_web": "网页扫码",
     "inbox.connect.mode_d_web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
     # QQ 协议登录（个人号；协议端 NapCat / LLOneBot / Lagrange 经 Milky 接口）：扫码在协议端里完成，本窗口只确认
-    "inbox.connect.mode_l_qq_protocol": "扫码登录（协议端）",
-    "inbox.connect.mode_d_qq_protocol": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码登录，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
+    "inbox.connect.mode_l_qq_protocol": "扫码登录",
+    "inbox.connect.mode_d_qq_protocol": "用你自己的 QQ 号：手机 QQ 扫本窗口二维码即接入（智聊内置连接，无需安装其它程序）；可收发文字/图片/语音/视频，建议用小号",
     # Zalo 个人号扫码（zca-js 边车）：与官方 OA 并列的第二路，能力更全
     "inbox.connect.mode_l_zalo_web": "扫码登录（个人号）",
     "inbox.connect.mode_d_zalo_web": "用你自己的 Zalo 账号扫码登录，可收发文字/图片/语音/贴纸；建议搭配小号与独立代理使用",
@@ -1212,13 +1212,24 @@ ZH = {
         "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
         "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。",
     "inbox.connect.instr_qq":
-        "请在你自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制台里用手机 QQ 扫码登录；"
-        "登录完成后本窗口会自动确认并把该 QQ 号接入。",
+        "用手机 QQ 扫描本窗口二维码即可接入（智聊内置连接，无需安装其它程序）；"
+        "扫码后在手机上确认，本窗口会自动完成登录。",
+    "inbox.connect.instr_qq_risk":
+        "QQ 个人号为非官方接入、有账号风控风险。请先阅读并同意《QQ 个人号接入协议与风险须知》，同意后再扫码。",
+    "inbox.connect.qq_risk_title": "QQ 个人号 · 接入协议与风险须知",
+    "inbox.connect.qq_risk_p1": "这是「用你自己的 QQ 号」接入，属于非官方自动化，可能不符合腾讯服务条款。",
+    "inbox.connect.qq_risk_p2": "个人号自动化存在被限制功能、临时冻结乃至永久封号的风险；新号、低活跃号、高频发送风险更高。",
+    "inbox.connect.qq_risk_p3": "强烈建议使用专门的运营小号，不要用主号；托管期间请勿在本机 QQ 再登同一个号。",
+    "inbox.connect.qq_risk_p4": "计费与其它渠道一致：AI 自动回复、翻译、语音等按 Token 从钱包扣减；人工手动发送免费。",
+    "inbox.connect.qq_risk_p5": "因使用本渠道导致的封号、数据丢失等损失，风险由你自行承担。",
+    "inbox.connect.qq_risk_link": "查看完整协议",
+    "inbox.connect.qq_risk_ack": "我已阅读并同意上述协议与风险须知",
+    "inbox.connect.qq_risk_go": "同意并开始扫码",
+    "inbox.connect.qq_risk_alt": "改用 QQ 机器人（官方接入，无此风险）",
     "inbox.connect.instr_qq_setup":
-        "未配置 QQ 协议端地址：请先到接入向导「QQ」卡填好协议端 Milky 地址（与 Token），再回来接入。",
+        "QQ 连接服务尚未就绪：请稍候片刻让智聊内置连接组件启动，再点「重新开始」。",
     "inbox.connect.instr_qq_down":
-        "无法连接 QQ 协议端：请确认 NapCat / LLOneBot / Lagrange 已启动、Milky 服务地址与 Token 正确，"
-        "然后点「重新开始」。",
+        "无法连接 QQ 连接服务：请点「重新开始」，或到设置里重启连接服务后再扫码。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2072,7 +2083,7 @@ ZH = {
     "inbox.plat.whatsapp_desc": "Web 扫码接入 · 支持多账号 · 媒体收发",
     "inbox.plat.zalo_desc": "Zalo OA 官方 API 接入 · 客服消息（7 天互动窗）· 填凭证即用（无扫码）",
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
-    "inbox.plat.qq_desc": "QQ 个人号（协议登录）· 用你自己的 QQ 号 · 文字/图片/语音/视频 · 需自装协议端（NapCat / LLOneBot / Lagrange）",
+    "inbox.plat.qq_desc": "QQ 个人号 · 用你自己的 QQ 号 · 文字/图片/语音/视频 · 智聊内置连接，扫码即用",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
     "inbox.plat_pause.multi": "AI 出多选草稿，人工挑选发送",
@@ -3225,7 +3236,7 @@ EN = {
     "inbox.acct.note_instagram": "Official API onboarding: paste the Page credentials of your Facebook developer app — no QR needed",
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
     "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
-    "inbox.acct.note_qq": "Your own QQ account: scan the QR in your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
+    "inbox.acct.note_qq": "Your own QQ account: just scan the QR with your phone's QQ (built-in connector, no extra app to install). Text / image / voice / video; a secondary account is recommended",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3750,9 +3761,9 @@ EN = {
     "inbox.connect.mode_d_protocol": "Direct protocol connection; run many accounts on one machine, lightest on resources",
     "inbox.connect.mode_l_web": "Web QR",
     "inbox.connect.mode_d_web": "Isolated browser + the platform’s web QR code; broad compatibility, more human-like",
-    # QQ protocol login (personal account; NapCat / LLOneBot / Lagrange via Milky): the scan happens inside the endpoint, this window only confirms
-    "inbox.connect.mode_l_qq_protocol": "Scan to log in (protocol endpoint)",
-    "inbox.connect.mode_d_qq_protocol": "Your own QQ account: scan the QR inside your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
+    # QQ protocol login (personal account): built-in connector injects the local QQ client; scan happens right in this window
+    "inbox.connect.mode_l_qq_protocol": "Scan to log in",
+    "inbox.connect.mode_d_qq_protocol": "Your own QQ account: scan the QR in this window with your phone's QQ (built-in connector, no extra app). Text / image / voice / video; a secondary account is recommended",
     # Zalo personal-account QR (zca-js sidecar): a second path alongside the official OA — fuller capability
     "inbox.connect.mode_l_zalo_web": "Scan to log in (personal account)",
     "inbox.connect.mode_d_zalo_web": "Log in by scanning with your own Zalo account; send/receive text, images, voice and stickers. Works best with a secondary account plus a dedicated proxy.",
@@ -4144,15 +4155,27 @@ EN = {
         "the Setup Wizard and it goes online automatically — no QR scan. Production requires an "
         "IP allowlist on the Open Platform; use the sandbox first while testing.",
     "inbox.connect.instr_qq":
-        "Scan the QR with your phone's QQ inside your self-hosted QQ protocol endpoint "
-        "(NapCat / LLOneBot / Lagrange WebUI or console); once logged in, this window confirms "
-        "automatically and connects that QQ account.",
+        "Scan the QR in this window with your phone's QQ to connect (built-in connector, no extra "
+        "app to install); confirm on your phone and this window finishes the login automatically.",
+    "inbox.connect.instr_qq_risk":
+        "QQ personal accounts use an unofficial integration and carry an account-restriction risk. "
+        "Please read and accept the QQ Personal Account Agreement & Risk Notice before scanning.",
+    "inbox.connect.qq_risk_title": "QQ Personal Account · Agreement & Risk Notice",
+    "inbox.connect.qq_risk_p1": "This connects your own QQ account via unofficial automation, which may not comply with Tencent's terms of service.",
+    "inbox.connect.qq_risk_p2": "Automating a personal account risks feature limits, temporary freezes or a permanent ban; new, low-activity or high-volume accounts are at higher risk.",
+    "inbox.connect.qq_risk_p3": "Strongly recommended: use a dedicated secondary account, never your main one; don't log the same account into QQ on this PC while it is managed here.",
+    "inbox.connect.qq_risk_p4": "Billing is the same as every other channel: AI replies, translation, voice etc. deduct Tokens from your wallet; manual sends are free.",
+    "inbox.connect.qq_risk_p5": "Any ban, data loss or other damage arising from this channel is at your own risk.",
+    "inbox.connect.qq_risk_link": "Read the full agreement",
+    "inbox.connect.qq_risk_ack": "I have read and accept the agreement and risk notice above",
+    "inbox.connect.qq_risk_go": "Accept and start scanning",
+    "inbox.connect.qq_risk_alt": "Use QQ Bot instead (official API, no such risk)",
     "inbox.connect.instr_qq_setup":
-        "No QQ protocol endpoint configured: fill the Milky address (and token) on the “QQ” card "
-        "in the Setup Wizard first, then come back to connect.",
+        "The QQ connector isn't ready yet: give the built-in connector a moment to start, "
+        "then click “Start over”.",
     "inbox.connect.instr_qq_down":
-        "Cannot reach the QQ protocol endpoint: make sure NapCat / LLOneBot / Lagrange is running "
-        "and the Milky address / token are correct, then click “Start over”.",
+        "Cannot reach the QQ connector service: click “Start over”, or restart the connector "
+        "service in Settings and scan again.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -4977,7 +5000,7 @@ EN = {
     "inbox.plat.whatsapp_desc": "QR web login · multi-account · media send/receive",
     "inbox.plat.zalo_desc": "Zalo OA official API · CS messages (7-day window) · credentials only (no QR)",
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
-    "inbox.plat.qq_desc": "QQ personal account (protocol login) · your own QQ number · text / image / voice / video · needs a self-hosted protocol endpoint (NapCat / LLOneBot / Lagrange)",
+    "inbox.plat.qq_desc": "QQ personal account · your own QQ number · text / image / voice / video · built-in connector, just scan to use",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",
     "inbox.plat_pause.multi": "AI proposes multiple drafts; a human picks one to send",

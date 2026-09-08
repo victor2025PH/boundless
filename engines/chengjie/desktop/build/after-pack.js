@@ -99,6 +99,21 @@ const REQUIRED = [
     "Messenger 边车 package.json",
     'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
   ],
+  [
+    path.join("services", "qq-personal", "server.js"),
+    "QQ 个人号自研连接边车入口",
+    "「接入 QQ → 扫码登录」在客户机上永远 service_down",
+  ],
+  [
+    path.join("services", "qq-personal", "node_modules"),
+    "QQ 边车依赖",
+    "边车一起来就 MODULE_NOT_FOUND（构建机漏跑 npm ci）",
+  ],
+  [
+    path.join("services", "qq-personal", "package.json"),
+    "QQ 边车 package.json",
+    'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
+  ],
 ];
 
 // 导出给 test/package-layout.test.js 交叉核对：包内 require 跨出 asar 的每个目录，
@@ -126,6 +141,9 @@ const FORBIDDEN = [
     "本机 Messenger 浏览器 profile 与 cookie（含已登录的 Facebook 会话）",
   ],
   [path.join("services", "messenger-web", "logs"), "本机运行日志"],
+  [path.join("services", "qq-personal", "qq-sessions"), "本机 QQ 登录凭据（随包＝把自己的 QQ 会话发给每个用户）"],
+  [path.join("services", "qq-personal", "qq-runtime"), "按需下载的 QQ 客户端运行时（体积巨大且属腾讯，绝不随包）"],
+  [path.join("services", "qq-personal", "logs"), "本机运行日志"],
   // J-9 #184（2026-09-05）：生产机 KB 快照曾随内测包出门，用户首装就多出 ~110 条
   // 厂商自家产品说明污染知识库、AI 对客推销厂商产品。KB 不再随任何形态的包走——
   // 首启由后端播 3 条格式示例（kb_store.seed_kb_format_examples，source=system，停用态）。

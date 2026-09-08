@@ -499,6 +499,8 @@ ipcMain.handle("desktop:backend-spawn-status", () => backendManager.getStatus())
 
 // 边车拉起状态：接入弹窗排障用（absent=没随包 / failed=起不来 / running-external=用户自管）。
 ipcMain.handle("desktop:sidecar-status", () => sidecars.getStatus());
+// 重启单个边车（连接弹窗 service_down 的「重启连接服务」按钮；QQ 个人号自研边车首个消费方）。
+ipcMain.handle("desktop:sidecar-restart", (_e, name) => sidecars.restart(String(name || ""), config));
 
 // #57 手机扫码操控（2026-08-30）：一键放行 Windows 防火墙（弹一次 UAC）。
 // 绑定侧已由 backend-launcher.lanServeHost 解决（强令牌默认 0.0.0.0）；剩下的

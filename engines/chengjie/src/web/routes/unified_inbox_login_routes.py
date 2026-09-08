@@ -229,6 +229,48 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         await _diagnose_modes(platform, modes, force=bool(recheck))
         return {"ok": True, "platform": platform, "modes": modes}
 
+    @app.get("/help/qq-personal-agreement")
+    async def qq_personal_agreement_page(request: Request):
+        """《QQ 个人号接入协议与风险须知》全文页（登录后可看）。
+
+        docs/ 目录不随桌面包分发——文件在就渲染 Markdown 原文（<pre> 保留结构），不在则回落
+        i18n 五要点，绝不 404（协议页 404 比没有协议更糟：用户会认为我们藏着掖着）。
+        """
+        api_auth(request)
+        from pathlib import Path as _P
+        from fastapi.responses import HTMLResponse
+        import html as _html
+        doc = _P(__file__).resolve().parents[3] / "docs" / "QQ个人号接入协议与风险须知.md"
+        if doc.is_file():
+            body = "<pre style='white-space:pre-wrap;font:14px/1.7 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;'>" \
+                + _html.escape(doc.read_text(encoding="utf-8")) + "</pre>"
+        else:
+            pts = "".join(f"<li>{_html.escape(tr(request, 'inbox.connect.qq_risk_p' + str(i)))}</li>"
+                          for i in range(1, 6))
+            body = (f"<div style='font:14px/1.7 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;'>"
+                    f"<h2>{_html.escape(tr(request, 'inbox.connect.qq_risk_title'))}</h2><ol>{pts}</ol></div>")
+        return HTMLResponse(f"<!doctype html><meta charset='utf-8'><title>QQ</title>{body}")
+
+    @app.post("/api/platforms/qq/risk-consent")
+    async def api_qq_risk_consent(request: Request):
+        """记录 QQ 个人号一次性风险须知的确认（写 platform_login.qq.risk_acknowledged_at）。
+
+        个人号是非官方接入、有封号风险（见 docs/QQ个人号接入协议与风险须知.md）：登录 provider
+        在 risk_acknowledged 为假时返回 reason_code=needs_risk_ack，前端弹协议页；用户勾选同意
+        调本端点后再重新发起扫码。仅记录时间戳，不改其它开关。
+        """
+        api_auth(request)
+        if config_manager is None:
+            return {"ok": False, "detail": tr(request, "err.svc.config_manager_not_ready")}
+        import time as _t
+        try:
+            ok = config_manager.save_overlay_patch(
+                {"platform_login": {"qq": {"risk_acknowledged_at": int(_t.time())}}})
+        except Exception:  # noqa: BLE001
+            logger.debug("[qq] 风险确认写盘失败", exc_info=True)
+            ok = False
+        return {"ok": bool(ok)}
+
     @app.get("/api/platforms/telegram/login/preflight")
     async def api_tg_login_preflight(request: Request, force: int = 0):
         """Telegram 直连可达性预检（P1-⑥，2026-08-10 事故链）。

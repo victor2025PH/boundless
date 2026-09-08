@@ -38,7 +38,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 
 def _cfg(**over) -> Dict[str, Any]:
-    qq = {"protocol_enabled": True, "milky_url": "http://127.0.0.1:3000", "milky_token": "TOK"}
+    # risk_acknowledged_at>0：一次性风险须知已确认（provider 才出码；未确认走 needs_risk_ack 分支另测）
+    qq = {"protocol_enabled": True, "milky_url": "http://127.0.0.1:3000", "milky_token": "TOK",
+          "risk_acknowledged_at": 1_700_000_000}
     qq.update(over)
     return {"platform_login": {"qq": qq, "orchestrator_enabled": True}}
 
@@ -231,7 +233,7 @@ async def test_worker_healthy_not_logged_in_reports_needs_login(monkeypatch):
     http = _FakeHttp({"get_login_info": (200, {"status": "failed", "retcode": -403, "message": "未登录"})})
     w = _worker(http)
     assert await w.healthy() is False
-    assert ("qq", "10001", "needs_login") in reports and "未登录" in w.detail
+    assert ("qq", "10001", "needs_login") in reports and "重新扫码" in w.detail
     http2 = _FakeHttp({"get_login_info": (0, {"error": "conn refused"})})
     w2 = _worker(http2)
     w2._health_ts = 0
@@ -438,6 +440,79 @@ async def test_probe_login_states():
     assert (await L.probe_login(down))["state"] == "down"
 
 
+def test_risk_acknowledged_tri_state():
+    assert M.risk_acknowledged({}) is False
+    assert M.risk_acknowledged(_cfg(risk_acknowledged_at=0)) is False
+    assert M.risk_acknowledged(_cfg(risk_acknowledged_at="bad")) is False
+    assert M.risk_acknowledged(_cfg()) is True
+
+
+async def test_provider_requires_risk_ack_before_qr(monkeypatch):
+    """个人号一次性风险须知：未确认 → reason_code=needs_risk_ack 早退，不拉码、不探协议端。"""
+    http = _FakeHttp({"get_login_info": {"uin": 10001, "nickname": "小Q"}})
+    monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=http))
+    info = await L.make_provider(_cfg(risk_acknowledged_at=0))(None, "qq", "protocol", "")
+    assert info["reason_code"] == L.REASON_NEEDS_RISK_ACK and "poll" not in info
+    assert info["instruction_key"] == "inbox.connect.instr_qq_risk"
+    assert http.calls == [], "未确认风险须知时不得打协议端"
+
+
+async def test_provider_start_returns_qr_and_poll_refreshes_it(monkeypatch):
+    """login_kind=qr：start 即带 qr_image（首帧有码）；未登录时 poll 持续下发新码；登录后 authorized。"""
+    state = {"logged": False}
+
+    async def http(method, url, *, headers, payload, timeout):
+        api = url.rsplit("/", 1)[-1]
+        if api == "get_login_info":
+            if state["logged"]:
+                return 200, {"status": "ok", "retcode": 0, "data": {"uin": 10001, "nickname": "小Q"}}
+            return 200, {"status": "failed", "retcode": -403, "message": "未登录"}
+        if api == "x_get_login_qrcode":
+            return 200, {"status": "ok", "retcode": 0,
+                         "data": {"qr_png_base64": "AAAA", "qr_url": "x://q", "expire_sec": 120}}
+        return 404, {}
+    monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=http))
+
+    async def fake_enrich(*a, **k):
+        return None
+    import src.integrations.account_self_profile as ASP
+    monkeypatch.setattr(ASP, "enrich_from_fields", fake_enrich)
+    info = await L.make_provider(_cfg())(None, "qq", "protocol", "")
+    assert info["qr_image"] == "data:image/png;base64,AAAA" and info["qr_expire_sec"] == 120
+    assert info["instruction_key"] == "inbox.connect.instr_qq"
+    p1 = await info["poll"](None)
+    assert p1["status"] == "pending" and p1["qr_image"].startswith("data:image/png;base64,")
+    assert p1.get("qr_expire_sec") == 120
+    state["logged"] = True
+    p2 = await info["poll"](None)
+    assert p2["status"] == "authorized" and p2["account_id"] == "10001"
+
+
+def test_risk_consent_endpoint_and_agreement_page(tmp_path):
+    """POST /api/platforms/qq/risk-consent 写 risk_acknowledged_at；GET /help/qq-personal-agreement 200。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.web.routes.unified_inbox_login_routes import register_platform_login_routes
+
+    class _CM:
+        config: Dict[str, Any] = {"platform_login": {"qq": {"protocol_enabled": True}}}
+        saved: List[Dict[str, Any]] = []
+
+        def save_overlay_patch(self, patch, *, replace_paths=()):
+            self.saved.append(patch)
+            return True
+    cm = _CM()
+    app = FastAPI()
+    register_platform_login_routes(app, api_auth=lambda r: None, config_manager=cm)
+    c = TestClient(app)
+    r = c.post("/api/platforms/qq/risk-consent")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    ts = cm.saved[-1]["platform_login"]["qq"]["risk_acknowledged_at"]
+    assert isinstance(ts, int) and ts > 1_700_000_000
+    page = c.get("/help/qq-personal-agreement")
+    assert page.status_code == 200 and "QQ" in page.text and "风险" in page.text
+
+
 async def test_provider_authorizes_and_persists_meta(monkeypatch):
     http = _FakeHttp({"get_login_info": {"uin": 10001, "nickname": "小Q"}})
     monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", "TOK", http=http))
@@ -467,7 +542,7 @@ async def test_provider_pending_when_not_logged_in_and_early_exit_when_down(monk
     info = await L.make_provider(_cfg())(None, "qq", "protocol", "")
     assert "reason_code" not in info
     res = await info["poll"](None)
-    assert res["status"] == "pending" and "尚未登录" in res["detail"]
+    assert res["status"] == "pending" and "未扫码登录" in res["detail"]
     down = _FakeHttp({"get_login_info": (0, {"error": "refused"})})
     monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=down))
     info2 = await L.make_provider(_cfg())(None, "qq", "protocol", "")
@@ -489,13 +564,13 @@ def test_maybe_register_gated_by_switch(monkeypatch):
 def test_qq_registered_everywhere():
     assert "qq" in SUPPORTED_PLATFORMS
     assert DEFAULT_PLATFORM_MODES["qq"] == {"modes": ["protocol"], "default": "protocol"}
-    assert login_kind("qq", "protocol") == "device", "扫码在协议端里完成，本窗口只等账号上线"
+    assert login_kind("qq", "protocol") == "qr", "扫码在本窗口完成（自研连接边车驱动本机 QQ）"
     assert ("qq", "protocol") in PR._IMPLEMENTED_MODES
     assert PLATFORM_INSTRUCTION_KEYS["qq"] == "inbox.connect.instr_qq"
     modes = list_modes("qq", {"protocol_enabled": True})
     assert [m["mode"] for m in modes] == ["protocol"]
     m = modes[0]
-    assert m["label_key"] == "inbox.connect.mode_l_qq_protocol" and m["login_kind"] == "device"
+    assert m["label_key"] == "inbox.connect.mode_l_qq_protocol" and m["login_kind"] == "qr"
     assert m["notice"] == {"key": "inbox.connect.notice_unofficial", "severity": "info"}
     # 能力矩阵：worker 登记 + 入站接线点可找到 + 群/媒体接线为真 + typing 属协议层硬限制
     assert ("qq", "protocol", "src.integrations.qq_milky", "QQPersonalWorker") in PC.WORKERS
@@ -522,19 +597,17 @@ def test_qq_channel_card_and_readiness():
     assert ch is not None and ch.login_platform == "qq" and ch.login_required is True
     assert ch.enable_key == "platform_login.qq.protocol_enabled"
     assert ch.login_notice_key == "inbox.connect.notice_unofficial" and ch.official_platform == ""
-    keys = {f.key for f in ch.fields}
-    assert keys == {"platform_login.qq.milky_url", "platform_login.qq.milky_token"}
-    src = (_ROOT / "src" / "integrations" / "qq_milky.py").read_text(encoding="utf-8")
-    for f in ch.fields:
-        leaf = f.key.rsplit(".", 1)[-1]
-        assert f'.get("{leaf}")' in src, f"向导字段 {f.key} 在 qq_milky.py 找不到对应读取"
+    # 自研连接边车随桌面壳打包、扫码即用——用户不填地址/token，故 qq 卡无字段
+    assert [f.key for f in ch.fields] == []
     st = next(c for c in channel_status({}) if c["id"] == "qq")
-    assert st["paths"]["login"] is not None and st["paths"]["api"]["is_transport"] is False
+    # 无字段卡：只有 login 路径，无 api/config 路径（用户不填地址/token）
+    assert st["paths"]["login"] is not None and st["paths"].get("api") is None
     assert st["ready"] is False
     on = next(c for c in channel_status(_cfg(), accounts_by_platform={"qq": 1}) if c["id"] == "qq")
     assert on["ready"] is True and on["ready_by"] == "login"
     d = PR.diagnose_mode("qq", "protocol", {})
-    assert d["ready"] is False and d["reason_code"] == PR.BLOCK_NEEDS_SERVER_SETUP
+    # 连接边车随桌面壳打包、翻开关即用——没开＝单纯没启用（not_enabled），不是需运维配置
+    assert d["ready"] is False and d["reason_code"] == PR.BLOCK_NOT_ENABLED
     d2 = PR.diagnose_mode("qq", "protocol", _cfg(), service_ok=False)
     assert d2["reason_code"] == PR.BLOCK_SERVICE_DOWN
     d3 = PR.diagnose_mode("qq", "protocol", _cfg(), service_ok=True)

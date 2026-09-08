@@ -125,6 +125,9 @@ class FakeMilky:
         if api in ("mark_message_as_read", "recall_private_message", "recall_group_message",
                    "kick_group_member", "set_group_name", "accept_friend_request"):
             return self._ok({})
+        if api == "x_get_login_qrcode":   # 智聊自研边车扩展：拉登录二维码
+            self.qr_pulls = getattr(self, "qr_pulls", 0) + 1
+            return self._ok({"qr_png_base64": "iVBORw0KGgo=", "qr_url": "x://qq/login", "expire_sec": 120})
         return web.Response(status=404)
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -188,7 +191,9 @@ async def milky():
 
 def _qq_cfg(srv: FakeMilky) -> Dict[str, Any]:
     return {"platform_login": {"qq": {"protocol_enabled": True, "milky_url": srv.base,
-                                      "milky_token": srv.token}}}
+                                      "milky_token": srv.token,
+                                      # 一次性风险须知已确认（未确认 provider 走 needs_risk_ack，单测另测）
+                                      "risk_acknowledged_at": 1_700_000_000}}}
 
 
 # ──────────────────────── qq 个人号：入站→收件箱→出站 全链路 ────────────────────────
@@ -362,10 +367,13 @@ async def test_qq_login_provider_readiness_and_wizard_over_real_http(milky, monk
     assert row and row["status"] == "online" and row["mode"] == "protocol"
     assert row["meta"]["milky_url"] == milky.base and row["meta"]["milky_token"] == "tok"
 
-    # 协议端在、QQ 未登录 → pending（用户去协议端 WebUI 扫码）
+    # 边车在、QQ 未登录 → start 首帧就带二维码（login_kind=qr，扫码在本窗口）；poll 持续 pending 并刷新码
     milky.logged_in = False
     info2 = await L.make_provider(cfg)(None, "qq", "protocol", "")
-    assert (await info2["poll"](None))["status"] == "pending"
+    assert info2["qr_image"].startswith("data:image/png;base64,") and info2["qr_expire_sec"] == 120
+    p = await info2["poll"](None)
+    assert p["status"] == "pending" and p["qr_image"].startswith("data:image/png;base64,")
+    assert getattr(milky, "qr_pulls", 0) >= 2
     milky.logged_in = True
 
     # 诊断探针 + readiness：真 HTTP 探到假协议端 → 可用；关掉服务 → service_down
@@ -386,7 +394,8 @@ async def test_qq_login_provider_readiness_and_wizard_over_real_http(milky, monk
     assert {"qq", "qqbot", "zalo"} <= set(by_id)
     qq, qqbot, zalo = by_id["qq"], by_id["qqbot"], by_id["zalo"]
     assert qq.login_required and qq.login_platform == "qq"
-    assert {f.key for f in qq.fields} == {"platform_login.qq.milky_url", "platform_login.qq.milky_token"}
+    # 自研连接边车：用户不填地址/token，qq 卡无字段（扫码即用）
+    assert [f.key for f in qq.fields] == []
     assert qqbot.official_platform == "qqbot" and qqbot.console_url == "https://q.qq.com/"
     assert {f.key for f in qqbot.fields} >= {"qqbot.app_id", "qqbot.app_secret"}
     assert type(qqbot) is type(zalo)
@@ -898,6 +907,25 @@ def test_parity_msgops_revoke_and_persona_binding_and_channel_policy():
     assert cap_max_parts_for_platform(3, "qqbot") == 1
     assert window_rule("qq") is None and cap_max_parts_for_platform(3, "qq") == 3
     assert policy_for("qqbot").buttons is False
+
+
+def test_parity_billing_qq_personal_is_metered_like_every_platform():
+    """按 Token 计费口径：AI 回复的计量在 ai_client 的单一出口（record_action_for_status("ai_reply")），
+    与平台无关——QQ 个人号不需要也**不得**有专门分支/白名单。这里钉两件事：
+    ① 费率表里 ai_reply 有价（10 Token/条）；② 计量出口不按平台分叉（源码里没有 platform 判定）。"""
+    from src.licensing.token_ledger import TOKEN_RATES, tokens_for
+    assert TOKEN_RATES["ai_reply"]["tokens"] > 0 and tokens_for("ai_reply", 1) == 10
+    src = _read("src/ai/ai_client.py")
+    i = src.index('record_action_for_status("ai_reply", 1)')
+    window = src[max(0, i - 1200): i]
+    for forbidden in ('platform ==', 'platform in', '"qq"', '"qqbot"', "'qq'"):
+        assert forbidden not in window, f"ai_reply 计量出口不得按平台分叉：{forbidden}"
+    # 风险须知与协议文案五要点齐全（ZH/EN），并明说「与其它渠道一致按 Token 计费」
+    from src.web.i18n_packs.inbox_workspace import EN, ZH
+    for i in range(1, 6):
+        assert f"inbox.connect.qq_risk_p{i}" in ZH and f"inbox.connect.qq_risk_p{i}" in EN
+    assert "Token" in ZH["inbox.connect.qq_risk_p4"] and "Token" in EN["inbox.connect.qq_risk_p4"]
+    assert (ROOT / "docs" / "QQ个人号接入协议与风险须知.md").is_file()
 
 
 def test_parity_frontend_tables_and_i18n():
