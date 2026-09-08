@@ -1,7 +1,7 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "1.0.77",
-  "displayVersion": "1.077",
+  "version": "1.0.78",
+  "displayVersion": "1.078",
   "private": true,
   "description": "智聊 ChatX · 多平台 AI 聊天与成交桌面端 · 无界科技 BOUNDLESS",
   "main": "main.js",
@@ -117,6 +117,17 @@
           "!_state_shot.png",
           "!node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/**",
           "!node_modules/playwright-core/.local-browsers/ffmpeg-*/**"
+        ]
+      },
+      {
+        "from": "../services/qq-personal",
+        "to": "services/qq-personal",
+        "filter": [
+          "**/*",
+          "!qq-sessions/**",
+          "!qq-runtime/**",
+          "!logs/**",
+          "!test/**"
         ]
       }
     ],

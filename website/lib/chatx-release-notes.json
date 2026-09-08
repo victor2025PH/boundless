@@ -1,5 +1,47 @@
 [
   {
+    "version": "1.0.78",
+    "date": "2026-09-08",
+    "title": {
+      "zh": "反识破与停联硬停：客户说停最多一句告别、出站去 AI 标点与客服腔、拟人程度三档、引用回复、记忆抽取基线、摸底目标主动问",
+      "en": "Anti-detection and hard stop: one farewell when a customer says stop, de-AI punctuation and tone, human-likeness levels, quote replies, memory extraction baseline, discovery goals that actually ask"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "客户明确要求停联（please stop / never write me again / 别再发了 / 再发就拉黑）后最多只回一句告别，随即冻结该会话：不再起草、不主动关怀、不推工作目标，切人工并在会话列表打「客户要求停联」标签，通知中心一条升级；解除由坐席在标签面板摘除并拨回档位。高风险稿在全自动档下转人工审而不再直发。",
+        "出站文本确定性去 AI 痕迹：破折号 / 分号 / 弯引号 / 省略号 / 列表与粗体 / 句尾反问（isn't it / 对吧）/ 结尾总结感悟句全部改成人话，默认最多两句；人工手发与原文直发不动。每条出站一行 [outbound] 日志（标点 / 句式修了几处、指纹、前 40 字）；发版门禁 200 条样例零破折号零分号零总结尾句。",
+        "陪伴机的私人聊天底稿换成第一人称真人口吻，不再是客服 / 助理底稿；客服腔守卫：I hear you / Take care / 我的助理 / 如有需要 / 您 之类句子先确定性改写一次，改不掉的转人工审，日志 [persona-guard]。销售机不受影响。",
+        "记忆抽取基线：干净包首装即带可抽取意图白名单（direct_chat / small_talk / greeting / complaint），记忆不再从安装第一天起静默不抽；启动日志说真话——白名单为空时写 WARNING「记忆不会新增」而不是「已启用」。",
+        "人工接管期间你亲手回客户的那一轮，客户说的约定 / 事实同样进该客户记忆（日志 [episodic] … source=manual_out）。",
+        "私事只进该客户的记忆：生日 / 具体时间地点的约定 / 个人情况不会进共享知识库；「你们周六营业吗」这类业务问题照旧可进知识库；学习页私事标签多四类（生日 / 具体时间 / 具体地点 / 个人情况）。",
+        "AI 记忆页顶部新增「自安装以来新增 N 条 · 今日 +T · 已转正 P · 已收客户消息 I 条」；收到 ≥50 条客户消息仍零新增时红字「记忆没有在增长」并链到日志页。",
+        "摸底目标主动腿修好：第 1 天起每天至少自然问一个未填项（客户 30 分钟内 ≥5 条时提前）；客户提到下雨 / 时差 / 上班 / 爸妈 这类话头时本轮必须顺着问对应那一项，没问出来下一轮重问；只有真问出问题才算当天已推进，客户越活跃越不问的死循环解除；看门狗不再把「还没到出手时刻」喊成卡住。",
+        "目标卡片改成三个诚实计数「注入 N 次 · 主动出手 N 次（已 H 小时）· 已采集 N/M · 问出 a 次 / 没问出 m 次」，到了该出手的时刻仍零才标红；画像采集不可用时黄条写出真实原因；新增「现在就问一个」按钮：预览会问哪一项与示例句，点一下 AI 用对方语言顺着最近话题问出去，计入主动出手。",
+        "引用回复规则引擎（Telegram / WhatsApp）：连发 ≥2 条回其中最相关一条、回 30 分钟前的旧消息必引；10–15% 随机基线且每个会话习惯不同；2 分钟内短答 / 连引两条歇两条 / 每小时 ≤6 / 引自己仅补充上一条 禁引；每条出站一行 [quote] 日志。自动回复设置 → 回复节奏与拟人细节 →「引用回复」开关默认开。",
+        "拟人节奏「拟人程度」三档：自动回复设置顶部一键 自然（默认）/ 偏快 / 偏慢，回复按「先读、再想、按手速打字、发出前停一下正在输入」出牌，快慢随字数变、无两条到秒相同，起草到发出不再固定 12–13 秒；出厂档自动补成「自然」（自己改过的不动）；客户连发多条等 8–15 秒合并只回一次；陌生人首条 / 沉寂 6 小时以上后的首回慢 1–5 分钟；凌晨 1 点到早 8 点不自动回、8 点后 0–40 分钟内补发（工作时间可改可关，危机消息穿透）；每条出站一行 [pacing] 日志带 composing 状态（Telegram / WhatsApp 真挂「正在输入」）。",
+        "账号名与人设名不一致时人设页红条提醒，Telegram / WhatsApp 一键按人设改账号名（LINE / Messenger 提示改人设名）；客户沉寂 3 天以上后的首回不再编「太忙 / 手机坏了」这类理由，命中即剥、只说「刚看到」。"
+      ],
+      "en": [
+        "When a customer explicitly asks us to stop (please stop / never write me again / block), at most one farewell line goes out and the conversation is frozen: no more drafts, no proactive care, no goal pushes; it switches to manual, gets a \"customer asked to stop\" tag in the list and one escalation in the notification center; an agent lifts it from the tag panel and restores the mode. High-risk drafts on full-auto now go to human review instead of being sent.",
+        "Deterministic de-AI pass on every outbound text: em dashes / semicolons / curly quotes / ellipses / lists and bold / trailing rhetorical questions (isn't it) / closing summary lines are rewritten into plain speech, two sentences max by default; manually typed and verbatim sends are untouched. One [outbound] log line per message (punctuation / style fixes, fingerprint, first 40 chars); release gate: 200 samples with zero em dashes, semicolons or summary tails.",
+        "Companion machines get a first-person, human \"private chat\" system prompt instead of the support-desk script, plus a service-tone guard: sentences like \"I hear you\" / \"Take care\" / \"my assistant\" / \"feel free to\" are rewritten once, and drafts that cannot be fixed go to human review ([persona-guard] log). Sales machines are unaffected.",
+        "Memory extraction baseline: a clean install now ships the extractable-intent whitelist (direct_chat / small_talk / greeting / complaint), so memory no longer silently stays empty from day one; the startup log tells the truth (an empty whitelist logs a WARNING \"memory will not grow\" instead of \"enabled\").",
+        "While an agent has taken over, what the customer said in that round is extracted into that customer's memory when the agent replies by hand ([episodic] … source=manual_out).",
+        "Private facts stay in that customer's memory only: birthdays, concrete meeting times and places and personal details never go to the shared knowledge base, while business questions (\"are you open Saturday?\") still can; the learner page gains four private-fact badges (birthday / time / place / personal).",
+        "The AI memory page now shows \"N added since install · +T today · P promoted · I customer messages received\" at the top, with a red \"memory is not growing\" alert linking to the logs when 50+ inbound messages produced zero new memories.",
+        "Discovery goals now actually ask: from day 1 the plan carries at least one natural question per day (earlier when the customer sends 5+ messages in 30 minutes); when the customer mentions rain / time zone / work / parents the reply must ask the matching item, retried next turn if it did not; only a real question counts as today's beat, ending the \"the more active the customer, the less we ask\" loop; the watchdog no longer reports \"stalled\" before the first eligible moment.",
+        "Goal cards show three honest counters \"injected N · sent N (H hours) · captured N/M · asked a / missed m\", turning red only when the eligible moment has passed with zero sends; a yellow bar states the real reason when profile capture is unavailable; a new \"Ask one now\" button previews which item and an example line, then asks in the customer's language along the recent topic and counts as a proactive send.",
+        "Quote-reply rule engine (Telegram / WhatsApp): quoting is mandatory for bursts of 2+ messages (the most relevant one) and for replies to messages older than 30 minutes; a 10–15% random baseline that differs per conversation; no quoting for quick short answers within 2 minutes, after two quotes in a row, beyond 6 per hour, and self-quotes only as a follow-up; one [quote] log line per outbound. Auto-reply settings → pacing and human details → \"Quote reply\" switch, on by default.",
+        "Human-likeness levels for reply pacing: one click at the top of Auto-reply settings picks Natural (default) / Faster / Slower; replies now read first, then think, then type at a human speed and pause the typing bubble right before sending, so timing follows word count and no two replies land at the same second (no more fixed 12-13 s from draft to send); the factory level is backfilled to Natural on upgrade (your own choice is kept); bursts of customer messages wait 8-15 s and get one merged reply; the first reply to a stranger or after 6+ hours of silence takes 1-5 minutes; no auto-replies between 01:00 and 08:00 local, catching up 0-40 minutes after 08:00 (Working hours is editable and can be turned off; crisis messages still go through); one [pacing] log line per outbound with the composing state (Telegram / WhatsApp really show typing).",
+        "The persona page shows a red bar when an account's display name does not match its persona name, with a one-click rename to the persona on Telegram / WhatsApp (LINE / Messenger: rename the persona instead); the first reply after 3+ days of silence no longer invents excuses like \"buried in work\" or \"my phone died\" - they are stripped and the reply simply says \"just saw this\"."
+      ]
+    }
+  },
+  {
     "version": "1.0.77",
     "date": "2026-09-08",
     "title": {
