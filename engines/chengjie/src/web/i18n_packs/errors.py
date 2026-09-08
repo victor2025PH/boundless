@@ -103,6 +103,8 @@ ZH = {
     "err.inbox.sendfail.e2ee_pin": "加密会话未解锁：请先在该账号输入恢复 PIN，再一键重发这条消息",
     "err.inbox.sendfail.session": "平台会话已掉线：请到账号管理重新登录，再一键重发这条消息",
     "err.inbox.sendfail.channel": "发送通道异常（我方组件），失败详情已记录——可稍后一键重发",
+    # P-5 C（#259）：后端刚重启、适配器 client 还没连上——此前 502 只显「消息未送达：」空原因
+    "err.inbox.sendfail.adapter_not_ready": "适配器未就绪（后端启动中），这条没有发出去——等约 1 分钟后一键重发",
     # 投递被平台拒绝的人话映射（2026-08-20 内测工单 #3：语音发送失败裸报英文）
     "err.inbox.voice_peer_privacy": "对方在 Telegram 隐私设置里限制了接收语音消息，语音发不进去——请改发文字或图片（这不是系统故障）。",
     "err.inbox.send_peer_blocked": "对方与这个账号处于拉黑状态，消息无法送达。",
@@ -262,6 +264,7 @@ EN = {
     "err.inbox.sendfail.e2ee_pin": "Encrypted chat locked: enter this account's recovery PIN first, then resend the kept message",
     "err.inbox.sendfail.session": "Platform session offline: re-login from account management, then resend the kept message",
     "err.inbox.sendfail.channel": "Send channel error (our side) — details recorded; resend later with one click",
+    "err.inbox.sendfail.adapter_not_ready": "Adapter not ready (backend still starting up); the message was NOT sent — wait ~1 minute and resend with one click",
     "err.inbox.voice_peer_privacy": "The recipient's Telegram privacy settings block incoming voice messages — send text or an image instead (this is not a system fault).",
     "err.inbox.send_peer_blocked": "This account and the recipient have blocked each other; the message cannot be delivered.",
     "err.inbox.send_flood": "The platform rate-limited this account for sending too fast — wait a bit and avoid rapid consecutive sends.",

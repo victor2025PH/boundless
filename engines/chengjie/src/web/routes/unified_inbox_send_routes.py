@@ -387,6 +387,25 @@ def _result_undelivered(result: Any) -> str:
     return ""
 
 
+def _undelivered_reason(result: Any, platform: str, account_id: str) -> tuple:
+    """delivered=False 的败因 ``(_fail_raw, _fail_kind)``，绝不为空（P-5 C，#259）。
+    见 send_failure_class.undelivered_reason；探测异常时退到固定码，不让失败响应再失败。"""
+    try:
+        from src.inbox.send_failure_class import undelivered_reason
+        return undelivered_reason(result, platform, account_id)
+    except Exception:
+        _fail_raw = str((result or {}).get("error") or (result or {}).get("error_kind") or "") \
+            if isinstance(result, dict) else ""
+        return (_fail_raw or "adapter_no_reason: 适配器未报原因"), "adapter_no_reason"
+
+
+def _log_send_fail(platform: str, account_id: str, chat_key: str,
+                   _fail_raw: str, _fail_kind: str, *, tag: str = "send") -> None:
+    """失败分支统一日志行 ``[send] fail conv=… reason=… kind=…``（值守 grep 口径）。"""
+    logger.warning("[%s] fail conv=%s reason=%s kind=%s", tag,
+                   _conv_id(platform, account_id, chat_key), _fail_raw[:200], _fail_kind or "-")
+
+
 def _send_blocked_exc(
     request: Request, platform: str, account_id: str, chat_key: str,
     reason: str = "", snap: Any = None,
@@ -874,9 +893,11 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
             raise _send_blocked_exc(
                 request, platform, account_id, chat_key,
                 reason=str(res.get("blocked") or ""))
+        _fail_raw, _fail_kind = _undelivered_reason(res, platform, account_id)
+        _log_send_fail(platform, account_id, chat_key, _fail_raw, _fail_kind, tag="send-media")
         raise HTTPException(502, tr(
             request, "err.inbox.send_not_delivered",
-            msg=str(res.get("error") or res.get("error_kind") or "")))
+            msg=_humanize_send_failure(request, _fail_raw, _fail_kind)))
     cid = _conv_id(platform, account_id, chat_key)
     try:
         ibx = _inbox_store(request)
@@ -1304,15 +1325,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 raise _send_blocked_exc(
                     request, platform, account_id, chat_key,
                     reason=str(result.get("blocked") or ""))
-            _fail_raw = str(result.get("error") or result.get("error_kind") or "")
+            _fail_raw, _fail_kind = _undelivered_reason(result, platform, account_id)
             _trace_failed_manual_send(
                 request, platform, account_id, chat_key, text,
-                str(result.get("error_kind") or "") or _fail_raw)
+                _fail_kind or _fail_raw)
+            _log_send_fail(platform, account_id, chat_key, _fail_raw, _fail_kind)
             raise HTTPException(502, tr(
                 request, "err.inbox.send_not_delivered",
                 msg=_humanize_send_failure(
-                    request, _fail_raw,
-                    str(result.get("error_kind") or ""))))
+                    request, _fail_raw, _fail_kind)))
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)
