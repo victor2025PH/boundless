@@ -259,7 +259,10 @@
     <span>{{ (i18n or {}).get('chc_note_lead', '本页管平台级配置（账号进程 · 接收规则 · 回复节奏 · 语音链路 · 运维）。常找的其他设置：') }}
       <a href="/workspace">{{ (i18n or {}).get('chc_note_conv', '单个客户的自动化档位 → 聊天坐席') }}</a><span class="chc-note-sep">·</span>
       <a href="/personas">{{ (i18n or {}).get('chc_note_persona', '每个人设的音色 → 人设工作室') }}</a><span class="chc-note-sep">·</span>
-      <a href="/rpa-overview">{{ (i18n or {}).get('chc_note_gate', 'AI 真发总闸 → 能力看板') }}</a>
+      <a href="/rpa-overview">{{ (i18n or {}).get('chc_note_gate', 'AI 真发总闸 → 能力看板') }}</a><span class="chc-note-sep">·</span>
+      {# 实施99 P1-3（2026-09-08）：官方新渠道的接入中心入口（教程 + 一键授权 + 状态灯），不在四渠道 tab 里 #}
+      <a href="/workspace/onboarding/tiktok">{{ (i18n or {}).get('chc_note_onboarding_tiktok', '接入 TikTok 官方私信 → 接入中心') }}</a><span class="chc-note-sep">·</span>
+      <a href="/workspace/onboarding/douyin">{{ (i18n or {}).get('chc_note_onboarding_douyin', '接入抖音企业号 → 接入中心') }}</a>
     </span>
     {# P0 可见化：收件箱对本渠道的封顶/跳过（数据源 _page_ctx.platform_mode_caps /
        platform_draft_skips，即 inbox.auto_draft 配置）——主管在渠道页就能看见

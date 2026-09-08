@@ -2,7 +2,7 @@
 """渠道接入教程（数据源）：抖音企业版（企业主体小程序 + 能力实验室）/ TikTok 官方通道 / 人民币付款说明。
 
 **一份数据、两个出口**（2026-09-08 老板拍板：「在页面做出教程和链接，也加入小智的提问问答中」）：
-- 页面 ``GET /help/onboarding/{slug}``（``src/web/routes/onboarding_guide_routes.py`` + ``help_onboarding.html``）
+- 页面 ``GET /workspace/onboarding/{slug}``（旧 ``/help/onboarding/{slug}`` 301）（``src/web/routes/onboarding_guide_routes.py`` + ``help_onboarding.html``）
 - 小智问答：``howto_pack._HOWTO`` 末尾 ``extend(howto_tuples())`` → 进 HelpKB（BM25 检索），答案带页面链接。
 
 内容以 2026-09 核实的平台文档为准（见 docs/实施96 §2.1、指令_TK-1 §2）；平台政策变动频繁，
@@ -78,12 +78,12 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "在本页下方面板填 client_key / client_secret 并「保存凭证」（落 config.local.yaml，自动开启 douyin.enabled），"
              "先把回调地址所在域名填进控制台「授权回调域」，再点「用企业号抖音扫码授权」；成功后经营者 open_id 与 access_token / "
              "refresh_token 自动登记为「抖音 · 官方通道」账号，智聊自动续期（access 15 天、refresh 30 天、最多续 5 次，到期前在"
-             "账号卡提醒重新授权）。保存凭证后需重启智聊一次让 webhook 挂载。可选：douyin.enter_greeting 设置客户进入私信页 30 秒内的自动问候。",
+             "账号卡提醒重新授权）。保存凭证后 webhook 与官方通道即时装载（顶部状态灯若仍提示需重启，再重启一次）。可选：douyin.enter_greeting 设置客户进入私信页 30 秒内的自动问候。",
              "Use the panel below: enter client_key / client_secret and Save (written to config.local.yaml, enables douyin), "
              "add the callback domain to the console's authorised redirect domains, then click Authorise with the enterprise "
              "Douyin app. On success the operator open_id and access/refresh tokens are registered as a Douyin official-channel "
              "account and refreshed automatically (access 15 d, refresh 30 d, up to 5 renewals; the account card reminds you "
-             "to re-authorise before expiry). Restart ChatX once after saving so the webhook is mounted. Optional: "
+             "to re-authorise before expiry). The webhook and official channel load immediately after saving (restart only if the status light still asks for it). Optional: "
              "douyin.enter_greeting for the 30-second welcome when a customer opens the chat.",
              "接入向导", "Setup wizard", "/workspace/setup"),
             ("验收：从抖音端发一条私信",
@@ -168,13 +168,13 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "在本页下方面板：① 填开发者应用的 App ID / Secret 并保存；② 把回调地址填进开发者应用的 Redirect URL；③ 填账号注册地"
              "（ISO 两位，如 SG / MY / MX），点「用 TikTok Business Account 授权」，在 TikTok 页面把私信读取 / 发送 / 管理权限全部允许；"
              "成功后账号、令牌自动登记并自动续期，私信 Webhook 也会自动注册到 TikTok。注册地决定私信 API 是否可用、图片能否发送：不可用"
-             "地区会直接标红并给出替代（Messaging Ads / 店铺客服 / WhatsApp 官方通道）。首次保存凭证后需重启智聊一次让 webhook 路由挂载。",
+             "地区会直接标红并给出替代（Messaging Ads / 店铺客服 / WhatsApp 官方通道）。保存凭证后 webhook 路由与官方通道即时装载（状态灯若仍提示需重启，再重启一次）。",
              "Use the panel below: ① enter the developer app's App ID / Secret and save; ② set the callback URL as the app's Redirect URL; "
              "③ enter the account's registration region (ISO-2, e.g. SG / MY / MX) and click “Authorise with TikTok Business Account”, "
              "allowing all messaging permissions (read / send / manage) on TikTok's page. On success the account and tokens are "
              "registered with auto-renewal and the DM webhook is registered automatically. The region decides whether the DM API and "
              "image sending are available; unsupported regions are flagged red with alternatives (Messaging Ads / Shop CS / WhatsApp). "
-             "Restart ChatX once after the first credential save so the webhook route is mounted.",
+             "The webhook route and official channel load immediately after saving (restart only if the status light still asks for it).",
              "接入向导", "Setup wizard", "/workspace/setup"),
         ],
         "rules": [
@@ -289,9 +289,9 @@ def howto_tuples() -> List[tuple]:
     out: List[tuple] = []
     for slug in SLUGS:
         out.append((f"onboarding-{slug}", titles[slug][0], titles[slug][1],
-                    _summary(slug, "zh") + f"。完整步骤与官方链接见教程页 /help/onboarding/{slug}。",
-                    _summary(slug, "en") + f" Full steps and official links: /help/onboarding/{slug}.",
-                    kw[slug], f"/help/onboarding/{slug}"))
+                    _summary(slug, "zh") + f"。完整步骤与官方链接见教程页 /workspace/onboarding/{slug}。",
+                    _summary(slug, "en") + f" Full steps and official links: /workspace/onboarding/{slug}.",
+                    kw[slug], f"/workspace/onboarding/{slug}"))
     return out
 
 

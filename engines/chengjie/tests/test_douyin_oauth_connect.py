@@ -110,39 +110,49 @@ def _fake_registry(monkeypatch):
     reg = FakeRegistry()
     import src.integrations.account_registry as ar
     monkeypatch.setattr(ar, "get_account_registry", lambda: reg)
-    return reg
+    yield reg
+    # 保存凭证时的热挂载会注册 (douyin, official) / (tiktok, official) 工厂——用完清掉
+    from src.integrations import account_orchestrator as ao
+    ao._WORKER_FACTORIES.pop("douyin:official", None)
+    ao._WORKER_FACTORIES.pop("tiktok:official", None)
 
 
 def test_panel_flow_end_to_end(auth_client, app, _fake_registry, monkeypatch):
     cm = app.state.config_manager
-    ref = {"Referer": "http://testserver/help/onboarding/douyin"}
+    ref = {"Referer": "http://testserver/workspace/onboarding/douyin"}
     # 未配置：面板可见、授权按钮禁用、回调地址按 Host 生成
-    r = auth_client.get("/help/onboarding/douyin")
+    r = auth_client.get("/workspace/onboarding/douyin")
     assert r.status_code == 200
-    assert 'action="/help/onboarding/douyin/credentials"' in r.text
+    assert 'action="/workspace/onboarding/douyin/credentials"' in r.text
     assert "http://testserver/webhook/douyin/oauth/callback" in r.text
     assert 'id="obg-authorize"' in r.text and "obg-btn pri dis" in r.text
     # 未配置就点授权 → 回教程页带 error
-    r = auth_client.get("/help/onboarding/douyin/authorize", follow_redirects=False)
+    r = auth_client.get("/workspace/onboarding/douyin/authorize", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?error=missing_credentials")
     # 缺 secret 拒绝；保存成功 → overlay + 内存
-    r = auth_client.post("/help/onboarding/douyin/credentials", data={"client_key": KEY}, headers=ref,
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": KEY}, headers=ref,
                          follow_redirects=False)
     assert r.status_code == 303 and "missing_secret" in r.headers["location"]
-    r = auth_client.post("/help/onboarding/douyin/credentials", data={"client_key": KEY, "client_secret": SECRET},
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": KEY, "client_secret": SECRET},
                          headers=ref, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?saved=1"), r.headers
     assert cm.config["douyin"]["client_key"] == KEY and cm.config["douyin"]["client_secret"] == SECRET
     assert cm.config["douyin"]["enabled"] is True
     # 密钥留空 = 保留
-    r = auth_client.post("/help/onboarding/douyin/credentials", data={"client_key": "aw-new", "client_secret": ""},
+    r = auth_client.post("/workspace/onboarding/douyin/credentials", data={"client_key": "aw-new", "client_secret": ""},
                          headers=ref, follow_redirects=False)
     assert r.status_code == 303 and cm.config["douyin"]["client_secret"] == SECRET and cm.config["douyin"]["client_key"] == "aw-new"
-    r = auth_client.get("/help/onboarding/douyin?saved=1")
-    assert "config.local.yaml" in r.text and 'value="aw-new"' in r.text and SECRET not in r.text   # 密钥不回显
+    r = auth_client.get("/workspace/onboarding/douyin?saved=1")
+    assert "已即时装载" in r.text and 'value="aw-new"' in r.text and SECRET not in r.text   # 密钥不回显
+    # 热挂载：保存凭证后 webhook 路由已挂、worker 工厂已注册，自检不再要求重启
+    from src.integrations import account_orchestrator as ao
+    assert ao.get_worker_factory("douyin", "official") is not None
+    st = auth_client.get("/api/onboarding/douyin/status").json()
+    assert st["checks"]["webhook_mounted"] is True and st["checks"]["restart_required"] is False
+    assert st["hint"] == "authorize" and st["light"] == "blue"
     assert "obg-btn pri dis" not in r.text                                                     # 授权按钮启用
     # 授权跳转：302 去抖音，redirect_uri 指回本机回调，state 可验
-    r = auth_client.get("/help/onboarding/douyin/authorize", follow_redirects=False)
+    r = auth_client.get("/workspace/onboarding/douyin/authorize", follow_redirects=False)
     assert r.status_code == 302
     q = parse_qs(urlparse(r.headers["location"]).query)
     assert r.headers["location"].startswith(dy.AUTHORIZE_URL) and q["client_key"] == ["aw-new"]
@@ -162,12 +172,12 @@ def test_panel_flow_end_to_end(auth_client, app, _fake_registry, monkeypatch):
     row = _fake_registry.get("douyin", "open-abc")
     assert row and row["mode"] == "official" and row["meta"]["access_token"] == "act.1"
     # 页面列出已授权账号与令牌状态
-    r = auth_client.get("/help/onboarding/douyin?connected=open-abc")
+    r = auth_client.get("/workspace/onboarding/douyin?connected=open-abc")
     assert "open-abc" in r.text and "令牌正常" in r.text and "授权成功" in r.text
     # 未登录不能进面板 / 授权，但公开回调路径可达（抖音回跳无会话）
     from starlette.testclient import TestClient
     with TestClient(app) as anon:
-        assert anon.get("/help/onboarding/douyin/authorize", follow_redirects=False).status_code in (302, 303, 401, 403)
+        assert anon.get("/workspace/onboarding/douyin/authorize", follow_redirects=False).status_code in (302, 303, 401, 403)
         r = anon.get("/webhook/douyin/oauth/callback?code=c&state=1.bad", follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"].endswith("?error=bad_state")
 
@@ -220,34 +230,34 @@ def test_reauth_days_left_and_seven_day_warning(monkeypatch):
 
 def test_tiktok_panel_registers_account_with_region(auth_client, app, _fake_registry):
     cm = app.state.config_manager
-    ref = {"Referer": "http://testserver/help/onboarding/tiktok"}
-    r = auth_client.get("/help/onboarding/tiktok")
-    assert r.status_code == 200 and 'action="/help/onboarding/tiktok/account"' in r.text
+    ref = {"Referer": "http://testserver/workspace/onboarding/tiktok"}
+    r = auth_client.get("/workspace/onboarding/tiktok")
+    assert r.status_code == 200 and 'action="/workspace/onboarding/tiktok/account"' in r.text
     assert "http://testserver/webhook/tiktok" in r.text
     # 缺注册地 → 拒
-    r = auth_client.post("/help/onboarding/tiktok/account", data={"business_id": "biz-1", "access_token": "t"},
+    r = auth_client.post("/workspace/onboarding/tiktok/account", data={"business_id": "biz-1", "access_token": "t"},
                          headers=ref, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?error=missing_region")
     # 德国：登记成功但私信不可用 → 标红 + 替代
-    r = auth_client.post("/help/onboarding/tiktok/account",
+    r = auth_client.post("/workspace/onboarding/tiktok/account",
                          data={"business_id": "biz-de", "access_token": "tok-de", "region": "de"},
                          headers=ref, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?connected=biz-de&region=DE")
     row = _fake_registry.get("tiktok", "biz-de")
     assert row["mode"] == "official" and row["meta"] == {"region": "DE", "access_token": "tok-de"}
     # 新加坡 + 应用凭证一起存：overlay 写入并开 enabled
-    r = auth_client.post("/help/onboarding/tiktok/account",
+    r = auth_client.post("/workspace/onboarding/tiktok/account",
                          data={"business_id": "biz-sg", "access_token": "tok-sg", "region": "SG",
                                "app_id": "app-1", "secret": "sec-1"}, headers=ref, follow_redirects=False)
     assert r.status_code == 303 and "connected=biz-sg" in r.headers["location"]
     assert cm.config["tiktok"] == {"app_id": "app-1", "secret": "sec-1", "enabled": True}
-    r = auth_client.get("/help/onboarding/tiktok?connected=biz-sg&region=SG")
+    r = auth_client.get("/workspace/onboarding/tiktok?connected=biz-sg&region=SG")
     html = r.text
     assert "TikTok 账号已登记" in html and "biz-sg" in html and "biz-de" in html
     assert "私信 API 可用" in html and "私信 API 不可用" in html and "替代：Messaging Ads" in html
     assert 'value="app-1"' in html and "sec-1" not in html   # secret 不回显
     # 令牌留空 = 保留已有；重复登记只改 region
-    r = auth_client.post("/help/onboarding/tiktok/account", data={"business_id": "biz-sg", "region": "MY"},
+    r = auth_client.post("/workspace/onboarding/tiktok/account", data={"business_id": "biz-sg", "region": "MY"},
                          headers=ref, follow_redirects=False)
     assert r.status_code == 303
     assert _fake_registry.get("tiktok", "biz-sg")["meta"] == {"region": "MY", "access_token": "tok-sg"}
@@ -258,5 +268,5 @@ def test_panel_shows_reauth_countdown(auth_client, _fake_registry):
     _fake_registry.upsert("douyin", "open-soon", mode="official", label="快到期的号", meta={
         "access_token": "a", "access_expires_at": now + 10 * 86400, "refresh_token": "r",
         "refresh_expires_at": now + 4 * 86400 + 100, "renew_count": 5})
-    r = auth_client.get("/help/onboarding/douyin")
+    r = auth_client.get("/workspace/onboarding/douyin")
     assert r.status_code == 200 and "open-soon" in r.text and "4 天后需重新授权" in r.text

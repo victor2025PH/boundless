@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """渠道接入教程页 + 抖音企业号「接入面板」（2026-09-08，老板拍板「在页面做出教程和链接」）。
 
-- ``GET /help/onboarding/{slug}``（session auth）：抖音企业版 / TikTok / 付款方式；数据源
-  ``src/assistant/onboarding_guides.py``（与小智问答同一份）。未知 slug → 404。
+- ``GET /workspace/onboarding/{slug}``（session auth，工作台壳 ``workspace_base.html``）：抖音企业版 / TikTok / 付款方式；
+  数据源 ``src/assistant/onboarding_guides.py``（与小智问答同一份）。未知 slug → 404。旧路径
+  ``/help/onboarding/{slug}`` 301（实施99 P0-1 迁壳，2026-09-08）。
 - 抖音页附「接入面板」，把教程第 6 步从「改配置文件」升级为三个动作（实施96 P1-1 收尾）：
-  ① ``POST /help/onboarding/douyin/credentials``：填 client_key / client_secret → ``save_overlay_patch`` 落
-     ``config.local.yaml``（不碰主配置）并即时进内存；``enabled`` 一并置真（webhook 挂载 / worker 注册在启动期做，
-     页面提示重启生效）。
-  ② ``GET /help/onboarding/douyin/authorize``：生成防篡改 state，302 去抖音扫码授权页。
+  ① ``POST /workspace/onboarding/douyin/credentials``：填 client_key / client_secret → ``save_overlay_patch`` 落
+     ``config.local.yaml``（不碰主配置）并即时进内存；``enabled`` 一并置真，随后 ``_hot_mount`` 即时挂 webhook 路由
+     并注册官方 worker 工厂（实施99 P1-1，不再要求重启）。
+  ② ``GET /workspace/onboarding/douyin/authorize``：生成防篡改 state，302 去抖音扫码授权页。
   ③ ``GET /webhook/douyin/oauth/callback``（公开，抖音回跳）：校验 state → code 换令牌 → 账号
      ``douyin/<open_id>`` mode=official 落注册表（meta 原子合并）→ 302 回教程页带结果。
 - 页面按 ``request.state.ui_lang`` 选中英；webhook / 回调地址按当前 Host（或 X-Forwarded-*）算好给用户复制。
@@ -179,6 +180,37 @@ def _route_mounted(request: Request, path: str, method: str = "POST") -> bool:
     return False
 
 
+def _hot_mount(request: Request, platform: str) -> Dict[str, bool]:
+    """保存凭证后即时装载（实施99 P1-1）：挂 webhook 路由 + 注册官方 worker 工厂，不再要求重启。
+
+    两个注册函数本身幂等（工厂查重；路由这里先查再挂）；编排器监督循环下一次 ``sync()`` 会按注册表拉起账号。
+    多进程部署只对当前进程生效——自检里 ``restart_required`` 仍会如实反映其它进程的状态。"""
+    app = request.app
+    cm = _config_manager(request)
+    cfg = getattr(cm, "config", None) or {}
+    out = {"routes": False, "worker": False}
+    try:
+        if platform == "douyin":
+            from src.integrations.douyin_official import (douyin_cfg, register_douyin_official_worker,
+                                                          register_douyin_routes)
+            path = douyin_cfg(cfg)["webhook_path"]
+            if not _route_mounted(request, path):
+                register_douyin_routes(app, cm, getattr(app.state, "telegram_client", None))
+            out["routes"] = _route_mounted(request, path)
+            out["worker"] = bool(register_douyin_official_worker(cfg))
+        elif platform == "tiktok":
+            from src.integrations.tiktok_official import (register_tiktok_official_worker, register_tiktok_routes,
+                                                          tiktok_cfg)
+            path = tiktok_cfg(cfg)["webhook_path"]
+            if not _route_mounted(request, path):
+                register_tiktok_routes(app, cm, getattr(app.state, "telegram_client", None))
+            out["routes"] = _route_mounted(request, path)
+            out["worker"] = bool(register_tiktok_official_worker(cfg))
+    except Exception:
+        logger.warning("[onboarding] %s 热挂载失败", platform, exc_info=True)
+    return out
+
+
 def _public_is_https(base: str) -> bool:
     if not base.startswith("https://"):
         return False
@@ -274,7 +306,7 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             raise HTTPException(status_code=404, detail="unknown guide")
         return onboarding_status(request, slug)
 
-    @app.get("/help/onboarding/{slug}")
+    @app.get("/workspace/onboarding/{slug}")
     async def onboarding_guide_page(slug: str, request: Request, _=Depends(page_auth)):
         from src.assistant.onboarding_guides import SLUGS, guide_for
         lang = str(getattr(request.state, "ui_lang", "") or "zh")
@@ -303,14 +335,22 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             except Exception:
                 logger.debug("[onboarding] 自检失败", exc_info=True)
         q = request.query_params
-        return templates.TemplateResponse(request, "help_onboarding.html", {
+        ctx: Dict[str, Any] = {
             "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel, "status": status,
             "flash": {"saved": q.get("saved") == "1", "connected": str(q.get("connected") or ""),
                       "error": str(q.get("error") or ""), "region": str(q.get("region") or ""),
                       "webhook": str(q.get("webhook") or "")},
-        })
+        }
+        # 工作台壳（workspace_base.html）需要的最小上下文；其余键缺省即安全（Jinja 非 strict）
+        try:
+            ctx["user_name"] = request.session.get("username") or ""
+            ctx["user_display_name"] = request.session.get("display_name") or ctx["user_name"]
+        except Exception:
+            ctx["user_name"] = ctx["user_display_name"] = ""
+        ctx.setdefault("is_supervisor", True)
+        return templates.TemplateResponse(request, "help_onboarding.html", ctx)
 
-    @app.post("/help/onboarding/tiktok/account")
+    @app.post("/workspace/onboarding/tiktok/account")
     async def onboarding_tiktok_account(request: Request, _=Depends(page_auth),
                                         business_id: str = Form(""), access_token: str = Form(""),
                                         region: str = Form(""), app_id: str = Form(""), secret: str = Form(""),
@@ -325,9 +365,9 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         tok = str(access_token or "").strip()
         reg_code = normalize_region(region)
         if not bid:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_business_id", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_business_id", status_code=303)
         if not reg_code:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_region", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_region", status_code=303)
         cm = _config_manager(request)
         patch: Dict[str, Any] = {}
         for k, v in (("app_id", app_id), ("secret", secret), ("webhook_secret", webhook_secret)):
@@ -336,7 +376,8 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         if patch:
             patch["enabled"] = True
             if cm is None or not _save_patch(cm, {"tiktok": patch}):
-                return RedirectResponse("/help/onboarding/tiktok?error=save_failed", status_code=303)
+                return RedirectResponse("/workspace/onboarding/tiktok?error=save_failed", status_code=303)
+            _hot_mount(request, "tiktok")
         try:
             from src.integrations.account_registry import get_account_registry
             reg = get_account_registry()
@@ -348,13 +389,13 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
                        label=(existing.get("label") or f"TikTok Business {bid[:8]}"), meta=meta, merge_meta=True)
         except Exception:
             logger.warning("[onboarding] TikTok 账号登记失败", exc_info=True)
-            return RedirectResponse("/help/onboarding/tiktok?error=registry_failed", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=registry_failed", status_code=303)
         caps = capabilities(reg_code)
         _audit(request, "tiktok_account_register", f"tiktok/{bid}", "",
                f"region={reg_code} dm_api={caps['dm_api']} token={'y' if tok else 'n'}")
-        return RedirectResponse(f"/help/onboarding/tiktok?connected={bid}&region={reg_code}", status_code=303)
+        return RedirectResponse(f"/workspace/onboarding/tiktok?connected={bid}&region={reg_code}", status_code=303)
 
-    @app.post("/help/onboarding/tiktok/credentials")
+    @app.post("/workspace/onboarding/tiktok/credentials")
     async def onboarding_tiktok_credentials(request: Request, _=Depends(page_auth),
                                             app_id: str = Form(""), secret: str = Form("")):
         """保存开发者应用凭证（app_id / secret）到 overlay 并开启 tiktok.enabled；密钥留空＝保留。"""
@@ -364,28 +405,29 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         aid = str(app_id or "").strip()
         sec = str(secret or "").strip()
         if not aid:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_app_id", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_app_id", status_code=303)
         patch: Dict[str, Any] = {"tiktok": {"app_id": aid, "enabled": True}}
         if sec:
             patch["tiktok"]["secret"] = sec
         elif not cur["secret"]:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_secret", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_secret", status_code=303)
         if cm is None or not _save_patch(cm, patch):
-            return RedirectResponse("/help/onboarding/tiktok?error=save_failed", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=save_failed", status_code=303)
         _audit(request, "tiktok_credentials_save", "tiktok.app_id", cur["app_id"], aid)
-        return RedirectResponse("/help/onboarding/tiktok?saved=1", status_code=303)
+        _hot_mount(request, "tiktok")
+        return RedirectResponse("/workspace/onboarding/tiktok?saved=1", status_code=303)
 
-    @app.get("/help/onboarding/tiktok/authorize")
+    @app.get("/workspace/onboarding/tiktok/authorize")
     async def onboarding_tiktok_authorize(request: Request, _=Depends(page_auth), region: str = ""):
         """一键授权：注册地必选（决定能力）→ 防篡改 state 带上 region → 302 去 TikTok 授权页。"""
         from src.integrations.tiktok_official import DEFAULT_OAUTH_CALLBACK_PATH, authorize_url, oauth_state, tiktok_cfg
         from src.integrations.tiktok_regions import normalize_region
         cfg = tiktok_cfg(_config(request))
         if not cfg["app_id"] or not cfg["secret"]:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_credentials", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_credentials", status_code=303)
         reg_code = normalize_region(region)
         if not reg_code:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_region", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_region", status_code=303)
         redirect_uri = f"{_public_base(request)}{DEFAULT_OAUTH_CALLBACK_PATH}"
         return RedirectResponse(authorize_url(cfg["app_id"], redirect_uri, oauth_state(cfg["secret"], reg_code)),
                                 status_code=302)
@@ -400,18 +442,18 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         cfg = tiktok_cfg(cfg_all)
         region = verify_oauth_state(cfg["secret"], q.get("state"))
         if region is None:
-            return RedirectResponse("/help/onboarding/tiktok?error=bad_state", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=bad_state", status_code=303)
         if q.get("error") or not q.get("code"):
             err = str(q.get("error_description") or q.get("error") or "no_code")[:40]
-            return RedirectResponse(f"/help/onboarding/tiktok?error=denied:{err}", status_code=303)
+            return RedirectResponse(f"/workspace/onboarding/tiktok?error=denied:{err}", status_code=303)
         base = _public_base(request)
         res = await complete_oauth(str(q.get("code")), config=cfg_all, redirect_uri=f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}",
                                    region=region)
         if not res.get("ok"):
             if res.get("error") == "ungranted_scopes":
-                return RedirectResponse("/help/onboarding/tiktok?error=ungranted_scopes", status_code=303)
+                return RedirectResponse("/workspace/onboarding/tiktok?error=ungranted_scopes", status_code=303)
             err = f"{res.get('error')}:{res.get('error_code') or ''}".rstrip(":")
-            return RedirectResponse(f"/help/onboarding/tiktok?error={err[:60]}", status_code=303)
+            return RedirectResponse(f"/workspace/onboarding/tiktok?error={err[:60]}", status_code=303)
         _audit(request, "tiktok_oauth_connected", f"tiktok/{res['open_id']}", "",
                f"region={region} scope={res.get('scope')}", actor="tiktok-oauth")
         wh = "skip"
@@ -421,17 +463,17 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         except Exception:
             logger.debug("[onboarding] TikTok webhook 注册异常", exc_info=True)
             wh = "fail:exception"
-        return RedirectResponse(f"/help/onboarding/tiktok?connected={res['open_id']}&region={region}&webhook={wh}",
+        return RedirectResponse(f"/workspace/onboarding/tiktok?connected={res['open_id']}&region={region}&webhook={wh}",
                                 status_code=303)
 
-    @app.post("/help/onboarding/tiktok/webhook")
+    @app.post("/workspace/onboarding/tiktok/webhook")
     async def onboarding_tiktok_webhook(request: Request, _=Depends(page_auth)):
         """手动（重新）把私信 webhook 回调注册到 TikTok（应用级，用 app_id/secret）。"""
         from src.integrations.tiktok_official import ensure_webhook, tiktok_cfg
         cfg_all = _config(request)
         cfg = tiktok_cfg(cfg_all)
         if not cfg["app_id"] or not cfg["secret"]:
-            return RedirectResponse("/help/onboarding/tiktok?error=missing_credentials", status_code=303)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=missing_credentials", status_code=303)
         url = f"{_public_base(request)}{cfg['webhook_path']}"
         try:
             r = await ensure_webhook(cfg_all, url)
@@ -439,12 +481,18 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             logger.debug("[onboarding] TikTok webhook 注册异常", exc_info=True)
             r = {"ok": False, "error": "exception"}
         if not r.get("ok"):
-            return RedirectResponse(f"/help/onboarding/tiktok?error=webhook:{r.get('error_code') or r.get('error')}",
+            return RedirectResponse(f"/workspace/onboarding/tiktok?error=webhook:{r.get('error_code') or r.get('error')}",
                                     status_code=303)
         _audit(request, "tiktok_webhook_register", "tiktok.webhook", "", url)
-        return RedirectResponse("/help/onboarding/tiktok?webhook=ok", status_code=303)
+        return RedirectResponse("/workspace/onboarding/tiktok?webhook=ok", status_code=303)
 
-    @app.post("/help/onboarding/douyin/credentials")
+    @app.get("/help/onboarding/{slug}")
+    async def onboarding_guide_page_legacy(slug: str, request: Request):
+        """旧路径 301 → 工作台壳新路径（保留查询串：授权回调等仍带 ?connected= / ?error=）。"""
+        q = str(request.url.query or "")
+        return RedirectResponse(f"/workspace/onboarding/{slug}" + (f"?{q}" if q else ""), status_code=301)
+
+    @app.post("/workspace/onboarding/douyin/credentials")
     async def onboarding_douyin_credentials(request: Request, _=Depends(page_auth),
                                             client_key: str = Form(""), client_secret: str = Form("")):
         from src.integrations.douyin_official import douyin_cfg
@@ -453,25 +501,26 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         key = str(client_key or "").strip()
         secret = str(client_secret or "").strip()
         if not key:
-            return RedirectResponse("/help/onboarding/douyin?error=missing_key", status_code=303)
+            return RedirectResponse("/workspace/onboarding/douyin?error=missing_key", status_code=303)
         patch: Dict[str, Any] = {"douyin": {"client_key": key, "enabled": True}}
         # 密钥留空 = 保留已配置的（脱敏回显不可能原样提交）
         if secret:
             patch["douyin"]["client_secret"] = secret
         elif not cur["client_secret"]:
-            return RedirectResponse("/help/onboarding/douyin?error=missing_secret", status_code=303)
+            return RedirectResponse("/workspace/onboarding/douyin?error=missing_secret", status_code=303)
         if cm is None or not _save_patch(cm, patch):
-            return RedirectResponse("/help/onboarding/douyin?error=save_failed", status_code=303)
+            return RedirectResponse("/workspace/onboarding/douyin?error=save_failed", status_code=303)
         _audit(request, "douyin_credentials_save", "douyin.client_key", cur["client_key"], key)
-        return RedirectResponse("/help/onboarding/douyin?saved=1", status_code=303)
+        _hot_mount(request, "douyin")
+        return RedirectResponse("/workspace/onboarding/douyin?saved=1", status_code=303)
 
-    @app.get("/help/onboarding/douyin/authorize")
+    @app.get("/workspace/onboarding/douyin/authorize")
     async def onboarding_douyin_authorize(request: Request, _=Depends(page_auth)):
         from src.integrations.douyin_official import (DEFAULT_OAUTH_CALLBACK_PATH, authorize_url, douyin_cfg,
                                                       oauth_state)
         cfg = douyin_cfg(_config(request))
         if not cfg["client_key"] or not cfg["client_secret"]:
-            return RedirectResponse("/help/onboarding/douyin?error=missing_credentials", status_code=303)
+            return RedirectResponse("/workspace/onboarding/douyin?error=missing_credentials", status_code=303)
         base = _public_base(request)
         redirect_uri = f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}"
         return RedirectResponse(authorize_url(cfg["client_key"], redirect_uri, oauth_state(cfg["client_secret"])),
@@ -485,17 +534,17 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         cfg_all = _config(request)
         cfg = douyin_cfg(cfg_all)
         if not verify_oauth_state(cfg["client_secret"], q.get("state")):
-            return RedirectResponse("/help/onboarding/douyin?error=bad_state", status_code=303)
+            return RedirectResponse("/workspace/onboarding/douyin?error=bad_state", status_code=303)
         if q.get("error") or not q.get("code"):
-            return RedirectResponse(f"/help/onboarding/douyin?error=denied:{str(q.get('error') or 'no_code')[:40]}",
+            return RedirectResponse(f"/workspace/onboarding/douyin?error=denied:{str(q.get('error') or 'no_code')[:40]}",
                                     status_code=303)
         res = await complete_oauth(str(q.get("code")), config=cfg_all)
         if not res.get("ok"):
             err = f"{res.get('error')}:{res.get('error_code') or ''}".rstrip(":")
-            return RedirectResponse(f"/help/onboarding/douyin?error={err[:60]}", status_code=303)
+            return RedirectResponse(f"/workspace/onboarding/douyin?error={err[:60]}", status_code=303)
         _audit(request, "douyin_oauth_connected", f"douyin/{res['open_id']}", "", str(res.get("scope") or ""),
                actor="douyin-oauth")
-        return RedirectResponse(f"/help/onboarding/douyin?connected={res['open_id']}", status_code=303)
+        return RedirectResponse(f"/workspace/onboarding/douyin?connected={res['open_id']}", status_code=303)
 
 
 __all__ = ["register_onboarding_guide_routes", "douyin_connect_panel", "tiktok_connect_panel", "onboarding_status"]

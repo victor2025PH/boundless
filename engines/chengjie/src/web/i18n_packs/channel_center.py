@@ -18,6 +18,8 @@ ZH = {
     "chc_note_conv": "单个客户的自动化档位 → 聊天坐席",
     "chc_note_persona": "每个人设的音色 → 人设工作室",
     "chc_note_gate": "AI 真发总闸 → 能力看板",
+    "chc_note_onboarding_tiktok": "接入 TikTok 官方私信 → 接入中心",
+    "chc_note_onboarding_douyin": "接入抖音企业号 → 接入中心",
     # 收件箱封顶/跳过徽章（P0：inbox.auto_draft.platform_modes / skip_platforms 可见化）
     "chc_cap_capped": "本渠道已被收件箱封顶为 {mode} · 全自动不生效",
     "chc_cap_skipped": "本渠道已被收件箱跳过自动拟稿",
@@ -106,6 +108,8 @@ EN = {
     "chc_note_conv": "Per-customer automation level → Agent Workspace",
     "chc_note_persona": "Per-persona voice → Persona Studio",
     "chc_note_gate": "Global AI auto-send gate → Capability Board",
+    "chc_note_onboarding_tiktok": "Connect TikTok official DMs → Onboarding centre",
+    "chc_note_onboarding_douyin": "Connect Douyin enterprise account → Onboarding centre",
     "chc_cap_capped": "Inbox has capped this channel at {mode} — full-auto is disabled here",
     "chc_cap_skipped": "Inbox skips auto-drafting for this channel",
     "chc_sess_ok_line": "Web sessions healthy ({n} accounts)",

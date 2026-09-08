@@ -8,7 +8,8 @@ from src.assistant import onboarding_guides as og
 
 
 def test_guides_data_integrity():
-    assert set(og.SLUGS) == {"douyin", "tiktok", "payment-cny"}
+    # 实施97：微信客服 / 个人微信 PC 副驾两份教程加入（工作台引导页 + HelpKB 同源）
+    assert set(og.SLUGS) == {"douyin", "tiktok", "payment-cny", "wechat_kf", "wechat_pc"}
     for slug in og.SLUGS:
         for lang in ("zh", "en"):
             g = og.guide_for(slug, lang)
@@ -20,7 +21,10 @@ def test_guides_data_integrity():
             for l in g["links"]:
                 assert l["url"].startswith("https://") and l["label"]
             for e in g["errors"]:
-                assert re.fullmatch(r"\d{7,8}", e["code"]) and e["meaning"] and e["fix"]
+                # 抖音是 7–8 位数字错误码；企微是 5–6 位（可多码并列）；副驾教程按「症状」列排障——都要短、非空
+                assert e["code"] and len(e["code"]) <= 24 and e["meaning"] and e["fix"], (slug, e)
+                if slug in ("douyin", "tiktok"):
+                    assert re.fullmatch(r"\d{7,8}", e["code"]), e["code"]
     assert og.guide_for("nope") is None
     # 抖音教程必须覆盖资质路径的关键节点与硬规则（这是老板要办的事）
     dy = og.guide_for("douyin", "zh")
@@ -37,16 +41,17 @@ def test_guides_data_integrity():
 
 def test_howto_tuples_feed_xiaozhi():
     tuples = og.howto_tuples()
-    assert [t[0] for t in tuples] == ["onboarding-douyin", "onboarding-tiktok", "onboarding-payment-cny"]
+    assert [t[0] for t in tuples] == ["onboarding-douyin", "onboarding-tiktok", "onboarding-payment-cny",
+                                      "onboarding-wechat_kf", "onboarding-wechat_pc"]
     for slug, title, title_en, ans, ans_en, kw, path in tuples:
-        assert path == f"/help/onboarding/{slug.split('-', 1)[1]}"
+        assert path == f"/workspace/onboarding/{slug.split('-', 1)[1]}"
         assert path in ans and path in ans_en
         assert len(ans) <= 4000 and len(ans_en) <= 4000  # HelpKB content 列上限
     from src.assistant.howto_pack import build_howto_entries
     ids = {e["id"] for e in build_howto_entries()}
     assert {"howto:onboarding-douyin", "howto:onboarding-tiktok", "howto:onboarding-payment-cny"} <= ids
     dy = next(e for e in build_howto_entries() if e["id"] == "howto:onboarding-douyin")
-    assert "能力实验室" in dy["title"] + dy["keywords"] and dy["path"] == "/help/onboarding/douyin"
+    assert "能力实验室" in dy["title"] + dy["keywords"] and dy["path"] == "/workspace/onboarding/douyin"
     # 词表要能命中老板会问的话：「怎么接入抖音」「支持人民币吗」
     assert "抖音" in dy["keywords"] and "申请" in dy["title"]
     pay = next(e for e in build_howto_entries() if e["id"] == "howto:onboarding-payment-cny")
@@ -71,17 +76,23 @@ def test_help_kb_retrieves_onboarding_answers(tmp_path):
 
 
 def test_guide_pages_render_in_both_languages(auth_client):
-    r = auth_client.get("/help/onboarding/douyin")
+    r = auth_client.get("/workspace/onboarding/douyin")
     assert r.status_code == 200, r.text[:300]
     html = r.text
     for must in ("能力实验室", "developer.open-douyin.com", "/webhook/douyin", "28003095",
-                 'target="_blank" rel="noopener noreferrer"', "obg-step"):
+                 'target="_blank" rel="noopener noreferrer"', "obg-step", "obg-light"):
         assert must in html, must
-    r = auth_client.get("/help/onboarding/tiktok")
+    # 迁壳：工作台壳 + --tk-* 令牌，不再引用旧管理壳令牌
+    style = html[html.find(".obg-wrap{"):html.find("</style>", html.find(".obg-wrap{"))]
+    assert "var(--tk-border)" in style and "var(--bd)" not in style and "var(--t2)" not in style and "#1e8cf2" not in style
+    r = auth_client.get("/workspace/onboarding/tiktok")
     assert r.status_code == 200 and "business-api.tiktok.com" in r.text
-    r = auth_client.get("/help/onboarding/payment-cny")
+    r = auth_client.get("/workspace/onboarding/payment-cny")
     assert r.status_code == 200 and "bd2026.cc/order" in r.text
-    assert auth_client.get("/help/onboarding/nope").status_code == 404
-    r = auth_client.get("/help/onboarding/douyin?lang=en")
+    assert auth_client.get("/workspace/onboarding/nope").status_code == 404
+    # 旧路径 301 到新壳页（保留查询串）
+    r = auth_client.get("/help/onboarding/douyin?connected=x", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/workspace/onboarding/douyin?connected=x"
+    r = auth_client.get("/workspace/onboarding/douyin?lang=en")
     assert r.status_code == 200
     assert ("Capability Lab" in r.text) or ("能力实验室" in r.text)  # lang 切换由中间件决定，至少渲染成功

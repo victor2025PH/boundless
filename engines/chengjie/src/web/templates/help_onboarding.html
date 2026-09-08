@@ -1,61 +1,61 @@
-{% extends "base.html" %}
+{% extends "workspace_base.html" %}
 {% block title %}{{ guide.title }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
 {% block page_title %}{{ guide.title }}{% endblock %}
 {% block head %}
 <style>
 /* 渠道接入教程（实施96 / TK-1）：全部走 base 令牌，暗色自适配；步骤用序号卡，链接一律新开页 */
-.obg-wrap{max-width:920px}
+.obg-wrap{height:100%;overflow-y:auto;max-width:920px;margin:0 auto;padding:18px;background:var(--tk-bg)}
 .obg-tabs{display:flex;gap:.45rem;flex-wrap:wrap;margin:0 0 .9rem}
-.obg-tab{font-size:.8rem;padding:.3rem .8rem;border-radius:99px;border:1px solid var(--bd);color:var(--t2);background:var(--input);text-decoration:none}
-.obg-tab.on{background:var(--p,#1e8cf2);border-color:var(--p,#1e8cf2);color:#fff;font-weight:600}
-.obg-meta{color:var(--t3);font-size:.76rem;margin:0 0 .8rem;display:flex;gap:1rem;flex-wrap:wrap}
-.obg-intro{border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.9rem 1rem;margin-bottom:.9rem;color:var(--t2);line-height:1.7;font-size:.88rem}
-.obg-h{font-size:.95rem;font-weight:700;color:var(--t);margin:1.1rem 0 .5rem}
-.obg-pre{margin:0;padding-left:1.2rem;color:var(--t2);font-size:.85rem;line-height:1.7}
-.obg-step{display:flex;gap:.8rem;border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.85rem 1rem;margin-bottom:.7rem}
-.obg-num{flex:none;width:28px;height:28px;border-radius:50%;background:var(--p,#1e8cf2);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:.85rem}
+.obg-tab{font-size:.8rem;padding:.3rem .8rem;border-radius:99px;border:1px solid var(--tk-border);color:var(--tk-text-muted);background:var(--tk-surface-2);text-decoration:none}
+.obg-tab.on{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;font-weight:600}
+.obg-meta{color:var(--tk-text-muted);font-size:.76rem;margin:0 0 .8rem;display:flex;gap:1rem;flex-wrap:wrap}
+.obg-intro{border:1px solid var(--tk-border);border-radius:14px;background:var(--tk-surface);padding:.9rem 1rem;margin-bottom:.9rem;color:var(--tk-text-muted);line-height:1.7;font-size:.88rem}
+.obg-h{font-size:.95rem;font-weight:700;color:var(--tk-text);margin:1.1rem 0 .5rem}
+.obg-pre{margin:0;padding-left:1.2rem;color:var(--tk-text-muted);font-size:.85rem;line-height:1.7}
+.obg-step{display:flex;gap:.8rem;border:1px solid var(--tk-border);border-radius:14px;background:var(--tk-surface);padding:.85rem 1rem;margin-bottom:.7rem}
+.obg-num{flex:none;width:28px;height:28px;border-radius:50%;background:var(--tk-brand);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:.85rem}
 .obg-body{flex:1;min-width:0}
-.obg-st{font-weight:700;color:var(--t);font-size:.92rem;margin-bottom:.25rem}
-.obg-sd{color:var(--t2);font-size:.84rem;line-height:1.7;white-space:pre-line}
-.obg-link{display:inline-block;margin-top:.45rem;font-size:.8rem;color:var(--p,#1e8cf2);text-decoration:none;border:1px solid color-mix(in srgb,var(--p,#1e8cf2) 40%,transparent);border-radius:99px;padding:.15rem .7rem}
-.obg-link:hover{background:color-mix(in srgb,var(--p,#1e8cf2) 10%,transparent)}
-.obg-rules{margin:0;padding-left:1.2rem;color:var(--t2);font-size:.84rem;line-height:1.7}
+.obg-st{font-weight:700;color:var(--tk-text);font-size:.92rem;margin-bottom:.25rem}
+.obg-sd{color:var(--tk-text-muted);font-size:.84rem;line-height:1.7;white-space:pre-line}
+.obg-link{display:inline-block;margin-top:.45rem;font-size:.8rem;color:var(--tk-brand);text-decoration:none;border:1px solid color-mix(in srgb,var(--tk-brand) 40%,transparent);border-radius:99px;padding:.15rem .7rem}
+.obg-link:hover{background:color-mix(in srgb,var(--tk-brand) 10%,transparent)}
+.obg-rules{margin:0;padding-left:1.2rem;color:var(--tk-text-muted);font-size:.84rem;line-height:1.7}
 .obg-tbl{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.3rem}
-.obg-tbl th,.obg-tbl td{border-bottom:1px solid var(--bd);padding:.4rem .5rem;text-align:left;vertical-align:top;color:var(--t2)}
-.obg-tbl th{color:var(--t3);font-weight:600;font-size:.74rem}
-.obg-tbl code{font-size:.78rem;color:var(--t)}
+.obg-tbl th,.obg-tbl td{border-bottom:1px solid var(--tk-border);padding:.4rem .5rem;text-align:left;vertical-align:top;color:var(--tk-text-muted)}
+.obg-tbl th{color:var(--tk-text-muted);font-weight:600;font-size:.74rem}
+.obg-tbl code{font-size:.78rem;color:var(--tk-text)}
 .obg-copy{display:flex;gap:.5rem;align-items:center;margin:.4rem 0 .2rem}
-.obg-copy code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--input);border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem;font-size:.8rem;color:var(--t)}
-.obg-copy button{flex:none;border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.78rem;padding:.3rem .7rem;border-radius:99px;cursor:pointer}
-.obg-foot{color:var(--t3);font-size:.75rem;margin-top:1.2rem;line-height:1.6}
+.obg-copy code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--tk-surface-2);border:1px solid var(--tk-border);border-radius:8px;padding:.35rem .6rem;font-size:.8rem;color:var(--tk-text)}
+.obg-copy button{flex:none;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text-muted);font-size:.78rem;padding:.3rem .7rem;border-radius:99px;cursor:pointer}
+.obg-foot{color:var(--tk-text-muted);font-size:.75rem;margin-top:1.2rem;line-height:1.6}
 /* 接入面板：填凭证 / 扫码授权 / 已授权账号——嵌在抖音第 6 步卡里 */
-.obg-panel{margin-top:.7rem;border-top:1px dashed var(--bd);padding-top:.7rem}
+.obg-panel{margin-top:.7rem;border-top:1px dashed var(--tk-border);padding-top:.7rem}
 .obg-form{display:grid;grid-template-columns:1fr 1fr auto;gap:.5rem;align-items:end}
-.obg-form label{display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--t3)}
-.obg-form input{border:1px solid var(--bd);background:var(--input);color:var(--t);border-radius:8px;padding:.4rem .6rem;font-size:.82rem;min-width:0}
-.obg-btn{border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.8rem;padding:.42rem .9rem;border-radius:99px;cursor:pointer;text-decoration:none;white-space:nowrap}
-.obg-btn.pri{background:var(--p,#1e8cf2);border-color:var(--p,#1e8cf2);color:#fff;font-weight:600}
+.obg-form label{display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--tk-text-muted)}
+.obg-form input{border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text);border-radius:8px;padding:.4rem .6rem;font-size:.82rem;min-width:0}
+.obg-btn{border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text-muted);font-size:.8rem;padding:.42rem .9rem;border-radius:99px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.obg-btn.pri{background:var(--tk-brand);border-color:var(--tk-brand);color:#fff;font-weight:600}
 .obg-btn.dis{opacity:.5;pointer-events:none}
-.obg-flash{border-radius:10px;padding:.55rem .8rem;font-size:.82rem;margin-bottom:.8rem;border:1px solid var(--bd)}
-.obg-flash.ok{background:color-mix(in srgb,#16a34a 12%,transparent);border-color:color-mix(in srgb,#16a34a 40%,transparent);color:var(--t)}
-.obg-flash.bad{background:color-mix(in srgb,#dc2626 10%,transparent);border-color:color-mix(in srgb,#dc2626 40%,transparent);color:var(--t)}
-.obg-acc{display:flex;gap:.6rem;align-items:center;font-size:.8rem;color:var(--t2);padding:.35rem 0;border-bottom:1px solid var(--bd)}
+.obg-flash{border-radius:10px;padding:.55rem .8rem;font-size:.82rem;margin-bottom:.8rem;border:1px solid var(--tk-border)}
+.obg-flash.ok{background:color-mix(in srgb,var(--tk-ok-ink) 12%,transparent);border-color:color-mix(in srgb,var(--tk-ok-ink) 40%,transparent);color:var(--tk-text)}
+.obg-flash.bad{background:color-mix(in srgb,var(--tk-danger-ink) 10%,transparent);border-color:color-mix(in srgb,var(--tk-danger-ink) 40%,transparent);color:var(--tk-text)}
+.obg-acc{display:flex;gap:.6rem;align-items:center;font-size:.8rem;color:var(--tk-text-muted);padding:.35rem 0;border-bottom:1px solid var(--tk-border)}
 .obg-acc:last-child{border-bottom:0}
-.obg-pill{font-size:.7rem;border-radius:99px;padding:.1rem .5rem;border:1px solid var(--bd);color:var(--t3)}
-.obg-pill.ok{border-color:color-mix(in srgb,#16a34a 50%,transparent);color:#16a34a}
-.obg-pill.warn{border-color:color-mix(in srgb,#d97706 50%,transparent);color:#d97706}
-.obg-pill.bad{border-color:color-mix(in srgb,#dc2626 50%,transparent);color:#dc2626}
-.obg-note{color:var(--t3);font-size:.74rem;margin-top:.4rem;line-height:1.6}
+.obg-pill{font-size:.7rem;border-radius:99px;padding:.1rem .5rem;border:1px solid var(--tk-border);color:var(--tk-text-muted)}
+.obg-pill.ok{border-color:color-mix(in srgb,var(--tk-ok-ink) 50%,transparent);color:var(--tk-ok-ink)}
+.obg-pill.warn{border-color:color-mix(in srgb,var(--tk-warn-ink) 50%,transparent);color:var(--tk-warn-ink)}
+.obg-pill.bad{border-color:color-mix(in srgb,var(--tk-danger-ink) 50%,transparent);color:var(--tk-danger-ink)}
+.obg-note{color:var(--tk-text-muted);font-size:.74rem;margin-top:.4rem;line-height:1.6}
 /* 状态灯卡（实施99 P0-2）：自检结果一屏——灯色 / 第几步 / 一句话下一步 */
-.obg-light{display:flex;align-items:center;gap:.9rem;border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.8rem 1rem;margin-bottom:.9rem}
-.obg-dot{width:34px;height:34px;border-radius:50%;flex:none;background:var(--t3);box-shadow:0 0 0 5px color-mix(in srgb,var(--t3) 14%,transparent)}
-.obg-dot.blue{background:var(--p,#1e8cf2);box-shadow:0 0 0 5px color-mix(in srgb,var(--p,#1e8cf2) 16%,transparent)}
-.obg-dot.amber{background:var(--amber);box-shadow:0 0 0 5px var(--as)}
-.obg-dot.red{background:var(--red);box-shadow:0 0 0 5px var(--rs)}
-.obg-dot.green{background:var(--green);box-shadow:0 0 0 5px var(--gs)}
-.obg-light-t{font-weight:700;color:var(--t);font-size:.92rem}
-.obg-light-s{color:var(--t2);font-size:.8rem;margin-top:.15rem;line-height:1.5}
-.obg-light-r{margin-left:auto;text-align:right;color:var(--t3);font-size:.74rem;white-space:nowrap}
+.obg-light{display:flex;align-items:center;gap:.9rem;border:1px solid var(--tk-border);border-radius:14px;background:var(--tk-surface);padding:.8rem 1rem;margin-bottom:.9rem}
+.obg-dot{width:34px;height:34px;border-radius:50%;flex:none;background:var(--tk-text-muted);box-shadow:0 0 0 5px color-mix(in srgb,var(--tk-text-muted) 14%,transparent)}
+.obg-dot.blue{background:var(--tk-brand);box-shadow:0 0 0 5px color-mix(in srgb,var(--tk-brand) 16%,transparent)}
+.obg-dot.amber{background:var(--tk-amber);box-shadow:0 0 0 5px color-mix(in srgb,var(--tk-amber) 16%,transparent)}
+.obg-dot.red{background:var(--tk-danger);box-shadow:0 0 0 5px color-mix(in srgb,var(--tk-danger) 14%,transparent)}
+.obg-dot.green{background:var(--tk-emerald);box-shadow:0 0 0 5px color-mix(in srgb,var(--tk-emerald) 14%,transparent)}
+.obg-light-t{font-weight:700;color:var(--tk-text);font-size:.92rem}
+.obg-light-s{color:var(--tk-text-muted);font-size:.8rem;margin-top:.15rem;line-height:1.5}
+.obg-light-r{margin-left:auto;text-align:right;color:var(--tk-text-muted);font-size:.74rem;white-space:nowrap}
 .obg-refs{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
 @media (max-width:640px){.obg-form{grid-template-columns:1fr}.obg-light{flex-wrap:wrap}.obg-light-r{margin-left:0;text-align:left}}
 </style>
@@ -82,7 +82,7 @@
   {% if flash and flash.saved and guide.slug == 'tiktok' %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_creds', '应用凭证已保存。下一步：填注册地，点「用 TikTok Business Account 授权」。') }}</div>
   {% elif flash and flash.saved %}
-  <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.saved', '凭证已保存到本机配置（config.local.yaml）。webhook 挂载与官方 worker 在重启后生效；现在可以先扫码授权。') }}</div>
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.saved', '凭证已保存，webhook 与官方通道已即时装载；现在去扫码授权。') }}</div>
   {% elif flash and flash.webhook == 'ok' and not flash.connected %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_webhook', '私信 Webhook 已注册到 TikTok。') }}</div>
   {% elif flash and flash.connected and guide.slug == 'tiktok' %}
@@ -124,7 +124,7 @@
         {% elif status.hint == 'authorize' %}{{ (i18n or {}).get('obg.st.h_authorize', '凭证已就位，去授权账号。') }}
         {% elif status.hint == 'region_blocked' %}{{ (i18n or {}).get('obg.st.h_region', '已登记账号的注册地都不支持私信 API，换可用区账号或改走 WhatsApp / Messaging Ads。') }}
         {% elif status.hint == 'needs_reauth' %}{{ (i18n or {}).get('obg.st.h_reauth', '账号令牌已失效，重新授权即可恢复。') }}
-        {% elif status.hint == 'restart_required' %}{{ (i18n or {}).get('obg.st.h_restart', '凭证已保存但 webhook 路由 / 官方 worker 还未装载——重启智聊一次。') }}
+        {% elif status.hint == 'restart_required' %}{{ (i18n or {}).get('obg.st.h_restart', '凭证已保存但 webhook 路由 / 官方 worker 在本进程仍未装载——重启智聊一次。') }}
         {% elif status.hint == 'await_first_dm' %}{{ (i18n or {}).get('obg.st.h_first', '一切就位，等第一条私信进来（用另一个账号发一条试试）。') }}
         {% elif status.hint == 'webhook_silent' %}{{ (i18n or {}).get('obg.st.h_silent', '超过 24 小时没有收到任何 webhook 事件，检查回调地址是否仍然可达。') }}
         {% elif status.hint == 'reauth_soon' %}{{ (i18n or {}).get('obg.st.h_soon', '有账号令牌 7 天内到期，提前重新授权。') }}
@@ -158,7 +158,7 @@
       {% endif %}
       {% if guide.slug == 'douyin' and loop.index == 6 and panel %}
       <div class="obg-panel">
-        <form class="obg-form" method="post" action="/help/onboarding/douyin/credentials" autocomplete="off">
+        <form class="obg-form" method="post" action="/workspace/onboarding/douyin/credentials" autocomplete="off">
           <label>client_key
             <input name="client_key" value="{{ panel.client_key }}" placeholder="aw…" required>
           </label>
@@ -173,7 +173,7 @@
           <button type="button" data-copy-target="obg-callback-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
         </div>
         <div style="display:flex;gap:.6rem;align-items:center;margin-top:.5rem;flex-wrap:wrap">
-          <a class="obg-btn pri {% if not (panel.has_key and panel.has_secret) %}dis{% endif %}" href="/help/onboarding/douyin/authorize" id="obg-authorize">{{ (i18n or {}).get('obg.panel.authorize', '用企业号抖音扫码授权') }}</a>
+          <a class="obg-btn pri {% if not (panel.has_key and panel.has_secret) %}dis{% endif %}" href="/workspace/onboarding/douyin/authorize" id="obg-authorize">{{ (i18n or {}).get('obg.panel.authorize', '用企业号抖音扫码授权') }}</a>
           <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.panel.authorize_hint', '授权页由抖音提供；成功后经营者 open_id 与令牌自动登记为「抖音 · 官方通道」账号。') }}</span>
         </div>
         {% if panel.accounts %}
@@ -193,7 +193,7 @@
       {% endif %}
       {% if guide.slug == 'tiktok' and loop.index == 4 and panel %}
       <div class="obg-panel">
-        <form class="obg-form" method="post" action="/help/onboarding/tiktok/credentials" autocomplete="off">
+        <form class="obg-form" method="post" action="/workspace/onboarding/tiktok/credentials" autocomplete="off">
           <label>{{ (i18n or {}).get('obg.tt.app_id', '开发者应用 App ID（app_id）') }}
             <input name="app_id" value="{{ panel.app_id }}" placeholder="TikTok for Business app_id" required>
           </label>
@@ -207,15 +207,15 @@
           <code id="obg-tt-callback-url">{{ panel.callback_url }}</code>
           <button type="button" data-copy-target="obg-tt-callback-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
         </div>
-        <form method="get" action="/help/onboarding/tiktok/authorize" style="display:flex;gap:.6rem;align-items:flex-end;margin-top:.6rem;flex-wrap:wrap">
-          <label style="display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}
+        <form method="get" action="/workspace/onboarding/tiktok/authorize" style="display:flex;gap:.6rem;align-items:flex-end;margin-top:.6rem;flex-wrap:wrap">
+          <label style="display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--tk-text-muted)">{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}
             <input name="region" placeholder="SG / MY / MX …" maxlength="3" required style="text-transform:uppercase;width:120px">
           </label>
           <button class="obg-btn pri {% if not (panel.has_app_id and panel.has_secret) %}dis{% endif %}" type="submit" id="obg-tt-authorize" {% if not (panel.has_app_id and panel.has_secret) %}aria-disabled="true" disabled{% endif %}>{{ (i18n or {}).get('obg.tt.authorize', '用 TikTok Business Account 授权') }}</button>
           <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.authorize_hint', '授权页由 TikTok 提供；成功后账号、令牌自动登记并自动续期，私信 webhook 也会自动注册。') }}</span>
         </form>
         <div style="display:flex;gap:.6rem;align-items:center;margin-top:.5rem;flex-wrap:wrap">
-          <form method="post" action="/help/onboarding/tiktok/webhook" style="margin:0">
+          <form method="post" action="/workspace/onboarding/tiktok/webhook" style="margin:0">
             <button class="obg-btn {% if not (panel.has_app_id and panel.has_secret) %}dis{% endif %}" type="submit" {% if not (panel.has_app_id and panel.has_secret) %}aria-disabled="true" disabled{% endif %}>{{ (i18n or {}).get('obg.tt.webhook_btn', '注册私信 Webhook') }}</button>
           </form>
           <div class="obg-copy" style="flex:1;margin:0">
@@ -225,7 +225,7 @@
         </div>
         <details style="margin-top:.6rem">
           <summary class="obg-note" style="cursor:pointer">{{ (i18n or {}).get('obg.tt.manual', '没有授权权限？手填 business_id + access_token 登记') }}</summary>
-          <form class="obg-form" method="post" action="/help/onboarding/tiktok/account" autocomplete="off" style="margin-top:.5rem">
+          <form class="obg-form" method="post" action="/workspace/onboarding/tiktok/account" autocomplete="off" style="margin-top:.5rem">
             <label>business_id<input name="business_id" placeholder="Business Account ID" required></label>
             <label>access_token<input name="access_token" type="password" placeholder="{{ (i18n or {}).get('obg.tt.token_ph', '开发者门户授权后获得') }}"></label>
             <label>{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}<input name="region" placeholder="SG" maxlength="3" required style="text-transform:uppercase"></label>
@@ -258,7 +258,7 @@
         <div class="obg-note" style="margin-top:.35rem">{{ (i18n or {}).get('obg.tt.me_link', '私信引流链接（可加 ref 区分渠道，如 ?ref=ig_bio；扫码/点击直接进入与你的私信）') }}</div>
         <div class="obg-copy">
           <code id="obg-me-{{ loop.index }}" data-me-base="{{ a.me_link }}">{{ a.me_link }}</code>
-          <input class="obg-ref-in" data-target="obg-me-{{ loop.index }}" placeholder="ref" maxlength="60" style="width:110px;border:1px solid var(--bd);background:var(--input);color:var(--t);border-radius:8px;padding:.3rem .5rem;font-size:.78rem">
+          <input class="obg-ref-in" data-target="obg-me-{{ loop.index }}" placeholder="ref" maxlength="60" style="width:110px;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text);border-radius:8px;padding:.3rem .5rem;font-size:.78rem">
           <button type="button" data-copy-target="obg-me-{{ loop.index }}">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
         </div>
         {% if a.ref_counts %}
