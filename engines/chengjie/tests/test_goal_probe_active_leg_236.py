@@ -667,3 +667,157 @@ def test_hard_line_survives_overflow_and_soft_gap_yields():
     blk2 = build_goal_block(title="客户摸底", milestone_label="x", milestone_idx=0, day_index=1,
                             total_days=3, intent="聊", profile_gap="人在哪个城市")
     assert "【画像缺口】像朋友闲聊，不要像查户口，一轮只问一个：人在哪个城市" in blk2
+
+
+# ══ D 卡片诚实三计数 + 零出手红字 + 采集不可用黄条 ═══════════════════════════════
+import pathlib  # noqa: E402
+
+import pytest  # noqa: E402
+from fastapi import FastAPI, Request  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
+
+from src.companion.goals.service import capture_status  # noqa: E402
+from src.companion.goals.sprint_ticker import record_natural_beat_sent  # noqa: E402
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
+
+
+def test_capture_status_two_independent_reasons():
+    assert capture_status({}) == {"ok": False, "reasons": ["profile_llm_off", "memory_extract_off"],
+                                  "profile_llm": False, "memory_extract": False}
+    both = {"companion": {"goals": {"profile_llm": {"enabled": True}}},
+            "memory": {"extract": {"intents": ["direct_chat", "small_talk"]}}}
+    assert capture_status(both)["ok"] is True
+    only_llm = {"companion": {"goals": {"profile_llm": {"enabled": True}}},
+                "memory": {"extract": {"intents": [], "match_all": False}}}
+    assert capture_status(only_llm)["reasons"] == ["memory_extract_off"]
+    match_all = {"memory": {"extract": {"match_all": True}}}
+    assert capture_status(match_all)["reasons"] == ["profile_llm_off"]
+    off = {"companion": {"goals": {"profile_llm": {"enabled": True}}},
+           "memory": {"extract": {"enabled": False, "intents": ["x"]}}}
+    assert capture_status(off)["reasons"] == ["memory_extract_off"]
+    assert capture_status(None)["ok"] is False        # 坏输入也不抛
+
+
+class _StubInbox:
+    def __init__(self, mode="auto_ai"):
+        self.mode = mode
+
+    def get_automation_mode(self, conv):
+        return self.mode
+
+    def get_conv_meta(self, conv):
+        return {}
+
+    def list_recent_messages(self, conv, limit=10):
+        return []
+
+
+@pytest.fixture
+def card(monkeypatch):
+    import src.integrations.protocol_bridge as pb
+    import src.utils.companion_context as cc
+    from src.companion.goals.store import get_goal_store, reset_goal_store
+    from src.web.routes.goal_routes import register_goal_routes
+
+    monkeypatch.setattr(cc, "_REL_PROVIDERS", {})
+    reset_goal_store()
+    stub = {"inbox": _StubInbox()}
+    monkeypatch.setattr(pb, "_inbox_store_getter", lambda: stub["inbox"])
+    cfg = {"companion": {"goals": {
+        "enabled": True, "db_path": ":memory:",
+        "sprint": {"enabled": True, "dry_run": False,
+                   "platforms": ["telegram", "whatsapp", "line"],
+                   "natural_window": [0, 24]},
+    }, "proactive_care": {"enabled": True, "dry_run": True}},
+        "memory": {"extract": {"intents": []}}}
+    app = FastAPI()
+
+    def auth_dep(request: Request) -> None:
+        request.scope["session"] = {"role": "", "user": "tester"}
+
+    register_goal_routes(app, auth_dep, SimpleNamespace(config=cfg, config_path=None))
+    c = TestClient(app)
+    now = time.time()
+
+    def _mk(created_ago_sec=0.0, autonomy="auto", template="profile_discovery"):
+        store = get_goal_store(":memory:")
+        params = ({"slots": "location,occupation,age,interests"}
+                  if template == "profile_discovery" else {"note": "推进到愿意视频"})
+        g = store.create_goal(
+            conversation_id=CONV, platform=PLAT, account_id=ACCT, chat_key=CK,
+            template=template, autonomy=autonomy, params=params, deadline_days=3,
+            now=now - created_ago_sec)
+        return store, g["goal_id"]
+
+    def _goal():
+        return c.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()["goal"]
+
+    yield SimpleNamespace(client=c, mk=_mk, goal=_goal, stub=stub, cfg=cfg, now=now)
+    reset_goal_store()
+
+
+def test_card_counts_day0_zero_send_not_alarmed_but_hours_shown(card):
+    """HM7XBA 8 小时形态：注入 0 / 主动出手 0（已 8 小时）/ 已采集 0/4；红字**不**亮
+    （首拍时刻在建目标 +24h），first_eligible_ts 给卡片写「最早几点」。黄条两条原因都在。"""
+    store, gid = card.mk(created_ago_sec=8 * 3600)
+    g = card.goal()
+    cnt = g["sprint_live"]["counts"]
+    assert cnt["injected"] == 0 and cnt["sent"] == 0
+    assert 7.9 <= cnt["zero_send_hours"] <= 8.1
+    assert cnt["zero_send_alarm"] is False
+    assert abs(cnt["first_eligible_ts"] - (card.now - 8 * 3600 + 86400)) < 5
+    assert [s["filled"] for s in g["slots_progress"]] == [False] * 4
+    assert g["capture"]["ok"] is False
+    assert g["capture"]["reasons"] == ["profile_llm_off", "memory_extract_off"]
+
+
+def test_card_counts_past_first_slot_zero_send_alarms_and_counts_all_three(card):
+    store, gid = card.mk(created_ago_sec=30 * 3600)
+    # 注入 3 稿（C 段计数）+ 采到 1 项 + 一次硬追问问出、一次没问出
+    store.update_goal_fields(gid, params={**store.get_goal(gid)["params"], "_inject_count": 3})
+    store.upsert_customer_profile(PLAT, CK, {"location": "Los Angeles"}, source="llm")
+    store.add_event(gid, "probe_asked", "location@rain", now=card.now - 3600)
+    store.add_event(gid, "probe_missed", "occupation@work", now=card.now - 1800)
+    g = card.goal()
+    cnt = g["sprint_live"]["counts"]
+    assert cnt["injected"] == 3 and cnt["sent"] == 0
+    assert cnt["zero_send_alarm"] is True and cnt["zero_send_hours"] >= 29.9
+    assert cnt["probe_asked"] == 1 and cnt["probe_missed"] == 1
+    assert sum(1 for s in g["slots_progress"] if s["filled"]) == 1
+    # 一次真发 → 主动出手 1、红字灭、小时数归 0（与看门狗 beat_sent 同口径）
+    record_natural_beat_sent(store, gid, "2026-09-08", now=card.now - 600, care_id=9)
+    cnt2 = card.goal()["sprint_live"]["counts"]
+    assert cnt2["sent"] == 1 and cnt2["zero_send_alarm"] is False and cnt2["zero_send_hours"] == 0
+
+
+def test_card_capture_ok_when_both_chains_on_and_manual_goal_no_alarm(card):
+    card.cfg["companion"]["goals"]["profile_llm"] = {"enabled": True}
+    card.cfg["memory"]["extract"]["intents"] = ["direct_chat"]
+    store, gid = card.mk(created_ago_sec=40 * 3600, autonomy="suggest")
+    g = card.goal()
+    assert g["capture"]["ok"] is True and g["capture"]["reasons"] == []
+    assert g["sprint_live"]["counts"]["zero_send_alarm"] is False   # 非 auto 不喊
+
+
+def test_card_counts_frontend_and_i18n_and_hosts():
+    js = (REPO / "shared/copilot/components/cp-goal.js").read_text(encoding="utf-8")
+    for needle in ("gl-counts", "inbox.goal.counts.injected", "inbox.goal.counts.sent_hours",
+                   "inbox.goal.counts.captured", "zero_send_alarm", "first_eligible_ts",
+                   "gl-capture-warn", "inbox.goal.capture.unavailable", 'cap.ok === false',
+                   "inbox.goal.counts.probe"):
+        assert needle in js, needle
+    mirror = (REPO / "desktop/renderer/shared/copilot/components/cp-goal.js").read_bytes()
+    assert mirror == (REPO / "shared/copilot/components/cp-goal.js").read_bytes()
+    from src.web.i18n_packs import goals as gp
+    for k in ("inbox.goal.counts.injected", "inbox.goal.counts.sent", "inbox.goal.counts.sent_hours",
+              "inbox.goal.counts.captured", "inbox.goal.counts.probe", "inbox.goal.counts.alarm_t",
+              "inbox.goal.counts.first_eligible_t", "inbox.goal.capture.unavailable",
+              "inbox.goal.capture.profile_llm_off", "inbox.goal.capture.memory_extract_off",
+              "inbox.goal.blocked.frozen", "inbox.goal.engine.blk.frozen"):
+        assert k in gp.ZH and k in gp.EN, k
+    from src.web.i18n_packs import zh_hant_auto as hant
+    assert "inbox.goal.counts.sent_hours" in hant.ZH_HANT
+    for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
+                 "src/web/templates/unified_inbox.html"):
+        assert "cp-goal.js?v=20260908c" in (REPO / host).read_text(encoding="utf-8"), host

@@ -1278,6 +1278,41 @@ def decide_probe_target(
         return "", "", "", []
 
 
+def capture_status(cfg_root: Any) -> Dict[str, Any]:
+    """摸底「采集链」当前能不能自动填槽（O-3 D #236，卡片黄条数据源）。纯函数、绝不抛。
+
+    按代码真相写两条独立原因（报告把 0/4 归咎「情景记忆抽取死」——槽位采集其实是另一条链）：
+    - ``profile_llm_off``：``companion.goals.profile_llm.enabled`` 关（clean 包基线未开）——
+      客户自由表达的回答（「I run a small bakery」）不会自动记入画像，只剩固定句式正则
+      （宁漏不错、坐标只认白名单地名）；这是 0/4 里「答了却没记」的真正依赖。
+    - ``memory_extract_off``：``memory.extract`` 总闸关 / 白名单空且未 match_all（O-2 #256）
+      ——客户透露的私事不进情景记忆，AI 下一轮就忘、追问接不上话头。
+    ``ok=True`` 仅当两条都不成立。"""
+    out: Dict[str, Any] = {"ok": True, "reasons": [], "profile_llm": False,
+                           "memory_extract": True}
+    try:
+        root = cfg_root if isinstance(cfg_root, dict) else {}
+        goals = ((root.get("companion") or {}).get("goals") or {}) \
+            if isinstance(root.get("companion"), dict) else {}
+        pl = goals.get("profile_llm") if isinstance(goals, dict) else None
+        llm_on = bool(isinstance(pl, dict) and pl.get("enabled"))
+        out["profile_llm"] = llm_on
+        if not llm_on:
+            out["reasons"].append("profile_llm_off")
+        mem = root.get("memory") if isinstance(root.get("memory"), dict) else {}
+        ex = mem.get("extract") if isinstance(mem.get("extract"), dict) else {}
+        ex_on = bool(ex.get("enabled", True))
+        whitelist = [str(x).strip() for x in (ex.get("intents") or []) if str(x).strip()]
+        mem_ok = ex_on and (bool(ex.get("match_all")) or bool(whitelist))
+        out["memory_extract"] = mem_ok
+        if not mem_ok:
+            out["reasons"].append("memory_extract_off")
+        out["ok"] = not out["reasons"]
+    except Exception:
+        logger.debug("capture_status failed", exc_info=True)
+    return out
+
+
 def build_block_for_chat(
     config_obj: Any,
     *,
@@ -1796,14 +1831,13 @@ def build_block_for_chat(
             params_patch = dict(probe_patch)
         elif gap_patch:
             params_patch = dict(gap_patch)
-        if _is_discovery:
-            base_cnt = params_patch if params_patch is not None else dict(
-                (res.get("goal") or goal).get("params") or {})
-            try:
-                base_cnt[INJECT_COUNT_PARAM] = int(base_cnt.get(INJECT_COUNT_PARAM) or 0) + 1
-            except (TypeError, ValueError):
-                base_cnt[INJECT_COUNT_PARAM] = 1
-            params_patch = base_cnt
+        base_cnt = params_patch if params_patch is not None else dict(
+            (res.get("goal") or goal).get("params") or {})
+        try:
+            base_cnt[INJECT_COUNT_PARAM] = int(base_cnt.get(INJECT_COUNT_PARAM) or 0) + 1
+        except (TypeError, ValueError):
+            base_cnt[INJECT_COUNT_PARAM] = 1
+        params_patch = base_cnt
         if params_patch is not None:
             try:
                 gid = str((res.get("goal") or goal).get("goal_id") or "")
@@ -2947,6 +2981,7 @@ __all__ = [
     "PROBE_PENDING_PARAM",
     "build_beats_trace",
     "build_block_for_chat",
+    "capture_status",
     "catalog_guard_facts",
     "decide_probe_target",
     "discovery_gap_for_goal",

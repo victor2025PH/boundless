@@ -221,6 +221,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 }
                 for k in sel
             ]
+            # O-3 D（#236）：采集链能不能自动填槽——不能就黄条明示（画像 AI 抽取未开 /
+            # 记忆抽取白名单空），不再让 0/4 静默像「客户没说」
+            try:
+                from src.companion.goals.service import capture_status
+                view["capture"] = capture_status(_cfg_root())
+            except Exception:
+                logger.debug("capture_status attach skipped", exc_info=True)
         except Exception:
             logger.debug("slots_progress attach skipped", exc_info=True)
         return view
@@ -517,12 +524,40 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 auto_state = "blocked_recent"
             else:
                 auto_state = "waiting_first"
+            # O-3 D（#236 HM7XBA）：卡片诚实三计数「注入 N 次 / 主动出手 N 次 / 已采集 N/M」
+            # ——注入＝每稿（params._inject_count，C 段每目标累加）；主动出手＝beat_sent
+            # 事件（与看门狗同口径，含 E 段手动摸底）；已采集由 slots_progress 给。
+            # 「主动出手 0 次」何时标红：**过了第一个可出手时刻**仍零真发（自然档＝建目标
+            # +24h、冲刺即刻；与 liveness.first_eligible_delay_sec 同源）且期限未到——
+            # HM7XBA 8 小时那会儿按设计根本没到点，红字会跟 watchdog 一样喊错；卡上照给
+            # 「已 N 小时」和「最早几点出手」让人自己判断。
+            from src.companion.goals.liveness import first_eligible_delay_sec
+            _params = view.get("params") if isinstance(view.get("params"), dict) else {}
+            try:
+                inject_count = int(_params.get("_inject_count") or 0)
+            except (TypeError, ValueError):
+                inject_count = 0
+            sent_total = int(tsum.get("sent") or 0)
+            try:
+                _born = float(view.get("created_at") or view.get("start_ts") or 0)
+            except (TypeError, ValueError):
+                _born = 0.0
+            zero_hours = (round((_now - _born) / 3600.0, 1)
+                          if (sent_total == 0 and _born > 0) else 0.0)
+            _first_ok_ts = (_born + first_eligible_delay_sec(dict(view))) if _born > 0 else 0.0
+            try:
+                _dl = float(view.get("deadline_ts") or 0)
+            except (TypeError, ValueError):
+                _dl = 0.0
+            zero_alarm = bool(
+                is_auto and sent_total == 0 and _born > 0
+                and _now >= _first_ok_ts and (_dl <= 0 or _now < _dl))
             view["sprint_live"] = {
                 "ticker_on": ticker_on,
                 "ticker_enabled": bool(scfg.get("enabled")),
                 "blockers": blockers,
                 "runtime": runtime,
-                "beats_used": int(tsum.get("sent") or 0),
+                "beats_used": sent_total,
                 "beats_actions": len(beats),
                 "trace": tsum,
                 "sent_24h": int(sent_24h),
@@ -534,6 +569,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "nudgeable": live_ok
                 and sprint
                 and str(view.get("autonomy") or "") == "auto",
+                "counts": {
+                    "injected": inject_count,
+                    "sent": sent_total,
+                    "probe_asked": int(tsum.get("probe_asked") or 0),
+                    "probe_missed": int(tsum.get("probe_missed") or 0),
+                    "zero_send_hours": zero_hours,
+                    "zero_send_alarm": zero_alarm,
+                    "first_eligible_ts": round(_first_ok_ts, 1),
+                },
             }
         except Exception:
             logger.debug("sprint live attach skipped", exc_info=True)

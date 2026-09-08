@@ -422,6 +422,20 @@
                     border-color:var(--cp-warn,#b45309); }
       .gl-engine-note { font-size:var(--cp-fs-tiny,11px); line-height:1.45; margin:2px 0 4px;
                         color:var(--cp-warn,#b45309); }
+      /* O-3 D（#236）：诚实三计数行「注入 N 次 · 主动出手 N 次（已 H 小时）· 已采集 N/M」
+         ——三个数各自口径，红字只在「过了首拍时刻仍零真发」（不冒充推进、也不喊错） */
+      .gl-counts { display:flex; flex-wrap:wrap; gap:2px 6px; align-items:center; margin:2px 0 0;
+                   font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); line-height:1.5; }
+      .gl-counts .red { color:var(--cp-danger,#dc2626); font-weight:700; }
+      .gl-counts .warn { color:var(--cp-warn,#b45309); }
+      .gl-counts-sep { color:var(--cp-text-tiny,#94a3b8); }
+      /* O-3 D：采集链不可用黄条（画像 AI 抽取未开 / 记忆抽取白名单空）——不让 0/4 静默 */
+      .gl-capture-warn { display:flex; gap:6px; align-items:flex-start; margin:4px 0 0; padding:4px 8px;
+                         border-radius:6px; font-size:var(--cp-fs-tiny,11px); line-height:1.45;
+                         color:var(--cp-warn,#b45309);
+                         border:1px solid color-mix(in srgb,var(--cp-warn,#d97706) 45%,transparent);
+                         background:color-mix(in srgb,var(--cp-warn,#d97706) 10%,transparent); }
+      .gl-capture-warn .gl-capture-why { display:block; }
       .gl-auto-card.off { opacity:.62; border-style:dashed; }
       .gl-auto-card.off.sel { opacity:.85; }
       .gl-sprint-line .gl-nudge { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:1px 8px;
@@ -1288,6 +1302,52 @@
             `<div class="gl-sprint-line"><span>${bits.join(" · ")}</span>${nudge}</div></div>`;
         }
       }
+      // O-3 D（#236 HM7XBA）：诚实三计数「注入 N 次 · 主动出手 N 次（已 H 小时）· 已采集 N/M」
+      // ——注入＝每稿；主动出手＝beat_sent（与看门狗同口径，含手动摸底）；已采集＝打勾清单。
+      // 「主动出手 0 次」红字只在后端 zero_send_alarm（过了首拍时刻仍零真发、期限未到）；
+      // 还没到点时 tooltip 写「最早 HH:MM 出手」，不跟 watchdog 一样对自然档喊错。
+      let countsLine = "";
+      const cnt = (live && live.counts && typeof live.counts === "object") ? live.counts : null;
+      if (cnt && g.status === "active") {
+        const fmtHM = (ts) => {
+          const nd = new Date(ts * 1000);
+          const today = new Date();
+          const hm = ("0" + nd.getHours()).slice(-2) + ":" + ("0" + nd.getMinutes()).slice(-2);
+          return nd.toDateString() === today.toDateString()
+            ? hm : `${nd.getMonth() + 1}/${nd.getDate()} ${hm}`;
+        };
+        const inj = parseInt(cnt.injected, 10) || 0;
+        const sentN = parseInt(cnt.sent, 10) || 0;
+        const zh = parseFloat(cnt.zero_send_hours) || 0;
+        const alarm = !!cnt.zero_send_alarm;
+        const fe = parseFloat(cnt.first_eligible_ts) || 0;
+        const parts = [];
+        parts.push(`<span title="${esc(this.t("inbox.goal.counts.injected_t"))}">` +
+          `${esc(this.t("inbox.goal.counts.injected", { n: inj }))}</span>`);
+        const sentTxt = (sentN === 0 && zh >= 1)
+          ? this.t("inbox.goal.counts.sent_hours", { n: sentN, h: Math.round(zh) })
+          : this.t("inbox.goal.counts.sent", { n: sentN });
+        const sentTip = alarm
+          ? this.t("inbox.goal.counts.alarm_t")
+          : ((sentN === 0 && fe > Date.now() / 1000)
+            ? this.t("inbox.goal.counts.first_eligible_t", { t: fmtHM(fe) })
+            : this.t("inbox.goal.counts.sent_t"));
+        parts.push(`<span class="${alarm ? "red" : ""}" data-ref="cnt_sent" title="${esc(sentTip)}">` +
+          `${alarm ? "\u26A0 " : ""}${esc(sentTxt)}</span>`);
+        const spc = Array.isArray(g.slots_progress) ? g.slots_progress : [];
+        if (spc.length) {
+          const filledC = spc.filter((s) => s && s.filled).length;
+          parts.push(`<span title="${esc(this.t("inbox.goal.counts.captured_t"))}">` +
+            `${esc(this.t("inbox.goal.counts.captured", { n: filledC, m: spc.length }))}</span>`);
+        }
+        const pa = parseInt(cnt.probe_asked, 10) || 0;
+        const pm = parseInt(cnt.probe_missed, 10) || 0;
+        if (pa || pm) {
+          parts.push(`<span class="${pm > pa ? "warn" : ""}" title="${esc(this.t("inbox.goal.counts.probe_t"))}">` +
+            `${esc(this.t("inbox.goal.counts.probe", { a: pa, m: pm }))}</span>`);
+        }
+        countsLine = `<div class="gl-counts">${parts.join('<span class="gl-counts-sep">\u00b7</span>')}</div>`;
+      }
       // #166：auto 档而引擎不能真出手 → 卡身一行说清（sprintLine 已点名 ticker
       // 关闸时不重复；运行时闸由 sprintLine 的 engine_blocked 覆盖）
       const engineNote = (engOff && !(live && !live.ticker_on))
@@ -1301,7 +1361,7 @@
       // M-7 C（#236）：新目标刚建、上一个同会话目标 7 天内刚到期 → 一行「上一个目标
       // 已结算：出手 X 拍，原因」（用户重建后卡片回「起步」，以为引擎被重置）
       const prevSettled = this._prevSettledHtml();
-      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + engineNote + retiredNote + prevSettled +
+      const meta = `<div class="gl-meta">${metaInner}</div>` + sprintLine + countsLine + engineNote + retiredNote + prevSettled +
         (isSprint ? "" : (this._deadlineOpen ? this._renderDeadlineForm(g) : this._renderDueRow(g)));
       if (isSprint && g.status === "active") this._armSprintTick();
 
@@ -1427,9 +1487,26 @@
           (on && s.value ? `\u00b7${esc(s.value)}` : "") +
           (stale ? "\u23F3" : "") + `</span>`;
       }).join("");
+      // O-3 D（#236）：采集链不可用 → 黄条把原因说全（画像 AI 抽取未开 / 记忆抽取白名单空），
+      // 不再让 0/4 静默得像「客户没说」。后端缺 capture 键（旧后端）＝不渲染。
+      let captureWarn = "";
+      const cap = (g.capture && typeof g.capture === "object") ? g.capture : null;
+      if (cap && cap.ok === false) {
+        const reasons = Array.isArray(cap.reasons) ? cap.reasons : [];
+        const why = reasons
+          .map((r) => this.t("inbox.goal.capture." + String(r)))
+          .filter((s) => s && !/^inbox\.goal\.capture\./.test(s));
+        if (why.length) {
+          captureWarn = `<div class="gl-capture-warn" role="note">` +
+            `<span aria-hidden="true">\u26A0</span><div>` +
+            `<strong>${esc(this.t("inbox.goal.capture.unavailable"))}</strong>` +
+            why.map((w) => `<span class="gl-capture-why">${esc(w)}</span>`).join("") +
+            `</div></div>`;
+        }
+      }
       return `<div class="gl-sec gl-slots"><div class="gl-slots-hd">` +
         `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}</div>` +
-        `<div class="gl-slots-row">${chips}</div></div>`;
+        `<div class="gl-slots-row">${chips}</div>${captureWarn}</div>`;
     }
 
     /* ── 调整期限（改节奏）内联表单（P25）── */
