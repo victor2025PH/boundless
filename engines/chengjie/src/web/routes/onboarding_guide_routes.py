@@ -126,7 +126,8 @@ def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optiona
 
 def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str, Any]:
     """TikTok 面板数据：应用凭证状态、webhook 地址、已登记 Business Account 及按注册地算出的能力。"""
-    from src.integrations.tiktok_official import MODE, PLATFORM, tiktok_cfg
+    from src.integrations.tiktok_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, tiktok_cfg,
+                                                  token_state)
     from src.integrations.tiktok_regions import capabilities
     cfg = tiktok_cfg(_config(request))
     base = _public_base(request)
@@ -136,20 +137,27 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
         if reg is None:
             from src.integrations.account_registry import get_account_registry
             reg = get_account_registry()
+        t = time.time()
         for acc in reg.list(PLATFORM):
             if str(acc.get("mode") or "") not in ("", MODE):
                 continue
             meta = dict(acc.get("meta") or {})
             caps = capabilities(meta.get("region"))
+            rexp = float(meta.get("refresh_expires_at") or 0)
             accounts.append({"account_id": str(acc.get("account_id") or ""), "label": str(acc.get("label") or ""),
-                             "has_token": bool(meta.get("access_token")), "region": caps["region"],
-                             "dm_api": caps["dm_api"], "media_send": caps["media_send"], "shop_site": caps["shop_site"],
-                             "alternatives": caps["alternatives"]})
+                             "username": str(meta.get("username") or ""),
+                             "has_token": bool(meta.get("access_token")), "token_state": token_state(meta, t),
+                             "auto_refresh": bool(meta.get("refresh_token")),
+                             "refresh_days_left": (max(0, int((rexp - t) // 86400)) if rexp else None),
+                             "region": caps["region"], "dm_api": caps["dm_api"], "media_send": caps["media_send"],
+                             "shop_site": caps["shop_site"], "alternatives": caps["alternatives"]})
     except Exception:
         logger.debug("[onboarding] 读取 TikTok 账号失败", exc_info=True)
     return {"has_app_id": bool(cfg["app_id"]), "has_secret": bool(cfg["secret"]), "enabled": cfg["enabled"],
             "app_id": cfg["app_id"], "secret_masked": _mask(cfg["secret"]),
-            "webhook_url": f"{base}{cfg['webhook_path']}" if base else cfg["webhook_path"], "accounts": accounts}
+            "webhook_url": f"{base}{cfg['webhook_path']}" if base else cfg["webhook_path"],
+            "callback_url": f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}" if base else DEFAULT_OAUTH_CALLBACK_PATH,
+            "accounts": accounts}
 
 
 def register_onboarding_guide_routes(app, page_auth, templates) -> None:
@@ -179,7 +187,8 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         return templates.TemplateResponse(request, "help_onboarding.html", {
             "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel,
             "flash": {"saved": q.get("saved") == "1", "connected": str(q.get("connected") or ""),
-                      "error": str(q.get("error") or ""), "region": str(q.get("region") or "")},
+                      "error": str(q.get("error") or ""), "region": str(q.get("region") or ""),
+                      "webhook": str(q.get("webhook") or "")},
         })
 
     @app.post("/help/onboarding/tiktok/account")
@@ -225,6 +234,96 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         _audit(request, "tiktok_account_register", f"tiktok/{bid}", "",
                f"region={reg_code} dm_api={caps['dm_api']} token={'y' if tok else 'n'}")
         return RedirectResponse(f"/help/onboarding/tiktok?connected={bid}&region={reg_code}", status_code=303)
+
+    @app.post("/help/onboarding/tiktok/credentials")
+    async def onboarding_tiktok_credentials(request: Request, _=Depends(page_auth),
+                                            app_id: str = Form(""), secret: str = Form("")):
+        """保存开发者应用凭证（app_id / secret）到 overlay 并开启 tiktok.enabled；密钥留空＝保留。"""
+        from src.integrations.tiktok_official import tiktok_cfg
+        cm = _config_manager(request)
+        cur = tiktok_cfg(getattr(cm, "config", None) or {})
+        aid = str(app_id or "").strip()
+        sec = str(secret or "").strip()
+        if not aid:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_app_id", status_code=303)
+        patch: Dict[str, Any] = {"tiktok": {"app_id": aid, "enabled": True}}
+        if sec:
+            patch["tiktok"]["secret"] = sec
+        elif not cur["secret"]:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_secret", status_code=303)
+        if cm is None or not _save_patch(cm, patch):
+            return RedirectResponse("/help/onboarding/tiktok?error=save_failed", status_code=303)
+        _audit(request, "tiktok_credentials_save", "tiktok.app_id", cur["app_id"], aid)
+        return RedirectResponse("/help/onboarding/tiktok?saved=1", status_code=303)
+
+    @app.get("/help/onboarding/tiktok/authorize")
+    async def onboarding_tiktok_authorize(request: Request, _=Depends(page_auth), region: str = ""):
+        """一键授权：注册地必选（决定能力）→ 防篡改 state 带上 region → 302 去 TikTok 授权页。"""
+        from src.integrations.tiktok_official import DEFAULT_OAUTH_CALLBACK_PATH, authorize_url, oauth_state, tiktok_cfg
+        from src.integrations.tiktok_regions import normalize_region
+        cfg = tiktok_cfg(_config(request))
+        if not cfg["app_id"] or not cfg["secret"]:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_credentials", status_code=303)
+        reg_code = normalize_region(region)
+        if not reg_code:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_region", status_code=303)
+        redirect_uri = f"{_public_base(request)}{DEFAULT_OAUTH_CALLBACK_PATH}"
+        return RedirectResponse(authorize_url(cfg["app_id"], redirect_uri, oauth_state(cfg["secret"], reg_code)),
+                                status_code=302)
+
+    @app.get("/webhook/tiktok/oauth/callback")
+    async def tiktok_oauth_callback(request: Request):
+        """TikTok 回跳（公开路径）：state 校验 → code 换令牌 → 账号落注册表 → 顺手把 webhook 回调注册到 TikTok。"""
+        from src.integrations.tiktok_official import (DEFAULT_OAUTH_CALLBACK_PATH, complete_oauth, ensure_webhook,
+                                                      tiktok_cfg, verify_oauth_state)
+        q = request.query_params
+        cfg_all = _config(request)
+        cfg = tiktok_cfg(cfg_all)
+        region = verify_oauth_state(cfg["secret"], q.get("state"))
+        if region is None:
+            return RedirectResponse("/help/onboarding/tiktok?error=bad_state", status_code=303)
+        if q.get("error") or not q.get("code"):
+            err = str(q.get("error_description") or q.get("error") or "no_code")[:40]
+            return RedirectResponse(f"/help/onboarding/tiktok?error=denied:{err}", status_code=303)
+        base = _public_base(request)
+        res = await complete_oauth(str(q.get("code")), config=cfg_all, redirect_uri=f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}",
+                                   region=region)
+        if not res.get("ok"):
+            if res.get("error") == "ungranted_scopes":
+                return RedirectResponse("/help/onboarding/tiktok?error=ungranted_scopes", status_code=303)
+            err = f"{res.get('error')}:{res.get('error_code') or ''}".rstrip(":")
+            return RedirectResponse(f"/help/onboarding/tiktok?error={err[:60]}", status_code=303)
+        _audit(request, "tiktok_oauth_connected", f"tiktok/{res['open_id']}", "",
+               f"region={region} scope={res.get('scope')}", actor="tiktok-oauth")
+        wh = "skip"
+        try:
+            r = await ensure_webhook(cfg_all, f"{base}{cfg['webhook_path']}")
+            wh = "ok" if r.get("ok") else f"fail:{r.get('error_code') or r.get('error')}"
+        except Exception:
+            logger.debug("[onboarding] TikTok webhook 注册异常", exc_info=True)
+            wh = "fail:exception"
+        return RedirectResponse(f"/help/onboarding/tiktok?connected={res['open_id']}&region={region}&webhook={wh}",
+                                status_code=303)
+
+    @app.post("/help/onboarding/tiktok/webhook")
+    async def onboarding_tiktok_webhook(request: Request, _=Depends(page_auth)):
+        """手动（重新）把私信 webhook 回调注册到 TikTok（应用级，用 app_id/secret）。"""
+        from src.integrations.tiktok_official import ensure_webhook, tiktok_cfg
+        cfg_all = _config(request)
+        cfg = tiktok_cfg(cfg_all)
+        if not cfg["app_id"] or not cfg["secret"]:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_credentials", status_code=303)
+        url = f"{_public_base(request)}{cfg['webhook_path']}"
+        try:
+            r = await ensure_webhook(cfg_all, url)
+        except Exception:
+            logger.debug("[onboarding] TikTok webhook 注册异常", exc_info=True)
+            r = {"ok": False, "error": "exception"}
+        if not r.get("ok"):
+            return RedirectResponse(f"/help/onboarding/tiktok?error=webhook:{r.get('error_code') or r.get('error')}",
+                                    status_code=303)
+        _audit(request, "tiktok_webhook_register", "tiktok.webhook", "", url)
+        return RedirectResponse("/help/onboarding/tiktok?webhook=ok", status_code=303)
 
     @app.post("/help/onboarding/douyin/credentials")
     async def onboarding_douyin_credentials(request: Request, _=Depends(page_auth),

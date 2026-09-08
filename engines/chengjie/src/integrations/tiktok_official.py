@@ -54,14 +54,36 @@ CONTENT_LIST_URL = f"{API_BASE}/business/message/content/list/"
 
 EVENT_RECEIVE = "im_receive_msg"
 EVENT_SEND = "im_send_msg"
+EVENT_MARK_READ = "im_mark_read_msg"
 EVENT_HIGH_INTENT_COMMENT = "im_receive_high_intent_comment"
 
+# 授权码模式（Business Account 持有人授权；business_id ＝ /tt_user/oauth2/token/ 返回的 open_id）
+AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
+TOKEN_URL = f"{API_BASE}/tt_user/oauth2/token/"
+REFRESH_URL = f"{API_BASE}/tt_user/oauth2/refresh_token/"
+REVOKE_URL = f"{API_BASE}/tt_user/oauth2/revoke/"
+BUSINESS_GET_URL = f"{API_BASE}/business/get/"
+CAPABILITIES_URL = f"{API_BASE}/business/message/capabilities/get/"
+WEBHOOK_UPDATE_URL = f"{API_BASE}/business/webhook/update/"
+WEBHOOK_LIST_URL = f"{API_BASE}/business/webhook/list/"
+MEDIA_DOWNLOAD_URL = f"{API_BASE}/business/message/media/download/"
+WEBHOOK_EVENT_TYPE = "DIRECT_MESSAGE"
+#: 私信收发所需 scope（用户可部分授权 → 回调后按 data.scope 校验齐全）
+OAUTH_SCOPES = ("user.info.basic", "user.info.username", "user.info.profile",
+                "message.list.read", "message.list.send", "message.list.manage")
+MESSAGING_SCOPES = ("message.list.read", "message.list.send", "message.list.manage")
+DEFAULT_OAUTH_CALLBACK_PATH = "/webhook/tiktok/oauth/callback"
+OAUTH_STATE_TTL_SEC = 600.0
+
 DEFAULT_WEBHOOK_PATH = "/webhook/tiktok"
-DEFAULT_SIGNATURE_HEADER = "X-TT-Signature"   # 以控制台 Webhook 配置页为准，可经 tiktok.webhook_signature_header 覆写
+#: 官方 webhook 验签头：``Tiktok-Signature: t=<unix>,s=<hex>``，``s = HMAC-SHA256(client_secret, f"{t}.{raw_body}")``
+DEFAULT_SIGNATURE_HEADER = "Tiktok-Signature"
+DEFAULT_SIGNATURE_TOLERANCE_SEC = 300.0
 TEXT_MAX = 6000
 IMAGE_MAX_BYTES = 3 * 1024 * 1024
 SEEN_TTL_SEC = 3 * 24 * 3600.0
 CONVERSATION_TTL_SEC = 48 * 3600.0   # 与 channel_policy tiktok 回复窗一致（用户先发后 48h）
+REFRESH_AHEAD_SEC = 30 * 60.0        # access 到期前 30 分钟刷新（短期令牌，全自动值守必须自刷）
 
 #: 鉴权类返回码（Business API 通用）：40001 参数/鉴权、40100 权限、40102/40105 token 无效或过期
 TOKEN_CODES = {40100, 40101, 40102, 40104, 40105, 40001}
@@ -84,6 +106,10 @@ def tiktok_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                                    or {}).get(PLATFORM, {}).get("enabled", False))
     except Exception:
         pass
+    try:
+        tol = float(blk.get("signature_tolerance_sec") or DEFAULT_SIGNATURE_TOLERANCE_SEC)
+    except (TypeError, ValueError):
+        tol = DEFAULT_SIGNATURE_TOLERANCE_SEC
     return {
         "enabled": enabled,
         "app_id": str(blk.get("app_id") or ""),
@@ -91,6 +117,7 @@ def tiktok_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "webhook_secret": str(blk.get("webhook_secret") or blk.get("secret") or ""),
         "webhook_path": str(blk.get("webhook_path") or DEFAULT_WEBHOOK_PATH),
         "webhook_signature_header": str(blk.get("webhook_signature_header") or DEFAULT_SIGNATURE_HEADER),
+        "signature_tolerance_sec": tol,
         "state_db_path": str(blk.get("state_db_path") or ""),
         "verify_signature": bool(blk.get("verify_signature", True)),
     }
@@ -109,19 +136,38 @@ def user_id_from_chat_key(chat_key: Any) -> str:
     return ck.rsplit(":", 1)[-1] if ":" in ck else ck
 
 
-# ── 签名（HMAC-SHA256，密钥为 webhook secret；控制台若给出不同算法按文档改此处一点）────────
+# ── 官方验签：Tiktok-Signature: t=<unix>,s=<hex>；s = HMAC-SHA256(client_secret, f"{t}.{raw_body}") ──────
 
-def sign_body(secret: str, body: bytes) -> str:
-    return hmac.new(str(secret or "").encode("utf-8"), bytes(body or b""), hashlib.sha256).hexdigest()
+def sign_body(secret: str, body: bytes, ts: Optional[int] = None) -> str:
+    """返回可直接放进 ``Tiktok-Signature`` 头的 ``t=…,s=…``（测试与自检用；ts 缺省取当前时间）。"""
+    t = int(ts if ts is not None else time.time())
+    mac = hmac.new(str(secret or "").encode("utf-8"), f"{t}.".encode("utf-8") + bytes(body or b""),
+                   hashlib.sha256).hexdigest()
+    return f"t={t},s={mac}"
 
 
-def verify_signature(secret: str, body: bytes, header_value: Any) -> bool:
+def parse_signature_header(header_value: Any) -> Tuple[Optional[int], str]:
+    parts: Dict[str, str] = {}
+    for seg in str(header_value or "").split(","):
+        k, _, v = seg.strip().partition("=")
+        if k and v:
+            parts[k.strip().lower()] = v.strip()
+    ts = parts.get("t", "")
+    return (int(ts) if ts.isdigit() else None), parts.get("s", "").lower()
+
+
+def verify_signature(secret: str, body: bytes, header_value: Any, *, now: Optional[float] = None,
+                     tolerance: float = DEFAULT_SIGNATURE_TOLERANCE_SEC) -> bool:
     if not secret:
         return False
-    got = str(header_value or "").strip().lower()
-    if got.startswith("sha256="):
-        got = got[7:]
-    return bool(got) and hmac.compare_digest(sign_body(secret, body), got)
+    ts, sig = parse_signature_header(header_value)
+    if ts is None or not sig:
+        return False
+    want = sign_body(secret, body, ts).split("s=", 1)[1]
+    if not hmac.compare_digest(want, sig):
+        return False
+    t_now = float(now if now is not None else time.time())
+    return abs(t_now - ts) <= float(tolerance)
 
 
 # ── 状态库 ───────────────────────────────────────────────────────────────────
@@ -300,6 +346,196 @@ class TikTokApi:
             return {"ok": False, "code": code, "message": msg}
         return {"ok": True, "messages": list((data.get("data") or {}).get("messages") or [])}
 
+    # ── OAuth（Business Account 持有人授权）──
+    async def exchange_code(self, *, client_id: str, client_secret: str, code: str, redirect_uri: str) -> Dict[str, Any]:
+        status, data = await self._t("POST", TOKEN_URL, headers={"Content-Type": "application/json"},
+                                     json_body={"client_id": client_id, "client_secret": client_secret,
+                                                "grant_type": "authorization_code", "auth_code": code,
+                                                "redirect_uri": redirect_uri})
+        return _grant_result(status, data)
+
+    async def refresh_token(self, *, client_id: str, client_secret: str, refresh_token: str) -> Dict[str, Any]:
+        status, data = await self._t("POST", REFRESH_URL, headers={"Content-Type": "application/json"},
+                                     json_body={"client_id": client_id, "client_secret": client_secret,
+                                                "grant_type": "refresh_token", "refresh_token": refresh_token})
+        return _grant_result(status, data)
+
+    async def business_profile(self, *, access_token: str, business_id: str) -> Dict[str, Any]:
+        status, data = await self._t("GET", BUSINESS_GET_URL, headers={"Access-Token": access_token},
+                                     params={"business_id": business_id,
+                                             "fields": json.dumps(["username", "display_name", "profile_image"])})
+        code, msg = _code(data)
+        if status != 200 or code:
+            return {"ok": False, "code": code, "message": msg}
+        d = data.get("data") or {}
+        return {"ok": True, "username": str(d.get("username") or ""), "display_name": str(d.get("display_name") or ""),
+                "profile_image": str(d.get("profile_image") or "")}
+
+    async def capabilities(self, *, access_token: str, business_id: str, capability_types: Any,
+                           conversation_id: str = "") -> Dict[str, Any]:
+        params: Dict[str, Any] = {"business_id": business_id, "capability_types": json.dumps(list(capability_types))}
+        if conversation_id:
+            params["conversation_id"] = conversation_id
+        status, data = await self._t("GET", CAPABILITIES_URL, headers={"Access-Token": access_token}, params=params)
+        code, msg = _code(data)
+        if status != 200 or code:
+            return {"ok": False, "code": code, "message": msg}
+        infos = list((data.get("data") or {}).get("capability_infos") or [])
+        return {"ok": True, "capabilities": {str(i.get("capability_type") or ""): bool(i.get("capability_result"))
+                                             for i in infos if isinstance(i, dict)}}
+
+    # ── Webhook 配置（应用级，用 app_id/secret，不需要用户令牌）──
+    async def webhook_update(self, *, app_id: str, secret: str, callback_url: str,
+                             event_type: str = WEBHOOK_EVENT_TYPE) -> Dict[str, Any]:
+        status, data = await self._t("POST", WEBHOOK_UPDATE_URL, headers={"Content-Type": "application/json"},
+                                     json_body={"app_id": app_id, "secret": secret, "event_type": event_type,
+                                                "callback_url": callback_url})
+        code, msg = _code(data)
+        if status != 200 or code:
+            return {"ok": False, "code": code, "message": msg}
+        return {"ok": True, "callback_url": str((data.get("data") or {}).get("callback_url") or callback_url)}
+
+    async def webhook_list(self, *, app_id: str, secret: str, event_type: str = WEBHOOK_EVENT_TYPE) -> Dict[str, Any]:
+        status, data = await self._t("GET", WEBHOOK_LIST_URL, params={"app_id": app_id, "secret": secret,
+                                                                       "event_type": event_type})
+        code, msg = _code(data)
+        if status != 200 or code:
+            return {"ok": False, "code": code, "message": msg}
+        d = data.get("data") or {}
+        return {"ok": True, "callback_url": str(d.get("callback_url") or ""), "raw": d}
+
+
+def _grant_result(status: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    code, msg = _code(data)
+    d = data.get("data") or {}
+    if status != 200 or code or not d.get("access_token"):
+        return {"ok": False, "code": code, "message": msg or str(data.get("message") or "")}
+    return {"ok": True, "access_token": str(d.get("access_token")), "open_id": str(d.get("open_id") or ""),
+            "expires_in": float(d.get("expires_in") or 0), "refresh_token": str(d.get("refresh_token") or ""),
+            "refresh_expires_in": float(d.get("refresh_token_expires_in") or d.get("refresh_expires_in") or 0),
+            "scope": str(d.get("scope") or "")}
+
+
+# ── 令牌生命周期 / 授权码流程 ────────────────────────────────────────────────────
+
+def token_state(meta: Dict[str, Any], now: float) -> str:
+    """``ok`` / ``refresh_due``（access 快到期或已到期，refresh 仍活）/ ``needs_reauth``（无令牌，或 refresh 已死且 access 也死）。"""
+    at = str(meta.get("access_token") or "")
+    rt = str(meta.get("refresh_token") or "")
+    aexp = float(meta.get("access_expires_at") or 0)
+    rexp = float(meta.get("refresh_expires_at") or 0)
+    refresh_alive = bool(rt) and (rexp <= 0 or now < rexp)
+    access_alive = bool(at) and (aexp <= 0 or now < aexp - REFRESH_AHEAD_SEC)
+    if access_alive:
+        return "ok"
+    if refresh_alive:
+        return "refresh_due"
+    return "ok" if (at and aexp > now) else "needs_reauth"
+
+
+def token_meta_from_grant(grant: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
+    t = float(now if now is not None else time.time())
+    out: Dict[str, Any] = {"access_token": str(grant.get("access_token") or ""),
+                           "access_expires_at": (t + float(grant["expires_in"])) if grant.get("expires_in") else 0.0,
+                           "scope": str(grant.get("scope") or ""), "authorized_at": t}
+    if grant.get("refresh_token"):
+        out["refresh_token"] = str(grant["refresh_token"])
+        out["refresh_expires_at"] = (t + float(grant["refresh_expires_in"])) if grant.get("refresh_expires_in") else 0.0
+    return out
+
+
+def missing_scopes(granted: Any) -> Tuple[str, ...]:
+    have = {s.strip() for s in str(granted or "").replace(" ", "").split(",") if s.strip()}
+    return tuple(s for s in MESSAGING_SCOPES if s not in have)
+
+
+def oauth_state(secret: str, region: str = "", now: Optional[float] = None) -> str:
+    """防篡改 state：``<ts>.<region>.<hmac[:32]>``——把面板选好的注册地一并带回回调。"""
+    ts = str(int(now if now is not None else time.time()))
+    reg = str(region or "").upper()
+    mac = hmac.new(str(secret or "").encode("utf-8"), f"{ts}.{reg}".encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return f"{ts}.{reg}.{mac}"
+
+
+def verify_oauth_state(secret: str, state: Any, now: Optional[float] = None,
+                       ttl: float = OAUTH_STATE_TTL_SEC) -> Optional[str]:
+    """合法 → 返回 region（可能为空串）；非法/过期 → None。"""
+    parts = str(state or "").split(".")
+    if len(parts) != 3 or not secret or not parts[0].isdigit():
+        return None
+    ts, reg, mac = parts
+    t_now = float(now if now is not None else time.time())
+    if not (0 <= t_now - float(ts) <= ttl):
+        return None
+    want = hmac.new(str(secret).encode("utf-8"), f"{ts}.{reg}".encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return reg if hmac.compare_digest(want, mac) else None
+
+
+def authorize_url(client_key: str, redirect_uri: str, state: str, scopes: Any = OAUTH_SCOPES) -> str:
+    from urllib.parse import urlencode
+    return AUTHORIZE_URL + "?" + urlencode({"client_key": client_key, "response_type": "code",
+                                            "scope": ",".join(scopes), "redirect_uri": redirect_uri, "state": state})
+
+
+async def complete_oauth(code: str, *, config: Optional[Dict[str, Any]], redirect_uri: str, region: str = "",
+                         registry: Any = None, api: Optional[TikTokApi] = None,
+                         now: Optional[float] = None) -> Dict[str, Any]:
+    """code 换令牌 → 校验私信 scope 齐全 → 拉账号资料 → ``tiktok/<open_id>`` mode=official 落注册表（meta 原子合并）。"""
+    cfg = tiktok_cfg(config)
+    if not cfg["app_id"] or not cfg["secret"]:
+        return {"ok": False, "error": "missing_credentials"}
+    api = api or TikTokApi()
+    grant = await api.exchange_code(client_id=cfg["app_id"], client_secret=cfg["secret"], code=str(code or ""),
+                                    redirect_uri=redirect_uri)
+    if not grant.get("ok"):
+        return {"ok": False, "error": "exchange_failed", "error_code": grant.get("code"), "description": grant.get("message")}
+    if not grant.get("open_id"):
+        return {"ok": False, "error": "exchange_failed", "error_code": 0, "description": "no open_id"}
+    lack = missing_scopes(grant.get("scope"))
+    if lack:
+        return {"ok": False, "error": "ungranted_scopes", "missing": list(lack), "open_id": grant["open_id"]}
+    open_id = grant["open_id"]
+    meta = token_meta_from_grant(grant, now)
+    meta["client_id"] = cfg["app_id"]
+    if region:
+        meta["region"] = str(region).upper()
+    prof = await api.business_profile(access_token=meta["access_token"], business_id=open_id)
+    if prof.get("ok"):
+        meta["username"] = prof["username"]
+        meta["display_name"] = prof["display_name"]
+        if prof.get("profile_image"):
+            meta["avatar_url"] = prof["profile_image"]
+    reg = registry
+    if reg is None:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+    existing = reg.get(PLATFORM, open_id) or {}
+    label = (existing.get("label") or meta.get("display_name") or meta.get("username") or f"TikTok {open_id[:8]}")
+    reg.upsert(PLATFORM, open_id, mode=MODE, status="active", label=label, meta=meta, merge_meta=True)
+    try:
+        from src.integrations.platform_session_health import get_platform_session_health
+        get_platform_session_health().record(PLATFORM, open_id, "authorized")
+    except Exception:
+        pass
+    return {"ok": True, "open_id": open_id, "scope": meta["scope"], "username": meta.get("username", ""),
+            "display_name": meta.get("display_name", ""), "region": meta.get("region", ""),
+            "access_expires_at": meta["access_expires_at"], "refresh_expires_at": meta.get("refresh_expires_at", 0.0)}
+
+
+async def ensure_webhook(config: Optional[Dict[str, Any]], callback_url: str, *, api: Optional[TikTokApi] = None) -> Dict[str, Any]:
+    """用应用凭证把私信 webhook 回调地址注册到 TikTok（幂等：已一致则不重复写）。"""
+    cfg = tiktok_cfg(config)
+    if not cfg["app_id"] or not cfg["secret"]:
+        return {"ok": False, "error": "missing_credentials"}
+    api = api or TikTokApi()
+    cur = await api.webhook_list(app_id=cfg["app_id"], secret=cfg["secret"])
+    if cur.get("ok") and cur.get("callback_url") == callback_url:
+        return {"ok": True, "callback_url": callback_url, "changed": False}
+    res = await api.webhook_update(app_id=cfg["app_id"], secret=cfg["secret"], callback_url=callback_url)
+    if not res.get("ok"):
+        return {"ok": False, "error": "webhook_update_failed", "error_code": res.get("code"), "description": res.get("message")}
+    return {"ok": True, "callback_url": res["callback_url"], "changed": True}
+
 
 # ── Worker ──────────────────────────────────────────────────────────────────
 
@@ -322,7 +558,7 @@ class TikTokOfficialWorker:
         self.dm_ok = dm_api_available(self.region)
         self.media_ok = media_send_allowed(self.region)
         self.running = False
-        self.token_state = "ok" if self.meta.get("access_token") else "needs_reauth"
+        self.token_state = token_state(self.meta, self._now())
         self.last_error = ""
         self._reported = None
 
@@ -334,9 +570,37 @@ class TikTokOfficialWorker:
 
     async def start(self) -> None:
         self.running = True
+        await self.maybe_refresh_tokens()
         self._report_session_health()
-        logger.info("[tiktok-official] worker 启动 business=%s region=%s dm_api=%s", self.account_id,
-                    self.region or "?", self.dm_ok)
+        logger.info("[tiktok-official] worker 启动 business=%s region=%s dm_api=%s token=%s", self.account_id,
+                    self.region or "?", self.dm_ok, self.token_state)
+
+    async def maybe_refresh_tokens(self, *, force: bool = False) -> str:
+        """access 到期前 30 分钟（或 force）用 refresh 换新；refresh 也死 → needs_reauth。返回刷新后的 token_state。"""
+        now = self._now()
+        self.token_state = token_state(self.meta, now)
+        if self.token_state != "refresh_due" and not (force and self.meta.get("refresh_token")):
+            return self.token_state
+        r = await self.api.refresh_token(client_id=self.cfg["app_id"], client_secret=self.cfg["secret"],
+                                         refresh_token=str(self.meta.get("refresh_token") or ""))
+        if r.get("ok"):
+            patch = token_meta_from_grant(r, now)
+            patch.pop("authorized_at", None)
+            if not patch.get("refresh_token"):
+                patch.pop("refresh_token", None)
+                patch.pop("refresh_expires_at", None)
+            self._persist_meta(patch)
+            self.token_state = token_state(self.meta, now)
+            self.last_error = ""
+        else:
+            self.last_error = f"refresh:{r.get('code')}:{r.get('message') or ''}"
+            if int(r.get("code") or 0) in TOKEN_CODES:
+                # refresh 本身被拒 → 两把令牌都作废，避免每次发送都再撞一次刷新接口
+                self._persist_meta({"access_token": "", "refresh_token": ""})
+                self.token_state = "needs_reauth"
+            elif not self.meta.get("access_token"):
+                self.token_state = "needs_reauth"
+        return self.token_state
 
     async def stop(self) -> None:
         self.running = False
@@ -384,7 +648,9 @@ class TikTokOfficialWorker:
         if self.dm_ok is False:
             return {"delivered": False, "blocked": "tiktok_region_unsupported",
                     "error": f"注册地 {self.region} 不支持 Business Messaging API"}
-        if self.token_state == "needs_reauth" or not self.meta.get("access_token"):
+        if await self.maybe_refresh_tokens() == "needs_reauth" or not self.meta.get("access_token"):
+            self.token_state = "needs_reauth"
+            self._report_session_health()
             return {"delivered": False, "blocked": "tiktok_needs_reauth", "error": "TikTok 授权失效，请重新授权"}
         user_id = user_id_from_chat_key(chat_key)
         ctx = self.state.get_ctx(self.account_id, user_id)
@@ -397,10 +663,19 @@ class TikTokOfficialWorker:
         res = await self.api.send_message(access_token=str(self.meta.get("access_token")), business_id=self.account_id,
                                           conversation_id=conv, message_type=message_type, payload=payload,
                                           referenced_message_id=ref)
+        if not res.get("ok") and int(res.get("code") or 0) in TOKEN_CODES and self.meta.get("refresh_token"):
+            # 鉴权失败先强制刷一次再重试一次；仍失败才判失效
+            if await self.maybe_refresh_tokens(force=True) != "needs_reauth":
+                res = await self.api.send_message(access_token=str(self.meta.get("access_token")),
+                                                  business_id=self.account_id, conversation_id=conv,
+                                                  message_type=message_type, payload=payload, referenced_message_id=ref)
         if res.get("ok"):
             self.last_error = ""
-            return {"delivered": True, "message_id": str(res.get("message_id") or ""), "kind": kind,
-                    "quote_applied": bool(ref)}
+            mid = str(res.get("message_id") or "")
+            if mid:
+                # 我方发送成功的消息 id 入幂等表：随后到达的 im_send_msg 回显不再二次落库
+                self.state.seen(f"{EVENT_SEND}:{mid}", now=self._now())
+            return {"delivered": True, "message_id": mid, "kind": kind, "quote_applied": bool(ref)}
         code = int(res.get("code") or 0)
         self.last_error = f"{code}:{res.get('message') or ''}"
         out: Dict[str, Any] = {"delivered": False, "error": str(res.get("message") or f"tiktok_error_{code}"),
@@ -408,6 +683,7 @@ class TikTokOfficialWorker:
         if code in TOKEN_CODES:
             self.token_state = "needs_reauth"
             self._persist_meta({"access_token": ""})
+            self._report_session_health()
             out["blocked"] = "tiktok_needs_reauth"
         return out
 
@@ -445,9 +721,25 @@ class TikTokOfficialWorker:
 
 # ── Webhook ─────────────────────────────────────────────────────────────────
 
+def _unwrap_content(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """官方外壳 ``{event, user_openid, content:"<JSON 字符串>"}``：``content`` 需二次解析；兼容 dict / ``message`` 壳 / 扁平。"""
+    c = payload.get("content")
+    if isinstance(c, str):
+        try:
+            c = json.loads(c)
+        except Exception:
+            c = None
+    if isinstance(c, dict):
+        return c
+    if isinstance(payload.get("message"), dict):
+        return payload["message"]
+    return payload
+
+
 def _extract_message(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """兼容两种壳：``{"event":…, "message": {...}}`` 与顶层扁平；字段名对齐 SDK MessageItem。"""
-    m = payload.get("message") if isinstance(payload.get("message"), dict) else payload
+    """字段名对齐官方 webhook 载荷 / SDK MessageItem：conversation_id、message_id、timestamp(ms)、message_type、
+    text.body、image.media_id、share_post.embed_url、from_user.id、to_user.id、referenced_message_info。"""
+    m = _unwrap_content(payload)
     text = ""
     t = m.get("text")
     if isinstance(t, dict):
@@ -467,11 +759,18 @@ def _extract_message(payload: Dict[str, Any]) -> Dict[str, Any]:
         ts = 0.0
     fu = m.get("from_user") if isinstance(m.get("from_user"), dict) else {}
     tu = m.get("to_user") if isinstance(m.get("to_user"), dict) else {}
+    ref = m.get("referenced_message_info") if isinstance(m.get("referenced_message_info"), dict) else {}
+    sp = m.get("share_post") if isinstance(m.get("share_post"), dict) else {}
+    img = m.get("image") if isinstance(m.get("image"), dict) else {}
+    referral = m.get("referral") if isinstance(m.get("referral"), dict) else {}
     return {
         "sender": str(m.get("sender") or fu.get("id") or ""), "recipient": str(m.get("recipient") or tu.get("id") or ""),
+        "sender_name": str(m.get("from") or fu.get("display_name") or ""),
         "sender_role": str(fu.get("role") or "").upper(), "conversation_id": str(m.get("conversation_id") or ""),
         "message_id": str(m.get("message_id") or ""), "ts": ts, "text": text, "media_type": media, "message_type": mtype,
-        "business_id": str(payload.get("business_id") or m.get("business_id") or ""),
+        "media_id": str(img.get("media_id") or ""), "embed_url": str(sp.get("embed_url") or ""),
+        "referenced_message_id": str(ref.get("referenced_message_id") or ""), "referral": referral,
+        "business_id": str(payload.get("user_openid") or payload.get("business_id") or m.get("business_id") or ""),
     }
 
 
@@ -481,7 +780,9 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
                          auto_reply: Optional[Callable[[Dict[str, Any]], Awaitable[Any]]] = None
                          ) -> Tuple[int, Dict[str, Any]]:
     cfg = tiktok_cfg(config)
-    if cfg["verify_signature"] and not verify_signature(cfg["webhook_secret"], body, signature):
+    t_now = float(now if now is not None else time.time())
+    if cfg["verify_signature"] and not verify_signature(cfg["webhook_secret"], body, signature, now=t_now,
+                                                        tolerance=cfg["signature_tolerance_sec"]):
         return 401, {"error": "bad_signature"}
     try:
         payload = json.loads(bytes(body or b"").decode("utf-8") or "{}")
@@ -489,16 +790,15 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
         return 400, {"error": "bad_json"}
     if not isinstance(payload, dict):
         return 400, {"error": "bad_json"}
-    # 控制台保存 webhook 时的探活：无 event 的空壳 / challenge 原样回显
+    # 注册回调时的探活：无 event 的空壳 / challenge 原样回显
     if payload.get("challenge") is not None and not payload.get("event"):
         return 200, {"challenge": payload.get("challenge")}
     event = str(payload.get("event") or payload.get("event_type") or "")
-    t_now = float(now if now is not None else time.time())
     st = state or get_state_store(cfg["state_db_path"] or None)
     m = _extract_message(payload)
     if not m["message_id"] and event in (EVENT_RECEIVE, EVENT_SEND):
         return 400, {"error": "missing_message_id"}
-    if m["message_id"] and st.seen(f"{event}:{m['message_id']}", now=t_now):
+    if m["message_id"] and event in (EVENT_RECEIVE, EVENT_SEND) and st.seen(f"{event}:{m['message_id']}", now=t_now):
         return 200, {"ok": True, "dup": True}
     if emit is None or auto_reply is None:
         from src.integrations.protocol_bridge import emit_incoming as _emit, maybe_auto_reply as _ar
@@ -506,28 +806,46 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
         auto_reply = auto_reply or _ar
     from src.integrations.protocol_bridge import make_message
 
-    if event == EVENT_RECEIVE:
-        business_id = m["business_id"] or m["recipient"]
-        user_id = m["sender"]
-        st.record_inbound(business_id, user_id, conversation_id=m["conversation_id"], msg_id=m["message_id"],
-                          ts=m["ts"] or t_now)
-        msg = make_message(platform=PLATFORM, account_id=business_id, chat_key=chat_key_for(user_id), text=m["text"],
-                           ts=m["ts"] or t_now, msg_id=m["message_id"], direction="in", media_type=m["media_type"],
-                           source={"conversation_id": m["conversation_id"], "message_type": m["message_type"],
-                                   "server_message_id": m["message_id"]})
-        emit(msg)
-        try:
-            await auto_reply(msg)
-        except Exception:
-            logger.debug("[tiktok-official] maybe_auto_reply 异常", exc_info=True)
-        return 200, {"ok": True}
-    if event == EVENT_SEND:
-        business_id = m["business_id"] or m["sender"]
-        user_id = m["recipient"]
+    business_id = m["business_id"]
+    # 方向：官方载荷两个事件都可能出现「商家从 TikTok App 手发」的消息——以 to_user.id == business_id 判进线
+    incoming = (event == EVENT_RECEIVE) if not business_id else (m["recipient"] == business_id)
+    if event in (EVENT_RECEIVE, EVENT_SEND):
+        if not business_id:
+            business_id = m["recipient"] if event == EVENT_RECEIVE else m["sender"]
+        user_id = m["sender"] if incoming else m["recipient"]
+        source: Dict[str, Any] = {"conversation_id": m["conversation_id"], "message_type": m["message_type"],
+                                  "server_message_id": m["message_id"]}
+        if m["referenced_message_id"]:
+            source["reply_to_msg_id"] = m["referenced_message_id"]
+        if m["media_id"]:
+            source["media_id"] = m["media_id"]
+        if m["embed_url"]:
+            source["embed_url"] = m["embed_url"]
+        if m["referral"]:
+            source["referral"] = m["referral"]
+            sl = m["referral"].get("short_link") if isinstance(m["referral"], dict) else None
+            if isinstance(sl, list) and sl and isinstance(sl[0], dict) and sl[0].get("ref"):
+                source["ref"] = str(sl[0]["ref"])
+        if incoming:
+            st.record_inbound(business_id, user_id, conversation_id=m["conversation_id"], msg_id=m["message_id"],
+                              ts=m["ts"] or t_now)
+            msg = make_message(platform=PLATFORM, account_id=business_id, chat_key=chat_key_for(user_id), text=m["text"],
+                               name=m["sender_name"], ts=m["ts"] or t_now, msg_id=m["message_id"], direction="in",
+                               media_type=m["media_type"], source=source)
+            emit(msg)
+            try:
+                await auto_reply(msg)
+            except Exception:
+                logger.debug("[tiktok-official] maybe_auto_reply 异常", exc_info=True)
+            return 200, {"ok": True}
+        source["echo"] = True
         emit(make_message(platform=PLATFORM, account_id=business_id, chat_key=chat_key_for(user_id), text=m["text"],
                           ts=m["ts"] or t_now, msg_id=m["message_id"], direction="out", media_type=m["media_type"],
-                          source={"conversation_id": m["conversation_id"], "echo": True}))
-        return 200, {"ok": True}
+                          source=source))
+        return 200, {"ok": True, "echo": True}
+    if event == EVENT_MARK_READ:
+        logger.debug("[tiktok-official] 对方已读 business=%s conversation=%s", business_id, m["conversation_id"])
+        return 200, {"ok": True, "read": True}
     if event == EVENT_HIGH_INTENT_COMMENT:
         # 高意向评论：只记录（Comment-to-Message 灰度，不在本骨架自动私信）
         logger.info("[tiktok-official] 高意向评论事件 business=%s（记录，不自动私信）", m["business_id"])
@@ -562,7 +880,11 @@ def register_tiktok_official_worker(config: Optional[Dict[str, Any]], *, registr
     return True
 
 
-__all__ = ["PLATFORM", "MODE", "SEND_URL", "MEDIA_UPLOAD_URL", "EVENT_RECEIVE", "EVENT_SEND",
-           "EVENT_HIGH_INTENT_COMMENT", "tiktok_cfg", "official_enabled", "chat_key_for", "user_id_from_chat_key",
-           "sign_body", "verify_signature", "TikTokStateStore", "get_state_store", "TikTokApi",
-           "TikTokOfficialWorker", "handle_webhook", "register_tiktok_routes", "register_tiktok_official_worker"]
+__all__ = ["PLATFORM", "MODE", "SEND_URL", "MEDIA_UPLOAD_URL", "EVENT_RECEIVE", "EVENT_SEND", "EVENT_MARK_READ",
+           "EVENT_HIGH_INTENT_COMMENT", "AUTHORIZE_URL", "TOKEN_URL", "REFRESH_URL", "WEBHOOK_UPDATE_URL",
+           "OAUTH_SCOPES", "MESSAGING_SCOPES", "DEFAULT_OAUTH_CALLBACK_PATH", "DEFAULT_SIGNATURE_HEADER",
+           "tiktok_cfg", "official_enabled", "chat_key_for", "user_id_from_chat_key",
+           "sign_body", "parse_signature_header", "verify_signature", "TikTokStateStore", "get_state_store",
+           "TikTokApi", "token_state", "token_meta_from_grant", "missing_scopes", "oauth_state", "verify_oauth_state",
+           "authorize_url", "complete_oauth", "ensure_webhook", "TikTokOfficialWorker", "handle_webhook",
+           "register_tiktok_routes", "register_tiktok_official_worker"]

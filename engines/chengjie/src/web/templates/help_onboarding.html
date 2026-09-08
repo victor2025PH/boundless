@@ -56,6 +56,8 @@
     <a class="obg-tab {% if s == guide.slug %}on{% endif %}" href="/help/onboarding/{{ s }}">
       {% if s == 'douyin' %}{{ (i18n or {}).get('obg.tab.douyin', '抖音企业版') }}
       {% elif s == 'tiktok' %}{{ (i18n or {}).get('obg.tab.tiktok', 'TikTok') }}
+      {% elif s == 'wechat_kf' %}{{ (i18n or {}).get('obg.tab.wechat_kf', '微信客服') }}
+      {% elif s == 'wechat_pc' %}{{ (i18n or {}).get('obg.tab.wechat_pc', '个人微信副驾') }}
       {% else %}{{ (i18n or {}).get('obg.tab.payment', '付款方式') }}{% endif %}
     </a>
     {% endfor %}
@@ -66,10 +68,18 @@
   </div>
   <div class="obg-intro">{{ guide.intro }}</div>
 
-  {% if flash and flash.saved %}
+  {% if flash and flash.saved and guide.slug == 'tiktok' %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_creds', '应用凭证已保存。下一步：填注册地，点「用 TikTok Business Account 授权」。') }}</div>
+  {% elif flash and flash.saved %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.saved', '凭证已保存到本机配置（config.local.yaml）。webhook 挂载与官方 worker 在重启后生效；现在可以先扫码授权。') }}</div>
+  {% elif flash and flash.webhook == 'ok' and not flash.connected %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_webhook', '私信 Webhook 已注册到 TikTok。') }}</div>
   {% elif flash and flash.connected and guide.slug == 'tiktok' %}
-  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_saved', 'TikTok 账号已登记：') }} <code>{{ flash.connected }}</code> · {{ flash.region }}</div>
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_saved', 'TikTok 账号已登记：') }} <code>{{ flash.connected }}</code> · {{ flash.region }}
+    {% if flash.webhook == 'ok' %}· {{ (i18n or {}).get('obg.tt.flash_webhook', '私信 Webhook 已注册到 TikTok。') }}
+    {% elif flash.webhook and flash.webhook.startswith('fail') %}· {{ (i18n or {}).get('obg.tt.flash_webhook_fail', 'Webhook 自动注册失败，请点「注册私信 Webhook」重试：') }} <code>{{ flash.webhook }}</code>{% endif %}
+    · {{ (i18n or {}).get('obg.tt.flash_next', '现在用另一个 TikTok 账号给它发一条私信，30 秒内应出现在收件箱。') }}
+  </div>
   {% elif flash and flash.connected %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.connected', '授权成功，经营者账号已登记：') }} <code>{{ flash.connected }}</code></div>
   {% elif flash and flash.error %}
@@ -77,6 +87,8 @@
     {% if flash.error == 'bad_state' %}— {{ (i18n or {}).get('obg.flash.bad_state', '授权链接已过期或被改动（10 分钟内有效），请重新点「扫码授权」。') }}
     {% elif flash.error == 'missing_region' %}— {{ (i18n or {}).get('obg.tt.flash_region', '注册地必填（ISO 3166-1 两位字母，如 SG、MY、MX）。') }}
     {% elif flash.error == 'missing_business_id' %}— {{ (i18n or {}).get('obg.tt.flash_bid', 'business_id 必填。') }}
+    {% elif flash.error == 'ungranted_scopes' %}— {{ (i18n or {}).get('obg.tt.flash_scopes', '授权时没有勾全私信权限（读取 / 发送 / 管理），请重新授权并全部允许。') }}
+    {% elif flash.error.startswith('webhook') %}— {{ (i18n or {}).get('obg.tt.flash_webhook_err', 'Webhook 注册被 TikTok 拒绝：检查应用是否已获 Business Messaging 访问权限、回调地址是否为公网 HTTPS。') }}
     {% elif flash.error.startswith('missing') %}— {{ (i18n or {}).get('obg.flash.missing', '请先填 client_key 与 client_secret。') }}
     {% elif flash.error.startswith('exchange_failed') %}— {{ (i18n or {}).get('obg.flash.exchange', '抖音换令牌失败：检查 client_secret、回调域是否与控制台一致、应用是否已开通 im.direct_message 权限。') }}
     {% elif flash.error.startswith('denied') %}— {{ (i18n or {}).get('obg.flash.denied', '用户在抖音端取消了授权，或未返回 code。') }}
@@ -139,43 +151,62 @@
       {% endif %}
       {% if guide.slug == 'tiktok' and loop.index == 4 and panel %}
       <div class="obg-panel">
-        <form class="obg-form" method="post" action="/help/onboarding/tiktok/account" autocomplete="off" style="grid-template-columns:1fr 1fr 120px">
-          <label>business_id
-            <input name="business_id" placeholder="Business Account ID" required>
+        <form class="obg-form" method="post" action="/help/onboarding/tiktok/credentials" autocomplete="off">
+          <label>{{ (i18n or {}).get('obg.tt.app_id', '开发者应用 App ID（app_id）') }}
+            <input name="app_id" value="{{ panel.app_id }}" placeholder="TikTok for Business app_id" required>
           </label>
-          <label>access_token
-            <input name="access_token" type="password" placeholder="{{ (i18n or {}).get('obg.tt.token_ph', '开发者门户授权后获得') }}">
+          <label>{{ (i18n or {}).get('obg.tt.secret', '应用 Secret') }}
+            <input name="secret" type="password" value="" placeholder="{{ panel.secret_masked or (i18n or {}).get('obg.panel.secret_ph', '从控制台复制') }}" {% if not panel.has_secret %}required{% endif %}>
           </label>
-          <label>{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}
-            <input name="region" placeholder="SG / MY / MX …" maxlength="3" required style="text-transform:uppercase">
-          </label>
-          <label>app_id
-            <input name="app_id" value="{{ panel.app_id }}" placeholder="TikTok for Business app_id">
-          </label>
-          <label>secret
-            <input name="secret" type="password" value="" placeholder="{{ panel.secret_masked or (i18n or {}).get('obg.panel.secret_ph', '从控制台复制') }}">
-          </label>
-          <button class="obg-btn pri" type="submit">{{ (i18n or {}).get('obg.tt.save', '登记账号') }}</button>
+          <button class="obg-btn" type="submit">{{ (i18n or {}).get('obg.panel.save', '保存凭证') }}</button>
         </form>
-        <div class="obg-note">{{ (i18n or {}).get('obg.tt.webhook_hint', 'Business Center 的 Webhook 地址填：') }}</div>
+        <div class="obg-note">{{ (i18n or {}).get('obg.tt.callback_hint', '开发者应用「Redirect URL」需填这个回调地址：') }}</div>
         <div class="obg-copy">
-          <code id="obg-tt-webhook-url">{{ panel.webhook_url }}</code>
-          <button type="button" data-copy-target="obg-tt-webhook-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+          <code id="obg-tt-callback-url">{{ panel.callback_url }}</code>
+          <button type="button" data-copy-target="obg-tt-callback-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
         </div>
+        <form method="get" action="/help/onboarding/tiktok/authorize" style="display:flex;gap:.6rem;align-items:flex-end;margin-top:.6rem;flex-wrap:wrap">
+          <label style="display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--t3)">{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}
+            <input name="region" placeholder="SG / MY / MX …" maxlength="3" required style="text-transform:uppercase;width:120px">
+          </label>
+          <button class="obg-btn pri {% if not (panel.has_app_id and panel.has_secret) %}dis{% endif %}" type="submit" id="obg-tt-authorize" {% if not (panel.has_app_id and panel.has_secret) %}aria-disabled="true" disabled{% endif %}>{{ (i18n or {}).get('obg.tt.authorize', '用 TikTok Business Account 授权') }}</button>
+          <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.authorize_hint', '授权页由 TikTok 提供；成功后账号、令牌自动登记并自动续期，私信 webhook 也会自动注册。') }}</span>
+        </form>
+        <div style="display:flex;gap:.6rem;align-items:center;margin-top:.5rem;flex-wrap:wrap">
+          <form method="post" action="/help/onboarding/tiktok/webhook" style="margin:0">
+            <button class="obg-btn {% if not (panel.has_app_id and panel.has_secret) %}dis{% endif %}" type="submit" {% if not (panel.has_app_id and panel.has_secret) %}aria-disabled="true" disabled{% endif %}>{{ (i18n or {}).get('obg.tt.webhook_btn', '注册私信 Webhook') }}</button>
+          </form>
+          <div class="obg-copy" style="flex:1;margin:0">
+            <code id="obg-tt-webhook-url">{{ panel.webhook_url }}</code>
+            <button type="button" data-copy-target="obg-tt-webhook-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+          </div>
+        </div>
+        <details style="margin-top:.6rem">
+          <summary class="obg-note" style="cursor:pointer">{{ (i18n or {}).get('obg.tt.manual', '没有授权权限？手填 business_id + access_token 登记') }}</summary>
+          <form class="obg-form" method="post" action="/help/onboarding/tiktok/account" autocomplete="off" style="margin-top:.5rem">
+            <label>business_id<input name="business_id" placeholder="Business Account ID" required></label>
+            <label>access_token<input name="access_token" type="password" placeholder="{{ (i18n or {}).get('obg.tt.token_ph', '开发者门户授权后获得') }}"></label>
+            <label>{{ (i18n or {}).get('obg.tt.region', '注册地（ISO 两位）') }}<input name="region" placeholder="SG" maxlength="3" required style="text-transform:uppercase"></label>
+            <button class="obg-btn" type="submit">{{ (i18n or {}).get('obg.tt.save', '登记账号') }}</button>
+          </form>
+        </details>
         <div class="obg-note">{{ (i18n or {}).get('obg.tt.region_hint', '注册地决定能力：欧洲经济区 / 瑞士 / 英国 / 美国 / 印度不可用私信 API；部分地区不能发图。未知地区按「需核实」处理，不默认可用。') }}</div>
         {% if panel.accounts %}
         <div class="obg-note" style="margin-top:.6rem">{{ (i18n or {}).get('obg.tt.accounts', '已登记账号') }}</div>
         {% for a in panel.accounts %}
         <div class="obg-acc">
           <code>{{ a.account_id }}</code>
-          <span>{{ a.label }}</span>
+          <span>{{ a.label }}{% if a.username %} <span class="obg-note" style="margin:0">@{{ a.username }}</span>{% endif %}</span>
           <span class="obg-pill">{{ a.region or '?' }}</span>
+          {% if a.token_state == 'needs_reauth' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.panel.tok_reauth', '需重新授权') }}</span>
+          {% elif a.auto_refresh %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.tok_auto', '令牌自动续期') }}{% if a.refresh_days_left is not none %} · {{ a.refresh_days_left }}d{% endif %}</span>
+          {% else %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.tok_manual', '手填令牌，到期需重填') }}</span>{% endif %}
           {% if a.dm_api is true %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.dm_ok', '私信 API 可用') }}</span>
           {% elif a.dm_api is false %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.dm_no', '私信 API 不可用') }}</span>
           {% else %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.dm_unknown', '地区待核实') }}</span>{% endif %}
           {% if a.media_send is false %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.no_media', '不能发图') }}</span>{% endif %}
           {% if a.shop_site %}<span class="obg-pill">Shop {{ a.shop_site }}</span>{% endif %}
-          {% if not a.has_token %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.no_token', '缺 access_token') }}</span>{% endif %}
+          {% if not a.has_token and a.token_state != 'needs_reauth' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.no_token', '缺 access_token') }}</span>{% endif %}
           {% if a.alternatives %}<span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.alternatives', '替代：Messaging Ads / 店铺客服 / 托管') }}</span>{% endif %}
         </div>
         {% endfor %}

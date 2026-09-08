@@ -165,15 +165,16 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "TikTok Shop Partner Center", "TikTok Shop Partner Center", "https://partner.tiktokshop.com/"),
             ("在智聊填入凭证并选择账号注册地",
              "Enter credentials in ChatX and select the account's registration region",
-             "在本页下方面板填 business_id、access_token（开发者门户授权后获得）与注册地（ISO 两位，如 SG / MY / MX）并「登记账号」；"
-             "可顺手填 app_id / secret 存为本机配置（落 config.local.yaml，自动开启 tiktok.enabled，重启后 webhook 挂载）。"
-             "注册地决定私信 API 是否可用、图片能否发送：不可用地区面板会直接标红并给出替代（Messaging Ads / 店铺客服 / 托管），"
-             "未知地区按「待核实」处理。",
-             "Use the panel below: enter business_id, access_token (obtained after authorising in the developer portal) and the "
-             "registration region (ISO-2, e.g. SG / MY / MX), then Register. Optionally store app_id / secret as local config "
-             "(config.local.yaml; enables tiktok; the webhook mounts after a restart). The region decides whether the DM API and "
-             "image sending are available: unsupported regions are flagged red with alternatives (Messaging Ads / Shop CS / hosted); "
-             "unknown regions are treated as “to verify”.",
+             "在本页下方面板：① 填开发者应用的 App ID / Secret 并保存；② 把回调地址填进开发者应用的 Redirect URL；③ 填账号注册地"
+             "（ISO 两位，如 SG / MY / MX），点「用 TikTok Business Account 授权」，在 TikTok 页面把私信读取 / 发送 / 管理权限全部允许；"
+             "成功后账号、令牌自动登记并自动续期，私信 Webhook 也会自动注册到 TikTok。注册地决定私信 API 是否可用、图片能否发送：不可用"
+             "地区会直接标红并给出替代（Messaging Ads / 店铺客服 / WhatsApp 官方通道）。首次保存凭证后需重启智聊一次让 webhook 路由挂载。",
+             "Use the panel below: ① enter the developer app's App ID / Secret and save; ② set the callback URL as the app's Redirect URL; "
+             "③ enter the account's registration region (ISO-2, e.g. SG / MY / MX) and click “Authorise with TikTok Business Account”, "
+             "allowing all messaging permissions (read / send / manage) on TikTok's page. On success the account and tokens are "
+             "registered with auto-renewal and the DM webhook is registered automatically. The region decides whether the DM API and "
+             "image sending are available; unsupported regions are flagged red with alternatives (Messaging Ads / Shop CS / WhatsApp). "
+             "Restart ChatX once after the first credential save so the webhook route is mounted.",
              "接入向导", "Setup wizard", "/workspace/setup"),
         ],
         "rules": [

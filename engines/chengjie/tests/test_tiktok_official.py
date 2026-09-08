@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""TikTok 官方通道骨架（指令 TK-1 A+B，2026-09-08）：地区模型 / 签名 / webhook→收件箱 / 幂等 / 发送形状与
-错误映射 / 图片（地区门控 + 3MB）/ 注册门控 / 路由。全部假 transport，零网络。"""
+"""TikTok 官方通道（实施100 T1/T2，2026-09-08）：地区模型 / 官方验签（Tiktok-Signature t=,s=）/ 官方载荷
+（user_openid + content 字符串、方向按 to_user.id）→ 收件箱 / 幂等与回显去重 / 发送形状 / 令牌刷新与重试 /
+图片（地区门控 + 3MB）/ OAuth 换令牌落注册表 / webhook 编程注册 / 注册门控 / 路由。全部假 transport，零网络。"""
 from __future__ import annotations
 
 import json
 import time
 from typing import Any, Dict, List, Tuple
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -14,10 +16,11 @@ from src.integrations import tiktok_regions as tr_
 from src.integrations import protocol_bridge as pb
 from src.inbox.store import InboxStore
 
-SECRET = "wh-secret"
+SECRET = "app-secret"
 BIZ = "biz-1"
 USER = "user-9"
-CFG = {"tiktok": {"enabled": True, "app_id": "app", "secret": "s", "webhook_secret": SECRET}}
+CFG = {"tiktok": {"enabled": True, "app_id": "app-1", "secret": SECRET}}
+OK_SEND = (200, {"code": 0, "message": "OK", "request_id": "r1", "data": {"message": {"message_id": "m-out-1"}}})
 
 
 class FakeTransport:
@@ -30,8 +33,7 @@ class FakeTransport:
         self.calls.append((method, url, kw))
         if self.queue:
             return self.queue.pop(0)
-        return self.responses.get(url, (200, {"code": 0, "message": "OK", "request_id": "r1",
-                                              "data": {"message": {"message_id": "m-out-1"}}}))
+        return self.responses.get(url, OK_SEND)
 
 
 @pytest.fixture()
@@ -47,16 +49,22 @@ def env(tmp_path):
     pb.register_inbox_sink(None)
 
 
-def _event(event, msg, **top):
-    d = {"event": event, "business_id": BIZ, "message": msg}
-    d.update(top)
-    return json.dumps(d, ensure_ascii=False).encode("utf-8")
+def _content(**kw) -> Dict[str, Any]:
+    base = {"conversation_id": "conv-1", "message_id": "m-in-1", "timestamp": int(time.time() * 1000),
+            "message_type": "text", "text": {"body": "hello there"}, "from": "Ann",
+            "from_user": {"id": USER, "role": "USER"}, "to": "Shop", "to_user": {"id": BIZ, "role": "BUSINESS"}}
+    base.update(kw)
+    return base
 
 
-def _recv(text="hello there", mid="m-in-1", conv="conv-1"):
-    return _event(tk.EVENT_RECEIVE, {"sender": USER, "recipient": BIZ, "conversation_id": conv, "message_id": mid,
-                                     "timestamp": int(time.time() * 1000), "message_type": "TEXT",
-                                     "text": {"body": text}, "from_user": {"role": "USER", "id": USER}})
+def _event(event: str, content: Dict[str, Any], business_id: str = BIZ) -> bytes:
+    # 官方外壳：content 是二次序列化的 JSON 字符串
+    return json.dumps({"event": event, "user_openid": business_id, "content": json.dumps(content, ensure_ascii=False)},
+                      ensure_ascii=False).encode("utf-8")
+
+
+def _sig(body: bytes, ts=None) -> str:
+    return tk.sign_body(SECRET, body, ts)
 
 
 async def _noop(_p):
@@ -80,73 +88,116 @@ def test_region_model():
     assert len(tr_.EEA) == 30 and "NO" in tr_.EEA and "NO" not in tr_.EU
 
 
-# ── 签名 / webhook ─────────────────────────────────────────────────────────────
+# ── 官方验签 ───────────────────────────────────────────────────────────────────
 
-def test_signature():
+def test_signature_official_scheme():
     body = b'{"event":"im_receive_msg"}'
-    sig = tk.sign_body(SECRET, body)
-    assert tk.verify_signature(SECRET, body, sig) and tk.verify_signature(SECRET, body, "sha256=" + sig.upper())
-    assert not tk.verify_signature(SECRET, body + b"x", sig) and not tk.verify_signature("", body, sig)
+    now = 1_800_000_000
+    hdr = tk.sign_body(SECRET, body, now)
+    ts, s = tk.parse_signature_header(hdr)
+    assert ts == now and len(s) == 64
+    assert tk.verify_signature(SECRET, body, hdr, now=now + 10)
+    assert tk.verify_signature(SECRET, body, f"s={s}, t={now}", now=now)          # 顺序无关
+    assert not tk.verify_signature(SECRET, body, hdr, now=now + 301)               # 超容忍
+    assert tk.verify_signature(SECRET, body, hdr, now=now + 301, tolerance=600)
+    assert not tk.verify_signature(SECRET, body + b"x", hdr, now=now)              # 改体
+    assert not tk.verify_signature("other", body, hdr, now=now)                    # 换密钥
+    assert not tk.verify_signature(SECRET, body, f"t={now + 1},s={s}", now=now)    # 改时间戳
+    assert not tk.verify_signature("", body, hdr, now=now) and not tk.verify_signature(SECRET, body, "garbage", now=now)
 
 
-async def test_webhook_receive_and_send_echo(env):
+# ── webhook ──────────────────────────────────────────────────────────────────
+
+async def test_webhook_receive_echo_read_and_dedupe(env):
     store, st, tr, api = env
-    body = _recv("how much is it?")
+    body = _event(tk.EVENT_RECEIVE, _content(text={"body": "how much is it?"},
+                                             referral={"short_link": [{"ref": "ig_bio", "prefilled_message": "hi"}]}))
     calls = []
 
     async def ar(p):
         calls.append(p)
 
-    status, resp = await tk.handle_webhook(body, tk.sign_body(SECRET, body), config=CFG, state=st, auto_reply=ar)
+    status, resp = await tk.handle_webhook(body, _sig(body), config=CFG, state=st, auto_reply=ar)
     assert (status, resp) == (200, {"ok": True})
     cid = f"tiktok:{BIZ}:tiktok:user:{USER}"
     conv = store.get_conversation(cid)
     assert conv and conv["platform"] == "tiktok" and conv["last_in_ts"] > 0
-    assert [(m["direction"], m["text"]) for m in store.list_recent_messages(cid, limit=5)] == [("in", "how much is it?")]
-    assert calls and calls[0]["chat_key"] == f"tiktok:user:{USER}"
+    rows = store.list_recent_messages(cid, limit=5)
+    assert [(m["direction"], m["text"]) for m in rows] == [("in", "how much is it?")]
+    assert calls and calls[0]["chat_key"] == f"tiktok:user:{USER}" and calls[0]["name"] == "Ann"
+    assert calls[0]["source"]["ref"] == "ig_bio" and calls[0]["source"]["conversation_id"] == "conv-1"
     assert st.get_ctx(BIZ, USER)["conversation_id"] == "conv-1"
-    # 重放 → dup
-    status, resp = await tk.handle_webhook(body, tk.sign_body(SECRET, body), config=CFG, state=st, auto_reply=ar)
-    assert resp.get("dup") is True and len(calls) == 1
-    # 坏签名 / 坏 JSON / 探活 challenge
-    assert (await tk.handle_webhook(body, "nope", config=CFG, state=st))[0] == 401
-    assert (await tk.handle_webhook(b"{", tk.sign_body(SECRET, b"{"), config=CFG, state=st))[0] == 400
+    # 重放 → dup；坏签名 401；坏 JSON 400；探活 challenge
+    assert (await tk.handle_webhook(body, _sig(body), config=CFG, state=st, auto_reply=ar))[1].get("dup") is True
+    assert len(calls) == 1
+    assert (await tk.handle_webhook(body, "t=1,s=00", config=CFG, state=st))[0] == 401
+    assert (await tk.handle_webhook(b"{", _sig(b"{"), config=CFG, state=st))[0] == 400
     ch = json.dumps({"challenge": "abc"}).encode()
-    assert await tk.handle_webhook(ch, tk.sign_body(SECRET, ch), config=CFG, state=st) == (200, {"challenge": "abc"})
-    # 我方回显镜像为 out；图片消息占位
-    echo = _event(tk.EVENT_SEND, {"sender": BIZ, "recipient": USER, "conversation_id": "conv-1", "message_id": "m-out-9",
-                                  "timestamp": int(time.time() * 1000), "message_type": "TEXT", "text": {"body": "sure"}})
-    await tk.handle_webhook(echo, tk.sign_body(SECRET, echo), config=CFG, state=st, auto_reply=_noop)
-    img = _event(tk.EVENT_RECEIVE, {"sender": USER, "recipient": BIZ, "conversation_id": "conv-1", "message_id": "m-in-2",
-                                    "timestamp": int(time.time() * 1000), "message_type": "IMAGE", "image": {"media_id": "x"}})
-    await tk.handle_webhook(img, tk.sign_body(SECRET, img), config=CFG, state=st, auto_reply=_noop)
+    assert await tk.handle_webhook(ch, _sig(ch), config=CFG, state=st) == (200, {"challenge": "abc"})
+    # 商家从 App 手发：im_send_msg 且 to_user 是客户 → out 回显镜像
+    echo = _event(tk.EVENT_SEND, _content(message_id="m-out-9", text={"body": "sure"}, from_user={"id": BIZ},
+                                          to_user={"id": USER}))
+    assert (await tk.handle_webhook(echo, _sig(echo), config=CFG, state=st, auto_reply=_noop))[1].get("echo") is True
+    # 客户发图：占位 + media_type + media_id 进 source
+    img = _event(tk.EVENT_RECEIVE, _content(message_id="m-in-2", message_type="image", text=None,
+                                            image={"media_id": "media-x"}))
+    await tk.handle_webhook(img, _sig(img), config=CFG, state=st, auto_reply=_noop)
     rows = [(m["direction"], m["text"], m["media_type"]) for m in store.list_recent_messages(cid, limit=10)]
     assert ("out", "sure", "") in rows and ("in", "[图片]", "image") in rows
-    # 高意向评论：只记录
+    # 已读事件 / 高意向评论：只记录
+    rd = _event(tk.EVENT_MARK_READ, {"conversation_id": "conv-1"})
+    assert (await tk.handle_webhook(rd, _sig(rd), config=CFG, state=st))[1].get("read") is True
     hi = _event(tk.EVENT_HIGH_INTENT_COMMENT, {"comment_id": "c1"})
-    assert (await tk.handle_webhook(hi, tk.sign_body(SECRET, hi), config=CFG, state=st))[1].get("noted") is True
+    assert (await tk.handle_webhook(hi, _sig(hi), config=CFG, state=st))[1].get("noted") is True
+
+
+async def test_webhook_direction_by_to_user_even_for_receive_event(env):
+    """官方文档：两个事件都可能带商家侧消息，方向唯一以 to_user.id == business_id 判定。"""
+    store, st, tr, api = env
+    body = _event(tk.EVENT_RECEIVE, _content(message_id="m-x", from_user={"id": BIZ}, to_user={"id": USER},
+                                             text={"body": "from shop"}))
+    status, resp = await tk.handle_webhook(body, _sig(body), config=CFG, state=st, auto_reply=_noop)
+    assert resp.get("echo") is True
+    assert st.get_ctx(BIZ, USER) == {}   # 不是进线，不开回复窗
 
 
 # ── worker ───────────────────────────────────────────────────────────────────
 
 class _Reg:
     def __init__(self):
-        self.upserts = []
+        self.rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def upsert(self, platform, account_id, **kw):
-        self.upserts.append((platform, account_id, kw))
+    def get(self, platform, account_id):
+        return self.rows.get((platform, account_id))
+
+    def list(self, platform=None, **_):
+        return [r for (p, _a), r in self.rows.items() if platform is None or p == platform]
+
+    def upsert(self, platform, account_id, *, meta=None, merge_meta=False, **kw):
+        row = self.rows.setdefault((platform, account_id), {"platform": platform, "account_id": account_id, "meta": {}})
+        for k, v in kw.items():
+            if v is not None:
+                row[k] = v
+        if meta is not None:
+            if merge_meta:
+                row["meta"].update(meta)
+            else:
+                row["meta"] = dict(meta)
+        return row
 
 
-def _worker(st, api, region="SG", token="tok"):
-    return tk.TikTokOfficialWorker({"account_id": BIZ, "meta": {"access_token": token, "region": region}}, CFG,
-                                   api=api, state=st, registry=_Reg())
+def _worker(st, api, region="SG", token="tok", **meta_extra):
+    meta = {"access_token": token, "region": region, "access_expires_at": time.time() + 86400,
+            "refresh_token": "rft", "refresh_expires_at": time.time() + 365 * 86400}
+    meta.update(meta_extra)
+    return tk.TikTokOfficialWorker({"account_id": BIZ, "meta": meta}, CFG, api=api, state=st, registry=_Reg())
 
 
 async def test_worker_send_shape_and_rules(env):
     store, st, tr, api = env
     w = _worker(st, api)
     await w.start()
-    assert await w.healthy() is True
+    assert await w.healthy() is True and tr.calls == []      # 令牌未到期，不刷
     r = await w.send(f"tiktok:user:{USER}", "hi")
     assert r == {"delivered": False, "blocked": "policy_window_no_inbound"} and tr.calls == []
     st.record_inbound(BIZ, USER, conversation_id="conv-1", msg_id="m-in-1", ts=time.time() - 60)
@@ -157,18 +208,50 @@ async def test_worker_send_shape_and_rules(env):
     assert kw["json_body"] == {"business_id": BIZ, "message_type": "TEXT", "recipient_type": "CONVERSATION",
                                "recipient": "conv-1", "text": {"body": "Sure, it's $99"},
                                "referenced_message_info": {"referenced_message_id": "m-in-1"}}
+    # 我方发送成功后到达的回显：幂等表命中 → dup，不二次落库
+    echo = _event(tk.EVENT_SEND, _content(message_id="m-out-1", from_user={"id": BIZ}, to_user={"id": USER},
+                                          text={"body": "Sure, it's $99"}))
+    assert (await tk.handle_webhook(echo, _sig(echo), config=CFG, state=st, auto_reply=_noop))[1].get("dup") is True
     assert (await w.send(f"tiktok:user:{USER}", "x" * 6001))["blocked"].startswith("policy_text_too_long")
-    # 48h 后 → 超窗
-    st.record_inbound(BIZ, USER, conversation_id="conv-1", msg_id="m-old", ts=time.time() - 49 * 3600)
     st.record_inbound(BIZ, "other", conversation_id="conv-2", msg_id="m-o", ts=time.time() - 49 * 3600)
     assert (await w.send("tiktok:user:other", "late"))["blocked"] == "policy_window_expired"
-    # 鉴权错误码 → needs_reauth 并清 token；再发直接拒
-    tr.queue.append((200, {"code": 40105, "message": "Access token is invalid", "request_id": "r2"}))
+
+
+async def test_worker_token_refresh_paths(env):
+    store, st, tr, api = env
+    st.record_inbound(BIZ, USER, conversation_id="conv-1", msg_id="m", ts=time.time())
+    # ① access 已到期、refresh 活 → start 时自动刷新并落 meta
+    w = _worker(st, api, access_expires_at=time.time() - 10)
+    assert w.token_state == "refresh_due"
+    tr.queue.append((200, {"code": 0, "data": {"access_token": "tok2", "expires_in": 86400, "refresh_token": "rft2",
+                                               "refresh_token_expires_in": 3000000, "open_id": BIZ, "scope": "x"}}))
+    await w.start()
+    assert w.token_state == "ok" and w.meta["access_token"] == "tok2" and w.meta["refresh_token"] == "rft2"
+    assert tr.calls[0][1] == tk.REFRESH_URL and tr.calls[0][2]["json_body"]["grant_type"] == "refresh_token"
+    assert w._registry.get("tiktok", BIZ)["meta"]["access_token"] == "tok2"
+    # ② 发送遇鉴权码 → 强刷一次 → 重试成功
+    tr.queue += [(200, {"code": 40105, "message": "Access token is invalid"}),
+                 (200, {"code": 0, "data": {"access_token": "tok3", "expires_in": 86400, "refresh_token": "rft3",
+                                            "refresh_token_expires_in": 3000000}}), OK_SEND]
     r = await w.send(f"tiktok:user:{USER}", "again")
-    assert r["blocked"] == "tiktok_needs_reauth" and w.meta["access_token"] == ""
+    assert r["delivered"] is True and w.meta["access_token"] == "tok3"
+    assert [c[1] for c in tr.calls[-3:]] == [tk.SEND_URL, tk.REFRESH_URL, tk.SEND_URL]
+    # ③ 鉴权码且刷新也失败 → needs_reauth，清 token，后续直接拒
+    tr.queue += [(200, {"code": 40105, "message": "invalid"}), (200, {"code": 40105, "message": "refresh invalid"})]
+    r = await w.send(f"tiktok:user:{USER}", "again")
+    assert r["blocked"] == "tiktok_needs_reauth" and w.token_state == "needs_reauth"
     n = len(tr.calls)
-    assert (await w.send(f"tiktok:user:{USER}", "again"))["blocked"] == "tiktok_needs_reauth" and len(tr.calls) == n
-    assert await w.healthy() is False and w.status()["token_state"] == "needs_reauth"
+    assert (await w.send(f"tiktok:user:{USER}", "x"))["blocked"] == "tiktok_needs_reauth" and len(tr.calls) == n
+    assert await w.healthy() is False
+    # ④ 纯函数矩阵
+    now = 1_800_000_000.0
+    assert tk.token_state({}, now) == "needs_reauth"
+    assert tk.token_state({"access_token": "a", "access_expires_at": now + 3600}, now) == "ok"
+    assert tk.token_state({"access_token": "a", "access_expires_at": now + 60, "refresh_token": "r",
+                           "refresh_expires_at": now + 1e6}, now) == "refresh_due"
+    assert tk.token_state({"access_token": "a", "access_expires_at": now + 60}, now) == "ok"          # 无 refresh：撑到到期
+    assert tk.token_state({"access_token": "a", "access_expires_at": now - 1, "refresh_token": "r",
+                           "refresh_expires_at": now - 1}, now) == "needs_reauth"
 
 
 async def test_worker_region_gating(env):
@@ -178,7 +261,6 @@ async def test_worker_region_gating(env):
     assert await w.healthy() is False and w.status()["dm_api"] is False
     st.record_inbound(BIZ, USER, conversation_id="conv-1", msg_id="m", ts=time.time())
     assert (await w.send(f"tiktok:user:{USER}", "hi"))["blocked"] == "tiktok_region_unsupported" and tr.calls == []
-    # 菲律宾：私信可用、图片不可用
     w2 = _worker(st, api, region="PH")
     assert w2.dm_ok is True and w2.media_ok is False
     r = await w2.send_media(f"tiktok:user:{USER}", media_path="/nonexistent.png", media_type="image")
@@ -201,6 +283,83 @@ async def test_worker_send_media_image(env, tmp_path):
     big = tmp_path / "big.png"
     big.write_bytes(b"\0" * (3 * 1024 * 1024 + 1))
     assert (await w.send_media(f"tiktok:user:{USER}", media_path=str(big), media_type="image"))["blocked"] == "policy_media_too_large:3MB"
+
+
+# ── OAuth / webhook 注册 ─────────────────────────────────────────────────────────
+
+def test_oauth_state_and_authorize_url():
+    now = 1_800_000_000.0
+    st = tk.oauth_state(SECRET, "sg", now)
+    assert tk.verify_oauth_state(SECRET, st, now + 5) == "SG"
+    assert tk.verify_oauth_state(SECRET, st, now + 601) is None and tk.verify_oauth_state("other", st, now) is None
+    ts, reg, mac = st.split(".")
+    assert tk.verify_oauth_state(SECRET, f"{ts}.MY.{mac}", now) is None     # 改地区
+    assert tk.verify_oauth_state(SECRET, tk.oauth_state(SECRET, "", now), now) == ""
+    u = tk.authorize_url("app-1", "https://x.example.com/webhook/tiktok/oauth/callback", st)
+    p = urlparse(u)
+    assert f"{p.scheme}://{p.netloc}{p.path}" == tk.AUTHORIZE_URL
+    q = parse_qs(p.query)
+    assert q["client_key"] == ["app-1"] and q["response_type"] == ["code"] and q["state"] == [st]
+    assert set(q["scope"][0].split(",")) >= set(tk.MESSAGING_SCOPES)
+    assert tk.missing_scopes("user.info.basic,message.list.read") == ("message.list.send", "message.list.manage")
+    assert tk.missing_scopes(",".join(tk.OAUTH_SCOPES)) == ()
+
+
+async def test_complete_oauth_registers_account(env):
+    store, st, tr, api = env
+    reg = _Reg()
+    reg.upsert("tiktok", "open-1", label="我的号", meta={"persona_id": "p-1"})
+    now = 1_800_000_000.0
+    tr.responses[tk.TOKEN_URL] = (200, {"code": 0, "data": {
+        "access_token": "act", "expires_in": 86400, "refresh_token": "rft", "refresh_token_expires_in": 31536000,
+        "open_id": "open-1", "scope": ",".join(tk.OAUTH_SCOPES)}})
+    tr.responses[tk.BUSINESS_GET_URL] = (200, {"code": 0, "data": {"username": "shop_sg", "display_name": "Shop SG",
+                                                                    "profile_image": "https://p/a.jpg"}})
+    res = await tk.complete_oauth("code-1", config=CFG, redirect_uri="https://x/cb", region="SG", registry=reg, api=api, now=now)
+    assert res["ok"] and res["open_id"] == "open-1" and res["username"] == "shop_sg"
+    assert tr.calls[0][1] == tk.TOKEN_URL and tr.calls[0][2]["json_body"] == {
+        "client_id": "app-1", "client_secret": SECRET, "grant_type": "authorization_code", "auth_code": "code-1",
+        "redirect_uri": "https://x/cb"}
+    assert tr.calls[1][1] == tk.BUSINESS_GET_URL and tr.calls[1][2]["headers"]["Access-Token"] == "act"
+    row = reg.get("tiktok", "open-1")
+    m = row["meta"]
+    assert row["mode"] == "official" and row["label"] == "我的号" and m["persona_id"] == "p-1"
+    assert m["access_token"] == "act" and m["access_expires_at"] == now + 86400 and m["refresh_expires_at"] == now + 31536000
+    assert m["region"] == "SG" and m["display_name"] == "Shop SG" and m["avatar_url"] == "https://p/a.jpg"
+    assert tk.token_state(m, now) == "ok"
+    # scope 不齐 → 明确错误、不落库
+    tr.responses[tk.TOKEN_URL] = (200, {"code": 0, "data": {"access_token": "a", "open_id": "open-2",
+                                                            "scope": "user.info.basic,message.list.read"}})
+    res = await tk.complete_oauth("c", config=CFG, redirect_uri="https://x/cb", registry=reg, api=api)
+    assert res["error"] == "ungranted_scopes" and res["missing"] == ["message.list.send", "message.list.manage"]
+    assert reg.get("tiktok", "open-2") is None
+    tr.responses[tk.TOKEN_URL] = (200, {"code": 40110, "message": "invalid auth_code"})
+    assert (await tk.complete_oauth("c", config=CFG, redirect_uri="u", registry=reg, api=api))["error"] == "exchange_failed"
+    assert (await tk.complete_oauth("c", config={}, registry=reg, redirect_uri="u", api=api))["error"] == "missing_credentials"
+
+
+async def test_ensure_webhook_idempotent(env):
+    store, st, tr, api = env
+    tr.responses[tk.WEBHOOK_LIST_URL] = (200, {"code": 0, "data": {"callback_url": "https://x/webhook/tiktok"}})
+    r = await tk.ensure_webhook(CFG, "https://x/webhook/tiktok", api=api)
+    assert r == {"ok": True, "callback_url": "https://x/webhook/tiktok", "changed": False}
+    assert [c[1] for c in tr.calls] == [tk.WEBHOOK_LIST_URL]
+    tr.responses[tk.WEBHOOK_UPDATE_URL] = (200, {"code": 0, "data": {"callback_url": "https://y/webhook/tiktok"}})
+    r = await tk.ensure_webhook(CFG, "https://y/webhook/tiktok", api=api)
+    assert r["ok"] and r["changed"] is True
+    assert tr.calls[-1][2]["json_body"] == {"app_id": "app-1", "secret": SECRET, "event_type": "DIRECT_MESSAGE",
+                                            "callback_url": "https://y/webhook/tiktok"}
+    tr.responses[tk.WEBHOOK_UPDATE_URL] = (200, {"code": 40001, "message": "bad"})
+    assert (await tk.ensure_webhook(CFG, "https://z/webhook/tiktok", api=api))["error"] == "webhook_update_failed"
+
+
+async def test_capabilities_probe(env):
+    store, st, tr, api = env
+    tr.responses[tk.CAPABILITIES_URL] = (200, {"code": 0, "data": {"capability_infos": [
+        {"capability_type": "SEND_TEXT", "capability_result": True}, {"capability_type": "SEND_IMAGE", "capability_result": False}]}})
+    r = await api.capabilities(access_token="t", business_id=BIZ, capability_types=["SEND_TEXT", "SEND_IMAGE"])
+    assert r == {"ok": True, "capabilities": {"SEND_TEXT": True, "SEND_IMAGE": False}}
+    assert json.loads(tr.calls[0][2]["params"]["capability_types"]) == ["SEND_TEXT", "SEND_IMAGE"]
 
 
 def test_registration_gated_and_capabilities():
@@ -226,6 +385,6 @@ def test_routes_mount_only_when_enabled(env):
     tk.register_tiktok_routes(app, SimpleNamespace(config=CFG))
     c = TestClient(app)
     ch = json.dumps({"challenge": 5}).encode()
-    r = c.post(tk.DEFAULT_WEBHOOK_PATH, content=ch, headers={tk.DEFAULT_SIGNATURE_HEADER: tk.sign_body(SECRET, ch)})
+    r = c.post(tk.DEFAULT_WEBHOOK_PATH, content=ch, headers={tk.DEFAULT_SIGNATURE_HEADER: _sig(ch)})
     assert r.status_code == 200 and r.json() == {"challenge": 5}
-    assert c.post(tk.DEFAULT_WEBHOOK_PATH, content=ch, headers={tk.DEFAULT_SIGNATURE_HEADER: "bad"}).status_code == 401
+    assert c.post(tk.DEFAULT_WEBHOOK_PATH, content=ch, headers={tk.DEFAULT_SIGNATURE_HEADER: "t=1,s=bad"}).status_code == 401
