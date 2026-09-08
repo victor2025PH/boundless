@@ -332,6 +332,24 @@ def proactive_candidate_ok(
             return (False, "own_fleet")
     except Exception:
         pass
+    # P-2 E / F（#259 #252 · D-P4）：客户要求过停联（账号级名单，随重装 / 迁移包持久）
+    # 与自聊会话（peer == 自己）**永不**主动触达——关怀 / 唤醒 / opener / 目标同一入口。
+    # 名单取进程默认实例（首次 get_blocklist(store) 已登记路径）；未初始化 → 空名单放行。
+    try:
+        from src.inbox.normalizer import is_self_chat
+        if is_self_chat(str(r.get("platform") or ""), str(r.get("account_id") or ""),
+                        str(r.get("chat_key") or "")):
+            return (False, "self_chat")
+    except Exception:
+        pass
+    try:
+        from src.inbox.account_blocklist import get_blocklist
+        if get_blocklist().is_blocked(str(r.get("platform") or ""),
+                                      str(r.get("account_id") or ""),
+                                      str(r.get("chat_key") or "")):
+            return (False, "stop_contact")
+    except Exception:
+        pass
     return (True, "")
 
 

@@ -285,6 +285,9 @@ class AccountBlocklist:
 # ── 单例（按库路径） ─────────────────────────────────────────────────────────
 _INSTANCES: Dict[str, AccountBlocklist] = {}
 _INST_LOCK = threading.Lock()
+#: 进程默认实例键：第一次用**真 store**（有 _db_path）取到的那份——没有 store 句柄的谓词点
+#: （proactive_candidate_ok）用 ``get_blocklist()`` 也能查到同一份名单。
+_DEFAULT_KEY: str = ""
 
 
 def blocklist_db_path(store: Any) -> Optional[Path]:
@@ -300,9 +303,12 @@ def blocklist_db_path(store: Any) -> Optional[Path]:
 def get_blocklist(store: Any = None, *, db_path: Any = None) -> AccountBlocklist:
     """取账号级名单（同一 inbox.db 目录一份；无路径 → 进程内 :memory: 一份）。首次取用
     自动 ``seed_from_store``（存量「客户要求停联」会话进名单）。绝不抛。"""
+    global _DEFAULT_KEY
     path = Path(str(db_path)) if db_path else blocklist_db_path(store)
-    key = str(path) if path else ":memory:"
+    key = str(path) if path else (_DEFAULT_KEY or ":memory:")
     with _INST_LOCK:
+        if path and not _DEFAULT_KEY:
+            _DEFAULT_KEY = key
         inst = _INSTANCES.get(key)
         if inst is None:
             try:
@@ -321,10 +327,12 @@ def get_blocklist(store: Any = None, *, db_path: Any = None) -> AccountBlocklist
 
 
 def reset_for_tests() -> None:
+    global _DEFAULT_KEY
     with _INST_LOCK:
         for inst in _INSTANCES.values():
             inst.close()
         _INSTANCES.clear()
+        _DEFAULT_KEY = ""
 
 
 def is_peer_blocked(store: Any, platform: str, account_id: str, peer: str) -> bool:

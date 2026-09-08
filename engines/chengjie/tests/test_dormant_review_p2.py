@@ -235,6 +235,39 @@ def test_blocklist_peer_refrozen_on_login_without_conv_tag(store):
     assert store.get_automation_mode_if_set(CID_S) == "manual"
 
 
+def test_proactive_predicate_blocks_stop_contact_and_self_chat(store):
+    """永不 opener / 关怀 / 目标：主动触达统一谓词对名单在场与自聊返回不可发。"""
+    from src.companion.proactive_peer_hygiene import proactive_candidate_ok
+    ab.get_blocklist(store).add(PLAT, ACCT, SINUE, hit_text="never write me again")
+    ok, why = proactive_candidate_ok({"platform": PLAT, "account_id": ACCT, "chat_key": SINUE})
+    assert (ok, why) == (False, "stop_contact")
+    ok, why = proactive_candidate_ok({"platform": PLAT, "account_id": ACCT, "chat_key": ACCT})
+    assert ok is False and why in ("self_chat", "own_fleet")   # 自家账号索引先拦也算
+    ok, _ = proactive_candidate_ok({"platform": PLAT, "account_id": ACCT, "chat_key": "u1"})
+    assert ok is True
+    ab.get_blocklist(store).mark_unfrozen(PLAT, ACCT, SINUE, by="agent")
+    assert proactive_candidate_ok({"platform": PLAT, "account_id": ACCT, "chat_key": SINUE})[0] is True
+
+
+def test_account_scope_migration_blocklist_seed(store, tmp_path):
+    """存量迁移 CLI 段：conv_tags「客户要求停联」→ account_blocklist.db（dry-run 只读、apply 只增）。"""
+    from src.utils.account_scope_migration import apply_blocklist_seed, plan_blocklist_seed
+    _push(store, SINUE, "x", time.time() - 100, "m1")
+    _push(store, "u2", "y", time.time() - 100, "m2")
+    store.set_conv_tags(CID_S, [sc.STOP_CONTACT_TAG])
+    store.set_conv_tags(f"{PLAT}:{ACCT}:u2", ["不需客户要求停联确认"])   # 子串假阳性不进
+    plan = plan_blocklist_seed(str(store._db_path))
+    assert [p["peer"] for p in plan] == [SINUE]
+    bl_db = tmp_path / "bl.db"
+    res = apply_blocklist_seed(str(store._db_path), str(bl_db))
+    assert res["inserted"] == 1
+    res2 = apply_blocklist_seed(str(store._db_path), str(bl_db))
+    assert res2["inserted"] == 0 and res2["updated"] == 1
+    bl = ab.AccountBlocklist(bl_db)
+    assert bl.is_blocked(PLAT, ACCT, SINUE) and bl.get(PLAT, ACCT, SINUE)["source"] == "seed:conv_tag"
+    bl.close()
+
+
 def test_seed_from_conv_tags(store):
     """存量迁移：库里已带「客户要求停联」标签的会话首次取用即补进名单。"""
     _push(store, SINUE, "x", time.time() - 100, "m1")

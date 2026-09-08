@@ -286,6 +286,56 @@ def apply_context_account_scope(
     return {"candidates": len(plan), "renamed": renamed, "details": plan}
 
 
+# ── P-2 E（#259 #252 · D-P4，2026-09-08）：会话级停联标记 → 账号级停联名单 ─────────────
+#   O-1 A 的冻结只记在 conversation_meta.conv_tags（「客户要求停联」）上；存量库升级到 1.0.79
+#   要把这些行补进 account_blocklist.db（只增不删；已在名单的不重复）。默认 dry-run。
+
+STOP_CONTACT_TAG = "客户要求停联"
+
+
+def plan_blocklist_seed(inbox_db: str) -> List[Dict[str, Any]]:
+    """扫 inbox.db：带「客户要求停联」标签的会话 → 名单候选行（纯只读）。"""
+    conn = sqlite3.connect(inbox_db)
+    try:
+        rows = conn.execute(
+            "SELECT c.platform, c.account_id, c.chat_key, c.last_ts, m.conv_tags "
+            "FROM conversation_meta m JOIN conversations c "
+            "ON c.conversation_id = m.conversation_id "
+            "WHERE m.conv_tags LIKE ?", (f"%{STOP_CONTACT_TAG}%",)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    out: List[Dict[str, Any]] = []
+    for plat, acct, ck, last_ts, tags_json in rows:
+        try:
+            tags = json.loads(tags_json or "[]")
+        except Exception:
+            tags = []
+        if STOP_CONTACT_TAG not in tags:
+            continue   # LIKE 预筛的子串假阳性
+        peer = str(ck or "").strip()
+        if not peer:
+            continue
+        out.append({"type": "blocklist", "platform": str(plat or "").lower(),
+                    "account_id": str(acct or "default"), "peer": peer,
+                    "reason": "stop_contact", "hit_text": "", "ts": float(last_ts or 0),
+                    "unfrozen_ts": 0.0, "source": "seed:conv_tag", "hits": 1})
+    return out
+
+
+def apply_blocklist_seed(inbox_db: str, blocklist_db: str) -> Dict[str, Any]:
+    """落地：候选行 upsert 进 account_blocklist.db（只增不删；已有行只刷 ts / hits）。"""
+    from src.inbox.account_blocklist import AccountBlocklist
+    plan = plan_blocklist_seed(inbox_db)
+    bl = AccountBlocklist(Path(blocklist_db))
+    try:
+        stats = bl.import_rows(plan)
+    finally:
+        bl.close()
+    return {"candidates": len(plan), **stats, "details": plan}
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────
 
 def _backup(path: str) -> str:
@@ -306,6 +356,10 @@ def _main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--context-db", default="", help="user_context 库（可选）")
     ap.add_argument("--registry-db", default="",
                     help="账号注册表库（给了才启用在线账号闸门，强烈建议）")
+    ap.add_argument("--blocklist-db", default="",
+                    help="P-2 E：账号级停联名单库（给了即把「客户要求停联」会话补进名单；"
+                         "缺省 = inbox.db 同目录 account_blocklist.db）")
+    ap.add_argument("--skip-blocklist", action="store_true", help="不做停联名单补种")
     ap.add_argument("--apply", action="store_true", help="落地（自动备份 db）")
     ap.add_argument("--json-out", default="", help="报告落 JSON 路径")
     args = ap.parse_args(argv)
@@ -348,6 +402,18 @@ def _main(argv: Optional[List[str]] = None) -> int:
                     1 for p in ctx_plan if p["action"] == "rename"),
                 "details": ctx_plan,
             }
+
+    if not args.skip_blocklist:
+        _bl_db = args.blocklist_db or str(
+            Path(args.inbox_db).parent / "account_blocklist.db")
+        if args.apply:
+            report["blocklist"] = apply_blocklist_seed(args.inbox_db, _bl_db)
+        else:
+            _bl_plan = plan_blocklist_seed(args.inbox_db)
+            report["blocklist"] = {"candidates": len(_bl_plan), "db": _bl_db,
+                                   "details": _bl_plan}
+        print(f"[{'apply' if args.apply else 'dry-run'}] 停联名单补种 候选="
+              f"{report['blocklist'].get('candidates')} → {_bl_db}")
 
     mode = "apply" if args.apply else "dry-run"
     epi = report.get("episodic") or {}
