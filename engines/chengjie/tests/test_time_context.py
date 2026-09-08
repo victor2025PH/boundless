@@ -393,7 +393,10 @@ async def test_time_context_disabled_restores_legacy_behavior():
     )
     assert out["ok"] is True
     assert len(sm.inbox_draft_calls) == 1
-    assert (sm.inbox_draft_calls[0].get("extra_hint") or "") == ""
+    # P-1 C（#259）起，extra_hint 消费口还挂了生成侧「AI 指纹」硬禁（与 time_context 无关、
+    # 由 inbox.auto_draft.style_hint 单独开关）——这里只钉「时间提示一条不注」。
+    _xh = sm.inbox_draft_calls[0].get("extra_hint") or ""
+    assert "当前时间" not in _xh and "迟回复" not in _xh and "不是刚才" not in _xh
     assert "time_anchor" not in out
 
 

@@ -540,6 +540,21 @@ async def generate_persona_reply(
     except Exception:
         logger.debug("[persona_reply] 交接提醒跳过", exc_info=True)
 
+    # P-1 C（#259 #254 · 34585H E/F）：生成侧「AI 指纹」硬禁 + few-shot——禁破折号 / 分号 /
+    # 列表、不引用上下文没有的「对方说过」、无历史不假装熟悉、一两句。与时间锚点共用
+    # extra_hint 单一消费口 → 统一引擎 / 直连 / 兜底三条路径一处全覆盖。后处理
+    # （enrich_draft 起草层 humanize + claim_guard）仍是最终保证。配置 inbox.auto_draft.style_hint。
+    try:
+        from src.inbox.draft_style_hint import build_style_hint, history_has_peer_turns
+        _cm_sh = getattr(state, "config_manager", None)
+        _sh = build_style_hint(
+            resolved_lang, has_history=history_has_peer_turns(history),
+            config=getattr(_cm_sh, "config", None) or None, sample_text=str(last_inbound or ""))
+        if _sh:
+            _time_hint = f"{_time_hint}\n{_sh}" if _time_hint else _sh
+    except Exception:
+        logger.debug("[persona_reply] style hint 跳过", exc_info=True)
+
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
     # 显式坐席指令优先，标注句仅在余量内追加（merge_agent_instruction）。
@@ -1122,6 +1137,19 @@ async def generate_topic_opener(
         goal_title=str(goal_meta.get("title") or ""),
         followup_note=followup_note,
     )
+    # P-1 C（#259 · ZH3ZQ5③）：开场链同一段硬禁 + few-shot 追加进 directive（主路径 user_message
+    # 与兜底 prompt 都吃它）；零对方历史 → 明说「首次接触，不回忆、不假装熟悉」——
+    # 「that hiking trail you mentioned」在源头就少产生，后处理 claim_guard 兜底。
+    try:
+        from src.inbox.draft_style_hint import build_style_hint, history_has_peer_turns
+        _cm_sh_o = getattr(getattr(app, "state", None), "config_manager", None)
+        _sh_o = build_style_hint(
+            resolved_lang, has_history=history_has_peer_turns(history, min_turns=1),
+            config=getattr(_cm_sh_o, "config", None) or None)
+        if _sh_o:
+            directive = f"{directive}\n\n{_sh_o}"
+    except Exception:
+        logger.debug("[persona_reply] opener style hint 跳过", exc_info=True)
 
     # 当前时刻锚点（P0 2026-08-12）：开场/跟进同样要有时段感（晚上不发
     # 「早安」体开场）。经 _topic_switch_hint 既有消费口注入；配置同一闸门。

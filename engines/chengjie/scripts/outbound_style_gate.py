@@ -6,8 +6,12 @@ O-1 B/E（#253 #254 · D-O2，2026-09-08）。用法：
     python scripts/outbound_style_gate.py                 # 内置 ≥200 合成样例（英 / 中 / 日 / 泰）
     python scripts/outbound_style_gate.py --input out.jsonl   # 额外喂真实出站样本（每行 {"text","lang"}）
     python scripts/outbound_style_gate.py --show 10       # 打印前 N 条改写前后
+    python scripts/outbound_style_gate.py --draft-log logs/app.log [--max-gen-dash-pct 5]
+        # P-1 C（#259）生成侧门禁：读起草层 ``[draft] … dash=n`` 行（净化**前**的 LLM 原文计数），
+        # 生成侧破折号率必须 <5%（后处理兜到 0）；样本 <20 条判「样本不足」退出码 3
 
-退出码 0 = 全过；1 = 有样例仍含 AI 标点 / 句式；2 = 输入文件读不出。**不过不发版**（N-5 E / 1.0.78）。
+退出码 0 = 全过；1 = 有样例仍含 AI 标点 / 句式 或 生成侧破折号率超阈；2 = 输入文件读不出；
+3 = 生成侧样本不足。**不过不发版**（N-5 E / 1.0.78；P-1 / 1.0.79 加生成侧）。
 门禁口径与 ``src/inbox/outbound_humanize.humanize`` 同一函数——脚本不重造规则，只做体检。
 """
 from __future__ import annotations
@@ -182,12 +186,51 @@ def run_gate(samples: Iterable[Tuple[str, str]], *, show: int = 0) -> Dict[str, 
     return {"total": total, "bad": bad, "agg": agg}
 
 
+_DRAFT_LINE_RE = re.compile(r"\[draft\] conv=\S+ .*?\bclaim=(\w+) punct_fix=(\d+) style_fix=(\d+) trimmed=(\d+) dash=(\d+)")
+GEN_DASH_MIN_SAMPLES = 20
+
+
+def gen_side_stats(lines: Iterable[str]) -> Dict[str, object]:
+    """从 ``[draft]`` 日志行统计**生成侧**（净化前）指标：稿数 / 含破折号稿数 / 引用改写数。"""
+    total = dash = claim_rw = 0
+    for ln in lines:
+        m = _DRAFT_LINE_RE.search(ln)
+        if not m:
+            continue
+        total += 1
+        if int(m.group(5)) > 0:
+            dash += 1
+        if m.group(1) == "rewrite":
+            claim_rw += 1
+    rate = (dash * 100.0 / total) if total else 0.0
+    return {"total": total, "dash": dash, "dash_rate_pct": round(rate, 2), "claim_rewrite": claim_rw}
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--input", type=str, default="", help="真实出站样本 jsonl（每行 {text, lang}）")
     ap.add_argument("--n", type=int, default=200, help="合成样例条数（默认 200）")
     ap.add_argument("--show", type=int, default=0, help="打印前 N 条改写前后")
+    ap.add_argument("--draft-log", type=str, nargs="*", default=[],
+                    help="P-1 C 生成侧门禁：含 [draft] 行的日志文件（可多个）")
+    ap.add_argument("--max-gen-dash-pct", type=float, default=5.0,
+                    help="生成侧破折号率上限（默认 5%%；后处理兜到 0）")
     args = ap.parse_args(argv)
+    if args.draft_log:
+        lines: List[str] = []
+        for f in args.draft_log:
+            p = Path(f)
+            if not p.exists():
+                print(f"[outbound-style-gate] draft log not found: {p}")
+                return 2
+            lines += p.read_text(encoding="utf-8", errors="replace").splitlines()
+        g = gen_side_stats(lines)
+        print(f"[outbound-style-gate] generation-side drafts={g['total']} with_dash={g['dash']} "
+              f"dash_rate={g['dash_rate_pct']}% (max {args.max_gen_dash_pct}%) claim_rewrite={g['claim_rewrite']}")
+        if int(g["total"]) < GEN_DASH_MIN_SAMPLES:  # type: ignore[call-overload]
+            print(f"  !! not enough [draft] samples (<{GEN_DASH_MIN_SAMPLES}); load the build and let it draft first")
+            return 3
+        return 0 if float(g["dash_rate_pct"]) < float(args.max_gen_dash_pct) else 1  # type: ignore[arg-type]
     samples = build_samples(max(1, int(args.n)))
     if args.input:
         p = Path(args.input)
