@@ -1833,41 +1833,45 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             except Exception:
                 _orch_owns = False
 
-            # #37 引用回复决策（I-4 D2，2026-09-04）：客户连发多条、AI 回一条时
-            # 对方不知道在回哪句。纯函数 reply_quote_policy 按「未回复入站 ≥2 且
-            # 最相关候选过地板」决定是否带原生 reply_to；单条入站一律不引用。
-            # 只在编排器路径（协议 worker）生效——RPA 回落适配器不收 reply_to。
-            # 任何异常＝不引用（绝不阻断投递）。
+            # 引用回复决策（#37 I-4 D2 基线 → O-4 #254 规则引擎，2026-09-08）：
+            # 确定性、不走 LLM，随机用会话级种子；必引 burst/stale、基线 random、
+            # 禁引 short_quick/streak/hourly_cap 全在纯函数 reply_quote_policy 里，
+            # 这里只取消息行、算一次、落一行 [quote] 日志。能力位关（LINE/Messenger）
+            # 或 RPA 回落路径 → rule=unsupported 也落日志。任何异常＝不引用（绝不阻断投递）。
             _quote_ref = None
             try:
                 from src.inbox import reply_quote_policy as _rqp
+                from src.inbox.normalizer import conv_id as _cidf_q
                 _qcfg = _rqp.parse_quote_cfg(_assistant_ref.config.config or {})
-                if _qcfg.get("enabled") and _rqp.platform_allows_quote(
-                        platform, _qcfg, orch_owns=_orch_owns):
-                    _q_store = getattr(_assistant_ref, "inbox_store", None)
-                    if _q_store is not None:
-                        from src.inbox.normalizer import conv_id as _cidf_q
-                        _q_rows = _q_store.list_recent_messages(
-                            _cidf_q(platform, account_id, chat_key), limit=12)
+                _q_cid = _cidf_q(platform, account_id, chat_key)
+                if not _qcfg.get("enabled"):
+                    _assistant_ref.logger.debug(
+                        "[quote] conv=%s reply_to_mid=- reason=none rule=disabled "
+                        "platform=%s", _q_cid, platform)
+                else:
+                    if not _rqp.platform_allows_quote(
+                            platform, _qcfg, orch_owns=_orch_owns):
+                        _qdec = _rqp.unsupported_decision(
+                            platform, orch_owns=_orch_owns)
+                    else:
+                        _q_store = getattr(_assistant_ref, "inbox_store", None)
+                        # 40 行够覆盖「每小时 ≤6 / 连引冷却」的出站历史 + 连发串
+                        _q_rows = (_q_store.list_recent_messages(_q_cid, limit=40)
+                                   if _q_store is not None else [])
                         # text=实发文本（出站翻译后＝客户语言，与入站同语）；
                         # original_text=人设原文（与入站 translated_text 同语）——
                         # 两路都比，跨语会话也能算出相关性。
                         _qdec = _rqp.decide_quote(
                             _q_rows, str(text or ""), cfg=_qcfg,
-                            reply_alt=str(original_text or ""))
-                        _rqp.record_decision(_qdec)
-                        _quote_ref = _qdec.as_reply_to()
-                        if _quote_ref:
-                            _assistant_ref.logger.info(
-                                "[reply_quote] 引用 idx=%d/%d score=%.2f "
-                                "platform=%s id=%s text=%r",
-                                _qdec.target_index, _qdec.burst_len, _qdec.score,
-                                platform, _quote_ref.get("id"),
-                                str(_quote_ref.get("text") or "")[:40])
+                            reply_alt=str(original_text or ""), conv_key=_q_cid)
+                    _rqp.record_decision(_qdec)
+                    _quote_ref = _qdec.as_reply_to()
+                    _assistant_ref.logger.info(
+                        "%s", _rqp.format_log(_qdec, conv=_q_cid, platform=platform))
             except Exception:
                 _quote_ref = None
                 _assistant_ref.logger.debug(
-                    "[reply_quote] 决策异常（不引用）", exc_info=True)
+                    "[quote] 决策异常（不引用）", exc_info=True)
 
             async def _send_one(_txt: str, _reply_to=None):
                 def _make_coro(_rt):
@@ -1889,13 +1893,13 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                 if not _reply_to:
                     return await _run(None)
                 # 带引用发送失败（目标消息已删/id 无效/worker 拒绝）→ 去引用重发
-                # 一次：引用是锦上添花，投递才是底线。
+                # 一次：引用是锦上添花，投递才是底线（M-3 A 出站结果口径：不丢消息）。
                 try:
                     _r = await _run(_reply_to)
                 except Exception as _qex:  # noqa: BLE001
                     _assistant_ref.logger.info(
-                        "[reply_quote] 带引用发送失败，去引用重发 platform=%s: %s",
-                        platform, _qex)
+                        "[quote] 带引用发送失败，去引用重发 rule=fallback_plain "
+                        "platform=%s: %s", platform, _qex)
                     try:
                         from src.inbox import reply_quote_policy as _rqp2
                         _rqp2.record_fallback_plain()
