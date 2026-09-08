@@ -4,6 +4,8 @@
 ZH = {
     # KB 来源隔离（2026-09-05 J-9 #184）
     "err.kb.purge_source_invalid": "只能整批清空 vendor / system / import 来源的条目",
+    # 清除客服域残留（2026-09-08 P-4 #254 / D-P6）：先 dry-run 再按清单删
+    "err.kb.purge_legacy_ids_required": "请先预览清单（dry_run），再把核对过的条目 id 一起提交",
     # 客户安全预警页「一键开启留痕/升级」（2026-09-05 #185）
     "err.ca.config_unavailable": "配置管理器未就绪，无法写入开关",
     "err.ca.enable_failed": "开启失败：{msg}",
@@ -165,6 +167,8 @@ ZH = {
 EN = {
     # KB source isolation (2026-09-05 J-9 #184)
     "err.kb.purge_source_invalid": "Only vendor / system / import entries can be purged in bulk",
+    # Purge legacy support-domain seeds (2026-09-08 P-4 #254 / D-P6): dry-run first, then delete by reviewed ids
+    "err.kb.purge_legacy_ids_required": "Preview the list first (dry_run), then submit the entry ids you reviewed",
     # Customer Safety Alerts "enable logging/escalation" (2026-09-05 #185)
     "err.ca.config_unavailable": "Config manager not ready; cannot write the switch",
     "err.ca.enable_failed": "Failed to enable: {msg}",

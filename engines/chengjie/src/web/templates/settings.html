@@ -376,6 +376,116 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
+  {# ══ P-4 B（#254 / D-P6）兜底策略：「系统话术」整类从知识库页移到这里。
+        开发者模式可见（客户版非开发者模式藏；内部版常显）。列 source=system 条目的
+        兜底键 / 首个变体 / 启用开关；陪伴域默认全部关。「清除客服域残留」两步走：先 dry-run
+        列清单，核对后再删——绝不自动跑（N-5 误删教训）。 ══ #}
+  {% if ui_developer_mode or not ui_client_hide %}
+  <div class="acc" id="card-fallback" data-bd="{{ fb_business_domain or 'sales' }}">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-slate5,#64748b),var(--th-bg-slate7,#334155))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v12H7l-3 3z"/><path d="M8 9h8"/><path d="M8 12h5"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('set_fb_title', "兜底策略") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('set_fb_sub', "AI 拿不到答案时的直发兜底话术（系统话术）。陪伴域默认全部关闭：AI 失败 = 本轮静默 + 转人工提示") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-fallback">
+      <p class="f-hint" style="margin-bottom:.6rem">
+        {% if fb_business_domain == 'companion' %}{{ (i18n or {}).get('set_fb_companion_note', "当前业务域：线上陪伴。所有直发兜底默认关闭且首装不预置——客服腔的罐头道歉 / 问候 / 闲聊在陪伴场景会直接毁掉人设；负面情绪走「人工客服转接」。") }}{% else %}{{ (i18n or {}).get('set_fb_sales_note', "当前业务域：销售。通用兜底（全局 / 问候 / 投诉 / 闲聊）默认启用，可在下方逐条关闭或改文案。") }}{% endif %}
+      </p>
+      <div id="fb-list" style="font-size:.8rem"></div>
+      <p class="f-hint" id="fb-empty" style="display:none">{{ (i18n or {}).get('set_fb_empty', "库里没有系统话术（陪伴域首装即为空）。需要直发兜底时在知识库「新建条目」填 template_key 即可。") }}</p>
+      <p style="margin-top:.5rem"><a href="/knowledge?source=system" style="font-size:.78rem">{{ (i18n or {}).get('set_fb_view_kb', "在知识库里查看全部系统话术") }} →</a></p>
+      <hr style="border:0;border-top:1px solid var(--bd);margin:.9rem 0">
+      <h4 style="margin:.2rem 0 .3rem;font-size:.86rem">{{ (i18n or {}).get('set_fb_purge_title', "清除客服域残留") }}</h4>
+      <p class="f-hint">{{ (i18n or {}).get('set_fb_purge_hint', "只删「系统预置 · 已停用 · 从未命中」的条目（1.0.77 前播进去的【示例】三条与客服兜底）。先预览清单，核对后再删；启用过或命中过的一律不碰。") }}</p>
+      <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn-s" id="fb-purge-preview" style="padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--t,#111827);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('set_fb_purge_preview', "预览清单（不删）") }}</button>
+        <button type="button" class="btn-s" id="fb-purge-go" style="display:none;padding:.45rem 1rem;border:1.5px solid var(--th-bd-red3,#fca5a5);border-radius:8px;background:var(--th-bg-red6,#dc2626);color:#fff;font-size:.8rem;font-weight:600;cursor:pointer"></button>
+      </div>
+      <p class="f-hint" id="fb-purge-out" style="display:none;margin-top:.5rem;font-weight:600"></p>
+      <ul id="fb-purge-list" style="display:none;margin:.4rem 0 0 1rem;padding:0;font-size:.76rem;color:var(--t2)"></ul>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var card=document.getElementById('card-fallback');
+    if(!card||typeof apiFetch!=='function') return;
+    var list=document.getElementById('fb-list'); var empty=document.getElementById('fb-empty');
+    var pv=document.getElementById('fb-purge-preview'); var go=document.getElementById('fb-purge-go');
+    var out=document.getElementById('fb-purge-out'); var ul=document.getElementById('fb-purge-list');
+    /* 封印页家规：script 内不留中文兜底（键在 settings_page pack 双语齐备） */
+    var T_KEY={{ ((i18n or {}).get('set_fb_col_key','set_fb_col_key'))|tojson }};
+    var T_TEXT={{ ((i18n or {}).get('set_fb_col_text','set_fb_col_text'))|tojson }};
+    var T_ON={{ ((i18n or {}).get('set_fb_col_on','set_fb_col_on'))|tojson }};
+    var T_EDIT={{ ((i18n or {}).get('set_fb_edit','set_fb_edit'))|tojson }};
+    var T_NONE={{ ((i18n or {}).get('set_fb_purge_none','set_fb_purge_none'))|tojson }};
+    var T_FOUND={{ ((i18n or {}).get('set_fb_purge_found','set_fb_purge_found'))|tojson }};
+    var T_GO={{ ((i18n or {}).get('set_fb_purge_go','set_fb_purge_go'))|tojson }};
+    var T_CONFIRM={{ ((i18n or {}).get('set_fb_purge_confirm','set_fb_purge_confirm'))|tojson }};
+    var T_DONE={{ ((i18n or {}).get('set_fb_purge_done','set_fb_purge_done'))|tojson }};
+    var T_FAIL={{ ((i18n or {}).get('set_fb_fail','set_fb_fail'))|tojson }};
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+    function firstVariant(e){ var t=String(e.example_reply_zh||''); return t.split('\n---\n')[0].trim(); }
+    function load(){
+      apiFetch('/api/kb/entries?source=system').then(function(r){ return r.json(); }).then(function(d){
+        var rows=(d&&d.entries)||[];
+        if(!rows.length){ list.innerHTML=''; empty.style.display='block'; return; }
+        empty.style.display='none';
+        var h='<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--t2);font-size:.74rem">'
+          +'<th style="padding:.3rem .4rem">'+esc(T_KEY)+'</th><th style="padding:.3rem .4rem">'+esc(T_TEXT)+'</th><th style="padding:.3rem .4rem;text-align:center">'+esc(T_ON)+'</th><th></th></tr></thead><tbody>';
+        rows.forEach(function(e){
+          h+='<tr style="border-top:1px solid var(--bd)">'
+            +'<td style="padding:.35rem .4rem;white-space:nowrap"><code style="font-size:.74rem">'+esc(e.template_key||'-')+'</code><div style="color:var(--t2);font-size:.72rem">'+esc(e.title||'')+'</div></td>'
+            +'<td style="padding:.35rem .4rem;color:var(--t2)">'+esc(firstVariant(e).slice(0,120))+'</td>'
+            +'<td style="padding:.35rem .4rem;text-align:center"><input type="checkbox" data-fb-id="'+esc(e.id)+'" '+(e.enabled?'checked':'')+'></td>'
+            +'<td style="padding:.35rem .4rem;white-space:nowrap"><a href="/knowledge?source=system&edit='+encodeURIComponent(e.id)+'" style="font-size:.74rem">'+esc(T_EDIT)+'</a></td></tr>';
+        });
+        list.innerHTML=h+'</tbody></table>';
+        list.querySelectorAll('input[data-fb-id]').forEach(function(cb){
+          cb.addEventListener('change',function(){
+            cb.disabled=true;
+            apiFetch('/api/kb/entries/batch-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[cb.getAttribute('data-fb-id')],enabled:cb.checked?1:0})})
+              .then(function(r){ if(!r.ok) throw new Error(String(r.status)); })
+              .catch(function(e){ cb.checked=!cb.checked; out.style.display='block'; out.textContent=T_FAIL.replace('{detail}',String(e&&e.message||e)); })
+              .finally(function(){ cb.disabled=false; });
+          });
+        });
+      }).catch(function(){});
+    }
+    var pending=[];
+    pv.addEventListener('click',function(){
+      pv.disabled=true; go.style.display='none'; ul.style.display='none'; ul.innerHTML='';
+      apiFetch('/api/kb/entries/purge-legacy-seeds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:true})})
+        .then(function(r){ return r.json(); }).then(function(d){
+          pending=((d&&d.items)||[]).map(function(x){ return x.id; });
+          out.style.display='block';
+          if(!pending.length){ out.textContent=T_NONE; return; }
+          out.textContent=T_FOUND.replace('{n}',pending.length);
+          ul.innerHTML=(d.items||[]).map(function(x){ return '<li><code>'+esc(x.template_key||x.id)+'</code> · '+esc(x.title||'')+' <span style="color:var(--t3)">['+esc(x.category||'')+']</span></li>'; }).join('');
+          ul.style.display='block';
+          go.textContent=T_GO.replace('{n}',pending.length); go.style.display='inline-block';
+        }).catch(function(e){ out.style.display='block'; out.textContent=T_FAIL.replace('{detail}',String(e&&e.message||e)); })
+        .finally(function(){ pv.disabled=false; });
+    });
+    go.addEventListener('click',function(){
+      if(!pending.length) return;
+      if(!window.confirm(T_CONFIRM.replace('{n}',pending.length))) return;
+      go.disabled=true;
+      apiFetch('/api/kb/entries/purge-legacy-seeds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false,ids:pending})})
+        .then(function(r){ return r.json(); }).then(function(d){
+          out.textContent=T_DONE.replace('{n}',(d&&d.count)||0); ul.style.display='none'; go.style.display='none'; pending=[]; load();
+        }).catch(function(e){ out.textContent=T_FAIL.replace('{detail}',String(e&&e.message||e)); })
+        .finally(function(){ go.disabled=false; });
+    });
+    load();
+  })();
+  </script>
+  {% endif %}
+
   {# L-4 B（#197 / D-L7）：品牌白标 / 授权 / 演示数据 = 代理商版才可见（PARTNER_ONLY）。
      ui_client_hide 缺席（旧后端 / 渲染类测试）按 falsy＝不藏，与 admin.py fail-internal 一致。 #}
   {% set _tier_hide = ' set-tier-hide' if ui_client_hide else '' %}
@@ -1814,7 +1924,7 @@ document.addEventListener('DOMContentLoaded', function(){
   (function(){
     const map = {escalation:'body-he', license:'body-license', brand:'body-brand',
                  demo:'body-demo', prompt:'body-prompt', features:'body-fc', diag:'body-diag',
-                 lan:'body-lan'};
+                 lan:'body-lan', fallback:'body-fallback'};
     const key = String(location.hash || '').replace(/^#/, '');
     if(!Object.prototype.hasOwnProperty.call(map, key)) return;
     const body = document.getElementById(map[key]);

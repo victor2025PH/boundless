@@ -104,6 +104,12 @@ def register_settings_routes(app, ctx):
         # 「开关已开但后端还没重启」这种半生效态，所以把本进程 bind host 一并给模板。
         lan_bind_host = str(wb.get("host") or "127.0.0.1").strip() or "127.0.0.1"
         lan_bind_port = str(wb.get("port") or "18799")
+        # P-4 B（#254 / D-P6）：「兜底策略」卡按业务域给说明（陪伴：默认零直发兜底）
+        try:
+            from src.utils.kb_store import system_seed_plan
+            fb_business_domain = system_seed_plan(config_manager)["business_domain"]
+        except Exception:
+            fb_business_domain = "sales"
         return templates.TemplateResponse(request, "settings.html", {
             "ai": ai, "wb": wb, "tg": tg, "notif": notif, "he": he,
             "he_agents_json": he_agents_json,
@@ -112,6 +118,7 @@ def register_settings_routes(app, ctx):
             "he_agent_teams_json": he_agent_teams_json,
             "lan_bind_host": lan_bind_host,
             "lan_bind_port": lan_bind_port,
+            "fb_business_domain": fb_business_domain,
         })
 
     @app.post("/api/settings/save")

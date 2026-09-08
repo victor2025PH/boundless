@@ -259,8 +259,8 @@ def test_kb_routes_expose_purge_and_health():
     assert '"/api/kb/entries/purge-source"' in src
     assert '"/api/kb/health"' in src
     assert 'src not in ("vendor", "system", "import")' in src
-    # 首装示例播种挂在 kb_routes（不是 admin.py）
-    assert "seed_kb_format_examples(_kb_store)" in src
+    # 首装示例播种挂在 kb_routes（不是 admin.py）；P-4 #254 起带 cfg 走 system_seed_plan
+    assert "seed_kb_format_examples(_kb_store, cfg=config_manager)" in src
 
 
 # ── ④ 首装：不带 KB、只播示例 ──────────────────────────────────
@@ -273,7 +273,13 @@ def test_format_examples_noop_outside_desktop(store):
 
 def test_format_examples_seed_once_on_fresh_desktop(store, monkeypatch):
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
-    r = seed_kb_format_examples(store)
+    # P-4 #254（D-P6）：桌面 env 默认推出陪伴域 → 不播（首装 KB 为空，示例改为「新建条目」模板）
+    r0 = seed_kb_format_examples(store)
+    assert r0["added"] == 0 and r0["reason"] == "companion_empty_kb"
+    assert store.stats()["total_entries"] == 0
+    assert not store.get_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY)     # 不打标：切销售域首启仍可播
+    # 销售域桌面机：原逻辑不变
+    r = seed_kb_format_examples(store, business_domain="sales")
     assert r["added"] == len(KB_FORMAT_EXAMPLES) == 3
     rows = store.list_entries()
     assert all(e["source"] == "system" for e in rows)
@@ -282,7 +288,7 @@ def test_format_examples_seed_once_on_fresh_desktop(store, monkeypatch):
     assert store.get_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY)
     # 用户删掉一条后再启动：不得灌回
     store.delete_entry(rows[0]["id"])
-    r2 = seed_kb_format_examples(store)
+    r2 = seed_kb_format_examples(store, business_domain="sales")
     assert r2["reason"] == "already_seeded" and r2["added"] == 0
     assert store.stats()["total_entries"] == 2
 
@@ -290,7 +296,7 @@ def test_format_examples_seed_once_on_fresh_desktop(store, monkeypatch):
 def test_format_examples_skip_when_kb_in_use(store):
     """已有用户条目（含旧包升级上来带 vendor 的库）不需要「教格式」，且打标不再重试。"""
     _add(store, "我的", source="user")
-    r = seed_kb_format_examples(store, force=True)
+    r = seed_kb_format_examples(store, force=True, business_domain="sales")
     assert r["added"] == 0 and r["reason"] == "kb_in_use"
     assert store.get_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY) == "skipped_nonempty"
     assert store.stats()["total_entries"] == 1
@@ -298,7 +304,7 @@ def test_format_examples_skip_when_kb_in_use(store):
 
 def test_format_examples_excluded_from_customer_retrieval_by_enabled(store):
     """示例条目 enabled=0：即使触发词命中也不进对客检索（索引只装 enabled=1）。"""
-    seed_kb_format_examples(store, force=True)
+    seed_kb_format_examples(store, force=True, business_domain="sales")
     res = store.search("退款 退货", top_k=5, include_vendor=True)
     assert res["entries"] == []
 

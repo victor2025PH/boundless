@@ -199,7 +199,9 @@
       <option value="">{{ (i18n or {}).get('kb2_src_all', "全部来源") }}</option>
       <option value="user">{{ (i18n or {}).get('kb2_src_user', "我建的") }}</option>
       <option value="import">{{ (i18n or {}).get('kb2_src_import', "批量导入") }}</option>
-      <option value="system">{{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</option>
+      {# P-4 #254（D-P6）：「系统话术」整类移出用户 KB 页 → 系统设置「兜底策略」（/settings#fallback）。
+         选项藏而不删：兜底策略页「在知识库里查看」与支付话术横幅仍经 kbShowSystem() 深链进来。 #}
+      <option value="system" hidden>{{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</option>
       <option value="vendor">{{ (i18n or {}).get('kb2_src_vendor', "系统预置·厂商产品") }}</option>
       <option value="learner">{{ (i18n or {}).get('kb2_src_learner', "学习队列学来的") }}</option>
     </select>
@@ -618,6 +620,13 @@
       </button>
       <span id="ai-gen-status" style="font-size:.72rem;color:var(--th-ink-violet7,#6d28d9)"></span>
     </div>
+    <!-- P-4 #254（D-P6）：「新建条目」预填模板（按域：陪伴＝称呼偏好 / 忌聊话题 / 常聊话题；
+         销售＝原三例）。首装 KB 不再落示例行，格式示例改在这里点一下即填进表单——不落库、
+         没有「误启用客服域示例」的事故面。只在新建时显示。 -->
+    <div id="kb-tpl-bar" style="display:none;border:1px dashed var(--bd);border-radius:9px;padding:.55rem .8rem;margin-bottom:.8rem">
+      <div style="font-size:.76rem;color:var(--t2);margin-bottom:.4rem">{{ (i18n or {}).get('kb2_tpl_lead', "从模板开始：点一下预填，再改成你的真实内容") }}</div>
+      <div id="kb-tpl-chips" style="display:flex;gap:.4rem;flex-wrap:wrap"></div>
+    </div>
     {% if domain_web_pages|selectattr('key','equalto','ch')|list %}
     <div class="ch-conflict-warn pro-only" id="ch-conflict-warn">
       <strong>⚠️ {{ (i18n or {}).get('kb_s098', "通道数据冲突提醒") }}</strong>
@@ -891,7 +900,10 @@ async function loadEntries(){
   const sort=document.getElementById('entry-sort').value;
   const srcEl=document.getElementById('entry-source');
   const source=srcEl?srcEl.value:'';
-  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort,source});
+  /* P-4 #254（D-P6）：不筛来源时默认**排除** source=system——系统话术 / 示例整类归系统设置
+     「兜底策略」页管理，用户知识库页只看自己的知识；显式选 system（深链）才看它们。 */
+  const querySource = source || '-system';
+  const params=new URLSearchParams({search,category:cat,enabled_only:enabled,sort_by:sort,source:querySource});
   const {entries}=await api('GET','/api/kb/entries?'+params);
   const grid=document.getElementById('entry-grid');
   _allEntryIds = (entries||[]).map(e=>String(e.id));   // 更新全选池
@@ -977,6 +989,36 @@ function entryCard(e){
   </div>`;
 }
 
+/* P-4 #254（D-P6）「新建条目」预填模板：GET /api/kb/new-entry-templates（按域），懒取一次；
+   点 chip → 填标题 / 分类 / 触发词 / 场景 / 步骤 / 原则 / 示例 / 禁忌，启用勾默认保留给用户决定。 */
+let _kbTplCache=null;
+function _kbTplFill(t){
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=(v==null?'':v); };
+  set('f-title',t.title); set('f-triggers',(t.triggers||[]).join(', ')); set('f-scenario',t.scenario);
+  set('f-steps',t.steps); set('f-principles',t.principles); set('f-example',t.example_reply_zh);
+  set('f-forbidden',t.forbidden); set('f-reply-mode',t.reply_mode||'ai_guided');
+  const cat=document.getElementById('f-category');
+  if(cat && t.category && [...cat.options].some(o=>o.value===t.category)) cat.value=t.category;
+  if(typeof _scheduleConflictCheck==='function') _scheduleConflictCheck();
+}
+async function _kbTplBarToggle(show){
+  const bar=document.getElementById('kb-tpl-bar'); const chips=document.getElementById('kb-tpl-chips');
+  if(!bar||!chips) return;
+  if(!show){ bar.style.display='none'; return; }
+  try{
+    if(!_kbTplCache){ const r=await api('GET','/api/kb/new-entry-templates'); _kbTplCache=(r&&r.templates)||[]; }
+  }catch(e){ _kbTplCache=[]; }
+  if(!_kbTplCache.length){ bar.style.display='none'; return; }
+  chips.innerHTML='';
+  _kbTplCache.forEach((t,i)=>{
+    const b=document.createElement('button'); b.type='button'; b.className='btn btn-s btn-xs';
+    b.textContent=t.title||('#'+(i+1)); b.title=t.scenario||'';
+    b.addEventListener('click',()=>_kbTplFill(t));
+    chips.appendChild(b);
+  });
+  bar.style.display='';
+}
+
 async function openEntryDrawer(id=null){
   document.getElementById('entry-id').value='';
   document.getElementById('f-reply-mode').value='ai_guided';
@@ -1013,6 +1055,7 @@ async function openEntryDrawer(id=null){
     if(verBtn) verBtn.style.display='none';
     document.getElementById('img-section').style.display='none';
   }
+  _kbTplBarToggle(!id);
   document.getElementById('version-panel').style.display='none';
   var _chWarn=document.getElementById('ch-conflict-warn');if(_chWarn)_chWarn.classList.remove('show');
   document.getElementById('entry-overlay').classList.add('open');
@@ -2446,7 +2489,13 @@ try{
   const _srcSel=document.getElementById('entry-source');
   if(_qsSrc && _srcSel && Array.from(_srcSel.options).some(o=>o.value===_qsSrc)) _srcSel.value=_qsSrc;
 }catch(_e){}
-loadEntries().then(_focusHashEntry).catch(()=>{});
+loadEntries().then(_focusHashEntry).then(()=>{
+  // P-4 #254：系统设置「兜底策略」→「在知识库里编辑」深链 /knowledge?source=system&edit=<id>
+  try{
+    const _qsEdit=new URLSearchParams(location.search).get('edit')||'';
+    if(_qsEdit) openEntryDrawer(_qsEdit);
+  }catch(_e){}
+}).catch(()=>{});
 loadHealthChip();
 // 静默加载待审核数量
 apiFetch('/api/kb/translations/pending?limit=100').then(r=>r.json()).then(d=>{

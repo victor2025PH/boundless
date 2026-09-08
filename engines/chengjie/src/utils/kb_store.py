@@ -2691,9 +2691,18 @@ def ensure_kb_seeded_once_meta(store: "KnowledgeBaseStore") -> None:
         store.set_meta(KB_SEEDED_ONCE_KEY, "1")
 
 
-def seed_default_data(store: "KnowledgeBaseStore"):
-    """首次初始化时写入默认错误码和规则（已存在则跳过）"""
+def seed_default_data(store: "KnowledgeBaseStore", cfg: Any = None, *,
+                      business_domain: Optional[str] = None):
+    """首次初始化时写入默认错误码和规则（已存在则跳过）。
+
+    P-4 #254（D-P6）：经 :func:`system_seed_plan` 过滤——陪伴域首装 KB **完全为空**，
+    支付错误码（X004 / G2P-T-97 …）与「禁止编造订单」「先道歉再索要信息」这类客服域
+    规则一律不播；销售域 / 支付域行为不变。
+    """
     ensure_kb_seeded_once_meta(store)
+    plan = system_seed_plan(cfg, business_domain=business_domain)
+    if not plan["seed_defaults"]:
+        return
     with store._conn() as c:
         existing_codes = c.execute("SELECT COUNT(*) FROM kb_error_codes").fetchone()[0]
         existing_rules = c.execute("SELECT COUNT(*) FROM kb_rules").fetchone()[0]
@@ -3101,11 +3110,17 @@ SYSTEM_REPLY_SEEDS: List[Dict[str, Any]] = [
 def system_seed_plan(cfg: Any = None, *, business_domain: Optional[str] = None) -> Dict[str, Any]:
     """本机该播哪些系统话术种子（N-3 #240 / D-N2）。
 
-    返回 ``{"business_domain", "payment", "enabled_default"}``：
+    返回 ``{"business_domain", "payment", "enabled_default", "seed_replies",
+    "seed_examples", "seed_defaults"}``：
     · ``payment``：支付域包（``effective_domain_name == "payment"``）才播 PAYMENT_SEED_KEYS；
       给不出配置（admin.py 那路调用没带 cfg）按 False——宁可少播，支付部署的
       ``kb_registry.get_kb_store(config)`` 路带 cfg，会把缺的补上；
     · ``enabled_default``：陪伴域 0（客服腔兜底先停用，运营改成自己的话再开），其他 1。
+    · ``seed_replies`` / ``seed_examples`` / ``seed_defaults``（P-4 #254，D-P6）：陪伴域
+      三者全 False——首装 KB **完全为空**：不播任何直发兜底（complaint / 全局 / 问候 /
+      闲聊 / 测试回复）、不播【示例】三条（营业时间 / 退款 / 价格在陪伴场景是高敏词，
+      32PTMK 实录用户误启用即事故）、不播支付错误码与客服规则；格式示例改为 KB 页
+      「新建条目」预填模板（:func:`new_entry_templates`）。销售 / 支付域三者 True，行为不变。
     绝不抛。
     """
     bd = str(business_domain or "").strip().lower()
@@ -3124,8 +3139,12 @@ def system_seed_plan(cfg: Any = None, *, business_domain: Optional[str] = None) 
     except Exception:
         pass
     bd = bd if bd in ("companion", "sales") else "sales"
+    companion = bd == "companion"
     return {"business_domain": bd, "payment": bool(payment),
-            "enabled_default": 0 if bd == "companion" else 1}
+            "enabled_default": 0 if companion else 1,
+            "seed_replies": not companion,
+            "seed_examples": not companion,
+            "seed_defaults": not companion}
 
 
 def seed_system_replies(store: "KnowledgeBaseStore", cfg: Any = None, *,
@@ -3141,6 +3160,11 @@ def seed_system_replies(store: "KnowledgeBaseStore", cfg: Any = None, *,
     ensure_kb_seeded_once_meta(store)
     plan = system_seed_plan(cfg, business_domain=business_domain)
     result["business_domain"] = plan["business_domain"]
+    if not plan["seed_replies"]:
+        # P-4 #254（D-P6）：陪伴域零直发兜底——AI 失败 = 静默 + 转人工提示，不冒客服腔。
+        # 系统话术整类改在系统设置「兜底策略」页管理，运营要用再自己建。
+        return {**result, "skipped_domain": len(SYSTEM_REPLY_SEEDS),
+                "suppressed_companion": True}
     if store.get_meta(KB_SYSTEM_SEEDS_PURGED_KEY):
         return {**result, "skipped": len(SYSTEM_REPLY_SEEDS),
                 "suppressed_purged": True}
@@ -3252,18 +3276,28 @@ KB_FORMAT_EXAMPLES: List[Dict] = [
 ]
 
 
-def seed_kb_format_examples(store: "KnowledgeBaseStore", *, force: bool = False) -> dict:
+def seed_kb_format_examples(store: "KnowledgeBaseStore", *, force: bool = False,
+                            cfg: Any = None,
+                            business_domain: Optional[str] = None) -> dict:
     """首装播 3 条格式示例（幂等；桌面模式外 no-op，除非 force）。
 
     播种前提（缺一不播）：① 桌面模式（``AITR_DESKTOP_MODE=1``）或 force；② kb_meta 未打
     ``kb_format_examples_seeded_v1``；③ 库里没有任何 user/import/vendor 条目（已经在用的库、
-    或从旧内测包带着厂商条目升级上来的库都不需要「教格式」）。播种后无论加了几条都打标，
-    用户删掉示例不会在下次启动被灌回。
+    或从旧内测包带着厂商条目升级上来的库都不需要「教格式」）；④ P-4 #254（D-P6）
+    :func:`system_seed_plan` 的 ``seed_examples``——陪伴域不播（首装 KB 为空，格式示例
+    改为「新建条目」预填模板），且**不打标**：日后切到销售域首启仍可按原逻辑播。
+    播种后无论加了几条都打标，用户删掉示例不会在下次启动被灌回。
     """
     result = {"added": 0, "skipped": 0, "reason": ""}
     desktop = (os.environ.get("AITR_DESKTOP_MODE") or "").strip() == "1"
     if not (desktop or force):
         result["reason"] = "not_desktop"
+        return result
+    plan = system_seed_plan(cfg, business_domain=business_domain)
+    result["business_domain"] = plan["business_domain"]
+    if not plan["seed_examples"]:
+        result["reason"] = "companion_empty_kb"
+        result["skipped"] = len(KB_FORMAT_EXAMPLES)
         return result
     if store.get_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY):
         result["reason"] = "already_seeded"
@@ -3298,3 +3332,137 @@ def seed_kb_format_examples(store: "KnowledgeBaseStore", *, force: bool = False)
             result["skipped"] += 1
     store.set_meta(KB_FORMAT_EXAMPLES_SEEDED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
     return result
+
+
+# ── 「新建条目」预填模板（P-4 #254 / D-P6）─────────────────────────────────
+# 首装 KB 不再往库里播示例行（陪伴域完全为空），「教格式」这件事改由 KB 页「新建条目」
+# 按钮的预填模板承担：点一个模板 → 抽屉字段填好 → 用户改成自己的再保存。**不落库**，
+# 所以没有「误启用客服域示例」的事故面。陪伴域三例围绕人设边界（称呼偏好 / 忌聊话题 /
+# 常聊话题）；销售域沿用原三例（营业时间 / 退款 / 价格）。
+KB_NEW_ENTRY_TEMPLATES_COMPANION: List[Dict] = [
+    {
+        "key": "companion_address",
+        "category": "人设背景",
+        "title": "TA 喜欢的称呼 / 不喜欢的称呼",
+        "triggers": ["叫我", "别叫我", "怎么称呼", "call me", "don't call me"],
+        "scenario": "对方说过希望被怎么称呼、或反感某个称呼。把这条改成这段关系里真实的称呼偏好。",
+        "steps": "1. 记住对方点名的称呼并沿用\n2. 对方反感的称呼之后一次都不用\n3. 不确定时用对方的名字，不自作主张起昵称",
+        "principles": "称呼是关系温度的第一信号，宁可保守也不要越界",
+        "example_reply_zh": "好，那我以后就这么叫你～",
+        "forbidden": "不要在对方没同意前用「宝贝」「老公 / 老婆」这类亲密称呼",
+        "reply_mode": "ai_guided",
+    },
+    {
+        "key": "companion_avoid",
+        "category": "边界与安全",
+        "title": "忌聊话题（对方不愿提的事）",
+        "triggers": ["别提", "不想说", "不要问", "换个话题", "don't ask", "drop it"],
+        "scenario": "对方明确表示不想聊某件事（前任 / 家庭矛盾 / 病情 / 收入…）。把具体话题写进触发词。",
+        "steps": "1. 立刻停止追问，不解释、不辩解\n2. 简短接住情绪\n3. 顺势换到对方愿意聊的话题",
+        "principles": "被拒一次就永久记住，不试探、不绕着问",
+        "example_reply_zh": "好，不聊这个。今天过得怎么样？",
+        "forbidden": "不要说「为什么不能说」「我只是关心你」这类施压句",
+        "reply_mode": "ai_guided",
+    },
+    {
+        "key": "companion_topics",
+        "category": "日常话题",
+        "title": "常聊话题（对方的兴趣与日常）",
+        "triggers": ["健身", "追剧", "做饭", "加班", "gym", "netflix"],
+        "scenario": "对方经常主动聊的事（爱好 / 工作节奏 / 宠物 / 追的剧）。把触发词换成对方真正的兴趣。",
+        "steps": "1. 接对方的话头往细节问一句\n2. 带一点自己的经历或看法，不要只当听众\n3. 记住细节，下次主动提起",
+        "principles": "聊对方在意的事，比聊自己更快拉近距离",
+        "example_reply_zh": "你今天又去健身了？练的哪个部位，我上次说要跟你一起练还没兑现呢。",
+        "forbidden": "不要编造「你上次说过」的细节——只提对方确实说过的",
+        "reply_mode": "ai_guided",
+    },
+]
+
+
+def new_entry_templates(business_domain: Optional[str] = None,
+                        categories: Optional[List[str]] = None) -> List[Dict]:
+    """KB 页「新建条目」预填模板（按域）。
+
+    陪伴域 → :data:`KB_NEW_ENTRY_TEMPLATES_COMPANION`；其他 → 原三条格式示例
+    （去掉【示例】前缀与 id / enabled，只留字段）。``category`` 归一到当前生效的
+    分类表（``categories`` 未给则用 :data:`KB_CATEGORIES`）：不在表内的落「其他」，
+    避免抽屉下拉选不到、保存后又是一条分类不属于本域的孤儿。绝不抛。
+    """
+    bd = str(business_domain or "").strip().lower()
+    if not bd:
+        try:
+            from src.utils.business_domain import active_business_domain
+            bd = active_business_domain()
+        except Exception:
+            bd = "sales"
+    cats = [str(c) for c in (categories if categories is not None else KB_CATEGORIES)]
+    fallback_cat = "其他" if "其他" in cats else (cats[-1] if cats else "其他")
+    out: List[Dict] = []
+    if bd == "companion":
+        src = [dict(t) for t in KB_NEW_ENTRY_TEMPLATES_COMPANION]
+    else:
+        src = []
+        for ex in KB_FORMAT_EXAMPLES:
+            t = {k: v for k, v in ex.items() if k not in ("id", "enabled")}
+            t["key"] = f"sales_{ex['id'].rsplit('-', 1)[-1]}"
+            t["title"] = str(t.get("title", "")).replace(KB_FORMAT_EXAMPLE_PREFIX, "", 1)
+            t.setdefault("reply_mode", "ai_guided")
+            src.append(t)
+    for t in src:
+        t = dict(t)
+        t["category"] = t["category"] if t.get("category") in cats else fallback_cat
+        t["triggers"] = list(t.get("triggers") or [])
+        out.append(t)
+    return out
+
+
+# ── 存量清理：清除客服域残留（P-4 #254 / D-P6，dry-run 先看清单）────────────
+# 1.0.77 及之前的陪伴机上已经播进库的客服域种子（3 条【示例】+ complaint / 全局 / 问候 /
+# 闲聊兜底 / 测试回复）。只碰 ``source=system 且 enabled=0 且 use_count=0`` 的行——
+# 用户启用过 / 命中过一次的都不是「残留」。**两步走**：先 dry-run 列清单，用户看过再删；
+# 与 N-5 误删事故同教训，绝不在启动自检里自动跑。
+def legacy_seed_residue(store: "KnowledgeBaseStore") -> List[Dict]:
+    """列出可清除的客服域残留（不删）。每项 ``{id, title, category, template_key, source}``。"""
+    try:
+        with store._conn() as c:
+            rows = c.execute(
+                f"SELECT id, title, category, template_key, COALESCE(source,'{KB_SOURCE_DEFAULT}') AS source "
+                f"FROM kb_entries "
+                f"WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')='system' "
+                f"AND COALESCE(enabled,0)=0 AND COALESCE(use_count,0)=0 "
+                f"ORDER BY template_key, id"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [{"id": r[0], "title": r[1] or "", "category": r[2] or "",
+             "template_key": r[3] or "", "source": r[4] or ""} for r in rows]
+
+
+def purge_legacy_seed_residue(store: "KnowledgeBaseStore",
+                              ids: Optional[List[str]] = None) -> int:
+    """删除客服域残留。``ids`` 给了则只删清单交集（且每一行仍须满足残留判据——
+    dry-run 到点删之间被启用 / 命中过的行自动豁免）；不给则删全部残留。
+    删完若库里已无 source=system 行 → 打 ``KB_SYSTEM_SEEDS_PURGED_KEY`` 防日后灌回。返回删除数。"""
+    eligible = {r["id"] for r in legacy_seed_residue(store)}
+    if ids is not None:
+        eligible &= {str(i) for i in ids}
+    victims = sorted(eligible)
+    if not victims:
+        return 0
+    with store._conn() as c:
+        for i in range(0, len(victims), 400):
+            chunk = victims[i:i + 400]
+            cph = ",".join("?" * len(chunk))
+            for tbl, col in (("kb_entries", "id"), ("kb_translations", "entry_id"),
+                             ("kb_entry_versions", "entry_id"), ("kb_entry_images", "entry_id")):
+                try:
+                    c.execute(f"DELETE FROM {tbl} WHERE {col} IN ({cph})", chunk)
+                except sqlite3.OperationalError:
+                    pass
+        remaining = c.execute(
+            f"SELECT COUNT(*) FROM kb_entries WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')='system'"
+        ).fetchone()[0]
+    if not remaining:
+        store.set_meta(KB_SYSTEM_SEEDS_PURGED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
+    store._touch_index()
+    return len(victims)

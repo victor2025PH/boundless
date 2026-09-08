@@ -73,14 +73,18 @@ def test_payment_seed_keys_cover_every_gxp_seed_and_nothing_generic():
 
 
 def test_plan_by_domain_and_without_config(monkeypatch):
+    # P-4 #254（D-P6）：plan 多出三把闸 seed_replies / seed_examples / seed_defaults，陪伴域全 False
     assert system_seed_plan(CFG_COMPANION) == {"business_domain": "companion", "payment": False,
-                                               "enabled_default": 0}
+                                               "enabled_default": 0, "seed_replies": False,
+                                               "seed_examples": False, "seed_defaults": False}
     assert system_seed_plan(CFG_SALES) == {"business_domain": "sales", "payment": False,
-                                           "enabled_default": 1}
+                                           "enabled_default": 1, "seed_replies": True,
+                                           "seed_examples": True, "seed_defaults": True}
     assert system_seed_plan(CFG_PAYMENT)["payment"] is True
     # 没配置（admin.py 那路）：按非支付；业务域读进程级 active / env
     assert system_seed_plan(None) == {"business_domain": "sales", "payment": False,
-                                      "enabled_default": 1}
+                                      "enabled_default": 1, "seed_replies": True,
+                                      "seed_examples": True, "seed_defaults": True}
     monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
     assert system_seed_plan(None)["business_domain"] == "companion"
     bdm.set_active_business_domain("sales")
@@ -88,20 +92,20 @@ def test_plan_by_domain_and_without_config(monkeypatch):
     assert system_seed_plan("junk")["payment"] is False    # 绝不抛
 
 
-def test_companion_fresh_install_seeds_zero_gxp_and_generic_disabled(store):
+def test_companion_fresh_install_seeds_nothing(store):
+    """P-4 #254（D-P6）收紧 N-3 的「陪伴域播停用态兜底」→ 陪伴域**一条不播**：
+    32PTMK 实录停用态的客服兜底照样躺在用户 KB 里，误启用即事故。"""
     r = seed_system_replies(store, CFG_COMPANION)
     assert r["business_domain"] == "companion"
-    assert r["added"] == len(GENERIC_KEYS) and r["skipped_domain"] == len(PAYMENT_SEED_KEYS)
-    rows = _rows(store)
-    assert set(rows) == GENERIC_KEYS
-    assert all(v["enabled"] == 0 and v["source"] == "system" for v in rows.values())
-    assert not any(k.startswith("gxp_") for k in rows)
+    assert r["added"] == 0 and r.get("suppressed_companion") is True
+    assert r["skipped_domain"] == len(SYSTEM_REPLY_SEEDS)
+    assert _rows(store) == {}
     assert store.stats()["entries_system_payment"] == 0
-    # 停用态 → 兜底拿不到 → 调用方「本轮不回复」，不再冒客服腔
+    # 无兜底 → 调用方「本轮不回复」，不冒客服腔
     assert store.get_fallback("greeting") is None
-    # 幂等：再播不加
+    # 幂等
     r2 = seed_system_replies(store, CFG_COMPANION)
-    assert r2["added"] == 0 and r2["skipped"] == len(GENERIC_KEYS)
+    assert r2["added"] == 0 and _rows(store) == {}
 
 
 def test_sales_server_keeps_generic_enabled_but_no_payment_seeds(store):

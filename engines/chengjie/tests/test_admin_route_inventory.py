@@ -1940,17 +1940,61 @@ _BASELINE += _ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT
 # 数据与小智问答同源（src/assistant/onboarding_guides.py）。`onboarding_guide_routes.py`。
 _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 /help/onboarding/{slug}	GET
-/help/onboarding/douyin/credentials	POST
-/help/onboarding/douyin/authorize	GET
+/workspace/onboarding/{slug}	GET
+/workspace/onboarding/douyin/credentials	POST
+/workspace/onboarding/douyin/authorize	GET
 /webhook/douyin/oauth/callback	GET
-/help/onboarding/tiktok/account	POST
-/help/onboarding/tiktok/credentials	POST
-/help/onboarding/tiktok/authorize	GET
+/workspace/onboarding/tiktok/account	POST
+/workspace/onboarding/tiktok/credentials	POST
+/workspace/onboarding/tiktok/authorize	GET
 /webhook/tiktok/oauth/callback	GET
-/help/onboarding/tiktok/webhook	POST
+/workspace/onboarding/tiktok/webhook	POST
 /api/onboarding/{slug}/status	GET
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
+
+# 实施97 微信线第四/六轮（2026-09-08）：微信客服会话状态动作（转企微人工 / 结束 / 查状态，
+# `wechat_kf_webhook.register_wechat_kf_session_routes`）+ 五步接入引导后端（`wechat_kf_setup_routes.py`：
+# 出站 IP / 凭证测试 / 客服账号列表与新建 / 绑定拉起 / 客户二维码 / AI 接待）+ 个人微信 PC 副驾引导后端
+# （`wechat_pc_setup_routes.py`：环境检测 / 档位与知情同意 / 启动命令）+ 引导页 `/workspace/connect/{platform}`。
+_ADDITIONS_2026_09_08_WECHAT_CONNECT_GUIDE = """
+/api/unified-inbox/kf/session-state	GET
+/api/unified-inbox/kf/transfer	POST
+/api/unified-inbox/kf/close	POST
+/api/setup/wechat_kf/egress-ip	GET
+/api/setup/wechat_kf/test	POST
+/api/setup/wechat_kf/accounts	GET,POST
+/api/setup/wechat_kf/bind	POST
+/api/setup/wechat_kf/contact-way	POST
+/api/setup/wechat_kf/reception	POST
+/api/setup/wechat_pc/env	GET
+/api/setup/wechat_pc/policy	GET,POST
+/api/setup/wechat_pc/start-command	GET
+/api/setup/wechat_pc/prepare	POST
+/workspace/connect/{platform}	GET
+/login/wecom	GET
+/login/wecom/callback	GET
+/api/auth/wecom/status	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_08_WECHAT_CONNECT_GUIDE
+
+# QQ 双轨·个人号线（2026-09-08）：协议登录风险知情同意 + 协议端使用协议页——**代登记**（实施97 微信线
+# 在跑全树门禁时发现已落盘未登记，同 WECHAT_PC_HEARTBEAT 先例；语义归属 QQ 线，改名/撤掉请一并改这两行）。
+_ADDITIONS_2026_09_08_QQ_PERSONAL_CONSENT = """
+/api/platforms/qq/risk-consent	POST
+/help/qq-personal-agreement	GET
+/api/platforms/qq/download-qq	POST
+/api/platforms/qq/qq-status	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_08_QQ_PERSONAL_CONSENT
+
+# P-4 #254（D-P6，2026-09-08）：陪伴域首装 KB 为空——「新建条目」预填模板（按域）+
+# 「清除客服域残留」两步走（默认 dry_run 只列清单；显式 dry_run=false + ids 才删）。
+_ADDITIONS_2026_09_08_P4_KB_FACTORY_STATE = """
+/api/kb/new-entry-templates	GET
+/api/kb/entries/purge-legacy-seeds	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_08_P4_KB_FACTORY_STATE
 
 # P-2 #259 #252（D-P1，2026-09-08）：「沉寂会话待你决定」清单快照 + 三按钮（ignore / manual /
 # draft 永远 review）+ 登录确认框 ack——unified_inbox_stored_read_routes.py。

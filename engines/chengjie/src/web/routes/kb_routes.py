@@ -45,10 +45,14 @@ def register_kb_routes(app, ctx):
 
     # J-9 #184：桌面首装播 3 条停用态格式示例（非桌面 / 已有用户条目 / 已播过 → no-op）。
     # 挂在这里而非 admin.py：kb_* 归 J-9，admin.py 归 J-7/J-8，不越界。
+    # P-4 #254（D-P6）：带 cfg 走 system_seed_plan——陪伴域不播（首装 KB 为空，示例改为
+    # 「新建条目」预填模板 GET /api/kb/new-entry-templates）；销售域照旧。
     try:
-        _fmt_seed = seed_kb_format_examples(_kb_store)
+        _fmt_seed = seed_kb_format_examples(_kb_store, cfg=config_manager)
         if _fmt_seed.get("added"):
             logger.info("KB 首装格式示例已播种: %s", _fmt_seed)
+        elif _fmt_seed.get("reason") == "companion_empty_kb":
+            logger.info("KB 首装：陪伴域不播格式示例（首装 KB 为空，示例见「新建条目」预填模板）")
     except Exception as _exc:  # noqa: BLE001
         logger.warning("KB 首装格式示例播种失败（忽略）: %s", _exc)
 
@@ -160,6 +164,47 @@ def register_kb_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "kb_purge_payment_seeds", f"{count} entries")
         return {"ok": True, "count": count}
+
+    @app.get("/api/kb/new-entry-templates")
+    async def api_kb_new_entry_templates(request: Request):
+        """「新建条目」预填模板（P-4 #254 / D-P6）：首装 KB 不再落示例行，格式示例改为
+        点一下就填进抽屉的模板——陪伴域三例（称呼偏好 / 忌聊话题 / 常聊话题），
+        销售域沿用原三例。分类归一到当前生效分类表。"""
+        _api_auth(request)
+        from src.utils.kb_store import new_entry_templates, system_seed_plan
+        plan = system_seed_plan(config_manager)
+        return {"business_domain": plan["business_domain"],
+                "templates": new_entry_templates(plan["business_domain"], KB_CATEGORIES)}
+
+    @app.post("/api/kb/entries/purge-legacy-seeds")
+    async def api_kb_purge_legacy_seeds(request: Request):
+        """一键「清除客服域残留」（P-4 #254 / D-P6）：只碰 source=system 且 enabled=0 且
+        use_count=0 的行（1.0.77 前播进陪伴机的【示例】三条 + complaint / 全局 / 问候 /
+        闲聊兜底 / 测试回复）。**默认 dry_run=true 只列清单不删**；确认删除要显式
+        ``{"dry_run": false, "ids": [...]}``——ids 与清单取交集，dry-run 到点删之间被启用 /
+        命中过的行自动豁免。与 N-5 误删同教训：启动自检里绝不自动跑。"""
+        _api_auth(request)
+        from src.utils.kb_store import legacy_seed_residue, purge_legacy_seed_residue
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        dry_run = data.get("dry_run", True) is not False
+        items = legacy_seed_residue(_kb_store)
+        if dry_run:
+            return {"ok": True, "dry_run": True, "count": len(items), "items": items}
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_legacy_ids_required",
+                        "ids required: run dry_run first and pass the ids you reviewed"))
+        count = purge_legacy_seed_residue(_kb_store, [str(i) for i in ids])
+        actor = request.session.get("username", "web_admin")
+        if audit_store:
+            audit_store.log(actor, "kb_purge_legacy_seeds", f"{count} entries")
+        return {"ok": True, "dry_run": False, "count": count}
 
     @app.get("/api/kb/health")
     async def api_kb_health(request: Request, days: int = 7):
