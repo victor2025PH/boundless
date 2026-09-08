@@ -296,6 +296,13 @@
 .connect-qr-mask .qq-risk-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px;}
 .connect-qr-mask .qq-risk-go:not([disabled]){background:var(--accent);color:#fff;border-color:var(--accent);}
 .connect-qr-mask .qq-risk-go[disabled]{opacity:.55;cursor:not-allowed;}
+/* QQ 客户端按需下载卡（同 qq-risk 底，蓝左边线 = 「等一步准备」而非风险）*/
+.connect-qr-mask .qq-dl{border-left-color:var(--accent);}
+.connect-qr-mask .qq-dl .qq-risk-hd{color:var(--accent);}
+.connect-qr-mask .qq-dl-desc,.connect-qr-mask .qq-dl-note{color:var(--text-sub);font-size:12px;}
+.connect-qr-mask .qq-dl-bar{height:6px;border-radius:999px;background:color-mix(in srgb,var(--accent) 15%,transparent);overflow:hidden;}
+.connect-qr-mask .qq-dl-fill{height:100%;width:2%;background:var(--accent);border-radius:999px;transition:width .4s ease;}
+.connect-qr-mask .qq-dl-st{font-size:12px;font-weight:600;min-height:16px;}
 @media (prefers-reduced-motion:reduce){ .connect-pin-bar-fill.low{animation:none;} }
 .connect-pin-bar-fill.low{background:var(--warn);}
 .connect-pin-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;}
@@ -25628,6 +25635,81 @@ function _renderQqRiskConsent(maskEl){
     closeConnect(); openConnect('qqbot');
   });
 }
+/* ── QQ 客户端按需下载（reason_code=qq_not_installed）─────────────────────────────
+   二维码位画「需要先安装 QQ」卡：说明 + 按钮 → POST download-qq → 每 1.5s 轮询 qq-status.download
+   （downloading 显示百分比 / installing / done → 重新 startConnect 出码 / error → 可重试）。
+   本机 QQ 版本不在支持表时额外一行说明「另装受支持版本到智聊目录、不动你现有 QQ」。 */
+let _qqDlTimer=null;
+function _stopQqDlPoll(){ if(_qqDlTimer){ clearInterval(_qqDlTimer); _qqDlTimer=null; } }
+function _renderQqDownload(maskEl, qs){
+  if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
+  _stopConnectTtl(); _stopQqDlPoll();
+  _setConnectState('warn', window.T('inbox.connect.qq_dl_title'), '');
+  const qimg=document.getElementById('connect-qr-img');
+  if(qimg) qimg.style.display='none';
+  const mask=maskEl||document.getElementById('connect-qr-mask');
+  if(!mask) return;
+  const unsup=(qs&&qs.qq_installed&&!qs.supported)
+    ? '<div class="qq-dl-note">'+esc(window.Tf('inbox.connect.qq_dl_unsupported',{ver:String(qs.qq_version||'?')}))+'</div>' : '';
+  mask.style.display='flex';
+  mask.innerHTML=''
+    +'<div class="qq-risk qq-dl" role="status" aria-live="polite">'
+    +  '<div class="qq-risk-hd"><span style="display:inline-flex;">'+uiIcon('download',20)+'</span><span>'+esc(window.T('inbox.connect.qq_dl_title'))+'</span></div>'
+    +  '<div class="qq-dl-desc">'+esc(window.T('inbox.connect.qq_dl_desc'))+'</div>'+unsup
+    +  '<div class="qq-dl-bar" id="qq-dl-bar" style="display:none;"><div class="qq-dl-fill" id="qq-dl-fill"></div></div>'
+    +  '<div class="qq-dl-st" id="qq-dl-st"></div>'
+    +  '<div class="qq-risk-actions"><button type="button" class="connect-fail-report qq-risk-go" id="qq-dl-go">'+esc(window.T('inbox.connect.qq_dl_btn'))+'</button></div>'
+    +'</div>';
+  const go=mask.querySelector('#qq-dl-go');
+  const st=mask.querySelector('#qq-dl-st');
+  const bar=mask.querySelector('#qq-dl-bar');
+  const fill=mask.querySelector('#qq-dl-fill');
+  function paint(dl){
+    dl=dl||{};
+    const ph=String(dl.phase||'idle');
+    if(ph==='downloading'){
+      if(bar) bar.style.display='';
+      if(fill) fill.style.width=Math.max(2,Number(dl.percent)||0)+'%';
+      if(st) st.textContent=window.Tf('inbox.connect.qq_dl_progress',{pct:String(Number(dl.percent)||0)});
+      if(go) go.disabled=true;
+    } else if(ph==='installing'){
+      if(fill) fill.style.width='99%';
+      if(st) st.textContent=window.T('inbox.connect.qq_dl_installing');
+      if(go) go.disabled=true;
+    } else if(ph==='done'){
+      if(fill) fill.style.width='100%';
+      if(st) st.textContent=window.T('inbox.connect.qq_dl_done');
+      _stopQqDlPoll();
+      _uiBeacon('connect_qq_dl_done');
+      setTimeout(function(){ mask.innerHTML=''; mask.style.display='none'; startConnect(); }, 600);
+    } else if(ph==='error'){
+      if(st) st.textContent=window.Tf('inbox.connect.qq_dl_failed',{err:String(dl.error||'?')});
+      if(go) go.disabled=false;
+      _stopQqDlPoll();
+      _uiBeacon('connect_qq_dl_error');
+    }
+  }
+  if(qs&&qs.download&&qs.download.phase&&qs.download.phase!=='idle') paint(qs.download);
+  if(go) go.addEventListener('click',async function(){
+    go.disabled=true;
+    _uiBeacon('connect_qq_dl_start');
+    try{
+      const r=await apiFetch('/api/platforms/qq/download-qq',{method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},body:'{}'});
+      const j=await r.json().catch(function(){return {};});
+      if(!(r.ok&&j&&j.ok)){ go.disabled=false; showHint(window.T('inbox.connect.hint_failed')); return; }
+      paint(j.download||{phase:'downloading',percent:0});
+    }catch(_){ go.disabled=false; showHint(window.T('inbox.connect.hint_failed')); return; }
+    _stopQqDlPoll();
+    _qqDlTimer=setInterval(async function(){
+      try{
+        const r=await apiFetch('/api/platforms/qq/qq-status',{credentials:'same-origin'});
+        const j=await r.json().catch(function(){return {};});
+        if(j&&j.download) paint(j.download);
+      }catch(_){ /* 单轮失败不停轮询 */ }
+    },1500);
+  });
+}
 function _renderConnectFailure(d){
   d=d||{};
   const rc=String(d.reason_code||'');
@@ -26814,6 +26896,7 @@ function closeConnect(){
   _connectStartSeq++;   // 作废可能仍在飞的 login/start
   if(_connectPollTimer){ clearInterval(_connectPollTimer); _connectPollTimer=null; }
   _stopConnectTtl();
+  _stopQqDlPoll();   // QQ 下载进度轮询随弹窗关闭停（边车后台继续下载，重开弹窗按 qq-status 续接进度）
   _cancelPendingLogin();
   _showConnectPassword(false);
   _showConnectPhonePhase('');
@@ -27163,6 +27246,12 @@ async function startConnect(extra){
       // 确认后 platform_login.qq.risk_acknowledged_at 落盘，之后直接出码。
       if(String((d&&d.reason_code)||'')==='needs_risk_ack'){
         _renderQqRiskConsent(maskEl);
+        return;
+      }
+      // 本机没有受支持版本的 QQ 客户端：在二维码位给「下载并安装 QQ」（腾讯官方包，落用户可写区），
+      // 下载/安装进度轮询 qq-status，done 后自动重新 start 出码——用户不用去官网找安装包。
+      if(String((d&&d.reason_code)||'')==='qq_not_installed'){
+        _renderQqDownload(maskEl, (d&&d.qq_status)||null);
         return;
       }
       // WA/Messenger 依赖本机 Node 连接服务(sidecar)；连不上时给「服务未运行 + 怎么启动」可操作引导，

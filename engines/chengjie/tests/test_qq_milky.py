@@ -488,6 +488,65 @@ async def test_provider_start_returns_qr_and_poll_refreshes_it(monkeypatch):
     assert p2["status"] == "authorized" and p2["account_id"] == "10001"
 
 
+async def test_provider_requires_supported_qq_client(monkeypatch):
+    """边车在、QQ 未登录、但本机没有受支持版本的 QQ → reason_code=qq_not_installed 早退（弹窗给下载按钮）；
+    老边车不支持 x_qq_status（-404）→ 不拦，照常出码。"""
+    async def fake_enrich(*a, **k):
+        return None
+    import src.integrations.account_self_profile as ASP
+    monkeypatch.setattr(ASP, "enrich_from_fields", fake_enrich)
+    not_logged = (200, {"status": "failed", "retcode": -403, "message": "未登录"})
+    # ① 未装 QQ
+    http = _FakeHttp({"get_login_info": not_logged,
+                      "x_qq_status": {"qq_installed": False, "supported": False, "download": {"phase": "idle"}}})
+    monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=http))
+    info = await L.make_provider(_cfg())(None, "qq", "protocol", "")
+    assert info["reason_code"] == L.REASON_QQ_NOT_INSTALLED and "poll" not in info
+    assert info["instruction_key"] == "inbox.connect.instr_qq_not_installed"
+    assert info["qq_status"]["qq_installed"] is False
+    assert not any(c["api"] == "x_get_login_qrcode" for c in http.calls), "没 QQ 就不该去拉码"
+    # ② 装了但版本不在支持表 → 同样早退（前端多一行「另装受支持版本」说明）
+    http2 = _FakeHttp({"get_login_info": not_logged,
+                       "x_qq_status": {"qq_installed": True, "qq_version": "9.9.99-99999", "supported": False,
+                                       "download": {"phase": "idle"}}})
+    monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=http2))
+    info2 = await L.make_provider(_cfg())(None, "qq", "protocol", "")
+    assert info2["reason_code"] == L.REASON_QQ_NOT_INSTALLED
+    # ③ 老边车没有 x_qq_status（-404）→ 不拦：正常拉码
+    http3 = _FakeHttp({"get_login_info": not_logged,
+                       "x_get_login_qrcode": {"qr_png_base64": "AAAA", "qr_url": "x://q", "expire_sec": 120}})
+    monkeypatch.setattr(L, "_client_factory", lambda cfg, meta=None: M.MilkyClient("http://x", http=http3))
+    info3 = await L.make_provider(_cfg())(None, "qq", "protocol", "")
+    assert "reason_code" not in info3 and info3["qr_image"].startswith("data:image/png;base64,")
+
+
+def test_qq_download_and_status_endpoints(monkeypatch):
+    """POST /api/platforms/qq/download-qq → 边车 x_download_qq；GET /api/platforms/qq/qq-status → x_qq_status。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.web.routes.unified_inbox_login_routes import register_platform_login_routes
+    http = _FakeHttp({
+        "x_download_qq": {"qq_installed": False, "download": {"phase": "downloading", "percent": 3}},
+        "x_qq_status": {"qq_installed": False, "supported": False, "download": {"phase": "downloading", "percent": 42}},
+    })
+    monkeypatch.setattr(M, "_default_http", http)
+
+    class _CM:
+        config: Dict[str, Any] = {"platform_login": {"qq": {"protocol_enabled": True}}}
+    app = FastAPI()
+    register_platform_login_routes(app, api_auth=lambda r: None, config_manager=_CM())
+    c = TestClient(app)
+    r = c.post("/api/platforms/qq/download-qq")
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["download"]["phase"] == "downloading"
+    s = c.get("/api/platforms/qq/qq-status")
+    assert s.status_code == 200 and s.json()["download"]["percent"] == 42
+    assert [x["api"] for x in http.calls] == ["x_download_qq", "x_qq_status"]
+    # 边车不可达 → ok:false、不抛（弹窗按钮回「失败可重试」）
+    monkeypatch.setattr(M, "_default_http", _FakeHttp({"x_qq_status": (0, {"error": "refused"})}))
+    s2 = c.get("/api/platforms/qq/qq-status")
+    assert s2.status_code == 200 and s2.json() == {"ok": False}
+
+
 def test_risk_consent_endpoint_and_agreement_page(tmp_path):
     """POST /api/platforms/qq/risk-consent 写 risk_acknowledged_at；GET /help/qq-personal-agreement 200。"""
     from fastapi import FastAPI

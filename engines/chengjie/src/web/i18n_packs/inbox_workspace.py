@@ -1226,6 +1226,16 @@ ZH = {
     "inbox.connect.qq_risk_ack": "我已阅读并同意上述协议与风险须知",
     "inbox.connect.qq_risk_go": "同意并开始扫码",
     "inbox.connect.qq_risk_alt": "改用 QQ 机器人（官方接入，无此风险）",
+    "inbox.connect.instr_qq_not_installed":
+        "本机未安装受支持版本的 QQ 客户端。点「下载并安装 QQ」（腾讯官方安装包，约 200 MB），装好后本窗口自动出码。",
+    "inbox.connect.qq_dl_title": "需要先安装 QQ 客户端",
+    "inbox.connect.qq_dl_desc": "智聊的 QQ 连接组件要借本机 QQ 客户端收发。点下方按钮从腾讯官方地址下载并静默安装（约 200 MB，装在智聊数据目录，不影响你已有的 QQ）。",
+    "inbox.connect.qq_dl_btn": "下载并安装 QQ",
+    "inbox.connect.qq_dl_progress": "正在下载 QQ… {pct}%",
+    "inbox.connect.qq_dl_installing": "正在安装 QQ…",
+    "inbox.connect.qq_dl_done": "QQ 已就绪，正在生成二维码…",
+    "inbox.connect.qq_dl_failed": "下载/安装失败：{err}。可重试，或手动到 im.qq.com 安装 QQ 后点「重新开始」。",
+    "inbox.connect.qq_dl_unsupported": "检测到本机 QQ 版本 {ver} 暂不受支持；将另装受支持版本到智聊目录，不改动你现有的 QQ。",
     "inbox.connect.instr_qq_setup":
         "QQ 连接服务尚未就绪：请稍候片刻让智聊内置连接组件启动，再点「重新开始」。",
     "inbox.connect.instr_qq_down":
@@ -4170,6 +4180,17 @@ EN = {
     "inbox.connect.qq_risk_ack": "I have read and accept the agreement and risk notice above",
     "inbox.connect.qq_risk_go": "Accept and start scanning",
     "inbox.connect.qq_risk_alt": "Use QQ Bot instead (official API, no such risk)",
+    "inbox.connect.instr_qq_not_installed":
+        "No supported QQ client is installed on this PC. Click “Download & install QQ” (official Tencent "
+        "installer, ~200 MB); the QR code appears here automatically once it's installed.",
+    "inbox.connect.qq_dl_title": "QQ client needed first",
+    "inbox.connect.qq_dl_desc": "The QQ connector drives the local QQ client to send and receive. Click below to download it from Tencent's official site and install silently (~200 MB, into the app data folder — your existing QQ is left untouched).",
+    "inbox.connect.qq_dl_btn": "Download & install QQ",
+    "inbox.connect.qq_dl_progress": "Downloading QQ… {pct}%",
+    "inbox.connect.qq_dl_installing": "Installing QQ…",
+    "inbox.connect.qq_dl_done": "QQ is ready, generating the QR code…",
+    "inbox.connect.qq_dl_failed": "Download/install failed: {err}. Retry, or install QQ manually from im.qq.com and click “Start over”.",
+    "inbox.connect.qq_dl_unsupported": "Your installed QQ {ver} isn't supported yet; a supported build will be installed into the app folder without touching your existing QQ.",
     "inbox.connect.instr_qq_setup":
         "The QQ connector isn't ready yet: give the built-in connector a moment to start, "
         "then click “Start over”.",

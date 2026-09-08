@@ -251,6 +251,30 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
                     f"<h2>{_html.escape(tr(request, 'inbox.connect.qq_risk_title'))}</h2><ol>{pts}</ol></div>")
         return HTMLResponse(f"<!doctype html><meta charset='utf-8'><title>QQ</title>{body}")
 
+    @app.post("/api/platforms/qq/download-qq")
+    async def api_qq_download(request: Request):
+        """让自研 QQ 边车按需下载并静默安装锁定版 QQ 客户端（腾讯官方安装包，落用户可写区）。
+
+        连接弹窗 ``qq_not_installed`` 态的「下载并安装 QQ」按钮调本端点；进度经
+        ``GET /api/platforms/qq/qq-status`` 轮询（边车 ``x_qq_status.download``）。幂等。
+        """
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.qq_milky import MilkyClient, service_base_url, service_token, start_qq_download
+        client = MilkyClient(service_base_url(cfg), service_token(cfg), timeout=8.0)
+        out = await start_qq_download(client)
+        return {"ok": bool(out), **out}
+
+    @app.get("/api/platforms/qq/qq-status")
+    async def api_qq_status(request: Request):
+        """本机 QQ 客户端安装态 / 版本 / 是否受支持 / 下载进度（边车 ``x_qq_status``）。"""
+        api_auth(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        from src.integrations.qq_milky import MilkyClient, fetch_qq_status, service_base_url, service_token
+        client = MilkyClient(service_base_url(cfg), service_token(cfg), timeout=8.0)
+        out = await fetch_qq_status(client)
+        return {"ok": bool(out), **out}
+
     @app.post("/api/platforms/qq/risk-consent")
     async def api_qq_risk_consent(request: Request):
         """记录 QQ 个人号一次性风险须知的确认（写 platform_login.qq.risk_acknowledged_at）。

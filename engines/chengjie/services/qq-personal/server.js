@@ -31,6 +31,8 @@ import express from "express";
 import pino from "pino";
 import { WebSocketServer } from "ws";
 import { createDriver } from "./ntq/driver.js";
+import { isSupportedBuild, locateQQ, PINNED_QQ_BUILD, SUPPORTED_QQ_BUILDS } from "./ntq/locate.js";
+import { downloadState, startDownload } from "./ntq/qq-download.js";
 
 const SVC_ID = "qq-personal";
 const PORT = Number(process.env.QQ_MILKY_PORT || process.env.PORT || 8792);
@@ -152,9 +154,26 @@ async function dispatch(api, p) {
       const r = await d.logout();
       return r.ok ? ok({}) : failed(r.retcode ?? -1, r.error);
     }
+    // ── QQ 客户端安装态 / 按需下载（连接弹窗「下载并安装 QQ」按钮 + 进度环）──────
+    case "x_qq_status":
+      return ok(qqStatus());
+    case "x_download_qq":
+      return ok({ ...qqStatus(), download: startDownload({ runtimeDir: process.env.QQ_RUNTIME_DIR, logger }) });
     default:
       return failed(-404, `unsupported api: ${api}`);
   }
+}
+
+/** 本机 QQ 安装态（真实探测，与驱动是 mock 无关）：装了没、版本、是否在支持表、下载进度。 */
+function qqStatus() {
+  const loc = locateQQ({ runtimeDir: process.env.QQ_RUNTIME_DIR });
+  return {
+    qq_installed: loc.installed, qq_version: loc.version, qq_build: loc.build, qq_root: loc.root,
+    qq_source: loc.source, wrapper_found: !!loc.wrapper,
+    supported: loc.installed ? isSupportedBuild(loc.build) : false,
+    pinned_build: PINNED_QQ_BUILD, pinned_version: (SUPPORTED_QQ_BUILDS[PINNED_QQ_BUILD] || {}).version || "",
+    download: downloadState(),
+  };
 }
 
 async function main() {
@@ -184,13 +203,16 @@ async function main() {
 
   app.get("/health", async (req, res) => {
     const info = await driver.info();
+    const qq = qqStatus();
     res.json({
       // svc 值必须与 desktop/sidecar-launcher.js SPECS.qq.svcId 一致（跨文件漂移门禁钉住）
       ok: true, svc: "qq-personal",
-      qq_installed: !!info.qq_installed, qq_version: info.qq_version || "",
+      // QQ 安装态用真实探测（mock 驱动下也如实），版本优先真实安装的
+      qq_installed: qq.qq_installed, qq_version: qq.qq_version || info.qq_version || "",
+      qq_supported: qq.supported,
       driver: info.driver || "mock", driver_reason: info.driver_reason || "",
       login_state: driver.loginState(), self: driver.selfInfo(),
-      download_progress: info.download_progress ?? null,
+      download_progress: qq.download.phase === "idle" ? null : qq.download,
     });
   });
 

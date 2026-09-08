@@ -30,6 +30,7 @@ from src.integrations.qq_milky import (
     MilkyError,
     avatar_url_for,
     fetch_login_qrcode,
+    fetch_qq_status,
     protocol_enabled,
     risk_acknowledged,
     service_base_url,
@@ -43,6 +44,8 @@ _registered = False
 REASON_SERVICE_DOWN = "service_down"
 REASON_NEEDS_SERVER_SETUP = "needs_server_setup"
 REASON_NEEDS_RISK_ACK = "needs_risk_ack"
+#: 本机没有受支持版本的 QQ 客户端（边车 x_qq_status 判定）——弹窗给「下载并安装 QQ」按钮
+REASON_QQ_NOT_INSTALLED = "qq_not_installed"
 
 
 def _client_factory(config: Dict[str, Any], meta: Optional[Dict[str, Any]] = None) -> MilkyClient:
@@ -112,6 +115,16 @@ def make_provider(config: Dict[str, Any]):
                     "instruction_key": "inbox.connect.instr_qq_down",
                     "reason_code": REASON_SERVICE_DOWN, "detail": first["detail"]}
 
+        # 边车在、QQ 未登录：先确认本机有受支持版本的 QQ（注入原料）。没有 → 早退 qq_not_installed，
+        # 弹窗给「下载并安装 QQ」按钮（下载进度经 poll 随 x_qq_status 下发）；老边车不支持
+        # x_qq_status（回 {}）时不拦——按有 QQ 处理，交给拉码结果说话。
+        if first["state"] != "authorized":
+            qs = await fetch_qq_status(client)
+            if qs and not (qs.get("qq_installed") and qs.get("supported")):
+                return {"instruction": "本机未安装受支持版本的 QQ 客户端：点「下载并安装 QQ」（腾讯官方安装包，约 200 MB），"
+                                       "装好后本窗口自动出码。",
+                        "instruction_key": "inbox.connect.instr_qq_not_installed",
+                        "reason_code": REASON_QQ_NOT_INSTALLED, "qq_status": qs}
         # 已就绪但未登录：拉一张二维码，弹窗立即显示（首帧就有码，不用等 poll）
         qr = {} if first["state"] == "authorized" else await fetch_login_qrcode(client)
 
@@ -167,4 +180,5 @@ def maybe_register(config: Dict[str, Any]) -> bool:
 
 
 __all__ = ["make_provider", "maybe_register", "probe_login",
-           "REASON_SERVICE_DOWN", "REASON_NEEDS_SERVER_SETUP", "REASON_NEEDS_RISK_ACK"]
+           "REASON_SERVICE_DOWN", "REASON_NEEDS_SERVER_SETUP", "REASON_NEEDS_RISK_ACK",
+           "REASON_QQ_NOT_INSTALLED"]

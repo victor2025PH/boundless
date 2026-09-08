@@ -113,6 +113,28 @@ def group_avatar_url_for(group_id: Any) -> str:
     return GROUP_AVATAR_URL_FMT.format(gid=s) if s.isdigit() else ""
 
 
+async def fetch_qq_status(client: "MilkyClient") -> Dict[str, Any]:
+    """边车 ``x_qq_status``：本机 QQ 安装态/版本/是否受支持/按需下载进度。
+
+    返回边车原样 dict（``qq_installed / qq_version / supported / download{phase,percent,error}``）；
+    边车不支持该 API（老版本，-404）或不可达 → ``{}``（调用方按「未知」处理，不拦）。
+    """
+    try:
+        return dict(await client.call("x_qq_status") or {})
+    except Exception:  # noqa: BLE001
+        logger.debug("[qq-milky] x_qq_status 失败", exc_info=True)
+        return {}
+
+
+async def start_qq_download(client: "MilkyClient") -> Dict[str, Any]:
+    """让边车从腾讯官方地址按需下载并静默安装锁定版 QQ（幂等；进度经 ``fetch_qq_status``）。"""
+    try:
+        return dict(await client.call("x_download_qq") or {})
+    except Exception:  # noqa: BLE001
+        logger.debug("[qq-milky] x_download_qq 失败", exc_info=True)
+        return {}
+
+
 async def fetch_login_qrcode(client: "MilkyClient") -> Dict[str, Any]:
     """向边车拉一张登录二维码（智聊扩展 API ``x_get_login_qrcode``）。
 
