@@ -305,6 +305,10 @@ class AutosendWorker:
         # 工作时间闸扣留事件数（同一草稿每 tick 重扫会重复计数——这是「扣留中」的
         # 活动信号而非唯一草稿数；复班后自然归零增长）
         self.total_skipped_off_hours: int = 0
+        # O-1 D（D-O4）首次接触 / 沉寂 >6h 首回延 1–5 min：留 pending 的唯一草稿数
+        # （按 draft_id 去重，与 off_hours 的「活动信号」计数口径不同）
+        self.total_first_reply_held: int = 0
+        self._first_reply_held_ids: set = set()
         self.total_catchup_regenerated: int = 0  # 复班补觉：作废陈稿并重拟的条数
         self.total_skipped_pilot: int = 0  # 驾驶权在原生面板而取消的 L2 数（surface_fusion）
         # B41（2026-08-22）：投递幂等钉拒绝的重复投递数（同稿在途/已投过）
@@ -775,8 +779,16 @@ class AutosendWorker:
 
     def _pick_deliver_delay(
         self, text: str = "", elapsed_sec: float = 0.0, persona_id: str = "",
-        platform: str = "", conversation_id: str = "",
+        platform: str = "", conversation_id: str = "", inbound_text: str = "",
     ) -> float:
+        return self._pick_deliver_pacing(
+            text, elapsed_sec, persona_id=persona_id, platform=platform,
+            conversation_id=conversation_id, inbound_text=inbound_text).delay
+
+    def _pick_deliver_pacing(
+        self, text: str = "", elapsed_sec: float = 0.0, persona_id: str = "",
+        platform: str = "", conversation_id: str = "", inbound_text: str = "",
+    ):
         """按 deliver_delay 配置取本次拟人延迟（秒）。统一走 resolve_pacing：
         先合并覆写层（人设 > 平台 > 全局，见 humanize._apply_scoped_overrides）；
         adaptive=false→uniform(min,max)（旧行为）；adaptive=true→按回复内容长度/
@@ -794,7 +806,7 @@ class AutosendWorker:
         )
         r = resolve_pacing(
             self._deliver_delay_block, text=text, elapsed_sec=elapsed_sec,
-            persona_id=persona_id, platform=platform)
+            persona_id=persona_id, platform=platform, inbound_text=inbound_text)
         delay = r.delay
         gap = resolve_min_gap_sec(
             self._deliver_delay_block, platform=platform, persona_id=persona_id)
@@ -812,11 +824,79 @@ class AutosendWorker:
                 f"autosend/{platform or '-'}/{persona_id or '-'}", r)
         except Exception:
             pass
-        return delay
+        return r
+
+    def _first_reply_remaining(self, d: Dict[str, Any], conversation_id: str) -> float:
+        """O-1 D 首回延迟：本稿还需留 pending 多少秒（0 ＝ 不延 / 已到点）。
+
+        判据（纯函数在 humanize）：``deliver_delay.first_reply`` 开着（缺省＝块带 profile）
+        且本轮入站之前无出站（首次接触）或距上一条出站 ≥ silence_hours → hold =
+        沉寂后首条入站 ts + 60–300s（按 会话#首条入站 ts 确定性取值）。危机消息不延。
+        首次判成 hold 时落一行 ``[pacing] first_reply hold …``（每稿一次）。
+        """
+        from src.inbox.humanize import (
+            first_reply_hold_sec,
+            resolve_first_reply_cfg,
+            silence_before_inbound,
+        )
+        _plat = str(d.get("platform") or "")
+        _acct = str(d.get("account_id") or "default")
+        _pid = ""
+        if self._persona_resolver is not None:
+            try:
+                try:
+                    _pid = str(self._persona_resolver(
+                        _plat, _acct, str(d.get("chat_key") or "")) or "")
+                except TypeError:
+                    _pid = str(self._persona_resolver(_plat, _acct) or "")
+            except Exception:
+                _pid = ""
+        cfg = resolve_first_reply_cfg(
+            self._deliver_delay_block, platform=_plat, persona_id=_pid)
+        if not cfg.get("enabled"):
+            return 0.0
+        store = getattr(self._svc, "_store", None)
+        if store is None or not hasattr(store, "list_recent_messages"):
+            return 0.0
+        draft_ts = float(d.get("created_ts") or d.get("created_at") or 0)
+        if draft_ts <= 0:
+            return 0.0
+        rows = store.list_recent_messages(conversation_id, limit=12)
+        silence, burst_start = silence_before_inbound(rows, draft_ts=draft_ts)
+        hold = first_reply_hold_sec(
+            cfg, silence_sec=silence, key=f"{conversation_id}#{int(burst_start)}")
+        if hold <= 0:
+            return 0.0
+        peer_text = str(d.get("peer_text") or "")
+        if peer_text.strip():
+            try:
+                from src.utils.wellbeing_guard import detect_crisis
+                lvl = str((detect_crisis(peer_text) or {}).get("level") or "none")
+                if lvl in ("severe", "elevated"):
+                    return 0.0
+            except Exception:
+                return 0.0
+        remain = (burst_start + hold) - time.time()
+        if remain <= 0:
+            return 0.0
+        did = str(d.get("draft_id") or d.get("id") or "")
+        if did and did not in self._first_reply_held_ids:
+            self._first_reply_held_ids.add(did)
+            if len(self._first_reply_held_ids) > 2048:
+                self._first_reply_held_ids = set(list(self._first_reply_held_ids)[-512:])
+            self.total_first_reply_held += 1
+            logger.info(
+                "[pacing] first_reply hold conv=%s platform=%s silence=%s hold=%.0fs "
+                "remain=%.0fs draft=%s",
+                conversation_id, _plat or "-",
+                "first_contact" if silence is None else "%.1fh" % (silence / 3600.0),
+                hold, remain, did)
+        return remain
 
     async def _run_humanize(
         self, platform: str, account_id: str, chat_key: str,
         *, text: str = "", elapsed_sec: float = 0.0, conversation_id: str = "",
+        inbound_text: str = "",
     ) -> None:
         """投递前拟人序列：已读 → 静默思考 → 打字续挂 → 投递（委托 humanize 协作器）。
 
@@ -828,6 +908,7 @@ class AutosendWorker:
         全程挂打字的旧行为等于宣称「我打了一分钟字只打出一句话」。
         """
         from src.inbox.humanize import (
+            count_words,
             resolve_typing_lead,
             run_presend_humanization,
         )
@@ -851,29 +932,60 @@ class AutosendWorker:
                 and self._humanize_flag(platform, "mark_read")):
             async def _mr():
                 await self._mark_read_callback(platform, account_id, chat_key)
+        # O-1 D（#253 #254）composing 可观测：回调返回 True＝平台真挂上了；False＝worker 不支持
+        # （LINE / Messenger 协议硬限制）或失败；无回调 / 开关关 → 如实写 nocb / off。
+        # 240 分钟零 typing 日志的根因就是这里此前只记指标不落日志。
         _tp = None
-        if (self._typing_callback is not None
-                and self._humanize_flag(platform, "typing")):
+        _typing_state = {"calls": 0, "ok": 0}
+        if self._typing_callback is None:
+            _composing = "nocb"
+        elif not self._humanize_flag(platform, "typing"):
+            _composing = "off"
+        else:
+            _composing = "pending"
+
             async def _tp(action):
-                await self._typing_callback(platform, account_id, chat_key, action)
+                _typing_state["calls"] += 1
+                _res = await self._typing_callback(platform, account_id, chat_key, action)
+                if _res is None or bool(_res):
+                    _typing_state["ok"] += 1
 
         def _inc_marked():
             self.total_marked_read += 1
 
+        _pr = self._pick_deliver_pacing(
+            text, elapsed_sec, persona_id=_pid, platform=platform,
+            conversation_id=conversation_id, inbound_text=inbound_text)
+        _lead = (_pr.typing_lead if getattr(_pr, "typing_lead", None) is not None
+                 else resolve_typing_lead(self._deliver_delay_block, text=text,
+                                          persona_id=_pid, platform=platform))
         await run_presend_humanization(
-            delay=self._pick_deliver_delay(
-                text, elapsed_sec, persona_id=_pid, platform=platform,
-                conversation_id=conversation_id),
+            delay=_pr.delay,
             action="typing",
             mark_read=_mr,
             typing=_tp,
             sleep=self._sleep,
             refresh_sec=_TYPING_REFRESH_SEC,
-            typing_lead_sec=resolve_typing_lead(
-                self._deliver_delay_block, text=text,
-                persona_id=_pid, platform=platform),
+            typing_lead_sec=_lead,
             on_marked=_inc_marked,
+            stop_before_send_sec=float(getattr(_pr, "stop_sec", 0.0) or 0.0),
         )
+        if _composing == "pending":
+            if _typing_state["calls"] == 0:
+                _composing = "skipped"          # 延迟太短 / 打字段低于阈值，没到挂气泡那一步
+            elif _typing_state["ok"] > 0:
+                _composing = "sent"
+            else:
+                _composing = "unsupported"
+        # 每条出站一行节奏日志（D-O4 验收：发出间隔与字数正相关、无两条到秒相同）
+        logger.info(
+            "[pacing] conv=%s platform=%s profile=%s read=%.1f think=%.1f type=%.1f stop=%.1f "
+            "elapsed=%.1f total=%.1f typing_lead=%.1f composing=%s typing_calls=%d words=%d",
+            conversation_id or "-", platform or "-", getattr(_pr, "profile", "") or "legacy",
+            float(getattr(_pr, "read_sec", 0.0) or 0.0), float(getattr(_pr, "think_sec", 0.0) or 0.0),
+            float(getattr(_pr, "type_sec", 0.0) or 0.0), float(getattr(_pr, "stop_sec", 0.0) or 0.0),
+            float(_pr.elapsed or 0.0), float(_pr.delay or 0.0), float(_lead or 0.0),
+            _composing, int(_typing_state["calls"]), count_words(text))
 
     def notify_new_l2(self) -> None:
         """从任意线程安全地通知 worker：有新 L2 草稿已落库，立即唤醒（C3 事件驱动）。
@@ -1383,7 +1495,8 @@ class AutosendWorker:
             _elapsed = max(0.0, time.time() - _created) if _created > 0 else 0.0
             await self._run_humanize(
                 _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed,
-                conversation_id=_conv_id_g)
+                conversation_id=_conv_id_g,
+                inbound_text=str(item.get("peer_text") or ""))
             # 延迟后二次过期复查（fresh_guard 同闸门，2026-08-05）：拟人延迟
             # 现可配 30-60s，而 _process_batch 的过期检查跑在延迟**之前**——
             # 整个延迟窗口原本不设防：客户此间插话，旧稿照发＝答非所问，
@@ -1897,6 +2010,20 @@ class AutosendWorker:
                 if _ws_hold:
                     self.total_skipped_off_hours += 1
                     continue
+            # O-1 D（D-O4）首回延迟：首次接触 / 沉寂 >6h 的这一轮，首条回复留 pending
+            # 到「沉寂后首条入站 + 60–300s（确定性）」再处置——与班表闸同款「不 resolve
+            # 不取消」，下一 tick 接续；不在拟人序列里睡（串行投递会堵别的会话）。
+            # 已耗时照扣：放行后 humanize 只剩打字段。危机消息穿透（与班表同口径）。
+            # 任何异常 → 放行（判不出就不延）。
+            if (self._send_callback is not None and _conv
+                    and int(d.get("_attempt", 0)) == 0):
+                try:
+                    _fr_remain = self._first_reply_remaining(d, _conv)
+                except Exception:
+                    _fr_remain = 0.0
+                    logger.debug("[pacing] first_reply 判定异常（放行）", exc_info=True)
+                if _fr_remain > 0:
+                    continue
             # 新入站过期守卫（fresh_guard，2026-08-03，默认关）：拟稿的 10-20s 里客户
             # 又补了话 → 本稿按旧输入写成，投出去=答非所问，且 stale_peer 重拟的新稿
             # 随后又到=两连发。判据（draft_fresh_guard.find_superseding_inbound）＝存在
@@ -2250,6 +2377,7 @@ class AutosendWorker:
             # 恒 False；扣留计数是每 tick 重扫的活动事件数，非唯一草稿数）
             "work_schedule_enabled": self._work_schedule_enabled(),
             "total_skipped_off_hours": self.total_skipped_off_hours,
+            "total_first_reply_held": self.total_first_reply_held,
             "total_catchup_regenerated": self.total_catchup_regenerated,
             "catchup_regen_wired": self._catchup_regen_cb is not None,
         }

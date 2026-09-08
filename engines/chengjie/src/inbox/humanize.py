@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -210,6 +211,117 @@ class PacingResult:
     adaptive: bool        # 是否自适应模式
     enabled: bool         # 该延迟配置是否启用（max_sec>0）
     floored: bool = False  # min_residual_sec 残余下限是否兜住了本次（观测用）
+    # O-1 D（D-O4）「拟人程度」三档（profile 在场时才有值；legacy 模型全 0 / None）
+    profile: str = ""      # natural / fast / slow；"" = legacy（min/max/adaptive 旧模型）
+    read_sec: float = 0.0  # 读消息分量（含按入站字数加成）
+    think_sec: float = 0.0  # 思考分量
+    type_sec: float = 0.0  # 打字分量（= 可见「正在输入」时长）
+    stop_sec: float = 0.0  # 发出前停止 composing 的静默秒数
+    typing_lead: Optional[float] = None  # profile 模型给出的可见打字时长（None=沿用 resolve_typing_lead）
+
+
+# ── O-1 D（#253 #254 · D-O4，2026-09-08）「拟人程度」三档：读 / 想 / 打字 分量模型 ──────
+# FW78ZP 骨架：读延迟 3–6s + 每 10 词 +1s（上限 20s）±30%；思考 3–8s；打字 英文 35–45 wpm /
+# 中日韩 60–90 字/分 ±30%（上限 90s）；发出前 1s 停 composing。事故：起草→发出恒 12–13s 与
+# 长度无关——旧模型 base 1 + 0.08×字数 对 60 字英文只有 5.8s，被 min_sec=8 夹成常数。
+# **只在延迟块显式带 ``profile`` 时启用**（legacy 块行为逐字节不变，存量部署 / 既有测试零变化）；
+# 出厂基线换 ``profile: natural`` 由 O-2 / N-5 的 config 基线带（见落点表）。
+PACING_PROFILES: Dict[str, Dict[str, float]] = {
+    "natural": dict(read_min=3.0, read_max=6.0, read_per_10_words=1.0, read_cap=20.0,
+                    think_min=3.0, think_max=8.0,
+                    wpm_min=35.0, wpm_max=45.0, cpm_min=60.0, cpm_max=90.0, type_cap=90.0,
+                    jitter=0.3, stop_before_send=1.0, min_gap_sec=8.0, min_residual_sec=2.0),
+    "fast": dict(read_min=1.5, read_max=3.5, read_per_10_words=0.6, read_cap=10.0,
+                 think_min=1.0, think_max=4.0,
+                 wpm_min=50.0, wpm_max=65.0, cpm_min=95.0, cpm_max=130.0, type_cap=45.0,
+                 jitter=0.3, stop_before_send=0.5, min_gap_sec=4.0, min_residual_sec=1.5),
+    "slow": dict(read_min=5.0, read_max=10.0, read_per_10_words=1.5, read_cap=30.0,
+                 think_min=6.0, think_max=14.0,
+                 wpm_min=25.0, wpm_max=35.0, cpm_min=45.0, cpm_max=70.0, type_cap=120.0,
+                 jitter=0.3, stop_before_send=1.5, min_gap_sec=12.0, min_residual_sec=3.0),
+}
+PACING_PROFILE_NAMES = tuple(PACING_PROFILES.keys())
+_CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+@dataclass
+class HumanPacing:
+    read: float
+    think: float
+    type_: float
+    stop: float
+    total: float          # read + think + type_（stop 含在 type_ 尾段，不另加）
+    words: int            # 入站词数（读分量依据）
+    reply_units: int      # 出站计量单位数（拉丁=词 / CJK=字）
+    cjk: bool
+
+
+def resolve_profile(block: Optional[Dict[str, Any]]) -> str:
+    """延迟块的「拟人程度」档位名；未设 / ``custom`` / 未知 → ""（legacy 模型）。"""
+    try:
+        p = str((block or {}).get("profile") or "").strip().lower()
+    except Exception:
+        return ""
+    return p if p in PACING_PROFILES else ""
+
+
+def _count_words(text: str) -> int:
+    s = str(text or "").strip()
+    if not s:
+        return 0
+    if _CJK_TEXT_RE.search(s):
+        # 中日韩按 2 字≈1 词折算（读速口径）
+        cjk = len(_CJK_TEXT_RE.findall(s))
+        latin = len([w for w in re.split(r"\s+", _CJK_TEXT_RE.sub(" ", s)) if w])
+        return max(1, cjk // 2 + latin)
+    return len([w for w in s.split() if w])
+
+
+count_words = _count_words   # 公开名（worker 日志 words= 与读分量同口径）
+
+
+def estimate_human_pacing(
+    reply_text: str,
+    *,
+    inbound_text: str = "",
+    params: Optional[Dict[str, float]] = None,
+    rng: Optional[Callable[[float, float], float]] = None,
+) -> HumanPacing:
+    """按三档参数估「读 → 想 → 打字」三段（纯函数，rng 可注入）。
+
+    读 = uniform(read_min, read_max) + 入站词数/10 × read_per_10_words，夹 read_cap，×(1±jitter)；
+    想 = uniform(think_min, think_max) ×(1±jitter)；
+    打字 = 出站长度 / 手速：拉丁 词数/uniform(wpm) 分、CJK 字数/uniform(cpm) 分，×(1±jitter)，
+           夹 [stop_before_send + 0.6, type_cap]（打字段至少能容下「停 composing」那一秒）。
+    """
+    p = dict(PACING_PROFILES["natural"])
+    if isinstance(params, dict):
+        p.update({k: float(v) for k, v in params.items() if isinstance(v, (int, float))})
+    _rng = rng or random.uniform
+    jit = max(0.0, min(0.9, float(p.get("jitter", 0.3))))
+
+    def _j(x: float) -> float:
+        return x * _rng(1.0 - jit, 1.0 + jit) if jit > 0 else x
+
+    words_in = _count_words(inbound_text)
+    read = _rng(p["read_min"], p["read_max"]) + (words_in / 10.0) * p["read_per_10_words"]
+    read = min(_j(read), p["read_cap"])          # cap 在抖动之后夹（cap 是硬上限）
+    think = _j(_rng(p["think_min"], p["think_max"]))
+    reply = str(reply_text or "").strip()
+    cjk = bool(_CJK_TEXT_RE.search(reply))
+    if cjk:
+        units = len(_CJK_TEXT_RE.findall(reply)) + len(
+            [w for w in re.split(r"\s+", _CJK_TEXT_RE.sub(" ", reply)) if w])
+        speed = _rng(p["cpm_min"], p["cpm_max"])           # 字/分
+    else:
+        units = len([w for w in reply.split() if w])
+        speed = _rng(p["wpm_min"], p["wpm_max"])           # 词/分
+    stop = max(0.0, float(p.get("stop_before_send", 0.0)))
+    type_raw = (units / max(1.0, speed)) * 60.0 if units else 0.0
+    type_ = min(float(p.get("type_cap", 90.0)), max(stop + 0.6, _j(type_raw)))
+    total = read + think + type_
+    return HumanPacing(read=read, think=think, type_=type_, stop=stop, total=total,
+                       words=words_in, reply_units=units, cjk=cjk)
 
 
 def resolve_following_delay_block(
@@ -255,8 +367,14 @@ def resolve_pacing(
     persona_id: str = "",
     platform: str = "",
     rng: Optional[Callable[[float, float], float]] = None,
+    inbound_text: str = "",
 ) -> PacingResult:
     """解析延迟配置为 ``PacingResult``（含诊断字段，供观测打点）。
+
+    **O-1 D 三档模型**：块带 ``profile ∈ {natural, fast, slow}`` → 走 ``estimate_human_pacing``
+    （读 / 想 / 打字分量；``inbound_text`` 供读分量按入站字数加成），忽略 min/max/adaptive；
+    已耗时照扣、``min_residual_sec`` 按档位缺省（块显式值优先）；``typing_lead`` = 打字分量、
+    ``stop_sec`` = 发出前停 composing。未带 profile → 下面的 legacy 语义逐字节不变。
 
     语义同 ``compute_pacing_delay``（后者是本函数 ``.delay`` 的薄封装，向后兼容）：
     - 先合并覆写层：``platform_overrides[platform]`` → ``persona_overrides[persona_id]``
@@ -272,6 +390,28 @@ def resolve_pacing(
     """
     b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
     _rng = rng or random.uniform
+    prof = resolve_profile(b)
+    if prof:
+        params = dict(PACING_PROFILES[prof])
+        for k in list(params.keys()):
+            if k in b and isinstance(b.get(k), (int, float)) and not isinstance(b.get(k), bool):
+                params[k] = float(b[k])          # 专家显式覆写单个分量参数
+        hp = estimate_human_pacing(text, inbound_text=inbound_text, params=params, rng=_rng)
+        if arousal is None:
+            arousal = _derive_arousal(text)
+        try:
+            el = max(0.0, float(elapsed_sec or 0.0))
+        except (TypeError, ValueError):
+            el = 0.0
+        residual = float(params.get("min_residual_sec", 0.0) or 0.0)
+        raw = max(0.0, hp.total - el)
+        # 扣掉已耗时后仍至少留「打字段」（可见打字不能被生成耗时吃光——那就是秒回）
+        delay = max(residual, min(hp.total, max(raw, hp.type_ if el > 0 else raw)))
+        return PacingResult(delay, hp.total, el, arousal, True, True,
+                            floored=(el > 0 and raw < delay),
+                            profile=prof, read_sec=hp.read, think_sec=hp.think,
+                            type_sec=hp.type_, stop_sec=hp.stop,
+                            typing_lead=min(hp.type_, delay))
     try:
         min_sec = float(b.get("min_sec", 0) or 0)
         max_sec = float(b.get("max_sec", 0) or 0)
@@ -344,9 +484,113 @@ def resolve_min_gap_sec(
     """
     b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
     try:
-        return max(0.0, float(b.get("min_gap_sec", 0) or 0))
+        v = b.get("min_gap_sec")
+        if (v is None or v == "") and resolve_profile(b):
+            # O-1 D：三档自带连发间隔缺省（块显式值优先）
+            return float(PACING_PROFILES[resolve_profile(b)].get("min_gap_sec", 0.0))
+        return max(0.0, float(v or 0))
     except (TypeError, ValueError):
         return 0.0
+
+
+# ── O-1 D（D-O4）首次接触 / 沉寂 >6h 的首回延 1–5 min ─────────────────────────────
+# 真人不会在陌生人第一条消息 10 秒内、或对方消失一天后又 10 秒内回。配置块
+# ``deliver_delay.first_reply {enabled, silence_hours, min_sec, max_sec}`` 与延迟块同住
+# （随 apply_deliver_delay 热更、随人设 / 平台覆写层继承）；``enabled`` 缺省 ＝
+# 「延迟块带 profile」（legacy 块零变化，显式 true/false 优先）。
+# 实现方式是 worker 侧「留 pending 不处置」（与班表闸同款），不是在拟人序列里睡 5 分钟
+# ——串行投递下那会堵住其他会话；hold 按 (会话, 沉寂后首条入站 ts) 确定性取值，
+# 同一轮连发的多条草稿同一时刻放行，且 tick 间重算不抖。
+FIRST_REPLY_DEFAULTS: Dict[str, float] = dict(silence_hours=6.0, min_sec=60.0, max_sec=300.0)
+
+
+def resolve_first_reply_cfg(
+    block: Optional[Dict[str, Any]], *, platform: str = "", persona_id: str = "",
+) -> Dict[str, Any]:
+    """``deliver_delay.first_reply`` 归一化；返回 ``enabled / silence_hours / min_sec / max_sec``。"""
+    b = _apply_scoped_overrides(block, platform=platform, persona_id=persona_id)
+    node = b.get("first_reply") if isinstance(b.get("first_reply"), dict) else {}
+    out: Dict[str, Any] = dict(FIRST_REPLY_DEFAULTS)
+    for k in ("silence_hours", "min_sec", "max_sec"):
+        try:
+            if node.get(k) is not None:
+                out[k] = max(0.0, float(node[k]))
+        except (TypeError, ValueError):
+            pass
+    if out["max_sec"] < out["min_sec"]:
+        out["max_sec"] = out["min_sec"]
+    en = node.get("enabled")
+    out["enabled"] = bool(resolve_profile(b)) if en is None else bool(en)
+    return out
+
+
+def silence_before_inbound(
+    rows: Optional[list], *, draft_ts: float,
+) -> "tuple[Optional[float], float]":
+    """从会话消息行推「这轮入站之前沉寂了多久」。
+
+    返回 ``(silence_sec, burst_start_ts)``：
+    - ``silence_sec=None`` ＝ 首次接触（这轮入站之前本会话没有任何出站）；
+    - 否则 ＝ 这轮入站的**首条**与其之前最后一条出站的间隔（客户连发算一轮，
+      不会因为「上一条是 5 秒前客户自己发的」把沉寂算成 5 秒）；
+    - ``burst_start_ts`` ＝ 这轮入站首条的 ts（hold 锚点）；无入站行时取 draft_ts。
+    ``rows`` 期望 ``list_recent_messages`` 的 ts 升序输出；坏输入按「无沉寂」（0, draft_ts）
+    返回——判不出就不延，宁快勿静默。
+    """
+    try:
+        dts = float(draft_ts or 0.0)
+    except (TypeError, ValueError):
+        dts = 0.0
+    if not isinstance(rows, list) or not rows:
+        return 0.0, dts
+    ordered = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        try:
+            ts = float(r.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        d = str(r.get("direction") or "")
+        if d not in ("in", "out"):
+            continue
+        if dts > 0 and ts > dts + 1.0:
+            continue          # 草稿之后才到的行不属于这一轮
+        ordered.append((ts, d))
+    ordered.sort()
+    # 从尾部回溯：先跳过本轮入站，遇到第一条出站即为沉寂起点
+    burst_start = dts
+    i = len(ordered) - 1
+    while i >= 0 and ordered[i][1] == "in":
+        burst_start = ordered[i][0]
+        i -= 1
+    if burst_start == dts and i == len(ordered) - 1:
+        return 0.0, dts       # 最后一条是出站（本稿不是在回入站）→ 不延
+    if i < 0:
+        return None, burst_start
+    return max(0.0, burst_start - ordered[i][0]), burst_start
+
+
+def first_reply_hold_sec(
+    cfg: Dict[str, Any], *, silence_sec: Optional[float], key: str,
+) -> float:
+    """按配置判这轮首回该加多少秒 hold（0 ＝ 不延）。确定性：同 key 同值。"""
+    if not cfg or not cfg.get("enabled"):
+        return 0.0
+    try:
+        hours = float(cfg.get("silence_hours", FIRST_REPLY_DEFAULTS["silence_hours"]))
+        lo = float(cfg.get("min_sec", FIRST_REPLY_DEFAULTS["min_sec"]))
+        hi = float(cfg.get("max_sec", FIRST_REPLY_DEFAULTS["max_sec"]))
+    except (TypeError, ValueError):
+        return 0.0
+    if hi <= 0:
+        return 0.0
+    if silence_sec is not None and silence_sec < hours * 3600.0:
+        return 0.0
+    from binascii import crc32
+    span = max(0.0, hi - lo)
+    frac = (crc32(str(key).encode("utf-8")) % 10007) / 10007.0
+    return lo + span * frac
 
 
 def apply_min_gap_floor(
@@ -408,8 +652,12 @@ async def run_presend_humanization(
     typing_lead_sec: Optional[float] = None,
     on_marked: Optional[Callable[[], None]] = None,
     on_typing: Optional[Callable[[], None]] = None,
+    stop_before_send_sec: float = 0.0,
 ) -> None:
-    """执行「已读 → （静默思考）→ 打字续挂 → 延迟」拟人序列。
+    """执行「已读 → （静默思考）→ 打字续挂 → （停 composing）→ 延迟」拟人序列。
+
+    ``stop_before_send_sec``（O-1 D）：打字段末尾留这么多秒**不再续挂**「正在输入」——真人按
+    发送前气泡会先消失一下；只在打字段长于它时生效，否则忽略。
 
     顺序：
       1. 若给了 ``mark_read`` → 调用一次（先看）。
@@ -452,6 +700,14 @@ async def run_presend_humanization(
     if remaining < max(0.0, float(min_typing_delay)):
         await sleep(remaining)
         return
+    try:
+        stop_tail = max(0.0, float(stop_before_send_sec or 0.0))
+    except (TypeError, ValueError):
+        stop_tail = 0.0
+    if stop_tail > 0 and remaining > stop_tail + 0.5:
+        remaining -= stop_tail
+    else:
+        stop_tail = 0.0
     step_max = max(0.5, float(refresh_sec))
     while remaining > 0:
         if typing is not None:
@@ -464,6 +720,8 @@ async def run_presend_humanization(
         step = min(step_max, remaining)
         await sleep(step)
         remaining -= step
+    if stop_tail > 0:
+        await sleep(stop_tail)   # composing 已停，静默这一段再发（真人按发送前气泡先消失）
 
 
 __all__ = [
@@ -477,4 +735,9 @@ __all__ = [
     "PacingResult",
     "DEFAULT_TYPING_REFRESH_SEC",
     "DEFAULT_MIN_TYPING_DELAY_SEC",
+    # O-1 D 三档
+    "PACING_PROFILES", "PACING_PROFILE_NAMES", "HumanPacing",
+    "resolve_profile", "estimate_human_pacing", "count_words",
+    "FIRST_REPLY_DEFAULTS", "resolve_first_reply_cfg",
+    "silence_before_inbound", "first_reply_hold_sec",
 ]

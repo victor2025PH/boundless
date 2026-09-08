@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -44,6 +45,10 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_WINDOW_SEC = 8.0
+# O-1 D（D-O4，2026-09-08）「客户连发合并等 8–15s 一次回」：静默窗每次开窗在
+# [window_sec, window_max_sec] 内均匀取值（恒定 8s 到点是节拍器）。配置路径缺省 15；
+# 直接构造 InboundMerger 不传 window_max_sec ＝ 不抖（既有测试 / 老调用零变化）。
+DEFAULT_WINDOW_MAX_SEC = 15.0
 DEFAULT_MAX_WAIT_SEC = 25.0
 DEFAULT_MAX_TEXTS = 6
 # 语音条静默窗：录一条语音 10–20s 是常态，8s 窗每条都到点。15s 仍在 25s 硬上限内。
@@ -135,6 +140,7 @@ def resolve_merge_cfg(auto_draft_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any
     return {
         "enabled": bool(blk.get("enabled", False)),
         "window_sec": float(blk.get("window_sec", DEFAULT_WINDOW_SEC)),
+        "window_max_sec": float(blk.get("window_max_sec", DEFAULT_WINDOW_MAX_SEC)),
         "voice_window_sec": float(
             blk.get("voice_window_sec", DEFAULT_VOICE_WINDOW_SEC)),
         "max_wait_sec": float(blk.get("max_wait_sec", DEFAULT_MAX_WAIT_SEC)),
@@ -162,11 +168,20 @@ class InboundMerger:
         frag_max_wait_sec: float = DEFAULT_FRAG_MAX_WAIT_SEC,
         frag_max_texts: int = DEFAULT_FRAG_MAX_TEXTS,
         voice_window_sec: Optional[float] = None,
+        window_max_sec: Optional[float] = None,
         timer_factory: Optional[Callable[..., Any]] = None,
         now_fn: Callable[[], float] = time.time,
+        rng: Optional[Callable[[float, float], float]] = None,
     ) -> None:
         self._cb = callback
         self._window = max(0.5, float(window_sec))
+        # 窗口随机上限（O-1 D）：不传 / 不大于 window ＝ 不抖
+        try:
+            self._window_max = max(self._window, float(window_max_sec)) \
+                if window_max_sec is not None else self._window
+        except (TypeError, ValueError):
+            self._window_max = self._window
+        self._rng = rng or random.uniform
         # 语音窗不低于常规窗（配置写小了按常规窗兜底，语音永远不比文本更急）
         _vw = DEFAULT_VOICE_WINDOW_SEC if voice_window_sec is None else float(voice_window_sec)
         self._voice_window = max(self._window, _vw)
@@ -232,6 +247,8 @@ class InboundMerger:
             else:
                 # 最新一条是语音条 → 静默窗换语音窗（录下一条要十几秒）；文本照常规窗
                 _win = self._window
+                if self._window_max > self._window:
+                    _win = self._rng(self._window, self._window_max)
                 if is_voice_piece(text, conv):
                     _win = self._voice_window
                     self.voice_windows += 1
@@ -302,6 +319,7 @@ __all__ = [
     "is_voice_piece",
     "resolve_merge_cfg",
     "DEFAULT_WINDOW_SEC",
+    "DEFAULT_WINDOW_MAX_SEC",
     "DEFAULT_VOICE_WINDOW_SEC",
     "DEFAULT_MAX_WAIT_SEC",
     "DEFAULT_MAX_TEXTS",
