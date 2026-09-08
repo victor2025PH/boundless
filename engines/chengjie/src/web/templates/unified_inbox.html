@@ -388,7 +388,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260906g">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260908dr">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -695,6 +695,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
          账号历史视角时点亮——用户始终看得见「我在只读查档、怎么出去」；内容由
          _syncHistBanner() 填充（含 退出视角/重登/恢复 按钮），退出即熄灭。 -->
     <div id="hist-view-banner" class="hist-view-banner" role="status"></div>
+    <!-- P-2 D（#259 · D-P1）「沉寂会话待你决定」可折叠横幅：3 天以上未回复的旧消息不自动回，
+         由坐席三选一（忽略 / 我来回 / 让 AI 起草预览）。内容由 _drRenderBanner() 填充。 -->
+    <div id="dr-banner" class="dr-banner" role="status" hidden></div>
     <div class="conv-items" id="conv-items">
       <div class="conv-skel-list" aria-busy="true" aria-label="loading">
         <div class="conv-skel"><div class="conv-skel-av"></div><div class="conv-skel-lines"><div class="conv-skel-line w60"></div><div class="conv-skel-line w90"></div></div></div>
@@ -3321,9 +3324,10 @@ function _acPickModeCtl(pl,aid,a){
 }
 async function _acctBulkMode(ev,pl,aid,mode,btn){
   if(ev){ try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){} }
-  const post=async (confirm)=>{
+  const post=async (confirm, extra)=>{
+    // P-2 C（_dr）：confirm 可带 targets / demote / draft_for / login_review_id（两栏确认框的勾选结果）
     const r=await apiFetch('/api/unified-inbox/automation/account-bulk',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({platform:pl,account_id:aid,mode:mode,confirm:!!confirm})},{timeoutMs:60000});
+      body:JSON.stringify(Object.assign({platform:pl,account_id:aid,mode:mode,confirm:!!confirm},extra||{}))},{timeoutMs:120000});
     let d={}; try{ d=await r.json(); }catch(_){ d={}; }
     if(!r.ok||d.ok===false) throw new Error((d&&(d.detail&&d.detail.message||d.detail))||'bulk failed');
     return d;
@@ -3332,6 +3336,20 @@ async function _acctBulkMode(ev,pl,aid,mode,btn){
   try{
     const plan=await post(false);
     const label=window.T(mode==='auto_ai'?'inbox.acct.bulk_auto':(mode==='manual'?'inbox.acct.bulk_manual':'inbox.acct.bulk_semi'));
+    if(mode==='auto_ai' && plan.split){
+      // P-2 C（#259 ZH3ZQ5 · D-P1）：切全自动改两栏确认框（dr-）——默认只勾「最近 3 天有来信」，
+      // 旧消息 / 已停联 / 我自己不碰；勾选即按 targets 落地，待回复的先出待审草稿。
+      const pick=await _drBulkAutoConfirm(pl,aid,plan,{label:label});
+      if(!pick) return;
+      const res=await post(true,pick);
+      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0),m:Number(res.skipped_unchecked||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'#2563eb');
+      try{ _uiBeacon('acct_bulk_auto_dr'); }catch(_){}
+      closeAcctPicker();
+      try{ await loadChats(); }catch(_){}
+      try{ if(typeof window.loadStandbyMode==='function') window.loadStandbyMode(); }catch(_){}
+      try{ _drLoad(); }catch(_){}
+      return;
+    }
     let msg=window.Tf('inbox.acct.bulk_confirm',{mode:label,n:Number(plan.will_change||0),m:Number(plan.override_individual||0),total:Number(plan.total||0)});
     if(mode==='auto_ai'&&Number(plan.skipped_groups||0)>0) msg+='\n'+window.Tf('inbox.acct.bulk_skip_groups',{k:Number(plan.skipped_groups||0)});
     const g=plan.gate||{};
@@ -3368,6 +3386,202 @@ async function _acctBulkMode(ev,pl,aid,mode,btn){
     if(btn) btn.disabled=false;
   }
 }
+/* ===== P-2 C / D / F（#259 #252 · D-P1，2026-09-08）dr- = dormant review ==================
+   ① 切档 / 登录两栏确认框 _drBulkAutoConfirm：「会自动回（最近 3 天有来信）N 个」默认勾 /
+      「不会碰：M 个旧消息、K 个已停联、我自己」默认不勾；每行可预览草稿（永远 review）。
+   ② 登录完成后账号已是全自动 → 后端 settle 登记 login_review，前端轮询到弹一次同一确认框
+      （不弹 / 关掉 = 默认不碰旧会话，ack 即不再弹）。
+   ③ 收件箱列表顶部可折叠横幅「有 N 个旧会话等你决定」+ 三按钮（忽略 / 我来回 / 让 AI 起草预览）。
+   ④ 自聊会话「我自己 · 备忘」：名字替换 + 标签 + 默认沉底。
+   DOM id / class 统一前缀 dr-（共享文件按 hunk 暂存的匹配标记）。 */
+var _drState={items:[],count:0,total:0,limitH:72,open:false,loginSeen:{},timer:null,busy:false};
+function _drConvName(c){ return (c&&c.self_chat)?window.T('inbox.dr.self_name'):(c.name||c.chat_key||window.T('dash.unknown')); }
+function _drSelfTag(c){ return (c&&c.self_chat)?`<span class="dr-self-tag" title="${esc(window.T('inbox.dr.self_tag_t'))}">${esc(window.T('inbox.dr.self_row'))}</span>`:''; }
+function _drSelfBottom(list){
+  if(!list||!list.some(c=>c&&c.self_chat)) return list;
+  const s=list.filter(c=>c&&c.self_chat), r=list.filter(c=>!(c&&c.self_chat));
+  list.length=0; list.push(...r,...s); return list;
+}
+function _drAge(h){
+  if(h==null||isNaN(h)) return '';
+  const n=Number(h); if(n>=48) return window.Tf('inbox.dr.age_d',{d:Math.round(n/24)});
+  return window.Tf('inbox.dr.age_h',{h:Math.max(1,Math.round(n))});
+}
+function _drRowHtml(r, col, checked, selectable){
+  const cid=String(r.conversation_id||'');
+  const age=_drAge(r.age_h);
+  const unrep=r.unreplied?`<span class="dr-chip dr-chip-unrep">${esc(window.T('inbox.dr.unreplied'))}</span>`:'';
+  const cb=selectable?`<input type="checkbox" class="dr-cb" data-cid="${esc(cid)}" data-col="${col}" data-unrep="${r.unreplied?1:0}" ${checked?'checked':''}>`:`<span class="dr-cb-off" aria-hidden="true"></span>`;
+  const prev=selectable?`<button type="button" class="dr-prev-btn" data-cid="${esc(cid)}">${esc(window.T('inbox.dr.preview'))}</button>`:'';
+  const tag=col==='frozen'?`<span class="dr-chip dr-chip-frozen">${esc(window.T('inbox.dr.frozen_row'))}</span>`:(col==='self_chat'?`<span class="dr-chip">${esc(window.T('inbox.dr.self_row'))}</span>`:'');
+  return `<div class="dr-row dr-col-${col}" data-cid="${esc(cid)}">
+    <label class="dr-row-main">${cb}<span class="dr-row-name" title="${esc(r.chat_key||'')}">${esc(r.name||r.chat_key||'')}</span>${unrep}${tag}<span class="dr-row-age">${esc(age)}</span></label>
+    <div class="dr-row-prev">${esc(r.preview||'')}</div>${prev}
+    <div class="dr-row-draft" hidden></div>
+  </div>`;
+}
+/* 两栏确认框。plan = account-bulk 干跑结果（含 split）；opts:{label, login:{id, acct}}。
+   resolve：null=取消 / {targets, demote, draft_for, login_review_id} */
+function _drBulkAutoConfirm(pl, aid, plan, opts){
+  opts=opts||{};
+  const sp=plan.split||{}; const cnt=sp.counts||{};
+  const limitH=Number(sp.limit_h||72);
+  const login=opts.login||null;
+  return new Promise(function(resolve){
+    var mask=document.createElement('div'); mask.className='app-confirm-mask';
+    var card=document.createElement('div'); card.className='app-confirm-card dr-card';
+    const title=login?window.Tf('inbox.dr.login_title',{acct:_acctLabel(pl,aid)}):window.T('inbox.dr.dlg_title');
+    const act=(sp.active||[]), dor=(sp.dormant||[]), frz=(sp.frozen||[]), slf=(sp.self_chat||[]);
+    const moreA=Math.max(0,Number(cnt.active||0)-act.length), moreD=Math.max(0,Number(cnt.dormant||0)-dor.length);
+    let html=`<div class="app-confirm-title">${uiIcon('zap',16)} ${esc(title)}</div>`;
+    if(login) html+=`<div class="dr-hint">${esc(window.T('inbox.dr.login_hint'))}</div>`;
+    const g=plan.gate||{};
+    if(Number(g.cooldown_remaining_s||0)>0) html+=`<div class="dr-hint">${esc(window.Tf('inbox.acct.bulk_cooldown_note',{m:Math.max(1,Math.ceil(Number(g.cooldown_remaining_s)/60))}))}</div>`;
+    if(g.degraded) html+=`<div class="dr-hint dr-hint-warn">${esc(window.T('inbox.acct.bulk_degraded_note'))}</div>`;
+    if(Number(plan.skipped_groups||0)>0) html+=`<div class="dr-hint">${esc(window.Tf('inbox.acct.bulk_skip_groups',{k:Number(plan.skipped_groups||0)}))}</div>`;
+    html+=`<div class="dr-cols">
+      <section class="dr-col">
+        <header class="dr-col-h dr-col-h-active"><span>${esc(window.Tf('inbox.dr.col_active',{h:limitH,n:Number(cnt.active||0)}))}</span>
+          <span class="dr-col-tools"><button type="button" class="dr-lnk" data-all="active" data-v="1">${esc(window.T('inbox.dr.check_all'))}</button> · <button type="button" class="dr-lnk" data-all="active" data-v="0">${esc(window.T('inbox.dr.uncheck_all'))}</button></span></header>
+        <div class="dr-col-hint">${esc(window.T('inbox.dr.active_hint'))}</div>
+        <div class="dr-list">${act.map(r=>_drRowHtml(r,'active',true,true)).join('')||`<div class="dr-empty">—</div>`}${moreA>0?`<div class="dr-more">${esc(window.Tf('inbox.dr.more',{n:moreA}))}</div>`:''}</div>
+      </section>
+      <section class="dr-col">
+        <header class="dr-col-h dr-col-h-skip"><span>${esc(window.Tf('inbox.dr.col_skip',{m:Number(cnt.dormant||0),k:Number(cnt.frozen||0),s:Number(cnt.self_chat||0)}))}</span>
+          <span class="dr-col-tools"><button type="button" class="dr-lnk" data-all="dormant" data-v="1">${esc(window.T('inbox.dr.check_all'))}</button> · <button type="button" class="dr-lnk" data-all="dormant" data-v="0">${esc(window.T('inbox.dr.uncheck_all'))}</button></span></header>
+        <div class="dr-col-hint">${esc(window.T('inbox.dr.dormant_hint'))}</div>
+        <div class="dr-list">${dor.map(r=>_drRowHtml(r,'dormant',false,true)).join('')}${moreD>0?`<div class="dr-more">${esc(window.Tf('inbox.dr.more',{n:moreD}))}</div>`:''}${frz.map(r=>_drRowHtml(r,'frozen',false,false)).join('')}${slf.map(r=>_drRowHtml(r,'self_chat',false,false)).join('')}${(!dor.length&&!frz.length&&!slf.length)?`<div class="dr-empty">—</div>`:''}</div>
+      </section>
+    </div>
+    <div class="app-confirm-acts">
+      <button type="button" class="app-confirm-btn" data-act="cancel">${esc(window.T('inbox.bab.cancel'))}</button>
+      <button type="button" class="app-confirm-btn danger" data-act="ok">${esc(window.T('inbox.dr.ok'))}</button>
+    </div>`;
+    card.innerHTML=html;
+    function done(v){ if(mask.parentNode) mask.parentNode.removeChild(mask); document.removeEventListener('keydown',onKey); resolve(v); }
+    function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); done(null); } }
+    function collect(){
+      const targets=[], demote=[], draft_for=[];
+      const activeAll=(plan.active_targets||[]), dormantAll=(plan.dormant_targets||[]);
+      const seen=new Set();
+      card.querySelectorAll('.dr-cb').forEach(cb=>{
+        const cid=cb.dataset.cid; seen.add(cid);
+        if(cb.checked){ targets.push(cid); if(cb.dataset.unrep==='1') draft_for.push(cid); }
+        else if(cb.dataset.col==='active'&&login) demote.push(cid);
+      });
+      // 未列出的（超出样例上限）按各栏默认：active 默认勾、dormant 默认不勾
+      activeAll.forEach(cid=>{ if(!seen.has(cid)) targets.push(cid); });
+      const out={targets:targets, demote:demote, draft_for:draft_for.slice(0,20)};
+      if(login&&login.id) out.login_review_id=login.id;
+      return out;
+    }
+    card.querySelector('[data-act="ok"]').onclick=function(){ done(collect()); };
+    card.querySelector('[data-act="cancel"]').onclick=function(){ done(null); };
+    card.querySelectorAll('.dr-lnk').forEach(b=>{ b.onclick=function(){ const v=b.dataset.v==='1'; card.querySelectorAll(`.dr-cb[data-col="${b.dataset.all}"]`).forEach(cb=>{ cb.checked=v; }); }; });
+    card.querySelectorAll('.dr-prev-btn').forEach(b=>{ b.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); _drPreviewInto(b, card.querySelector(`.dr-row[data-cid="${CSS.escape(b.dataset.cid)}"] .dr-row-draft`)); }; });
+    mask.onclick=function(e){ if(e.target===mask) done(null); };
+    document.addEventListener('keydown',onKey);
+    mask.appendChild(card); document.body.appendChild(mask);
+  });
+}
+/* 逐行「预览草稿」：复用清单 draft 动作（generate_persona_reply → review 稿），结果就地展开 */
+async function _drPreviewInto(btn, box){
+  if(!btn||btn.disabled) return;
+  const cid=btn.dataset.cid; btn.disabled=true; const old=btn.textContent; btn.textContent=window.T('inbox.dr.previewing');
+  try{
+    const r=await apiFetch('/api/unified-inbox/dormant-review/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid,action:'draft'})},{timeoutMs:90000});
+    let d={}; try{ d=await r.json(); }catch(_){}
+    if(d&&d.ok&&d.draft_text){
+      if(box){ box.hidden=false; box.innerHTML=`<span class="dr-draft-lbl">${esc(window.T('inbox.dr.preview_done'))}</span>${esc(d.draft_text)}`; }
+      btn.textContent=old;
+    } else {
+      _toast(window.T(d&&d.error==='frozen'?'inbox.dr.draft_frozen':'inbox.dr.draft_fail'),'#b45309'); btn.textContent=old; btn.disabled=false;
+    }
+  }catch(_){ _toast(window.T('inbox.dr.draft_fail'),'#b91c1c'); btn.textContent=old; btn.disabled=false; }
+}
+/* ---- 横幅 + 轮询 ---- */
+async function _drLoad(){
+  try{
+    const r=await apiFetch('/api/unified-inbox/dormant-review?limit=200',{},{timeoutMs:15000});
+    if(!r.ok) return;
+    const d=await r.json(); if(!d||d.ok===false) return;
+    _drState.items=d.items||[]; _drState.count=Number(d.count||0); _drState.total=Number(d.total||0); _drState.limitH=Number(d.limit_h||72);
+    _drRenderBanner();
+    _drLoginCheck(d.login_reviews||[]);
+  }catch(_){}
+}
+function _drRenderBanner(){
+  const el=document.getElementById('dr-banner'); if(!el) return;
+  const items=_drState.items||[];
+  if(!items.length){ el.hidden=true; el.innerHTML=''; return; }
+  el.hidden=false;
+  let html=`<div class="dr-banner-h"><span class="dr-banner-badge">${items.length}</span><span class="dr-banner-t">${esc(window.Tf('inbox.dr.banner',{n:items.length}))}</span>
+    <button type="button" class="dr-lnk" id="dr-banner-toggle">${esc(window.T(_drState.open?'inbox.dr.hide':'inbox.dr.show'))}</button></div>`;
+  if(_drState.open){
+    html+=`<div class="dr-banner-hint">${esc(window.T('inbox.dr.banner_hint'))}</div><div class="dr-banner-list">`;
+    items.slice(0,50).forEach(it=>{
+      const cid=String(it.conversation_id||'');
+      html+=`<div class="dr-banner-item" data-cid="${esc(cid)}">
+        <div class="dr-bi-main"><span class="dr-row-name">${esc(it.display_name||it.chat_key||cid)}</span><span class="dr-row-age">${esc(_drAge(it.age_h))}</span></div>
+        <div class="dr-row-prev">${esc(it.inbound_text||'')}</div>
+        <div class="dr-bi-acts">
+          <button type="button" class="dr-act" data-act="ignore" data-cid="${esc(cid)}">${esc(window.T('inbox.dr.act_ignore'))}</button>
+          <button type="button" class="dr-act" data-act="manual" data-cid="${esc(cid)}">${esc(window.T('inbox.dr.act_manual'))}</button>
+          <button type="button" class="dr-act dr-act-ai" data-act="draft" data-cid="${esc(cid)}">${esc(window.T('inbox.dr.act_draft'))}</button>
+        </div><div class="dr-row-draft" hidden></div></div>`;
+    });
+    if(items.length>50) html+=`<div class="dr-more">${esc(window.Tf('inbox.dr.more',{n:items.length-50}))}</div>`;
+    html+=`</div>`;
+  }
+  el.innerHTML=html;
+  const tg=document.getElementById('dr-banner-toggle'); if(tg) tg.onclick=function(){ _drState.open=!_drState.open; _drRenderBanner(); };
+  el.querySelectorAll('.dr-act').forEach(b=>{ b.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); _drAction(b.dataset.cid, b.dataset.act, b); }; });
+}
+async function _drAction(cid, action, btn){
+  if(!cid||!action) return;
+  const row=btn&&btn.closest?btn.closest('.dr-banner-item'):null;
+  if(action==='draft'){ await _drPreviewInto(btn, row?row.querySelector('.dr-row-draft'):null); setTimeout(_drLoad, 800); return; }
+  if(btn) btn.disabled=true;
+  try{
+    const r=await apiFetch('/api/unified-inbox/dormant-review/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid,action:action})},{timeoutMs:20000});
+    let d={}; try{ d=await r.json(); }catch(_){}
+    if(!r.ok||!d.ok){ _toast(window.T('inbox.acct.bulk_fail'),'#b91c1c'); if(btn) btn.disabled=false; return; }
+    _drState.items=(_drState.items||[]).filter(x=>String(x.conversation_id)!==String(cid)); _drRenderBanner();
+    if(action==='manual'){
+      _toast(window.T('inbox.dr.manual_ok'),'#2563eb');
+      const c=(typeof allChats!=='undefined'?allChats:[]).find(x=>x&&x.conversation_id===cid);
+      if(c){ c.automation_mode='manual'; try{ selectChat(convKey(c)); }catch(_){} }
+    } else { _toast(window.T('inbox.dr.ignored'),'#64748b'); }
+  }catch(_){ _toast(window.T('inbox.acct.bulk_fail'),'#b91c1c'); if(btn) btn.disabled=false; }
+}
+/* 登录完成后待弹的确认框：每条 login_review 只弹一次（弹出即 ack；取消 = 不碰旧会话） */
+async function _drLoginCheck(reviews){
+  if(_drState.busy||!reviews||!reviews.length) return;
+  const r=reviews.find(x=>x&&x.id&&!_drState.loginSeen[x.id]); if(!r) return;
+  _drState.loginSeen[r.id]=1; _drState.busy=true;
+  const pl=String(r.platform||''), aid=String(r.account_id||'default');
+  const ack=async()=>{ try{ await apiFetch('/api/unified-inbox/dormant-review/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login_review_id:r.id,action:'ack'})},{timeoutMs:10000}); }catch(_){} };
+  try{
+    const pr=await apiFetch('/api/unified-inbox/automation/account-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:pl,account_id:aid,mode:'auto_ai',confirm:false,scope:'all'})},{timeoutMs:60000});
+    let plan={}; try{ plan=await pr.json(); }catch(_){}
+    if(!pr.ok||!plan.split){ await ack(); return; }
+    const pick=await _drBulkAutoConfirm(pl,aid,plan,{login:{id:r.id,acct:aid}});
+    if(!pick){ await ack(); return; }
+    const cr=await apiFetch('/api/unified-inbox/automation/account-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({platform:pl,account_id:aid,mode:'auto_ai',confirm:true},pick))},{timeoutMs:120000});
+    let res={}; try{ res=await cr.json(); }catch(_){}
+    if(cr.ok&&res.ok!==false){
+      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0)+Number(res.already||0)-Number(res.demoted||0),m:Number(res.skipped_unchecked||0)+Number(res.demoted||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'#2563eb');
+      try{ await loadChats(); }catch(_){}
+    } else { await ack(); }
+  }catch(_){ await ack(); }
+  finally{ _drState.busy=false; _drLoad(); }
+}
+function _drInit(){
+  if(_drState.timer) return;
+  setTimeout(_drLoad, 2500);
+  _drState.timer=setInterval(function(){ if(document.hidden) return; _drLoad(); }, 45000);
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _drInit); else _drInit();
 /* dock 模式总览：全平台账号分组清单（分组头不占 .ac-pick-row 计数——「行数=总览计数+1」不变量沿用） */
 function _renderAcctPickerDock(){
   const groups=_adkCollect();
@@ -5719,7 +5933,7 @@ function _applySort(list){
   } else {
     list.sort((a,b)=> (b.last_ts||0)-(a.last_ts||0));
   }
-  return _applyPinAt(list);
+  return _drSelfBottom(_applyPinAt(list));   // P-2 F：自聊「我自己 · 备忘」默认沉底
 }
 function _sortSearchList(list){
   // 搜索混排：群彼此走 _cmpGroup（置顶/@我/未读）；群与私聊按时间；私聊走当前
@@ -6312,7 +6526,7 @@ function _buildConvItemDom(c, isSel){
       <div class="conv-avatar-badge">${platIcon(c.platform,16)}</div>
     </div>
     <div class="conv-body">
-      <div class="conv-name">${esc(c.name||c.chat_key||window.T('dash.unknown'))} ${viaTag}${groupTag}${reqTag}${outTag}${archiveIcon}${_goalMarkHtml(c)}</div>
+      <div class="conv-name">${esc(_drConvName(c))} ${_drSelfTag(c)}${viaTag}${groupTag}${reqTag}${outTag}${archiveIcon}${_goalMarkHtml(c)}</div>
       <div class="conv-preview-row"><div class="conv-preview">${draftTag}${_previewHtml(c)}</div>${line2Chips}</div>
     </div>
     <div class="conv-meta">

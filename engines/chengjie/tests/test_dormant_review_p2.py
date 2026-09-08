@@ -296,3 +296,35 @@ def test_plan_account_bulk_split_and_apply_only_checked(store):
     # 手动 / 半自动降档不分栏（旧口径）
     p2 = plan_account_bulk(store, PLAT, ACCT, "review")
     assert "split" not in p2 and p2["will_change"] >= 2
+
+
+def test_frontend_dr_wiring_static():
+    """前端接线静态钉：两栏确认框 / 横幅 / 三按钮 / 自聊名 / 登录轮询 / i18n zh+en 同键。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "src" / "web" / "templates" / "unified_inbox.html").read_text(encoding="utf-8")
+    for needle in (
+        'id="dr-banner"', "function _drBulkAutoConfirm(", "function _drRenderBanner(",
+        "function _drAction(", "function _drLoginCheck(", "function _drPreviewInto(",
+        "function _drConvName(", "_drSelfBottom(_applyPinAt(list))",
+        "${esc(_drConvName(c))} ${_drSelfTag(c)}",
+        "if(mode==='auto_ai' && plan.split){", "scope:'all'", "action:'ack'",
+        "data-act=\"draft\"", "data-act=\"manual\"", "data-act=\"ignore\"",
+        "/api/unified-inbox/dormant-review?limit=200",
+        "unified-inbox.css?v=20260908dr",
+    ):
+        assert needle in html, needle
+    css = (root / "src" / "web" / "static" / "workspace" / "unified-inbox.css").read_text(encoding="utf-8")
+    for cls in (".dr-card", ".dr-cols", ".dr-banner", ".dr-self-tag", ".dr-row-draft"):
+        assert cls in css, cls
+    import re as _re
+    keys = set(_re.findall(r"inbox\.dr\.[a-z_]+", html))
+    assert keys, "模板里应引用 inbox.dr.* 键"
+    from src.web.i18n_packs import inbox_workspace as pack
+    zh = {k: v for k, v in vars(pack).items() if isinstance(v, dict) and "inbox.dr.self_name" in v}
+    assert zh, "inbox_workspace 里找不到 inbox.dr.* 词包"
+    dicts = [d for d in vars(pack).values() if isinstance(d, dict) and "inbox.dr.self_name" in d]
+    assert len(dicts) >= 2, "zh / en 两包都应含 inbox.dr.*"
+    for d in dicts:
+        missing = sorted(k for k in keys if k not in d)
+        assert not missing, missing
