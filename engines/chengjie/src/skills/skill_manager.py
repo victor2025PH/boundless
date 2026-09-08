@@ -5760,6 +5760,7 @@ class SkillManager(LoggerMixin):
             _prov_quote = str(mu_facts or mu or "").strip()[:200]
             _prov_ts = time.time()
             n_heuristic = 0
+            _scope_facts: List[str] = []   # O-2 C：本轮全部事实文本，供去向日志判锚点
             for fact in extract_heuristic_facts(mu_facts):
                 # R12：启发式事实从用户原话正则提取 → user_stated（高置信）
                 rid = self._episodic_store.add_fact(
@@ -5768,6 +5769,7 @@ class SkillManager(LoggerMixin):
                 )
                 await self._episodic_patch_embedding(rid, fact)
                 n_heuristic += 1
+                _scope_facts.append(str(fact))
 
             # J-10 A1（#183）：LLM 抽取走引文级接地——每条事实带客户原话逐字引文
             # ``evidence``（原语言），护栏只核引文 → 外语客户的中文事实不再整条被丢。
@@ -5808,6 +5810,24 @@ class SkillManager(LoggerMixin):
                     confidence=_conf,   # J-10 二期
                 )
                 await self._episodic_patch_embedding(rid, f)
+
+            # O-2 C（#201 / W7ZTSB 收口）：去向一行。抽取链**只写该客户 episodic**（上面两个
+            # add_fact 都按客户键落库，没有任何共享 KB / 通用事实写口）——scope 恒 customer；
+            # reason 给出本轮事实里的私事锚点（memory_scope 与 DailyLearner 分流同一口径），
+            # 无锚点写 episodic_only（客户偏好等仍是客户记忆，不因无锚点被丢）。
+            _n_facts_total = n_heuristic + len(facts_llm)
+            if _n_facts_total:
+                try:
+                    from src.utils.memory_scope import personal_anchors
+                    _scope_facts.extend(f for f, _e, _c in facts_llm)
+                    _anchors = personal_anchors("\n".join(_scope_facts))
+                    self.logger.info(
+                        "[episodic] scope=customer reason=%s facts=%d user=%s",
+                        ("anchors:" + ",".join(_anchors)) if _anchors else "episodic_only",
+                        _n_facts_total, user_id,
+                    )
+                except Exception:
+                    self.logger.debug("[episodic] scope log skipped", exc_info=True)
 
             if grounding_dropped:
                 # 观测：按原因记账 → admin_summary → 页面「有 N 条因无法核对原话未记录」

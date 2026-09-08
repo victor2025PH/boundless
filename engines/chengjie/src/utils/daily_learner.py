@@ -65,15 +65,14 @@ _NOISE_FRAGMENTS = (
 )
 # 只有表情 / 标点 / 空白（无任何字母、数字、汉字）
 _NO_CONTENT_RE = re.compile(r"^[^\w\u4e00-\u9fff]*$")
-# 人名线索（J-10 词表没有人名类，这里补最窄的一组「自报姓名」句式）
-_NAME_HINT_RE = re.compile(
-    r"我叫|叫我|我的名字|名字是|我姓|"
-    r"\b(?:my\s+name\s+is|call\s+me|i\s*am|i'm|this\s+is)\s+[A-Z][a-z]{1,15}\b",
-    re.IGNORECASE,
-)
-#: private_kinds 取值（顺序即页面标签顺序）
+#: private_kinds 取值（顺序即页面标签顺序）。O-2 C（#201，2026-09-08）：判定本体迁到
+#: ``src/utils/memory_scope.personal_anchors``（与抽取链日志同一口径），本表 +4：
+#: ``birthday`` / ``time``（带日号的日期，或星期·相对日·钟点与约见动词合取）/ ``place``
+#: （场所词与时间或约见动词合取）/ ``personal``（第一二人称属性：我住在… / I live in…）
+#: ——指令验收「约会地点 / 对方生日」两例此前都不在词表里，会被当成可进共享 KB 的条目。
 PRIVATE_KINDS: Tuple[str, ...] = (
-    "name", "money", "meet", "address", "identity", "family", "health", "commitment",
+    "name", "birthday", "time", "place", "money", "meet", "address", "identity",
+    "family", "health", "commitment", "personal",
 )
 
 # ── M-5 E（#220，2026-09-06）：语种按文字系统判 + 重复待审合并 ────────────────
@@ -173,25 +172,16 @@ def is_fact_question(text: str) -> bool:
 def private_kinds(text: str) -> List[str]:
     """条目里的「客户私事」类别（空＝可进共享 KB）。
 
-    复用 J-10 记忆例外词表：金钱 / 见面 / 地址 / 证件 / 家人 / 健康 六类 + 承诺约定；
-    人名靠最窄的自报姓名句式。命中即分流到该客户记忆——共享 KB 里出现「Maria 下周三
-    来马尼拉见我」会让别的客户被复述别人的私事（#201 跨客户串记忆）。
+    判定本体＝``memory_scope.personal_anchors``（O-2 C 单一来源）：J-10 六类高影响 + 承诺
+    + 自报姓名 + 生日 + 具体时间 + 具体地点 + 第一二人称属性。命中即分流到该客户记忆——
+    共享 KB 里出现「Maria 下周三来马尼拉见我」会让别的客户被复述别人的私事（#201 跨客户
+    串记忆）。判定异常 → 空（宁可进人审队列的共享侧，也不让学习器整条崩）。
     """
-    t = str(text or "")
-    if not t.strip():
-        return []
-    kinds: List[str] = []
-    if _NAME_HINT_RE.search(t):
-        kinds.append("name")
     try:
-        from src.utils.memory_review import high_impact_categories, is_commitment
-        for c in high_impact_categories(t):
-            if c in PRIVATE_KINDS and c not in kinds:
-                kinds.append(c)
-        if is_commitment(t) and "commitment" not in kinds:
-            kinds.append("commitment")
+        from src.utils.memory_scope import personal_anchors
+        kinds = personal_anchors(text)
     except Exception:
-        pass
+        return []
     return [k for k in PRIVATE_KINDS if k in kinds]
 
 # 进程内最近构造的学习器（value_report 周报段 peek 用——与 peek_goal_store 同纪律：
@@ -996,6 +986,9 @@ class DailyLearner:
                     (operator, now, mem_ref, draft_id))
             _logger.info("草稿 %s（客户私事 %s）已写入客户记忆 %s，未进 KB",
                          draft_id, ",".join(kinds), res["key"])
+            # O-2 C：去向一行（与抽取链同前缀，诊断包一把捞齐三分流）
+            _logger.info("[episodic] scope=customer reason=%s draft=%s dest=memory:%s",
+                         ",".join(kinds), draft_id, res["key"])
             return mem_ref
 
         triggers = draft.get("triggers", "")
@@ -1022,6 +1015,8 @@ class DailyLearner:
             )
 
         _logger.info("草稿 %s 已审核通过，入库为条目 %s", draft_id, entry_id)
+        _logger.info("[episodic] scope=shared reason=no_personal_anchor draft=%s dest=kb:%s",
+                     draft_id, entry_id)
         return entry_id
 
     def reject_draft(self, draft_id: str, operator: str = "") -> bool:
