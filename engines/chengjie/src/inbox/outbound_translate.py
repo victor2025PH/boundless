@@ -652,7 +652,62 @@ def _log_decision(cid: str, target: str, decided_by: str, action: str,
         (" reason=" + reason) if reason else "")
 
 
+def _note_target(item: Dict[str, Any], target: str, action: str = "") -> None:
+    """把目标语言 / 决策动作挂回 item（O-1 B：出口后处理按客户语言选标点表；只读标注）。"""
+    try:
+        if target:
+            item["_xlate_target"] = str(target)
+        if action:
+            item["_xlate_action"] = str(action)
+    except Exception:
+        pass
+
+
 async def translate_outbound_text(
+    item: Dict[str, Any],
+    *,
+    translation_service: Any,
+    store: Any = None,
+    source_lang: str = _DEFAULT_SOURCE,
+    style: str = "chat",
+    gate_only: bool = False,
+    contacts_store: Any = None,
+    cfg_root: Any = None,
+) -> Optional[str]:
+    """出站文本终态口：翻译 / 语言硬闸（``_translate_outbound_core``）→ **确定性去 AI 标点 /
+    句式后处理**（O-1 B · #253 #254 · D-O2，``outbound_humanize``）。
+
+    后处理挂在这里的理由：autosend 自动链 / 人工通过链 / deferred（关怀·唤醒·冲刺）/
+    主动触达 / 协议直发 / 收口点铆定修正——**所有 AI 出站都先过本函数**（pass_gate_only /
+    pass_same_lang / translated / 无可译内容 各返回路径统一在出口过一遍）。HOLD（None）不动。
+    **绕过**：``item["origin"] ∈ {manual, verbatim, human}``（worker 人工通过稿显式标
+    ``manual``）与 deferred 队列里 ``care:verbatim`` 原文行（``resolve_origin`` 只读反查）
+    ——用户写的破折号是用户的。每条出站落一行 ``[outbound] conv=… punct_fix=n style_fix=n``。
+    后处理任何异常 → 原样放行，绝不影响投递。
+    """
+    out = await _translate_outbound_core(
+        item, translation_service=translation_service, store=store,
+        source_lang=source_lang, style=style, gate_only=gate_only,
+        contacts_store=contacts_store, cfg_root=cfg_root)
+    if out is None or not str(out).strip():
+        return out
+    try:
+        from src.inbox.outbound_humanize import apply_outbound_humanize, resolve_origin
+        cid = str(item.get("conversation_id") or "")
+        # 纯 emoji / 标点 / 数字（无文字系统字符）没有可去 AI 化的内容——按 identity 绕过只记日志
+        origin = resolve_origin(item, store) if _TRANSLATABLE_RE.search(str(out)) else "identity"
+        return apply_outbound_humanize(
+            str(out), conversation_id=cid,
+            lang=str(item.get("_xlate_target") or item.get("lang") or ""),
+            origin=origin,
+            cfg_root=(cfg_root if isinstance(cfg_root, dict) else None),
+            stage=str(item.get("_xlate_action") or "xlate"))
+    except Exception:
+        logger.debug("[outbound_translate] 后处理异常（原样放行）", exc_info=True)
+        return out
+
+
+async def _translate_outbound_core(
     item: Dict[str, Any],
     *,
     translation_service: Any,
@@ -732,8 +787,10 @@ async def translate_outbound_text(
     # 冲突判定用「实质性 CJK」口径（cjk_substantial）：英文消息引用个别中文
     # 专名不算冲突（生产实锤误伤面，见函数 docstring）。
     cjk_conflict = text_cjk and not lang_is_cjk(target)
+    _note_target(item, target)
     if gate_only and not cjk_conflict:
         _log_decision(cid, target, decided_by, "pass_gate_only")
+        _note_target(item, target, "pass_gate_only")
         return text  # 硬闸模式：无冲突不翻译（运营已关闭常规出站翻译），免source检测
     detected = _detect_source(translation_service, text)
     if cjk_conflict:
@@ -747,6 +804,7 @@ async def translate_outbound_text(
         eff_source = detected or normalize_target(source_lang) or source_lang
         if eff_source == target:
             _log_decision(cid, target, decided_by, "pass_same_lang")
+            _note_target(item, target, "pass_same_lang")
             return text
 
     # 实施93b URL 保护：翻译前把 URL 换成引擎几乎必然原样保留的占位 token，
@@ -815,6 +873,7 @@ async def translate_outbound_text(
     if _url_map:
         translated = _restore_urls(translated, _url_map)
     _log_decision(cid, target, decided_by, "translated")
+    _note_target(item, target, "translated")
 
     if cjk_conflict and gate_only:
         # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的

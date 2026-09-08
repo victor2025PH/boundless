@@ -957,6 +957,8 @@ class AutosendWorker:
             "account_id": str(draft.get("account_id") or "default"),
             "chat_key": str(draft.get("chat_key") or ""),
             "text": str(draft.get("final_text") or draft.get("draft_text") or "").strip(),
+            # O-1 B（D-O2）：人审后的终稿是人的文字——出站去 AI 标点后处理见此标记即绕过
+            "origin": "manual",
         }
         send_cb = self._human_send_callback or self._send_callback
         if send_cb is None or not item["text"] or not item["chat_key"]:
