@@ -115,6 +115,13 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "inbox.l2_autosend.typing_indicator": {
         "type": "bool", "default": True, "hot": "worker",
     },
+    # O-4（#254，2026-09-08）引用回复开关：消费方 reply_quote_policy.parse_quote_cfg
+    # 每次投递现读 config → hot=True；default 与 reply_quote_policy.DEFAULTS["enabled"]
+    # 同值（门禁钉住，test_reply_quote_policy::test_settings_switch_whitelisted）。
+    # 少 / 中 / 多三档二期再做，一期只有开关（中档参数在代码缺省）。
+    "inbox.l2_autosend.quote_reply.enabled": {
+        "type": "bool", "default": True, "hot": True,
+    },
     "inbox.l2_autosend.voice.enabled": {
         "type": "bool", "default": False, "hot": True,
     },

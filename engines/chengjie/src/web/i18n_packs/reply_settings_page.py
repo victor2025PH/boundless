@@ -334,6 +334,9 @@ ZH = {
     "rps_markread_hint": "对端先看到「已读」、停顿几秒、再收到回复——与真人一致",
     "rps_typing_label": "延迟期间显示「正在输入」",
     "rps_typing_hint": "延迟期间挂打字气泡；不支持的平台自动跳过，不影响发送",
+    # O-4 引用回复开关（#254，1.0.78）
+    "rps_quote_label": "引用回复",
+    "rps_quote_hint": "像真人一样偶尔「回复」客户的某条消息：客户连发几条时引用所答那条、回半小时前的旧消息必引、其余约 10–15% 随机引用；两分钟内的短答不引、连引两条后歇两条、每小时最多 6 条。默认开；不支持引用的平台自动跳过，不影响发送。",
 
     # 平台能力清单（P0-caps，2026-08-03）：由 capability_matrix 现算，勿手写平台名
     "rps_caps_lbl": "平台支持",
@@ -916,6 +919,9 @@ EN = {
     "rps_markread_hint": "The peer sees “read”, a short pause, then the reply — just like a human",
     "rps_typing_label": "Show “typing…” during the delay",
     "rps_typing_hint": "Typing bubble during the delay; platforms without support skip silently — sending is unaffected",
+    # O-4 quoted reply switch (#254, 1.0.78)
+    "rps_quote_label": "Quoted replies",
+    "rps_quote_hint": "Occasionally \"reply to\" a specific customer message the way a real person does: quote the one you answer when they sent several in a row, always quote when answering a message older than half an hour, otherwise quote at random about 10–15% of the time. Never on a short answer within two minutes, two in a row at most then two without, and no more than 6 per hour. On by default; platforms without quote support skip silently and sending is unaffected.",
 
     "rps_caps_lbl": "Platform support",
     "rps_cap_ok": "supported",

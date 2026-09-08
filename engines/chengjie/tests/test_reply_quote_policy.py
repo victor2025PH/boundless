@@ -567,6 +567,50 @@ def test_autosend_bubbles_only_first_part_quotes(monkeypatch):
     assert seen[1][1] is None and seen[2][1] is None
 
 
+# ── C 设置页开关（自动回复设置 → 拟人节奏区「引用回复」，默认开）───────────
+
+_SWITCH_KEY = "inbox.l2_autosend.quote_reply.enabled"
+
+
+def test_settings_switch_whitelisted():
+    """白名单一键：bool / hot（消费方逐次投递现读 config）/ default 与规则引擎缺省同值。"""
+    from src.inbox import reply_pacing_settings as rps
+    spec = rps.FIELDS[_SWITCH_KEY]
+    assert spec["type"] == "bool" and spec["hot"] is True
+    assert spec["default"] is rqp.DEFAULTS["enabled"] is True
+    clean, errors = rps.sanitize_patch({_SWITCH_KEY: False})
+    assert not errors and clean == {_SWITCH_KEY: False}
+    assert rps.nested_patch(clean) == {"inbox": {"l2_autosend": {"quote_reply": {"enabled": False}}}}
+    assert rps.effective_values({})[_SWITCH_KEY] is True
+    assert rps.effective_values({"inbox": {"l2_autosend": {"quote_reply": {"enabled": False}}}})[_SWITCH_KEY] is False
+    live, pending = rps.split_hot_pending(clean)
+    assert live == [_SWITCH_KEY] and pending == []
+    # 预设档不碰这个开关（引用与否是能力决策，不随快/慢档翻）
+    assert all(_SWITCH_KEY not in kv for kv in rps.PRESETS.values())
+
+
+def test_settings_switch_wired_in_template_and_i18n():
+    import pathlib
+    tpl = pathlib.Path(__file__).resolve().parents[1] / "src" / "web" / "templates" / "reply_settings.html"
+    src = tpl.read_text(encoding="utf-8")
+    assert 'id="rps-quote-row"' in src and 'id="rps-quote"' in src
+    assert 'data-hot-chip="inbox.l2_autosend.quote_reply.enabled"' in src
+    assert '{path: "inbox.l2_autosend.quote_reply.enabled", kind: "check", el: "rps-quote", feat: "quote"}' in src
+    assert src.count('def.feat === "quote"') == 2                  # collect + fill 两处特性门
+    assert 'rpsQuoteEnabled = !!((d.meta || {})["inbox.l2_autosend.quote_reply.enabled"])' in src
+    assert '"inbox.l2_autosend.quote_reply.enabled": {{ (i18n or {}).get(\'rps_quote_label\'' in src
+    # 开关在拟人节奏卡里（rps-sec-pace 与下一张卡之间）
+    pace = src.index('id="rps-sec-pace"')
+    assert pace < src.index('id="rps-quote-row"') < src.index('id="rps-sec-bub"')
+    from src.web.i18n_packs import reply_settings_page as pack
+    for k in ("rps_quote_label", "rps_quote_hint"):
+        assert k in pack.ZH and k in pack.EN
+    # hint 不手写平台名（能力清单会烂，与 typing/markread 同纪律）
+    for lang in (pack.ZH, pack.EN):
+        low = lang["rps_quote_hint"].lower()
+        assert not any(p in low for p in ("telegram", "whatsapp", "line", "messenger"))
+
+
 # ── 观测暴露面（I-4 续）：autosend-status.quote_reply / metrics.persona_region ──
 
 def _obs_client(config: dict):

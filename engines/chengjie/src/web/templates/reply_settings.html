@@ -822,6 +822,15 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_typing_hint', "延迟期间挂打字气泡；不支持的平台自动跳过，不影响发送") }}</span>
       <span class="rps-row-hint rps-caps" id="rps-caps-typing" style="display:none"></span>
     </div>
+    <!-- O-4 引用回复（#254，2026-09-08）：规则引擎在 reply_quote_policy（确定性、不走 LLM）；
+         一期只有开关（中档参数在代码缺省，少/中/多二期）。旧后端白名单未装载该键 → 整行隐藏
+         （feat:"quote" 同款特性探测，防假脏/保存被拒）。 -->
+    <div class="rps-row" id="rps-quote-row" style="display:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_quote_label', "引用回复") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.quote_reply.enabled"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-quote" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_quote_hint', "像真人一样偶尔「回复」客户的某条消息：客户连发几条时引用所答那条、回半小时前的旧消息必引、其余约 10–15% 随机引用；两分钟内的短答不引、连引两条后歇两条、每小时最多 6 条。默认开；不支持引用的平台自动跳过，不影响发送。") }}</span>
+    </div>
     <div class="rps-preview">
       <div class="rps-preview-head">
         <div class="rps-preview-title">{{ (i18n or {}).get('rps_pace_preview', "客户视角预览") }}</div>
@@ -1377,6 +1386,7 @@ var RPS_I18N = {
     "inbox.l2_autosend.deliver_delay.persona_overrides": {{ (i18n or {}).get('rps_po_title', "按人设覆写节奏")|tojson }},
     "inbox.l2_autosend.mark_read_before_reply": {{ (i18n or {}).get('rps_markread_label', "回复前先标已读")|tojson }},
     "inbox.l2_autosend.typing_indicator": {{ (i18n or {}).get('rps_typing_label', "延迟期间显示「正在输入」")|tojson }},
+    "inbox.l2_autosend.quote_reply.enabled": {{ (i18n or {}).get('rps_quote_label', "引用回复")|tojson }},
     "inbox.l2_autosend.voice.enabled": {{ (i18n or {}).get('rps_voice_enabled', "启用语音回复")|tojson }},
     "inbox.l2_autosend.voice.trigger": {{ (i18n or {}).get('rps_voice_trigger', "触发方式")|tojson }},
     "inbox.l2_autosend.holding.enabled": {{ (i18n or {}).get('rps_holding_label', "待人审消息先发一句缓冲语")|tojson }},
@@ -1420,6 +1430,7 @@ var rpsBubNlEnabled = false;  // 「仅显式换行才拆」键是否已装载�
 var rpsGuardAdvEnabled = false; // 高级参数键是否已装载（P1；未装载时折叠区回落只读行）
 var rpsGuardBusy = false;     // 豁免/撤销请求在途互斥（防连点双写）
 var rpsSgEnabled = false;     // 后端是否已装载发送额度闸门白名单（2026-08-29；旧进程卡可见但表单 pending）
+var rpsQuoteEnabled = false;  // 后端是否已装载引用回复开关白名单（O-4 #254；旧进程隐藏该行）
 
 /* ── 字段注册表（P0-R，2026-08-03）：控件绑定的单一事实源 ──
    收集 / 回填 / 预设应用 / 改动明细全部由此驱动。此前同一份「字段→控件」映射在
@@ -1751,7 +1762,9 @@ RPS_FIELD_DEFS.push(
   {path: "inbox.reply_style.bubbles.max_gap_sec", kind: "float", el: "rps-bub-maxgap", feat: "bub"},
   {path: "inbox.reply_style.bubbles.total_budget_sec", kind: "float", el: "rps-bub-budget", feat: "bub"},
   // #210 / D-L3（1.0.75）：独立探测——bub 已装载但本键未装载的错位期不收集/不回填
-  {path: "inbox.reply_style.bubbles.explicit_newline_only", kind: "check", el: "rps-bub-nlonly", feat: "bub_nl"}
+  {path: "inbox.reply_style.bubbles.explicit_newline_only", kind: "check", el: "rps-bub-nlonly", feat: "bub_nl"},
+  // O-4 引用回复开关（#254，1.0.78）：feat:"quote" 同款特性探测
+  {path: "inbox.l2_autosend.quote_reply.enabled", kind: "check", el: "rps-quote", feat: "quote"}
 );
 RPS_DEFS_BY_PATH = {};
 RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
@@ -1766,6 +1779,7 @@ function rpsCollect(){
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }       // 旧后端：分条字段不参与
     else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }  // 错位期：仅显式换行键不参与
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }   // 旧后端：发送闸门字段不参与
+    else if (def.feat === "quote"){ if (!rpsQuoteEnabled) return; }   // 旧后端：引用开关不参与
     else if (def.kind === "virtual" && !rpsPlatEnabled) return; // 旧后端：平台字段不参与
     out[def.path] = rpsFieldGet(def);
   });
@@ -1782,6 +1796,7 @@ function rpsFill(values){
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }
     else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }
+    else if (def.feat === "quote"){ if (!rpsQuoteEnabled) return; }
     else if (def.kind === "virtual" && !rpsPlatEnabled) return;
     rpsFieldSet(def, values[def.path]);
   });
@@ -3748,6 +3763,10 @@ async function rpsLoad(){
     rpsBubNlEnabled = rpsBubEnabled && !!((d.meta || {})["inbox.reply_style.bubbles.explicit_newline_only"]);
     var bubNlRow = document.getElementById('rps-bub-nl-row');
     if (bubNlRow) bubNlRow.style.display = rpsBubNlEnabled ? '' : 'none';
+    // 引用回复开关（O-4 #254，1.0.78）：键级独立探测，旧进程隐藏该行
+    rpsQuoteEnabled = !!((d.meta || {})["inbox.l2_autosend.quote_reply.enabled"]);
+    var quoteRow = document.getElementById('rps-quote-row');
+    if (quoteRow) quoteRow.style.display = rpsQuoteEnabled ? '' : 'none';
     // 新账号接管确认（P0 2026-08-30）：独立端点异步装载，缺席/关闭整卡隐藏
     rpsAmLoad();
     rpsFill(rpsBaseline);
