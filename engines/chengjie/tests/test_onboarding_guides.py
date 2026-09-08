@@ -8,8 +8,7 @@ from src.assistant import onboarding_guides as og
 
 
 def test_guides_data_integrity():
-    # 实施97：微信客服 / 个人微信 PC 副驾两份教程加入（工作台引导页 + HelpKB 同源）
-    assert set(og.SLUGS) == {"douyin", "tiktok", "payment-cny", "wechat_kf", "wechat_pc"}
+    assert set(og.SLUGS) == {"douyin", "tiktok", "payment-cny"}
     for slug in og.SLUGS:
         for lang in ("zh", "en"):
             g = og.guide_for(slug, lang)
@@ -21,10 +20,7 @@ def test_guides_data_integrity():
             for l in g["links"]:
                 assert l["url"].startswith("https://") and l["label"]
             for e in g["errors"]:
-                # 抖音是 7–8 位数字错误码；企微是 5–6 位（可多码并列）；副驾教程按「症状」列排障——都要短、非空
-                assert e["code"] and len(e["code"]) <= 24 and e["meaning"] and e["fix"], (slug, e)
-                if slug in ("douyin", "tiktok"):
-                    assert re.fullmatch(r"\d{7,8}", e["code"]), e["code"]
+                assert re.fullmatch(r"\d{7,8}", e["code"]) and e["meaning"] and e["fix"]
     assert og.guide_for("nope") is None
     # 抖音教程必须覆盖资质路径的关键节点与硬规则（这是老板要办的事）
     dy = og.guide_for("douyin", "zh")
@@ -41,8 +37,7 @@ def test_guides_data_integrity():
 
 def test_howto_tuples_feed_xiaozhi():
     tuples = og.howto_tuples()
-    assert [t[0] for t in tuples] == ["onboarding-douyin", "onboarding-tiktok", "onboarding-payment-cny",
-                                      "onboarding-wechat_kf", "onboarding-wechat_pc"]
+    assert [t[0] for t in tuples] == ["onboarding-douyin", "onboarding-tiktok", "onboarding-payment-cny"]
     for slug, title, title_en, ans, ans_en, kw, path in tuples:
         assert path == f"/workspace/onboarding/{slug.split('-', 1)[1]}"
         assert path in ans and path in ans_en
