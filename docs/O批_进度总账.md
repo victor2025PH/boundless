@@ -14,7 +14,7 @@
 | 指令 | 主题 | 工单 | 预算 | 状态 | 已完成 | 剩余 | 落点表 | 已花 |
 |---|---|---|---|---|---|---|---|---|
 | **O-1** | 拟人与反识破 | #252 #253 #254 #255 | $200 | 未开工 | | A stop_contact 硬停 + risk=high 不直发 / B 去 AI 标点 + 句式 / C 陪伴系统提示词 + 客服腔守卫 / D 拟人节奏默认档 / E 账号名提醒 + 出站落日志 + 盲评门禁 | `发版对账_v1.0.78_O1.md` | |
-| **O-2** | 记忆抽取基线 | WYNN22（O-5 改立新单）| $100 | 未开工 | | A intents 进基线 + 启动 WARNING / B origin=manual 同抽 / C 私事只进客户记忆 / D 记忆页新增计数 | `发版对账_v1.0.78_O2.md` | |
+| **O-2** | 记忆抽取基线 | WYNN22（现挂 #201，O-5 改立新单）| $100 | **A 已收工，B/C/D 进行中** | **A 已收工 commit `ad5c7dbd`（#201），可并入 1.0.77**：`memory.extract.{enabled,use_llm,intents}` 进 feature_registry A 类 + `config.desktop.min.yaml` 首带 memory.extract 块 + 启动日志四态说真话（白名单空即 WARNING 不写「已启用」）；87 passed（3 预存红：bubbles 遗留）+ episodic 160 passed | B origin=manual 同抽 / C 私事只进客户记忆 / D 记忆页新增计数 | `发版对账_v1.0.78_O2.md`（§〇 基线键清单核对步骤 + `memory.consolidation.enabled` 缺省关待拍板候选） | ~$25 |
 | **O-3** | 目标摸底主动腿 | HM7XBA（#236 族） | $150 | 未开工 | | A auto=3 sent_24h=0 根因 / B 第 1 天起每天 ≥1 摸底问句 + 活跃自适应 / C 注入变硬 target 槽 / D 卡片三计数 / E 「现在就问一个」 | `发版对账_v1.0.78_O3.md` | |
 | **O-4** | 引用回复 MVP | 47KNBV 3HNCJ7 | $120 | 未开工 | | A 规则引擎（旧消息 >30min 必引 / 随机基线 / 禁引约束）/ B TG reply_to + WA quoted 接线 / C `[quote]` 日志 + 开关 / D 二期三期评估 | `发版对账_v1.0.78_O4.md` | |
 | **O-5** | 值守（不与 N-5 重叠） | 归位 + 答复 | $60 | 未开工 | | A 回 3HNCJ7 排期 / B WYNN22 改立 P0 单、HM7XBA 改挂 #236 族、#253→#252 / C 回访口径汇总 | `发版对账_v1.0.78_O5.md` | |
