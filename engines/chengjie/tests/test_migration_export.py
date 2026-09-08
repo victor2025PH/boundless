@@ -451,8 +451,9 @@ def test_kit_integrity_hashes_verify(store, media_root, tmp_path):
             assert actual == digest, f"{name} 校验和不符"
     # manifest 自身不进 integrity（自指无意义）
     assert "manifest.json" not in man["integrity"]
+    # P-2 E（#259 · D-P4）：blocklist.jsonl 账号级停联名单成员随包走
     assert {"contacts.jsonl", "contacts.csv", "conversations.jsonl",
-            "media_index.jsonl", "README.txt"} == set(man["integrity"])
+            "media_index.jsonl", "blocklist.jsonl", "README.txt"} == set(man["integrity"])
 
 
 def test_media_index_present_even_when_not_packed(store, media_root, tmp_path):
@@ -555,7 +556,7 @@ def test_kit_on_empty_account_is_valid(store, media_root, tmp_path):
         assert _jsonl_rows(zf, "media_index.jsonl") == []
     assert man["counts"] == {"conversations": 0, "messages": 0, "contacts": 0,
                              "media_files": 0, "media_bytes": 0,
-                             "media_missing": 0}
+                             "media_missing": 0, "blocklist": 0}
     assert man["reachability"]["total"] == 0
     assert kit.reconciled is True
 

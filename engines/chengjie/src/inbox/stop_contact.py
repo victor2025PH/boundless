@@ -328,12 +328,39 @@ def freeze_conversation(
         except Exception:
             logger.debug("[stop-contact] 通知发布失败", exc_info=True)
 
+    # ⑥ P-2 E（D-P4）：账号级停联名单——会话级标记随重装 / 删会话即丢，名单只增不删、
+    #    随账号迁移包导出导入、登录同步后扫描复用。只记 stop_contact（自伤不是「别联系我」）。
+    out["blocklisted"] = False
+    if reason == "stop_contact":
+        try:
+            from src.inbox.account_blocklist import get_blocklist
+            _plat, _acct, _peer = _split_cid(cid, platform, account_id, chat_key)
+            if _plat and _acct and _peer:
+                get_blocklist(store).add(
+                    _plat, _acct, _peer, reason=reason,
+                    hit_text="|".join(hits_l), ts=ts, source="freeze")
+                out["blocklisted"] = True
+        except Exception:
+            logger.debug("[stop-contact] 名单写入失败", exc_info=True)
+
     log_action(
         "frozen" if not out["already_frozen"] else "frozen_again",
         conversation_id=cid, reason=reason, hits=hits_l,
         extra=f"prev_mode={out['prev_mode'] or '-'} mode_set={out['mode_set']} "
-              f"tagged={out['tagged']} labelled={out['labelled']}")
+              f"tagged={out['tagged']} labelled={out['labelled']} "
+              f"blocklisted={out['blocklisted']}")
     return out
+
+
+def _split_cid(cid: str, platform: str = "", account_id: str = "",
+               chat_key: str = "") -> tuple:
+    """(platform, account_id, peer)：显式参数优先，缺的从 ``platform:account:peer`` 解。"""
+    plat, acct, peer = str(platform or ""), str(account_id or ""), str(chat_key or "")
+    if (not plat or not acct or not peer) and cid:
+        parts = str(cid).split(":", 2)
+        if len(parts) == 3:
+            plat, acct, peer = plat or parts[0], acct or parts[1], peer or parts[2]
+    return plat.lower(), acct, peer
 
 
 def unfreeze_conversation(
@@ -387,8 +414,114 @@ def unfreeze_conversation(
                 out["mode_restored"] = target
     except Exception:
         logger.debug("[stop-contact] 档位还原失败", exc_info=True)
+    # P-2 E：名单行写 unfrozen_ts（**不删行**）——人工解冻是「解冻」标记，历史可查
+    out["unfrozen_listed"] = False
+    try:
+        from src.inbox.account_blocklist import get_blocklist
+        _plat, _acct, _peer = _split_cid(cid)
+        if _plat and _acct and _peer:
+            out["unfrozen_listed"] = bool(get_blocklist(store).mark_unfrozen(
+                _plat, _acct, _peer, by=actor))
+    except Exception:
+        logger.debug("[stop-contact] 名单解冻标记失败", exc_info=True)
     log_action("unfrozen", conversation_id=cid, reason=out["was"],
-               extra=f"by={actor} mode_restored={out['mode_restored'] or '-'}")
+               extra=f"by={actor} mode_restored={out['mode_restored'] or '-'} "
+                     f"listed={out['unfrozen_listed']}")
+    return out
+
+
+def stop_contact_hits(text: str) -> List[str]:
+    """文本是否命中停联词表（复用 O-1 A 双语词表：``quick_analyze`` → risk_reasons 含
+    stop_contact）。返回命中词（空 = 未命中）。绝不抛。"""
+    t = str(text or "").strip()
+    if not t:
+        return []
+    try:
+        from src.ai.chat_assistant_service import quick_analyze
+        a = quick_analyze(t) or {}
+        if "stop_contact" in list(a.get("risk_reasons") or []):
+            hits = [str(h) for h in list(a.get("risk_hits") or []) if str(h)]
+            return hits or [t[:40]]
+    except Exception:
+        logger.debug("[stop-contact] 词表判定异常", exc_info=True)
+    return []
+
+
+def login_scan_backfill(
+    store: Any, platform: str, account_id: str,
+    items: Iterable[Dict[str, Any]], *, now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """P-2 E（D-P4）：登录同步完成后对回填历史跑一遍停联扫描 + 名单复冻。
+
+    ``items``：本次登录回填的**客户入站**行 ``{conversation_id, chat_key, text, ts, name}``
+    （dormant_review 的 settle 收集）。两路：① 文本命中双语词表 → 冻结 + 标签「客户要求停联」
+    + 进名单；② 名单里未解冻的 peer 其会话在场但未冻结（重装丢了会话标记）→ 重新冻结。
+    日志一行 ``[stop-contact] login_scan account=… hits=N relisted=M``。绝不抛。
+    """
+    plat = str(platform or "").lower()
+    acct = str(account_id or "")
+    out: Dict[str, Any] = {"platform": plat, "account_id": acct, "scanned": 0,
+                           "hits": 0, "relisted": 0, "frozen": []}
+    if store is None or not plat or not acct:
+        return out
+    try:
+        from src.inbox.account_blocklist import get_blocklist
+        bl = get_blocklist(store)
+    except Exception:
+        bl = None
+    seen_peers: Dict[str, str] = {}
+    for it in items or []:
+        try:
+            cid = str(it.get("conversation_id") or "")
+            peer = str(it.get("chat_key") or "")
+            if not peer and cid:
+                peer = _split_cid(cid)[2]
+            if not cid:
+                from src.inbox.normalizer import conv_id as _conv_id
+                cid = _conv_id(plat, acct, peer)
+            seen_peers.setdefault(peer, cid)
+            out["scanned"] += 1
+            hits = stop_contact_hits(str(it.get("text") or ""))
+            if not hits:
+                continue
+            out["hits"] += 1
+            if frozen_reason(store, cid) != "stop_contact":
+                freeze_conversation(
+                    store, platform=plat, account_id=acct, chat_key=peer,
+                    conversation_id=cid, reason="stop_contact", hits=hits,
+                    chat_name=str(it.get("name") or ""), now=now)
+                out["frozen"].append(cid)
+            elif bl is not None:
+                bl.add(plat, acct, peer, reason="stop_contact",
+                       hit_text="|".join(hits), ts=now, source="login_scan")
+        except Exception:
+            logger.debug("[stop-contact] login_scan 单条失败", exc_info=True)
+    # ② 名单复冻：名单在场（未解冻）但会话没冻结标记
+    if bl is not None:
+        try:
+            for peer in bl.blocked_peers(plat, acct):
+                cid = seen_peers.get(peer)
+                if not cid:
+                    from src.inbox.normalizer import conv_id as _conv_id
+                    cid = _conv_id(plat, acct, peer)
+                    try:
+                        if hasattr(store, "get_conversation") and not store.get_conversation(cid):
+                            continue   # 会话不在本机 → 无需冻结（下次它来消息时 opener 谓词仍挡）
+                    except Exception:
+                        continue
+                if frozen_reason(store, cid) == "stop_contact":
+                    continue
+                freeze_conversation(
+                    store, platform=plat, account_id=acct, chat_key=peer,
+                    conversation_id=cid, reason="stop_contact",
+                    hits=["blocklist"], now=now)
+                out["relisted"] += 1
+                if cid not in out["frozen"]:
+                    out["frozen"].append(cid)
+        except Exception:
+            logger.debug("[stop-contact] 名单复冻失败", exc_info=True)
+    logger.info("[stop-contact] login_scan account=%s:%s scanned=%d hits=%d relisted=%d",
+                plat, acct, out["scanned"], out["hits"], out["relisted"])
     return out
 
 
@@ -397,4 +530,5 @@ __all__ = [
     "farewell_text", "farewell_languages", "is_farewell_draft", "is_hard_stop_pass_draft",
     "frozen_reason", "freeze_conversation", "unfreeze_conversation",
     "is_freeze_mode_source", "freeze_prev_mode", "log_action",
+    "stop_contact_hits", "login_scan_backfill",
 ]

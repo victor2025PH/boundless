@@ -935,6 +935,22 @@ def build_migration_kit(
                 w.write(_jsonl(entry))
             integrity[_MEMBER_MEDIA_INDEX] = w.close()
 
+            # 4b) blocklist.jsonl（P-2 E · D-P4）：账号级停联名单随包走——封号换新号 /
+            #     重装后 import_from_kit 即恢复「谁要求过别再联系」（只增不删，含解冻标记）。
+            #     名单库不可用 → 成员照写（空），读方按字段名读、零行零成本。
+            try:
+                from src.inbox.account_blocklist import KIT_MEMBER, get_blocklist
+                _bl_rows = get_blocklist(store).export_rows(plat, acct)
+            except Exception:
+                logger.debug("[migration_export] 停联名单导出失败（成员留空）",
+                             exc_info=True)
+                KIT_MEMBER, _bl_rows = "blocklist.jsonl", []
+            w = _HashingWriter(zf, KIT_MEMBER)
+            for row in _bl_rows:
+                w.write(_jsonl(row))
+            integrity[KIT_MEMBER] = w.close()
+            counts["blocklist"] = len(_bl_rows)
+
             # 5) README.txt
             w = _HashingWriter(zf, _MEMBER_README)
             w.write(readme_text(plat, acct, media_included=include_media))

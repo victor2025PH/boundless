@@ -1029,6 +1029,17 @@ class DraftService:
                         extra="stage=inbound_no_draft")
             return None
 
+        # P-2 B（#259 · D-P1）入站年龄闸：now - inbound_ts > inbox.auto_draft.max_inbound_age_hours
+        # （默认 72h）→ 不起草（全自动 = 不发；半自动 = 不出草稿），记 `[draft] skip=stale_inbound`
+        # 并把会话写进「沉寂会话待你决定」清单——登录 / 切档 / 拉历史把老会话的旧消息当新入站
+        # 时（H3BAJD / ZH3ZQ5）第二道闸；清单里「让 AI 起草预览」传 conv.dormant_review=True 旁路。
+        try:
+            from src.inbox.dormant_review import check_stale_inbound as _stale_check
+            if _stale_check(self._store, conv, t) is not None:
+                return None
+        except Exception:
+            logger.debug("[draft] 年龄闸判定异常（放行）", exc_info=True)
+
         try:
             # 幂等保护：同一会话已有 pending/enriching 草稿则跳过——但若 peer_text
             # 与本次入站不同，说明是陈旧草稿（客户又发了新消息），作废后重生成。
