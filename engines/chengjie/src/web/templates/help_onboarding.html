@@ -57,14 +57,28 @@
 .obg-light-s{color:var(--tk-text-muted);font-size:.8rem;margin-top:.15rem;line-height:1.5}
 .obg-light-r{margin-left:auto;text-align:right;color:var(--tk-text-muted);font-size:.74rem;white-space:nowrap}
 .obg-refs{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
+/* 有状态的步骤（实施99 P1-2）：状态圆五色 + 当前步描边 + 勾选动作行 */
+.obg-num.st-todo{background:var(--tk-surface-2);color:var(--tk-text-muted);border:1px solid var(--tk-border)}
+.obg-num.st-doing{background:var(--tk-brand);color:#fff}
+.obg-num.st-done{background:var(--tk-emerald);color:#fff}
+.obg-num.st-submitted{background:var(--tk-amber);color:#fff}
+.obg-num.st-blocked{background:var(--tk-danger);color:#fff}
+.obg-step.cur{outline:2px solid var(--tk-brand);outline-offset:2px}
+.obg-acts{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.55rem;padding-top:.5rem;border-top:1px dashed var(--tk-border)}
+.obg-acts form{margin:0;display:flex;gap:.35rem;align-items:center}
+.obg-acts input[type=number]{width:56px;border:1px solid var(--tk-border);background:var(--tk-surface-2);color:var(--tk-text);border-radius:8px;padding:.25rem .4rem;font-size:.78rem}
+.obg-btn.sm{font-size:.74rem;padding:.3rem .7rem}
+.obg-btn.ghost{background:transparent}
+.obg-back{display:inline-block;font-size:.78rem;color:var(--tk-brand);text-decoration:none;margin-bottom:.6rem}
 @media (max-width:640px){.obg-form{grid-template-columns:1fr}.obg-light{flex-wrap:wrap}.obg-light-r{margin-left:0;text-align:left}}
 </style>
 {% endblock %}
 {% block content %}
 <div class="obg-wrap">
+  <a class="obg-back" href="/workspace/channels/telegram">← {{ (i18n or {}).get('obg.back', '返回渠道页') }}</a>
   <nav class="obg-tabs" aria-label="guides">
     {% for s in slugs %}
-    <a class="obg-tab {% if s == guide.slug %}on{% endif %}" href="/help/onboarding/{{ s }}">
+    <a class="obg-tab {% if s == guide.slug %}on{% endif %}" href="/workspace/onboarding/{{ s }}">
       {% if s == 'douyin' %}{{ (i18n or {}).get('obg.tab.douyin', '抖音企业版') }}
       {% elif s == 'tiktok' %}{{ (i18n or {}).get('obg.tab.tiktok', 'TikTok') }}
       {% elif s == 'wechat_kf' %}{{ (i18n or {}).get('obg.tab.wechat_kf', '微信客服') }}
@@ -98,6 +112,7 @@
     {% if flash.error == 'bad_state' %}— {{ (i18n or {}).get('obg.flash.bad_state', '授权链接已过期或被改动（10 分钟内有效），请重新点「扫码授权」。') }}
     {% elif flash.error == 'missing_region' %}— {{ (i18n or {}).get('obg.tt.flash_region', '注册地必填（ISO 3166-1 两位字母，如 SG、MY、MX）。') }}
     {% elif flash.error == 'missing_business_id' %}— {{ (i18n or {}).get('obg.tt.flash_bid', 'business_id 必填。') }}
+    {% elif flash.error == 'step_auto' %}— {{ (i18n or {}).get('obg.pg.err_auto', '这一步由系统自动检测，不能手动勾选。') }}
     {% elif flash.error == 'ungranted_scopes' %}— {{ (i18n or {}).get('obg.tt.flash_scopes', '授权时没有勾全私信权限（读取 / 发送 / 管理），请重新授权并全部允许。') }}
     {% elif flash.error.startswith('webhook') %}— {{ (i18n or {}).get('obg.tt.flash_webhook_err', 'Webhook 注册被 TikTok 拒绝：检查应用是否已获 Business Messaging 访问权限、回调地址是否为公网 HTTPS。') }}
     {% elif flash.error.startswith('missing') %}— {{ (i18n or {}).get('obg.flash.missing', '请先填 client_key 与 client_secret。') }}
@@ -128,12 +143,15 @@
         {% elif status.hint == 'await_first_dm' %}{{ (i18n or {}).get('obg.st.h_first', '一切就位，等第一条私信进来（用另一个账号发一条试试）。') }}
         {% elif status.hint == 'webhook_silent' %}{{ (i18n or {}).get('obg.st.h_silent', '超过 24 小时没有收到任何 webhook 事件，检查回调地址是否仍然可达。') }}
         {% elif status.hint == 'reauth_soon' %}{{ (i18n or {}).get('obg.st.h_soon', '有账号令牌 7 天内到期，提前重新授权。') }}
-        {% elif status.hint == 'connected' %}{{ (i18n or {}).get('obg.st.h_connected', '收到过事件，链路健康。') }}{% endif %}
+        {% elif status.hint == 'connected' %}{{ (i18n or {}).get('obg.st.h_connected', '收到过事件，链路健康。') }}
+        {% elif status.hint == 'review_overdue' %}{{ (i18n or {}).get('obg.st.h_overdue', '有步骤的预计出结果日已过，去平台控制台看看审核状态。') }}
+        {% elif status.hint == 'step_blocked' %}{{ (i18n or {}).get('obg.st.h_blocked', '有步骤被标记为受阻——解决后点「重置」或「标记完成」。') }}{% endif %}
       </div>
     </div>
     <div class="obg-light-r">
       {% if status.checks.public_https is false %}<div>{{ (i18n or {}).get('obg.st.not_https', '对外地址不是公网 HTTPS') }}</div>{% endif %}
       {% if status.checks.accounts_total is defined %}<div>{{ (i18n or {}).get('obg.st.accounts', '账号') }} {{ status.checks.accounts_authorized }}/{{ status.checks.accounts_total }}</div>{% endif %}
+      {% if status.progress and status.progress.total %}<div>{{ (i18n or {}).get('obg.pg.done', '已完成 {d} / {t}').replace('{d}', status.progress.done|string).replace('{t}', status.progress.total|string) }}</div>{% endif %}
     </div>
   </div>
   {% endif %}
@@ -143,12 +161,21 @@
   <ul class="obg-pre">{% for p in guide.prereq %}<li>{{ p }}</li>{% endfor %}</ul>
   {% endif %}
 
-  <div class="obg-h">{{ (i18n or {}).get('obg.steps', '步骤') }}</div>
+  <div class="obg-h">{{ (i18n or {}).get('obg.steps', '步骤') }}{% if status and status.progress and status.progress.total %} <span class="obg-note" style="margin:0;font-weight:400">· {{ (i18n or {}).get('obg.pg.done', '已完成 {d} / {t}').replace('{d}', status.progress.done|string).replace('{t}', status.progress.total|string) }}</span>{% endif %}</div>
   {% for s in guide.steps %}
-  <div class="obg-step">
-    <div class="obg-num">{{ loop.index }}</div>
+  {% set _ps = (status.steps[loop.index0] if (status and status.steps and status.steps|length >= loop.index) else none) %}
+  {% set _state = (_ps.state if _ps else 'todo') %}
+  <div class="obg-step{% if status and status.step == loop.index %} cur{% endif %}" id="obg-step-{{ loop.index }}" data-state="{{ _state }}">
+    <div class="obg-num st-{{ _state }}">{% if _state == 'done' %}✓{% elif _state == 'blocked' %}!{% elif _state == 'submitted' %}⏳{% else %}{{ loop.index }}{% endif %}</div>
     <div class="obg-body">
-      <div class="obg-st">{{ s.title }}</div>
+      <div class="obg-st">{{ s.title }}
+        {% if _ps and _ps.auto %}<span class="obg-pill">{{ (i18n or {}).get('obg.pg.auto', '自动检测') }}</span>
+        {% elif _state == 'submitted' %}<span class="obg-pill {% if _ps.overdue %}bad{% else %}warn{% endif %}">{{ (i18n or {}).get('obg.pg.submitted', '审核中') }}{% if _ps.due_date %} · {{ (i18n or {}).get('obg.pg.due', '预计 {d}').replace('{d}', _ps.due_date) }}{% endif %}</span>
+        {% elif _state == 'done' %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.pg.done_pill', '已完成') }}</span>
+        {% elif _state == 'blocked' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.pg.blocked', '受阻') }}</span>{% endif %}
+      </div>
+      {% if _ps and _ps.overdue %}<div class="obg-note" style="margin:.1rem 0 .3rem;color:var(--tk-danger-ink)">{{ (i18n or {}).get('obg.pg.overdue', '预计出结果的日子已过——去平台控制台看看审核状态，通过了就标记完成。') }}</div>{% endif %}
+      {% if _ps and _ps.note and not _ps.auto %}<div class="obg-note" style="margin:.1rem 0 .3rem">{{ _ps.note }}</div>{% endif %}
       <div class="obg-sd">{{ s.detail }}</div>
       {% if guide.slug == 'douyin' and loop.index == 5 and webhook_url %}
       <div class="obg-copy">
@@ -278,6 +305,25 @@
       {% else %}
       <a class="obg-link" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.link_label }} ↗</a>
       {% endif %}
+      {% endif %}
+      {% if status and status.total_steps and _ps and not _ps.auto %}
+      <div class="obg-acts">
+        {% if _state != 'done' %}
+        <form method="post" action="/workspace/onboarding/{{ guide.slug }}/step/{{ loop.index }}"><input type="hidden" name="state" value="done"><button class="obg-btn sm" type="submit">{{ (i18n or {}).get('obg.pg.mark_done', '标记完成') }}</button></form>
+        {% endif %}
+        {% if _state not in ('done', 'submitted') %}
+        <form method="post" action="/workspace/onboarding/{{ guide.slug }}/step/{{ loop.index }}" class="obg-acts-sub"><input type="hidden" name="state" value="submitted">
+          <button class="obg-btn sm" type="submit">{{ (i18n or {}).get('obg.pg.mark_submitted', '已提交审核，预计') }}</button>
+          <input name="due_days" type="number" min="0" max="90" value="5" aria-label="days"> <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.pg.days', '天出结果') }}</span>
+        </form>
+        {% endif %}
+        {% if _state not in ('done', 'blocked') %}
+        <form method="post" action="/workspace/onboarding/{{ guide.slug }}/step/{{ loop.index }}"><input type="hidden" name="state" value="blocked"><button class="obg-btn sm ghost" type="submit">{{ (i18n or {}).get('obg.pg.mark_blocked', '受阻') }}</button></form>
+        {% endif %}
+        {% if _state != 'todo' %}
+        <form method="post" action="/workspace/onboarding/{{ guide.slug }}/step/{{ loop.index }}"><input type="hidden" name="state" value="todo"><button class="obg-btn sm ghost" type="submit">{{ (i18n or {}).get('obg.pg.reset', '重置') }}</button></form>
+        {% endif %}
+      </div>
       {% endif %}
     </div>
   </div>

@@ -1950,6 +1950,7 @@ _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 /webhook/tiktok/oauth/callback	GET
 /workspace/onboarding/tiktok/webhook	POST
 /api/onboarding/{slug}/status	GET
+/workspace/onboarding/{slug}/step/{n}	POST
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
 

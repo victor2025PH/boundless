@@ -176,6 +176,16 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "image sending are available; unsupported regions are flagged red with alternatives (Messaging Ads / Shop CS / WhatsApp). "
              "The webhook route and official channel load immediately after saving (restart only if the status light still asks for it).",
              "接入向导", "Setup wizard", "/workspace/setup"),
+            ("验收：用另一个 TikTok 账号发一条私信",
+             "Verify: send a DM from another TikTok account",
+             "用任意个人 TikTok 账号给已授权的 Business Account 发「hi」→ 30 秒内收件箱出现 TikTok 会话并自动回复；composer 上方显示 48 小时"
+             "回复窗（最多 10 条）；本页状态灯转绿并开始统计进线来源（ref）。没有出现：先看状态灯提示（webhook 是否注册、令牌是否有效、"
+             "账号注册地是否可用）。",
+             "Send “hi” from any personal TikTok account to the authorised Business Account → within 30 seconds the conversation appears "
+             "in the inbox and is auto-replied; the composer shows the 48-hour window (max 10 messages); the status light turns green "
+             "and entry sources (ref) start counting. Nothing arrives? Check the status light hints first (webhook registered, token "
+             "valid, account region supported).",
+             "聊天工作台", "Chat workspace", "/workspace"),
         ],
         "rules": [
             ("私信 API 不可用地区：欧洲经济区、瑞士、英国（美国多数服务商标不可用）",

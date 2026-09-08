@@ -211,6 +211,29 @@ def _hot_mount(request: Request, platform: str) -> Dict[str, bool]:
     return out
 
 
+async def _hot_mount_and_sync(request: Request, platform: str) -> Dict[str, bool]:
+    """热挂载后立即让编排器同步一次注册表（账号不用等下一轮监督循环）；编排器未运行则跳过。"""
+    out = _hot_mount(request, platform)
+    try:
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is not None:
+            await orch.sync()
+            out["synced"] = True
+    except Exception:
+        logger.debug("[onboarding] 热挂载后编排器 sync 失败", exc_info=True)
+    return out
+
+
+def _mark_auto(slug: str, step_no: int, note: str = "") -> None:
+    """处理器在事实发生时写自动进度（如 webhook 注册成功 → 第 2 步 done）。失败只记日志。"""
+    try:
+        from src.web.onboarding_progress import get_progress
+        get_progress().set(slug, step_no, state="done", source="auto", note=note)
+    except Exception:
+        logger.debug("[onboarding] 自动进度写入失败 %s/%s", slug, step_no, exc_info=True)
+
+
 def _public_is_https(base: str) -> bool:
     if not base.startswith("https://"):
         return False
@@ -246,7 +269,7 @@ def onboarding_status(request: Request, slug: str) -> Dict[str, Any]:
         })
         checks["restart_required"] = bool(checks["credentials_configured"] and checks["enabled"]
                                           and not (checks["webhook_mounted"] and checks["worker_registered"]))
-        total_steps = 5
+        total_steps = 5   # 与 onboarding_guides tiktok 步骤数一致（第 5 步＝验收）
         if not checks["credentials_configured"]:
             light, step, hint = "grey", 1, "credentials"
         elif not accs:
@@ -293,9 +316,48 @@ def onboarding_status(request: Request, slug: str) -> Dict[str, Any]:
         else:
             light, step, hint = "blue", 7, "await_first_dm"
     else:
-        return {"slug": slug, "light": "grey", "step": 0, "total_steps": 0, "hint": "", "checks": checks}
+        return {"slug": slug, "light": "grey", "step": 0, "total_steps": 0, "hint": "", "checks": checks, "steps": [],
+                "progress": {"done": 0, "total": 0}}
+    # ── 进度合并（实施99 P1-2）：自检现算的事实 > 手动勾选 > todo；审核类步骤到期未完成 → overdue ──
+    from src.web.onboarding_progress import get_progress, merge_steps
+    try:
+        from src.assistant.onboarding_guides import guide_for
+        g = guide_for(slug, "zh") or {}
+        total_steps = max(total_steps, len(g.get("steps") or [])) if g.get("steps") else total_steps
+    except Exception:
+        pass
+    now = time.time()
+    auto: Dict[int, str] = {}
+    if slug == "tiktok":
+        if checks["credentials_configured"]:
+            auto[4] = "done" if checks["accounts_authorized"] > 0 else "doing"
+        if checks.get("first_inbound_seen"):
+            auto[5] = "done"
+    elif slug == "douyin":
+        if checks["credentials_configured"]:
+            auto[6] = "done" if checks["accounts_authorized"] > 0 else "doing"
+    try:
+        manual = get_progress().all(slug)
+    except Exception:
+        manual = {}
+    steps = merge_steps(total_steps, manual, auto, now)
+    done = sum(1 for s in steps if s["state"] == "done")
+    overdue = [s["n"] for s in steps if s["overdue"]]
+    blocked = [s["n"] for s in steps if s["state"] == "blocked" and not s["auto"]]
+    if light in ("grey", "blue") and steps:
+        # 灯色仍由事实决定；进度只影响「当前步」：第一个未完成的步
+        pending = [s["n"] for s in steps if s["state"] != "done"]
+        if pending and step < pending[0]:
+            step = pending[0]
+    if light not in ("red",) and overdue:
+        light, hint = "amber", "review_overdue"
+        step = overdue[0]
+    elif light in ("grey", "blue") and blocked:
+        light, hint = "amber", "step_blocked"
+        step = blocked[0]
     return {"slug": slug, "light": light, "step": step, "total_steps": total_steps, "hint": hint, "checks": checks,
-            "public_base": base}
+            "public_base": base, "steps": steps, "progress": {"done": done, "total": total_steps},
+            "overdue_steps": overdue}
 
 
 def register_onboarding_guide_routes(app, page_auth, templates) -> None:
@@ -377,7 +439,7 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             patch["enabled"] = True
             if cm is None or not _save_patch(cm, {"tiktok": patch}):
                 return RedirectResponse("/workspace/onboarding/tiktok?error=save_failed", status_code=303)
-            _hot_mount(request, "tiktok")
+            await _hot_mount_and_sync(request, "tiktok")
         try:
             from src.integrations.account_registry import get_account_registry
             reg = get_account_registry()
@@ -414,7 +476,7 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         if cm is None or not _save_patch(cm, patch):
             return RedirectResponse("/workspace/onboarding/tiktok?error=save_failed", status_code=303)
         _audit(request, "tiktok_credentials_save", "tiktok.app_id", cur["app_id"], aid)
-        _hot_mount(request, "tiktok")
+        await _hot_mount_and_sync(request, "tiktok")
         return RedirectResponse("/workspace/onboarding/tiktok?saved=1", status_code=303)
 
     @app.get("/workspace/onboarding/tiktok/authorize")
@@ -460,6 +522,8 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         try:
             r = await ensure_webhook(cfg_all, f"{base}{cfg['webhook_path']}")
             wh = "ok" if r.get("ok") else f"fail:{r.get('error_code') or r.get('error')}"
+            if r.get("ok"):
+                _mark_auto("tiktok", 2, "webhook registered via API")
         except Exception:
             logger.debug("[onboarding] TikTok webhook 注册异常", exc_info=True)
             wh = "fail:exception"
@@ -484,7 +548,46 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             return RedirectResponse(f"/workspace/onboarding/tiktok?error=webhook:{r.get('error_code') or r.get('error')}",
                                     status_code=303)
         _audit(request, "tiktok_webhook_register", "tiktok.webhook", "", url)
+        _mark_auto("tiktok", 2, "webhook registered via API")
         return RedirectResponse("/workspace/onboarding/tiktok?webhook=ok", status_code=303)
+
+    @app.post("/workspace/onboarding/{slug}/step/{n}")
+    async def onboarding_mark_step(slug: str, n: int, request: Request, _=Depends(page_auth),
+                                   state: str = Form(""), due_days: str = Form(""), note: str = Form("")):
+        """手动勾选步骤（实施99 P1-2）：done / submitted（预计 N 天出结果）/ blocked / todo（重置）。自动检测的步骤不接受手动值。"""
+        from src.assistant.onboarding_guides import SLUGS, guide_for
+        from src.web.onboarding_progress import STATES, get_progress
+        if slug not in SLUGS:
+            raise HTTPException(status_code=404, detail="unknown guide")
+        g = guide_for(slug, "zh") or {}
+        total = len(g.get("steps") or [])
+        if not (1 <= int(n) <= total):
+            raise HTTPException(status_code=404, detail="unknown step")
+        st = str(state or "").strip().lower()
+        if st not in STATES:
+            raise HTTPException(status_code=400, detail="bad state")
+        try:
+            cur = onboarding_status(request, slug)
+            if any(s["n"] == int(n) and s["auto"] for s in cur.get("steps") or []):
+                return RedirectResponse(f"/workspace/onboarding/{slug}?error=step_auto#obg-step-{n}", status_code=303)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug("[onboarding] 自检失败（勾选前）", exc_info=True)
+        due_ts = 0.0
+        if st == "submitted":
+            try:
+                days = max(0, min(90, int(str(due_days or "5").strip() or 5)))
+            except ValueError:
+                days = 5
+            due_ts = time.time() + days * 86400
+        prog = get_progress()
+        if st == "todo":
+            prog.clear(slug, int(n))
+        else:
+            prog.set(slug, int(n), state=st, source="manual", note=str(note or ""), due_ts=due_ts)
+        _audit(request, "onboarding_step_mark", f"{slug}/step{n}", "", st)
+        return RedirectResponse(f"/workspace/onboarding/{slug}?step={n}#obg-step-{n}", status_code=303)
 
     @app.get("/help/onboarding/{slug}")
     async def onboarding_guide_page_legacy(slug: str, request: Request):
@@ -511,7 +614,7 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         if cm is None or not _save_patch(cm, patch):
             return RedirectResponse("/workspace/onboarding/douyin?error=save_failed", status_code=303)
         _audit(request, "douyin_credentials_save", "douyin.client_key", cur["client_key"], key)
-        _hot_mount(request, "douyin")
+        await _hot_mount_and_sync(request, "douyin")
         return RedirectResponse("/workspace/onboarding/douyin?saved=1", status_code=303)
 
     @app.get("/workspace/onboarding/douyin/authorize")
