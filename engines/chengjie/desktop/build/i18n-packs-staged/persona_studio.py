@@ -1184,6 +1184,15 @@ ZH = {
     # #192 标签云折叠
     "psn_tags_more": "更多 {n} 个标签",
     "psn_tags_less": "收起标签",
+    # O-1 E（#255）账号显示名 ≠ 人设名 红条
+    "psn_nm_title": "账号名与人设名不一致，客户会察觉",
+    "psn_nm_hint": "客户看到的账号昵称和聊天里自称的名字不是同一个人。Telegram / WhatsApp 可一键按人设改账号名；LINE / Messenger 官方不开放改名接口，请改人设名或到手机 App 里改昵称。",
+    "psn_nm_push": "按人设改账号名",
+    "psn_nm_pushing": "改名中…",
+    "psn_nm_manual": "该平台不可远程改名：改人设名，或到手机 App 改昵称",
+    "psn_nm_confirm": "把这个账号的显示名改成「{name}」？频繁改名会触发平台风控，新号请谨慎。",
+    "psn_nm_done": "账号名已改为「{name}」",
+    "psn_nm_fail": "改名失败",
 }
 
 EN = {
@@ -2360,4 +2369,12 @@ EN = {
     "psn_gr_leave_stay": "Staying on this page: Global Rules still has unsaved changes — save or discard them first",
     "psn_tags_more": "{n} more tags",
     "psn_tags_less": "Fewer tags",
+    "psn_nm_title": "Account name doesn't match the persona name — customers will notice",
+    "psn_nm_hint": "The nickname customers see on the account and the name used in chat are not the same person. Telegram / WhatsApp can be renamed to the persona in one click; LINE / Messenger expose no rename API — rename the persona or change the nickname in the phone app.",
+    "psn_nm_push": "Rename account to persona",
+    "psn_nm_pushing": "Renaming…",
+    "psn_nm_manual": "No remote rename on this platform: rename the persona, or change the nickname in the phone app",
+    "psn_nm_confirm": "Rename this account's display name to \u201c{name}\u201d? Frequent renames trigger platform risk controls; be careful with fresh accounts.",
+    "psn_nm_done": "Account renamed to \u201c{name}\u201d",
+    "psn_nm_fail": "Rename failed",
 }

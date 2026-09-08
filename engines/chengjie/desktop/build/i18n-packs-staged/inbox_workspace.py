@@ -94,13 +94,6 @@ ZH = {
     "inbox.acct.hist_sec_t": "不由系统托管收发的账号：桌面工作台（消息经桌面壳镜像进站）、在册未接管、已退出（可重登）、已移除（只读）、仅历史（未配对）。历史会话均可查看。",
     "inbox.acct.desk_tag": "桌面工作台",
     "inbox.acct.desk_tag_t": "由桌面壳镜像进站的在册账号（无自动收发通道），会话与未读照常统计",
-    "inbox.acct.bridge_on": "副驾在线 · {tier}",
-    "inbox.acct.bridge_on_t": "PC 副驾驱动进程正在读屏收发（90 秒内有心跳）",
-    "inbox.acct.bridge_off": "副驾离线 {m} 分",
-    "inbox.acct.bridge_off_t": "PC 副驾驱动进程已无心跳：新消息不会进来、回复不会发出，请在电脑上重启副驾（tools\\wechat_pc_devlink.ps1）",
-    "inbox.acct.bridge_tier_copilot": "只读建议",
-    "inbox.acct.bridge_tier_semi": "半自动",
-    "inbox.acct.bridge_tier_auto_reply": "全自动",
     "inbox.acct.reg_tag": "在册·未接管",
     "inbox.acct.reg_tag_t": "已登记到账号注册表、但系统当前未托管收发的账号",
     "inbox.acct.hist_unread_t": "含历史账号存量未读（只查档，不可回复）",
@@ -295,9 +288,7 @@ ZH = {
     # QQ 机器人（QQ 开放平台官方 API，2026-09-07）：与「QQ 协议登录」是两个独立渠道
     "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；准入区）：与「QQ 机器人」是两个独立渠道
-    "inbox.acct.note_qq": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
-    # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」是两个独立渠道
-    "inbox.acct.note_wechat_kf": "企业微信官方接入：填企微自建应用 CorpID / Secret 即可，无需扫码；客户扫客服二维码即可咨询（不用加好友）；每轮 48 小时内最多回 5 条，应用需配可信 IP",
+    "inbox.acct.note_qq": "用你自己的 QQ 号：手机 QQ 扫码即接入（智聊内置连接，无需装其它程序）；可收发文字/图片/语音/视频，建议用小号",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -845,8 +836,8 @@ ZH = {
     "inbox.connect.mode_l_web": "网页扫码",
     "inbox.connect.mode_d_web": "隔离浏览器 + 平台网页二维码，兼容好、更像真人",
     # QQ 协议登录（个人号；协议端 NapCat / LLOneBot / Lagrange 经 Milky 接口）：扫码在协议端里完成，本窗口只确认
-    "inbox.connect.mode_l_qq_protocol": "扫码登录（协议端）",
-    "inbox.connect.mode_d_qq_protocol": "用你自己的 QQ 号：在自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）里扫码登录，本窗口自动确认；可收发文字/图片/语音/视频，建议小号 + 固定 IP",
+    "inbox.connect.mode_l_qq_protocol": "扫码登录",
+    "inbox.connect.mode_d_qq_protocol": "用你自己的 QQ 号：手机 QQ 扫本窗口二维码即接入（智聊内置连接，无需安装其它程序）；可收发文字/图片/语音/视频，建议用小号",
     # Zalo 个人号扫码（zca-js 边车）：与官方 OA 并列的第二路，能力更全
     "inbox.connect.mode_l_zalo_web": "扫码登录（个人号）",
     "inbox.connect.mode_d_zalo_web": "用你自己的 Zalo 账号扫码登录，可收发文字/图片/语音/贴纸；建议搭配小号与独立代理使用",
@@ -1058,10 +1049,6 @@ ZH = {
         "「被动回复窗口」＝QQ 开放平台机器人政策：单聊每条来话 60 分钟内最多回 4 条、"
         "群 @ 消息 5 分钟内最多 5 条；用户不再说话就不能再发（主动消息已于 2025-04 收敛）。"
         "群里默认只收 @机器人 的消息。这是平台规则，不是本系统限制。",
-    "inbox.connect.win_note_wechat_kf":
-        "「48 小时 / 5 条」＝微信客服政策：客户每发一条消息，企业在其后 48 小时内最多回 5 条，"
-        "客户再发则重置；超窗/超条的发送会被平台丢弃。本系统会在用完前自动停发并等客户回复，"
-        "且不拆条、不发缓冲话术。这是平台规则，不是本系统限制。",
     "inbox.connect.win_note_whatsapp":
         "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
         "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
@@ -1225,16 +1212,34 @@ ZH = {
         "QQ 机器人走 QQ 开放平台官方接入：在「接入向导」里填好 AppID / AppSecret 即自动上线，"
         "无需扫码；正式环境需在开放平台配置 IP 白名单，联调可先用沙箱。",
     "inbox.connect.instr_qq":
-        "请在你自装的 QQ 协议端（NapCat / LLOneBot / Lagrange）的 WebUI 或控制台里用手机 QQ 扫码登录；"
-        "登录完成后本窗口会自动确认并把该 QQ 号接入。",
+        "用手机 QQ 扫描本窗口二维码即可接入（智聊内置连接，无需安装其它程序）；"
+        "扫码后在手机上确认，本窗口会自动完成登录。",
+    "inbox.connect.instr_qq_risk":
+        "QQ 个人号为非官方接入、有账号风控风险。请先阅读并同意《QQ 个人号接入协议与风险须知》，同意后再扫码。",
+    "inbox.connect.qq_risk_title": "QQ 个人号 · 接入协议与风险须知",
+    "inbox.connect.qq_risk_p1": "这是「用你自己的 QQ 号」接入，属于非官方自动化，可能不符合腾讯服务条款。",
+    "inbox.connect.qq_risk_p2": "个人号自动化存在被限制功能、临时冻结乃至永久封号的风险；新号、低活跃号、高频发送风险更高。",
+    "inbox.connect.qq_risk_p3": "强烈建议使用专门的运营小号，不要用主号；托管期间请勿在本机 QQ 再登同一个号。",
+    "inbox.connect.qq_risk_p4": "计费与其它渠道一致：AI 自动回复、翻译、语音等按 Token 从钱包扣减；人工手动发送免费。",
+    "inbox.connect.qq_risk_p5": "因使用本渠道导致的封号、数据丢失等损失，风险由你自行承担。",
+    "inbox.connect.qq_risk_link": "查看完整协议",
+    "inbox.connect.qq_risk_ack": "我已阅读并同意上述协议与风险须知",
+    "inbox.connect.qq_risk_go": "同意并开始扫码",
+    "inbox.connect.qq_risk_alt": "改用 QQ 机器人（官方接入，无此风险）",
+    "inbox.connect.instr_qq_not_installed":
+        "本机未安装受支持版本的 QQ 客户端。点「下载并安装 QQ」（腾讯官方安装包，约 200 MB），装好后本窗口自动出码。",
+    "inbox.connect.qq_dl_title": "需要先安装 QQ 客户端",
+    "inbox.connect.qq_dl_desc": "智聊的 QQ 连接组件要借本机 QQ 客户端收发。点下方按钮从腾讯官方地址下载并静默安装（约 200 MB，装在智聊数据目录，不影响你已有的 QQ）。",
+    "inbox.connect.qq_dl_btn": "下载并安装 QQ",
+    "inbox.connect.qq_dl_progress": "正在下载 QQ… {pct}%",
+    "inbox.connect.qq_dl_installing": "正在安装 QQ…",
+    "inbox.connect.qq_dl_done": "QQ 已就绪，正在生成二维码…",
+    "inbox.connect.qq_dl_failed": "下载/安装失败：{err}。可重试，或手动到 im.qq.com 安装 QQ 后点「重新开始」。",
+    "inbox.connect.qq_dl_unsupported": "检测到本机 QQ 版本 {ver} 暂不受支持；将另装受支持版本到智聊目录，不改动你现有的 QQ。",
     "inbox.connect.instr_qq_setup":
-        "未配置 QQ 协议端地址：请先到接入向导「QQ」卡填好协议端 Milky 地址（与 Token），再回来接入。",
+        "QQ 连接服务尚未就绪：请稍候片刻让智聊内置连接组件启动，再点「重新开始」。",
     "inbox.connect.instr_qq_down":
-        "无法连接 QQ 协议端：请确认 NapCat / LLOneBot / Lagrange 已启动、Milky 服务地址与 Token 正确，"
-        "然后点「重新开始」。",
-    "inbox.connect.instr_wechat_kf":
-        "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
-        "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。",
+        "无法连接 QQ 连接服务：请点「重新开始」，或到设置里重启连接服务后再扫码。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2088,8 +2093,7 @@ ZH = {
     "inbox.plat.whatsapp_desc": "Web 扫码接入 · 支持多账号 · 媒体收发",
     "inbox.plat.zalo_desc": "Zalo OA 官方 API 接入 · 客服消息（7 天互动窗）· 填凭证即用（无扫码）",
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
-    "inbox.plat.qq_desc": "QQ 个人号（协议登录）· 用你自己的 QQ 号 · 文字/图片/语音/视频 · 需自装协议端（NapCat / LLOneBot / Lagrange）",
-    "inbox.plat.wechat_kf_desc": "微信客服（企业微信官方通道）· 微信用户扫码即聊，不用加好友 · 每轮 48 小时内最多回 5 条 · 填企微 CorpID/Secret 即用（无扫码）",
+    "inbox.plat.qq_desc": "QQ 个人号 · 用你自己的 QQ 号 · 文字/图片/语音/视频 · 智聊内置连接，扫码即用",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
     "inbox.plat_pause.multi": "AI 出多选草稿，人工挑选发送",
@@ -3045,13 +3049,6 @@ EN = {
     "inbox.acct.ghost_tag": "history",
     "inbox.acct.desk_tag": "Desktop",
     "inbox.acct.desk_tag_t": "Registry account mirrored by the desktop shell (no cloud worker). Chats and unread still count.",
-    "inbox.acct.bridge_on": "Copilot online · {tier}",
-    "inbox.acct.bridge_on_t": "The PC copilot driver is reading the screen and relaying (heartbeat within 90s)",
-    "inbox.acct.bridge_off": "Copilot offline {m}m",
-    "inbox.acct.bridge_off_t": "No heartbeat from the PC copilot driver: new messages won't arrive and replies won't go out. Restart it on the PC (tools\\wechat_pc_devlink.ps1)",
-    "inbox.acct.bridge_tier_copilot": "read-only",
-    "inbox.acct.bridge_tier_semi": "semi-auto",
-    "inbox.acct.bridge_tier_auto_reply": "auto",
     "inbox.acct.reg_tag": "Registered · idle",
     "inbox.acct.reg_tag_t": "In the account registry, but the orchestrator is not running a worker for it",
     "inbox.acct.grp_unread_t": "Group unread {n} (not counted in the main badge)",
@@ -3249,8 +3246,7 @@ EN = {
     "inbox.acct.note_instagram": "Official API onboarding: paste the Page credentials of your Facebook developer app — no QR needed",
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
     "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
-    "inbox.acct.note_qq": "Your own QQ account: scan the QR in your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
-    "inbox.acct.note_wechat_kf": "WeCom official onboarding: enter your WeCom self-built app CorpID / Secret — no QR; customers scan the service QR to chat (no friend request); at most 5 replies per 48 h turn, the app needs a trusted-IP allowlist",
+    "inbox.acct.note_qq": "Your own QQ account: just scan the QR with your phone's QQ (built-in connector, no extra app to install). Text / image / voice / video; a secondary account is recommended",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3775,9 +3771,9 @@ EN = {
     "inbox.connect.mode_d_protocol": "Direct protocol connection; run many accounts on one machine, lightest on resources",
     "inbox.connect.mode_l_web": "Web QR",
     "inbox.connect.mode_d_web": "Isolated browser + the platform’s web QR code; broad compatibility, more human-like",
-    # QQ protocol login (personal account; NapCat / LLOneBot / Lagrange via Milky): the scan happens inside the endpoint, this window only confirms
-    "inbox.connect.mode_l_qq_protocol": "Scan to log in (protocol endpoint)",
-    "inbox.connect.mode_d_qq_protocol": "Your own QQ account: scan the QR inside your self-hosted QQ protocol endpoint (NapCat / LLOneBot / Lagrange); this window confirms automatically. Text / image / voice / video; use a secondary account plus a fixed IP",
+    # QQ protocol login (personal account): built-in connector injects the local QQ client; scan happens right in this window
+    "inbox.connect.mode_l_qq_protocol": "Scan to log in",
+    "inbox.connect.mode_d_qq_protocol": "Your own QQ account: scan the QR in this window with your phone's QQ (built-in connector, no extra app). Text / image / voice / video; a secondary account is recommended",
     # Zalo personal-account QR (zca-js sidecar): a second path alongside the official OA — fuller capability
     "inbox.connect.mode_l_zalo_web": "Scan to log in (personal account)",
     "inbox.connect.mode_d_zalo_web": "Log in by scanning with your own Zalo account; send/receive text, images, voice and stickers. Works best with a secondary account plus a dedicated proxy.",
@@ -4004,12 +4000,6 @@ EN = {
         "once the user stops talking you cannot send (proactive messages were retired in "
         "2025-04). In groups the bot only receives @-mentions by default. A platform rule, "
         "not a limit of this system.",
-    "inbox.connect.win_note_wechat_kf":
-        "The “48 h / 5 messages” rule is WeChat Customer Service policy: after each customer "
-        "message the business may send at most 5 replies within 48 hours; a new customer message "
-        "resets the turn, and anything beyond is dropped by the platform. This system stops "
-        "before the quota runs out and waits for the customer, never splits replies into bubbles "
-        "and never sends holding text. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_whatsapp":
         "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
         "of the user's last message; outside the window only pre-approved template messages can "
@@ -4175,19 +4165,38 @@ EN = {
         "the Setup Wizard and it goes online automatically — no QR scan. Production requires an "
         "IP allowlist on the Open Platform; use the sandbox first while testing.",
     "inbox.connect.instr_qq":
-        "Scan the QR with your phone's QQ inside your self-hosted QQ protocol endpoint "
-        "(NapCat / LLOneBot / Lagrange WebUI or console); once logged in, this window confirms "
-        "automatically and connects that QQ account.",
+        "Scan the QR in this window with your phone's QQ to connect (built-in connector, no extra "
+        "app to install); confirm on your phone and this window finishes the login automatically.",
+    "inbox.connect.instr_qq_risk":
+        "QQ personal accounts use an unofficial integration and carry an account-restriction risk. "
+        "Please read and accept the QQ Personal Account Agreement & Risk Notice before scanning.",
+    "inbox.connect.qq_risk_title": "QQ Personal Account · Agreement & Risk Notice",
+    "inbox.connect.qq_risk_p1": "This connects your own QQ account via unofficial automation, which may not comply with Tencent's terms of service.",
+    "inbox.connect.qq_risk_p2": "Automating a personal account risks feature limits, temporary freezes or a permanent ban; new, low-activity or high-volume accounts are at higher risk.",
+    "inbox.connect.qq_risk_p3": "Strongly recommended: use a dedicated secondary account, never your main one; don't log the same account into QQ on this PC while it is managed here.",
+    "inbox.connect.qq_risk_p4": "Billing is the same as every other channel: AI replies, translation, voice etc. deduct Tokens from your wallet; manual sends are free.",
+    "inbox.connect.qq_risk_p5": "Any ban, data loss or other damage arising from this channel is at your own risk.",
+    "inbox.connect.qq_risk_link": "Read the full agreement",
+    "inbox.connect.qq_risk_ack": "I have read and accept the agreement and risk notice above",
+    "inbox.connect.qq_risk_go": "Accept and start scanning",
+    "inbox.connect.qq_risk_alt": "Use QQ Bot instead (official API, no such risk)",
+    "inbox.connect.instr_qq_not_installed":
+        "No supported QQ client is installed on this PC. Click “Download & install QQ” (official Tencent "
+        "installer, ~200 MB); the QR code appears here automatically once it's installed.",
+    "inbox.connect.qq_dl_title": "QQ client needed first",
+    "inbox.connect.qq_dl_desc": "The QQ connector drives the local QQ client to send and receive. Click below to download it from Tencent's official site and install silently (~200 MB, into the app data folder — your existing QQ is left untouched).",
+    "inbox.connect.qq_dl_btn": "Download & install QQ",
+    "inbox.connect.qq_dl_progress": "Downloading QQ… {pct}%",
+    "inbox.connect.qq_dl_installing": "Installing QQ…",
+    "inbox.connect.qq_dl_done": "QQ is ready, generating the QR code…",
+    "inbox.connect.qq_dl_failed": "Download/install failed: {err}. Retry, or install QQ manually from im.qq.com and click “Start over”.",
+    "inbox.connect.qq_dl_unsupported": "Your installed QQ {ver} isn't supported yet; a supported build will be installed into the app folder without touching your existing QQ.",
     "inbox.connect.instr_qq_setup":
-        "No QQ protocol endpoint configured: fill the Milky address (and token) on the “QQ” card "
-        "in the Setup Wizard first, then come back to connect.",
+        "The QQ connector isn't ready yet: give the built-in connector a moment to start, "
+        "then click “Start over”.",
     "inbox.connect.instr_qq_down":
-        "Cannot reach the QQ protocol endpoint: make sure NapCat / LLOneBot / Lagrange is running "
-        "and the Milky address / token are correct, then click “Start over”.",
-    "inbox.connect.instr_wechat_kf":
-        "WeChat Customer Service connects via the WeCom official API: save your WeCom self-built "
-        "app CorpID / Secret in the Setup Wizard and it goes online automatically — no QR scan. "
-        "The app needs a trusted-IP allowlist; customers scan the service QR code to chat.",
+        "Cannot reach the QQ connector service: click “Start over”, or restart the connector "
+        "service in Settings and scan again.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -5012,8 +5021,7 @@ EN = {
     "inbox.plat.whatsapp_desc": "QR web login · multi-account · media send/receive",
     "inbox.plat.zalo_desc": "Zalo OA official API · CS messages (7-day window) · credentials only (no QR)",
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
-    "inbox.plat.qq_desc": "QQ personal account (protocol login) · your own QQ number · text / image / voice / video · needs a self-hosted protocol endpoint (NapCat / LLOneBot / Lagrange)",
-    "inbox.plat.wechat_kf_desc": "WeChat Customer Service (WeCom official channel) · WeChat users scan to chat, no friend request · at most 5 replies per 48 h turn · WeCom CorpID/Secret only (no QR)",
+    "inbox.plat.qq_desc": "QQ personal account · your own QQ number · text / image / voice / video · built-in connector, just scan to use",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",
     "inbox.plat_pause.multi": "AI proposes multiple drafts; a human picks one to send",
