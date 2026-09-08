@@ -218,6 +218,41 @@ def test_reauth_days_left_and_seven_day_warning(monkeypatch):
     assert records[-1][2] == "expired"
 
 
+def test_tiktok_panel_registers_account_with_region(auth_client, app, _fake_registry):
+    cm = app.state.config_manager
+    ref = {"Referer": "http://testserver/help/onboarding/tiktok"}
+    r = auth_client.get("/help/onboarding/tiktok")
+    assert r.status_code == 200 and 'action="/help/onboarding/tiktok/account"' in r.text
+    assert "http://testserver/webhook/tiktok" in r.text
+    # 缺注册地 → 拒
+    r = auth_client.post("/help/onboarding/tiktok/account", data={"business_id": "biz-1", "access_token": "t"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?error=missing_region")
+    # 德国：登记成功但私信不可用 → 标红 + 替代
+    r = auth_client.post("/help/onboarding/tiktok/account",
+                         data={"business_id": "biz-de", "access_token": "tok-de", "region": "de"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?connected=biz-de&region=DE")
+    row = _fake_registry.get("tiktok", "biz-de")
+    assert row["mode"] == "official" and row["meta"] == {"region": "DE", "access_token": "tok-de"}
+    # 新加坡 + 应用凭证一起存：overlay 写入并开 enabled
+    r = auth_client.post("/help/onboarding/tiktok/account",
+                         data={"business_id": "biz-sg", "access_token": "tok-sg", "region": "SG",
+                               "app_id": "app-1", "secret": "sec-1"}, headers=ref, follow_redirects=False)
+    assert r.status_code == 303 and "connected=biz-sg" in r.headers["location"]
+    assert cm.config["tiktok"] == {"app_id": "app-1", "secret": "sec-1", "enabled": True}
+    r = auth_client.get("/help/onboarding/tiktok?connected=biz-sg&region=SG")
+    html = r.text
+    assert "TikTok 账号已登记" in html and "biz-sg" in html and "biz-de" in html
+    assert "私信 API 可用" in html and "私信 API 不可用" in html and "替代：Messaging Ads" in html
+    assert 'value="app-1"' in html and "sec-1" not in html   # secret 不回显
+    # 令牌留空 = 保留已有；重复登记只改 region
+    r = auth_client.post("/help/onboarding/tiktok/account", data={"business_id": "biz-sg", "region": "MY"},
+                         headers=ref, follow_redirects=False)
+    assert r.status_code == 303
+    assert _fake_registry.get("tiktok", "biz-sg")["meta"] == {"region": "MY", "access_token": "tok-sg"}
+
+
 def test_panel_shows_reauth_countdown(auth_client, _fake_registry):
     now = time.time()
     _fake_registry.upsert("douyin", "open-soon", mode="official", label="快到期的号", meta={

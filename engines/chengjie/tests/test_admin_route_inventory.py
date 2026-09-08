@@ -1943,6 +1943,7 @@ _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 /help/onboarding/douyin/credentials	POST
 /help/onboarding/douyin/authorize	GET
 /webhook/douyin/oauth/callback	GET
+/help/onboarding/tiktok/account	POST
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
 

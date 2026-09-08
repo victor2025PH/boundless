@@ -165,10 +165,15 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "TikTok Shop Partner Center", "TikTok Shop Partner Center", "https://partner.tiktokshop.com/"),
             ("在智聊填入凭证并选择账号注册地",
              "Enter credentials in ChatX and select the account's registration region",
-             "TikTok 账号在智聊里必须带 region：注册地决定私信 API 是否可用、图片能否发送；不可用地区会在接入向导直接说明并给出替代"
-             "（Messaging Ads / 店铺客服 / 托管）。该部分随指令 TK-1 落地。",
-             "TikTok accounts in ChatX carry a region: it decides whether the DM API and image sending are available; unsupported "
-             "regions are flagged in the wizard with alternatives (Messaging Ads / Shop CS / hosted). Shipping under directive TK-1.",
+             "在本页下方面板填 business_id、access_token（开发者门户授权后获得）与注册地（ISO 两位，如 SG / MY / MX）并「登记账号」；"
+             "可顺手填 app_id / secret 存为本机配置（落 config.local.yaml，自动开启 tiktok.enabled，重启后 webhook 挂载）。"
+             "注册地决定私信 API 是否可用、图片能否发送：不可用地区面板会直接标红并给出替代（Messaging Ads / 店铺客服 / 托管），"
+             "未知地区按「待核实」处理。",
+             "Use the panel below: enter business_id, access_token (obtained after authorising in the developer portal) and the "
+             "registration region (ISO-2, e.g. SG / MY / MX), then Register. Optionally store app_id / secret as local config "
+             "(config.local.yaml; enables tiktok; the webhook mounts after a restart). The region decides whether the DM API and "
+             "image sending are available: unsupported regions are flagged red with alternatives (Messaging Ads / Shop CS / hosted); "
+             "unknown regions are treated as “to verify”.",
              "接入向导", "Setup wizard", "/workspace/setup"),
         ],
         "rules": [

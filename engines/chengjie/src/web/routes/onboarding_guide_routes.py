@@ -124,6 +124,34 @@ def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optiona
     }
 
 
+def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str, Any]:
+    """TikTok 面板数据：应用凭证状态、webhook 地址、已登记 Business Account 及按注册地算出的能力。"""
+    from src.integrations.tiktok_official import MODE, PLATFORM, tiktok_cfg
+    from src.integrations.tiktok_regions import capabilities
+    cfg = tiktok_cfg(_config(request))
+    base = _public_base(request)
+    accounts = []
+    try:
+        reg = registry
+        if reg is None:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+        for acc in reg.list(PLATFORM):
+            if str(acc.get("mode") or "") not in ("", MODE):
+                continue
+            meta = dict(acc.get("meta") or {})
+            caps = capabilities(meta.get("region"))
+            accounts.append({"account_id": str(acc.get("account_id") or ""), "label": str(acc.get("label") or ""),
+                             "has_token": bool(meta.get("access_token")), "region": caps["region"],
+                             "dm_api": caps["dm_api"], "media_send": caps["media_send"], "shop_site": caps["shop_site"],
+                             "alternatives": caps["alternatives"]})
+    except Exception:
+        logger.debug("[onboarding] 读取 TikTok 账号失败", exc_info=True)
+    return {"has_app_id": bool(cfg["app_id"]), "has_secret": bool(cfg["secret"]), "enabled": cfg["enabled"],
+            "app_id": cfg["app_id"], "secret_masked": _mask(cfg["secret"]),
+            "webhook_url": f"{base}{cfg['webhook_path']}" if base else cfg["webhook_path"], "accounts": accounts}
+
+
 def register_onboarding_guide_routes(app, page_auth, templates) -> None:
     @app.get("/help/onboarding/{slug}")
     async def onboarding_guide_page(slug: str, request: Request, _=Depends(page_auth)):
@@ -141,12 +169,62 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             except Exception:
                 logger.debug("[onboarding] 抖音接入面板构建失败", exc_info=True)
                 webhook_url = "/webhook/douyin"
+        elif slug == "tiktok":
+            try:
+                panel = tiktok_connect_panel(request)
+                webhook_url = panel["webhook_url"]
+            except Exception:
+                logger.debug("[onboarding] TikTok 接入面板构建失败", exc_info=True)
         q = request.query_params
         return templates.TemplateResponse(request, "help_onboarding.html", {
             "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel,
             "flash": {"saved": q.get("saved") == "1", "connected": str(q.get("connected") or ""),
-                      "error": str(q.get("error") or "")},
+                      "error": str(q.get("error") or ""), "region": str(q.get("region") or "")},
         })
+
+    @app.post("/help/onboarding/tiktok/account")
+    async def onboarding_tiktok_account(request: Request, _=Depends(page_auth),
+                                        business_id: str = Form(""), access_token: str = Form(""),
+                                        region: str = Form(""), app_id: str = Form(""), secret: str = Form(""),
+                                        webhook_secret: str = Form("")):
+        """登记 TikTok Business Account（business_id + access_token + 注册地）并可顺手存应用凭证。
+
+        令牌来自 TikTok for Business 开发者门户（Business Messaging 授权流程以控制台为准，本面板不猜 OAuth 端点）；
+        region 必填——注册地决定私信 API 能不能用，这是 TikTok 接入最先要说清的一件事。"""
+        from src.integrations.tiktok_official import MODE, PLATFORM
+        from src.integrations.tiktok_regions import capabilities, normalize_region
+        bid = str(business_id or "").strip()
+        tok = str(access_token or "").strip()
+        reg_code = normalize_region(region)
+        if not bid:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_business_id", status_code=303)
+        if not reg_code:
+            return RedirectResponse("/help/onboarding/tiktok?error=missing_region", status_code=303)
+        cm = _config_manager(request)
+        patch: Dict[str, Any] = {}
+        for k, v in (("app_id", app_id), ("secret", secret), ("webhook_secret", webhook_secret)):
+            if str(v or "").strip():
+                patch[k] = str(v).strip()
+        if patch:
+            patch["enabled"] = True
+            if cm is None or not _save_patch(cm, {"tiktok": patch}):
+                return RedirectResponse("/help/onboarding/tiktok?error=save_failed", status_code=303)
+        try:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+            existing = reg.get(PLATFORM, bid) or {}
+            meta: Dict[str, Any] = {"region": reg_code}
+            if tok:
+                meta["access_token"] = tok
+            reg.upsert(PLATFORM, bid, mode=MODE, status="active",
+                       label=(existing.get("label") or f"TikTok Business {bid[:8]}"), meta=meta, merge_meta=True)
+        except Exception:
+            logger.warning("[onboarding] TikTok 账号登记失败", exc_info=True)
+            return RedirectResponse("/help/onboarding/tiktok?error=registry_failed", status_code=303)
+        caps = capabilities(reg_code)
+        _audit(request, "tiktok_account_register", f"tiktok/{bid}", "",
+               f"region={reg_code} dm_api={caps['dm_api']} token={'y' if tok else 'n'}")
+        return RedirectResponse(f"/help/onboarding/tiktok?connected={bid}&region={reg_code}", status_code=303)
 
     @app.post("/help/onboarding/douyin/credentials")
     async def onboarding_douyin_credentials(request: Request, _=Depends(page_auth),
@@ -202,4 +280,4 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         return RedirectResponse(f"/help/onboarding/douyin?connected={res['open_id']}", status_code=303)
 
 
-__all__ = ["register_onboarding_guide_routes", "douyin_connect_panel"]
+__all__ = ["register_onboarding_guide_routes", "douyin_connect_panel", "tiktok_connect_panel"]
