@@ -124,7 +124,8 @@
         <div class="obg-acc">
           <code>{{ a.account_id }}</code>
           <span>{{ a.label }}</span>
-          {% if a.token_state == 'ok' %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.panel.tok_ok', '令牌正常') }}{% if a.access_days_left is not none %} · {{ a.access_days_left }}d{% endif %}</span>
+          {% if a.token_state != 'needs_reauth' and a.reauth_soon %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.panel.tok_soon', '{n} 天后需重新授权').replace('{n}', a.reauth_days_left|string) }}</span>
+          {% elif a.token_state == 'ok' %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.panel.tok_ok', '令牌正常') }}{% if a.access_days_left is not none %} · {{ a.access_days_left }}d{% endif %}</span>
           {% elif a.token_state in ('refresh_due', 'renew_due') %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.panel.tok_due', '即将自动续期') }}</span>
           {% else %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.panel.tok_reauth', '需重新授权') }}</span>{% endif %}
         </div>

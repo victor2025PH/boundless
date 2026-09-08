@@ -175,3 +175,53 @@ def test_panel_flow_end_to_end(auth_client, app, _fake_registry, monkeypatch):
 class _ApiWith(dy.DouyinApi):
     def __init__(self, tr):
         super().__init__(transport=tr)
+
+
+def test_reauth_days_left_and_seven_day_warning(monkeypatch):
+    now = 1_800_000_000.0
+    d = 86400.0
+    # 能自动续期（refresh 存活、未续满）→ 无倒计时
+    assert dy.reauth_days_left({"refresh_token": "r", "refresh_expires_at": now + 20 * d, "renew_count": 2}, now) is None
+    # 已续满 5 次 → 终点＝refresh 到期日
+    assert dy.reauth_days_left({"refresh_token": "r", "refresh_expires_at": now + 6 * d + 100, "renew_count": 5}, now) == 6
+    # 无 refresh → 终点＝access 到期日
+    assert dy.reauth_days_left({"access_token": "a", "access_expires_at": now + 3 * d}, now) == 3
+    assert dy.reauth_days_left({}, now) is None
+
+    records = []
+
+    class _H:
+        def record(self, platform, account_id, status, *, detail="", login_id=""):
+            records.append((platform, account_id, status, detail))
+            return {}
+
+    import src.integrations.platform_session_health as psh
+    monkeypatch.setattr(psh, "get_platform_session_health", lambda: _H())
+    meta = {"access_token": "a", "access_expires_at": now + 10 * d, "refresh_token": "r",
+            "refresh_expires_at": now + 6 * d, "renew_count": 5}
+    clock = {"t": now}
+    w = dy.DouyinOfficialWorker({"account_id": "open-1", "meta": meta}, {"douyin": {"client_key": KEY}},
+                                api=dy.DouyinApi(transport=FakeTransport()), state=dy.DouyinStateStore(":memory:"),
+                                now=lambda: clock["t"])
+    assert w.token_state == "ok"
+    w._report_session_health()
+    w._report_session_health()   # 同态不重复上报
+    assert len(records) == 1 and records[0][2] == "authorized" and "6 天后到期" in records[0][3]
+    clock["t"] = now + 1 * d     # 倒计时变化 → 再报一次（detail 更新）
+    w._report_session_health()
+    assert len(records) == 2 and "5 天后到期" in records[1][3]
+    # 到期后 → expired
+    clock["t"] = now + 11 * d
+    w.token_state = dy.token_state(meta, clock["t"])
+    assert w.token_state == "needs_reauth"
+    w._report_session_health()
+    assert records[-1][2] == "expired"
+
+
+def test_panel_shows_reauth_countdown(auth_client, _fake_registry):
+    now = time.time()
+    _fake_registry.upsert("douyin", "open-soon", mode="official", label="快到期的号", meta={
+        "access_token": "a", "access_expires_at": now + 10 * 86400, "refresh_token": "r",
+        "refresh_expires_at": now + 4 * 86400 + 100, "renew_count": 5})
+    r = auth_client.get("/help/onboarding/douyin")
+    assert r.status_code == 200 and "open-soon" in r.text and "4 天后需重新授权" in r.text

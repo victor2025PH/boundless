@@ -86,8 +86,8 @@ def _save_patch(config_manager: Any, patch: Dict[str, Any]) -> bool:
 
 def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optional[float] = None) -> Dict[str, Any]:
     """教程页「接入面板」数据：凭证状态（脱敏）、回调/webhook 地址、已授权账号及令牌状态。"""
-    from src.integrations.douyin_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, douyin_cfg,
-                                                  token_state)
+    from src.integrations.douyin_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, REAUTH_WARN_DAYS,
+                                                  douyin_cfg, reauth_days_left, token_state)
     cfg = douyin_cfg(_config(request))
     base = _public_base(request)
     accounts = []
@@ -104,10 +104,13 @@ def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optiona
             if not meta.get("access_token") and not meta.get("refresh_token"):
                 continue
             aexp = float(meta.get("access_expires_at") or 0)
+            reauth_days = reauth_days_left(meta, t)
             accounts.append({
                 "account_id": str(acc.get("account_id") or ""), "label": str(acc.get("label") or ""),
                 "token_state": token_state(meta, t), "scope": str(meta.get("scope") or ""),
                 "access_days_left": (max(0, int((aexp - t) // 86400)) if aexp else None),
+                "reauth_days_left": reauth_days,
+                "reauth_soon": bool(reauth_days is not None and reauth_days <= REAUTH_WARN_DAYS),
                 "authorized_at": float(meta.get("authorized_at") or 0),
             })
     except Exception:

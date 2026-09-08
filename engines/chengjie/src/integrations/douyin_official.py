@@ -549,6 +549,25 @@ def token_state(meta: Dict[str, Any], now: float) -> str:
     return "ok"
 
 
+REAUTH_WARN_DAYS = 7
+
+
+def reauth_days_left(meta: Dict[str, Any], now: float) -> Optional[int]:
+    """距「必须人工重新授权」还有几天；能自动续期（refresh 存活且未续满）→ None。
+
+    终点＝refresh 已续满 5 次时的 refresh 到期日；无 refresh 时＝access 到期日。给账号卡 / 教程面板做 7 天预警。"""
+    rt = str(meta.get("refresh_token") or "")
+    aexp = float(meta.get("access_expires_at") or 0)
+    rexp = float(meta.get("refresh_expires_at") or 0)
+    renew_count = int(meta.get("renew_count") or 0)
+    if rt and rexp > now and renew_count < RENEW_MAX:
+        return None
+    end = rexp if (rt and rexp > now) else aexp
+    if end <= 0:
+        return None
+    return max(0, int((end - now) // 86400))
+
+
 # ── Worker ──────────────────────────────────────────────────────────────────
 
 class DouyinOfficialWorker:
@@ -630,15 +649,21 @@ class DouyinOfficialWorker:
         ``expired``（LOGIN_RECOVERY_STATUSES 之一，坐席看到的是「需重新登录」出口），恢复记 ``authorized``。
         """
         st = self.token_state
-        if st == getattr(self, "_reported_token_state", None):
+        days = reauth_days_left(self.meta, self._now())
+        key = (st, days if (days is not None and days <= REAUTH_WARN_DAYS) else None)
+        if key == getattr(self, "_reported_token_state", None):
             return
-        self._reported_token_state = st
+        self._reported_token_state = key
         try:
             from src.integrations.platform_session_health import get_platform_session_health
             h = get_platform_session_health()
             if st == "needs_reauth":
                 h.record(PLATFORM, self.account_id, "expired",
                          detail="[rc:other] 抖音授权已到期（refresh 过期或续期已满 5 次），请重新扫码授权")
+            elif key[1] is not None:
+                # 提前 7 天预警：仍健康（不禁发），但 detail 带倒计时进账号卡 / 教程页面板
+                h.record(PLATFORM, self.account_id, "authorized",
+                         detail=f"[rc:other] 抖音授权 {days} 天后到期且无法再自动续期，请提前重新扫码授权")
             else:
                 h.record(PLATFORM, self.account_id, "authorized")
         except Exception:
@@ -915,5 +940,6 @@ __all__ = [
     "text_content", "image_content", "retain_card_content", "question_guide_content", "token_state",
     "DouyinOfficialWorker", "handle_webhook", "register_douyin_routes", "register_douyin_official_worker",
     "AUTHORIZE_URL", "ACCESS_TOKEN_URL", "OAUTH_SCOPES", "DEFAULT_OAUTH_CALLBACK_PATH", "oauth_state",
-    "verify_oauth_state", "authorize_url", "token_meta_from_grant", "complete_oauth",
+    "verify_oauth_state", "authorize_url", "token_meta_from_grant", "complete_oauth", "reauth_days_left",
+    "REAUTH_WARN_DAYS",
 ]
