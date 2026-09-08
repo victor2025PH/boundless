@@ -655,6 +655,34 @@ async def run_autoreply(
     except Exception:
         logger.debug("[protocol-autoreply] 客服腔守卫异常（放行原稿）", exc_info=True)
 
+    # O-1 E（#255 8FJDUK ①）：沉寂 ≥72h 的首回不编造迟回理由（与 drafts.enrich_draft 同守卫）。
+    # 沉寂判定读 inbox 镜像（protocol_bridge.get_inbox_store → list_recent_messages）；
+    # 判不出 / 首次接触 → 原稿不动；异常放行。
+    try:
+        from src.utils.persona_guard import detect_late_reply_excuses as _dlre
+        if _dlre(reply):
+            from src.inbox.humanize import silence_before_inbound as _sbi
+            from src.inbox.normalizer import conv_id as _le_cid
+            from src.integrations.protocol_bridge import get_inbox_store as _le_gis
+            from src.utils.persona_guard import (
+                LATE_REPLY_SILENCE_HOURS as _le_hours, strip_late_reply_excuses as _slre,
+            )
+            _le_store = _le_gis()
+            if _le_store is not None and hasattr(_le_store, "list_recent_messages"):
+                _le_rows = _le_store.list_recent_messages(
+                    _le_cid(platform, account_id, chat_key), limit=12)
+                _le_sil, _ = _sbi(_le_rows, draft_ts=time.time())
+                if _le_sil is not None and _le_sil >= _le_hours * 3600.0:
+                    _le_out, _le_rep = _slre(reply)
+                    if _le_rep.get("action") in ("strip", "replace"):
+                        logger.info(
+                            "[persona-guard] late_excuse=%s action=%s silence=%.1fh conv=%s stage=protocol",
+                            "|".join(str(h) for h in (_le_rep.get("hits") or [])[:4]) or "-",
+                            _le_rep.get("action"), _le_sil / 3600.0, key)
+                        reply = _le_out
+    except Exception:
+        logger.debug("[protocol-autoreply] 迟回理由守卫异常（放行原稿）", exc_info=True)
+
     risk = "low"
     try:
         risk = (risk_fn(reply) if risk_fn else "low") or "low"
