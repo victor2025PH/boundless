@@ -2467,6 +2467,64 @@ async function unbindChat(chatId) {
   } catch(e) { _toast(window.T('psn_js_057') + e, 'err'); }
 }
 
+// ── O-1 E（#255）：账号显示名 ≠ 人设名 红条 + 一键按人设改账号名 ──────────
+// 数据来自 /api/personas/status 每账号行的 name_mismatch（后端纯函数比对，昵称含人设名算一致）。
+// TG / WA（能力位 direct）→ POST /api/accounts/{p}/{a}/profile {name: 人设名}（既有 profile_push
+// 写口，冷却 / 新号 / 总闸守卫都在那边）；LINE / Messenger 无写口 → 只给「改人设名」。
+function _collectNameMismatches(d) {
+  const out = [];
+  [['telegram', d.tg_accounts], ['messenger', d.mrpa_accounts], ['whatsapp', d.wa_accounts], ['line', d.line_accounts]]
+    .forEach(([plat, accs]) => {
+      (accs || []).forEach(a => {
+        const m = a && a.name_mismatch;
+        if (m && m.persona_name) out.push(Object.assign({platform: plat}, m));
+      });
+    });
+  return out;
+}
+function _renderNameMismatchBar(d) {
+  const rows = _collectNameMismatches(d);
+  if (!rows.length) return '';
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let s = `<div id="psn-name-mismatch" style="margin:.4rem 0 .6rem;padding:.5rem .75rem;border-radius:8px;background:var(--th-bg-red08,rgba(239,68,68,.08));border:1px solid var(--th-bd-red30,rgba(239,68,68,.3))">
+    <div style="font-size:.8rem;font-weight:600;color:var(--th-ink-red6,#b91c1c)">⚠️ ${esc(window.T('psn_nm_title'))}</div>
+    <div style="font-size:.74rem;color:var(--t2);margin:.15rem 0 .35rem">${esc(window.T('psn_nm_hint'))}</div>`;
+  rows.forEach(m => {
+    const key = esc(m.platform) + '/' + esc(m.account_id);
+    const act = m.can_push
+      ? `<button class="btn btn-sm" style="font-size:.68rem;padding:.15rem .5rem" onclick="_pushPersonaName('${esc(m.platform)}','${esc(m.account_id)}','${esc(m.persona_name)}',this)">${esc(window.T('psn_nm_push'))}</button>`
+      : `<span style="font-size:.7rem;color:var(--t2)">${esc(window.T('psn_nm_manual'))}</span>`;
+    s += `<div class="account-row" style="padding:.25rem 0;gap:.5rem;align-items:center" data-nm="${key}">
+      <span style="font-size:.76rem;flex:1"><span class="tag tag-gray">${esc(m.platform)}</span> <strong>${esc(m.account_name)}</strong> ≠ <strong>${esc(m.persona_name)}</strong>
+        <span style="color:var(--t2);font-size:.7rem;margin-left:.3rem">${esc(m.account_id)}</span></span>
+      ${act}
+    </div>`;
+  });
+  return s + '</div>';
+}
+async function _pushPersonaName(platform, accountId, personaName, btn) {
+  if (!confirm(window.T('psn_nm_confirm').replace('{name}', personaName))) return;
+  if (btn) { btn.disabled = true; btn.textContent = window.T('psn_nm_pushing'); }
+  try {
+    const r = await apiFetch(`/api/accounts/${encodeURIComponent(platform)}/${encodeURIComponent(accountId)}/profile`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: personaName})
+    });
+    let j = {};
+    try { j = await r.json(); } catch (_e) {}
+    if (r.ok && j && j.ok !== false) {
+      _toast(window.T('psn_nm_done').replace('{name}', personaName), 'ok');
+      refreshStatus();
+    } else {
+      _toast((j && (j.detail || j.error)) || (window.T('psn_nm_fail') + ' HTTP ' + r.status), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = window.T('psn_nm_push'); }
+    }
+  } catch (e) {
+    _toast(window.T('psn_nm_fail') + ' ' + e, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = window.T('psn_nm_push'); }
+  }
+}
+
 // ── Live status panel ────────────────────────────────────────
 async function refreshStatus() {
   const body = document.getElementById('status-body');
@@ -2518,6 +2576,7 @@ async function refreshStatus() {
     </div>`;
     if (sbHtml) html += `<div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.5rem">${sbHtml}</div>`;
     html += unsyncHtml;
+    html += _renderNameMismatchBar(d);
 
     if (d.profiles_in_use && d.profiles_in_use.length) {
       html += `<div style="margin-bottom:.5rem">${window.T('psn_js_349')}`;

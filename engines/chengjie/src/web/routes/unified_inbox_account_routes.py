@@ -5022,14 +5022,28 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             last_push_ts = float(meta.get("profile_push_last_ts") or 0)
         except (TypeError, ValueError):
             last_push_ts = 0.0
+        # O-1 E（#255）：账号显示名 ≠ 人设名 → name_mismatch（详情页红条）；一致 / 判不出 None
+        _self = read_self_profile_from_meta(meta)
+        name_mismatch = None
+        try:
+            from src.utils.account_name_check import (
+                check_name_mismatch, log_mismatch_once)
+            name_mismatch = check_name_mismatch(
+                platform, account_id, _self.get("self_name"),
+                (persona or {}).get("name"), persona_id=persona_id)
+            if name_mismatch:
+                log_mismatch_once(name_mismatch)
+        except Exception:
+            name_mismatch = None
         return {
             "ok": True, "platform": platform, "account_id": account_id,
             "enabled": profile_push_enabled(cfg),
             "capabilities": capabilities(platform),
-            "self": read_self_profile_from_meta(meta),
+            "self": _self,
             "label": str(row.get("label") or ""),
             "persona_id": persona_id,
             "persona": persona,
+            "name_mismatch": name_mismatch,
             "account_age_days": account_age_days,
             "fresh": bool(account_age_days is not None
                           and account_age_days < fdays),

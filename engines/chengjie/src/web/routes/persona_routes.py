@@ -2206,6 +2206,22 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
         profile_ids = pm.list_profile_ids()
         bindings = pm.get_all_chat_bindings()
 
+        # O-1 E（#255 TDNJHQ / 8FJDUK ①）：账号显示名（meta.self_name）≠ 绑定人设名 →
+        # 行上多回 name_mismatch（页面红条 + 一键按人设改名）；一致 / 判不出 → None。
+        # 日志 [self-name] … mismatch=1 每组合一次（本接口被轮询）。
+        def _name_mismatch(_plat: str, _aid: str, _self_name: str, _profile: Any,
+                           _pid: str):
+            try:
+                from src.utils.account_name_check import (
+                    check_name_mismatch, log_mismatch_once)
+                _pname = (_profile or {}).get("name") if isinstance(_profile, dict) else ""
+                _m = check_name_mismatch(_plat, _aid, _self_name, _pname, persona_id=_pid)
+                if _m:
+                    log_mismatch_once(_m)
+                return _m
+            except Exception:
+                return None
+
         # Telegram accounts
         tg_accounts: list = []
         try:
@@ -2248,18 +2264,22 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                     continue
                 _pids = parse_persona_ids(_row.get("meta"))
                 _meta = _row.get("meta") if isinstance(_row.get("meta"), dict) else {}
+                _self_name = str(_meta.get("self_name") or "").strip()
+                _ap = pm.get_persona_by_id(_pids[0]) if _pids else None
                 tg_accounts.append({
                     "account_id": _aid,
                     # #78 二轮：主标签链 运营label → 账号自身昵称(self_name，
                     # account_self_profile 富集) → 裸 id 兜底——skuio 原图 929
                     # 六行全是裸数字 id 的根因就是这里没吃 self_name。
                     "label": (str(_row.get("label") or "").strip()
-                              or str(_meta.get("self_name") or "").strip()
+                              or _self_name
                               or _aid),
                     "username": str(_meta.get("self_username") or "").strip(),
+                    "self_name": _self_name,
                     "persona_ids": _pids,
-                    "active_profile": (pm.get_persona_by_id(_pids[0])
-                                       if _pids else None),
+                    "active_profile": _ap,
+                    "name_mismatch": _name_mismatch(
+                        "telegram", _aid, _self_name, _ap, _pids[0] if _pids else ""),
                     "source": "registry",
                 })
             # #78 二轮（钧 0831 原图 889 / skuio 929 两票）：运行时注册表有真账号
@@ -2372,17 +2392,21 @@ def register_persona_routes(app, auth_dep, audit_store=None, config_manager=None
                     _pids = parse_persona_ids(_row.get("meta"))
                     _meta = (_row.get("meta")
                              if isinstance(_row.get("meta"), dict) else {})
+                    _self_name = str(_meta.get("self_name") or "").strip()
+                    _ap = pm.get_persona_by_id(_pids[0]) if _pids else None
                     out.append({
                         "account_id": _aid,
                         # #78 二轮：label → self_name → id（LINE 裸 token 当主标签
                         # 完全不可读，self_name 是登录时富集的账号自身昵称）。
                         "label": (str(_row.get("label") or "").strip()
-                                  or str(_meta.get("self_name") or "").strip()
+                                  or _self_name
                                   or _aid),
                         "username": str(_meta.get("self_username") or "").strip(),
+                        "self_name": _self_name,
                         "persona_ids": _pids,
-                        "active_profile": (pm.get_persona_by_id(_pids[0])
-                                           if _pids else None),
+                        "active_profile": _ap,
+                        "name_mismatch": _name_mismatch(
+                            _plat, _aid, _self_name, _ap, _pids[0] if _pids else ""),
                         "source": "registry",
                     })
                 return out
