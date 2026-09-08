@@ -612,8 +612,8 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
   <!-- 场景化预设档（P1）：一键把下方多个参数填成组合值，经保存条确认才落盘。
        JS 按 API 是否返回 presets 控显（重启装载前旧进程无此字段 → 整卡隐藏不摆空架子） -->
   <div class="rps-card" id="rps-preset-card" style="display:none">
-    <h3>🎛️ {{ (i18n or {}).get('rps_preset_title', "场景预设档") }}</h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "点选即把速度 / 拟人 / 长度 / 语音触发填成该场景的推荐组合——先填进表单，看清底部改动数再保存；表情、风格要求等个性化项不受影响。") }}</p>
+    <h3>🎛️ {{ (i18n or {}).get('rps_preset_title', "拟人程度") }}</h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_preset_hint', "选一档即把回复节奏（先读、再想、按手速打字，发出前停一下「正在输入」）、已读 / 打字气泡、长度、语音触发一键填成该档——先填进表单，看清底部改动数再保存；表情、风格要求等个性化项不受影响。专家参数在下方「高级参数」里。") }}</p>
     <div class="rps-modes" id="rps-presets"></div>
     <div class="rps-preset-state" id="rps-preset-state"></div>
   </div>
@@ -785,6 +785,19 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span><i class="zdot z-slow"></i>{{ (i18n or {}).get('rps_zone_slow', "30s+ 慢热") }}</span>
       <span id="rps-zone-obs-legend" style="display:none"><i class="zdot z-obs"></i>{{ (i18n or {}).get('rps_zone_obs', "实测均值（按人设）") }}</span>
       <a href="#" onclick="rpsUseRecommended(event)">{{ (i18n or {}).get('rps_zone_use', "一键用推荐区间 3–12s") }}</a>
+    </div>
+    <!-- O-1 D（D-O4）「拟人程度」档位：natural / fast / slow 走读 / 想 / 打字分量模型，
+         上方滑杆与自适应只在 custom 时生效。旧后端白名单缺此键 → 整行隐藏（feat 探测） -->
+    <div class="rps-row" id="rps-profile-row" style="display:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_profile_label', "拟人程度档") }}
+        <span class="rps-chip" data-hot-chip="inbox.l2_autosend.deliver_delay.profile"></span></span>
+      <select id="rps-profile" onchange="rpsMarkDirty();rpsPaceRefresh()">
+        <option value="natural">{{ (i18n or {}).get('rps_profile_natural', "自然（默认）· 读 3–6s · 想 3–8s · 打字 35–45 词/分") }}</option>
+        <option value="fast">{{ (i18n or {}).get('rps_profile_fast', "偏快 · 读 1.5–3.5s · 想 1–4s · 打字 50–65 词/分") }}</option>
+        <option value="slow">{{ (i18n or {}).get('rps_profile_slow', "偏慢 · 读 5–10s · 想 6–14s · 打字 25–35 词/分") }}</option>
+        <option value="custom">{{ (i18n or {}).get('rps_profile_custom', "自定义（用下方区间 / 自适应旧模型）") }}</option>
+      </select>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_profile_hint', "三档都按「先读、再想、按手速打字，发出前停一下正在输入」出牌，快慢随字数变、无两条到秒相同；选自定义才用上面的区间滑杆") }}</span>
     </div>
     <div class="rps-row" style="border-top:none;padding-top:0">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_pace_adaptive', "按内容长度自适应") }}
@@ -1248,9 +1261,11 @@ var RPS_I18N = {
   poAdaptive: {{ (i18n or {}).get('rps_po_adaptive', "自适应")|tojson }},
   platUnsupported: {{ (i18n or {}).get('rps_plat_unsupported', "该平台协议/链路不支持此能力")|tojson }},
   presetMeta: {
-    cautious: {name: {{ (i18n or {}).get('rps_preset_cautious', "谨慎养号")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_cautious_d', "新号 / 防风控：慢节奏全拟人，回复简短克制，语音只跟随对方")|tojson }}},
-    natural: {name: {{ (i18n or {}).get('rps_preset_natural', "自然真人")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_natural_d', "日常运营平衡档：3-12 秒自适应节奏，长度适中")|tojson }}, badge: {{ (i18n or {}).get('rps_preset_recommended', "推荐")|tojson }}},
-    rapid: {name: {{ (i18n or {}).get('rps_preset_rapid', "快速响应")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_rapid_d', "客服 / 效率场景：几乎即回，简短直接，不发语音")|tojson }}}
+    // O-1 D（D-O4）「拟人程度」三档：偏慢 / 自然（默认推荐）/ 偏快——每档带 deliver_delay.profile，
+    // humanize 走读 / 想 / 打字分量模型；文案以 i18n 包 reply_settings_page 为准，此处为回落
+    cautious: {name: {{ (i18n or {}).get('rps_preset_cautious', "偏慢 · 谨慎养号")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_cautious_d', "新号 / 防风控：读 5–10 秒、想 6–14 秒、打字 25–35 词/分，回复简短克制，语音只跟随对方")|tojson }}},
+    natural: {name: {{ (i18n or {}).get('rps_preset_natural', "自然 · 真人节奏")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_natural_d', "日常运营默认：读 3–6 秒、想 3–8 秒、打字 35–45 词/分 ±30%，回复快慢随字数变")|tojson }}, badge: {{ (i18n or {}).get('rps_preset_recommended', "推荐")|tojson }}},
+    rapid: {name: {{ (i18n or {}).get('rps_preset_rapid', "偏快 · 手快的人")|tojson }}, desc: {{ (i18n or {}).get('rps_preset_rapid_d', "读 1.5–3.5 秒、想 1–4 秒、打字 50–65 词/分：仍是人的手速，不是秒回")|tojson }}}
   },
   presetKv: {{ (i18n or {}).get('rps_preset_kv', "延迟 {min}–{max}s · 长度 {len} · 语音 {vt}")|tojson }},
   presetCurrent: {{ (i18n or {}).get('rps_preset_current', "当前匹配：{name}")|tojson }},
@@ -1381,6 +1396,7 @@ var RPS_I18N = {
     "inbox.l2_autosend.deliver_delay.min_sec": {{ (i18n or {}).get('rps_pace_min', "最快（秒）")|tojson }},
     "inbox.l2_autosend.deliver_delay.max_sec": {{ (i18n or {}).get('rps_pace_max', "最慢（秒）")|tojson }},
     "inbox.l2_autosend.deliver_delay.adaptive": {{ (i18n or {}).get('rps_pace_adaptive', "按内容长度自适应")|tojson }},
+    "inbox.l2_autosend.deliver_delay.profile": {{ (i18n or {}).get('rps_profile_label', "拟人程度档")|tojson }},
     "inbox.l2_autosend.deliver_delay.min_gap_sec": {{ (i18n or {}).get('rps_floor_gap_label', "同一客户连发最小间隔（秒）")|tojson }},
     "inbox.l2_autosend.deliver_delay.min_residual_sec": {{ (i18n or {}).get('rps_floor_resid_label', "自适应抵扣后至少等待（秒）")|tojson }},
     "inbox.l2_autosend.deliver_delay.persona_overrides": {{ (i18n or {}).get('rps_po_title', "按人设覆写节奏")|tojson }},
@@ -1424,6 +1440,7 @@ var RPS_PRESETS = {};       // 服务端预设定义（P1；键集与白名单�
 var rpsWsDupFlag = false;   // 账号班表覆写表是否有重复账号键（保存前拦）
 var rpsWsEnabled = false;   // 后端是否已装载 work_schedule 白名单（旧进程隐藏整卡）
 var rpsFloorsEnabled = false; // 后端是否已装载连发/秒回地板白名单（P1；旧进程隐藏该组）
+var rpsProfileEnabled = false; // O-1 D：后端是否已装载「拟人程度」档位键（旧进程隐藏该行）
 var rpsGuardEnabled = false;  // 后端是否已装载回复额度守卫白名单（P0-guard；旧进程隐藏整卡）
 var rpsBubEnabled = false;    // 后端是否已装载消息分条白名单（P0-bub；旧进程隐藏整卡）
 var rpsBubNlEnabled = false;  // 「仅显式换行才拆」键是否已装载（#210 1.0.75；错位期隐藏该行）
@@ -1443,6 +1460,8 @@ var RPS_FIELD_DEFS = [
   {path: "inbox.l2_autosend.deliver_delay.min_sec", kind: "float", el: "rps-min"},
   {path: "inbox.l2_autosend.deliver_delay.max_sec", kind: "float", el: "rps-max"},
   {path: "inbox.l2_autosend.deliver_delay.adaptive", kind: "check", el: "rps-adaptive"},
+  // O-1 D「拟人程度」档位：feat:"profile" ＝旧后端白名单缺此键时不参与收集/回填
+  {path: "inbox.l2_autosend.deliver_delay.profile", kind: "select", el: "rps-profile", dflt: "custom", feat: "profile"},
   // P1 连发/秒回地板（2026-08-12）：feat:"floors" ＝旧后端白名单缺这两键时
   // 不参与收集/回填（同班表 feat:"ws" 语义，防假脏/保存被拒）
   {path: "inbox.l2_autosend.deliver_delay.min_gap_sec", kind: "float", el: "rps-mingap", feat: "floors"},
@@ -1774,6 +1793,7 @@ function rpsCollect(){
   RPS_FIELD_DEFS.forEach(function(def){
     if (def.feat === "ws"){ if (!rpsWsEnabled) return; }        // 旧后端：班表字段不参与
     else if (def.feat === "floors"){ if (!rpsFloorsEnabled) return; } // 旧后端：地板字段不参与
+    else if (def.feat === "profile"){ if (!rpsProfileEnabled) return; } // 旧后端：拟人档位不参与
     else if (def.feat === "guard"){ if (!rpsGuardEnabled) return; }   // 旧后端：守卫字段不参与
     else if (def.feat === "guard_adv"){ if (!rpsGuardAdvEnabled) return; } // 守卫高级组独立探测
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }       // 旧后端：分条字段不参与
@@ -1791,6 +1811,7 @@ function rpsFill(values){
   RPS_FIELD_DEFS.forEach(function(def){
     if (def.feat === "ws"){ if (!rpsWsEnabled) return; }
     else if (def.feat === "floors"){ if (!rpsFloorsEnabled) return; }
+    else if (def.feat === "profile"){ if (!rpsProfileEnabled) return; }
     else if (def.feat === "guard"){ if (!rpsGuardEnabled) return; }
     else if (def.feat === "guard_adv"){ if (!rpsGuardAdvEnabled) return; }
     else if (def.feat === "bub"){ if (!rpsBubEnabled) return; }
@@ -3739,6 +3760,10 @@ async function rpsLoad(){
     rpsFloorsEnabled = !!((d.meta || {})["inbox.l2_autosend.deliver_delay.min_gap_sec"]);
     var floorsGrp = document.getElementById('rps-floors');
     if (floorsGrp) floorsGrp.style.display = rpsFloorsEnabled ? '' : 'none';
+    // O-1 D「拟人程度」档位：同款特性探测，旧进程隐藏该行
+    rpsProfileEnabled = !!((d.meta || {})["inbox.l2_autosend.deliver_delay.profile"]);
+    var profRow = document.getElementById('rps-profile-row');
+    if (profRow) profRow.style.display = rpsProfileEnabled ? '' : 'none';
     // 回复额度守卫（P0-guard）：同款特性探测；卡片亮起后异步拉「今日额度状态」
     rpsGuardEnabled = !!((d.meta || {})["inbox.peer_bot_guard.enabled"]);
     // 高级参数组（P1）独立探测：P0/P1 后端错位期基础键照编、高级组回落只读

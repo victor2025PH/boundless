@@ -30,6 +30,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 AUTOMATION_MODES = ("manual", "review", "multi_choice", "auto_ai")
 VOICE_TRIGGERS = ("never", "always", "when_peer_voice", "smart")
+# O-1 D 「拟人程度」三档 + custom（旧模型）。刻意本地定义（本模块零依赖纯函数）；
+# 与 humanize.PACING_PROFILE_NAMES 一致性由门禁钉住（test_pacing_profiles）。
+PACING_PROFILE_CHOICES = ("custom", "natural", "fast", "slow")
 # 内容与风格全局默认（P0-style，2026-08-02）：空串＝不干预（跟随人设/旧行为）。
 # 消费点在 persona_manager（活读 config，人设显式值永远优先——见
 # resolve_reply_defaults 的 precedence 说明），写完即生效故 hot=True。
@@ -101,6 +104,18 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     },
     "inbox.l2_autosend.deliver_delay.min_residual_sec": {
         "type": "number", "lo": 0, "hi": 60, "default": 0, "hot": "worker",
+    },
+    # O-1 D（#253 #254 · D-O4，2026-09-08）「拟人程度」三档：natural（自然）/ fast（偏快）/
+    # slow（偏慢）→ humanize.PACING_PROFILES 的读 / 想 / 打字分量模型（读 3–6s + 每 10 词 +1s、
+    # 想 3–8s、打字 35–45 wpm / 60–90 字/分 ±30%、发出前 1s 停 composing），一键改全部节奏
+    # 参数；custom＝沿用 min/max/adaptive 旧模型（存量默认，行为零变化）。同住 deliver_delay
+    # 块 → apply_deliver_delay 热更。出厂基线 natural 由 feature_registry A 类 + min 种子带
+    # （O-1 D ④：clean 升级机首启 _ensure_baseline 补进 overlay；块里已显式写 profile 的一字不动）。
+    # 此处 default 保持 custom：它是「配置里没写时 UI 回填什么」——与基线补齐不同层，且旧后端
+    # 错位期 feat 探测为假时该行整行隐藏，不会把 custom 写回去。
+    "inbox.l2_autosend.deliver_delay.profile": {
+        "type": "enum", "choices": PACING_PROFILE_CHOICES,
+        "default": "custom", "hot": "worker",
     },
     # 人设节奏覆写（P1）：{persona_id: {min_sec?, max_sec?, adaptive?}} 整表提交，
     # 删掉的人设真被删掉（save_overlay_patch 走 REPLACE_PATHS 整树替换）；
@@ -376,9 +391,13 @@ _PLAT_VOICE_PATH = "inbox.l2_autosend.voice.platform_triggers"
 # （运营个性化，预设不清洗）、危险闸门（能力看板辖区）。
 # 键集必须 ⊆ FIELDS（有门禁钉住）；匹配判定＝全键相等（match_preset）。
 PRESETS: Dict[str, Dict[str, Any]] = {
+    # O-1 D（D-O4）：三档即「拟人程度」——cautious=偏慢（slow）/ natural=自然（natural）/
+    # rapid=偏快（custom 旧模型近即回，客服效率场景）。profile 在场时 humanize 走读 / 想 /
+    # 打字分量模型，min/max/adaptive 只作 custom 回落值保留。
     # 谨慎养号：新号/防风控——慢节奏 + 全拟人 + 简短克制 + 语音只跟随
     # （P0-bub 起预设连带条间思考抖动：分条关着也只是躺着的值，开闸即同档）
     "cautious": {
+        "inbox.l2_autosend.deliver_delay.profile": "slow",
         "inbox.l2_autosend.deliver_delay.min_sec": 8,
         "inbox.l2_autosend.deliver_delay.max_sec": 20,
         "inbox.l2_autosend.deliver_delay.adaptive": True,
@@ -392,6 +411,7 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     },
     # 自然真人（推荐）：日常运营平衡档
     "natural": {
+        "inbox.l2_autosend.deliver_delay.profile": "natural",
         "inbox.l2_autosend.deliver_delay.min_sec": 3,
         "inbox.l2_autosend.deliver_delay.max_sec": 12,
         "inbox.l2_autosend.deliver_delay.adaptive": True,
@@ -404,8 +424,10 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "inbox.reply_style.bubbles.gap_sec_hi": 8.0,
         "inbox.reply_style.bubbles.max_gap_sec": 12,
     },
-    # 快速响应：客服/效率场景——几乎即回 + 简短 + 不发语音
+    # 快速响应：客服/效率场景——几乎即回 + 简短 + 不发语音（偏快 = fast 档：读 1.5–3.5s、
+    # 想 1–4s、50–65 wpm——仍是人的手速，不是秒回；真要秒回走专家区 custom + 0–3s）
     "rapid": {
+        "inbox.l2_autosend.deliver_delay.profile": "fast",
         "inbox.l2_autosend.deliver_delay.min_sec": 0,
         "inbox.l2_autosend.deliver_delay.max_sec": 3,
         "inbox.l2_autosend.deliver_delay.adaptive": False,

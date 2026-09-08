@@ -1047,7 +1047,9 @@ class TestRoutes:
     def test_get_snapshot_preset_match_hits(self, tmp_path):
         cfg = {
             "inbox": {"l2_autosend": {
-                "deliver_delay": {"min_sec": 3, "max_sec": 12, "adaptive": True},
+                # O-1 D（D-O4）：三预设各带 profile，命中判定含档位键（缺 profile = custom → 不匹配）
+                "deliver_delay": {"profile": "natural", "min_sec": 3, "max_sec": 12,
+                                  "adaptive": True},
                 "mark_read_before_reply": True, "typing_indicator": True,
                 "voice": {"trigger": "when_peer_voice"},
             },
