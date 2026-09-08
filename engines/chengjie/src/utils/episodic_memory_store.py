@@ -2062,6 +2062,41 @@ class EpisodicMemoryStore:
             "review": self.review_counts(),
             "grounding_drops": self.grounding_drop_summary(days=d),
             "recall": self.recall_stats(days=d),
+            "growth": self.growth_counts(),
+        }
+
+    def growth_counts(self, now: Optional[float] = None) -> Dict[str, Any]:
+        """O-2 D（#201 WYNN22）：记忆页顶部「自安装以来新增 N 条 · 今日 +T · 已转正 P」。
+
+        口径刻意与 ``admin_summary.total_count`` 不同：``since_install`` 数**历史上写过的
+        每一行**（含后来被软删 / 标 stale / ignored 的）——它回答的是「抽取链有没有在
+        产出」，而不是「现在库里留着几条」；WYNN22 现场 8 小时零抽取，就该在这里读到 0。
+        ``today_new`` 按**本机本地日期**当天 0 点起算；``promoted_total`` = tier=stable
+        的 active 行；``first_created_at`` = 库里第一条的写入时刻（≈ 安装 / 建库日）。
+        store 异常返回全零、绝不抛。
+        """
+        ts = float(now if now is not None else time.time())
+        lt = time.localtime(ts)
+        midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*), MIN(created_at),"
+                " SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END),"
+                " SUM(CASE WHEN COALESCE(tier, 'raw') = 'stable'"
+                "          AND COALESCE(status, 'active') = 'active' THEN 1 ELSE 0 END)"
+                " FROM episodic_memory",
+                (midnight,),
+            ).fetchone()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("episodic growth_counts failed: %s", e)
+            return {"since_install": 0, "today_new": 0, "promoted_total": 0,
+                    "first_created_at": None}
+        first = row[1]
+        return {
+            "since_install": int(row[0] or 0),
+            "today_new": int(row[2] or 0),
+            "promoted_total": int(row[3] or 0),
+            "first_created_at": (float(first) if first is not None else None),
         }
 
     def record_grounding_drops(

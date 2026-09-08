@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -162,6 +163,50 @@ def build_correction_stats(
             {"date": d, "count": daily[d]} for d in sorted(daily)
         ]
     return out
+
+
+#: O-2 D（#201 WYNN22）：入站累计 ≥ 此数而记忆自安装以来仍 0 条 → 页面红字「记忆没有在增长」
+MEMORY_STALL_MIN_INBOUND = 50
+
+
+def inbound_message_total(inbox_db: Optional[Path]) -> Optional[int]:
+    """inbox.db 里客户入站（``direction='in'``）消息总数——「自安装以来收到多少条」。
+
+    只读 URI 连接、2s 超时、任何异常 → None（页面拿到 None 就**不**判停滞，宁不报
+    勿误报）。不经 InboxStore 实例：本路由本就按路径富化身份，与之同口径。
+    """
+    if not inbox_db:
+        return None
+    try:
+        uri = Path(inbox_db).resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) FROM messages WHERE direction = 'in'").fetchone()
+            return int((row or [0])[0] or 0)
+        finally:
+            con.close()
+    except Exception:
+        return None
+
+
+def memory_growth_status(
+    growth: Optional[Mapping[str, Any]], inbound_total: Optional[int], *,
+    min_inbound: int = MEMORY_STALL_MIN_INBOUND,
+) -> Dict[str, Any]:
+    """把 store 的 growth 读数与入站累计合成页面用块（纯函数）。
+
+    ``stalled`` = 入站累计已知且 ≥ min_inbound **且** 自安装以来记忆写入 0 条——
+    这正是 WYNN22 现场形态（8 小时 30 次 schedule run 全 skip、6 客户零抽取）；
+    抽取修好后 since_install 从 0 开始涨，红字自然消失。入站数拿不到（None）不判。
+    """
+    g: Dict[str, Any] = dict(growth or {})
+    since = int(g.get("since_install") or 0)
+    g["inbound_total"] = inbound_total
+    g["stall_min_inbound"] = int(min_inbound)
+    g["stalled"] = bool(
+        inbound_total is not None and int(inbound_total) >= int(min_inbound) and since == 0)
+    return g
 
 
 def register_episodic_identity_routes(app, ctx) -> None:
@@ -433,6 +478,10 @@ def register_episodic_identity_routes(app, ctx) -> None:
                         t["identity"] = ident
             except Exception:
                 pass  # 富化失败不阻断摘要
+        # O-2 D（#201）：「自安装以来新增 N 条」+ 入站累计 → 停滞判定（旧 store 无 growth 则省略）
+        if isinstance(out.get("growth"), dict):
+            out["growth"] = memory_growth_status(
+                out["growth"], inbound_message_total(inbox_db))
         return {"ok": True, **out}
 
     @app.get("/api/episodic-memory/key-health")

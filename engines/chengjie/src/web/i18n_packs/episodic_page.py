@@ -219,6 +219,13 @@ ZH = {
     "em_impact_cat_health": "健康",
     "em_impact_cat_identity": "证件/账号",
     "em_impact_cat_family": "家人",
+    # ── O-2 D（#201 WYNN22）：自安装以来新增计数 + 停滞红字 ──
+    "em_growth_line": "自安装以来新增 {n} 条 · 今日 +{t} · 已转正 {p}",
+    "em_growth_since": "记忆库建于 {d}",
+    "em_growth_inbound": "已收客户消息 {i} 条",
+    "em_growth_stalled": "记忆没有在增长——已收到 {i} 条客户消息，记忆仍是 0 条。检查抽取白名单（memory.extract.intents）与模型是否可用；",
+    "em_growth_stalled_link": "看日志里的 [episodic] 行（「抽取白名单为空」/「skip: intent … not extractable」即是根因）",
+    "em_growth_tip": "从记忆库建立（安装）起累计写入的条数，含后来被删除 / 过时的；今日按本机日期 0 点起算",
 }
 
 EN = {
@@ -439,4 +446,10 @@ EN = {
     "em_impact_cat_health": "health",
     "em_impact_cat_identity": "ID/account",
     "em_impact_cat_family": "family",
+    "em_growth_line": "{n} memories added since install · today +{t} · {p} promoted",
+    "em_growth_since": "memory store created {d}",
+    "em_growth_inbound": "{i} customer messages received",
+    "em_growth_stalled": "Memory is not growing — {i} customer messages received but still 0 memories. Check the extraction whitelist (memory.extract.intents) and that the model is reachable;",
+    "em_growth_stalled_link": "see the [episodic] lines in the log (\"抽取白名单为空\" / \"skip: intent … not extractable\" is the root cause)",
+    "em_growth_tip": "Total rows ever written since the memory store was created (install), including ones later deleted / outdated; \"today\" starts at local midnight",
 }

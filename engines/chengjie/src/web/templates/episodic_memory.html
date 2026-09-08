@@ -136,6 +136,10 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
     {{ (i18n or {}).get('em_s002', "记忆校正质量") }}
     <span style="font-size:.75rem;font-weight:400;color:var(--t2);margin-left:.4rem">{{ (i18n or {}).get('em_s003', "坐席把 AI 推断确认为事实的采纳情况（近") }} <span id="cs-win">30</span> {{ (i18n or {}).get('db_js_012', "天）") }}</span>
   </h2>
+  {# O-2 D（#201 WYNN22）：「自安装以来新增 N 条 · 今日 +T · 已转正 P」——回答「抽取链有没有在产出」；
+     入站 ≥50 而记忆 0 条 → 红字「记忆没有在增长」+ 链到日志页（看 [episodic] 行）。旧后端无 growth 字段 → 两行都隐藏 #}
+  <div id="cs-growth" hidden style="font-size:.8rem;color:var(--t2);margin:-.1rem 0 .55rem" title="{{ (i18n or {}).get('em_growth_tip', '从记忆库建立（安装）起累计写入的条数，含后来被删除 / 过时的；今日按本机日期 0 点起算') }}"></div>
+  <div id="cs-stall" hidden role="alert" style="font-size:.8rem;font-weight:600;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem;line-height:1.5"></div>
   {# J-10 B5：「AI 记忆健康」KPI——今日需处理 / AI 已记住 / 未记录（护栏丢弃）/ 被用轮数 / 抽检准确率；
      数据全部来自 A 组新增字段（/summary 的 review / grounding_drops / recall + /correction-stats） #}
   <div class="cs-grid" id="cs-grid">
@@ -1514,6 +1518,25 @@ async function _emPromisesLoad() {
 }
 /* J-10 B5：「AI 记忆健康」卡——/summary（A 组新增 review / grounding_drops / recall / total_*）+ /correction-stats（抽检） */
 function _emSetText(id, v) { var el = document.getElementById(id); if (el) el.textContent = v; }
+/* O-2 D（#201 WYNN22）：自安装以来新增 / 今日 / 已转正 + 停滞红字（入站 ≥N 而记忆 0 条） */
+function _emGrowthRender(g) {
+  var line = document.getElementById('cs-growth'), stall = document.getElementById('cs-stall');
+  if (!line || !stall) return;
+  if (!g || typeof g.since_install === 'undefined') { line.hidden = true; stall.hidden = true; return; }
+  var txt = window.Tf('em_growth_line', {n: g.since_install || 0, t: g.today_new || 0, p: g.promoted_total || 0});
+  if (g.first_created_at) {
+    try { txt += ' · ' + window.Tf('em_growth_since', {d: window.wsFmtDate(g.first_created_at) || ''}); } catch (e) {}
+  }
+  if (typeof g.inbound_total === 'number') txt += ' · ' + window.Tf('em_growth_inbound', {i: g.inbound_total});
+  line.textContent = txt; line.hidden = false;
+  if (g.stalled) {
+    stall.innerHTML = _emEsc(window.Tf('em_growth_stalled', {i: g.inbound_total || 0}))
+      + ' <a href="/logs" style="color:inherit;text-decoration:underline">' + _emEsc(window.T('em_growth_stalled_link')) + '</a>';
+    stall.hidden = false;
+  } else {
+    stall.hidden = true;
+  }
+}
 async function _emHealthLoad() {
   try {
     var res = await apiFetch('/api/episodic-memory/summary?days=7&top=3');
@@ -1531,6 +1554,7 @@ async function _emHealthLoad() {
       _emSetText('cs-remembered-lb', window.T('em_kpi_remembered_lb') + ' · ' + window.Tf('em_kpi_remembered_sub',
         {u: d.total_users || 0, d: days, x: d.new_count || 0, s: d.stable_count || 0}));
     }
+    _emGrowthRender(d.growth);
     if (gd && typeof gd.total !== 'undefined') {
       _emSetText('cs-dropped', gd.total);
       _emSetText('cs-dropped-lb', window.Tf('em_kpi_dropped_lb', {d: days}));
