@@ -99,7 +99,7 @@ def _service_tone_pass(text: str, cfg: Dict[str, Any]) -> Tuple[str, str, int]:
         from src.utils.persona_guard import companion_tone_guard_active, rewrite_service_tone
         if not companion_tone_guard_active():
             return src, "clean", 0
-        out, rep = rewrite_service_tone(src)
+        out, rep = rewrite_service_tone(src, record_stats=False)
         act = str(rep.get("action") or "clean")
         n = len(rep.get("hits") or []) + int(bool(rep.get("three_part"))) + int(bool(rep.get("conditional_close")))
         if act == "rewrite":
@@ -656,14 +656,102 @@ def apply_outbound_humanize(
             st["punct_fix"], st["style_fix"], st["trimmed"], st["dash"], st["semicolon"],
             st["summary"], st["tag_q"], svc_n if svc_act != "clean" else 0,
             text_fingerprint(out), out[:40])
+        # P-1 A（#259）：起草层已净化 → 发送门这里正常应 punct_fix=0；>0 说明有绕过起草层
+        # 的出站路径（协议直发 / 未挂 apply_draft_humanize 的生成口），告警一行便于补挂点。
+        _fp_stats(record_gate=st["punct_fix"])
+        if st["punct_fix"] > 0:
+            logger.warning(
+                "[outbound-leak] conv=%s stage=%s origin=%s punct_fix=%d dash=%d "
+                "(a path bypassed draft-stage humanize; send gate caught it)",
+                conversation_id or "-", stage or "-", org, st["punct_fix"], st["dash"])
         return out
     except Exception:
         logger.debug("[outbound_humanize] apply 异常（原文放行）", exc_info=True)
         return src
 
 
+def _fp_stats(*, record_gate: Optional[int] = None, record_draft: Optional[int] = None,
+              claim_action: str = "", svc_action: Optional[str] = None) -> None:
+    """「AI 指纹」计数（ai_fingerprint_stats）——best-effort，任何失败静默。"""
+    try:
+        from src.inbox import ai_fingerprint_stats as _fp
+        if record_gate is not None:
+            _fp.record_gate(int(record_gate))
+        if record_draft is not None:
+            _fp.record_draft(int(record_draft))
+        if claim_action:
+            _fp.record_claim(claim_action)
+        if svc_action is not None:
+            _fp.record_service_tone(svc_action)
+    except Exception:
+        pass
+
+
+# ── 起草层挂点（P-1 A · #259 #254）──────────────────────────────────────────
+
+def apply_draft_humanize(
+    text: Optional[str], *, conversation_id: str = "", lang: str = "", origin: str = "auto",
+    stage: str = "draft", draft_id: str = "", history_texts: Optional[List[Any]] = None,
+    memory_facts: Optional[List[Any]] = None, cfg_root: Optional[Dict[str, Any]] = None,
+    mode: str = "default",
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """AI 稿**落库之前**的净化：先引用锚点守卫（``claim_guard.check_claims``，去谎）再
+    :func:`humanize`（去标点 / 句式），使「草稿 = 将发文本」（工作台 / L1 审核稿 / 关怀预览
+    看到的就是要发出去的）。发送门 :func:`apply_outbound_humanize` 保留兜底。
+
+    返回 ``(text, meta)``；``meta``: ``punct_fix / style_fix / trimmed / dash / claim_action /
+    claim_phrases / claim_anchor / skipped``。``origin ∈ BYPASS_ORIGINS``（verbatim / 人工）或配置关
+    → 原文 + ``skipped=True``；``None`` 原样返回。每稿一行日志
+    ``[draft] conv=… stage=… draft=… lang=… claim=… punct_fix=n style_fix=n``。绝不抛。
+    """
+    meta: Dict[str, Any] = {"punct_fix": 0, "style_fix": 0, "trimmed": 0, "dash": 0,
+                            "claim_action": "clean", "claim_phrases": [], "claim_anchor": "",
+                            "skipped": False}
+    if text is None:
+        meta["skipped"] = True
+        return None, meta
+    src = str(text)
+    org = str(origin or "auto").lower()
+    try:
+        cfg = resolve_cfg(cfg_root)
+        lg = _norm_lang(lang, src)
+        if org in BYPASS_ORIGINS or not cfg.get("enabled", True) or not src.strip():
+            meta["skipped"] = True
+            logger.info(
+                "[draft] conv=%s stage=%s draft=%s origin=%s lang=%s humanize=skip len=%d",
+                conversation_id or "-", stage or "-", draft_id or "-", org, lg, len(src))
+            return src, meta
+        cur = src
+        try:
+            from src.inbox.claim_guard import check_claims, log_report
+            cur, crep = check_claims(cur, history_texts=history_texts, memory_facts=memory_facts,
+                                     lang=lg, seed=conversation_id or draft_id)
+            meta["claim_action"] = str(crep.get("action") or "clean")
+            meta["claim_phrases"] = list(crep.get("phrases") or [])[:4]
+            meta["claim_anchor"] = str(crep.get("anchor") or "")
+            log_report(crep, conversation_id=conversation_id, stage=stage)
+            if crep.get("phrases"):
+                _fp_stats(claim_action=meta["claim_action"])
+        except Exception:
+            logger.debug("[draft] claim_guard 异常（原文继续）", exc_info=True)
+        out, st = humanize(cur, lg, cfg=cfg, mode=mode)
+        meta.update({"punct_fix": int(st["punct_fix"]), "style_fix": int(st["style_fix"]),
+                     "trimmed": int(st["trimmed"]), "dash": int(st["dash"])})
+        _fp_stats(record_draft=st["punct_fix"])
+        logger.info(
+            "[draft] conv=%s stage=%s draft=%s origin=%s lang=%s len=%d claim=%s punct_fix=%d "
+            "style_fix=%d trimmed=%d dash=%d fp=%s preview=%r",
+            conversation_id or "-", stage or "-", draft_id or "-", org, lg, len(out),
+            meta["claim_action"], st["punct_fix"], st["style_fix"], st["trimmed"], st["dash"],
+            text_fingerprint(out), out[:40])
+        return out, meta
+    except Exception:
+        logger.debug("[draft] apply_draft_humanize 异常（原文放行）", exc_info=True)
+        return src, meta
+
+
 __all__ = [
     "DEFAULT_MAX_SENTENCES", "BYPASS_ORIGINS", "resolve_cfg", "humanize",
-    "apply_outbound_humanize", "resolve_origin", "deferred_verbatim_pending",
-    "text_fingerprint",
+    "apply_outbound_humanize", "apply_draft_humanize", "resolve_origin",
+    "deferred_verbatim_pending", "text_fingerprint",
 ]

@@ -1366,6 +1366,27 @@ class DraftService:
             reply = self._guard_late_reply_excuses(reply, draft, draft_id)
         except Exception:
             logger.debug("enrich_draft 迟回理由守卫异常（放行原稿）", exc_info=True)
+        # P-1 A/B（#259 #254）起草即净化：AI 稿**写入 draft 表之前**先过引用锚点守卫（「you
+        # mentioned / 你之前说」在最近 200 条会话 + 客户记忆里找不到锚点 → 整句改中性），再过
+        # 去 AI 标点 / 句式（O-1 B 同一 humanize），使草稿 = 将发文本——工作台 / L1 审核稿看到的
+        # 就是要发的。发送门 apply_outbound_humanize 保留兜底（正常 punct_fix=0）。verbatim /
+        # 人工手发不经此处（它们不走 enrich_draft）。日志 [draft] / [claim-guard] 每稿一行。
+        try:
+            from src.inbox.claim_guard import history_texts_for, memory_facts_for
+            from src.inbox.outbound_humanize import apply_draft_humanize
+            _cid = str(draft.get("conversation_id") or "")
+            _pre_sanitize = reply
+            reply, _dmeta = apply_draft_humanize(
+                reply, conversation_id=_cid, draft_id=draft_id, stage="enrich",
+                lang=reply_lang or str(draft.get("draft_lang") or ""),
+                history_texts=history_texts_for(self._store, _cid, 200),
+                memory_facts=memory_facts_for(str(draft.get("chat_key") or ""),
+                                              str(draft.get("account_id") or ""), store=self._store),
+                cfg_root=self._cfg or None,
+            )
+            reply = str(reply or "").strip() or _pre_sanitize
+        except Exception:
+            logger.debug("enrich_draft 起草层净化异常（放行原稿）", exc_info=True)
         effective_risk = _max_risk(base_risk, reply_risk)
         # 档位只认 policy：入站风险 + AI 稿风险一起进 decide（shadow 下不降档）。
         # 台账去重：入站侧「本会被扣」已在 auto_generate_draft 落过一行，这里只在

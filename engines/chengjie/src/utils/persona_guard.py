@@ -332,12 +332,27 @@ def service_tone_report(text: str) -> Dict[str, Any]:
             "formal_you": formal, "any": bool(hits or three or cond or formal)}
 
 
-def rewrite_service_tone(text: str, *, formal_you: bool = True) -> Tuple[str, Dict[str, Any]]:
+def rewrite_service_tone(text: str, *, formal_you: bool = True,
+                         record_stats: bool = True) -> Tuple[str, Dict[str, Any]]:
     """按人设口吻**确定性**改写一次：剥掉客服腔句、剥条件句收尾、三段式只留中间承接句、
     您 → 你。返回 ``(文本, report)``，``report["action"] ∈ {"clean", "rewrite", "review"}``——
     ``review``＝整段都是客服腔、剥完为空 → 原文返回，调用方降级人工审核。绝不抛、绝不返回空。
+
+    ``record_stats``（P-1 D）：计入质检页「客服腔命中率」（``ai_fingerprint_stats``）；发送门
+    兜底那次复检传 False，避免同一稿记两遍。
     """
     src = str(text or "")
+    out_text, rep = _rewrite_service_tone_impl(src, formal_you=formal_you)
+    if record_stats and src.strip():
+        try:
+            from src.inbox.ai_fingerprint_stats import record_service_tone
+            record_service_tone(str(rep.get("action") or "clean"))
+        except Exception:
+            pass
+    return out_text, rep
+
+
+def _rewrite_service_tone_impl(src: str, *, formal_you: bool) -> Tuple[str, Dict[str, Any]]:
     rep = service_tone_report(src)
     rep["action"] = "clean"
     if not src.strip() or not rep["any"]:

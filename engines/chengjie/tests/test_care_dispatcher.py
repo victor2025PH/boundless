@@ -275,8 +275,9 @@ async def test_dislike_similarity_regenerates():
     s = _store_with()
     rec = []
     ai = _AISeq([bad, good])
+    # P-1 B：引用「你提过换工作」必须在会话要点里有锚点，否则被 claim_guard 改成中性句
     d = CareDispatcher(store=s, ai_client=ai, send_callback=_sender(rec),
-                       context_provider=lambda ck: "ctx", default_lang="zh")
+                       context_provider=lambda ck: "对方最近说想换工作", default_lang="zh")
     n = await d.run_once(now=NOW)
     assert n == 1 and len(rec) == 1
     assert rec[0]["reply"] == good  # 发的是重生成版
@@ -429,9 +430,10 @@ async def test_dry_run_writes_sent_text_snapshot():
     """dry 拟稿也落快照：metrics 侧样本进程内易失，本列才是持久口径。
     实施84 P0-4：快照落在 pending 行（不再借 sent 行），负样本/审核队列照常可见。"""
     s = _store_with()
+    # P-1 B：引用「你说的复查」要有锚点（会话要点提到复查），否则 claim_guard 改中性句
     d = CareDispatcher(store=s, ai_client=_AI("记得你说的复查，还顺利吗？"),
                        send_callback=_sender([]),
-                       context_provider=lambda ck: "ctx", dry_run=True)
+                       context_provider=lambda ck: "下周要去医院复查", dry_run=True)
     assert await d.run_once(now=NOW) == 1
     row = s.list_pending()[0]
     assert float(row["dry_sampled_at"]) > 0

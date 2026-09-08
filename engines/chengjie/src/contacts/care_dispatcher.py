@@ -1025,6 +1025,24 @@ class CareDispatcher:
                 _r(decision="skipped", reason="disliked_similarity")
                 return False
 
+            # P-1 A/B（#259 #254）：关怀 / 目标冲刺 AI 稿在**入队 / 留预览之前**先净化——引用
+            # 锚点守卫（锚点 = 会话要点 + 记忆块 + 目标背景）+ 去 AI 标点，预览卡看到的就是
+            # 将发文本；发送门兜底保留。verbatim 原文行走上面的分支，不经此处。
+            try:
+                from src.inbox.outbound_humanize import apply_draft_humanize
+                _pre_h = reply
+                reply, _hm = apply_draft_humanize(
+                    reply, conversation_id=f"{platform}:{account_id}:{chat_key}",
+                    draft_id=f"care:{sid}", stage="care",
+                    lang=str(profile.get("language") or self._default_lang or ""),
+                    history_texts=[context_block, str(item.get("source_text") or ""), topic],
+                    memory_facts=[str(extras.get("memory_block") or ""),
+                                  str(extras.get("goal_block") or "")],
+                )
+                reply = str(reply or "").strip() or _pre_h
+            except Exception:
+                logger.debug("[care-gen] 起草层净化异常（放行原稿）", exc_info=True)
+
             # M-1 A #218 ②③：事实校验 + 强制预览。与档案矛盾（本地人当外国人 / 老客当
             # 新客）→ 拦下 skip 并留原因；首次对该客户真发 / 含地名 / 含人名 → 不发，
             # 草稿留 pending 待运营确认（dry 档只是看质量，不拦——样本要流动）。
