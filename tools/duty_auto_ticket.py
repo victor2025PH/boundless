@@ -73,7 +73,13 @@ TITLE_MAX = 80
 SEVERITY_RANK = {"P0": 3, "P1": 2, "P2": 1, "P3": 0}
 
 _CODE_RE = re.compile(r"\b([A-Z0-9]{6})\b")
-_TICKET_RE = re.compile(r"#\s*(\d{1,4})\b")
+# ``#N`` 只在挂单上下文算意图：行首 / 前后空白或标点 / 前缀词（工单 挂 关联 见 同）。紧贴中文或
+# 字母词尾的引用（「翻译器#106(8DVDVC)」「器#106」）是正文里提一嘴，不是要挂它（P-5 A，09-08
+# 13:37 实锤：MTRCH2 1.0.77 验收对照被挂到 08-31 已 fixed 的 #106 并抬 P0）。
+_TICKET_RE = re.compile(
+    r"(?:(?<![\w\u4e00-\u9fff)])|(?<=工单)|(?<=关联)|(?<=[挂见同]))#\s*(\d{1,4})\b")
+# 已修 / 已关的单：note 提到它不挂、不升级（复验类 verify 报告除外——那本来就是对着旧单说话）
+RESOLVED_STATUSES = ("fixed", "closed", "verified")
 _ATTACH_PREFIX_RE = re.compile(r"^\s*(?:【\s*(?:复现|复验|补证|关联)|复验\s|补证\s|关联\s)")
 _SUMMARY_RE = re.compile(r"^\s*【\s*汇总")
 _LEAD_TAG_RE = re.compile(r"^\s*【[^】]{1,24}】\s*")
@@ -418,12 +424,35 @@ def decide(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str,
         return {"action": "skip", "ticket": 0, "reason": f"kind={kind} 非报告", "refs": []}
     if _SUMMARY_RE.match(note):
         return {"action": "summary", "ticket": 0, "reason": "【汇总】总表不立单，推值守人工", "refs": valid_refs}
-    if valid_refs:
-        return {"action": "attach", "ticket": valid_refs[0],
-                "reason": f"note 带 #{valid_refs[0]}", "refs": valid_refs}
+    # P-5 A：note 里的 #N 指向已修 / 已关单 → 不挂、不升级；只在最终去向的 note 里记一句
+    # 「正文提及 #N（已修）」，然后照常走 ②③④ 找开放单或新立
+    open_refs = [r for r in valid_refs if _ticket_status(con, r) not in RESOLVED_STATUSES]
+    resolved_refs = [r for r in valid_refs if r not in open_refs]
+    if open_refs:
+        return {"action": "attach", "ticket": open_refs[0],
+                "reason": f"note 带 #{open_refs[0]}", "refs": open_refs,
+                "mentions_resolved": resolved_refs}
     # ③ 的候选先算出来：② 里「码指向已修单」要拿它做对照
     rep = FP_REPORTER.get(str(head.get("fp4") or ""), ("", ""))[0]
     follow = followup_candidate(con, rep, float(head.get("ts") or 0), note)
+    dec = _decide_without_refs(head, con, ledger, codes, diag_root, note, follow)
+    if resolved_refs:
+        tag = "、".join(f"#{r}（已修/已关）" for r in resolved_refs)
+        dec["reason"] = f"note 提及 {tag}，不挂不升；{dec['reason']}"
+        dec["mentions_resolved"] = resolved_refs
+    return dec
+
+
+def _ticket_status(con: sqlite3.Connection, tid: int) -> str:
+    row = con.execute("SELECT status FROM bug_tickets WHERE id=?", (int(tid),)).fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def _decide_without_refs(head: Dict[str, Any], con: sqlite3.Connection, ledger: List[Dict[str, Any]],
+                         codes: Set[str], diag_root: Path, note: str,
+                         follow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """规则 ②③④（note 里没有可挂的开放 #N 时）。"""
+    code = head["code"]
     # ② 已知报告码（含 复现/复验/补证/关联 前缀的显式意图）。多个码 → 汇总候选单，
     #    开放单优先、再 id 大优先（0906 12:49 实锤：9YYD44 写「关联 ZQ4ASK / 9K6G7W / M2SHYA」，
     #    按首码挂到了已修的 #182，其实是 2 分钟前 M2SHYA 刚立的 #214 的根因补证）
@@ -481,13 +510,18 @@ def _stamp(head: Dict[str, Any]) -> str:
 
 
 def _lift_severity(bi, tid: int, code: str, note: str, rep_id: str) -> str:
-    """挂单时 note 的严重度高于主单 → 抬主单（只升不降），记 auto_severity 事件；返回新档或空串。"""
+    """挂单时 note 的严重度高于主单 → 抬主单（只升不降），记 auto_severity 事件；返回新档或空串。
+
+    只对开放单生效：已修 / 已关的单不因一条补录被抬档（P-5 A，09-08 13:37 #106 P1→P0 实锤）。"""
     try:
         want = str(bi.classify_severity(note) or "P2")
         con = sqlite3.connect(str(bi._db_path()), timeout=10)
         try:
-            row = con.execute("SELECT severity FROM bug_tickets WHERE id=?", (tid,)).fetchone()
+            row = con.execute("SELECT severity, status FROM bug_tickets WHERE id=?", (tid,)).fetchone()
             have = str(row[0] if row else "P2")
+            if row and str(row[1] or "") in RESOLVED_STATUSES:
+                log(f"{code} #{tid} status={row[1]} 已修/已关，不升级（want {want}）")
+                return ""
             if SEVERITY_RANK.get(want, 0) <= SEVERITY_RANK.get(have, 0):
                 return ""
             con.execute("UPDATE bug_tickets SET severity=?, updated_ts=? WHERE id=?", (want, time.time(), tid))
@@ -500,6 +534,14 @@ def _lift_severity(bi, tid: int, code: str, note: str, rep_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         log(f"{code} lift severity #{tid} failed: {type(exc).__name__}: {exc}")
         return ""
+
+
+def _mentions_resolved_note(dec: Dict[str, Any]) -> str:
+    """note 提到的已修 / 已关单 → 落到去向单里的一行说明（不挂它、不升它，但留线索）。"""
+    refs = [int(r) for r in (dec.get("mentions_resolved") or []) if r]
+    if not refs:
+        return ""
+    return "[值守自动] 正文提及 " + "、".join(f"#{r}" for r in refs) + "（已修/已关，未挂不升）"
 
 
 def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[str, Any]:
@@ -533,9 +575,12 @@ def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[s
         write_ticket_txt(code, row)
         log(f"{code} verify app={head.get('app')} → #{res['ticket'] or '-'}")
         return res
+    mentioned_note = _mentions_resolved_note(dec)
     if act == "attach":
         tid = res["ticket"]
         bi.append_ticket_note(tid, f"{_stamp(head)} {note[:380]}")
+        if mentioned_note:
+            bi.append_ticket_note(tid, mentioned_note)
         bi._record_event(GROUP, "auto_attach", rep_id, f"#{tid} ← 报告 {code}（{res['reason']}）")
         lifted = _lift_severity(bi, tid, code, note, rep_id)
         _ledger_received(tid, code)
@@ -571,6 +616,8 @@ def apply(head: Dict[str, Any], dec: Dict[str, Any], *, dry_run: bool) -> Dict[s
         _lift_severity(bi, tid, code, note, rep_id)
         res["action"], res["reason"] = "attach", "标题与开放单相似，自动归并"
         log(f"{code} dup-merge → #{tid}")
+    if mentioned_note:
+        bi.append_ticket_note(tid, mentioned_note)
     _ledger_received(tid, code)
     row.update(action=res["action"], ticket=tid, reason=res["reason"], title=title)
     write_ticket_txt(code, row)

@@ -117,6 +117,98 @@ def test_decide_attach_by_ticket_ref_follows_dup_chain(dat, tmp_path):
     assert dec2["action"] == "new"
 
 
+MTRCH2_NOTE = (
+    "【1.0.77.0 验收·启动日志对照】13:32:37 clean 安装启动 8.3s 无错。已落地：CompanionDomainHook+线上陪伴"
+    "(3NVM7Q/TN736F/8FJDUK)；AutosendWorker CJK 语言硬闸+出站收口翻译器#106(8DVDVC)；deferred_outbox drain loop "
+    "常驻(FHSZTA④)。新问题：①FateX 幻缘 产品库 fatex.db 随用户版打包；②Web 监听 0.0.0.0 全网卡开放；"
+    "③clean 包缺 handoff_scripts.yaml；④‘首启体验档 100000 字符/0.0 小时窗口(剩 None 小时)’文案 bug。关联 ZFFBG6 / 9K8YJA"
+)
+
+
+def test_ticket_ref_only_in_attach_context(dat):
+    """P-5 A：#N 紧贴中文 / 字母词尾（翻译器#106、器#106、abc#12）不算挂单意图；
+    行首 / 空白 / 标点 / 前缀词后的 #N 才算。"""
+    assert dat._TICKET_RE.findall(MTRCH2_NOTE) == []
+    assert dat._TICKET_RE.findall("翻译器#106(8DVDVC)") == []
+    assert dat._TICKET_RE.findall("器#106 abc#12 x#7") == []
+    assert dat._TICKET_RE.findall("关联 #254") == ["254"]
+    assert dat._TICKET_RE.findall("#188 复验通过") == ["188"]
+    assert dat._TICKET_RE.findall("复验 #209：仍灰；见#210，工单#211、挂 # 212") == ["209", "210", "211", "212"]
+    assert dat._TICKET_RE.findall("（#106）") == ["106"]
+
+
+def test_decide_never_attaches_or_lifts_resolved_ticket(dat, tmp_path):
+    """09-08 13:37 实锤：MTRCH2 原文提到「翻译器#106」→ 不挂已 fixed 的 #106（新立单）；
+    显式「关联 #254」→ 挂开放单 #254；显式 #N 指向 fixed 单 → 不挂，走同报障人开放单，
+    reason / mentions_resolved 记它。"""
+    con = _mk_db(tmp_path / "b.db")
+    _ticket(con, 106, "图片轮回复语言又漂中文", status="fixed", ts=time.time() - 8 * 86400)
+    _ticket(con, 254, "em dash 出站文本", status="confirmed", ts=time.time() - 3600 * 10)
+    diag = tmp_path / "diag"
+    _write_report(diag, "MTRCH2", MTRCH2_NOTE, when="2026-09-08 13:36:58", app="1.0.77.0")
+    dec = dat.decide(_head(dat, diag, "MTRCH2"), con, [], {"MTRCH2"}, diag)
+    assert dec["action"] == "new" and dec["ticket"] == 0 and dec.get("mentions_resolved") in (None, [])
+    _write_report(diag, "K1K1K1", "关联 #254：1.0.77 草稿预览仍有 — 破折号", when="2026-09-08 14:00:00", app="1.0.77.0")
+    dec2 = dat.decide(_head(dat, diag, "K1K1K1"), con, [], {"MTRCH2", "K1K1K1"}, diag)
+    assert dec2["action"] == "attach" and dec2["ticket"] == 254
+    # 显式 #106（fixed）：不挂它；同报障人 90 分钟内有开放单 #254（同实体 12137839654）→ 挂开放单
+    _ticket(con, 260, "WhatsApp evelyn(12137839654) 出站语言漂移", status="new",
+            ts=time.mktime(time.strptime("2026-09-08 14:10:00", "%Y-%m-%d %H:%M:%S")))
+    _write_report(diag, "K2K2K2", "复验 #106：evelyn(12137839654) 图片轮又回中文", when="2026-09-08 14:20:00", app="1.0.77.0")
+    dec3 = dat.decide(_head(dat, diag, "K2K2K2"), con, [], {"MTRCH2", "K1K1K1", "K2K2K2"}, diag)
+    assert dec3["action"] == "attach" and dec3["ticket"] == 260, dec3
+    assert dec3["mentions_resolved"] == [106] and "#106（已修/已关）" in dec3["reason"]
+    # 没有开放单可挂 → 新立，并带 mentions_resolved 让 apply 写「正文提及 #106（已修）」
+    con.execute("DELETE FROM bug_tickets WHERE id=260")
+    con.commit()
+    _write_report(diag, "K3K3K3", "复验 #106：图片轮又回中文", when="2026-09-08 18:20:00", app="1.0.77.0")
+    dec4 = dat.decide(_head(dat, diag, "K3K3K3"), con, [], {"K3K3K3"}, diag)
+    assert dec4["action"] == "new" and dec4["mentions_resolved"] == [106]
+    assert dat._mentions_resolved_note(dec4) == "[值守自动] 正文提及 #106（已修/已关，未挂不升）"
+    assert dat._mentions_resolved_note({"action": "new"}) == ""
+    # verify 报告对着已修单复验是正当的 → 仍记到 #106
+    _write_report(diag, "V6V6V6", "#106 复验通过", kind="verify")
+    assert dat.decide(_head(dat, diag, "V6V6V6"), con, [], {"V6V6V6"}, diag)["ticket"] == 106
+
+
+def test_lift_severity_skips_resolved_ticket(dat, tmp_path):
+    """auto_severity 只对开放单生效：fixed 单即使 note 判 P0 也不抬。"""
+    db = tmp_path / "bug_intake.db"
+    con = _mk_db(db)
+    con.execute("ALTER TABLE bug_tickets ADD COLUMN severity TEXT DEFAULT 'P2'")
+    _ticket(con, 106, "图片轮语言漂移", status="fixed")
+    _ticket(con, 259, "全自动出站链 hana 破折号", status="new")
+    con.execute("UPDATE bug_tickets SET severity='P1'")
+    con.commit()
+
+    class _BI:
+        notes = []
+        events = []
+
+        @staticmethod
+        def classify_severity(_note):
+            return "P0"
+
+        @staticmethod
+        def _db_path():
+            return db
+
+        @classmethod
+        def append_ticket_note(cls, tid, text):
+            cls.notes.append((tid, text))
+
+        @classmethod
+        def _record_event(cls, *a):
+            cls.events.append(a)
+
+    assert dat._lift_severity(_BI, 106, "XXXXXX", "崩了 P0 直发中文", "8942577244") == ""
+    assert con.execute("SELECT severity FROM bug_tickets WHERE id=106").fetchone()[0] == "P1"
+    assert _BI.notes == [] and _BI.events == []
+    assert dat._lift_severity(_BI, 259, "XXXXXX", "崩了 P0 直发中文", "8942577244") == "P0"
+    assert con.execute("SELECT severity FROM bug_tickets WHERE id=259").fetchone()[0] == "P0"
+    assert _BI.notes and _BI.events and "auto_severity" in _BI.events[0]
+
+
 def test_decide_attach_by_known_code_via_ledger_body_or_ticket_txt(dat, tmp_path):
     con = _mk_db(tmp_path / "b.db")
     _ticket(con, 202, "人设备份与迁移缺失")
