@@ -28,6 +28,25 @@
 .obg-copy code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--input);border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem;font-size:.8rem;color:var(--t)}
 .obg-copy button{flex:none;border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.78rem;padding:.3rem .7rem;border-radius:99px;cursor:pointer}
 .obg-foot{color:var(--t3);font-size:.75rem;margin-top:1.2rem;line-height:1.6}
+/* 接入面板：填凭证 / 扫码授权 / 已授权账号——嵌在抖音第 6 步卡里 */
+.obg-panel{margin-top:.7rem;border-top:1px dashed var(--bd);padding-top:.7rem}
+.obg-form{display:grid;grid-template-columns:1fr 1fr auto;gap:.5rem;align-items:end}
+.obg-form label{display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--t3)}
+.obg-form input{border:1px solid var(--bd);background:var(--input);color:var(--t);border-radius:8px;padding:.4rem .6rem;font-size:.82rem;min-width:0}
+.obg-btn{border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.8rem;padding:.42rem .9rem;border-radius:99px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.obg-btn.pri{background:var(--p,#1e8cf2);border-color:var(--p,#1e8cf2);color:#fff;font-weight:600}
+.obg-btn.dis{opacity:.5;pointer-events:none}
+.obg-flash{border-radius:10px;padding:.55rem .8rem;font-size:.82rem;margin-bottom:.8rem;border:1px solid var(--bd)}
+.obg-flash.ok{background:color-mix(in srgb,#16a34a 12%,transparent);border-color:color-mix(in srgb,#16a34a 40%,transparent);color:var(--t)}
+.obg-flash.bad{background:color-mix(in srgb,#dc2626 10%,transparent);border-color:color-mix(in srgb,#dc2626 40%,transparent);color:var(--t)}
+.obg-acc{display:flex;gap:.6rem;align-items:center;font-size:.8rem;color:var(--t2);padding:.35rem 0;border-bottom:1px solid var(--bd)}
+.obg-acc:last-child{border-bottom:0}
+.obg-pill{font-size:.7rem;border-radius:99px;padding:.1rem .5rem;border:1px solid var(--bd);color:var(--t3)}
+.obg-pill.ok{border-color:color-mix(in srgb,#16a34a 50%,transparent);color:#16a34a}
+.obg-pill.warn{border-color:color-mix(in srgb,#d97706 50%,transparent);color:#d97706}
+.obg-pill.bad{border-color:color-mix(in srgb,#dc2626 50%,transparent);color:#dc2626}
+.obg-note{color:var(--t3);font-size:.74rem;margin-top:.4rem;line-height:1.6}
+@media (max-width:640px){.obg-form{grid-template-columns:1fr}}
 </style>
 {% endblock %}
 {% block content %}
@@ -47,6 +66,20 @@
   </div>
   <div class="obg-intro">{{ guide.intro }}</div>
 
+  {% if flash and flash.saved %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.saved', '凭证已保存到本机配置（config.local.yaml）。webhook 挂载与官方 worker 在重启后生效；现在可以先扫码授权。') }}</div>
+  {% elif flash and flash.connected %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.connected', '授权成功，经营者账号已登记：') }} <code>{{ flash.connected }}</code></div>
+  {% elif flash and flash.error %}
+  <div class="obg-flash bad">{{ (i18n or {}).get('obg.flash.error', '操作未完成：') }} <code>{{ flash.error }}</code>
+    {% if flash.error == 'bad_state' %}— {{ (i18n or {}).get('obg.flash.bad_state', '授权链接已过期或被改动（10 分钟内有效），请重新点「扫码授权」。') }}
+    {% elif flash.error.startswith('missing') %}— {{ (i18n or {}).get('obg.flash.missing', '请先填 client_key 与 client_secret。') }}
+    {% elif flash.error.startswith('exchange_failed') %}— {{ (i18n or {}).get('obg.flash.exchange', '抖音换令牌失败：检查 client_secret、回调域是否与控制台一致、应用是否已开通 im.direct_message 权限。') }}
+    {% elif flash.error.startswith('denied') %}— {{ (i18n or {}).get('obg.flash.denied', '用户在抖音端取消了授权，或未返回 code。') }}
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if guide.prereq %}
   <div class="obg-h">{{ (i18n or {}).get('obg.prereq', '开始前准备') }}</div>
   <ul class="obg-pre">{% for p in guide.prereq %}<li>{{ p }}</li>{% endfor %}</ul>
@@ -63,6 +96,40 @@
       <div class="obg-copy">
         <code id="obg-webhook-url">{{ webhook_url }}</code>
         <button type="button" data-copy-target="obg-webhook-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+      </div>
+      {% endif %}
+      {% if guide.slug == 'douyin' and loop.index == 6 and panel %}
+      <div class="obg-panel">
+        <form class="obg-form" method="post" action="/help/onboarding/douyin/credentials" autocomplete="off">
+          <label>client_key
+            <input name="client_key" value="{{ panel.client_key }}" placeholder="aw…" required>
+          </label>
+          <label>client_secret
+            <input name="client_secret" type="password" value="" placeholder="{{ panel.client_secret_masked or (i18n or {}).get('obg.panel.secret_ph', '从控制台复制') }}" {% if not panel.has_secret %}required{% endif %}>
+          </label>
+          <button class="obg-btn" type="submit">{{ (i18n or {}).get('obg.panel.save', '保存凭证') }}</button>
+        </form>
+        <div class="obg-note">{{ (i18n or {}).get('obg.panel.callback_hint', '控制台「授权回调域」需填本机回调地址所在域名；回调地址：') }}</div>
+        <div class="obg-copy">
+          <code id="obg-callback-url">{{ panel.callback_url }}</code>
+          <button type="button" data-copy-target="obg-callback-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+        </div>
+        <div style="display:flex;gap:.6rem;align-items:center;margin-top:.5rem;flex-wrap:wrap">
+          <a class="obg-btn pri {% if not (panel.has_key and panel.has_secret) %}dis{% endif %}" href="/help/onboarding/douyin/authorize" id="obg-authorize">{{ (i18n or {}).get('obg.panel.authorize', '用企业号抖音扫码授权') }}</a>
+          <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.panel.authorize_hint', '授权页由抖音提供；成功后经营者 open_id 与令牌自动登记为「抖音 · 官方通道」账号。') }}</span>
+        </div>
+        {% if panel.accounts %}
+        <div class="obg-note" style="margin-top:.6rem">{{ (i18n or {}).get('obg.panel.accounts', '已授权账号') }}</div>
+        {% for a in panel.accounts %}
+        <div class="obg-acc">
+          <code>{{ a.account_id }}</code>
+          <span>{{ a.label }}</span>
+          {% if a.token_state == 'ok' %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.panel.tok_ok', '令牌正常') }}{% if a.access_days_left is not none %} · {{ a.access_days_left }}d{% endif %}</span>
+          {% elif a.token_state in ('refresh_due', 'renew_due') %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.panel.tok_due', '即将自动续期') }}</span>
+          {% else %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.panel.tok_reauth', '需重新授权') }}</span>{% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
       </div>
       {% endif %}
       {% if s.url %}

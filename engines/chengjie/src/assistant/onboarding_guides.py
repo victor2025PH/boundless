@@ -73,15 +73,18 @@ GUIDES: Dict[str, Dict[str, Any]] = {
              "im_enter_direct_msg (plus im_group_receive_msg if you use groups). Signatures use client_secret.",
              "Webhook 文档", "Webhook docs",
              "https://developer.open-douyin.com/docs/resource/zh-CN/dop/develop/webhooks/summarize"),
-            ("在智聊填入凭证并开启",
-             "Enter the credentials in ChatX and enable the channel",
-             "配置 douyin.client_key / douyin.client_secret，douyin.enabled: true；经营者账号扫码授权后 access_token / "
-             "refresh_token 写入账号，智聊自动续期（access 15 天、refresh 30 天、最多续 5 次，到期前会在账号卡提醒重新授权）。"
-             "可选：douyin.enter_greeting 设置客户进入私信页 30 秒内的自动问候。",
-             "Set douyin.client_key / douyin.client_secret and douyin.enabled: true; after the operator account authorises, "
-             "tokens are stored on the account and refreshed automatically (access 15 d, refresh 30 d, up to 5 renewals; "
-             "the account card reminds you to re-authorise before expiry). Optional: douyin.enter_greeting for the 30-second "
-             "welcome when a customer opens the chat.",
+            ("在智聊填入凭证并扫码授权",
+             "Enter the credentials in ChatX and authorise by QR code",
+             "在本页下方面板填 client_key / client_secret 并「保存凭证」（落 config.local.yaml，自动开启 douyin.enabled），"
+             "先把回调地址所在域名填进控制台「授权回调域」，再点「用企业号抖音扫码授权」；成功后经营者 open_id 与 access_token / "
+             "refresh_token 自动登记为「抖音 · 官方通道」账号，智聊自动续期（access 15 天、refresh 30 天、最多续 5 次，到期前在"
+             "账号卡提醒重新授权）。保存凭证后需重启智聊一次让 webhook 挂载。可选：douyin.enter_greeting 设置客户进入私信页 30 秒内的自动问候。",
+             "Use the panel below: enter client_key / client_secret and Save (written to config.local.yaml, enables douyin), "
+             "add the callback domain to the console's authorised redirect domains, then click Authorise with the enterprise "
+             "Douyin app. On success the operator open_id and access/refresh tokens are registered as a Douyin official-channel "
+             "account and refreshed automatically (access 15 d, refresh 30 d, up to 5 renewals; the account card reminds you "
+             "to re-authorise before expiry). Restart ChatX once after saving so the webhook is mounted. Optional: "
+             "douyin.enter_greeting for the 30-second welcome when a customer opens the chat.",
              "接入向导", "Setup wizard", "/workspace/setup"),
             ("验收：从抖音端发一条私信",
              "Verify: send a DM from the Douyin app",

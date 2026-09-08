@@ -1940,6 +1940,9 @@ _BASELINE += _ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT
 # 数据与小智问答同源（src/assistant/onboarding_guides.py）。`onboarding_guide_routes.py`。
 _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 /help/onboarding/{slug}	GET
+/help/onboarding/douyin/credentials	POST
+/help/onboarding/douyin/authorize	GET
+/webhook/douyin/oauth/callback	GET
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
 

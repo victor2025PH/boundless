@@ -55,6 +55,12 @@ IMAGE_UPLOAD_URL = f"{API_BASE}/tool/imagex/client_upload/"
 CLIENT_TOKEN_URL = f"{API_BASE}/oauth/client_token/"
 REFRESH_TOKEN_URL = f"{API_BASE}/oauth/refresh_token/"
 RENEW_REFRESH_URL = f"{API_BASE}/oauth/renew_refresh_token/"
+# 授权码模式（经营者用企业号抖音 App 扫码 → 回调带 code → 换 access/refresh token + open_id）
+AUTHORIZE_URL = f"{API_BASE}/platform/oauth/connect/"
+ACCESS_TOKEN_URL = f"{API_BASE}/oauth/access_token/"
+OAUTH_SCOPES = "im.direct_message,im.message_card,tool.image.upload"
+DEFAULT_OAUTH_CALLBACK_PATH = "/webhook/douyin/oauth/callback"
+OAUTH_STATE_TTL_SEC = 600.0
 
 SCENE_REPLY = "im_reply_msg"
 SCENE_ENTER = "im_enter_direct_msg"
@@ -417,6 +423,88 @@ class DouyinApi:
             return {"ok": False, "error_code": code, "description": desc}
         return {"ok": True, "refresh_token": str(d.get("refresh_token")),
                 "expires_in": float(d.get("expires_in") or REFRESH_TTL_SEC)}
+
+    async def exchange_code(self, client_key: str, client_secret: str, code: str) -> Dict[str, Any]:
+        """授权码换令牌：``POST /oauth/access_token/``（form）→ access/refresh token + 经营者 open_id + scope。"""
+        status, data = await self._t("POST", ACCESS_TOKEN_URL, form={
+            "client_key": client_key, "client_secret": client_secret, "code": code,
+            "grant_type": "authorization_code"})
+        d = data.get("data") or {}
+        ecode, desc = _err(data)
+        if status != 200 or ecode or not d.get("access_token") or not d.get("open_id"):
+            return {"ok": False, "error_code": ecode, "description": desc or str(data.get("message") or "")}
+        return {"ok": True, "access_token": str(d.get("access_token")), "open_id": str(d.get("open_id")),
+                "expires_in": float(d.get("expires_in") or ACCESS_TTL_SEC),
+                "refresh_token": str(d.get("refresh_token") or ""),
+                "refresh_expires_in": float(d.get("refresh_expires_in") or REFRESH_TTL_SEC),
+                "scope": str(d.get("scope") or "")}
+
+
+# ── 授权码流程（教程页「扫码授权」按钮 → 抖音 → 回调 → 账号落注册表）──────────────────
+
+def oauth_state(secret: str, now: Optional[float] = None) -> str:
+    """防篡改 state：``<ts>.<hmac_sha256(secret, ts)[:32]>``——无会话存储也能校验来源与时效。"""
+    ts = str(int(now if now is not None else time.time()))
+    mac = hmac.new(str(secret or "").encode("utf-8"), ts.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return f"{ts}.{mac}"
+
+
+def verify_oauth_state(secret: str, state: Any, now: Optional[float] = None, ttl: float = OAUTH_STATE_TTL_SEC) -> bool:
+    s = str(state or "")
+    if "." not in s or not secret:
+        return False
+    ts, mac = s.split(".", 1)
+    if not ts.isdigit():
+        return False
+    t_now = float(now if now is not None else time.time())
+    if not (0 <= t_now - float(ts) <= ttl):
+        return False
+    want = hmac.new(str(secret).encode("utf-8"), ts.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(want, mac)
+
+
+def authorize_url(client_key: str, redirect_uri: str, state: str, scopes: str = OAUTH_SCOPES) -> str:
+    from urllib.parse import urlencode
+    return AUTHORIZE_URL + "?" + urlencode({"client_key": client_key, "response_type": "code", "scope": scopes,
+                                            "redirect_uri": redirect_uri, "state": state})
+
+
+def token_meta_from_grant(grant: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
+    t = float(now if now is not None else time.time())
+    return {"access_token": str(grant.get("access_token") or ""),
+            "access_expires_at": t + float(grant.get("expires_in") or ACCESS_TTL_SEC),
+            "refresh_token": str(grant.get("refresh_token") or ""),
+            "refresh_expires_at": t + float(grant.get("refresh_expires_in") or REFRESH_TTL_SEC),
+            "renew_count": 0, "scope": str(grant.get("scope") or ""), "authorized_at": t}
+
+
+async def complete_oauth(code: str, *, config: Optional[Dict[str, Any]], registry: Any = None,
+                         api: Optional[DouyinApi] = None, now: Optional[float] = None) -> Dict[str, Any]:
+    """用 code 换令牌并把经营者账号（``douyin`` / ``open_id`` / mode=official）落注册表（meta 原子合并，不抹人设）。"""
+    cfg = douyin_cfg(config)
+    if not cfg["client_key"] or not cfg["client_secret"]:
+        return {"ok": False, "error": "missing_credentials"}
+    grant = await (api or DouyinApi()).exchange_code(cfg["client_key"], cfg["client_secret"], str(code or ""))
+    if not grant.get("ok"):
+        return {"ok": False, "error": "exchange_failed", "error_code": grant.get("error_code"),
+                "description": grant.get("description")}
+    meta = token_meta_from_grant(grant, now)
+    meta["client_key"] = cfg["client_key"]
+    reg = registry
+    if reg is None:
+        from src.integrations.account_registry import get_account_registry
+        reg = get_account_registry()
+    open_id = grant["open_id"]
+    existing = reg.get(PLATFORM, open_id) or {}
+    reg.upsert(PLATFORM, open_id, mode=MODE, status="active",
+               label=(existing.get("label") or f"抖音企业号 {open_id[:8]}"), meta=meta, merge_meta=True)
+    try:
+        from src.integrations.platform_session_health import get_platform_session_health
+        get_platform_session_health().record(PLATFORM, open_id, "authorized")
+    except Exception:
+        pass
+    return {"ok": True, "open_id": open_id, "scope": meta["scope"], "access_expires_at": meta["access_expires_at"],
+            "refresh_expires_at": meta["refresh_expires_at"]}
 
 
 # ── 内容构造 ─────────────────────────────────────────────────────────────────
@@ -826,4 +914,6 @@ __all__ = [
     "verify_signature", "DouyinStateStore", "get_state_store", "choose_scene", "DouyinApi",
     "text_content", "image_content", "retain_card_content", "question_guide_content", "token_state",
     "DouyinOfficialWorker", "handle_webhook", "register_douyin_routes", "register_douyin_official_worker",
+    "AUTHORIZE_URL", "ACCESS_TOKEN_URL", "OAUTH_SCOPES", "DEFAULT_OAUTH_CALLBACK_PATH", "oauth_state",
+    "verify_oauth_state", "authorize_url", "token_meta_from_grant", "complete_oauth",
 ]
