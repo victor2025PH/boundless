@@ -29,6 +29,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -180,10 +181,36 @@ CREATE TABLE IF NOT EXISTS peer_ctx (
     last_msg_id     TEXT NOT NULL DEFAULT '',
     last_msg_ts     REAL NOT NULL DEFAULT 0,
     updated_at      REAL NOT NULL DEFAULT 0,
+    ref             TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (business_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS seen_events (key TEXT PRIMARY KEY, ts REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS biz_stats (
+    business_id     TEXT PRIMARY KEY,
+    first_event_ts  REAL NOT NULL DEFAULT 0,
+    last_event_ts   REAL NOT NULL DEFAULT 0,
+    events_total    INTEGER NOT NULL DEFAULT 0
+);
 """
+
+# ── 入口经营：TikTok.me 引流链接（业务方不能先开口，链接/二维码是唯一可控的进线口）──────────
+TIKTOK_ME_BASE = "https://tiktok.me/"
+REF_MAX_LEN = 60
+_REF_ALLOWED = re.compile(r"[^A-Za-z0-9_=\-]")
+
+
+def sanitize_ref(ref: Any) -> str:
+    """ref 只允许字母数字与 ``- _ =``（官方规则），截到 60 字符。"""
+    return _REF_ALLOWED.sub("", str(ref or ""))[:REF_MAX_LEN]
+
+
+def tiktok_me_link(username: Any, ref: Any = "") -> str:
+    """``https://tiktok.me/<username>?ref=<ref>``——点开直接进入与该 Business Account 的私信会话。"""
+    u = str(username or "").strip().lstrip("@")
+    if not u:
+        return ""
+    r = sanitize_ref(ref)
+    return f"{TIKTOK_ME_BASE}{u}" + (f"?ref={r}" if r else "")
 
 
 class TikTokStateStore:
@@ -202,6 +229,13 @@ class TikTokStateStore:
         except Exception:
             pass
         self._conn.executescript(_DDL)
+        # 老库补列（骨架期建的 peer_ctx 没有 ref）
+        try:
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(peer_ctx)").fetchall()}
+            if "ref" not in cols:
+                self._conn.execute("ALTER TABLE peer_ctx ADD COLUMN ref TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         self._conn.commit()
 
     @staticmethod
@@ -218,16 +252,45 @@ class TikTokStateStore:
                                      (str(business_id), str(user_id))).fetchone()
         return dict(row) if row else {}
 
-    def record_inbound(self, business_id: str, user_id: str, *, conversation_id: str, msg_id: str, ts: float) -> None:
+    def record_inbound(self, business_id: str, user_id: str, *, conversation_id: str, msg_id: str, ts: float,
+                       ref: str = "") -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO peer_ctx(business_id, user_id, conversation_id, last_msg_id, last_msg_ts, updated_at) "
-                "VALUES(?,?,?,?,?,?) ON CONFLICT(business_id, user_id) DO UPDATE SET "
+                "INSERT INTO peer_ctx(business_id, user_id, conversation_id, last_msg_id, last_msg_ts, updated_at, ref) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(business_id, user_id) DO UPDATE SET "
                 "conversation_id=CASE WHEN excluded.conversation_id<>'' THEN excluded.conversation_id ELSE peer_ctx.conversation_id END, "
                 "last_msg_id=CASE WHEN excluded.last_msg_ts>=peer_ctx.last_msg_ts THEN excluded.last_msg_id ELSE peer_ctx.last_msg_id END, "
-                "last_msg_ts=MAX(excluded.last_msg_ts, peer_ctx.last_msg_ts), updated_at=excluded.updated_at",
-                (str(business_id), str(user_id), str(conversation_id or ""), str(msg_id or ""), float(ts or 0), time.time()))
+                "last_msg_ts=MAX(excluded.last_msg_ts, peer_ctx.last_msg_ts), updated_at=excluded.updated_at, "
+                "ref=CASE WHEN peer_ctx.ref='' THEN excluded.ref ELSE peer_ctx.ref END",
+                (str(business_id), str(user_id), str(conversation_id or ""), str(msg_id or ""), float(ts or 0), time.time(),
+                 sanitize_ref(ref)))
             self._conn.commit()
+
+    def record_event(self, business_id: str, ts: Optional[float] = None) -> None:
+        """任何 webhook 事件到达都记一笔——给「webhook 静默」检测用。"""
+        t = float(ts if ts is not None else time.time())
+        if not business_id:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO biz_stats(business_id, first_event_ts, last_event_ts, events_total) VALUES(?,?,?,1) "
+                "ON CONFLICT(business_id) DO UPDATE SET last_event_ts=MAX(excluded.last_event_ts, biz_stats.last_event_ts), "
+                "events_total=biz_stats.events_total+1", (str(business_id), t, t))
+            self._conn.commit()
+
+    def stats(self, business_id: str) -> Dict[str, Any]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM biz_stats WHERE business_id=?", (str(business_id),)).fetchone()
+        return dict(row) if row else {"business_id": str(business_id), "first_event_ts": 0.0, "last_event_ts": 0.0,
+                                      "events_total": 0}
+
+    def ref_counts(self, business_id: str, *, since_ts: float = 0.0, limit: int = 10) -> Dict[str, int]:
+        """按引流 ref 统计进线用户数（首条进线的 ref 固定不变）——面板「入口来源」用。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ref, COUNT(*) AS n FROM peer_ctx WHERE business_id=? AND ref<>'' AND last_msg_ts>=? "
+                "GROUP BY ref ORDER BY n DESC LIMIT ?", (str(business_id), float(since_ts or 0), int(limit))).fetchall()
+        return {str(r["ref"]): int(r["n"]) for r in rows}
 
     def seen(self, key: str, *, now: Optional[float] = None) -> bool:
         t = float(now if now is not None else time.time())
@@ -433,6 +496,32 @@ def token_state(meta: Dict[str, Any], now: float) -> str:
     return "ok" if (at and aexp > now) else "needs_reauth"
 
 
+REAUTH_WARN_DAYS = 7
+WEBHOOK_SILENCE_SEC = 24 * 3600.0
+
+
+def reauth_days_left(meta: Dict[str, Any], now: float) -> Optional[int]:
+    """距「必须人工重新授权」还有几天：有活的 refresh → 按 refresh 到期日；只有 access（手填令牌）→ 按 access 到期日；
+    没有到期信息 → None（未知，不预警）。"""
+    rt = str(meta.get("refresh_token") or "")
+    rexp = float(meta.get("refresh_expires_at") or 0)
+    aexp = float(meta.get("access_expires_at") or 0)
+    end = rexp if (rt and rexp > 0) else aexp
+    if end <= 0:
+        return None
+    return max(0, int((end - now) // 86400))
+
+
+def webhook_silence(stats: Dict[str, Any], now: float, *, threshold_sec: float = WEBHOOK_SILENCE_SEC) -> Dict[str, Any]:
+    """``{"seen_any": bool, "last_event_ts": float, "silent_sec": float, "silent": bool}``——曾收到过事件且超过阈值无事件才算静默；
+    从未收到过事件不是故障（可能还没人来），只提示「尚未收到任何事件」。"""
+    last = float((stats or {}).get("last_event_ts") or 0)
+    if last <= 0:
+        return {"seen_any": False, "last_event_ts": 0.0, "silent_sec": 0.0, "silent": False}
+    gap = max(0.0, now - last)
+    return {"seen_any": True, "last_event_ts": last, "silent_sec": gap, "silent": gap > threshold_sec}
+
+
 def token_meta_from_grant(grant: Dict[str, Any], now: Optional[float] = None) -> Dict[str, Any]:
     t = float(now if now is not None else time.time())
     out: Dict[str, Any] = {"access_token": str(grant.get("access_token") or ""),
@@ -610,15 +699,22 @@ class TikTokOfficialWorker:
         return self.running and self.token_state != "needs_reauth" and self.dm_ok is not False
 
     def status(self) -> Dict[str, Any]:
+        now = self._now()
+        stats = self.state.stats(self.account_id) if self._state is not None else {}
         return {"type": "tiktok_official", "running": self.running, "token_state": self.token_state,
                 "region": self.region, "dm_api": self.dm_ok, "media_send": self.media_ok,
-                "last_error": self.last_error}
+                "reauth_days_left": reauth_days_left(self.meta, now), "auto_refresh": bool(self.meta.get("refresh_token")),
+                "webhook": webhook_silence(stats, now), "last_error": self.last_error}
 
     def _report_session_health(self) -> None:
+        now = self._now()
+        days = reauth_days_left(self.meta, now)
+        warn_days = days if (days is not None and days <= REAUTH_WARN_DAYS) else None
         st = ("region_unsupported" if self.dm_ok is False else self.token_state)
-        if st == self._reported:
+        key = (st, warn_days)
+        if key == self._reported:
             return
-        self._reported = st
+        self._reported = key
         try:
             from src.integrations.platform_session_health import get_platform_session_health
             h = get_platform_session_health()
@@ -627,6 +723,11 @@ class TikTokOfficialWorker:
             elif st == "region_unsupported":
                 h.record(PLATFORM, self.account_id, "blocked",
                          detail=f"[rc:forbidden] 注册地 {self.region} 不支持 Business Messaging API（EEA/瑞士/英国/美国）")
+            elif warn_days is not None:
+                # 提前 7 天预警：仍健康不禁发，detail 带倒计时进账号卡 / 面板
+                how = "自动续期令牌" if self.meta.get("refresh_token") else "手填的 access_token"
+                h.record(PLATFORM, self.account_id, "authorized",
+                         detail=f"[rc:other] TikTok {how} {warn_days} 天后到期，请提前重新授权")
             else:
                 h.record(PLATFORM, self.account_id, "authorized")
         except Exception:
@@ -807,11 +908,14 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
     from src.integrations.protocol_bridge import make_message
 
     business_id = m["business_id"]
+    if business_id:
+        st.record_event(business_id, t_now)
     # 方向：官方载荷两个事件都可能出现「商家从 TikTok App 手发」的消息——以 to_user.id == business_id 判进线
     incoming = (event == EVENT_RECEIVE) if not business_id else (m["recipient"] == business_id)
     if event in (EVENT_RECEIVE, EVENT_SEND):
         if not business_id:
             business_id = m["recipient"] if event == EVENT_RECEIVE else m["sender"]
+            st.record_event(business_id, t_now)
         user_id = m["sender"] if incoming else m["recipient"]
         source: Dict[str, Any] = {"conversation_id": m["conversation_id"], "message_type": m["message_type"],
                                   "server_message_id": m["message_id"]}
@@ -828,7 +932,7 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
                 source["ref"] = str(sl[0]["ref"])
         if incoming:
             st.record_inbound(business_id, user_id, conversation_id=m["conversation_id"], msg_id=m["message_id"],
-                              ts=m["ts"] or t_now)
+                              ts=m["ts"] or t_now, ref=str(source.get("ref") or ""))
             msg = make_message(platform=PLATFORM, account_id=business_id, chat_key=chat_key_for(user_id), text=m["text"],
                                name=m["sender_name"], ts=m["ts"] or t_now, msg_id=m["message_id"], direction="in",
                                media_type=m["media_type"], source=source)
@@ -887,4 +991,5 @@ __all__ = ["PLATFORM", "MODE", "SEND_URL", "MEDIA_UPLOAD_URL", "EVENT_RECEIVE", 
            "sign_body", "parse_signature_header", "verify_signature", "TikTokStateStore", "get_state_store",
            "TikTokApi", "token_state", "token_meta_from_grant", "missing_scopes", "oauth_state", "verify_oauth_state",
            "authorize_url", "complete_oauth", "ensure_webhook", "TikTokOfficialWorker", "handle_webhook",
-           "register_tiktok_routes", "register_tiktok_official_worker"]
+           "register_tiktok_routes", "register_tiktok_official_worker", "sanitize_ref", "tiktok_me_link",
+           "reauth_days_left", "webhook_silence", "REAUTH_WARN_DAYS", "WEBHOOK_SILENCE_SEC"]

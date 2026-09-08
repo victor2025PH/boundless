@@ -46,7 +46,18 @@
 .obg-pill.warn{border-color:color-mix(in srgb,#d97706 50%,transparent);color:#d97706}
 .obg-pill.bad{border-color:color-mix(in srgb,#dc2626 50%,transparent);color:#dc2626}
 .obg-note{color:var(--t3);font-size:.74rem;margin-top:.4rem;line-height:1.6}
-@media (max-width:640px){.obg-form{grid-template-columns:1fr}}
+/* 状态灯卡（实施99 P0-2）：自检结果一屏——灯色 / 第几步 / 一句话下一步 */
+.obg-light{display:flex;align-items:center;gap:.9rem;border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.8rem 1rem;margin-bottom:.9rem}
+.obg-dot{width:34px;height:34px;border-radius:50%;flex:none;background:var(--t3);box-shadow:0 0 0 5px color-mix(in srgb,var(--t3) 14%,transparent)}
+.obg-dot.blue{background:var(--p,#1e8cf2);box-shadow:0 0 0 5px color-mix(in srgb,var(--p,#1e8cf2) 16%,transparent)}
+.obg-dot.amber{background:var(--amber);box-shadow:0 0 0 5px var(--as)}
+.obg-dot.red{background:var(--red);box-shadow:0 0 0 5px var(--rs)}
+.obg-dot.green{background:var(--green);box-shadow:0 0 0 5px var(--gs)}
+.obg-light-t{font-weight:700;color:var(--t);font-size:.92rem}
+.obg-light-s{color:var(--t2);font-size:.8rem;margin-top:.15rem;line-height:1.5}
+.obg-light-r{margin-left:auto;text-align:right;color:var(--t3);font-size:.74rem;white-space:nowrap}
+.obg-refs{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
+@media (max-width:640px){.obg-form{grid-template-columns:1fr}.obg-light{flex-wrap:wrap}.obg-light-r{margin-left:0;text-align:left}}
 </style>
 {% endblock %}
 {% block content %}
@@ -93,6 +104,37 @@
     {% elif flash.error.startswith('exchange_failed') %}— {{ (i18n or {}).get('obg.flash.exchange', '抖音换令牌失败：检查 client_secret、回调域是否与控制台一致、应用是否已开通 im.direct_message 权限。') }}
     {% elif flash.error.startswith('denied') %}— {{ (i18n or {}).get('obg.flash.denied', '用户在抖音端取消了授权，或未返回 code。') }}
     {% endif %}
+  </div>
+  {% endif %}
+
+  {% if status and status.total_steps %}
+  <div class="obg-light" id="obg-light" data-light="{{ status.light }}" data-hint="{{ status.hint }}">
+    <div class="obg-dot {{ status.light }}"></div>
+    <div>
+      <div class="obg-light-t">
+        {% if status.light == 'green' %}{{ (i18n or {}).get('obg.st.green', '已连通，正在自动接待') }}
+        {% elif status.light == 'red' %}{{ (i18n or {}).get('obg.st.red', '已阻塞，需要处理') }}
+        {% elif status.light == 'amber' %}{{ (i18n or {}).get('obg.st.amber', '等一个动作') }}
+        {% elif status.light == 'blue' %}{{ (i18n or {}).get('obg.st.blue', '进行中') }}
+        {% else %}{{ (i18n or {}).get('obg.st.grey', '未开始') }}{% endif %}
+        · {{ (i18n or {}).get('obg.st.step', '第 {n} / {m} 步').replace('{n}', status.step|string).replace('{m}', status.total_steps|string) }}
+      </div>
+      <div class="obg-light-s">
+        {% if status.hint == 'credentials' %}{{ (i18n or {}).get('obg.st.h_credentials', '先在下方面板保存应用凭证。') }}
+        {% elif status.hint == 'authorize' %}{{ (i18n or {}).get('obg.st.h_authorize', '凭证已就位，去授权账号。') }}
+        {% elif status.hint == 'region_blocked' %}{{ (i18n or {}).get('obg.st.h_region', '已登记账号的注册地都不支持私信 API，换可用区账号或改走 WhatsApp / Messaging Ads。') }}
+        {% elif status.hint == 'needs_reauth' %}{{ (i18n or {}).get('obg.st.h_reauth', '账号令牌已失效，重新授权即可恢复。') }}
+        {% elif status.hint == 'restart_required' %}{{ (i18n or {}).get('obg.st.h_restart', '凭证已保存但 webhook 路由 / 官方 worker 还未装载——重启智聊一次。') }}
+        {% elif status.hint == 'await_first_dm' %}{{ (i18n or {}).get('obg.st.h_first', '一切就位，等第一条私信进来（用另一个账号发一条试试）。') }}
+        {% elif status.hint == 'webhook_silent' %}{{ (i18n or {}).get('obg.st.h_silent', '超过 24 小时没有收到任何 webhook 事件，检查回调地址是否仍然可达。') }}
+        {% elif status.hint == 'reauth_soon' %}{{ (i18n or {}).get('obg.st.h_soon', '有账号令牌 7 天内到期，提前重新授权。') }}
+        {% elif status.hint == 'connected' %}{{ (i18n or {}).get('obg.st.h_connected', '收到过事件，链路健康。') }}{% endif %}
+      </div>
+    </div>
+    <div class="obg-light-r">
+      {% if status.checks.public_https is false %}<div>{{ (i18n or {}).get('obg.st.not_https', '对外地址不是公网 HTTPS') }}</div>{% endif %}
+      {% if status.checks.accounts_total is defined %}<div>{{ (i18n or {}).get('obg.st.accounts', '账号') }} {{ status.checks.accounts_authorized }}/{{ status.checks.accounts_total }}</div>{% endif %}
+    </div>
   </div>
   {% endif %}
 
@@ -199,8 +241,11 @@
           <span>{{ a.label }}{% if a.username %} <span class="obg-note" style="margin:0">@{{ a.username }}</span>{% endif %}</span>
           <span class="obg-pill">{{ a.region or '?' }}</span>
           {% if a.token_state == 'needs_reauth' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.panel.tok_reauth', '需重新授权') }}</span>
-          {% elif a.auto_refresh %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.tok_auto', '令牌自动续期') }}{% if a.refresh_days_left is not none %} · {{ a.refresh_days_left }}d{% endif %}</span>
+          {% elif a.reauth_soon %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.panel.tok_soon', '{n} 天后需重新授权').replace('{n}', a.reauth_days_left|string) }}</span>
+          {% elif a.auto_refresh %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.tok_auto', '令牌自动续期') }}{% if a.reauth_days_left is not none %} · {{ a.reauth_days_left }}d{% endif %}</span>
           {% else %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.tok_manual', '手填令牌，到期需重填') }}</span>{% endif %}
+          {% if a.webhook_silent %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.silent', 'webhook 静默 {h} 小时').replace('{h}', a.silent_hours|string) }}</span>
+          {% elif a.events_total %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.events', '事件 {n}').replace('{n}', a.events_total|string) }}</span>{% endif %}
           {% if a.dm_api is true %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.dm_ok', '私信 API 可用') }}</span>
           {% elif a.dm_api is false %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.dm_no', '私信 API 不可用') }}</span>
           {% else %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.dm_unknown', '地区待核实') }}</span>{% endif %}
@@ -209,6 +254,20 @@
           {% if not a.has_token and a.token_state != 'needs_reauth' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.no_token', '缺 access_token') }}</span>{% endif %}
           {% if a.alternatives %}<span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.alternatives', '替代：Messaging Ads / 店铺客服 / 托管') }}</span>{% endif %}
         </div>
+        {% if a.me_link %}
+        <div class="obg-note" style="margin-top:.35rem">{{ (i18n or {}).get('obg.tt.me_link', '私信引流链接（可加 ref 区分渠道，如 ?ref=ig_bio；扫码/点击直接进入与你的私信）') }}</div>
+        <div class="obg-copy">
+          <code id="obg-me-{{ loop.index }}" data-me-base="{{ a.me_link }}">{{ a.me_link }}</code>
+          <input class="obg-ref-in" data-target="obg-me-{{ loop.index }}" placeholder="ref" maxlength="60" style="width:110px;border:1px solid var(--bd);background:var(--input);color:var(--t);border-radius:8px;padding:.3rem .5rem;font-size:.78rem">
+          <button type="button" data-copy-target="obg-me-{{ loop.index }}">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+        </div>
+        {% if a.ref_counts %}
+        <div class="obg-refs">
+          <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.ref_counts', '近 30 天进线来源：') }}</span>
+          {% for r, n in a.ref_counts.items() %}<span class="obg-pill">{{ r }} · {{ n }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
         {% endfor %}
         {% endif %}
       </div>
@@ -255,6 +314,16 @@
     var done = function(){ var old=b.textContent; b.textContent='✓'; setTimeout(function(){ b.textContent=old; }, 1200); };
     if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done, done); }
     else { try{ var r=document.createRange(); r.selectNodeContents(el); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); s.removeAllRanges(); done(); }catch(_){} }
+  });
+  // TikTok.me 引流链接：ref 只留字母数字与 - _ =（与服务端 sanitize_ref 同规则），实时拼到链接上
+  document.addEventListener('input', function(ev){
+    var inp = ev.target && ev.target.classList && ev.target.classList.contains('obg-ref-in') ? ev.target : null;
+    if(!inp) return;
+    var code = document.getElementById(inp.getAttribute('data-target'));
+    if(!code) return;
+    var ref = (inp.value || '').replace(/[^A-Za-z0-9_=-]/g, '').slice(0, 60);
+    var base = code.getAttribute('data-me-base') || '';
+    code.textContent = ref ? base + '?ref=' + ref : base;
   });
 })();
 </script>

@@ -135,6 +135,44 @@ def test_tiktok_one_click_flow(auth_client, app, wired):
     assert "error=webhook:40001" in r.headers["location"]
     r = auth_client.get("/help/onboarding/tiktok?error=webhook:40001")
     assert "Webhook 注册被 TikTok 拒绝" in r.text
+    # 引流链接按 username 生成；自检 API：凭证在、账号已授权，但 worker 未在启动期注册 → 需重启（诚实）
+    assert "https://tiktok.me/shop_sg" in html and 'data-me-base="https://tiktok.me/shop_sg"' in html
+    st = auth_client.get("/api/onboarding/tiktok/status").json()
+    assert st["slug"] == "tiktok" and st["checks"]["credentials_configured"] is True
+    assert st["checks"]["accounts_authorized"] == 1 and st["checks"]["restart_required"] is True
+    assert st["light"] == "amber" and st["hint"] == "restart_required" and st["step"] == 4
+    assert st["checks"]["public_https"] is False
+    assert 'data-light="amber"' in html and "重启智聊一次" in html
+    assert auth_client.get("/api/onboarding/nope/status").status_code == 404
+    # 事件到达后（假装 worker 已注册）→ 等首条私信 / 已连通；静默 25 小时 → amber
+    from types import SimpleNamespace
+    from src.integrations import account_orchestrator as ao
+    from src.integrations import tiktok_official as tk_mod
+    ao._WORKER_FACTORIES["tiktok:official"] = lambda acc, cfg: None
+    try:
+        tk_mod._reset_for_tests()
+        store_ = tk_mod.get_state_store()
+        st = auth_client.get("/api/onboarding/tiktok/status").json()
+        assert st["hint"] == "restart_required" and st["checks"]["webhook_mounted"] is False   # 路由仍未挂：仍需重启
+        tk_mod.register_tiktok_routes(app, SimpleNamespace(config=cm.config))                    # 模拟重启后装载
+        st = auth_client.get("/api/onboarding/tiktok/status").json()
+        assert st["light"] == "blue" and st["hint"] == "await_first_dm" and st["step"] == 5
+        store_.record_event("open-7", time.time())
+        store_.record_inbound("open-7", "u1", conversation_id="c1", msg_id="m1", ts=time.time(), ref="ig_bio")
+        st = auth_client.get("/api/onboarding/tiktok/status").json()
+        assert st["light"] == "green" and st["hint"] == "connected"
+        html = auth_client.get("/help/onboarding/tiktok").text
+        assert "ig_bio · 1" in html and "事件 1" in html and 'data-light="green"' in html
+        store_.record_event("open-7", time.time() - 25 * 3600)   # MAX 保留最新，改用直写模拟静默
+        with store_._lock:
+            store_._conn.execute("UPDATE biz_stats SET last_event_ts=? WHERE business_id=?", (time.time() - 25 * 3600, "open-7"))
+            store_._conn.commit()
+        st = auth_client.get("/api/onboarding/tiktok/status").json()
+        assert st["light"] == "amber" and st["hint"] == "webhook_silent"
+        assert "webhook 静默 25 小时" in auth_client.get("/help/onboarding/tiktok").text
+    finally:
+        ao._WORKER_FACTORIES.pop("tiktok:official", None)
+        tk_mod._reset_for_tests()
     # 未登录：面板路由不可达，公开回调可达
     from starlette.testclient import TestClient
     with TestClient(app) as anon:

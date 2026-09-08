@@ -126,8 +126,9 @@ def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optiona
 
 def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str, Any]:
     """TikTok 面板数据：应用凭证状态、webhook 地址、已登记 Business Account 及按注册地算出的能力。"""
-    from src.integrations.tiktok_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, tiktok_cfg,
-                                                  token_state)
+    from src.integrations.tiktok_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, REAUTH_WARN_DAYS,
+                                                  get_state_store, reauth_days_left, tiktok_cfg, tiktok_me_link,
+                                                  token_state, webhook_silence)
     from src.integrations.tiktok_regions import capabilities
     cfg = tiktok_cfg(_config(request))
     base = _public_base(request)
@@ -138,17 +139,28 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
             from src.integrations.account_registry import get_account_registry
             reg = get_account_registry()
         t = time.time()
+        try:
+            st = get_state_store(cfg["state_db_path"] or None)
+        except Exception:
+            st = None
         for acc in reg.list(PLATFORM):
             if str(acc.get("mode") or "") not in ("", MODE):
                 continue
             meta = dict(acc.get("meta") or {})
+            aid = str(acc.get("account_id") or "")
             caps = capabilities(meta.get("region"))
-            rexp = float(meta.get("refresh_expires_at") or 0)
-            accounts.append({"account_id": str(acc.get("account_id") or ""), "label": str(acc.get("label") or ""),
+            days = reauth_days_left(meta, t)
+            stats = st.stats(aid) if st is not None else {}
+            sil = webhook_silence(stats, t)
+            accounts.append({"account_id": aid, "label": str(acc.get("label") or ""),
                              "username": str(meta.get("username") or ""),
+                             "me_link": tiktok_me_link(meta.get("username")),
                              "has_token": bool(meta.get("access_token")), "token_state": token_state(meta, t),
                              "auto_refresh": bool(meta.get("refresh_token")),
-                             "refresh_days_left": (max(0, int((rexp - t) // 86400)) if rexp else None),
+                             "reauth_days_left": days, "reauth_soon": bool(days is not None and days <= REAUTH_WARN_DAYS),
+                             "events_total": int(stats.get("events_total") or 0), "webhook_silent": sil["silent"],
+                             "silent_hours": int(sil["silent_sec"] // 3600),
+                             "ref_counts": (st.ref_counts(aid, since_ts=t - 30 * 86400, limit=5) if st is not None else {}),
                              "region": caps["region"], "dm_api": caps["dm_api"], "media_send": caps["media_send"],
                              "shop_site": caps["shop_site"], "alternatives": caps["alternatives"]})
     except Exception:
@@ -160,7 +172,108 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
             "accounts": accounts}
 
 
+def _route_mounted(request: Request, path: str, method: str = "POST") -> bool:
+    for r in getattr(request.app, "routes", []):
+        if getattr(r, "path", "") == path and method in (getattr(r, "methods", None) or {method}):
+            return True
+    return False
+
+
+def _public_is_https(base: str) -> bool:
+    if not base.startswith("https://"):
+        return False
+    host = base[len("https://"):].split("/", 1)[0].split(":", 1)[0].lower()
+    return not (host in ("localhost", "testserver") or host.startswith(("127.", "10.", "192.168.", "0.")))
+
+
+def onboarding_status(request: Request, slug: str) -> Dict[str, Any]:
+    """接入自检（实施99 P0-2）：凭证 / 路由挂载 / worker 注册 / 公网 https / 账号令牌态 / 首条进线 → 状态灯 + 当前步。
+
+    灯色：grey 未开始 · blue 进行中 · amber 等动作（需重启 / 令牌快到期 / webhook 静默）· red 阻塞（地区不可用 / 令牌失效）
+    · green 已连通（收到过事件）。"""
+    from src.integrations import account_orchestrator as ao
+    base = _public_base(request)
+    checks: Dict[str, Any] = {"public_https": _public_is_https(base)}
+    light, step, hint = "grey", 1, ""
+    if slug == "tiktok":
+        panel = tiktok_connect_panel(request)
+        from src.integrations.tiktok_official import tiktok_cfg
+        cfg = tiktok_cfg(_config(request))
+        accs = panel["accounts"]
+        checks.update({
+            "credentials_configured": bool(panel["has_app_id"] and panel["has_secret"]), "enabled": panel["enabled"],
+            "webhook_mounted": _route_mounted(request, cfg["webhook_path"]),
+            "worker_registered": ao.get_worker_factory("tiktok", "official") is not None,
+            "accounts_total": len(accs),
+            "accounts_authorized": sum(1 for a in accs if a["token_state"] != "needs_reauth" and a["has_token"]),
+            "accounts_needs_reauth": sum(1 for a in accs if a["token_state"] == "needs_reauth" or not a["has_token"]),
+            "accounts_region_blocked": sum(1 for a in accs if a["dm_api"] is False),
+            "accounts_reauth_soon": sum(1 for a in accs if a["reauth_soon"]),
+            "webhook_silent": sum(1 for a in accs if a["webhook_silent"]),
+            "first_inbound_seen": any(a["events_total"] > 0 for a in accs),
+        })
+        checks["restart_required"] = bool(checks["credentials_configured"] and checks["enabled"]
+                                          and not (checks["webhook_mounted"] and checks["worker_registered"]))
+        total_steps = 5
+        if not checks["credentials_configured"]:
+            light, step, hint = "grey", 1, "credentials"
+        elif not accs:
+            light, step, hint = "blue", 4, "authorize"
+        elif checks["accounts_region_blocked"] == len(accs):
+            light, step, hint = "red", 4, "region_blocked"
+        elif checks["accounts_authorized"] == 0:
+            light, step, hint = "red", 4, "needs_reauth"
+        elif checks["restart_required"]:
+            light, step, hint = "amber", 4, "restart_required"
+        elif not checks["first_inbound_seen"]:
+            light, step, hint = "blue", 5, "await_first_dm"
+        elif checks["webhook_silent"] or checks["accounts_reauth_soon"]:
+            light, step, hint = "amber", 5, ("webhook_silent" if checks["webhook_silent"] else "reauth_soon")
+        else:
+            light, step, hint = "green", 5, "connected"
+    elif slug == "douyin":
+        panel = douyin_connect_panel(request)
+        from src.integrations.douyin_official import douyin_cfg
+        cfg = douyin_cfg(_config(request))
+        accs = panel["accounts"]
+        checks.update({
+            "credentials_configured": bool(panel["has_key"] and panel["has_secret"]), "enabled": panel["enabled"],
+            "webhook_mounted": _route_mounted(request, cfg["webhook_path"]),
+            "worker_registered": ao.get_worker_factory("douyin", "official") is not None,
+            "accounts_total": len(accs),
+            "accounts_authorized": sum(1 for a in accs if a["token_state"] != "needs_reauth"),
+            "accounts_needs_reauth": sum(1 for a in accs if a["token_state"] == "needs_reauth"),
+            "accounts_reauth_soon": sum(1 for a in accs if a.get("reauth_soon")),
+        })
+        checks["restart_required"] = bool(checks["credentials_configured"] and checks["enabled"]
+                                          and not (checks["webhook_mounted"] and checks["worker_registered"]))
+        total_steps = 7
+        if not checks["credentials_configured"]:
+            light, step, hint = "grey", 1, "credentials"
+        elif not accs:
+            light, step, hint = "blue", 6, "authorize"
+        elif checks["accounts_authorized"] == 0:
+            light, step, hint = "red", 6, "needs_reauth"
+        elif checks["restart_required"]:
+            light, step, hint = "amber", 6, "restart_required"
+        elif checks["accounts_reauth_soon"]:
+            light, step, hint = "amber", 7, "reauth_soon"
+        else:
+            light, step, hint = "blue", 7, "await_first_dm"
+    else:
+        return {"slug": slug, "light": "grey", "step": 0, "total_steps": 0, "hint": "", "checks": checks}
+    return {"slug": slug, "light": light, "step": step, "total_steps": total_steps, "hint": hint, "checks": checks,
+            "public_base": base}
+
+
 def register_onboarding_guide_routes(app, page_auth, templates) -> None:
+    @app.get("/api/onboarding/{slug}/status")
+    async def onboarding_status_api(slug: str, request: Request, _=Depends(page_auth)):
+        from src.assistant.onboarding_guides import SLUGS
+        if slug not in SLUGS:
+            raise HTTPException(status_code=404, detail="unknown guide")
+        return onboarding_status(request, slug)
+
     @app.get("/help/onboarding/{slug}")
     async def onboarding_guide_page(slug: str, request: Request, _=Depends(page_auth)):
         from src.assistant.onboarding_guides import SLUGS, guide_for
@@ -183,9 +296,15 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
                 webhook_url = panel["webhook_url"]
             except Exception:
                 logger.debug("[onboarding] TikTok 接入面板构建失败", exc_info=True)
+        status: Dict[str, Any] = {}
+        if slug in ("douyin", "tiktok"):
+            try:
+                status = onboarding_status(request, slug)
+            except Exception:
+                logger.debug("[onboarding] 自检失败", exc_info=True)
         q = request.query_params
         return templates.TemplateResponse(request, "help_onboarding.html", {
-            "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel,
+            "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel, "status": status,
             "flash": {"saved": q.get("saved") == "1", "connected": str(q.get("connected") or ""),
                       "error": str(q.get("error") or ""), "region": str(q.get("region") or ""),
                       "webhook": str(q.get("webhook") or "")},
@@ -379,4 +498,4 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         return RedirectResponse(f"/help/onboarding/douyin?connected={res['open_id']}", status_code=303)
 
 
-__all__ = ["register_onboarding_guide_routes", "douyin_connect_panel", "tiktok_connect_panel"]
+__all__ = ["register_onboarding_guide_routes", "douyin_connect_panel", "tiktok_connect_panel", "onboarding_status"]

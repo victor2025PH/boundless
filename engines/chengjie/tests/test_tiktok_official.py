@@ -362,6 +362,75 @@ async def test_capabilities_probe(env):
     assert json.loads(tr.calls[0][2]["params"]["capability_types"]) == ["SEND_TEXT", "SEND_IMAGE"]
 
 
+# ── T4 入口经营 / T5 值守 ────────────────────────────────────────────────────────
+
+def test_tiktok_me_link_and_ref_sanitize():
+    assert tk.tiktok_me_link("@shop_sg") == "https://tiktok.me/shop_sg"
+    assert tk.tiktok_me_link("shop_sg", "ig-bio_2026=a") == "https://tiktok.me/shop_sg?ref=ig-bio_2026=a"
+    assert tk.tiktok_me_link("shop_sg", "bad ref!#") == "https://tiktok.me/shop_sg?ref=badref"
+    assert tk.sanitize_ref("x" * 100) == "x" * 60 and tk.tiktok_me_link("", "r") == ""
+
+
+async def test_ref_attribution_and_event_stats(env):
+    store, st, tr, api = env
+    t0 = 1_800_000_000.0
+    for i, ref in enumerate(["ig_bio", "ig_bio", "poster", ""]):
+        body = _event(tk.EVENT_RECEIVE, _content(message_id=f"m-{i}", from_user={"id": f"u{i}"},
+                                                 referral=({"short_link": [{"ref": ref}]} if ref else {}),
+                                                 timestamp=int((t0 + i) * 1000)))
+        await tk.handle_webhook(body, _sig(body, int(t0 + i)), config=CFG, state=st, now=t0 + i, auto_reply=_noop)
+    assert st.ref_counts(BIZ) == {"ig_bio": 2, "poster": 1}
+    assert st.get_ctx(BIZ, "u0")["ref"] == "ig_bio" and st.get_ctx(BIZ, "u3")["ref"] == ""
+    # 同一用户再来不改首条进线的 ref
+    body = _event(tk.EVENT_RECEIVE, _content(message_id="m-9", from_user={"id": "u0"},
+                                             referral={"short_link": [{"ref": "other"}]}))
+    await tk.handle_webhook(body, _sig(body, int(t0 + 9)), config=CFG, state=st, now=t0 + 9, auto_reply=_noop)
+    assert st.get_ctx(BIZ, "u0")["ref"] == "ig_bio"
+    s = st.stats(BIZ)
+    assert s["events_total"] == 5 and s["first_event_ts"] == t0 and s["last_event_ts"] == t0 + 9
+    assert tk.webhook_silence(s, t0 + 9 + 3600)["silent"] is False
+    sil = tk.webhook_silence(s, t0 + 9 + 25 * 3600)
+    assert sil["silent"] is True and sil["seen_any"] is True and int(sil["silent_sec"]) == 25 * 3600
+    assert tk.webhook_silence(st.stats("nobody"), t0)["seen_any"] is False
+
+
+def test_reauth_days_and_health_warning(monkeypatch):
+    now = 1_800_000_000.0
+    d = 86400.0
+    assert tk.reauth_days_left({"access_token": "a", "access_expires_at": now + 3 * d}, now) == 3
+    assert tk.reauth_days_left({"access_token": "a", "access_expires_at": now + d, "refresh_token": "r",
+                                "refresh_expires_at": now + 40 * d}, now) == 40
+    assert tk.reauth_days_left({"access_token": "a"}, now) is None
+    records = []
+
+    class _H:
+        def record(self, platform, account_id, status, *, detail="", login_id=""):
+            records.append((status, detail))
+            return {}
+
+    import src.integrations.platform_session_health as psh
+    monkeypatch.setattr(psh, "get_platform_session_health", lambda: _H())
+    clock = {"t": now}
+    meta = {"access_token": "a", "access_expires_at": now + 30 * d, "refresh_token": "r", "refresh_expires_at": now + 6 * d + 100,
+            "region": "SG"}
+    w = tk.TikTokOfficialWorker({"account_id": BIZ, "meta": meta}, CFG, api=tk.TikTokApi(transport=FakeTransport()),
+                                state=tk.TikTokStateStore(":memory:"), registry=_Reg(), now=lambda: clock["t"])
+    w._report_session_health()
+    w._report_session_health()
+    assert len(records) == 1 and records[0][0] == "authorized" and "6 天后到期" in records[0][1]
+    clock["t"] = now + d
+    w._report_session_health()
+    assert len(records) == 2 and "5 天后到期" in records[1][1]
+    st = w.status()
+    assert st["reauth_days_left"] == 5 and st["auto_refresh"] is True and st["webhook"]["seen_any"] is False
+    # 手填令牌（无 refresh）也预警
+    w2 = tk.TikTokOfficialWorker({"account_id": "b2", "meta": {"access_token": "a", "access_expires_at": now + 2 * d, "region": "SG"}},
+                                 CFG, api=tk.TikTokApi(transport=FakeTransport()), state=tk.TikTokStateStore(":memory:"),
+                                 registry=_Reg(), now=lambda: now)
+    w2._report_session_health()
+    assert records[-1][0] == "authorized" and "手填的 access_token 2 天后到期" in records[-1][1]
+
+
 def test_registration_gated_and_capabilities():
     from src.integrations import account_orchestrator as ao
     from src.integrations.platform_capabilities import worker_capabilities
