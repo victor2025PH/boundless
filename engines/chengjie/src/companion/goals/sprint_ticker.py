@@ -165,11 +165,19 @@ def daily_norm(goal_id: str, day: str) -> str:
     return f"goal:{str(goal_id or '')[:48]}:d{d}"
 
 
+def probe_norm(goal_id: str, now: float) -> str:
+    """坐席「现在就问一个」（O-3 E #236）的 care ``topic_norm``：``goal:{gid}:q{ts}``
+    ——时间戳键，每次点击独立一行，不与当日拍 / 相位去重撞车（人拍板要现在问，
+    今天引擎已经出过手也照问）。"""
+    return f"goal:{str(goal_id or '')[:48]}:q{int(float(now or 0))}"
+
+
 def parse_goal_care_kind(tnorm: Any) -> Tuple[str, str, Any]:
     """``goal:*`` 行分型 → ``(kind, goal_id, arg)``：
 
     - ``("sprint", gid, phase:int)``   ``goal:{gid}:p{n}`` 冲刺相位行
     - ``("daily", gid, day:"YYYY-MM-DD")`` ``goal:{gid}:d{YYYYMMDD}`` 自然档每日拍
+    - ``("probe", gid, ts:int)``      ``goal:{gid}:q{ts}`` 坐席手动摸底问句（O-3 E）
     - ``("care", gid, None)``         impl84 到期关怀行（无后缀）
     - ``("", "", None)``              非 goal 行
     """
@@ -185,6 +193,9 @@ def parse_goal_care_kind(tnorm: Any) -> Tuple[str, str, Any]:
     head, sep, tail = body.rpartition(":d")
     if sep and head and tail.isdigit() and len(tail) == 8:
         return "daily", head, f"{tail[:4]}-{tail[4:6]}-{tail[6:]}"
+    head, sep, tail = body.rpartition(":q")
+    if sep and head and tail.isdigit():
+        return "probe", head, int(tail)
     return "care", body, None
 
 
@@ -283,6 +294,27 @@ def due_phase(
     return candidate
 
 
+PROBE_ASKED_DETAIL_PREFIX = "asked:"
+
+
+def probe_asked_in_action(today_action: Optional[Dict[str, Any]]) -> bool:
+    """当日拍行是否已经**真问出**一个摸底问句（O-3 C 出站校验通过后把 detail 写成
+    ``asked:<slot>``）。``consumed`` 只说明方向进了拟稿，不等于问了。"""
+    if not isinstance(today_action, dict):
+        return False
+    return str(today_action.get("detail") or "").startswith(PROBE_ASKED_DETAIL_PREFIX)
+
+
+def is_discovery_goal(goal: Any) -> bool:
+    """摸底类目标（模板声明 ``gap_in_intent``：客户摸底 profile_discovery）。绝不抛。"""
+    try:
+        from src.companion.goals.templates import get_template
+        tpl = get_template(str((goal or {}).get("template") or "")) or {}
+        return bool(tpl.get("gap_in_intent"))
+    except Exception:
+        return False
+
+
 def due_daily(
     goal: Dict[str, Any],
     *,
@@ -291,6 +323,7 @@ def due_daily(
     last_inbound_ts: float = 0.0,
     last_outbound_ts: float = 0.0,
     today_action: Optional[Dict[str, Any]] = None,
+    discovery: bool = False,
 ) -> Optional[str]:
     """自然档「今天该不该主动拍一次」→ 本地日键 ``YYYY-MM-DD``（None=不拍）。纯函数。
 
@@ -299,7 +332,11 @@ def due_daily(
        主动拍从第二天起——当天再追一句是连珠炮）；有 deadline 且已过 → 不拍；
     2. 本地小时落在 ``natural_window`` 内（默认 10–20 点：自然档是日常节奏，
        不像冲刺有时限压力，深夜/清晨不出手）；
-    3. 今日拍已 consumed/sent（回复链顺势拍过 / 今天已主动拍过）→ 不拍；
+    3. 今日拍已 sent（今天已主动拍过）→ 不拍；今日拍 consumed（回复链顺势带过
+       方向）→ 普通目标不拍；**摸底目标**（``discovery=True``）只在 detail 已是
+       ``asked:<slot>``（出站校验证实真问出了问句）时才让位——O-3 A #236 根因：
+       HM7XBA 客户 00:11 来消息，回复链把当日拍 consumed，模型却顺着聊天气没问坐标，
+       主动腿看到 consumed 就整天不出手 = 客户越活跃越永远不摸底；
        今日拍被坐席驳回（detail 以 ``rejected`` 起）→ 不拍（人已否决）；
     4. 沉默闸：对方 ``natural_silence_min_sec``（默认 6h）内开过口 → 让回复链；
     5. 出站间隔闸：距我方上条出站 < ``natural_min_gap_sec``（默认 6h）→ 不拍。
@@ -325,7 +362,10 @@ def due_daily(
         return None
     if isinstance(today_action, dict):
         st = str(today_action.get("status") or "")
-        if st in ("consumed", "sent"):
+        if st == "sent":
+            return None
+        if st == "consumed" and (
+                not discovery or probe_asked_in_action(today_action)):
             return None
         if str(today_action.get("detail") or "").startswith("rejected"):
             return None
@@ -339,16 +379,26 @@ def due_daily(
 
 
 def natural_source_text(goal: Dict[str, Any],
-                        today_action: Optional[Dict[str, Any]] = None) -> str:
+                        today_action: Optional[Dict[str, Any]] = None,
+                        *, probe_hint: str = "") -> str:
     """自然档每日拍的 care ``source_text``（≤160 字）：优先用规划器已排的今日
-    拍意图（与回复链「同一拍」口径），没有就按里程碑给一句通用推进语。"""
+    拍意图（与回复链「同一拍」口径），没有就按里程碑给一句通用推进语。
+
+    ``probe_hint``（O-3 A #236）：摸底目标当前最优先的未填槽问法（「人在哪个城市」）
+    ——客户一天没开口时当日拍行根本不存在（refresh_goal 只在读到时才排），此前
+    主动拍的 source_text 回落成「轻轻带进来一步」，一句摸底话都没有；现在缺口
+    直接钉进本拍指令，派发器拟稿必围绕它问。"""
     title = str(goal.get("title") or "").strip() or "这件事"
     intent = ""
     if isinstance(today_action, dict):
         intent = str(today_action.get("intent") or "").strip()
+    hint = str(probe_hint or "").strip()
+    if hint:
+        ask = f"自然问一句：{hint}（像朋友闲聊，一轮只问一个）"
+        intent = ask if not intent or hint in intent else f"{intent}；{ask}"
     if not intent:
         intent = "自然接住对方近况，把这件事轻轻带进来一步，先看反应"
-    return (f"日常推进「{title[:40]}」；本拍：" + intent)[:160]
+    return (f"日常推进「{title[:40]}」；本拍：" + intent)[:200]
 
 
 def _beat_trace_detail(base: str, care_id: Any) -> str:
@@ -471,7 +521,7 @@ def record_sprint_beat_sent(
 # goals.py ``goal.blocked.<reason>``，这里只是键名清单与回落文案）
 BLOCKED_REASONS = (
     "silence", "min_gap", "pace_cap", "platform", "automation_mode",
-    "crisis", "optout", "no_conversation", "no_inbox", "autonomy",
+    "frozen", "crisis", "optout", "no_conversation", "no_inbox", "autonomy",
     "goal_no_product", "first_send_preview", "dedup",
 )
 
@@ -621,8 +671,37 @@ def _last_in_out_ts(msgs: Any) -> Tuple[float, float]:
 # 运行时闸的固定顺序（ticker 短路顺序 = preflight 展示顺序，安全型闸在前）。
 RUNTIME_GATE_ORDER: Tuple[str, ...] = (
     "autonomy", "platform", "no_conversation", "no_inbox",
-    "automation_mode", "crisis", "optout",
+    "automation_mode", "frozen", "crisis", "optout",
 )
+
+# O-1 A（D-O1 停联硬停）会话冻结标记的候选键（conv_meta）——O-3 与 O-1 并行，
+# 这里按「任一键为真 / 到期时刻在未来」判冻结，O-1 落地后只需对齐键名一处。
+_FREEZE_META_KEYS: Tuple[str, ...] = (
+    "stop_contact", "contact_frozen", "frozen", "conv_frozen",
+    "stop_contact_at", "frozen_at", "freeze_until", "frozen_until",
+)
+
+
+def conversation_frozen(meta: Any, *, now: Optional[float] = None) -> bool:
+    """会话是否处于「客户要求停联 → 冻结」态（O-1 A / D-O1）。冻结会话**不推目标**
+    （不排主动拍、不手动摸底）。纯函数、绝不抛；meta 非 dict → False。"""
+    if not isinstance(meta, dict):
+        return False
+    n = float(now if now is not None else time.time())
+    for k in _FREEZE_META_KEYS:
+        v = meta.get(k)
+        if v in (None, "", 0, False):
+            continue
+        if k.endswith("_until"):
+            try:
+                if float(v) > n:
+                    return True
+            except (TypeError, ValueError):
+                if v:
+                    return True
+            continue
+        return True
+    return False
 
 
 def goal_runtime_gates(
@@ -672,7 +751,7 @@ def goal_runtime_gates(
     if not conv:
         # 后面几道全依赖会话 id，无会话时一律视为未过（preflight 全列）
         _fail("no_conversation")
-        for k in ("no_inbox", "automation_mode", "crisis", "optout"):
+        for k in ("no_inbox", "automation_mode", "frozen", "crisis", "optout"):
             gates.setdefault(k, False)
         return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
 
@@ -680,7 +759,7 @@ def goal_runtime_gates(
     gates["no_inbox"] = inbox is not None
     if inbox is None:
         _fail("no_inbox")
-        for k in ("automation_mode", "crisis", "optout"):
+        for k in ("automation_mode", "frozen", "crisis", "optout"):
             gates.setdefault(k, False)
         return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
 
@@ -698,6 +777,11 @@ def goal_runtime_gates(
         meta = inbox.get_conv_meta(conv) or {}
     except Exception:
         meta = {}
+    # O-1 A 停联冻结（安全型，绝不豁免）：客户说过「别再写了」→ 会话冻结 → 目标不推
+    frozen = conversation_frozen(meta, now=n)
+    gates["frozen"] = not frozen
+    if frozen and _fail("frozen"):
+        return {"gates": gates, "skip": skip, "last_in": 0.0, "last_out": 0.0}
     crisis_ok = True
     try:
         if emotion_gate is not None:
@@ -842,7 +926,8 @@ def preflight_goal(
                 out["due_now"] = due_daily(
                     goal, cfg=cfg, now=n,
                     last_inbound_ts=rg["last_in"],
-                    last_outbound_ts=rg["last_out"]) is not None
+                    last_outbound_ts=rg["last_out"],
+                    discovery=is_discovery_goal(goal)) is not None
                 # 自然档：下一拍＝今天窗口起点（若还没到）或明天窗口起点
                 out["next_due"] = next_daily_ts(cfg, now=n)
         except Exception:
@@ -928,6 +1013,7 @@ class SprintGoalTicker:
         sprint: bool, cfg: Dict[str, Any], relaxed: Dict[str, Any],
         now: float, last_in: float, last_out: float,
         today_row: Optional[Dict[str, Any]],
+        discovery: bool = False,
     ) -> None:
         """安全闸全过、但 ``not_due``：区分「相位/日键没到」（不算想出手，不记）
         与「到点了被沉默闸 / 出站间隔闸拦住」（记 ``beat_blocked`` silence /
@@ -940,7 +1026,8 @@ class SprintGoalTicker:
                 sil = float(cfg.get("silence_min_sec") or 0)
                 gap = float(cfg.get("min_gap_sec") or 0)
             else:
-                d = due_daily(g, cfg=relaxed, now=now, today_action=today_row)
+                d = due_daily(g, cfg=relaxed, now=now, today_action=today_row,
+                              discovery=discovery)
                 slot = f"d{d}" if d else ""
                 sil = float(cfg.get("natural_silence_min_sec") or 0)
                 gap = float(cfg.get("natural_min_gap_sec") or 0)
@@ -1007,6 +1094,9 @@ class SprintGoalTicker:
                 gid = str(g.get("goal_id") or "")
                 conv = str(g.get("conversation_id") or "").strip()
                 today_row = None
+                # O-3 A（#236）：摸底目标的当日拍 consumed≠asked——回复链带了方向但
+                # 模型没问出来时，主动腿照样到点出手（沉默闸仍守，不打断正聊着的对话）
+                discovery = (not sprint) and is_discovery_goal(g)
                 if not sprint:
                     try:
                         from src.companion.goals.planner import day_key
@@ -1019,7 +1109,8 @@ class SprintGoalTicker:
                     if sprint:
                         p = due_phase(g, cfg=relaxed, now=n)
                         return f"p{p}" if p is not None else ""
-                    d = due_daily(g, cfg=relaxed, now=n, today_action=today_row)
+                    d = due_daily(g, cfg=relaxed, now=n, today_action=today_row,
+                                  discovery=discovery)
                     return f"d{d}" if d else ""
 
                 # 运行时闸（D1b P0-4 起与 preflight 同一函数：卡片/预检说「能出手」
@@ -1057,18 +1148,39 @@ class SprintGoalTicker:
                     # sent 即让位），窗口内一日一发。
                     day = due_daily(
                         g, cfg=cfg, now=n, last_inbound_ts=last_in,
-                        last_outbound_ts=last_out, today_action=today_row)
+                        last_outbound_ts=last_out, today_action=today_row,
+                        discovery=discovery)
                     if day is None:
                         _skip("not_due")
                         self._note_pace_block(
                             gstore, g, gid, conv, sprint=False, cfg=cfg,
                             relaxed=relaxed, now=n, last_in=last_in,
-                            last_out=last_out, today_row=today_row)
+                            last_out=last_out, today_row=today_row,
+                            discovery=discovery)
                         continue
                     tnorm = daily_norm(gid, day)
                     topic = (str(g.get("title") or "").strip() or "日常推进")[:40]
-                    src = natural_source_text(g, today_row)
+                    probe_hint = ""
+                    if discovery:
+                        try:
+                            from src.companion.goals.service import (
+                                discovery_gap_for_goal,
+                            )
+                            from src.companion.goals.templates import get_template
+                            probe_hint = discovery_gap_for_goal(
+                                gstore, get_template(str(g.get("template") or ""))
+                                or {}, g)
+                        except Exception:
+                            probe_hint = ""
+                    src = natural_source_text(g, today_row, probe_hint=probe_hint)
                     evt = f"d{day}"
+                    if discovery:
+                        logger.info(
+                            "[goal-probe] daily goal=%s conv=%s day=%s slot_hint=%r "
+                            "consumed=%s asked=%s",
+                            gid[:12], conv, day, probe_hint[:30],
+                            str((today_row or {}).get("status") or "-"),
+                            probe_asked_in_action(today_row))
                 rid = self._care_store.add_scheduled_care(
                     contact_key=conv,
                     platform=str(g.get("platform") or ""),
@@ -1156,17 +1268,25 @@ __all__ = [
     "BLOCKED_REASONS",
     "DEFAULT_PHASE_POINTS",
     "PHASE_DIRECTIVES",
+    "PROBE_ASKED_DETAIL_PREFIX",
     "SprintGoalTicker",
+    "conversation_frozen",
+    "due_daily",
     "due_phase",
+    "is_discovery_goal",
     "record_beat_blocked",
     "record_natural_beat_sent",
     "load_optout_mutes",
+    "natural_source_text",
     "next_phase_ts",
     "next_daily_ts",
+    "parse_goal_care_kind",
     "parse_goal_care_norm",
     "parse_sprint_cfg",
     "phase_directive",
     "phase_norm",
+    "probe_asked_in_action",
+    "probe_norm",
     "record_sprint_beat_sent",
     "remaining_phrase",
     "schedule_nudge",

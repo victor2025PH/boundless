@@ -15,11 +15,23 @@ M-7（#236，2026-09-07）两处改口径：
 - 读事件按 kind 过滤（``list_events(kinds=...)``）——``beat_injected`` /
   ``beat_blocked`` 事件多了以后，40 行窗口不再把真发挤出去。
 - 新增单目标粒度 ``goal_stall_verdict``：卡片红字 + 看门狗带 goal_id/会话。
+
+O-3 A（#236，2026-09-08，HM7XBA）：
+- 全局判据此前按「建目标起算的年龄」（``oldest_age_sec`` ≥ 4h）→ 自然档目标 14:45
+  建、当天设计上就不排主动拍（day 0 让回复链接住、10–20 点窗口），18:42 就被喊
+  ``stalled: auto=3 sent_24h=0 oldest_h=4.0``——**结构上还没到第一个可出手时刻**，
+  不是「能发没发」。现在快照另附 ``oldest_eligible_sec``＝自「第一个可出手时刻」起
+  的时长（自然档＝建目标 +24h；冲刺＝建目标即刻），``stall_verdict`` 优先读它。
+- 逐目标 stalled 在本模块直接落一行 **WARNING**（此前只有看门狗 INFO），诊断包
+  按级别过滤也能看到。
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger("src.companion.goals.liveness")
 
 SENT_KINDS = ("beat_sent",)
 
@@ -27,6 +39,18 @@ SENT_KINDS = ("beat_sent",)
 GOAL_STALL_WINDOW_SEC = 86400.0
 # 新目标宽限：建目标当天（<24h）不判 stalled——自然档主动拍从第二天起才排
 GOAL_STALL_MIN_AGE_SEC = 86400.0
+
+
+def first_eligible_delay_sec(goal: Any) -> float:
+    """建目标后多久才到「第一个可出手时刻」：自然档 ``GOAL_STALL_MIN_AGE_SEC``
+    （day 0 不排 + 次日白天窗），冲刺（today/session）即刻。纯函数、绝不抛。"""
+    try:
+        from src.companion.goals.pace import is_sprint, resolve_pace
+        if is_sprint(resolve_pace(goal or {})):
+            return 0.0
+    except Exception:
+        pass
+    return GOAL_STALL_MIN_AGE_SEC
 
 
 def _count_sent_since(store: Any, gid: str, since_ts: float) -> int:
@@ -54,7 +78,7 @@ def collect_send_liveness(store: Any, *, now: float,
     ``{goal_id, conversation_id, title}`` 清单（看门狗告警点名到目标）。"""
     out: Dict[str, Any] = {
         "active_auto": 0, "sent_24h": 0, "oldest_age_sec": 0.0,
-        "stalled_goals": [],
+        "oldest_eligible_sec": 0.0, "stalled_goals": [],
     }
     try:
         goals = store.list_goals(status="active", limit=200) or []
@@ -62,6 +86,7 @@ def collect_send_liveness(store: Any, *, now: float,
         return out
     sent = 0
     oldest = 0.0
+    oldest_eligible = 0.0
     auto_n = 0
     stalled = []
     for g in goals:
@@ -75,21 +100,33 @@ def collect_send_liveness(store: Any, *, now: float,
         except (TypeError, ValueError):
             born = 0.0
         if born > 0:
-            oldest = max(oldest, now - born)
+            age = now - born
+            oldest = max(oldest, age)
+            oldest_eligible = max(
+                oldest_eligible, age - first_eligible_delay_sec(g))
         gid = str(g.get("goal_id") or "")
         if not gid:
             continue
         n_sent = _count_sent_since(store, gid, now - lookback_sec)
         sent += n_sent
         if goal_stall_verdict(g, sent_in_window=n_sent, now=now) == "stalled":
+            conv = str(g.get("conversation_id") or "")
             stalled.append({
                 "goal_id": gid,
-                "conversation_id": str(g.get("conversation_id") or ""),
+                "conversation_id": conv,
                 "title": str(g.get("title") or "")[:40],
             })
+            # O-3 A（#236）：升 WARNING——「有排期却 24h 零真发」是要人看的事故，
+            # 不该埋在 INFO 里等人翻。看门狗那条 INFO + 事件总线照旧。
+            logger.warning(
+                "[goal-liveness] stalled goal=%s conv=%s title=%r age_h=%.1f "
+                "sent_24h=0 ——auto 档、建 ≥24h、期限未到，仍一拍未发；卡片已标红",
+                gid[:12], conv, str(g.get("title") or "")[:30],
+                (now - born) / 3600.0 if born > 0 else -1.0)
     out["active_auto"] = auto_n
     out["sent_24h"] = sent
     out["oldest_age_sec"] = oldest
+    out["oldest_eligible_sec"] = max(0.0, oldest_eligible)
     out["stalled_goals"] = stalled
     return out
 
@@ -101,7 +138,10 @@ def stall_verdict(
     min_active: int = 2,
     min_age_sec: float = 4 * 3600.0,
 ) -> Optional[str]:
-    """``sprint_effective`` + 够老的 auto 目标 + 近窗零真发 → ``\"stalled\"``。"""
+    """``sprint_effective`` + 够老的 auto 目标 + 近窗零真发 → ``\"stalled\"``。
+
+    O-3 A：「够老」按 ``oldest_eligible_sec``（自第一个可出手时刻起）判；旧快照
+    没有该键时回落 ``oldest_age_sec``。自然档建目标当天不再触发全局告警。"""
     if not isinstance(engine, dict) or not engine.get("sprint_effective"):
         return None
     if not isinstance(snap, dict):
@@ -109,7 +149,9 @@ def stall_verdict(
     try:
         if int(snap.get("active_auto") or 0) < int(min_active):
             return None
-        if float(snap.get("oldest_age_sec") or 0) < float(min_age_sec):
+        age_key = ("oldest_eligible_sec" if "oldest_eligible_sec" in snap
+                   else "oldest_age_sec")
+        if float(snap.get(age_key) or 0) < float(min_age_sec):
             return None
         if int(snap.get("sent_24h") or 0) > 0:
             return None
@@ -165,6 +207,7 @@ __all__ = [
     "GOAL_STALL_WINDOW_SEC",
     "SENT_KINDS",
     "collect_send_liveness",
+    "first_eligible_delay_sec",
     "goal_stall_verdict",
     "stall_verdict",
 ]

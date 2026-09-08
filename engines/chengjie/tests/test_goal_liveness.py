@@ -101,8 +101,11 @@ def _wd(monkeypatch, store, cfg_extra=None):
 
 def test_watchdog_alerts_then_throttles_then_recovers(monkeypatch):
     gs = _store()
-    _auto(gs, age_h=6, chat="a")
-    _auto(gs, age_h=8, chat="b")
+    # O-3 A（#236）：自然档目标的「够老」从**第一个可出手时刻**（建目标 +24h）起算——
+    # 6h/8h 的自然档目标结构上还没到能出手的时候（HM7XBA 18:42 那声 stalled 就是
+    # 这样喊错的），这里用 30h/32h（可出手已过 6h/8h）才该响。
+    _auto(gs, age_h=30, chat="a")
+    _auto(gs, age_h=32, chat="b")
     w, bus = _wd(monkeypatch, gs)
     w._check_goal_sprint_liveness(now=NOW)
     hits = [p for n, p in bus.events
@@ -115,7 +118,9 @@ def test_watchdog_alerts_then_throttles_then_recovers(monkeypatch):
     assert w.total_goal_sprint_stall_alerts == 1
     w._check_goal_sprint_liveness(now=NOW + 60)
     hits2 = [p for n, p in bus.events
-             if n == "scan_loop_stall_alert" and not p.get("recovered")]
+             if n == "scan_loop_stall_alert"
+             and p.get("loop") == "goal_sprint_sends"
+             and not p.get("recovered")]
     assert len(hits2) == 1
     gid = gs.list_goals(status="active")[0]["goal_id"]
     gs.add_event(gid, "beat_sent", "ok")
