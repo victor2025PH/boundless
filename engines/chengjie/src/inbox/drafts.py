@@ -1015,6 +1015,20 @@ class DraftService:
         if not conv_id:
             return None
 
+        # O-1 A（#252 #253 · D-O1）：会话已因停联 / 自伤冻结 → 后续入站**不起草**
+        # （XAM4KV 21:03:38「Never write me again」之后又发一条的口子在这里堵上）。
+        # 只读标志，判定在 stop_contact.frozen_reason；解冻由人工（unfreeze_conversation）。
+        try:
+            from src.inbox.stop_contact import frozen_reason as _frozen_reason, log_action as _sc_log
+            _frz = _frozen_reason(self._store, conv_id)
+        except Exception:
+            _frz, _sc_log = "", None
+        if _frz:
+            if _sc_log is not None:
+                _sc_log("skipped", conversation_id=conv_id, reason=_frz,
+                        extra="stage=inbound_no_draft")
+            return None
+
         try:
             # 幂等保护：同一会话已有 pending/enriching 草稿则跳过——但若 peer_text
             # 与本次入站不同，说明是陈旧草稿（客户又发了新消息），作废后重生成。
@@ -1111,6 +1125,7 @@ class DraftService:
             _decision = policy_decide(
                 peer_risk=risk_level, peer_reasons=_peer_reasons,
                 risk_hits=_risk_hits, automation_mode=automation_mode,
+                conversation_frozen=False,   # 上方已按 frozen_reason 早退，这里必然未冻结
             )
             autopilot = _decision.level
 
@@ -1130,6 +1145,22 @@ class DraftService:
 
             # enrich=True：停泊态落库，待人设产线补全后再翻 pending（见 enrich_draft）。
             _status = "enriching" if enrich else "pending"
+            # O-1 A（D-O1）「最多一条」：硬停放行的这一条稿在 risk_reasons 带 HARD_STOP_PASS_MARK
+            # （worker / enrich 对冻结会话只认它）。stop_contact → 正文换成 farewell_text（人设
+            # 口吻一句话，不经 AI 生成：「I hear you… Take care」正是 AI 稿），直接 pending 不停泊
+            # 不补全，另带 FAREWELL_MARK；self_harm → 照常停泊补全，AI 那一句陪伴发完即冻结。
+            if getattr(_decision, "hard_stop", "") and autopilot == "L2":
+                from src.inbox.stop_contact import (
+                    FAREWELL_MARK, HARD_STOP_PASS_MARK, farewell_text,
+                )
+                _peer_reasons = list(_peer_reasons)
+                if HARD_STOP_PASS_MARK not in _peer_reasons:
+                    _peer_reasons.append(HARD_STOP_PASS_MARK)
+                if getattr(_decision, "farewell", False):
+                    draft_text = farewell_text(lang)
+                    _status = "pending"
+                    if FAREWELL_MARK not in _peer_reasons:
+                        _peer_reasons.append(FAREWELL_MARK)
             draft_id = self._store.upsert_draft({
                 "source_kind": "inbox",
                 "source_id": conv_id,  # 用 conv_id 作为 source_id 保证每会话唯一幂等键
@@ -1179,6 +1210,31 @@ class DraftService:
                 (_sh.hold_reason if _sh else "-"),
                 ("|".join(_sh.risk_hits[:4]) if _sh and _sh.risk_hits else "-"),
             )
+            # O-1 A（D-O1）：硬停 → 冻结会话（需人工 + 「客户要求停联」+ 档位 manual + 通知）；
+            # 告别稿已在上面落库为 L2 pending，worker 放行它一条后本会话再无自动出站。
+            # risk=high 非停联 → 稿已是 L1 人审，再打「需人工」让列表可见。全部 best-effort。
+            try:
+                _hard = str(getattr(_decision, "hard_stop", "") or "")
+                if _hard:
+                    from src.inbox.stop_contact import freeze_conversation, log_action as _sc_log2
+                    _sc_log2("farewell" if getattr(_decision, "farewell", False) else "held",
+                             conversation_id=conv_id, reason=_hard, draft_id=str(draft_id),
+                             hits=_risk_hits, extra=f"level={autopilot} lang={lang}")
+                    freeze_conversation(
+                        self._store, platform=platform, account_id=account_id,
+                        chat_key=chat_key, conversation_id=conv_id, reason=_hard,
+                        hits=_risk_hits, chat_name=chat_name)
+                elif getattr(_decision, "review_required", False):
+                    from src.integrations.protocol_autoreply import tag_needs_human
+                    tag_needs_human(
+                        self._store,
+                        {"platform": platform, "account_id": account_id, "chat_key": chat_key},
+                        reason="high_risk", source="system")
+                    logger.info(
+                        "[stop-contact] conv=%s action=review reason=risk_high draft=%s hits=%s",
+                        conv_id, draft_id, "|".join(_risk_hits[:4]) or "-")
+            except Exception:
+                logger.debug("auto_generate_draft 硬停/人审落点失败（已忽略）", exc_info=True)
             if autopilot == "L1": logger.info("auto_generate_draft L1 conv=%s draft_id=%s reason=%s", conv_id, draft_id, __import__("src.inbox.l1_reason", fromlist=["peek"]).peek(conv_id) or "-")  # D-M10（M-2 E #235）：level=L1 带 reason=（cooldown/no_persona/lang_unknown/first_contact/weak_evidence/…），原因由 autodraft_helpers 推导登记，本行只读不改判定
             # G1：向事件总线发布 draft_created，供 SSE 实时通知坐席工作台
             try:
@@ -1249,14 +1305,25 @@ class DraftService:
         # 档位只认 policy：入站风险 + AI 稿风险一起进 decide（shadow 下不降档）。
         # 台账去重：入站侧「本会被扣」已在 auto_generate_draft 落过一行，这里只在
         # **AI 稿把扣稿档位推高/新引入**时再落（stage=reply）——同一稿不记两遍。
+        # O-1 A：已冻结会话上的停泊稿不得翻成第二条出站（decide 见 conversation_frozen）；
+        # 冻结当刻放行的那一条（risk_reasons 带 HARD_STOP_PASS_MARK）除外——它就是「最多一条」。
+        try:
+            from src.inbox.stop_contact import (
+                frozen_reason as _frozen_reason, is_hard_stop_pass_draft as _is_pass,
+            )
+            _frozen = (bool(_frozen_reason(self._store, str(draft.get("conversation_id") or "")))
+                       and not _is_pass(draft))
+        except Exception:
+            _frozen = False
         _peer_only = policy_decide(
             peer_risk=base_risk, peer_reasons=_peer_reasons,
-            automation_mode=automation_mode,
+            automation_mode=automation_mode, conversation_frozen=_frozen,
         )
         _decision = policy_decide(
             peer_risk=base_risk, peer_reasons=_peer_reasons,
             reply_risk=reply_risk or "low", reply_reasons=_reply_reasons,
             risk_hits=_reply_hits, automation_mode=automation_mode,
+            conversation_frozen=_frozen,
         )
         autopilot = _decision.level
         lang = reply_lang or str(draft.get("draft_lang") or "")

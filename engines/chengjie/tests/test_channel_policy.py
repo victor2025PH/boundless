@@ -144,8 +144,10 @@ def test_autosend_policy_platform_override(monkeypatch):
     monkeypatch.setattr(ap, "current_policy_mode", lambda: ap.POLICY_SHADOW)
     kw = dict(peer_risk="low", reply_risk="high", reply_reasons=["keyword"],
               risk_hits=["转账"], automation_mode="auto_ai")
-    base = ap.decide(**kw)                       # 不传 platform：全局 shadow，放行 + 影子记录
-    assert base.policy_mode == ap.POLICY_SHADOW and base.level == "L2" and base.shadow is not None
+    base = ap.decide(**kw)                       # 不传 platform：全局 shadow + 影子记录
+    # D-O1（O-1 A，2026-09-08）：shadow 下 high 转人审 L1（不再直发），影子记录照有
+    assert base.policy_mode == ap.POLICY_SHADOW and base.level == "L1" and base.shadow is not None
+    assert base.review_required is True
     same = ap.decide(platform="telegram", **kw)  # 未声明平台：与不传完全一致
     assert (same.level, same.hold_reason, same.policy_mode) == (base.level, base.hold_reason, base.policy_mode)
     dy = ap.decide(platform="douyin", **kw)      # 抖音声明 enforce：真扣

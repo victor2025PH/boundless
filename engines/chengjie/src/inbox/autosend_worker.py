@@ -311,6 +311,8 @@ class AutosendWorker:
         self.total_skipped_already_sent: int = 0
         # B41：通道互斥仲裁取消的跟进链稿数（同会话同批常规稿在场，链稿让位）
         self.total_skipped_mutex: int = 0
+        # O-1 A（#252 #253）：会话已因停联/自伤冻结而取消的 L2 稿数（告别稿不计）
+        self.total_skipped_stop_contact: int = 0
         # M-2（D-M1 / #232 / #233）：账号级通道门禁扣住次数（每 tick 重扫会重复计，
         # 是「扣留中」活动信号）/ 账号因连续失败被降半自动的次数 / 门禁日志节流表
         self.total_skipped_channel_gate: int = 0
@@ -1740,11 +1742,49 @@ class AutosendWorker:
                     "draft=%s conv=%s（同会话同批双通道出稿，防同问双答）",
                     draft_id, _conv)
                 continue
+            # O-1 A（#252 #253 · D-O1）停联 / 自伤硬停门禁——本 worker **唯一**一处：
+            # 会话已冻结（stop_contact.frozen_reason 非空）→ 只放行带 HARD_STOP_PASS_MARK /
+            # FAREWELL_MARK 的「最多一条」（停联告别 / 自伤那一句陪伴），其余 L2 稿一律取消
+            # （decided_by=stop_contact_frozen）。放行稿同时豁免下方「档位已降级」取消（冻结时
+            # 档位已被按成 manual，否则这一条也会被它扫掉）。
+            # 判定只读 stop_contact 模块，不按 risk_level 再算一遍档位。fail-open：判定异常放行。
+            _store_sc = getattr(self._svc, "_store", None)
+            _is_farewell = False
+            if _store_sc is not None and _conv:
+                try:
+                    from src.inbox.stop_contact import (
+                        frozen_reason as _sc_frozen, is_hard_stop_pass_draft as _sc_is_pass,
+                        log_action as _sc_log,
+                    )
+                    _frz = _sc_frozen(_store_sc, _conv)
+                except Exception:
+                    _frz, _sc_is_pass, _sc_log = "", None, None
+                if _frz:
+                    _is_farewell = bool(_sc_is_pass(d)) if _sc_is_pass else False
+                    if _is_farewell:
+                        _sc_log("farewell" if _frz == "stop_contact" else "one_reply",
+                                conversation_id=_conv, reason=_frz,
+                                draft_id=str(draft_id), extra="stage=worker_deliver")
+                    else:
+                        try:
+                            if hasattr(_store_sc, "update_draft_status"):
+                                _store_sc.update_draft_status(
+                                    draft_id, status="cancelled",
+                                    decided_by="stop_contact_frozen")
+                        except Exception:
+                            logger.debug(
+                                "[AutosendWorker] 取消冻结会话草稿失败 draft_id=%s",
+                                draft_id, exc_info=True)
+                        self.total_skipped_stop_contact += 1
+                        _sc_log("skipped", conversation_id=_conv, reason=_frz,
+                                draft_id=str(draft_id), extra="stage=worker_cancel")
+                        continue
             # Sprint1 统一出站闸门：会话被**显式**降级（坐席接管→manual / 改 review 等）后，
             # 接管前已入队的 L2 不该再自动发（防「接管前排队的草稿仍被投递」竞态）。
             # 仅对显式设过档位者生效；未显式设置(None)不干预 → 不改既有默认行为/perf 测试。
             _store_rt = getattr(self._svc, "_store", None)
-            if _store_rt is not None and _conv and hasattr(_store_rt, "get_automation_mode_if_set"):
+            if (_store_rt is not None and _conv and not _is_farewell
+                    and hasattr(_store_rt, "get_automation_mode_if_set")):
                 try:
                     _explicit_mode = _store_rt.get_automation_mode_if_set(_conv)
                 except Exception:
@@ -2170,6 +2210,8 @@ class AutosendWorker:
             # 涨了说明真拦到了双投/双答（去日志看 guard=deliver_once/channel_mutex）
             "total_skipped_already_sent": self.total_skipped_already_sent,
             "total_skipped_mutex": self.total_skipped_mutex,
+            # O-1 A：冻结会话（停联/自伤）取消的 L2 稿数——涨了＝硬停真拦到了
+            "total_skipped_stop_contact": self.total_skipped_stop_contact,
             # M-2：账号级通道门禁扣住次数（冷静期/降级/退避/未连接）+ 降级发生次数
             "total_skipped_channel_gate": self.total_skipped_channel_gate,
             "total_account_degraded": self.total_account_degraded,

@@ -42,6 +42,7 @@ _MODE_WRITER_ALLOWLIST = {
     "src/inbox/account_mode_onboarding.py":                "J-2 C（#63 #167）新账号接管方式确认后对齐系统落档行（align_account_conversations，只动 bootstrap/standby/account_mode 来源）——运营显式决策",
     "src/web/routes/cases_routes.py":                      "工单结案勾「转人工」（显式勾选）",
     "src/web/routes/web_chat_routes.py":                   "网站访客会话默认档（新会话预建）",
+    "src/inbox/stop_contact.py":                           "O-1 A（#252 #253 · D-O1）客户要求停联 / 自伤硬停守卫：冻结 → manual（guard:stop_contact_from:<原档>），人工解冻还原——守卫类，与 peer_bot_guard 同族",
 }
 
 # ── 允许清单：调 record_agent_takeover（接管即静音）的文件 ─────────────────────

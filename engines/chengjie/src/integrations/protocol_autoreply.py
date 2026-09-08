@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,11 @@ def humanize_flags(cfg: Dict[str, Any], platform: str) -> tuple:
             tp = bool(ov.get("typing"))
     return mr, tp
 # 值得落审计的原因（过滤掉门控/冷却/去重等噪声）
-AUDIT_REASONS = frozenset({"ok"}) | HANDOFF_REASONS
+#: O-1 A（#252 #253 · D-O1）：本链的硬停结果码——stop_contact（发了唯一一条告别或零出站）
+#: / self_harm（零出站，转人工）。进审计；不进 HANDOFF_REASONS（冻结时已打「需人工」，
+#: 且 reason 必须是冻结原因本身而非 hook 的泛化打标）。
+HARD_STOP_RESULT_REASONS = frozenset({"stop_contact", "self_harm"})
+AUDIT_REASONS = frozenset({"ok"}) | HANDOFF_REASONS | HARD_STOP_RESULT_REASONS
 
 
 def _result(reason: str, *, sent: bool = False, **extra: Any) -> Dict[str, Any]:
@@ -536,6 +540,82 @@ async def run_autoreply(
             registry=_RowRegistry())
     except Exception:
         persona_id = str((row.get("meta") or {}).get("persona_id") or "")
+
+    # O-1 A（#252 #253 · D-O1）停联 / 自伤硬停「最多一条」——本链此前对入站零分析（peer_risk
+    # 恒 low），客户说「别再写了」照样生成照发。现在：入站命中 stop_contact → **不生成 AI 稿**，
+    # 只发唯一一条人设口吻告别（stop_contact.farewell_text，按入站语言）并冻结会话（需人工 +
+    # 「客户要求停联」+ 档位 manual）；self_harm → 冻结转人工，AI 那一句陪伴照常往下走
+    # （与 R8 危机穿透同向），发完即因档位 manual 再无第二条。冻结后下一条入站在上方
+    # inbox_mode_fn（档位已 manual）处早退。判定异常一律放行（不做新的静默故障源）。
+    _hard = ""
+    _hard_lang = ""
+    _hard_hits: List[str] = []
+    if text:
+        try:
+            from src.ai.chat_assistant_service import quick_analyze as _qa
+            from src.inbox.autosend_policy import hard_stop_reason as _hsr
+            _a = _qa(text)
+            _hard = _hsr(list(_a.get("risk_reasons") or []))
+            _hard_lang = str(_a.get("language") or "")
+            _hard_hits = [str(h) for h in (_a.get("risk_hits") or [])]
+        except Exception:
+            logger.debug("[protocol-autoreply] 停联判定异常（放行）", exc_info=True)
+            _hard = ""
+    if _hard:
+        _store_sc = None
+        try:
+            from src.integrations.protocol_bridge import get_inbox_store as _gis
+            _store_sc = _gis()
+        except Exception:
+            _store_sc = None
+        _was_frozen = ""
+        try:
+            from src.inbox.stop_contact import (
+                farewell_text as _sc_farewell, freeze_conversation as _sc_freeze,
+                frozen_reason as _sc_frozen, log_action as _sc_log,
+            )
+            from src.inbox.normalizer import conv_id as _sc_cid
+            _cid_sc = _sc_cid(platform, account_id, chat_key)
+            _was_frozen = _sc_frozen(_store_sc, _cid_sc) if _store_sc is not None else ""
+            _sc_freeze(_store_sc, platform=platform, account_id=account_id, chat_key=chat_key,
+                       conversation_id=_cid_sc, reason=_hard, hits=_hard_hits)
+        except Exception:
+            logger.debug("[protocol-autoreply] 停联冻结失败（继续硬停）", exc_info=True)
+            _sc_farewell = None  # type: ignore[assignment]
+            _sc_log = None  # type: ignore[assignment]
+            _cid_sc = key
+        if _hard == "stop_contact" and not _was_frozen and _sc_farewell is not None:
+            _farewell = _sc_farewell(_hard_lang)
+            try:
+                await send(platform=platform, account_id=account_id,
+                           chat_key=chat_key, text=_farewell)
+            except Exception as _fw_ex:
+                logger.warning("[protocol-autoreply] 告别发送失败 %s", key, exc_info=True)
+                if _sc_log is not None:
+                    _sc_log("farewell_failed", conversation_id=_cid_sc, reason=_hard,
+                            hits=_hard_hits, extra=f"stage=protocol err={str(_fw_ex)[:60]}")
+                return _result("stop_contact", text=_farewell, inbound=text, hard_stop=_hard,
+                               error=str(_fw_ex)[:200])
+            _send_ts_fw = ts if now is not None else time.time()
+            _last_reply[key] = (dedup_text, _send_ts_fw)
+            _last_sent[key] = _send_ts_fw
+            if limiter is not None:
+                limiter.record_sent(account_key, _send_ts_fw)
+            if _sc_log is not None:
+                _sc_log("farewell", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
+                        extra=f"stage=protocol lang={_hard_lang or '-'}")
+            return _result("stop_contact", sent=True, text=_farewell, inbound=text,
+                           hard_stop=_hard, farewell=True)
+        if _hard == "stop_contact" or _was_frozen:
+            if _sc_log is not None:
+                _sc_log("skipped", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
+                        extra=f"stage=protocol was_frozen={_was_frozen or '-'}")
+            return _result(_hard, inbound=text, hard_stop=_hard)
+        # self_harm 首次：已冻结切人工，这一句陪伴照常生成 / 发送（下方主流程）
+        if _sc_log is not None:
+            _sc_log("one_reply", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
+                    extra="stage=protocol")
+
     try:
         reply = await generate(
             text=text, platform=platform, account_id=account_id,
@@ -568,6 +648,14 @@ async def run_autoreply(
         except Exception:
             logger.debug("[protocol-autoreply] policy decide 异常（按 enforce 旧行为）", exc_info=True)
         if _decision is None or _decision.level != "L2":
+            # O-1 A（D-O1 豁免②）：shadow 下 high 也转人工审（decide 回 L1 + shadow 记录）——
+            # 台账仍落 hold 行并当场写去向 cancelled:risk_high_review（一个月数据不缺这一类）。
+            if _decision is not None and getattr(_decision, "shadow", None) is not None:
+                _held_rec = _shadow_hold(
+                    _decision, platform=platform, account_id=account_id, chat_key=chat_key,
+                    reply=reply, inbound=text, ts=(ts if now is not None else time.time()))
+                _shadow_outcome(_held_rec, "cancelled",
+                                str(getattr(_decision, "hold_reason", "") or "risk_high_review"))
             logger.warning("[protocol-autoreply] 命中高风险，转人工不自动发：%s", key)
             return _result("high_risk", text=reply, inbound=text, risk=risk)
         _shadow_rec = _shadow_hold(

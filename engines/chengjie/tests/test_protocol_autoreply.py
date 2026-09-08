@@ -131,9 +131,10 @@ def _ledger_rows(d):
 
 
 @pytest.mark.asyncio
-async def test_high_risk_reply_released_in_shadow_with_ledger(_shadow_ledger):
-    """#160 v2 shadow（默认）：AI 稿高风险照发；台账一行 hold(stage=protocol) + 一行
-    outcome(sent)；不登记 reconcile 待终局（本链无草稿行）；res 带 shadow_released。"""
+async def test_high_risk_reply_held_for_review_in_shadow_with_ledger(_shadow_ledger):
+    """D-O1 豁免②（O-1 A，2026-09-08）：shadow 下 AI 稿高风险**不再直发**，转人工（high_risk）；
+    台账仍一行 hold(stage=protocol) + 一行 outcome(cancelled:risk_high_review)；不登记 reconcile
+    待终局（本链无草稿行）。09-04 全放行只剩 medium（见下一条）。"""
     from src.inbox import autosend_shadow_log as sl
     sent = []
     res = await pa.run_autoreply(
@@ -142,8 +143,9 @@ async def test_high_risk_reply_released_in_shadow_with_ledger(_shadow_ledger):
         generate=_make_gen("好的，请提供付款账号我帮你退款"), send=_make_send(sent),
         risk_fn=lambda t: "high",
     )
-    assert res["sent"] is True and res["risk"] == "high" and res["shadow_released"] is True
-    assert len(sent) == 1
+    assert res["skipped"] == "high_risk" and res["risk"] == "high" and res.get("sent") is not True
+    assert pa.needs_handoff(res) is True
+    assert sent == []
     rows = _ledger_rows(_shadow_ledger)
     holds = [r for r in rows if r.get("kind") == "hold"]
     outs = [r for r in rows if r.get("kind") == "outcome"]
@@ -155,18 +157,23 @@ async def test_high_risk_reply_released_in_shadow_with_ledger(_shadow_ledger):
     assert h["reply_risk"] == "high" and h["peer_risk"] == "low"
     assert any("付款" in x or "退款" in x for x in h["risk_hits"]), h["risk_hits"]
     assert h["text_fp"] and h["peer_text_fp"] and h["lang"] == "zh"
-    assert o["draft_id"] == h["draft_id"] and o["outcome"] == "sent"
+    assert o["draft_id"] == h["draft_id"] and o["outcome"] == "cancelled"
+    assert o["reason"] == "risk_high_review"
     assert sl.pending_count() == 0                      # 不进 reconcile 队列
     snap = sl.stats_snapshot()
-    assert snap["total"] == 1 and snap["by_stage"] == {"protocol": 1} and snap["outcomes"] == {"sent": 1}
+    assert snap["total"] == 1 and snap["by_stage"] == {"protocol": 1} and snap["outcomes"] == {"cancelled": 1}
     # 不记原文
     raw = "".join(p.read_text(encoding="utf-8") for p in _shadow_ledger.glob("*.jsonl"))
     assert "好的，请提供付款账号我帮你退款" not in raw
 
 
 @pytest.mark.asyncio
-async def test_high_risk_shadow_send_failure_records_delivery_failed(_shadow_ledger):
+async def test_high_risk_never_reaches_send(_shadow_ledger):
+    """D-O1 ②：高风险稿在到 send 之前就被扣下——send 即使会炸也不会被调用。"""
+    calls = []
+
     async def _send_fail(**kw):
+        calls.append(kw)
         raise RuntimeError("send_gate_blocked:kill_switch")
     res = await pa.run_autoreply(
         _payload("退款"), registry=_FakeRegistry(_row()),
@@ -174,11 +181,9 @@ async def test_high_risk_shadow_send_failure_records_delivery_failed(_shadow_led
         generate=_make_gen("请给我银行卡号"), send=_send_fail,
         risk_fn=lambda t: "high",
     )
-    assert res["skipped"] == "send_error" and res["shadow_released"] is True
+    assert res["skipped"] == "high_risk" and calls == []
     outs = [r for r in _ledger_rows(_shadow_ledger) if r.get("kind") == "outcome"]
-    assert len(outs) == 1
-    assert outs[0]["outcome"] == "delivery_failed"
-    assert outs[0]["reason"].startswith("gate:send_gate_blocked")   # 类别与 send_health 同口径
+    assert len(outs) == 1 and outs[0]["outcome"] == "cancelled"
 
 
 @pytest.mark.asyncio

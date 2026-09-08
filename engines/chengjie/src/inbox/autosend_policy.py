@@ -23,6 +23,20 @@
 ``risk_to_autopilot`` / ``is_autosend_allowed`` / ``apply_analysis`` 与 worker 的捞稿逻辑
 **全部只认本模块**——任何一处再自己算一遍档位，一个月后就会出现「台账说放行了、
 实际还是被拦」这种无法归因的状态。
+
+**09-04 放行的两条豁免（O-1 A · #252 #253 · D-O1，2026-09-08）**——不看 policy_mode：
+
+1. ``stop_contact`` / ``self_harm`` 命中（:data:`HARD_STOP_REASONS`）→ **硬停**。auto_ai 且
+   会话尚未冻结：本轮只放一条告别（``farewell=True``，level L2，正文由 ``drafts.py`` 换成
+   ``stop_contact.farewell_text``，不经 AI 生成），随后会话冻结（``hard_stop`` 非空 →
+   调用方 ``freeze_conversation``）；已冻结 / self_harm：AI 稿一律不自动发（stop_contact →
+   L4，self_harm → L1 人审）。review / manual 档保留其档位，但同样 ``hard_stop`` 冻结。
+   影子记录照常产出（台账要有这一行、值守群要收即时告警），去向行会如实写成未发。
+2. ``risk=high``（非停联）在 auto_ai + shadow 档 → **转人工审**（``review_required=True``，
+   level L1，hold_reason ``risk_high_review``），不再直发；medium 仍放行进台账。
+
+放行初衷是敏感词误伤（「用户只看到全自动不工作了」），不是客户说了「别再写了」还连发
+两条——那是投诉与封号的直接原因（XAM4KV 21:00:26 → 21:03:48）。
 """
 from __future__ import annotations
 
@@ -47,6 +61,12 @@ _REASON_PRIORITY = (
     "stop_contact", "self_harm", "credential_or_payment_request",
     "money", "privacy", "adult", "keyword", "negative_emotion",
 )
+
+# O-1 A（D-O1）：09-04 放行的豁免项——命中即硬停，不看 policy_mode。
+# 与 ``src.inbox.stop_contact.FREEZE_REASONS`` 同值（测试钉住）。
+HARD_STOP_REASONS = ("stop_contact", "self_harm")
+# risk=high（非停联）在全自动下转人工审的 hold_reason（L1，草稿进人审队列）
+REVIEW_HOLD_REASON = "risk_high_review"
 
 
 @dataclass(frozen=True)
@@ -79,6 +99,12 @@ class Decision:
     shadow: Optional[ShadowRecord]   # shadow 档下「本会被扣」的记录；None＝旧规则也放行/非风险挂起
     policy_mode: str = DEFAULT_POLICY_MODE
     automation_mode: str = "review"
+    # O-1 A（D-O1）：硬停原因（stop_contact / self_harm / 空）——非空＝调用方须冻结会话
+    hard_stop: str = ""
+    # 本轮放行的是「唯一一条告别」（level=L2 但正文必须换成 farewell_text，不发 AI 稿）
+    farewell: bool = False
+    # risk=high 非停联 → 转人工审（level=L1）
+    review_required: bool = False
 
     @property
     def autosend_allowed(self) -> bool:
@@ -87,6 +113,15 @@ class Decision:
     @property
     def held(self) -> bool:
         return bool(self.hold_reason)
+
+
+def hard_stop_reason(peer_reasons: Iterable[str]) -> str:
+    """入站风险原因里的硬停项（按 HARD_STOP_REASONS 优先级取首个）；无 → 空串。"""
+    pr = [str(r) for r in (peer_reasons or [])]
+    for r in HARD_STOP_REASONS:
+        if r in pr:
+            return r
+    return ""
 
 
 # ── 策略模式解析 ─────────────────────────────────────────────────────────
@@ -193,20 +228,32 @@ def decide(
     automation_mode: str = "review",
     policy_mode: Optional[str] = None,
     platform: str = "",
+    conversation_frozen: bool = False,
 ) -> Decision:
-    """Decision = (level, hold_reason, shadow)。
+    """Decision = (level, hold_reason, shadow[, hard_stop, farewell, review_required])。
 
     ``platform``（实施96 P0-3，可选）：未显式传 ``policy_mode`` 时，先问渠道策略层
     ``channel_policy.risk_policy_mode(platform)``——抖音/TikTok 这类以行为指纹与内容合规
     为主判据的平台声明 ``enforce``，全局 shadow 档对它们不生效；未声明的平台跟全局，
     不传 platform 逐字节旧行为。
 
+    ``conversation_frozen``（O-1 A）：调用方读到的 ``stop_contact.frozen_reason`` 非空——
+    已冻结的会话不再给第二条告别。
+
+    - **硬停先于一切**（D-O1）：``peer_reasons`` 含 stop_contact / self_harm → 一律
+      ``hard_stop=<reason>``（调用方据此冻结会话，不看 policy_mode / 档位）。level：
+      shadow × auto_ai × 未冻结 → L2「最多一条」（stop_contact 带 ``farewell=True``＝告别
+      模板；self_harm＝AI 那一句陪伴照发），shadow 记录照常产出＝台账 + 即时告警；
+      shadow × auto_ai × 已冻结 → stop_contact L4 / self_harm L1 人审（带 shadow 记录）；
+      enforce → 旧表逐字 L4（shadow=None）；非 auto_ai → 保留档位（人已在环，不进台账）。
     - 非 ``auto_ai`` 档（review / manual / multi_choice）：用户显式选的人审/手动档，
       **先于风险层**返回该档位（L1/L0/L1），``shadow=None``——不是风险触发的挂起，
       不进台账，也不受 policy_mode 影响。
     - ``auto_ai`` 档：按旧规则算 would_hold_level；
         · 旧规则也放行（low/low）→ L2，shadow=None；
-        · 旧规则会扣（L3/L4）→ shadow 档：**L2 + 空 hold_reason + ShadowRecord**；
+        · 旧规则会扣（L3/L4）→ shadow 档：medium **L2 + 空 hold_reason + ShadowRecord**；
+                                  high → **L1 + ``risk_high_review`` + ShadowRecord**
+                                  （D-O1 豁免②：高风险稿转人工审，不直发）；
                                   enforce 档：would_hold_level + hold_reason，shadow=None。
     """
     mode = normalize_automation_mode(automation_mode)
@@ -221,6 +268,42 @@ def decide(
     reply_reasons_l = [str(r) for r in (reply_reasons or [])]
     hits_l = [str(h) for h in (risk_hits or []) if str(h)]
     effective = max_risk(peer_risk or "low", reply_risk or "low")
+
+    # ── 硬停（D-O1 豁免①）：``hard_stop`` 冻结不看 policy_mode / 档位；
+    #    「唯一一条告别」只在 shadow × auto_ai × 未冻结 时给（enforce 档＝旧表逐字 L4，
+    #    review/manual 档＝人已在环，不代人说再见）。
+    hard = hard_stop_reason(peer_reasons_l)
+    if hard:
+        if pm == POLICY_ENFORCE:
+            # 旧表逐字（含 review+high → L4 主管闸），不写影子台账；只多带冻结信号
+            lvl = legacy_level(effective, mode)
+            lvl = lvl if lvl in HOLD_LEVELS else "L4"
+            return Decision(level=lvl, hold_reason=hard, shadow=None,
+                            policy_mode=pm, automation_mode=mode, hard_stop=hard)
+        if mode != "auto_ai":
+            # 用户显式选的人审/手动档：保留档位、不进台账（非风险触发的挂起），只带冻结信号
+            lvl = mode_level(mode)
+            return Decision(level=lvl, hold_reason=f"mode:{mode}", shadow=None,
+                            policy_mode=pm, automation_mode=mode, hard_stop=hard)
+        would = legacy_level(effective, mode)
+        rec = ShadowRecord(
+            would_hold_level=(would if would in HOLD_LEVELS else "L4"),
+            hold_reason=hard,
+            peer_risk=str(peer_risk or "high"), peer_reasons=peer_reasons_l,
+            reply_risk=str(reply_risk or "low"), reply_reasons=reply_reasons_l,
+            risk_hits=hits_l,
+        )
+        if not conversation_frozen:
+            # 「最多一条」：level L2 让 worker 投这一条，随后调用方冻结会话。
+            # stop_contact → 正文由调用方换成 farewell_text（告别，不发 AI 稿）；
+            # self_harm → AI 那一句陪伴照发（与 R8「危机穿透照发」同向：零回应比一句陪伴更糟），
+            #             发完即冻结切人工——今天的差别是之后不再有第二条。
+            return Decision(level="L2", hold_reason="", shadow=rec,
+                            policy_mode=pm, automation_mode=mode,
+                            hard_stop=hard, farewell=(hard == "stop_contact"))
+        lvl = "L4" if hard == "stop_contact" else "L1"
+        return Decision(level=lvl, hold_reason=hard, shadow=rec,
+                        policy_mode=pm, automation_mode=mode, hard_stop=hard)
 
     if pm == POLICY_ENFORCE:
         # 骨架＝v1.0.71 旧表**逐字**（含 review+high→L4 主管闸）。规则表一个月后读完
@@ -252,14 +335,20 @@ def decide(
         reply_risk=str(reply_risk or "low"), reply_reasons=reply_reasons_l,
         risk_hits=hits_l,
     )
-    # 先按旧规则算出 would_hold_level / hold_reason，然后无条件覆写 L2 + 空 hold_reason
+    if would == "L4":
+        # D-O1 豁免②：risk=high（非停联）在全自动下转人工审——L1 进人审队列，不直发；
+        # 影子记录照常（台账仍要看到「本会被扣」+ 命中词），去向行会写成人工处置结果。
+        return Decision(level="L1", hold_reason=REVIEW_HOLD_REASON, shadow=rec,
+                        policy_mode=pm, automation_mode=mode, review_required=True)
+    # medium：先按旧规则算出 would_hold_level / hold_reason，然后覆写 L2 + 空 hold_reason
     return Decision(level="L2", hold_reason="", shadow=rec,
                     policy_mode=pm, automation_mode=mode)
 
 
 __all__ = [
     "POLICY_SHADOW", "POLICY_ENFORCE", "POLICY_MODES", "DEFAULT_POLICY_MODE",
-    "ENV_POLICY_MODE", "HOLD_LEVELS", "Decision", "ShadowRecord",
+    "ENV_POLICY_MODE", "HOLD_LEVELS", "HARD_STOP_REASONS", "REVIEW_HOLD_REASON",
+    "Decision", "ShadowRecord", "hard_stop_reason",
     "decide", "legacy_level", "mode_level", "max_risk", "hold_reason_for",
     "current_policy_mode", "resolve_policy_mode", "normalize_policy_mode",
     "normalize_automation_mode",

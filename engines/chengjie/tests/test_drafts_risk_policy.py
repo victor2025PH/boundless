@@ -199,28 +199,60 @@ def _lines(d: Path):
     return out
 
 
-# 判中五条（含 AI 稿）：shadow 下全放行 + 恰好一条台账
+# 判中五条（含 AI 稿）：shadow 下恰好一条台账；发送行为按 D-O1（O-1 A，2026-09-08）：
+#   stop_contact → 唯一一条告别（L2 + farewell）+ 冻结；self_harm → AI 那一句陪伴放行（L2）+ 冻结
+#   （之后再无第二条）；risk=high 非停联 → L1 人审（risk_high_review）。09-04「全放行」只剩 medium。
 _SHADOW_CASES = [
-    # (入站文本, AI 稿, 期望 hold_reason, would_hold_level)
-    ("please stop messaging me", "", "stop_contact", "L4"),
-    ("别再联系我", "", "stop_contact", "L4"),
-    ("I want to kill myself", "", "self_harm", "L4"),
-    ("send me your bank card number", "", "credential_or_payment_request", "L4"),
-    ("ok how do I pay", "Just transfer to this account and I'll ship it", "reply_risk", "L4"),
+    # (入站文本, AI 稿, 期望 hold_reason(台账), would_hold_level, 期望 level, hard_stop, farewell, review)
+    ("please stop messaging me", "", "stop_contact", "L4", "L2", "stop_contact", True, False),
+    ("别再联系我", "", "stop_contact", "L4", "L2", "stop_contact", True, False),
+    ("I want to kill myself", "", "self_harm", "L4", "L2", "self_harm", False, False),
+    ("send me your bank card number", "", "credential_or_payment_request", "L4", "L1", "", False, True),
+    ("ok how do I pay", "Just transfer to this account and I'll ship it", "reply_risk", "L4", "L1", "", False, True),
 ]
 
 
-@pytest.mark.parametrize("text,reply,reason,would", _SHADOW_CASES)
-def test_shadow_releases_and_produces_exactly_one_record(shadow_env, text, reply, reason, would):
+@pytest.mark.parametrize("text,reply,reason,would,level,hard,farewell,review", _SHADOW_CASES)
+def test_shadow_releases_and_produces_exactly_one_record(
+        shadow_env, text, reply, reason, would, level, hard, farewell, review):
     d = _decide_text(text, reply=reply)
-    assert d.level == "L2", (text, d)
-    assert d.hold_reason == "", d
-    assert d.autosend_allowed is True
+    assert d.level == level, (text, d)
+    assert d.hard_stop == hard and d.farewell is farewell and d.review_required is review, d
+    if level == "L2":
+        assert d.hold_reason == "" and d.autosend_allowed is True
+    else:
+        assert d.held and d.autosend_allowed is False
+        assert d.hold_reason == (hard or pol.REVIEW_HOLD_REASON)
     assert d.shadow is not None, "判中却没有影子记录＝台账丢数据"
     assert d.shadow.would_hold_level == would
     assert d.shadow.hold_reason == reason, d.shadow
     assert d.shadow.risk_hits, "命中词必须有，否则一个月后分不清真该拦还是误伤"
     assert d.policy_mode == "shadow"
+
+
+def test_medium_risk_still_released_with_shadow(shadow_env):
+    """D-O1 只收 high / 停联 / 自伤；medium（投诉 / 优惠 / 负面情绪）仍按 09-04 放行进台账。"""
+    d = _decide_text("this is a scam, I want a discount or I complain")
+    assert d.level == "L2" and d.hold_reason == "" and d.autosend_allowed is True
+    assert d.shadow is not None and d.shadow.would_hold_level == "L3"
+    assert d.hard_stop == "" and d.review_required is False
+
+
+def test_stop_contact_second_time_no_second_farewell(shadow_env):
+    """会话已冻结（调用方传 conversation_frozen=True）→ 不给第二条告别，AI 稿 L4 不发。"""
+    d = _decide_text("never write me again, please")
+    assert d.level == "L2" and d.farewell is True and d.hard_stop == "stop_contact"
+    a = quick_analyze("never write me again, please")
+    d2 = pol.decide(a["risk_level"], a["risk_reasons"], risk_hits=a["risk_hits"],
+                    automation_mode="auto_ai", policy_mode="shadow", conversation_frozen=True)
+    assert d2.level == "L4" and d2.farewell is False and d2.hard_stop == "stop_contact"
+    assert d2.hold_reason == "stop_contact" and d2.shadow is not None
+    # 自伤：首次一条放行（L2），已冻结 → L1 人审
+    b = quick_analyze("I want to kill myself")
+    d3 = pol.decide(b["risk_level"], b["risk_reasons"], risk_hits=b["risk_hits"],
+                    automation_mode="auto_ai", policy_mode="shadow", conversation_frozen=True)
+    assert d3.level == "L1" and d3.hold_reason == "self_harm" and d3.hard_stop == "self_harm"
+    assert pol.HARD_STOP_REASONS == ("stop_contact", "self_harm")
 
 
 @pytest.mark.parametrize("text", _NO_RISK)
@@ -238,21 +270,28 @@ def test_explicit_non_auto_mode_still_held_and_not_in_ledger(shadow_env, mode, l
         assert d.level == level, (mode, text, d)
         assert d.held and d.hold_reason.startswith("mode:")
         assert d.shadow is None
+        # D-O1：人已在环不代人说再见（无 farewell），但冻结信号照带（调用方据此切人工）
+        assert d.farewell is False
+        assert d.hard_stop == ("stop_contact" if "stop" in text else "")
     # enforce＝旧表逐字：review+high 仍是 L4 主管闸（反向验证基线），且不是影子
     d = _decide_text("please stop messaging me", mode="review", policy="enforce")
     assert d.level == "L4" and d.shadow is None and d.hold_reason == "stop_contact"
+    assert d.hard_stop == "stop_contact" and d.farewell is False
     d = _decide_text("hi there", mode="review", policy="enforce")
     assert d.level == "L1" and d.shadow is None
 
 
-@pytest.mark.parametrize("text,reply,reason,would", _SHADOW_CASES)
-def test_enforce_reverse_verification_restores_hold(shadow_env, text, reply, reason, would):
-    """§6-10 反向验证：把 policy 置 enforce，2–5 必须变回挂起——证明旧规则没被删。"""
+@pytest.mark.parametrize("text,reply,reason,would,_l,hard,_f,_r", _SHADOW_CASES)
+def test_enforce_reverse_verification_restores_hold(
+        shadow_env, text, reply, reason, would, _l, hard, _f, _r):
+    """§6-10 反向验证：把 policy 置 enforce，2–5 必须变回挂起——证明旧规则没被删。
+    D-O1：enforce 下停联 / 自伤不给告别（旧表逐字 L4），但冻结信号照带。"""
     d = _decide_text(text, reply=reply, policy="enforce")
     assert d.level == would, (text, d)
     assert d.hold_reason == reason
     assert d.autosend_allowed is False
     assert d.shadow is None          # 真扣了就不是影子
+    assert d.farewell is False and d.hard_stop == hard
 
 
 def test_env_override_switches_policy_mode(shadow_env, monkeypatch):
@@ -262,7 +301,9 @@ def test_env_override_switches_policy_mode(shadow_env, monkeypatch):
     assert risk_to_autopilot("high", "auto_ai") == "L4"
     assert is_autosend_allowed("medium", "auto_ai") is False
     monkeypatch.setenv(pol.ENV_POLICY_MODE, "shadow")
-    assert risk_to_autopilot("high", "auto_ai") == "L2"
+    # D-O1（O-1 A）：shadow 下 high 不再直发 → L1 人审；medium 仍放行
+    assert risk_to_autopilot("high", "auto_ai") == "L1"
+    assert is_autosend_allowed("high", "auto_ai") is False
     assert is_autosend_allowed("medium", "auto_ai") is True
     assert risk_to_autopilot("high", "review") == "L1"
     assert risk_to_autopilot("low", "manual") == "L0"
@@ -333,7 +374,7 @@ def test_service_review_mode_held_not_in_ledger(shadow_env, store):
 
 
 def test_service_enrich_reply_risk_recorded_once(shadow_env, store):
-    """入站干净 + AI 稿要付款 → 放行 L2，台账恰好一条 stage=reply / reply_risk=high。"""
+    """入站干净 + AI 稿要付款 → D-O1：high 转人审 L1（不直发），台账恰好一条 stage=reply。"""
     svc = DraftService(inbox_store=store, risk_fn=quick_risk)
     did = svc.auto_generate_draft(_conv(), "ok how do I pay", automation_mode="auto_ai", enrich=True)
     assert _lines(shadow_env) == []                 # 入站侧无风险
@@ -341,7 +382,7 @@ def test_service_enrich_reply_risk_recorded_once(shadow_env, store):
                           automation_mode="auto_ai")
     assert ok
     row = store.get_draft(did)
-    assert row["status"] == "pending" and row["autopilot_level"] == "L2"
+    assert row["status"] == "pending" and row["autopilot_level"] == "L1"
     rows = _lines(shadow_env)
     assert len(rows) == 1
     assert rows[0]["stage"] == "reply" and rows[0]["reply_risk"] == "high"
@@ -350,13 +391,21 @@ def test_service_enrich_reply_risk_recorded_once(shadow_env, store):
 
 
 def test_service_enrich_does_not_double_count_peer_hold(shadow_env, store):
-    """入站已判中（记过一行）+ AI 稿也高风险 → 同一稿不记两遍。"""
+    """入站已判中（记过一行）+ AI 稿也高风险 → 同一稿不记两遍；自伤 → 这一条放行（L2，
+    带 HARD_STOP_PASS_MARK）+ 会话冻结切人工（之后再无第二条）。"""
     svc = DraftService(inbox_store=store, risk_fn=quick_risk)
     did = svc.auto_generate_draft(_conv(), "I want to kill myself", automation_mode="auto_ai", enrich=True)
     assert len(_lines(shadow_env)) == 1
     svc.enrich_draft(did, reply_text="please transfer to this account", automation_mode="auto_ai")
     assert len(_lines(shadow_env)) == 1
-    assert store.get_draft(did)["autopilot_level"] == "L2"
+    row = store.get_draft(did)
+    assert row["autopilot_level"] == "L2" and row["status"] == "pending"
+    from src.inbox.stop_contact import frozen_reason, is_hard_stop_pass_draft
+    assert is_hard_stop_pass_draft(row)
+    assert frozen_reason(store, _conv()["conversation_id"]) == "self_harm"
+    assert store.get_automation_mode_if_set(_conv()["conversation_id"]) == "manual"
+    # 第二条入站：不起草
+    assert svc.auto_generate_draft(_conv(), "I really want to die", automation_mode="auto_ai") is None
 
 
 def test_service_enforce_holds_for_real(shadow_env, store, monkeypatch):

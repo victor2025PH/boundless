@@ -286,25 +286,40 @@ _STOP_CONTACT_EN = re.compile(
     # 带对象的放最前：同一起点下让「please stop messaging me」整句成为命中词，
     # 而不是只剩一个「please stop」（台账要看得出对方到底拒绝了什么）
     r"(?:please\s+)?stop\s+(?:texting|messaging|contacting|calling|bothering"
-    r"|writing(?:\s+to)?|talking\s+to)(?:\s+me)?" + _RB
+    r"|writing(?:\s+to)?|talking\s+to|sending\s+(?:me\s+)?(?:messages|texts|msgs))(?:\s+me)?"
+    r"(?:\s+(?:again|anymore|any\s+more|ever\s+again))?" + _RB
     + r"|please\s+stop" + _RB
-    + r"|(?:don'?t|do\s+not|never)\s+(?:contact|message|text|call|write\s+to)\s+me" + _RB
+    # O-1 A（#252 XAM4KV 21:03:38 漏判「Never write me again, please」）：write 不再强制带 to；
+    # 补 ever / again / anymore 尾巴与 talk to me
+    + r"|(?:please\s+)?(?:don'?t|do\s+not|never)\s+(?:ever\s+)?"
+    r"(?:contact|message|text|call|write(?:\s+to)?|talk\s+to)\s+me"
+    r"(?:\s+(?:again|anymore|any\s+more|ever\s+again))?" + _RB
     + r"|unsubscribe" + _RB
     + r"|leave\s+me\s+alone" + _RB
-    + r"|lose\s+my\s+number" + _RB
+    + r"|(?:lose|delete|remove|forget)\s+my\s+(?:number|contact)" + _RB
+    # 「I'm blocking you / I will block you / going to block you」——对我们的拉黑宣告
+    + r"|(?:i(?:'m|\s+am|'ll|\s+will)\s+(?:gonna\s+|going\s+to\s+)?|gonna\s+|going\s+to\s+)"
+    r"block(?:ing)?\s+(?:you|u|this\s+number)" + _RB
     + r")",
     re.IGNORECASE,
 )
 # 否定式：「didn't want to stop」「can't stop thinking about you」——这里的 stop
 # 是「停下（聊天/想你）」，不是叫我们别联系；先把这些片段挖掉再判正向短语。
+# O-1 A 追加：「you never text me back / he never calls me」是抱怨不是停联——主语代词 +
+# never + 联系动词 的片段一并挖掉（「Never write me again」句首无主语，不受影响）。
 _STOP_CONTACT_NEGATED = re.compile(
     _LB + r"(?:didn'?t|don'?t|can'?t|cannot|couldn'?t|never|won'?t|wouldn'?t|not)\s+"
-    r"(?:want\s+to\s+|wanna\s+|really\s+|ever\s+)?stop" + _RB,
+    r"(?:want\s+to\s+|wanna\s+|really\s+|ever\s+)?stop" + _RB
+    + r"|" + _LB + r"(?:you|u|he|she|they|we|i|people|guys|ya)\s+(?:just\s+|even\s+)?never\s+"
+    r"(?:ever\s+)?(?:contact|message|text|call|write(?:\s+to)?|talk\s+to)\s+me" + _RB,
     re.IGNORECASE,
 )
 _STOP_CONTACT_ZH = re.compile(
     r"别联系|别再联系|不要联系|勿扰|别发了|别再发|不要发了|不要再发"
     r"|(?:别|不要|不想|勿|停止)\S{0,4}(?:联系|打扰|骚扰|发消息|发信息)"
+    # O-1 A：拉黑宣告（针对我们）+ 别烦我；不收裸「拉黑」（「我把他拉黑了」是转述）
+    r"|(?:再发|再联系|再打扰|再骚扰|再找我)\S{0,3}拉黑|拉黑你|要拉黑|把你拉黑|拉黑了你"
+    r"|(?:别|不要|不许|不准|请勿)(?:再|来|总)?烦我"
 )
 
 # high 档风险主题词（客户**提到**了敏感主题）。命中不再扣稿（#160 v2 全放行），
