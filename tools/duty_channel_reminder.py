@@ -17,6 +17,9 @@
 
 护栏：
   - 首次运行只初始化水位（event_id = 当前 max；receipted = 已下载全部码），不回放历史；
+  - 回执发送失败最多重试 3 次（跨 tick 计数 state.receipt_attempts），之后 receipt_gave_up 写
+    .ops/duty_alerts.log 一行交人工；每次发前先查 inbox.db 群会话 10 分钟内有无同文本带 mid 的
+    out 行（有＝上次其实发到了）；空备注 report 包 / selfcheck 自检包不回执（P-5 B，2026-09-08）；
   - 发送走 engines/chengjie/tools/duty_reply.py（token 从实例配置读、对外红线闸门、回复台账）；
   - 任何异常只写日志，绝不抛出；--dry-run 只打印不发不写状态；
   - 文案可被 D:\\chengjie-instances\\.ops\\channel_reminder_text.txt / channel_receipt_text.txt 覆盖
@@ -47,9 +50,16 @@ ENGINE = Path(r"D:\boundless\engines\chengjie")
 WATCH_STATE = OPS / "duty_watch_loop.state.json"
 STATE = OPS / "duty_channel_reminder.state.json"
 LOG = OPS / "duty_channel_reminder.log"
+ALERTS = OPS / "duty_alerts.log"          # 值守人工要补的事，一行一件（回执放弃 …）
 TEXT_REMIND = OPS / "channel_reminder_text.txt"
 TEXT_RECEIPT = OPS / "channel_receipt_text.txt"
 GROUP_ID = "4345824259"   # 报障群 chat_key 去负号（inbox conversation_id 模糊匹配用）
+# 回执重试（P-5 B，09-08 13:47–14:09 实锤：32PTMK 回执 502 十二次、每次在收件箱留一条 failed 行，
+# 群里只到 1 条）：跨 tick 最多 3 次，之后 receipt_gave_up 写告警交人工；每次发前先查收件箱
+# 最近 10 分钟有没有同文本且带 platform_msg_id 的 out 行——有就是已发（上次 502 是假失败）
+RECEIPT_MAX_ATTEMPTS = 3
+RECEIPT_DEDUP_WINDOW_SEC = 10 * 60
+EMPTY_NOTE_MARK = "（无备注）"
 
 # 受控报障人：群里提交 → 提醒走 Cursor（同时是无人值守时的受理回执）。老板 0906 指令先点了
 # skuio；0906 22:3x 钧 13:39 三条群提交 9 小时无人回（bot 只静默立了 #215）→ 钧也加进来。
@@ -114,6 +124,50 @@ def read_template(p: Path, default: str) -> str:
         return t or default
     except Exception:
         return default
+
+
+def alert(msg: str) -> None:
+    """值守人工待办一行（不抛）。"""
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    try:
+        with ALERTS.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+    log("ALERT " + msg)
+
+
+def already_in_inbox(text: str, *, now: Optional[float] = None,
+                     db_path: Optional[Path] = None,
+                     window: float = RECEIPT_DEDUP_WINDOW_SEC) -> str:
+    """收件箱群会话最近 ``window`` 秒内是否已有**同文本且带 platform_msg_id** 的 out 行。
+
+    返回那条的 platform_msg_id（没有返空串）。只认带 mid 的：status=failed 的留痕行 mid 恒空，
+    不算已发。任何异常按「没有」处理（宁可多发一条也别把没发的当发了）。
+    """
+    body = str(text or "").strip()
+    if not body:
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{(db_path or DATA / 'config' / 'inbox.db').as_posix()}?mode=ro",
+                              uri=True, timeout=5)
+        try:
+            row = con.execute(
+                "SELECT platform_msg_id FROM messages WHERE conversation_id LIKE ? AND direction='out'"
+                " AND platform_msg_id<>'' AND ts>=? AND trim(text)=? ORDER BY ts DESC LIMIT 1",
+                (f"%{GROUP_ID}%", float(now or time.time()) - float(window), body)).fetchone()
+        finally:
+            con.close()
+        return str(row[0]) if row and row[0] else ""
+    except Exception as exc:  # noqa: BLE001
+        log(f"already_in_inbox check failed: {type(exc).__name__}: {exc}")
+        return ""
+
+
+def is_empty_note(note: str) -> bool:
+    """note 为空 / 只有「（无备注）」占位 → 不回执（只登记）。"""
+    t = str(note or "").strip()
+    return not t or t in (EMPTY_NOTE_MARK, EMPTY_NOTE_MARK.strip("（）"), "(无备注)")
 
 
 # ── 发送（走 duty_reply：token / 红线闸门 / 台账都在那里）──────────────────────
@@ -251,6 +305,21 @@ def _auto_ticket(code: str, *, dry_run: bool) -> Optional[dict]:
         return None
 
 
+def _register_skip(code: str, reason: str) -> None:
+    """不回执的 report 包在 tmp_diag/<码>/ticket.txt 留一行 skip（每日对账能看见它被看过）。"""
+    try:
+        here = str(Path(__file__).resolve().parent)
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import duty_auto_ticket as dat  # noqa: E402
+        if dat.read_ticket_txt(code) is None:
+            dat.write_ticket_txt(code, {"code": code, "action": "skip", "ticket": 0, "reason": reason,
+                                        "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "by": "duty_channel_reminder"})
+    except Exception as exc:  # noqa: BLE001
+        log(f"register skip {code} failed: {type(exc).__name__}: {exc}")
+
+
 def _receipt_item(code: str, topic: str, res: Optional[dict]) -> str:
     try:
         import duty_auto_ticket as dat  # noqa: E402
@@ -276,11 +345,22 @@ def _report_head(code: str) -> Optional[Tuple[str, str, str]]:
     d = DIAG / code
     if not d.is_dir():
         return None
-    mds = list(d.glob("*_report*.md"))
+    mds = sorted(d.glob("*_report*.md"))
     if not mds:
         return ("diag", "", "")
     lines = mds[0].read_text(encoding="utf-8", errors="replace").splitlines()
-    kind = "verify" if "verify" in mds[0].name else "report"
+    # kind 以报告头 ``field-agent:<agent>:<kind>`` 为准（与 duty_auto_ticket.parse_report_head 同口径）：
+    # 09-08 13:33 实锤 2WD7FY 是 selfcheck 自检包（文件名 *_selfcheck_report.md），按文件名判成
+    # report 回执了一条「（无备注）」
+    m0 = re.search(r"field-agent:[\w-]+:(\w+)", lines[0] if lines else "")
+    if m0:
+        kind = m0.group(1).lower()
+    elif "verify" in mds[0].name:
+        kind = "verify"
+    elif "selfcheck" in mds[0].name or "probe" in mds[0].name:
+        kind = "selfcheck"
+    else:
+        kind = "report"
     head = lines[1] if len(lines) > 1 else ""
     fp = re.search(r"fp:\s*([A-Z0-9]{4})", head)
     note = next((l[len("- note:"):].strip() for l in lines[:6] if l.startswith("- note:")), "")
@@ -300,6 +380,7 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
         pending = _order_pending([c for c in codes if c not in receipted])
         if not pending:
             return
+        attempts: Dict[str, int] = dict(st.get("receipt_attempts") or {})
         by_owner: Dict[str, List[str]] = {}
         owner_codes: Dict[str, List[str]] = {}
         for code in pending:
@@ -311,6 +392,14 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
                 receipted.add(code)
                 log(f"pack {code} kind={kind} — 不回执")
                 continue
+            if kind == "report" and is_empty_note(note):
+                # P-5 B：空备注的 report 包没法回「收到 <主题>」，也没法立题——只登记（ticket.txt
+                # 留一行 skip 供每日对账），不发群、不立单
+                receipted.add(code)
+                if not dry_run:
+                    _register_skip(code, "空备注 report 包 — 不回执只登记")
+                log(f"pack {code} kind=report 空备注 — 不回执（只登记）")
+                continue
             # L-7 A：先挂单/立单，单号接进这条回执（工具自身失败 → res=None → 无单号回执）
             res = _auto_ticket(code, dry_run=dry_run)
             if kind == "verify" and not (res and res.get("ticket")):
@@ -318,23 +407,48 @@ def check_new_reports(st: dict, *, dry_run: bool) -> None:
                 log(f"pack {code} kind=verify 无 #N — 不回执")
                 continue
             owner = FP_OWNER.get(fp4, f"机器 {fp4}*")
-            topic = re.sub(r"^【[^】]+】", "", note).strip()[:36] or "（无备注）"
+            topic = re.sub(r"^【[^】]+】", "", note).strip()[:36] or EMPTY_NOTE_MARK
             by_owner.setdefault(owner, []).append(_receipt_item(code, topic, res))
             owner_codes.setdefault(owner, []).append(code)
         for owner, items in by_owner.items():
             tpl = read_template(TEXT_RECEIPT, DEFAULT_RECEIPT)
             text = tpl.replace("{name}", owner).replace("{items}", "、".join(items))
-            log(f"RECEIPT {owner}: {len(items)} 份 {owner_codes.get(owner)}")
+            batch = owner_codes.get(owner, [])
+            # P-5 B 幂等：上一轮 502 可能是假失败（09-08 13:47 实锤：适配器回 delivered=False 无原因，
+            # 消息其实到了群）——收件箱里已有同文本带 mid 的 out 行就是已发，直接标 receipted
+            mid = already_in_inbox(text)
+            if mid:
+                receipted.update(batch)
+                for c in batch:
+                    attempts.pop(c, None)
+                log(f"receipt for {batch} 已在收件箱见到同文本 mid={mid} — 视为已发，不重发")
+                continue
+            tries = max([int(attempts.get(c) or 0) for c in batch] or [0])
+            if tries >= RECEIPT_MAX_ATTEMPTS:
+                receipted.update(batch)
+                for c in batch:
+                    attempts.pop(c, None)
+                alert(f"receipt_gave_up {owner} {batch} 回执连败 {tries} 次，已停止重试——值守人工补发："
+                      f"python tools/duty_reply.py --group neice --receipt --text-file <F>")
+                continue
+            log(f"RECEIPT {owner}: {len(items)} 份 {batch}" + (f"（第 {tries + 1} 次）" if tries else ""))
             # 发成功才算已回执；失败（0906 12:49 实锤：连发两份同题报告，第二条回执被
-            # send 的 120 秒近重复守卫 409 拒掉）留到下一轮重发，报告不会零回音
+            # send 的 120 秒近重复守卫 409 拒掉）留到下一轮重发，报告不会零回音；
+            # 但最多 RECEIPT_MAX_ATTEMPTS 次（跨 tick 计数进 state）
             if send_group(text, 0, dry_run=dry_run):
-                receipted.update(owner_codes.get(owner, []))
+                receipted.update(batch)
+                for c in batch:
+                    attempts.pop(c, None)
             else:
-                log(f"receipt for {owner_codes.get(owner)} not sent — 下一轮重试")
+                for c in batch:
+                    attempts[c] = tries + 1
+                log(f"receipt for {batch} not sent — 第 {tries + 1}/{RECEIPT_MAX_ATTEMPTS} 次失败，"
+                    + ("下一轮重试" if tries + 1 < RECEIPT_MAX_ATTEMPTS else "下一轮放弃并告警"))
         if not dry_run:
             # 只记还在 watch 水位里的码（不在水位里的永远不会再成为 pending）；此前
             # sorted(...)[-400:] 按字母序截，超 400 后早字母的旧码会被挤出 → 重复回执 + 重复立单
             st["receipted"] = [c for c in codes if c in receipted]
+            st["receipt_attempts"] = {c: n for c, n in attempts.items() if c in codes and c not in receipted}
     except Exception as exc:  # noqa: BLE001
         log(f"check_new_reports failed: {type(exc).__name__}: {exc}")
 

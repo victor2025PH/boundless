@@ -488,5 +488,5 @@ def test_reminder_wires_auto_ticket_into_receipt():
     # 0906 12:49：回执发失败（409 近重复）不得算已回执——发成功才 receipted.update，否则下一轮重试
     body = src.split("def check_new_reports", 1)[1]
     assert "if send_group(text, 0, dry_run=dry_run):" in body
-    assert "receipted.update(owner_codes.get(owner, []))" in body
+    assert "receipted.update(batch)" in body
     assert "下一轮重试" in body
