@@ -434,6 +434,13 @@
     <div id="autosendShadowDetail"></div>
   </section>
 
+  <section id="aiFpSection" style="display:none;">
+    <h2>🧬 {{ (i18n or {}).get('ov2_s_aifp', "AI 指纹（近 24h · 草稿 = 将发文本）") }}</h2>
+    <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_aifp_hint', "四个数都该是 0。破折号率 = 起草层净化前带 — / ; / 弯引号的稿子占比；客服腔 = 陪伴域稿命中客服腔被改写或转人审的占比；引用无锚点 = 「you mentioned / 你之前说」在会话与记忆里找不到依据被改中性的次数；承诺无动作 = 说了发图却没动作的次数。红黄绿：0 / <2% / ≥2%。") }}</div>
+    <div class="grid" id="aiFpKpis"></div>
+    <div id="aiFpDetail"></div>
+  </section>
+
   <section id="outMirrorSection" style="display:none;">
     <h2>📤 {{ (i18n or {}).get('ov2_s_omirror', "出站媒体归档（镜像发布失败观测）") }}</h2>
     <div class="muted" style="font-size:12px;margin:-6px 0 10px;">{{ (i18n or {}).get('ov2_om_hint', "A 线出站图/语音发完即删，先归档到 /static 坐席台才能回放。归档失败＝那条媒体在聊天记录里退化成「无音频存档」的纯文字占位。有失败就查磁盘、protocol_media 目录可写性与 app.log。") }}</div>
@@ -2659,7 +2666,7 @@ async function loadFrontendErrors(){
   if(!kp || !dv) return;
   try{
     const r = await apiFetch('/api/workspace/metrics', {credentials:'same-origin'});
-    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderAutosendShadow(null); }catch(_as){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderLineMedia(null); }catch(_lm){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderAccountHealth(null); }catch(_ah){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
+    if(r.status === 403){ kp.innerHTML=''; dv.innerHTML='<div class="empty">'+window.T('ov2_js037')+'</div>'; try{ renderProfilePush(null); }catch(_pp){} try{ renderUiEvents(null); }catch(_ue){} try{ renderDpickFunnel(null); }catch(_df){} try{ renderPersonaOverride(null); }catch(_po){} try{ renderCsrfRejects(null); }catch(_cs){} try{ renderAutosendShadow(null); }catch(_as){} try{ renderAiFingerprint(null); }catch(_af){} try{ renderOutboundMirror(null); }catch(_om){} try{ renderLineMedia(null); }catch(_lm){} try{ renderPhotoCapability(null); }catch(_pc){} try{ renderLoginFunnel(null); }catch(_lf){} try{ renderPeerBotGuard(null); }catch(_bp){} try{ renderAccountsTruth(null); }catch(_at){} try{ renderAccountHealth(null); }catch(_ah){} try{ renderOriginProfile(null); }catch(_or){} try{ renderTokenLedger(null); }catch(_tk){} try{ renderImageXlate(null); }catch(_ix){} return; }
     const d = await r.json();
     try{ renderImageXlate(d); }catch(_ix){}
     try{ renderTokenLedger(d); }catch(_tk){}
@@ -2669,6 +2676,7 @@ async function loadFrontendErrors(){
     try{ renderPersonaOverride(d); }catch(_po){}
     try{ renderCsrfRejects(d); }catch(_cs){}
     try{ renderAutosendShadow(d); }catch(_as){}
+    try{ renderAiFingerprint(d); }catch(_af){}
     try{ renderOutboundMirror(d); }catch(_om){}
     try{ renderLineMedia(d); }catch(_lm){}
     try{ renderPhotoCapability(d); }catch(_pc){}
@@ -3466,6 +3474,57 @@ function renderAutosendShadow(d){
     +   '<table><tr><th>'+window.T('ov2_js_ash_col_outcome')+'</th><th>'+window.T('ov2_js_ash_col_count')+'</th></tr>'+reasonRows(sh.outcomes||{}, 6)+'</table></div>'
     + '</div>'
     + (sh.warmed_from ? ('<div class="muted" style="font-size:11px;margin-top:6px;">'+window.T('ov2_js_ash_warm_note')+'</div>') : '');
+}
+
+// 🧬 AI 指纹卡（P-1 D #259 #254）：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
+// 读 ai_fingerprint 段（src/inbox/ai_fingerprint_stats.snapshot，近 24h）。四格：破折号率 /
+// 客服腔命中率 / 引用无锚点 / 承诺无动作；每格 hits/total + 百分比，灯色 0 绿 / <2% 黄 / ≥2% 红。
+// 一条样本都没有（进程刚起、且 JSONL 也空）→ 整卡隐藏 no_data；有样本就常显——0% 也是要看的读数。
+function renderAiFingerprint(d){
+  var sec = document.getElementById('aiFpSection');
+  var kp = document.getElementById('aiFpKpis');
+  var dv = document.getElementById('aiFpDetail');
+  if(!sec || !kp || !dv) return;
+  var fp = (d && d.ai_fingerprint) || null;
+  var cnt = (fp && fp.counts) || {};
+  var anyN = Number(cnt.draft||0) + Number(cnt.svc_checked||0) + Number(cnt.claim_checked||0) + Number(cnt.promise_checked||0) + Number(cnt.gate_checked||0);
+  if(!fp || !anyN){ opsSetCardLight('aifp', ''); opsHideCardEl(sec, 'aifp', 'no_data'); return; }
+  opsShowCardEl(sec, 'aifp');
+  var lv = String(fp.level||'');
+  opsSetCardLight('aifp', lv === 'red' ? 'red' : (lv === 'yellow' ? 'yellow' : ''));
+  function colorOf(c){ return c === 'red' ? 'var(--red)' : (c === 'yellow' ? 'var(--yellow, #d29922)' : (c === 'green' ? 'var(--green, #2ea043)' : '')); }
+  function cell(labelKey, card, opts){
+    card = card || {}; opts = opts || {};
+    var tot = Number(card.total)||0, hits = Number(card.hits)||0;
+    var val, sub;
+    if(!tot){
+      val = '—';
+      sub = opts.pendingWhenEmpty ? window.T('ov2_js_aifp_pending') : window.T('ov2_js_aifp_na');
+    } else {
+      var pct = (card.rate_pct === null || card.rate_pct === undefined) ? (hits*100/tot) : Number(card.rate_pct);
+      val = (Math.round(pct*100)/100) + '%';
+      sub = fmt(hits) + ' / ' + fmt(tot) + ' ' + window.T('ov2_js_aifp_drafts');
+    }
+    return {label: window.T(labelKey), value: val, sub: sub, color: tot ? colorOf(String(card.level||'')) : ''};
+  }
+  var kpis = [
+    cell('ov2_js_aifp_dash', fp.dash),
+    cell('ov2_js_aifp_svc', fp.service_tone),
+    cell('ov2_js_aifp_claim', fp.claim_unanchored),
+    cell('ov2_js_aifp_promise', fp.promise_no_action, {pendingWhenEmpty: !(fp.promise_no_action && fp.promise_no_action.ready)}),
+  ];
+  var gate = fp.gate_leak || {};
+  var gateHits = Number(gate.hits)||0;
+  if(Number(gate.total)||0){ kpis.push({label: window.T('ov2_js_aifp_gate'), value: fmt(gateHits), sub: fmt(gateHits)+' / '+fmt(Number(gate.total)||0), color: gateHits ? 'var(--red)' : ''}); }
+  kp.innerHTML = kpis.map(function(c){
+    return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
+      '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div>'+
+      '<div class="muted" style="font-size:11px;margin-top:2px;">'+c.sub+'</div></div>';
+  }).join('');
+  dv.innerHTML = '<div class="muted" style="font-size:11px;margin-top:6px;">'
+    + window.T('ov2_js_aifp_window') + ': ' + fmt(Number(fp.window_hours)||24) + 'h'
+    + (gateHits ? (' · ' + window.T('ov2_js_aifp_gate_note')) : '')
+    + '</div>';
 }
 
 // 📤 出站媒体归档卡：与 loadFrontendErrors 共享同一次 /api/workspace/metrics 响应，
@@ -8559,6 +8618,8 @@ var OPS_CARDS = [
   {key:'csrf',     group:'infra',   anchor:'csrfRejectKpis',   loaders:[loadFrontendErrors]},
   // 风险放行影子台账（#160 2026-09-04）：旧规则本会扣、现已放行的稿子有多少、为什么
   {key:'ashadow',  group:'quality', anchor:'autosendShadowKpis', loaders:[loadFrontendErrors]},
+  // AI 指纹四格（P-1 D #259 2026-09-08）：破折号率 / 客服腔 / 引用无锚点 / 承诺无动作
+  {key:'aifp',     group:'quality', anchor:'aiFpKpis',         loaders:[loadFrontendErrors]},
   {key:'omirror',  group:'infra',   anchor:'outMirrorKpis',    loaders:[loadFrontendErrors]},
   // LINE 媒体收发（#101 2026-08-31）：无音频存档/0:00 的远程归因读数面
   {key:'linemedia',group:'infra',   anchor:'lineMediaKpis',    loaders:[loadFrontendErrors]},
@@ -8602,6 +8663,7 @@ var _OPS_HIDE_HINT = {
   imgen:    {reason:'no_data'},
   csrf:     {reason:'healthy'},
   ashadow:  {reason:'healthy'},
+  aifp:     {reason:'no_data'},
   omirror:  {reason:'healthy'},
   linemedia:{reason:'no_data'},
   buried:   {reason:'healthy'},

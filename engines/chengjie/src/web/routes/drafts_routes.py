@@ -1305,6 +1305,15 @@ def register_metrics_route(app, *, api_auth):
         except Exception:
             pass
 
+        # 「AI 指纹」四格（P-1 D #259 #254）：近 24h 破折号率 / 客服腔命中率 / 引用无锚点 /
+        # 承诺无动作（+ 发送门兜底命中）。进程事件环 + logs/ai_fingerprint/*.jsonl 回填，
+        # 重启不清零。恒暴露（无样本时卡片按 na 隐藏）。
+        try:
+            from src.inbox.ai_fingerprint_stats import snapshot as _aifp_snapshot
+            metrics["ai_fingerprint"] = _aifp_snapshot(hours=24)
+        except Exception:
+            pass
+
         # 出站文本形态守卫（实施74 B118/B121/B104）：monologue=括号独白拦截、
         # lang_mix_hard/soft=语种混杂剥除/观测、unfounded_recall=无出处引用剥句。
         # 进程口径重启清零；恒暴露（全 0=没流量或没命中，与「没接」可区分）。
