@@ -324,11 +324,21 @@ class AIChatAssistant:
                             # touch() 是节流的（见 local_trial.TOUCH_MIN_INTERVAL_SEC）。
                             _lt.begin()
                             _snap = _lt.snapshot()
+                            # P-4 #254（MTRCH2④）：window_hours=0 = 不限时 → hours_left 是 None，
+                            # 此前原样打成「0.0 小时窗口（剩 None 小时）」；窗口 >0 但还没落
+                            # 锚点（hours_left None）则是「未开始计时」。三态分开说人话。
+                            _wh = float(_snap.get("window_hours") or 0.0)
+                            _hl = _snap.get("hours_left")
+                            if _wh <= 0:
+                                _win_txt = "不限时"
+                            elif _hl is None:
+                                _win_txt = f"{_wh:g} 小时窗口（未开始计时）"
+                            else:
+                                _win_txt = f"{_wh:g} 小时窗口（剩 {_hl} 小时）"
                             self.logger.info(
-                                "🎁 首启体验档：%s · %s 字符 / %s 小时窗口（剩 %s 小时）",
+                                "🎁 首启体验档：%s · %s 字符 / %s",
                                 "已结束" if not _snap.get("active") else "生效中",
-                                _snap.get("included"), _snap.get("window_hours"),
-                                _snap.get("hours_left"),
+                                _snap.get("included"), _win_txt,
                             )
                     except Exception:
                         self.logger.debug("首启体验档装配跳过", exc_info=True)
@@ -852,8 +862,19 @@ class AIChatAssistant:
         命理产品的权威生辰画像按 (platform, account_id, chat_key) 结构化落本库
         （episodic 仅保留「说过生辰」的对话记忆），产品数据与主产品互不落对方库；
         路径随 config 目录 → 双实例天然隔离。故障软忽略，绝不阻断主产品启动。
+
+        P-4 #254（MTRCH2①，2026-09-08）：只在 FateX 产品开着（``fatex.enabled`` /
+        兼容 ``companion.bazi.enabled``）时才建库。此前无条件 ``configure_fatex_store``
+        让每台用户版陪伴机 clean 装就多出一个 ``config/fatex.db``（命理产品库），
+        报告误判为「随包打进来」——实为启动期空建；命理产品库只随 FateX 产品线走。
         """
         try:
+            from src.fatex.config import fatex_enabled
+            if not fatex_enabled(self.config):
+                from src.fatex.store import disable_fatex_store
+                disable_fatex_store()     # 连懒建也封死：生辰双写 / ops 体检那几处不再凭空建库
+                self.logger.info("FateX 产品未启用（fatex.enabled=false）：不建 fatex.db（用户版不带命理产品库）")
+                return
             from src.fatex import product_badge
             from src.fatex.store import configure_fatex_store
             _cfg_dir = Path(self.config.config_path).parent

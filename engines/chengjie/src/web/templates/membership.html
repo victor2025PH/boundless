@@ -134,8 +134,16 @@
           {% if lvl == 'out' %}{{ (i18n or {}).get('mb_hero_state_out', '额度已用尽') }}
           {% elif lvl == 'low' %}{{ (i18n or {}).get('mb_hero_state_low', '额度即将用尽') }}
           {% elif inc > 0 %}{{ (i18n or {}).get('mb_hero_state_ok', '额度充足') }}{% endif %}
-          {% if is_trial_src and q.trial_hours_left is not none and not q.exceeded %}
+          {#- P-4 #254（MTRCH2④）：hours_left 三态——有数 / None 且窗口 0（不限时）/ None 且窗口 >0（未开始计时）。
+              此前 None 分支整行不渲染，日志侧则打成「0.0 小时窗口（剩 None 小时）」。 -#}
+          {% if is_trial_src and not q.exceeded %}
+            {% if q.trial_hours_left is not none %}
           <span style="font-weight:400;color:var(--t2)">· {{ ((i18n or {}).get('mb_trial_line', '首启体验档 · 还剩 {h} 小时')).format(h=q.trial_hours_left) }}</span>
+            {% elif not q.trial_window_hours %}
+          <span style="font-weight:400;color:var(--t2)">· {{ (i18n or {}).get('mb_trial_line_unlimited', '首启体验档 · 不限时') }}</span>
+            {% else %}
+          <span style="font-weight:400;color:var(--t2)">· {{ (i18n or {}).get('mb_trial_line_not_started', '首启体验档 · 未开始计时') }}</span>
+            {% endif %}
           {% endif %}
           {#- low/out 前置引导（P1-L 缩水版）：三出路卡就在下方，给一步直达锚点即可，
               不在英雄区复制按钮组（重复建设）。 -#}

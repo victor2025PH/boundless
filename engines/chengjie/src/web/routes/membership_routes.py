@@ -52,6 +52,8 @@ def _quota_snapshot() -> Dict[str, Any]:
             # 页面据此换一套说法，并把「还剩几小时」也讲出来。
             "source": q.get("source", "license"),
             "trial_hours_left": q.get("trial_hours_left"),
+            # P-4 #254（MTRCH2④）：hours_left 为 None 时靠窗口小时数分「不限时 / 未开始计时」
+            "trial_window_hours": q.get("trial_window_hours"),
             "trial_expired": q.get("trial_expired", False),
         }
     except Exception:

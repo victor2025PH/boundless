@@ -46,6 +46,17 @@ from src.skills.base import Skill
 _CHANNEL_FAMILY_FOR_FOLLOWUP = frozenset({"channel_info", "status_check"})
 
 
+def _business_domain_label() -> str:
+    """启动日志用的业务域标签（P-4 #254）：companion → 陪伴 / sales → 销售；读不到给 '?'。
+    域包名（conversion）与业务域（陪伴 / 销售）是两个维度，日志只打前者会误导排障。"""
+    try:
+        from src.utils.business_domain import active_business_domain
+        bd = str(active_business_domain() or "").strip().lower()
+    except Exception:
+        bd = ""
+    return {"companion": "companion/陪伴", "sales": "sales/销售"}.get(bd, bd or "?")
+
+
 def _last_reply_looks_like_channel_summary(reply: str) -> bool:
     r = (reply or "").strip()
     if len(r) < 18:
@@ -837,7 +848,10 @@ class SkillManager(LoggerMixin):
             from src.utils.kb_store import set_kb_categories
             cat_names = [c["name"] if isinstance(c, dict) else c for c in pack.kb_categories]
             set_kb_categories(cat_names)
-            self.logger.info("KB categories set from domain '%s': %s", domain_name, cat_names)
+            # P-4 #254（MTRCH2）：日志标签带业务域名——分类表其实按 business_domain 选
+            # （categories.companion.yaml），只打域包名 'conversion' 让人以为域包没切。
+            self.logger.info("KB categories set from domain '%s' (business_domain=%s): %s",
+                             domain_name, _business_domain_label(), cat_names)
 
         # Push domain prompt/terminology to AI client
         if self.ai_client and hasattr(self.ai_client, 'set_domain_pack'):

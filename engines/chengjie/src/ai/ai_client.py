@@ -2472,7 +2472,15 @@ class AIClient(LoggerMixin):
         self._domain_context_supplements = context_supplements or {}
         if not self.system_prompt and self._domain_system_prompt:
             self.system_prompt = self._domain_system_prompt
-            self.logger.info("System prompt loaded from domain pack (%d chars)", len(self.system_prompt))
+            # P-4 #254（MTRCH2）：带业务域名——prompt 变体按 business_domain 选
+            # （system_prompt_by_business_domain），只打字数让人以为陪伴 / 销售没切。
+            try:
+                from src.utils.business_domain import active_business_domain
+                _bd = str(active_business_domain() or "") or "?"
+            except Exception:
+                _bd = "?"
+            self.logger.info("System prompt loaded from domain pack (business_domain=%s, %d chars)",
+                             _bd, len(self.system_prompt))
 
     def _primary_system_prompt_text(self) -> str:
         """主系统提示：优先读当前 config 中的 ai.system_prompt，避免进程内 self.system_prompt 与后台保存不一致。"""

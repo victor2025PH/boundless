@@ -419,6 +419,9 @@ def _merge_local_trial_quota(out: Dict[str, Any]) -> None:
         out["remaining"] = max(0, int(snap["included"]) - int(snap["used"]))
         out["enforce"] = enforce
         out["trial_hours_left"] = snap.get("hours_left")
+        # P-4 #254（MTRCH2④）：hours_left=None 有两种含义——窗口 0（不限时）或窗口 >0 但
+        # 未开始计时；会员页要分开说，所以把窗口小时数一并给出。
+        out["trial_window_hours"] = snap.get("window_hours")
         out["trial_expired"] = bool(snap.get("expired"))
         out["trial_closed"] = bool(snap.get("closed"))
         # 过期与用尽都算"没额度了"——两者都该走同一条软/硬拦截口径。

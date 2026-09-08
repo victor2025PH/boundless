@@ -554,16 +554,42 @@ def _get_contacts_cfg(config: Any) -> Dict[str, Any]:
     return (root or {}).get("contacts") or {}
 
 
-def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
-    scripts_path = contacts_cfg.get("scripts_path") or "config/handoff_scripts.yaml"
-    p = Path(scripts_path)
+def _bundled_config_fallback(name: str) -> Optional[Path]:
+    """随包只读种子 ``<_internal>/config/<name>``（P-4 #254 / MTRCH2③）。
+
+    开发态 = 仓库 ``config/``；PyInstaller onedir 下 ``__file__`` 落在
+    ``_internal/src/contacts/bootstrap.py``，``parents[2]`` 即 ``_internal``，与
+    build_backend.py ``DATAS`` 的 ``config`` 落点一致（同 ConfigManager._bundled_example_path）。
+    用户数据区没有这份 yaml（clean 装从不播种它）时回落到这里，转人工话术 / 合规检查
+    才能在客户机上装配起来；用户想改话术就往数据区 config/ 放一份同名文件覆盖。
+    """
+    try:
+        p = Path(__file__).resolve().parents[2] / "config" / name
+        return p if p.is_file() else None
+    except Exception:
+        return None
+
+
+def _resolve_contacts_yaml(cfg_dir: Path, configured: str) -> Path:
+    p = Path(configured)
     if not p.is_absolute():
         p = cfg_dir.parent / p if cfg_dir.name == "config" else cfg_dir / p
     # config/ 下也是常见位置
     if not p.exists():
-        alt = cfg_dir / Path(scripts_path).name
+        alt = cfg_dir / Path(configured).name
         if alt.exists():
             p = alt
+    if not p.exists():
+        bundled = _bundled_config_fallback(Path(configured).name)
+        if bundled is not None:
+            logger.info("contacts: %s 用户数据区缺席，回落随包种子 %s", Path(configured).name, bundled)
+            p = bundled
+    return p
+
+
+def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
+    scripts_path = contacts_cfg.get("scripts_path") or "config/handoff_scripts.yaml"
+    p = _resolve_contacts_yaml(cfg_dir, scripts_path)
     try:
         from src.skills.handoff_renderer import HandoffRenderer
         return HandoffRenderer(p)
@@ -574,13 +600,7 @@ def _safe_init_renderer(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
 
 def _safe_init_compliance(cfg_dir: Path, contacts_cfg: Dict[str, Any]):
     comp_path = contacts_cfg.get("compliance_path") or "config/handoff_compliance.yaml"
-    p = Path(comp_path)
-    if not p.is_absolute():
-        p = cfg_dir.parent / p if cfg_dir.name == "config" else cfg_dir / p
-    if not p.exists():
-        alt = cfg_dir / Path(comp_path).name
-        if alt.exists():
-            p = alt
+    p = _resolve_contacts_yaml(cfg_dir, comp_path)
     try:
         from src.skills.handoff_compliance import HandoffComplianceChecker
         return HandoffComplianceChecker(config_path=p)

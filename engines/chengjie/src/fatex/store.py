@@ -237,9 +237,24 @@ def configure_fatex_store(db_path: Any = DEFAULT_DB_PATH) -> Optional[FatexStore
         return _STORE
 
 
+_DISABLED = False
+
+
+def disable_fatex_store() -> None:
+    """P-4 #254：FateX 产品关着时由 main.py 调用——之后 :func:`get_fatex_store` 恒返 None，
+    不再按默认路径懒建 ``config/fatex.db``（生辰记忆双写 / ops 隔离体检那几处调用软失败）。
+    用户版陪伴机不该凭空多出一个命理产品库。"""
+    global _DISABLED
+    with _CFG_LOCK:
+        _DISABLED = True
+
+
 def get_fatex_store() -> Optional[FatexStore]:
-    """运行期取单例；未 configure 时按默认路径懒建（失败返 None，绝不抛）。"""
+    """运行期取单例；未 configure 时按默认路径懒建（失败返 None，绝不抛）；
+    :func:`disable_fatex_store` 之后恒 None。"""
     global _STORE
+    if _DISABLED:
+        return None
     if _STORE is None:
         with _CFG_LOCK:
             if _STORE is None:
@@ -253,7 +268,8 @@ def get_fatex_store() -> Optional[FatexStore]:
 
 def reset_fatex_store_for_tests() -> None:
     """单测隔离用：重置单例（生产勿用）。"""
-    global _STORE, _DB_PATH
+    global _STORE, _DB_PATH, _DISABLED
     with _CFG_LOCK:
         _STORE = None
         _DB_PATH = DEFAULT_DB_PATH
+        _DISABLED = False
