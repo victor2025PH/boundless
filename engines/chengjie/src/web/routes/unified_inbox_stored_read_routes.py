@@ -620,12 +620,26 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         - ``confirm=True`` → 落地：写会话行（source=account_bulk）+ 账号级决策（新会话跟随）
           + 登录门禁确认（登录后默认半自动到此为止）；升 auto_ai 时群/频道跳过。
         全自动只能经本端点按账号显式开启；逐会话下拉仍可单独调。
+
+        P-2 C（#259 ZH3ZQ5 / H3BAJD · D-P1）：升 auto_ai 的干跑多回 ``split``（active / dormant /
+        frozen / self_chat 四栏 + 样例）；``scope="all"`` → 分栏覆盖该账号**全部**会话（登录完成后
+        账号已是全自动时的确认框）。confirm 可带 ``targets``（勾选的 cid，只改这些；未勾旧会话不碰）、
+        ``demote``（登录确认框里被取消勾选的「最近有来信」会话 → 拨回 review）、``draft_for``
+        （勾选且有待回复入站的 → 各生成一条 **review** 稿进人审，永不 L2）、``login_review_id``（弹过即 ack）。
         """
         body = await request.json()
         platform = str(body.get("platform") or "").lower()
         account_id = str(body.get("account_id") or "default")
         mode = str(body.get("mode") or "").lower()
         confirm = bool(body.get("confirm"))
+        _scope = str(body.get("scope") or "targets").lower()
+        _targets = body.get("targets")
+        _targets = [str(x) for x in _targets] if isinstance(_targets, list) else None
+        _demote = [str(x) for x in (body.get("demote") or []) if str(x)] \
+            if isinstance(body.get("demote"), list) else []
+        _draft_for = [str(x) for x in (body.get("draft_for") or []) if str(x)] \
+            if isinstance(body.get("draft_for"), list) else []
+        _login_review_id = int(body.get("login_review_id") or 0)
         if not platform:
             raise HTTPException(400, tr(request, "err.ws.field_required", field="platform"))
         if mode not in AUTOMATION_MODES:
@@ -642,6 +656,17 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         if not confirm:
             plan = plan_account_bulk(store, platform, account_id, mode)
             plan.pop("targets", None)
+            if mode == "auto_ai" and _scope == "all":
+                # 登录确认框：账号已是全自动，将改动数为 0，但两栏要看**全部**会话
+                from src.inbox.dormant_review import split_targets
+                sp = split_targets(store, platform, account_id, None, config=_cfg)
+                plan["split"] = sp
+                c = sp.get("counts") or {}
+                plan["dormant"] = int(c.get("dormant") or 0)
+                plan["frozen"] = int(c.get("frozen") or 0)
+                plan["self_chat"] = int(c.get("self_chat") or 0)
+                plan["active_targets"] = [r["conversation_id"] for r in sp.get("active") or []]
+                plan["dormant_targets"] = [r["conversation_id"] for r in sp.get("dormant") or []]
             return {"ok": True, "dry_run": True, **plan,
                     "gate": account_snapshot(platform, account_id, config=_cfg),
                     "summary": account_mode_summary(store, platform, account_id)}
@@ -650,9 +675,98 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         except Exception:
             operator = "web_admin"
         res = apply_account_bulk(store, platform, account_id, mode,
-                                 actor=operator, config=_cfg)
+                                 actor=operator, config=_cfg, only=_targets)
+        # 登录确认框：取消勾选的「最近有来信」会话 → 拨回 review（不碰）；取消其待投递 L2
+        res["demoted"] = 0
+        if mode == "auto_ai" and _demote:
+            from src.inbox.account_bulk_mode import BULK_SOURCE
+            for cid in _demote[:2000]:
+                try:
+                    if str(store.get_automation_mode_if_set(cid) or "") == "auto_ai":
+                        try:
+                            store.set_automation_mode(cid, "review", source=BULK_SOURCE)
+                        except TypeError:
+                            store.set_automation_mode(cid, "review")
+                        res["demoted"] += 1
+                        if hasattr(store, "cancel_pending_l2_drafts"):
+                            store.cancel_pending_l2_drafts(cid, decided_by="account_bulk_demote")
+                except Exception:
+                    logger.debug("[account_bulk] demote 失败 cid=%s", cid, exc_info=True)
+        # 勾选且待回复的 → 逐条 review 稿（永不 L2；LLM 逐条，上限 20 条防长请求）
+        res["drafted"] = []
+        if mode == "auto_ai" and _draft_for:
+            from src.inbox.dormant_review import draft_preview
+            for cid in _draft_for[:20]:
+                try:
+                    r = await draft_preview(request.app, store, cid, actor=operator,
+                                            source="bulk_confirm")
+                    if r.get("ok"):
+                        res["drafted"].append({"conversation_id": cid, "draft_id": r["draft_id"]})
+                except Exception:
+                    logger.debug("[account_bulk] 预览稿失败 cid=%s", cid, exc_info=True)
+        if _login_review_id:
+            try:
+                from src.inbox.dormant_review import get_dormant_store
+                get_dormant_store(store).ack_login_review(_login_review_id, by=operator)
+            except Exception:
+                pass
         return {"ok": True, "dry_run": False, **res,
                 "summary": account_mode_summary(store, platform, account_id)}
+
+    @app.get("/api/unified-inbox/dormant-review")
+    async def api_unified_inbox_dormant_review(
+        request: Request, _=Depends(api_auth),
+        platform: str = "", account_id: str = "", limit: int = 200,
+    ):
+        """P-2 D（#259 · D-P1）「沉寂会话待你决定」清单快照：items / count / total /
+        login_reviews（登录完成后待弹一次的两栏确认框）/ limit_h。前端横幅 + 轮询同一入口。"""
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        from src.inbox.dormant_review import snapshot
+        return {"ok": True, **snapshot(store, platform=str(platform or "").lower(),
+                                       account_id=str(account_id or ""), limit=int(limit or 200))}
+
+    @app.post("/api/unified-inbox/dormant-review/action")
+    async def api_unified_inbox_dormant_review_action(
+        request: Request, _=Depends(api_auth),
+    ):
+        """三按钮：``{conversation_id, action: ignore|manual|draft}``。
+        ignore → 标 ``dormant:ignored``；manual → 档位切手动（前端随后跳会话）；
+        draft → 生成一条 **review** 稿（永不自动发），返回 draft_id / draft_text。
+        ``{login_review_id, action: ack}`` → 登录确认框已弹过（不再弹）。"""
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        store = _inbox_store(request)
+        if store is None:
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        action = str((body or {}).get("action") or "").lower()
+        from src.inbox.dormant_review import (
+            ACTIONS, apply_action, draft_preview, get_dormant_store,
+        )
+        if action == "ack":
+            rid = int((body or {}).get("login_review_id") or 0)
+            ok = get_dormant_store(store).ack_login_review(rid, by=operator) if rid else False
+            return {"ok": bool(ok), "action": "ack", "login_review_id": rid}
+        cid = str((body or {}).get("conversation_id") or "")
+        if not cid:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="conversation_id"))
+        if action not in ACTIONS:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="action"))
+        if action == "draft":
+            r = await draft_preview(request.app, store, cid, actor=operator)
+            if not r.get("ok"):
+                return {"ok": False, "action": action, "conversation_id": cid,
+                        "error": str(r.get("error") or "generate_failed")}
+            return {"ok": True, "action": action, **r}
+        return apply_action(store, cid, action, actor=operator)
 
     @app.post("/api/unified-inbox/automation/bulk-downgrade")
     async def api_unified_inbox_automation_bulk_downgrade(

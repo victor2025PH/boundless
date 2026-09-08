@@ -1952,6 +1952,14 @@ _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
 
+# P-2 #259 #252（D-P1，2026-09-08）：「沉寂会话待你决定」清单快照 + 三按钮（ignore / manual /
+# draft 永远 review）+ 登录确认框 ack——unified_inbox_stored_read_routes.py。
+_ADDITIONS_2026_09_08_P2_DORMANT_REVIEW = """
+/api/unified-inbox/dormant-review	GET
+/api/unified-inbox/dormant-review/action	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_08_P2_DORMANT_REVIEW
+
 
 def _parse_baseline():
     expected = set()

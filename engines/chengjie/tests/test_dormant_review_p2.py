@@ -267,3 +267,32 @@ def test_split_targets_four_columns(store):
     # 只分给定 targets
     sp2 = dr.split_targets(store, PLAT, ACCT, [f"{PLAT}:{ACCT}:a1", f"{PLAT}:{ACCT}:d1"], now=now)
     assert sp2["counts"]["active"] == 1 and sp2["counts"]["dormant"] == 1 and sp2["counts"]["frozen"] == 0
+
+
+def test_plan_account_bulk_split_and_apply_only_checked(store):
+    """切全自动：plan 带四栏、frozen / self_chat 剔出 targets；confirm 只勾 2 个 → 只改 2 个，旧会话不碰。"""
+    from src.inbox.account_bulk_mode import apply_account_bulk, plan_account_bulk
+    now = time.time()
+    _push(store, "a1", "recent", now - 3600, "m1", name="A1")
+    _push(store, "a2", "recent2", now - 7200, "m2", name="A2")
+    _push(store, "d1", "old unreplied", now - 5 * 86400, "m4", name="D1")
+    _push(store, SINUE, "Never write me again", now - 86400, "m7")
+    sc.freeze_conversation(store, platform=PLAT, account_id=ACCT, chat_key=SINUE,
+                           conversation_id=CID_S, reason="stop_contact")
+    _push(store, ACCT, "memo", now - 60, "m8", name="me")
+    plan = plan_account_bulk(store, PLAT, ACCT, "auto_ai")
+    assert plan["frozen"] == 1 and plan["self_chat"] == 1 and plan["dormant"] == 1
+    assert set(plan["targets"]) == {f"{PLAT}:{ACCT}:a1", f"{PLAT}:{ACCT}:a2", f"{PLAT}:{ACCT}:d1"}
+    assert CID_S not in plan["targets"] and f"{PLAT}:{ACCT}:{ACCT}" not in plan["targets"]
+    assert set(plan["active_targets"]) == {f"{PLAT}:{ACCT}:a1", f"{PLAT}:{ACCT}:a2"}
+    assert plan["dormant_targets"] == [f"{PLAT}:{ACCT}:d1"]
+    res = apply_account_bulk(store, PLAT, ACCT, "auto_ai", actor="t",
+                             only=[f"{PLAT}:{ACCT}:a1", f"{PLAT}:{ACCT}:a2"])
+    assert res["changed"] == 2 and res["skipped_unchecked"] == 1
+    assert store.get_automation_mode_if_set(f"{PLAT}:{ACCT}:a1") == "auto_ai"
+    assert store.get_automation_mode_if_set(f"{PLAT}:{ACCT}:d1") is None, "未勾的旧会话不碰"
+    assert store.get_automation_mode_if_set(CID_S) == "manual", "停联会话不碰"
+    assert store.get_automation_mode_if_set(f"{PLAT}:{ACCT}:{ACCT}") is None, "自聊不碰"
+    # 手动 / 半自动降档不分栏（旧口径）
+    p2 = plan_account_bulk(store, PLAT, ACCT, "review")
+    assert "split" not in p2 and p2["will_change"] >= 2

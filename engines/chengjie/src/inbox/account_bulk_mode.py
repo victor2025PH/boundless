@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from src.inbox.store import AUTOMATION_MODES
 
@@ -33,8 +33,15 @@ def _is_group_row(row: Dict[str, Any]) -> bool:
 
 
 def plan_account_bulk(store: Any, platform: str, account_id: str,
-                      target_mode: str) -> Dict[str, Any]:
-    """干跑：该账号会话总数 / 将改动数 / 覆盖的个别设置数 / 跳过的群数 / 目标 cid 列表。"""
+                      target_mode: str, *, with_split: bool = True) -> Dict[str, Any]:
+    """干跑：该账号会话总数 / 将改动数 / 覆盖的个别设置数 / 跳过的群数 / 目标 cid 列表。
+
+    P-2 C（#259 ZH3ZQ5 · D-P1）：升 ``auto_ai`` 时多回 ``split``——targets 分四栏
+    active（最近 72h 有来信，确认框默认勾）/ dormant（旧消息，默认不碰，未回复的进「沉寂清单」）
+    / frozen（已停联，不可选）/ self_chat（我自己，不可选），各带样例行与计数；
+    ``dormant / frozen / self_chat`` 顶层计数供旧调用方直接读。frozen / self_chat **从 targets 剔除**
+    （切全自动永不碰它们）。
+    """
     plat = str(platform or "").strip().lower()
     acct = str(account_id or "").strip() or "default"
     mode = str(target_mode or "").strip().lower()
@@ -42,6 +49,7 @@ def plan_account_bulk(store: Any, platform: str, account_id: str,
         "platform": plat, "account_id": acct, "mode": mode,
         "total": 0, "will_change": 0, "override_individual": 0,
         "skipped_groups": 0, "already": 0, "targets": [],
+        "dormant": 0, "frozen": 0, "self_chat": 0,
     }
     if store is None or mode not in AUTOMATION_MODES or not plat:
         return out
@@ -81,22 +89,51 @@ def plan_account_bulk(store: Any, platform: str, account_id: str,
         if row is not None and src.startswith(_INDIVIDUAL_SOURCES_PREFIX):
             out["override_individual"] += 1
         out["targets"].append(cid)
+    if mode == "auto_ai" and with_split and out["targets"]:
+        try:
+            from src.inbox.dormant_review import split_targets
+            sp = split_targets(store, plat, acct, out["targets"])
+            c = sp.get("counts") or {}
+            out["split"] = sp
+            out["dormant"] = int(c.get("dormant") or 0)
+            out["frozen"] = int(c.get("frozen") or 0)
+            out["self_chat"] = int(c.get("self_chat") or 0)
+            # 停联 / 自聊：切全自动永不碰
+            _excl = {str(r.get("conversation_id")) for r in (sp.get("frozen") or [])}
+            _excl |= {str(r.get("conversation_id")) for r in (sp.get("self_chat") or [])}
+            if _excl:
+                out["targets"] = [t for t in out["targets"] if t not in _excl]
+            out["active_targets"] = [str(r.get("conversation_id")) for r in (sp.get("active") or [])]
+            out["dormant_targets"] = [str(r.get("conversation_id")) for r in (sp.get("dormant") or [])]
+        except Exception:
+            logger.debug("[account_bulk] 沉寂分栏失败（按旧口径全量）", exc_info=True)
     out["will_change"] = len(out["targets"])
     return out
 
 
 def apply_account_bulk(store: Any, platform: str, account_id: str,
                        target_mode: str, *, actor: str = "",
-                       config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """落地：写会话行（source=account_bulk）+ 账号级决策 + 门禁确认；返回 plan + changed/cancelled_l2。"""
+                       config: Optional[Dict[str, Any]] = None,
+                       only: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """落地：写会话行（source=account_bulk）+ 账号级决策 + 门禁确认；返回 plan + changed/cancelled_l2。
+
+    ``only``（P-2 C）：确认框勾选的 cid 子集——只改这些（∩ plan.targets，frozen / self_chat 已剔）；
+    None = 旧口径全量。升 auto_ai 且 only 给了 → 未勾的旧会话**一律不碰**。
+    """
     plan = plan_account_bulk(store, platform, account_id, target_mode)
     mode = plan["mode"]
     res = dict(plan)
-    res.update({"changed": 0, "cancelled_l2": 0, "failed": 0})
+    res.update({"changed": 0, "cancelled_l2": 0, "failed": 0, "skipped_unchecked": 0})
     if store is None or mode not in AUTOMATION_MODES:
         return res
     downgrade = mode != "auto_ai"
-    for cid in plan["targets"]:
+    targets = list(plan["targets"])
+    if only is not None:
+        want = {str(x) for x in only}
+        kept = [t for t in targets if t in want]
+        res["skipped_unchecked"] = len(targets) - len(kept)
+        targets = kept
+    for cid in targets:
         try:
             prev = None
             try:
@@ -135,11 +172,13 @@ def apply_account_bulk(store: Any, platform: str, account_id: str,
         res["gate"] = {}
     logger.info(
         "[account_bulk] %s:%s → %s by=%s：改 %d 个会话（覆盖个别设置 %d，跳过群 %d，"
-        "已是 %d），取消待投递 L2 %d 条（D-M1 ②）",
+        "已是 %d，未勾不碰 %d，停联 %d，自聊 %d，旧消息 %d），取消待投递 L2 %d 条（D-M1 ② / P-2 C）",
         plan["platform"], plan["account_id"], mode, actor or "?", res["changed"],
         plan["override_individual"], plan["skipped_groups"], plan["already"],
-        res["cancelled_l2"])
-    res.pop("targets", None)
+        res["skipped_unchecked"], plan.get("frozen", 0), plan.get("self_chat", 0),
+        plan.get("dormant", 0), res["cancelled_l2"])
+    for k in ("targets", "split", "active_targets", "dormant_targets"):
+        res.pop(k, None)
     return res
 
 
