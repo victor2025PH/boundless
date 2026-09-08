@@ -5480,6 +5480,7 @@ class SkillManager(LoggerMixin):
         self, user_id: str, user_msg: str, reply: str, intent: str, chat_id: Any,
         platform: str = "",  # S5
         account_id: str = "",
+        source: str = "",
     ) -> None:
         if not self._episodic_store:
             self.logger.info(
@@ -5498,9 +5499,11 @@ class SkillManager(LoggerMixin):
                 user_id,
             )
             return
+        # source 只在非入站路径（O-2 B manual_out）带上，入站行文案与历史逐字一致
         self.logger.info(
-            "[episodic] schedule run user=%s intent=%s msg_len=%d",
+            "[episodic] schedule run user=%s intent=%s msg_len=%d%s",
             user_id, intent, len(user_msg or ""),
+            (f" source={source}" if source else ""),
         )
 
         async def _run():
@@ -5515,6 +5518,107 @@ class SkillManager(LoggerMixin):
             self.logger.warning(
                 "[episodic] schedule failed: no running loop user=%s", user_id,
             )
+
+    _MANUAL_OUT_MARK_KEY = "_episodic_manual_out_mark"
+
+    def schedule_manual_outbound_extract(
+        self, *, platform: str, account_id: str, chat_key: str, operator_text: str,
+        conversation_id: str = "", inbox_store: Any = None,
+        user_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """O-2 B（#201 / DY534Y）：坐席 ``origin=manual`` 出站成功后，把**客户这一轮对人工
+        说的话**送进同一条抽取链。
+
+        此前抽取只挂在「AI 回复之后」（A 线 process_message / B 线 generate_inbox_draft /
+        persona_reply 写回）：人工接管中会话不拟稿 → 客户说的约定（地点 / 时间 / 生日）
+        从不进记忆；#177（K-1 D）做的是坐席替人设说的**自述**进 ``_human_said_log``，
+        不是客户事实抽取。本方法只补这条腿，抽取本体 / 意图门 / 白名单 / 冷却全部复用：
+
+        - ``user_msg``＝会话里**上一条出站之后**的连续入站原文（客户这一轮说的），
+          ``reply``＝坐席这条出站原文——与正常轮次 ``(user_msg, reply)`` 同结构：启发式正则
+          只吃客户的话（坐席「我住在曼谷」绝不会被抽成客户事实），LLM 抽取拿坐席的确认
+          作语境（「周六三点星巴克见」在客户句 / 坐席句里都能锚定）；
+        - ``user=`` 仍是客户号（chat_key）；键派生与 B 线 ``generate_inbox_draft`` 同口径
+          （``chat_id=""`` / ``account_id`` 缺省或 default 时从 conversation_id 补）→ 同一记忆桶；
+        - 去重两道：① ``user_context["user_msg_id"]``＝B 线最近拟稿过的入站 message_id，
+          与本轮最新入站相等＝那条入站已在拟稿时走过抽取（人审后手发的形态）→ 跳过；
+          ② ``_episodic_manual_out_mark`` 记本方法消费过的最新入站 ts，坐席连发两条只抽一次；
+        - 日志 ``[episodic] schedule run user=… source=manual_out``；各 skip 原因同前缀。
+
+        返回 ``{"ok", "reason", "n_inbound", "intent"}`` 供测试 / 观测；绝不抛、零阻断发送。
+        """
+        res: Dict[str, Any] = {"ok": False, "reason": "", "n_inbound": 0, "intent": ""}
+        peer = str(chat_key or "").strip()
+        try:
+            body = str(operator_text or "").strip()
+            if not peer or not body:
+                res["reason"] = "empty"
+                return res
+            if inbox_store is None or not str(conversation_id or "").strip():
+                res["reason"] = "no_store"
+                return res
+            rows = list(inbox_store.list_recent_messages(str(conversation_id), limit=30) or [])
+            # 尾部先跳过刚发出的出站行（本条 manual 已落库），再收「上一条出站之后」的连续入站
+            i = len(rows) - 1
+            while i >= 0 and str(rows[i].get("direction") or "") == "out":
+                i -= 1
+            run: List[Dict[str, Any]] = []
+            while i >= 0 and str(rows[i].get("direction") or "") != "out":
+                run.append(rows[i])
+                i -= 1
+            run.reverse()
+            ctx = user_context if isinstance(user_context, dict) else {}
+            try:
+                mark = float(ctx.get(self._MANUAL_OUT_MARK_KEY) or 0.0)
+            except (TypeError, ValueError):
+                mark = 0.0
+            run = [r for r in run if float(r.get("ts") or 0.0) > mark]
+            if not run:
+                res["reason"] = "no_fresh_inbound"
+                self.logger.info(
+                    "[episodic] schedule skip: source=manual_out no fresh inbound user=%s", peer)
+                return res
+            newest = run[-1]
+            newest_ts = float(newest.get("ts") or 0.0)
+            drafted_mid = str(ctx.get("user_msg_id") or "").strip()
+            if drafted_mid and drafted_mid == str(newest.get("message_id") or "").strip():
+                ctx[self._MANUAL_OUT_MARK_KEY] = newest_ts
+                res["reason"] = "drafted"
+                self.logger.info(
+                    "[episodic] schedule skip: source=manual_out inbound already drafted "
+                    "(mid=%s) user=%s", drafted_mid, peer)
+                return res
+            texts = [str(r.get("text") or "").strip() for r in run]
+            texts = [t for t in texts if t]
+            if not texts:
+                ctx[self._MANUAL_OUT_MARK_KEY] = newest_ts
+                res["reason"] = "no_text"
+                self.logger.info(
+                    "[episodic] schedule skip: source=manual_out inbound has no text user=%s", peer)
+                return res
+            user_msg = "\n".join(texts)
+            if len(user_msg) > 1500:
+                user_msg = user_msg[-1500:]   # 保留最近的话（约定通常在最后几句）
+            try:
+                intent = str(self._recognize_intent(user_msg) or "direct_chat")
+            except Exception:
+                intent = "direct_chat"
+            acct = str(account_id or "").strip()
+            if (not acct or acct == "default") and conversation_id:
+                _parts = str(conversation_id).split(":", 2)
+                if len(_parts) >= 3 and _parts[1]:
+                    acct = str(_parts[1]).strip()
+            self._schedule_episodic_memory_extract(
+                peer, user_msg, body, intent, "", platform=str(platform or ""),
+                account_id=acct, source="manual_out",
+            )
+            ctx[self._MANUAL_OUT_MARK_KEY] = newest_ts
+            res.update({"ok": True, "n_inbound": len(texts), "intent": intent})
+            return res
+        except Exception:
+            self.logger.debug("[episodic] manual_out schedule failed user=%s", peer, exc_info=True)
+            res["reason"] = "error"
+            return res
 
     async def _capture_birthday_fact(
         self, user_id: str, user_msg: str, reply: str, chat_id: Any,

@@ -238,16 +238,21 @@ def on_human_outbound(
     platform: str, account_id: str, chat_key: str, text: str, *,
     conversation_id: str = "", persona_id: str = "", channel: str = "inbox",
     media_type: str = "", skill_manager: Any = None, now: Optional[float] = None,
-    sent_text: str = "",
+    sent_text: str = "", inbox_store: Any = None,
 ) -> Dict[str, Any]:
     """手动发送成功后调用（``record_agent_send`` 之后一行）。绝不抛、零阻断发送。
 
     ``text``＝坐席敲的原文（事实抽取 + 接地都对它做）；``sent_text``＝经出站翻译
     后实际发给客户的文本（非空时用它填 ``last_reply`` 环——防复读要对照客户真看到
-    的那句）。返回 ``{"ok", "facts", "reason"}`` 供测试/观测。``skill_manager``
-    为 None（app.state 未装配）时直接跳过（reason=no_skill_manager）。
+    的那句）。返回 ``{"ok", "facts", "reason", "customer_extract"}`` 供测试/观测。
+    ``skill_manager`` 为 None（app.state 未装配）时直接跳过（reason=no_skill_manager）。
+
+    ``inbox_store``（O-2 B，#201 / DY534Y，2026-09-08）：非 None 时把**客户这一轮对
+    人工说的话**送进 ``SkillManager.schedule_manual_outbound_extract``——本模块自己
+    刻意不抽坐席的话进客户事实库（见模块头），客户的话则与 AI 回复后同一条链、同一个
+    记忆桶；缺 store（老调用方 / 测试）＝旧行为。
     """
-    res: Dict[str, Any] = {"ok": False, "facts": [], "reason": ""}
+    res: Dict[str, Any] = {"ok": False, "facts": [], "reason": "", "customer_extract": {}}
     try:
         sm = skill_manager
         if sm is None:
@@ -304,6 +309,18 @@ def on_human_outbound(
             facts = _grounded(extract_self_facts(body), body)
             if facts:
                 record_human_said(ctx, facts, quote=body, now=ts)
+            # 4) O-2 B（#201 / DY534Y）：客户对人工说的话同走抽取（user=客户号，
+            #    source=manual_out）。去重 / 意图门 / 白名单 / 冷却在 SkillManager 内。
+            if inbox_store is not None:
+                try:
+                    _sched = getattr(sm, "schedule_manual_outbound_extract", None)
+                    if callable(_sched):
+                        res["customer_extract"] = _sched(
+                            platform=platform, account_id=acct, chat_key=peer,
+                            operator_text=body, conversation_id=conversation_id,
+                            inbox_store=inbox_store, user_context=ctx) or {}
+                except Exception:
+                    logger.debug("[human_memory] 客户侧抽取调度跳过", exc_info=True)
         # 持久化（ContextStore 键由 _get_user_context 挂在 ctx 上）
         key = str(ctx.get("_context_store_key") or "")
         try:
@@ -329,15 +346,16 @@ def record_human_outbound(
     conversation_id: str = "", channel: str = "inbox", media_type: str = "",
     sent_text: str = "",
 ) -> Dict[str, Any]:
-    """路由侧一行调用：自己从 ``app.state`` 解析 SkillManager，其余同
+    """路由侧一行调用：自己从 ``app.state`` 解析 SkillManager 与收件箱 store，其余同
     :func:`on_human_outbound`。绝不抛。"""
     try:
         return on_human_outbound(
             platform, account_id, chat_key, text,
             conversation_id=conversation_id, channel=channel, media_type=media_type,
-            sent_text=sent_text, skill_manager=resolve_skill_manager(app_state))
+            sent_text=sent_text, skill_manager=resolve_skill_manager(app_state),
+            inbox_store=getattr(app_state, "inbox_store", None))
     except Exception:
-        return {"ok": False, "facts": [], "reason": "error"}
+        return {"ok": False, "facts": [], "reason": "error", "customer_extract": {}}
 
 
 __all__ = [
