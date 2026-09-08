@@ -1000,18 +1000,18 @@ def test_probe_row_skips_first_send_preview_but_keeps_product_guard():
 
     guarded = wrap_care_send(_cb, care_store=care, goal_store_getter=lambda: gs,
                              inbox_store_getter=lambda: _DraftInbox())
-    out = asyncio.get_event_loop().run_until_complete(guarded(
+    out = asyncio.run(guarded(
         "whatsapp", ACCT, CK, "Which city are you in?", 0, "care", 0, {"care_id": rid}))
     assert out == 5 and sent == ["Which city are you in?"]      # 未被首条预览拦
     assert not gs.list_events(g["goal_id"], kinds=("first_send_preview",))
     # 同目标的自然档每日拍行仍走首条预览（口径不变）
     rid2 = care.add_scheduled_care(topic_norm=f"goal:{g['goal_id']}:d20260908")
-    out2 = asyncio.get_event_loop().run_until_complete(guarded(
+    out2 = asyncio.run(guarded(
         "whatsapp", ACCT, CK, "Hi there, how was your day?", 0, "care", 0, {"care_id": rid2}))
     assert out2 == 0 and care.rows[rid2]["status"] == "skipped"
     # 无产品目标的报价话术：手动摸底行也拦
     rid3 = care.add_scheduled_care(topic_norm=probe_norm(g["goal_id"], time.time() + 1))
-    out3 = asyncio.get_event_loop().run_until_complete(guarded(
+    out3 = asyncio.run(guarded(
         "whatsapp", ACCT, CK, "开个账户吧，现在付款有折扣", 0, "care", 0, {"care_id": rid3}))
     assert out3 == 0 and care.rows[rid3]["note"] == "goal_no_product"
     assert "必问" in probe_source_text(g, "location") or "必须带这一个问题" in probe_source_text(g, "location")
