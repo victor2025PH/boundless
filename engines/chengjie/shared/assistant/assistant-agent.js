@@ -20,7 +20,7 @@
   'use strict';
   if (window.XZAgent) { return; }
 
-  var VER = '20260905b';
+  var VER = '20260908a';
 
   var I18N = {
     zh: {
@@ -118,7 +118,8 @@
       pair_fail: '生成失败，请重试',
       pair_url: '或手机浏览器打开：',
       pair_lan_down: '局域网入口未就绪：手机现在打不开这个地址。请点「重新生成」；仍不行就把电脑与手机连同一 WiFi（不要用流量）。',
-      pair_lan_bind: '本机后端仅监听本机回环（旧版绑定方式）：升级智聊到最新版后局域网入口会自动放开，届时再扫码。',
+      pair_lan_bind: '局域网访问未开启：后台出厂只监听本机（127.0.0.1），手机扫不到。去 系统设置 → 连接与安全 打开「允许局域网设备连接」，重启后端后再扫码。',
+      pair_lan_open_settings: '去设置开启',
       pair_fw_btn: '手机打不开？一键放行防火墙',
       pair_fw_hint: '同一 WiFi 下手机仍打不开时，多半是 Windows 防火墙拦了入站——点这里放行（会弹一次系统授权）。',
       pair_fw_busy: '正在放行防火墙…（请在系统弹窗里点「是」）',
@@ -247,7 +248,8 @@
       pair_fail: 'Failed, please retry',
       pair_url: 'Or open in the phone browser: ',
       pair_lan_down: 'LAN entrance is down — the phone cannot open this address. Tap Regenerate; keep phone and PC on the same WiFi (not cellular).',
-      pair_lan_bind: 'The backend only listens on loopback (legacy binding): upgrade ChatX to the latest version and the LAN entrance opens automatically.',
+      pair_lan_bind: 'LAN access is off: the backend ships listening on this machine only (127.0.0.1), so the phone cannot reach it. Go to System settings → Connection & security and turn on "Allow LAN devices to connect", restart the backend, then scan again.',
+      pair_lan_open_settings: 'Open settings',
       pair_fw_btn: 'Phone can\u2019t open it? Allow through firewall',
       pair_fw_hint: 'If the phone still cannot open the address on the same WiFi, Windows Firewall is likely blocking inbound — click to allow (one system prompt).',
       pair_fw_busy: 'Allowing through firewall… (click "Yes" in the system prompt)',
@@ -1150,6 +1152,12 @@
       if (a === 'pair-close') { closePair(); return; }
       if (a === 'pair-regen') { loadPairQr(); return; }
       if (a === 'pair-fw') { pairFwFix(b); return; }
+      if (a === 'pair-settings') {
+        beacon('asb_pair_open_settings');
+        closePair();
+        try { window.location.href = '/settings#lan'; } catch (e) { /* */ }
+        return;
+      }
       if (a === 'pair-kick') {
         beacon('asb_pair_kick');
         post('/api/assistant/pair/revoke',
@@ -1174,10 +1182,19 @@
       // 服务端新字段）→ 指路升级；其余 lan_ok=false 维持通用红字。桌面壳带
       // pairLanFix 桥（1.0.62+）时常驻「放行防火墙」出口——绑定修好后手机仍
       // 打不开的，几乎全是 Windows 防火墙拦入站（hairpin 自检测不出它）。
+      // #254 D-P2（2026-09-08）：loopback_bind 不再是「旧版」而是**出厂态**——后台默认
+      // 只绑 127.0.0.1，用户要在系统设置显式打开「允许局域网设备连接」。这里不再静默
+      // 红字了事，给「去设置开启」直达按钮（/settings#lan 深链自动展开那张卡）。
       var lanMsg = '';
+      var lanSettingsBtn = '';
       if (j.lan_ok === false) {
-        lanMsg = (String(j.lan_reason || '') === 'loopback_bind')
-          ? t('pair_lan_bind') : t('pair_lan_down');
+        var loopback = (String(j.lan_reason || '') === 'loopback_bind');
+        lanMsg = loopback ? t('pair_lan_bind') : t('pair_lan_down');
+        if (loopback) {
+          lanSettingsBtn = '<div class="xza-cf-row" style="margin-top:.3rem">' +
+            '<button type="button" data-xza="pair-settings">' + ic('shield') + '<span>' +
+            esc(t('pair_lan_open_settings')) + '</span></button></div>';
+        }
       }
       var fwBtn = '';
       try {
@@ -1191,7 +1208,7 @@
       } catch (e) { fwBtn = ''; }
       box.innerHTML = (lanMsg
         ? '<div class="xza-say" style="color:#dc2626;margin-bottom:.5rem">' +
-          esc(lanMsg) + '</div>'
+          esc(lanMsg) + '</div>' + lanSettingsBtn
         : '') +
         (j.qr_b64
         ? '<img alt="QR" src="' + esc(j.qr_b64) + '">'

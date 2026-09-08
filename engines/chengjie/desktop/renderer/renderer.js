@@ -2348,3 +2348,34 @@ function esc(s) {
   if (typeof sh.onShellNotice === "function") sh.onShellNotice(render);
   sh.shellNotice().then(render).catch(() => {});
 })();
+
+// ── #254 D-P2 局域网开放常驻小横幅 ────────────────────────────────────────────
+// 出厂态后端只绑 127.0.0.1，横幅不存在；用户在系统设置打开「允许局域网设备连接」后
+// （主进程广播 cx-lan-access）常驻显示「后台对局域网开放 · 192.168.x.x:18799」——
+// 后台正对整个局域网可达这件事必须一直看得见，而不是藏在设置页里。
+// 「手机扫码」直达收件箱页小智的配对弹窗（assistant-agent.js 暴露 window.XZAgent.pair）。
+(function initLanOpenBanner() {
+  const bar = document.getElementById("lan-open-banner");
+  const sh = window.shell;
+  if (!bar || !sh || typeof sh.lanAccess !== "function") return;
+  const addr = document.getElementById("lan-open-addr");
+  const qr = document.getElementById("lan-open-qr");
+  function render(st) {
+    if (!st || st.lan_access !== true) { bar.hidden = true; return; }
+    if (addr) addr.textContent = st.lan_ip ? `${st.lan_ip}:${st.port || ""}` : "";
+    bar.hidden = false;
+  }
+  if (qr) {
+    qr.addEventListener("click", () => {
+      try { if (typeof Inbox.activate === "function") Inbox.activate(INBOX_ID); } catch (e) { /* 收件箱未就绪 */ }
+      try {
+        if (Inbox.wv && typeof Inbox.wv.executeJavaScript === "function") {
+          Inbox.wv.executeJavaScript(
+            "(function(){try{if(window.XZAgent&&window.XZAgent.pair){window.XZAgent.pair();}}catch(e){}})();", true);
+        }
+      } catch (e) { console.log(`[lan-access] open pair modal failed: ${e}`); }
+    });
+  }
+  if (typeof sh.onLanAccess === "function") sh.onLanAccess(render);
+  sh.lanAccess({ action: "status" }).then(render).catch(() => {});
+})();

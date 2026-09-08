@@ -61,25 +61,22 @@ function webEnvFromBackend(backend) {
 }
 
 /**
- * #57：后端 serve 是否放开到局域网（返回 "0.0.0.0" 或 ""=维持 base_url 回环）。
+ * #57 / #254（D-P2）：后端 serve 是否放开到局域网（返回 "0.0.0.0" 或 ""=维持 base_url 回环）。
  *
- * 决策表（安全第一，逐条有据）：
- *   - `backend.lan_access === false` → 永不放开（显式关，运维逃生门）。
- *   - 令牌仍是出厂默认 "admin"/空 → **不放开**，除非 `lan_access === true` 显式
- *     兜底——admin/admin 面板暴露到整个局域网是比「扫码连不上」更糟的事故；
- *     托管版首启已轮换随机令牌（token-util），所以正常客户机天然满足强令牌。
+ * 决策表（出厂态回环，只有用户显式打开才放）：
+ *   - `backend.lan_access !== true` → 不放开。**默认就是关**：1.0.77 复测（MTRCH2）
+ *     实锤「强令牌即 0.0.0.0」让用户在公共 Wi-Fi 上把后台整个暴露出去——令牌强不强
+ *     不是「要不要监听全网卡」的依据，用户意愿才是。手机扫码操控需要时，在系统设置
+ *     「允许局域网设备连接」打开（写 lan_access=true，重启后端生效）。
  *   - base_url 指向非回环地址（用户自配远端后端）→ 不动（serve 归远端自己管）。
- *   - 其余（强令牌 + 回环 base_url）→ "0.0.0.0"：renderer 照走 127.0.0.1，
- *     手机经 LAN IP 可达，「手机扫码操控」开箱即用。
+ *   - `lan_access === true` + 回环 base_url → "0.0.0.0"：renderer 照走 127.0.0.1，
+ *     手机经 LAN IP 可达。
  * @param {{base_url?:string, token?:string, lan_access?:boolean}} backend
  * @returns {string}
  */
 function lanServeHost(backend) {
   const b = backend || {};
-  if (b.lan_access === false) return "";
-  const tok = String(b.token == null ? "" : b.token).trim();
-  const strong = !!tok && tok !== "admin";   // token-util.DEFAULT_TOKEN 同义
-  if (!strong && b.lan_access !== true) return "";
+  if (b.lan_access !== true) return "";
   let host = "127.0.0.1";
   try {
     if (b.base_url) host = new URL(String(b.base_url)).hostname || host;

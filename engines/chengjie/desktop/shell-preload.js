@@ -156,6 +156,10 @@ contextBridge.exposeInMainWorld("shell", {
   // 主进程把「打开 /workspace」折进主窗（openBackendPopup 特判聚焦，不再开原生弹窗），
   // renderer 收到后切收件箱标签并把 ?conv= 深链转成页面 open-conv。
   onOpenWorkspace: (cb) => ipcRenderer.on("cx-open-workspace", (_e, payload) => { try { cb(payload || {}); } catch (err) { /* 渲染回调异常不断桥 */ } }),
+  // #254 D-P2 局域网访问开关：{action:"status"|"set"|"relaunch", on?, confirmed?}；
+  // 开关变化由主进程广播 cx-lan-access（壳顶部「后台对局域网开放」横幅据此显隐）。
+  lanAccess: (args) => ipcRenderer.invoke("desktop:lan-access", args || {}),
+  onLanAccess: (cb) => ipcRenderer.on("cx-lan-access", (_e, st) => { try { cb(st || {}); } catch (err) { /* 渲染回调异常不断桥 */ } }),
   // #151：工作台里切了语言（/set_lang）→ 主进程同步壳配置 + 重建菜单后回推新壳语言码，
   // renderer 让 shell-i18n 就地换词（静态 data-sh-i18n 文案 + <html lang>/title），不整窗重载。
   onShellLang: (cb) => ipcRenderer.on("cx-shell-lang", (_e, lang) => { try { cb(String(lang || "")); } catch (err) { /* 渲染回调异常不断桥 */ } }),

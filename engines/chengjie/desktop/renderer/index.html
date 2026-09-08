@@ -130,6 +130,13 @@
         <span class="aob-text"></span>
         <button type="button" class="aob-cta" id="assist-only-inbox-btn" data-sh-i18n="console.manual">人工操作台</button>
       </div>
+      <!-- #254 D-P2 局域网开放常驻小横幅：只在 config.backend.lan_access=true 时出现（出厂关），
+           让用户始终知道后台正对局域网开放；「手机扫码」直达收件箱页小智的配对弹窗。 -->
+      <div id="lan-open-banner" hidden>
+        <span class="lob-text" data-sh-i18n="lan.banner">后台对局域网开放</span>
+        <span class="lob-addr" id="lan-open-addr"></span>
+        <button type="button" class="lob-cta" id="lan-open-qr" data-sh-i18n="lan.qr">手机扫码</button>
+      </div>
     </main>
     <aside id="copilot">
       <div class="cp-sidebar-resize" id="cp-sidebar-resize" title="拖动调节宽度（双击恢复默认）" data-sh-i18n-title="cp.resize"></div>

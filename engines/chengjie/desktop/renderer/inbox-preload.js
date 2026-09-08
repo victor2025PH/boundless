@@ -86,6 +86,16 @@ const api = {
       return Promise.resolve({ ok: false, reason: "ipc" });
     }
   },
+  // #254 D-P2「允许局域网设备连接」：系统设置页的开关经此读写壳 config.json
+  // backend.lan_access（后端进程自己写不了壳配置）。{action:"status"|"set"|"relaunch",
+  // on?, confirmed?}；纯浏览器 / 旧壳无此方法 → 设置页显示「仅桌面版可用」。
+  lanAccess(payload) {
+    try {
+      return ipcRenderer.invoke("desktop:lan-access", payload && typeof payload === "object" ? payload : {});
+    } catch (_) {
+      return Promise.resolve({ ok: false, reason: "ipc" });
+    }
+  },
 };
 
 // contextIsolation 开（Electron webview 默认）→ contextBridge；关 → 直挂 window 兜底。

@@ -288,6 +288,94 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
   })();
   </script>
 
+  <!-- ══ P-4 A（#254 / D-P2）连接与安全：允许局域网设备连接（出厂默认关，后端只绑 127.0.0.1）。
+       写侧在桌面壳 config.json backend.lan_access（经 window.__chatxShell.lanAccess IPC），
+       后端进程写不了壳配置；纯浏览器 / 旧壳无桥 → 只显示状态 + 「仅桌面版可切换」。 ══ -->
+  <div class="acc" id="card-lan" data-bind-host="{{ lan_bind_host }}" data-bind-port="{{ lan_bind_port }}">
+    <div class="acc-hd" onclick="toggleAcc(this)">
+      <div class="acc-hd-icon" style="background:linear-gradient(135deg,var(--th-bg-amber5,#f59e0b),var(--th-bg-amber7,#b45309))">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="19" r=".8"/></svg>
+      </div>
+      <div>
+        <div class="acc-title">{{ (i18n or {}).get('set_lan_title', "连接与安全") }}</div>
+        <div class="acc-sub">{{ (i18n or {}).get('set_lan_sub', "后台默认只监听本机（127.0.0.1）；手机扫码操控需要时再显式打开局域网访问") }}</div>
+      </div>
+      <svg class="acc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <div class="acc-body" id="body-lan">
+      <div class="f-check-row" style="margin-bottom:6px">
+        <input type="checkbox" id="lan-access-switch" disabled>
+        <label for="lan-access-switch">{{ (i18n or {}).get('set_lan_switch', "允许局域网设备连接（手机扫码操控需要）") }}</label>
+      </div>
+      <p class="f-hint">{{ (i18n or {}).get('set_lan_switch_hint', "打开后后台会监听所有网卡（0.0.0.0），同一 Wi-Fi 下的设备凭令牌可访问后台。公共 Wi-Fi（咖啡馆 / 机场）请保持关闭。") }}</p>
+      <p class="f-hint" id="lan-access-state" style="margin-top:.55rem;font-weight:600">{{ (i18n or {}).get('set_lan_bind_note', "后端当前监听：{bind}").replace('{bind}', lan_bind_host ~ ':' ~ lan_bind_port) }}</p>
+      <p class="f-hint" id="lan-access-desktop-only" style="display:none;margin-top:.4rem">{{ (i18n or {}).get('set_lan_desktop_only', "此开关由桌面壳管理：请在智聊桌面版里打开本页；纯浏览器 / 旧壳无法切换。") }}</p>
+      <div style="margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap">
+        <button type="button" class="btn-s" id="lan-access-restart" style="display:none;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:var(--p);color:var(--th-ink-inverse);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('set_lan_restart_btn', "立即重启应用") }}</button>
+        <button type="button" class="btn-s" id="lan-access-qr" style="display:none;padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--t,#111827);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('set_lan_qr_btn', "手机扫码") }}</button>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var card=document.getElementById('card-lan');
+    var sw=document.getElementById('lan-access-switch');
+    var state=document.getElementById('lan-access-state');
+    var onlyDesk=document.getElementById('lan-access-desktop-only');
+    var restartBtn=document.getElementById('lan-access-restart');
+    var qrBtn=document.getElementById('lan-access-qr');
+    if(!card||!sw||!state) return;
+    /* 封印页家规：script 内不留中文兜底（键在 settings_page pack 双语齐备） */
+    var T_OFF={{ ((i18n or {}).get('set_lan_state_off', 'set_lan_state_off'))|tojson }};
+    var T_ON={{ ((i18n or {}).get('set_lan_state_on', 'set_lan_state_on'))|tojson }};
+    var T_PENDING={{ ((i18n or {}).get('set_lan_state_pending', 'set_lan_state_pending'))|tojson }};
+    var T_CONFIRM={{ ((i18n or {}).get('set_lan_public_confirm', 'set_lan_public_confirm'))|tojson }};
+    var T_FAIL={{ ((i18n or {}).get('set_lan_fail', 'set_lan_fail'))|tojson }};
+    var bindHost=String(card.getAttribute('data-bind-host')||'127.0.0.1');
+    var bindPort=String(card.getAttribute('data-bind-port')||'18799');
+    var bindOpen=(bindHost==='0.0.0.0'||bindHost==='::');
+    var bridge=(window.__chatxShell&&typeof window.__chatxShell.lanAccess==='function')?window.__chatxShell:null;
+    if(!bridge){
+      if(onlyDesk) onlyDesk.style.display='block';
+      sw.checked=bindOpen; sw.disabled=true;
+      return;
+    }
+    function render(st){
+      if(!st) return;
+      var on=(st.lan_access===true);
+      sw.checked=on; sw.disabled=false;
+      var addr=st.lan_ip?(st.lan_ip+':'+(st.port||bindPort)):('0.0.0.0:'+(st.port||bindPort));
+      if(on&&bindOpen){ state.textContent=T_ON.replace('{addr}',addr); }
+      else if(on&&!bindOpen){ state.textContent=T_PENDING.replace('{bind}',bindHost+':'+bindPort); }
+      else if(!on&&bindOpen){ state.textContent=T_PENDING.replace('{bind}',bindHost+':'+bindPort); }
+      else { state.textContent=T_OFF.replace('{port}',st.port||bindPort); }
+      if(restartBtn) restartBtn.style.display=(on!==bindOpen)?'inline-block':'none';
+      if(qrBtn) qrBtn.style.display=(on&&bindOpen&&window.XZAgent&&typeof window.XZAgent.pair==='function')?'inline-block':'none';
+    }
+    function setLan(on,confirmed){
+      sw.disabled=true;
+      return bridge.lanAccess({action:'set',on:on,confirmed:confirmed===true}).then(function(r){
+        if(r&&r.needs_confirm&&!confirmed){
+          if(window.confirm(T_CONFIRM)) return setLan(on,true);
+          render(r); return r;
+        }
+        if(!r||!r.ok){
+          state.textContent=T_FAIL.replace('{detail}',String((r&&(r.error||r.reason))||'ipc'));
+          sw.disabled=false; sw.checked=!on; return r;
+        }
+        render(r); return r;
+      }).catch(function(e){
+        state.textContent=T_FAIL.replace('{detail}',String(e&&e.message||e));
+        sw.disabled=false; sw.checked=!on;
+      });
+    }
+    sw.addEventListener('change',function(){ setLan(sw.checked===true,false); });
+    if(restartBtn) restartBtn.addEventListener('click',function(){ restartBtn.disabled=true; bridge.lanAccess({action:'relaunch'}); });
+    if(qrBtn) qrBtn.addEventListener('click',function(){ try{ window.XZAgent.pair(); }catch(e){} });
+    bridge.lanAccess({action:'status'}).then(render).catch(function(){});
+  })();
+  </script>
+
   {# L-4 B（#197 / D-L7）：品牌白标 / 授权 / 演示数据 = 代理商版才可见（PARTNER_ONLY）。
      ui_client_hide 缺席（旧后端 / 渲染类测试）按 falsy＝不藏，与 admin.py fail-internal 一致。 #}
   {% set _tier_hide = ' set-tier-hide' if ui_client_hide else '' %}
@@ -1725,7 +1813,8 @@ document.addEventListener('DOMContentLoaded', function(){
         等旧深链落在页顶、卡片折叠零提示（P0-IA 修复）。简洁模式下被隐藏的卡片静默忽略。 ── */
   (function(){
     const map = {escalation:'body-he', license:'body-license', brand:'body-brand',
-                 demo:'body-demo', prompt:'body-prompt', features:'body-fc', diag:'body-diag'};
+                 demo:'body-demo', prompt:'body-prompt', features:'body-fc', diag:'body-diag',
+                 lan:'body-lan'};
     const key = String(location.hash || '').replace(/^#/, '');
     if(!Object.prototype.hasOwnProperty.call(map, key)) return;
     const body = document.getElementById(map[key]);

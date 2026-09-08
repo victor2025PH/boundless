@@ -89,34 +89,45 @@ ok("bundled web port", bundledWeb.env.AITR_WEB_PORT === "18799");
 ok("bundled web token", bundledWeb.env.AITR_WEB_TOKEN === "admin");
 
 // webEnvFromBackend 纯函数：解析 + 容错
-// #57（2026-08-30）起：强令牌 + 回环 base_url → serve host 升 0.0.0.0（手机扫码
-// 操控的 LAN 入口），renderer 仍连 base_url 回环地址——serve 与 talk 解耦。
+// #254 D-P2（2026-09-08）起：serve host 只在 lan_access===true 时升 0.0.0.0；
+// 强令牌不再是放开依据（MTRCH2：公共 Wi-Fi 上后台全网卡暴露）。renderer 仍连 base_url。
 const we = webEnvFromBackend({ base_url: "http://localhost:9000", token: "t" });
-ok("webEnv 强令牌回环 → serve 0.0.0.0", we.AITR_WEB_HOST === "0.0.0.0");
+ok("webEnv 强令牌回环默认仍回环（不再自动 0.0.0.0）", we.AITR_WEB_HOST === "localhost");
 ok("webEnv port", we.AITR_WEB_PORT === "9000");
 ok("webEnv token", we.AITR_WEB_TOKEN === "t");
+ok("webEnv lan_access=true → serve 0.0.0.0",
+  webEnvFromBackend({ base_url: "http://localhost:9000", token: "t", lan_access: true }).AITR_WEB_HOST === "0.0.0.0");
 ok("webEnv 非法 base_url 容错", Object.keys(webEnvFromBackend({ base_url: "::::" })).length === 0);
 ok("webEnv 空 backend → 空", Object.keys(webEnvFromBackend({})).length === 0);
 
-// ── #57 lanServeHost 决策表（安全第一：admin/admin 绝不暴露到局域网）──────────
+// ── #254 D-P2 lanServeHost 决策表（出厂态回环：只有 lan_access===true 才放开）─────
 const { lanServeHost } = require("../backend-launcher.js");
 ok("lan 弱令牌(admin)默认不放开",
   lanServeHost({ base_url: "http://127.0.0.1:18799", token: "admin" }) === "");
 ok("lan 空令牌默认不放开",
   lanServeHost({ base_url: "http://127.0.0.1:18799", token: "" }) === "");
-ok("lan 强令牌回环 → 0.0.0.0",
-  lanServeHost({ base_url: "http://127.0.0.1:18799", token: "a1b2c3" }) === "0.0.0.0");
-ok("lan lan_access=false 硬关（强令牌也不放）",
+ok("lan 强令牌回环也不自动放开（D-P2：令牌强弱不是监听全网卡的依据）",
+  lanServeHost({ base_url: "http://127.0.0.1:18799", token: "a1b2c3" }) === "");
+ok("lan 无 backend 段 → 回环",
+  lanServeHost(undefined) === "" && lanServeHost({}) === "");
+ok("lan lan_access=false 硬关",
   lanServeHost({ base_url: "http://127.0.0.1:18799", token: "a1b2c3", lan_access: false }) === "");
-ok("lan lan_access=true 显式兜底（弱令牌也放，运维明示自担）",
+ok("lan lan_access=true 显式打开 → 0.0.0.0",
+  lanServeHost({ base_url: "http://127.0.0.1:18799", token: "a1b2c3", lan_access: true }) === "0.0.0.0");
+ok("lan lan_access=true 弱令牌也放（用户明示自担）",
   lanServeHost({ base_url: "http://127.0.0.1:18799", token: "admin", lan_access: true }) === "0.0.0.0");
+ok("lan lan_access 字符串 'true' 不算显式打开（只认布尔）",
+  lanServeHost({ base_url: "http://127.0.0.1:18799", token: "a1b2c3", lan_access: "true" }) === "");
 ok("lan 远端 base_url 不动（serve 归远端自管）",
-  lanServeHost({ base_url: "http://192.168.0.9:18799", token: "a1b2c3" }) === "");
-ok("lan 非法 base_url 按回环处理（强令牌照放）",
-  lanServeHost({ base_url: "::::", token: "a1b2c3" }) === "0.0.0.0");
-// 弱令牌整包装机（token=admin）路径回归：AITR_WEB_HOST 保持 127.0.0.1 不升
+  lanServeHost({ base_url: "http://192.168.0.9:18799", token: "a1b2c3", lan_access: true }) === "");
+ok("lan 非法 base_url 按回环处理（开关开才放）",
+  lanServeHost({ base_url: "::::", token: "a1b2c3", lan_access: true }) === "0.0.0.0");
+// 整包装机（token=admin 或随机强令牌）路径回归：AITR_WEB_HOST 保持 127.0.0.1 不升
 ok("webEnv 弱令牌不升 serve host",
   webEnvFromBackend({ base_url: "http://127.0.0.1:18799", token: "admin" })
+    .AITR_WEB_HOST === "127.0.0.1");
+ok("webEnv 强令牌默认不升 serve host（clean 装 netstat 只见 127.0.0.1）",
+  webEnvFromBackend({ base_url: "http://127.0.0.1:18799", token: "R4nd0mStr0ngT0ken" })
     .AITR_WEB_HOST === "127.0.0.1");
 
 // 退出哨兵路径（正常关闭清哨兵，防 taskkill /F 把正常关误报成崩溃）

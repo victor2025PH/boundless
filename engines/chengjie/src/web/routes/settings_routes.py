@@ -99,12 +99,19 @@ def register_settings_routes(app, ctx):
             he_agent_teams_json = json.dumps(he.get("agent_teams", []), ensure_ascii=False, indent=2)
         except Exception:
             he_agent_teams_json = "[]"
+        # P-4 A（#254 / D-P2）：后端当前真实监听地址——设置页「允许局域网设备连接」
+        # 开关的写侧在桌面壳 config.json（backend.lan_access），读侧要能对照
+        # 「开关已开但后端还没重启」这种半生效态，所以把本进程 bind host 一并给模板。
+        lan_bind_host = str(wb.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+        lan_bind_port = str(wb.get("port") or "18799")
         return templates.TemplateResponse(request, "settings.html", {
             "ai": ai, "wb": wb, "tg": tg, "notif": notif, "he": he,
             "he_agents_json": he_agents_json,
             "he_work_hours_json": he_work_hours_json,
             "he_work_exceptions_json": he_work_exceptions_json,
             "he_agent_teams_json": he_agent_teams_json,
+            "lan_bind_host": lan_bind_host,
+            "lan_bind_port": lan_bind_port,
         })
 
     @app.post("/api/settings/save")

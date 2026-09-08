@@ -420,6 +420,21 @@ ZH = {
     "set_lic_no_file": "未检测到授权文件",
     "set_demo_blocked": "工作区已有真实数据（会话 {c} · 账号 {a}），演示数据只能在空工作区铺",
     "err.demo.workspace_not_empty": "工作区已有真实数据（会话 {c} · 账号 {a}），演示数据只能在没有真实账号的空工作区铺——全自动账号会把示例会话当真客户发出去",
+    # ── P-4 A（#254 / D-P2）：连接与安全 · 允许局域网设备连接（出厂默认关，后端只绑 127.0.0.1）──
+    "set_lan_title": "连接与安全",
+    "set_lan_sub": "后台默认只监听本机（127.0.0.1）；手机扫码操控需要时再显式打开局域网访问",
+    "set_lan_switch": "允许局域网设备连接（手机扫码操控需要）",
+    "set_lan_switch_hint": "打开后后台会监听所有网卡（0.0.0.0），同一 Wi-Fi 下的设备凭令牌可访问后台。公共 Wi-Fi（咖啡馆 / 机场）请保持关闭。",
+    "set_lan_state_off": "当前：仅本机可访问（127.0.0.1:{port}）",
+    "set_lan_state_on": "当前：局域网可访问 · {addr}",
+    "set_lan_state_pending": "已保存，重启后端后生效（当前后端仍只监听 {bind}）",
+    "set_lan_desktop_only": "此开关由桌面壳管理：请在智聊桌面版里打开本页；纯浏览器 / 旧壳无法切换。",
+    "set_lan_public_confirm": "检测到当前 Windows 网络类别是「公用网络」：这通常是公共 Wi-Fi，打开后同一网络里的任何人都能尝试访问后台。确定仍要打开吗？",
+    "set_lan_restart_btn": "立即重启应用",
+    "set_lan_qr_btn": "手机扫码",
+    "set_lan_saved": "已保存",
+    "set_lan_fail": "保存失败：{detail}",
+    "set_lan_bind_note": "后端当前监听：{bind}",
 }
 
 EN = {
@@ -839,4 +854,19 @@ EN = {
     "set_lic_no_file": "no license file detected",
     "set_demo_blocked": "This workspace already has real data ({c} conversations · {a} accounts); demo data can only be seeded into an empty workspace",
     "err.demo.workspace_not_empty": "This workspace already has real data ({c} conversations · {a} accounts). Demo data can only be seeded into an empty workspace with no real accounts — a fully automatic account would treat the sample conversations as real customers and send to them",
+    # -- P-4 A (#254 / D-P2): connection & security - allow LAN devices (factory default off, backend binds 127.0.0.1) --
+    "set_lan_title": "Connection & security",
+    "set_lan_sub": "The backend listens on this machine only (127.0.0.1) by default; turn on LAN access only when phone QR control needs it",
+    "set_lan_switch": "Allow LAN devices to connect (needed for phone QR control)",
+    "set_lan_switch_hint": "When on, the backend listens on all interfaces (0.0.0.0) and devices on the same Wi-Fi can reach it with the token. Keep it off on public Wi-Fi (cafes / airports).",
+    "set_lan_state_off": "Now: this machine only (127.0.0.1:{port})",
+    "set_lan_state_on": "Now: reachable on LAN · {addr}",
+    "set_lan_state_pending": "Saved; takes effect after the backend restarts (it still listens on {bind})",
+    "set_lan_desktop_only": "This switch is managed by the desktop shell: open this page inside the desktop app; a plain browser or an old shell cannot toggle it.",
+    "set_lan_public_confirm": "Your current Windows network category is \"Public\": this is usually public Wi-Fi, and anyone on the same network could try to reach the backend. Turn it on anyway?",
+    "set_lan_restart_btn": "Restart app now",
+    "set_lan_qr_btn": "Scan on phone",
+    "set_lan_saved": "Saved",
+    "set_lan_fail": "Save failed: {detail}",
+    "set_lan_bind_note": "Backend currently listens on: {bind}",
 }

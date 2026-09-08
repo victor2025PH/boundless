@@ -568,6 +568,65 @@ ipcMain.handle("desktop:pair-lan-fix", async () => {
   });
 });
 
+// #254 D-P2「允许局域网设备连接」开关（2026-09-08）。出厂态后端只绑 127.0.0.1
+// （backend-launcher.lanServeHost 只认 backend.lan_access===true）；本 IPC 是设置页 /
+// 壳横幅 / 小智配对弹窗共用的唯一读写口：
+//   {action:"status"}                    → 当前开关 + 本机 LAN 地址（横幅/设置页显示）
+//   {action:"set", on, confirmed}        → 写 config.json；on 且 Windows 网络类别为 Public
+//                                          且未 confirmed → 回 needs_confirm 让页面二次确认
+//   {action:"relaunch"}                  → 重启应用（后端随壳重拉，新 serve host 生效）
+// 决策纯函数在 lan-access.js（门禁直跑）；这里只做 Electron/进程胶水。
+const lanAccess = require("./lan-access.js");
+function probeNetworkCategory() {
+  if (process.platform !== "win32") return Promise.resolve("");
+  return new Promise((resolve) => {
+    let out = "";
+    let child;
+    try {
+      child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+        "Get-NetConnectionProfile | Select-Object -ExpandProperty NetworkCategory"],
+      { windowsHide: true });
+    } catch (e) { resolve(""); return; }
+    const timer = setTimeout(() => { try { child.kill(); } catch (e) { /* */ } resolve(""); }, 6000);
+    try { child.stdout.on("data", (d) => { out += String(d); }); } catch (e) { /* */ }
+    child.on("exit", () => { clearTimeout(timer); resolve(lanAccess.parseNetworkCategory(out)); });
+    child.on("error", () => { clearTimeout(timer); resolve(""); });
+  });
+}
+function lanAccessStatus() {
+  let ifaces = {};
+  try { ifaces = require("os").networkInterfaces(); } catch (e) { ifaces = {}; }
+  return lanAccess.lanStatus(config, { lanIp: lanAccess.pickLanIp(ifaces) });
+}
+function broadcastLanAccess(st) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send("cx-lan-access", st); } catch (e) { /* 窗已亡 */ }
+  }
+}
+ipcMain.handle("desktop:lan-access", async (_e, args) => {
+  const a = (args && typeof args === "object") ? args : {};
+  const action = String(a.action || "status");
+  if (action === "relaunch") {
+    try { app.relaunch(); app.exit(0); } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    return { ok: true };
+  }
+  if (action === "set") {
+    const on = a.on === true;
+    const category = on ? await probeNetworkCategory() : "";
+    const d = lanAccess.decideToggle({ on, confirmed: a.confirmed === true, category });
+    if (!d.allow) {
+      return Object.assign({ ok: false, needs_confirm: true, category }, lanAccessStatus());
+    }
+    const r = saveConfigPatch({ backend: { lan_access: on } });
+    if (!r.ok) return r;
+    const st = Object.assign({ ok: true, restart_required: true, category }, lanAccessStatus());
+    console.log(`[lan-access] backend.lan_access=${on} (category=${category || "unknown"}); restart required`);
+    broadcastLanAccess(st);
+    return st;
+  }
+  return Object.assign({ ok: true }, lanAccessStatus());
+});
+
 ipcMain.handle("desktop:backend-health", async () => {
   const { base_url } = config.backend || {};
   if (!base_url) return { ok: false, error: "no base_url" };

@@ -35,6 +35,9 @@
       'brand.mark': '智',
       'brand.product': '智聊',
       'console.manual': '人工操作台',
+      // #254 D-P2 局域网开放常驻小横幅（lan_access=true 才出现）
+      'lan.banner': '后台对局域网开放',
+      'lan.qr': '手机扫码',
       'rail.inbox.title': '人工操作台（统一收件箱 · AI+人工协作）',
       'rail.inbox.chip': 'AI+人工',
       // platform-caps.js 的诚实提示（assist-only 内嵌页）：只回 key，文案在此
@@ -394,6 +397,8 @@
       'brand.mark': 'C',
       'brand.product': 'ChatX',
       'console.manual': 'Manual Console',
+      'lan.banner': 'Backend open to LAN',
+      'lan.qr': 'Scan on phone',
       'rail.inbox.title': 'Manual Console (Unified Inbox · AI + human collaboration)',
       'rail.inbox.chip': 'AI+human',
       'notice.forced_ready': 'This version is no longer supported · A new version is ready — please restart now (about 30 seconds; accounts and chat history are kept)',
