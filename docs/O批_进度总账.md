@@ -25,6 +25,13 @@
 
 ## 全批收口（随 N-5 E 或 1.0.78）
 
-- [ ] O-1 A / O-2 A 若在 N-5 打包前收工 → 并入 1.0.77
+- [x] ~~O-1 A / O-2 A 若在 N-5 打包前收工 → 并入 1.0.77~~ 1.0.77 07:23 已发，止血件未赶上 → 全部随 1.0.78
 - [ ] 其余随 1.0.78：装载 → 回归 → 三包 → 三渠道 → 两机 → 台账 → 回访（含 3HNCJ7 排期答复兑现）
 - [ ] 发版门禁：200 条样例 0 em dash / 0 分号 / 0 总结尾句；50 条拒绝·冷淡·告别场景盲评「像真人」
+
+### 验收核对 09-08 11:45（值守，在 HEAD `d303ad05` 的干净临时工作树上跑，不含任何在途未提交文件）
+
+- **O 批自有测试 18 文件：480 passed / 1 skipped / 2 failed**，两条红都不是 O 批的：`test_takeover_trigger_surface::test_mode_writer_files_are_allowlisted`（`src/assistant/actions.py` 小智线 09-02 写点未登记，O-1 落点表已注「既有红未动」）；`test_admin_route_inventory::test_all_baseline_routes_still_registered`（`POST /api/desktop/heartbeat` 05:55 被 N-5 代登记进清单，但路由文件 `src/web/desktop_bridge_presence.py` 仍是微信 PC 线的**未提交**文件——共享树绿、HEAD 红；微信线提交即绿）。
+- **O-1 B 门禁 `scripts/outbound_style_gate.py`：200 样例 violations=0**（punct 534 / style 246 / trimmed 48）。
+- **跨线 `gate_sweep`：16 红**。7 条是 N-5 06:44 已记的老债（`deploy_profiles` / `seed_switch`×2 / `inline_color_ratchet`×3 / `orphan_refs`）；其余 9 条逐一核过**均非 O 批 commit 所致**：`copilot_tiny_font_ratchet` cp-goal.js 29>24 在 1.0.77 发版点已是 29（O-3 D/E 零新增）；`input_theme_contrast` `--t1` 两处分别来自 09-05 / 09-07；`workspace_emoji_ratchet` 56>54 与 `legacy_blue_ratchet` 18>15 / css 2>0 来自抖音 UI 线；`silent_exception_ratchet` 多模块整体超限属存量；`assistant_qa_eval`×2 小智问答金标（小智 / 教程页线）；`takeover_trigger_surface` 与 `admin_route_inventory` 见上。**R78 发版前请以此表对号，别把这些算到 O 批头上，也别在别人的编辑窗口里替他们修。**
+- **R78 注意**：O-1 行仍是「进行中」（D 拟人节奏 / E 三小件在途，`autosend_worker.py` / `reply_pacing_settings.py` / `humanize.py` / `reply_settings.html` 有未提交改动），微信 PC 线 11:1x 仍在写。三包从共享树打包＝会把在途半成品带进包；**O-1 行未变「收工」前不要 bump / dist**。
