@@ -1926,6 +1926,14 @@ _ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT = """
 """
 _BASELINE += _ADDITIONS_2026_09_08_WECHAT_PC_HEARTBEAT
 
+# 实施96 DY（2026-09-08 老板拍板「在页面做出教程和链接」）：渠道接入教程页——抖音企业版
+# （企业主体小程序 + 能力实验室）/ TikTok 官方通道 / 付款方式；session auth，按 ui_lang 中英，
+# 数据与小智问答同源（src/assistant/onboarding_guides.py）。`onboarding_guide_routes.py`。
+_ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
+/help/onboarding/{slug}	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
+
 
 def _parse_baseline():
     expected = set()

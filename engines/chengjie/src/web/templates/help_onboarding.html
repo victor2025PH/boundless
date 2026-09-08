@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ guide.title }} · {{ product_name|default((i18n or {}).get('brand.product', '智聊')) }}{% endblock %}
+{% block page_title %}{{ guide.title }}{% endblock %}
+{% block head %}
+<style>
+/* 渠道接入教程（实施96 / TK-1）：全部走 base 令牌，暗色自适配；步骤用序号卡，链接一律新开页 */
+.obg-wrap{max-width:920px}
+.obg-tabs{display:flex;gap:.45rem;flex-wrap:wrap;margin:0 0 .9rem}
+.obg-tab{font-size:.8rem;padding:.3rem .8rem;border-radius:99px;border:1px solid var(--bd);color:var(--t2);background:var(--input);text-decoration:none}
+.obg-tab.on{background:var(--p,#1e8cf2);border-color:var(--p,#1e8cf2);color:#fff;font-weight:600}
+.obg-meta{color:var(--t3);font-size:.76rem;margin:0 0 .8rem;display:flex;gap:1rem;flex-wrap:wrap}
+.obg-intro{border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.9rem 1rem;margin-bottom:.9rem;color:var(--t2);line-height:1.7;font-size:.88rem}
+.obg-h{font-size:.95rem;font-weight:700;color:var(--t);margin:1.1rem 0 .5rem}
+.obg-pre{margin:0;padding-left:1.2rem;color:var(--t2);font-size:.85rem;line-height:1.7}
+.obg-step{display:flex;gap:.8rem;border:1px solid var(--bd);border-radius:14px;background:var(--card,var(--input));padding:.85rem 1rem;margin-bottom:.7rem}
+.obg-num{flex:none;width:28px;height:28px;border-radius:50%;background:var(--p,#1e8cf2);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:.85rem}
+.obg-body{flex:1;min-width:0}
+.obg-st{font-weight:700;color:var(--t);font-size:.92rem;margin-bottom:.25rem}
+.obg-sd{color:var(--t2);font-size:.84rem;line-height:1.7;white-space:pre-line}
+.obg-link{display:inline-block;margin-top:.45rem;font-size:.8rem;color:var(--p,#1e8cf2);text-decoration:none;border:1px solid color-mix(in srgb,var(--p,#1e8cf2) 40%,transparent);border-radius:99px;padding:.15rem .7rem}
+.obg-link:hover{background:color-mix(in srgb,var(--p,#1e8cf2) 10%,transparent)}
+.obg-rules{margin:0;padding-left:1.2rem;color:var(--t2);font-size:.84rem;line-height:1.7}
+.obg-tbl{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.3rem}
+.obg-tbl th,.obg-tbl td{border-bottom:1px solid var(--bd);padding:.4rem .5rem;text-align:left;vertical-align:top;color:var(--t2)}
+.obg-tbl th{color:var(--t3);font-weight:600;font-size:.74rem}
+.obg-tbl code{font-size:.78rem;color:var(--t)}
+.obg-copy{display:flex;gap:.5rem;align-items:center;margin:.4rem 0 .2rem}
+.obg-copy code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--input);border:1px solid var(--bd);border-radius:8px;padding:.35rem .6rem;font-size:.8rem;color:var(--t)}
+.obg-copy button{flex:none;border:1px solid var(--bd);background:var(--input);color:var(--t2);font-size:.78rem;padding:.3rem .7rem;border-radius:99px;cursor:pointer}
+.obg-foot{color:var(--t3);font-size:.75rem;margin-top:1.2rem;line-height:1.6}
+</style>
+{% endblock %}
+{% block content %}
+<div class="obg-wrap">
+  <nav class="obg-tabs" aria-label="guides">
+    {% for s in slugs %}
+    <a class="obg-tab {% if s == guide.slug %}on{% endif %}" href="/help/onboarding/{{ s }}">
+      {% if s == 'douyin' %}{{ (i18n or {}).get('obg.tab.douyin', '抖音企业版') }}
+      {% elif s == 'tiktok' %}{{ (i18n or {}).get('obg.tab.tiktok', 'TikTok') }}
+      {% else %}{{ (i18n or {}).get('obg.tab.payment', '付款方式') }}{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+  <div class="obg-meta">
+    <span>{{ (i18n or {}).get('obg.verified', '规则核实日期') }}：{{ guide.verified_on }}</span>
+    {% if guide.eta %}<span>{{ (i18n or {}).get('obg.eta', '预计周期') }}：{{ guide.eta }}</span>{% endif %}
+  </div>
+  <div class="obg-intro">{{ guide.intro }}</div>
+
+  {% if guide.prereq %}
+  <div class="obg-h">{{ (i18n or {}).get('obg.prereq', '开始前准备') }}</div>
+  <ul class="obg-pre">{% for p in guide.prereq %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <div class="obg-h">{{ (i18n or {}).get('obg.steps', '步骤') }}</div>
+  {% for s in guide.steps %}
+  <div class="obg-step">
+    <div class="obg-num">{{ loop.index }}</div>
+    <div class="obg-body">
+      <div class="obg-st">{{ s.title }}</div>
+      <div class="obg-sd">{{ s.detail }}</div>
+      {% if guide.slug == 'douyin' and loop.index == 5 and webhook_url %}
+      <div class="obg-copy">
+        <code id="obg-webhook-url">{{ webhook_url }}</code>
+        <button type="button" data-copy-target="obg-webhook-url">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+      </div>
+      {% endif %}
+      {% if s.url %}
+      {% if s.url.startswith('/') %}
+      <a class="obg-link" href="{{ s.url }}">{{ s.link_label }} →</a>
+      {% else %}
+      <a class="obg-link" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.link_label }} ↗</a>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if guide.rules %}
+  <div class="obg-h">{{ (i18n or {}).get('obg.rules', '平台规则速查') }}</div>
+  <ul class="obg-rules">{% for r in guide.rules %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if guide.errors %}
+  <div class="obg-h">{{ (i18n or {}).get('obg.errors', '常见错误码') }}</div>
+  <table class="obg-tbl">
+    <thead><tr><th>{{ (i18n or {}).get('obg.err_code', '错误码') }}</th><th>{{ (i18n or {}).get('obg.err_meaning', '含义') }}</th><th>{{ (i18n or {}).get('obg.err_fix', '处置') }}</th></tr></thead>
+    <tbody>{% for e in guide.errors %}<tr><td><code>{{ e.code }}</code></td><td>{{ e.meaning }}</td><td>{{ e.fix }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+
+  {% if guide.links %}
+  <div class="obg-h">{{ (i18n or {}).get('obg.links', '官方链接') }}</div>
+  <ul class="obg-rules">{% for l in guide.links %}<li><a href="{{ l.url }}" target="_blank" rel="noopener noreferrer">{{ l.label }}</a></li>{% endfor %}</ul>
+  {% endif %}
+
+  <div class="obg-foot">{{ (i18n or {}).get('obg.foot', '平台政策变动频繁，以官方控制台当日说明为准；在小智里直接问「怎么接入抖音 / TikTok / 怎么付款」也能得到本页要点。') }}</div>
+</div>
+<script>
+(function(){
+  document.addEventListener('click', function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest('button[data-copy-target]') : null;
+    if(!b) return;
+    var el = document.getElementById(b.getAttribute('data-copy-target'));
+    if(!el) return;
+    var txt = el.textContent || '';
+    var done = function(){ var old=b.textContent; b.textContent='✓'; setTimeout(function(){ b.textContent=old; }, 1200); };
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done, done); }
+    else { try{ var r=document.createRange(); r.selectNodeContents(el); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); s.removeAllRanges(); done(); }catch(_){} }
+  });
+})();
+</script>
+{% endblock %}

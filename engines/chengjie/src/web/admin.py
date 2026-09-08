@@ -3783,6 +3783,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_douyin.getLogger("admin").debug("抖音 Webhook 注册跳过", exc_info=True)
 
+    # ── 渠道接入教程页 /help/onboarding/{slug}（抖音企业版申请 / TikTok / 付款方式；2026-09-08 拍板）──
+    # 与小智问答同一份数据（src/assistant/onboarding_guides.py）；session auth，按 ui_lang 中英。
+    try:
+        from src.web.routes.onboarding_guide_routes import register_onboarding_guide_routes
+
+        register_onboarding_guide_routes(app, page_auth=_page_auth, templates=templates)
+    except Exception:
+        import logging as _log_obg
+
+        _log_obg.getLogger("admin").debug("接入教程页注册跳过", exc_info=True)
+
     # ── LINE RPA（个人号自动聊天）Web 管理页 + REST ──
     try:
         from src.web.routes.line_rpa_routes import register_line_rpa_routes

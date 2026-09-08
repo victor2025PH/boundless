@@ -1204,6 +1204,15 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     ),
 ]
 
+# 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请
+# （小程序 + 能力实验室）/ TikTok 官方通道 / 付款方式与人民币通道进度。答案与教程页
+# /help/onboarding/{slug} 同一份数据（src/assistant/onboarding_guides.py），path 直达教程页。
+try:
+    from src.assistant.onboarding_guides import howto_tuples as _onboarding_howto_tuples
+    _HOWTO.extend(_onboarding_howto_tuples())
+except Exception:  # 教程数据不可用不影响其余帮助条目
+    pass
+
 
 # 「带我去」聚光灯锚点（P3 2026-08-21）：跳页后高亮的目标选择器。
 # 纪律：**只登记核实过真实存在的稳定 id/data 属性**（2026-08-21 已逐个查证；
