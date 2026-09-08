@@ -18,6 +18,11 @@ kb:
 
 prompts:
   system_prompt: prompts/system_prompt.txt
+  # O-1 C #253（D-O3）：按业务域的系统提示词变体——陪伴运营（business_domain=companion）
+  # 装「私人聊天」底稿（第一人称、口语短句、有情绪、禁客服 / 助理腔 + 禁 AI 标点）；
+  # 销售域仍用上面主文件。选择在 domain_loader._load_prompts（与 kb 变体同机制）。
+  system_prompt_by_business_domain:
+    companion: prompts/system_companion.txt
 
 hooks: true
 

@@ -265,6 +265,16 @@ class DomainLoader:
             return
 
         prompt_path = pack.root / prompts_section.get("system_prompt", "prompts/system_prompt.txt")
+        # O-1 C #253（D-O3）：manifest ``prompts.system_prompt_by_business_domain.<bd>`` 给出按
+        # 业务域的系统提示词变体（陪伴域 = 「私人聊天」底稿，销售域仍主文件）——与 N-3 的
+        # ``kb.categories_by_business_domain`` 同机制；没给该域 / 文件缺 → 主文件。
+        _variants = prompts_section.get("system_prompt_by_business_domain")
+        if isinstance(_variants, dict) and pack.business_domain:
+            _alt = _variants.get(pack.business_domain)
+            if _alt and (pack.root / str(_alt)).exists():
+                prompt_path = pack.root / str(_alt)
+                logger.info("Domain '%s': system prompt variant for business_domain=%s: %s",
+                            pack.name, pack.business_domain, _alt)
         if prompt_path.exists():
             try:
                 pack.system_prompt = prompt_path.read_text(encoding="utf-8")

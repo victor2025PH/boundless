@@ -149,6 +149,8 @@ def _shadow_outcome(rec: Optional[Dict[str, Any]], outcome: str, reason: str) ->
 HANDOFF_REASONS = frozenset({
     "high_risk", "empty_reply", "generate_error", "send_error",
     "quota_hour", "quota_day", "circuit_open", "off_hours",
+    # O-1 C（#253）：陪伴域 AI 稿整段客服腔、确定性改写后仍空 → 不发转人工
+    "service_tone",
 })
 
 
@@ -630,6 +632,29 @@ async def run_autoreply(
     if not reply:
         return _result("empty_reply", inbound=text)
 
+    # O-1 C（#253 · D-O3）陪伴域客服腔守卫：改写一次（剥客服腔句 / 条件句收尾 / 您→你）；
+    # 整段客服腔剥完为空 → 不发，转人工（reason=service_tone）。销售域不启用；判定异常放行。
+    try:
+        from src.utils.persona_guard import (
+            companion_tone_guard_active as _ctga, rewrite_service_tone as _rst,
+        )
+        if _ctga(cfg):
+            _rw, _rep = _rst(reply)
+            _act = str(_rep.get("action") or "clean")
+            if _act != "clean":
+                logger.info(
+                    "[persona-guard] service_tone=%s three_part=%s cond_close=%s formal_you=%d "
+                    "action=%s conv=%s stage=protocol",
+                    "|".join(str(h) for h in (_rep.get("hits") or [])[:4]) or "-",
+                    bool(_rep.get("three_part")), bool(_rep.get("conditional_close")),
+                    int(_rep.get("formal_you") or 0), _act, key)
+            if _act == "rewrite":
+                reply = _rw
+            elif _act == "review":
+                return _result("service_tone", text=reply, inbound=text)
+    except Exception:
+        logger.debug("[protocol-autoreply] 客服腔守卫异常（放行原稿）", exc_info=True)
+
     risk = "low"
     try:
         risk = (risk_fn(reply) if risk_fn else "low") or "low"
@@ -925,6 +950,7 @@ def _fmt_meta_ts(ts: Any) -> str:
 HANDOFF_AUTO_CLEAR_REASONS = frozenset({
     "dup_guard_blocked", "empty_reply", "generate_error", "send_error",
     "quota_hour", "quota_day", "circuit_open", "off_hours",
+    "service_tone",   # O-1 C：AI 稿被客服腔守卫扣下＝「AI 没能回上」类，之后回上即摘
 })
 
 

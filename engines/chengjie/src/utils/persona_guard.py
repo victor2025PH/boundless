@@ -165,6 +165,214 @@ def matches_service_frame(text: str) -> List[str]:
     return out
 
 
+# ── 客服腔句级家族（O-1 C · #253 · D-O3，2026-09-08 Q9H2HM / XAM4KV）──────────────
+# 事故原话：「I hear you, and I'll stop here… Take care.」「Absolutely, I'm looking forward
+# to it. Have a great morning over there!」「我的助理会联系您」——不是组织框架硬词（#175
+# 已收），是**客服/助理的礼貌腔**：同理确认句、告别祝福句、「随时告诉我」条件句、您称。
+# 陪伴人设（第一人称朋友）一开口是这套，客户当场识破（Sinue：obviously handled by an AI
+# assistant）。词形保守：只收定式短语；「take care of yourself when sick」这类实义用法靠
+# 上下文排除（see _SERVICE_TONE_EXEMPT）。**只对 business_domain=companion 启用**（销售域
+# 的「如有需要 / 您」是对的）——由调用方判域。
+_SERVICE_TONE_PATTERNS_EN = [
+    re.compile(r"\bi\s+hear\s+you\b", re.I),
+    re.compile(r"\bi\s+(?:completely|totally|fully|really|do)?\s*understand\s+(?:how\s+you\s+feel|"
+               r"where\s+you(?:'re|\s+are)\s+coming\s+from|your\s+(?:frustration|concern|point)"
+               r"|that\s+this|if\s+you)\b", re.I),
+    re.compile(r"\bi\s+(?:completely|totally|fully)\s+understand\b", re.I),
+    re.compile(r"\btake\s+care(?:\s+of\s+yourself)?\s*(?:[!.。]|$)", re.I),
+    re.compile(r"\bi(?:'|’)?ll\s+be\s+(?:around|right\s+here|here\s+(?:if|when|whenever))\b", re.I),
+    re.compile(r"\bi(?:'|’)?m\s+(?:always\s+)?here\s+(?:if|when|whenever|for\s+you)\b", re.I),
+    re.compile(r"\bfeel\s+free\s+to\b", re.I),
+    re.compile(r"\blet\s+me\s+know\s+if\b", re.I),
+    re.compile(r"\bdon(?:'|’)?t\s+hesitate\s+to\b", re.I),
+    re.compile(r"\brest\s+assured\b", re.I),
+    re.compile(r"\bi\s+(?:really\s+)?appreciate\s+you(?:r)?\s+(?:sharing|telling|opening|trust|"
+               r"honesty|patience|understanding)\b", re.I),
+    re.compile(r"\bthank(?:s|\s+you)\s+for\s+(?:sharing|opening\s+up|telling\s+me|your\s+"
+               r"(?:message|time|honesty|patience|understanding|kind\s+words)|letting\s+me\s+know)\b", re.I),
+    re.compile(r"\bthank\s+you\s+for\s+reaching\s+out\b", re.I),
+    re.compile(r"\b(?:have|hope\s+you\s+have)\s+a\s+(?:great|wonderful|lovely|nice|good|fantastic|"
+               r"blessed|beautiful|restful|productive)\s+(?:day|morning|evening|night|weekend|"
+               r"week|rest\s+of\s+your\s+day)(?:\s+over\s+there)?\b", re.I),
+    re.compile(r"\bwishing\s+you\s+(?:a|all|the|nothing\s+but|good)\b", re.I),
+    re.compile(r"\bplease\s+know\s+that\b", re.I),
+    re.compile(r"\byour\s+feelings\s+are\s+valid\b", re.I),
+    re.compile(r"\bit(?:'|’)?s\s+(?:completely\s+)?understandable\s+(?:that|to)\b", re.I),
+    re.compile(r"\bthat\s+(?:must|sounds)\s+(?:be\s+)?(?:really\s+|so\s+|incredibly\s+)?"
+               r"(?:hard|difficult|tough|frustrating|overwhelming|exhausting)\b", re.I),
+    re.compile(r"\bi(?:'|’)?m\s+(?:so\s+)?(?:sorry|glad)\s+to\s+hear\s+that\b", re.I),
+    re.compile(r"\babsolutely[,!]\s+i(?:'|’)?m\s+looking\s+forward\s+to\s+it\b", re.I),
+    re.compile(r"\bis\s+there\s+anything\s+(?:else\s+)?(?:i\s+can\s+do|you\s+need)\b", re.I),
+    re.compile(r"\bhow\s+can\s+i\s+(?:help|support)\s+you\b", re.I),
+    re.compile(r"\bmy\s+assistant\b", re.I),
+    re.compile(r"\bour\s+team\b", re.I),
+    re.compile(r"\bat\s+your\s+(?:convenience|service)\b", re.I),
+    re.compile(r"\bi\s+(?:hope|trust)\s+this\s+(?:helps|finds\s+you\s+well)\b", re.I),
+]
+_SERVICE_TONE_PATTERNS_ZH = [
+    re.compile(r"如有需要|如您需要|若有需要|如果您需要|如果您有任何|若您有任何|如果有任何(?:问题|需要|疑问)"),
+    re.compile(r"很高兴为您|很高兴能为您|很荣幸为您|为您服务|为您解答|为您提供"),
+    re.compile(r"感谢您的(?:分享|信任|理解|耐心|支持|反馈|消息|来信|咨询)|谢谢您的(?:分享|信任|理解|耐心|支持)"),
+    re.compile(r"我(?:非常|完全|很|能|十分)?理解您的(?:感受|心情|处境|担忧|顾虑)"),
+    re.compile(r"请随时(?:告诉我|联系我|联系|找我|沟通)|随时告诉我|随时联系我|欢迎随时"),
+    re.compile(r"祝您(?:生活愉快|一切顺利|工作顺利|身体健康|好运|愉快|有美好的一天|度过)|祝你有(?:个|一个)(?:美好|愉快)的"),
+    re.compile(r"我的助理|我们(?:的)?团队|我们会尽快|我们将"),
+    re.compile(r"有什么可以帮|需要什么帮助|还有什么可以帮|有什么需要"),
+    re.compile(r"请您(?:放心|谅解|理解|知悉|留意|注意)|请放心|敬请"),
+    re.compile(r"给您带来的不便|造成的不便|深表歉意|非常抱歉给您"),
+    re.compile(r"保重(?:身体)?[。！!]?\s*$"),
+    re.compile(r"我(?:一直|随时|都)在(?:这里|这儿)[，,]?(?:如果|若|需要|随时)"),
+    # 独立收尾句「我一直在这里。」「我随时都在。」——客服式陪伴承诺
+    re.compile(r"^\s*我(?:会)?(?:一直|随时|都|永远)(?:都)?在(?:这里|这儿|的)?(?:陪(?:着)?你)?[。！!～~]*\s*$"),
+    re.compile(r"(?:^|[。！？!?\n]\s*)您好[，,!！。]"),
+]
+# 实义用法豁免：「take care of the kids」「照顾好自己」不是客服告别
+_SERVICE_TONE_EXEMPT = [
+    re.compile(r"\btake\s+care\s+of\s+(?!yourself\b)\w+", re.I),
+    re.compile(r"\btake\s+care\s+of\s+yourself\s+(?:when|while|after|during|if)\b", re.I),
+]
+# 「致谢-确认-告别」三段式：三类句子同时在场（各一句）＝客服收尾模板
+_TONE_THANKS_RE = re.compile(
+    r"^\s*(?:thank(?:s|\s+you)\b|i\s+(?:really\s+)?appreciate\b|感谢|谢谢|多谢)", re.I)
+_TONE_CONFIRM_RE = re.compile(
+    r"^\s*(?:i\s+(?:completely\s+|totally\s+)?(?:understand|hear\s+you|get\s+it|see)\b|"
+    r"(?:got\s+it|noted|understood|absolutely|of\s+course|certainly)\b|"
+    r"(?:我)?(?:明白|理解|了解|知道)了?|好的|没问题|当然)", re.I)
+_TONE_FAREWELL_RE = re.compile(
+    r"(?:\btake\s+care\b|\bhave\s+a\s+(?:great|wonderful|lovely|nice|good)\b|\bwishing\s+you\b|"
+    r"\bgood\s*bye\b|\ball\s+the\s+best\b|\bbest\s+wishes\b|祝您|祝你|保重|再见|再會|拜拜)", re.I)
+# 条件句收尾：末句以「如果你需要 / 有需要的话 / 随时 / If you ever need / Should you / Whenever you're ready」起
+_TONE_CONDITIONAL_CLOSE_RE = re.compile(
+    r"^\s*(?:if\s+(?:you\s+)?(?:ever\s+)?(?:need|want|feel|have|change\s+your\s+mind|decide|"
+    r"you(?:'d|\s+would)\s+like)\b|should\s+you\b|whenever\s+you(?:'re|\s+are)?\s+ready\b|"
+    r"anytime\s+you\b|just\s+(?:say|let\s+me\s+know|reach\s+out)\b|"
+    r"(?:如果|若|要是)(?:你|您)?(?:有|需要|想|愿意|改变)|有需要(?:的话)?|需要的话|随时|"
+    r"什么时候(?:想|需要))", re.I)
+_FORMAL_YOU_RE = re.compile(r"您")
+
+
+def companion_tone_guard_active(config: Any = None) -> bool:
+    """客服腔守卫是否该开＝这台机器是陪伴运营（``business_domain=companion``）。
+
+    进程级 active（DomainLoader 装配时登记）优先，其次给定配置 / 运行时配置推导；销售域
+    （「如有需要 / 您」是对的）恒 False。异常 → False（宁漏不误伤）。
+    """
+    try:
+        from src.utils.business_domain import active_business_domain
+        cfg = config
+        if cfg is None:
+            try:
+                from src.compliance.runtime import runtime_config
+                cfg = runtime_config() or None
+            except Exception:
+                cfg = None
+        return active_business_domain(cfg) == "companion"
+    except Exception:
+        return False
+
+
+def matches_service_tone(text: str) -> List[str]:
+    """文本中「客服 / 助理礼貌腔」命中片段（O-1 C）；空 = 合规。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _SERVICE_TONE_PATTERNS_EN + _SERVICE_TONE_PATTERNS_ZH:
+            m = pat.search(s)
+            if not m:
+                continue
+            frag = m.group(0)
+            if any(ex.search(s[max(0, m.start() - 2): m.end() + 24]) for ex in _SERVICE_TONE_EXEMPT):
+                continue
+            out.append(frag.strip())
+    except Exception:
+        return []
+    return out
+
+
+def _tone_sentences(text: str) -> List[str]:
+    parts = _split_sentences_sn(text)
+    return [p for p in parts if p and p.strip()]
+
+
+def detect_three_part_close(text: str) -> bool:
+    """「致谢 - 确认 - 告别」三段式：≥3 句且三类各至少一句（顺序不限）。"""
+    try:
+        sents = _tone_sentences(str(text or ""))
+        if len(sents) < 3:
+            return False
+        has_t = any(_TONE_THANKS_RE.search(s) for s in sents)
+        has_c = any(_TONE_CONFIRM_RE.search(s) for s in sents)
+        has_f = any(_TONE_FAREWELL_RE.search(s) for s in sents)
+        return bool(has_t and has_c and has_f)
+    except Exception:
+        return False
+
+
+def detect_conditional_close(text: str) -> bool:
+    """末句是条件句收尾（「如果你需要…随时找我」/ If you ever need…）。"""
+    try:
+        sents = _tone_sentences(str(text or ""))
+        if len(sents) < 2:
+            return False
+        return bool(_TONE_CONDITIONAL_CLOSE_RE.search(sents[-1]))
+    except Exception:
+        return False
+
+
+def service_tone_report(text: str) -> Dict[str, Any]:
+    """客服腔体检：``{"hits", "three_part", "conditional_close", "formal_you", "any"}``。"""
+    s = str(text or "")
+    hits = matches_service_tone(s)
+    three = detect_three_part_close(s)
+    cond = detect_conditional_close(s)
+    formal = len(_FORMAL_YOU_RE.findall(s)) if _CJK_RE.search(s) else 0
+    return {"hits": hits, "three_part": three, "conditional_close": cond,
+            "formal_you": formal, "any": bool(hits or three or cond or formal)}
+
+
+def rewrite_service_tone(text: str, *, formal_you: bool = True) -> Tuple[str, Dict[str, Any]]:
+    """按人设口吻**确定性**改写一次：剥掉客服腔句、剥条件句收尾、三段式只留中间承接句、
+    您 → 你。返回 ``(文本, report)``，``report["action"] ∈ {"clean", "rewrite", "review"}``——
+    ``review``＝整段都是客服腔、剥完为空 → 原文返回，调用方降级人工审核。绝不抛、绝不返回空。
+    """
+    src = str(text or "")
+    rep = service_tone_report(src)
+    rep["action"] = "clean"
+    if not src.strip() or not rep["any"]:
+        return src, rep
+    try:
+        sents = _tone_sentences(src)
+        if not sents:
+            return src, rep
+        kept: List[str] = []
+        for s in sents:
+            if matches_service_tone(s):
+                continue
+            # 三段式：致谢 / 确认 / 告别三类句子整套剥掉（模板句一句都不是人话）
+            if rep["three_part"] and (_TONE_THANKS_RE.search(s) or _TONE_FAREWELL_RE.search(s)
+                                      or _TONE_CONFIRM_RE.search(s)):
+                continue
+            kept.append(s)
+        if rep["conditional_close"] and kept and _TONE_CONDITIONAL_CLOSE_RE.search(kept[-1]):
+            kept.pop()
+        out = "".join(kept).strip()
+        if formal_you and out and _CJK_RE.search(out):
+            out = out.replace("您好", "你好").replace("您", "你")
+        # 剥完残留的孤立连接词 / 开头逗号（整词匹配：别把 Sounds 的 So 吃掉）
+        out = re.sub(r"^(?:and|but|so|anyway|also)\b\s*[,，]?\s*|^[,，、]\s*", "", out,
+                     flags=re.I).strip()
+        if not out or not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", out):
+            rep["action"] = "review"
+            return src, rep
+        rep["action"] = "rewrite" if out != src.strip() else "clean"
+        return out, rep
+    except Exception:
+        rep["action"] = "clean"
+        return src, rep
+
+
 def matches_multi_peer_leak(text: str) -> List[str]:
     """文本中「他人串扰自曝」命中片段（#91-B 红线，无条件检）。纯函数绝不抛。"""
     out: List[str] = []

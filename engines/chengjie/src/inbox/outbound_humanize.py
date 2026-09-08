@@ -77,10 +77,39 @@ def resolve_cfg(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "strip_tag_questions": bool(raw.get("strip_tag_questions", True)),
         "flatten_lists": bool(raw.get("flatten_lists", True)),
         "units": bool(raw.get("units", True)),
+        # O-1 C：陪伴域客服腔句级剥离（persona_guard.rewrite_service_tone），先于标点处理
+        "service_tone": bool(raw.get("service_tone", True)),
         "summary_patterns": [str(p) for p in pats] if isinstance(pats, (list, tuple)) else [],
         "skip_langs": {str(x).lower() for x in (raw.get("skip_langs") or [])
                        if isinstance(raw.get("skip_langs"), (list, tuple))},
     }
+
+
+def _service_tone_pass(text: str, cfg: Dict[str, Any]) -> Tuple[str, str, int]:
+    """陪伴域客服腔守卫（O-1 C）：返回 ``(text, action, hits)``。非陪伴域 / 关 → 原文 clean。
+
+    出口这里只做「改写一次」；剥完为空（整段客服腔）没有人审出口可退 → 原文放行并记
+    ``review_needed``（B 线拟稿链在 enrich_draft 已于更早处转人审，这里兜的是 deferred /
+    主动触达 / 协议链漏网）。绝不抛。
+    """
+    src = str(text or "")
+    if not src.strip() or not cfg.get("service_tone", True):
+        return src, "clean", 0
+    try:
+        from src.utils.persona_guard import companion_tone_guard_active, rewrite_service_tone
+        if not companion_tone_guard_active():
+            return src, "clean", 0
+        out, rep = rewrite_service_tone(src)
+        act = str(rep.get("action") or "clean")
+        n = len(rep.get("hits") or []) + int(bool(rep.get("three_part"))) + int(bool(rep.get("conditional_close")))
+        if act == "rewrite":
+            return out, act, n
+        if act == "review":
+            return src, "review_needed", n
+        return src, "clean", 0
+    except Exception:
+        logger.debug("[outbound_humanize] 客服腔守卫异常（原文放行）", exc_info=True)
+        return src, "clean", 0
 
 
 # ── 语言分类 ─────────────────────────────────────────────────────────────
@@ -472,6 +501,9 @@ def humanize(text: str, lang: str = "", *, cfg: Optional[Dict[str, Any]] = None,
             # 只有句子集合真被删减才重拼（否则原样，保留原有换行）
             if parts and (len(kept_raw) != len(raw) or len(parts) != n_before):
                 t = _join_sentences(parts, lg)
+                # 裁掉末句后新的句尾也可能是「…对吧？」——再剥一次尾巴
+                if c.get("strip_tag_questions", True):
+                    t = _strip_tag_question(t, lg, st)
         t = re.sub(r"[ \t]{2,}", " ", t).strip()
         if not t:
             t = src
@@ -611,13 +643,19 @@ def apply_outbound_humanize(
                 conversation_id or "-", stage or "-", org, lg, len(src),
                 text_fingerprint(src), src[:40])
             return src
-        out, st = humanize(src, lg, cfg=cfg, mode=mode)
+        pre, svc_act, svc_n = _service_tone_pass(src, cfg)
+        if svc_act != "clean":
+            logger.info(
+                "[persona-guard] service_tone=%d action=%s conv=%s stage=%s",
+                svc_n, svc_act, conversation_id or "-", stage or "-")
+        out, st = humanize(pre, lg, cfg=cfg, mode=mode)
         logger.info(
             "[outbound] conv=%s stage=%s origin=%s lang=%s len=%d punct_fix=%d style_fix=%d "
-            "trimmed=%d dash=%d semi=%d summary=%d tag_q=%d fp=%s preview=%r",
+            "trimmed=%d dash=%d semi=%d summary=%d tag_q=%d svc_tone=%d fp=%s preview=%r",
             conversation_id or "-", stage or "-", org, lg, len(out),
             st["punct_fix"], st["style_fix"], st["trimmed"], st["dash"], st["semicolon"],
-            st["summary"], st["tag_q"], text_fingerprint(out), out[:40])
+            st["summary"], st["tag_q"], svc_n if svc_act != "clean" else 0,
+            text_fingerprint(out), out[:40])
         return out
     except Exception:
         logger.debug("[outbound_humanize] apply 异常（原文放行）", exc_info=True)

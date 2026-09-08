@@ -1301,6 +1301,29 @@ class DraftService:
         _peer_reasons = _as_list(draft.get("risk_reasons"))
         reply_risk, _reply_hits = keyword_risk_hits(reply)
         _reply_reasons = ["keyword"] if reply_risk else []
+        # O-1 C（#253 · D-O3）陪伴域客服腔守卫：AI 稿命中「I hear you / Take care / 如有需要 /
+        # 您…」→ 按人设口吻确定性改写一次（剥句 + 您→你）；剥完为空（整段客服腔）→ 以
+        # reply_risk=high 经 decide 单一入口转人工审（不在这里自算档位）。销售域不启用。
+        try:
+            from src.utils.persona_guard import companion_tone_guard_active, rewrite_service_tone
+            if companion_tone_guard_active(self._cfg or None):
+                _rw, _rep = rewrite_service_tone(reply)
+                _act = str(_rep.get("action") or "clean")
+                if _act != "clean":
+                    logger.info(
+                        "[persona-guard] service_tone=%s three_part=%s cond_close=%s formal_you=%d "
+                        "action=%s draft=%s",
+                        "|".join(str(h) for h in (_rep.get("hits") or [])[:4]) or "-",
+                        bool(_rep.get("three_part")), bool(_rep.get("conditional_close")),
+                        int(_rep.get("formal_you") or 0), _act, draft_id)
+                if _act == "rewrite":
+                    reply = _rw
+                elif _act == "review":
+                    reply_risk = "high"
+                    _reply_reasons = list(_reply_reasons) + ["service_tone"]
+                    _reply_hits = list(_reply_hits) + [str(h) for h in (_rep.get("hits") or [])[:4]]
+        except Exception:
+            logger.debug("enrich_draft 客服腔守卫异常（放行原稿）", exc_info=True)
         effective_risk = _max_risk(base_risk, reply_risk)
         # 档位只认 policy：入站风险 + AI 稿风险一起进 decide（shadow 下不降档）。
         # 台账去重：入站侧「本会被扣」已在 auto_generate_draft 落过一行，这里只在
