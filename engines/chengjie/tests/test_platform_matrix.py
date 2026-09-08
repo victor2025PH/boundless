@@ -186,6 +186,8 @@ _RECV_MEDIA_TRUTH = {
     # 2026-09-08 抖音官方（实施96 P1-1）：webhook 把 message_type=image/video 映射成 media_type
     # 进 payload（平台不下发媒体本体，只有占位 + 类型；AI 可知「客户发了图」）
     "douyin:official": True,
+    # 2026-09-08 TikTok 官方（TK-1 B）：同上，IMAGE/VIDEO/STICKER → media_type 进 payload
+    "tiktok:official": True,
 }
 
 
@@ -413,6 +415,8 @@ _RECV_GROUP_TRUTH = {
     "qq:protocol": True,
     # 抖音官方：im_group_receive_msg 事件（硬事实）→ handler 显式 chat_type="group" + 群会话键
     "douyin:official": True,
+    # TikTok 官方：Business Messaging 只有一对一会话，无群（如实 False）
+    "tiktok:official": False,
 }
 
 

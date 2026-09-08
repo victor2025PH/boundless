@@ -4976,6 +4976,21 @@ compliance:
 #   enter_greeting: "您好，很高兴为您服务，请问想了解哪方面？"   # 进私事件 30 秒内即刻问候（禁外链）
 #   enter_greeting_enabled: true
 
+# ── TikTok 官方通道（Business Messaging API，Open Beta；指令 TK-1 B 骨架；src/integrations/tiktok_official.py）──
+# Business Account + TikTok for Business 开发者权限到位后填凭证并开 enabled；账号（account_id＝business_id）的
+# meta 需带 access_token 与 region（ISO-3166-1 alpha-2 注册地）——注册地决定私信 API 是否可用（EEA/瑞士/英国/
+# 美国/印度不可用）与图片能否发送（src/integrations/tiktok_regions.py）。webhook：控制台配
+# https://<公网域名>/webhook/tiktok，验签 HMAC-SHA256(webhook_secret, body)，请求头名以控制台为准（默认 X-TT-Signature）。
+# 规则：只能回复先发消息的用户、48h 内 ≤10 条、文本 ≤6000、图片 JPG/PNG ≤3MB、无按钮/主动私信。未开启：零痕迹。
+# tiktok:
+#   enabled: false
+#   app_id: ""
+#   secret: ""
+#   webhook_secret: ""           # 缺省取 secret
+#   webhook_path: /webhook/tiktok
+#   webhook_signature_header: X-TT-Signature
+#   verify_signature: true
+
 # ── 抖音演示 worker（实施96 P0-3；src/integrations/douyin_mock_worker.py）───────────────
 # 资质到位前把「收件箱 / 拟稿 / 策略拦截 / 出站镜像」整条链跑通的假传输。**默认关**，生产零痕迹；
 # 开着时注册 (douyin, web) 工厂并登记演示账号 douyin:demo 为 online。它不是抖音接入：能力矩阵与

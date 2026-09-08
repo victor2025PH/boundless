@@ -39,6 +39,7 @@ PLATFORM_LABEL = {
     "zalo": "Zalo",
     "instagram": "Instagram",
     "douyin": "抖音",
+    "tiktok": "TikTok",
 }
 
 

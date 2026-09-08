@@ -1154,6 +1154,12 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
         register_douyin_official_worker(config)
     except Exception:
         logger.debug("[orchestrator] 注册抖音官方 worker 失败", exc_info=True)
+    # TikTok 官方通道（Business Messaging API，mode=official；指令 TK-1 B 骨架）：tiktok.enabled 才注册
+    try:
+        from src.integrations.tiktok_official import register_tiktok_official_worker
+        register_tiktok_official_worker(config)
+    except Exception:
+        logger.debug("[orchestrator] 注册 TikTok 官方 worker 失败", exc_info=True)
     try:
         from src.integrations.line_protocol_login import (
             protocol_enabled as line_enabled, is_okline_available,

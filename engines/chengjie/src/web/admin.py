@@ -3783,6 +3783,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_douyin.getLogger("admin").debug("抖音 Webhook 注册跳过", exc_info=True)
 
+    # ── TikTok 官方通道（Business Messaging）Webhook（指令 TK-1 B 骨架；tiktok.enabled 为真才挂） ──
+    try:
+        from src.integrations.tiktok_official import register_tiktok_routes
+
+        register_tiktok_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_tiktok
+
+        _log_tiktok.getLogger("admin").debug("TikTok Webhook 注册跳过", exc_info=True)
+
     # ── 渠道接入教程页 /help/onboarding/{slug}（抖音企业版申请 / TikTok / 付款方式；2026-09-08 拍板）──
     # 与小智问答同一份数据（src/assistant/onboarding_guides.py）；session auth，按 ui_lang 中英。
     try:

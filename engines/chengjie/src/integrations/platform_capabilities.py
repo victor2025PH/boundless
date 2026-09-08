@@ -78,6 +78,9 @@ WORKERS: List[Tuple[str, str, str, str]] = [
     # 进私快路径 / 令牌续期），douyin.enabled 才注册。进表＝「代码支持什么」；抖音无已读回执 /
     # 正在输入接口，媒体只有图片（视频只能按 item_id 分享自己作品）。
     ("douyin", "official", "src.integrations.douyin_official", "DouyinOfficialWorker"),
+    # 指令 TK-1 B（2026-09-08）：TikTok 官方通道（Business Messaging API）——独立模块 worker，tiktok.enabled 才注册。
+    # 无已读回执 / 正在输入接口；图片按注册地表门控；无群聊（如实 -）。
+    ("tiktok", "official", "src.integrations.tiktok_official", "TikTokOfficialWorker"),
 ]
 
 #: 入站接线点：矩阵行 key → 站点。两种形态：
@@ -101,6 +104,8 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
     "messenger:web": ("js", "services/messenger-web/server.js"),
     # 抖音官方：webhook 处理函数把 message_type 映射成 media_type 带进 make_message（图/视频占位）
     "douyin:official": ("src.integrations.douyin_official", "handle_webhook"),
+    # TikTok 官方：webhook 处理函数把 message_type=IMAGE/VIDEO/STICKER 映射成 media_type 带进 make_message
+    "tiktok:official": ("src.integrations.tiktok_official", "handle_webhook"),
     "zalo:web": ("js", "services/zalo-personal/server.js"),
     "instagram:web": ("js", "services/instagram-web/server.js"),
     # Python 侧直接持有 Milky 事件流，payload 在 _ingest_inbound 构造（AST 判定）
