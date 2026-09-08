@@ -190,6 +190,13 @@ _IMG_CLAIM_STRONG = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:photo|pic(?:ture)?|selfie)?\b",
     r"\bhere(?:'|’)?s\s+(?:the|a|my|one)?\s*(?:photo|pic(?:ture)?|selfie)",
     r"\bthere\s+you\s+go\b", r"\bcheck\s+(?:it|this|that)\s+out\b",
+    # #259 P-3（6SRA2B 14:49:51 / 14:50 实录漏网）：「Just took this one for
+    # you—」「Ah, here it is—」——代词宾语的照片配文体，无 photo 名词，旧表全漏。
+    # 只在媒体语境（客户在等图 / 5 分钟内刚真发过一张）下判，配文体离开图就是谎。
+    r"\b(?:i\s+)?(?:just\s+)?(?:took|snapped|shot|grabbed)\s+(?:this|that|it|one|these|a\s+(?:quick\s+)?(?:one|pic|photo|selfie|shot))\b",
+    r"\b(?:took|snapped|shot)\s+(?:this|that|it|one|a)\s*(?:one|pic|photo|selfie|shot)?\s+(?:just\s+)?for\s+(?:you|u|ya)\b",
+    r"\bhere\s+(?:it\s+is|you\s+go|you\s+are)\b", r"\bthere\s+it\s+is\b",
+    r"\b(?:it|this|that)\s+(?:should\s+be|is|'s)\s+(?:right\s+)?there\b", r"\bshould\s+be\s+there\b",
     # ja / ko
     r"送った(?:よ|ね)?|送りました", r"보냈(?:어|어요|습니다)",
     # 粤语完成态（啱啱/头先=刚刚 影咗=拍了 嘅=的）——「啱啱拍嘅」「影咗俾你」
@@ -230,6 +237,8 @@ _MEDIA_DONE_WEAK = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:已经|已經|刚|剛|这就|這就|就)\s*(?:发|發|传|傳)\s*(?:了|啦|出去|过去|過去)(?![什么么问])",
     r"给\s*你\s*(?:发|發|传|傳)\s*(?:了|啦|过去了|過去了)",
     r"\b(?:i\s+)?(?:just\s+)?sent\s+it\b|\byou\s+can\s+see\s+it\b|\bit(?:'|’)?s\s+there\b",
+    # #259 P-3：「let me send it (now/over)」代词宾语的将发句（promise 表要求 photo 名词）
+    r"\blet\s+me\s+(?:just\s+)?send\s+(?:it|that|this|one)\s+(?:now|over|to\s+you|right\s+now|real\s+quick)\b",
 )]
 
 # ── 客户是否在「索要」媒体（media_context 判据；A/B 线共用）────────────────────
@@ -547,6 +556,15 @@ _SENT_CLAIM_IMG = [re.compile(p, re.IGNORECASE) for p in (
     r"\bdid\s+(?:it|they|the\s+(?:photos?|pics?|pictures?|images?))\s+(?:go|come|get)\s+through\b",
     # en：sending it now / over（代词宾语进行态；promise 词表要求 photo 名词）
     r"\bsending\s+(?:it|them|that|those|one)\s+(?:now|right\s+now|over|your\s+way|to\s+you)\b",
+    # #259 P-3（6SRA2B 14:50 / 14:51 实录）：「I thought it went through」「maybe it
+    # took a moment to load on your end」「check your phone」——传输借口 / 让对方查收
+    # 都预设「我已经发了」，与 sent-claim 同真伪判据（近窗真发过才算真话）。
+    r"\b(?:it|that|this|the\s+(?:photo|pic\w*|image|selfie))\s+(?:just\s+|already\s+|probably\s+|definitely\s+)?(?:went|got|came)\s+through\b",
+    r"\b(?:took|takes|taking|might\s+take|may\s+take)\s+(?:a\s+)?(?:moment|while|sec(?:ond)?|minute|bit|little)\b[^.!?\n]{0,12}\bto\s+load\b",
+    r"\b(?:still\s+)?load(?:ing|ed)?\s+on\s+your\s+(?:end|side|phone)\b",
+    r"\bcheck\s+(?:your|ur)\s+(?:phone|chat|inbox|whatsapp|dms?|messages|gallery|notifications?)\b",
+    # zh：看手机（让对方查收＝自称已发）；「别看/少看/老看手机」由排除面挡
+    r"(?:去|快|快去|你)?\s*看\s*(?:看|下|一下)?\s*(?:你的?)?\s*手机",
     # zh：已经/刚/刚刚/刚才 + (给你)发/传 + 你/过去/出去 (+了)
     r"(?:已经|已經|刚刚|剛剛|刚才|剛才|刚|剛|这不|這不)\s*(?:就)?\s*(?:给|給)?\s*你?\s*"
     r"(?:发|發|传|傳)\s*(?:给|給)?\s*(?:你|过去|過去|出去)\s*(?:了|啦)?",
@@ -589,6 +607,8 @@ _SENT_CLAIM_EXCLUDES = [re.compile(p, re.IGNORECASE) for p in (
     # 第三方去向（发给别人不是发给对方）
     r"\bsent\s+(?:it|them|that|those|one|the\s+\w+|a\s+\w+)\s+to\s+(?!(?:you|u|ya)\b)",
     r"(?:发|發|传|傳)\s*(?:给|給)\s*(?!你)(?:我|他|她|它|老板|老闆|朋友|同事|家人|妈|媽|爸|群)",
+    # 「别看/少看/老看手机」是劝对方放下手机，不是让对方查收（#259 P-3 看手机条）
+    r"(?:别|別|不要|少|老|总|總|一直|天天|光)\s*看\s*(?:看|下|一下)?\s*(?:你的?)?\s*手机",
     # 非媒体宾语（那类谎不归发图链管，拉进来会误发自拍）
     r"\b(?:money|payment|cash|deposit|transfer|wire|invoice|bill|receipt|link|url|address|"
     r"(?:phone\s+)?number|email|e-mail|mail|gift|present|package|parcel|order|file|document|"
@@ -667,6 +687,24 @@ def strip_sent_claims(text: str) -> str:
     if res and not re.search(r"[\w\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", res):
         return ""
     return res
+
+
+def build_photo_unsent_rewrite_instruction(text: str) -> str:
+    """#259 P-3 A 段：模型发了 ``send_photo``/[PHOTO] 请求、正文按「图已发」写，但
+    图这一轮**没能发出**（无匹配图 / 发送失败）→ 把这个事实回喂模型，重生一句
+    **不提照片、不承诺、不解释**的自然回复。只输出正文。"""
+    t = str(text or "").strip()[:400]
+    return (
+        "下面这条聊天消息是配着一张照片写的（把照片当作已经发出/刚拍好来写），"
+        "但实际上这一轮照片**没有发出去**，对方不会收到任何图片。\n"
+        "请改写这条消息：删掉所有关于这张照片的措辞（「刚拍的 / 给你看 / here it is /"
+        " took this for you / 你看这张」等），也不要改口说「等我拍 / 稍后发」或"
+        "「没发出去 / 传不了」——直接当作这一轮没提照片，用同样的语言和语气自然地"
+        "接着对方的话聊（可以回应对方说的内容、反问或轻松带过），长度与原消息相近。"
+        "不要道歉、不要解释系统原因、不要说自己是 AI。\n"
+        "只输出改写后的消息正文，不要引号。\n"
+        f"原消息：「{t}」"
+    )
 
 
 def build_promise_rewrite_instruction(
@@ -788,6 +826,72 @@ def deflection_line(
         return table.get(_script_lang(sample_text), table.get("en", ""))
     table = _DEFLECTIONS.get(kind if kind in _DEFLECTIONS else KIND_IMAGE, {})
     return table.get(_script_lang(sample_text), table.get("en", ""))
+
+
+# ── #259 P-3 固定动作模板（不经 LLM；文案已过本模块全部检测器，测试守不回环）────
+# D 段：人设无发图能力 / 相册空 → 承诺句改写为**诚实拒绝**（不是「卖关子」——
+# 卖关子暗示「以后会发」，能力关的人设永远发不出，那仍是空头支票）。
+_HONEST_NO_PHOTO = {
+    "zh": "这会儿发不了照片呢，先陪我聊聊嘛～",
+    "ja": "今は写真送れないんだ〜先にもっと話そ？",
+    "ko": "지금은 사진 못 보내~ 일단 얘기 더 하자😊",
+    "en": "I can't send a photo right now~ let's just chat for a bit 😊",
+}
+# C 段②：客户说「没收到」而本会话**从未真发过**媒体 → 强制实话：承认没发出去、
+# 说自己去看一下。禁「加载慢 / 再试一次 / 网络不好」三类传输借口（实录 14:50 /
+# 14:51 两句谎话正是这三类）。
+_LIE_CAUGHT_HONEST = {
+    "zh": "呃，刚才的照片没发出去…我这边查一下，别急",
+    "ja": "あれ、さっきの写真ちゃんと送れてなかったみたい…こっちで確認してみるね",
+    "ko": "어라, 아까 사진이 제대로 안 갔나 봐… 내가 여기서 확인해볼게",
+    "en": "hmm, looks like the photo didn't actually go out on my end. "
+          "let me check what happened here",
+}
+# C 段①：客户说「没收到」且本会话最近真发过一张 → 自动**重发同一张**，配这一句
+# 短话（随图发出，不经守卫——它绑着真实的 send_media 回执）。
+_LIE_CAUGHT_RESEND_CAPTION = {
+    "zh": "咦，没收到吗？我再发一次这张～",
+    "ja": "あれ、届いてなかった？もう一回送るね〜",
+    "ko": "어? 안 갔어? 다시 한 번 보낼게~",
+    "en": "oh? didn't get it? here, sending this one again~",
+}
+
+
+def honest_no_photo_line(sample_text: str) -> str:
+    """D 段：能力关 / 无图可发时的诚实拒绝（按 sample 文字系统取语言）。"""
+    return _HONEST_NO_PHOTO.get(_script_lang(sample_text), _HONEST_NO_PHOTO["en"])
+
+
+def lie_caught_honest_line(sample_text: str) -> str:
+    """C 段②：从未真发过却被问「没收到」→ 强制实话模板。"""
+    return _LIE_CAUGHT_HONEST.get(_script_lang(sample_text), _LIE_CAUGHT_HONEST["en"])
+
+
+def lie_caught_resend_caption(sample_text: str) -> str:
+    """C 段①：重发上一张时随图的短配文。"""
+    return _LIE_CAUGHT_RESEND_CAPTION.get(
+        _script_lang(sample_text), _LIE_CAUGHT_RESEND_CAPTION["en"])
+
+
+def detect_photo_caption_claim(text: str) -> str:
+    """「照片配文体」合流检测（#259 P-3 E 段）：将发承诺 ∪ 已发/正在发断言（**强制**
+    媒体语境）∪ 过去时假声明，任一命中返回 'image'/'voice'/''。
+
+    用途：同会话 5 分钟内刚真发过一张、本轮又出一句配文体文本（「Just took this one
+    for you—」）而本轮没有图——这句离开图就是谎，调用方据此「必须再附图，否则改写」。
+    刻意绕开 ``wants_media`` 语境闸：那道闸在图真发出后就闭合了（请求已兑现），
+    正是 14:49:51 第二句放行的原因。
+    """
+    return (detect_media_promise(text)
+            or detect_media_claim(text, media_context=True)
+            or detect_sent_claim(text))
+
+
+def strip_photo_caption_claims(text: str) -> str:
+    """与 :func:`detect_photo_caption_claim` 对称的句级剥离（承诺 + 断言 + 假声明）。"""
+    out = strip_media_promises(text)
+    out = strip_media_claims(out, media_context=True)
+    return strip_sent_claims(out)
 
 
 # ── offer-accept 桥（上一轮 AI 提议发照片、本轮客户短肯定 → 视同要图请求）──────
@@ -1027,7 +1131,10 @@ __all__ = [
     "detect_media_promise", "strip_media_promises",
     "detect_media_claim", "strip_media_claims", "wants_media",
     "detect_sent_claim", "strip_sent_claims",
-    "build_promise_rewrite_instruction", "deflection_line",
+    "detect_photo_caption_claim", "strip_photo_caption_claims",
+    "honest_no_photo_line", "lie_caught_honest_line", "lie_caught_resend_caption",
+    "build_promise_rewrite_instruction", "build_photo_unsent_rewrite_instruction",
+    "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",
     "detect_show_offer_subject", "wanted_media_subject",
 ]

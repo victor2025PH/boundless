@@ -1198,6 +1198,16 @@ _MEDIA_COMPLAINT_MAP: tuple = (
         "说话不算", "食言", "光说不做", "光說不做", "说了不做", "說了不做",
         "didn't get", "didnt get", "didn't receive", "nothing here",
         "you said you", "thought you said",
+        # #259 P-3（6SRA2B 14:51「Where honey? No picture」未识别）复诉词补全：
+        # 「没图」的各种口语形态——第二次复诉没被认出，AI 才有机会编第二句谎。
+        "no picture", "no pic", "no photo", "no image", "nothing came",
+        "nothing arrived", "still nothing", "never got", "never received",
+        "don't see it", "dont see it", "don't see any", "dont see any",
+        "didn't come through", "didnt come through",
+        "where honey", "where babe", "where love",
+        "没有收到", "没收到啊", "沒收到啊", "没有照片", "沒有照片", "没有图", "沒有圖",
+        "图在哪", "圖在哪", "照片在哪", "什么都没收到", "什麼都沒收到", "啥也没",
+        "啥都没", "还是没有", "還是沒有", "还是没收到", "還是沒收到",
     )),
     # 失望/敷衍/整体不信任（T10 型）——单独一类，配「停止解释、简短真诚」纠偏。
     ("distrust", (
@@ -1233,7 +1243,17 @@ def detect_apology_spiral(text: str) -> bool:
     return hits >= 2 or (hits >= 1 and len(t) > 60)
 
 
-def detect_media_complaint(text: str) -> str:
+# #259 P-3：lie_caught **弱词**——「Where?」「哪呢」「没有啊」这类单看会误伤
+# （「where are you from?」不含「where?」但「你在哪呢」会含「哪呢」），只在调用方
+# 确认**媒体悬置中**（AI 承诺 / 真发过一张、客户在等图）时才采信。
+_LIE_CAUGHT_WEAK_KEYS: tuple = (
+    "where?", "where??", "where ?", "where is it", "where's it", "nothing here",
+    "哪呢", "哪儿呢", "哪裡呢", "没有啊", "沒有啊", "没有呀", "沒有呀",
+    "没啊", "沒啊", "没呢", "沒呢",
+)
+
+
+def detect_media_complaint(text: str, *, media_pending: bool = False) -> str:
     """客户是否在**质疑刚收到的图/抓包说谎**（纯函数）：返回 ``repeat``（图重复）/
     ``not_you``（不像本人）/``fake``（假图/网图）/``content_mismatch``（画面与叙事
     对不上，实施69）/``unfulfilled``（催兑现「照片呢」，实施69）/``lie_caught``
@@ -1245,6 +1265,10 @@ def detect_media_complaint(text: str) -> str:
     确认「最近真发过媒体」再采信，lie_caught/distrust 不强制该闸（没收到/唱歌
     冒充本就没有媒体台账）；unfulfilled 只计数不设纠偏 hint（措辞由悬置常驻
     hint 负责，见 skill_manager._maybe_flag_media_complaint）。
+
+    ``media_pending=True``（#259 P-3）＝调用方已确认客户在等一张图（AI 刚承诺 /
+    刚真发过）：此时「Where?」「哪呢」「没有啊」这类弱词也算 ``lie_caught``
+    （6SRA2B 14:51「Where honey? No picture」第二次复诉此前完全没被认出）。
     """
     t = str(text or "").strip().lower()
     if not t or len(t) > 200:
@@ -1253,6 +1277,10 @@ def detect_media_complaint(text: str) -> str:
         for k in keys:
             if k in t:
                 return kind
+    if media_pending and len(t) <= 60:
+        for k in _LIE_CAUGHT_WEAK_KEYS:
+            if k in t:
+                return "lie_caught"
     return ""
 
 
