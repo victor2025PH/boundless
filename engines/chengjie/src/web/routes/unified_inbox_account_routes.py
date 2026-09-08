@@ -1482,6 +1482,9 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                 _plat, _ck, _raw_name0)
         direction = str((body or {}).get("direction") or "in")
         _chat_type = str((body or {}).get("chat_type") or "")
+        # P-2 A（#259）：边车打的回填标记（history_set / resync / upsert_append）——落库不触发
+        _backfill = bool((body or {}).get("backfill"))
+        _backfill_source = str((body or {}).get("backfill_source") or "")
         _contact_name = ""
         if not _raw_name or _raw_name == _ck:
             try:
@@ -1600,6 +1603,8 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             mentions=_mentions,
             sender_id=_sender_id,
             sender_name=_sender_name,
+            backfill=_backfill,
+            backfill_source=_backfill_source,
         )
         # 请求标记落库（2026-08-11 可视化）：is_request 落 conversations 列 → chats 透传
         # → 前端徽章/引导条「回复即通过验证」。出站落库自动清（ingest_message），
@@ -1612,7 +1617,13 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         # 群/频道/多人房间不进自动回复（自动回复面向 1:1，判据走 group_thread 白名单——
         # 旧口径 `!= "group"` 会把 channel / supergroup / LINE room 全放进来）。
         # spam 类陌生人请求只入收件箱、不自动回。
-        if direction == "in" and _one_to_one and not _is_spam_request:
+        # P-2 A / F：回填历史 / 自聊会话不进协议链直发（与 B 线拟稿同口径）。
+        if direction == "in" and _one_to_one and not _is_spam_request and not _backfill:
+            from src.inbox.normalizer import is_self_chat as _is_self_chat
+            if _is_self_chat(_plat, _acct, _ck):
+                logger.info("[inbound] self_chat=1 conv=%s:%s:%s skipped_autoreply=1",
+                            _plat, _acct, _ck)
+                return {"ok": bool(cid), "conversation_id": cid or ""}
             await maybe_auto_reply(make_message(
                 platform=_plat,
                 account_id=_acct,

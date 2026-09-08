@@ -178,6 +178,18 @@ def _apply_contact_id(store, conv: InboxConversation) -> str:
     return cid
 
 
+def _quiet_inbound(conv: InboxConversation, lm: Dict[str, Any]) -> bool:
+    """这条入站是否「落库即止」：回填标记（source.backfill）或自聊会话。纯判定，绝不抛。"""
+    try:
+        from .normalizer import is_backfill_source, is_self_chat
+        src = lm.get("source") if isinstance(lm.get("source"), dict) else {}
+        if is_backfill_source(src):
+            return True
+        return is_self_chat(conv.platform, conv.account_id, conv.chat_key, src)
+    except Exception:
+        return False
+
+
 def _publish_inbox_message(conv: InboxConversation) -> None:
     """有新入站消息时，向全局事件总线发 inbox_message（SSE 实时推送给工作台）。"""
     try:
@@ -228,6 +240,12 @@ def ingest_collected_chats(
             msgs.append(_msg_from_obj(conv.conversation_id, lm, platform=conv.platform))
         n = store.ingest_batch(conv, msgs)
         inserted += n
+        # P-2 A / F（#259 #252，2026-09-08）：回填历史（登录 / 重连 / 拉历史同步回来的）与
+        # 自聊会话（peer == 自己）**已落库**，到此为止——不清 snooze、不发 SSE、不进任何
+        # 入站回调（起草 / 关怀 / 目标 / 问候 / 影子扫描）、不更新意图情绪、不做记忆抽取。
+        # H3BAJD：登录 3 秒后对 6 个老会话批量 auto_generate_draft，根因就是这条 continue 缺席。
+        if n > 0 and isinstance(lm, dict) and _quiet_inbound(conv, lm):
+            continue
         if n > 0 and isinstance(lm, dict) \
                 and str(lm.get("direction") or "in") == "in":
             # P0-companion：客户再次来消息 → 立即取消搁置，让会话重回「待接管」队列。

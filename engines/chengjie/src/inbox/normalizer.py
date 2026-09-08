@@ -80,6 +80,57 @@ def normalize_chat_key(platform: str, chat_key: str) -> str:
     return key
 
 
+# ── P-2 A / F（#259 #252，2026-09-08）：回填标记 + 自聊会话 ─────────────────────────
+# 两个「不是新入站」的判据收口在 normalizer（落库路径唯一读它的地方是 ingest_collected_chats）：
+#   · backfill：边车 / 桥打在 source 上的 ``backfill=1``（含 backfill_source: history_set |
+#     resync | upsert_append | tg_dialogs）——登录 / 重连 / 拉历史同步回来的消息。**落库**（历史要
+#     看得见）但不发「新入站」事件（起草 / 关怀 / 目标 / 问候 / 引用 / 学习抽取 / 未读角标）。
+#   · self_chat：peer == 自己（WhatsApp「Message yourself」jid==me；Telegram Saved Messages
+#     peer id == 自己的 user id）——手机备忘录，不是客户，排除全部自动化、不计未读、列表显示
+#     「我自己 · 备忘」。判据只用 id（chat_key == account_id），零 schema。
+BACKFILL_KEY = "backfill"
+BACKFILL_SOURCE_KEY = "backfill_source"
+SELF_CHAT_KEY = "self_chat"
+
+
+def is_backfill_source(source: Any) -> bool:
+    """source dict 是否带回填标记（``backfill`` 真值）。纯函数，绝不抛。"""
+    if not isinstance(source, dict):
+        return False
+    v = source.get(BACKFILL_KEY)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes")
+    return bool(v)
+
+
+def backfill_source_of(source: Any) -> str:
+    """回填来源标签（history_set / resync / upsert_append / tg_dialogs / ""）。"""
+    if not isinstance(source, dict):
+        return ""
+    return str(source.get(BACKFILL_SOURCE_KEY) or "").strip()[:32]
+
+
+def is_self_chat(platform: str, account_id: str, chat_key: str,
+                 source: Any = None) -> bool:
+    """会话对端是否就是账号自己（自聊 / 备忘）。
+
+    WhatsApp：私聊 chat_key 是裸 E.164，「Message yourself」的 jid==me → chat_key==account_id。
+    Telegram：Saved Messages 的 peer id == 自己的 user id → 同样 chat_key==account_id。
+    其它平台无自聊语义，只认 source 显式 ``self_chat`` 标（边车 / 桥知道 me 时可直接打）。
+    account_id 为空 / default 时判不出 → False（default 账号没有「自己」的身份可比）。
+    """
+    if isinstance(source, dict) and source.get(SELF_CHAT_KEY):
+        return True
+    plat = str(platform or "").strip().lower()
+    acct = str(account_id or "").strip()
+    key = normalize_chat_key(plat, str(chat_key or "")).strip()
+    if not acct or acct == "default" or not key:
+        return False
+    if plat in ("whatsapp", "telegram"):
+        return key == acct
+    return False
+
+
 def name_is_real(name: Any, chat_key: Any) -> bool:
     """显名是否「真实昵称」——非空、非等于裸 chat_key、非纯数字（Telegram 数字号）。
 
@@ -427,6 +478,7 @@ def store_row_to_chat(
     )
     language = (last_msg_obj["language"] if last_msg_obj
                else str(row.get("language") or "unknown"))
+    _self_chat = is_self_chat(platform, account_id, chat_key)
     return {
         "platform": platform,
         "platform_name": PLATFORM_DISPLAY.get(platform, platform.title() or platform),
@@ -451,8 +503,8 @@ def store_row_to_chat(
         # 末条则 0，否则用同步来的 unread。这样协议号每轮 upsert_protocol_chats 覆盖的
         # 手机端未读数不会把坐席已读态冲回（打开即已读、永不回弹）。
         # ``synced_unread`` 保留平台/手机端原始未读，供前端出「灰色·手机端未读」徽标区分。
-        "unread": _effective_unread_from_row(row),
-        "synced_unread": int(row.get("unread") or 0),
+        "unread": 0 if _self_chat else _effective_unread_from_row(row),
+        "synced_unread": 0 if _self_chat else int(row.get("unread") or 0),
         # 占位会话：有同步未读但本地零条消息（协议号只同步了会话列表、消息本体没回流）。
         # 前端据此出专属空态（「历史尚未回流」+ 拉取按钮），而非通用「暂无消息」。
         "is_placeholder": bool(int(row.get("unread") or 0) > 0
@@ -463,6 +515,9 @@ def store_row_to_chat(
         # 出站落库自动清（ingest_message），显式接受/拒绝走 request-action 代理。
         "is_request": bool(row.get("is_request") or 0),
         "request_category": str(row.get("request_category") or ""),
+        # P-2 F（#252 A7PB2F / H3BAJD）：自聊会话（peer == 自己）——前端显示「我自己 · 备忘」、
+        # 折叠到底部、不计未读；自动化排除在 ingest 侧（同一 is_self_chat 判据）。
+        "self_chat": _self_chat,
         "language": language,
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],

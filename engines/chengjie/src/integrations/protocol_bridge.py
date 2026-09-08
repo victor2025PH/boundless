@@ -859,8 +859,16 @@ def ingest_incoming(
     mentions: Optional[Any] = None,
     sender_id: str = "",
     sender_name: str = "",
+    backfill: bool = False,
+    backfill_source: str = "",
 ) -> Optional[str]:
     """把一条 protocol 消息落库到统一收件箱。返回 conversation_id（失败返回 None）。
+
+    P-2 A（#259 H3BAJD / ZH3ZQ5）：``backfill=True`` = 同步回来的历史（WA 边车
+    messaging-history.set / ON_DEMAND 回填 / TG 首连 get_dialogs 末条）——**照常落库**，
+    但 source 打 ``backfill=1``（+ ``backfill_source``）、不计未读、不发 SSE 新入站事件；
+    ``ingest_collected_chats`` 见标不触发任何自动化（起草 / 关怀 / 目标 / 学习抽取）。
+    P-2 F：peer == 自己（自聊 / 备忘）同样不计未读、不发事件、不触发自动化。
 
     M6④：携带 ``media_type`` / ``media_ref``（已下载好的 /static URL 或本地路径）。
     媒体消息即使无文本也会落库为一条消息（会话预览用占位符如「[图片]」，但消息正文仍为空，
@@ -937,13 +945,26 @@ def ingest_incoming(
     # P2 群聊：chat_type=group 让会话分流到「群组动态」（不进 SLA/自动回复/auto-draft）
     if chat_type:
         src.setdefault("chat_type", str(chat_type))
+    # P-2 A / F：回填 / 自聊 → source 打标（ingest_collected_chats 据此跳过自动化）+ 不计未读
+    from src.inbox.normalizer import (
+        BACKFILL_KEY, BACKFILL_SOURCE_KEY, SELF_CHAT_KEY, is_self_chat,
+    )
+    _backfill = bool(backfill) or bool(src.get(BACKFILL_KEY))
+    if _backfill:
+        src[BACKFILL_KEY] = 1
+        if backfill_source:
+            src[BACKFILL_SOURCE_KEY] = str(backfill_source)[:32]
+    _self_chat = is_self_chat(platform, str(account_id), str(chat_key), src)
+    if _self_chat:
+        src[SELF_CHAT_KEY] = 1
+    _quiet = _backfill or _self_chat
     chat = normalize_chat(
         platform=platform,
         platform_name=PLATFORM_DISPLAY.get(platform, platform.title()),
         account_id=str(account_id), account_label=str(account_id),
         chat_key=str(chat_key), name=name or str(chat_key),
         last_msg=text, last_ts=ts or 0,
-        unread=1 if direction == "in" else 0, source=src,
+        unread=(1 if (direction == "in" and not _quiet) else 0), source=src,
         chat_type=str(chat_type or ""),
         username=str(username or ""), phone=str(phone or ""),
         avatar_url=str(avatar_url or ""),
@@ -971,13 +992,32 @@ def ingest_incoming(
         _base = str(chat.get("last_msg") or "")
         chat["last_msg"] = f"{_sender_name}：{_base}" if _base else _sender_name
     try:
-        _n = ingest_collected_chats(store, [chat], publish_events=(direction == "in"))
+        _n = ingest_collected_chats(
+            store, [chat], publish_events=(direction == "in" and not _quiet))
+        if _quiet and direction == "in":
+            # P-2 A / F 可对账日志：每条回填 / 自聊入站一行（落库了、但没进自动化）
+            logger.info(
+                "[inbound] backfill=%d self_chat=%d source=%s conv=%s ts=%s "
+                "inserted=%d skipped_automation=1",
+                1 if _backfill else 0, 1 if _self_chat else 0,
+                str(src.get(BACKFILL_SOURCE_KEY) or "-"),
+                chat.get("conversation_id"), int(float(ts or 0)), int(_n or 0))
+        if _backfill and not _self_chat and _n > 0:
+            # P-2 D / E：回填结算观察者——同步静默后跑停联登录扫描 + 沉寂清单 + 登录确认框
+            try:
+                from src.inbox.dormant_review import note_backfill
+                note_backfill(
+                    store, platform=platform, account_id=str(account_id),
+                    conversation_id=str(chat["conversation_id"]), chat_key=str(chat_key),
+                    name=str(name or ""), ts=float(ts or 0), direction=direction, text=text)
+            except Exception:
+                logger.debug("[protocol_bridge] note_backfill 失败", exc_info=True)
         # P2-2（2026-07-23）：出站镜像也发 SSE 事件（独立类型 outbound_message，不复用
         # inbox_message——前端对后者会给非选中会话 unread+1，出站消息不该点未读）。
         # 条件 _n>0 =「真的新插入」：编排器镜像与 worker fromMe 回显同 msg_id 落同键，
         # 第二次 INSERT OR IGNORE 无行插入 → 不重复发事件。让打开会话的坐席在 AI
         # autosend/主动触达后即时看到气泡，选中会话轮询由 10s 放宽到 30s（见 P1-3）。
-        if direction == "out" and _n > 0:
+        if direction == "out" and _n > 0 and not _quiet:
             _publish_outbound_event(chat)
     except Exception:
         logger.debug("[protocol_bridge] ingest_collected_chats 失败", exc_info=True)
@@ -1207,6 +1247,10 @@ async def backfill_telegram(
                     continue
                 payload = tg_message_payload(msg, account_id)
                 if payload and str(payload.get("text") or "").strip():
+                    # P-2 A：首连回填的会话末条是历史不是新入站——与 WA 边车同口径打标，
+                    # sink（ingest_incoming）落库但不触发起草 / 自动回复 / 未读。
+                    payload["backfill"] = True
+                    payload["backfill_source"] = "tg_dialogs"
                     sink(payload)
                     n += 1
             except Exception:

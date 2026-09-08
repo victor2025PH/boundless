@@ -1008,8 +1008,12 @@ function ephemeralOpts(entry, jid, extra) {
   return Object.assign({ ephemeralExpiration: exp }, extra || {});
 }
 
-/** 把一条 Baileys 入站消息 push 到 Python（skipEmpty=true 时跳过无文本无媒体，用于历史回填降噪）。 */
-async function pushWaMessage(entry, msg, skipEmpty) {
+/** 把一条 Baileys 入站消息 push 到 Python（skipEmpty=true 时跳过无文本无媒体，用于历史回填降噪）。
+ *  P-2 A（#259 H3BAJD / ZH3ZQ5）：backfillSource 非空 = 这条是**同步回来的历史**（messaging-history.set
+ *  初次同步 / ON_DEMAND 回填 / messages.upsert type≠notify 的 append），payload 带 backfill:true +
+ *  backfill_source——后端照常落库（历史要看得见），但不当「新入站」触发起草 / 关怀 / 目标 / 未读。
+ *  此前登录后每个会话的最后一条历史消息都被当新入站推给后端，3 秒内对 6 个老会话批量起草。 */
+async function pushWaMessage(entry, msg, skipEmpty, backfillSource) {
   if (!msg || !msg.message) return false;
   // P3-198：remoteJid 去设备后缀再入镜像——否则同一客户裂成 'num:0'/'num' 两个会话
   const jid = normalizeUserJid((msg.key && msg.key.remoteJid) || "");
@@ -1096,6 +1100,8 @@ async function pushWaMessage(entry, msg, skipEmpty) {
     mentions: mentionList.length ? mentionList : undefined,
     sender_id: senderId || undefined,
     sender_name: senderName || undefined,
+    backfill: backfillSource ? true : undefined,
+    backfill_source: backfillSource || undefined,
   });
   return true;
 }
@@ -1236,6 +1242,10 @@ async function _startLoginInner(loginId, proxyUrl) {
   // 入站消息 → push 到 Python 统一收件箱
   sock.ev.on("messages.upsert", async (m) => {
     try {
+      // P-2 A：Baileys 语义 type=notify 才是真新消息；append 是「已在会话里、补进来的」
+      // （离线期 / 历史补录）→ 按回填标记推给后端（落库不触发自动化）。
+      const _upType = String((m && m.type) || "notify");
+      const _upBackfill = _upType === "notify" ? "" : ("upsert_" + _upType);
       for (const msg of (m && m.messages) || []) {
         // J-6 C：解密失败 stub 计数/自愈（明文顺手清零连击）；不影响后续落库语义
         try { await observeBadMac(loginId, entry, msg); } catch (_) {}
@@ -1248,7 +1258,7 @@ async function _startLoginInner(loginId, proxyUrl) {
         // 占位会话兜底：实时消息顺手更新「该会话最新消息 key」缓存（撤回/编辑等协议消息
         // 已在上面 continue——它们在手机历史里可能不存在，不适合当锚点）
         rememberLastMsgKey(entry, msg);
-        await pushWaMessage(entry, msg, false);
+        await pushWaMessage(entry, msg, false, _upBackfill);
       }
     } catch (e) {
       logger.debug({ e }, "messages.upsert handler failed");
@@ -1341,8 +1351,10 @@ async function _startLoginInner(loginId, proxyUrl) {
         if (onDemand || WA_BACKFILL > 0) {
           // 按需回填拉全量；初次同步只取末尾 WA_BACKFILL 条降噪
           const msgs = onDemand ? h.messages : h.messages.slice(-WA_BACKFILL);
+          // P-2 A：history_set=登录初次同步；resync=按需回填 / 占位会话拉历史（ON_DEMAND）
+          const _bfSrc = onDemand ? "resync" : "history_set";
           for (const msg of msgs) {
-            await pushWaMessage(entry, msg, true); // 跳过无文本，降噪
+            await pushWaMessage(entry, msg, true, _bfSrc); // 跳过无文本，降噪
           }
         }
       }
