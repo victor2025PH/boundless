@@ -10,6 +10,8 @@ Endpoints:
 - GET  /api/persona/preview-prompt — preview assembled system prompt
 """
 
+from typing import Any
+
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from src.web.web_i18n import tr
