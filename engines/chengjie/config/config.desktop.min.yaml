@@ -110,10 +110,25 @@ inbox:
     # 全自动」）：图片/语音没识别出来时不扣留回复，AI 自然承认没看清并温和追问
     # （绝不装懂）。服务器实例代码默认关（维持 08-17 无兜底纪律），客户包默认开。
     media_degrade_reply: true
+    # 入站爆发合并（A 类基线，2026-09-08 D-O4 #252 #254）：客户几秒内连发多条 → 等一个
+    # 8–15s 随机静默窗合并成一句、只拟一次稿只回一次（不是每条各回一条机关枪）。
+    # 窗口上限 window_max_sec 代码缺省 15；语音条窗 15s；硬上限 25s / 6 条照旧。
+    inbound_merge:
+      enabled: true
   # 出站近重复守卫（A 类基线，2026-08-22 随全自动开箱）：投递前与最近出站比对，
   # 同义双发静默跳过——B41「同稿双投」防线里唯一跨重启的一层（DB 消息镜像口径）。
   outbound_dup_guard:
     enabled: true
+  # 账号作息班表（A 类基线，2026-09-08 D-O4 #252 #254）：夜间按账号时区 01–08 不自动回、
+  # 08 后随机 0–40 min 补发——start 08:20 配代码缺省 edge_jitter_min=20（±20 min 按账号×日期
+  # 确定性抖动）= 开班落在 08:00–08:40；end 01:00 跨午夜 = 收班 00:40–01:20。timezone 空 =
+  # 本机钟（桌面机就是运营者所在时区；单账号可在「自动回复设置 → 工作时间」覆写或豁免）。
+  # 危机消息穿透（crisis_bypass 缺省开）、休息期仍拟稿、复班补觉（>2h 陈稿重拟）皆代码缺省。
+  work_schedule:
+    enabled: true
+    default:
+      start: "08:20"
+      end: "01:00"
   l2_autosend:
     enabled: true
     deliver: true
@@ -122,6 +137,11 @@ inbox:
     fresh_guard:
       enabled: true
     deliver_delay:
+      # 「拟人程度」出厂档（A 类基线，2026-09-08 D-O4 #252 #254，FW78ZP「起草→发出恒
+      # 12–13s」）：natural = 读 3–6s + 每 10 词 +1s、想 3–8s、打字 35–45 词/分（中文
+      # 60–90 字/分）±30%、发出前 1s 停「正在输入」——回复快慢随字数变、无两条到秒相同。
+      # profile 在场时下面的 min/max/adaptive 只作 custom 回落值；设置页「拟人程度」可改。
+      profile: natural
       min_sec: 8
       max_sec: 20
       adaptive: true

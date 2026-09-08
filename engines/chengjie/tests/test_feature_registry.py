@@ -103,8 +103,19 @@ def test_baseline_patch_only_fills_missing():
                           # intents=[] 从首日起不抽（第三次「出厂默认没进基线」）
                           "memory.extract.enabled",
                           "memory.extract.use_llm",
-                          "memory.extract.intents"}
+                          "memory.extract.intents",
+                          # 2026-09-08 O-1 D D-O4（#252 #254 FW78ZP）：拟人节奏出厂基线
+                          # ——三档 profile=natural / 入站连发合并 / 账号作息班表
+                          # 08:20–01:00（夜间 01–08 不回、08 后 0–40 min 补）
+                          "inbox.l2_autosend.deliver_delay.profile",
+                          "inbox.auto_draft.inbound_merge.enabled",
+                          "inbox.work_schedule.enabled",
+                          "inbox.work_schedule.default.start",
+                          "inbox.work_schedule.default.end"}
     assert patch["contacts.mode"] == "lite"
+    assert patch["inbox.l2_autosend.deliver_delay.profile"] == "natural"
+    assert patch["inbox.work_schedule.default.start"] == "08:20"
+    assert patch["inbox.work_schedule.default.end"] == "01:00"
     assert patch["memory.extract.intents"] == [
         "direct_chat", "small_talk", "greeting", "complaint"]
     # 列表型 baseline 必须是副本：改 patch 里的列表不得污染注册表声明值
@@ -125,10 +136,15 @@ def test_baseline_patch_only_fills_missing():
                                     "crisis_escalation": False},
                       "deep_persona": {"enabled": False}},
         "inbox": {"reply_style": {"bubbles": {"enabled": True}},
-                  "auto_draft": {"media_degrade_reply": True},
+                  "auto_draft": {"media_degrade_reply": True,
+                                 "inbound_merge": {"enabled": False}},
                   # 守卫一开一关＝显式表态的两种形态都不被覆盖
                   "outbound_dup_guard": {"enabled": True},
-                  "l2_autosend": {"fresh_guard": {"enabled": False}}},
+                  # O-1 D：显式 custom（旧模型）/ 班表显式关 + 自定班次 → 一字不动
+                  "l2_autosend": {"fresh_guard": {"enabled": False},
+                                  "deliver_delay": {"profile": "custom"}},
+                  "work_schedule": {"enabled": False,
+                                    "default": {"start": "09:00", "end": "23:00"}}},
         "avatar_voice": {"_hosted_auto": True},
         "voice_recognition": {"_hosted_auto": True},
         "vision": {"_hosted_auto": True},

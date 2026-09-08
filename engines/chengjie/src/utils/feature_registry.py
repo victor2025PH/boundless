@@ -259,6 +259,43 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=["direct_chat", "small_talk", "greeting", "complaint"], show=False,
         note="情景记忆可抽取意图白名单（D-O5 #201，WYNN22 干净包首日即死）：与服务器"
              "config.yaml 同值；缺席＝should_extract_intent 恒 False＝记忆永不新增"),
+    # ── 老板决策 D-O4（2026-09-08 O-1 D，FW78ZP #252 #254）：拟人节奏出厂基线 ──
+    # 事故：起草→发出恒 12–13s 与长度无关、全天秒回、零 composing。旧 min/max/adaptive
+    # 模型对 60 字英文只估 5.8s，被种子 min_sec=8 夹成常数。三档 profile 在场时 humanize
+    # 走「读 / 想 / 打字」分量模型，min/max 只作 custom 回落值。**存量语义**：块里已显式
+    # 写过 profile（含 custom）的一字不动；只有缺键的补 natural——正是那批「被夹成常数」
+    # 的机器要换的行为。设置页「拟人程度」四档随时可改（custom＝回旧模型）。
+    Feature(
+        key="inbox.l2_autosend.deliver_delay.profile", cls="A", slug="pacing_profile",
+        baseline="natural", show=False,
+        note="拟人节奏「拟人程度」出厂档 natural（D-O4 #252 #254）：读 3–6s + 每 10 词 +1s、"
+             "想 3–8s、打字 35–45 wpm / CJK 60–90 字/分 ±30%、发出前 1s 停 composing；"
+             "缺键＝旧 min/max 模型（FW78ZP 恒 12–13s 的来源）"),
+    # 客户连发合并等 8–15s 一次回：复用 inbound_merge（08-02 P0，内测种子已开、clean 种子
+    # 没有）——不做第二套；窗口 8–15s 随机由 window_max_sec 缺省 15 带。
+    Feature(
+        key="inbox.auto_draft.inbound_merge.enabled", cls="A", slug="inbound_merge",
+        baseline=True, show=False,
+        note="入站爆发合并（D-O4 #252 #254）：客户几秒内连发多条 → 等 8–15s 静默窗合并"
+             "只回一次；缺键＝每条各自拟稿各自回（同义双发 + 机关枪节奏）"),
+    # 夜间按账号时区 01–08 不回、08 后随机 0–40 min 补：复用 work_schedule（08-04，默认关）
+    # ——default.start 08:20 + edge_jitter_min 20（代码缺省）＝ 开班 08:00–08:40 确定性抖动；
+    # end 01:00 → 收班 00:40–01:20。timezone 空＝本机钟（桌面机就是运营者时区；账号可覆写）。
+    # 危机穿透 / 休息期照拟稿 / 复班补觉重拟（>2h 陈稿）都是该子系统既有语义。
+    # 存量机器已显式写过 work_schedule.enabled（含 false）的不动。
+    Feature(
+        key="inbox.work_schedule.enabled", cls="A", slug="work_schedule",
+        baseline=True, show=False,
+        note="账号作息班表总闸（D-O4 #252 #254）：夜间不自动回、复班补发；缺键＝7×24 秒回"
+             "（凌晨秒回一眼假 + 平台风控特征）"),
+    Feature(
+        key="inbox.work_schedule.default.start", cls="A", slug="work_schedule_start",
+        baseline="08:20", show=False,
+        note="默认开班 08:20（±20 min 确定性抖动 ⇒ 08:00–08:40 补发，D-O4「08 后随机 0–40 min」）"),
+    Feature(
+        key="inbox.work_schedule.default.end", cls="A", slug="work_schedule_end",
+        baseline="01:00", show=False,
+        note="默认收班 01:00（跨午夜班；±20 min 抖动 ⇒ 00:40–01:20 起静默，D-O4「01–08 不回」）"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     # 2026-09-06 老板决策 D-L3（#210，82BF95 付费客户的客户识破 AI）：拆条**出厂关**
     # ——2026-07-31 升 A 的「默认开安全」前提（真发仍逐条前端 opt-in）在 08 月三链
