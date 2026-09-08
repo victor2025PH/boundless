@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Optional  # noqa: F401
+from typing import Any, Dict, List, Optional, Tuple  # noqa: F401
 
 
 async def autosend_voice(assistant, platform, account_id, chat_key, text,
@@ -707,9 +707,12 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
             _res = await asyncio.wrap_future(_f)
         else:
             _res = await _coro()
-        return bool(
-            isinstance(_res, dict)
-            and _res.get("delivered"))
+        # #259 P-3：回执契约——把平台 message_id 一并交回图链（真发成功=回执，
+        # 不是 dispatch；``image_autosend._send_result`` 兼容旧 bool）。
+        if isinstance(_res, dict) and _res.get("delivered"):
+            return {"delivered": True,
+                    "message_id": str(_res.get("message_id") or "")}
+        return {"delivered": False}
 
     # Phase20 已发媒体日志合流（A/B 线同一份）：deliver 与 draft 同属 worker 线程
     # 串行流程，ContextStore（draft 已在读写）此处追加安全。发图成功 → 记
@@ -834,6 +837,238 @@ def _media_sent_recently(
     except Exception:
         return False
     return False
+
+
+# ── #259 P-3 媒体承诺执行型：识别 → 动作（B 线投递层）────────────────────────
+# 6SRA2B 实录三轮：14:49:20 真发一张 → 14:49:51 第二句照片配文体放行但无图 →
+# 客户「Where? I didn't get the other picture」被认出 lie_caught 却只给 hint →
+# 14:50 / 14:51 两句传输借口谎话。守卫「看见了却没拦」的根因是识别与动作脱节：
+# ① 模型的 [PHOTO] 请求失败后正文仍按「图已发」写；② 第二句配文体不在词表；
+# ③ 已发假声明对照 30 分钟账本被判「真话」（2 分钟前真发过一张）；④ lie_caught
+# 只注 hint 让模型自己编。下面四个函数把四处接成固定动作。
+
+def _conv_rows(assistant, platform: str, account_id: str, chat_key: str,
+               limit: int = 12) -> List[Dict[str, Any]]:
+    """该会话最近消息（inbox 镜像，按时间正序；取不到 → []）。"""
+    try:
+        from src.inbox.normalizer import conv_id as _cidf
+        _st = getattr(assistant, "inbox_store", None)
+        if _st is None:
+            return []
+        return list(_st.list_recent_messages(
+            _cidf(platform, account_id, chat_key), limit=limit) or [])
+    except Exception:
+        return []
+
+
+def _media_pending_state(rows: List[Dict[str, Any]], *, now: Optional[float] = None,
+                         window_sec: float = 24 * 3600.0) -> Dict[str, Any]:
+    """客户是否在**等一张图**：窗内 AI 出站含承诺/断言/offer（``promised_ts``）或
+    真发过媒体（``media_ts``）。C 段据此决定「重发上一张」还是「强制实话」，
+    也是 lie_caught 弱词（Where? / 哪呢）的采信闸。"""
+    from src.ai.outbound_promise_guard import (
+        detect_media_offer, detect_photo_caption_claim,
+    )
+    _now = float(now if now is not None else time.time())
+    out = {"promised_ts": 0.0, "media_ts": 0.0}
+    for m in rows or []:
+        if str(m.get("direction") or "in") != "out":
+            continue
+        try:
+            ts = float(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts <= 0 or (_now - ts) > window_sec:
+            continue
+        if str(m.get("media_type") or "") in ("image", "photo", "video"):
+            out["media_ts"] = max(out["media_ts"], ts)
+            continue
+        txt = str(m.get("text") or "")
+        if txt and (detect_photo_caption_claim(txt) or detect_media_offer(txt)):
+            out["promised_ts"] = max(out["promised_ts"], ts)
+    out["pending"] = bool(out["promised_ts"] or out["media_ts"])
+    return out
+
+
+def _tag_needs_human(assistant, platform: str, account_id: str, chat_key: str,
+                     reason: str) -> bool:
+    """转人工 + 「需人工」标签（与 O-1 C 客服腔守卫 / drafts.py review 同一入口）。"""
+    try:
+        from src.integrations.protocol_autoreply import tag_needs_human
+        return bool(tag_needs_human(
+            getattr(assistant, "inbox_store", None),
+            {"platform": platform, "account_id": account_id, "chat_key": chat_key},
+            reason=reason, source="system"))
+    except Exception:
+        assistant.logger.debug("[media_complaint] tag_needs_human 失败", exc_info=True)
+        return False
+
+
+async def _lie_caught_fixed_action(
+    assistant, platform: str, account_id: str, chat_key: str, text: str,
+) -> Optional[Dict[str, Any]]:
+    """C 段：客户最新入站是 ``lie_caught``（没收到 / 哪呢 / no picture）→ **固定动作**，
+    不再给 hint 让模型编：
+
+    ① 本会话最近一次真发的媒体可重发（回执账本 / 相册投放账本）→ 重发同一张 +
+       模板短话 → ``{"action": "resend", "delivered": True}``；
+    ② 从未真发过 → 强制实话模板替换正文（禁「加载慢 / 再试 / 网络」）→
+       ``{"action": "honest", "text": <模板>}``；
+    ③ 连续第二次 lie_caught → 转人工 + 标签，本条不发 → ``{"action": "handoff"}``。
+    不适用（最新入站不是 lie_caught / 客户并未在等图）→ None，走正常链。
+    """
+    from src.ai.companion_selfie import detect_media_complaint
+    rows = _conv_rows(assistant, platform, account_id, chat_key, limit=16)
+    ins = [m for m in rows if str(m.get("direction") or "in") == "in"]
+    if not ins:
+        return None
+    last_in = ins[-1]
+    if str(last_in.get("media_type") or "") in ("image", "photo"):
+        return None
+    st = _media_pending_state(rows)
+    if not st["pending"]:
+        return None
+    kind = detect_media_complaint(str(last_in.get("text") or ""), media_pending=True)
+    if kind != "lie_caught":
+        return None
+    from src.ai.outbound_promise_guard import (
+        lie_caught_honest_line, lie_caught_resend_caption,
+    )
+    # ③ 复诉：上一条入站也是 lie_caught（客户连说两次没收到）→ 人来接
+    prev_in = ins[-2] if len(ins) >= 2 else {}
+    repeat = bool(prev_in) and detect_media_complaint(
+        str(prev_in.get("text") or ""), media_pending=True) == "lie_caught"
+    if repeat:
+        _tag_needs_human(assistant, platform, account_id, chat_key,
+                         reason="media_lie_caught_repeat")
+        assistant.logger.warning(
+            "[media_complaint] kind=lie_caught action=handoff media_id=%s "
+            "platform=%s acct=%s text=%r", "-", platform, account_id,
+            str(last_in.get("text") or "")[:60])
+        return {"action": "handoff"}
+    # ① 真发过 → 重发上一张（真发＝回执，caption 是模板不经 LLM）
+    from src.inbox.image_autosend import resolve_last_sent_media
+    ck = f"{platform}:{account_id}:{chat_key}"
+    media = resolve_last_sent_media(ck) if st["media_ts"] else {}
+    if media.get("path") or media.get("url"):
+        cap = lie_caught_resend_caption(text)
+        try:
+            from src.integrations.account_orchestrator import get_orchestrator as _go
+            _orch = _go(assistant.config.config or {})
+
+            async def _coro():
+                return await _orch.send_media(
+                    platform, account_id, chat_key,
+                    media_path=str(media.get("path") or ""),
+                    media_url=str(media.get("url") or ""),
+                    media_type=str(media.get("media_type") or "image"),
+                    caption=cap, inbox_text=("[图片] " + cap).strip())
+
+            _wl = getattr(assistant, "_web_loop", None)
+            if _wl is not None and _wl.is_running():
+                _res = await asyncio.wrap_future(
+                    asyncio.run_coroutine_threadsafe(_coro(), _wl))
+            else:
+                _res = await _coro()
+        except Exception:
+            assistant.logger.debug("[media_complaint] 重发上一张异常", exc_info=True)
+            _res = None
+        if isinstance(_res, dict) and _res.get("delivered"):
+            from src.inbox.image_autosend import note_media_receipt
+            note_media_receipt(
+                ck, media_id=str(media.get("media_id") or ""),
+                path=str(media.get("path") or ""), url=str(media.get("url") or ""),
+                media_type=str(media.get("media_type") or "image"),
+                mid=str(_res.get("message_id") or ""))
+            assistant.logger.info(
+                "[media_complaint] kind=lie_caught action=resend media_id=%s mid=%s "
+                "platform=%s acct=%s", media.get("media_id") or "-",
+                _res.get("message_id") or "-", platform, account_id)
+            return {"action": "resend", "delivered": True}
+        assistant.logger.info(
+            "[media_complaint] kind=lie_caught action=resend_failed media_id=%s → honest "
+            "platform=%s acct=%s", media.get("media_id") or "-", platform, account_id)
+    # ② 从未真发 / 重发失败 → 强制实话
+    honest = lie_caught_honest_line(text)
+    assistant.logger.info(
+        "[media_complaint] kind=lie_caught action=honest media_id=%s platform=%s acct=%s",
+        media.get("media_id") or "-", platform, account_id)
+    return {"action": "honest", "text": honest}
+
+
+async def _media_promise_action(
+    assistant, text: str, kind: str, *, media_context: bool = False,
+    sent_claim: bool = False, photos_disabled: bool = False,
+    photo_request_failed: bool = False,
+) -> Tuple[str, str]:
+    """B 段：承诺 / 断言句本轮无已回执 send_media → ``strip → rewrite → review``。
+
+    返回 ``(text, action)``：``strip``＝正则剥句后仍有干净正文；``rewrite``＝剥空后
+    LLM 重写一次且不再命中；``review``＝仍命中 / 无 LLM——调用方转人审，本条不发。
+    ``photos_disabled``（D 段）＝人设无发图能力 / 无图可发：剥空不走「卖关子」，
+    直接换**诚实拒绝**模板（action 仍记 strip，模板已过检测器）。
+    ``photo_request_failed``（A 段）＝模型的 send_photo/[PHOTO] 请求没能真发：正文
+    整体是按「图已发」写的配文，词表未必认得出 → 先把「无图可发」回喂模型重生一句
+    不含照片措辞的回复；LLM 不可用 → 强制媒体语境剥句 → 诚实模板。
+    """
+    from src.ai.outbound_promise_guard import (
+        build_photo_unsent_rewrite_instruction, build_promise_rewrite_instruction,
+        deflection_line, detect_media_claim, detect_media_promise,
+        detect_sent_claim, honest_no_photo_line, strip_media_claims,
+        strip_media_promises, strip_sent_claims,
+    )
+    if photo_request_failed:
+        media_context = True
+
+    def _clean(t: str) -> bool:
+        return bool(t.strip()) and not (
+            detect_media_promise(t)
+            or detect_media_claim(t, media_context=media_context)
+            or ((sent_claim or media_context) and detect_sent_claim(t)))
+
+    if photo_request_failed:
+        _ai0 = getattr(assistant, "ai_client", None)
+        if _ai0 is not None:
+            try:
+                out0 = str(await _ai0.chat(
+                    build_photo_unsent_rewrite_instruction(text)) or "")
+                out0 = out0.strip().strip('"“”「」').strip()
+                if (out0 and len(out0) <= max(200, len(str(text or "")) * 3)
+                        and _clean(out0)):
+                    return out0, "rewrite"
+            except Exception:
+                assistant.logger.debug(
+                    "[media-bind] 无图回喂重生失败，回落剥句", exc_info=True)
+        s0 = strip_sent_claims(strip_media_claims(
+            strip_media_promises(text), media_context=True))
+        if s0 != str(text or "") and _clean(s0):
+            return s0, "strip"
+        return honest_no_photo_line(text), "strip"
+
+    stripped = strip_media_promises(text)
+    stripped = strip_media_claims(stripped, media_context=media_context)
+    if sent_claim or media_context:
+        stripped = strip_sent_claims(stripped)
+    if _clean(stripped):
+        return stripped, "strip"
+    if photos_disabled and kind == "image":
+        return honest_no_photo_line(text), "strip"
+    if sent_claim:
+        # 客户刚说「没收到」：剥空后如实说「没发出去」，不卖关子（#171 口径）
+        return deflection_line(text, kind, sent_claim=True), "strip"
+    _ai = getattr(assistant, "ai_client", None)
+    if _ai is not None:
+        try:
+            out = str(await _ai.chat(build_promise_rewrite_instruction(
+                text, kind, sent_claim=sent_claim)) or "")
+            out = out.strip().strip('"“”「」').strip()
+            if (out and len(out) <= max(200, len(str(text or "")) * 3)
+                    and _clean(out)):
+                return out, "rewrite"
+        except Exception:
+            assistant.logger.debug(
+                "[media_promise] LLM 重写失败", exc_info=True)
+    return "", "review"
 
 
 async def autosend_bazi_kline(assistant, platform, account_id, chat_key, text) -> bool:
@@ -1429,17 +1664,64 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend song] 失败，回落图/语音/文本", exc_info=True)
+            # #259 P-3 C 段：客户最新入站在说「没收到」（lie_caught）→ 固定动作
+            # （重发上一张 / 强制实话 / 复诉转人工），不再让模型带 hint 自己编——
+            # 6SRA2B 14:50「maybe it took a moment to load」/ 14:51「let me try
+            # sending it again」两句谎话都是 hint 式纠偏下编出来的。守卫总闸同
+            # media_promise_guard.enabled；lie_caught_action=false 可单独回旧行为。
+            _pg0 = {}
+            _lie_honest = False
+            try:
+                _pg0 = (((_assistant_ref.config.config or {}).get(
+                    "companion", {}) or {}).get("media_promise_guard", {}) or {})
+                if _pg0.get("enabled", True) and _pg0.get("lie_caught_action", True):
+                    _lie = await _lie_caught_fixed_action(
+                        _assistant_ref, platform, account_id, chat_key, text)
+                    if _lie and _lie.get("action") == "resend":
+                        return {"ok": True, "delivered_as": "image"}
+                    if _lie and _lie.get("action") == "handoff":
+                        return {"ok": True,
+                                "delivered_as": "suppressed_media_complaint_handoff"}
+                    if _lie and _lie.get("action") == "honest":
+                        text = str(_lie.get("text") or "")
+                        original_text = None
+                        _photo_directive = None
+                        _lie_honest = True
+            except Exception:
+                _assistant_ref.logger.debug(
+                    "[media_complaint] lie_caught 固定动作异常（放行正常链）", exc_info=True)
             # 全自动「按需发图」优先（gated）：LLM 指令直通生成，或对方在要照片时
             # 关键词链出图；成功即作为图片发出、跳过语音/文本；失败 → 继续。
+            # #259 P-3 A 段（文字绑动作）：模型的 [PHOTO] 是**请求**不是事实——
+            # 真发（回执）成功配文才随图出；请求失败则正文里「刚拍的 / here it is」
+            # 全是空头，强制进承诺链改写（不再依赖词表能不能认出那句配文）。
+            _img_sent = False
+            _directive_unfulfilled = False
             try:
-                if await autosend_image(
+                if not _lie_honest and await autosend_image(
                     _assistant_ref, platform, account_id, chat_key, text,
                     directive_override=_photo_directive,
                 ):
-                    return {"ok": True, "delivered_as": "image"}
+                    _img_sent = True
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend image] 失败，回落语音/文本", exc_info=True)
+            if _photo_directive is not None or _img_sent:
+                try:
+                    from src.inbox.image_autosend import last_media_receipt as _lmr
+                    _rc_mid = str((_lmr(f"{platform}:{account_id}:{chat_key}") or {}).get(
+                        "mid") or "") if _img_sent else ""
+                except Exception:
+                    _rc_mid = ""
+                _assistant_ref.logger.info(
+                    "[media-bind] conv=%s:%s:%s requested=%d sent=%d mid=%s caption_allowed=%d",
+                    platform, account_id, chat_key,
+                    1 if _photo_directive is not None else 0, 1 if _img_sent else 0,
+                    _rc_mid or "-", 1 if _img_sent else 0)
+            if _img_sent:
+                return {"ok": True, "delivered_as": "image"}
+            if _photo_directive is not None:
+                _directive_unfulfilled = True
             # 出站媒体承诺守卫（companion.media_promise_guard，默认开）：
             # 发图判定看的是**客户入站文本**，而 LLM 草稿却可能自己承诺「等我拍/
             # 发你一张」——两边从不核对（实录事故：客户质问"你快拍啊是不是骗我"）。
@@ -1449,6 +1731,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             _promised = ""
             _mctx = False
             _sent_claim = False
+            _bind_reason = ""
             _pg = {}
             try:
                 _pg = (((_assistant_ref.config.config or {}).get(
@@ -1542,6 +1825,38 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                                     "[promise_guard] 出站含「已发」假声明（%s）"
                                     "且近窗无媒体真发 → 走兑现/撤回 platform=%s "
                                     "acct=%s", _sck, platform, account_id)
+                    # #259 P-3 A 段：[PHOTO] 请求失败 → 正文按「图已发」写的措辞
+                    # 一律视作未兑现承诺（不依赖词表能否认出那句配文）。
+                    if not _promised and _directive_unfulfilled:
+                        _promised = "image"
+                        _bind_reason = "directive_unfulfilled"
+                    # #259 P-3 E 段：同会话 5 分钟内刚真发过一张、本轮又是一句
+                    # 照片配文体（「Just took this one for you—」）却没图 → 必须再
+                    # 附图（下方兑现链），否则改写。wants_media 语境闸在图发出后已
+                    # 闭合，这里强制媒体语境判（14:49:51 放行的根因）。
+                    if not _promised and not _lie_honest:
+                        try:
+                            _e_raw = _pg.get("second_caption_window_sec", 300)
+                            _e_win = float(300 if _e_raw is None else _e_raw)
+                        except (TypeError, ValueError):
+                            _e_win = 300.0
+                        if _e_win > 0:
+                            _e_kind = ""
+                            for _t in (str(original_text or ""), str(text or "")):
+                                _e_kind = _dmp(_t) or _dmc(_t, media_context=True)
+                                if _e_kind:
+                                    break
+                            if _e_kind == "image" and _media_sent_recently(
+                                    _assistant_ref, platform, account_id, chat_key,
+                                    kind="image", window_sec=_e_win):
+                                _promised = "image"
+                                _mctx = True
+                                _bind_reason = "second_caption_in_window"
+                                _assistant_ref.logger.info(
+                                    "[media_promise] conv=%s:%s:%s claims_send=1 "
+                                    "attached=0 reason=second_caption_in_window "
+                                    "window=%.0fs → 必须附图否则改写",
+                                    platform, account_id, chat_key, _e_win)
             except Exception:
                 _promised = ""
             if _promised == "image":
@@ -1551,9 +1866,28 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                 )
                 if not _sent_claim:
                     _rpe("detected")
-                if _pg.get("fulfill", True):
+                # #259 P-3 D 段：人设无发图能力（capabilities.photos=false）→ 承诺句
+                # 剥空时换**诚实拒绝**模板（非「卖关子」）。兑现仍照打图链（图链内部
+                # 同一 SSOT 闸会拒；这里只决定改写口径，判不出人设按「关」）。
+                _photos_off = False
+                try:
+                    from src.ai.persona_voice import (
+                        resolve_effective_persona_id as _repi_p3,
+                    )
+                    from src.companion.photo_capability import (
+                        persona_photos_enabled_by_id as _ppe_p3,
+                    )
+                    _pid_p3 = _repi_p3(
+                        _assistant_ref.config.config or {}, platform, account_id,
+                        str(chat_key))
+                    _photos_off = not _ppe_p3(_pid_p3)
+                except Exception:
+                    _photos_off = False
+                if _pg.get("fulfill", True) \
+                        and _bind_reason != "directive_unfulfilled":
                     # P0 一致性：承诺句点名了场景（「拍张海边的发你」）→ 兑现
                     # 必须贴场景（相册场景类硬匹配/生成带场景），随机人像不算兑现。
+                    # directive_unfulfilled：图链刚按模型请求试过一次失败，不复烧。
                     _pscene = ""
                     try:
                         from src.ai.outbound_promise_guard import (
@@ -1575,20 +1909,38 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                                 "图片投递 platform=%s acct=%s",
                                 "「已发」假声明" if _sent_claim else "承诺",
                                 platform, account_id)
+                            _assistant_ref.logger.info(
+                                "[media_promise] conv=%s:%s:%s claims_send=1 "
+                                "attached=1 action=fulfill reason=%s",
+                                platform, account_id, chat_key, _bind_reason or "-")
                             return {"ok": True, "delivered_as": "image"}
                     except Exception:
                         _assistant_ref.logger.debug(
                             "[promise_guard] 兑现发图失败", exc_info=True)
-                text = await _depromise_autosend_text(
+                # B 段：无已回执 send_media → strip → rewrite → review
+                _new_text, _pact = await _media_promise_action(
                     _assistant_ref, text, "image", media_context=_mctx,
-                    sent_claim=_sent_claim)
-                # 原文含未兑现承诺：语音/视频分支改念撤回后的文本（防克隆声念出谎话）
-                original_text = None
+                    sent_claim=_sent_claim, photos_disabled=_photos_off,
+                    photo_request_failed=(_bind_reason == "directive_unfulfilled"))
                 (_rsce if _sent_claim else _rpe)("retracted")
                 _assistant_ref.logger.info(
-                    "[promise_guard] 发图%s无法兑现 → 已撤回改写文本 "
+                    "[media_promise] conv=%s:%s:%s claims_send=1 attached=0 action=%s "
+                    "reason=%s photos=%s sent_claim=%s",
+                    platform, account_id, chat_key, _pact, _bind_reason or "-",
+                    "off" if _photos_off else "on", _sent_claim)
+                if _pact == "review" or not str(_new_text or "").strip():
+                    _tag_needs_human(
+                        _assistant_ref, platform, account_id, chat_key,
+                        reason="media_promise_unfulfilled")
+                    return {"ok": True,
+                            "delivered_as": "suppressed_media_promise_review"}
+                text = _new_text
+                # 原文含未兑现承诺：语音/视频分支改念撤回后的文本（防克隆声念出谎话）
+                original_text = None
+                _assistant_ref.logger.info(
+                    "[promise_guard] 发图%s无法兑现 → 已撤回改写文本(%s) "
                     "platform=%s acct=%s",
-                    "「已发」假声明" if _sent_claim else "承诺",
+                    "「已发」假声明" if _sent_claim else "承诺", _pact,
                     platform, account_id)
             elif _promised == "video_call":
                 # A2（2026-07-22）：视频通话承诺没有兑现路径（无此能力），

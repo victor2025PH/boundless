@@ -657,6 +657,80 @@ def note_media_sent(conv_key: str, media_id: str) -> None:
             _LAST_SENT.popitem(last=False)
 
 
+# ── #259 P-3 真发回执账本（每会话最近一次 send_media 的平台回执）──────────────
+# 「真发成功」= 平台回执（``delivered=True`` + message_id，M-2 D 口径），不是
+# dispatch。记 {media_id, path, url, media_type, mid, ts}：C 段 lie_caught 固定动作
+# 「重发上一张」直接拿 path/url 重发同一文件（含生成图——它没有相册 id，旧账本
+# ``_LAST_SENT`` 只记相册条目）；E 段「5 分钟内第二句配文体必附图」按 ts 判。
+_LAST_RECEIPT: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+
+
+def _send_result(res: Any) -> Tuple[bool, str]:
+    """``send_fn`` 返回值归一：bool（旧契约）或 ``{"delivered", "message_id"}``
+    （回执契约）→ ``(delivered, mid)``。"""
+    if isinstance(res, dict):
+        return bool(res.get("delivered")), str(res.get("message_id") or "")
+    return bool(res), ""
+
+
+def note_media_receipt(
+    conv_key: str, *, media_id: str = "", path: str = "", url: str = "",
+    media_type: str = "image", mid: str = "", now: Optional[float] = None,
+) -> None:
+    if not conv_key or not (path or url):
+        return
+    rec = {
+        "media_id": str(media_id or ""), "path": str(path or ""),
+        "url": str(url or ""), "media_type": str(media_type or "image"),
+        "mid": str(mid or ""),
+        "ts": float(now if now is not None else time.time()),
+    }
+    with _LAST_SENT_LOCK:
+        _LAST_RECEIPT[str(conv_key)] = rec
+        _LAST_RECEIPT.move_to_end(str(conv_key))
+        while len(_LAST_RECEIPT) > _LAST_SENT_CAP:
+            _LAST_RECEIPT.popitem(last=False)
+
+
+def last_media_receipt(conv_key: str) -> Dict[str, Any]:
+    with _LAST_SENT_LOCK:
+        return dict(_LAST_RECEIPT.get(str(conv_key or ""), {}) or {})
+
+
+def resolve_last_sent_media(conv_key: str, persona_id: str = "") -> Dict[str, Any]:
+    """该会话最近一次**真发**的媒体（可重发的文件）：进程内回执账本优先，跨重启
+    回落相册投放账本（``persona_media_sends`` 最新一条 → 条目 file_path/url）。
+    查不到 → 空 dict（调用方走「从未真发过」分支）。"""
+    if not str(conv_key or "").strip():
+        return {}
+    rec = last_media_receipt(conv_key)
+    if rec.get("path") or rec.get("url"):
+        return rec
+    try:
+        from src.companion.persona_media_store import get_persona_media_store
+        st = get_persona_media_store()
+        if st is None:
+            return {}
+        items = list((st.sent_history(str(conv_key or "")) or {}).get("items") or [])
+        if not items:
+            return {}
+        latest = max(items, key=lambda it: float((it or {}).get("ts") or 0))
+        row = st.get(str(latest.get("id") or "")) or {}
+        if not row:
+            return {}
+        mt = str(row.get("media_type") or "photo")
+        return {
+            "media_id": str(row.get("id") or ""),
+            "path": str(row.get("file_path") or ""),
+            "url": str(row.get("url") or ""),
+            "media_type": "video" if mt == "video" else "image",
+            "mid": "", "ts": float(latest.get("ts") or 0),
+        }
+    except Exception:
+        logger.debug("[image_autosend] resolve_last_sent_media 失败", exc_info=True)
+        return {}
+
+
 def resolve_consistency_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     """``companion.selfie.consistency`` 一致性护栏配置（P0，默认开）。
 
@@ -1079,13 +1153,15 @@ async def run_autosend_image(
             cap = _fixed_caption(scfg, kind, _fresh, lang, chat_key=ck)
             cap_src = "fixed" if cap else ""
         cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
+        _mid = ""
         try:
-            ok = bool(await send_fn(local, url, "image", cap,
-                                    ("[图片] " + (cap or "")).strip()))
+            ok, _mid = _send_result(await send_fn(
+                local, url, "image", cap, ("[图片] " + (cap or "")).strip()))
         except Exception:
             logger.debug("[image_autosend] 指令图投递异常", exc_info=True)
             ok = False
         if ok:
+            note_media_receipt(ck, path=local, url=url, media_type="image", mid=_mid)
             if cap_src:
                 record_caption(cap_src, cap)
             if cap_src == "fixed":
@@ -1097,9 +1173,9 @@ async def run_autosend_image(
                              _d["scene"] if kind == KIND_SELFIE else "")),
                          str(sinfo.get("series") or ""))
             logger.info(
-                "[autosend image] 已发图(LLM指令) platform=%s acct=%s kind=%s scene=%r src=%s",
+                "[autosend image] 已发图(LLM指令) platform=%s acct=%s kind=%s scene=%r src=%s mid=%s",
                 platform, account_id, kind, _d["scene"][:120],
-                sinfo.get("provider") or "?")
+                sinfo.get("provider") or "?", _mid or "-")
         else:
             record_image_fallback("directive_deliver_failed")
         return ok
@@ -1223,12 +1299,16 @@ async def run_autosend_image(
             # skill_manager._try_send_selfie_media 同口径），"photo" 裸传会让
             # WhatsApp 边车按 document 发出（对方看到点不开的「文档」）。
             _send_mt = "video" if mt == "video" else "image"
+            _mid = ""
             try:
-                ok = bool(await send_fn(local, url, _send_mt, cap, (tag + (cap or "")).strip()))
+                ok, _mid = _send_result(await send_fn(
+                    local, url, _send_mt, cap, (tag + (cap or "")).strip()))
             except Exception:
                 logger.debug("[image_autosend] 注册媒体投递异常", exc_info=True)
                 ok = False
             if ok:
+                note_media_receipt(ck, media_id=str(row.get("id") or ""),
+                                   path=local, url=url, media_type=_send_mt, mid=_mid)
                 if cap_src:
                     record_caption(cap_src, cap)
                 if cap_src == "fixed":
@@ -1255,8 +1335,8 @@ async def run_autosend_image(
                 # 相册现成图：场景取条目 scene:* 标签（配文层已算过，见上）
                 _notify_sent((tag + (cap or "")).strip(), _row_scene, _row_series)
                 logger.info(
-                    "[autosend image] 已发相册媒体 platform=%s acct=%s type=%s id=%s",
-                    platform, account_id, mt, row.get("id"))
+                    "[autosend image] 已发相册媒体 platform=%s acct=%s type=%s id=%s mid=%s",
+                    platform, account_id, mt, row.get("id"), _mid or "-")
                 return True
             record_image_fallback("registry_deliver_failed")
 
@@ -1358,12 +1438,15 @@ async def run_autosend_image(
         cap = str(ai_text or "")
         cap_src = "draft" if cap else ""
     cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
+    _mid = ""
     try:
-        ok = bool(await send_fn(local, url, "image", cap, ("[图片] " + (cap or "")).strip()))
+        ok, _mid = _send_result(await send_fn(
+            local, url, "image", cap, ("[图片] " + (cap or "")).strip()))
     except Exception:
         logger.debug("[image_autosend] 生成图投递异常", exc_info=True)
         ok = False
     if ok:
+        note_media_receipt(ck, path=local, url=url, media_type="image", mid=_mid)
         if cap_src:
             record_caption(cap_src, cap)
         if cap_src == "fixed":
@@ -1373,8 +1456,8 @@ async def run_autosend_image(
         _notify_sent("[图片] " + (cap or ""), _scene,
                      str(sinfo.get("series") or ""))
         logger.info(
-            "[autosend image] 已发图(生成) platform=%s acct=%s kind=%s",
-            platform, account_id, kind)
+            "[autosend image] 已发图(生成) platform=%s acct=%s kind=%s mid=%s",
+            platform, account_id, kind, _mid or "-")
         # 自动定妆：真出图后端生成的自拍入册，下次同类请求秒发同一张（脸恒定、零 GPU）。
         # album 后端不入册（图本来就来自相册，登记是循环）。入册后记会话避重，
         # 使下一次请求轮换到旧照或触发下一轮扩容。
@@ -1504,6 +1587,7 @@ __all__ = [
     "pick_registered_media", "media_caption", "run_autosend_image",
     "run_autosend_kline",
     "last_media_sent", "note_media_sent",
+    "note_media_receipt", "last_media_receipt", "resolve_last_sent_media",
     "record_image_sent", "record_image_fallback", "metrics_snapshot",
     "record_promise_event", "record_sent_claim_event",
     "image_gen_inflight",
