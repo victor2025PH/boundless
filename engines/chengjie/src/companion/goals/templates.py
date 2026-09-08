@@ -42,6 +42,22 @@ CARE_PAIRS = (
 )
 CARE_INTENTS = tuple(zh for zh, _ in CARE_PAIRS)
 
+# O-3 B（#236）：摸底类目标今日意图的「摸底子句」分隔（planner.with_probe 拼、
+# intent_en_for 拆）——「<意图>；今天至少自然问一个：<未填槽问法>」。
+PROBE_CLAUSE_SEP = "；今天至少自然问一个："
+PROBE_CLAUSE_SEP_EN = "; ask at least one thing naturally today: "
+
+
+def strip_probe_clause(intent: str) -> str:
+    """去掉今日意图尾部的摸底子句（注入链按**本轮**缺口重新合流，一轮只带一个问法；
+    计划层的子句留在卡片 today.intent 上给人看）。"""
+    it = str(intent or "")
+    if PROBE_CLAUSE_SEP in it:
+        return it.split(PROBE_CLAUSE_SEP, 1)[0].rstrip()
+    if it.startswith("今天至少自然问一个："):
+        return ""
+    return it
+
 # 漏斗阶段序（relationship_stage 结算用；与 contacts.Journey 阶段名对齐，全小写比较）
 STAGE_ORDER = (
     "initial", "contacted", "engaged", "qualified",
@@ -445,11 +461,14 @@ TEMPLATES: Dict[str, Dict[str, Any]] = {
         # 转向与主动桥唯一携带的载荷，缺口不进意图就到不了那两处
         "gap_in_intent": True,
         "phase_days": (2, 5, 8, 10),
+        # O-3 B（#236，HM7XBA）：里程碑 0 此前是「先暖场 / 不急着问」——与同块里的
+        # 「本轮顺势了解：坐标」自相矛盾，模型自然选软的那句，3 天目标 1/3 时间零摸底。
+        # 现在暖场段也带「聊到相关处顺口问一个」，planner 再钉具体槽位。
         "intents": {
-            0: (("先把互动热起来：顺着TA的话题聊，让TA觉得跟你聊天轻松不设防",
-                 "Warm the chat up first: follow their topics so talking to you feels easy and unguarded"),
-                ("从今天的日常小事自然切入，先建立「聊得来」的感觉，不急着问",
-                 "Ease in with today's small things and build rapport first — no rush to ask questions")),
+            0: (("先把互动热起来：顺着TA的话题聊，聊到相关处顺口问一个你想了解的，问完回到闲聊",
+                 "Warm the chat up on their topics; when it fits, slip in one thing you want to learn, then drop back to small talk"),
+                ("从今天的日常小事自然切入，先聊得来，再顺着话头轻轻问一个你想了解的",
+                 "Ease in with today's small things, get the rapport going, then gently ask one thing you want to learn when the topic leads there")),
             1: (("顺着当下话题自然带出你想了解的那件事，问完就回到闲聊，绝不连环追问",
                  "Let the current topic lead into the one thing you want to learn, then drop back to small talk — never chain questions"),
                 ("用「分享自己→顺口反问」换信息：先说你自己的情况，再轻轻问TA",
@@ -717,6 +736,16 @@ def intent_en_for(
     target = str(intent_zh or "").strip()
     if not target:
         return ""
+    # O-3 B：摸底子句「；今天至少自然问一个：<问法>」——基础意图照旧精确匹配，
+    # 问法按槽位登记表 ask_zh → ask_en 反查；任一边匹配不到 → ""（回落中文）。
+    if PROBE_CLAUSE_SEP in target:
+        base, _, ask_zh = target.partition(PROBE_CLAUSE_SEP)
+        base_en = intent_en_for(template, params, base) if base.strip() else ""
+        ask_en = _slot_ask_en(ask_zh.strip())
+        if (base.strip() and not base_en) or not ask_en:
+            return ""
+        return (f"{base_en}{PROBE_CLAUSE_SEP_EN}{ask_en}" if base_en
+                else f"Ask at least one thing naturally today: {ask_en}")
     p = params or {}
     pools: List[Any] = list(((template or {}).get("intents") or {}).values())
     pools.extend(((template or {}).get("intents_sprint") or {}).values())
@@ -728,6 +757,25 @@ def intent_en_for(
                 continue
             if _format_intent(_intent_zh(entry), p) == target:
                 return _format_intent(en_raw, p, en=True)
+    return ""
+
+
+def _slot_ask_en(ask_zh: str) -> str:
+    """槽位中文问法 → 英文问法（profile_slots 登记表 + 自定义槽；敏感槽约束后缀剥离）。"""
+    try:
+        from src.companion.goals.profile_slots import (
+            ALL_SLOTS,
+            SENSITIVE_ASK_DISCIPLINE,
+            custom_slots,
+        )
+    except Exception:
+        return ""
+    want = str(ask_zh or "").replace(f"（{SENSITIVE_ASK_DISCIPLINE}）", "").strip()
+    if not want:
+        return ""
+    for s in tuple(ALL_SLOTS) + tuple(custom_slots()):
+        if str(s.get("ask_zh") or "").strip() == want:
+            return str(s.get("ask_en") or s.get("label_en") or "").strip()
     return ""
 
 
@@ -807,6 +855,9 @@ __all__ = [
     "CLIENT_HIDDEN_KINDS",
     "COMPANION_HIDDEN_KINDS",
     "GOAL_STATUSES",
+    "PROBE_CLAUSE_SEP",
+    "PROBE_CLAUSE_SEP_EN",
+    "strip_probe_clause",
     "PUSH_LEVELS",
     "STAGE_ORDER",
     "TEMPLATES",

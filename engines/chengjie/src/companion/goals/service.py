@@ -17,7 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.companion.goals import store as goal_store_mod
 from src.companion.goals.context_block import goal_view_block
 from src.companion.goals.ledger import settle_goal
-from src.companion.goals.planner import effective_rejects, plan_beat
+from src.companion.goals.planner import (
+    customer_active,
+    effective_rejects,
+    plan_beat,
+)
 from src.companion.goals.signals import collect_signals
 from src.companion.goals.stats import get_goal_stats
 from src.companion.goals.store import GoalStore, get_goal_store
@@ -26,6 +30,7 @@ from src.companion.goals.templates import (
     intent_en_for,
     milestone_label,
     pick_sprint_intent,
+    strip_probe_clause,
 )
 
 logger = logging.getLogger("src.companion.goals.service")
@@ -568,12 +573,17 @@ def refresh_goal(
                     "halt_after", pl.get("halt_after_unanswered", 4) or 0))
             except (TypeError, ValueError):
                 halt = 4
+            # O-3 B（#236）：摸底目标把「今天至少问一个：<未填槽>」钉进计划（第 1 天也钉）
+            probe_asks = discovery_probe_asks(store, template, goal)
+            active = customer_active(signals.extras.get("inbound_30m", 0))
             beat = plan_beat(
                 template=template, goal=goal, signals=signals, day=day,
                 engaged_since_inbound=engaged,
                 backoff_after=backoff,
                 halt_after=halt,
                 recent_rejects=rejects,
+                probe_asks=probe_asks,
+                active=active,
             )
             if beat is None or beat.get("hold"):
                 reason = str((beat or {}).get("hold") or "no_intent")
@@ -582,6 +592,16 @@ def refresh_goal(
                 return out
             push = str(beat.get("push_level") or "soft")
             intent = str(beat.get("intent") or "")
+            if template.get("gap_in_intent"):
+                _start = float(goal.get("start_ts") or goal.get("created_at") or n)
+                logger.info(
+                    "[goal-plan] goal=%s conv=%s day=%d probes=%d slots=%s active=%s "
+                    "inbound_30m=%s advanced=%s push=%s",
+                    gid[:12], str(goal.get("conversation_id") or ""),
+                    int((n - _start) // _DAY) + 1, int(beat.get("probes") or 0),
+                    list(beat.get("probe_slots") or []), active,
+                    signals.extras.get("inbound_30m", 0),
+                    bool(beat.get("advanced")), push)
             if sprint:
                 push = sprint_push(
                     pace, n_existing, push,
@@ -1063,7 +1083,10 @@ def merged_beat_intent(intent: str, gap: str) -> str:
     开场/主动触达就只剩泛化模式没有具体方向。合流后独立缺口行由调用方
     取消（防同块重复）。gap 空 → 原样返回。"""
     g = str(gap or "").strip()
-    it = str(intent or "").strip()
+    # O-3 B：planner 把「今天至少自然问一个：<今日目标槽>」钉在今日意图上（卡片给人看）；
+    # 注入链按**本轮**缺口（逐轮轮换 / 线索词命中）重新合流——先剥掉计划子句，一轮只带
+    # 一个问法，不出现「今天问坐标」「本轮问职业」两句打架。
+    it = strip_probe_clause(str(intent or "").strip())
     if not g:
         return it
     tail = f"本轮顺势了解：{g}（像朋友闲聊，不要像查户口，一轮只问一个）"
@@ -1097,6 +1120,37 @@ def discovery_gap_for_goal(
     except Exception:
         logger.debug("discovery_gap_for_goal failed", exc_info=True)
         return ""
+
+
+def discovery_probe_asks(
+    store: Any, template: Dict[str, Any], goal: Dict[str, Any],
+    *, lang: str = "zh",
+) -> List[str]:
+    """摸底类目标当前**全部**未填勾选槽位的问法（勾选序＝优先级；已问过仍空的排后）。
+    planner 据此把「今天至少自然问一个：<第一个>」钉进今日意图（O-3 B #236）。
+    非摸底 / 无勾选 / 全填 / 异常 → []。"""
+    try:
+        if not template.get("gap_in_intent"):
+            return []
+        from src.companion.goals.profile_slots import (
+            asked_slot_keys,
+            inject_ask,
+            missing_slots,
+            parse_selected_slots,
+        )
+        sel = parse_selected_slots((goal.get("params") or {}).get("slots"))
+        if not sel:
+            return []
+        prof = store.get_customer_profile(
+            str(goal.get("platform") or ""), str(goal.get("chat_key") or ""))
+        fields = dict((prof or {}).get("fields") or {})
+        asked = asked_slot_keys(goal.get("params") or {})
+        miss = missing_slots(fields, include=sel, limit=32, exclude=asked)
+        return [inject_ask(str(m.get("key") or ""), lang) for m in miss
+                if str(m.get("key") or "")]
+    except Exception:
+        logger.debug("discovery_probe_asks failed", exc_info=True)
+        return []
 
 
 def build_block_for_chat(

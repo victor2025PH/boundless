@@ -19,10 +19,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.companion.goals.signals import GoalSignals
 from src.companion.goals.templates import (
+    PROBE_CLAUSE_SEP,
     pick_care_intent,
     pick_intent,
     push_for_milestone,
@@ -30,6 +31,33 @@ from src.companion.goals.templates import (
 
 # 强负面情绪判定线（与 proactive_emotion_gate 的 min_negative_intensity 同刻度）
 NEGATIVE_INTENSITY_HOLD = 0.5
+
+# O-3 B（#236）：客户活跃判据——30 分钟内 ≥5 条入站（HM7XBA 00:11–00:43 九条）。
+# 活跃时摸底目标的计划自适应提前：第 1 天的「先暖场」直接换成「顺着话头带出想
+# 了解的那件事」（里程碑 1 的意图池），不再等日历走到第 3 天才开口问。
+ACTIVE_WINDOW_SEC = 1800.0
+ACTIVE_INBOUND_MIN = 5
+
+
+def customer_active(inbound_recent: int, *, threshold: int = ACTIVE_INBOUND_MIN) -> bool:
+    """近 30 分钟入站条数 ≥ 阈值 → 客户活跃。纯函数。"""
+    try:
+        return int(inbound_recent or 0) >= int(threshold)
+    except (TypeError, ValueError):
+        return False
+
+
+def with_probe(intent: str, ask: str) -> str:
+    """把「今天至少自然问一个：<未填槽问法>」钉进今日意图（O-3 B）。
+
+    摸底类目标此前第 1 天意图池是「先暖场、不急着问」，缺口只在注入时软合流——
+    3 天目标 1/3 时间零摸底。现在计划层就写死：每天 ≥1 个摸底问句，第 1 天也要。
+    ask 已在意图里 → 原样返回（不重复）；ask 空 → 原样返回。"""
+    it = str(intent or "").strip()
+    a = str(ask or "").strip()
+    if not a or a in it:
+        return it
+    return f"{it}{PROBE_CLAUSE_SEP}{a}" if it else f"今天至少自然问一个：{a}"
 
 
 def day_key(now: Optional[float] = None) -> str:
@@ -58,6 +86,8 @@ def plan_beat(
     backoff_after: int = 2,
     halt_after: int = 4,
     recent_rejects: int = 0,
+    probe_asks: Optional[List[str]] = None,
+    active: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """规划今天的拍。返回 ``{intent, push_level}``；hold 时返回
     ``{"hold": reason}``（调用方不建拍、不注入推进块）。
@@ -72,6 +102,13 @@ def plan_beat(
             人审说「推得不对」是最强的负反馈信号：
             1 次 → 力度封顶 soft（direct 降档）；≥2 次 → 退避陪伴日。
             回流只降不升——坐席采纳不加码，防正反馈螺旋。
+        probe_asks（O-3 B #236）: 摸底类目标（模板 ``gap_in_intent``）当前**未填**勾选
+            槽位的问法，按优先级排（调用方经 profile_slots 算好）。非空 → 今日意图
+            钉进「今天至少自然问一个：<第一个>」并回 ``probes=1 / probe_slots``；
+            第 1 天也钉（退避陪伴日 / hold 除外——安全语义优先于摸底 KPI）。
+        active（O-3 B）: 客户活跃（30min ≥5 条入站）。摸底目标里程碑 0 的「先暖场」
+            意图池提前换成里程碑 1 的「顺着话头带出想了解的那件事」——客户正聊得
+            热乎就是问的最好时机，不该按日历等到第 3 天。
     """
     # 1) 情绪红线：强负面 → 彻底放下目标（危机场景另有 crisis safety net 兜底）
     if signals.negative_emotion and (
@@ -89,18 +126,46 @@ def plan_beat(
     mi = int(goal.get("milestone_idx") or 0)
     rejects = max(0, int(recent_rejects or 0))
 
+    # 摸底类模板（gap_in_intent）才带 probes / probe_slots / advanced 三个观测键；
+    # 其余模板返回形状逐字不变（{intent, push_level}）。
+    discovery = bool(template.get("gap_in_intent"))
+
     # 3) 退避陪伴日：连发未回 或 坐席连续驳回 → 推进降为纯陪伴
     if (backoff_after > 0 and engaged >= int(backoff_after)) or rejects >= 2:
-        return {"intent": pick_care_intent(gid, day), "push_level": "none"}
+        care: Dict[str, Any] = {"intent": pick_care_intent(gid, day), "push_level": "none"}
+        if discovery:
+            care.update(probes=0, probe_slots=[], advanced=False)
+        return care
 
     # 4) 正常拍：模板意图池确定性轮换 + 里程碑力度
-    intent = pick_intent(template, mi, gid, day, params=goal.get("params") or {})
+    asks = [str(a).strip() for a in (probe_asks or []) if str(a or "").strip()]
+    # O-3 B：客户活跃 → 摸底目标暖场段（里程碑 0）提前用「自然带出」段（里程碑 1）的意图
+    mi_intent = mi
+    if discovery and active and mi == 0 and asks:
+        mi_intent = 1
+    intent = pick_intent(template, mi_intent, gid, day, params=goal.get("params") or {})
     if not intent:
         return {"hold": "no_intent"}
     push = push_for_milestone(template, mi)
     if rejects >= 1 and push == "direct":
         push = "soft"          # 坐席驳回过 → 力度封顶 soft
-    return {"intent": intent, "push_level": push}
+    out: Dict[str, Any] = {"intent": intent, "push_level": push}
+    if discovery:
+        out.update(probes=0, probe_slots=[], advanced=mi_intent != mi)
+        if asks:
+            out["intent"] = with_probe(intent, asks[0])
+            out["probes"] = 1
+            out["probe_slots"] = asks[:1]
+    return out
 
 
-__all__ = ["NEGATIVE_INTENSITY_HOLD", "day_key", "effective_rejects", "plan_beat"]
+__all__ = [
+    "ACTIVE_INBOUND_MIN",
+    "ACTIVE_WINDOW_SEC",
+    "NEGATIVE_INTENSITY_HOLD",
+    "customer_active",
+    "day_key",
+    "effective_rejects",
+    "plan_beat",
+    "with_probe",
+]

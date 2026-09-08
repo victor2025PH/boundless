@@ -81,6 +81,27 @@ def _last_inbound_ts(inbox_store: Any, conversation_id: str) -> float:
     return best
 
 
+def inbound_count_since(inbox_store: Any, conversation_id: str,
+                        since_ts: float) -> int:
+    """``since_ts`` 之后对方开口的条数（O-3 B 客户活跃判据：30min ≥5 条）。best-effort。"""
+    if inbox_store is None or not conversation_id:
+        return 0
+    try:
+        msgs = inbox_store.list_recent_messages(conversation_id, limit=40) or []
+    except Exception:
+        return 0
+    n = 0
+    for m in msgs:
+        try:
+            if str(m.get("direction") or "") != "in":
+                continue
+            if float(m.get("ts") or 0) >= float(since_ts):
+                n += 1
+        except Exception:
+            continue
+    return n
+
+
 def collect_signals(
     *,
     platform: str,
@@ -135,6 +156,9 @@ def collect_signals(
         except Exception:
             pass
         sig.last_inbound_ts = _last_inbound_ts(store, conversation_id)
+        # O-3 B：近 30 分钟入站条数（planner 客户活跃自适应）
+        sig.extras["inbound_30m"] = inbound_count_since(
+            store, conversation_id, n - 1800.0)
     return sig
 
 
@@ -143,4 +167,5 @@ __all__ = [
     "collect_signals",
     "entitlement_tier",
     "entitlement_unlocked",
+    "inbound_count_since",
 ]

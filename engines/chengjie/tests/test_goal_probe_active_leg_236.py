@@ -24,7 +24,27 @@ from __future__ import annotations
 import logging
 import time
 
-from src.companion.goals import liveness, sprint_ticker
+from types import SimpleNamespace
+
+from src.companion.goals import liveness, service, sprint_ticker
+from src.companion.goals.planner import (
+    ACTIVE_INBOUND_MIN,
+    customer_active,
+    plan_beat,
+    with_probe,
+)
+from src.companion.goals.service import (
+    build_block_for_chat,
+    discovery_probe_asks,
+    merged_beat_intent,
+    refresh_goal,
+)
+from src.companion.goals.signals import GoalSignals, inbound_count_since
+from src.companion.goals.templates import (
+    PROBE_CLAUSE_SEP,
+    get_template,
+    intent_en_for,
+)
 from src.companion.goals.liveness import (
     collect_send_liveness,
     first_eligible_delay_sec,
@@ -268,3 +288,161 @@ def test_frozen_conversation_blocks_runtime_gates_and_records_block():
     assert out["scheduled"] == 0 and out["skips"].get("frozen") == 1
     ev = gs.list_events(g["goal_id"], kinds=("beat_blocked",))
     assert ev and ev[0]["detail"] == "frozen@d2026-09-08"
+
+
+# ══ B 第 1 天就摸 + 客户活跃自适应 ═══════════════════════════════════════════════
+TPL = get_template("profile_discovery")
+ASKS = ["人在哪个城市", "做什么生意/工作", "大概哪个年龄段", "平时喜欢做什么"]
+
+
+def _cfg_obj():
+    return SimpleNamespace(
+        config={"companion": {"goals": {"enabled": True, "db_path": ":memory:"}}},
+        config_path=None)
+
+
+def _sig(**kw):
+    return GoalSignals(now=T_CREATE, **kw)
+
+
+def test_plan_day1_discovery_carries_one_probe():
+    """第 1 天（里程碑 0）计划就含 ≥1 个摸底问句，围绕第一个未填槽。"""
+    g = {"goal_id": "g1", "milestone_idx": 0, "template": "profile_discovery",
+         "params": {"slots": "location,occupation,age,interests"}}
+    beat = plan_beat(template=TPL, goal=g, signals=_sig(), day="2026-09-07",
+                     probe_asks=ASKS)
+    assert beat["probes"] == 1 and beat["probe_slots"] == ["人在哪个城市"]
+    assert beat["intent"].endswith(f"{PROBE_CLAUSE_SEP}人在哪个城市")
+    assert "不急着问" not in beat["intent"]          # 旧暖场文案退场
+    assert beat["push_level"] == "soft" and beat.get("advanced") is False
+    # 英文展示态能反查（基础意图 + 槽位问法两段都译）
+    en = intent_en_for(TPL, g["params"], beat["intent"])
+    assert en and en.endswith("; ask at least one thing naturally today: which city they are in")
+    # 非摸底模板 / 无缺口：零变化
+    cust = plan_beat(template=get_template("custom"), goal={**g, "template": "custom"},
+                     signals=_sig(), day="2026-09-07", probe_asks=ASKS)
+    assert set(cust) == {"intent", "push_level"}          # 非摸底模板形状逐字不变
+    assert PROBE_CLAUSE_SEP not in cust["intent"]
+    full = plan_beat(template=TPL, goal=g, signals=_sig(), day="2026-09-07", probe_asks=[])
+    assert full["probes"] == 0 and PROBE_CLAUSE_SEP not in full["intent"]
+
+
+def test_plan_active_customer_advances_warmup_to_collect():
+    """客户活跃（30min ≥5 条）→ 里程碑 0 的暖场意图提前换成里程碑 1「顺着话头带出」。"""
+    g = {"goal_id": "g1", "milestone_idx": 0, "template": "profile_discovery",
+         "params": {"slots": "location"}}
+    quiet = plan_beat(template=TPL, goal=g, signals=_sig(), day="2026-09-07",
+                      probe_asks=["人在哪个城市"], active=False)
+    busy = plan_beat(template=TPL, goal=g, signals=_sig(), day="2026-09-07",
+                     probe_asks=["人在哪个城市"], active=True)
+    assert busy["advanced"] is True and quiet["advanced"] is False
+    ms1_pool = [zh for zh, _en in TPL["intents"][1]]
+    assert busy["intent"].split(PROBE_CLAUSE_SEP)[0] in ms1_pool
+    assert quiet["intent"].split(PROBE_CLAUSE_SEP)[0] in [zh for zh, _ in TPL["intents"][0]]
+    assert busy["push_level"] == "soft"            # 力度仍按真实里程碑 0
+    assert customer_active(ACTIVE_INBOUND_MIN) and not customer_active(ACTIVE_INBOUND_MIN - 1)
+    assert not customer_active(None)
+
+
+def test_plan_safety_beats_probe_floor():
+    """退避陪伴日 / 情绪 hold 优先于「每天 ≥1 问」——安全语义不让 KPI 覆盖。"""
+    g = {"goal_id": "g1", "milestone_idx": 0, "template": "profile_discovery",
+         "params": {"slots": "location"}}
+    care = plan_beat(template=TPL, goal=g, signals=_sig(), day="d", probe_asks=ASKS,
+                     engaged_since_inbound=2)
+    assert care["push_level"] == "none" and care["probes"] == 0
+    hold = plan_beat(template=TPL, goal=g, signals=_sig(negative_emotion=True),
+                     day="d", probe_asks=ASKS)
+    assert hold == {"hold": "emotion"}
+    assert with_probe("聊聊", "人在哪个城市") == f"聊聊{PROBE_CLAUSE_SEP}人在哪个城市"
+    assert with_probe("顺口问问人在哪个城市", "人在哪个城市") == "顺口问问人在哪个城市"
+    assert with_probe("", "人在哪个城市") == "今天至少自然问一个：人在哪个城市"
+    # 注入链合流：先剥计划子句，再按本轮缺口带一个问法（一轮只带一个；缺口换了跟着换）
+    merged = merged_beat_intent(f"x{PROBE_CLAUSE_SEP}人在哪个城市", "人在哪个城市")
+    assert merged == "x；本轮顺势了解：人在哪个城市（像朋友闲聊，不要像查户口，一轮只问一个）"
+    rotated = merged_beat_intent(f"x{PROBE_CLAUSE_SEP}人在哪个城市", "做什么生意/工作")
+    assert "人在哪个城市" not in rotated and "本轮顺势了解：做什么生意/工作" in rotated
+    assert merged_beat_intent(f"x{PROBE_CLAUSE_SEP}人在哪个城市", "") == "x"   # 全填 → 剥掉过期子句
+
+
+class _InboxMsgs:
+    def __init__(self, msgs):
+        self.msgs = msgs
+
+    def list_recent_messages(self, conv, limit=30):
+        return list(self.msgs)
+
+    def get_conversation(self, conv):
+        return {"last_ts": max((m["ts"] for m in self.msgs), default=0)}
+
+    def get_conv_meta(self, conv):
+        return {}
+
+    def get_automation_mode(self, conv):
+        return "auto_ai"
+
+
+def test_refresh_goal_day1_plan_has_probe_and_logs(caplog):
+    """端到端：HM7XBA 14:45 建目标 → 当天第一稿 refresh_goal 排出的当日拍含问句，
+    ``[goal-plan] day=1 probes=1 slots=['人在哪个城市']``；00:11–00:43 九条入站 → active=True。"""
+    gs = GoalStore(":memory:")
+    g = _discovery_goal(gs)
+    cfg = _cfg_obj().config
+    with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
+        res = refresh_goal(gs, cfg, g, now=T_CREATE + 600, inbound_turn=True)
+    act = res["action"]
+    assert act and PROBE_CLAUSE_SEP in act["intent"] and "人在哪个城市" in act["intent"]
+    plan_logs = [r.getMessage() for r in caplog.records if "[goal-plan]" in r.getMessage()]
+    assert plan_logs and "day=1 probes=1 slots=['人在哪个城市'] active=False" in plan_logs[0]
+    # 客户 30 分钟 9 条 → active=True，暖场段提前
+    t = _local(2026, 9, 8, 0, 43)
+    msgs = [{"direction": "in", "ts": t - 60 * i, "text": f"m{i}"} for i in range(9)]
+    assert inbound_count_since(_InboxMsgs(msgs), CONV, t - 1800) == 9
+    g2 = gs.create_goal(conversation_id="whatsapp:x:y", platform="whatsapp", account_id="x",
+                        chat_key="y", template="profile_discovery", autonomy="auto",
+                        deadline_days=3, params={"slots": "location"}, now=T_CREATE)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
+        res2 = refresh_goal(gs, cfg, g2, inbox_store=_InboxMsgs(msgs), now=t, inbound_turn=True)
+    assert res2["action"] and "人在哪个城市" in res2["action"]["intent"]
+    logs2 = [r.getMessage() for r in caplog.records if "[goal-plan]" in r.getMessage()]
+    assert logs2 and "active=True inbound_30m=9" in logs2[0]
+    # 结果口径：暖场段文案不再出现——要么 ledger 因对方开口已把里程碑推到 1，
+    # 要么 planner 因活跃提前用里程碑 1 池；两条路都落在「顺着话头带出」上
+    base = res2["action"]["intent"].split(PROBE_CLAUSE_SEP)[0]
+    assert base in [zh for zh, _ in TPL["intents"][1]] or int(
+        res2["goal"].get("milestone_idx") or 0) >= 1
+
+
+def test_discovery_probe_asks_orders_unfilled_and_skips_filled():
+    gs = GoalStore(":memory:")
+    g = _discovery_goal(gs)
+    assert discovery_probe_asks(gs, TPL, g) == ASKS
+    gs.upsert_customer_profile(PLAT, CK, {"location": "Manila"}, source="agent")
+    g = gs.get_goal(g["goal_id"])
+    assert discovery_probe_asks(gs, TPL, g) == ASKS[1:]
+    assert discovery_probe_asks(gs, get_template("custom"), g) == []
+
+
+def test_inject_block_day1_carries_probe_once():
+    """第 1 天注入块：计划子句被剥、本轮缺口合流一次——块里同一问法只出现一次，
+    暖场段也带问法（旧「不急着问」退场）。"""
+    service._inject_log_seen.clear()
+    gs = GoalStore(":memory:")
+    from src.companion.goals.store import reset_goal_store, get_goal_store
+    reset_goal_store()
+    store = get_goal_store(":memory:")
+    _discovery_goal(store)
+    try:
+        blk = build_block_for_chat(
+            _cfg_obj(), platform=PLAT, chat_key=CK, account_id=ACCT, conversation_id=CONV,
+            user_context={}, chain="draft", inbound_text="hi there", now=T_CREATE + 60)
+        assert blk and blk.count("人在哪个城市") == 1
+        assert "本轮顺势了解：人在哪个城市" in blk
+        assert "不急着问" not in blk and PROBE_CLAUSE_SEP not in blk
+        # 卡片 today.intent（计划层）仍带「今天至少自然问一个：坐标」
+        act = store.get_action(store.list_goals(status="active")[0]["goal_id"],
+                               time.strftime("%Y-%m-%d", time.localtime(T_CREATE + 60)))
+        assert act and f"{PROBE_CLAUSE_SEP}人在哪个城市" in act["intent"]
+    finally:
+        reset_goal_store()
