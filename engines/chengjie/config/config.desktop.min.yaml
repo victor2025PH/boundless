@@ -258,6 +258,24 @@ companion:
       # 要恢复保护：改回 true（判据取账号注册表 created_at，判不出则不封顶）。
       warmup_review: false
 
+# ── 情景记忆抽取白名单（老板决策 D-O5，2026-09-08 O-2 A，WYNN22 #201）─────────────
+# 第三次「出厂默认没进基线」。抽取闸 should_extract_intent 按 memory.extract.intents
+# 白名单放行、**空即不抽**（Phase D 为存量零回归刻意如此）。此前这把钥匙只在两处：
+#   · 服务器 config/config.yaml（四值）——不随包；
+#   · 内测种子 config.desktop.internal.yaml（match_all: true）——只进 smart 包。
+# 本文件此前**没有任何 memory 块** → clean 包每台全新安装从首日起 intents=[]：skuio 机
+# 1.0.76 重装后 8 小时 30 次 `[episodic] schedule run` 全部 skip、6 客户零抽取零 promoted，
+# 而启动日志仍写「情景记忆已启用」。现为 feature_registry A 类：新装随本种子；存量升级
+# （skuio 两台、钧一台）由 _ensure_baseline 在**合并视图缺键**时补进 overlay；用户显式写
+# `intents: []` ＝自己关掉，一个字不动（启动日志会 WARNING「抽取白名单为空」）。
+# 值与服务器同（不选 match_all：greeting / stop_contact 噪音 + token 成本）。列表顺序须与
+# feature_registry baseline 一致——种子门禁 test_desktop_seed_visibility 按声明值逐字核。
+memory:
+  extract:
+    enabled: true
+    use_llm: true
+    intents: [direct_chat, small_talk, greeting, complaint]
+
 # ── 账号接入（「下载即可用」的关键开关）──────────────────────────────────────
 # 为什么必须在种子里显式打开：代码默认全关，而桌面用户装完不会去改 YAML —— 于是
 # 「接入 Telegram / WhatsApp / LINE / Messenger」弹窗里每一种方式都灰着显示「未启用」，

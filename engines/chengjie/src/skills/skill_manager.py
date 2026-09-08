@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import time
 import random
@@ -202,6 +203,45 @@ def should_extract_intent(intent: str, ex_cfg: Dict[str, Any]) -> bool:
     if not intents:
         return False
     return intent in set(intents)
+
+
+def episodic_startup_banner(memory_cfg: Dict[str, Any], db_path: Any) -> Tuple[int, str]:
+    """启动一行「情景记忆」状态 → ``(logging 级别, 文案)``，纯函数可单测。
+
+    D-O5 / O-2 A（2026-09-08，WYNN22 #201）：此前无论白名单如何都写「情景记忆已启用」，
+    skuio 机 clean 包 8 小时 30 次 schedule run 全 skip（intents=[]）时卡片与日志仍在
+    说「已启用」——日志必须说真话：
+
+    - 抽取总闸关 / 白名单空（且未开 match_all）→ **WARNING**，文案写明「记忆不会新增」，
+      **不得**出现「已启用」四个字（诊断包一眼分清是库开着还是抽取活着）；
+    - match_all → INFO「可抽取意图：全部」；
+    - 白名单非空 → INFO「可抽取意图 N 个：…」（排序去重，值守对照配置零歧义）。
+    """
+    ex = dict((memory_cfg or {}).get("extract") or {})
+    if not ex.get("enabled", True):
+        return (
+            logging.WARNING,
+            "[episodic] 情景记忆库已就绪但抽取总闸已关（memory.extract.enabled=False），"
+            f"记忆不会新增: {db_path}",
+        )
+    if ex.get("match_all"):
+        return (
+            logging.INFO,
+            "[episodic] 情景记忆已启用 · 可抽取意图：全部（memory.extract.match_all=True）"
+            f": {db_path}",
+        )
+    whitelist = sorted({str(x).strip() for x in (ex.get("intents") or []) if str(x).strip()})
+    if not whitelist:
+        return (
+            logging.WARNING,
+            "[episodic] 抽取白名单为空（memory.extract.intents=[] · match_all=False），"
+            f"记忆不会新增——每条入站都会 skip: intent not extractable: {db_path}",
+        )
+    return (
+        logging.INFO,
+        f"[episodic] 情景记忆已启用 · 可抽取意图 {len(whitelist)} 个：{', '.join(whitelist)}"
+        f": {db_path}",
+    )
 
 
 def _guard_offer_claims(
@@ -502,7 +542,10 @@ class SkillManager(LoggerMixin):
             try:
                 from src.utils.episodic_memory_store import EpisodicMemoryStore
                 self._episodic_store = EpisodicMemoryStore(_epath)
-                self.logger.info("情景记忆已启用: %s", _epath)
+                # D-O5 / O-2 A（#201）：启动一行说真话——白名单空即 WARNING「记忆不会
+                # 新增」，不再无条件写「已启用」（WYNN22：库开着、抽取死了 8 小时无人知）。
+                _bn_level, _bn_msg = episodic_startup_banner(self._memory_cfg, _epath)
+                self.logger.log(_bn_level, _bn_msg)
                 # J-10 A2：例外打标阈值透传（memory.review.low_confidence_threshold，默认 0.6）
                 _rv_cfg = self._memory_cfg.get("review") or {}
                 _rv_thr = _rv_cfg.get("low_confidence_threshold")

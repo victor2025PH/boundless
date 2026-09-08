@@ -97,8 +97,20 @@ def test_baseline_patch_only_fills_missing():
                           # 走 clean 包升级的内测机两条路都没经过
                           "companion.goals.sprint.enabled",
                           "companion.wellbeing.crisis_audit",
-                          "companion.wellbeing.crisis_escalation"}
+                          "companion.wellbeing.crisis_escalation",
+                          # 2026-09-08 O-2 A D-O5（#201 WYNN22）：情景记忆抽取白名单进
+                          # 基线——clean 包 min 种子此前没有任何 memory 块，全新安装
+                          # intents=[] 从首日起不抽（第三次「出厂默认没进基线」）
+                          "memory.extract.enabled",
+                          "memory.extract.use_llm",
+                          "memory.extract.intents"}
     assert patch["contacts.mode"] == "lite"
+    assert patch["memory.extract.intents"] == [
+        "direct_chat", "small_talk", "greeting", "complaint"]
+    # 列表型 baseline 必须是副本：改 patch 里的列表不得污染注册表声明值
+    patch["memory.extract.intents"].append("order_query")
+    assert by_key("memory.extract.intents").baseline == [
+        "direct_chat", "small_talk", "greeting", "complaint"]
     # 显式 false = 用户决定，绝不覆盖；其余缺失键照补
     part = baseline_patch({"companion": {"goals": {"enabled": False}}})
     assert "companion.goals.enabled" not in part
@@ -128,6 +140,8 @@ def test_baseline_patch_only_fills_missing():
         # 小智三键（主开关开、子键一开一关＝显式表态不被覆盖）
         "assistant": {"enabled": True, "agent": {"enabled": False},
                       "vision": {"enabled": True}},
+        # 记忆抽取三键：显式空白名单 = 用户关掉，与显式 false 同一条三态语义
+        "memory": {"extract": {"enabled": True, "use_llm": False, "intents": []}},
     }) == {}
 
 

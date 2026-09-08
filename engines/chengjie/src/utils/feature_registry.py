@@ -234,6 +234,31 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=True, show=False,
         note="客户安全预警人工升级（#185 D7）：severe 命中点亮工作台「需人工」徽标 + "
              "置顶会话 + 落案例，不依赖外部 webhook；纯软件零依赖"),
+    # ── 老板决策 D-O5（2026-09-08 O-2 A，WYNN22 #201）：情景记忆抽取白名单进基线。
+    # 第三次「出厂默认没进基线」：should_extract_intent 按 memory.extract.intents 白名单
+    # 放行、**空即不抽**（Phase D 为存量零回归刻意如此）；服务器 config.yaml 有四值、
+    # 内测种子 config.desktop.internal.yaml 走 match_all（只进 smart 包）、而 clean 包
+    # 播种的 config.desktop.min.yaml **没有任何 memory 块** → 每台全新安装的记忆从首日
+    # 起为死（skuio 8 小时 30 次 schedule run 全 skip intents=[]，卡片却写「已启用」）。
+    # 三键成组：enabled/use_llm 代码默认本就 True，进表只为「显式交付 + 缺键补齐」同源；
+    # intents 是真正缺的那把钥匙——与服务器同值，不选 match_all（greeting/stop_contact
+    # 噪音 + token 成本）。列表型 baseline：baseline_patch 逐次拷贝，防合并后被原地改。
+    # 三态语义照旧：合并视图缺键才补；用户显式写 intents: [] ＝关掉，尊重（启动 WARNING）。
+    Feature(
+        key="memory.extract.enabled", cls="A", slug="mem_extract",
+        baseline=True, show=False,
+        note="情景记忆抽取总闸（D-O5 #201）：代码默认已 True，进基线为与 intents 同组"
+             "显式交付；本地 SQLite + 随包 AI 链，零 LAN 依赖"),
+    Feature(
+        key="memory.extract.use_llm", cls="A", slug="mem_extract_llm",
+        baseline=True, show=False,
+        note="情景记忆 LLM 抽取（D-O5 #201）：启发式正则之外由主链 LLM 抽事实（引文级"
+             "接地）；代码默认已 True，进基线为与 intents 同组显式交付"),
+    Feature(
+        key="memory.extract.intents", cls="A", slug="mem_extract_intents",
+        baseline=["direct_chat", "small_talk", "greeting", "complaint"], show=False,
+        note="情景记忆可抽取意图白名单（D-O5 #201，WYNN22 干净包首日即死）：与服务器"
+             "config.yaml 同值；缺席＝should_extract_intent 恒 False＝记忆永不新增"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     # 2026-09-06 老板决策 D-L3（#210，82BF95 付费客户的客户识破 AI）：拆条**出厂关**
     # ——2026-07-31 升 A 的「默认开安全」前提（真发仍逐条前端 opt-in）在 08 月三链
@@ -399,7 +424,9 @@ def baseline_patch(cfg: dict) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for f in FEATURES:
         if f.cls == "A" and dig(cfg, f.key) is None:
-            out[f.key] = f.baseline
+            # 列表型 baseline（memory.extract.intents）每次给新副本：patch 会被深合并进
+            # 运行时 config 并落 overlay，共享同一个 list 对象＝谁改运行时谁就改了注册表。
+            out[f.key] = list(f.baseline) if isinstance(f.baseline, list) else f.baseline
     return out
 
 
