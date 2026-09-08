@@ -1293,6 +1293,15 @@ _ADDITIONS_2026_09_07_GOALS_BEATS = """
 """
 _BASELINE += _ADDITIONS_2026_09_07_GOALS_BEATS
 
+# O-3 E 2026-09-08（#236 #257 HM7XBA）：摸底目标「现在就问一个」——预览未填槽问法
+# （槽位 / 问法 / 示例 / 拦截原因）+ 点发即发（排 goal:{gid}:q{ts} care 行 → 派发器
+# send_now 同一条守卫 / 拟稿 / 投递链 → beat_sent 计入「主动出手」+ 出站文本当场校验）。
+_ADDITIONS_2026_09_08_GOALS_PROBE = """
+/api/goals/{goal_id}/probe/preview	GET
+/api/goals/{goal_id}/probe/send	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_08_GOALS_PROBE
+
 # 实施91（小智线 impl88）PC 受控机管理三端点——**代登记**（2026-08-30 晚：
 # 该线路由已落盘、清单行未及登记，红了全树装配门禁并挡住老板点名的发版重启；
 # 语义归属仍是小智线，端点行为以其实现为准，见 .ops NOTE_from_goals_sprint_*）。

@@ -649,6 +649,46 @@ def pick_probe_target(
     return "", "", ""
 
 
+# O-3 E：「现在就问一个」预览的示例问法（真正出站文本由派发器按对方语言 + 最近话题拟稿，
+# 这里只让坐席看懂「会问什么」；custom 槽回落通用句）
+PROBE_EXAMPLES: Dict[str, Tuple[str, str]] = {
+    "location": ("对了，你那边现在是在哪个城市呀？", "By the way, which city are you in these days?"),
+    "occupation": ("你平时是做什么工作的呀？", "What do you do for work, by the way?"),
+    "age": ("好奇问一下，你大概是哪个年龄段的？", "Curious — roughly what age range are you in?"),
+    "interests": ("你闲下来一般喜欢做什么？", "What do you like doing when you have free time?"),
+    "name": ("我该怎么称呼你比较好？", "What should I call you?"),
+    "family_status": ("你家里都有谁呀，平时跟家人住一起吗？", "Who's in your family — do you live with them?"),
+    "marital_status": ("你现在是单身还是有伴呀？", "Are you single these days, or seeing someone?"),
+    "residence": ("你现在住在哪一块？住得习惯吗？", "Where are you living now? Settled in okay?"),
+    "income_level": ("（敏感项：只能顺着对方话头多轮带出，不直接问）",
+                     "(Sensitive: surfaced gradually from their own cues, never asked outright)"),
+    "assets": ("（敏感项：只能顺着对方话头多轮带出，不直接问）",
+               "(Sensitive: surfaced gradually from their own cues, never asked outright)"),
+}
+
+
+def probe_example(slot_key: str, lang: str = "zh") -> str:
+    """示例问法；未登记槽 → 按 ask 短语拼通用句。"""
+    k = str(slot_key or "").strip().lower()
+    pair = PROBE_EXAMPLES.get(k)
+    en = str(lang).lower().startswith("en")
+    if pair:
+        return pair[1] if en else pair[0]
+    ask = slot_ask(k, lang)
+    if not ask:
+        return ""
+    return f"Just curious — {ask}?" if en else f"顺口问一下，{ask}？"
+
+
+def probe_source_text(goal: Dict[str, Any], slot_key: str, *, lang: str = "zh") -> str:
+    """坐席手动摸底行的 care ``source_text``（≤200 字）：派发器按普通目标行 prompt 拟稿，
+    这里把「必问这一个」钉死。"""
+    title = str((goal or {}).get("title") or "").strip() or "客户摸底"
+    ask = inject_ask(slot_key, lang) or slot_label(slot_key, lang) or str(slot_key)
+    return (f"坐席点了「现在就问一个」：顺着最近的话题，用对方习惯的语言自然问到：{ask}"
+            f"——这条消息必须带这一个问题（{HARD_ASK_DISCIPLINE}）；目标「{title[:30]}」")[:200]
+
+
 def probe_hard_line(slot_key: str, cue: str = "", *, lang: str = "zh") -> str:
     """注入块的硬约束行（context_block 原样落）：一轮只问一个，但**必须**问。"""
     ask = inject_ask(slot_key, lang) or slot_label(slot_key, lang) or str(slot_key)

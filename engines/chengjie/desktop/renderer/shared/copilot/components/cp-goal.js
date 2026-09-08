@@ -436,6 +436,26 @@
                          border:1px solid color-mix(in srgb,var(--cp-warn,#d97706) 45%,transparent);
                          background:color-mix(in srgb,var(--cp-warn,#d97706) 10%,transparent); }
       .gl-capture-warn .gl-capture-why { display:block; }
+      /* O-3 E：「现在就问一个」按钮 + 内联预览面板 */
+      .gl-probe-row { margin-top:4px; }
+      .gl-probe-btn { font-size:var(--cp-fs-tiny,11px); padding:2px 9px; border-radius:999px;
+                      border:1px solid color-mix(in srgb,var(--cp-accent,#2563eb) 45%,transparent);
+                      color:var(--cp-accent,#2563eb); background:color-mix(in srgb,var(--cp-accent,#2563eb) 8%,transparent);
+                      cursor:pointer; }
+      .gl-probe-btn:hover { background:color-mix(in srgb,var(--cp-accent,#2563eb) 16%,transparent); }
+      .gl-probe-panel { margin-top:6px; padding:6px 8px; border-radius:8px;
+                        border:1px solid var(--cp-border,#cbd5e1);
+                        background:color-mix(in srgb,var(--cp-accent,#2563eb) 5%,transparent); }
+      .gl-probe-hd { font-size:var(--cp-fs-sm,12px); font-weight:700; color:var(--cp-text,#0f172a); }
+      .gl-probe-tx { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text-dim,#64748b); line-height:1.5; margin-top:2px; }
+      .gl-probe-ex { font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#0f172a); line-height:1.5; margin-top:3px;
+                     padding:3px 6px; border-left:2px solid var(--cp-accent,#2563eb);
+                     background:color-mix(in srgb,var(--cp-accent,#2563eb) 6%,transparent); }
+      .gl-probe-err { color:var(--cp-danger,#dc2626); }
+      .gl-probe-res { font-size:var(--cp-fs-tiny,11px); line-height:1.5; margin-top:4px; }
+      .gl-probe-res.ok { color:var(--cp-ok,#16a34a); }
+      .gl-probe-res.warn { color:var(--cp-warn,#b45309); }
+      .gl-probe-acts { margin-top:6px; }
       .gl-auto-card.off { opacity:.62; border-style:dashed; }
       .gl-auto-card.off.sel { opacity:.85; }
       .gl-sprint-line .gl-nudge { flex:0 0 auto; font-size:var(--cp-fs-tiny,11px); padding:1px 8px;
@@ -1504,9 +1524,101 @@
             `</div></div>`;
         }
       }
+      // O-3 E（#236）：「现在就问一个」——有未填项且目标进行中才出；点开预览会问什么，
+      // 点发即发（后端经 care send_now 同一条守卫 / 拟稿 / 投递链，计入「主动出手」）
+      let probeUi = "";
+      if (g.status === "active" && filled < rows.length) {
+        if (this._probeOpen && this._probeForGid !== String(g.goal_id || "")) {
+          this._probeOpen = false; this._probePv = null; this._probeRes = null;
+        }
+        if (!this._probeOpen) {
+          probeUi = `<div class="gl-probe-row"><button type="button" class="gl-probe-btn" data-act="probe_open"` +
+            ` title="${esc(this.t("inbox.goal.probe.btn_t"))}">\u2753 ${esc(this.t("inbox.goal.probe.btn"))}</button></div>`;
+        } else {
+          probeUi = this._renderProbePanel();
+        }
+      }
       return `<div class="gl-sec gl-slots"><div class="gl-slots-hd">` +
         `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}</div>` +
-        `<div class="gl-slots-row">${chips}</div>${captureWarn}</div>`;
+        `<div class="gl-slots-row">${chips}</div>${captureWarn}${probeUi}</div>`;
+    }
+
+    /* O-3 E：「现在就问一个」内联面板——预览（槽位 / 问法 / 示例）→ 就这样问 / 换一项 / 关 */
+    _renderProbePanel() {
+      const esc = (s) => this.esc(s);
+      const pv = this._probePv;
+      const res = this._probeRes;
+      let body = "";
+      if (this._probeBusy && !pv) {
+        body = `<div class="gl-probe-tx">${esc(this.t("cp.common.loading") || "…")}</div>`;
+      } else if (pv && pv.error) {
+        body = `<div class="gl-probe-tx gl-probe-err">${esc(pv.error)}</div>`;
+      } else if (pv) {
+        const cands = Array.isArray(pv.candidates) ? pv.candidates : [];
+        const idx = cands.length ? (this._probeIdx || 0) % cands.length : 0;
+        const c = cands[idx] || {};
+        const blk = Array.isArray(pv.blockers) ? pv.blockers : [];
+        const why = blk.length ? this._engineWhy(blk) : "";
+        body = `<div class="gl-probe-hd">${esc(this.t("inbox.goal.probe.preview_hd", { label: c.label || c.slot || "" }))}</div>` +
+          `<div class="gl-probe-tx">${esc(this.t("inbox.goal.probe.preview_ask", { ask: c.ask || "" }))}</div>` +
+          (c.example ? `<div class="gl-probe-ex">${esc(this.t("inbox.goal.probe.preview_example", { ex: c.example }))}</div>` : "") +
+          (why ? `<div class="gl-probe-tx gl-probe-err">${esc(this.t("inbox.goal.probe.blocked", { why }))}</div>` : "");
+        if (res) {
+          const k = res.decision === "sent" ? "sent" : res.decision === "queued" ? "queued"
+            : res.decision === "dry_sampled" ? "dry" : res.decision === "held" ? "held"
+            : res.decision === "skipped" ? "skipped" : "failed";
+          const vars = { text: res.text || "", why: this._blockedLabel(res.reason || res.held || "") || res.reason || res.held || res.decision || "" };
+          body += `<div class="gl-probe-res ${k === "sent" || k === "queued" ? "ok" : "warn"}">${esc(this.t("inbox.goal.probe." + k, vars))}</div>`;
+        }
+        const canSend = !blk.length && !this._probeBusy && !(res && (res.decision === "sent" || res.decision === "queued"));
+        body += `<div class="acts gl-acts gl-probe-acts">` +
+          `<button type="button" data-act="probe_close">${esc(this.t("cp.common.cancel"))}</button>` +
+          (cands.length > 1 ? `<button type="button" data-act="probe_next">${esc(this.t("inbox.goal.probe.next"))}</button>` : "") +
+          `<button type="button" class="primary" data-act="probe_send"${canSend ? "" : " disabled"}>` +
+          `${esc(this._probeBusy && pv ? this.t("inbox.goal.probe.sending") : this.t("inbox.goal.probe.send"))}</button></div>`;
+      }
+      return `<div class="gl-probe-panel">${body}</div>`;
+    }
+
+    async _probeOpenPanel() {
+      const g = this._d && this._d.goal;
+      if (!g || !g.goal_id) return;
+      this._probeOpen = true; this._probeForGid = String(g.goal_id);
+      this._probePv = null; this._probeRes = null; this._probeIdx = 0; this._probeBusy = true;
+      this._rerender();
+      let r = null;
+      try { r = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/probe/preview`); } catch (_e) { r = null; }
+      this._probeBusy = false;
+      if (r && r.ok && r.data) this._probePv = r.data;
+      else this._probePv = { error: (r && r.data && r.data.detail) || this.t("cp.base.err") };
+      _beacon("goal_probe_open");
+      this._rerender();
+    }
+
+    async _probeSend() {
+      const g = this._d && this._d.goal;
+      const pv = this._probePv;
+      if (!g || !g.goal_id || !pv || !Array.isArray(pv.candidates) || !pv.candidates.length) return;
+      const c = pv.candidates[(this._probeIdx || 0) % pv.candidates.length] || {};
+      this._probeBusy = true; this._probeRes = null; this._rerender();
+      let r = null;
+      try {
+        r = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/probe/send`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slot: c.slot || "" }) });
+      } catch (_e) { r = null; }
+      this._probeBusy = false;
+      _beacon("goal_probe_send");
+      if (r && r.data && typeof r.data === "object" && r.ok) {
+        this._probeRes = r.data;
+        this._rerender();
+        // 计数 / 拍清单随真发刷新（beat_sent 由派发回执落库）
+        setTimeout(() => { if (this.isConnected) this.refresh(); }, 1500);
+        return;
+      }
+      const detail = r && r.data && r.data.detail;
+      this._probeRes = { decision: "failed", reason: (typeof detail === "string" && detail) || this.t("cp.base.err") };
+      this._rerender();
     }
 
     /* ── 调整期限（改节奏）内联表单（P25）── */
@@ -4061,6 +4173,15 @@
         return;
       }
       if (act === "sprint_nudge") { await this._sprintNudge(el); return; }
+      // O-3 E：「现在就问一个」
+      if (act === "probe_open") { await this._probeOpenPanel(); return; }
+      if (act === "probe_close") {
+        this._probeOpen = false; this._probePv = null; this._probeRes = null; this._rerender(); return;
+      }
+      if (act === "probe_next") {
+        this._probeIdx = (this._probeIdx || 0) + 1; this._probeRes = null; this._rerender(); return;
+      }
+      if (act === "probe_send") { await this._probeSend(); return; }
       if (act === "revive_won") { await this._reviveWon(el); return; }
       if (act === "jump_sprint") { await this._jumpSprint(el); return; }
       if (act === "note_example") {

@@ -557,7 +557,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "ticker_enabled": bool(scfg.get("enabled")),
                 "blockers": blockers,
                 "runtime": runtime,
-                "beats_used": sent_total,
+                "beats_used": int(tsum.get("sent") or 0),
                 "beats_actions": len(beats),
                 "trace": tsum,
                 "sent_24h": int(sent_24h),
@@ -1974,6 +1974,199 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         logger.info("[goal-sprint] 坐席手动加速 goal=%s p%s care#%s",
                     goal_id, phase, rid)
         return {"ok": True, "phase": int(phase), "care_id": int(rid)}
+
+    # ── O-3 E（#236 HM7XBA）：「现在就问一个」——预览未填槽问法 → 点发即发 ──────────
+    _PROBE_SAFETY_GATES = ("no_conversation", "no_inbox", "frozen", "crisis", "optout")
+
+    def _probe_context(request: Request, goal_id: str, *, lang: str):
+        """摸底目标 + 未填勾选槽（轮换序）+ 安全闸（人点的：不看 autonomy / 会话档位 /
+        平台白名单，但停联冻结 / 危机 / opt-out / 读不到收件箱一律拦）。"""
+        svc = _require_enabled(request)
+        store = _store(svc)
+        goal = store.get_goal(goal_id)
+        if goal is None:
+            raise HTTPException(404, tr(request, "err.goals.not_found"))
+        if str(goal.get("status")) != "active":
+            raise HTTPException(409, tr(request, "err.goals.not_active"))
+        from src.companion.goals.profile_slots import (
+            asked_slot_keys,
+            missing_slots,
+            parse_selected_slots,
+            probe_example,
+            slot_ask,
+            slot_label,
+        )
+        from src.companion.goals.sprint_ticker import (
+            goal_runtime_gates,
+            is_discovery_goal,
+            load_optout_mutes,
+            parse_sprint_cfg,
+        )
+        if not is_discovery_goal(goal):
+            raise HTTPException(400, tr(request, "err.goals.probe_not_discovery"))
+        sel = parse_selected_slots((goal.get("params") or {}).get("slots"))
+        prof = store.get_customer_profile(
+            str(goal.get("platform") or ""), str(goal.get("chat_key") or ""))
+        fields = dict((prof or {}).get("fields") or {})
+        asked = asked_slot_keys(goal.get("params") or {})
+        ordered = [str(m.get("key") or "") for m in missing_slots(
+            fields, include=sel, limit=32, exclude=asked) if m.get("key")]
+        rest = [str(m.get("key") or "") for m in missing_slots(
+            fields, include=sel, limit=32) if m.get("key")]
+        keys = ordered + [k for k in rest if k not in ordered]
+        if not keys:
+            raise HTTPException(409, tr(request, "err.goals.probe_all_filled"))
+        scfg = parse_sprint_cfg(svc.resolve_goals_cfg(_cfg_root()))
+        try:
+            mutes = load_optout_mutes(_config_path())
+        except Exception:
+            mutes = {}
+        rg = goal_runtime_gates(dict(goal), cfg=scfg, inbox=_inbox_store(),
+                                mutes=mutes, stop_on_fail=False)
+        gates = dict(rg.get("gates") or {})
+        blockers = [k for k in _PROBE_SAFETY_GATES if k in gates and not gates[k]]
+        cands = [{
+            "slot": k,
+            "label": slot_label(k, lang),
+            "ask": slot_ask(k, lang),
+            "example": probe_example(k, lang),
+        } for k in keys]
+        return svc, store, goal, cands, blockers
+
+    @app.get("/api/goals/{goal_id}/probe/preview")
+    async def goals_probe_preview(
+        request: Request, goal_id: str, _auth=Depends(auth_dep),
+    ):
+        """「现在就问一个」预览：按未填槽（轮换序）给出会问什么（槽位 / 问法 / 示例句）
+        + 当前拦截原因。真正的文本由派发器按对方语言、顺着最近话题拟稿。只读。"""
+        lang = _lang(request)
+        _svc, _store_, goal, cands, blockers = _probe_context(request, goal_id, lang=lang)
+        return {"ok": not blockers, "goal_id": str(goal.get("goal_id") or ""),
+                "candidates": cands, "blockers": blockers}
+
+    async def _run_on_care_loop(coro_factory, *, timeout: float = 30.0):
+        """把协程投到派发器所在的（主）事件循环执行（与 care_routes 同款 N-1 A）。"""
+        import asyncio
+        engine = getattr(app.state, "care_engine", None) or {}
+        loop = engine.get("loop") if isinstance(engine, dict) else None
+        try:
+            cur = asyncio.get_running_loop()
+        except RuntimeError:
+            cur = None
+        try:
+            if loop is not None and loop is not cur and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
+                return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+            return await asyncio.wait_for(coro_factory(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    @app.post("/api/goals/{goal_id}/probe/send")
+    async def goals_probe_send(
+        request: Request, goal_id: str, payload: Optional[Dict[str, Any]] = None,
+        _auth=Depends(auth_dep),
+    ):
+        """「现在就问一个」点发即发：排一条 care 行 ``goal:{gid}:q{ts}``（派发器按目标行
+        prompt 拟稿、对方语言、顺着最近话题）→ ``send_now`` 同步直投（与 care「立即发」
+        同一条守卫 / 拟稿 / 档案校验 / 入队 / 当场投递链；产品守卫仍在、首条预览不再拦——人
+        就是审批）→ 真发回执经 ``_care_sent_hook`` 落 ``beat_sent``（计入「主动出手」）；
+        出站文本当场按槽位关键词校验 → ``probe_asked`` / ``probe_missed`` + 当日拍
+        ``asked:<slot>``。``[goal-probe] manual=1 slot= …`` 日志。"""
+        _deny_viewer(request)
+        lang = _lang(request)
+        svc, store, goal, cands, blockers = _probe_context(request, goal_id, lang=lang)
+        if blockers:
+            key = {"frozen": "err.goals.probe_frozen", "crisis": "err.goals.nudge_blocked",
+                   "optout": "err.goals.nudge_muted"}.get(blockers[0], "err.goals.nudge_blocked")
+            raise HTTPException(409, tr(request, key))
+        body = payload if isinstance(payload, dict) else {}
+        want = str(body.get("slot") or "").strip().lower()
+        pick = next((c for c in cands if c["slot"] == want), None) or cands[0]
+        slot = pick["slot"]
+        import time as _tp
+        now = _tp.time()
+        engine = getattr(app.state, "care_engine", None) or {}
+        disp = engine.get("dispatcher") if isinstance(engine, dict) else None
+        care_store = getattr(app.state, "care_schedule_store", None)
+        if care_store is None:
+            try:
+                from src.contacts.care_schedule import get_care_schedule_store
+                care_store = get_care_schedule_store()
+            except Exception:
+                care_store = None
+        if care_store is None or disp is None or not hasattr(disp, "send_now"):
+            raise HTTPException(409, tr(request, "err.goals.probe_no_dispatcher"))
+        from src.companion.goals.profile_slots import probe_source_text, reply_asks_slot
+        from src.companion.goals.sprint_ticker import PROBE_ASKED_DETAIL_PREFIX, probe_norm
+        conv = str(goal.get("conversation_id") or "")
+        rid = care_store.add_scheduled_care(
+            contact_key=conv,
+            platform=str(goal.get("platform") or ""),
+            account_id=str(goal.get("account_id") or ""),
+            chat_key=str(goal.get("chat_key") or ""),
+            due_at=now,
+            event_at=float(goal.get("deadline_ts") or 0) or now,
+            topic=(str(goal.get("title") or "").strip() or "客户摸底")[:40],
+            topic_norm=probe_norm(goal_id, now),
+            source_text=probe_source_text(goal, slot, lang=lang),
+            confidence=1.0,
+            dedup_days=1.0,
+        )
+        if not rid:
+            raise HTTPException(409, tr(request, "err.goals.nudge_exhausted"))
+        item = care_store.get(int(rid)) or {}
+        res = await _run_on_care_loop(lambda: disp.send_now(dict(item)))
+        res = dict(res or {"ok": False, "decision": "timeout", "reason": "timeout"})
+        decision = str(res.get("decision") or "")
+        text = str(res.get("text") or "").strip()
+        store.add_event(goal_id, "probe_manual",
+                        f"{slot} care#{int(rid)} {decision or '-'}",
+                        conversation_id=conv, text_head=text[:120], now=now)
+        asked = None
+        if decision in ("sent", "queued") and text:
+            asked = reply_asks_slot(text, slot)
+            store.add_event(
+                goal_id, svc.PROBE_EVENT_ASKED if asked else svc.PROBE_EVENT_MISSED,
+                f"{slot}@manual", conversation_id=conv, text_head=text[:120], now=now)
+            try:
+                from src.companion.goals.planner import day_key
+                row = store.get_action(goal_id, day_key(now))
+                if row is None:
+                    store.upsert_action(goal_id, day_key(now), intent=f"手动摸底：{pick['ask']}",
+                                        push_level="soft", status="sent",
+                                        detail=f"{PROBE_ASKED_DETAIL_PREFIX}{slot}", now=now)
+                elif asked and str(row.get("status") or "") in ("planned", "consumed"):
+                    store.mark_action(str(row.get("action_id") or ""),
+                                      str(row.get("status") or "consumed"),
+                                      detail=f"{PROBE_ASKED_DETAIL_PREFIX}{slot}")
+            except Exception:
+                logger.debug("probe manual action mark skipped", exc_info=True)
+            try:
+                params = dict(goal.get("params") or {})
+                asked_l = [str(x) for x in (params.get("_gap_asked") or []) if str(x or "").strip()]
+                if slot not in asked_l:
+                    asked_l.append(slot)
+                params["_gap_asked"] = asked_l
+                store.update_goal_fields(goal_id, params=params)
+            except Exception:
+                logger.debug("probe manual gap_asked skipped", exc_info=True)
+        try:
+            from src.companion.goals.stats import get_goal_stats
+            get_goal_stats().record_probe("manual")
+        except Exception:
+            pass
+        logger.info(
+            "[goal-probe] manual=1 slot=%s goal=%s conv=%s care#%s decision=%s dry=%s "
+            "asked=%s text=%r",
+            slot, goal_id[:12], conv, rid, decision or "-", bool(res.get("dry_run")),
+            asked, text[:80])
+        return {
+            "ok": bool(res.get("ok")), "decision": decision,
+            "reason": str(res.get("reason") or ""), "held": str(res.get("held") or ""),
+            "dry_run": bool(res.get("dry_run")), "text": text,
+            "care_id": int(rid), "slot": slot, "label": pick["label"], "asked": asked,
+            "sent_at": float(res.get("sent_at") or 0),
+        }
 
     @app.get("/api/goals/{goal_id}/preflight")
     async def goals_preflight(

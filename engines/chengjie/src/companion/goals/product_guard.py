@@ -362,8 +362,9 @@ def wrap_care_send(
                 logger.debug("add_event failed", exc_info=True)
             return 0
 
-        # ② 首次真发强制预览 → L1 草稿
-        if first_send_pending(gstore, gid):
+        # ② 首次真发强制预览 → L1 草稿。O-3 E（#236）：坐席「现在就问一个」（kind=probe）
+        # 是人当场点的，人就是审批——不再转一道 L1 预览，否则按钮点了没消息、卡上也没数。
+        if ctx["kind"] != "probe" and first_send_pending(gstore, gid):
             inbox = None
             try:
                 inbox = inbox_store_getter() if inbox_store_getter is not None else None

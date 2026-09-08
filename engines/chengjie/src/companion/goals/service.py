@@ -2876,6 +2876,14 @@ def build_beats_trace(
             if care_row:
                 if not item["text_head"]:
                     item["text_head"] = str(care_row.get("sent_text") or "")[:120]
+                # O-3 E：坐席「现在就问一个」行（goal:{gid}:q{ts}）——sent_hook 走通用分支
+                # 记成 care:link，这里按 care 行 topic_norm 回标 probe:manual
+                try:
+                    from src.companion.goals.sprint_ticker import parse_goal_care_kind
+                    if parse_goal_care_kind(care_row.get("topic_norm"))[0] == "probe":
+                        item["phase"] = "probe:manual"
+                except Exception:
+                    pass
                 if str(care_row.get("status") or "") == "skipped":
                     # 入队后又被守卫/坐席拦下（note 带原因）
                     item["status"] = "blocked"
