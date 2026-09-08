@@ -114,6 +114,28 @@ const REQUIRED = [
     "QQ 边车 package.json",
     'ESM 解析失败（server.js 依赖其中的 "type":"module"）',
   ],
+  // P-4 #254（MTRCH2③，2026-09-08）后端随包配置「必须在」清单：build_backend.py DATAS 漏一项
+  // 只会在客户机 WARNING 里暴露（handoff 两 yaml 漏了两个版本没人发现）。
+  [
+    path.join("backend", "_internal", "config", "config.desktop.min.yaml"),
+    "桌面最小种子配置",
+    "clean 装首启回落完整 example（带 YOUR_* 占位脏值）",
+  ],
+  [
+    path.join("backend", "_internal", "config", "handoff_scripts.yaml"),
+    "转人工话术模板",
+    "HandoffRenderer init skipped：转人工整条链在客户机上哑（MTRCH2③）",
+  ],
+  [
+    path.join("backend", "_internal", "config", "handoff_compliance.yaml"),
+    "转人工合规检查规则",
+    "HandoffComplianceChecker init skipped（MTRCH2③）",
+  ],
+  [
+    path.join("backend", "_internal", "domains", "conversion", "manifest.yaml"),
+    "域包清单（陪伴 / 销售分类与提示词）",
+    "域包加载失败 → KB 分类 / System prompt 全回落硬编码客服域",
+  ],
 ];
 
 // 导出给 test/package-layout.test.js 交叉核对：包内 require 跨出 asar 的每个目录，
@@ -148,7 +170,17 @@ const FORBIDDEN = [
   // 厂商自家产品说明污染知识库、AI 对客推销厂商产品。KB 不再随任何形态的包走——
   // 首启由后端播 3 条格式示例（kb_store.seed_kb_format_examples，source=system，停用态）。
   [path.join("seed-data", "config", "knowledge_base.db"), "生产机知识库快照（厂商产品条目污染用户 KB）"],
+  // P-4 #254（MTRCH2①，2026-09-08）「必须不在」清单：命理产品库只随 FateX 产品线；
+  // 密钥 / 凭据池库 / 真实运行配置任何形态都不得进用户版。
+  [path.join("backend", "_internal", "config", "fatex.db"), "FateX 命理产品库（用户版不带）"],
+  [path.join("seed-data", "config", "fatex.db"), "FateX 命理产品库（用户版不带）"],
+  [path.join("backend", "_internal", "config", "license.key"), "授权私钥 / 授权文件"],
+  [path.join("backend", "_internal", "config", "config.yaml"), "构建机真实运行配置（含 Key / 令牌）"],
+  [path.join("backend", "_internal", "config", "config.local.yaml"), "构建机 overlay（含 Key / 令牌）"],
+  [path.join("backend", "_internal", "platform", "credpool", "data"), "凭据池数据库"],
+  [path.join("backend", "_internal", "platform", "credpool", "config"), "凭据池配置（含内网地址 / 密钥）"],
 ];
+exports.FORBIDDEN = FORBIDDEN;
 
 // 内测/定制包随包数据种子。判据与 stage_internal_assets.py 的产出一一对应：
 // 种子缺一半（比如只有 overlay 没有语音）装出来就是「人设在、声音哑」的半残包，

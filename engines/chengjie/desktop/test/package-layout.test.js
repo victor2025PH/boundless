@@ -170,13 +170,113 @@ for (const dir of crossedDirs) {
 // 反向：REQUIRED 里点名的 shared 代表文件必须真能被映射交付
 for (const rel of requiredRels) {
   const mp = mappings.find((x) => rel === x.to || rel.startsWith(x.to.replace(/^\/+/, "") + "/"));
-  if (!mp) continue; // backend/services 由各自 from 目录交付，不在本门禁口径内
+  if (!mp) continue; // services 由各自 from 目录交付，不在本门禁口径内
+  // backend/ 是 PyInstaller 产物（build_backend.py 产出），源侧判据在下方「必须在」清单里
+  // 按 DATAS 源码 + 仓库文件核对，不要求本机已经打过后端。
+  if (rel === "backend" || rel.startsWith("backend/")) continue;
   const relInDir = rel === mp.to ? "" : rel.slice(mp.to.length + 1);
   if (!relInDir) continue;
   ok(
     fs.existsSync(path.join(mp.srcDir, relInDir.split("/").join(path.sep))),
     `after-pack 点名的 ${rel} 在映射源 ${mp.from} 里不存在（装包必失败，先修表或修文件）`
   );
+}
+
+// ── P-4 #254（MTRCH2①③，2026-09-08）后端随包清单两张：「必须在」与「必须不在」──────
+// 1.0.77 clean 包实锤：handoff_scripts.yaml / handoff_compliance.yaml 没进包（转人工链哑），
+// 而 fatex.db（命理产品库）在客户机上凭空出现。此前 backend/ 对本门禁是一个不透明映射，
+// 什么进了、什么没进只有装到客户机才知道。这里按**源侧契约**核对（不打包、不看 dist）：
+//   · 必须在：build_backend.py 的 DATAS 必须登记这些文件 / 目录，且仓库里真有；after-pack
+//     REQUIRED 必须有对应的包内路径（打包时再实测一次）。
+//   · 必须不在：DATAS 里不得出现 .db / .key / 真实 config.yaml / config.local.yaml / seed-data；
+//     after-pack FORBIDDEN 必须点名 fatex.db 等；随包 YAML 里不得有内网地址（10./192.168./172.16-31.）。
+// 若本机恰好有 build/backend-dist（打过后端），顺手对产物做一遍同样的存在 / 不存在断言。
+const repoRoot = path.join(appDir, "..");
+const buildBackendPy = fs.readFileSync(path.join(appDir, "build", "build_backend.py"), "utf8");
+const datasBlock = (buildBackendPy.match(/DATAS\s*=\s*\[([\s\S]*?)\n\]/) || ["", ""])[1];
+ok(datasBlock.length > 0, "build_backend.py 里找不到 DATAS = [...] 块（门禁口径失效）");
+
+// [DATAS 里的源路径写法, 仓库相对路径, 包内相对路径（after-pack REQUIRED 口径）, 人话]
+const MUST_SHIP = [
+  ['REPO / "config" / "config.desktop.min.yaml"', "config/config.desktop.min.yaml",
+    "backend/_internal/config/config.desktop.min.yaml", "桌面最小种子配置"],
+  ['REPO / "config" / "handoff_scripts.yaml"', "config/handoff_scripts.yaml",
+    "backend/_internal/config/handoff_scripts.yaml", "转人工话术模板（MTRCH2③）"],
+  ['REPO / "config" / "handoff_compliance.yaml"', "config/handoff_compliance.yaml",
+    "backend/_internal/config/handoff_compliance.yaml", "转人工合规规则（MTRCH2③）"],
+  ['REPO / "config" / "profiles"', "config/profiles",
+    null, "部署能力预设档（按 profile 播种）"],
+];
+for (const [datasLit, repoRel, packRel, what] of MUST_SHIP) {
+  ok(datasBlock.includes(datasLit),
+    `build_backend.py DATAS 未登记 ${repoRel}（${what}）—— clean 包会缺它，只在客户机 WARNING 里暴露`);
+  ok(fs.existsSync(path.join(repoRoot, repoRel.split("/").join(path.sep))),
+    `仓库缺 ${repoRel}（${what}）—— DATAS 登记了但源文件不存在，PyInstaller 会直接报错`);
+  if (packRel) {
+    ok(requiredRels.includes(packRel),
+      `after-pack.js REQUIRED 未点名 ${packRel}（${what}）—— 打包时无人核对它是否真进包`);
+  }
+}
+// domains/ 经 _stage_domains 暂存进包（不是 DATAS 常量），源侧核对函数在位 + 清单文件存在
+ok(/def _stage_domains\(/.test(buildBackendPy) && /\(_stage_domains\(\),\s*"domains"\)/.test(buildBackendPy),
+  "build_backend.py 丢了 domains/ 暂存（_stage_domains → \"domains\"）—— 域包不进包，KB 分类 / 提示词回落硬编码");
+ok(fs.existsSync(path.join(repoRoot, "domains", "conversion", "manifest.yaml")),
+  "仓库缺 domains/conversion/manifest.yaml");
+ok(requiredRels.includes("backend/_internal/domains/conversion/manifest.yaml"),
+  "after-pack.js REQUIRED 未点名 domains manifest");
+
+// 必须不在：DATAS 源侧不得出现这些
+const MUST_NOT_SHIP_DATAS = [
+  [/\.db"/, "任何 .db（fatex.db / knowledge_base.db / credpool 库）"],
+  [/\.key"/, "任何 .key（授权私钥）"],
+  [/"config\.yaml"/, "构建机真实运行配置 config.yaml"],
+  [/"config\.local\.yaml"/, "构建机 overlay config.local.yaml"],
+  [/seed-data/, "内测数据种子（走 extraResources 的 seed-data 映射，不进后端产物）"],
+  [/"demo"|demo_data|演示数据/, "演示数据"],
+];
+for (const [re, what] of MUST_NOT_SHIP_DATAS) {
+  ok(!re.test(datasBlock), `build_backend.py DATAS 出现了不该随包的 ${what}`);
+}
+ok(Array.isArray(afterPack.FORBIDDEN), "after-pack.js 未导出 FORBIDDEN（「必须不在」清单无人核对）");
+const forbiddenRels = afterPack.FORBIDDEN.map((r) => toPosix(String(r[0])));
+for (const rel of ["backend/_internal/config/fatex.db", "seed-data/config/fatex.db",
+  "backend/_internal/config/license.key", "backend/_internal/config/config.yaml",
+  "backend/_internal/config/config.local.yaml", "backend/_internal/platform/credpool/data",
+  "seed-data/config/knowledge_base.db"]) {
+  ok(forbiddenRels.includes(rel), `after-pack.js FORBIDDEN 未点名 ${rel}（「必须不在」清单漏项）`);
+}
+// 随包 YAML 零内网地址（config.desktop.min / handoff 两 yaml / profiles/*.yaml）
+const PRIVATE_IP = /\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/;
+const shippedYaml = ["config/config.desktop.min.yaml", "config/handoff_scripts.yaml", "config/handoff_compliance.yaml"]
+  .map((r) => path.join(repoRoot, r.split("/").join(path.sep)));
+try {
+  for (const n of fs.readdirSync(path.join(repoRoot, "config", "profiles"))) {
+    if (/\.ya?ml$/.test(n)) shippedYaml.push(path.join(repoRoot, "config", "profiles", n));
+  }
+} catch (e) { /* profiles 目录缺失已由 MUST_SHIP 报 */ }
+for (const f of shippedYaml) {
+  if (!fs.existsSync(f)) continue;
+  const lines = fs.readFileSync(f, "utf8").split(/\r?\n/);
+  const hit = lines.findIndex((ln) => PRIVATE_IP.test(ln.replace(/#.*$/, "")));
+  ok(hit < 0, `随包 YAML ${path.relative(repoRoot, f)} 第 ${hit + 1} 行含内网地址（用户版不得带厂商内网）`);
+}
+// 本机若已打过后端：对产物再核一遍（可选；没有 backend-dist 不算失败）。
+// 「必须在」缺件只**警告**：产物可能只是比 DATAS 旧（check_backend_freshness.py 在 predist
+// 里会硬拒陈旧产物，refresh_backend_datas.py 可只补数据不重打）；「必须不在」泄漏则硬红。
+const backendDist = path.join(appDir, "build", "backend-dist", "_internal");
+if (fs.existsSync(backendDist)) {
+  for (const [, , packRel, what] of MUST_SHIP) {
+    if (!packRel) continue;
+    const p = path.join(backendDist, packRel.replace(/^backend\/_internal\//, "").split("/").join(path.sep));
+    if (!fs.existsSync(p)) {
+      console.warn(`package-layout WARN: 本机 backend-dist 缺 ${packRel}（${what}）—— 产物比 DATAS 旧，` +
+        "npm run build:backend 或 python build/refresh_backend_datas.py 后再打包（predist 的 freshness 门禁会硬拒）");
+    }
+  }
+  for (const rel of ["config/fatex.db", "config/license.key", "config/config.yaml", "config/config.local.yaml"]) {
+    ok(!fs.existsSync(path.join(backendDist, rel.split("/").join(path.sep))),
+      `本机 backend-dist 含不该随包的 ${rel}`);
+  }
 }
 
 console.log("package-layout.test.js: " + passed + " passed");

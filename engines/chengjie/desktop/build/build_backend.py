@@ -59,6 +59,14 @@ DATAS = [
     # 完整 example 仍随包：供参考 + 非桌面模式回落种子。
     (REPO / "config" / "config.desktop.min.yaml", "config"),
     (REPO / "config" / "config.example.yaml", "config"),
+    # P-4 #254（MTRCH2③，2026-09-08）：转人工话术 / 合规检查两份 yaml 此前**没进包**，
+    # clean 装每次启动 WARNING「HandoffRenderer init skipped: scripts file not found」
+    # 「HandoffComplianceChecker init skipped」——转人工整条链在客户机上哑。
+    # contacts/bootstrap 先找用户数据区 config/，缺则回落这里的 <_internal>/config/。
+    # ⚠ 只许纯 YAML 话术 / 规则进这一段；fatex.db / *.key / credpool 库 / 真实 config.yaml
+    # 一律不得出现（package-layout.test.js「必须不在」清单钉住）。
+    (REPO / "config" / "handoff_scripts.yaml", "config"),
+    (REPO / "config" / "handoff_compliance.yaml", "config"),
     # WP-1：部署能力预设档（cloud_light 等；纯 YAML，门禁保证零内网 IP）。
     # launcher 注入 AITR_DEPLOY_PROFILE 后，首启由 ConfigManager 播种进 overlay。
     (REPO / "config" / "profiles", "config/profiles"),
