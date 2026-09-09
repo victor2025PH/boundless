@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  ROUTE_BUDGET_MS,
   VISION_CHAR_COST,
   consumeQuota,
   estimateRequestChars,
   gatewayEnabled,
   isVisionModel,
   logGateway,
-  proxyChatCompletions,
+  noteChatLatency,
+  proxyChatCompletionsEx,
   proxyVision,
   quotaSnapshot,
   shouldAlertVisionOverflow,
   verifyDeviceToken,
   visionContextOverflow,
   visionRelayEnabled,
+  type ChatUpstreamChoice,
   type VisionContextOverflow,
 } from "@/lib/ai-gateway";
 import { getAdminChats } from "@/lib/admin-store";
@@ -119,13 +122,28 @@ export async function POST(req: NextRequest) {
     }
 
     const ac = new AbortController();
-    // 识图冷载/大图更慢，给更宽超时
-    const timer = setTimeout(() => ac.abort(), vision ? 120000 : 55000);
+    // 识图冷载/大图更慢，给更宽超时。chat 预算 = ROUTE_BUDGET_MS.chat（55s）：客户端读超时
+    // 必须 ≥ 它（1.0.79 起默认 60s，Q-14 #262），否则客户端先断 → nginx 499、客户端沉默。
+    const timer = setTimeout(() => ac.abort(), vision ? ROUTE_BUDGET_MS.vision : ROUTE_BUDGET_MS.chat);
     let upstream: Response;
+    let choice: ChatUpstreamChoice | null = null;
+    const reqModel = String(body.model || "");
     try {
-      upstream = vision ? await proxyVision(body, ac.signal) : await proxyChatCompletions(body, ac.signal);
+      if (vision) {
+        upstream = await proxyVision(body, ac.signal);
+      } else {
+        const r = await proxyChatCompletionsEx(body, ac.signal);
+        upstream = r.res;
+        choice = r.choice;
+      }
     } catch {
-      void logGateway({ ev: vision ? "vision_fail" : "upstream_fail", mid: claims.mid, ms: Date.now() - started });
+      const ms = Date.now() - started;
+      // 超时 / 连接失败也进慢模型观测：整包吃满 55s 预算就是「慢」的最强证据
+      if (!vision) noteChatLatency(choice?.model || reqModel, ms);
+      void logGateway({
+        ev: vision ? "vision_fail" : "upstream_fail", mid: claims.mid, ms,
+        ...(vision ? {} : { model: choice?.model || reqModel, key: choice?.key || "primary", prompt_chars: inChars }),
+      });
       return NextResponse.json({ error: { message: "upstream_error" } }, { status: 502 });
     } finally {
       clearTimeout(timer);
@@ -167,10 +185,16 @@ export async function POST(req: NextRequest) {
     // 识图调用带独立标（2026-08-23）：此前 vision 也记 ev:"chat"，排障只能靠
     // in===VISION_CHAR_COST 猜——「把人看成猫」事故的服务端流水就因此被误读成
     // 「零识图调用」。加 vision:1 字段（不改 ev，老消费方零影响）。
+    // Q-14 #262：ok 事件补 model / key=primary|backup / prompt_chars / ok，供
+    // scripts/ai-gateway-report.mjs 算近 24h 按模型 p50 / p95（499 率另取 nginx access.log）。
+    const totalMs = Date.now() - started;
+    if (!vision) noteChatLatency(choice?.model || reqModel, totalMs);
     void logGateway({
-      ev: "chat", mid: claims.mid, status: upstream.status,
-      in: inChars, out: outChars, ms: Date.now() - started,
-      ...(vision ? { vision: 1 } : {}),
+      ev: "chat", mid: claims.mid, status: upstream.status, ok: upstream.ok ? 1 : 0,
+      in: inChars, out: outChars, ms: totalMs,
+      ...(vision
+        ? { vision: 1 }
+        : { model: choice?.model || reqModel, key: choice?.key || "primary", prompt_chars: inChars }),
     });
 
     return new NextResponse(text, {

@@ -921,27 +921,114 @@ export async function logGateway(rec: Record<string, unknown>): Promise<void> {
   }
 }
 
-export async function proxyChatCompletions(
+// ── 慢模型冷却 → 切备用 Key / 模型（Q-14 #262 C，2026-09-09）───────────────────
+// 09-08 23h 起 DeepSeek 峰时生成常超 30s（1.0.78 prompt 变长）→ 客户端先断 → nginx 499。
+// 客户端已把读超时对齐到 60s；网关侧再补一层：某模型**连续 N=3 次 p95 > 40s** 或
+// **单次 > 45s**（含超时被 abort 的那次）→ 该模型进 60s 冷却，下一请求切备用
+// （DEEPSEEK_BACKUP_API_KEY / DEEPSEEK_BACKUP_BASE_URL / DEEPSEEK_BACKUP_MODEL；没配备用 =
+// 只记日志不切）。与识图中继 `_relayCooldown` 同一套语义（键 `chat:<model>`）。
+export const CHAT_SLOW_P95_MS = Number(process.env.AI_GATEWAY_CHAT_SLOW_P95_MS || 40_000);
+export const CHAT_SLOW_SINGLE_MS = Number(process.env.AI_GATEWAY_CHAT_SLOW_SINGLE_MS || 45_000);
+export const CHAT_SLOW_STREAK = Number(process.env.AI_GATEWAY_CHAT_SLOW_STREAK || 3);
+export const CHAT_COOLDOWN_MS = Number(process.env.AI_GATEWAY_CHAT_COOLDOWN_MS || 60_000);
+const CHAT_LAT_WINDOW = 20;
+const _chatLat = new Map<string, number[]>();
+const _chatSlowStreak = new Map<string, number>();
+
+const BACKUP_KEY = (process.env.DEEPSEEK_BACKUP_API_KEY || "").trim();
+const BACKUP_ENDPOINT = (process.env.DEEPSEEK_BACKUP_BASE_URL || VENDOR_ENDPOINT).trim();
+const BACKUP_MODEL = (process.env.DEEPSEEK_BACKUP_MODEL || "").trim();
+
+export type ChatUpstreamChoice = {
+  key: "primary" | "backup";
+  model: string;
+  endpoint: string;
+  apiKey: string;
+};
+
+function p95Of(arr: number[]): number {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))];
+}
+
+/** 一次 chat 往返的耗时观测；触发冷却时返回 true（调用方只需记日志）。 */
+export function noteChatLatency(model: string, ms: number, now = Date.now()): boolean {
+  const m = String(model || "").trim() || "?";
+  const arr = _chatLat.get(m) || [];
+  arr.push(Math.max(0, Math.floor(ms)));
+  while (arr.length > CHAT_LAT_WINDOW) arr.shift();
+  _chatLat.set(m, arr);
+  const p95 = arr.length >= 5 ? p95Of(arr) : 0;
+  const streak = p95 > CHAT_SLOW_P95_MS ? (_chatSlowStreak.get(m) || 0) + 1 : 0;
+  _chatSlowStreak.set(m, streak);
+  const slow = ms > CHAT_SLOW_SINGLE_MS || streak >= CHAT_SLOW_STREAK;
+  if (!slow) return false;
+  if ((_relayCooldown.get(`chat:${m}`) || 0) > now) return false; // 已在冷却，不重复记
+  _relayCooldown.set(`chat:${m}`, now + CHAT_COOLDOWN_MS);
+  _chatSlowStreak.set(m, 0);
+  const why = ms > CHAT_SLOW_SINGLE_MS ? `single=${Math.floor(ms)}ms` : `p95=${p95}ms streak=${streak}`;
+  console.warn(
+    `[ai-gw] cooldown model=${m} reason=slow ${why} for=${CHAT_COOLDOWN_MS}ms backup=${BACKUP_KEY ? "yes" : "none"}`
+  );
+  void logGateway({ ev: "cooldown", model: m, why: "slow", ms: Math.floor(ms), p95, streak, backup: BACKUP_KEY ? 1 : 0 });
+  return true;
+}
+
+export function chatModelCooling(model: string, now = Date.now()): boolean {
+  return (_relayCooldown.get(`chat:${String(model || "").trim()}`) || 0) > now;
+}
+
+/** 本次 chat 请求该打哪把 Key / 哪个模型：主模型冷却中且配了备用 → 备用；否则主。 */
+export function chatUpstreamChoice(body: Record<string, unknown>, now = Date.now()): ChatUpstreamChoice {
+  const model = clampModel(body.model);
+  const primaryKey = (process.env.DEEPSEEK_API_KEY || "").trim();
+  if (chatModelCooling(model, now) && BACKUP_KEY) {
+    return { key: "backup", model: BACKUP_MODEL || model, endpoint: BACKUP_ENDPOINT, apiKey: BACKUP_KEY };
+  }
+  return { key: "primary", model, endpoint: VENDOR_ENDPOINT, apiKey: primaryKey };
+}
+
+export function chatCooldownStatus(now = Date.now()): Array<{ model: string; cooling: boolean; until: number; p95: number; n: number }> {
+  const models = new Set<string>([...MODEL_ALLOWLIST, ..._chatLat.keys()]);
+  return [...models].map((m) => ({
+    model: m,
+    cooling: chatModelCooling(m, now),
+    until: _relayCooldown.get(`chat:${m}`) || 0,
+    p95: p95Of(_chatLat.get(m) || []),
+    n: (_chatLat.get(m) || []).length,
+  }));
+}
+
+export async function proxyChatCompletionsEx(
   body: Record<string, unknown>,
   signal?: AbortSignal
-): Promise<Response> {
-  const key = process.env.DEEPSEEK_API_KEY;
-  if (!key) throw new Error("no_vendor_key");
+): Promise<{ res: Response; choice: ChatUpstreamChoice }> {
+  const choice = chatUpstreamChoice(body);
+  if (!choice.apiKey) throw new Error("no_vendor_key");
   const payload = {
     ...body,
-    model: clampModel(body.model),
+    model: choice.model,
     max_tokens: clampMaxTokens(body.max_tokens),
     stream: false, // 首版关流式：契约明确，非流式客户端零影响
   };
-  return fetch(VENDOR_ENDPOINT, {
+  const res = await fetch(choice.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${choice.apiKey}`,
     },
     body: JSON.stringify(payload),
     signal,
   });
+  return { res, choice };
+}
+
+export async function proxyChatCompletions(
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Response> {
+  return (await proxyChatCompletionsEx(body, signal)).res;
 }
 
 export function publicGatewayBase(siteOrigin: string): string {

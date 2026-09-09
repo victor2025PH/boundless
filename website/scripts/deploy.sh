@@ -128,7 +128,7 @@ rollback() {
   # 备份 tar 不含 node_modules；若本次部署改过依赖（package/lock）再回滚，旧代码必须配旧 lock
   # 对应的依赖树，否则 build 会因依赖错配失败。LIBC=glibc 已在主流程全局 export，对 rollback 同样生效。
   npm ci --no-audit --no-fund >/dev/null 2>&1 || true
-  ( cd "$APP_DIR" && npm run build >/dev/null 2>&1 && pm2 restart "$PM2_NAME" --update-env >/dev/null 2>&1 ) \
+  ( cd "$APP_DIR" && npm run build >/dev/null 2>&1 && (pm2 reload "$PM2_NAME" --update-env >/dev/null 2>&1 || pm2 restart "$PM2_NAME" --update-env >/dev/null 2>&1) ) \
     || fail "rollback rebuild/restart had issues — inspect manually"
   fail "rollback attempted; site restored to pre-deploy state"
   exit 1
@@ -226,8 +226,11 @@ export LIBC=glibc
 npm ci --no-audit --no-fund || rollback
 log "5/7 next build"
 npm run build || rollback
-log "6/7 pm2 restart ($PM2_NAME)"
-pm2 restart "$PM2_NAME" --update-env || rollback
+# Q-14 #262（2026-09-09）：滚动 reload 代替 restart。cluster 模式（ecosystem.config.js）下
+# pm2 reload = 先起新 worker、就绪后再停旧 → 部署期 /api/ai/hub/health 零 5xx（09-08 19h
+# R78 部署窗 restart 让 nginx 记了 7 次 5xx）。旧 fork 进程上 reload 退化为重启，语义不坏。
+log "6/7 pm2 reload ($PM2_NAME, rolling)"
+pm2 reload "$PM2_NAME" --update-env || pm2 restart "$PM2_NAME" --update-env || rollback
 pm2 save >/dev/null 2>&1 || true
 
 log "7/7 health check (:$PORT)"

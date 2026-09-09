@@ -227,7 +227,7 @@ if ($PublishAnnouncement) {
 $scpBase = @("-i", $Key, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 $sshBase = $scpBase
 if ($DryRun) {
-    Info "DRYRUN would scp exe+blockmap -> ${Vps}:$RemoteDir, verify sha512 on VPS, then scp $YmlName+manifest.json, then pm2 restart"
+    Info "DRYRUN would scp exe+blockmap -> ${Vps}:$RemoteDir, verify sha512 on VPS, then scp $YmlName+manifest.json, then pm2 reload (rolling)"
 } else {
     if ($Internal) {
         & ssh @sshBase $Vps "mkdir -p '$RemoteDir'"
@@ -245,8 +245,11 @@ if ($DryRun) {
     if ($LASTEXITCODE -ne 0) { Fail "scp pointers failed" }
     # Next.js indexes public/ at boot: a NEW file (new version exe, or the whole internal/ dir the
     # first time) is 404 until the server restarts. Same restart for both channels.
-    & ssh @sshBase $Vps "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
-    Ok "pointers uploaded + pm2 restarted"
+    # Q-14 #262 (2026-09-09): `pm2 reload` = rolling (cluster mode, ecosystem.config.js): new worker
+    # up first, old one stopped after -> zero 5xx window. 09-08 19h the old `pm2 restart` cost 7 x 5xx
+    # in nginx during the R78 publish. Falls back to restart only if reload is rejected (old pm2).
+    & ssh @sshBase $Vps "pm2 reload yuntech --update-env >/dev/null 2>&1 || pm2 restart yuntech --update-env >/dev/null 2>&1; sleep 4 && echo reloaded" | Out-Null
+    Ok "pointers uploaded + pm2 reloaded (rolling)"
 }
 
 # -- 4.5 R2 mirror sync (download-speed P0, 2026-08-08) --------------------------

@@ -255,7 +255,8 @@ try {
       # Next.js 只在启动时建立 public/ 静态索引：新增文件后不重启会 404（本次事故的第二成因）。
       if ($changed -gt 0) {
         Write-Host "    发布物有 $changed 项变更 → 重启 pm2 让静态索引生效"
-        Invoke-Remote "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
+        # Q-14 #262：滚动 reload（cluster 模式）代替 restart，发布物生效不再有 5xx 窗
+        Invoke-Remote "pm2 reload yuntech --update-env >/dev/null 2>&1 || pm2 restart yuntech --update-env >/dev/null 2>&1; sleep 4 && echo reloaded" | Out-Null
       }
 
       # [3.6/4] R2 镜像同步（下载提速 P0 · 2026-08-08）：官网 /dl 分流入口 R2 优先，

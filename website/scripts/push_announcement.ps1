@@ -162,8 +162,9 @@ Ok "staged $AnnLocal ($($items.Count) entries$(if ($minSupported) { ", min_suppo
 $scpBase = @("-i", $Key, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
 & scp @scpBase $AnnLocal "${Vps}:$RemoteDir/"
 if ($LASTEXITCODE -ne 0) { Fail "scp announcements.json failed" }
-& ssh @scpBase $Vps "pm2 restart yuntech --update-env >/dev/null 2>&1 && sleep 4 && echo restarted" | Out-Null
-Ok "uploaded + pm2 restarted"
+# Q-14 #262: rolling reload (cluster mode) instead of restart -> no 5xx window while the feed goes live.
+& ssh @scpBase $Vps "pm2 reload yuntech --update-env >/dev/null 2>&1 || pm2 restart yuntech --update-env >/dev/null 2>&1; sleep 4 && echo reloaded" | Out-Null
+Ok "uploaded + pm2 reloaded (rolling)"
 
 # R2 mirror (soft-fail, same lookup as publish_chatx.ps1)
 $R2Conf = $env:RCLONE_R2_CONF
