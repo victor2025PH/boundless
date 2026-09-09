@@ -42,6 +42,9 @@ account_missing         warn   注册表无此账号行
 customer_waiting_no_gate warn  无任何闸拦、也无待审草稿，但末条是入站且已超
                                宽限（600s）无回——「一片绿却不回」的定向诊断
                                （B113；params: wait_sec/effective）
+ai_last_fail            warn   最近一次 AI 起草失败未被后续成功覆盖（Q-14 #262：
+                               params: reason=timeout|connect|gateway_5xx|no_key|
+                               empty|unknown / hhmm / ago_sec / latency_ms / draft_id）
 looks_alive             ok     未发现拦截
 ======================  =====  ==========================================
 """
@@ -378,6 +381,24 @@ def diagnose_conversation(
                  wait_sec=round(silent_wait_sec, 1),
                  effective=str(effective.get("effective_mode")
                                or base_mode or ""))
+
+    # ── Q-14 #262：最近一次 AI 起草失败（超时 / 网关不可达 / 空响应）──────
+    # 「为什么没回」最直接的答案之一：AI 这一轮根本没生成。灰标由起草侧写、下次
+    # 成功即清，所以这里有值 = 该会话最新状态仍是「未生成」。fail-open。
+    try:
+        from src.inbox.ai_fail_marker import get as _aif_get, hhmm as _aif_hhmm
+        _aif = _aif_get(store, cid) if store is not None else None
+        if _aif:
+            out["ai_last_fail"] = _aif
+            _aif_ts = float(_aif.get("ts") or 0.0)
+            _finding(findings, "warn", "ai_last_fail",
+                     reason=str(_aif.get("reason") or "unknown"),
+                     hhmm=_aif_hhmm(_aif_ts),
+                     ago_sec=round(max(0.0, ts_now - _aif_ts), 0),
+                     latency_ms=int(_aif.get("latency_ms") or 0),
+                     draft_id=str(_aif.get("draft_id") or ""))
+    except Exception:
+        logger.debug("[reply_diag] ai_last_fail 读取失败（忽略）", exc_info=True)
 
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",

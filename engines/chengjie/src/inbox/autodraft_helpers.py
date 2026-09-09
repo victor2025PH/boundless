@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 # 图文连发补识（Phase1.3）：拟稿时向前回扫多少条消息找「还没识别过」的入站媒体行。
 # 窗口大小读 `inbox.auto_draft.media_backscan`（缺省本默认值；≤1 = 关闭回扫，退化为
@@ -787,6 +788,12 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                 reply_lang=str(out.get("reply_lang") or "zh"),
                 automation_mode=mode,
             )
+            # Q-14 B：本会话 AI 成功出稿 → 清「AI 本轮未生成」灰标
+            try:
+                from src.inbox.ai_fail_marker import clear as _aif_clear
+                _aif_clear(_ad_store, cid)
+            except Exception:
+                pass
             if done:
                 # L3 缓冲话术：草稿被定级为需人审（L3+）而不会自动发时，先「接住」客户
                 # ——自动已读 + 一句安全缓冲话术，避免人审挂起期客户被沉默晾着（真实事故）。
@@ -796,6 +803,8 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                 return
         # 生成失败/为空 → 兜底放行（规则模板占位）
         draft_svc.release_enriching_draft(draft_id)
+        # Q-14 B：失败对坐席可见——接住点落一行 [ai] fail + 会话灰标（不引入任何罐头句）
+        _mark_ai_fail(_ad_app, _ad_store, cid, draft_id)
     except Exception:
         assistant.logger.debug(
             "[AutoDraft] 人设补全失败，兜底放行 draft_id=%s",
@@ -804,6 +813,25 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
             draft_svc.release_enriching_draft(draft_id)
         except Exception:
             pass
+        try:
+            _mark_ai_fail(_ad_app, _ad_store, cid, draft_id)
+        except Exception:
+            pass
+
+
+def _mark_ai_fail(app: Any, store: Any, cid: str, draft_id: str) -> None:
+    """Q-14 B：把 ``AIClient`` 记下的失败原因（timeout / connect / gateway_5xx / no_key /
+    empty）搬到会话灰标 ``last_ai_fail``；ai_client 无记录（失败在 AI 之外）→ unknown。绝不抛。"""
+    try:
+        from src.inbox.ai_fail_marker import consume_and_mark
+        _st = getattr(getattr(app, "state", None), "inbox_store", None) or store
+        _ai = getattr(getattr(app, "state", None), "ai_client", None)
+        if _ai is None:
+            _sm = getattr(getattr(app, "state", None), "skill_manager", None)
+            _ai = getattr(_sm, "ai_client", None)
+        consume_and_mark(_ai, _st, str(cid or ""), draft_id=str(draft_id or ""))
+    except Exception:
+        logging.getLogger(__name__).debug("[AutoDraft] ai_fail 灰标写入失败（忽略）", exc_info=True)
 
 
 async def _maybe_holding_after_enrich(

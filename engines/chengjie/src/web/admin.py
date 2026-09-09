@@ -4036,6 +4036,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_ac.getLogger("admin").warning("资产中心路由注册失败", exc_info=True)
 
+    # ── Q-14 #262（2026-09-09）：「AI 本轮未生成」灰标读 / 清端点（独立块，同上例）──
+    try:
+        from src.web.routes.ai_fail_routes import register_ai_fail_routes
+
+        register_ai_fail_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_aif
+
+        _log_aif.getLogger("admin").warning("ai_fail 路由注册失败", exc_info=True)
+
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")
     async def _ws_queue_monitor(request: Request):

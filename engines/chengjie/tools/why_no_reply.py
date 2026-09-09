@@ -328,6 +328,26 @@ def diagnose(root: Path, platform: str, account_id: str,
            f"有 {len(pend)} 条待审草稿（最老 {(now - oldest) / 3600.0:.1f}h）"
            f"——AI 一直在拟稿，只是没人在待审队列点「发送」")
 
+    # ── Q-14 #262：最近一次 AI 起草失败（app_settings 键 ai_last_fail:<cid>）──
+    _REASON_ZH = {"timeout": "超时", "connect": "连不上网关", "gateway_5xx": "网关 5xx",
+                  "auth": "Key 鉴权失败", "no_key": "未配置 Key", "empty": "空响应",
+                  "other": "其他错误", "unknown": "原因未知"}
+    try:
+        if ib is not None:
+            _af = _row(ib, "SELECT sval FROM app_settings WHERE skey=?",
+                       (f"ai_last_fail:{cid}",))
+            if _af and _af.get("sval"):
+                _rec = json.loads(str(_af["sval"]))
+                out["ai_last_fail"] = _rec
+                _r = str(_rec.get("reason") or "unknown")
+                _v("warn", "ai_last_fail",
+                   f"AI {_fmt_ts(_rec.get('ts'))} {_REASON_ZH.get(_r, _r)}，未生成"
+                   f"（latency={_rec.get('latency_ms')}ms attempt={_rec.get('attempt')}"
+                   f" draft={_rec.get('draft_id') or '-'}）——本轮不回、无罐头；"
+                   f"下次该会话 AI 成功即自动清除，也可在工作台灰标点「重试起草」")
+    except Exception:
+        pass
+
     if not any(v["level"] == "block" for v in verdicts):
         _v("ok", "looks_alive",
            f"未发现拦截：有效档位={eff_mode}"

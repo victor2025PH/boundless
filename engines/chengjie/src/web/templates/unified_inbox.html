@@ -798,10 +798,15 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                基础档位，被系统封顶（新号预热/平台/业务线）时在此说真话。默认隐藏，
                _renderEffChip 按 /automation 响应 effective 段控显（旧后端无该段=不显示）。 -->
           <span class="hdr-eff-chip" id="mode-eff-chip" onclick="openAiDiag()" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:pointer;"></span>
+          <!-- Q-14 #262：「AI 本轮未生成（超时 · 23:41）」灰标——/thread 响应 ai_last_fail 有值才显示；
+               点「重试起草」走既有 /api/drafts/{id}/regenerate；该会话下次 AI 成功自动清。 -->
+          <span class="hdr-eff-chip" id="aif-chip" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-gray100,#f1f5f9);color:var(--th-ink-gray6,#64748b);white-space:nowrap;"><span id="aif-chip-text"></span><button class="hdr-btn" id="aif-retry-btn" onclick="aifRetryDraft()" style="padding:0 6px;font-size:11px;line-height:16px;" data-i18n="inbox.aif.retry">重试起草</button></span>
           <!-- P0 2026-08-09 AI 状态体检入口：why_no_reply 排障 CLI 的面板化。
                「为什么这条没自动回」从工程师 SSH 变成坐席自己点一下。 -->
           <button class="hdr-btn" id="ai-diag-btn" onclick="openAiDiag()" title="AI 回复链路体检：这个会话为什么没自动回" data-i18n-title="inbox.diag.btn_t"><span>🩺</span><span data-i18n="inbox.diag.btn">AI 状态</span></button>
           <button class="hdr-btn" id="ai-toggle-btn" onclick="toggleAiDraft()" style="display:none;" title="待审 AI 草稿队列（仅「AI草稿/多选」档显示，人工审批后发送）" data-i18n-title="inbox.ai.pending_t"><span data-i18n="inbox.ai.pending">📝 待审</span><span id="ai-pending-badge" style="display:none;margin-left:4px;background:var(--th-bg-red5,#ef4444);color:var(--th-ink-inverse,#fff);border-radius:9px;font-size:11px;font-weight:700;padding:0 5px;">0</span></button>
+          <!-- 实施97 线 A：微信客服会话独有——把会话转给企微客服后台的接待人员（本端 AI 同时停手）。仅 wechat_kf 会话显示 -->
+          <button class="hdr-btn" id="kf-transfer-btn" onclick="kfTransferToHuman()" style="display:none;" data-i18n-title="inbox.kf.transfer_t"><span>🧑‍💼</span><span data-i18n="inbox.kf.transfer">转企微人工</span></button>
           <button class="hdr-btn" id="info-toggle-btn" onclick="toggleInfoSidebar()" title="业务助手（AI回复/洞察/客户档案）" data-i18n-title="inbox.assist_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/></svg><span data-i18n="inbox.assist">助手</span></button>
           <!-- P17 Phase2: 右栏收起时的「工作目标」快捷入口（U6 窄屏可达性；JS 按 featureOn+会话选中 控显） -->
           <button class="hdr-btn" id="goal-quick-btn" onclick="_openGoalQuick()" style="display:none;" title="工作目标（工作计划）" data-i18n-title="inbox.goal.title_hint"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg><span data-i18n="inbox.goal.title">工作目标</span></button>
@@ -9398,6 +9403,8 @@ async function _loadThreadBody(c,silent,key){
     // B88：缺口探测状态随响应更新（无字段=无探测/无异常 → 清横幅）
     _threadGapProbe=(d.gap_probe && typeof d.gap_probe==='object')?d.gap_probe:null;
     _maybeScheduleGapReload(c,_threadGapProbe);
+    // Q-14 #262：会话头灰标「AI 本轮未生成」（无字段 = 无失败 / 已被成功覆盖 → 隐藏）
+    try{ if(typeof _aifRender==='function') _aifRender(c, d.ai_last_fail||null); }catch(_e){}
     // 保留乐观消息（还没被服务器确认的临时消息）
     const prevOptimistic=threadMsgs.filter(m=>m._optimistic);
     // 增量渲染配套：客户端补译状态（_translateMsgInto 写在旧对象上）随轮询并入新对象，
@@ -15886,6 +15893,58 @@ function closeAiDiag(ev){
   var ov=document.getElementById('ai-diag-overlay');
   if(ov) ov.style.display='none';
 }
+// ── Q-14 #262：「AI 本轮未生成」灰标（aif-*）───────────────────────────────
+// 起草侧失败写 last_ai_fail={ts, reason, draft_id}，/thread 响应带出；这里只做可见化：
+// 会话头灰标 + 「重试起草」（走既有 /api/drafts/{id}/regenerate），成功后清标。
+// 不引入任何罐头句：失败就是失败，坐席看得见、能重试、能人工接。
+var _aifCur=null;   // {cid, rec}
+function _aifReasonLabel(r){
+  r=String(r||'unknown');
+  var k='inbox.aif.reason.'+r, t=window.T(k);
+  return (t&&t!==k)?t:r;
+}
+function _aifHHMM(ts){
+  try{ var d=new Date(Number(ts||0)*1000); if(!isNaN(d.getTime())) return d.toTimeString().slice(0,5); }catch(_){}
+  return '--:--';
+}
+function _aifRender(c, rec){
+  var chip=document.getElementById('aif-chip'), txt=document.getElementById('aif-chip-text'), btn=document.getElementById('aif-retry-btn');
+  if(!chip||!txt) return;
+  if(!rec||!rec.reason||!c){ chip.style.display='none'; _aifCur=null; return; }
+  _aifCur={cid:convKey(c), conv:c, rec:rec};
+  txt.textContent=window.Tf('inbox.aif.chip',{reason:_aifReasonLabel(rec.reason), hhmm:_aifHHMM(rec.ts)});
+  chip.title=window.T('inbox.aif.title')+' · '+_aifReasonLabel(rec.reason)+(rec.latency_ms?(' · '+Math.round(Number(rec.latency_ms)/1000)+'s'):'');
+  if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.aif.retry'); btn.style.display=rec.draft_id?'':'none'; }
+  chip.style.display='inline-flex';
+}
+async function aifRetryDraft(){
+  var cur=_aifCur; if(!cur||!cur.rec) return;
+  var btn=document.getElementById('aif-retry-btn');
+  var did=String(cur.rec.draft_id||'');
+  if(!did){ _toast(window.T('inbox.aif.no_draft')); return; }
+  if(btn){ btn.disabled=true; btn.textContent=window.T('inbox.aif.retrying'); }
+  try{
+    var r=await apiFetch('/api/drafts/'+enc(did)+'/regenerate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var d=await r.json().catch(function(){ return {}; });
+    if(!r.ok||!d.ok){
+      var detail=String((d&&(d.detail||d.message))||('HTTP '+r.status));
+      if(r.status===404||r.status===409){ _toast(window.T('inbox.aif.no_draft')); }
+      else { _toast(window.Tf('inbox.aif.retry_fail',{detail:detail})); }
+      if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.aif.retry'); }
+      return;
+    }
+    var cid=(cur.conv&&cur.conv.platform)?(String(cur.conv.platform)+':'+String(cur.conv.account_id||'default')+':'+String(cur.conv.chat_key||'')):'';
+    try{ if(cid) await apiFetch('/api/unified-inbox/ai-last-fail/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cid:cid})}); }catch(_e){}
+    _toast(window.T('inbox.aif.retry_ok'));
+    _aifRender(cur.conv,null);
+    try{ if(typeof loadPendingDrafts==='function') loadPendingDrafts(); }catch(_e){}
+    try{ if(typeof selectedChat!=='undefined'&&selectedChat) loadThread(selectedChat,true); }catch(_e){}
+  }catch(e){
+    _toast(window.Tf('inbox.aif.retry_fail',{detail:String(e&&e.message||e)}));
+    if(btn){ btn.disabled=false; btn.textContent=window.T('inbox.aif.retry'); }
+  }
+}
+window.aifRetryDraft=aifRetryDraft;
 var __diagLast=null; // 最近一次体检结果（复制报告用）
 function _diagFindingText(f){
   var code=String((f&&f.code)||'');
@@ -15896,10 +15955,12 @@ function _diagFindingText(f){
   var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
     explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
     deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
-    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1};
+    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1};
   if(known[code]){
     var fmt={};
     Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
+    // Q-14 #262：AI 失败原因码译人话（与会话头灰标同一组词条）
+    if(code==='ai_last_fail'){ try{ fmt.reason=_aifReasonLabel(fmt.reason); }catch(_){} }
     // 档位/来源码先译人话再入模板（别把 review / guard:peer_bot 漏给坐席）
     try{
       if(fmt.mode) fmt.mode=_modeLabel(fmt.mode)||fmt.mode;

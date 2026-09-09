@@ -2005,6 +2005,15 @@ _ADDITIONS_2026_09_08_P2_DORMANT_REVIEW = """
 """
 _BASELINE += _ADDITIONS_2026_09_08_P2_DORMANT_REVIEW
 
+# Q-14 #262（2026-09-09）：「AI 本轮未生成」灰标读 / 清（ai_fail_routes.py）。灰标由起草侧写、
+# 下次 AI 成功自动清；clear 给坐席「重试起草」成功后手动清。
+_ADDITIONS_2026_09_09_Q14_AI_FAIL = """
+/api/unified-inbox/ai-last-fail	GET
+/api/unified-inbox/ai-last-fail/all	GET
+/api/unified-inbox/ai-last-fail/clear	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_09_Q14_AI_FAIL
+
 
 def _parse_baseline():
     expected = set()
