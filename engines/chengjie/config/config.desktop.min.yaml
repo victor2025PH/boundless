@@ -60,7 +60,8 @@ ai:
   model: "deepseek-v4-flash"
   temperature: 0.7
   max_tokens: 1024
-  timeout: 30
+  timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
+  prompt_budget_tokens: 6000        # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史 → few-shot → 注入长度 裁；0 = 不裁
 
 # 技能集（回复产线用；与 example 同款默认，不含 test 技能）
 skills:

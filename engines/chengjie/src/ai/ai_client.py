@@ -9,7 +9,7 @@ import json
 import re
 import time
 from collections import deque
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 
 try:
@@ -195,7 +195,15 @@ class AIClient(LoggerMixin):
         self.model = "gemini-2.5-flash"
         self.temperature = 0.7
         self.max_tokens = 1024
-        self.timeout = 30
+        # Q-14 #262（D-Q10）：默认读超时 30 → 60s。桌面托管版走官网网关，网关 chat 路由
+        # 预算 55s（website/lib/ai-gateway.ts ROUTE_BUDGET_MS.chat）：客户端 30s 先放弃
+        # → 网关还在等上游 → nginx 记 499、客户端这一轮沉默（09-08 实测 2.4%）。
+        # 不变量：客户端读超时 ≥ 网关路由预算 + 余量。显式配置了 ai.timeout 的存量不动。
+        self.timeout = 60
+        # prompt token 预算（系统提示 + 注入 + few-shot + 历史合计；0 = 不裁）
+        self._prompt_budget_tokens = 6000
+        # 最近一次主链失败（供起草侧「AI 本轮未生成」灰标消费；pop 即清）
+        self._last_fail: Optional[Dict[str, Any]] = None
 
         # 性能跟踪
         self.total_calls = 0
@@ -240,8 +248,13 @@ class AIClient(LoggerMixin):
             self.model = ai_config.get('model', 'gemini-2.5-flash')
             self.temperature = float(ai_config.get('temperature', 0.7))
             self.max_tokens = int(ai_config.get('max_tokens', 1024))
-            self.timeout = int(ai_config.get('timeout', 30))
-            # 启动连接探针的独立上限（秒）：主链读超时 self.timeout 常为 30s，但**冷启动**
+            self.timeout = int(ai_config.get('timeout', 60))
+            try:
+                self._prompt_budget_tokens = max(
+                    0, int(ai_config.get('prompt_budget_tokens', 6000) or 0))
+            except Exception:
+                self._prompt_budget_tokens = 6000
+            # 启动连接探针的独立上限（秒）：主链读超时 self.timeout 常为 60s，但**冷启动**
             # 时若云端(DeepSeek)被限流/抖动，这一次探针会占满整读超时，把「进程起来→/login
             # 可服务」的窗口拖到分钟级（seat 端撞加载超时）。探针结果 main 并不消费（仅日志 +
             # 坏 key 告警），故给它一个更短的独立上限；超时=按「未验证」放行（首个真实请求自会
@@ -867,6 +880,7 @@ class AIClient(LoggerMixin):
         )
         if not _primary_client and not _local_primary:
             self.logger.error("AI 客户端未初始化")
+            self._note_ai_fail("no_key", context, latency_ms=0, attempt=0)
             return self._fallback_reply(_fb_lang)
         if context is not None:
             context["_current_user_message_for_lang"] = user_message
@@ -967,6 +981,8 @@ class AIClient(LoggerMixin):
         except Exception:
             _um_send = user_message
         messages.append({"role": "user", "content": _um_send})
+        # Q-14 A：prompt 预算（历史 → few-shot → 注入长度），主链 / 备用池 / 本地同一份
+        messages = self._apply_prompt_budget(messages, context)
 
         request_id = (context or {}).get("request_id", "")
         # P1 本地优先：本地模型即主链，在**所有云端逻辑之前**短路（云端熔断态与它无关）。
@@ -1025,7 +1041,14 @@ class AIClient(LoggerMixin):
                 " request_id=%s", request_id or "n/a")
         last_error = None
         start_time = time.time()
+        _attempts_made = 0
+        _fail_reason = "empty"
         for attempt in range(2):
+            # Q-14 A（D-Q10）：读超时不重试——上游可能仍在生成，再打一枪 = 双倍成本 +
+            # 双倍延迟（网关预算 55s 内两枪永远等不完）。连接类 / 5xx 照旧再试 1 次。
+            if last_error is not None and _fail_reason == "timeout":
+                break
+            _attempts_made = attempt + 1
             try:
                 pt: int = 0
                 ct: int = 0
@@ -1091,6 +1114,7 @@ class AIClient(LoggerMixin):
                     pass
                 reply = reply or None
                 if reply:
+                    self._clear_ai_fail(context)
                     self.total_calls += 1
                     self.total_tokens += pt + ct
                     self.last_call_time = time.time()
@@ -1153,6 +1177,7 @@ class AIClient(LoggerMixin):
                     self._maybe_trip_circuit()
             except Exception as e:
                 last_error = e
+                _fail_reason = self._classify_ai_error(e)   # Q-14：timeout|connect|gateway_5xx|…
                 self.logger.warning("AI 调用失败(attempt=%s): %s", attempt + 1, e)
                 if attempt == 0:
                     await asyncio.sleep(1.5)
@@ -1166,7 +1191,10 @@ class AIClient(LoggerMixin):
         if self._cb_enabled:
             self._cb_window.append(False)
             self._maybe_trip_circuit()
-        self.logger.error("AI 两次调用均失败, request_id=%s: %s", request_id or "n/a", last_error)
+        self._note_ai_fail(
+            _fail_reason if last_error is not None else "empty", context,
+            latency_ms=int((time.time() - start_time) * 1000), attempt=_attempts_made,
+            model=str(use_model), err=last_error)
         # 生产主路径（openai_compat 运行时）的 key 失效弹窗：余额耗尽/Key 被封多发生在
         # 运行中，若只在启动连接测试挂钩会一直静默到下次重启。备用池/本地兜底即便顶上，
         # 机主也必须立刻知道主 Key 已坏（弹窗与降级并行，互不阻塞）。
@@ -1548,6 +1576,213 @@ class AIClient(LoggerMixin):
         cjk = sum(1 for ch in s if ord(ch) >= 0x2E80)
         other = len(s) - cjk
         return cjk + (other + 2) // 3 + 8
+
+    # ── Q-14 #262：失败分类 / 重试判定 / 失败可见 ────────────────────────────
+    @staticmethod
+    def _classify_ai_error(e: BaseException) -> str:
+        """异常 → ``timeout|connect|gateway_5xx|auth|other``。
+
+        读超时（请求已送达、上游可能仍在生成）与连接类错误（连不上 / 被重置 /
+        网关 502·503·504）必须分开：前者重试 = 双倍成本 + 双倍延迟，后者重试 1 次
+        常能救回。openai SDK 把两类超时都包成 APITimeoutError，靠 ``__cause__``
+        链上的 httpx 异常区分（ConnectTimeout 归连接类）。"""
+        seen = 0
+        cur: Optional[BaseException] = e
+        names: List[str] = []
+        status = None
+        while cur is not None and seen < 6:
+            names.append(type(cur).__name__.lower())
+            if status is None:
+                status = getattr(cur, "status_code", None)
+                if status is None:
+                    _r = getattr(cur, "response", None)
+                    status = getattr(_r, "status_code", None) if _r is not None else None
+            cur = cur.__cause__ or cur.__context__
+            seen += 1
+        joined = " ".join(names)
+        msg = str(e).lower()
+        if any(n in ("connecttimeout", "connecterror", "remoteprotocolerror",
+                     "connectionreseterror", "connectionrefusederror",
+                     "connectionerror", "apiconnectionerror") for n in names):
+            if "apiconnectionerror" in joined and (
+                    "readtimeout" in joined or "writetimeout" in joined
+                    or "pooltimeout" in joined):
+                return "timeout"
+            if "apiconnectionerror" in joined and "apitimeouterror" in joined:
+                # openai APITimeoutError 是 APIConnectionError 子类：无 httpx 因果
+                # 链时按读超时处理（connect 只有 5s，多数是读侧）
+                return "timeout"
+            return "connect"
+        if ("timeout" in joined or "timed out" in msg or "timeouterror" in joined):
+            return "timeout"
+        try:
+            sc = int(status) if status is not None else 0
+        except Exception:
+            sc = 0
+        if sc in (502, 503, 504) or "internalservererror" in joined or sc >= 500:
+            return "gateway_5xx"
+        if sc in (401, 403) or "authenticationerror" in joined or "permissiondeniederror" in joined:
+            return "auth"
+        if "502" in msg or "503" in msg or "bad gateway" in msg or "service unavailable" in msg:
+            return "gateway_5xx"
+        if "connection" in msg and ("reset" in msg or "refused" in msg or "aborted" in msg):
+            return "connect"
+        return "other"
+
+    @classmethod
+    def _should_retry_ai_error(cls, e: BaseException) -> bool:
+        """连接类 / 网关 5xx / 未知 → 再试 1 次；读超时 → 不重试（走 None）。"""
+        return cls._classify_ai_error(e) != "timeout"
+
+    @staticmethod
+    def _conv_label(context: Optional[Dict[str, Any]]) -> str:
+        c = context or {}
+        cid = str(c.get("conversation_id") or "").strip()
+        if cid:
+            return cid
+        p = str(c.get("platform") or c.get("channel") or "").strip().lower()
+        a = str(c.get("account_id") or "").strip()
+        k = str(c.get("chat_key") or c.get("chat_id") or "").strip()
+        if p and k:
+            return f"{p}:{a or 'default'}:{k}"
+        return k or "-"
+
+    def _note_ai_fail(self, reason: str, context: Optional[Dict[str, Any]],
+                      *, latency_ms: int, attempt: int, model: str = "",
+                      err: Any = None) -> None:
+        """主链失败落一行 ``[ai] fail`` 日志 + 记到 ``_last_fail``（起草侧 pop 消费）。
+        备用池 / 本地兜底若随后出话，起草侧不会来取，标记在下次成功 / 失败时被覆盖。"""
+        conv = self._conv_label(context)
+        rid = str((context or {}).get("request_id") or "") or "n/a"
+        detail = ""
+        if err is not None:
+            detail = str(err).replace("\n", " ")[:160]
+        self.logger.error(
+            "[ai] fail conv=%s reason=%s latency_ms=%d attempt=%d model=%s request_id=%s%s",
+            conv, reason, int(latency_ms), int(attempt), model or self.model or "-", rid,
+            (" err=" + detail) if detail else "")
+        rec = {
+            "ts": time.time(), "reason": reason, "latency_ms": int(latency_ms),
+            "attempt": int(attempt), "conv": conv, "model": model or self.model or "",
+            "request_id": rid,
+        }
+        try:
+            store = self._last_fail if isinstance(self._last_fail, dict) else {}
+            if "conv" in store:      # 旧单条结构 → 升级成按会话字典
+                store = {}
+            store[conv] = rec
+            if len(store) > 64:
+                for _k in sorted(store, key=lambda k: store[k].get("ts", 0))[:len(store) - 64]:
+                    store.pop(_k, None)
+            self._last_fail = store
+        except Exception:
+            self._last_fail = {conv: rec}
+
+    def _clear_ai_fail(self, context: Optional[Dict[str, Any]]) -> None:
+        try:
+            if isinstance(self._last_fail, dict):
+                self._last_fail.pop(self._conv_label(context), None)
+        except Exception:
+            pass
+
+    def pop_last_fail(self, conv: str = "") -> Optional[Dict[str, Any]]:
+        """取走某会话最近一次主链失败记录（一次性）。``conv`` 空 = 取最近一条。"""
+        store = self._last_fail if isinstance(self._last_fail, dict) else None
+        if not store:
+            return None
+        key = str(conv or "").strip()
+        if not key:
+            key = max(store, key=lambda k: store[k].get("ts", 0))
+        rec = store.pop(key, None)
+        return dict(rec) if rec else None
+
+    _FEWSHOT_HEAD_RE = None
+
+    @classmethod
+    def _is_fewshot_part(cls, part: str) -> bool:
+        """system 提示里的 few-shot 段：首行含 示例/范例/例句/few-shot/examples。"""
+        import re as _re
+        if cls._FEWSHOT_HEAD_RE is None:
+            cls._FEWSHOT_HEAD_RE = _re.compile(
+                r"(示例|范例|例句|对话样例|few[\s_-]?shot|\bexamples?\b)", _re.IGNORECASE)
+        head = (part or "").strip().split("\n", 1)[0][:80]
+        return bool(head) and bool(cls._FEWSHOT_HEAD_RE.search(head))
+
+    @classmethod
+    def _trim_prompt_to_budget(
+        cls, messages: List[Dict[str, Any]], budget_tokens: int,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """prompt 预算（Q-14 A）：合计估算 token 超 ``budget_tokens`` 时按顺序裁
+        ① 历史（最旧先丢）→ ② system 里的 few-shot 段 → ③ 注入长度（截 system 尾部）。
+        首部 system 主体（人设 / 底稿首段）与最后一条用户消息永不丢。
+        返回 (messages, stats)；stats = {before, after, hist, fewshot, inject_chars}。
+        ``budget_tokens<=0`` = 关闭（原样返回）。"""
+        stats = {"before": 0, "after": 0, "hist": 0, "fewshot": 0, "inject_chars": 0}
+        if not messages:
+            return messages, stats
+        est = [cls._estimate_msg_tokens(m.get("content")) for m in messages]
+        total = sum(est)
+        stats["before"] = total
+        stats["after"] = total
+        if budget_tokens <= 0 or total <= budget_tokens:
+            return messages, stats
+        out = [dict(m) for m in messages]
+        # ① 历史：非 system、非最后一条，从最旧开始丢
+        last_idx = len(out) - 1
+        keep = [True] * len(out)
+        for i in range(len(out)):
+            if total <= budget_tokens:
+                break
+            if i == last_idx or out[i].get("role") == "system":
+                continue
+            keep[i] = False
+            total -= est[i]
+            stats["hist"] += 1
+        out = [m for i, m in enumerate(out) if keep[i]]
+        # ② few-shot：system 段按空行切，丢首段以外的 few-shot 段（从后往前）
+        if total > budget_tokens and out and out[0].get("role") == "system":
+            parts = str(out[0].get("content") or "").split("\n\n")
+            for j in range(len(parts) - 1, 0, -1):
+                if total <= budget_tokens:
+                    break
+                if cls._is_fewshot_part(parts[j]):
+                    total -= cls._estimate_msg_tokens(parts[j])
+                    parts.pop(j)
+                    stats["fewshot"] += 1
+            out[0]["content"] = "\n\n".join(parts)
+        # ③ 注入长度：仍超 → 截 system 尾部（人设主体在头部，注入块在尾部）
+        if total > budget_tokens and out and out[0].get("role") == "system":
+            sys_txt = str(out[0].get("content") or "")
+            overflow = total - budget_tokens
+            cut = min(len(sys_txt), int(overflow * 1.1) * 3 + 32)
+            new_len = max(0, len(sys_txt) - cut)
+            out[0]["content"] = sys_txt[:new_len].rstrip()
+            stats["inject_chars"] = len(sys_txt) - new_len
+            total -= cls._estimate_msg_tokens(sys_txt) - cls._estimate_msg_tokens(out[0]["content"])
+        stats["after"] = max(0, total)
+        return out, stats
+
+    def _apply_prompt_budget(self, messages: List[Dict[str, Any]],
+                             context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """主链发送前套 prompt 预算并落 ``[ai] prompt_tokens=… trimmed=…`` 日志。绝不抛。"""
+        try:
+            budget = int(getattr(self, "_prompt_budget_tokens", 6000) or 0)
+            out, st = self._trim_prompt_to_budget(messages, budget)
+            trimmed = st["hist"] or st["fewshot"] or st["inject_chars"]
+            rid = str((context or {}).get("request_id") or "") or "n/a"
+            if trimmed:
+                self.logger.info(
+                    "[ai] prompt_tokens=%d budget=%d trimmed=hist:%d,fewshot:%d,inject_chars:%d"
+                    " after=%d conv=%s request_id=%s",
+                    st["before"], budget, st["hist"], st["fewshot"], st["inject_chars"],
+                    st["after"], self._conv_label(context), rid)
+            else:
+                self.logger.debug("[ai] prompt_tokens=%d budget=%d trimmed=0 request_id=%s",
+                                  st["before"], budget, rid)
+            return out
+        except Exception:
+            self.logger.debug("[ai] prompt 预算裁剪失败（放行原 messages）", exc_info=True)
+            return messages
 
     @staticmethod
     def _coalesce_system_head(
@@ -2013,7 +2248,10 @@ class AIClient(LoggerMixin):
                                         context_rounds_override=use_context_rounds)
         request_id = (context or {}).get("request_id", "")
         last_error = None
+        _attempts_made = 0
+        _fail_reason = "empty"
         for attempt in range(2):
+            _attempts_made = attempt + 1
             try:
                 use_thinking = int(so.get("thinking_budget", 0))
                 config = types.GenerateContentConfig(
@@ -2047,6 +2285,7 @@ class AIClient(LoggerMixin):
 
                     if reply:
                         self.total_calls += 1
+                        self._clear_ai_fail(context)
                         pt = ct = 0
                         um = response.usage_metadata
                         if um:
@@ -2120,6 +2359,9 @@ class AIClient(LoggerMixin):
             except Exception as e:
                 last_error = e
                 self.logger.warning("AI 调用失败(attempt=%s): %s", attempt + 1, e)
+                _fail_reason = self._classify_ai_error(e)
+                if _fail_reason == "timeout":
+                    break   # Q-14 A：读超时不重试
                 if attempt == 0:
                     await asyncio.sleep(1.5)
         try:
@@ -2132,7 +2374,10 @@ class AIClient(LoggerMixin):
         if self._cb_enabled:
             self._cb_window.append(False)
             self._maybe_trip_circuit()
-        self.logger.error("AI 两次调用均失败, request_id=%s: %s", request_id or "n/a", last_error)
+        self._note_ai_fail(
+            _fail_reason if last_error is not None else "empty", context,
+            latency_ms=int((time.time() - start_time) * 1000), attempt=_attempts_made,
+            model=str(use_model), err=last_error)
         self._alert_key_failure_if_matches(last_error)
         return self._fallback_reply(_fb_lang)
 
