@@ -265,7 +265,8 @@ class TestForConversation:
         client, _ = _build_client()
         r = client.get(f"/api/goals/for-conversation?conversation_id={CONV}")
         assert r.status_code == 200
-        assert r.json() == {"goal": None, "last": None}
+        # Q-1 E（#264）：无目标路也带总开关现状 discovery_paused
+        assert r.json() == {"goal": None, "last": None, "discovery_paused": False}
 
     def test_active_goal_view_with_today(self):
         client, _ = _build_client()

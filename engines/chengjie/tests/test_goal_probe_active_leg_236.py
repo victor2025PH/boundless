@@ -830,7 +830,7 @@ def test_card_counts_frontend_and_i18n_and_hosts():
     assert "inbox.goal.counts.sent_hours" in hant.ZH_HANT
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        assert "cp-goal.js?v=20260908d" in (REPO / host).read_text(encoding="utf-8"), host
+        assert "cp-goal.js?v=20260910a" in (REPO / host).read_text(encoding="utf-8"), host   # Q-1 E 前移
 
 
 # ══ E 「现在就问一个」：预览 → 点发即发（care send_now 三闸 + 冻结检查）→ 计入主动出手 ═══
