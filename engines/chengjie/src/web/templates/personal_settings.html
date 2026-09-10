@@ -63,13 +63,13 @@
 /* appearance.js 的 T() 解析器在无 window.T 的 base.html 页面回落到 __apI18n：
    这里按渲染器实际用到的键列表内联服务端译文（键表与 appearance.js 同步维护）。 */
 window.__apI18n = {
-{%- set _apk = ['ap.pop.title','ap.pop.roam','ap.sec.theme','ap.sec.wall','ap.sec.custom','ap.sec.night','ap.sec.fs','ap.sec.radius','ap.sec.anim','ap.theme.brand','ap.theme.aurora','ap.theme.starry','ap.theme.sunset','ap.theme.graphite','ap.theme.sakura','ap.wall.flat','ap.wall.mist','ap.wall.night','ap.wall.dusk','ap.wall.dots','ap.night.auto','ap.night.light','ap.night.dark','ap.night.schedule','ap.night.from','ap.night.to','ap.custom.out','ap.custom.in','ap.custom.reset','ap.anim.label','ap.guard.fixed','ap.reset_all','ap.all_settings','ap.saved','ap.fs.hint','ap.sched_exit'] %}
+{%- set _apk = ['ap.pop.title','ap.pop.roam','ap.sec.theme','ap.sec.wall','ap.sec.custom','ap.sec.night','ap.sec.fs','ap.sec.radius','ap.sec.anim','ap.theme.brand','ap.theme.aurora','ap.theme.starry','ap.theme.sunset','ap.theme.graphite','ap.theme.sakura','ap.wall.flat','ap.wall.mist','ap.wall.night','ap.wall.dusk','ap.wall.dots','ap.night.auto','ap.night.light','ap.night.dark','ap.night.schedule','ap.night.handoff','ap.night.from','ap.night.to','ap.custom.out','ap.custom.in','ap.custom.reset','ap.anim.label','ap.guard.fixed','ap.reset_all','ap.all_settings','ap.saved','ap.fs.hint','ap.sched_exit'] %}
 {%- for k in _apk %}
   {{ k|tojson }}: {{ ((i18n or {}).get(k, k))|tojson }}{{ "," if not loop.last }}
 {%- endfor %}
 };
 </script>
-<script src="/static/workspace/appearance.js?v=20260816a"></script>
+<script src="/static/workspace/appearance.js?v=20260910b"></script>
 <script>
 (function(){
   /* #appearance 深链落点：工作台用户菜单「全部外观设置 / 改时间」带此 hash 进来。

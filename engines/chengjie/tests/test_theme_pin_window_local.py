@@ -13,6 +13,12 @@ applyTheme 又把它广播一遍 → 同分区里另一个后台窗口刚点的�
 守两条窄不变量：
  ① 三个读者都不许把 URL `theme` 参数写进 `cp_theme`；
  ② 钉必须参与「生效主题」计算（否则钉白钉，回到「深色壳里白聊天」那个老 bug）。
+
+Q-10 B（#268 / 4KEJ63，2026-09-10）补一层：钉只在「用户从未选过档」时当出厂默认——
+用户显式选过一次 → localStorage(cp_theme_user_set)=1，之后 ?theme= 不再当钉（刷新 /
+切页 / 重启壳都按用户选择）。这写进 localStorage 的是「用户选过」这一事实，不是钉值、
+也不是 PIN_OFF 释放标记，与①②及下方 sessionStorage 门禁不冲突；行为层见
+tests/test_theme_manual_persist_q10_268.py。
 """
 
 from __future__ import annotations

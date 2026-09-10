@@ -41,12 +41,27 @@
    * release must be too (localStorage is partition-wide -> releasing here would unpin
    * the shell's other windows as well). Survives reloads of this window, gone on restart. */
   var PIN_OFF_KEY = 'cp_theme_pin_off';
+  /* Q-10 B (#268 N9JQ3M / #267 4KEJ63, 2026-09-10): the pin is only a factory default
+   * for users who never picked a theme. An explicit pick persists USER_SET_KEY in
+   * localStorage (profile-wide, like cp_theme itself) so that ?theme= URLs -- desktop
+   * shell webview, F5, in-app navigation, top pill, shell restart -- never act as a pin
+   * again; the window-scoped sessionStorage release alone died with the window, which is
+   * exactly the "switch back to dark after refresh / page change" report.
+   * HANDOFF_KEY marks "schedule was left by a manual light/dark pick": the schedule chip
+   * / user-menu row show "taken over manually" with a one-click way back to schedule. */
+  var USER_SET_KEY = 'cp_theme_user_set';
+  var HANDOFF_KEY = 'cp_theme_sched_handoff';
   var _urlPin = null;
   try {
     var _utp = new URLSearchParams(location.search).get('theme');
     if (_utp === 'dark' || _utp === 'light') _urlPin = _utp;
     if (_urlPin && sessionStorage.getItem(PIN_OFF_KEY) === '1') _urlPin = null;
+    if (_urlPin && localStorage.getItem(USER_SET_KEY) === '1') _urlPin = null;
   } catch (_) {}
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+  function lsDel(k) { try { localStorage.removeItem(k); } catch (_) {} }
+  function schedHandoff() { return lsGet(HANDOFF_KEY) === '1'; }
   function currentPin() {
     var wp = window.__cpThemePin;                    /* publisher (workspace_base) is authoritative */
     if (wp === 'dark' || wp === 'light') return wp;
@@ -58,6 +73,7 @@
     else { window.__cpThemePin = null; }
     _urlPin = null;
     try { sessionStorage.setItem(PIN_OFF_KEY, '1'); } catch (_) {}
+    lsSet(USER_SET_KEY, '1');
   }
 
   /* ---- catalog (ids must stay in sync with appearance_prefs.py) ---- */
@@ -231,8 +247,25 @@
       var eff = currentPin() || ((want === 'auto') ? (sysDark() ? 'dark' : 'light') : want);
       document.documentElement.setAttribute('data-cp-theme', eff);
     }
+    logThemeChange(mode);
   }
-  function applyAll(withTransition) {
+  /* Q-10 B: one console line per effective change ("theme change source=... value=... mode=...").
+   * source: manual (user pick) | schedule (night window tick) | system (prefers-color-scheme)
+   *       | restore (boot from localStorage) | sync (roaming pull / other-tab storage event).
+   * Manual picks always log (even a no-op re-pick is a user action worth seeing); the
+   * others only when the painted value or mode actually changed, so the 60s tick is silent. */
+  var _themeSrc = 'restore';
+  var _lastThemeLog = '';
+  function logThemeChange(mode) {
+    var value = '';
+    try { value = document.documentElement.getAttribute('data-cp-theme') || ''; } catch (_) {}
+    var line = _themeSrc + '|' + value + '|' + mode;
+    if (_themeSrc !== 'manual' && line === _lastThemeLog) return;
+    _lastThemeLog = line;
+    try { console.info('theme change source=%s value=%s mode=%s', _themeSrc, value, mode); } catch (_) {}
+  }
+  function applyAll(withTransition, src) {
+    _themeSrc = src || 'sync';
     var run = function () { applyTheme(); applyVars(); };
     if (withTransition && state.anim && !reducedMotion() && document.startViewTransition) {
       try { document.startViewTransition(run); return; } catch (_) {}
@@ -271,7 +304,7 @@
             for (var k in ap) if (Object.prototype.hasOwnProperty.call(ap, k)) state[k] = ap[k];
             if (!ap.night || typeof ap.night !== 'object') state.night = clone(DEF.night);
             save({ silent: true, noPush: true });
-            applyAll(false);
+            applyAll(false, 'sync');
             syncAllMounts();
           }
         }).catch(function () {});
@@ -306,7 +339,9 @@
     var modes = ['auto', 'light', 'dark', 'schedule'];
     for (i = 0; i < modes.length; i++) {
       nightChips.push('<button type="button" class="wsap-chip" data-ap-night="' + modes[i] + '">' +
-        T('ap.night.' + modes[i]) + '</button>');
+        T('ap.night.' + modes[i]) +
+        (modes[i] === 'schedule' ? '<span data-role="handoff" style="font-size:10px;opacity:.8"></span>' : '') +
+        '</button>');
     }
     var fsChips = [], rdChips = [];
     for (i = 0; i < SIZES.length; i++) fsChips.push('<button type="button" class="wsap-chip" data-ap-fs="' + SIZES[i] + '">' + SIZES[i] + 'px</button>');
@@ -368,8 +403,11 @@
           state.wall = el.getAttribute('data-ap-wall');
           save(); applyAll(false); syncAllMounts();
         } else if (el.hasAttribute('data-ap-night')) {
-          state.night.mode = el.getAttribute('data-ap-night');
-          save(); applyAll(true); syncAllMounts();
+          /* Q-10 B: the quick-panel chips used to write state.night.mode directly, bypassing
+           * setNightMode -- so a pinned window (desktop shell ?theme=dark) saw the chip
+           * highlight move while data-cp-theme never changed, and leaving schedule gave no
+           * exit toast / handoff mark. Single write path, like every other entry point. */
+          setNightMode(el.getAttribute('data-ap-night'));
         } else if (el.hasAttribute('data-ap-fs')) {
           state.fs = parseInt(el.getAttribute('data-ap-fs'), 10) || 13;
           save(); applyAll(false); syncAllMounts();
@@ -384,7 +422,8 @@
             save(); applyAll(false); syncAllMounts();
           } else if (act === 'resetAll') {
             state = clone(DEF);
-            save(); applyAll(true); syncAllMounts();
+            releasePin(); lsDel(HANDOFF_KEY);
+            save(); applyAll(true, 'manual'); syncAllMounts();
             toast(T('ap.saved'));
           }
         }
@@ -416,9 +455,12 @@
     host.querySelectorAll('[data-ap-wall]').forEach(function (el) {
       el.classList.toggle('on', el.getAttribute('data-ap-wall') === state.wall);
     });
+    var nmode = state.night.mode || 'auto';
     host.querySelectorAll('[data-ap-night]').forEach(function (el) {
-      el.classList.toggle('on', el.getAttribute('data-ap-night') === (state.night.mode || 'auto'));
+      el.classList.toggle('on', el.getAttribute('data-ap-night') === nmode);
     });
+    var ho = host.querySelector('[data-role="handoff"]');
+    if (ho) ho.textContent = (nmode !== 'schedule' && schedHandoff()) ? T('ap.night.handoff') : '';
     host.querySelectorAll('[data-ap-fs]').forEach(function (el) {
       el.classList.toggle('on', parseInt(el.getAttribute('data-ap-fs'), 10) === state.fs);
     });
@@ -487,12 +529,21 @@
     if ((state.night && state.night.mode) === 'schedule') {
       var want = schedEffective();
       var cur = localStorage.getItem(THEME_KEY);
-      if (cur !== want) { applyAll(true); }
+      if (cur !== want) { applyAll(true, 'schedule'); }
     }
   }, 60000);
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden && (state.night && state.night.mode) === 'schedule') applyAll(false);
+    if (!document.hidden && (state.night && state.night.mode) === 'schedule') applyAll(false, 'schedule');
   });
+  /* prefers-color-scheme flip while in auto: repaint + log source=system (workspace_base's own
+   * listener only repaints; it does not know the engine's mode nor the log line). */
+  try {
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change', function () {
+        if (((state.night && state.night.mode) || 'auto') === 'auto') { applyAll(false, 'system'); syncAllMounts(); }
+      });
+    }
+  } catch (_) {}
   window.addEventListener('storage', function (e) {
     if (e.key === LS_KEY && e.newValue) {
       try {
@@ -500,10 +551,11 @@
         if (got && got.v === 1 && (got.ts || 0) >= (state.ts || 0)) {
           state = clone(DEF);
           for (var k in got) if (Object.prototype.hasOwnProperty.call(got, k)) state[k] = got[k];
-          applyAll(false); syncAllMounts();
+          applyAll(false, 'sync'); syncAllMounts();
         }
       } catch (_) {}
     }
+    if (e.key === HANDOFF_KEY || e.key === USER_SET_KEY) syncAllMounts();
   });
 
   /* ---- night-mode single write path ----
@@ -516,6 +568,14 @@
   /* 用量埋点（theme_ 前缀）：打在单一写路径上＝分段控件/快捷面板/设置页/legacy
    * cycle 全入口一网打尽；漫游回拉（pullSrv）与启动装载不经过这里，零噪声。
    * 读数：/api/admin/ui-event-trend?prefix=theme_（ops.ui_event_trend 开时落库）。 */
+  /* Q-10 B: light/dark/auto while scheduled = manual takeover -> HANDOFF_KEY set (schedule
+   * chip / user-menu row show "overridden manually" + one-click resume); picking schedule
+   * again clears it. Also persists USER_SET_KEY via releasePin() so ?theme= URLs stop
+   * re-pinning this profile after the first explicit pick. */
+  function markHandoff(was, mode) {
+    if (mode === 'schedule') lsDel(HANDOFF_KEY);
+    else if (was === 'schedule') lsSet(HANDOFF_KEY, '1');
+  }
   function bcn(action) {
     try {
       navigator.sendBeacon('/api/telemetry/ui-event', new Blob(
@@ -525,14 +585,14 @@
   }
   function setNightMode(mode) {
     if (['auto', 'light', 'dark', 'schedule'].indexOf(mode) < 0) return false;
-    /* An explicit pick takes this window over from the boot pin -- release BEFORE the
-     * no-op shortcut below, because "already auto + pinned dark" is precisely the case
-     * where the user sees nothing happen (pin keeps painting dark) yet mode is unchanged. */
+    /* Explicit pick takes over from the boot pin: release BEFORE the no-op shortcut --
+     * "already auto + pinned dark" is exactly where the user sees nothing happen. */
     releasePin();
     var was = (state.night && state.night.mode) || 'auto';
-    if (was === mode) { applyAll(false); return true; }
+    markHandoff(was, mode);
+    if (was === mode) { applyAll(false, 'manual'); return true; }
     state.night.mode = mode;
-    save(); applyAll(true); syncAllMounts();
+    save(); applyAll(true, 'manual'); syncAllMounts();
     bcn('theme_set_' + mode);
     if (was === 'schedule') toast(T('ap.sched_exit'));
     return true;
@@ -563,7 +623,7 @@
 
   function boot() {
     hookThemeApply();
-    applyAll(false);
+    applyAll(false, 'restore');
     pullSrv();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

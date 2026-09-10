@@ -39,17 +39,27 @@
      的钉（又变成「深色壳里白聊天」）。sessionStorage 跨本窗口的刷新/站内跳转都在，
      关窗/重启壳即回到钉住的出厂默认。 */
   var PIN_OFF='cp_theme_pin_off';
+  /* Q-10 B（#268 N9JQ3M / #267 4KEJ63，2026-09-10）：钉只是「用户从未选过档」时的出厂默认。
+     用户一旦显式选过（三档 / 外观面板 / 轮换）→ localStorage(cp_theme_user_set)=1 **持久化**：
+     之后不管 URL 带不带 ?theme=（桌面壳 webview 固定 theme=dark、F5 刷新、站内跳转、顶栏胶囊、
+     重启壳）都不再当钉用，画面一律按用户治理值（cp_theme / ws_appearance_v1，本就 profile 共享
+     且漫游）。这与上方不变量①不冲突：①禁的是把**钉**写进共享键；这里写的是**用户的选择**，
+     同 profile 各窗口跟着用户走正是期望（4KEJ63「切页/刷新又变回深色」的根因就是钉只在
+     sessionStorage 窗口级释放、关窗即复活）。 */
+  var USER_SET='cp_theme_user_set';
   var PIN=null;
   try{ var u=new URLSearchParams(location.search).get('theme'); if(u==='dark'||u==='light') PIN=u; }catch(_){}
   try{ if(PIN&&sessionStorage.getItem(PIN_OFF)==='1') PIN=null; }catch(_){}
+  try{ if(PIN&&localStorage.getItem(USER_SET)==='1') PIN=null; }catch(_){}
   window.__cpThemePin=PIN;
   /* 钉的唯一释放入口（appearance.js 单一写路径也调它，别再各自清）。幂等。
-     语义＝「本窗口的主题已由用户接管」，故**无钉时也落标记**：同窗口之后再跳到带钉
+     语义＝「主题已由用户接管」，故**无钉时也落标记**：同窗口之后再跳到带钉
      URL（壳内导航）不该把用户刚做的选择又盖回去。两个调用方必须同口径，否则
-     「有钉才记」与「一律记」会漂成两套行为。 */
+     「有钉才记」与「一律记」会漂成两套行为。窗口级 PIN_OFF 与持久 USER_SET 同时落。 */
   window.cpReleaseThemePin=window.cpReleaseThemePin||function(){
     window.__cpThemePin=null;
     try{ sessionStorage.setItem(PIN_OFF,'1'); }catch(_){}
+    try{ localStorage.setItem(USER_SET,'1'); }catch(_){}
   };
   function curPin(){ var wp=window.__cpThemePin; return (wp==='dark'||wp==='light')?wp:null; }
   /* embed=1：iframe 内嵌模式（坐席台「管理工作链」抽屉等）——隐藏顶栏 chrome 只留正文；
@@ -107,13 +117,22 @@
     }
     var sc=document.getElementById('ws-theme-sched');
     if(sc){
+      var tx=document.getElementById('ws-theme-sched-txt');
+      var ed=document.getElementById('ws-theme-sched-edit');
+      var rs=document.getElementById('ws-theme-sched-resume');
+      var handoff=false; try{ handoff=localStorage.getItem('cp_theme_sched_handoff')==='1'; }catch(_){}
       if(mode==='schedule'){
         var hm=function(m){ m=((m%1440)+1440)%1440; var h=Math.floor(m/60),mm=m%60; return (h<10?'0':'')+h+':'+(mm<10?'0':'')+mm; };
         var st=(night&&night.start!=null)?night.start:1320, en=(night&&night.end!=null)?night.end:480;
         /* 文本只写 span——sc.textContent 整写会抹掉旁边的「改时间」链接 */
-        var tx=document.getElementById('ws-theme-sched-txt');
         var msg=T('base.theme.sched_on')+' '+hm(st)+'\u2013'+hm(en);
         if(tx) tx.textContent=msg; else sc.textContent=msg;
+        if(ed) ed.style.display=''; if(rs) rs.style.display='none';
+        sc.style.display='flex';
+      } else if(handoff){
+        /* Q-10 B：点亮色/暗色退出了定时 → 这行改显「定时已手动接管 · 恢复定时」，一键回到定时 */
+        if(tx) tx.textContent=T('base.theme.sched_handoff');
+        if(ed) ed.style.display='none'; if(rs) rs.style.display='';
         sc.style.display='flex';
       } else { sc.style.display='none'; }
     }
@@ -199,7 +218,7 @@
      （CSS 变量对无消费方页面无副作用）。unified_inbox 自己的那份 script 标签已
      移除（继承本页，重复装载会双跑 IIFE）。改本文件或 appearance.js 记得双戳
      （?v= + ui-build.txt）。 -->
-<script src="/static/workspace/appearance.js?v=20260816a" defer></script>
+<script src="/static/workspace/appearance.js?v=20260910b" defer></script>
 <style>
   /* 品牌拉丁字 @font-face 已收口到 /static/brand/brand-fonts.css（见上方 <link>，
      与 login.html / setup.html 共用同一份定义）——勿在此处重新内联，否则
@@ -1074,7 +1093,7 @@
       </div>
       <!-- 定时提示行：文本写进 span（cpSyncThemeSeg 只动 span，别再 sc.textContent 整写
            ——会把「改时间」链接一起抹掉）；「改时间」与「全部外观设置」同一深链同一窗口复用。 -->
-      <div class="ws-theme-sched" id="ws-theme-sched" style="display:none;" data-i18n-title="base.theme.sched_on_t" title="定时切换由「全部外观设置」管理；点击上方任一档退出定时"><span id="ws-theme-sched-txt"></span><a id="ws-theme-sched-edit" href="/personal-settings#appearance" target="_blank" rel="noopener" data-winname="admin" onclick="window.__thmBcn&&window.__thmBcn('theme_sched_edit');return __openUnique(event,this)" data-i18n="base.theme.sched_edit">改时间</a></div>
+      <div class="ws-theme-sched" id="ws-theme-sched" style="display:none;" data-i18n-title="base.theme.sched_on_t" title="定时切换由「全部外观设置」管理；点击上方任一档退出定时"><span id="ws-theme-sched-txt"></span><a id="ws-theme-sched-edit" href="/personal-settings#appearance" target="_blank" rel="noopener" data-winname="admin" onclick="window.__thmBcn&&window.__thmBcn('theme_sched_edit');return __openUnique(event,this)" data-i18n="base.theme.sched_edit">改时间</a><a id="ws-theme-sched-resume" href="#" style="display:none;" onclick="window.__thmBcn&&window.__thmBcn('theme_sched_resume');window.cpSetTheme&&window.cpSetTheme('schedule');return false" data-i18n="base.theme.sched_resume">恢复定时</a></div>
       <a class="ws-um-item" id="ws-appearance-link" href="/personal-settings#appearance" target="_blank" rel="noopener" data-winname="admin" onclick="window.__thmBcn&&window.__thmBcn('theme_all_settings');return __openUnique(event,this)"
          data-i18n-title="base.um.appearance_all_t" title="壁纸 / 气泡色 / 夜间定时 / 字号 / 圆角 / 动画（在管理后台窗口打开）" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="spark" data-size="14"></span><span data-i18n="ap.all_settings">全部外观设置</span></a>
       <a class="ws-um-item" id="ws-prefs-btn" data-i18n="base.um.prefs" data-i18n-title="base.um.prefs_t" title="告警阈值 / 免打扰 / 消息提示音 / 弹窗"
