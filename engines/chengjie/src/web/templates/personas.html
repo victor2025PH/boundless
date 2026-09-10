@@ -1924,6 +1924,7 @@ function _setAdultPolicy(raw){
   _setOptCard('ad-cards', v);
   _adPreview();
 }
+function _selOpt(el, hiddenId, cardsId) {
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
   el.classList.add('sel');
   document.getElementById(hiddenId).value = el.dataset.val;
