@@ -188,6 +188,8 @@ _RECV_MEDIA_TRUTH = {
     "douyin:official": True,
     # 2026-09-08 TikTok 官方（TK-1 B）：同上，IMAGE/VIDEO/STICKER → media_type 进 payload
     "tiktok:official": True,
+    # 2026-09-10 TikTok Shop 客服（TikTok 线续做 C）：_ingest_message 把 IMAGE/VIDEO/STICKER → media_type 进 payload
+    "tiktok:official(shop)": True,
 }
 
 
@@ -417,6 +419,8 @@ _RECV_GROUP_TRUTH = {
     "douyin:official": True,
     # TikTok 官方：Business Messaging 只有一对一会话，无群（如实 False）
     "tiktok:official": False,
+    # TikTok Shop 客服：买家—店铺一对一会话，无群（如实 False）
+    "tiktok:official(shop)": False,
 }
 
 

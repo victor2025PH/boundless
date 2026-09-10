@@ -42,6 +42,12 @@ PLATFORM_LABEL = {
     "tiktok": "TikTok",
 }
 
+#: 整行标签覆写（同平台下按账号 meta 分流的第二类 worker，mode 键带括号后缀时用；
+#: 缺省仍是 ``PLATFORM_LABEL[platform]（mode）``）。
+ROW_LABEL = {
+    "tiktok:official(shop)": "TikTok Shop（official）",
+}
+
 
 def render_matrix(config: dict | None = None) -> str:
     cfg = config or {}
@@ -104,8 +110,8 @@ def render_matrix(config: dict | None = None) -> str:
 
     for key in sorted(matrix):
         row = matrix[key]
-        label = "%s（%s）" % (PLATFORM_LABEL.get(row["platform"], row["platform"]),
-                             row["mode"])
+        label = ROW_LABEL.get(key) or "%s（%s）" % (
+            PLATFORM_LABEL.get(row["platform"], row["platform"]), row["mode"])
         cells = []
         for c in caps:
             if not row["available"]:

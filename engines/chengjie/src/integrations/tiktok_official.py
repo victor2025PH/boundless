@@ -958,10 +958,22 @@ async def handle_webhook(body: bytes, signature: Any, *, config: Optional[Dict[s
 
 
 def register_tiktok_routes(app: Any, config_manager: Any, telegram_client: Any = None) -> None:
+    """TikTok 平台路由的唯一挂载口（admin.py / 接入面板热挂载都只调这里）：私信 webhook（``tiktok.enabled``）、
+    店铺客服 webhook + 订单卡只读接口（``tiktok.shop.enabled``）、huoke 桥（``tiktok.huoke_bridge.enabled``）——各自独立门控。"""
+    for _mount in ("src.integrations.tiktok_shop_cs:register_tiktok_shop_routes",
+                   "src.integrations.tiktok_huoke_bridge:register_tiktok_huoke_routes"):
+        try:
+            import importlib
+            _modname, _fn = _mount.split(":")
+            getattr(importlib.import_module(_modname), _fn)(app, config_manager)
+        except Exception:
+            logger.debug("[tiktok-official] 子模块路由挂载跳过 %s", _mount, exc_info=True)
     cfg0 = tiktok_cfg(getattr(config_manager, "config", None) or {})
     if not cfg0["enabled"] or JSONResponse is None:
         return
     path = cfg0["webhook_path"]
+    if any(getattr(r, "path", "") == path for r in getattr(app, "routes", [])):
+        return
 
     @app.post(path)
     async def tiktok_webhook(request: Request):  # noqa: D401

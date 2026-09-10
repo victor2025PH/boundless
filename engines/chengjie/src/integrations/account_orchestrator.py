@@ -1172,6 +1172,13 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
         register_tiktok_official_worker(config)
     except Exception:
         logger.debug("[orchestrator] 注册 TikTok 官方 worker 失败", exc_info=True)
+    # TikTok Shop 店铺客服（Customer Service API；TikTok 线续做 C，2026-09-10）：tiktok.shop.enabled 才把
+    # (tiktok, official) 工厂包成分流器——账号 meta.source=shop → Shop CS worker，其余仍走私信 worker
+    try:
+        from src.integrations.tiktok_shop_cs import register_tiktok_shop_cs_worker
+        register_tiktok_shop_cs_worker(config)
+    except Exception:
+        logger.debug("[orchestrator] 注册 TikTok Shop 客服 worker 失败", exc_info=True)
     try:
         from src.integrations.line_protocol_login import (
             protocol_enabled as line_enabled, is_okline_available,

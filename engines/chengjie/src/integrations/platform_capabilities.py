@@ -81,6 +81,10 @@ WORKERS: List[Tuple[str, str, str, str]] = [
     # 指令 TK-1 B（2026-09-08）：TikTok 官方通道（Business Messaging API）——独立模块 worker，tiktok.enabled 才注册。
     # 无已读回执 / 正在输入接口；图片按注册地表门控；无群聊（如实 -）。
     ("tiktok", "official", "src.integrations.tiktok_official", "TikTokOfficialWorker"),
+    # TikTok 线续做 C（2026-09-10）：TikTok Shop 店铺客服（Customer Service API）——同 tiktok/official 工厂下按账号
+    # meta.source=shop 分流的独立 worker，tiktok.shop.enabled 才注册。有已读接口（messages/read）；无正在输入；
+    # 买家—店铺一对一会话，无群（如实 -）。矩阵行标「TikTok Shop（official）」（scripts/platform_matrix.py ROW_LABEL）。
+    ("tiktok", "official(shop)", "src.integrations.tiktok_shop_cs", "TikTokShopCSWorker"),
 ]
 
 #: 入站接线点：矩阵行 key → 站点。两种形态：
@@ -106,6 +110,8 @@ INBOUND_SITES: Dict[str, Tuple[str, str]] = {
     "douyin:official": ("src.integrations.douyin_official", "handle_webhook"),
     # TikTok 官方：webhook 处理函数把 message_type=IMAGE/VIDEO/STICKER 映射成 media_type 带进 make_message
     "tiktok:official": ("src.integrations.tiktok_official", "handle_webhook"),
+    # TikTok Shop 客服：webhook 与补拉对账共用的落库函数把 type=IMAGE/VIDEO/STICKER 映射成 media_type 带进 make_message
+    "tiktok:official(shop)": ("src.integrations.tiktok_shop_cs", "_ingest_message"),
     "zalo:web": ("js", "services/zalo-personal/server.js"),
     "instagram:web": ("js", "services/instagram-web/server.js"),
     # Python 侧直接持有 Milky 事件流，payload 在 _ingest_inbound 构造（AST 判定）
