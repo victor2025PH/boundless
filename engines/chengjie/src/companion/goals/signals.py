@@ -162,9 +162,77 @@ def collect_signals(
     return sig
 
 
+# ── Q-8 C/E（#264 #263）：「客户本条有没有新信息」纯判定 ──────────────────────────
+# B9D8NW：四轮纯夸赞（you're beautiful / wow / love it）零新信息，AI 顺着夸回去、第五轮自己退场。
+# 无新信息＝纯夸赞 / 应答词 / 表情 / 问候，且不含问句、不含数字、不含自述——保守判：
+# 判不准算「有新信息」（宁漏不错，错判会把正常聊天推成 must）。
+import re as _re
+
+_NNI_WORDS = frozenset((
+    # en praise / ack / filler
+    "you", "u", "are", "re", "so", "very", "really", "such", "a", "an", "the", "look", "looks",
+    "looking", "beautiful", "pretty", "cute", "gorgeous", "hot", "sexy", "lovely", "sweet",
+    "amazing", "awesome", "perfect", "wonderful", "stunning", "nice", "good", "great", "cool",
+    "wow", "omg", "lol", "haha", "hahaha", "hehe", "ok", "okay", "yes", "yeah", "yep", "no",
+    "nope", "sure", "thanks", "thank", "thx", "ty", "love", "like", "it", "that", "this",
+    "morning", "night", "evening", "afternoon", "hi", "hello", "hey", "babe", "baby", "dear",
+    "honey", "my", "mine", "me", "too", "same", "true", "right", "indeed", "agree", "smile",
+    "eyes", "face", "voice", "pic", "pics", "photo", "picture", "gm", "gn", "xoxo", "kiss",
+    "kisses", "hug", "hugs", "miss", "and", "is", "am", "of", "to", "your", "ur", "wanna",
+    "see", "more", "again", "always", "forever", "angel", "princess", "queen", "goddess",
+    # zh praise / ack / filler（按字切，见 _cjk_only_praise）
+))
+_NNI_CJK = "你真好美漂亮可爱迷人性感甜漂亮好看棒赞哈嗯呢啊呀哦喔哇是的对好的行嗯嗯早安晚安午安晚上好早上好谢谢爱喜欢想亲抱笨蛋宝贝宝亲爱的女神仙女天使漂亮啦啊哈哈嘿嘻嘻嘿嘿么么哒吻抱抱一直永远都也真的很超太特别非常"
+_EMOJI_RX = _re.compile(
+    "[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50\u2764\uFE0F\U0001F900-\U0001F9FF]+")
+_WORD_RX = _re.compile(r"[A-Za-z']+")
+
+
+def no_new_info(text: Any) -> bool:
+    """本条是否**无新信息**（纯夸赞 / 应答 / 表情 / 问候）。含问号 / 数字 / 长句 → False。"""
+    t = str(text or "").strip()
+    if not t:
+        return True
+    if "?" in t or "？" in t or _re.search(r"\d", t):
+        return False
+    body = _EMOJI_RX.sub("", t)
+    body = _re.sub(r"[\s\.,!！。，~～…'\"“”:;()（）\-]+", " ", body).strip()
+    if not body:
+        return True  # 纯表情 / 纯标点
+    words = _WORD_RX.findall(body)
+    cjk = [c for c in body if "\u4e00" <= c <= "\u9fff"]
+    other = _re.sub(r"[A-Za-z'\s\u4e00-\u9fff]", "", body)
+    if other.strip():
+        return False  # 含其它文字（日 / 韩 / 数字符号）→ 判不准算有信息
+    if len(words) > 8 or len(cjk) > 14:
+        return False
+    if words and any(w.lower().replace("'", "") not in _NNI_WORDS
+                     and w.lower() not in _NNI_WORDS for w in words):
+        return False
+    if cjk and any(c not in _NNI_CJK for c in cjk):
+        return False
+    return True
+
+
+def no_new_info_streak(history: Any) -> int:
+    """会话最近**连续**无新信息的入站条数（从最新一条向前数；遇到我方出站不打断，遇到
+    有信息的入站即停）。``history``＝``recent_history`` 形状 ``[{direction, text}]`` 时间正序。"""
+    n = 0
+    for m in reversed(list(history or [])):
+        if not isinstance(m, dict) or str(m.get("direction") or "in") != "in":
+            continue
+        if no_new_info(m.get("text")):
+            n += 1
+        else:
+            break
+    return n
+
+
 __all__ = [
     "GoalSignals",
     "collect_signals",
+    "no_new_info",
+    "no_new_info_streak",
     "entitlement_tier",
     "entitlement_unlocked",
     "inbound_count_since",

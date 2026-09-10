@@ -159,8 +159,77 @@ def plan_beat(
     return out
 
 
+# ── Q-8 B（#264 #263）：关系阶段自带推进计划——无手建目标的会话也有「今日主线」 ──────────
+# 阶段来自 intimacy_engine 既有判定（0-25 stranger / 25-55 friend / 55-80 close / 80+ soulmate，
+# 与 relationship_stager._intim_band 同刻度）；意图池复用 relationship_stage 模板四段弧线
+# （engage / warm / trust / ready 恰与四档一一对应），不建目标行、不落库，纯函数确定性轮换。
+STAGE_BANDS = ("stranger", "friend", "close", "soulmate")
+STAGE_LABELS = {
+    "stranger": ("陌生", "New"),
+    "friend": ("朋友", "Friend"),
+    "close": ("亲近", "Close"),
+    "soulmate": ("知心", "Soulmate"),
+}
+#: 客户连续 N 轮无新信息 → 今日主线升 must（Q-8 C）
+NO_NEW_INFO_MUST_STREAK = 2
+
+
+def intimacy_stage(score: Any) -> str:
+    """亲密度分 → 阶段档；未知 / 非法 → stranger（新客最保守）。"""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "stranger"
+    if s < 0:
+        return "stranger"
+    if s >= 80:
+        return "soulmate"
+    if s >= 55:
+        return "close"
+    if s >= 25:
+        return "friend"
+    return "stranger"
+
+
+def stage_label(stage: str, lang: str = "zh") -> str:
+    pair = STAGE_LABELS.get(str(stage or "").lower()) or STAGE_LABELS["stranger"]
+    return pair[1] if str(lang or "").lower().startswith("en") else pair[0]
+
+
+def plan_stage_beat(
+    *, stage: str, conversation_id: str, day: str, no_new_info_streak: int = 0,
+    missed_x2: bool = False,
+) -> Dict[str, Any]:
+    """阶段计划的「今日主线」：``{stage, intent, intent_en, level}``。
+
+    ``level``：soft（默认）/ must（客户连续 ≥2 轮无新信息、或 Q-1 missed×2）——must 时注入链
+    把主线写成硬约束（【本轮必做】），仍受「已知即不问」与每槽每日上限约束（那是槽位层的事）。
+    纯函数：同会话同日恒定、跨日轮换。"""
+    from src.companion.goals.templates import TEMPLATES, _format_intent, _intent_en, _intent_zh
+    st = str(stage or "").lower()
+    if st not in STAGE_BANDS:
+        st = "stranger"
+    idx = STAGE_BANDS.index(st)
+    pool = ((TEMPLATES.get("relationship_stage") or {}).get("intents") or {}).get(idx) or ()
+    intent = intent_en = ""
+    if pool:
+        import zlib
+        h = zlib.crc32(f"stage:{conversation_id}:{day}".encode("utf-8", "ignore"))
+        entry = pool[h % len(pool)]
+        intent = _format_intent(_intent_zh(entry), {})
+        intent_en = _format_intent(_intent_en(entry), {}, en=True)
+    level = "must" if (int(no_new_info_streak or 0) >= NO_NEW_INFO_MUST_STREAK or missed_x2) else "soft"
+    return {"stage": st, "intent": intent, "intent_en": intent_en, "level": level}
+
+
 __all__ = [
     "ACTIVE_INBOUND_MIN",
+    "NO_NEW_INFO_MUST_STREAK",
+    "STAGE_BANDS",
+    "STAGE_LABELS",
+    "intimacy_stage",
+    "plan_stage_beat",
+    "stage_label",
     "ACTIVE_WINDOW_SEC",
     "NEGATIVE_INTENSITY_HOLD",
     "customer_active",

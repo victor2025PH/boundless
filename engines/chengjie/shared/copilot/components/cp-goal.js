@@ -57,7 +57,8 @@
     custom: 1, conversion_unlock: 1, conversion_subscribe: 1, acquire_and_convert: 1,
   };
   // P22：生命周期/人设自动创建的来源 → UI「AI 自建」徽标
-  const AUTO_ORIGIN = { auto_create: 1, winback_auto: 1, retention_auto: 1, reconvert_auto: 1 };
+  const AUTO_ORIGIN = { auto_create: 1, winback_auto: 1, retention_auto: 1, reconvert_auto: 1,
+    account_default: 1, persona_default: 1 };
   const PREFS_KEY = "cp_goal_form_prefs_v1";
   // 表单草稿幸存层（P0 2026-08-04）：第二步弹层输入的实时快照，键=会话 id。
   // 刻意用 sessionStorage（同标签页作用域）：跨「误触关闭/外部重渲染/页面刷新」
@@ -746,6 +747,37 @@
                        border:1px solid var(--cp-border,#e2e8f0); background:transparent; cursor:pointer;
                        color:var(--cp-text,#374151); }
       .gl-dpause-btn:hover { border-color:var(--cp-accent,#4f46e5); color:var(--cp-accent,#4f46e5); }
+      /* Q-8 B（#264）：「阶段 · 今日主线」行 */
+      .gl-stage { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+                  margin:0 0 var(--cp-gap-xs,4px); padding:4px 8px; border-radius:8px;
+                  background:rgba(79,70,229,.06); border:1px solid rgba(79,70,229,.18);
+                  font-size:var(--cp-fs-tiny,11px); color:var(--cp-text,#374151); }
+      .gl-stage-k { color:var(--cp-text-dim,#64748b); }
+      .gl-stage-v { font-weight:600; }
+      .gl-stage.must { border-color:var(--cp-warn,#b45309); background:rgba(180,83,9,.08); }
+      .gl-stage-must { margin-left:auto; padding:0 6px; border-radius:99px; font-weight:600;
+                       background:var(--cp-warn,#b45309); color:#fff; }
+      /* Q-8 A（#264）：账号默认目标行 + 存量批量挂预览 */
+      .gl-default { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+                    margin:var(--cp-gap-xs,4px) 0; padding:4px 8px; border-radius:8px;
+                    border:1px dashed var(--cp-border,#e2e8f0); font-size:var(--cp-fs-tiny,11px);
+                    color:var(--cp-text-dim,#64748b); }
+      .gl-default.unset { justify-content:flex-end; border-style:none; padding:0 4px; }
+      .gl-default-acts { display:flex; gap:4px; }
+      .gl-default-btn { font-size:var(--cp-fs-tiny,11px); padding:2px 8px; border-radius:99px;
+                        border:1px solid var(--cp-border,#e2e8f0); background:transparent; cursor:pointer;
+                        color:var(--cp-text,#374151); }
+      .gl-default-btn:hover { border-color:var(--cp-accent,#4f46e5); color:var(--cp-accent,#4f46e5); }
+      .gl-default-btn.ghost { color:var(--cp-text-dim,#64748b); }
+      .gl-default-pv { width:100%; margin-top:4px; padding:6px 8px; border-radius:8px;
+                       background:var(--cp-bg-soft,rgba(0,0,0,.03)); }
+      .gl-default-pv-t, .gl-default-pv-empty, .gl-default-pv-done { margin-bottom:4px; }
+      .gl-default-pv-done { color:var(--cp-ok,#059669); font-weight:600; }
+      .gl-default-pv-list { max-height:180px; overflow:auto; display:flex; flex-direction:column; gap:2px; }
+      .gl-default-pv-row { display:flex; align-items:center; gap:6px; cursor:pointer; }
+      .gl-default-pv-row.ex .nm { color:var(--cp-text-dim,#64748b); }
+      .gl-default-pv-row .ex { margin-left:auto; padding:0 6px; border-radius:99px;
+                               border:1px solid var(--cp-border,#e2e8f0); }
       .gl-slotpicks { margin-top:4px; }
       .gl-disc-tip { margin-top:6px; padding:6px 8px; border-radius:8px;
                      background:rgba(13,148,136,.08);
@@ -1020,7 +1052,8 @@
         const mi = parseInt(g.milestone_idx, 10) || 0;
         if (this._prevMsIdx >= 0 && mi > this._prevMsIdx) this._celebrateMs = true;
         this._prevMsIdx = mi;
-        const html = this._renderDiscoveryBar(d) + this._renderActive(g);
+        const html = this._renderDiscoveryBar(d) + this._renderStageRow(d) + this._renderActive(g)
+          + this._renderDefaultRow(d, g);
         this._celebrateMs = false;
         this._emitLoadedSignal(g);
         return html + this._toastHtml();
@@ -1030,7 +1063,171 @@
       this._emitLoadedSignal(null);
       if (this._formOpen) return this._renderForm() + this._lastLine(last) + this._toastHtml();
       if (term) return this._renderTerminal(term) + this._toastHtml();
-      return this._renderDiscoveryBar(d) + this._renderEmpty(last, d.signal_hint) + this._toastHtml();
+      return this._renderDiscoveryBar(d) + this._renderStageRow(d) + this._renderDefaultRow(d, null)
+        + this._renderEmpty(last, d.signal_hint) + this._toastHtml();
+    }
+
+    /* Q-8 B（#264 #263）：「阶段 · 今日主线」——关系阶段（intimacy 既有判定）自带推进计划的
+       今日意图；不建目标行，有无目标都显示（陪伴域后端才给 stage_plan，旧后端 / 销售域缺键＝不渲染）。 */
+    _renderStageRow(d) {
+      const sp = d && d.stage_plan && typeof d.stage_plan === "object" ? d.stage_plan : null;
+      if (!sp || !(sp.intent || sp.intent_en)) return "";
+      const esc = (s) => this.esc(s);
+      const intent = LANG === "en" ? (sp.intent_en || sp.intent) : (sp.intent || sp.intent_en);
+      const must = String(sp.level || "") === "must";
+      const streak = parseInt(sp.no_new_info_streak, 10) || 0;
+      const tip = (sp.intimacy != null ? ("intimacy " + sp.intimacy + " · ") : "")
+        + (streak >= 2 ? this.t("inbox.goal.stage.no_new_info", { n: streak }) : "");
+      return `<div class="gl-stage${must ? " must" : ""}" title="${esc(tip)}">` +
+        `<span class="gl-stage-k">${esc(this.t("inbox.goal.stage.title"))}</span>` +
+        `<span class="gl-stage-v">${esc(this.t("inbox.goal.stage.line", { stage: sp.stage_label || sp.stage || "", intent }))}</span>` +
+        (must ? `<span class="gl-stage-must">${esc(this.t("inbox.goal.stage.must"))}</span>` : "") +
+        `</div>`;
+    }
+
+    /* Q-8 A（#264 #263）：账号级 / 人设级默认目标——空态 / 活跃态都有一行：
+       已设 → 「新会话会自动挂：X（账号级）」+ 批量挂存量 + 取消；
+       未设且有活跃目标 → 「设为本账号默认」（把当前目标模板 / 参数 / 档位存为账号默认）。 */
+    _renderDefaultRow(d, g) {
+      if (!d || !("default_goal" in d)) return "";
+      const esc = (s) => this.esc(s);
+      const dg = d.default_goal && typeof d.default_goal === "object" ? d.default_goal : null;
+      let html = "";
+      if (dg) {
+        const scope = this.t(dg.scope === "persona" ? "inbox.goal.default.scope.persona" : "inbox.goal.default.scope.account");
+        html = `<div class="gl-default" data-scope="${esc(String(dg.scope || "account"))}">` +
+          `<span class="gl-default-tx">${esc(this.t("inbox.goal.default.line", { name: dg.template_name || dg.template || "", scope }))}</span>` +
+          `<span class="gl-default-acts">` +
+          `<button type="button" class="gl-default-btn" data-act="default_attach_open">${esc(this.t("inbox.goal.default.attach_btn"))}</button>` +
+          (dg.scope === "account"
+            ? `<button type="button" class="gl-default-btn ghost" data-act="default_clear">${esc(this.t("inbox.goal.default.clear_btn"))}</button>`
+            : "") +
+          `</span></div>` + this._renderDefaultPreview();
+      } else if (g && g.status === "active" && g.template) {
+        html = `<div class="gl-default unset">` +
+          `<button type="button" class="gl-default-btn" data-act="default_set" data-gid="${esc(String(g.goal_id || ""))}"` +
+          ` title="${esc(this.t("inbox.goal.default.set_ok"))}">${esc(this.t("inbox.goal.default.set_btn"))}</button></div>`;
+      }
+      return html;
+    }
+
+    _renderDefaultPreview() {
+      const pv = this._defPv;
+      if (!pv) return "";
+      const esc = (s) => this.esc(s);
+      if (pv.loading) return `<div class="gl-default-pv"><div class="gl-default-pv-t">…</div></div>`;
+      const items = Array.isArray(pv.items) ? pv.items : [];
+      const checked = pv.checked || {};
+      const n = items.filter((it) => checked[it.conversation_id]).length;
+      let rows;
+      if (!items.length) {
+        rows = `<div class="gl-default-pv-empty">${esc(this.t("inbox.goal.default.preview_empty"))}</div>`;
+      } else {
+        rows = `<div class="gl-default-pv-list">` + items.map((it) => {
+          const ex = String(it.exclude || "");
+          const exl = ex ? this.t("inbox.goal.default.excl." + ex) : "";
+          const cid = String(it.conversation_id || "");
+          return `<label class="gl-default-pv-row${ex ? " ex" : ""}">` +
+            `<input type="checkbox" data-act="default_pv_toggle" data-cid="${esc(cid)}"${checked[cid] ? " checked" : ""}>` +
+            `<span class="nm">${esc(it.name || it.chat_key || cid)}</span>` +
+            (exl ? `<span class="ex">${esc(exl)}</span>` : "") + `</label>`;
+        }).join("") + `</div>`;
+      }
+      const done = pv.result
+        ? `<div class="gl-default-pv-done">${esc(this.t("inbox.goal.default.apply_done", { attached: pv.result.attached || 0, skipped: pv.result.skipped || 0 }))}</div>`
+        : "";
+      return `<div class="gl-default-pv">` +
+        `<div class="gl-default-pv-t">${esc(this.t("inbox.goal.default.preview_title", { n: items.length }))}</div>` +
+        rows + done +
+        `<div class="acts">` +
+        `<button type="button" class="primary" data-act="default_attach_apply"${n && !pv.result ? "" : " disabled"}>${esc(this.t("inbox.goal.default.apply_btn", { n }))}</button>` +
+        `<button type="button" class="ghost" data-act="default_attach_close">${esc(this.t("cp.common.cancel"))}</button>` +
+        `</div></div>`;
+    }
+
+    async _defaultSet(el) {
+      const ctx = this._ctx || {};
+      const g = this._d && this._d.goal;
+      if (!ctx.conversationId || !g) return;
+      if (el) el.disabled = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/defaults", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "account", conversation_id: ctx.conversationId,
+            template: g.template, params: g.params || {}, autonomy: g.autonomy || "suggest",
+            days: g.total_days || 0, title: g.title || "",
+          }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
+      if (res && res.ok && res.data && res.data.ok) {
+        this._flashToast(this.t("inbox.goal.default.set_ok"));
+        _beacon("goal_default_set");
+        this.refresh();
+        return;
+      }
+      if (el) el.disabled = false;
+      this._flashToast((res && res.data && (res.data.detail || res.data.error)) || this.t("inbox.goal.err_retry"));
+    }
+
+    async _defaultClear(el) {
+      const ctx = this._ctx || {};
+      if (!ctx.conversationId) return;
+      if (el) el.disabled = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/defaults", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope: "account", conversation_id: ctx.conversationId, clear: true }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.ok && res.data && res.data.ok) {
+        this._defPv = null;
+        _beacon("goal_default_clear");
+        this.refresh();
+        return;
+      }
+      if (el) el.disabled = false;
+      this._flashToast(this.t("inbox.goal.err_retry"));
+    }
+
+    async _defaultAttach(apply) {
+      const ctx = this._ctx || {};
+      if (!ctx.conversationId) return;
+      const body = { conversation_id: ctx.conversationId, dry_run: !apply };
+      if (apply) {
+        const pv = this._defPv || {};
+        body.conversation_ids = Object.keys(pv.checked || {}).filter((k) => pv.checked[k]);
+        if (!body.conversation_ids.length) return;
+      } else {
+        this._defPv = { loading: true };
+        this._rerender();
+      }
+      let res = null;
+      try {
+        res = await this._api("/api/goals/defaults/attach", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.ok && res.data && res.data.ok) {
+        if (apply) {
+          this._defPv = Object.assign({}, this._defPv, { result: res.data });
+          _beacon("goal_default_attach");
+          this.emit("cp-goal-changed", { action: "default_attach", conversationId: ctx.conversationId });
+        } else {
+          const checked = {};
+          (res.data.items || []).forEach((it) => { if (it.checked) checked[it.conversation_id] = true; });
+          this._defPv = { items: res.data.items || [], checked };
+        }
+        this._rerender();
+        return;
+      }
+      this._defPv = null;
+      this._flashToast((res && res.data && res.data.detail) || this.t("inbox.goal.err_retry"));
+      this._rerender();
     }
 
     /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关。数据源 for-conversation.discovery_paused
@@ -4118,6 +4315,7 @@
       const sameCid = !!(prev && ctx && prev.conversationId
         && prev.conversationId === ctx.conversationId);
       this._ctx = ctx;
+      if (!sameCid) this._defPv = null;
       if (sameCid && this._formOpen) {
         if (!this._ctxDeferred) _beacon("goal_ctx_deferred");   // 每次编辑会话只记一次
         this._ctxDeferred = true;
@@ -4347,6 +4545,22 @@
       }
       if (act === "probe_send") { await this._probeSend(); return; }
       if (act === "dpause_toggle") { await this._dpauseToggle(el); return; }
+      // Q-8 A（#264）：账号默认目标 / 存量批量挂
+      if (act === "default_set") { await this._defaultSet(el); return; }
+      if (act === "default_clear") { await this._defaultClear(el); return; }
+      if (act === "default_attach_open") { await this._defaultAttach(false); return; }
+      if (act === "default_attach_apply") { if (el) el.disabled = true; await this._defaultAttach(true); return; }
+      if (act === "default_attach_close") { this._defPv = null; this._rerender(); return; }
+      if (act === "default_pv_toggle") {
+        const pv = this._defPv;
+        const cid = el && el.getAttribute("data-cid");
+        if (pv && cid) {
+          pv.checked = pv.checked || {};
+          if (el.checked) pv.checked[cid] = true; else delete pv.checked[cid];
+          this._rerender();
+        }
+        return;
+      }
       if (act === "slot_confirm") { await this._slotConfirm(el); return; }
       if (act === "slot_edit_confirm") { await this._slotEditConfirm(el); return; }
       if (act === "slot_reject") { await this._slotReject(el); return; }

@@ -417,4 +417,4 @@ def test_memory_growth_status_carries_extract_stall_and_frontend_wiring():
         for lang in (gp.ZH, gp.EN):
             assert "{label}" in lang[k] and "{confirmed}" in lang[k] and "{candidate}" in lang[k]
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html"):
-        assert "cp-goal.js?v=20260910b" in (_ROOT / host).read_text(encoding="utf-8"), host
+        assert "cp-goal.js?v=20260910c" in (_ROOT / host).read_text(encoding="utf-8"), host

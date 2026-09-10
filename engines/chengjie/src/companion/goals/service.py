@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1436,6 +1438,204 @@ def decide_probe_target(
         return "", "", "", [], empty
 
 
+# ── Q-8 B/C/E（#264 #263）：阶段计划 + 注入分级 must + 无新信息×2 投话题 ─────────────────
+MUST_DISCIPLINE_ZH = ("回复里必须真的把这个问题问出来（以问句收尾），不许只回应夸赞、不许自己"
+                      "告别或说要去忙。")
+TOPIC_USED_KEY_PREFIX = "goals:topic_used:"
+#: 人设话题库为空时的兜底话题（客户导向的开放式话头；zh 权威 / en 展示）
+_FALLBACK_TOPICS = (
+    ("问TA今天过得怎么样、最忙的是哪一段", "ask how their day went and which part was busiest"),
+    ("问TA周末一般怎么过", "ask what their weekends usually look like"),
+    ("聊最近吃到的好东西，反问TA最爱吃什么", "talk about something tasty you had lately and ask their favourite food"),
+    ("聊最近在听的歌或看的剧，问TA在看什么", "mention a song or show you're into and ask what they're watching"),
+    ("问TA那边今天天气怎么样、平时喜欢晴天还是雨天", "ask about the weather there and whether they like sun or rain"),
+    ("问TA小时候最喜欢做的一件事", "ask one thing they loved doing as a kid"),
+)
+
+
+def stage_plan_enabled(cfg_root: Any) -> bool:
+    """阶段计划只在**陪伴域**默认开（销售域会话有自己的目标弧线）；``companion.goals.stage_plan.enabled``
+    显式 false 可关。"""
+    try:
+        cfg = resolve_goals_cfg(cfg_root)
+        sp = cfg.get("stage_plan") if isinstance(cfg.get("stage_plan"), dict) else {}
+        if sp.get("enabled") is False:
+            return False
+        if sp.get("enabled") is True:
+            return True
+        from src.utils.business_domain import active_business_domain
+        return active_business_domain(cfg_root if isinstance(cfg_root, dict) else None) == "companion"
+    except Exception:
+        return False
+
+
+def resolve_stage(platform: str, account_id: str, chat_key: str) -> Tuple[str, float]:
+    """``(stage, intimacy)``：亲密度来自 intimacy_engine 既有判定（companion_context provider）。"""
+    from src.companion.goals.planner import intimacy_stage
+    score = -1.0
+    try:
+        from src.utils.companion_context import resolve_intimacy_score
+        v = resolve_intimacy_score(account_id or "default", chat_key, channel=platform or "telegram")
+        if v is not None:
+            score = float(v)
+    except Exception:
+        score = -1.0
+    return intimacy_stage(score), score
+
+
+def persona_topic_pool(persona: Any) -> List[str]:
+    """人设话题库：hobbies / interests / tastes / topics / openers / life_arc（list 或 dict.beats）。"""
+    out: List[str] = []
+    if not isinstance(persona, dict):
+        return out
+    for k in ("topics", "openers", "hobbies", "interests", "tastes"):
+        v = persona.get(k)
+        if isinstance(v, str) and v.strip():
+            out.extend([s.strip() for s in re.split(r"[,，;；\n]", v) if s.strip()])
+        elif isinstance(v, (list, tuple)):
+            out.extend([str(s).strip() for s in v if str(s or "").strip()])
+    arc = persona.get("life_arc")
+    if isinstance(arc, (list, tuple)):
+        out.extend([str(s).strip() for s in arc if str(s or "").strip()])
+    elif isinstance(arc, dict):
+        beats = arc.get("beats")
+        if isinstance(beats, (list, tuple)):
+            out.extend([str(s).strip() for s in beats if str(s or "").strip()])
+    seen: set = set()
+    uniq: List[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t[:80])
+    return uniq
+
+
+def pick_proactive_topic(
+    conversation_id: str, persona: Any, *, inbox_store: Any = None, now: Optional[float] = None,
+    lang: str = "zh",
+) -> str:
+    """无新信息×2 时投给本轮的**新**话题：人设话题库优先（避开本会话近 10 次用过的），库空回落
+    兜底池；按 (conv, day, 已用数) 确定性轮换。落 KV ``goals:topic_used:<conv>``。绝不抛。"""
+    try:
+        n = float(now if now is not None else time.time())
+        used: List[str] = []
+        key = f"{TOPIC_USED_KEY_PREFIX}{conversation_id}"
+        st = _kv_store(inbox_store)
+        if st is not None and hasattr(st, "get_app_setting"):
+            try:
+                raw = st.get_app_setting(key, "") or ""
+                used = [str(x) for x in (json.loads(raw) if raw else [])][-10:]
+            except Exception:
+                used = []
+        pool = [t for t in persona_topic_pool(persona) if t not in used]
+        en = str(lang or "").lower().startswith("en")
+        if not pool:
+            fb = [(zh, e) for zh, e in _FALLBACK_TOPICS if (e if en else zh) not in used]
+            if not fb:
+                fb = list(_FALLBACK_TOPICS)
+            pool = [e if en else zh for zh, e in fb]
+        if not pool:
+            return ""
+        day = time.strftime("%Y-%m-%d", time.localtime(n))
+        import zlib
+        h = zlib.crc32(f"topic:{conversation_id}:{day}:{len(used)}".encode("utf-8", "ignore"))
+        topic = pool[h % len(pool)]
+        if st is not None and hasattr(st, "set_app_setting"):
+            try:
+                st.set_app_setting(key, json.dumps((used + [topic])[-10:], ensure_ascii=False),
+                                   updated_by="goal_service")
+            except Exception:
+                pass
+        return topic
+    except Exception:
+        logger.debug("pick_proactive_topic failed", exc_info=True)
+        return ""
+
+
+def proactive_topic_allowed(inbox_store: Any, conversation_id: str, *, now: Optional[float] = None) -> str:
+    """回复链内投话题的约束（停联冻结 / risk_hold）；返回拦截原因，"" 为放行。节奏 / 预算属外呼
+    链（这里是顺着客户来信回，不新增出站条数）。"""
+    st = _kv_store(inbox_store)
+    if st is None or not conversation_id:
+        return ""
+    try:
+        from src.inbox.stop_contact import frozen_reason
+        r = frozen_reason(st, conversation_id)
+        if r:
+            return f"frozen:{r}"
+    except Exception:
+        pass
+    try:
+        from src.inbox import risk_hold
+        r = risk_hold.active(st, conversation_id, now=now)
+        if r:
+            return f"risk_hold:{r}"
+    except Exception:
+        pass
+    return ""
+
+
+def build_stage_block(
+    *, conversation_id: str, platform: str, account_id: str, chat_key: str,
+    inbound_text: str, inbox_store: Any, user_context: Optional[Dict[str, Any]],
+    cfg_root: Any, now: Optional[float] = None, chain: str = "reply",
+) -> Optional[str]:
+    """无手建目标的会话：阶段计划「今日主线」块（B）+ 无新信息×2 → must + 投人设新话题（C/E）。
+    不建目标行；``user_context._goal_inject_meta`` 写 ``reason=stage_plan``。绝不抛。"""
+    try:
+        from src.companion.goals.planner import day_key, plan_stage_beat, stage_label
+        from src.companion.goals.signals import no_new_info_streak
+        n = float(now if now is not None else time.time())
+        stage, score = resolve_stage(platform, account_id, chat_key)
+        hist = recent_history(inbox_store, conversation_id, limit=12)
+        # 本条入站可能尚未落库：把它并进流末尾再数
+        if str(inbound_text or "").strip():
+            hist = list(hist) + [{"direction": "in", "text": str(inbound_text), "ts": n}]
+        streak = no_new_info_streak(hist)
+        beat = plan_stage_beat(stage=stage, conversation_id=conversation_id, day=day_key(n),
+                               no_new_info_streak=streak)
+        if not beat.get("intent"):
+            return None
+        lines = [f"【关系阶段 · 今日主线】阶段：{stage_label(stage)}。今日主线：{beat['intent']}。"]
+        level = str(beat.get("level") or "soft")
+        topic = ""
+        if level == "must":
+            block_why = proactive_topic_allowed(inbox_store, conversation_id, now=n)
+            if not block_why:
+                persona: Any = None
+                try:
+                    from src.utils.persona_manager import PersonaManager
+                    uc = user_context or {}
+                    persona, _t = PersonaManager.get_instance().get_persona_with_tier(
+                        str(uc.get("chat_id") or chat_key or ""),
+                        str(uc.get("account_persona_id") or ""))
+                except Exception:
+                    persona = None
+                topic = pick_proactive_topic(conversation_id, persona, inbox_store=inbox_store, now=n)
+                if topic:
+                    lines.append(f"【本轮必做】对方连续 {streak} 轮只有夸赞 / 应答、没有新信息："
+                                 f"接住一句就换你来带话题——{topic}；{MUST_DISCIPLINE_ZH}")
+                    logger.info("[proactive_topic] conv=%s topic=%r reason=no_new_info_x2 streak=%d chain=%s",
+                                conversation_id, topic[:40], streak, chain)
+            else:
+                logger.info("[proactive_topic] conv=%s topic=- reason=blocked:%s streak=%d",
+                            conversation_id, block_why, streak)
+            if not topic:
+                lines.append(f"【本轮必做】对方连续 {streak} 轮没有新信息：用一个开放式问题把话题转到TA身上；"
+                             f"{MUST_DISCIPLINE_ZH}")
+        logger.info("[goal-inject] level=%s reason=%s conv=%s stage=%s intimacy=%.0f intent=%r chain=%s",
+                    level, ("no_new_info" if level == "must" else "stage_plan"), conversation_id,
+                    stage, score, str(beat["intent"])[:40], chain)
+        if isinstance(user_context, dict):
+            user_context["_goal_inject_meta"] = {
+                "injected": True, "reason": "stage_plan", "stage": stage, "level": level,
+                "intent": beat["intent"], "topic": topic, "no_new_info_streak": streak}
+        return "\n".join(lines)
+    except Exception:
+        logger.debug("build_stage_block failed", exc_info=True)
+        return None
+
+
 def capture_status(cfg_root: Any) -> Dict[str, Any]:
     """摸底「采集链」当前能不能自动填槽（O-3 D #236，卡片黄条数据源）。纯函数、绝不抛。
 
@@ -1593,11 +1793,28 @@ def build_block_for_chat(
                 chat_key=str(chat_key or ""), account_id=account_id,
                 conversation_id=conversation_id,
                 user_context=user_context, now=now)
+        # Q-8 A（#264 #263）：账号级 / 人设级默认目标——新会话首条真实入站自动挂
+        # （B9D8NW：7 条目标全手建、新客 Enrique 无目标 → no_goal → AI 自己退场）
+        if goal is None and str(inbound_text or "").strip():
+            from src.companion.goals.defaults import maybe_attach_default_goal
+            goal = maybe_attach_default_goal(
+                store, cfg_root, platform=platform,
+                chat_key=str(chat_key or ""), account_id=account_id,
+                conversation_id=conversation_id,
+                user_context=user_context, inbox_store=inbox_store, now=now)
         if goal is None:
             _note_meta(False, "no_goal", _store=store)
             if isinstance(user_context, dict):
                 # _store 只给日志用，不透传到 API 的 goal_applied
                 (user_context.get("_goal_inject_meta") or {}).pop("_store", None)
+            # Q-8 B（#264 #263）：陪伴域无目标会话仍有「阶段 · 今日主线」（不建目标行）；
+            # 只在真实入站回合出块（主动链 / 系统调用不出）
+            if str(inbound_text or "").strip() and stage_plan_enabled(cfg_root):
+                return build_stage_block(
+                    conversation_id=_conv_label(), platform=platform, account_id=account_id,
+                    chat_key=str(chat_key or ""), inbound_text=inbound_text,
+                    inbox_store=inbox_store, user_context=user_context, cfg_root=cfg_root,
+                    now=now, chain=chain)
             return None
         # Q-1 D（#264 #269）识破守卫：对方本条说「you're a bot / 20th time / 你又问」→ 该目标
         # 停 24h（params._paused_until）+ 会话侧 needs_human / 打标「疑似识破」/ KV 标记（出站
@@ -1942,6 +2159,30 @@ def build_block_for_chat(
                             _gid_p[:12], chain)
                     else:
                         probe_line = probe_hard_line(probe_slot, probe_cue)
+                        # Q-8 C（#264 #263）：注入分级——客户连续 ≥2 轮无新信息（纯夸赞 / 应答）
+                        # 或今日 missed 已 ≥2（跨槽累计）→ level=must：硬约束再加一句「必须以问句
+                        # 收尾、不许只回应夸赞 / 不许自己退场」。候选槽仍只来自 Q-1 的 unknown +
+                        # 每槽每日上限过滤（decide_probe_target），must 不越过「已知即不问」。
+                        _must_reason = ""
+                        try:
+                            from src.companion.goals.signals import no_new_info_streak as _nnis
+                            _h2 = list(_hist) + [{"direction": "in", "text": str(inbound_text), "ts": _n_p}]
+                            _streak = _nnis(_h2)
+                            _missed_n = sum(_event_detail_slots_today(
+                                store, _gid_p, PROBE_EVENT_MISSED, _n_p).values())
+                            if _streak >= 2:
+                                _must_reason = "no_new_info"
+                            elif _missed_n >= 2:
+                                _must_reason = "missed_x2"
+                        except Exception:
+                            _must_reason = ""
+                        if _must_reason:
+                            probe_mode = "must"
+                            probe_line = f"{probe_line} {MUST_DISCIPLINE_ZH}"
+                        logger.info(
+                            "[goal-inject] level=%s reason=%s conv=%s goal=%s target=%s",
+                            "must" if _must_reason else "soft", _must_reason or "probe",
+                            _conv_p, _gid_p[:12], probe_slot)
                         base_p = dict(probe_patch if probe_patch is not None
                                       else (gap_patch or (_g_now.get("params") or {})))
                         base_p[PROBE_PENDING_PARAM] = {
@@ -1978,6 +2219,42 @@ def build_block_for_chat(
                 logger.debug("probe hard-inject skipped", exc_info=True)
                 probe_slot = probe_cue = probe_mode = ""
                 probe_line = ""
+
+        # Q-8 E（#264 #263）：有目标但本轮没定硬注入问句、客户连续 ≥2 轮无新信息（纯夸赞 /
+        # 应答）→ 投人设话题库新话题（陪伴域；受停联冻结 / risk_hold 约束）。
+        if (str(inbound_text or "").strip() and not probe_line
+                and stage_plan_enabled(cfg_root)):
+            try:
+                from src.companion.goals.signals import no_new_info_streak as _nnis2
+                _n_e = float(now if now is not None else time.time())
+                _hs = list(recent_history(inbox_store, _conv_label(), limit=12)) + [
+                    {"direction": "in", "text": str(inbound_text), "ts": _n_e}]
+                _stk = _nnis2(_hs)
+                if _stk >= 2:
+                    _why_e = proactive_topic_allowed(inbox_store, _conv_label(), now=_n_e)
+                    if not _why_e:
+                        _persona_e: Any = None
+                        try:
+                            from src.utils.persona_manager import PersonaManager as _PM
+                            _persona_e, _t_e = _PM.get_instance().get_persona_with_tier(
+                                str(uc.get("chat_id") or chat_key or ""),
+                                str(uc.get("account_persona_id") or ""))
+                        except Exception:
+                            _persona_e = None
+                        _topic_e = pick_proactive_topic(_conv_label(), _persona_e,
+                                                        inbox_store=inbox_store, now=_n_e)
+                        if _topic_e:
+                            probe_line = (f"【本轮必做】对方连续 {_stk} 轮只有夸赞 / 应答、没有新信息："
+                                          f"接住一句就换你来带话题——{_topic_e}；{MUST_DISCIPLINE_ZH}")
+                            probe_mode = probe_mode or "must"
+                            logger.info(
+                                "[proactive_topic] conv=%s topic=%r reason=no_new_info_x2 streak=%d goal=%s",
+                                _conv_label(), _topic_e[:40], _stk, str(goal.get("goal_id") or "")[:12])
+                    else:
+                        logger.info("[proactive_topic] conv=%s topic=- reason=blocked:%s streak=%d",
+                                    _conv_label(), _why_e, _stk)
+            except Exception:
+                logger.debug("proactive topic (goal path) skipped", exc_info=True)
 
         # P9b 流失应对策略：生命周期会话 + 原因在档 → 背景行拼「应对：…」。
         # 按当轮画像现值动态拼（不烤进 note——采集常发生在目标创建之后）。

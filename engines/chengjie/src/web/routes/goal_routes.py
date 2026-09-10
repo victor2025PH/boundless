@@ -27,7 +27,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, HTTPException, Request
 
@@ -734,6 +734,53 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             return None
         return None
 
+    def _default_goal_view(platform: str, account_id: str, lang: str) -> Optional[Dict[str, Any]]:
+        """Q-8 A：本账号（或账号绑定人设）默认目标现状 → 卡片载荷；无 → None。绝不抛。"""
+        try:
+            from src.companion.goals import defaults as gdef
+            from src.companion.goals.templates import get_template
+            svc = _svc()
+            pid = svc._account_persona(_cfg_root(), platform, account_id) if platform and account_id else ""
+            spec = gdef.get_default(_inbox_store(), platform=platform, account_id=account_id,
+                                    persona_id=pid)
+            if not spec:
+                return None
+            t = get_template(str(spec.get("template") or "")) or {}
+            return {
+                "scope": spec.get("scope"), "template": spec.get("template"),
+                "template_name": str(t.get("name_en" if lang.startswith("en") else "name_zh")
+                                     or spec.get("template")),
+                "autonomy": spec.get("autonomy"), "days": spec.get("days"),
+                "params": spec.get("params") or {},
+                "platform": platform, "account_id": account_id, "persona_id": pid,
+            }
+        except Exception:
+            logger.debug("default_goal_view skipped", exc_info=True)
+            return None
+
+    def _stage_plan_view(conv: str, platform: str, account_id: str, chat_key: str,
+                         *, lang: str) -> Optional[Dict[str, Any]]:
+        """Q-8 B：「阶段 · 今日主线」卡片载荷（陪伴域；不建目标行）。绝不抛。"""
+        try:
+            svc = _svc()
+            if not svc.stage_plan_enabled(_cfg_root()):
+                return None
+            from src.companion.goals.planner import day_key, plan_stage_beat, stage_label
+            from src.companion.goals.signals import no_new_info_streak
+            stage, score = svc.resolve_stage(platform, account_id, chat_key)
+            streak = no_new_info_streak(svc.recent_history(_inbox_store(), conv, limit=12))
+            beat = plan_stage_beat(stage=stage, conversation_id=conv, day=day_key(),
+                                   no_new_info_streak=streak)
+            return {
+                "stage": stage, "stage_label": stage_label(stage, lang),
+                "intimacy": round(float(score), 1) if score >= 0 else None,
+                "intent": beat.get("intent") or "", "intent_en": beat.get("intent_en") or "",
+                "level": beat.get("level") or "soft", "no_new_info_streak": streak,
+            }
+        except Exception:
+            logger.debug("stage_plan_view skipped", exc_info=True)
+            return None
+
     @app.get("/api/goals/for-conversation")
     async def goals_for_conversation(
         request: Request, conversation_id: str = "", _auth=Depends(auth_dep)
@@ -774,6 +821,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             except Exception:
                 logger.debug("buying signal hint skipped", exc_info=True)
             out["discovery_paused"] = svc.discovery_paused(_inbox_store())
+            out["default_goal"] = _default_goal_view(platform, account_id, _lang(request))
+            # Q-8 B（#264）：无目标会话也有「阶段 · 今日主线」（不建目标行）
+            out["stage_plan"] = _stage_plan_view(conv, platform, account_id, chat_key,
+                                                 lang=_lang(request))
             return out
         lang = _lang(request)
         view = _attach_notified(
@@ -811,6 +862,10 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         return {"goal": view, "last": None, "prev_settled": prev_settled,
                 # Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关现状
                 "discovery_paused": svc.discovery_paused(_inbox_store()),
+                # Q-8 A（#264）：本账号默认目标现状（卡片「设为默认 / 批量挂存量」入口）
+                "default_goal": _default_goal_view(platform, account_id, lang),
+                # Q-8 B（#264）：关系阶段 · 今日主线（有目标时与目标并列显示）
+                "stage_plan": _stage_plan_view(conv, platform, account_id, chat_key, lang=lang),
                 # N-3 #241：卡片按业务域渲染画像分组 / 「标成交」字段（陪伴 = 「标记达成」
                 # 达成结果 + 备注，不出现产品 / 金额）
                 "business_domain": _business_domain(),
@@ -1418,6 +1473,107 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         if not ok:
             raise HTTPException(503, "discovery_pause_store_unavailable")
         return {"ok": True, "paused": svc.discovery_paused(_inbox_store())}
+
+    # ── Q-8 A（#264 #263）：账号级 / 人设级默认目标 ─────────────────────────────
+    def _default_scope_ids(body: Dict[str, Any]) -> Tuple[str, str]:
+        """``{platform, account_id}`` 或从 ``conversation_id`` 拆（卡片只知会话 id）。"""
+        plat = str(body.get("platform") or "").strip()
+        acct = str(body.get("account_id") or "").strip()
+        if (not plat or not acct) and body.get("conversation_id"):
+            p2, a2, _ck = _split_conversation_id(str(body.get("conversation_id") or ""))
+            plat, acct = plat or str(p2 or ""), acct or str(a2 or "")
+        return plat, acct
+
+    def _default_scope_key(request: Request, body: Dict[str, Any]) -> str:
+        from src.companion.goals import defaults as gdef
+        scope = str(body.get("scope") or "account").strip().lower()
+        if scope == "persona":
+            pid = str(body.get("persona_id") or "").strip()
+            if not pid:
+                raise HTTPException(400, tr(request, "err.goals.default_scope_required"))
+            return gdef.persona_key(pid)
+        plat, acct = _default_scope_ids(body)
+        if not plat or not acct:
+            raise HTTPException(400, tr(request, "err.goals.default_scope_required"))
+        return gdef.account_key(plat, acct)
+
+    @app.get("/api/goals/defaults")
+    async def goals_defaults_list(request: Request, _auth=Depends(auth_dep)):
+        """全部默认目标（账号级 + 人设级）。带模板名供 UI。"""
+        _require_enabled(request)
+        from src.companion.goals import defaults as gdef
+        from src.companion.goals.templates import get_template
+        rows = gdef.list_defaults(_inbox_store())
+        lang = _lang(request)
+        for r in rows:
+            t = get_template(str(r.get("template") or "")) or {}
+            r["template_name"] = str(t.get("name_en" if lang.startswith("en") else "name_zh") or r.get("template"))
+        return {"items": rows}
+
+    @app.post("/api/goals/defaults")
+    async def goals_defaults_set(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """设 / 清默认目标：``{scope: account|persona, platform, account_id | persona_id,
+        template, params, autonomy, days, title, clear?}``。模板受形态 / 业务域隐藏约束。"""
+        _require_enabled(request)
+        _deny_viewer(request)
+        from src.companion.goals import defaults as gdef
+        body = payload if isinstance(payload, dict) else {}
+        key = _default_scope_key(request, body)
+        try:
+            by = str(request.session.get("user", "") or "")
+        except Exception:
+            by = ""
+        if body.get("clear"):
+            if not gdef.set_default(_inbox_store(), key, None, by=by):
+                raise HTTPException(503, "default_goal_store_unavailable")
+            return {"ok": True, "cleared": True, "scope_key": key}
+        spec = gdef.normalize_spec(body)
+        if spec is None:
+            raise HTTPException(400, tr(request, "err.goals.template_unknown"))
+        _deny_hidden_template(request, spec["template"])
+        if not gdef.set_default(_inbox_store(), key, spec, by=by):
+            raise HTTPException(503, "default_goal_store_unavailable")
+        return {"ok": True, "scope_key": key, "spec": spec}
+
+    @app.post("/api/goals/defaults/attach")
+    async def goals_defaults_attach(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """存量批量挂：``{platform, account_id, dry_run: true}`` → 预览 N 个会话（默认不勾
+        已停联 / 自聊 / 需人工 / 群 / 已有目标）；``dry_run: false, conversation_ids: [...]`` → 按勾选建。
+        日志 ``[goal-default] account=… attached=n``。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        from src.companion.goals import defaults as gdef
+        body = payload if isinstance(payload, dict) else {}
+        plat, acct = _default_scope_ids(body)
+        if not plat or not acct:
+            raise HTTPException(400, tr(request, "err.goals.default_scope_required"))
+        store = _store(svc)
+        inbox = _inbox_store()
+        pid = str(body.get("persona_id") or "")
+        if not pid:
+            try:
+                pid = svc._account_persona(_cfg_root(), plat, acct) or ""
+            except Exception:
+                pid = ""
+        spec = gdef.get_default(inbox, platform=plat, account_id=acct, persona_id=pid)
+        if not spec:
+            raise HTTPException(404, tr(request, "err.goals.default_not_set"))
+        if body.get("dry_run", True):
+            rows = gdef.preview_existing(store, inbox, platform=plat, account_id=acct,
+                                         limit=int(body.get("limit") or gdef.PREVIEW_LIMIT))
+            return {"ok": True, "dry_run": True, "spec": spec, "items": rows,
+                    "checked": sum(1 for r in rows if r["checked"]),
+                    "unchecked_reasons": list(gdef.DEFAULT_UNCHECKED)}
+        ids = body.get("conversation_ids")
+        ids = [str(x) for x in ids] if isinstance(ids, list) else None
+        res = gdef.attach_existing(store, inbox, platform=plat, account_id=acct, spec=spec,
+                                   conversation_ids=ids)
+        res["ok"] = True
+        return res
 
     # ── 自定义摸底标签（N-3 #241 「+ 自定义标签」；TN736F ③ 同步出现在画像卡）──
     _CUSTOM_SLOTS_PATH = "companion.goals.custom_slots"

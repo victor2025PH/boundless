@@ -2072,6 +2072,15 @@ _ADDITIONS_2026_09_10_Q10_KB_PURGE_PRESET = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q10_KB_PURGE_PRESET
 
+# Q-8 #264 #263（2026-09-10，A）：账号级 / 人设级默认目标（InboxStore KV）——设 / 清 / 列，
+# 存量批量挂（dry_run 预览默认不勾已停联 / 自聊 / 需人工 / 群 / 已有目标）。goal_routes.py。
+_ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS = """
+/api/goals/defaults	GET
+/api/goals/defaults	POST
+/api/goals/defaults/attach	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS
+
 
 def _parse_baseline():
     expected = set()
