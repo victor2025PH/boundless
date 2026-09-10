@@ -5089,6 +5089,33 @@ compliance:
 #   webhook_path: /webhook/tiktok
 #   webhook_signature_header: X-TT-Signature
 #   verify_signature: true
+#   # ── TikTok Shop 店铺客服（Customer Service API；src/integrations/tiktok_shop_cs.py；TikTok 线 C，2026-09-10）──
+#   # 同 tiktok 平台 / 同 official mode，账号 meta.source=shop 分流；account_id=shop_id，会话键 tiktok:shop:<conversation_id>。
+#   # 开放平台 app_key/app_secret（Seller 授权 scope seller.customer_service），账号 meta 带 access_token / refresh_token /
+#   # shop_cipher。webhook：合作伙伴中心配 https://<公网域名>/webhook/tiktok/shop，验签 Authorization 头 =
+#   # HMAC-SHA256(app_secret, app_key + raw_body)，3 秒内回空 200。订单卡只读侧栏 GET /api/tiktok/shop/order-card。
+#   # 发送仍走同一 channel_policy(tiktok)。未开启：不注册工厂、不挂路由、零痕迹。
+#   shop:
+#     enabled: false
+#     app_key: ""
+#     app_secret: ""
+#     webhook_path: /webhook/tiktok/shop
+#     webhook_signature_header: Authorization
+#     verify_signature: true
+#     state_db_path: ""            # 缺省 <config_dir>/tiktok_shop_cs_state.db
+#   # ── huoke（获客真机）桥：脑手分离 opt-in（src/integrations/tiktok_huoke_bridge.py；TikTok 线 E，2026-09-10）──
+#   # huoke 侧 config/apps/tiktok.yaml reply_engine=chengjie 时：评论区高意向线索 POST /api/tiktok/huoke/leads 进收件箱
+#   # （会话键 tiktok:comment:<user_id>，账号 personal_rpa——本机编排器不接管）→ 智聊起草（既有 reply hook，不另起大脑）
+#   # → 坐席审过 / 自动放行的回复进回传队列 → huoke GET /api/tiktok/huoke/handback 认领、真机回评论、
+#   # POST /api/tiktok/huoke/handback/ack 回执 → 线程 out 回显。评论回复 API 归 TK-2。全程 Bearer api_auth。
+#   # 闸门：低于 min_intent 不进线；评论 ≤150 字；同一入站只准回一条；每号日上限 daily_cap。未开启：零痕迹。
+#   huoke_bridge:
+#     enabled: false
+#     min_intent: 0.6              # 0–1，低于此分的线索 huoke 本地规则继续处理、不进智聊
+#     daily_cap: 20                # 每号每日回传上限（新号 10–20 起）
+#     max_reply_len: 150           # 上限 150（TikTok 评论字数上限，配更大无效）
+#     claim_ttl_sec: 600           # 认领后多久没回执 → 回收重新认领
+#     state_db_path: ""            # 缺省 <config_dir>/tiktok_huoke_bridge_state.db
 
 # ── 抖音演示 worker（实施96 P0-3；src/integrations/douyin_mock_worker.py）───────────────
 # 资质到位前把「收件箱 / 拟稿 / 策略拦截 / 出站镜像」整条链跑通的假传输。**默认关**，生产零痕迹；
