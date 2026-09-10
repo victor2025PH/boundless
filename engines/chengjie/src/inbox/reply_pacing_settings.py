@@ -42,6 +42,10 @@ TONE_HINT_MAXLEN = 120
 # 上下文/记忆深度四档；刻意本地定义（本模块零依赖纯函数），与 context_depth.TIER_KEYS 的
 # 一致性由门禁钉住（test_context_depth::test_settings_choices_synced）。
 CONTEXT_DEPTH_CHOICES = ("standard", "deep", "max", "ultra")
+# 用量模式（B9，2026-09-11）：与深度四档并列、不混成第五档。full = 不压帽；
+# economy = usage_economy overlay（历史 4 / compact 人设 / 少抽）。钱包用尽时
+# 即使选 full 也会自动压（ai.economy_on_degrade 默认开）。
+USAGE_MODE_CHOICES = ("full", "economy")
 
 # 平台专家覆写（P1，2026-08-03）：键域=编排器 worker 的平台集合。
 # 刻意本地定义而非 import platform_capabilities（本模块保持零依赖纯函数）；
@@ -172,6 +176,10 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "ai.context_depth": {
         "type": "enum", "choices": CONTEXT_DEPTH_CHOICES,
         "default": "standard", "hot": True,
+    },
+    "ai.usage_mode": {
+        "type": "enum", "choices": USAGE_MODE_CHOICES,
+        "default": "full", "hot": True,
     },
     # ── 平台专家覆写（P1，2026-08-03；缺省全空表=继承全局，零行为变更）────
     # 档位封顶：{platform: mode}——只降不升（cap_automation_mode），删除=不封顶。

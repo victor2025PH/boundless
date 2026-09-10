@@ -1766,6 +1766,12 @@ class AIClient(LoggerMixin):
     _PROTECTED_SYS_HEADS = (
         "【后台人设定位", "【人称与角色", "【自称规则", "【媒体能力边界",
         "【输出语言", "【硬性要求", "【身份硬锁", "【年龄事实",
+        # B3（2026-09-11 用量分析补漏）：非中文会话真正生效的语言块是
+        # 【LANGUAGE RULE — TOP PRIORITY】（2.7k 字、在 system 尾部），中文会话是
+        # 【多语言回复规则】；【回复硬约束】里第 4 条正是「严禁 ()/[] 描写动作」
+        # ——它们都不在上表，超预算时会被当注入尾巴弹掉：英文客户「Why don't you
+        # speak English anymore」与括号旁白（#275）就从这里漏出去。
+        "【LANGUAGE RULE", "【多语言回复规则", "【回复硬约束】",
     )
     # 历史保底：预算再紧也先留最近这几条真实对话（丢完注入尾巴之后才动它们）
     _HIST_FLOOR_MSGS = 6
@@ -3010,6 +3016,11 @@ class AIClient(LoggerMixin):
         # 后台人设（Web「默认人设」/ persona_runtime.yaml / 域包）：与静态 system_prompt 叠加
         ai_cfg_pre = (self.config.config or {}).get("ai", {}) if self.config else {}
         _pbd = (ai_cfg_pre.get("persona_block_detail") or "full").strip().lower()
+        try:
+            from src.ai.usage_economy import persona_detail as _econ_pbd
+            _pbd = _econ_pbd(self.config, _pbd)
+        except Exception:
+            pass
         if _pbd not in ("none", "full", "compact"):
             _pbd = "full"
         _name_ov = "" if _suppress_global_identity else (ai_cfg_pre.get("ai_name") or "").strip()
@@ -3239,69 +3250,13 @@ class AIClient(LoggerMixin):
         _lang_name = self._LANG_NAMES.get(_reply_lang, "")
         _cfg_ins = (self.config.config or {}) if self.config and hasattr(self.config, "config") else {}
         _instr_companion = isinstance(_cfg_ins, dict) and effective_domain_name(_cfg_ins) == "conversion"
-        if _reply_lang != "zh" and _lang_name:
-            if _instr_companion:
-                # companion 模式对 ja/ko 加明确禁混指令：
-                # 日/韩文本本身含大量 CJK，所以不能说"禁 CJK"，
-                # 但必须明确禁止把中文句子夹在日/韩回复里。
-                if _reply_lang == "ja":
-                    _no_zh_extra = (
-                        " 絶対に中国語の文章や括弧内の中国語注釈を混入しないでください。"
-                        "全ての文を日本語のみで書くこと。"
-                        " CRITICAL: Do NOT mix Chinese sentences or parenthetical Chinese"
-                        " notes into your Japanese reply. Every sentence must be Japanese ONLY."
-                    )
-                elif _reply_lang == "ko":
-                    _no_zh_extra = (
-                        " 절대로 중국어 문장을 섞지 마세요. 한국어만 사용하세요."
-                        " CRITICAL: Do NOT mix Chinese sentences into your Korean reply."
-                        " Use Korean ONLY."
-                    )
-                else:
-                    # Latin/其他非 CJK 目标语（en/es/pt…）：中文字符是明确错误，
-                    # 与非 companion 同等硬禁。companion 无 EP/JC 支付通道名，故不留例外。
-                    # 修复前此处为空串，导致英文客户在「中文人设+长段中文历史」惯性下
-                    # 仍被回中文（线上实测客户抱怨 "Why don't you speak English anymore?"）。
-                    _no_zh_extra = (
-                        " 绝不要输出任何中文字符；中文人设/模板/知识库内容必须先翻译成目标语言再输出。"
-                        " DO NOT output any Chinese characters — translate any Chinese"
-                        " persona/template/KB content into the target language first."
-                    )
-            else:
-                _no_zh_extra = " DO NOT output any Chinese characters (except channel names like EP/JC/EasyPaisa/JazzCash)."
-            # 会话级口径（lang_policy）：语言由「运营锁定 > 用户明确请求 > 稳定证据」
-            # 决策得出，不再是「最新一条消息的检测结果」。措辞对齐——旧文案的
-            # "follow the LATEST message" 会怂恿模型自行按最新消息改语言，
-            # 与「用户明确要求日语后仍继续打中文」的持久偏好语义冲突。
-            parts.append(
-                f"【LANGUAGE RULE — TOP PRIORITY — MANDATORY】\n"
-                f"ACTIVE CONVERSATION LANGUAGE: {_lang_name} "
-                f"(decided from the user's explicit request or their stable message language).\n"
-                f"You MUST reply ENTIRELY in {_lang_name}.{_no_zh_extra}\n"
-                f"If earlier turns were in another language, SWITCH to {_lang_name} NOW — "
-                f"this decision already accounts for the user's latest message and any "
-                f"explicit language request; do NOT second-guess it from conversation history.\n"
-                f"Any Chinese templates or knowledge base content MUST be translated to {_lang_name} before output.\n"
-                f"Commands (/cxds etc) stay as-is.\n"
-                f"Violating this rule is MORE SERIOUS than giving wrong content."
-            )
-        else:
-            _zh_tail = (
-                "中文模板和知识库内容必须翻译为用户使用的语言后输出。"
-                if _instr_companion
-                else (
-                    "中文模板和知识库内容必须翻译为用户使用的语言后输出。"
-                    "通道名(EP/JC/EasyPaisa/JazzCash)、命令(/cxds等)保持原样不翻译。"
-                )
-            )
-            parts.append(
-                "【多语言回复规则 — MANDATORY】"
-                "ALWAYS reply in the SAME language as the user's message. This is the #1 priority rule. "
-                "If the user writes in English, you MUST reply entirely in English. "
-                "If the user writes in Urdu/Arabic, reply in that language. "
-                f"{_zh_tail}"
-                "违反此规则比回复错误的内容更严重。"
-            )
+        # B6（2026-09-11）：语言规则抽到 language_rule.py，≤400 字。旧块中英双语各说一遍
+        # 「禁中文 / 先翻译」，英文会话常到 600–2700 字且落在 system 尾部——裁剪器一紧就丢。
+        from src.ai.language_rule import language_rule_block
+        parts.append(language_rule_block(
+            _reply_lang, _lang_name, companion=_instr_companion))
+        if isinstance(context, dict):
+            context["_lang_rule_emitted"] = True
 
         if _deferred_dp_block:
             parts.append(_deferred_dp_block)
@@ -3705,6 +3660,10 @@ class AIClient(LoggerMixin):
             lang_hint = self._detect_message_language(_um_lang_src)
         else:
             lang_hint = str(context.get("reply_lang") or "").strip()
+        if lang_hint:
+            from src.ai.language_rule import skip_output_lang_block
+            if skip_output_lang_block(context):
+                lang_hint = ""
         if lang_hint:
             lang_name = self._LANG_NAMES.get(lang_hint, lang_hint) or "中文"
             _channel = str(context.get("channel") or context.get("platform") or "").strip().lower()

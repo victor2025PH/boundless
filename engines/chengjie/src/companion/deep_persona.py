@@ -664,6 +664,12 @@ def build_deep_persona_block(
     cfg = cfg or {}
     if not cfg.get("enabled", False):
         return ""
+    try:
+        from src.ai.usage_economy import skip_deep_persona
+        if skip_deep_persona():
+            return ""
+    except Exception:
+        pass
     persona = persona or {}
     # isinstance 而非 or：空 dict 是 falsy，`or {}` 会换新对象——调用方要靠
     # 传入的 deep_ctx 读回 _life_beat_chosen（实施55），引用必须保住。
@@ -682,8 +688,11 @@ def build_deep_persona_block(
             blocks.append(lc)
             deep_ctx["_life_beat_chosen"] = str(beat or "")
 
-    # L3 口味/立场（persona.tastes 静态）
-    if _flag(cfg, "tastes"):
+    # L3 口味/立场（persona.tastes 静态）。
+    # B6（2026-09-11）：PersonaManager.format_persona_block 已从同一 tastes 字段写
+    # 【你的好恶与观点】，这里再写【你的稳定口味与立场】= 每轮重复 200–400 字。
+    # 默认去重；``tastes_repeat: true`` 才双写（门禁用 / 回滚）。
+    if _flag(cfg, "tastes") and bool(cfg.get("tastes_repeat")):
         tb = format_tastes(persona)
         if tb:
             blocks.append(tb)

@@ -62,3 +62,41 @@ def test_extract_facts_and_slots_still_calls_llm_for_informative():
     out = asyncio.run(pf.extract_facts_and_slots(spy, "I'm Sarah, a nurse in Manila", "Nice to meet you Sarah!", slots=[]))
     assert spy.calls == 1
     assert out["llm"] == 1 and "skipped" not in out
+
+
+def test_informative_tokens_picks_name_number_cjk():
+    toks = pf.informative_tokens("I'm Sarah, 28, 住在上海")
+    assert "w:sarah" in toks and "n:28" in toks and "c:住在上海" in toks
+
+
+def test_extract_repeat_skip_no_new_entity_and_daily_cap():
+    pf.reset_extract_memo()
+    msg = "I'm Sarah, a nurse in Manila"
+    assert pf.extract_repeat_skip(msg, conv="wa:1:x") == ""
+    pf.remember_extract("wa:1:x", msg, llm=1, now=1_000_000.0)
+    assert pf.extract_repeat_skip(msg, conv="wa:1:x", now=1_000_100.0) == "no_new_entity"
+    # 新实体必须放行
+    assert pf.extract_repeat_skip("I'm Sarah, I have a daughter", conv="wa:1:x",
+                                 now=1_000_100.0) == ""
+    # 日限额
+    pf.reset_extract_memo()
+    for i in range(3):
+        pf.remember_extract("wa:1:x", f"fact number {i} extra", llm=1, now=2_000_000.0)
+    assert pf.extract_repeat_skip("brand new token zulu", conv="wa:1:x",
+                                 now=2_000_100.0, daily_cap=3) == "daily_cap"
+
+
+def test_run_extraction_skips_repeat_without_llm():
+    pf.reset_extract_memo()
+    cfg = {"companion": {"goals": {"profile_llm": {"enabled": True, "per_conv_daily": 12}}}}
+    spy = _Spy()
+    first = asyncio.run(pf.run_extraction(
+        spy, cfg, None, user_msg="I'm Sarah, a nurse in Manila", reply="hi Sarah",
+        platform="wa", chat_key="ck", account_id="a1", conversation_id="wa:a1:ck"))
+    assert first["llm"] == 1 and spy.calls == 1
+    spy2 = _Spy()
+    second = asyncio.run(pf.run_extraction(
+        spy2, cfg, None, user_msg="I'm Sarah, a nurse in Manila", reply="ok",
+        platform="wa", chat_key="ck", account_id="a1", conversation_id="wa:a1:ck"))
+    assert second["llm"] == 0 and second.get("skipped") == "no_new_entity" and spy2.calls == 0
+    pf.reset_extract_memo()

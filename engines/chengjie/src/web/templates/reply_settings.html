@@ -1038,6 +1038,14 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       </select>
       <span class="rps-row-hint" id="rps-ctx-depth-hint">{{ (i18n or {}).get('rps_ctx_depth_hint', "越深越记得住、也越贵：每轮把更多历史与记忆喂给模型（人设/规则部分稳定不变，可吃缓存价）。峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，无需重启。") }}</span>
     </div>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_usage_mode', "用量模式") }}</span>
+      <select class="rps-select" id="rps-usage-mode" onchange="rpsMarkDirty()">
+        <option value="full">{{ (i18n or {}).get('rps_usage_mode_full', "完整（按上面的深度档）") }}</option>
+        <option value="economy">{{ (i18n or {}).get('rps_usage_mode_economy', "经济（压帽：最近 4 条 · compact 人设 · 少抽取）") }}</option>
+      </select>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_usage_mode_hint', "和「深度」是两套旋钮：深度决定记得多少，经济档是省用量压帽。钱包用尽时即使选「完整」也会自动进经济档（本地模型顶班 + 短上下文），避免断线。改完即生效。") }}</span>
+    </div>
     <div class="rps-row" id="rps-style-ov-row" style="display:none">
       <span class="rps-row-hint" id="rps-style-ov" style="margin-top:0"></span>
     </div>
@@ -1466,6 +1474,7 @@ var RPS_I18N = {
     "ai.reply_defaults.emoji_level": {{ (i18n or {}).get('rps_style_emoji', "表情密度")|tojson }},
     "ai.reply_defaults.tone_hint": {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
     "ai.context_depth": {{ (i18n or {}).get('rps_ctx_depth', "上下文与记忆深度")|tojson }},
+    "ai.usage_mode": {{ (i18n or {}).get('rps_usage_mode', "用量模式")|tojson }},
     "inbox.auto_draft.platform_modes": {{ (i18n or {}).get('rps_plat_col_cap', "档位封顶")|tojson }},
     "inbox.l2_autosend.deliver_delay.platform_overrides": {{ (i18n or {}).get('rps_plat_fn_delay', "平台节奏覆写")|tojson }},
     "inbox.l2_autosend.platform_humanize": {{ (i18n or {}).get('rps_plat_fn_flags', "平台拟人开关")|tojson }},
@@ -1531,7 +1540,8 @@ var RPS_FIELD_DEFS = [
   {path: "ai.reply_defaults.max_sentences", kind: "int", el: "rps-style-maxsent"},
   {path: "ai.reply_defaults.emoji_level", kind: "select", el: "rps-style-emoji"},
   {path: "ai.reply_defaults.tone_hint", kind: "text", el: "rps-style-tone"},
-  {path: "ai.context_depth", kind: "select", el: "rps-ctx-depth", dflt: "standard"}
+  {path: "ai.context_depth", kind: "select", el: "rps-ctx-depth", dflt: "standard"},
+  {path: "ai.usage_mode", kind: "select", el: "rps-usage-mode", dflt: "full"}
 ];
 var RPS_DEFS_BY_PATH = {};
 // 上下文深度档提示：超大档单轮上限接近 ¥2，选中时把提示染成警示色（文案本身在 i18n）

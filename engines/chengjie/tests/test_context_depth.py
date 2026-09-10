@@ -83,10 +83,15 @@ def test_config_manager_object_and_runtime_config(monkeypatch):
 
 
 def test_settings_choices_synced():
-    from src.inbox.reply_pacing_settings import CONTEXT_DEPTH_CHOICES, FIELDS
+    from src.inbox.reply_pacing_settings import (
+        CONTEXT_DEPTH_CHOICES, FIELDS, USAGE_MODE_CHOICES)
     assert tuple(CONTEXT_DEPTH_CHOICES) == tuple(cd.TIER_KEYS)
     f = FIELDS["ai.context_depth"]
     assert f["type"] == "enum" and f["default"] == cd.DEFAULT_TIER and f["hot"] is True
+    um = FIELDS["ai.usage_mode"]
+    assert um["type"] == "enum" and um["default"] == "full" and um["hot"] is True
+    assert tuple(USAGE_MODE_CHOICES) == ("full", "economy")
+    assert "lite" not in USAGE_MODE_CHOICES          # 不与深度档混成第五档
 
 
 def test_settings_sanitize_accepts_tier_and_rejects_junk():
@@ -94,6 +99,10 @@ def test_settings_sanitize_accepts_tier_and_rejects_junk():
     clean, errors = sanitize_patch({"ai.context_depth": "ultra"})
     assert not errors and clean["ai.context_depth"] == "ultra"
     _, errors = sanitize_patch({"ai.context_depth": "gigantic"})
+    assert errors
+    clean, errors = sanitize_patch({"ai.usage_mode": "economy"})
+    assert not errors and clean["ai.usage_mode"] == "economy"
+    _, errors = sanitize_patch({"ai.usage_mode": "ultra"})
     assert errors
 
 

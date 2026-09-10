@@ -164,8 +164,8 @@ def test_companion_en_prompt_hard_no_chinese_and_anti_momentum():
     client = AIClient(_ConvCfg())
     prompt = client._build_system_instruction({"reply_lang": "en"})
     assert "LANGUAGE RULE" in prompt
-    assert "DO NOT output any Chinese characters" in prompt
-    assert "SWITCH to English NOW" in prompt
+    assert "No Chinese characters" in prompt
+    assert "Switch now" in prompt and "second-guess" in prompt
 
 
 def test_companion_zh_prompt_keeps_no_top_priority_block():

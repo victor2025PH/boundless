@@ -74,6 +74,19 @@ _APP: Any = None
 _NICK_MEMO: Dict[str, str] = {}
 _NICK_MEMO_MAX = 5000
 
+# B4 二期（2026-09-11）：按会话记住已见实体 + 当日 LLM 次数。进程内、重启归零——
+# 漏抽一次下次还会再抽，绝不落盘。上限刻意松（默认 12 次/会话/日），拦的是
+# 「同一句自我介绍被每条 hi 之后又复述一遍」和「活跃会话每条都抽」。
+_EXTRACT_MEMO: Dict[str, Dict[str, Any]] = {}
+_EXTRACT_MEMO_LOCK = threading.Lock()
+_EXTRACT_MEMO_MAX = 4000
+PER_CONV_DAILY_DEFAULT = 12
+_NO_NEW_ENTITY_TTL = 6 * 3600
+_ENTITY_LATIN_RE = re.compile(r"[A-Za-z]{3,}")
+_ENTITY_NUM_RE = re.compile(r"[0-9]{1,6}")
+_ENTITY_CJK_RE = re.compile(
+    r"[\u4e00-\u9fff]{2,12}|[\u3040-\u30ff]{2,12}|[\uac00-\ud7af]{2,12}")
+
 
 # ── 单元 schema ───────────────────────────────────────────────────────────────
 
@@ -676,6 +689,112 @@ def low_information_message(text: str) -> str:
         return ""
 
 
+def informative_tokens(text: str) -> frozenset:
+    """从用户消息抽出「可能是事实」的 token（拉丁词 / 数字 / CJK·假名·谚文 2+ 字串）。
+    纯函数，绝不抛。用于「与上次抽取比有没有新实体」。"""
+    try:
+        s = str(text or "")
+        toks: set = set()
+        for m in _ENTITY_LATIN_RE.finditer(s):
+            toks.add("w:" + m.group().lower())
+        for m in _ENTITY_NUM_RE.finditer(s):
+            toks.add("n:" + m.group())
+        for m in _ENTITY_CJK_RE.finditer(s):
+            toks.add("c:" + m.group())
+        return frozenset(toks)
+    except Exception:
+        return frozenset()
+
+
+def _day_local(now: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(now if now is not None else _now()))
+
+
+def extract_repeat_skip(user_msg: str, *, conv: str = "",
+                        now: Optional[float] = None,
+                        daily_cap: int = PER_CONV_DAILY_DEFAULT) -> str:
+    """会话级二期闸门。返回原因（空串 = 抽）：
+
+    ``daily_cap``：该会话当日已跑过 ``daily_cap`` 次 LLM 抽取；
+    ``no_new_entity``：本条实体 token ⊆ 6 小时内上次抽取见过的集合（复述旧事实）。
+    无 conv / 无历史 → 放行。绝不抛。
+    """
+    try:
+        key = str(conv or "").strip()
+        if not key:
+            return ""
+        toks = informative_tokens(user_msg)
+        n = float(now if now is not None else _now())
+        day = _day_local(n)
+        cap = max(1, int(daily_cap or PER_CONV_DAILY_DEFAULT))
+        with _EXTRACT_MEMO_LOCK:
+            st = _EXTRACT_MEMO.get(key)
+            if not st:
+                return ""
+            if str(st.get("day") or "") == day and int(st.get("llm_n") or 0) >= cap:
+                return "daily_cap"
+            seen = st.get("tokens") or frozenset()
+            ts = float(st.get("ts") or 0)
+            if toks and toks <= seen and ts and (n - ts) < _NO_NEW_ENTITY_TTL:
+                return "no_new_entity"
+        return ""
+    except Exception:
+        logger.debug("[extract] repeat_skip 判定异常（按可抽取放行）", exc_info=True)
+        return ""
+
+
+def remember_extract(conv: str, user_msg: str, *, llm: int = 0,
+                     now: Optional[float] = None) -> None:
+    """抽取结束后记下实体并累加当日 LLM 次数。``llm=0``（闸门跳过）不刷新 ts / tokens，
+    只避免空 conv 写入。"""
+    key = str(conv or "").strip()
+    if not key:
+        return
+    try:
+        n = float(now if now is not None else _now())
+        day = _day_local(n)
+        toks = informative_tokens(user_msg)
+        with _EXTRACT_MEMO_LOCK:
+            st = _EXTRACT_MEMO.get(key)
+            if st is None or str(st.get("day") or "") != day:
+                st = {"day": day, "llm_n": 0, "tokens": frozenset(), "ts": 0.0}
+            if int(llm or 0):
+                st["llm_n"] = int(st.get("llm_n") or 0) + 1
+                st["tokens"] = frozenset(st.get("tokens") or ()) | toks
+                st["ts"] = n
+            _EXTRACT_MEMO[key] = st
+            if len(_EXTRACT_MEMO) > _EXTRACT_MEMO_MAX:
+                # 丢掉最老的 1/4，避免长驻进程无限涨
+                old = sorted(_EXTRACT_MEMO.items(), key=lambda kv: float((kv[1] or {}).get("ts") or 0))
+                for k, _ in old[: max(1, len(old) // 4)]:
+                    _EXTRACT_MEMO.pop(k, None)
+    except Exception:
+        logger.debug("[extract] remember 失败", exc_info=True)
+
+
+def reset_extract_memo() -> None:
+    with _EXTRACT_MEMO_LOCK:
+        _EXTRACT_MEMO.clear()
+
+
+def _per_conv_daily_cap(cfg_root: Any) -> int:
+    try:
+        goals = ((cfg_root or {}).get("companion") or {}).get("goals") or {}
+        pl = goals.get("profile_llm") if isinstance(goals, dict) else {}
+        v = (pl or {}).get("per_conv_daily")
+        if v is None:
+            n = PER_CONV_DAILY_DEFAULT
+        else:
+            n = max(1, int(v))
+    except (TypeError, ValueError, AttributeError):
+        n = PER_CONV_DAILY_DEFAULT
+    try:
+        from src.ai.usage_economy import cap_extract_daily
+        return cap_extract_daily(n, cfg_root)
+    except Exception:
+        return n
+
+
 async def extract_facts_and_slots(ai_client: Any, user_msg: str, reply: str, *,
                                   slots: Optional[List[Dict[str, Any]]] = None,
                                   timeout: float = _LLM_TIMEOUT) -> Dict[str, Any]:
@@ -791,6 +910,7 @@ def reset_stall() -> None:
     with _STALL_LOCK:
         _STALL.update({"zero_streak": 0, "runs": 0, "last_ts": 0.0, "last_nonzero_ts": 0.0, "last_llm": None})
     _NICK_MEMO.clear()
+    reset_extract_memo()
 
 
 # ── skill_manager 入口 ────────────────────────────────────────────────────────
@@ -831,19 +951,27 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
                 except Exception:
                     logger.debug("nickname prefill failed", exc_info=True)
         if on and ai_client is not None:
-            ext = await extract_facts_and_slots(
-                ai_client, user_msg, reply, slots=slots if slots is not None else slot_table(cfg_root))
-            res["llm"] = int(ext.get("llm") or 0)
-            res["facts"] = [(str(it.get("fact") or ""), str(it.get("evidence") or ""),
-                             (float(it["confidence"]) if it.get("confidence") is not None else None))
-                            for it in (ext.get("facts") or []) if it.get("fact")]
-            res["dropped"] = list(ext.get("dropped") or [])
-            res["slots"] = dict(ext.get("slots") or {})
-            if res["slots"] and store is not None and pf and ck:
-                ap = apply(store, pf, ck, res["slots"], source=SRC_AI, status=ST_MENTIONED,
-                           conversation_id=conv, now=now, lang=lang)
-                res["slots_written"] = len(ap.get("written") or [])
-                res["conflicts"] = list(ap.get("conflicts") or [])
+            _rep = extract_repeat_skip(
+                user_msg, conv=conv, now=now, daily_cap=_per_conv_daily_cap(cfg_root))
+            if _rep:
+                logger.debug("[extract] skipped: %s conv=%s", _rep, conv or "-")
+                res["skipped"] = _rep
+            else:
+                ext = await extract_facts_and_slots(
+                    ai_client, user_msg, reply,
+                    slots=slots if slots is not None else slot_table(cfg_root))
+                res["llm"] = int(ext.get("llm") or 0)
+                res["facts"] = [(str(it.get("fact") or ""), str(it.get("evidence") or ""),
+                                 (float(it["confidence"]) if it.get("confidence") is not None else None))
+                                for it in (ext.get("facts") or []) if it.get("fact")]
+                res["dropped"] = list(ext.get("dropped") or [])
+                res["slots"] = dict(ext.get("slots") or {})
+                if res["slots"] and store is not None and pf and ck:
+                    ap = apply(store, pf, ck, res["slots"], source=SRC_AI, status=ST_MENTIONED,
+                               conversation_id=conv, now=now, lang=lang)
+                    res["slots_written"] = len(ap.get("written") or [])
+                    res["conflicts"] = list(ap.get("conflicts") or [])
+                remember_extract(conv, user_msg, llm=res["llm"], now=now)
     except Exception:
         logger.debug("[extract] run_extraction failed", exc_info=True)
     # facts 口径 = 启发式（调用方已落库）+ 本次 LLM 过接地的；停滞计数同口径
@@ -858,8 +986,9 @@ __all__ = [
     "SCHEMA_VERSION", "SOURCES", "STATUSES", "STALL_THRESHOLD",
     "apply", "bind_app", "build_merged_prompt", "confirm", "conversation_nickname",
     "export_profile", "extract_facts_and_slots", "ground_slots", "import_profile",
-    "is_new_schema", "llm_extract_enabled", "low_information_message", "make_cell",
-    "nickname_prefill", "normalize_cell",
+    "is_new_schema", "llm_extract_enabled", "low_information_message",
+    "extract_repeat_skip", "informative_tokens", "remember_extract", "reset_extract_memo",
+    "make_cell", "nickname_prefill", "normalize_cell",
     "notify_conflict", "parse_merged", "record_extract_result", "reject", "reset_stall",
     "run_extraction", "slot_table", "stall_status", "upgrade_fields",
 ]

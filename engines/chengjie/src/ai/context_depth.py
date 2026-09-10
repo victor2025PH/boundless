@@ -122,8 +122,14 @@ def prompt_budget(config: Any, legacy: int) -> int:
     """预算：standard → legacy 原值（含 0=不裁）；深档 → max(legacy, 档位)。legacy=0（不裁）保持 0。"""
     d = resolve(config)
     if d.is_standard or not legacy:
-        return int(legacy or 0)
-    return _lift(legacy, d.prompt_budget_tokens)
+        n = int(legacy or 0)
+    else:
+        n = _lift(legacy, d.prompt_budget_tokens)
+    try:
+        from src.ai.usage_economy import cap_prompt_budget
+        return cap_prompt_budget(n, config)
+    except Exception:
+        return n
 
 
 def history_limit(config: Any, legacy: int, *, strategy_rounds: Optional[int] = None) -> int:
@@ -132,20 +138,35 @@ def history_limit(config: Any, legacy: int, *, strategy_rounds: Optional[int] = 
     if strategy_rounds == 0:
         return 0
     d = resolve(config)
-    return _lift(base, None if d.is_standard else d.history_msgs)
+    n = _lift(base, None if d.is_standard else d.history_msgs)
+    try:
+        from src.ai.usage_economy import cap_history
+        return cap_history(n, config)
+    except Exception:
+        return n
 
 
 def verbatim_rounds(config: Any, legacy_rounds: int) -> int:
     """本地逐字保留的轮数（TG 直答路径按轮计）。"""
     d = resolve(config)
-    return _lift(legacy_rounds, None if d.is_standard else d.verbatim_rounds)
+    n = _lift(legacy_rounds, None if d.is_standard else d.verbatim_rounds)
+    try:
+        from src.ai.usage_economy import cap_verbatim_rounds
+        return cap_verbatim_rounds(n, config)
+    except Exception:
+        return n
 
 
 def verbatim_msgs(config: Any, legacy_msgs: int) -> int:
     """本地逐字保留的条数（收件箱拟稿路径按条计）= 轮数 × 2。"""
     d = resolve(config)
-    return _lift(legacy_msgs, None if d.is_standard or d.verbatim_rounds is None
-                 else d.verbatim_rounds * 2)
+    n = _lift(legacy_msgs, None if d.is_standard or d.verbatim_rounds is None
+              else d.verbatim_rounds * 2)
+    try:
+        from src.ai.usage_economy import cap_verbatim_msgs
+        return cap_verbatim_msgs(n, config)
+    except Exception:
+        return n
 
 
 def compress_threshold(keep: int, legacy_threshold: int) -> int:
@@ -161,14 +182,25 @@ def compress_threshold(keep: int, legacy_threshold: int) -> int:
 def memory_limits(config: Any, legacy_items: int, legacy_chars: int) -> Tuple[int, int]:
     d = resolve(config)
     if d.is_standard:
-        return int(legacy_items), int(legacy_chars)
-    return _lift(legacy_items, d.memory_items), _lift(legacy_chars, d.memory_chars)
+        items, chars = int(legacy_items), int(legacy_chars)
+    else:
+        items, chars = _lift(legacy_items, d.memory_items), _lift(legacy_chars, d.memory_chars)
+    try:
+        from src.ai.usage_economy import cap_memory
+        return cap_memory(items, chars, config)
+    except Exception:
+        return items, chars
 
 
 def history_fetch_limit(config: Any, legacy: int = 30) -> int:
     """从库里取多少行历史（各拟稿入口 list_recent_messages 的 limit）。"""
     d = resolve(config)
-    return _lift(legacy, None if d.is_standard else d.history_fetch)
+    n = _lift(legacy, None if d.is_standard else d.history_fetch)
+    try:
+        from src.ai.usage_economy import cap_history
+        return cap_history(n, config)
+    except Exception:
+        return n
 
 
 def describe(config: Any = None) -> Dict[str, Any]:
