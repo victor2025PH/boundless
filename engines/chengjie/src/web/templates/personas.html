@@ -1458,6 +1458,12 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-in{flex:1;min-width:120px;padding:.3rem .45rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);font-size:.72rem}
     .pma-status{font-size:.68rem;color:var(--t2)}
     .pma-summary{font-size:.68rem;color:var(--t2);margin:.2rem 0;display:flex;gap:.5rem;flex-wrap:wrap}
+    .al-counts{font-size:.68rem;color:var(--t2);margin:.15rem 0 .35rem;display:flex;gap:.55rem;flex-wrap:wrap;align-items:center}
+    .al-counts b{color:var(--t1);font-weight:600}
+    .al-ai{font-size:.62rem;color:var(--th-ink-amber7,#b45309);border:1px dashed var(--th-ink-amber7,#b45309);border-radius:999px;padding:.05rem .35rem;margin-left:.2rem}
+    .al-kind{font-size:.68rem;padding:.1rem .2rem;border:1px solid var(--bd);border-radius:6px;background:var(--bg);max-width:7.5rem}
+    .al-chk{margin:0 .25rem 0 0;vertical-align:middle}
+    .al-batch{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;font-size:.7rem;margin:.25rem 0}
     .pma-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:.5rem;margin:.5rem 0}
     .pma-card{border:1px solid var(--bd);border-radius:8px;padding:.4rem;background:var(--bg);display:flex;flex-direction:column;gap:.3rem}
     .pma-card.pma-off{opacity:.5}
@@ -3009,7 +3015,7 @@ async function pmaLoad() {
       const gr = await apiFetch('/api/personas/selfie-gate');
       if (gr.ok) gate = await gr.json();
     } catch (e) { /* 不渲染总闸行 */ }
-    _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, photosOn: photosOn, gate: gate };
+    _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, counts: d.counts || _alCountsFrom(d.items || []), photosOn: photosOn, gate: gate };
     _pmaRender(body, _pmaState.items, _pmaState.stats, photosOn, gate);
     pmaFaceLoad();
     const badge = document.getElementById('pe-album-badge');
@@ -3081,6 +3087,7 @@ async function _pmaRefreshAi() {
     const d = await r.json();
     const prevTagged = Number((_pmaState.ai || {}).tagged || 0);
     _pmaState.items = d.items || []; _pmaState.stats = d.stats || {}; _pmaState.ai = d.ai || {};
+    if (d.counts) _pmaState.counts = d.counts;
     _pmaRenderGuide();
     const cover = document.getElementById('pma-ai-cover');
     if (cover) cover.textContent = window.Tf('pma_ai_cover', { done: String(_pmaState.ai.tagged || 0), total: String(_pmaState.items.length) });
@@ -3259,6 +3266,81 @@ var _pmaFilter = 'all';
 var _pmaQuery = '';
 var _pmaPollTimer = null;
 var _pmaPollLeft = 0;
+var _alSel = {};
+
+function _alKindOf(raw) {
+  const tags = (raw && raw.tags) || [];
+  for (let i = 0; i < tags.length; i++) {
+    const t = String(tags[i] || '');
+    if (t.indexOf('kind:') === 0) return t.slice(5);
+  }
+  const am = (raw && raw.auto_meta && typeof raw.auto_meta === 'object') ? raw.auto_meta : {};
+  return String(am.scene_kind || '');
+}
+function _alCountsFrom(items) {
+  let confirmed = 0, ai = 0, none = 0;
+  (items || []).forEach(function (raw) {
+    const it = _pmaItemView(raw);
+    const trg = (it.triggers || []).length;
+    const meta = (raw.auto_meta && typeof raw.auto_meta === 'object') ? raw.auto_meta : {};
+    const sug = (meta.triggers_suggest || []).length;
+    if (trg) confirmed++;
+    else if (sug) ai++;
+    else none++;
+  });
+  return { confirmed: confirmed, ai_suggest: ai, none: none };
+}
+async function _alAdoptAll() {
+  const pid = _pmaPid();
+  if (!pid) return;
+  const n = ((_pmaState && _pmaState.counts) || _alCountsFrom((_pmaState || {}).items || [])).ai_suggest || 0;
+  if (!n) return;
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/adopt-suggest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    }, { timeoutMs: 120000 });
+    if (r.ok) { _toast(_pmaEsc(window.Tf('al_adopted_n', { n: String(n) })), 'info'); await pmaLoad(); }
+    else _toast(window.T('pma_save_fail'), 'err');
+  } catch (e) { _toast(window.T('pma_save_fail') + e, 'err'); }
+}
+function _alToggle(mid, on) {
+  if (on) _alSel[String(mid)] = true; else delete _alSel[String(mid)];
+  const bar = document.getElementById('al-batch');
+  if (bar) bar.style.display = Object.keys(_alSel).length ? 'flex' : 'none';
+  const c = document.getElementById('al-sel-n');
+  if (c) c.textContent = window.Tf('al_sel_n', { n: String(Object.keys(_alSel).length) });
+}
+async function _alSetKind(mid, kind) {
+  const pid = _pmaPid();
+  if (!pid || !mid) return;
+  try {
+    await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scene_kind: kind })
+    });
+    const raw = ((_pmaState || {}).items || []).find(function (x) { return String(x.id) === String(mid); });
+    if (raw) {
+      raw.tags = (raw.tags || []).filter(function (t) { return String(t).indexOf('kind:') !== 0; });
+      if (kind) raw.tags.push('kind:' + kind);
+      raw.auto_meta = Object.assign({}, raw.auto_meta || {}, { scene_kind: kind });
+    }
+  } catch (e) { _toast(window.T('pma_save_fail') + e, 'err'); }
+}
+async function _alBatchAdd() {
+  const pid = _pmaPid();
+  const inp = document.getElementById('al-batch-trg');
+  const add = String((inp && inp.value) || '').split(/[,\n，、;；]/).map(function (s) { return s.trim(); }).filter(Boolean);
+  const ids = Object.keys(_alSel);
+  if (!pid || !ids.length || !add.length) return;
+  try {
+    const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/batch-triggers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ids, add: add })
+    });
+    if (r.ok) { _alSel = {}; if (inp) inp.value = ''; _toast(window.T('al_batch_ok'), 'info'); await pmaLoad(); }
+    else _toast(window.T('pma_save_fail'), 'err');
+  } catch (e) { _toast(window.T('pma_save_fail') + e, 'err'); }
+}
 
 function _pmaDirtyCount() { return Object.keys(_pmaEdits).length; }
 
@@ -3336,12 +3418,25 @@ function _pmaRender(body, items, stats, photosOn, gate) {
   let summary = '';
   if (items.length) {
     const totalHits = items.reduce((a, it) => a + (it.hits || 0), 0);
-    const noTrg = items.filter(function (it) { return !(_pmaItemView(it).triggers || []).length; }).length;
+    const counts = (typeof (_pmaState.counts) === 'object' && _pmaState.counts) ? _pmaState.counts : _alCountsFrom(items);
+    const noTrg = Number(counts.ai_suggest || 0) + Number(counts.none || 0);
     summary = '<div class="pma-summary" style="' + dim + '"><span>🖼 ' + (stats.photo || 0) + '</span>'
       + '<span>🎬 ' + (stats.video || 0) + '</span>'
       + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span>'
+      + '</div>'
+      + '<div class="al-counts" id="al-counts" style="' + dim + '">'
+      + '<span>' + _pmaEsc(window.T('al_count_confirmed')) + ' <b>' + String(counts.confirmed || 0) + '</b></span>'
+      + '<span>' + _pmaEsc(window.T('al_count_ai')) + ' <b>' + String(counts.ai_suggest || 0) + '</b></span>'
+      + '<span>' + _pmaEsc(window.T('al_count_none')) + ' <b>' + String(counts.none || 0) + '</b></span>'
+      + (Number(counts.ai_suggest || 0) ? ('<button type="button" class="btn btn-xs btn-primary" id="al-adopt-all" onclick="_alAdoptAll()">'
+        + _pmaEsc(window.Tf('al_adopt_all', { n: String(counts.ai_suggest) })) + '</button>') : '')
       + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
       + (typeof ai.tagged === 'number' && items.length ? '<span id="pma-ai-cover">' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
+      + '</div>'
+      + '<div class="al-batch" id="al-batch" style="display:' + (Object.keys(_alSel).length ? 'flex' : 'none') + dim + '">'
+      + '<span id="al-sel-n">' + _pmaEsc(window.Tf('al_sel_n', { n: String(Object.keys(_alSel).length) })) + '</span>'
+      + '<input type="text" id="al-batch-trg" class="pma-in" placeholder="' + _pmaEsc(window.T('al_batch_ph')) + '" style="min-width:140px">'
+      + '<button type="button" class="btn btn-xs btn-primary" onclick="_alBatchAdd()">' + _pmaEsc(window.T('al_batch_add')) + '</button>'
       + '</div>';
   }
   body.innerHTML = capbar + faceref + uploader + test + summary
@@ -3447,7 +3542,7 @@ function _pmaCard(raw) {
   const sug = (meta.triggers_suggest || []).map(String).filter(function (s) { return s && trgArr.indexOf(s) === -1; }).slice(0, 8);
   let chips = '';
   if (sug.length) {
-    chips = '<div class="pma-chips" title="' + _pmaEsc(window.T('pma_sug_trg')) + '">✨ '
+    chips = '<div class="pma-chips" title="' + _pmaEsc(window.T('pma_sug_trg')) + '">✨ <span class="al-ai">' + _pmaEsc(window.T('al_ai_badge')) + '</span> '
       + sug.map(function (s) { return '<span class="pma-chip" onclick="_pmaAdoptTrigger(' + midArg + ',' + _jsArgAttr(s) + ')">' + _pmaEsc(s) + '</span>'; }).join('')
       + (sug.length > 1 ? '<span class="pma-chip" style="border-style:solid" onclick="_pmaAdoptTrigger(' + midArg + ',null)">' + window.T('pma_adopt_all') + '</span>' : '')
       + '</div>';
@@ -3456,12 +3551,19 @@ function _pmaCard(raw) {
   const needTrg = !trgArr.length;
   const bondSug = (typeof meta.suggest_min_bond === 'number' && meta.suggest_min_bond !== (it.min_bond_level || 0))
     ? ' <span class="pma-chip" onclick="_pmaAdoptBond(' + midArg + ',' + meta.suggest_min_bond + ')">' + _pmaEsc(window.Tf('pma_sug_bond', { v: String(meta.suggest_min_bond) })) + '</span>' : '';
+  const kindNow = _alKindOf(raw) || (meta.scene_kind || '');
+  const kindOpts = [['', 'al_kind_unset'], ['selfie', 'al_kind_selfie'], ['indoor', 'al_kind_indoor'], ['outdoor', 'al_kind_outdoor'], ['food', 'al_kind_food'], ['pet', 'al_kind_pet'], ['other', 'al_kind_other']];
+  const kindSel = '<select class="al-kind" onchange="event.stopPropagation();_alSetKind(' + midArg + ',this.value)">'
+    + kindOpts.map(function (o) { return '<option value="' + o[0] + '"' + (kindNow === o[0] ? ' selected' : '') + '>' + _pmaEsc(window.T(o[1])) + '</option>'; }).join('')
+    + '</select>';
+  const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><a href="' + url + '" target="_blank" rel="noopener" style="display:block">' + thumb + '</a>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><a href="' + url + '" target="_blank" rel="noopener" style="display:block">' + thumb + '</a>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips
-    + '<div class="pma-row" style="justify-content:space-between">'
+    + '<div class="pma-row" style="justify-content:space-between;align-items:center">'
+    +   kindSel
     +   '<label class="pma-lb"><input type="checkbox" class="pma-en"' + (it.enabled ? ' checked' : '') + '>' + window.T('pma_enabled_label') + '</label>'
     +   '<span class="pma-hits" style="flex:none">' + window.T('pma_hits') + ' ' + (raw.hits || 0) + '</span>'
     +   '<button class="btn btn-xs btn-danger" title="' + _pmaEsc(window.T('pma_del_btn')) + '" onclick="pmaDeleteItem(' + midArg + ')">🗑</button>'
