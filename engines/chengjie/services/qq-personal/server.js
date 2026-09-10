@@ -145,6 +145,7 @@ async function dispatch(api, p) {
                   : failed(r.retcode ?? -1, r.error);
     }
     case "x_quick_login_list":
+      if (typeof d.refreshQuickLoginList === "function") await d.refreshQuickLoginList();   // qqnt：向内核要一次最新列表
       return ok({ accounts: d.quickLoginList() });
     case "x_quick_login": {
       const r = await d.quickLogin(String(p.uin || ""));
@@ -199,6 +200,15 @@ async function main() {
       logger.error({ e: String(e), api: req.params.api }, "dispatch crashed");
       res.json(failed(-1, String((e && e.message) || e)));
     }
+  });
+
+  // 真驱动的媒体回放：NT 内核只给本地缓存路径，Python 侧要的是可拉取的 URL（qq_milky 用 temp_url /
+  // download_url 下载后落库）。只回放驱动登记过的 id（driver.mediaFile），不接受任意路径；同 Milky 鉴权。
+  app.get("/media/:id", (req, res) => {
+    if (TOKEN && String(req.headers["authorization"] || "") !== `Bearer ${TOKEN}`) return res.status(401).end();
+    const p = typeof driver.mediaFile === "function" ? driver.mediaFile(req.params.id) : "";
+    if (!p) return res.status(404).end();
+    res.sendFile(p, (e) => { if (e && !res.headersSent) res.status(404).end(); });
   });
 
   app.get("/health", async (req, res) => {

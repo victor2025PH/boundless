@@ -24,9 +24,25 @@
    连接弹窗与就绪诊断消费。
 5. 会话凭据落用户可写数据根，绝不随安装包分发（见 `desktop/build/after-pack.js` FORBIDDEN）。
 
+## 真驱动移植说明（2026-09-10，B 段）
+
+`ntq/qqnt-driver.js` / `ntq/qqnt-agent.cjs` / `ntq/qqnt-ipc.js` / `ntq/qqnt-elements.js` / `ntq/qqnt-versions.js`
+是对 **LLOneBot v4.9.4 直连注入形态**（GPL-2.0）的移植，按 GPL-2.0 同许可发布，全部留在本目录：
+
+| 来源（LLOneBot v4.9.4） | 移植到 | 保留 | 修改 |
+|---|---|---|---|
+| `src/ntqqapi/wrapper.ts`、`hook.ts`（拦 `.node` 加载拿 wrapper 导出；代理 `NodeIQQNTWrapperSession.create` / `NodeIKernelLoginService`；包装 `addKernelXxxListener` 旁路事件） | `qqnt-agent.cjs` | 挂钩位置与监听器包装方式 | 改为零依赖 CommonJS；去掉 OneBot/Satori/HTTP 面，只留本机命名管道 RPC；`API_PROFILES` 按 build 分档 |
+| `src/ntqqapi/api/msg.ts` / `file.ts` / `group.ts` / `friend.ts`（`sendMsg` / `recallMsg` / `setMsgRead` / `getRichMediaFilePathForGuild` / `kickMember` / `modifyGroupName` / `approvalFriendRequest` 调用形状） | `qqnt-agent.cjs` `METHODS` | 内核方法名与参数形状 | 只保留 Milky 子集；uid/uin 解析走 `getUidByUinV2` 优先并做缓存 |
+| `src/ntqqapi/types/msg.ts`（元素类型号、`picElement` / `fileElement` / `replyElement` 字段） | `qqnt-elements.js` | 元素形状 | 直接与 Milky 段互转；record/video/forward 明确 unsupported 而非静默丢 |
+| `src/main/...` 启动注入（改 `resources/app/package.json` main 指向 launcher） | `qqnt-driver.js` `ensureInjected` | 注入方式 | **只对智聊自己下载的运行时 QQ 做**（`source=runtime`），用户自装 QQ 一律拒绝；幂等；备份原 `package.json` |
+
+不含来源、智聊自写：`qqnt-ipc.js`（随机 token 经环境变量传入、只在内存比对）、`qqnt-versions.js` 版本表、
+日志纪律（不落消息正文 / token / 二维码 png）、`server.js` 的 `/media/:id` 回放。
+
 ## 当前形态
 
-本目录当前提供 **`server.js` 的 Milky 服务外壳 + 可注入驱动接口 `ntq/driver.js`**：
-- 默认驱动为 `mock`（离线自测：假登录、假收发，供 CI 与端到端门禁跑通）；
-- 真实注入驱动 `ntq/qqnt-driver.js`（GPL-2.0 移植）在去风险验证通过后接入，
-  与外壳的接口契约已冻结（见 `ntq/driver.js` 的 JSDoc）。
+本目录提供 **`server.js` 的 Milky 服务外壳 + 驱动接口 `ntq/driver.js` + 两个实现**：
+- `mock`（离线自测：假登录、假收发，供 CI 与端到端门禁跑通）；
+- `qqnt`（真驱动，默认）：本机定位到**运行时目录内、版本表内**的 QQ 才注入；任一条件不满足即回退 `mock`，
+  `/health` 如实标 `driver="mock" + driver_reason`。真驱动**尚未经真机 72 h 去风险验证**（版本表 `verified` 皆空），
+  验证通过前安装包不把它列为 REQUIRED、产品对外口径保持「演示态」（平台注册表 `qq.driver_state=mock`）。
