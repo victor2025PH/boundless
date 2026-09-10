@@ -727,9 +727,10 @@ VPS_ALIAS = "bd2026"
 def _vps(cmd: str, timeout: int = 90) -> tuple[int, str]:
     """VPS 上执行一条命令（BatchMode 免交互；返回 (rc, 输出)）。
 
-    ``-n``（StdinNull）必带（2026-09-11，ssh_config.boundless 的 VPS 块也已带）：Windows
-    自带 ssh.exe 9.5p1 跑一次性命令会随机卡在 stdin 读取上不退出（Win32-OpenSSH #1334），
-    这里从不经 stdin 送数据（文件走 _vps_push/scp）。
+    ``-n``（StdinNull）必带（2026-09-11）：Windows 自带 ssh.exe 9.5p1 跑一次性命令会随机
+    卡在 stdin 读取上不退出（Win32-OpenSSH #1334），这里从不经 stdin 送数据。只能写在
+    调用点：ssh_config 的 Host 块一旦写 StdinNull，``_vps_push`` 的 scp（经 ssh 子进程
+    stdin/stdout 跑协议）会立刻 Connection closed。
     """
     r = subprocess.run(
         ["ssh", "-n", "-F", str(SSH_CONFIG), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",

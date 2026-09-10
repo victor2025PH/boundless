@@ -371,7 +371,7 @@ def fetch_telemetry_lines(fp: str, *, host: str = _TELEMETRY_SSH_HOST,
 
     ``-n``（StdinNull）必带（2026-09-11）：Windows 自带 ssh.exe 9.5p1 在无人值守的
     控制台下跑一次性命令会随机卡在 stdin 读取上不退出（Win32-OpenSSH #1334），这里
-    完全不用 stdin；173/117 的 ~/.ssh/config 是否带 StdinNull 不一定同步，命令行显式给。
+    完全不用 stdin。只能写在调用点，不能写进 ~/.ssh/config 的 Host 块——scp 会跟着断。
     """
     import subprocess
     cmd = ["ssh", "-n", host,
