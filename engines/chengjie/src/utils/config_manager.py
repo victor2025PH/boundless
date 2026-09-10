@@ -6,7 +6,7 @@
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import logging
 
 
@@ -407,6 +407,10 @@ class ConfigManager:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f) or {}
 
+            # Q-4 C（#267 65UQRE）：升级回读基线——load() 内所有迁移/补齐**之前**的
+            # overlay 显式叶子快照；末尾对照，任何显式值被改写都落 [upgrade] 日志。
+            _overlay_before = self._overlay_leaves()
+
             # P1-1：凭证 overlay（config.local.yaml）深合并覆盖在主配置之上。
             # 接入向导只写这个小文件 → 主 config.yaml 的注释/结构永不被改写，
             # 且密钥与 git 跟踪文件分离（overlay 应进 .gitignore）。
@@ -430,6 +434,14 @@ class ConfigManager:
             # review + bootstrap 关；用户在 overlay 里显式写过的档位不动（三态）。
             self._migrate_login_default_semi_1076()
 
+            # D-Q1 / D-Q2（1.0.79，Q-4 #267）：撤回 1.0.78 基线补进去的班表 / 额度闸门
+            # ——只回滚「原样基线形态」（用户没改过一个字），用户自己开过的一字不动。
+            _rolled_back = self._rollback_baselines_1079()
+
+            # Q-4 C：升级回读——overlay 里升级前就存在的显式叶子，升级后必须逐字相等
+            # （回滚键除外，单列 rolled_back）。changed 非空＝红线①被破，WARNING 可见。
+            self._log_upgrade_readback(_overlay_before, _rolled_back)
+
             # 打包/自包含部署：用 AITR_WEB_* 覆盖 web_admin.{host,port,auth_token}，
             # 使后端「serve 的端口/令牌」与桌面壳 renderer「talk 的 base_url/token」强一致，
             # 无需改随包 example（server 端口/令牌保持 canonical）。开发/server 态无 env→零影响。
@@ -449,6 +461,8 @@ class ConfigManager:
             # P0-1：非阻断启动自检 — 把 error/warn 摘要打到日志，引导修复错配，
             # 但不改变启动成败（严格 gate 走 `python main.py --check`）。
             self._run_startup_self_check()
+            # Q-4 B/E：班表 / 额度闸门 / 两个基线键的一行启动横幅（纯读，永不抛）
+            self.log_factory_defaults_banner()
             return True
 
         except yaml.YAMLError as e:
@@ -828,6 +842,176 @@ class ConfigManager:
                 self.logger.warning("登录默认半自动迁移写入 overlay 失败（忽略，本次按旧配置跑）")
         except Exception as exc:
             self.logger.warning("登录默认半自动迁移异常（忽略）: %s", exc)
+
+    # ── Q-4（1.0.79，#267 #265）：撤回 1.0.78 错误基线 + 升级回读 ─────────────
+
+    def baseline_rollback_patch(self) -> Dict[str, Dict[str, Any]]:
+        """D-Q1 / D-Q2 撤回判定核心（纯读，供 ``_rollback_baselines_1079`` 与测试）。
+
+        对 ``feature_registry.ROLLED_BACK_BASELINES`` 每个键：合并视图里该键的**整块**
+        与 1.0.78 基线 / 种子写入的原样形态（``shape``）逐字相等、且无回滚标记 → 视为
+        「由基线补进去、用户从未改过」→ 返回要写进 overlay 的 patch（``new`` 值 + 标记）。
+        任何偏差（用户填了时区 / 改了额度 / 显式写过 false / 已有标记）→ 一字不动。
+        返回 {dotted_key: {"patch": nested, "reason": str, "old": Any, "new": Any}}。
+        """
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            from src.utils.feature_registry import ROLLED_BACK_BASELINES, as_nested, dig
+            for key, spec in ROLLED_BACK_BASELINES.items():
+                try:
+                    if dig(self.config, spec["marker"]) is not None:
+                        continue
+                    block = dig(self.config, spec["shape_root"])
+                    if not isinstance(block, dict):
+                        continue
+                    if self._plain(block) != spec["shape"]:
+                        continue
+                    patch = as_nested({key: spec["new"], spec["marker"]: "1.0.79"})
+                    out[key] = {"patch": patch, "reason": spec["reason"],
+                                "old": spec["old"], "new": spec["new"]}
+                except Exception:
+                    continue
+        except Exception:
+            return {}
+        return out
+
+    @staticmethod
+    def _plain(node: Any) -> Any:
+        """CommentedMap / 嵌套 dict → 纯 dict（形态比对用；标量原样）。"""
+        if isinstance(node, dict):
+            return {str(k): ConfigManager._plain(v) for k, v in node.items()}
+        if isinstance(node, (list, tuple)):
+            return [ConfigManager._plain(v) for v in node]
+        return node
+
+    def _rollback_baselines_1079(self) -> List[str]:
+        """D-Q1 / D-Q2 存量撤回：只动桌面态（1.0.78 基线补齐与种子只发生在桌面态）。
+
+        命中一键写一次 overlay + 一行 WARNING ``[baseline] rollback <key> reason=D-Qn``
+        （65UQRE 主诉之一＝「静默」，撤回也必须可见）。幂等：标记在场即 no-op。永不抛。
+        返回本次回滚的键列表（供升级回读把它们从 changed 里单列）。
+        """
+        rolled: List[str] = []
+        try:
+            if not self._env_truthy("AITR_DESKTOP_MODE"):
+                return rolled
+            plan = self.baseline_rollback_patch()
+            for key, item in plan.items():
+                if self.save_overlay_patch(item["patch"]):
+                    rolled.append(key)
+                    self.logger.warning(
+                        "[baseline] rollback %s reason=%s %r→%r（1.0.78 基线补进去的原样"
+                        "形态，用户未改过；要开请在自动回复设置页显式开启并填时区/额度）",
+                        key, item["reason"], item["old"], item["new"])
+                else:
+                    self.logger.warning("[baseline] rollback %s 写入 overlay 失败（忽略）", key)
+        except Exception as exc:
+            self.logger.warning("[baseline] rollback 异常（忽略）: %s", exc)
+        return rolled
+
+    def _overlay_leaves(self) -> Dict[str, Any]:
+        """overlay 文件的显式叶子 {dotted: value}（纯读；缺失/损坏 → {}）。"""
+        try:
+            p = self._overlay_path()
+            if not p.exists():
+                return {}
+            with open(p, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                return {}
+            out: Dict[str, Any] = {}
+
+            def _walk(node: Any, prefix: str) -> None:
+                if isinstance(node, dict) and node:
+                    for k, v in node.items():
+                        _walk(v, f"{prefix}{k}.")
+                else:
+                    out[prefix[:-1]] = node
+            _walk(data, "")
+            return out
+        except Exception:
+            return {}
+
+    def _log_upgrade_readback(self, before: Dict[str, Any],
+                              rolled_back: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Q-4 C（#267 65UQRE）：升级回读——``[upgrade] user_flags_preserved=N changed=[]``。
+
+        ``before``＝load() 开头 overlay 显式叶子快照；此刻再读一次文件：升级前就存在的
+        每个叶子都必须逐字相等（红线①）。差异分两类：``rolled_back``（D-Q1/D-Q2 有意
+        撤回、单列）与 ``changed``（**不该发生**，WARNING）。返回统计供测试断言。
+        """
+        summary: Dict[str, Any] = {"preserved": 0, "changed": [], "rolled_back": []}
+        try:
+            if not before:
+                return summary
+            after = self._overlay_leaves()
+            rb = set(rolled_back or [])
+            for key, old in before.items():
+                if key in rb:
+                    summary["rolled_back"].append(key)
+                    continue
+                if key in after and after[key] == old:
+                    summary["preserved"] += 1
+                else:
+                    summary["changed"].append(
+                        {"key": key, "before": old, "after": after.get(key, "<missing>")})
+            msg = ("[upgrade] user_flags_preserved=%d changed=%s rolled_back=%s"
+                   % (summary["preserved"],
+                      [c["key"] for c in summary["changed"]], summary["rolled_back"]))
+            if summary["changed"]:
+                self.logger.warning(msg + "（红线①：升级不得改变用户显式值——请附 overlay 报障）")
+                for c in summary["changed"]:
+                    self.logger.warning("[upgrade] changed %s: %r → %r",
+                                        c["key"], c["before"], c["after"])
+            else:
+                self.logger.info(msg)
+        except Exception:
+            self.logger.debug("[upgrade] 回读异常（忽略）", exc_info=True)
+        return summary
+
+    def log_factory_defaults_banner(self) -> Dict[str, Any]:
+        """Q-4 B/E 启动日志：班表 / 额度闸门状态 + 各账号折算上限 + 两个基线键。
+
+        一行 ``[baseline] ...`` INFO，让「为什么这个号今天只发了 N 条 / 为什么凌晨不回」
+        不用翻配置就能对上号。纯读（send_gate_today 走 mode=ro），永不抛。
+        """
+        info: Dict[str, Any] = {}
+        try:
+            from src.utils.feature_registry import dig
+            cfg = self.config or {}
+            ws = dig(cfg, "inbox.work_schedule") or {}
+            gate = dig(cfg, "companion_send_gate") or {}
+            info = {
+                "work_schedule.enabled": bool(ws.get("enabled")) if isinstance(ws, dict) else False,
+                "work_schedule.timezone": (ws.get("timezone") if isinstance(ws, dict) else "") or "",
+                "send_gate.enabled": bool(gate.get("enabled")) if isinstance(gate, dict) else False,
+                "send_gate.target_cap": (gate.get("target_cap") if isinstance(gate, dict) else None),
+                "goals.profile_llm": dig(cfg, "companion.goals.profile_llm.enabled"),
+                "memory.extract.use_llm": dig(cfg, "memory.extract.use_llm"),
+            }
+            caps: List[str] = []
+            if info["send_gate.enabled"]:
+                try:
+                    from src.inbox.send_gate_today import (
+                        collect_send_gate_today, data_root_from_config_path,
+                    )
+                    root = data_root_from_config_path(str(self.config_path))
+                    if root is not None:
+                        snap = collect_send_gate_today(root, cfg)
+                        for row in (snap.get("rows") or [])[:32]:
+                            caps.append(f"{row.get('account')}={row.get('auto_cap')}/{row.get('cap')}")
+                except Exception:
+                    caps = ["<unavailable>"]
+            self.logger.info(
+                "[baseline] work_schedule.enabled=%s tz=%r | send_gate.enabled=%s target_cap=%s "
+                "auto_cap/cap per account: %s | goals.profile_llm=%s memory.extract.use_llm=%s",
+                info["work_schedule.enabled"], info["work_schedule.timezone"],
+                info["send_gate.enabled"], info["send_gate.target_cap"],
+                ", ".join(caps) if caps else "-",
+                info["goals.profile_llm"], info["memory.extract.use_llm"])
+        except Exception:
+            self.logger.debug("[baseline] 启动横幅异常（忽略）", exc_info=True)
+        return info
 
     def _ensure_deploy_profile(self) -> None:
         """部署能力预设档首启播种（WP-1 纯云起步档，2026-08）。

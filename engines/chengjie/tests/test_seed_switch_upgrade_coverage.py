@@ -89,11 +89,13 @@ _EXEMPT: Dict[str, str] = {
         "「AI 接管」三档主控 ③收件箱「AI 值守」胶囊——三个入口共用 POST "
         "/api/companion/standby 捆绑写入（含 worker 热接线，免重启生效）。"
         "种子 true 只翻新装（feature_registry 已 C→B 配套拍板）",
-    "companion_send_gate.enabled":
-        "安全闸随真发同批武装：新装随种子开；存量升级在用户接受上述任一入口的"
-        "「全自动」时由 standby watching 捆绑计划一并写 true（capability_presets"
-        "._priority 保证闸先立、deliver 后武装）——存量不开真发就不需要它，"
-        "刻意不单独补齐",
+    # companion_send_gate.enabled：2026-09-09 D-Q2（Q-4 #267）种子改 false（额度闸门出厂关，
+    # 人工永不限），不再是 true 开关，条目按本文件规则移除；feature_registry 现为 B 类。
+    "inbox.reply_style.bubbles.explicit_newline_only":
+        "非功能开关而是拆条**形态**标记（D-L3 #210，1.0.75）：代码默认已 True（reply_split."
+        "DEFAULT_EXPLICIT_NEWLINE_ONLY，parse_bubbles_cfg 缺键回落该默认），存量机器由 "
+        "ConfigManager._migrate_bubbles_1075 在 per_sentence=true 时写 true 作幂等标记；"
+        "种子显式写出只为把「仅显式换行才拆」文档化，升级安装不写也照样生效",
 }
 
 #: **真实缺口，待产品决策**（沿用本仓 _PENDING_* 惯例：CI 保绿 + 债务可见 + 防过期）。

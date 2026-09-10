@@ -36,6 +36,26 @@ config dict，不打网络（在线探活属 readiness 体系，别混进来—�
 指「配置层面没配」，确定性可测）。键路径必须与 config.example.yaml 或消费代码
 逐字核实过才允许入表（bio_retrieval 核实结果＝**没有 enabled 总闸**只有调参键，
 故不入表；accounts.profile_push 等桌面形态未评估，仍在台账候选）。
+
+基线三条红线（老板决策 D-Q1 / D-Q2，2026-09-09，#267 #265；``_validate`` 与
+``tests/test_baseline_redlines_q4.py`` 钉住）——1.0.78 把 ``inbox.work_schedule``
+08:20–01:00 按**服务器本机时区**补进每台桌面机的 overlay，美英客户的下午被静默
+关掉（KYHGSZ：Mike 01:46 来信、稿 01:47 生成、无日志暂存到 08:00）；额度闸门
+「300 · 安装包默认」连人工也拦（CSTCJT）。事故沉淀为三条硬规则：
+
+① **只补缺席键、绝不覆盖显式值**——``baseline_patch`` 判据是 ``dig()==None``，
+   显式 false / 空列表 / 任何值都是用户表态；任何迁移都不得改写 overlay 里已存在
+   的键（``ConfigManager.load`` 升级回读 ``[upgrade] user_flags_preserved`` 兜底）。
+② **会改变发送行为的开关不得 ``baseline=True``**（A 类）——班表 / 额度闸门 /
+   拆条 / 关怀真发 / 全自动真发。这些键只能是 B/C：默认关、用户自助开、开启时把
+   「需要人决定的参数」（时区、额度）一并要求填。``SEND_BEHAVIOR_KEY_PREFIXES``
+   是机器可判的名单，A 类命中即 fail-fast。
+③ **时区类键不得默认服务器本机**——``*.timezone`` 键不得进 A 类基线，也不得以
+   空串 / ``local`` 作 baseline；班表开启时时区必填（账号 / 客户 / 本机三选一，
+   由用户显式选），``work_hours_gate`` 的「空＝本机钟」只对存量显式配置保留。
+存量机器的撤回只对「由基线补进去的」值生效：``ConfigManager.baseline_rollback_patch``
+按 1.0.78 基线原样形态识别（``enabled:true + 08:20/01:00`` 且无时区/账号覆写），
+命中才回滚并落日志 ``[baseline] rollback <key> reason=D-Qn``；用户自己开过的一字不动。
 """
 
 from __future__ import annotations
@@ -44,6 +64,64 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _VALID_CLS = ("A", "B", "C")
+
+#: 红线②：会改变发送行为的开关前缀——命中的键**不得**是 A 类基线（fail-fast）。
+#: 名单是「会让 AI 多发 / 少发 / 换时间发」的总闸与其参数块，不是全部 inbox 键。
+SEND_BEHAVIOR_KEY_PREFIXES: Tuple[str, ...] = (
+    "inbox.work_schedule.",            # 班表：夜间不回 / 复班补发（D-Q1 撤回 D-O4）
+    "companion_send_gate.",            # 账号日发额度闸门（D-Q2 出厂关）
+    "inbox.reply_style.bubbles.",      # 拆条（D-L3 已出厂关）
+    "companion.proactive_care.",       # 关怀真发 / dry_run
+    "companion.proactive_topic.",      # 主动话题外呼
+    "inbox.l2_autosend.deliver",       # 全自动真发总闸
+    "inbox.auto_draft.automation_mode",  # 全局档位（全自动）
+    "inbox.auto_draft.bootstrap_automation_mode",
+)
+
+#: 红线③：时区类键的识别标记（点分路径任一段等于这些词即算时区键）。
+TIMEZONE_KEY_MARKERS: Tuple[str, ...] = ("timezone", "tz")
+
+#: 红线③：时区键禁止的 baseline 值（＝「服务器本机钟」的各种写法）。
+_LOCAL_TZ_SENTINELS = ("", "local", "server", "system", None)
+
+#: 1.0.78 基线补进去、1.0.79 撤回的键（D-Q1 / D-Q2）。value=1.0.78 基线写入的形态
+#: （``ConfigManager.baseline_rollback_patch`` 用它做「来源是基线」的识别）。
+ROLLED_BACK_BASELINES: Dict[str, Dict[str, Any]] = {
+    "inbox.work_schedule.enabled": {
+        "reason": "D-Q1", "old": True, "new": False,
+        "shape_root": "inbox.work_schedule",
+        "shape": {"enabled": True, "default": {"start": "08:20", "end": "01:00"}},
+        "marker": "inbox.work_schedule.baseline_rollback",
+    },
+    "companion_send_gate.enabled": {
+        "reason": "D-Q2", "old": True, "new": False,
+        "shape_root": "companion_send_gate",
+        "shape": {"enabled": True, "target_cap": 300,
+                  "warmup_start_cap": 100, "warmup_ramp_days": 3},
+        "marker": "companion_send_gate.baseline_rollback",
+    },
+}
+
+#: 班表**开启时**的建议班次（不再是基线值；设置页做预填与换算提示用）。
+WORK_SCHEDULE_SUGGESTED_SHIFT: Dict[str, str] = {"start": "08:20", "end": "01:00"}
+
+
+def is_send_behavior_key(key: str) -> bool:
+    """红线②判定：键是否落在「会改变发送行为」名单（前缀或精确匹配）。"""
+    k = str(key or "")
+    for p in SEND_BEHAVIOR_KEY_PREFIXES:
+        if p.endswith("."):
+            if k.startswith(p):
+                return True
+        elif k == p or k.startswith(p + "."):
+            return True
+    return False
+
+
+def is_timezone_key(key: str) -> bool:
+    """红线③判定：点分路径任一段是时区词。"""
+    parts = [s.lower() for s in str(key or "").split(".") if s]
+    return any(p in TIMEZONE_KEY_MARKERS for p in parts)
 
 
 @dataclass(frozen=True)
@@ -278,25 +356,34 @@ FEATURES: Tuple[Feature, ...] = (
         baseline=True, show=False,
         note="入站爆发合并（D-O4 #252 #254）：客户几秒内连发多条 → 等 8–15s 静默窗合并"
              "只回一次；缺键＝每条各自拟稿各自回（同义双发 + 机关枪节奏）"),
-    # 夜间按账号时区 01–08 不回、08 后随机 0–40 min 补：复用 work_schedule（08-04，默认关）
-    # ——default.start 08:20 + edge_jitter_min 20（代码缺省）＝ 开班 08:00–08:40 确定性抖动；
-    # end 01:00 → 收班 00:40–01:20。timezone 空＝本机钟（桌面机就是运营者时区；账号可覆写）。
-    # 危机穿透 / 休息期照拟稿 / 复班补觉重拟（>2h 陈稿）都是该子系统既有语义。
-    # 存量机器已显式写过 work_schedule.enabled（含 false）的不动。
+    # ── Q-5 代（D-Q 2026-09-09，#267）：摸底目标 LLM 摘录补槽进基线。clean 包 goal
+    # engine-status 恒报 profile_llm_off（service.py L1443），兴趣槽只能人工补录；纯软件、
+    # 随包 AI 链、只多学不多发（不是发送行为开关，红线②不适用）。
     Feature(
-        key="inbox.work_schedule.enabled", cls="A", slug="work_schedule",
+        key="companion.goals.profile_llm.enabled", cls="A", slug="goals_profile_llm",
         baseline=True, show=False,
-        note="账号作息班表总闸（D-O4 #252 #254）：夜间不自动回、复班补发；缺键＝7×24 秒回"
-             "（凌晨秒回一眼假 + 平台风控特征）"),
-    Feature(
-        key="inbox.work_schedule.default.start", cls="A", slug="work_schedule_start",
-        baseline="08:20", show=False,
-        note="默认开班 08:20（±20 min 确定性抖动 ⇒ 08:00–08:40 补发，D-O4「08 后随机 0–40 min」）"),
-    Feature(
-        key="inbox.work_schedule.default.end", cls="A", slug="work_schedule_end",
-        baseline="01:00", show=False,
-        note="默认收班 01:00（跨午夜班；±20 min 抖动 ⇒ 00:40–01:20 起静默，D-O4「01–08 不回」）"),
+        note="摸底目标 LLM 摘录补槽（Q-5 代 #267）：正则轨盲区由主链 LLM 摘录客户自由表达"
+             "填画像槽；clean 包此前恒 profile_llm_off，兴趣槽永远只能人工补录"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
+    # 2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：班表 A→B **出厂关**。1.0.78 基线把
+    # 08:20–01:00 + 「timezone 空＝本机钟」补进每台机器——桌面机在上海、客户在纽约，
+    # 客户的下午＝我们的凌晨 → 自动回被整段静默扣留且无日志。红线②③双命中。开启入口＝
+    # 自动回复设置页「工作时间」：时区必填（账号 / 客户 / 本机三选一），页面给换算提示。
+    # 建议班次见 WORK_SCHEDULE_SUGGESTED_SHIFT（预填值，不是基线）。存量：由 1.0.78 基线
+    # 补进去的原样形态由 ConfigManager.baseline_rollback_patch 回滚；用户自己开过的不动。
+    Feature(
+        key="inbox.work_schedule.enabled", cls="B", slug="work_schedule",
+        show=False,
+        note="账号作息班表总闸（D-Q1 #267 撤回 D-O4）：会改变发送时间的开关，出厂关；"
+             "开启时时区必填，缺时区不得保存"),
+    # 2026-09-09 老板决策 D-Q2（#267 CSTCJT）：账号日发额度闸门**出厂关**（种子 300/100/3
+    # 曾显式 enabled:true，各号折算 114–129 且人工也拦）。B 类：默认关、设置页自助开；
+    # 开启后只作用 origin=auto，人工发送永不受额度限制（companion_send_gate.gate_decision）。
+    Feature(
+        key="companion_send_gate.enabled", cls="B", slug="send_gate",
+        show=False,
+        note="单账号日发额度闸门（D-Q2 #267）：会减少发送的开关，出厂关；开启后只拦自动链，"
+             "人工发送永不限制；「300 · 推荐」是建议值不是默认值"),
     # 2026-09-06 老板决策 D-L3（#210，82BF95 付费客户的客户识破 AI）：拆条**出厂关**
     # ——2026-07-31 升 A 的「默认开安全」前提（真发仍逐条前端 opt-in）在 08 月三链
     # 自动拆条接线后已不成立；A 类基线曾让每台桌面机首启被 _ensure_baseline 补成
@@ -415,6 +502,19 @@ def _validate() -> None:
                 raise ValueError(
                     f"feature_registry: A 类人人标配，不得归售卖档（{f.key}）"
                     "——要按档卖就别放基线，降回 B/C")
+            # 红线②（D-Q1/D-Q2 2026-09-09）：会改变发送行为的开关不得默认开
+            if is_send_behavior_key(f.key):
+                raise ValueError(
+                    f"feature_registry: 红线②——会改变发送行为的开关不得进 A 类基线"
+                    f"（{f.key}）；降回 B，让用户自助开并把时区/额度一并填")
+            # 红线③：时区类键不得默认服务器本机（空 / local / server）
+            if is_timezone_key(f.key):
+                raise ValueError(
+                    f"feature_registry: 红线③——时区类键不得进 A 类基线（{f.key}）"
+                    "：时区只能由用户显式选（账号 / 客户 / 本机），不得默认服务器本机")
+        if is_timezone_key(f.key) and f.baseline in _LOCAL_TZ_SENTINELS and f.baseline is not None:
+            raise ValueError(
+                f"feature_registry: 红线③——时区键 baseline 不得是本机哨兵值（{f.key}={f.baseline!r}）")
         if f.cls == "C" and not f.reason:
             raise ValueError(f"feature_registry: C 类必须给 reason 码（{f.key}）")
         for code in f.requires:

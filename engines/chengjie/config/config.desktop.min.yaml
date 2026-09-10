@@ -120,13 +120,13 @@ inbox:
   # 同义双发静默跳过——B41「同稿双投」防线里唯一跨重启的一层（DB 消息镜像口径）。
   outbound_dup_guard:
     enabled: true
-  # 账号作息班表（A 类基线，2026-09-08 D-O4 #252 #254）：夜间按账号时区 01–08 不自动回、
-  # 08 后随机 0–40 min 补发——start 08:20 配代码缺省 edge_jitter_min=20（±20 min 按账号×日期
-  # 确定性抖动）= 开班落在 08:00–08:40；end 01:00 跨午夜 = 收班 00:40–01:20。timezone 空 =
-  # 本机钟（桌面机就是运营者所在时区；单账号可在「自动回复设置 → 工作时间」覆写或豁免）。
-  # 危机消息穿透（crisis_bypass 缺省开）、休息期仍拟稿、复班补觉（>2h 陈稿重拟）皆代码缺省。
+  # 账号作息班表——2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：**出厂关**。
+  # 1.0.78 曾 enabled:true + 「timezone 空＝本机钟」：桌面机在上海、客户在纽约，客户的下午
+  # ＝我们的凌晨 → 自动回被整段静默扣留。班表会改变发送时间（基线红线②）、时区不得默认本机
+  # （红线③），只能由用户在「自动回复设置 → 工作时间」显式开启并**选时区**（缺时区不能保存）。
+  # default.start/end 只是开启时的建议班次（页面预填），不是基线值。
   work_schedule:
-    enabled: true
+    enabled: false
     default:
       start: "08:20"
       end: "01:00"
@@ -182,8 +182,12 @@ inbox:
 # 按 0 天算恰好命中最低档）。客户档=宽额度快爬坡；真正的反轰炸主力是
 # peer_bot_guard（每会话每日 500 轮）与 flood/错误风控信号（红灯照拦不受此参数
 # 影响）。养号/内部部署刻意不受本段影响（各自 overlay 自带参数）。
+# 2026-09-09 老板决策 D-Q2（#267 CSTCJT）：**出厂关**。1.0.78 各号折算 114–129 条且人工也拦
+# （「自动 ok / 人工 ok」两列）。额度是会减少发送的开关（基线红线②）：默认关、用户在
+# 「自动回复设置 → 单账号日发额度」自助开；开启后只拦 origin=auto，人工发送永不受限；
+# 300/100/3 是「推荐」参数（新号 3 天从 100 爬到 300），不是安装包默认。
 companion_send_gate:
-  enabled: true
+  enabled: false
   target_cap: 300
   warmup_start_cap: 100
   warmup_ramp_days: 3
@@ -247,6 +251,11 @@ companion:
     # _ensure_baseline 补齐；安全闸全部沿用代码默认（silence_min/min_gap/危机/
     # opt-out/平台白名单/仅 auto_ai 会话）。
     sprint:
+      enabled: true
+    # 摸底目标 LLM 摘录补槽（Q-5 代 Q-4 2026-09-09，#267）：正则轨盲区由主链 LLM 摘录客户
+    # 自由表达填画像槽。clean 包此前缺键 → goal engine-status 恒 profile_llm_off、兴趣槽只能
+    # 人工补录。纯软件、只多学不多发（不是发送行为开关）。feature_registry A 类同值。
+    profile_llm:
       enabled: true
   # 客户安全预警出厂开（老板决策 D7 #185，2026-09-05；D-L1 2026-09-06 进基础配置）：
   # 危机识别 + 安全回复红线本就随 wellbeing.enabled 默认开；留痕（crisis_audit）与

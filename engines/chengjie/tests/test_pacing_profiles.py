@@ -462,13 +462,20 @@ def test_inbound_merge_window_randomised_8_to_15():
 # ── 夜间：种子班表 01–08 不回、08 后补 ───────────────────────────────────────
 
 def test_seed_work_schedule_holds_at_night_and_releases_in_the_morning():
+    """班表**开启后**的夜间扣留 / 早晨放行语义（D-O4 节奏本体不变）。
+
+    2026-09-09 D-Q1（Q-4 #267）：种子出厂**关**——1.0.78 把 08:20–01:00 按本机时区补进
+    每台机器把美英客户的下午关掉了。这里显式开启 + 显式选时区再验节奏；种子本身
+    enabled 必须为 false（红线②），建议班次仍预填 08:20/01:00。
+    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from src.inbox.work_hours_gate import should_hold_auto_reply, work_schedule_cfg
     seed = yaml.safe_load(SEED.read_text(encoding="utf-8"))
     ws = dict(work_schedule_cfg(seed))
-    assert ws.get("enabled") is True
+    assert ws.get("enabled") is False, "D-Q1：班表出厂关（红线②）"
     assert ws["default"]["start"] == "08:20" and ws["default"]["end"] == "01:00"
+    ws["enabled"] = True
     ws["timezone"] = "Asia/Shanghai"
     tz = ZoneInfo("Asia/Shanghai")
     night = datetime(2026, 9, 9, 3, 0, tzinfo=tz).timestamp()
@@ -493,11 +500,10 @@ def test_factory_baseline_registry_and_seed():
     p = baseline_patch({})
     assert p["inbox.l2_autosend.deliver_delay.profile"] == "natural"
     assert p["inbox.auto_draft.inbound_merge.enabled"] is True
-    assert p["inbox.work_schedule.enabled"] is True
-    assert p["inbox.work_schedule.default.start"] == "08:20"
-    assert p["inbox.work_schedule.default.end"] == "01:00"
-    for k in ("inbox.l2_autosend.deliver_delay.profile", "inbox.auto_draft.inbound_merge.enabled",
-              "inbox.work_schedule.enabled"):
+    # 2026-09-09 D-Q1（Q-4 #267）：班表撤出基线（A→B），不再补齐
+    assert "inbox.work_schedule.enabled" not in p
+    assert by_key("inbox.work_schedule.enabled").cls == "B"
+    for k in ("inbox.l2_autosend.deliver_delay.profile", "inbox.auto_draft.inbound_merge.enabled"):
         assert by_key(k).cls == "A" and by_key(k).show is False
     # 存量机器：块里已显式写 profile（含 custom）一字不动
     part = baseline_patch({"inbox": {"l2_autosend": {"deliver_delay": {"profile": "custom"}}}})

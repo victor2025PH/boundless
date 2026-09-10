@@ -105,17 +105,22 @@ def test_baseline_patch_only_fills_missing():
                           "memory.extract.use_llm",
                           "memory.extract.intents",
                           # 2026-09-08 O-1 D D-O4（#252 #254 FW78ZP）：拟人节奏出厂基线
-                          # ——三档 profile=natural / 入站连发合并 / 账号作息班表
-                          # 08:20–01:00（夜间 01–08 不回、08 后 0–40 min 补）
+                          # ——三档 profile=natural / 入站连发合并
                           "inbox.l2_autosend.deliver_delay.profile",
                           "inbox.auto_draft.inbound_merge.enabled",
-                          "inbox.work_schedule.enabled",
-                          "inbox.work_schedule.default.start",
-                          "inbox.work_schedule.default.end"}
+                          # 2026-09-09 Q-4（Q-5 代，#267）：摸底目标 LLM 摘录补槽进基线
+                          "companion.goals.profile_llm.enabled"}
+    # 2026-09-09 D-Q1（#267 KYHGSZ）：班表三键撤出基线（A→B 出厂关；红线②③）
+    for k in ("inbox.work_schedule.enabled", "inbox.work_schedule.default.start",
+              "inbox.work_schedule.default.end"):
+        assert k not in patch
+    assert by_key("inbox.work_schedule.enabled").cls == "B"
+    assert by_key("inbox.work_schedule.default.start") is None
+    # D-Q2：额度闸门入表为 B（默认关、人工永不限）
+    assert by_key("companion_send_gate.enabled").cls == "B"
     assert patch["contacts.mode"] == "lite"
     assert patch["inbox.l2_autosend.deliver_delay.profile"] == "natural"
-    assert patch["inbox.work_schedule.default.start"] == "08:20"
-    assert patch["inbox.work_schedule.default.end"] == "01:00"
+    assert patch["companion.goals.profile_llm.enabled"] is True
     assert patch["memory.extract.intents"] == [
         "direct_chat", "small_talk", "greeting", "complaint"]
     # 列表型 baseline 必须是副本：改 patch 里的列表不得污染注册表声明值
@@ -131,7 +136,8 @@ def test_baseline_patch_only_fills_missing():
         "companion": {"goals": {"enabled": True,
                                 "notify": {"enabled": True},
                                 # L-5 D-L1 三键：一关两开＝显式表态都不被覆盖
-                                "sprint": {"enabled": False}},
+                                "sprint": {"enabled": False},
+                                "profile_llm": {"enabled": False}},
                       "wellbeing": {"crisis_audit": True,
                                     "crisis_escalation": False},
                       "deep_persona": {"enabled": False}},

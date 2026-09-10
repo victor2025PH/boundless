@@ -96,7 +96,9 @@ def test_gate_on_blocks_over_cap(tmp_path):
     expect_cap = warmup_cap(30.0, 15, start_cap=2, ramp_days=14)
     assert row["cap"] == expect_cap == 15
     assert row["auto_verdict"] == "BLOCK"
-    assert row["manual_verdict"] == "BLOCK"
+    # D-Q2（Q-4 #267）：额度永不限制人工——闸门开着、额度用尽，人工仍 ok
+    assert row["manual_verdict"] == "ok"
+    assert row["auto_pct"] >= 100 and row["warn80"] is True
 
 
 def test_gate_off_lists_usage_without_block(tmp_path):

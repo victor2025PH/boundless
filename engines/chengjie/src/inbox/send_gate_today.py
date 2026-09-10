@@ -188,9 +188,13 @@ def collect_send_gate_today(
 
             auto_verdict = "-"
             manual_verdict = "-"
+            pct = None
             if enabled and used is not None:
                 auto_verdict = "BLOCK" if used >= auto_cap else "ok"
-                manual_verdict = "BLOCK" if used >= cap else "ok"
+                # D-Q2（Q-4 #267）：额度永不限制人工——闸门开着时人工恒 ok（与
+                # companion_send_gate.gate_decision origin=manual 同口径）
+                manual_verdict = "ok"
+                pct = int(round(100.0 * used / auto_cap)) if auto_cap > 0 else 100
             out["rows"].append({
                 "account": key,
                 "status": status,
@@ -200,6 +204,9 @@ def collect_send_gate_today(
                 "auto_cap": auto_cap,
                 "auto_verdict": auto_verdict,
                 "manual_verdict": manual_verdict,
+                # Q-4 B：AI 已用占自动额度百分比（进度条 + ≥80 橙 + ≥100 「请手动接管」）
+                "auto_pct": pct,
+                "warn80": bool(pct is not None and pct >= 80),
                 "frees_at": frees_at,
                 "auto_frees_at": auto_frees_at,
             })

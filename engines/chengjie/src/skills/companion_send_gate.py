@@ -112,8 +112,15 @@ def gate_decision(
     auto_cap = max(0, rec_cap - reserve)
     cap_for_origin = rec_cap if str(origin or "auto") == "manual" else auto_cap
 
+    # D-Q2（2026-09-09 Q-4 #267 CSTCJT）：**额度永不限制人工**。旧口径 manual 比完整
+    # recommended_cap 仍会在用尽后拦坐席（「自动 ok / 人工 ok」两列人工也 BLOCK 的来源）。
+    # 额度是「AI 别发太多」的业务上限，坐席亲手回客户不属于它管；banned（号已封）仍拦
+    # ——那是物理事实不是额度。health_red 对人工也放：红灯是风控信号，坐席看着发是人的决定。
+    is_manual = str(origin or "auto") == "manual"
     if bool(signals.get("banned", False)):
         reason, allowed = "banned", False
+    elif is_manual:
+        reason, allowed = "ok", True
     elif block_on_red and light == "red":
         reason, allowed = "health_red", False
     elif sends_today >= cap_for_origin:
