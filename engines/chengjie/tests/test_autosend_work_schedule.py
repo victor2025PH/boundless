@@ -294,6 +294,61 @@ def test_catchup_disabled_delivers_stale_as_is():
     assert svc._store.cancelled == []
 
 
+# ── Q-4 #267：阈值 0（默认）= 过夜积压全部重拟（R79 代补接线）──────────
+
+
+def _catchup_ws_default_zero():
+    ws = _ws_cfg(in_hours=True)          # 本班次 now-2h 开班
+    ws["off_hours"] = {"catch_up": True}  # 不写 hours → 默认 0 = regenerate_all
+    return ws
+
+
+def test_catchup_zero_threshold_regenerates_pre_shift_draft():
+    # 稿拟于开班前（稿龄 3h > 班龄 2h）→ 过夜积压 → 作废重拟
+    svc = _Svc([_draft(age_sec=3 * 3600)])
+    regen_calls = []
+    w = AutosendWorker(draft_service=svc, send_callback=_noop_send,
+                       config={}, work_schedule_provider=_catchup_ws_default_zero,
+                       catchup_regenerate_cb=lambda conv, text: regen_calls.append(conv) or True)
+    sent, _errors, to_deliver = w._process_batch()
+    assert sent == 0 and to_deliver == []
+    assert svc._store.cancelled == [("d1", "cancelled", "work_schedule_regen")]
+    assert len(regen_calls) == 1
+    assert w.total_catchup_regenerated == 1
+
+
+def test_catchup_zero_threshold_keeps_in_shift_draft():
+    # 稿拟于本班次内（稿龄 30min < 班龄 2h）→ 不是过夜稿 → 原样投递
+    svc = _Svc([_draft(age_sec=1800)])
+    w = AutosendWorker(draft_service=svc, send_callback=_noop_send,
+                       config={}, work_schedule_provider=_catchup_ws_default_zero,
+                       catchup_regenerate_cb=lambda conv, text: True)
+    sent, _errors, to_deliver = w._process_batch()
+    assert sent == 1 and len(to_deliver) == 1
+    assert svc._store.cancelled == []
+
+
+def test_off_hours_hold_logs_once_per_conv(caplog):
+    # Q-4 D-Q1：扣留必留痕 [work_schedule] hold=off_hours conv=… until=… tz=…；
+    # 同会话同一「到点」只打一条（第二 tick 不重复刷屏）
+    import logging
+    from src.inbox import work_hours_gate as whg
+    whg._hold_logged.clear()
+    svc = _Svc([_draft()])
+    ws = _ws_cfg(in_hours=False)
+    w = AutosendWorker(draft_service=svc, send_callback=_noop_send,
+                       config={}, work_schedule_provider=lambda: ws)
+    with caplog.at_level(logging.INFO, logger=whg.logger.name):
+        w._process_batch()
+        w._process_batch()
+    hold_lines = [r.getMessage() for r in caplog.records
+                  if "[work_schedule] hold=off_hours" in r.getMessage()]
+    assert len(hold_lines) == 1
+    assert "conv=telegram:acct1:d1" in hold_lines[0]
+    assert "until=" in hold_lines[0] and "tz=UTC" in hold_lines[0]
+    assert w.total_skipped_off_hours == 2
+
+
 # ── 拟稿节流 + companion 双轨互斥（autodraft_helpers）────────
 
 

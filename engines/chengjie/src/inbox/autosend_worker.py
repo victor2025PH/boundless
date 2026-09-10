@@ -2263,6 +2263,16 @@ class AutosendWorker:
                         "[AutosendWorker] 工作时间闸判定异常（放行）",
                         exc_info=True)
                 if _ws_hold:
+                    # Q-4 #267 D-Q1：扣留必留痕（同会话同一「到点」只打一条），
+                    # 否则老板只看到「不回」查不到「为什么不回」。日志失败不影响扣留。
+                    try:
+                        from src.inbox.work_hours_gate import log_off_hours_hold
+                        log_off_hours_hold(
+                            str(d.get("conversation_id") or ""),
+                            _ws_cfg_hold, _ws_plat, _ws_acct)
+                    except Exception:
+                        logger.debug("[work_schedule] hold 日志异常（忽略）",
+                                     exc_info=True)
                     self.total_skipped_off_hours += 1
                     continue
             # O-1 D（D-O4）首回延迟：首次接触 / 沉寂 >6h 的这一轮，首条回复留 pending
@@ -2337,16 +2347,28 @@ class AutosendWorker:
                     and self._catchup_regen_cb is not None
                     and self._send_callback is not None and _conv):
                 try:
-                    from src.inbox.work_hours_gate import off_hours_cfg
+                    from src.inbox.work_hours_gate import (
+                        catch_up_regen_due,
+                        off_hours_cfg,
+                        schedule_state,
+                    )
                     _ws_cfg = self._ws_provider() or {}
                     _oh = off_hours_cfg(_ws_cfg)
-                    _regen_h = float(_oh.get("catch_up_regenerate_hours") or 0)
                     _peer_txt = str(d.get("peer_text") or "")
                     _draft_ts = float(
                         d.get("created_ts") or d.get("created_at") or 0)
+                    # Q-4 #267：阈值 0（默认）= 过夜积压（拟于本班次开始前）全部
+                    # 重拟；班次锚点拿不到时 catch_up_regen_due 判 False（宁发陈稿）。
+                    _shift = 0.0
+                    if _ws_cfg.get("enabled") and _oh.get("catch_up"):
+                        _shift = float(schedule_state(
+                            _ws_cfg, str(d.get("platform") or ""),
+                            str(d.get("account_id") or "default"),
+                        ).get("shift_started_ts") or 0)
                     if (_ws_cfg.get("enabled") and _oh.get("catch_up")
-                            and _regen_h > 0 and _draft_ts > 0 and _peer_txt
-                            and time.time() - _draft_ts > _regen_h * 3600.0):
+                            and _draft_ts > 0 and _peer_txt
+                            and catch_up_regen_due(
+                                _oh, _draft_ts, shift_started_ts=_shift)):
                         if catchup_budget <= 0:
                             continue  # 本批预算用完，留 pending 下一 tick
                         _cancelled = False
