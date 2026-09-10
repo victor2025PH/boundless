@@ -296,6 +296,12 @@
 .connect-qr-mask .qq-risk-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px;}
 .connect-qr-mask .qq-risk-go:not([disabled]){background:var(--accent);color:#fff;border-color:var(--accent);}
 .connect-qr-mask .qq-risk-go[disabled]{opacity:.55;cursor:not-allowed;}
+/* QQ 线 A 段：驱动演示态标位（账号组头 / 账号卡 / 连接面板共用；琥珀底 = 「能看不能用」不是故障红）*/
+.acct-qq-demo{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;line-height:16px;padding:1px 7px;border-radius:9px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:help;}
+.acct-qq-demo::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.7;}
+.acct-qq-demo.acct-qq-demo-card{margin:4px 0 0 0;align-self:flex-start;}
+.acct-qq-demo.acct-qq-demo-hd{margin-top:2px;}
+.connect-qr-mask .qq-risk .acct-qq-demo{align-self:flex-start;}
 /* QQ 客户端按需下载卡（同 qq-risk 底，蓝左边线 = 「等一步准备」而非风险）*/
 .connect-qr-mask .qq-dl{border-left-color:var(--accent);}
 .connect-qr-mask .qq-dl .qq-risk-hd{color:var(--accent);}
@@ -2270,11 +2276,21 @@ var _PREG = {};
       .then(function(j){
         if (!j || !Array.isArray(j.platforms)) return;
         j.platforms.forEach(function(s){ if (s && s.id) _PREG[s.id] = {color: s.color, name: s.name}; });
+        j.platforms.forEach(function(s){ if (s && s.id) _PREG_DRV[s.id] = String(s.driver_state||''); }); // qq 线 A 段：驱动三态随产物到达
+        if (_PREG_DRV.qq === 'mock') { try { renderDrawerAccounts(); } catch (_e) {} }  // qq 演示态标位晚到时补一次重绘
       })
       .catch(function(){});
   } catch (e) {}
 })();
 function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)||'#6b7280'; }
+/* QQ 线 A 段（2026-09-10）诚实标位：注册表 driver_state（real/mock/none）→ 账号卡 / 平台组头 / 连接面板。
+   qq 边车已进安装包但真驱动 ntq/qqnt-driver.js 未接入 → 注册表标 mock → 这里显示
+   qq「边车已装 · 驱动未接入（演示态）」；驱动接真后注册表翻 real，此钩子自动不再出现，模板零改动。
+   qq 只读注册表产物、不打边车 /health（演示态是产品事实不是运行态，离线也该如实标）。 */
+var _PREG_DRV = {};  // qq 线：id → driver_state
+function _qqDriverDemoHtml(pl, cls){
+  if (pl !== 'qq' || _PREG_DRV.qq !== 'mock') return '';   // qq 以外 / 已接真驱动 → 不出
+  return '<span class="acct-qq-demo '+(cls||'')+'" title="'+esc(window.T('inbox.acct.qq_driver_demo_t'))+'">'+esc(window.T('inbox.acct.qq_driver_demo'))+'</span>'; }  // qq
 /* 实施97：微信客服（企业官方客服号）与个人微信（PC 副驾）共用微信绿字形——对客户都是「微信里聊」；
    但管理者要分得清，给右下角加一枚小徽章（企 / PC），文案走 i18n。其它平台原样。 */
 const _PLAT_BADGE_KEY={wechat_kf:'inbox.plat.badge_wechat_kf',wechat:'inbox.plat.badge_wechat'};
@@ -24438,6 +24454,7 @@ function renderDrawerAccounts(){
         <div class="acct-plat-meta">
           <div class="acct-plat-name">${esc(platName(pl))}</div>
           <div class="acct-plat-sub">${accts.length?window.Tf('inbox.acct.n_online',{n:accts.length,on:onCount}):window.T('inbox.acct.not_connected')}</div>
+          ${_qqDriverDemoHtml(pl,'acct-qq-demo-hd')}
         </div>
         <button class="acct-add-btn" onclick="openConnect('${esc(pl)}')">${window.T(pl==='wechat_kf'?'inbox.acct.add_connect':'inbox.acct.add_scan')}</button>
       </div>`;
@@ -24498,6 +24515,7 @@ function renderDrawerAccounts(){
           ${_acctValueMetaHtml(pl,a,on)}
           ${_acctOfflineHint(pl,a,on)}
           ${_acctStallHint(pl,a,on)}
+          ${_qqDriverDemoHtml(pl,'acct-qq-demo-card')}
           ${a.serial?`<div class="acct-detail">${window.T('inbox.acct.device')}${esc(a.serial)}</div>`:''}
           ${_acctActionsHtml(pl,aid,a,on)}
         </div>`;
@@ -26119,6 +26137,7 @@ function _renderQqRiskConsent(maskEl){
   mask.innerHTML=''
     +'<div class="qq-risk" role="dialog" aria-labelledby="qq-risk-title">'
     +  '<div class="qq-risk-hd" id="qq-risk-title"><span style="display:inline-flex;">'+uiIcon('alert',20)+'</span><span>'+esc(window.T('inbox.connect.qq_risk_title'))+'</span></div>'
+    +  _qqDriverDemoHtml('qq','')   // qq 线 A 段：面板顶部如实标「边车已装 · 驱动未接入（演示态）」
     +  '<ul class="qq-risk-list">'+pts+'</ul>'
     +  '<a class="qq-risk-link" href="/help/qq-personal-agreement" target="_blank" rel="noopener">'+esc(window.T('inbox.connect.qq_risk_link'))+'</a>'
     +  '<label class="qq-risk-ack"><input type="checkbox" id="qq-risk-ack-cb"> <span>'+esc(window.T('inbox.connect.qq_risk_ack'))+'</span></label>'

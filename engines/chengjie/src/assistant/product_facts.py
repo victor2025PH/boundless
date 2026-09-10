@@ -37,17 +37,23 @@ from typing import Any, Dict
 # 把这个漏报固化成「小智也说不支持」，所以这里以代码为准；话术那边属产品/销售
 # 侧决策，已在交付说明里点名。
 SUPPORTED_CHANNELS = ("Telegram", "WhatsApp", "LINE", "Facebook Messenger",
-                      "Instagram", "Zalo", "QQ 机器人", "QQ 个人号（协议登录）", "微信客服（企业微信）", "官网网页聊天")
+                      "Instagram", "Zalo", "QQ 机器人", "微信客服（企业微信）", "官网网页聊天")
+# **预览中**的渠道（QQ 线 A 段，2026-09-10）：代码 / 边车 / 工作台全链在、CI 全绿，但底层驱动还是演示
+# 替身——在真平台上**尚不能真收发**。与「支持」分列，小智被问「QQ 个人号能用吗」必须答「预览，尚不能
+# 真收发」而不是「能」。事实源 = platform_registry 的 driver_state=mock（门禁 test_platform_registry
+# 钉两边一致；驱动接真后从注册表翻 real，这里随之清空）。
+PREVIEW_CHANNELS = ("QQ 个人号（协议登录）",)
 # 事实卡里的渠道叫法 → 代码平台键（门禁 test_product_facts 据此核对「声称的能力在代码里
-# 真实存在」；能按小写/去 "Facebook " 前缀直接对上的不必登记）。
+# 真实存在」；能按小写/去 "Facebook " 前缀直接对上的不必登记）。预览渠道同样登记——它在代码里
+# 也必须真有实现（只是驱动是替身）。
 CHANNEL_PLATFORM_KEYS = {
     "QQ 机器人": "qqbot",
     "QQ 个人号（协议登录）": "qq",
     "微信客服（企业微信）": "wechat_kf",
 }
 # 明确**不支持**的平台：说不支持比含糊其辞有用得多，也防销售侧谎称支持。
-# 「QQ 个人号（协议登录）」＝用自己的 QQ 号登录那条路（用户自装 NapCat / LLOneBot / Lagrange
-# 协议端、经 Milky 接口；非官方接入、准入区），与「QQ 机器人」（QQ 开放平台官方 API）是两个渠道。
+# 「QQ 个人号（协议登录）」＝用自己的 QQ 号登录那条路（智聊内置 QQ 连接边车 services/qq-personal，
+# 亦可指向自装的 Milky 协议端；非官方接入、准入区），与「QQ 机器人」（QQ 开放平台官方 API）是两个渠道。
 # 「个人微信」：不作为**自动聊天渠道**接入（没有官方接口，封号 + 法律风险），所以留在这张表里；
 # 但实施97 线 B 提供了「PC 副驾」——读取电脑上已登录的微信、AI 给建议、半自动按批准代发、全自动
 # 需风险确认，属读屏辅助而非渠道接入。边界说明见下面 _CHANNEL_CAVEATS_*，小智答「个人微信」时两句话都要说。
@@ -56,8 +62,9 @@ UNSUPPORTED_CHANNELS = ("个人微信", "淘宝", "抖音", "小红书")
 _CHANNEL_CAVEATS_ZH = (
     "QQ 机器人（QQ 开放平台官方 API）只能被动回复：单聊每条来话 60 分钟内最多回 4 条、"
     "群里默认只收 @机器人 的消息、不支持主动消息；发图/语音属下一批次。"
-    "QQ 个人号（协议登录）需要用户自己安装 QQ 协议端（NapCat / LLOneBot / Lagrange，Milky 协议），"
-    "属非官方接入、有风控风险，建议小号 + 固定 IP；能力与 Telegram 协议号相当，但无「正在输入」。"
+    "QQ 个人号（协议登录）目前是**预览**：智聊内置的 QQ 连接边车已随安装包装好，但底层真驱动尚未接入"
+    "（演示态），扫码与收发都是演示数据、尚不能真收发；真驱动通过去风险验证后才开放。它属非官方接入、"
+    "有风控风险，届时建议小号 + 固定 IP；能力与 Telegram 协议号相当，但无「正在输入」。"
     "微信客服（企业微信官方 API）需要客户自己的企业微信（自建应用 CorpID/Secret），"
     "微信用户扫客服二维码即可咨询、不用加好友；客户最后一条消息后 48 小时内最多回 5 条、"
     "不能主动发起会话、无正在输入/已读回执，AI 身份披露在该渠道恒开。"
@@ -69,10 +76,11 @@ _CHANNEL_CAVEATS_EN = (
     "QQ Bot (QQ Open Platform official API) is passive-only: at most 4 replies within "
     "60 minutes per inbound private message, groups only deliver @-mentions by default, "
     "no proactive messages; image/voice sending lands in the next batch. "
-    "QQ personal account (protocol login) requires the user's own QQ protocol endpoint "
-    "(NapCat / LLOneBot / Lagrange via the Milky protocol); it is unofficial with risk-control "
-    "exposure (use a secondary account plus a fixed IP) and matches Telegram protocol accounts "
-    "except for typing indicators. "
+    "QQ personal account (protocol login) is currently a PREVIEW: ChatX's built-in QQ connector "
+    "sidecar ships with the installer, but the real low-level driver is not wired yet (demo mode) - "
+    "QR login and messages are demo data and it cannot actually send or receive; it opens once the "
+    "driver passes risk validation. It is unofficial with risk-control exposure (use a secondary "
+    "account plus a fixed IP) and matches Telegram protocol accounts except for typing indicators. "
     "WeChat Customer Service (WeCom official API) needs the customer's own WeCom "
     "(self-built app CorpID/Secret); WeChat users scan the service QR to chat without "
     "adding a friend; at most 5 replies within 48 hours after the customer's last message, "
@@ -91,6 +99,7 @@ _FACTS_ZH = f"""【本产品是什么】
 （声音克隆）、幻颜 FaceX（图片视频换脸）、幻影 LiveX（直播换脸换声）。
 
 【支持的聊天渠道】{"、".join(SUPPORTED_CHANNELS)}。
+【预览中（尚不能真收发）】{"、".join(PREVIEW_CHANNELS)}——被问「能用吗」答「预览，尚不能真收发」，不说「能」。
 【渠道边界】{_CHANNEL_CAVEATS_ZH}
 【暂不支持】{"、".join(UNSUPPORTED_CHANNELS)}等国内平台——如实说明即可，
 不要为了让答案好听而谎称支持；用户如果需要，可以让他把需求提给产品团队评估。
@@ -111,6 +120,7 @@ ReachX outreach, ChatX this product, VoiceX voice cloning, FaceX face swap,
 LiveX live avatar).
 
 [Supported chat channels] {", ".join(SUPPORTED_CHANNELS)}.
+[Preview - cannot really send/receive yet] {", ".join(PREVIEW_CHANNELS)} - when asked "does it work", answer "preview, not yet able to send/receive", never "yes".
 [Channel limits] {_CHANNEL_CAVEATS_EN}
 [Not supported] {", ".join(UNSUPPORTED_CHANNELS)} and other China-domestic
 platforms - say so honestly, never claim support to make an answer nicer.
@@ -132,6 +142,7 @@ def facts_fingerprint() -> Dict[str, Any]:
     """给门禁与 ops 用的结构化快照（比对 system_prompt 是否漂移）。"""
     return {
         "supported": list(SUPPORTED_CHANNELS),
+        "preview": list(PREVIEW_CHANNELS),
         "unsupported": list(UNSUPPORTED_CHANNELS),
         "zh_chars": len(_FACTS_ZH),
         "en_chars": len(_FACTS_EN),

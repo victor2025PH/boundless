@@ -806,7 +806,7 @@ def _js_obj_keys(src: str, decl_regex: str) -> set:
 def test_parity_backend_platform_tables():
     """后端每张按平台分叉的表：qq / qqbot 与参照平台同在（按各表语义选参照）。"""
     from src.assistant.actions import ACTION_PLATFORMS
-    from src.assistant.product_facts import CHANNEL_PLATFORM_KEYS, SUPPORTED_CHANNELS
+    from src.assistant.product_facts import CHANNEL_PLATFORM_KEYS, PREVIEW_CHANNELS, SUPPORTED_CHANNELS
     from src.companion.group_show.platform_policy import KNOWN_PLATFORMS as GS_KNOWN
     from src.contacts.reactivation_loop import _PLATFORM_LABELS
     from src.inbox.reply_pacing_settings import PLATFORMS as PACING
@@ -849,8 +849,13 @@ def test_parity_backend_platform_tables():
                         ("account_scope_migration", SCOPE_KNOWN),
                         ("send_routes._PLATFORM_LABEL", _PLATFORM_LABEL)):
         assert both <= set(table) and {"telegram", "zalo"} <= set(table), name
-    # 事实卡：两者都以对客叫法登记并映射回平台 id
-    assert {"QQ 机器人", "QQ 个人号（协议登录）"} <= set(SUPPORTED_CHANNELS)
+    # 事实卡：两者都以对客叫法登记并映射回平台 id。QQ 线 A 段（2026-09-10）诚实标位：qq 的真驱动
+    # 未接入（注册表 driver_state=mock）→ 事实卡列「预览中」而非「支持」；驱动接真后随注册表翻回「支持」。
+    assert "QQ 机器人" in SUPPORTED_CHANNELS
+    if reg.driver_state("qq") == reg.DRIVER_MOCK:
+        assert "QQ 个人号（协议登录）" in PREVIEW_CHANNELS and "QQ 个人号（协议登录）" not in SUPPORTED_CHANNELS
+    else:
+        assert "QQ 个人号（协议登录）" in SUPPORTED_CHANNELS
     assert CHANNEL_PLATFORM_KEYS["QQ 机器人"] == "qqbot"
     assert CHANNEL_PLATFORM_KEYS["QQ 个人号（协议登录）"] == "qq"
 

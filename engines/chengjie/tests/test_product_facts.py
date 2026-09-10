@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.assistant.product_facts import (  # noqa: E402
     CHANNEL_PLATFORM_KEYS,
+    PREVIEW_CHANNELS,
     SUPPORTED_CHANNELS,
     UNSUPPORTED_CHANNELS,
     facts_fingerprint,
@@ -54,8 +55,13 @@ def test_claimed_channels_exist_in_code():
             f"事实卡声称支持「{ch}」，但 ACTION_PLATFORMS ∪ OFFICIAL_PLATFORMS 里没有它"
             f"（现有 {sorted(known)}）——助手声称的能力必须在代码里真实存在"
         )
+    # 预览渠道（QQ 线 A 段）：代码里同样必须真有实现——只是驱动是替身，所以它不在「支持」而在「预览」
+    for ch in PREVIEW_CHANNELS:
+        key = CHANNEL_PLATFORM_KEYS.get(ch) or ch.lower().replace("facebook ", "").strip()
+        assert key in known, f"事实卡列为预览的「{ch}」在代码里没有实现（{sorted(known)}）"
+        assert ch not in SUPPORTED_CHANNELS, f"「{ch}」同时出现在支持与预览清单——对客口径必须唯一"
     for ch, key in CHANNEL_PLATFORM_KEYS.items():
-        assert ch in SUPPORTED_CHANNELS, f"登记了叫法映射却不在支持清单里：{ch}"
+        assert ch in SUPPORTED_CHANNELS or ch in PREVIEW_CHANNELS, f"登记了叫法映射却不在支持/预览清单里：{ch}"
         assert key in known, f"叫法映射指向了不存在的平台键：{ch} → {key}"
 
 

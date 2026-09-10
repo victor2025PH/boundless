@@ -25,6 +25,12 @@ Zalo/IG 接入付过一次税，QQ/微信客服（实施97）付第二次，抖�
 - ``implemented``：有真实 worker / 边车 / webhook 落地（``platform_readiness._IMPLEMENTED_MODES``
   与工作台左栏常驻 ``FIXED_PLATS`` 口径）。**规划中的平台也登记（implemented=False）**，
   这样事实卡的「暂不支持」清单有据可查，翻转时门禁会逼人同步。
+- ``driver_state``（QQ 线 A 段，2026-09-10）：``implemented`` 之下再分一层「底层驱动到底接上没」——
+  ``real``＝真收发；``mock``＝外壳 / 边车 / UI 全链在、但底层驱动是演示替身（CI 成立、真平台不成立）；
+  ``none``＝未落地。缺省按 ``implemented`` 推（True→real / False→none），**只有驱动是替身的平台才显式标
+  mock**。消费方：工作台账号卡 / 连接面板「边车已装 · 驱动未接入（演示态）」、事实卡「预览中」清单。
+  发明它的原因：qq-personal 边车已进安装包、CI 全绿，但 ``ntq/qqnt-driver.js`` 尚未移植——
+  ``implemented=True`` 一个布尔位会让所有下游（含小智）对客说「能用」，这是诚实缺口。
 """
 from __future__ import annotations
 
@@ -36,6 +42,12 @@ COMPLIANCE_MAIN = "main"
 COMPLIANCE_RESTRICTED = "restricted"
 COMPLIANCE_MIXED = "mixed"
 _COMPLIANCE_VALUES = (COMPLIANCE_MAIN, COMPLIANCE_RESTRICTED, COMPLIANCE_MIXED)
+
+#: 驱动三态（见模块 docstring ``driver_state``）
+DRIVER_REAL = "real"
+DRIVER_MOCK = "mock"
+DRIVER_NONE = "none"
+_DRIVER_STATES = (DRIVER_REAL, DRIVER_MOCK, DRIVER_NONE)
 
 #: 登录/接入方式全集（``platform_login`` 的 mode 词表；``personal_rpa`` 是 leadbus 外部
 #: 进程驱动的账号 mode，收件箱可见但本机编排器不接管）。
@@ -67,6 +79,10 @@ class PlatformSpec:
     #: 备注（规划状态、路线来源）
     note: str = ""
     aliases: Tuple[str, ...] = field(default_factory=tuple)
+    #: 驱动三态 real/mock/none；空＝按 implemented 推（见 ``driver_state_value()``）
+    driver_state: str = ""
+    #: 驱动非 real 时的一句原因（对客 / 账号卡 / 事实卡同源）
+    driver_note: str = ""
 
     def facts_name(self) -> str:
         return self.facts_label or self.name
@@ -74,12 +90,22 @@ class PlatformSpec:
     def icon_key(self) -> str:
         return self.icon or self.id
 
+    def driver_state_value(self) -> str:
+        if self.driver_state:
+            return self.driver_state
+        return DRIVER_REAL if self.implemented else DRIVER_NONE
+
+    def is_preview(self) -> bool:
+        """已落地但驱动是演示替身（对客口径「预览，尚不能真收发」）。"""
+        return self.implemented and self.driver_state_value() == DRIVER_MOCK
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id, "name": self.name, "name_zh": self.name_zh,
             "family": self.family, "color": self.color,
             "modes": list(self.modes), "default_mode": self.default_mode,
             "compliance": self.compliance, "implemented": self.implemented,
+            "driver_state": self.driver_state_value(), "driver_note": self.driver_note,
             "msg_id_fields": list(self.msg_id_fields), "console_url": self.console_url,
             "region_aware": self.region_aware, "facts_label": self.facts_name(),
             "icon": self.icon_key(), "sort": self.sort, "note": self.note,
@@ -160,7 +186,12 @@ _SPECS: Tuple[PlatformSpec, ...] = (
         color="#1EBAFC", modes=("protocol",), default_mode="protocol",
         compliance=COMPLIANCE_RESTRICTED, implemented=True,
         facts_label="QQ 个人号（协议登录）", sort=71, aliases=("tencentqq", "qq_protocol"),
-        note="QQ 双轨 P2（2026-09-07 落地）：个人号经用户自装协议端的 Milky 接口，准入区、默认关",
+        note="QQ 双轨 P2（2026-09-07 落地）：个人号经 Milky 接口（route-1 自带边车 services/qq-personal，"
+             "亦可指向自装协议端），准入区、默认关",
+        # QQ 线 A 段（2026-09-10）：边车已进安装包、CI 全绿，但真驱动 ntq/qqnt-driver.js 未移植，
+        # QQ_DRIVER=qqnt 加载失败 → 回退 mock。翻 real 的条件：B 段真驱动落地 + C 段测试号 72h 挂机通过。
+        driver_state=DRIVER_MOCK,
+        driver_note="边车已装 · 驱动未接入（演示态）：扫码与收发均为演示数据，尚不能真收发",
     ),
     # ── 规划中（登记即有据可查；翻 implemented 前门禁逼同步事实卡）──────────────
     PlatformSpec(
@@ -230,6 +261,17 @@ def planned_ids() -> Tuple[str, ...]:
     return tuple(s.id for s in all_platforms() if not s.implemented)
 
 
+def driver_state(platform: Any) -> str:
+    """驱动三态 real/mock/none；未登记平台 → ``none``（不猜）。"""
+    s = get(platform)
+    return s.driver_state_value() if s is not None else DRIVER_NONE
+
+
+def preview_ids() -> Tuple[str, ...]:
+    """已落地但驱动是演示替身的平台（工作台标「演示态」、事实卡列「预览中」）。"""
+    return tuple(s.id for s in all_platforms(implemented_only=True) if s.is_preview())
+
+
 def display_name(platform: Any, fallback: str = "") -> str:
     """语言中立品牌名；未登记 → ``fallback``（缺省 ``platform.title()``，与 normalizer 旧行为同）。"""
     s = get(platform)
@@ -280,6 +322,11 @@ def facts_unsupported_labels() -> Tuple[str, ...]:
     return tuple(s.facts_name() for s in all_platforms() if not s.implemented)
 
 
+def facts_preview_labels() -> Tuple[str, ...]:
+    """事实卡「预览中（尚不能真收发）」应包含的叫法：已落地但驱动是演示替身。"""
+    return tuple(s.facts_name() for s in all_platforms(implemented_only=True) if s.is_preview())
+
+
 def export_dict() -> Dict[str, Any]:
     """给前端 / 文档的可序列化快照（稳定排序，便于门禁逐字比对产物）。"""
     return {
@@ -315,6 +362,15 @@ def validate() -> List[str]:
             errs.append(f"{s.id}: default_mode set but modes empty")
         if s.compliance not in _COMPLIANCE_VALUES:
             errs.append(f"bad compliance {s.compliance!r} on {s.id}")
+        ds = s.driver_state_value()
+        if ds not in _DRIVER_STATES:
+            errs.append(f"bad driver_state {ds!r} on {s.id}")
+        if s.implemented and ds == DRIVER_NONE:
+            errs.append(f"{s.id}: implemented but driver_state=none（要么没落地，要么驱动该标 mock/real）")
+        if not s.implemented and ds != DRIVER_NONE:
+            errs.append(f"{s.id}: not implemented yet driver_state={ds}（未落地的平台不该有驱动）")
+        if ds == DRIVER_MOCK and not s.driver_note:
+            errs.append(f"{s.id}: driver_state=mock 必须带 driver_note（对客要说得出为什么不能真收发）")
         for a in s.aliases:
             if a in _BY_ID and a != s.id:
                 errs.append(f"alias {a!r} of {s.id} collides with a platform id")
@@ -323,8 +379,9 @@ def validate() -> List[str]:
 
 __all__ = [
     "COMPLIANCE_MAIN", "COMPLIANCE_RESTRICTED", "COMPLIANCE_MIXED", "KNOWN_MODES",
+    "DRIVER_REAL", "DRIVER_MOCK", "DRIVER_NONE",
     "PlatformSpec", "normalize_platform_id", "get", "all_platforms", "implemented_ids",
-    "planned_ids", "display_name", "color", "family_of", "modes_table", "display_table",
-    "color_table", "facts_supported_labels", "facts_unsupported_labels",
-    "export_dict", "export_json", "validate",
+    "planned_ids", "driver_state", "preview_ids", "display_name", "color", "family_of",
+    "modes_table", "display_table", "color_table", "facts_supported_labels",
+    "facts_unsupported_labels", "facts_preview_labels", "export_dict", "export_json", "validate",
 ]

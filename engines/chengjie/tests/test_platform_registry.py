@@ -72,6 +72,44 @@ def test_planned_platforms_are_registered_but_not_implemented():
     assert reg.get("tiktok").region_aware is True
 
 
+def test_driver_state_three_way_and_qq_is_honestly_mock():
+    """QQ 线 A 段（2026-09-10）诚实标位：implemented 之下的驱动三态 real/mock/none。
+
+    qq-personal 边车已进安装包、CI 全绿，但真驱动 ntq/qqnt-driver.js 未移植 → 注册表必须标 mock，
+    JSON 产物带出该字段给工作台账号卡（「边车已装 · 驱动未接入（演示态）」），事实卡把它列为
+    「预览中（尚不能真收发）」而不是「支持」。B/C 段通过后把 qq 翻 real：本测试会逼着同步事实卡与 UI 文案。
+    """
+    from src.assistant.product_facts import PREVIEW_CHANNELS, SUPPORTED_CHANNELS, product_facts_block
+    # 三态推导：已落地缺省 real，规划中缺省 none，只有显式标注的才是 mock
+    assert reg.driver_state("telegram") == reg.DRIVER_REAL
+    assert reg.driver_state("tiktok") == reg.DRIVER_NONE
+    assert reg.driver_state("nope") == reg.DRIVER_NONE  # 未登记不猜
+    assert reg.driver_state("qq") == reg.DRIVER_MOCK
+    assert reg.get("qq").implemented is True and reg.get("qq").is_preview()
+    assert reg.get("qq").driver_note, "mock 必须带对客能说出口的原因"
+    assert reg.preview_ids() == ("qq",)
+    assert reg.validate() == []
+    # 事实卡与注册表同源：预览清单 = driver_state=mock 的叫法，且绝不同时出现在「支持」里
+    assert set(reg.facts_preview_labels()) == set(PREVIEW_CHANNELS) == {"QQ 个人号（协议登录）"}
+    assert not (set(PREVIEW_CHANNELS) & set(SUPPORTED_CHANNELS))
+    for lang, must in (("zh", "预览"), ("en", "PREVIEW")):
+        blk = product_facts_block(lang)
+        assert "QQ 个人号（协议登录）" in blk and must in blk, lang
+        assert ("尚不能真收发" in blk) or ("cannot really send/receive" in blk), lang
+    # JSON 产物带三态（前端 _PREG 读它标「演示态」）
+    data = json.loads((ROOT / "src" / "web" / "static" / "platform_registry.json").read_text(encoding="utf-8"))
+    by_id = {x["id"]: x for x in data["platforms"]}
+    assert by_id["qq"]["driver_state"] == "mock" and by_id["qq"]["driver_note"]
+    assert by_id["telegram"]["driver_state"] == "real" and by_id["tiktok"]["driver_state"] == "none"
+    # 工作台账号卡 / 连接面板消费同一字段（qq- 前缀钩子在模板里）
+    html = _read("src/web/templates/unified_inbox.html")
+    assert "_qqDriverDemoHtml" in html and "driver_state" in html
+    from src.web.i18n_packs.inbox_workspace import ZH, EN
+    for k in ("inbox.acct.qq_driver_demo", "inbox.acct.qq_driver_demo_t"):
+        assert ZH.get(k) and EN.get(k), k
+    assert "演示态" in ZH["inbox.acct.qq_driver_demo"]
+
+
 # ── 2. 散表不漂移 ───────────────────────────────────────────────────────────────
 
 def test_platform_login_supported_platforms_are_implemented_in_registry():

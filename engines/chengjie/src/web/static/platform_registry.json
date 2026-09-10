@@ -15,6 +15,8 @@
       "default_mode": "protocol",
       "compliance": "main",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [
         "id",
         "message_id"
@@ -41,6 +43,8 @@
       "default_mode": "protocol",
       "compliance": "mixed",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [
         "wamid",
         "message_id",
@@ -67,6 +71,8 @@
       "default_mode": "protocol",
       "compliance": "mixed",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [
         "message_id",
         "server_id"
@@ -92,6 +98,8 @@
       "default_mode": "web",
       "compliance": "mixed",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [
         "mid",
         "message_id",
@@ -117,6 +125,8 @@
       "default_mode": "official",
       "compliance": "mixed",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [],
       "console_url": "https://developers.facebook.com/apps/",
       "region_aware": false,
@@ -138,6 +148,8 @@
       "default_mode": "official",
       "compliance": "mixed",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [],
       "console_url": "https://oa.zalo.me/",
       "region_aware": false,
@@ -158,6 +170,8 @@
       "default_mode": "official",
       "compliance": "main",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [],
       "console_url": "https://q.qq.com/",
       "region_aware": false,
@@ -178,13 +192,15 @@
       "default_mode": "protocol",
       "compliance": "restricted",
       "implemented": true,
+      "driver_state": "mock",
+      "driver_note": "边车已装 · 驱动未接入（演示态）：扫码与收发均为演示数据，尚不能真收发",
       "msg_id_fields": [],
       "console_url": "",
       "region_aware": false,
       "facts_label": "QQ 个人号（协议登录）",
       "icon": "qq",
       "sort": 71,
-      "note": "QQ 双轨 P2（2026-09-07 落地）：个人号经用户自装协议端的 Milky 接口，准入区、默认关"
+      "note": "QQ 双轨 P2（2026-09-07 落地）：个人号经 Milky 接口（route-1 自带边车 services/qq-personal，亦可指向自装协议端），准入区、默认关"
     },
     {
       "id": "wechat_kf",
@@ -198,6 +214,8 @@
       "default_mode": "official",
       "compliance": "main",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [],
       "console_url": "https://work.weixin.qq.com/wework_admin/frame#apps",
       "region_aware": false,
@@ -218,6 +236,8 @@
       "default_mode": "device",
       "compliance": "restricted",
       "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
       "msg_id_fields": [],
       "console_url": "",
       "region_aware": false,
@@ -240,6 +260,8 @@
       "default_mode": "official",
       "compliance": "mixed",
       "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
       "msg_id_fields": [
         "server_message_id",
         "msg_id"
@@ -265,6 +287,8 @@
       "default_mode": "official",
       "compliance": "mixed",
       "implemented": false,
+      "driver_state": "none",
+      "driver_note": "",
       "msg_id_fields": [
         "message_id",
         "msg_id"
@@ -286,6 +310,8 @@
       "default_mode": "",
       "compliance": "main",
       "implemented": true,
+      "driver_state": "real",
+      "driver_note": "",
       "msg_id_fields": [
         "message_id",
         "id"

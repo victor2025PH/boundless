@@ -311,6 +311,8 @@ ZH = {
     "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；准入区）：与「QQ 机器人」是两个独立渠道
     "inbox.acct.note_qq": "用你自己的 QQ 号：手机 QQ 扫码即接入（智聊内置连接，无需装其它程序）；可收发文字/图片/语音/视频，建议用小号",
+    "inbox.acct.qq_driver_demo": "边车已装 · 驱动未接入（演示态）",
+    "inbox.acct.qq_driver_demo_t": "QQ 个人号连接边车已随安装包装好，但底层真驱动尚未接入：当前扫码与收发都是演示数据，不能真收发。真驱动通过去风险验证后自动开放。",
     # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」是两个独立渠道
     "inbox.acct.note_wechat_kf": "企业微信官方通道：填自建应用凭证即接通（不扫码），客户扫客服二维码即可咨询；五步引导页约 10 分钟",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
@@ -3368,6 +3370,8 @@ EN = {
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
     "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
     "inbox.acct.note_qq": "Your own QQ account: just scan the QR with your phone's QQ (built-in connector, no extra app to install). Text / image / voice / video; a secondary account is recommended",
+    "inbox.acct.qq_driver_demo": "Sidecar installed · driver not wired (demo mode)",
+    "inbox.acct.qq_driver_demo_t": "The QQ personal-account connector sidecar ships with the installer, but the real low-level driver is not wired yet: QR login and messages are demo data and nothing is actually sent or received. It opens automatically once the driver passes risk validation.",
     "inbox.acct.note_wechat_kf": "WeCom official channel: connect with your self-built app credentials (no QR); customers scan the service QR to chat; the 5-step guide takes about 10 minutes",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
