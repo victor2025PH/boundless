@@ -587,6 +587,15 @@ def on_needs_human_tagged(store: Any, cid: str, reason: Any, payload: Dict[str, 
     只在这一处决定「要不要补发」——drafts 钩子打标带 adult 原因，A 线 / 其它链的打标不带则
     零行为。soft_reply 政策已即时发过（账本有记录）→ 不再补。返回 ``scheduled`` / 跳过原因。
     """
+    try:
+        return _on_needs_human_tagged(store, cid, reason, payload, now=now)
+    except Exception:
+        logger.debug("[adult] on_needs_human_tagged 异常（忽略）", exc_info=True)
+        return "error"
+
+
+def _on_needs_human_tagged(store: Any, cid: str, reason: Any, payload: Dict[str, Any], *,
+                           now: Optional[float] = None) -> str:
     level, _hit = parse_reason(reason)
     if not level or not is_blocking_level(level):
         return "not_adult"

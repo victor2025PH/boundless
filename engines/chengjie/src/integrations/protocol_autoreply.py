@@ -1185,6 +1185,7 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
                 now=now)
     except Exception:
         logger.debug("[protocol-autoreply] risk_hold.set 失败（忽略）", exc_info=True)
+    __import__("src.inbox.adult_grader", fromlist=["on_needs_human_tagged"]).on_needs_human_tagged(store, cid, reason, payload, now=now) if str(reason or "").startswith("adult:") else None  # Q-15 #271：成人内容打标（adult:<level>）× 人设 adult_policy=human → 3 分钟无人接手补发一次人设口吻软回应并落 [adult] soft_reply 日志（钩子自吞异常）
     if HANDOFF_TAG in tags:
         return False
     tags.append(HANDOFF_TAG)
