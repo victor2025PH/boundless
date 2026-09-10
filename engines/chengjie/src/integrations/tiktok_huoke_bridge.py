@@ -86,6 +86,11 @@ REASON_REQUEST_PENDING = "policy_message_request_pending"
 REASON_PEER_SILENT = "policy_peer_silent"
 REASON_QUIET_HOURS = "policy_quiet_hours"
 REASON_DEVICE_OFFLINE = "device_offline"
+# TK-3 E5 运维默认值（bridge_cfg 归一；细节见 ops_snapshot / maybe_alert_backlog）
+DEFAULT_BACKLOG_WARN_MIN = 30        # 待发最久超过这么多分钟 → 快照标 yellow（真机离线时 red）
+DEFAULT_FAIL_RATE_WARN = 0.3         # 近 24h 回执失败率 ≥ 30%（且样本 ≥5）→ yellow
+DEFAULT_OPS_SWEEP_SEC = 300.0        # 巡检周期：没有任何 huoke 请求时也要能判出「真机离线」
+DEFAULT_BACKLOG_REMIND_SEC = 4 * 3600.0
 
 
 def bridge_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -111,6 +116,12 @@ def bridge_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "claim_ttl_sec": max(30.0, _f("claim_ttl_sec", DEFAULT_CLAIM_TTL_SEC)),
         "quiet_hours_block_auto": bool(blk.get("quiet_hours_block_auto", True)),
         "state_db_path": str(blk.get("state_db_path") or ""),
+        # TK-3 E5 运维：巡检周期 / 积压黄线 / 失败率黄线 / 积压告警（0=只进快照与日报，不发实时卡）
+        "ops_sweep_sec": max(30.0, _f("ops_sweep_sec", DEFAULT_OPS_SWEEP_SEC)),
+        "backlog_warn_min": max(1.0, _f("backlog_warn_min", DEFAULT_BACKLOG_WARN_MIN)),
+        "fail_rate_warn": max(0.0, min(1.0, _f("fail_rate_warn", DEFAULT_FAIL_RATE_WARN))),
+        "backlog_alert_min": max(0.0, _f("backlog_alert_min", 0.0)),
+        "backlog_remind_sec": max(600.0, _f("backlog_remind_sec", DEFAULT_BACKLOG_REMIND_SEC)),
     }
 
 
@@ -506,6 +517,27 @@ class TikTokHuokeStateStore:
         out["oldest_queued_ts"] = int(float(oldest["t"] or 0)) if oldest else 0
         return out
 
+    def window_stats(self, *, since: float, until: Optional[float] = None) -> Dict[str, Any]:
+        """TK-3 E5：时间窗内回执结果——sent / failed 条数、失败率、失败原因 Top3（运维卡 / 日报用）。"""
+        t1 = float(until if until is not None else time.time())
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) AS n FROM outbound WHERE status IN ('sent','failed') AND acked_at>=? AND acked_at<=? GROUP BY status",
+                (float(since), t1)).fetchall()
+            errs = self._conn.execute(
+                "SELECT error, COUNT(*) AS n FROM outbound WHERE status='failed' AND acked_at>=? AND acked_at<=? "
+                "GROUP BY error ORDER BY n DESC LIMIT 3", (float(since), t1)).fetchall()
+        sent = failed = 0
+        for r in rows:
+            if r["status"] == "sent":
+                sent = int(r["n"])
+            elif r["status"] == "failed":
+                failed = int(r["n"])
+        total = sent + failed
+        return {"sent": sent, "failed": failed, "total": total,
+                "fail_rate": (round(failed / total, 3) if total else 0.0),
+                "top_errors": [{"error": str(r["error"] or "send_failed"), "n": int(r["n"])} for r in errs]}
+
     def close(self) -> None:
         try:
             self._conn.close()
@@ -546,17 +578,21 @@ def report_health(st: TikTokHuokeStateStore, account_id: str, *, now: Optional[f
     prev = st.set_health(account_id, state)
     if prev == state:
         return state
+    detail = ""
+    if state == "reconnecting":
+        detail = "[rc:other] TikTok 真机 15 分钟未心跳（huoke 未认领）"
+    elif state == "expired":
+        detail = "[rc:other] TikTok 真机离线超 2 小时，请检查 huoke 设备"
     try:
-        h = health_sink
-        if h is None:
-            from src.integrations.platform_session_health import get_platform_session_health
-            h = get_platform_session_health()
-        if state == "authorized":
-            h.record(PLATFORM, account_id, "authorized")
-        elif state == "reconnecting":
-            h.record(PLATFORM, account_id, "reconnecting", detail="[rc:other] TikTok 真机 15 分钟未心跳（huoke 未认领）")
+        if health_sink is not None:
+            health_sink.record(PLATFORM, account_id, state, detail=detail)
         else:
-            h.record(PLATFORM, account_id, "expired", detail="[rc:other] TikTok 真机离线超 2 小时，请检查 huoke 设备")
+            # TK-3 E5：走库级统一入口而不是裸 record——同一次调用完成三件事：健康表落账 +
+            # 注册表 online/offline 真相（offline_reason=worker:expired，看门狗持续提醒只认它）+
+            # 「进入不健康 / 恢复」发 platform_session_alert（运维群「🔴 链路」卡 + 30min/4h 催办）。
+            # 此前只 record → 真机离线从来没进过运维群。
+            from src.integrations.platform_session_health import report_session_transition
+            report_session_transition(PLATFORM, account_id, state, detail=detail)
     except Exception:
         logger.debug("[tiktok-huoke] 会话健康上报失败", exc_info=True)
     return state
@@ -569,6 +605,141 @@ def sweep_health(*, config: Optional[Dict[str, Any]] = None, state: Optional[Tik
         return {}
     st = state or get_state_store(bridge_cfg(config)["state_db_path"] or None)
     return {a["account_id"]: report_health(st, a["account_id"], now=now, health_sink=health_sink) for a in st.accounts()}
+
+
+# ── TK-3 E5 运维快照 / 巡检 ──────────────────────────────────────────────────────────────────
+_BACKLOG_ALERT_STATE: Dict[str, Any] = {"active": False, "last_ts": 0.0, "sig": ""}
+
+
+def ops_snapshot(*, config: Optional[Dict[str, Any]], state: Optional[TikTokHuokeStateStore] = None,
+                 now: Optional[float] = None) -> Dict[str, Any]:
+    """运维卡 / 日报的一屏数字（只读、无副作用）：真机离线 · 认领积压 · 近 24h 失败率 → light + problems。
+
+    真机离线本身由 ``report_health`` 走 ``report_session_transition`` 进「🔴 链路」卡；这里把它与积压
+    关联起来解释（积压多半就是真机不在），日报 / status 一处看全。
+    """
+    cfg = bridge_cfg(config)
+    st = state or get_state_store(cfg["state_db_path"] or None)
+    t = float(now if now is not None else time.time())
+    pend = st.pending(now=t, claim_ttl_sec=cfg["claim_ttl_sec"])
+    w24 = st.window_stats(since=t - 86400.0, until=t)
+    accounts = st.accounts()
+    health = {a["account_id"]: heartbeat_state(float(a.get("last_seen_ts") or 0), t) for a in accounts}
+    expired = sorted(aid for aid, h in health.items() if h == "expired")
+    late = sorted(aid for aid, h in health.items() if h == "reconnecting")
+    backlog_min, fail_warn = cfg["backlog_warn_min"], cfg["fail_rate_warn"]
+    problems: List[Dict[str, str]] = []
+    light = "green"
+    if expired:
+        problems.append({"key": "tiktok_huoke_offline", "name": "TikTok 真机离线",
+                         "detail": f"{len(expired)} 个账号超 2 小时无心跳：{', '.join(expired[:5])}——检查 huoke 设备 / 轮询器"})
+        light = "red"
+    queued, wait = int(pend.get("queued") or 0), int(pend.get("oldest_wait_sec") or 0)
+    if queued and wait >= backlog_min * 60:
+        why = "真机离线，发不出去" if expired else ("真机心跳迟到" if late else "huoke 轮询器 / 收件箱巡检没来认领")
+        problems.append({"key": "tiktok_huoke_backlog", "name": "TikTok 真机认领积压",
+                         "detail": f"{queued} 条已过闸的回复等真机发出，最久已等 {wait // 60} 分钟（{why}）"})
+        light = "red" if expired else "yellow" if light == "green" else light
+    if w24["total"] >= 5 and w24["fail_rate"] >= fail_warn:
+        top = w24["top_errors"][0]["error"] if w24["top_errors"] else "send_failed"
+        problems.append({"key": "tiktok_huoke_fail_rate", "name": "TikTok 真机发送失败率",
+                         "detail": f"近 24h {w24['failed']}/{w24['total']} 条回执失败（{int(w24['fail_rate'] * 100)}%），主因 {top}"})
+        if light == "green":
+            light = "yellow"
+    return {"ts": t, "light": light, "problems": problems,
+            "queued": queued, "claimed": int(pend.get("claimed") or 0), "oldest_wait_sec": wait,
+            "queued_dm": int(pend.get("queued_dm") or 0), "queued_comment": int(pend.get("queued_comment") or 0),
+            "sent_24h": w24["sent"], "failed_24h": w24["failed"], "fail_rate_24h": w24["fail_rate"],
+            "top_errors_24h": w24["top_errors"],
+            "accounts": {"total": len(accounts), "authorized": sum(1 for h in health.values() if h == "authorized"),
+                         "reconnecting": len(late), "expired": len(expired), "expired_ids": expired, "reconnecting_ids": late}}
+
+
+def maybe_alert_backlog(snapshot: Dict[str, Any], *, config: Optional[Dict[str, Any]], now: Optional[float] = None,
+                        publish: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+                        state_holder: Optional[Dict[str, Any]] = None) -> bool:
+    """积压 / 失败率 → ``health_alert`` 事件（运维群「系统健康告警」卡）。**默认关**：
+    ``tiktok.huoke_bridge.backlog_alert_min`` > 0 才发；同一签名 4h 内不重发；清了不发恢复（恢复卡语义是全站健康，不能借）。
+    真机离线不在这里发——它已经走 platform_session_alert。"""
+    cfg = bridge_cfg(config)
+    alert_min = cfg["backlog_alert_min"]
+    hold = state_holder if state_holder is not None else _BACKLOG_ALERT_STATE
+    if alert_min <= 0:
+        return False
+    probs = [p for p in (snapshot.get("problems") or []) if p.get("key") in ("tiktok_huoke_backlog", "tiktok_huoke_fail_rate")]
+    # 积压要达到**告警**阈值（可高于快照黄线）；失败率问题单独成立
+    probs = [p for p in probs if p["key"] == "tiktok_huoke_fail_rate"
+             or int(snapshot.get("oldest_wait_sec") or 0) >= alert_min * 60]
+    if not probs:
+        hold.update(active=False, sig="")
+        return False
+    t = float(now if now is not None else time.time())
+    sig = "|".join(sorted(p["key"] for p in probs))
+    remind = cfg["backlog_remind_sec"]
+    if hold.get("active") and hold.get("sig") == sig and t - float(hold.get("last_ts") or 0) < remind:
+        return False
+    payload = {"light": snapshot.get("light") or "yellow", "problems": probs,
+               "summary": {"source": "tiktok_huoke", "queued": snapshot.get("queued"), "oldest_wait_sec": snapshot.get("oldest_wait_sec"),
+                           "fail_rate_24h": snapshot.get("fail_rate_24h"), "accounts": snapshot.get("accounts")},
+               "recovered": False, "rate_key": "tiktok_huoke:backlog"}
+    try:
+        if publish is None:
+            from src.integrations.shared.event_bus import get_event_bus
+            publish = get_event_bus().publish
+        publish("health_alert", payload)
+    except Exception:
+        logger.debug("[tiktok-huoke] 积压告警发布失败", exc_info=True)
+        return False
+    hold.update(active=True, sig=sig, last_ts=t)
+    return True
+
+
+def sweep_ops(*, config: Optional[Dict[str, Any]], state: Optional[TikTokHuokeStateStore] = None,
+              now: Optional[float] = None, publish: Optional[Callable[[str, Dict[str, Any]], Any]] = None) -> Dict[str, Any]:
+    """一轮巡检：心跳三态过账（离线 → 链路告警 / 注册表 offline）+ 运维快照 + （可选）积压告警。桥未开 → ``{}``。"""
+    if not bridge_enabled(config) and state is None:
+        return {}
+    health = sweep_health(config=config, state=state, now=now)
+    snap = ops_snapshot(config=config, state=state, now=now)
+    snap["health"] = health
+    snap["alerted"] = maybe_alert_backlog(snap, config=config, now=now, publish=publish)
+    return snap
+
+
+def ensure_ops_sweeper(app: Any, config_getter: Callable[[], Dict[str, Any]], *, interval_sec: Optional[float] = None) -> bool:
+    """挂一条 asyncio 周期巡检（桥挂载时调用，幂等）。没有 huoke 请求进来时，只有它能把「真机离线」判出来。
+
+    应用未启动 → 挂 startup 钩子；已在事件循环里（接入页热挂）→ 直接建任务。"""
+    import asyncio
+    st_obj = getattr(app, "state", None)
+    if st_obj is None or getattr(st_obj, "tiktok_huoke_sweeper_armed", False):
+        return False
+    period = max(30.0, float(interval_sec if interval_sec is not None else bridge_cfg(config_getter() or {})["ops_sweep_sec"]))
+
+    async def _loop() -> None:
+        while True:
+            await asyncio.sleep(period)
+            try:
+                sweep_ops(config=config_getter() or {})
+            except Exception:
+                logger.debug("[tiktok-huoke] 运维巡检异常", exc_info=True)
+
+    def _start() -> None:
+        try:
+            st_obj.tiktok_huoke_sweeper = asyncio.get_running_loop().create_task(_loop())
+        except RuntimeError:
+            logger.debug("[tiktok-huoke] 无事件循环，巡检任务未起", exc_info=True)
+
+    st_obj.tiktok_huoke_sweeper_armed = True
+    try:
+        asyncio.get_running_loop()
+        _start()
+    except RuntimeError:
+        try:
+            app.add_event_handler("startup", _start)
+        except Exception:
+            logger.debug("[tiktok-huoke] startup 钩子挂载失败", exc_info=True)
+    return True
 
 
 # ── 设备绑定 ───────────────────────────────────────────────────────────────────────────────
@@ -1158,6 +1329,7 @@ def register_tiktok_huoke_routes(app: Any, config_manager: Any) -> bool:
         st = get_state_store(cfg["state_db_path"] or None)
         health = sweep_health(config=_cfg(), state=st)
         return {"ok": True, "enabled": True, **st.summary(), "health": health,
+                "ops": ops_snapshot(config=_cfg(), state=st),   # TK-3 E5：运维卡 / 日报一处取数
                 "policy": {"min_intent": cfg["min_intent"], "max_reply_len": cfg["max_reply_len"], "daily_cap": cfg["daily_cap"],
                            "dm_max_len": cfg["dm_max_len"], "dm_daily_cap": cfg["dm_daily_cap"],
                            "peer_silent_hours": cfg["peer_silent_hours"]}}
@@ -1167,6 +1339,10 @@ def register_tiktok_huoke_routes(app: Any, config_manager: Any) -> bool:
         install_adapter(_INBOX_ADAPTERS, _cfg)
     except Exception:
         logger.debug("[tiktok-huoke] 适配器追加跳过", exc_info=True)
+    try:
+        ensure_ops_sweeper(app, _cfg)   # TK-3 E5：周期巡检——huoke 全灭时也能判出真机离线 → 链路卡
+    except Exception:
+        logger.debug("[tiktok-huoke] 运维巡检任务未挂", exc_info=True)
     logger.info("[tiktok-huoke] 桥已挂载 %s / %s / %s / %s / %s / %s", LEADS_ROUTE, DM_ROUTE, DEVICES_ROUTE, HANDBACK_ROUTE,
                 HANDBACK_ACK_ROUTE, STATUS_ROUTE)
     return True
@@ -1179,6 +1355,7 @@ __all__ = [
     "REASON_PEER_SILENT", "REASON_QUIET_HOURS", "REASON_DEVICE_OFFLINE",
     "bridge_cfg", "bridge_enabled", "chat_key_for", "dm_chat_key_for", "is_bridge_chat", "is_dm_chat", "kind_of_chat",
     "heartbeat_state", "TikTokHuokeStateStore", "get_state_store", "report_health", "sweep_health", "bind_device",
+    "ops_snapshot", "maybe_alert_backlog", "sweep_ops", "ensure_ops_sweeper",
     "ingest_leads", "ingest_dm", "enqueue_reply", "ack_handback",
     "TikTokHuokeAdapter", "install_adapter", "register_tiktok_huoke_routes",
 ]

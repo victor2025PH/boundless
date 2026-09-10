@@ -399,6 +399,86 @@ def test_routes_default_off_then_mounted_with_window_field_normalization(env, mo
     assert r.status_code == 200 and r.json()["accounts"][0]["account_id"] == ACC and r.json()["accounts"][0]["sent_today_dm"] == 1
     r = c.get(hb.STATUS_ROUTE)
     assert r.status_code == 200 and r.json()["enabled"] is True and r.json()["sent"] == 1 and r.json()["health"] == {ACC: "authorized"}
+    assert r.json()["ops"]["light"] == "green" and r.json()["ops"]["sent_24h"] == 1 and r.json()["ops"]["accounts"]["authorized"] == 1
+    assert getattr(app.state, "tiktok_huoke_sweeper_armed", False) is True   # E5 巡检随路由挂载（startup 钩子）
+
+
+# ═══ TK-3 E5 运维卡 ══════════════════════════════════════════════════════════════════════════
+
+def test_report_health_uses_session_transition_so_offline_reaches_ops(env, monkeypatch):
+    """默认（无注入 sink）走 report_session_transition：健康表 + 注册表 offline + platform_session_alert 一次到位。"""
+    store, st = env
+    calls: List[tuple] = []
+    monkeypatch.setattr("src.integrations.platform_session_health.report_session_transition",
+                        lambda plat, acc, status, *, detail="", login_id="": calls.append((plat, acc, status, detail)) or {"changed": True})
+    hb.bind_device({"device_id": DEV, "account_id": ACC}, config=CFG, state=st, now=T0, registry=FakeRegistry())
+    assert calls == [("tiktok", ACC, "authorized", "")]
+    assert hb.report_health(st, ACC, now=T0 + 16 * 60) == "reconnecting" and calls[-1][2] == "reconnecting"
+    assert hb.report_health(st, ACC, now=T0 + 3 * 3600) == "expired" and "2 小时" in calls[-1][3]
+    assert hb.report_health(st, ACC, now=T0 + 3 * 3600 + 1) == "expired" and len(calls) == 3   # 同态不重报
+    st.heartbeat(DEV, now=T0 + 4 * 3600)
+    assert hb.report_health(st, ACC, now=T0 + 4 * 3600 + 1) == "authorized" and calls[-1][2] == "authorized"
+
+
+def test_ops_snapshot_and_backlog_alert_default_off(env):
+    store, st = env
+    reg = FakeRegistry()
+    hb.bind_device({"device_id": DEV, "account_id": ACC, "timezone": "Asia/Manila"}, config=CFG, state=st, now=T0, registry=reg,
+                   health_sink=FakeHealth())
+    hb.bind_device({"device_id": "device-B", "account_id": "acc-b"}, config=CFG, state=st, now=T0, registry=reg, health_sink=FakeHealth())
+    for i in range(6):
+        st.record_inbound(ACC, f"tiktok:user:p{i}", username=f"p{i}", ts=T0, kind=hb.KIND_DM)
+    ids = [st.enqueue(ACC, f"tiktok:user:p{i}", f"r{i}", ctx={"username": f"p{i}"}, now=T0 + i, kind=hb.KIND_DM) for i in range(6)]
+    # 5 条回执：2 sent 3 failed（近 24h 失败率 60%）；第 6 条一直 queued（积压 40 分钟）
+    for i, ok in enumerate([True, True, False, False, False]):
+        st.ack(ids[i], ok=ok, error="" if ok else ("account_restricted" if i < 4 else "ui_gone"), now=T0 + 100 + i)
+    now = T0 + 40 * 60
+    st.heartbeat(DEV, now=now - 60)
+    st.heartbeat("device-B", now=now - 60)   # 两台都在线 → 积压只能是「没人来认领」
+    w = st.window_stats(since=now - 86400, until=now)
+    assert (w["sent"], w["failed"], w["fail_rate"]) == (2, 3, 0.6) and w["top_errors"][0] == {"error": "account_restricted", "n": 2}
+    snap = hb.ops_snapshot(config=CFG, state=st, now=now)
+    keys = [p["key"] for p in snap["problems"]]
+    assert snap["queued"] == 1 and snap["oldest_wait_sec"] >= 39 * 60 and snap["fail_rate_24h"] == 0.6
+    assert keys == ["tiktok_huoke_backlog", "tiktok_huoke_fail_rate"] and snap["light"] == "yellow"
+    assert "巡检没来认领" in snap["problems"][0]["detail"] and "account_restricted" in snap["problems"][1]["detail"]
+    assert snap["accounts"] == {"total": 2, "authorized": 2, "reconnecting": 0, "expired": 0, "expired_ids": [], "reconnecting_ids": []}
+    # 3 小时后两台都没心跳 → 离线 red，积压解释改成「真机离线」
+    snap2 = hb.ops_snapshot(config=CFG, state=st, now=T0 + 3 * 3600)
+    assert snap2["light"] == "red" and snap2["problems"][0]["key"] == "tiktok_huoke_offline"
+    assert snap2["accounts"]["expired_ids"] == ["acc-b", ACC] and "真机离线" in snap2["problems"][1]["detail"]
+    # 积压实时卡默认关：不发；开了 → 发一次 health_alert（只带积压/失败率，不带离线）→ 4h 内不重发 → 清了不发恢复
+    published: List[tuple] = []
+    pub = lambda name, payload: published.append((name, payload))
+    hold: Dict[str, Any] = {}
+    assert hb.maybe_alert_backlog(snap2, config=CFG, now=now, publish=pub, state_holder=hold) is False and published == []
+    cfg_on = {"tiktok": {"huoke_bridge": {**CFG["tiktok"]["huoke_bridge"], "backlog_alert_min": 10}}}
+    assert hb.maybe_alert_backlog(snap2, config=cfg_on, now=now, publish=pub, state_holder=hold) is True
+    assert published[0][0] == "health_alert" and [p["key"] for p in published[0][1]["problems"]] == ["tiktok_huoke_backlog", "tiktok_huoke_fail_rate"]
+    assert published[0][1]["light"] == "red" and published[0][1]["recovered"] is False and published[0][1]["rate_key"] == "tiktok_huoke:backlog"
+    assert hb.maybe_alert_backlog(snap2, config=cfg_on, now=now + 3600, publish=pub, state_holder=hold) is False and len(published) == 1
+    assert hb.maybe_alert_backlog(snap2, config=cfg_on, now=now + 5 * 3600, publish=pub, state_holder=hold) is True and len(published) == 2
+    # 积压阈值高于快照黄线：40 分钟积压、alert_min=60 → 只有失败率单独成立
+    cfg_hi = {"tiktok": {"huoke_bridge": {**CFG["tiktok"]["huoke_bridge"], "backlog_alert_min": 60}}}
+    assert hb.maybe_alert_backlog(snap, config=cfg_hi, now=now, publish=pub, state_holder={}) is True
+    assert [p["key"] for p in published[-1][1]["problems"]] == ["tiktok_huoke_fail_rate"]
+    assert hb.maybe_alert_backlog({"problems": [], "oldest_wait_sec": 0}, config=cfg_on, now=now, publish=pub, state_holder=hold) is False
+    assert hold["active"] is False and len(published) == 3
+    # sweep_ops：桥未开 → {}；开 → 心跳过账 + 快照 + alerted 标
+    assert hb.sweep_ops(config={}, state=None) == {}
+    out = hb.sweep_ops(config=CFG, state=st, now=now, publish=pub)
+    assert out["health"] == {ACC: "authorized", "acc-b": "authorized"} and out["alerted"] is False and out["light"] == "yellow"
+
+
+def test_ensure_ops_sweeper_is_idempotent_and_hooks_startup():
+    from fastapi import FastAPI
+    app = FastAPI()
+    assert hb.ensure_ops_sweeper(app, lambda: CFG, interval_sec=5) is True
+    assert hb.ensure_ops_sweeper(app, lambda: CFG) is False   # 已挂
+    assert app.state.tiktok_huoke_sweeper_armed is True
+    assert any(getattr(h, "__name__", "") == "_start" for h in app.router.on_startup)   # 未启动 → startup 钩子
+    assert hb.bridge_cfg({})["ops_sweep_sec"] == hb.DEFAULT_OPS_SWEEP_SEC and hb.bridge_cfg({})["backlog_alert_min"] == 0.0
+    assert hb.bridge_cfg({"tiktok": {"huoke_bridge": {"ops_sweep_sec": 5}}})["ops_sweep_sec"] == 30.0
 
 
 # ═══ e2e（conftest 完整 app）═══════════════════════════════════════════════════════════════
