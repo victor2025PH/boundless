@@ -167,6 +167,33 @@ def test_blocked_reason_key_families():
     assert blocked_reason_key("license_readonly") == "license"
     assert blocked_reason_key("session_unhealthy") == "session"
     assert blocked_reason_key("") == "generic"
+    # TK-3 B6：TikTok 真机桥闸门（须在泛 policy_ 之前分族）
+    assert blocked_reason_key("policy_message_request_pending") == "policy_message_request"
+    assert blocked_reason_key("policy_peer_silent") == "policy_peer_silent"
+    assert blocked_reason_key("policy_daily_cap:15") == "policy_daily_cap"
+    assert blocked_reason_key("policy_quiet_hours") == "policy_quiet_hours"
+    assert blocked_reason_key("policy_one_reply_per_inbound") == "policy_one_reply"
+    assert blocked_reason_key("policy_comment_too_long:151>150") == "policy_comment_len"
+    assert blocked_reason_key("device_offline") == "device_offline"
+    assert blocked_reason_key("policy_unknown_future") == "policy"
+
+
+def test_tiktok_huoke_gate_i18n_six_langs():
+    """TK-3 B6：桥闸门族谱每条都有六语人话（zh/en 齐平；zh_hant/vi/th/id 覆盖同键）。"""
+    from src.inbox.send_gate_status import blocked_reason_key
+    from src.web.i18n_packs import tiktok_huoke as pack
+    fams = (
+        "policy_message_request", "policy_peer_silent", "policy_daily_cap",
+        "policy_quiet_hours", "policy_one_reply", "policy_comment_len", "device_offline",
+    )
+    keys = [f"err.inbox.send_blocked_{f}" for f in fams] + [f"inbox.failr.{f}" for f in fams]
+    assert set(pack.ZH) == set(pack.EN) == set(keys)
+    for lg in (pack.ZH_HANT, pack.VI, pack.TH, pack.ID):
+        assert set(lg) == set(keys)
+        assert all(str(lg[k]).strip() for k in keys)
+    assert "{reason}" in pack.ZH["err.inbox.send_blocked_policy_daily_cap"]
+    assert "{reason}" in pack.EN["err.inbox.send_blocked_policy_daily_cap"]
+    assert blocked_reason_key("policy_one_reply_per_inbound") == "policy_one_reply"
 
 
 def test_send_blocked_notify_flag(monkeypatch):

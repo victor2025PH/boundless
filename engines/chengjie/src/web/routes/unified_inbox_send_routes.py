@@ -408,9 +408,10 @@ def _log_send_fail(platform: str, account_id: str, chat_key: str,
 
 def _send_blocked_exc(
     request: Request, platform: str, account_id: str, chat_key: str,
-    reason: str = "", snap: Any = None,
+    reason: str = "", snap: Any = None, status_code: int = 409,
 ) -> HTTPException:
     """护栏拦截 → 409 HTTPException（code=send_blocked，供前端分型渲染）。
+    ``status_code``：TK-3 真机离线走 503，其余仍 409。
 
     detail 结构与语言错配/近重复守卫同族：{code, message, reason, quota?,
     frees_at?}。message 按拦因族谱出人话（额度/红灯/急停/放量/授权/会话掉线）。
@@ -450,7 +451,7 @@ def _send_blocked_exc(
     logger.warning(
         "[send] guard=send_blocked 护栏拦截已显式回执 conv=%s reason=%s used=%s cap=%s",
         _conv_id(platform, account_id, chat_key), reason, used, cap)
-    return HTTPException(409, detail)
+    return HTTPException(int(status_code or 409), detail)  # TK-3：真机离线可 503
 
 
 def _send_gate_exc(
@@ -1323,6 +1324,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     "message": tr(request, "err.inbox.channel_disconnected",
                                   platform=platform),
                 })
+            # TK-3 B6：桥闸门 reason_code（policy_* / device_offline）走拦因族谱人话，
+            # 与编排器护栏同一 409 send_blocked 形；真机离线保留 503。
+            try:
+                from src.inbox.send_gate_status import blocked_reason_key as _brk
+                _fam = _brk(_rc)
+            except Exception:
+                _fam = "generic"
+            if _fam == "device_offline" or str(_fam).startswith("policy"):
+                raise _send_blocked_exc(
+                    request, platform, account_id, chat_key, reason=_rc,
+                    status_code=int(getattr(ex, "status_code", 0) or 409))
             raise HTTPException(ex.status_code, _humanize_send_failure(
                 request, ex.detail, _rc))
         except Exception as _send_ex:

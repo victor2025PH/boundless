@@ -193,6 +193,21 @@ def blocked_reason_key(reason: str) -> str:
         return "policy_len"
     if r.startswith("policy_media_type_denied"):
         return "policy_media"
+    # TK-3 B6：TikTok 个人号真机桥闸门——须在泛 ``policy_`` 之前，否则全掉进「请按平台规则调整」
+    if r.startswith("policy_message_request_pending"):
+        return "policy_message_request"
+    if r.startswith("policy_peer_silent"):
+        return "policy_peer_silent"
+    if r.startswith("policy_daily_cap"):
+        return "policy_daily_cap"
+    if r.startswith("policy_quiet_hours"):
+        return "policy_quiet_hours"
+    if r.startswith("policy_one_reply_per_inbound"):
+        return "policy_one_reply"
+    if r.startswith("policy_comment_too_long"):
+        return "policy_comment_len"
+    if r.startswith("device_offline"):
+        return "device_offline"
     if r.startswith("policy_"):
         return "policy"
     return "generic"

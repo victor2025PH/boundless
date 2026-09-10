@@ -14131,6 +14131,14 @@ function _failReasonText(code){
   /* 实施86 域B-1（#21/#23/#49）：限频/风控/通道三类，与 send_failure_class 的
      分类词表同口径（先于 session 判——「temporarily blocked」含 blocked 不能
      掉进兜底）。 */
+  /* TK-3 B6：TikTok 真机桥闸门（须在 session/expired 通配之前，避免 device_offline 被误判掉线） */
+  if(low.indexOf('policy_message_request')>=0) return window.T('inbox.failr.policy_message_request');
+  if(low.indexOf('policy_peer_silent')>=0) return window.T('inbox.failr.policy_peer_silent');
+  if(low.indexOf('policy_daily_cap')>=0) return window.T('inbox.failr.policy_daily_cap');
+  if(low.indexOf('policy_quiet_hours')>=0) return window.T('inbox.failr.policy_quiet_hours');
+  if(low.indexOf('policy_one_reply')>=0) return window.T('inbox.failr.policy_one_reply');
+  if(low.indexOf('policy_comment_too_long')>=0||low.indexOf('policy_comment_len')>=0) return window.T('inbox.failr.policy_comment_len');
+  if(low.indexOf('device_offline')>=0) return window.T('inbox.failr.device_offline');
   if(low.indexOf('send_backoff')>=0||low.indexOf('too many requests')>=0) return window.T('inbox.failr.rate_limited');
   if(low.indexOf('account_blocked')>=0||low.indexOf('temporarily blocked')>=0) return window.T('inbox.failr.platform_block');
   if(low.indexOf('e2ee_pin')>=0) return window.T('inbox.failr.e2ee_pin');
@@ -15105,7 +15113,7 @@ async function sendMsg(){
         showHint(String(det.message||window.Tf('inbox.chan.banner_off',{platform:platName(selectedChat.platform)})));
         try{ _uiBeacon('send_blk_channel_disconnected_srv'); }catch(_){}
         try{ loadChats(); }catch(_){}
-      } else if(r.status===409 && det && typeof det==='object' && det.code==='send_blocked'){
+      } else if((r.status===409||r.status===503) && det && typeof det==='object' && det.code==='send_blocked'){  // TK-3: device_offline 503
         // P0 2026-08-12 护栏拦截显式反馈（额度/急停/放量/授权/会话掉线）：
         // 移除乐观气泡（拦截重试也会被拦，failed+重发按钮是误导）+ 原文回填
         // 输入框（绝不丢稿）+ 横幅即时点亮 + hint。刻意无「强发」出路——
