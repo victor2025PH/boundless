@@ -35,6 +35,163 @@ def _tc_metric(name: str) -> None:
         pass
 
 
+def _prompt_addenda(
+    persona: Any,
+    account: Any,
+    conv: Any,
+    *,
+    lang: str = "zh",
+    inbound: str = "",
+    config: Optional[Dict[str, Any]] = None,
+    persona_id: str = "",
+) -> str:
+    """Q-6 F 单一接线点：相册场景清单 + 本会话已发媒体 + Q-1 身份补丁（+ 无匹配/封锁）。
+
+    空段不出现。纯装配：I/O 失败则跳过该段，绝不抛。
+    """
+    chunks: List[str] = []
+    pid = str(persona_id or "").strip()
+    if not pid and isinstance(persona, dict):
+        pid = str(persona.get("id") or persona.get("persona_id") or "").strip()
+    ck = str(conv or "").strip()
+
+    # ① 相册可展示场景
+    try:
+        from src.inbox.prompt_addenda import album_scene_addendum
+        from src.companion.persona_media import album_kind_counts
+        from src.companion.persona_media_store import get_persona_media_store
+        rows = []
+        if pid:
+            st = get_persona_media_store()
+            if st is not None:
+                rows = st.list(pid, enabled_only=True) or []
+        block = album_scene_addendum(album_kind_counts(rows), lang=lang)
+        if block:
+            chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] album_scene_addendum 跳过", exc_info=True)
+
+    # ② 本会话已发媒体
+    try:
+        from src.inbox.prompt_addenda import sent_media_addendum
+        items: List[Dict[str, Any]] = []
+        if ck:
+            try:
+                from src.companion.persona_media_store import get_persona_media_store
+                from src.companion.persona_media import scene_kind_of, row_scene_class
+                st = get_persona_media_store()
+                if st is not None:
+                    hist = st.sent_history(ck, max_age_days=7) or {}
+                    by_id = {}
+                    try:
+                        if pid:
+                            for r in st.list(pid) or []:
+                                by_id[str(r.get("id") or "")] = r
+                    except Exception:
+                        by_id = {}
+                    for it in list(hist.get("items") or [])[-12:]:
+                        mid = str(it.get("id") or "")
+                        row = by_id.get(mid) or {}
+                        scene = ""
+                        if row:
+                            scene = scene_kind_of(row) or row_scene_class(row)
+                        ts = float(it.get("ts") or 0)
+                        when = ""
+                        if ts:
+                            try:
+                                when = time.strftime("%m-%d %H:%M", time.localtime(ts))
+                            except Exception:
+                                when = ""
+                        items.append({"id": mid, "scene": scene, "when": when})
+            except Exception:
+                items = []
+            block = sent_media_addendum(items, conv_known=True, lang=lang)
+            if block:
+                chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] sent_media_addendum 跳过", exc_info=True)
+
+    # ③ Q-1 身份补丁
+    try:
+        from src.inbox.prompt_addenda import identity_addendum
+        block = identity_addendum(persona, account, lang=lang)
+        if block:
+            chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] identity_addendum 跳过", exc_info=True)
+
+    # 无匹配回喂：生成前自探相册（B 线 autosend 在拟稿之后，不探则本轮仍会圆谎）
+    try:
+        from src.ai.companion_selfie import detect_selfie_request, extract_requested_scene
+        from src.companion.persona_media import requested_scene_kind
+        from src.inbox.prompt_addenda import album_miss_addendum
+        from src.inbox.image_autosend import (
+            consume_album_miss, pick_registered_media, note_album_miss,
+        )
+        pending = consume_album_miss(ck) if ck else {}
+        scene = (
+            requested_scene_kind(inbound)
+            or extract_requested_scene(inbound)
+            or str((pending or {}).get("scene") or "")
+        )
+        ask = bool(detect_selfie_request(inbound) or scene or pending)
+        miss = False
+        if ask and pid:
+            row = None
+            try:
+                row = pick_registered_media(
+                    config or {}, pid, inbound, conv_key=ck)
+            except Exception:
+                row = None
+            if row is None:
+                miss = True
+                if ck:
+                    note_album_miss(ck, inbound, scene)
+        elif pending:
+            miss = True
+        if miss:
+            block = album_miss_addendum(scene, lang=lang)
+            if block:
+                chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] album_miss_addendum 跳过", exc_info=True)
+
+    # C/D 封锁提示
+    try:
+        from src.inbox.media_claim_block import blocked_addendum
+        block = blocked_addendum(ck, lang=lang)
+        if block:
+            chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] blocked_addendum 跳过", exc_info=True)
+
+    return "\n".join(c for c in chunks if c)
+
+
+class _SkipGoalInject:
+    """blocked 期间临时掏空 skill_manager._inject_goal_context（不改 skill_manager.py）。"""
+
+    def __init__(self, sm: Any, active: bool):
+        self.sm = sm
+        self.active = bool(active) and sm is not None
+        self.orig = None
+
+    def __enter__(self):
+        if not self.active:
+            return self
+        self.orig = getattr(self.sm, "_inject_goal_context", None)
+        if self.orig is not None:
+            def _skip(*_a, **_k):
+                return None
+            self.sm._inject_goal_context = _skip
+        return self
+
+    def __exit__(self, *_exc):
+        if self.orig is not None:
+            self.sm._inject_goal_context = self.orig
+        return False
+
+
 def trim_stale_history(
     messages: List[Dict[str, Any]],
     *,
@@ -342,6 +499,46 @@ async def generate_persona_reply(
     agent_instruction: str = "",
     inbound_msg_id: str = "",
 ) -> Dict[str, Any]:
+    """人设化智能回复入口（实现见 :func:`_generate_persona_reply_impl`，签名逐字相同）。
+
+    实施97：以 ``platform`` 打合规平台作用域（``compliance.runtime.platform_scope``）——微信客服等
+    强制平台上，链路内的 ``honest_identity_active()``/``notice_active()`` 读到即恒 True，人设
+    ``deny_ai`` 被按 False 处理、出站守卫放行如实身份，无需把 platform 穿透 skill_manager。
+    """
+    from src.compliance.runtime import platform_scope
+    with platform_scope(platform):
+        return await _generate_persona_reply_impl(
+            app=app, platform=platform, chat_key=chat_key, last_inbound=last_inbound,
+            history=history, persona_id=persona_id, target_lang=target_lang,
+            reply_lang=reply_lang, risk_level=risk_level, media_type=media_type,
+            media_ref=media_ref, media_desc=media_desc, conversation_id=conversation_id,
+            peer_audio_emotion=peer_audio_emotion, account_id=account_id,
+            gloss_lang=gloss_lang, agent_instruction=agent_instruction,
+            inbound_msg_id=inbound_msg_id,
+        )
+
+
+async def _generate_persona_reply_impl(
+    *,
+    app: Any,
+    platform: str,
+    chat_key: str,
+    last_inbound: str,
+    history: List[Dict[str, str]],
+    persona_id: str = "",
+    target_lang: str = "",
+    reply_lang: str = "",
+    risk_level: str = "",
+    media_type: str = "",
+    media_ref: str = "",
+    media_desc: str = "",
+    conversation_id: str = "",
+    peer_audio_emotion: Optional[Dict[str, Any]] = None,
+    account_id: str = "",
+    gloss_lang: str = "",
+    agent_instruction: str = "",
+    inbound_msg_id: str = "",
+) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
     走与 ``/api/chat/test`` 同一条产线：SkillManager 识别意图 → 取回复策略 →
@@ -555,6 +752,63 @@ async def generate_persona_reply(
     except Exception:
         logger.debug("[persona_reply] style hint 跳过", exc_info=True)
 
+    # Q-6 A/C/D/F（#263 #266）：单一接线点注入相册场景 / 已发媒体 / 身份补丁；
+    # 入站质问记 spiral；blocked 期间 goal-inject 在调用侧掏空。
+    _persona_obj: Any = None
+    _account_obj: Any = None
+    try:
+        if persona_id:
+            from src.utils.persona_manager import PersonaManager
+            _persona_obj = PersonaManager.get_instance().get_persona_by_id(str(persona_id))
+    except Exception:
+        _persona_obj = None
+    try:
+        from src.integrations.account_registry import get_account_registry
+        if platform and _acct:
+            _account_obj = get_account_registry().get(platform, _acct)
+    except Exception:
+        _account_obj = None
+    _cid_q6 = str(conversation_id or "").strip()
+    _blocked_now = False
+    try:
+        from src.ai.companion_selfie import detect_media_complaint
+        from src.inbox.media_claim_block import (
+            SPIRAL_THRESHOLD, is_blocked, note_lie_caught, spiral_count,
+        )
+        from src.inbox.image_autosend import last_media_receipt
+        _pending = is_blocked(_cid_q6) or bool(last_media_receipt(_cid_q6))
+        _ckind = detect_media_complaint(last_inbound, media_pending=bool(_pending))
+        if _ckind in ("lie_caught", "unfulfilled") and _cid_q6:
+            rec = note_lie_caught(_cid_q6, kind=_ckind)
+            if int(rec.get("spiral_n") or 0) >= SPIRAL_THRESHOLD:
+                try:
+                    from src.integrations.protocol_autoreply import tag_needs_human
+                    _ibx_h = getattr(state, "inbox_store", None)
+                    tag_needs_human(
+                        _ibx_h,
+                        {"platform": platform, "account_id": _acct, "chat_key": chat_key},
+                        reason="media_lie_caught_repeat",
+                        source="media_claim_block",
+                    )
+                except Exception:
+                    logger.debug("[persona_reply] lie_caught 转人工跳过", exc_info=True)
+        _blocked_now = is_blocked(_cid_q6)
+        _ = spiral_count  # 保留导入供调试；计数已在 note 里
+    except Exception:
+        logger.debug("[persona_reply] media_claim_block 跳过", exc_info=True)
+    try:
+        _cm_q6 = getattr(state, "config_manager", None)
+        _cfg_q6 = getattr(_cm_q6, "config", None) or {}
+        _add = _prompt_addenda(
+            _persona_obj or persona_id, _account_obj or _acct, _cid_q6,
+            lang=resolved_lang, inbound=last_inbound, config=_cfg_q6,
+            persona_id=str(persona_id or ""),
+        )
+        if _add:
+            _time_hint = f"{_time_hint}\n{_add}" if _time_hint else _add
+    except Exception:
+        logger.debug("[persona_reply] _prompt_addenda 跳过", exc_info=True)
+
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
     # 显式坐席指令优先，标注句仅在余量内追加（merge_agent_instruction）。
@@ -608,6 +862,8 @@ async def generate_persona_reply(
     kb_refs: list = []    # P2 证据链：本稿引用的 KB 条目（前端知识 chip / 工坊 chips 用）
     used_unified = False  # 统一引擎已自带记忆写回 → 避免文末重复写
     goal_applied: Optional[Dict[str, Any]] = None  # P25：目标注入观测（透传前端）
+    _goal_skip = _SkipGoalInject(sm, bool(_blocked_now))
+    _goal_skip.__enter__()
 
     # ★ 统一规则引擎（单一事实源·彻底对齐）：优先走 SkillManager.generate_inbox_draft，
     # 与原生 bot/RPA 同享情感引擎/陪伴阶段/慢思考/人设守卫/危机兜底/记忆读写全栈规则。
@@ -796,7 +1052,24 @@ async def generate_persona_reply(
             logger.debug("[persona_reply] 兜底失败", exc_info=True)
             reply = None
 
+    try:
+        _goal_skip.__exit__(None, None, None)
+    except Exception:
+        pass
+
     reply = (reply or "").strip()
+    if reply and _cid_q6:
+        try:
+            from src.ai.outbound_promise_guard import apply_blocked_media_rewrite
+            reply = apply_blocked_media_rewrite(
+                reply, _cid_q6, sample_text=last_inbound) or reply
+        except Exception:
+            logger.debug("[persona_reply] blocked rewrite 跳过", exc_info=True)
+        try:
+            from src.inbox.media_claim_block import tick_outbound
+            tick_outbound(_cid_q6)
+        except Exception:
+            pass
     # ── 出站复读守卫（P0 2026-08-12）：生成稿与我方最近已发消息近重复 → 带
     # 负样本重生成一次（相似度归一化/阈值与 proactive_variety 生产校准同源）。
     # 实录：智能回复几乎逐字复读了 4 天前已发出的回答——对方看过的话原样再说
@@ -1117,7 +1390,13 @@ async def generate_topic_opener(
         ctx["_agent_instruction"] = _ainst
 
     goal_meta: Dict[str, Any] = {}
-    if sm is not None and hasattr(sm, "_inject_goal_context"):
+    _opener_blocked = False
+    try:
+        from src.inbox.media_claim_block import is_blocked as _is_blk
+        _opener_blocked = _is_blk(str(conversation_id or ""))
+    except Exception:
+        _opener_blocked = False
+    if sm is not None and hasattr(sm, "_inject_goal_context") and not _opener_blocked:
         try:
             sm._inject_goal_context(
                 ctx, platform=platform, chat_key=str(chat_key or ""),
