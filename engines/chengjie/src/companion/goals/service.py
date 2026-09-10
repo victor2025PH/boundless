@@ -1528,6 +1528,28 @@ def build_block_for_chat(
                 # _store 只给日志用，不透传到 API 的 goal_applied
                 (user_context.get("_goal_inject_meta") or {}).pop("_store", None)
             return None
+        # Q-1 D（#264 #269）识破守卫：对方本条说「you're a bot / 20th time / 你又问」→ 该目标
+        # 停 24h（params._paused_until）+ 会话侧 needs_human / 打标「疑似识破」/ KV 标记（出站
+        # 只出一句挽回），本轮**不注入**。停牌期内每轮不注入（reason=goals_paused）。
+        try:
+            from src.inbox import exposure_guard as _xg
+            _gid = str(goal.get("goal_id") or "")
+            _hit = _xg.detect_exposure(inbound_text) if str(inbound_text or "").strip() else ""
+            if _hit:
+                _xg.pause_goal(store, goal, hit=_hit, now=now, conversation_id=_conv_label())
+                _xg.handle_inbound(inbound_text, conversation_id=_conv_label(),
+                                   inbox_store=inbox_store, now=now)
+                _note_meta(False, "exposure_paused", goal_id=_gid,
+                           title=str(goal.get("title") or ""), hit=_hit)
+                return None
+            _pu = _xg.goal_paused_until(goal)
+            if _pu > float(now if now is not None else time.time()):
+                _note_meta(False, "goals_paused", goal_id=_gid,
+                           title=str(goal.get("title") or ""),
+                           paused_until=int(_pu))
+                return None
+        except Exception:
+            logger.debug("exposure guard skipped", exc_info=True)
         # P1 达成信号（2026-08-29）：自定义目标在要联系方式、对方本条真给了
         # → 记 outcome_signal（params+事件，右栏卡出「像是达成了」提示行）。
         # 只提示不自动结算——确认权在人。放在 observe 早退**之前**：观察档

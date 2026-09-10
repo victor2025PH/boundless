@@ -732,6 +732,14 @@ def apply_draft_humanize(
             meta["repeat_q_stripped"] = int(rrep.get("stripped") or 0)
         except Exception:
             logger.debug("[draft] repeat_question_guard 异常（原文继续）", exc_info=True)
+        # Q-1 D（#264 #269）：识破守卫——最近入站命中「you're a bot / 20th time / 你又问」→ 本稿
+        # 只出一句轻松不辩解的挽回；任何时候删自证句（I'm not a robot / 我是真人）。meta.exposure。
+        try:
+            from src.inbox.exposure_guard import guard_outbound
+            cur, xrep = guard_outbound(cur, conversation_id=conversation_id, lang=lg)
+            meta["exposure"] = str(xrep.get("action") or "clean")
+        except Exception:
+            logger.debug("[draft] exposure_guard 异常（原文继续）", exc_info=True)
         try:
             from src.inbox.claim_guard import check_claims, log_report
             cur, crep = check_claims(cur, history_texts=history_texts, memory_facts=memory_facts,
