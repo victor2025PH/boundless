@@ -212,8 +212,20 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
             "accounts": accounts,
             "tabs": list(TIKTOK_PANEL_TABS), "active_tab": "official",
             "personal_rpa": personal,
-            "web": {"enabled": False, "phase": "assistOnly", "notice": "notice_unofficial",
-                    "ready": False, "hint": "网页托管边车阶段 1 未开工（TK-3 ②-A）"}}
+            "web": _tiktok_web_panel(_config(request))}
+
+
+def _tiktok_web_panel(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """TK-3 ②-A：网页边车页签数据——开关 / 服务地址 / assistOnly。``ready`` 阶段 1 恒 False（人工可发是 ②-B）。"""
+    out: Dict[str, Any] = {"enabled": False, "phase": "assistOnly", "notice": "notice_unofficial", "ready": False,
+                           "service_url": "", "hint": "网页托管边车阶段 1：只读进收件箱、不代发；platform_login.tiktok.web_enabled 开启"}
+    try:
+        from src.integrations.tiktok_web_login import service_base_url, web_enabled
+        out["enabled"] = bool(web_enabled(cfg))
+        out["service_url"] = service_base_url(cfg)
+    except Exception:
+        logger.debug("[onboarding] TikTok 网页边车面板跳过", exc_info=True)
+    return out
 
 
 def _route_mounted(request: Request, path: str, method: str = "POST") -> bool:

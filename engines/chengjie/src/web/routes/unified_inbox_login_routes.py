@@ -130,6 +130,12 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         except Exception:
             logger.debug("注册 instagram web provider 失败", exc_info=True)
         try:
+            # TK-3 ②-A：TikTok 个人号网页边车（assistOnly，默认关；platform_login.tiktok.web_enabled 才注册）
+            from src.integrations.tiktok_web_login import maybe_register as _tt_reg
+            _tt_reg(cfg)
+        except Exception:
+            logger.debug("注册 tiktok web provider 失败", exc_info=True)
+        try:
             from src.integrations.line_protocol_login import maybe_register as _ln_reg
             _ln_reg(cfg)
         except Exception:
