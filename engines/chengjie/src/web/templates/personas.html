@@ -1222,6 +1222,18 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <input type="hidden" id="mp-style" value="soft">
       <div id="mp-preview" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
     </div>
+    <!-- Q-15 #271：成人话题政策一格四选（ad- 前缀；空值=跟随业务域默认：陪聊 soft_reply / 销售 human） -->
+    <div class="field-row" id="ad-row">
+      <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span></label>
+      <div class="opt-cards" id="ad-cards">
+        <div class="opt-card" data-val="" onclick="_selAdultPolicy(this)"><span class="oc-ico">🧭</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_default','跟随域默认') }}</span></div>
+        <div class="opt-card" data-val="soft_reply" onclick="_selAdultPolicy(this)"><span class="oc-ico">💬</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_soft','软回应') }}</span></div>
+        <div class="opt-card" data-val="human" onclick="_selAdultPolicy(this)"><span class="oc-ico">🙋</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_human','转人工') }}</span></div>
+        <div class="opt-card" data-val="mark_only" onclick="_selAdultPolicy(this)"><span class="oc-ico">🏷️</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_mark','只标记') }}</span></div>
+      </div>
+      <input type="hidden" id="ad-policy" value="">
+      <div id="ad-preview" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
+    </div>
     <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_appearance','外观锚点') }}</div>
     <div class="field-row">
       <label>{{ (i18n or {}).get('psn_pf_appearance','外观描述') }}</label>
@@ -1880,11 +1892,37 @@ function _setMeetingPolicy(raw){
 }
 function _setMpStyle(raw){
   var v = String(raw || 'soft').toLowerCase();
-  if (v === 'direct' || v === '直接' || v === 'blunt') v = 'direct';
+  if (v === 'direct' || v === '\u76f4\u63a5' || v === 'blunt') v = 'direct';  // Q-15 代补：裸 CJK 门禁（test_i18n_coverage personas.html 基线 0）
   else v = 'soft';
   var hid = document.getElementById('mp-style'); if (hid) hid.value = v;
   _setOptCard('mp-style-cards', v);
   _mpPreview();
+}
+// ── Q-15 #271 ad-：成人话题政策（空=跟随业务域默认） ──────────────────────────
+function _adPreview(){
+  var v = _pfStr('ad-policy') || '';
+  var map = {
+    '': window.T('psn_pf_ad_ex_default'),
+    soft_reply: window.T('psn_pf_ad_ex_soft'),
+    human: window.T('psn_pf_ad_ex_human'),
+    mark_only: window.T('psn_pf_ad_ex_mark')
+  };
+  var el = document.getElementById('ad-preview');
+  if (el) el.textContent = map[v] || map[''] || '';
+}
+function _selAdultPolicy(el){
+  _selOpt(el, 'ad-policy', 'ad-cards');
+  _adPreview();
+}
+function _setAdultPolicy(raw){
+  var s = String(raw || '').toLowerCase();
+  var v = '';
+  if (s === 'soft_reply' || s === 'soft') v = 'soft_reply';
+  else if (s === 'human' || s === 'handoff') v = 'human';
+  else if (s === 'mark_only' || s === 'mark') v = 'mark_only';
+  var hid = document.getElementById('ad-policy'); if (hid) hid.value = v;
+  _setOptCard('ad-cards', v);
+  _adPreview();
 }
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
   el.classList.add('sel');
@@ -4274,7 +4312,7 @@ var _ADV_MANAGED_SUB = {
   names: ['full_western','english','nickname','usage_notes'],
   context: ['hobbies','specific_memories','emotional_triggers'],
   tastes: ['likes','dislikes','opinions'],
-  boundaries: ['topics_to_avoid', 'meeting_policy', 'commitment_style'],  // mp- Q-2
+  boundaries: ['topics_to_avoid', 'meeting_policy', 'commitment_style', 'adult_policy'],  // mp- Q-2 / ad- Q-15
 };
 function _refreshAdvPanel() {
   var panel = document.getElementById('pe-adv-panel');
@@ -5155,6 +5193,7 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetLines('pe-pf-avoid', bnd.topics_to_avoid);
   _setMeetingPolicy(bnd.meeting_policy || 'never');  // mp-
   _setMpStyle(bnd.commitment_style || 'soft');       // mp-
+  _setAdultPolicy(bnd.adult_policy || '');           // ad- Q-15
   _pfSetVal('pe-pf-appearance', p.appearance);
   _pfSetLines('pe-pf-scenes', p.selfie_scenes);
   _pfSetVal('pe-pf-quirks', persObj ? persObj.quirks : '');
@@ -5272,6 +5311,10 @@ function _collectProfileTabPatch() {
   }
   var st = _pfStr('mp-style') || 'soft';
   bndOut.commitment_style = (st === 'direct') ? 'direct' : 'soft';
+  // ad- Q-15：空=跟随业务域默认 → 不落键（缺省语义由 adult_grader.adult_policy_of 决定）
+  var adp = _pfStr('ad-policy') || '';
+  if (adp === 'soft_reply' || adp === 'human' || adp === 'mark_only') bndOut.adult_policy = adp;
+  else delete bndOut.adult_policy;
   if (Object.keys(bndOut).length) patch.boundaries = bndOut;
   // personality 三补充：由 saveProfile 做对象/字符串形态特殊融合
   var persOut = {};

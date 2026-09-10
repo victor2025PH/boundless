@@ -132,6 +132,8 @@ _PROBES: Dict[str, _Probe] = {
     # Q-2 #263 D-Q3：见面政策 / 拒绝口吻必须进 prompt（哨兵与默认 never/soft 错开）
     "boundaries.meeting_policy": _Probe("handoff", "一律交给人工"),
     "boundaries.commitment_style": _Probe("direct", "拒绝口吻=直接"),
+    # Q-15 #271：成人话题政策显式配置才进 prompt（哨兵用 mark_only，与两种缺省 human/soft_reply 错开）
+    "boundaries.adult_policy": _Probe("mark_only", "成人话题·只标记"),
     # 已撤销的旧设定（2026-08-03 删除不干净事故链）：列表条目必须逐条进
     # 【已作废的旧设定】块——这是压住会话历史复读/客户假记忆钩子的 prompt 层防线
     "boundaries.retired_facts": _Probe(["探针撤销养猫设定"], "探针撤销养猫设定"),

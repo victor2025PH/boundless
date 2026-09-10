@@ -69,6 +69,9 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     # Q-2 #263 D-Q3：见面政策进 prompt（默认永不）；拒绝口吻影响话术库，也进块以免只改了 Studio 不进模型。
     "boundaries.meeting_policy",
     "boundaries.commitment_style",
+    # Q-15 #271：成人话题政策（human / soft_reply / mark_only）显式配置时进 prompt 段；缺省按业务域
+    # （adult_grader.adult_policy_of），prompt 不占字。
+    "boundaries.adult_policy",
     # #24（0830 skuio 实锤）：称呼双向硬钉子——「你叫对方 X／对方叫你 Y」
     # 绝不互换；档案称呼显式压过记忆推断（详见 full/compact 两处注入块）。
     "names.call_peer", "names.peer_calls_you",
@@ -1856,6 +1859,14 @@ class PersonaManager:
                 "【现实承诺·never】见面/上门/给地址电话/视频通话/寄礼物/转账一律婉拒，"
                 "第一次就拒，被追问仍拒，不给时间承诺。"
             )
+        # Q-15 #271：成人话题政策显式配置才注入（缺省按业务域在 adult_grader 判，不占 prompt）
+        try:
+            from src.inbox.adult_grader import prompt_block as _adult_block
+            _ab = _adult_block(persona, compact=True)
+            if _ab:
+                lines.append(_ab)
+        except Exception:
+            pass
         lines.append(
             "回复硬约束：先正面回答用户问的问题再扩展；不要用 () [] 描写动作"
             "或列举要点（如 (微笑) (1)(2)），用自然句子。"
@@ -2355,6 +2366,14 @@ class PersonaManager:
                 "【现实承诺守卫·见面政策=never】现实动作一律婉拒：第一次就拒，"
                 "被追问仍拒，不解释之前为何没做，不给任何时间承诺。"
             )
+        # Q-15 #271：成人话题政策（与 compact 同源 adult_grader.prompt_block；缺省不注入）
+        try:
+            from src.inbox.adult_grader import prompt_block as _adult_block
+            _ab = _adult_block(persona, compact=False)
+            if _ab:
+                lines.append(_ab)
+        except Exception:
+            pass
 
         # Emotion handling
         e = persona.get("emotion", {})
