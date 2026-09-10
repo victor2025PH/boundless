@@ -722,6 +722,16 @@ def apply_draft_humanize(
                 conversation_id or "-", stage or "-", draft_id or "-", org, lg, len(src))
             return src, meta
         cur = src
+        # Q-1 C（#264 #270）：出站重复提问守卫——本稿问句与 24h 内我方问句相似（词干 + 同义 +
+        # 槽位标签）≥0.8 → 删句 / 整稿只剩它则改非问句；挂在 claim_guard 之前（先去重问、再去谎）。
+        # 绝不抛、原文放行；meta.repeat_q / repeat_q_stripped。
+        try:
+            from src.inbox.repeat_question_guard import check_repeat_questions
+            cur, rrep = check_repeat_questions(cur, conversation_id=conversation_id, lang=lg)
+            meta["repeat_q"] = str(rrep.get("action") or "clean")
+            meta["repeat_q_stripped"] = int(rrep.get("stripped") or 0)
+        except Exception:
+            logger.debug("[draft] repeat_question_guard 异常（原文继续）", exc_info=True)
         try:
             from src.inbox.claim_guard import check_claims, log_report
             cur, crep = check_claims(cur, history_texts=history_texts, memory_facts=memory_facts,
