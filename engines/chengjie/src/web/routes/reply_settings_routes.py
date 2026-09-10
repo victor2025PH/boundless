@@ -48,6 +48,8 @@ _ERR_KEYS = {
     "bad_timezone": "rps_err_bad_timezone",
     "bad_account_key": "rps_err_bad_account_key",
     "incomplete_window": "rps_err_incomplete_window",
+    # D-Q1（Q-4 #267）：班表开启时时区必填
+    "tz_required": "rps_err_tz_required",
 }
 
 _HUMANIZE_FLAGS = {

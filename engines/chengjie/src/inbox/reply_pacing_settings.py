@@ -1121,6 +1121,7 @@ def cross_validate(
     config 现值来自 YAML（可能手写脏类型）→ 比较包 TypeError 守卫，绝不 500。
     """
     errors_ws = _validate_schedule_window(clean, config)
+    errors_ws += _validate_schedule_timezone(clean, config)
     errors_ws += _validate_bubble_gap(clean, config)
     errors_ws += _validate_sendgate_ramp(clean, config)
     kmin = _DELAY_PREFIX + "min_sec"
@@ -1198,6 +1199,29 @@ def _validate_schedule_window(
     if bool(str(start).strip()) != bool(str(end).strip()):
         empty_key = _WS_START_PATH if not str(start).strip() else _WS_END_PATH
         return [{"field": empty_key, "code": "incomplete_window"}]
+    return []
+
+
+_WS_ENABLED_PATH = "inbox.work_schedule.enabled"
+_WS_TZ_PATH = "inbox.work_schedule.timezone"
+
+
+def _validate_schedule_timezone(
+    clean: Mapping[str, Any], config: Any,
+) -> List[Dict[str, str]]:
+    """D-Q1（Q-4 #267，基线红线③）：班表**开启**时时区必填。
+
+    1.0.78 事故：「timezone 空＝服务器本地」让上海机器把纽约客户的下午当凌晨静默扣留。
+    合并视图 enabled 为真 且 timezone 为空 → ``tz_required``。只在本次触碰 enabled /
+    timezone 任一时校验（历史已开且空时区的存量配置不拦无关项的保存——它们由启动横幅
+    ``[baseline] work_schedule.enabled=True tz=''`` 露出，用户下次改班表时会被要求补）。
+    """
+    if _WS_ENABLED_PATH not in clean and _WS_TZ_PATH not in clean:
+        return []
+    enabled = clean.get(_WS_ENABLED_PATH, bool(_dig(config, _WS_ENABLED_PATH, False)))
+    tz = clean.get(_WS_TZ_PATH, str(_dig(config, _WS_TZ_PATH, "") or ""))
+    if bool(enabled) and not str(tz or "").strip():
+        return [{"field": _WS_TZ_PATH, "code": "tz_required"}]
     return []
 
 

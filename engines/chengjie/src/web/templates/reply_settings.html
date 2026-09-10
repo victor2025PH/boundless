@@ -60,6 +60,12 @@
 .rps-guard-st.hard{background:rgba(239,68,68,.14);color:var(--red)}
 .rps-guard-st.na{background:var(--input);color:var(--t3)}
 .rps-guard-st.near{background:rgba(245,158,11,.07);color:var(--amber);border:1px dashed color-mix(in srgb, var(--amber,#f59e0b) 55%, transparent)}
+/* D-Q2（Q-4）：AI 额度进度条；≥80% 橙（warn）、≥100% 红（exhausted 复用 hard 色） */
+.rps-guard-st.warn{background:rgba(245,158,11,.14);color:var(--amber)}
+.rps-sg-bar{display:inline-block;vertical-align:middle;width:84px;height:6px;margin-right:.45rem;border-radius:999px;background:var(--input);overflow:hidden}
+.rps-sg-bar i{display:block;height:100%;border-radius:999px;background:var(--green)}
+.rps-ws-tzconv{display:block;margin-top:.3rem;font-size:.74rem;color:var(--t2);line-height:1.5}
+.rps-ws-tzconv.miss{color:var(--red);font-weight:600}
 .rps-guard-relief{border:1px solid color-mix(in srgb, var(--amber,#f59e0b) 55%, transparent);background:transparent;color:var(--t);border-radius:6px;padding:.14rem .5rem;font-size:.72rem;cursor:pointer}
 .rps-guard-relief:hover{background:color-mix(in srgb, var(--amber,#f59e0b) 14%, transparent)}
 .rps-guard-relief[disabled]{opacity:.5;cursor:default}
@@ -557,24 +563,26 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <span style="display:inline-flex;align-items:center;gap:.45rem;flex-wrap:wrap">
         <input type="number" class="rps-num" id="rps-sg-cap" min="1" max="1000000" step="1" oninput="rpsMarkDirty()">
         <button type="button" class="rps-guard-quick" onclick="rpsSgQuick(15)">15 · {{ (i18n or {}).get('rps_sg_q_cautious', "谨慎养号") }}</button>
-        <button type="button" class="rps-guard-quick" onclick="rpsSgQuick(300)">300 · {{ (i18n or {}).get('rps_sg_q_pkg', "安装包默认") }}</button>
+        <button type="button" class="rps-guard-quick" onclick="rpsSgQuick(300)">300 · {{ (i18n or {}).get('rps_sg_q_pkg', "推荐") }}</button>
         <button type="button" class="rps-guard-quick" onclick="rpsSgQuick(500)">500 · {{ (i18n or {}).get('rps_sg_q_loose', "宽松") }}</button>
       </span>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_sg_cap_hint', "养熟后的单号每日发送上限。安装包默认 300/天；单号日发 300+ 已属较高风控风险，建议优先多号分摊而不是无限调大。0 不是「不限」——闸门语义里 0＝全停，界面不提供（临时全停请用急停开关）。") }}</span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_sg_cap_hint', "养熟后的单号每日 AI 发送上限。推荐 300/天：新号按「新号起步额度」在爬坡天数内线性爬到这个数（出厂参数 100 → 300 / 3 天），养熟号直接按 300；单号日发 300+ 已属较高风控风险，建议多号分摊而不是无限调大。此额度只管 AI 自动发送，坐席人工发送永不受限。0 不是「不限」——闸门语义里 0＝全停，界面不提供（临时全停请用急停开关）。") }}</span>
     </div>
     <div class="rps-guard-top" id="rps-sg-top" style="display:none"></div>
     <div class="rps-row" style="display:block">
-      <span class="rps-row-label" style="display:block;margin-bottom:.35rem">{{ (i18n or {}).get('rps_sg_today', "今日发送量（滚动 24 小时）") }}</span>
+      <span class="rps-row-label" style="display:block;margin-bottom:.35rem">{{ (i18n or {}).get('rps_sg_today', "本号今日 AI 已发（滚动 24 小时）") }}</span>
+      <!-- D-Q2（Q-4 #267 CSTCJT）：去掉「人工」列——额度永不限制人工发送；「自动」列改为
+           已发 N / 上限 M 进度条，≥80% 橙、≥100% 红并提示「AI 已达今日额度，请手动接管」。 -->
       <table class="rps-po-table rps-guard-table">
         <thead><tr>
           <th>{{ (i18n or {}).get('rps_sg_col_acct', "账号") }}</th>
-          <th>{{ (i18n or {}).get('rps_sg_col_used', "已发 / 上限") }}</th>
-          <th>{{ (i18n or {}).get('rps_sg_col_auto', "自动") }}</th>
-          <th>{{ (i18n or {}).get('rps_sg_col_manual', "人工") }}</th>
+          <th>{{ (i18n or {}).get('rps_sg_col_used', "AI 已发 / 上限") }}</th>
+          <th>{{ (i18n or {}).get('rps_sg_col_auto', "AI 额度进度") }}</th>
         </tr></thead>
         <tbody id="rps-sg-tbody"></tbody>
       </table>
       <div class="rps-po-empty" id="rps-sg-empty" style="display:none"></div>
+      <p class="rps-hint" style="margin:.4rem 0 0">{{ (i18n or {}).get('rps_sg_manual_note', "坐席人工发送与人工通过投递不计入、也不受此额度限制（额度只管 AI 自动发）。") }}</p>
     </div>
     <details class="rps-guard-adv">
       <summary>{{ (i18n or {}).get('rps_sg_adv', "高级参数（新号爬坡 / 红灯拒发 / 人工预留 / 白名单）") }}</summary>
@@ -618,11 +626,13 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-preset-state" id="rps-preset-state"></div>
   </div>
 
-  <!-- 默认自动化档位 -->
+  <!-- 默认自动化档位（HEEEN9 / Q-4 #267：三层语义——会话 > 账号 > 本页兜底） -->
   <div class="rps-card" id="rps-sec-mode">
-    <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "默认自动化档位") }}
-      <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span></h3>
-    <p class="rps-hint">{{ (i18n or {}).get('rps_mode_hint', "新会话的默认档位；单个会话可在收件箱里单独覆写，坐席显式设置优先。") }}</p>
+    <h3>🎚️ {{ (i18n or {}).get('rps_mode_title', "未设置账号的兜底档位") }}
+      <span class="rps-chip" data-hot-chip="inbox.auto_draft.automation_mode"></span>
+      <span class="rps-chip" id="rps-mode-tiers" style="display:none;background:var(--input);color:var(--t2)"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_mode_hint', "三层优先级：会话里手选的档位 ＞ 账号菜单「此账号全部会话 →」设的档位 ＞ 本页兜底。只有既没按会话选、账号也没设过的会话，才用这里的档位。本页即使选「全自动」，账号未在账号菜单确认「此账号全部会话 → 全自动」之前，该账号的会话仍按拟稿人审落地，不会自动发出。") }}</p>
+    <p class="rps-hint" id="rps-mode-tiers-line" style="margin-top:-.2rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.74rem">{{ (i18n or {}).get('rps_mode_tiers_diagram', "会话手选 ▶ 账号设定 ▶ 本页兜底 ｜ 前面有值就不再往后看") }}</p>
     <div class="rps-modes" id="rps-modes">
       <label class="rps-mode">
         <input type="radio" name="rps-mode" value="manual" onchange="rpsMarkDirty()">
@@ -649,23 +659,29 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
         <input type="radio" name="rps-mode" value="auto_ai" onchange="rpsMarkDirty()">
         <span class="rps-mode-box">
           <span class="rps-mode-name"><span class="rps-mode-emoji">🚀</span>{{ (i18n or {}).get('rps_mode_auto', "全自动") }}</span>
-          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_auto_d', "AI 直接回复，低风险草稿自动发出") }}</span>
+          <span class="rps-mode-desc">{{ (i18n or {}).get('rps_mode_auto_d', "AI 直接回复，低风险草稿自动发出；高风险（危机 / 投诉 / 金额 / 政策类）转人工审核") }}</span>
         </span>
       </label>
     </div>
     <div class="rps-mode-capnote" id="rps-cap-note" style="display:none"></div>
-    <div class="rps-row" style="margin-top:.6rem">
-      <span class="rps-row-label">{{ (i18n or {}).get('rps_bootstrap_label', "新会话自动沿用此档位") }}
-        <span class="rps-chip" data-hot-chip="inbox.auto_draft.bootstrap_automation_mode"></span></span>
-      <label class="rps-switch"><input type="checkbox" id="rps-bootstrap" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_bootstrap_hint', "首条入站时把默认档位持久化到该会话（关闭则新会话按人审口径落地）") }}</span>
-    </div>
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度") }}
         <span class="rps-chip" data-hot-chip="inbox.auto_draft.min_text_len"></span></span>
       <input type="number" class="rps-num" id="rps-minlen" min="0" max="500" step="1" oninput="rpsMarkDirty()">
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_minlen_hint', "短于此字数的入站不生成草稿（0 = 不限制）") }}</span>
     </div>
+    <!-- HEEEN9（Q-4 #267）：「新会话自动沿用此档位」→ 高级折叠 + 大白话 + 出厂关。
+         开着＝新会话第一条消息到时把兜底档位**写死**进该会话，之后改本页也不跟；
+         关着＝会话不写死，始终跟随三层实时算。 -->
+    <details class="rps-guard-adv" style="margin-top:.5rem">
+      <summary>{{ (i18n or {}).get('rps_mode_adv', "高级：把兜底档位写死到新会话") }}</summary>
+      <div class="rps-row" style="border-top:none">
+        <span class="rps-row-label">{{ (i18n or {}).get('rps_bootstrap_label', "新会话第一条消息到时，把当时的兜底档位写死进这个会话") }}
+          <span class="rps-chip" data-hot-chip="inbox.auto_draft.bootstrap_automation_mode"></span></span>
+        <label class="rps-switch"><input type="checkbox" id="rps-bootstrap" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
+        <span class="rps-row-hint">{{ (i18n or {}).get('rps_bootstrap_hint', "出厂关。关着：会话不写死档位，之后改本页或账号菜单，这些会话立刻跟着变。开着：写死之后改本页不再影响它们，得逐个会话或按账号重设——只在「希望老会话锁住当时档位」时才开。") }}</span>
+      </div>
+    </details>
   </div>
 
   <!-- 工作时间班表（P0-ws，2026-08-04）：非工作时间不自动回复。后端未装载
@@ -677,8 +693,8 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <p class="rps-hint">{{ (i18n or {}).get('rps_ws_hint', "账号的「作息表」——非工作时间不自动回复入站消息（危机求助信号除外），复班后自动补觉处理积压。坐席手动发送与人工通过不受限。") }}</p>
     <div class="rps-row" style="border-top:none">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_enabled', "启用工作时间班表") }}</span>
-      <label class="rps-switch"><input type="checkbox" id="rps-ws-enabled" onchange="rpsMarkDirty()"><span class="rps-slider"></span></label>
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_enabled_hint', "开启后，下方默认班表对全部账号生效；个别账号可在覆写表单独配") }}</span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ws-enabled" onchange="rpsMarkDirty(); rpsWsTzConv()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_enabled_hint', "出厂关（1.0.79 起）。开启后，下方默认班表对全部账号生效，且必须填班表时区——按谁的作息就填谁的时区（客户在纽约就填 America/New_York），留空不能保存；个别账号可在覆写表单独配") }}</span>
     </div>
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_days', "工作日") }}</span>
@@ -693,9 +709,9 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_window', "上下班时间") }}</span>
       <span class="rps-ws-window">
-        <input type="time" id="rps-ws-start" onchange="rpsMarkDirty()">
+        <input type="time" id="rps-ws-start" onchange="rpsMarkDirty(); rpsWsTzConv()">
         <span>–</span>
-        <input type="time" id="rps-ws-end" onchange="rpsMarkDirty()">
+        <input type="time" id="rps-ws-end" onchange="rpsMarkDirty(); rpsWsTzConv()">
       </span>
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_window_hint', "下班早于上班 = 跨午夜班（如 14:00–02:00）；两者相同 = 全天在班；都留空 = 未配置（不闸）") }}</span>
     </div>
@@ -706,9 +722,25 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <button type="button" onclick="rpsWsPreset('always')">{{ (i18n or {}).get('rps_ws_preset_always', "全天候") }}</button>
     </div>
     <div class="rps-row">
-      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_tz', "班表时区") }}</span>
-      <input type="text" class="rps-num" style="width:min(220px,100%)" id="rps-ws-tz" placeholder="Asia/Shanghai" oninput="rpsMarkDirty()">
-      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_tz_hint', "IANA 时区名（如 Asia/Shanghai）；留空 = 服务器本地时间") }}</span>
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_tz', "班表时区（开启班表时必填）") }}</span>
+      <span style="display:inline-flex;flex-direction:column;gap:.3rem;min-width:0">
+        <input type="text" class="rps-num" style="width:min(220px,100%)" id="rps-ws-tz" placeholder="America/New_York" list="rps-ws-tz-list" oninput="rpsMarkDirty(); rpsWsTzConv()">
+        <datalist id="rps-ws-tz-list">
+          <option value="Asia/Shanghai"></option><option value="America/New_York"></option><option value="America/Los_Angeles"></option>
+          <option value="Europe/London"></option><option value="Europe/Berlin"></option><option value="Asia/Tokyo"></option>
+          <option value="Asia/Singapore"></option><option value="Asia/Ho_Chi_Minh"></option><option value="Australia/Sydney"></option>
+        </datalist>
+        <!-- D-Q1（Q-4 #267）：三选一快捷——账号所在地 / 客户所在地 / 本机；不再有「留空＝服务器本地」 -->
+        <span class="rps-ws-presets" style="margin:0">
+          <span>{{ (i18n or {}).get('rps_ws_tz_pick', "按谁的作息：") }}</span>
+          <button type="button" onclick="rpsWsTzSet('Asia/Shanghai')">{{ (i18n or {}).get('rps_ws_tz_pick_acct', "账号在上海") }}</button>
+          <button type="button" onclick="rpsWsTzSet('America/New_York')">{{ (i18n or {}).get('rps_ws_tz_pick_ny', "客户在纽约") }}</button>
+          <button type="button" onclick="rpsWsTzSet('Europe/London')">{{ (i18n or {}).get('rps_ws_tz_pick_ldn', "客户在伦敦") }}</button>
+          <button type="button" onclick="rpsWsTzSet('__local__')">{{ (i18n or {}).get('rps_ws_tz_pick_local', "本机时区") }}</button>
+        </span>
+        <span class="rps-ws-tzconv" id="rps-ws-tzconv"></span>
+      </span>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_ws_tz_hint', "IANA 时区名（如 America/New_York）。班表上的「上班 / 下班」按这个时区读——1.0.78 曾因默认取服务器本地时间，把纽约客户的下午当成上海凌晨扣住不回。填了之后下面会换算给你核对。") }}</span>
     </div>
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_ws_jitter', "边界抖动（±分钟）") }}</span>
@@ -1223,6 +1255,18 @@ var RPS_I18N = {
   wsXOpenAt: {{ (i18n or {}).get('rps_ws_js_x_openat', "{t} 复班")|tojson }},
   wsXCloseAt: {{ (i18n or {}).get('rps_ws_js_x_closeat', "{t} 下班")|tojson }},
   wsXAlways: {{ (i18n or {}).get('rps_ws_js_x_always', "未配置班表（全天候）")|tojson }},
+  // D-Q1（Q-4 #267）：时区必填 + 换算核对行
+  wsTzRequired: {{ (i18n or {}).get('rps_err_tz_required', "班表已开启，必须填班表时区（按谁的作息就填谁的时区，如 America/New_York）——不能留空按服务器本地时间（{field}）")|tojson }},
+  wsTzMissing: {{ (i18n or {}).get('rps_ws_js_tz_missing', "⚠ 未填时区：开启班表后不能保存。按谁的作息就填谁的时区。")|tojson }},
+  wsTzBad: {{ (i18n or {}).get('rps_ws_js_tz_bad', "时区名不合法：{tz}")|tojson }},
+  wsTzNow: {{ (i18n or {}).get('rps_ws_js_tz_now', "{tz} 现在 {now}")|tojson }},
+  wsTzConv: {{ (i18n or {}).get('rps_ws_js_tz_conv', "上班 {start} ＝ {cities_s}；下班 {end} ＝ {cities_e}")|tojson }},
+  wsTzCity: {{ (i18n or {}).get('rps_ws_js_tz_city', "{city} {t}")|tojson }},
+  wsTzCities: {sh: {{ (i18n or {}).get('rps_ws_js_city_sh', "上海")|tojson }}, ny: {{ (i18n or {}).get('rps_ws_js_city_ny', "纽约")|tojson }}, ldn: {{ (i18n or {}).get('rps_ws_js_city_ldn', "伦敦")|tojson }}},
+  // D-Q2 / HEEEN9
+  sgExhausted: {{ (i18n or {}).get('rps_sg_js_exhausted', "AI 已达今日额度，请手动接管")|tojson }},
+  sgWarn80: {{ (i18n or {}).get('rps_sg_js_warn80', "已用 {p}%，接近上限")|tojson }},
+  modeTiers: {{ (i18n or {}).get('rps_mode_tiers', "{n} 个账号已设全自动 / {m} 个跟随本页")|tojson }},
   rtLive: {{ (i18n or {}).get('rps_rt_live', "线上正在用")|tojson }},
   rtDelay: {{ (i18n or {}).get('rps_rt_delay', "延迟 {min}–{max} 秒")|tojson }},
   rtAdaptiveOn: {{ (i18n or {}).get('rps_rt_adaptive_on', "自适应开")|tojson }},
@@ -1736,7 +1780,7 @@ RPS_FIELD_DEFS.push(
   {path: "inbox.work_schedule.off_hours.catch_up_regenerate_hours", kind: "float", el: "rps-ws-regenh", feat: "ws"},
   {path: "inbox.work_schedule.accounts", kind: "virtual", feat: "ws",
    vget: function(){ return rpsWsAcctCollect(); },
-   vset: function(v){ rpsWsAcctRender(v || {}); }}
+   vset: function(v){ rpsWsAcctRender(v || {}); try { rpsWsTzConv(); } catch (_e){} }}
 );
 // 回复额度守卫（P0-guard）：feat:"guard" 同款特性探测——旧后端（白名单未装载
 // 这两键）时收集/回填全部跳过，防假脏/保存被拒
@@ -1891,6 +1935,92 @@ function rpsWsPreset(kind){
   if (s) s.value = p.start;
   if (e) e.value = p.end;
   rpsMarkDirty();
+  rpsWsTzConv();
+}
+
+/* D-Q1（Q-4 #267）：班表时区三选一快捷 + 换算核对行。
+   「上海 01:00 ＝ 纽约 13:00」这种换算是 1.0.78 事故（默认服务器本地时间把美英客户
+   的下午当凌晨扣住）之后的必备核对；换算用浏览器 Intl，按「今天」的偏移算（夏令时
+   期间偏移会变，行内标注了当下时刻）。 */
+function rpsWsTzSet(tz){
+  var el = document.getElementById('rps-ws-tz');
+  if (!el) return;
+  if (tz === '__local__'){
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_e){ tz = ''; }
+  }
+  el.value = tz || '';
+  rpsMarkDirty();
+  rpsWsTzConv();
+}
+
+function rpsWsTzValid(tz){
+  if (!tz) return false;
+  try { new Intl.DateTimeFormat('en-US', {timeZone: tz}); return true; } catch (_e){ return false; }
+}
+
+// 把 srcTz 里「今天 HH:MM」换算成 dstTz 的 HH:MM（仅本地核对用，不参与保存）
+function rpsWsConvHHMM(hhmm, srcTz, dstTz){
+  var m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+  if (!m) return '';
+  function parts(date, tz){
+    var f = new Intl.DateTimeFormat('en-US', {timeZone: tz, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+    var o = {};
+    f.formatToParts(date).forEach(function(p){ o[p.type] = p.value; });
+    return o;
+  }
+  try {
+    var now = new Date();
+    var s = parts(now, srcTz);
+    // 以 srcTz 的今天日期 + 目标 HH:MM 造一个「视为 UTC」的时间戳，再用 srcTz 的偏移修正
+    var asUtc = Date.UTC(+s.year, +s.month - 1, +s.day, +m[1], +m[2]);
+    var probe = new Date(asUtc);
+    var p = parts(probe, srcTz);
+    var probeUtc = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute);
+    var real = new Date(asUtc - (probeUtc - asUtc));
+    var d = parts(real, dstTz);
+    var dayDelta = Math.round((Date.UTC(+d.year, +d.month - 1, +d.day) - Date.UTC(+s.year, +s.month - 1, +s.day)) / 86400000);
+    var suffix = dayDelta > 0 ? '(+1)' : (dayDelta < 0 ? '(-1)' : '');
+    return ('0' + ((+d.hour) % 24)).slice(-2) + ':' + d.minute + suffix;
+  } catch (_e){ return ''; }
+}
+
+function rpsWsTzConv(){
+  var box = document.getElementById('rps-ws-tzconv');
+  if (!box) return;
+  var en = document.getElementById('rps-ws-enabled');
+  var tzEl = document.getElementById('rps-ws-tz');
+  var tz = String((tzEl && tzEl.value) || '').trim();
+  box.className = 'rps-ws-tzconv';
+  if (!tz){
+    if (en && en.checked){ box.className += ' miss'; box.textContent = RPS_I18N.wsTzMissing; }
+    else box.textContent = '';
+    return;
+  }
+  if (!rpsWsTzValid(tz)){
+    box.className += ' miss';
+    box.textContent = String(RPS_I18N.wsTzBad).replace('{tz}', tz);
+    return;
+  }
+  var nowTxt = '';
+  try {
+    nowTxt = new Intl.DateTimeFormat('en-GB', {timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit'}).format(new Date());
+  } catch (_e){}
+  var lines = [String(RPS_I18N.wsTzNow).replace('{tz}', tz).replace('{now}', nowTxt)];
+  var s = (document.getElementById('rps-ws-start') || {}).value || '';
+  var e = (document.getElementById('rps-ws-end') || {}).value || '';
+  if (s && e){
+    var cities = [['Asia/Shanghai', RPS_I18N.wsTzCities.sh], ['America/New_York', RPS_I18N.wsTzCities.ny], ['Europe/London', RPS_I18N.wsTzCities.ldn]]
+      .filter(function(c){ return c[0] !== tz; });
+    function conv(t){
+      return cities.map(function(c){
+        return String(RPS_I18N.wsTzCity).replace('{city}', c[1]).replace('{t}', rpsWsConvHHMM(t, tz, c[0]) || '?');
+      }).join(' · ');
+    }
+    lines.push(String(RPS_I18N.wsTzConv).replace('{start}', s).replace('{end}', e)
+      .replace('{cities_s}', conv(s)).replace('{cities_e}', conv(e)));
+  }
+  box.textContent = lines.join('\n');
+  box.style.whiteSpace = 'pre-line';
 }
 
 function rpsWsAcctRow(key, entry){
@@ -2161,18 +2291,37 @@ function rpsSgSyncState(){
   chip.textContent = on ? RPS_I18N.sgStateOn : RPS_I18N.sgStateOff;
 }
 
+// D-Q2（Q-4 #267）：闸门只管 origin=auto。行＝「AI 已发 N / 上限 M」+ 进度条；
+// pct 由后端 auto_pct/warn80 给（无则本地算），≥80% 橙、≥100% 红＋「请手动接管」。
+function rpsSgPct(row){
+  if (row && row.auto_pct != null && isFinite(Number(row.auto_pct))) return Math.max(0, Number(row.auto_pct));
+  var used = Number(row && row.used_24h), cap = Number(row && row.cap);
+  if (!isFinite(used) || !isFinite(cap)) return null;
+  if (cap <= 0) return 100;
+  return Math.round(100 * used / cap);
+}
+
 function rpsSgRow(row, gateOn){
   var used = (row.used_24h == null ? '—' : String(row.used_24h))
     + ' / ' + (row.cap == null ? '—' : String(row.cap));
   var av = gateOn ? (row.auto_verdict || '—') : '—';
-  var mv = gateOn ? (row.manual_verdict || '—') : '—';
-  var acls = (!gateOn || av === '-') ? 'na' : (av === 'BLOCK' ? 'exhausted' : 'ok');
-  var mcls = (!gateOn || mv === '-') ? 'na' : (mv === 'BLOCK' ? 'hard' : 'ok');
+  var pct = gateOn ? rpsSgPct(row) : null;
+  var exhausted = gateOn && (av === 'BLOCK' || (pct != null && pct >= 100));
+  var warn = gateOn && !exhausted && (row.warn80 === true || (pct != null && pct >= 80));
+  var cls = !gateOn ? 'na' : (exhausted ? 'exhausted' : (warn ? 'warn' : 'ok'));
+  var barW = pct == null ? 0 : Math.min(100, pct);
+  var barColor = exhausted ? 'var(--danger,#e5484d)' : (warn ? 'var(--warn,#f59e0b)' : 'var(--ok,#22a06b)');
+  var label = !gateOn ? '—'
+    : exhausted ? String(RPS_I18N.sgExhausted || av)
+    : (warn ? String(RPS_I18N.sgWarn80 || '{p}%').replace('{p}', pct)
+            : (pct == null ? av : (pct + '%')));
+  var bar = gateOn && pct != null
+    ? '<span class="rps-sg-bar" title="' + rpsEsc(av) + '"><i style="width:' + barW + '%;background:' + barColor + '"></i></span>'
+    : '';
   return '<tr>'
     + '<td class="rps-guard-name">' + rpsEsc(row.account || '') + '</td>'
     + '<td>' + rpsEsc(used) + '</td>'
-    + '<td><span class="rps-guard-st ' + acls + '">' + rpsEsc(av) + '</span></td>'
-    + '<td><span class="rps-guard-st ' + mcls + '">' + rpsEsc(mv) + '</span></td>'
+    + '<td>' + bar + '<span class="rps-guard-st ' + cls + '">' + rpsEsc(label) + '</span></td>'
     + '</tr>';
 }
 
@@ -3626,10 +3775,24 @@ function rpsAmModeBtns(plat, aid, name, current){
   }).join(' ');
 }
 
+// HEEEN9（Q-4 #267）：档位卡标题旁「N 个账号已设全自动 / M 个跟随本页」——
+// N＝账号菜单已确认全自动的账号数；M＝还没按账号设过（pending，走本页兜底）的账号数。
+function rpsModeTiers(pending, decided){
+  var chip = document.getElementById('rps-mode-tiers');
+  if (!chip) return;
+  pending = pending || []; decided = decided || [];
+  var n = decided.filter(function(a){ return a && a.mode === 'auto_ai'; }).length;
+  var m = pending.length;
+  if (!n && !m){ chip.style.display = 'none'; return; }
+  chip.style.display = '';
+  chip.textContent = String(RPS_I18N.modeTiers || '{n} / {m}').replace('{n}', n).replace('{m}', m);
+}
+
 function rpsAmRender(pending, decided){
   var card = document.getElementById('rps-sec-am');
   if (!card) return;
   pending = pending || []; decided = decided || [];
+  rpsModeTiers(pending, decided);
   if (!pending.length && !decided.length){ card.style.display = 'none'; return; }
   card.style.display = '';
   var badge = document.getElementById('rps-am-badge');
@@ -3806,6 +3969,17 @@ async function rpsSave(){
   if (!Object.keys(changes).length) return;
   if (rpsPoDupFlag){ rpsToast(rpsEsc(RPS_I18N.poDup), 'err'); return; }
   if (rpsWsDupFlag){ rpsToast(rpsEsc(RPS_I18N.wsDup), 'err'); return; }
+  // D-Q1（Q-4 #267）：班表开启 ⇒ 时区必填（后端 cross_validate 同样拦；这里先给人话）
+  var wsEn = document.getElementById('rps-ws-enabled');
+  var wsTzEl = document.getElementById('rps-ws-tz');
+  if (wsEn && wsEn.checked && wsTzEl && !String(wsTzEl.value || '').trim()
+      && (Object.prototype.hasOwnProperty.call(changes, 'inbox.work_schedule.enabled')
+          || Object.prototype.hasOwnProperty.call(changes, 'inbox.work_schedule.timezone'))){
+    rpsWsTzConv();
+    rpsToast(rpsEsc(String(RPS_I18N.wsTzRequired).replace('{field}', 'inbox.work_schedule.timezone')), 'err');
+    try { wsTzEl.focus(); } catch (_e){}
+    return;
+  }
   // 守卫总开关关闭＝防轰炸防线整组失守——危险操作要确认（审计行随保存管线自动落）
   var GUARD_KEY = "inbox.peer_bot_guard.enabled";
   if (Object.prototype.hasOwnProperty.call(changes, GUARD_KEY)

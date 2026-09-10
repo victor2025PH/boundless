@@ -1665,8 +1665,9 @@ class TestWorkSchedule:
 
     def test_post_schedule_end_to_end(self, tmp_path):
         client, cm = _make_client(tmp_path)
+        # D-Q1（Q-4 #267）：开启班表必须带时区（红线③：时区类键不得默认服务器本机）
         d = client.post("/api/reply-settings", json={"changes": {
-            _WS_EN: True,
+            _WS_EN: True, _WS_TZ: "America/New_York",
             _WS_ST: "09:00", _WS_ED: "23:00",
             _WS_WD: [1, 2, 3, 4, 5, 6, 7],
             _WS_AC: {"telegram:night": {"start": "22:00", "end": "06:00"}},
@@ -1674,14 +1675,45 @@ class TestWorkSchedule:
         assert d["ok"] is True, d
         saved = cm.saved_patches[0]["inbox"]["work_schedule"]
         assert saved["enabled"] is True
+        assert saved["timezone"] == "America/New_York"
         assert saved["default"]["start"] == "09:00"
         assert saved["accounts"]["telegram:night"]["end"] == "06:00"
         # 账号表走整树替换（删掉的账号真被删掉）
         assert _WS_AC in cm.saved_replace_paths[0]
         # 全 hot=True：即时生效，无需重启
         assert d["needs_restart"] == []
-        assert set(d["applied_live"]) == {_WS_EN, _WS_ST, _WS_ED, _WS_WD, _WS_AC}
+        assert set(d["applied_live"]) == {_WS_EN, _WS_TZ, _WS_ST, _WS_ED, _WS_WD, _WS_AC}
         assert d["values"][_WS_EN] is True
+
+    def test_post_enable_without_timezone_rejected(self, tmp_path):
+        """D-Q1（Q-4 #267）：班表开启 + 时区空 → tz_required，且什么都不落盘。"""
+        client, cm = _make_client(tmp_path)
+        d = client.post("/api/reply-settings", json={"changes": {
+            _WS_EN: True, _WS_ST: "09:00", _WS_ED: "23:00"}}).json()
+        assert d["ok"] is False
+        assert d["errors"][0]["code"] == "tz_required"
+        assert d["errors"][0]["field"] == _WS_TZ
+        assert "{field}" not in d["errors"][0]["message"]
+        assert cm.saved_patches == []
+
+    def test_timezone_required_rule(self):
+        """cross_validate 合并视图：enabled 真 ∧ tz 空 → 拦；只在触碰 enabled/tz 时校验。"""
+        # 本次开启、现值无时区 → 拦
+        errs = rps.cross_validate({_WS_EN: True}, {})
+        assert errs == [{"field": _WS_TZ, "code": "tz_required"}]
+        # 现值已开、本次把时区清空 → 拦（不能把已配好的时区退回「服务器本地」）
+        cfg_on = {"inbox": {"work_schedule": {"enabled": True, "timezone": "Asia/Shanghai"}}}
+        errs = rps.cross_validate({_WS_TZ: ""}, cfg_on)
+        assert errs and errs[0]["code"] == "tz_required"
+        # 现值已有时区、本次只开开关 → 放行
+        cfg_tz = {"inbox": {"work_schedule": {"timezone": "Asia/Shanghai"}}}
+        assert rps.cross_validate({_WS_EN: True}, cfg_tz) == []
+        # 同批带时区 → 放行；关闭班表时时区可空
+        assert rps.cross_validate({_WS_EN: True, _WS_TZ: "Europe/London"}, {}) == []
+        assert rps.cross_validate({_WS_EN: False, _WS_TZ: ""}, {}) == []
+        # 存量「已开 + 空时区」的脏配置：不触碰班表键时不拦无关保存
+        cfg_dirty = {"inbox": {"work_schedule": {"enabled": True, "timezone": ""}}}
+        assert rps.cross_validate({"inbox.auto_draft.min_text_len": 3}, cfg_dirty) == []
 
     def test_post_incomplete_window_rejected(self, tmp_path):
         client, cm = _make_client(tmp_path)
