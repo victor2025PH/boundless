@@ -763,6 +763,15 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
         logger.debug("会话列表 tags 加载失败（已忽略）", exc_info=True)
 
     try:
+        # TK-3 E3：tiktok 会话来源徽标（官方 / 真机 / 网页，按账号 mode；评论线索恒真机）+ 个人号
+        # 「消息请求 · 对方未回」（从未有对方入站 = 桥闸门必拦，列表先亮）。非 tiktok 行零开销。
+        if any(str(c.get("platform") or "") == "tiktok" for c in chats):
+            from src.integrations.tiktok_source_badge import annotate_tiktok_sources
+            annotate_tiktok_sources(chats, store=_inbox_store(request))
+    except Exception:
+        logger.debug("会话列表 tiktok 来源徽标失败（已忽略）", exc_info=True)
+
+    try:
         # Q-4（#267 D-Q1）休息期扣留可视：账号在班表休息期 ∧ 会话有 pending 草稿
         # → 行上挂 off_hours_hold{until_hhmm,tz} + 读侧计算标签「作息外 · 到点重新拟稿」
         # （按请求语言取词，**不落库**——写标签接口用 strip_off_hours_hold_tags 剥掉）。

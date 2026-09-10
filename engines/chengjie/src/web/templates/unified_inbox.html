@@ -2408,6 +2408,21 @@ function _convViaTag(c){
     return `<span class="conv-via" title="${esc(window.Tf('inbox.conv.via_t',{name:nm}))}">${esc(disp)}</span>`;
   }catch(_){ return ''; }
 }
+// TK-3 E3：TikTok 会话来源徽标（官方 / 真机 / 网页，服务端按账号 mode 打 tiktok_source）
+// + 个人号「消息请求 · 对方未回」（peer_never_replied：从未有对方入站 → 桥闸门必拦，列表先亮）。非 tiktok 恒空串。
+function _convTikTokTags(c){
+  try{
+    if(!c || String(c.platform||'')!=='tiktok') return '';
+    var src=String(c.tiktok_source||'');
+    var out='';
+    if(src){
+      var k=src==='official'?'inbox.tt.src_official':(src==='web'?'inbox.tt.src_web':'inbox.tt.src_rpa');
+      out+=`<span class="conv-src-chip ${esc(src)}" title="${esc(window.T(k+'_t'))}">${esc(window.T(k))}</span>`;
+    }
+    if(c.peer_never_replied) out+=`<span class="conv-req-chip pending" title="${esc(window.T('inbox.tt.never_replied_t'))}">${esc(window.T('inbox.tt.never_replied'))}</span>`;
+    return out;
+  }catch(_){ return ''; }
+}
 // 账号短码（列表角标用）：有友好名优先；否则显示完整账号号（不截断成「#末四位」——
 // 末四位会让同一主号在每行都显示成一样的「#9900」、且不同号末四位可能碰撞，既像错误码又有歧义）。
 // 过长的非数字 ID 才做省略；数字号原样展示，配合悬浮提示引导起名。
@@ -6354,6 +6369,7 @@ function _convItemSig(c, isSel){
     c.last_direction||'',   // P2: 方向变化（我方/对方）触发预览前缀更新
     Number(c.risk_blocked||0),   // B-2: 风控拦截数变化触发重绘（chip 出现/消失）
     c.account_status||'', c.is_request?1:0,   // C 批：已退出灰化/消息请求 chip 此前不在签名里——账号掉线若无其他字段变化则永不重绘
+    c.tiktok_source||'', c.peer_never_replied?1:0,   // TK-3 E3：tiktok 来源徽标 / 「对方未回」出现或消失（对方一开口就该撤）触发重绘
     _handlerSig(c),   // 二期：谁在处理（AI/我/同事）变化触发徽章更新
     (_goalAgenda.byCid[c.conversation_id||'']?1:0),
     _peerAvatarPlan(c).key,   // 头像身份：avatar_url 变更/身份回填（_mergePeerIdentity）触发头像重建
@@ -6651,7 +6667,7 @@ function _buildConvItemDom(c, isSel){
       <div class="conv-avatar-badge">${platIcon(c.platform,16)}</div>
     </div>
     <div class="conv-body">
-      <div class="conv-name">${esc(_drConvName(c))} ${_drSelfTag(c)}${viaTag}${groupTag}${reqTag}${outTag}${archiveIcon}${_goalMarkHtml(c)}</div>
+      <div class="conv-name">${esc(_drConvName(c))} ${_drSelfTag(c)}${viaTag}${groupTag}${reqTag}${_convTikTokTags(c)}${outTag}${archiveIcon}${_goalMarkHtml(c)}</div>
       <div class="conv-preview-row"><div class="conv-preview">${draftTag}${_previewHtml(c)}</div>${line2Chips}</div>
     </div>
     <div class="conv-meta">
