@@ -1014,13 +1014,16 @@ class AIClient(LoggerMixin):
                     messages.append({"role": "assistant", "content": content})
                 else:
                     messages.append({"role": "user", "content": content})
-        # 真人感文本层 L2：轮变尾注只进本轮送出的消息，不进历史（默认关；中文消息才注入）
+        # 真人感文本层 L2：轮变尾注只进本轮送出的消息，不进历史（默认关；中文消息才注入）。
+        # 裸 system 的工具调用（抽取 / 分类 / 翻译纠错）不是对话回复，口语化尾注只会污染
+        # JSON / 译文（B1，2026-09-11）。
         _um_send = user_message
-        try:
-            from src.ai.spoken_style_bridge import turn_tail as _ss_turn_tail
-            _um_send = user_message + _ss_turn_tail(self.config, user_message)
-        except Exception:
-            _um_send = user_message
+        if not (context or {}).get("_bare_system"):
+            try:
+                from src.ai.spoken_style_bridge import turn_tail as _ss_turn_tail
+                _um_send = user_message + _ss_turn_tail(self.config, user_message)
+            except Exception:
+                _um_send = user_message
         messages.append({"role": "user", "content": _um_send})
         # Q-14 A：prompt 预算（历史 → few-shot → 注入长度），主链 / 备用池 / 本地同一份
         messages = self._apply_prompt_budget(messages, context)
@@ -1115,6 +1118,12 @@ class AIClient(LoggerMixin):
                     )
                     if _primary_extra:
                         _create_kw["extra_body"] = _primary_extra
+                    # B5（2026-09-11）：用途随请求头送到官网网关（X-ChatX-Purpose），网关
+                    # 流水按用途分桶——此前网关只看得到字符数，「钱花在哪」只能靠体量猜。
+                    # 云端厂商忽略未知请求头，LAN 端点同理，零副作用。
+                    _hdr_purpose = self._purpose_header(context)
+                    if _hdr_purpose:
+                        _create_kw["extra_headers"] = {"X-ChatX-Purpose": _hdr_purpose}
                     response = await _primary_client.chat.completions.create(**_create_kw)
                     elapsed_time = time.time() - start_time
                     reply = None
@@ -1356,6 +1365,9 @@ class AIClient(LoggerMixin):
                 )
                 if entry.get("extra_body"):
                     _pool_kw["extra_body"] = entry["extra_body"]
+                _hdr_purpose = self._purpose_header(context)
+                if _hdr_purpose:
+                    _pool_kw["extra_headers"] = {"X-ChatX-Purpose": _hdr_purpose}
                 resp = await entry["client"].chat.completions.create(**_pool_kw)
                 reply = ""
                 if resp and getattr(resp, "choices", None):
@@ -2287,6 +2299,8 @@ class AIClient(LoggerMixin):
             return
         if context.get("_ecommerce_facts"):
             return  # 上游已注入，尊重之
+        if context.get("_bare_system"):
+            return  # 工具/翻译类裸 system 调用：事实块不会被消费，省一次订单查询
         try:
             from src.ecommerce_tools import (
                 extract_order_no, extract_tracking_no,
@@ -2444,7 +2458,24 @@ class AIClient(LoggerMixin):
                     _free_path = bool(context.pop("_reply_free_path", False))
             except Exception:
                 _free_path = False
-            if reply and not _free_path:
+            # 2026-09-08：演练号段（duel_nightly 990001xxx）不记 ai_reply——它此前把
+            # 「每天 AI 回复 56 条」虚高成真实客户的 5 倍，老板日报/周报全被带偏。
+            _is_drill = False
+            _purpose = "customer_reply"
+            try:
+                from src.ai.llm_purpose import purpose_for_reply
+                _purpose = purpose_for_reply(context)
+                _is_drill = _purpose == "drill"
+            except Exception:
+                _is_drill = False
+            # B2（2026-09-11 用量分析）：只有**客户回复**才记 ai_reply。工具短判 / 记忆
+            # 抽取 / 翻译纠错 / 探针也从本出口出话（chat() → generate_reply），此前一律
+            # 按「AI 回复」扣 10 Token——198 坐席 09-04~10 对账：钱包实扣 2,400 条 vs
+            # 真实回复 1,777 条（多扣 35%）。产品口径「AI 智能回复 10 Token/条」指的是
+            # 发给客户的那一条，不是链路里的每次 LLM 调用。用途由 purpose_for_reply 定：
+            # 显式 _llm_purpose > purpose_scope > 演练号 > customer_reply。
+            if (reply and not _free_path and not _is_drill
+                    and _purpose == "customer_reply"):
                 try:
                     from src.licensing.token_ledger import record_action_for_status
 
@@ -2782,6 +2813,10 @@ class AIClient(LoggerMixin):
         """
         if not isinstance(context, dict) or not context:
             return False
+        # B1：裸 system 的工具调用现在也带 context（用途 / 裸 system 标记），
+        # 但它们不是聊天出口——抽取 JSON / 译文 / 分类结果一律零触碰。
+        if context.get("_tool_call") or context.get("_bare_system"):
+            return False
         try:
             _cfg = (self.config.config or {}) if self.config else {}
             if not isinstance(_cfg, dict):
@@ -2905,12 +2940,17 @@ class AIClient(LoggerMixin):
         except Exception:
             pass
         try:
+            # B1（2026-09-11）：纠错翻译走裸 system + tool 用途。此前用普通 context
+            # → 再拼一遍整套人设/硬约束（3.8k+ 字）去翻译一条 30 字回复，且按
+            # customer_reply 又记一次 ai_reply（一条回复扣两次）。
             _fix_ctx = {
                 "_skip_lang_guard": True,
-                "_intent_supplement": (
-                    f"Translate the following customer-service reply into {_lang_name}. "
-                    f"Keep channel names (EP/JC/EasyPaisa/JazzCash) and commands unchanged. "
-                    f"Output ONLY the translation, no explanation."
+                "_llm_purpose": "tool",
+                "_tool_call": True,
+                "_bare_system": (
+                    f"You are a translation tool. Translate the following customer-service "
+                    f"reply into {_lang_name}. Keep channel names (EP/JC/EasyPaisa/JazzCash) "
+                    f"and commands unchanged. Output ONLY the translation, no explanation."
                 ),
                 "_current_user_message_for_lang": "x" * 5,
             }
@@ -5351,6 +5391,75 @@ class AIClient(LoggerMixin):
             self.logger.debug("should_reply_by_context 异常: %s", e)
             return False, str(e)
 
+    @staticmethod
+    def _purpose_header(context: Optional[Dict[str, Any]]) -> str:
+        """本次调用的用途（``purpose_for_reply`` 同口径），作 ``X-ChatX-Purpose`` 请求头值。
+        只出现在 KNOWN_PURPOSES 白名单内的小写标识，绝不抛；异常返回空串＝不带头。"""
+        try:
+            from src.ai.llm_purpose import KNOWN_PURPOSES, purpose_for_reply
+            p = str(purpose_for_reply(context) or "")
+            return p if p in KNOWN_PURPOSES else ""
+        except (ImportError, AttributeError, TypeError, ValueError):
+            return ""
+
+    #: 工具/短判/抽取调用的裸 system（B1，2026-09-11 用量分析）。chat() 此前传
+    #: context=None，_build_system_instruction 照样拼上 顾嘉 system_prompt + 默认人设块 +
+    #: 身份硬锁 + 禁止内心独白 + 多语言规则 + 作息合理性 ≈ 3.8k 字（能解析出绑定人设时
+    #: 5–6k 字），只为换 15–23 字 JSON——网关流水实测这类调用占全队 token 16.9%
+    #: （钧机 46.6%），198 坐席一条入站消息 3 次 LLM 里 2 次是它。各工具 prompt 自带
+    #: 全部任务指令与角色框定（「你是对话记忆抽取器…」「你是温暖的线上陪伴…」），
+    #: 人设与硬约束对它们只是噪声；输出语言/格式由各调用方 prompt 自管。
+    TOOL_SYSTEM_PROMPT = (
+        "你是聊天产品内部的文本处理组件。严格按下方任务指令执行：只输出任务要求的内容，"
+        "不加解释、不加前后缀、不输出思考过程；任务要求 JSON 时只输出合法 JSON。"
+    )
+
+    def _tool_chat_bare_enabled(self) -> bool:
+        """``ai.tool_chat_bare``（默认 True）。False = 回到旧行为（工具调用带整套
+        人设与硬约束），只作线上回滚开关，不是长期档位。绝不抛。"""
+        try:
+            ai_cfg = (self.config.config or {}).get("ai", {}) if self.config else {}
+            return bool((ai_cfg or {}).get("tool_chat_bare", True))
+        except (AttributeError, TypeError):
+            return True   # 直构对象 / 测试替身无 config：按默认裸 system
+
+    def _tool_context(self, purpose: str = "tool", *,
+                      system: Optional[str] = None) -> Dict[str, Any]:
+        """工具调用的 context：裸 system（跳过人设/硬约束/语言规则/上下文注入）、
+        显式用途（计量与成本归因）、不跑语言守卫。"""
+        out = {
+            "_bare_system": str(system or self.TOOL_SYSTEM_PROMPT),
+            "_llm_purpose": str(purpose or "tool"),
+            "_skip_lang_guard": True,
+            "_tool_call": True,
+        }
+        # 已登记的任务档（含默认绑的 memory_extract → LAN）随用途走，不配则仍主链。
+        if purpose and purpose in getattr(self, "_task_routes", {}):
+            out["_route"] = str(purpose)
+        return out
+
+    async def tool_chat(
+        self,
+        prompt: str,
+        *,
+        purpose: str = "tool",
+        system: Optional[str] = None,
+        strategy_overrides: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """工具型调用（抽取 / 分类 / 改写 / 翻译纠错）：裸 system、按 ``purpose``
+        归因成本、**不计 ai_reply**、不跑语言守卫 / QualityTracker。
+
+        与 :meth:`chat` 的区别只在显式 ``purpose`` 与可选自定义 ``system``；
+        chat() 现在默认也走裸 system（见 TOOL_SYSTEM_PROMPT 注释）。
+        """
+        from src.ai.llm_purpose import purpose_scope
+        ctx = self._tool_context(purpose, system=system)
+        with purpose_scope(str(purpose or "tool")):
+            return await self.generate_reply(
+                prompt, context=ctx, conversation_history=None,
+                strategy_overrides=strategy_overrides, _skip_quality_check=True,
+            )
+
     async def chat(
         self,
         prompt: str,
@@ -5361,14 +5470,31 @@ class AIClient(LoggerMixin):
         ★ 这条入口设计就是给 yes/no 等短答 prompt 用的（见 runner.py 7267
         context_check 等），3 字符 'yes' 是合法回复——必须跳过 QualityTracker，
         否则会反复触发 too_short 误报，污染监控信号。
+
+        ★ B1（2026-09-11）：默认走**裸 system**（TOOL_SYSTEM_PROMPT），不再把整套
+        人设 / 硬约束 / 语言规则拼给工具调用；外层 ``purpose_scope`` 已声明用途
+        （翻译引擎 / 合并抽取 / 主动触达真发）则沿用该用途——计量只认
+        customer_reply，工具用途不记 ai_reply。``ai.tool_chat_bare: false`` 回旧行为。
         """
-        return await self.generate_reply(
-            prompt,
-            context=None,
-            conversation_history=None,
-            strategy_overrides=strategy_overrides,
-            _skip_quality_check=True,
+        from src.ai.llm_purpose import _PURPOSE_VAR, purpose_scope
+        scoped = str(_PURPOSE_VAR.get() or "")
+        ctx: Optional[Dict[str, Any]] = (
+            self._tool_context(scoped or "tool") if self._tool_chat_bare_enabled() else None
         )
+        # 成本归因：短判/分类是「工具」用途；外层已声明用途（翻译引擎等）则尊重外层。
+        if scoped:
+            return await self.generate_reply(
+                prompt, context=ctx, conversation_history=None,
+                strategy_overrides=strategy_overrides, _skip_quality_check=True,
+            )
+        with purpose_scope("tool"):
+            return await self.generate_reply(
+                prompt,
+                context=ctx,
+                conversation_history=None,
+                strategy_overrides=strategy_overrides,
+                _skip_quality_check=True,
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

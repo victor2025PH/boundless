@@ -829,7 +829,7 @@ async def extract_facts_and_slots(ai_client: Any, user_msg: str, reply: str, *,
     raw = None
     try:
         try:
-            from src.ai.llm_cost import purpose_scope
+            from src.ai.llm_purpose import purpose_scope
         except Exception:
             purpose_scope = None   # type: ignore[assignment]
         if purpose_scope is not None:

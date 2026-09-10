@@ -1061,8 +1061,8 @@ async def _generate_persona_reply_impl(
         try:
             # 兜底稿也是发给客户的回复：计量口径 customer_reply（chat() 默认 tool 不计费）
             try:
-                from src.ai.llm_cost import purpose_scope
-            except ImportError:   # 旧版 llm_cost 无用途作用域：行为同旧
+                from src.ai.llm_purpose import purpose_scope
+            except ImportError:   # 旧包无 llm_purpose：不归因，行为同旧
                 from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
             with purpose_scope("customer_reply"):
                 reply = await ai.chat(prompt)
@@ -1510,7 +1510,7 @@ async def generate_topic_opener(
         )
         try:
             try:
-                from src.ai.llm_cost import purpose_scope
+                from src.ai.llm_purpose import purpose_scope
             except ImportError:
                 from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
             with purpose_scope("customer_reply"):

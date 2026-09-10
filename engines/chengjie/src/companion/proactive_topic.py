@@ -2080,8 +2080,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 # 主动开场是发给客户的 AI 消息：计量口径与回复同（customer_reply）。
                 # chat() 现默认按 tool 用途、不记 ai_reply（B1/B2 2026-09-11），这里显式声明。
                 try:
-                    from src.ai.llm_cost import purpose_scope
-                except ImportError:   # 旧版 llm_cost 无用途作用域：行为同旧
+                    from src.ai.llm_purpose import purpose_scope
+                except ImportError:   # 旧包无 llm_purpose：行为同旧
                     from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
                 with purpose_scope("customer_reply"):
                     text = await assistant.ai_client.chat(prompt)
