@@ -109,7 +109,8 @@ def test_default_timeout_is_60_and_config_key_respected():
     """缺席键 → 60（≥ 网关 55s）；显式写 30 的存量照旧 30（基线只补缺席键）。"""
     c = AIClient(_Cfg())
     assert c.timeout == 60
-    assert c._prompt_budget_tokens == 6000
+    # 2026-09-11：6000 → 12000（生产一轮完整装配 10-12k，6000 = 每轮都在裁人设）
+    assert c._prompt_budget_tokens == 12000 == AIClient._DEFAULT_PROMPT_BUDGET
 
 
 async def test_initialize_reads_timeout_default_60(monkeypatch):
@@ -287,22 +288,27 @@ def test_prompt_budget_trims_history_first():
 def test_prompt_budget_then_fewshot_then_inject():
     msgs = _msgs_long()
     sys_tokens = AIClient._estimate_msg_tokens(msgs[0]["content"])
-    # 预算比 system 还小：历史全丢 → few-shot 段丢 → 还超 → 截注入尾部
+    # 预算比 system 还小：历史丢到保底 → few-shot 段丢 → 还超 → 按段弹注入尾段
+    # → 还超才动保底历史（2026-09-11 起：最近几轮真实对话优先于注入尾巴）
     budget = sys_tokens - 900
     out, st = AIClient._trim_prompt_to_budget(msgs, budget)
-    assert st["hist"] == 40
+    assert st["hist"] >= 40 - AIClient._HIST_FLOOR_MSGS
     assert st["fewshot"] == 1
     assert "【参考对话示例】" not in out[0]["content"]
     assert out[0]["content"].startswith("【人设】")            # 人设主体保住
-    assert st["inject_chars"] > 0
+    assert st["inject_chars"] > 0 and "【目标注入】" not in out[0]["content"]
     assert out[-1]["content"] == "最新的问题"
-    assert [m["role"] for m in out] == ["system", "user"]
+    assert out[0]["role"] == "system" and all(m["role"] != "system" for m in out[1:])
+    assert sum(AIClient._estimate_msg_tokens(m["content"]) for m in out) <= budget
+    assert st["over"] == 0
 
 
 async def test_prompt_budget_applied_before_send_and_logged(caplog):
     primary = _FakeChatClient(reply="ok")
     c = _client(primary)
-    c._prompt_budget_tokens = 900
+    # 2026-09-11 起人设/硬规则段永不砍：预算要给受保护段留位（默认人设块 ~1k），
+    # 这里 2500 足以钉住「历史被裁进预算」而不触发软放行
+    c._prompt_budget_tokens = 2500
     hist = []
     for i in range(30):
         hist.append({"role": "user", "content": f"历史{i}" + "字" * 60})
@@ -312,10 +318,24 @@ async def test_prompt_budget_applied_before_send_and_logged(caplog):
             "最新消息", context={"reply_lang": "zh"}, conversation_history=hist)
     assert out == "ok"
     sent = primary.last_kw["messages"]
-    assert sum(AIClient._estimate_msg_tokens(m["content"]) for m in sent) <= 900
+    assert sum(AIClient._estimate_msg_tokens(m["content"]) for m in sent) <= 2500
     assert sent[-1]["content"] == "最新消息"
     line = next(r.getMessage() for r in caplog.records if "[ai] prompt_tokens=" in r.getMessage())
-    assert "trimmed=hist:" in line and "budget=900" in line
+    assert "trimmed=hist:" in line and "budget=2500" in line and "over=0" in line
+
+
+async def test_prompt_budget_soft_overflow_logged_not_cut(caplog):
+    """预算比受保护段还小 → 软放行 + WARNING over>0，人设块一个字不少。"""
+    primary = _FakeChatClient(reply="ok")
+    c = _client(primary)
+    c._prompt_budget_tokens = 300
+    with caplog.at_level(logging.INFO):
+        out = await c._generate_reply_openai_compat("最新消息", context={"reply_lang": "zh"})
+    assert out == "ok"
+    sent = primary.last_kw["messages"]
+    assert sent[-1]["content"] == "最新消息"
+    line = next(r.getMessage() for r in caplog.records if "[ai] prompt_tokens=" in r.getMessage())
+    assert "budget=300" in line and "over=0" not in line and " over=" in line
 
 
 def test_fewshot_part_detection():

@@ -11,7 +11,7 @@ ai:
   provider: openai_compatible
   api_key: "YOUR_API_KEY"            # ← 必填
   base_url: "https://api.deepseek.com"
-  model: "deepseek-v4-flash"
+  model: "deepseek-flash"
   temperature: 0.6
   max_tokens: 1024
   timeout: 30

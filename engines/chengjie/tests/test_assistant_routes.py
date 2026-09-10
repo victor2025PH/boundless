@@ -289,9 +289,19 @@ def test_query_validation(monkeypatch, tmp_path):
 
 
 def test_assistant_llm_extra_body_disables_v4_thinking():
-    """与 AIClient 同口径：仅 deepseek-v4 + deepseek 端点默认关思维链。"""
+    """与 AIClient 同口径：DeepSeek 官方端点一律默认关思维链（按主机，不按模型名）。
+
+    2026-09-11 起官方唯一对话模型 deepseek-flash（V4.1）默认开思考，退役别名过渡期
+    照样路由到它——按 deepseek-v4 前缀判会漏 deepseek-chat / deepseek-flash。
+    """
     assert assistant_llm_extra_body(
         "https://api.deepseek.com/v1", "deepseek-v4-flash"
+    ) == {"thinking": {"type": "disabled"}}
+    assert assistant_llm_extra_body(
+        "https://api.deepseek.com/v1", "deepseek-flash"
+    ) == {"thinking": {"type": "disabled"}}
+    assert assistant_llm_extra_body(
+        "https://api.deepseek.com/v1", "deepseek-chat"
     ) == {"thinking": {"type": "disabled"}}
     assert assistant_llm_extra_body(
         "https://api.deepseek.com/v1", "deepseek-v4-flash", reasoning=True
@@ -299,8 +309,12 @@ def test_assistant_llm_extra_body_disables_v4_thinking():
     assert assistant_llm_extra_body(
         "https://api.openai.com/v1", "deepseek-v4-flash"
     ) == {}
+    # 硅基混合档：enable_thinking:false（不带它 </think> 混进 content）；非混合档不下发
     assert assistant_llm_extra_body(
-        "https://api.deepseek.com/v1", "deepseek-chat"
+        "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash"
+    ) == {"enable_thinking": False}
+    assert assistant_llm_extra_body(
+        "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"
     ) == {}
 
 

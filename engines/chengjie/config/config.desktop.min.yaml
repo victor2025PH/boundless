@@ -57,11 +57,11 @@ ai:
   provider: "openai_compatible"     # gemini | openai_compatible（DeepSeek/Ollama/vLLM 走这条）
   api_key: ""                       # ← 首启向导写 config.local.yaml overlay，勿手改本文件
   base_url: "https://api.deepseek.com"
-  model: "deepseek-v4-flash"
+  model: "deepseek-flash"           # DeepSeek V4.1-Flash（2026-09-10 起官方唯一对话模型；deepseek-chat / deepseek-v4-flash 已退役，装载时自动归一）
   temperature: 0.7
   max_tokens: 1024
   timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
-  prompt_budget_tokens: 6000        # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史 → few-shot → 注入长度 裁；0 = 不裁
+  prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
 
 # 技能集（回复产线用；与 example 同款默认，不含 test 技能）
 skills:

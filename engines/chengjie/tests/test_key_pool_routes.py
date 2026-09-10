@@ -44,7 +44,7 @@ class TestChatPingTargets:
         out = cc.chat_ping_targets(_pool_cfg([{"name": "b1", "api_key": "sk-b"}]))
         assert len(out) == 1
         assert out[0]["base_url"] == "https://api.deepseek.com/v1"
-        assert out[0]["model"] == "deepseek-chat"
+        assert out[0]["model"] == "deepseek-flash"    # 退役别名 deepseek-chat 归一（与 AIClient 同款）
 
     def test_skips_placeholder_and_dupes(self):
         out = cc.chat_ping_targets(_pool_cfg([

@@ -35,6 +35,43 @@ _AI_SELF_ID_PATTERNS = [
     re.compile(r"\blanguage model\b", re.I),
 ]
 
+# ── 能力自曝（2026-09-11 客户机 DC8F 实录「我只能发文字」）────────────────────
+# 与「自称 AI」同族、同开关（deny_ai 人设）：不说自己是 AI，却把**通道能力**当
+# 自身属性说出口——「我只能发文字/只能打字」「I can only send text」「text-only」
+# ——对客户等于「你是个程序」。词形保守：必须是第一人称 + 「只能」+ 文字/打字；
+# 「这边不方便开视频，先这样聊嘛」（人设块要求的正确婉拒）不含「只能…文字」不命中。
+_CAPABILITY_LEAK_PATTERNS = [
+    re.compile(r"(我|我这边|我这|这边|我目前|目前)\s*(现在|暂时|只|就)?\s*只能\s*"
+               r"(发|打|用|发送|回|以)?\s*(文字|文本|字|纯文字|文字消息|文字聊|打字)"),
+    re.compile(r"(我|我这边|这边)\s*(没法|无法|不能|没办法)\s*(发|传|发送)\s*"
+               r"(语音|照片|图片|图|视频)[^。！？!?\n]{0,6}(只能|就)\s*(发|打|用)?\s*(文字|字|打字)"),
+    re.compile(r"\bi(?:'m| am)?\s+(?:can|could)?\s*only\s+(?:able\s+to\s+)?"
+               r"(?:send|type|use|do|write|reply\s+(?:with|in|via))\s+"
+               r"(?:you\s+)?(?:plain\s+)?text(?:\s+messages?)?\b", re.I),
+    re.compile(r"\bi\s+can\s+only\s+communicate\s+(?:via|through|by|in|with)\s+text\b", re.I),
+    re.compile(r"\b(?:i(?:'m| am)\s+)?text[- ]only\b", re.I),
+    re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+have\s+(?:the\s+)?(?:ability|capability|"
+               r"function|feature)\s+to\s+(?:send|share)\s+(?:photos?|pictures?|images?|"
+               r"voice|audio|videos?)\b", re.I),
+]
+
+
+def matches_capability_leak(text: str) -> List[str]:
+    """文本中「能力自曝」命中片段（deny_ai 人设启用）；纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        if not s:
+            return []
+        for pat in _CAPABILITY_LEAK_PATTERNS:
+            m = pat.search(s)
+            if m:
+                out.append(m.group(0))
+    except Exception:
+        return []
+    return out
+
+
 # 感知语境豁免（2026-07-20 阿龙实测误报）：「我怕你觉得我是AI客服机器人」是
 # 「怕被当成机器人」的拟人打趣（强化真人感），不是身份自曝——与既有「否定句不算
 # 露馅」同一类。命中片段若紧跟在感知动词后（觉得/以为/当成…，允许 ≤4 个非标点
@@ -604,6 +641,7 @@ def find_violations(
     hits = _matches_phrase(_norm(text), fb["phrases"])
     if fb["deny_ai"]:
         hits.extend(_matches_ai_self_id(text))
+        hits.extend(matches_capability_leak(text))
     if fb.get("retired_terms"):
         hits.extend(_matches_retired_claims(text, fb["retired_terms"]))
     if fb.get("peer_leak"):
@@ -629,7 +667,8 @@ def _split_sentences(text: str) -> List[str]:
 def _sentence_violates(sentence: str, fb: Dict[str, Any]) -> bool:
     if _matches_phrase(_norm(sentence), fb["phrases"]):
         return True
-    if fb["deny_ai"] and _matches_ai_self_id(sentence):
+    if fb["deny_ai"] and (_matches_ai_self_id(sentence)
+                          or matches_capability_leak(sentence)):
         return True
     if fb.get("retired_terms") and _matches_retired_claims(
             sentence, fb["retired_terms"]):

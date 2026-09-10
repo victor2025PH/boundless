@@ -51,6 +51,42 @@ def test_ai_self_id_ignored_when_deny_ai_false():
     assert find_violations("我是一个人工智能", p) == []
 
 
+# ── 能力自曝（2026-09-11 DC8F「我只能发文字」）────────────────────────────────
+
+def test_capability_leak_flagged_when_deny_ai():
+    p = _persona(deny_ai=True)
+    for txt in (
+        "哈哈我这边只能发文字啦，你发照片我看不到",
+        "我目前只能打字，不能发语音哦",
+        "我没法发语音，只能用文字跟你聊",
+        "Sorry, I can only send text messages here.",
+        "I can only communicate through text right now.",
+        "I'm text-only, so no voice notes from me!",
+        "I don't have the ability to send photos, sorry.",
+    ):
+        assert find_violations(txt, p), txt
+
+
+def test_capability_leak_no_false_positive_and_gated():
+    p = _persona(deny_ai=True)
+    for txt in (
+        "这边不方便开视频，先这样聊嘛",          # 人设块要求的正确婉拒
+        "文字表达不了我现在的开心",
+        "你只能发文字吗？语音也行呀",              # 说的是对方
+        "I only read the text you sent, not the file.",
+        "text me when you get home",
+    ):
+        assert find_violations(txt, p) == [], txt
+    assert find_violations("我只能发文字", _persona(deny_ai=False)) == []
+
+
+def test_capability_leak_sentence_stripped():
+    p = _persona(deny_ai=True)
+    cleaned, hits = sanitize("刚忙完～我这边只能发文字哦。你今天过得怎么样？", p)
+    assert hits and "只能发文字" not in cleaned
+    assert "你今天过得怎么样" in cleaned
+
+
 def test_negation_not_flagged():
     p = _persona(deny_ai=True)
     # "我不是 AI" 是否定句，不算露馅

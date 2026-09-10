@@ -119,6 +119,9 @@ def order_pool_entries(entries: List[Dict[str, Any]],
 class AIClient(LoggerMixin):
     """AI 大模型 API 客户端（Gemini 或 OpenAI 兼容 / Ollama）"""
 
+    # prompt 预算缺省（ai.prompt_budget_tokens 缺席时）；理由见 __init__ 注释
+    _DEFAULT_PROMPT_BUDGET = 12000
+
     def __init__(self, config):
         """
         初始化 AI 客户端
@@ -200,8 +203,11 @@ class AIClient(LoggerMixin):
         # → 网关还在等上游 → nginx 记 499、客户端这一轮沉默（09-08 实测 2.4%）。
         # 不变量：客户端读超时 ≥ 网关路由预算 + 余量。显式配置了 ai.timeout 的存量不动。
         self.timeout = 60
-        # prompt token 预算（系统提示 + 注入 + few-shot + 历史合计；0 = 不裁）
-        self._prompt_budget_tokens = 6000
+        # prompt token 预算（系统提示 + 注入 + few-shot + 历史合计；0 = 不裁）。
+        # 2026-09-11：6000 → 12000。生产实测一轮完整装配（人设 full + 记忆 + 目标 +
+        # 场景 + KB + 12 条历史）约 10-12k token，6000 意味着**每一轮**都在裁；
+        # 主链 deepseek-flash 1M 窗、备用硅基 V4-Flash 1M、LAN chatx 64k，12k 只占零头。
+        self._prompt_budget_tokens = self._DEFAULT_PROMPT_BUDGET
         # 最近一次主链失败（供起草侧「AI 本轮未生成」灰标消费；pop 即清）
         self._last_fail: Optional[Dict[str, Any]] = None
 
@@ -251,9 +257,9 @@ class AIClient(LoggerMixin):
             self.timeout = int(ai_config.get('timeout', 60))
             try:
                 self._prompt_budget_tokens = max(
-                    0, int(ai_config.get('prompt_budget_tokens', 6000) or 0))
+                    0, int(ai_config.get('prompt_budget_tokens', self._DEFAULT_PROMPT_BUDGET) or 0))
             except Exception:
-                self._prompt_budget_tokens = 6000
+                self._prompt_budget_tokens = self._DEFAULT_PROMPT_BUDGET
             # 启动连接探针的独立上限（秒）：主链读超时 self.timeout 常为 60s，但**冷启动**
             # 时若云端(DeepSeek)被限流/抖动，这一次探针会占满整读超时，把「进程起来→/login
             # 可服务」的窗口拖到分钟级（seat 端撞加载超时）。探针结果 main 并不消费（仅日志 +
@@ -376,20 +382,36 @@ class AIClient(LoggerMixin):
             if ai_config.get("ollama_native", True) and (":11434" in _root or "/ollama" in _root.lower()):
                 self._ollama_native_base = _root.rstrip("/")
                 self.logger.info("Ollama native /api/chat mode enabled: %s", self._ollama_native_base)
-        # DeepSeek v4 系（flash/pro）是混合推理模型：思维链**默认开启**且与正文共享
-        # max_tokens 预算——复杂 prompt 的长思考会把正文挤成空（finish=length、
-        # content 0 字、预算全在 reasoning_tokens），客户端只认 content → 「AI 返回
-        # 空响应」×2 → 拦发弹窗。这就是 2026-08-17 全天「空响应」事故的根因
-        # （8/4 起累计 139 次，此前一直被本地兜底静默遮蔽）。陪聊/客服场景直答
-        # 质量足够：官方参数 thinking.disabled 实测 0 推理 token、更快更省。
-        # 要重新开思维链：ai.reasoning: true（届时必须同步调大 ai.max_tokens，
-        # 给思考留预算）。仅对 deepseek-v4* 下发——该字段 DeepSeek 强校验
-        # （布尔值会 422），其他 OpenAI 兼容端点不见得认识，宁窄勿宽。
-        if ("deepseek" in raw_base.lower()
-                and str(self.model or "").lower().startswith("deepseek-v4")
-                and not ai_config.get("reasoning")):
-            self._oa_extra_body["thinking"] = {"type": "disabled"}
-            self.logger.info("DeepSeek v4 思维链已关闭（ai.reasoning: true 可开启）")
+        # DeepSeek 官方退役别名归一（deepseek-chat / deepseek-v4-flash → deepseek-flash）：
+        # 存量 overlay 不必手改，装载时归一并留日志（2026-09-11 V4.1-Flash 切链）。
+        try:
+            from src.ai.vendor_params import normalize_model, thinking_off_extra_body
+            _norm_model, _norm_note = normalize_model(raw_base, self.model)
+            if _norm_note:
+                self.model = _norm_model
+                self.logger.info(_norm_note)
+        except Exception:
+            thinking_off_extra_body = None  # type: ignore[assignment]
+        # DeepSeek 系（V4 起，含 V4.1-Flash 的唯一模型名 deepseek-flash）是混合推理模型：
+        # 思维链**默认开启**且与正文共享 max_tokens 预算——复杂 prompt 的长思考会把
+        # 正文挤成空（finish=length、content 0 字、预算全在 reasoning_tokens），客户端
+        # 只认 content → 「AI 返回空响应」×2 → 拦发弹窗。这就是 2026-08-17 全天
+        # 「空响应」事故的根因（8/4 起累计 139 次，此前一直被本地兜底静默遮蔽）。
+        # 陪聊/客服场景直答质量足够：官方参数 thinking.disabled 实测 0 推理 token、
+        # 更快更省。要重新开思维链：ai.reasoning: true（届时必须同步调大
+        # ai.max_tokens，给思考留预算）。
+        # 2026-09-11 起**按端点主机**下发而非按模型名：官方对话模型只剩 deepseek-flash，
+        # 退役别名过渡期照样路由到 V4.1，按名字判会漏；硅基混合档改发 enable_thinking:false
+        # （否则 </think> 混进 content）。字段口径见 src/ai/vendor_params.py。
+        if thinking_off_extra_body is not None:
+            _toff = thinking_off_extra_body(raw_base, self.model,
+                                            reasoning=bool(ai_config.get("reasoning")))
+            if _toff:
+                for _k, _v in _toff.items():
+                    self._oa_extra_body.setdefault(_k, _v)
+                self.logger.info("思维链已关闭 model=%s host=%s via=%s（ai.reasoning: true 可开启）",
+                                 self.model, raw_base.split("://", 1)[-1].split("/", 1)[0],
+                                 ",".join(_toff.keys()))
         # 主链为 Ollama 时可显式配 ai.num_ctx 扩上下文窗（默认 0=不下发，行为不变）
         try:
             self._oa_num_ctx = max(0, int(ai_config.get("num_ctx") or 0))
@@ -596,6 +618,18 @@ class AIClient(LoggerMixin):
                 seen_pool.add(dedup)
                 p_model = str(item.get("model") or self.model or "").strip()
                 p_name = str(item.get("name") or f"key{i + 1}").strip()
+                # 池条目分厂商：退役名归一 + 各自的「关思维链」字段（主链的 extra_body 是
+                # 主链端点的口径，硅基备用池套用它会让 </think> 混进正文）。
+                p_extra: Dict[str, Any] = {}
+                try:
+                    from src.ai.vendor_params import normalize_model, thinking_off_extra_body
+                    p_model, _p_note = normalize_model(p_base, p_model)
+                    if _p_note:
+                        self.logger.info("备用池 %s：%s", p_name, _p_note)
+                    p_extra = thinking_off_extra_body(
+                        p_base, p_model, reasoning=bool(item.get("reasoning", ai_config.get("reasoning"))))
+                except Exception:
+                    p_extra = {}
                 try:
                     import httpx as _hx
                     _p_to: Any = _hx.Timeout(float(self.timeout), connect=5.0)
@@ -608,6 +642,7 @@ class AIClient(LoggerMixin):
                                           timeout=_p_to, max_retries=0),
                     "model": p_model,
                     "label": f"{p_model} @ {p_host} ({p_name})",
+                    "extra_body": p_extra,
                     "bad_until": 0.0,
                     "last_ok_ts": 0.0,
                 })
@@ -870,7 +905,7 @@ class AIClient(LoggerMixin):
         _route = route or (context or {}).get("_route")
         _profile = self.resolve_route(_route)
         _primary_client = _profile["client"] if _profile else self._oa_client
-        _primary_extra = None if _profile else self._oa_extra_body
+        _primary_extra = (_profile.get("extra_body") or None) if _profile else self._oa_extra_body
         _primary_native = None if _profile else self._ollama_native_base
         # 本地优先模式（P1）：本地端点齐备即可出话——全本地部署常**根本没配云端 key**，
         # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先放弃回复。
@@ -1302,12 +1337,15 @@ class AIClient(LoggerMixin):
             self._pool_calls += 1
             t0 = time.time()
             try:
-                resp = await entry["client"].chat.completions.create(
+                _pool_kw: Dict[str, Any] = dict(
                     model=entry["model"],
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                if entry.get("extra_body"):
+                    _pool_kw["extra_body"] = entry["extra_body"]
+                resp = await entry["client"].chat.completions.create(**_pool_kw)
                 reply = ""
                 if resp and getattr(resp, "choices", None):
                     _msg = resp.choices[0].message
@@ -1708,16 +1746,106 @@ class AIClient(LoggerMixin):
         head = (part or "").strip().split("\n", 1)[0][:80]
         return bool(head) and bool(cls._FEWSHOT_HEAD_RE.search(head))
 
+    # 裁剪器永不动的 system 段落（段首匹配）：人设主体与几条「一丢就穿帮」的硬规则。
+    # 2026-09-11 事故沉淀：旧 ③ 步按「1 token = 3 字符」截 system 尾部，而估算器按
+    # CJK 1 字 = 1 token 计——中文超额被放大 3 倍，11k 的系统提示被砍到 ~700 token，
+    # 人设/记忆/自称规则/媒体边界整段消失（zhiliao 演练 49/49、客户机 81/81 命中）
+    # ＝「现在聊天没有人设、没有记忆」的根因。现改为**按段落、用同一估算器**弹尾，
+    # 且以下段落受保护；仍超预算宁可软放行（云端上下文远大于预算），不再砍人设。
+    _PROTECTED_SYS_HEADS = (
+        "【后台人设定位", "【人称与角色", "【自称规则", "【媒体能力边界",
+        "【输出语言", "【硬性要求", "【身份硬锁", "【年龄事实",
+    )
+    # 历史保底：预算再紧也先留最近这几条真实对话（丢完注入尾巴之后才动它们）
+    _HIST_FLOOR_MSGS = 6
+
+    @classmethod
+    def _protected_sys_parts(cls, parts: List[str]) -> set:
+        """返回受保护段落下标：首段 + 保护段首 + 人设区（【后台人设定位】起到
+        紧随其后的【人称与角色】为止——人设块内部可能含空行，按区保护）。"""
+        prot = {0} if parts else set()
+        persona_start = -1
+        for j, p in enumerate(parts):
+            head = (p or "").lstrip()
+            if head.startswith(cls._PROTECTED_SYS_HEADS):
+                prot.add(j)
+            if head.startswith("【后台人设定位"):
+                persona_start = j
+            elif persona_start >= 0 and head.startswith("【人称与角色"):
+                prot.update(range(persona_start, j + 1))
+                persona_start = -1
+        if persona_start >= 0:
+            # 人设区没有【人称与角色】收尾（老版/自定义）：保护到下一个「【」段首为止
+            for j in range(persona_start + 1, len(parts)):
+                if (parts[j] or "").lstrip().startswith("【"):
+                    break
+                prot.add(j)
+        return prot
+
+    @classmethod
+    def _pop_sys_parts_to_budget(
+        cls, sys_txt: str, other_tokens: int, budget_tokens: int,
+        *, fewshot_only: bool = False,
+    ) -> Tuple[str, int, int, int]:
+        """从 system 尾部按段（空行分隔）弹出未保护段落直到合计 ≤ 预算。
+
+        用 ``_estimate_msg_tokens`` 对整段 system 重估（与预算口径**同一把尺**），
+        返回 (新 system, 合计 tokens, 弹掉的段数, 弹掉的字符数)。
+        ``fewshot_only=True`` 只弹 few-shot 段（② 步）。"""
+        parts = sys_txt.split("\n\n")
+        prot = cls._protected_sys_parts(parts)
+
+        def _total() -> int:
+            return other_tokens + cls._estimate_msg_tokens("\n\n".join(parts))
+
+        total = _total()
+        popped = chars = 0
+        j = len(parts) - 1
+        while j > 0 and total > budget_tokens:
+            if j not in prot and (not fewshot_only or cls._is_fewshot_part(parts[j])):
+                whole = parts[j]
+                parts.pop(j)
+                after_pop = _total()
+                # 整段丢会把预算大幅砸穿（KB/记忆列表常是最大段）→ 改为截该段尾部
+                # 恰好塞进预算：列表型注入前面的条目相关度更高，留头比全丢强。
+                room = budget_tokens - after_pop
+                if (not fewshot_only and room >= 96
+                        and after_pop < int(budget_tokens * 0.85)):
+                    lo, hi = 0, len(whole)
+                    while lo < hi:
+                        mid = (lo + hi + 1) // 2
+                        parts.insert(j, whole[:mid])
+                        fits = _total() <= budget_tokens
+                        parts.pop(j)
+                        if fits:
+                            lo = mid
+                        else:
+                            hi = mid - 1
+                    head = whole[:lo].rstrip()
+                    if lo >= max(32, len(whole) // 4) and head:
+                        parts.insert(j, head)
+                        chars += len(whole) - len(head)
+                        total = _total()
+                        popped += 1
+                        break
+                chars += len(whole) + 2
+                total = after_pop
+                popped += 1
+            j -= 1
+        return "\n\n".join(parts).rstrip(), total, popped, chars
+
     @classmethod
     def _trim_prompt_to_budget(
         cls, messages: List[Dict[str, Any]], budget_tokens: int,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """prompt 预算（Q-14 A）：合计估算 token 超 ``budget_tokens`` 时按顺序裁
-        ① 历史（最旧先丢）→ ② system 里的 few-shot 段 → ③ 注入长度（截 system 尾部）。
-        首部 system 主体（人设 / 底稿首段）与最后一条用户消息永不丢。
-        返回 (messages, stats)；stats = {before, after, hist, fewshot, inject_chars}。
+        ① 历史（最旧先丢，保底最近 ``_HIST_FLOOR_MSGS`` 条）→ ② system 里的 few-shot 段
+        → ③ system 尾部未保护的注入段（按段、同一估算器）→ ④ 保底历史
+        → ⑤ 仍超＝软放行（云端窗口远大于预算；宁超预算不砍人设）。
+        首部 system 的人设主体 / 硬规则段与最后一条用户消息永不丢。
+        返回 (messages, stats)；stats = {before, after, hist, fewshot, inject_chars, over}。
         ``budget_tokens<=0`` = 关闭（原样返回）。"""
-        stats = {"before": 0, "after": 0, "hist": 0, "fewshot": 0, "inject_chars": 0}
+        stats = {"before": 0, "after": 0, "hist": 0, "fewshot": 0, "inject_chars": 0, "over": 0}
         if not messages:
             return messages, stats
         est = [cls._estimate_msg_tokens(m.get("content")) for m in messages]
@@ -1727,38 +1855,43 @@ class AIClient(LoggerMixin):
         if budget_tokens <= 0 or total <= budget_tokens:
             return messages, stats
         out = [dict(m) for m in messages]
-        # ① 历史：非 system、非最后一条，从最旧开始丢
         last_idx = len(out) - 1
+        hist_idx = [i for i in range(len(out))
+                    if i != last_idx and out[i].get("role") != "system"]
+        floor = hist_idx[-cls._HIST_FLOOR_MSGS:] if cls._HIST_FLOOR_MSGS > 0 else []
         keep = [True] * len(out)
-        for i in range(len(out)):
+        # ① 历史：从最旧开始丢，先不碰保底的最近几条
+        for i in hist_idx:
             if total <= budget_tokens:
                 break
-            if i == last_idx or out[i].get("role") == "system":
+            if i in floor:
                 continue
             keep[i] = False
             total -= est[i]
             stats["hist"] += 1
-        out = [m for i, m in enumerate(out) if keep[i]]
-        # ② few-shot：system 段按空行切，丢首段以外的 few-shot 段（从后往前）
-        if total > budget_tokens and out and out[0].get("role") == "system":
-            parts = str(out[0].get("content") or "").split("\n\n")
-            for j in range(len(parts) - 1, 0, -1):
-                if total <= budget_tokens:
-                    break
-                if cls._is_fewshot_part(parts[j]):
-                    total -= cls._estimate_msg_tokens(parts[j])
-                    parts.pop(j)
-                    stats["fewshot"] += 1
-            out[0]["content"] = "\n\n".join(parts)
-        # ③ 注入长度：仍超 → 截 system 尾部（人设主体在头部，注入块在尾部）
+        # ②③ system 段落：先 few-shot，再未保护的注入尾段（人设区/硬规则段不动）
         if total > budget_tokens and out and out[0].get("role") == "system":
             sys_txt = str(out[0].get("content") or "")
-            overflow = total - budget_tokens
-            cut = min(len(sys_txt), int(overflow * 1.1) * 3 + 32)
-            new_len = max(0, len(sys_txt) - cut)
-            out[0]["content"] = sys_txt[:new_len].rstrip()
-            stats["inject_chars"] = len(sys_txt) - new_len
-            total -= cls._estimate_msg_tokens(sys_txt) - cls._estimate_msg_tokens(out[0]["content"])
+            other = total - cls._estimate_msg_tokens(sys_txt)
+            sys_txt, total, n_fs, _ = cls._pop_sys_parts_to_budget(
+                sys_txt, other, budget_tokens, fewshot_only=True)
+            stats["fewshot"] += n_fs
+            if total > budget_tokens:
+                sys_txt, total, _, chars = cls._pop_sys_parts_to_budget(
+                    sys_txt, other, budget_tokens)
+                stats["inject_chars"] += chars
+            out[0]["content"] = sys_txt
+        # ④ 保底历史：注入尾巴都丢光还超 → 才动最近几条（仍是最旧先丢）
+        for i in floor:
+            if total <= budget_tokens:
+                break
+            keep[i] = False
+            total -= est[i]
+            stats["hist"] += 1
+        out = [m for i, m in enumerate(out) if keep[i]]
+        # ⑤ 软放行：剩下的全是人设/硬规则/最后一条消息——超就超，绝不砍人设
+        total = sum(cls._estimate_msg_tokens(m.get("content")) for m in out)
+        stats["over"] = max(0, total - budget_tokens)
         stats["after"] = max(0, total)
         return out, stats
 
@@ -1766,16 +1899,17 @@ class AIClient(LoggerMixin):
                              context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """主链发送前套 prompt 预算并落 ``[ai] prompt_tokens=… trimmed=…`` 日志。绝不抛。"""
         try:
-            budget = int(getattr(self, "_prompt_budget_tokens", 6000) or 0)
+            budget = int(getattr(self, "_prompt_budget_tokens", self._DEFAULT_PROMPT_BUDGET) or 0)
             out, st = self._trim_prompt_to_budget(messages, budget)
             trimmed = st["hist"] or st["fewshot"] or st["inject_chars"]
             rid = str((context or {}).get("request_id") or "") or "n/a"
-            if trimmed:
-                self.logger.info(
+            if trimmed or st.get("over"):
+                _log = self.logger.warning if st.get("over") else self.logger.info
+                _log(
                     "[ai] prompt_tokens=%d budget=%d trimmed=hist:%d,fewshot:%d,inject_chars:%d"
-                    " after=%d conv=%s request_id=%s",
+                    " after=%d over=%d conv=%s request_id=%s",
                     st["before"], budget, st["hist"], st["fewshot"], st["inject_chars"],
-                    st["after"], self._conv_label(context), rid)
+                    st["after"], st.get("over", 0), self._conv_label(context), rid)
             else:
                 self.logger.debug("[ai] prompt_tokens=%d budget=%d trimmed=0 request_id=%s",
                                   st["before"], budget, rid)
@@ -1834,15 +1968,25 @@ class AIClient(LoggerMixin):
             total -= est[i]
         out = [m for i, m in enumerate(messages) if keep[i]]
         if total > budget_tokens and out and out[0].get("role") == "system":
-            # 最后手段：按超额比例截 system 尾部（头部人设核心指令优先保留）
             sys_txt = str(out[0].get("content") or "")
-            overflow = total - budget_tokens
-            # CJK 1 token/字 的保守换算：多砍 10% 余量
-            cut = min(len(sys_txt), int(overflow * 1.1) * 3 + 32)
-            new_len = max(0, len(sys_txt) - cut)
+            other = total - cls._estimate_msg_tokens(sys_txt)
+            # 先按段弹未保护的注入尾段（与云端裁剪器同一把尺、同一保护名单）
+            sys_txt, total, _, _ = cls._pop_sys_parts_to_budget(sys_txt, other, budget_tokens)
+            if total > budget_tokens:
+                # 本地 num_ctx 是硬上限（超了整包 400）：最后手段按**估算器**二分截尾，
+                # 不再用「1 token=3 字符」换算（CJK 会多砍 3 倍，人设整段消失）。
+                room = max(0, budget_tokens - other)
+                lo, hi = 0, len(sys_txt)
+                while lo < hi:
+                    mid = (lo + hi + 1) // 2
+                    if cls._estimate_msg_tokens(sys_txt[:mid]) <= room:
+                        lo = mid
+                    else:
+                        hi = mid - 1
+                sys_txt = sys_txt[:lo].rstrip()
             out = list(out)
             out[0] = dict(out[0])
-            out[0]["content"] = sys_txt[:new_len]
+            out[0]["content"] = sys_txt
         return out
 
     def _record_local_fallback_metric(self, ok: bool, latency_ms: float = 0.0) -> None:
@@ -2115,6 +2259,13 @@ class AIClient(LoggerMixin):
                     m_model = str(spec.get("model") or self.model or "").strip()
                     if not m_model:
                         continue
+                    try:
+                        from src.ai.vendor_params import normalize_model as _nm
+                        m_model, _m_note = _nm(m_base, m_model)
+                        if _m_note:
+                            self.logger.info("模型档 %s：%s", name, _m_note)
+                    except Exception:
+                        pass
                     m_key = str(spec.get("api_key") or api_key or "").strip()
                     if not m_key or m_key.upper().startswith("YOUR_"):
                         m_key = "ollama"  # 本地端点常无需鉴权
@@ -2124,11 +2275,18 @@ class AIClient(LoggerMixin):
                     except Exception:
                         m_to = float(self.timeout)
                     m_host = m_base.split("://", 1)[1].split("/", 1)[0]
+                    try:
+                        from src.ai.vendor_params import thinking_off_extra_body as _toff
+                        m_extra = _toff(m_base, m_model, reasoning=bool(
+                            spec.get("reasoning", ai_config.get("reasoning"))))
+                    except Exception:
+                        m_extra = {}
                     self._route_clients[str(name)] = {
                         "client": AsyncOpenAI(api_key=m_key, base_url=m_base,
                                               timeout=m_to, max_retries=0),
                         "model": m_model,
                         "label": f"{m_model} @ {m_host} ({name})",
+                        "extra_body": m_extra,
                     }
             routes = ai_config.get("task_routes") or {}
             if isinstance(routes, dict):

@@ -139,7 +139,9 @@ def test_pool_parse_inherits_base_and_model(monkeypatch):
     assert len(c._pool_entries) == 1
     e = c._pool_entries[0]
     assert e["name"] == "ds2"
-    assert e["model"] == "deepseek-chat"
+    # 继承主链模型名；官方主机上的退役别名 deepseek-chat 装载时归一到 deepseek-flash
+    assert e["model"] == "deepseek-flash"
+    assert e["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "api.deepseek.com" in e["label"] and "(ds2)" in e["label"]
 
 

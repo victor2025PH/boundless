@@ -40,7 +40,10 @@ def test_routes_parse_and_resolve():
     # base_url 归一化补 /v1
     assert str(prof["client"].base_url).rstrip("/").endswith("192.168.0.173:8001/v1")
 
-    assert c.resolve_route("assistant_qa")["model"] == "deepseek-v4-flash"
+    # 官方主机上的退役别名归一到现役 deepseek-flash，且按主机关思维链
+    assert c.resolve_route("assistant_qa")["model"] == "deepseek-flash"
+    assert c.resolve_route("assistant_qa")["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert prof["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def test_default_off_no_models():

@@ -12,7 +12,11 @@ process.env.AI_GATEWAY_SECRET = "unit-test-secret";
 process.env.AI_GATEWAY_DAILY_CHARS = "100";
 process.env.AI_GATEWAY_GLOBAL_DAILY_CHARS = "150";
 process.env.AI_GATEWAY_MAX_TOKENS = "2048";
-process.env.AI_GATEWAY_MODELS = "deepseek-chat,deepseek-v4-flash";
+// 刻意保留退役名：白名单条目须被归一到 deepseek-flash（env 残留旧名不放进白名单）
+process.env.AI_GATEWAY_MODELS = "deepseek-chat,deepseek-v4-flash,deepseek-v4-pro";
+process.env.DEEPSEEK_BACKUP_API_KEY = "sk-backup-unit";
+process.env.DEEPSEEK_BACKUP_BASE_URL = "https://api.siliconflow.cn/v1/chat/completions";
+process.env.DEEPSEEK_BACKUP_MODEL = "deepseek-ai/DeepSeek-V4-Flash";
 process.env.AI_GATEWAY_QUOTA_DB = path.join(
   fs.mkdtempSync(path.join(os.tmpdir(), "gwtest-")),
   "quota.db"
@@ -47,9 +51,53 @@ async function main() {
   assert.equal((await gw.quotaSnapshot(cb)).used, 1);
 
   // ── model / max_tokens 钳制 ──
-  assert.equal(gw.clampModel("deepseek-v4-flash"), "deepseek-v4-flash");
-  assert.equal(gw.clampModel("deepseek-reasoner"), "deepseek-chat"); // 白名单外回落默认
-  assert.equal(gw.clampModel(undefined), "deepseek-chat");
+  // 退役名归一：老客户端令牌里的 deepseek-chat / deepseek-v4-flash → 现役 deepseek-flash
+  assert.equal(gw.publicModel(), "deepseek-flash");
+  assert.equal(gw.clampModel("deepseek-v4-flash"), "deepseek-flash");
+  assert.equal(gw.clampModel("deepseek-chat"), "deepseek-flash");
+  assert.equal(gw.clampModel("deepseek-v4-pro"), "deepseek-v4-pro"); // 白名单内非退役名原样
+  assert.equal(gw.clampModel("deepseek-reasoner"), "deepseek-flash"); // 白名单外回落默认
+  assert.equal(gw.clampModel(undefined), "deepseek-flash");
+  assert.equal(gw.normalizeVendorModel("deepseek-chat", "https://api.siliconflow.cn/v1"), "deepseek-chat");
+
+  // ── 按上游主机关思维链（与引擎 vendor_params 同口径）──
+  assert.deepEqual(gw.thinkingOffFields("https://api.deepseek.com/chat/completions", "deepseek-flash"), {
+    thinking: { type: "disabled" },
+  });
+  assert.deepEqual(
+    gw.thinkingOffFields("https://api.siliconflow.cn/v1/chat/completions", "deepseek-ai/DeepSeek-V4-Flash"),
+    { enable_thinking: false }
+  );
+  assert.deepEqual(gw.thinkingOffFields("https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct"), {});
+  assert.deepEqual(gw.thinkingOffFields("https://api.openai.com/v1/chat/completions", "gpt-4o-mini"), {});
+  const primaryChoice = gw.chatUpstreamChoice({ model: "deepseek-chat", messages: [] });
+  assert.equal(primaryChoice.key, "primary");
+  assert.equal(primaryChoice.model, "deepseek-flash");
+  const p1 = gw.buildChatPayload(
+    { model: "deepseek-chat", messages: [{ role: "user", content: "hi" }], max_tokens: 99999, thinking: { type: "enabled" }, stream: true },
+    primaryChoice
+  );
+  assert.equal(p1.model, "deepseek-flash");
+  assert.equal(p1.max_tokens, 2048);
+  assert.equal(p1.stream, false);
+  assert.deepEqual(p1.thinking, { type: "disabled" }); // 客户端要开也被网关口径覆盖
+  assert.equal("enable_thinking" in p1, false);
+  const backupChoice: import("./ai-gateway").ChatUpstreamChoice = {
+    key: "backup",
+    model: "deepseek-ai/DeepSeek-V4-Flash",
+    endpoint: "https://api.siliconflow.cn/v1/chat/completions",
+    apiKey: "sk-backup-unit",
+  };
+  const p2 = gw.buildChatPayload({ model: "deepseek-chat", messages: [] }, backupChoice);
+  assert.equal(p2.model, "deepseek-ai/DeepSeek-V4-Flash");
+  assert.equal(p2.enable_thinking, false);
+  assert.equal("thinking" in p2, false);
+  // 慢模型冷却 → 备用（硅基 V4-Flash）
+  assert.equal(gw.noteChatLatency("deepseek-flash", 46_000), true);
+  const cooled = gw.chatUpstreamChoice({ model: "deepseek-flash", messages: [] });
+  assert.equal(cooled.key, "backup");
+  assert.equal(cooled.model, "deepseek-ai/DeepSeek-V4-Flash");
+  assert.ok(cooled.endpoint.includes("siliconflow"));
   assert.equal(gw.clampMaxTokens(99999), 2048);
   assert.equal(gw.clampMaxTokens(100), 100);
   assert.equal(gw.clampMaxTokens(undefined), 1024);

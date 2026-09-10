@@ -60,6 +60,16 @@ def test_english_narration_stripped():
     assert hits
 
 
+def test_long_english_narration_over_80_chars_stripped_dc8f():
+    """2026-09-11 客户机 DC8F 实录：整句英文旁白超 80 字符曾漏网直发（旧上限 80）。"""
+    stage = ("(Smiling slightly, she set down her cup and looked at the screen, "
+             "wondering what he had been up to all day before typing)")
+    assert len(stage) > 80
+    cleaned, hits = sanitize_inner_monologue(stage + " Hey, long day?")
+    assert "Smiling" not in cleaned and cleaned.startswith("Hey, long day?")
+    assert hits
+
+
 def test_legit_parenthetical_kept():
     """正常补充语绝不误伤（宁可漏拦不误伤）。"""
     src = "我买了新手机（iPhone 15）超好用"

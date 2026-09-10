@@ -35,11 +35,13 @@ from typing import Any, Dict, List, Optional, Tuple
 # ── 括号旁白（B118） ─────────────────────────────────────────────────────────
 
 # 全/半角括号 + 方括号；成对捕获（不跨行、限长防灾难回溯）
+# 2026-09-11：上限 80 → 200。客户机 DC8F 实录英文旁白「(Smiling slightly, she set
+# down her cup and …)」整句超 80 字符漏网直发；命中仍须旁白标记词，误伤面不变。
 _BRACKET_RES = [
-    re.compile(r"（([^（）\n]{1,80})）"),
-    re.compile(r"\(([^()\n]{1,80})\)"),
-    re.compile(r"【([^【】\n]{1,80})】"),
-    re.compile(r"\[([^\[\]\n]{1,80})\]"),
+    re.compile(r"（([^（）\n]{1,200})）"),
+    re.compile(r"\(([^()\n]{1,200})\)"),
+    re.compile(r"【([^【】\n]{1,200})】"),
+    re.compile(r"\[([^\[\]\n]{1,200})\]"),
 ]
 # 单星号动作体 *叹了口气*（避开 **markdown 粗体**）
 _ASTERISK_RE = re.compile(r"(?<!\*)\*([^*\n]{1,60})\*(?!\*)")

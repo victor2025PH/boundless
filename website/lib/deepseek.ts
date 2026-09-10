@@ -4,7 +4,13 @@ import { getKbExtraContext } from "./kb-extra";
 import { canProceed, recordSuccess, recordFailure } from "./circuit-breaker";
 
 const ENDPOINT = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/chat/completions";
-const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+// deepseek-flash（V4.1-Flash）= 2026-09-10 起官方唯一对话模型；deepseek-chat 已退役。
+const MODEL = process.env.DEEPSEEK_MODEL || "deepseek-flash";
+// V4 起混合推理默认开思考且与正文共享 max_tokens（这里只给 500-700）：不关就是空回答。
+// 官方字段 thinking.disabled；上游若换成非 DeepSeek 端点则不下发（字段强校验）。
+const THINKING_OFF: Record<string, unknown> = /api\.deepseek\.com/i.test(ENDPOINT)
+  ? { thinking: { type: "disabled" } }
+  : {};
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -47,6 +53,7 @@ export async function generateText(
         temperature: 0.85,
         max_tokens: 700,
         stream: false,
+        ...THINKING_OFF,
       }),
       signal: ac.signal,
     });
@@ -94,6 +101,7 @@ export async function streamDeepSeek(
         temperature: 0.5,
         max_tokens: 600,
         stream: true,
+        ...THINKING_OFF,
       }),
       signal: ac.signal,
     });
@@ -146,6 +154,7 @@ export async function askDeepSeek(
         temperature: 0.5,
         max_tokens: 500,
         stream: false,
+        ...THINKING_OFF,
       }),
       signal: ac.signal,
     });

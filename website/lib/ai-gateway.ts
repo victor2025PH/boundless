@@ -19,7 +19,57 @@ import { DATA_DIR } from "./data-dir";
 
 const VENDOR_ENDPOINT =
   process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/chat/completions";
-const VENDOR_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
+// 2026-09-10 起 DeepSeek 官方唯一对话模型 = deepseek-flash（V4.1-Flash）。旧名
+// deepseek-chat（07-24 退役）/ deepseek-v4-flash（09-10 退役）过渡期仍被官方路由到 V4.1，
+// 但随时可能 404；网关默认改现役名，客户端送来的退役名由 normalizeVendorModel 归一。
+export const DEEPSEEK_CURRENT_MODEL = "deepseek-flash";
+const RETIRED_DEEPSEEK_ALIASES: Record<string, string> = {
+  "deepseek-chat": DEEPSEEK_CURRENT_MODEL,
+  "deepseek-v4-flash": DEEPSEEK_CURRENT_MODEL,
+  "deepseek-v4-flash-vision-exp": DEEPSEEK_CURRENT_MODEL,
+};
+const VENDOR_MODEL = process.env.DEEPSEEK_MODEL || DEEPSEEK_CURRENT_MODEL;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(String(url || "")).hostname.toLowerCase();
+  } catch {
+    return String(url || "").toLowerCase();
+  }
+}
+export function isDeepSeekOfficial(endpoint: string): boolean {
+  return hostOf(endpoint).endsWith("api.deepseek.com");
+}
+export function isSiliconFlow(endpoint: string): boolean {
+  return hostOf(endpoint).includes("siliconflow");
+}
+
+/** 退役别名 → 现役（仅上游是 DeepSeek 官方时）；其他主机原样返回。 */
+export function normalizeVendorModel(model: unknown, endpoint: string = VENDOR_ENDPOINT): string {
+  const m = String(model ?? "").trim();
+  if (!m || !isDeepSeekOfficial(endpoint)) return m;
+  return RETIRED_DEEPSEEK_ALIASES[m.toLowerCase()] || m;
+}
+
+// 硅基流动上受 enable_thinking 控制的混合推理档（模型名小写子串）
+const SF_HYBRID_MARKERS = ["deepseek-v3.1", "deepseek-v3.2", "deepseek-v4", "qwen3", "glm-4.5", "glm-4.6", "glm-5"];
+
+/**
+ * 按上游主机给出「关思维链」字段（与引擎 src/ai/vendor_params.py 同口径）。
+ * DeepSeek V4 起混合推理**默认开思考**且与正文共享 max_tokens：网关钳 2048 的情况下长思考
+ * 会把 content 挤成空（2026-08-17 引擎侧同款事故）；托管客户端只认 content，且客户端
+ * 对 bd2026.cc 主机刻意不注入该字段——**必须由网关按真实上游注入**。
+ * AI_GATEWAY_THINKING=on 可整体放开（届时 AI_GATEWAY_MAX_TOKENS 也要同步调大）。
+ */
+export function thinkingOffFields(endpoint: string, model: string): Record<string, unknown> {
+  if ((process.env.AI_GATEWAY_THINKING || "").trim().toLowerCase() === "on") return {};
+  if (isDeepSeekOfficial(endpoint)) return { thinking: { type: "disabled" } };
+  if (isSiliconFlow(endpoint)) {
+    const ml = String(model || "").toLowerCase();
+    if (SF_HYBRID_MARKERS.some((k) => ml.includes(k))) return { enable_thinking: false };
+  }
+  return {};
+}
 
 /** 单机每日字符预算（入站 + 出站），防单机刷爆。 */
 export const DAILY_CHAR_BUDGET = Number(process.env.AI_GATEWAY_DAILY_CHARS || 50000);
@@ -32,11 +82,16 @@ export const TOKEN_TTL_SEC = Number(process.env.AI_GATEWAY_TOKEN_TTL || 30 * 24 
 /** 服务端 max_tokens 钳制（客户端自报不可信）。 */
 export const MAX_TOKENS_CAP = Number(process.env.AI_GATEWAY_MAX_TOKENS || 2048);
 
-/** model 白名单：默认只放厂商默认模型；多模型用逗号分隔 env 配置。 */
-const MODEL_ALLOWLIST: string[] = (process.env.AI_GATEWAY_MODELS || VENDOR_MODEL)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+/** model 白名单：默认只放厂商默认模型；多模型用逗号分隔 env 配置。
+ *  条目先经退役名归一（env 里残留 deepseek-chat 也不会把退役名放进白名单）并去重。 */
+const MODEL_ALLOWLIST: string[] = Array.from(
+  new Set(
+    (process.env.AI_GATEWAY_MODELS || VENDOR_MODEL)
+      .split(",")
+      .map((s) => normalizeVendorModel(s.trim()))
+      .filter(Boolean)
+  )
+);
 
 // ── 识图中继（我们自己的 GPU VLM，经 117→VPS 反向隧道暴露到 VPS localhost）──
 // VISION_RELAY_URLS 逗号列表 = 多机双活（176/140），按序尝试、失败短冷却降权；
@@ -704,7 +759,9 @@ export function quotaSubject(claims: Pick<DeviceClaims, "mid" | "iid"> | string)
 
 /** model 钳制：白名单外一律回落默认（不拒——改造过的客户端也能用，只是用不了贵模型）。 */
 export function clampModel(m: unknown): string {
-  const s = String(m || "").trim();
+  // 已发布客户端（≤1.0.79）令牌里缓存的是退役名 deepseek-chat / deepseek-v4-flash：
+  // 先归一再查白名单，老客户端零改动即切到现役模型。
+  const s = normalizeVendorModel(String(m || "").trim());
   return MODEL_ALLOWLIST.includes(s) ? s : MODEL_ALLOWLIST[0];
 }
 
@@ -935,9 +992,11 @@ const CHAT_LAT_WINDOW = 20;
 const _chatLat = new Map<string, number[]>();
 const _chatSlowStreak = new Map<string, number>();
 
+// 2026-09-11 生产口径：备用 = 硅基流动 deepseek-ai/DeepSeek-V4-Flash（跨厂商容灾；同厂商
+// 第二个号挡不住厂商级宕机）。备用端点/模型缺省仍回主上游（老部署行为不变）。
 const BACKUP_KEY = (process.env.DEEPSEEK_BACKUP_API_KEY || "").trim();
 const BACKUP_ENDPOINT = (process.env.DEEPSEEK_BACKUP_BASE_URL || VENDOR_ENDPOINT).trim();
-const BACKUP_MODEL = (process.env.DEEPSEEK_BACKUP_MODEL || "").trim();
+const BACKUP_MODEL = normalizeVendorModel((process.env.DEEPSEEK_BACKUP_MODEL || "").trim(), BACKUP_ENDPOINT);
 
 export type ChatUpstreamChoice = {
   key: "primary" | "backup";
@@ -1000,18 +1059,34 @@ export function chatCooldownStatus(now = Date.now()): Array<{ model: string; coo
   }));
 }
 
+/**
+ * 上游请求体：客户端 body + 网关策略（model 钳制 / max_tokens 钳制 / 非流式 / 按上游主机关思维链）。
+ * 客户端带来的 thinking / enable_thinking 一律被网关口径覆盖——它不知道真实上游是谁
+ * （主 DeepSeek 官方 vs 备用硅基），字段口径不同，套错会 422 或 </think> 混进正文。
+ */
+export function buildChatPayload(
+  body: Record<string, unknown>,
+  choice: ChatUpstreamChoice
+): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...body };
+  delete rest.thinking;
+  delete rest.enable_thinking;
+  return {
+    ...rest,
+    ...thinkingOffFields(choice.endpoint, choice.model),
+    model: choice.model,
+    max_tokens: clampMaxTokens(body.max_tokens),
+    stream: false, // 首版关流式：契约明确，非流式客户端零影响
+  };
+}
+
 export async function proxyChatCompletionsEx(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<{ res: Response; choice: ChatUpstreamChoice }> {
   const choice = chatUpstreamChoice(body);
   if (!choice.apiKey) throw new Error("no_vendor_key");
-  const payload = {
-    ...body,
-    model: choice.model,
-    max_tokens: clampMaxTokens(body.max_tokens),
-    stream: false, // 首版关流式：契约明确，非流式客户端零影响
-  };
+  const payload = buildChatPayload(body, choice);
   const res = await fetch(choice.endpoint, {
     method: "POST",
     headers: {

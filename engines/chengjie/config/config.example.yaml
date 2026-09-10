@@ -1566,10 +1566,20 @@ ai:
   #   AITR_HOSTED_AI_KEY / AITR_HOSTED_AI_BASE_URL / AITR_HOSTED_AI_MODEL
   # 仅当 api_key 为空/占位时生效；用户保存自有 Key 后永远优先自有。
   base_url: "https://api.deepseek.com"  # openai_compatible 时必填（如 DeepSeek）
-  model: "deepseek-v4-flash"      # 使用的模型（DeepSeek 已废弃 deepseek-chat 旧名）
+  # 2026-09-10 起 DeepSeek 官方唯一对话模型 = deepseek-flash（V4.1-Flash，1M 上下文）。
+  # 旧名 deepseek-chat / deepseek-v4-flash 已退役，装载时自动归一到 deepseek-flash 并记日志
+  # （src/ai/vendor_params.py）。思维链默认按端点主机关闭（api.deepseek.com → thinking.disabled；
+  # 硅基混合档 → enable_thinking:false）；要开思维链设 ai.reasoning: true 并同步调大 max_tokens。
+  model: "deepseek-flash"
   temperature: 0.7                # 温度参数 (0.0-1.0)
   max_tokens: 1024                # 最大回复token数
   timeout: 30                     # API调用超时(秒)
+  # prompt 预算（系统提示 + 注入 + few-shot + 历史合计 token 上限；缺省 12000，0 = 不裁）。
+  # 超了按 历史(保底最近 6 条) → few-shot 段 → system 尾部注入段(按段、KB/记忆列表截尾留头)
+  # → 保底历史 裁；【后台人设定位】/【人称与角色】/【自称规则】/【媒体能力边界】等硬规则段
+  # 永不砍，全丢光仍超则软放行并记 WARNING over=N。别设回 6000：一轮完整装配 10-12k，
+  # 6000 = 每轮都在裁（2026-09-11「聊天没有人设、没有记忆」事故根因之一）。
+  # prompt_budget_tokens: 12000
   # 启动连接探针的独立上限(秒)：冷启动时若云端限流/抖动，这一次探针会占满 timeout(30s)，
   # 把「进程起来→/login 可服务」窗口拖到分钟级(seat 撞加载超时)。探针结果启动流程并不消费
   # (仅日志+坏key告警)，故给它更短上限；超时=按未验证放行(首个真实请求确认健康)，坏 key 走
@@ -1696,11 +1706,17 @@ ai:
   # （任意 OpenAI 兼容端点，如智谱/moonshot，需带 base_url+model）。
   # 失败的 key 进 120s 冷却；池 key 自身 401/欠费也会触发主机告警（防备用键悄悄过期）；
   # DeepSeek 系备用 key 的余额同样被 ops.cloud_credentials 周期巡检。仅 openai_compatible 生效。
+  # 池条目按各自端点主机自动带「关思维链」字段（硅基 enable_thinking:false / DeepSeek
+  # thinking.disabled），不会把主链的字段套到别家；退役名同样自动归一。
+  # 2026-09-11 生产口径：主链 DeepSeek 官方 deepseek-flash，备用池 = 硅基流动上的同款
+  # DeepSeek-V4-Flash（跨厂商容灾——同厂商第二个号挡不住厂商级宕机）。
   # key_pool:
   #   enabled: true
   #   keys:
-  #     - name: ds-backup          # 可读名（告警/看板用）
-  #       api_key: sk-xxxx         # 备用 DeepSeek 号
+  #     - name: siliconflow-v4-flash   # 可读名（告警/看板用）
+  #       api_key: sk-xxxx             # 硅基流动 key
+  #       base_url: https://api.siliconflow.cn/v1
+  #       model: deepseek-ai/DeepSeek-V4-Flash
   #     - name: zhipu-glm
   #       api_key: xxxx.yyyy
   #       base_url: https://open.bigmodel.cn/api/paas/v4
@@ -1716,7 +1732,7 @@ ai:
   #           computer_use（电脑操控 VLM）/ chat（默认对话；不配=用 ai.model）。
   # models:
   #   planner_local: { base_url: http://192.168.0.173:8001, model: chatx }
-  #   qa_cheap:      { base_url: https://api.deepseek.com,   model: deepseek-v4-flash }
+  #   qa_cheap:      { base_url: https://api.deepseek.com,   model: deepseek-flash }
   #   cu_vlm:        { base_url: http://192.168.0.176:11434, model: qwen3-vl:8b-instruct }
   # task_routes:
   #   assistant_planner: planner_local

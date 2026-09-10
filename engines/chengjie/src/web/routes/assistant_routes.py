@@ -278,21 +278,11 @@ def assistant_llm_extra_body(base_url: str, model: str, *,
     max_tokens，复杂帮助 prompt 会把 content 挤成 0 字；前端只认
     delta/done，流在 meta 后结束 → 误显示「网络异常」。
     """
-    base = str(base_url or "").lower()
-    model_l = str(model or "").lower()
-    if ("deepseek" in base and model_l.startswith("deepseek-v4")
-            and not reasoning):
-        return {"thinking": {"type": "disabled"}}
-    # vLLM 上的 Qwen3 系（本机 LAN 落点 173:8001 chatx=Qwen3.6-27B-abl）**默认
-    # 开 thinking**：正文全进 reasoning、message.content 恒为 null，预算还被思考
-    # 吃光（finish_reason=length）。2026-08-28 这个坑已经让 LAN 翻译兜底静默失效
-    # 过一次；docless 轮改打这个端点，必须同款关掉，否则用户看到的是空回答。
-    # 键名与 translation_engines / voice_colloquial_llm / ai_client 三处同源。
-    if not reasoning and (":8001" in base or "vllm" in base
-                          or model_l.startswith("chatx")
-                          or model_l.startswith("qwen3")):
-        return {"chat_template_kwargs": {"enable_thinking": False}}
-    return {}
+    # 2026-09-11 起口径收敛到 src/ai/vendor_params.py（按端点主机而非模型名：
+    # DeepSeek 官方 → thinking.disabled；硅基混合档 → enable_thinking:false；
+    # vLLM/LAN Qwen3 系 → chat_template_kwargs.enable_thinking:false）。
+    from src.ai.vendor_params import thinking_off_extra_body
+    return thinking_off_extra_body(base_url, model, reasoning=reasoning)
 
 
 # SSE 注释行（`:` 开头）：不是事件，前端 readNdjson 的 handleLine 直接忽略，
