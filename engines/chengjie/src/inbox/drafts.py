@@ -54,6 +54,20 @@ _SENSITIVE_PATTERNS: List[Tuple[re.Pattern, str]] = [
         + r"|优惠|折扣|免费|投诉|律师|法律|起诉|骗子|诈骗|被骗|骗钱|骗局|报警",
         re.IGNORECASE,
     ), "medium"),
+    # high: 现实承诺（Q-2 #263）——出站答应语 + 入站邀约强短语。细类标签
+    # ``commitment:<kind>`` 由 keyword_risk_hits 调 detect_* 补上；本正则兜底升 high。
+    # 刻意不收裸「见面/address/weekend」：误伤「我今天见了老板」「email address」
+    # 「hotpot this weekend」。
+    (re.compile(
+        _LB + r"(?:come\s+over|meet\s+up|meet\s+me|sounds?\s+lovely"
+        r"|see\s+you\s+(?:on\s+)?(?:sat|sun|saturday|sunday|tonight|tomorrow|this\s+weekend)"
+        r"|i'?ll\s+(?:text\s+you\s+my\s+address|be\s+waiting|make\s+sure\s+to\s+have)"
+        r"|my\s+address\s+is|your\s+(?:home\s+|shipping\s+|mailing\s+)?address"
+        r"|phone\s+number|send\s+(?:me\s+)?money|cash\s*app)" + _RB
+        + r"|上门|见个面|见一面|出来见面|来找你|来找我|到时见|到時候見|我地址是"
+        r"|收货地址|打钱给你|寄给你|视频通话",
+        re.IGNORECASE,
+    ), "high"),
 ]
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
@@ -78,6 +92,20 @@ def keyword_risk_hits(text: str) -> Tuple[Optional[str], List[str]]:
         if matched and (best is None
                         or _RISK_RANK.get(level, 0) > _RISK_RANK.get(best, 0)):
             best = level
+    # Q-2：细类标签 commitment:<kind>（入站邀约 ∪ 出站答应）。失败不影响旧表。
+    try:
+        from src.inbox.commitment_guard import (
+            detect_commitment, detect_commitment_claim,
+        )
+        kind = detect_commitment(t) or detect_commitment_claim(t)
+        if kind:
+            tag = "commitment:" + str(kind)
+            if tag not in hits:
+                hits.append(tag)
+            if best is None or _RISK_RANK.get("high", 0) > _RISK_RANK.get(best, 0):
+                best = "high"
+    except Exception:
+        pass
     return best, hits
 
 
