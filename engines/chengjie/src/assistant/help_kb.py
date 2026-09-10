@@ -217,4 +217,22 @@ def get_help_kb() -> HelpKB:
     return _KB
 
 
-__all__ = ["HelpKB", "get_help_kb"]
+def help_corpus_status() -> dict:
+    """只读口（Q-10 #254 / 22KVXF ⑤）：给 KB 页 / 自检说明「帮助语料在哪」。
+
+    帮助语料（~295 条）自始只存这份独立库 ``assistant_help.db``，**从不进用户
+    知识库 kb_entries**；KB 页「一键清除预置条目」的 help 档清的是历史残留、
+    不会碰这里。不建索引、不改任何状态：单例已建就复用，未建则单独开一次连接数数。
+    """
+    kb = _KB
+    try:
+        if kb is None:
+            kb = HelpKB()
+        return {"store": "assistant_help.db", "path": str(kb._path), "count": int(kb.count()),
+                "in_user_kb": False}
+    except Exception:  # noqa: BLE001
+        logger.debug("help_corpus_status 读取失败", exc_info=True)
+        return {"store": "assistant_help.db", "path": "", "count": -1, "in_user_kb": False}
+
+
+__all__ = ["HelpKB", "get_help_kb", "help_corpus_status"]

@@ -235,6 +235,10 @@
     <button class="btn btn-s btn-sm pro-only" onclick="openMaintPanel()" title="{{ (i18n or {}).get('kb_s028', '查重、备份、维护诊断') }}">
       ⚙️ {{ (i18n or {}).get('db_s012', "维护") }}
     </button>
+    {# Q-10 #254（22KVXF ⑤）：预置条目按来源 vendor / system / help 两步清——先列清单再删 #}
+    <button class="btn btn-s btn-sm" id="btn-purge-preset" onclick="openPresetPurgeModal()" title="{{ (i18n or {}).get('kb2_preset_btn_tip', '按来源列出厂商 / 系统 / 帮助语料残留的预置条目，看过清单再删；你自己建的条目永不在内') }}">
+      🧹 {{ (i18n or {}).get('kb2_preset_btn', "清除预置条目") }}
+    </button>
     <button class="btn btn-s btn-sm pro-only" onclick="exportCsv()" title="{{ (i18n or {}).get('kb_s029', '导出为 CSV，可用 Excel 打开编辑') }}">
       📊 CSV
     </button>
@@ -323,6 +327,30 @@
   <div style="display:flex;gap:.5rem;justify-content:flex-end">
     <button class="btn btn-s" onclick="closeImportModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
     <button class="btn btn-p" onclick="doImport()">{{ (i18n or {}).get('psn_start_import', "开始导入") }}</button>
+  </div>
+</div>
+
+<!-- ══ 清除预置条目模态框（Q-10 #254 / 22KVXF ⑤）：dry-run 清单 → 勾选来源 → 确认删除 ═══ -->
+<div id="preset-overlay" onclick="closePresetPurgeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:700"></div>
+<div id="preset-modal" role="dialog" aria-labelledby="preset-title" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:701;padding:1.4rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+    <strong id="preset-title">🧹 {{ (i18n or {}).get('kb2_preset_title', "清除预置条目") }}</strong>
+    <button class="btn btn-s" onclick="closePresetPurgeModal()" style="padding:.3rem .6rem">✕</button>
+  </div>
+  <div style="font-size:.82rem;color:var(--t2);margin-bottom:.6rem">{{ (i18n or {}).get('kb2_preset_lead', "预置条目不是你的知识：厂商随包的产品说明、系统话术 / 示例、历史版本误播进来的帮助语料残留。先列清单，看过再删；「我建的」「批量导入」「学习队列学来的」永远不在清单里。") }}</div>
+  <div id="preset-sources" style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.83rem;margin-bottom:.6rem">
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="vendor" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_vendor', "系统预置·厂商产品") }}</label>
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="system" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_system', "系统话术/示例") }}</label>
+    <label style="display:flex;align-items:center;gap:.35rem"><input type="checkbox" value="help" checked onchange="presetPurgePreview()"> {{ (i18n or {}).get('kb2_src_help', "帮助语料残留") }}</label>
+  </div>
+  <div id="preset-help-line" style="font-size:.78rem;color:var(--t3);margin-bottom:.6rem"></div>
+  <div id="preset-summary" style="font-size:.82rem;margin-bottom:.5rem;min-height:1.2rem"></div>
+  <div id="preset-list" style="max-height:38vh;overflow:auto;border:1px solid var(--bd);border-radius:8px;font-size:.8rem"></div>
+  <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.9rem;align-items:center">
+    <span id="preset-status" style="font-size:.78rem;color:var(--t3);margin-right:auto"></span>
+    <button class="btn btn-s" onclick="closePresetPurgeModal()">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+    <button class="btn btn-s" id="btn-preset-preview" onclick="presetPurgePreview()">{{ (i18n or {}).get('kb2_preset_preview', "刷新清单") }}</button>
+    <button class="btn btn-p" id="btn-preset-delete" onclick="presetPurgeConfirm()" disabled style="background:var(--red,#c0392b);border-color:var(--red,#c0392b)">{{ (i18n or {}).get('kb2_preset_delete', "确认删除") }}</button>
   </div>
 </div>
 
@@ -1693,18 +1721,98 @@ function kbDismissVendorNotice(){
   const box=document.getElementById('kb-vendor-notice'); if(box) box.style.display='none';
 }
 async function kbPurgeVendor(){
+  /* Q-10 #254：厂商横幅的「一键清空」不再直删（purge-source 无 dry-run）——统一走
+     「清除预置条目」两步弹窗，预选 vendor 一档；旧口 /api/kb/entries/purge-source 保留给 API 调用方。 */
   const s=await api('GET','/api/kb/stats');
   const n=(s&&s.entries_vendor)||0;
   if(!n){ toast(window.T('kb2_vendor_none')); return; }
-  if(!confirm(window.Tf('kb2_vendor_purge_confirm',{n}))) return;
-  let r;
-  try{ r=await api('POST','/api/kb/entries/purge-source',{source:'vendor'}); }
-  catch(err){ toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
-  toast(window.Tf('kb2_vendor_purged',{n:(r&&r.count)||0}));
-  const sel=document.getElementById('entry-source'); if(sel&&sel.value==='vendor') sel.value='';
-  await loadEntries(); await refreshStats();
+  openPresetPurgeModal(['vendor']);
 }
 window.kbShowVendor=kbShowVendor; window.kbDismissVendorNotice=kbDismissVendorNotice; window.kbPurgeVendor=kbPurgeVendor;
+
+/* ── 清除预置条目（Q-10 #254 / 22KVXF ⑤）────────────────────
+   两步走：POST /api/kb/entries/purge-preset 默认 dry_run 只列清单（含启用 / 命中次数）→
+   用户看过清单、勾好来源 → dry_run:false + ids（清单交集）才删。绝不在自检 / 加载时自动跑。 */
+let _presetItems=[];
+function _presetSources(){
+  return Array.from(document.querySelectorAll('#preset-sources input[type=checkbox]:checked')).map(x=>x.value);
+}
+function openPresetPurgeModal(only){
+  document.querySelectorAll('#preset-sources input[type=checkbox]').forEach(x=>{
+    x.checked = Array.isArray(only) ? only.indexOf(x.value)>=0 : true;
+  });
+  _presetItems=[];
+  document.getElementById('preset-list').innerHTML='';
+  document.getElementById('preset-summary').textContent='';
+  document.getElementById('preset-help-line').textContent='';
+  document.getElementById('preset-status').textContent='';
+  document.getElementById('btn-preset-delete').disabled=true;
+  document.getElementById('preset-modal').style.display='';
+  document.getElementById('preset-overlay').style.display='';
+  presetPurgePreview();
+}
+function closePresetPurgeModal(){
+  document.getElementById('preset-modal').style.display='none';
+  document.getElementById('preset-overlay').style.display='none';
+}
+const _PRESET_SRC_LABEL={vendor:'kb2_src_vendor',system:'kb2_src_system',help:'kb2_src_help'};
+async function presetPurgePreview(){
+  const srcs=_presetSources();
+  const list=document.getElementById('preset-list');
+  const sum=document.getElementById('preset-summary');
+  const del=document.getElementById('btn-preset-delete');
+  const st=document.getElementById('preset-status');
+  _presetItems=[]; del.disabled=true;
+  if(!srcs.length){ list.innerHTML=''; sum.textContent=window.T('kb2_preset_pick_source'); return; }
+  st.textContent=window.T('dash.loading');
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-preset',{dry_run:true,sources:srcs}); }
+  catch(err){ st.textContent=''; sum.textContent=String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail'); return; }
+  st.textContent='';
+  const items=(r&&r.items)||[];
+  _presetItems=items;
+  const hc=r&&r.help_corpus;
+  const hl=document.getElementById('preset-help-line');
+  if(hc&&typeof hc.count==='number'&&hc.count>=0){ hl.textContent=window.Tf('kb2_preset_help_line',{n:hc.count}); }
+  else hl.textContent='';
+  if(!items.length){
+    list.innerHTML=''; sum.textContent=window.T('kb2_preset_none'); return;
+  }
+  const bys=r.by_source||{};
+  const parts=Object.keys(bys).map(k=>window.T(_PRESET_SRC_LABEL[k]||k)+' '+bys[k]);
+  sum.textContent=window.Tf('kb2_preset_summary',{n:items.length})+(parts.length?'（'+parts.join(' · ')+'）':'');
+  list.innerHTML=items.map(it=>{
+    const flags=[];
+    if(it.enabled) flags.push(window.T('kb2_preset_flag_enabled'));
+    if(it.use_count>0) flags.push(window.Tf('kb2_preset_flag_used',{n:it.use_count}));
+    return '<div style="display:flex;gap:.6rem;align-items:baseline;padding:.35rem .6rem;border-bottom:1px solid var(--bd)">'
+      +'<span style="flex:0 0 auto;color:var(--t3);font-size:.72rem;min-width:5.5em">'+esc(window.T(_PRESET_SRC_LABEL[it.source]||it.source))+'</span>'
+      +'<span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.title)+'">'+esc(it.title||it.id)+'</span>'
+      +'<span style="flex:0 0 auto;color:var(--t3);font-size:.72rem">'+esc(it.category||'')+(flags.length?' · <b style="color:var(--amber,#d98c00)">'+esc(flags.join(' / '))+'</b>':'')+'</span>'
+      +'</div>';
+  }).join('');
+  del.disabled=false;
+  del.textContent=window.Tf('kb2_preset_delete_n',{n:items.length});
+}
+async function presetPurgeConfirm(){
+  const srcs=_presetSources();
+  const ids=_presetItems.map(x=>x.id).filter(Boolean);
+  if(!ids.length||!srcs.length) return;
+  if(!confirm(window.Tf('kb2_preset_confirm',{n:ids.length}))) return;
+  const st=document.getElementById('preset-status');
+  const del=document.getElementById('btn-preset-delete');
+  del.disabled=true; st.textContent=window.T('dash.loading');
+  let r;
+  try{ r=await api('POST','/api/kb/entries/purge-preset',{dry_run:false,sources:srcs,ids}); }
+  catch(err){ st.textContent=''; del.disabled=false; toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
+  st.textContent='';
+  toast(window.Tf('kb2_preset_purged',{n:(r&&r.count)||0}));
+  closePresetPurgeModal();
+  const sel=document.getElementById('entry-source'); if(sel&&(sel.value==='vendor'||sel.value==='system')) sel.value='';
+  await loadEntries(); await refreshStats();
+}
+window.openPresetPurgeModal=openPresetPurgeModal; window.closePresetPurgeModal=closePresetPurgeModal;
+window.presetPurgePreview=presetPurgePreview; window.presetPurgeConfirm=presetPurgeConfirm;
 
 /* ── 系统预置支付话术提示 / 一键清除（N-3 #240 / D-N2）────────
    source=system 且 template_key 属支付系列（GXP 等）。只清这一系列：用户改过的

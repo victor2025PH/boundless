@@ -206,6 +206,67 @@ def register_kb_routes(app, ctx):
             audit_store.log(actor, "kb_purge_legacy_seeds", f"{count} entries")
         return {"ok": True, "dry_run": False, "count": count}
 
+    @app.post("/api/kb/entries/purge-preset")
+    async def api_kb_purge_preset(request: Request):
+        """一键「清除预置条目」（Q-10 #254 / 22KVXF ⑤）：按来源 vendor / system / help
+        统一入口，替代「vendor 一键清空（不 dry-run）」。**默认 dry_run=true 只列清单不删**
+        （含启用状态 / 命中次数，让用户看清再删）；确认删除要显式
+        ``{"dry_run": false, "sources": [...], "ids": [...]}``——ids 与清单取交集，
+        dry-run 到点删之间被改成 user 来源 / 已删的行自动豁免。user / import / learner 永不入选。
+        与 N-5 误删同教训：启动自检 / 巡检里绝不自动跑。响应附 ``help_corpus``（小智帮助语料
+        在独立库 assistant_help.db 的条数，只读——说明 295 条帮助语料不在用户 KB 里）。"""
+        _api_auth(request)
+        from src.utils.kb_store import PRESET_PURGE_SOURCES, preset_entries, purge_preset_entries
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        dry_run = data.get("dry_run", True) is not False
+        sources = data.get("sources")
+        if sources is None:
+            sources = list(PRESET_PURGE_SOURCES)
+        if not isinstance(sources, list):
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_preset_sources_invalid",
+                        "sources must be a list of vendor/system/help"))
+        sources = [str(s or "").strip().lower() for s in sources]
+        bad = [s for s in sources if s not in PRESET_PURGE_SOURCES]
+        if bad:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_preset_sources_invalid",
+                        "sources must be a list of vendor/system/help"))
+        help_corpus = {}
+        try:
+            from src.assistant.help_kb import help_corpus_status
+            help_corpus = help_corpus_status()
+        except Exception:  # noqa: BLE001
+            help_corpus = {}
+        items = preset_entries(_kb_store, sources)
+        by_source: dict = {}
+        for it in items:
+            by_source[it["source"]] = by_source.get(it["source"], 0) + 1
+        if dry_run:
+            logger.info("[kb] purge_preset dry-run sources=%s count=%d by_source=%s",
+                        ",".join(sources), len(items), by_source)
+            return {"ok": True, "dry_run": True, "sources": sources, "count": len(items),
+                    "by_source": by_source, "items": items, "help_corpus": help_corpus}
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(
+                400, tr(request, "err.kb.purge_legacy_ids_required",
+                        "ids required: run dry_run first and pass the ids you reviewed"))
+        res = purge_preset_entries(_kb_store, [str(i) for i in ids], sources)
+        actor = request.session.get("username", "web_admin")
+        logger.info("[kb] purge_preset deleted=%d by_source=%s actor=%s",
+                    res["count"], res["by_source"], actor)
+        if audit_store:
+            audit_store.log(actor, "kb_purge_preset",
+                            f"{res['count']} entries {json.dumps(res['by_source'], ensure_ascii=False)}")
+        return {"ok": True, "dry_run": False, "sources": sources, "count": res["count"],
+                "by_source": res["by_source"], "help_corpus": help_corpus}
+
     @app.get("/api/kb/health")
     async def api_kb_health(request: Request, days: int = 7):
         """KB 自检（J-9 #184）：条目分来源计数 / 向量化数 / 7 天注入命中数 / 最近命中时刻。"""

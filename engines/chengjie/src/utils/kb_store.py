@@ -3466,3 +3466,95 @@ def purge_legacy_seed_residue(store: "KnowledgeBaseStore",
         store.set_meta(KB_SYSTEM_SEEDS_PURGED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
     store._touch_index()
     return len(victims)
+
+
+# ── 一键清除预置条目（Q-10 #254 / 22KVXF ⑤，按来源 dry-run 后删）─────────────────
+# 统一入口替代「vendor 一键清空（不 dry-run）/ 支付话术 / 客服域残留」三个散口：
+# 来源可选 vendor（厂商随包产品说明）/ system（系统话术·示例）/ help（历史版本若曾把小智
+# 帮助语料播进用户 KB 的残留：source 以 help / seed: 开头——当前版本帮助语料只在
+# assistant_help.db，正常库这一档为 0）。user / import / learner 绝不在候选里。
+# **两步走**：先 dry-run 列清单（含启用状态 / 用过几次），用户看过再传 ids 删；
+# 与 N-5 误删同教训，启动自检 / 巡检里绝不自动跑。
+PRESET_PURGE_SOURCES = ("vendor", "system", "help")
+
+
+def _preset_source_clause(src: str) -> Tuple[str, List[Any]]:
+    col = f"COALESCE(source,'{KB_SOURCE_DEFAULT}')"
+    if src == "help":
+        return f"({col} LIKE 'help%' OR {col} LIKE 'seed:%')", []
+    return f"{col}=?", [src]
+
+
+def preset_entries(store: "KnowledgeBaseStore",
+                   sources: Optional[List[str]] = None) -> List[Dict]:
+    """列出可清除的预置条目（不删）。每项 ``{id, title, category, source, enabled, use_count,
+    template_key}``；``sources`` 缺省 = 全部三档；非法来源静默忽略（fail-closed：user 永不入选）。"""
+    want = [str(s or "").strip().lower() for s in (sources or list(PRESET_PURGE_SOURCES))]
+    want = [s for s in want if s in PRESET_PURGE_SOURCES]
+    if not want:
+        return []
+    clauses, params = [], []
+    for s in want:
+        c, p = _preset_source_clause(s)
+        clauses.append(c)
+        params.extend(p)
+    try:
+        with store._conn() as c:
+            rows = c.execute(
+                f"SELECT id, title, category, COALESCE(source,'{KB_SOURCE_DEFAULT}') AS source, "
+                f"COALESCE(enabled,0) AS enabled, COALESCE(use_count,0) AS use_count, "
+                f"COALESCE(template_key,'') AS template_key "
+                f"FROM kb_entries WHERE {' OR '.join(clauses)} "
+                f"ORDER BY source, category, title, id",
+                params,
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    out: List[Dict] = []
+    for r in rows:
+        src = str(r[3] or "")
+        out.append({
+            "id": r[0], "title": r[1] or "", "category": r[2] or "",
+            "source": ("help" if (src.startswith("help") or src.startswith("seed:")) else src),
+            "source_raw": src,
+            "enabled": int(r[4] or 0), "use_count": int(r[5] or 0),
+            "template_key": r[6] or "",
+        })
+    return out
+
+
+def purge_preset_entries(store: "KnowledgeBaseStore", ids: List[str],
+                         sources: Optional[List[str]] = None) -> Dict[str, Any]:
+    """删除预置条目：只删 ``ids`` 与当前清单（``preset_entries(sources)``）的交集——dry-run
+    到点删之间被改成 user 来源 / 已删的行自动豁免；``ids`` 为空 → 不删（必须先 dry-run）。
+    删完若库里已无 source=system 行 → 打 ``KB_SYSTEM_SEEDS_PURGED_KEY``（下次启动不灌回）；
+    删过 vendor 的同样不会回来（vendor 只随安装包 db 进来）。
+    返回 ``{"count", "by_source": {src: n}, "ids": [...]}``。"""
+    wanted = {str(i) for i in (ids or []) if str(i or "").strip()}
+    if not wanted:
+        return {"count": 0, "by_source": {}, "ids": []}
+    eligible = {r["id"]: r for r in preset_entries(store, sources)}
+    victims = sorted(i for i in wanted if i in eligible)
+    if not victims:
+        return {"count": 0, "by_source": {}, "ids": []}
+    by_source: Dict[str, int] = {}
+    for i in victims:
+        s = eligible[i]["source"]
+        by_source[s] = by_source.get(s, 0) + 1
+    with store._conn() as c:
+        for i in range(0, len(victims), 400):
+            chunk = victims[i:i + 400]
+            cph = ",".join("?" * len(chunk))
+            for tbl, col in (("kb_entries", "id"), ("kb_translations", "entry_id"),
+                             ("kb_entry_versions", "entry_id"), ("kb_entry_images", "entry_id")):
+                try:
+                    c.execute(f"DELETE FROM {tbl} WHERE {col} IN ({cph})", chunk)
+                except sqlite3.OperationalError:
+                    pass
+        remaining_system = c.execute(
+            f"SELECT COUNT(*) FROM kb_entries WHERE COALESCE(source,'{KB_SOURCE_DEFAULT}')='system'"
+        ).fetchone()[0]
+    if by_source.get("system") and not remaining_system:
+        store.set_meta(KB_SYSTEM_SEEDS_PURGED_KEY, time.strftime("%Y-%m-%dT%H:%M:%S"))
+    store._touch_index()
+    return {"count": len(victims), "by_source": by_source, "ids": victims}

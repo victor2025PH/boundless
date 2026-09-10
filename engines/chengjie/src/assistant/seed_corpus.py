@@ -127,8 +127,9 @@ def seed_help_corpus_bg() -> None:
 
             kb = get_help_kb()
             n = kb.upsert_entries(build_all_entries())
-            log.info("帮助语料自动播种完成：upsert %s 条，库内 %s 条",
-                     n, kb.count())
+            # Q-10 #254：点明落点——小智独立库 assistant_help.db，不入用户知识库
+            log.info("帮助语料自动播种完成：upsert %s 条，库内 %s 条（小智独立库 %s，不入用户 KB）",
+                     n, kb.count(), getattr(kb, "_path", "assistant_help.db"))
         except Exception:
             log.warning("帮助语料自动播种失败（忽略）", exc_info=True)
 

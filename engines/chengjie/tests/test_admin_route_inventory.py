@@ -2065,6 +2065,13 @@ _ADDITIONS_2026_09_10_Q5_PROFILE_REJECT = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q5_PROFILE_REJECT
 
+# Q-10 #254（2026-09-10，D）：KB 页「一键清除预置条目」按来源 vendor / system / help 统一入口
+# （默认 dry_run 只列清单；显式 dry_run=false + ids 才删；自检里绝不自动跑）。kb_routes.py。
+_ADDITIONS_2026_09_10_Q10_KB_PURGE_PRESET = """
+/api/kb/entries/purge-preset	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q10_KB_PURGE_PRESET
+
 
 def _parse_baseline():
     expected = set()
