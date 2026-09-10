@@ -5794,27 +5794,42 @@ class SkillManager(LoggerMixin):
             grounding_dropped: List[Dict[str, Any]] = []
             cooldown = float(ex.get("cooldown_seconds", 20))
             now = time.time()
-            if (
-                ex.get("use_llm", True)
-                and self.ai_client
-                and (now - self._memory_llm_last.get(key, 0) >= cooldown)
-            ):
-                _ext_facts = getattr(self.ai_client, "extract_memory_facts", None)
-                if callable(_ext_facts):
-                    _res = await _ext_facts(mu, reply) or {}
-                    facts_llm = [
-                        (str(it.get("fact") or ""), str(it.get("evidence") or ""),
-                         (float(it["confidence"]) if it.get("confidence") is not None else None))
-                        for it in (_res.get("facts") or [])
-                        if isinstance(it, dict) and it.get("fact")
-                    ]
-                    grounding_dropped = list(_res.get("dropped") or [])
-                else:
-                    facts_llm = [
-                        (str(f), "", None)
-                        for f in (await self.ai_client.extract_memory_bullets(mu, reply) or [])
-                    ]
-                self._memory_llm_last[key] = time.time()
+            # Q-5 A（#263）：两链合一——**一次** LLM 调用同时产出记忆事实与画像槽位候选
+            # （profile_fill.run_extraction）：companion.goals.profile_llm.enabled 与
+            # memory.extract.use_llm 任一开即走；事实回到下面既有 add_fact 路径（ai_inferred），
+            # 槽位在 profile_fill 内分发（apply source=ai_inferred status=mentioned，绝不自动
+            # 升 confirmed）；昵称预填（B）与 [extract] 行 / 停滞计数（D）同在其内。
+            # 冷却中 / 开关关 → 不传 ai_client（只做昵称预填 + 记账），日志 llm=0。
+            try:
+                from src.companion.goals import profile_fill as _pf
+                _cfg_root = getattr(self.config, "config", None) or {}
+                _llm_on, _ = _pf.llm_extract_enabled(_cfg_root, self._memory_cfg)
+                _llm_go = bool(
+                    _llm_on and self.ai_client
+                    and (now - self._memory_llm_last.get(key, 0) >= cooldown))
+                _ibx_pf = None
+                try:
+                    from src.integrations.protocol_bridge import get_inbox_store as _pf_gis
+                    _ibx_pf = _pf_gis()
+                except Exception:
+                    _ibx_pf = None
+                _ext = await _pf.run_extraction(
+                    self.ai_client if _llm_go else None, _cfg_root,
+                    getattr(self.config, "config_path", None),
+                    user_msg=mu, reply=reply, platform=str(platform or ""),
+                    chat_key=str(chat_id or "").strip() or str(user_id or ""),
+                    account_id=str(account_id or ""), memory_cfg=self._memory_cfg,
+                    inbox_store=_ibx_pf, heuristic_facts=n_heuristic,
+                )
+                facts_llm = [
+                    (str(f), str(ev or ""), (float(c) if c is not None else None))
+                    for f, ev, c in (_ext.get("facts") or []) if f
+                ]
+                grounding_dropped = list(_ext.get("dropped") or [])
+                if _llm_go:
+                    self._memory_llm_last[key] = time.time()
+            except Exception:
+                self.logger.debug("[episodic] merged extract skipped", exc_info=True)
 
             for f, _ev, _conf in facts_llm:
                 # R12：LLM 抽取是对话推断/概括 → ai_inferred（晋升/推翻 stable 需更高置信）

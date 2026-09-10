@@ -769,6 +769,63 @@ class GoalStore:
             return cur
         return self.get_customer_profile(pf, ck)
 
+    def upsert_profile_cells(
+        self,
+        platform: str,
+        chat_key: str,
+        cells: Dict[str, Any],
+        *,
+        now: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Q-5（#263）：**裸单元**合并写口——调用方（``profile_fill``）已经按接口约定①
+        把单元组好（``{value, source, status, ts}`` + 旧读者兼容键 ``v/src``），并自行判过
+        「不覆盖已确认」等规则；本方法只做键校验 + 合并落盘。``cells[k] is None`` = 删该槽。
+        槽位键不在注册表的忽略（与 ``upsert_customer_profile`` 同口径）。无变化 → 返回现状。"""
+        from src.companion.goals.profile_slots import get_slot
+        pf = str(platform or "").strip()
+        ck = str(chat_key or "").strip()
+        if not pf or not ck or not isinstance(cells, dict):
+            return self.get_customer_profile(pf, ck)
+        n = float(now if now is not None else _now())
+        cur = self.get_customer_profile(pf, ck)
+        fields: Dict[str, Any] = dict((cur or {}).get("fields") or {})
+        changed = False
+        for key, cell in cells.items():
+            k = str(key or "").strip().lower()
+            if get_slot(k) is None:
+                continue
+            if cell is None:
+                if k in fields:
+                    fields.pop(k, None)
+                    changed = True
+                continue
+            if not isinstance(cell, dict):
+                continue
+            if fields.get(k) == cell:
+                continue
+            fields[k] = dict(cell)
+            changed = True
+        if not changed:
+            return cur
+        try:
+            fjson = json.dumps(fields, ensure_ascii=False)
+        except Exception:
+            return cur
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO customer_profiles (platform, chat_key, fields,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?)"
+                    " ON CONFLICT(platform, chat_key) DO UPDATE SET"
+                    " fields = excluded.fields, updated_at = excluded.updated_at",
+                    (pf, ck, fjson, n, n),
+                )
+                self._conn.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("upsert_profile_cells failed: %s", e)
+            return cur
+        return self.get_customer_profile(pf, ck)
+
     # ── 结果闭环（P2）─────────────────────────────────────────────────────────
     def sold_plan_counts(
         self, days: int = 90, *, now: Optional[float] = None
