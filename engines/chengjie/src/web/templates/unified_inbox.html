@@ -6439,11 +6439,23 @@ var _HANDOFF_REASON_KEYS={high_risk:'inbox.handoff.r_high_risk',empty_reply:'inb
   quota_hour:'inbox.handoff.r_quota_hour',quota_day:'inbox.handoff.r_quota_day',
   circuit_open:'inbox.handoff.r_circuit_open',off_hours:'inbox.handoff.r_off_hours',
   dup_guard_blocked:'inbox.handoff.r_dup_guard_blocked'};
+/* Q-15 #271（ad-）：成人内容原因码 adult:<level>[:<hit>] → 「命中：成人内容（sex）· 露骨」；四级词条查表 */
+var _AD_LEVEL_KEYS={mention:'inbox.adult.lv_mention',flirt:'inbox.adult.lv_flirt',explicit:'inbox.adult.lv_explicit',pressure:'inbox.adult.lv_pressure'};
+function _adParseReason(raw){
+  raw=String(raw||''); if(raw.indexOf('adult:')!==0) return null;
+  var p=raw.split(':'); var lv=p[1]||''; var hit=p.slice(2).join(':');
+  return {level:lv,hit:hit};
+}
+function _adWhyText(raw){
+  var ad=_adParseReason(raw); if(!ad) return '';
+  var lk=_AD_LEVEL_KEYS[ad.level]; var lvl=lk?window.T(lk):ad.level;
+  return window.Tf('inbox.handoff.r_adult',{hit:(ad.hit||'-'),level:lvl});
+}
 function _handoffTip(c){
   var hm=(c&&c.handoff_meta)||null;
   if(!hm||!hm.ts) return window.T('inbox.handoff.tip_generic');
   var rk=_HANDOFF_REASON_KEYS[String(hm.reason||'')];
-  var why=rk?window.T(rk):(String(hm.reason||'')||'-');
+  var why=_adWhyText(hm.reason)||(rk?window.T(rk):(String(hm.reason||'')||'-'));
   var src=window.T(String(hm.source||'system')==='system'?'inbox.handoff.src_system':'inbox.handoff.src_manual');
   return window.Tf('inbox.handoff.tip',{when:fmtTs(hm.ts),src:src,why:why});
 }
@@ -8216,7 +8228,12 @@ function _paintAcctBanner(c){
   // 此前红标只在列表 chip 悬停可解释，点进会话什么都没有（BJZFSX：Loki 红标挂 30h）。
   if(c && c.conversation_id && _convNeedsHuman(c)){
     const cid=esc(c.conversation_id);
-    const cta=`<button type="button" class="aob-btn primary" onclick="_handoffBarGo()" title="${esc(window.T('inbox.handoff.bar_go_t'))}">${esc(window.T('inbox.handoff.bar_go'))}</button>`
+    // Q-15 #271（ad-）：成人内容命中 → 多一枚「一键人设口吻软回应」（取词端点 + 既有 sendMsg 发送）
+    const _adCta=_adParseReason(c.handoff_meta&&c.handoff_meta.reason)
+      ?`<button type="button" class="aob-btn ad-soft-btn" onclick="_adSoftReply('${cid}',this)" title="${esc(window.T('inbox.handoff.ad_soft_t'))}">${esc(window.T('inbox.handoff.ad_soft'))}</button>`
+      :'';
+    const cta=_adCta
+      +`<button type="button" class="aob-btn primary" onclick="_handoffBarGo()" title="${esc(window.T('inbox.handoff.bar_go_t'))}">${esc(window.T('inbox.handoff.bar_go'))}</button>`
       +`<button type="button" class="aob-btn" onclick="_handoffBarAck('${cid}',this)" title="${esc(window.T('inbox.handoff.bar_ack_t'))}">${esc(window.T('inbox.handoff.bar_ack'))}</button>`;
     banner.className='acct-out-banner handoff';
     banner.innerHTML=`<span class="aob-txt">${esc(_handoffBarText(c))}</span>${cta}`;
@@ -8232,9 +8249,33 @@ function _handoffBarText(c){
   if(!hm||!hm.ts) return window.T('inbox.handoff.bar_generic');
   const raw=String(hm.reason||'');
   const rk=_HANDOFF_REASON_KEYS[raw]||(raw.indexOf('crisis')===0?'inbox.handoff.r_crisis':'');
-  const why=rk?window.T(rk):(raw||'-');
+  const why=_adWhyText(raw)||(rk?window.T(rk):(raw||'-'));
   const src=window.T(String(hm.source||'system')==='system'?'inbox.handoff.src_system':'inbox.handoff.src_manual');
   return window.Tf('inbox.handoff.bar',{when:fmtTs(hm.ts),src:src,why:why});
+}
+/* Q-15 #271（ad-）「一键人设口吻软回应」：GET 取词（人设口吻 · 按最近入站语言）→ 填输入框 → 走既有
+   sendMsg()（人工出站同路：服务端自动摘「需人工」标 + 解除 risk_hold）。只取词不另起发送链。 */
+async function _adSoftReply(cid,btn){
+  if(!cid) return;
+  try{ _uiBeacon('ad_soft_reply'); }catch(_){}
+  if(!selectedChat||String(selectedChat.conversation_id||'')!==String(cid)){ _toast(window.T('inbox.handoff.ad_soft_fail'),'#dc2626'); return; }
+  if(btn){ btn.disabled=true; }
+  try{
+    const r=await apiFetch('/api/unified-inbox/adult/soft-reply?cid='+encodeURIComponent(cid));
+    const out=r.ok?await r.json():null;
+    const text=out&&out.ok?String(out.text||'').trim():'';
+    if(!text) throw new Error('no_text');
+    const ta=document.getElementById('reply-ta');
+    if(!ta) throw new Error('no_ta');
+    ta.value=text;
+    try{ ta.dispatchEvent(new Event('input',{bubbles:true})); }catch(_){}
+    await sendMsg();
+    _toast(window.T('inbox.handoff.ad_soft_ok'),'#16a34a');
+  }catch(_){
+    _toast(window.T('inbox.handoff.ad_soft_fail'),'#dc2626');
+  }finally{
+    if(btn){ btn.disabled=false; }
+  }
 }
 function _handoffBarGo(){
   try{ _uiBeacon('handoff_bar_go'); }catch(_){}
@@ -15965,12 +16006,23 @@ function _diagFindingText(f){
   var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
     explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
     deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
-    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1};
+    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1};
   if(known[code]){
     var fmt={};
     Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
     // Q-14 #262：AI 失败原因码译人话（与会话头灰标同一组词条）
     if(code==='ai_last_fail'){ try{ fmt.reason=_aifReasonLabel(fmt.reason); }catch(_){} }
+    // Q-15 #271（ad-）：high_risk 的类别 / 级别 / 政策先译人话（成人内容 → 「成人内容（sex）· 露骨」）
+    if(code==='high_risk'){
+      try{
+        var _ck='inbox.adult.cat_'+(fmt.category||'other'), _cl=window.T(_ck);
+        fmt.category_label=(_cl&&_cl!==_ck)?_cl:(fmt.category||window.T('inbox.adult.cat_other'));
+        var _lk=_AD_LEVEL_KEYS[fmt.level]; fmt.level_label=_lk?window.T(_lk):(fmt.level||'-');
+        var _pk='inbox.adult.pol_'+(fmt.policy||''), _pl=fmt.policy?window.T(_pk):'';
+        fmt.policy_label=(_pl&&_pl!==_pk)?_pl:(fmt.policy||'-');
+        fmt.hit=fmt.hit||'-';
+      }catch(_){}
+    }
     // 档位/来源码先译人话再入模板（别把 review / guard:peer_bot 漏给坐席）
     try{
       if(fmt.mode) fmt.mode=_modeLabel(fmt.mode)||fmt.mode;
@@ -16017,6 +16069,10 @@ function _diagFixHtml(f){
   if(code==='pending_drafts') return btn(window.T('inbox.diag.fix_drafts'),'closeAiDiag();diagOpenDrafts();');
   // 实施56 P1：媒体拦截明细——内容已转待发队列的给「去放行」；没稿的人工回即可
   if(code==='media_block'&&String(p.queued)==='true') return btn(window.T('inbox.diag.fix_drafts'),'closeAiDiag();diagOpenDrafts();');
+  // Q-15 #271（ad-）：成人内容持有 → 就地「一键人设口吻软回应」（人工出站同路，发完自动摘标）
+  if(code==='high_risk'&&String(p.category||'')==='adult'&&selectedChat&&selectedChat.conversation_id){
+    return btn(window.T('inbox.handoff.ad_soft'),"closeAiDiag();_adSoftReply('"+esc(String(selectedChat.conversation_id))+"',null);");
+  }
   return '';
 }
 async function diagUncapPlatform(plat){
@@ -28706,6 +28762,7 @@ Object.assign(window, {
   // L-3 A #207（2026-09-06）：会话头「需人工」原因条两按钮（内联 onclick）——落地时漏挂 window，
   // L-7 收口哑按钮门禁（test_inbox_inline_handlers_exported）抓出补挂
   _handoffBarGo, _handoffBarAck,
+  _adSoftReply,                     // Q-15 #271（ad-）：会话头「一键人设口吻软回应」（内联 onclick）
   // P0 账号视角增强（2026-07-29）：溢出箭头 / 账号总览下拉（开关+选择+键盘）
   _acNudge, toggleAcctPicker, _acPickChoose, _acPickKey, _copyViewLink,
   // Account Dock（20260817-0055 批）：四个内联 handler 落地时漏挂 window（哑按钮

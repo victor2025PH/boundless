@@ -4056,6 +4056,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_aif.getLogger("admin").warning("ai_fail 路由注册失败", exc_info=True)
 
+    # ── Q-15 #271（2026-09-10）：成人内容「一键人设口吻软回应」取词 + grade 自检（adult_routes.py）──
+    try:
+        from src.web.routes.adult_routes import register_adult_routes
+
+        register_adult_routes(app, api_auth=_api_auth)
+    except Exception:
+        import logging as _log_adg
+
+        _log_adg.getLogger("admin").warning("adult 路由注册失败（Q-15）", exc_info=True)
+
     # ── Q-14 #262 E（2026-09-10）：告警「一眼看」只读页 /ops/glance（十分钟一次性令牌，
     # 令牌密钥 = web_admin.secret_key；默认占位符不铸令牌 → notifier 回落普通登录链接）──
     try:

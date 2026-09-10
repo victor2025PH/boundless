@@ -45,6 +45,9 @@ customer_waiting_no_gate warn  无任何闸拦、也无待审草稿，但末条�
 ai_last_fail            warn   最近一次 AI 起草失败未被后续成功覆盖（Q-14 #262：
                                params: reason=timeout|connect|gateway_5xx|no_key|
                                empty|unknown / hhmm / ago_sec / latency_ms / draft_id）
+high_risk               block  会话挂着风险持有 / 「需人工」标（Q-3 闸；Q-15 #271：params
+                               reason / category（adult|privacy|…）/ level（成人四级）/ hit /
+                               policy（adult 时 human|soft_reply|mark_only）/ held_min）
 looks_alive             ok     未发现拦截
 ======================  =====  ==========================================
 """
@@ -399,6 +402,62 @@ def diagnose_conversation(
                      draft_id=str(_aif.get("draft_id") or ""))
     except Exception:
         logger.debug("[reply_diag] ai_last_fail 读取失败（忽略）", exc_info=True)
+
+    # ── Q-15 #271：会话级风险持有 / 「需人工」原因 → high_risk（带类别 / 级别 / 命中词）──
+    # Q-3 之后 risk_hold 与「需人工」标都是闸（worker 人工优先闸 / A 线 _risk_hold_gate）；
+    # 此前体检对它们零感知——一片绿却不回。成人内容（adult_grader）带 level / hit / 人设政策，
+    # 其余（privacy / commitment / stop_contact / 泛因 needs_human）只带 reason。fail-open。
+    try:
+        _hold: Dict[str, Any] = {}
+        _hm: Dict[str, Any] = {}
+        if store is not None:
+            try:
+                from src.inbox import risk_hold as _rh
+                _hold = dict(_rh.active_record(store, cid, now=ts_now) or {})
+            except Exception:
+                _hold = {}
+            try:
+                if hasattr(store, "get_handoff_meta"):
+                    _hm = dict(store.get_handoff_meta(cid) or {})
+            except Exception:
+                _hm = {}
+            _tagged = False
+            try:
+                if hasattr(store, "get_conv_tags"):
+                    from src.integrations.protocol_autoreply import HANDOFF_TAG as _hp_tag
+                    _tagged = _hp_tag in list(store.get_conv_tags(cid) or [])
+            except Exception:
+                _tagged = False
+            if _hold or _tagged:
+                from src.inbox.adult_grader import (
+                    CATEGORY as _ADULT, adult_policy_of, card_label_parts, resolve_persona,
+                )
+                _hm_reason = str(_hm.get("reason") or "")
+                _hold_reason = str(_hold.get("reason") or "")
+                _parts = card_label_parts(_hm_reason)
+                _category = _parts["category"] or (
+                    _hold_reason if _hold_reason and _hold_reason != "needs_human" else "")
+                if not _category and _hm_reason:
+                    _category = _hm_reason.split(":", 1)[0]
+                _p: Dict[str, Any] = {
+                    "reason": _hold_reason or (_hm_reason or "needs_human"),
+                    "category": _category,
+                    "level": _parts["level"],
+                    "hit": _parts["hit"] or str(_hold.get("hit") or ""),
+                    "tagged_ts": float(_hm.get("ts") or _hold.get("set_ts") or 0.0),
+                    "source": str(_hm.get("source") or _hold.get("by") or ""),
+                    "held_min": round(max(0.0, ts_now - float(_hold.get("set_ts") or _hm.get("ts") or ts_now)) / 60.0, 1),
+                }
+                if _category == _ADULT:
+                    _pol, _pol_src = adult_policy_of(resolve_persona(
+                        {"platform": platform, "account_id": account_id, "chat_key": chat_key}, cfg), cfg)
+                    _p["policy"] = _pol
+                    _p["policy_source"] = _pol_src
+                out["risk_hold"] = {"hold": _hold or None, "handoff_meta": _hm or None, "tagged": _tagged}
+                # params 里的 level 是成人四级（与 _finding 的严重度同名），直接组 dict
+                findings.append({"level": "block", "code": "high_risk", "params": _p})
+    except Exception:
+        logger.debug("[reply_diag] risk_hold / needs_human 读取失败（忽略）", exc_info=True)
 
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",
