@@ -1,4 +1,4 @@
-# gate_sweep.ps1 - one-command cross-line gate sweep for the shared worktree.
+﻿# gate_sweep.ps1 - one-command cross-line gate sweep for the shared worktree.
 # ASCII-only output (PS5.1 GBK decode lesson).
 #
 # Protocol item 4 (AGENTS.md/CLAUDE.md "multi-agent shared-worktree protocol"):
@@ -394,7 +394,28 @@ $gates = @(
     # 写错只在真实翻译调用时才炸，且会被 EngineRouter 的故障转移吞成「悄悄换了引擎」。
     'tests/test_translation_engines.py',
     'tests/test_deploy_profiles.py',
-    'tests/test_config_check.py'
+    'tests/test_config_check.py',
+    # 实施97 微信线（2026-09-10 入库 f00c4d00 / 183e2322，全部开关默认关，1.0.80 进包）：
+    # 企微客服（wechat_kf client/worker/合规/48h 窗口 kf_window_guard）、个人微信 PC 副驾
+    # （wechat_pc 核心 + 桌面桥心跳）、企微扫码登录 wecom_sso、公网中继客户端 relay_client、
+    # 接入向导 connect_guide、e2e parity（真 create_app + 进程内 FakeWeCom）。这 11 个文件
+    # 此前只在本线自跑，别的线收口 sweep 不到——而它们钉的恰是共享面：platform_registry /
+    # channel_policy.window_rule('wechat_kf') / admin 路由清单 / unified_inbox.html 内联脚本。
+    # test_workspace_template_js_syntax 同时是「工作台模板内联 <script> 能被 Node 解析」门禁
+    # （unified_inbox.html / workspace_base.html / connect_guide.html 每段 script）——原本只在
+    # -Full 的 tools\verify_template_js_syntax.py 里跑一次，改模板不跑 -Full 就漏；本条让它
+    # 每次 sweep 都在场（无 Node 时该测试自 skip，不红）。
+    'tests/test_wechat_kf_client.py',
+    'tests/test_wechat_kf_worker.py',
+    'tests/test_wechat_kf_compliance.py',
+    'tests/test_kf_window_guard.py',
+    'tests/test_wechat_pc_core.py',
+    'tests/test_desktop_bridge_presence.py',
+    'tests/test_wecom_sso.py',
+    'tests/test_relay_client.py',
+    'tests/test_wechat_connect_guide.py',
+    'tests/test_wechat_e2e_parity.py',
+    'tests/test_workspace_template_js_syntax.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
@@ -507,6 +528,22 @@ try {
     }
 } catch {
     Write-Output ('  (red ledger unavailable, sweep unaffected: {0})' -f $_.Exception.Message)
+}
+
+# --- import sweep (2026-09-10, 实施97 R79 入库验证沉淀) ------------------------
+# pytest 只能覆盖「有测试 import 到」的模块；真正炸生产的常是**没人测、只被进程
+# import** 的那层（一线删了符号、另一线文件还 from-import 它；漏 import；循环 import）。
+# 这类在 py_compile（能 parse）和 pyflakes F821（from-import 语句本身就算定义）之间
+# 有缝，只有真 import 才炸。scripts\import_sweep.py：src/**/*.py 逐个 import_module
+# （1200+ 模块）+ AST 校验每个 `from src.X import name` 的 name 真存在（try/except
+# ImportError 护住的可选依赖回落不算雷）。~25s；隔离同 conftest（AITR_DATA_DIR→tmp）。
+# 非零 = 折进总 exit code（不进 pytest 红账本：它不是 pytest 用例）。
+Write-Output ''
+Write-Output '=== [1b/2] import sweep: src/**/*.py real import + from-import names (scripts\import_sweep.py) ==='
+python (Join-Path $engineRoot 'scripts\import_sweep.py')
+if ($LASTEXITCODE -ne 0) {
+    Write-Output '  import sweep RED (a module fails to import, or a from-import name no longer exists).'
+    if ($code -eq 0) { $code = $LASTEXITCODE }
 }
 
 if ($Full) {
