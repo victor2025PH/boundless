@@ -47,3 +47,11 @@
 - [x] Q-1～Q-6 收工 → R79 发 1.0.79（09-10 17:57–18:09 三渠道 + 官网 + 坐席三台；`docs/发版对账_v1.0.79_发版.md`）
 - [x] Q-8 / Q-10（+ Q-15）收工于 R79 基点 `4ba5e0bc`（15:14）之后 → **随 1.0.80**（R79 §4.2：改基点须重装载 + 重跑回归 + 重打三包，未并）
 - [ ] Q-12 / Q-13 → 1.0.80
+
+## 独立线（不在 Q 批编号内；09-10 18:35 老板：微信 / QQ / TikTok 三条未完成线各给续做指令，能入库的入库并打包测试）
+
+| 线 | 指令 | 现状（09-10 19:xx） | 去向 |
+|---|---|---|---|
+| **WX** 微信（实施97） | `docs/指令_微信线_续做_2026-09-10.md` | 代码全部入库 **`f00c4d00`**（96 文件 +12842/−70，共享文件只带本线 hunk、index-only）+ **`183e2322`**（两处门禁红 + ui-build 戳）；全部开关默认关；入库树导入扫雷 1220/0、本线 136 绿、gate_sweep 本线旧红 9 项全消；打包测试 D:\boundless-wx@183e2322：uild:backend 后端冒烟全过 → dist:win 预发门禁 76/16/81/303 + after-pack 22 项 + 内测包冒烟全过，smart 593,800,745 B（R79 +546 KB），PYZ 含 wechat_pc/wechat_kf/wecom_sso/relay_client/kf_window_guard，connect_guide.html 在包；**未发布**（版本号仍 1.0.79，只作测试） | **1.0.80 进包**；真企微账号联调 / 副驾生产化 / 中继运维按指令 A–F |
+| **QQ** route-1（Milky 边车） | `docs/指令_QQ线_续做_2026-09-10.md` | 边车 + Python 侧 + 打包早已入库（`7383d15e` `d9c09ebf`）并在包内；**真驱动 `ntq/qqnt-driver.js` 不存在 → 回退 mock**（`/health.driver_reason` 如实标）；本次无新改动 | A 诚实标位（注册表三态 + 账号卡「演示态」）随 1.0.80；真驱动移植 + 72 h 去风险验证后再加 after-pack REQUIRED |
+| **TK** TikTok（TK-1） | `docs/指令_TikTok线_续做_2026-09-10.md` | A/B/T1–T5 全部入库默认关，`implemented=False`；`test_douyin_e2e_alignment` platName 断言随 `f00c4d00` 改为契约式；本次无新改动；抖音线冻结不动 | C Shop CS / D 参数收口 / E huoke 桥先做；A 真流量 / B 补字段等 Business Messaging 权限；收工立 TK-2 |
