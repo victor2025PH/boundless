@@ -1,5 +1,53 @@
 [
   {
+    "version": "1.0.79",
+    "date": "2026-09-10",
+    "title": {
+      "zh": "行为止血版：重装不群发、草稿即将发文本、发图不说谎、不答应见面、已知不再问、切手动即停、撤回错误默认",
+      "en": "Behavior hotfix release: no mass-send on reinstall, draft equals sent text, honest photos, no meetups, known facts never re-asked, manual switch cancels in-flight, wrong defaults rolled back"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "重装 / 重新登录不再群发：扫码登录同步回来的历史消息一律标 backfill 落库不触发自动起草；72 小时内没来信的旧会话不再自动回，进「有 N 个旧会话等你决定」横幅（忽略 / 我来回 / 让 AI 起草预览）；登录同步完成与切「全自动」都会先弹两栏确认框「会自动回（最近 72 小时有来信）N 个 / 不会碰：旧消息 M · 已停联 K · 我自己 S」；停联名单按账号持久，重装后仍认；「我自己」备忘会话排除全部自动化。",
+        "草稿即将发文本：工作台任何新草稿 / L1 审核稿 / 关怀预览在起草层就已去破折号 / 分号 / 弯引号 / 列表 / 感悟尾 / 反问尾并压到两句以内；新增引用锚点守卫，凡「你之前提过 / you mentioned / last time you」都会到最近 200 条对话和该客户记忆里找依据，找不到整句换成中性问句；每条 AI 稿一行 [draft] 日志；/admin/ops 新增「AI 指纹」卡（破折号率 / 客服腔 / 引用无锚点 / 承诺无动作，近 24 小时）。",
+        "发图不说谎：AI 只能「请求」发图，系统真发成功（拿到平台回执）配文才会出；说要发 / 说发了但没图 → 自动改写或拦下人审；客户说「没收到」→ 自动重发上一张，从没发过就直说没发出去；连说两次没收到转人工；相册里没有对应场景就直接说没有，不再编「还在加载 / 我再发一次」。",
+        "相册 AI 建议词默认参与匹配（卡片标「AI 标注」），顶部一键采纳全部建议词，可按场景（自拍 / 室内 / 户外 / 美食 / 宠物）批量标注；要风景照不会再随机抓自拍。",
+        "现实承诺守卫：AI 不会再答应上门喝茶、给地址、寄东西或打钱；人设「见面政策」默认「永不」，只会委婉延后，被追问仍拒，也不会说「我忘了今晚一定」；20 条邀约 + 10 条要照片门禁全过才发的版。",
+        "客户说过的事按「已知」处理：字段没填也会扫最近 30 轮对话，说过职业就不再问，最多顺着追一句；同一项一天最多问两次没回应当天不再问；24 小时内问过的同类问题出站前拦掉；目标页顶部「暂停全部摸底目标」总开关，卡片「已提及（未确认）」一键确认。",
+        "识破处置：客户一说「你是机器人吧 / 你又问」，该会话全部目标自动停 24 小时并转需人工，这一轮只回一句轻松的「抱歉，你确实说过」，任何时候不再说「我不是机器人」这类自证句；账号昵称与人设名不一致时 AI 知道对方可能用昵称叫自己，不再否认。",
+        "风险挂会话 + 人工优先：隐私 / 承诺 / 停联等风险命中后挂在会话上 24 小时（不只是那一条稿），期间新起草强制人审；切手动、坐席正在打字、坐席手发任一发生都会立刻取消在途的 AI 待发消息（含拟人等待中的），并提示「已取消 N 条待发 AI 消息」。",
+        "撤回错误默认：工作时间班表出厂改为关（1.0.78 升级机被基线补进去的班表 / 额度闸门自动回滚并写日志，你自己改过的一字不动）；开班表必须选时区并给「上海 01:00 ＝ 纽约 13:00」换算核对；休息期扣留每条一行 [work_schedule] hold=off_hours 日志 + 会话标签「作息外 · 到点重新拟稿」；过夜积压的稿复班后默认全部作废重写；AI 发送额度出厂关、人工发送永不限额、进度条 80% 提醒；升级后首次打开工作台弹一次「这版改变了什么」，每行可「保持 / 改回」。",
+        "关怀排期：你亲手写的原话按你定的时间发（不再被安静时段顺延），多条顺延错峰 ≥5 分钟；关怀页显示安静时段 / 时区依据；排期落安静时段弹「仍按 01:20 发 / 顺延到 08:00」。",
+        "画像抽取两链合一：一次抽取同时写记忆和画像；客户昵称「Michael/46/New york/union carpenter」自动预填年龄 / 城市 / 职业；AI 推断和昵称预填都带「待确认」徽标，你点 ✓ 才算确认；连续多轮零抽取时记忆页 / 目标页亮一行提醒。",
+        "AI 未生成对坐席可见：AI 超时默认 30 → 60 秒、读超时不再盲重试；失败一行 [ai] fail conv= reason= latency_ms=；会话头灰标「AI 本轮未生成（超时 · 23:41）」+「重试起草」，新入站成功后自动清。",
+        "出厂态与安全：后台默认只监听 127.0.0.1（netstat 不再见 0.0.0.0）；系统设置新卡「连接与安全」→「允许局域网设备连接」开关默认关，要手机扫码操控时再开（公用网络二次确认）；陪伴域首装知识库为空、系统话术移到系统设置「兜底策略」卡并可预览清理存量；包内 handoff yaml 齐、fatex.db 不再进包；首启体验档文案不再出现 None。",
+        "发送失败现在会写明原因（含「适配器未就绪（后端启动中）」），收件箱 failed 气泡带原因，日志一行 [send] fail conv= reason= kind=。",
+        "告警链接：通知 webhook 可选 links=login / magic / off，magic 为十分钟一次性只读速览页 /ops/glance。"
+      ],
+      "en": [
+        "Reinstall / re-login no longer mass-sends: history pulled in by the login sync is tagged backfill and stored without triggering drafts; conversations silent for more than 72 hours are never auto-answered and go to a \"N dormant conversations waiting for you\" banner (ignore / I'll reply / let AI preview a draft); finishing a login sync or switching an account to Full-auto first shows a two-column confirmation \"will auto-reply (inbound within 72 h) N / will not touch: M old, K stopped, S myself\"; the stop-contact list is persisted per account and survives a reinstall; \"Message yourself\" notes are excluded from all automation.",
+        "Draft = the text that will be sent: every new draft / L1 review draft / care preview is cleaned at drafting time (em dashes, semicolons, curly quotes, lists, summary tails, rhetorical tails; two sentences max); a new claim guard checks any \"you mentioned / last time you / 你之前说\" against the last 200 messages and that customer's memory and rewrites the whole sentence into a neutral question when nothing backs it; one [draft] log line per AI draft; /admin/ops gains an \"AI fingerprint\" card (dash rate / service tone / unanchored claims / promise without action, last 24 h).",
+        "Photos without lies: the AI can only request a photo; the caption goes out only after the platform acknowledges the send; \"I'll send one\" / \"sent it\" without an actual image is rewritten or held for review; \"I didn't get it\" triggers a resend of the last photo, or an honest \"it did not go through\" if nothing was ever sent; a second complaint hands off to a human; when the album has no matching scene the AI says so instead of \"still loading / let me try again\".",
+        "Album AI-suggested tags now take part in matching by default (cards show \"AI tagged\"), a one-click \"adopt all suggestions\" at the top, batch tagging by scene (selfie / indoor / outdoor / food / pet); a request for scenery never returns a random selfie again.",
+        "Real-world commitment guard: the AI no longer agrees to come over for tea, share an address, mail things or send money; the persona \"meeting policy\" defaults to Never, so it only defers politely, keeps declining when pressed and never says \"I forgot, tonight for sure\"; shipped only after a 20-invitation + 10-photo-request gate passed clean.",
+        "What the customer said counts as known: even with empty profile fields the engine scans the last 30 turns, never asks about a job the customer already mentioned (one follow-up at most), asks the same item at most twice a day and sleeps for the day when unanswered, and blocks any question already asked in the last 24 hours before it leaves; a \"Pause all discovery goals\" master switch at the top of the goals page; \"mentioned (unconfirmed)\" slots confirm with one click.",
+        "Exposure handling: as soon as a customer says \"you're a bot / you asked that already\", every goal in that conversation pauses for 24 hours and the thread is flagged needs-human; this turn only replies with one light \"sorry, you did tell me\", and self-proving lines like \"I'm not a robot\" are never sent; when the account nickname differs from the persona name the AI knows the customer may use the nickname and stops denying it.",
+        "Risk pinned to the conversation + human priority: privacy / commitment / stop-contact hits now stay on the conversation for 24 hours (not just one draft) and force human review on new drafts; switching to Manual, an agent typing or an agent sending by hand immediately cancels in-flight AI messages (including those in the human-pacing wait) with a toast \"cancelled N pending AI messages\".",
+        "Wrong defaults rolled back: the working-hours schedule ships OFF (a schedule / send-quota gate that the 1.0.78 baseline inserted is rolled back automatically with a log line; anything you changed yourself is untouched); enabling the schedule now requires a time zone with a \"Shanghai 01:00 = New York 13:00\" cross-check; every off-hours hold logs one [work_schedule] hold=off_hours line and tags the conversation \"off hours · redraft when back\"; overnight backlog drafts are discarded and rewritten when the shift starts; the AI send quota ships OFF, manual sends are never capped, 80% progress warning; after upgrading, the first workbench open shows \"what changed in this version\" once with keep / revert per row.",
+        "Care scheduling: your own verbatim message goes out at the time you set (no longer deferred by quiet hours), multiple deferred items are staggered by at least 5 minutes; the care page shows the quiet window / time-zone source; scheduling into quiet hours asks \"send at 01:20 anyway / defer to 08:00\".",
+        "Profile extraction unified: one extraction writes both memory and profile; a nickname like \"Michael/46/New york/union carpenter\" pre-fills age / city / job; AI-inferred and nickname values carry an \"unconfirmed\" badge until you click ✓; many consecutive empty extractions light a hint on the memory and goals pages.",
+        "AI failures visible to agents: AI timeout default 30 → 60 s, read timeouts are no longer blindly retried; one [ai] fail conv= reason= latency_ms= line per failure; the conversation header shows a grey \"AI did not generate this turn (timeout · 23:41)\" chip with \"retry draft\", cleared automatically once a new inbound succeeds.",
+        "Factory state and security: the backend listens on 127.0.0.1 only by default (no more 0.0.0.0 in netstat); new \"Connection & security\" settings card with an \"Allow LAN devices\" switch, off by default, to enable when you need phone QR control (extra confirmation on public networks); companion-domain clean installs start with an empty knowledge base, system fallback scripts move to a \"Fallback policy\" settings card with a preview-then-clean for leftovers; handoff yaml files are in the package, fatex.db is not; the first-run trial banner no longer shows None.",
+        "Failed sends now state the reason (including \"adapter not ready (backend starting)\"), the inbox failed bubble carries it, and one [send] fail conv= reason= kind= log line is written.",
+        "Alert links: notification webhooks accept links=login / magic / off; magic is a ten-minute single-use read-only glance page at /ops/glance."
+      ]
+    }
+  },
+  {
     "version": "1.0.78",
     "date": "2026-09-08",
     "title": {
