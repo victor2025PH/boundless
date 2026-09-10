@@ -2053,7 +2053,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 // wechat（个人微信 PC 副驾，准入区）不进 FIXED_PLATS：仅在该桌面账号真的接入时按「有账号的平台」动态出现，
 // 这里只给它配色/显示名，免得动态出现时退灰色兜底。
 const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6'};
-const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',wechat_kf:'💬',wechat:'💬',web:'🌐'};
+const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',web:'🌐'};   // wechat_kf / wechat 走 platformIconSVG，文本回落取 PI[p]||默认气泡（实施97：不再各占一个 emoji，emoji ratchet 天花板）
 const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
 // IG/Zalo/QQ 机器人/微信客服为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
@@ -2299,7 +2299,7 @@ function platIcon(p,size){
   const bk=_PLAT_BADGE_KEY[p]; if(!bk) return svg;
   const s=size||18, fs=Math.max(7,Math.round(s*0.3));
   return '<span class="plat-ico-wrap" style="position:relative;display:inline-flex;width:'+s+'px;height:'+s+'px;">'+svg
-    +'<span class="plat-ico-badge" style="position:absolute;right:-3px;bottom:-3px;min-width:'+Math.round(s*0.42)+'px;height:'+Math.round(s*0.42)+'px;padding:0 2px;border-radius:5px;background:'+(p==='wechat_kf'?'#1b6df5':'#4b5563')+';color:#fff;font-size:'+fs+'px;line-height:'+Math.round(s*0.42)+'px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--bg-panel,#fff);">'+esc(window.T(bk))+'</span></span>';
+    +'<span class="plat-ico-badge" style="position:absolute;right:-3px;bottom:-3px;min-width:'+Math.round(s*0.42)+'px;height:'+Math.round(s*0.42)+'px;padding:0 2px;border-radius:5px;background:'+(p==='wechat_kf'?'var(--wx-kf,#1b6df5)':'var(--wx-badge,#4b5563)')+';color:var(--wx-on-badge,#fff);font-size:'+fs+'px;line-height:'+Math.round(s*0.42)+'px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--bg-panel,#fff);">'+esc(window.T(bk))+'</span></span>';
 }
 // 中文界面里两个微信平台显示中文名（微信客服 / 个人微信），英文回落 PN
 const _PLAT_NAME_KEY={wechat_kf:'inbox.plat.name_wechat_kf',wechat:'inbox.plat.name_wechat'};
@@ -8254,6 +8254,7 @@ async function kfTransferToHuman(){
   }catch(e){ _toast(window.Tf('inbox.kf.transfer_fail',{why:String(e&&e.message||e).slice(0,80)}),'#dc2626'); }
   finally{ if(b) b.disabled=false; }
 }
+window.kfTransferToHuman=kfTransferToHuman;   // 实施97：会话头按钮内联 onclick 引用，本文件整体在 IIFE 内须挂 window（gate: test_inbox_inline_handlers_exported）
 /* M-2 A2/B（#232 / D-M1）：按 (platform, account_id) 取 platform_status 条目——账号栏 chip、
    会话横幅、发送前置检查共用同一份「通道真相 + 门禁快照」。取不到返回 {}（旧后端/未托管）。 */
 function _acctInfo(p,aid){
@@ -8618,7 +8619,7 @@ function _renderKfSession(ks, c){
     el.style.background=bg; el.style.border='1px solid '+bd;
     el.style.color=tone==='muted'?'var(--text-muted,#6b7280)':'var(--text-main,#0f172a)';
     el.innerHTML='<span style="flex:none;width:8px;height:8px;border-radius:50%;background:'
-      +(tone==='warn'?'#f59e0b':(tone==='muted'?'#9ca3af':'var(--accent,#1e8cf2)'))+'"></span>'
+      +(tone==='warn'?'var(--wx-warn,#f59e0b)':(tone==='muted'?'var(--wx-muted,#9ca3af)':'var(--accent,#1e8cf2)'))+'"></span>'
       +'<span style="flex:1;min-width:0;">'+esc(text)+'</span>';
     el.style.display='flex';
     // 已是人工接待：转人工按钮改为「已转人工」态（仍可点，换人）

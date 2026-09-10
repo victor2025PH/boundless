@@ -4,7 +4,7 @@
 <style>
   /* 实施97 · 多步引导型接入页：左步骤轨 + 右内容区 + 底部动作条。全部走 --tk-* 令牌；
      企微侧步骤（授权/凭证）用企微蓝 --cg-wecom，客户侧（二维码）与个人微信用微信绿 --cg-wx。 */
-  .cg-wrap{--cg-wecom:#1b6df5;--cg-wx:#07c160;height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;}
+  .cg-wrap{--cg-wecom:#1b6df5;--cg-wx:#07c160;--cg-badge-gray:#4b5563;--cg-on-badge:#fff;height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px;}
   .cg-shell{max-width:960px;margin:0 auto;}
   .cg-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;}
   .cg-head .cg-ico{flex:none;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--cg-accent,var(--tk-brand)) 13%,transparent);}
@@ -182,7 +182,7 @@
       // 与抽屉同一枚角标（企 / PC）：管理者一眼分清「企业官方客服号」与「我自己的个人号」
       var badge=isKF?T('inbox.plat.badge_wechat_kf'):T('inbox.plat.badge_wechat');
       el('cg-ico').innerHTML='<span style="position:relative;display:inline-flex;width:28px;height:28px;">'+svg
-        +'<span style="position:absolute;right:-5px;bottom:-5px;min-width:13px;height:13px;padding:0 3px;border-radius:5px;background:'+(isKF?'var(--cg-wecom)':'#4b5563')+';color:#fff;font-size:9px;line-height:13px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--tk-surface,#fff);">'+esc(badge)+'</span></span>';
+        +'<span style="position:absolute;right:-5px;bottom:-5px;min-width:13px;height:13px;padding:0 3px;border-radius:5px;background:'+(isKF?'var(--cg-wecom)':'var(--cg-badge-gray)')+';color:var(--cg-on-badge);font-size:9px;line-height:13px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--tk-surface,#fff);">'+esc(badge)+'</span></span>';
     }catch(_){}
   }
   function rail(){

@@ -101,7 +101,7 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
     <button type="submit" class="btn-login">{{ (i18n or {}).get('login_btn', '登 录') }}</button>
     {% if wecom_login %}
     {# 实施97 P1：企业微信成员扫码登录（wecom_login.enabled 且凭证齐才出现）——跳企微官方登录页，回调建本地会话 #}
-    <a class="btn-login" href="/login/wecom" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:.6rem;background:#1b6df5;text-decoration:none;">
+    <a class="btn-login" href="/login/wecom" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:.6rem;background:var(--wx-kf,#1b6df5);text-decoration:none;">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM19 14h2M19 19h2M14 19h2"/></svg>
       <span>{{ (i18n or {}).get('lg2_wecom_btn', '企业微信扫码登录') }}</span>
     </a>
