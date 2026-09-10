@@ -52,6 +52,7 @@ _TAKEOVER_CALLER_ALLOWLIST = {
     "src/web/routes/unified_inbox_send_routes.py":    "人工发送：文本/媒体/语音",
     "src/web/routes/sticker_routes.py":               "人工发送：贴纸",
     "src/inbox/channel_adapters.py":                  "网站客服坐席人工出站",
+    "src/integrations/wechat_kf_webhook.py":          "坐席显式点「转企微人工」（POST /kf/transfer）成功后打接管标：企微坐席在答、本端 AI 必须停手（实施97 线 A）",
 }
 
 # ── 查看类路由文件：绝不允许出现任何档位写入 / 接管调用 ─────────────────────────

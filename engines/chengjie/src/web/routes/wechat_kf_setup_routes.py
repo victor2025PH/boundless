@@ -232,7 +232,9 @@ def register_wechat_kf_setup_routes(app: FastAPI, api_auth: Any) -> None:
                              meta={"open_kfid": it["open_kfid"]})
             rows.append({"account_id": row.get("account_id"), "label": row.get("label"), "status": row.get("status")})
         patch: Dict[str, Any] = {"wechat_kf": {"enabled": True, "open_kfid": kfids[0]["open_kfid"]}}
-        if not cfg.get("platform_login", {}).get("orchestrator_enabled", False):
+        # 三态解析（桌面模式从未写过=默认开）——字面直读会让升级安装重复写 true
+        from src.integrations.platform_login import resolve_login_switch
+        if not resolve_login_switch(cfg, "platform_login.orchestrator_enabled"):
             patch["platform_login"] = {"orchestrator_enabled": True}
         saved = _save_patch(request, patch)
         await _hot_start(_cfg(request))
