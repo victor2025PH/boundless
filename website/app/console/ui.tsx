@@ -10,6 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   Bug,
+  Download,
   Filter,
   Gift,
   Inbox,
@@ -308,6 +309,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { href: "/console/leads", label: "留资", Icon: Inbox },
       { href: "/console/trial", label: "试用", Icon: Gift },
       { href: "/console/funnel", label: "激活漏斗", Icon: Filter },
+      { href: "/console/downloads", label: "下载台账", Icon: Download },
       { href: "/console/channels", label: "渠道", Icon: Radio },
     ],
   },

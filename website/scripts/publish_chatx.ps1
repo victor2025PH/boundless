@@ -281,7 +281,9 @@ if (-not $DryRun) {
         $ly = (& curl.exe -s -m 15 "$PublicBase/$YmlName" | Out-String)
         $lv = if ($ly -match "(?m)^version:\s*(.+?)\s*$") { $Matches[1].Trim() } else { "?" }
         $mv = ""; try { $mv = ([string]((& curl.exe -s -m 15 "$PublicBase/manifest.json" | ConvertFrom-Json).version)).Trim() } catch {}
-        $code = (& curl.exe -s -o NUL -w "%{http_code}" -m 20 -r 0-0 "$PublicBase/ChatX-Setup-$Version.exe")
+        # -L: since the 2026-09-10 download ledger, GET /downloads/*.exe is rewritten to /dl and 302s to R2
+        # when the mirror has the file; follow it so the check sees what a real downloader sees (200/206).
+        $code = (& curl.exe -s -L -o NUL -w "%{http_code}" -m 20 -r 0-0 "$PublicBase/ChatX-Setup-$Version.exe")
         if ($lv -eq $Version -and $mv -eq $Version -and $code -in @("200","206")) { break }
         if ($attempt -lt 3) { Info "public check attempt $attempt not yet consistent (yml=$lv manifest=$mv exe=HTTP$code) - retrying in 8s"; Start-Sleep -Seconds 8 }
     }

@@ -95,7 +95,8 @@ if (-not $DryRun) {
   $pub = ""
   try { $pub = (& curl.exe -s -m 15 "$SiteUrl/downloads/hotpatch.json" | Out-String) } catch {}
   if ($pub -notmatch [regex]::Escape($id)) { Fail "public hotpatch.json missing id $id" }
-  $code = (& curl.exe -s -o NUL -w "%{http_code}" -m 20 -r 0-0 "$SiteUrl/downloads/$zipName")
+  # -L: /downloads/*.zip is rewritten to /dl (download ledger, 2026-09-10) and may 302 to R2.
+  $code = (& curl.exe -s -L -o NUL -w "%{http_code}" -m 20 -r 0-0 "$SiteUrl/downloads/$zipName")
   if ($code -notin @("200", "206")) { Fail "public zip not downloadable (HTTP $code)" }
   Ok "public verified: hotpatch.json=$id zip=HTTP$code"
 }

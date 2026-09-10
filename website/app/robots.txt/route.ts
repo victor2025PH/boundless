@@ -22,6 +22,10 @@ const DISALLOW: string[] = [
   "/admin",
   "/api/",
   "/robot-stage",
+  // 安装包与分流器（2026-09-10 下载台账批）：二进制无索引价值，且 GPTBot/Bingbot 抓 exe 只是
+  // 白耗 R2/主站流量并污染下载台账。下载页本身（/download/*）照常可抓。
+  "/dl/",
+  "/downloads/",
   ...GATED_SLUGS.flatMap((slug) => [slug, `/en${slug}`]),
 ];
 
