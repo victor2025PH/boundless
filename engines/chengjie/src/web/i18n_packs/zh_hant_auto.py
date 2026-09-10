@@ -21709,6 +21709,36 @@ ZH_HANT = {
     'psn_pf_mem_count': '{n} 條',
     # ── psn_pf_mem_hint ──
     'psn_pf_mem_hint': '一行一條，寫可被追問驗證的具體事實',
+    # ── psn_pf_meeting ──
+    'psn_pf_meeting': '見面政策',
+    # ── psn_pf_meeting_hint ──
+    'psn_pf_meeting_hint': '陪聊預設永不答應見面；熟悉 N 個月後也只交人工，AI 本人永不接受',
+    # ── psn_pf_mp_never ──
+    'psn_pf_mp_never': '永不',
+    # ── psn_pf_mp_months ──
+    'psn_pf_mp_months': '熟悉 N 月',
+    # ── psn_pf_mp_handoff ──
+    'psn_pf_mp_handoff': '交人工',
+    # ── psn_pf_mp_months_label ──
+    'psn_pf_mp_months_label': '月數',
+    # ── psn_pf_mp_style ──
+    'psn_pf_mp_style': '拒絕口吻',
+    # ── psn_pf_mp_soft ──
+    'psn_pf_mp_soft': '委婉',
+    # ── psn_pf_mp_direct ──
+    'psn_pf_mp_direct': '直接',
+    # ── psn_pf_mp_ex_never_soft ──
+    'psn_pf_mp_ex_never_soft': '例：「我還沒準備好見面，等我們更熟一點再說。」',
+    # ── psn_pf_mp_ex_never_direct ──
+    'psn_pf_mp_ex_never_direct': '例：「我不跟網上認識的人見面。」',
+    # ── psn_pf_mp_ex_months_soft ──
+    'psn_pf_mp_ex_months_soft': '例：未滿 N 月時婉拒；滿了也只交人工，不答應見面。',
+    # ── psn_pf_mp_ex_months_direct ──
+    'psn_pf_mp_ex_months_direct': '例：未滿 N 月直接拒；滿了交人工。',
+    # ── psn_pf_mp_ex_handoff_soft ──
+    'psn_pf_mp_ex_handoff_soft': '例：不答應，一句延後並轉人工。',
+    # ── psn_pf_mp_ex_handoff_direct ──
+    'psn_pf_mp_ex_handoff_direct': '例：不答應，轉人工處理。',
     # ── psn_pf_name_callpeer ──
     'psn_pf_name_callpeer': '你稱呼對方（愛稱）',
     # ── psn_pf_name_callpeer_tip ──

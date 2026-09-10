@@ -1200,6 +1200,28 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <textarea id="pe-pf-avoid" rows="3"></textarea>
       <div class="pf-hint">{{ (i18n or {}).get('psn_pf_one_per_line','一行一条') }}</div>
     </div>
+    <!-- Q-2 #263 D-Q3：见面政策一格三选（mp- 前缀，与 Q-6 相册区分段） -->
+    <div class="field-row" id="mp-row">
+      <label>{{ (i18n or {}).get('psn_pf_meeting','见面政策') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_meeting_hint','陪聊默认永不答应见面；熟悉 N 个月后也只交人工，AI 本人永不接受') }}</span></label>
+      <div class="opt-cards" id="mp-cards">
+        <div class="opt-card" data-val="never" onclick="_selMeetingPolicy(this)"><span class="oc-ico">🚫</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_mp_never','永不') }}</span></div>
+        <div class="opt-card" data-val="after_months" onclick="_selMeetingPolicy(this)"><span class="oc-ico">⏳</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_mp_months','熟悉 N 月') }}</span></div>
+        <div class="opt-card" data-val="handoff" onclick="_selMeetingPolicy(this)"><span class="oc-ico">🙋</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_mp_handoff','交人工') }}</span></div>
+      </div>
+      <input type="hidden" id="mp-policy" value="never">
+      <div id="mp-months-wrap" style="margin-top:.4rem;display:none">
+        <label style="font-size:.8rem">{{ (i18n or {}).get('psn_pf_mp_months_label','月数') }}
+          <input id="mp-months" type="number" min="1" max="36" value="3" style="width:4rem" oninput="_mpPreview()">
+        </label>
+      </div>
+      <div style="margin-top:.45rem;font-size:.8rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_mp_style','拒绝口吻') }}</div>
+      <div class="opt-cards" id="mp-style-cards" style="margin-top:.2rem">
+        <div class="opt-card" data-val="soft" onclick="_selMpStyle(this)"><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_mp_soft','委婉') }}</span></div>
+        <div class="opt-card" data-val="direct" onclick="_selMpStyle(this)"><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_mp_direct','直接') }}</span></div>
+      </div>
+      <input type="hidden" id="mp-style" value="soft">
+      <div id="mp-preview" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
+    </div>
     <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_appearance','外观锚点') }}</div>
     <div class="field-row">
       <label>{{ (i18n or {}).get('psn_pf_appearance','外观描述') }}</label>
@@ -1809,7 +1831,55 @@ function _setTemperCard(lv){
 }
 
 // ── Option cards ──────────────────────────────────────────────────────────────
-function _selOpt(el, hiddenId, cardsId) {
+function _mpPreview(){
+  var pol = (_pfStr('mp-policy') || 'never');
+  var st = (_pfStr('mp-style') || 'soft');
+  var wrap = document.getElementById('mp-months-wrap');
+  if (wrap) wrap.style.display = (pol === 'after_months') ? '' : 'none';
+  var map = {
+    never_soft: window.T('psn_pf_mp_ex_never_soft'),
+    never_direct: window.T('psn_pf_mp_ex_never_direct'),
+    after_months_soft: window.T('psn_pf_mp_ex_months_soft'),
+    after_months_direct: window.T('psn_pf_mp_ex_months_direct'),
+    handoff_soft: window.T('psn_pf_mp_ex_handoff_soft'),
+    handoff_direct: window.T('psn_pf_mp_ex_handoff_direct')
+  };
+  var el = document.getElementById('mp-preview');
+  if (!el) return;
+  el.textContent = map[pol + '_' + st] || map.never_soft || '';
+}
+function _selMeetingPolicy(el){
+  _selOpt(el, 'mp-policy', 'mp-cards');
+  _mpPreview();
+}
+function _selMpStyle(el){
+  _selOpt(el, 'mp-style', 'mp-style-cards');
+  _mpPreview();
+}
+function _setMeetingPolicy(raw){
+  var s = String(raw || 'never').toLowerCase();
+  var pol = 'never', months = '3';
+  if (s.indexOf('after_months') === 0) {
+    pol = 'after_months';
+    var n = parseInt(s.split(':')[1] || '3', 10);
+    if (!n || n < 1) n = 3;
+    months = String(n);
+  } else if (s === 'handoff') {
+    pol = 'handoff';
+  }
+  var hid = document.getElementById('mp-policy'); if (hid) hid.value = pol;
+  var mEl = document.getElementById('mp-months'); if (mEl) mEl.value = months;
+  _setOptCard('mp-cards', pol);
+  _mpPreview();
+}
+function _setMpStyle(raw){
+  var v = String(raw || 'soft').toLowerCase();
+  if (v === 'direct' || v === '直接' || v === 'blunt') v = 'direct';
+  else v = 'soft';
+  var hid = document.getElementById('mp-style'); if (hid) hid.value = v;
+  _setOptCard('mp-style-cards', v);
+  _mpPreview();
+}
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
   el.classList.add('sel');
   document.getElementById(hiddenId).value = el.dataset.val;
@@ -4102,7 +4172,7 @@ var _ADV_MANAGED_SUB = {
   names: ['full_western','english','nickname','usage_notes'],
   context: ['hobbies','specific_memories','emotional_triggers'],
   tastes: ['likes','dislikes','opinions'],
-  boundaries: ['topics_to_avoid'],
+  boundaries: ['topics_to_avoid', 'meeting_policy', 'commitment_style'],  // mp- Q-2
 };
 function _refreshAdvPanel() {
   var panel = document.getElementById('pe-adv-panel');
@@ -4981,6 +5051,8 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetLines('pe-pf-dislikes', tst.dislikes);
   _pfSetLines('pe-pf-opinions', tst.opinions);
   _pfSetLines('pe-pf-avoid', bnd.topics_to_avoid);
+  _setMeetingPolicy(bnd.meeting_policy || 'never');  // mp-
+  _setMpStyle(bnd.commitment_style || 'soft');       // mp-
   _pfSetVal('pe-pf-appearance', p.appearance);
   _pfSetLines('pe-pf-scenes', p.selfie_scenes);
   _pfSetVal('pe-pf-quirks', persObj ? persObj.quirks : '');
@@ -5080,9 +5152,25 @@ function _collectProfileTabPatch() {
     if (v.length || _pfNonEmpty(_pfOrig('tastes', pair[1]))) tstOut[pair[1]] = v;
   });
   if (Object.keys(tstOut).length) patch.tastes = tstOut;
-  // boundaries 子树
+  // boundaries 子树：避谈 + 见面政策（Q-2）。整棵 merge，避免保存丢掉未在表单里的键。
+  var origB = _pfOrig('boundaries');
+  var bndOut = (origB && typeof origB === 'object' && !Array.isArray(origB)) ? Object.assign({}, origB) : {};
   var avoid = _pfLines('pe-pf-avoid');
-  if (avoid.length || _pfNonEmpty(_pfOrig('boundaries', 'topics_to_avoid'))) patch.boundaries = {topics_to_avoid: avoid};
+  if (avoid.length || _pfNonEmpty(bndOut.topics_to_avoid)) bndOut.topics_to_avoid = avoid;
+  var mp = _pfStr('mp-policy') || 'never';
+  if (mp === 'after_months') {
+    var mn = parseInt(_pfStr('mp-months') || '3', 10);
+    if (!mn || mn < 1) mn = 3;
+    if (mn > 36) mn = 36;
+    bndOut.meeting_policy = 'after_months:' + mn;
+  } else if (mp === 'handoff') {
+    bndOut.meeting_policy = 'handoff';
+  } else {
+    bndOut.meeting_policy = 'never';
+  }
+  var st = _pfStr('mp-style') || 'soft';
+  bndOut.commitment_style = (st === 'direct') ? 'direct' : 'soft';
+  if (Object.keys(bndOut).length) patch.boundaries = bndOut;
   // personality 三补充：由 saveProfile 做对象/字符串形态特殊融合
   var persOut = {};
   [['pe-pf-quirks','quirks'],['pe-pf-humor','humor'],['pe-pf-temperament','temperament']].forEach(function(pair){

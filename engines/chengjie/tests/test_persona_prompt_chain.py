@@ -129,6 +129,9 @@ _PROBES: Dict[str, _Probe] = {
     "identity.deny_ai_reply": _Probe("探针否认话术我是真人啦", "探针否认话术我是真人啦"),
     "identity.claim_human": _Probe(True, f"你就是真人{_ROLE}{_NAME}"),
     "boundaries.topics_to_avoid": _Probe(["探针雷区话题"], "探针雷区话题"),
+    # Q-2 #263 D-Q3：见面政策 / 拒绝口吻必须进 prompt（哨兵与默认 never/soft 错开）
+    "boundaries.meeting_policy": _Probe("handoff", "一律交给人工"),
+    "boundaries.commitment_style": _Probe("direct", "拒绝口吻=直接"),
     # 已撤销的旧设定（2026-08-03 删除不干净事故链）：列表条目必须逐条进
     # 【已作废的旧设定】块——这是压住会话历史复读/客户假记忆钩子的 prompt 层防线
     "boundaries.retired_facts": _Probe(["探针撤销养猫设定"], "探针撤销养猫设定"),

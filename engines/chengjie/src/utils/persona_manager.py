@@ -66,6 +66,9 @@ PROMPT_CONSUMED_FIELDS = frozenset({
     # 身份/边界/情绪
     "identity.deny_ai", "identity.deny_ai_reply", "identity.claim_human",
     "boundaries.topics_to_avoid",
+    # Q-2 #263 D-Q3：见面政策进 prompt（默认永不）；拒绝口吻影响话术库，也进块以免只改了 Studio 不进模型。
+    "boundaries.meeting_policy",
+    "boundaries.commitment_style",
     # #24（0830 skuio 实锤）：称呼双向硬钉子——「你叫对方 X／对方叫你 Y」
     # 绝不互换；档案称呼显式压过记忆推断（详见 full/compact 两处注入块）。
     "names.call_peer", "names.peer_calls_you",
@@ -419,6 +422,8 @@ _DEFAULT_PERSONA: Dict[str, Any] = {
     "boundaries": {
         "topics_to_avoid": [],
         "escalation_phrases": [],
+        "meeting_policy": "never",
+        "commitment_style": "soft",
     },
 }
 
@@ -1842,6 +1847,15 @@ class PersonaManager:
             "绝不编造联系方式（微信/QQ/手机号等，对方会验证）：资料里没有就说"
             "「先在这聊嘛」带过。"
         )
+        # Q-2 #263 D-Q3：compact 是生产主用，见面政策缺了等于没设。
+        try:
+            from src.inbox.commitment_guard import prompt_block as _cmt_block
+            lines.append(_cmt_block(persona, compact=True))
+        except Exception:
+            lines.append(
+                "【现实承诺·never】见面/上门/给地址电话/视频通话/寄礼物/转账一律婉拒，"
+                "第一次就拒，被追问仍拒，不给时间承诺。"
+            )
         lines.append(
             "回复硬约束：先正面回答用户问的问题再扩展；不要用 () [] 描写动作"
             "或列举要点（如 (微笑) (1)(2)），用自然句子。"
@@ -2332,6 +2346,15 @@ class PersonaManager:
             "验证，编造=当场穿帮。人设资料里没有的联系方式，被问时就说"
             "「先在这聊嘛」自然带过；绝不现编一个号码或 ID 给对方。"
         )
+        # Q-2 #263 D-Q3：见面政策（默认永不）进 full 块，与 compact 同源 prompt_block。
+        try:
+            from src.inbox.commitment_guard import prompt_block as _cmt_block
+            lines.append(_cmt_block(persona, compact=False))
+        except Exception:
+            lines.append(
+                "【现实承诺守卫·见面政策=never】现实动作一律婉拒：第一次就拒，"
+                "被追问仍拒，不解释之前为何没做，不给任何时间承诺。"
+            )
 
         # Emotion handling
         e = persona.get("emotion", {})
