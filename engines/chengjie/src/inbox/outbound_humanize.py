@@ -752,6 +752,15 @@ def apply_draft_humanize(
                 _fp_stats(claim_action=meta["claim_action"])
         except Exception:
             logger.debug("[draft] claim_guard 异常（原文继续）", exc_info=True)
+        # Q-2 D（#263）：commitment_claim / self_blame_repromise；与 P-3 media_claim 并表 CLAIM_KINDS。
+        # stats 由 apply_claim_rewrites 按 hits 记 commitment_claim / self_blame_repromise / media_claim。
+        try:
+            from src.inbox.commitment_guard import apply_claim_rewrites
+            cur, crep2 = apply_claim_rewrites(cur, lang=lg)
+            _hits = list(crep2.get("hits") or [])
+            meta["commitment"] = "|".join(_hits) or "clean"
+        except Exception:
+            logger.debug("[draft] commitment_guard 出站拦截异常（原文继续）", exc_info=True)
         out, st = humanize(cur, lg, cfg=cfg, mode=mode)
         meta.update({"punct_fix": int(st["punct_fix"]), "style_fix": int(st["style_fix"]),
                      "trimmed": int(st["trimmed"]), "dash": int(st["dash"])})

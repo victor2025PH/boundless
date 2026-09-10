@@ -3487,7 +3487,8 @@ function renderAiFingerprint(d){
   if(!sec || !kp || !dv) return;
   var fp = (d && d.ai_fingerprint) || null;
   var cnt = (fp && fp.counts) || {};
-  var anyN = Number(cnt.draft||0) + Number(cnt.svc_checked||0) + Number(cnt.claim_checked||0) + Number(cnt.promise_checked||0) + Number(cnt.gate_checked||0);
+  var anyN = Number(cnt.draft||0) + Number(cnt.svc_checked||0) + Number(cnt.claim_checked||0) + Number(cnt.promise_checked||0) + Number(cnt.gate_checked||0)
+    + Number(cnt.commitment_claim||0) + Number(cnt.self_blame_repromise||0) + Number(cnt.media_claim||0);
   if(!fp || !anyN){ opsSetCardLight('aifp', ''); opsHideCardEl(sec, 'aifp', 'no_data'); return; }
   opsShowCardEl(sec, 'aifp');
   var lv = String(fp.level||'');
@@ -3516,6 +3517,10 @@ function renderAiFingerprint(d){
   var gate = fp.gate_leak || {};
   var gateHits = Number(gate.hits)||0;
   if(Number(gate.total)||0){ kpis.push({label: window.T('ov2_js_aifp_gate'), value: fmt(gateHits), sub: fmt(gateHits)+' / '+fmt(Number(gate.total)||0), color: gateHits ? 'var(--red)' : ''}); }
+  var cmtHits = Number((fp.commitment_claim||{}).hits)||0;
+  var blameHits = Number((fp.self_blame_repromise||{}).hits)||0;
+  kpis.push({label: window.T('ov2_js_aifp_cmt'), value: fmt(cmtHits), sub: fmt(cmtHits)+' '+window.T('ov2_js_aifp_drafts'), color: cmtHits ? 'var(--red)' : ''});
+  kpis.push({label: window.T('ov2_js_aifp_blame'), value: fmt(blameHits), sub: fmt(blameHits)+' '+window.T('ov2_js_aifp_drafts'), color: blameHits ? 'var(--red)' : ''});
   kp.innerHTML = kpis.map(function(c){
     return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
       '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div>'+

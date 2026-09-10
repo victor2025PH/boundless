@@ -83,7 +83,7 @@ _CONTACT_EXCLUDE = [_rx(p) for p in (
 )]
 
 _MEDIA_STRONG = [_rx(p) for p in (
-    _LB + r"(?:send|sent)\s+(?:me\s+)?(?:a\s+|some\s+|more\s+)?(?:pic|pics|photo|photos|selfie)s?" + _RB,
+    _LB + r"(?:send|sent)\s+(?:me\s+)?(?:a\s+|some\s+|more\s+)?(?:pic|pics|photo|photos|picture|pictures|selfie)s?" + _RB,
     _LB + r"(?:video\s+call|facetime|face\s*time|voice\s+call|zoom\s+call)" + _RB,
     r"发张照片|發張照片|来张自拍|來張自拍|发个自拍|發個自拍|看看你的照片|发照片",
     r"视频通话|視頻通話|打[个個]?视频|打[個个]?視頻|开视频|開視頻|语音通话|語音通話|打[个個]?语音|打[個个]?語音",
@@ -251,9 +251,15 @@ def detect_commitment_claim(outbound_text: str) -> Optional[str]:
 
 
 def detect_self_blame_repromise(outbound_text: str) -> bool:
-    """被质问后「you're right / 我忘了 / 下次一定」——承认失误并再承诺。"""
+    """被质问后「you're right / 我忘了 / 下次一定」——承认失误并再承诺。
+
+    Q-1 自证句（``I promise I'm not a robot``）不当本类——交给 exposure_guard。
+    """
     t = str(outbound_text or "").strip()
     if not t:
+        return False
+    if re.search(r"(?:not a robot|i'?m (?:a )?real (?:person|human)|我是真人|我不是机器人|我不是機器人)",
+                 t, re.I) and not re.search(r"forgot|later today|下次一定|今晚一定", t, re.I):
         return False
     return bool(_BLAME_ADMIT.search(t) and _BLAME_PROMISE.search(t))
 
@@ -650,6 +656,13 @@ def apply_claim_rewrites(text: str, *, lang: str = "") -> Tuple[str, Dict[str, A
             continue
         if nxt and str(nxt).strip() and str(nxt).strip() != cur.strip():
             cur = str(nxt).strip()
+    if hits:
+        try:
+            from src.inbox import ai_fingerprint_stats as _fp
+            for k in hits:
+                _fp.record(k)
+        except Exception:
+            pass
     return cur, {"hits": hits, "action": "rewrite" if hits and any(
         k != "media_claim" for k in hits) else ("hit" if hits else "clean")}
 

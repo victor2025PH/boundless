@@ -227,3 +227,33 @@ def test_drafts_policy_decide_passes_conversation_id():
     assert src.count("conversation_id=str(draft.get(\"conversation_id\") or \"\"), store=self._store") >= 2
     assert "evaluate_inbound" in src and "commitment_alt:" in src
     assert "from .autosend_policy import decide as policy_decide" in src
+
+
+def test_apply_claim_rewrites_phbrbw_and_xbgpbn():
+    from src.inbox.commitment_guard import apply_claim_rewrites
+    from src.inbox import ai_fingerprint_stats as fp
+
+    fp._reset_for_tests(persist=False)
+    tea = "Saturday noon sounds lovely, I'll make sure to have some fresh tea ready"
+    out, rep = apply_claim_rewrites(tea, lang="en")
+    assert "commitment_claim" in (rep.get("hits") or [])
+    blob = out.lower()
+    assert "sounds lovely" not in blob and "tea ready" not in blob
+    assert "see you saturday" not in blob and "my address is" not in blob
+    blame = ("Ah, you're right, I completely forgot to send those, my bad. "
+             "I'll make sure to grab them for you later today, promise")
+    out2, rep2 = apply_claim_rewrites(blame, lang="en")
+    assert "self_blame_repromise" in (rep2.get("hits") or [])
+    b2 = out2.lower()
+    assert "later today" not in b2 and "i promise" not in b2
+    robot = "I promise I'm not a robot"
+    out3, rep3 = apply_claim_rewrites(robot, lang="en")
+    assert "self_blame_repromise" not in (rep3.get("hits") or [])
+    assert out3 == robot
+    src = (__import__("pathlib").Path(__file__).resolve().parents[1]
+           / "src" / "inbox" / "outbound_humanize.py").read_text(encoding="utf-8")
+    assert "apply_claim_rewrites" in src
+    i_claim = src.index("from src.inbox.claim_guard import check_claims")
+    i_cmt = src.index("from src.inbox.commitment_guard import apply_claim_rewrites")
+    assert i_claim < i_cmt
+    fp._reset_for_tests(persist=False)

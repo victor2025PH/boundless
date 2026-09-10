@@ -50,7 +50,8 @@ def test_snapshot_shape_matches_card_contract():
     fp._reset_for_tests(persist=False)
     fp.record_draft(1)
     snap = fp.snapshot(hours=24)
-    for k in ("dash", "service_tone", "claim_unanchored", "promise_no_action", "gate_leak"):
+    for k in ("dash", "service_tone", "claim_unanchored", "promise_no_action", "gate_leak",
+              "commitment_claim", "self_blame_repromise", "media_claim"):
         assert {"hits", "total", "rate_pct", "level"} <= set(snap[k])
     assert "ready" in snap["promise_no_action"] and "counts" in snap and "level" in snap and snap["window_hours"] == 24
     fp._reset_for_tests(persist=False)
