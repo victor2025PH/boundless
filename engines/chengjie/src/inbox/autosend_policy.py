@@ -40,9 +40,12 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 POLICY_SHADOW = "shadow"
 POLICY_ENFORCE = "enforce"
@@ -105,6 +108,8 @@ class Decision:
     farewell: bool = False
     # risk=high 非停联 → 转人工审（level=L1）
     review_required: bool = False
+    # Q-3（#264）：会话级风险持有（risk_hold.active）把本稿按成 L1 的原因码；空＝未触发
+    risk_hold: str = ""
 
     @property
     def autosend_allowed(self) -> bool:
@@ -229,8 +234,18 @@ def decide(
     policy_mode: Optional[str] = None,
     platform: str = "",
     conversation_frozen: bool = False,
+    conversation_id: str = "",
+    store: Any = None,
+    risk_hold_reason: Optional[str] = None,
 ) -> Decision:
-    """Decision = (level, hold_reason, shadow[, hard_stop, farewell, review_required])。
+    """Decision = (level, hold_reason, shadow[, hard_stop, farewell, review_required, risk_hold])。
+
+    ``conversation_id`` + ``store`` / ``risk_hold_reason``（Q-3 #264 A）：会话级风险持有。
+    调用方给了会话（``store`` 缺省时 ``risk_hold_reason`` 可直接传已知原因）→ 先问
+    ``risk_hold.active(conv)``；活跃 → 非硬停分支一律**强制 L1**（人审）并**继承 shadow**
+    （已有影子记录保留；没有则按持有原因造一条 would_hold_level=L3 的记录——重新起草
+    不得归零），``hold_reason=risk_hold:<reason>``、``review_required=True``。不传会话＝
+    逐字节旧行为（drafts.py 的调用点由 Q-2 补 ``conversation_id=``，见总账）。
 
     ``platform``（实施96 P0-3，可选）：未显式传 ``policy_mode`` 时，先问渠道策略层
     ``channel_policy.risk_policy_mode(platform)``——抖音/TikTok 这类以行为指纹与内容合规
@@ -256,6 +271,62 @@ def decide(
                                   （D-O1 豁免②：高风险稿转人工审，不直发）；
                                   enforce 档：would_hold_level + hold_reason，shadow=None。
     """
+    base = _decide_base(
+        peer_risk, peer_reasons, reply_risk, reply_reasons, risk_hits,
+        automation_mode, policy_mode, platform, conversation_frozen)
+    hold = _resolve_risk_hold(conversation_id, store, risk_hold_reason)
+    if not hold or base.hard_stop:
+        # 硬停分支（停联告别「最多一条」/ 自伤陪伴）语义不动——冻结本身已把会话按成 manual
+        return base
+    if base.level == "L1" and base.review_required:
+        # 已是风险人审（risk_high_review）：只补原因码，影子记录原样继承
+        return Decision(level="L1", hold_reason=base.hold_reason, shadow=base.shadow,
+                        policy_mode=base.policy_mode, automation_mode=base.automation_mode,
+                        review_required=True, risk_hold=hold)
+    peer_reasons_l = [str(r) for r in (peer_reasons or [])]
+    reply_reasons_l = [str(r) for r in (reply_reasons or [])]
+    hits_l = [str(h) for h in (risk_hits or []) if str(h)]
+    shadow = base.shadow or ShadowRecord(
+        would_hold_level="L3", hold_reason=f"risk_hold:{hold}",
+        peer_risk=str(peer_risk or "low"), peer_reasons=peer_reasons_l,
+        reply_risk=str(reply_risk or "low"), reply_reasons=reply_reasons_l,
+        risk_hits=hits_l,
+    )
+    logger.info("[policy] conv=%s risk_hold=%s forced=L1 was=%s mode=%s shadow=%s",
+                conversation_id or "-", hold, base.level, base.automation_mode,
+                shadow.hold_reason)
+    return Decision(level="L1", hold_reason=f"risk_hold:{hold}", shadow=shadow,
+                    policy_mode=base.policy_mode, automation_mode=base.automation_mode,
+                    review_required=True, risk_hold=hold)
+
+
+def _resolve_risk_hold(conversation_id: str, store: Any,
+                       risk_hold_reason: Optional[str]) -> str:
+    """会话级持有原因：显式传入优先；否则有 store + conv 时查 ``risk_hold.active``。绝不抛。"""
+    if risk_hold_reason:
+        return str(risk_hold_reason)
+    cid = str(conversation_id or "").strip()
+    if not cid or store is None:
+        return ""
+    try:
+        from src.inbox import risk_hold as _rh
+        return str(_rh.active(store, cid) or "")
+    except Exception:
+        return ""
+
+
+def _decide_base(
+    peer_risk: str,
+    peer_reasons: Iterable[str],
+    reply_risk: str,
+    reply_reasons: Iterable[str],
+    risk_hits: Iterable[str],
+    automation_mode: str,
+    policy_mode: Optional[str],
+    platform: str,
+    conversation_frozen: bool,
+) -> Decision:
+    """``decide`` 的原判定（#160 v2 单一入口正文，Q-3 之前逐字）。"""
     mode = normalize_automation_mode(automation_mode)
     if not policy_mode and platform:
         try:

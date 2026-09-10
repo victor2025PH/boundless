@@ -1187,6 +1187,32 @@ def make_auto_draft_cb(
             logger.debug("[AutoDraft] companion 双轨互斥判定失败（忽略）", exc_info=True)
         if mode == "manual":
             return
+        # Q-3（#264 A/B/E，调用侧）：① 触发源 reason——worker 侧经 draft_trigger.note 登记的
+        # catchup_regen / risk_hold_regen，缺省 new_inbound；② 会话级风险持有 / 「需人工」标在场
+        # → 本稿封顶 review（L1 人审），重新起草不得归零（XBGPBN 23:55:42 那条 L2 的口子）。
+        # drafts.py 不动（Q-2 的）：它拿到的 automation_mode 已是 review。任何异常按原档放行。
+        _cid_q3 = str(conv.get("conversation_id") or "")
+        _trigger_q3 = "new_inbound"
+        try:
+            from src.inbox.draft_trigger import pop as _trig_pop
+            _trigger_q3 = _trig_pop(_cid_q3) or "new_inbound"
+        except Exception:
+            _trigger_q3 = "new_inbound"
+        _rh_cap = ""
+        try:
+            from src.inbox.risk_hold import active as _rh_active
+            _rh_cap = str(_rh_active(store, _cid_q3) or "")
+            if not _rh_cap and store is not None and hasattr(store, "get_conv_tags"):
+                from src.integrations.protocol_autoreply import HANDOFF_TAG as _hp_tag
+                if _hp_tag in list(store.get_conv_tags(_cid_q3) or []):
+                    _rh_cap = "needs_human"
+        except Exception:
+            _rh_cap = ""
+        if _rh_cap and mode == "auto_ai":
+            mode = "review"
+            logger.info("[policy] conv=%s risk_hold=%s forced=L1 stage=autodraft trigger=%s",
+                        _cid_q3, _rh_cap, _trigger_q3)
+        logger.info("[draft] trigger conv=%s reason=%s mode=%s", _cid_q3, _trigger_q3, mode)
         # 预算分子（peer_bot_guard P2）：只数「将自动投递」的拟稿轮次——
         # auto_ai 档 L2 会被 AutosendWorker 真发；review/multi_choice 是
         # 人审，人的决定不占 AI 预算。软停轮已封顶 review，天然不计。
@@ -1210,6 +1236,8 @@ def make_auto_draft_cb(
                 mode=mode, caps_applied=_caps_applied, conv=conv, store=store,
                 peer_text=str(text or ""), explicit_mode=_l1_explicit,
                 account_layer=_l1_account_layer)
+            if _rh_cap and mode != "auto_ai":
+                _l1_reason = "risk_hold"     # Q-3：封顶原因就是会话级风险持有，不再猜证据
             if _l1_reason:
                 _l1_note(str(conv.get("conversation_id") or ""), _l1_reason)
         except Exception:

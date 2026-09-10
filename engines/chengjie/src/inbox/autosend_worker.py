@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import threading
 import time
 from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -58,6 +59,11 @@ _RUNNING_SVC_KEYS: set = set()
 
 # apply_send_callbacks 的「未传」哨兵（None 是合法值=撤能力，不能当缺省用）
 _UNSET = object()
+
+# Q-3（#264 C）：坐席「刚刚」打字 / 发送的窗口——窗口内 worker 视为插话，放弃在途 AI 稿
+AGENT_ACTIVITY_WINDOW_SEC = 60.0
+# 人工优先复检的放弃原因码（日志 `[autosend] abort=<code>`）
+ABORT_REASONS = ("mode_changed", "agent_typing", "agent_sent", "risk_hold", "needs_human")
 
 class UndeliveredError(RuntimeError):
     """投递结果为「数据形态失败」（{delivered:False,...}）时的异常载体。
@@ -363,6 +369,21 @@ class AutosendWorker:
         # 陈稿按旧行为原样投递——绝不允许「作废了却没人重拟」的静默丢回复。
         self._catchup_regen_cb: Optional[Callable[..., bool]] = \
             catchup_regenerate_cb
+
+        # Q-3（#264 C/D，2026-09-10）人工优先：在途稿登记表（draft_id → 载荷，从进入拟人
+        # 等待到真发前）+ 取消信号（draft_id → by）+ 坐席打字 / 发送时刻（conv → ts）。
+        # 切档路由 / 坐席打字端点 / 坐席发送 经 cancel_inflight / note_agent_* 写入；
+        # _deliver_one 在拟人等待结束、真发之前经 _human_priority_gate 复检一次。
+        self._inflight: Dict[str, Dict[str, Any]] = {}
+        self._inflight_cancel: Dict[str, str] = {}
+        self._agent_typing_ts: Dict[str, float] = {}
+        self._agent_sent_ts: Dict[str, float] = {}
+        self._hp_lock = threading.Lock()
+        self.total_abort_recheck: int = 0          # 真发前二次复检放弃的条数（含在途取消）
+        self.total_inflight_cancelled: int = 0     # cancel_inflight 点名取消的在途 / 排队稿数
+        self.total_skipped_risk_hold: int = 0      # 捞稿期因会话级风险持有 / 需人工取消的 L2 数
+        self.total_risk_hold_regen: int = 0        # 取消后按 L1 重拟派发数
+        self._risk_hold_regen_done: Dict[str, float] = {}   # conv → 已重拟过的 hold set_ts
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -892,6 +913,191 @@ class AutosendWorker:
                 "first_contact" if silence is None else "%.1fh" % (silence / 3600.0),
                 hold, remain, did)
         return remain
+
+    # ── Q-3（#264 C/D）人工优先：单一复检函数 + 在途取消 ──────────────────
+
+    def _human_priority_gate(self, conv: str, *, draft_id: str = "",
+                             is_farewell: bool = False) -> str:
+        """人工优先复检——**一个函数两处调用**：捞稿（resolve 前，原 Sprint1 档位闸位置）
+        与真发前（拟人等待结束后）。返回放弃原因码（:data:`ABORT_REASONS`）；空＝放行。
+
+        判定顺序：① 在途取消信号（切档路由 / 坐席打字端点 / 坐席发送点名本稿）→ 该信号的
+        by；② 会话显式档位 ∈ manual/review/multi_choice → mode_changed（Sprint1 原闸逐字：
+        仅真实字符串生效，None / mock 不干预）；③ 坐席 60s 内发送 → agent_sent；
+        ④ 坐席 60s 内打字 → agent_typing；⑤ 会话级风险持有 → risk_hold；⑥ 「需人工」标在场
+        → needs_human。告别稿（停联「最多一条」）豁免全部；判定只读，任何异常按放行。
+        """
+        if not conv or is_farewell:
+            return ""
+        if draft_id:
+            with self._hp_lock:
+                by = self._inflight_cancel.get(draft_id, "")
+            if by:
+                return by
+        store = getattr(self._svc, "_store", None)
+        if store is not None and hasattr(store, "get_automation_mode_if_set"):
+            try:
+                _m = store.get_automation_mode_if_set(conv)
+            except Exception:
+                _m = None
+            if isinstance(_m, str) and _m in ("manual", "review", "multi_choice"):
+                return "mode_changed"
+        now = time.time()
+        if now - float(self._agent_sent_ts.get(conv, 0.0)) <= AGENT_ACTIVITY_WINDOW_SEC:
+            return "agent_sent"
+        if now - float(self._agent_typing_ts.get(conv, 0.0)) <= AGENT_ACTIVITY_WINDOW_SEC:
+            return "agent_typing"
+        if store is not None:
+            try:
+                from src.inbox import risk_hold as _rh
+                _hold = _rh.active(store, conv)
+                if _hold:
+                    # 泛因 needs_human（打标派生）按 needs_human 报，其余（privacy / commitment /
+                    # stop_contact…）按 risk_hold 报——日志能直接看出是哪一类闸
+                    return "needs_human" if _hold == _rh.GENERIC_REASON else "risk_hold"
+            except Exception:
+                logger.debug("[AutosendWorker] risk_hold 判定异常（放行）", exc_info=True)
+            if hasattr(store, "get_conv_tags"):
+                try:
+                    from src.integrations.protocol_autoreply import HANDOFF_TAG as _hp_tag
+                    if _hp_tag in list(store.get_conv_tags(conv) or []):
+                        return "needs_human"
+                except Exception:
+                    pass
+        return ""
+
+    def _inflight_register(self, item: Dict[str, Any]) -> None:
+        did = str(item.get("draft_id") or "")
+        if not did:
+            return
+        with self._hp_lock:
+            self._inflight[did] = {
+                "conversation_id": str(item.get("conversation_id") or ""),
+                "platform": str(item.get("platform") or ""),
+                "account_id": str(item.get("account_id") or "default"),
+                "since": time.time(),
+            }
+
+    def _inflight_unregister(self, draft_id: str) -> None:
+        with self._hp_lock:
+            self._inflight.pop(str(draft_id or ""), None)
+            self._inflight_cancel.pop(str(draft_id or ""), None)
+
+    def cancel_inflight(self, *, conversation_id: str = "", platform: str = "",
+                        account_id: str = "", by: str = "mode_switch") -> int:
+        """取消范围内**排队中 + 拟人等待中**的 L2 稿。返回取消条数（前端 toast「已取消 N 条」）。
+
+        范围：``conversation_id`` → 单会话；否则 ``platform``(+``account_id``) → 账号；都不给
+        → 全部在途。排队中的经 ``store.cancel_pending_l2_drafts``（会话范围）作废；在途的写
+        取消信号（等待结束即放弃，不真发）并把已 resolve 的行 approved→cancelled
+        （``decided_by=abort:<by>``）。``by`` ∈ mode_switch | agent_typing | agent_send。
+        日志 ``[inflight] cancel scope=conv|account|all n=… by=…``。绝不抛。
+        """
+        by = str(by or "mode_switch")
+        cid = str(conversation_id or "")
+        plat = str(platform or "").lower()
+        acct = str(account_id or "")
+        scope = "conv" if cid else ("account" if plat else "all")
+        store = getattr(self._svc, "_store", None)
+        n = 0
+        hit_ids: List[str] = []
+        with self._hp_lock:
+            for did, meta in list(self._inflight.items()):
+                if cid and meta.get("conversation_id") != cid:
+                    continue
+                if not cid and plat and (
+                        str(meta.get("platform") or "").lower() != plat
+                        or (acct and str(meta.get("account_id") or "") != acct)):
+                    continue
+                if did in self._inflight_cancel:
+                    continue
+                self._inflight_cancel[did] = by
+                hit_ids.append(did)
+        for did in hit_ids:
+            n += 1
+            try:
+                if store is not None and hasattr(store, "update_draft_status"):
+                    try:
+                        store.update_draft_status(
+                            did, status="cancelled", decided_by=f"abort:{by}"[:40],
+                            expected_statuses=("approved", "pending", "enriching"))
+                    except TypeError:   # 旧签名 / 测试替身无 expected_statuses
+                        store.update_draft_status(
+                            did, status="cancelled", decided_by=f"abort:{by}"[:40])
+            except Exception:
+                logger.debug("[AutosendWorker] 在途稿改 cancelled 失败 draft_id=%s", did,
+                             exc_info=True)
+        if cid and store is not None and hasattr(store, "cancel_pending_l2_drafts"):
+            try:
+                n += int(store.cancel_pending_l2_drafts(cid, decided_by=f"abort:{by}"[:40]) or 0)
+            except Exception:
+                logger.debug("[AutosendWorker] 排队 L2 取消失败 conv=%s", cid, exc_info=True)
+        self.total_inflight_cancelled += n
+        if n or hit_ids:
+            logger.info("[inflight] cancel scope=%s n=%d by=%s conv=%s account=%s inflight=%d",
+                        scope, n, by, cid or "-", (f"{plat}:{acct}" if plat else "-"),
+                        len(hit_ids))
+        return n
+
+    def note_agent_typing(self, conversation_id: str) -> int:
+        """坐席在输入框打字（端点 3s 一次节流）：记时刻 + 取消该会话在途 / 排队 AI 稿。"""
+        cid = str(conversation_id or "")
+        if not cid:
+            return 0
+        self._agent_typing_ts[cid] = time.time()
+        return self.cancel_inflight(conversation_id=cid, by="agent_typing")
+
+    def note_agent_send(self, conversation_id: str) -> int:
+        """坐席手动发送成功：记时刻 + 取消该会话在途 / 排队 AI 稿（摘标由路由既有逻辑做）。"""
+        cid = str(conversation_id or "")
+        if not cid:
+            return 0
+        self._agent_sent_ts[cid] = time.time()
+        return self.cancel_inflight(conversation_id=cid, by="agent_send")
+
+    def _risk_hold_regen_once(self, d: Dict[str, Any], conv: str, reason: str) -> bool:
+        """捞稿期取消了被风险持有 / 需人工闸住的 L2 稿 → 按 L1 重拟一次（同一次持有只重拟一次，
+        防「取消→重拟→又是 L2→再取消」循环）。走 catchup 同一条重拟回调，触发源
+        reason=risk_hold_regen（draft_trigger 登记，autodraft 侧封顶 review）。未接线 → False。"""
+        if self._catchup_regen_cb is None or not conv:
+            return False
+        store = getattr(self._svc, "_store", None)
+        stamp = 0.0
+        try:
+            from src.inbox import risk_hold as _rh
+            rec = _rh.active_record(store, conv) if store is not None else None
+            stamp = float((rec or {}).get("set_ts") or 0.0)
+        except Exception:
+            stamp = 0.0
+        key = f"{conv}|{reason}"
+        if self._risk_hold_regen_done.get(key) == (stamp or -1.0):
+            return False
+        self._risk_hold_regen_done[key] = stamp or -1.0
+        if len(self._risk_hold_regen_done) > 2000:
+            for k in list(self._risk_hold_regen_done)[:500]:
+                self._risk_hold_regen_done.pop(k, None)
+        peer_txt = str(d.get("peer_text") or "").strip()
+        if not peer_txt:
+            return False
+        try:
+            from src.inbox.draft_trigger import note as _trig_note
+            _trig_note(conv, "risk_hold_regen")
+        except Exception:
+            pass
+        try:
+            self._catchup_regen_cb({
+                "conversation_id": conv,
+                "platform": str(d.get("platform") or ""),
+                "account_id": str(d.get("account_id") or "default"),
+                "chat_key": str(d.get("chat_key") or ""),
+            }, peer_txt)
+            self.total_risk_hold_regen += 1
+            logger.info("[draft] regen conv=%s reason=risk_hold_regen hold=%s（L2 稿已取消，按 L1 重拟）",
+                        conv, reason)
+            return True
+        except Exception:
+            logger.warning("[AutosendWorker] risk_hold 重拟派发失败 conv=%s", conv, exc_info=True)
+            return False
 
     async def _run_humanize(
         self, platform: str, account_id: str, chat_key: str,
@@ -1493,10 +1699,53 @@ class AutosendWorker:
             # （adaptive=true 时生效；总响应时长目标而非叠加）。
             _created = float(item.get("created_ts") or 0)
             _elapsed = max(0.0, time.time() - _created) if _created > 0 else 0.0
-            await self._run_humanize(
-                _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed,
-                conversation_id=_conv_id_g,
-                inbound_text=str(item.get("peer_text") or ""))
+            # Q-3（#264 C/D）：进入拟人等待即登记在途——切档路由 / 坐席打字 / 坐席发送
+            # 可在等待期间点名取消（cancel_inflight），等待结束下方复检读到信号即放弃。
+            self._inflight_register(item)
+            try:
+                await self._run_humanize(
+                    _plat, _acc, _ck, text=send_text, elapsed_sec=_elapsed,
+                    conversation_id=_conv_id_g,
+                    inbound_text=str(item.get("peer_text") or ""))
+                # Q-3（#264 C）真发前二次复检**第二处**（与捞稿期同一函数）：拟人等待可达
+                # 30–60s，此间坐席切手动 / 打字 / 发送、会话被风险持有或打「需人工」——
+                # 旧链只在等待**之前**过闸、等待后只认**客户**插话（下方 fresh_guard），
+                # 于是 XBGPBN 23:56:20 切了手动、人在打字，AI 稿照发。任一不满足即放弃：
+                # 撤出站登记、行 approved→cancelled（decided_by=abort:<code>）、不喂熔断。
+                _hp_abort = self._human_priority_gate(
+                    _conv_id_g, draft_id=_do_did, is_farewell=bool(item.get("_farewell")))
+            finally:
+                self._inflight_unregister(_do_did)
+            if _hp_abort:
+                self.total_abort_recheck += 1
+                if _dup_token:
+                    try:
+                        from src.inbox.outbound_dup_guard import (
+                            outbound_registry as _dup_reg_hp,
+                        )
+                        _dup_reg_hp.unregister(_conv_id_g, _dup_token)
+                    except Exception:
+                        logger.warning(
+                            "[AutosendWorker] 出站去重撤登记失败 conv=%s（≤600s 内可能误判重复）",
+                            _conv_id_g, exc_info=True)
+                try:
+                    _hp_store = getattr(self._svc, "_store", None)
+                    if _hp_store is not None and hasattr(_hp_store, "update_draft_status"):
+                        try:
+                            _hp_store.update_draft_status(
+                                _do_did, status="cancelled",
+                                decided_by=f"abort:{_hp_abort}"[:40],
+                                expected_statuses=("approved", "pending"))
+                        except TypeError:   # 旧签名 / 测试替身无 expected_statuses
+                            _hp_store.update_draft_status(
+                                _do_did, status="cancelled",
+                                decided_by=f"abort:{_hp_abort}"[:40])
+                except Exception:
+                    logger.debug("[AutosendWorker] 复检放弃后改 cancelled 失败 draft_id=%s",
+                                 _do_did, exc_info=True)
+                logger.info("[autosend] abort=%s stage=presend draft=%s conv=%s（拟人等待后复检，未发）",
+                            _hp_abort, _do_did, _conv_id_g)
+                return
             # 延迟后二次过期复查（fresh_guard 同闸门，2026-08-05）：拟人延迟
             # 现可配 30-60s，而 _process_batch 的过期检查跑在延迟**之前**——
             # 整个延迟窗口原本不设防：客户此间插话，旧稿照发＝答非所问，
@@ -1894,30 +2143,36 @@ class AutosendWorker:
                         _sc_log("skipped", conversation_id=_conv, reason=_frz,
                                 draft_id=str(draft_id), extra="stage=worker_cancel")
                         continue
-            # Sprint1 统一出站闸门：会话被**显式**降级（坐席接管→manual / 改 review 等）后，
-            # 接管前已入队的 L2 不该再自动发（防「接管前排队的草稿仍被投递」竞态）。
+            # Sprint1 统一出站闸门 → Q-3（#264 C）人工优先复检**第一处**：会话被显式降级
+            # （接管→manual / 改 review 等）/ 坐席 60s 内打字或发送 / 会话级风险持有 /
+            # 「需人工」标在场 → 本稿不 resolve、取消。同一函数在 _deliver_one 拟人等待后
+            # 再调一次（第二处）——闸只在等待之前 = XBGPBN「切手动了还发」的根因之一。
             # 仅对显式设过档位者生效；未显式设置(None)不干预 → 不改既有默认行为/perf 测试。
             _store_rt = getattr(self._svc, "_store", None)
-            if (_store_rt is not None and _conv and not _is_farewell
-                    and hasattr(_store_rt, "get_automation_mode_if_set")):
+            _hp_abort = self._human_priority_gate(
+                _conv, draft_id=str(draft_id), is_farewell=_is_farewell)
+            if _hp_abort:
+                _decided_by = ("mode_downgraded" if _hp_abort == "mode_changed"
+                               else f"abort:{_hp_abort}")
                 try:
-                    _explicit_mode = _store_rt.get_automation_mode_if_set(_conv)
+                    if _store_rt is not None and hasattr(_store_rt, "update_draft_status"):
+                        _store_rt.update_draft_status(
+                            draft_id, status="cancelled", decided_by=_decided_by)
                 except Exception:
-                    _explicit_mode = None
-                # 仅对「真实字符串且属显式降级档位」生效——auto_ai/未设(None)/mock 对象均不跳过，
-                # 避免误伤（尤其单测用 MagicMock store 时 getattr 返回 Mock）。
-                if isinstance(_explicit_mode, str) and _explicit_mode in (
-                        "manual", "review", "multi_choice"):
-                    try:
-                        if hasattr(_store_rt, "update_draft_status"):
-                            _store_rt.update_draft_status(
-                                draft_id, status="cancelled", decided_by="mode_downgraded")
-                    except Exception:
-                        logger.debug(
-                            "[AutosendWorker] 取消降级会话 L2 失败 draft_id=%s", draft_id,
-                            exc_info=True)
+                    logger.debug(
+                        "[AutosendWorker] 取消 L2 失败 draft_id=%s abort=%s", draft_id,
+                        _hp_abort, exc_info=True)
+                if _hp_abort == "mode_changed":
                     self.total_skipped_mode += 1
-                    continue
+                elif _hp_abort in ("risk_hold", "needs_human"):
+                    self.total_skipped_risk_hold += 1
+                    # 稿没了不能让人也没得审：按 L1 重拟一次（同一次持有只一次）
+                    self._risk_hold_regen_once(d, _conv, _hp_abort)
+                else:
+                    self.total_abort_recheck += 1
+                logger.info("[autosend] abort=%s stage=batch draft=%s conv=%s",
+                            _hp_abort, draft_id, _conv)
+                continue
             # 会话处于发送封禁冷却 → 不 resolve/投递，直接取消该 pending 草稿（防堆积）。
             # 冷却到期后新草稿会重新尝试（权限恢复即自动回正常）。
             if self._send_callback is not None and self._conv_send_blocked(_conv):
@@ -2110,6 +2365,13 @@ class AutosendWorker:
                         if not _cancelled:
                             continue
                         catchup_budget -= 1
+                        # Q-3（#264 E）：触发源 reason 随重拟走（autodraft 侧 pop 后落 [draft] trigger）
+                        try:
+                            from src.inbox.draft_trigger import note as _trig_note
+                            _trig_note(_conv, "catchup_regen")
+                        except Exception:
+                            pass
+                        logger.info("[draft] regen conv=%s reason=catchup_regen", _conv)
                         try:
                             self._catchup_regen_cb({
                                 "conversation_id": _conv,
@@ -2163,6 +2425,8 @@ class AutosendWorker:
                             # 拟稿所回应的客户原话：延迟后二次过期复查须同文本免拦
                             # （同文本新入站不会催生新稿，拦了=客户零回复）
                             "peer_text": str(d.get("peer_text") or ""),
+                            # Q-3：告别稿（停联「最多一条」）豁免真发前人工优先复检
+                            "_farewell": bool(_is_farewell),
                         })
                 elif int(result.get("code") or 0) == 409:
                     # 撞状态闸门＝该草稿刚被人工窗口处置（含人工通过后自带投递）。
@@ -2324,6 +2588,12 @@ class AutosendWorker:
                 self._typing_callback is not None and self._typing_enabled),
             "total_skipped_blocked": self.total_skipped_blocked,  # 因会话发送封禁跳过取消数
             "total_skipped_mode": self.total_skipped_mode,  # 因会话被降级(接管)取消的 L2 数
+            # Q-3（#264）人工优先：真发前复检放弃 / 在途点名取消 / 风险持有取消 / 按 L1 重拟
+            "total_abort_recheck": self.total_abort_recheck,
+            "total_inflight_cancelled": self.total_inflight_cancelled,
+            "total_skipped_risk_hold": self.total_skipped_risk_hold,
+            "total_risk_hold_regen": self.total_risk_hold_regen,
+            "inflight_now": len(self._inflight),
             # 驾驶权互斥锁（surface_fusion）：owner=native 让位取消的 L2 数
             "total_skipped_pilot": self.total_skipped_pilot,
             "pilot_guard_wired": self._pilot_guard is not None,

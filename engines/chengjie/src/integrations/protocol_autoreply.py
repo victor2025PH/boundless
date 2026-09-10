@@ -95,6 +95,40 @@ def _risk_policy_decide(reply: str, platform: str = ""):
     )
 
 
+def _risk_hold_gate(platform: str, account_id: str, chat_key: str) -> str:
+    """Q-3（#264 B）：会话是否被风险持有 / 「需人工」闸住。返回原因码（空＝放行）。
+
+    读 inbox 镜像（``protocol_bridge.get_inbox_store``）；无 store → 放行。命中落一行
+    ``[autosend] abort=risk_hold|needs_human stage=protocol conv=…``。绝不抛。"""
+    try:
+        from src.inbox.normalizer import conv_id as _cid_fn
+        from src.integrations.protocol_bridge import get_inbox_store as _gis
+        store = _gis()
+    except Exception:
+        return ""
+    if store is None:
+        return ""
+    cid = _cid_fn(str(platform or ""), str(account_id or ""), str(chat_key or ""))
+    reason = ""
+    try:
+        from src.inbox import risk_hold as _rh
+        reason = str(_rh.active(store, cid) or "")
+        abort = "risk_hold" if reason else ""
+    except Exception:
+        abort = ""
+    if not abort:
+        try:
+            if HANDOFF_TAG in list(store.get_conv_tags(cid) or []):
+                abort, reason = "needs_human", "needs_human"
+        except Exception:
+            abort = ""
+    if abort:
+        logger.info("[autosend] abort=%s stage=protocol conv=%s reason=%s",
+                    abort, cid, reason or "-")
+        return reason or abort
+    return ""
+
+
 def _shadow_hold(decision: Any, *, platform: str, account_id: str, chat_key: str,
                  reply: str, inbound: str, ts: float) -> Optional[Dict[str, Any]]:
     """影子档放行 → 台账 hold 行（stage=protocol，不登记 reconcile：本链无草稿行，
@@ -419,6 +453,16 @@ async def run_autoreply(
                     return _result(_skip, inbound=text)
         except Exception:
             logger.debug("[protocol-autoreply] inbox_mode_fn 检查失败（忽略）", exc_info=True)
+
+    # Q-3（#264 B）会话级风险持有 / 「需人工」作闸：本链是无人值守直发（≡ L2），会话挂着
+    # risk_hold（隐私 / 承诺 / 停联 / 需人工）或列表上「需人工」标在场 → 不生成不发，
+    # 只落一行 abort 日志——「查看≠接管」（#45）：只有人工动作才解除。store 缺席 / 异常放行。
+    try:
+        _rh_reason = _risk_hold_gate(platform, account_id, chat_key)
+    except Exception:
+        _rh_reason = ""
+    if _rh_reason:
+        return _result("risk_hold", inbound=text, risk_hold=_rh_reason)
 
     # 双面板融合驾驶权锁（surface_fusion，2026-08-13 第二批）：该账号自动化持有者
     # 是「原生面板」→ 本直发链让位（与上方 automation_mode 同族的归属判定）。
@@ -954,6 +998,13 @@ def clear_needs_human(store: Any, conversation_id: str, *,
     except Exception:
         logger.debug("[protocol-autoreply] handoff_meta 清除失败（忽略）",
                      exc_info=True)
+    # Q-3（#264 B）：摘标同步解除会话级风险持有。actor 以 system 开头（自动摘标）只清
+    # needs_human 泛因——隐私 / 承诺等更具体持有只认人工（risk_hold.clear 内部判定）。
+    try:
+        from src.inbox import risk_hold as _rh
+        _rh.clear(store, conversation_id, by=str(actor or "agent"))
+    except Exception:
+        logger.debug("[protocol-autoreply] risk_hold.clear 失败（忽略）", exc_info=True)
     logger.info(
         "[needs_human] 摘标 conv=%s by=%s（原因=%s 打标于=%s 打标方=%s）",
         conversation_id, actor or "?", meta.get("reason") or "-",
@@ -1125,6 +1176,15 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
         tags = list(store.get_conv_tags(cid) or [])
     except Exception:
         tags = []
+    # Q-3（#264 B）：「需人工」从标签升级为闸——同时登记会话级风险持有（泛因 needs_human，
+    # hit=打标原因；会话上已有更具体的活跃持有则由 risk_hold.set 保留不覆盖）。标已在场
+    # 也登记（老标补闸，幂等）；best-effort。
+    try:
+        from src.inbox import risk_hold as _rh
+        _rh.set(store, cid, "needs_human", str(reason or ""), by=str(source or "system"),
+                now=now)
+    except Exception:
+        logger.debug("[protocol-autoreply] risk_hold.set 失败（忽略）", exc_info=True)
     if HANDOFF_TAG in tags:
         return False
     tags.append(HANDOFF_TAG)

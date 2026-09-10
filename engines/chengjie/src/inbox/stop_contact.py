@@ -273,6 +273,13 @@ def freeze_conversation(
         out["tagged"] = tagged
     except Exception:
         logger.debug("[stop-contact] tag_needs_human 失败", exc_info=True)
+    # Q-3（#264 A）：冻结同时在会话级风险持有登记一行（reason=stop_contact / self_harm，
+    # 覆盖 tag_needs_human 写下的泛因）——**只登记**，冻结语义（标签 / 档位 / 名单）不变。
+    try:
+        from src.inbox import risk_hold as _rh
+        _rh.set(store, cid, reason, hits_l, by="system", now=ts)
+    except Exception:
+        logger.debug("[stop-contact] risk_hold.set 失败（忽略）", exc_info=True)
 
     # ② 列表标签「客户要求停联」（自伤不打这个标：语义不对，需人工 + 危机链已有）
     try:
@@ -392,6 +399,12 @@ def unfreeze_conversation(
             out["untagged"] = bool(clear_needs_human(store, cid, actor=actor))
     except Exception:
         logger.debug("[stop-contact] 摘需人工失败", exc_info=True)
+    # Q-3（#264 A）：人工解冻＝人工动作 → 会话级风险持有一并解除（clear_needs_human 未走到时兜底）
+    try:
+        from src.inbox import risk_hold as _rh
+        _rh.clear(store, cid, by=f"unfreeze:{actor}")
+    except Exception:
+        logger.debug("[stop-contact] risk_hold.clear 失败（忽略）", exc_info=True)
     try:
         meta: Dict[str, Any] = {}
         if hasattr(store, "get_automation_mode_meta"):
