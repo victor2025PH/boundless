@@ -286,3 +286,129 @@ def test_migrate_marshals_to_session_loop(tmp_path, monkeypatch):
 def test_migrate_same_loop_runs_direct(tmp_path, monkeypatch):
     """同 loop 场景（单测/主线程运行）：直连执行，行为与旧实现一致。"""
     _run_migrate_with_session_loop(tmp_path, monkeypatch, cross_loop=False)
+
+
+# ── Q-10 #268：storage 已关闭时 _migrate 不再对尸体操作（2026-09-08 13:32 实锤）──
+# 栈：_advance → _migrate → _do → storage.dc_id()/session.start() →
+# pyrogram sqlite_storage：sqlite3.ProgrammingError: Cannot operate on a closed database；
+# 且 _advance 的「首试失败自动重试一次」对同一具尸体再撞一次（两份栈）。
+
+class _ClosedConnStorage(_MigrateStorage):
+    """带 pyrogram SQLiteStorage 同款 ``conn`` 属性、且连接已关闭的假 storage。"""
+
+    def __init__(self, sink):
+        import sqlite3
+        super().__init__(sink)
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.close()
+
+
+def test_storage_closed_probe():
+    import sqlite3
+
+    class _S:
+        pass
+
+    class _C:
+        storage = _S()
+
+    assert tpl._storage_closed(None) is True
+    assert tpl._storage_closed(_C()) is False            # 无 conn 属性（假件 / 内存）＝未关
+    c = _C()
+    c.storage.conn = None
+    assert tpl._storage_closed(c) is True
+    c.storage.conn = sqlite3.connect(":memory:")
+    assert tpl._storage_closed(c) is False
+    c.storage.conn.close()
+    assert tpl._storage_closed(c) is True
+    assert tpl._is_closed_db_error(
+        sqlite3.ProgrammingError("Cannot operate on a closed database.")) is True
+    assert tpl._is_closed_db_error(Exception("timeout")) is False
+
+
+def test_migrate_refuses_closed_storage(tmp_path, monkeypatch):
+    """storage 已关 → _migrate 直接抛 LoginStorageClosed，不碰 session.stop / storage.dc_id。"""
+    import pyrogram.session as pysess
+    sink: list = []
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    client = _FakeClient()
+    client.storage = _ClosedConnStorage(sink)
+    login.client = client
+    monkeypatch.setattr(pysess, "Auth", _FakeAuth)
+
+    async def _run():
+        client.session = _MigrateSession(asyncio.get_running_loop(), sink)
+        await login._migrate(5)
+
+    with pytest.raises(tpl.LoginStorageClosed):
+        asyncio.run(_run())
+    assert sink == []          # 一步都没往尸体上走
+
+
+def test_advance_migrate_closed_storage_no_retry_and_terminal(tmp_path, monkeypatch):
+    """扫码后 storage 被收走：_advance 只试一次（不再「自动重试」撞第二次），poll 归因
+    session_closed 终态，不再 expired 让前端无限换码。"""
+    if not tpl.is_pyrogram_available():
+        pytest.skip("pyrogram 未安装")
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    from pyrogram.raw.types.auth import LoginTokenMigrateTo
+
+    sink: list = []
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    client = _FakeClient()
+    client.storage = _ClosedConnStorage(sink)
+    login.client = client
+    calls = {"n": 0}
+    orig = login._migrate
+
+    async def _counting(dc_id):
+        calls["n"] += 1
+        await orig(dc_id)
+
+    monkeypatch.setattr(login, "_migrate", _counting)
+    tok = LoginTokenMigrateTo(dc_id=5, token=b"abc")
+
+    async def _run():
+        client.session = _MigrateSession(asyncio.get_running_loop(), sink)
+        try:
+            await login._advance(tok)
+        except Exception as ex:  # noqa: BLE001
+            login._classify_poll_failure(ex)
+
+    asyncio.run(_run())
+    assert calls["n"] == 1, "storage 已关不得自动重试第二次"
+    assert login._scan_seen is True
+    assert login.status == "failed"
+    assert login.reason_code == "session_closed"
+    assert "重新发起" in login.detail
+
+
+def test_classify_raw_closed_db_error_is_terminal(tmp_path):
+    """pyrogram 内部抛出的裸 sqlite3.ProgrammingError(closed database) 同样归 session_closed。"""
+    import sqlite3
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    login._scan_seen = False
+    login._classify_poll_failure(
+        sqlite3.ProgrammingError("Cannot operate on a closed database."))
+    assert login.status == "failed"
+    assert login.reason_code == "session_closed"
+
+
+def test_poll_short_circuits_when_storage_closed(tmp_path):
+    """poll 进锁后先探 storage：已关 → 不 invoke（invoke 会 AttributeError）直接终态。"""
+
+    class _S:
+        conn = None
+
+    class _C:
+        storage = _S()
+
+    login = tpl.TelegramQrLogin(1, "h", str(tmp_path))
+    login.status = "pending"
+    login.client = _C()
+    res = asyncio.run(login.poll())
+    assert res["status"] == "failed"
+    assert res["reason_code"] == "session_closed"

@@ -170,6 +170,47 @@ def _flood_wait_sec(ex: Exception) -> int:
     return 0
 
 
+class LoginStorageClosed(RuntimeError):
+    """登录 client 的 sqlite storage 已关闭（Q-10 #268，2026-09-08 13:32 实锤）。
+
+    时序：用户扫码 → ``_advance`` 进 DC 迁移；同时另一路（cancel / TTL 清理 /
+    换码）已对同一 client ``disconnect()`` → storage.close()。``_migrate`` 里再
+    ``storage.dc_id()`` / ``session.start()`` 撞 pyrogram sqlite_storage 的
+    ``sqlite3.ProgrammingError: Cannot operate on a closed database``，且
+    ``_advance`` 的「首试失败自动重试一次」对同一具尸体再撞一次，日志两份栈。
+    这类异常＝会话已被收走，不是网络抖动：不重试、归因 ``session_closed``。
+    """
+
+
+def _storage_closed(client: Any) -> bool:
+    """client 的 storage 是否已关闭（best-effort 探测，判不出＝当作未关）。
+
+    pyrogram ``SQLiteStorage`` 没有 closed 标志：``close()`` 只 ``conn.close()``，
+    对象仍在。故用 ``conn`` 做一条 ``SELECT 1`` 探针；``conn`` 为 None（``close``
+    后某些版本置 None）也算关。假件 / 内存 storage 没有 ``conn`` 属性 → 未关。
+    """
+    if client is None:
+        return True
+    storage = getattr(client, "storage", None)
+    if storage is None:
+        return True
+    if not hasattr(storage, "conn"):
+        return False
+    conn = getattr(storage, "conn", None)
+    if conn is None:
+        return True
+    try:
+        conn.execute("SELECT 1")
+        return False
+    except Exception as ex:  # noqa: BLE001
+        return "closed database" in str(ex).lower()
+
+
+def _is_closed_db_error(ex: Exception) -> bool:
+    return isinstance(ex, LoginStorageClosed) or (
+        "cannot operate on a closed database" in str(ex).lower())
+
+
 # ── 登录状态机（真实 pyrogram 调用，全程降级保护） ───────────────────────────
 
 class TelegramQrLogin:
@@ -272,6 +313,8 @@ class TelegramQrLogin:
             if self.status in ("authorized", "failed", "expired", "password_needed"):
                 return self.result()
             try:
+                if _storage_closed(self.client):
+                    raise LoginStorageClosed("login client storage already closed")
                 from pyrogram.raw.functions.auth import ExportLoginToken
                 r = await self.client.invoke(ExportLoginToken(
                     api_id=self.api_id, api_hash=self.api_hash, except_ids=[]))
@@ -296,6 +339,17 @@ class TelegramQrLogin:
             self.status = "password_needed"
             self.detail = "该账号已开启两步验证，请输入云密码完成登录"
             logger.info("[tg_protocol_login] 扫码已确认，等待两步验证云密码")
+            return
+        if _is_closed_db_error(ex):
+            # Q-10 #268：storage 已关（cancel / TTL 清理 / 换码抢先 disconnect）——
+            # 会话已被收走，换码也救不回，终态 + 一条 WARNING（不带栈：栈里只有
+            # pyrogram sqlite_storage 的同一句话，13:32 那两份就是它）。
+            self.status = "failed"
+            self.reason_code = "session_closed"
+            self.detail = "登录会话已关闭（被取消或超时清理），请重新发起扫码"
+            logger.warning(
+                "[tg_protocol_login] storage 已关闭，登录会话终止 scan_seen=%s type=%s: %s",
+                self._scan_seen, type(ex).__name__, ex)
             return
         code = classify_login_exception(ex)
         if code == "rate_limited":
@@ -380,6 +434,8 @@ class TelegramQrLogin:
             except Exception as ex:  # noqa: BLE001
                 if _is_password_needed(ex):
                     raise  # 2FA 等待态由 poll 归因，重迁移纯属浪费
+                if _is_closed_db_error(ex) or _storage_closed(self.client):
+                    raise  # storage 已关：重试只会再撞一次 closed database（Q-10 #268）
                 # 迁移链（新 DC 握手 / 导入令牌）自动重试一次：跨区首次握手
                 # 偶发超时是常态，直接判死会把可救的登录变成用户可见失败。
                 logger.warning("[tg_protocol_login] DC 迁移首试失败，自动重试一次 "
@@ -408,6 +464,13 @@ class TelegramQrLogin:
         上执行；同 loop 场景（单测/主线程运行）自动走直连路径，行为不变。
         """
         from pyrogram.session import Auth, Session
+
+        # Q-10 #268：迁移前先探 storage——已关（另一路 disconnect 收走了会话）就别碰
+        # session.stop()/storage.dc_id()，直接抛可归因异常，_advance 不重试、poll 落终态。
+        if _storage_closed(self.client):
+            logger.info("[tg_protocol_login] DC 迁移前 storage 已关闭，跳过迁移 dc=%s status=%s",
+                        dc_id, self.status)
+            raise LoginStorageClosed(f"storage closed before migrate to dc={dc_id}")
 
         async def _do() -> None:
             await self.client.session.stop()
