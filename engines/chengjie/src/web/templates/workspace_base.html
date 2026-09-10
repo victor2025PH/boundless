@@ -4895,5 +4895,9 @@ window.__wsMultiWin = (function(){
 })();
 </script>
 {% include "_page_view_beacon.html" %}
+{% if user_role in ('master', 'operator') %}
+{# Q-4 #267 F：升级后首开「这版改变了什么」弹窗——/api/release-notice 不 pending 则零痕迹；同一版只弹一次 #}
+<script src="/static/workspace/release-notice.js?v=20260910a" defer></script>
+{% endif %}
 </body>
 </html>

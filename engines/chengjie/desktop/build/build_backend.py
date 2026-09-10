@@ -67,6 +67,9 @@ DATAS = [
     # 一律不得出现（package-layout.test.js「必须不在」清单钉住）。
     (REPO / "config" / "handoff_scripts.yaml", "config"),
     (REPO / "config" / "handoff_compliance.yaml", "config"),
+    # Q-4 #267 F（2026-09-10）：「这版改变了什么」默认值变更清单（纯 JSON 数据；每版发版线维护）。
+    # src/utils/release_defaults.py 用 parents[2]/config 定位＝冻结后 <_internal>/config/。
+    (REPO / "config" / "release_defaults_changed.json", "config"),
     # WP-1：部署能力预设档（cloud_light 等；纯 YAML，门禁保证零内网 IP）。
     # launcher 注入 AITR_DEPLOY_PROFILE 后，首启由 ConfigManager 播种进 overlay。
     (REPO / "config" / "profiles", "config/profiles"),

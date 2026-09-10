@@ -316,7 +316,8 @@ def resync_zones(zones: set[str], repo: Path, internal: Path, bb) -> None:
         elif zone == "config":
             dest = internal / "config"
             dest.mkdir(parents=True, exist_ok=True)
-            for name in ("config.desktop.min.yaml", "config.example.yaml"):
+            for name in ("config.desktop.min.yaml", "config.example.yaml",
+                         "release_defaults_changed.json"):  # Q-4 #267 F
                 src = repo / "config" / name
                 if src.is_file():
                     shutil.copy2(src, dest / name)

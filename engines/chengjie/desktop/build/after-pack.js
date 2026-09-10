@@ -132,6 +132,11 @@ const REQUIRED = [
     "HandoffComplianceChecker init skipped（MTRCH2③）",
   ],
   [
+    path.join("backend", "_internal", "config", "release_defaults_changed.json"),
+    "「这版改变了什么」默认值变更清单（Q-4 #267 F）",
+    "升级首开弹窗静默缺席（/api/release-notice 永远 pending=false）",
+  ],
+  [
     path.join("backend", "_internal", "domains", "conversion", "manifest.yaml"),
     "域包清单（陪伴 / 销售分类与提示词）",
     "域包加载失败 → KB 分类 / System prompt 全回落硬编码客服域",

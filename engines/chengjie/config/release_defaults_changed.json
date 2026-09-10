@@ -1,0 +1,60 @@
+{
+  "_doc": [
+    "「这版改变了什么」数据文件（Q-4 #267 F）。每版发版线维护：本版把哪些出厂默认改了。",
+    "升级后首次打开工作台弹一次（src/utils/release_defaults.py + /api/release-notice + static/workspace/release-notice.js）。",
+    "维护步骤见 docs/Q批_进度总账.md R79 粘贴块：① releases 下加本版号；② 每条 change 写 key / kind / old / new / i18n（词条前缀，",
+    "  在 src/web/i18n_packs/release_notice.py 加 <i18n>_title / <i18n>_desc，zh/en/zh_hant 三语）；③ needs_timezone 只给班表类键；",
+    "  ④ 跑 tests/test_release_notice_q4.py；⑤ 随包（build_backend.py DATAS 已登记本文件）。",
+    "kind: switch＝布尔开关（行内「保持 / 改回」二选一）；value＝数值/字符串（只展示，不给按钮）。",
+    "show_if: marker＝只在 overlay 有该 marker（本机被基线回滚过）时弹；missing＝用户 overlay 已显式写过该键则不弹；always＝升级机一律弹。",
+    "升级机判定：状态文件 last_version ≠ 本版，或任一行 marker 在 overlay 里；否则视为 clean 装静默记 seen。"
+  ],
+  "schema": 1,
+  "releases": {
+    "1.0.79": {
+      "date": "2026-09-10",
+      "decisions": [
+        "D-Q1",
+        "D-Q2"
+      ],
+      "changes": [
+        {
+          "key": "inbox.work_schedule.enabled",
+          "kind": "switch",
+          "old": true,
+          "new": false,
+          "i18n": "rn_ws_enabled",
+          "needs_timezone": true,
+          "timezone_key": "inbox.work_schedule.timezone",
+          "marker": "inbox.work_schedule.baseline_rollback",
+          "show_if": "marker"
+        },
+        {
+          "key": "companion_send_gate.enabled",
+          "kind": "switch",
+          "old": true,
+          "new": false,
+          "i18n": "rn_send_gate",
+          "marker": "companion_send_gate.baseline_rollback",
+          "show_if": "marker"
+        },
+        {
+          "key": "inbox.work_schedule.off_hours.catch_up_regenerate_hours",
+          "kind": "value",
+          "old": 2,
+          "new": 0,
+          "i18n": "rn_regen",
+          "show_if": "missing"
+        },
+        {
+          "key": "companion.goals.profile_llm.enabled",
+          "kind": "switch",
+          "old": false,
+          "new": true,
+          "i18n": "rn_profile_llm",
+          "show_if": "always"
+        }
+      ]
+    }
+  }
+}

@@ -2051,6 +2051,14 @@ _ADDITIONS_2026_09_10_Q4_CARE_QUIET = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q4_CARE_QUIET
 
+# Q-4 #267（2026-09-10，F）：升级首开「这版改变了什么」弹窗（release_notice_routes.py）。
+_ADDITIONS_2026_09_10_Q4_RELEASE_NOTICE = """
+/api/release-notice	GET
+/api/release-notice/apply	POST
+/api/release-notice/dismiss	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q4_RELEASE_NOTICE
+
 # Q-5 #263（2026-09-10，C）：画像槽位「✕ 否」——否掉 AI 推断 / 昵称预填值（只删 mentioned）。goal_routes.py。
 _ADDITIONS_2026_09_10_Q5_PROFILE_REJECT = """
 /api/goals/profile/reject	POST

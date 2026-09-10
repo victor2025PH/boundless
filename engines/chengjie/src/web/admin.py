@@ -1568,6 +1568,16 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_care.getLogger("admin").warning("care 路由注册失败", exc_info=True)
 
+    # ── Q-4 #267 F：升级首开「这版改变了什么」弹窗 API（/api/release-notice*）──
+    try:
+        from src.web.routes.release_notice_routes import register_release_notice_routes
+
+        register_release_notice_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_rn
+
+        _log_rn.getLogger("admin").warning("release-notice 路由注册失败", exc_info=True)
+
     # ── 多平台 deferred 队列·运营可观测 API（/api/deferred-outbox/status）──
     try:
         from src.web.routes.deferred_outbox_routes import (

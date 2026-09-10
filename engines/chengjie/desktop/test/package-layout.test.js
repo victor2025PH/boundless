@@ -204,6 +204,8 @@ const MUST_SHIP = [
     "backend/_internal/config/handoff_scripts.yaml", "转人工话术模板（MTRCH2③）"],
   ['REPO / "config" / "handoff_compliance.yaml"', "config/handoff_compliance.yaml",
     "backend/_internal/config/handoff_compliance.yaml", "转人工合规规则（MTRCH2③）"],
+  ['REPO / "config" / "release_defaults_changed.json"', "config/release_defaults_changed.json",
+    "backend/_internal/config/release_defaults_changed.json", "「这版改变了什么」默认值变更清单（Q-4 #267 F）"],
   ['REPO / "config" / "profiles"', "config/profiles",
     null, "部署能力预设档（按 profile 播种）"],
 ];
