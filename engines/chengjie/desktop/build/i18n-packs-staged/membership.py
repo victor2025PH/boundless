@@ -87,6 +87,9 @@ ZH = {
     "mb_topup_line": "含加量包 +{n} 字符",
     # P2 首启体验档（额度来自本地赠量，不是签名授权 —— 说法必须区分开）
     "mb_trial_line": "首启体验档 · 还剩 {h} 小时",
+    # P-4 #254（MTRCH2④）：hours_left 为 None 的两个分支（窗口 0 = 不限时 / 窗口 >0 未落锚点）
+    "mb_trial_line_unlimited": "首启体验档 · 不限时",
+    "mb_trial_line_not_started": "首启体验档 · 未开始计时",
     "mb_trial_expired": "首启体验档已到期",
     "mb_trial_used_up": "首启体验档额度已用完",
     # 托管 AI 试用通道（云端网关按日计量，与授权字符额度是两套水表）
@@ -301,6 +304,8 @@ EN = {
     "mb_topup_line": "Includes top-up packs: +{n} chars",
     # P2 starter allowance (local grant, not a signed license — wording differs)
     "mb_trial_line": "Starter allowance · {h}h left",
+    "mb_trial_line_unlimited": "Starter allowance · no time limit",
+    "mb_trial_line_not_started": "Starter allowance · timer not started",
     "mb_trial_expired": "Starter allowance has expired",
     "mb_trial_used_up": "Starter allowance is used up",
     # Hosted AI trial channel (cloud gateway, daily metering — separate meter from license chars)

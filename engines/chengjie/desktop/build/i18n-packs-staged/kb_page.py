@@ -47,6 +47,8 @@ ZH = {
     "kb2_syspay_none": "没有系统预置的支付话术",
     "kb2_syspay_purge_confirm": "确定清除这 {n} 条系统预置支付话术？只删支付系列（GXP / 订单 / 费率 / 通道 / 状态兜底），你自建 / 导入的知识与其他系统话术不受影响；清除后不会再自动灌回。",
     "kb2_syspay_purged": "已清除 {n} 条系统预置支付话术",
+    # 「新建条目」预填模板（P-4 #254 / D-P6，2026-09-08）
+    "kb2_tpl_lead": "从模板开始：点一下预填，再改成你的真实内容",
 }
 
 EN = {
@@ -89,4 +91,6 @@ EN = {
     "kb2_syspay_none": "No system-preset payment scripts",
     "kb2_syspay_purge_confirm": "Clear these {n} system-preset payment scripts? Only the payment series (GXP / order / rate / channel / status fallbacks) is removed; your own / imported knowledge and other system scripts stay, and they will not be re-seeded.",
     "kb2_syspay_purged": "Cleared {n} system-preset payment scripts",
+    # New-entry prefill templates (P-4 #254 / D-P6, 2026-09-08)
+    "kb2_tpl_lead": "Start from a template: click to prefill, then replace with your real content",
 }
