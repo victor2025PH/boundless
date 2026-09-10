@@ -5109,11 +5109,21 @@ compliance:
 #   # → 坐席审过 / 自动放行的回复进回传队列 → huoke GET /api/tiktok/huoke/handback 认领、真机回评论、
 #   # POST /api/tiktok/huoke/handback/ack 回执 → 线程 out 回显。评论回复 API 归 TK-2。全程 Bearer api_auth。
 #   # 闸门：低于 min_intent 不进线；评论 ≤150 字；同一入站只准回一条；每号日上限 daily_cap。未开启：零痕迹。
+#   # TK-3（同日）私信通道：huoke 真机读到的私信 POST /api/tiktok/huoke/dm（会话键 tiktok:user:<username>，与官方私信同键；
+#   # huoke 自己发的首触按 direction=out 回传做上下文）；POST /api/tiktok/huoke/devices 绑定设备↔账号（时区 / 日上限）。
+#   # 私信闸门：智聊只接管对方开口之后的对话（会话无对方入站 → policy_message_request_pending 一条不发）；对方 peer_silent_hours
+#   # 未回 → 自动链停、人工只可再补 1 条；work_schedule 夜间静默只拦自动链；每号日上限 dm_daily_cap 按账号时区切日；
+#   # 真机 2 小时无心跳 → device_offline 不收单。回执成功 → 线程镜像升 sent；失败 → 「发送失败 + 一键重发」留痕。
 #   huoke_bridge:
 #     enabled: false
 #     min_intent: 0.6              # 0–1，低于此分的线索 huoke 本地规则继续处理、不进智聊
-#     daily_cap: 20                # 每号每日回传上限（新号 10–20 起）
+#     daily_cap: 20                # 每号每日回评论上限（新号 10–20 起）
 #     max_reply_len: 150           # 上限 150（TikTok 评论字数上限，配更大无效）
+#     dm_daily_cap: 15             # 每号每日私信回复上限（与 huoke tiktok.yaml send_dm.daily 同值，双保险取严）
+#     dm_max_len: 1000             # 私信单条字数上限（TikTok 私信上限 1000，配更大无效）
+#     peer_silent_hours: 72        # 对方多少小时未回 → 自动链停、人工只可再补 1 条
+#     min_gap_sec: 20              # 同一账号两条私信认领的最小间隔（真机侧另加随机大间隔）
+#     quiet_hours_block_auto: true # inbox.work_schedule 非在班时段自动链不入队（人工不受限）
 #     claim_ttl_sec: 600           # 认领后多久没回执 → 回收重新认领
 #     state_db_path: ""            # 缺省 <config_dir>/tiktok_huoke_bridge_state.db
 
