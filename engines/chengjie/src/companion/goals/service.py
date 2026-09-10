@@ -574,7 +574,7 @@ def refresh_goal(
             except (TypeError, ValueError):
                 halt = 4
             # O-3 B（#236）：摸底目标把「今天至少问一个：<未填槽>」钉进计划（第 1 天也钉）
-            probe_asks = discovery_probe_asks(store, template, goal)
+            probe_asks = discovery_probe_asks(store, template, goal, inbox_store=inbox_store)
             active = customer_active(signals.extras.get("inbound_30m", 0))
             beat = plan_beat(
                 template=template, goal=goal, signals=signals, day=day,
@@ -1122,21 +1122,52 @@ def discovery_gap_for_goal(
         return ""
 
 
+def recent_history(
+    inbox_store: Any, conversation_id: str, *, limit: int = 30,
+) -> List[Dict[str, Any]]:
+    """最近 N 条会话消息 ``[{direction, text, ts}]``（时间正序；Q-1 A 三态扫描 / 深化判定
+    共用）。无 inbox / 无会话 / 异常 → []。绝不抛。"""
+    conv = str(conversation_id or "").strip()
+    if inbox_store is None or not conv:
+        return []
+    try:
+        rows = inbox_store.list_recent_messages(conv, limit=max(1, int(limit or 30))) or []
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        t = str(m.get("text") or m.get("content") or "").strip()
+        if not t:
+            continue
+        try:
+            ts = float(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        out.append({"direction": str(m.get("direction") or "in"), "text": t, "ts": ts})
+    return out
+
+
 def discovery_probe_asks(
     store: Any, template: Dict[str, Any], goal: Dict[str, Any],
-    *, lang: str = "zh",
+    *, lang: str = "zh", inbox_store: Any = None,
 ) -> List[str]:
-    """摸底类目标当前**全部**未填勾选槽位的问法（勾选序＝优先级；已问过仍空的排后）。
+    """摸底类目标当前**全部 unknown** 勾选槽位的问法（勾选序＝优先级；已问过仍空的排后）。
     planner 据此把「今天至少自然问一个：<第一个>」钉进今日意图（O-3 B #236）。
+    Q-1 A（#264）：给了 ``inbox_store`` 时按最近 30 轮三态过滤——mentioned / confirmed 的槽
+    不进计划句（「今天至少问一个：做什么工作」钉在今日意图上，客户昨晚刚说过就是打脸）。
     非摸底 / 无勾选 / 全填 / 异常 → []。"""
     try:
         if not template.get("gap_in_intent"):
             return []
         from src.companion.goals.profile_slots import (
+            SLOT_STATE_UNKNOWN,
             asked_slot_keys,
             inject_ask,
             missing_slots,
             parse_selected_slots,
+            slot_states,
         )
         sel = parse_selected_slots((goal.get("params") or {}).get("slots"))
         if not sel:
@@ -1146,8 +1177,13 @@ def discovery_probe_asks(
         fields = dict((prof or {}).get("fields") or {})
         asked = asked_slot_keys(goal.get("params") or {})
         miss = missing_slots(fields, include=sel, limit=32, exclude=asked)
-        return [inject_ask(str(m.get("key") or ""), lang) for m in miss
-                if str(m.get("key") or "")]
+        keys = [str(m.get("key") or "") for m in miss if str(m.get("key") or "")]
+        if inbox_store is not None and keys:
+            hist = recent_history(inbox_store, str(goal.get("conversation_id") or ""))
+            if hist:
+                st = slot_states(keys, fields, hist)
+                keys = [k for k in keys if st.get(k, ("unknown", ""))[0] == SLOT_STATE_UNKNOWN]
+        return [inject_ask(k, lang) for k in keys]
     except Exception:
         logger.debug("discovery_probe_asks failed", exc_info=True)
         return []
@@ -1159,6 +1195,10 @@ INJECT_COUNT_PARAM = "_inject_count"
 PROBE_PENDING_TTL_SEC = 86400.0
 PROBE_EVENT_ASKED = "probe_asked"
 PROBE_EVENT_MISSED = "probe_missed"
+PROBE_EVENT_COVERED = "probe_covered"
+# Q-1 B（#264 T9KN8X）：每槽每日 missed 上限——O-3 C 的 retry 无上限是「十小时 asked 8 次」的
+# 机械根源；到上限该槽当日休眠（不 retry / 不 cue / 不 floor）。
+PROBE_RETRY_PER_DAY = 2
 
 
 def _local_day_start(now: float) -> float:
@@ -1216,14 +1256,19 @@ def verify_pending_probe(
         if not outs:
             out["result"] = "pending"
             return out
-        from src.companion.goals.profile_slots import reply_asks_slot
+        from src.companion.goals.profile_slots import reply_asks_slot, reply_covers_slot
         text = " ".join(outs)
         asked = reply_asks_slot(text, slot)
-        out.update(result="asked" if asked else "missed", patch=cleared,
-                   reply_head=text[:120])
+        # Q-1 B（#264）：没问出来但回复顺着该槽话头聊了（cue=job → 回复带 job / work /
+        # carpenter）→ covered：不计 missed、不触发 retry（O-3 C 这里把「AI 自己说
+        # it's a job… convention center」也判 missed→retry）
+        covered = (not asked) and reply_covers_slot(text, slot)
+        result = "asked" if asked else ("covered" if covered else "missed")
+        out.update(result=result, patch=cleared, reply_head=text[:120])
         gid = str(goal.get("goal_id") or "")
         store.add_event(
-            gid, PROBE_EVENT_ASKED if asked else PROBE_EVENT_MISSED,
+            gid, {"asked": PROBE_EVENT_ASKED, "covered": PROBE_EVENT_COVERED}.get(
+                result, PROBE_EVENT_MISSED),
             f"{slot}@{cue or '-'}", conversation_id=conv,
             text_head=text[:120], now=now)
         if asked:
@@ -1244,38 +1289,80 @@ def verify_pending_probe(
         return out
 
 
+PROBE_EVENT_DEEPEN = "probe_deepen"
+
+
+def _event_detail_slots_today(
+    store: Any, goal_id: str, kind: str, now: float,
+) -> Dict[str, int]:
+    """今日某类事件按 detail 首段（``slot@cue`` 的 slot）计数 → ``{slot: n}``。绝不抛。"""
+    out: Dict[str, int] = {}
+    try:
+        rows = store.list_events(str(goal_id or ""), limit=120, kinds=(kind,),
+                                 since_ts=_local_day_start(now))
+    except Exception:
+        return out
+    for e in rows or []:
+        s = str((e or {}).get("detail") or "").split("@", 1)[0].strip().lower()
+        if s:
+            out[s] = out.get(s, 0) + 1
+    return out
+
+
 def decide_probe_target(
     store: Any, goal: Dict[str, Any], *, prof_fields: Dict[str, Any],
     sel_slots: List[str], inbound_text: str, retry_slot: str, now: float,
-) -> Tuple[str, str, str, List[Tuple[str, str]]]:
-    """本轮硬注入目标 ``(slot, cue, mode, cues)``：线索词对上未填槽 / 上轮 missed 重试 /
-    今天还没真问过一个（每日下限）。不必问 → ``("", "", "", cues)``。绝不抛。"""
+    history: Any = None,
+) -> Tuple[str, str, str, List[Tuple[str, str]], Dict[str, Tuple[str, str]]]:
+    """本轮硬注入目标 ``(slot, cue, mode, cues, states)``。
+
+    Q-1 A（#264 #269）：候选只来自 **unknown** 槽（三态见 ``profile_slots.slot_state``：
+    字段 + 最近 30 轮客户 / 我方文本）——mentioned 只许「深化式」提法（mode=deepen，每槽
+    每日 ≤1、只跟线索）、confirmed 永不问。O-3 C 的「问过的加回末尾」已撤：``asked_slot_keys``
+    只排序，不再把问过的槽补回候选；所以「已问过 + 无线索」不会再被 floor 兜回来。
+    不必问 → ``("", "", "", cues, states)``。绝不抛。"""
+    empty: Dict[str, Tuple[str, str]] = {}
     try:
         from src.companion.goals.profile_slots import (
+            SLOT_STATE_MENTIONED,
+            SLOT_STATE_UNKNOWN,
             asked_slot_keys,
             detect_cues,
             missing_slots,
             pick_probe_target,
+            slot_states,
         )
         all_unfilled = [str(m.get("key") or "") for m in missing_slots(
             prof_fields, include=sel_slots, limit=32) if m.get("key")]
+        states = slot_states(list(sel_slots or []), prof_fields, history)
         if not all_unfilled:
-            return "", "", "", []
-        ordered = [str(m.get("key") or "") for m in missing_slots(
-            prof_fields, include=sel_slots, limit=32,
-            exclude=asked_slot_keys(goal.get("params") or {})) if m.get("key")]
-        unfilled = ordered + [k for k in all_unfilled if k not in ordered]
+            return "", "", "", [], states
+        unknown = [k for k in all_unfilled
+                   if states.get(k, (SLOT_STATE_UNKNOWN, ""))[0] == SLOT_STATE_UNKNOWN]
+        mentioned = [k for k in all_unfilled
+                     if states.get(k, ("", ""))[0] == SLOT_STATE_MENTIONED]
+        asked = set(asked_slot_keys(goal.get("params") or {}))
+        # 只排序（问过的排后），**不**把问过的加回末尾——那一行是 O-3 C 的病根
+        ordered = [k for k in unknown if k not in asked] + [k for k in unknown if k in asked]
+        gid = str(goal.get("goal_id") or "")
         cues = detect_cues(inbound_text, slots=all_unfilled)
         asked_today = int(store.count_events_since(
-            str(goal.get("goal_id") or ""), PROBE_EVENT_ASKED,
-            _local_day_start(now)) or 0) > 0
+            gid, PROBE_EVENT_ASKED, _local_day_start(now)) or 0) > 0
+        # B 段：每槽每日 missed ≤2——连续两次没问出来当日休眠（不再 retry、不再 floor / cue）
+        missed_today = _event_detail_slots_today(store, gid, PROBE_EVENT_MISSED, now)
+        awake = [k for k in ordered if missed_today.get(k, 0) < PROBE_RETRY_PER_DAY]
+        r = str(retry_slot or "").strip()
+        if r and missed_today.get(r, 0) >= PROBE_RETRY_PER_DAY:
+            r = ""
+        deepened_today = _event_detail_slots_today(store, gid, PROBE_EVENT_DEEPEN, now)
+        deepen_ok = [k for k in mentioned if deepened_today.get(k, 0) < 1]
         slot, cue, mode = pick_probe_target(
-            cues=cues, unfilled=unfilled, asked_today=asked_today,
-            retry_slot=retry_slot)
-        return slot, cue, mode, cues
+            cues=cues, unfilled=awake, asked_today=asked_today,
+            retry_slot=r, mentioned=mentioned, deepen_ok=deepen_ok)
+        return slot, cue, mode, cues, states
     except Exception:
         logger.debug("decide_probe_target failed", exc_info=True)
-        return "", "", "", []
+        return "", "", "", [], empty
 
 
 def capture_status(cfg_root: Any) -> Dict[str, Any]:
@@ -1658,6 +1745,7 @@ def build_block_for_chat(
         profile_facts = ""
         prof_fields: Dict[str, Any] = {}
         gap_patch: Optional[Dict[str, Any]] = None
+        _gap_key = ""
         try:
             from src.companion.goals.profile_slots import (
                 facts_line,
@@ -1693,6 +1781,13 @@ def build_block_for_chat(
         _is_discovery = bool(has_slots and template.get("gap_in_intent") and sel_slots)
         if _is_discovery:
             try:
+                from src.companion.goals.profile_slots import (
+                    SLOT_STATE_UNKNOWN,
+                    deepen_line,
+                    known_slots_line,
+                    probe_hard_line,
+                    slot_label,
+                )
                 _g_now = res.get("goal") or goal
                 _gid_p = str(_g_now.get("goal_id") or "")
                 _conv_p = conversation_id or f"{platform}:{account_id}:{chat_key}"
@@ -1700,20 +1795,53 @@ def build_block_for_chat(
                 ver = verify_pending_probe(store, _g_now, inbox_store=inbox_store, now=_n_p)
                 if ver.get("patch") is not None:
                     probe_patch = dict(ver["patch"])
-                if ver["result"] in ("asked", "missed"):
+                if ver["result"] in ("asked", "missed", "covered"):
                     logger.info(
                         "[goal-inject] target=%s cue=%s result=%s conv=%s goal=%s reply=%r",
                         ver["slot"], ver["cue"] or "-", ver["result"], _conv_p,
                         _gid_p[:12], str(ver.get("reply_head") or "")[:60])
                     get_goal_stats().record_probe(ver["result"])
+                # Q-1 A（#264 #269）：注入前扫最近 30 轮，槽位三态——unknown 才是候选；
+                # mentioned / confirmed 进「已知不再问」负向清单，软缺口行也只许指向 unknown。
+                _hist = recent_history(inbox_store, _conv_p, limit=30)
                 if str(inbound_text or "").strip():
-                    probe_slot, probe_cue, probe_mode, _cues = decide_probe_target(
+                    probe_slot, probe_cue, probe_mode, _cues, _states = decide_probe_target(
                         store, _g_now, prof_fields=prof_fields, sel_slots=sel_slots,
                         inbound_text=inbound_text,
                         retry_slot=(ver["slot"] if ver["result"] == "missed" else ""),
-                        now=_n_p)
-                    if probe_slot:
-                        from src.companion.goals.profile_slots import probe_hard_line
+                        now=_n_p, history=_hist)
+                else:
+                    from src.companion.goals.profile_slots import slot_states as _ss
+                    _states = _ss(list(sel_slots), prof_fields, _hist)
+                _known = [k for k, (st, _r) in _states.items() if st != SLOT_STATE_UNKNOWN]
+                if _known:
+                    # 软缺口行只许指向 unknown 槽（resolve_inject_gap 只看字段空不空）
+                    if _gap_key and _gap_key in _known:
+                        profile_gap = ""
+                        gap_patch = None
+                    from src.companion.goals.profile_slots import slot_value as _sv
+                    _known_line = known_slots_line([
+                        slot_label(k) for k in _known if not _sv(prof_fields, k)])
+                else:
+                    _known_line = ""
+                if probe_slot:
+                    _st_p, _rs_p = _states.get(probe_slot, (SLOT_STATE_UNKNOWN, ""))
+                    if probe_mode == "deepen":
+                        probe_line = deepen_line(probe_slot, probe_cue)
+                        # 深化不挂 _probe_pending（不校验、不 retry）；记事件计每槽每日 ≤1
+                        try:
+                            store.add_event(_gid_p, PROBE_EVENT_DEEPEN,
+                                            f"{probe_slot}@{probe_cue or '-'}",
+                                            conversation_id=_conv_p, now=_n_p)
+                        except Exception:
+                            logger.debug("probe_deepen event skipped", exc_info=True)
+                        get_goal_stats().record_probe("deepen")
+                        logger.info(
+                            "[goal-inject] target=%s cue=%s state=%s decision=deepen reason=%s "
+                            "conv=%s goal=%s chain=%s",
+                            probe_slot, probe_cue or "-", _st_p, _rs_p or "-", _conv_p,
+                            _gid_p[:12], chain)
+                    else:
                         probe_line = probe_hard_line(probe_slot, probe_cue)
                         base_p = dict(probe_patch if probe_patch is not None
                                       else (gap_patch or (_g_now.get("params") or {})))
@@ -1727,10 +1855,26 @@ def build_block_for_chat(
                         base_p["_gap_asked"] = asked_l
                         probe_patch = base_p
                         logger.info(
-                            "[goal-inject] target=%s cue=%s mode=%s result=pending conv=%s "
-                            "goal=%s chain=%s",
+                            "[goal-inject] target=%s cue=%s mode=%s state=unknown decision=probe "
+                            "result=pending conv=%s goal=%s chain=%s",
                             probe_slot, probe_cue or "-", probe_mode, _conv_p,
                             _gid_p[:12], chain)
+                    if _known_line:
+                        probe_line = f"{_known_line} {probe_line}"
+                elif str(inbound_text or "").strip():
+                    # 判不准就不问：把「为什么这轮没定目标」落一行（每槽状态可读）
+                    logger.info(
+                        "[goal-inject] target=- state=%s decision=skip reason=%s conv=%s goal=%s",
+                        ",".join(f"{k}:{v[0]}" for k, v in _states.items())[:160] or "-",
+                        "all_known" if _states and all(
+                            v[0] != SLOT_STATE_UNKNOWN for v in _states.values())
+                        else "no_cue_or_asked_today",
+                        _conv_p, _gid_p[:12])
+                    if _known_line:
+                        # 负向清单 + 软缺口（若仍有 unknown）合成一行：已知的别问、要问只问这一个
+                        from src.companion.goals.profile_slots import HARD_ASK_DISCIPLINE
+                        probe_line = (f"{_known_line} 【画像缺口】{HARD_ASK_DISCIPLINE}：{profile_gap}"
+                                      if profile_gap else _known_line)
             except Exception:
                 logger.debug("probe hard-inject skipped", exc_info=True)
                 probe_slot = probe_cue = probe_mode = ""
@@ -2718,7 +2862,7 @@ def settle_order_ref(
 BEAT_TRACE_KINDS = (
     "beat_sent", "beat_injected", "beat_blocked",
     "goal_no_product", "first_send_preview",
-    PROBE_EVENT_ASKED, PROBE_EVENT_MISSED,
+    PROBE_EVENT_ASKED, PROBE_EVENT_MISSED, PROBE_EVENT_COVERED, PROBE_EVENT_DEEPEN,
 )
 
 _DEFERRED_STATUS_MAP = {
@@ -2825,9 +2969,11 @@ def build_beats_trace(
         "goal_id": gid, "beats": [],
         "summary": {"sent": 0, "delivered": 0, "injected": 0, "blocked": 0,
                     "preview": 0, "probe_asked": 0, "probe_missed": 0,
+                    "probe_covered": 0, "probe_deepen": 0,
                     "blocked_by": {}, "today": {
                         "sent": 0, "injected": 0, "blocked": 0,
                         "probe_asked": 0, "probe_missed": 0,
+                        "probe_covered": 0, "probe_deepen": 0,
                         "blocked_by": {}}},
     }
     if not gid:
@@ -2944,18 +3090,21 @@ def build_beats_trace(
             item["status"] = "preview_pending"
             item["text_head"] = str(ev.get("detail") or "")[:120]
             summ["preview"] += 1
-        elif kind in (PROBE_EVENT_ASKED, PROBE_EVENT_MISSED):
-            # O-3 C：硬注入的摸底问句出站校验——asked（真问了）/ missed（回复没带问题）
+        elif kind in (PROBE_EVENT_ASKED, PROBE_EVENT_MISSED, PROBE_EVENT_COVERED,
+                      PROBE_EVENT_DEEPEN):
+            # O-3 C：硬注入的摸底问句出站校验——asked（真问了）/ missed（回复没带问题）；
+            # Q-1：covered（没问但顺着话头盖到了槽位词）/ deepen（已提及槽的深化提法）
             item["kind"] = "probe"
             det = str(ev.get("detail") or "")
             slot, _, cue = det.partition("@")
             item["phase"] = slot.strip()
             item["reason"] = cue.strip() if cue.strip() not in ("", "-") else ""
-            item["status"] = "asked" if kind == PROBE_EVENT_ASKED else "missed"
-            key = "probe_asked" if kind == PROBE_EVENT_ASKED else "probe_missed"
-            summ[key] += 1
+            item["status"] = {PROBE_EVENT_ASKED: "asked", PROBE_EVENT_COVERED: "covered",
+                              PROBE_EVENT_DEEPEN: "deepen"}.get(kind, "missed")
+            key = f"probe_{item['status']}"
+            summ[key] = int(summ.get(key) or 0) + 1
             if is_today:
-                today[key] += 1
+                today[key] = int(today.get(key) or 0) + 1
         else:
             continue
         if item["kind"] == "blocked":
@@ -2994,6 +3143,10 @@ __all__ = [
     "decide_probe_target",
     "discovery_gap_for_goal",
     "discovery_probe_asks",
+    "recent_history",
+    "PROBE_EVENT_COVERED",
+    "PROBE_EVENT_DEEPEN",
+    "PROBE_RETRY_PER_DAY",
     "verify_pending_probe",
     "get_configured_store",
     "goal_view",

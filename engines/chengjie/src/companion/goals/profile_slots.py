@@ -622,31 +622,320 @@ def reply_asks_slot(text: str, slot_key: str) -> bool:
     return any(_contains_term(low, w) for w in kws)
 
 
+def reply_covers_slot(text: str, slot_key: str) -> bool:
+    """Q-1 B（#264）：出站回复虽没问出该槽，但**顺着该槽的话头聊了**（含该槽的问法关键词 /
+    线索词 / 提及词，如 cue=job → 回复带 job / work / carpenter）→ ``covered``：不算 missed、
+    不触发下轮重试。「AI 自己说 it's a job… convention center 仍 missed→retry」就是这里没判。
+    纯函数；空 → False。"""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    k = str(slot_key or "").strip().lower()
+    low = t.lower()
+    for w in SLOT_ASK_KEYWORDS.get(k, ()) + CUE_LEXICON.get(k, ()):
+        if _contains_term(low, w):
+            return True
+    return bool(_mention_hit(t, k))
+
+
 def pick_probe_target(
     *,
     cues: List[Tuple[str, str]],
     unfilled: List[str],
     asked_today: bool,
     retry_slot: str = "",
+    mentioned: Optional[List[str]] = None,
+    deepen_ok: Optional[List[str]] = None,
 ) -> Tuple[str, str, str]:
     """本轮「必问」目标决议 → ``(slot_key, cue_word, mode)``；不必问 → ``("", "", "")``。
 
-    优先级：``retry``（上一轮硬注入没问出来，同槽重试）> ``cue``（客户本轮话头对上了
-    某个未填槽）> ``floor``（今天还没真问过一个 → 用轮换到的第一个未填槽兜「每天
-    ≥1」）。已问过一次、没线索 → 不必问（不连环追问）。"""
+    ``unfilled`` 是 **unknown** 槽（Q-1 A #264：调用方已按三态过滤，mentioned /
+    confirmed 不在其中）。优先级：``retry``（上一轮硬注入没问出来，同槽重试；调用方已按
+    每槽每日 ≤2 过滤）> ``cue``（客户本轮话头对上了某个 unknown 槽）> ``floor``（今天还没
+    真问过一个 → 用轮换到的第一个 unknown 槽兜「每天 ≥1」）。
+
+    unknown 里挑不出 → ``deepen``：客户本轮话头对上了某个 **mentioned** 槽且该槽今天还没
+    深化过（``deepen_ok``）→ 「你说的那个 X，具体是…」式的深化提法（每槽每日 ≤1，只跟
+    线索走、绝不按下限兜——「每天问一遍已知的事」正是 #264 的病）。confirmed 永不出现。
+    已问过一次、没线索 → 不必问（不连环追问）。"""
     un = [str(k) for k in (unfilled or []) if str(k or "").strip()]
-    if not un:
-        return "", "", ""
     r = str(retry_slot or "").strip()
-    if r and r in un:
-        cue = next((c for k, c in (cues or []) if k == r), "")
-        return r, cue, "retry"
+    if un:
+        if r and r in un:
+            cue = next((c for k, c in (cues or []) if k == r), "")
+            return r, cue, "retry"
+        for k, c in (cues or []):
+            if k in un:
+                return k, c, "cue"
+        if not asked_today:
+            return un[0], "", "floor"
+    men = {str(k) for k in (mentioned or []) if str(k or "").strip()}
+    ok = {str(k) for k in (deepen_ok if deepen_ok is not None else mentioned or [])
+          if str(k or "").strip()}
     for k, c in (cues or []):
-        if k in un:
-            return k, c, "cue"
-    if not asked_today:
-        return un[0], "", "floor"
+        if k in men and k in ok:
+            return k, c, "deepen"
     return "", "", ""
+
+
+# ── Q-1 A（#264 #269 K24YJ2 / FCQFKF / T9KN8X）：槽位三态 unknown / mentioned / confirmed ──
+# 事故：客户 23:46 说了「it's a job… convention center / union carpenter」，AI 自己也复述过，
+# 引擎仍按「画像字段为空」把 occupation 当没问过 → 十小时 asked 8 次、注入 13 次，客户
+# 「I told you what I do for work like 50 times… Like I am talking to a wall」→ Goodbye。
+# 根因是「只判问否、不判知否」：抽取关着（profile_llm_off）时字段永远空。这里把「知否」
+# 从字段扩到**最近 30 轮（客户 + 我方）文本**：命中该槽的「提及」词表 / 确定性抽取候选 /
+# 「我方问过该槽 + 客户接了话」→ mentioned。判据刻意偏宽（宁漏不错：误判 mentioned 的代价
+# 是少问一句，误判 unknown 的代价是被客户当机器人）。
+SLOT_STATE_UNKNOWN = "unknown"
+SLOT_STATE_MENTIONED = "mentioned"
+SLOT_STATE_CONFIRMED = "confirmed"
+SLOT_STATES = (SLOT_STATE_UNKNOWN, SLOT_STATE_MENTIONED, SLOT_STATE_CONFIRMED)
+HISTORY_SCAN_TURNS = 30
+
+# 「已提及」词表：客户**陈述**自己该项事实时会带的词（与 CUE_LEXICON「话头」不同——客户说
+# 「下雨」是问坐标的话头，不是说了坐标；说「I live in LA」才是提及）。拉丁词按词边界，
+# 中文子串；``re:`` 前缀＝正则（对原文小写后匹配；``RE:`` 前缀＝保留大小写匹配，用于
+# 「I'm in Chicago」这类靠大写专名判定的句式）。
+MENTION_LEXICON: Dict[str, Tuple[str, ...]] = {
+    "occupation": (
+        "i work", "my job", "my work", "for work", "at work", "for a living", "i run a",
+        "my business", "my company", "my boss", "my shift", "self employed", "self-employed",
+        "freelanc", "retired", "unemployed", "my career", "my office", "my clients",
+        "my coworker", "my colleague", "i teach", "i drive a", "i build", "i sell", "i manage",
+        "work in", "work at", "work for", "working in", "working at", "working as",
+        "carpenter", "electrician", "plumber", "nurse", "doctor", "engineer", "teacher",
+        "driver", "chef", "mechanic", "accountant", "lawyer", "soldier", "military",
+        "construction", "warehouse", "factory", "convention center",
+        r"re:\bi(?:'m| am) an? [a-z]+(?:ist|er|or|ant|ian|eer|ent|man|woman|ic|yst|ary)\b",
+        r"re:\bi(?:'m| am) (?:a |an )?(?:student|nurse|chef|cook|cop|dentist|pilot|farmer|"
+        r"barber|realtor|trader|banker|coder|dev|programmer|designer|consultant)\b",
+        "我做", "我是做", "我是搞", "我的工作", "工作是", "我开店", "我开了", "自由职业",
+        "退休", "我是学生", "我上班", "我们公司", "我公司", "我在公司", "我老板", "我同事",
+        r"re:我在[\u4e00-\u9fff]{1,8}(?:上班|工作|打工|开店|做事)",
+    ),
+    "age": (
+        r"re:\b(?:1[3-9]|[2-7]\d)\s*(?:years old|yrs old|yr old|yo|y/o)\b",
+        r"re:\bi(?:'m| am) (?:1[3-9]|[2-7]\d)\b",
+        r"re:\b(?:turned|turning|just turned) (?:1[3-9]|[2-7]\d)\b",
+        r"re:\bborn in (?:19[4-9]\d|20[01]\d)\b", "my age", "at my age",
+        r"re:(?:1[3-9]|[2-7]\d)\s*岁", "我今年", r"re:我(?:都)?(?:1[3-9]|[2-7]\d)了",
+        r"re:[五六七八九零〇]\d?后", r"re:\b[5-9]0后", "我这个年纪", "我年纪",
+    ),
+    "location": (
+        "i live in", "i'm from", "i am from", "here in", "based in", "my city", "my town",
+        "living in", "moved to", "i stay in", "we live in", "my country", "my state",
+        "where i live", "i'm living", "i am living", "over here in",
+        r"RE:\bI(?:'m| am) (?:in|at|from|near) [A-Z][a-z]+",
+        r"RE:\bin [A-Z][a-z]+(?: [A-Z][a-z]+)? (?:right now|now|here|at the moment)\b",
+        "我住在", "我人在", "我来自", "我这边是", "我这边在", "我家在", "我老家", "我们这边",
+        "我们这里", r"re:我在[\u4e00-\u9fff]{1,6}(?:市|省|区|县|镇|城|这边)",
+        r"re:我是[\u4e00-\u9fff]{2,6}人",
+    ),
+    "interests": (
+        # 「i like that / it / you」是应答不是爱好——只认带实义宾语的
+        r"re:\bi (?:really |also |just )?(?:love|like|enjoy) (?!that\b|it\b|you\b|this\b|him\b|her\b|them\b|when\b|how\b|the way\b|what\b|your\b|u\b)\w",
+        "my hobby", "my hobbies", "i play", "i watch",
+        "i listen", "i collect", "i'm into", "i am into", "my favorite", "my favourite",
+        "i usually", "on weekends i", "on the weekend i", "in my free time", "i go to the gym",
+        "i cook", "i paint", "i hike", "i fish",
+        "我喜欢", "我爱", "我平时", "我的爱好", "我常", "我经常", "我周末", "我最爱",
+    ),
+    "family_status": (
+        r"re:\bmy (?:mom|mum|dad|mother|father|parents|kids?|children|son|daughter|"
+        r"wife|husband|brother|sister|family|grandma|grandpa|nephew|niece)\b",
+        r"re:\b(?:have|got) (?:a|two|three|four|\d) (?:kids?|children|sons?|daughters?)\b",
+        "no kids", "single mom", "single dad", "single mother", "single father",
+        r"re:我(?:爸|妈|父母|爸妈|孩子|儿子|女儿|老公|老婆|哥|姐|弟|妹|家人|外婆|奶奶|爷爷)",
+        "没孩子", "有孩子", "单亲",
+    ),
+    "marital_status": (
+        r"re:\bmy (?:boyfriend|girlfriend|bf|gf|husband|wife|ex|partner|fianc[eé]e?)\b",
+        r"re:\bi(?:'m| am) (?:single|married|divorced|engaged|separated|widowed|taken)\b",
+        "not married", "never married", "still single", "got divorced", "got married",
+        r"re:我(?:单身|结婚了|已婚|离婚了|离了|有对象|有男朋友|有女朋友|老公|老婆|前任|前妻|前夫)",
+        "单身", "没对象", "没结婚", "未婚",
+    ),
+    "residence": (
+        "i live in", "my apartment", "my flat", "my house", "my place", "i rent", "my roommate",
+        "moved in", "moved to", "my landlord", "my neighborhood", "live alone", "live with my",
+        "我住", "我租", "我家在", "搬家", "我的房子", "我的公寓", "一个人住", "跟家人住",
+    ),
+    "name": (
+        "call me", "my name is", "my name's", "name is", "i go by", "叫我", "我叫", "我的名字",
+    ),
+    "income_level": (
+        "i make", "i earn", "my salary", "my income", "per month", "a month", "a year",
+        "per year", "paycheck", "我工资", "月薪", "年薪", "我赚", "我收入", "一个月挣", "我一个月",
+    ),
+    "assets": (
+        "my car", "i own", "own a house", "own a car", "bought a", "my truck", "my bike",
+        "mortgage", "我买了房", "我买了车", "我的车", "我有房", "我有车", "房贷", "车贷",
+    ),
+    "need": (
+        "my problem", "struggle", "struggling", "pain point", "headache", "biggest issue",
+        "hard part", "頭疼", "头疼", "问题是", "最麻烦", "最难", "痛点",
+    ),
+    "channel": (
+        "facebook", "instagram", "tiktok", "whatsapp", "telegram", "shopee", "lazada",
+        "amazon", "etsy", "抖音", "小红书", "微信", "淘宝", "拼多多", "闲鱼", "快手",
+    ),
+    "team_size": (
+        r"re:\b\d+ (?:people|staff|employees|guys|persons)\b", "team of", "just me", "one man",
+        "one-man", "solo", r"re:\d+\s*个人", "人团队", "就我一个", "我一个人做", "几个人",
+    ),
+    "budget": (
+        r"re:[\$€£¥]\s?\d", "budget", "afford", "per month", "a month", "预算", "块钱", "美金",
+        "美元", "一个月多少", "太贵", "便宜",
+    ),
+    "authority": (
+        "i decide", "i'm the owner", "i am the owner", "my boss decides", "ask my boss",
+        "up to me", "老板是我", "我拍板", "我说了算", "要问老板", "我决定", "我是老板",
+    ),
+    "timeline": (
+        "next month", "next week", "asap", "this month", "this week", "by the end of",
+        "下个月", "下周", "尽快", "月底", "这个月", "马上", "年底",
+    ),
+}
+
+
+def _mention_hit(text: str, slot_key: str) -> str:
+    """该槽「提及」词表是否命中；返回命中词（正则返回匹配片段），未中 → ""。纯函数。"""
+    t = str(text or "").strip()
+    if not t or len(t) > 4000:
+        return ""
+    low = t.lower()
+    for w in MENTION_LEXICON.get(str(slot_key or "").strip().lower(), ()):
+        try:
+            if w.startswith("re:"):
+                m = re.search(w[3:], low)
+                if m:
+                    return m.group(0)[:24]
+            elif w.startswith("RE:"):
+                m = re.search(w[3:], t)
+                if m:
+                    return m.group(0)[:24]
+            elif _contains_term(low, w):
+                return w
+        except re.error:
+            continue
+    return ""
+
+
+def cell_view(cell: Any) -> Tuple[str, str, str]:
+    """画像单元 → ``(value, source, status)``，三种形状都认（跨线接口约定 ①，Q-5 写 / Q-1 读）：
+
+    - Q-5 新形 ``{value, source: user|nickname|ai_inferred|confirmed, status: unknown|mentioned|confirmed}``；
+    - 旧形 ``{v, src: auto|llm|llm_pending|agent, ts}``——``agent``（坐席手录）/ ``auto``（客户
+      原话确定性正则）→ confirmed；``llm`` / ``llm_pending``（AI 摘录）→ mentioned；
+    - 裸字符串 → confirmed（旧行）。
+    无值 → ``("", "", "unknown")``。绝不抛。"""
+    if isinstance(cell, dict):
+        val = str(cell.get("value") if cell.get("value") is not None else cell.get("v") or "").strip()
+        src = str(cell.get("source") or cell.get("src") or "").strip().lower()
+        st = str(cell.get("status") or "").strip().lower()
+        if not val and st != SLOT_STATE_MENTIONED:
+            return "", src, SLOT_STATE_UNKNOWN
+        if st in SLOT_STATES:
+            return val, src, st
+        if src in ("user", "confirmed", "agent", "auto"):
+            return val, src, SLOT_STATE_CONFIRMED
+        if src in ("nickname", "ai_inferred", "llm", "llm_pending"):
+            return val, src, SLOT_STATE_MENTIONED
+        return val, src, SLOT_STATE_CONFIRMED if val else SLOT_STATE_UNKNOWN
+    if not isinstance(cell, (str, int, float)) or isinstance(cell, bool):
+        return "", "", SLOT_STATE_UNKNOWN
+    val = str(cell or "").strip()
+    return (val, "", SLOT_STATE_CONFIRMED) if val else ("", "", SLOT_STATE_UNKNOWN)
+
+
+def _hist_items(history: Any) -> List[Tuple[str, str]]:
+    """历史 → ``[(direction, text)]``（时间正序）。接受 dict 行（direction/text 或 content）
+    或裸字符串（方向未知按 in）；只取最后 :data:`HISTORY_SCAN_TURNS` 条。"""
+    out: List[Tuple[str, str]] = []
+    for m in list(history or [])[-HISTORY_SCAN_TURNS:]:
+        if isinstance(m, dict):
+            d = str(m.get("direction") or m.get("dir") or "in").strip().lower()
+            t = str(m.get("text") or m.get("content") or "").strip()
+        else:
+            d, t = "in", str(m or "").strip()
+        if t:
+            out.append(("out" if d in ("out", "outbound", "ai", "assistant") else "in", t))
+    return out
+
+
+def slot_state(
+    slot_key: str, prof_field: Any, history_texts: Any = None,
+) -> Tuple[str, str]:
+    """槽位三态 → ``(state, reason)``。
+
+    - 字段 confirmed（坐席手录 / 客户原话正则 / Q-5 status=confirmed）→ ``confirmed``；
+    - 字段 mentioned（AI 摘录 / 昵称解析 / Q-5 status=mentioned）→ ``mentioned``；
+    - 否则扫最近 30 轮：客户文本命中提及词表 / 确定性抽取抽到该槽 → ``mentioned:said``；
+      我方**非问句**命中提及词表（AI 自己复述过「it's a job at the convention center」）→
+      ``mentioned:echoed``；我方问过该槽（``reply_asks_slot``）且客户随后接了话（≥2 字）→
+      ``mentioned:answered``；
+    - 都没有 → ``unknown``。纯函数、绝不抛。"""
+    k = str(slot_key or "").strip().lower()
+    try:
+        _v, _src, st = cell_view(prof_field)
+        if st == SLOT_STATE_CONFIRMED:
+            return SLOT_STATE_CONFIRMED, f"field:{_src or 'value'}"
+        if st == SLOT_STATE_MENTIONED:
+            return SLOT_STATE_MENTIONED, f"field:{_src or 'mentioned'}"
+        items = _hist_items(history_texts)
+        pending_ask = False
+        for d, t in items:
+            if d == "in":
+                if pending_ask and len(t) >= 2:
+                    return SLOT_STATE_MENTIONED, "answered"
+                hit = _mention_hit(t, k)
+                if hit:
+                    return SLOT_STATE_MENTIONED, f"said:{hit}"
+                try:
+                    if any(ck == k for ck, _cv in capture_from_text(t)):
+                        return SLOT_STATE_MENTIONED, "captured"
+                except Exception:
+                    pass
+            else:
+                if reply_asks_slot(t, k):
+                    pending_ask = True
+                    continue
+                pending_ask = False
+                if not has_question(t):
+                    hit = _mention_hit(t, k)
+                    if hit:
+                        return SLOT_STATE_MENTIONED, f"echoed:{hit}"
+        return SLOT_STATE_UNKNOWN, ""
+    except Exception:
+        return SLOT_STATE_UNKNOWN, "error"
+
+
+def slot_states(
+    slot_keys: List[str], fields: Optional[Dict[str, Any]], history_texts: Any = None,
+) -> Dict[str, Tuple[str, str]]:
+    """批量三态：``{slot: (state, reason)}``（只对给定槽）。"""
+    f = fields or {}
+    return {str(k): slot_state(k, f.get(str(k)), history_texts) for k in (slot_keys or []) if k}
+
+
+def deepen_line(slot_key: str, cue: str = "", *, lang: str = "zh") -> str:
+    """mentioned 槽的「深化式」提法（每槽每日 ≤1，只跟线索走）：不许再问「X 是什么」，
+    只许顺着 TA 说过的追一句细节，话头不合就不提。"""
+    lab = slot_label(slot_key, lang) or str(slot_key)
+    ask = slot_ask(slot_key, lang) or lab
+    c = str(cue or "").strip()
+    head = f"客户刚提到「{c}」，" if c else ""
+    return (f"【已知不再问】对方之前已经说过自己的{lab}（见上文 / 画像）——**绝不要再问**"
+            f"「{ask}」这类问题；{head}如果话头自然，最多顺着 TA 说过的追一句细节"
+            f"（像「你说的那个{lab}，具体是…」），今天只这一次；话头不合就不提。")
+
+
+def known_slots_line(labels: List[str]) -> str:
+    """注入块的「已知项」负向清单一行：告诉模型哪些事客户已经说过、别再问。空 → ""。"""
+    ls = [str(x).strip() for x in (labels or []) if str(x or "").strip()]
+    if not ls:
+        return ""
+    return f"【已知不再问】客户已经说过：{'、'.join(ls[:8])}——这些一律不再问，需要就当已知的事顺着聊。"
 
 
 # O-3 E：「现在就问一个」预览的示例问法（真正出站文本由派发器按对方语言 + 最近话题拟稿，

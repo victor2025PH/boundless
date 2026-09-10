@@ -34,7 +34,7 @@ class GoalStats:
         "deadline_shorten", "deadline_extend",
         "sprint_scheduled", "sprint_sent", "sprint_nudges",
         "sprint_auto_settled",
-        "probe_asked", "probe_missed", "probe_manual",
+        "probe_asked", "probe_missed", "probe_manual", "probe_covered", "probe_deepen",
     )
 
     def __init__(self) -> None:
@@ -97,6 +97,9 @@ class GoalStats:
         self.probe_asked = 0
         self.probe_missed = 0
         self.probe_manual = 0
+        # Q-1 B/A（#264）：没问出但顺着话头盖到了槽位词（不计 missed）/ 已提及槽的深化提法
+        self.probe_covered = 0
+        self.probe_deepen = 0
 
     # ── 记录（绝不抛）────────────────────────────────────────────────────────
     def record_probe(self, result: str) -> None:
@@ -108,6 +111,10 @@ class GoalStats:
                 self.probe_missed += 1
             elif r == "manual":
                 self.probe_manual += 1
+            elif r == "covered":
+                self.probe_covered += 1
+            elif r == "deepen":
+                self.probe_deepen += 1
     def record_created(self) -> None:
         with self._lock:
             self.created += 1
@@ -401,7 +408,9 @@ class GoalStats:
                            "auto_settled": self.sprint_auto_settled},
                 "probe": {"asked": self.probe_asked,
                           "missed": self.probe_missed,
-                          "manual": self.probe_manual},
+                          "manual": self.probe_manual,
+                          "covered": self.probe_covered,
+                          "deepen": self.probe_deepen},
             }
             out["active"] = bool(
                 self.created or injected or self.beats_planned
@@ -478,6 +487,8 @@ class GoalStats:
                 f'goals_probe_total{{result="asked"}} {self.probe_asked}',
                 f'goals_probe_total{{result="missed"}} {self.probe_missed}',
                 f'goals_probe_total{{result="manual"}} {self.probe_manual}',
+                f'goals_probe_total{{result="covered"}} {self.probe_covered}',
+                f'goals_probe_total{{result="deepen"}} {self.probe_deepen}',
                 "# HELP goals_retention_created_total Retention goals auto-created on won deals",
                 "# TYPE goals_retention_created_total counter",
                 f"goals_retention_created_total {self.retention_created}",

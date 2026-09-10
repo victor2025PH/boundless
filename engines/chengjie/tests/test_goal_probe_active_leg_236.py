@@ -571,6 +571,7 @@ def test_hm7xba_replay_nine_inbound_at_least_two_location_probes(caplog):
         "Glad you like it.", "Same here.", "Talk soon!",
     ]
     hard = 0
+    loc_hard = 0
     try:
         with caplog.at_level(logging.INFO, logger="src.companion.goals.service"):
             for i, (txt, reply) in enumerate(zip(inbound, ai_replies)):
@@ -580,30 +581,38 @@ def test_hm7xba_replay_nine_inbound_at_least_two_location_probes(caplog):
                 assert blk
                 if "【本轮必问】" in blk:
                     hard += 1
-                    assert blk.count("人在哪个城市") == 1
+                    # 一块只带一个问法
+                    assert blk.count("人在哪个城市") <= 1
+                    if "人在哪个城市" in blk:
+                        loc_hard += 1
                     assert "【画像缺口】" not in blk and PROBE_CLAUSE_SEP not in blk
                 inbox.add("out", reply, t + 30)
         assert hard >= 2, hard
+        # Q-1 B（#264 T9KN8X）：每槽每日 missed ≤2——坐标线索两次没问出来即当日休眠，
+        # 第 4 条「it rained here」的坐标线索不再触发（O-3 C 时这里是无上限 retry）
+        assert loc_hard == 2, loc_hard
         gid = store.list_goals(status="active")[0]["goal_id"]
         g = store.get_goal(gid)
-        # 每次硬注入下一轮都校验出「没问」→ missed 事件；同槽重试
+        # 每次硬注入下一轮都校验出「没问」→ missed 事件；同槽重试一次后休眠、轮到下一个 unknown 槽
         missed = store.list_events(gid, kinds=("probe_missed",))
-        assert len(missed) >= 2 and all(e["detail"].startswith("location@") for e in missed)
+        assert sum(1 for e in missed if e["detail"].startswith("location@")) == 2
+        assert len(missed) >= 3
         assert not store.list_events(gid, kinds=("probe_asked",))
         msgs = [r.getMessage() for r in caplog.records]
-        assert any("[goal-inject] target=location cue=morning here mode=cue result=pending" in m
-                   for m in msgs)
+        assert any("[goal-inject] target=location cue=morning here mode=cue state=unknown "
+                   "decision=probe result=pending" in m for m in msgs)
         assert any("[goal-inject] target=location cue=morning here result=missed" in m for m in msgs)
-        assert any(" mode=retry result=pending" in m for m in msgs)
+        assert any(" mode=retry state=unknown decision=probe result=pending" in m for m in msgs)
         assert int((g.get("params") or {}).get(INJECT_COUNT_PARAM) or 0) == 9
         tr = build_beats_trace(store, g, now=base + 3600)
         assert tr["summary"]["probe_missed"] >= 2 and tr["summary"]["probe_asked"] == 0
         assert [b for b in tr["beats"] if b["kind"] == "probe"][0]["status"] == "missed"
-        # 第 10 轮：模型终于问了 → asked + 当日拍 detail=asked:location（A 段让位钥匙）+ 今天不再硬追
-        t10 = base + 9 * 240
+        # 次日 10:00（当日休眠已过）：模型终于问了 → asked + 当日拍 detail=asked:location
+        # （A 段让位钥匙）+ 今天不再硬追
+        t10 = _local(2026, 9, 9, 10, 0)
         inbox.add("in", "you still there?", t10)
         blk10 = _inject(cfg, inbox, "you still there?", t10)
-        assert "【本轮必问】" in blk10
+        assert "【本轮必问】" in blk10 and "人在哪个城市" in blk10
         inbox.add("out", "Here! Btw which city are you in? Sounds like a rainy one 🌧", t10 + 30)
         t11 = t10 + 240
         inbox.add("in", "los angeles", t11)
@@ -617,8 +626,9 @@ def test_hm7xba_replay_nine_inbound_at_least_two_location_probes(caplog):
         row = store.get_action(gid, day_key(t11))
         assert row and row["detail"] == "asked:location" and row["status"] == "consumed"
         assert PROBE_PENDING_PARAM not in (store.get_goal(gid).get("params") or {})
-        # 今天已真问过一次且本轮无新线索 → 不再硬追（软合流照旧带一个缺口，不连环追问）
+        # 今天已真问过一次且本轮无新线索 → 不再硬追；坐标已答（answered）进「已知不再问」清单
         assert blk11 and "【本轮必问】" not in blk11
+        assert "【已知不再问】" in blk11 and "坐标" in blk11
     finally:
         reset_goal_store()
 
