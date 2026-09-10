@@ -631,11 +631,19 @@ class DraftService:
         kind, _, sid = str(draft_id or "").partition(":")
         risk_level = str(analysis.get("risk_level") or "low")
         _reasons = list(analysis.get("risk_reasons") or [])
+        _conv = str(analysis.get("conversation_id") or "")
+        try:
+            _row = self._store.get_draft(draft_id) or {}
+            if not _conv:
+                _conv = str(_row.get("conversation_id") or "")
+        except Exception:
+            pass
         # 单一入口：LLM 分析的 peer 风险也只经 policy 定档（shadow 下不降档、进台账）
         decision = policy_decide(
             peer_risk=risk_level, peer_reasons=_reasons,
             risk_hits=list(analysis.get("risk_hits") or []),
             automation_mode=automation_mode,
+            conversation_id=_conv, store=self._store,
         )
         autopilot = decision.level
         _platform = (self._by_kind.get(kind).platform if kind in self._by_kind else "")
@@ -1159,18 +1167,37 @@ class DraftService:
                 _peer_reasons.append("keyword")
             _risk_hits = list(analysis.get("risk_hits") or [])
             _risk_hits += [h for h in _kw_hits if h not in _risk_hits]
+            lang = analysis.get("language", "zh")
+            intent = analysis.get("intent", "")
+            emotion = analysis.get("emotion", "平稳")
+            # Q-2 C：evaluate_inbound（政策 / 话术 / 二次坚持 / 账本）。refuse_sent 用罐头句
+            # 跳过 enrich；handoff / second_insist 已在 evaluate 内登记 risk_hold。
+            _cmt = None
+            try:
+                from src.inbox.commitment_guard import detect_commitment, evaluate_inbound
+                _ckind = detect_commitment(t, lang)
+                if _ckind:
+                    _cmt = evaluate_inbound(
+                        self._store,
+                        {"conversation_id": conv_id, "platform": platform,
+                         "account_id": account_id, "chat_key": chat_key},
+                        t, kind=_ckind, automation_mode=automation_mode,
+                        lang=lang, cfg=self._cfg or None)
+                    if _cmt and str(_cmt.get("decision") or "") == "p3":
+                        _cmt = None  # 照片支线交 P-3，本链照常拟稿
+            except Exception:
+                logger.debug("auto_generate_draft commitment_guard 失败（忽略）", exc_info=True)
+                _cmt = None
             # 档位**只认** autosend_policy.decide（#160 v2：shadow 下风险不降档，
             # 「本会被扣」进影子台账；review/manual 档由会话档位自身决定，与风险无关）
             _decision = policy_decide(
                 peer_risk=risk_level, peer_reasons=_peer_reasons,
                 risk_hits=_risk_hits, automation_mode=automation_mode,
                 conversation_frozen=False,   # 上方已按 frozen_reason 早退，这里必然未冻结
+                conversation_id=conv_id, store=self._store,
             )
             autopilot = _decision.level
 
-            lang = analysis.get("language", "zh")
-            intent = analysis.get("intent", "")
-            emotion = analysis.get("emotion", "平稳")
             suggestions = _suggestions(t, lang=lang, intent=intent, emotion=emotion, risk=risk_level)
             draft_text = suggestions[0].text if suggestions else "感谢您的消息，我们稍后为您回复。"
 
@@ -1184,6 +1211,25 @@ class DraftService:
 
             # enrich=True：停泊态落库，待人设产线补全后再翻 pending（见 enrich_draft）。
             _status = "enriching" if enrich else "pending"
+            # Q-2 C：命中承诺 → 罐头委婉延后、跳过 enrich（仿 stop_contact farewell）；
+            # 审核稿 2–3 条拒绝候选写进 risk_reasons commitment_alt:…
+            _cdec = str((_cmt or {}).get("decision") or "clean")
+            if _cmt and _cdec in ("refuse_sent", "refuse_drafted", "handoff", "second_insist"):
+                _txt = str(_cmt.get("line") or _cmt.get("text") or "").strip()
+                if _txt:
+                    draft_text = _txt
+                _status = "pending"
+                risk_level = _max_risk(risk_level, "high")
+                _peer_reasons = list(_peer_reasons)
+                _ckind = str(_cmt.get("kind") or "meet")
+                _tag = "commitment:" + _ckind
+                if _tag not in _peer_reasons:
+                    _peer_reasons.append(_tag)
+                _peer_reasons.append("commitment:" + _cdec)
+                for _alt in list(_cmt.get("candidates") or [])[1:3]:
+                    _a = str(_alt or "").strip()
+                    if _a:
+                        _peer_reasons.append("commitment_alt:" + _a[:80])
             # O-1 A（D-O1）「最多一条」：硬停放行的这一条稿在 risk_reasons 带 HARD_STOP_PASS_MARK
             # （worker / enrich 对冻结会话只认它）。stop_contact → 正文换成 farewell_text（人设
             # 口吻一句话，不经 AI 生成：「I hear you… Take care」正是 AI 稿），直接 pending 不停泊
@@ -1272,6 +1318,13 @@ class DraftService:
                     logger.info(
                         "[stop-contact] conv=%s action=review reason=risk_high draft=%s hits=%s",
                         conv_id, draft_id, "|".join(_risk_hits[:4]) or "-")
+                elif _cmt and str(_cmt.get("decision") or "") in ("handoff", "second_insist", "refuse_drafted"):
+                    from src.integrations.protocol_autoreply import tag_needs_human
+                    tag_needs_human(
+                        self._store,
+                        {"platform": platform, "account_id": account_id, "chat_key": chat_key},
+                        reason="commitment:" + str(_cmt.get("kind") or "meet"),
+                        source="commitment_guard")
             except Exception:
                 logger.debug("auto_generate_draft 硬停/人审落点失败（已忽略）", exc_info=True)
             if autopilot == "L1": logger.info("auto_generate_draft L1 conv=%s draft_id=%s reason=%s", conv_id, draft_id, __import__("src.inbox.l1_reason", fromlist=["peek"]).peek(conv_id) or "-")  # D-M10（M-2 E #235）：level=L1 带 reason=（cooldown/no_persona/lang_unknown/first_contact/weak_evidence/…），原因由 autodraft_helpers 推导登记，本行只读不改判定
@@ -1443,12 +1496,14 @@ class DraftService:
         _peer_only = policy_decide(
             peer_risk=base_risk, peer_reasons=_peer_reasons,
             automation_mode=automation_mode, conversation_frozen=_frozen,
+            conversation_id=str(draft.get("conversation_id") or ""), store=self._store,
         )
         _decision = policy_decide(
             peer_risk=base_risk, peer_reasons=_peer_reasons,
             reply_risk=reply_risk or "low", reply_reasons=_reply_reasons,
             risk_hits=_reply_hits, automation_mode=automation_mode,
             conversation_frozen=_frozen,
+            conversation_id=str(draft.get("conversation_id") or ""), store=self._store,
         )
         autopilot = _decision.level
         lang = reply_lang or str(draft.get("draft_lang") or "")
@@ -1619,16 +1674,19 @@ _HIGH = "high"
 _MEDIUM = "medium"
 
 
-def risk_to_autopilot(risk_level: str, automation_mode: str) -> str:
+def risk_to_autopilot(risk_level: str, automation_mode: str, *,
+                     conversation_id: str = "", store: Any = None) -> str:
     """把风险等级 + 自动化模式映射到 L0–L4 —— **薄壳，只认 autosend_policy.decide**。
 
     L0 仅翻译(manual) / L1 草稿待审(review/multi_choice) / L2 auto_ai 放行 /
     L3、L4 只在 ``policy_mode=enforce`` 下由风险产生。#160 v2（2026-09-04）默认
     ``shadow``：风险不再降档，high/medium 在 auto_ai 下照样 L2，「本会被扣」进影子台账。
     旧表见 ``autosend_policy.legacy_level``。**不许在别处再算一遍档位。**
+    Q-2：可选 ``conversation_id`` + ``store`` 让 Q-3 risk_hold 在本壳也生效。
     """
     return policy_decide(
         peer_risk=risk_level, automation_mode=automation_mode,
+        conversation_id=conversation_id or "", store=store,
     ).level
 
 

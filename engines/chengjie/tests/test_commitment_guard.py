@@ -117,3 +117,113 @@ def test_refuse_candidates_are_refusals_not_acceptances():
         assert "see you saturday" not in blob
         assert "my address is" not in blob
         assert "sounds lovely" not in blob
+
+
+class _KvStore:
+    def __init__(self):
+        self.kv, self.mode, self.created_at = {}, "auto_ai", 0.0
+
+    def get_app_setting(self, key, default=""):
+        return self.kv.get(key, default)
+
+    def set_app_setting(self, key, value, updated_by=""):
+        self.kv[key] = value
+        return True
+
+    def get_conversation(self, cid):
+        return {"created_at": self.created_at}
+
+    def list_recent_messages(self, cid, limit=30):
+        return []
+
+    def get_automation_mode(self, cid):
+        return self.mode
+
+    def set_automation_mode(self, cid, mode, *, source=""):
+        self.mode = mode
+
+
+def test_handle_inbound_refuse_sent_then_second_insist():
+    from src.inbox.commitment_guard import handle_inbound
+
+    store = _KvStore()
+    r1 = handle_inbound("wanna come over Saturday?", conversation_id="c1",
+                        store=store, lang="en")
+    assert r1["decision"] == "refuse_sent" and r1["kind"] == "meet"
+    assert r1["text"]
+    assert 2 <= len(r1["candidates"]) <= 3
+    assert "see you" not in r1["text"].lower()
+    r2 = handle_inbound("come over this weekend", conversation_id="c1",
+                        store=store, lang="en")
+    assert r2["decision"] == "second_insist"
+    assert r2["text"]
+
+
+def test_handle_inbound_handoff_policy_does_not_auto_accept():
+    from src.inbox.commitment_guard import handle_inbound
+
+    store = _KvStore()
+    r = handle_inbound(
+        "Just need your address", conversation_id="c2", store=store, lang="en",
+        persona={"boundaries": {"meeting_policy": "handoff"}})
+    assert r["decision"] == "handoff" and r["kind"] == "contact"
+    assert "address is" not in (r["text"] or "").lower()
+
+
+def test_handle_inbound_photos_delegate_p3_but_video_still_refused():
+    from src.inbox.commitment_guard import handle_inbound
+
+    store = _KvStore()
+    persona = {"capabilities": {"photos": True}, "boundaries": {"meeting_policy": "never"}}
+    r = handle_inbound("send me a pic?", conversation_id="c3", store=store,
+                       persona=persona, photos_ok=True, lang="en")
+    assert r["decision"] == "delegate_p3"
+    r2 = handle_inbound("can we video call tonight?", conversation_id="c3",
+                        store=store, persona=persona, photos_ok=True, lang="en")
+    assert r2["decision"] == "refuse_sent" and r2["kind"] == "media"
+
+
+def test_evaluate_inbound_refuse_sent_skips_risk_hold_handoff_sets():
+    """首次 refuse_sent 不挂 risk_hold（否则 Q-3 worker 闸会取消本条 pacing）；
+    handoff 才 set。"""
+    from src.inbox.commitment_guard import evaluate_inbound
+    from src.inbox import risk_hold
+
+    store = _KvStore()
+    r1 = evaluate_inbound(store, {"conversation_id": "c-hold"},
+                          "wanna come over Saturday?",
+                          kind="meet", automation_mode="auto_ai", lang="en")
+    assert r1["decision"] == "refuse_sent"
+    assert risk_hold.active(store, "c-hold") is None
+    store2 = _KvStore()
+    r2 = evaluate_inbound(
+        store2, {"conversation_id": "c-hf"}, "Just need your address",
+        kind="contact", automation_mode="auto_ai", lang="en",
+        persona={"boundaries": {"meeting_policy": "handoff"}})
+    assert r2["decision"] == "handoff"
+    assert (risk_hold.active(store2, "c-hf") or "").startswith("commitment")
+
+
+def test_evaluate_inbound_second_insist_sets_hold_and_pauses_auto():
+    from src.inbox.commitment_guard import evaluate_inbound, handle_inbound
+    from src.inbox import risk_hold
+
+    store = _KvStore()
+    conv = {"conversation_id": "c-ins"}
+    handle_inbound("wanna come over Saturday?", conversation_id="c-ins",
+                   store=store, lang="en")
+    r = evaluate_inbound(store, conv, "come over this weekend",
+                         kind="meet", automation_mode="auto_ai", lang="en")
+    assert r["decision"] == "second_insist"
+    assert (risk_hold.active(store, "c-ins") or "").startswith("commitment")
+    assert store.mode == "review"
+
+
+def test_drafts_policy_decide_passes_conversation_id():
+    src = (__import__("pathlib").Path(__file__).resolve().parents[1]
+           / "src" / "inbox" / "drafts.py").read_text(encoding="utf-8")
+    assert src.count("conversation_id=conv_id, store=self._store") >= 1
+    assert "conversation_id=_conv, store=self._store" in src
+    assert src.count("conversation_id=str(draft.get(\"conversation_id\") or \"\"), store=self._store") >= 2
+    assert "evaluate_inbound" in src and "commitment_alt:" in src
+    assert "from .autosend_policy import decide as policy_decide" in src

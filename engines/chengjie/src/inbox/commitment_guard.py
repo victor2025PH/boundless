@@ -828,12 +828,60 @@ def handle_inbound(
             "candidates": cands, "policy": policy_raw, "lang": lg}
 
 
+def evaluate_inbound(store: Any, conv: Dict[str, Any], text: str, *, kind: str,
+                     automation_mode: str = "auto_ai", lang: str = "", cfg: Any = None,
+                     now: Optional[float] = None, persona: Any = None) -> Dict[str, Any]:
+    """drafts.auto_generate_draft 调用口：detect 已完成，此处按政策出话术。
+
+    refuse_sent 不登记 risk_hold（Q-3 worker 闸会取消本条 pacing）；handoff /
+    second_insist 才 set + 暂停全自动。``decision=p3`` 表示照片交 P-3。
+    """
+    _ = (kind, cfg)
+    cid = str((conv or {}).get("conversation_id") or "")
+    photos_ok = False
+    if persona is None:
+        try:
+            plat = str((conv or {}).get("platform") or "")
+            acct = str((conv or {}).get("account_id") or "")
+            ck = str((conv or {}).get("chat_key") or "")
+            if plat or acct or ck:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                pid = str(resolve_effective_persona_id(cfg or {}, plat, acct, ck) or "")
+                if pid:
+                    from src.utils.persona_manager import PersonaManager
+                    persona = PersonaManager.get_instance().get_persona_by_id(pid)
+        except Exception:
+            persona = None
+    try:
+        caps = (persona or {}).get("capabilities") if isinstance(persona, dict) else None
+        photos_ok = bool(isinstance(caps, dict) and caps.get("photos"))
+    except Exception:
+        photos_ok = False
+    got = handle_inbound(
+        text, conversation_id=cid, store=store, persona=persona,
+        lang=lang, now=now, photos_ok=photos_ok)
+    got["line"] = str(got.get("text") or "")
+    dec = str(got.get("decision") or "")
+    if dec == "delegate_p3":
+        got["decision"] = "p3"
+        return got
+    if dec in ("handoff", "second_insist"):
+        set_risk_hold(store, cid, str(got.get("kind") or kind), str(text or "")[:80])
+        if dec == "second_insist" and store is not None and hasattr(store, "set_automation_mode"):
+            try:
+                if str(automation_mode or "") == "auto_ai":
+                    store.set_automation_mode(cid, "review", source="guard:commitment")
+            except Exception:
+                logger.debug("[commitment] 暂停全自动失败", exc_info=True)
+    return got
+
+
 __all__ = [
     "KINDS", "CLAIM_KINDS", "DEFAULT_POLICY",
     "detect_commitment", "detect_commitment_claim", "detect_self_blame_repromise",
     "meeting_policy_of", "commitment_style_of", "effective_policy",
     "pick_refuse_line", "refuse_candidates", "retract_line",
-    "apply_claim_rewrites", "handle_inbound", "set_risk_hold",
+    "apply_claim_rewrites", "handle_inbound", "evaluate_inbound", "set_risk_hold",
     "note_hit", "is_second_insist", "already_promised", "prompt_block",
     "sniff_lang", "is_video_call_ask", "conversation_age_months",
 ]
