@@ -207,6 +207,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 str(view.get("platform") or ""),
                 str(view.get("chat_key") or ""))
             fields = dict((prof or {}).get("fields") or {})
+            # Q-1 E（#264）：槽位三态 state=unknown|mentioned|confirmed（字段来源 + 最近 30 轮
+            # 「说过 / 复述过 / 问过且接了话」同注入口径）——卡上「职业：已提及（未确认）」+ 确认
+            try:
+                from src.companion.goals.profile_slots import slot_states
+                from src.companion.goals.service import recent_history
+                _hist = recent_history(_inbox_store(), str(view.get("conversation_id") or ""))
+                _states = slot_states(sel, fields, _hist)
+            except Exception:
+                _states = {}
             # src=值来源（auto 正则/llm 抽取/agent 人工）——卡上打勾清单据此
             # 标注「AI 猜的还是人核实的」（P3 2026-08-18，行业 handoff 惯例）；
             # stale=值超 90 天未更新（P1 2026-08-29，提醒顺口再确认而非硬信旧值）
@@ -218,6 +227,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     "value": slot_value(fields, k)[:20],
                     "src": slot_src(fields, k),
                     "stale": slot_is_stale(fields, k),
+                    "state": str((_states.get(k) or ("", ""))[0] or "unknown"),
                 }
                 for k in sel
             ]
@@ -737,6 +747,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                         out["signal_hint"] = hint
             except Exception:
                 logger.debug("buying signal hint skipped", exc_info=True)
+            out["discovery_paused"] = svc.discovery_paused(_inbox_store())
             return out
         lang = _lang(request)
         view = _attach_notified(
@@ -772,6 +783,8 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         # #166：卡片带引擎真相（按本会话平台判白名单）——「自动推进」档在引擎
         # 不能真出手时卡上要说清，不能只在建目标表单里说一次
         return {"goal": view, "last": None, "prev_settled": prev_settled,
+                # Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关现状
+                "discovery_paused": svc.discovery_paused(_inbox_store()),
                 # N-3 #241：卡片按业务域渲染画像分组 / 「标成交」字段（陪伴 = 「标记达成」
                 # 达成结果 + 备注，不出现产品 / 金额）
                 "business_domain": _business_domain(),
@@ -1273,6 +1286,61 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         view = _profile_view(svc, pf, ck, _lang(request))
         view["ok"] = True
         return view
+
+    # ── Q-1 E（#264）：槽位人工确认 mentioned → confirmed；「暂停全部摸底目标」总开关 ──
+    @app.post("/api/goals/profile/confirm")
+    async def goals_profile_confirm(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """卡片槽位行「确认」：把「已提及（未确认）」写成 confirmed（旧形 cell src=agent；
+        接口约定① cell_view 读作 confirmed，注入链自此永不再问该槽）。``value`` 可选
+        （缺省用现值；无现值且未给值 → 400）。返回 ``{ok, slot, value, state}``。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        body = payload or {}
+        pf = str(body.get("platform") or "").strip()
+        ck = str(body.get("chat_key") or "").strip()
+        conv = str(body.get("conversation_id") or "").strip()
+        if not (pf and ck) and conv:
+            pf2, _acct, ck2 = _split_conversation_id(conv)
+            pf, ck = pf or pf2, ck or ck2
+        if not pf or not ck:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        slot = str(body.get("slot") or "").strip().lower()
+        if not slot:
+            raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+        res = svc.confirm_profile_slot(
+            _store(svc), pf, ck, slot, value=str(body.get("value") or ""))
+        if not res.get("ok"):
+            if res.get("reason") == "unknown_slot":
+                raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+            if res.get("reason") == "no_value":
+                raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+            raise HTTPException(500, str(res.get("reason") or "confirm_failed"))
+        return res
+
+    @app.get("/api/goals/discovery-pause")
+    async def goals_discovery_pause_get(request: Request, _auth=Depends(auth_dep)):
+        svc = _require_enabled(request)
+        return {"paused": svc.discovery_paused(_inbox_store())}
+
+    @app.post("/api/goals/discovery-pause")
+    async def goals_discovery_pause_set(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """总开关：``{paused: bool}`` → 一切摸底类目标（模板带 profile_slots）不再注入
+        （reason=discovery_paused），卡片照常显示；关掉即恢复。落 InboxStore app_settings。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        paused = bool((payload or {}).get("paused"))
+        try:
+            by = str(request.session.get("user", "") or "")
+        except Exception:
+            by = ""
+        ok = svc.set_discovery_paused(paused, inbox_store=_inbox_store(), by=by)
+        if not ok:
+            raise HTTPException(503, "discovery_pause_store_unavailable")
+        return {"ok": True, "paused": svc.discovery_paused(_inbox_store())}
 
     # ── 自定义摸底标签（N-3 #241 「+ 自定义标签」；TN736F ③ 同步出现在画像卡）──
     _CUSTOM_SLOTS_PATH = "companion.goals.custom_slots"

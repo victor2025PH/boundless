@@ -1149,6 +1149,77 @@ def recent_history(
     return out
 
 
+# ── Q-1 E（#264）：「暂停全部摸底目标」总开关 + 槽位人工确认 ──────────────────────
+# 总开关落 InboxStore app_settings KV（goals 库 store.py 默认不碰）；开着 → 一切带 profile_slots
+# 的目标不注入（reason=discovery_paused），卡片 / 计划句照常显示。无 InboxStore → 视为未暂停。
+DISCOVERY_PAUSE_KEY = "goals:discovery_paused"
+
+
+def _kv_store(inbox_store: Any = None) -> Any:
+    if inbox_store is not None:
+        return inbox_store
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store
+        return get_inbox_store()
+    except Exception:
+        return None
+
+
+def discovery_paused(inbox_store: Any = None) -> bool:
+    """总开关现状（KV ``goals:discovery_paused`` == "1"）。异常 / 无 store → False。"""
+    st = _kv_store(inbox_store)
+    if st is None or not hasattr(st, "get_app_setting"):
+        return False
+    try:
+        return str(st.get_app_setting(DISCOVERY_PAUSE_KEY, "") or "").strip() in ("1", "true", "on")
+    except Exception:
+        return False
+
+
+def set_discovery_paused(paused: bool, *, inbox_store: Any = None, by: str = "") -> bool:
+    st = _kv_store(inbox_store)
+    if st is None or not hasattr(st, "set_app_setting"):
+        return False
+    try:
+        ok = bool(st.set_app_setting(DISCOVERY_PAUSE_KEY, "1" if paused else "0",
+                                     updated_by=str(by or "goal_routes")))
+        logger.info("[goal-inject] discovery_paused=%s by=%s", int(bool(paused)), by or "-")
+        return ok
+    except Exception:
+        logger.debug("set_discovery_paused failed", exc_info=True)
+        return False
+
+
+def confirm_profile_slot(
+    store: Any, platform: str, chat_key: str, slot: str, *, value: str = "",
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """坐席点「确认」：槽位从 mentioned → confirmed（旧形 cell ``src=agent``，接口约定①
+    ``cell_view`` 读作 confirmed）。``value`` 缺省用现值；无现值且未给值 → ``{"ok": False,
+    "reason": "no_value"}``。store 同值覆盖会被跳过，故先清再写两步。"""
+    from src.companion.goals.profile_slots import cell_view, get_slot, slot_value
+    k = str(slot or "").strip().lower()
+    if get_slot(k) is None:
+        return {"ok": False, "reason": "unknown_slot"}
+    prof = store.get_customer_profile(platform, chat_key) or {}
+    fields = dict(prof.get("fields") or {})
+    v = str(value or "").strip()[:80] or slot_value(fields, k)
+    if not v:
+        return {"ok": False, "reason": "no_value"}
+    try:
+        store.upsert_customer_profile(platform, chat_key, {k: ""}, source="agent",
+                                      overwrite=True, now=now)
+        store.upsert_customer_profile(platform, chat_key, {k: v}, source="agent",
+                                      overwrite=True, now=now)
+    except Exception:
+        logger.debug("confirm_profile_slot write failed", exc_info=True)
+        return {"ok": False, "reason": "write_failed"}
+    after = (store.get_customer_profile(platform, chat_key) or {}).get("fields") or {}
+    _v, _src, state = cell_view(after.get(k))
+    logger.info("[goal-inject] slot_confirm plat=%s chat=%s slot=%s state=%s", platform, chat_key, k, state)
+    return {"ok": state == "confirmed", "slot": k, "value": v, "state": state}
+
+
 def discovery_probe_asks(
     store: Any, template: Dict[str, Any], goal: Dict[str, Any],
     *, lang: str = "zh", inbox_store: Any = None,
@@ -1586,6 +1657,12 @@ def build_block_for_chat(
             return None
         template = get_template(str(goal.get("template") or "")) or {}
         has_slots = bool(template.get("profile_slots"))
+        # Q-1 E（#264）：目标页「暂停全部摸底目标」总开关开着 → 摸底类目标整体不注入
+        if has_slots and discovery_paused(inbox_store):
+            _note_meta(False, "discovery_paused",
+                       goal_id=str(goal.get("goal_id") or ""),
+                       title=str(goal.get("title") or ""))
+            return None
         # 勾选槽位（摸底目标 params.slots）一次解析全程复用：LLM 摘录聚焦 /
         # 缺口指令 / 意图合流三处同一口径
         sel_slots: list = []
@@ -3166,6 +3243,10 @@ __all__ = [
     "discovery_gap_for_goal",
     "discovery_probe_asks",
     "recent_history",
+    "DISCOVERY_PAUSE_KEY",
+    "discovery_paused",
+    "set_discovery_paused",
+    "confirm_profile_slot",
     "PROBE_EVENT_COVERED",
     "PROBE_EVENT_DEEPEN",
     "PROBE_RETRY_PER_DAY",

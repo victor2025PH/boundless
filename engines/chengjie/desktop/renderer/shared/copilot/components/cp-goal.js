@@ -721,6 +721,24 @@
       /* P3b：人工确认的槽位=实边+深底（可信度分层；auto/llm 维持浅描边） */
       .gl-slotchk.on.src-agent { border-color:var(--cp-ok,#0f9d75);
                                  background:rgba(15,157,117,.16); font-weight:600; }
+      /* Q-1 E（#264）：「已提及（未确认）」= 琥珀虚边 + 行内「确认」小钮（点了写 confirmed，引擎永不再问） */
+      .gl-slotchk.mention { color:var(--cp-warn,#b45309); border-color:rgba(180,83,9,.45);
+                            border-style:dashed; background:rgba(180,83,9,.06); }
+      .gl-slot-confirm { font-size:10px; line-height:1; padding:0 5px; margin-left:2px; border-radius:99px;
+                         border:1px solid var(--cp-warn,#b45309); background:transparent;
+                         color:var(--cp-warn,#b45309); cursor:pointer; }
+      .gl-slot-confirm:hover { background:var(--cp-warn,#b45309); color:#fff; }
+      /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关条 */
+      .gl-dpause { display:flex; align-items:center; justify-content:space-between; gap:8px;
+                   margin:0 0 var(--cp-gap-xs,4px); padding:4px 8px; border-radius:8px;
+                   border:1px dashed var(--cp-border,#e2e8f0); font-size:var(--cp-fs-tiny,11px);
+                   color:var(--cp-text-dim,#64748b); }
+      .gl-dpause.on { border-color:var(--cp-warn,#b45309); background:rgba(180,83,9,.08);
+                      color:var(--cp-warn,#b45309); font-weight:600; }
+      .gl-dpause-btn { font-size:var(--cp-fs-tiny,11px); padding:2px 8px; border-radius:99px;
+                       border:1px solid var(--cp-border,#e2e8f0); background:transparent; cursor:pointer;
+                       color:var(--cp-text,#374151); }
+      .gl-dpause-btn:hover { border-color:var(--cp-accent,#4f46e5); color:var(--cp-accent,#4f46e5); }
       .gl-slotpicks { margin-top:4px; }
       .gl-disc-tip { margin-top:6px; padding:6px 8px; border-radius:8px;
                      background:rgba(13,148,136,.08);
@@ -995,7 +1013,7 @@
         const mi = parseInt(g.milestone_idx, 10) || 0;
         if (this._prevMsIdx >= 0 && mi > this._prevMsIdx) this._celebrateMs = true;
         this._prevMsIdx = mi;
-        const html = this._renderActive(g);
+        const html = this._renderDiscoveryBar(d) + this._renderActive(g);
         this._celebrateMs = false;
         this._emitLoadedSignal(g);
         return html + this._toastHtml();
@@ -1005,7 +1023,74 @@
       this._emitLoadedSignal(null);
       if (this._formOpen) return this._renderForm() + this._lastLine(last) + this._toastHtml();
       if (term) return this._renderTerminal(term) + this._toastHtml();
-      return this._renderEmpty(last, d.signal_hint) + this._toastHtml();
+      return this._renderDiscoveryBar(d) + this._renderEmpty(last, d.signal_hint) + this._toastHtml();
+    }
+
+    /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关。数据源 for-conversation.discovery_paused
+       （旧后端缺键＝不渲染）。开着 → 一切摸底类目标不注入（reason=discovery_paused），卡片 / 计划照常。 */
+    _renderDiscoveryBar(d) {
+      if (!d || typeof d.discovery_paused !== "boolean") return "";
+      const on = !!d.discovery_paused;
+      const esc = (s) => this.esc(s);
+      return `<div class="gl-dpause${on ? " on" : ""}" role="group" aria-label="${esc(this.t("inbox.goal.dpause.label"))}">` +
+        `<span class="gl-dpause-tx">${on ? "\u23F8 " : ""}${esc(this.t(on ? "inbox.goal.dpause.on" : "inbox.goal.dpause.label"))}</span>` +
+        `<button type="button" class="gl-dpause-btn" data-act="dpause_toggle" role="switch"` +
+        ` aria-checked="${on ? "true" : "false"}" title="${esc(this.t("inbox.goal.dpause.hint"))}">` +
+        `${esc(this.t(on ? "inbox.goal.dpause.resume" : "inbox.goal.dpause.pause"))}</button></div>`;
+    }
+
+    async _dpauseToggle(el) {
+      const d = this._d || {};
+      const next = !d.discovery_paused;
+      if (el) el.disabled = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/discovery-pause", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paused: next }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
+      if (res && res.ok && res.data) {
+        this._d = Object.assign({}, this._d, { discovery_paused: !!res.data.paused });
+        this._flashToast(this.t(res.data.paused ? "inbox.goal.dpause.toast_on" : "inbox.goal.dpause.toast_off"));
+        _beacon(res.data.paused ? "goal_dpause_on" : "goal_dpause_off");
+        return;
+      }
+      if (el) el.disabled = false;
+      this._flashToast(this.t("inbox.goal.err_retry"));
+    }
+
+    /* Q-1 E（#264）：槽位「确认」——mentioned → confirmed（无现值时先问一下值） */
+    async _slotConfirm(el) {
+      const ctx = this._ctx || {};
+      const slot = (el && el.getAttribute("data-slot")) || "";
+      if (!ctx.conversationId || !slot) return;
+      let value = (el && el.getAttribute("data-value")) || "";
+      const label = (el && el.getAttribute("data-label")) || slot;
+      if (!value) {
+        if (typeof prompt !== "function") return;
+        value = String(prompt(this.t("inbox.goal.slots.confirm_prompt", { label }), "") || "").trim();
+        if (!value) return;
+      }
+      if (el) el.disabled = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/profile/confirm", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_id: ctx.conversationId, slot, value }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
+      if (res && res.ok && res.data && res.data.ok) {
+        this._flashToast(this.t("inbox.goal.slots.confirmed_toast", { label }));
+        _beacon("goal_slot_confirm");
+        this.emit("cp-goal-changed", { action: "profile", conversationId: ctx.conversationId });
+        this.refresh();
+        return;
+      }
+      if (el) el.disabled = false;
+      this._flashToast(this.t("inbox.goal.err_retry"));
     }
 
     _emitLoadedSignal(g) {
@@ -1490,6 +1575,17 @@
       const filled = rows.filter((s) => s && s.filled).length;
       const chips = rows.map((s) => {
         const on = !!s.filled;
+        // Q-1 E（#264）：三态 state=mentioned → 「职业：已提及（未确认）」+ 行内「确认」；
+        // 确认即写 confirmed，引擎永不再问该槽（旧后端缺 state 键＝走原打勾逻辑）
+        if (String(s.state || "") === "mentioned") {
+          const lab = String(s.label || s.key);
+          const tipM = lab + (s.value ? ": " + s.value : "") + " \u00b7 " + this.t("inbox.goal.slots.mentioned_t");
+          return `<span class="gl-slotchk mention" title="${esc(tipM)}">\u25D0 ` +
+            `${esc(this.t("inbox.goal.slots.mentioned", { label: lab }))}` +
+            `<button type="button" class="gl-slot-confirm" data-act="slot_confirm" data-slot="${esc(String(s.key || ""))}"` +
+            ` data-value="${esc(String(s.value || ""))}" data-label="${esc(lab)}" title="${esc(this.t("inbox.goal.slots.confirm_t"))}">` +
+            `${esc(this.t("inbox.goal.slots.confirm"))}</button></span>`;
+        }
         // P3b 来源标注：auto 正则 / llm 抽取 / agent 人工——「AI 猜的还是人
         // 核实的」进 tooltip；人工确认档加实心边框（handoff 惯例：可信度可见）
         const src = (on && /^(auto|llm|agent)$/.test(String(s.src || "")))
@@ -4182,6 +4278,8 @@
         this._probeIdx = (this._probeIdx || 0) + 1; this._probeRes = null; this._rerender(); return;
       }
       if (act === "probe_send") { await this._probeSend(); return; }
+      if (act === "dpause_toggle") { await this._dpauseToggle(el); return; }
+      if (act === "slot_confirm") { await this._slotConfirm(el); return; }
       if (act === "revive_won") { await this._reviveWon(el); return; }
       if (act === "jump_sprint") { await this._jumpSprint(el); return; }
       if (act === "note_example") {

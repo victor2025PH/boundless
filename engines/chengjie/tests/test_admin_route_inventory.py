@@ -2021,6 +2021,15 @@ _ADDITIONS_2026_09_10_Q3_AGENT_TYPING = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q3_AGENT_TYPING
 
+# Q-1 #264（2026-09-10）：目标页「暂停全部摸底目标」总开关（InboxStore KV）+ 卡片槽位
+# 「已提及（未确认）」→「确认」（mentioned → confirmed）。goal_routes.py。
+_ADDITIONS_2026_09_10_Q1_DISCOVERY_PAUSE = """
+/api/goals/discovery-pause	GET
+/api/goals/discovery-pause	POST
+/api/goals/profile/confirm	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q1_DISCOVERY_PAUSE
+
 
 def _parse_baseline():
     expected = set()
