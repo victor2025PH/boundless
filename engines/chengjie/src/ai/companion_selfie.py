@@ -1063,6 +1063,9 @@ _REQUESTED_SCENE_MAP: tuple = (
      "in the kitchen cooking, apron on"),
     (("公园", "公園", "户外", "戶外", "park", "outdoors"),
      "outdoors in a park, natural daylight"),
+    # Q-6 E（CK8HCT）：「风景/landscape/scenery」此前不在表 → 索风景走通用自拍池。
+    (("风景", "風景", "风景照", "風景照", "landscape", "scenery", "scenic"),
+     "outdoors scenic landscape view"),
     (("家里", "家裡", "在家", "沙发", "沙發", "at home", "on the couch"),
      "at home on the couch, cozy and relaxed"),
     (("卧室", "臥室", "床上", "bedroom"),
@@ -1205,6 +1208,11 @@ _MEDIA_COMPLAINT_MAP: tuple = (
         "don't see it", "dont see it", "don't see any", "dont see any",
         "didn't come through", "didnt come through",
         "where honey", "where babe", "where love",
+        # Q-6 C（#263）：复诉词再补口语（P-3 已有 no picture / nothing came / still nothing /
+        # 没收到；这里补 didn't get it / 没收到图，避免「图呢」之外的短句漏识别）。
+        "didn't get it", "didnt get it", "didn't get the", "didnt get the",
+        "you didn't send", "u didn't send", "you didnt send",
+        "没收到图", "沒收到圖", "没收到照片啊", "沒收到照片啊",
         "没有收到", "没收到啊", "沒收到啊", "没有照片", "沒有照片", "没有图", "沒有圖",
         "图在哪", "圖在哪", "照片在哪", "什么都没收到", "什麼都沒收到", "啥也没",
         "啥都没", "还是没有", "還是沒有", "还是没收到", "還是沒收到",

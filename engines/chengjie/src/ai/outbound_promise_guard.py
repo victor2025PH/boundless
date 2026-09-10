@@ -562,6 +562,9 @@ _SENT_CLAIM_IMG = [re.compile(p, re.IGNORECASE) for p in (
     r"\b(?:it|that|this|the\s+(?:photo|pic\w*|image|selfie))\s+(?:just\s+|already\s+|probably\s+|definitely\s+)?(?:went|got|came)\s+through\b",
     r"\b(?:took|takes|taking|might\s+take|may\s+take)\s+(?:a\s+)?(?:moment|while|sec(?:ond)?|minute|bit|little)\b[^.!?\n]{0,12}\bto\s+load\b",
     r"\b(?:still\s+)?load(?:ing|ed)?\s+on\s+your\s+(?:end|side|phone)\b",
+    # Q-6 C（D6V29H）：「maybe it's still loading」不带 on your end 也会圆谎。
+    r"\bit(?:'s|\s+is)?\s+still\s+loading\b",
+    r"\bstill\s+loading\b",
     r"\bcheck\s+(?:your|ur)\s+(?:phone|chat|inbox|whatsapp|dms?|messages|gallery|notifications?)\b",
     # zh：看手机（让对方查收＝自称已发）；「别看/少看/老看手机」由排除面挡
     r"(?:去|快|快去|你)?\s*看\s*(?:看|下|一下)?\s*(?:你的?)?\s*手机",
@@ -576,6 +579,13 @@ _SENT_CLAIM_IMG = [re.compile(p, re.IGNORECASE) for p in (
     r"(?:再|重新|重)\s*(?:发|發|传|傳)\s*(?:一次|一遍|一下|一回|给你|給你|过去|過去|你)",
     # zh：你收到了吗 / 收到没（出站问对方是否收到＝自称已发）
     r"(?:你)?\s*(?:收到|收得到)\s*(?:了)?\s*(?:吗|嗎|没|沒|没有|沒有|未|不)",
+    # Q-6 C（D6V29H）：「在加载了 / 加载中」传输借口。
+    r"(?:还|還)?在加载",
+    r"加载中",
+    r"加载了",
+    r"(?:還)?在加載",
+    r"加載中",
+    r"加載了",
 )]
 
 _SENT_CLAIM_VOICE = [re.compile(p, re.IGNORECASE) for p in (
@@ -873,6 +883,31 @@ def lie_caught_resend_caption(sample_text: str) -> str:
         _script_lang(sample_text), _LIE_CAUGHT_RESEND_CAPTION["en"])
 
 
+def apply_blocked_media_rewrite(text: str, conv: str = "", *, sample_text: str = "") -> str:
+    """Q-6 C：``media_claim_blocked`` 期间剥掉照片承诺/断言；剥空则诚实拒绝。
+
+    未封锁 / 原文不含承诺 → 原样返回。不重做 P-3 投递层动作，只给生成侧收口。
+    """
+    if not str(conv or "").strip():
+        return str(text or "")
+    try:
+        from src.inbox.media_claim_block import is_blocked
+        if not is_blocked(conv):
+            return str(text or "")
+    except Exception:
+        return str(text or "")
+    raw = str(text or "")
+    if not raw.strip():
+        return raw
+    hit = detect_photo_caption_claim(raw)
+    if not hit:
+        return raw
+    stripped = strip_photo_caption_claims(raw).strip()
+    if stripped and not detect_photo_caption_claim(stripped):
+        return stripped
+    return honest_no_photo_line(sample_text or raw)
+
+
 def detect_photo_caption_claim(text: str) -> str:
     """「照片配文体」合流检测（#259 P-3 E 段）：将发承诺 ∪ 已发/正在发断言（**强制**
     媒体语境）∪ 过去时假声明，任一命中返回 'image'/'voice'/''。
@@ -1133,6 +1168,7 @@ __all__ = [
     "detect_sent_claim", "strip_sent_claims",
     "detect_photo_caption_claim", "strip_photo_caption_claims",
     "honest_no_photo_line", "lie_caught_honest_line", "lie_caught_resend_caption",
+    "apply_blocked_media_rewrite",
     "build_promise_rewrite_instruction", "build_photo_unsent_rewrite_instruction",
     "deflection_line",
     "detect_media_offer", "is_short_affirmative", "offer_accepted",
