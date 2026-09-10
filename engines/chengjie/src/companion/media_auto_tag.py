@@ -70,6 +70,8 @@ def resolve_album_ai_cfg(cfg: Any) -> Dict[str, Any]:
         "auto_on_upload": bool(a.get("auto_on_upload", True)),
         "max_batch": max(1, max_batch),
         "face_check": bool(a.get("face_check", True)),
+        # Q-6 E：建议词默认直接参与匹配（auto）；confirm = 只展示等一键采纳。
+        "apply": "confirm" if str(a.get("apply") or "auto").strip().lower() == "confirm" else "auto",
     }
 
 
@@ -109,6 +111,9 @@ def build_auto_tag_prompt() -> str:
         '- "sensitivity": 0 (fine for anyone) | 1 (casual friends) | '
         "2 (close relationship) | 3 (intimate/private) based on how "
         "private or revealing the photo is\n"
+        '- "kind": "selfie" | "indoor" | "outdoor" | "food" | "pet" | "other" '
+        "(selfie=close-up of the persona; outdoor=landscape/scenery; "
+        "food=meals; pet=animals; indoor=rooms without being a selfie)\n"
         "Rules: be conservative — when unsure use \"unknown\" / \"\" / false. "
         "STRICT JSON only."
     )
@@ -229,8 +234,19 @@ def parse_auto_tag_response(raw: Any) -> Optional[Dict[str, Any]]:
             objects.append(c)
         if len(objects) >= 5:
             break
+    scene_n = normalize_scene(data.get("scene"))
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind not in ("selfie", "indoor", "outdoor", "food", "pet", "other"):
+        try:
+            from src.companion.persona_media import infer_scene_kind
+            kind = infer_scene_kind(
+                {"objects": objects, "desc": _s("desc_zh", _DESC_MAX),
+                 "indoor": indoor, "people_count": people, "scene": scene_n},
+                scene_n)
+        except Exception:
+            kind = "other"
     return {
-        "scene": normalize_scene(data.get("scene")),
+        "scene": scene_n,
         "tod": normalize_tod(data.get("tod")),
         "season": normalize_season(data.get("season")),
         "country": normalize_country(data.get("place_country")),
@@ -247,6 +263,7 @@ def parse_auto_tag_response(raw: Any) -> Optional[Dict[str, Any]]:
         "desc": _s("desc_zh", _DESC_MAX),
         "triggers": triggers,
         "sensitivity": sens,
+        "kind": kind,
     }
 
 
@@ -322,6 +339,9 @@ def derive_tags(
     scene = str(parsed.get("scene") or "")
     if scene and "scene" not in have:
         add.append(f"scene:{scene}")
+    kind = str(parsed.get("kind") or "").strip().lower()
+    if kind in ("selfie", "indoor", "outdoor", "food", "pet", "other") and "kind" not in have:
+        add.append(f"kind:{kind}")
     tod = str(parsed.get("tod") or "")
     if tod and "tod" not in have:
         add.append(f"tod:{tod}")
@@ -364,6 +384,7 @@ def build_auto_meta(
         "country_conf": str(parsed.get("country_conf") or ""),
         "indoor": str(parsed.get("indoor") or ""),
         "people_count": int(parsed.get("people_count", -1)),
+        "scene_kind": str(parsed.get("kind") or ""),
         "flags": {
             "nsfw": bool(parsed.get("nsfw")),
             "explicit": bool(parsed.get("explicit")),

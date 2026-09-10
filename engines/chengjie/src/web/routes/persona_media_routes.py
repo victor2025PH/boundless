@@ -203,7 +203,10 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         ai["vision_ready"] = bool(probe.get("ready"))
         ai["vision_reason"] = str(probe.get("reason") or "")
         ai["last_error"] = str(snap.get("last_error") or "")
-        return {"items": items, "stats": st.stats(str(pid)), "ai": ai}
+        ai["apply"] = str(_aicfg.get("apply") or "auto")
+        from src.companion.persona_media import album_trigger_counts
+        counts = album_trigger_counts(items)
+        return {"items": items, "stats": st.stats(str(pid)), "ai": ai, "counts": counts}
 
     @app.post("/api/personas/{pid}/speech-print")
     async def save_persona_speech_print(pid: str, request: Request,
@@ -448,6 +451,23 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                 fields["min_bond_level"] = int(body.get("min_bond_level") or 0)
             except Exception:
                 pass
+        # Q-6 E：场景 kind 写入 tags kind:*（白名单字段）；识图结论同步 auto_meta.scene_kind。
+        if "scene_kind" in body:
+            kind = str(body.get("scene_kind") or "").strip().lower()
+            if kind not in ("selfie", "indoor", "outdoor", "food", "pet", "other", ""):
+                raise HTTPException(400, tr(request, "err.pmedia.bad_body"))
+            row0 = st.get(str(mid)) or {}
+            tags = [str(t) for t in (fields.get("tags") if "tags" in fields else (row0.get("tags") or [])) if str(t or "").strip()]
+            tags = [t for t in tags if not str(t).startswith("kind:")]
+            if kind:
+                tags.append(f"kind:{kind}")
+            fields["tags"] = tags
+            try:
+                am = dict(row0.get("auto_meta") or {}) if isinstance(row0.get("auto_meta"), dict) else {}
+                am["scene_kind"] = kind
+                st.set_auto_tag(str(mid), auto_meta=am)
+            except Exception:
+                logger.debug("[pmedia] scene_kind auto_meta 同步跳过", exc_info=True)
         item = st.update(str(mid), **fields)
         _audit(request, "pmedia_update", f"pid={pid} id={mid}",
                ",".join(sorted(fields.keys())))
@@ -521,6 +541,72 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
     # 手动补标是运营显式动作，不受 album_ai.enabled 闸（与回填 CLI 同语义）；
     # enabled 只管「上传即自动打标」。批任务单工位互斥，进度靠列表轮询
     # tag_status/thumb_url 变化。
+
+    @app.post("/api/personas/{pid}/media/adopt-suggest")
+    async def adopt_suggest_persona_media(pid: str, request: Request,
+                                          _=Depends(auth_dep)):
+        """Q-6 E：一键采纳建议词 → 写入正式 triggers（已确认）。ids 空＝全部有建议的条目。"""
+        _require_write(request)
+        st = _require_store(request)
+        _require_persona(request, pid)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        want = {str(x) for x in ((body or {}).get("ids") or []) if str(x or "").strip()}
+        n = 0
+        for row in st.list(str(pid)) or []:
+            mid = str(row.get("id") or "")
+            if want and mid not in want:
+                continue
+            trg = [str(x).strip() for x in (row.get("triggers") or []) if str(x or "").strip()]
+            am = row.get("auto_meta") if isinstance(row.get("auto_meta"), dict) else {}
+            sug = [str(x).strip() for x in ((am or {}).get("triggers_suggest") or []) if str(x or "").strip()]
+            if not sug:
+                continue
+            merged = list(trg)
+            for s in sug:
+                if s not in merged:
+                    merged.append(s)
+            if merged != trg:
+                st.update(mid, triggers=merged)
+                n += 1
+        from src.companion.persona_media import album_trigger_counts
+        items = st.list(str(pid)) or []
+        _audit(request, "pmedia_adopt_suggest", f"pid={pid}", f"n={n}")
+        return {"ok": True, "adopted": n, "counts": album_trigger_counts(items)}
+
+    @app.post("/api/personas/{pid}/media/batch-triggers")
+    async def batch_triggers_persona_media(pid: str, request: Request,
+                                           _=Depends(auth_dep)):
+        """Q-6 E：多选批量加触发词。Body ``{ids, add: ["风景"]}``。"""
+        _require_write(request)
+        st = _require_store(request)
+        _require_persona(request, pid)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        ids = [str(x) for x in ((body or {}).get("ids") or []) if str(x or "").strip()]
+        add = _as_str_list((body or {}).get("add"))
+        if not ids or not add:
+            raise HTTPException(400, tr(request, "err.pmedia.bad_body"))
+        n = 0
+        for mid in ids:
+            try:
+                row = _owned_row(request, st, pid, mid)
+            except HTTPException:
+                continue
+            trg = [str(x).strip() for x in (row.get("triggers") or []) if str(x or "").strip()]
+            merged = list(trg)
+            for s in add:
+                if s and s not in merged:
+                    merged.append(s)
+            if merged != trg:
+                st.update(mid, triggers=merged)
+                n += 1
+        _audit(request, "pmedia_batch_triggers", f"pid={pid}", f"n={n}")
+        return {"ok": True, "updated": n}
 
     @app.post("/api/personas/{pid}/media/retag-all")
     async def retag_all_persona_media(pid: str, request: Request,

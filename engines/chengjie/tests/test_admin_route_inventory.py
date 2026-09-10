@@ -2030,6 +2030,13 @@ _ADDITIONS_2026_09_10_Q1_DISCOVERY_PAUSE = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q1_DISCOVERY_PAUSE
 
+# Q-6 #263 #266（2026-09-10）：相册一键采纳建议词 + 多选批量加触发词。
+_ADDITIONS_2026_09_10_Q6_ALBUM = """
+/api/personas/{pid}/media/adopt-suggest	POST
+/api/personas/{pid}/media/batch-triggers	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q6_ALBUM
+
 
 def _parse_baseline():
     expected = set()

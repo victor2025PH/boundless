@@ -54,7 +54,9 @@ def test_resolve_album_ai_cfg_defaults_on_since_d_n3():
         "enabled": True, "auto_on_upload": False, "max_batch": "50",
         "face_check": False}}}})
     assert c2 == {"enabled": True, "auto_on_upload": False, "max_batch": 50,
-                  "face_check": False}
+                  "face_check": False, "apply": "auto"}
+    conf = resolve_album_ai_cfg({"companion": {"selfie": {"album_ai": {"apply": "confirm"}}}})
+    assert conf["apply"] == "confirm"
 
 
 def test_prompt_contract():
@@ -102,7 +104,10 @@ def test_derive_tags_manual_first_and_precedence():
     parsed = parse_auto_tag_response(_good_json())
     # 空白条目：四族全补
     tags = derive_tags(parsed, {}, [])
-    assert set(tags) == {"scene:beach", "tod:day", "season:summer", "place:JP"}
+    # Q-6：识图产出 kind:selfie|indoor|outdoor|food|pet|other，供相册场景清单
+    assert set(tags) == {
+        "scene:beach", "tod:day", "season:summer", "place:JP", "kind:outdoor",
+    }
     # 运营已有 scene → 绝不覆盖；其余补缺
     tags2 = derive_tags(parsed, {}, ["scene:cafe", "series:white-dress"])
     assert "scene:cafe" in tags2 and "scene:beach" not in tags2
