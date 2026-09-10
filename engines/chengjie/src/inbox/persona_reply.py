@@ -514,7 +514,12 @@ async def generate_persona_reply(
     强制平台上，链路内的 ``honest_identity_active()``/``notice_active()`` 读到即恒 True，人设
     ``deny_ai`` 被按 False 处理、出站守卫放行如实身份，无需把 platform 穿透 skill_manager。
     """
-    from src.compliance.runtime import platform_scope
+    try:
+        from src.compliance.runtime import platform_scope
+    except ImportError:
+        # 实施97 的 runtime.platform_scope 尚未随微信 KF 线入库：没有它时按「不改变现状」
+        # 空作用域处理（nullcontext 接受并忽略 platform 参数），主链不能因合规作用域缺席而 ImportError
+        from contextlib import nullcontext as platform_scope  # type: ignore[assignment]
     with platform_scope(platform):
         return await _generate_persona_reply_impl(
             app=app, platform=platform, chat_key=chat_key, last_inbound=last_inbound,
