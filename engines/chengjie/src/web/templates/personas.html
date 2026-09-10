@@ -1886,6 +1886,7 @@ function _setMpStyle(raw){
   _setOptCard('mp-style-cards', v);
   _mpPreview();
 }
+function _selOpt(el, hiddenId, cardsId) {
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
   el.classList.add('sel');
   document.getElementById(hiddenId).value = el.dataset.val;
