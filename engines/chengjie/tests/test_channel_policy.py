@@ -273,3 +273,56 @@ async def test_orchestrator_send_media_blocked_by_channel_policy(tmp_path, _no_s
                                 media_url="", media_type="voice", origin="manual")
     assert res == {"delivered": False, "blocked": f"{cp.REASON_MEDIA_DENIED}:voice"}
     assert w.media == []
+
+
+# ── TK-3（2026-09-10）：TikTok 个人号 mode 键 + 编排器传 mode ──────────────────────────
+
+def test_tiktok_personal_modes_have_no_official_window():
+    """个人号（huoke 真机 personal_rpa / 网页边车 web）不是 Business Messaging API：没有 48h·10 条窗，
+    ≤1000 字、首条禁链、无按钮；平台级 ``tiktok`` 键（官方 / Shop）原样不动。"""
+    official = cp.policy_for("tiktok")
+    assert official.has_window and official.max_text_len == 6000
+    for mode in ("personal_rpa", "web"):
+        pol = cp.policy_for("tiktok", mode=mode)
+        assert pol.mode == mode and pol.platform == "tiktok"
+        assert not pol.has_window and cp.window_rule("tiktok", mode=mode) is None
+        assert pol.max_text_len == 1000 and pol.links == cp.LINKS_FIRST_MESSAGE_DENY and pol.buttons is False
+        assert "非官方" in pol.note and "notice_unofficial" in pol.note
+        assert cp.text_block_reason("tiktok", "x" * 1001, mode=mode).startswith(cp.REASON_TEXT_TOO_LONG)
+        assert cp.text_block_reason("tiktok", "see https://a.com", mode=mode, first_message=True) == cp.REASON_LINK_DENIED
+        assert cp.text_block_reason("tiktok", "see https://a.com", mode=mode, first_message=False) == ""
+    assert cp.media_block_reason("tiktok", "image", mode="personal_rpa") == ""
+    assert cp.media_block_reason("tiktok", "image", mode="web").startswith(cp.REASON_MEDIA_DENIED)   # 边车阶段 1 不发媒体
+    # 官方 / Shop 的 shop:official 未登记 → 回落平台级键（TK-1 行为不变）
+    assert cp.policy_for("tiktok", mode="official") is not None and cp.policy_for("tiktok", mode="official").has_window
+    # 配置覆写：mode 键优先于平台键，且个人号配窗口不殃及官方号
+    cfg = {"channel_policy": {"tiktok": {"max_text_len": 500}, "tiktok:personal_rpa": {"max_text_len": 800}}}
+    assert cp.policy_for("tiktok", config=cfg).max_text_len == 500
+    assert cp.policy_for("tiktok", mode="personal_rpa", config=cfg).max_text_len == 800
+    assert cp.policy_for("tiktok", mode="web", config=cfg).max_text_len == 500          # 无 mode 键 → 回落平台键（旧行为）
+    assert cp.policy_for("whatsapp", mode="official", config={"channel_policy": {"whatsapp": {"reply_window_sec": 3600}}}).reply_window_sec == 3600.0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_passes_managed_mode_to_channel_policy(_no_store):
+    """编排器 send/send_media 按账号登记的 mode 取策略：tiktok:web 按个人号规则（1000 字拦、6000 字规则不再套用）；
+    whatsapp:official 只声明窗长无条数 → 传 mode 后 WA 零行为变化；未登记 mode → 平台键（旧行为）。"""
+    from src.integrations import account_orchestrator as ao
+    from src.integrations import protocol_bridge as pb
+    orch = ao.AccountOrchestrator(config={})
+    pb.register_inbox_sink(None)
+    assert orch._managed_mode("tiktok", "nobody") == ""
+    w = _W()
+    _managed(orch, "tiktok", "tt1", w)                       # _managed 登记 mode="web"
+    assert orch._managed_mode("tiktok", "tt1") == "web"
+    res = await orch.send("tiktok", "tt1", "tiktok:user:u1", "x" * 1001, origin="manual")
+    assert res["delivered"] is False and res["blocked"] == f"{cp.REASON_TEXT_TOO_LONG}:1001/1000"
+    ok = await orch.send("tiktok", "tt1", "tiktok:user:u1", "x" * 999, origin="manual")
+    assert ok["delivered"] is True and len(w.sent) == 1
+    # WhatsApp 官方号：传 mode 前后都放行（窗长声明无配额 → window_rule None）
+    wa = _W()
+    key = ao.account_key("whatsapp", "wa1")
+    orch._managed[key] = ao._Managed(key=key, platform="whatsapp", account_id="wa1", mode="official", worker=wa, state="running")
+    assert cp.window_rule("whatsapp", mode="official") is None
+    ok2 = await orch.send("whatsapp", "wa1", "1", "hello " * 200 + "https://a.com", origin="auto")
+    assert ok2["delivered"] is True and len(wa.sent) == 1

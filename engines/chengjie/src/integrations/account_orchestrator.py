@@ -645,13 +645,14 @@ class AccountOrchestrator:
         # 明确返回 blocked 而不是静默降级发文字——让上层的「媒体承诺兑现链」按失败处理。
         try:
             from src.inbox.channel_policy import media_block_reason as _cp_media_block
-            _cp_reason = _cp_media_block(platform, media_type, config=self._config)
+            _mode = self._managed_mode(platform, account_id)
+            _cp_reason = _cp_media_block(platform, media_type, mode=_mode, config=self._config)
             if _cp_reason:
                 logger.warning("[orchestrator] 渠道策略拦截媒体 %s:%s → peer=%s (%s)",
                                platform, account_id, chat_key, _cp_reason)
                 return {"delivered": False, "blocked": _cp_reason}
             from src.inbox.window_guard import send_block_reason as _wg_block
-            _wg_reason = _wg_block(platform, account_id, chat_key, origin=str(origin or "auto"),
+            _wg_reason = _wg_block(platform, account_id, chat_key, mode=_mode, origin=str(origin or "auto"),
                                    config=self._config)
             if _wg_reason:
                 logger.warning("[orchestrator] 回复窗/配额拦截媒体 %s:%s → peer=%s (%s, origin=%s)",
@@ -854,11 +855,15 @@ class AccountOrchestrator:
             from src.inbox.channel_policy import (
                 LINKS_FIRST_MESSAGE_DENY as _CP_FIRST_DENY, policy_for as _cp_policy_for,
                 text_block_reason as _cp_text_block)
+            # TK-3 E1：带上账号 mode——策略表 ``platform:mode`` 键（tiktok:web / whatsapp:official）
+            # 此前在编排器从未生效；whatsapp:official 只声明窗长无条数配额 → has_window False，
+            # 传 mode 对 WA 零行为变化（test_account_orchestrator_policy_mode 钉住）。
+            _mode = self._managed_mode(platform, account_id)
             _first_msg = False
-            if _cp_policy_for(platform, config=self._config).links == _CP_FIRST_DENY:
+            if _cp_policy_for(platform, mode=_mode, config=self._config).links == _CP_FIRST_DENY:
                 from src.inbox.window_guard import is_first_message as _wg_first
                 _first_msg = _wg_first(platform, account_id, chat_key)
-            _cp_reason = _cp_text_block(platform, text, config=self._config,
+            _cp_reason = _cp_text_block(platform, text, mode=_mode, config=self._config,
                                         first_message=_first_msg)
             if _cp_reason:
                 logger.warning("[orchestrator] 渠道策略拦截 %s:%s → peer=%s (%s, origin=%s)",
@@ -867,7 +872,7 @@ class AccountOrchestrator:
             # 回复窗 / 每轮配额（抖音 24h·6 条、TikTok 48h·10 条…）：从收件箱事实现算，
             # 人工可用满、自动链给坐席留预留条数；微信客服由 kf_window_guard 记账，这里让路。
             from src.inbox.window_guard import send_block_reason as _wg_block
-            _wg_reason = _wg_block(platform, account_id, chat_key, origin=str(origin or "auto"),
+            _wg_reason = _wg_block(platform, account_id, chat_key, mode=_mode, origin=str(origin or "auto"),
                                    config=self._config)
             if _wg_reason:
                 logger.warning("[orchestrator] 回复窗/配额拦截 %s:%s → peer=%s (%s, origin=%s)",
@@ -1063,6 +1068,15 @@ class AccountOrchestrator:
             return {"ok": True, "checked": False, "error": str(exc)}
 
     # ── 状态 ─────────────────────────────────────────────────────────────
+
+    def _managed_mode(self, platform: str, account_id: str) -> str:
+        """账号在编排器登记的 mode（``web`` / ``official`` / ``protocol``…；未登记 → ""）。
+        供渠道策略按 ``platform:mode`` 键取规则（TK-3 E1）；任何异常都回 ""（＝平台级键，旧行为）。"""
+        try:
+            m = self._managed.get(account_key(platform, account_id))
+            return str(getattr(m, "mode", "") or "") if m is not None else ""
+        except Exception:
+            return ""
 
     def status(self) -> Dict[str, Any]:
         accts = [m.to_dict() for m in self._managed.values()]

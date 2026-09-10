@@ -152,6 +152,20 @@ _POLICIES: Dict[str, ChannelPolicy] = {
         platform="whatsapp", mode="official", reply_window_sec=24 * 3600.0,
         note="Meta WhatsApp Cloud API 24h customer service window（窗外需模板消息）",
     ),
+    # TikTok **个人号**（TK-3，2026-09-10）：走 huoke 真机（personal_rpa）或网页托管边车（web），
+    # 都不是 Business Messaging API → 没有 48h·10 条窗（那是官方 API 的配额，套到个人号上会误拦）；
+    # 端内规则：私信 ≤1000 字、给陌生人的**第一条**带链即风控、无按钮、图片可发。
+    # 节奏 / 消息请求 / 日上限是**风控**不是平台拒收，在 tiktok_huoke_bridge（真机）与边车各自闸门执行。
+    "tiktok:personal_rpa": ChannelPolicy(
+        platform="tiktok", mode="personal_rpa", max_text_len=1000, links=LINKS_FIRST_MESSAGE_DENY,
+        max_bubbles=2, media_types=frozenset({"image"}), buttons=False, risk_policy_mode="enforce",
+        note="TikTok 个人号·huoke 真机（非官方，notice_unofficial）；无 48h 窗；节奏闸门在 tiktok_huoke_bridge",
+    ),
+    "tiktok:web": ChannelPolicy(
+        platform="tiktok", mode="web", max_text_len=1000, links=LINKS_FIRST_MESSAGE_DENY,
+        max_bubbles=2, media_types=frozenset(), buttons=False, risk_policy_mode="enforce",
+        note="TikTok 个人号·网页托管边车（非官方，notice_unofficial）；阶段 1 只读辅助、永不自动发；无 48h 窗",
+    ),
 }
 
 _URL_RE = re.compile(
@@ -178,9 +192,12 @@ def _norm(platform: Any) -> str:
 
 
 def _apply_overrides(pol: ChannelPolicy, config: Optional[Dict[str, Any]]) -> ChannelPolicy:
-    """``config.channel_policy.<platform>`` 覆写数值字段（只认已知字段，坏值忽略）。"""
+    """``config.channel_policy.<platform>`` 覆写数值字段（只认已知字段，坏值忽略）。
+    带 mode 的策略先找 ``<platform>:<mode>`` 键，没有再回落 ``<platform>``（TK-3：给个人号配窗口
+    不该殃及官方号，反之亦然）。"""
     try:
-        blk = ((config or {}).get("channel_policy") or {}).get(pol.platform) or {}
+        cp = (config or {}).get("channel_policy") or {}
+        blk = (cp.get(f"{pol.platform}:{pol.mode}") if pol.mode else None) or cp.get(pol.platform) or {}
     except Exception:
         blk = {}
     if not isinstance(blk, dict) or not blk:
