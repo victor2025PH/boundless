@@ -257,6 +257,7 @@ _SOFT_LINES: Dict[str, Dict[str, List[str]]] = {
         "direct": [
             "这个话题我不聊。想聊别的我在。",
             "打住，这个不行。换个话题吧。",
+            "这种话我不接。你要是想正常聊天，我随时在。",
         ],
     },
     "en": {
@@ -268,6 +269,7 @@ _SOFT_LINES: Dict[str, Dict[str, List[str]]] = {
         "direct": [
             "Not going there. Happy to keep chatting about other stuff though.",
             "That's a no from me. Different topic?",
+            "I don't do that kind of talk. If you want a normal chat, I'm here.",
         ],
     },
     "ja": {
@@ -279,6 +281,7 @@ _SOFT_LINES: Dict[str, Dict[str, List[str]]] = {
         "direct": [
             "その話はしないよ。他の話ならいいけど。",
             "それはなし。別の話題にしよ。",
+            "そういう話には乗らない。普通に話すならいつでもいるよ。",
         ],
     },
 }
