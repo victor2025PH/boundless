@@ -638,12 +638,24 @@ def apply_outbound_humanize(
         cfg = resolve_cfg(cfg_root)
         lg = _norm_lang(lang, src)
         if org in BYPASS_ORIGINS or not cfg.get("enabled", True):
+            # Q-8 F（#264）：人工 / verbatim 出站的「工作」借口也计数（客户听到的就是借口），不改写
+            try:
+                from src.inbox.excuse_budget import note_outbound_excuse
+                note_outbound_excuse(src, conversation_id=conversation_id, cfg_root=cfg_root, origin=org)
+            except Exception:
+                pass
             logger.info(
                 "[outbound] conv=%s stage=%s origin=%s lang=%s len=%d humanize=skip fp=%s preview=%r",
                 conversation_id or "-", stage or "-", org, lg, len(src),
                 text_fingerprint(src), src[:40])
             return src
         pre, svc_act, svc_n = _service_tone_pass(src, cfg)
+        # Q-8 F（#264）：发送门 = 真出站——「工作」借口计数（同客户每日 ≤ cap），超额砍借口句
+        try:
+            from src.inbox.excuse_budget import guard_outbound as _excuse_guard
+            pre, _xe = _excuse_guard(pre, conversation_id=conversation_id, lang=lg, cfg_root=cfg_root, count=True)
+        except Exception:
+            logger.debug("[outbound] excuse_budget 异常（原文继续）", exc_info=True)
         if svc_act != "clean":
             logger.info(
                 "[persona-guard] service_tone=%d action=%s conv=%s stage=%s",
@@ -772,6 +784,16 @@ def apply_draft_humanize(
                 meta["exit_reason"] = str(xg.get("reason"))
         except Exception:
             logger.debug("[draft] exit_gate 异常（原文继续）", exc_info=True)
+        # Q-8 F（#264）：「工作」类借口同客户每日 ≤1——起草层只判超额改写（count=False），
+        # 真计数在发送门 apply_outbound_humanize；meta.excuse=pass|rewrite
+        try:
+            from src.inbox.excuse_budget import guard_outbound as _excuse_guard
+            cur, xe = _excuse_guard(cur, conversation_id=conversation_id, lang=lg, cfg_root=cfg_root, count=False)
+            if xe.get("action") and xe.get("action") != "clean":
+                meta["excuse"] = str(xe.get("action"))
+                meta["excuse_today"] = int(xe.get("today") or 0)
+        except Exception:
+            logger.debug("[draft] excuse_budget 异常（原文继续）", exc_info=True)
         out, st = humanize(cur, lg, cfg=cfg, mode=mode)
         meta.update({"punct_fix": int(st["punct_fix"]), "style_fix": int(st["style_fix"]),
                      "trimmed": int(st["trimmed"]), "dash": int(st["dash"])})

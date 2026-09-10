@@ -1708,6 +1708,14 @@ companion:
   # #104（实施91 2026-08-31）起**默认开**：默认关的旧态=AI 对人设当地天气零
   # 事实来源，「我这边也在下雨」全靠共情镜像编造（0831 实锤）。软失败零阻断，
   # 无所在地人设零改变；显式 false 可关。
+  # 当地时间 + 今日日程注入（Q-8 F #264，经 persona_reply 的 Q-6 addenda 接线点）：
+  # 生成前一段「现在当地时间 / 今天动线（selfie.scene_rotation 同日确定性）/ 借口只能
+  # 从日程取」；「工作」类借口（在上班 / 加班 / 开会 / swamped with work…）同客户每日
+  # ≤ work_excuse_cap——发送门真计数（含人工发出的），起草层超额即砍借口句并在 prompt
+  # 里禁用。enabled 缺席按业务域解释：陪伴开 / 销售关（销售「在开会」是正常客服话）。
+  # time_schedule:
+  #   enabled: true
+  #   work_excuse_cap: 1
   weather:
     enabled: true
     ttl_sec: 1800            # 新鲜缓存（秒）

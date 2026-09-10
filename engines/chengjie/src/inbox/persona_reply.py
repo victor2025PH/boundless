@@ -120,6 +120,15 @@ def _prompt_addenda(
     except Exception:
         logger.debug("[persona_reply] identity_addendum 跳过", exc_info=True)
 
+    # ④ Q-8 F（#264）：当地时间 + 今日日程（借口只从日程取；「工作」类借口同客户每日 ≤1）
+    try:
+        from src.inbox.excuse_budget import build_time_schedule_addendum
+        block = build_time_schedule_addendum(persona, ck, config or {}, lang=lang)
+        if block:
+            chunks.append(block)
+    except Exception:
+        logger.debug("[persona_reply] time_schedule_addendum 跳过", exc_info=True)
+
     # 无匹配回喂：生成前自探相册（B 线 autosend 在拟稿之后，不探则本轮仍会圆谎）
     try:
         from src.ai.companion_selfie import detect_selfie_request, extract_requested_scene

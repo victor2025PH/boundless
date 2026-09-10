@@ -16,6 +16,7 @@ from typing import Any, Optional
 __all__ = [
     "identity_addendum", "persona_display_name", "account_display_name",
     "album_scene_addendum", "sent_media_addendum", "album_miss_addendum",
+    "time_schedule_addendum",
 ]
 
 # Q-6 A：相册场景 kind 中文名（与 persona_media.SCENE_KINDS 对齐，这里只做文案）。
@@ -163,6 +164,67 @@ def sent_media_addendum(items: Any, *, conv_known: bool = False, lang: str = "zh
         f"【本会话已发媒体】近 7 天已发给 TA 的：{body}。"
         "清单以外的不得声称发过。"
     )
+
+
+def time_schedule_addendum(
+    local_time: str, itinerary: Any, *, lang: str = "zh", current_bucket: str = "",
+    work_excuse_used: int = 0, work_excuse_cap: int = 1,
+) -> str:
+    """Q-8 F（#264）：当地时间 + 今日日程一段；借口只能从日程取；「工作」类借口同客户每日 ≤ cap。
+
+    ``local_time`` 已格式化的当地时间短句（空 → 不写时间行）；``itinerary`` =
+    ``companion_selfie.build_day_itinerary`` 输出 ``[(时段, 场景), ...]``（空 → 不写动线行）；
+    ``work_excuse_used`` 今日已对该客户用过的「工作忙」借口次数（≥ cap → 追加禁用句）。
+    三者皆空且未超额 → ""。纯格式化、零 I/O。
+    """
+    lt = str(local_time or "").strip()
+    rows = [(str(a).strip(), str(b).strip()) for a, b in (
+        r for r in (itinerary or []) if isinstance(r, (list, tuple)) and len(r) == 2)
+        if str(b).strip()]
+    try:
+        used = int(work_excuse_used or 0)
+        cap = max(0, int(work_excuse_cap if work_excuse_cap is not None else 1))
+    except (TypeError, ValueError):
+        used, cap = 0, 1
+    over = used >= cap
+    if not lt and not rows and not over:
+        return ""
+    lg = str(lang or "zh").lower()
+    en = lg.startswith("en")
+    cur = str(current_bucket or "").strip()
+    lines = []
+    if en:
+        if lt:
+            lines.append(f"Your local time now: {lt}.")
+        if rows:
+            seq = " -> ".join(f"{a}{' (now)' if a == cur else ''}: {b}" for a, b in rows)
+            lines.append(f"Your day today: {seq}.")
+        lines.append(
+            "If you say you're busy, stepping away or will reply later, the reason must come from "
+            "this schedule only. Don't invent a different one (no 'at work' unless work is on it)."
+            if rows else
+            "If you say you're busy or stepping away, don't invent a reason; if you have no real "
+            "one, just don't give one.")
+        if over:
+            lines.append(
+                f"You have already used a work excuse with this person today ({used}/{cap}). "
+                "This turn: no work / office / meeting / overtime as the reason. Pick something "
+                "else from the schedule or skip the excuse.")
+        return "【local time & today's schedule】" + " ".join(lines)
+    if lt:
+        lines.append(f"现在当地时间：{lt}。")
+    if rows:
+        seq = "→".join(f"{a}{'(现在)' if a == cur else ''}:{b}" for a, b in rows)
+        lines.append(f"你今天的日程：{seq}。")
+    lines.append(
+        "如果要说自己在忙 / 走不开 / 晚点回，理由**只能取自这条日程**，不许另编"
+        "（日程里没有上班就别说在上班）。" if rows else
+        "如果要说自己在忙 / 走不开，不许现编理由；没有真实理由就不给理由。")
+    if over:
+        lines.append(
+            f"今天已经对 TA 用过「工作忙」这个理由（{used}/{cap}），本轮**不许再以工作 / 上班 / "
+            "加班 / 开会为借口**：从日程里换别的，或者干脆不找理由。")
+    return "【当地时间与今日日程】" + "".join(lines)
 
 
 def album_miss_addendum(scene: Any, *, lang: str = "zh") -> str:

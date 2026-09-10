@@ -73,7 +73,8 @@ def test_sales_domain_keeps_original_prompt():
 
 def test_companion_prompt_content_contract():
     t = (DOMAINS / "conversion/prompts/system_companion.txt").read_text(encoding="utf-8")
-    assert 1500 <= len(t) <= 4500, len(t)
+    # 上限随 Q-2 E 三句拒绝（#263）+ Q-8 F 夸赞一句（#264）放宽；仍钉「一屏内」不许无限膨胀
+    assert 1500 <= len(t) <= 5200, len(t)
     low = t.lower()
     for phrase in ("i hear you", "take care", "i'll be around", "feel free to", "let me know if",
                    "如有需要", "很高兴为您", "我的助理"):
