@@ -348,7 +348,8 @@ def test_routes_default_off_then_mounted_with_window_field_normalization(env, mo
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from src.integrations import tiktok_official as tk
-    routes = (hb.LEADS_ROUTE, hb.DM_ROUTE, hb.DEVICES_ROUTE, hb.HANDBACK_ROUTE, hb.HANDBACK_ACK_ROUTE, hb.STATUS_ROUTE)
+    routes = (hb.LEADS_ROUTE, hb.DM_ROUTE, hb.DEVICES_ROUTE, hb.HANDBACK_ROUTE, hb.HANDBACK_ACK_ROUTE, hb.HANDBACK_PENDING_ROUTE,
+              hb.STATUS_ROUTE)
     app0 = FastAPI()
     tk.register_tiktok_routes(app0, SimpleNamespace(config={}))
     assert not any(getattr(r_, "path", "") in routes for r_ in app0.routes)
@@ -378,9 +379,16 @@ def test_routes_default_off_then_mounted_with_window_field_normalization(env, mo
     assert r.status_code == 200 and r.json()["accepted"] == 1 and r.json()["low_intent"] == 1
     ok = hb.enqueue_reply(ACC, "tiktok:user:buyer_1", "Yes! DM us", config=CFG, state=st)
     assert ok["ok"] is True
+    # TK-3 轮询器只看不认领：pending 报 queued=1 且不改状态；认领后 queued=0/claimed=1；缺参 400
+    r = c.get(hb.HANDBACK_PENDING_ROUTE, params={"device_id": DEV})
+    assert r.status_code == 200 and r.json()["queued"] == 1 and r.json()["queued_dm"] == 1 and r.json()["claimed"] == 0
+    assert st.item(ok["item_id"])["status"] == "queued"
+    assert c.get(hb.HANDBACK_PENDING_ROUTE).status_code == 400
     r = c.get(hb.HANDBACK_ROUTE, params={"device_id": DEV})
     assert r.status_code == 200 and [i["id"] for i in r.json()["items"]] == [ok["item_id"]]
     assert r.json()["policy"]["dm_daily_cap"] == 3 and r.json()["policy"]["min_gap_sec"] == 30
+    r = c.get(hb.HANDBACK_PENDING_ROUTE, params={"account_id": ACC})
+    assert r.status_code == 200 and r.json()["queued"] == 0 and r.json()["claimed"] == 1
     assert c.get(hb.HANDBACK_ROUTE).status_code == 400
     r = c.post(hb.HANDBACK_ACK_ROUTE, json={"item_id": ok["item_id"], "ok": True, "external_id": "rp-1",
                                             "window": {"reply_window_deadline": T0 + 100, "window_sent_count": 1, "cap": 20}})

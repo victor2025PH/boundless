@@ -13,6 +13,7 @@ chengjie:
   timezone: ""                 # IANA，例 Asia/Manila；智聊按此时区切日上限
   timeout_sec: 8
   handback_limit: 5
+  handback_poll_sec: 120       # 轮询器：每 N 秒问智聊「有没有待发」，有才建真机任务；0 关（仅 check_inbox 尾部认领）
   device_account_map: {}       # {设备序列号: {account_id, username, timezone}}
 
 compliance:

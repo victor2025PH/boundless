@@ -62,6 +62,7 @@ DM_ROUTE = "/api/tiktok/huoke/dm"
 DEVICES_ROUTE = "/api/tiktok/huoke/devices"
 HANDBACK_ROUTE = "/api/tiktok/huoke/handback"
 HANDBACK_ACK_ROUTE = "/api/tiktok/huoke/handback/ack"
+HANDBACK_PENDING_ROUTE = "/api/tiktok/huoke/handback/pending"  # TK-3：只看不认领，huoke 轮询器决定是否唤醒真机
 STATUS_ROUTE = "/api/tiktok/huoke/status"
 
 COMMENT_MAX_LEN = 150          # TikTok 评论字数上限（平台事实，非策略参数）
@@ -431,6 +432,37 @@ class TikTokHuokeStateStore:
                 picked.append(r)
             self._conn.commit()
         return picked
+
+    def pending(self, device_id: str = "", *, account_id: str = "", now: Optional[float] = None,
+                claim_ttl_sec: float = DEFAULT_CLAIM_TTL_SEC) -> Dict[str, Any]:
+        """TK-3 只看不认领：待发 / 在途条数（先回收过期认领，数字与 ``claim`` 视角一致）。
+
+        huoke 轮询器据此决定要不要唤醒真机——队列空就不建设备任务、不占设备锁。
+        """
+        t = float(now if now is not None else time.time())
+        with self._lock:
+            self._conn.execute("UPDATE outbound SET status='queued', claimed_at=0, claimed_by='' WHERE status='claimed' AND claimed_at<?",
+                               (t - float(claim_ttl_sec),))
+            q = "SELECT status, kind, COUNT(*) AS n, MIN(created_at) AS oldest FROM outbound WHERE status IN ('queued','claimed')"
+            args: List[Any] = []
+            if account_id:
+                q += " AND account_id=?"
+                args.append(str(account_id))
+            elif device_id:
+                q += " AND account_id IN (SELECT account_id FROM lead_accounts WHERE device_id=?)"
+                args.append(str(device_id))
+            q += " GROUP BY status, kind"
+            rows = [dict(r) for r in self._conn.execute(q, args).fetchall()]
+            self._conn.commit()
+        out: Dict[str, Any] = {"queued": 0, "claimed": 0, "queued_dm": 0, "queued_comment": 0, "oldest_wait_sec": 0}
+        for r in rows:
+            n = int(r["n"] or 0)
+            out[str(r["status"])] = out.get(str(r["status"]), 0) + n
+            if r["status"] == "queued":
+                out["queued_dm" if r["kind"] == KIND_DM else "queued_comment"] += n
+                wait = t - float(r["oldest"] or t)
+                out["oldest_wait_sec"] = max(out["oldest_wait_sec"], int(wait))
+        return out
 
     def ack(self, item_id: int, *, ok: bool, external_id: str = "", error: str = "", now: Optional[float] = None
             ) -> Optional[Dict[str, Any]]:
@@ -1093,6 +1125,19 @@ def register_tiktok_huoke_routes(app: Any, config_manager: Any) -> bool:
                 "policy": {"max_reply_len": cfg["max_reply_len"], "daily_cap": cfg["daily_cap"],
                            "dm_max_len": cfg["dm_max_len"], "dm_daily_cap": cfg["dm_daily_cap"], "min_gap_sec": cfg["min_gap_sec"]}}
 
+    @app.get(HANDBACK_PENDING_ROUTE, dependencies=deps)
+    async def tiktok_huoke_handback_pending(request: Request, device_id: str = "", account_id: str = ""):
+        """TK-3 只看不认领：huoke 轮询器每 N 秒问一次，队列空就不建真机任务；带 device_id 顺手记心跳。"""
+        if not device_id and not account_id:
+            return JSONResponse({"error": "device_id 或 account_id 必填"}, status_code=400)
+        cfg = bridge_cfg(_cfg())
+        st = get_state_store(cfg["state_db_path"] or None)
+        now = time.time()
+        if device_id:
+            for aid in st.heartbeat(device_id, now=now):
+                report_health(st, aid, now=now)
+        return {"ok": True, **st.pending(device_id, account_id=account_id, now=now, claim_ttl_sec=cfg["claim_ttl_sec"])}
+
     @app.post(HANDBACK_ACK_ROUTE, dependencies=deps)
     async def tiktok_huoke_handback_ack(request: Request):
         payload = await _json(request)
@@ -1123,7 +1168,7 @@ def register_tiktok_huoke_routes(app: Any, config_manager: Any) -> bool:
 
 __all__ = [
     "PLATFORM", "MODE", "SOURCE", "KIND_COMMENT", "KIND_DM", "CHAT_PREFIX", "DM_CHAT_PREFIX", "COMMENT_MAX_LEN", "DM_MAX_LEN",
-    "LEADS_ROUTE", "DM_ROUTE", "DEVICES_ROUTE", "HANDBACK_ROUTE", "HANDBACK_ACK_ROUTE", "STATUS_ROUTE",
+    "LEADS_ROUTE", "DM_ROUTE", "DEVICES_ROUTE", "HANDBACK_ROUTE", "HANDBACK_ACK_ROUTE", "HANDBACK_PENDING_ROUTE", "STATUS_ROUTE",
     "REASON_ONE_REPLY", "REASON_DAILY_CAP", "REASON_TOO_LONG", "REASON_NOT_BRIDGED", "REASON_REQUEST_PENDING",
     "REASON_PEER_SILENT", "REASON_QUIET_HOURS", "REASON_DEVICE_OFFLINE",
     "bridge_cfg", "bridge_enabled", "chat_key_for", "dm_chat_key_for", "is_bridge_chat", "is_dm_chat", "kind_of_chat",

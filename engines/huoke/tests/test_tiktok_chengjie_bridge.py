@@ -115,3 +115,70 @@ def test_drain_handback_send_ack_success_and_failure():
 
     r = cj.drain_handback(device_id="DEV-A", send_dm=lambda a, b: False, cfg=CFG_CJ, http=http)
     assert r["failed"] == 1 and acks[-1]["error"] == "send_failed"
+
+
+# ═══ 独立轮询器（不再只挂 check_inbox 尾部）═══════════════════════════════════════════════
+
+def test_poll_planner_only_wakes_devices_with_queued_items():
+    pending = {"DEV-A": {"ok": True, "queued": 2, "oldest_wait_sec": 40}, "DEV-B": {"ok": True, "queued": 0},
+               "DEV-D": {"ok": False, "error": "boom"}}
+    polled: List[str] = []
+
+    def http(method, url, headers, body):
+        assert method == "GET" and "/handback/pending?" in url
+        did = url.split("device_id=")[1].split("&")[0]
+        polled.append(did)
+        return (200 if pending[did].get("ok") else 503), pending[did]
+
+    busy = {"DEV-C": {"tiktok_check_inbox"}, "DEV-E": {"tiktok_chengjie_handback"}}
+    plan = cj.plan_handback_tasks(["DEV-A", "DEV-B", "DEV-C", "DEV-D", "DEV-E"], busy, cfg=CFG_CJ, http=http)
+    assert [x["device_id"] for x in plan["create"]] == ["DEV-A"] and plan["create"][0]["queued"] == 2
+    assert plan["skipped"] == {"DEV-B": "empty", "DEV-C": "busy", "DEV-E": "busy"}
+    assert plan["errors"] == {"DEV-D": "boom"} and plan["polled"] == 3
+    assert sorted(polled) == ["DEV-A", "DEV-B", "DEV-D"]  # 忙设备不打 HTTP、不占设备锁
+    # local / 关轮询 → 零 HTTP
+    assert cj.plan_handback_tasks(["DEV-A"], {}, cfg=CFG_LOCAL, http=lambda *a: (_ for _ in ()).throw(AssertionError("no http")))["skipped"] == {"*": "not_chengjie"}
+    off = {**CFG_CJ, "chengjie": {**CFG_CJ["chengjie"], "handback_poll_sec": 0}}
+    assert cj.plan_handback_tasks(["DEV-A"], {}, cfg=off, http=None)["skipped"] == {"*": "poll_off"}
+    assert cj.reply_cfg(off)["handback_poll_sec"] == 0 and cj.reply_cfg(CFG_CJ)["handback_poll_sec"] == 120
+    assert cj.reply_cfg({**CFG_CJ, "chengjie": {**CFG_CJ["chengjie"], "handback_poll_sec": 5}})["handback_poll_sec"] == cj.POLL_MIN_SEC
+
+
+def test_poll_once_creates_tasks_via_injected_host():
+    created: List[str] = []
+    r = cj.run_handback_poll_once(
+        cfg=CFG_CJ, http=lambda m, u, h, b: (200, {"ok": True, "queued": 1}),
+        list_online=lambda: ["DEV-A", "DEV-B"], busy_types=lambda: {"DEV-B": {"tiktok_chengjie_handback"}},
+        create_task=lambda did: created.append(did) or f"task-{did}")
+    assert created == ["DEV-A"] and r["created"] == ["task-DEV-A"] and r["skipped"] == {"DEV-B": "busy"}
+    assert cj.run_handback_poll_once(cfg=CFG_LOCAL, list_online=lambda: ["DEV-A"])["skipped"] == {"*": "not_chengjie"}
+    assert cj.run_handback_poll_once(cfg=CFG_CJ, list_online=lambda: [])["skipped"] == {"*": "no_online_devices"}
+
+
+def test_executor_handback_task_local_skips_and_chengjie_drains(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from src.host import executor as ex
+
+    tt = MagicMock()
+    tt.send_dm.return_value = True
+    with patch.object(ex, "_fresh_tiktok", return_value=tt), patch.object(ex, "_check_tiktok_version", lambda *a, **k: None):
+        monkeypatch.setattr(cj, "_load_yaml", lambda: CFG_LOCAL)
+        ok, msg, data = ex._execute_tiktok(MagicMock(), "DEV-A", cj.TASK_HANDBACK, {})
+        assert ok is True and data["skipped"] == "not_chengjie" and not tt.send_dm.called
+        monkeypatch.setattr(cj, "_load_yaml", lambda: CFG_CJ)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_http(cfg, method, path, *, query="", body=None, http=None):
+            calls.append((method, path))
+            if path == cj.HANDBACK_PATH:
+                return 200, {"ok": True, "items": [{"id": 3, "username": "buyer_1", "text": "hello"}]}
+            return 200, {"ok": True}
+
+        monkeypatch.setattr(cj, "_http", fake_http)
+        ok, msg, data = ex._execute_tiktok(MagicMock(), "DEV-A", cj.TASK_HANDBACK, {})
+        assert ok is True and data["chengjie_handback"]["sent"] == 1
+        tt.send_dm.assert_called_once_with("buyer_1", "hello")
+        assert [p for _, p in calls] == [cj.DEVICES_PATH, cj.HANDBACK_PATH, cj.HANDBACK_ACK_PATH]
+    assert ex._TASK_TYPE_TIMEOUTS[cj.TASK_HANDBACK] == 300
+    from src.host.schemas import TaskType
+    assert TaskType(cj.TASK_HANDBACK).value == cj.TASK_HANDBACK

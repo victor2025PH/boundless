@@ -199,6 +199,7 @@ _TASK_TYPE_TIMEOUTS = {
     "tiktok_follow_up": 600,                       # 10 min max (30 leads × ~20s each)
     "tiktok_auto": 7200,                           # 120 min max (warmup 50m + follow + extra warmup + chat)
     "tiktok_send_dm": 120,                         # 2 min max
+    "tiktok_chengjie_handback": 300,               # 5 min max (TK-3: handback_limit≤5 条 × 真机 send_dm)
     "tiktok_status": 60,                           # 1 min max
     "tiktok_scan_username": 120,                   # 2 min max
     "tiktok_follow_user": 300,                     # 5 min max
@@ -5811,6 +5812,17 @@ def _execute_tiktok(manager, resolved, task_type, params):
     elif task_type == "tiktok_auto":
         result = _execute_tiktok_auto(tt, manager, resolved, params)
         return True, "", result
+
+    elif task_type == "tiktok_chengjie_handback":
+        # TK-3：独立认领任务——智聊队列有待发才由轮询器建（不再只挂 check_inbox 尾部）。local 模式 → 直接 skipped。
+        from src.app_automation.tiktok_chengjie_bridge import (
+            bind_device as _cj_bind, drain_handback as _cj_drain, is_chengjie as _cj_on)
+        if not _cj_on():
+            return True, "", {"skipped": "not_chengjie", "device_id": resolved}
+        _cj_bind(resolved)
+        _hb = _cj_drain(device_id=resolved, send_dm=lambda recip, msg: tt.send_dm(recip, msg))
+        _ok = bool(_hb.get("ok"))
+        return _ok, ("" if _ok else f"智聊回传认领失败: {_hb.get('error') or 'unknown'}"), {"chengjie_handback": _hb, "device_id": resolved}
 
     elif task_type == "tiktok_status":
         tracker = _get_leads_tracker()
