@@ -76,7 +76,8 @@ def test_frontend_fixed_plats_match_login_channels():
     src = _INBOX_TPL.read_text(encoding="utf-8")
     m = re.search(r"const FIXED_PLATS *= *\[([^\]]*)\]", src)
     assert m, "unified_inbox.html 里找不到 FIXED_PLATS 定义"
-    fixed = set(re.findall(r"'([a-z]+)'", m.group(1)))
+    # 平台键可含下划线（wechat_kf，实施97）——与 test_inbox_platform_rail 的解析同口径
+    fixed = set(re.findall(r"'([a-z_]+)'", m.group(1)))
     login_platforms = {ch.login_platform for ch in CHANNELS if ch.login_platform}
     official_only = {ch.official_platform for ch in CHANNELS if ch.official_platform}
     assert fixed == (login_platforms | official_only), (
@@ -88,7 +89,7 @@ def test_frontend_connect_deeplink_plats_are_supported():
     src = _INBOX_TPL.read_text(encoding="utf-8")
     m = re.search(r"_CONNECT_PLATS *= *new Set\(\[([^\]]*)\]", src)
     assert m, "unified_inbox.html 里找不到 _CONNECT_PLATS 定义"
-    plats = set(re.findall(r"'([a-z]+)'", m.group(1)))
+    plats = set(re.findall(r"'([a-z_]+)'", m.group(1)))
     assert plats <= SUPPORTED
 
 

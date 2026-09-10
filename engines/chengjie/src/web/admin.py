@@ -605,6 +605,11 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         _line_exempt = getattr(request.app.state, "line_webhook_path", None)
         if _line_exempt and request.url.path == _line_exempt:
             return await call_next(request)
+        # 微信客服（企微）回调：企微服务器 POST 加密 XML，路由自带 msg_signature（SHA1 token）验签，不借用任何会话
+        # 权限——CSRF 威胁模型不适用（实施97；此前只被带 cookie 的测试客户端掩盖，经中继转来的真回调会被拦成 403）。
+        _wxkf_exempt = getattr(request.app.state, "wechat_kf_callback_path", None)
+        if _wxkf_exempt and request.url.path == _wxkf_exempt:
+            return await call_next(request)
         cookie_tok = request.cookies.get("csrf_token", "")
         header_tok = request.headers.get("X-CSRF-Token", "")
         if cookie_tok and header_tok and hmac.compare_digest(cookie_tok, header_tok):
@@ -1467,6 +1472,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         _log_au.getLogger("admin").warning(
             "auth_user 路由注册失败", exc_info=True
         )
+
+    # ── 企业微信成员扫码登录（实施97 P1：wecom_login.enabled 才会在登录页出现按钮；恒注册） ──
+    try:
+        from src.web.routes.wecom_login_routes import register_wecom_login_routes
+
+        register_wecom_login_routes(app, user_store=user_store, config_manager=config_manager,
+                                    templates=templates)
+    except Exception:
+        import logging as _log_ww
+
+        _log_ww.getLogger("admin").debug("企业微信登录路由注册跳过", exc_info=True)
 
     # ── C0-1 授权状态只读 API ──────────────────────────────
     try:
@@ -3768,6 +3784,28 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_zalo
 
         _log_zalo.getLogger("admin").debug("Zalo Webhook 注册跳过", exc_info=True)
+
+    # ── 微信客服（企业微信）回调（实施97 线 A；未配回调即纯轮询，不注册） ──
+    try:
+        from src.integrations.wechat_kf_webhook import (
+            register_wechat_kf_routes, register_wechat_kf_session_routes,
+        )
+
+        register_wechat_kf_routes(app, config_manager)
+        # 会话状态动作（转企微人工 / 结束会话 / 查状态）——坐席鉴权，恒注册（无 worker 时 409）
+        register_wechat_kf_session_routes(app, _api_auth)
+        # 五步接入向导后端（出站 IP / 凭证测试 / 客服账号 / 绑定 / 客户二维码 / AI 接待）——主管专属
+        from src.web.routes.wechat_kf_setup_routes import register_wechat_kf_setup_routes
+
+        register_wechat_kf_setup_routes(app, _api_auth)
+        # 个人微信 PC 副驾接入引导后端（环境检测 / 档位与风险确认）
+        from src.web.routes.wechat_pc_setup_routes import register_wechat_pc_setup_routes
+
+        register_wechat_pc_setup_routes(app, _api_auth)
+    except Exception:
+        import logging as _log_wxkf
+
+        _log_wxkf.getLogger("admin").debug("微信客服回调注册跳过", exc_info=True)
 
     # ── QQ 机器人（QQ 开放平台官方 API）Webhook（2026-09-07 QQ 双轨·官方轨） ──
     # WebSocket 网关由编排器里的 QQBotOfficialWorker 拉起；这里只挂 HTTPS 回调

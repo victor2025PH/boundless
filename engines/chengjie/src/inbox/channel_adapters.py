@@ -987,7 +987,44 @@ async def _send_via_adapters_inner(
             # 让「编排器漏接」在看板可见（回落率高=该查 worker ownership），而非崩了才知道。
             _record_send_route(platform, "adapter")
             return await adapter.send(request, account_id, chat_key, text)
+    # 实施97 线 B：无 worker、无适配器的 ``mode=desktop`` 账号（个人微信 PC 副驾等由外部驱动进程
+    # 收发的桥接账号）→ 以 kind=manual 落受控出站队列，由驱动认领、守卫发送、回执。
+    # enqueue() 内建 Kill-Switch/发送闸门；桥未开或账号非 desktop → 维持旧 400。
+    _queued = _enqueue_desktop_bridge(request, platform, account_id, chat_key, text)
+    if _queued is not None:
+        _record_send_route(platform, "desktop_bridge")
+        return _queued
     raise ChannelSendError(400, f"不支持的平台: {platform}")
+
+
+def _enqueue_desktop_bridge(request: Any, platform: str, account_id: str, chat_key: str,
+                            text: str) -> Optional[Dict[str, Any]]:
+    """desktop 桥接账号的人工发送 → 受控出站队列（kind=manual）。不适用返回 None；绝不抛。"""
+    try:
+        cm = getattr(request.app.state, "config_manager", None)
+        cfg = (getattr(cm, "config", None) or {}) if cm is not None else {}
+        bridge = ((((cfg.get("inbox") or {}).get("l2_autosend") or {}).get("desktop_bridge")) or {})
+        if not bridge.get("enabled"):
+            return None
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get(platform, account_id) or {}
+        if str(row.get("mode") or "") != "desktop":
+            return None
+        from src.inbox.desktop_outbound import get_desktop_outbound_queue
+        from src.inbox.normalizer import conv_id
+        res = get_desktop_outbound_queue().enqueue(
+            platform, account_id, chat_key, text, kind="manual",
+            conversation_id=conv_id(platform, account_id, chat_key), config=cfg)
+        if not res.get("enqueued"):
+            raise ChannelSendError(409, f"desktop bridge blocked: {res.get('blocked') or 'enqueue_failed'}",
+                                   reason_code=str(res.get("blocked") or "enqueue_failed"))
+        return {"delivered": True, "queued": True, "queue_id": res.get("id"),
+                "message_id": f"dq-{res.get('id')}"}
+    except ChannelSendError:
+        raise
+    except Exception:
+        logger.debug("[send] desktop bridge 回落异常（按不适用处理）", exc_info=True)
+        return None
 
 
 def _record_send_route(platform: str, route: str) -> None:

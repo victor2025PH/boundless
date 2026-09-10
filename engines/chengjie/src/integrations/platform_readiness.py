@@ -88,6 +88,9 @@ _IMPLEMENTED_MODES = {
     ("qqbot", "official"),
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；默认关、准入区）
     ("qq", "protocol"),
+    # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：独立平台，唯一形态 official
+    # （企微自建应用凭证经向导）；个人微信 PC 副驾是另一个平台 wechat（mode=pcui，准入区）。
+    ("wechat_kf", "official"),
 }
 
 

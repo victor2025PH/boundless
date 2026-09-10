@@ -253,15 +253,21 @@ def _registry_active_map(request: Request) -> Dict[tuple, Dict[str, str]]:
     由它按「是否已在 platform_status」决定要不要补桶（desktop / registered）。
     查不到一律空 map（回落旧行为：这类号继续按 history_only 展示，不比修前更糟）。
     """
-    out: Dict[tuple, Dict[str, str]] = {}
+    out: Dict[tuple, Dict[str, Any]] = {}
     try:
         from src.integrations.account_registry import get_account_registry
+        from src.web.desktop_bridge_presence import bridge_presence
         for a in (get_account_registry().list() or []):   # 默认不含 removed
             if str(a.get("status") or "") == "offline":
                 continue   # 已登出走 _account_status_map 的 logged_out 桶
             key = (str(a.get("platform") or ""), str(a.get("account_id") or ""))
-            out[key] = {"mode": str(a.get("mode") or ""),
-                        "label": str(a.get("label") or "")}
+            info: Dict[str, Any] = {"mode": str(a.get("mode") or ""),
+                                    "label": str(a.get("label") or "")}
+            # 桥接驱动（PC 副驾）心跳 → 工作台能看出驱动进程是否还活着（实施97 线 B）
+            pres = bridge_presence(a.get("meta") if isinstance(a.get("meta"), dict) else None)
+            if pres:
+                info["bridge"] = pres
+            out[key] = info
     except Exception:
         return {}
     return out

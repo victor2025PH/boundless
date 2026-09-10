@@ -37,23 +37,33 @@ from typing import Any, Dict
 # 把这个漏报固化成「小智也说不支持」，所以这里以代码为准；话术那边属产品/销售
 # 侧决策，已在交付说明里点名。
 SUPPORTED_CHANNELS = ("Telegram", "WhatsApp", "LINE", "Facebook Messenger",
-                      "Instagram", "Zalo", "QQ 机器人", "QQ 个人号（协议登录）", "官网网页聊天")
+                      "Instagram", "Zalo", "QQ 机器人", "QQ 个人号（协议登录）", "微信客服（企业微信）", "官网网页聊天")
 # 事实卡里的渠道叫法 → 代码平台键（门禁 test_product_facts 据此核对「声称的能力在代码里
 # 真实存在」；能按小写/去 "Facebook " 前缀直接对上的不必登记）。
 CHANNEL_PLATFORM_KEYS = {
     "QQ 机器人": "qqbot",
     "QQ 个人号（协议登录）": "qq",
+    "微信客服（企业微信）": "wechat_kf",
 }
 # 明确**不支持**的平台：说不支持比含糊其辞有用得多，也防销售侧谎称支持。
 # 「QQ 个人号（协议登录）」＝用自己的 QQ 号登录那条路（用户自装 NapCat / LLOneBot / Lagrange
 # 协议端、经 Milky 接口；非官方接入、准入区），与「QQ 机器人」（QQ 开放平台官方 API）是两个渠道。
-UNSUPPORTED_CHANNELS = ("微信", "淘宝", "抖音", "小红书")
+# 「个人微信」：不作为**自动聊天渠道**接入（没有官方接口，封号 + 法律风险），所以留在这张表里；
+# 但实施97 线 B 提供了「PC 副驾」——读取电脑上已登录的微信、AI 给建议、半自动按批准代发、全自动
+# 需风险确认，属读屏辅助而非渠道接入。边界说明见下面 _CHANNEL_CAVEATS_*，小智答「个人微信」时两句话都要说。
+UNSUPPORTED_CHANNELS = ("个人微信", "淘宝", "抖音", "小红书")
 # 已支持渠道的边界说明（常驻注入；用户问「QQ 机器人能主动发消息吗」这类必须答得准）
 _CHANNEL_CAVEATS_ZH = (
     "QQ 机器人（QQ 开放平台官方 API）只能被动回复：单聊每条来话 60 分钟内最多回 4 条、"
     "群里默认只收 @机器人 的消息、不支持主动消息；发图/语音属下一批次。"
     "QQ 个人号（协议登录）需要用户自己安装 QQ 协议端（NapCat / LLOneBot / Lagrange，Milky 协议），"
     "属非官方接入、有风控风险，建议小号 + 固定 IP；能力与 Telegram 协议号相当，但无「正在输入」。"
+    "微信客服（企业微信官方 API）需要客户自己的企业微信（自建应用 CorpID/Secret），"
+    "微信用户扫客服二维码即可咨询、不用加好友；客户最后一条消息后 48 小时内最多回 5 条、"
+    "不能主动发起会话、无正在输入/已读回执，AI 身份披露在该渠道恒开。"
+    "个人微信不作为自动聊天渠道接入（无官方接口，有封号与法律风险），但提供「PC 副驾」：读取电脑上"
+    "已登录的微信 4.x 窗口，把消息同步进工作台、AI 给建议；半自动档只发坐席批准的回复，全自动档需"
+    "在引导页确认风险；仅 Windows，接入流程在工作台「账号管理 → 个人微信 · PC 副驾」。"
 )
 _CHANNEL_CAVEATS_EN = (
     "QQ Bot (QQ Open Platform official API) is passive-only: at most 4 replies within "
@@ -63,6 +73,14 @@ _CHANNEL_CAVEATS_EN = (
     "(NapCat / LLOneBot / Lagrange via the Milky protocol); it is unofficial with risk-control "
     "exposure (use a secondary account plus a fixed IP) and matches Telegram protocol accounts "
     "except for typing indicators. "
+    "WeChat Customer Service (WeCom official API) needs the customer's own WeCom "
+    "(self-built app CorpID/Secret); WeChat users scan the service QR to chat without "
+    "adding a friend; at most 5 replies within 48 hours after the customer's last message, "
+    "no proactive conversations, no typing/read receipts, and AI disclosure is always on. "
+    "Personal WeChat is not an auto-chat channel (no official API; ban and legal risk), but a "
+    "\"PC copilot\" is available: it reads the signed-in WeChat 4.x window on the PC, mirrors messages "
+    "into the workspace and drafts suggestions; semi-auto sends only agent-approved replies, full-auto "
+    "requires a risk acknowledgement in the guide; Windows only, set up under Accounts → Personal WeChat · PC copilot."
 )
 
 _FACTS_ZH = f"""【本产品是什么】

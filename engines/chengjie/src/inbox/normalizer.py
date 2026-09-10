@@ -51,6 +51,9 @@ PLATFORM_DISPLAY = {
     "whatsapp": "WhatsApp",
     "messenger": "Messenger",
     "telegram": "Telegram",
+    # 微信客服（企业微信官方通道，实施97）：不加则 platform.title() 渲成「Wechat_Kf」；
+    # 与其它条目一样用语言中立的英文品牌名（工作台 PN 表同名，UI 语种切换不混语）
+    "wechat_kf": "WeChat Service",
 }
 
 

@@ -25,6 +25,8 @@
     // 刻意不互为别名——身份空间（QQ 号 vs openid）与合规归属都不同，图标也必须一眼可辨。
     tencentqq: "qq", qq_protocol: "qq",
     qq_bot: "qqbot", "qq-bot": "qqbot", qqofficial: "qqbot", qq_official: "qqbot",
+    // 微信客服（企业微信官方通道，实施97）复用 WeChat 字形：终端客户看到的都是微信
+    wechat_kf: "wechat", wxkf: "wechat", weixin: "wechat",
     inbox: "web", website: "web", widget: "web"
   };
 

@@ -26,7 +26,12 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # 编排器接管的官方平台（platform 与 RPA/Kill-Switch 作用域命名保持一致）
-OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot")
+OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot", "wechat_kf")
+#: 有**专属有状态 worker** 的官方平台（不由本模块的无状态 OfficialApiWorker 服务）：
+#: 微信客服（实施97）要 sync_msg 游标轮询 + token 自管 → src/integrations/wechat_kf_worker.py 自行
+#: register_worker。列在 OFFICIAL_PLATFORMS 里是为了渠道向导/一致性门禁把它当官方通道对待，
+#: register_official_workers 对这些平台跳过，免得抢注一个 start() 必抛的空壳。
+DEDICATED_WORKER_PLATFORMS = frozenset({"wechat_kf"})
 
 
 def _meta(account: Dict[str, Any]) -> Dict[str, Any]:
@@ -520,6 +525,8 @@ def register_official_workers(config: Dict[str, Any]) -> None:
         get_worker_factory, register_worker,
     )
     for platform in OFFICIAL_PLATFORMS:
+        if platform in DEDICATED_WORKER_PLATFORMS:
+            continue
         try:
             if official_enabled(config, platform) and get_worker_factory(platform, "official") is None:
                 register_worker(platform, "official", official_worker_factory(platform))
@@ -532,5 +539,5 @@ __all__ = [
     "OfficialApiWorker", "QQBotOfficialWorker", "official_worker_factory",
     "official_enabled", "official_pipeline_enabled",
     "register_official_workers", "dest_from_chat_key", "OFFICIAL_PLATFORMS",
-    "OFFICIAL_MEDIA_URL_PLATFORMS", "official_send_caps",
+    "DEDICATED_WORKER_PLATFORMS", "OFFICIAL_MEDIA_URL_PLATFORMS", "official_send_caps",
 ]

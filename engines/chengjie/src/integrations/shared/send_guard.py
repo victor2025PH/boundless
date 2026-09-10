@@ -109,6 +109,19 @@ def send_blocked(
             return True, f"kill_switch:{scope or 'global'}"
     except Exception:
         pass
+    # 1.5) 平台窗口配额（实施97 线 A，仅 wechat_kf 等 QUOTA_WINDOW_PLATFORMS）：微信客服
+    #      「客户最后一条后 48h 内最多 5 条」是确定性硬规则——超了发出去也只会收到
+    #      msg_send_fail 事件，坐席却以为已送达。这里按本地记账判定，非配额平台零成本早退。
+    try:
+        from src.inbox.kf_window_guard import send_block_reason as _kf_block
+        _kf_reason = _kf_block(p, a, str(chat_key or ""), origin=str(origin or "auto"),
+                               config=config)
+        if _kf_reason:
+            if notify:
+                _record_block(p, a, f"{_kf_reason}|{origin}")
+            return True, _kf_reason
+    except Exception:
+        pass
     # 2) 金丝雀放量（仅 ops.canary.enabled 时；默认关 → 零破坏）：不在 cohort → hold
     try:
         from src.ops.canary import is_held as _canary_held

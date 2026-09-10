@@ -237,6 +237,111 @@ GUIDES: Dict[str, Dict[str, Any]] = {
         "links": [("官网下单", "Order page", "https://bd2026.cc/order")],
         "eta": ("人民币通道：以官网公告为准", "CNY channel: see website announcements"),
     },
+    # ── 实施97 线 A：微信客服（企业微信官方通道）──────────────────────────────
+    "wechat_kf": {
+        "title": ("微信客服（企业微信）接入", "WeChat Customer Service (WeCom) onboarding"),
+        "intro": (
+            "微信用户扫你的客服二维码或点客服链接即可咨询，不用加好友；用你自己企业的企业微信，填自建应用凭证即接通，"
+            "不需要扫码授权。智聊工作台里有五步引导页（/workspace/connect/wechat_kf），本页是规则与排障速查。",
+            "Any WeChat user can scan your service QR or tap the service link to chat—no friend request. Connect with your own "
+            "WeCom self-built app credentials (no QR authorization). The workspace has a 5-step guide "
+            "(/workspace/connect/wechat_kf); this page is the rules and troubleshooting reference.",
+        ),
+        "prereq": [
+            ("企业微信管理员账号（能进「应用管理」和「微信客服」）", "A WeCom admin account (access to Apps and WeChat Customer Service)"),
+            ("运行智聊的机器有公网出口（其出站 IP 要填进应用「可信 IP」）", "The machine running ChatX has an internet egress IP (added to the app's trusted IP list)"),
+        ],
+        "steps": [
+            ("创建自建应用", "Create a self-built app",
+             "企微管理后台 → 应用管理 → 自建 → 创建应用；记下 AgentId 与 Secret；「我的企业 → 企业信息」记下企业 ID（CorpID，ww 开头）。",
+             "WeCom admin console → Apps → Self-built → Create; note the AgentId and Secret; copy the CorpID (starts with ww) from My Company → Company Info.",
+             "打开企微管理后台", "Open WeCom admin", "https://work.weixin.qq.com/wework_admin/frame#apps"),
+            ("授权应用管理微信客服", "Authorize the app for WeChat Customer Service",
+             "企微管理后台 → 微信客服 → 通过 API 管理微信客服账号（可调用接口的应用）→ 添加该自建应用，并勾选它可管理的客服账号（或稍后由智聊新建）。",
+             "Admin console → WeChat Customer Service → Manage via API (apps allowed to call the API) → add the self-built app and tick the service accounts it may manage (or let ChatX create one later).",
+             "微信客服后台", "Customer Service console", "https://work.weixin.qq.com/wework_admin/frame#/kf"),
+            ("配置可信 IP", "Set the trusted IP",
+             "自建应用详情 → 企业可信 IP → 添加智聊所在机器的出站公网 IP（引导页第 ① 步会自动检测并可一键复制）。宽带 IP 变化后要重填。",
+             "App details → Trusted IPs → add the public egress IP of the machine running ChatX (the guide detects it and offers one-click copy). Update it when the IP changes.",
+             "自建应用列表", "Self-built apps", "https://work.weixin.qq.com/wework_admin/frame#apps"),
+            ("在智聊填凭证并测试", "Enter credentials in ChatX and test",
+             "工作台 → 账号管理 → 微信客服 →「接入」→ 第 ② 步填 CorpID / Secret →「保存并测试连接」；三项检查全绿再进下一步。",
+             "Workspace → Accounts → WeChat Customer Service → Connect → step 2: enter CorpID / Secret → Save & test; proceed when all three checks pass.",
+             "打开引导页", "Open the guide", "/workspace/connect/wechat_kf"),
+            ("选客服账号、设 AI 接待、扫码自测", "Pick accounts, set AI reception, self-test",
+             "第 ③ 步勾选（或新建）客服账号并绑定；第 ④ 步选档位（推荐「AI 草稿我审」）、绑人设、填欢迎语；第 ⑤ 步用自己的微信扫二维码发一句话，10 秒内看到回复即成功。二维码可下载给客户。",
+             "Step 3: tick (or create) service accounts and bind; step 4: choose the tier (AI draft + review recommended), persona and welcome text; step 5: scan the QR with your own WeChat and send a message—an AI reply within 10 s means success. The QR is downloadable for customers.",
+             "打开引导页", "Open the guide", "/workspace/connect/wechat_kf"),
+        ],
+        "rules": [
+            ("客户每发一条消息，企业可在其后 48 小时内最多回 5 条；客户再发即重置。超窗/超条的发送会被平台丢弃，智聊会在用完前自动停发并等客户回复",
+             "After each customer message the business may send at most 5 replies within 48 h; a new customer message resets it. Over-limit sends are dropped by the platform; ChatX stops before the limit and waits"),
+            ("不能主动发起会话；没有「正在输入」和已读回执", "No proactive sessions; no typing indicator or read receipts"),
+            ("该渠道 AI 身份披露恒开（大陆法规），不可关闭", "AI identity disclosure is always on for this channel (mainland regulation) and cannot be disabled"),
+            ("语音消息平台只收 AMR；智聊会自动转码，转不了则回落文字", "Voice messages must be AMR; ChatX transcodes automatically or falls back to text"),
+        ],
+        "errors": [
+            ("40013", "CorpID 不正确", "CorpID is invalid", "到「我的企业 → 企业信息」复制以 ww 开头的企业 ID", "Copy the ww… CorpID from My Company → Company Info"),
+            ("40001 / 40014", "Secret 不正确或与企业不配对", "Secret invalid or mismatched", "在自建应用详情重新查看 Secret；重置过要重填", "Re-check the Secret in the app details; re-enter if it was reset"),
+            ("60020", "本机出站 IP 不在可信 IP 里", "Egress IP not in the trusted list", "把引导页检测到的 IP 加进「企业可信 IP」后重测", "Add the detected IP to Trusted IPs and retest"),
+            ("60011 / 95014", "应用没有该客服账号的管理权限", "App lacks permission for the service account", "到「微信客服 → 通过 API 管理」勾选可管理的客服账号", "Tick the manageable accounts under Manage via API"),
+            ("95013", "应用未被授权微信客服接口", "App not authorized for the Customer Service API", "把自建应用加入「可调用接口的应用」", "Add the self-built app to the allowed apps"),
+            ("701008", "接待人员未开通互通账号许可", "Agent lacks an interconnect license", "为接待人员购买/分配许可后再转人工", "Assign licenses before handing over to a human agent"),
+        ],
+        "links": [
+            ("企微管理后台", "WeCom admin console", "https://work.weixin.qq.com/wework_admin/frame#apps"),
+            ("微信客服开发文档", "WeChat Customer Service API docs", "https://developer.work.weixin.qq.com/document/path/94638"),
+        ],
+        "eta": ("约 10 分钟（有企微管理员权限）", "About 10 minutes (with WeCom admin rights)"),
+    },
+    # ── 实施97 线 B：个人微信 PC 副驾 ─────────────────────────────────────────
+    "wechat_pc": {
+        "title": ("个人微信 · PC 副驾使用流程", "Personal WeChat · PC copilot guide"),
+        "intro": (
+            "副驾读取你电脑上**已登录**的微信 4.x 窗口，把客户消息同步进智聊工作台，AI 给出建议；半自动档只发你在工作台批准的回复，"
+            "全自动档需先确认风险。它不是微信的官方接口，也不保存你的微信密码——微信退出登录、窗口最小化时它会停下并提醒你。",
+            "The copilot reads the already-signed-in WeChat 4.x window on your PC, mirrors customer messages into the ChatX workspace and "
+            "drafts suggestions; semi-auto sends only what you approve, full-auto requires a risk acknowledgement. It is not an official "
+            "WeChat API and never stores your password—if WeChat signs out or is minimized it pauses and alerts you.",
+        ),
+        "prereq": [
+            ("Windows 电脑 + 电脑版微信 4.0 以上（在电脑微信里扫码登录）", "Windows PC with WeChat for Windows 4.0+ (sign in by QR inside WeChat itself)"),
+            ("智聊后端在同一台电脑（或局域网可达）并有管理员令牌文件", "ChatX backend on the same PC (or reachable on LAN) and an admin token file"),
+        ],
+        "steps": [
+            ("安装并登录电脑微信", "Install and sign in to WeChat for Windows",
+             "从微信官网安装 4.x 版本，打开后用手机微信扫码并在手机上确认。窗口可以被其它窗口遮住，但**不要最小化**。",
+             "Install 4.x from the official site, scan the QR with your phone and confirm. The window may be covered by others but must not be minimized.",
+             "下载电脑版微信", "Download WeChat for Windows", "https://pc.weixin.qq.com/"),
+            ("启动副驾", "Start the copilot",
+             "工作台 → 账号管理 → 「个人微信 · PC 副驾」→ 查看接入流程 → 第 ③ 步复制启动命令，在 PowerShell 运行；要开机自启就用自启命令注册计划任务。",
+             "Workspace → Accounts → Personal WeChat · PC copilot → view guide → step 3: copy the start command and run it in PowerShell; use the autostart command to register a scheduled task.",
+             "打开引导页", "Open the guide", "/workspace/connect/wechat_pc"),
+            ("选择档位", "Choose a tier",
+             "只读建议：只同步消息、AI 给建议；半自动：只发你在工作台批准的回复；全自动：AI 直接代发——需在第 ④ 步勾选风险知情同意。改档后重启副驾生效。",
+             "Read-only: mirror messages and suggest; Semi-auto: send only what you approve; Full-auto: AI replies directly—requires the risk acknowledgement in step 4. Restart the copilot after changing.",
+             "打开引导页", "Open the guide", "/workspace/connect/wechat_pc"),
+            ("确认在线并发一条测试", "Confirm online and send a test",
+             "账号卡显示「● 副驾在线」后，用另一个微信号给这个号发一句话，几秒后出现在工作台；同名联系人会按微信号自动区分。",
+             "Once the card shows “● copilot online”, message this account from another WeChat; it appears in the workspace within seconds. Same-name contacts are separated by WeChat ID.",
+             "打开工作台", "Open the workspace", "/workspace"),
+        ],
+        "rules": [
+            ("默认只回复给你发过消息的人；日发送有上限（新号预热期更低），仅在设定的工作时段发送", "Replies only to people who messaged you; daily send caps (lower during warm-up); sends only within work hours"),
+            ("群聊默认只在被 @ 时回复；系统号（微信团队、文件传输助手等）永不读写", "Groups: reply only when mentioned; system accounts (WeChat Team, File Transfer…) are never read or written"),
+            ("每次发送前核对会话标题与同名联系人的微信号，发错人风险为零容忍；对方正在输入时不抢话", "Every send verifies the chat title and the WeChat ID of same-name contacts; it waits while the other side is typing"),
+            ("这是读屏辅助而非官方接口：微信改版可能需要更新锚点；账号安全责任由使用者承担", "Screen-reading assistance, not an official API: WeChat UI updates may require anchor updates; account safety is the user's responsibility"),
+        ],
+        "errors": [
+            ("副驾离线", "账号卡显示「副驾离线 N 分」", "Card shows “copilot offline N min”", "驱动进程未运行：重新运行启动命令，或检查计划任务", "Driver not running: rerun the start command or check the scheduled task"),
+            ("消息没进来", "客户发了消息，工作台没有", "Customer messaged but nothing arrived", "微信窗口是否最小化（要还原）；对方是否系统号；副驾是否在线", "Is the WeChat window minimized (restore it)? Is the sender a system account? Is the copilot online?"),
+            ("回复没发出", "工作台已发送，微信没出现", "Sent in workspace but not in WeChat", "档位是否只读；是否在工作时段；是否超日配额；守卫是否冻结（10 分钟后自动恢复）", "Read-only tier? Outside work hours? Daily cap hit? Guard frozen (auto-recovers in 10 min)?"),
+            ("手机确认", "微信弹出「在手机上确认」", "WeChat asks to confirm on the phone", "在手机微信上确认；期间副驾暂停发送", "Confirm on the phone; the copilot pauses sending meanwhile"),
+            ("微信升级", "微信更新后副驾读不到消息", "Copilot stops reading after a WeChat update", "运行 tools\\wechat_pc_probe.py 复核锚点并升级智聊", "Run tools\\wechat_pc_probe.py to re-check anchors and update ChatX"),
+        ],
+        "links": [("电脑版微信", "WeChat for Windows", "https://pc.weixin.qq.com/")],
+        "eta": ("约 5 分钟", "About 5 minutes"),
+    },
 }
 
 SLUGS = tuple(GUIDES.keys())
@@ -287,6 +392,8 @@ def howto_tuples() -> List[tuple]:
         "douyin": "抖音 企业号 小程序 能力实验室 私信 接入 申请 douyin mini-program capability lab webhook 蓝V",
         "tiktok": "tiktok 接入 申请 business messaging business account shop 客服 partner center 地区 region",
         "payment-cny": "付款 支付 人民币 微信支付 支付宝 充值 usdt 美元 发票 对公 price pay cny rmb payment invoice",
+        "wechat_kf": "微信客服 企业微信 企微 接入 corpid secret 可信ip 客服账号 二维码 48小时 5条 wecom kf customer service",
+        "wechat_pc": "个人微信 电脑微信 副驾 pc 读屏 半自动 全自动 只读 风险 启动 离线 心跳 wechat copilot desktop",
     }
     titles = {
         "douyin": ("怎么接入抖音 / 抖音企业版怎么申请（小程序与能力实验室）",
@@ -295,6 +402,10 @@ def howto_tuples() -> List[tuple]:
                    "How to connect TikTok (Business Messaging / Shop customer service)"),
         "payment-cny": ("怎么付款 / 支持人民币吗 / 微信支付宝能付吗",
                         "How do I pay / is CNY supported / WeChat Pay or Alipay"),
+        "wechat_kf": ("怎么接入微信客服 / 企业微信怎么接 / 客户扫码怎么聊",
+                      "How to connect WeChat Customer Service / WeCom / customer QR chat"),
+        "wechat_pc": ("个人微信怎么用 / PC 副驾怎么启动 / 副驾离线怎么办",
+                      "How to use personal WeChat / start the PC copilot / copilot offline"),
     }
     out: List[tuple] = []
     for slug in SLUGS:

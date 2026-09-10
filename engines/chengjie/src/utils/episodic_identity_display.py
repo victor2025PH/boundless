@@ -38,6 +38,7 @@ logger = logging.getLogger("ai_chat_assistant.episodic_identity")
 KNOWN_PLATFORMS: Tuple[str, ...] = (
     "telegram", "whatsapp", "line", "messenger", "instagram", "zalo", "qqbot",
     "qq",
+    "wechat_kf",   # 微信客服（企业微信官方通道，实施97 线 A）
 )
 
 # 群成员键 peer 段：``<gid>_<uid>``（telegram 群 id 可为负数；uid 纯数字）。

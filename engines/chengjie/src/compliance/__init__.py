@@ -24,6 +24,27 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
+#: **平台级强制合规**（实施97，2026-09-07）：这些平台上披露与诚实身份**恒开且不可配置**。
+#: 微信客服跑在中国大陆法域——《人工智能生成合成内容标识办法》（2025-09-01 施行）与腾讯
+#: 平台条款都要求 AI 身份可识别；人设模板普遍 ``deny_ai=true``（「坚称真人」）在这类平台
+#: 上是法律红线而非产品选项。运营方的 ``compliance.disclosure.*`` 开关只对其余平台生效。
+FORCED_COMPLIANCE_PLATFORMS = frozenset({"wechat_kf"})
+
+
+def platform_forces_compliance(platform: Any) -> bool:
+    """该平台是否强制披露 + 诚实身份（纯函数，绝不抛）。"""
+    try:
+        return str(platform or "").strip().lower() in FORCED_COMPLIANCE_PLATFORMS
+    except Exception:
+        return False
+
+
+def platform_of_conversation_key(key: Any) -> str:
+    """``platform:account_id:chat_key`` 会话键 → platform（无冒号返回空串）。"""
+    s = str(key or "")
+    return s.split(":", 1)[0].strip().lower() if ":" in s else ""
+
+
 def compliance_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     try:
         c = (config or {}).get("compliance")
@@ -37,16 +58,20 @@ def _disclosure_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return d if isinstance(d, dict) else {}
 
 
-def notice_enabled(config: Optional[Dict[str, Any]]) -> bool:
-    """系统级披露开关（``compliance.disclosure.notice``，基线 false）。"""
+def notice_enabled(config: Optional[Dict[str, Any]], platform: str = "") -> bool:
+    """系统级披露开关（``compliance.disclosure.notice``，基线 false）；强制平台恒 True。"""
+    if platform and platform_forces_compliance(platform):
+        return True
     try:
         return bool(_disclosure_cfg(config).get("notice"))
     except Exception:
         return False
 
 
-def honest_identity_enabled(config: Optional[Dict[str, Any]]) -> bool:
-    """对话内如实承认开关（``compliance.disclosure.honest_identity``，基线 false）。"""
+def honest_identity_enabled(config: Optional[Dict[str, Any]], platform: str = "") -> bool:
+    """对话内如实承认开关（``compliance.disclosure.honest_identity``，基线 false）；强制平台恒 True。"""
+    if platform and platform_forces_compliance(platform):
+        return True
     try:
         return bool(_disclosure_cfg(config).get("honest_identity"))
     except Exception:
@@ -69,6 +94,9 @@ def crisis_protocol_url(config: Optional[Dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "FORCED_COMPLIANCE_PLATFORMS",
+    "platform_forces_compliance",
+    "platform_of_conversation_key",
     "compliance_cfg",
     "notice_enabled",
     "honest_identity_enabled",

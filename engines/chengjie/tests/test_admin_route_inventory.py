@@ -1976,6 +1976,8 @@ _ADDITIONS_2026_09_08_WECHAT_CONNECT_GUIDE = """
 /login/wecom	GET
 /login/wecom/callback	GET
 /api/auth/wecom/status	GET
+/api/auth/wecom/verify-file	POST
+/WW_verify_{code}.txt	GET
 """
 _BASELINE += _ADDITIONS_2026_09_08_WECHAT_CONNECT_GUIDE
 

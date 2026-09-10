@@ -214,6 +214,53 @@ def test_orchestrator_worker_transient_is_yellow(monkeypatch):
     assert len(hits) == 1 and hits[0]["light"] == "yellow"  # restarts<3
 
 
+def test_bridge_driver_heartbeat_loss_alerts_via_orchestrator_worker_channel(monkeypatch, tmp_path):
+    """实施97 线 B：PC 副驾心跳过期 → 并入 orchestrator_worker_alert（无编排器的部署也要能报）；心跳恢复 → 恢复通知。"""
+    import time as _t
+    published = _patch_bus(monkeypatch)
+    import src.integrations.account_orchestrator as ao
+    monkeypatch.setattr(ao, "get_orchestrator_if_running", lambda: None)
+    from src.integrations import account_registry as ar
+    from src.web.desktop_bridge_presence import heartbeat_meta
+    reg = ar.AccountRegistry(tmp_path / "reg.db")
+    monkeypatch.setattr(ar, "_registry", reg)
+    wd = _wd(monkeypatch)
+    # 无桥接账号：和以前一样静默
+    wd._check_orchestrator_workers()
+    assert not [1 for t, _ in published if t == "orchestrator_worker_alert"]
+    # 心跳新鲜：不报
+    reg.upsert("wechat", "wxpc-1", mode="desktop", label="个人微信 · PC 副驾", status="online",
+               meta={"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "copilot"})})
+    wd._check_orchestrator_workers()
+    assert not [1 for t, _ in published if t == "orchestrator_worker_alert"]
+    # 只读档心跳 4 分钟前 → warn（yellow）告警一次，含账号名与人话
+    reg.upsert("wechat", "wxpc-1", meta={"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "pcui", "tier": "copilot"}, now=_t.time() - 240)}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    wd._check_orchestrator_workers()   # 同签名不重复
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 1 and hits[0]["light"] == "yellow" and hits[0]["recovered"] is False
+    p = hits[0]["problems"][0]
+    assert p["id"] == "wechat:wxpc-1" and p["kind"] == "bridge_offline" and "个人微信 · PC 副驾" in p["name"]
+    assert "4 分钟无心跳" in p["detail"] and "只读建议" in p["detail"]
+    # 半自动档（该发消息的）断了 → 直接 fail（red），签名变了再报一次
+    reg.upsert("wechat", "wxpc-1", meta={"bridge_heartbeat": heartbeat_meta(
+        {"bridge": "pcui", "tier": "semi"}, now=_t.time() - 240)}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 2 and hits[1]["light"] == "red"
+    # 运营把账号登出 → 不再算问题 → 恢复通知
+    reg.set_status("wechat", "wxpc-1", "offline")
+    wd._check_orchestrator_workers()
+    hits = [d for t, d in published if t == "orchestrator_worker_alert"]
+    assert len(hits) == 3 and hits[2]["recovered"] is True
+    # 心跳回来（重新在线）→ 不报；再断 → 再报
+    reg.upsert("wechat", "wxpc-1", status="online",
+               meta={"bridge_heartbeat": heartbeat_meta({"bridge": "pcui", "tier": "semi"})}, merge_meta=True)
+    wd._check_orchestrator_workers()
+    assert len([1 for t, _ in published if t == "orchestrator_worker_alert"]) == 3
+
+
 def test_orchestrator_worker_alert_in_sse_whitelists():
     """P9：worker 告警须在 SSE 流白名单 + 通知中心白名单，否则前端 EventSource 收不到。"""
     from src.web.routes.unified_inbox_realtime_routes import (

@@ -8,16 +8,25 @@
 惰性读取。provider 未注册（单测 / legacy 装配 / CLI）＝一律 False，行为与
 合规模式不存在时逐字节一致。
 
+**平台作用域**（实施97，2026-09-07）：微信客服等 ``FORCED_COMPLIANCE_PLATFORMS`` 上
+披露/诚实身份**恒开**。同样为了不把 platform 穿透十几个签名，用 ``contextvars``：
+出稿入口（``persona_reply.generate_persona_reply``）以 :func:`platform_scope` 打标，
+链路内所有 ``honest_identity_active()`` / ``notice_active()`` 读到即生效——asyncio 任务
+与 ``asyncio.to_thread`` 都会拷贝上下文，prompt 组装/出站守卫无需改签名。
+
 绝不抛：任何异常按「开关关」处理——合规读取面自身故障不得影响出话链。
 """
 from __future__ import annotations
 
+import contextvars
 import logging
-from typing import Any, Callable, Dict, Optional
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
 _PROVIDER: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
+_PLATFORM: contextvars.ContextVar[str] = contextvars.ContextVar("compliance_platform", default="")
 
 
 def set_config_provider(fn: Callable[[], Optional[Dict[str, Any]]]) -> None:
@@ -39,18 +48,42 @@ def runtime_config() -> Dict[str, Any]:
         return {}
 
 
+@contextmanager
+def platform_scope(platform: Any) -> Iterator[None]:
+    """把「当前在为哪个平台出稿/出站」放进上下文（嵌套安全；空值＝不改变现状）。"""
+    p = str(platform or "").strip().lower()
+    if not p:
+        yield
+        return
+    token = _PLATFORM.set(p)
+    try:
+        yield
+    finally:
+        try:
+            _PLATFORM.reset(token)
+        except Exception:
+            pass
+
+
+def current_platform() -> str:
+    try:
+        return _PLATFORM.get()
+    except Exception:
+        return ""
+
+
 def honest_identity_active() -> bool:
-    """``compliance.disclosure.honest_identity`` 实时值（缺 provider 恒 False）。"""
+    """``compliance.disclosure.honest_identity`` 实时值（缺 provider 恒 False；强制平台恒 True）。"""
     from src.compliance import honest_identity_enabled
 
-    return honest_identity_enabled(runtime_config())
+    return honest_identity_enabled(runtime_config(), platform=current_platform())
 
 
 def notice_active() -> bool:
-    """``compliance.disclosure.notice`` 实时值（缺 provider 恒 False）。"""
+    """``compliance.disclosure.notice`` 实时值（缺 provider 恒 False；强制平台恒 True）。"""
     from src.compliance import notice_enabled
 
-    return notice_enabled(runtime_config())
+    return notice_enabled(runtime_config(), platform=current_platform())
 
 
 def _reset_for_tests() -> None:
@@ -61,6 +94,8 @@ def _reset_for_tests() -> None:
 __all__ = [
     "set_config_provider",
     "runtime_config",
+    "platform_scope",
+    "current_platform",
     "honest_identity_active",
     "notice_active",
 ]

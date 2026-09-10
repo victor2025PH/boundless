@@ -888,6 +888,18 @@ class AccountOrchestrator:
         # 开关随 companion.outbound_text_guard.{enabled,lang_mix,vocative,
         # lang_pin}（默认开）。
         if str(origin or "auto") != "manual" and text:
+            # 实施97 线 A：微信客服等配额平台的自动链文本敏感词守卫（USDT/转账/外链/引流…
+            # 触发微信安全过滤 fail_type 13）——命中即 HOLD 转人审；人工原文不拦。
+            try:
+                from src.inbox.kf_window_guard import auto_text_block_reason
+                _kf_hold = auto_text_block_reason(platform, text, origin=str(origin or "auto"),
+                                                  config=self._config)
+                if _kf_hold:
+                    logger.warning("[orchestrator] 配额平台敏感词 HOLD %s:%s → peer=%s (%s)",
+                                   platform, account_id, chat_key, _kf_hold)
+                    return {"delivered": False, "blocked": _kf_hold}
+            except Exception:
+                logger.debug("[orchestrator] 敏感词守卫异常（放行）", exc_info=True)
             try:
                 from src.ai.outbound_text_guard import (
                     resolve_cfg as _otg_cfg, sendpoint_lang_mix_pass)
@@ -1184,6 +1196,12 @@ def ensure_builtin_workers(config: Dict[str, Any]) -> None:
         register_official_workers(config)
     except Exception:
         logger.debug("[orchestrator] 注册官方 worker 失败", exc_info=True)
+    # 微信客服（企业微信，mode=official 但有状态：sync_msg 游标轮询；实施97 线 A）
+    try:
+        from src.integrations.wechat_kf_worker import register_wechat_kf_worker
+        register_wechat_kf_worker(config)
+    except Exception:
+        logger.debug("[orchestrator] 注册微信客服 worker 失败", exc_info=True)
 
 
 class TelegramProtocolWorker:

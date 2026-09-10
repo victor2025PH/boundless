@@ -1664,6 +1664,8 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           • <b>LINE</b><span data-i18n="inbox.drawer.about_line">：真机接入（需 adb 设备 + 手机 LINE）；协议扫码为可选项</span><br>
           • <b>WhatsApp</b><span data-i18n="inbox.drawer.about_wa">：扫码登录（需本机连接服务在运行）</span><br>
           • <b>Messenger</b><span data-i18n="inbox.drawer.about_msg">：在服务器端弹出的浏览器窗口内登录</span><br>
+          • <b data-i18n="inbox.plat.name_wechat_kf">微信客服</b><span data-i18n="inbox.drawer.about_wxkf">：企业微信官方通道，填自建应用凭证接通（不扫码），客户扫客服二维码咨询</span><br>
+          • <b data-i18n="inbox.plat.name_wechat">个人微信</b><span data-i18n="inbox.drawer.about_wxpc">：PC 副驾读取电脑上已登录的微信（在电脑微信里扫码登录），默认只读建议</span><br>
           <span data-i18n="inbox.drawer.about_reconnect">账号断线后可在对应卡片点「重连」自助恢复；Messenger 断线用卡片上的「重新登录」。</span>
         </div>
       </div>
@@ -2042,13 +2044,15 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 <script>
 (function(){
 /* ===== 常量 ===== */
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',web:'#3b82f6'};
-const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',web:'🌐'};
-const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',web:'Web'};
+// wechat（个人微信 PC 副驾，准入区）不进 FIXED_PLATS：仅在该桌面账号真的接入时按「有账号的平台」动态出现，
+// 这里只给它配色/显示名，免得动态出现时退灰色兜底。
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6'};
+const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',wechat_kf:'💬',wechat:'💬',web:'🌐'};
+const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
-// IG/Zalo/QQ 机器人为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
-// 仅有图标没有后端的平台（X/Signal/WeChat/Viber）刻意不进此表——展示了也没有接入路径。
-const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq'];
+// IG/Zalo/QQ 机器人/微信客服为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
+// 仅有图标没有后端的平台（X/Signal/个人微信/Viber）刻意不进此表——展示了也没有接入路径。
+const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq','wechat_kf'];
 const PLAT_DESC = {
   telegram:window.T('inbox.plat.telegram_desc'),
   line:window.T('inbox.plat.line_desc'),
@@ -2058,6 +2062,7 @@ const PLAT_DESC = {
   zalo:window.T('inbox.plat.zalo_desc'),
   qqbot:window.T('inbox.plat.qqbot_desc'),
   qq:window.T('inbox.plat.qq_desc'),
+  wechat_kf:window.T('inbox.plat.wechat_kf_desc'),
   web:window.T('inbox.plat.web_desc'),
 };
 // 各平台接入方式一句话说明（账号抽屉空状态 note 行）：登录形态不同，别让「扫码」心智一刀切
@@ -2071,6 +2076,7 @@ const PLAT_NOTE = {
   zalo:window.T('inbox.acct.note_zalo'),
   qqbot:window.T('inbox.acct.note_qqbot'),
   qq:window.T('inbox.acct.note_qq'),
+  wechat_kf:window.T('inbox.acct.note_wechat_kf'),
 };
 const PLAT_STATE_LABEL = {on:window.T('inbox.pstate.on'),off:window.T('inbox.pstate.off'),none:window.T('inbox.pstate.none')};
 const PLAT_STATE_COLOR = {on:'#16a34a',off:'#dc2626',none:'#94a3b8'};
@@ -2269,8 +2275,23 @@ var _PREG = {};
   } catch (e) {}
 })();
 function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)||'#6b7280'; }
-function platIcon(p,size){ return (window.platformIconSVG)?window.platformIconSVG(p,{size:size||18}):(PI[p]||'💬'); }
-function platName(p){ return PN[p]||(_PREG[p]&&_PREG[p].name)||p; }
+/* 实施97：微信客服（企业官方客服号）与个人微信（PC 副驾）共用微信绿字形——对客户都是「微信里聊」；
+   但管理者要分得清，给右下角加一枚小徽章（企 / PC），文案走 i18n。其它平台原样。 */
+const _PLAT_BADGE_KEY={wechat_kf:'inbox.plat.badge_wechat_kf',wechat:'inbox.plat.badge_wechat'};
+function platIcon(p,size){
+  const svg=(window.platformIconSVG)?window.platformIconSVG(p,{size:size||18}):(PI[p]||'💬');
+  const bk=_PLAT_BADGE_KEY[p]; if(!bk) return svg;
+  const s=size||18, fs=Math.max(7,Math.round(s*0.3));
+  return '<span class="plat-ico-wrap" style="position:relative;display:inline-flex;width:'+s+'px;height:'+s+'px;">'+svg
+    +'<span class="plat-ico-badge" style="position:absolute;right:-3px;bottom:-3px;min-width:'+Math.round(s*0.42)+'px;height:'+Math.round(s*0.42)+'px;padding:0 2px;border-radius:5px;background:'+(p==='wechat_kf'?'#1b6df5':'#4b5563')+';color:#fff;font-size:'+fs+'px;line-height:'+Math.round(s*0.42)+'px;font-weight:800;text-align:center;box-shadow:0 0 0 1.5px var(--bg-panel,#fff);">'+esc(window.T(bk))+'</span></span>';
+}
+// 中文界面里两个微信平台显示中文名（微信客服 / 个人微信），英文回落 PN
+const _PLAT_NAME_KEY={wechat_kf:'inbox.plat.name_wechat_kf',wechat:'inbox.plat.name_wechat'};
+function platName(p){
+  const nk=_PLAT_NAME_KEY[p];
+  if(nk){ const t=window.T(nk); if(t&&t!==nk) return t; }
+  return PN[p]||(_PREG[p]&&_PREG[p].name)||p;
+}
 /* P2: 每联系人确定性渐变头像色（同一联系人恒定同色，扫列表更易区分；平台身份仍由右下角标承载） */
 const _AV_GRAD=[['#60a5fa','#2563eb'],['#38bdf8','#0284c7'],['#34d399','#059669'],['#a78bfa','#7c3aed'],['#f472b6','#db2777'],['#fbbf24','#d97706'],['#22d3ee','#0891b2'],['#818cf8','#4f46e5'],['#fb7185','#e11d48'],['#2dd4bf','#0d9488'],['#c084fc','#9333ea'],['#4ade80','#16a34a']];
 function _avatarGrad(seed){
@@ -2788,7 +2809,8 @@ function _historyAccounts(){
       platform:String(a.platform||'web'), account_id:String(a.account_id||'default'),
       status:String(a.status||'history_only'), unread:Number(a.unread)||0,
       attn:Number(a.attn)||0, count:Number(a.conv_count)||0, last_ts:Number(a.last_ts)||0,
-      label:String(a.label||'')}));   // P4：desktop/registered 行带注册表 label（如 BOUNDLESS）
+      label:String(a.label||''),       // P4：desktop/registered 行带注册表 label（如 BOUNDLESS）
+      bridge:(a.bridge&&typeof a.bridge==='object')?a.bridge:null}));   // 实施97：桥接驱动心跳（PC 副驾在线态）
   }
   const out=[];
   try{
@@ -3130,18 +3152,84 @@ async function cleanupStaleHistAccounts(btn){
    动作分层＝1 主 CTA（已退出=重登琥珀 / 已移除=恢复 / 其余=查看历史）+ 查看 +
    ⋯ 菜单（清未读 / 导出 / 危险项）。危险项按状态二选一（彻底删除 vs 移除），
    决策表与理由写在 _adkGovItems 头部——两处必须同时改。 */
+/* 桥接驱动（个人微信 PC 副驾）存活：accounts_summary 行的 bridge={alive,age_sec,tier,readonly}。
+   返回 {text, tip, cls}；没有 bridge（普通桌面壳镜像账号）→ null。 */
+function _bridgePresence(h){
+  const b=h&&h.bridge; if(!b||typeof b!=='object') return null;
+  const tier=(b.tier==='semi')?window.T('inbox.acct.bridge_tier_semi')
+    :(b.tier==='auto_reply')?window.T('inbox.acct.bridge_tier_auto_reply')
+    :window.T('inbox.acct.bridge_tier_copilot');
+  if(b.alive){
+    // 进程在线但读不到屏（微信收进托盘 / 退出登录）：不能报「在线」——消息此刻进不来
+    if(b.readable===false) return {cls:'blind', text:window.T('inbox.acct.bridge_blind'), tip:window.T('inbox.acct.bridge_blind_t')};
+    return {cls:'on', text:window.Tf('inbox.acct.bridge_on',{tier:tier}), tip:window.T('inbox.acct.bridge_on_t')};
+  }
+  const m=Math.max(1,Math.round((Number(b.age_sec)||0)/60));
+  return {cls:'off', text:window.Tf('inbox.acct.bridge_off',{m:m}), tip:window.T('inbox.acct.bridge_off_t')};
+}
+/* 实施97 线 B：抽屉里的「个人微信 · PC 副驾」准入卡。未接入＝六步引导入口；已接入＝每个副驾账号一行
+   （心跳胶囊 + 查看会话 + 接入流程）。数据源同 accounts_summary（histAccts 里 status==='desktop' 的 wechat 行）。 */
+function _pcCopilotCardHtml(hist){
+  const rows=(hist||[]).filter(h=>h&&h.platform==='wechat'&&String(h.status||'')==='desktop');
+  const pc=platColor('wechat');
+  let body='';
+  if(rows.length){
+    body=rows.map(h=>{
+      const bp=_bridgePresence(h);
+      const pill=bp?`<span class="acct-pill ${bp.cls==='on'?'hist-live':(bp.cls==='blind'?'hist-blind':'hist-out')}" title="${esc(bp.tip)}">${esc(bp.text)}</span>`
+                   :`<span class="acct-pill hist-reg" title="${esc(window.T('inbox.acct.desk_tag_t'))}">${esc(window.T('inbox.acct.desk_tag'))}</span>`;
+      return `<div class="acct-card ${bp&&bp.cls==='on'?'on':'off'}" data-plat="wechat" data-aid="${esc(h.account_id)}" style="--acct-accent:${pc};">
+        <div class="acct-card-head">
+          ${_acctAvatar('wechat',h.account_id,h.label||_acctLabel('wechat',h.account_id),36,'')}
+          <div style="flex:1;min-width:0;">
+            <div class="acct-name" title="${esc(h.account_id)}">${esc(h.label||_acctLabel('wechat',h.account_id))}</div>
+            <div class="acct-id">${esc(_maskAcctId(h.account_id))}${h.count?' · '+esc(window.Tf('inbox.acct.hist_convs',{n:h.count})):''}</div>
+          </div>
+          ${h.unread?`<span class="ac-unread">${h.unread>99?'99+':h.unread}</span>`:''}
+          ${pill}
+        </div>
+        <div class="acct-actions">
+          <button type="button" class="acct-btn primary" onclick="viewAcctChats('wechat','${esc(h.account_id)}','desktop')">${uiIcon('msg',14)}<span class="lbl">${esc(window.T('inbox.acct.hist_view'))}</span></button>
+          <button type="button" class="acct-btn ghost" onclick="openConnect('wechat')">${uiIcon('help',14)}<span class="lbl">${esc(window.T('inbox.acct.pc_flow'))}</span></button>
+        </div>
+      </div>`;
+    }).join('');
+  } else {
+    body=`<div class="acct-empty acct-empty-rich" style="background:linear-gradient(135deg,${pc}14,transparent);">
+      <div class="acct-empty-lead">${esc(window.T('inbox.acct.pc_lead'))}</div>
+      <div class="acct-empty-caps">
+        <span class="acct-cap-chip">${esc(window.T('inbox.acct.bridge_tier_copilot'))}</span>
+        <span class="acct-cap-chip">${esc(window.T('inbox.acct.bridge_tier_semi'))}</span>
+        <span class="acct-cap-chip">${esc(window.T('inbox.acct.bridge_tier_auto_reply'))}</span>
+      </div>
+      <div class="acct-empty-note">${esc(window.T('inbox.acct.pc_desc'))}</div>
+      <button type="button" class="acct-empty-cta" onclick="openConnect('wechat')">${esc(window.T('inbox.acct.pc_cta'))}</button>
+    </div>`;
+  }
+  const on=rows.filter(h=>{ const bp=_bridgePresence(h); return bp&&bp.cls==='on'; }).length;
+  const sub=rows.length?window.Tf('inbox.acct.n_online',{n:rows.length,on:on}):window.T('inbox.acct.pc_sub_off');
+  return `<div class="acct-plat-group acct-pc-copilot" style="--pc:${pc};">
+    <div class="acct-plat-header">
+      <div class="acct-plat-icon">${platIcon('wechat',32)}</div>
+      <div class="acct-plat-meta"><div class="acct-plat-name">${esc(platName('wechat'))}</div><div class="acct-plat-sub">${esc(sub)}</div></div>
+      <button class="acct-add-btn" onclick="openConnect('wechat')">${esc(window.T('inbox.acct.pc_flow'))}</button>
+    </div>${body}</div>`;
+}
 function _acctHistRowHtml(h){
   const hp=esc(h.platform), ha=esc(h.account_id), st=String(h.status||'');
+  const bp=(st==='desktop')?_bridgePresence(h):null;
   const stCls=(st==='logged_out')?'hist-out':(st==='removed')?'hist-removed'
+    :(bp&&bp.cls==='on')?'hist-live':(bp&&bp.cls==='blind')?'hist-blind':(bp&&bp.cls==='off')?'hist-out'
     :(st==='desktop'||st==='registered')?'hist-reg':'hist-only';
   const tagKey=(st==='removed')?'inbox.filter.removed'
     :(st==='logged_out')?'inbox.acct.out_tag'
     :(st==='desktop')?'inbox.acct.desk_tag'
     :(st==='registered')?'inbox.acct.reg_tag'
     :'inbox.acct.ghost_tag';
-  const tagTip=(st==='desktop')?window.T('inbox.acct.desk_tag_t')
+  const tagTip=bp?bp.tip:(st==='desktop')?window.T('inbox.acct.desk_tag_t')
     :(st==='registered')?window.T('inbox.acct.reg_tag_t')
     :(st==='logged_out')?window.T('inbox.acct.out_tag_t'):'';
+  const tagText=bp?bp.text:window.T(tagKey);
   const meta=[_maskAcctId(h.account_id)];
   if(h.count) meta.push(window.Tf('inbox.acct.hist_convs',{n:h.count}));
   if(h.last_ts) meta.push(fmtTs(h.last_ts));
@@ -3189,7 +3277,7 @@ function _acctHistRowHtml(h){
         <div class="acct-id" title="${esc(meta.join(' · '))}">${esc(meta.join(' · '))}</div>
       </div>
       ${h.unread?`<span class="ac-unread" title="${esc(window.T('inbox.acct.hist_unread_t'))}">${h.unread>99?'99+':h.unread}</span>`:''}
-      <div class="acct-pill ${stCls}"${tagTip?` title="${esc(tagTip)}"`:''}>${esc(window.T(tagKey))}</div>
+      <div class="acct-pill ${stCls}"${tagTip?` title="${esc(tagTip)}"`:''}>${esc(tagText)}</div>
     </div>
     <div class="acct-actions">${primary}${viewBtn}${menu}</div>
   </div>`;
@@ -3962,7 +4050,11 @@ function _adkAll(){
    purgeable 资格判定、404/403 分账一处不造第二份。面板打开期 buildAcctDock 跳过重绘
    （与 ac-pick-pop 同护栏）；面板内动作完成后就地重绘面板（数据单源 _historyAccounts）。 */
 let _adkHistPrevN=-1;   // 「历史 N」计数上一帧值：变化时打 ac-ack 脉冲（删除/恢复结果可感知）
-function _ahpStatusTag(st){
+function _ahpStatusTag(st,h){
+  const bp=(st==='desktop'&&h)?_bridgePresence(h):null;
+  if(bp){
+    return `<span class="ahp-tag ${bp.cls==='on'?'live':(bp.cls==='blind'?'blind':'out')}" title="${esc(bp.tip)}">${esc(bp.text)}</span>`;
+  }
   const cls=(st==='logged_out')?'out':(st==='removed')?'removed'
     :(st==='desktop'||st==='registered')?'reg':'only';
   const key=(st==='removed')?'inbox.filter.removed'
@@ -3995,7 +4087,7 @@ function _ahpRowHtml(h){
   return `<div class="ahp-row" data-plat="${pl}" data-aid="${aid}">
     ${_acctAvatar(h.platform,h.account_id,nm,30,'')}
     <div class="ahp-main">
-      <div class="ahp-name"><span class="ahp-nm" title="${aid}">${esc(nm)}</span>${_ahpStatusTag(st)}</div>
+      <div class="ahp-name"><span class="ahp-nm" title="${aid}">${esc(nm)}</span>${_ahpStatusTag(st,h)}</div>
       <div class="ahp-meta" title="${esc(meta.join(' · '))}">${esc(meta.join(' · '))}</div>
     </div>
     ${h.unread?`<span class="ac-unread" title="${esc(window.T('inbox.acct.hist_unread_t'))}">${h.unread>99?'99+':h.unread}</span>`:''}
@@ -8119,6 +8211,32 @@ function _applyReadOnly(c){
   if(btn){ btn.disabled=ro; btn.style.opacity=ro?'.45':''; btn.style.cursor=ro?'not-allowed':''; }
   if(tools){ tools.style.opacity=ro?'.45':''; tools.style.pointerEvents=ro?'none':''; }
   _paintAcctBanner(c);
+  _syncKfTransferBtn(c, ro);
+}
+/* 实施97 线 A：「转企微人工」只在微信客服会话头出现；点击 → POST /api/unified-inbox/kf/transfer
+   （后端挑一位接待中的企微客服，转成功后本端会话打接管标、AI 停手）。 */
+function _syncKfTransferBtn(c, ro){
+  const b=document.getElementById('kf-transfer-btn'); if(!b) return;
+  b.style.display=(c&&c.platform==='wechat_kf'&&!ro)?'':'none';
+}
+async function kfTransferToHuman(){
+  const c=selectedChat;
+  if(!c||c.platform!=='wechat_kf'){ _toast(window.T('inbox.toast.select_first'),'#b45309'); return; }
+  if(!confirm(window.T('inbox.kf.transfer_confirm'))) return;
+  const b=document.getElementById('kf-transfer-btn'); if(b) b.disabled=true;
+  try{
+    const r=await apiFetch('/api/unified-inbox/kf/transfer',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({account_id:c.account_id||'',chat_key:c.chat_key||''})},{timeoutMs:20000});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok&&d.ok){
+      _toast(window.Tf('inbox.kf.transfer_ok',{who:d.servicer_userid||'-'}),'#16a34a');
+      if(typeof loadChats==='function') loadChats();
+    } else {
+      const why=(d&&(d.errmsg||d.detail))||('HTTP '+r.status);
+      _toast(window.Tf('inbox.kf.transfer_fail',{why:String(why).slice(0,80)}),'#dc2626');
+    }
+  }catch(e){ _toast(window.Tf('inbox.kf.transfer_fail',{why:String(e&&e.message||e).slice(0,80)}),'#dc2626'); }
+  finally{ if(b) b.disabled=false; }
 }
 /* M-2 A2/B（#232 / D-M1）：按 (platform, account_id) 取 platform_status 条目——账号栏 chip、
    会话横幅、发送前置检查共用同一份「通道真相 + 门禁快照」。取不到返回 {}（旧后端/未托管）。 */
@@ -8451,8 +8569,46 @@ async function _loadSendCaps(c){
     if(d&&d.ok) _renderDeadPeerNotice(d.dead_peer||null);
     if(d&&d.ok) _renderTravelNotice(d.travel_state||null, c);
     if(d&&d.ok) _renderReplyWindow(d.reply_window||null, c);
+    if(d&&d.ok) _renderKfSession(d.kf_session||null, c);
     if(d&&d.ok) _applyOutboundPolicy(d.outbound_policy||null);
   }catch(_){ /* 网络异常：保持乐观，点击时仍有 501 兜底 */ }
+}
+/* 实施97 线 A：微信客服会话在企微侧的接待状态（send-caps.kf_session：0 未处理 / 1 智能助手 / 2 排队 / 3 人工 xx / 4 已结束）。
+   人工接待中＝企微坐席在答、本端 AI 已停手——坐席必须先看见，别再插话；非 wechat_kf 会话或无数据不渲染。 */
+function _renderKfSession(ks, c){
+  try{
+    let el=document.getElementById('kf-session-notice');
+    if(!ks||!c||c.platform!=='wechat_kf'||typeof ks.state!=='number'){ if(el) el.style.display='none'; return; }
+    if(!el){
+      const ta=document.getElementById('reply-ta');
+      const host=ta&&ta.parentNode?ta.parentNode:null;
+      if(!host) return;
+      el=document.createElement('div');
+      el.id='kf-session-notice';
+      el.setAttribute('role','status');
+      el.style.cssText='margin:0 0 .35rem;padding:.35rem .6rem;border-radius:8px;display:flex;align-items:center;gap:8px;font-size:.76rem;line-height:1.45;';
+      host.insertBefore(el, ta);
+    }
+    const key=String(ks.state_key||'unknown');
+    let text, tone;
+    if(key==='human'){ text=window.Tf('inbox.kf.state_human',{who:ks.servicer_userid||'-'}); tone='warn'; }
+    else if(key==='bot'){ text=window.T('inbox.kf.state_bot'); tone='ok'; }
+    else if(key==='queued'){ text=window.T('inbox.kf.state_queued'); tone='warn'; }
+    else if(key==='closed'){ text=window.T('inbox.kf.state_closed'); tone='muted'; }
+    else if(key==='untouched'){ text=window.T('inbox.kf.state_untouched'); tone='muted'; }
+    else { el.style.display='none'; return; }
+    const bg={ok:'color-mix(in srgb, var(--accent,#1e8cf2) 10%, transparent)', warn:'rgba(245,158,11,.12)', muted:'rgba(107,114,128,.10)'}[tone];
+    const bd={ok:'color-mix(in srgb, var(--accent,#1e8cf2) 32%, transparent)', warn:'rgba(245,158,11,.4)', muted:'rgba(107,114,128,.35)'}[tone];
+    el.style.background=bg; el.style.border='1px solid '+bd;
+    el.style.color=tone==='muted'?'var(--text-muted,#6b7280)':'var(--text-main,#0f172a)';
+    el.innerHTML='<span style="flex:none;width:8px;height:8px;border-radius:50%;background:'
+      +(tone==='warn'?'#f59e0b':(tone==='muted'?'#9ca3af':'var(--accent,#1e8cf2)'))+'"></span>'
+      +'<span style="flex:1;min-width:0;">'+esc(text)+'</span>';
+    el.style.display='flex';
+    // 已是人工接待：转人工按钮改为「已转人工」态（仍可点，换人）
+    const b=document.getElementById('kf-transfer-btn');
+    if(b){ b.style.opacity=(key==='human')?'.6':''; b.title=(key==='human')?window.Tf('inbox.kf.state_human',{who:ks.servicer_userid||'-'}):window.T('inbox.kf.transfer_t'); }
+  }catch(_){ }
 }
 /* 实施96 P0（2026-09-08）：平台回复窗 / 每轮配额可见面——抖音「对方最后一条后 24h 内 ≤6 条」、
    TikTok「48h ≤10 条」这类硬规则，发送口 window_guard 会拦，但坐席得**先看见**：composer 上方
@@ -24283,7 +24439,7 @@ function renderDrawerAccounts(){
           <div class="acct-plat-name">${esc(platName(pl))}</div>
           <div class="acct-plat-sub">${accts.length?window.Tf('inbox.acct.n_online',{n:accts.length,on:onCount}):window.T('inbox.acct.not_connected')}</div>
         </div>
-        <button class="acct-add-btn" onclick="openConnect('${esc(pl)}')">${window.T('inbox.acct.add_scan')}</button>
+        <button class="acct-add-btn" onclick="openConnect('${esc(pl)}')">${window.T(pl==='wechat_kf'?'inbox.acct.add_connect':'inbox.acct.add_scan')}</button>
       </div>`;
     if(!accts.length){
       if(q){
@@ -24349,12 +24505,19 @@ function renderDrawerAccounts(){
     }
     html+=`</div>`;
   });
+  // 实施97 线 B：个人微信 · PC 副驾准入卡（不进 FIXED_PLATS——它没有服务端 worker 模式，
+  // 是桌面桥接账号；这里给一张独立入口卡：未接入 → 六步引导；已接入 → 心跳态 + 入口）
+  if(!_acctAbnOnly && !q){
+    try{ html+=_pcCopilotCardHtml(histAccts); }catch(_){}
+  }
   // P0 账号真相单源（2026-08-17）：历史/已退出账号分区——顶部 dock「历史 N」点开抽屉
   // 在这里能找到同一批号（此前 dock 数 10 抽屉只有 5，坐席不知道信谁）。只读行：
   // 状态 tag（仅历史/已退出/已移除）+ 会话数/最近活跃 + 存量未读（灰）+「查看会话」。
   // 异常过滤（只看离线在册号）语义下不掺历史号；搜索按账号 id 过滤与在册卡同口径。
   if(histAccts.length && !_acctAbnOnly){
+    // 个人微信 PC 副驾账号已由上方准入卡承载（未搜索时），历史分区不再重复列
     const hshown=histAccts.filter(h=>!q||String(h.account_id).toLowerCase().includes(q))
+      .filter(h=>q||!(h.platform==='wechat'&&String(h.status||'')==='desktop'))
       .sort((x,y)=>(y.last_ts-x.last_ts)||(y.count-x.count));
     if(hshown.length){
       // 排版重构（历史账号治理 P0，2026-08-17）：旧版把状态胶囊+最多 3 个按钮全塞进
@@ -26236,7 +26399,11 @@ async function _connectReportDiag(){
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind); else bind();
 })();
+/* 实施97：多步引导型平台不进 380px 弹窗，走独立引导页（左步骤轨 + 右内容区）——
+   微信客服五步（准备应用 → 凭证测试 → 选客服账号 → AI 接待 → 扫码自测）、个人微信 PC 副驾六步。 */
+const _GUIDED_CONNECT={wechat_kf:'/workspace/connect/wechat_kf',wechat:'/workspace/connect/wechat_pc'};
 function openConnect(pl, acctId){
+  if(!acctId && _GUIDED_CONNECT[pl]){ location.href=_GUIDED_CONNECT[pl]; return; }
   _connectPlat=pl; _connectAcct=acctId||''; _connectMode=''; _connectAuthorized=false; _connectAutoRefresh=0;
   _connectFailStreak=0;
   // interactive 是上一轮 start 响应的产物，换平台开新弹窗必须先归零——残留 true 会让
@@ -26582,6 +26749,7 @@ const _OFFICIAL_CONSOLE={
   whatsapp:'https://developers.facebook.com/apps/',
   line:'https://developers.line.biz/console/',
   qqbot:'https://q.qq.com/',
+  wechat_kf:'https://work.weixin.qq.com/wework_admin/frame#apps',
 };
 // 准备清单：让用户点「去接入向导」之前就知道要带什么材料、去哪拿、大约多久。
 // 字段 chip 标必填/可选/已填；win_note_<platform> 键存在时附平台政策注释（如 7 天窗）。
@@ -28628,8 +28796,8 @@ async function init(){
     const _connect=String(_q.get('connect')||'').toLowerCase().trim();
     const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
     const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
-    // Instagram/Zalo/QQ 机器人无扫码态，openConnect → 模式选 → credentials → /workspace/setup
-    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq']);
+    // Instagram/Zalo/QQ 机器人/微信客服无扫码态，openConnect → 模式选 → credentials → /workspace/setup
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq','wechat_kf']);
     if(_wantDrawer && typeof openDrawer==='function'){
       openDrawer();
       if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){

@@ -310,6 +310,58 @@ zalo:
   webhook_path: "/zalo/webhook"
   unsupported_type_reply: "目前仅支持文字消息。"
 
+# 微信客服（企业微信官方通道；实施97 线 A，2026-09-07）。默认关。
+# 任何微信用户扫「客服链接/二维码」即可与企业的客服账号聊天，不用加好友；用客户**自己企业的企微**
+# （自建应用），无界不做服务商。凭证也可经 /workspace/setup 接入向导填写（写 overlay）。
+# 平台硬规则：客户最后一条消息后 48h 内最多回 5 条（超出由 kf_window_guard 自动 HOLD，
+# 不拆条、不发缓冲话术）；仅会话状态「新接入/智能助手接待」可由 API 发；无 typing/已读回执；
+# AI 身份披露与诚实身份在本渠道**恒开**（大陆法规，compliance.FORCED_COMPLIANCE_PLATFORMS）。
+# 个人微信不在此渠道内（另一平台 wechat，准入区 PC 副驾）。
+wechat_kf:
+  enabled: false
+  corpid: ""                     # 企业 ID（企微后台 → 我的企业 → 企业信息）
+  secret: ""                     # 自建应用 Secret（该应用须配在「微信客服 → 可调用接口的应用」）
+  open_kfid: ""                  # 客服账号 ID；留空则启动时取第一个可管理的客服账号并回写注册表
+  poll_interval_sec: 5           # sync_msg 轮询间隔（有新消息时）；无消息指数退避到 idle_backoff_max_sec
+  idle_backoff_max_sec: 30       # 无 token 拉取受平台严格频控，空闲退避是必需品
+  voice_format: amr              # amr | silk（客户语音下载格式；amr 有现成解码路径）
+  welcome_text: ""               # 客户进入会话时的欢迎语（官方 welcome_code 20 秒有效，仅文字）；空=不发
+  callback:                      # 可选：企微「接收消息服务器」回调（不配即纯轮询；配了→事件秒级触发 + token 免频控）
+    path: "/wechat/kf/callback"  # 企微后台 URL 填 https://<你的域名>/wechat/kf/callback
+    token: ""
+    encoding_aes_key: ""         # 43 位
+  window_guard:                  # 48h/5 条配额守卫（数值封顶到官方硬规则，只能调小）
+    enabled: true
+    quota_per_turn: 5
+    reserve_for_manual: 1        # 自动链在剩余 ≤ 此值时让路，给坐席留最后一句
+  # 自动链文本敏感词（命中 → HOLD 转人审；人工原文不拦）。整表替换默认词表（kf_window_guard.DEFAULT_SENSITIVE_TERMS）。
+  # sensitive_terms: ["usdt", "转账", "加微信"]
+
+# 企业微信成员扫码登录智聊（实施97 P1）：登录页出现「企业微信扫码登录」，成员在企微官方登录页扫码 → 回调换 userid →
+# 首次自动开户为坐席（用户名 wecom_<userid>）。redirect_base 必须是该自建应用配置的 HTTPS **可信域名**
+# （本机 127.0.0.1 实例不满足；部署在公网域名下或经官网中继）。corpid / secret 留空＝复用上面 wechat_kf 同一自建应用。
+wecom_login:
+  enabled: false
+  corpid: ""                     # 留空复用 wechat_kf.corpid
+  agentid: ""                    # 自建应用 AgentId（应用详情页）
+  secret: ""                     # 留空复用 wechat_kf.secret
+  redirect_base: ""              # 例 https://chatx.example.com（企微后台该应用「网页授权及 JS-SDK → 可信域名」）
+  default_role: agent            # 首次登录自动开户的角色：agent | supervisor | viewer（不允许 master/admin）
+  auto_provision: true           # false＝只允许已在 wecom_bindings.json 绑定过的成员登录
+  allowed_userids: []            # 白名单（空＝该企业所有在应用可见范围内的成员）
+
+# 官网中继设备端（实施97）：NAT 后的实例拿不到 HTTPS 域名——开启后本实例主动出站连 relay.bd2026.cc，
+# 获得公网前缀 https://relay.bd2026.cc/d/<device_id>：企微「接收消息服务器 URL」填 <前缀>/wechat/kf/callback，
+# 企业微信登录 redirect_uri 自动取 <前缀>/login/wecom/callback（成员回跳由中继 302 直接送回本机浏览器，不过隧道）。
+# 只转发回调/webhook/探活白名单路径，不会把工作台暴露到公网。device_id/secret 首次自动生成并写回本文件的 overlay。
+relay:
+  enabled: false
+  url: wss://relay.bd2026.cc
+  device_id: ""                  # 留空自动生成（dev-xxxxxxxxxxxxxxxx）
+  secret: ""                     # 留空自动生成；丢了就换一个 device_id（中继不能改 secret）
+  register_key: ""               # 中继若设了 RELAY_REGISTER_KEY，这里填同一把
+  ping_sec: 25
+
 # 官方通道入站统一主管道（G4c）：默认关 → LINE/Messenger/WhatsApp 各 webhook 维持自身
 # SkillManager 自答（零回归）。开启后官方入站改走 protocol_autoreply 主管道，享：
 # kill-switch 决策期早退 / canary 放量 / 陪伴记忆 / 限速熔断 / 审计 / 转人工；回复经
@@ -4260,6 +4312,26 @@ platform_login:
     whatsapp: { enabled: false }
     instagram: { enabled: false }
     zalo: { enabled: false }
+  # 微信客服 worker（实施97 线 A）：与顶层 wechat_kf.enabled 任一为真即注册 wechat_kf:official 工厂
+  # （有状态 worker：sync_msg 游标轮询 + token 自管，不走 OfficialApiWorker）。
+  wechat_kf:
+    enabled: false
+  # ── 个人微信 PC 副驾（实施97 线 B，准入区；platform=wechat，与 wechat_kf 严格分开）──────────
+  # 独立进程 `python -m src.integrations.wechat_pc`：Windows UIAutomation 读 PC 微信 4.x 窗口 + 模拟键入，
+  # 不注入/不改客户端/不碰协议/不接触凭证（登录由主人手机扫码）。经桌面桥（mode=desktop）进统一收件箱。
+  # ⚠ 违反微信服务协议条款、账号风险由用户承担；只做「仅回复」，加好友/群发/朋友圈/红包等为代码红线。
+  wechat_pc:
+    tier: copilot            # copilot（只读+建议，永不发送，默认）| semi（只发人审通过的）| auto_reply（全自动仅回复，需 risk_ack）
+    risk_ack: false          # 用户确认风险声明后才允许 auto_reply（否则自动降 semi）
+    daily_cap_new: 20        # 接入不足 warmup_days 的账号日上限
+    daily_cap: 80
+    warmup_days: 7
+    per_peer_daily_cap: 15   # 对同一联系人每日上限
+    min_gap_sec: 20          # 同一联系人两条出站最小间隔
+    work_hours: [8, 23]      # 本地时间 [start, end)；[0, 24]=全天
+    reply_only: true         # 只回最近 reply_window_hours 内有入站的会话，绝不主动开新会话
+    reply_window_hours: 72
+    groups_reply: mention_only   # never | mention_only
 
 # ── 反封号发送闸门（N3 / 优化1）──────────────────────────────────────
 # A/B 两线共用：发送前按账号健康（天龄/代理/今日发送量/熔断）给红黄绿灯 + 建议日上限，

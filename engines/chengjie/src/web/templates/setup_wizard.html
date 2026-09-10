@@ -341,7 +341,7 @@ function _swDeepLink(){
 
 /* 官方渠道开通漏斗埋点（unavail_shown → wizard_open → saved → online；
    经 /api/telemetry/ui-event 通用通道，ops 侧按 prefix=official_setup_ 查趋势） */
-var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1,qqbot:1};
+var OFFICIAL_CHS={instagram:1,zalo:1,line:1,messenger:1,whatsapp:1,qqbot:1,wechat_kf:1};
 function _swBeacon(action){
   try{
     var body=JSON.stringify({page:'/workspace/setup', action:String(action||'')});

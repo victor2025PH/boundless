@@ -6465,25 +6465,28 @@ class HealthWatchdog:
         去抖：按 ``(worker, severity)`` 签名，仅错误集合/严重度变化时 emit；恢复补发一次。
         严重度：``restarts>=3`` → red(fail，真实掉线)，否则 yellow(warn，瞬时抖动/重连)。
         """
+        status: Dict[str, Any] = {}
         try:
             from src.integrations.account_orchestrator import (
                 get_orchestrator_if_running,
             )
             from src.utils.ops_overview import orchestrator_worker_problems
             orch = get_orchestrator_if_running()
-            if orch is None:
-                return
-            status = orch.status()
+            if orch is not None:
+                status = orch.status() or {}
         except Exception:
-            return
-        # 无受管账号：若此前报过异常，静默 reconcile 掉遗留 open 事件
-        if int((status or {}).get("total") or 0) <= 0:
+            status = {}
+        # 实施97 线 B：桥接驱动（个人微信 PC 副驾）心跳过期也是「该账号投递链断了」——并入同一
+        # 问题列表走同一告警/恢复/事件表（编排器没起来的部署也要能报，故不再因无编排器早退）
+        bridge_problems = self._bridge_driver_problems()
+        # 无受管账号且无桥接问题：若此前报过异常，静默 reconcile 掉遗留 open 事件
+        if int(status.get("total") or 0) <= 0 and not bridge_problems:
             if self._last_orch_worker_sig:
                 self._emit_orchestrator_worker_recovery()
                 self._last_orch_worker_sig = None
             return
 
-        problems = orchestrator_worker_problems(status)
+        problems = (orchestrator_worker_problems(status) if status else []) + bridge_problems
         light = ("red" if any(p["status"] == "fail" for p in problems)
                  else ("yellow" if problems else "green"))
         sig = "|".join(sorted(f"{p['id']}:{p['status']}" for p in problems))
@@ -6510,6 +6513,22 @@ class HealthWatchdog:
                         logger.debug("编排器 worker 事件 reconcile 失败（已忽略）",
                                      exc_info=True)
             self._last_orch_worker_sig = None
+
+    def _bridge_driver_problems(self) -> List[Dict[str, Any]]:
+        """桥接驱动心跳过期的账号（注册表 ``meta.bridge_heartbeat``）；读不到一律空表。
+
+        只读**已初始化**的注册表单例（读路径不隐式建库）：单例还没建，说明本进程没见过任何桥接账号。
+        """
+        try:
+            from src.integrations import account_registry as _ar
+            reg = getattr(_ar, "_registry", None)
+            if reg is None:
+                return []
+            from src.web.desktop_bridge_presence import bridge_driver_problems
+            return bridge_driver_problems(reg.list() or [])
+        except Exception:
+            logger.debug("桥接驱动心跳巡检失败（已忽略）", exc_info=True)
+            return []
 
     def _emit_orchestrator_worker_alert(
         self, problems: List[Dict[str, Any]], light: str = "yellow",

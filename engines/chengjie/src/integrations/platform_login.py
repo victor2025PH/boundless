@@ -48,6 +48,9 @@ SUPPORTED_PLATFORMS = (
     "qqbot",
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；默认关、准入区）
     "qq",
+    # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」（platform=wechat，
+    # 准入区 PC 副驾）是两个独立平台——身份空间（external_userid vs 微信号）/ 合规归属不同。
+    "wechat_kf",
 )
 
 # 登录方式（mode）：协议多开 / 网页隔离 / 真机RPA / 官方 API / 手机号验证码
@@ -260,6 +263,8 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     "qqbot": {"modes": ["official"], "default": "official"},
     # QQ 协议登录：只有 protocol 形态（扫码在用户自装的协议端里完成，本窗口等账号上线）
     "qq": {"modes": ["protocol"], "default": "protocol"},
+    # 微信客服：只有官方形态（企微 CorpID/Secret 经向导）；个人微信是另一个平台 wechat
+    "wechat_kf": {"modes": ["official"], "default": "official"},
 }
 
 # 个人号扫码登录（web/qr 边车）可**增量**补给这些原本纯官方的渠道。刻意不写进上面的
@@ -301,6 +306,10 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
         "用手机 QQ 扫描本窗口二维码即可接入（智聊内置连接，无需安装其它程序）；"
         "扫码后在手机上确认，本窗口会自动完成登录。"
     ),
+    "wechat_kf": (
+        "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
+        "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。"
+    ),
 }
 
 # 上表的 i18n 键（英文坐席不该看到中文指引）。仅在指引取自上表（即 provider 没给
@@ -316,6 +325,7 @@ PLATFORM_INSTRUCTION_KEYS: Dict[str, str] = {
     "zalo": "inbox.connect.instr_zalo",
     "qqbot": "inbox.connect.instr_qqbot",
     "qq": "inbox.connect.instr_qq",
+    "wechat_kf": "inbox.connect.instr_wechat_kf",
 }
 
 

@@ -365,6 +365,43 @@ def register_desktop_routes(app, *, api_auth) -> None:
         )
         return {"ok": bool(cid), "conversation_id": cid or ""}
 
+    @app.post("/api/desktop/heartbeat")
+    async def api_desktop_heartbeat(request: Request, _=Depends(api_auth)):
+        """桥接驱动进程（个人微信 PC 副驾等）的存活心跳（实施97 线 B 第三轮）。
+
+        desktop 账号没有 worker，registry 状态只在首见入站时写一次 ``online``，驱动进程挂了工作台
+        看不出来。驱动每轮 tick 调本端点，把 ``{bridge, tier, readonly, stats}`` 记进 registry
+        ``meta.bridge_heartbeat``；accounts_summary 据 ``ts`` 新鲜度给出 ``bridge.alive``。
+        **不改 status**：运营已登出/移除的账号不被心跳复活（只在账号不存在时按首见登记）。
+        body: {platform, account_id, bridge?, tier?, readonly?, stats?}
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        platform = str((body or {}).get("platform") or "").lower()
+        account_id = str((body or {}).get("account_id") or "")
+        if not platform or not account_id:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="platform / account_id"))
+        from src.web.desktop_bridge_presence import heartbeat_meta
+        meta = heartbeat_meta(body or {})
+        # 账号标签：ingest 首见用的是**联系人**名（对桌面壳镜像账号够用，对 PC 副驾会把账号叫成第一个客户）
+        # → 驱动可带 label 纠正；空则不动
+        label = str((body or {}).get("label") or "").strip()[:64] or None
+        try:
+            from src.integrations.account_registry import get_account_registry
+            reg = get_account_registry()
+            row = reg.get(platform, account_id)
+            if not row:
+                reg.upsert(platform, account_id, mode="desktop", label=label or account_id, status="online",
+                           meta={"bridge_heartbeat": meta})
+            else:
+                reg.upsert(platform, account_id, label=label, meta={"bridge_heartbeat": meta}, merge_meta=True)
+        except Exception:
+            logger.debug("[desktop] heartbeat registry 写入失败（已忽略）", exc_info=True)
+            return {"ok": False}
+        return {"ok": True, "ts": meta.get("ts")}
+
     @app.get("/api/desktop/selector-profiles")
     async def api_desktop_selector_profiles(request: Request, _=Depends(api_auth)):
         """桌面壳选择器覆写层（D1 热更新）：下发官方网页改版后的「选择器修正」补丁。

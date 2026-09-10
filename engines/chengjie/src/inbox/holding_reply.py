@@ -146,6 +146,15 @@ async def maybe_send_holding_reply(
     hb = resolve_holding_cfg(_cfg)
     if not hb.get("enabled"):
         return False
+    # 实施97：微信客服等「每轮 5 条」配额平台不发缓冲话术——「稍等」白占 1 条额度，
+    # 且该平台无 typing/已读可拟人，缓冲毫无收益。
+    try:
+        from src.inbox.kf_window_guard import is_quota_platform as _is_qp
+        if _is_qp(platform):
+            _record("skipped_quota_platform")
+            return False
+    except Exception:
+        pass
     from src.integrations.account_orchestrator import get_orchestrator as _go
     _orch = _go(_cfg)
     # 与语音/图片同口径：仅对编排器管理的账号发（原生 standalone 不归编排器）

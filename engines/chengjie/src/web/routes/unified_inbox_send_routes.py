@@ -2322,10 +2322,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 from src.inbox.window_guard import snapshot as _wg_snapshot
                 _rw = _wg_snapshot(plat, acc, chat_key, store=_inbox_store(request),
                                    config=_caps_cfg)
+                if not _rw:
+                    # 实施97：微信客服的 48h·5 条由 kf_window_guard 记账（含平台关窗事件），
+                    # window_guard 对它让路 → 这里用同一 UI 契约的适配快照，前端信息带零改动
+                    from src.inbox.kf_window_guard import ui_snapshot as _kf_ui_snapshot
+                    _rw = _kf_ui_snapshot(plat, acc, chat_key, config=_caps_cfg)
                 if _rw:
                     out["reply_window"] = _rw
             except Exception:
                 logger.debug("send-caps reply_window 快照跳过", exc_info=True)
+            # 实施97：微信客服会话在企微侧的接待状态（智能助手/排队/人工 xx/已结束）→ 会话头状态条；
+            # 30s 进程内缓存，无 worker 不带此键
+            if plat == "wechat_kf":
+                try:
+                    from src.integrations.wechat_kf_webhook import kf_session_snapshot
+                    _ks = await kf_session_snapshot(acc, chat_key)
+                    if _ks:
+                        out["kf_session"] = _ks
+                except Exception:
+                    logger.debug("send-caps kf_session 快照跳过", exc_info=True)
         # #73-③（0830 UDEKBY）可见面：该会话 peer 挂着 dead-peer 标时坐席必须
         # 看得见「自动回复已对此人停用+原因」——此前 AI 静默跳过、坐席零感知。
         # chat_key 为可选新参（旧前端不传=响应形状不变）。

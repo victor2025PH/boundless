@@ -199,12 +199,12 @@
       "compliance": "main",
       "implemented": true,
       "msg_id_fields": [],
-      "console_url": "https://kf.weixin.qq.com/",
+      "console_url": "https://work.weixin.qq.com/wework_admin/frame#apps",
       "region_aware": false,
       "facts_label": "微信客服（企业微信）",
       "icon": "wechat",
       "sort": 75,
-      "note": "企业微信官方通道；与个人微信（wechat）是两个平台"
+      "note": "企业微信官方通道；凭证在企微管理后台「应用管理」取（与 channel_setup 同一入口）；与个人微信（wechat）是两个平台"
     },
     {
       "id": "wechat",
@@ -224,7 +224,7 @@
       "facts_label": "个人微信",
       "icon": "wechat",
       "sort": 76,
-      "note": "实施97 线 B：PC 副驾（准入区）"
+      "note": "实施97 线 B：PC 副驾（桌面桥接账号 mode=desktop，非编排器 worker → implemented 保持 False）；接入引导 /workspace/connect/wechat_pc"
     },
     {
       "id": "douyin",

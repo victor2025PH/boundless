@@ -1013,14 +1013,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "supported-platforms",
         "支持哪些平台 / 支持抖音吗",
         "Which platforms are supported / is Douyin (TikTok) supported",
-        "当前支持四个平台：Telegram、WhatsApp、LINE、Messenger（Facebook），"
-        "账号接入都在坐席工作台的账号抽屉完成。抖音/TikTok、微信当前版本"
-        "暂不支持。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
-        "Four platforms are supported today: Telegram, WhatsApp, LINE and "
-        "Messenger (Facebook); accounts are connected from the account "
-        "drawer in the agent workspace. Douyin/TikTok and WeChat are not "
-        "supported in this version. To request another platform, submit it "
-        "via the Report tab.",
+        "当前支持：Telegram、WhatsApp、LINE、Messenger（Facebook）、Instagram、Zalo，"
+        "以及微信客服（企业微信官方通道，工作台「账号管理 → 微信客服 → 接入」五步引导，填企微自建应用凭证、"
+        "不用扫码，微信用户扫客服二维码咨询）。个人微信不作为自动聊天渠道接入，但提供「PC 副驾」："
+        "读取电脑上已登录的微信、AI 给建议、半自动代发（Windows，入口在账号管理的「个人微信 · PC 副驾」卡，"
+        "教程 /help/onboarding/wechat_pc）。账号接入在坐席工作台的账号抽屉或「接入向导」完成。抖音/TikTok "
+        "当前版本暂不支持。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
+        "Supported today: Telegram, WhatsApp, LINE, Messenger (Facebook), Instagram, Zalo, "
+        "and WeChat Customer Service (the WeCom official channel — a 5-step guide under Accounts → "
+        "WeChat Service → Connect; enter your WeCom self-built app credentials, no QR login; WeChat users "
+        "scan the service QR to chat). Personal WeChat is not an auto-chat channel, but a PC copilot is "
+        "available: it reads the signed-in WeChat on the PC, drafts suggestions and can semi-auto send "
+        "(Windows; see the Personal WeChat · PC copilot card and /help/onboarding/wechat_pc). Accounts "
+        "are connected from the account drawer or the Setup Wizard. Douyin/TikTok are not supported in "
+        "this version. To request another platform, submit it via the Report tab.",
         # ⚠ 词表刻意不含裸「支持/接入/渠道/哪些」：宽词把「支持多少个并发坐席」
         # （189.92 假命中）与「**哪些**对话需要我亲自处理」这类别家问题吸过来；
         # 标题已自带「支持哪些平台/支持抖音吗」锚点，词表只留平台名。

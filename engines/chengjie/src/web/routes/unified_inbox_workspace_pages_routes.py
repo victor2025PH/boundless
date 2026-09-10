@@ -226,6 +226,32 @@ def register_workspace_pages_routes(
             return RedirectResponse("/workspace/dash", status_code=307)
         return templates.TemplateResponse(request, "setup_wizard.html", _page_ctx(request))
 
+    # 实施97：多步引导型接入页（微信客服五步 / 个人微信 PC 副驾六步）。坐席也可进：
+    # 需要主管权限的步骤在页内显示「邀请管理员完成」，不 307 走人。
+    _GUIDE_PLATS = ("wechat_kf", "wechat_pc")
+
+    @app.get("/workspace/connect/{platform}", response_class=HTMLResponse)
+    async def workspace_connect_guide(platform: str, request: Request, _=Depends(page_auth)):
+        plat = str(platform or "").strip().lower()
+        if plat not in _GUIDE_PLATS:
+            from fastapi import HTTPException
+            raise HTTPException(404, "unknown guide")
+        ctx = _page_ctx(request)
+        ctx["guide_platform"] = plat
+        ctx["is_supervisor"] = bool(_is_supervisor(request))
+        faq: List[Dict[str, Any]] = []
+        try:
+            from src.assistant.onboarding_guides import guide_for
+            g = guide_for(plat, str(getattr(request.state, "ui_lang", "") or "zh"))
+            if g:
+                faq = list(g.get("errors") or [])
+                ctx["guide_rules"] = list(g.get("rules") or [])
+        except Exception:
+            faq = []
+        ctx["guide_faq"] = faq
+        ctx.setdefault("guide_rules", [])
+        return templates.TemplateResponse(request, "connect_guide.html", ctx)
+
     # ── 渠道中心（四渠道设置融合，主管专属）─────────────────────────
     # 旧管理后台四页（/telegram /line-rpa /messenger-rpa /whatsapp-rpa）整体迁入
     # 工作台壳：正文 partial =_channel_body_<ch>.html，观感由 workspace_channels.html

@@ -65,8 +65,10 @@ def test_unsupported_list_covers_the_common_asks():
     「没提到」和「明确不支持」对用户是两种体验：前者让他继续追问/以为在路上，
     后者他当场就能决策。老板实录问的正是「支持抖音吗」。
     """
+    # 「微信」以「个人微信」条目承载（实施97：企业微信的「微信客服」已支持，个人号明确不支持）
     for must in ("微信", "抖音"):
-        assert must in UNSUPPORTED_CHANNELS, f"{must} 是高频提问，必须显式回答"
+        assert any(must in ch for ch in UNSUPPORTED_CHANNELS), (
+            f"{must} 是高频提问，必须显式回答")
 
 
 def test_facts_block_carries_boundaries_in_both_langs():

@@ -726,6 +726,25 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     except Exception:
                         assistant.logger.debug("HealthWatchdog 启动跳过", exc_info=True)
 
+                    # ── 实施97：官网中继设备端（relay.enabled）——把企微回调/成员登录回跳带进 NAT 后的本实例 ──
+                    try:
+                        from src.integrations.relay_client import RelayClient, ensure_identity, relay_config
+                        _rc = relay_config(assistant.config.config or {})
+                        if _rc["enabled"]:
+                            _dev_id, _dev_secret = ensure_identity(assistant.config)
+                            _web = (assistant.config.config or {}).get("web_admin") or {}
+                            _relay = RelayClient(
+                                relay_url=_rc["url"], device_id=_dev_id, secret=_dev_secret,
+                                local_base=f"http://127.0.0.1:{int(_web.get('port') or 18799)}",
+                                register_key=_rc["register_key"], ping_sec=_rc["ping_sec"],
+                                app_version=str(getattr(web_app.state, "version", "") or ""),
+                            )
+                            web_app.state.relay_client = _relay
+                            asyncio.ensure_future(_relay.run_forever())
+                            assistant.logger.info("官网中继设备端已启动：%s → 公网前缀 %s", _rc["url"], _relay.public_base)
+                    except Exception:
+                        assistant.logger.debug("官网中继设备端启动跳过", exc_info=True)
+
                     # ── N2：ScheduledReporter 定时简报推送 ─────────────
                     try:
                         from src.inbox.scheduled_reporter import ScheduledReporter

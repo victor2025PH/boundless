@@ -312,6 +312,43 @@ CHANNELS: List[Channel] = [
         ],
     ),
     Channel(
+        id="wechat_kf",
+        name="微信客服（企业微信）",
+        enable_key="wechat_kf.enabled",
+        official_platform="wechat_kf",
+        # account_id 口径 = wechat_kf.open_kfid（留空按 official 记账，worker 启动时从
+        # kf/account/list 取第一个可管理的客服账号并回写 meta.open_kfid）
+        official_account_id_key="wechat_kf.open_kfid",
+        console_url="https://work.weixin.qq.com/wework_admin/frame#apps",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入微信客服（企业微信官方通道）：任何微信用户扫客服二维码/点客服链接即可咨询，"
+            "不用加好友；用你自己企业的企微，无需服务商。个人微信不在此渠道内。"
+        ),
+        api_intro=(
+            "企微管理后台 → 应用管理 → 自建应用 拿 CorpID / Secret，并在「微信客服 → 可调用接口的应用」"
+            "把该应用配进去、勾选可管理的客服账号；应用需配可信 IP（本机出站 IP）。"
+            "默认轮询拉取（免公网）；配了回调 Token/EncodingAESKey 并把「接收消息服务器 URL」指到 "
+            "https://<你的域名>/wechat/kf/callback 可秒级触发。"
+            "硬规则：客户最后一条消息后 48 小时内最多回 5 条（超出会自动 HOLD 等客户回复），"
+            "无 typing / 已读回执，AI 身份披露在该渠道恒开（大陆法规）。"
+        ),
+        fields=[
+            Field("wechat_kf.corpid", "企业 CorpID",
+                  help="企业微信管理后台 → 我的企业 → 企业信息 → 企业 ID"),
+            Field("wechat_kf.secret", "自建应用 Secret", secret=True,
+                  help="应用管理 → 自建应用 → Secret（须是配在「微信客服 → 可调用接口的应用」里的那个应用）"),
+            Field("wechat_kf.open_kfid", "客服账号 ID（open_kfid）", required=False,
+                  help="可选；留空则自动取第一个可管理的客服账号。企微后台「微信客服」→ 账号 → 账号 ID"),
+            Field("wechat_kf.callback.token", "回调 Token", required=False, secret=True,
+                  help="可选；企微自建应用「接收消息」里设置的 Token（与 EncodingAESKey 同时填才启用回调）"),
+            Field("wechat_kf.callback.encoding_aes_key", "回调 EncodingAESKey", required=False,
+                  secret=True, help="可选；43 位 EncodingAESKey，与 Token 配对"),
+            Field("wechat_kf.welcome_text", "欢迎语", required=False,
+                  help="可选；客户进入会话时自动发送（官方 20 秒有效期，仅文字）"),
+        ],
+    ),
+    Channel(
         id="web",
         name="网页客服 Widget",
         enable_key="web_chat.enabled",

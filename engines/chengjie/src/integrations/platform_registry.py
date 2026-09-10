@@ -151,9 +151,9 @@ _SPECS: Tuple[PlatformSpec, ...] = (
         id="wechat_kf", name="WeChat Service", name_zh="微信客服", family="tencent",
         color="#07C160", modes=("official",), default_mode="official",
         compliance=COMPLIANCE_MAIN, implemented=True, icon="wechat",
-        facts_label="微信客服（企业微信）", console_url="https://kf.weixin.qq.com/", sort=75,
+        facts_label="微信客服（企业微信）", console_url="https://work.weixin.qq.com/wework_admin/frame#apps", sort=75,
         aliases=("wxkf", "wecom_kf"),
-        note="企业微信官方通道；与个人微信（wechat）是两个平台",
+        note="企业微信官方通道；凭证在企微管理后台「应用管理」取（与 channel_setup 同一入口）；与个人微信（wechat）是两个平台",
     ),
     PlatformSpec(
         id="qq", name="QQ", name_zh="QQ 个人号", family="tencent",
@@ -168,7 +168,7 @@ _SPECS: Tuple[PlatformSpec, ...] = (
         color="#07C160", modes=("device",), default_mode="device",
         compliance=COMPLIANCE_RESTRICTED, implemented=False,
         facts_label="个人微信", sort=76, aliases=("weixin",),
-        note="实施97 线 B：PC 副驾（准入区）",
+        note="实施97 线 B：PC 副驾（桌面桥接账号 mode=desktop，非编排器 worker → implemented 保持 False）；接入引导 /workspace/connect/wechat_pc",
     ),
     PlatformSpec(
         id="douyin", name="Douyin", name_zh="抖音", family="bytedance",

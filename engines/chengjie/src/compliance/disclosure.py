@@ -51,7 +51,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from src.compliance import crisis_protocol_url, notice_enabled, notice_text_override
+from src.compliance import (
+    crisis_protocol_url, notice_enabled, notice_text_override, platform_of_conversation_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +225,10 @@ def apply_disclosure(
     """
     try:
         t = str(text or "")
-        if not t or not notice_enabled(config):
-            return t, False
         key = str(conversation_key or "").strip()
+        # 实施97：会话键前缀即平台——微信客服等强制平台不看运营开关
+        if not t or not notice_enabled(config, platform=platform_of_conversation_key(key)):
+            return t, False
         if not key or already_disclosed(key):
             return t, False
         notice = disclosure_text(config, lang_hint=lang_hint, sample_text=t)
@@ -259,7 +262,7 @@ def apply_disclosure_for(
     try:
         from src.compliance.runtime import runtime_config
         cfg = runtime_config()
-        if not notice_enabled(cfg):
+        if not notice_enabled(cfg, platform=platform_of_conversation_key(conversation_id)):
             return str(text or ""), False
         lh = str(lang_hint or "")
         if not lh and store is not None:

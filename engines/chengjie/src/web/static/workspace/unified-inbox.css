@@ -3381,6 +3381,13 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .acct-pill.hist-removed{color:var(--text-sub);background:color-mix(in srgb,var(--text-sub) 13%,transparent);}
 .acct-pill.hist-only{color:var(--text-sub);background:color-mix(in srgb,var(--text-sub) 9%,transparent);border:1px dashed color-mix(in srgb,var(--text-sub) 30%,transparent);}
 .acct-pill.hist-reg{color:var(--accent);background:color-mix(in srgb,var(--accent) 11%,transparent);}
+/* 桥接驱动（PC 副驾）心跳在线：绿点 + 档位，与在线号同一「可收可发」语义色 */
+.acct-pill.hist-live{color:var(--tk-ok-ink,#0f766e);background:color-mix(in srgb,var(--tk-ok-ink,#0f766e) 12%,transparent);}
+.acct-pill.hist-live::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--tk-ok-ink,#0f766e);margin-right:4px;vertical-align:1px;}
+/* 副驾进程在线但读不到屏（微信收进托盘/退出登录）：琥珀——不是故障，是要主人动一下 */
+.acct-pill.hist-blind{color:var(--tk-warn-ink,#b45309);background:rgba(245,158,11,.14);}
+.acct-pill.hist-blind::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--tk-amber,#f59e0b);margin-right:4px;vertical-align:1px;}
+.ahp-tag.blind{color:var(--tk-warn-ink,#b45309);border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.10);}
 /* 已退出主 CTA＝琥珀（可救、不紧急）——红色 .reconnect 留给在册离线故障号 */
 .acct-hist-row .acct-btn.hist-relogin{flex:1 1 auto;border-color:color-mix(in srgb,var(--warn,#f59e0b) 45%,transparent);color:var(--tk-warn-ink,#b45309);background:color-mix(in srgb,var(--warn,#f59e0b) 12%,transparent);font-weight:600;}
 .acct-hist-row .acct-btn.hist-relogin:hover{background:color-mix(in srgb,var(--warn,#f59e0b) 20%,transparent);border-color:var(--warn,#f59e0b);color:var(--tk-warn-ink,#b45309);}
@@ -3542,6 +3549,8 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .ahp-tag.out{color:var(--tk-amber-ink,#d97706);border-color:color-mix(in srgb,var(--tk-amber-ink,#d97706) 45%,transparent);background:color-mix(in srgb,var(--tk-amber-ink,#d97706) 10%,transparent);}
 .ahp-tag.removed{color:var(--text-sub);background:var(--bg-soft);}
 .ahp-tag.reg{color:var(--tk-ok-ink,#0f766e);border-color:color-mix(in srgb,var(--tk-ok-ink,#0f766e) 40%,transparent);}
+.ahp-tag.live{color:var(--tk-ok-ink,#0f766e);border-color:color-mix(in srgb,var(--tk-ok-ink,#0f766e) 40%,transparent);background:color-mix(in srgb,var(--tk-ok-ink,#0f766e) 10%,transparent);}
+.ahp-tag.live::before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--tk-ok-ink,#0f766e);margin-right:3px;}
 .ahp-meta{font-size:10.5px;color:var(--text-sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ahp-row .ac-unread{flex:none;background:color-mix(in srgb,var(--text-sub,#64748b) 82%,transparent);color:#fff;border-radius:999px;font-size:10px;padding:0 5px;min-width:16px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;}
 .ahp-cta{flex:none;display:inline-flex;align-items:center;gap:4px;border-radius:8px;font-size:11px;line-height:1.2;

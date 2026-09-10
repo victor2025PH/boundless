@@ -76,10 +76,18 @@ def register_auth_user_routes(
 
     def _login_ctx(request: Request, *, error: str = "", next_raw: str = ""):
         nxt = safe_next_path(next_raw) or safe_next_path(request.query_params.get("next"))
+        # 实施97 P1：企业微信扫码登录入口（wecom_login.enabled 且凭证齐才亮）
+        wecom_on = False
+        try:
+            from src.integrations.wecom_sso import sso_config, sso_ready
+            wecom_on = sso_ready(sso_config(_runtime_config() or {}))[0]
+        except Exception:
+            wecom_on = False
         return {
             "error": error,
             "has_users": user_store.user_count() > 0,
             "next": nxt,
+            "wecom_login": wecom_on,
         }
 
     # ── 角色分层守卫（谁能管谁 / 谁能发什么角色，判定在 web_user_store 单点）──

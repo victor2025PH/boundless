@@ -592,8 +592,11 @@ def _accounts_summary_list(
             continue
         seen.add((p, a))
         mode = str((info or {}).get("mode") or "")
-        out.append(_row(p, a, "desktop" if mode == "desktop" else "registered",
-                        False, label=str((info or {}).get("label") or "")))
+        row = _row(p, a, "desktop" if mode == "desktop" else "registered",
+                   False, label=str((info or {}).get("label") or ""))
+        if isinstance((info or {}).get("bridge"), dict):
+            row["bridge"] = dict(info["bridge"])   # 桥接驱动存活（PC 副驾）：alive/age_sec/tier/readonly
+        out.append(row)
     for (pl, aid) in (directory or {}):
         p, a = str(pl or "web"), str(aid or "default")
         if (p, a) in seen:

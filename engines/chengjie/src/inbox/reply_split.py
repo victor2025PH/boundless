@@ -651,11 +651,19 @@ def should_split_for_delivery(
     orch_owns: bool,
     chat_type: str = "",
 ) -> bool:
-    """投递侧总闸：配置开 +（非 orch_only 或编排器拥有）+ 非群。"""
+    """投递侧总闸：配置开 +（非 orch_only 或编排器拥有）+ 非群 + 非窗口配额平台。"""
     if not cfg or not cfg.get("enabled"):
         return False
     if cfg.get("orch_only", True) and not orch_owns:
         return False
+    # 实施97：微信客服等「每轮 5 条」配额平台一律整段一条——拆 3 条＝白烧 3/5 配额，
+    # 客户一句「好」就可能把本轮额度耗尽，比拟人节奏重要得多。
+    try:
+        from src.inbox.kf_window_guard import is_quota_platform
+        if is_quota_platform(platform):
+            return False
+    except Exception:
+        pass
     if cfg.get("skip_groups", True):
         ct = str(chat_type or "").strip().lower()
         if ct and ct not in ("private", ""):
