@@ -1170,6 +1170,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 pass
 
         _send_agent = _session_agent(request)
+        _consumed_drafts: list = []   # Q-10 A：本次发送置 consumed 的草稿 id（回给前端免二次 cancel）
 
         def _mark_send(cid: str) -> None:
             """发送成功后打坐席首响归属点（best-effort，失败不影响发送）。"""
@@ -1196,6 +1197,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     _asw.note_agent_send(cid)
             except Exception:
                 logger.debug("[inflight] agent_send 取消在途稿失败（已忽略）", exc_info=True)
+            # Q-10 A（#267，CV4E22 / RU89S6）：坐席发送成功 ＝ 这条入站已被人回过 →
+            # 会话在途 AI 稿（含 Tab 采用的那条 body.draft_id）同步置 consumed 并从面板
+            # 移除；仅新入站再产新稿。此前只靠前端 fire-and-forget cancel，与紧随的
+            # GET pending 竞态 → 旧稿被顶回、坐席每次都要多点一次「忽略」。
+            try:
+                from src.inbox.autodraft_helpers import consume_drafts_on_agent_send
+                _consumed_drafts.extend(consume_drafts_on_agent_send(
+                    ibx, cid, draft_id=str(body.get("draft_id") or ""),
+                    by="agent_send"))
+            except Exception:
+                logger.debug("[draft] agent_send 置 consumed 失败（已忽略）", exc_info=True)
             # Sprint1 接管即静音：坐席出站即把会话切 manual，停 AI（后续入站不再产 L2/autosend，
             # protocol 直发亦让位），与 web_chat 适配器(channel_adapters.send)一致；重复调用幂等。
             # P0 2026-08-09：统一走 record_agent_takeover——打 source=takeover 标
@@ -1453,6 +1465,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             "bubbles": _bubbles_info,
             "quote_applied": bool(
                 isinstance(result, dict) and result.get("quote_applied")),
+            "consumed_drafts": list(_consumed_drafts),
         }
 
     @app.post("/api/unified-inbox/send-gate/exempt")

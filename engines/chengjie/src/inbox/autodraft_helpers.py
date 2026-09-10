@@ -903,6 +903,73 @@ class AutoDraftConfig:
     skip_groups_trust_weak: bool = False
 
 
+DRAFT_STATUS_CONSUMED = "consumed"
+_CONSUME_SCAN_LIMIT = 20
+
+
+def consume_drafts_on_agent_send(
+    store: Any, conversation_id: str, *, draft_id: str = "", by: str = "agent_send",
+) -> list:
+    """Q-10 A（#267，CV4E22 / RU89S6）：坐席人工发送成功 → 该会话在途草稿置 ``consumed``。
+
+    语义：坐席已经替这条入站回过话了（不论是原样采用 Tab、改过再发，还是自己另写），
+    面板上那条 AI 稿就没有存在的意义——**仅新入站才产生新稿**（``upsert_draft`` 单行复用，
+    下一条入站会把本行重生为 pending）。「忽略」（前端 dismiss / reject）语义不变。
+
+    为什么放服务端而不是靠前端 ``_cdraftResolveAdopted`` 的 fire-and-forget cancel：
+    前端 POST resolve 不 await 就立刻 GET pending 刷草稿条，旧稿先一步被顶回；且
+    桌面壳 / 其它端发送不走那段 JS。放在 send 成功路径里同步落库，前端随后的刷新
+    必然看不到它。
+
+    只碰 ``pending`` / ``enriching``（``update_draft_status`` 的原子闸门），已投递 / 已处置
+    的终态一律不动；``draft_id`` 给了（前端采用的那条）优先，再扫会话其余在途稿。
+    best-effort：store 缺方法 / 异常 → 返回已消费列表（可能为空），绝不影响发送。
+    返回本次置 consumed 的 draft_id 列表。
+    """
+    if store is None:
+        return []
+    cid = str(conversation_id or "").strip()
+    log = logging.getLogger("ai_chat_assistant.autodraft")
+    candidates: list = []
+    seen: set = set()
+    did0 = str(draft_id or "").strip()
+    if did0:
+        candidates.append(did0)
+        seen.add(did0)
+    if cid:
+        # 单行复用约定：inbox 源草稿 id 恒为 inbox:<conversation_id>
+        canon = f"inbox:{cid}"
+        if canon not in seen:
+            candidates.append(canon)
+            seen.add(canon)
+        lister = getattr(store, "list_drafts", None)
+        if callable(lister):
+            for status in ("pending", "enriching"):
+                try:
+                    rows = lister(conversation_id=cid, status=status,
+                                  limit=_CONSUME_SCAN_LIMIT) or []
+                except Exception:
+                    log.debug("[draft] 列举在途草稿失败（忽略）conv=%s", cid, exc_info=True)
+                    continue
+                for r in rows:
+                    did = str((r or {}).get("draft_id") or "").strip()
+                    if did and did not in seen:
+                        candidates.append(did)
+                        seen.add(did)
+    updater = getattr(store, "update_draft_status", None)
+    if not callable(updater):
+        return []
+    consumed: list = []
+    for did in candidates:
+        try:
+            if updater(did, status=DRAFT_STATUS_CONSUMED, decided_by=by):
+                consumed.append(did)
+                log.info("[draft] consumed draft_id=%s by=%s conv=%s", did, by, cid or "-")
+        except Exception:
+            log.debug("[draft] 置 consumed 失败（忽略）draft_id=%s", did, exc_info=True)
+    return consumed
+
+
 def _a_line_on_duty(app_config, conv: dict, text: str) -> bool:
     """A 线此刻是否会直发本条消息（与 telegram_client 的班表闸同一判定）。
 

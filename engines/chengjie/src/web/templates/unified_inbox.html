@@ -14810,6 +14810,7 @@ async function sendMsg(){
       client_msg_id: _newClientMsgId(),   // P0 幂等键：双窗口/双击重复提交服务端拒重
       bubbles: _bubblePref()?1:0,         // P1.5 多句分条 opt-in（服务端配置/群聊守卫仍生效）
     };
+    if(_cdraft.adoptedId) body.draft_id=_cdraft.adoptedId;   // Q-10 A（#267）：采用的草稿随发送 → 服务端同步置 consumed
     if(_serverXlate) body.target_lang=_outLang;   // P0：一击直发让后端翻译（含 'auto'）
     // P4-5B 引用回复：携带被引用消息上下文（发送后清除引用条）
     if(_replyTarget && _replyTarget.id){ body.reply_to=_replyTarget; _cancelReply(); }
@@ -14855,7 +14856,7 @@ async function sendMsg(){
       }catch(_){}
       // 成功：移除乐观消息（下次 loadThread 会带真实消息）
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
-      _cdraftResolveAdopted();   // 二期：人工发送成功 → 已采用的 pending 草稿闭环 cancel
+      _cdraftResolveAdopted(d.consumed_drafts);   // 二期：人工发送成功 → 已采用的 pending 草稿闭环（Q-10 A：服务端已置 consumed 则免二次 cancel）
       await loadThread(selectedChat,true);
       await loadChats();
       // P0 2026-08-09：手动发送触发「接管即静音」（服务端已切 manual），
@@ -16984,12 +16985,19 @@ function _cdraftExpand(){
   if(bar) bar.classList.remove('slim');
 }
 // 采用的草稿在人工发送成功后 cancel（fire-and-forget；审计留痕 by=composer_adopt）
-function _cdraftResolveAdopted(){
+// Q-10 A（#267，CV4E22）：send 成功路径已在服务端同步把会话在途稿置 consumed（响应
+// consumed_drafts）——此时不再补发 cancel（会拿 409 already_resolved），直接刷草稿条；
+// 旧后端无该字段才走原 fire-and-forget cancel。
+function _cdraftResolveAdopted(consumedSrv){
   const id=_cdraft.adoptedId;
-  if(!id) return;
   _cdraft.adoptedId='';
-  apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'cancel', by:'composer_adopt'})}, {timeoutMs: 60000}).catch(()=>{});
+  const srvDone=Array.isArray(consumedSrv)&&consumedSrv.length>0;
+  if(!id && !srvDone) return;
+  _cdraft.draft=null; _cdraftRender();       // 服务端已消费/即将取消 → 面板先收，刷新只会拿到新入站的新稿
+  if(id && !srvDone){
+    apiFetch(`/api/drafts/${enc(id)}/resolve`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'cancel', by:'composer_adopt'})}, {timeoutMs: 60000}).catch(()=>{});
+  }
   if(selectedChat){ _refreshComposerDraft(selectedChat); if(aiDraftOn) loadDrafts(selectedChat); }
 }
 
@@ -19986,7 +19994,7 @@ async function _sendDraftParts(parts){
   _sendInFlight=true;
   if(btn) btn.disabled=true;
   showHint(window.Tf('inbox.dpick.sending',{n:parts.length}));
-  var sent=0, forceLang=false, forceDup=false, stopped=-1;
+  var sent=0, forceLang=false, forceDup=false, stopped=-1, consumedSrv=null;
   try{
     for(var i=0;i<parts.length;i++){
       if(!_sameConv()){ stopped=i; break; }       // 会话切走即停
@@ -20003,6 +20011,7 @@ async function _sendDraftParts(parts){
       // C3（#148）：整批沿用的 force 标志是「链路自带」不是本条人点——服务端日志按 src 区分
       if(forceLang){ body.force_lang=1; body.force_src='batch_confirm'; body._force_used=true; }
       if(forceDup){ body.force_dup=1; body.force_src='batch_confirm'; body._force_used=true; }
+      if(i===0 && _cdraft.adoptedId) body.draft_id=_cdraft.adoptedId;   // Q-10 A（#267）：首条带上采用的草稿 id
       if(i===0 && _dpickMeta && _dpickMeta.text){
         // 采纳归因（只记首条防多算）：AI 弹窗草稿 → 实发，经既有 copilot_meta 审计链
         // 落 /api/workspace/agent-copilot-stats 的 by_source。exact=原样发，edit=坐席改过。
@@ -20016,7 +20025,7 @@ async function _sendDraftParts(parts){
       try{
         var r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:60000});
         var d=await r.json().catch(function(){ return {}; });
-        if(d&&d.ok){ ok=true; }
+        if(d&&d.ok){ ok=true; if(Array.isArray(d.consumed_drafts)&&d.consumed_drafts.length) consumedSrv=d.consumed_drafts; }
         else{
           var det=d&&d.detail;
           if(r.status===409 && det && typeof det==='object' && det.code==='send_blocked'){
@@ -20057,7 +20066,7 @@ async function _sendDraftParts(parts){
     if(btn) btn.disabled=false;
   }
   if(sent>0){
-    try{ _cdraftResolveAdopted(); }catch(_){}     // 人工发送成功 → 采用中的 pending 草稿闭环
+    try{ _cdraftResolveAdopted(consumedSrv); }catch(_){}     // 人工发送成功 → 采用中的 pending 草稿闭环
     if(selectedChat && convKey(selectedChat)===convKey(c)){
       try{ await loadThread(c,true); }catch(_){}
     }
@@ -25412,6 +25421,7 @@ const _CONNECT_FAIL_REASON_KEYS={
   code_invalid:'inbox.connect.err_code_invalid',
   code_expired:'inbox.connect.err_code_expired',
   dc_migrate_failed:'inbox.connect.err_dc_migrate_failed',
+  session_closed:'inbox.connect.err_session_closed',
   temp_unavailable:'inbox.connect.err_temp_unavailable',
 };
 // 失败短状态（遮罩/状态行用）：短语说「哪一环坏了」，失败卡的长文案说「为什么 + 怎么办」。
