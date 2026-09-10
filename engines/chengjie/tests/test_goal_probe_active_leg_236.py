@@ -832,7 +832,7 @@ def test_card_counts_frontend_and_i18n_and_hosts():
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
         # Q-1 E a → Q-5 C b（unified_inbox.html 别线整文件在途，b 戳随宿主线前移，两戳皆认）
-        assert _re.search(r"cp-goal\.js\?v=20260910[abc]", (REPO / host).read_text(encoding="utf-8")), host
+        assert _re.search(r"cp-goal\.js\?v=20260910[abcd]", (REPO / host).read_text(encoding="utf-8")), host
 
 
 # ══ E 「现在就问一个」：预览 → 点发即发（care send_now 三闸 + 冻结检查）→ 计入主动出手 ═══
@@ -859,16 +859,41 @@ class _FakeCareStore:
 
 
 class _FakeDispatcher:
-    def __init__(self, text, decision="sent", dry=False):
-        self.text, self.decision, self.dry = text, decision, dry
+    """Q-8 G（#264）：直投 ``send_text_now``——文本原样发；不再有 care 行 / send_now。"""
+
+    def __init__(self, text="", decision="sent", reason=""):
+        self.text, self.decision, self.reason = text, decision, reason
         self.calls = []
 
-    async def send_now(self, item):
-        self.calls.append(item)
-        return {"ok": self.decision in ("sent", "queued", "dry_sampled"),
-                "decision": self.decision, "reason": "", "text": self.text,
-                "row_id": 77, "sent_at": time.time() if self.decision == "sent" else 0.0,
-                "dry_run": self.dry, "held": ""}
+    async def send_text_now(self, *, platform, account_id, chat_key, text, tag="goal:probe",
+                            extra=None, now=None, pace_sec=0.0):
+        self.calls.append({"platform": platform, "account_id": account_id, "chat_key": chat_key,
+                           "text": text, "tag": tag, "extra": dict(extra or {}), "pace_sec": pace_sec})
+        return {"ok": self.decision in ("sent", "queued"), "decision": self.decision,
+                "reason": self.reason, "row_id": 77, "text": text,
+                "sent_at": time.time() if self.decision == "sent" else 0.0, "defer_until": time.time()}
+
+
+class _ActiveInbox(_StubInbox):
+    """客户 N 秒前刚来过消息（活跃窗）。"""
+
+    def __init__(self, age_sec=60.0, text="It's raining here again"):
+        super().__init__()
+        self.age, self.text = age_sec, text
+        self.outreach = []
+
+    def list_recent_messages(self, conv, limit=10):
+        return [{"direction": "out", "text": "hey", "ts": time.time() - self.age - 30},
+                {"direction": "in", "text": self.text, "ts": time.time() - self.age}]
+
+    def record_outreach(self, conv, **kw):
+        self.outreach.append((conv, kw))
+
+    def count_outreach_since(self, conv, since_ts):
+        return len(self.outreach)
+
+    def last_outreach_ts(self, conv):
+        return 0.0
 
 
 @pytest.fixture
@@ -929,68 +954,195 @@ def test_probe_preview_lists_unfilled_in_rotation_order_with_examples(probe_app)
     assert probe_app.client.get(f"/api/goals/{g2['goal_id']}/probe/preview").status_code == 400
 
 
-def test_probe_send_goes_through_care_send_now_and_counts(probe_app, caplog):
-    """点发即发：排 goal:{gid}:q{ts} care 行 → 派发器 send_now（同一条守卫 / 拟稿 / 投递链）
-    → 出站文本当场校验 asked → probe_manual + probe_asked 事件 + 当日拍 asked:location +
-    _gap_asked 轮换 + [goal-probe] manual=1 日志；suggest 档也能点（人就是审批）。"""
+def test_probe_preview_returns_editable_text_route_and_budget(probe_app):
+    """Q-8 G：预览即所发——候选带 ``text``（按客户语言的示例句）；沉寂 → route=direct；
+    预算只提醒（budget 字段）；活跃窗（10 分钟内来过信）→ route=must。"""
+    d = probe_app.client.get(f"/api/goals/{probe_app.gid}/probe/preview").json()
+    assert d["route"] == "direct" and d["last_inbound_age_sec"] is None
+    assert d["candidates"][0]["text"] and d["candidates"][0]["text"] == d["candidates"][0]["example"]
+    assert set(d["budget"]) >= {"today_n", "over", "enabled"} and d["budget"]["over"] is False
+    assert d["active_window_sec"] == 600
+    probe_app.stub["inbox"] = _ActiveInbox(age_sec=90)
+    d2 = probe_app.client.get(f"/api/goals/{probe_app.gid}/probe/preview").json()
+    assert d2["route"] == "must" and 80 <= d2["last_inbound_age_sec"] <= 100
+    assert d2["customer_lang"] == "en" and d2["candidates"][0]["text"].startswith("By the way, which city")
+
+
+def test_probe_send_direct_bypasses_dispatcher_queue_and_counts(probe_app, caplog):
+    """Q-8 G：沉寂客户 → 直接单发 ``send_text_now``（不建 care 行、不过 contact_budget）；
+    发的就是 ``text``；→ probe_manual + probe_asked + beat_sent + 当日拍 asked:location +
+    _gap_asked + record_outreach + ``[goal-probe] manual=1 direct=1`` 日志；suggest 档也能点。"""
+    probe_app.stub["inbox"] = inbox = _ActiveInbox(age_sec=3600)
     with caplog.at_level(logging.INFO, logger="ai_chat_assistant.goal_routes"):
-        r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"slot": "location"})
+        r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send",
+                                  json={"slot": "location", "text": "By the way, which city are you in? "})
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["ok"] is True and d["decision"] == "sent" and d["slot"] == "location"
-    assert d["asked"] is True and "Which city" in d["text"] and d["care_id"] == 1
-    row = probe_app.care.rows[1]
-    assert parse_goal_care_kind(row["topic_norm"])[0] == "probe"
-    assert parse_goal_care_kind(row["topic_norm"])[1] == probe_app.gid
-    assert "人在哪个城市" in row["source_text"] and "必须带这一个问题" in row["source_text"]
-    assert probe_app.disp.calls and probe_app.disp.calls[0]["id"] == 1
+    assert d["ok"] is True and d["decision"] == "sent" and d["route"] == "direct" and d["slot"] == "location"
+    assert d["asked"] is True and d["text"] == "By the way, which city are you in?"
+    assert d["sent_hhmm"] and len(d["sent_hhmm"]) == 5 and d["row_id"] == 77
+    assert not probe_app.care.rows                                   # 不建 care 行
+    call = probe_app.disp.calls[0]
+    assert call["text"] == d["text"] and call["platform"] == PLAT and call["chat_key"] == CK
+    assert call["tag"].startswith("goal:probe:") and call["extra"]["goal_probe"] is True
+    assert call["extra"]["slot"] == "location" and call["extra"]["by"] == "tester"
     ev_kinds = [e["kind"] for e in probe_app.store.list_events(probe_app.gid, limit=20)]
-    assert "probe_manual" in ev_kinds and "probe_asked" in ev_kinds
+    assert "probe_manual" in ev_kinds and "probe_asked" in ev_kinds and "beat_sent" in ev_kinds
     from src.companion.goals.planner import day_key
     act = probe_app.store.get_action(probe_app.gid, day_key(time.time()))
     assert act and act["detail"] == "asked:location" and act["status"] == "sent"
     assert (probe_app.store.get_goal(probe_app.gid)["params"].get("_gap_asked") or []) == ["location"]
-    assert any("[goal-probe] manual=1 slot=location" in r_.getMessage() and "decision=sent" in r_.getMessage()
-               for r_ in caplog.records)
-    # 缺省槽＝轮换第一个未填（location 已问 → occupation）
-    probe_app.disp.text = "Nice. So what do you do for work?"
-    d2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={}).json()
-    assert d2["slot"] == "occupation" and d2["asked"] is True
-    # 拍清单：手动摸底行按 care 行 topic_norm 回标 probe:manual（sent_hook 走通用分支记 beat_sent）
-    probe_app.store.add_event(probe_app.gid, "beat_sent", "care:link care#1", conversation_id=CONV)
+    assert inbox.outreach and inbox.outreach[0][1]["batch_id"].startswith("goal_probe:")
+    assert any("[goal-probe] manual=1 direct=1 route=direct slot=location" in r_.getMessage()
+               and "decision=sent" in r_.getMessage() for r_ in caplog.records)
+    # 缺省槽＝轮换第一个未填（location 已问 → occupation）；文本没问到 → probe_missed
+    d2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send",
+                               json={"text": "Sounds cozy over there!"}).json()
+    assert d2["slot"] == "occupation" and d2["asked"] is False
+    assert probe_app.store.list_events(probe_app.gid, kinds=("probe_missed",))
+    # 拍清单：直投回执同步落 beat_sent → 「主动出手」计数
     tr = build_beats_trace(probe_app.store, probe_app.store.get_goal(probe_app.gid),
                            care_store=probe_app.care)
-    sent = [b for b in tr["beats"] if b["kind"] == "sent"]
-    assert sent and sent[0]["phase"] == "probe:manual" and tr["summary"]["sent"] == 1
-    assert tr["summary"]["probe_asked"] == 2
+    assert tr["summary"]["sent"] == 2 and tr["summary"]["probe_asked"] == 1
 
 
-def test_probe_send_dry_and_missed_and_gates(probe_app):
-    # 模拟运行：已拟稿未发出 → 不记 asked/missed、不动当日拍（没真发）
-    probe_app.disp.decision, probe_app.disp.dry = "dry_sampled", True
-    d = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"slot": "location"}).json()
-    assert d["decision"] == "dry_sampled" and d["dry_run"] is True and d["asked"] is None
-    assert not probe_app.store.list_events(probe_app.gid, kinds=("probe_asked", "probe_missed"))
-    # 真发了但模型没问 → probe_missed（当日拍不标 asked）
-    probe_app.disp.decision, probe_app.disp.dry = "sent", False
-    probe_app.disp.text = "Sounds cozy over there!"
-    d2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"slot": "location"}).json()
-    assert d2["asked"] is False
-    assert probe_app.store.list_events(probe_app.gid, kinds=("probe_missed",))
+def test_probe_send_active_window_injects_must_into_next_reply(probe_app, caplog):
+    """Q-8 G：客户 10 分钟内活跃 → 不单发；把这句挂到 goal.params._probe_must（TTL 30 分）→
+    build_block_for_chat 下一条回复硬注入（【本轮必问·硬性】）并一次性消费。"""
+    from src.companion.goals import service as svc
+    probe_app.stub["inbox"] = _ActiveInbox(age_sec=120)
+    with caplog.at_level(logging.INFO, logger="ai_chat_assistant.goal_routes"):
+        d = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send",
+                                  json={"slot": "location", "text": "你那边现在在哪个城市呀？"}).json()
+    assert d["ok"] is True and d["decision"] == "must_injected" and d["route"] == "must"
+    assert not probe_app.disp.calls and not probe_app.care.rows
+    assert d["expires_at"] - time.time() > 1700
+    g = probe_app.store.get_goal(probe_app.gid)
+    rec = g["params"][svc.PROBE_MUST_PARAM]
+    assert rec["slot"] == "location" and rec["text"] == "你那边现在在哪个城市呀？" and rec["by"] == "tester"
+    assert any("route=must" in r_.getMessage() for r_ in caplog.records)
+    # 下一条回复：service 消费 → 注入硬性行 + 摘键 + probe_must_consumed；[goal-inject] level=must reason=agent_probe
+    with caplog.at_level(logging.INFO, logger=svc.logger.name):
+        blk = svc.build_block_for_chat(
+            SimpleNamespace(config={"companion": {"goals": {"enabled": True, "db_path": ":memory:"}}}),
+            platform=PLAT, chat_key=CK, account_id=ACCT, conversation_id=CONV, user_context={},
+            chain="ai", inbound_text="haha you're funny", inbox_store=probe_app.stub["inbox"],
+            ai_client=None, now=time.time())
+    assert blk and "【本轮必问·硬性】" in blk and "你那边现在在哪个城市呀？" in blk
+    assert any("[goal-inject] level=must reason=agent_probe" in r_.getMessage() for r_ in caplog.records)
+    g2 = probe_app.store.get_goal(probe_app.gid)
+    assert svc.PROBE_MUST_PARAM not in (g2["params"] or {})
+    kinds = [e["kind"] for e in probe_app.store.list_events(probe_app.gid, limit=30)]
+    assert "probe_must_set" in kinds and "probe_must_consumed" in kinds
+    # 再来一条：已消费 → 不再硬注入这句
+    blk2 = svc.build_block_for_chat(
+        SimpleNamespace(config={"companion": {"goals": {"enabled": True, "db_path": ":memory:"}}}),
+        platform=PLAT, chat_key=CK, account_id=ACCT, conversation_id=CONV, user_context={},
+        chain="ai", inbound_text="lol", inbox_store=probe_app.stub["inbox"], ai_client=None, now=time.time())
+    assert "坐席指定" not in (blk2 or "")
+
+
+def test_probe_must_expired_is_dropped():
+    from src.companion.goals import service as svc
+    gs = GoalStore(":memory:")
+    g = _discovery_goal(gs)
+    t0 = time.time()
+    svc.set_agent_probe_must(gs, g, slot="location", text="which city?", by="a", now=t0)
+    g = gs.get_goal(g["goal_id"])
+    assert svc.take_agent_probe_must(gs, g, now=t0 + svc.PROBE_MUST_TTL_SEC + 5) is None
+    assert svc.PROBE_MUST_PARAM not in gs.get_goal(g["goal_id"])["params"]
+    assert gs.list_events(g["goal_id"], kinds=("probe_must_expired",))
+    # 新鲜的 → 返回记录（调用方在 patch 里摘键）
+    svc.set_agent_probe_must(gs, gs.get_goal(g["goal_id"]), slot="location", text="which city?", now=t0)
+    rec = svc.take_agent_probe_must(gs, gs.get_goal(g["goal_id"]), now=t0 + 10)
+    assert rec and rec["text"] == "which city?"
+    assert "问题本身不能少" in svc.agent_probe_line("which city?")
+
+
+def test_probe_send_text_required_budget_only_warns_and_gates(probe_app):
+    # 空文本 → 400（预览即所发，不许发空）
+    r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"slot": "location", "text": "  "})
+    assert r.status_code == 400 and "不能为空" in r.json()["detail"]
+    # 预算超了只提醒：today_n 回传 + over=True，但照发
+    inbox = _ActiveInbox(age_sec=7200)
+    inbox.outreach = [(CONV, {})] * 5
+    probe_app.stub["inbox"] = inbox
+    pv = probe_app.client.get(f"/api/goals/{probe_app.gid}/probe/preview").json()
+    assert pv["budget"]["today_n"] == 5 and pv["budget"]["over"] is True and pv["ok"] is True
+    d = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send",
+                              json={"slot": "location", "text": "Which city are you in?", "force": True}).json()
+    assert d["decision"] == "sent" and d["budget"]["over"] is True
+    # 投递失败 → 人话 reason_key；不记 asked/missed
+    probe_app.disp.decision, probe_app.disp.reason = "failed", "no_sender"
+    d2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send",
+                               json={"slot": "occupation", "text": "What do you do for work?"}).json()
+    assert d2["ok"] is False and d2["decision"] == "failed"
+    assert d2["reason_key"] == "inbox.goal.probe.reason.no_sender"
+    assert not probe_app.store.list_events(probe_app.gid, kinds=("probe_missed",))
     # 冻结会话 → 409 + 预览 blockers 点名 frozen
+    probe_app.disp.decision, probe_app.disp.reason = "sent", ""
     probe_app.stub["inbox"] = type("I", (), {
         "get_automation_mode": lambda s, c: "auto_ai",
         "get_conv_meta": lambda s, c: {"stop_contact": True},
         "list_recent_messages": lambda s, c, limit=10: []})()
     pv = probe_app.client.get(f"/api/goals/{probe_app.gid}/probe/preview").json()
     assert pv["ok"] is False and pv["blockers"] == ["frozen"]
-    r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={})
+    r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"text": "hi?"})
     assert r.status_code == 409 and "冻结" in r.json()["detail"]
-    # 派发器缺席 → 409 probe_no_dispatcher
+    # 派发器缺席（沉寂 → 需直投）→ 409 probe_no_dispatcher
     probe_app.stub["inbox"] = _StubInbox()
     probe_app.app.state.care_engine = {}
-    r2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={})
+    r2 = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"text": "hi?"})
     assert r2.status_code == 409 and "派发器" in r2.json()["detail"]
+
+
+def test_probe_send_risk_hold_blocks(probe_app, monkeypatch):
+    from src.inbox import risk_hold as rh
+    monkeypatch.setattr(rh, "active", lambda store, cid, now=None: "needs_human")
+    pv = probe_app.client.get(f"/api/goals/{probe_app.gid}/probe/preview").json()
+    assert "risk_hold" in pv["blockers"] and pv["risk_hold"] == "needs_human"
+    r = probe_app.client.post(f"/api/goals/{probe_app.gid}/probe/send", json={"text": "hi?"})
+    assert r.status_code == 409 and "风险" in r.json()["detail"]
+
+
+def test_care_dispatcher_send_text_now_direct_path():
+    """派发器直投：``_send`` 入队 → ``_deliver_now`` 当场投；不建 care 行；空文本 / 缺路由 / 投递失败分支。"""
+    from src.contacts.care_dispatcher import CareDispatcher
+    sent, delivered = [], []
+
+    async def _cb(channel, account_id, chat_name, reply, defer_until, reason, staleness, extra):
+        sent.append((channel, account_id, chat_name, reply, reason, dict(extra)))
+        return 42
+
+    async def _dn(row_id, platform):
+        delivered.append((row_id, platform))
+        return {"delivered": True, "status": "sent", "reason": "", "sent_at": 1234.0}
+
+    disp = CareDispatcher.__new__(CareDispatcher)
+    disp._send, disp._deliver_now, disp._staleness = _cb, _dn, 0
+    res = asyncio.run(disp.send_text_now(platform="whatsapp", account_id="a1", chat_key="c1",
+                                         text=" Which city are you in? ", tag="goal:probe:x",
+                                         extra={"goal_id": "x"}))
+    assert res["ok"] and res["decision"] == "sent" and res["row_id"] == 42 and res["sent_at"] == 1234.0
+    assert sent[0][3] == "Which city are you in?" and sent[0][4] == "goal:probe:x"
+    assert sent[0][5]["direct_text"] is True and sent[0][5]["manual"] is True and sent[0][5]["goal_id"] == "x"
+    assert delivered == [(42, "whatsapp")]
+    assert asyncio.run(disp.send_text_now(platform="whatsapp", account_id="a1", chat_key="c1", text=""))["reason"] == "empty_text"
+    assert asyncio.run(disp.send_text_now(platform="", account_id="a1", chat_key="c1", text="x"))["reason"] == "missing_route"
+
+    async def _dn_pending(row_id, platform):
+        return {"delivered": False, "status": "pending", "reason": "messenger_rpa_queue", "retry_at": 9.0}
+
+    disp._deliver_now = _dn_pending
+    r2 = asyncio.run(disp.send_text_now(platform="messenger", account_id="a1", chat_key="c1", text="x"))
+    assert r2["decision"] == "queued" and r2["reason"] == "messenger_rpa_queue"
+
+    async def _dn_fail(row_id, platform):
+        return {"delivered": False, "status": "failed", "reason": "no_sender"}
+
+    disp._deliver_now = _dn_fail
+    r3 = asyncio.run(disp.send_text_now(platform="line", account_id="a1", chat_key="c1", text="x"))
+    assert r3["ok"] is False and r3["decision"] == "failed" and r3["reason"] == "no_sender"
 
 
 def test_probe_row_skips_first_send_preview_but_keeps_product_guard():
@@ -1033,7 +1185,11 @@ def test_probe_frontend_wiring_and_hook_source():
     js = (REPO / "shared/copilot/components/cp-goal.js").read_text(encoding="utf-8")
     for needle in ('data-act="probe_open"', 'data-act="probe_send"', 'data-act="probe_next"',
                    "_renderProbePanel", "/probe/preview", "/probe/send", "inbox.goal.probe.btn",
-                   "inbox.goal.probe.preview_example", "gl-probe-panel", 'act === "probe_send"'):
+                   "gl-probe-panel", 'act === "probe_send"',
+                   # Q-8 G（#264）：预览即所发（可编辑文本框）/ 选路提示 / 预算只提醒（灰显仍可点）/ 已发出 hh:mm
+                   'data-chg="probe_text"', "gl-probe-text", "inbox.goal.probe.text_required",
+                   "inbox.goal.probe.route_must", "inbox.goal.probe.budget_over", "gl-probe-force",
+                   'k = "must_injected"', 'k = "sent_at"', "reason_key", "force: over"):
         assert needle in js, needle
     assert (REPO / "desktop/renderer/shared/copilot/components/cp-goal.js").read_bytes() == \
         (REPO / "shared/copilot/components/cp-goal.js").read_bytes()

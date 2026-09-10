@@ -1452,6 +1452,68 @@ _FALLBACK_TOPICS = (
     ("问TA小时候最喜欢做的一件事", "ask one thing they loved doing as a kid"),
 )
 
+# ── Q-8 G（#264 #263）：坐席「现在就问一个」硬注入下一条回复（客户活跃窗内不单发）────────
+PROBE_MUST_PARAM = "_probe_must"
+PROBE_MUST_TTL_SEC = 1800
+PROBE_MUST_EVENT_SET = "probe_must_set"
+PROBE_MUST_EVENT_CONSUMED = "probe_must_consumed"
+PROBE_MUST_EVENT_EXPIRED = "probe_must_expired"
+
+
+def agent_probe_line(text: str) -> str:
+    """坐席指定问句的硬注入行：文本可顺着语境微调措辞，问题不能少。"""
+    t = " ".join(str(text or "").split())[:300]
+    return ("【本轮必问·硬性】坐席指定现在就把这一句问出去（可顺着语境微调措辞，问题本身不能少，"
+            f"以问句收尾）：{t}")
+
+
+def set_agent_probe_must(store: Any, goal: Dict[str, Any], *, slot: str, text: str, by: str = "",
+                         now: Optional[float] = None) -> Dict[str, Any]:
+    """把坐席的问句挂到目标 ``params._probe_must``（覆盖旧的）；下一条回复消费。返回记录。"""
+    n = float(now if now is not None else time.time())
+    gid = str(goal.get("goal_id") or "")
+    rec = {"slot": str(slot or ""), "text": " ".join(str(text or "").split())[:300], "ts": n,
+           "by": str(by or ""), "expires_at": n + PROBE_MUST_TTL_SEC}
+    params = dict(goal.get("params") or {})
+    params[PROBE_MUST_PARAM] = rec
+    store.update_goal_fields(gid, params=params)
+    try:
+        store.add_event(gid, PROBE_MUST_EVENT_SET, f"{rec['slot']} by={rec['by'] or '-'}",
+                        conversation_id=str(goal.get("conversation_id") or ""), text_head=rec["text"][:120], now=n)
+    except Exception:
+        logger.debug("probe_must_set event skipped", exc_info=True)
+    return rec
+
+
+def take_agent_probe_must(store: Any, goal: Dict[str, Any], *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """读取待消费的坐席问句：TTL 内 → 返回记录（调用方在本轮 patch 里摘键 + 记 consumed）；
+    过期 → 当场摘键 + 记 ``probe_must_expired``，返回 None；没有 → None。绝不抛。"""
+    try:
+        params = dict((goal or {}).get("params") or {})
+        rec = params.get(PROBE_MUST_PARAM)
+        if not isinstance(rec, dict) or not str(rec.get("text") or "").strip():
+            return None
+        n = float(now if now is not None else time.time())
+        gid = str(goal.get("goal_id") or "")
+        conv = str(goal.get("conversation_id") or "")
+        exp = float(rec.get("expires_at") or (float(rec.get("ts") or 0) + PROBE_MUST_TTL_SEC))
+        if n > exp:
+            params.pop(PROBE_MUST_PARAM, None)
+            store.update_goal_fields(gid, params=params)
+            store.add_event(gid, PROBE_MUST_EVENT_EXPIRED, str(rec.get("slot") or "-"), conversation_id=conv,
+                            text_head=str(rec.get("text") or "")[:120], now=n)
+            logger.info("[goal-probe] must expired goal=%s conv=%s slot=%s age=%.0fs", gid[:12], conv,
+                        rec.get("slot") or "-", n - float(rec.get("ts") or n))
+            return None
+        store.add_event(gid, PROBE_MUST_EVENT_CONSUMED, str(rec.get("slot") or "-"), conversation_id=conv,
+                        text_head=str(rec.get("text") or "")[:120], now=n)
+        logger.info("[goal-inject] level=must reason=agent_probe conv=%s goal=%s target=%s text=%r", conv,
+                    gid[:12], rec.get("slot") or "-", str(rec.get("text") or "")[:80])
+        return dict(rec)
+    except Exception:
+        logger.debug("take_agent_probe_must failed", exc_info=True)
+        return None
+
 
 def stage_plan_enabled(cfg_root: Any) -> bool:
     """阶段计划只在**陪伴域**默认开（销售域会话有自己的目标弧线）；``companion.goals.stage_plan.enabled``
@@ -2120,12 +2182,18 @@ def build_block_for_chat(
                 # Q-1 A（#264 #269）：注入前扫最近 30 轮，槽位三态——unknown 才是候选；
                 # mentioned / confirmed 进「已知不再问」负向清单，软缺口行也只许指向 unknown。
                 _hist = recent_history(inbox_store, _conv_p, limit=30)
+                # Q-8 G（#264 #263）：坐席「现在就问一个」在客户活跃窗内点的 → 硬注入下一条回复
+                # （params._probe_must，TTL 内一次性消费；过期即丢并记事件）。
+                _agent_must = take_agent_probe_must(store, _g_now, now=_n_p) if str(inbound_text or "").strip() else None
                 if str(inbound_text or "").strip():
                     probe_slot, probe_cue, probe_mode, _cues, _states = decide_probe_target(
                         store, _g_now, prof_fields=prof_fields, sel_slots=sel_slots,
                         inbound_text=inbound_text,
                         retry_slot=(ver["slot"] if ver["result"] == "missed" else ""),
                         now=_n_p, history=_hist)
+                    if _agent_must:
+                        probe_slot = str(_agent_must.get("slot") or probe_slot or "")
+                        probe_cue, probe_mode = "agent", "must"
                 else:
                     from src.companion.goals.profile_slots import slot_states as _ss
                     _states = _ss(list(sel_slots), prof_fields, _hist)
@@ -2164,18 +2232,23 @@ def build_block_for_chat(
                         # 收尾、不许只回应夸赞 / 不许自己退场」。候选槽仍只来自 Q-1 的 unknown +
                         # 每槽每日上限过滤（decide_probe_target），must 不越过「已知即不问」。
                         _must_reason = ""
-                        try:
-                            from src.companion.goals.signals import no_new_info_streak as _nnis
-                            _h2 = list(_hist) + [{"direction": "in", "text": str(inbound_text), "ts": _n_p}]
-                            _streak = _nnis(_h2)
-                            _missed_n = sum(_event_detail_slots_today(
-                                store, _gid_p, PROBE_EVENT_MISSED, _n_p).values())
-                            if _streak >= 2:
-                                _must_reason = "no_new_info"
-                            elif _missed_n >= 2:
-                                _must_reason = "missed_x2"
-                        except Exception:
-                            _must_reason = ""
+                        if _agent_must:
+                            # Q-8 G：坐席指定的这一句就是要问的（可微调措辞、问题不能少）
+                            _must_reason = "agent_probe"
+                            probe_line = agent_probe_line(str(_agent_must.get("text") or ""))
+                        else:
+                            try:
+                                from src.companion.goals.signals import no_new_info_streak as _nnis
+                                _h2 = list(_hist) + [{"direction": "in", "text": str(inbound_text), "ts": _n_p}]
+                                _streak = _nnis(_h2)
+                                _missed_n = sum(_event_detail_slots_today(
+                                    store, _gid_p, PROBE_EVENT_MISSED, _n_p).values())
+                                if _streak >= 2:
+                                    _must_reason = "no_new_info"
+                                elif _missed_n >= 2:
+                                    _must_reason = "missed_x2"
+                            except Exception:
+                                _must_reason = ""
                         if _must_reason:
                             probe_mode = "must"
                             probe_line = f"{probe_line} {MUST_DISCIPLINE_ZH}"
@@ -2185,6 +2258,8 @@ def build_block_for_chat(
                             _conv_p, _gid_p[:12], probe_slot)
                         base_p = dict(probe_patch if probe_patch is not None
                                       else (gap_patch or (_g_now.get("params") or {})))
+                        if _agent_must:
+                            base_p.pop(PROBE_MUST_PARAM, None)
                         base_p[PROBE_PENDING_PARAM] = {
                             "slot": probe_slot, "cue": probe_cue, "mode": probe_mode,
                             "ts": _n_p, "chain": str(chain or "")}

@@ -213,7 +213,7 @@ def test_frontend_two_trees_same_and_v_bumped_and_i18n_trilingual():
     # Q-5 C（#263）前移到 20260910b；unified_inbox.html 当时别线整文件在途（CRLF 翻转），b 戳随宿主线
     # 提交前移——HEAD 上可能 a/b 并存，工作树全 b；两态都绿，但 b 必须已出现
     # Q-8 A/B（#264）再前移到 20260910c（默认目标行 + 阶段主线行）
-    assert stamps <= {"20260910a", "20260910b", "20260910c"} and (stamps & {"20260910b", "20260910c"}), stamps
+    assert stamps <= {"20260910a", "20260910b", "20260910c", "20260910d"} and (stamps & {"20260910b", "20260910c", "20260910d"}), stamps
     from src.web.i18n_packs import goals as g
     hant = (_ROOT / "src" / "web" / "i18n_packs" / "zh_hant_auto.py").read_text(encoding="utf-8")
     for k in ("inbox.goal.slots.mentioned", "inbox.goal.slots.mentioned_t", "inbox.goal.slots.confirm",

@@ -201,6 +201,12 @@
           if (out) out.textContent = String(t.value);
         } else if (chg === "item_label") {
           this._labelTouched = true;   // 坐席自己写了称呼 → 不再自动跟随下拉
+        } else if (chg === "probe_text") {
+          // Q-8 G：预览即所发——坐席改的原话留在状态里，重渲染不丢
+          this._probeText = String(t.value || "");
+          this._probeTextTouched = true;
+          const er = this.shadowRoot.querySelector('[data-ref="probe_err"]');
+          if (er) er.hidden = true;
         } else if (chg === "dl_days") {
           // 改期限动态提示：只改 DOM 文本不重渲染（保输入焦点）
           this._deadlineVal = t.value;
@@ -453,6 +459,13 @@
                      padding:3px 6px; border-left:2px solid var(--cp-accent,#2563eb);
                      background:color-mix(in srgb,var(--cp-accent,#2563eb) 6%,transparent); }
       .gl-probe-err { color:var(--cp-danger,#dc2626); }
+      .gl-probe-text { display:block; width:100%; box-sizing:border-box; margin-top:5px; padding:5px 7px; resize:vertical;
+        font:inherit; font-size:var(--cp-fs-sm,12px); line-height:1.45; color:var(--cp-text,#0f172a);
+        background:var(--cp-bg,#fff); border:1px solid var(--cp-border,#e2e8f0); border-radius:6px; }
+      .gl-probe-text:focus { outline:none; border-color:var(--cp-accent,#2563eb); }
+      .gl-probe-route { color:var(--cp-text-dim,#64748b); }
+      .gl-probe-force { opacity:.62; }
+      .gl-probe-force:hover { opacity:1; }
       .gl-probe-res { font-size:var(--cp-fs-tiny,11px); line-height:1.5; margin-top:4px; }
       .gl-probe-res.ok { color:var(--cp-ok,#16a34a); }
       .gl-probe-res.warn { color:var(--cp-warn,#b45309); }
@@ -1914,23 +1927,47 @@
         const c = cands[idx] || {};
         const blk = Array.isArray(pv.blockers) ? pv.blockers : [];
         const why = blk.length ? this._engineWhy(blk) : "";
+        // Q-8 G：预览即所发——文本框预填示例句（按客户语言），坐席可改；换一项时未改过则跟随
+        if (!this._probeTextTouched || this._probeText == null) this._probeText = String(c.text || c.example || "");
+        const txt = String(this._probeText || "");
+        const budget = (pv.budget && typeof pv.budget === "object") ? pv.budget : {};
+        const over = !!budget.over;
+        const route = String(pv.route || "direct");
+        const ageMin = pv.last_inbound_age_sec != null ? Math.max(0, Math.round(Number(pv.last_inbound_age_sec) / 60)) : null;
+        const routeLine = route === "must"
+          ? this.t("inbox.goal.probe.route_must", { m: ageMin == null ? "?" : String(ageMin) })
+          : this.t("inbox.goal.probe.route_direct");
+        const done = !!(res && (res.decision === "sent" || res.decision === "queued" || res.decision === "must_injected"));
         body = `<div class="gl-probe-hd">${esc(this.t("inbox.goal.probe.preview_hd", { label: c.label || c.slot || "" }))}</div>` +
           `<div class="gl-probe-tx">${esc(this.t("inbox.goal.probe.preview_ask", { ask: c.ask || "" }))}</div>` +
-          (c.example ? `<div class="gl-probe-ex">${esc(this.t("inbox.goal.probe.preview_example", { ex: c.example }))}</div>` : "") +
-          (why ? `<div class="gl-probe-tx gl-probe-err">${esc(this.t("inbox.goal.probe.blocked", { why }))}</div>` : "");
+          `<textarea class="gl-probe-text" data-chg="probe_text" rows="2" maxlength="600" ` +
+          `placeholder="${esc(this.t("inbox.goal.probe.text_hint"))}"${done || this._probeBusy ? " disabled" : ""}>${esc(txt)}</textarea>` +
+          `<div class="gl-probe-tx gl-probe-err" data-ref="probe_err" hidden>${esc(this.t("inbox.goal.probe.text_required"))}</div>` +
+          (why ? `<div class="gl-probe-tx gl-probe-err">${esc(this.t("inbox.goal.probe.blocked", { why }))}</div>`
+            : `<div class="gl-probe-tx gl-probe-route">${esc(routeLine)}</div>`);
         if (res) {
-          const k = res.decision === "sent" ? "sent" : res.decision === "queued" ? "queued"
-            : res.decision === "dry_sampled" ? "dry" : res.decision === "held" ? "held"
-            : res.decision === "skipped" ? "skipped" : "failed";
-          const vars = { text: res.text || "", why: this._blockedLabel(res.reason || res.held || "") || res.reason || res.held || res.decision || "" };
-          body += `<div class="gl-probe-res ${k === "sent" || k === "queued" ? "ok" : "warn"}">${esc(this.t("inbox.goal.probe." + k, vars))}</div>`;
+          let k, vars, cls;
+          if (res.decision === "must_injected") { k = "must_injected"; vars = {}; cls = "ok"; }
+          else if (res.decision === "sent") { k = "sent_at"; vars = { hhmm: res.sent_hhmm || "" }; cls = "ok"; }
+          else if (res.decision === "queued") { k = "queued_at"; vars = {}; cls = "ok"; }
+          else {
+            k = "failed"; cls = "warn";
+            const rk = res.reason_key ? this.t(res.reason_key) : "";
+            const human = (rk && rk !== res.reason_key) ? rk : (this._blockedLabel(res.reason || "") || res.reason || res.decision || "");
+            vars = { why: human };
+          }
+          body += `<div class="gl-probe-res ${cls}">${esc(this.t("inbox.goal.probe." + k, vars))}</div>`;
         }
-        const canSend = !blk.length && !this._probeBusy && !(res && (res.decision === "sent" || res.decision === "queued"));
+        const canSend = !blk.length && !this._probeBusy && !done;
+        const sendLabel = this._probeBusy && pv ? this.t("inbox.goal.probe.sending")
+          : over ? this.t("inbox.goal.probe.budget_over", { n: String(budget.today_n || 0) })
+          : this.t("inbox.goal.probe.send");
         body += `<div class="acts gl-acts gl-probe-acts">` +
           `<button type="button" data-act="probe_close">${esc(this.t("cp.common.cancel"))}</button>` +
           (cands.length > 1 ? `<button type="button" data-act="probe_next">${esc(this.t("inbox.goal.probe.next"))}</button>` : "") +
-          `<button type="button" class="primary" data-act="probe_send"${canSend ? "" : " disabled"}>` +
-          `${esc(this._probeBusy && pv ? this.t("inbox.goal.probe.sending") : this.t("inbox.goal.probe.send"))}</button></div>`;
+          `<button type="button" class="primary${over ? " gl-probe-force" : ""}" data-act="probe_send"${canSend ? "" : " disabled"}` +
+          `${over ? ` title="${esc(this.t("inbox.goal.probe.budget_over_t"))}"` : ""}>` +
+          `${esc(sendLabel)}</button></div>`;
       }
       return `<div class="gl-probe-panel">${body}</div>`;
     }
@@ -1940,6 +1977,7 @@
       if (!g || !g.goal_id) return;
       this._probeOpen = true; this._probeForGid = String(g.goal_id);
       this._probePv = null; this._probeRes = null; this._probeIdx = 0; this._probeBusy = true;
+      this._probeText = null; this._probeTextTouched = false;
       this._rerender();
       let r = null;
       try { r = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/probe/preview`); } catch (_e) { r = null; }
@@ -1955,19 +1993,30 @@
       const pv = this._probePv;
       if (!g || !g.goal_id || !pv || !Array.isArray(pv.candidates) || !pv.candidates.length) return;
       const c = pv.candidates[(this._probeIdx || 0) % pv.candidates.length] || {};
+      // Q-8 G：预览即所发——发的就是文本框里那句；空 → 就地提示不请求
+      const ta = this.shadowRoot.querySelector('textarea.gl-probe-text');
+      const text = String((ta && ta.value != null ? ta.value : this._probeText) || "").trim();
+      if (!text) {
+        const er = this.shadowRoot.querySelector('[data-ref="probe_err"]');
+        if (er) er.hidden = false;
+        if (ta) ta.focus();
+        return;
+      }
+      this._probeText = text; this._probeTextTouched = true;
+      const over = !!(pv.budget && pv.budget.over);
       this._probeBusy = true; this._probeRes = null; this._rerender();
       let r = null;
       try {
         r = await this._api(`/api/goals/${encodeURIComponent(g.goal_id)}/probe/send`,
           { method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ slot: c.slot || "" }) });
+            body: JSON.stringify({ slot: c.slot || "", text, force: over }) });
       } catch (_e) { r = null; }
       this._probeBusy = false;
       _beacon("goal_probe_send");
       if (r && r.data && typeof r.data === "object" && r.ok) {
         this._probeRes = r.data;
         this._rerender();
-        // 计数 / 拍清单随真发刷新（beat_sent 由派发回执落库）
+        // 计数 / 拍清单随真发刷新（直投同步回执已落 beat_sent）
         setTimeout(() => { if (this.isConnected) this.refresh(); }, 1500);
         return;
       }
@@ -4541,7 +4590,8 @@
         this._probeOpen = false; this._probePv = null; this._probeRes = null; this._rerender(); return;
       }
       if (act === "probe_next") {
-        this._probeIdx = (this._probeIdx || 0) + 1; this._probeRes = null; this._rerender(); return;
+        this._probeIdx = (this._probeIdx || 0) + 1; this._probeRes = null;
+        this._probeText = null; this._probeTextTouched = false; this._rerender(); return;
       }
       if (act === "probe_send") { await this._probeSend(); return; }
       if (act === "dpause_toggle") { await this._dpauseToggle(el); return; }

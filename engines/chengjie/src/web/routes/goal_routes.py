@@ -2334,16 +2334,111 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         } for k in keys]
         return svc, store, goal, cands, blockers
 
+    # ── Q-8 G（#264 #263）：预览即所发 / 直投不进派发器 / 预算只提醒 / 活跃→must 沉寂→单发 ──
+    _PROBE_ACTIVE_WINDOW_SEC = 600.0
+    _PROBE_PACE_CAP_SEC = 12.0
+
+    def _probe_last_inbound(inbox: Any, conv: str, *, now: float) -> Tuple[float, str]:
+        """→ (最近一条入站距今秒数（无 → inf）, 文本)。"""
+        try:
+            rows = inbox.list_recent_messages(conv, limit=8) if inbox is not None else []
+        except Exception:
+            rows = []
+        for r in reversed(list(rows or [])):
+            if isinstance(r, dict) and str(r.get("direction") or "") == "in":
+                try:
+                    return max(0.0, now - float(r.get("ts") or 0)), str(r.get("text") or "")
+                except (TypeError, ValueError):
+                    return float("inf"), str(r.get("text") or "")
+        return float("inf"), ""
+
+    def _probe_customer_lang(inbox: Any, conv: str, last_text: str, ui_lang: str) -> str:
+        """客户语言：会话行 lang → 最近来信字符系 → UI 语言。"""
+        import re as _re
+        try:
+            row = inbox.get_conversation(conv) if inbox is not None and hasattr(inbox, "get_conversation") else None
+            for k in ("lang", "language", "customer_lang"):
+                v = str((row or {}).get(k) or "").strip().lower()
+                if v:
+                    return "zh" if v.startswith("zh") else "en" if v.startswith("en") else v
+        except Exception:
+            pass
+        t = str(last_text or "")
+        if _re.search(r"[\u4e00-\u9fff]", t):
+            return "zh"
+        if _re.search(r"[A-Za-z]{3,}", t):
+            return "en"
+        return "zh" if str(ui_lang or "zh").lower().startswith("zh") else "en"
+
+    def _probe_budget(inbox: Any, conv: str, *, now: float) -> Dict[str, Any]:
+        """每联系人主动预算（proactive_care.contact_budget）——**只提醒**：today_n / over / cap。"""
+        out = {"today_n": 0, "over": False, "enabled": False, "max_per_day": 0, "min_gap_min": 0}
+        try:
+            from src.contacts.care_budget import budget_allows, local_midnight_ts, parse_contact_budget_cfg
+            pc = ((_cfg_root().get("companion") or {}).get("proactive_care") or {})
+            bcfg = parse_contact_budget_cfg(pc if isinstance(pc, dict) else {})
+            out["enabled"] = bool(bcfg.enabled)
+            out["max_per_day"] = int(getattr(bcfg, "max_daily_touches", 0) or 0)
+            out["min_gap_min"] = int(float(getattr(bcfg, "min_gap_hours", 0) or 0) * 60)
+            if inbox is None or not hasattr(inbox, "count_outreach_since"):
+                return out
+            today = int(inbox.count_outreach_since(conv, local_midnight_ts(now)) or 0)
+            last = float(inbox.last_outreach_ts(conv) or 0) if hasattr(inbox, "last_outreach_ts") else 0.0
+            out["today_n"] = today
+            if bcfg.enabled:
+                out["over"] = not budget_allows(cfg=bcfg, last_touch_ts=last, touches_today=today, now=now)
+        except Exception:
+            logger.debug("probe budget probe failed", exc_info=True)
+        return out
+
+    def _probe_risk_hold(inbox: Any, conv: str, *, now: float) -> str:
+        try:
+            from src.inbox import risk_hold
+            return str(risk_hold.active(inbox, conv, now=now) or "")
+        except Exception:
+            return ""
+
+    def _probe_pace_sec(text: str, platform: str) -> float:
+        """节奏（O-1 D）：按 l2_autosend.deliver_delay 的打字段取一个人味停顿（≤ 12s）；无配置 0。"""
+        try:
+            from src.inbox.humanize import resolve_pacing
+            block = ((_cfg_root().get("inbox") or {}).get("l2_autosend") or {}).get("deliver_delay") or {}
+            if not isinstance(block, dict) or not block:
+                return 0.0
+            r = resolve_pacing(block, text=text, platform=platform)
+            lead = getattr(r, "typing_lead", None)
+            sec = float(lead if lead is not None else (getattr(r, "type_sec", 0.0) or r.delay or 0.0))
+            return max(0.0, min(_PROBE_PACE_CAP_SEC, sec))
+        except Exception:
+            return 0.0
+
     @app.get("/api/goals/{goal_id}/probe/preview")
     async def goals_probe_preview(
         request: Request, goal_id: str, _auth=Depends(auth_dep),
     ):
-        """「现在就问一个」预览：按未填槽（轮换序）给出会问什么（槽位 / 问法 / 示例句）
-        + 当前拦截原因。真正的文本由派发器按对方语言、顺着最近话题拟稿。只读。"""
+        """「现在就问一个」预览（Q-8 G：**预览即所发**）：按未填槽（轮换序）给候选（槽位 / 问法 /
+        示例句 = 默认可编辑 ``text``，按客户语言）+ 拦截原因 + 选路（客户 10 分钟内活跃 →
+        ``must`` 硬注入下一条回复；沉寂 → ``direct`` 直接单发）+ 预算提醒（只提醒不拦）。只读。"""
+        import time as _tp
         lang = _lang(request)
         _svc, _store_, goal, cands, blockers = _probe_context(request, goal_id, lang=lang)
+        now = _tp.time()
+        inbox = _inbox_store()
+        conv = str(goal.get("conversation_id") or "")
+        age, last_text = _probe_last_inbound(inbox, conv, now=now)
+        clang = _probe_customer_lang(inbox, conv, last_text, lang)
+        from src.companion.goals.profile_slots import probe_example
+        for c in cands:
+            c["text"] = probe_example(c["slot"], clang) or c.get("example") or ""
+        rh = _probe_risk_hold(inbox, conv, now=now)
+        if rh and "risk_hold" not in blockers:
+            blockers = list(blockers) + ["risk_hold"]
+        route = "must" if age <= _PROBE_ACTIVE_WINDOW_SEC else "direct"
         return {"ok": not blockers, "goal_id": str(goal.get("goal_id") or ""),
-                "candidates": cands, "blockers": blockers}
+                "candidates": cands, "blockers": blockers, "customer_lang": clang,
+                "route": route, "last_inbound_age_sec": (None if age == float("inf") else int(age)),
+                "active_window_sec": int(_PROBE_ACTIVE_WINDOW_SEC),
+                "budget": _probe_budget(inbox, conv, now=now), "risk_hold": rh}
 
     async def _run_on_care_loop(coro_factory, *, timeout: float = 30.0):
         """把协程投到派发器所在的（主）事件循环执行（与 care_routes 同款 N-1 A）。"""
@@ -2367,68 +2462,61 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         request: Request, goal_id: str, payload: Optional[Dict[str, Any]] = None,
         _auth=Depends(auth_dep),
     ):
-        """「现在就问一个」点发即发：排一条 care 行 ``goal:{gid}:q{ts}``（派发器按目标行
-        prompt 拟稿、对方语言、顺着最近话题）→ ``send_now`` 同步直投（与 care「立即发」
-        同一条守卫 / 拟稿 / 档案校验 / 入队 / 当场投递链；产品守卫仍在、首条预览不再拦——人
-        就是审批）→ 真发回执经 ``_care_sent_hook`` 落 ``beat_sent``（计入「主动出手」）；
-        出站文本当场按槽位关键词校验 → ``probe_asked`` / ``probe_missed`` + 当日拍
-        ``asked:<slot>``。``[goal-probe] manual=1 slot= …`` 日志。"""
+        """「现在就问一个」（Q-8 G #264 #263）：**预览即所发**——``text`` 不得为空且可编辑；
+        **不进派发器、不受 contact_budget**（预算只提醒：``force`` 由前端「仍要发」带上，后端不拦）。
+        自动选路：客户 10 分钟内活跃 → ``mode=must`` 硬注入下一条回复（goal ``params._probe_must``，
+        ``build_block_for_chat`` 一次性消费，TTL 30 分钟）；沉寂 → 直接单发 ``disp.send_text_now``
+        （与 N-1 A「立即发」共用 ``_send`` + ``_deliver_now`` 直接投递路径；经 O-1 A 冻结 /
+        Q-3 risk_hold / 节奏 O-1 D 打字段停顿）；同步返回 ``sent_at`` / ``sent_hhmm``。真发 →
+        ``record_outreach(batch_id=goal_probe:<gid>)`` + ``probe_manual`` + ``probe_asked|missed``
+        + 当日拍 ``asked:<slot>`` + ``_gap_asked``。失败原因给 ``reason_key``（人话映射）。
+        ``[goal-probe] manual=1 direct=1 …`` 日志。"""
         _deny_viewer(request)
         lang = _lang(request)
         svc, store, goal, cands, blockers = _probe_context(request, goal_id, lang=lang)
+        import time as _tp
+        now = _tp.time()
+        inbox = _inbox_store()
+        conv = str(goal.get("conversation_id") or "")
+        rh = _probe_risk_hold(inbox, conv, now=now)
+        if rh and "risk_hold" not in blockers:
+            blockers = list(blockers) + ["risk_hold"]
         if blockers:
             key = {"frozen": "err.goals.probe_frozen", "crisis": "err.goals.nudge_blocked",
-                   "optout": "err.goals.nudge_muted"}.get(blockers[0], "err.goals.nudge_blocked")
+                   "optout": "err.goals.nudge_muted",
+                   "risk_hold": "err.goals.probe_risk_hold"}.get(blockers[0], "err.goals.nudge_blocked")
             raise HTTPException(409, tr(request, key))
         body = payload if isinstance(payload, dict) else {}
         want = str(body.get("slot") or "").strip().lower()
         pick = next((c for c in cands if c["slot"] == want), None) or cands[0]
         slot = pick["slot"]
-        import time as _tp
-        now = _tp.time()
-        engine = getattr(app.state, "care_engine", None) or {}
-        disp = engine.get("dispatcher") if isinstance(engine, dict) else None
-        care_store = getattr(app.state, "care_schedule_store", None)
-        if care_store is None:
-            try:
-                from src.contacts.care_schedule import get_care_schedule_store
-                care_store = get_care_schedule_store()
-            except Exception:
-                care_store = None
-        if care_store is None or disp is None or not hasattr(disp, "send_now"):
-            raise HTTPException(409, tr(request, "err.goals.probe_no_dispatcher"))
-        from src.companion.goals.profile_slots import probe_source_text, reply_asks_slot
-        from src.companion.goals.sprint_ticker import PROBE_ASKED_DETAIL_PREFIX, probe_norm
-        conv = str(goal.get("conversation_id") or "")
-        rid = care_store.add_scheduled_care(
-            contact_key=conv,
-            platform=str(goal.get("platform") or ""),
-            account_id=str(goal.get("account_id") or ""),
-            chat_key=str(goal.get("chat_key") or ""),
-            due_at=now,
-            event_at=float(goal.get("deadline_ts") or 0) or now,
-            topic=(str(goal.get("title") or "").strip() or "客户摸底")[:40],
-            topic_norm=probe_norm(goal_id, now),
-            source_text=probe_source_text(goal, slot, lang=lang),
-            confidence=1.0,
-            dedup_days=1.0,
-        )
-        if not rid:
-            raise HTTPException(409, tr(request, "err.goals.nudge_exhausted"))
-        item = care_store.get(int(rid)) or {}
-        res = await _run_on_care_loop(lambda: disp.send_now(dict(item)))
-        res = dict(res or {"ok": False, "decision": "timeout", "reason": "timeout"})
-        decision = str(res.get("decision") or "")
-        text = str(res.get("text") or "").strip()
-        store.add_event(goal_id, "probe_manual",
-                        f"{slot} care#{int(rid)} {decision or '-'}",
-                        conversation_id=conv, text_head=text[:120], now=now)
-        asked = None
-        if decision in ("sent", "queued") and text:
+        text = " ".join(str(body.get("text") or "").split()).strip()
+        if not text:
+            raise HTTPException(400, tr(request, "err.goals.probe_text_required"))
+        text = text[:600]
+        force = bool(body.get("force"))
+        budget = _probe_budget(inbox, conv, now=now)
+        age, _last_text = _probe_last_inbound(inbox, conv, now=now)
+        want_route = str(body.get("route") or "").strip().lower()
+        route = want_route if want_route in ("must", "direct") else (
+            "must" if age <= _PROBE_ACTIVE_WINDOW_SEC else "direct")
+        from src.companion.goals.profile_slots import reply_asks_slot
+        from src.companion.goals.sprint_ticker import PROBE_ASKED_DETAIL_PREFIX
+        platform = str(goal.get("platform") or "")
+        account_id = str(goal.get("account_id") or "")
+        chat_key = str(goal.get("chat_key") or "")
+        user = ""
+        try:
+            user = str((request.scope.get("session") or {}).get("user") or "")
+        except Exception:
+            user = ""
+
+        def _finish_sent(decision: str, sent_at: float, reason: str = "", row_id: int = 0) -> Dict[str, Any]:
             asked = reply_asks_slot(text, slot)
-            store.add_event(
-                goal_id, svc.PROBE_EVENT_ASKED if asked else svc.PROBE_EVENT_MISSED,
-                f"{slot}@manual", conversation_id=conv, text_head=text[:120], now=now)
+            store.add_event(goal_id, "probe_manual", f"{slot} direct {decision}",
+                            conversation_id=conv, text_head=text[:120], now=now)
+            store.add_event(goal_id, svc.PROBE_EVENT_ASKED if asked else svc.PROBE_EVENT_MISSED,
+                            f"{slot}@manual", conversation_id=conv, text_head=text[:120], now=now)
             try:
                 from src.companion.goals.planner import day_key
                 row = store.get_action(goal_id, day_key(now))
@@ -2443,7 +2531,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             except Exception:
                 logger.debug("probe manual action mark skipped", exc_info=True)
             try:
-                params = dict(goal.get("params") or {})
+                params = dict((store.get_goal(goal_id) or goal).get("params") or {})
                 asked_l = [str(x) for x in (params.get("_gap_asked") or []) if str(x or "").strip()]
                 if slot not in asked_l:
                     asked_l.append(slot)
@@ -2451,23 +2539,72 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 store.update_goal_fields(goal_id, params=params)
             except Exception:
                 logger.debug("probe manual gap_asked skipped", exc_info=True)
-        try:
-            from src.companion.goals.stats import get_goal_stats
-            get_goal_stats().record_probe("manual")
-        except Exception:
-            pass
-        logger.info(
-            "[goal-probe] manual=1 slot=%s goal=%s conv=%s care#%s decision=%s dry=%s "
-            "asked=%s text=%r",
-            slot, goal_id[:12], conv, rid, decision or "-", bool(res.get("dry_run")),
-            asked, text[:80])
-        return {
-            "ok": bool(res.get("ok")), "decision": decision,
-            "reason": str(res.get("reason") or ""), "held": str(res.get("held") or ""),
-            "dry_run": bool(res.get("dry_run")), "text": text,
-            "care_id": int(rid), "slot": slot, "label": pick["label"], "asked": asked,
-            "sent_at": float(res.get("sent_at") or 0),
-        }
+            try:
+                store.add_event(goal_id, "beat_sent", f"probe:direct row#{int(row_id or 0)}",
+                                conversation_id=conv, text_head=text[:120], now=now)
+            except Exception:
+                logger.debug("probe beat_sent skipped", exc_info=True)
+            try:
+                if inbox is not None and hasattr(inbox, "record_outreach"):
+                    inbox.record_outreach(conv, batch_id=f"goal_probe:{goal_id}"[:64], platform=platform,
+                                          account_id=account_id or "default", note="goal_probe")
+            except Exception:
+                logger.debug("probe record_outreach skipped", exc_info=True)
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                get_goal_stats().record_probe("manual")
+            except Exception:
+                pass
+            hhmm = _tp.strftime("%H:%M", _tp.localtime(sent_at or now)) if decision == "sent" else ""
+            logger.info(
+                "[goal-probe] manual=1 direct=1 route=direct slot=%s goal=%s conv=%s decision=%s reason=%s "
+                "sent_at=%.0f budget_over=%s force=%s asked=%s text=%r",
+                slot, goal_id[:12], conv, decision, reason or "-", float(sent_at or 0), budget.get("over"),
+                force, asked, text[:80])
+            return {"ok": decision in ("sent", "queued"), "decision": decision, "route": "direct",
+                    "reason": reason, "reason_key": (f"inbox.goal.probe.reason.{reason}" if reason else ""),
+                    "text": text, "slot": slot, "label": pick["label"], "asked": asked,
+                    "sent_at": float(sent_at or 0), "sent_hhmm": hhmm, "budget": budget, "row_id": int(row_id or 0)}
+
+        if route == "must":
+            rec = svc.set_agent_probe_must(store, goal, slot=slot, text=text, by=user, now=now)
+            try:
+                from src.companion.goals.stats import get_goal_stats
+                get_goal_stats().record_probe("manual")
+            except Exception:
+                pass
+            logger.info(
+                "[goal-probe] manual=1 direct=0 route=must slot=%s goal=%s conv=%s inbound_age=%.0fs "
+                "expires_in=%ds budget_over=%s text=%r",
+                slot, goal_id[:12], conv, age, int(rec["expires_at"] - now), budget.get("over"), text[:80])
+            return {"ok": True, "decision": "must_injected", "route": "must", "reason": "", "reason_key": "",
+                    "text": text, "slot": slot, "label": pick["label"], "asked": None,
+                    "sent_at": 0.0, "sent_hhmm": "", "budget": budget,
+                    "expires_at": float(rec["expires_at"]), "last_inbound_age_sec": int(age)}
+
+        engine = getattr(app.state, "care_engine", None) or {}
+        disp = engine.get("dispatcher") if isinstance(engine, dict) else None
+        if disp is None or not hasattr(disp, "send_text_now"):
+            raise HTTPException(409, tr(request, "err.goals.probe_no_dispatcher"))
+        pace = _probe_pace_sec(text, platform)
+        res = await _run_on_care_loop(lambda: disp.send_text_now(
+            platform=platform, account_id=account_id, chat_key=chat_key, text=text,
+            tag=f"goal:probe:{goal_id[:12]}", pace_sec=pace,
+            extra={"goal_id": goal_id, "goal_probe": True, "slot": slot, "by": user}), timeout=45.0)
+        res = dict(res or {"ok": False, "decision": "failed", "reason": "timeout"})
+        decision = str(res.get("decision") or "failed")
+        reason = str(res.get("reason") or "")
+        if decision not in ("sent", "queued"):
+            store.add_event(goal_id, "probe_manual", f"{slot} direct failed:{reason or '-'}",
+                            conversation_id=conv, text_head=text[:120], now=now)
+            logger.warning("[goal-probe] manual=1 direct=1 route=direct slot=%s goal=%s conv=%s decision=failed "
+                           "reason=%s text=%r", slot, goal_id[:12], conv, reason or "-", text[:80])
+            return {"ok": False, "decision": "failed", "route": "direct", "reason": reason or "send_failed",
+                    "reason_key": f"inbox.goal.probe.reason.{reason or 'send_failed'}", "text": text,
+                    "slot": slot, "label": pick["label"], "asked": None, "sent_at": 0.0, "sent_hhmm": "",
+                    "budget": budget, "row_id": int(res.get("row_id") or 0)}
+        return _finish_sent(decision, float(res.get("sent_at") or 0), reason if decision == "queued" else "",
+                            int(res.get("row_id") or 0))
 
     @app.get("/api/goals/{goal_id}/preflight")
     async def goals_preflight(

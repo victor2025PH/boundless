@@ -1377,6 +1377,75 @@ class CareDispatcher:
         self._store.mark_sent(sid, note=f"deferred:{int(row_id)}", sent_text=reply)
         return True
 
+    async def send_text_now(self, *, platform: str, account_id: str, chat_key: str, text: str,
+                            tag: str = "goal:probe", extra: Optional[Dict[str, Any]] = None,
+                            now: Optional[float] = None, pace_sec: float = 0.0) -> Dict[str, Any]:
+        """Q-8 G（#264 #263）「现在就问一个」直投：运营看到的文本就是发出的文本。
+
+        **不建 care 行、不过 LLM / 联系人预算（contact_budget）/ already_discussed / 档案校验**
+        ——那些是自动派发的「别打扰」闸，人亲手点的一句由人负责；与 N-1 A「立即发」**共用**
+        同一条直接投递路径（``_send`` 入 deferred 队列 → ``_deliver_now`` 当场投），安全型闸
+        （kill-switch / 运营暂停 / 无 sender）仍由投递层守。``pace_sec``＝节奏（O-1 D：打字段），
+        上限 15s——同步请求里的人味停顿，不是排期。
+        返回 ``{"ok", "decision": sent|queued|failed, "reason", "row_id", "sent_at", "text",
+        "defer_until"}``，绝不抛。
+        """
+        n = float(now if now is not None else time.time())
+        body = str(text or "").strip()
+        res: Dict[str, Any] = {"ok": False, "decision": "failed", "reason": "", "row_id": 0,
+                               "sent_at": 0.0, "text": body, "defer_until": n}
+        if not body:
+            res["reason"] = "empty_text"
+            return res
+        if not chat_key or not platform:
+            res["reason"] = "missing_route"
+            return res
+        acct = str(account_id or "default") or "default"
+        try:
+            p = max(0.0, min(15.0, float(pace_sec or 0.0)))
+        except (TypeError, ValueError):
+            p = 0.0
+        if p > 0:
+            try:
+                await asyncio.sleep(p)
+            except Exception:
+                pass
+        meta = {"care": False, "manual": True, "direct_text": True, "ignore_quiet": True}
+        if isinstance(extra, dict):
+            meta.update(extra)
+        try:
+            row_id = await self._send(platform, acct, chat_key, body, n, str(tag or "goal:probe"),
+                                      self._staleness, meta)
+        except Exception:
+            logger.warning("care send_text_now send_callback 失败 %s:%s:%s", platform, acct, chat_key,
+                           exc_info=True)
+            res["reason"] = "send_error"
+            return res
+        if not row_id:
+            res["reason"] = "queue_unavailable"
+            return res
+        res["row_id"] = int(row_id)
+        dres: Dict[str, Any] = {}
+        if self._deliver_now is not None:
+            try:
+                dres = dict(await self._deliver_now(int(row_id), platform) or {})
+            except Exception:
+                logger.warning("care send_text_now deliver_now 异常 row=%s", row_id, exc_info=True)
+                dres = {"delivered": False, "status": "pending", "reason": "deliver_now_error"}
+        else:
+            dres = {"delivered": False, "status": "pending", "reason": "no_sync_path"}
+        if dres.get("delivered"):
+            res.update(ok=True, decision="sent", sent_at=float(dres.get("sent_at") or n))
+        elif str(dres.get("status") or "") == "pending":
+            res.update(ok=True, decision="queued", reason=str(dres.get("reason") or "queued"),
+                       defer_until=float(dres.get("retry_at") or n))
+        else:
+            res.update(decision="failed", reason=str(dres.get("reason") or "send_failed"))
+        logger.info("[care-gen] direct_text tag=%s route=%s:%s:%s decision=%s reason=%s deferred=%s pace=%.1f text=%r",
+                    tag, platform, acct, chat_key, res["decision"], res["reason"] or "-", int(row_id), p,
+                    body[:120])
+        return res
+
     async def deliver_text(self, item: dict, text: str, *,
                            now: Optional[float] = None) -> Dict[str, Any]:
         """J-8 #182「改一改再发」：运营在预览上手改的终稿**直接**送出站队列。
