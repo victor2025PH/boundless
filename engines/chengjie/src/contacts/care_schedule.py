@@ -62,6 +62,26 @@ def care_verbatim_text(item: Any) -> str:
     return str((item or {}).get("source_text") or "").strip()
 
 
+# Q-4（#267 D）：verbatim 行的「安静时段策略」——运营亲手定的时刻默认**尊重人工**
+# （keep＝到点就发、不顺延）；关怀页排期时若落在安静时段弹「仍按 01:20 发 / 顺延到
+# 08:00」，选顺延的行 topic_norm 追加后缀 ``:defer_quiet``（不引入新列，老库零迁移；
+# ``is_verbatim_care`` 只看前缀不受影响）。
+VERBATIM_QUIET_DEFER_SUFFIX = ":defer_quiet"
+QUIET_POLICIES = ("keep", "defer")
+
+
+def verbatim_quiet_policy(item: Any) -> str:
+    """verbatim 行的安静时段策略：``keep``（默认，人工时刻照发）/ ``defer``（顺延到安静
+    时段结束，多条同顺延由派发器错峰）。非 verbatim 行返回 ""（按普通关怀规则）。"""
+    if not is_verbatim_care(item):
+        return ""
+    try:
+        tn = str((item or {}).get("topic_norm") or "")
+    except Exception:
+        return "keep"
+    return "defer" if tn.endswith(VERBATIM_QUIET_DEFER_SUFFIX) else "keep"
+
+
 def _topic_norm(topic: str) -> str:
     return (topic or "").strip().lower()[:32]
 
@@ -278,12 +298,15 @@ class CareScheduleStore:
         platform: str = "",
         account_id: str = "",
         chat_key: str = "",
+        quiet_policy: str = "keep",
     ) -> Optional[int]:
         """J-8 #182：运营「到点发这句话」——原文直发行入队。
 
         ``text`` 就是到点要发出去的整句话（≤ ``VERBATIM_MAX_CHARS``，**不截 160**）；
         ``topic`` 存一行摘要（列表卡片显示用），``topic_norm=verbatim:<sha8>``
         让派发器/预览识别并绕过 LLM。手动可信：不做去重、confidence=1.0。绝不抛。
+        ``quiet_policy``（Q-4 #267 D）：``keep``（默认）＝人工时刻照发不顺延；
+        ``defer``＝落在安静时段则顺延到结束并错峰（topic_norm 追加 ``:defer_quiet``）。
         """
         import hashlib
         body = str(text or "").strip()
@@ -293,6 +316,8 @@ class CareScheduleStore:
         summary = " ".join(body.split())[:80]
         tnorm = (VERBATIM_CARE_NORM_PREFIX
                  + hashlib.sha1(body.encode("utf-8")).hexdigest()[:8])
+        if str(quiet_policy or "keep").strip().lower() == "defer":
+            tnorm += VERBATIM_QUIET_DEFER_SUFFIX
         now = time.time()
         try:
             with self._lock:
@@ -821,4 +846,5 @@ def get_care_schedule_store(db_path=None) -> "CareScheduleStore":
 __all__ = ["CareScheduleStore", "get_care_schedule_store", "_topic_norm",
            "CRISIS_CARE_TOPIC", "GOAL_CARE_NORM_PREFIX",
            "VERBATIM_CARE_NORM_PREFIX", "VERBATIM_MAX_CHARS",
-           "is_verbatim_care", "care_verbatim_text"]
+           "VERBATIM_QUIET_DEFER_SUFFIX", "QUIET_POLICIES",
+           "is_verbatim_care", "care_verbatim_text", "verbatim_quiet_policy"]

@@ -24,6 +24,15 @@
 .cs3-sec{margin:1.1rem 0 .5rem}
 .cs3-sec h4{font-size:.9rem;margin:0;color:var(--t)}
 .cs3-sec .sub{color:var(--t3);font-size:.72rem;margin-top:.1rem}
+/* Q-4（#267 D）：安静时段卡（区间 + 开关 + 时区依据） */
+.cs3-quiet{display:flex;align-items:flex-start;gap:.6rem;flex-wrap:wrap;font-size:.78rem;line-height:1.5;color:var(--t2);border:1px dashed var(--bd);border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem}
+.cs3-quiet .qi{flex:1;min-width:220px}
+.cs3-quiet .qi b{color:var(--t1)}
+.cs3-quiet .qi .basis{display:block;color:var(--t3);font-size:.72rem;margin-top:.1rem}
+.cs3-quiet .qi .now{display:inline-block;margin-left:.4rem;padding:0 .4rem;border-radius:999px;font-size:.68rem;background:color-mix(in srgb,var(--amber,#d97706) 14%,transparent);color:var(--amber,#d97706)}
+.cs3-quiet .qi .note{display:block;color:var(--t3);font-size:.7rem;margin-top:.2rem}
+.cs7-pv .qc-sub{color:var(--t3);font-size:.74rem;margin:.15rem 0 .3rem}
+.cs7-pv .qc-note{color:var(--t3);font-size:.7rem;margin-top:.3rem}
 /* 时间轴分组 + 方案卡 */
 .cs3-group{border-left:2px solid color-mix(in srgb,var(--p,#1e8cf2) 22%,var(--bd));margin:0 0 .3rem .4rem;padding:0 0 .35rem .95rem}
 .cs3-group-h{position:relative;color:var(--t3);font-size:.72rem;font-weight:600;letter-spacing:.04em;margin:.15rem 0 .5rem}
@@ -245,6 +254,7 @@ span.cs-p-ava{display:inline-flex;align-items:center;justify-content:center;back
       <h4>{{ (i18n or {}).get('cs3_plan_title', "关怀方案") }}</h4>
       <div class="sub">{{ (i18n or {}).get('cs3_plan_sub', "AI 记下的约定，到点自动生成话术发出；每条都可预览、改期、跳过") }}</div>
     </div>
+    <div id="cs-quiet" class="cs3-quiet" style="display:none"></div>
     <div id="cs-plan"></div>
 
     <details class="cs3-fold" id="cs-add-details">
@@ -549,10 +559,42 @@ function _csRenderAll(d){
     _csRenderSteward(d);
     _csEnsureChats();
   }
+  _csRenderQuiet(d);
   _csRenderPlan(d);
   _csRenderRecent(d);
   _csRenderStats(d);
   _csRenderLights(d);
+}
+
+/* Q-4（#267 D）：安静时段卡——区间 + 开关 + 时区依据（客户 / 人设 / 账号 / 服务器）。
+   plan 降级路径没有 quiet 字段 → 隐藏，不猜。 */
+function _csHH(h){var n=Number(h)||0;var hh=Math.floor(n),mm=Math.round((n-hh)*60);return (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;}
+function _csQuietBasis(q){
+  var b=String((q&&q.tz_basis)||'server'),tz=String((q&&q.tz_name)||'');
+  var key=(b==='customer'||b==='persona'||b==='account')?('cs_quiet_basis_'+b):'cs_quiet_basis_server';
+  return window.Tf(key,{tz:tz});
+}
+function _csRenderQuiet(d){
+  var box=document.getElementById('cs-quiet');if(!box)return;
+  var q=d&&d.quiet;var eng=d.engine||{};
+  if(!q||!eng.enabled){box.style.display='none';box.innerHTML='';return;}
+  var on=!!q.enabled;
+  var h='<div class="qi"><b>'+esc(window.T('cs_quiet_title'))+'</b> · '+
+    esc(on?window.Tf('cs_quiet_range',{s:_csHH(q.start_hour),e:_csHH(q.end_hour)}):window.T('cs_quiet_off'))+
+    (on&&q.in_quiet_now?'<span class="now">'+esc(window.T('cs_quiet_now'))+'</span>':'')+
+    (on?'<span class="basis">'+esc(window.Tf('cs_quiet_basis',{b:_csQuietBasis(q)}))+'</span>':'')+
+    '<span class="note">'+esc(window.T('cs_quiet_verbatim_note'))+'</span></div>'+
+    '<button type="button" class="cs-act" onclick="csQuietToggle('+(on?'false':'true')+')">'+
+    esc(window.T(on?'cs_quiet_toggle_off':'cs_quiet_toggle_on'))+'</button>';
+  box.innerHTML=h;box.style.display='';
+}
+async function csQuietToggle(enabled){
+  try{
+    var r=await apiFetch('/api/care/quiet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});
+    var d=await r.json();
+    if(!d.ok){alert(window.T('cs_quiet_save_fail')+((d.failed&&d.failed[0]&&d.failed[0].reason)||d.reason||r.status));return;}
+    csPlanLoad();
+  }catch(e){alert(window.T('cs_quiet_save_fail')+e);}
 }
 
 function _csRenderSteward(d){
@@ -580,7 +622,8 @@ function _csRenderSteward(d){
   act.innerHTML=btns.join('');
   document.getElementById('cs-st-brief').textContent=_csBrief(d);
   var advBox=document.getElementById('cs-st-advice');
-  var advs=(d.advice||[]).map(_csAdviceHtml).filter(Boolean);
+  /* Q-4（#267 D）：「到期会先拟稿给你过目」只在试运行 / 预览模式成立，真发档一律不显 */
+  var advs=(d.advice||[]).filter(function(a){return !(a&&a.code==='waiting_due'&&!eng.dry_run);}).map(_csAdviceHtml).filter(Boolean);
   advBox.innerHTML=advs.join('');
 }
 
@@ -1370,17 +1413,38 @@ async function csAdd2(){
   _csPvHide();
   await _csAddSubmit(_csKind,false);
 }
-async function _csAddSubmit(mode,confirmed){
+/* Q-4（#267 D）：原文行到期落在安静时段 → 后端不入队、回 in_quiet_hours；这里弹
+   「仍按 01:20 发 / 顺延到 08:00」，选完带 quiet_policy 重发同一 payload。 */
+function _csQuietChoiceShow(d,topic){
+  var p=document.getElementById('cs-p-preview');if(!p)return;
+  var q=(_csPlan&&_csPlan.quiet)||{};
+  var h='<div class="ttl">'+esc(window.T('cs_quiet_choice_title'))+'</div>'+
+    '<div class="qc-sub">'+esc(window.Tf('cs_quiet_choice_sub',{basis:_csQuietBasis(d),due:d.due_local||'',s:_csHH(q.start_hour),e:_csHH(q.end_hour)}))+'</div>'+
+    '<div class="ops">'+
+    '<button type="button" class="btn btn-p" onclick="_csAddSubmit(\'verbatim\',false,\'keep\')">'+esc(window.Tf('cs_quiet_keep',{t:d.due_local||''}))+'</button>'+
+    '<button type="button" class="cs-act p" onclick="_csAddSubmit(\'verbatim\',false,\'defer\')">'+esc(window.Tf('cs_quiet_defer',{t:d.shifted_local||''}))+'</button>'+
+    '<button type="button" class="cs-act" onclick="_csPvHide()">'+esc(window.T('cs_quiet_cancel'))+'</button>'+
+    '</div><div class="qc-note">'+esc(window.T('cs_quiet_defer_note'))+'</div>';
+  p.innerHTML=h;p.style.display='';
+  p._topic=topic;
+}
+async function _csAddSubmit(mode,confirmed,quietPolicy){
   var msg=document.getElementById('cs-p-msg');
   var pv=document.getElementById('cs-p-preview');
   var topic=(document.getElementById('cs-p-topic').value||'').trim()||(pv&&pv._topic)||'';
   if(!_csSel||!topic){msg.style.color='var(--amber)';msg.textContent=window.T('cs2_add_need');return;}
   var payload=_csAddPayload(topic,mode);
   if(mode==='event'&&confirmed)payload.preview_confirmed=true;
+  if(mode==='verbatim'&&(quietPolicy==='keep'||quietPolicy==='defer'))payload.quiet_policy=quietPolicy;
   msg.style.color='var(--t3)';msg.textContent='…';
   try{
     var res=await apiFetch('/api/care/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)},{timeoutMs:90000});
     var d=await res.json();
+    if(!d.ok&&d.reason==='in_quiet_hours'){
+      msg.textContent='';
+      _csQuietChoiceShow(d,topic);
+      return;
+    }
     if(!d.ok&&d.reason==='looks_like_instruction'){
       /* 后端守卫拦下：不入队，把切换提示亮出来让运营决定 */
       msg.style.color='var(--amber)';msg.textContent=window.T('cs6_add_guarded');
@@ -1395,7 +1459,7 @@ async function _csAddSubmit(mode,confirmed){
     }
     if(!d.ok){msg.style.color='var(--red)';msg.textContent=window.T('cs2_add_fail')+(d.message||d.reason||'');return;}
     _csPvHide();
-    msg.style.color='var(--green)';msg.textContent=window.T(mode==='verbatim'?'cs6_add_ok_verbatim':'cs7_add_ok_event');
+    msg.style.color='var(--green)';msg.textContent=window.T(mode==='verbatim'?(quietPolicy==='defer'?'cs6_add_ok_verbatim_defer':'cs6_add_ok_verbatim'):'cs7_add_ok_event');
     _csIntentKeep=false;_csIntentShow(false);
     document.getElementById('cs-p-topic').value='';
     document.getElementById('cs-p-topics').querySelectorAll('.cs-chip').forEach(function(b){b.classList.remove('on');});

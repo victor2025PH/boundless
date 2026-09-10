@@ -12,6 +12,8 @@ from pathlib import Path
 
 from fastapi import Depends, Request
 
+from src.web.web_i18n import tr
+
 logger = logging.getLogger(__name__)
 
 _DEFERRED_NOTE_PREFIX = "deferred:"
@@ -653,9 +655,22 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             effect_replied=int(effect.get("replied") or 0),
             now=now,
         )
+        # Q-4（#267 D）：安静时段区间 + 开关 + 时区依据（关怀页可见）。窗口来自派发器
+        # （与顺延判定同源）；依据按「首条待办」的钟算一次示例（客户/人设/账号/服务器）。
+        quiet_info: dict = {"start_hour": float(care_cfg.get("quiet_start_hour", 23)),
+                            "end_hour": float(care_cfg.get("quiet_end_hour", 8)),
+                            "enabled": True, "tz_basis": "", "tz_name": ""}
+        quiet_info["enabled"] = quiet_info["start_hour"] != quiet_info["end_hour"]
+        if dispatcher is not None and hasattr(dispatcher, "quiet_window_info"):
+            try:
+                quiet_info.update(dispatcher.quiet_window_info(
+                    dict(pending[0]) if pending else None) or {})
+            except Exception:
+                logger.debug("care plan quiet_window_info 失败", exc_info=True)
         return {
             "ok": True,
             "now": now,
+            "quiet": quiet_info,
             "engine": {
                 "enabled": enabled,
                 "dry_run": dry_run,
@@ -756,6 +771,55 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             "hot_reload_sec": 30,
         }
 
+    @app.post("/api/care/quiet")
+    async def api_care_quiet(request: Request, _=Depends(api_auth)):
+        """关怀页安静时段开关 / 区间（Q-4 #267 D）。
+
+        body: {enabled: bool, start_hour?: 0–23, end_hour?: 0–23}。
+        - enabled=false → start=end=8（派发器语义：start==end 即无安静窗）
+        - enabled=true  → 用给定 start/end；缺省回出厂 23→8
+        写 companion.proactive_care.quiet_start_hour/quiet_end_hour overlay（硬编码路径，
+        非用户输入）+ 在场派发器即时改窗（免等热重载）。
+        """
+        cm = _cm(request)
+        if cm is None or not hasattr(cm, "set_overlay_flag"):
+            return {"ok": False, "reason": "config_unavailable"}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        enabled = bool(body.get("enabled", True))
+        if enabled:
+            try:
+                s = int(body.get("start_hour", 23))
+                e = int(body.get("end_hour", 8))
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": "bad_hours"}
+            if not (0 <= s < 24 and 0 <= e < 24) or s == e:
+                return {"ok": False, "reason": "bad_hours"}
+        else:
+            s = e = 8
+        applied, failed = [], []
+        for path, value in (("companion.proactive_care.quiet_start_hour", s),
+                            ("companion.proactive_care.quiet_end_hour", e)):
+            ok, msg = cm.set_overlay_flag(path, value)
+            if ok:
+                applied.append(path)
+            else:
+                failed.append({"path": path, "reason": str(msg)})
+        disp = _dispatcher(request)
+        if disp is not None and hasattr(disp, "set_quiet_window"):
+            try:
+                disp.set_quiet_window(s, e)
+            except Exception:
+                logger.debug("care quiet set_quiet_window 失败", exc_info=True)
+        if applied:
+            _engine_audit(cm, actor=str(body.get("actor") or "web-admin"),
+                          action="quiet_window:%d-%d" % (s, e), applied=applied)
+        return {"ok": not failed, "applied": applied, "failed": failed,
+                "quiet": {"start_hour": s, "end_hour": e, "enabled": s != e}}
+
     @app.get("/api/care/schedule")
     async def api_care_schedule_list(
         request: Request, status: str = "", limit: int = 100,
@@ -847,17 +911,49 @@ def register_care_routes(app, *, api_auth, config_manager=None) -> None:
             text = str(body.get("text") or body.get("source_text") or topic).strip()
             if not hasattr(store, "add_verbatim"):
                 return {"ok": False, "reason": "unsupported"}
+            # Q-4（#267 D）：人工指定的时刻默认**照发**（quiet_policy=keep）。未带策略且到期
+            # 落在该客户/人设/账号时钟的安静时段 → 不入队，回 in_quiet_hours + 两个时刻，
+            # 前端弹「仍按 01:20 发 / 顺延到 08:00」，选完带 quiet_policy 重发。
+            quiet_policy = str(body.get("quiet_policy") or "").strip().lower()
+            if quiet_policy and quiet_policy not in ("keep", "defer"):
+                return {"ok": False, "reason": "bad_quiet_policy"}
+            disp = _dispatcher(request)
+            if not quiet_policy and disp is not None and hasattr(disp, "quiet_check_for_due"):
+                try:
+                    qc = disp.quiet_check_for_due({
+                        "contact_key": contact_key,
+                        "platform": str(body.get("platform") or ""),
+                        "account_id": str(body.get("account_id") or "default"),
+                        "chat_key": str(body.get("chat_key") or ""),
+                        "topic_norm": "verbatim:pre",
+                    }, due_at) or {}
+                except Exception:
+                    logger.debug("care schedule quiet_check 失败（按不在安静时段）", exc_info=True)
+                    qc = {}
+                if qc.get("in_quiet"):
+                    return {"ok": False, "reason": "in_quiet_hours",
+                            "due_local": qc.get("due_local", ""),
+                            "shifted_local": qc.get("shifted_local", ""),
+                            "shifted_at": float(qc.get("shifted_at") or 0),
+                            "tz_name": qc.get("tz_name", ""),
+                            "tz_basis": qc.get("tz_basis", ""),
+                            "message": tr(request, "cs_quiet_choice_msg",
+                                          due=qc.get("due_local", ""),
+                                          shifted=qc.get("shifted_local", ""))}
             rid = store.add_verbatim(
                 contact_key=contact_key, due_at=due_at, text=text,
                 platform=str(body.get("platform") or ""),
                 account_id=str(body.get("account_id") or "default"),
                 chat_key=str(body.get("chat_key") or ""),
+                quiet_policy=quiet_policy or "keep",
             )
             if not rid:
                 return {"ok": False, "reason": "add_failed", "message": "写入失败"}
-            logger.info("[care-gen] id=%s contact=%s mode=verbatim decision=enqueued_by_operator "
-                        "text=%r", rid, contact_key, text[:160])
-            return {"ok": True, "id": rid, "mode": "verbatim"}
+            logger.info("[care-gen] id=%s contact=%s mode=verbatim quiet_policy=%s "
+                        "decision=enqueued_by_operator text=%r",
+                        rid, contact_key, quiet_policy or "keep", text[:160])
+            return {"ok": True, "id": rid, "mode": "verbatim",
+                    "quiet_policy": quiet_policy or "keep"}
 
         # M-1 A #218：AI 档必须先看后排。候选行（未入库）走与派发同源的预览体。
         if not bool(body.get("preview_confirmed")):

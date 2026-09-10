@@ -649,7 +649,10 @@ class DeferredDispatcher:
             return False
 
         # 3. quiet_hours：顺延到安静窗结束
-        shifted = shift_out_of_quiet_hours(
+        # Q-4（#267 D）：extra.ignore_quiet=True（人工指定时刻的原文关怀 / goal ignore_quiet）
+        # → 上游已按客户钟裁定「照发」，这里不得再按服务器钟二次顺延。
+        _extra_q = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+        shifted = now if _extra_q.get("ignore_quiet") else shift_out_of_quiet_hours(
             now, start_hour=self._quiet_start, end_hour=self._quiet_end)
         if shifted > now:
             self._store.push_until(row_id, shifted, note="quiet_hours")

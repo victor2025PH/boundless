@@ -426,9 +426,39 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
                 return {"delivered": False, "status": "pending", "reason": "no_sync_path"}
             return await disp.deliver_now(int(row_id))
 
+        def _care_tz_fallback(item: dict) -> dict:
+            """Q-4（#267 D）：客户钟解析不出时，安静窗按 人设所在地 → 账号班表时区 判，
+            不再默认服务器本地钟。返回 {"tz_name", "basis"}；两者皆无 → {}（服务器钟）。"""
+            plat = str(item.get("platform") or "")
+            acct = str(item.get("account_id") or "default")
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.companion.persona_location import resolve_place_with_fallback
+                from src.utils.persona_manager import PersonaManager
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {}, plat, acct,
+                    str(item.get("chat_key") or ""))
+                if pid:
+                    p = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                    place = resolve_place_with_fallback(p)
+                    if place is not None and getattr(place, "tz_name", ""):
+                        return {"tz_name": str(place.tz_name), "basis": "persona"}
+            except Exception:
+                assistant.logger.debug("care tz_fallback 人设时区解析失败", exc_info=True)
+            try:
+                from src.inbox.work_hours_gate import resolve_entry, work_schedule_cfg
+                ws = work_schedule_cfg(assistant.config.config or {})
+                tz_name = str(resolve_entry(ws, plat, acct).get("tz_name") or "").strip()
+                if tz_name:
+                    return {"tz_name": tz_name, "basis": "account"}
+            except Exception:
+                assistant.logger.debug("care tz_fallback 账号时区解析失败", exc_info=True)
+            return {}
+
         dispatcher = CareDispatcher(
             store=care_store, ai_client=assistant.ai_client,
             send_callback=_care_send_guarded,
+            tz_fallback_provider=_care_tz_fallback,
             context_provider=_care_context, proactive_allowed=proactive_paywall,
             already_discussed=_care_already_discussed,
             ai_name=ai_name,

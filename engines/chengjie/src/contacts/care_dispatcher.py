@@ -27,6 +27,7 @@ from src.contacts.care_schedule import (
     GOAL_CARE_NORM_PREFIX,
     care_verbatim_text,
     is_verbatim_care,
+    verbatim_quiet_policy,
     CareScheduleStore,
 )
 
@@ -87,9 +88,32 @@ ProfileProvider = Callable[[dict], dict]
 # 路径）→ 只入队，按「排队中」回话。
 DeliverNow = Callable[[int, str], Awaitable[dict]]
 
+# tz_fallback_provider：(item dict) -> {"tz_name": str, "basis": "persona"|"account"|""}
+# （Q-4 #267 D，2026-09-10）：客户时钟解析不出时安静窗按**人设所在地**、再按**账号班表
+# 时区**判，而不是服务器本地钟——1.0.78 事故同根（上海机器把纽约客户的下午当凌晨）。
+# None/异常/空 → 服务器钟（旧行为，basis=""）。
+TzFallbackProvider = Callable[[dict], dict]
+
 # 运营「立即发」的决策码（send_now 返回 ``decision``；前端据此渲染卡片状态）
 SEND_NOW_DECISIONS = ("sent", "queued", "dry_sampled", "skipped", "held",
                       "failed", "not_pending", "missing_route")
+
+# Q-4（#267 D）：安静时段顺延后的错峰——多条落到同一「安静时段结束」时刻的行，按
+# 到达顺序拉开 0–40 min（槽距 5 min，≥5 min 是验收线；9 条以上回绕随机落在 0–40 内），
+# 免得 08:00:00 同秒齐发像机器。verbatim 行**只有**选了 defer 才会走到这里。
+QUIET_STAGGER_SLOT_SEC = 300.0
+QUIET_STAGGER_MAX_SEC = 2400.0
+
+
+def quiet_stagger_offset(slot_index: int) -> float:
+    """第 ``slot_index``（0 起）条顺延到同一时刻的行应再推后多少秒（0,300,…,2400，回绕随机）。"""
+    try:
+        n = max(0, int(slot_index))
+    except (TypeError, ValueError):
+        n = 0
+    if n * QUIET_STAGGER_SLOT_SEC <= QUIET_STAGGER_MAX_SEC:
+        return n * QUIET_STAGGER_SLOT_SEC
+    return random.uniform(0.0, QUIET_STAGGER_MAX_SEC)
 
 _IDENTITY_LEAK = ("作为AI", "作为一个AI", "AI助手", "as an AI", "i'm an ai", "i am an ai")
 
@@ -413,8 +437,13 @@ class CareDispatcher:
         profile_provider: Optional[ProfileProvider] = None,
         reply_gates: Optional[bool] = None,
         deliver_now: Optional[DeliverNow] = None,
+        tz_fallback_provider: Optional[TzFallbackProvider] = None,
     ) -> None:
         self._store = store
+        # Q-4（#267 D）：客户钟缺位时的时区依据（人设 → 账号 → 服务器）
+        self._tz_fallback_provider = tz_fallback_provider
+        # 同一「安静时段结束」时刻已排了几条（错峰槽位）；键=结束 epoch 取整分钟
+        self._quiet_stagger_slots: Dict[int, int] = {}
         self._ai = ai_client
         self._send = send_callback
         self._context_provider = context_provider
@@ -703,6 +732,114 @@ class CareDispatcher:
             logger.debug("care profile_provider 异常（按空档案）", exc_info=True)
             return empty_profile()
 
+    def _resolve_clock(self, item: dict) -> "tuple[Any, str]":
+        """安静窗按谁的钟判（Q-4 #267 D）：客户（user_clock 解析成功）→ 人设所在地 →
+        账号班表时区 → 服务器本地。返回 ``(clock|None, basis)``，basis ∈
+        {"customer","persona","account",""}；clock None＝服务器钟（旧行为）。绝不抛。"""
+        clock = None
+        if self._user_clock_provider is not None:
+            try:
+                clock = self._user_clock_provider(dict(item))
+            except Exception:
+                clock = None
+        if clock is not None:
+            return clock, "customer"
+        if self._tz_fallback_provider is not None:
+            try:
+                fb = self._tz_fallback_provider(dict(item)) or {}
+                tz_name = str(fb.get("tz_name") or "").strip()
+                if tz_name:
+                    from src.companion.user_clock import UserClock, _tz_offset_hours
+                    off = _tz_offset_hours(tz_name)
+                    if off is not None:
+                        return UserClock(
+                            tz_name=tz_name, offset_hours=float(off),
+                            source=str(fb.get("basis") or "fallback"), confidence=1.0,
+                            country="", city_slug="", trust="replace",
+                        ), str(fb.get("basis") or "account")
+            except Exception:
+                logger.debug("care tz_fallback_provider 异常（回落服务器钟）", exc_info=True)
+        return None, ""
+
+    def set_quiet_window(self, start_hour: float, end_hour: float) -> None:
+        """关怀页开关 / 改区间即时生效（Q-4 #267 D）；持久化由路由写 overlay。
+        start==end 即「关闭安静时段」。非法值忽略（保持原窗）。"""
+        try:
+            s, e = float(start_hour), float(end_hour)
+        except (TypeError, ValueError):
+            return
+        if not (0 <= s < 24 and 0 <= e < 24):
+            return
+        self._quiet_start, self._quiet_end = s, e
+
+    def quiet_window_info(self, item: Optional[dict] = None) -> Dict[str, Any]:
+        """关怀页「安静时段 + 时区依据」卡（Q-4 #267 D）。``item`` 给了就按该行的钟算
+        依据与「此刻是否在安静时段」；没给只回窗口本身。绝不抛。"""
+        out: Dict[str, Any] = {
+            "start_hour": self._quiet_start, "end_hour": self._quiet_end,
+            "enabled": self._quiet_start != self._quiet_end,
+            "tz_basis": "", "tz_name": "", "in_quiet_now": False,
+        }
+        try:
+            if item is not None:
+                clock, basis = self._resolve_clock(item)
+                out["tz_basis"] = basis or "server"
+                out["tz_name"] = str(getattr(clock, "tz_name", "") or "") if clock else ""
+                now = time.time()
+                shifted = shift_out_of_quiet_hours(
+                    now, start_hour=self._quiet_start, end_hour=self._quiet_end, clock=clock)
+                out["in_quiet_now"] = bool(shifted > now)
+        except Exception:
+            logger.debug("care quiet_window_info 异常", exc_info=True)
+        return out
+
+    def quiet_check_for_due(self, item: dict, due_at: float) -> Dict[str, Any]:
+        """排期前预判（Q-4 #267 D）：``due_at`` 若落在该行时钟的安静时段，回
+        ``{"in_quiet": True, "due_local": "01:20", "shifted_at": <epoch>, "shifted_local": "08:00",
+        "tz_name", "tz_basis"}`` 供关怀页弹「仍按 01:20 发 / 顺延到 08:00」；否则 in_quiet=False。"""
+        out: Dict[str, Any] = {"in_quiet": False, "due_local": "", "shifted_at": 0.0,
+                               "shifted_local": "", "tz_name": "", "tz_basis": ""}
+        try:
+            due = float(due_at or 0)
+            if due <= 0:
+                return out
+            clock, basis = self._resolve_clock(item)
+            out["tz_basis"] = basis or "server"
+            out["tz_name"] = str(getattr(clock, "tz_name", "") or "") if clock else ""
+            shifted = shift_out_of_quiet_hours(
+                due, start_hour=self._quiet_start, end_hour=self._quiet_end, clock=clock)
+
+            def _local(ts: float) -> str:
+                try:
+                    if clock is not None:
+                        from src.companion.user_clock import user_now
+                        return user_now(clock, ts).strftime("%H:%M")
+                except Exception:
+                    pass
+                return datetime.fromtimestamp(ts).strftime("%H:%M")
+
+            out["due_local"] = _local(due)
+            if shifted > due:
+                out["in_quiet"] = True
+                out["shifted_at"] = shifted
+                out["shifted_local"] = _local(shifted)
+        except Exception:
+            logger.debug("care quiet_check_for_due 异常", exc_info=True)
+        return out
+
+    def _stagger_after_quiet(self, shifted_ts: float) -> float:
+        """同一「安静时段结束」时刻的第 n 条再推后 quiet_stagger_offset(n)。"""
+        try:
+            key = int(float(shifted_ts) // 60)
+            n = self._quiet_stagger_slots.get(key, 0)
+            self._quiet_stagger_slots[key] = n + 1
+            if len(self._quiet_stagger_slots) > 500:
+                for k in sorted(self._quiet_stagger_slots)[:250]:
+                    self._quiet_stagger_slots.pop(k, None)
+            return float(shifted_ts) + quiet_stagger_offset(n)
+        except Exception:
+            return float(shifted_ts)
+
     def projected_send_window(self, item: dict, *, at: Optional[float] = None) -> Dict[str, Any]:
         """这条待办若在 ``at``（缺省 due_at）被派发，**实际**会几点出手（N-1 C #243，D-N4 ③）。
 
@@ -720,6 +857,7 @@ class CareDispatcher:
         try:
             is_goal = str(item.get("topic_norm") or "").startswith(GOAL_CARE_NORM_PREFIX)
             policy = self._goal_policy(item) if is_goal else {}
+            vq = verbatim_quiet_policy(item)
             if is_verbatim_care(item):
                 jit = (0.0, 0.0)
             else:
@@ -731,23 +869,25 @@ class CareDispatcher:
                     except (TypeError, ValueError):
                         jit = self._jitter
             lo, hi = base + float(jit[0]), base + float(jit[1])
-            if not policy.get("ignore_quiet"):
-                clock = None
-                if self._user_clock_provider is not None:
-                    try:
-                        clock = self._user_clock_provider(dict(item))
-                    except Exception:
-                        clock = None
+            # Q-4（#267 D）：verbatim 行默认 keep＝人工时刻照发（不看安静窗）；选了 defer
+            # 才顺延，且顺延后按错峰给 [T, T+40min] 的区间
+            ignore_quiet = bool(policy.get("ignore_quiet")) or vq == "keep"
+            quiet_tz_basis = ""
+            if not ignore_quiet:
+                clock, quiet_tz_basis = self._resolve_clock(item)
                 lo2 = shift_out_of_quiet_hours(lo, start_hour=self._quiet_start,
                                                end_hour=self._quiet_end, clock=clock)
                 hi2 = shift_out_of_quiet_hours(hi, start_hour=self._quiet_start,
                                                end_hour=self._quiet_end, clock=clock)
                 quiet = (lo2 > lo) or (hi2 > hi)
                 lo, hi = lo2, max(lo2, hi2)
+                if quiet and vq == "defer":
+                    hi = max(hi, lo + QUIET_STAGGER_MAX_SEC)
             else:
                 quiet = False
             return {"eta_min": lo, "eta_max": hi, "jitter": bool(jit[1] > 0),
-                    "quiet_shifted": bool(quiet)}
+                    "quiet_shifted": bool(quiet), "quiet_policy": vq,
+                    "tz_basis": quiet_tz_basis or ("" if ignore_quiet else "server")}
         except Exception:
             logger.debug("care projected_send_window 异常", exc_info=True)
             return {"eta_min": base, "eta_max": base, "jitter": False, "quiet_shifted": False}
@@ -1079,12 +1219,8 @@ class CareDispatcher:
         # O3 改进②：发送时刻命中 quiet_hours → 顺延到结束（而非跳过）。
         # 实施84 P0-6：能解析出客户时钟时按**对方当地时间**判安静窗（provider
         # 未注入/解析不出 → clock=None＝服务器钟，旧行为）。
-        _clock = None
-        if self._user_clock_provider is not None:
-            try:
-                _clock = self._user_clock_provider(dict(item))
-            except Exception:
-                _clock = None
+        # Q-4（#267 D）：钟的依据 客户 → 人设 → 账号 → 服务器（不再默认服务器本地）
+        _clock, _tz_basis = self._resolve_clock(item)
         # 冲刺行用快抖动（默认 60-1200s 对 2-12h 窗口太慢）；策略给坏值回默认
         _jit = self._jitter
         gp_jit = goal_policy.get("jitter")
@@ -1096,6 +1232,8 @@ class CareDispatcher:
         # N-1 D：「不当场发而入 deferred」必须说清为什么晚——none（到点即发）/ jitter（错峰）/
         # quiet_hours（安静时段顺延）；进 decision=enqueued 那行日志的 defer_why=。
         defer_why = "none"
+        _vq = verbatim_quiet_policy(item)
+        _skip_quiet = True  # manual：人工此刻就是此刻（投递层也不得再顺延）
         if manual:
             # N-1 A（D-N4 ①③）：运营亲手点「立即发」——零错峰、不做安静时段顺延，
             # 现在就是现在。安全型闸（急停 / 无 sender）由投递层守。
@@ -1108,15 +1246,23 @@ class CareDispatcher:
             # 安静时段顺延对原文行保留（J-8 #182 口径），卡片经 projected_send_window 明示。
             defer_until = now if is_verbatim else now + random.uniform(_jit[0], _jit[1])
             # 冲刺行可按策略跳过安静时段顺延（顺延到早 8 点＝3 小时目标必死；
-            # 用户拍板的全力档自担深夜打扰）；普通行为不变
-            if not goal_policy.get("ignore_quiet"):
+            # 用户拍板的全力档自担深夜打扰）；普通行为不变。
+            # Q-4（#267 D）：verbatim 行**默认尊重人工时刻**（quiet_policy=keep → 不顺延；
+            # 01:20 就是 01:20），排期时选了「顺延到 08:00」的行才顺延，且同一结束时刻的多条
+            # 按 0–40 min 错峰（≥5 min 间隔）——两条「预计 08:00」同一分钟齐发是 65UQRE 实录。
+            _skip_quiet = bool(goal_policy.get("ignore_quiet")) or _vq == "keep"
+            if not _skip_quiet:
                 _before_quiet = defer_until
                 defer_until = shift_out_of_quiet_hours(
                     defer_until, start_hour=self._quiet_start,
                     end_hour=self._quiet_end, clock=_clock)
                 if defer_until > _before_quiet:
                     defer_why = "quiet_hours"
-        _r(text=reply, defer_until=defer_until)
+                    if _vq == "defer":
+                        defer_until = self._stagger_after_quiet(defer_until)
+            elif _vq == "keep":
+                defer_why = "none"
+        _r(text=reply, defer_until=defer_until, quiet_policy=_vq or "", tz_basis=_tz_basis or "server")
 
         if dry:
             logger.info("[care DRY] id=%s contact=%s topic=%s manual=%s reply=%r",
@@ -1155,7 +1301,9 @@ class CareDispatcher:
                 self._staleness,
                 {"care": True, "care_id": sid, "contact_key": contact_key,
                  "topic": topic, "crisis_care": is_crisis_care,
-                 "verbatim": is_verbatim, "manual": bool(manual)},
+                 "verbatim": is_verbatim, "manual": bool(manual),
+                 # Q-4（#267 D）：人工指定时刻照发 → 投递队列不得再按服务器钟顺延
+                 "quiet_policy": _vq or "", "ignore_quiet": bool(_skip_quiet)},
             )
         except Exception:
             logger.warning("care send_callback 失败 id=%s", sid, exc_info=True)
@@ -1249,12 +1397,7 @@ class CareDispatcher:
         contact_key = str(item.get("contact_key") or "")
         if not chat_key or not platform:
             return {"ok": False, "reason": "missing_route"}
-        _clock = None
-        if self._user_clock_provider is not None:
-            try:
-                _clock = self._user_clock_provider(dict(item))
-            except Exception:
-                _clock = None
+        _clock, _ = self._resolve_clock(item)
         # N-1 C（D-N4 ③）：人工改稿点「发出」是人工时刻——零错峰（此前还加 60–120s
         # 抖动）；安静时段顺延保留（面板提示语本就写着「安静时段照常顺延」）。
         defer_until = shift_out_of_quiet_hours(
@@ -1359,4 +1502,5 @@ class CareDispatcher:
 
 
 __all__ = ["CareDispatcher", "build_care_prompt", "shift_out_of_quiet_hours",
-           "SEND_NOW_DECISIONS"]
+           "SEND_NOW_DECISIONS", "quiet_stagger_offset",
+           "QUIET_STAGGER_SLOT_SEC", "QUIET_STAGGER_MAX_SEC"]

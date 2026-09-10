@@ -2037,6 +2037,13 @@ _ADDITIONS_2026_09_10_Q6_ALBUM = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q6_ALBUM
 
+# Q-4 #267（2026-09-10，D）：关怀页安静时段开关 / 区间（写 proactive_care.quiet_*_hour overlay
+# + 派发器即时改窗）。care_routes.py。
+_ADDITIONS_2026_09_10_Q4_CARE_QUIET = """
+/api/care/quiet	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q4_CARE_QUIET
+
 
 def _parse_baseline():
     expected = set()

@@ -604,7 +604,10 @@ def test_projected_send_window_matches_dispatch_rules():
     d = CareDispatcher(store=s, ai_client=_AI(), send_callback=_Queue("ok").send_callback(),
                        send_jitter_sec=(60.0, 1200.0), quiet_start_hour=23, quiet_end_hour=8)
     v = d.projected_send_window(s.get(vid))
-    assert v == {"eta_min": due, "eta_max": due, "jitter": False, "quiet_shifted": False}
+    # Q-4（#267 D）：窗口多带 quiet_policy / tz_basis 两键（附加信息），四个原键口径不变
+    assert {k: v[k] for k in ("eta_min", "eta_max", "jitter", "quiet_shifted")} == {
+        "eta_min": due, "eta_max": due, "jitter": False, "quiet_shifted": False}
+    assert v["quiet_policy"] == "keep"
     e = d.projected_send_window(s.get(eid))
     assert e["jitter"] is True and e["quiet_shifted"] is True
     assert e["eta_min"] == due + 60.0                                   # 22:51 仍在窗外
