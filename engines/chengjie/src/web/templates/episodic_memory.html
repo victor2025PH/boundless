@@ -1529,9 +1529,19 @@ function _emGrowthRender(g) {
   }
   if (typeof g.inbound_total === 'number') txt += ' · ' + window.Tf('em_growth_inbound', {i: g.inbound_total});
   line.textContent = txt; line.hidden = false;
+  var rows = [];
   if (g.stalled) {
-    stall.innerHTML = _emEsc(window.Tf('em_growth_stalled', {i: g.inbound_total || 0}))
-      + ' <a href="/logs" style="color:inherit;text-decoration:underline">' + _emEsc(window.T('em_growth_stalled_link')) + '</a>';
+    rows.push(_emEsc(window.Tf('em_growth_stalled', {i: g.inbound_total || 0}))
+      + ' <a href="/logs" style="color:inherit;text-decoration:underline">' + _emEsc(window.T('em_growth_stalled_link')) + '</a>');
+  }
+  /* Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0（记忆 + 画像两链合一口径）→ 第二条告警行 */
+  var es = g.extract_stall;
+  if (es && es.stalled) {
+    rows.push(_emEsc(window.Tf('em_extract_stalled', {n: es.zero_streak || es.threshold || 50}))
+      + ' <a href="/logs" style="color:inherit;text-decoration:underline">' + _emEsc(window.T('em_extract_stalled_link')) + '</a>');
+  }
+  if (rows.length) {
+    stall.innerHTML = rows.join('<br>');
     stall.hidden = false;
   } else {
     stall.hidden = true;

@@ -203,6 +203,17 @@ def register_goal_routes(app, auth_dep, config_manager=None):
             sel = parse_selected_slots((view.get("params") or {}).get("slots"))
             if not sel:
                 return view
+            # Q-5 B（#263）：读卡时顺手做一次昵称预填（会话 display_name → 名/年龄/城市/职业，
+            # source=nickname status=mentioned；同昵称进程内只跑一次）——存量会话不等新入站
+            try:
+                from src.companion.goals import profile_fill as _pf
+                _nick = _pf.conversation_nickname(_inbox_store(), str(view.get("conversation_id") or ""))
+                if _nick:
+                    _pf.nickname_prefill(
+                        store, str(view.get("platform") or ""), str(view.get("chat_key") or ""),
+                        _nick, conversation_id=str(view.get("conversation_id") or ""), lang=lang)
+            except Exception:
+                logger.debug("nickname prefill on read skipped", exc_info=True)
             prof = store.get_customer_profile(
                 str(view.get("platform") or ""),
                 str(view.get("chat_key") or ""))
@@ -216,6 +227,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 _states = slot_states(sel, fields, _hist)
             except Exception:
                 _states = {}
+            # Q-5 C（#263）：值来源（接口约定① source=user|nickname|ai_inferred|confirmed）——
+            # 卡上「AI 推断 · 待确认」/「来自昵称 · 待确认」徽标据此分辨
+            try:
+                from src.companion.goals.profile_slots import cell_view as _cv
+                _sources = {k: (_cv(fields.get(k))[1] or "") for k in sel}
+            except Exception:
+                _sources = {}
             # src=值来源（auto 正则/llm 抽取/agent 人工）——卡上打勾清单据此
             # 标注「AI 猜的还是人核实的」（P3 2026-08-18，行业 handoff 惯例）；
             # stale=值超 90 天未更新（P1 2026-08-29，提醒顺口再确认而非硬信旧值）
@@ -228,6 +246,7 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     "src": slot_src(fields, k),
                     "stale": slot_is_stale(fields, k),
                     "state": str((_states.get(k) or ("", ""))[0] or "unknown"),
+                    "source": str(_sources.get(k) or ""),
                 }
                 for k in sel
             ]
@@ -238,6 +257,13 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 view["capture"] = capture_status(_cfg_root())
             except Exception:
                 logger.debug("capture_status attach skipped", exc_info=True)
+            # Q-5 D（#263）：连续 50 次抽取 facts=0 slots=0 → 黄条多一行「抽取可能未生效」
+            try:
+                from src.companion.goals.profile_fill import stall_status
+                if isinstance(view.get("capture"), dict):
+                    view["capture"]["extract_stall"] = stall_status()
+            except Exception:
+                logger.debug("extract stall attach skipped", exc_info=True)
         except Exception:
             logger.debug("slots_progress attach skipped", exc_info=True)
         return view
@@ -820,6 +846,12 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         out["ok"] = True
         # N-3 #241（VAQGZY ④）：报表页按域收起金额口径（陪伴域没有「赢单金额」）
         out["business_domain"] = _business_domain()
+        # Q-5 D（#263）：目标页告警行数据源——连续 50 次抽取 0/0
+        try:
+            from src.companion.goals.profile_fill import stall_status
+            out["extract_stall"] = stall_status()
+        except Exception:
+            pass
         return out
 
     @app.get("/api/goals/report/contacts")
@@ -1203,6 +1235,15 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 "src": str((cell or {}).get("src") or ""),
                 "ts": float((cell or {}).get("ts") or 0),
             }
+            # Q-5 C（#263）：接口约定① 三态 + 来源（旧形 cell 经 cell_view 映射）——画像区 chip
+            # 「AI 推断 · 待确认」徽标 / ✓ ✎ ✕ 据此渲染
+            try:
+                from src.companion.goals.profile_slots import cell_view as _cv
+                _v, _src2, _st = _cv(fields.get(key))
+                row["state"] = _st
+                row["source"] = _src2
+            except Exception:
+                pass
             if s.get("sensitive"):
                 row["sensitive"] = True
             if s.get("custom"):
@@ -1309,14 +1350,50 @@ def register_goal_routes(app, auth_dep, config_manager=None):
         slot = str(body.get("slot") or "").strip().lower()
         if not slot:
             raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
-        res = svc.confirm_profile_slot(
-            _store(svc), pf, ck, slot, value=str(body.get("value") or ""))
+        # Q-5 C（#263）：确认写接口约定① ``status=confirmed source=confirmed``（profile_fill.confirm；
+        # 旧读者键 v/src=agent 同步带上）；模块缺席回落 Q-1 的 service.confirm_profile_slot
+        try:
+            from src.companion.goals.profile_fill import confirm as _pf_confirm
+            res = _pf_confirm(_store(svc), pf, ck, slot, value=str(body.get("value") or ""),
+                              conversation_id=conv)
+        except Exception:
+            res = svc.confirm_profile_slot(
+                _store(svc), pf, ck, slot, value=str(body.get("value") or ""))
         if not res.get("ok"):
             if res.get("reason") == "unknown_slot":
                 raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
             if res.get("reason") == "no_value":
                 raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
             raise HTTPException(500, str(res.get("reason") or "confirm_failed"))
+        return res
+
+    # ── Q-5 C（#263）：槽位「✕ 否」——否掉 AI 推断 / 昵称预填值（只删 mentioned，已确认不动）──
+    @app.post("/api/goals/profile/reject")
+    async def goals_profile_reject(
+        request: Request, payload: Dict[str, Any], _auth=Depends(auth_dep)
+    ):
+        """卡片槽位行「✕」：AI 推断 / 昵称值不对 → 清掉回 unknown（``[profile] … status=rejected``）。
+        已确认值不受影响（返回 ``{ok: False, reason: "confirmed"}``）。"""
+        svc = _require_enabled(request)
+        _deny_viewer(request)
+        body = payload or {}
+        pf = str(body.get("platform") or "").strip()
+        ck = str(body.get("chat_key") or "").strip()
+        conv = str(body.get("conversation_id") or "").strip()
+        if not (pf and ck) and conv:
+            pf2, _acct, ck2 = _split_conversation_id(conv)
+            pf, ck = pf or pf2, ck or ck2
+        if not pf or not ck:
+            raise HTTPException(400, tr(request, "err.goals.conversation_required"))
+        slot = str(body.get("slot") or "").strip().lower()
+        if not slot:
+            raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+        from src.companion.goals.profile_fill import reject as _pf_reject
+        res = _pf_reject(_store(svc), pf, ck, slot, conversation_id=conv)
+        if res.get("reason") == "unknown_slot":
+            raise HTTPException(400, tr(request, "err.goals.profile_fields_required"))
+        if res.get("reason") == "write_failed":
+            raise HTTPException(500, "reject_failed")
         return res
 
     @app.get("/api/goals/discovery-pause")

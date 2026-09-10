@@ -226,6 +226,9 @@ ZH = {
     "em_growth_stalled": "记忆没有在增长——已收到 {i} 条客户消息，记忆仍是 0 条。检查抽取白名单（memory.extract.intents）与模型是否可用；",
     "em_growth_stalled_link": "看日志里的 [episodic] 行（「抽取白名单为空」/「skip: intent … not extractable」即是根因）",
     "em_growth_tip": "从记忆库建立（安装）起累计写入的条数，含后来被删除 / 过时的；今日按本机日期 0 点起算",
+    # Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0（记忆 + 画像两链合一后的同一口径）
+    "em_extract_stalled": "抽取可能未生效：连续 {n} 轮记忆 0 条、画像 0 项——检查「AI 抽取」开关（companion.goals.profile_llm.enabled / memory.extract.use_llm）与模型是否可用；",
+    "em_extract_stalled_link": "看日志里的 [extract] 行（facts=0 slots=0 llm=0 即开关没开 / 冷却中；llm=1 仍 0/0 是模型或接地问题）",
 }
 
 EN = {
@@ -452,4 +455,6 @@ EN = {
     "em_growth_stalled": "Memory is not growing — {i} customer messages received but still 0 memories. Check the extraction whitelist (memory.extract.intents) and that the model is reachable;",
     "em_growth_stalled_link": "see the [episodic] lines in the log (\"抽取白名单为空\" / \"skip: intent … not extractable\" is the root cause)",
     "em_growth_tip": "Total rows ever written since the memory store was created (install), including ones later deleted / outdated; \"today\" starts at local midnight",
+    "em_extract_stalled": "Extraction may not be working: {n} consecutive turns with 0 memories and 0 profile fields — check the \"AI extraction\" switch (companion.goals.profile_llm.enabled / memory.extract.use_llm) and that the model is reachable;",
+    "em_extract_stalled_link": "see the [extract] lines in the log (facts=0 slots=0 llm=0 = switch off / cooling down; llm=1 yet 0/0 = model or grounding issue)",
 }

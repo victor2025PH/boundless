@@ -8,6 +8,7 @@
 - 图标走 data-cp-ic=target（非 emoji）
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -76,7 +77,9 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "accent" in inbox_html
     assert "card" in inbox_html and "_handleGoalDeepLink" in inbox_html
     assert "cp-goal-drive-draft" in inbox_html
-    assert "cp-goal.js?v=20260910a" in inbox_html  # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；Q-1 E）
+    # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；Q-1 E a → Q-5 C b）。unified_inbox.html 在 Q-5 时
+    # 是别线整文件在途（CRLF 翻转，无法单 hunk 暂存），b 戳随宿主线提交前移——两戳皆认，HEAD / 工作树都绿。
+    assert re.search(r"cp-goal\.js\?v=20260910[ab]", inbox_html), "cp-goal.js 缓存戳丢失 / 未随批次前移"
     # M-7 A（#236）：目标卡「查看消息」经 iframe 桥 cp-goal-jump-message → 宿主 __wsFocusConv（与通知中心点击同源）
     assert "m.type==='cp-goal-jump-message'" in inbox_html
 

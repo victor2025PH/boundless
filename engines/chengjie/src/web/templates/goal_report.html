@@ -93,6 +93,8 @@
   </div>
 
   <div id="gr-disabled" class="gr-card" style="display:none;"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_disabled', "工作目标功能未启用（companion.goals.enabled）") }}</div></div>
+  <!-- Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0 → 告警行（记忆页 #cs-stall 同口径） -->
+  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);"></div>
 
   <div id="gr-body">
     <!-- KPI -->
@@ -232,6 +234,7 @@ var GR_I18N = {
   st_cancelled: {{ ((i18n or {}).get('goal_rpt_st_cancelled', "已取消"))|tojson }},
   empty: {{ ((i18n or {}).get('goal_rpt_empty', "该窗口内没有记录"))|tojson }},
   load_fail: {{ ((i18n or {}).get('goal_rpt_load_fail', "加载失败"))|tojson }},
+  extract_stall: {{ ((i18n or {}).get('goal_rpt_extract_stall', "抽取可能未生效：连续 {n} 轮记忆 0 条、画像 0 项——检查「AI 抽取」开关与模型是否可用"))|tojson }},
   send_ok: {{ ((i18n or {}).get('goal_rpt_send_ok', "已发送"))|tojson }},
   send_fail: {{ ((i18n or {}).get('goal_rpt_send_fail', "发送失败"))|tojson }},
   view_contacts: {{ ((i18n or {}).get('goal_rpt_view_contacts', "看客户"))|tojson }},
@@ -309,6 +312,15 @@ async function grLoad(){
     grRenderAccounts(d.accounts||[]);
     grRenderTrend(d.trend||[]);
     grRenderHeat(d.heat||{});
+    /* Q-5 D（#263）：连续 N 轮抽取 0/0 → 顶部告警行；后端缺键 / 未停滞 = 隐藏 */
+    var esEl = document.getElementById('gr-extract-stall');
+    if (esEl) {
+      var es = d.extract_stall;
+      if (es && es.stalled) {
+        esEl.textContent = String(GR_I18N.extract_stall||'').replace('{n}', String(es.zero_streak||es.threshold||50));
+        esEl.style.display = 'block';
+      } else { esEl.style.display = 'none'; }
+    }
     document.getElementById('gr-update').textContent = window.wsFmtTime(Date.now());
   }catch(e){
     document.getElementById('gr-acct-rows').innerHTML = '<tr><td colspan="9"><div class="gr-empty">'+esc(GR_I18N.load_fail)+'</div></td></tr>';

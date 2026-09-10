@@ -165,7 +165,9 @@ def test_slots_progress_state_and_confirm_flow(_env):
                     json={"conversation_id": CONV, "slot": "occupation", "value": "union carpenter"})
     assert r.status_code == 200 and r.json()["ok"] and r.json()["state"] == "confirmed"
     fields = (gs.get_customer_profile(PLAT, CK) or {}).get("fields") or {}
-    assert cell_view(fields.get("occupation")) == ("union carpenter", "agent", "confirmed")
+    # Q-5 C（#263）：确认端点改写接口约定① source=confirmed（旧读者键 src=agent 同步带上）
+    assert cell_view(fields.get("occupation")) == ("union carpenter", "confirmed", "confirmed")
+    assert fields["occupation"]["src"] == "agent" and fields["occupation"]["v"] == "union carpenter"
     r = client.get("/api/goals/for-conversation?conversation_id=" + CONV)
     sp = {s["key"]: s for s in r.json()["goal"]["slots_progress"]}
     assert sp["occupation"]["state"] == "confirmed" and sp["occupation"]["filled"] is True
@@ -208,7 +210,9 @@ def test_frontend_two_trees_same_and_v_bumped_and_i18n_trilingual():
         m = re.search(r"cp-goal\.js\?v=(\w+)", (_ROOT / rel).read_text(encoding="utf-8", errors="replace"))
         assert m, rel
         stamps.add(m.group(1))
-    assert stamps == {"20260910a"}, stamps
+    # Q-5 C（#263）前移到 20260910b；unified_inbox.html 当时别线整文件在途（CRLF 翻转），b 戳随宿主线
+    # 提交前移——HEAD 上可能 a/b 并存，工作树全 b；两态都绿，但 b 必须已出现
+    assert stamps <= {"20260910a", "20260910b"} and "20260910b" in stamps, stamps
     from src.web.i18n_packs import goals as g
     hant = (_ROOT / "src" / "web" / "i18n_packs" / "zh_hant_auto.py").read_text(encoding="utf-8")
     for k in ("inbox.goal.slots.mentioned", "inbox.goal.slots.mentioned_t", "inbox.goal.slots.confirm",

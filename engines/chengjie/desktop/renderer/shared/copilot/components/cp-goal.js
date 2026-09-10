@@ -728,6 +728,13 @@
                          border:1px solid var(--cp-warn,#b45309); background:transparent;
                          color:var(--cp-warn,#b45309); cursor:pointer; }
       .gl-slot-confirm:hover { background:var(--cp-warn,#b45309); color:#fff; }
+      /* Q-5 C（#263）：「AI 推断 · 待确认」/「来自昵称 · 待确认」徽标 + ✕ 否钮（红边） */
+      .gl-slot-badge { font-style:normal; font-size:9px; line-height:1; padding:1px 4px; margin-left:3px;
+                       border-radius:99px; background:rgba(180,83,9,.14); color:var(--cp-warn,#b45309); white-space:nowrap; }
+      .gl-slot-badge.nick { background:rgba(99,102,241,.14); color:var(--cp-accent,#6366f1); }
+      .gl-slot-reject { border-color:var(--cp-danger,#dc2626); color:var(--cp-danger,#dc2626); }
+      .gl-slot-reject:hover { background:var(--cp-danger,#dc2626); color:#fff; }
+      .gl-chip.pending { border-style:dashed; }
       /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关条 */
       .gl-dpause { display:flex; align-items:center; justify-content:space-between; gap:8px;
                    margin:0 0 var(--cp-gap-xs,4px); padding:4px 8px; border-radius:8px;
@@ -1085,6 +1092,43 @@
       if (res && res.ok && res.data && res.data.ok) {
         this._flashToast(this.t("inbox.goal.slots.confirmed_toast", { label }));
         _beacon("goal_slot_confirm");
+        this.emit("cp-goal-changed", { action: "profile", conversationId: ctx.conversationId });
+        this.refresh();
+        return;
+      }
+      if (el) el.disabled = false;
+      this._flashToast(this.t("inbox.goal.err_retry"));
+    }
+
+    /* Q-5 C（#263）：✎ 改——先问客户实际说的值，再走确认（status=confirmed source=confirmed） */
+    async _slotEditConfirm(el) {
+      if (!el || typeof prompt !== "function") return;
+      const label = el.getAttribute("data-label") || el.getAttribute("data-slot") || "";
+      const cur = el.getAttribute("data-value") || "";
+      const value = String(prompt(this.t("inbox.goal.slots.confirm_prompt", { label }), cur) || "").trim();
+      if (!value) return;
+      el.setAttribute("data-value", value);
+      await this._slotConfirm(el);
+    }
+
+    /* Q-5 C（#263）：✕ 否——清掉 AI 推断 / 昵称预填值（后端只删 mentioned，已确认不动） */
+    async _slotReject(el) {
+      const ctx = this._ctx || {};
+      const slot = (el && el.getAttribute("data-slot")) || "";
+      if (!ctx.conversationId || !slot) return;
+      const label = (el && el.getAttribute("data-label")) || slot;
+      if (el) el.disabled = true;
+      let res = null;
+      try {
+        res = await this._api("/api/goals/profile/reject", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_id: ctx.conversationId, slot }),
+        });
+      } catch (_e) { res = null; }
+      if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
+      if (res && res.ok && res.data && res.data.ok) {
+        this._flashToast(this.t("inbox.goal.slots.rejected_toast", { label }));
+        _beacon("goal_slot_reject");
         this.emit("cp-goal-changed", { action: "profile", conversationId: ctx.conversationId });
         this.refresh();
         return;
@@ -1579,12 +1623,25 @@
         // 确认即写 confirmed，引擎永不再问该槽（旧后端缺 state 键＝走原打勾逻辑）
         if (String(s.state || "") === "mentioned") {
           const lab = String(s.label || s.key);
-          const tipM = lab + (s.value ? ": " + s.value : "") + " \u00b7 " + this.t("inbox.goal.slots.mentioned_t");
-          return `<span class="gl-slotchk mention" title="${esc(tipM)}">\u25D0 ` +
-            `${esc(this.t("inbox.goal.slots.mentioned", { label: lab }))}` +
-            `<button type="button" class="gl-slot-confirm" data-act="slot_confirm" data-slot="${esc(String(s.key || ""))}"` +
-            ` data-value="${esc(String(s.value || ""))}" data-label="${esc(lab)}" title="${esc(this.t("inbox.goal.slots.confirm_t"))}">` +
-            `${esc(this.t("inbox.goal.slots.confirm"))}</button></span>`;
+          // Q-5 C（#263）：来源徽标——AI 推断 / 来自昵称（接口约定① source；旧后端 src=llm*
+          // 视为 AI）+ ✓ 确认 / ✎ 改 / ✕ 否（否只清 mentioned 值，已确认永不动）
+          const srcQ = String(s.source || "");
+          const isNick = srcQ === "nickname";
+          const isAI = srcQ === "ai_inferred" || /^llm/.test(String(s.src || ""));
+          const badgeKey = isNick ? "nick_badge" : (isAI ? "ai_badge" : "");
+          const tipM = lab + (s.value ? ": " + s.value : "") + " \u00b7 " +
+            (badgeKey ? this.t("inbox.goal.slots." + badgeKey + "_t") : this.t("inbox.goal.slots.mentioned_t"));
+          const dataA = ` data-slot="${esc(String(s.key || ""))}" data-value="${esc(String(s.value || ""))}" data-label="${esc(lab)}"`;
+          const head = (badgeKey && s.value)
+            ? `${esc(lab)}\u00b7${esc(String(s.value))} <em class="gl-slot-badge${isNick ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>`
+            : esc(this.t("inbox.goal.slots.mentioned", { label: lab }));
+          const editBtn = badgeKey
+            ? `<button type="button" class="gl-slot-confirm" data-act="slot_edit_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.edit_t"))}">\u270E</button>` +
+              `<button type="button" class="gl-slot-confirm gl-slot-reject" data-act="slot_reject"${dataA} title="${esc(this.t("inbox.goal.slots.reject_t"))}">\u2715</button>`
+            : "";
+          return `<span class="gl-slotchk mention${badgeKey ? " inferred" : ""}" title="${esc(tipM)}">\u25D0 ${head}` +
+            `<button type="button" class="gl-slot-confirm" data-act="slot_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.confirm_t"))}">` +
+            `${badgeKey ? "\u2713" : esc(this.t("inbox.goal.slots.confirm"))}</button>${editBtn}</span>`;
         }
         // P3b 来源标注：auto 正则 / llm 抽取 / agent 人工——「AI 猜的还是人
         // 核实的」进 tooltip；人工确认档加实心边框（handoff 惯例：可信度可见）
@@ -1607,11 +1664,16 @@
       // 不再让 0/4 静默得像「客户没说」。后端缺 capture 键（旧后端）＝不渲染。
       let captureWarn = "";
       const cap = (g.capture && typeof g.capture === "object") ? g.capture : null;
-      if (cap && cap.ok === false) {
+      // Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0 → 黄条多一行（开关开着也可能是模型 / 接地问题）
+      const stallQ = (cap && cap.extract_stall && typeof cap.extract_stall === "object") ? cap.extract_stall : null;
+      if (cap && (cap.ok === false || (stallQ && stallQ.stalled))) {
         const reasons = Array.isArray(cap.reasons) ? cap.reasons : [];
         const why = reasons
           .map((r) => this.t("inbox.goal.capture." + String(r)))
           .filter((s) => s && !/^inbox\.goal\.capture\./.test(s));
+        if (stallQ && stallQ.stalled) {
+          why.push(this.t("inbox.goal.capture.extract_stall", { n: stallQ.zero_streak || stallQ.threshold || 50 }));
+        }
         if (why.length) {
           captureWarn = `<div class="gl-capture-warn" role="note">` +
             `<span aria-hidden="true">\u26A0</span><div>` +
@@ -2425,11 +2487,17 @@
         // 缺口=点击展开「拟稿去问 / 我来补录」追问行（旧版是死 span，可供性错位）。
         const editT = this.t("inbox.goal.profile.edit_t");
         const chips = filled.map((s) => {
-          const src = s.src
-            ? this.t("inbox.goal.profile.src." + (s.src === "agent" ? "agent" : "auto")) : "";
+          // Q-5 C（#263）：待确认值（AI 推断 / 来自昵称）在画像区 chip 上带徽标，tooltip 说来源
+          const pend = String(s.state || "") === "mentioned";
+          const srcQ = String(s.source || "");
+          const badgeKey = pend ? (srcQ === "nickname" ? "nick_badge" : "ai_badge") : "";
+          const src = badgeKey ? this.t("inbox.goal.slots." + badgeKey)
+            : (s.src ? this.t("inbox.goal.profile.src." + (s.src === "agent" ? "agent" : "auto")) : "");
           const tip = s.label + ": " + s.value + (src ? " \u00b7 " + src : "") + " \u00b7 " + editT;
-          return `<button type="button" class="gl-chip" data-act="slot_edit"` +
-            ` data-slot="${esc(s.key)}" title="${esc(tip)}">${esc(s.label)}\u00b7${esc(s.value)}</button>`;
+          return `<button type="button" class="gl-chip${pend ? " pending" : ""}" data-act="slot_edit"` +
+            ` data-slot="${esc(s.key)}" title="${esc(tip)}">${esc(s.label)}\u00b7${esc(s.value)}` +
+            (badgeKey ? `<em class="gl-slot-badge${srcQ === "nickname" ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>` : "") +
+            `</button>`;
         }).join("");
         const miss = missing.map((s) =>
           `<button type="button" class="gl-chip miss${this._slotAsk === s.key ? " on" : ""}"` +
@@ -4280,6 +4348,8 @@
       if (act === "probe_send") { await this._probeSend(); return; }
       if (act === "dpause_toggle") { await this._dpauseToggle(el); return; }
       if (act === "slot_confirm") { await this._slotConfirm(el); return; }
+      if (act === "slot_edit_confirm") { await this._slotEditConfirm(el); return; }
+      if (act === "slot_reject") { await this._slotReject(el); return; }
       if (act === "revive_won") { await this._reviveWon(el); return; }
       if (act === "jump_sprint") { await this._jumpSprint(el); return; }
       if (act === "note_example") {

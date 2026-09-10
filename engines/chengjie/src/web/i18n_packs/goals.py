@@ -520,6 +520,18 @@ ZH = {
     "inbox.goal.slots.confirm_t": "记为已核实（AI 此后不再问这一项）",
     "inbox.goal.slots.confirm_prompt": "「{label}」客户说的是什么？（记为已核实）",
     "inbox.goal.slots.confirmed_toast": "「{label}」已确认",
+    # Q-5 C（#263）：AI 推断 / 昵称预填值「待确认」徽标 + ✓ 确认 / ✎ 改 / ✕ 否；冲突只通知不打断
+    "inbox.goal.slots.ai_badge": "AI 推断 · 待确认",
+    "inbox.goal.slots.ai_badge_t": "AI 从聊天里推断出来的，未经人核实——✓ 记为已核实；✎ 改成客户说的；✕ 不对，清掉",
+    "inbox.goal.slots.nick_badge": "来自昵称 · 待确认",
+    "inbox.goal.slots.nick_badge_t": "从客户昵称（名/年龄/城市/职业）解析出来的，未经人核实——✓ 记为已核实；✎ 改；✕ 清掉",
+    "inbox.goal.slots.edit_t": "改成客户实际说的值（记为已核实）",
+    "inbox.goal.slots.reject_t": "不对——清掉这条推断（已确认的值不会被动）",
+    "inbox.goal.slots.rejected_toast": "「{label}」推断值已清掉",
+    "inbox.goal.profile.conflict_notice": "画像冲突：{label} 已确认「{confirmed}」，AI 推断「{candidate}」——已保留已确认值，请在画像卡核对",
+    "inbox.goal.profile.conflict_notice_nick": "画像冲突：{label} 已确认「{confirmed}」，昵称里写的是「{candidate}」——已保留已确认值",
+    # Q-5 D（#263）：连续 50 次抽取 facts=0 slots=0 → 黄条多一行
+    "inbox.goal.capture.extract_stall": "抽取可能未生效：连续 {n} 轮记忆 0 条、画像 0 项——检查「AI 抽取」开关与模型是否可用",
     "inbox.goal.dpause.label": "摸底目标运行中",
     "inbox.goal.dpause.on": "已暂停全部摸底目标",
     "inbox.goal.dpause.pause": "暂停全部摸底目标",
@@ -690,6 +702,8 @@ ZH = {
     "goal_rpt_loading": "加载中…",
     "goal_rpt_load_fail": "加载失败",
     "goal_rpt_disabled": "工作目标功能未启用（companion.goals.enabled）",
+    # Q-5 D（#263）：目标页告警行——连续 N 轮抽取 0/0
+    "goal_rpt_extract_stall": "抽取可能未生效：连续 {n} 轮记忆 0 条、画像 0 项——检查「AI 抽取」开关与模型是否可用",
 
     # ── 报表页 P1：批量触达 / 后续链 / 导出（2026-08-09） ────────────────────
     "goal_rpt_batch_bar": "已选 {n} 人",
@@ -1243,6 +1257,16 @@ EN = {
     "inbox.goal.slots.confirm_t": "Mark as verified (AI stops asking about this)",
     "inbox.goal.slots.confirm_prompt": "What did the customer say for \"{label}\"? (marks it verified)",
     "inbox.goal.slots.confirmed_toast": "\"{label}\" confirmed",
+    "inbox.goal.slots.ai_badge": "AI-inferred · unconfirmed",
+    "inbox.goal.slots.ai_badge_t": "Inferred by AI from the chat, not verified by a person — ✓ mark verified; ✎ change to what the customer said; ✕ wrong, clear it",
+    "inbox.goal.slots.nick_badge": "From nickname · unconfirmed",
+    "inbox.goal.slots.nick_badge_t": "Parsed from the customer's nickname (name/age/city/job), not verified — ✓ mark verified; ✎ edit; ✕ clear",
+    "inbox.goal.slots.edit_t": "Change to what the customer actually said (marks it verified)",
+    "inbox.goal.slots.reject_t": "Wrong — clear this inference (confirmed values are never touched)",
+    "inbox.goal.slots.rejected_toast": "Cleared the inferred \"{label}\"",
+    "inbox.goal.profile.conflict_notice": "Profile conflict: {label} confirmed as \"{confirmed}\", AI inferred \"{candidate}\" — kept the confirmed value, please check the profile card",
+    "inbox.goal.profile.conflict_notice_nick": "Profile conflict: {label} confirmed as \"{confirmed}\", nickname says \"{candidate}\" — kept the confirmed value",
+    "inbox.goal.capture.extract_stall": "Extraction may not be working: {n} consecutive turns with 0 memories and 0 profile fields — check the \"AI extraction\" switch and that the model is reachable",
     "inbox.goal.dpause.label": "Discovery goals running",
     "inbox.goal.dpause.on": "All discovery goals paused",
     "inbox.goal.dpause.pause": "Pause all discovery goals",
@@ -1411,6 +1435,7 @@ EN = {
     "goal_rpt_loading": "Loading…",
     "goal_rpt_load_fail": "Failed to load",
     "goal_rpt_disabled": "Work goals disabled (companion.goals.enabled)",
+    "goal_rpt_extract_stall": "Extraction may not be working: {n} consecutive turns with 0 memories and 0 profile fields — check the \"AI extraction\" switch and that the model is reachable",
 
     # ── Report page P1: batch outreach / next chain / export (2026-08-09) ───
     "goal_rpt_batch_bar": "{n} selected",

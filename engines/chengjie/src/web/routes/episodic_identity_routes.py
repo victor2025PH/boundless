@@ -220,6 +220,14 @@ def register_episodic_identity_routes(app, ctx) -> None:
         from src.web.web_context import resolve_skill_manager
         return resolve_skill_manager(telegram_client, app)
 
+    # Q-5 C（#263）：画像冲突通知落工作台通知中心（app.state.notif_queue sys_status）——把 app 交给
+    # profile_fill（抽取链跑在 skill_manager 里拿不到 app）。装配即绑定，失败零影响。
+    try:
+        from src.companion.goals.profile_fill import bind_app as _pf_bind_app
+        _pf_bind_app(app)
+    except Exception:
+        pass
+
     # ── 情景记忆 API ──────────────────────────────────────────────────────
 
     def _inbox_db_or_none():
@@ -482,6 +490,12 @@ def register_episodic_identity_routes(app, ctx) -> None:
         if isinstance(out.get("growth"), dict):
             out["growth"] = memory_growth_status(
                 out["growth"], inbound_message_total(inbox_db))
+            # Q-5 D（#263）：连续 50 次抽取 facts=0 slots=0 → 页面第二条告警行（两链合一口径）
+            try:
+                from src.companion.goals.profile_fill import stall_status
+                out["growth"]["extract_stall"] = stall_status()
+            except Exception:
+                pass
         return {"ok": True, **out}
 
     @app.get("/api/episodic-memory/key-health")

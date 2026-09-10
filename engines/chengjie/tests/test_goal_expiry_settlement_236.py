@@ -346,8 +346,9 @@ def test_card_frontend_states_and_watchdog_names_goal():
         assert k in gp.ZH and k in gp.EN
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        # 三宿主戳一致（随批次前移：M-7 e → N-5 发版 20260908b → O-3 D c → O-3 E d）
-        assert "cp-goal.js?v=20260910a" in (REPO / host).read_text(encoding="utf-8"), host   # Q-1 E 前移
+        # 三宿主戳一致（随批次前移：M-7 e → N-5 发版 20260908b → O-3 D c → O-3 E d → Q-1 E 20260910a
+        # → Q-5 C b；unified_inbox.html 在 Q-5 时别线整文件在途，b 戳随宿主线前移，两戳皆认）
+        assert re.search(r"cp-goal\.js\?v=20260910[ab]", (REPO / host).read_text(encoding="utf-8")), host
     # 「查看消息」对齐：组件回落宿主 __wsFocusConv；iframe 宿主 app.html 桥 postMessage（双树一致）
     assert "root.__wsFocusConv" in js
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html"):
