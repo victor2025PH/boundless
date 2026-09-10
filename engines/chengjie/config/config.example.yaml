@@ -3546,6 +3546,20 @@ inbox:
                               #   = 该账号豁免班表=全天候）。例：
                               #   "telegram:default": { start: "10:00", end: "02:00" }
 
+  # 退场闸（Q-8 D #264）：AI 稿里「gotta go / talk later / 我先忙了 / 回去工作了」这类
+  # **自己结束对话**的句子，默认一律改写成把话题转回对方的问句 / 话头；只有三种合法退场
+  # 放行并补一句真实钩子（「等我忙完给你发消息接着聊」）+ 关怀队列排一条后续：
+  #   ① 班表到点（上面 work_schedule 已下班或 shift_end_grace_min 内即将下班）
+  #   ② 客户先告别（最近一条来信命中告别词）
+  #   ③ 用户开启留白策略（allow_silence: true）
+  # 每次检出：stats exit_claim（AI 指纹卡「自行退场」格）+ 日志 [exit] conv= allowed=0|1 reason=。
+  exit_gate:
+    enabled: true
+    allow_silence: false      # 留白策略：true = 允许 AI 主动收尾（仍补钩子 + 排后续）
+    shift_end_grace_min: 20   # 距下班 ≤ 此分钟数算「到点」
+    followup_hours: 3         # 合法退场后多久排关怀后续（同会话同日去重）
+    followup_on_silence: true # 留白策略放行时是否也排后续
+
   # L2 草稿自动发送 worker（全自动回复的「发送」环节）。
   l2_autosend:
     enabled: true             # false = 不启动 worker（L2 草稿不会被自动处置）

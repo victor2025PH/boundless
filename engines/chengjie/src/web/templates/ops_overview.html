@@ -3488,7 +3488,7 @@ function renderAiFingerprint(d){
   var fp = (d && d.ai_fingerprint) || null;
   var cnt = (fp && fp.counts) || {};
   var anyN = Number(cnt.draft||0) + Number(cnt.svc_checked||0) + Number(cnt.claim_checked||0) + Number(cnt.promise_checked||0) + Number(cnt.gate_checked||0)
-    + Number(cnt.commitment_claim||0) + Number(cnt.self_blame_repromise||0) + Number(cnt.media_claim||0);
+    + Number(cnt.commitment_claim||0) + Number(cnt.self_blame_repromise||0) + Number(cnt.media_claim||0) + Number(cnt.exit_claim||0);
   if(!fp || !anyN){ opsSetCardLight('aifp', ''); opsHideCardEl(sec, 'aifp', 'no_data'); return; }
   opsShowCardEl(sec, 'aifp');
   var lv = String(fp.level||'');
@@ -3521,6 +3521,8 @@ function renderAiFingerprint(d){
   var blameHits = Number((fp.self_blame_repromise||{}).hits)||0;
   kpis.push({label: window.T('ov2_js_aifp_cmt'), value: fmt(cmtHits), sub: fmt(cmtHits)+' '+window.T('ov2_js_aifp_drafts'), color: cmtHits ? 'var(--red)' : ''});
   kpis.push({label: window.T('ov2_js_aifp_blame'), value: fmt(blameHits), sub: fmt(blameHits)+' '+window.T('ov2_js_aifp_drafts'), color: blameHits ? 'var(--red)' : ''});
+  var exitHits = Number((fp.exit_claim||{}).hits)||0;
+  kpis.push({label: window.T('ov2_js_aifp_exit'), value: fmt(exitHits), sub: fmt(exitHits)+' '+window.T('ov2_js_aifp_drafts'), color: exitHits ? 'var(--red)' : ''});
   kp.innerHTML = kpis.map(function(c){
     return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
       '</div><div style="font-size:20px;font-weight:600;margin-top:4px;'+(c.color?('color:'+c.color+';'):'')+'">'+c.value+'</div>'+

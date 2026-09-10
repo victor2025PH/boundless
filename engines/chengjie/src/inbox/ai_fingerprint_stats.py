@@ -38,6 +38,8 @@ KINDS = (
     "gate_checked", "gate_leak",
     # Q-2 D 接口约定④：质检卡自动多两格
     "commitment_claim", "self_blame_repromise", "media_claim",
+    # Q-8 D（#264）：退场闸 exit_claim
+    "exit_claim",
 )
 
 # 红黄绿阈值（百分比）：0 绿 / <2 黄 / ≥2 红
@@ -214,7 +216,7 @@ def snapshot(hours: int = 24, *, now: Optional[float] = None) -> Dict[str, Any]:
     }
     out["promise_no_action"]["ready"] = counts.get("promise_checked", 0) > 0
     # Q-2 D：CLAIM_KINDS 额外格（命中计数；无样本时 total=0 → 卡上「—」）
-    for extra_k in ("commitment_claim", "self_blame_repromise", "media_claim"):
+    for extra_k in ("commitment_claim", "self_blame_repromise", "media_claim", "exit_claim"):
         n = counts.get(extra_k, 0)
         out[extra_k] = {"hits": n, "total": n, "rate_pct": (100.0 if n else None),
                         "level": "red" if n else "green"}

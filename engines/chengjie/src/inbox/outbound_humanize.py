@@ -761,6 +761,17 @@ def apply_draft_humanize(
             meta["commitment"] = "|".join(_hits) or "clean"
         except Exception:
             logger.debug("[draft] commitment_guard 出站拦截异常（原文继续）", exc_info=True)
+        # Q-8 D（#264 #263）：退场闸 exit_claim——AI 自己 "gotta go / talk later / 我先忙了" 退场：
+        # 班表到点 / 客户先告别 / 留白策略三者之外一律改写成问句 / 话头；合法退场留钩子 + 关怀排后续。
+        # meta.exit = clean|rewrite|allow；stats exit_claim；日志 [exit] conv= allowed= reason=。
+        try:
+            from src.inbox.exit_gate import guard_exit
+            cur, xg = guard_exit(cur, conversation_id=conversation_id, lang=lg, cfg_root=cfg_root)
+            meta["exit"] = str(xg.get("action") or "clean")
+            if xg.get("reason"):
+                meta["exit_reason"] = str(xg.get("reason"))
+        except Exception:
+            logger.debug("[draft] exit_gate 异常（原文继续）", exc_info=True)
         out, st = humanize(cur, lg, cfg=cfg, mode=mode)
         meta.update({"punct_fix": int(st["punct_fix"]), "style_fix": int(st["style_fix"]),
                      "trimmed": int(st["trimmed"]), "dash": int(st["dash"])})
