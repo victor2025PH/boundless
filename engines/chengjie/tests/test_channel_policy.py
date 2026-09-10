@@ -76,6 +76,41 @@ def test_tiktok_rules():
     assert cp.media_block_reason("tiktok", "video") == f"{cp.REASON_MEDIA_DENIED}:video"
 
 
+def test_tiktok_window_ui_fields_follow_dy_executor():
+    """TK → DY 交接项收口（TikTok 线续做 D，2026-09-10）：回复窗 UI 字段名以 window_guard 执行器为准，
+    TK-1 规划的 source.reply_window_deadline / window_sent_count 不进 source、不进快照。"""
+    from src.inbox import window_guard as wg
+    st = wg.WindowState(platform="tiktok", window_sec=48 * 3600.0, cap=10, reserve=1,
+                        last_inbound_ts=1_800_000_000.0, sent_since_inbound=3, now=1_800_000_000.0 + 3600)
+    d = st.as_dict()
+    assert set(cp.WINDOW_UI_FIELDS) <= set(d), d.keys()
+    assert d[cp.WINDOW_FIELD_DEADLINE] == 1_800_000_000.0 + 48 * 3600 and d[cp.WINDOW_FIELD_SENT] == 3
+    assert d[cp.WINDOW_FIELD_REMAINING] == 7 and d[cp.WINDOW_FIELD_REMAINING_SEC] == 47 * 3600.0
+    assert not (set(cp.LEGACY_WINDOW_FIELDS) & set(d)), "旧名不得出现在执行器快照里"
+    # 数值仍同源于声明层
+    assert (d["window_sec"], d["cap"], d["reserve_for_manual"]) == cp.window_rule("tiktok")
+    # 代码里没有任何地方再产出旧名（tiktok 两个传输模块 + 执行器）
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src"
+    for rel in ("integrations/tiktok_official.py", "integrations/tiktok_shop_cs.py", "inbox/window_guard.py"):
+        txt = (root / rel).read_text(encoding="utf-8")
+        for legacy in cp.LEGACY_WINDOW_FIELDS:
+            assert f'"{legacy}"' not in txt, f"{rel} 仍在产出旧字段名 {legacy}"
+
+
+def test_legacy_window_field_names_normalize_to_dy_names():
+    n = cp.normalize_window_fields
+    assert n({"reply_window_deadline": 1.5, "window_sent_count": 2, "window_remaining": 8, "cap": 10}) == {
+        "deadline_ts": 1.5, "sent": 2, "remaining": 8, "cap": 10}
+    # 新旧同在以新名为准（两种键序都成立）
+    assert n({"window_sent_count": 9, "sent": 2}) == {"sent": 2}
+    assert n({"sent": 2, "window_sent_count": 9}) == {"sent": 2}
+    # 已是新名 → 原样；非 dict → {}
+    assert n({"deadline_ts": 3.0, "sent": 1}) == {"deadline_ts": 3.0, "sent": 1}
+    assert n(None) == {} and n("x") == {}
+    assert set(cp.LEGACY_WINDOW_FIELDS.values()) <= set(cp.WINDOW_UI_FIELDS)
+
+
 def test_mode_specific_key_only_hits_that_mode():
     # WhatsApp Cloud 只声明了 24h 窗、未声明条数 → 不算「窗口+配额」平台（不影响拆条）
     assert cp.window_rule("whatsapp", "official") is None

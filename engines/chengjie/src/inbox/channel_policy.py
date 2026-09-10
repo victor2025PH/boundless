@@ -42,6 +42,37 @@ REASON_TEXT_TOO_LONG = "policy_text_too_long"
 REASON_LINK_DENIED = "policy_link_denied"
 REASON_MEDIA_DENIED = "policy_media_type_denied"
 
+# ── 回复窗 UI 契约字段名（TikTok 线续做 D，2026-09-10：TK → DY 交接项收口）─────────────────
+# 执行器 ``window_guard.WindowState.as_dict()`` / ``send-caps.reply_window`` 的键以 DY 09-08 落地口径为准：
+# ``deadline_ts``（对方最近入站 + 窗长）/ ``sent``（此后我方已发条数）/ ``remaining`` / ``remaining_sec``。
+# 指令 TK-1 §7 规划的 ``source.reply_window_deadline`` / ``source.window_sent_count`` **不采用**——窗口状态从收件箱
+# 事实现算、不写进消息 ``source``（再记一处就多一处会漂移的状态）；旧名只作只读别名，任何仍按旧名产出的载荷
+# （huoke 桥回传 / 第三方）经 ``normalize_window_fields()`` 归一。门禁 ``test_channel_policy`` 钉住两套名字的对应。
+WINDOW_FIELD_DEADLINE = "deadline_ts"
+WINDOW_FIELD_SENT = "sent"
+WINDOW_FIELD_REMAINING = "remaining"
+WINDOW_FIELD_REMAINING_SEC = "remaining_sec"
+WINDOW_UI_FIELDS = (WINDOW_FIELD_DEADLINE, WINDOW_FIELD_SENT, WINDOW_FIELD_REMAINING, WINDOW_FIELD_REMAINING_SEC)
+LEGACY_WINDOW_FIELDS: Dict[str, str] = {
+    "reply_window_deadline": WINDOW_FIELD_DEADLINE,
+    "window_sent_count": WINDOW_FIELD_SENT,
+    "window_remaining": WINDOW_FIELD_REMAINING,
+}
+
+
+def normalize_window_fields(payload: Any) -> Dict[str, Any]:
+    """把带旧名（``reply_window_deadline`` / ``window_sent_count`` / ``window_remaining``）的窗口载荷归一到 DY 口径；
+    新旧同在以新名为准，旧键不再出现在结果里；非 dict → ``{}``。纯函数、绝不抛。"""
+    if not isinstance(payload, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for k, v in payload.items():
+        nk = LEGACY_WINDOW_FIELDS.get(str(k), str(k))
+        if nk in out and str(k) in LEGACY_WINDOW_FIELDS:
+            continue  # 新名已写入，旧名不覆盖
+        out[nk] = v
+    return out
+
 
 @dataclass(frozen=True)
 class ChannelPolicy:
@@ -99,7 +130,8 @@ _POLICIES: Dict[str, ChannelPolicy] = {
         platform="tiktok", max_text_len=6000, links=LINKS_FIRST_MESSAGE_DENY,
         reply_window_sec=48 * 3600.0, per_window_cap=10, reserve_for_manual=1,
         max_bubbles=3, media_types=frozenset({"image"}), buttons=False,
-        risk_policy_mode="enforce", note="TikTok Business Messaging API（Open Beta）",
+        risk_policy_mode="enforce",
+        note="TikTok Business Messaging API（Open Beta）；Shop 客服会话（source=shop）同此声明；回复窗 UI 字段随 WINDOW_UI_FIELDS",
     ),
     # 微信客服（实施97 线 A）：48h ≤5 条、预留 1 给坐席——**与 kf_window_guard 默认值同源**
     # （门禁 test_channel_policy 钉住）；整段一条（拆条＝白烧配额）。
@@ -297,4 +329,6 @@ __all__ = [
     "ChannelPolicy", "UNLIMITED", "policy_for", "registered_platforms", "has_link",
     "text_block_reason", "media_block_reason", "max_bubbles", "cap_max_parts",
     "risk_policy_mode", "window_rule", "is_quota_platform", "snapshot",
+    "WINDOW_FIELD_DEADLINE", "WINDOW_FIELD_SENT", "WINDOW_FIELD_REMAINING", "WINDOW_FIELD_REMAINING_SEC",
+    "WINDOW_UI_FIELDS", "LEGACY_WINDOW_FIELDS", "normalize_window_fields",
 ]
