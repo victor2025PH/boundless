@@ -1188,6 +1188,14 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 clear_needs_human(ibx, cid)
             except Exception:
                 logger.debug("清除 needs-human 标签失败（已忽略）", exc_info=True)
+            # Q-3（#264 D）：坐席发送成功＝插话 → 取消该会话在途 / 排队的 L2 AI 稿
+            # （摘标上面已做；此前只摘标不取消，XBGPBN 23:56:23 摘标时 AI 稿早已发出）
+            try:
+                _asw = getattr(request.app.state, "autosend_worker", None)
+                if _asw is not None and hasattr(_asw, "note_agent_send"):
+                    _asw.note_agent_send(cid)
+            except Exception:
+                logger.debug("[inflight] agent_send 取消在途稿失败（已忽略）", exc_info=True)
             # Sprint1 接管即静音：坐席出站即把会话切 manual，停 AI（后续入站不再产 L2/autosend，
             # protocol 直发亦让位），与 web_chat 适配器(channel_adapters.send)一致；重复调用幂等。
             # P0 2026-08-09：统一走 record_agent_takeover——打 source=takeover 标

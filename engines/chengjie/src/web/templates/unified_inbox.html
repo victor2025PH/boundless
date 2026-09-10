@@ -15112,6 +15112,15 @@ function onTextareaKey(e){
 }
 async function _publishTyping(){
   if(!selectedChat) return;
+  // Q-3（#264 D）：坐席在打字＝插话 → 通知 worker 放弃该会话在途 AI 稿（人工优先 ≥ 客户）。
+  // 与多坐席 typing 广播同一节流（3s），fire-and-forget，失败静默。
+  try{
+    apiFetch('/api/unified-inbox/agent-typing',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key})}, {timeoutMs: 10000})
+      .then(function(r){ return r&&r.ok?r.json():null; })
+      .then(function(d){ if(d&&Number(d.cancelled||0)>0){ try{ _toast(window.Tf('inbox.mode.cancelled_ai',{n:Number(d.cancelled)}),'#64748b'); }catch(_){} } })
+      .catch(function(){});
+  }catch(_){}
   try{
     await apiFetch('/api/workspace/typing',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({conversation_id:selectedChat.conversation_id||convKey(selectedChat)})}, {timeoutMs: 60000});
@@ -16392,7 +16401,8 @@ async function setMode(mode, opts){
       tip+=' · '+window.T(opts.rearm==='rearm30'?'inbox.mode.sticky_30m':(opts.rearm==='on_leave'?'inbox.mode.sticky_on_leave':'inbox.mode.sticky_forever'));
     }
     if(d.cancelled_l2>0){
-      tip+=' · '+window.Tf('inbox.mode.cancelled_l2',{n:d.cancelled_l2});
+      // Q-3（#264 D）：计数含排队中 + 拟人等待中（在途）的 AI 稿——「切手动了还发」的口子已堵
+      tip+=' · '+window.Tf('inbox.mode.cancelled_ai',{n:d.cancelled_l2});
     }
     try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){}
     // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」

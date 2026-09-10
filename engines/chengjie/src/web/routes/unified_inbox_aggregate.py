@@ -78,11 +78,33 @@ def _write_automation_mode(request: Request, conversation_id: str, mode: str) ->
                 if hasattr(store, "cancel_pending_l2_drafts"):
                     cancelled = int(store.cancel_pending_l2_drafts(
                         conversation_id, decided_by="mode_downgraded") or 0)
+            # Q-3（#264 D）：切到 manual / review / multi_choice → 连**在途**（已 resolve、正在
+            # 拟人等待）的 L2 一起取消——cancel_pending 只够得着 pending，XBGPBN「切手动了还发」
+            # 的那条正是等待中的 approved 稿。prev 未显式设置（全局 auto_ai）也要取消。
+            if not allows_direct_autosend(mode):
+                cancelled += _cancel_inflight_q3(request, conversation_id=conversation_id)
             return cancelled
         except Exception:
             logger.debug("inbox_store.set_automation_mode 失败，回落进程内 dict", exc_info=True)
     _automation_store(request)[conversation_id] = mode
     return cancelled
+
+
+def _cancel_inflight_q3(request: Request, *, conversation_id: str = "",
+                        platform: str = "", account_id: str = "",
+                        by: str = "mode_switch") -> int:
+    """Q-3（#264 D）：经 ``app.state.autosend_worker.cancel_inflight`` 取消范围内排队 + 在途
+    L2 稿，返回条数（前端 toast「已取消 N 条待发 AI 消息」）。worker 缺席 / 旧版无方法 → 0。绝不抛。"""
+    try:
+        worker = getattr(request.app.state, "autosend_worker", None)
+        if worker is None or not hasattr(worker, "cancel_inflight"):
+            return 0
+        return int(worker.cancel_inflight(
+            conversation_id=str(conversation_id or ""), platform=str(platform or ""),
+            account_id=str(account_id or ""), by=str(by or "mode_switch")) or 0)
+    except Exception:
+        logger.debug("[inflight] cancel 调用失败（忽略）", exc_info=True)
+        return 0
 
 
 def _ingest_best_effort(request: Request, chats: List[Dict[str, Any]]) -> None:

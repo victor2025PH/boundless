@@ -9927,6 +9927,7 @@ ZH_HANT = {
     'inbox.mode.auto': '🚀 全自動',
     'inbox.mode.auto_ai': '全自動',
     'inbox.mode.cancelled_l2': '已取消 {n} 條待自動傳送',
+    'inbox.mode.cancelled_ai': '已取消 {n} 條待發 AI 訊息',
     'inbox.mode.channel_hint_auto': '本頻道已確認 AI 自動發帖',
     'inbox.mode.channel_hint_manual': '本頻道為手動發帖',
     'inbox.mode.channel_hint_review': '本頻道預設人審，選全自動需確認',

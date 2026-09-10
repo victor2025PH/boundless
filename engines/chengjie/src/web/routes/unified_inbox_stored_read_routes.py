@@ -26,6 +26,7 @@ from fastapi import Depends, HTTPException, Request
 
 from src.inbox.normalizer import conv_id as _conv_id
 from src.web.routes.unified_inbox_aggregate import (
+    _cancel_inflight_q3,
     _read_automation_mode,
     _write_automation_mode,
 )
@@ -339,9 +340,40 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "ok": True,
             "conversation_id": cid,
             "mode": mode,
+            # Q-3（#264 D）：含在途（拟人等待中）稿——前端 toast「已取消 N 条待发 AI 消息」
             "cancelled_l2": int(cancelled or 0),
             "rearm_source": rearm_source,
         }
+
+    @app.post("/api/unified-inbox/agent-typing")
+    async def api_unified_inbox_agent_typing(request: Request, _=Depends(api_auth)):
+        """Q-3（#264 D）坐席打字信号：工作台输入框有输入（前端 3s 节流）→ worker 视为**插话**，
+        放弃该会话在途 / 排队的 L2 AI 稿（60s 窗口内新捞到的也不发）。人工优先 ≥ 客户。
+
+        Body ``{platform, account_id, chat_key}`` 或 ``{conversation_id}``。返回
+        ``{ok, conversation_id, cancelled}``；worker 缺席 → cancelled=0（不报错，前端 fire-and-forget）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body or {}
+        cid = str(body.get("conversation_id") or "").strip()
+        if not cid:
+            platform = str(body.get("platform") or "").lower()
+            account_id = str(body.get("account_id") or "default")
+            chat_key = str(body.get("chat_key") or "")
+            if not platform or not chat_key:
+                raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+            cid = _conv_id(platform, account_id, chat_key)
+        cancelled = 0
+        try:
+            worker = getattr(request.app.state, "autosend_worker", None)
+            if worker is not None and hasattr(worker, "note_agent_typing"):
+                cancelled = int(worker.note_agent_typing(cid) or 0)
+        except Exception:
+            logger.debug("[inflight] agent_typing 信号处理失败（忽略）", exc_info=True)
+        return {"ok": True, "conversation_id": cid, "cancelled": cancelled}
 
     @app.get("/api/unified-inbox/why-no-reply")
     async def api_unified_inbox_why_no_reply(
@@ -676,6 +708,13 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             operator = "web_admin"
         res = apply_account_bulk(store, platform, account_id, mode,
                                  actor=operator, config=_cfg, only=_targets)
+        # Q-3（#264 D）账号级切到 manual / review / multi_choice → 该账号在途（拟人等待中）
+        # L2 一并取消，计入 cancelled_l2（前端 toast「已取消 N 条」）
+        res["cancelled_inflight"] = 0
+        if mode in ("manual", "review", "multi_choice"):
+            res["cancelled_inflight"] = _cancel_inflight_q3(
+                request, platform=platform, account_id=account_id, by="mode_switch")
+            res["cancelled_l2"] = int(res.get("cancelled_l2") or 0) + res["cancelled_inflight"]
         # 登录确认框：取消勾选的「最近有来信」会话 → 拨回 review（不碰）；取消其待投递 L2
         res["demoted"] = 0
         if mode == "auto_ai" and _demote:
@@ -798,6 +837,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                     cid, decided_by="bulk_mode_downgrade") or 0)
             except Exception:
                 pass
+        # Q-3（#264 D）：应急止血也要拦住正在拟人等待的在途稿（全部范围）
+        cancelled += _cancel_inflight_q3(request, by="mode_switch")
         return {
             "ok": True,
             "from_mode": "auto_ai",

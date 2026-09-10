@@ -505,6 +505,88 @@ def test_autodraft_trigger_reason_from_registry(caplog):
     assert draft_trigger.pop("tg:a:1") == ""      # 已消费
 
 
+# ── D（路由侧）切档 / 坐席打字端点 → cancel_inflight ──────────────────────
+
+def _route_app(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.inbox.store import InboxStore
+    from src.web.routes.unified_inbox_stored_read_routes import register_stored_read_routes
+    app = FastAPI()
+    register_stored_read_routes(app, api_auth=lambda request=None: None)
+    store = InboxStore(tmp_path / "inbox.db")
+    app.state.inbox_store = store
+    return app, store, TestClient(app)
+
+
+class _FakeWorker:
+    def __init__(self):
+        self.calls = []
+
+    def cancel_inflight(self, *, conversation_id="", platform="", account_id="", by="mode_switch"):
+        self.calls.append(("cancel", conversation_id, platform, account_id, by))
+        return 2
+
+    def note_agent_typing(self, conversation_id):
+        self.calls.append(("typing", conversation_id))
+        return 1
+
+
+def test_mode_switch_route_cancels_inflight_and_reports_count(tmp_path):
+    app, store, client = _route_app(tmp_path)
+    fw = _FakeWorker()
+    app.state.autosend_worker = fw
+    cid = "telegram:a1:u1"
+    store.set_automation_mode(cid, "auto_ai")
+    store.upsert_draft({"draft_id": "d1", "conversation_id": cid, "platform": "telegram",
+                        "account_id": "a1", "chat_key": "u1", "source_kind": "inbox",
+                        "source_id": "d1", "peer_text": "hi", "draft_text": "hello",
+                        "autopilot_level": "L2", "status": "pending", "risk_level": "low"})
+    r = client.post("/api/unified-inbox/automation",
+                    json={"platform": "telegram", "account_id": "a1", "chat_key": "u1",
+                          "mode": "manual"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    # pending 1 条（store.cancel_pending_l2_drafts）+ 在途 2 条（worker）→ toast 数 3
+    assert d["cancelled_l2"] == 3
+    assert ("cancel", cid, "", "", "mode_switch") in fw.calls
+    assert store.get_draft("d1")["status"] == "cancelled"
+    # 切回全自动不取消
+    fw.calls.clear()
+    r = client.post("/api/unified-inbox/automation",
+                    json={"platform": "telegram", "account_id": "a1", "chat_key": "u1",
+                          "mode": "auto_ai"})
+    assert r.status_code == 200 and r.json()["cancelled_l2"] == 0 and fw.calls == []
+    store.close()
+
+
+def test_agent_typing_endpoint(tmp_path):
+    app, store, client = _route_app(tmp_path)
+    fw = _FakeWorker()
+    app.state.autosend_worker = fw
+    r = client.post("/api/unified-inbox/agent-typing",
+                    json={"platform": "telegram", "account_id": "a1", "chat_key": "u1"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "conversation_id": "telegram:a1:u1", "cancelled": 1}
+    assert fw.calls == [("typing", "telegram:a1:u1")]
+    # conversation_id 直传；worker 缺席 → cancelled=0 不报错
+    app.state.autosend_worker = None
+    r = client.post("/api/unified-inbox/agent-typing", json={"conversation_id": "x:y:z"})
+    assert r.status_code == 200 and r.json()["cancelled"] == 0
+    assert client.post("/api/unified-inbox/agent-typing", json={}).status_code == 400
+    store.close()
+
+
+def test_i18n_toast_key_three_langs():
+    from src.web.i18n_packs import inbox_workspace, zh_hant_auto
+    zh = getattr(inbox_workspace, "ZH", None) or getattr(inbox_workspace, "zh", None)
+    en = getattr(inbox_workspace, "EN", None) or getattr(inbox_workspace, "en", None)
+    for pack in (zh, en):
+        assert pack is not None and "{n}" in pack["inbox.mode.cancelled_ai"]
+    hant = [v for v in vars(zh_hant_auto).values() if isinstance(v, dict)]
+    assert any("inbox.mode.cancelled_ai" in d for d in hant)
+
+
 # ── XBGPBN 回放 ───────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

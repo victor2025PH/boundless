@@ -2014,6 +2014,13 @@ _ADDITIONS_2026_09_09_Q14_AI_FAIL = """
 """
 _BASELINE += _ADDITIONS_2026_09_09_Q14_AI_FAIL
 
+# Q-3 #264（2026-09-10）：坐席打字信号——工作台输入框有输入（3s 节流）→ worker 放弃该会话
+# 在途 / 排队的 L2 AI 稿（人工优先 ≥ 客户）。unified_inbox_stored_read_routes.py。
+_ADDITIONS_2026_09_10_Q3_AGENT_TYPING = """
+/api/unified-inbox/agent-typing	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q3_AGENT_TYPING
+
 
 def _parse_baseline():
     expected = set()
