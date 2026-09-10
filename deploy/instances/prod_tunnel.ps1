@@ -53,7 +53,12 @@ $lastStaleCleanup = [datetime]::MinValue
 function Clear-StaleForwards([string[]]$PortList) {
   $spec = (($PortList | ForEach-Object { "$_/tcp" }) -join ' ')
   Log ("bind failed; killing stale VPS listener(s): " + $spec)
-  & ssh '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=no' '-o' 'ConnectTimeout=15' `
+  # -n (StdinNull) is mandatory on every ONE-SHOT ssh from this box (2026-09-11): the in-box
+  # Windows ssh.exe 9.5p1 can hang forever after a fast remote command when stdin is an
+  # unattended console (Win32-OpenSSH #1334). Here a hang would freeze this reconnect loop
+  # with the tunnel down. The -N tunnel session itself is unaffected (no exec channel).
+  & ssh '-n' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=no' '-o' 'ConnectTimeout=15' `
+      '-o' 'ServerAliveInterval=10' '-o' 'ServerAliveCountMax=2' `
       '-i' $Key $Vps ("sudo fuser -k " + $spec + " >/dev/null 2>&1; true") 2>$null | Out-Null
 }
 

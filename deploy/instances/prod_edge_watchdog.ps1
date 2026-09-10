@@ -38,6 +38,9 @@ param(
     [int]   $StrikeLimit = 2,
     [int]   $RestartCooldownMin = 15,
     [int]   $BootWaitSec = 90,
+    # Hard process-level cap on one ssh probe (see Probe-TunnelLeg, 2026-09-11). Must stay well
+    # above ConnectTimeout(15)+curl(8) so a slow-but-alive VPS is never misread as dead.
+    [int]   $ProbeTimeoutSec = 30,
     [switch]$ForceRestart,
     [switch]$DryRun,
     [string]$OpsDir = "D:\chengjie-instances\.ops",
@@ -99,11 +102,41 @@ function Probe-TunnelLeg {
     # failed" -> outage classified as VPS/network-down ("restart would not
     # help") so the tunnel leg was never healed. ssh transport health is now
     # judged by the marker, port health by the http code alone.
+    #
+    # 2026-09-11 fix - two layers, both mandatory:
+    #   -n (StdinNull): the in-box Windows ssh.exe (OpenSSH_for_Windows_9.5p1) has a known
+    #     race (Win32-OpenSSH #1334) - a one-shot remote command that returns fast can leave the
+    #     client blocked on stdin and NEVER exit, even after the VPS closed the session (VPS
+    #     auth.log: Accepted + session opened within seconds, then nothing). This is what wedged
+    #     this task from 09-10 09:53 to 09-11 03:53 (ssh pid 11208 with no TCP socket left;
+    #     MultipleInstancesPolicy=IgnoreNew -> LastResult 0x800710E0 every 5 min, zero log lines,
+    #     production entrance unmonitored for 18h) and what produced the "first probe times out,
+    #     retry passes" noise in duty_watch_loop. Same launch chain A/B 60x2: 3 hangs without -n,
+    #     0 with. -n removes the stdin reader entirely; stdin is never used by this probe.
+    #   WaitForExit + Kill: a hung client must cost one tick, never the task. Success is judged
+    #     by the marker in captured stdout (PS 5.1 .ExitCode can read $null - see uplink_watchdog).
     $cmd = "curl -s -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:$Port/login; echo _SSHOK_"
-    $out = ssh -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 `
-        "$VpsUser@$VpsHost" $cmd 2>$null
-    $txt = ("$out").Trim()
-    if ($LASTEXITCODE -ne 0 -or $txt -notmatch '_SSHOK_') { return @{ ssh_ok = $false; http = 0 } }
+    $outFile = Join-Path $env:TEMP ("prod_edge_probe_" + $PID + ".txt")
+    $errFile = Join-Path $env:TEMP ("prod_edge_probe_err_" + $PID + ".txt")
+    $argLine = ('-n -i "{0}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 ' +
+        '-o ServerAliveInterval=10 -o ServerAliveCountMax=2 {1}@{2} "{3}"') -f $Key, $VpsUser, $VpsHost, $cmd
+    $txt = ""
+    try {
+        $p = Start-Process -FilePath "ssh" -ArgumentList $argLine -NoNewWindow -PassThru `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $null = $p.Handle
+        if (-not $p.WaitForExit($ProbeTimeoutSec * 1000)) {
+            try { $p.Kill() } catch {}
+            Write-Log "WARN" "tunnel probe ssh exceeded ${ProbeTimeoutSec}s hard timeout; killed (client-side ssh.exe hang; see 2026-09-11 note in Probe-TunnelLeg)"
+            return @{ ssh_ok = $false; http = 0 }
+        }
+        $txt = ((Get-Content $outFile -ErrorAction SilentlyContinue) -join " ").Trim()
+    } catch {
+        Write-Log "WARN" ("tunnel probe ssh launch failed: " + $_.Exception.Message)
+    } finally {
+        Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($txt -notmatch '_SSHOK_') { return @{ ssh_ok = $false; http = 0 } }
     $code = 0
     if ($txt -match '(\d{3})') { $code = [int]$Matches[1] }
     return @{ ssh_ok = $true; http = $code }

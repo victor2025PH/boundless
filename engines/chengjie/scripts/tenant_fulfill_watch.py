@@ -171,8 +171,10 @@ def _dns_sentinel(st: dict) -> None:
             return
         st["dns_check_hour"] = hour
         ssh_cfg = REPO_ROOT / "deploy" / "ssh_config.boundless"
+        # -n（StdinNull）：Windows 自带 ssh.exe 9.5p1 一次性命令会随机卡在 stdin 上不退出
+        # （Win32-OpenSSH #1334，2026-09-11）；哨兵不用 stdin，别让它撞 30s 超时白丢一小时。
         r = subprocess.run(
-            ["ssh", "-F", str(ssh_cfg), "-o", "BatchMode=yes",
+            ["ssh", "-n", "-F", str(ssh_cfg), "-o", "BatchMode=yes",
              "-o", "ConnectTimeout=10", "bd2026",
              f"getent ahostsv4 dnsprobe-{hour}.bd2026.cc | head -1"],
             capture_output=True, text=True, encoding="utf-8",

@@ -103,13 +103,18 @@ def sh_full(cmd: list, timeout: int = 40) -> tuple:
 
 
 def probe_packs(st: dict) -> None:
-    cmd = ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", VPS,
+    # ``-n``（= StdinNull）是必需项，不是可选项（2026-09-11 定案）：Windows 自带
+    # OpenSSH_for_Windows_9.5p1 在计划任务这种「无人敲键盘的隐藏控制台」下跑一次性
+    # 远程命令，命令越快越容易在收尾时卡在 stdin 读取上不退出（Win32-OpenSSH #1334）。
+    # 09-03～09-11 每晚几十次「timeout>40s 重试才通」全是它：VPS 侧每一拍都在 1～6s 内
+    # Accepted + session opened，然后再无一行直到客户端被 40s 杀掉；同链路 A/B 60×2：
+    # 不带 -n 挂 3 次、带 -n 0 次。网络/VPS 都被排除（ICMP 3/3、两条线都出、-N 隧道零断）。
+    cmd = ["ssh", "-n", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", VPS,
            f"tail -12 {REMOTE_UPLOADS}"]
     out, why = sh_full(cmd)
     if not out.strip():
-        # 一次短退避重试：同一分钟 net_probe_117 显示链路全绿时的空输出多为
-        # ssh 握手瞬时失败（sshd MaxStartups / 与 LedgerBackup、callback_poll 等
-        # 并发 ssh 撞车），重试即过；两次都空才算失败，并带出真实原因。
+        # 一次短退避重试（保留作兜底）：-n 落地前这里吃掉的全是上面那个客户端挂死；
+        # 落地后若再见 recovered on retry，才轮到看 sshd MaxStartups / 并发 ssh 撞车。
         time.sleep(3)
         out, why2 = sh_full(cmd)
         if not out.strip():

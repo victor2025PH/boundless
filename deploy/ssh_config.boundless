@@ -278,4 +278,10 @@ Host vps-bd2026 bd2026
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30
+    StdinNull yes
+
+Host 165.154.233.121
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
+    StdinNull yes
 

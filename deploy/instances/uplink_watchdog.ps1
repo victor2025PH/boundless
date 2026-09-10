@@ -102,9 +102,14 @@ function Save-State($st) {
 # (scheduler refuses new instances while one is Running, result 0x800710E0).
 # Belt: ServerAlive kills a wedged session at the ssh layer in ~20s.
 # Suspenders: WaitForExit(30s) + Kill guarantees this process always exits.
+# 2026-09-11: the "half-open session" guessed above was in fact the in-box Windows ssh.exe
+# (9.5p1) client-side hang (Win32-OpenSSH #1334: fast one-shot command + unattended stdin ->
+# client never exits; VPS had already closed the session). 20:52/21:12/21:22 on 09-10 the 30s
+# kill fired three times on it. -n (StdinNull) removes the stdin reader and with it the hang
+# (A/B 60x2 on this machine: 3 hangs without -n, 0 with); the kill stays as the last line.
 $ipArgs = ($Uplinks -join " ")
 $outFile = Join-Path $env:TEMP ("uplink_probe_" + $PID + ".txt")
-$sshArgLine = ('-i "{0}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new ' +
+$sshArgLine = ('-n -i "{0}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new ' +
     '-o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ' +
     '{1}@{2} "/usr/local/bin/uplink_lastseen {3}"') -f $Key, $VpsUser, $VpsHost, $ipArgs
 $errFile = Join-Path $env:TEMP ("uplink_probe_err_" + $PID + ".txt")

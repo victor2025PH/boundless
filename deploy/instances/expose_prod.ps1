@@ -29,7 +29,10 @@ $fqdn = "$Slug.$Domain"
 $marker = 'D:\chengjie-instances\.ops\prod_public_url.txt'
 
 function VpsRun([string]$cmd, [int]$timeout = 60) {
-    $out = ssh -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
+    # -n (StdinNull): one-shot ssh from Windows 9.5p1 can hang forever after a fast remote
+    # command when stdin is unattended (Win32-OpenSSH #1334, 2026-09-11); stdin is unused here
+    # (the conf/page bodies travel inside $cmd as base64, never via stdin).
+    $out = ssh -n -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
         -o ConnectTimeout=$timeout "$VpsUser@$VpsIp" $cmd 2>&1
     return ($out | Out-String).Trim()
 }

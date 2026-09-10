@@ -49,6 +49,10 @@ param(
     [int]   $BootWaitSec     = 120,
     # consecutive ssh_fail runs (5 min apart) before raising the "uplink down" alert; 3 = ~15 min
     [int]   $SshFailAlertAfter = 3,
+    # Hard process-level cap on one ssh round-trip (see Invoke-Ssh, 2026-09-11). Worst honest case
+    # is ConnectTimeout(25) + four zombie legs x curl -m 6 = ~49s; 60s keeps a slow VPS from being
+    # misread as ssh_fail while still guaranteeing this task can never wedge.
+    [int]   $ProbeTimeoutSec = 60,
     [switch]$ForceRestart,
     [switch]$DryRun,
     [string]$OpsDir          = "D:\chengjie-instances\.ops",
@@ -125,13 +129,38 @@ function Get-Epoch { return [double]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds(
 function Invoke-Ssh([string]$remoteCmd, [int]$timeoutSec = 20) {
     # Returns @{ ok; out }. ok=$false means SSH itself could not run (network/auth), NOT a remote
     # non-zero exit - we only care about stdout content for the probe.
-    $args = @("-i", $Key, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
-              "-o", "ConnectTimeout=$timeoutSec", "$VpsUser@$VpsHost", $remoteCmd)
+    #
+    # 2026-09-11 fix - two layers, both mandatory (same incident as prod_edge_watchdog):
+    #   -n (StdinNull): the in-box Windows ssh.exe (OpenSSH_for_Windows_9.5p1) has a known race
+    #     (Win32-OpenSSH #1334) - a one-shot remote command that returns fast can leave the client
+    #     blocked on stdin and NEVER exit, even after the VPS closed the session. This wedged the
+    #     task from 09-10 09:54 to 09-11 03:53 (ssh pid 25020, no TCP socket left; IgnoreNew ->
+    #     LastResult 0x800710E0, zero log lines, relay legs unmonitored for 18h). -n removes the
+    #     stdin reader entirely; this probe never uses stdin.
+    #   WaitForExit + Kill ($ProbeTimeoutSec): a hung client costs one tick, never the task.
+    #     $remoteCmd must not contain double quotes (it is passed as one "..." argv element).
+    $outFile = Join-Path $env:TEMP ("vision_wd_probe_" + $PID + ".txt")
+    $errFile = Join-Path $env:TEMP ("vision_wd_probe_err_" + $PID + ".txt")
+    $argLine = ('-n -i "{0}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout={1} ' +
+        '-o ServerAliveInterval=10 -o ServerAliveCountMax=2 {2}@{3} "{4}"') -f $Key, $timeoutSec, $VpsUser, $VpsHost, $remoteCmd
     try {
-        $out = & ssh @args 2>$null
-        return @{ ok = $true; out = ($out | Out-String).Trim() }
+        $p = Start-Process -FilePath "ssh" -ArgumentList $argLine -NoNewWindow -PassThru `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $null = $p.Handle
+        if (-not $p.WaitForExit($ProbeTimeoutSec * 1000)) {
+            try { $p.Kill() } catch {}
+            Write-Log "WARN" "probe ssh exceeded ${ProbeTimeoutSec}s hard timeout; killed (client-side ssh.exe hang; see 2026-09-11 note in Invoke-Ssh)"
+            return @{ ok = $false; out = "" }
+        }
+        $out = ((Get-Content $outFile -ErrorAction SilentlyContinue) -join "`n").Trim()
+        # Empty stdout with a non-zero exit = ssh itself failed (network/auth); callers already
+        # treat ok+empty as ssh_fail, so only the success path needs the content.
+        return @{ ok = $true; out = $out }
     } catch {
+        Write-Log "WARN" ("probe ssh launch failed: " + $_.Exception.Message)
         return @{ ok = $false; out = "" }
+    } finally {
+        Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
     }
 }
 

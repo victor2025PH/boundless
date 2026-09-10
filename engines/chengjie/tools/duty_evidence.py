@@ -367,9 +367,14 @@ _TELEMETRY_FILES = ("/home/ubuntu/hualing-leads/diag/uploads.jsonl",
 
 def fetch_telemetry_lines(fp: str, *, host: str = _TELEMETRY_SSH_HOST,
                           runner=None) -> List[str]:
-    """SSH 到遥测宿主 grep 指定机器码的行。``runner`` 可注入（测试）。"""
+    """SSH 到遥测宿主 grep 指定机器码的行。``runner`` 可注入（测试）。
+
+    ``-n``（StdinNull）必带（2026-09-11）：Windows 自带 ssh.exe 9.5p1 在无人值守的
+    控制台下跑一次性命令会随机卡在 stdin 读取上不退出（Win32-OpenSSH #1334），这里
+    完全不用 stdin；173/117 的 ~/.ssh/config 是否带 StdinNull 不一定同步，命令行显式给。
+    """
     import subprocess
-    cmd = ["ssh", host,
+    cmd = ["ssh", "-n", host,
            "grep -h '" + str(fp) + "' " + " ".join(_TELEMETRY_FILES)
            + " 2>/dev/null | tail -200"]
     run = runner or (lambda c: subprocess.run(

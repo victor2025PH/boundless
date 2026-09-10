@@ -36,6 +36,8 @@ $remote = "/tmp/chatx_gate.sh"
 & scp -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new $sh "${Vps}:$remote" | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Error "scp failed"; exit 1 }
 # strip CRLF/BOM so remote bash is happy, then run with the chosen action
-& ssh -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new $Vps `
+# -n (StdinNull): one-shot ssh from Windows 9.5p1 can hang forever after a fast remote
+# command when stdin is unattended (Win32-OpenSSH #1334, 2026-09-11); stdin is unused here.
+& ssh -n -i $Key -o BatchMode=yes -o StrictHostKeyChecking=accept-new $Vps `
     "sed -i '1s/^\xEF\xBB\xBF//;s/\r`$//' $remote && bash $remote $action; rm -f $remote"
 exit $LASTEXITCODE
