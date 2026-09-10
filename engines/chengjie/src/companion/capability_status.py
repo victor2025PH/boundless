@@ -172,6 +172,16 @@ def evaluate_capability(
     if cap.unset_follows_runtime and _raw_flag is None:
         # 未配置 → 跟随运行时（未知则保守按关，与 inbound_translate 无引擎保持关一致）
         enabled = bool(runtime_ok) if runtime_known else False
+    elif _raw_flag is None:
+        # Q-8 E / D-Q5（#264）：B 类域默认（feature_registry.DOMAIN_DEFAULTS）——键缺席时
+        # 与运行时同口径解释（陪伴域 proactive_topic 缺席即开），看板不与真实行为相悖。
+        try:
+            from src.utils.business_domain import active_business_domain
+            from src.utils.feature_registry import effective_flag
+            enabled = bool(effective_flag(config if isinstance(config, dict) else {}, cap.flag_path,
+                                          active_business_domain(config), fallback=False))
+        except Exception:
+            enabled = False
     else:
         enabled = bool(_raw_flag)
 

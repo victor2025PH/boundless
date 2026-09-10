@@ -206,7 +206,29 @@ def test_state_on_wins_regardless_of_cls():
 
 def test_state_locked_for_c_class_off():
     assert feature_state(_f("avatar_voice"), {}) == "locked"
-    assert feature_state(_f("proactive"), {}) == "locked"
+    # Q-8 E / D-Q5（#264）：proactive_topic C→B——无域信息时缺席=available（不再 locked）
+    assert _f("proactive").cls == "B" and _f("proactive").reason == ""
+    assert feature_state(_f("proactive"), {}) == "available"
+
+
+def test_domain_defaults_only_b_class_and_companion_proactive_on():
+    """Q-8 E / D-Q5：陪伴域缺席即开、销售域缺席仍关、显式值永远优先；域默认只许挂 B 类。"""
+    from src.utils import feature_registry as fr
+    key = "companion.proactive_topic.enabled"
+    assert fr.DOMAIN_DEFAULTS["companion"][key] is True
+    for dom, kv in fr.DOMAIN_DEFAULTS.items():
+        for k in kv:
+            assert fr.by_key(k) is not None and fr.by_key(k).cls == "B", (dom, k)
+    assert fr.effective_flag({}, key, "companion") is True
+    assert fr.effective_flag({}, key, "sales", fallback=False) is False
+    assert fr.effective_flag({"companion": {"proactive_topic": {"enabled": False}}}, key, "companion") is False
+    assert fr.effective_flag({"companion": {"proactive_topic": {"enabled": True}}}, key, "sales") is True
+    assert feature_state(_f("proactive"), {}, "companion") == "on"
+    assert feature_state(_f("proactive"), {}, "sales") == "available"
+    assert feature_state(_f("proactive"), {"companion": {"proactive_topic": {"enabled": False}}}, "companion") == "available"
+    # 红线②仍在：会改变发送行为的键不进 A 类；域默认不落 baseline_patch（不静默改写配置）
+    assert fr.is_send_behavior_key(key) and key not in fr.baseline_patch({})
+    assert key not in fr.seed_forbidden_map()
 
 
 def test_state_available_vs_needs_dep():

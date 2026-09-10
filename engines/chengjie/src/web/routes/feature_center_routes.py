@@ -106,7 +106,13 @@ def register_feature_center_routes(app, auth_dep, config_manager=None):
             return False
 
     def _item(request: Request, f, cfg: Dict[str, Any]) -> Dict[str, Any]:
-        state = feature_state(f, cfg)
+        # Q-8 E（#264）：键缺席按业务域默认解释（陪伴域 proactive_topic 缺席即 on）
+        try:
+            from src.utils.business_domain import active_business_domain
+            _dom = active_business_domain(cfg)
+        except Exception:
+            _dom = ""
+        state = feature_state(f, cfg, _dom)
         extra = ""
         if state in ("available", "needs_dep"):
             # Plan wall is the harder one -- show it before dependency gaps.

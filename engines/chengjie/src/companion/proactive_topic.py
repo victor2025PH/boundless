@@ -556,6 +556,34 @@ def maybe_upgrade_to_news(
     return op
 
 
+PROACTIVE_TOPIC_FLAG = "companion.proactive_topic.enabled"
+
+
+def resolve_proactive_topic_enabled(config: Any, *, log: Any = None) -> bool:
+    """Q-8 E / D-Q5（#264）：``companion.proactive_topic.enabled`` 的运行时口径——
+    显式 true/false 以配置为准；**缺席**时按业务域解释（陪伴域 → 开，销售域 → 关），
+    走 ``feature_registry.effective_flag``，不改写配置、不落 overlay。"""
+    try:
+        from src.utils.business_domain import active_business_domain
+        from src.utils.feature_registry import dig, effective_flag
+        cfg = config if isinstance(config, dict) else {}
+        explicit = dig(cfg, PROACTIVE_TOPIC_FLAG)
+        dom = active_business_domain(cfg)
+        val = bool(effective_flag(cfg, PROACTIVE_TOPIC_FLAG, dom, fallback=False))
+        if explicit is None and log is not None:
+            try:
+                log.info("[proactive_topic] enabled=%s source=domain_default domain=%s (键缺席，按业务域解释)",
+                         int(val), dom)
+            except Exception:
+                pass
+        return val
+    except Exception:
+        try:
+            return bool(((config or {}).get("companion") or {}).get("proactive_topic", {}).get("enabled", False))
+        except Exception:
+            return False
+
+
 async def maybe_start_companion_proactive(assistant) -> None:
     """P2：陪伴主动话题调度（默认关，companion.proactive_topic.enabled 开）。
 
@@ -567,7 +595,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
     try:
         comp = (assistant.config.config.get("companion") or {})
         cfg = (comp.get("proactive_topic") or {})
-        enabled = bool(cfg.get("enabled", False))
+        enabled = resolve_proactive_topic_enabled(assistant.config.config, log=assistant.logger)
         # 融合实例 P1：授权档位闸门（gate 默认关 = 恒放行零变化）。
         # 档位不含 companion → 主动触达调度整体不启（预览面板亦无意义）。
         try:

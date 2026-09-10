@@ -105,6 +105,30 @@ ROLLED_BACK_BASELINES: Dict[str, Dict[str, Any]] = {
 #: 班表**开启时**的建议班次（不再是基线值；设置页做预填与换算提示用）。
 WORK_SCHEDULE_SUGGESTED_SHIFT: Dict[str, str] = {"start": "08:20", "end": "01:00"}
 
+#: Q-8 E / D-Q5（#264 2026-09-10）：按**业务域**解释「键缺席」的 B 类默认值。
+#: 与 A 类 baseline 的差别：不补齐、不落 overlay、不进种子门禁——只在运行时读取处
+#: （``effective_flag``）把 None 解释成域默认；用户显式写过的值永远优先。
+#: 只允许 B 类键入表（A 类有 baseline 不需要；C 类禁入种子也不该被域默认打开）。
+DOMAIN_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "companion": {
+        "companion.proactive_topic.enabled": True,
+    },
+}
+
+
+def domain_default(key: str, domain: str) -> Any:
+    """``DOMAIN_DEFAULTS[domain][key]``；无 → None。"""
+    return (DOMAIN_DEFAULTS.get(str(domain or "").strip().lower()) or {}).get(str(key or ""))
+
+
+def effective_flag(cfg: Any, key: str, domain: str, fallback: Any = None) -> Any:
+    """配置里显式值优先；缺席 → 域默认 → ``fallback``。运行时读开关的统一口。"""
+    v = dig(cfg, key)
+    if v is not None:
+        return v
+    d = domain_default(key, domain)
+    return fallback if d is None else d
+
 
 def is_send_behavior_key(key: str) -> bool:
     """红线②判定：键是否落在「会改变发送行为」名单（前缀或精确匹配）。"""
@@ -425,9 +449,16 @@ FEATURES: Tuple[Feature, ...] = (
         gate_feature="companion",
         note="出图后端是 LAN ComfyUI，相册备货属运营内容，均未随包"),
     Feature(
-        key="companion.proactive_topic.enabled", cls="C", slug="proactive",
-        reason="risk", gate_feature="companion",
-        note="AI 主动外呼=账号风险行为，开闸属运营决策，不随安装包默认开"),
+        # Q-8 E / D-Q5（#264 2026-09-10）：C(risk)→B。陪伴产品的「主动惦记」是产品本体
+        # 不是风险附件（B9D8NW 等三包：AI 四轮纯夸赞后自己退场，没人主动带话题）。
+        # 红线②禁 A：会改变发送行为的键不得**静默补齐**存量；于是不写 baseline，改走
+        # ``DOMAIN_DEFAULTS``：键**缺席**且业务域=companion 时运行时按 True 解释（不落
+        # overlay、用户显式 false 永远尊重、销售域仍默认关）。真发仍受 dry_run / 沉默时长 /
+        # 冷却 / 停联 / risk_hold / 节奏 / 预算全部既有闸。
+        key="companion.proactive_topic.enabled", cls="B", slug="proactive",
+        gate_feature="companion",
+        note="AI 主动惦记外呼：陪伴域缺席即开（DOMAIN_DEFAULTS，不静默改写配置）；"
+             "销售域默认关；随 companion 档位售卖"),
     Feature(
         key="companion.bazi.enabled", cls="C", slug="bazi", reason="pending",
         gate_feature="bazi",
@@ -521,6 +552,15 @@ def _validate() -> None:
             if code not in DEP_CHECKERS:
                 raise ValueError(
                     f"feature_registry: 未注册的依赖码 {code!r}（{f.key}）")
+    # Q-8 E：域默认只许挂在 B 类键上（A 有 baseline；C 禁入种子不得被域默认打开）
+    by = {f.key: f for f in FEATURES}
+    for dom, kv in DOMAIN_DEFAULTS.items():
+        for k in kv:
+            f = by.get(k)
+            if f is None or f.cls != "B":
+                raise ValueError(
+                    f"feature_registry: DOMAIN_DEFAULTS[{dom!r}] 只许 B 类键（{k} → "
+                    f"{getattr(f, 'cls', '未入表')}）")
 
 
 _validate()
@@ -598,13 +638,17 @@ def missing_deps(f: Feature, cfg: dict) -> List[str]:
     return out
 
 
-def feature_state(f: Feature, cfg: dict) -> str:
+def feature_state(f: Feature, cfg: dict, domain: str = "") -> str:
     """确定性状态：on | available | needs_dep | locked。
 
     已开启（不论分级）如实报 on——运营机上 C 类经 overlay 打开是合法部署形态，
-    总览必须与真实行为一致，不装「未开放」。
+    总览必须与真实行为一致，不装「未开放」。``domain`` 给了则键**缺席**时按
+    ``DOMAIN_DEFAULTS`` 解释（Q-8 E：陪伴域 proactive_topic 缺席即 on）。
     """
-    if bool(dig(cfg, f.key)):
+    raw = dig(cfg, f.key)
+    if bool(raw):
+        return "on"
+    if raw is None and domain and bool(domain_default(f.key, domain)):
         return "on"
     if f.cls == "C":
         return "locked"

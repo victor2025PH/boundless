@@ -430,6 +430,39 @@ def test_default_routes_set_preview_attach_and_card_payload(monkeypatch):
     assert client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()["default_goal"] is None
 
 
+# ── E：proactive_topic 陪伴域 B 类默认开（运行时口径 + 能力看板同口径） ─────────────
+
+def test_proactive_topic_runtime_domain_default(caplog):
+    from src.companion import proactive_topic as pt
+    from src.companion.capability_status import CAPABILITIES, evaluate_capability
+    from src.utils import business_domain as bd
+    caplog.set_level(logging.INFO)
+    log = logging.getLogger("t.q8.pt")
+    companion_cfg = {"business_domain": "companion", "companion": {"enabled": True, "proactive_topic": {}}}
+    sales_cfg = {"business_domain": "sales", "companion": {"enabled": True, "proactive_topic": {}}}
+    assert pt.resolve_proactive_topic_enabled(companion_cfg, log=log) is True
+    assert any("[proactive_topic] enabled=1 source=domain_default domain=companion" in r.getMessage()
+               for r in caplog.records)
+    assert pt.resolve_proactive_topic_enabled(sales_cfg) is False
+    assert pt.resolve_proactive_topic_enabled(
+        {"business_domain": "companion", "companion": {"proactive_topic": {"enabled": False}}}) is False
+    assert pt.resolve_proactive_topic_enabled(
+        {"business_domain": "sales", "companion": {"proactive_topic": {"enabled": True}}}) is True
+    # 能力看板与运行时同口径：缺席 + 陪伴域 → enabled；显式 false → 关
+    cap = next(c for c in CAPABILITIES if c.key == "proactive_topic")
+    assert evaluate_capability(cap, companion_cfg, None)["enabled"] is True
+    assert evaluate_capability(cap, sales_cfg, None)["enabled"] is False
+    assert evaluate_capability(cap, {"business_domain": "companion", "companion": {
+        "enabled": True, "proactive_topic": {"enabled": False}}}, None)["enabled"] is False
+    # 源码钉桩：maybe_start_companion_proactive 不再直读 cfg.get("enabled", False)
+    src = (_ROOT / "src" / "companion" / "proactive_topic.py").read_text(encoding="utf-8")
+    i = src.index("async def maybe_start_companion_proactive(")
+    body = src[i:i + 1500]
+    assert "resolve_proactive_topic_enabled(assistant.config.config" in body
+    assert 'cfg.get("enabled", False)' not in body
+    bd.reset_active_business_domain()
+
+
 def test_frontend_wiring_i18n_and_version_bump():
     js = (_ROOT / "shared" / "copilot" / "components" / "cp-goal.js").read_text(encoding="utf-8")
     assert js == (_ROOT / "desktop" / "renderer" / "shared" / "copilot" / "components" / "cp-goal.js").read_text(
