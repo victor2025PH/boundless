@@ -5438,6 +5438,17 @@ def _execute_tiktok(manager, resolved, task_type, params):
             target_languages=_tl_inbox or None,
             progress_callback=_make_progress_cb(),
         )
+        # TK-3：chengjie 模式在巡检后认领智聊回传队列，真机发出并回执（local 零调用）
+        try:
+            from src.app_automation.tiktok_chengjie_bridge import (
+                bind_device as _cj_bind, drain_handback as _cj_drain, is_chengjie as _cj_on)
+            if _cj_on():
+                _cj_bind(resolved)
+                _hb = _cj_drain(device_id=resolved, send_dm=lambda recip, msg: tt.send_dm(recip, msg))
+                if isinstance(result, dict):
+                    result["chengjie_handback"] = _hb
+        except Exception:
+            logger.debug("[收件箱] chengjie 回传认领跳过", exc_info=True)
         # Push real-time event so frontend refreshes conversation list
         try:
             from src.host.event_stream import push_event as _push_ev

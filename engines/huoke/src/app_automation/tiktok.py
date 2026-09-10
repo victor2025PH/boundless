@@ -3079,6 +3079,22 @@ class TikTokAutomation(BaseAutomation):
                              last_msg.get("direction", "?"),
                              last_msg.get("text", "")[:60])
 
+                    # TK-3：chengjie 模式整段对话都交给智聊（含己方出站回显），不跑本地大脑。
+                    _cj = False
+                    try:
+                        from .tiktok_chengjie_bridge import is_chengjie as _is_cj
+                        _cj = _is_cj()
+                    except Exception:
+                        _cj = False
+                    if _cj:
+                        try:
+                            from .tiktok_chengjie_bridge import handle_inbox_chengjie
+                            _fw = handle_inbox_chengjie(conv_data, device_id=did)
+                            log.info("[收件箱] 已转智聊 %s action=%s accepted=%s",
+                                     contact_name or "?", _fw.get("action"), _fw.get("accepted"))
+                        except Exception:
+                            log.warning("[收件箱] 转智聊失败", exc_info=True)
+
                     if last_msg.get("direction") == "inbound":
                         result["new_messages"] += 1
 
@@ -3088,7 +3104,7 @@ class TikTokAutomation(BaseAutomation):
                             "direction": "inbound",
                         }
 
-                        if auto_reply and classifier:
+                        if (not _cj) and auto_reply and classifier:
                             reply = self._handle_inbox_message(
                                 d, did, classifier, contact_name,
                                 last_msg.get("text", ""),
