@@ -2009,6 +2009,13 @@ class SkillManager(LoggerMixin):
                 _conv_hist.append({"role": "assistant", "content": _clean_prev_reply[:300]})
             _KEEP_VERBATIM = 5  # 与 reply 策略 context_rounds≈5 对齐，避免本地先裁成 3 轮导致模型「失忆」
             _COMPRESS_THRESHOLD = 8  # 更长对话才摘要，减少过早丢轮次
+            # 上下文深度档（ai.context_depth 深度/最大/超大）抬高逐字保留轮数；standard 零变化
+            try:
+                from src.ai import context_depth as _cd
+                _KEEP_VERBATIM = _cd.verbatim_rounds(self.config, _KEEP_VERBATIM)
+                _COMPRESS_THRESHOLD = _cd.compress_threshold(_KEEP_VERBATIM, _COMPRESS_THRESHOLD)
+            except Exception:
+                pass
             _total_rounds = len(_conv_hist) // 2
             if _total_rounds > _COMPRESS_THRESHOLD:
                 _old_msgs = _conv_hist[:(-_KEEP_VERBATIM * 2)]
@@ -3072,6 +3079,13 @@ class SkillManager(LoggerMixin):
         # 并按已覆盖条数缓存——只在新增足够多（>=6 条）时才重算，避免每稿一次 LLM。
         _KEEP_VERBATIM = 10
         _COMPRESS_AT = 16
+        # 上下文深度档（ai.context_depth）抬高逐字保留条数；standard 零变化
+        try:
+            from src.ai import context_depth as _cd
+            _KEEP_VERBATIM = _cd.verbatim_msgs(self.config, _KEEP_VERBATIM)
+            _COMPRESS_AT = _cd.compress_threshold(_KEEP_VERBATIM, _COMPRESS_AT)
+        except Exception:
+            pass
         if len(_hist) > _COMPRESS_AT:
             _old = _hist[:-_KEEP_VERBATIM]
             _cached = (user_context.get("_conversation_summary") or "").strip()
@@ -5372,6 +5386,11 @@ class SkillManager(LoggerMixin):
             return
         mx = int(mcfg.get("inject_max_items", 8))
         mc = int(mcfg.get("inject_max_chars", 1200))
+        try:  # 上下文深度档只抬地板（standard 零变化）
+            from src.ai import context_depth as _cd
+            mx, mc = _cd.memory_limits(self.config, mx, mc)
+        except Exception:
+            pass
         key = self._episodic_storage_key(
             user_id_str, chat_id, platform, user_context=user_context)
         rr = bool(mcfg.get("inject_rerank_keywords", True))

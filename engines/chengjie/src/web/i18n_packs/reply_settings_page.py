@@ -338,6 +338,12 @@ ZH = {
     "rps_style_tone_hint": "对全部人设追加的统一说话要求（与上面两项的「兜底」语义不同：这条对所有人设都生效）。留空 = 无。",
     "rps_style_ov_note": "共 {p} 个人设：{l} 个自定义了长度、{e} 个自定义了表情——它们不吃这里的默认值。",
     "rps_style_ov_link": "去人设工作室查看 →",
+    "rps_ctx_depth": "上下文与记忆深度",
+    "rps_ctx_depth_standard": "标准（约 12k · 最近 10 条 · 8 条记忆）",
+    "rps_ctx_depth_deep": "深度（约 32k · 最近 40 条 · 16 条记忆）",
+    "rps_ctx_depth_max": "最大（约 128k · 最近 160 条 · 30 条记忆）",
+    "rps_ctx_depth_ultra": "超大（约 900k · 与 DeepSeek 1M 窗口平齐）",
+    "rps_ctx_depth_hint": "越深越记得住、也越贵：每轮把更多历史与记忆喂给模型（人设/规则部分稳定不变，可吃缓存价）。峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，无需重启。",
 
     # 拟人细节
     "rps_human_title": "拟人细节",
@@ -952,6 +958,12 @@ EN = {
     "rps_style_tone_hint": "Appended to every persona's speaking rules (unlike the two fallbacks above, this applies to all personas). Empty = none.",
     "rps_style_ov_note": "{p} persona(s): {l} customize length, {e} customize emoji — those ignore the defaults here.",
     "rps_style_ov_link": "Open Persona Studio →",
+    "rps_ctx_depth": "Context & memory depth",
+    "rps_ctx_depth_standard": "Standard (~12k · last 10 msgs · 8 memories)",
+    "rps_ctx_depth_deep": "Deep (~32k · last 40 msgs · 16 memories)",
+    "rps_ctx_depth_max": "Max (~128k · last 160 msgs · 30 memories)",
+    "rps_ctx_depth_ultra": "Ultra (~900k · on par with DeepSeek's 1M window)",
+    "rps_ctx_depth_hint": "Deeper remembers more and costs more: each turn feeds more history and memories to the model (persona/rules prefix stays stable, so cache pricing applies). Peak per-turn ceiling ≈ Standard ¥0.02 · Deep ¥0.06 · Max ¥0.26 · Ultra ¥1.8. Takes effect immediately, no restart.",
 
     "rps_human_title": "Human-like Details",
     "rps_markread_label": "Mark as read before replying",

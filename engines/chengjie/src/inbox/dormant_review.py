@@ -664,7 +664,8 @@ async def draft_preview(app: Any, store: Any, conversation_id: str, *,
     from src.inbox.persona_reply import generate_persona_reply, normalize_history
     rows: List[Dict[str, Any]] = []
     try:
-        rows = store.list_recent_messages(cid, limit=30) or []
+        from src.ai.context_depth import history_fetch_limit as _hfl
+        rows = store.list_recent_messages(cid, limit=_hfl(None, 30)) or []
     except Exception:
         rows = []
     msgs = [{"direction": str(r.get("direction") or "in"),

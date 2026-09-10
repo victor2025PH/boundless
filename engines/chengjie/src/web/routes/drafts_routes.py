@@ -866,7 +866,8 @@ def register_drafts_routes(app, *, api_auth):
         rows = []
         try:
             if cid and hasattr(store, "list_recent_messages"):
-                rows = store.list_recent_messages(cid, limit=30) or []
+                from src.ai.context_depth import history_fetch_limit as _hfl
+                rows = store.list_recent_messages(cid, limit=_hfl(None, 30)) or []
         except Exception:
             rows = []
         msgs = []

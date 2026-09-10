@@ -968,6 +968,12 @@ class AIClient(LoggerMixin):
         use_local_model = str(so["local_model"]) if so.get("local_model") else ""
 
         max_hist = use_context_rounds if use_context_rounds is not None else max(1, int(self.max_conversation_history or 10))
+        # 上下文深度档（ai.context_depth 深度/最大/超大）只抬地板：策略 context_rounds=0 仍尊重
+        try:
+            from src.ai.context_depth import history_limit as _cd_hist
+            max_hist = _cd_hist(self.config, max_hist, strategy_rounds=use_context_rounds)
+        except Exception:
+            pass
         system_instruction = self._build_system_instruction(context)
         # ★ companion debug：可热开 ai.debug.dump_system_prompt 把完整 system prompt 打到 INFO 日志
         # 用法：在 config 里设 ai.debug.dump_system_prompt: true，看 logs/app.log 验证 4 层记忆是否注入
@@ -1142,6 +1148,11 @@ class AIClient(LoggerMixin):
                                 "reasoning_tokens", None)
                     except Exception:
                         pass
+                    # prompt-inspect 留痕 + 缓存命中统计（模型实际收到的 messages + usage）
+                    self._trace_prompt(
+                        messages, model=use_model, client=_primary_client, context=context,
+                        usage=getattr(response, "usage", None),
+                        latency_ms=int(elapsed_time * 1000), ok=bool(reply))
                 try:
                     from src.monitoring.metrics_store import get_metrics_store
                     get_metrics_store().record_api_call(elapsed_time * 1000)
@@ -1900,9 +1911,18 @@ class AIClient(LoggerMixin):
         """主链发送前套 prompt 预算并落 ``[ai] prompt_tokens=… trimmed=…`` 日志。绝不抛。"""
         try:
             budget = int(getattr(self, "_prompt_budget_tokens", self._DEFAULT_PROMPT_BUDGET) or 0)
+            try:
+                from src.ai.context_depth import prompt_budget as _cd_budget
+                budget = _cd_budget(self.config, budget)   # 深度档只抬预算地板；0=不裁 保持
+            except Exception:
+                pass
             out, st = self._trim_prompt_to_budget(messages, budget)
             trimmed = st["hist"] or st["fewshot"] or st["inject_chars"]
             rid = str((context or {}).get("request_id") or "") or "n/a"
+            st["budget"] = budget
+            self._last_budget_stats = dict(st)   # prompt-inspect 留痕用
+            if st.get("over"):
+                self._alert_prompt_over_budget(st, context)
             if trimmed or st.get("over"):
                 _log = self.logger.warning if st.get("over") else self.logger.info
                 _log(
@@ -1917,6 +1937,65 @@ class AIClient(LoggerMixin):
         except Exception:
             self.logger.debug("[ai] prompt 预算裁剪失败（放行原 messages）", exc_info=True)
             return messages
+
+    # 软放行（over>0）= 人设/硬规则/最后一条消息本身就超预算，裁剪器什么都没砍成。
+    # 这是配置问题（预算设太小 / 人设写太长）不是抖动，进程内 30 分钟一条进运维群即可。
+    _OVER_ALERT_DEBOUNCE_SEC = 1800
+
+    def _alert_prompt_over_budget(self, st: Dict[str, Any],
+                                  context: Optional[Dict[str, Any]]) -> None:
+        try:
+            from src.ops.ops_alert import notify
+            _ctx = context or {}
+            acct = str(_ctx.get("account_id") or "default")
+            notify(
+                "prompt_over_budget",
+                "⚠️ AI 提示词超预算软放行\n"
+                f"账号 {acct} · 会话 {self._conv_label(context)}\n"
+                f"预算 {st.get('budget', 0)} · 裁后仍 {st.get('after', 0)} token（超 {st.get('over', 0)}）\n"
+                "人设/硬规则段不砍，已按原样发送。建议：回复设置里把「上下文与记忆深度」调高一档，"
+                "或精简该人设/知识库注入。",
+                account_id=acct, source="ai_client", reason="prompt_over_budget",
+                debounce_sec=self._OVER_ALERT_DEBOUNCE_SEC,
+            )
+        except Exception:
+            self.logger.debug("prompt_over_budget 告警跳过", exc_info=True)
+
+    _CACHE_STAT_LOG_EVERY = 25
+
+    def _trace_prompt(self, messages: List[Dict[str, Any]], *, model: str, client: Any,
+                      context: Optional[Dict[str, Any]], usage: Any,
+                      latency_ms: int, ok: bool = True) -> None:
+        """主链一次调用的留痕（prompt-inspect）+ 缓存命中滚动统计。绝不抛。"""
+        try:
+            from src.ai import prompt_trace
+            host = ""
+            try:
+                host = str(getattr(client, "base_url", "") or "").split("://", 1)[-1].split("/", 1)[0]
+            except Exception:
+                host = ""
+            _ctx = context or {}
+            prompt_trace.record(
+                messages=messages, model=str(model), host=host,
+                conv=self._conv_label(context),
+                request_id=str(_ctx.get("request_id") or ""),
+                usage=usage, budget_stats=getattr(self, "_last_budget_stats", None),
+                latency_ms=int(latency_ms or 0), ok=ok,
+            )
+            uf = prompt_trace.usage_fields(usage)
+            if uf["prompt_tokens"]:
+                self.logger.debug(
+                    "[ai] usage model=%s prompt=%d cache_hit=%d completion=%d reasoning=%d ms=%d",
+                    model, uf["prompt_tokens"], uf["cache_hit_tokens"], uf["completion_tokens"],
+                    uf["reasoning_tokens"], int(latency_ms or 0))
+            cs = prompt_trace.cache_stats()
+            if cs["calls"] and cs["calls"] % self._CACHE_STAT_LOG_EVERY == 0:
+                self.logger.info(
+                    "[ai] prompt-cache 滚动统计 calls=%d prompt=%d hit=%d (%.0f%%) completion=%d reasoning=%d",
+                    cs["calls"], cs["prompt_tokens"], cs["cache_hit_tokens"],
+                    cs["hit_ratio"] * 100, cs["completion_tokens"], cs["reasoning_tokens"])
+        except Exception:
+            self.logger.debug("prompt_trace 留痕跳过", exc_info=True)
 
     @staticmethod
     def _coalesce_system_head(
@@ -2898,6 +2977,7 @@ class AIClient(LoggerMixin):
     def _build_system_instruction(self, context: Optional[Dict[str, Any]] = None) -> str:
         """将主系统提示词 + 快速设置 + 上下文提示合并为单一 system_instruction"""
         parts = []
+        _deferred_dp_block = ""   # 深度人设块推后到静态段之后（缓存友好布局，见下）
         context = context or {}
         # 裸 system 通道（P0-198，2026-07-31）：工具型调用（翻译引擎等）传
         # ``_bare_system`` = 完整 system 文本，跳过全局 system_prompt / 人设块 /
@@ -3099,7 +3179,10 @@ class AIClient(LoggerMixin):
                         context["_life_beat_current"] = _lb_beat
                         context["_life_beat_ck"] = _lb_ck
                     if _dp_block:
-                        parts.append(_dp_block)
+                        # 缓存友好布局（2026-09-11）：深度人设块每轮都变（随机瑕疵/生活线/时钟），
+                        # 若紧跟人设块会把 DeepSeek 前缀缓存在此截断；推后到静态段（快速设置 /
+                        # 语言规则）之后、上下文块之前——模型读到的信息不变，稳定前缀更长。
+                        _deferred_dp_block = _dp_block
                         if "后来怎么样了" in _dp_block:
                             try:
                                 from src.companion.deep_persona_stats import (
@@ -3220,6 +3303,9 @@ class AIClient(LoggerMixin):
                 "违反此规则比回复错误的内容更严重。"
             )
 
+        if _deferred_dp_block:
+            parts.append(_deferred_dp_block)
+
         context_prompt = self._build_context_prompt(context)
         if context_prompt:
             parts.append(context_prompt)
@@ -3273,6 +3359,11 @@ class AIClient(LoggerMixin):
 
         max_hist = context_rounds_override if context_rounds_override is not None else \
             max(1, getattr(self, "max_conversation_history", 10) or 10)
+        try:
+            from src.ai.context_depth import history_limit as _cd_hist
+            max_hist = _cd_hist(self.config, max_hist, strategy_rounds=context_rounds_override)
+        except Exception:
+            pass
         if conversation_history:
             _lim = max(0, int(max_hist))
             hist = [] if _lim == 0 else conversation_history[-_lim:]

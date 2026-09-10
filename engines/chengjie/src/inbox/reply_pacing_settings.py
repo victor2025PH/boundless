@@ -39,6 +39,9 @@ PACING_PROFILE_CHOICES = ("custom", "natural", "fast", "slow")
 REPLY_LENGTH_CHOICES = ("", "concise", "moderate", "detailed")
 EMOJI_LEVEL_CHOICES = ("", "none", "minimal", "moderate", "rich")
 TONE_HINT_MAXLEN = 120
+# 上下文/记忆深度四档；刻意本地定义（本模块零依赖纯函数），与 context_depth.TIER_KEYS 的
+# 一致性由门禁钉住（test_context_depth::test_settings_choices_synced）。
+CONTEXT_DEPTH_CHOICES = ("standard", "deep", "max", "ultra")
 
 # 平台专家覆写（P1，2026-08-03）：键域=编排器 worker 的平台集合。
 # 刻意本地定义而非 import platform_capabilities（本模块保持零依赖纯函数）；
@@ -161,6 +164,14 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     },
     "ai.reply_defaults.tone_hint": {
         "type": "text", "maxlen": TONE_HINT_MAXLEN, "default": "", "hot": True,
+    },
+    # 上下文/记忆深度四档（2026-09-11，老板口径「标准/深度/最大/超大，可到 1M」）：一档改全部
+    # 相关旋钮（预算 / 喂模型历史条数 / 本地逐字保留 / 记忆注入条数 / 取库行数），单一事实源
+    # src/ai/context_depth.py。standard = 零行为变化；深档只抬地板不压手调值。消费方全部
+    # 活读 config → hot=True。
+    "ai.context_depth": {
+        "type": "enum", "choices": CONTEXT_DEPTH_CHOICES,
+        "default": "standard", "hot": True,
     },
     # ── 平台专家覆写（P1，2026-08-03；缺省全空表=继承全局，零行为变更）────
     # 档位封顶：{platform: mode}——只降不升（cap_automation_mode），删除=不封顶。

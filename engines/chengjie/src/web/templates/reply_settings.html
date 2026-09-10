@@ -1027,6 +1027,17 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <input type="text" class="rps-num" style="width:min(420px,100%)" id="rps-style-tone" maxlength="120" placeholder="{{ (i18n or {}).get('rps_style_tone_ph', '例：多用短句和口语语气词，别用书面腔') }}" oninput="rpsMarkDirty()">
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_style_tone_hint', "对全部人设追加的统一说话要求（与上面两项的「兜底」语义不同：这条对所有人设都生效）。留空 = 无。") }}</span>
     </div>
+    <!-- 上下文/记忆深度四档（2026-09-11）：一档改预算/历史/记忆/取库全部旋钮，单一事实源 src/ai/context_depth.py -->
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ctx_depth', "上下文与记忆深度") }}</span>
+      <select class="rps-select" id="rps-ctx-depth" onchange="rpsMarkDirty(); rpsCtxDepthHint(this.value)">
+        <option value="standard">{{ (i18n or {}).get('rps_ctx_depth_standard', "标准（约 12k · 最近 10 条 · 8 条记忆）") }}</option>
+        <option value="deep">{{ (i18n or {}).get('rps_ctx_depth_deep', "深度（约 32k · 最近 40 条 · 16 条记忆）") }}</option>
+        <option value="max">{{ (i18n or {}).get('rps_ctx_depth_max', "最大（约 128k · 最近 160 条 · 30 条记忆）") }}</option>
+        <option value="ultra">{{ (i18n or {}).get('rps_ctx_depth_ultra', "超大（约 900k · 与 DeepSeek 1M 窗口平齐）") }}</option>
+      </select>
+      <span class="rps-row-hint" id="rps-ctx-depth-hint">{{ (i18n or {}).get('rps_ctx_depth_hint', "越深越记得住、也越贵：每轮把更多历史与记忆喂给模型（人设/规则部分稳定不变，可吃缓存价）。峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，无需重启。") }}</span>
+    </div>
     <div class="rps-row" id="rps-style-ov-row" style="display:none">
       <span class="rps-row-hint" id="rps-style-ov" style="margin-top:0"></span>
     </div>
@@ -1454,6 +1465,7 @@ var RPS_I18N = {
     "ai.reply_defaults.max_sentences": {{ (i18n or {}).get('rps_style_maxsent', "最多句数")|tojson }},
     "ai.reply_defaults.emoji_level": {{ (i18n or {}).get('rps_style_emoji', "表情密度")|tojson }},
     "ai.reply_defaults.tone_hint": {{ (i18n or {}).get('rps_style_tone', "一句话风格要求")|tojson }},
+    "ai.context_depth": {{ (i18n or {}).get('rps_ctx_depth', "上下文与记忆深度")|tojson }},
     "inbox.auto_draft.platform_modes": {{ (i18n or {}).get('rps_plat_col_cap', "档位封顶")|tojson }},
     "inbox.l2_autosend.deliver_delay.platform_overrides": {{ (i18n or {}).get('rps_plat_fn_delay', "平台节奏覆写")|tojson }},
     "inbox.l2_autosend.platform_humanize": {{ (i18n or {}).get('rps_plat_fn_flags', "平台拟人开关")|tojson }},
@@ -1518,9 +1530,16 @@ var RPS_FIELD_DEFS = [
   {path: "ai.reply_defaults.length", kind: "select", el: "rps-style-length"},
   {path: "ai.reply_defaults.max_sentences", kind: "int", el: "rps-style-maxsent"},
   {path: "ai.reply_defaults.emoji_level", kind: "select", el: "rps-style-emoji"},
-  {path: "ai.reply_defaults.tone_hint", kind: "text", el: "rps-style-tone"}
+  {path: "ai.reply_defaults.tone_hint", kind: "text", el: "rps-style-tone"},
+  {path: "ai.context_depth", kind: "select", el: "rps-ctx-depth", dflt: "standard"}
 ];
 var RPS_DEFS_BY_PATH = {};
+// 上下文深度档提示：超大档单轮上限接近 ¥2，选中时把提示染成警示色（文案本身在 i18n）
+function rpsCtxDepthHint(v){
+  var el = document.getElementById("rps-ctx-depth-hint");
+  if (!el) return;
+  el.style.color = (v === "ultra" || v === "max") ? "var(--rps-warn, #b45309)" : "";
+}
 RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
 
 function rpsFieldGet(def){

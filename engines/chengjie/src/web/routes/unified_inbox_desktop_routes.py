@@ -796,7 +796,8 @@ def register_desktop_routes(app, *, api_auth) -> None:
                 from src.inbox.normalizer import conv_id
                 cid = (cmd.get("conversation_id")
                        or conv_id(platform, account_id, chat_key))
-                rows = store.list_recent_messages(cid, limit=30)
+                from src.ai.context_depth import history_fetch_limit as _hfl
+                rows = store.list_recent_messages(cid, limit=_hfl(None, 30))
                 history, last_inbound = normalize_history(_msgs_from_store_rows(rows))
             except Exception:
                 logger.debug("[desktop] rewrite 取会话上下文失败", exc_info=True)

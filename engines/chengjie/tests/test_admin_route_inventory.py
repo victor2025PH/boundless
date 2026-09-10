@@ -2099,6 +2099,14 @@ _ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS
 
+# AI 提示词调试口（ai_inspect_routes.py，2026-09-11）：模型实际收到的 messages + usage +
+# DeepSeek 缓存命中率 + 上下文深度档——「聊天没人设」类问题不再靠日志倒推。
+_ADDITIONS_2026_09_11_AI_INSPECT = """
+/api/ai/prompt-inspect	GET
+/api/ai/prompt-inspect/{seq}	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_11_AI_INSPECT
+
 
 def _parse_baseline():
     expected = set()

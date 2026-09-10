@@ -81,7 +81,9 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
         _peer_media_desc = ""
         _peer_msg_id = ""  # 语音转录回写目标行
         try:
-            for r in _ad_store.list_recent_messages(cid, limit=30):
+            from src.ai.context_depth import history_fetch_limit as _hfl
+            for r in _ad_store.list_recent_messages(
+                    cid, limit=_hfl(assistant.config.config or {}, 30)):
                 msgs.append({
                     "direction": r.get("direction") or "in",
                     "text": r.get("text") or "",

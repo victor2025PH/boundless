@@ -23535,6 +23535,18 @@ ZH_HANT = {
     'rps_chip_hot': '儲存即生效',
     # ── rps_chip_restart ──
     'rps_chip_restart': '重啟後生效',
+    # ── rps_ctx_depth ──
+    'rps_ctx_depth': '上下文與記憶深度',
+    # ── rps_ctx_depth_deep ──
+    'rps_ctx_depth_deep': '深度（約 32k · 最近 40 條 · 16 條記憶）',
+    # ── rps_ctx_depth_hint ──
+    'rps_ctx_depth_hint': '越深越記得住、也越貴：每輪把更多歷史與記憶餵給模型（人設/規則部分穩定不變，可吃快取價）。尖峰單輪上限約：標準 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，無需重啟。',
+    # ── rps_ctx_depth_max ──
+    'rps_ctx_depth_max': '最大（約 128k · 最近 160 條 · 30 條記憶）',
+    # ── rps_ctx_depth_standard ──
+    'rps_ctx_depth_standard': '標準（約 12k · 最近 10 條 · 8 條記憶）',
+    # ── rps_ctx_depth_ultra ──
+    'rps_ctx_depth_ultra': '超大（約 900k · 與 DeepSeek 1M 視窗對齊）',
     # ── rps_diff_btn ──
     'rps_diff_btn': '改動明細',
     # ── rps_diff_empty ──
