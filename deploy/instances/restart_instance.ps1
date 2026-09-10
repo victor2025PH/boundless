@@ -80,6 +80,19 @@ function Fail([string]$msg) {
     exit 1
 }
 
+# Q-14 D-3 (#262, 2026-09-10): one line at the start and one at the end of a zhiliao restart
+# into .ops\prod_tunnel.log, next to the tunnel's own "dropped / bind failed" lines, so the
+# 502 window on katie can be reconciled against a deliberate local restart instead of being
+# read as tunnel death (09-09 the edge watchdog restarted a healthy tunnel twice for this).
+# zhiliao only: that is the instance behind the 18799 -R forward. Never blocks the restart.
+function Note-TunnelLog([string]$m) {
+    if ($Instance -ne 'zhiliao') { return }
+    try {
+        $tl = Join-Path $ProdBase '.ops\prod_tunnel.log'
+        ("{0} [restart_instance] {1}" -f (Get-Date -Format s), $m) | Out-File $tl -Append -Encoding utf8
+    } catch {}
+}
+
 function Send-RestartAlert([string]$text) {
     if ($NoAlert) { return }
     $key = [Environment]::GetEnvironmentVariable('EVENT_INGEST_KEY', 'Machine')
@@ -317,6 +330,7 @@ if ($listenPids.Count) {
 }
 
 $t0 = Get-Date
+Note-TunnelLog ("BEGIN restart port={0} reason={1} pid={2} - local :{0} will refuse for the window; tunnel_http!=200 in this span is the instance, not the tunnel" -f $meta.port, $Reason, $PID)
 
 $stopScript = Join-Path $PSScriptRoot 'stop_instance.ps1'
 Say 'stopping instance...' 'Yellow'
@@ -358,6 +372,7 @@ if ($SkipReadyWait) {
 }
 
 $sec = [int]((Get-Date) - $t0).TotalSeconds
+Note-TunnelLog ("END restart port={0} ready={1} window={2}s" -f $effPort, $ready, $sec)
 if (-not $ready) {
     Send-RestartAlert ("⛔ {0} restarted but /login not ready after {1}s ({2})" -f $meta.name, $sec, $env:COMPUTERNAME)
     Fail ("Not ready after {0}s (/login). Check {1}\logs\ latest boot_*.out.log; keep agents off the workbench." -f $sec, $root)

@@ -150,6 +150,26 @@ if ($ForceRestart) {
 $tun = Probe-TunnelLeg
 $pub = Probe-Public
 
+# Q-14 D-3 (#262, 2026-09-10): tunnel-vs-instance discrimination, LOG ONLY. From the VPS,
+# "ssh ok but 127.0.0.1:$Port != 200" looks identical for a dead -R forward and for a
+# local zhiliao restart (forward alive, nothing listening behind it). 09-09 15:18 and
+# 17:13 that ambiguity made this watchdog restart a healthy tunnel. Verdict / strikes /
+# restart below are untouched; this only records whether the LOCAL port had a listener,
+# in this log and as one line in prod_tunnel.log where the tunnel's own drops are read.
+if ($tun.ssh_ok -and $tun.http -ne 200) {
+    $localListen = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if ($localListen.Count -eq 0) {
+        $note = "local :$Port has no listener (instance restarting); tunnel_http=$($tun.http) is not tunnel death"
+        Write-Log "LOCALDOWN" $note
+        try {
+            ("{0} [edge_watchdog] {1}" -f (Get-Date -Format s), $note) |
+                Out-File (Join-Path $OpsDir "prod_tunnel.log") -Append -Encoding utf8
+        } catch {}
+    } else {
+        Write-Log "INFO" "local :$Port is listening (pid $($localListen[0].OwningProcess)); tunnel_http=$($tun.http) points at the tunnel leg itself"
+    }
+}
+
 $healthy = ($tun.ssh_ok -and $tun.http -eq 200 -and ($pub -eq -1 -or $pub -eq 200))
 if ($healthy) {
     if ($st.strikes -gt 0) { Write-Log "OK" "recovered (tunnel=200 public=$pub), strikes reset" }
