@@ -41,7 +41,8 @@ _SCENE_CLASS_WORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("office", ("office", "workday", "办公室", "辦公室", "上班")),
     ("gym", ("gym", "workout", "sporty outfit", "健身")),
     ("kitchen", ("kitchen", "cooking", "apron", "厨房", "廚房", "做饭", "做菜")),
-    ("park", ("park", "outdoor", "natural daylight", "公园", "公園", "户外", "戶外")),
+    ("park", ("park", "outdoor", "natural daylight", "公园", "公園", "户外", "戶外",
+              "风景", "風景", "landscape", "scenery", "scenic")),
     ("bedroom", ("bedroom", "卧室", "臥室", "床上")),
     ("library", ("library", "bookstore", "bookshel", "图书馆", "圖書館", "书店", "書店")),
     # 实施69：烧烤/烤串/大排档并入 street（哈尔滨烧烤店老板娘人设的职业场景
@@ -62,6 +63,123 @@ _CAR_RE = re.compile(r"(?:\bcar\b|车里|車裡|车内|車內|车上|車上|开�
 # 全部 canonical 场景类（词表 14 类 + car）——上传自动打标的 prompt 枚举与
 # 归一化（media_taxonomy.normalize_scene）共用这一份，别在别处手抄。
 SCENE_CLASSES: Tuple[str, ...] = tuple(c for c, _ in _SCENE_CLASS_WORDS) + ("car",)
+
+# Q-6 E：产品场景 kind（自拍/室内/室外风景/美食/宠物/其他）——A 段清单与「索风景不再抓自拍」。
+SCENE_KINDS: Tuple[str, ...] = ("selfie", "indoor", "outdoor", "food", "pet", "other")
+_OUTDOOR_CLASSES = {"beach", "park", "street", "night_city"}
+_FOOD_CLASSES = {"kitchen", "restaurant"}
+_INDOOR_CLASSES = {
+    "cafe", "office", "gym", "kitchen", "bedroom", "library", "campus",
+    "restaurant", "home", "car",
+}
+_SELFIE_CLASSES = {"home", "bedroom"}
+_FOOD_OBJ = (
+    "food", "meal", "dish", "cake", "coffee", "noodle", "sushi", "pizza",
+    "dessert", "早餐", "午餐", "晚餐", "蛋糕", "咖啡", "火锅", "麵", "面",
+)
+_PET_OBJ = ("dog", "cat", "pet", "puppy", "kitten", "狗", "猫", "寵物", "宠物")
+_KIND_ASK_WORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("outdoor", ("风景", "風景", "风景照", "風景照", "landscape", "scenery",
+                 "scenic", "outdoor view", "the view")),
+    ("selfie", ("自拍", "selfie", "mirror pic", "mirror photo")),
+    ("food", ("美食", "吃饭", "吃饭照", "food pic", "what you ate")),
+    ("pet", ("宠物", "寵物", "小狗", "小猫", "my dog", "my cat")),
+    ("indoor", ("室内", "室內", "indoor")),
+)
+
+
+def infer_scene_kind(parsed: Any, scene_class: str = "") -> str:
+    """VLM 结论 + canonical 场景类 → kind；认不出 → other。纯函数。"""
+    p = parsed if isinstance(parsed, dict) else {}
+    objects = [str(o).lower() for o in (p.get("objects") or [])]
+    blob = " ".join(objects) + " " + str(p.get("desc") or "").lower()
+    if any(w in blob for w in _PET_OBJ):
+        return "pet"
+    cls = str(scene_class or p.get("scene") or "").strip().lower()
+    if cls in _FOOD_CLASSES or any(w in blob for w in _FOOD_OBJ):
+        return "food"
+    indoor = str(p.get("indoor") or "").strip().lower()
+    if cls in _OUTDOOR_CLASSES or indoor == "outdoor":
+        return "outdoor"
+    try:
+        people = int(p.get("people_count") if p.get("people_count") is not None else -1)
+    except (TypeError, ValueError):
+        people = -1
+    if "selfie" in blob or "mirror" in blob:
+        return "selfie"
+    if cls in _SELFIE_CLASSES and people >= 1:
+        return "selfie"
+    if indoor == "indoor" or cls in _INDOOR_CLASSES:
+        return "indoor"
+    if people >= 1:
+        return "selfie"
+    return "other"
+
+
+def scene_kind_of(row: Optional[Dict[str, Any]]) -> str:
+    """条目 kind：``tags kind:`` → auto_meta.scene_kind → 从场景类/识图结论推断。"""
+    k = _tag_value(row, "kind:").lower()
+    if k in SCENE_KINDS:
+        return k
+    am = (row or {}).get("auto_meta") if isinstance((row or {}).get("auto_meta"), dict) else {}
+    ak = str((am or {}).get("scene_kind") or "").strip().lower()
+    if ak in SCENE_KINDS:
+        return ak
+    return infer_scene_kind(am, row_scene_class(row))
+
+
+def requested_scene_kind(text: Any) -> str:
+    """客户点名的产品 kind；「风景」→ outdoor。认不出 → ""。"""
+    t = normalize_text(text)
+    if not t:
+        return ""
+    for kind, words in _KIND_ASK_WORDS:
+        for w in words:
+            if w in t:
+                return kind
+    return ""
+
+
+def album_kind_counts(rows: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    """enabled 行按 kind 计数（A 段清单）。"""
+    out = {k: 0 for k in SCENE_KINDS}
+    for r in rows or []:
+        if not r.get("enabled", True):
+            continue
+        k = scene_kind_of(r)
+        if k in out:
+            out[k] += 1
+        else:
+            out["other"] += 1
+    return {k: n for k, n in out.items() if n}
+
+
+def album_trigger_counts(rows: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    """三段计数：已确认 / AI 建议 / 无建议。"""
+    confirmed = ai_suggest = none = 0
+    for r in rows or []:
+        trg = [str(x).strip() for x in (r.get("triggers") or []) if str(x or "").strip()]
+        am = r.get("auto_meta") if isinstance(r.get("auto_meta"), dict) else {}
+        sug = [str(x).strip() for x in ((am or {}).get("triggers_suggest") or [])
+               if str(x or "").strip()]
+        if trg:
+            confirmed += 1
+        elif sug:
+            ai_suggest += 1
+        else:
+            none += 1
+    return {"confirmed": confirmed, "ai_suggest": ai_suggest, "none": none}
+
+
+def row_has_match_terms(row: Optional[Dict[str, Any]], *, suggest_ok: bool = True) -> bool:
+    """正式触发词或（suggest_ok 时）建议词任一非空。"""
+    r = row or {}
+    if any(str(x or "").strip() for x in (r.get("triggers") or [])):
+        return True
+    if not suggest_ok:
+        return False
+    am = r.get("auto_meta") if isinstance(r.get("auto_meta"), dict) else {}
+    return any(str(x or "").strip() for x in ((am or {}).get("triggers_suggest") or []))
 
 
 def scene_class_of(phrase: Any) -> str:
@@ -255,11 +373,17 @@ def _partition(
     rows: Sequence[Dict[str, Any]], text: str, *,
     media_types: Optional[Sequence[str]] = None,
     bond_level: Optional[int] = None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """把候选行分成 (关键词命中, 通用池)，同时过 enabled / 类型 / 关系闸门。"""
+    suggest_ok: bool = True,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """把候选行分成 (关键词命中, 建议词命中, 通用池)，同时过 enabled / 类型 / 关系闸门。
+
+    Q-6 E：未确认建议词（``auto_meta.triggers_suggest``）低权重参与；``suggest_ok=False``
+    （``album.autotag.apply=confirm``）时建议词不进匹配。
+    """
     tn = normalize_text(text)
     mt_set = {str(m).strip().lower() for m in media_types} if media_types else None
     keyword: List[Dict[str, Any]] = []
+    suggest: List[Dict[str, Any]] = []
     generic: List[Dict[str, Any]] = []
     for r in rows or []:
         if not r.get("enabled", True):
@@ -268,20 +392,37 @@ def _partition(
             continue
         if bond_level is not None and int(r.get("min_bond_level") or 0) > int(bond_level):
             continue
-        trg = r.get("triggers") or []
-        if trg:
-            if _triggers_hit(trg, tn):
-                keyword.append(r)
-        else:
+        trg = [x for x in (r.get("triggers") or []) if str(x or "").strip()]
+        am = r.get("auto_meta") if isinstance(r.get("auto_meta"), dict) else {}
+        sug = [x for x in ((am or {}).get("triggers_suggest") or []) if str(x or "").strip()] if suggest_ok else []
+        if trg and _triggers_hit(trg, tn):
+            keyword.append(r)
+        elif (not trg) and sug and _triggers_hit(sug, tn):
+            rr = dict(r)
+            rr["_match_weight"] = 0.6
+            suggest.append(rr)
+        elif not trg and not sug:
             generic.append(r)
-    return keyword, generic
+        elif not trg and sug and not _triggers_hit(sug, tn):
+            # 有建议词但本句未命中 → 不进通用池（有词就不是随机素材）
+            pass
+        elif trg and not _triggers_hit(trg, tn):
+            pass
+    return keyword, suggest, generic
 
 
 def _weighted_choice(
     rows: Sequence[Dict[str, Any]], rng: Optional[random.Random] = None,
 ) -> Dict[str, Any]:
     r = rng or random
-    weights = [max(1, int(x.get("weight") or 1)) for x in rows]
+    weights = []
+    for x in rows:
+        base = max(1, int(x.get("weight") or 1))
+        try:
+            mw = float(x.get("_match_weight") or 1.0)
+        except (TypeError, ValueError):
+            mw = 1.0
+        weights.append(max(0.1, base * mw))
     return r.choices(list(rows), weights=weights, k=1)[0]
 
 
@@ -333,6 +474,9 @@ def select_media(
     now_season: str = "",
     home_country: str = "",
     trace: Optional[Dict[str, Any]] = None,
+    suggest_ok: bool = True,
+    allow_random: bool = True,
+    required_scene_kind: str = "",
 ) -> Optional[Dict[str, Any]]:
     """从候选行里挑一个媒体条目；挑不到返回 None。纯函数（rng 可注入以确定性测试）。
 
@@ -373,19 +517,48 @@ def select_media(
             cut = trace.setdefault("cut", {})
             cut[gate] = int(cut.get(gate, 0)) + int(n)
 
-    keyword, generic = _partition(
-        rows, text, media_types=media_types, bond_level=bond_level)
+    keyword, suggest, generic = _partition(
+        rows, text, media_types=media_types, bond_level=bond_level,
+        suggest_ok=bool(suggest_ok))
     # 信息性提问不劫持：疑问句且无求图动词 → 关键词池让路（见 is_info_question）。
     if keyword and is_info_question(text):
         keyword = []
+    if suggest and is_info_question(text):
+        suggest = []
     # 邀约/拒收不劫持：「出来喝咖啡」是约人不是要图（见 is_invite_or_decline）。
     if keyword and is_invite_or_decline(text):
         keyword = []
-    pool = keyword if keyword else (generic if generic_ok else [])
-    from_generic = not keyword
+    if suggest and is_invite_or_decline(text):
+        suggest = []
+    kind = str(required_scene_kind or "").strip().lower()
+    if kind in SCENE_KINDS:
+        mt_set = {str(m).strip().lower() for m in media_types} if media_types else None
+        keyword = [r for r in keyword if scene_kind_of(r) == kind]
+        suggest = [r for r in suggest if scene_kind_of(r) == kind]
+        generic = [r for r in generic if scene_kind_of(r) == kind]
+        # 索「风景」：即使触发词字面没写「风景」，outdoor 存货仍可作候选（CK8HCT）。
+        if not keyword and not suggest:
+            kind_pool = []
+            for r in rows or []:
+                if not r.get("enabled", True):
+                    continue
+                if mt_set and str(r.get("media_type") or "").lower() not in mt_set:
+                    continue
+                if bond_level is not None and int(r.get("min_bond_level") or 0) > int(bond_level):
+                    continue
+                if scene_kind_of(r) == kind:
+                    kind_pool.append(r)
+            if kind_pool:
+                suggest = kind_pool
+    pool = keyword if keyword else (
+        suggest if suggest else (
+            generic if (generic_ok and allow_random) else []))
+    from_generic = bool(not keyword and not suggest)
     _tr("pool", "keyword" if keyword else (
-        "generic" if (generic_ok and generic) else "none"))
+        "suggest" if suggest else (
+            "generic" if (generic_ok and allow_random and generic) else "none")))
     _tr("start", len(pool))
+    _tr("fallback", "random" if (from_generic and pool) else "none")
     if not pool:
         _tr("refused", "no_pool")
         return None
@@ -517,16 +690,20 @@ def explain_match(
     防复读账本）与具体会话绑定，预览刻意不判（``conv_gates_included=False``）。
     季节/地点门与 select_media 同口径只约束通用池；关键词池仅时段参与提示。
     """
-    keyword, generic = _partition(
+    keyword, suggest, generic = _partition(
         rows, text, media_types=media_types, bond_level=bond_level)
-    info_q = bool(keyword) and is_info_question(text)
+    info_q = bool(keyword or suggest) and is_info_question(text)
     if info_q:
-        keyword = []  # 与 select_media 同口径：预览不骗人
-    invite = bool(keyword) and is_invite_or_decline(text)
+        keyword = []
+        suggest = []
+    invite = bool(keyword or suggest) and is_invite_or_decline(text)
     if invite:
         keyword = []
+        suggest = []
     if keyword:
         pool, cands = POOL_KEYWORD, keyword
+    elif suggest:
+        pool, cands = POOL_KEYWORD, suggest
     elif generic_ok and generic:
         pool, cands = POOL_GENERIC, generic
     else:
@@ -589,6 +766,10 @@ def pick_media(
     no_resend: bool = False,
     now_season: str = "",
     home_country: str = "",
+    allow_random: bool = True,
+    suggest_ok: bool = True,
+    required_scene_kind: str = "",
+    trace: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """store 便捷封装：取该人设 enabled 行 → select_media。store/persona 缺失 → None。
 
@@ -640,7 +821,7 @@ def pick_media(
             ex_ids = ex_series = None
             hard_ids = hard_files = None
             prefer_series = ""
-    _trace: Dict[str, Any] = {}
+    _trace: Dict[str, Any] = trace if isinstance(trace, dict) else {}
     row = select_media(
         rows, text, generic_ok=generic_ok, media_types=media_types,
         avoid_id=avoid_id, bond_level=bond_level, rng=rng,
@@ -649,7 +830,10 @@ def pick_media(
         hard_exclude_ids=hard_ids, hard_exclude_files=hard_files,
         prefer_series=prefer_series, no_resend=bool(no_resend),
         now_season=str(now_season or ""),
-        home_country=str(home_country or ""), trace=_trace)
+        home_country=str(home_country or ""), trace=_trace,
+        suggest_ok=bool(suggest_ok), allow_random=bool(allow_random),
+        required_scene_kind=str(required_scene_kind or ""),
+    )
     # 拦截观测（实施90）：A/B 两条链都从这里过——「为什么没发」进程计数
     try:
         from src.companion.album_gate_stats import record as _gate_record
@@ -679,9 +863,11 @@ def caption_for(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str 
 
 
 __all__ = [
-    "POOL_KEYWORD", "POOL_GENERIC", "POOL_NONE", "SCENE_CLASSES",
+    "POOL_KEYWORD", "POOL_GENERIC", "POOL_NONE", "SCENE_CLASSES", "SCENE_KINDS",
     "normalize_text", "select_media", "explain_match", "pick_media", "caption_for",
     "scene_class_of", "tod_conflicts_with_hour", "row_tod", "row_scene_class",
     "row_file_key", "series_of", "is_info_question", "is_invite_or_decline",
     "caption_tod_conflict",
+    "infer_scene_kind", "scene_kind_of", "requested_scene_kind",
+    "album_kind_counts", "album_trigger_counts", "row_has_match_terms",
 ]

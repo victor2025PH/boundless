@@ -86,10 +86,13 @@ def candidate_text(row: Optional[Dict[str, Any]]) -> str:
     trg = [str(t).strip() for t in (r.get("triggers") or []) if str(t).strip()]
     if trg:
         parts.append(" ".join(trg))
+    sug = [str(t).strip() for t in (am.get("triggers_suggest") or []) if str(t).strip()]
+    if sug:
+        parts.append(" ".join(sug))
     for t in (r.get("tags") or []):
         ts = str(t or "")
-        if ts.startswith("scene:"):
-            parts.append(ts[6:])
+        if ts.startswith("scene:") or ts.startswith("kind:"):
+            parts.append(ts.split(":", 1)[-1])
     return " ".join(parts).strip()
 
 

@@ -697,6 +697,40 @@ def last_media_receipt(conv_key: str) -> Dict[str, Any]:
         return dict(_LAST_RECEIPT.get(str(conv_key or ""), {}) or {})
 
 
+# Q-6 B：无匹配回喂（进程内）。生成侧 consume 后注入「无可用照片（场景 X）」。
+_ALBUM_MISS: Dict[str, Dict[str, Any]] = {}
+_ALBUM_MISS_LOCK = threading.Lock()
+
+
+def note_album_miss(conv_key: str, query: str = "", scene: str = "") -> None:
+    ck = str(conv_key or "").strip()
+    if not ck:
+        return
+    with _ALBUM_MISS_LOCK:
+        _ALBUM_MISS[ck] = {
+            "query": str(query or "")[:120],
+            "scene": str(scene or "")[:80],
+            "ts": time.time(),
+        }
+
+
+def consume_album_miss(conv_key: str) -> Dict[str, Any]:
+    ck = str(conv_key or "").strip()
+    if not ck:
+        return {}
+    with _ALBUM_MISS_LOCK:
+        rec = _ALBUM_MISS.pop(ck, None)
+    return dict(rec or {})
+
+
+def peek_album_miss(conv_key: str) -> Dict[str, Any]:
+    ck = str(conv_key or "").strip()
+    if not ck:
+        return {}
+    with _ALBUM_MISS_LOCK:
+        return dict(_ALBUM_MISS.get(ck) or {})
+
+
 def resolve_last_sent_media(conv_key: str, persona_id: str = "") -> Dict[str, Any]:
     """该会话最近一次**真发**的媒体（可重发的文件）：进程内回执账本优先，跨重启
     回落相册投放账本（``persona_media_sends`` 最新一条 → 条目 file_path/url）。
@@ -808,6 +842,7 @@ def pick_registered_media(
     cc = resolve_consistency_cfg(scfg)
     # 场景硬要求：调用方显式给的优先，否则从客户原话提取点名场景。
     _scene_cls = ""
+    _scene_kind = ""
     if cc["enabled"]:
         _req = str(required_scene or "").strip()
         if not _req:
@@ -818,6 +853,30 @@ def pick_registered_media(
                 _req = ""
         if _req:
             _scene_cls = scene_class_of(_req) or _req.strip().lower()
+    try:
+        from src.companion.persona_media import requested_scene_kind
+        _scene_kind = requested_scene_kind(str(peer_text or ""))
+    except Exception:
+        _scene_kind = ""
+    # Q-6 E：建议词默认参与匹配（apply=auto）；confirm 档只等一键采纳。
+    _suggest_ok = True
+    try:
+        from src.companion.media_auto_tag import resolve_album_ai_cfg
+        _apply = str(resolve_album_ai_cfg(config).get("apply") or "auto").lower()
+        _suggest_ok = _apply != "confirm"
+    except Exception:
+        _suggest_ok = True
+    # Q-6 B：随机兜底默认关——整册完全无词 且 非索图/非点名场景 才 random。
+    _ask = bool(detect_selfie_request(str(peer_text or ""))) or bool(force_generic) or bool(_scene_cls or _scene_kind)
+    _allow_random = False
+    try:
+        _rows_pre = store.list(str(persona_id or ""), enabled_only=True) if persona_id else []
+        from src.companion.persona_media import row_has_match_terms
+        _album_no_terms = bool(_rows_pre) and not any(
+            row_has_match_terms(r, suggest_ok=_suggest_ok) for r in _rows_pre)
+        _allow_random = _album_no_terms and not _ask
+    except Exception:
+        _allow_random = False
     # 实施90 季节/地点门：人设「此刻季节 + 所在国」上下文（软失败=不设门）。
     _geo = {"season": "", "country": ""}
     if cc.get("season_gate") or cc.get("place_gate"):
@@ -826,7 +885,8 @@ def pick_registered_media(
             _geo = persona_geo_context(str(persona_id or ""))
         except Exception:
             _geo = {"season": "", "country": ""}
-    return pick_media(
+    _trace: Dict[str, Any] = {}
+    row = pick_media(
         store, str(persona_id or ""), str(peer_text or ""),
         generic_ok=generic_ok, avoid_id=avoid_id, bond_level=bond_level,
         conv_key=conv_key, resend_after_days=_resend_days,
@@ -837,7 +897,25 @@ def pick_registered_media(
         now_season=(str(_geo.get("season") or "")
                     if cc.get("season_gate") else ""),
         home_country=(str(_geo.get("country") or "")
-                      if cc.get("place_gate") else ""))
+                      if cc.get("place_gate") else ""),
+        allow_random=_allow_random, suggest_ok=_suggest_ok,
+        required_scene_kind=_scene_kind, trace=_trace)
+    _picked = str((row or {}).get("id") or "-")
+    _fb = str(_trace.get("fallback") or "none")
+    if _fb not in ("none", "random"):
+        _fb = "none"
+    logger.info(
+        "[album_match] conv=%s query=%s candidates=%s picked=%s fallback=%s",
+        conv_key or "-",
+        str(peer_text or "").replace("\n", " ")[:80],
+        int(_trace.get("start") or 0),
+        _picked,
+        _fb,
+    )
+    if row is None and _ask:
+        note_album_miss(str(conv_key or ""), str(peer_text or ""),
+                        _scene_kind or _scene_cls or "")
+    return row
 
 
 def media_caption(row: Optional[Dict[str, Any]], lang: str = "", *, fallback: str = "") -> str:
@@ -1588,6 +1666,7 @@ __all__ = [
     "run_autosend_kline",
     "last_media_sent", "note_media_sent",
     "note_media_receipt", "last_media_receipt", "resolve_last_sent_media",
+    "note_album_miss", "consume_album_miss", "peek_album_miss",
     "record_image_sent", "record_image_fallback", "metrics_snapshot",
     "record_promise_event", "record_sent_claim_event",
     "image_gen_inflight",
