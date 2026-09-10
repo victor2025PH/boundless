@@ -928,12 +928,18 @@ def _echo_sent(item: Dict[str, Any], *, emit: Optional[Callable[[Dict[str, Any]]
         from src.integrations.protocol_bridge import emit_incoming as _emit
         emit = _emit
     from src.integrations.protocol_bridge import make_message
+    echo_id = str(item.get("external_id") or f"hb:{item['id']}")
     emit(make_message(platform=PLATFORM, account_id=account_id, chat_key=chat_key,
                       text=str(item["text"]), ts=float(item.get("acked_at") or time.time()),
-                      msg_id=str(item.get("external_id") or f"hb:{item['id']}"), direction="out",
+                      msg_id=echo_id, direction="out",
                       source={"source": SOURCE, "kind": str(item.get("kind") or KIND_COMMENT), "mode": MODE,
                               "handback_item": int(item["id"]), "comment_id": str(item.get("comment_id") or ""),
                               "video_id": str(item.get("video_id") or ""), "echo": True}))
+    try:
+        # TK-3 P2：补出来的回显也是「已发出」——带勾，别让老队列项 / 直入队的回复看起来像待真机
+        status_reporter(PLATFORM, account_id, chat_key, echo_id, "sent")
+    except Exception:
+        logger.debug("[tiktok-huoke] 回显升 sent 失败", exc_info=True)
 
 
 def _record_failed(item: Dict[str, Any], error: str, *, store: Any = None) -> str:
