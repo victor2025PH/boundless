@@ -50,6 +50,10 @@ function readLines(file) {
 }
 const rows = [...readLines(GW_LOG + ".1"), ...readLines(GW_LOG)];
 const byModel = new Map();
+// B5（2026-09-11）：真 token（route.ts 起落 pt/ct/cache_hit/cache_miss/purpose）——
+// 成本从「按字符估」变可对账；缓存命中率是 1M 档能不能用得起的唯一前提。
+const tok = { n: 0, pt: 0, ct: 0, hit: 0, miss: 0, reasoning: 0, in_chars: 0 };
+const byPurpose = new Map();
 let cooldowns = 0;
 let upstreamFail = 0;
 let backupHits = 0;
@@ -84,6 +88,23 @@ for (const ln of rows) {
     backupHits++;
   }
   byModel.set(m, slot);
+  // 真 usage 汇总（只算带 pt 的成功行；老流水无该字段自然不进）
+  const pt = Number(r.pt), ct = Number(r.ct);
+  if (r.ev === "chat" && Number.isFinite(pt) && pt > 0) {
+    tok.n++;
+    tok.pt += pt;
+    tok.ct += Number.isFinite(ct) ? ct : 0;
+    tok.hit += Number(r.cache_hit) || 0;
+    tok.miss += Number(r.cache_miss) || 0;
+    tok.reasoning += Number(r.reasoning) || 0;
+    tok.in_chars += Number(r.prompt_chars ?? r.in) || 0;
+    const pu = String(r.purpose || "unknown");
+    const ps = byPurpose.get(pu) || { n: 0, pt: 0, ct: 0 };
+    ps.n++;
+    ps.pt += pt;
+    ps.ct += Number.isFinite(ct) ? ct : 0;
+    byPurpose.set(pu, ps);
+  }
 }
 
 // ── 2. nginx 499 / 5xx ─────────────────────────────────────────────────────
@@ -142,6 +163,21 @@ const models = [...byModel.entries()]
   }))
   .sort((a, b) => b.n - a.n);
 const totalN = models.reduce((a, m) => a + m.n, 0);
+const tokens = {
+  calls_with_usage: tok.n,
+  prompt_tokens: tok.pt,
+  completion_tokens: tok.ct,
+  cache_hit_tokens: tok.hit,
+  cache_miss_tokens: tok.miss,
+  reasoning_tokens: tok.reasoning,
+  cache_hit_rate: tok.hit + tok.miss > 0 ? +(tok.hit / (tok.hit + tok.miss)).toFixed(4) : null,
+  tokens_per_char: tok.in_chars > 0 ? +(tok.pt / tok.in_chars).toFixed(3) : null,
+  prompt_per_call: tok.n ? Math.round(tok.pt / tok.n) : 0,
+  by_purpose: [...byPurpose.entries()]
+    .map(([purpose, s]) => ({ purpose, n: s.n, prompt_tokens: s.pt, completion_tokens: s.ct,
+      share: tok.pt + tok.ct ? +((s.pt + s.ct) / (tok.pt + tok.ct)).toFixed(4) : 0 }))
+    .sort((a, b) => b.prompt_tokens + b.completion_tokens - a.prompt_tokens - a.completion_tokens),
+};
 const out = {
   window_h: HOURS,
   generated_at: new Date(NOW).toISOString(),
@@ -151,6 +187,7 @@ const out = {
   cooldowns,
   backup_hits: backupHits,
   models,
+  tokens,
   nginx: {
     ...ng,
     rate_499: ng.total ? +(ng.s499 / ng.total).toFixed(4) : null,
@@ -166,7 +203,13 @@ const modelLine = models.length
 const nginxLine = ng.available
   ? `nginx: total=${ng.total} 499=${ng.s499} (${pc(out.nginx.rate_499)}) 5xx=${ng.s5xx} (${pc(out.nginx.rate_5xx)})`
   : "nginx: n/a (access.log unreadable)";
-const oneLine = `[ai-gw ${HOURS}h] calls=${totalN} upstream_fail=${upstreamFail} cooldowns=${cooldowns} | ${modelLine} | ${nginxLine}`;
+const fmtK = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
+const tokenLine = tokens.calls_with_usage
+  ? `tokens: in=${fmtK(tokens.prompt_tokens)} out=${fmtK(tokens.completion_tokens)} cache_hit=${pc(tokens.cache_hit_rate)} ` +
+    `in/call=${tokens.prompt_per_call}${tokens.reasoning_tokens ? ` reasoning=${fmtK(tokens.reasoning_tokens)}` : ""} | ` +
+    tokens.by_purpose.slice(0, 5).map((p) => `${p.purpose}=${pc(p.share)}`).join(" ")
+  : "tokens: n/a (流水尚无 usage 字段)";
+const oneLine = `[ai-gw ${HOURS}h] calls=${totalN} upstream_fail=${upstreamFail} cooldowns=${cooldowns} | ${modelLine} | ${tokenLine} | ${nginxLine}`;
 
 if (flag("--json")) {
   console.log(JSON.stringify(out, null, 2));
@@ -177,6 +220,14 @@ if (flag("--json")) {
     console.log(`· ${m.model}：n=${m.n} 成功 ${pc(m.ok_rate)} p50 ${sec(m.p50_ms)} p95 ${sec(m.p95_ms)} 最慢 ${sec(m.max_ms)} 超40s ${m.over_40s} 次 prompt中位 ${m.prompt_chars_p50} 字`);
   }
   if (!models.length) console.log("· 窗口内无 chat 调用");
+  if (tokens.calls_with_usage) {
+    console.log(
+      `· 真 token：输入 ${fmtK(tokens.prompt_tokens)} · 输出 ${fmtK(tokens.completion_tokens)} · 缓存命中 ${pc(tokens.cache_hit_rate)}` +
+      ` · 每次 prompt ${tokens.prompt_per_call} tok（${tokens.tokens_per_char ?? "?"} tok/字）` +
+      (tokens.reasoning_tokens ? ` · 思维链 ${fmtK(tokens.reasoning_tokens)}` : "")
+    );
+    console.log("· 按用途：" + tokens.by_purpose.map((p) => `${p.purpose} ${pc(p.share)}（${p.n} 次）`).join(" · "));
+  }
   console.log(
     ng.available
       ? `· nginx：${ng.total} 次 · 499（客户端先断）${ng.s499} 次 = ${pc(out.nginx.rate_499)} · 5xx ${ng.s5xx} 次 = ${pc(out.nginx.rate_5xx)}`

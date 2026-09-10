@@ -4,6 +4,7 @@ import {
   VISION_CHAR_COST,
   consumeQuota,
   estimateRequestChars,
+  extractUsage,
   gatewayEnabled,
   isVisionModel,
   logGateway,
@@ -11,6 +12,7 @@ import {
   proxyChatCompletionsEx,
   proxyVision,
   quotaSnapshot,
+  sanitizePurpose,
   shouldAlertVisionOverflow,
   verifyDeviceToken,
   visionContextOverflow,
@@ -157,13 +159,18 @@ export async function POST(req: NextRequest) {
 
     const text = await upstream.text();
     let outChars = 0;
+    // B5（2026-09-11）：真 token 用量（含 DeepSeek 缓存命中/未命中、思维链 tokens）
+    // 与客户端申报用途一并落流水——成本从「按字符估」变成可对账，缓存命中率可见。
+    let usage = extractUsage(null);
     try {
       const j = JSON.parse(text);
       const c = j?.choices?.[0]?.message?.content;
       if (typeof c === "string") outChars = c.length;
+      usage = extractUsage(j);
     } catch {
       /* ignore */
     }
+    const purpose = sanitizePurpose(req.headers.get("x-chatx-purpose"));
 
     if (vision) {
       const ovf = visionContextOverflow(upstream.status, text);
@@ -195,6 +202,10 @@ export async function POST(req: NextRequest) {
       ...(vision
         ? { vision: 1 }
         : { model: choice?.model || reqModel, key: choice?.key || "primary", prompt_chars: inChars }),
+      // 真 usage（上游未回 usage 时全 0，与「无字段」可区分：pt/ct 同为 0 且 ok=1 即上游没给）
+      pt: usage.pt, ct: usage.ct, cache_hit: usage.cache_hit, cache_miss: usage.cache_miss,
+      ...(usage.reasoning ? { reasoning: usage.reasoning } : {}),
+      ...(purpose ? { purpose } : {}),
     });
 
     return new NextResponse(text, {

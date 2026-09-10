@@ -228,6 +228,26 @@ async function main() {
   assert.equal(gw.gatewayEnabled(), true);
   (process.env as Record<string, string | undefined>).NODE_ENV = oldEnv;
 
+  // ── B5：真 usage 抽取 + 用途白名单（2026-09-11）──
+  const u = gw.extractUsage({
+    usage: {
+      prompt_tokens: 5120, completion_tokens: 37,
+      prompt_cache_hit_tokens: 4096, prompt_cache_miss_tokens: 1024,
+      completion_tokens_details: { reasoning_tokens: 0 },
+    },
+  });
+  assert.deepEqual(u, { pt: 5120, ct: 37, cache_hit: 4096, cache_miss: 1024, reasoning: 0 });
+  // 硅基 / 其他厂商无缓存字段 → 0；非法形状 → 全 0；负数 / 非数字 → 0
+  assert.deepEqual(gw.extractUsage({ usage: { prompt_tokens: "12", completion_tokens: -3 } }),
+    { pt: 12, ct: 0, cache_hit: 0, cache_miss: 0, reasoning: 0 });
+  assert.deepEqual(gw.extractUsage(null), { pt: 0, ct: 0, cache_hit: 0, cache_miss: 0, reasoning: 0 });
+  assert.deepEqual(gw.extractUsage({ choices: [] }), { pt: 0, ct: 0, cache_hit: 0, cache_miss: 0, reasoning: 0 });
+  assert.equal(gw.sanitizePurpose("customer_reply"), "customer_reply");
+  assert.equal(gw.sanitizePurpose(" Memory_Extract "), "memory_extract");
+  assert.equal(gw.sanitizePurpose("drop table"), "");
+  assert.equal(gw.sanitizePurpose(null), "");
+  assert.ok(gw.KNOWN_PURPOSES.has("tool") && gw.KNOWN_PURPOSES.has("translate"));
+
   console.log("ai-gateway.test.ts OK");
 }
 

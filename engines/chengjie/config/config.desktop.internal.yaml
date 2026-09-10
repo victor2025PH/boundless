@@ -718,10 +718,12 @@ companion:
     dry_run: true
     interval_sec: 300
     llm_extract:
-      shadow: true
+      # 2026-09-11 用量分析（B4）：影子扫描是纯实验流量（只写 jsonl 对照，不进产品），
+      # 此前随包全开＝每条入站多一次 LLM（198 实测 5.1k 字换 15 字），全队 token 的
+      # 16.9% 来自这类工具调用。实验样本留 117 生产实例一台采即可；客户/坐席包默认关。
+      shadow: false
       daily_budget: 150
-      # v1.005：影子扫描范围=全量会话（与生产一致）
-      scan_gate: all
+      scan_gate: time_like
   # 客户侧时钟（时空一致性：对方当地时间事实行 + 时差桥 + 出站星期守卫）
   user_clock:
     enabled: true

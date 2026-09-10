@@ -608,6 +608,74 @@ def ground_slots(user_msg: str, slots: Dict[str, Dict[str, str]]) -> Tuple[Dict[
     return kept, dropped
 
 
+# ── B4（2026-09-11 用量分析）：抽取前的相关性闸门 ─────────────────────────────
+# 合并抽取此前对**每条**入站都跑一次 LLM（「hi」也带 6k 字 prompt 去问「有什么事实」），
+# 198 坐席实测一条消息 3 次 LLM 里它占一次、返回多为空。这里只拦「不可能含事实」的
+# 形态：纯表情/标点、招呼与应答词（含尾随标点/表情）。判据刻意保守——「我是Tom」
+# 「叫我小明」这类 4 字自我介绍必须放行；宁可多抽一次，不能漏记名字。
+_LOW_INFO_MAX_LEN = 16
+_LOW_INFO_TRAIL_RE = re.compile(r"[\s\.,!?~…。，！？～、:：;；'\"“”‘’()（）\-—_*#]+$")
+_LOW_INFO_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F2FF\uFE0F\u200D]+")
+_LOW_INFO_TOKENS = frozenset({
+    # en
+    "hi", "hii", "hiii", "hello", "hey", "heyy", "yo", "ok", "okay", "okk", "k", "kk",
+    "thanks", "thank you", "thx", "ty", "tks", "yes", "yea", "yeah", "yep", "yup", "no",
+    "nope", "sure", "fine", "good", "great", "nice", "cool", "lol", "haha", "hahaha",
+    "morning", "good morning", "gm", "good night", "gn", "night", "good evening",
+    "good afternoon", "bye", "byee", "see you", "see ya", "cya", "brb", "hmm", "hm", "oh",
+    "ohh", "wow", "i see", "got it", "noted", "np", "u", "you", "me", "and you",
+    "how are you", "how are u", "what's up", "whats up", "sup",
+    # zh
+    "嗯", "嗯嗯", "嗯嗯嗯", "哦", "哦哦", "噢", "喔", "好", "好的", "好呀", "好啊", "好好", "好滴",
+    "行", "行的", "可以", "可", "哈哈", "哈哈哈", "哈哈哈哈", "嘻嘻", "呵呵", "嘿嘿", "谢谢",
+    "谢啦", "多谢", "感谢", "谢谢你", "早", "早安", "早上好", "早啊", "晚安", "晚上好", "中午好",
+    "下午好", "在吗", "在不在", "在", "在的", "在呢", "收到", "了解", "明白", "知道了", "好吧",
+    "是的", "是", "对", "对的", "对啊", "不是", "不", "没有", "没", "没事", "拜拜", "再见",
+    "你好", "您好", "哈喽", "嗨", "hi呀", "你呢", "呢", "啊", "嗯呢", "哦好", "好哦",
+    # ja / ko / es / th / vi（问候与应答，常见形）
+    "こんにちは", "おはよう", "おはようございます", "こんばんは", "おやすみ", "ありがとう",
+    "はい", "うん", "そうだね", "ok了", "안녕", "안녕하세요", "네", "응", "고마워", "감사합니다",
+    "hola", "gracias", "vale", "si", "sí", "buenos días", "buenas noches", "สวัสดี",
+    "ขอบคุณ", "ครับ", "ค่ะ", "xin chào", "cảm ơn", "ok nhé", "dạ", "vâng",
+})
+
+
+def low_information_message(text: str) -> str:
+    """返回「不值得抽取」的原因（空串 = 正常抽取）。纯函数，绝不抛。
+
+    ``no_text``：去掉表情/标点后没有任何字母、数字或 CJK；
+    ``greeting_ack``：整条消息（去尾随标点/表情、折叠重复）是招呼 / 应答 / 语气词，
+    且长度 ≤ :data:`_LOW_INFO_MAX_LEN`。含数字、@、URL、连字符姓名等一律放行。
+    """
+    try:
+        s = str(text or "").strip()
+        if not s:
+            return "no_text"
+        core = _LOW_INFO_EMOJI_RE.sub("", s)
+        core = _LOW_INFO_TRAIL_RE.sub("", core).strip()
+        if not core or not re.search(r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af"
+                                     r"\u0e00-\u0e7f\u00c0-\u024f]", core):
+            return "no_text"
+        if len(core) > _LOW_INFO_MAX_LEN or re.search(r"[0-9@/]", core):
+            return ""
+        low = re.sub(r"\s+", " ", core.lower())
+        if low in _LOW_INFO_TOKENS:
+            return "greeting_ack"
+        # 「哈哈哈哈哈」「嗯嗯嗯嗯」「okok」「hiii」类重复：折叠成 ≤2 连字再比对
+        folded = re.sub(r"(.)\1{2,}", r"\1\1", low)
+        if folded in _LOW_INFO_TOKENS or re.fullmatch(r"(哈|嘿|呵|嘻|嗯|哦|噢|啊|呀|哇|呜)+", folded):
+            return "greeting_ack"
+        # 多个应答词并列（「好的 谢谢」「ok thanks」「嗯嗯 好」）
+        parts = [p for p in re.split(r"[\s,，。!！?？~～]+", low) if p]
+        if 1 < len(parts) <= 3 and all(p in _LOW_INFO_TOKENS for p in parts):
+            return "greeting_ack"
+        return ""
+    except Exception:
+        logger.debug("[extract] low_information 判定异常（按可抽取放行）", exc_info=True)
+        return ""
+
+
 async def extract_facts_and_slots(ai_client: Any, user_msg: str, reply: str, *,
                                   slots: Optional[List[Dict[str, Any]]] = None,
                                   timeout: float = _LLM_TIMEOUT) -> Dict[str, Any]:
@@ -625,6 +693,12 @@ async def extract_facts_and_slots(ai_client: Any, user_msg: str, reply: str, *,
     a = str(reply or "").strip()
     if len(u) < 2 or ai_client is None or not callable(getattr(ai_client, "chat", None)):
         return empty
+    _low = low_information_message(u)
+    if _low:
+        logger.debug("[extract] skipped: low_information=%s len=%d", _low, len(u))
+        out_skip: Dict[str, Any] = dict(empty)
+        out_skip["skipped"] = _low
+        return out_skip
     try:
         cb_until = float(getattr(ai_client, "_cb_open_until", 0) or 0)
         if getattr(ai_client, "_cb_enabled", False) and cb_until > 0 and time.time() < cb_until:
@@ -784,7 +858,8 @@ __all__ = [
     "SCHEMA_VERSION", "SOURCES", "STATUSES", "STALL_THRESHOLD",
     "apply", "bind_app", "build_merged_prompt", "confirm", "conversation_nickname",
     "export_profile", "extract_facts_and_slots", "ground_slots", "import_profile",
-    "is_new_schema", "llm_extract_enabled", "make_cell", "nickname_prefill", "normalize_cell",
+    "is_new_schema", "llm_extract_enabled", "low_information_message", "make_cell",
+    "nickname_prefill", "normalize_cell",
     "notify_conflict", "parse_merged", "record_extract_result", "reject", "reset_stall",
     "run_extraction", "slot_table", "stall_status", "upgrade_fields",
 ]

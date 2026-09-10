@@ -1128,7 +1128,14 @@ class CareDispatcher:
                 goal_block=str(extras.get("goal_block") or ""),
                 profile_block=pblock)
             try:
-                reply = (await self._ai.chat(prompt) or "").strip()
+                # 计量口径（B2 2026-09-11）：真发的关怀是发给客户的 AI 消息 → customer_reply
+                # 记 ai_reply；dry_run 只是采样，按 tool 用途不计费（此前 dry_run 也扣）。
+                try:
+                    from src.ai.llm_cost import purpose_scope
+                except ImportError:   # 旧版 llm_cost 无用途作用域：不归因，行为同旧
+                    from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
+                with purpose_scope("tool" if self.effective_dry_run() else "customer_reply"):
+                    reply = (await self._ai.chat(prompt) or "").strip()
             except Exception:
                 logger.warning("care LLM 失败 id=%s", sid, exc_info=True)
                 _r(decision="failed", reason="llm_error")

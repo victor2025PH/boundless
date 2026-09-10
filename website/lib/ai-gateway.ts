@@ -960,6 +960,56 @@ export function estimateRequestChars(body: unknown): number {
   }
 }
 
+// ── 真 token 用量 + 用途（B5，2026-09-11 用量分析）─────────────────────────────
+// 此前流水只有字符数：成本只能按「0.57 token/字」估、缓存命中率完全不可见（DeepSeek
+// 命中价约为未命中的 2%，1M 档能不能用得起全看它），用途（回复 / 抽取 / 短判）只能按
+// prompt 体量猜。上游响应 JSON 本就带 usage，这里原样抽出；客户端 ai_client 随请求带
+// X-ChatX-Purpose（白名单值），网关只落流水、不参与鉴权与计额。
+
+export type UpstreamUsage = {
+  /** prompt / completion tokens（缺省 0） */
+  pt: number;
+  ct: number;
+  /** DeepSeek 前缀缓存命中 / 未命中 tokens（其他厂商无此字段 → 0） */
+  cache_hit: number;
+  cache_miss: number;
+  /** 思维链 tokens（reasoning_tokens；关思考时应恒 0） */
+  reasoning: number;
+};
+
+/** 从上游响应 JSON 抽 usage；非对象 / 无 usage → 全 0（绝不抛）。 */
+export function extractUsage(j: unknown): UpstreamUsage {
+  const out: UpstreamUsage = { pt: 0, ct: 0, cache_hit: 0, cache_miss: 0, reasoning: 0 };
+  try {
+    const u = (j as { usage?: Record<string, unknown> } | null)?.usage;
+    if (!u || typeof u !== "object") return out;
+    const num = (v: unknown): number => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    };
+    out.pt = num(u.prompt_tokens);
+    out.ct = num(u.completion_tokens);
+    out.cache_hit = num(u.prompt_cache_hit_tokens);
+    out.cache_miss = num(u.prompt_cache_miss_tokens);
+    const det = u.completion_tokens_details as Record<string, unknown> | undefined;
+    if (det && typeof det === "object") out.reasoning = num(det.reasoning_tokens);
+  } catch {
+    /* 观测字段，任何形状问题都按 0 */
+  }
+  return out;
+}
+
+/** 客户端用途白名单（与引擎 src/ai/llm_cost.py KNOWN_PURPOSES 同表）；不在表内 → ""。 */
+export const KNOWN_PURPOSES = new Set([
+  "customer_reply", "drill", "memory_extract", "translate", "assistant", "kb", "vision",
+  "probe", "eval", "tool", "colloquial", "persona", "unknown",
+]);
+
+export function sanitizePurpose(raw: unknown): string {
+  const s = String(raw || "").trim().toLowerCase().slice(0, 32);
+  return KNOWN_PURPOSES.has(s) ? s : "";
+}
+
 /** 观测流水（JSONL，绝不写消息内容——只有量级与状态）。超 10MB 轮转一份 .1。 */
 export async function logGateway(rec: Record<string, unknown>): Promise<void> {
   try {

@@ -1059,7 +1059,13 @@ async def _generate_persona_reply_impl(
             "只输出回复正文。\n\n对话：\n" + "\n".join(lines) + "\n\n我的回复："
         )
         try:
-            reply = await ai.chat(prompt)
+            # 兜底稿也是发给客户的回复：计量口径 customer_reply（chat() 默认 tool 不计费）
+            try:
+                from src.ai.llm_cost import purpose_scope
+            except ImportError:   # 旧版 llm_cost 无用途作用域：行为同旧
+                from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
+            with purpose_scope("customer_reply"):
+                reply = await ai.chat(prompt)
             if reply:
                 _gen_path = "fallback"
         except Exception:
@@ -1503,7 +1509,12 @@ async def generate_topic_opener(
             + ("\n\n最近的对话（供参考）：\n" + "\n".join(lines) if lines else "")
         )
         try:
-            reply = await ai.chat(prompt)
+            try:
+                from src.ai.llm_cost import purpose_scope
+            except ImportError:
+                from contextlib import nullcontext as purpose_scope  # type: ignore[assignment]
+            with purpose_scope("customer_reply"):
+                reply = await ai.chat(prompt)
         except Exception:
             logger.debug("[persona_reply] opener 兜底失败", exc_info=True)
             reply = None
