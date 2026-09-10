@@ -1188,6 +1188,7 @@ class DraftService:
             except Exception:
                 logger.debug("auto_generate_draft commitment_guard 失败（忽略）", exc_info=True)
                 _cmt = None
+            risk_level, _peer_reasons, _adult = __import__("src.inbox.adult_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, {"conversation_id": conv_id, "platform": platform, "account_id": account_id, "chat_key": chat_key}, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None)  # Q-15 #271：成人内容四级——mention/flirt 不转人工（medium shadow=adult_flirt）；explicit/pressure 按人设 adult_policy 软回应 / 打标 adult:<level>（钩子内自吞异常，原判定放行）
             # 档位**只认** autosend_policy.decide（#160 v2：shadow 下风险不降档，
             # 「本会被扣」进影子台账；review/manual 档由会话档位自身决定，与风险无关）
             _decision = policy_decide(
