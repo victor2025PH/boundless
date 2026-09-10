@@ -166,11 +166,34 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
                              "shop_site": caps["shop_site"], "alternatives": caps["alternatives"]})
     except Exception:
         logger.debug("[onboarding] 读取 TikTok 账号失败", exc_info=True)
+    # TK-3 E2：个人号页签数据（真机桥 / 网页边车）。官方私信 implemented=False 不变；
+    # 两路皆非官方 → notice_unofficial。网页边车阶段 1 未开工，只占位。
+    personal: Dict[str, Any] = {"bridge_enabled": False, "accounts": [], "notice": "notice_unofficial"}
+    try:
+        from src.integrations.tiktok_huoke_bridge import bridge_cfg, bridge_enabled, get_state_store, report_health
+        hb = bridge_cfg(_config(request))
+        personal["bridge_enabled"] = bool(hb["enabled"])
+        if hb["enabled"]:
+            st = get_state_store(hb["state_db_path"] or None)
+            now = time.time()
+            personal["accounts"] = [
+                {"account_id": a["account_id"], "device_id": a.get("device_id") or "",
+                 "username": a.get("username") or "", "timezone": a.get("timezone") or "",
+                 "health": report_health(st, a["account_id"], now=now),
+                 "last_seen_ts": float(a.get("last_seen_ts") or 0)}
+                for a in st.accounts()
+            ]
+    except Exception:
+        logger.debug("[onboarding] TikTok 真机桥面板跳过", exc_info=True)
     return {"has_app_id": bool(cfg["app_id"]), "has_secret": bool(cfg["secret"]), "enabled": cfg["enabled"],
             "app_id": cfg["app_id"], "secret_masked": _mask(cfg["secret"]),
             "webhook_url": f"{base}{cfg['webhook_path']}" if base else cfg["webhook_path"],
             "callback_url": f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}" if base else DEFAULT_OAUTH_CALLBACK_PATH,
-            "accounts": accounts}
+            "accounts": accounts,
+            "tabs": ["official", "personal_rpa", "web"],
+            "personal_rpa": personal,
+            "web": {"enabled": False, "phase": "assistOnly", "notice": "notice_unofficial",
+                    "ready": False, "hint": "网页托管边车阶段 1 未开工（TK-3 ②-A）"}}
 
 
 def _route_mounted(request: Request, path: str, method: str = "POST") -> bool:

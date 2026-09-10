@@ -217,7 +217,9 @@ _SPECS: Tuple[PlatformSpec, ...] = (
         msg_id_fields=("message_id", "msg_id"),
         console_url="https://business-api.tiktok.com/", facts_label="TikTok", sort=85,
         aliases=("tt", "trill", "musically"),
-        note="指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region",
+        note="指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region。"
+             "TK-3：personal_rpa＝huoke 真机私信（非官方 notice_unofficial，默认关）；"
+             "web＝网页托管边车（阶段 1 未开工）。个人号无私信官方接口，implemented=False 不变",
     ),
 )
 

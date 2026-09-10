@@ -298,7 +298,7 @@
       "facts_label": "TikTok",
       "icon": "tiktok",
       "sort": 85,
-      "note": "指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region"
+      "note": "指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region。TK-3：personal_rpa＝huoke 真机私信（非官方 notice_unofficial，默认关）；web＝网页托管边车（阶段 1 未开工）。个人号无私信官方接口，implemented=False 不变"
     },
     {
       "id": "web",
