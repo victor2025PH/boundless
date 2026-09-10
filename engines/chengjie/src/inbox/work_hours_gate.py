@@ -33,8 +33,11 @@ B 线 autosend / 协议号直发三条出口 7×24 秒回，既是拟人破绽�
 
     inbox:
       work_schedule:
-        enabled: false
-        timezone: ""            # 班表时区（IANA 名，如 Asia/Shanghai；空=服务器本地钟）
+        enabled: false          # 出厂关（1.0.79 D-Q1 撤回 1.0.78 的基线 true）
+        timezone: ""            # 班表时区（IANA 名）。**开启班表时必填**（reply_settings
+                                # 保存校验 tz_required）——按谁的作息就填谁的时区；空值
+                                # 只是运行时 fail-open 回落服务器本地钟，不再是产品默认
+                                # （1.0.78：上海机器把纽约客户的下午当凌晨扣住，D-Q1）
         default:                # 全局默认班表
           workdays: [1,2,3,4,5,6,7]   # ISO 周几（1=周一..7=周日）；空/缺省=每天
           start: "09:00"
@@ -45,7 +48,10 @@ B 线 autosend / 协议号直发三条出口 7×24 秒回，既是拟人破绽�
         off_hours:
           generate_drafts: true # 休息期是否仍拟稿（人可介入 + 危机可见）
           catch_up: true        # 复班后补觉投递被扣住的稿
-          catch_up_regenerate_hours: 2  # 稿龄超此值 → 重生成再发（防内容穿帮）
+          catch_up_regenerate_hours: 0  # 复班重拟阈值（小时）。**0（默认）= 过夜积压
+                                        # 全部作废重写**（凌晨拟的稿早上原样发必穿帮）；
+                                        # >0 = 只重拟稿龄超过 N 小时的（Q-4 #267，
+                                        # 判定见 catch_up_regen_due）
         accounts:               # 账号覆写（键 = "platform:account_id"）
           "telegram:default": { start: "10:00", end: "02:00" }
           # 账号亦可 enabled:false = 该账号豁免班表（全天候）
@@ -160,18 +166,140 @@ def resolve_entry(ws: Any, platform: str, account_id: str) -> Dict[str, Any]:
 
 
 def off_hours_cfg(ws: Any) -> Dict[str, Any]:
-    """``off_hours`` 行为块（休息期拟稿 / 复班补觉）归一化读取。"""
+    """``off_hours`` 行为块（休息期拟稿 / 复班补觉）归一化读取。
+
+    Q-4（#267）起 ``catch_up_regenerate_hours`` 默认 **0 = 过夜积压全部作废重写**
+    （``catch_up_regenerate_all=True``）；>0 才是「只重拟稿龄超 N 小时的」。
+    坏值（非数字）按默认 0 处理——宁多重拟不发陈稿。
+    """
     node = ws.get("off_hours") if isinstance(ws, Mapping) else None
     oh = node if isinstance(node, Mapping) else {}
     try:
-        regen_h = float(oh.get("catch_up_regenerate_hours", 2) or 0)
+        regen_h = float(oh.get("catch_up_regenerate_hours", 0) or 0)
     except (TypeError, ValueError):
-        regen_h = 2.0
+        regen_h = 0.0
+    regen_h = max(0.0, regen_h)
     return {
         "generate_drafts": bool(oh.get("generate_drafts", True)),
         "catch_up": bool(oh.get("catch_up", True)),
-        "catch_up_regenerate_hours": max(0.0, regen_h),
+        "catch_up_regenerate_hours": regen_h,
+        "catch_up_regenerate_all": regen_h <= 0.0,
     }
+
+
+def catch_up_regen_due(
+    oh: Mapping[str, Any], draft_ts: float, now_ts: Optional[float] = None,
+    shift_started_ts: float = 0.0,
+) -> bool:
+    """复班补觉：这张扣留稿该不该作废重拟（AutosendWorker 投递前调，Q-4 #267）。
+
+    - ``catch_up`` 关 → False。
+    - ``catch_up_regenerate_all``（阈值 0，默认）→ 稿拟于**本班次开始之前**
+      （``draft_ts < shift_started_ts``，即过夜积压）就重拟；``shift_started_ts``
+      拿不到（0）时退化为「稿龄 > 0 即重拟」**不成立**——没有班次锚点无法区分
+      「过夜稿」与「刚拟的稿」，宁发陈稿不空转（铁律：判不出就不作废）。
+    - 阈值 >0 → 稿龄超过 N 小时才重拟（老语义）。
+    ``draft_ts`` ≤0 一律 False。
+    """
+    try:
+        if not oh or not bool(oh.get("catch_up", True)):
+            return False
+        d_ts = float(draft_ts or 0)
+        if d_ts <= 0:
+            return False
+        now = float(now_ts if now_ts is not None else time.time())
+        regen_h = float(oh.get("catch_up_regenerate_hours") or 0)
+        if regen_h > 0:
+            return now - d_ts > regen_h * 3600.0
+        if bool(oh.get("catch_up_regenerate_all", regen_h <= 0)):
+            anchor = float(shift_started_ts or 0)
+            return anchor > 0 and d_ts < anchor
+        return False
+    except Exception:
+        return False
+
+
+# ── 休息期扣留：日志 + 会话标签（Q-4 #267 D-Q1）────────────────────────────
+
+# 会话列表「作息外」显示标签：读侧计算、按界面语言取词，**不落库**——写标签接口
+# （PUT tags / 批量 set）用 strip_off_hours_hold_tags 剥掉，防前端整表回写把它钉死。
+OFF_HOURS_HOLD_TAG_KEY = "inbox.conv.off_hours_hold"
+OFF_HOURS_HOLD_TAG_ZH = "作息外 · 到点重新拟稿"
+# 单进程内同一会话同一「到点」只打一条 hold 日志（休息期每条入站都会命中，逐条打
+# 是刷屏；但复班后再次休息 until 变了要重新打）。
+_hold_logged: Dict[str, float] = {}
+
+
+def off_hours_hold_info(
+    ws: Any, platform: str, account_id: str, now_ts: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """账号此刻是否处于「休息期扣留」：是 → ``{until_hhmm, until_ts, tz, now_local}``，
+    否 → None。口径＝ ``schedule_state``（与闸门同源），危机豁免不在此判（这是
+    「账号状态」不是「这条消息放不放」）。fail-open：异常 → None（不标不打）。"""
+    try:
+        st = schedule_state(ws, platform, account_id, now_ts=now_ts)
+        if not st.get("gated") or st.get("in_hours", True):
+            return None
+        until_ts = float(st.get("next_change_ts") or 0)
+        tz_name = str(st.get("timezone") or "local")
+        until_hhmm = ""
+        if until_ts > 0:
+            tz = _resolve_tz("" if tz_name == "local" else tz_name)
+            until_hhmm = _local_wall(until_ts, tz).strftime("%H:%M")
+        return {
+            "until_hhmm": until_hhmm, "until_ts": until_ts, "tz": tz_name,
+            "now_local": str(st.get("now_local") or ""),
+        }
+    except Exception:
+        logger.debug("[work-schedule] hold_info 异常（按不扣留）", exc_info=True)
+        return None
+
+
+def log_off_hours_hold(
+    conversation_id: str, ws: Any, platform: str, account_id: str,
+    now_ts: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """休息期扣留落日志（Q-4 #267 D-Q1）：
+    ``[work_schedule] hold=off_hours conv=<cid> until=<hh:mm> tz=<tz>``。
+    同会话同一 until 只打一次；返回 hold_info（None=此刻不在扣留期）。"""
+    info = off_hours_hold_info(ws, platform, account_id, now_ts=now_ts)
+    if info is None:
+        return None
+    key = str(conversation_id or "")
+    stamp = float(info.get("until_ts") or 0)
+    if _hold_logged.get(key) == stamp:
+        return info
+    _hold_logged[key] = stamp
+    if len(_hold_logged) > 5000:
+        for k in list(_hold_logged)[:1000]:
+            _hold_logged.pop(k, None)
+    logger.info(
+        "[work_schedule] hold=off_hours conv=%s until=%s tz=%s",
+        key, info.get("until_hhmm") or "?", info.get("tz") or "local")
+    return info
+
+
+def off_hours_hold_tag_labels() -> List[str]:
+    """标签在所有 UI 语言下的显示文案（剥离用）；i18n 不可用时只剩简体常量。"""
+    labels = [OFF_HOURS_HOLD_TAG_ZH]
+    try:
+        from src.web import web_i18n as _wi
+        for lang in list(getattr(_wi, "_MERGED", {}).keys()):
+            s = _wi.get_translations(lang).get(OFF_HOURS_HOLD_TAG_KEY)
+            if s and s not in labels:
+                labels.append(str(s))
+    except Exception:
+        pass
+    return labels
+
+
+def strip_off_hours_hold_tags(tags: Any) -> List[str]:
+    """从待写入的标签列表里剥掉读侧计算的「作息外」标签（任何语言）。"""
+    try:
+        drop = set(off_hours_hold_tag_labels())
+        return [str(t) for t in (tags or []) if str(t) not in drop]
+    except Exception:
+        return [str(t) for t in (tags or [])]
 
 
 # ── 时钟与班次区间 ──────────────────────────────────────────

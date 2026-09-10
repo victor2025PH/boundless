@@ -294,9 +294,10 @@ def test_work_schedule_cfg_dig():
 
 def test_off_hours_cfg_defaults_and_overrides():
     d = off_hours_cfg({})
+    # Q-4（#267）：默认 0 = 过夜积压全部作废重写
     assert d == {
         "generate_drafts": True, "catch_up": True,
-        "catch_up_regenerate_hours": 2.0,
+        "catch_up_regenerate_hours": 0.0, "catch_up_regenerate_all": True,
     }
     o = off_hours_cfg({"off_hours": {
         "generate_drafts": False, "catch_up": False,
@@ -305,8 +306,9 @@ def test_off_hours_cfg_defaults_and_overrides():
     assert o["generate_drafts"] is False
     assert o["catch_up"] is False
     assert o["catch_up_regenerate_hours"] == 6.0
+    assert o["catch_up_regenerate_all"] is False
     assert off_hours_cfg({"off_hours": {
-        "catch_up_regenerate_hours": "bad"}})["catch_up_regenerate_hours"] == 2.0
+        "catch_up_regenerate_hours": "bad"}})["catch_up_regenerate_hours"] == 0.0
 
 
 def test_workdays_empty_means_all_days():

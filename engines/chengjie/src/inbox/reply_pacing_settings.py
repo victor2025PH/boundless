@@ -218,8 +218,9 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "inbox.work_schedule.off_hours.catch_up": {
         "type": "bool", "default": True, "hot": True,
     },
+    # Q-4（#267）：默认 0 = 过夜积压全部作废重写；>0 = 只重拟稿龄超 N 小时的
     "inbox.work_schedule.off_hours.catch_up_regenerate_hours": {
-        "type": "number", "lo": 0, "hi": 48, "default": 2, "hot": True,
+        "type": "number", "lo": 0, "hi": 48, "default": 0, "hot": True,
     },
     # 账号班表覆写：{"platform:account_id": {enabled?/workdays?/start?/end?/
     # timezone?}} 整表提交（缺席=删除，走 REPLACE_PATHS 整树替换）。

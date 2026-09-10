@@ -760,6 +760,49 @@ def _enrich_chat_list(request: Request, chats: List[Dict[str, Any]], *, config_m
         logger.debug("会话列表 tags 加载失败（已忽略）", exc_info=True)
 
     try:
+        # Q-4（#267 D-Q1）休息期扣留可视：账号在班表休息期 ∧ 会话有 pending 草稿
+        # → 行上挂 off_hours_hold{until_hhmm,tz} + 读侧计算标签「作息外 · 到点重新拟稿」
+        # （按请求语言取词，**不落库**——写标签接口用 strip_off_hours_hold_tags 剥掉）。
+        # 班表关（出厂默认）时整段零开销；按账号记忆 schedule_state，单次 IN 查 pending。
+        _ws_cfg_full = (getattr(config_manager, "config", None) or {})
+        from src.inbox.work_hours_gate import (
+            OFF_HOURS_HOLD_TAG_KEY, OFF_HOURS_HOLD_TAG_ZH,
+            off_hours_hold_info, work_schedule_cfg,
+        )
+        _ws = work_schedule_cfg(_ws_cfg_full)
+        ibx_ws = _inbox_store(request) if _ws.get("enabled") and chats else None
+        if ibx_ws is not None and hasattr(ibx_ws, "conversations_with_pending_drafts"):
+            _hold_memo: Dict[tuple, Any] = {}
+            _held_rows = []
+            for c in chats:
+                acct_key = (str(c.get("platform") or ""),
+                            str(c.get("account_id") or "default"))
+                if acct_key not in _hold_memo:
+                    _hold_memo[acct_key] = off_hours_hold_info(_ws, *acct_key)
+                if _hold_memo[acct_key]:
+                    _held_rows.append(c)
+            if _held_rows:
+                pending_set = ibx_ws.conversations_with_pending_drafts(
+                    [str(c.get("conversation_id") or "") for c in _held_rows])
+                tag_label = tr(request, OFF_HOURS_HOLD_TAG_KEY, OFF_HOURS_HOLD_TAG_ZH)
+                for c in _held_rows:
+                    if str(c.get("conversation_id") or "") not in pending_set:
+                        continue
+                    info = _hold_memo[(str(c.get("platform") or ""),
+                                       str(c.get("account_id") or "default"))]
+                    c["off_hours_hold"] = {
+                        "until_hhmm": info.get("until_hhmm", ""),
+                        "until_ts": info.get("until_ts", 0),
+                        "tz": info.get("tz", ""),
+                    }
+                    tags_now = list(c.get("conv_tags") or [])
+                    if tag_label not in tags_now:
+                        tags_now.append(tag_label)
+                    c["conv_tags"] = tags_now
+    except Exception:
+        logger.debug("会话列表休息期扣留标记失败（已忽略）", exc_info=True)
+
+    try:
         # B-2 风控可视：批量标记今日命中风控转人工(blocked)的会话，供列表高亮，
         # 与全自动安全条形成闭环（看到拦截数 → 列表一眼定位被拦会话）。单次 IN 查询。
         ibx3 = _inbox_store(request)

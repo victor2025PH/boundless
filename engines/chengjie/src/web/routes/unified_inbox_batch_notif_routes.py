@@ -125,6 +125,13 @@ def register_batch_notif_routes(app, *, api_auth) -> None:
         mode = str(body.get("mode", "add")).lower()
         if mode not in ("set", "add", "remove"):
             mode = "add"
+        if mode in ("set", "add"):
+            # Q-4（#267）：读侧计算的「作息外」标签不许写库
+            try:
+                from src.inbox.work_hours_gate import strip_off_hours_hold_tags
+                tags = strip_off_hours_hold_tags(tags)
+            except Exception:
+                pass
         if not cids:
             return {"ok": False, "error": tr(request, "err.ws.field_required", field="conversation_ids")}
         store = _inbox_store(request)

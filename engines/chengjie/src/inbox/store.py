@@ -5319,6 +5319,29 @@ class InboxStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_draft(r) for r in rows]
 
+    def conversations_with_pending_drafts(self, conversation_ids: List[str]) -> set:
+        """给定会话集合里**有 pending 草稿**的会话 id 集（单次 IN 查询，Q-4 #267）。
+
+        会话列表读侧「作息外 · 到点重新拟稿」标签只标「有稿被扣住」的会话，
+        不给没稿的会话贴。空入参 → 空集；异常 → 空集（标签是锦上添花，绝不 500）。
+        """
+        ids = [str(x) for x in (conversation_ids or []) if x]
+        if not ids:
+            return set()
+        out: set = set()
+        try:
+            with self._lock:
+                for i in range(0, len(ids), 400):
+                    chunk = ids[i:i + 400]
+                    rows = self._conn.execute(
+                        "SELECT DISTINCT conversation_id FROM reply_drafts "
+                        "WHERE status = 'pending' AND conversation_id IN (%s)"
+                        % ",".join("?" * len(chunk)), chunk).fetchall()
+                    out.update(str(r[0]) for r in rows if r and r[0])
+        except Exception:
+            logger.debug("conversations_with_pending_drafts 失败（返回空集）", exc_info=True)
+        return out
+
     @staticmethod
     def _row_to_draft(row) -> Dict[str, Any]:
         out = dict(row)

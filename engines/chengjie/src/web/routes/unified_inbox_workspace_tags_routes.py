@@ -180,6 +180,12 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
         """T1+P28：覆写会话标签列表，广播 conv_tagged 事件供 Webhook 外发。"""
         body = await request.json()
         tags = [str(t) for t in (body.get("tags") or []) if str(t).strip()]
+        # Q-4（#267）：「作息外 · 到点重新拟稿」是读侧计算标签，前端整表回写时剥掉不落库
+        try:
+            from src.inbox.work_hours_gate import strip_off_hours_hold_tags
+            tags = strip_off_hours_hold_tags(tags)
+        except Exception:
+            pass
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}

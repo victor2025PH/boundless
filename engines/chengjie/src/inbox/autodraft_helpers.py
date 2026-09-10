@@ -1030,17 +1030,27 @@ def make_auto_draft_cb(
                     work_schedule_cfg,
                 )
                 _ws = work_schedule_cfg(app_config)
-                if (_ws.get("enabled")
-                        and not off_hours_cfg(_ws)["generate_drafts"]
-                        and should_hold_auto_reply(
-                            _ws, str(conv.get("platform") or ""),
-                            str(conv.get("account_id") or "default"),
-                            peer_text=str(text or ""))):
+                _ws_hold = ""
+                if _ws.get("enabled"):
+                    _ws_hold = should_hold_auto_reply(
+                        _ws, str(conv.get("platform") or ""),
+                        str(conv.get("account_id") or "default"),
+                        peer_text=str(text or ""))
+                if _ws_hold and not off_hours_cfg(_ws)["generate_drafts"]:
                     logger.info(
                         "[AutoDraft] 休息期不拟稿 cid=%s"
                         "（work_schedule.off_hours.generate_drafts=false）",
                         conv.get("conversation_id"))
                     return
+                if _ws_hold:
+                    # Q-4（#267 D-Q1）：休息期入站 → 稿照拟但 autosend 会扣住；在这里
+                    # 落一条可检索的 hold 日志（同会话同「到点」只打一次），会话列表
+                    # 标签「作息外 · 到点重新拟稿」由读侧按同口径计算。
+                    from src.inbox.work_hours_gate import log_off_hours_hold
+                    log_off_hours_hold(
+                        str(conv.get("conversation_id") or ""), _ws,
+                        str(conv.get("platform") or ""),
+                        str(conv.get("account_id") or "default"))
             except Exception:
                 logger.debug(
                     "[AutoDraft] 班表拟稿节流判定失败（放行）", exc_info=True)
