@@ -47,6 +47,9 @@ STATE_PATH = Path(os.environ.get("RELAY_STATE") or "relay_devices.json")
 VERIFY_DIR = Path(os.environ.get("RELAY_VERIFY_DIR") or "verify")
 REGISTER_KEY = str(os.environ.get("RELAY_REGISTER_KEY") or "").strip()
 FORWARD_TIMEOUT_SEC = float(os.environ.get("RELAY_FORWARD_TIMEOUT") or 8.0)
+#: 设备表清理：离线且 ``last_seen`` 早于此秒数的登记行删掉（默认 24h）。在线设备永不清（心跳会刷 last_seen）。
+#: 触发点 = ``/healthz``（prod_edge_watchdog 每 5 min 打一次，天然是调度器）+ 设备上线时。
+STALE_SEC = float(os.environ.get("RELAY_STALE_SEC") or 86400.0)
 MAX_BODY = 512 * 1024
 
 #: 只转这些前缀（回调 / webhook / 探活），不做通用反代
@@ -73,6 +76,8 @@ class DeviceRegistry:
         self.path = path
         self._lock = asyncio.Lock()
         self._data: Dict[str, Dict[str, Any]] = {}
+        self._last_touch_flush = 0.0
+        self.pruned_total = 0
         try:
             d = json.loads(self.path.read_text(encoding="utf-8"))
             self._data = d if isinstance(d, dict) else {}
@@ -108,6 +113,52 @@ class DeviceRegistry:
 
     def known(self, device_id: str) -> bool:
         return device_id in self._data
+
+    def touch(self, device_id: str, now: float | None = None, flush_every: float = 60.0) -> None:
+        """心跳刷 ``last_seen``（内存即时；落盘至多每 ``flush_every`` 秒一次，ping 很密不值得每次写文件）。"""
+        row = self._data.get(device_id)
+        if row is None:
+            return
+        now = time.time() if now is None else now
+        row["last_seen"] = now
+        if now - float(self._last_touch_flush or 0.0) >= flush_every:
+            self._last_touch_flush = now
+            self._flush()
+
+    def _last_seen_of(self, row: Dict[str, Any]) -> float:
+        try:
+            return float(row.get("last_seen") or row.get("created_at") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def stale_ids(self, online_ids, now: float | None = None, stale_sec: float | None = None) -> list:
+        """离线且 ``last_seen`` 早于 ``stale_sec`` 的 device_id（不删，只算）。"""
+        now = time.time() if now is None else now
+        stale_sec = STALE_SEC if stale_sec is None else stale_sec
+        online = set(online_ids or ())
+        return [d for d, row in self._data.items()
+                if d not in online and (now - self._last_seen_of(row)) > stale_sec]
+
+    def offline_ids(self, online_ids) -> list:
+        online = set(online_ids or ())
+        return [d for d in self._data if d not in online]
+
+    async def prune_stale(self, online_ids, now: float | None = None) -> list:
+        """删掉 ``stale_ids`` 的行并落盘；返回被删的 device_id。在线的永不动。"""
+        async with self._lock:
+            gone = self.stale_ids(online_ids, now)
+            if not gone:
+                return []
+            for d in gone:
+                self._data.pop(d, None)
+            self._flush()
+            self.pruned_total += len(gone)
+        if gone:
+            logger.info("relay: pruned %d stale device row(s) (offline > %.0fs): %s", len(gone), STALE_SEC, ",".join(gone[:10]))
+        return gone
+
+    def __len__(self) -> int:
+        return len(self._data)
 
 
 class Hub:
@@ -205,7 +256,25 @@ def origin_is_private(origin: str) -> bool:
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "devices_online": len(hub.sockets), "ts": time.time()}
+    """探活 + 设备表体检（prod_edge_watchdog 每 5 min 打一次，也是清理调度器）。
+
+    - ``devices_online``：此刻挂着 WebSocket 的设备数；
+    - ``devices_known``：登记表行数（清理后）；
+    - ``devices_stale``：登记了但**此刻离线**的设备数（没心跳＝回调会 503；离线满 ``stale_sec`` 就被清）；
+    - ``devices_pruned_total``：进程启动以来清掉的行数；``pruned_now``：本次清掉的 device_id。
+    """
+    online = list(hub.sockets.keys())
+    pruned = await registry.prune_stale(online)
+    return {
+        "ok": True,
+        "devices_online": len(online),
+        "devices_known": len(registry),
+        "devices_stale": len(registry.offline_ids(online)),
+        "devices_pruned_total": registry.pruned_total,
+        "pruned_now": pruned,
+        "stale_sec": STALE_SEC,
+        "ts": time.time(),
+    }
 
 
 @app.get("/api/device/{device_id}/status")
@@ -246,6 +315,10 @@ async def ws_device(ws: WebSocket):
     await ws.send_text(json.dumps({"type": "auth", "ok": True, "reason": why, "device_id": device_id,
                                    "public_base": f"/d/{device_id}"}))
     try:
+        await registry.prune_stale(list(hub.sockets.keys()))  # 设备上线也是一次清理机会（healthz 之外的兜底）
+    except Exception:
+        logger.debug("prune on attach failed", exc_info=True)
+    try:
         while True:
             raw = await ws.receive_text()
             try:
@@ -256,6 +329,7 @@ async def ws_device(ws: WebSocket):
             if t == "resp":
                 hub.resolve(device_id, msg)
             elif t == "ping":
+                registry.touch(device_id)  # 心跳刷 last_seen：在线设备永不会被当 stale 清掉
                 await ws.send_text(json.dumps({"type": "pong", "ts": time.time()}))
             elif t == "verify_file":
                 # 设备发布企微「可信域名」归属验证文件（每个企业各自一份，文件名带企业哈希，不会互撞）
@@ -275,6 +349,7 @@ async def ws_device(ws: WebSocket):
         logger.debug("ws loop error", exc_info=True)
     finally:
         hub.detach(device_id, ws)
+        registry.touch(device_id, flush_every=0.0)  # 断线时刻＝24h 清理计时起点，立即落盘
 
 
 @app.api_route("/d/{device_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "HEAD"])
@@ -315,4 +390,4 @@ async def forward(device_id: str, path: str, request: Request):
     return Response(content=content, status_code=int(resp.get("status") or 502), headers=headers)
 
 
-__all__ = ["app", "registry", "hub", "path_allowed", "origin_from_state", "origin_is_private"]
+__all__ = ["app", "registry", "hub", "path_allowed", "origin_from_state", "origin_is_private", "STALE_SEC"]

@@ -20,6 +20,13 @@
 #     ssh fail + B bad       -> VPS/network down -> 2 strikes -> alert (restart would not help)
 #   Restart cooldown prevents flap; state survives in .ops\prod_edge_watchdog.state.json.
 #
+#   leg C  relay  : GET https://relay.bd2026.cc/healthz (WeChat line, 2026-09-10). The relay is
+#                   the public HTTPS front for WeCom callbacks / WeCom SSO of NAT-ed ChatX
+#                   instances (relay/app.py, systemd chatx-relay on the same VPS). It has NO
+#                   local heal (systemd Restart=always on the VPS side); verdict is independent
+#                   of legs A/B: own 2-strike counter + own DOWN/recovered alert, same telegram
+#                   tier as the katie public domain. -RelayUrl "" disables the leg.
+#
 # Manual: -DryRun (probe only) / -ForceRestart (drill).
 # ASCII-only on purpose (PowerShell 5.1 decodes BOM-less UTF-8 as GBK).
 param(
@@ -34,7 +41,8 @@ param(
     [switch]$ForceRestart,
     [switch]$DryRun,
     [string]$OpsDir = "D:\chengjie-instances\.ops",
-    [string]$NotifyWebhooksJson = "D:\chengjie-instances\zhiliao\data\config\notify_webhooks.json"
+    [string]$NotifyWebhooksJson = "D:\chengjie-instances\zhiliao\data\config\notify_webhooks.json",
+    [string]$RelayUrl = "https://relay.bd2026.cc/healthz"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -77,8 +85,9 @@ function Read-State {
     try {
         $s = Get-Content $StatePath -Raw | ConvertFrom-Json
         return @{ strikes = [int]$s.strikes; last_restart_epoch = [double]$s.last_restart_epoch;
-                  alerted = [bool]$s.alerted }
-    } catch { return @{ strikes = 0; last_restart_epoch = 0.0; alerted = $false } }
+                  alerted = [bool]$s.alerted;
+                  relay_strikes = [int]$s.relay_strikes; relay_alerted = [bool]$s.relay_alerted }
+    } catch { return @{ strikes = 0; last_restart_epoch = 0.0; alerted = $false; relay_strikes = 0; relay_alerted = $false } }
 }
 function Save-State($st) { try { ($st | ConvertTo-Json -Compress) | Set-Content -Path $StatePath } catch {} }
 function Get-Epoch { return [double]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) }
@@ -108,6 +117,29 @@ function Probe-Public {
     catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { return 0 } }
 }
 
+function Probe-Relay {
+    # @{ http; ok; online; stale } - http 0 = unreachable; ok = body.ok true (JSON healthz of relay/app.py).
+    # -1 when the leg is disabled (-RelayUrl "").
+    if (-not $RelayUrl) { return @{ http = -1; ok = $false; online = -1; stale = -1 } }
+    try {
+        $r = Invoke-WebRequest -Uri $RelayUrl -UseBasicParsing -TimeoutSec 15
+        $code = [int]$r.StatusCode
+        $body = $null
+        try { $body = $r.Content | ConvertFrom-Json } catch {}
+        $isOk = ($code -eq 200 -and $body -and $body.ok -eq $true)
+        $on = -1; $stale = -1
+        if ($body) {
+            if ($null -ne $body.devices_online) { $on = [int]$body.devices_online }
+            if ($null -ne $body.devices_stale)  { $stale = [int]$body.devices_stale }
+        }
+        return @{ http = $code; ok = $isOk; online = $on; stale = $stale }
+    } catch {
+        $code = 0
+        if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch {} }
+        return @{ http = $code; ok = $false; online = -1; stale = -1 }
+    }
+}
+
 function Restart-Tunnel {
     # Kill every local ssh carrying our -R (pid file first, then command-line sweep:
     # a zombie forward on the VPS releases only when the local ssh dies), then End+Run task.
@@ -134,6 +166,8 @@ function Restart-Tunnel {
 
 $ALERT_DOWN = "[ChatX] PROD workspace entrance DOWN: katie public chain unhealthy and auto-heal did not recover. Agents cannot reach the workspace. Check ProdTunnel / VPS nginx / zhiliao. Log: prod_edge_watchdog.log"
 $ALERT_OK   = "[ChatX] PROD workspace entrance recovered."
+$RELAY_DOWN = "[ChatX] relay.bd2026.cc (WeChat relay) DOWN: /healthz unhealthy for 2 probes. WeCom callbacks / WeCom SSO of NAT-ed instances are failing. Check on VPS: systemctl status chatx-relay; nginx relay vhost; cert. Log: prod_edge_watchdog.log"
+$RELAY_OK   = "[ChatX] relay.bd2026.cc (WeChat relay) recovered."
 
 # -- main ---------------------------------------------------------------------
 $st  = Read-State
@@ -149,6 +183,29 @@ if ($ForceRestart) {
 
 $tun = Probe-TunnelLeg
 $pub = Probe-Public
+
+# -- leg C: WeChat relay (independent verdict; never touches tunnel strikes/restart) --------
+# Runs BEFORE the tunnel verdict because every branch below exits. Own strike counter and
+# own alert pair; state fields relay_strikes / relay_alerted ride in the same state file.
+$rly = Probe-Relay
+if ($rly.http -ne -1) {
+    if ($rly.ok) {
+        if ([int]$st.relay_strikes -gt 0) { Write-Log "RELAY" "recovered (http=200 ok=true online=$($rly.online) stale=$($rly.stale)), relay strikes reset" }
+        else { Write-Log "RELAY" "healthy (http=200 online=$($rly.online) stale=$($rly.stale))" }
+        if ($st.relay_alerted) { Send-Alert $RELAY_OK; $st.relay_alerted = $false }
+        $st.relay_strikes = 0
+    } else {
+        $st.relay_strikes = [int]$st.relay_strikes + 1
+        Write-Log "RELAYSTRIKE" "relay unhealthy ($($st.relay_strikes)/$StrikeLimit): http=$($rly.http) ok=$($rly.ok) url=$RelayUrl"
+        if ($st.relay_strikes -ge $StrikeLimit) {
+            if (-not $st.relay_alerted) {
+                if ($DryRun) { Write-Log "DRYRUN" "would send relay DOWN alert now" }
+                else { Send-Alert $RELAY_DOWN; $st.relay_alerted = $true }
+            } else { Write-Log "HOLD" "relay already alerted; awaiting recovery" }
+        }
+    }
+    Save-State $st
+}
 
 # Q-14 D-3 (#262, 2026-09-10): tunnel-vs-instance discrimination, LOG ONLY. From the VPS,
 # "ssh ok but 127.0.0.1:$Port != 200" looks identical for a dead -R forward and for a

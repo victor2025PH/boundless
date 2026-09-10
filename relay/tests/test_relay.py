@@ -205,3 +205,67 @@ def test_sso_callback_redirects_browser_back_to_private_origin(relay):
     assert r.status_code == 404
     assert not origin_is_private("http://8.8.8.8") and origin_is_private("http://localhost:18799") and origin_is_private("http://10.1.2.3")
     assert origin_from_state("bad") == "" and origin_from_state("a.b.c.!!!") == ""
+
+
+def test_healthz_prunes_stale_offline_devices_and_reports_counts(relay):
+    """设备表 24h 清理：离线且 last_seen 早于 STALE_SEC 的登记行被 /healthz 清掉并落盘；离线但未满期的留着并计入 devices_stale。"""
+    mod = relay["mod"]
+    reg = mod.registry
+    now = time.time()
+    # 直接注入两行离线设备：一行 25h 没心跳（该清），一行 1h 没心跳（该留、计 stale）
+    reg._data["dev-stale-25h-aaa"] = {"secret_sha256": "x" * 64, "created_at": now - 30 * 3600, "last_seen": now - 25 * 3600}
+    reg._data["dev-offline-1h-bbb"] = {"secret_sha256": "y" * 64, "created_at": now - 2 * 3600, "last_seen": now - 1 * 3600}
+    reg._flush()
+    before = reg.pruned_total
+    h = httpx.get(relay["http"] + "/healthz").json()
+    assert h["ok"] is True and h["stale_sec"] == mod.STALE_SEC == 86400.0
+    assert "dev-stale-25h-aaa" in h["pruned_now"] and "dev-offline-1h-bbb" not in h["pruned_now"]
+    assert h["devices_pruned_total"] == before + 1
+    assert not reg.known("dev-stale-25h-aaa") and reg.known("dev-offline-1h-bbb")
+    # devices_stale = 登记但此刻离线（1h 那行 + 前面用例留下的已下线设备），且 known >= stale
+    assert h["devices_stale"] >= 1 and h["devices_known"] >= h["devices_stale"]
+    assert h["devices_known"] == len(reg)
+    # 清理已落盘：state 文件里没有 25h 那行
+    disk = json.loads(Path(os.environ["RELAY_STATE"]).read_text(encoding="utf-8"))
+    assert "dev-stale-25h-aaa" not in disk and "dev-offline-1h-bbb" in disk
+    # 再打一次：无新清理、计数不变
+    h2 = httpx.get(relay["http"] + "/healthz").json()
+    assert h2["pruned_now"] == [] and h2["devices_pruned_total"] == before + 1
+
+
+def test_online_device_never_pruned_and_ping_refreshes_last_seen(relay):
+    """在线设备哪怕 last_seen 被做旧到 3 天前也不清；ping 心跳把 last_seen 刷回当前；断线时刻落盘为清理计时起点。"""
+    mod = relay["mod"]
+    reg = mod.registry
+    pinged = []
+
+    class _PingDev(FakeDevice):
+        async def run(self, ready):
+            async with websockets.connect(self.ws_url) as ws:
+                await ws.send(json.dumps({"device_id": self.device_id, "secret": self.secret, "app": "chengjie"}))
+                self.auth_reply = json.loads(await ws.recv())
+                # 做旧 last_seen（3 天前），然后 healthz：在线 → 不清、不计 stale
+                reg._data[self.device_id]["last_seen"] = time.time() - 3 * 86400
+                h = httpx.get(relay["http"] + "/healthz").json()
+                assert self.device_id not in h["pruned_now"] and reg.known(self.device_id)
+                assert h["devices_online"] >= 1
+                await ws.send(json.dumps({"type": "ping"}))
+                pinged.append(json.loads(await ws.recv()))
+                while not self._stop.is_set():
+                    await asyncio.sleep(0.05)
+
+    dev = _PingDev(relay["ws"], "dev-online-ping-05", "p" * 24)
+    th = _run_device(dev)
+    deadline = time.time() + 5
+    while time.time() < deadline and not pinged:
+        time.sleep(0.05)
+    assert pinged and pinged[0]["type"] == "pong"
+    assert time.time() - reg._data["dev-online-ping-05"]["last_seen"] < 5, "ping 应把 last_seen 刷到当前"
+    dev.stop()
+    th.join(timeout=3)
+    time.sleep(0.3)
+    # 断线：last_seen 立即落盘（24h 计时起点），行仍在（离线未满期）→ 计入 devices_stale，不清
+    disk = json.loads(Path(os.environ["RELAY_STATE"]).read_text(encoding="utf-8"))
+    assert "dev-online-ping-05" in disk and time.time() - disk["dev-online-ping-05"]["last_seen"] < 5
+    h = httpx.get(relay["http"] + "/healthz").json()
+    assert "dev-online-ping-05" not in h["pruned_now"] and reg.known("dev-online-ping-05")
