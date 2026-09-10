@@ -125,6 +125,15 @@ def douyin_connect_panel(request: Request, *, registry: Any = None, now: Optiona
     }
 
 
+# TK-3 P3：个人号（真机）页签的时区候选（datalist；仍接受任何合法 IANA 名，服务端 bind_device 校验）
+TIKTOK_RPA_TIMEZONES = (
+    "Asia/Manila", "Asia/Jakarta", "Asia/Bangkok", "Asia/Ho_Chi_Minh", "Asia/Kuala_Lumpur", "Asia/Singapore",
+    "Asia/Tokyo", "Asia/Seoul", "Asia/Taipei", "Asia/Shanghai", "Asia/Dubai", "Europe/Rome", "Europe/Madrid",
+    "Europe/Berlin", "Europe/London", "America/Mexico_City", "America/Sao_Paulo", "America/New_York", "America/Los_Angeles",
+)
+TIKTOK_PANEL_TABS = ("official", "personal_rpa", "web")
+
+
 def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str, Any]:
     """TikTok 面板数据：应用凭证状态、webhook 地址、已登记 Business Account 及按注册地算出的能力。"""
     from src.integrations.tiktok_official import (DEFAULT_OAUTH_CALLBACK_PATH, MODE, PLATFORM, REAUTH_WARN_DAYS,
@@ -168,11 +177,18 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
         logger.debug("[onboarding] 读取 TikTok 账号失败", exc_info=True)
     # TK-3 E2：个人号页签数据（真机桥 / 网页边车）。官方私信 implemented=False 不变；
     # 两路皆非官方 → notice_unofficial。网页边车阶段 1 未开工，只占位。
-    personal: Dict[str, Any] = {"bridge_enabled": False, "accounts": [], "notice": "notice_unofficial"}
+    personal: Dict[str, Any] = {"bridge_enabled": False, "accounts": [], "notice": "notice_unofficial",
+                                # TK-3 P3：页签表单需要的静态数据——huoke 侧 endpoint 就是本机地址；探针命令；常用 IANA 时区
+                                "huoke": {"endpoint": base, "probe_cmd": "python scripts/tiktok_chengjie_probe.py --bind --roundtrip",
+                                          "yaml": "config/apps/tiktok.yaml → reply_engine: chengjie + chengjie.endpoint / token / timezone"},
+                                "timezones": TIKTOK_RPA_TIMEZONES, "dm_daily_cap_default": 0, "policy": {}}
     try:
-        from src.integrations.tiktok_huoke_bridge import bridge_cfg, bridge_enabled, get_state_store, report_health
+        from src.integrations.tiktok_huoke_bridge import KIND_DM, bridge_cfg, bridge_enabled, get_state_store, report_health
         hb = bridge_cfg(_config(request))
         personal["bridge_enabled"] = bool(hb["enabled"])
+        personal["dm_daily_cap_default"] = int(hb["dm_daily_cap"])
+        personal["policy"] = {"dm_daily_cap": int(hb["dm_daily_cap"]), "dm_max_len": int(hb["dm_max_len"]),
+                              "peer_silent_hours": int(hb["peer_silent_hours"])}
         if hb["enabled"]:
             st = get_state_store(hb["state_db_path"] or None)
             now = time.time()
@@ -180,7 +196,11 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
                 {"account_id": a["account_id"], "device_id": a.get("device_id") or "",
                  "username": a.get("username") or "", "timezone": a.get("timezone") or "",
                  "health": report_health(st, a["account_id"], now=now),
-                 "last_seen_ts": float(a.get("last_seen_ts") or 0)}
+                 "last_seen_ts": float(a.get("last_seen_ts") or 0),
+                 "last_seen_min": int(max(0.0, now - float(a.get("last_seen_ts") or 0)) // 60) if float(a.get("last_seen_ts") or 0) > 0 else None,
+                 "dm_daily_cap": min(int(a.get("dm_daily_cap") or 0) or int(hb["dm_daily_cap"]), int(hb["dm_daily_cap"])),
+                 "sent_today_dm": st.sent_today(a["account_id"], now=now, kind=KIND_DM, tz_name=str(a.get("timezone") or "")),
+                 "queued": int(st.pending(account_id=a["account_id"], now=now, claim_ttl_sec=hb["claim_ttl_sec"]).get("queued") or 0)}
                 for a in st.accounts()
             ]
     except Exception:
@@ -190,7 +210,7 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
             "webhook_url": f"{base}{cfg['webhook_path']}" if base else cfg["webhook_path"],
             "callback_url": f"{base}{DEFAULT_OAUTH_CALLBACK_PATH}" if base else DEFAULT_OAUTH_CALLBACK_PATH,
             "accounts": accounts,
-            "tabs": ["official", "personal_rpa", "web"],
+            "tabs": list(TIKTOK_PANEL_TABS), "active_tab": "official",
             "personal_rpa": personal,
             "web": {"enabled": False, "phase": "assistOnly", "notice": "notice_unofficial",
                     "ready": False, "hint": "网页托管边车阶段 1 未开工（TK-3 ②-A）"}}
@@ -420,11 +440,18 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
             except Exception:
                 logger.debug("[onboarding] 自检失败", exc_info=True)
         q = request.query_params
+        rpa_flash = str(q.get("rpa") or "")
+        if slug == "tiktok" and panel:
+            # TK-3 P3：?tab= 选页签；真机桥动作回跳（rpa=on / rpa=bound:<acc> / error=rpa:*）默认落在个人号页签
+            tab = str(q.get("tab") or "")
+            if tab not in panel.get("tabs") or []:
+                tab = "personal_rpa" if (rpa_flash or str(q.get("error") or "").startswith("rpa:")) else "official"
+            panel["active_tab"] = tab
         ctx: Dict[str, Any] = {
             "guide": guide, "slugs": list(SLUGS), "webhook_url": webhook_url, "panel": panel, "status": status,
             "flash": {"saved": q.get("saved") == "1", "connected": str(q.get("connected") or ""),
                       "error": str(q.get("error") or ""), "region": str(q.get("region") or ""),
-                      "webhook": str(q.get("webhook") or "")},
+                      "webhook": str(q.get("webhook") or ""), "rpa": rpa_flash},
         }
         # 工作台壳（workspace_base.html）需要的最小上下文；其余键缺省即安全（Jinja 非 strict）
         try:
@@ -479,6 +506,64 @@ def register_onboarding_guide_routes(app, page_auth, templates) -> None:
         _audit(request, "tiktok_account_register", f"tiktok/{bid}", "",
                f"region={reg_code} dm_api={caps['dm_api']} token={'y' if tok else 'n'}")
         return RedirectResponse(f"/workspace/onboarding/tiktok?connected={bid}&region={reg_code}", status_code=303)
+
+    @app.post("/workspace/onboarding/tiktok/huoke_bridge")
+    async def onboarding_tiktok_huoke_bridge(request: Request, _=Depends(page_auth)):
+        """TK-3 P3：一键开启个人号真机桥——写 ``tiktok.huoke_bridge.enabled=true`` 并即时挂路由 + 收件箱适配器（不用重启）。
+
+        只开不关：关闭走配置文件 + 重启（路由无法热卸载，半开状态比明确的「重启后生效」更糟）。
+        其余键（日上限 / 沉默小时 / 状态库路径）原样保留——补丁按整块写回，避免简化桩的浅合并把它们抹掉。"""
+        from src.integrations.tiktok_huoke_bridge import bridge_enabled, register_tiktok_huoke_routes
+        cm = _config_manager(request)
+        cfg_all = getattr(cm, "config", None) or {}
+        blk = dict(((cfg_all.get("tiktok") or {}).get("huoke_bridge") or {}) if isinstance(cfg_all.get("tiktok"), dict) else {})
+        was_on = bridge_enabled(cfg_all)
+        blk["enabled"] = True
+        if cm is None or not _save_patch(cm, {"tiktok": {"huoke_bridge": blk}}):
+            return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:save_failed", status_code=303)
+        mounted = False
+        try:
+            mounted = bool(register_tiktok_huoke_routes(request.app, cm))
+        except Exception:
+            logger.warning("[onboarding] TikTok 真机桥热挂载失败", exc_info=True)
+        if not mounted:
+            return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:mount_failed", status_code=303)
+        _audit(request, "tiktok_huoke_bridge_enable", "tiktok.huoke_bridge.enabled", str(was_on), "True")
+        return RedirectResponse("/workspace/onboarding/tiktok?rpa=on", status_code=303)
+
+    @app.post("/workspace/onboarding/tiktok/device")
+    async def onboarding_tiktok_device(request: Request, _=Depends(page_auth),
+                                       device_id: str = Form(""), account_id: str = Form(""), username: str = Form(""),
+                                       timezone: str = Form(""), dm_daily_cap: str = Form("")):
+        """TK-3 P3：接入页绑定真机 ↔ 账号（与 huoke ``POST /api/tiktok/huoke/devices`` 同一函数，进程内直调）。
+
+        序列号 / 账号必填；时区 IANA（服务端校验）；日上限与全局取小。绑定即一次心跳——真机还没跑起来时健康态会随即
+        走向 reconnecting / expired，那是如实反映，不是错误。"""
+        from src.integrations.tiktok_huoke_bridge import bind_device, bridge_enabled
+        cfg_all = _config(request)
+        if not bridge_enabled(cfg_all):
+            return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:bridge_off", status_code=303)
+        did, aid = str(device_id or "").strip(), str(account_id or "").strip()
+        if not did or not aid:
+            return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:missing_device_or_account", status_code=303)
+        payload: Dict[str, Any] = {"device_id": did, "account_id": aid, "username": str(username or "").strip().lstrip("@"),
+                                   "timezone": str(timezone or "").strip()}
+        cap = str(dm_daily_cap or "").strip()
+        if cap:
+            try:
+                payload["dm_daily_cap"] = max(0, int(cap))
+            except ValueError:
+                return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:bad_daily_cap", status_code=303)
+        try:
+            status, res = bind_device(payload, config=cfg_all)
+        except Exception:
+            logger.warning("[onboarding] TikTok 真机绑定异常", exc_info=True)
+            return RedirectResponse("/workspace/onboarding/tiktok?error=rpa:bind_exception", status_code=303)
+        if status != 200:
+            err = str((res or {}).get("error") or f"http_{status}")[:60]
+            return RedirectResponse(f"/workspace/onboarding/tiktok?error=rpa:{err}", status_code=303)
+        _audit(request, "tiktok_huoke_device_bind", f"tiktok/{aid}", "", f"device={did} tz={payload['timezone'] or '-'} cap={payload.get('dm_daily_cap', '-')}")
+        return RedirectResponse(f"/workspace/onboarding/tiktok?rpa=bound:{aid}", status_code=303)
 
     @app.post("/workspace/onboarding/tiktok/credentials")
     async def onboarding_tiktok_credentials(request: Request, _=Depends(page_auth),

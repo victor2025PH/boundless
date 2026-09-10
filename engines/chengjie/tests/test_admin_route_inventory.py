@@ -1954,6 +1954,14 @@ _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE = """
 """
 _BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_GUIDE
 
+# TK-3 P3（tiktok 个人号 · 真机页签，2026-09-11）：接入页一键开启 huoke 真机桥（热挂 /api/tiktok/huoke/*，
+# 只开不关）+ 绑定真机 ↔ 账号（与桥 POST /devices 同一函数进程内直调）。`onboarding_guide_routes.py`。
+_ADDITIONS_2026_09_11_TK3_RPA_TAB = """
+/workspace/onboarding/tiktok/huoke_bridge	POST
+/workspace/onboarding/tiktok/device	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_11_TK3_RPA_TAB
+
 # 实施97 微信线第四/六轮（2026-09-08）：微信客服会话状态动作（转企微人工 / 结束 / 查状态，
 # `wechat_kf_webhook.register_wechat_kf_session_routes`）+ 五步接入引导后端（`wechat_kf_setup_routes.py`：
 # 出站 IP / 凭证测试 / 客服账号列表与新建 / 绑定拉起 / 客户二维码 / AI 接待）+ 个人微信 PC 副驾引导后端

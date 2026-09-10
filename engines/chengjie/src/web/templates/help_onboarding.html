@@ -70,6 +70,11 @@
 .obg-btn.sm{font-size:.74rem;padding:.3rem .7rem}
 .obg-btn.ghost{background:transparent}
 .obg-back{display:inline-block;font-size:.78rem;color:var(--tk-brand);text-decoration:none;margin-bottom:.6rem}
+/* TK-3 P3：TikTok 面板三页签（官方 / 个人号·真机 / 网页托管）——同一步卡内切换，不跳页 */
+.obg-ptabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:0 0 .7rem}
+.obg-ptabs .obg-tab{cursor:pointer;font-family:inherit}
+.obg-pane{display:none}.obg-pane.on{display:block}
+.obg-form.rpa{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 @media (max-width:640px){.obg-form{grid-template-columns:1fr}.obg-light{flex-wrap:wrap}.obg-light-r{margin-left:0;text-align:left}}
 </style>
 {% endblock %}
@@ -93,7 +98,11 @@
   </div>
   <div class="obg-intro">{{ guide.intro }}</div>
 
-  {% if flash and flash.saved and guide.slug == 'tiktok' %}
+  {% if flash and flash.rpa == 'on' and guide.slug == 'tiktok' %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.rpa.flash_on', '真机桥已开启并即时挂载（/api/tiktok/huoke/*）。下一步：绑定设备，再在 huoke 机上跑探针。') }}</div>
+  {% elif flash and flash.rpa and flash.rpa.startswith('bound:') and guide.slug == 'tiktok' %}
+  <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.rpa.flash_bound', '设备已绑定到账号：') }} <code>{{ flash.rpa[6:] }}</code> · {{ (i18n or {}).get('obg.tt.rpa.flash_bound_next', '在 huoke 机上跑探针确认全绿；然后让对方先发一条私信，智聊只接管对方开口之后的对话。') }}</div>
+  {% elif flash and flash.saved and guide.slug == 'tiktok' %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.tt.flash_creds', '应用凭证已保存。下一步：填注册地，点「用 TikTok Business Account 授权」。') }}</div>
   {% elif flash and flash.saved %}
   <div class="obg-flash ok">{{ (i18n or {}).get('obg.flash.saved', '凭证已保存，webhook 与官方通道已即时装载；现在去扫码授权。') }}</div>
@@ -115,6 +124,10 @@
     {% elif flash.error == 'step_auto' %}— {{ (i18n or {}).get('obg.pg.err_auto', '这一步由系统自动检测，不能手动勾选。') }}
     {% elif flash.error == 'ungranted_scopes' %}— {{ (i18n or {}).get('obg.tt.flash_scopes', '授权时没有勾全私信权限（读取 / 发送 / 管理），请重新授权并全部允许。') }}
     {% elif flash.error.startswith('webhook') %}— {{ (i18n or {}).get('obg.tt.flash_webhook_err', 'Webhook 注册被 TikTok 拒绝：检查应用是否已获 Business Messaging 访问权限、回调地址是否为公网 HTTPS。') }}
+    {% elif flash.error.startswith('rpa:bad_timezone') %}— {{ (i18n or {}).get('obg.tt.rpa.err_tz', '时区要用 IANA 名，如 Asia/Manila、Europe/Rome。') }}
+    {% elif flash.error == 'rpa:bridge_off' %}— {{ (i18n or {}).get('obg.tt.rpa.err_off', '真机桥还没开：先点「开启真机桥」。') }}
+    {% elif flash.error == 'rpa:missing_device_or_account' %}— {{ (i18n or {}).get('obg.tt.rpa.err_missing', '设备序列号与账号 ID 必填。') }}
+    {% elif flash.error.startswith('rpa:') %}— {{ (i18n or {}).get('obg.tt.rpa.err_generic', '真机桥操作失败，看服务端日志 [tiktok-huoke]。') }}
     {% elif flash.error.startswith('missing') %}— {{ (i18n or {}).get('obg.flash.missing', '请先填 client_key 与 client_secret。') }}
     {% elif flash.error.startswith('exchange_failed') %}— {{ (i18n or {}).get('obg.flash.exchange', '抖音换令牌失败：检查 client_secret、回调域是否与控制台一致、应用是否已开通 im.direct_message 权限。') }}
     {% elif flash.error.startswith('denied') %}— {{ (i18n or {}).get('obg.flash.denied', '用户在抖音端取消了授权，或未返回 code。') }}
@@ -220,6 +233,13 @@
       {% endif %}
       {% if guide.slug == 'tiktok' and loop.index == 4 and panel %}
       <div class="obg-panel">
+        {# TK-3 P3：三页签——官方 Business Account / 个人号·真机（huoke 桥）/ 网页托管·边车；两路个人号皆非官方 #}
+        {% set _ptab = panel.active_tab or 'official' %}
+        {% set _ptabnames = {'official': (i18n or {}).get('obg.tt.tab.official', '官方 Business Account'), 'personal_rpa': (i18n or {}).get('obg.tt.tab.personal_rpa', '个人号 · 真机'), 'web': (i18n or {}).get('obg.tt.tab.web', '网页托管 · 边车')} %}
+        <div class="obg-ptabs" role="tablist">
+          {% for t in (panel.tabs or ['official']) %}<button type="button" class="obg-tab {% if _ptab == t %}on{% endif %}" role="tab" data-obg-tab="{{ t }}" aria-selected="{{ 'true' if _ptab == t else 'false' }}">{{ _ptabnames.get(t, t) }}</button>{% endfor %}
+        </div>
+        <div class="obg-pane {% if _ptab == 'official' %}on{% endif %}" data-pane="official">
         <form class="obg-form" method="post" action="/workspace/onboarding/tiktok/credentials" autocomplete="off">
           <label>{{ (i18n or {}).get('obg.tt.app_id', '开发者应用 App ID（app_id）') }}
             <input name="app_id" value="{{ panel.app_id }}" placeholder="TikTok for Business app_id" required>
@@ -297,6 +317,58 @@
         {% endif %}
         {% endfor %}
         {% endif %}
+        </div>
+        {% set rpa = panel.personal_rpa or {} %}
+        <div class="obg-pane {% if _ptab == 'personal_rpa' %}on{% endif %}" data-pane="personal_rpa">
+          <div class="obg-note" style="margin-top:0">{{ (i18n or {}).get('obg.tt.rpa.intro', '个人号没有官方私信接口。这条路由获客真机（huoke）读私信、智聊起草 / 把关、真机发出；非官方，只接管对方开口之后的对话，绝不首触；自动发送默认关。') }}</div>
+          {% if not rpa.bridge_enabled %}
+          <form method="post" action="/workspace/onboarding/tiktok/huoke_bridge" style="display:flex;gap:.6rem;align-items:center;margin-top:.6rem;flex-wrap:wrap">
+            <button class="obg-btn pri" type="submit" id="obg-rpa-enable">{{ (i18n or {}).get('obg.tt.rpa.enable_btn', '开启真机桥') }}</button>
+            <span class="obg-note" style="margin:0">{{ (i18n or {}).get('obg.tt.rpa.enable_hint', '开启后即时挂载 /api/tiktok/huoke/*，不用重启；默认关；关闭走配置文件 + 重启。') }}</span>
+          </form>
+          {% else %}
+          <div class="obg-note"><span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.rpa.on_pill', '真机桥已开启') }}</span> {{ (i18n or {}).get('obg.tt.rpa.policy', '每号每日 {cap} 条 · 私信 ≤{len} 字 · 对方 {h} 小时未回自动停').replace('{cap}', (rpa.policy.dm_daily_cap or 0)|string).replace('{len}', (rpa.policy.dm_max_len or 0)|string).replace('{h}', (rpa.policy.peer_silent_hours or 0)|string) }}</div>
+          <form class="obg-form rpa" method="post" action="/workspace/onboarding/tiktok/device" autocomplete="off" style="margin-top:.5rem">
+            <label>{{ (i18n or {}).get('obg.tt.rpa.f_device', '设备序列号') }}<input name="device_id" placeholder="adb devices" required></label>
+            <label>{{ (i18n or {}).get('obg.tt.rpa.f_account', '账号 ID（收件箱里显示的账号名）') }}<input name="account_id" placeholder="shop_ph" required></label>
+            <label>{{ (i18n or {}).get('obg.tt.rpa.f_username', 'TikTok 用户名') }}<input name="username" placeholder="@shop_ph"></label>
+            <label>{{ (i18n or {}).get('obg.tt.rpa.f_tz', '时区（IANA，决定日上限何时清零）') }}<input name="timezone" list="obg-tz-list" placeholder="Asia/Manila"></label>
+            <label>{{ (i18n or {}).get('obg.tt.rpa.f_cap', '日上限（留空用全局）') }}<input name="dm_daily_cap" type="number" min="0" max="500" placeholder="{{ rpa.dm_daily_cap_default }}"></label>
+            <button class="obg-btn" type="submit">{{ (i18n or {}).get('obg.tt.rpa.bind_btn', '绑定设备') }}</button>
+          </form>
+          <datalist id="obg-tz-list">{% for tz in (rpa.timezones or []) %}<option value="{{ tz }}"></option>{% endfor %}</datalist>
+          {% if rpa.accounts %}
+          <div class="obg-note" style="margin-top:.6rem">{{ (i18n or {}).get('obg.tt.rpa.devices', '已绑定设备') }}</div>
+          {% for a in rpa.accounts %}
+          <div class="obg-acc">
+            <code>{{ a.account_id }}</code>
+            <span>{{ a.device_id or '—' }}{% if a.username %} <span class="obg-note" style="margin:0">@{{ a.username }}</span>{% endif %}</span>
+            <span class="obg-pill">{{ a.timezone or 'UTC' }}</span>
+            {% if a.health == 'authorized' %}<span class="obg-pill ok">{{ (i18n or {}).get('obg.tt.rpa.h_ok', '真机在线') }}{% if a.last_seen_min is not none %} · {{ a.last_seen_min }}m{% endif %}</span>
+            {% elif a.health == 'reconnecting' %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.rpa.h_late', '心跳迟到') }} {{ a.last_seen_min }}m</span>
+            {% elif a.health == 'expired' %}<span class="obg-pill bad">{{ (i18n or {}).get('obg.tt.rpa.h_offline', '真机离线 >2h') }}</span>
+            {% else %}<span class="obg-pill">{{ (i18n or {}).get('obg.tt.rpa.h_unknown', '未见心跳') }}</span>{% endif %}
+            <span class="obg-pill">{{ (i18n or {}).get('obg.tt.rpa.today', '今日') }} {{ a.sent_today_dm }}/{{ a.dm_daily_cap }}</span>
+            {% if a.queued %}<span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.rpa.queued', '待真机发出') }} {{ a.queued }}</span>{% endif %}
+          </div>
+          {% endfor %}
+          {% else %}
+          <div class="obg-note">{{ (i18n or {}).get('obg.tt.rpa.none', '还没有绑定设备——填上面表单，或让 huoke 机上的探针自动绑定。') }}</div>
+          {% endif %}
+          {% endif %}
+          <div class="obg-note" style="margin-top:.6rem">{{ (i18n or {}).get('obg.tt.rpa.huoke_steps', 'huoke 机三步：① config/apps/tiktok.yaml 改 reply_engine: chengjie，chengjie.endpoint 填下面地址、token 填智聊 API token、timezone 填 IANA；② 跑探针，四步全绿；③ 让对方先发一条私信 → 收件箱巡检交给智聊 → 工作台回复 → ≤2 分钟真机发出。') }}</div>
+          <div class="obg-copy">
+            <code id="obg-rpa-endpoint">{{ rpa.huoke.endpoint or '' }}</code>
+            <button type="button" data-copy-target="obg-rpa-endpoint">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+          </div>
+          <div class="obg-copy">
+            <code id="obg-rpa-probe">{{ rpa.huoke.probe_cmd or '' }}</code>
+            <button type="button" data-copy-target="obg-rpa-probe">{{ (i18n or {}).get('obg.copy', '复制') }}</button>
+          </div>
+        </div>
+        <div class="obg-pane {% if _ptab == 'web' %}on{% endif %}" data-pane="web">
+          <div class="obg-note" style="margin-top:0"><span class="obg-pill warn">{{ (i18n or {}).get('obg.tt.web.phase', '阶段 1 未开工') }}</span> {{ (i18n or {}).get('obg.tt.web.intro', '网页托管边车：在本机浏览器登录个人号，只读私信进收件箱，不代发（assistOnly）；作为真机不可用时的备用路，仍是非官方。开工后这里会出现登录二维码与会话健康。') }}</div>
+        </div>
       </div>
       {% endif %}
       {% if s.url %}
@@ -360,6 +432,17 @@
     var done = function(){ var old=b.textContent; b.textContent='✓'; setTimeout(function(){ b.textContent=old; }, 1200); };
     if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done, done); }
     else { try{ var r=document.createRange(); r.selectNodeContents(el); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); s.removeAllRanges(); done(); }catch(_){} }
+  });
+  // TK-3 P3：TikTok 面板页签切换（官方 / 个人号·真机 / 网页托管），同步到 ?tab= 便于回跳落回同页签
+  document.addEventListener('click', function(ev){
+    var t = ev.target && ev.target.closest ? ev.target.closest('button[data-obg-tab]') : null;
+    if(!t) return;
+    var name = t.getAttribute('data-obg-tab');
+    var root = t.closest('.obg-panel');
+    if(!root) return;
+    root.querySelectorAll('button[data-obg-tab]').forEach(function(b){ var on = b === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+    root.querySelectorAll('.obg-pane').forEach(function(p){ p.classList.toggle('on', p.getAttribute('data-pane') === name); });
+    try{ var u = new URL(location.href); u.searchParams.set('tab', name); history.replaceState(null, '', u.toString()); }catch(_){}
   });
   // TikTok.me 引流链接：ref 只留字母数字与 - _ =（与服务端 sanitize_ref 同规则），实时拼到链接上
   document.addEventListener('input', function(ev){
