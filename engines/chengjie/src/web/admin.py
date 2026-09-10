@@ -4046,6 +4046,19 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_aif.getLogger("admin").warning("ai_fail 路由注册失败", exc_info=True)
 
+    # ── Q-14 #262 E（2026-09-10）：告警「一眼看」只读页 /ops/glance（十分钟一次性令牌，
+    # 令牌密钥 = web_admin.secret_key；默认占位符不铸令牌 → notifier 回落普通登录链接）──
+    try:
+        from src.utils import ops_glance_token as _ogt
+        from src.web.routes.ops_glance_routes import register_ops_glance_routes
+
+        _ogt.configure(secret)
+        register_ops_glance_routes(app, templates=templates)
+    except Exception:
+        import logging as _log_og
+
+        _log_og.getLogger("admin").warning("ops_glance 路由注册失败", exc_info=True)
+
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")
     async def _ws_queue_monitor(request: Request):

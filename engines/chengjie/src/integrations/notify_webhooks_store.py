@@ -97,6 +97,11 @@ def sanitize_webhook(item: Dict[str, Any]) -> Dict[str, Any]:
         "events": events,
         "enabled": item.get("enabled", True) is not False,
     }
+    # Q-14 #262 E（2026-09-10）：链接形态 login（默认）/ magic / off。键缺席 → 不落键（＝login，
+    # 且让 merge_preserve_secrets 能区分「面板没这个字段」与「显式选了 login」）；非法值 → 不落键。
+    links = str(item.get("links") or "").strip().lower()
+    if links in ("login", "magic", "off"):
+        out["links"] = links
     return out
 
 
@@ -187,6 +192,10 @@ def merge_preserve_secrets(
             nv = str(w.get(k) or "")
             if (not nv) or nv.endswith("***"):
                 w[k] = str(old.get(k) or "")
+        # Q-14 #262 E：面板表单没有 links 字段——回传缺键时沿用旧值，免得一次「改个名字再保存」
+        # 把手工配好的 magic 抹回 login。显式带 links（含 login）则以回传为准。
+        if "links" not in w and old.get("links") in ("magic", "off"):
+            w["links"] = old["links"]
     return incoming
 
 

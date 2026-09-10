@@ -2014,6 +2014,13 @@ _ADDITIONS_2026_09_09_Q14_AI_FAIL = """
 """
 _BASELINE += _ADDITIONS_2026_09_09_Q14_AI_FAIL
 
+# Q-14 #262 E（2026-09-10）：告警「一眼看」只读页（ops_glance_routes.py）——Telegram 告警卡
+# links=magic 的落点，十分钟一次性令牌，不建会话不写库。
+_ADDITIONS_2026_09_10_Q14_OPS_GLANCE = """
+/ops/glance	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_10_Q14_OPS_GLANCE
+
 # Q-3 #264（2026-09-10）：坐席打字信号——工作台输入框有输入（3s 节流）→ worker 放弃该会话
 # 在途 / 排队的 L2 AI 稿（人工优先 ≥ 客户）。unified_inbox_stored_read_routes.py。
 _ADDITIONS_2026_09_10_Q3_AGENT_TYPING = """

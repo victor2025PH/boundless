@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="{{ ui_locale|default('zh-CN') }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>{{ (i18n or {}).get('og.title', 'Alert glance') }}</title>
+<style>
+  /* Q-14 #262 E：告警速览只读页。手机上从 Telegram 点进来的第一屏，独立于工作台壳（无 session），
+     只用系统字体与几种颜色，不引任何工作台脚本。 */
+  html,body{margin:0;background:#f5f6f8;color:#1f2937;font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:640px;margin:0 auto;padding:18px 14px 40px}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{font-size:12px;color:#6b7280;margin:0 0 14px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin-bottom:12px}
+  dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0;font-size:13.5px}
+  dt{color:#6b7280}
+  dd{margin:0;word-break:break-all}
+  .tier{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:600;font-size:12.5px}
+  .msgs{list-style:none;margin:0;padding:0}
+  .msgs li{padding:8px 0;border-top:1px solid #f1f5f9;font-size:13.5px;line-height:1.5}
+  .msgs li:first-child{border-top:0}
+  .msgs .m{display:flex;gap:8px;font-size:11.5px;color:#6b7280;margin-bottom:2px}
+  .msgs .who{font-weight:600}
+  .msgs .who.out{color:#0f766e}
+  .msgs .t{white-space:pre-wrap;word-break:break-word}
+  .btn{display:block;text-align:center;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;padding:12px;border-radius:10px;font-size:15px}
+  .hint{font-size:12px;color:#6b7280;text-align:center;margin-top:8px}
+  .warn{background:#fff7ed;border-color:#fed7aa;color:#9a3412;font-size:14px}
+  code{font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{{ (i18n or {}).get('og.title', 'Alert glance') }}</h1>
+  <p class="sub">{{ (i18n or {}).get('og.subtitle', '') }}</p>
+
+  {% if state != 'ok' %}
+    <div class="card warn">{{ (i18n or {}).get('og.' ~ state, state) }}</div>
+    <a class="btn" href="{{ login_url }}">{{ (i18n or {}).get('og.go_login', 'Go to login') }}</a>
+  {% else %}
+    {% if not conv_id %}
+      <div class="card">
+        <p style="margin:0 0 8px;font-size:13.5px;color:#6b7280">{{ (i18n or {}).get('og.no_conv', '') }}</p>
+        <code>{{ to }}</code>
+      </div>
+    {% elif not conv %}
+      <div class="card warn">{{ ((i18n or {}).get('og.conv_missing', '{cid}')).replace('{cid}', conv_id) }}</div>
+    {% else %}
+      <div class="card">
+        <dl>
+          <dt>{{ (i18n or {}).get('og.conv', 'Conversation') }}</dt><dd><code>{{ conv_id }}</code></dd>
+          <dt>{{ (i18n or {}).get('og.contact', 'Contact') }}</dt><dd>{{ conv.display_name or conv.contact_id or '—' }}</dd>
+          <dt>{{ (i18n or {}).get('og.platform', 'Platform') }}</dt><dd>{{ conv.platform }}</dd>
+          <dt>{{ (i18n or {}).get('og.account', 'Account') }}</dt><dd>{{ conv.account_id }}</dd>
+          <dt>{{ (i18n or {}).get('og.tier', 'Current tier') }}</dt>
+          <dd><span class="tier">{{ (i18n or {}).get('og.tier_' ~ tier, tier) }}</span></dd>
+        </dl>
+      </div>
+      <div class="card">
+        <div style="font-size:12.5px;color:#6b7280;margin-bottom:6px">{{ (i18n or {}).get('og.recent', 'Last 5 messages') }}</div>
+        {% if messages %}
+        <ul class="msgs">
+          {% for m in messages %}
+          <li>
+            <div class="m">
+              <span class="who {{ 'out' if m.direction == 'out' else 'in' }}">{{ (i18n or {}).get('og.dir_out' if m.direction == 'out' else 'og.dir_in', m.direction) }}</span>
+              <span>{{ m.when }}</span>
+              {% if m.media_type %}<span>[{{ m.media_type }}]</span>{% endif %}
+            </div>
+            <div class="t">{{ m.text }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div style="font-size:13px;color:#6b7280">{{ (i18n or {}).get('og.no_messages', '') }}</div>
+        {% endif %}
+      </div>
+    {% endif %}
+    <a class="btn" href="{{ open_url }}">{{ (i18n or {}).get('og.open', 'Open in workspace') }}</a>
+    <p class="hint">{{ (i18n or {}).get('og.open_hint', '') }}</p>
+  {% endif %}
+</div>
+</body>
+</html>

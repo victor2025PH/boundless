@@ -486,14 +486,34 @@ _MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 
 
-def _plainify(text: str, base_url: str = "") -> str:
+_LINK_MODES = ("login", "magic", "off")
+
+
+def _plainify(text: str, base_url: str = "", links: str = "login") -> str:
     """把内部 Markdown（**粗体** / [文字](链接) / ### 标题）转成 IM 纯文本。
-    相对链接（/workspace/...）默认只保留文字；给了 base_url 则拼成绝对地址。"""
+    相对链接（/workspace/...）默认只保留文字；给了 base_url 则拼成绝对地址。
+
+    ``links``（Q-14 #262 E，2026-09-10，按端点配）：
+    - ``login``（默认＝此前行为）：``base_url + href``，点开撞登录页；
+    - ``magic``：``base_url/ops/glance?t=<十分钟一次性令牌>&to=<href>``——手机上先看只读速览
+      再决定要不要登录；铸不出令牌（secret 未配）回落 ``login``，链接永远可点；
+    - ``off``：只留文字（外链 http… 也只留文字）。
+    """
     def _link(m: "re.Match") -> str:
         label, href = m.group(1), m.group(2)
+        if links == "off":
+            return label
         if href.startswith("http"):
             return f"{label}: {href}"
         if base_url and href.startswith("/"):
+            if links == "magic":
+                try:
+                    from src.utils import ops_glance_token
+                    magic = ops_glance_token.glance_url(base_url, href)
+                except Exception:
+                    magic = None
+                if magic:
+                    return f"{label}: {magic}"
             return f"{label}: {base_url.rstrip('/')}{href}"
         return label
     s = _MD_LINK.sub(_link, text or "")
@@ -2238,17 +2258,18 @@ _CARD_RULE = "━━━━━━━━━━━━━━"
 
 
 def _build_card(event_type: str, data: Dict[str, Any], title: str, text: str,
-                base_url: str = "") -> str:
+                base_url: str = "", links: str = "login") -> str:
     """把已有中文标题+正文套成统一「表单式」卡片（仅 Telegram 等 IM 渠道用）。
 
     顶部：级别 · 类别（自解释、可扫读）；正文：事件既有中文说明；
     表尾：来源系统 + 时间 + 原始事件名（排查锚点）。不改各事件正文语义。
+    ``links`` 透传 ``_plainify``（login / magic / off，见其说明）。
     """
     sev, cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
     if data.get("recovered"):
         sev = "✅ 恢复"
-    body_title = _plainify(title, base_url)
-    body = _plainify(text, base_url)
+    body_title = _plainify(title, base_url, links)
+    body = _plainify(text, base_url, links)
     ts = time.strftime("%m-%d %H:%M", time.localtime())
     parts = [
         f"{sev} · {cat}",
@@ -2305,6 +2326,10 @@ class WebhookNotifier:
                     "token": str(wh.get("token") or ""),
                     "target": str(wh.get("target") or wh.get("chat_id") or ""),
                     "name": str(wh.get("name") or "webhook"),
+                    # Q-14 #262 E：链接形态 login（默认）/ magic（十分钟一次性速览页）/ off
+                    "links": (str(wh.get("links") or "login").strip().lower()
+                              if str(wh.get("links") or "login").strip().lower() in _LINK_MODES
+                              else "login"),
                     "types": rule["types"],          # None → 全部
                     "levels": rule.get("levels"),    # None → 全部
                 })
@@ -2426,7 +2451,8 @@ class WebhookNotifier:
             # Telegram 套统一中文卡片（级别·类别 / 说明 / 来源·时间·原始事件）；
             # 其余 IM（whatsapp/messenger）保持纯文本拼接。
             if fmt == "telegram":
-                msg = _build_card(etype, data, title, text, matcher.get("base_url", ""))
+                msg = _build_card(etype, data, title, text, matcher.get("base_url", ""),
+                                  matcher.get("links", "login"))
             else:
                 msg = f"{_plainify(title)}\n{_plainify(text)}".strip()
             body, headers = _build_chat_body(fmt, msg, target, token)
