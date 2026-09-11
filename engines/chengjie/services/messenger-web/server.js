@@ -58,6 +58,12 @@ import {
   parseCurrentUserInitialData, pickSelfAvatar, summarizeCandidates,
   nextSelfProfileRecaptureMs,
 } from "./self_profile.js";
+import {
+  isDetachedError, isCallOverlayText, normalizeSendFailCode, sendFailBody, sendFailHttpStatus,
+  bumpJidFailStreak, shouldQueueRetry, retryQueueUpsert, retryQueueDue, retryQueueSettle,
+  RETRY_QUEUE_INTERVAL_MS, RETRY_QUEUE_MAX_TRIES, REACTION_ARIA_RE, parseReactionPill,
+  inputWithRebind,
+} from "./send_chain.js";
 import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -166,6 +172,11 @@ const HIDE_AFTER_LOGIN = String(process.env.MSG_HIDE_AFTER_LOGIN ?? "1") === "1"
 // 落定。下限 3s 防手抖配置把成功横幅闪没。
 const HIDE_AFTER_LOGIN_DELAY_MS = Math.max(
   3000, Number(process.env.MSG_HIDE_AFTER_LOGIN_DELAY_MS || 12000));
+// Q-24 E（#298）：授权后 PIN 浮层在场时窗口最多再露多久（人可就地输 PIN），到点强制隐藏。
+const HIDE_PIN_GRACE_MS = Math.max(15000, Number(process.env.MSG_HIDE_PIN_GRACE_MS || 120000));
+// Q-24 E：Chromium 沙箱默认开（Playwright 默认 chromiumSandbox:false 会加 --no-sandbox →
+// Chrome 顶栏黄条「--no-sandbox 不受支持」，TKV3HB 实锤）。老机器沙箱起不来时 MSG_NO_SANDBOX=1 回旧行为。
+const CHROMIUM_SANDBOX = String(process.env.MSG_NO_SANDBOX || "") !== "1";
 // B65：登录期「需要人操作」的分段——看门狗观测到进入这些 stage 时把 headed 窗口
 // 前置一次（每个 stage 只前置一次，防 1.5s tick 反复夺焦点把整台机器搞到没法用）。
 const HUMAN_ACTION_STAGES = new Set([
@@ -826,7 +837,10 @@ async function mirrorManualOutbound(entry, chatKey, tail, opts = {}) {
           name: String(opts.rowName || ""), text: m.text || "",
           media_type: m.media_type || "", media_ref: m.media_ref || "",
           ts: Math.floor(Date.now() / 1000), msg_id: mid,
-          direction: "out", is_request: false, request_category: "",
+          // Q-24 C（#298）：手机/其它设备发出的消息回抄——origin=external 让 Python 侧
+          // 只落行（不起草、不算坐席动作、不触发让位）；sender_id=external 供气泡打「手机端发出」小标。
+          direction: "out", origin: "external", sender_id: "external",
+          is_request: false, request_category: "",
         });
         bumpOp(entry, "manual_out_mirrored");
       } catch (_) { /* best-effort：镜像失败绝不影响入站主流程 */ }
@@ -985,7 +999,7 @@ async function readThreadTail(entry, key, extPage = null, opts = {}) {
     }, { timeout: 3500 }).catch(() => {});
     // 每条消息取 aria-label + 其气泡容器内的媒体源（图片/视频/音频）。保守取媒体：仅当元素够大
     // （避免头像/emoji/链接预览缩略图误判为客户媒体）；有文本的气泡不强行贴图（防误贴头像）。
-    const items = await page.evaluate(() => {
+    const items = await page.evaluate((reactRe) => {
       const region = document.querySelector('[role="log"]')
         || document.querySelector('[aria-label*="消息"],[aria-label*="Messages"],[aria-label*="对话"]')
         || document.querySelector('[role="main"]') || document.body;
@@ -1002,12 +1016,18 @@ async function readThreadTail(entry, key, extPage = null, opts = {}) {
           box = box.parentElement;
         }
         // P2：同行内的表情回应 aria（「你用👍回应了」/「X reacted with …」）
+        // Q-24 D（#298，P7P8FY 实锤）：当前 messenger.com 反应胶囊 aria 是「查看回应 /
+        // See who reacted to this message」+ 可见 emoji 文本，旧正则一条匹不到 → 反应从未出边车。
+        // 判据放宽（reactRe 由 Node 侧传入 = send_chain.REACTION_ARIA_RE），同时带出可见文本抽 emoji。
         const reactions = [];
         try {
+          const rre = new RegExp(reactRe, "i");
           for (const el of box.querySelectorAll("[aria-label]")) {
             if (el === e) continue;
             const ra = el.getAttribute("aria-label") || "";
-            if (/回应了|reacted with/i.test(ra)) reactions.push(ra);
+            if (!rre.test(ra)) continue;
+            const rt = ((el.innerText || el.textContent) || "").trim().slice(0, 40);
+            reactions.push({ aria: ra, text: rt });
           }
         } catch (_) { /* best-effort */ }
         let media = null;
@@ -1050,16 +1070,21 @@ async function readThreadTail(entry, key, extPage = null, opts = {}) {
         }
         return { aria, media, reactions };
       });
-    });
+    }, REACTION_ARIA_RE.source);
     const msgs = [];
     for (const it of items) {
       const p = parseMsgAria(it.aria);
       if (!p) continue;
       p.media_type = ""; p.media_ref = "";
       // P2：解析同行反应 aria → [{emoji,sender}]（挂到本条消息）
+      // Q-24 D：旧 aria 词序优先；匹不到走 parseReactionPill（emoji 取可见文本，发送者按
+      // 消息方向推——本方出站气泡上的反应＝对方点的，入站气泡上的＝我们点的）。
       p.reactions = [];
-      for (const ra of (it.reactions || [])) {
-        const r = parseReactionFromAria(ra);
+      for (const rr of (it.reactions || [])) {
+        const ra = typeof rr === "string" ? rr : String((rr && rr.aria) || "");
+        const rt = typeof rr === "string" ? "" : String((rr && rr.text) || "");
+        const r = parseReactionFromAria(ra)
+          || parseReactionPill(ra, rt, p.direction === "out" ? "peer" : "me");
         if (r && r.emoji) p.reactions.push(r);
       }
       // 有媒体：文本气泡只在「无正文」时贴媒体（防把带头像的文本消息误标成图片）
@@ -1260,6 +1285,8 @@ function launchOptions(proxyUrl, channel = BROWSER_CHANNEL, headless = HEADLESS,
       ...(Array.isArray(extraArgs) ? extraArgs : []),
     ],
     ignoreDefaultArgs: ["--enable-automation"],
+    // Q-24 E：沙箱开着就不会出 --no-sandbox 黄条（黄条本身也是「这是自动化浏览器」的指纹）
+    chromiumSandbox: CHROMIUM_SANDBOX,
   };
   if (channel) opts.channel = channel;
   // UA 只在显式指定、或回落到捆绑 Chromium 时才覆盖：真 Chrome 自带的 UA 与它发出的
@@ -1542,6 +1569,8 @@ async function tryAutoE2eePin(loginId, entry, page) {
       // （最长 60s）才自愈。清零后即按恢复后的真实读取重新积累。
       entry._readWin = [];
       entry._convStats = { count: 0, ph: 0 };
+      // Q-24 C：PIN 过了 → 自动回填该账号（历史 + 手机端发出的消息此前都读不出）
+      scheduleBackfillAfterPin(entry, "pin_accepted");
       return true;
     }
     logger.warn({ loginId, tries: entry._pinTries },
@@ -2269,6 +2298,18 @@ async function pollInbound(entry) {
         }
       }
     }
+    // Q-24 C（#298）：PIN 刚通过 → 重建回填队列（此前队列消化的全是加密占位空读）。
+    // 同首连口径：只碰已读会话；Python 侧 thread-history 幂等，重灌无害。
+    if (!firstPass && entry._backfillRebuildPending && MSG_BACKFILL > 0 && PY_THREAD_HISTORY_URL) {
+      entry._backfillRebuildPending = false;
+      entry._backfillQueue = convs
+        .filter((c) => canOpenThread({ purpose: "backfill", unread: !!c.unread }).ok)
+        .slice(0, MSG_BACKFILL)
+        .map((c) => ({ key: c.key, name: c.name, avatar: c.avatar }));
+      entry._backfillRetry = null;
+      logger.info({ accountId: entry.accountId, n: entry._backfillQueue.length },
+        "backfill queue rebuilt after e2ee pin passed");
+    }
     // P1 首连回填推进 + 预热提速：每 tick 串行消化一小批（batch 条，非并发），把稀疏窗口
     // 压短（20 条 batch=3 ≈ 7 tick）。串行复用同一 readPage、条间 GAP 小憩，导航形态与逐条
     // 一致、只是更密；_polling 再入闸保证本 tick 变长不与下一 tick 重叠。设 batch=1 即旧行为。
@@ -2334,6 +2375,16 @@ async function pollInbound(entry) {
         // 心跳能立刻带上精确的 e2ee_pin_required 提示码（否则 UI 会先给一拍
         // 泛泛「重登」CTA）。自愈成功会清 _readWin，下一拍读取重建即转健康。
         await maybeAutoPinSelfHeal(entry);
+        // Q-24 C：PIN 曾缺失/失败，而浮层已不在（手机端确认 / 人工输入过了）→ 转 ok + 自动回填
+        if (entry._pinPromptSeen && /^(missing|failed)$/.test(String(entry._pinState || ""))) {
+          // 只在页面停在加密线程上时判「浮层消失＝已解锁」（非 e2ee 页本就没有浮层，不算证据）
+          const onE2ee = /\/e2ee\//.test(String(entry.page.url() || ""));
+          if (onE2ee && !(await detectPinPrompt(entry.page))) {
+            entry._pinState = "ok";
+            entry._pinLastOkTs = Date.now();
+            scheduleBackfillAfterPin(entry, "pin_cleared_heartbeat");
+          }
+        }
         await postInboxHealth(entry);
       }
     } catch (_) { /* 心跳失败不影响轮询 */ }
@@ -2671,27 +2722,57 @@ function maybeAutoHideAfterLogin(loginId, entry) {
   injectPostLoginBanner(entry.page).catch(() => {});
   logger.info({ loginId, delayMs: HIDE_AFTER_LOGIN_DELAY_MS },
     "headed login window authorized → will auto-swap to headless");
-  const t = setTimeout(async () => {
+  entry._hideArmedAt = Date.now();
+  const arm = (ms) => {
+    const t = setTimeout(() => { hideTick().catch((e) => logger.debug({ e }, "hide tick failed")); }, ms);
+    if (typeof t.unref === "function") t.unref();
+  };
+  const hideTick = async () => {
     const cur = sessions.get(loginId);
     // 只动「还是同一个 entry 且仍授权」的会话；期间被 relogin/cancel/logout 换掉就不掺和。
     if (_shuttingDown || !cur || cur !== entry || cur.status !== "authorized") return;
     if (_recovering.has(loginId)) return; // 崩溃自愈已在处理 → 让它走
     // B70（实施67 P1-9）：隐藏前最后核对——e2ee PIN 浮层在场时把窗口无头化
     // ＝把「等人输 PIN」的账号推进入站半死（`_344`/`_345` 死等实录）。
-    // 有托管 PIN 先就地自愈（成功→照常隐藏）；没有/自愈失败→本轮不隐藏，
-    // 摘掉成功横幅把输入还给人。
+    // 有托管 PIN 先就地自愈（成功→照常隐藏）。
+    // Q-24 E（#298，TKV3HB 实锤）：旧版「本轮不隐藏 + return」= 永不再武装 → 窗口永久
+    // 露着、每次导航都抢前台。现在：PIN 在场且未自愈 → 记 pinState=missing/failed 让
+    // 心跳把 e2ee_pin_required 送到工作台黄条（会话头「需在手机确认 PIN / 托管 PIN」），
+    // 每 15s 复查一次；给人 HIDE_PIN_GRACE_MS 宽限（默认 2min）在窗口里输 PIN，宽限到
+    // 仍未过 → **强制隐藏**（托管 PIN 后 headless 里 driveE2eePinReplay 照样能自愈）。
+    // 每次复查都落 `[msg-sidecar] window visible reason=…` 行，可见就有痕。
     try {
       if (await detectPinPrompt(cur.page)) {
+        cur._pinPromptSeen = true;
         let healed = false;
         if (getE2eePin(loginId)) {
           healed = await tryAutoE2eePin(loginId, cur, cur.page).catch(() => false);
+        } else {
+          cur._pinState = "missing";
         }
         if (!healed) {
-          logger.info({ loginId },
-            "auto-hide deferred: e2ee pin prompt on screen (window stays visible)");
-          await removePostLoginBanner(cur.page);
-          return;
+          const visibleFor = Date.now() - (cur._hideArmedAt || Date.now());
+          if (visibleFor < HIDE_PIN_GRACE_MS) {
+            logger.warn({ loginId, visibleMs: visibleFor, graceMs: HIDE_PIN_GRACE_MS,
+              pinState: String(cur._pinState || "") },
+            "[msg-sidecar] window visible reason=e2ee_pin_prompt (auto-hide deferred, re-check in 15s)");
+            await removePostLoginBanner(cur.page);
+            postInboxHealth(cur).catch(() => {});
+            arm(15000);
+            return;
+          }
+          logger.warn({ loginId, visibleMs: visibleFor, pinState: String(cur._pinState || "") },
+            "[msg-sidecar] window visible reason=e2ee_pin_prompt grace exhausted → FORCE hide "
+            + "(PIN via workbench hosted-PIN; headless replay will heal)");
+        } else {
+          // PIN 刚过：加密线程此前读不出 → 重建回填队列，历史/手机端消息补抄进来（C 段）
+          scheduleBackfillAfterPin(cur, "pin_healed_before_hide");
         }
+      } else if (cur._pinPromptSeen && cur._pinState !== "ok") {
+        // 人在窗口里手输 PIN 过了（浮层消失）→ 同样视为解锁：清状态 + 回填
+        cur._pinState = "ok";
+        cur._pinLastOkTs = Date.now();
+        scheduleBackfillAfterPin(cur, "pin_cleared_manually");
       }
     } catch (_) { /* 探测异常按旧行为继续隐藏 */ }
     try {
@@ -2708,8 +2789,28 @@ function maybeAutoHideAfterLogin(loginId, entry) {
       _intentionalClose.delete(loginId);
       scheduleRecovery(loginId);
     }
-  }, HIDE_AFTER_LOGIN_DELAY_MS);
-  if (typeof t.unref === "function") t.unref();
+  };
+  arm(HIDE_AFTER_LOGIN_DELAY_MS);
+}
+
+/**
+ * Q-24 C（#298）：PIN 通过后自动回填——加密线程在 PIN 未过时 readThreadTail 全是占位/空，
+ * 首连回填队列早已消化完（消化的是空读）。PIN 一过就把队列重建（复用首连 warmBackfillBatch
+ * 口径：只碰已读会话，未读留给实时链，绝不额外标已读），下几拍轮询自然把历史 + 手机端
+ * 发出的消息（direction=out origin=external）抄进来。同一 entry 5 分钟内只重建一次。
+ */
+function scheduleBackfillAfterPin(entry, reason) {
+  try {
+    if (!entry || entry.status !== "authorized") return;
+    const now = Date.now();
+    if (entry._pinBackfillAt && now - entry._pinBackfillAt < 300000) return;
+    entry._pinBackfillAt = now;
+    entry._backfillRebuildPending = true;
+    entry._readWin = [];
+    entry._convStats = { count: 0, ph: 0 };
+    logger.info({ loginId: entry._loginId, reason }, "e2ee pin passed → backfill queue rebuild scheduled");
+    postInboxHealth(entry).catch(() => {});
+  } catch (_) { /* best-effort */ }
 }
 
 async function startLogin(loginId, proxyUrl, isRestore = false, interactive = false) {
@@ -4272,183 +4373,310 @@ async function recoverComposerOnce(entry, page, jid) {
   return { box: null, accepted, reason, probe };
 }
 
-app.post("/accounts/:id/send", async (req, res) => {
-  const entry = findByAccount(req.params.id);
-  if (!entry || !entry.page) {
-    // M-2 D（#232）：这一行此前静默——ZGKVQB「restored 0 后两小时零日志」的直接原因之一。
-    // 收得到（Python 侧历史/同步还在）发不出（边车没有该账号的已授权会话）必须留痕。
-    logger.warn({ accountId: String(req.params.id || ""),
-      known: [...sessions.entries()].map(([id, e]) => `${id}:${e.status}:${e.accountId || "-"}`),
-      restoring: _restoring }, "send: account not connected (no authorized session) → 404");
-    // 文案里带 not_logged_in 标记：Python note_send_auth_failure 据此立刻登记 needs_login
-    // （账号栏「需重新登录」不必等编排器下一轮探测）。
-    return res.status(404).json({ ok: false, delivered: false, reason_code: "not_logged_in",
-      error: "account not connected (not_logged_in: no authorized session in sidecar; re-login required)" });
-  }
-  const jid = String((req.body && req.body.jid) || "");
-  const text = String((req.body && req.body.text) || "");
-  if (!jid || !text) {
-    return res.status(400).json({ ok: false, error: "jid and text required" });
-  }
-  // M-2 C（#233）：手动发送与自动投递分开配额、手动优先——body.manual=true（Python 人工
-  // 路由透传）在 send_backoff 窗内放行**一次**探测性发送（成功即 noteSendSuccess 解锁，
-  // 失败照常续退避）。account_blocked（平台临时封锁）不放行：那是平台说的不许发。
-  const isManual = !!(req.body && (req.body.manual === true || req.body.manual === 1));
-  // P3：send 进每账号写操作互斥（与 /react 串行；等锁超时 fail-open 回无锁旧行为）
-  const _opRelease = await acquireAccountOp(entry, "send");
+// ── Q-24 A/B（#298 P0，2026-09-12）：composer 重绑 + 结构化失败 + 待重试队列 ─────────
+// DXAPAX / FJM9ER 四份诊断包同型：ElementHandle 抓到手 → Messenger 重绘 composer →
+// click/type 抛 `Element is not attached to the DOM` → 500 → Python 只写「发送失败」→
+// 连败 backoff 40s 静默。三处止血：
+//   ① 输入前**重查** composer 并等 DOM 安静（MutationObserver 300ms 静默，≤2s 预算）再
+//      focus → 输入；② detached 族错误**同线程重查重试 1 次**（不重导航），仍失败才
+//      re-navigate 一次（recoverComposerOnce）；③ 同会话连败 ≥2 → 待重试队列（60s 一拍、
+//      ≤3 次）+ postStatus("send_stuck") 让工作台铃铛出声，不再只靠 40s backoff 静默。
+// 失败一律经 failSend 出网：{ok:false, code, reason, detail, retry_after_ms, retries}。
+const COMPOSER_STABLE_BUDGET_MS = Number(process.env.MSG_COMPOSER_STABLE_MS || 2000);
+const COMPOSER_QUIET_MS = 300;
+
+/** 重查 composer → 等其所在行 DOM 安静 → 取**新鲜** handle 并 focus。找不到返回 null。 */
+async function resolveComposerStable(page, { timeoutMs = 10000 } = {}) {
+  const first = await page.waitForSelector(SEL_COMPOSER, { timeout: timeoutMs }).catch(() => null);
+  if (!first) return null;
+  // DOM 安静期：composer 父容器 quiet 300ms 或预算耗尽即放行（预算内最多等 2s，不拖慢常态发送）
   try {
-    // B99 ①③：临时封锁冻结 / 连败退避窗内直接快速失败——不碰浏览器（重试风暴
-    // 正是风控反噬的燃料），上游拿 reason_code 决定改期而不是立刻再投。
-    const gate = sendGateCheck(entry);
-    if (!gate.ok) {
-      // 每个退避窗放行一次人工探测（纯函数 msg_ops.manualProbeDecision，有单测）
-      const probeOk = manualProbeDecision({
-        manual: isManual, gateReason: gate.reason, backoffUntil: entry._sendBackoffUntil || 0,
-        streak: entry._sendFailStreak || 1, lastProbeAt: entry._manualProbeAt || 0,
-      }).allow;
-      if (probeOk) {
-        entry._manualProbeAt = Date.now();
-        logger.warn({ loginId: entry._loginId, jid, streak: entry._sendFailStreak,
-          backoffLeftMs: gate.retryAfterMs }, "send: manual probe allowed through send_backoff (manual-first, once per window)");
-      } else {
-        return res.status(gate.code).json({
-          ok: false, delivered: false, reason_code: gate.reason,
-          retry_after_ms: gate.retryAfterMs, manual: isManual,
-          error: gate.reason === "account_blocked"
-            ? "account temporarily blocked by platform (auto-frozen)"
-            : (isManual ? "send backoff active; manual probe already used this window"
-                        : "send backoff active after consecutive failures"),
-        });
-      }
-    }
-    const t0 = Date.now();
-    const page = entry.page;
-    // 同线程快路：页面已停在目标线程（连续给同一客户发消息的常态；发送后页面本就留在
-    // 线程上）→ 跳过整页重导航 + 2s settle（实测省 ~3-5s/条）。composer 存在性仍由下方
-    // waitForSelector 统一把关；PIN 浮层探测/接受栏处理照走，行为面不变。
-    const fastPath = sendFastPathEligible(page.url(), jid);
-    if (!fastPath) {
-      await page.goto(`${MESSENGER_URL}t/${jid}`, {
-        waitUntil: "domcontentloaded", timeout: 20000,
+    await page.evaluate(({ sel, quiet, budget }) => new Promise((resolve) => {
+      const el = document.querySelector(sel);
+      if (!el) return resolve(false);
+      let root = el;
+      for (let i = 0; i < 4 && root.parentElement; i++) root = root.parentElement;
+      let timer = setTimeout(() => { obs.disconnect(); resolve(true); }, quiet);
+      const hard = setTimeout(() => { obs.disconnect(); clearTimeout(timer); resolve(false); }, budget);
+      const obs = new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { obs.disconnect(); clearTimeout(hard); resolve(true); }, quiet);
       });
-      // settle：请求线程会先乐观渲染输入框、再换成「接受」栏，须等 UI 稳定再判定。
-      await page.waitForTimeout(2000);
+      obs.observe(root, { childList: true, subtree: true, attributes: true });
+    }), { sel: SEL_COMPOSER, quiet: COMPOSER_QUIET_MS, budget: COMPOSER_STABLE_BUDGET_MS });
+  } catch (_) { /* 探针失败按已稳定 */ }
+  // 安静期后重新取 handle（安静期内可能又换了一轮节点）
+  const fresh = await page.$(SEL_COMPOSER).catch(() => null);
+  const box = fresh || first;
+  try { await box.focus(); } catch (_) { /* focus 失败由后续 click 兜底 */ }
+  return box;
+}
+
+/** 通话 / 来电浮层探测（E 段）：在场则尝试点「关闭/拒绝/结束」，返回 { seen, dismissed }。 */
+async function detectCallOverlay(page) {
+  let txt = "";
+  try {
+    txt = await page.evaluate(() => {
+      const dlg = document.querySelector('[role="dialog"], [aria-modal="true"]');
+      return ((dlg && dlg.innerText) || "").slice(0, 1500);
+    });
+  } catch (_) { return { seen: false, dismissed: false }; }
+  if (!isCallOverlayText(txt)) return { seen: false, dismissed: false };
+  let dismissed = false;
+  try {
+    const btn = page.locator('[role="dialog"] [role="button"], [role="dialog"] button, [aria-modal="true"] [role="button"]')
+      .filter({ hasText: /^(关闭|拒绝|结束|忽略|Close|Decline|Dismiss|Ignore|End call|Leave)$/i }).first();
+    if (await btn.count()) { await btn.click({ timeout: 2000 }); dismissed = true; }
+    else { await page.keyboard.press("Escape").catch(() => {}); }
+  } catch (_) { dismissed = false; }
+  logger.warn({ dismissed, snippet: txt.slice(0, 80) }, "send: call overlay on screen");
+  return { seen: true, dismissed };
+}
+
+/**
+ * 统一失败出口：退避计数 + 每会话连败 + 待重试队列 + 铃铛 + 结构化响应。
+ * 绝不换文案、绝不在这里重发（重发只在 retry tick，且回读去重）。
+ */
+function failSend(entry, res, { code = "", reason = "", detail = "", jid = "", status = 0,
+  retryAfterMs = 0, manual = false, text = "", quoted = null, mediaPath = "", mediaType = "",
+  caption = "", skipBackoff = false, extra = null } = {}) {
+  const c = normalizeSendFailCode({ reason, message: detail, status });
+  if (!skipBackoff) noteSendFailure(entry, reason || c);
+  if (!entry._jidFailStreak) entry._jidFailStreak = new Map();
+  const streak = jid ? bumpJidFailStreak(entry._jidFailStreak, jid, false) : 0;
+  let queued = false;
+  if (jid && shouldQueueRetry({ streak, code: c })) {
+    if (!entry._sendRetryQueue) entry._sendRetryQueue = new Map();
+    const r = retryQueueUpsert(entry._sendRetryQueue, jid, {
+      text, manual, quoted, code: c, mediaPath, mediaType, caption,
+    });
+    queued = r.queued;
+    if (queued) {
+      logger.warn({ loginId: entry._loginId, jid, streak, code: c, replaced: r.replaced },
+        "send: consecutive failures → queued for background retry (60s x3) + agent bell");
+      postStatus(entry._loginId || "", entry, "send_stuck",
+        `${c}|jid=${jid}|streak=${streak}|preview=${String(text || caption || "[media]").slice(0, 40)}`)
+        .catch(() => {});
+      ensureRetryTicker(entry);
     }
-    // E2EE 半死自愈（2026-08-10 .198 事故）：加密线程缺设备密钥时会挂「输入恢复 PIN」浮层，
-    // 此时 composer 可能仍在但发出去对端收不到（回读锚不到气泡＝verified:false 的真因）。
-    // 发送前若探到浮层且已配 PIN → 先输 PIN 恢复密钥，再走正常发送。已配 PIN 才动手，闸门限次。
-    if (getE2eePin(entry._loginId || "") && await detectPinPrompt(page)) {
-      entry._pinPromptSeen = true;
-      const healed = await tryAutoE2eePin(entry._loginId || "", entry, page).catch(() => false);
-      if (healed) {
-        await page.goto(`${MESSENGER_URL}t/${jid}`, { waitUntil: "domcontentloaded", timeout: 20000 })
-          .catch(() => {});
-        await page.waitForTimeout(1500);
+  }
+  const body = sendFailBody({
+    code: c, reason: reason || c, detail,
+    retryAfterMs: retryAfterMs || Math.max(0, (entry._sendBackoffUntil || 0) - Date.now()),
+    retries: Math.max(0, streak - 1),
+    extra: { accepted: false, manual: !!manual, queued, streak, ...(extra || {}) },
+  });
+  logger.warn({ loginId: entry._loginId, jid, code: c, reason, streak, queued, manual,
+    detail: String(detail || "").slice(0, 160) }, "send failed (structured)");
+  return res.status(status || sendFailHttpStatus(c)).json(body);
+}
+
+/** 成功出口：清连败 + 出队（人工/自动任一成功即视为该会话通了）。 */
+function noteJidSendOk(entry, jid) {
+  noteSendSuccess(entry);
+  if (entry._jidFailStreak && jid) bumpJidFailStreak(entry._jidFailStreak, jid, true);
+  if (entry._sendRetryQueue && jid && entry._sendRetryQueue.has(String(jid))) {
+    retryQueueSettle(entry._sendRetryQueue, jid, { ok: true });
+    logger.info({ loginId: entry._loginId, jid }, "send: retry queue item cleared by a successful send");
+  }
+}
+
+/** 待重试队列的后台拍子：每 entry 一个 ticker，队列空即停。 */
+function ensureRetryTicker(entry) {
+  if (entry._retryTicker) return;
+  entry._retryTicker = setInterval(() => {
+    retryTick(entry).catch((e) => logger.debug({ e }, "retry tick failed"));
+  }, 15000);
+  if (typeof entry._retryTicker.unref === "function") entry._retryTicker.unref();
+}
+
+async function retryTick(entry) {
+  const q = entry._sendRetryQueue;
+  if (!q || !q.size) {
+    if (entry._retryTicker) { clearInterval(entry._retryTicker); entry._retryTicker = null; }
+    return;
+  }
+  if (_shuttingDown || entry.status !== "authorized" || !entry.page) return;
+  if (!sendGateCheck(entry).ok) return; // 退避 / 封锁窗内不撞
+  const due = retryQueueDue(q);
+  if (!due.length) return;
+  const item = due[0];
+  if (item.mediaPath) {
+    // 媒体重试暂不做（附件链需 file chooser 全程），到点直接终局报告，不静默
+    const st = retryQueueSettle(q, item.jid, { ok: false, error: "media_retry_unsupported",
+      maxTries: 1 });
+    if (st.final) reportRetryFinal(entry, item, "media_retry_unsupported");
+    return;
+  }
+  const release = await acquireAccountOp(entry, "send_retry");
+  try {
+    logger.info({ loginId: entry._loginId, jid: item.jid, tries: item.tries + 1 },
+      "send retry: attempting queued message");
+    const r = await performTextSend(entry, item.jid, item.text, { quoted: item.quoted, manual: item.manual,
+      retry: true });
+    if (r.ok) {
+      retryQueueSettle(q, item.jid, { ok: true });
+      noteJidSendOk(entry, item.jid);
+      logger.info({ loginId: entry._loginId, jid: item.jid, alreadyOnPage: !!r.alreadyOnPage },
+        "send retry: delivered");
+      // 回抄给 Python：失败留痕行改标 resent（origin=retry_queue 让 ingest 路由认领），坐席看到「已补发」
+      await postIngest({
+        platform: "messenger", account_id: entry.accountId, chat_key: item.jid,
+        name: "", text: item.text, ts: Math.floor(Date.now() / 1000),
+        msg_id: r.messageId || synthMsgId({ chatKey: item.jid, direction: "out", tsLabel: "", text: item.text, mediaRef: "" }),
+        direction: "out", origin: "retry_queue", is_request: false, request_category: "",
+      }).catch(() => {});
+      postStatus(entry._loginId || "", entry, "send_recovered",
+        `jid=${item.jid}|tries=${item.tries + 1}`).catch(() => {});
+    } else {
+      const st = retryQueueSettle(q, item.jid, { ok: false, error: r.reason || r.code });
+      logger.warn({ loginId: entry._loginId, jid: item.jid, code: r.code, reason: r.reason,
+        tries: st.item ? st.item.tries : "-", final: st.final }, "send retry: failed");
+      if (st.final) reportRetryFinal(entry, item, r.code || r.reason || "retry_exhausted");
+    }
+  } finally {
+    release();
+  }
+}
+
+function reportRetryFinal(entry, item, code) {
+  logger.error({ loginId: entry._loginId, jid: item.jid, code, tries: item.tries },
+    "send retry: exhausted → final failure reported to agent");
+  postStatus(entry._loginId || "", entry, "send_stuck_final",
+    `${code}|jid=${item.jid}|tries=${item.tries}|preview=${String(item.text || "[media]").slice(0, 40)}`)
+    .catch(() => {});
+}
+
+/**
+ * 文本发送核心（/send 与 retryTick 共用）。返回 { ok, code, reason, detail, accepted, verified,
+ * quoted, messageId, alreadyOnPage }。不写响应、不计退避——由调用方决定。
+ * retry=true 时先回读页面：我们的文本已是最后一条本方气泡 → 视为已发出（防双发，VNA2Q3 教训）。
+ */
+async function performTextSend(entry, jid, text, { quoted = null, manual = false, retry = false } = {}) {
+  const page = entry.page;
+  const fastPath = sendFastPathEligible(page.url(), jid);
+  if (!fastPath) {
+    try {
+      await page.goto(`${MESSENGER_URL}t/${jid}`, { waitUntil: "domcontentloaded", timeout: 20000 });
+    } catch (e) {
+      return { ok: false, code: "thread_not_found", reason: "nav_failed",
+        detail: String((e && e.message) || e).slice(0, 200) };
+    }
+    await page.waitForTimeout(2000);
+  }
+  if (getE2eePin(entry._loginId || "") && await detectPinPrompt(page)) {
+    entry._pinPromptSeen = true;
+    const healed = await tryAutoE2eePin(entry._loginId || "", entry, page).catch(() => false);
+    if (healed) {
+      await page.goto(`${MESSENGER_URL}t/${jid}`, { waitUntil: "domcontentloaded", timeout: 20000 })
+        .catch(() => {});
+      await page.waitForTimeout(1500);
+    }
+  }
+  if (await detectPinPrompt(page)) {
+    entry._pinPromptSeen = true;
+    if (!getE2eePin(entry._loginId || "")) entry._pinState = "missing";
+    return { ok: false, code: "e2ee_pin_pending", reason: "e2ee_pin_pending",
+      detail: "e2ee recovery pin prompt on screen (session locked; send would fail)",
+      extra: { pin_set: !!getE2eePin(entry._loginId || "") } };
+  }
+  const call = await detectCallOverlay(page);
+  if (call.seen && !call.dismissed) {
+    return { ok: false, code: "call_overlay", reason: "call_overlay",
+      detail: "call / incoming-call overlay blocks the composer" };
+  }
+  if (retry) {
+    // 防双发：上一次其实已发出（composer 清空滞后 / 回读超时）→ 页面上已有我们的气泡
+    try {
+      const rb0 = await readbackLastOutgoing(page, text, 1500);
+      if (rb0.found && !rb0.rowFail) {
+        return { ok: true, alreadyOnPage: true, accepted: false, verified: true, quoted: false,
+          messageId: synthMsgId({ chatKey: jid, direction: "out", tsLabel: "", text, mediaRef: "" }) };
       }
-    }
-    // B99 ②：PIN 浮层仍在场＝加密会话没解锁——此时 composer 交互必然超时/发了
-    // 对端也收不到（CUN2TM 实锤失败链）。快速失败出精确码，别再当 DOM flake 撞。
-    if (await detectPinPrompt(page)) {
-      noteSendFailure(entry, "e2ee_pin_pending");
-      return res.status(503).json({
-        ok: false, delivered: false, reason_code: "e2ee_pin_pending",
-        pin_set: !!getE2eePin(entry._loginId || ""),
-        error: "e2ee recovery pin prompt on screen (session locked; send would fail)",
-      });
-    }
-    // 先处理「接受」——有此按钮即消息请求，须先接受才可回复（回复即接受，符合获客策略）。
-    let accepted = await clickAcceptRequest(page);
-    if (accepted) await page.waitForTimeout(2000);
-    // 只认真正的消息输入框（aria-label「发消息给…」/ Message…），排除搜索框等。
-    let box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
+    } catch (_) { /* 回读失败照常重发 */ }
+  }
+  let accepted = await clickAcceptRequest(page);
+  if (accepted) await page.waitForTimeout(2000);
+  let box = await resolveComposerStable(page, { timeoutMs: 10000 });
+  if (!box) {
+    const rec = await recoverComposerOnce(entry, page, jid);
+    accepted = accepted || rec.accepted;
+    box = rec.box;
     if (!box) {
-      // 首轮没等到 ≠ 发不了：重新导航再等一轮（新 E2EE 线程首开渲染慢的主救济），
-      // 仍无 → 探针分类 + error 日志 + reason_code 出网（此前该分支静默 500）。
+      await maybeMarkBlocked(entry, page);
+      return { ok: false, code: normalizeSendFailCode({ reason: rec.reason || "composer_not_found" }),
+        reason: rec.reason || "composer_not_found", accepted,
+        detail: `composer not found (${rec.reason || "unknown"})` };
+    }
+  }
+  recordSent(entry, jid, text);
+  const outMsgId = synthMsgId({ chatKey: jid, direction: "out", tsLabel: "", text, mediaRef: "" });
+  if (!entry._lastOutboundId) entry._lastOutboundId = new Map();
+  entry._lastOutboundId.set(String(jid), outMsgId);
+  let quoteApplied = false;
+  if (quoted && quoted.text) {
+    try { quoteApplied = await tryQuoteTarget(page, String(quoted.text)); }
+    catch (_) { quoteApplied = false; }
+    bumpOp(entry, quoteApplied ? "quote_applied" : "quote_degraded");
+    if (!quoteApplied) {
+      logger.warn({ jid }, "send: quote target not located → sending without quote (degraded)");
+    }
+  }
+  const clearComposer = async () => {
+    try {
+      const b = await page.$(SEL_COMPOSER);
+      if (b) { await b.click({ timeout: 2000 }); }
+      await page.keyboard.press("Control+a");
+      await page.keyboard.press("Backspace");
+    } catch (_) {}
+  };
+  const typeIntoComposer = async () => {
+    if (text.length > 80 && !text.includes("\n")) {
+      await box.type(text.slice(0, 20), { delay: 20 });
+      await page.keyboard.insertText(text.slice(20));
+      await page.waitForTimeout(150);
+      let cur = "";
+      try {
+        cur = await page.$eval(SEL_COMPOSER,
+          (el) => ((el.innerText || el.textContent || "") + "").trim());
+      } catch (_) { cur = ""; }
+      if (composerTextMatches(cur, text)) return;
+      logger.warn({ jid }, "send: insertText integrity check failed → falling back to full typing");
+      await page.keyboard.press("Control+a").catch(() => {});
+      await page.keyboard.press("Backspace").catch(() => {});
+    }
+    await box.type(text, { delay: 20 });
+  };
+  // 输入一击 = 重查稳定 composer → click → type。detached 族错误：同线程重查重试 1 次；
+  // 仍 detached → re-navigate 一次再试；第三次仍失败 → composer_detached 终局（不再撞）。
+  const inputOnce = async () => {
+    await box.click();
+    await typeIntoComposer();
+  };
+  const rebindLog = (stage, err) => logger.warn({ jid, stage,
+    err: err ? String(err.message || err).slice(0, 120) : undefined },
+    "send: composer detached → rebind (" + stage + ")");
+  // 编排在 send_chain.inputWithRebind（可注入回调，node --test 回放 DXAPAX 序列）
+  const doRebind = () => inputWithRebind({
+    input: inputOnce,
+    clear: clearComposer,
+    requery: async () => { box = await resolveComposerStable(page, { timeoutMs: 8000 }); return !!box; },
+    renavigate: async () => {
       const rec = await recoverComposerOnce(entry, page, jid);
       accepted = accepted || rec.accepted;
-      box = rec.box;
-      if (!box) {
-        await maybeMarkBlocked(entry, page);   // B99 ⑤：composer 缺席可能是封锁页
-        noteSendFailure(entry, rec.reason || "composer_not_found");
-        return res.status(500).json({
-          ok: false, delivered: false, accepted,
-          reason_code: rec.reason,
-          error: `composer not found (${rec.reason || "unknown"})`,
-        });
-      }
-    }
-    // 记录自发文本（在真正尝试发送前即记）——即使后续 verify 偶发误判，也确保轮询能识别
-    // 并跳过这条自发消息的回声，杜绝「自己回自己」。幂等：重试不重复记（recordSent 去重）。
-    recordSent(entry, jid, text);
-    // P2：出站稳定 id——本方撤回预览 / 墓碑可挂 revoke；回传给 Python 供将来对齐 platform_msg_id。
-    const outMsgId = synthMsgId({
-      chatKey: jid, direction: "out", tsLabel: "", text, mediaRef: "",
-    });
-    if (!entry._lastOutboundId) entry._lastOutboundId = new Map();
-    entry._lastOutboundId.set(String(jid), outMsgId);
-    // 引用回复（P2 双面板融合）：body.quoted.text 命中可见气泡 → 进引用态再发。
-    // best-effort + degrade-safe：定位不到/任何步骤失败即普通发送，绝不阻断（引用是
-    // 增强不是前提）。在 type 之前执行，让 composer 先进引用态。
-    const quoted = req.body && req.body.quoted;
-    let quoteApplied = false;
-    if (quoted && quoted.text) {
-      try { quoteApplied = await tryQuoteTarget(page, String(quoted.text)); }
-      catch (_) { quoteApplied = false; }
-      bumpOp(entry, quoteApplied ? "quote_applied" : "quote_degraded");
-      if (!quoteApplied) {
-        logger.warn({ jid }, "send: quote target not located → sending without quote (degraded)");
-      }
-    }
-    // 一次输入+回车+校验清空的原子尝试；返回是否确认发出（composer 清空）。
-    // 长文本（>80 字且不含换行）混合输入提速：先逐字敲一小段建立输入态，剩余整段
-    // insertText（≈粘贴，人类常见行为；20ms/字逐敲 200 字要 4s）。按 Enter 前必须过
-    // composerTextMatches 完整性闸门——insertText 没进编辑器状态就清空回退整段逐字，
-    // 宁可慢也绝不让「内容截断」出站。含换行文本保持旧路径（type 的 \n 语义另有含义）。
-    const typeIntoComposer = async () => {
-      if (text.length > 80 && !text.includes("\n")) {
-        await box.type(text.slice(0, 20), { delay: 20 });
-        await page.keyboard.insertText(text.slice(20));
-        await page.waitForTimeout(150);
-        let cur = "";
-        try {
-          cur = await page.$eval(SEL_COMPOSER,
-            (el) => ((el.innerText || el.textContent || "") + "").trim());
-        } catch (_) { cur = ""; }
-        if (composerTextMatches(cur, text)) return;
-        logger.warn({ jid }, "send: insertText integrity check failed → falling back to full typing");
-        await page.keyboard.press("Control+a").catch(() => {});
-        await page.keyboard.press("Backspace").catch(() => {});
-      }
-      await box.type(text, { delay: 20 });
-    };
-    // B85（实施68）：composer ElementHandle 在点击瞬间被 Messenger 重绘换掉
-    // （stale element：`elementHandle.click: Element is not attached to the DOM`，
-    // e2ee 恢复态页面重绘频繁加剧）。click 抛 stale → 就地 re-resolve 一次再点，
-    // 而不是让异常冒泡成 500（坐席手发/自动稿双双静默丢失）。仅重解元素引用，
-    // 不重发消息——发送与否仍由下方 waitComposerCleared 判定，零重复发送风险。
-    const clickComposer = async () => {
-      try {
-        await box.click();
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        if (!/not attached|detached|stale/i.test(msg)) throw e;
-        logger.warn({ jid }, "send: composer stale on click → re-resolving once");
-        const fresh = await page.waitForSelector(SEL_COMPOSER, { timeout: 8000 })
-          .catch(() => null);
-        if (!fresh) throw e;
-        box = fresh;
-        await box.click();
-      }
-    };
-    const attemptSend = async () => {
-      await clickComposer();
-      await typeIntoComposer();
-      await page.keyboard.press("Enter");
-      return await waitComposerCleared(page, 3000);
-    };
-    let sent = await attemptSend();
-    // 安全重试一次：composer 未清空＝多半没发出。重试前确认 composer 里确实还是我们要发的
-    // 文本（避免「其实已发出、只是清空滞后」时重复发送造成刷屏）。仍是原文才再发一次。
+      if (rec.box) box = (await resolveComposerStable(page, { timeoutMs: 8000 })) || rec.box;
+      return rec;
+    },
+    log: rebindLog,
+  });
+  const attemptSend = async () => {
+    await doRebind();
+    await page.keyboard.press("Enter");
+    return await waitComposerCleared(page, 3000);
+  };
+  let sent;
+  try {
+    sent = await attemptSend();
     if (!sent) {
       let stillHasOurText = false;
       try {
@@ -4458,59 +4686,112 @@ app.post("/accounts/:id/send", async (req, res) => {
       } catch (_) { stillHasOurText = false; }
       if (stillHasOurText) {
         logger.warn({ jid }, "send: composer not cleared → retrying once");
-        // 重试前先清空残留（否则 attemptSend 再 type 一遍＝叠成双份文本发出——潜在老 bug）
-        try {
-          await box.click();
-          await page.keyboard.press("Control+a");
-          await page.keyboard.press("Backspace");
-        } catch (_) {}
+        await clearComposer();
         sent = await attemptSend();
       }
     }
-    // 关键修复：sent=false（未确认发出）必须如实上报为失败，让 Python 侧记 autosend_failed、
-    // 不把「没发出去」的草稿标记为已送达（此前恒 ok:true → 静默丢消息）。
-    if (!sent) {
-      logger.error({ jid }, "send: composer still not cleared after retry → reporting NOT delivered");
-      await maybeMarkBlocked(entry, page);   // B99 ⑤：发送被吞可能是封锁弹层拦的
-      noteSendFailure(entry, "composer_not_cleared");
-      return res.status(502).json({
-        ok: false, delivered: false, accepted, sent: false,
-        error: "composer not cleared after send (message likely not delivered)",
+  } catch (e) {
+    const detail = String((e && e.message) || e).slice(0, 300);
+    const code = e && e.sendCode ? e.sendCode
+      : normalizeSendFailCode({ reason: "exception", message: detail });
+    logger.error({ e, jid, manual, message: detail, loginId: entry._loginId, code }, "send failed");
+    return { ok: false, code, reason: (e && e.sendReason) || "exception", detail, accepted };
+  }
+  if (!sent) {
+    logger.error({ jid }, "send: composer still not cleared after retry → reporting NOT delivered");
+    await maybeMarkBlocked(entry, page);
+    return { ok: false, code: "composer_detached", reason: "composer_not_cleared", accepted,
+      detail: "composer not cleared after send (message likely not delivered)", extra: { sent: false } };
+  }
+  const rb = await readbackLastOutgoing(page, text, 5000);
+  if (rb.found && rb.rowFail) {
+    logger.error({ jid }, "send: bubble rendered with FAIL marker → reporting NOT delivered");
+    await maybeMarkBlocked(entry, page);
+    return { ok: false, code: "thread_not_found", reason: "bubble_fail_marker", accepted,
+      detail: "messenger marked the message as failed to send", extra: { sent: false, verified: true } };
+  }
+  if (!rb.found) {
+    logger.warn({ jid }, "send: composer cleared but readback did not find our bubble "
+      + "(treating as delivered, verified=false)");
+  }
+  return { ok: true, accepted, verified: !!rb.found, quoted: quoteApplied, messageId: outMsgId,
+    fastPath };
+}
+
+app.post("/accounts/:id/send", async (req, res) => {
+  const entry = findByAccount(req.params.id);
+  const jid = String((req.body && req.body.jid) || "");
+  const text = String((req.body && req.body.text) || "");
+  const isManual = !!(req.body && (req.body.manual === true || req.body.manual === 1));
+  if (!entry || !entry.page) {
+    // M-2 D（#232）：这一行此前静默——ZGKVQB「restored 0 后两小时零日志」的直接原因之一。
+    // 收得到（Python 侧历史/同步还在）发不出（边车没有该账号的已授权会话）必须留痕。
+    logger.warn({ accountId: String(req.params.id || ""),
+      known: [...sessions.entries()].map(([id, e]) => `${id}:${e.status}:${e.accountId || "-"}`),
+      restoring: _restoring }, "send: account not connected (no authorized session) → 404");
+    // 文案里带 not_logged_in 标记：Python note_send_auth_failure 据此立刻登记 needs_login
+    // （账号栏「需重新登录」不必等编排器下一轮探测）。Q-24：七码 login_expired 同出。
+    return res.status(404).json(sendFailBody({
+      code: "login_expired", reason: "not_logged_in",
+      detail: "account not connected (not_logged_in: no authorized session in sidecar; re-login required)",
+      extra: { manual: isManual },
+    }));
+  }
+  if (!jid || !text) {
+    return res.status(400).json({ ok: false, error: "jid and text required" });
+  }
+  // M-2 C（#233）：手动发送与自动投递分开配额、手动优先——body.manual=true（Python 人工
+  // 路由透传）在 send_backoff 窗内放行**一次**探测性发送（成功即 noteSendSuccess 解锁，
+  // 失败照常续退避）。account_blocked（平台临时封锁）不放行：那是平台说的不许发。
+  // P3：send 进每账号写操作互斥（与 /react 串行；等锁超时 fail-open 回无锁旧行为）
+  const _opRelease = await acquireAccountOp(entry, "send");
+  try {
+    // B99 ①③：临时封锁冻结 / 连败退避窗内直接快速失败——不碰浏览器（重试风暴
+    // 正是风控反噬的燃料），上游拿 code=send_backoff 决定改期而不是立刻再投。
+    const gate = sendGateCheck(entry);
+    if (!gate.ok) {
+      const probeOk = manualProbeDecision({
+        manual: isManual, gateReason: gate.reason, backoffUntil: entry._sendBackoffUntil || 0,
+        streak: entry._sendFailStreak || 1, lastProbeAt: entry._manualProbeAt || 0,
+      }).allow;
+      if (probeOk) {
+        entry._manualProbeAt = Date.now();
+        logger.warn({ loginId: entry._loginId, jid, streak: entry._sendFailStreak,
+          backoffLeftMs: gate.retryAfterMs }, "send: manual probe allowed through send_backoff (manual-first, once per window)");
+      } else {
+        // 退避窗内的失败不再叠退避、不进队列（队列 tick 自己会等窗到期）——但如实出码
+        return res.status(gate.code).json(sendFailBody({
+          code: "send_backoff", reason: gate.reason, retryAfterMs: gate.retryAfterMs,
+          retries: Math.max(0, (entry._sendFailStreak || 0)),
+          detail: gate.reason === "account_blocked"
+            ? "account temporarily blocked by platform (auto-frozen)"
+            : (isManual ? "send backoff active; manual probe already used this window"
+                        : "send backoff active after consecutive failures"),
+          extra: { manual: isManual, queued: !!(entry._sendRetryQueue && entry._sendRetryQueue.has(jid)) },
+        }));
+      }
+    }
+    const t0 = Date.now();
+    const quoted = req.body && req.body.quoted;
+    const r = await performTextSend(entry, jid, text, { quoted, manual: isManual });
+    if (!r.ok) {
+      return failSend(entry, res, {
+        code: r.code, reason: r.reason, detail: r.detail, jid, manual: isManual, text, quoted,
+        extra: { accepted: !!r.accepted, ...(r.extra || {}) },
       });
     }
-    // 送达二次确认（P1）：回读消息区，确认我们的文本已渲染成本方气泡且无「无法发送」标记。
-    // - 命中失败标记 → 确定性失败，如实 502（Messenger 不会自动重发失败气泡，重投不刷屏）；
-    // - 回读命中且干净 → verified:true；
-    // - 超时未见（DOM 改版/虚拟列表滚动等）→ **不定态按已发出处理**（composer 已清空），
-    //   verified:false 仅作观测——绝不因回读不确定而触发重发（重复消息比漏发更伤客户体验）。
-    const rb = await readbackLastOutgoing(page, text, 5000);
-    if (rb.found && rb.rowFail) {
-      logger.error({ jid }, "send: bubble rendered with FAIL marker → reporting NOT delivered");
-      await maybeMarkBlocked(entry, page);   // B99 ⑤：失败气泡常伴随封锁提示
-      noteSendFailure(entry, "bubble_fail_marker");
-      return res.status(502).json({
-        ok: false, delivered: false, accepted, sent: false, verified: true,
-        error: "messenger marked the message as failed to send",
-      });
-    }
-    if (!rb.found) {
-      logger.warn({ jid }, "send: composer cleared but readback did not find our bubble "
-        + "(treating as delivered, verified=false)");
-    }
-    noteSendSuccess(entry);   // B99 ④：成功清退避
+    noteJidSendOk(entry, jid);   // B99 ④：成功清退避 + Q-24 清会话连败/出队
     // 发送耗时观测：fast=同线程快路是否命中；线上「发送慢」从体感变成可读数
-    logger.info({ jid, ms: Date.now() - t0, fast: fastPath, len: text.length,
-                  verified: !!rb.found, quoted: quoteApplied }, "send ok");
-    res.json({ ok: true, delivered: true, message_id: outMsgId, accepted, sent: true,
-      verified: !!rb.found, quoted: quoteApplied });
+    logger.info({ jid, ms: Date.now() - t0, fast: !!r.fastPath, len: text.length,
+                  verified: !!r.verified, quoted: !!r.quoted }, "send ok");
+    res.json({ ok: true, delivered: true, message_id: r.messageId, accepted: !!r.accepted, sent: true,
+      verified: !!r.verified, quoted: !!r.quoted });
   } catch (e) {
     // M-2 D：Playwright 错误对象经 pino 序列化只剩 {log:[...],name:"Error"}（K9CY6R 实录），
-    // message / jid / 是否手动 一并落行；响应体带 reason_code=exception 供 Python 分类。
-    logger.error({ e, jid, manual: isManual, message: String((e && e.message) || e).slice(0, 300),
-      loginId: entry._loginId }, "send failed");
-    noteSendFailure(entry, "exception");
-    res.status(500).json({ ok: false, delivered: false, reason_code: "exception",
-      error: String((e && e.message) || e).slice(0, 300) });
+    // message / jid / 是否手动 一并落行；Q-24：异常同样走结构化七码出口（不再裸 reason_code=exception）。
+    const detail = String((e && e.message) || e).slice(0, 300);
+    logger.error({ e, jid, manual: isManual, message: detail, loginId: entry._loginId }, "send failed (route)");
+    return failSend(entry, res, { reason: "exception", detail, jid, manual: isManual, text });
   } finally {
     _opRelease();
   }
@@ -4728,49 +5009,66 @@ app.post("/accounts/:id/request-action", async (req, res) => {
 // （Node 与 Python 同机，直接 setInputFiles，无需上传）。
 app.post("/accounts/:id/send-media", async (req, res) => {
   const entry = findByAccount(req.params.id);
-  if (!entry || !entry.page) {
-    return res.status(404).json({ ok: false, error: "account not connected" });
-  }
   const jid = String((req.body && req.body.jid) || "");
   const mediaPath = String((req.body && req.body.media_path) || "");
   const mediaType = String((req.body && req.body.media_type) || "");
   const caption = String((req.body && req.body.caption) || "");
+  const isManual = !!(req.body && (req.body.manual === true || req.body.manual === 1));
+  if (!entry || !entry.page) {
+    return res.status(404).json(sendFailBody({
+      code: "login_expired", reason: "not_logged_in",
+      detail: "account not connected (not_logged_in: no authorized session in sidecar; re-login required)",
+    }));
+  }
   if (!jid || !mediaPath) {
     return res.status(400).json({ ok: false, error: "jid and media_path required" });
   }
   if (!fs.existsSync(mediaPath)) {
-    return res.status(400).json({ ok: false, error: "media_path not found on host" });
+    return res.status(400).json(sendFailBody({
+      code: "upload_failed", reason: "media_path_missing", detail: "media_path not found on host",
+    }));
   }
   // B99 ①③：与文本 send 同一发送闸（冻结/退避窗内不碰浏览器）
   const _mGate = sendGateCheck(entry);
   if (!_mGate.ok) {
-    return res.status(_mGate.code).json({
-      ok: false, delivered: false, reason_code: _mGate.reason,
-      retry_after_ms: _mGate.retryAfterMs,
-      error: _mGate.reason === "account_blocked"
+    return res.status(_mGate.code).json(sendFailBody({
+      code: "send_backoff", reason: _mGate.reason, retryAfterMs: _mGate.retryAfterMs,
+      retries: Math.max(0, (entry._sendFailStreak || 0)),
+      detail: _mGate.reason === "account_blocked"
         ? "account temporarily blocked by platform (auto-frozen)"
         : "send backoff active after consecutive failures",
-    });
+    }));
   }
+  const failMedia = (o) => failSend(entry, res, {
+    ...o, jid, manual: isManual, text: caption, mediaPath, mediaType, caption,
+  });
+  // Q-24：媒体发送也进每账号写互斥（此前不锁 → 与文本 send / 轮询导航互相踩页面）
+  const _opRelease = await acquireAccountOp(entry, "send-media");
   try {
     const page = entry.page;
-    await page.goto(`${MESSENGER_URL}t/${jid}`, {
-      waitUntil: "domcontentloaded", timeout: 20000,
-    });
+    try {
+      await page.goto(`${MESSENGER_URL}t/${jid}`, { waitUntil: "domcontentloaded", timeout: 20000 });
+    } catch (e) {
+      return failMedia({ code: "thread_not_found", reason: "nav_failed",
+        detail: String((e && e.message) || e).slice(0, 200) });
+    }
     await page.waitForTimeout(2000);
     // B99 ②：加密会话未解锁 → 快速失败（与文本 send 同码）
     if (await detectPinPrompt(page)) {
       entry._pinPromptSeen = true;
-      noteSendFailure(entry, "e2ee_pin_pending");
-      return res.status(503).json({
-        ok: false, delivered: false, reason_code: "e2ee_pin_pending",
-        pin_set: !!getE2eePin(entry._loginId || ""),
-        error: "e2ee recovery pin prompt on screen (session locked; send would fail)",
-      });
+      if (!getE2eePin(entry._loginId || "")) entry._pinState = "missing";
+      return failMedia({ code: "e2ee_pin_pending", reason: "e2ee_pin_pending",
+        detail: "e2ee recovery pin prompt on screen (session locked; send would fail)",
+        extra: { pin_set: !!getE2eePin(entry._loginId || "") } });
+    }
+    const call = await detectCallOverlay(page);
+    if (call.seen && !call.dismissed) {
+      return failMedia({ code: "call_overlay", reason: "call_overlay",
+        detail: "call / incoming-call overlay blocks the composer" });
     }
     let accepted = await clickAcceptRequest(page);
     if (accepted) await page.waitForTimeout(2000);
-    let box = await page.waitForSelector(SEL_COMPOSER, { timeout: 10000 }).catch(() => null);
+    let box = await resolveComposerStable(page, { timeoutMs: 10000 });
     if (!box) {
       // 与文本 send 同款救济：重导航一轮 + 探针分类（此前同样是静默 500 分支）。
       const rec = await recoverComposerOnce(entry, page, jid);
@@ -4778,15 +5076,31 @@ app.post("/accounts/:id/send-media", async (req, res) => {
       box = rec.box;
       if (!box) {
         await maybeMarkBlocked(entry, page);
-        noteSendFailure(entry, rec.reason || "composer_not_found");
-        return res.status(500).json({
-          ok: false, delivered: false, accepted,
-          reason_code: rec.reason,
-          error: `composer not found (${rec.reason || "unknown"})`,
-        });
+        return failMedia({ reason: rec.reason || "composer_not_found",
+          detail: `composer not found (${rec.reason || "unknown"})`, extra: { accepted } });
       }
     }
-    await attachAndSend(page, mediaPath, mediaType, caption);
+    try {
+      await attachAndSend(page, mediaPath, mediaType, caption);
+    } catch (e) {
+      const detail = String((e && e.message) || e).slice(0, 300);
+      logger.error({ e, jid, message: detail }, "send-media: attach/send failed");
+      if (isDetachedError(e)) {
+        // 附件链 detached：同线程重查一次再挂（不重导航——file chooser 已可能半开）
+        logger.warn({ jid }, "send-media: composer detached during attach → re-query in-thread (retry 1/1)");
+        box = await resolveComposerStable(page, { timeoutMs: 8000 });
+        if (!box) return failMedia({ code: "composer_detached", reason: "composer_detached", detail });
+        try {
+          await attachAndSend(page, mediaPath, mediaType, caption);
+        } catch (e2) {
+          const d2 = String((e2 && e2.message) || e2).slice(0, 300);
+          return failMedia({ code: isDetachedError(e2) ? "composer_detached" : "upload_failed",
+            reason: isDetachedError(e2) ? "composer_detached" : "attach_failed", detail: d2 });
+        }
+      } else {
+        return failMedia({ code: "upload_failed", reason: "attach_failed", detail });
+      }
+    }
     // 记录自发（含 caption）→ 轮询自回声抑制；无 caption 记媒体占位。
     recordSent(entry, jid, caption || "[媒体]");
     // P3：媒体出站也回传 synth id（与文本 send 对齐），供撤回/账本挂 platform_msg_id。
@@ -4799,27 +5113,27 @@ app.post("/accounts/:id/send-media", async (req, res) => {
     entry._lastOutboundId.set(String(jid), outMsgId);
     // 送达二次确认（P1，媒体版）：有 caption 才回读（按文本匹配我们的气泡 + 失败标记）；
     // 无 caption 的纯媒体无法可靠锚定「我们这条」→ 跳过校验（宁可不定态，不冒误报失败
-    // 触发重发刷屏的险）。命中失败标记 → 如实 502。
+    // 触发重发刷屏的险）。命中失败标记 → 如实失败码。
     let verified = false;
     if (caption) {
       const rb = await readbackLastOutgoing(page, caption, 5000);
       if (rb.found && rb.rowFail) {
         logger.error({ jid }, "send-media: bubble rendered with FAIL marker → NOT delivered");
         await maybeMarkBlocked(entry, page);
-        noteSendFailure(entry, "bubble_fail_marker");
-        return res.status(502).json({
-          ok: false, delivered: false, accepted, sent: false, verified: true,
-          error: "messenger marked the media message as failed to send",
-        });
+        return failMedia({ code: "upload_failed", reason: "bubble_fail_marker",
+          detail: "messenger marked the media message as failed to send",
+          extra: { accepted, sent: false, verified: true } });
       }
       verified = !!rb.found;
     }
-    noteSendSuccess(entry);
-    res.json({ ok: true, message_id: outMsgId, accepted, verified });
+    noteJidSendOk(entry, jid);
+    res.json({ ok: true, delivered: true, message_id: outMsgId, accepted, verified });
   } catch (e) {
-    logger.error({ e }, "send-media failed");
-    noteSendFailure(entry, "exception");
-    res.status(500).json({ ok: false, error: String(e) });
+    const detail = String((e && e.message) || e).slice(0, 300);
+    logger.error({ e, jid, message: detail }, "send-media failed");
+    return failMedia({ reason: "exception", detail });
+  } finally {
+    _opRelease();
   }
 });
 
