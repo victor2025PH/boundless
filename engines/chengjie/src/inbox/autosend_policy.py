@@ -376,6 +376,7 @@ def _decide_unrestricted(peer_reasons: Iterable[str], automation_mode: str,
             return None
         bypass_hard = bool(skip_for_conv(store, cid, "hard_stop"))
     except Exception:
+        logger.debug("[autosend_policy] conv_route lookup failed; standard decide", exc_info=True)
         return None
     hard = hard_stop_reason([str(r) for r in (peer_reasons or [])])
     if hard and not bypass_hard:
@@ -386,6 +387,7 @@ def _decide_unrestricted(peer_reasons: Iterable[str], automation_mode: str,
             from src.inbox.channel_policy import risk_policy_mode as _cp_risk_mode
             policy_mode = _cp_risk_mode(platform) or None
         except Exception:
+            logger.debug("[autosend_policy] channel risk_policy_mode unavailable", exc_info=True)
             policy_mode = None
     pm = normalize_policy_mode(policy_mode) if policy_mode else current_policy_mode()
     if mode == "auto_ai":

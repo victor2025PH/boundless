@@ -1154,6 +1154,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _unr_lang = bool(_cr_skip_send(_ibx_unr, _cid_unr, "lang_mismatch"))
                 _unr_dup = bool(_cr_skip_send(_ibx_unr, _cid_unr, "outbound_dup"))
         except Exception:
+            logger.debug("[send] conv_route skip lookup failed; guards stay on", exc_info=True)
             _unr_lang = _unr_dup = False
 
         # ── P0-198 语言错配护栏（后半，通用兜底）：无论翻译是否被请求/是否成功，

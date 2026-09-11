@@ -22744,7 +22744,7 @@ function _mpPickOpen(kind){
   var html='<div class="xl-pick-hd"><button type="button" class="xl-pick-back" onclick="_mpPickBack()" title="'+esc(window.T('inbox.mp.back'))+'" aria-label="'+esc(window.T('inbox.mp.back'))+'">‹</button><span class="xl-pick-title">'+esc(title)+'</span></div><div class="xl-pick-list">';
   rows.forEach(function(row){
     html+='<button type="button" class="xl-pick-row two-line'+(row.on?' on':'')+(row.locked?' locked':'')+(row.vio?' vio':'')+'" data-v="'+esc(row.v)+'"'+(row.locked?' aria-disabled="true"':'')+'>'
-        +'<span class="xl-pick-row-main">'+esc(row.main)+(row.locked?' <span class="mp-lock" aria-hidden="true">🔒</span>':'')+'</span>'
+        +'<span class="xl-pick-row-main">'+esc(row.main)+(row.locked?' <span class="mp-lock" aria-hidden="true">'+(typeof uiIcon==='function'?uiIcon('lock',11):'')+'</span>':'')+'</span>'
         +'<span class="xl-pick-row-sub">'+esc(row.sub||'')+'</span></button>';
   });
   html+='</div>';

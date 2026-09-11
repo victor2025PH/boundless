@@ -388,6 +388,7 @@ class DraftService:
             from src.ai.conv_route import skip_for_conv
             return bool(skip_for_conv(self._store, cid, layer))
         except Exception:
+            logger.debug("[drafts] conv_route skip lookup failed (%s); guarding as usual", layer, exc_info=True)
             return False
 
     def _stale_check(

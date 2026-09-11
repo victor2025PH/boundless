@@ -39,12 +39,14 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
             c = getattr(config_manager, "config", None)
             return c if isinstance(c, dict) else {}
         except Exception:
+            logger.debug("[conv_model_route] config_manager.config unreadable", exc_info=True)
             return {}
 
     def _agent(request: Request) -> str:
         try:
             return str(_session_agent(request).get("agent_id") or "agent")
         except Exception:
+            logger.debug("[conv_model_route] no session agent, using 'agent'", exc_info=True)
             return "agent"
 
     def _cid(platform: Any, account_id: Any, chat_key: Any) -> str:
@@ -79,6 +81,7 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
         try:
             body = await request.json()
         except Exception:
+            logger.debug("[conv_model_route] non-JSON body, treating as empty", exc_info=True)
             body = {}
         if not isinstance(body, dict):
             body = {}
@@ -140,6 +143,7 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
         try:
             snap = conv_route.stats_snapshot(ibx)
         except Exception:
+            logger.debug("[conv_model_route] stats_snapshot failed", exc_info=True)
             snap = {}
         return {"ok": True, "stats": snap, "enabled": conv_route.enabled(_cfg()),
                 "allowed": conv_route.feature_allowed(_cfg())}

@@ -984,6 +984,7 @@ class AutosendWorker:
                 _unr_hold = bool(_cr_skip_w(store, conv, "risk_hold"))
                 _unr_tag = bool(_cr_skip_w(store, conv, "needs_human_tag"))
             except Exception:
+                logger.debug("[autosend_worker] conv_route skip lookup failed; human gate stays on", exc_info=True)
                 _unr_hold = _unr_tag = False
             try:
                 from src.inbox import risk_hold as _rh
