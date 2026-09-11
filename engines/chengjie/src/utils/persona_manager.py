@@ -317,16 +317,20 @@ def _client_side_name_differs(peer_calls_you: str, self_name: str) -> bool:
 def client_side_name_pin(peer_calls_you: str, self_name: str = "") -> str:
     """「对方一直叫你 X」硬约束句（Q-20 B，#178 Q9GDEH/2PKKM6 实锤）。
 
-    与 ``prompt_addenda.identity_addendum(conversation_id=)`` 的 zh 句同源措辞；
-    这里进 ``_build_address_pin``（full/compact 两种 prompt 格式都吃）。
+    措辞单一事实源＝``prompt_addenda.client_side_name_sentence``（zh，去句号后进
+    ``_build_address_pin`` 的「；」串；full/compact 两种 prompt 格式都吃）。
     """
     x = str(peer_calls_you or "").strip()
     y = str(self_name or "").strip()
-    deny = f"绝不说『我是 {y} 不是 {x}』" if y else f"绝不说『我不是 {x}』"
-    return (
-        f"对方一直叫你「{x}」，这是你在 TA 那里的名字：绝不纠正、{deny}、"
-        f"不解释；自我介绍 / 被问名字时就用「{x}」"
-    )
+    try:
+        from src.inbox.prompt_addenda import client_side_name_sentence
+        return client_side_name_sentence(x, y, lang="zh").rstrip("。")
+    except Exception:
+        deny = f"绝不说『我是 {y} 不是 {x}』" if y else f"绝不说『我不是 {x}』"
+        return (
+            f"对方一直叫你「{x}」，这是你在 TA 那里的名字：绝不纠正、{deny}、"
+            f"不解释；自我介绍 / 被问名字时就用「{x}」"
+        )
 
 
 def _labelled_pairs(v: Any, labels: Dict[str, str]) -> str:

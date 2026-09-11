@@ -8,13 +8,18 @@ AI 按人设答「我不是 Vanessa，我是 Mizuki」→ 当场穿帮。O-1 E �
 
 本模块只出**纯函数**、零 I/O；由 Q-6 在 ``persona_reply`` 组 system prompt 时接线
 （``identity_addendum(persona, account)`` 非空即追加）。本线**不动** persona_reply。
+
+Q-20 B（#178，2026-09-11）：``identity_addendum`` 加可选 ``conversation_id`` / ``peer_calls_you``
+——联系人级「对方怎么叫我」≠ 人设名 → 「对方一直叫你 X，绝不纠正、自我介绍用 X」。只有传了
+``conversation_id`` 才做一次联系人级读取；旧签名调用零 I/O、输出逐字不变。
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
 __all__ = [
-    "identity_addendum", "persona_display_name", "account_display_name",
+    "identity_addendum", "client_side_name_sentence",
+    "persona_display_name", "account_display_name",
     "album_scene_addendum", "sent_media_addendum", "album_miss_addendum",
     "time_schedule_addendum",
 ]
@@ -74,28 +79,92 @@ def account_display_name(account: Any) -> str:
     return _get(account, "self_name", "display_name", "name", "nickname", "account_name")
 
 
-def identity_addendum(persona: Any, account: Any, *, lang: str = "zh") -> str:
-    """账号显示名 ≠ 人设名 → 一句身份附加段；一致 / 任一未知 / 判不出 → ""。
+def _account_name_sentence(a: str, lg: str) -> str:
+    if lg.startswith("en"):
+        return (f"The other person may call you \"{a}\" — that is your display name on this "
+                f"platform. Never deny it and don't explain it; just answer as yourself.")
+    if lg.startswith("ja"):
+        return (f"相手はあなたを「{a}」と呼ぶかもしれない。それはこのプラットフォームでの"
+                f"あなたの表示名。否定せず、説明もせず、そのまま自分として答える。")
+    return f"对方可能用「{a}」称呼你，那是你在这个平台的昵称，不得否认、不必解释，照常以自己的身份回应。"
+
+
+def client_side_name_sentence(x: str, self_name: str, *, lang: str = "zh") -> str:
+    """「对方一直叫你 X」硬约束句（Q-20 B · #178 Q9GDEH/2PKKM6）。纯格式化。
+
+    与 ``persona_manager.client_side_name_pin`` 同义（那边进 ``【称呼·硬约束】``，
+    这边进 Q-1 F 身份补丁段）；措辞里必须出现「绝不纠正」（门禁锚词）。
+    """
+    x = str(x or "").strip()
+    y = str(self_name or "").strip()
+    lg = str(lang or "zh").lower()
+    if lg.startswith("en"):
+        deny = f"never say \"I'm {y}, not {x}\"" if y else f"never say \"I'm not {x}\""
+        return (f"The other person has always called you \"{x}\" — that IS your name to them. "
+                f"Never correct it, {deny}, don't explain; when introducing yourself or asked "
+                f"your name, use \"{x}\".")
+    if lg.startswith("ja"):
+        deny = f"「私は{y}、{x}じゃない」とは絶対に言わない" if y else f"「私は{x}じゃない」とは絶対に言わない"
+        return (f"相手はずっとあなたを「{x}」と呼んでいる。それが相手にとってのあなたの名前。"
+                f"絶対に訂正しない、{deny}、説明もしない。自己紹介や名前を聞かれたら「{x}」を使う。")
+    deny = f"绝不说『我是 {y} 不是 {x}』" if y else f"绝不说『我不是 {x}』"
+    return (f"对方一直叫你「{x}」，这是你在 TA 那里的名字：绝不纠正、{deny}、不解释；"
+            f"自我介绍 / 被问名字时就用「{x}」。")
+
+
+def _resolve_client_side_name(conversation_id: str) -> str:
+    """联系人级「对方怎么叫我」（``contact_names``）。仅在给了会话 id 时做这一次 I/O；
+    store 不可用 / 未配置 / 异常 → ""。"""
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        return ""
+    try:
+        from src.inbox.contact_names import get_contact_names
+        from src.integrations.protocol_bridge import get_inbox_store
+        store = get_inbox_store()
+        if store is None:
+            return ""
+        return str(get_contact_names(store, cid).get("peer_calls_you") or "").strip()
+    except Exception:
+        return ""
+
+
+def identity_addendum(
+    persona: Any, account: Any, *, lang: str = "zh",
+    conversation_id: str = "", peer_calls_you: str = "",
+) -> str:
+    """身份附加段：账号显示名 ≠ 人设名 → 「对方可能用 X 称呼你」；**联系人级「对方怎么叫我」
+    ≠ 人设名 → 「对方一直叫你 X，绝不纠正、自我介绍用 X」**（Q-20 B，#178）。两句可叠加；
+    一致 / 未知 / 判不出 → 该句不出；全空 → ""。
 
     一致性用 ``utils.account_name_check.names_consistent``（昵称含人设名算一致：「Mizuki 🌸」是
-    Mizuki）。绝不抛。"""
+    Mizuki）。``conversation_id`` / ``peer_calls_you`` 都不传＝Q-1 F 旧签名、零 I/O、输出逐字
+    不变（Q-6 现有接线 ``identity_addendum(persona, account, lang=lang)`` 不受影响）。
+    ``peer_calls_you`` 显式给值优先；否则有 ``conversation_id`` 才查联系人级（一次 I/O）。
+    生产上同句已由 ``persona_manager._build_address_pin`` 进 system prompt（full / compact），
+    本参数供 Q-6 在 ``_prompt_addenda`` ③ 传 ``conversation_id=conv`` 时叠进补丁段。绝不抛。"""
     try:
         p = persona_display_name(persona)
-        a = account_display_name(account)
-        if not p or not a:
-            return ""
-        from src.utils.account_name_check import names_consistent
-        ok: Optional[bool] = names_consistent(a, p)
-        if ok is None or ok:
-            return ""
         lg = str(lang or "zh").lower()
-        if lg.startswith("en"):
-            return (f"The other person may call you \"{a}\" — that is your display name on this "
-                    f"platform. Never deny it and don't explain it; just answer as yourself.")
-        if lg.startswith("ja"):
-            return (f"相手はあなたを「{a}」と呼ぶかもしれない。それはこのプラットフォームでの"
-                    f"あなたの表示名。否定せず、説明もせず、そのまま自分として答える。")
-        return f"对方可能用「{a}」称呼你，那是你在这个平台的昵称，不得否认、不必解释，照常以自己的身份回应。"
+        parts = []
+        a = account_display_name(account)
+        if p and a:
+            from src.utils.account_name_check import names_consistent
+            ok: Optional[bool] = names_consistent(a, p)
+            if ok is False:
+                parts.append(_account_name_sentence(a, lg))
+        x = str(peer_calls_you or "").strip() or _resolve_client_side_name(conversation_id)
+        if x:
+            differs = True
+            if p:
+                try:
+                    from src.utils.account_name_check import names_consistent
+                    differs = names_consistent(x, p) is False
+                except Exception:
+                    differs = True
+            if differs:
+                parts.append(client_side_name_sentence(x, p, lang=lg))
+        return "\n".join(parts)
     except Exception:
         return ""
 
