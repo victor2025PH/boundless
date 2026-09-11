@@ -14,10 +14,14 @@
    · resolve(string)＝用户确认（含空串）；resolve(null)＝取消 / Esc / 点背板；
    · 同时只允许一个弹层在场：第二次调用会先把前一个按取消收掉；
    · 打开即聚焦输入框并全选默认值；Enter 确认、Esc 取消；
-   · opts = { ok, cancel, placeholder, type, hint, min, max, step, preview }
+   · opts = { ok, cancel, placeholder, type, hint, min, max, step, preview, danger, match }
      - type 默认 "text"，可传 "number"；number 且给了 min/max → 渲染 −/+ 步进器
        并把值夹在 [min,max]（越界回弹，不让「0 天」「999 天」直接过闸）；
      - hint：标题下方一行说明（次级色，不再和标题争同一行）；
+     - danger：确认键走危险色（用户管理 P0-4 删除逐字确认，2026-09-11）——令牌链
+       `--red → --tk-danger → --cp-danger → --danger → #dc2626`，同样不引入新字面量；
+     - match：期望的逐字输入（如用户名）；给了它，输入与之不等时确认键禁用、Enter 不过闸
+       ——把「输错就取消」提前到「输对才可点」，少一次失败 toast；
      - preview(value) → string | Promise<string>：值变化后（120ms 去抖）实时渲染预览行
        （#209「符合条件 N · 将挂 min(N,50) · 跳过 M」），抛错/返回空即隐藏；
      - 按钮文案未传时按页面语言给 zh/en 缺省（不依赖任何 i18n 系统，App 宿主
@@ -40,6 +44,7 @@
   var BORDER = "var(--cp-border,var(--tk-border,var(--bd,var(--border,#d1d5db))))";
   var INPUT_BG = "var(--cp-bg,var(--tk-surface-2,var(--input,var(--bg-soft,var(--tk-surface,var(--card,#fff))))))";
   var BRAND = "var(--p,var(--tk-brand,var(--cp-accent,var(--accent,#1e8cf2))))";
+  var DANGER = "var(--red,var(--tk-danger,var(--cp-danger,var(--danger,#dc2626))))";
   var CSS =
     ".uip-backdrop{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;" +
     "justify-content:center;background:rgba(15,23,42,.45);padding:16px;box-sizing:border-box;}" +
@@ -71,6 +76,8 @@
     ".uip-btn.ok{background:" + BRAND + ";border-color:" + BRAND + ";color:#fff;}" +
     ".uip-btn.ok:hover{filter:brightness(.92);}" +
     ".uip-btn.ok:disabled{opacity:.5;cursor:default;filter:none;}" +
+    ".uip-btn.ok.danger{background:" + DANGER + ";border-color:" + DANGER + ";}" +
+    ".uip-input.danger:focus{border-color:" + DANGER + ";box-shadow:0 0 0 3px color-mix(in srgb," + DANGER + " 22%,transparent);caret-color:" + DANGER + ";}" +
     ".uip-btn:focus-visible{outline:2px solid " + BRAND + ";outline-offset:2px;}";
 
   function ensureStyle() {
@@ -109,6 +116,8 @@
       var lo = opts.min != null ? num(opts.min, -Infinity) : -Infinity;
       var hi = opts.max != null ? num(opts.max, Infinity) : Infinity;
       var step = Math.abs(num(opts.step, 1)) || 1;
+      var isDanger = !!opts.danger;
+      var match = (opts.match == null || isNumber) ? null : String(opts.match);
 
       var back = document.createElement("div");
       back.className = "uip-backdrop";
@@ -133,7 +142,7 @@
       var row = document.createElement("div");
       row.className = "uip-row";
       var input = document.createElement("input");
-      input.className = "uip-input";
+      input.className = "uip-input" + (isDanger ? " danger" : "");
       input.type = isNumber ? "number" : (opts.type || "text");
       input.value = def == null ? "" : String(def);
       if (opts.placeholder) input.placeholder = String(opts.placeholder);
@@ -179,7 +188,7 @@
       var bCancel = document.createElement("button");
       bCancel.type = "button"; bCancel.className = "uip-btn"; bCancel.textContent = cancelLabel;
       var bOk = document.createElement("button");
-      bOk.type = "button"; bOk.className = "uip-btn ok"; bOk.textContent = okLabel;
+      bOk.type = "button"; bOk.className = "uip-btn ok" + (isDanger ? " danger" : ""); bOk.textContent = okLabel;
       actions.appendChild(bCancel); actions.appendChild(bOk);
       card.appendChild(actions);
       back.appendChild(card);
@@ -196,7 +205,11 @@
         var n = clamp(input.value);
         return n == null ? "" : String(n);
       }
+      function matchOk() {
+        return match == null || String(input.value).trim() === match;
+      }
       function syncSteppers() {
+        if (match != null) { bOk.disabled = !matchOk(); return; }
         if (!hasRange) return;
         var n = clamp(input.value);
         bMinus.disabled = (n != null && n <= lo);
@@ -249,6 +262,7 @@
         resolve(val);
       }
       function confirmValue() {
+        if (!matchOk()) { try { input.focus(); } catch (_e) {} return; }
         if (isNumber) {
           var n = clamp(input.value);
           if (n == null) { try { input.focus(); } catch (_e) {} return; }

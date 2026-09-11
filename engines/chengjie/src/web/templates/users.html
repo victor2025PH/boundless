@@ -533,7 +533,8 @@ async function toggleEnabled(uid,enable,btn){
 /* 删除：逐字输入用户名确认。走 window.uiPrompt（Electron 渲染进程里原生 prompt() 调用即抛）。 */
 async function deleteUser(uid,uname){
   closeMenus();
-  var typed=await window.uiPrompt(TQ.delConfirm.replace('{name}',uname),'',{placeholder:uname,hint:TQ.delHint,ok:window.T('delete')});
+  // danger=红色确认键；match=输对用户名才可点（老缓存的 ui-prompt.js 不认这两项时，下面的不匹配判定仍兜底）
+  var typed=await window.uiPrompt(TQ.delConfirm.replace('{name}',uname),'',{placeholder:uname,hint:TQ.delHint,ok:window.T('delete'),danger:true,match:uname});
   if(typed===null)return;
   if(String(typed).trim()!==uname){showToast(TQ.delMismatch,'err');return}
   try{var r=await apiFetch('/users/delete/'+uid,{method:'POST',body:new FormData(),headers:{'Accept':'application/json'}},{timeoutMs:60000});

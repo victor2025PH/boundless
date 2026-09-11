@@ -211,4 +211,18 @@ def test_i18n_keys_bilingual():
 def test_hosts_bumped_ui_prompt_stamp():
     for host in (_ROOT / "src" / "web" / "templates" / "_win_unique.html",
                  _ROOT / "shared" / "copilot" / "app.html"):
-        assert "ui-prompt.js?v=20260906a" in host.read_text(encoding="utf-8"), host.name
+        # 2026-09-11：uiPrompt 增 danger/match（用户管理删除逐字确认）→ 戳号同步抬
+        assert "ui-prompt.js?v=20260911a" in host.read_text(encoding="utf-8"), host.name
+
+
+def test_ui_prompt_danger_and_match_contract():
+    """danger：确认键走危险色令牌链（不引入新字面量之外的品牌色）；match：输入不等于期望值时
+    确认键禁用、Enter 不过闸。users.html 删除确认必须同时用上这两项。"""
+    body = _UIP.read_text(encoding="utf-8")
+    assert 'var DANGER = "var(--red,var(--tk-danger,var(--cp-danger,var(--danger,#dc2626))))"' in body
+    assert ".uip-btn.ok.danger{background:" in body
+    assert "var isDanger = !!opts.danger;" in body
+    assert "function matchOk()" in body and "if (!matchOk())" in body
+    users = (_ROOT / "src" / "web" / "templates" / "users.html").read_text(encoding="utf-8")
+    assert re.search(r"window\.uiPrompt\([^;]*danger:true[^;]*match:uname", users)
+    assert _UIP.read_bytes() == _UIP_MIRROR.read_bytes(), "镜像漂移：python -m scripts.sync_copilot_mirror"
