@@ -1677,7 +1677,7 @@ function bindBackendPopupLogin(win, intendedUrl) {
       "(function(){try{" +
       "var n=" + JSON.stringify(next) + ";" +
       "fetch('/login',{method:'POST'," +
-      "headers:{'Content-Type':'application/x-www-form-urlencoded'}," +
+      "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'}," +
       "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")" +
       "+'&next='+encodeURIComponent(n)," +
       "credentials:'same-origin'})" +

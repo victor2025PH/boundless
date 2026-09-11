@@ -56,8 +56,10 @@ function backendLoginJS(cred, path) {
     "(function(){try{" +
     "var c=" + JSON.stringify(cred || {}) + ";" +
     "var b=Object.keys(c).map(function(k){return k+'='+encodeURIComponent(c[k]);}).join('&');" +
+    // X-ChatX-Auto-Login：向服务端自报「这是壳的代登，不是人按的登录按钮」——刚主动退出时
+    // 服务端据此精确拒绝（否则只能靠「120s 内且不带 manual=1」的启发式）。同源 fetch 不触发预检。
     "fetch('/login',{method:'POST'," +
-    "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b," +
+    "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'},body:b," +
     "credentials:'same-origin'})" +
     ".then(function(){" + repl + "})" +
     ".catch(function(){" + repl + "});" +

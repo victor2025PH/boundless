@@ -42,6 +42,10 @@ def test_silent_token_relogin_rejected_right_after_logout(client, config_dir):
     assert r.status_code == 200 and 'id="manual-note"' in r.text
     r2 = client.get("/users", follow_redirects=False)
     assert r2.status_code in (302, 303) and "/login" in r2.headers.get("location", "")
+    # ①b 新壳自报身份头：即便带了 manual=1（理论上不会），只要是壳代登就拒
+    r1b = client.post("/login", data={"auth_token": "test-token-123", "manual": "1"},
+                      headers={"X-ChatX-Auto-Login": "1"}, follow_redirects=False)
+    assert r1b.status_code == 200 and 'id="manual-note"' in r1b.text
     # ② 人在登录页按令牌登录（表单带 manual=1）→ 放行，cookie 清掉
     r3 = client.post("/login", data={"auth_token": "test-token-123", "manual": "1"},
                      follow_redirects=False)
@@ -122,3 +126,8 @@ def test_desktop_shell_honors_manual_and_auto_login_flag():
     assert "backend.auto_login !== false" in renderer
     assert 'searchParams.get("manual") === "1"' in main
     assert "auto_login === false" in main
+    # 两条代登 fetch 都自报 X-ChatX-Auto-Login: 1（服务端据此精确拒绝退出后的静默代登）
+    assert renderer.count("'X-ChatX-Auto-Login':'1'") == 1
+    assert main.count("'X-ChatX-Auto-Login':'1'") == 1
+    routes = (_ROOT / "src" / "web" / "routes" / "auth_user_routes.py").read_text(encoding="utf-8")
+    assert 'request.headers.get("x-chatx-auto-login") == "1"' in routes

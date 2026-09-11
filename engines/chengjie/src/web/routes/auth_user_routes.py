@@ -168,6 +168,10 @@ def register_auth_user_routes(
         # 让**老版桌面包不升级**也能真正退出：老壳凭据用尽后露出登录页人工登录。
         # 人在登录页按的按钮（manual 态表单带 manual=1）不受影响。
         _just_logged_out = request.cookies.get(_MANUAL_LOGOUT_COOKIE) == "1"
+        # 新壳自报身份头（renderer.js / main.js 代登 fetch 带 X-ChatX-Auto-Login: 1）：精确识别，
+        # 不再依赖「不带 manual」启发式；老壳不带头，仍走启发式。
+        _auto_login = request.headers.get("x-chatx-auto-login") == "1"
+        _silent_relogin = _just_logged_out and (_auto_login or not _manual)
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         # multi-user login
@@ -197,7 +201,7 @@ def register_auth_user_routes(
                 manual=_manual))
         # legacy token login（S6：恒定时间比较，防时序侧信道）
         if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
-            if _just_logged_out and not _manual:
+            if _silent_relogin:
                 # 令牌对但这是退出后 120 秒内的静默代登 → 拒建会话（不报「令牌错误」，
                 # 只回手动态登录页；壳随后 location.replace 目标页会被 require_auth 打回
                 # /login，老壳凭据用尽即露出登录页）

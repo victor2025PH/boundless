@@ -226,7 +226,7 @@
                   onclick="openNotifyModal({{ u.id }},'{{ u.username }}')">🔔 {{ (i18n or {}).get('tq_notify_btn', "通知") }}{{ ' ✓' if u.notify_tg_chat_id else '' }}</button>
           <button type="button" onclick="copyLoginInfo('{{ u.username }}')">📋 {{ (i18n or {}).get('us_copy_login', "复制登录信息") }}</button>
           <hr>
-          <button type="button" class="toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ (i18n or {}).get('disable', '禁用') if u.enabled else (i18n or {}).get('enable', '启用') }}</button>
+          <button type="button" class="toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ '🚫 ' ~ (i18n or {}).get('disable', '禁用') if u.enabled else '✅ ' ~ (i18n or {}).get('enable', '启用') }}</button>
           <button type="button" class="danger" data-help="btn_delete" onclick="deleteUser({{ u.id }},'{{ u.username }}')">🗑 {{ (i18n or {}).get('delete', "删除") }}</button>
         </div>
       </div>
@@ -524,7 +524,7 @@ async function toggleEnabled(uid,enable,btn){
         if(enable&&db)db.remove();
         else if(!enable&&!db){var s=document.createElement('span');s.className='badge b-r dis-badge';s.textContent=window.T('psn_disabled');var fl=c.querySelector('.u-flags');if(fl)fl.appendChild(s)}
       }
-      btn.textContent=enable?window.T('disable'):window.T('enable');btn.onclick=function(){toggleEnabled(uid,!enable,btn)};
+      btn.textContent=enable?'🚫 '+window.T('disable'):'✅ '+window.T('enable');btn.onclick=function(){toggleEnabled(uid,!enable,btn)};
       filterUsers();
     }else showToast(d.detail||window.T('ov_js_op_fail'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
