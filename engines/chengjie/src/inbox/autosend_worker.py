@@ -164,8 +164,15 @@ class AutosendWorker:
         work_schedule_provider: Optional[Callable[[], Dict[str, Any]]] = None,
         catchup_regenerate_cb: Optional[Callable[..., bool]] = None,
         pilot_guard: Optional[Callable[[str, str], bool]] = None,
+        app: Any = None,
     ) -> None:
         cfg = config or {}
+        # Q-23（#303）：stage=soft_reply 的人设口吻短生成要 app.state（skill_manager / ai_client /
+        # config_manager）。None = 生成不可用 → 软回应一律 gen=skip 不发（不回落固定句）。
+        self._app: Any = app
+        self.total_soft_reply_delivered: int = 0
+        self.total_soft_reply_errors: int = 0
+        self.total_soft_reply_aborted: int = 0
         # deliver_only=True：本实例**只**作「人工通过→真投递」的载体，自动轮询循环
         # 压根不会 run()。用于 `l2_autosend.enabled=false` 的人审档部署——那种部署
         # 原本连 worker 都不创建，于是坐席点通过没有任何消费者（只标记不发送）。
@@ -1482,9 +1489,173 @@ class AutosendWorker:
             # O-1 B（D-O2）：人审后的终稿是人的文字——出站去 AI 标点后处理见此标记即绕过
             "origin": "manual",
         }
+        return await self._deliver_now(item, stage="human")
+
+    # ── Q-23（#303）stage=soft_reply：守卫触发的自动软回应单一出口 ─────────────
+
+    def _soft_reply_own_hold(self, conv: str) -> bool:
+        """当前会话级持有是否正是软回应要回应的那个（``SOFT_REPLY_OWN_HOLDS``）。"""
+        store = getattr(self._svc, "_store", None)
+        if store is None or not conv:
+            return False
+        try:
+            from src.inbox import risk_hold as _rh
+            from src.inbox.autosend_policy import SOFT_REPLY_OWN_HOLDS
+            return str(_rh.active(store, conv) or "") in SOFT_REPLY_OWN_HOLDS
+        except Exception:
+            return False
+
+    def _soft_reply_abort(self, row: Dict[str, Any], code: str, *, detail: str = "") -> Dict[str, Any]:
+        cid = str(row.get("conversation_id") or "")
+        did = str(row.get("draft_id") or "")
+        self.total_soft_reply_aborted += 1
+        logger.info("[autosend] abort=%s stage=soft_reply draft=%s conv=%s level=%s policy=%s mode=%s%s",
+                    code, did or "-", cid or "-", row.get("level") or "-", row.get("policy") or "-",
+                    row.get("mode") or "-", (f" detail={detail}" if detail else ""))
+        self._ledger_abort(cid, code, stage="soft_reply", draft_id=did)
+        return {"ok": False, "status": code, "error": code}
+
+    async def _soft_reply_generate(self, row: Dict[str, Any], ctx: Any) -> Dict[str, str]:
+        """人设口吻一句话短生成。返回 ``{text, lang, by}``；``text`` 空＝生成失败（**不发**，不回落固定句）。"""
+        cid = str(row.get("conversation_id") or "")
+        store = getattr(self._svc, "_store", None)
+        cfg = getattr(self._svc, "_cfg", None) or {}
+        lang, by = "", ""
+        try:
+            from src.inbox.outbound_translate import resolve_outbound_lang
+            lang, by = resolve_outbound_lang(
+                cid, store=store, cfg_root=cfg, platform=str(row.get("platform") or ""),
+                account_id=str(row.get("account_id") or ""), chat_key=str(row.get("chat_key") or ""))
+        except Exception:
+            logger.debug("[adult] soft_reply resolve_outbound_lang 异常", exc_info=True)
+        if not lang:
+            lang = str(row.get("lang") or getattr(ctx, "lang", "") or "").strip()
+            by = "peer_text" if lang else ""
+        if not lang:
+            return {"text": "", "lang": "", "by": "lang_unknown"}
+        if self._app is None:
+            return {"text": "", "lang": lang, "by": by, "gen": "no_app"}
+        try:
+            from src.inbox.persona_reply import generate_soft_deflect
+            res = await generate_soft_deflect(
+                app=self._app, platform=str(row.get("platform") or ""),
+                chat_key=str(row.get("chat_key") or ""), account_id=str(row.get("account_id") or ""),
+                conversation_id=cid, target_lang=lang, peer_text=str(row.get("peer_text") or ""),
+                persona_id=str(row.get("persona_id") or ""), level=str(row.get("level") or ""))
+        except Exception:
+            logger.debug("[adult] soft_reply 生成异常（不发）", exc_info=True)
+            res = {}
+        text = str((res or {}).get("reply") or "").strip() if (res or {}).get("ok") else ""
+        return {"text": text, "lang": lang, "by": by}
+
+    async def deliver_soft_reply(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """守卫触发的自动软回应（成人 explicit/pressure × soft_reply、human 3 分钟补发）**唯一**出口。
+
+        与人工通过链的差别：人工通过是人的决定、什么闸都不过；软回应是**自动出站**，所以：
+          ① ``autosend_policy.decide(kind="soft_reply")``：场景闸（群 / 非客户 → L0）、冻结、档位
+             （非 auto_ai → 候选进审核稿，不发）、他因持有；
+          ② ``_human_priority_gate``：在途取消 / mode_changed / 坐席 60s 内发送或打字 → **放弃**
+             （软回应不延后——坐席在场就交给人）；risk_hold / needs_human 只放行「自己刚设的 adult 持有」；
+          ③ 文本由 ``persona_reply.generate_soft_deflect`` 人设口吻短生成；生成失败 → 不发（无固定句）；
+          ④ 生成耗时数秒，真发前**再过一次** ②；
+          ⑤ 投递与人工通过共用 ``_deliver_now``（翻译 / 披露 / deliver_once 幂等 / 失败审计同口径）。
+        跳过节奏排队（软回应要即时），不进 recoverable 重试。自吞一切异常（后台任务无人 await）。
+        日志 ``[adult] soft_reply conv= level= policy= mode= lang= gen=persona|skip status=``。
+        """
+        row = dict(row or {})
+        cid = str(row.get("conversation_id") or "")
+        did = str(row.get("draft_id") or f"soft_reply:{cid}:{int(time.time())}")
+        row["draft_id"] = did
+        store = getattr(self._svc, "_store", None)
+        cfg = getattr(self._svc, "_cfg", None) or {}
+        if not cid or not str(row.get("chat_key") or ""):
+            return {"ok": False, "status": "empty", "error": "empty"}
+        try:
+            from src.inbox.guard_context import from_row as _ctx_from_row
+            ctx = _ctx_from_row(row, cfg=cfg, store=store)
+        except Exception:
+            ctx = None
+        frozen = ""
+        try:
+            from src.inbox.stop_contact import frozen_reason as _frz
+            frozen = str(_frz(store, cid) or "") if store is not None else ""
+        except Exception:
+            frozen = ""
+        try:
+            from src.inbox.autosend_policy import decide as _decide
+            dec = _decide(peer_risk="low", automation_mode=str(row.get("automation_mode") or ""),
+                          platform=str(row.get("platform") or ""), conversation_frozen=bool(frozen),
+                          conversation_id=cid, store=store, kind="soft_reply", ctx=ctx)
+        except Exception:
+            logger.debug("[adult] soft_reply decide 异常（按不发）", exc_info=True)
+            return self._soft_reply_abort(row, "policy_error")
+        if not dec.autosend_allowed:
+            code = str(dec.hold_reason or "policy")
+            if code.startswith("mode:"):
+                code = "mode_changed"
+            return self._soft_reply_abort(row, code, detail=str(dec.hold_reason or ""))
+        gate = self._human_priority_gate(cid, draft_id=did)
+        if gate in ("risk_hold", "needs_human") and self._soft_reply_own_hold(cid):
+            gate = ""
+        if gate:
+            return self._soft_reply_abort(row, gate)
+        self._inflight_register({"draft_id": did, "conversation_id": cid,
+                                 "platform": row.get("platform"), "account_id": row.get("account_id")})
+        try:
+            text = str(row.get("final_text") or row.get("draft_text") or "").strip()
+            gen = "given" if text else "persona"
+            lang = str(row.get("lang") or "")
+            if not text:
+                g = await self._soft_reply_generate(row, ctx)
+                text, lang = str(g.get("text") or ""), str(g.get("lang") or "")
+                if not text:
+                    gen = "skip"
+                    logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s lang=%s gen=skip status=%s",
+                                cid, row.get("level") or "-", row.get("policy") or "-", row.get("mode") or "-",
+                                lang or "-", g.get("gen") or g.get("by") or "gen_failed")
+                    self.total_soft_reply_errors += 1
+                    return {"ok": False, "status": "gen_skip", "error": str(g.get("gen") or g.get("by") or "gen_failed")}
+            gate = self._human_priority_gate(cid, draft_id=did)
+            if gate in ("risk_hold", "needs_human") and self._soft_reply_own_hold(cid):
+                gate = ""
+            if gate:
+                return self._soft_reply_abort(row, gate, detail="after_gen")
+            item = {
+                "draft_id": did, "conversation_id": cid,
+                "platform": str(row.get("platform") or ""),
+                "account_id": str(row.get("account_id") or "default"),
+                "chat_key": str(row.get("chat_key") or ""),
+                "text": text, "origin": "soft_reply",
+            }
+            res = await self._deliver_now(item, stage="soft_reply")
+            logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s lang=%s gen=%s status=%s text=%s",
+                        cid, row.get("level") or "-", row.get("policy") or "-", row.get("mode") or "-",
+                        lang or "-", gen, "sent" if res.get("ok") else f"failed:{res.get('error')}", text[:60])
+            if res.get("ok"):
+                try:
+                    from src.inbox.adult_grader import record_sent as _rec
+                    _rec(store, row, text)
+                except Exception:
+                    logger.debug("[adult] soft_reply 账本写入失败（忽略）", exc_info=True)
+            return res
+        except Exception as exc:  # noqa: BLE001
+            self.total_soft_reply_errors += 1
+            logger.warning("[adult] soft_reply conv=%s 投递链异常: %s", cid, exc)
+            return {"ok": False, "status": "error", "error": str(exc)}
+        finally:
+            self._inflight_unregister(did)
+
+    async def _deliver_now(self, item: Dict[str, Any], *, stage: str = "human") -> Dict[str, Any]:
+        """人工通过 / 软回应共用的**即时**投递核心（不走拟人节奏、不进重试队列）。
+
+        ``stage="human"`` 逐字保持 2026-07-29 以来的人工通过行为（计数 / 影子计量 / 日志口径）；
+        ``stage="soft_reply"``（Q-23）只换计数与日志前缀。
+        """
         send_cb = self._human_send_callback or self._send_callback
         if send_cb is None or not item["text"] or not item["chat_key"]:
             return {"ok": False, "error": "no_send_path_or_empty"}
+        _human = stage == "human"
+        _label = "人工通过草稿" if _human else "软回应"
         # B41 投递幂等钉：人工通过与自动链共用同一登记表——同稿在途/已投过
         # 一律拒（resolve 的状态 CAS 只保「处置一次」，这里保「出门一次」）。
         _claim_err = self._deliver_once.claim(
@@ -1492,8 +1663,9 @@ class AutosendWorker:
         if _claim_err:
             self.total_skipped_already_sent += 1
             logger.warning(
-                "[AutosendWorker] guard=deliver_once 人工通过投递被拒 draft=%s "
+                "[AutosendWorker] guard=deliver_once %s投递被拒 draft=%s "
                 "conv=%s reason=%s（同稿已投/在途，防双发）",
+                "人工通过" if _human else "软回应",
                 item["draft_id"], item["conversation_id"], _claim_err)
             return {"ok": False, "error": f"deliver_once:{_claim_err}"}
         _delivered_ok = False
@@ -1505,7 +1677,8 @@ class AutosendWorker:
                     _tx = await self._translate_callback(item)
                 except Exception:
                     logger.warning(
-                        "[AutosendWorker] 人工通过出站翻译回调异常 → HOLD 不发 conv=%s",
+                        "[AutosendWorker] %s出站翻译回调异常 → HOLD 不发 conv=%s",
+                        "人工通过" if _human else "软回应",
                         item["conversation_id"], exc_info=True)
                     _tx = None
                 # None = HOLD（无兜底纪律 2026-08-17：翻译失败一律不发原文，
@@ -1533,45 +1706,54 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             _delivered_ok = True
-            self.total_human_delivered += 1
+            if _human:
+                self.total_human_delivered += 1
+            else:
+                self.total_soft_reply_delivered += 1
             # #88：人审通过投递送达成功 → 清 dead-peer 标（与自动链同口径）
             self._dead_peer_clear(item["conversation_id"])
-            # B41：成功投递补写 DB sent_at（best-effort，与自动链同口径）
-            try:
-                _st_mark = getattr(self._svc, "_store", None)
-                if _st_mark is not None and hasattr(_st_mark, "mark_draft_sent"):
-                    _st_mark.mark_draft_sent(item["draft_id"])
-            except Exception:
-                logger.debug("[AutosendWorker] mark_draft_sent 失败（忽略）",
-                             exc_info=True)
+            # B41：成功投递补写 DB sent_at（best-effort，与自动链同口径；软回应无草稿行，跳过）
+            if _human:
+                try:
+                    _st_mark = getattr(self._svc, "_store", None)
+                    if _st_mark is not None and hasattr(_st_mark, "mark_draft_sent"):
+                        _st_mark.mark_draft_sent(item["draft_id"])
+                except Exception:
+                    logger.debug("[AutosendWorker] mark_draft_sent 失败（忽略）",
+                                 exc_info=True)
             # 2026-08-19 Token P5b 影子计数（观测非计费）：投递点口径——与出稿点
             # （ai_client generate_reply 记 ai_reply）对读几周，拿真实「出稿/投递」
             # 比值再决定计费点迁移。fail-silent，总闸关=零行为。
+            _shadow_key = "ai_reply_delivered_human" if _human else "ai_reply_delivered_soft_reply"
             try:
                 from src.licensing.token_ledger import record_shadow
 
-                record_shadow("ai_reply_delivered_human")
+                record_shadow(_shadow_key)
             except Exception:
                 # 影子计量丢一次＝「出稿 vs 投递」对读偏小。该读数是 enforce 切换的
                 # 判据之一（tools/wallet_shadow_report.py），静默偏差会让决策失真。
-                logger.warning("[AutosendWorker] 影子计量 ai_reply_delivered_human 记账失败",
+                logger.warning("[AutosendWorker] 影子计量 %s 记账失败", _shadow_key,
                                exc_info=True)
             # 人工通过也进同一账本：坐席刚发过 → 紧随的自动稿同样要垫连发地板
             # （对客户视角「谁按的发送」不重要，背靠背两条出站一样露馅）。
             self._note_conv_sent(item["conversation_id"])
             logger.info(
-                "[AutosendWorker] 人工通过草稿已投递 draft=%s conv=%s",
-                item["draft_id"], item["conversation_id"])
+                "[AutosendWorker] %s已投递 draft=%s conv=%s",
+                _label, item["draft_id"], item["conversation_id"])
             return {"ok": True}
         except Exception as exc:  # noqa: BLE001
-            self.total_human_deliver_errors += 1
-            self.last_error = f"human_deliver: {exc}"
+            if _human:
+                self.total_human_deliver_errors += 1
+                self.last_error = f"human_deliver: {exc}"
+            else:
+                self.total_soft_reply_errors += 1
+                self.last_error = f"soft_reply_deliver: {exc}"
             logger.warning(
-                "[AutosendWorker] 人工通过草稿投递失败 draft=%s conv=%s: %s",
-                item["draft_id"], item["conversation_id"], exc)
+                "[AutosendWorker] %s投递失败 draft=%s conv=%s: %s",
+                _label, item["draft_id"], item["conversation_id"], exc)
             try:
                 rec = getattr(self._svc, "record_autosend_failure", None)
-                if rec is not None:
+                if rec is not None and _human:
                     rec(
                         item["draft_id"],
                         conversation_id=item["conversation_id"],
@@ -1579,9 +1761,11 @@ class AutosendWorker:
                     )
             except Exception:
                 logger.debug("human_deliver 失败审计写入失败", exc_info=True)
-            # 复用坐席铃铛/webhook 的投递失败提醒（工作台已订阅该事件）
-            self._publish_deliver_failed(
-                item, str(exc), permanent=_is_permanent_send_error(str(exc)))
+            # 复用坐席铃铛/webhook 的投递失败提醒（工作台已订阅该事件）；软回应是自动出站，
+            # 失败不要坐席补发（人工处置由「需人工」标本身承载），只留日志。
+            if _human:
+                self._publish_deliver_failed(
+                    item, str(exc), permanent=_is_permanent_send_error(str(exc)))
             return {"ok": False, "error": str(exc)}
         finally:
             self._deliver_once.release(
@@ -2898,6 +3082,10 @@ class AutosendWorker:
             "deliver_once": self._deliver_once.stats_snapshot(),
             "total_human_delivered": self.total_human_delivered,  # 人工通过经 worker 投递成功
             "total_human_deliver_errors": self.total_human_deliver_errors,
+            # Q-23（#303）stage=soft_reply：守卫触发的自动软回应经单一闸门投递 / 失败（含 gen=skip）/ 闸拦
+            "total_soft_reply_delivered": self.total_soft_reply_delivered,
+            "total_soft_reply_errors": self.total_soft_reply_errors,
+            "total_soft_reply_aborted": self.total_soft_reply_aborted,
             "total_dup_blocked": self.total_dup_blocked,  # 出站近重复守卫拦截数
             "total_dup_rewritten": self.total_dup_rewritten,  # 拦截后换说法得救数
             # #144 拆计数：同轮双发拦截 / 跨轮拦截（仅 dup 档原样复读）/

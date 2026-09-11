@@ -76,6 +76,11 @@ REVIEW_HOLD_REASON = "risk_high_review"
 # ``deferred_until = 坐席最后活动 + AGENT_YIELD_WINDOW_SEC``，窗过自动复检再发（仍是最新
 # 入站且档位仍 auto → 发；期间有更新入站 → fresh_guard 让新稿覆盖）。其余原因码
 # （mode_changed / risk_hold / needs_human）仍是放弃，语义一字不变。
+#: Q-23（#303）：守卫触发的自动软回应走 ``decide(kind=SOFT_REPLY_KIND)``；它是对这些持有原因的
+#: **回应**，不被它们按成 L1（其它持有原因照旧 L1）。
+SOFT_REPLY_KIND = "soft_reply"
+SOFT_REPLY_OWN_HOLDS = ("adult",)
+
 YIELD_DEFER_REASONS = ("agent_sent", "agent_typing")
 AGENT_YIELD_WINDOW_SEC = 60.0
 # 连续让位上限（坐席一直在发 / 一直在打字 → 稿最多顺延这么多次，再多按放弃处理防无限滞留）
@@ -272,8 +277,16 @@ def decide(
     conversation_id: str = "",
     store: Any = None,
     risk_hold_reason: Optional[str] = None,
+    kind: str = "draft",
+    ctx: Any = None,
 ) -> Decision:
     """Decision = (level, hold_reason, shadow[, hard_stop, farewell, review_required, risk_hold])。
+
+    ``kind`` / ``ctx``（Q-23 #303）：``kind="soft_reply"`` = 守卫触发的自动软回应（成人软回应 /
+    human 3 分钟补发）——它是**对**风险持有的回应，不再被自己刚设的 ``adult`` 持有按成 L1，
+    但必须过场景闸（``ctx.skip_reason()`` → L0 ``scene:<reason>``）、冻结闸、档位闸（非
+    auto_ai → 该档位 + ``review_required``＝候选进审核稿）、他因持有闸（非 adult 的 risk_hold → L1）。
+    ``kind="draft"``（缺省）逐字旧行为，``ctx`` 不参与草稿判定。
 
     ``conversation_id`` + ``store`` / ``risk_hold_reason``（Q-3 #264 A）：会话级风险持有。
     调用方给了会话（``store`` 缺省时 ``risk_hold_reason`` 可直接传已知原因）→ 先问
@@ -306,6 +319,9 @@ def decide(
                                   （D-O1 豁免②：高风险稿转人工审，不直发）；
                                   enforce 档：would_hold_level + hold_reason，shadow=None。
     """
+    if str(kind or "draft") == SOFT_REPLY_KIND:
+        return _decide_soft_reply(automation_mode, ctx, policy_mode, platform, conversation_frozen,
+                                  conversation_id, store, risk_hold_reason)
     base = _decide_base(
         peer_risk, peer_reasons, reply_risk, reply_reasons, risk_hits,
         automation_mode, policy_mode, platform, conversation_frozen)
@@ -333,6 +349,46 @@ def decide(
     return Decision(level="L1", hold_reason=f"risk_hold:{hold}", shadow=shadow,
                     policy_mode=base.policy_mode, automation_mode=base.automation_mode,
                     review_required=True, risk_hold=hold)
+
+
+def _decide_soft_reply(automation_mode: str, ctx: Any, policy_mode: Optional[str], platform: str,
+                       conversation_frozen: bool, conversation_id: str, store: Any,
+                       risk_hold_reason: Optional[str]) -> Decision:
+    """``kind="soft_reply"`` 判定（Q-23 #303）。只做负向闸：错场景 → 什么都不做。"""
+    mode = normalize_automation_mode(getattr(ctx, "mode", None) or automation_mode)
+    if not policy_mode and platform:
+        try:
+            from src.inbox.channel_policy import risk_policy_mode as _cp_risk_mode
+            policy_mode = _cp_risk_mode(platform) or None
+        except Exception:
+            policy_mode = None
+    pm = normalize_policy_mode(policy_mode) if policy_mode else current_policy_mode()
+    skip = ""
+    if ctx is not None:
+        try:
+            skip = str(ctx.skip_reason() or "")
+        except Exception:
+            skip = ""
+    if skip:
+        dec = Decision(level="L0", hold_reason=f"scene:{skip}", shadow=None,
+                       policy_mode=pm, automation_mode=mode)
+    elif conversation_frozen:
+        dec = Decision(level="L0", hold_reason="frozen", shadow=None,
+                       policy_mode=pm, automation_mode=mode)
+    elif mode != "auto_ai":
+        dec = Decision(level=mode_level(mode), hold_reason=f"mode:{mode}", shadow=None,
+                       policy_mode=pm, automation_mode=mode, review_required=True)
+    else:
+        hold = _resolve_risk_hold(conversation_id, store, risk_hold_reason)
+        if hold and hold not in SOFT_REPLY_OWN_HOLDS:
+            dec = Decision(level="L1", hold_reason=f"risk_hold:{hold}", shadow=None,
+                           policy_mode=pm, automation_mode=mode, review_required=True, risk_hold=hold)
+        else:
+            dec = Decision(level="L2", hold_reason="", shadow=None,
+                           policy_mode=pm, automation_mode=mode, risk_hold=hold)
+    logger.info("[policy] kind=%s conv=%s level=%s hold=%s mode=%s", SOFT_REPLY_KIND,
+                conversation_id or "-", dec.level, dec.hold_reason or "-", mode)
+    return dec
 
 
 def _resolve_risk_hold(conversation_id: str, store: Any,
@@ -460,4 +516,5 @@ __all__ = [
     "normalize_automation_mode",
     "YIELD_DEFER_REASONS", "AGENT_YIELD_WINDOW_SEC", "AGENT_YIELD_MAX_DEFERRALS",
     "agent_yield_state",
+    "SOFT_REPLY_KIND", "SOFT_REPLY_OWN_HOLDS",
 ]

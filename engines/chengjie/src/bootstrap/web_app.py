@@ -509,6 +509,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                 fresh_guard_cfg=_fresh_guard_cfg,
                                 work_schedule_provider=_ws_provider,
                                 pilot_guard=_pilot_guard,
+                                app=web_app,   # Q-23 #303：软回应人设口吻短生成要拿 skill_manager
                             )
                             web_app.state.autosend_worker = _as_worker
                             # C3：注册 L2 事件驱动钩子，新草稿落库时立即唤醒
@@ -530,9 +531,12 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                     "stale_approve_hours", 24) or 0)
                             if _human_deliver_on and _human_send_cb is not None:
                                 try:
+                                    # Q-23 #303：守卫软回应改走 stage=soft_reply 单一闸门
+                                    # （policy(kind=soft_reply) + 人工优先闸 + 场景闸），不再复用人工通过直投。
                                     draft_svc.set_inbox_deliver_callback(
                                         _as_worker.deliver_human_approved,
-                                        stale_approve_hours=_stale_h)
+                                        stale_approve_hours=_stale_h,
+                                        soft_reply_cb=_as_worker.deliver_soft_reply)
                                 except Exception:
                                     assistant.logger.debug(
                                         "人工通过投递回调注入失败", exc_info=True)
@@ -579,12 +583,16 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                                         human_send_callback=_hs_cb,
                                         translate_callback=_htr_cb,
                                         deliver_only=True,
+                                        app=web_app,
                                     )
                                     web_app.state.autosend_worker = _do_worker
+                                    # Q-23 #303：deliver_only 实例同样承载软回应闸门——档位非 auto_ai
+                                    # 时闸内即转审核候选，不会因「自动发送未启用」而绕闸直投。
                                     draft_svc.set_inbox_deliver_callback(
                                         _do_worker.deliver_human_approved,
                                         stale_approve_hours=float(
-                                            _ad_cfg.get("stale_approve_hours", 24) or 0))
+                                            _ad_cfg.get("stale_approve_hours", 24) or 0),
+                                        soft_reply_cb=_do_worker.deliver_soft_reply)
                                     assistant.logger.info(
                                         "人工通过投递已接线（deliver_only；自动发送未启用）")
                     except Exception:

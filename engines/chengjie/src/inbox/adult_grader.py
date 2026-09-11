@@ -23,12 +23,19 @@ C. :func:`regrade_inbound`（drafts.py 唯一钩子）——
      mark_only → medium + ``adult_mark`` 标记，不转不发；
    · pressure → 一律 high + needs_human（安全地板，不看 mark_only）；soft_reply 立即发；human
      3 分钟补发。
-   软回应经 DraftService 的人工通过投递回调（``AutosendWorker.deliver_human_approved``：不过
-   人工优先闸 / 不进 pacing——needs_human 在场时 L2 稿会被 Q-3 闸取消，故不能当 L2 稿发）。
    软回应**不是**缓冲句、不做全局兜底：只在 explicit / pressure × (soft_reply | human 超时) 出。
-   群 / 频道 / 报障群一律不发软回应、不打标、不持有（一对一口吻罐头与群内容无关）。
 
-日志：``[adult] grade conv= level= hits= policy=`` / ``[adult] soft_reply conv= level= policy= mode=``。
+Q-23（#303，2026-09-12，事故：报障群被软回应刷屏 mid 1445/1454/1459/1461）：
+   · 入口先看 :class:`src.inbox.guard_context.GuardContext`：群 / 非客户发送方 → **不评估、不打标、
+     不出站**（``info.skipped``）；
+   · 软回应不再走人工通过直投链（该回调从此只剩坐席「人工通过」一个调用方），改经
+     ``DraftService._soft_reply_cb`` = ``AutosendWorker.deliver_soft_reply``（stage=soft_reply）：
+     autosend_policy(kind=soft_reply) → ``_human_priority_gate`` → 人设口吻短生成（语言跟对方
+     ``resolve_outbound_lang``，失败**不发**、不用固定句）→ 投递 → :func:`record_sent` 账本；
+   · manual / review 档：不自动出站，reasons 追加 ``adult_soft_alt:<mode>``（审核候选），坐席自己挑句；
+   · ``_SOFT_LINES`` / :func:`soft_reply_for` 只剩坐席挑句端点（adult_routes.pick）用，自动链不再引用。
+
+日志：``[adult] grade conv= level= hits= policy=`` / ``[adult] soft_reply conv= level= policy= mode= status=``。
 """
 from __future__ import annotations
 
@@ -54,6 +61,9 @@ KV_PREFIX = "adult_soft:"          # 每会话账本 {ts, level, policy, mode, t
 REASON_PREFIX = "adult:"           # 打标 / risk_reasons 标签：adult:<level>[:<hit>]
 FLIRT_REASON = "adult_flirt"
 MARK_REASON = "adult_mark"
+# Q-23（#303）：manual / review 档下「本该软回应」不再自动出站，改标成审核候选
+# adult_soft_alt:<mode>（同 Q-2 commitment_alt: 模式）——坐席在稿上看到即可自己挑句（adult_routes.pick）。
+SOFT_ALT_PREFIX = "adult_soft_alt:"
 
 _LB = r"(?<![A-Za-z])"
 _RB = r"(?![A-Za-z])"
@@ -457,8 +467,11 @@ def blocks_adult_outbound(conv: Optional[Dict[str, Any]], cfg: Any = None) -> bo
     return False
 
 
-def _deliver_cb(svc: Any) -> Any:
-    return getattr(svc, "_inbox_deliver_cb", None) if svc is not None else None
+def _soft_reply_cb(svc: Any) -> Any:
+    """Q-23（#303）：软回应**只**经 ``DraftService._soft_reply_cb``（= ``AutosendWorker.deliver_soft_reply``，
+    过 autosend_policy(kind=soft_reply) + ``_human_priority_gate`` + 场景闸）。坐席「人工通过」
+    直投回调是坐席专用，本模块不再触碰（静态门禁 test_guard_context_gate）。"""
+    return getattr(svc, "_soft_reply_cb", None) if svc is not None else None
 
 
 def _find_loop(cb: Any) -> Any:
@@ -476,38 +489,60 @@ def _find_loop(cb: Any) -> Any:
     return None
 
 
-def dispatch_soft_reply(conv: Dict[str, Any], text: str, *, svc: Any = None,
+def dispatch_soft_reply(conv: Dict[str, Any], text: str = "", *, svc: Any = None,
                         level: str = "", policy: str = "", mode: str = "immediate",
-                        now: Optional[float] = None, cfg: Any = None) -> str:
-    """把软回应排进人工通过投递链。返回 ``scheduled`` / ``no_deliver_cb`` / ``no_loop`` / ``empty``。
+                        now: Optional[float] = None, cfg: Any = None,
+                        peer_text: str = "", lang: str = "", persona: Any = None,
+                        tag_ts: float = 0.0, ctx: Any = None, automation_mode: str = "") -> str:
+    """把软回应排进 **stage=soft_reply 单一闸门**（``AutosendWorker.deliver_soft_reply``）。
 
-    只排队不等结果——投递回调自吞异常并负责失败审计 + 坐席铃铛。
+    返回 ``scheduled`` / ``skip_public_chat`` / ``no_soft_reply_cb`` / ``no_loop`` / ``empty``。
+    只排队不等结果——闸门内做：policy(kind=soft_reply) → ``_human_priority_gate`` → 人设口吻短生成
+    （``text`` 为空时；生成失败**不发**）→ 投递 → ``record_sent`` 账本。``text`` 非空 = 调用方已备好
+    正文（测试 / 坐席工具），闸门照过、只跳过生成。
     """
     cid = str((conv or {}).get("conversation_id") or "")
     text = str(text or "").strip()
-    if not text or not cid:
+    # 「空」= 既没正文、也没有任何生成依据（对方原话 / 语言）。followup 只带 lang 也算有依据——
+    # 闸门内 resolve_outbound_lang 会再定一次语言，定不出即 lang_unknown 不发。
+    if not cid or (not text and not str(peer_text or "").strip() and not str(lang or "").strip()):
         return "empty"
     svc = svc if svc is not None else _bound_service()
     if cfg is None:
         cfg = getattr(svc, "_cfg", None) if svc is not None else None
-    if blocks_adult_outbound(conv, cfg):
+    if blocks_adult_outbound(conv, cfg) or (ctx is not None and getattr(ctx, "is_group", False)):
         logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=skip_public_chat",
                     cid, level or "-", policy or "-", mode)
         return "skip_public_chat"
-    cb = _deliver_cb(svc)
+    cb = _soft_reply_cb(svc)
     if cb is None:
-        logger.warning("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=no_deliver_cb",
+        logger.warning("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=no_soft_reply_cb",
                        cid, level or "-", policy or "-", mode)
-        return "no_deliver_cb"
+        return "no_soft_reply_cb"
     ts = float(now if now is not None else time.time())
+    pid = ""
+    try:
+        pid = str((persona or {}).get("id") or "") if isinstance(persona, dict) else ""
+    except Exception:
+        pid = ""
     row = {
         "draft_id": f"adult_soft:{cid}:{int(ts)}",
+        "kind": "soft_reply",
         "conversation_id": cid,
         "platform": str(conv.get("platform") or ""),
         "account_id": str(conv.get("account_id") or "default"),
         "chat_key": str(conv.get("chat_key") or ""),
         "final_text": text,
         "draft_text": text,
+        "peer_text": str(peer_text or "")[:400],
+        "lang": str(lang or ""),
+        "persona_id": pid,
+        "level": str(level or ""),
+        "policy": str(policy or ""),
+        "mode": str(mode or "immediate"),
+        "tag_ts": float(tag_ts or ts),
+        "automation_mode": str(automation_mode or ""),
+        "guard_ctx": ctx,
         "created_ts": ts,
     }
     loop = _find_loop(cb)
@@ -527,16 +562,31 @@ def dispatch_soft_reply(conv: Dict[str, Any], text: str, *, svc: Any = None,
     except Exception:
         logger.warning("[adult] soft_reply conv=%s 排入投递失败", cid, exc_info=True)
         return "no_loop"
-    logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s text=%s",
-                cid, level or "-", policy or "-", mode, text[:60])
+    logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=scheduled gen=%s",
+                cid, level or "-", policy or "-", mode, "given" if text else "persona")
     return "scheduled"
+
+
+def record_sent(store: Any, row: Dict[str, Any], text: str) -> None:
+    """闸门投递**成功后**记账（``adult_soft:<cid>``）——补发「同一次打标只补一次」与回访卡都读它。
+    生成失败 / 闸拦 → 不记（下一次打标仍可再试）。"""
+    row = row or {}
+    cid = str(row.get("conversation_id") or "")
+    try:
+        ts = float(row.get("created_ts") or row.get("ts") or time.time())
+    except (TypeError, ValueError):
+        ts = time.time()
+    _kv_set(store, cid, {"ts": ts, "level": str(row.get("level") or ""), "policy": str(row.get("policy") or ""),
+                         "mode": str(row.get("mode") or "immediate"), "tag_ts": float(row.get("tag_ts") or ts),
+                         "text": str(text or "")[:120]})
 
 
 def send_soft_reply(store: Any, conv: Dict[str, Any], *, level: str, policy: str, mode: str,
                     persona: Any = None, lang: str = "", cfg: Any = None, svc: Any = None,
                     now: Optional[float] = None, tag_ts: float = 0.0,
-                    peer_text: str = "") -> Dict[str, Any]:
-    """挑句 + 排队 + 记账。返回 ``{status, text}``。语言：显式 lang → 入站文本嗅探 → en。"""
+                    peer_text: str = "", ctx: Any = None, automation_mode: str = "") -> Dict[str, Any]:
+    """排进单一闸门。返回 ``{status, text}``（``text`` 恒空：正文由闸门内人设口吻短生成，语言跟对方
+    ``resolve_outbound_lang``；这里不再挑固定句）。账本由闸门投递成功后 ``record_sent`` 写。"""
     cid = str((conv or {}).get("conversation_id") or "")
     ts = float(now if now is not None else time.time())
     if blocks_adult_outbound(conv, cfg):
@@ -544,13 +594,29 @@ def send_soft_reply(store: Any, conv: Dict[str, Any], *, level: str, policy: str
         return {"status": "skip_public_chat", "text": ""}
     if persona is None:
         persona = resolve_persona(conv, cfg)
-    text = soft_reply_for(persona, sniff_lang(peer_text, lang), cid=cid, now=ts)
-    status = dispatch_soft_reply(conv, text, svc=svc, level=level, policy=policy, mode=mode,
-                                 now=ts, cfg=cfg)
-    if status == "scheduled":
-        _kv_set(store, cid, {"ts": ts, "level": level, "policy": policy, "mode": mode,
-                             "tag_ts": float(tag_ts or ts), "text": text[:120]})
-    return {"status": status, "text": text}
+    if not str(peer_text or "").strip():
+        peer_text = _last_inbound_text(store, cid)
+    status = dispatch_soft_reply(conv, "", svc=svc, level=level, policy=policy, mode=mode,
+                                 now=ts, cfg=cfg, peer_text=peer_text, lang=sniff_lang(peer_text, lang),
+                                 persona=persona, tag_ts=float(tag_ts or ts), ctx=ctx,
+                                 automation_mode=automation_mode)
+    return {"status": status, "text": ""}
+
+
+def _last_inbound_text(store: Any, cid: str) -> str:
+    if store is None or not cid:
+        return ""
+    try:
+        rows = store.list_recent_messages(cid, limit=12) or []
+    except Exception:
+        return ""
+    for m in reversed(rows):
+        try:
+            if str(m.get("direction") or "") == "in" and str(m.get("text") or "").strip():
+                return str(m.get("text") or "")
+        except Exception:
+            continue
+    return ""
 
 
 # ── 3 分钟无人接手补发（policy=human）─────────────────────────────────────────
@@ -734,20 +800,38 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                     peer_reasons: Sequence[str], risk_hits: Sequence[str], *,
                     automation_mode: str = "auto_ai", cfg: Any = None, persona: Any = None,
                     now: Optional[float] = None,
-                    send: bool = True) -> Tuple[str, List[str], Optional[Dict[str, Any]]]:
+                    send: bool = True,
+                    ctx: Any = None) -> Tuple[str, List[str], Optional[Dict[str, Any]]]:
     """``(risk_level, peer_reasons, info)``。无成人命中 → 原样返回、info=None。
 
     副作用（explicit / pressure 且政策非 mark_only）：``risk_hold.set(adult)`` + ``tag_needs_human``
     （reason ``adult:<level>:<hit>``）+ soft_reply 政策立即软回应。任何异常 → 原判定放行。
+
+    ``ctx``（Q-23 #303 ``GuardContext``，None = 逐字旧行为）：群 / 非客户发送方 → **不评估、不出站、
+    不打标、不持有**（``info.skipped=group|sender:<kind>``，原判定原样返回）；``manual`` / ``review`` /
+    ``multi_choice`` 档 → 打标 / 持有照旧，但软回应**不发**，改为审核稿候选（reasons 追加
+    ``adult_soft_alt:<text>``，与 Q-2 ``commitment_alt:`` 同式）。
     """
     reasons = [str(r) for r in (peer_reasons or [])]
     try:
         bind_service(svc)
+        cid = str((conv or {}).get("conversation_id") or "")
+        if ctx is not None:
+            _skip = ""
+            try:
+                _skip = str(ctx.skip_reason() or "")
+            except Exception:
+                _skip = ""
+            if _skip:
+                logger.info("[guard-ctx] skip=%s stage=adult conv=%s %s", _skip, cid or "-", ctx.log_tag())
+                return risk_level, reasons, {
+                    "level": "", "hits": [], "pressure_hits": [], "policy": "", "policy_source": "",
+                    "category": CATEGORY, "soft_reply": "", "needs_human": False, "skipped": _skip,
+                }
         g = grade(text, lang)
         level = str(g.get("level") or "")
         if not level:
             return risk_level, reasons, None
-        cid = str((conv or {}).get("conversation_id") or "")
         store = getattr(svc, "_store", None)
         if cfg is None:
             cfg = getattr(svc, "_cfg", None)
@@ -806,10 +890,19 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
             except Exception:
                 logger.debug("[adult] tag_needs_human 失败（忽略）", exc_info=True)
         action = "handoff"
-        if policy == "soft_reply" and send:
+        _mode = str(getattr(ctx, "mode", "") or automation_mode or "").strip().lower()
+        if policy == "soft_reply" and send and _mode and _mode != "auto_ai":
+            # Q-23 #303：人在环档位（manual / review / multi_choice）任何自动出站只能是审核稿候选——
+            # 软回应不发，候选写进 reasons（drafts 落进草稿 risk_reasons，坐席卡片可见）。
+            out.append(f"{SOFT_ALT_PREFIX}{_mode}")
+            info["soft_reply_status"] = "review_candidate"
+            action = "soft_reply_candidate"
+            logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=immediate status=review_candidate "
+                        "automation_mode=%s", cid, level, policy, _mode)
+        elif policy == "soft_reply" and send:
             res = send_soft_reply(store, conv, level=level, policy=policy, mode="immediate",
                                   persona=persona, lang=lang, cfg=cfg, svc=svc, now=ts, tag_ts=ts,
-                                  peer_text=text)
+                                  peer_text=text, ctx=ctx, automation_mode=_mode or automation_mode)
             info["soft_reply"] = str(res.get("text") or "")
             info["soft_reply_status"] = str(res.get("status") or "")
             action = "soft_reply"

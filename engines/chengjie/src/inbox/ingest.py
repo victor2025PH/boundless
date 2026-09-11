@@ -271,6 +271,9 @@ def ingest_collected_chats(
                     "chat_key": conv.chat_key,
                     "display_name": conv.display_name,
                     "chat_type": conv.chat_type or "private",
+                    # Q-23 #303：发送方 id（群里区分同事 / 客户；私聊缺省=对端）→ GuardContext.sender_kind
+                    "sender_id": str(lm.get("sender_id")
+                                     or (lm.get("source") or {}).get("sender_id") or ""),
                 }
                 for _cb in getattr(store, "_new_inbound_cbs", []):
                     try:

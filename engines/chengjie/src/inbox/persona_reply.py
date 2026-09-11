@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1548,3 +1549,117 @@ async def generate_topic_opener(
         out["translated"] = translated
     await _attach_gloss(app, out, reply, resolved_lang, gloss_lang)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Q-23（#303）：守卫触发的「软回应」人设口吻短生成——单一入口
+# ---------------------------------------------------------------------------
+_SOFT_DEFLECT_MAX_CHARS = 120
+_SOFT_DEFLECT_LANG_NAMES = {
+    "zh": "中文", "en": "English", "ja": "日本語", "ko": "한국어", "th": "ไทย", "vi": "Tiếng Việt",
+    "id": "Bahasa Indonesia", "ms": "Bahasa Melayu", "es": "Español", "pt": "Português",
+    "fr": "Français", "de": "Deutsch", "ru": "Русский", "ar": "العربية", "hi": "हिन्दी", "tr": "Türkçe",
+}
+
+
+def _soft_deflect_first_sentence(text: str) -> str:
+    """一句话预算：取首个句末标点前的内容（多句 / 换行 → 只留第一句），超长即失败（返回空）。"""
+    t = str(text or "").strip().strip('"“”「」')
+    if not t:
+        return ""
+    t = t.splitlines()[0].strip()
+    m = re.search(r"^(.+?[。！？!?…]+)(?:\s|$)", t)
+    if m:
+        t = m.group(1).strip()
+    else:
+        parts = re.split(r"(?<=[.])\s+", t, maxsplit=1)
+        t = parts[0].strip()
+    if not t or len(t) > _SOFT_DEFLECT_MAX_CHARS:
+        return ""
+    return t
+
+
+def build_soft_deflect_directive(*, target_lang: str, peer_text: str, level: str = "") -> str:
+    lang_name = _SOFT_DEFLECT_LANG_NAMES.get(str(target_lang or "").lower()[:2], str(target_lang or ""))
+    peer = str(peer_text or "").strip().replace("\n", " ")[:200]
+    return (
+        "【任务：对方刚发来一句越界的成人向内容，你要用你自己的口吻轻轻把话题带开。】\n"
+        "要求：\n"
+        f"· 只写一句话（不超过 {_SOFT_DEFLECT_MAX_CHARS // 2} 个汉字或 25 个英文单词），不分段、不加表情堆砌；\n"
+        "· 保持你一贯的语气与身份，像随口一句，不解释、不道歉、不说教、不引用任何规则或平台政策；\n"
+        "· 不迎合、不延续对方的话题、不给承诺，也不生硬拒绝——顺手换到一个你此刻真实在做/想聊的小事；\n"
+        f"· 必须用 {lang_name or '对方所用语言'} 写，且只输出这一句正文，不要前缀或引号。\n"
+        + (f"对方原话（仅供判断语气，不要复述）：{peer}\n" if peer else "")
+        + (f"越界程度：{level}\n" if level else "")
+    )
+
+
+async def generate_soft_deflect(
+    *,
+    app: Any,
+    platform: str,
+    chat_key: str,
+    account_id: str = "",
+    conversation_id: str = "",
+    target_lang: str = "",
+    peer_text: str = "",
+    persona_id: str = "",
+    level: str = "",
+) -> Dict[str, Any]:
+    """成人守卫「软回应」的**唯一**生成入口（AutosendWorker.deliver_soft_reply 调）。
+
+    与开场 / 回复链同一套人设解析与 ``generate_reply_with_intent``（PersonaManager 注入人设、
+    LANGUAGE RULE 守卫），但：不走 KB / 目标 / 记忆注入（一句带开话题的话不需要），不落记忆，
+    没有 ``ai.chat`` 兜底、没有固定句——生成失败 / 超出一句预算 → ``{ok: False}``，调用方**不发**。
+    """
+    lang = str(target_lang or "").strip()
+    if not lang:
+        return {"ok": False, "reply": "", "reply_lang": "", "detail": "lang_unknown"}
+    _acct = str(account_id or "").strip()
+    if (not _acct or _acct == "default") and conversation_id:
+        _parts = str(conversation_id).split(":", 2)
+        if len(_parts) >= 3 and _parts[1]:
+            _acct = str(_parts[1]).strip()
+    if not str(persona_id or "").strip():
+        try:
+            from src.ai.persona_voice import resolve_effective_persona
+            _cm = getattr(getattr(app, "state", None), "config_manager", None)
+            _pid_r, _tier_r = resolve_effective_persona(
+                getattr(_cm, "config", None) or {}, platform, _acct, str(chat_key or ""))
+            if _pid_r:
+                persona_id = _pid_r
+        except Exception:
+            logger.debug("[persona_reply] soft_deflect persona 解析跳过", exc_info=True)
+    state = getattr(app, "state", None)
+    sm = getattr(state, "skill_manager", None)
+    if sm is None:
+        tc = getattr(state, "telegram_client", None)
+        sm = getattr(tc, "skill_manager", None) if tc is not None else None
+    ai_client = getattr(sm, "ai_client", None) if sm is not None else None
+    if ai_client is None or not hasattr(ai_client, "generate_reply_with_intent"):
+        return {"ok": False, "reply": "", "reply_lang": lang, "detail": "no_engine"}
+    user_id = f"desktop:{platform}:{chat_key}"
+    ctx: Dict[str, Any] = {
+        "user_id": user_id,
+        "chat_id": chat_key or user_id,
+        "channel": "desktop",
+        "platform": platform,
+        "intent": "adult_soft_deflect",
+        "current_intent": "adult_soft_deflect",
+        "reply_lang": lang,
+    }
+    if persona_id:
+        ctx["account_persona_id"] = persona_id
+    directive = build_soft_deflect_directive(target_lang=lang, peer_text=peer_text, level=level)
+    try:
+        reply = await ai_client.generate_reply_with_intent(
+            user_message=directive, intent="adult_soft_deflect", user_context=ctx)
+    except Exception:
+        logger.debug("[persona_reply] soft_deflect 生成异常", exc_info=True)
+        reply = None
+    text = _soft_deflect_first_sentence(reply or "")
+    if not text:
+        return {"ok": False, "reply": "", "reply_lang": lang, "persona": persona_id or "",
+                "detail": "empty_or_over_budget" if reply else "gen_failed"}
+    return {"ok": True, "reply": text, "reply_lang": lang, "persona": persona_id or "",
+            "intent": "adult_soft_deflect"}

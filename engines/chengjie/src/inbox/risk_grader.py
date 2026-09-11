@@ -382,7 +382,8 @@ def _tag_medium(store: Any, cid: str) -> bool:
 def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_level: str,
                     peer_reasons: Sequence[str], risk_hits: Any, *,
                     automation_mode: str = "auto_ai", cfg: Any = None, persona: Any = None,
-                    now: Optional[float] = None) -> Tuple[str, List[str], Optional[Dict[str, Any]]]:
+                    now: Optional[float] = None,
+                    ctx: Any = None) -> Tuple[str, List[str], Optional[Dict[str, Any]]]:
     """``(risk_level, peer_reasons, info)``。drafts.py 钩子入口（Q-15 同式）。任何异常 → 原判定放行。
 
     - 分级 high：``max(原, high)`` + reasons 追加 ``risk:<category>``（新表 threat / minor / scam /
@@ -390,10 +391,23 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
     - 分级 medium：原 high 且只由可降因子撑起 → 降 medium（``privacy``→``privacy_mention``）；会话打
       ``risk:medium`` 标签；日志 ``[risk] medium``。
     - 分级 low：同上降 low；只落 ``[risk] low conv= category= hits=``。
+    - ``ctx``（Q-23 #303 ``GuardContext``，None = 逐字旧行为）：群 / 非客户发送方 → **不评估、不打标**，
+      原判定原样返回，``info={"skipped": <reason>}``。
     """
     reasons = [str(r) for r in (peer_reasons or [])]
     try:
         cid = str((conv or {}).get("conversation_id") or "")
+        if ctx is not None:
+            _skip = ""
+            try:
+                _skip = str(ctx.skip_reason() or "")
+            except Exception:
+                _skip = ""
+            if _skip:
+                logger.info("[guard-ctx] skip=%s stage=risk conv=%s %s", _skip, cid or "-", ctx.log_tag())
+                return risk_level, reasons, {"level": "", "category": "", "hits": [], "action": "",
+                                             "downgraded": False, "from": str(risk_level or "low"),
+                                             "skipped": _skip}
         store = getattr(svc, "_store", None)
         if cfg is None:
             cfg = getattr(svc, "_cfg", None)

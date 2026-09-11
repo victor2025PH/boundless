@@ -83,11 +83,30 @@ _SENSITIVE_PATTERNS: List[Tuple[re.Pattern, str]] = [
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
 
 
-def keyword_risk_hits(text: str, direction: Optional[str] = None) -> Tuple[Optional[str], List[str]]:
+def keyword_risk_hits(text: str, direction: Optional[str] = None,
+                      ctx: Any = None) -> Tuple[Optional[str], List[str]]:
     """(强制 risk_level 或 None, 命中词组列表)。
 
     与 ``keyword_risk_level`` 同表同口径，但把**全部**命中词收齐（不首中即止）——
     影子台账要的就是「到底哪个正则在响」；level 取最高档。
+
+    ``ctx``（Q-23 #303，``guard_context.GuardContext``，缺省 None = 逐字旧行为）：群 / 非客户
+    发送方 → **不评估**（``(None, [])``），日志 ``[guard-ctx] skip=… stage=keyword``。
+    """
+    if ctx is not None:
+        try:
+            _skip = ctx.skip_reason()
+        except Exception:
+            _skip = ""
+        if _skip:
+            logger.info("[guard-ctx] skip=%s stage=keyword conv=%s %s", _skip,
+                        getattr(ctx, "conversation_id", "") or "-", ctx.log_tag())
+            return None, []
+    return _keyword_risk_hits(text, direction)
+
+
+def _keyword_risk_hits(text: str, direction: Optional[str] = None) -> Tuple[Optional[str], List[str]]:
+    """``keyword_risk_hits`` 的原判定（Q-23 之前逐字）。
 
     ``direction``（Q-17 #277②）：
       - ``None``（旧签名，兼容全部老调用方）/ ``"out"``（AI 稿 / 出站）：逐字旧口径——
@@ -212,6 +231,10 @@ class DraftService:
         self._inbox_deliver_cb: Optional[Any] = None
         # 陈旧草稿护栏阈值（小时）；随投递回调注入，未接线时不生效。见 _stale_check。
         self._stale_approve_hours: float = 0.0
+        # Q-23（#303）：守卫触发的自动软回应回调（AutosendWorker.deliver_soft_reply，
+        # 过 autosend_policy(kind=soft_reply) + _human_priority_gate + 场景闸）。
+        # ``_inbox_deliver_cb`` 从此**只**由坐席「人工通过」调（静态门禁 test_guard_context_gate）。
+        self._soft_reply_cb: Optional[Any] = None
 
     # ── 读：跨平台统一列表（read-through）─────────────────────
 
@@ -333,7 +356,7 @@ class DraftService:
     # ── 写：统一 resolve 派发 ─────────────────────────────────
 
     def set_inbox_deliver_callback(
-        self, cb: Any, *, stale_approve_hours: float = 24.0
+        self, cb: Any, *, stale_approve_hours: float = 24.0, soft_reply_cb: Any = None,
     ) -> None:
         """注册 inbox 草稿人工通过后的真投递回调（async (draft_row)->Any）。
 
@@ -343,9 +366,14 @@ class DraftService:
 
         ``stale_approve_hours``：超此龄的草稿禁止 ``approve``（原样发）——见
         ``_stale_check``。与回调同参注入，因为「能真发」与「需要陈旧护栏」是同一件事。
+
+        ``soft_reply_cb``（Q-23 #303）：守卫触发的自动软回应出口（``AutosendWorker.deliver_soft_reply``），
+        与人工通过回调同时接线——两者能力同源（同一 worker），但软回应是自动出站，必须过闸。
+        None = 软回应不可用（adult_grader 记 ``no_soft_reply_cb``，不发）。
         """
         self._inbox_deliver_cb = cb
         self._stale_approve_hours = float(stale_approve_hours or 0)
+        self._soft_reply_cb = soft_reply_cb
 
     def _stale_check(
         self,
@@ -1194,7 +1222,8 @@ class DraftService:
         try:
             from src.ai.chat_assistant_service import quick_analyze, _suggestions, detect_language
             analysis = quick_analyze(t)
-            _kw_level, _kw_hits = keyword_risk_hits(t, direction="in")  # Q-17 #277②：客户入站不跑 commitment_claim，只认索要句式 request:<kind>
+            _gctx = __import__("src.inbox.guard_context", fromlist=["build"]).build(conv, automation_mode=automation_mode, lang=str(analysis.get("language") or ""), cfg=self._cfg or None, store=self._store, sender_id=str(conv.get("sender_id") or ""))  # Q-23 #303：场景维度构造一次——群 / 非客户发送方不评估不出站不打标；manual/review 档自动出站改候选进审核稿（三处守卫 ctx 同源）
+            _kw_level, _kw_hits = keyword_risk_hits(t, direction="in", ctx=_gctx)  # Q-17 #277②：客户入站不跑 commitment_claim，只认索要句式 request:<kind>
             risk_level = _max_risk(analysis.get("risk_level", "low"), _kw_level)
             _peer_reasons = list(analysis.get("risk_reasons") or [])
             if _kw_level and "keyword" not in _peer_reasons:
@@ -1223,8 +1252,8 @@ class DraftService:
                 logger.debug("auto_generate_draft commitment_guard 失败（忽略）", exc_info=True)
                 _cmt = None
             _adult_conv = {"conversation_id": conv_id, "platform": platform, "account_id": account_id, "chat_key": chat_key, "chat_type": conv.get("chat_type") or ""}
-            risk_level, _peer_reasons, _adult = __import__("src.inbox.adult_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, _adult_conv, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None)  # Q-15 #271：成人内容四级——mention/flirt 不转人工（medium shadow=adult_flirt）；explicit/pressure 按人设 adult_policy 软回应 / 打标 adult:<level>（钩子内自吞异常，原判定放行）
-            risk_level, _peer_reasons, _rk = __import__("src.inbox.risk_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, _adult_conv, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None)  # Q-17 #277②：三级分级——高（诈骗/索钱/威胁/自伤/未成年/露骨施压）现状不动；中（索要句式/露骨提及/停联）只打 risk:medium 标不进 needs_human；低（隐私词/叙述提及）只落 [risk] low 日志。原 high 仅由 privacy 叙述 / 承诺兜底撑起时才降（钩子内自吞异常，原判定放行）
+            risk_level, _peer_reasons, _adult = __import__("src.inbox.adult_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, _adult_conv, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None, ctx=_gctx)  # Q-15 #271：成人内容四级——mention/flirt 不转人工（medium shadow=adult_flirt）；explicit/pressure 按人设 adult_policy 软回应 / 打标 adult:<level>（钩子内自吞异常，原判定放行）；Q-23 ctx：群 / 非客户不评估，review 档软回应只进审核稿候选
+            risk_level, _peer_reasons, _rk = __import__("src.inbox.risk_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, _adult_conv, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None, ctx=_gctx)  # Q-17 #277②：三级分级——高（诈骗/索钱/威胁/自伤/未成年/露骨施压）现状不动；中（索要句式/露骨提及/停联）只打 risk:medium 标不进 needs_human；低（隐私词/叙述提及）只落 [risk] low 日志。原 high 仅由 privacy 叙述 / 承诺兜底撑起时才降（钩子内自吞异常，原判定放行）；Q-23 ctx：群 / 非客户不评估不打标
             # 档位**只认** autosend_policy.decide（#160 v2：shadow 下风险不降档，
             # 「本会被扣」进影子台账；review/manual 档由会话档位自身决定，与风险无关）
             _decision = policy_decide(

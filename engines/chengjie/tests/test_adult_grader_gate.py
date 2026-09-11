@@ -10,9 +10,12 @@ human 政策 3 分钟无人接手补发一次并落 ``[adult] soft_reply`` 日�
 10 条硬门禁（指令 E 段）：
   · 5 条 mention / flirt：不打「需人工」、不设 risk_hold、risk 只到 medium、reasons[0]==adult_flirt（不被拦）；
   · 5 条 explicit + pressure：打标 ``adult:pressure:<hit>``、risk_hold=adult、soft_reply 政策下软回应经
-    ``_inbox_deliver_cb``（人工通过投递链，不进 L2 草稿）真的排出、账本落 ``adult_soft:<cid>``。
+    ``_soft_reply_cb``（Q-23 #303：= AutosendWorker.deliver_soft_reply 单一闸门，不再复用人工通过直投、
+    不进 L2 草稿）真的排出；账本 ``adult_soft:<cid>`` 由闸门投递成功后 ``record_sent`` 落。
 附加：3 分钟补发四种跳过 + 一次补发；政策缺省按域；prompt 段；软回应不是缓冲句（无「稍等」类罐头）；
 mark_only 露骨只标不转、pressure 仍转（安全地板）。
+Q-23 后自动链不再挑固定句（正文由闸门内人设口吻短生成，失败即不发）：本文件里 ``_Svc`` 桩模拟闸门
+「已生成并投递成功」→ 只验排队行（kind / peer_text / lang / 无预置正文）与账本。
 
 纳入 R 批门禁清单（与 test_commitment_gate / test_risk_hold_q3 同组）。
 """
@@ -40,7 +43,11 @@ def _conv(ck: str) -> Dict[str, Any]:
 
 
 class _Svc:
-    """DraftService 桩：只暴露 adult_grader 会碰的三样——_store / _cfg / _inbox_deliver_cb（+ _loop）。"""
+    """DraftService 桩：只暴露 adult_grader 会碰的三样——_store / _cfg / _soft_reply_cb（+ _loop）。
+
+    ``_soft_reply_cb`` 模拟闸门放行 + 生成成功 + 投递成功（真闸门见 test_guard_context_gate）：
+    记下排队行并像 worker 一样调 ``record_sent`` 落账本。
+    """
 
     def __init__(self, store: InboxStore, cfg: Dict[str, Any], loop: asyncio.AbstractEventLoop):
         self._store = store
@@ -49,8 +56,9 @@ class _Svc:
         self.delivered: List[Dict[str, Any]] = []
         self.got = threading.Event()
 
-    async def _inbox_deliver_cb(self, row: Dict[str, Any]) -> None:
+    async def _soft_reply_cb(self, row: Dict[str, Any]) -> None:
         self.delivered.append(dict(row))
+        ag.record_sent(self._store, row, row.get("final_text") or "<generated>")
         self.got.set()
 
 
@@ -168,21 +176,20 @@ def test_explicit_pressure_hands_off_and_soft_replies(store, bg_loop, monkeypatc
     # 会话级持有 = adult（不是泛因 needs_human，系统自动摘标不会误清）
     rec = risk_hold.active_record(store, cid)
     assert rec and rec["reason"] == "adult" and rec["by"] == "adult_grader"
-    # 软回应：经 _inbox_deliver_cb 排出（人工通过链，不进 L2），账本落地，日志口径 policy=soft_reply
+    # 软回应：经 _soft_reply_cb 排出（Q-23 单一闸门，不进 L2、不走人工通过直投），日志口径 policy=soft_reply
     assert info["policy"] == "soft_reply" and info["policy_source"] == "default_companion"
-    assert info["soft_reply_status"] == "scheduled" and info["soft_reply"]
-    assert svc.got.wait(3.0), "soft reply not delivered via _inbox_deliver_cb"
+    assert info["soft_reply_status"] == "scheduled"
+    assert info["soft_reply"] == ""            # Q-23：自动链不再预置固定句，正文闸门内人设短生成
+    assert svc.got.wait(3.0), "soft reply not dispatched via _soft_reply_cb"
     row = svc.delivered[0]
-    assert row["conversation_id"] == cid and row["final_text"] == info["soft_reply"]
+    assert row["conversation_id"] == cid and row["kind"] == "soft_reply"
+    assert row["final_text"] == "" and row["peer_text"] == text and row["lang"] == lang
+    assert row["level"] == "pressure" and row["policy"] == "soft_reply" and row["mode"] == "immediate"
     assert row["draft_id"].startswith("adult_soft:")
+    # 账本由闸门投递成功后 record_sent 落（桩模拟成功）
     led = ag.last_soft_reply(store, cid)
     assert led["mode"] == "immediate" and led["policy"] == "soft_reply" and led["level"] == "pressure"
     assert abs(float(led["ts"]) - t0) < 1e-6
-    # 语言跟入站：中文来中文回、英文来英文回
-    if lang == "zh":
-        assert any("\u4e00" <= ch <= "\u9fff" for ch in info["soft_reply"])
-    elif lang == "en":
-        assert info["soft_reply"].isascii() or "'" in info["soft_reply"]
 
 
 # ── ③ 软回应不是缓冲句 / 不是罐头 ─────────────────────────────────────────────
@@ -324,17 +331,23 @@ def test_schedule_followup_fires_and_replaces(store, bg_loop, monkeypatch):
 
 def test_dispatch_without_deliver_cb_or_loop_is_noop(store):
     conv = _conv("nocb")
-    assert ag.dispatch_soft_reply(conv, "x", svc=object()) == "no_deliver_cb"
+    assert ag.dispatch_soft_reply(conv, "x", svc=object()) == "no_soft_reply_cb"
 
     class _NoLoop:
-        async def _inbox_deliver_cb(self, row):  # pragma: no cover
+        async def _soft_reply_cb(self, row):  # pragma: no cover
             pass
     assert ag.dispatch_soft_reply(conv, "x", svc=_NoLoop()) == "no_loop"
     assert ag.dispatch_soft_reply(conv, "", svc=_NoLoop()) == "empty"
-    # 未排出 → 账本不落
+
+    class _OnlyHuman:
+        """只接了人工通过直投、没接软回应闸门 → 软回应不可用（绝不回落到人工通过链）。"""
+        async def _inbox_deliver_cb(self, row):  # pragma: no cover
+            raise AssertionError("soft reply must never use the human-approve deliver path")
+    assert ag.dispatch_soft_reply(conv, "x", svc=_OnlyHuman()) == "no_soft_reply_cb"
+    # 未排出 → 账本不落；Q-23 后 text 恒空（不再挑固定句）
     res = ag.send_soft_reply(store, conv, level="explicit", policy="human", mode="followup",
                              persona=_persona(), lang="en", svc=object())
-    assert res["status"] == "no_deliver_cb" and res["text"]
+    assert res["status"] == "no_soft_reply_cb" and res["text"] == ""
     assert ag.last_soft_reply(store, conv["conversation_id"]) == {}
 
 
