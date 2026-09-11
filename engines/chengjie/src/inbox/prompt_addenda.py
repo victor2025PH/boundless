@@ -207,13 +207,38 @@ def album_scene_addendum(kind_counts: Any, *, lang: str = "zh") -> str:
     )
 
 
-def sent_media_addendum(items: Any, *, conv_known: bool = False, lang: str = "zh") -> str:
-    """本会话已发媒体清单。``conv_known=False`` → ""；已知会话但 items 空 → 写死从未发过。"""
+def _recent_media_claim(conv_key: str, lang: str, inbound: str = "") -> str:
+    """Q-20 D：30 分钟内我方（人工或 AI）刚发过媒体 → 「刚发过一张…认领」句；否则 ""。
+
+    ``conv_key`` 空时读 ``image_autosend.bound_prompt_conv()``（persona_reply 组 prompt 前
+    调过 ``last_media_receipt(cid)`` 的桥，同 task 内 20s TTL）——本线不动 persona_reply，
+    Q-6 显式传 ``conv_key`` 后桥可拆。任何异常 → ""（回到原文案）。"""
+    try:
+        from src.inbox.image_autosend import bound_prompt_conv, recent_media_claim_note
+        ck = str(conv_key or "").strip() or bound_prompt_conv()
+        if not ck:
+            return ""
+        return recent_media_claim_note(ck, lang=lang, inbound=inbound)
+    except Exception:
+        return ""
+
+
+def sent_media_addendum(
+    items: Any, *, conv_known: bool = False, lang: str = "zh",
+    conv_key: str = "", inbound: str = "",
+) -> str:
+    """本会话已发媒体清单。``conv_known=False`` → ""；已知会话但 items 空 → 写死从未发过——
+    **除非** 30 分钟内我方刚发过媒体（Q-20 D：人工手发的图不在相册台账 ``items`` 里，
+    VDUJX6 就是据「从未发过」拒绝的）→ 改为「刚发过一张…认领」；有清单且刚发过 → 清单后
+    追加认领句。``conv_key`` 不传时经 ``image_autosend.bound_prompt_conv`` 桥取当前会话。"""
     if not conv_known:
         return ""
     lg = str(lang or "zh").lower()
     rows = [x for x in (items or []) if isinstance(x, dict)] if items else []
+    claim = _recent_media_claim(conv_key, lg, inbound)
     if not rows:
+        if claim:
+            return claim
         if lg.startswith("en"):
             return "【sent media】You have never sent TA a photo in this chat."
         return "【本会话已发媒体】你从未给 TA 发过照片。"
@@ -225,14 +250,16 @@ def sent_media_addendum(items: Any, *, conv_known: bool = False, lang: str = "zh
         bits.append(f"{mid}/{scene}" + (f"@{when}" if when else ""))
     body = "；".join(bits)
     if lg.startswith("en"):
-        return (
+        out = (
             f"【sent media】Photos already sent in this chat (last 7 days): {body}. "
             "Don't claim you sent anything that isn't on this list."
         )
-    return (
-        f"【本会话已发媒体】近 7 天已发给 TA 的：{body}。"
-        "清单以外的不得声称发过。"
-    )
+    else:
+        out = (
+            f"【本会话已发媒体】近 7 天已发给 TA 的：{body}。"
+            "清单以外的不得声称发过。"
+        )
+    return out + ("\n" + claim if claim else "")
 
 
 def time_schedule_addendum(
@@ -296,10 +323,28 @@ def time_schedule_addendum(
     return "【当地时间与今日日程】" + "".join(lines)
 
 
-def album_miss_addendum(scene: Any, *, lang: str = "zh") -> str:
-    """无匹配回喂。scene 空仍给一句（索图但完全没图）；调用方决定是否调用。"""
+def album_miss_addendum(
+    scene: Any, *, lang: str = "zh", conv_key: str = "", inbound: str = "",
+) -> str:
+    """无匹配回喂。scene 空仍给一句（索图但完全没图）；调用方决定是否调用。
+
+    Q-20 D：相册为空 / 无匹配**但 30 分钟内我方刚发过一张**（多半是人工手发、不在相册）
+    → 「无可用照片…只许拒绝」改为「刚发过一张（描述）：TA 问是不是你就认领；要新的照片才按
+    没有合适的婉拒，但绝不说不能发图 / 没这个功能」。``conv_key`` 不传时走
+    ``image_autosend.bound_prompt_conv`` 桥。"""
     sc = str(scene or "").strip() or "照片"
     lg = str(lang or "zh").lower()
+    claim = _recent_media_claim(conv_key, lg, inbound)
+    if claim:
+        if lg.startswith("en"):
+            return (claim + " If TA wants a NEW photo of another scene, gently say you don't have "
+                    "a good one right now — still never 'I can't send photos / no such feature', "
+                    "never 'already sent / loading / later'.")
+        if lg.startswith("ja"):
+            return (claim + " 別のシーンの新しい写真を求められたら「今ちょうどいいのがない」と"
+                    "やわらかく断る——それでも「写真は送れない / 機能がない」「送った / 読み込み中 / あとで」は禁止。")
+        return (claim + " 如果 TA 要的是**另一张新照片**（别的场景），就说现在没有合适的、"
+                "轻轻带过——照样禁止说「不能发图 / 没这个功能」，禁止说已经发了、加载中、稍后发。")
     if lg.startswith("en"):
         return (
             f"【no album photo (scene {sc})】There is no matching photo. "

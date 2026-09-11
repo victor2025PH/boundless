@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -693,8 +694,222 @@ def note_media_receipt(
 
 
 def last_media_receipt(conv_key: str) -> Dict[str, Any]:
+    # Q-20 D 桥：persona_reply 在组 prompt 前恰以本会话调一次本函数（Q-6 C/D 的
+    # media_pending 判定），生成侧附加段（prompt_addenda）无会话参数时从这里取
+    # 「当前正在为哪个会话组 prompt」——见 bind_prompt_conv。
+    bind_prompt_conv(conv_key)
     with _LAST_SENT_LOCK:
         return dict(_LAST_RECEIPT.get(str(conv_key or ""), {}) or {})
+
+
+# ── Q-20 D（#178 VDUJX6 / PQE9ZF · 2026-09-11）：刚发的图必须认领 ─────────────────
+# 实录：坐席人工发了一张照片，3 分钟后客户问「是你吗」，AI 走「相册无图 → 拒绝」分支
+# 回「我没这个功能」。根因两处：① 人工发的媒体不在相册投放账本（persona_media_sends）
+# 与进程回执账本里，生成侧「本会话已发媒体」段据此写死「你从未给 TA 发过照片」；
+# ② 「是你的照片吗」被当成新的索图请求 → 相册无匹配 → 「只许自然拒绝」。
+# 修法：以 **inbox 消息表**（人工 / AI 出站媒体行都在）+ 两本账本合并判「30 分钟内
+# 我方发过媒体」，生成侧改注入「刚发过一张（描述）——TA 问是不是你就认领」。
+RECENT_MEDIA_CLAIM_SEC = 30 * 60.0
+
+_PROMPT_CONV_TTL_SEC = 20.0
+try:
+    import contextvars as _contextvars
+    _PROMPT_CONV: "Any" = _contextvars.ContextVar(
+        "image_autosend_prompt_conv", default=("", 0.0))
+except Exception:  # pragma: no cover
+    _PROMPT_CONV = None
+
+
+def bind_prompt_conv(conv_key: str) -> None:
+    """记「当前任务正在为哪个会话组 prompt」（ContextVar，同一 asyncio task / 线程内可见，
+    TTL 20s）。Q-20 D 桥：``persona_reply._prompt_addenda`` 的 ``sent_media_addendum`` /
+    ``album_miss_addendum`` 调用点没有会话参数、且本线不动 persona_reply——它们在没被
+    显式传 ``conv_key`` 时读 :func:`bound_prompt_conv`。Q-6 把 ``conv_key=ck`` 传进去后
+    本桥即可拆。软失败。"""
+    try:
+        if _PROMPT_CONV is not None:
+            _PROMPT_CONV.set((str(conv_key or "").strip(), time.monotonic()))
+    except Exception:
+        pass
+
+
+def bound_prompt_conv(max_age_sec: float = _PROMPT_CONV_TTL_SEC) -> str:
+    """最近 ``max_age_sec`` 内绑定的会话 key；过期 / 未绑定 → ""。"""
+    try:
+        if _PROMPT_CONV is None:
+            return ""
+        ck, t0 = _PROMPT_CONV.get()
+        if not ck or (time.monotonic() - float(t0 or 0)) > float(max_age_sec):
+            return ""
+        return str(ck)
+    except Exception:
+        return ""
+
+
+_MEDIA_TYPES_VISUAL = ("image", "photo", "picture", "sticker_image", "video", "gif")
+
+
+def _row_is_outbound_media(row: Dict[str, Any]) -> str:
+    """inbox 消息行是否我方发出的图 / 视频（人工或 AI）；返回归一 media_type 或 ""。"""
+    try:
+        if str(row.get("direction") or "") not in ("out", "outbound"):
+            return ""
+        if row.get("revoked") or str(row.get("deleted_by") or "") == "peer":
+            return ""
+        mt = str(row.get("media_type") or "").strip().lower()
+        ref = str(row.get("media_ref") or row.get("media_url") or "").strip()
+        if mt in ("video", "gif"):
+            return "video"
+        if mt in _MEDIA_TYPES_VISUAL or (not mt and ref and re.search(
+                r"\.(?:jpe?g|png|webp|gif|heic|mp4|mov)(?:\?|$)", ref, re.I)):
+            return "image"
+        return ""
+    except Exception:
+        return ""
+
+
+def recent_outbound_media(
+    conv_key: str, *, within_sec: float = RECENT_MEDIA_CLAIM_SEC,
+    now: Optional[float] = None, store: Any = None,
+) -> Dict[str, Any]:
+    """会话 ``within_sec`` 内**我方（人工或 AI）**最近一次发出的媒体。
+
+    三源合并取最新：① 进程回执账本（AI autosend 真发）；② inbox 消息表出站媒体行
+    （人工手发 / 任何链的出站都在这里——VDUJX6 的人工发图只有它记得）；③ 相册投放账本
+    （跨重启）。返回 ``{ts, age_sec, media_type, source∈receipt/store/album, caption}``；
+    没有 → ``{}``。绝不抛。
+    """
+    ck = str(conv_key or "").strip()
+    if not ck:
+        return {}
+    ts_now = float(now if now is not None else time.time())
+    best: Dict[str, Any] = {}
+
+    def _consider(ts: float, mt: str, source: str, caption: str = "") -> None:
+        nonlocal best
+        if ts <= 0 or (ts_now - ts) > float(within_sec) or ts > ts_now + 120:
+            return
+        if not best or ts > float(best.get("ts") or 0):
+            best = {"ts": ts, "age_sec": max(0.0, ts_now - ts),
+                    "media_type": mt or "image", "source": source,
+                    "caption": str(caption or "")[:80]}
+
+    try:
+        rec = last_media_receipt_peek(ck)
+        if rec:
+            _consider(float(rec.get("ts") or 0), str(rec.get("media_type") or "image"),
+                      "receipt")
+    except Exception:
+        pass
+    try:
+        st = store
+        if st is None:
+            from src.integrations.protocol_bridge import get_inbox_store
+            st = get_inbox_store()
+        if st is not None and hasattr(st, "list_recent_messages"):
+            rows = st.list_recent_messages(ck, limit=30) or []
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                mt = _row_is_outbound_media(r)
+                if mt:
+                    _consider(float(r.get("ts") or 0), mt, "store",
+                              str(r.get("text") or ""))
+    except Exception:
+        logger.debug("[image_autosend] recent_outbound_media store 查询失败", exc_info=True)
+    try:
+        from src.companion.persona_media_store import get_persona_media_store
+        pms = get_persona_media_store()
+        if pms is not None:
+            items = list((pms.sent_history(ck, max_age_days=1) or {}).get("items") or [])
+            for it in items:
+                _consider(float((it or {}).get("ts") or 0), "image", "album")
+    except Exception:
+        pass
+    return best
+
+
+def last_media_receipt_peek(conv_key: str) -> Dict[str, Any]:
+    """同 ``last_media_receipt`` 但**不**触发 prompt 会话绑定（内部查询用）。"""
+    with _LAST_SENT_LOCK:
+        return dict(_LAST_RECEIPT.get(str(conv_key or ""), {}) or {})
+
+
+# 「这是你吗 / 像 P 的 / 是你的照片吗」——对**刚收到的图**的身份追问（与 companion_selfie
+# 的 not_you / fake 质疑词表同族，这里只做「刚发过图 → 认领」的判定，不计投诉）。
+_MEDIA_IDENTITY_Q_RE = re.compile(
+    r"(?:这|這|那)?(?:是|係|系)\s*(?:你|妳|您)\s*(?:吗|嗎|么|麼|不|嘅|咩|呀|啊|嗎\?|\?|？)|"
+    r"(?:是|係)\s*(?:你|妳)\s*(?:本人|自己|的照片|的相片|的自拍|的图|的圖)|"
+    r"(?:你|妳)\s*(?:本人|真人)\s*(?:吗|嗎|么|麼|\?|？)|"
+    r"(?:真的|真係|真系)\s*(?:是|係)\s*(?:你|妳)|"
+    r"(?:像|好像|似|好似)\s*(?:P|p|ps|PS|修|修图|修圖|加工|滤镜|濾鏡)|"
+    r"(?:P|p)\s*(?:的|過|过)\s*(?:吧|嗎|吗|\?|？)|"
+    r"\b(?:is|was)\s+(?:that|this|it)\s+(?:really\s+)?(?:you|u)\b|"
+    r"\b(?:that|this)\s+(?:you|u)\s*\?|"
+    r"\b(?:is\s+)?(?:that|this|it)\s+(?:really\s+)?(?:your|ur)\s+(?:pic|picture|photo|selfie|face)\b|"
+    r"\b(?:looks?|seems?)\s+(?:like\s+)?(?:photoshopped|edited|filtered|a\s+filter|ai|fake)\b|"
+    r"\bfor\s+real\s*\?|\breally\s+you\b|\bthat'?s\s+(?:really\s+)?(?:you|u)\b|"
+    r"(?:これ|それ|あれ)\s*(?:は)?\s*(?:あなた|君|きみ|お前)\s*(?:なの|ですか|\?|？)|"
+    r"(?:本人|加工|修正)\s*(?:なの|ですか|\?|？)",
+    re.IGNORECASE)
+
+
+def is_media_identity_question(text: str) -> bool:
+    """客户是否在追问「刚发的图是不是你 / 是不是 P 的」（纯函数）。"""
+    t = str(text or "").strip()
+    if not t or len(t) > 160:
+        return False
+    return bool(_MEDIA_IDENTITY_Q_RE.search(t))
+
+
+def recent_media_claim_note(
+    conv_key: str, *, lang: str = "zh", inbound: str = "",
+    within_sec: float = RECENT_MEDIA_CLAIM_SEC, recent: Optional[Dict[str, Any]] = None,
+    store: Any = None, now: Optional[float] = None,
+) -> str:
+    """「刚发过一张——TA 问是不是你就认领」注入句（Q-20 D）。
+
+    ``recent`` 显式给（测试 / 调用方已查）优先，否则 :func:`recent_outbound_media`；
+    窗口外 / 没发过 → ""。``inbound`` 命中身份追问时措辞更硬（「本条就是在问这个」）。
+    """
+    rec = recent if recent is not None else recent_outbound_media(
+        conv_key, within_sec=within_sec, store=store, now=now)
+    if not rec:
+        return ""
+    try:
+        mins = max(1, int(round(float(rec.get("age_sec") or 0) / 60.0)))
+    except (TypeError, ValueError):
+        mins = 1
+    mt = str(rec.get("media_type") or "image")
+    cap = str(rec.get("caption") or "").strip()
+    asking = is_media_identity_question(inbound)
+    lg = str(lang or "zh").lower()
+    if lg.startswith("en"):
+        what = "a video" if mt == "video" else "a photo"
+        desc = f' (caption: "{cap}")' if cap else ""
+        head = (f"【just sent media】About {mins} min ago YOU (or a teammate on this account) sent "
+                f"TA {what} in this chat{desc}. ")
+        ask = ("TA is asking right now whether that is you / your photo / edited — " if asking
+               else "If TA asks whether that is you / your photo / edited — ")
+        return (head + ask +
+                "CLAIM IT: yes, that's the one I just sent you, then keep chatting about it. "
+                "Never say you never sent it, never say 'I can't send photos / no such feature / "
+                "text only', never refuse, never promise another one.")
+    if lg.startswith("ja"):
+        what = "動画" if mt == "video" else "写真"
+        desc = f"（キャプション「{cap}」）" if cap else ""
+        head = f"【直前に送った{what}】約{mins}分前、あなた（またはこのアカウントの同僚）がこのチャットで{what}を送っている{desc}。"
+        ask = "相手は今それがあなた本人か / 加工かを聞いている——" if asking else "相手が本人か / 加工かを聞いてきたら——"
+        return (head + ask + "認める：「うん、さっき送ったやつだよ」と受けて、その話を続ける。"
+                "「送ってない / 写真は送れない / そんな機能はない / 文字だけ」は絶対に言わない。断らない。")
+    what = "视频" if mt == "video" else "照片"
+    desc = f"（配文「{cap}」）" if cap else ""
+    head = f"【刚发过{what}】约 {mins} 分钟前，你（或这个账号的同事）刚在本会话给 TA 发过一张{what}{desc}。"
+    ask = "TA 这条就是在问那张是不是你 / 是不是你的照片 / 是不是 P 的——" if asking else \
+        "TA 若问「这是你吗 / 是你的照片吗 / 像 P 的」——"
+    return (head + ask + "**认领**：「对，就是刚发你的那张」，然后顺着那张图聊下去。"
+            "绝不说没发过、绝不说「没这个功能 / 不支持发图 / 不能发照片 / 只能发文字」、"
+            "绝不拒绝、也不要承诺再发一张。")
 
 
 # Q-6 B：无匹配回喂（进程内）。生成侧 consume 后注入「无可用照片（场景 X）」。
@@ -1132,6 +1347,23 @@ async def run_autosend_image(
     if not persona_photos_enabled_by_id(persona_id):
         return False
     ck = conv_key or f"{platform}:{account_id}:{chat_key}"
+
+    # Q-20 D（#178 VDUJX6）认领分支：客户在问「这是你吗 / 是你的照片吗 / 像 P 的」而
+    # 30 分钟内我方（人工或 AI）刚发过媒体 → 这不是新的索图请求，**不发第二张**、
+    # 也绝不走「相册无图 → 拒绝」；交文字链按 recent_media_claim_note 认领。
+    # 调用方显式兑现（assume_intent / directive_override）不受此影响。
+    if not assume_intent and not directive_override:
+        try:
+            if is_media_identity_question(peer_text):
+                _recent = recent_outbound_media(ck)
+                if _recent:
+                    logger.info(
+                        "[image_autosend] claim_recent conv=%s age=%.0fs src=%s: 「是你吗」"
+                        "追问刚发的图 → 不发新图、文字认领", ck,
+                        float(_recent.get("age_sec") or 0), _recent.get("source"))
+                    return False
+        except Exception:
+            logger.debug("[image_autosend] claim_recent 判定异常（忽略）", exc_info=True)
 
     def _notify_sent(note: str, scene: str, series: str = "") -> None:
         """发出成功后的调用方通知（软失败：日志记录绝不影响已完成的发送）。"""
