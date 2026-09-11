@@ -415,7 +415,14 @@ $gates = @(
     'tests/test_relay_client.py',
     'tests/test_wechat_connect_guide.py',
     'tests/test_wechat_e2e_parity.py',
-    'tests/test_workspace_template_js_syntax.py'
+    'tests/test_workspace_template_js_syntax.py',
+    # Q-15 / Q-17 / Q-18 R 批门禁（2026-09-11）：成人分级 cum 消歧 + 孤立歧义词不判 explicit
+    # （#278 追加）、风控三级分级 / 摘标冷却（#277②）、让位 = 延后不是丢弃 + 切全自动明示接回
+    # + 拦截台账（#292 #291 #293）。三者钉的都是「全自动被自己机制掐停」的共享面：
+    # adult_grader / risk_grader / autosend_worker 人工优先闸 / 切档路由 / 回复设置页卡片。
+    'tests/test_adult_grader_gate.py',
+    'tests/test_risk_grader_gate.py',
+    'tests/test_agent_yield_defer.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
