@@ -3826,3 +3826,28 @@ html[data-ws-embed="1"] body.adk-on .inbox-root{height:100%;}
 .dr-act-ai{border-color:color-mix(in srgb,var(--accent,#1e8cf2) 40%,transparent);color:var(--accent,#1e8cf2);}
 .dr-banner-item .dr-row-draft{margin-left:0;}
 .dr-self-tag{display:inline-block;margin-left:4px;font-size:10px;padding:0 5px;border-radius:999px;background:color-mix(in srgb,var(--text-sub) 14%,transparent);color:var(--text-sub);font-weight:600;vertical-align:1px;}
+/* ── Q-26 #301 #302（cs-）：会话头一条状态带「AI 会不会回」 ─────────────────────────────
+   四色语义只走四个类（cs-ok 绿 / cs-warn 琥珀 / cs-danger 红 / cs-muted 灰），颜色全部来自 --tk-* 令牌
+   （文字用 *-ink 保对比，底 / 点用 color-mix 半透明），暗色自适配、零内联色。一行：圆点 + 一句话 + 一个动作 + 「详情」。 */
+.cs-band{display:flex;align-items:center;gap:8px;margin:0;padding:5px 18px;font-size:12.5px;line-height:1.45;border-bottom:1px solid var(--border);background:var(--bg-panel);color:var(--tk-text-muted,var(--text-sub));--cs-c:var(--tk-text-muted,#5b6b85);--cs-ink:var(--tk-text-muted,#5b6b85);}
+.cs-band[hidden]{display:none;}
+.cs-band.cs-ok{--cs-c:var(--tk-emerald,#10b981);--cs-ink:var(--tk-ok-ink,#15803d);}
+.cs-band.cs-warn{--cs-c:var(--tk-amber,#f59e0b);--cs-ink:var(--tk-warn-ink,#b45309);}
+.cs-band.cs-danger{--cs-c:var(--tk-danger,#e11d48);--cs-ink:var(--tk-danger-ink,#b91c1c);}
+.cs-band.cs-muted{--cs-c:var(--tk-text-muted,#5b6b85);--cs-ink:var(--tk-text-muted,#5b6b85);}
+.cs-band.cs-ok,.cs-band.cs-warn,.cs-band.cs-danger{background:color-mix(in srgb,var(--cs-c) 9%,var(--bg-panel));color:var(--cs-ink);}
+.cs-band .cs-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--cs-c);box-shadow:0 0 0 3px color-mix(in srgb,var(--cs-c) 22%,transparent);}
+.cs-band.cs-danger .cs-dot{animation:cs-pulse 1.6s ease-in-out infinite;}
+@keyframes cs-pulse{0%,100%{box-shadow:0 0 0 3px color-mix(in srgb,var(--cs-c) 22%,transparent);}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--cs-c) 10%,transparent);}}
+.cs-band .cs-txt{flex:1 1 auto;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cs-band .cs-act{flex:0 0 auto;border:1px solid color-mix(in srgb,var(--cs-c) 55%,transparent);background:var(--bg-panel);color:var(--cs-ink);border-radius:7px;padding:2px 11px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .12s;}
+.cs-band .cs-act:hover{background:color-mix(in srgb,var(--cs-c) 16%,var(--bg-panel));}
+.cs-band .cs-act:disabled{opacity:.6;cursor:default;}
+.cs-band .cs-act[hidden]{display:none;}
+.cs-band .cs-more{flex:0 0 auto;border:0;background:transparent;color:var(--tk-text-muted,var(--text-sub));font-size:11.5px;cursor:pointer;padding:2px 4px;text-decoration:underline dotted;text-underline-offset:2px;}
+.cs-band .cs-more:hover{color:var(--accent);}
+@media (prefers-reduced-motion:reduce){.cs-band.cs-danger .cs-dot{animation:none;}}
+@media (max-width:768px){
+  .cs-band{padding:4px 10px;gap:6px;font-size:12px;}
+  .cs-band .cs-txt{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+}
