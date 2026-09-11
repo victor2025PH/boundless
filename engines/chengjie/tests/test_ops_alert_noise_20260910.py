@@ -311,10 +311,13 @@ def test_a_line_own_bot_blocks_but_does_not_alert(monkeypatch):
     reason = pbg.guard_a_line_should_skip(
         config=cfg, account_id="8244899900", chat_id=8506426282, message=_Msg(),
         current_text="[坐席日志监控] 健康")
-    assert reason == "tg_is_bot"                       # 仍然拦
-    assert list(store.modes.values()) == ["manual"]     # 仍然降档
+    # Q-23 #303（1.0.83）：硬名单（同事 / 本租户账号 / 自家 bot）先于 Tier0 且不看 enabled，
+    # 自家 bot 在这一层就被拦成 colleague:<id>——比原来更早、更硬，且根本走不到告警；
+    # 硬名单拦截不依赖档位，故不再顺带降 manual（原 tg_is_bot 路径才降档）。
+    assert reason == "colleague:8506426282"            # 仍然拦（更早一层）
+    assert store.modes == {}                           # 硬名单不靠降档
     assert alerts == []                                # 但不告警
-    assert pbg.stats_snapshot()["suppressed"].get("own_bot") == 1
+    assert pbg.stats_snapshot()["suppressed"].get("never_auto_reply") == 1
 
     # 对照：陌生 bot 照常告警
     _Peer.username = "SpamBot"
