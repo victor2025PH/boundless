@@ -18,10 +18,25 @@ alwaysApply: false
    漏了这步=客户问小智全是「没有找到可靠依据」。本地 E2E 验法参照
    实施93 发版夜的 tmp_impl93/xiaozhi_local_e2e.py 模式（真语料+真 LLM+真路由）。
 
+## 单一版本（D-Q11，2026-09-11 老板「不要内测版，只要一个版本」）
+
+从 1.0.81 起 **R 批只出一个包 = clean 形态**（`npm run dist:win:clean` → `dist-clean\`），坐席机、内测机、
+公网用户装同一个 exe；`dist:win`（smart / internal，带「内测版」角标 + seed-data）**不再是发版产物**。
+- 一个 semver 只对应一个包：不许同号重切不同内容（1.0.80 两包同号 → 坐席机停在无 P0 修复的旧内容，
+  自动更新按 semver 判无更新，教训见 `docs/发版对账_v1.0.81_发版.md` §1）。
+- 内测渠道 `/downloads/internal/latest-internal.yml` 只做**同字节桥接**：把 clean 包的 exe + blockmap + `latest.yml`
+  复名 `latest-internal.yml` 放暂存目录 → `publish_chatx.ps1 -DistDir <暂存> -Channel internal`，让还在内测渠道的机器
+  自检到新版并装成 clean（装完 `app-update.yml` 指公共渠道）；fleet 与内测机全部显示 `clean/public` 后停更该渠道。
+- 坐席推包用 `-Setup <worktree>\dist-clean\ChatX-Setup-<ver>.exe`（push 默认取 `dist\` 最新，不指 -Setup 会推错目录）；
+  升级保数据，原 smart/internal 装机会变 clean/public。
+- 发版必须从 **release commit 的干净 worktree** 打包 + 在 worktree 上跑回归 / gate_sweep / import_sweep（主工作树被别线
+  未提交文件掩盖，R79 三处、R81 102 条红都是这样抓出来的）；回归红先串行复跑，再与上一版 release commit 对照，
+  只有「本版红 / 上版绿」才算本版引入。
+
 ## 内测约定：「安装」＝先打包最新代码
 
 用户说「安装到这几台机器」＝**从当前工作树打全新安装包再装**，不是拿 `dist/` 里的旧包直接推。
-完整动作序列（每步都有实测背书，别跳步）：
+完整动作序列（每步都有实测背书，别跳步；**第 4 步按上节改打 clean 包**）：
 
 1. **探活+登记**：`engines\chengjie\scripts\agent_probe.ps1 -Intent "..."`；`services/messenger-web`、`shared/inject`、`desktop/` 有 ACTIVE（≤10min）先等静默——它们都会被打进包（extraResources）。
 2. **版本号**：`engines/chengjie/desktop/package.json` 的 `version`+`displayVersion` 一起递增（可能已被并行线 bump，确认即可，勿重复加）。
