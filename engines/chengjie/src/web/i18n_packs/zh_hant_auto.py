@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-10 15:37:15 · OpenCC s2twp + 術語釘 · 17393 鍵（源 zh 全量 17438）
+生成: 2026-09-11 14:36:25 · OpenCC s2twp + 術語釘 · 17513 鍵（源 zh 全量 17674）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -354,6 +354,7 @@ ZH_HANT = {
     'ap.night.auto': '跟隨系統',
     'ap.night.dark': '深色',
     'ap.night.from': '入夜',
+    'ap.night.handoff': '（已手動接管）',
     'ap.night.light': '淺色',
     'ap.night.schedule': '定時',
     'ap.night.to': '轉亮',
@@ -2112,8 +2113,10 @@ ZH_HANT = {
     'base.theme.light': '亮色',
     'base.theme.now': '當前：',
     'base.theme.sched_edit': '改時間',
+    'base.theme.sched_handoff': '定時已手動接管',
     'base.theme.sched_on': '定時',
     'base.theme.sched_on_t': '定時切換由「全部外觀設定」管理；點選上方任一檔退出定時',
+    'base.theme.sched_resume': '恢復定時',
     'base.um.admin': '管理後台',
     'base.um.admin_t': '渠道 / 系統 / 配置（系統管理）',
     'base.um.agents_online': '坐席 {list}',
@@ -5974,6 +5977,13 @@ ZH_HANT = {
     'err.case.claimed_by_other': '案例已由 {name} 認領',
     'err.case.not_found': 'Case {case_id} 不存在',
     'err.chat_test.rate_limited': '試聊太頻繁，請稍後再試（每分鐘上限 {n} 次）',
+    'err.cost.bad_date': '日期格式應為 YYYY-MM-DD',
+    'err.cost.bill_parse_failed': '賬單 CSV 解析失敗：{err}',
+    'err.cost.ledger_unavailable': '成本賬本不可用（價格表未配置或賬本未落盤）',
+    'err.cost.need_amount_or_balance': '金額與餘額至少填一項',
+    'err.cost.not_number': '金額 / 餘額必須是數字',
+    'err.cost.recharge_not_number': '充值金額必須是數字',
+    'err.cost.recharge_positive': '充值金額必須大於 0',
     'err.cp.user_msg_reply_required': 'user_message 和 correct_reply 不能為空',
     'err.demo.workspace_not_empty': '工作區已有真實資料（會話 {c} · 賬號 {a}），演示資料只能在沒有真實賬號的空工作區鋪——全自動賬號會把示例會話當真客戶發出去',
     'err.docmsg.read_failed': '檔案讀取失敗',
@@ -6060,6 +6070,8 @@ ZH_HANT = {
     'err.goals.probe_frozen': '客戶要求停聯，會話已凍結，不能主動發訊息',
     'err.goals.probe_no_dispatcher': '派發器未就緒（AI 未連線），暫時發不出',
     'err.goals.probe_not_discovery': '該目標不是摸底類，沒有可問的槽位',
+    'err.goals.probe_risk_hold': '這位客戶剛出現風險訊號，主動訊息先停一停（風險冷靜期）',
+    'err.goals.probe_text_required': '要問的話不能為空——預覽裡那句就是發出去的那句，改好再點',
     'err.goals.profile_fields_required': '缺少畫像欄位（fields）',
     'err.goals.readonly': '只讀賬號不能操作目標',
     'err.goals.ref_required': '缺少 ref（會話歸因串）',
@@ -6183,6 +6195,7 @@ ZH_HANT = {
     'err.kb.msg_reply_empty': 'user_message 和 ai_reply 不能為空',
     'err.kb.no_update_fields': '未提供可更新的欄位',
     'err.kb.purge_legacy_ids_required': '請先預覽清單（dry_run），再把核對過的條目 id 一起提交',
+    'err.kb.purge_preset_sources_invalid': 'sources 只能是 vendor / system / help 的列表',
     'err.kb.purge_source_invalid': '只能整批清空 vendor / system / import 來源的條目',
     'err.kb.query_empty': 'query 不能為空',
     'err.kb.question_empty': 'question 不能為空',
@@ -7924,6 +7937,8 @@ ZH_HANT = {
     'inbox.acct.pu_join': '、',
     'inbox.acct.pu_name': '暱稱',
     'inbox.acct.purge_export_first': '先匯出備份',
+    'inbox.acct.qq_driver_demo': '邊車已裝 · 驅動未接入（演示態）',
+    'inbox.acct.qq_driver_demo_t': 'QQ 個人號連線邊車已隨安裝包裝好，但底層真驅動尚未接入：當前掃碼與收發都是演示資料，不能真收發。真驅動透過去風險驗證後自動開放。',
     'inbox.acct.reconnect': '🔗 重連',
     'inbox.acct.refresh': '🔄 重新整理',
     'inbox.acct.reg_tag': '在冊·未接管',
@@ -9703,19 +9718,46 @@ ZH_HANT = {
     'inbox.goal.probe.blocked': '現在不能問：{why}',
     'inbox.goal.probe.btn': '現在就問一個',
     'inbox.goal.probe.btn_t': '按未填的摸底項，讓 AI 現在就自然問一句（經出站守衛，計入「主動出手」）',
+    'inbox.goal.probe.budget_over': '今天已主動聯絡 TA {n} 次 · 仍要發',
+    'inbox.goal.probe.budget_over_t': '超過每聯絡人主動預算，只提醒不攔——點了就發，由你負責',
     'inbox.goal.probe.dry': '模擬執行中（proactive_care.dry_run）：已擬稿未發出——{text}',
     'inbox.goal.probe.failed': '傳送失敗：{why}',
+    'inbox.goal.probe.force_send': '仍要發',
     'inbox.goal.probe.held': '這條先留給你確認（{why}），去關懷面板點「就這樣發」',
+    'inbox.goal.probe.must_injected': '已掛到下一條回覆裡：TA 一開口，回覆裡就會把這句問出來（30 分鐘內有效）',
     'inbox.goal.probe.next': '換一項',
     'inbox.goal.probe.not_discovery': '只有「客戶摸底」類目標有這個按鈕',
     'inbox.goal.probe.preview_ask': '會順著最近的話題、用對方的語言問：{ask}',
     'inbox.goal.probe.preview_example': '示例：{ex}',
     'inbox.goal.probe.preview_hd': '現在就問：{label}',
     'inbox.goal.probe.queued': '已入隊，通道就緒後發出：{text}',
+    'inbox.goal.probe.queued_at': '已入隊，通道就緒即發出',
+    'inbox.goal.probe.reason.crisis': '客戶處於危機狀態，禁止主動訊息',
+    'inbox.goal.probe.reason.deliver_now_error': '即時投遞出錯，已留在佇列裡',
+    'inbox.goal.probe.reason.empty_text': '要問的話為空',
+    'inbox.goal.probe.reason.frozen': '客戶要求停聯，會話已凍結',
+    'inbox.goal.probe.reason.kill_switch': '出站總閘已關（運營層）',
+    'inbox.goal.probe.reason.messenger_rpa_queue': 'Messenger 走桌面端排隊傳送，稍後自動發出',
+    'inbox.goal.probe.reason.missing_route': '這個會話缺平台或聊天標識，發不出',
+    'inbox.goal.probe.reason.no_sender': '該平台沒有可用的傳送通道',
+    'inbox.goal.probe.reason.no_sync_path': '沒有即時投遞通道，已入隊等待',
+    'inbox.goal.probe.reason.optout': '客戶已退訂主動訊息',
+    'inbox.goal.probe.reason.paused': '該賬號出站已被暫停',
+    'inbox.goal.probe.reason.queue_unavailable': '出站佇列不可用',
+    'inbox.goal.probe.reason.queued': '已入隊',
+    'inbox.goal.probe.reason.risk_hold': '風險冷靜期內',
+    'inbox.goal.probe.reason.send_error': '傳送時出錯，請看日誌',
+    'inbox.goal.probe.reason.send_failed': '傳送失敗',
+    'inbox.goal.probe.reason.timeout': '等太久沒回執，可能已入隊',
+    'inbox.goal.probe.route_direct': 'TA 已經沉寂一陣 → 直接單獨發這一句',
+    'inbox.goal.probe.route_must': 'TA {m} 分鐘前還在聊 → 不單獨發，硬塞進下一條回覆裡問出來',
     'inbox.goal.probe.send': '就這樣問',
     'inbox.goal.probe.sending': '正在擬稿傳送…',
     'inbox.goal.probe.sent': '已發出：{text}',
+    'inbox.goal.probe.sent_at': '已發出 {hhmm}',
     'inbox.goal.probe.skipped': '沒發出：{why}',
+    'inbox.goal.probe.text_hint': '這句就是發出去的原話，可以直接改',
+    'inbox.goal.probe.text_required': '先寫上要問的話',
     'inbox.goal.products.title': '推薦產品',
     'inbox.goal.profile.ask.age': '大概哪個年齡段',
     'inbox.goal.profile.ask.assets': '有沒有房車之類的資產（敏感：只順著話頭帶，不直接問）',
@@ -11214,6 +11256,36 @@ ZH_HANT = {
     'kb2_health_tip': '知識庫健康分（點選檢視診斷建議與修復入口）',
     # ── kb2_nomatch ──
     'kb2_nomatch': '沒有匹配當前篩選的條目',
+    # ── kb2_preset_btn ──
+    'kb2_preset_btn': '清除預置條目',
+    # ── kb2_preset_btn_tip ──
+    'kb2_preset_btn_tip': '按來源列出廠商 / 系統 / 幫助語料殘留的預置條目，看過清單再刪；你自己建的條目永不在內',
+    # ── kb2_preset_confirm ──
+    'kb2_preset_confirm': '確定刪除清單裡這 {n} 條預置條目？只刪你剛看過的清單（期間被改成「我建的」的會自動跳過），刪除後不會再自動灌回。',
+    # ── kb2_preset_delete ──
+    'kb2_preset_delete': '確認刪除',
+    # ── kb2_preset_delete_n ──
+    'kb2_preset_delete_n': '確認刪除 {n} 條',
+    # ── kb2_preset_flag_enabled ──
+    'kb2_preset_flag_enabled': '啟用中',
+    # ── kb2_preset_flag_used ──
+    'kb2_preset_flag_used': '命中 {n} 次',
+    # ── kb2_preset_help_line ──
+    'kb2_preset_help_line': '小智的 {n} 條幫助語料存在獨立庫 assistant_help.db，不在你的知識庫裡；這裡的「幫助語料殘留」只清歷史版本誤播進來的條目。',
+    # ── kb2_preset_lead ──
+    'kb2_preset_lead': '預置條目不是你的知識：廠商隨包的產品說明、系統話術 / 示例、歷史版本誤播進來的幫助語料殘留。先列清單，看過再刪；「我建的」「批次匯入」「學習佇列學來的」永遠不在清單裡。',
+    # ── kb2_preset_none ──
+    'kb2_preset_none': '所選來源下沒有預置條目，無需清理',
+    # ── kb2_preset_pick_source ──
+    'kb2_preset_pick_source': '先勾選至少一種來源',
+    # ── kb2_preset_preview ──
+    'kb2_preset_preview': '重新整理清單',
+    # ── kb2_preset_purged ──
+    'kb2_preset_purged': '已清除 {n} 條預置條目',
+    # ── kb2_preset_summary ──
+    'kb2_preset_summary': '清單共 {n} 條，刪除前請過目',
+    # ── kb2_preset_title ──
+    'kb2_preset_title': '清除預置條目',
     # ── kb2_sandbox_try ──
     'kb2_sandbox_try': '沙盒試一句',
     # ── kb2_sandbox_try_tip ──
@@ -11222,6 +11294,8 @@ ZH_HANT = {
     'kb2_sat_none': '暫無反饋',
     # ── kb2_src_all ──
     'kb2_src_all': '全部來源',
+    # ── kb2_src_help ──
+    'kb2_src_help': '幫助語料殘留',
     # ── kb2_src_import ──
     'kb2_src_import': '批次匯入',
     # ── kb2_src_learner ──
@@ -15323,6 +15397,39 @@ ZH_HANT = {
     'ntf.rc_toast': '系統剛完成維護，正在預熱，約 {n} 分鐘後恢復最佳狀態；期間偶發載入慢屬正常，無需重新整理。',
     'ntf.summary_n': '有 {n} 項需要注意 ›',
     'ntf.type_sys': '系統狀態',
+    # ── oa ──
+    'oa.ack': '✅ 已處理 / 認領',
+    'oa.ack_hint': '同樣的內容不再重提；數字變了（新增積壓、錯誤形態變化）會再提醒',
+    'oa.back': '去運營總覽',
+    'oa.bad_action': '動作令牌無效或已過期，請重新開啟卡片連結',
+    'oa.bad_sig': '這個處置連結不完整或被改動過',
+    'oa.by': '操作人',
+    'oa.done_acked': '已記錄為「已處理」：這條提醒內容不變就不會再來了',
+    'oa.done_muted': '已靜音至 {until}',
+    'oa.done_unmuted': '已取消靜音，按正常節律提醒',
+    'oa.expired': '這個處置連結已過期或已用過一次；請在工作台登入後操作',
+    'oa.go_login': '去登入',
+    'oa.item': '提醒項',
+    'oa.label.avatar_voice': '語音克隆服務',
+    'oa.label.case_backlog': '案例無人跟進',
+    'oa.label.draft_backlog': '待審草稿積壓',
+    'oa.label.lan_gpu': 'LAN GPU 主機',
+    'oa.label.unanswered_inbound': '客戶在等（沒人回）',
+    'oa.mute_24': '🔕 靜音 24 小時',
+    'oa.mute_4': '🔕 靜音 4 小時',
+    'oa.mute_72': '🔕 靜音 3 天',
+    'oa.since': '持續',
+    'oa.state_acked': '已認領（內容不變不再提）',
+    'oa.state_clear': '當前沒有在告警（可能剛恢復）',
+    'oa.state_muted': '已靜音至 {until}',
+    'oa.state_open': '仍在提醒',
+    'oa.status': '當前',
+    'oa.subtitle': '認領或靜音這條巡檢提醒；恢復通知不受影響，情況有變化會重新提醒',
+    'oa.title': '告警處置',
+    'oa.unavailable': '巡檢服務還沒就緒，稍後再點一次',
+    'oa.unconfigured': '本機沒有配置簽名金鑰，無法校驗連結',
+    'oa.unmute': '🔔 取消靜音 / 認領',
+    'oa.via_link': '卡片連結',
     # ── obg ──
     'obg.back': '返回渠道頁',
     'obg.copy': '複製',
@@ -23540,13 +23647,13 @@ ZH_HANT = {
     # ── rps_ctx_depth_deep ──
     'rps_ctx_depth_deep': '深度（約 32k · 最近 40 條 · 16 條記憶）',
     # ── rps_ctx_depth_hint ──
-    'rps_ctx_depth_hint': '越深越記得住、也越貴：每輪把更多歷史與記憶餵給模型（人設/規則部分穩定不變，可吃快取價）。尖峰單輪上限約：標準 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，無需重啟。',
+    'rps_ctx_depth_hint': '越深越記得住、也越貴：每輪把更多歷史與記憶餵給模型（人設/規則部分穩定不變，可吃快取價）。峰時單輪上限約：標準 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，無需重啟。',
     # ── rps_ctx_depth_max ──
     'rps_ctx_depth_max': '最大（約 128k · 最近 160 條 · 30 條記憶）',
     # ── rps_ctx_depth_standard ──
     'rps_ctx_depth_standard': '標準（約 12k · 最近 10 條 · 8 條記憶）',
     # ── rps_ctx_depth_ultra ──
-    'rps_ctx_depth_ultra': '超大（約 900k · 與 DeepSeek 1M 視窗對齊）',
+    'rps_ctx_depth_ultra': '超大（約 900k · 與 DeepSeek 1M 視窗平齊）',
     # ── rps_diff_btn ──
     'rps_diff_btn': '改動明細',
     # ── rps_diff_empty ──
@@ -24241,6 +24348,14 @@ ZH_HANT = {
     'rps_typing_hint': '延遲期間掛打字氣泡；不支援的平台自動跳過，不影響傳送',
     # ── rps_typing_label ──
     'rps_typing_label': '延遲期間顯示「正在輸入」',
+    # ── rps_usage_mode ──
+    'rps_usage_mode': '用量模式',
+    # ── rps_usage_mode_economy ──
+    'rps_usage_mode_economy': '經濟（壓帽：最近 4 條 · compact 人設 · 少抽取）',
+    # ── rps_usage_mode_full ──
+    'rps_usage_mode_full': '完整（按上面的深度檔）',
+    # ── rps_usage_mode_hint ──
+    'rps_usage_mode_hint': '和「深度」是兩套旋鈕：深度決定記得多少，經濟檔是省用量壓帽。錢包用盡時即使選「完整」也會自動進經濟檔（本地模型頂班 + 短上下文），避免斷線。改完即生效。',
     # ── rps_val_concise ──
     'rps_val_concise': '簡短',
     # ── rps_val_detailed ──

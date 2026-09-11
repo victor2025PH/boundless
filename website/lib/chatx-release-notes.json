@@ -1,5 +1,37 @@
 [
   {
+    "version": "1.0.81",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "发送语言按会话、风控三级分级、单一版本",
+      "en": "Per-thread send language, three-tier risk grading, one build for everyone"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "发送语言按会话生效：翻译工具条「我的消息→ 某语言」只影响当前会话，切到别的会话不再带过去；没设过的会话显示「自动 · 跟对方：English」，AI 回复跟对方语言、手发原样。",
+        "手发前语种确认：手工发送的目标语言与客户语言不一致时先弹「将译成 X 发给 Y 客户，确定发送？」，确认前不发；「对方消息→」仍是全局默认。",
+        "风控三级分级：高（自伤 / 未成年 / 威胁 / 要钱要凭据 / 诈骗 / 支付词）转人审并保持「需人工」；中（成人内容、索要联系方式 / 照片 / 见面、停联）只打「风险 · 中」标签按人设政策委婉处理；低（隐私词、照片 / 钱 / 电话的叙述性提及）只记日志。",
+        "「承诺」类风控只评我们自己要发出的话，客户叙述「他们给我发的照片」「你的电话」不再被误判转人工。",
+        "摘标冷却：人工发送或点「我知道了」后，同类别 30 分钟内不重复打标、不重弹横幅；会话头「风险保持 · 类别」胶囊与横幅写明命中类别和命中词。",
+        "新增「🧯 风控分级」卡：自动回复设置 → 查看全部 15 个类别的词表 / 级别 / 动作，选人设可把「索要照片 / 视频」等类别改高 / 中 / 低并保存。",
+        "本版起只发一个版本：内测机与坐席机装同一个安装包，不再区分内测版；已在用内测版的机器装完本版后自动跟随正式更新渠道。"
+      ],
+      "en": [
+        "Send language is per thread: the toolbar's My messages → language applies only to the current thread and no longer carries over; an unset thread shows Auto · follow peer: English — AI replies follow the customer's language, manual sends go as typed.",
+        "Confirm before a mismatched manual send: when the target language differs from the customer's, a confirmation appears first and nothing is sent until you confirm; Receive → stays a global default.",
+        "Three-tier risk grading: High (self-harm / minor / threat / asking for money or credentials / scam / payment words) goes to human review and holds Needs human; Medium (adult content, asking for contact / photos / meetup, stop-contact) only gets a Risk · medium tag and the persona policy defers softly; Low (privacy words, narrative mentions of photos / money / phone) is log only.",
+        "Commitment checks now apply only to our own outbound text, so customer narration such as the photos they sent me or your phone is no longer misjudged as high risk.",
+        "Tag cooldown: after a human send or Got it, the same category is not re-tagged and no banner reappears for 30 minutes; the header chip Risk hold · category and the banner state the matched category and words.",
+        "New Risk grading card in Reply settings: see all 15 categories with word lists / tier / action, and per persona move categories such as asking for photos between high / medium / low.",
+        "One build from now on: testers and seat machines install the same package, no separate internal flavor; machines still on the internal flavor follow the regular update channel after installing this version."
+      ]
+    }
+  },
+  {
     "version": "1.0.80",
     "date": "2026-09-11",
     "title": {

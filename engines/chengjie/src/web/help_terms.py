@@ -475,6 +475,22 @@ HELP_TERMS: dict = {
         "usage": "自动回复设置 →「用量模式」选完整或经济 → 保存。要省量选经济；要按深度档完整记忆选完整。",
         "usage_en": "Reply settings → Usage mode → Full or Economy → save. Pick Economy to spend less; pick Full to use the depth tier as-is."
     },
+    "risk_grading": {
+        "zh": "风控分级",
+        "en": "Risk grading",
+        "desc": "客户消息按三级处理：高（自伤 / 未成年 / 威胁 / 要钱要凭据 / 诈骗 / 支付关键词）→ 稿子转人审 + 会话标「需人工」并保持；中（成人内容、要联系方式 / 照片 / 见面 / 礼物、停联）→ 只打「风险 · 中」标签，按人设政策委婉延后或软回应，不进需人工；低（隐私词、照片 / 钱 / 电话的叙述性提及）→ 只记日志。「承诺」类只评我们自己要发出的话，客户叙述不再误判。人工发送或点「我知道了」摘标后，同类别 30 分钟内不重复打标、不重弹横幅。",
+        "desc_en": "Customer messages are handled in three tiers. High (self-harm / minor / threat / asking for money or credentials / scam / payment keywords) → draft goes to human review and the thread is tagged Needs human and held. Medium (adult content, asking for contact / photos / meetup / gifts, stop-contact) → only a Risk · medium tag; the persona policy softly defers or soft-replies, no Needs human. Low (privacy words, narrative mentions of photos / money / phone) → log only. Commitment checks now apply only to our own outbound text, so customer narration is no longer misjudged. After a human send or Got it clears the tag, the same category is not re-tagged and no banner reappears for 30 minutes.",
+        "usage": "自动回复设置 →「🧯 风控分级」卡查看全部类别 / 词表 / 级别 / 动作；选人设后可把「索要照片 / 视频」等类别改高 / 中 / 低 → 保存。会话头的「风险保持 · 类别」胶囊与横幅会写明命中类别与命中词。",
+        "usage_en": "Reply settings → Risk grading card lists every category / word list / tier / action; pick a persona to move categories such as asking for photos between high / medium / low → save. The thread header chip Risk hold · category and the banner state the matched category and words."
+    },
+    "send_lang_per_conv": {
+        "zh": "发送语言（本会话）",
+        "en": "Send language (this thread)",
+        "desc": "翻译工具条的「我的消息→ 某语言」只对当前会话生效，不再跨会话继承：在 A 会话切「发→日」，切到 B 会话时 B 仍是自己的设置；没设过就显示「自动 · 跟对方：English」，AI 自动回复跟对方语言，手发原样。「对方消息→」（收→）仍是全局默认。手发时若目标语言和客户语言不一致，会先弹「将译成 X 发给 Y 客户，确定发送？」，确认前不发。",
+        "desc_en": "The translation toolbar's My messages → language applies to the current thread only and no longer carries over: set Send → Japanese in thread A and thread B keeps its own setting; unset shows Auto · follow peer: English, AI replies follow the customer's language and manual sends go as typed. Incoming (Receive →) stays a global default. If a manual send's target language differs from the customer's language, a confirmation Translate into X for a Y-speaking customer, send? appears first; nothing is sent until confirmed.",
+        "usage": "聊天工作台 → 翻译工具条 →「我的消息→」选语言（旁边标「本会话」）。切会话前看一眼工具条即可；弹确认时按取消可改回。",
+        "usage_en": "Workspace → translation toolbar → My messages → pick a language (marked This thread). Glance at the toolbar before switching threads; press Cancel on the confirmation to change it."
+    },
     "split_send": {
         "zh": "分条发送",
         "en": "Split Send",

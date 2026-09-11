@@ -192,6 +192,38 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "/reply-settings",
     ),
     (
+        "risk-grading",
+        "风控分级怎么看 / 客户提到照片钱电话为什么不再转人工",
+        "How risk grading works / why mentions of photos or money no longer go to human",
+        "打开「自动回复设置」，找到「🧯 风控分级」卡：15 个类别列出词表、级别和动作。"
+        "高（自伤 / 未成年 / 威胁 / 要钱要凭据 / 诈骗 / 支付词）→ 稿子转人审 + 会话「需人工」并保持；"
+        "中（成人内容、要联系方式 / 照片 / 见面 / 礼物、停联）→ 只打「风险 · 中」标签，按人设政策委婉延后，不进需人工；"
+        "低（隐私词和照片 / 钱 / 电话的叙述性提及）→ 只记日志。"
+        "选一个人设可把「索要照片 / 视频」等类别改高 / 中 / 低，保存即生效。"
+        "人工发送或点「我知道了」摘标后，同类别 30 分钟内不重复打标、不重弹横幅；会话头「风险保持 · 类别」胶囊会写明命中类别和命中词。",
+        "Open Reply settings and find the Risk grading card: 15 categories with word lists, tier and action. "
+        "High (self-harm / minor / threat / asking for money or credentials / scam / payment words) → draft to human review + thread tagged Needs human and held; "
+        "Medium (adult content, asking for contact / photos / meetup / gifts, stop-contact) → only a Risk · medium tag, the persona policy softly defers, no Needs human; "
+        "Low (privacy words and narrative mentions of photos / money / phone) → log only. "
+        "Pick a persona to move categories such as asking for photos between high / medium / low; saving takes effect at once. "
+        "After a human send or Got it clears the tag, the same category is not re-tagged for 30 minutes; the header chip Risk hold · category shows the matched category and words.",
+        "风控 分级 高风险 需人工 误判 转人工 照片 要钱 摘标 重复打标 横幅 风险保持 risk grading needs human cooldown",
+        "/reply-settings",
+    ),
+    (
+        "send-lang-per-conv",
+        "发送语言怎么按会话设 / 为什么别的会话也变成日语了",
+        "How the send language is set per thread / why another thread switched to Japanese",
+        "翻译工具条里「我的消息→ 某语言」只对当前会话生效（旁边标「本会话」），切到别的会话不会带过去；"
+        "没设过的会话显示「自动 · 跟对方：English」，AI 自动回复跟对方语言，手发原样发出。"
+        "「对方消息→」（收→）仍是全局默认。手发时目标语言和客户语言不一致会先弹确认「将译成 X 发给 Y 客户，确定发送？」，按取消就不发。",
+        "In the translation toolbar, My messages → language applies to the current thread only (marked This thread) and does not carry over when you switch threads; "
+        "an unset thread shows Auto · follow peer: English — AI replies follow the customer's language and manual sends go as typed. "
+        "Receive → stays a global default. If a manual send's target language differs from the customer's, a confirmation appears first; Cancel sends nothing.",
+        "发送语言 翻译 发→ 本会话 日语 误发 全局 确认弹窗 send language per thread translate mismatch confirm",
+        "/workspace/inbox",
+    ),
+    (
         "kb-add",
         "知识库怎么添加条目",
         "How to add a knowledge base entry",
