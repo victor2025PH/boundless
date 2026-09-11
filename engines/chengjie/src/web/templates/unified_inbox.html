@@ -22642,6 +22642,13 @@ async function _hydrateConvModelRoute(c){
   try{
     var p=_mpParams(c);
     var resp=await apiFetch('/api/unified-inbox/conv-model-route?platform='+enc(p.platform)+'&account_id='+enc(p.account_id)+'&chat_key='+enc(p.chat_key));
+    if(resp.status===404){
+      /* 模板热更新先于 .py 重启到位（路由尚未注册）：整组隐藏而不是留一个点了就报错的按钮；
+         实例重启后 ui-build 横幅会引导刷新，刷新即出现。 */
+      var wrap=document.querySelector('.rt-pop-wrap.mp-wrap'); if(wrap) wrap.style.display='none';
+      var dv=wrap&&wrap.previousElementSibling; if(dv&&dv.classList.contains('rt-divider')) dv.style.display='none';
+      _mp.unavailable=true; return;
+    }
     var d=await resp.json();
     if(_mp.cid!==cid) return;              // 期间切走了：不落到别的会话上
     if(d&&d.ok){ _mp.data=d; _mpRender(); if(d.route&&d.route.unrestricted) _mpHealth(false); }
