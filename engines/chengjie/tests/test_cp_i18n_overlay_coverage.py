@@ -48,11 +48,9 @@ _EXT_ENTRY = re.compile(r'^\s*"((?:[^"\\]|\\.)+)"\s*:')
 # 机翻语种的已知覆盖债（2026-08-28 实测）：lang → 该语种缺多少键。
 # 语义＝「这个语种的 overlay 没做起来/只做了一部分，坐席在吃 en/zh 回落」。
 # 谁把它做起来（覆盖率 ≥ _MT_DONE_RATIO）就来删掉对应条目。
-_MT_OVERLAY_DEBT = {
-    "vi": "62/974 键（HY-MT 只跑出一小部分）",
-    "th": "0 键空壳（生成器 08-27 04:16 跑出 0 键却报成功＝静默降级）",
-    "id": "0 键空壳（同上）",
-}
+# 2026-09-12（1.0.83 语言切换批）：HY-MT 重跑 vi/th/id 三语 overlay 到 94–98%（cp/shell/SHELL_STR
+# 三套齐），债表清空。再有语种掉回 <90% 会由 test_mt_debt_registry_not_stale 的 unlisted_gaps 抓回。
+_MT_OVERLAY_DEBT: dict = {}
 # 覆盖率达到这个比例即视为「做起来了」→ 债表条目必须删除
 _MT_DONE_RATIO = 0.9
 
