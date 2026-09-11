@@ -72,6 +72,9 @@ async def test_minicpm_clone_base_url_override_via_voice_profile(tmp_path, monke
     monkeypatch.setattr(vcc.VoiceCloneClient, "synthesize_clone", fake_clone)
     p = _mc_pipeline(tmp_path)
     p.voice_profile["clone_base_url"] = "http://127.0.0.1:7852"
+    # Q-22：粤语专线路由改派克隆节点时携带 _lang_route_cleared=yue（运营声明会念
+    # 粤语）——本测直构管线，按路由口径补上；否则语种闸按「克隆不支持 yue」阻断。
+    p.lang_route_cleared = "yue"
     rv = await p.synthesize("我哋今日去饮茶好唔好")
     assert rv.ok is True
     assert rv.provider == "minicpm_clone"

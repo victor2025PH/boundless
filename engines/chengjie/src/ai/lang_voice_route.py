@@ -310,6 +310,12 @@ def clone_lang_gate(
         han = len(_CJK_RE.findall(t))
         if kana < 2 or (han and kana * 5 < han):
             return ""
+    # Q-22 #304（2026-09-12）：粤语与普通话在脚本检测里同为 zh，但克隆引擎按
+    # 普通话建模，粤文喂进去=普通话腔念粤字。粤语只在克隆链**声明**支持 yue
+    # （avatar_voice.voice_langs 含 yue / 粤语专线路由放行）时走克隆，否则按
+    # 「语种不支持」阻断——不再静默切 zh-HK 系统声。
+    if prefix == "zh" and is_cantonese_text(t):
+        prefix = "yue"
     langs = clone_voice_langs(avatar_voice_cfg, backend, persona_id)
     if not langs or prefix in langs:
         return ""
@@ -532,11 +538,26 @@ def _route_cantonese(
         return None
     new_cfg = dict(voice_cfg or {})
     backend = str(yue.get("backend") or "edge_tts").strip().lower()
+    # Q-22 #287/#304（2026-09-12）：人设是**克隆声**而粤语专线只配了 edge 系统声
+    # → 不再静默把人设换成 zh-HK 系统音（GWJ2RZ：lin_jiaxin 客户听到「广东话」
+    # 陌生女声）。保持克隆主链不动、只标记文本为粤语，交 TTSPipeline 语种闸
+    # 按「克隆链不支持 yue」阻断：自动链改发文字，坐席链亮红条二选一（改发文字 /
+    # 二次确认用系统音——那时才由管线按人设性别取 zh-HK 预置声）。
+    if backend not in _CLONE_BACKENDS \
+            and _effective_backend_of(voice_cfg or {}) in _CLONE_BACKENDS:
+        new_cfg["_yue_text"] = True
+        logger.info(
+            "[lang_voice_route] 粤语文本 × 克隆人设：不切系统声 zh-HK，交语种闸"
+            "阻断（clone_unavailable:clone_lang_unsupported:yue）markers>=%d",
+            min_markers)
+        return new_cfg, "yue"
     new_cfg["backend"] = backend
     new_cfg["voice"] = str(yue.get("voice") or "zh-HK-HiuMaanNeural")
     # RVC 变声是普通话克隆链的附件，粤语路由下关掉防串味
     new_cfg.pop("rvc", None)
     if backend in _CLONE_BACKENDS:
+        # 运营把粤语专线配成克隆节点＝声明「这个节点会念粤语」→ 语种闸对 yue 放行
+        new_cfg["_lang_route_cleared"] = "yue"
         # 粤语克隆分支（2026-08-30，接 117:7852 CosyVoice3 原生粤语克隆）：
         # backend 配成克隆类＝运营声明「这个后端会念粤语」→ 不再停 voice_profile
         # （停掉=丢参考音=克隆形同虚设）。cantonese.voice_profile 是 **merge 覆写**

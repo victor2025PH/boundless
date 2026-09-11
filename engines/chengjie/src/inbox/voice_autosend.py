@@ -606,9 +606,13 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
             suspect_tts_truncation,
         )
         tts = TTSPipeline(voice_cfg)
+        # Q-22 #304：会话计划语种（Q-21 conv_lang_plan.tts_lang；未合并前为空=
+        # 管线按出站文本检测语种）
+        from src.ai.tts_pipeline import log_skip_voice, plan_tts_lang
         result = await tts.synthesize(
             synth_src, timeout_sec=45.0, emotion=voice_ctx.get("emotion"),
-            pre_colloquialized=bool(_spoken))
+            pre_colloquialized=bool(_spoken),
+            tts_lang=plan_tts_lang(platform, account_id or "default", contact_key or ""))
     except Exception:
         logger.debug("[voice_autosend] TTS 合成异常", exc_info=True)
         _set_synth_failure("synth_exception")
@@ -616,6 +620,11 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
     if not getattr(result, "ok", False) or not getattr(result, "audio_path", ""):
         meta["provider"] = str(getattr(result, "provider", "") or "")
         meta["error"] = str(getattr(result, "error", "") or "")
+        # Q-22 C：克隆不可用 / 语种不一致 → 一行 skip_voice，改发文字（不出系统音）
+        _skip = log_skip_voice(
+            result, conv=f"{platform}:{account_id or 'default'}:{contact_key or ''}")
+        if _skip:
+            meta["skip_voice"] = _skip
         _set_synth_failure(str(meta["error"] or "synth_failed"))
         return None, meta
 

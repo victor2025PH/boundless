@@ -75,10 +75,9 @@ def test_route_disabled_by_default():
 
 
 def test_route_switches_to_cantonese_voice():
-    vc = {"backend": "avatar_clone", "voice": "clone-x",
-          "rvc": {"enabled": True},
-          "voice_profile": {"enabled": True, "backend": "avatar_clone",
-                            "reference_audio_path": "x.wav"}}
+    """预置声人设（非克隆）粤语文本 → 切 zh-HK 粤语 edge 声（系统声换系统声，不穿帮）。"""
+    vc = {"backend": "edge_tts", "voice": "zh-CN-XiaoxiaoNeural",
+          "rvc": {"enabled": True}}
     out, tag = route_voice_cfg_for_text(
         vc, "识听少少啦，但讲得麻麻地，咁你同我讲粤语都OK嘅", _ROUTE_ON)
     assert tag == "yue"
@@ -86,12 +85,44 @@ def test_route_switches_to_cantonese_voice():
     assert out["voice"] == "zh-HK-HiuMaanNeural"
     assert out["fallback_voice"] == "zh-HK-HiuMaanNeural"
     assert "rvc" not in out, "粤语路由应剥掉普通话克隆链的 RVC 附件"
-    # 回归守卫（2026-07-21 生产事故）：voice_profile.enabled=true 时
-    # TTSPipeline 用 voice_profile.backend 覆盖顶层 backend——路由必须停用它，
-    # 否则日志「切 edge_tts」但实际仍走克隆链（provider=avatar_clone）。
     assert out["voice_profile"] == {"enabled": False}
+    assert vc["backend"] == "edge_tts", "原配置不可被就地修改"
+
+
+def test_route_cantonese_clone_persona_not_silently_switched_to_system_voice():
+    """Q-22 #287/#304（GWJ2RZ 2026-09-12）：克隆人设 × 粤语文本，专线只配 edge 系统声
+    → **不再**静默把人设换成 zh-HK 系统音；保持克隆主链、只标记 yue，交管线语种闸
+    阻断（自动链改发文字 / 坐席链红条二选一）。"""
+    vc = {"backend": "avatar_clone", "voice": "clone-x",
+          "rvc": {"enabled": True},
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "reference_audio_path": "x.wav"}}
+    out, tag = route_voice_cfg_for_text(
+        vc, "识听少少啦，但讲得麻麻地，咁你同我讲粤语都OK嘅", _ROUTE_ON)
+    assert tag == "yue"
+    assert out["backend"] == "avatar_clone", "克隆主链不得被换成系统声"
+    assert out["voice_profile"]["enabled"] is True
+    assert out.get("_yue_text") is True
+    assert out.get("voice") != "zh-HK-HiuMaanNeural"
     assert vc["backend"] == "avatar_clone", "原配置不可被就地修改"
     assert vc["voice_profile"]["enabled"] is True, "原 voice_profile 不可被改"
+
+
+def test_route_cantonese_clone_line_declares_yue_capability():
+    """粤语专线配成克隆节点＝运营声明会念粤语 → 携带 _lang_route_cleared=yue 放行语种闸。"""
+    cfg = {"voice_lang_route": {
+        "enabled": True,
+        "cantonese": {"backend": "avatar_clone",
+                      "voice_profile": {"clone_base_url": "http://127.0.0.1:7852"}}}}
+    vc = {"backend": "avatar_clone", "voice": "clone-x",
+          "voice_profile": {"enabled": True, "backend": "avatar_clone",
+                            "reference_audio_path": "x.wav"}}
+    out, tag = route_voice_cfg_for_text(
+        vc, "识听少少啦，但讲得麻麻地，咁你同我讲粤语都OK嘅", cfg)
+    assert tag == "yue"
+    assert out["backend"] == "avatar_clone"
+    assert out.get("_lang_route_cleared") == "yue"
+    assert out["voice_profile"]["clone_base_url"] == "http://127.0.0.1:7852"
 
 
 def test_route_mandarin_clone_backend_and_voice_untouched():
@@ -340,10 +371,13 @@ def test_cantonese_clone_backend_full_override_still_works():
 
 
 def test_cantonese_edge_backend_behavior_pinned():
-    """edge 分支（默认档）行为钉死：停克隆、剥 RVC、兜底同音色——与克隆分支互斥。"""
-    vc = {"backend": "avatar_clone", "voice": "clone-x",
+    """edge 分支（默认档）行为钉死：剥 RVC、兜底同音色——与克隆分支互斥。
+
+    Q-22（2026-09-12）起只对**非克隆**人设成立：克隆人设不再被静默换成系统声
+    （见 test_route_cantonese_clone_persona_not_silently_switched_to_system_voice）。"""
+    vc = {"backend": "edge_tts", "voice": "zh-CN-XiaoxiaoNeural",
           "rvc": {"enabled": True},
-          "voice_profile": {"enabled": True, "backend": "avatar_clone"}}
+          "voice_profile": {"enabled": False, "backend": "avatar_clone"}}
     out, tag = route_voice_cfg_for_text(vc, _YUE_TEXT, _ROUTE_ON)
     assert tag == "yue"
     assert out["backend"] == "edge_tts"

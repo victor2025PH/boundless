@@ -474,9 +474,79 @@ def classify_voice_error(err: Optional[str]) -> str:
     # 「本条没出声、已改发文字」，坐席该做的是等引擎恢复或给人设换声，不是重试。
     if e.startswith("clone_engine_offline:"):
         return "clone_engine_offline"
+    # Q-22 #287：克隆不可用（语种超能力 / 钱包耗尽 / 成品念错）阻断——坐席二选一：
+    # 改发文字，或显式二次确认用系统音。
+    if e.startswith("clone_unavailable:"):
+        return "clone_unavailable"
+    if e == "lang_mismatch":
+        return "lang_mismatch"
     if "no_voice_for(" in e or "edge_voice_unresolved(" in e:
         return "no_matching_voice"
     return ""
+
+
+def plan_tts_lang(platform: str, account_id: str, chat_key: str) -> str:
+    """Q-22 #304：读会话语言计划的 ``tts_lang``（Q-21 conv_lang_plan 提供）。
+
+    Q-21 未合并前计划里没有 ``tts_lang`` 字段 → 返回 ""（管线按出站文本检测语种
+    兜底，即 ``hasattr`` 兜底口径）。计划缺席 / 任何异常 → ""。纯函数、绝不抛。
+    """
+    try:
+        from src.inbox.normalizer import conv_id
+        from src.inbox.outbound_translate import peek_conv_lang_plan
+        cid = conv_id(str(platform or ""), str(account_id or "default"),
+                      str(chat_key or ""))
+        plan = peek_conv_lang_plan(cid)
+        if plan is None:
+            return ""
+        if isinstance(plan, dict):
+            v = plan.get("tts_lang", "")
+        else:
+            v = getattr(plan, "tts_lang", "") if hasattr(plan, "tts_lang") else ""
+        v = str(v or "").strip().lower()
+        return "" if v in ("", "unknown") else v
+    except Exception:
+        return ""
+
+
+def skip_voice_reason(result: Any) -> str:
+    """Q-22：合成结果是否为「跳过语音改发文字」的阻断——返回 reason 或 ""。
+
+    ``clone_unavailable``（克隆链不可用：语种超能力 / 钱包耗尽 / 引擎不可达 /
+    成品念错）或 ``lang_mismatch``（#304 文本/音色/计划语种不一致）。自动链据此
+    打 ``[tts] skip_voice`` 行并改发文字；其余失败按旧口径处置。
+    """
+    ex = getattr(result, "extra", None) or {}
+    if ex.get("clone_unavailable"):
+        return "clone_unavailable"
+    if ex.get("skip_voice") == "lang_mismatch":
+        return "lang_mismatch"
+    return ""
+
+
+def log_skip_voice(result: Any, *, conv: str = "", log: Any = None) -> str:
+    """Q-22 C：自动链统一落 ``[tts] skip_voice reason=… conv=… lang=…`` 一行。
+
+    返回 reason（"" ＝不是阻断，未打日志）。``conv`` 为三段式会话 id（拿不到传空）。
+    """
+    reason = skip_voice_reason(result)
+    if not reason:
+        return ""
+    lg = log or logger
+    ex = getattr(result, "extra", None) or {}
+    if reason == "clone_unavailable":
+        lg.warning(
+            "[tts] skip_voice reason=clone_unavailable:%s conv=%s lang=%s "
+            "system_voice=%s → 改发文字（自动链不出系统音）",
+            ex.get("clone_unavailable") or "?", conv or "-",
+            ex.get("clone_lang_blocked") or "-", ex.get("system_voice") or "-")
+    else:
+        lg.warning(
+            "[tts] skip_voice reason=lang_mismatch conv=%s text_lang=%s tts_lang=%s "
+            "source=%s → 改发文字",
+            conv or "-", ex.get("text_lang") or "-", ex.get("tts_lang") or "-",
+            ex.get("lang_source") or "-")
+    return reason
 
 
 def hub_strict_scope(avatar_voice_cfg: Any, persona_id: Any) -> bool:
@@ -995,8 +1065,21 @@ class TTSPipeline:
         split_part: bool = False,
         interactive: bool = False,
         total_budget_sec: Optional[float] = None,
+        confirm_system_voice: bool = False,
+        tts_lang: str = "",
     ) -> TTSResult:
         """合成语音。``emotion`` 可为 None / 情绪字符串 / dict / EmotionSpec。
+
+        ``confirm_system_voice``（Q-22 #287/#288，2026-09-12）：克隆链不可用
+        （语种超能力 / Token 钱包耗尽 / 引擎不可达 / 成品判念错）时**缺省阻断**
+        ——``ok=False, error=clone_unavailable:<why>, extra.degrade_to_text``，
+        不出任何系统音；只有坐席在语音行显式点了「用系统音发」（此参 True）
+        才允许走 edge 兜底（extra.fallback_from 照旧标「非克隆声」）。自动链
+        永远不传 True。
+        ``tts_lang``：会话语言计划给出的**应发语种**（Q-21 conv_lang_plan.tts_lang；
+        未合并前调用方以出站文本检测语种兜底）。合成前核
+        ``文本语种 == 音色语种 == tts_lang``，不一致 → ``error=lang_mismatch``
+        跳过语音（#304 十翼会话普通话回复被切 zh-HK 声念粤语腔）。
 
         ``interactive``（2026-08-10 坐席手动链提速）：有人正盯着等这次合成
         （收件箱直发语音）→ hub 候选数封顶（缺省 1，可配 hub_fish.
@@ -1094,13 +1177,40 @@ class TTSPipeline:
         # ── 强制观测（#137/#140，2026-09-02）：每次合成打一行「生效后端/音色/
         # 来源」INFO。占位串事故里登记、合成、路由三方日志各说各话，「到底哪层
         # 配置在生效」全靠拼图——这行是下次诊断包的定锚，刻意不设开关。
+        # Q-22 #304（2026-09-12）：同一行补 text_lang / tts_lang / source 三字段
+        # ——「音频念的是哪门语言、按谁的判定」不再靠 lang_voice_route 的另一行
+        # 拼图（GWJ2RZ：普通话回复被切 zh-HK 声，合成生效行只写了 voice）。
+        _lc = self._lang_consistency(text_s, voice, tts_lang)
         if self.enabled and text_s.strip():
             logger.info(
-                "[tts] 合成生效 backend=%s voice=%s 来源=%s",
+                "[tts] 合成生效 backend=%s voice=%s 来源=%s text_lang=%s "
+                "tts_lang=%s source=%s",
                 self._effective_backend(),
                 (voice or self._effective_voice() or "-"),
                 self.voice_source
-                or (f"人设{self.persona_id}" if self.persona_id else "全局"))
+                or (f"人设{self.persona_id}" if self.persona_id else "全局"),
+                _lc["text_lang"] or "-", _lc["tts_lang"] or "-",
+                _lc["source"] or "-")
+        # ── Q-22 #304 语种一致性闸：文本语种 ≠ 音色语种 / 计划语种 → 不出声 ──
+        # 客户听到「不是这段话的语言」的语音比不发更糟（十翼会话客户回「你在说
+        # 什么怎么说广东话」）。skip 不换声、不重试，调用方按 degrade_to_text
+        # 改发文字。语种判不出（短句/混排）一律放行——宁可漏拦不误拦。
+        if self.enabled and text_s.strip() and _lc["mismatch"]:
+            logger.warning(
+                "[tts] skip_voice reason=lang_mismatch text_lang=%s tts_lang=%s "
+                "source=%s persona=%s",
+                _lc["text_lang"], _lc["tts_lang"], _lc["source"] or "-",
+                self.persona_id or "-")
+            _rv = TTSResult(
+                ok=False, text=str(text or ""), provider=self._effective_backend(),
+                voice=voice or self._effective_voice(), format=self.format,
+                error="lang_mismatch")
+            _rv.extra["degrade_to_text"] = True
+            _rv.extra["skip_voice"] = "lang_mismatch"
+            _rv.extra["text_lang"] = _lc["text_lang"]
+            _rv.extra["tts_lang"] = _lc["tts_lang"]
+            _rv.extra["lang_source"] = _lc["source"]
+            return _rv
 
         # ── 预渲染命中层（AvatarHub Phase 2）：固定台词直接复用夜间预合成的
         # OGG 语音条——零 GPU、零延迟、音色最像（7858 离线档质量 > 7852 在线档）。
@@ -1173,7 +1283,8 @@ class TTSPipeline:
             skip_llm_colloquial=skip_llm_colloquial,
             split_part=split_part,
             interactive=interactive,
-            total_budget_sec=total_budget_sec)
+            total_budget_sec=total_budget_sec,
+            confirm_system_voice=confirm_system_voice)
         if _t2s_applied:
             rv.extra["tts_t2s"] = True
 
@@ -1603,6 +1714,7 @@ class TTSPipeline:
         split_part: bool = False,
         interactive: bool = False,
         total_budget_sec: Optional[float] = None,
+        confirm_system_voice: bool = False,
     ) -> TTSResult:
         rv = TTSResult(
             text=str(text or ""),
@@ -1682,14 +1794,15 @@ class TTSPipeline:
             logger.warning(
                 "[tts] 文本语种 '%s' 超出克隆链 '%s' 能力（persona=%s）→ 跳过克隆，%s",
                 _lang_blocked, primary_backend, self.persona_id or "-",
-                "走 edge 兜底" if (self.fallback_on_error and self.fallback_backend
-                                   and self.fallback_backend != primary_backend)
-                else "回落文字")
+                ("走 edge 兜底（坐席已二次确认系统音）" if confirm_system_voice
+                 else "阻断（不出系统音，改发文字）"))
         elif _token_skip_clone:
             err = "token_wallet_exhausted"
             logger.info(
-                "[tts] Token 钱包耗尽（enforce）→ 跳过克隆声 '%s'，走 '%s' 兜底",
-                primary_backend, self.fallback_backend)
+                "[tts] Token 钱包耗尽（enforce）→ 跳过克隆声 '%s'，%s",
+                primary_backend,
+                (f"走 '{self.fallback_backend}' 兜底（坐席已二次确认）"
+                 if confirm_system_voice else "阻断（不出系统音，改发文字）"))
         elif primary_backend == "avatar_clone":
             # AvatarHub CosyVoice3（本机 7852）：情感克隆在线主力（2~4s/句）。
             av_rv = await self._try_avatar_clone(
@@ -1699,6 +1812,15 @@ class TTSPipeline:
                 split_part=split_part,
                 interactive=interactive,
                 deadline=deadline)
+            if av_rv is None and await self._cold_start_wait(
+                    rv, interactive=interactive, deadline=deadline):
+                av_rv = await self._try_avatar_clone(
+                    rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
+                    pre_colloquialized=pre_colloquialized,
+                    skip_llm_colloquial=skip_llm_colloquial,
+                    split_part=split_part,
+                    interactive=interactive,
+                    deadline=deadline)
             if av_rv is not None:
                 # #161 自动链事后腿：成品判「念错」→ 当语种闸命中处置（下方
                 # 既有 edge 兜底块会按语种对齐音色出标准声）。合成前的表拦不住
@@ -1719,6 +1841,13 @@ class TTSPipeline:
                 pre_colloquialized=pre_colloquialized,
                 skip_llm_colloquial=skip_llm_colloquial,
                 split_part=split_part, interactive=interactive)
+            if mc_rv is None and await self._cold_start_wait(
+                    rv, interactive=interactive, deadline=deadline):
+                mc_rv = await self._try_minicpm_clone(
+                    rv, out, t0, spec=spec, colloquial_lead=colloquial_lead,
+                    pre_colloquialized=pre_colloquialized,
+                    skip_llm_colloquial=skip_llm_colloquial,
+                    split_part=split_part, interactive=interactive)
             if mc_rv is not None:
                 _garb = (await self._clone_take_garbled(mc_rv)
                          if mc_rv.ok else "")
@@ -1750,21 +1879,46 @@ class TTSPipeline:
             # 女声直接发给客户（V85TY9 / ERS5QQ「运行时兜底默认音色」）。克隆声
             # 是人设身份的一部分，引擎离线时**改发文字**，由调用方（autosend /
             # voice_reply / 试听）按 ok=False + degrade_to_text 处置并提示「语音
-            # 引擎离线，本条已改发文字」。两条**刻意改道**不在此列、照旧走下方
-            # 兜底：语种闸（克隆念不了这门语言，#161 保护性改标准声）与 Token
-            # 钱包耗尽（计费降级）——但兜底音色同样要过下方同性别同语种选声。
-            if (primary_backend in CLONE_BACKENDS
-                    and not _lang_blocked and not _token_skip_clone):
-                logger.info(
-                    "[tts] fallback 克隆引擎失败不换声 → 改发文字 persona=%s "
-                    "backend=%s err=%s（D-L4：禁回落预置声）",
-                    self.persona_id or "-", primary_backend, err)
-                rv.extra["fallback_blocked"] = "clone_engine_offline"
+            # 引擎离线，本条已改发文字」。
+            # Q-22 #287/#288（2026-09-12）：语种闸 / 成品判念错 / Token 钱包耗尽
+            # 三条「刻意改道」**同样阻断**——V9YAAX/YNH6ZW 实录：STEVEN 人设日/韩/泰/法
+            # 客户全听到 Keita/InJoon/Niwat/Henri 系统男声，坐席只在黄字里看到
+            # 「非克隆声」，客户端已穿帮。系统音只在坐席**显式二次确认**
+            # （confirm_system_voice=True）后才出；自动链永远不传。阻断结果带
+            # extra.system_voice=可用的同语种同性别预置声（空=连二次确认这条路也没有），
+            # 供语音行判断要不要亮「用系统音发」按钮。
+            if primary_backend in CLONE_BACKENDS and not confirm_system_voice:
+                if _lang_blocked or _token_skip_clone:
+                    _why = err
+                    rv.extra["fallback_blocked"] = "clone_unavailable"
+                    rv.error = f"clone_unavailable:{err}"
+                else:
+                    _why = "clone_engine_offline"
+                    rv.extra["fallback_blocked"] = "clone_engine_offline"
+                    rv.error = f"clone_engine_offline:{err}"
+                rv.extra["clone_unavailable"] = _why
                 rv.extra["degrade_to_text"] = True
                 rv.extra["primary_error"] = err
-                rv.error = f"clone_engine_offline:{err}"
+                _sys_voice = ""
+                if fb == "edge_tts":
+                    try:
+                        _sys_voice = self._pick_fallback_edge_voice(_lang_blocked) or ""
+                    except Exception:
+                        _sys_voice = ""
+                rv.extra["system_voice"] = _sys_voice
+                logger.info(
+                    "[tts] blocked reason=clone_unavailable:%s persona=%s backend=%s "
+                    "lang=%s system_voice=%s → 不出系统音，改发文字（二次确认后方可）",
+                    _why, self.persona_id or "-", primary_backend,
+                    _lang_blocked or "-", _sys_voice or "-")
                 rv.latency_ms = int((time.monotonic() - t0) * 1000)
                 return rv
+            if primary_backend in CLONE_BACKENDS:
+                logger.warning(
+                    "[tts] 坐席二次确认用系统音 persona=%s backend=%s err=%s "
+                    "→ 走 edge 兜底（对方将听到非人设声）",
+                    self.persona_id or "-", primary_backend, err)
+                rv.extra["system_voice_confirmed"] = True
             # 冷却期内的「缓存命中不可达」是已知稳态 → DEBUG，避免主机长时间离线时
             # 每次语音合成都刷 WARNING；首次探测失败（刚写入缓存）仍按 WARNING 记。
             _cached_dead = "tts_host_unreachable_cached:" in (err or "")
@@ -1815,6 +1969,17 @@ class TTSPipeline:
             err = f"{err} | fallback({fb}):{fb_err}"
 
         rv.error = err
+        # Q-22：无兜底链（no_edge 部署 / fallback 关）的克隆不可用同样打统一标记，
+        # 调用方/前端只认 extra.clone_unavailable 一个键，不用再解析 err 前缀。
+        if (primary_backend in CLONE_BACKENDS and not rv.ok
+                and "clone_unavailable" not in rv.extra
+                and (_lang_blocked or _token_skip_clone
+                     or str(err or "").endswith("_unreachable"))):
+            rv.extra["clone_unavailable"] = (
+                err if (_lang_blocked or _token_skip_clone) else "clone_engine_offline")
+            rv.extra["degrade_to_text"] = True
+            rv.extra.setdefault("primary_error", err)
+            rv.extra.setdefault("system_voice", "")
         rv.latency_ms = int((time.monotonic() - t0) * 1000)
         return rv
 
@@ -1922,8 +2087,12 @@ class TTSPipeline:
         if not self.persona_gender:
             if text_lang:
                 try:
+                    from src.ai.edge_voice_catalog import pick_edge_voice
                     from src.ai.lang_voice_route import default_edge_voice_for_lang
+                    # 语种表没有（如 yue）但目录里有该语种缺省声 → 用目录的；
+                    # 都没有才沿用配置兜底声（Q-22：粤语二次确认不得落回普通话声）
                     return (default_edge_voice_for_lang(text_lang)
+                            or pick_edge_voice(text_lang, "")
                             or self.fallback_voice)
                 except Exception:
                     return self.fallback_voice
@@ -1933,6 +2102,106 @@ class TTSPipeline:
             return pick_edge_voice(lg, self.persona_gender)
         except Exception:
             return ""
+
+    def _lang_consistency(
+        self, text: str, voice: Optional[str], plan_lang: str = "",
+    ) -> Dict[str, Any]:
+        """Q-22 #304 合成前语种三方核对：文本语种 / 音色语种 / 会话计划语种。
+
+        返回 ``{text_lang, tts_lang, source, mismatch}``：
+        - ``text_lang``：出站文本检测语种（粤语特征字命中 → ``yue``，与 zh 区分）；
+        - ``tts_lang``：本条音频将念的语种——edge 等 BCP47 音色取音色 locale
+          （``zh-HK-*`` → ``yue``）；克隆链原生跟随文本（=text_lang），有会话
+          计划语种则以计划为准；
+        - ``source``：tts_lang 的判定来源 ``voice_locale`` / ``conv_lang_plan`` /
+          ``text_detect``；
+        - ``mismatch``：三方任一对不上（zh 与 zh-tw 同族；multilingual 音色自适应
+          不算；任一侧判不出＝放行）。纯函数、绝不抛。
+        """
+        out: Dict[str, Any] = {
+            "text_lang": "", "tts_lang": "", "source": "", "mismatch": False}
+        try:
+            from src.ai.lang_voice_route import (
+                detect_text_lang, is_cantonese_text, is_clone_backend)
+
+            def _fam(lang: str) -> str:
+                s = str(lang or "").strip().lower().replace("_", "-")
+                if not s or s == "unknown":
+                    return ""
+                if s in ("yue", "zh-yue", "zh-hk"):
+                    return "yue"
+                return s.split("-")[0]
+
+            t = str(text or "")
+            text_lang = _fam(detect_text_lang(t))
+            if text_lang == "zh" and is_cantonese_text(t):
+                text_lang = "yue"
+            out["text_lang"] = text_lang
+            plan = _fam(plan_lang)
+            backend = self._effective_backend()
+            eff_voice = str(voice or self._effective_voice() or "").strip()
+            voice_lang = ""
+            if not is_clone_backend(backend) and eff_voice \
+                    and "multilingual" not in eff_voice.lower():
+                try:
+                    from src.ai.edge_voice_catalog import edge_voice_lang
+                    voice_lang = _fam(edge_voice_lang(eff_voice))
+                except Exception:
+                    voice_lang = ""
+            if voice_lang:
+                out["tts_lang"], out["source"] = voice_lang, "voice_locale"
+            elif plan:
+                out["tts_lang"], out["source"] = plan, "conv_lang_plan"
+            elif text_lang:
+                out["tts_lang"], out["source"] = text_lang, "text_detect"
+            if text_lang:
+                if voice_lang and voice_lang != text_lang:
+                    out["mismatch"] = True
+                elif plan and plan != text_lang:
+                    out["mismatch"] = True
+                    if not voice_lang:
+                        out["tts_lang"], out["source"] = plan, "conv_lang_plan"
+            if voice_lang and plan and voice_lang != plan:
+                out["mismatch"] = True
+        except Exception:
+            out["mismatch"] = False
+        return out
+
+    async def _cold_start_wait(
+        self, rv: "TTSResult", *, interactive: bool,
+        deadline: Optional[float],
+    ) -> bool:
+        """Q-22 C：克隆主机**冷启动中**（已触发后台载入）→ 等一拍、放行重试一次。
+
+        只对自动链生效（interactive=坐席在等，不白耗 20s）；预算不够一拍 + 一次
+        合成也不等。返回 True＝已等完、调用方重试主链一次；False＝直接按不可用处置。
+        标记由 ``_try_minicpm_clone`` 探测到「可达但模型未载入 / 正在载入」时写入
+        ``rv.extra['clone_cold_start']``；一次 synthesize 只等一次。
+        """
+        tag = str(rv.extra.get("clone_cold_start") or "")
+        if not tag or rv.extra.get("clone_cold_start_waited") or interactive:
+            return False
+        av = self.avatar_voice if isinstance(self.avatar_voice, dict) else {}
+        try:
+            wait = float(av.get("cold_start_retry_sec", 20) or 0)
+        except Exception:
+            wait = 20.0
+        if wait <= 0:
+            return False
+        if deadline is not None:
+            # 留 10s 给重试那次合成本身
+            wait = min(wait, deadline - time.monotonic() - 10.0)
+            if wait < 3.0:
+                return False
+        rv.extra["clone_cold_start_waited"] = round(wait, 1)
+        logger.info(
+            "[tts] 克隆主机冷启动中（%s）→ 等 %.0fs 重试一次再决定是否改发文字 "
+            "persona=%s", tag, wait, self.persona_id or "-")
+        try:
+            await asyncio.sleep(wait)
+        except Exception:
+            return False
+        return True
 
     def _clone_t2s_enabled(self) -> bool:
         """繁→简发音输入转换开关（默认开；opt-out ``avatar_voice.clone_t2s: false``）。
@@ -1958,6 +2227,12 @@ class TTSPipeline:
                 persona_id=self.persona_id)
             if blocked and blocked == self.lang_route_cleared:
                 return ""
+            # Q-22：人设档显式带 CosyVoice 粤语标签（clone_text_prefix <|yue|>）＝
+            # 运营声明这把克隆声会念粤语 → yue 放行（与路由 _lang_route_cleared 同义）
+            if blocked == "yue":
+                _pfx = str((self.voice_profile or {}).get("clone_text_prefix") or "")
+                if "yue" in _pfx.lower():
+                    return ""
             return blocked
         except Exception:
             return ""
@@ -2364,12 +2639,17 @@ class TTSPipeline:
             if client.auto_load:
                 try:
                     detail = await asyncio.to_thread(client.probe_health_detail)
-                    if (detail.get("reachable") and detail.get("model_loaded") is False
+                    if detail.get("reachable") and detail.get("loading"):
+                        # Q-22 C：正在载入＝冷启动窗口，交 _cold_start_wait 等一拍重试
+                        rv.extra["clone_cold_start"] = "minicpm_clone_loading"
+                    elif (detail.get("reachable") and detail.get("model_loaded") is False
                             and not detail.get("loading")):
                         if await asyncio.to_thread(client.request_model_load_async):
+                            rv.extra["clone_cold_start"] = "minicpm_clone_load_triggered"
                             logger.warning(
                                 "[tts] minicpm_clone 模型未载入，已触发后台载入"
-                                "（本条回落 edge，约 20–30s 后自动恢复克隆声）")
+                                "（约 20–30s 后恢复克隆声；自动链等一拍重试一次，"
+                                "仍不可用则改发文字，不出系统音）")
                 except Exception:
                     pass
             if cloud_fallback:

@@ -1660,6 +1660,9 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         persona_id = body.get("persona_id") or None
         caption = str(body.get("caption") or "")
         cfg_override = body.get("voice_cfg_override")
+        # Q-22 #287：阻断文案与 tts-test 同源（voice_routes 单点）
+        from src.web.routes.voice_routes import (
+            clone_unavailable_message as _clone_unavailable_message)
         if not chat_key or not text:
             raise HTTPException(400, tr(request, "err.inbox.chat_text_empty"))
         if len(text) > 1000:
@@ -1758,6 +1761,16 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _vt_target = ""
         spoken_text = text
         _vxl = {"translated": False, "target_lang": "", "provider": ""}
+        # Q-22 #287/#288：系统音二次确认位。缺省 0＝克隆不可用时**阻断**（不出
+        # edge 系统音）；坐席在语音行红条点了「用系统音发（对方会听到非人设声）」
+        # 前端才带 1。自动链不经此路由。
+        _confirm_sys = str(body.get("confirm_system_voice") or "").strip().lower() \
+            in ("1", "true", "yes", "on")
+        if _confirm_sys:
+            logger.info(
+                "[inbox/voice-send] confirm_system_voice=1 conv=%s pid=%s agent=%s "
+                "→ 坐席显式确认用系统音", _conv_id(platform, account_id, chat_key),
+                persona_id or "-", (_session_agent(request) or {}).get("agent_id", "-"))
 
         # ── 所听即所发（P1 2026-08-05）：优先复用坐席刚试听过的产物 ──────────
         # 试听与发送此前是两次独立合成——坐席听到 A 声、客户可能收到 B 声（克隆
@@ -1929,7 +1942,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 result = await tts.synthesize(
                     spoken_text, timeout_sec=_budget, emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
-                    total_budget_sec=_budget)
+                    total_budget_sec=_budget,
+                    confirm_system_voice=_confirm_sys,
+                    # Q-22 #304：会话计划语种（译声目标语；Q-21 conv_lang_plan 合并前
+                    # 以 target_lang 兜底）——文本/音色/计划三方不一致管线跳过语音
+                    tts_lang=_vt_target)
                 _synth_ms = int((_time.monotonic() - _t_synth0) * 1000)
             except Exception as ex:  # noqa: BLE001
                 _dedup.release(_dedup_scope, _client_msg_id)
@@ -1955,6 +1972,39 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 # 其余保持原始错误码口径。reason 字段维持机器可读。
                 _err = result.error or "tts_failed"
                 _msg = ""
+                _rex_blk = getattr(result, "extra", {}) or {}
+                # Q-22 #287/#288：克隆不可用阻断——机器可读 reason=clone_unavailable:<why>
+                # + blocked=true + system_voice（可二次确认的预置声，空=无此选项）。
+                # 前端据此在语音行出红条 + 「改发文字」「用系统音发」两键，缺省不发。
+                if _rex_blk.get("clone_unavailable"):
+                    _why = str(_rex_blk.get("clone_unavailable") or "")
+                    _sysv = str(_rex_blk.get("system_voice") or "")
+                    _lang = str(_rex_blk.get("clone_lang_blocked") or "")
+                    logger.info(
+                        "[inbox/voice-send] blocked reason=clone_unavailable:%s conv=%s "
+                        "pid=%s lang=%s system_voice=%s → 未发，待坐席二选一",
+                        _why, _conv_id(platform, account_id, chat_key),
+                        voice_ctx.get("persona_id") or "-", _lang or "-",
+                        _sysv or "-")
+                    return {
+                        "ok": False, "blocked": True,
+                        "reason": f"clone_unavailable:{_why}",
+                        "clone_unavailable": {
+                            "why": _why, "lang": _lang,
+                            "system_voice": _sysv,
+                            "system_voice_available": bool(_sysv),
+                        },
+                        "message": _clone_unavailable_message(request, _why, _lang),
+                    }
+                if _rex_blk.get("skip_voice") == "lang_mismatch":
+                    return {
+                        "ok": False, "blocked": True, "reason": "lang_mismatch",
+                        "text_lang": str(_rex_blk.get("text_lang") or ""),
+                        "tts_lang": str(_rex_blk.get("tts_lang") or ""),
+                        "message": tr(request, "err.voice.lang_mismatch_skip",
+                                      text_lang=str(_rex_blk.get("text_lang") or "?"),
+                                      tts_lang=str(_rex_blk.get("tts_lang") or "?")),
+                    }
                 try:
                     from src.ai.tts_pipeline import classify_voice_error
                     _cls = classify_voice_error(_err)
@@ -2036,6 +2086,48 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 字符；上方复用试听产物分支刻意跳过不记账——已在 tts-test 计过，重复
             # 记＝双计。按实际合成文本（译声=译文）计，与授权池同口径。
             record_request_chars(request, "tts", len(spoken_text))
+
+        # ── Q-22 #287 路由级拒收：产物是「克隆回落的系统音」而坐席未二次确认 → 不发 ──
+        # 管线阻断罩不住两条旁路：试听复用（tts-test 产物 sidecar 记着 fallback_from）
+        # 与 #93 补标（应克隆未克隆）。V9YAAX 实录正是 reuse=True provider=edge_tts
+        # fallback=avatar_clone 把 Keita 系统声发给了日本客户。
+        try:
+            from src.ai.persona_voice import CLONE_BACKENDS as _CLB_gate
+            _gx = getattr(result, "extra", {}) or {}
+            _g_prov = str(getattr(result, "provider", "") or "").strip().lower()
+            _g_fb = str(_gx.get("fallback_from") or "").strip().lower()
+            if (_g_fb in _CLB_gate and _g_prov and _g_prov not in _CLB_gate
+                    and not _confirm_sys):
+                try:
+                    os.remove(result.audio_path)
+                except Exception:
+                    pass
+                _dedup.release(_dedup_scope, _client_msg_id)
+                _vo_record(False, "clone_unavailable:system_voice_unconfirmed")
+                _vst.record_failed(_dedup_scope, _client_msg_id,
+                                   "clone_unavailable:system_voice_unconfirmed")
+                _g_why = str(_gx.get("primary_error") or "clone_not_engaged")
+                _g_lang = str(_gx.get("clone_lang_blocked") or "")
+                logger.warning(
+                    "[inbox/voice-send] 拒收 provider=%s fallback=%s 无 "
+                    "confirm_system_voice conv=%s pid=%s reuse=%s → 未发",
+                    _g_prov, _g_fb, _conv_id(platform, account_id, chat_key),
+                    voice_ctx.get("persona_id") or "-",
+                    bool(_gx.get("reused_preview")))
+                return {
+                    "ok": False, "blocked": True,
+                    "reason": f"clone_unavailable:{_g_why}",
+                    "clone_unavailable": {
+                        "why": _g_why, "lang": _g_lang,
+                        "system_voice": str(getattr(result, "voice", "") or ""),
+                        "system_voice_available": True,
+                    },
+                    "message": _clone_unavailable_message(request, _g_why, _g_lang),
+                }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.debug("[inbox/voice-send] Q-22 拒收判定异常（放行）", exc_info=True)
 
         # 转 OGG/Opus，使其在 Telegram/WhatsApp 呈现为"语音消息"（ffmpeg 缺失则原样发）
         _vst.record_stage(_dedup_scope, _client_msg_id, "convert")

@@ -40,6 +40,57 @@ from src.web.web_i18n import tr
 logger = logging.getLogger(__name__)
 
 
+def clone_unavailable_message(request: Request, why: str, lang: str = "") -> str:
+    """Q-22 #287：``clone_unavailable:<why>`` → 坐席人话（tts-test 与 send-voice 同源）。
+
+    ``why`` 取管线 ``extra.clone_unavailable``：``clone_lang_unsupported:<lang>`` /
+    ``clone_lang_garbled:<lang>`` / ``token_wallet_exhausted`` / ``clone_engine_offline``。
+    文案统一给出两条出路（改发文字 / 二次确认用系统音），绝不暗示「已自动换声」。
+    """
+    w = str(why or "").strip()
+    lg = str(lang or "").strip()
+    if not lg and ":" in w:
+        lg = w.split(":", 1)[1].strip()
+    try:
+        from src.ai.edge_voice_catalog import LANG_LABELS  # type: ignore
+        lg_label = LANG_LABELS.get(lg, lg) if lg else ""
+    except Exception:
+        lg_label = lg
+    if w.startswith("clone_lang_unsupported"):
+        return tr(request, "err.voice.clone_unavailable_lang", lang=lg_label or "?")
+    if w.startswith("clone_lang_garbled"):
+        return tr(request, "err.voice.clone_unavailable_garbled", lang=lg_label or "?")
+    if w == "token_wallet_exhausted":
+        return tr(request, "err.voice.clone_unavailable_quota")
+    if w == "clone_engine_offline" or w.endswith("_unreachable"):
+        return tr(request, "err.voice.clone_unavailable_offline")
+    return tr(request, "err.voice.clone_unavailable", why=w or "?")
+
+
+def clone_unavailable_payload(result: Any) -> Optional[Dict[str, Any]]:
+    """管线阻断结果 → 响应体附加字段（``None``＝不是 Q-22 阻断）。
+
+    ``{blocked, reason, clone_unavailable:{why, lang, system_voice,
+    system_voice_available}}``——前端语音行据此出红条 + 「改发文字」「用系统音发」。
+    ``system_voice_available=False`` 时第二个按钮不亮（连同语种同性别预置声都没有）。
+    """
+    ex = getattr(result, "extra", None) or {}
+    why = str(ex.get("clone_unavailable") or "").strip()
+    if not why:
+        return None
+    sysv = str(ex.get("system_voice") or "").strip()
+    return {
+        "blocked": True,
+        "reason": f"clone_unavailable:{why}",
+        "clone_unavailable": {
+            "why": why,
+            "lang": str(ex.get("clone_lang_blocked") or ""),
+            "system_voice": sysv,
+            "system_voice_available": bool(sysv),
+        },
+    }
+
+
 def _perm_ok(request: Request, perm: str) -> bool:
     """按登录坐席判能力权限（P2 管理面改造：perms_json 按人覆写，master 恒 True）。
 
@@ -269,6 +320,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return tr(request, "err.voice.clone_engine_offline")
         if reason == "no_matching_voice":
             return tr(request, "err.voice.no_matching_voice")
+        # Q-22 #287/#304：阻断类（不出系统音）→ 两条出路的人话
+        if str(reason or "").startswith("clone_unavailable:"):
+            return clone_unavailable_message(request, reason.split(":", 1)[1])
+        if reason == "lang_mismatch":
+            return tr(request, "err.voice.lang_mismatch_skip",
+                      text_lang="?", tts_lang="?")
         return ""
 
     async def _redispatch_garbled_to_edge(
@@ -583,12 +640,18 @@ def register_voice_routes(app, api_auth, config_manager=None):
             _budget = clone_budget_sec(
                 spoken_text, fast=fast,
                 lang=str(_xl.get("target_lang") or ""))
+            # Q-22 #287/#288：系统音只在坐席显式二次确认后才出（缺省阻断）；
+            # #304：译声目标语＝会话计划语种，文本/音色/计划三方核对不一致跳过。
+            _confirm_sys = str(body.get("confirm_system_voice") or "").strip().lower() \
+                in ("1", "true", "yes", "on")
             result = await _aio.wait_for(
                 tts.synthesize(
                     spoken_text, timeout_sec=_budget,
                     emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=True, interactive=True,
-                    total_budget_sec=_budget),
+                    total_budget_sec=_budget,
+                    confirm_system_voice=_confirm_sys,
+                    tts_lang=_vt),
                 timeout=_budget + 5.0,
             )
         except Exception as ex:
@@ -612,8 +675,24 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 voice_ctx.get("persona_id") or persona_id or "-",
                 result.provider, time.monotonic() - _t0, result.error)
             note_voice_attempt(False, "preview", str(result.error or ""))
-            return {"ok": False, "error": result.error, "fast": fast,
-                    "reason": _classify_err(result.error)}
+            _out = {"ok": False, "error": result.error, "fast": fast,
+                    "reason": _classify_err(result.error),
+                    "persona_id": voice_ctx.get("persona_id") or persona_id or ""}
+            # Q-22 #287：克隆不可用阻断 → blocked + 二选一所需字段（文案在路由层补）
+            _blk = clone_unavailable_payload(result)
+            if _blk:
+                _out.update(_blk)
+                logger.info(
+                    "[tts] preview blocked reason=%s persona=%s lang=%s system_voice=%s",
+                    _blk["reason"], voice_ctx.get("persona_id") or persona_id or "-",
+                    _blk["clone_unavailable"]["lang"] or "-",
+                    _blk["clone_unavailable"]["system_voice"] or "-")
+            elif (result.extra or {}).get("skip_voice") == "lang_mismatch":
+                _out.update({
+                    "blocked": True, "reason": "lang_mismatch",
+                    "text_lang": str((result.extra or {}).get("text_lang") or ""),
+                    "tts_lang": str((result.extra or {}).get("tts_lang") or "")})
+            return _out
         note_voice_attempt(True, "preview")
 
         # #93（2026-09-01）：「应克隆未克隆」显式化——解析出的音色配置本该走
@@ -674,6 +753,41 @@ def register_voice_routes(app, api_auth, config_manager=None):
         # 闸门按表事前拦，终审按产物事后兜——表来不及更新的语种由这条兜住。
         # 改派仍失败/仍判乱码 → 保留原产物并如实标 garbled（前端禁发）。
         if _speech.get("speech") == "garbled":
+            # Q-22 #287：念错改派 Edge ＝ 静默换系统音——只在坐席二次确认后才做；
+            # 缺省阻断（作废乱音产物），前端红条二选一。
+            _is_clone_take = False
+            try:
+                from src.ai.persona_voice import CLONE_BACKENDS as _CLB_g
+                _is_clone_take = str(result.provider or "").strip().lower() in _CLB_g
+            except Exception:
+                _is_clone_take = False
+            if _is_clone_take and not _confirm_sys:
+                from src.ai.lang_voice_route import detect_text_lang as _dtl
+                _g_lang = (_dtl(spoken_text) or "").split("-")[0]
+                if _g_lang == "unknown":
+                    _g_lang = ""
+                try:
+                    preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
+                except Exception:
+                    pass
+                _why = f"clone_lang_garbled:{_g_lang or '?'}"
+                logger.warning(
+                    "[tts] preview blocked reason=clone_unavailable:%s persona=%s "
+                    "（成品判念错，不改派系统音，待坐席二选一）", _why,
+                    voice_ctx.get("persona_id") or persona_id or "-")
+                _sysv = ""
+                try:
+                    _sysv = tts._pick_fallback_edge_voice(_g_lang) or ""
+                except Exception:
+                    _sysv = ""
+                return {
+                    "ok": False, "fast": fast, "blocked": True,
+                    "error": _why, "reason": f"clone_unavailable:{_why}",
+                    "persona_id": voice_ctx.get("persona_id") or persona_id or "",
+                    "clone_unavailable": {
+                        "why": _why, "lang": _g_lang, "system_voice": _sysv,
+                        "system_voice_available": bool(_sysv)},
+                }
             _speech, result, preview_path = await _redispatch_garbled_to_edge(
                 voice_cfg, spoken_text, result, preview_path, _speech,
                 persona_id=str(voice_ctx.get("persona_id") or ""))
@@ -929,6 +1043,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     entry["status"] = "error"
                     entry["error"] = str(rv.get("error") or "")
                     entry["reason"] = str(rv.get("reason") or "")
+                    # Q-22：阻断附加字段随 job 透传（blocked / clone_unavailable / 语种）
+                    entry["blocked_fields"] = {
+                        k: rv[k] for k in (
+                            "blocked", "clone_unavailable", "text_lang", "tts_lang",
+                            "persona_id") if k in rv}
 
             # create_task 对任务仅弱引用 → Task 存进条目防 GC（任务亦持 entry 引用）
             entry["task"] = asyncio.create_task(
@@ -945,7 +1064,12 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 record_request_chars(request, "translation", len(text))
         # 失败分类 → 本地化人话（additive：error 原样保留，老前端零感知）
         if not rv.get("ok") and rv.get("reason"):
-            _msg = _voice_fail_message(request, str(rv.get("reason")))
+            if rv.get("reason") == "lang_mismatch":
+                _msg = tr(request, "err.voice.lang_mismatch_skip",
+                          text_lang=str(rv.get("text_lang") or "?"),
+                          tts_lang=str(rv.get("tts_lang") or "?"))
+            else:
+                _msg = _voice_fail_message(request, str(rv.get("reason")))
             if not _msg and str(rv.get("reason")).startswith("voice_config:"):
                 # #250（N-4 D）：配置闸拦下 → 与人设页保存 400 同一份人话（err.persona.voice_*）
                 try:
@@ -979,11 +1103,18 @@ def register_voice_routes(app, api_auth, config_manager=None):
             return {"ok": True, "status": "done", "result": entry.get("result")}
         out = {"ok": True, "status": "error",
                "error": str(entry.get("error") or "")}
+        if isinstance(entry.get("blocked_fields"), dict):
+            out.update(entry["blocked_fields"])
         # 可行动分类 → 本地化 message（additive；老前端只读 error 不受影响）
         _reason = str(entry.get("reason") or "")
         if _reason:
             out["reason"] = _reason
-            _msg = _voice_fail_message(request, _reason)
+            if _reason == "lang_mismatch":
+                _msg = tr(request, "err.voice.lang_mismatch_skip",
+                          text_lang=str(out.get("text_lang") or "?"),
+                          tts_lang=str(out.get("tts_lang") or "?"))
+            else:
+                _msg = _voice_fail_message(request, _reason)
             if _msg:
                 out["message"] = _msg
         return out

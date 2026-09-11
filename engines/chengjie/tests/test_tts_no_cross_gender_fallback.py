@@ -139,7 +139,8 @@ async def test_clone_engine_offline_blocks_even_without_gender(tmp_path, monkeyp
 
 
 async def test_lang_gate_edge_voice_follows_persona_gender(tmp_path, monkeypatch):
-    """语种闸改道 edge（保护性、非故障）仍出声，但 ja × 男人设 → Keita 而非 Nanami。"""
+    """语种闸命中：缺省**阻断**（Q-22 #287，不静默出系统音）；坐席二次确认
+    （confirm_system_voice=True）后才改道 edge，且 ja × 男人设 → Keita 而非 Nanami。"""
     _deny_clone(monkeypatch)
     seen: list = []
     _spy_run_backend(monkeypatch, seen)
@@ -149,17 +150,27 @@ async def test_lang_gate_edge_voice_follows_persona_gender(tmp_path, monkeypatch
                       "hub_fish": {"enabled": True, "tts_engine": "index_tts",
                                    "persona_allowlist": ["p1"]}})
     tts = TTSPipeline(cfg)
-    rv = await tts.synthesize(_JA)
+    # 缺省：阻断，edge 零调用，带可二次确认的同性别预置声
+    rv0 = await tts.synthesize(_JA)
+    assert rv0.ok is False
+    assert rv0.error == "clone_unavailable:clone_lang_unsupported:ja"
+    assert rv0.extra.get("clone_unavailable") == "clone_lang_unsupported:ja"
+    assert rv0.extra.get("degrade_to_text") is True
+    assert rv0.extra.get("system_voice") == "ja-JP-KeitaNeural"
+    assert seen == [], f"未二次确认不得调用 edge: {seen}"
+    # 二次确认：出系统音，按人设性别对齐
+    rv = await tts.synthesize(_JA, confirm_system_voice=True)
     assert rv.ok is True
     assert rv.provider == "edge_tts"
     assert seen and seen[-1]["voice"] == "ja-JP-KeitaNeural"
     assert rv.voice == "ja-JP-KeitaNeural"
     assert rv.extra.get("fallback_from") == "avatar_clone"
     assert rv.extra.get("clone_lang_blocked") == "ja"
+    assert rv.extra.get("system_voice_confirmed") is True
 
 
 async def test_lang_gate_gender_unknown_keeps_lang_default(tmp_path, monkeypatch):
-    """性别未知 → 与改前一致：ja → Nanami（EDGE_VOICE_BY_LANG）。"""
+    """性别未知 + 二次确认 → 与改前一致：ja → Nanami（EDGE_VOICE_BY_LANG）。"""
     _deny_clone(monkeypatch)
     seen: list = []
     _spy_run_backend(monkeypatch, seen)
@@ -168,7 +179,7 @@ async def test_lang_gate_gender_unknown_keeps_lang_default(tmp_path, monkeypatch
         avatar_voice={"enabled": True,
                       "hub_fish": {"enabled": True, "tts_engine": "index_tts",
                                    "persona_allowlist": ["p1"]}})
-    rv = await TTSPipeline(cfg).synthesize(_JA)
+    rv = await TTSPipeline(cfg).synthesize(_JA, confirm_system_voice=True)
     assert rv.ok is True and seen[-1]["voice"] == "ja-JP-NanamiNeural"
 
 

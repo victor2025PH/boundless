@@ -1774,12 +1774,25 @@ class TelegramSenderMixin:
                             return True
                         self.logger.info("[voice_reply] 分条路径未完成 → 回落整段单条")
 
+                # Q-22 #304：会话计划语种（Q-21 conv_lang_plan.tts_lang；未合并前
+                # 为空=管线按出站文本检测语种）——文本/音色/计划三方不一致跳过语音。
+                from src.ai.tts_pipeline import log_skip_voice, plan_tts_lang
+                _q22_conv = f"telegram:{getattr(self, 'account_id', '') or 'default'}:{_contact_key or ''}"
                 result = await tts.synthesize(
                     synth_source, timeout_sec=timeout_sec,
                     emotion=voice_ctx.get("emotion"),
                     pre_colloquialized=bool(_spoken),
-                    skip_llm_colloquial=_skip_llm_col)
+                    skip_llm_colloquial=_skip_llm_col,
+                    tts_lang=plan_tts_lang(
+                        "telegram", getattr(self, "account_id", "") or "default",
+                        _contact_key or ""))
                 if not result.ok:
+                    # Q-22 C：克隆不可用 / 语种不一致 → 一行 skip_voice + 改发文字
+                    # （不出系统音，不算合成断档：record=False）
+                    _skip = log_skip_voice(result, conv=_q22_conv, log=self.logger)
+                    if _skip:
+                        _note_voice_fail(str(result.error or _skip), record=False)
+                        return False
                     self.logger.warning("[voice_reply] TTS failed: %s", result.error)
                     _note_voice_fail(str(result.error or "synth_failed"))
                     return False
@@ -2148,6 +2161,10 @@ class TelegramSenderMixin:
         await self._voice_recording_action(chat_id)
 
         results = []
+        # Q-22 #304：会话计划语种（Q-21 未合并前为空=按文本检测语种）
+        from src.ai.tts_pipeline import plan_tts_lang, skip_voice_reason
+        _q22_tts_lang = plan_tts_lang(
+            "telegram", getattr(self, "account_id", "") or "default", str(chat_id))
         for i, p in enumerate(parts):
             # 分条活人感：只首条允许口语化「句首迟疑词」（其实，/话说，），
             # 后续条 colloquial_lead=False——连发 2-3 条都同样开头会做作。
@@ -2160,11 +2177,14 @@ class TelegramSenderMixin:
                 pre_colloquialized=pre_colloquialized,
                 skip_llm_colloquial=skip_llm_colloquial,
                 # 分条单条：hub_fish 按 best_of_parts 减候选（GPU 减负）
-                split_part=True)
+                split_part=True,
+                tts_lang=_q22_tts_lang)
             if not rv.ok:
                 self.logger.info(
-                    "[voice_reply] 分条第 %d/%d 条合成失败(%s)",
-                    len(results) + 1, len(parts), rv.error)
+                    "[voice_reply] 分条第 %d/%d 条合成失败(%s)%s",
+                    len(results) + 1, len(parts), rv.error,
+                    ("（克隆不可用/语种不一致：整段路径同样阻断 → 改发文字）"
+                     if skip_voice_reason(rv) else ""))
                 for r in results:
                     try:
                         os.unlink(r.audio_path)
