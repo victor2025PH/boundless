@@ -2153,6 +2153,9 @@ button.fleet-cell:disabled{cursor:default;}
 .day-divider.bf-divider{color:var(--tk-warn-ink,#d97706);opacity:.85;font-size:11px;}
 /* 实施72 P3：失败原因人话短语（「发送失败」旁，悬停显原始码） */
 .msg-fail-why{color:var(--tk-text-muted,#94a3b8);margin-left:5px;font-size:11px;cursor:help;border-bottom:1px dotted var(--tk-text-muted,#94a3b8);}
+/* Q-24 #298（ms-）：Messenger 边车失败红字三段式（悬停显边车原始证据句）+ 手机端发出角标 */
+.ms-fail-tri{cursor:help;}
+.ms-ext-chip{display:inline-block;margin-right:5px;padding:0 5px;border-radius:6px;font-size:10px;line-height:14px;font-weight:600;background:rgba(148,163,184,.18);color:var(--tk-text-muted,#94a3b8);vertical-align:middle;cursor:help;}
 .conv-group-tag{display:inline-block;padding:0 5px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(148,163,184,.2);color:var(--tk-text-muted);vertical-align:middle;line-height:15px;margin-left:2px;}
 /* P0 真相化：已退出账号的会话行——整体灰化 + 琥珀「已退出」chip（会话保留可查，
    但一眼可见「这个号已经不在线上」；hover/选中恢复可读性便于查看历史） */

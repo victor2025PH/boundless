@@ -8415,6 +8415,15 @@ function _paintAcctBanner(c){
     banner.style.display='flex';
     return;
   }
+  // Q-24 C（#298，ms-）：e2ee PIN 未过但尚未判半死（TKV3HB：账号刚授权、PIN 浮层在场）→ 黄条
+  // 「Messenger 需在手机确认 PIN 后才能同步」+ 托管 PIN 按钮；PIN 过后边车自动回填、心跳清 hint。
+  if(c && c.platform==='messenger' && _messengerStallHint(c)==='e2ee_pin_required'){
+    banner.className='acct-out-banner warn';
+    banner.innerHTML=`<span class="aob-txt" title="${esc(window.T('inbox.ms.pin_bar_sub'))}">${esc(window.T('inbox.ms.pin_bar'))}</span>`
+      +`<button type="button" class="aob-btn" onclick="setMessengerPin('${esc(c.account_id||'')}',this)">${esc(window.T('inbox.ro.set_pin_btn'))}</button>`;
+    banner.style.display='flex';
+    return;
+  }
   // M-2 A2：通道重连中（编排器 worker 退避重启窗）——信息条，不给重登按钮（多半自己会好）
   if(c && _acctChannelState(c)==='reconnecting'){
     banner.className='acct-out-banner info';
@@ -14214,6 +14223,30 @@ function _threadEmptyHtml(c){
    提前闭合了注释，后半段中文遂变成裸代码，整个 script 块 Unexpected token 全死
    （2026-08-27 实锤；模板热更新直上生产，门禁 test_template_inline_js_syntax 才抓到）。
    列举通配符一律用「、」分隔。 */
+/* Q-24 #298（ms-）：Messenger 边车发送失败七码 → 工作台红字三段式
+   「原因 · 已自动重试 N 次 · 出路」（与 services/messenger-web/send_chain.js 同源）。 */
+var _MS_FAIL_CODES={composer_detached:1,thread_not_found:1,e2ee_pin_pending:1,call_overlay:1,send_backoff:1,login_expired:1,upload_failed:1};
+function _msFailCodeLabel(code){
+  const c=String(code||'').toLowerCase();
+  if(_MS_FAIL_CODES[c]) return window.T('inbox.ms.fail.'+c);
+  return c||window.T('dash.unknown');
+}
+function _msFailThreeParts(det){
+  det=det||{};
+  const code=String(det.sidecar_code||det.code||'').toLowerCase();
+  const n=Math.max(0,Number(det.retries||0));
+  const sec=Math.max(0,Number(det.retry_after_sec||Math.ceil(Number(det.retry_after_ms||0)/1000)||0));
+  const p1=_msFailCodeLabel(code);
+  const p2=n>0?window.Tf('inbox.ms.fail.retried',{n:String(n)}):window.T('inbox.ms.fail.retried_none');
+  let p3;
+  if(code==='e2ee_pin_pending') p3=window.T('inbox.ms.fail.next_pin');
+  else if(code==='login_expired') p3=window.T('inbox.ms.fail.next_login');
+  else if(code==='send_backoff') p3=window.Tf('inbox.ms.fail.next_backoff',{sec:String(sec||40)});
+  else if(sec>0) p3=window.Tf('inbox.ms.fail.next_phone',{sec:String(sec)});
+  else p3=window.T('inbox.ms.fail.next_phone_now');
+  return {code:code, text:p1+' · '+p2+' · '+p3, parts:[p1,p2,p3]};
+}
+window._msFailThreeParts=_msFailThreeParts;
 function _failReasonText(code){
   const c=String(code||'');
   if(!c) return '';
@@ -14235,6 +14268,8 @@ function _failReasonText(code){
   if(low.indexOf('policy_one_reply')>=0) return window.T('inbox.failr.policy_one_reply');
   if(low.indexOf('policy_comment_too_long')>=0||low.indexOf('policy_comment_len')>=0) return window.T('inbox.failr.policy_comment_len');
   if(low.indexOf('device_offline')>=0) return window.T('inbox.failr.device_offline');
+  /* Q-24 #298（ms-）：Messenger 边车七码留痕（fail_reason 即码）→ 与失败气泡第一段同一组词条 */
+  if(_MS_FAIL_CODES[low]) return window.T('inbox.ms.fail.'+low);
   if(low.indexOf('send_backoff')>=0||low.indexOf('too many requests')>=0) return window.T('inbox.failr.rate_limited');
   if(low.indexOf('account_blocked')>=0||low.indexOf('temporarily blocked')>=0) return window.T('inbox.failr.platform_block');
   if(low.indexOf('e2ee_pin')>=0) return window.T('inbox.failr.e2ee_pin');
@@ -14436,14 +14471,21 @@ function renderMessages(c, msgs, opts={}){
     const _failWhy=(_storeFailed&&m.fail_reason)
       ?`<span class="msg-fail-why" title="${esc(m.fail_reason)}">${esc(_failReasonText(m.fail_reason))}</span>`
       :'';
-    const _failTail=m._failed
+    // Q-24 #298（ms-）：边车结构化失败 → 红字三段式「输入框丢失 · 已自动重试 2 次 · 你可以手机发，或 40 秒后再试」+「重试」
+    const _msTri=(m._failed&&m._msFail)?_msFailThreeParts(m._msFail):null;
+    // Q-24 C：手机端 Messenger 发出的消息回抄（sender_id=external）→ 小标「手机发出」
+    const _extChip=(isOut&&String(m.sender_id||'')==='external'&&!m._optimistic&&!m._failed)
+      ?`<span class="ms-ext-chip" title="${esc(window.T('inbox.ms.external_out_t'))}">${esc(window.T('inbox.ms.external_out'))}</span>`:'';
+    const _failTail=_msTri
+      ?`<span class="ms-fail-tri" style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;" title="${esc(String(m._msFail.sidecar_detail||''))}">${esc(_msTri.text)}</span>${m._retryBody?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendFailed('${esc(m.message_id||'')}')">${window.T('inbox.ms.fail.retry_btn')}</button>`:''}`
+      :m._failed
       ?`<span style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;">${window.T('inbox.msg.send_failed')}</span>${m._retryBody?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendFailed('${esc(m.message_id||'')}')">${window.T('inbox.msg.resend')}</button>`:''}`
       :(_storeFailed
         ?`<span style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;">${window.T('inbox.msg.send_failed')}</span>${_failWhy}${(String(m.text||'').trim()&&!m._resending)?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendStoreFailed('${esc(m.message_id||'')}')">${window.T('inbox.msg.resend')}</button>`:''}`
         :(_storeResent?`<span style="color:var(--tk-text-muted);margin-left:4px;">${window.T('inbox.msg.resent')}</span>`:''));
     pushUnit('m_'+_ukey,`<div class="msg-row ${isOut?'out':'in'}" id="msg-${esc(m.message_id||m._optimistic||'')}" data-mid="${esc(m.message_id||'')}" data-pmid="${esc(_pmid)}" data-ts="${esc(m.ts||'')}">
       <div class="msg-bubble${_revoked?' msg-bubble-revoked':''}${(!_revoked&&_isChannel&&!isOut)?' msg-channel-card':''}"${optClass}${failClass}>${_bubbleInner}</div>${_reactOut}
-      <div class="msg-ts">${ts}${_editedMark}${_tick}${_failTail}</div>
+      <div class="msg-ts">${ts}${_extChip}${_editedMark}${_tick}${_failTail}</div>
       ${_revoked?'':tools}${waActions}
     </div>`);
   });
@@ -15234,6 +15276,16 @@ async function sendMsg(){
         _guard409={det:det, body:body};   // body 是 try 块内 const，须一并捕获
         threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
         renderMessages(selectedChat, threadMsgs, {silent:true});
+      } else if(det && typeof det==='object' && det.code==='sidecar_send_fail'){
+        // Q-24 #298（ms-）：Messenger 边车七码 → 失败气泡红字三段式 + 「重试」（同文案重发，
+        // 服务端回读去重防双发；**不自动换文案**）。原因/次数/出路来自 det，不再是泛「发送失败」。
+        const idx=threadMsgs.findIndex(m=>m.message_id===optId);
+        if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; threadMsgs[idx]._msFail=det; }
+        renderMessages(selectedChat, threadMsgs, {silent:true});
+        try{ showHint(_msFailThreeParts(det).text); }catch(_){ showHint(String(det.message||'')); }
+        try{ _uiBeacon('send_ms_'+String(det.sidecar_code||'x').replace(/[^a-zA-Z0-9_]/g,'_').slice(0,28)); }catch(_){}
+        // PIN 锁 / 登录失效属账号级 → 顺带刷账号横幅（黄条 / 重登出路）
+        if(det.sidecar_code==='e2ee_pin_pending'||det.sidecar_code==='login_expired'){ try{ loadChats(); }catch(_){} }
       } else {
       // 失败：把乐观消息标为"发送失败"（保留 _retryBody，气泡上出「重发」按钮，不再回灌输入框避免重复发）
       const idx=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -15345,14 +15397,16 @@ async function resendFailed(optId){
       await loadChats();
     } else {
       const i2=threadMsgs.findIndex(m=>m.message_id===optId);
-      if(i2>=0){ threadMsgs[i2]._optimistic=false; threadMsgs[i2]._failed=true; }
-      renderMessages(selectedChat, threadMsgs, {silent:true});
       const _det2=d&&d.detail;
+      const _isMs2=!!(_det2 && typeof _det2==='object' && _det2.code==='sidecar_send_fail');   // Q-24 #298（ms-）
+      if(i2>=0){ threadMsgs[i2]._optimistic=false; threadMsgs[i2]._failed=true; threadMsgs[i2]._msFail=_isMs2?_det2:null; }
+      renderMessages(selectedChat, threadMsgs, {silent:true});
       // P0 2026-08-12：重发撞上护栏拦截 → 横幅点亮（重试不会成功，别再引导重发）
       if(_det2 && typeof _det2==='object' && _det2.code==='send_blocked'){
         try{ _noteGateBlock(_det2); }catch(_){}
       }
-      showHint(window.Tf('inbox.toast.send_fail',{msg:((_det2&&_det2.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      if(_isMs2){ try{ showHint(_msFailThreeParts(_det2).text); }catch(_){ showHint(String(_det2.message||'')); } }
+      else showHint(window.Tf('inbox.toast.send_fail',{msg:((_det2&&_det2.message)||d.detail||d.error||window.T('dash.unknown'))}));
     }
   }catch(e){
     const i2=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -16293,12 +16347,14 @@ function _diagFindingText(f){
   var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
     explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
     deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
-    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1,agent_yield:1};
+    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1,agent_yield:1,sidecar_send_fail:1};
   if(known[code]){
     var fmt={};
     Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
     // Q-14 #262：AI 失败原因码译人话（与会话头灰标同一组词条）
     if(code==='ai_last_fail'){ try{ fmt.reason=_aifReasonLabel(fmt.reason); }catch(_){} }
+    // Q-24 #298（ms-）：边车七码译人话（与发送失败气泡第一段同一组词条）+ 时刻
+    if(code==='sidecar_send_fail'){ try{ fmt.code_label=_msFailCodeLabel(fmt.code); fmt.hhmm=fmtTs(Number(p.ts||0)); }catch(_){} }
     if(code==='agent_yield'){ try{ fmt.by_label=window.T(_AY_BY_KEYS[fmt.by]||'inbox.ay.by_sent'); fmt.until_hhmm=fmtTs(Number(p.until||0)); fmt.n=String(Math.max(0,Math.round(Number(p.remaining_sec||0)))); }catch(_){} }   // Q-18 #292（ay-）
     // Q-15 #271（ad-）：high_risk 的类别 / 级别 / 政策先译人话（成人内容 → 「成人内容（sex）· 露骨」）
     if(code==='high_risk'){
