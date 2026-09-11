@@ -53,6 +53,14 @@ ZH = {
     "bp_now_risk_frozen": "{n} 个账号被安全冻结（风控保护中，会自动恢复）",
     "bp_now_risk_alert": "告警通道未接通——出了状况不会有人收到通知",
     "bp_now_ok": "一切正常，没有需要处理的事",
+    # 「AI 花费」卡（成本对账 P2 2026-09-08）
+    "bp_cost_title": "AI 花了多少钱",
+    "bp_cost_more": "看去向 / 导账单 →",
+    "bp_cost_today": "今天（内部估算）",
+    "bp_cost_month": "本月累计",
+    "bp_cost_recon": "昨日与厂商账单核对",
+    "bp_cost_runway": "余额还能撑",
+    "bp_cost_days": "天",
 }
 
 EN = {
@@ -103,4 +111,11 @@ EN = {
     "bp_now_risk_frozen": "{n} account(s) safety-frozen (risk-control protection, auto-recovers)",
     "bp_now_risk_alert": "Alert channel not connected — nobody gets notified when something breaks",
     "bp_now_ok": "All clear — nothing needs your attention",
+    "bp_cost_title": "What the AI cost",
+    "bp_cost_more": "Breakdown / import bill →",
+    "bp_cost_today": "Today (internal estimate)",
+    "bp_cost_month": "This month",
+    "bp_cost_recon": "Yesterday vs vendor bill",
+    "bp_cost_runway": "Balance lasts",
+    "bp_cost_days": "days",
 }

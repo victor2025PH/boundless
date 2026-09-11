@@ -107,6 +107,38 @@
       <div id="bp-now-risk" class="bp-note" style="display:none"></div>
     </div>
 
+    <!-- 「AI 花费」卡（成本对账 P2 2026-09-08）：今天/本月花了多少、昨日对账灯、余额跑道；
+         点标题进 /workspace/cost 看去向与导账单。段缺失（账本不可用）＝整卡隐藏。 -->
+    <div class="bp-card" id="bp-cost-card" style="display:none">
+      <h3 style="display:flex;justify-content:space-between;align-items:center">
+        <span>{{ (i18n or {}).get('bp_cost_title', 'AI 花了多少钱') }}</span>
+        <a href="/workspace/cost" style="font-size:12px;font-weight:500;color:var(--tk-brand,#1e8cf2);text-decoration:none">{{ (i18n or {}).get('bp_cost_more', '看去向 / 导账单 →') }}</a>
+      </h3>
+      <div class="bp-hero" style="margin-bottom:0">
+        <div class="bp-kpi">
+          <div class="val"><small>¥</small><span id="bp-cost-today">0.00</span></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_today', '今天（内部估算）') }}</div>
+          <div class="cmp" id="bp-cost-top"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val"><small>¥</small><span id="bp-cost-month">0.00</span></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_month', '本月累计') }}</div>
+          <div class="cmp" id="bp-cost-avg"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val" id="bp-cost-light">⚪</div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_recon', '昨日与厂商账单核对') }}</div>
+          <div class="cmp" id="bp-cost-recon-day"></div>
+        </div>
+        <div class="bp-kpi">
+          <div class="val"><span id="bp-cost-runway">—</span><small>{{ (i18n or {}).get('bp_cost_days', '天') }}</small></div>
+          <div class="lbl">{{ (i18n or {}).get('bp_cost_runway', '余额还能撑') }}</div>
+          <div class="cmp" id="bp-cost-balance"></div>
+        </div>
+      </div>
+      <div id="bp-cost-issues" class="bp-note" style="display:none"></div>
+    </div>
+
     <div class="bp-card">
       <h3>{{ (i18n or {}).get('bp_week_title', '本周合计') }}</h3>
       <div class="bp-week" id="bp-week"></div>
@@ -252,6 +284,35 @@
       } else {
         re.style.color = 'var(--tk-emerald-ink,#059669)';
         re.textContent = T('bp_now_ok');
+      }
+    }
+
+    // 「AI 花费」卡（成本对账 P2）：段缺失整卡隐藏
+    var cs = data.cost || null;
+    var cc = el('bp-cost-card');
+    if (cc) {
+      cc.style.display = cs ? '' : 'none';
+      if (cs) {
+        var f2 = function (v) { return (v === null || v === undefined) ? '—' : Number(v).toFixed(2); };
+        el('bp-cost-today').textContent = f2(cs.today);
+        el('bp-cost-top').textContent = (cs.top || []).map(function (p) {
+          return p.label + ' ¥' + f2(p.cost); }).join(' · ');
+        el('bp-cost-month').textContent = f2(cs.month);
+        el('bp-cost-avg').textContent = '\u8FD1 7 \u5929\u65E5\u5747 ¥' + f2(cs.avg7);
+        el('bp-cost-light').textContent = cs.recon_light || '\u26AA';
+        el('bp-cost-recon-day').textContent = cs.recon_day
+          ? (cs.recon_day + (cs.recon_verdict === 'ok' ? ' \u4E00\u81F4' : cs.recon_verdict === 'mismatch' ? ' \u4E0D\u4E00\u81F4' : ' \u65E0\u8D26\u5355\u771F\u503C'))
+          : '\u5C1A\u672A\u5BF9\u8D26';
+        el('bp-cost-runway').textContent = (cs.runway_days === null || cs.runway_days === undefined) ? '—' : cs.runway_days;
+        el('bp-cost-balance').textContent = (cs.balance === null || cs.balance === undefined)
+          ? '\u4F59\u989D\u672A\u77E5\uFF08\u5728\u6210\u672C\u9875\u586B\u4E00\u6B21\uFF09' : '\u4F59\u989D\u7EA6 ¥' + f2(cs.balance);
+        var ci = el('bp-cost-issues');
+        var issues = (cs.issues || []).slice();
+        if (!cs.pricing_configured) { issues.unshift('\u4EF7\u683C\u8868\u672A\u914D\u7F6E\uFF0C\u91D1\u989D\u4F1A\u4E00\u76F4\u662F 0'); }
+        if (issues.length) {
+          ci.style.display = ''; ci.style.color = 'var(--tk-amber-ink,#b45309)';
+          ci.textContent = '\u26A0 ' + issues.join('\uFF1B');
+        } else { ci.style.display = 'none'; }
       }
     }
 

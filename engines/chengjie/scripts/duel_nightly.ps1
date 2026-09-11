@@ -15,6 +15,11 @@
 #     instance twice inside 30 min (FLAP threshold).
 #   - Keep turns-per-scenario small: defect density comes from scenario variety,
 #     not from long single runs.
+#   - Cadence (2026-09-08 cost recon): the scheduled task \DuelNightly now fires
+#     Tue + Fri 02:10 instead of every night. One run = 48 real cloud replies +
+#     memory extraction + LLM judge ~= 1.2 CNY; nightly it was >60% of the whole
+#     SiliconFlow bill while real customer traffic was ~0.3 CNY/day. Drill ids
+#     (990001xxx) are also excluded from memory extraction and the token ledger.
 #
 # Scheduled use:
 #   powershell -ExecutionPolicy Bypass -File scripts\duel_nightly.ps1

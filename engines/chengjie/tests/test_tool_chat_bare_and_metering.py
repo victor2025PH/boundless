@@ -286,3 +286,49 @@ def test_protected_heads_pinned():
     heads = AIClient._PROTECTED_SYS_HEADS
     for must in ("【LANGUAGE RULE", "【多语言回复规则", "【回复硬约束】", "【后台人设定位", "【输出语言"):
         assert must in heads
+
+# ── 记忆抽取默认走 LAN（2026-09-11）─────────────────────────────────────────
+
+def _bare_client_for_routes():
+    c = AIClient.__new__(AIClient)
+    c.timeout = 10
+    c.model = "deepseek-flash"
+    c._oa_extra_body = {}
+    return c
+
+
+def test_memory_extract_auto_binds_lan_when_fallback_ready():
+    c = _bare_client_for_routes()
+    c._fb_client = object()
+    c._fb_model = "chatx"
+    c._fb_extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    c._build_route_clients({}, None)
+    assert c._task_routes.get("memory_extract") == "_lan_tool"
+    prof = c.resolve_route("memory_extract")
+    assert prof and prof["model"] == "chatx" and prof["client"] is c._fb_client
+    ctx = c._tool_context("memory_extract")
+    assert ctx["_route"] == "memory_extract"
+    assert "_route" not in c._tool_context("tool")
+
+
+def test_memory_extract_explicit_task_route_wins():
+    c = _bare_client_for_routes()
+    c._fb_client = object()
+    c._fb_model = "chatx"
+    c._fb_extra_body = {}
+    c._build_route_clients({
+        "models": {"qa_cheap": {
+            "base_url": "https://api.deepseek.com", "model": "deepseek-flash", "api_key": "sk-x"}},
+        "task_routes": {"memory_extract": "qa_cheap"},
+    }, "sk-x")
+    assert c._task_routes["memory_extract"] == "qa_cheap"
+    assert c.resolve_route("memory_extract")["model"] == "deepseek-flash"
+
+
+def test_memory_extract_no_lan_stays_on_primary():
+    c = _bare_client_for_routes()
+    c._fb_client = None
+    c._fb_model = ""
+    c._build_route_clients({}, None)
+    assert "memory_extract" not in c._task_routes
+    assert c.resolve_route("memory_extract") is None

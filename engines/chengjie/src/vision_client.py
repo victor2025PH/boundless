@@ -297,6 +297,19 @@ def _url_cooling(url: str) -> bool:
         return time.time() < _URL_BAD_UNTIL.get(url, 0.0)
 
 
+def _record_vision_usage(resp: Any, *, url: str, model: str, t0: float) -> None:
+    """识图调用成本记账（2026-09-08 成本对账）：云端 VLM（硅基 Qwen3-VL）按厂商 usage
+    记真值；LAN 端点同样记（金额 0，但看板要看到调用量）。绝不抛。"""
+    try:
+        from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+        record_usage_from_response(
+            resp, model=str(model), purpose="vision",
+            provider=provider_from_base_url(url) or "lan", tier="vision",
+            latency_ms=int((time.time() - t0) * 1000))
+    except Exception:
+        pass
+
+
 def has_any_vision_backend(merged: dict, global_vision: dict) -> bool:
     """至少存在一种可用后端：配置了 Ollama base_url，或存在有效智谱 api_key。"""
     if _wants_openai_primary(merged):
@@ -534,12 +547,15 @@ class VisionClient:
                         for du in data_urls
                     ]
                     content.append({"type": "text", "text": text_prompt})
+                    _t0 = time.time()
+                    _mdl = _endpoint_model(self.config, url, "llava")
                     resp = cli.chat.completions.create(
-                        model=_endpoint_model(self.config, url, "llava"),
+                        model=_mdl,
                         messages=[{"role": "user", "content": content}],
                         max_tokens=int(self.config.get("max_tokens") or 300),
                         temperature=0,
                     )
+                    _record_vision_usage(resp, url=url, model=_mdl, t0=_t0)
                     out = None
                     if resp and getattr(resp, "choices", None):
                         c0 = getattr(resp.choices[0].message, "content", None)
@@ -612,14 +628,17 @@ class VisionClient:
         last_exc_kind = ""
         for i, (url, cli) in enumerate(endpoints):
             try:
+                _t0 = time.time()
+                _mdl = _endpoint_model(self.config, url, "llava")
                 resp = cli.chat.completions.create(
-                    model=_endpoint_model(self.config, url, "llava"),
+                    model=_mdl,
                     messages=[{"role": "user", "content": content}],
                     max_tokens=int(self.config.get("max_tokens") or 300),
                     # 识图是抽取任务不是创作任务：贪心解码保确定性（2026-07-26 实锤：
                     # 默认采样温度下同图偶发漏抄 Name 等字段——同图同 prompt 应同答）。
                     temperature=0,
                 )
+                _record_vision_usage(resp, url=url, model=_mdl, t0=_t0)
             except Exception as e:
                 _mark_url_bad(url)
                 last_exc_kind = classify_vision_error(e)
@@ -685,6 +704,8 @@ class VisionClient:
                 timeout=timeout,
                 temperature=0,   # 抽取任务贪心解码（与 openai 兼容路径同口径）
             )
+            _record_vision_usage(resp, url="https://open.bigmodel.cn", model=str(model),
+                                 t0=time.time())
             if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
                 content = getattr(resp.choices[0].message, "content", None)
                 if content and isinstance(content, str) and content.strip():

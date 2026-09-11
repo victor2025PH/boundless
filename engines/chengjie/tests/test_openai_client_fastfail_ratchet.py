@@ -26,7 +26,8 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 #   ① 调用文本含 max_retries=0（关 SDK 内建重试，端点轮询由调用方自己做）；
 #   ② 构造点前 25 行内出现 connect=（httpx.Timeout 拆分连接/读超时）。
 _REQUIRED_FASTFAIL: Dict[str, int] = {
-    "ai/ai_client.py": 4,             # 主链 / 嵌入双活 / 本地兜底 / 云 Key 池
+    "ai/ai_client.py": 5,             # 主链 / 嵌入双活 / 本地兜底 / 云 Key 池 / 模型路由档
+    #                                   （_build_route_clients，2026-09-02 加；connect=5 + max_retries=0）
     # ollama_mt 已于 2026-08-09 弃用 AsyncOpenAI（/v1 兼容层忽略请求级 keep_alive
     # → 模型反复冷加载），改走 httpx 原生 /api/chat，连接 5s 快败语义在
     # OllamaMTEngine._post_chat 内保留（httpx.Timeout(read, connect=5.0)）。
@@ -47,6 +48,10 @@ _ACCEPTED_SLOW: Dict[str, Tuple[int, str]] = {
     "voice_transcriber.py": (
         1, "参数化构造：max_retries 默认 0、timeout 默认 30s 标量（单次尝试、"
            "connect ≤ min(30, OS~21)s 有界）；转录链自有 176→140→本机 CPU 多级回落"),
+    "web/routes/assistant_routes.py": (
+        1, "小智 docless 直连流式（2026-08-27）：max_retries=0 已关 SDK 重试；未拆 connect= → "
+           "SDK 默认 connect=5s 有界；端点由 assistant.query.llm 配（inherit 主链，云端为主），"
+           "流式自带 stream_options/前端超时预算，不在坐席出话热路"),
     "ai/companion_selfie.py": (
         1, "云端出图后端（gpt-image-1/dall-e）：生成本身 10-60s 量级、异步媒体链"
            "自带预算与回落，SDK 默认重试对云端点有价值"),

@@ -297,6 +297,9 @@ class AIEngine:
                     context={
                         "_skip_lang_guard": True,
                         "_bare_system": self._BARE_TRANSLATION_SYSTEM,
+                        # 成本归因（2026-09-08）：这条走 generate_reply 的翻译此前被记成
+                        # customer_reply，「客户回复花了多少」因此虚高。
+                        "_llm_purpose": "translate",
                     },
                     conversation_history=None,
                     _skip_quality_check=True,

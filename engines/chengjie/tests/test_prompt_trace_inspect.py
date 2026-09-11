@@ -101,8 +101,10 @@ def test_apply_budget_stashes_stats_and_alerts_on_over(monkeypatch):
     monkeypatch.setattr(oa, "notify", lambda kind, text, **kw: calls.append((kind, text, kw)) or True)
     c._trim_prompt_to_budget = lambda msgs, budget: (msgs, {
         "before": 15000, "after": 14000, "hist": 0, "fewshot": 0, "inject_chars": 0, "over": 2000})
-    c._apply_prompt_budget([{"role": "user", "content": "hi"}], {"account_id": "acc1", "chat_id": "c1"})
+    ctx = {"account_id": "acc1", "chat_id": "c1"}
+    c._apply_prompt_budget([{"role": "user", "content": "hi"}], ctx)
     assert c._last_budget_stats["over"] == 2000 and c._last_budget_stats["budget"] == 12000
+    assert ctx["_budget_stats"]["over"] == 2000
     assert len(calls) == 1
     kind, text, kw = calls[0]
     assert kind == "prompt_over_budget" and "软放行" in text and "2000" in text
@@ -125,7 +127,36 @@ def test_trace_prompt_records_with_host_and_budget():
     it = prompt_trace.list_entries()[0]
     assert it["host"] == "api.deepseek.com" and it["model"] == "deepseek-flash"
     assert it["budget"]["budget"] == 12000 and it["usage"]["cache_hit_tokens"] == 1500
+    assert it["budget"]["billed_prompt"] == 2000
     assert it["request_id"] == "rq" and it["latency_ms"] == 700
+
+
+def test_budget_stats_stay_on_outer_context_when_inner_chat_runs():
+    """重入：抽取走 chat() 会再跑一遍预算，实例字段被覆盖，外层 context 必须还留着长回合的数。"""
+    c = _client()
+    outer, inner = {"chat_id": "big"}, {"chat_id": "tool"}
+    c._trim_prompt_to_budget = lambda msgs, budget: (msgs, {
+        "before": 11000, "after": 11000, "hist": 0, "fewshot": 0, "inject_chars": 0, "over": 0})
+    c._apply_prompt_budget([{"role": "user", "content": "long"}], outer)
+    c._trim_prompt_to_budget = lambda msgs, budget: (msgs, {
+        "before": 400, "after": 400, "hist": 0, "fewshot": 0, "inject_chars": 0, "over": 0})
+    c._apply_prompt_budget([{"role": "user", "content": "short"}], inner)
+    assert outer["_budget_stats"]["before"] == 11000
+    assert inner["_budget_stats"]["before"] == 400
+    assert c._last_budget_stats["before"] == 400
+
+
+def test_trace_prefers_context_budget_over_instance():
+    c = _client()
+    c._last_budget_stats = {"before": 400, "after": 400, "over": 0, "budget": 12000}
+    ctx = {"chat_id": "c1", "request_id": "r2",
+           "_budget_stats": {"before": 11000, "after": 11000, "over": 0, "budget": 12000}}
+    c._trace_prompt([{"role": "system", "content": "【后台人设定位】x"}],
+                    model="deepseek-flash",
+                    client=types.SimpleNamespace(base_url="https://api.deepseek.com/v1/"),
+                    context=ctx, usage=_usage(pt=7400, hit=2000), latency_ms=10)
+    it = prompt_trace.list_entries()[0]
+    assert it["budget"]["before"] == 11000 and it["budget"]["billed_prompt"] == 7400
 
 
 def test_main_chain_calls_trace_hook():

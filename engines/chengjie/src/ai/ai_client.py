@@ -301,9 +301,13 @@ class AIClient(LoggerMixin):
                 from src.ai.llm_cost import get_llm_cost
                 pricing = ai_config.get("pricing") or {}
                 if pricing:
-                    get_llm_cost().set_pricing(pricing)
+                    # 2026-09-08：价格表按 CNY/1K tokens 解释（与硅基账单同币种），
+                    # ai.pricing_currency 可改；缺省 CNY。
+                    get_llm_cost().set_pricing(
+                        pricing, currency=str(ai_config.get("pricing_currency") or "CNY"))
                     self.logger.info(
                         f"LLM 成本追踪：已加载 {len(pricing)} 个模型的价格表"
+                        f"（{get_llm_cost().currency}/1K tokens）"
                     )
             except Exception:
                 self.logger.debug("LLM 成本追踪初始化失败", exc_info=True)
@@ -807,6 +811,7 @@ class AIClient(LoggerMixin):
                 if self._oa_extra_body:
                     create_kwargs["extra_body"] = self._oa_extra_body
                 response = await self._oa_client.chat.completions.create(**create_kwargs)
+                self._record_direct_usage(response, purpose="probe")
                 text = ""
                 if response and response.choices:
                     c0 = response.choices[0].message
@@ -1174,9 +1179,9 @@ class AIClient(LoggerMixin):
                     self.total_tokens += pt + ct
                     self.last_call_time = time.time()
                     self._last_primary_ok_ts = time.time()
-                    # ★ P6-4：按 (model, tier, account) 累积 tokens + cost
+                    # ★ P6-4：按 (model, tier, account, purpose) 累积 tokens + cost
                     try:
-                        from src.ai.llm_cost import get_llm_cost
+                        from src.ai.llm_cost import get_llm_cost, purpose_for_reply
                         _ctx = context or {}
                         get_llm_cost().record(
                             model=str(use_model),
@@ -1185,6 +1190,9 @@ class AIClient(LoggerMixin):
                             tier=str(_ctx.get("ai_tier") or "default"),
                             account_id=str(_ctx.get("account_id") or "default"),
                             latency_ms=int(elapsed_time * 1000),
+                            purpose=purpose_for_reply(_ctx),
+                            provider=("lan" if _primary_native
+                                      else self._provider_of(_primary_client)),
                         )
                     except Exception:
                         self.logger.debug("llm_cost.record 失败", exc_info=True)
@@ -1234,6 +1242,14 @@ class AIClient(LoggerMixin):
                 last_error = e
                 _fail_reason = self._classify_ai_error(e)   # Q-14：timeout|connect|gateway_5xx|…
                 self.logger.warning("AI 调用失败(attempt=%s): %s", attempt + 1, e)
+                # 读超时＝请求已送达、服务端很可能照常计费，本地却一个 token 都没记
+                # （0907 实测两次超时重试 → 账单多两笔看不见的钱）。按 prompt 字数估算记一笔
+                # ``suspected``，对账时单列；连接错误不记（请求根本没出去）。
+                if "timeout" in type(e).__name__.lower() or "timed out" in str(e).lower():
+                    self._record_suspected_usage(
+                        model=str(use_model), messages=messages, context=context,
+                        provider=("lan" if _primary_native
+                                  else self._provider_of(_primary_client)))
                 if attempt == 0:
                     await asyncio.sleep(1.5)
         try:
@@ -1398,13 +1414,15 @@ class AIClient(LoggerMixin):
                 self.total_tokens += pt + ct
                 self.last_call_time = time.time()
                 try:
-                    from src.ai.llm_cost import get_llm_cost
+                    from src.ai.llm_cost import get_llm_cost, purpose_for_reply
                     get_llm_cost().record(
                         model=str(entry["model"]),
                         prompt_tokens=pt, completion_tokens=ct,
                         tier="key_pool",
                         account_id=str((context or {}).get("account_id") or "default"),
                         latency_ms=int(elapsed * 1000),
+                        purpose=purpose_for_reply(context),
+                        provider=self._provider_of(entry.get("client")),
                     )
                 except Exception:
                     pass
@@ -1577,13 +1595,15 @@ class AIClient(LoggerMixin):
             self.total_tokens += pt + ct
             self.last_call_time = time.time()
             try:
-                from src.ai.llm_cost import get_llm_cost
+                from src.ai.llm_cost import get_llm_cost, purpose_for_reply
                 get_llm_cost().record(
                     model=str(use_fb_model),
                     prompt_tokens=pt, completion_tokens=ct,
                     tier="local_primary" if as_primary else "local_fallback",
                     account_id=str((context or {}).get("account_id") or "default"),
                     latency_ms=int(elapsed * 1000),
+                    purpose=purpose_for_reply(context),
+                    provider=self._provider_of(getattr(self, "_fb_client", None)) or "lan",
                 )
             except Exception:
                 pass
@@ -1938,7 +1958,11 @@ class AIClient(LoggerMixin):
             trimmed = st["hist"] or st["fewshot"] or st["inject_chars"]
             rid = str((context or {}).get("request_id") or "") or "n/a"
             st["budget"] = budget
-            self._last_budget_stats = dict(st)   # prompt-inspect 留痕用
+            self._last_budget_stats = dict(st)
+            # 挂在本轮 context 上：generate_reply 会重入（抽取/短判走 chat()），
+            # 实例字段会被内层短调用覆盖——inspect 就会把 11k 人设回合记成 400 token。
+            if isinstance(context, dict):
+                context["_budget_stats"] = dict(st)
             if st.get("over"):
                 self._alert_prompt_over_budget(st, context)
             if trimmed or st.get("over"):
@@ -1993,14 +2017,21 @@ class AIClient(LoggerMixin):
             except Exception:
                 host = ""
             _ctx = context or {}
+            uf = prompt_trace.usage_fields(usage)
+            st = {}
+            if isinstance(_ctx.get("_budget_stats"), dict):
+                st = dict(_ctx["_budget_stats"])
+            elif getattr(self, "_last_budget_stats", None):
+                st = dict(self._last_budget_stats)
+            if uf["prompt_tokens"]:
+                st["billed_prompt"] = uf["prompt_tokens"]
             prompt_trace.record(
                 messages=messages, model=str(model), host=host,
                 conv=self._conv_label(context),
                 request_id=str(_ctx.get("request_id") or ""),
-                usage=usage, budget_stats=getattr(self, "_last_budget_stats", None),
+                usage=usage, budget_stats=st or None,
                 latency_ms=int(latency_ms or 0), ok=ok,
             )
-            uf = prompt_trace.usage_fields(usage)
             if uf["prompt_tokens"]:
                 self.logger.debug(
                     "[ai] usage model=%s prompt=%d cache_hit=%d completion=%d reasoning=%d ms=%d",
@@ -2212,18 +2243,7 @@ class AIClient(LoggerMixin):
             if self._oa_extra_body:
                 kw["extra_body"] = self._oa_extra_body
             resp = await self._oa_client.chat.completions.create(**kw)
-            try:
-                _u = getattr(resp, "usage", None)
-                if _u:
-                    from src.ai.llm_cost import get_llm_cost
-                    get_llm_cost().record(
-                        model=str(self.model),
-                        prompt_tokens=int(getattr(_u, "prompt_tokens", 0) or 0),
-                        completion_tokens=int(
-                            getattr(_u, "completion_tokens", 0) or 0),
-                        tier="tool")
-            except Exception:
-                self.logger.debug("llm_cost.record(tool) 失败", exc_info=True)
+            self._record_direct_usage(resp, purpose="tool")
             if resp and getattr(resp, "choices", None):
                 return (resp.choices[0].message.content or "").strip()
             return ""
@@ -2393,6 +2413,21 @@ class AIClient(LoggerMixin):
                     p = str(prof or "").strip()
                     if p and p in self._route_clients:
                         self._task_routes[str(task)] = p
+            # 记忆抽取默认走 LAN 兜底（有才绑）：短 JSON、不服务客户，不必吃云端 ¥2/M。
+            # 显式 ai.task_routes.memory_extract 优先；LAN 失败仍回主链降级链。
+            if ("memory_extract" not in self._task_routes
+                    and getattr(self, "_fb_client", None)
+                    and str(getattr(self, "_fb_model", "") or "").strip()):
+                self._route_clients.setdefault("_lan_tool", {
+                    "client": self._fb_client,
+                    "model": self._fb_model,
+                    "label": f"{self._fb_model} @ lan (memory_extract)",
+                    "extra_body": dict(getattr(self, "_fb_extra_body", None) or {}),
+                })
+                self._task_routes["memory_extract"] = "_lan_tool"
+                self.logger.info(
+                    "记忆抽取默认走本地兜底 model=%s（ai.task_routes.memory_extract 可改）",
+                    self._fb_model)
             if self._route_clients:
                 self.logger.info(
                     "多模型路由已配置: %d 档（%s）；任务映射 %s",
@@ -2576,7 +2611,7 @@ class AIClient(LoggerMixin):
                             )
                         # ★ P6-4：Gemini 分支 cost tracking
                         try:
-                            from src.ai.llm_cost import get_llm_cost
+                            from src.ai.llm_cost import get_llm_cost, purpose_for_reply
                             _ctx = context or {}
                             get_llm_cost().record(
                                 model=str(self.model),
@@ -2585,6 +2620,8 @@ class AIClient(LoggerMixin):
                                 tier=str(_ctx.get("ai_tier") or "default"),
                                 account_id=str(_ctx.get("account_id") or "default"),
                                 latency_ms=int(elapsed_time * 1000),
+                                purpose=purpose_for_reply(_ctx),
+                                provider="google",
                             )
                         except Exception:
                             self.logger.debug("llm_cost.record 失败", exc_info=True)
@@ -4591,6 +4628,60 @@ class AIClient(LoggerMixin):
         """Parse model output {\"facts\": [...]} → 事实文本列表（兼容壳）。"""
         return [it["fact"] for it in self._parse_memory_fact_items(raw)]
 
+    # ── 成本计量辅助（2026-09-08 成本对账 P0）──────────────────────────────────
+    def _provider_of(self, client: Any = None) -> str:
+        """OpenAI SDK client → 厂商短名（账单主体）。缺省取主链 client。"""
+        try:
+            from src.ai.llm_cost import provider_from_base_url
+            c = client if client is not None else getattr(self, "_oa_client", None)
+            return provider_from_base_url(str(getattr(c, "base_url", "") or ""))
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _estimate_prompt_tokens(messages: Any) -> int:
+        """无 usage 时的 prompt 估算：中英混排按 0.75 token/字符（DeepSeek 分词实测
+        中文约 0.7~0.8）。只用于 ``suspected`` 记账，不进任何决策。"""
+        try:
+            n = 0
+            for m in messages or []:
+                c = m.get("content") if isinstance(m, dict) else None
+                if isinstance(c, str):
+                    n += len(c)
+                elif isinstance(c, list):
+                    n += sum(len(str(p.get("text") or "")) for p in c if isinstance(p, dict))
+            return int(n * 0.75)
+        except Exception:
+            return 0
+
+    def _record_suspected_usage(self, *, model: str, messages: Any,
+                                context: Optional[Dict[str, Any]] = None,
+                                provider: str = "", purpose: Optional[str] = None) -> None:
+        """超时后的「疑似已计费」记账（绝不抛）。"""
+        try:
+            from src.ai.llm_cost import get_llm_cost, purpose_for_reply
+            _ctx = context or {}
+            get_llm_cost().record(
+                model=str(model or self.model), prompt_tokens=self._estimate_prompt_tokens(messages),
+                completion_tokens=0, tier=str(_ctx.get("ai_tier") or "default"),
+                account_id=str(_ctx.get("account_id") or "default"),
+                purpose=purpose or purpose_for_reply(_ctx), provider=provider,
+                status="timeout", suspected=True,
+            )
+        except Exception:
+            pass
+
+    def _record_direct_usage(self, response: Any, *, purpose: str, model: str = "",
+                             client: Any = None, latency_ms: Optional[int] = None) -> None:
+        """直连 ``chat.completions.create`` 的统一记账出口（记忆抽取/摘要/短判等）。"""
+        try:
+            from src.ai.llm_cost import record_usage_from_response
+            record_usage_from_response(
+                response, model=str(model or self.model), purpose=purpose,
+                provider=self._provider_of(client), tier="tool", latency_ms=latency_ms)
+        except Exception:
+            pass
+
     async def extract_memory_bullets(self, user_msg: str, assistant_msg: str) -> List[str]:
         """兼容壳：只要事实文本（评测器 / 旧调用方）。真实抽取见 ``extract_memory_facts``。"""
         res = await self.extract_memory_facts(user_msg, assistant_msg)
@@ -4668,9 +4759,13 @@ class AIClient(LoggerMixin):
 
         try:
             if self._use_openai_compat and self._oa_client:
+                _prof = self.resolve_route("memory_extract")
+                _ex_client = (_prof.get("client") if _prof else None) or self._oa_client
+                _ex_model = str((_prof or {}).get("model") or self.model)
+                _ex_extra = (_prof or {}).get("extra_body") or None
                 async def _call():
-                    return await self._oa_client.chat.completions.create(
-                        model=self.model,
+                    _kw: Dict[str, Any] = dict(
+                        model=_ex_model,
                         messages=[
                             {"role": "system", "content": sys_inst},
                             {"role": "user", "content": usr},
@@ -4678,8 +4773,15 @@ class AIClient(LoggerMixin):
                         temperature=0.15,
                         max_tokens=480,
                     )
+                    if _ex_extra:
+                        _kw["extra_body"] = _ex_extra
+                    return await _ex_client.chat.completions.create(**_kw)
 
+                _t0 = time.time()
                 response = await asyncio.wait_for(_call(), timeout=14.0)
+                self._record_direct_usage(
+                    response, purpose="memory_extract",
+                    latency_ms=int((time.time() - _t0) * 1000))
                 raw = ""
                 if response and response.choices:
                     raw = (response.choices[0].message.content or "").strip()
@@ -4838,6 +4940,7 @@ class AIClient(LoggerMixin):
                         max_tokens=400,
                     )
                 response = await asyncio.wait_for(_call(), timeout=timeout_sec)
+                self._record_direct_usage(response, purpose="memory_extract")
                 raw = ""
                 if response and response.choices:
                     raw = (response.choices[0].message.content or "").strip()
@@ -4979,6 +5082,7 @@ class AIClient(LoggerMixin):
                         ),
                         timeout=timeout_sec,
                     )
+                self._record_direct_usage(response, purpose="memory_extract")
                 raw = ""
                 if response and response.choices:
                     raw = (response.choices[0].message.content or "").strip()
@@ -5104,6 +5208,7 @@ class AIClient(LoggerMixin):
                     ),
                     timeout=18.0,
                 )
+                self._record_direct_usage(response, purpose="tool")
                 if response and response.choices:
                     raw = (response.choices[0].message.content or "").strip()
             elif GENAI_AVAILABLE and self.client:
@@ -5342,6 +5447,7 @@ class AIClient(LoggerMixin):
                     max_tokens=150,
                     temperature=0.3,
                 )
+                self._record_direct_usage(response, purpose="tool")
                 raw = (response.choices[0].message.content or "").strip() if response and response.choices else ""
                 lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
                 first = (lines[0] or "").upper()

@@ -177,6 +177,12 @@ def _build_sync_llm() -> Optional[Callable[[str], str]]:
                 model=model, temperature=0.4, max_tokens=300,
                 messages=[{"role": "user", "content": str(prompt or "")}],
             )
+            try:
+                from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+                record_usage_from_response(r, model=model, purpose="persona", tier="persona",
+                                           provider=provider_from_base_url(base))
+            except Exception:
+                pass
             return str(r.choices[0].message.content or "")
         except Exception:
             return ""

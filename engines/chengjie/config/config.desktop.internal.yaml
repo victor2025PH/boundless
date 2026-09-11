@@ -246,10 +246,11 @@ lang_prior:
   phone_platforms:
   - whatsapp
 
-# ── 克隆语音（IndexTTS-2 @104:7865 主力；140:7852 CosyVoice 备）──────────────
+# ── 克隆语音（IndexTTS-2 @104:7865）────────────────────────────────────────
 # 2026-08-29 域A修复：智聊 TTS 主力迁 104:7865 IndexTTS-2（同 /v1/tts/clone 契约，
 # 老板拍板专用节点），117:7852 CosyVoice 已退役（EmotionTTS_Boot Disabled）——
 # 旧种子 base_urls 指 [117:7852,140:7852] 两个死端点＝装机后克隆必回落通用音。
+# 2026-09-11：140:7852 也已停（08-29 Q7），种子不再列这条死备。
 # backend 仍用 avatar_clone（不学生产切 minicpm_clone）：hosted_gateway 混合注入
 # **只接管 avatar_voice.base_urls**，外网机器全靠它把官网网关排首位；minicpm_clone
 # 无网关注入路径，出了内网就是死配置。
@@ -306,12 +307,11 @@ avatar_voice:
   prosody:
     enabled: true
     flow_temperature: 1.08
-  # 2026-08-29 域A：104:7865 IndexTTS-2 主（健康形状 {status:"ok",model_loaded}，
-  # AvatarVoiceClient._probe 已双形状兼容）；140:7852 CosyVoice 备（断电后未回，
-  # AvatarHub 属地，复活即自动生效）。
+  # 2026-08-29 域A：104:7865 IndexTTS-2（健康形状 {status:"ok",model_loaded}，
+  # AvatarVoiceClient._probe 已双形状兼容）。140:7852 CosyVoice 08-29 已停，
+  # 不要再写进种子——会连 RST、看板假红。
   base_urls:
   - http://192.168.0.104:7865
-  - http://192.168.0.140:7852
   voice_consistency: strict
   hub_fish:
     # 2026-08-29 与生产对齐关闭（老板拍板不用 176 角色库；智聊克隆统一走 104

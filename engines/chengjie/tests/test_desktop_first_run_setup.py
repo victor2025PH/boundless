@@ -48,13 +48,20 @@ class TestDesktopMinSeed:
         # companion 保留：只防顶层 companion.enabled 之类的粗暴全开；其嵌套功能键
         # （goals 基线该开 / selfie·proactive·bazi 等禁入）由
         # test_desktop_seed_visibility.py 的 PRODUCT_BASELINE / MUST_STAY_OFF 管辖。
-        for key in ("line_rpa", "messenger_rpa", "whatsapp_rpa", "contacts",
+        # contacts 自 2026-08-20 起**刻意**以「精简档」进基线（种子头部注释 + contacts 段：
+        # mode: lite 是硬闸，衰减/KPI/RPA hooks/Mobile Bridge 一律不启动），故移出清单，
+        # 改钉「开了就必须是 lite」（2026-09-11 收口：本清单自 07-15 起未随产品决策更新）。
+        for key in ("line_rpa", "messenger_rpa", "whatsapp_rpa",
                     "monetization", "companion", "protocol"):
             sub = data.get(key)
             if sub is None:
                 continue  # 未列出 = 走代码默认（关）
             assert not (isinstance(sub, dict) and sub.get("enabled")), (
                 f"最小种子不得显式开启 {key}")
+        contacts = data.get("contacts")
+        if isinstance(contacts, dict) and contacts.get("enabled"):
+            assert str(contacts.get("mode") or "").lower() == "lite", (
+                "最小种子的 contacts 只允许精简档（mode: lite）")
 
     def test_required_sections_for_validation(self):
         data = yaml.safe_load(MIN_SEED.read_text(encoding="utf-8"))

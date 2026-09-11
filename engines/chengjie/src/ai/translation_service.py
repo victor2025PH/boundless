@@ -517,7 +517,7 @@ class TranslationService:
         self._cache_put(key, result)
         if result.ok:
             self._memory_put(key, result, style, engine=res.engine)
-            self._record_cost(src_text, out, source, target)
+            self._record_cost(src_text, out, source, target, engine=str(res.engine or ""))
             self._record_license_quota(src_text, tier=tier,
                                        provider=str(res.engine or ""))
             try:   # P4 埋点：翻译字符量按语向聚合计量（窗口 flush，绝不逐条发事件）
@@ -649,19 +649,34 @@ class TranslationService:
         except Exception:
             pass
 
-    def _record_cost(self, src: str, out: str, source: str, target: str) -> None:
+    def _record_cost(self, src: str, out: str, source: str, target: str,
+                     engine: str = "") -> None:
+        """翻译成本记账（tier=translation，purpose=translate）。
+
+        2026-09-08：``ai`` 引擎走 ``generate_reply``，那里已按厂商返回的 usage 记过一笔
+        真值（purpose=translate）——这里再按字数估一笔就是**重复计费**，会让对账天天
+        对不上。所以真 AIClient 的 ai 引擎不再在此记账；只有老签名桩 / 非 AIClient
+        引擎（LAN MT、DeepL 等不经 llm_cost 的）才落这条估算行，并标 ``suspected``。
+        """
         if not self._cost_tracking:
             return
         try:
             from src.ai.llm_cost import get_llm_cost
 
-            # chat() 不返回 token 数，按字符估算（~4 字符/token），best-effort
+            ai = self.ai_client
+            real_ai = (ai is not None and hasattr(ai, "generate_reply")
+                       and hasattr(ai, "_oa_client"))
+            if real_ai and (not engine or engine == "ai"):
+                return
             pt = max(1, len(src) // 4)
             ct = max(1, len(out) // 4)
-            model = getattr(self.ai_client, "model", "") or "translate"
+            model = (str(engine) if engine and engine != "ai"
+                     else (getattr(ai, "model", "") or "translate"))
             get_llm_cost().record(
                 model=str(model), prompt_tokens=pt, completion_tokens=ct,
-                tier="translation",
+                tier="translation", purpose="translate",
+                provider=("lan" if engine and engine != "ai" else ""),
+                suspected=not bool(engine and engine != "ai"),
             )
         except Exception:
             pass

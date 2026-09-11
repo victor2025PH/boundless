@@ -440,6 +440,9 @@ web_admin:
   port: 18787
   auth_token: YOUR_ADMIN_TOKEN
   secret_key: YOUR_FLASK_SECRET_KEY
+  # 内网地址（2026-09-10 运维群降噪 P2.2）：告警渠道 base_url 那条公网链（VPS → 隧道 → 本机）
+  # 断了时，卡片链接改拼在这里，点开至少不是 502。留空＝按本机 LAN IP + port 自动推导。
+  # lan_base_url: http://192.168.0.149:18799
   # ⭐ 协议侧车专用窄令牌（2026-08-28 P1-6）。留空＝维持旧行为，侧车继续用上面的
   #   auth_token（那是**管理员级**：匹配即直通全部 api_auth 路由）。
   #   四个 Node 侧车（whatsapp-baileys / messenger-web / instagram-web / zalo-personal）
@@ -1734,7 +1737,8 @@ ai:
   #   task_routes：任务名 → 档名。命中即用该档跑「主尝试」；该档不在线/失败仍回落
   #           备用池 → 本地兜底 → canned（与主链同一条降级链，绝不因路由丢话）。
   #   已认任务名：assistant_planner（小智「替我做」规划）/ assistant_qa（小智问答）/
-  #           computer_use（电脑操控 VLM）/ chat（默认对话；不配=用 ai.model）。
+  #           computer_use（电脑操控 VLM）/ chat（默认对话；不配=用 ai.model）/
+  #           memory_extract（记忆抽取；不配且本地兜底在线 → 自动走 LAN，省云端钱）。
   # models:
   #   planner_local: { base_url: http://192.168.0.173:8001, model: chatx }
   #   qa_cheap:      { base_url: https://api.deepseek.com,   model: deepseek-flash }
@@ -2373,6 +2377,7 @@ companion:
     # album_ai:
     #   enabled: true          # 1.0.77 默认；false = 关闭上传自动识别（手动「AI 补标」仍可用）
     #   auto_on_upload: true   # 随 enabled：上传成功即排队打标
+    #   apply: auto            # Q-6：auto=建议词低权重参与匹配（默认）；confirm=只展示等一键采纳
     #   max_batch: 200         # 一次「整册补标」的条目上限
     #   # 语义召回·影子（实施90 阶段二，独立于上面的打标闸）：触发词字面 miss 时
     #   # 后台线程记「按语义（bge-m3 余弦，客户话 vs AI 描述+触发词）会召回哪张」
@@ -4765,6 +4770,27 @@ health_watchdog:
     enabled: false
     interval_min: 10                  # 真实探测间隔（分钟；watchdog tick 内节流）
     fail_strikes: 2                   # 连败几次才告警（吸收单次冷载/抖动）
+    # 2026-09-10 运维群降噪 P0.4 滞回：09-09～09-10 视觉探针 6 组「失败→10 分钟后恢复」成对刷屏
+    # ——模型冷加载超 3s、下一轮就好，形态是抖动不是故障。连败之外失败还要**持续**
+    # min_fail_min 分钟才首报；恢复要连续 recover_oks 次成功才发恢复卡。
+    min_fail_min: 15
+    recover_oks: 2
+  # 每日运维摘要（2026-09-10 运维群降噪 P1.2，默认关）：固定钟点一张卡——此刻仍未处理的
+  # 巡检项（待审草稿/客户在等/案例跟进/语音/LAN GPU，各开了多久）+ 真活探针 + 昨日花费。
+  # 数据面是提醒账本 health_remind_state.json（各巡检外发时登记一行人话），不重跑巡检；
+  # 「今天发过没」记在账本里，重启不重发。渠道需订阅别名 ops_digest。
+  daily_digest:
+    enabled: false
+    hour: 9
+    minute: 0
+  # 公网入口可达性（2026-09-10 运维群降噪 P2.2，默认开）：每 interval_min 探一次告警渠道
+  # base_url 的 /ops/glance（403 也算通；5xx / 超时算断），连 strikes 次不通 → 卡片链接改拼
+  # web_admin.lan_base_url 并在卡上说明，恢复自动换回。**不发告警**（公网链路告警归
+  # deploy/instances/prod_edge_watchdog.ps1）。没配 base_url 的部署零开销。
+  public_link_probe:
+    enabled: true
+    interval_min: 5
+    strikes: 2
   billing_interval_sec: 3600          # E3 计费异常巡检周期（秒，比健康巡检稀疏；超席位/超额→billing_alert）
   incident_retention_days: 30         # 已关闭运维事件保留天数（每日清理一次，防表膨胀；<=0 关闭清理）
   weekly_report_enabled: false        # H1 运营周报自动外发（默认关；开后每周经 ops_report 事件推送，需在「告警渠道」订阅 ops_report）
@@ -5236,6 +5262,10 @@ assistant:
     enabled: false             # 语音提问（P1）：面板 🎤 录音 → audio_pipeline ASR
                                # 转写回填输入框。浏览器需安全上下文（桌面壳已
                                # 白名单；LAN http 浏览器无麦克风，按钮自动隐藏）
+                               # 同一开关也管「语音对话」（实施95：长按球免手动回合，
+                               # 说完自动转写、答完自动念、说话即打断）
+    rate_per_min: 20           # 转写限频（每用户）：语音对话一轮=一次转写，正常
+    rate_per_day: 400          # 对话 4-6 轮/分；ASR 走自有 GPU 无外部成本
   vision:
     enabled: false             # 报障截图 VLM 摘要（P1）：落单后用 vision 后端
                                # 生成 2-3 句画面描述追进工单备注（best-effort，

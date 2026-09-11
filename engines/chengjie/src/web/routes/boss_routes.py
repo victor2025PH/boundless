@@ -128,7 +128,7 @@ def _build_payload(store: Any, config: Dict[str, Any],
         (daily or {}).get("today") or {}, mpr)
     saved_week = estimate_saved_minutes(
         (weekly or {}).get("this_week") or {}, mpr)
-    return {
+    out = {
         "ok": True,
         "generated_at": t,
         "daily": daily,
@@ -141,6 +141,32 @@ def _build_payload(store: Any, config: Dict[str, Any],
             "week_minutes": saved_week,
         },
     }
+    # 2026-09-08 成本对账 P2：老板日报加「AI 花费」段（今天/本月/昨日对账灯/余额跑道）。
+    # 账本缺席 → 段缺失，前端隐藏卡片，绝不摆假零。
+    try:
+        from src.ai.cost_ledger import get_cost_ledger
+        from src.web.routes.cost_routes import build_summary
+        cs = build_summary(get_cost_ledger(), config, days=7, now=t)
+        if cs.get("available"):
+            lr = cs.get("last_recon") or {}
+            out["cost"] = {
+                "provider": cs["provider"], "currency": cs["currency"],
+                "today": cs["today"]["cost"], "month": cs["month_total"],
+                "avg7": cs["avg7"], "balance": cs["balance"], "runway_days": cs["runway_days"],
+                "recon_light": lr.get("light") or (
+                    "✅" if lr.get("verdict") == "ok" else "❌" if lr.get("verdict") == "mismatch"
+                    else "⚪"),
+                "recon_day": lr.get("day") or "",
+                "recon_verdict": lr.get("verdict") or "",
+                "issues": [r.get("message") for r in (lr.get("reasons") or [])
+                           if r.get("level") in ("warn", "crit")][:3],
+                "top": [{"label": p["label"], "cost": p["cost"]}
+                        for p in cs["today"]["purposes"][:3]],
+                "pricing_configured": bool(cs.get("pricing_configured")),
+            }
+    except Exception:
+        logger.debug("boss: cost section skipped", exc_info=True)
+    return out
 
 
 def _export_markdown(payload: Dict[str, Any]) -> str:

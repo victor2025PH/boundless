@@ -524,6 +524,40 @@ def test_strike_state_alert_once_then_recover():
     assert st["tts"]["fails"] == 0
 
 
+def test_strike_state_hysteresis_absorbs_flap_and_delays_recovery():
+    """2026-09-10 运维群降噪 P0.4：10 分钟一轮的「败、败、好」抖动不该出一对告警。
+
+    min_fail_sec=900：连败达阈值还要持续 15min 才首报；recover_oks=2：连续两次成功才补绿窗。
+    """
+    kw = dict(fail_strikes=2, min_fail_sec=900.0, recover_oks=2)
+    # 抖动：t=0 败、t=600 败（达 2 连败但只持续 10min）、t=1200 好 → 全程无 action
+    st = {}
+    st, a = next_strike_state(st, "vision", False, now=0.0, **kw)
+    assert a == ""
+    st, a = next_strike_state(st, "vision", False, now=600.0, **kw)
+    assert a == "" and st["vision"]["fails"] == 2 and not st["vision"]["alerted"]
+    st, a = next_strike_state(st, "vision", True, now=1200.0, **kw)
+    assert a == "" and st["vision"]["fails"] == 0 and st["vision"]["first_fail"] == 0.0
+    # 真故障：连败持续到 20min → 首报，且状态里带 first_fail 供文案算时长
+    st, a = next_strike_state(st, "vision", False, now=1800.0, **kw)
+    st, a = next_strike_state(st, "vision", False, now=2400.0, **kw)
+    assert a == ""                                   # 10min：还没到 15min
+    st, a = next_strike_state(st, "vision", False, now=3000.0, **kw)
+    assert a == "alert" and st["vision"]["first_fail"] == 1800.0
+    # 恢复要连续两次成功：第一次好不发，中间再坏一次要重新数
+    st, a = next_strike_state(st, "vision", True, now=3600.0, **kw)
+    assert a == "" and st["vision"]["alerted"] is True
+    st, a = next_strike_state(st, "vision", False, now=4200.0, **kw)
+    assert a == "" and st["vision"]["alerted"] is True   # 已报过，不重复报
+    st, a = next_strike_state(st, "vision", True, now=4800.0, **kw)
+    assert a == ""
+    st, a = next_strike_state(st, "vision", True, now=5400.0, **kw)
+    assert a == "recovered" and st["vision"]["alerted"] is False
+    # 默认参数（min_fail_sec=0 / recover_oks=1）＝旧行为，老用例不受影响
+    st2, _ = next_strike_state({}, "tts", False, fail_strikes=1, now=1.0)
+    assert st2["tts"]["alerted"] is True
+
+
 def test_strike_state_domains_independent():
     st = {}
     st, _ = next_strike_state(st, "tts", False, fail_strikes=2, now=1.0)

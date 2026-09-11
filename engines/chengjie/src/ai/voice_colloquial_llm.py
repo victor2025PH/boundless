@@ -652,11 +652,18 @@ def _record_rewrite_cost(ep: Dict[str, Any], usage: Dict[str, Any],
         else:  # Ollama 原生 /api/chat 顶层字段
             pt = int((usage or {}).get("prompt_eval_count") or 0)
             ct = int((usage or {}).get("eval_count") or 0)
+        _base = str(ep.get("base_url") or "").lower()
+        _provider = ("siliconflow" if "siliconflow" in _base
+                     else "deepseek" if "deepseek.com" in _base
+                     else "dashscope" if "dashscope" in _base
+                     else "lan")
         get_llm_cost().record(
             model=str(ep.get("model") or "colloquial"),
             prompt_tokens=pt, completion_tokens=ct,
             tier="colloquial",
             latency_ms=int((time.monotonic() - t0) * 1000),
+            purpose="colloquial",
+            provider=_provider,
         )
     except Exception:
         pass

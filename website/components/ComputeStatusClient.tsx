@@ -48,6 +48,7 @@ interface Snapshot {
   hub?: { ok?: boolean; mode?: string; held?: string[]; parked?: string[]; services_up?: number; services_total?: number };
   media?: {
     asr?: { ok?: boolean; asr_loaded?: boolean; ser_loaded?: boolean };
+    tts104?: { ok?: boolean; models_loaded?: boolean };
     tts140?: { ok?: boolean; models_loaded?: boolean };
   };
 }
@@ -343,7 +344,7 @@ export default function ComputeStatusClient() {
                 <Dot on={typeof s?.media?.asr?.ok === "boolean" ? s.media.asr.ok : null} /> ASR/SER @176
               </span>
               <span className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1">
-                <Dot on={typeof s?.media?.tts140?.ok === "boolean" ? s.media.tts140.ok : null} /> 克隆TTS @140
+                <Dot on={(s?.media?.tts104?.ok ?? s?.media?.tts140?.ok) ?? null} /> 克隆TTS @104
               </span>
             </div>
           </div>

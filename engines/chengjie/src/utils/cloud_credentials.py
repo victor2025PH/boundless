@@ -300,9 +300,16 @@ def probe_chat_key(base_url: str, api_key: str, model: str,
             "Content-Type": "application/json",
         })
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            resp.read()
+            body = resp.read()
             result.update({"ok": True, "reachable": True,
                            "http_status": int(resp.status or 200)})
+        try:
+            from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+            record_usage_from_response(
+                json.loads(body.decode("utf-8", "replace")), model=model,
+                purpose="probe", tier="probe", provider=provider_from_base_url(base_url))
+        except Exception:
+            pass
     except urllib.error.HTTPError as e:
         result.update({"reachable": True, "http_status": int(e.code or 0),
                        "error": f"HTTP {e.code}"})

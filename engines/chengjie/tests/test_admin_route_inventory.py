@@ -1999,6 +1999,12 @@ _ADDITIONS_2026_09_08_QQ_PERSONAL_CONSENT = """
 """
 _BASELINE += _ADDITIONS_2026_09_08_QQ_PERSONAL_CONSENT
 
+# 实施96 DY 教程线（2026-09-08）：工作台内嵌教程步骤勾选——**代登记**（同上，已落盘未登记；归属 DY 线）。
+_ADDITIONS_2026_09_08_DY_ONBOARDING_STEPS = """
+/workspace/onboarding/{slug}/step/{n}	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_08_DY_ONBOARDING_STEPS
+
 # P-4 #254（D-P6，2026-09-08）：陪伴域首装 KB 为空——「新建条目」预填模板（按域）+
 # 「清除客服域残留」两步走（默认 dry_run 只列清单；显式 dry_run=false + ids 才删）。
 _ADDITIONS_2026_09_08_P4_KB_FACTORY_STATE = """
@@ -2098,6 +2104,27 @@ _ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS = """
 /api/goals/defaults/attach	POST
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q8_GOAL_DEFAULTS
+
+# 成本对账 P1/P2（cost_routes.py，2026-09-10 重挂）：AI 花费页 + 汇总 / 账单 CSV 导入 / 手填真值 /
+# 充值 / 立即对账。09-09 曾在线（日志「成本页已注册」）但注册调用从未入库、随工作树覆盖丢失，
+# 老板日报脚本 /api/cost/summary 404 两天无人知——本块即防再丢门禁。
+_ADDITIONS_2026_09_10_COST = """
+/workspace/cost	GET
+/api/cost/summary	GET
+/api/cost/import-bill	POST
+/api/cost/truth	POST
+/api/cost/recharge	POST
+/api/cost/recon/run	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_COST
+
+# 运维群降噪 P1.3（ops_act_routes.py，2026-09-10）：告警卡「已处理 / 静音」动作页——
+# 24h 一次性链接令牌进页，15min 动作令牌提交；写巡检进程内的提醒账本。
+_ADDITIONS_2026_09_10_OPS_ACT = """
+/ops/act	GET
+/ops/act	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_10_OPS_ACT
 
 # AI 提示词调试口（ai_inspect_routes.py，2026-09-11）：模型实际收到的 messages + usage +
 # DeepSeek 缓存命中率 + 上下文深度档——「聊天没人设」类问题不再靠日志倒推。

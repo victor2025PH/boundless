@@ -1,0 +1,289 @@
+{% extends "workspace_base.html" %}
+{% block title %}{{ (i18n or {}).get('cost_title', 'AI 花费与对账') }}{% endblock %}
+{% block head %}
+<style>
+  /* AI 花费与对账（成本对账 P2）：复用老板日报的视觉令牌，一屏四问——花了多少 / 花在哪 / 对得上吗 / 还能撑几天 */
+  .cs-wrap{height:100%;overflow-y:auto;background:var(--tk-bg);padding:18px 20px 40px;}
+  .cs-inner{max-width:1040px;margin:0 auto;}
+  .cs-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+  .cs-header h2{margin:0;font-size:20px;color:var(--tk-text);}
+  .cs-sub{font-size:12px;color:var(--tk-text-muted);margin:4px 0 16px;}
+  .cs-actions{display:flex;gap:8px;flex-wrap:wrap;}
+  .cs-btn{padding:7px 14px;border-radius:9px;border:1px solid var(--tk-border);cursor:pointer;
+    background:var(--tk-surface);color:var(--tk-text);font:inherit;font-size:13px;}
+  .cs-btn:hover{border-color:var(--tk-brand,#1e8cf2);}
+  .cs-btn.primary{background:var(--tk-brand,#1e8cf2);color:#fff;border-color:transparent;}
+  .cs-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px;}
+  .cs-kpi{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:14px;padding:16px 18px;}
+  .cs-kpi .val{font-size:30px;font-weight:800;color:var(--tk-text);font-variant-numeric:tabular-nums;}
+  .cs-kpi .val small{font-size:14px;font-weight:600;color:var(--tk-text-muted);margin-left:2px;}
+  .cs-kpi .lbl{font-size:12px;color:var(--tk-text-muted);margin-top:4px;}
+  .cs-kpi .cmp{font-size:11px;margin-top:6px;color:var(--tk-text-muted);}
+  .cs-light{font-size:26px;line-height:1;}
+  .cs-card{background:var(--tk-surface);border:1px solid var(--tk-border);border-radius:14px;
+    padding:14px 18px 16px;margin-bottom:14px;}
+  .cs-card h3{margin:0 0 10px;font-size:14px;color:var(--tk-text);display:flex;justify-content:space-between;align-items:center;}
+  .cs-grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:820px){.cs-grid2{grid-template-columns:1fr;}}
+  .cs-warn{background:color-mix(in srgb, var(--tk-amber,#f59e0b) 12%, var(--tk-surface));
+    border:1px solid color-mix(in srgb, var(--tk-amber,#f59e0b) 40%, transparent);
+    border-radius:12px;padding:10px 14px;font-size:13px;color:var(--tk-text);margin-bottom:14px;}
+  .cs-warn.crit{background:color-mix(in srgb, var(--tk-danger,#ef4444) 10%, var(--tk-surface));
+    border-color:color-mix(in srgb, var(--tk-danger,#ef4444) 40%, transparent);}
+  .cs-bars{display:flex;align-items:flex-end;gap:6px;height:110px;padding-top:6px;}
+  .cs-day{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;}
+  .cs-bar{width:100%;max-width:26px;border-radius:4px 4px 0 0;min-height:2px;
+    background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 60%, transparent);}
+  .cs-bar.truth{background:var(--tk-emerald,#34d399);}
+  .cs-day .d{font-size:10px;color:var(--tk-text-muted);white-space:nowrap;}
+  .cs-day .v{font-size:10px;color:var(--tk-text);font-variant-numeric:tabular-nums;}
+  .cs-purpose{display:flex;flex-direction:column;gap:8px;}
+  .cs-prow{display:grid;grid-template-columns:110px 1fr 70px 60px;gap:10px;align-items:center;font-size:13px;color:var(--tk-text);}
+  .cs-prow .track{height:8px;border-radius:4px;background:var(--tk-border);overflow:hidden;}
+  .cs-prow .fill{height:100%;border-radius:4px;background:var(--tk-brand,#1e8cf2);}
+  .cs-prow .fill.waste{background:var(--tk-amber,#f59e0b);}
+  .cs-prow .num{text-align:right;font-variant-numeric:tabular-nums;}
+  .cs-prow .n{text-align:right;color:var(--tk-text-muted);font-size:11px;}
+  table.cs-tbl{width:100%;border-collapse:collapse;font-size:13px;color:var(--tk-text);}
+  table.cs-tbl th,table.cs-tbl td{padding:7px 8px;border-bottom:1px solid var(--tk-border);text-align:left;white-space:nowrap;}
+  table.cs-tbl th{font-size:11px;color:var(--tk-text-muted);font-weight:600;}
+  table.cs-tbl td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  table.cs-tbl td.reason{white-space:normal;font-size:12px;color:var(--tk-text-muted);}
+  .cs-drop{border:2px dashed var(--tk-border);border-radius:12px;padding:18px;text-align:center;
+    color:var(--tk-text-muted);font-size:13px;cursor:pointer;transition:border-color .15s;}
+  .cs-drop.over{border-color:var(--tk-brand,#1e8cf2);color:var(--tk-text);}
+  .cs-drop b{color:var(--tk-text);}
+  .cs-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;align-items:end;}
+  .cs-form label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--tk-text-muted);}
+  .cs-form input{padding:7px 9px;border:1px solid var(--tk-border);border-radius:8px;background:var(--tk-bg);color:var(--tk-text);font:inherit;font-size:13px;}
+  .cs-note{font-size:11px;color:var(--tk-text-muted);margin-top:6px;line-height:1.6;}
+  .cs-empty{text-align:center;padding:34px 10px;color:var(--tk-text-muted);}
+  .cs-toast{position:fixed;right:18px;bottom:18px;background:var(--tk-text);color:var(--tk-bg);padding:10px 14px;border-radius:10px;font-size:13px;display:none;z-index:9999;max-width:420px;}
+</style>
+{% endblock %}
+{% block content %}
+<div class="cs-wrap"><div class="cs-inner">
+  <div class="cs-header">
+    <h2>{{ (i18n or {}).get('cost_title', 'AI 花费与对账') }} <span id="cs-provider" style="font-size:13px;color:var(--tk-text-muted);font-weight:500"></span></h2>
+    <div class="cs-actions">
+      <button class="cs-btn" onclick="csLoad()">{{ (i18n or {}).get('cost_refresh', '刷新') }}</button>
+      <button class="cs-btn" onclick="csRunRecon()">{{ (i18n or {}).get('cost_run_recon', '立即对账昨天') }}</button>
+    </div>
+  </div>
+  <p class="cs-sub">{{ (i18n or {}).get('cost_sub', '每天早上自动核对：内部按 token 算出来的钱，与厂商账单是否一致；不一致、花得异常、余额不够，都会推到管理员。') }}</p>
+
+  <div id="cs-loading" class="cs-empty">{{ (i18n or {}).get('cost_loading', '加载中…') }}</div>
+  <div id="cs-body" style="display:none">
+    <div id="cs-pricing-warn" class="cs-warn crit" style="display:none">
+      {{ (i18n or {}).get('cost_pricing_missing', '价格表未配置（ai.pricing）：金额会一直显示 0，对账没有意义。请在配置里按厂商账单单价填写。') }}
+    </div>
+
+    <div class="cs-hero">
+      <div class="cs-kpi">
+        <div class="val"><small>¥</small><span id="cs-k-today">0.00</span></div>
+        <div class="lbl">{{ (i18n or {}).get('cost_k_today', '今天已花（内部估算）') }}</div>
+        <div class="cmp" id="cs-c-today"></div>
+      </div>
+      <div class="cs-kpi">
+        <div class="val"><small>¥</small><span id="cs-k-month">0.00</span></div>
+        <div class="lbl">{{ (i18n or {}).get('cost_k_month', '本月累计') }}</div>
+        <div class="cmp" id="cs-c-month"></div>
+      </div>
+      <div class="cs-kpi">
+        <div class="val"><span class="cs-light" id="cs-k-recon">⚪</span></div>
+        <div class="lbl">{{ (i18n or {}).get('cost_k_recon', '昨日对账') }}</div>
+        <div class="cmp" id="cs-c-recon"></div>
+      </div>
+      <div class="cs-kpi">
+        <div class="val"><span id="cs-k-runway">—</span><small id="cs-k-runway-u">{{ (i18n or {}).get('cost_unit_days', '天') }}</small></div>
+        <div class="lbl">{{ (i18n or {}).get('cost_k_runway', '余额还能撑') }}</div>
+        <div class="cmp" id="cs-c-runway"></div>
+      </div>
+      <div class="cs-kpi">
+        <div class="val"><span id="cs-k-cache">—</span><small>%</small></div>
+        <div class="lbl">{{ (i18n or {}).get('cost_k_cache', '前缀缓存命中') }}</div>
+        <div class="cmp" id="cs-c-cache"></div>
+      </div>
+    </div>
+
+    <div id="cs-issues"></div>
+
+    <div class="cs-grid2">
+      <div class="cs-card">
+        <h3>{{ (i18n or {}).get('cost_trend_title', '近 14 天每日花费') }}
+          <span style="font-size:11px;color:var(--tk-text-muted);font-weight:500">
+            <span style="display:inline-block;width:9px;height:9px;border-radius:3px;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 60%, transparent);vertical-align:-1px"></span> {{ (i18n or {}).get('cost_legend_internal', '内部估算') }}
+            &nbsp;<span style="display:inline-block;width:9px;height:9px;border-radius:3px;background:var(--tk-emerald,#34d399);vertical-align:-1px"></span> {{ (i18n or {}).get('cost_legend_truth', '账单真值') }}
+          </span></h3>
+        <div class="cs-bars" id="cs-bars"></div>
+      </div>
+      <div class="cs-card">
+        <h3>{{ (i18n or {}).get('cost_purpose_title', '今天的钱花在哪') }}</h3>
+        <div class="cs-purpose" id="cs-purposes"></div>
+        <div class="cs-note">{{ (i18n or {}).get('cost_purpose_note', '橙色是「不直接服务客户」的用途（演练 / 记忆抽取 / 评测 / 知识库辅助）——预算超线时会先停这些。') }}</div>
+      </div>
+    </div>
+
+    <div class="cs-grid2">
+      <div class="cs-card">
+        <h3>{{ (i18n or {}).get('cost_import_title', '导入厂商账单（真值）') }}</h3>
+        <div class="cs-drop" id="cs-drop" onclick="document.getElementById('cs-file').click()">
+          <b>{{ (i18n or {}).get('cost_drop_hint', '把硅基「费用明细」导出的 CSV 拖到这里，或点击选择文件') }}</b><br>
+          {{ (i18n or {}).get('cost_drop_sub', '导入即按天写入真值并立刻对账；当天的行会跳过（账单还没走完）。') }}
+        </div>
+        <input type="file" id="cs-file" accept=".csv,.tsv,.txt" style="display:none" onchange="csUpload(this.files[0])">
+        <div class="cs-note">{{ (i18n or {}).get('cost_import_note', '硅基控制台 → 费用账单 → 费用明细 → 导出。没有账单 API（官方 2026-08-14 已下线），这一步只能人工。连续 3 天没导入会提醒。') }}</div>
+      </div>
+      <div class="cs-card">
+        <h3>{{ (i18n or {}).get('cost_manual_title', '手填当日金额 / 余额 / 充值') }}</h3>
+        <div class="cs-form">
+          <label>{{ (i18n or {}).get('cost_f_day', '日期') }}<input type="date" id="cs-f-day"></label>
+          <label>{{ (i18n or {}).get('cost_f_amount', '当日账单金额 ¥') }}<input type="number" step="0.01" id="cs-f-amount" placeholder="1.25"></label>
+          <label>{{ (i18n or {}).get('cost_f_balance', '当前余额 ¥') }}<input type="number" step="0.01" id="cs-f-balance" placeholder="96.50"></label>
+          <button class="cs-btn primary" onclick="csSaveTruth()">{{ (i18n or {}).get('cost_f_save', '保存并对账') }}</button>
+        </div>
+        <div class="cs-form" style="margin-top:10px">
+          <label>{{ (i18n or {}).get('cost_f_recharge', '充值金额 ¥') }}<input type="number" step="1" id="cs-f-recharge" placeholder="300"></label>
+          <label>{{ (i18n or {}).get('cost_f_recharge_day', '充值日期') }}<input type="date" id="cs-f-recharge-day"></label>
+          <button class="cs-btn" onclick="csSaveRecharge()">{{ (i18n or {}).get('cost_f_recharge_save', '记一笔充值') }}</button>
+        </div>
+        <div class="cs-note">{{ (i18n or {}).get('cost_manual_note', '余额只要填一次，之后每天按消耗往下扣；有充值流水时也能推算。金额以厂商账单页为准。') }}</div>
+      </div>
+    </div>
+
+    <div class="cs-card">
+      <h3>{{ (i18n or {}).get('cost_recon_title', '对账记录') }} <span id="cs-recon-at" style="font-size:11px;color:var(--tk-text-muted);font-weight:500"></span></h3>
+      <table class="cs-tbl"><thead><tr>
+        <th>{{ (i18n or {}).get('cost_th_day', '日期') }}</th><th></th>
+        <th>{{ (i18n or {}).get('cost_th_internal', '内部估算') }}</th>
+        <th>{{ (i18n or {}).get('cost_th_truth', '账单') }}</th>
+        <th>{{ (i18n or {}).get('cost_th_diff', '差额') }}</th>
+        <th>{{ (i18n or {}).get('cost_th_reason', '说明') }}</th>
+      </tr></thead><tbody id="cs-recon-rows"></tbody></table>
+      <div id="cs-recon-empty" class="cs-empty" style="display:none">{{ (i18n or {}).get('cost_recon_empty', '还没有对账记录：明早自动跑第一次，或点右上「立即对账昨天」。') }}</div>
+    </div>
+  </div>
+</div></div>
+<div class="cs-toast" id="cs-toast"></div>
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const fmt = (v) => (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(2);
+  const WASTE = new Set(['drill','memory_extract','eval','kb','persona','tool','unknown']);
+  let CUR = null;
+  function toast(msg, ms){ const t = $('cs-toast'); t.textContent = msg; t.style.display='block';
+    clearTimeout(t._h); t._h = setTimeout(()=>{ t.style.display='none'; }, ms || 3200); }
+  async function api(url, opt){
+    const init = Object.assign({credentials:'same-origin'}, opt||{});
+    const doFetch = window.apiFetch || window.fetch;
+    const r = await doFetch(url, init, {timeoutMs: 60000});
+    let j = null; try { j = await r.json(); } catch(e){}
+    if(!r.ok){ throw new Error((j && (j.detail || j.error)) || ('HTTP ' + r.status)); } return j; }
+  function esc(s){ return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function render(d){
+    CUR = d;
+    $('cs-loading').style.display='none'; $('cs-body').style.display='block';
+    $('cs-provider').textContent = d.provider ? ('· ' + d.provider) : '';
+    $('cs-pricing-warn').style.display = d.pricing_configured ? 'none' : 'block';
+    $('cs-k-today').textContent = fmt(d.today.cost);
+    $('cs-c-today').textContent = `${d.today.calls} 次调用 · 昨天 ¥${fmt(d.yesterday.cost)}` + (d.today.suspected_cost > 0 ? ` · 含超时估算 ¥${fmt(d.today.suspected_cost)}` : '');
+    $('cs-k-month').textContent = fmt(d.month_total);
+    $('cs-c-month').textContent = d.budget.monthly > 0 ? `月预算 ¥${fmt(d.budget.monthly)} · 已用 ${Math.round(d.month_total / d.budget.monthly * 100)}%` : `日均 ¥${fmt(d.avg7)}（近 7 天）`;
+    const lr = d.last_recon;
+    $('cs-k-recon').textContent = lr ? (lr.verdict === 'ok' ? '✅' : lr.verdict === 'mismatch' ? '❌' : '⚪') : '⚪';
+    $('cs-c-recon').textContent = lr ? (lr.truth === null || lr.truth === undefined
+        ? `${lr.day} 没有账单真值`
+        : lr.verdict === 'no_data' ? `${lr.day} 账本无记录（账单 ¥${fmt(lr.truth)}，装载前消耗）`
+        : `${lr.day} 内部 ¥${fmt(lr.internal)} vs 账单 ¥${fmt(lr.truth)}（差 ${Math.abs(lr.diff_pct||0).toFixed(0)}%）`)
+      : '尚未对账';
+    $('cs-k-runway').textContent = d.runway_days === null || d.runway_days === undefined ? '—' : d.runway_days;
+    $('cs-c-runway').textContent = d.balance === null || d.balance === undefined
+      ? '还不知道余额：右侧填一次余额或记一笔充值'
+      : `余额约 ¥${fmt(d.balance)}（${d.balance_basis === 'manual' ? '按 ' + d.balance_as_of + ' 填写值推算' : '按充值流水推算'}）`;
+    const pc = d.prompt_cache || {};
+    if (pc.calls > 0) {
+      $('cs-k-cache').textContent = Math.round((pc.hit_ratio || 0) * 100);
+      $('cs-c-cache').textContent = `${pc.calls} 次 · 命中 ${pc.cache_hit_tokens || 0} token` +
+        (pc.saved_cny > 0 ? ` · 约省 ¥${fmt(pc.saved_cny)}` : '') +
+        '（本进程，重启清零；按 DeepSeek 峰时差价估算）';
+    } else {
+      $('cs-k-cache').textContent = '—';
+      $('cs-c-cache').textContent = '本进程还没有主链调用；出稿后这里会显示命中率';
+    }
+
+    // 需要处理
+    const issues = (lr && lr.reasons || []).filter(r => r.level !== 'info');
+    $('cs-issues').innerHTML = issues.length ? issues.map(r =>
+      `<div class="cs-warn ${r.level === 'crit' ? 'crit' : ''}">${r.level === 'crit' ? '🔴' : '🟡'} ${esc(r.message)}</div>`).join('') : '';
+
+    // 趋势
+    const truthByDay = {}; (d.truth_rows||[]).forEach(t => { truthByDay[t.day] = t.amount; });
+    const series = d.series || []; const mx = Math.max(0.01, ...series.map(s => Math.max(s.cost, truthByDay[s.day] || 0)));
+    $('cs-bars').innerHTML = series.map(s => {
+      const h = Math.max(2, Math.round(s.cost / mx * 84)); const tv = truthByDay[s.day];
+      const th = tv !== undefined ? Math.max(2, Math.round(tv / mx * 84)) : 0;
+      return `<div class="cs-day" title="${s.day} 内部 ¥${fmt(s.cost)}${tv !== undefined ? ' / 账单 ¥' + fmt(tv) : ''}">
+        <div class="v">${s.cost >= 0.005 ? fmt(s.cost) : ''}</div>
+        <div style="display:flex;gap:2px;align-items:flex-end;height:84px;width:100%;justify-content:center">
+          <div class="cs-bar" style="height:${h}px"></div>${tv !== undefined ? `<div class="cs-bar truth" style="height:${th}px"></div>` : ''}
+        </div><div class="d">${s.day.slice(5)}</div></div>`; }).join('');
+
+    // 去向
+    const ps = d.today.purposes || []; const total = Math.max(0.0001, ps.reduce((a, p) => a + p.cost, 0));
+    $('cs-purposes').innerHTML = ps.length ? ps.map(p => `<div class="cs-prow">
+        <div>${esc(p.label)}</div>
+        <div class="track"><div class="fill ${WASTE.has(p.purpose) ? 'waste' : ''}" style="width:${Math.max(1, Math.round(p.cost / total * 100))}%"></div></div>
+        <div class="num">¥${fmt(p.cost)}</div><div class="n">${p.calls} 次</div></div>`).join('')
+      : '<div class="cs-empty">今天还没有云端调用</div>';
+
+    // 对账记录
+    const rows = d.recon || [];
+    $('cs-recon-at').textContent = `每天 ${d.budget.recon_at} 自动对账昨日 · 差额 >${d.budget.mismatch_pct}% 且 >¥${fmt(d.budget.mismatch_abs)} 判不一致`;
+    $('cs-recon-empty').style.display = rows.length ? 'none' : 'block';
+    $('cs-recon-rows').innerHTML = rows.map(r => {
+      const reasons = (r.reasons || []).filter(x => x.level !== 'info').map(x => esc(x.message)).join('<br>');
+      const diff = (r.truth === null || r.truth === undefined) ? '—' : `${r.internal - r.truth >= 0 ? '+' : '−'}¥${fmt(Math.abs(r.internal - r.truth))}（${Math.abs(r.diff_pct||0).toFixed(0)}%）`;
+      return `<tr><td>${r.day}</td><td>${r.verdict === 'ok' ? '✅' : r.verdict === 'mismatch' ? '❌' : '⚪'}</td>
+        <td class="num">¥${fmt(r.internal)}</td><td class="num">${r.truth === null || r.truth === undefined ? '—' : '¥' + fmt(r.truth)}</td>
+        <td class="num">${diff}</td><td class="reason">${reasons || (r.verdict === 'no_truth' ? '没有账单真值' : r.verdict === 'no_data' ? '账本无当日记录（装载前消耗）' : '一致')}</td></tr>`; }).join('');
+    if(!$('cs-f-day').value){ const y = new Date(Date.now() - 86400000); $('cs-f-day').value = y.toISOString().slice(0,10); }
+  }
+
+  window.csLoad = async function(){
+    try { const d = await api('/api/cost/summary?days=14'); if(!d.available){ $('cs-loading').textContent = '成本账本不可用'; return; } render(d); }
+    catch(e){ $('cs-loading').textContent = '加载失败：' + e.message; }
+  };
+  window.csRunRecon = async function(){
+    try { const r = await api('/api/cost/recon/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+      const s = (r.results||[]).map(x => x.summary).join('\n') || '昨天没有计费厂商的用量';
+      toast(s, 6000); csLoad(); } catch(e){ toast('对账失败：' + e.message); }
+  };
+  window.csUpload = async function(file){
+    if(!file) return;
+    const fd = new FormData(); fd.append('file', file); if(CUR && CUR.provider) fd.append('provider', CUR.provider);
+    try { const r = await api('/api/cost/import-bill', {method:'POST', body: fd});
+      toast(`已导入 ${r.rows} 行，写入 ${r.days_written.length} 天真值` + (r.skipped_today.length ? `（今天的 ${r.skipped_today.length} 天跳过）` : ''), 6000); csLoad(); }
+    catch(e){ toast('导入失败：' + e.message, 6000); }
+    $('cs-file').value = '';
+  };
+  window.csSaveTruth = async function(){
+    const body = {day: $('cs-f-day').value, amount: $('cs-f-amount').value, balance: $('cs-f-balance').value, provider: CUR && CUR.provider};
+    try { const r = await api('/api/cost/truth', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      toast((r.recon && r.recon[0] && r.recon[0].summary) || '已保存', 6000); $('cs-f-amount').value=''; $('cs-f-balance').value=''; csLoad(); }
+    catch(e){ toast('保存失败：' + e.message); }
+  };
+  window.csSaveRecharge = async function(){
+    const body = {amount: $('cs-f-recharge').value, day: $('cs-f-recharge-day').value, provider: CUR && CUR.provider};
+    try { const r = await api('/api/cost/recharge', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      toast(`已记充值 ¥${fmt(r.amount)}，余额推算 ¥${fmt(r.balance && r.balance.balance)}`); $('cs-f-recharge').value=''; csLoad(); }
+    catch(e){ toast('保存失败：' + e.message); }
+  };
+  const drop = $('cs-drop');
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if(f) csUpload(f); });
+  csLoad();
+})();
+</script>
+{% endblock %}

@@ -13,7 +13,7 @@
 - 智聊引擎：/login 200 探活 + ai-runtime-status（降级快照）+ cloud-credentials 的
   usage 段（出话分布），带 web_admin Bearer；只透传白名单字段，绝不外送密钥。
 - LAN GPU 四机 ollama /api/ps 显存水位与驻留模型；176 ComfyUI system_stats；
-  176:9000 hub 泊车/挂起名单；176:8765 ASR/SER 与 140:7852 克隆 TTS 健康。
+  176:9000 hub 泊车/挂起名单；176:8765 ASR/SER 与 104:7865 克隆 TTS 健康。
 
 用法：python tools/compute_status_report.py [--once]（--once 推一发即退，验证用）。
 """
@@ -159,13 +159,23 @@ def collect_hub() -> Dict[str, Any]:
 
 def collect_media() -> Dict[str, Any]:
     asr = _get("http://192.168.0.176:8765/health", timeout=3.0)
-    tts = _get("http://192.168.0.140:7852/health", timeout=3.0)
+    # 2026-09-11：140:7852 CosyVoice 已停（RST）。克隆探针跟现役 104:7865 IndexTTS-2。
+    # 健康形状两家不同：7852={ok,models_loaded}；7865={status:"ok",model_loaded}。
+    tts = _get("http://192.168.0.104:7865/health", timeout=3.0)
+    tts_ok = bool(tts) and (
+        tts.get("ok") is True
+        or str(tts.get("status") or "").lower() in ("ok", "healthy", "ready")
+    )
+    tts_loaded = bool(tts) and (
+        tts.get("models_loaded") is True or tts.get("model_loaded") is True
+    )
+    tts_row = {"ok": tts_ok, "models_loaded": tts_loaded}
     return {
         "asr": {"ok": bool(asr and asr.get("status") == "ok"),
                 "asr_loaded": bool(asr and asr.get("asr_loaded")),
                 "ser_loaded": bool(asr and asr.get("ser_loaded"))},
-        "tts140": {"ok": bool(tts and tts.get("ok")),
-                   "models_loaded": bool(tts and tts.get("models_loaded"))},
+        "tts104": tts_row,
+        "tts140": tts_row,  # 旧看板键兼容，语义已是 104
     }
 
 
@@ -266,9 +276,9 @@ def collect_functions(overlay: Dict[str, Any], translation_usage: Optional[Dict[
     fns.append({"name": "语音识别 ASR", "backend": "局域网 .176 🖥️", "cloud": False,
                 "detail": "whisper large-v3-turbo",
                 "note": "硅基仅 SenseVoice（中粤英日韩）——泰/越/印尼等客户语音会听不懂，云端无同级多语模型，硬阻塞"})
-    fns.append({"name": "声音克隆 TTS", "backend": "局域网 .140 🖥️", "cloud": False,
-                "detail": "CosyVoice 混合保真",
-                "note": "硅基 CosyVoice2 支持上传参考音克隆，但接口契约不同——需适配器 + 音色保真 A/B 验证 + 人设声纹上云决策（P1 排期）"})
+    fns.append({"name": "声音克隆 TTS", "backend": "局域网 .104 🖥️", "cloud": False,
+                "detail": "IndexTTS-2（104:7865）",
+                "note": "140:7852 CosyVoice 已于 08-29 停；回落/探针勿再打 140"})
     fns.append({"name": "生图（人设自拍）", "backend": "局域网 .176 🖥️", "cloud": False,
                 "detail": "ComfyUI + PuLID 锁脸",
                 "note": "云端无 PuLID 同款人脸一致性——切云=每张自拍换一张脸、人设穿帮；相册存货优先不受影响"})

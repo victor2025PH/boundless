@@ -27,7 +27,7 @@ from fastapi import BackgroundTasks, File, Form, HTTPException, Request, UploadF
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from src.utils.kb_store import KB_CATEGORIES, seed_kb_format_examples
-from src.web.kb_ai_helpers import ai_translate_entry, auto_fill_entry
+from src.web.kb_ai_helpers import _record_kb_usage, ai_translate_entry, auto_fill_entry
 from src.web.web_i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -1480,6 +1480,7 @@ def register_kb_routes(app, ctx):
                           "response_format": {"type": "json_object"}},
                 )
             result = resp.json()
+            _record_kb_usage(result, model=model, base_url=base_url)
             raw    = result["choices"][0]["message"]["content"]
         except Exception as _e:
             return {"ok": False, "error": tr(request, "err.kb.ai_call_failed", err=_e)}
@@ -1612,6 +1613,7 @@ def register_kb_routes(app, ctx):
                           "max_tokens": 500, "temperature": 0.7},
                 )
                 result = resp.json()
+                _record_kb_usage(result, model=model, base_url=base_url)
                 reply = result["choices"][0]["message"]["content"]
                 return {"reply": reply.strip(), "ok": True}
         except Exception as _e:

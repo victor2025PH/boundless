@@ -20,6 +20,17 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 
+def _record_kb_usage(data: Any, *, model: str, base_url: str) -> None:
+    """知识库 AI 辅助（翻译/自动填充）成本记账，purpose=kb。绝不抛。"""
+    try:
+        from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+        record_usage_from_response(
+            data, model=str(model), purpose="kb", tier="kb",
+            provider=provider_from_base_url(base_url))
+    except Exception:
+        pass
+
+
 async def ai_translate_entry(config_manager: Any, entry: Dict[str, Any], langs: List[str]) -> Dict[str, Any]:
     """
     一次 API 调用同时翻译到所有目标语言（批量 4 语言 1 次调用优化）。
@@ -77,6 +88,7 @@ async def ai_translate_entry(config_manager: Any, entry: Dict[str, Any], langs: 
                 },
             )
             data = resp.json()
+            _record_kb_usage(data, model=model, base_url=base_url)
             content = data["choices"][0]["message"]["content"]
             match = _re.search(r"\{[\s\S]*\}", content)
             if match:
@@ -131,7 +143,9 @@ async def auto_fill_entry(config_manager: Any, kb_store: Any, entry_id: str,
                       "max_tokens": 800, "temperature": 0.6,
                       "response_format": {"type": "json_object"}},
             )
-        raw = resp.json()["choices"][0]["message"]["content"]
+        _data = resp.json()
+        _record_kb_usage(_data, model=model, base_url=base_url)
+        raw = _data["choices"][0]["message"]["content"]
         generated = json.loads(raw)
     except json.JSONDecodeError:
         m = _re.search(r'\{[\s\S]+\}', raw)

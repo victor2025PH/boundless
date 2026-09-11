@@ -5532,6 +5532,14 @@ class SkillManager(LoggerMixin):
                 user_id,
             )
             return
+        skip_why = self._episodic_extract_skip_reason(
+            user_id, chat_id, ex, source=source)
+        if skip_why:
+            self.logger.info(
+                "[episodic] schedule skip: %s user=%s%s", skip_why, user_id,
+                (f" source={source}" if source else ""),
+            )
+            return
         # source 只在非入站路径（O-2 B manual_out）带上，入站行文案与历史逐字一致
         self.logger.info(
             "[episodic] schedule run user=%s intent=%s msg_len=%d%s",
@@ -5553,6 +5561,49 @@ class SkillManager(LoggerMixin):
             )
 
     _MANUAL_OUT_MARK_KEY = "_episodic_manual_out_mark"
+
+    @staticmethod
+    def _episodic_extract_skip_reason(
+        user_id: Any, chat_id: Any, ex: Dict[str, Any], *, source: str = "",
+    ) -> str:
+        """记忆抽取的**成本门禁**（2026-09-08 成本对账 P0）→ 跳过原因，空串＝放行。
+
+        0908 账单实锤：LLM 抽取每天 40+ 次里绝大多数 ``llm_count=0``，且相当一部分
+        打在根本不可能有「客户事实」的会话上——夜跑演练假号（990001xxx，还会把演练
+        台词写进记忆库）、运维/报障群里机器人自己发的报告（manual_out 把群里多人的
+        话拼成一段送去抽「客户」事实）。三条规则，都可配、默认从紧：
+
+        - ``memory.extract.skip_drill``（默认 true）：演练号段一律不抽；
+        - ``memory.extract.skip_chat_ids``（默认空）：显式点名的会话/群 id 不抽；
+        - ``memory.extract.manual_out_groups``（默认 false）：坐席出站触发的抽取
+          只对私聊做，群（负数 id）不做——群里的「客户」不是一个人。
+        入站路径的群消息**不受**第三条影响（user_id 是说话的那个人，语义成立）。
+        """
+        try:
+            uid = str(user_id or "").strip()
+            cid = str(chat_id or "").strip()
+            if ex.get("skip_drill", True):
+                from src.utils.case_center import is_drill_uid
+                if is_drill_uid(uid) or is_drill_uid(cid):
+                    return "drill uid"
+            skip_ids = ex.get("skip_chat_ids") or []
+            if isinstance(skip_ids, (list, tuple, set)):
+                wanted = {str(x).strip() for x in skip_ids if str(x).strip()}
+                for cand in (uid, cid, uid.rsplit(":", 1)[-1], cid.rsplit(":", 1)[-1]):
+                    if cand and cand in wanted:
+                        return "chat id in memory.extract.skip_chat_ids"
+            if source == "manual_out" and not ex.get("manual_out_groups", False):
+                tail = uid.rsplit(":", 1)[-1]
+                if tail.startswith("-") and tail[1:].isdigit():
+                    return "manual_out on group chat"
+            # 预算闸（P1）：当日云端消耗已超 ai.cost_guard.daily_budget_cny → 记忆抽取
+            # 这类非关键用途先停，客户回复不受影响。启发式抽取（免费）仍在 async 侧照跑。
+            from src.ai.cost_recon import allow_purpose
+            if not allow_purpose("memory_extract"):
+                return "daily budget exceeded (ai.cost_guard)"
+        except Exception:
+            return ""
+        return ""
 
     def schedule_manual_outbound_extract(
         self, *, platform: str, account_id: str, chat_key: str, operator_text: str,

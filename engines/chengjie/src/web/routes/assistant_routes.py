@@ -262,6 +262,30 @@ def build_docless_prompt(q: str, ctx_block: str, hist_block: str,
     )
 
 
+def _record_assistant_usage(model: str, base: str, prompt: str, usage: Any,
+                            out_chars: int, latency_ms: int) -> None:
+    """小智直连流式的成本记账（2026-09-08）。拿到 usage 就记真值；没拿到（厂商不回
+    include_usage / 中途断流）按字数估算记 ``suspected``——宁可标「估」也不能是 0。"""
+    try:
+        from src.ai.llm_cost import (
+            PURPOSE_ASSISTANT, get_llm_cost, provider_from_base_url)
+        pt = ct = 0
+        suspected = True
+        if usage is not None:
+            pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+            ct = int(getattr(usage, "completion_tokens", 0) or 0)
+            suspected = not (pt or ct)
+        if suspected:
+            pt = int(len(prompt or "") * 0.75)
+            ct = int(out_chars * 0.75)
+        get_llm_cost().record(
+            model=str(model), prompt_tokens=pt, completion_tokens=ct, tier="assistant",
+            purpose=PURPOSE_ASSISTANT, provider=provider_from_base_url(base),
+            status="ok", suspected=suspected, latency_ms=latency_ms)
+    except Exception:
+        logger.debug("assistant usage record skipped", exc_info=True)
+
+
 def _detect_report_hint(q: str) -> bool:
     ql = str(q or "").lower()
     return any(k in ql for k in (
@@ -398,11 +422,18 @@ def register_assistant_routes(app, ctx) -> None:
             "temperature": 0.3,
             "max_tokens": max_tokens,
             "stream": True,
+            # 2026-09-08 成本对账：流式默认不回 usage，这条链此前在成本看板上是 0。
+            # OpenAI 兼容口（硅基/DeepSeek/vLLM）都认 include_usage：最后一个 chunk
+            # 带 usage、choices 为空。
+            "stream_options": {"include_usage": True},
         }
         extra = assistant_llm_extra_body(
             base, model, reasoning=bool(llm_cfg.get("reasoning")))
         if extra:
             create_kw["extra_body"] = extra
+        _t0 = time.time()
+        _usage = None
+        _chars = 0
         try:
             stream = await client.chat.completions.create(**create_kw)
             yielded = False
@@ -412,12 +443,17 @@ def register_assistant_routes(app, ctx) -> None:
                     piece = chunk.choices[0].delta.content or ""
                 except Exception:
                     piece = ""
+                if getattr(chunk, "usage", None) is not None:
+                    _usage = chunk.usage
                 if piece:
                     yielded = True
+                    _chars += len(piece)
                     yield piece
             if not yielded:
                 raise RuntimeError("assistant llm empty stream")
         finally:
+            _record_assistant_usage(model, base, prompt, _usage, _chars,
+                                    int((time.time() - _t0) * 1000))
             close = getattr(client, "close", None)
             if close is not None:
                 try:
@@ -1225,8 +1261,20 @@ def register_assistant_routes(app, ctx) -> None:
         from src.assistant.rate_limit import get_rate_limiter
         from src.assistant.stats import get_assistant_stats
 
+        # 限频按手动录音口径设的 6/分 · 120/天，免手动语音对话（实施95 P1：说完
+        # 自动转写、答完自动听）一轮就是一次转写，正常对话 4-6 轮/分即撞墙。
+        # 转写走自有 GPU 无外部成本，放宽到 20/分 · 400/天，且可配
+        # （assistant.voice.rate_per_min / rate_per_day）。
+        def _lim(key: str, default: int) -> int:
+            try:
+                v = int(vcfg.get(key, default))
+            except (TypeError, ValueError):
+                v = default
+            return max(1, v)
+
         verdict = get_rate_limiter().check_and_record(
-            f"v:{uid}", per_min=6, per_day=120
+            f"v:{uid}", per_min=_lim("rate_per_min", 20),
+            per_day=_lim("rate_per_day", 400)
         )
         if not verdict.allowed:
             get_assistant_stats().record_rate_limited()

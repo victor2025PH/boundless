@@ -1588,15 +1588,6 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         }
         if gap_probe.get("state") not in (None, "", "idle"):
             resp["gap_probe"] = gap_probe
-        # Q-14 #262：会话头灰标「AI 本轮未生成（超时 · 23:41）」——有灰标才带字段
-        try:
-            from src.inbox.ai_fail_marker import get as _aif_get
-            _aif_store = getattr(request.app.state, "inbox_store", None)
-            _aif = _aif_get(_aif_store, cid) if _aif_store is not None else None
-            if _aif:
-                resp["ai_last_fail"] = _aif
-        except Exception:
-            pass
         return resp
 
     @app.get("/api/unified-inbox/conv-probe")

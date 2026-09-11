@@ -4068,6 +4068,22 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_boss.getLogger("admin").warning("boss 路由注册失败", exc_info=True)
 
+    # ── AI 花费与对账（成本对账 P1/P2）：/workspace/cost + /api/cost/*（cost_routes.py）──
+    # 2026-09-10 重挂：09-09 07:31～17:13 四次启动日志均有「成本页已注册」，17:58 起消失
+    # ——注册调用在工作树覆盖中丢失且从未入库，老板日报脚本 /api/cost/summary 404 崩、
+    # 通报里的成本页链接是死链。独立 try 块（同 boss_routes 例），清单门禁见
+    # tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_10_COST`。
+    try:
+        from src.web.routes.cost_routes import register_cost_routes
+
+        register_cost_routes(
+            app, page_auth=_unified_inbox_page_auth, api_auth=_api_auth,
+            templates=templates, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cost
+
+        _log_cost.getLogger("admin").warning("成本页路由注册失败", exc_info=True)
+
     # AI 提示词调试口（2026-09-11）：模型实际收到的 messages / usage / 缓存命中率 / 深度档。
     # 基线登记：tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_11_AI_INSPECT`。
     try:
@@ -4127,6 +4143,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_og
 
         _log_og.getLogger("admin").warning("ops_glance 路由注册失败", exc_info=True)
+
+    # ── 运维群降噪 P1.3（2026-09-10）：告警卡「已处理 / 静音」动作页 /ops/act（同款令牌，
+    # 24h 链接 + 15min 动作表单两步确认；写巡检进程内的提醒账本）──
+    try:
+        from src.web.routes.ops_act_routes import register_ops_act_routes
+
+        register_ops_act_routes(app, templates=templates, page_auth=_unified_inbox_page_auth)
+    except Exception:
+        import logging as _log_oa
+
+        _log_oa.getLogger("admin").warning("ops_act 路由注册失败", exc_info=True)
 
     # ── P29: 实时队列看板页面 ──────────────────────────────────────
     @app.get("/workspace/queue")

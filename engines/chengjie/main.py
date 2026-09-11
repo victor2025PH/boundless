@@ -234,6 +234,13 @@ class AIChatAssistant:
                 start_refresh_daemon(self.config)
             except Exception as _hg:
                 self.logger.debug("托管网关跳过: %s", _hg)
+            # 2026-09-09：成本账本必须在 AIClient 之前挂好——启动探针（Say hi）在 AIClient
+            # 初始化里就打出去了，sink 后挂那一笔就永远进不了账（0909 首次装载实锤）。
+            try:
+                from src.ai.cost_ledger import attach_ledger_sink
+                attach_ledger_sink()
+            except Exception:
+                self.logger.debug("成本账本预挂载跳过", exc_info=True)
             self.ai_client = AIClient(self.config)
             # defer_probe（P3-1 2026-08-12）：启动连接探针后台化——boot phases 实测
             # 它是 init 段最大单项（4.3s），而本处从不消费 initialize() 的返回值；
@@ -298,6 +305,20 @@ class AIChatAssistant:
                             "enforce=耗尽降级免费路径" if _tl_enforce else "观测记账")
                 except Exception:
                     self.logger.debug("Token 账本装配跳过", exc_info=True)
+                # 2026-09-08 成本对账 P0：LLM 真实用量落盘（cost_ledger.db）。
+                # 与 Token 账本正交——那边是对客配额单位，这边是对厂商账单的真金白银。
+                # 常开：没有它，重启即丢账、看板恒 0（0908 前的状态）。
+                try:
+                    from src.ai.cost_ledger import attach_ledger_sink, get_cost_ledger
+                    if attach_ledger_sink():
+                        _ai_cfg = (self.config.config or {}).get("ai", {}) or {}
+                        self.logger.info(
+                            "💴 成本账本：已落盘 %s（价格表 %s）",
+                            getattr(get_cost_ledger(), "path", "?"),
+                            "已配置" if _ai_cfg.get("pricing") else
+                            "**未配置** ai.pricing → 金额恒 0，对账无意义")
+                except Exception:
+                    self.logger.debug("成本账本装配跳过", exc_info=True)
                 if _lic.state == "active":
                     _exp = ("永久" if not _lic.expires_at
                             else f"剩 {_lic.days_left} 天")
