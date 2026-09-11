@@ -1920,9 +1920,15 @@ class MessengerWebWorker:
                 note_send_auth_failure("messenger", self.account_id, _detail)
             except Exception:
                 logger.debug("[messenger] 发送败因会话登记失败", exc_info=True)
+            # Q-24 B（#298）：七码 ``sidecar_code`` 一路透传到发送路由 → 工作台红字三段式。
+            # error_kind 优先取七码（老边车无 code 时由 reason_code 归一），旧消费口不变。
             return {"delivered": False,
                     "error": f"messenger send failed: {_detail}",
-                    "error_kind": str(_f["reason_code"]),
+                    "error_kind": str(_f.get("code") or _f["reason_code"]),
+                    "sidecar_code": str(_f.get("code") or ""),
+                    "sidecar_reason": str(_f["reason_code"]),
+                    "sidecar_detail": str(_f.get("sidecar_detail") or ""),
+                    "sidecar_retries": int(_f.get("retries") or 0),
                     "retry_after_ms": int(_f["retry_after_ms"])}
         res = res or {}
         # 双重口径：ok 或 delivered 任一显式为 False，或 sent 显式为 False，都判未送达。
@@ -1935,9 +1941,20 @@ class MessengerWebWorker:
             logger.info(
                 "[messenger] 发送已确认（composer 清空）但回读未锚定气泡 "
                 "account=%s chat=%s（按已送达处理）", self.account_id, chat_key)
-        return {"delivered": bool(delivered),
-                "message_id": str(res.get("message_id") or ""),
-                "error": str(res.get("error") or "")}
+        out: Dict[str, Any] = {"delivered": bool(delivered),
+                               "message_id": str(res.get("message_id") or ""),
+                               "error": str(res.get("error") or "")}
+        if not delivered:
+            # 2xx 体里显式 ok:false（老边车路径）也按七码归一，别让它掉回无码「发送失败」
+            from src.integrations.messenger_web_login import sidecar_fail_code
+            _code = str(res.get("code") or "") or sidecar_fail_code(
+                str(res.get("reason") or res.get("reason_code") or ""), out["error"])
+            out.update({"error_kind": _code, "sidecar_code": _code,
+                        "sidecar_reason": str(res.get("reason") or res.get("reason_code") or ""),
+                        "sidecar_detail": str(res.get("detail") or out["error"])[:300],
+                        "sidecar_retries": int(res.get("retries") or 0),
+                        "retry_after_ms": int(res.get("retry_after_ms") or 0)})
+        return out
 
     async def send_media(self, chat_key: str, *, media_path: str,
                          media_type: str, caption: str = "") -> Dict[str, Any]:
@@ -1954,18 +1971,50 @@ class MessengerWebWorker:
             return {"delivered": False, "blocked": "session_unhealthy",
                     "error": "messenger session unhealthy (needs manual re-login)"}
         abs_path = os.path.abspath(media_path) if media_path else ""
-        res = await _post_json(
-            f"{self._base()}/accounts/{self.account_id}/send-media",
-            {"jid": chat_key, "media_path": abs_path,
-             "media_type": str(media_type or ""), "caption": caption},
-            timeout=120.0,
-        )
+        # Q-24 B（#298）：媒体发送此前非 2xx 直接抛到路由层 → 坐席只见泛 500。现与文本
+        # 同契约：结构化七码（upload_failed / composer_detached / …）返回，路由层出三段式。
+        try:
+            res = await _post_json(
+                f"{self._base()}/accounts/{self.account_id}/send-media",
+                {"jid": chat_key, "media_path": abs_path,
+                 "media_type": str(media_type or ""), "caption": caption},
+                timeout=120.0,
+            )
+        except Exception as ex:  # noqa: BLE001
+            from src.integrations.messenger_web_login import http_error_fields
+            _f = http_error_fields(ex)
+            _detail = str(_f["detail"])
+            try:
+                from src.integrations.platform_session_health import (
+                    note_send_auth_failure)
+                note_send_auth_failure("messenger", self.account_id, _detail)
+            except Exception:
+                logger.debug("[messenger] 媒体发送败因会话登记失败", exc_info=True)
+            return {"delivered": False,
+                    "error": f"messenger send-media failed: {_detail}",
+                    "error_kind": str(_f.get("code") or _f["reason_code"]),
+                    "sidecar_code": str(_f.get("code") or ""),
+                    "sidecar_reason": str(_f["reason_code"]),
+                    "sidecar_detail": str(_f.get("sidecar_detail") or ""),
+                    "sidecar_retries": int(_f.get("retries") or 0),
+                    "retry_after_ms": int(_f["retry_after_ms"])}
         res = res or {}
         delivered = (res.get("ok", True) is not False
                      and res.get("delivered", True) is not False
                      and res.get("sent", True) is not False)
-        return {"delivered": bool(delivered),
-                "message_id": str(res.get("message_id") or "")}
+        out: Dict[str, Any] = {"delivered": bool(delivered),
+                               "message_id": str(res.get("message_id") or "")}
+        if not delivered:
+            from src.integrations.messenger_web_login import sidecar_fail_code
+            _err = str(res.get("error") or res.get("detail") or "")
+            _code = str(res.get("code") or "") or sidecar_fail_code(
+                str(res.get("reason") or res.get("reason_code") or ""), _err)
+            out.update({"error": _err, "error_kind": _code, "sidecar_code": _code,
+                        "sidecar_reason": str(res.get("reason") or res.get("reason_code") or ""),
+                        "sidecar_detail": str(res.get("detail") or _err)[:300],
+                        "sidecar_retries": int(res.get("retries") or 0),
+                        "retry_after_ms": int(res.get("retry_after_ms") or 0)})
+        return out
 
     async def stop(self) -> None:
         # 不登出（浏览器上下文由 Node 保活）；仅停止 Python 侧监督

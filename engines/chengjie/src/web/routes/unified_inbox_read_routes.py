@@ -327,6 +327,10 @@ def _merge_orchestrator_status(
                                     v["e2ee_ratio"] = _er
                             except (TypeError, ValueError):
                                 pass
+                        elif str(ih.get("hint_code") or "") == "e2ee_pin_required":
+                            # Q-24 C（#298，TKV3HB）：PIN 缺失是确定性证据，不等半死判定
+                            # 就透出 → 会话头黄条「需在手机确认 PIN 后才能同步」
+                            v["inbox_hint"] = "e2ee_pin_required"
                 except Exception:
                     logger.debug("[chats] 会话/入站健康透传失败", exc_info=True)
     except Exception:

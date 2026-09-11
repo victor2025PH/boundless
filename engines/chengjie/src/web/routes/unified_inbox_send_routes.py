@@ -387,6 +387,21 @@ def _result_undelivered(result: Any) -> str:
     return ""
 
 
+def _sidecar_fail_fields(result: Any) -> Dict[str, Any]:
+    """Q-24 B（#298）：编排器返回体里的 Messenger 边车七码 → 结构化 502 detail；无码返 {}。
+
+    detail 形如 ``{code:"sidecar_send_fail", sidecar_code, retries, retry_after_ms, retry_after_sec,
+    sidecar_detail, message}``——前端按 ``sidecar_code`` 出红字三段式「输入框丢失 · 已自动重试 N 次 ·
+    你可以手机发，或 X 秒后再试」+「重试」按钮（同文案重发，绝不自动换文案）。失败留痕
+    ``fail_reason`` 即七码（``_fail_kind``），reply_diagnosis 据此归 ``sidecar_send_fail``。
+    """
+    try:
+        from src.inbox.send_failure_class import sidecar_fail_fields
+        return dict(sidecar_fail_fields(result) or {})
+    except Exception:
+        return {}
+
+
 def _undelivered_reason(result: Any, platform: str, account_id: str) -> tuple:
     """delivered=False 的败因 ``(_fail_raw, _fail_kind)``，绝不为空（P-5 C，#259）。
     见 send_failure_class.undelivered_reason；探测异常时退到固定码，不让失败响应再失败。"""
@@ -896,6 +911,14 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
                 reason=str(res.get("blocked") or ""))
         _fail_raw, _fail_kind = _undelivered_reason(res, platform, account_id)
         _log_send_fail(platform, account_id, chat_key, _fail_raw, _fail_kind, tag="send-media")
+        _sc = _sidecar_fail_fields(res)  # Q-24 B（#298）：媒体同样出七码结构化 502
+        if _sc:
+            _sc.update({
+                "platform": platform, "account_id": account_id, "chat_key": chat_key,
+                "message": tr(request, "err.inbox.send_not_delivered",
+                              msg=_humanize_send_failure(request, _fail_raw, _fail_kind)),
+            })
+            raise HTTPException(502, _sc)
         raise HTTPException(502, tr(
             request, "err.inbox.send_not_delivered",
             msg=_humanize_send_failure(request, _fail_raw, _fail_kind)))
@@ -1378,10 +1401,15 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 request, platform, account_id, chat_key, text,
                 _fail_kind or _fail_raw)
             _log_send_fail(platform, account_id, chat_key, _fail_raw, _fail_kind)
-            raise HTTPException(502, tr(
-                request, "err.inbox.send_not_delivered",
-                msg=_humanize_send_failure(
-                    request, _fail_raw, _fail_kind)))
+            _msg = tr(request, "err.inbox.send_not_delivered",
+                      msg=_humanize_send_failure(request, _fail_raw, _fail_kind))
+            # Q-24 B（#298）：Messenger 边车七码 → 结构化 502（见 _sidecar_fail_fields）
+            _sc = _sidecar_fail_fields(result)
+            if _sc:
+                _sc.update({"platform": platform, "account_id": account_id,
+                            "chat_key": chat_key, "message": _msg})
+                raise HTTPException(502, _sc)
+            raise HTTPException(502, _msg)
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
         _mark_send(cid)

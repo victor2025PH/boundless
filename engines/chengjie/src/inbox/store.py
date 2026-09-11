@@ -3711,6 +3711,54 @@ class InboxStore:
             self._conn.commit()
             return bool(cur.rowcount)
 
+    def mark_failed_outbound_resent_by_text(
+        self, conversation_id: str, text: str, *, within_sec: float = 3600.0,
+    ) -> str:
+        """Q-24 A（#298）：边车待重试队列补发成功（ingest origin=retry_queue）→ 把该会话
+        最近一条**同文案** ``status='failed'`` 留痕改标 ``resent``（前端收起重发按钮、
+        红字变「已补发」）。只动最新一条、只在 within_sec 内；找不到返 ""。"""
+        cid = str(conversation_id or "")
+        body = str(text or "")
+        if not cid or not body.strip():
+            return ""
+        since = time.time() - max(60.0, float(within_sec or 3600.0))
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT message_id FROM messages WHERE conversation_id=? AND status='failed'"
+                " AND direction='out' AND text=? AND ts>=? ORDER BY ts DESC LIMIT 1",
+                (cid, body, since)).fetchone()
+            if row is None:
+                return ""
+            mid = str(row[0] or "")
+            self._conn.execute(
+                "UPDATE messages SET status='resent' WHERE message_id=? AND status='failed'",
+                (mid,))
+            self._conn.commit()
+        return mid
+
+    def recent_failed_outbound(
+        self, conversation_id: str, *, within_sec: float = 86400.0, limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Q-24 B（#298）：会话近 within_sec 内的 ``status='failed'`` 出站留痕
+        ``[{message_id, ts, fail_reason, text}]``（新→旧），reply_diagnosis 归
+        ``sidecar_send_fail`` 用。异常 / 无表返 []。"""
+        cid = str(conversation_id or "")
+        if not cid:
+            return []
+        since = time.time() - max(60.0, float(within_sec or 86400.0))
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT message_id, ts, fail_reason, text FROM messages"
+                    " WHERE conversation_id=? AND status='failed' AND direction='out'"
+                    " AND ts>=? ORDER BY ts DESC LIMIT ?",
+                    (cid, since, max(1, int(limit or 10)))).fetchall()
+            return [{"message_id": str(r[0] or ""), "ts": float(r[1] or 0.0),
+                     "fail_reason": str(r[2] or ""), "text": str(r[3] or "")[:120]}
+                    for r in rows]
+        except Exception:
+            return []
+
     def last_outbound_ts_map(
         self, conversation_ids: List[str],
     ) -> Dict[str, float]:
@@ -4108,6 +4156,10 @@ class InboxStore:
             return False
         where = "message_id = ?" if mid else "conversation_id = ? AND media_ref = ?"
         params: List[Any] = [mid] if mid else [cid, ref]
+        if not mid:
+            # Q-24 F（#298）：按 media_ref 定位的回写（识图描述 / 转录）只该落在**入站**媒体行——
+            # 出站图（我方/手机端发的）若也被写成「客户发的图：…」，会进草稿上下文冒充客户输入。
+            where += " AND direction != 'out'"
         if only_if_empty:
             # 占位/空白才覆盖：'', 纯空白, 或 [xxx] 单一媒体占位（无其他正文）
             where += (

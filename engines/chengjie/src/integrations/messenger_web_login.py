@@ -72,6 +72,46 @@ async def _get_json(url: str, timeout: float = 20.0) -> Dict[str, Any]:
         return r.json()
 
 
+# Q-24 B（#298）：边车 /send /send-media 失败七码契约（与 services/messenger-web/send_chain.js 同源）。
+SIDECAR_SEND_FAIL_CODES = (
+    "composer_detached", "thread_not_found", "e2ee_pin_pending", "call_overlay",
+    "send_backoff", "login_expired", "upload_failed",
+)
+_SIDECAR_CODE_SET = frozenset(SIDECAR_SEND_FAIL_CODES)
+
+
+def sidecar_fail_code(reason: str = "", detail: str = "") -> str:
+    """老边车 / 非结构化失败 → 七码归一（Python 侧镜像 send_chain.normalizeSendFailCode）。
+
+    认不出的一律 ``composer_detached``（DXAPAX 实锤：未归类 500 全是 detached 族）。
+    只做粗归类：细因由 reason/detail 原样带出，不丢证据。
+    """
+    r = str(reason or "").strip().lower()
+    m = str(detail or "")
+    if r in _SIDECAR_CODE_SET:
+        return r
+    import re as _re
+    if r in ("not_logged_in", "login_page", "logged_out", "expired", "needs_login") \
+            or _re.search(r"not_logged_in|not logged in|login required|re-login", m, _re.I):
+        return "login_expired"
+    if "pin" in r or _re.search(r"recovery pin|e2ee pin|\bPIN\b", m):
+        return "e2ee_pin_pending"
+    if r in ("send_backoff", "account_blocked", "temporarily_blocked", "blocked") \
+            or _re.search(r"backoff|temporarily blocked", m, _re.I):
+        return "send_backoff"
+    if "call" in r or "ongoing" in r or _re.search(r"Ongoing call|is calling you|Incoming (video )?call|正在通话|来电", m, _re.I):
+        return "call_overlay"
+    if _re.search(r"not attached|detached|stale|is not stable|Execution context was destroyed", m, _re.I):
+        return "composer_detached"
+    if _re.search(r"upload|attach|media|file_chooser|filechooser", r) \
+            or _re.search(r"file chooser|setInputFiles|upload|attach", m, _re.I):
+        return "upload_failed"
+    if r in ("page_not_rendered", "render_timeout", "thread_not_found", "nav_failed", "navigation") \
+            or _re.search(r"net::ERR|Navigation (failed|timeout)|page\.goto", m, _re.I):
+        return "thread_not_found"
+    return "composer_detached"
+
+
 def http_error_fields(ex: Exception) -> Dict[str, Any]:
     """HTTP 状态异常 → 结构化败因 ``{detail, reason_code, retry_after_ms, status}``。
 
@@ -85,7 +125,8 @@ def http_error_fields(ex: Exception) -> Dict[str, Any]:
     提取；任一步失败回落 ``{detail: str(ex), ...零值}``，绝不抛。
     """
     out: Dict[str, Any] = {"detail": str(ex), "reason_code": "",
-                           "retry_after_ms": 0, "status": 0}
+                           "retry_after_ms": 0, "status": 0,
+                           "code": "", "retries": 0, "sidecar_detail": ""}
     resp = getattr(ex, "response", None)
     if resp is None:
         return out
@@ -100,8 +141,18 @@ def http_error_fields(ex: Exception) -> Dict[str, Any]:
     if not isinstance(body, dict):
         return out
     detail = str(body.get("error") or "").strip()
-    reason = str(body.get("reason_code") or "").strip()
+    reason = str(body.get("reason_code") or body.get("reason") or "").strip()
     out["reason_code"] = reason
+    # Q-24 B（#298）：边车七码契约 ``code``（composer_detached|thread_not_found|e2ee_pin_pending|
+    # call_overlay|send_backoff|login_expired|upload_failed）+ ``retries``（同会话连败次数）+
+    # ``detail``（边车原始证据句）。老边车没有 code → 由 reason_code 归一（见 sidecar_fail_code）。
+    code = str(body.get("code") or "").strip().lower()
+    out["code"] = code if code in SIDECAR_SEND_FAIL_CODES else sidecar_fail_code(reason, detail)
+    try:
+        out["retries"] = max(0, int(body.get("retries") or 0))
+    except Exception:
+        pass
+    out["sidecar_detail"] = str(body.get("detail") or detail or "").strip()[:300]
     try:
         out["retry_after_ms"] = max(0, int(body.get("retry_after_ms") or 0))
     except Exception:

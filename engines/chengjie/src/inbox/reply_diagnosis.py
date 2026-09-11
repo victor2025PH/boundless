@@ -52,6 +52,11 @@ agent_yield             warn   AI 让位中（Q-18 #292：坐席 60s 内发过 /
                                defer 到窗过再发，**不是丢弃**；params: by=agent_sent|agent_typing /
                                until / remaining_sec / since / draft_id / stage / deferrals；
                                切全自动或点会话头 chip = 立即接回）
+sidecar_send_fail       warn   Messenger 边车发送失败留痕（Q-24 #298：近 24h 有 status=failed
+                               且 fail_reason ∈ 七码 composer_detached|thread_not_found|
+                               e2ee_pin_pending|call_overlay|send_backoff|login_expired|
+                               upload_failed；params: code / n / ts / ago_sec / preview /
+                               message_id——「稿生成了但客户没收到」的现场答案）
 looks_alive             ok     未发现拦截
 ======================  =====  ==========================================
 """
@@ -502,6 +507,36 @@ def diagnose_conversation(
                          deferrals=int(_ay.get("deferrals") or 0))
     except Exception:
         logger.debug("[reply_diag] agent_yield 读取失败（忽略）", exc_info=True)
+
+    # ── Q-24 B（#298）：Messenger 边车发送失败 → sidecar_send_fail（warn）────────────
+    # DXAPAX：稿生成了、也「发」了，边车 composer 失联 4 连败——体检此前只看拟稿链，答不出
+    # 「为什么客户没收到」。近 24h 内 status='failed' 留痕且 fail_reason 是边车七码之一
+    # （或 detached 族文本）→ 报最新一条：code / 次数 / 时刻 / 文案预览。fail-open。
+    try:
+        if platform == "messenger" and store is not None and hasattr(store, "recent_failed_outbound"):
+            from src.inbox.send_failure_class import SIDECAR_SEND_FAIL_CODES as _SC
+            _rows = list(store.recent_failed_outbound(cid, within_sec=86400.0, limit=10) or [])
+            _hits: List[Dict[str, Any]] = []
+            for _r in _rows:
+                _fr = str(_r.get("fail_reason") or "").strip().lower()
+                _code = _fr if _fr in _SC else ""
+                if not _code and ("not attached" in _fr or "detached" in _fr or "composer" in _fr):
+                    _code = "composer_detached"
+                if _code:
+                    _hits.append({**_r, "code": _code})
+            if _hits:
+                _h0 = _hits[0]
+                out["sidecar_send_fail"] = {"latest": _h0, "n": len(_hits)}
+                # params 里的 code 是边车七码（与 _finding 的 code 形参同名），直接组 dict
+                findings.append({"level": "warn", "code": "sidecar_send_fail", "params": {
+                    "code": str(_h0["code"]), "n": len(_hits),
+                    "ts": float(_h0.get("ts") or 0.0),
+                    "ago_sec": round(max(0.0, ts_now - float(_h0.get("ts") or ts_now)), 0),
+                    "preview": str(_h0.get("text") or "")[:40],
+                    "message_id": str(_h0.get("message_id") or ""),
+                }})
+    except Exception:
+        logger.debug("[reply_diag] sidecar_send_fail 读取失败（忽略）", exc_info=True)
 
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",

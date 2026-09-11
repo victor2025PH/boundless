@@ -64,8 +64,10 @@ def test_http_error_fields_extracts_reason_and_retry_after():
 def test_http_error_fields_no_response_falls_back():
     from src.integrations.messenger_web_login import http_error_fields
     f = http_error_fields(_FakeHttpError("connection refused"))
+    # Q-24 #298：新增 code / retries / sidecar_detail 三个零值键（七码契约），旧四键不变
     assert f == {"detail": "connection refused", "reason_code": "",
-                 "retry_after_ms": 0, "status": 0}
+                 "retry_after_ms": 0, "status": 0,
+                 "code": "", "retries": 0, "sidecar_detail": ""}
 
 
 def test_http_error_fields_bad_body_keeps_base_detail():

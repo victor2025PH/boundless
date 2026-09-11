@@ -1606,6 +1606,22 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             backfill=_backfill,
             backfill_source=_backfill_source,
         )
+        # Q-24 A/C（#298）：边车出站回抄的来源标记 ``origin``——
+        #   external    手机端 Messenger 发出的消息回抄（sender_id="external" 已随落库，
+        #               前端出「手机发出」角标）；**只落库不起草、不记坐席发送时刻**
+        #               （让位由 note_agent_send 只在工作台手发路由触发，此处天然不碰）；
+        #   retry_queue 边车待重试队列补发成功 → 把同文案 failed 留痕改标 resent。
+        _origin = str((body or {}).get("origin") or "")
+        if direction == "out" and cid and _origin == "retry_queue":
+            try:
+                _rs = store.mark_failed_outbound_resent_by_text(cid, _text)
+                logger.info("[protocol] messenger 排队补发成功 conv=%s resent_row=%s",
+                            cid, _rs or "-")
+            except Exception:
+                logger.debug("[protocol] retry_queue 留痕改标失败", exc_info=True)
+        elif direction == "out" and cid and _origin == "external":
+            logger.info("[protocol] messenger 手机端出站回抄 conv=%s len=%d（不起草/不让位）",
+                        cid, len(_text))
         # 请求标记落库（2026-08-11 可视化）：is_request 落 conversations 列 → chats 透传
         # → 前端徽章/引导条「回复即通过验证」。出站落库自动清（ingest_message），
         # 显式接受/拒绝走 request-action 代理。best-effort 不阻断入站。
@@ -1660,6 +1676,20 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
         detail = str((body or {}).get("detail") or "")
         if not plat or not status:
             return {"ok": False, "reason": "missing_field"}
+        # Q-24 A（#298）：边车「发送卡住/已恢复/终局失败」是**发送态**不是登录态——
+        # 直接翻成通知中心铃铛并返回，不进 PlatformSessionHealth 状态机（会污染健康判定）。
+        try:
+            from src.inbox.sidecar_send_alert import (
+                is_send_stuck_status, push_send_stuck_bell)
+            if is_send_stuck_status(status):
+                item = push_send_stuck_bell(
+                    request.app, platform=plat, account_id=acct or login_id,
+                    status=status, detail=detail)
+                return {"ok": True, "kind": "send_stuck_bell", "pushed": item is not None}
+        except Exception:
+            logger.debug("[protocol] send_stuck 铃铛处理失败（忽略）", exc_info=True)
+            if str(status).startswith("send_"):
+                return {"ok": False, "kind": "send_stuck_bell", "pushed": False}
         # P1 身份化：authorized 推送可携带自身昵称/头像（WA Baileys: pushname/avatar_url、
         # messenger-web: 同名字段）→ 富集 registry meta.self_*。关键在覆盖「服务重启后
         # Node restoreAll 自动重连」的存量账号——它们不经登录轮询，此前永远拿不到真实身份。

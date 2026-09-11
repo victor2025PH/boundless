@@ -34,14 +34,48 @@ _BLOCK_MARKS = ("account_blocked", "temporarily blocked")
 _PIN_MARKS = ("e2ee_pin", "pin prompt", "recovery pin")
 _SESSION_MARKS = ("needs_login", "logged_out", "logged out", "not logged in",
                   "session unhealthy", "session_unhealthy", "cookie expired",
-                  "needs manual re-login", "login_form")
+                  "needs manual re-login", "login_form", "login_expired")
 # P-5 C（#259，09-08 13:47 实锤）：后端刚重启、适配器 client 还没连上时 A 线 worker 只回
 # delivered=False 不带 error → 坐席看到「消息未送达：」空原因、留痕行 fail_reason 为空。
 _NOT_READY_MARKS = ("adapter_not_ready", "client 未连接", "未就绪", "not connected",
                     "无可用的运行中 worker", "backend starting")
 _CHANNEL_MARKS = ("composer", "upstream", "bubble_fail", "render_timeout",
                   "internal server error", "worker unreachable",
-                  "not delivered", "服务不可达", "adapter_no_reason", "send_timeout")
+                  "not delivered", "服务不可达", "adapter_no_reason", "send_timeout",
+                  # Q-24（#298）边车七码里的瞬态通道码（composer_detached 已被 "composer" 命中）
+                  "thread_not_found", "call_overlay", "upload_failed")
+
+# Q-24 B（#298）：Messenger 边车七码契约——路由层据此出结构化 502
+# ``{code:"sidecar_send_fail", sidecar_code, retries, retry_after_ms}`` → 工作台红字三段式 + 重试。
+SIDECAR_SEND_FAIL_CODES = frozenset((
+    "composer_detached", "thread_not_found", "e2ee_pin_pending", "call_overlay",
+    "send_backoff", "login_expired", "upload_failed",
+))
+
+
+def sidecar_fail_fields(result: Any) -> Dict[str, Any]:
+    """编排器返回体 → 边车结构化败因字段（没有七码返 ``{}``，调用方走旧人话路径）。"""
+    res: Dict[str, Any] = result if isinstance(result, dict) else {}
+    code = str(res.get("sidecar_code") or "").strip().lower()
+    if code not in SIDECAR_SEND_FAIL_CODES:
+        return {}
+    try:
+        retries = max(0, int(res.get("sidecar_retries") or 0))
+    except Exception:
+        retries = 0
+    try:
+        retry_after_ms = max(0, int(res.get("retry_after_ms") or 0))
+    except Exception:
+        retry_after_ms = 0
+    return {
+        "code": "sidecar_send_fail",
+        "sidecar_code": code,
+        "sidecar_reason": str(res.get("sidecar_reason") or "")[:80],
+        "sidecar_detail": str(res.get("sidecar_detail") or res.get("error") or "")[:300],
+        "retries": retries,
+        "retry_after_ms": retry_after_ms,
+        "retry_after_sec": int((retry_after_ms + 999) // 1000),
+    }
 
 # 进程起来多久内适配器回「没发出去且不说原因」按「未就绪（后端启动中）」解释
 ADAPTER_WARMUP_SEC = 180.0
@@ -159,5 +193,6 @@ def plan_failure_retry(*, hint_ms: int = 0, deferrals_used: int = 0,
 
 __all__ = [
     "FAILURE_CLASS_I18N", "classify_send_failure", "plan_failure_retry", "undelivered_reason",
+    "SIDECAR_SEND_FAIL_CODES", "sidecar_fail_fields",
     "DEFER_CAP_SEC", "DEFER_MAX_TIMES", "DEFER_MARGIN_SEC", "ADAPTER_WARMUP_SEC",
 ]

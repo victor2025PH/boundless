@@ -289,15 +289,24 @@ def normalize_history(
         if not isinstance(m, dict):
             continue
         t = str(m.get("text") or "").strip()
-        if not t and (m.get("media_type") or m.get("media_ref")):
-            try:
-                from src.integrations.protocol_bridge import media_placeholder
-                t = media_placeholder(str(m.get("media_type") or ""))
-            except Exception:
-                t = "[媒体]"
+        is_in = m.get("direction") in ("in", "inbound")
+        _has_media = bool(m.get("media_type") or m.get("media_ref"))
+        if not t and _has_media:
+            # Q-24 F（#298）：出站媒体（我们/坐席/手机端发的图）在上下文里必须标成
+            # 「我方发出的图片」——占位 [图片] 会让 LLM 把它当客户发的图去接话。
+            _mt = str(m.get("media_type") or "").lower()
+            if not is_in and _mt in ("image", "photo", "picture", "sticker"):
+                t = "[我方发出的图片]"
+            elif not is_in:
+                t = f"[我方发出的{_mt or '媒体'}]"
+            else:
+                try:
+                    from src.integrations.protocol_bridge import media_placeholder
+                    t = media_placeholder(str(m.get("media_type") or ""))
+                except Exception:
+                    t = "[媒体]"
         if not t:
             continue
-        is_in = m.get("direction") in ("in", "inbound")
         row: Dict[str, Any] = {"role": "user" if is_in else "assistant", "content": t}
         # P2-198：可选透传 ts——草稿链的时间断层提示（build_time_gap_hint）
         # 需要「上一条入站是什么时候」，Phase8 只在 process_message 链写
