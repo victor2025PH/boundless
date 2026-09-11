@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-11 14:36:25 · OpenCC s2twp + 術語釘 · 17513 鍵（源 zh 全量 17674）
+生成: 2026-09-11 18:40:11 · OpenCC s2twp + 術語釘 · 17510 鍵（源 zh 全量 17742）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -109,7 +109,7 @@ ZH_HANT = {
     # ── ac_nav ──
     'ac_nav': '賬號資產中心',
     # ── ac_no_perm ──
-    'ac_no_perm': '許可權不足（需要主管及以上）',
+    'ac_no_perm': '權限不足（需要主管及以上）',
     # ── ac_note_contacts ──
     'ac_note_contacts': '各賬號相加，同一個人在多個賬號上會重複計數',
     # ── ac_note_media ──
@@ -206,7 +206,7 @@ ZH_HANT = {
     'al.ct.how': '① Telegram 搜 @BotFather → /newbot 建立機器人，得到 Token；② 用要收告警的賬號先給這個機器人發一句話（否則它無法主動私聊你）；③ Chat ID 可發訊息給 @userinfobot 查到。',
     'al.ct.need_both': '請先填寫 Token 和 Chat ID',
     'al.ct.need_test': '先傳送測試訊息、確認真能收到，再儲存。',
-    'al.ct.no_perm': '需要管理員許可權（坐席/觀察員不可配置告警渠道）。',
+    'al.ct.no_perm': '需要管理員權限（坐席/觀察員不可配置告警渠道）。',
     'al.ct.save': '儲存並接通',
     'al.ct.save_fail': '儲存失敗：{err}',
     'al.ct.save_ok': '已接通：關鍵故障將推送到該 Telegram。',
@@ -398,7 +398,7 @@ ZH_HANT = {
     # ── ap_js_005 ──
     'ap_js_005': '待改善',
     # ── ap_js_006 ──
-    'ap_js_006': '載入失敗（需要主管許可權）',
+    'ap_js_006': '載入失敗（需要主管權限）',
     # ── ap_js_007 ──
     'ap_js_007': '週一',
     # ── ap_js_008 ──
@@ -430,7 +430,7 @@ ZH_HANT = {
     # ── ap_js_021 ──
     'ap_js_021': '暫無 OCR/ASR 呼叫記錄',
     # ── ap_js_022 ──
-    'ap_js_022': '載入失敗（需主管許可權）',
+    'ap_js_022': '載入失敗（需主管權限）',
     # ── ap_js_023 ──
     'ap_js_023': '控制檯',
     # ── ap_js_024 ──
@@ -1496,7 +1496,7 @@ ZH_HANT = {
     # ── aud_act_set_notify_binding ──
     'aud_act_set_notify_binding': '設定坐席通知號繫結',
     # ── aud_act_set_perms ──
-    'aud_act_set_perms': '設定坐席許可權覆寫',
+    'aud_act_set_perms': '設定坐席權限覆寫',
     # ── aud_act_set_quota ──
     'aud_act_set_quota': '設定坐席月度額度',
     # ── aud_act_stk_collect ──
@@ -2292,7 +2292,7 @@ ZH_HANT = {
     # ── bt_js_status_ok ──
     'bt_js_status_ok': '狀態已更新',
     # ── bt_js_viewer ──
-    'bt_js_viewer': '只讀（需管理員許可權操作）',
+    'bt_js_viewer': '只讀（需管理員權限操作）',
     # ── bt_s001 ──
     'bt_s001': '報障工單處置台',
     # ── bt_s002 ──
@@ -2364,7 +2364,7 @@ ZH_HANT = {
     # ── bt_tpl_ack ──
     'bt_tpl_ack': '收到，正在排查，有結論第一時間在群裡同步。',
     # ── bt_tpl_fixed ──
-    'bt_tpl_fixed': '你反饋的問題已修復上線，方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
+    'bt_tpl_fixed': '問題：（一句話核心）\n修復：（改了什麼、怎麼拿到）\n已修復上線。方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
     # ── bt_tpl_label ──
     'bt_tpl_label': '快捷模板',
     # ── bt_tpl_logged ──
@@ -2985,7 +2985,7 @@ ZH_HANT = {
     'cg.step_of': '第 {i} 步 / 共 {n} 步',
     'cg.sub_wechat_kf': '微信使用者掃你的客服二維碼即可諮詢，不用加好友；用你自己企業的企微，填憑證即接通',
     'cg.sub_wechat_pc': '讀取你電腦上已登入的微信，AI 給建議或代發；預設只讀，全自動需確認風險',
-    'cg.supervisor_only': '這一步需要主管許可權',
+    'cg.supervisor_only': '這一步需要主管權限',
     'cg.title_wechat_kf': '接入微信客服（企業微信）',
     'cg.title_wechat_pc': '接入個人微信 · PC 副駕',
     'cg.tutorial': '完整教程與排障 ↗',
@@ -4800,7 +4800,7 @@ ZH_HANT = {
     'draft.net_err_retry': '網路錯誤，請重試',
     'draft.op_fail': '操作失敗',
     'draft.op_fail_msg': '操作失敗：{msg}',
-    'draft.override_confirm': '確認以主管許可權強制放行此 L4 草稿？操作將記入審計日誌。',
+    'draft.override_confirm': '確認以主管權限強制放行此 L4 草稿？操作將記入審計日誌。',
     'draft.page_title': '草稿審批工作台',
     'draft.pf.ai_inferred': 'AI 推斷 {n}',
     'draft.pf.all_handled': '均已處置',
@@ -6158,7 +6158,7 @@ ZH_HANT = {
     'err.inbox.send_not_delivered': '訊息未送達：{msg}',
     'err.inbox.send_peer_blocked': '對方與這個賬號處於拉黑狀態，訊息無法送達。',
     'err.inbox.send_peer_deactivated': '對方賬號已登出，訊息無法送達。',
-    'err.inbox.send_write_forbidden': '沒有向該會話傳送內容的許可權（可能被禁言、被移出，或對方作了限制）。',
+    'err.inbox.send_write_forbidden': '沒有向該會話傳送內容的權限（可能被禁言、被移出，或對方作了限制）。',
     'err.inbox.sendfail.adapter_not_ready': '介面卡未就緒（後端啟動中），這條沒有發出去——等約 1 分鐘後一鍵重發',
     'err.inbox.sendfail.channel': '傳送通道異常（我方元件），失敗詳情已記錄——可稍後一鍵重發',
     'err.inbox.sendfail.e2ee_pin': '加密會話未解鎖：請先在該賬號輸入恢復 PIN，再一鍵重發這條訊息',
@@ -6253,8 +6253,8 @@ ZH_HANT = {
     'err.perm.agent_self_only': '坐席只能檢視自己的績效資料',
     'err.perm.capability_denied': '當前賬號未被授予此能力，請聯絡管理員開通',
     'err.perm.master_only': '該操作僅主帳號可執行',
-    'err.perm.supervisor_force_l4': '需要主管許可權才能強制放行 L4 草稿',
-    'err.perm.supervisor_required': '需要主管許可權',
+    'err.perm.supervisor_force_l4': '需要主管權限才能強制放行 L4 草稿',
+    'err.perm.supervisor_required': '需要主管權限',
     'err.perm.viewer_readonly': '只讀賬號無法執行此操作',
     'err.persona.account_ref_required': '缺少賬號定位引數（platform + account_id）',
     'err.persona.conv_override_disabled': '會話級人設覆寫未啟用（inbox.persona_conv_override.enabled）',
@@ -6292,7 +6292,7 @@ ZH_HANT = {
     'err.pmedia.store_unavailable': '相簿儲存不可用',
     'err.pmedia.too_large': '檔案過大（上限 {mb}MB）',
     'err.pmedia.too_long': '影片過長（上限 {sec} 秒）',
-    'err.psess.pin_clear_admin_only': '清除託管 PIN 需要管理員許可權（坐席入口僅支援設定）',
+    'err.psess.pin_clear_admin_only': '清除託管 PIN 需要管理員權限（坐席入口僅支援設定）',
     'err.psess.pin_invalid': 'PIN 格式不對：應為 4-12 位純數字',
     'err.psess.relogin_no_profile': '該賬號在本伺服器已沒有登入檔案（可能已在其他電腦登入，或其登入視窗已被別的賬號使用）。一鍵重登無法恢復：請在「賬號管理」重新接入；若該賬號已遷移或棄用，請將其登出/刪除，相關提醒會隨之停止',
     'err.psess.relogin_unsupported': '該平台暫不支援一鍵重登: {platform}',
@@ -6466,7 +6466,6 @@ ZH_HANT = {
     'err.svc.upstream_unreachable': '連不上官網服務，請檢查網路後重試。',
     'err.svc.upstream_unreachable_staged': '暫時連不上官網服務：報障內容已在本機暫存，網路恢復後會自動補傳給客服，無需重複提交。',
     'err.team.bad_chat_id': 'Chat ID 格式無效：應為純數字（群為負數），留空=解綁',
-    'err.team.bad_perms': '許可權提交無效（未知能力鍵，或同一能力同時出現在允許與禁止）',
     'err.team.cannot_manage': '無權管理該賬號（角色層級不足）',
     'err.team.master_protected': '主帳號受保護，不可在此修改',
     'err.team.no_alert_channel': '告警渠道未接通（無可用的 Telegram 機器人），請先在告警渠道面板接通',
@@ -7583,7 +7582,7 @@ ZH_HANT = {
     # ── hp_s013 ──
     'hp_s013': '示例',
     # ── hp_s014 ──
-    'hp_s014': '許可權',
+    'hp_s014': '權限',
     # ── hp_s015 ──
     'hp_s015': '複製指令',
     # ── hp_sec_scripts ──
@@ -7595,7 +7594,7 @@ ZH_HANT = {
     # ── im_js002 ──
     'im_js002': '合併中…',
     # ── im_js003 ──
-    'im_js003': '載入失敗（需要管理員許可權）',
+    'im_js003': '載入失敗（需要管理員權限）',
     # ── im_js004 ──
     'im_js004': '設定已儲存',
     # ── im_js005 ──
@@ -7945,7 +7944,7 @@ ZH_HANT = {
     'inbox.acct.reg_tag_t': '已登記到賬號登錄檔、但系統當前未託管收發的賬號',
     'inbox.acct.relogin': '🔗 重新登入',
     'inbox.acct.relogin_fail': '發起重新登入失敗。常見原因：Messenger 服務未執行（需管理員在伺服器上啟動）或該賬號檔案已被刪除；請稍後重試，不要連點。',
-    'inbox.acct.relogin_no_perm': '重新登入需要管理員許可權，請聯絡管理員在「運維」頁操作。',
+    'inbox.acct.relogin_no_perm': '重新登入需要管理員權限，請聯絡管理員在「運維」頁操作。',
     'inbox.acct.relogin_started': '已發起重新登入 ✅ 登入視窗彈在【執行 Messenger 服務的電腦】螢幕上，請在 30 分鐘內到那台機器完成 Facebook 賬密/驗證碼登入；成功後這裡的賬號會自動轉為線上。',
     'inbox.acct.relogin_waiting': '🪟 已開登入窗（去伺服器完成）',
     'inbox.acct.remove': '🗑️ 刪除',
@@ -8822,7 +8821,7 @@ ZH_HANT = {
     'inbox.convdel.btn': '刪除',
     'inbox.convdel.btn_t': '刪除會話（僅刪本機聊天記錄，不動對方與手機端；不可恢復）',
     'inbox.convdel.confirm': '確定刪除與「{name}」的全部本機聊天記錄？刪除後不可恢復；對方再發新訊息時會話會重新出現。',
-    'inbox.convdel.denied': '沒有許可權：刪除會話需要主管賬號',
+    'inbox.convdel.denied': '沒有權限：刪除會話需要主管賬號',
     'inbox.convdel.done': '會話已刪除',
     'inbox.convdel.fail': '刪除失敗，請稍後重試',
     'inbox.convdel.okbtn': '刪除',
@@ -8942,7 +8941,7 @@ ZH_HANT = {
     'inbox.deadpeer.r_blocked': '曾被對方拉黑',
     'inbox.deadpeer.r_deactivated': '對方賬號已登出',
     'inbox.deadpeer.r_other': '歷史傳送失敗',
-    'inbox.deadpeer.r_write_forbidden': '無發言許可權',
+    'inbox.deadpeer.r_write_forbidden': '無發言權限',
     'inbox.delete': '刪除',
     'inbox.diag.account_missing': '系統賬號名錄裡沒有這個賬號的登記（主協議號 / 純 RPA 會話屬正常現象，可忽略）',
     'inbox.diag.account_status': '本賬號當前「{status}」（不線上）：收發都停了，AI 想回也發不出。先到賬號面板把賬號重新上線',
@@ -8950,7 +8949,7 @@ ZH_HANT = {
     'inbox.diag.btn': 'AI 狀態',
     'inbox.diag.btn_t': 'AI 回覆鏈路體檢：這個會話為什麼沒自動回 / 下一條入站會不會自動回',
     'inbox.diag.cap_business_line': '本賬號屬「{detail}」業務線，按業務線規則以「{ceiling}」檔執行（AI 寫稿、人審後發）',
-    'inbox.diag.cap_platform': '運營把 {detail} 平台整體降為「{ceiling}」檔：AI 照常寫草稿，但不會自動發出，需要人點「傳送」。解除封頂是主管許可權',
+    'inbox.diag.cap_platform': '運營把 {detail} 平台整體降為「{ceiling}」檔：AI 照常寫草稿，但不會自動發出，需要人點「傳送」。解除封頂是主管權限',
     'inbox.diag.cap_platform_note': '封頂備註：{note}',
     'inbox.diag.cap_platform_stale': '檢測到本賬號的傳送通道當前線上——當初封頂的原因可能已消除，可請主管評估解除',
     'inbox.diag.cap_warmup': '新號保護期：還剩 {left_h} 小時，期間 AI 只寫稿、由人稽核後發（防新號被平台風控）。到期自動恢復，也可由主管提前關閉',
@@ -8963,7 +8962,7 @@ ZH_HANT = {
     'inbox.diag.customer_waiting_no_gate': '沒有任何閘攔下它、也沒有待審草稿，但客戶最後一條訊息已等了 {wait_sec} 秒還沒回。本會話按「{effective}」執行，回覆可能仍在生成/投遞途中；若持續不回，請人工回一句推進，並把本次情況反饋值守定位。',
     'inbox.diag.deliver_off': '「AI 自動真發」開關未開：AI 只寫稿做標記，不會真的發出。到「自動回覆設定 → AI 接管」選「🚀 全自動」一鍵開啟（也可在收件箱頂部「AI 值守」切換）',
     'inbox.diag.explicit_non_auto': '本會話被設為「{mode}」（{source}）：AI 不會自動傳送。想恢復就點「切回全自動」',
-    'inbox.diag.fail': '體檢失敗（網路或許可權問題），稍後重試',
+    'inbox.diag.fail': '體檢失敗（網路或權限問題），稍後重試',
     'inbox.diag.fix_auto': '切回全自動',
     'inbox.diag.fix_drafts': '開啟待審佇列',
     'inbox.diag.fix_resume': '讓 AI 接回',
@@ -8999,14 +8998,14 @@ ZH_HANT = {
     'inbox.diag.tech_details': '技術詳情（給工程師看）',
     'inbox.diag.title': '🩺 AI 回覆狀態體檢',
     'inbox.diag.uncap_confirm': '解除後，本平台所有「全自動」會話將恢復 AI 自動傳送。確認解除？',
-    'inbox.diag.uncap_fail': '解除失敗：需要主管許可權，或後端版本較舊（升級後可用）',
+    'inbox.diag.uncap_fail': '解除失敗：需要主管權限，或後端版本較舊（升級後可用）',
     'inbox.diag.uncap_ok': '已解除平台封頂，即刻生效',
     'inbox.diag.unknown': '未識別的體檢項 {code}（後端比前端新，重新整理頁面後可讀）',
     'inbox.diag.verdict_blocked': '自動回覆已暫停',
     'inbox.diag.verdict_blocked_sub': '有 {n} 個原因攔住了自動傳送，逐條看下面（能一鍵處理的都帶按鈕）',
     'inbox.diag.verdict_ok': '自動回覆執行正常',
     'inbox.diag.verdict_warn': '自動回覆執行中，有 {n} 項需要留意',
-    'inbox.diag.warmup_off_fail': '關閉失敗（需主管許可權或後端過舊）',
+    'inbox.diag.warmup_off_fail': '關閉失敗（需主管權限或後端過舊）',
     'inbox.diag.warmup_off_ok': '已關閉預熱人審：熱過載約 30 秒內生效',
     'inbox.diag.work_schedule': '現在是休息時段（工作班表 {hold}）：自動回覆暫扣，復班後會自動補發，無需操作',
     'inbox.dlang.clear_fail': '清除失敗',
@@ -9065,7 +9064,7 @@ ZH_HANT = {
     'inbox.dpause.conv_t': '這個會話的檔位是全自動/多選，但全域性「真發總閘」當前關閉（{reason}），自動投遞被攔下：AI 只寫草稿、不外發。恢復總閘後即恢復自動傳送。',
     'inbox.dpause.global': '⏸️ 全域性已暫停真發：全自動會話只擬稿、不外發（Telegram 私聊直答不受影響）',
     'inbox.dpause.global_by': '{time} 由 {actor} 經「{src}」關閉',
-    'inbox.dpause.need_supervisor': '恢復真發需主管許可權，請聯絡管理員',
+    'inbox.dpause.need_supervisor': '恢復真發需主管權限，請聯絡管理員',
     'inbox.dpause.resume_btn': '▶ 恢復真發',
     'inbox.dpause.resume_confirm': '恢復真發總閘：全自動會話將立即恢復 AI 自動傳送（傳送前仍過安全閘與額度護欄）。確定？',
     'inbox.dpause.resume_fail': '恢復失敗：{msg}',
@@ -9759,6 +9758,8 @@ ZH_HANT = {
     'inbox.goal.probe.text_hint': '這句就是發出去的原話，可以直接改',
     'inbox.goal.probe.text_required': '先寫上要問的話',
     'inbox.goal.products.title': '推薦產品',
+    'inbox.goal.profile.age_hint': '填 16–99 的數字，或年齡段（如 30s / 三十多 / 90後）',
+    'inbox.goal.profile.age_invalid': '年齡只能填 16–99 的數字或年齡段（如 30s / 三十多 / 90後）',
     'inbox.goal.profile.ask.age': '大概哪個年齡段',
     'inbox.goal.profile.ask.assets': '有沒有房車之類的資產（敏感：只順著話頭帶，不直接問）',
     'inbox.goal.profile.ask.authority': '這類事TA能不能拍板',
@@ -9860,6 +9861,8 @@ ZH_HANT = {
     'inbox.goal.slots.miss_t': '還沒聊到「{label}」',
     'inbox.goal.slots.nick_badge': '來自暱稱 · 待確認',
     'inbox.goal.slots.nick_badge_t': '從客戶暱稱（名/年齡/城市/職業）解析出來的，未經人核實——✓ 記為已核實；✎ 改；✕ 清掉',
+    'inbox.goal.slots.pending_n': '待確認 {n}',
+    'inbox.goal.slots.pending_t': 'AI 推斷 / 暱稱解析 / 聊到過但未經人核實的項——不計入已採集，✓ 確認後才算',
     'inbox.goal.slots.reject_t': '不對——清掉這條推斷（已確認的值不會被動）',
     'inbox.goal.slots.rejected_toast': '「{label}」推斷值已清掉',
     'inbox.goal.slots.src.agent': '人工確認',
@@ -10183,7 +10186,7 @@ ZH_HANT = {
     'inbox.mem.high_impact': '高影響（金錢 / 見面 / 地址 / 健康 / 證件 / 家人）',
     'inbox.mem.ignore': '不再使用',
     'inbox.mem.ignore_fail': '操作失敗，請稍後再試',
-    'inbox.mem.ignore_forbidden': '你的角色沒有修改 AI 記憶的許可權',
+    'inbox.mem.ignore_forbidden': '你的角色沒有修改 AI 記憶的權限',
     'inbox.mem.ignore_ok': '已不再使用',
     'inbox.mem.ignore_t': '以後回覆不再用這條（可在「AI 記憶」頁維護區恢復）',
     'inbox.mem.locate_miss': '這條原話在更早的歷史裡',
@@ -11154,7 +11157,7 @@ ZH_HANT = {
     'inbox.xl.pick_cust': '客戶正在說',
     'inbox.xl.pick_empty': '沒有匹配的語言',
     'inbox.xl.pick_recent': '最近使用',
-    'inbox.xl.pick_search': '搜尋語言',
+    'inbox.xl.pick_search': '搜尋語言 / 語種碼（如 vi）',
     'inbox.xl.pick_title_agent': '我的語言',
     'inbox.xl.pick_title_in': '對方訊息譯成',
     'inbox.xl.pick_title_lb': '圖片譯成',
@@ -11206,6 +11209,8 @@ ZH_HANT = {
     'inbox.xl.tone_sales': '促單',
     'inbox.xl.tone_t': '我方訊息譯文的語氣（僅大模型與 DeepL 線生效；本地/NMT 線忽略）',
     'inbox.xl.tools_lbl': '單次翻譯工具',
+    'inbox.xl.tools_more': '更多 →',
+    'inbox.xl.tools_more_t': '開啟右欄翻譯工具箱（文件 / 字幕 / 多線路對照全功能面）',
     'inbox.xl.transcript_lbl': '轉寫原文',
     'inbox.xl.unavailable': '翻譯不可用',
     'inbox.xl.upload_txt': '上傳 .txt',
@@ -13239,7 +13244,7 @@ ZH_HANT = {
     # ── mo_js048 ──
     'mo_js048': '已擁有',
     # ── mo_js049 ──
-    'mo_js049': '許可權，無需升級',
+    'mo_js049': '權限，無需升級',
     # ── mo_js050 ──
     'mo_js050': '無可推薦的升級項（gate 關或目錄無對應套餐）',
     # ── mo_js051 ──
@@ -13401,7 +13406,7 @@ ZH_HANT = {
     # ── msg_js_003 ──
     'msg_js_003': '檢查 wifi 或網線',
     # ── msg_js_004 ──
-    'msg_js_004': '許可權不足',
+    'msg_js_004': '權限不足',
     # ── msg_js_005 ──
     'msg_js_005': '服務暫不可用',
     # ── msg_js_006 ──
@@ -15442,7 +15447,7 @@ ZH_HANT = {
     'obg.flash.connected': '授權成功，經營者賬號已登記：',
     'obg.flash.denied': '使用者在抖音端取消了授權，或未返回 code。',
     'obg.flash.error': '操作未完成：',
-    'obg.flash.exchange': '抖音換令牌失敗：檢查 client_secret、回撥域是否與控制檯一致、應用是否已開通 im.direct_message 許可權。',
+    'obg.flash.exchange': '抖音換令牌失敗：檢查 client_secret、回撥域是否與控制檯一致、應用是否已開通 im.direct_message 權限。',
     'obg.flash.missing': '請先填 client_key 與 client_secret。',
     'obg.flash.saved': '憑證已儲存，webhook 與官方通道已即時裝載；現在去掃碼授權。',
     'obg.foot': '平台政策變動頻繁，以官方控制檯當日說明為準；在小智裡直接問「怎麼接入抖音 / TikTok / 怎麼付款」也能得到本頁要點。',
@@ -15510,11 +15515,11 @@ ZH_HANT = {
     'obg.tt.flash_next': '現在用另一個 TikTok 賬號給它發一條私信，30 秒內應出現在收件箱。',
     'obg.tt.flash_region': '註冊地必填（ISO 3166-1 兩位字母，如 SG、MY、MX）。',
     'obg.tt.flash_saved': 'TikTok 賬號已登記：',
-    'obg.tt.flash_scopes': '授權時沒有勾全私信許可權（讀取 / 傳送 / 管理），請重新授權並全部允許。',
+    'obg.tt.flash_scopes': '授權時沒有勾全私信權限（讀取 / 傳送 / 管理），請重新授權並全部允許。',
     'obg.tt.flash_webhook': '私信 Webhook 已註冊到 TikTok。',
-    'obg.tt.flash_webhook_err': 'Webhook 註冊被 TikTok 拒絕：檢查應用是否已獲 Business Messaging 訪問許可權、回撥地址是否為公網 HTTPS。',
+    'obg.tt.flash_webhook_err': 'Webhook 註冊被 TikTok 拒絕：檢查應用是否已獲 Business Messaging 訪問權限、回撥地址是否為公網 HTTPS。',
     'obg.tt.flash_webhook_fail': 'Webhook 自動註冊失敗，請點「註冊私信 Webhook」重試：',
-    'obg.tt.manual': '沒有授權許可權？手填 business_id + access_token 登記',
+    'obg.tt.manual': '沒有授權權限？手填 business_id + access_token 登記',
     'obg.tt.me_link': '私信引流連結（可加 ref 區分渠道，如 ?ref=ig_bio；掃碼/點選直接進入與你的私信）',
     'obg.tt.no_media': '不能發圖',
     'obg.tt.no_token': '缺 access_token',
@@ -16722,7 +16727,7 @@ ZH_HANT = {
     # ── ov2_hid_grp_healthy ──
     'ov2_hid_grp_healthy': '零異常',
     # ── ov2_hid_grp_noacc ──
-    'ov2_hid_grp_noacc': '無許可權',
+    'ov2_hid_grp_noacc': '無權限',
     # ── ov2_hid_grp_off ──
     'ov2_hid_grp_off': '未開啟',
     # ── ov2_hid_grp_other ──
@@ -16740,7 +16745,7 @@ ZH_HANT = {
     # ── ov2_hid_why_healthy ──
     'ov2_hid_why_healthy': '這張卡只在出異常時現身——現在零異常，是好訊息，無需處理。',
     # ── ov2_hid_why_noacc ──
-    'ov2_hid_why_noacc': '當前登入角色沒有這張卡的資料許可權（主管/老闆賬號可見）。',
+    'ov2_hid_why_noacc': '當前登入角色沒有這張卡的資料權限（主管/老闆賬號可見）。',
     # ── ov2_hid_why_off ──
     'ov2_hid_why_off': '功能開關未開啟。不是故障，空卡已收起以免佔版面。',
     # ── ov2_hid_why_other ──
@@ -16992,7 +16997,7 @@ ZH_HANT = {
     # ── ov2_js036 ──
     'ov2_js036': '平均解決：',
     # ── ov2_js037 ──
-    'ov2_js037': '指標檢視需要主管許可權',
+    'ov2_js037': '指標檢視需要主管權限',
     # ── ov2_js038 ──
     'ov2_js038': '暫無語音合成資料（開啟語音回覆後累計）',
     # ── ov2_js039 ──
@@ -18428,7 +18433,7 @@ ZH_HANT = {
     # ── ov2_rtv_engine_model ──
     'ov2_rtv_engine_model': '模型在視訊記憶體',
     # ── ov2_rtv_engine_readonly ──
-    'ov2_rtv_engine_readonly': '只讀：需 manage_ops 許可權方可載入/釋放視訊記憶體',
+    'ov2_rtv_engine_readonly': '只讀：需 manage_ops 權限方可載入/釋放視訊記憶體',
     # ── ov2_rtv_engine_token ──
     'ov2_rtv_engine_token': '訪問口令',
     # ── ov2_rtv_engine_token_hint ──
@@ -19538,7 +19543,7 @@ ZH_HANT = {
     # ── ov_js_no_pending_all ──
     'ov_js_no_pending_all': '當前所有平台均無待審條目 ✅',
     # ── ov_js_no_perm ──
-    'ov_js_no_perm': '許可權不足（{status}）：{detail}',
+    'ov_js_no_perm': '權限不足（{status}）：{detail}',
     # ── ov_js_no_platform ──
     'ov_js_no_platform': '未分配平台',
     # ── ov_js_no_platforms_stopped ──
@@ -19588,7 +19593,7 @@ ZH_HANT = {
     # ── ov_js_og_load_fail ──
     'ov_js_og_load_fail': '讀取失敗',
     # ── ov_js_og_op_fail ──
-    'ov_js_og_op_fail': '操作失敗（需 manage_ops 許可權）',
+    'ov_js_og_op_fail': '操作失敗（需 manage_ops 權限）',
     # ── ov_js_og_perm_confirm ──
     'ov_js_og_perm_confirm': '「{scope}」將被永久停發（無自動恢復，只能人工解除）。\n\n確定不選帶 TTL 的檔位嗎？',
     # ── ov_js_og_scopes_n ──
@@ -22015,7 +22020,7 @@ ZH_HANT = {
     # ── psn_pers_structured ──
     'psn_pers_structured': '結構化人設：此處僅編輯說話風格 style，特質等欄位隨儲存原樣保留',
     # ── psn_persist_warn ──
-    'psn_persist_warn': '⚠ 已儲存到記憶體但未寫入磁碟——服務重啟後會回退！請重試儲存或聯絡技術檢查 profiles_runtime.yaml 寫入許可權。',
+    'psn_persist_warn': '⚠ 已儲存到記憶體但未寫入磁碟——服務重啟後會回退！請重試儲存或聯絡技術檢查 profiles_runtime.yaml 寫入權限。',
     # ── psn_personality_eg_ph ──
     'psn_personality_eg_ph': '如：口語像私聊微信；短訊息就短回；不套客服模板',
     # ── psn_personality_ph ──
@@ -23200,12 +23205,8 @@ ZH_HANT = {
     'rh_s017': '建議動作',
     # ── rh_s018 ──
     'rh_s018': '重逢開場草稿',
-    # ── role_admin ──
-    'role_admin': '管理員（編輯許可權）',
     # ── role_agent ──
     'role_agent': '坐席（僅聊天工作台）',
-    # ── role_master ──
-    'role_master': '主帳號（全部許可權）',
     # ── role_supervisor ──
     'role_supervisor': '主管（坐席+團隊看板）',
     # ── role_viewer ──
@@ -24687,7 +24688,7 @@ ZH_HANT = {
     # ── rvc_js_050 ──
     'rvc_js_050': '正在請求麥克風…',
     # ── rvc_js_051 ──
-    'rvc_js_051': '麥克風許可權被拒絕',
+    'rvc_js_051': '麥克風權限被拒絕',
     # ── rvc_js_052 ──
     'rvc_js_052': '已連線，正在喚醒…',
     # ── rvc_js_053 ──
@@ -26963,7 +26964,7 @@ ZH_HANT = {
     # ── tm_js005 ──
     'tm_js005': '此操作不可恢復。',
     # ── tm_js006 ──
-    'tm_js006': '刪除失敗（可能需要主管許可權）',
+    'tm_js006': '刪除失敗（可能需要主管權限）',
     # ── tm_s001 ──
     'tm_s001': '模板庫管理',
     # ── tm_s002 ──
@@ -27242,36 +27243,26 @@ ZH_HANT = {
     'tq_notify_title': '繫結 Telegram 通知號',
     # ── tq_perm_allow ──
     'tq_perm_allow': '覆寫允許',
-    # ── tq_perm_btn ──
-    'tq_perm_btn': '許可權',
     # ── tq_perm_deny ──
     'tq_perm_deny': '覆寫禁止',
     # ── tq_perm_domain_ai ──
     'tq_perm_domain_ai': 'AI',
     # ── tq_perm_domain_chat ──
     'tq_perm_domain_chat': '聊天',
-    # ── tq_perm_hint ──
-    'tq_perm_hint': '覆寫只對該賬號生效；「繼承預設」跟隨角色許可權。',
     # ── tq_perm_inherit ──
     'tq_perm_inherit': '繼承預設',
     # ── tq_perm_inherit_allow ──
     'tq_perm_inherit_allow': '繼承預設允許',
     # ── tq_perm_inherit_deny ──
     'tq_perm_inherit_deny': '繼承預設禁止',
-    # ── tq_perm_load_fail ──
-    'tq_perm_load_fail': '許可權介面未就緒（服務重啟後可用）',
     # ── tq_perm_overridden ──
     'tq_perm_overridden': '已覆寫',
-    # ── tq_perm_saved ──
-    'tq_perm_saved': '許可權已儲存',
     # ── tq_perm_send_media ──
     'tq_perm_send_media': '傳送圖片/媒體',
     # ── tq_perm_send_text ──
     'tq_perm_send_text': '傳送文字',
     # ── tq_perm_send_voice ──
     'tq_perm_send_voice': '語音合成與傳送',
-    # ── tq_perm_title ──
-    'tq_perm_title': '按人許可權覆寫',
     # ── tq_perm_translate ──
     'tq_perm_translate': '手動翻譯',
     # ── tq_quota_btn ──
@@ -27402,8 +27393,6 @@ ZH_HANT = {
     'us_s001': '使用者管理',
     # ── us_s002 ──
     'us_s002': '此頁面為高階管理功能。',
-    # ── us_s003 ──
-    'us_s003': '管理後台帳號、角色與許可權',
     # ── us_s004 ──
     'us_s004': '觀察員',
     # ── us_s005 ──
@@ -28713,12 +28702,12 @@ ZH_HANT = {
     'ws.banner.name.expiry': '到期提醒',
     'ws.banner.name.restartcool': '維護視窗',
     'ws.banner.name.session': '登入狀態',
-    'ws.cap.denied_msg': '當前賬號未開通此能力（許可權閘已攔截）。如需使用請聯絡管理員開通。',
+    'ws.cap.denied_msg': '當前賬號未開通此能力（權限閘已攔截）。如需使用請聯絡管理員開通。',
     'ws.chandown.cancel': '取消',
     'ws.chandown.close_t': '關閉本條提醒：本次會話內同一事件不再彈出；通道圖示仍會標示該賬號離線，恢復線上後自動消失',
     'ws.chandown.disable_btn': '標為已停用',
     'ws.chandown.disable_confirm': '把 {who} 標為已停用？系統將停止拉起它、不再提醒斷線，賬號欄灰顯；登入憑據保留，之後在「賬號管理」重新登入一次即恢復。',
-    'ws.chandown.disable_denied': '標為已停用需要管理許可權，請聯絡管理員處理；您可以先選「不再提醒此賬號」',
+    'ws.chandown.disable_denied': '標為已停用需要管理權限，請聯絡管理員處理；您可以先選「不再提醒此賬號」',
     'ws.chandown.disable_fail': '標為已停用失敗：{err}',
     'ws.chandown.disable_ok': '{who} 已標為已停用：不再提醒，賬號欄灰顯；需要時到「賬號管理」重新登入即恢復',
     'ws.chandown.disable_old_backend': '服務端尚未裝載本功能（等待重啟生效）；您可以先選「不再提醒此賬號」',
@@ -28729,7 +28718,7 @@ ZH_HANT = {
     'ws.chandown.hint': '（共 {count} 條通道異常：{list}）',
     'ws.chandown.logout_btn': '登出該賬號',
     'ws.chandown.logout_confirm': '確認登出 {who}？登出後系統停止該賬號的收發與相關提醒，歷史會話仍可檢視；之後可在「賬號管理」重新接入。',
-    'ws.chandown.logout_denied': '登出需要管理許可權，請聯絡管理員處理',
+    'ws.chandown.logout_denied': '登出需要管理權限，請聯絡管理員處理',
     'ws.chandown.logout_fail': '登出失敗：{err}',
     'ws.chandown.logout_ok': '已登出，提醒將停止；如需繼續使用請到「賬號管理」重新接入。',
     'ws.chandown.mute_acct': '不再提醒此賬號',

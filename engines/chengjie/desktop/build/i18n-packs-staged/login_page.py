@@ -14,6 +14,9 @@ ZH = {
     # 实施97 P1：企业微信成员扫码登录
     "lg2_wecom_btn": "企业微信扫码登录",
     "lg2_wecom_hint": "用企业微信扫码即可登录，首次登录自动创建坐席账号。",
+    # 用户管理 P0-1（2026-09-11）：主动退出后落地提示（/login?manual=1）
+    "lg2_manual_note": "已退出登录。请用帐号密码登录；系统管理员可切到「管理员令牌登录」。",
+    "lg2_manual_shell": "桌面端的自动登录已暂停；重新打开应用会恢复主帐号自动登录。",
 }
 
 EN = {
@@ -25,4 +28,14 @@ EN = {
                       "agents sign in with username & password.",
     "lg2_wecom_btn": "Sign in with WeCom",
     "lg2_wecom_hint": "Scan with WeCom to sign in; an agent account is created on first sign-in.",
+    "lg2_manual_note": "You have signed out. Sign in with username & password; "
+                       "system administrators can switch to admin token sign-in.",
+    "lg2_manual_shell": "Automatic sign-in in the desktop app is paused; "
+                        "reopening the app restores master auto sign-in.",
+}
+
+# 繁體人工詞條（本批新鍵，regen 前的兜底；regen 不會復活已轉正鍵）
+ZH_HANT = {
+    "lg2_manual_note": "已退出登入。請用帳號密碼登入；系統管理員可切到「管理員令牌登入」。",
+    "lg2_manual_shell": "桌面端的自動登入已暫停；重新開啟應用會恢復主帳號自動登入。",
 }
