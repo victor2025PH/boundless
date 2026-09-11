@@ -70,6 +70,24 @@ ok(
   "renderer.js 登录链未把 dest（next 优先）传给 backendLoginJS"
 );
 
+// ── 用户管理 P0-1（2026-09-11）：主动退出 ≠ 会话过期 ─────────────────────────
+// /logout 落地 /login?manual=1；两条自动登录链看到它必须停手，否则「退出登录」被壳
+// 秒级令牌重登吃掉、子帐号永远见不到登录表单。三端契约缺任何一半即拒绝出生。
+const authRoutes = fs.readFileSync(
+  path.join(__dirname, "..", "..", "src", "web", "routes", "auth_user_routes.py"), "utf8");
+ok(
+  /RedirectResponse\(\s*["']\/login\?manual=1["']/.test(authRoutes),
+  "auth_user_routes.py /logout 不再落 /login?manual=1 —— 壳无法区分主动退出与会话过期"
+);
+ok(
+  /searchParams\.get\(\s*["']manual["']\s*\)\s*===\s*["']1["']/.test(fnBody) && /if \(manual\) return;/.test(fnBody),
+  "bindBackendPopupLogin 丢失 manual=1 手动登录态 —— 弹窗里点退出会被 token 秒级重登"
+);
+ok(
+  /searchParams\.get\(\s*["']manual["']\s*\)\s*===\s*["']1["']/.test(loginBody) && /_manualLogin/.test(loginBody),
+  "renderer.js 登录链丢失 manual=1 手动登录态 —— 工作台里退出会被凭据链秒级重登"
+);
+
 // ── _loading_overlay.html：超时散开必须显式报错（禁静默）────────────────────
 ok(
   /function\s+navFailNote\(/.test(overlayHtml),

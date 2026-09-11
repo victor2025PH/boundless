@@ -83,10 +83,15 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
     {{ error }}
   </div>
   {% endif %}
+  {% if manual %}
+  {# 用户管理 P0-1：主动退出落地（/login?manual=1）——桌面壳据此暂停令牌自动重登 #}
+  <div class="f-hint2" id="manual-note" style="margin:0 0 1rem;padding:.55rem .8rem;border:1px solid var(--bd);border-radius:9px;background:var(--input);text-align:left">{{ (i18n or {}).get('lg2_manual_note', '已退出登录。请用帐号密码登录；系统管理员可切到「管理员令牌登录」。') }}{% if in_shell %} {{ (i18n or {}).get('lg2_manual_shell', '桌面端的自动登录已暂停；重新打开应用会恢复主帐号自动登录。') }}{% endif %}</div>
+  {% endif %}
   {% if has_users %}
   <!-- Multi-user login；next 透传：托管交付深链 / 会话过期回跳 -->
   <form method="post" action="/login" id="form-user">
     {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    {% if manual %}<input type="hidden" name="manual" value="1">{% endif %}
     <div class="f-inp-wrap" style="margin-bottom:.9rem">
       <label class="f-lbl">{{ (i18n or {}).get('set_js_075', "用户名") }}</label>
       <input class="f-inp" type="text" name="username" placeholder="{{ (i18n or {}).get('set_js_075', '用户名') }}" required autofocus autocomplete="username">
@@ -114,6 +119,7 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
   <!-- Token login (hidden by default) -->
   <form method="post" action="/login" id="form-token" style="display:none">
     {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    {% if manual %}<input type="hidden" name="manual" value="1">{% endif %}
     <label class="f-lbl">{{ (i18n or {}).get('lg_s006', '管理密码') }}</label>
     <div class="f-inp-wrap">
       <input class="f-inp" type="password" id="pwd-inp2" name="auth_token" placeholder="{{ (i18n or {}).get('lg_s003', '请输入访问令牌') }}" autocomplete="current-password">

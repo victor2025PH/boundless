@@ -1632,6 +1632,8 @@ function isBackendUrl(url) {
 function bindBackendPopupLogin(win, intendedUrl) {
   const token = String(((config.backend || {}).token) || "");
   if (!token) return;
+  // 用户管理 P0-2：坐席机 backend.auto_login=false → 弹窗也不拿 token 代登，走人的子帐号
+  if ((config.backend || {}).auto_login === false) return;
   // B95（实施68 P1-14）：两处旧缺陷曾把「点数据洞察」变成「弹回后台首页」——
   //   ① 回跳目标写死为「开窗时的 URL」：会话中途过期后点任何侧栏页 → 服务端
   //      303 /login?next=<目标页> → 这里重登后 location.replace(开窗首页)，
@@ -1643,13 +1645,20 @@ function bindBackendPopupLogin(win, intendedUrl) {
   //      处理）；任一次成功进入非登录页即重置配额。
   let tries = 0;
   let lastTry = 0;
+  // 用户管理 P0-1（2026-09-11）：/logout 落地 /login?manual=1 =「人主动退出」——本窗进入
+  // 手动登录态，不再拿 token 秒级重登（否则「退出登录」形同虚设、子帐号无法登录）。
+  // 态粘性：密码错重渲染的 /login 无 query 也不自动登录；进入任何非登录页即解除。
+  let manual = false;
   win.webContents.on("did-finish-load", () => {
     let u;
     try { u = new URL(win.webContents.getURL()); } catch (e) { return; }
     if (u.pathname !== "/login" && u.pathname !== "/login/") {
       tries = 0;   // 成功进站：重置重登配额（下次过期还有机会自愈）
+      manual = false;
       return;
     }
+    try { if (u.searchParams.get("manual") === "1") manual = true; } catch (e) {}
+    if (manual) return;
     const now = Date.now();
     if (tries >= 3 || (now - lastTry) < 8000) return;
     tries++;

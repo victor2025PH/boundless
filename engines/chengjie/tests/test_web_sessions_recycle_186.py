@@ -114,7 +114,10 @@ def test_token_login_route_wires_recycle_and_mark_login():
 def test_users_template_copy_and_units():
     tpl = (_ROOT / "src" / "web" / "templates" / "users.html").read_text(encoding="utf-8")
     assert "us_account_note" in tpl, "页头必须说明这是操作员账号而非聊天平台账号"
-    assert "else '从未'" not in tpl and "get('us_never_login'" in tpl, "「从未」必须走 i18n 键（旧写法是硬编码）"
+    # 2026-09-11 用户管理 P0：徽章升级为「从未登录」（us_never_badge，带悬停自救提示）；两键皆走 i18n
+    assert "else '从未'" not in tpl and (
+        "get('us_never_login'" in tpl or "get('us_never_badge'" in tpl
+    ), "「从未」必须走 i18n 键（旧写法是硬编码）"
     assert "TQ.charsUnit" in tpl and "tq_chars_unit" in tpl, "用量必须带单位"
     # 技术标注（IP/UA/role/jti）收进折叠区；卡片主体显设备名 + 操作员 + 最后活跃
     sess = tpl[tpl.index("async function loadSessions()"):tpl.index("async function revokeSession(")]

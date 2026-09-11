@@ -43,7 +43,6 @@ _LEDGER: dict[str, int] = {
     "src/web/templates/ops_overview.html": 1,
     "src/web/templates/singing.html": 1,
     "src/web/templates/unified_inbox.html": 6,
-    "src/web/templates/users.html": 1,
     "src/web/templates/workspace_dashboard.html": 1,
     "src/web/static/messenger/messenger_rpa.js": 6,
 }

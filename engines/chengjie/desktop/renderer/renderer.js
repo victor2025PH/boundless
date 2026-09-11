@@ -366,9 +366,13 @@ initTitlebar();
     navTarget += (navTarget.includes("?") ? "&" : "?") + "theme=dark";
     const fullUrl = base + navTarget;
     // 凭据链：优先 token，回退用户名/密码（token 为空或失效时自动接力）
+    // 用户管理 P0-2：backend.auto_login=false（坐席机开关）→ 不自动登录，每次启动露出登录页
+    // 让操作员用自己的子帐号登录；backend.token 仍供 sidecar/API 使用，两者解耦。
     const creds = [];
-    if (backend.token) creds.push({ auth_token: backend.token });
-    if (backend.user && backend.pass) creds.push({ username: backend.user, password: backend.pass });
+    if (backend.auto_login !== false) {
+      if (backend.token) creds.push({ auth_token: backend.token });
+      if (backend.user && backend.pass) creds.push({ username: backend.user, password: backend.pass });
+    }
 
     const item = document.createElement("div");
     item.className = "rail-item active";
@@ -411,6 +415,7 @@ initTitlebar();
     });
     wv._loginIdx = 0;       // 凭据链游标
     wv._loginPending = false; // 登录尝试进行中标记
+    wv._manualLogin = false;  // 人主动退出后的手动登录态（/login?manual=1 置位，进站/重试清零）
     stage.appendChild(wv);
 
     // ── 连接遮罩（loading / error）：盖在收件箱 webview 上 ──────────────
@@ -486,6 +491,8 @@ initTitlebar();
       stopReconnectPoll();
       wv._loginIdx = 0;
       wv._loginPending = false;
+      wv._manualLogin = false; // 手动重试 = 用户要回自动登录
+      wv._manualFlashed = false;
       wv._phase = undefined;
       setPhase("loading", SH("conn.connecting"));
       try { wv.loadURL(fullUrl); } catch (e) { try { wv.reload(); } catch (e2) {} }
@@ -506,18 +513,28 @@ initTitlebar();
         wv.executeJavaScript(
           "!!(document.body && document.body.dataset && document.body.dataset.wsOffline)"
         ).then((isOfflineShell) => {
-          if (!isOfflineShell) { wv._phase = "done"; wv._loginIdx = 0; setPhase("ready"); return; }
+          if (!isOfflineShell) { wv._phase = "done"; wv._loginIdx = 0; wv._manualLogin = false; wv._manualFlashed = false; setPhase("ready"); return; }
           wv._phase = "error";
           setPhase("error", SH("conn.offline_shell", { base: base }));
           startReconnectPoll();
         }).catch(() => {
           // 旧后端不带该标记 / 取值失败 → 保持原行为，不因探测失败卡住用户
-          wv._phase = "done"; wv._loginIdx = 0; setPhase("ready");
+          wv._phase = "done"; wv._loginIdx = 0; wv._manualLogin = false; wv._manualFlashed = false; setPhase("ready");
         });
         return;
       }
       if (p === "/login") {
         if (wv._loginPending) return; // 本次登录尝试进行中，等其 location.replace
+        // 用户管理 P0-1：/logout 落地 /login?manual=1 =「人主动退出」——进入手动登录态，
+        // 不再跑凭据链（否则退出被壳秒级令牌重登吃掉，子帐号永远见不到登录表单）。
+        // 态是粘性的：密码错重渲染的 /login 无 query 也不自动登录；进站成功 / 手动重试解除。
+        try { if (new URL(url).searchParams.get("manual") === "1") wv._manualLogin = true; } catch (e) {}
+        if (wv._manualLogin) {
+          wv._phase = "manual";
+          setPhase("ready");
+          if (!wv._manualFlashed) { wv._manualFlashed = true; flash(SH("conn.login_manual_out")); }
+          return;
+        }
         const idx = wv._loginIdx || 0;
         if (idx < creds.length) {
           wv._loginIdx = idx + 1;
@@ -539,7 +556,8 @@ initTitlebar();
         }
         return;
       }
-      // 其它后台子路径（/setup 等）：直接展示
+      // 其它后台子路径（/setup、/workspace/dash 等）：直接展示；已进站 = 手动登录态结束
+      wv._manualLogin = false; wv._manualFlashed = false;
       setPhase("ready");
     }
 

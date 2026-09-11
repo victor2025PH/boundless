@@ -6466,7 +6466,6 @@ ZH_HANT = {
     'err.svc.upstream_unreachable': '連不上官網服務，請檢查網路後重試。',
     'err.svc.upstream_unreachable_staged': '暫時連不上官網服務：報障內容已在本機暫存，網路恢復後會自動補傳給客服，無需重複提交。',
     'err.team.bad_chat_id': 'Chat ID 格式無效：應為純數字（群為負數），留空=解綁',
-    'err.team.bad_perms': '許可權提交無效（未知能力鍵，或同一能力同時出現在允許與禁止）',
     'err.team.cannot_manage': '無權管理該賬號（角色層級不足）',
     'err.team.master_protected': '主帳號受保護，不可在此修改',
     'err.team.no_alert_channel': '告警渠道未接通（無可用的 Telegram 機器人），請先在告警渠道面板接通',
@@ -23200,12 +23199,8 @@ ZH_HANT = {
     'rh_s017': '建議動作',
     # ── rh_s018 ──
     'rh_s018': '重逢開場草稿',
-    # ── role_admin ──
-    'role_admin': '管理員（編輯許可權）',
     # ── role_agent ──
     'role_agent': '坐席（僅聊天工作台）',
-    # ── role_master ──
-    'role_master': '主帳號（全部許可權）',
     # ── role_supervisor ──
     'role_supervisor': '主管（坐席+團隊看板）',
     # ── role_viewer ──
@@ -27242,36 +27237,26 @@ ZH_HANT = {
     'tq_notify_title': '繫結 Telegram 通知號',
     # ── tq_perm_allow ──
     'tq_perm_allow': '覆寫允許',
-    # ── tq_perm_btn ──
-    'tq_perm_btn': '許可權',
     # ── tq_perm_deny ──
     'tq_perm_deny': '覆寫禁止',
     # ── tq_perm_domain_ai ──
     'tq_perm_domain_ai': 'AI',
     # ── tq_perm_domain_chat ──
     'tq_perm_domain_chat': '聊天',
-    # ── tq_perm_hint ──
-    'tq_perm_hint': '覆寫只對該賬號生效；「繼承預設」跟隨角色許可權。',
     # ── tq_perm_inherit ──
     'tq_perm_inherit': '繼承預設',
     # ── tq_perm_inherit_allow ──
     'tq_perm_inherit_allow': '繼承預設允許',
     # ── tq_perm_inherit_deny ──
     'tq_perm_inherit_deny': '繼承預設禁止',
-    # ── tq_perm_load_fail ──
-    'tq_perm_load_fail': '許可權介面未就緒（服務重啟後可用）',
     # ── tq_perm_overridden ──
     'tq_perm_overridden': '已覆寫',
-    # ── tq_perm_saved ──
-    'tq_perm_saved': '許可權已儲存',
     # ── tq_perm_send_media ──
     'tq_perm_send_media': '傳送圖片/媒體',
     # ── tq_perm_send_text ──
     'tq_perm_send_text': '傳送文字',
     # ── tq_perm_send_voice ──
     'tq_perm_send_voice': '語音合成與傳送',
-    # ── tq_perm_title ──
-    'tq_perm_title': '按人許可權覆寫',
     # ── tq_perm_translate ──
     'tq_perm_translate': '手動翻譯',
     # ── tq_quota_btn ──
@@ -27402,8 +27387,6 @@ ZH_HANT = {
     'us_s001': '使用者管理',
     # ── us_s002 ──
     'us_s002': '此頁面為高階管理功能。',
-    # ── us_s003 ──
-    'us_s003': '管理後台帳號、角色與許可權',
     # ── us_s004 ──
     'us_s004': '觀察員',
     # ── us_s005 ──

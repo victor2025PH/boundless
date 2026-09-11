@@ -48,7 +48,11 @@ rail 标签：
 
 - **统一收件箱**：固定 id `__inbox__`，独立分区 `persist:backend-workspace`。落到 `/login`
   时在页面内 POST 凭据自动登录回跳——**凭据链**优先 `backend.token`，回退 `backend.user`/`backend.pass`
-  （token 为空/失效时自动接力，全部失败才露出登录页人工处理）。带 loading/error 遮罩；
+  （token 为空/失效时自动接力，全部失败才露出登录页人工处理）。两处例外（用户管理 P0，2026-09-11）：
+  ① 人在页面里点「退出登录」→ 服务端落 `/login?manual=1`，壳进入**手动登录态**不再自动重登
+  （密码错重渲染也不重登；进站成功 / 点重试 / 重开应用恢复）；② `backend.auto_login=false`
+  （坐席机开关）→ 凭据链整体停用、每次启动露出登录页让操作员用自己的子帐号登录，
+  `backend.token` 仍供 sidecar/API 使用。后台弹窗（`bindBackendPopupLogin`）同两条规则。带 loading/error 遮罩；
   **后端未起会自动重连**（主进程 `desktop:backend-health` 探活，可达即自动重载，先开桌面后开后端也能自愈）。
   开关：`config.json::unified_inbox.enabled`（默认 `true`，可改 `label`/`path`）；
   `unified_inbox.lang`（`zh`/`zh_hant`/`en`/`vi`/`th`/`id`，与后端 `i18n_packs.UI_LANGS` 对齐，`zh-TW`/`zh-HK` 视作 `zh_hant`；**空=跟随系统**——`app.getLocale()` 按同一家族映射推断，2026-08-27 起真跟随，此前空值恒中文）会以 `?lang=` 注入并贯穿登录回跳，**坐席界面语言对齐**。扩展语下壳菜单/向导按表定底回落（vi/th/id→en，zh_hant→zh），Web 工作台按该语渲染。Web 端未登录/无偏好时按 `Accept-Language` 协商（显式选择与登录回填永远优先，推断不落 cookie）。

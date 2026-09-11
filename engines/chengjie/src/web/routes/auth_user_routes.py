@@ -74,8 +74,16 @@ def register_auth_user_routes(
             return "/workspace/dash"
         return "/"
 
-    def _login_ctx(request: Request, *, error: str = "", next_raw: str = ""):
+    def _login_ctx(request: Request, *, error: str = "", next_raw: str = "",
+                   manual: bool | None = None):
         nxt = safe_next_path(next_raw) or safe_next_path(request.query_params.get("next"))
+        # 用户管理 P0-1（2026-09-11）：/logout 落到 /login?manual=1 ——「人手动退出」信号。
+        # 桌面壳（renderer.js onNav / main.js bindBackendPopupLogin）看到它就不再用
+        # backend.token 自动重登，否则「退出→303 /login→壳秒级令牌重登」= 退出无效、
+        # 子帐号永远看不到登录表单。表单失败重渲染时经 Form 透传保持该态。
+        if manual is None:
+            manual = request.query_params.get("manual") == "1"
+        ua = request.headers.get("user-agent", "")
         # 实施97 P1：企业微信扫码登录入口（wecom_login.enabled 且凭证齐才亮）
         wecom_on = False
         try:
@@ -88,6 +96,8 @@ def register_auth_user_routes(
             "has_users": user_store.user_count() > 0,
             "next": nxt,
             "wecom_login": wecom_on,
+            "manual": bool(manual),
+            "in_shell": "Electron" in ua or "ChatX" in ua,
         }
 
     # ── 角色分层守卫（谁能管谁 / 谁能发什么角色，判定在 web_user_store 单点）──
@@ -116,12 +126,16 @@ def register_auth_user_routes(
                 if fb:
                     u["last_login"] = fb
                     u["last_login_from_session"] = True
+        # P0-5：页面明示「帐号建在哪台后端」——子帐号只在本后端的 web_users.db 里，
+        # 坐席机若指向别的后端（各自捆绑 backend）登不上；host 直接来自本次请求。
+        backend_host = str(request.headers.get("host") or request.url.netloc or "")
         return {
             "users": users,
             "role_labels": ROLE_LABELS,
             "msg": msg,
             "msg_ok": msg_ok,
             "actor_role": actor,
+            "backend_host": backend_host,
             "assignable_roles_ctx": [
                 (r, ROLE_LABELS.get(r, r)) for r in assignable_roles(actor)
             ],
@@ -141,7 +155,8 @@ def register_auth_user_routes(
     @app.post("/login")
     async def login_submit(request: Request, auth_token: str = Form(None),
                            username: str = Form(None), password: str = Form(None),
-                           next: str = Form("")):
+                           next: str = Form(""), manual: str = Form("")):
+        _manual = manual == "1"
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         # multi-user login
@@ -165,7 +180,8 @@ def register_auth_user_routes(
                     resp.set_cookie("ui_lang", _lang, max_age=365 * 86400)
                 return resp
             return templates.TemplateResponse(request, "login.html", _login_ctx(
-                request, error=tr(request, "err.auth.bad_credentials"), next_raw=next))
+                request, error=tr(request, "err.auth.bad_credentials"), next_raw=next,
+                manual=_manual))
         # legacy token login（S6：恒定时间比较，防时序侧信道）
         if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
             # #186：桌面壳每次启动都走这里 → 同设备旧会话随新登录作废（只留最近一条），
@@ -184,7 +200,7 @@ def register_auth_user_routes(
             _dest = resolve_post_login_dest(next_raw=next, role_default="/")
             return RedirectResponse(_dest, status_code=303)
         return templates.TemplateResponse(request, "login.html", _login_ctx(
-            request, error=tr(request, "token_error"), next_raw=next))
+            request, error=tr(request, "token_error"), next_raw=next, manual=_manual))
 
     @app.get("/logout")
     async def logout(request: Request):
@@ -192,7 +208,8 @@ def register_auth_user_routes(
         if jti:
             user_store.revoke_session(jti)
         request.session.clear()
-        return RedirectResponse("/login", status_code=303)
+        # manual=1：告诉桌面壳「这是人主动退出」，别再拿 backend.token 秒级重登（见 _login_ctx）
+        return RedirectResponse("/login?manual=1", status_code=303)
 
     # ── 首次使用配置向导 ──────────────────────────────────────
     @app.get("/setup", response_class=HTMLResponse)
@@ -340,13 +357,14 @@ def register_auth_user_routes(
             if ajax:
                 return {"ok": False, "detail": tr(request, "su_js_003")}
             return templates.TemplateResponse(request, "users.html", _users_page_ctx(
-                request, msg="密码至少 6 位", msg_ok=False))
+                request, msg=tr(request, "su_js_003"), msg_ok=False))
         result = user_store.create_user(username, password, role, display_name)
         if not result:
             if ajax:
                 return {"ok": False, "detail": tr(request, "err.auth.user_exists_or_bad_role", username=username)}
             return templates.TemplateResponse(request, "users.html", _users_page_ctx(
-                request, msg=f"创建失败：用户名 '{username}' 已存在或角色无效", msg_ok=False))
+                request, msg=tr(request, "err.auth.user_exists_or_bad_role", username=username),
+                msg_ok=False))
         if audit_store:
             audit_store.log(request.session.get("username", ""), "create_user", username)
         if ajax:
@@ -372,6 +390,9 @@ def register_auth_user_routes(
                 raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
             kw["role"] = role
         if password:
+            # P0-3 重置密码入口与创建同一下限（此前 update 路径无校验，可设 1 位密码）
+            if len(password) < 6:
+                raise HTTPException(400, tr(request, "su_js_003"))
             kw["password"] = password
         if enabled is not None:
             kw["enabled"] = enabled == "1"
@@ -402,7 +423,7 @@ def register_auth_user_routes(
         if audit_store and ok:
             audit_store.log(request.session.get("username", ""), "delete_user", str(user_id))
         if "application/json" in request.headers.get("accept", ""):
-            return {"ok": ok, "detail": "" if ok else "无法删除（主帐号不可删除）"}
+            return {"ok": ok, "detail": "" if ok else tr(request, "err.team.master_no_delete")}
         return RedirectResponse("/users", status_code=303)
 
     # ── 坐席月度字符额度（0 = 不限；层级守卫与角色变更同一判定）─────────

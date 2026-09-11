@@ -3,45 +3,109 @@
 {% block page_title %}{{ (i18n or {}).get('us_s001', "用户管理") }}{% endblock %}
 {% block head %}
 <style>
-.u-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1.1rem;margin-bottom:1.5rem}
-.u-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.2rem;transition:all .25s;position:relative}
+/* 用户管理页（2026-09-11 五视角方案落地）：只用主题变量，零新色值；字号下限 .75rem；
+   禁用态不用 opacity 压字（对比度纪律）。 */
+.u-head-right{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.u-chip{display:inline-flex;align-items:center;gap:.35rem;font-size:.75rem;color:var(--t2);background:var(--input);border:1px solid var(--bd);border-radius:20px;padding:.25rem .65rem;max-width:100%}
+.u-chip b{color:var(--t);font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+.u-note{margin-top:.5rem;font-size:.78rem;color:var(--t2);max-width:760px}
+.u-note summary{cursor:pointer;color:var(--p);font-weight:600;font-size:.78rem;list-style:none;display:inline-flex;align-items:center;gap:.3rem}
+.u-note summary::-webkit-details-marker{display:none}
+.u-note[open] summary{margin-bottom:.35rem}
+.u-note p{line-height:1.55;padding:.5rem .7rem;border:1px solid var(--bd);border-radius:8px;background:var(--input)}
+/* KPI 四格 */
+.u-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
+.u-kpi div{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.75rem 1rem}
+.u-kpi small{display:block;font-size:.75rem;color:var(--t3);margin-bottom:.2rem}
+.u-kpi b{font-size:1.25rem;font-weight:800;color:var(--t);letter-spacing:-.01em}
+/* 工具栏：搜索 + 角色筛选 */
+.u-tools{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.9rem}
+.u-search{flex:1 1 220px;max-width:340px;padding:.45rem .75rem;font-size:.82rem;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--t)}
+.u-search:focus{outline:none;border-color:var(--p);box-shadow:0 0 0 3px var(--ps)}
+.u-fchip{font-size:.75rem;padding:.3rem .7rem;border-radius:20px;border:1px solid var(--bd);background:var(--card);color:var(--t2);cursor:pointer;font-family:inherit}
+.u-fchip:hover{border-color:var(--bd2);color:var(--t)}
+.u-fchip.on{background:var(--ps);border-color:var(--p);color:var(--p);font-weight:600}
+.u-showing{margin-left:auto;font-size:.75rem;color:var(--t3)}
+/* 卡片网格 */
+.u-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem;margin-bottom:1.5rem}
+.u-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:1.1rem 1.15rem;transition:box-shadow .2s,transform .2s;position:relative;display:flex;flex-direction:column;gap:.75rem}
 .u-card:hover{box-shadow:var(--s1);transform:translateY(-1px)}
-.u-card.disabled{opacity:.55}
-.u-hd{display:flex;align-items:center;gap:.7rem;margin-bottom:.8rem}
-.u-avatar{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1rem;color:#fff;flex-shrink:0}
-.u-avatar.master{background:var(--g)}
-.u-avatar.admin{background:linear-gradient(135deg,#10b981,#059669)}
-.u-avatar.viewer{background:linear-gradient(135deg,#6b7280,#4b5563)}
-.u-avatar.supervisor,.u-avatar.agent{background:var(--p)}
-.u-name{font-weight:700;font-size:.95rem}
-.u-sub{font-size:.75rem;color:var(--t3)}
-.u-meta{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.8rem;color:var(--t2);margin-bottom:.8rem}
-.u-meta span{background:var(--input);padding:.3rem .5rem;border-radius:6px}
-.u-actions{display:flex;gap:.4rem;flex-wrap:wrap}
-.u-stats{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem}
-.u-stats span{background:var(--input);padding:.4rem .7rem;border-radius:8px;font-size:.78rem;color:var(--t3)}
-.u-stats b{color:var(--t);font-size:.92rem;margin-left:.3rem}
-.u-usage{margin-bottom:.8rem}
-.u-usage-hd{display:flex;align-items:center;gap:.45rem;font-size:.74rem;color:var(--t3);margin-bottom:.3rem}
+.u-card.menu-open{z-index:5}
+.u-card.disabled{border-style:dashed;background:var(--bg2)}
+.u-card.disabled .u-avatar{filter:grayscale(1)}
+.u-card.disabled .u-name{color:var(--t2)}
+.u-hd{display:flex;align-items:flex-start;gap:.7rem}
+.u-avatar{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.9rem;letter-spacing:.02em;color:#fff;flex-shrink:0;background:var(--t3)}
+.u-avatar.master{background:var(--g);box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--p)}
+.u-avatar.admin{background:var(--g-g)}
+.u-avatar.supervisor{background:linear-gradient(135deg,var(--violet),var(--purple))}
+.u-avatar.agent{background:var(--g-a)}
+.u-avatar.viewer{background:var(--t3)}
+.u-id{flex:1;min-width:0}
+.u-name{font-weight:700;font-size:.95rem;display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;line-height:1.3}
+.u-sub{font-size:.78rem;color:var(--t3);margin-top:.15rem;word-break:break-all}
+.role-chip{display:inline-block;font-size:.75rem;font-weight:600;padding:.1rem .5rem;border-radius:20px;background:var(--input);color:var(--t2);white-space:nowrap}
+.role-chip.master{background:var(--ps);color:var(--p)}
+.role-chip.admin{background:var(--gs);color:var(--green)}
+.role-chip.supervisor{background:var(--prs);color:var(--purple)}
+.role-chip.agent{background:var(--as);color:var(--amber)}
+.role-chip.viewer{background:var(--input);color:var(--t2)}
+.u-flags{display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;flex-shrink:0}
+.u-meta{display:flex;gap:.4rem;flex-wrap:wrap;font-size:.75rem;color:var(--t2)}
+.u-meta span{background:var(--input);padding:.25rem .55rem;border-radius:6px;display:inline-flex;align-items:center;gap:.3rem}
+.u-meta span[hidden]{display:none}
+.u-meta .u-never{background:var(--as);color:var(--amber);font-weight:600}
+.u-meta .u-sess-n b{font-weight:700;color:var(--t)}
+.u-usage-hd{display:flex;align-items:center;gap:.45rem;font-size:.75rem;color:var(--t3);margin-bottom:.3rem}
 .u-usage-txt{color:var(--t2);font-weight:600}
 .u-usage-badge:empty{display:none}
 .u-usage-bar{height:4px;border-radius:2px;background:var(--input);overflow:hidden}
 .u-usage-bar i{display:block;height:100%;width:0;background:var(--p);border-radius:2px;transition:width .3s}
+/* 操作行：角色 + 重置密码 + ⋯ 溢出菜单（低频/危险动作收进菜单） */
+.u-actions{display:flex;gap:.4rem;align-items:center;margin-top:auto;padding-top:.6rem;border-top:1px solid var(--bd)}
+.u-card .btn-xs,.sess-card .btn-xs{font-size:.75rem} /* base .btn-xs=.74rem，本页抬到字号下限 */
+.u-role-sel{flex:1;min-width:0;padding:.3rem .5rem;font-size:.78rem;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);cursor:pointer;font-family:inherit}
+.u-menu-wrap{position:relative;flex-shrink:0}
+.u-more{padding:.3rem .55rem;font-size:.9rem;line-height:1;letter-spacing:.05em}
+.u-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);min-width:180px;background:var(--card);border:1px solid var(--bd2);border-radius:10px;box-shadow:var(--s2);padding:.35rem;z-index:20}
+.u-menu.open{display:block}
+.u-menu button{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;background:none;border:0;border-radius:7px;padding:.45rem .6rem;font-size:.8rem;color:var(--t);cursor:pointer;font-family:inherit}
+.u-menu button:hover{background:var(--input)}
+.u-menu button.danger{color:var(--red)}
+.u-menu button.danger:hover{background:var(--rs)}
+.u-menu hr{border:0;border-top:1px solid var(--bd);margin:.3rem 0}
+.u-master-note{font-size:.78rem;color:var(--t3);margin-top:auto;padding-top:.6rem;border-top:1px solid var(--bd)}
 .create-card{border:2px dashed var(--bd2);background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px;cursor:pointer;transition:.2s}
 .create-card:hover{border-color:var(--p);background:var(--ps)}
 .create-card svg{width:32px;height:32px;color:var(--t3);margin-bottom:.5rem}
 .create-card span{font-weight:600;color:var(--t2)}
+/* 会话卡 */
+.sess-card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:.9rem 1rem}
+.sess-card.cur{border:2px solid var(--p)}
+.sess-card .sess-dev{font-size:.85rem;font-weight:700}
+.sess-card .sess-cur{font-size:.75rem;padding:.1rem .5rem;background:var(--ps);color:var(--p);border-radius:20px;font-weight:600}
+.sess-card .sess-line{font-size:.75rem;color:var(--t2);margin-bottom:.3rem}
+.sess-card .sess-dim{font-size:.75rem;color:var(--t3);margin-bottom:.3rem}
+.sess-card details summary{cursor:pointer;font-size:.75rem;color:var(--t3)}
+.sess-card details div{font-size:.75rem;color:var(--t3);line-height:1.6;margin-top:.2rem;word-break:break-all}
 /* modal */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
 .modal-bg.show{display:flex}
-.modal{background:var(--card);border-radius:16px;padding:1.5rem;width:90%;max-width:400px;box-shadow:var(--s2)}
+.modal{background:var(--card);border-radius:16px;padding:1.5rem;width:90%;max-width:420px;box-shadow:var(--s2)}
 .modal h3{font-size:1.05rem;font-weight:700;margin-bottom:1rem}
-/* L3 按人权限覆写编辑器（行由 JS 渲染；只用既有主题变量，零新色值） */
+.modal .f-hint{font-size:.75rem;color:var(--t3);margin:.3rem 0 0;line-height:1.5}
+.modal .f-row{display:flex;gap:.4rem}
+.modal .f-row input{flex:1;min-width:0}
+.modal .m-foot{display:flex;gap:.5rem;margin-top:1rem}
+.cred-box{background:var(--input);border:1px solid var(--bd);border-radius:10px;padding:.8rem .9rem;font-size:.85rem;line-height:1.9}
+.cred-box .k{color:var(--t3);display:inline-block;min-width:5.5em}
+.cred-box .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--t);font-weight:600;user-select:all;word-break:break-all}
+/* L3 按人权限覆写编辑器（行由 JS 渲染） */
 .perm-row{display:flex;align-items:center;gap:.5rem;padding:.45rem 0;border-bottom:1px solid var(--bd);font-size:.82rem}
 .perm-row:last-child{border-bottom:0}
-.perm-dom{flex-shrink:0;font-size:.68rem;padding:.12rem .4rem;border-radius:6px;background:var(--input);color:var(--t3)}
+.perm-dom{flex-shrink:0;font-size:.75rem;padding:.12rem .4rem;border-radius:6px;background:var(--input);color:var(--t3)}
 .perm-name{flex:1;color:var(--t)}
-.perm-eff{font-size:.72rem;color:var(--t3);white-space:nowrap}
+.perm-eff{font-size:.75rem;color:var(--t3);white-space:nowrap}
 .perm-row select{padding:.2rem .4rem;font-size:.76rem;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);cursor:pointer}
 </style>
 {% endblock %}
@@ -70,34 +134,67 @@
   <div>
     <h1>{{ (i18n or {}).get('users', "用户管理") }}</h1>
     <p style="font-size:.82rem;color:var(--t3);margin-top:.2rem">{{ (i18n or {}).get('us_s003', "管理后台帐号、角色与权限") }}</p>
-    {# #186：页面没说这是智聊操作员账号——用户把它当成聊天平台账号来读 #}
-    <p style="font-size:.78rem;color:var(--t2);margin-top:.35rem;line-height:1.5;padding:.4rem .6rem;border:1px solid var(--bd);border-radius:8px;background:var(--input);max-width:720px">ℹ {{ (i18n or {}).get('us_account_note', "这里管理的是智聊本身的操作员账号（谁能登录这个后台 / 桌面端），不是你的 Telegram、WhatsApp、LINE 等聊天平台账号——那些在「接入」页管理。") }}</p>
+    {# #186 说明条改为可折叠：首次读一遍就够，不再常驻占两行 #}
+    <details class="u-note">
+      <summary>ℹ {{ (i18n or {}).get('us_what_is', "这是什么帐号？") }}</summary>
+      <p>{{ (i18n or {}).get('us_account_note', "这里管理的是智聊本身的操作员账号（谁能登录这个后台 / 桌面端），不是你的 Telegram、WhatsApp、LINE 等聊天平台账号——那些在「接入」页管理。") }}</p>
+    </details>
+  </div>
+  <div class="u-head-right">
+    {# P0-5：帐号建在哪台后端——子帐号「登不上」最常见的根因是坐席机连的是另一台 backend #}
+    {% if backend_host %}
+    <span class="u-chip" title="{{ (i18n or {}).get('us_backend_t', '子帐号只存在于这台后端；坐席机若连的是另一台后端，要在那台上创建') }}">🖧 {{ (i18n or {}).get('us_backend_lbl', "帐号所在后端") }} <b>{{ backend_host }}</b></span>
+    {% endif %}
+    <button class="btn btn-p btn-sm" onclick="openCreateModal()">＋ {{ (i18n or {}).get('us_s006', "添加子帐号") }}</button>
   </div>
 </div>
 
-<!-- ── 团队统计条（本月字符/授权池两格由 /api/users/char-usage 回填，失败保持 —）── -->
-<div class="u-stats fa">
-  <span>{{ (i18n or {}).get('tq_stat_members', "成员总数") }}<b>{{ users|length }}</b></span>
-  <span>{{ (i18n or {}).get('tq_stat_enabled', "已启用") }}<b>{{ users|selectattr('enabled')|list|length }}</b></span>
-  <span>{{ (i18n or {}).get('tq_stat_month_chars', "本月团队字符") }}<b id="tq-stat-month">—</b></span>
-  <span>{{ (i18n or {}).get('tq_stat_pool_left', "授权池剩余") }}<b id="tq-stat-pool">—</b></span>
+<!-- ── KPI 四格（本月字符/授权池两格由 /api/users/char-usage 回填，失败保持 —）── -->
+<div class="u-kpi fa">
+  <div><small>{{ (i18n or {}).get('tq_stat_members', "成员总数") }}</small><b>{{ users|length }}</b></div>
+  <div><small>{{ (i18n or {}).get('tq_stat_enabled', "已启用") }}</small><b>{{ users|selectattr('enabled')|list|length }}</b></div>
+  <div><small>{{ (i18n or {}).get('tq_stat_month_chars', "本月团队字符") }}</small><b id="tq-stat-month">—</b></div>
+  <div><small>{{ (i18n or {}).get('tq_stat_pool_left', "授权池剩余") }}</small><b id="tq-stat-pool">—</b></div>
+</div>
+
+<!-- ── 工具栏：搜索 + 角色筛选（纯前端过滤，不打请求）── -->
+<div class="u-tools fa">
+  <input class="u-search" id="u-search" type="search" placeholder="{{ (i18n or {}).get('us_search_ph', '搜索用户名 / 显示名') }}" oninput="onSearch(this)" autocomplete="off" spellcheck="false">
+  <button class="u-fchip on" data-f="all" onclick="setRoleFilter(this)">{{ (i18n or {}).get('us_filter_all', "全部") }}</button>
+  {% for rv in ['master','admin','supervisor','agent','viewer'] %}
+  {% if users|selectattr('role','equalto',rv)|list|length %}
+  <button class="u-fchip" data-f="{{ rv }}" onclick="setRoleFilter(this)">{{ (i18n or {}).get('role_' ~ rv, role_labels.get(rv, rv)) }}</button>
+  {% endif %}
+  {% endfor %}
+  {% if users|rejectattr('enabled')|list|length %}
+  <button class="u-fchip" data-f="disabled" onclick="setRoleFilter(this)">{{ (i18n or {}).get('us_filter_disabled', "已禁用") }}</button>
+  {% endif %}
+  <span class="u-showing" id="u-showing"></span>
 </div>
 
 <div class="u-grid">
   {% for u in users %}
-  <div class="u-card {{ 'disabled' if not u.enabled }} fa" id="user-{{ u.id }}">
+  {% set nm = (u.display_name or u.username) %}
+  <div class="u-card {{ 'disabled' if not u.enabled }} fa" id="user-{{ u.id }}" data-role="{{ u.role }}" data-enabled="{{ '1' if u.enabled else '0' }}" data-user="{{ u.username }}" data-search="{{ (u.username ~ ' ' ~ (u.display_name or ''))|lower }}">
     <div class="u-hd">
-      <div class="u-avatar {{ u.role }}">{{ (u.display_name or u.username)[0]|upper }}</div>
-      <div>
-        <div class="u-name">{{ u.display_name or u.username }}</div>
-        <div class="u-sub">@{{ u.username }} · <span class="role-label">{{ (i18n or {}).get('role_' ~ u.role, role_labels.get(u.role, u.role)) }}</span></div>
+      <div class="u-avatar {{ u.role }}" aria-hidden="true">{{ nm[:2]|upper }}</div>
+      <div class="u-id">
+        <div class="u-name"><span>{{ nm }}</span><span class="role-chip role-label {{ u.role }}">{{ (i18n or {}).get('role_' ~ u.role, role_labels.get(u.role, u.role)) }}</span></div>
+        <div class="u-sub">@{{ u.username }}</div>
       </div>
-      {% if u.role != 'master' and u.perms_json %}<span class="badge b-p perm-badge" style="margin-left:auto" title="{{ (i18n or {}).get('tq_perm_title', '按人权限覆写') }}">{{ (i18n or {}).get('tq_perm_overridden', "已覆写") }}</span>{% endif %}
-      {% if not u.enabled %}<span class="badge b-r dis-badge" style="margin-left:auto">{{ (i18n or {}).get('psn_disabled', "已禁用") }}</span>{% endif %}
+      <div class="u-flags">
+        {% if u.role != 'master' and u.perms_json %}<span class="badge b-p perm-badge" title="{{ (i18n or {}).get('tq_perm_title', '按人权限覆写') }}">{{ (i18n or {}).get('tq_perm_overridden', "已覆写") }}</span>{% endif %}
+        {% if not u.enabled %}<span class="badge b-r dis-badge">{{ (i18n or {}).get('psn_disabled', "已禁用") }}</span>{% endif %}
+      </div>
     </div>
     <div class="u-meta">
-      <span>{{ (i18n or {}).get('dash.btn.create', "创建") }}: {{ u.created_at[:10] if u.created_at else '-' }}</span>
-      <span title="{{ (i18n or {}).get('us_login_from_session_t', '按最近一次登录会话的时间') if u.last_login_from_session else '' }}">{{ (i18n or {}).get('login_btn', "登录") }}: {{ u.last_login[:10] if u.last_login else (i18n or {}).get('us_never_login', '从未') }}</span>
+      <span title="{{ (i18n or {}).get('dash.btn.create', '创建') }}">📅 {{ u.created_at[:10] if u.created_at else '-' }}</span>
+      {% if u.last_login %}
+      <span title="{{ (i18n or {}).get('us_login_from_session_t', '按最近一次登录会话的时间') if u.last_login_from_session else '' }}">{{ (i18n or {}).get('login_btn', "登录") }}: {{ u.last_login[:10] }}</span>
+      {% else %}
+      <span class="u-never" title="{{ (i18n or {}).get('us_never_t', '该帐号还没登录过——用「复制登录信息」把登录地址和用户名发给对方') }}">{{ (i18n or {}).get('us_never_badge', "从未登录") }}</span>
+      {% endif %}
+      <span class="u-sess-n" hidden title="{{ (i18n or {}).get('us_sess_title', '已登录的设备') }}">🖥 <b>0</b></span>
     </div>
     <!-- 本月用量行：/api/users/char-usage 回填后显示；端点未装载（重启前）保持隐藏 -->
     <div class="u-usage" data-user="{{ u.username }}" style="display:none">
@@ -110,7 +207,7 @@
     </div>
     {% if u.role != 'master' %}
     <div class="u-actions">
-      <select onchange="updateRole({{ u.id }},this)" style="padding:.25rem .5rem;font-size:.78rem;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--t);cursor:pointer">
+      <select class="u-role-sel" data-cur="{{ u.role }}" data-name="{{ u.username }}" onchange="updateRole({{ u.id }},this)" title="{{ (i18n or {}).get('psn_th_role', '角色') }}">
         {% if u.role not in assignable_role_vals %}
         <option value="{{ u.role }}" selected>{{ (i18n or {}).get('role_' ~ u.role, role_labels.get(u.role, u.role)) }}</option>
         {% endif %}
@@ -118,30 +215,39 @@
         <option value="{{ rv }}" {{ 'selected' if u.role==rv }} data-help="role_{{ rv }}">{{ (i18n or {}).get('role_' ~ rv, rl) }}</option>
         {% endfor %}
       </select>
-      <button class="btn btn-s btn-xs" onclick="openQuotaModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_quota_btn', "额度") }}</button>
-      <button class="btn btn-s btn-xs" onclick="openPermModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_perm_btn', "权限") }}</button>
-      <button class="btn btn-s btn-xs" id="notify-btn-{{ u.id }}" data-tg="{{ u.notify_tg_chat_id or '' }}"
-              title="{{ (i18n or {}).get('tq_notify_bound', '已绑定') if u.notify_tg_chat_id else '' }}"
-              onclick="openNotifyModal({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('tq_notify_btn', "通知") }}{{ ' ✓' if u.notify_tg_chat_id else '' }}</button>
-      <button class="btn btn-s btn-xs toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ (i18n or {}).get('disable', '禁用') if u.enabled else (i18n or {}).get('enable', '启用') }}</button>
-      <button class="btn btn-d btn-xs" data-help="btn_delete" onclick="deleteUser({{ u.id }},'{{ u.username }}')">{{ (i18n or {}).get('delete', "删除") }}</button>
+      <button class="btn btn-s btn-xs" onclick="openResetPwdModal({{ u.id }},'{{ u.username }}')">🔑 {{ (i18n or {}).get('us_reset_pwd', "重置密码") }}</button>
+      <div class="u-menu-wrap">
+        <button class="btn btn-s btn-xs u-more" aria-haspopup="true" aria-expanded="false" title="{{ (i18n or {}).get('us_more', '更多操作') }}" onclick="toggleMenu({{ u.id }},this)">⋯</button>
+        <div class="u-menu" id="u-menu-{{ u.id }}" role="menu">
+          <button type="button" onclick="openQuotaModal({{ u.id }},'{{ u.username }}')">📊 {{ (i18n or {}).get('tq_quota_btn', "额度") }}…</button>
+          <button type="button" onclick="openPermModal({{ u.id }},'{{ u.username }}')">🛡 {{ (i18n or {}).get('tq_perm_btn', "权限") }}…</button>
+          <button type="button" id="notify-btn-{{ u.id }}" data-tg="{{ u.notify_tg_chat_id or '' }}"
+                  title="{{ (i18n or {}).get('tq_notify_bound', '已绑定') if u.notify_tg_chat_id else '' }}"
+                  onclick="openNotifyModal({{ u.id }},'{{ u.username }}')">🔔 {{ (i18n or {}).get('tq_notify_btn', "通知") }}{{ ' ✓' if u.notify_tg_chat_id else '' }}</button>
+          <button type="button" onclick="copyLoginInfo('{{ u.username }}')">📋 {{ (i18n or {}).get('us_copy_login', "复制登录信息") }}</button>
+          <hr>
+          <button type="button" class="toggle-btn" onclick="toggleEnabled({{ u.id }},{{ 'false' if u.enabled else 'true' }},this)">{{ (i18n or {}).get('disable', '禁用') if u.enabled else (i18n or {}).get('enable', '启用') }}</button>
+          <button type="button" class="danger" data-help="btn_delete" onclick="deleteUser({{ u.id }},'{{ u.username }}')">🗑 {{ (i18n or {}).get('delete', "删除") }}</button>
+        </div>
+      </div>
     </div>
     {% else %}
-    <div style="font-size:.78rem;color:var(--t3)">{{ (i18n or {}).get('us_s005', "主帐号不可删除或降级") }}</div>
+    <div class="u-master-note">🔒 {{ (i18n or {}).get('us_s005', "主帐号不可删除或降级") }}</div>
     {% endif %}
   </div>
   {% endfor %}
 
   <!-- Create new user -->
-  <div class="u-card create-card fa" onclick="document.getElementById('create-modal').classList.add('show')">
+  <div class="u-card create-card fa" onclick="openCreateModal()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     <span>{{ (i18n or {}).get('us_s006', "添加子帐号") }}</span>
   </div>
 </div>
+<div id="u-empty" style="display:none;color:var(--t3);font-size:.85rem;padding:1rem 0 1.5rem">{{ (i18n or {}).get('us_empty_filter', "没有匹配的帐号") }}</div>
 
 <!-- ── 活跃会话管理 ─────────────────────────────────── -->
 <div style="margin-top:2rem">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;gap:.75rem;flex-wrap:wrap">
     <div>
       <h2 style="font-size:1rem;font-weight:700;margin-bottom:.15rem">🖥 {{ (i18n or {}).get('us_sess_title', "已登录的设备") }}</h2>
       <p style="font-size:.78rem;color:var(--t3)">{{ (i18n or {}).get('us_s007', "当前登录中的所有设备，可踢出指定会话") }} · {{ (i18n or {}).get('us_sess_hint', "同一台设备重复启动只保留最近一条；超过 7 天没动的登录自动失效") }}</p>
@@ -160,32 +266,78 @@
 <div class="modal-bg" id="create-modal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal">
     <h3>{{ (i18n or {}).get('us_s009', "创建子帐号") }}</h3>
-    <form id="create-form" onsubmit="createUser(event)">
+    <form id="create-form" onsubmit="createUser(event)" autocomplete="off">
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('set_js_075', "用户名") }}</label>
-        <input type="text" name="username" required placeholder="{{ (i18n or {}).get('us_s010', '英文字母') }}+{{ (i18n or {}).get('us_s011', '数字') }}" pattern="[a-zA-Z0-9_]{3,20}">
+        <input type="text" name="username" required placeholder="{{ (i18n or {}).get('us_s010', '英文字母') }}+{{ (i18n or {}).get('us_s011', '数字') }}" pattern="[a-zA-Z0-9_]{3,20}" autocomplete="off" spellcheck="false">
       </div>
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('dash.ws.name_ph', "显示名称") }}</label>
-        <input type="text" name="display_name" placeholder="{{ (i18n or {}).get('msg_s416', '可选') }}">
+        <input type="text" name="display_name" placeholder="{{ (i18n or {}).get('msg_s416', '可选') }}" autocomplete="off">
       </div>
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('us_s012', "密码") }}</label>
-        <input type="password" name="password" required minlength="6" placeholder="{{ (i18n or {}).get('us_s013', '至少 6 位') }}">
+        <div class="f-row">
+          <input type="text" name="password" id="create-pwd" required minlength="6" placeholder="{{ (i18n or {}).get('us_s013', '至少 6 位') }}" autocomplete="new-password" spellcheck="false">
+          <button type="button" class="btn btn-s btn-sm" onclick="fillGenPwd('create-pwd')">🎲 {{ (i18n or {}).get('us_pwd_gen', "生成") }}</button>
+        </div>
       </div>
       <div class="f-grp">
         <label class="f-lbl">{{ (i18n or {}).get('psn_th_role', "角色") }}</label>
-        <select name="role">
+        <select name="role" id="create-role" onchange="roleDescUpdate(this,'create-role-desc')">
           {% for rv, rl in assignable_roles_list %}
           <option value="{{ rv }}" {{ 'selected' if rv=='agent' }}>{{ (i18n or {}).get('role_' ~ rv, rl) }}</option>
           {% endfor %}
         </select>
+        <p class="f-hint" id="create-role-desc"></p>
       </div>
-      <div style="display:flex;gap:.5rem;margin-top:1rem">
+      <p class="f-hint">{{ (i18n or {}).get('us_create_hint', "创建成功后会显示一次登录信息，请当场复制给对方。") }}</p>
+      <div class="m-foot">
         <button type="submit" class="btn btn-p">{{ (i18n or {}).get('dash.btn.create', "创建") }}</button>
         <button type="button" class="btn btn-s" onclick="document.getElementById('create-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Reset password modal（P0-3：管理员代重置；成功后接「登录信息」卡）
+     id/函数名带 reset- 前缀：base.html 顶栏「修改密码」已占用 openPwdModal() / #pwd-new，同名即互相覆盖 -->
+<div class="modal-bg" id="reset-pwd-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>🔑 {{ (i18n or {}).get('us_pwd_title', "重置密码") }} · <span id="reset-pwd-user"></span></h3>
+    <form id="reset-pwd-form" onsubmit="saveResetPassword(event)" autocomplete="off">
+      <input type="hidden" name="uid" value="">
+      <input type="hidden" name="uname" value="">
+      <div class="f-grp">
+        <label class="f-lbl">{{ (i18n or {}).get('us_pwd_new', "新密码") }}</label>
+        <div class="f-row">
+          <input type="text" name="new_pw" id="reset-pwd-new" required minlength="6" placeholder="{{ (i18n or {}).get('us_s013', '至少 6 位') }}" autocomplete="new-password" spellcheck="false">
+          <button type="button" class="btn btn-s btn-sm" onclick="fillGenPwd('reset-pwd-new')">🎲 {{ (i18n or {}).get('us_pwd_gen', "生成") }}</button>
+        </div>
+      </div>
+      <p class="f-hint">{{ (i18n or {}).get('us_pwd_hint', "保存后旧密码立即失效，请把新密码交给对方。已登录的设备不会被踢出；需要的话在下方「已登录的设备」里踢出。") }}</p>
+      <div class="m-foot">
+        <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
+        <button type="button" class="btn btn-s" onclick="document.getElementById('reset-pwd-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Credentials modal（创建成功 / 重置密码后一次性展示；关闭即不再显示密码） -->
+<div class="modal-bg" id="cred-modal">
+  <div class="modal">
+    <h3>✅ {{ (i18n or {}).get('us_cred_title', "登录信息（只显示这一次）") }}</h3>
+    <div class="cred-box" id="cred-box">
+      <div><span class="k">{{ (i18n or {}).get('us_cred_url', "登录地址") }}</span><span class="v" id="cred-url"></span></div>
+      <div><span class="k">{{ (i18n or {}).get('us_cred_user', "用户名") }}</span><span class="v" id="cred-user"></span></div>
+      <div id="cred-pwd-row"><span class="k">{{ (i18n or {}).get('us_cred_pwd', "密码") }}</span><span class="v" id="cred-pwd"></span></div>
+    </div>
+    <p class="f-hint" style="margin-top:.6rem">{{ (i18n or {}).get('us_cred_note', "把这几行发给对方；关闭后不再显示密码。在智聊桌面端登录：先点右上角头像 → 退出登录，再用这个帐号登录。") }}</p>
+    <div class="m-foot">
+      <button type="button" class="btn btn-p" onclick="copyCred(this)">📋 {{ (i18n or {}).get('us_copy_all', "复制全部") }}</button>
+      <button type="button" class="btn btn-s" onclick="closeCred()">{{ (i18n or {}).get('close', "关闭") }}</button>
+    </div>
   </div>
 </div>
 
@@ -199,8 +351,8 @@
         <label class="f-lbl">{{ (i18n or {}).get('tq_quota_btn', "额度") }}</label>
         <input type="number" name="monthly_quota" min="0" step="1000" value="0" required>
       </div>
-      <p style="font-size:.75rem;color:var(--t3);margin:.2rem 0 0">{{ (i18n or {}).get('tq_quota_hint', "0 = 不限；额度按 UTC 自然月计，每月 1 日自动重置。") }}</p>
-      <div style="display:flex;gap:.5rem;margin-top:1rem">
+      <p class="f-hint">{{ (i18n or {}).get('tq_quota_hint', "0 = 不限；额度按 UTC 自然月计，每月 1 日自动重置。") }}</p>
+      <div class="m-foot">
         <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
         <button type="button" class="btn btn-s" onclick="document.getElementById('quota-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
       </div>
@@ -220,8 +372,8 @@
         <input type="text" name="tg_chat_id" inputmode="numeric" pattern="-?\d{0,20}"
                placeholder="{{ (i18n or {}).get('tq_notify_ph', 'Chat ID') }}" autocomplete="off" spellcheck="false">
       </div>
-      <p style="font-size:.75rem;color:var(--t3);margin:.2rem 0 0">{{ (i18n or {}).get('tq_notify_hint', "绑定后：该坐席创建/认领的会话目标达成时，完成推送会同时发到这个号（管理员渠道照常收）。留空保存=解绑。") }}</p>
-      <div style="display:flex;gap:.5rem;margin-top:1rem">
+      <p class="f-hint">{{ (i18n or {}).get('tq_notify_hint', "绑定后：该坐席创建/认领的会话目标达成时，完成推送会同时发到这个号（管理员渠道照常收）。留空保存=解绑。") }}</p>
+      <div class="m-foot">
         <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
         <button type="button" class="btn btn-s" onclick="sendNotifyTest(this)">{{ (i18n or {}).get('tq_notify_test_btn', "发送测试") }}</button>
         <button type="button" class="btn btn-s" onclick="document.getElementById('notify-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
@@ -237,8 +389,8 @@
     <h3>{{ (i18n or {}).get('tq_perm_title', "按人权限覆写") }} · <span id="perm-modal-user"></span></h3>
     <form id="perm-form" onsubmit="savePerms(event)">
       <div id="perm-list"></div>
-      <p style="font-size:.75rem;color:var(--t3);margin:.4rem 0 0">{{ (i18n or {}).get('tq_perm_hint', "覆写只对该账号生效；「继承默认」跟随角色权限。") }}</p>
-      <div style="display:flex;gap:.5rem;margin-top:1rem">
+      <p class="f-hint" style="margin-top:.4rem">{{ (i18n or {}).get('tq_perm_hint', "覆写只对该账号生效；「继承默认」跟随角色权限。") }}</p>
+      <div class="m-foot">
         <button type="submit" class="btn btn-p">{{ (i18n or {}).get('save', "保存") }}</button>
         <button type="button" class="btn btn-s" onclick="document.getElementById('perm-modal').classList.remove('show')">{{ (i18n or {}).get('ov_js_cancel', "取消") }}</button>
       </div>
@@ -259,12 +411,28 @@ const TQ={
   sessSince: {{ (i18n or {}).get('us_sess_since', 'Signed in: ') | tojson }},
   delConfirm: {{ (i18n or {}).get('tq_js_del_confirm', 'Danger: type the username {name} to confirm deletion') | tojson }},
   delMismatch: {{ (i18n or {}).get('tq_js_del_mismatch', 'Username mismatch, cancelled') | tojson }},
+  delHint: {{ (i18n or {}).get('us_del_hint', 'Their sign-in stops working immediately; chat history is kept.') | tojson }},
   quotaSaved: {{ (i18n or {}).get('tq_js_quota_saved', 'Quota saved') | tojson }},
   notifySaved: {{ (i18n or {}).get('tq_js_notify_saved', 'Notify chat saved') | tojson }},
   notifyBound: {{ (i18n or {}).get('tq_notify_bound', 'Bound') | tojson }},
   notifyTestOk: {{ (i18n or {}).get('tq_js_test_ok', 'Test push sent - check Telegram') | tojson }},
   lvOver: {{ (i18n or {}).get('tq_lv_over', 'Over') | tojson }},
   lvWarn: {{ (i18n or {}).get('tq_lv_warn', 'Near limit') | tojson }},
+  showing: {{ (i18n or {}).get('us_showing', 'Showing {shown} / {total}') | tojson }},
+  roleChange: {{ (i18n or {}).get('us_role_change_confirm', 'Change the role of @{name} to "{role}"?') | tojson }},
+  pwdSaved: {{ (i18n or {}).get('us_pwd_saved', 'Password reset') | tojson }},
+  copied: {{ (i18n or {}).get('us_copied', 'Copied') | tojson }},
+  copyFail: {{ (i18n or {}).get('us_copy_fail', 'Copy failed') | tojson }},
+  credUrl: {{ (i18n or {}).get('us_cred_url', 'Sign-in address') | tojson }},
+  credUser: {{ (i18n or {}).get('us_cred_user', 'Username') | tojson }},
+  credPwd: {{ (i18n or {}).get('us_cred_pwd', 'Password') | tojson }},
+  roleDesc: {
+    master: {{ (i18n or {}).get('us_role_desc_master', '') | tojson }},
+    admin: {{ (i18n or {}).get('us_role_desc_admin', '') | tojson }},
+    supervisor: {{ (i18n or {}).get('us_role_desc_supervisor', '') | tojson }},
+    agent: {{ (i18n or {}).get('us_role_desc_agent', '') | tojson }},
+    viewer: {{ (i18n or {}).get('us_role_desc_viewer', '') | tojson }}
+  },
   permName: {
     'chat.send_text': {{ (i18n or {}).get('tq_perm_send_text', 'Send text') | tojson }},
     'chat.send_media': {{ (i18n or {}).get('tq_perm_send_media', 'Send images/media') | tojson }},
@@ -284,54 +452,182 @@ const TQ={
   permLoadFail: {{ (i18n or {}).get('tq_perm_load_fail', 'Permissions API not ready (pending service restart)') | tojson }},
   overridden: {{ (i18n or {}).get('tq_perm_overridden', 'Overridden') | tojson }}
 };
+var ROLE_KEYS=['master','admin','supervisor','agent','viewer'];
+
+/* ── 搜索 / 角色筛选（纯前端）── */
+var _uf={q:'',role:'all'};
+function onSearch(inp){_uf.q=(inp.value||'').trim().toLowerCase();filterUsers()}
+function setRoleFilter(btn){
+  _uf.role=btn.getAttribute('data-f')||'all';
+  document.querySelectorAll('.u-fchip').forEach(function(b){b.classList.toggle('on',b===btn)});
+  filterUsers();
+}
+function filterUsers(){
+  var cards=document.querySelectorAll('.u-card[data-role]'),shown=0;
+  cards.forEach(function(c){
+    var ok=true;
+    if(_uf.role==='disabled')ok=c.getAttribute('data-enabled')==='0';
+    else if(_uf.role!=='all')ok=c.getAttribute('data-role')===_uf.role;
+    if(ok&&_uf.q)ok=(c.getAttribute('data-search')||'').indexOf(_uf.q)>=0;
+    c.style.display=ok?'':'none';if(ok)shown++;
+  });
+  var sh=document.getElementById('u-showing');
+  if(sh)sh.textContent=(_uf.q||_uf.role!=='all')?TQ.showing.replace('{shown}',shown).replace('{total}',cards.length):'';
+  var em=document.getElementById('u-empty');if(em)em.style.display=(cards.length&&!shown)?'':'none';
+  var cc=document.querySelector('.create-card');if(cc)cc.style.display=(_uf.q||_uf.role!=='all')?'none':'';
+}
+
+/* ── ⋯ 溢出菜单 ── */
+function closeMenus(){
+  document.querySelectorAll('.u-menu.open').forEach(function(m){m.classList.remove('open')});
+  document.querySelectorAll('.u-card.menu-open').forEach(function(c){c.classList.remove('menu-open')});
+  document.querySelectorAll('.u-more[aria-expanded="true"]').forEach(function(b){b.setAttribute('aria-expanded','false')});
+}
+function toggleMenu(uid,btn){
+  var m=document.getElementById('u-menu-'+uid);if(!m)return;
+  var wasOpen=m.classList.contains('open');
+  closeMenus();
+  if(!wasOpen){m.classList.add('open');btn.setAttribute('aria-expanded','true');var c=document.getElementById('user-'+uid);if(c)c.classList.add('menu-open')}
+}
+document.addEventListener('click',function(e){if(!e.target.closest('.u-menu-wrap'))closeMenus()});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeMenus()});
+
+/* ── 角色变更（先确认再提交；取消/失败回滚 select）── */
+function _setRoleChip(card,role,label){
+  var lb=card.querySelector('.role-label');if(!lb)return;
+  lb.textContent=label;
+  ROLE_KEYS.forEach(function(k){lb.classList.remove(k)});lb.classList.add(role);
+  card.setAttribute('data-role',role);
+}
 async function updateRole(uid,sel){
+  var cur=sel.getAttribute('data-cur')||'',label=sel.options[sel.selectedIndex].text,name=sel.getAttribute('data-name')||'';
+  if(sel.value===cur)return;
+  var okc=await confirmAction(TQ.roleChange.replace('{name}',name).replace('{role}',label),{okText:window.T('confirm'),danger:false});
+  if(!okc){sel.value=cur;return}
   var fd=new FormData();fd.append('role',sel.value);
   try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(r.ok&&d.ok){showToast(window.T('us_js001'),'ok');var c=document.getElementById('user-'+uid);if(c){var lb=c.querySelector('.role-label');if(lb)lb.textContent=sel.options[sel.selectedIndex].text}}
-    else showToast(d.detail||window.T('inbox.toast.update_fail'),'err');
-  }catch(e){showToast(window.T('draft.net_err'),'err')}
+    if(r.ok&&d.ok){showToast(window.T('us_js001'),'ok');sel.setAttribute('data-cur',sel.value);var c=document.getElementById('user-'+uid);if(c)_setRoleChip(c,sel.value,label)}
+    else{showToast(d.detail||window.T('inbox.toast.update_fail'),'err');sel.value=cur}
+  }catch(e){showToast(window.T('draft.net_err'),'err');sel.value=cur}
 }
 async function toggleEnabled(uid,enable,btn){
+  closeMenus();
   var fd=new FormData();fd.append('enabled',enable?'1':'0');
   btnLoading(btn,true);
   try{var r=await apiFetch('/users/update/'+uid,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
     if(r.ok&&d.ok){showToast(enable?window.T('ov_js_enabled'):window.T('psn_disabled'),'ok');
       var c=document.getElementById('user-'+uid);
-      if(c){c.classList.toggle('disabled',!enable);
+      if(c){c.classList.toggle('disabled',!enable);c.setAttribute('data-enabled',enable?'1':'0');
         var db=c.querySelector('.dis-badge');
         if(enable&&db)db.remove();
-        else if(!enable&&!db){var s=document.createElement('span');s.className='badge b-r dis-badge';s.style.marginLeft='auto';s.textContent=window.T('psn_disabled');c.querySelector('.u-hd').appendChild(s)}
+        else if(!enable&&!db){var s=document.createElement('span');s.className='badge b-r dis-badge';s.textContent=window.T('psn_disabled');var fl=c.querySelector('.u-flags');if(fl)fl.appendChild(s)}
       }
       btn.textContent=enable?window.T('disable'):window.T('enable');btn.onclick=function(){toggleEnabled(uid,!enable,btn)};
+      filterUsers();
     }else showToast(d.detail||window.T('ov_js_op_fail'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
   finally{btnLoading(btn,false)}
 }
+/* 删除：逐字输入用户名确认。走 window.uiPrompt（Electron 渲染进程里原生 prompt() 调用即抛）。 */
 async function deleteUser(uid,uname){
-  var typed=prompt(TQ.delConfirm.replace('{name}',uname));
+  closeMenus();
+  var typed=await window.uiPrompt(TQ.delConfirm.replace('{name}',uname),'',{placeholder:uname,hint:TQ.delHint,ok:window.T('delete')});
   if(typed===null)return;
-  if(typed!==uname){showToast(TQ.delMismatch,'err');return}
-  if(!await confirmAction(window.T('us_js002')+' '+uname+'?',{okText:window.T('delete')}))return;
+  if(String(typed).trim()!==uname){showToast(TQ.delMismatch,'err');return}
   try{var r=await apiFetch('/users/delete/'+uid,{method:'POST',body:new FormData(),headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(r.ok&&d.ok){showToast(window.T('kb_js_041')+' '+uname,'ok');var c=document.getElementById('user-'+uid);if(c){c.style.transition='all .3s';c.style.opacity='0';c.style.transform='scale(.9)';setTimeout(function(){c.remove()},300)}}
+    if(r.ok&&d.ok){showToast(window.T('kb_js_041')+' '+uname,'ok');var c=document.getElementById('user-'+uid);if(c){c.style.transition='all .3s';c.style.opacity='0';c.style.transform='scale(.9)';setTimeout(function(){c.remove();filterUsers()},300)}}
     else showToast(d.detail||window.T('inbox.toast.del_fail'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
+}
+
+/* ── 密码生成 / 复制 / 一次性登录信息卡 ── */
+function genPassword(){
+  var a='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789',out='';
+  var arr=new Uint32Array(10);
+  try{crypto.getRandomValues(arr)}catch(e){for(var i=0;i<10;i++)arr[i]=Math.floor(Math.random()*4294967296)}
+  for(var j=0;j<10;j++)out+=a[arr[j]%a.length];
+  return out;
+}
+function fillGenPwd(id){var el=document.getElementById(id);if(!el)return;el.value=genPassword();el.type='text';try{el.focus();el.select()}catch(e){}}
+async function copyText(t){
+  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(t);return true}}catch(e){}
+  try{var ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();var ok=document.execCommand('copy');ta.remove();return !!ok}catch(e){return false}
+}
+function _credText(uname,pwd){
+  var lines=[TQ.credUrl+': '+location.origin+'/login',TQ.credUser+': '+uname];
+  if(pwd)lines.push(TQ.credPwd+': '+pwd);
+  return lines.join('\n');
+}
+async function copyLoginInfo(uname){
+  closeMenus();
+  showToast((await copyText(_credText(uname,'')))?TQ.copied:TQ.copyFail,'ok');
+}
+var _cred={uname:'',pwd:'',reload:false};
+function showCred(uname,pwd,reloadOnClose){
+  _cred={uname:uname,pwd:pwd||'',reload:!!reloadOnClose};
+  document.getElementById('cred-url').textContent=location.origin+'/login';
+  document.getElementById('cred-user').textContent=uname;
+  document.getElementById('cred-pwd').textContent=pwd||'';
+  document.getElementById('cred-pwd-row').style.display=pwd?'':'none';
+  document.getElementById('cred-modal').classList.add('show');
+}
+async function copyCred(btn){
+  var ok=await copyText(_credText(_cred.uname,_cred.pwd));
+  showToast(ok?TQ.copied:TQ.copyFail,ok?'ok':'err');
+}
+function closeCred(){
+  document.getElementById('cred-modal').classList.remove('show');
+  _cred.pwd='';
+  if(_cred.reload)location.reload();
+}
+/* 管理员代重置（区别于 base.html 的 openPwdModal()=改自己密码，勿同名） */
+function openResetPwdModal(uid,uname){
+  var f=document.getElementById('reset-pwd-form');
+  f.uid.value=uid;f.uname.value=uname;f.new_pw.value='';
+  document.getElementById('reset-pwd-user').textContent='@'+uname;
+  document.getElementById('reset-pwd-modal').classList.add('show');
+  try{f.new_pw.focus()}catch(e){}
+}
+async function saveResetPassword(e){
+  e.preventDefault();
+  var f=e.target,btn=f.querySelector('.btn-p');
+  var pw=(f.new_pw.value||'').trim();
+  if(pw.length<6){showToast(window.T('su_js_003'),'err');return}
+  btnLoading(btn,true);
+  var fd=new FormData();fd.append('password',pw);
+  try{
+    var r=await apiFetch('/users/update/'+f.uid.value,{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
+    var d=await r.json().catch(function(){return {}});
+    if(r.ok&&d.ok){showToast(TQ.pwdSaved,'ok');document.getElementById('reset-pwd-modal').classList.remove('show');showCred(f.uname.value,pw,false)}
+    else showToast((d&&d.detail)||window.T('ov_js_op_fail'),'err');
+  }catch(ex){showToast(window.T('draft.net_err'),'err')}
+  finally{btnLoading(btn,false)}
+}
+
+/* ── 创建子帐号：成功后不静默 reload，先出一次性登录信息卡（关闭再刷新）── */
+function roleDescUpdate(sel,targetId){var p=document.getElementById(targetId);if(p)p.textContent=TQ.roleDesc[sel.value]||''}
+function openCreateModal(){
+  var f=document.getElementById('create-form');
+  try{f.reset()}catch(e){}
+  roleDescUpdate(document.getElementById('create-role'),'create-role-desc');
+  document.getElementById('create-modal').classList.add('show');
+  try{f.username.focus()}catch(e){}
 }
 async function createUser(e){
   e.preventDefault();var form=e.target,fd=new FormData(form);
   var btn=form.querySelector('.btn-p');btnLoading(btn,true);
   try{var r=await apiFetch('/users/create',{method:'POST',body:fd,headers:{'Accept':'application/json'}},{timeoutMs:60000});
     var d=await r.json();
-    if(r.ok&&d.ok){showToast(window.T('us_js003'),'ok');document.getElementById('create-modal').classList.remove('show');setTimeout(function(){location.reload()},600)}
+    if(r.ok&&d.ok){showToast(window.T('us_js003'),'ok');document.getElementById('create-modal').classList.remove('show');showCred(d.username||fd.get('username'),fd.get('password'),true)}
     else showToast(d.detail||window.T('kb_js_086'),'err');
   }catch(e){showToast(window.T('draft.net_err'),'err')}
   finally{btnLoading(btn,false)}
 }
 
-/* ── 团队字符用量（统计条 + 每卡用量行；端点 404=重启前中间态，整块保持隐藏）── */
+/* ── 团队字符用量（KPI + 每卡用量行；端点 404=重启前中间态，整块保持隐藏）── */
 var _tqAgents={};
 function fmtChars(n){n=n||0;try{return n.toLocaleString()}catch(e){return String(n)}}
 async function loadCharUsage(){
@@ -353,7 +649,6 @@ async function loadCharUsage(){
       var st=a.status||{};
       el.style.display='';
       var q=st.quota||0;
-      // #186：用量带单位（字符），额度不限时写「不限」
       el.querySelector('.u-usage-txt').textContent=fmtChars(st.used||0)+' '+TQ.charsUnit+' / '+(q>0?fmtChars(q)+' '+TQ.charsUnit:TQ.unlimited);
       el.querySelector('.u-usage-bar i').style.width=(q>0?Math.min(100,st.pct||0):0)+'%';
       var b=el.querySelector('.u-usage-badge');
@@ -363,6 +658,7 @@ async function loadCharUsage(){
   }catch(e){/* 额度观测失败不影响用户管理主功能 */}
 }
 function openQuotaModal(uid,uname){
+  closeMenus();
   var f=document.getElementById('quota-form');
   f.uid.value=uid;
   document.getElementById('quota-modal-user').textContent='@'+uname;
@@ -386,6 +682,7 @@ async function saveQuota(e){
 
 /* ── 坐席 Telegram 通知号绑定（P2 2026-08-18；端点未装载=保存时 404 toast）── */
 function openNotifyModal(uid,uname){
+  closeMenus();
   var f=document.getElementById('notify-form');
   f.uid.value=uid;
   document.getElementById('notify-modal-user').textContent='@'+uname;
@@ -455,6 +752,7 @@ function permSelChanged(sel){
   if(eff)eff.textContent=_permEffText(sel.value,row.getAttribute('data-def')==='1');
 }
 async function openPermModal(uid,uname){
+  closeMenus();
   var d=null;
   try{
     var r=await apiFetch('/api/users/'+uid+'/perms',{headers:{'Accept':'application/json'}},{timeoutMs:20000});
@@ -492,18 +790,30 @@ function _syncPermBadge(uid,has){
   var b=c.querySelector('.perm-badge');
   if(has&&!b){
     var s=document.createElement('span');s.className='badge b-p perm-badge';
-    s.style.marginLeft='auto';s.textContent=TQ.overridden;
-    var hd=c.querySelector('.u-hd');if(hd)hd.insertBefore(s,hd.querySelector('.dis-badge'));
+    s.textContent=TQ.overridden;
+    var fl=c.querySelector('.u-flags');if(fl)fl.insertBefore(s,fl.firstChild);
   }else if(!has&&b)b.remove();
 }
 
 /* ── 会话管理 ─────────────────────────────── */
+function _syncSessCounts(sessions){
+  var by={};
+  sessions.forEach(function(s){var u=String(s.username||'');by[u]=(by[u]||0)+1});
+  document.querySelectorAll('.u-card[data-user]').forEach(function(c){
+    var u=c.getAttribute('data-user')||'',n=by[u]||0;
+    // 令牌直登的主帐号会话记在常量用户名 admin 下
+    if(c.getAttribute('data-role')==='master'&&u!=='admin')n+=(by['admin']||0);
+    var el=c.querySelector('.u-sess-n');if(!el)return;
+    el.hidden=!n;var b=el.querySelector('b');if(b)b.textContent=String(n);
+  });
+}
 async function loadSessions(){
   const el=document.getElementById('sessions-list');
   try{
     const r=await apiFetch('/api/sessions',{headers:{'Accept':'application/json'}});
     const d=await r.json();
     const sessions=d.sessions||[];
+    _syncSessCounts(sessions);
     if(!sessions.length){el.innerHTML='<div style="color:var(--t3);font-size:.85rem;grid-column:1/-1">'+window.T('us_js004')+'</div>';return;}
     // #186：人话优先——设备名 + 操作员 + 最后活跃；master/127.0.0.1/UA 这类技术标注收进「技术信息」折叠
     const esc=function(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')};
@@ -517,21 +827,21 @@ async function loadSessions(){
       const lastSeen=s.last_seen||s.created_at||'';
       const roleLabel=window.T('role_'+(s.role||''),s.role||'');
       const localIp=!s.ip||s.ip==='127.0.0.1'||s.ip==='::1';
-      return `<div style="background:var(--card);border:${isCurrent?'2px solid var(--p)':'1px solid var(--bd)'};border-radius:var(--r);padding:.9rem 1rem">
+      return `<div class="sess-card${isCurrent?' cur':''}">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
-          <span style="font-size:.85rem;font-weight:700">${device}</span>
-          ${isCurrent?'<span style="font-size:.68rem;padding:.1rem .45rem;background:var(--ps);color:var(--p);border-radius:20px;font-weight:600">'+window.T('msg_js_265')+' · '+esc(TQ.devThis)+'</span>':''}
+          <span class="sess-dev">${device}</span>
+          ${isCurrent?'<span class="sess-cur">'+window.T('msg_js_265')+' · '+esc(TQ.devThis)+'</span>':''}
         </div>
-        <div style="font-size:.75rem;color:var(--t2);margin-bottom:.3rem">${esc(TQ.sessOperator)} <b>@${esc(s.username)}</b> · ${esc(roleLabel)}</div>
-        <div style="font-size:.72rem;color:var(--t3);margin-bottom:.3rem">${window.T('us_js010')}${esc(lastSeen.slice(0,16))}</div>
-        <details style="margin-bottom:.5rem"><summary style="cursor:pointer;font-size:.68rem;color:var(--t3)">${esc(TQ.sessTech)}</summary>
-          <div style="font-size:.68rem;color:var(--t3);line-height:1.6;margin-top:.2rem;word-break:break-all">
+        <div class="sess-line">${esc(TQ.sessOperator)} <b>@${esc(s.username)}</b> · <span class="role-chip ${esc(s.role||'')}">${esc(roleLabel)}</span></div>
+        <div class="sess-dim">${window.T('us_js010')}${esc(lastSeen.slice(0,16))}</div>
+        <details style="margin-bottom:.5rem"><summary>${esc(TQ.sessTech)}</summary>
+          <div>
             ${esc(TQ.sessSince)}${esc((s.created_at||'').slice(0,16))}<br>
             IP: ${esc(s.ip||'—')}${localIp?' (local)':''} · role: ${esc(s.role||'')}<br>
             UA: ${esc(ua||'—')}<br>
             id: ${esc(s.jti_display||'')}
           </div></details>
-        ${!isCurrent?`<button class="btn btn-d" style="font-size:.72rem;padding:.25rem .6rem" onclick="revokeSession('${esc(s.jti)}',this)">${window.T('us_js009')}</button>`:''}
+        ${!isCurrent?`<button class="btn btn-d btn-xs" onclick="revokeSession('${esc(s.jti)}',this)">${window.T('us_js009')}</button>`:''}
       </div>`;
     }).join('');
   }catch(ex){el.innerHTML='<div style="color:var(--red);font-size:.85rem">'+window.T('rpa_load_failed')+'</div>';}
@@ -547,14 +857,17 @@ async function revokeSession(jti,btn){
   finally{btnLoading(btn,false);}
 }
 async function revokeAllSessions(){
-  if(!confirm(window.T('us_js008')))return;
+  if(!await confirmAction(window.T('us_js008'),{okText:window.T('us_js009'),danger:true}))return;
   try{
     const r=await apiFetch('/api/sessions/revoke-all',{method:'POST',headers:{'Accept':'application/json'}}, {timeoutMs: 60000});
     const d=await r.json();
-        showToast(window.Tf('us_kicked_n', {n: d.revoked||0}),'ok');
+    showToast(window.Tf('us_kicked_n', {n: d.revoked||0}),'ok');
     loadSessions();
   }catch(ex){showToast(window.T('ov_js_op_fail'),'err');}
 }
-document.addEventListener('DOMContentLoaded',function(){loadSessions();loadCharUsage()});
+document.addEventListener('DOMContentLoaded',function(){
+  loadSessions();loadCharUsage();filterUsers();
+  var cr=document.getElementById('create-role');if(cr)roleDescUpdate(cr,'create-role-desc');
+});
 </script>
 {% endblock %}
