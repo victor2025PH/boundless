@@ -95,6 +95,8 @@ ZH = {
     "inbox.diag.customer_waiting_no_gate": "没有任何闸拦下它、也没有待审草稿，但客户最后一条消息已等了 {wait_sec} 秒还没回。本会话按「{effective}」运行，回复可能仍在生成/投递途中；若持续不回，请人工回一句推进，并把本次情况反馈值守定位。",
     "inbox.diag.looks_alive": "一切正常：本会话按「{effective}」运行，客户的下一条消息会被自动处理",
     "inbox.diag.unknown": "未识别的体检项 {code}（后端比前端新，刷新页面后可读）",
+    # Q-15 #271：会话挂风险持有 / 「需人工」标（成人内容带级别·命中词·人设政策）
+    "inbox.diag.high_risk": "本会话被风险持有拦下：{category_label} · {level_label}（命中词「{hit}」，已持有 {held_min} 分钟，人设政策：{policy_label}）。自动回复全停在这一步；人工回一条（或一键软回应）即自动摘标解除",
     # Q-14 #262：AI 本轮未生成（灰标同源）
     "inbox.diag.ai_last_fail": "AI {hhmm} {reason}，本轮未生成回复（不会用套话顶替）。可在会话头灰标点「重试起草」；该会话下次 AI 成功后本条自动消失",
     "inbox.aif.title": "AI 本轮未生成",
@@ -204,6 +206,7 @@ EN = {
     "inbox.diag.customer_waiting_no_gate": "Nothing is gating it and there's no pending draft, yet the customer's last message has waited {wait_sec}s with no reply. This conversation runs as \"{effective}\"; a reply may still be generating/delivering. If it keeps not replying, send a manual line to move it along and report this to on-call for diagnosis.",
     "inbox.diag.looks_alive": "All good: this conversation runs as \"{effective}\"; the customer's next message will be handled automatically",
     "inbox.diag.unknown": "Unrecognized finding {code} (backend newer than this page; refresh after upgrade)",
+    "inbox.diag.high_risk": "This conversation is held by a risk hold: {category_label} · {level_label} (keyword \"{hit}\", held for {held_min} min, persona policy: {policy_label}). Auto-replies stop right here; one manual reply (or the one-click soft reply) clears the tag and releases it",
     "inbox.diag.ai_last_fail": "AI {reason} at {hhmm} — no reply was generated this turn (nothing canned is sent instead). Click \"Retry draft\" on the grey chip in the header; this note clears once the AI succeeds on this conversation again",
     "inbox.aif.title": "AI did not generate this turn",
     "inbox.aif.chip": "AI did not generate ({reason} · {hhmm})",

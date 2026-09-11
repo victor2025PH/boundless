@@ -49,6 +49,23 @@ ZH = {
     "kb2_syspay_purged": "已清除 {n} 条系统预置支付话术",
     # 「新建条目」预填模板（P-4 #254 / D-P6，2026-09-08）
     "kb2_tpl_lead": "从模板开始：点一下预填，再改成你的真实内容",
+    # 一键清除预置条目（Q-10 #254 / 22KVXF ⑤，2026-09-10）：按来源 dry-run 清单 → 确认删
+    "kb2_preset_btn": "清除预置条目",
+    "kb2_preset_btn_tip": "按来源列出厂商 / 系统 / 帮助语料残留的预置条目，看过清单再删；你自己建的条目永不在内",
+    "kb2_preset_title": "清除预置条目",
+    "kb2_preset_lead": "预置条目不是你的知识：厂商随包的产品说明、系统话术 / 示例、历史版本误播进来的帮助语料残留。先列清单，看过再删；「我建的」「批量导入」「学习队列学来的」永远不在清单里。",
+    "kb2_src_help": "帮助语料残留",
+    "kb2_preset_preview": "刷新清单",
+    "kb2_preset_delete": "确认删除",
+    "kb2_preset_delete_n": "确认删除 {n} 条",
+    "kb2_preset_pick_source": "先勾选至少一种来源",
+    "kb2_preset_none": "所选来源下没有预置条目，无需清理",
+    "kb2_preset_summary": "清单共 {n} 条，删除前请过目",
+    "kb2_preset_flag_enabled": "启用中",
+    "kb2_preset_flag_used": "命中 {n} 次",
+    "kb2_preset_help_line": "小智的 {n} 条帮助语料存在独立库 assistant_help.db，不在你的知识库里；这里的「帮助语料残留」只清历史版本误播进来的条目。",
+    "kb2_preset_confirm": "确定删除清单里这 {n} 条预置条目？只删你刚看过的清单（期间被改成「我建的」的会自动跳过），删除后不会再自动灌回。",
+    "kb2_preset_purged": "已清除 {n} 条预置条目",
 }
 
 EN = {
@@ -93,4 +110,21 @@ EN = {
     "kb2_syspay_purged": "Cleared {n} system-preset payment scripts",
     # New-entry prefill templates (P-4 #254 / D-P6, 2026-09-08)
     "kb2_tpl_lead": "Start from a template: click to prefill, then replace with your real content",
+    # One-click preset cleanup (Q-10 #254 / 22KVXF ⑤, 2026-09-10): dry-run list by source → confirm delete
+    "kb2_preset_btn": "Clear preset entries",
+    "kb2_preset_btn_tip": "List vendor / system / help-corpus preset entries by source, review the list, then delete; entries you created are never included",
+    "kb2_preset_title": "Clear preset entries",
+    "kb2_preset_lead": "Preset entries are not your knowledge: vendor product notes bundled with the installer, system scripts / examples, and help-corpus residue mistakenly seeded by older versions. Review the list first, then delete; “Created by me”, “Bulk import” and “Learned via learning queue” are never listed.",
+    "kb2_src_help": "Help-corpus residue",
+    "kb2_preset_preview": "Refresh list",
+    "kb2_preset_delete": "Confirm delete",
+    "kb2_preset_delete_n": "Delete {n} entries",
+    "kb2_preset_pick_source": "Tick at least one source first",
+    "kb2_preset_none": "No preset entries under the selected sources — nothing to clean",
+    "kb2_preset_summary": "{n} entries listed — please review before deleting",
+    "kb2_preset_flag_enabled": "enabled",
+    "kb2_preset_flag_used": "used {n}×",
+    "kb2_preset_help_line": "Xiaozhi's {n} help-corpus entries live in the separate assistant_help.db, not in your knowledge base; “Help-corpus residue” here only clears entries mistakenly seeded by older versions.",
+    "kb2_preset_confirm": "Delete these {n} preset entries from the list? Only the list you just reviewed is removed (entries changed to “Created by me” meanwhile are skipped automatically), and they will not be re-seeded.",
+    "kb2_preset_purged": "Cleared {n} preset entries",
 }

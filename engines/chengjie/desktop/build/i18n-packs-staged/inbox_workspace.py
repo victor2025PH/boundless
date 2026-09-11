@@ -94,6 +94,28 @@ ZH = {
     "inbox.acct.hist_sec_t": "不由系统托管收发的账号：桌面工作台（消息经桌面壳镜像进站）、在册未接管、已退出（可重登）、已移除（只读）、仅历史（未配对）。历史会话均可查看。",
     "inbox.acct.desk_tag": "桌面工作台",
     "inbox.acct.desk_tag_t": "由桌面壳镜像进站的在册账号（无自动收发通道），会话与未读照常统计",
+    "inbox.acct.bridge_on": "副驾在线 · {tier}",
+    "inbox.acct.bridge_on_t": "PC 副驾驱动进程正在读屏收发（90 秒内有心跳）",
+    "inbox.acct.bridge_off": "副驾离线 {m} 分",
+    "inbox.acct.bridge_off_t": "PC 副驾驱动进程已无心跳：新消息不会进来、回复不会发出，请在电脑上重启副驾（tools\\wechat_pc_devlink.ps1）",
+    "inbox.acct.bridge_tier_copilot": "只读建议",
+    "inbox.acct.bridge_tier_semi": "半自动",
+    "inbox.acct.bridge_tier_auto_reply": "全自动",
+    "inbox.acct.bridge_blind": "副驾在线 · 微信窗口不可见",
+    "inbox.acct.bridge_blind_t": "副驾进程在跑，但读不到微信主窗（收进托盘或已退出登录）：此刻消息进不来、回复发不出，请把电脑微信点开还原",
+    # 实施97：抽屉里的两个微信入口（微信客服＝凭证接入不扫码；个人微信＝PC 副驾准入卡）
+    "inbox.acct.add_connect": "＋ 接入",
+    "inbox.acct.pc_lead": "个人微信 · PC 副驾",
+    "inbox.acct.pc_desc": "读取你电脑上已登录的微信，AI 给建议或按你批准代发；默认只读，全自动需确认风险。仅支持 Windows + 微信 4.x。",
+    "inbox.acct.pc_cta": "查看接入流程",
+    "inbox.acct.pc_flow": "接入流程",
+    "inbox.acct.pc_sub_off": "未接入 · 读屏辅助，非官方接口",
+    "inbox.plat.name_wechat_kf": "微信客服",
+    "inbox.plat.name_wechat": "个人微信",
+    "inbox.plat.badge_wechat_kf": "企",
+    "inbox.plat.badge_wechat": "PC",
+    "inbox.drawer.about_wxkf": "：企业微信官方通道，填自建应用凭证接通（不扫码），客户扫客服二维码咨询",
+    "inbox.drawer.about_wxpc": "：PC 副驾读取电脑上已登录的微信（在电脑微信里扫码登录），默认只读建议",
     "inbox.acct.reg_tag": "在册·未接管",
     "inbox.acct.reg_tag_t": "已登记到账号注册表、但系统当前未托管收发的账号",
     "inbox.acct.hist_unread_t": "含历史账号存量未读（只查档，不可回复）",
@@ -289,6 +311,10 @@ ZH = {
     "inbox.acct.note_qqbot": "官方 API 接入：填 AppID / AppSecret 即可，无需扫码；只能被动回复（单聊每条来话 60 分钟内 4 条），正式环境需 IP 白名单",
     # QQ 协议登录（个人号，经用户自装协议端的 Milky 接口；准入区）：与「QQ 机器人」是两个独立渠道
     "inbox.acct.note_qq": "用你自己的 QQ 号：手机 QQ 扫码即接入（智聊内置连接，无需装其它程序）；可收发文字/图片/语音/视频，建议用小号",
+    "inbox.acct.qq_driver_demo": "边车已装 · 驱动未接入（演示态）",
+    "inbox.acct.qq_driver_demo_t": "QQ 个人号连接边车已随安装包装好，但底层真驱动尚未接入：当前扫码与收发都是演示数据，不能真收发。真驱动通过去风险验证后自动开放。",
+    # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」是两个独立渠道
+    "inbox.acct.note_wechat_kf": "企业微信官方通道：填自建应用凭证即接通（不扫码），客户扫客服二维码即可咨询；五步引导页约 10 分钟",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -778,6 +804,7 @@ ZH = {
     "inbox.connect.err_rate_limited_sec": "尝试太频繁，Telegram 要求等待 {sec} 秒后再试。请勿反复刷新——每次重试都会让限制变长。",
     "inbox.connect.err_rate_limited_min": "尝试太频繁，Telegram 要求等待约 {min} 分钟后再试。请勿反复刷新——每次重试都会让限制变长。",
     "inbox.connect.err_dc_migrate_failed": "扫码成功，但与你账号归属的 Telegram 数据中心建立连接失败（跨区账号常见）。请点「刷新二维码」再试一次；连续失败请检查网络/代理后再试。",
+    "inbox.connect.err_session_closed": "这次登录会话已被关闭（被取消或超时清理），扫码结果作废。请点「刷新二维码」重新发起一次扫码。",
     "inbox.connect.st_scan_lost": "扫码后连接中断",
     "inbox.connect.hint_scan_lost": "已检测到你扫了码，但后续登录握手没有完成，本次会话已过期。请点「刷新二维码」重扫一次；若反复出现，多为网络/代理不稳，先检查再试。",
     "inbox.connect.err_login_failed": "登录没成功。请重试；若多次失败请联系管理员。",
@@ -1049,6 +1076,10 @@ ZH = {
         "「被动回复窗口」＝QQ 开放平台机器人政策：单聊每条来话 60 分钟内最多回 4 条、"
         "群 @ 消息 5 分钟内最多 5 条；用户不再说话就不能再发（主动消息已于 2025-04 收敛）。"
         "群里默认只收 @机器人 的消息。这是平台规则，不是本系统限制。",
+    "inbox.connect.win_note_wechat_kf":
+        "「48 小时 / 5 条」＝微信客服政策：客户每发一条消息，企业在其后 48 小时内最多回 5 条，"
+        "客户再发则重置；超窗/超条的发送会被平台丢弃。本系统会在用完前自动停发并等客户回复，"
+        "且不拆条、不发缓冲话术。这是平台规则，不是本系统限制。",
     "inbox.connect.win_note_whatsapp":
         "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
         "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
@@ -1240,6 +1271,9 @@ ZH = {
         "QQ 连接服务尚未就绪：请稍候片刻让智聊内置连接组件启动，再点「重新开始」。",
     "inbox.connect.instr_qq_down":
         "无法连接 QQ 连接服务：请点「重新开始」，或到设置里重启连接服务后再扫码。",
+    "inbox.connect.instr_wechat_kf":
+        "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
+        "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2131,6 +2165,17 @@ ZH = {
     "inbox.plat.zalo_desc": "Zalo OA 官方 API 接入 · 客服消息（7 天互动窗）· 填凭证即用（无扫码）",
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
     "inbox.plat.qq_desc": "QQ 个人号 · 用你自己的 QQ 号 · 文字/图片/语音/视频 · 智聊内置连接，扫码即用",
+    "inbox.plat.wechat_kf_desc": "微信客服（企业微信官方通道）· 微信用户扫客服二维码即聊，不用加好友 · 填企微凭证即接通，不扫码",
+    "inbox.kf.transfer": "转企微人工",
+    "inbox.kf.transfer_t": "把这个客户转给企业微信客服后台的接待人员：之后由他们在企微里应答，本端 AI 停手",
+    "inbox.kf.transfer_confirm": "转给企微客服后台的接待人员？转出后本端 AI 不再自动回复这位客户。",
+    "inbox.kf.transfer_ok": "已转人工：接待人 {who}，本端 AI 已停手",
+    "inbox.kf.transfer_fail": "转人工失败：{why}",
+    "inbox.kf.state_human": "企微会话：人工接待中 · {who}（企微坐席在应答，本端 AI 已停手）",
+    "inbox.kf.state_bot": "企微会话：智能助手接待中（由本端应答）",
+    "inbox.kf.state_queued": "企微会话：排队待接入（客户在等企微人工，本端仍可回）",
+    "inbox.kf.state_closed": "企微会话：已结束（客户再发言会重新开始）",
+    "inbox.kf.state_untouched": "企微会话：尚未处理（客户刚进来，尚无接待方）",
     "inbox.plat_pause.capped": "自动化档位已被平台上限限制",
     "inbox.plat_pause.manual": "AI 拟稿已暂停，仅人工回复",
     "inbox.plat_pause.multi": "AI 出多选草稿，人工挑选发送",
@@ -2250,6 +2295,26 @@ ZH = {
     "inbox.handoff.bar_ack_ok": "已摘掉「需人工」标",
     "inbox.handoff.bar_ack_fail": "摘标失败，请稍后重试",
     "inbox.handoff.ai_muted_t": "此会话挂着「需人工」标，AI 徽标暂降灰——处理完摘标后恢复",
+    # Q-15 #271（ad-）：成人内容分级——卡片写明类别·级别·命中词 + 「一键人设口吻软回应」
+    "inbox.handoff.r_adult": "命中：成人内容（sex）· {level}，命中词「{hit}」",
+    "inbox.handoff.ad_soft": "一键人设口吻软回应",
+    "inbox.handoff.ad_soft_t": "按人设口吻生成一句不接话、不冷场的软回应并发出（走人工出站同路，发完自动摘「需人工」标）",
+    "inbox.handoff.ad_soft_ok": "软回应已发出，「需人工」标已随人工出站摘掉",
+    "inbox.handoff.ad_soft_fail": "软回应未发出：请先打开该会话，或直接手打一句",
+    "inbox.adult.lv_mention": "提及",
+    "inbox.adult.lv_flirt": "撩",
+    "inbox.adult.lv_explicit": "露骨",
+    "inbox.adult.lv_pressure": "露骨+施压",
+    "inbox.adult.cat_adult": "成人内容（sex）",
+    "inbox.adult.cat_privacy": "隐私索取",
+    "inbox.adult.cat_commitment": "承诺越界",
+    "inbox.adult.cat_stop_contact": "客户要求停止联系",
+    "inbox.adult.cat_crisis": "危机升级",
+    "inbox.adult.cat_needs_human": "需人工（泛因）",
+    "inbox.adult.cat_other": "风险持有",
+    "inbox.adult.pol_human": "转人工",
+    "inbox.adult.pol_soft_reply": "软回应",
+    "inbox.adult.pol_mark_only": "只标记",
     "inbox.ctx.rm_tag_t": "点一下直接摘掉这个标签",
     "inbox.dpick.studio": "去工坊深编",
     "inbox.dpick.studio_t": "把勾选的短句填入输入框，并打开右栏「回复工坊」做改语言/改语气等深度编辑",
@@ -2848,6 +2913,13 @@ ZH = {
     "inbox.xl.off": "关闭",
     "inbox.xl.off_t": "关闭双向翻译",
     "inbox.xl.out_t": "发送前把你的消息翻译成",
+    # #276 Q-16（2026-09-11）：「发→X」会话级作用域文案 + 空档=自动跟对方 + 目标语≠客户语言阻断确认
+    "inbox.xl.out_auto_peer": "自动 · 跟对方：{lang}",
+    "inbox.xl.out_auto_peer_unk": "自动 · 跟对方语言",
+    "inbox.xl.out_auto_peer_sub": "未设本会话目标语：AI 自动回复跟对方语言；手发原样发送",
+    "inbox.xl.dir_scope_conv": "本会话",
+    "inbox.xl.dir_scope_t": "收→ 全局默认 / 发→ 仅本会话",
+    "inbox.xl.confirm_mismatch": "将译成 {to} 发给 {cust} 客户，确定发送？",
     "inbox.xl.pdf_extracting": "抽取并翻译中…",
     "inbox.xl.pop_hd": "对话翻译",
     "inbox.xl.pref_offline_t": "首选线路 {label} 对当前目标语离线，已自动改用备用线路——点 ✕ 取消偏好",
@@ -3086,6 +3158,27 @@ EN = {
     "inbox.acct.ghost_tag": "history",
     "inbox.acct.desk_tag": "Desktop",
     "inbox.acct.desk_tag_t": "Registry account mirrored by the desktop shell (no cloud worker). Chats and unread still count.",
+    "inbox.acct.bridge_on": "Copilot online · {tier}",
+    "inbox.acct.bridge_on_t": "The PC copilot driver is reading the screen and relaying (heartbeat within 90s)",
+    "inbox.acct.bridge_off": "Copilot offline {m}m",
+    "inbox.acct.bridge_off_t": "No heartbeat from the PC copilot driver: new messages won't arrive and replies won't go out. Restart it on the PC (tools\\wechat_pc_devlink.ps1)",
+    "inbox.acct.bridge_tier_copilot": "read-only",
+    "inbox.acct.bridge_tier_semi": "semi-auto",
+    "inbox.acct.bridge_tier_auto_reply": "auto",
+    "inbox.acct.bridge_blind": "Copilot online · WeChat window not visible",
+    "inbox.acct.bridge_blind_t": "The copilot process is running but cannot see the WeChat main window (in the tray or signed out): messages can't arrive and replies can't go out—restore WeChat on the PC",
+    "inbox.acct.add_connect": "+ Connect",
+    "inbox.acct.pc_lead": "Personal WeChat · PC copilot",
+    "inbox.acct.pc_desc": "Reads the WeChat already signed in on your PC; AI suggests or sends what you approve. Read-only by default, full-auto needs a risk acknowledgement. Windows + WeChat 4.x only.",
+    "inbox.acct.pc_cta": "View the setup guide",
+    "inbox.acct.pc_flow": "Setup guide",
+    "inbox.acct.pc_sub_off": "Not connected · screen-reading assistant, not an official API",
+    "inbox.plat.name_wechat_kf": "WeChat Service",
+    "inbox.plat.name_wechat": "WeChat (personal)",
+    "inbox.plat.badge_wechat_kf": "Biz",
+    "inbox.plat.badge_wechat": "PC",
+    "inbox.drawer.about_wxkf": ": WeCom official channel—connect with self-built app credentials (no QR); customers scan the service QR",
+    "inbox.drawer.about_wxpc": ": the PC copilot reads the WeChat signed in on your PC (sign in by QR inside WeChat); read-only by default",
     "inbox.acct.reg_tag": "Registered · idle",
     "inbox.acct.reg_tag_t": "In the account registry, but the orchestrator is not running a worker for it",
     "inbox.acct.grp_unread_t": "Group unread {n} (not counted in the main badge)",
@@ -3284,6 +3377,9 @@ EN = {
     "inbox.acct.note_zalo": "Official API onboarding: paste the Zalo OA access token — no QR; CS messages limited to the 7-day interaction window",
     "inbox.acct.note_qqbot": "Official API onboarding: enter AppID / AppSecret — no QR; passive replies only (up to 4 per inbound message within 60 min), production needs an IP allowlist",
     "inbox.acct.note_qq": "Your own QQ account: just scan the QR with your phone's QQ (built-in connector, no extra app to install). Text / image / voice / video; a secondary account is recommended",
+    "inbox.acct.qq_driver_demo": "Sidecar installed · driver not wired (demo mode)",
+    "inbox.acct.qq_driver_demo_t": "The QQ personal-account connector sidecar ships with the installer, but the real low-level driver is not wired yet: QR login and messages are demo data and nothing is actually sent or received. It opens automatically once the driver passes risk validation.",
+    "inbox.acct.note_wechat_kf": "WeCom official channel: connect with your self-built app credentials (no QR); customers scan the service QR to chat; the 5-step guide takes about 10 minutes",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3758,6 +3854,7 @@ EN = {
     "inbox.connect.err_rate_limited_sec": "Too many attempts — Telegram requires waiting {sec} seconds before retrying. Don’t keep refreshing; every retry extends the block.",
     "inbox.connect.err_rate_limited_min": "Too many attempts — Telegram requires waiting about {min} minutes before retrying. Don’t keep refreshing; every retry extends the block.",
     "inbox.connect.err_dc_migrate_failed": "Scan succeeded, but connecting to your account’s Telegram data center failed (common for cross-region accounts). Click “Refresh QR code” and try again; if it keeps failing, check your network/proxy first.",
+    "inbox.connect.err_session_closed": "This login session was closed (cancelled or cleaned up after timeout), so the scan result is void. Click “Refresh QR code” to start a new scan.",
     "inbox.connect.st_scan_lost": "Connection lost after scan",
     "inbox.connect.hint_scan_lost": "Your scan was detected, but the login handshake didn’t complete and this session expired. Click “Refresh QR code” and scan again; if it keeps happening, it’s usually an unstable network/proxy — check that first.",
     "inbox.connect.err_login_failed": "Login didn’t go through. Please try again; if it keeps failing, contact your admin.",
@@ -4037,6 +4134,12 @@ EN = {
         "once the user stops talking you cannot send (proactive messages were retired in "
         "2025-04). In groups the bot only receives @-mentions by default. A platform rule, "
         "not a limit of this system.",
+    "inbox.connect.win_note_wechat_kf":
+        "The “48 h / 5 messages” rule is WeChat Customer Service policy: after each customer "
+        "message the business may send at most 5 replies within 48 hours; a new customer message "
+        "resets the turn, and anything beyond is dropped by the platform. This system stops "
+        "before the quota runs out and waits for the customer, never splits replies into bubbles "
+        "and never sends holding text. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_whatsapp":
         "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
         "of the user's last message; outside the window only pre-approved template messages can "
@@ -4234,6 +4337,10 @@ EN = {
     "inbox.connect.instr_qq_down":
         "Cannot reach the QQ connector service: click “Start over”, or restart the connector "
         "service in Settings and scan again.",
+    "inbox.connect.instr_wechat_kf":
+        "WeChat Customer Service connects via the WeCom official API: save your WeCom self-built "
+        "app CorpID / Secret in the Setup Wizard and it goes online automatically — no QR scan. "
+        "The app needs a trusted-IP allowlist; customers scan the service QR code to chat.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -5095,6 +5202,17 @@ EN = {
     "inbox.plat.zalo_desc": "Zalo OA official API · CS messages (7-day window) · credentials only (no QR)",
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
     "inbox.plat.qq_desc": "QQ personal account · your own QQ number · text / image / voice / video · built-in connector, just scan to use",
+    "inbox.plat.wechat_kf_desc": "WeChat Customer Service (WeCom official channel) · WeChat users scan the service QR to chat, no friend request · connect with WeCom credentials, no QR login",
+    "inbox.kf.transfer": "Hand to WeCom agent",
+    "inbox.kf.transfer_t": "Hand this customer to a human agent in the WeCom customer-service console; they reply from WeCom and our AI stops",
+    "inbox.kf.transfer_confirm": "Hand over to a WeCom console agent? Our AI will stop auto-replying to this customer.",
+    "inbox.kf.transfer_ok": "Handed over to {who}; AI stopped for this chat",
+    "inbox.kf.transfer_fail": "Handover failed: {why}",
+    "inbox.kf.state_human": "WeCom session: human agent {who} is serving (our AI is paused)",
+    "inbox.kf.state_bot": "WeCom session: served by the assistant (answered from here)",
+    "inbox.kf.state_queued": "WeCom session: queued for a WeCom agent (you can still reply here)",
+    "inbox.kf.state_closed": "WeCom session: ended (a new customer message reopens it)",
+    "inbox.kf.state_untouched": "WeCom session: not yet handled (customer just arrived)",
     "inbox.plat_pause.capped": "Automation level capped by platform ceiling",
     "inbox.plat_pause.manual": "AI drafting paused; manual replies only",
     "inbox.plat_pause.multi": "AI proposes multiple drafts; a human picks one to send",
@@ -5212,6 +5330,26 @@ EN = {
     "inbox.handoff.bar_ack_ok": "Needs-human tag cleared",
     "inbox.handoff.bar_ack_fail": "Failed to clear the tag, please retry",
     "inbox.handoff.ai_muted_t": "This conversation carries a needs-human tag, so the AI badge is dimmed until the tag is cleared",
+    # Q-15 #271 (ad-): adult-content grading — card shows category · level · hit + one-click persona-voice soft reply
+    "inbox.handoff.r_adult": "hit: adult content (sex) · {level}, keyword \"{hit}\"",
+    "inbox.handoff.ad_soft": "Soft reply in persona voice",
+    "inbox.handoff.ad_soft_t": "Generate one persona-voice line that neither plays along nor goes silent, and send it (same path as a manual reply; the needs-human tag clears on send)",
+    "inbox.handoff.ad_soft_ok": "Soft reply sent; the needs-human tag was cleared with the manual send",
+    "inbox.handoff.ad_soft_fail": "Soft reply not sent: open the conversation first, or type a line yourself",
+    "inbox.adult.lv_mention": "mention",
+    "inbox.adult.lv_flirt": "flirt",
+    "inbox.adult.lv_explicit": "explicit",
+    "inbox.adult.lv_pressure": "explicit + pressure",
+    "inbox.adult.cat_adult": "adult content (sex)",
+    "inbox.adult.cat_privacy": "privacy request",
+    "inbox.adult.cat_commitment": "commitment overreach",
+    "inbox.adult.cat_stop_contact": "customer asked to stop contact",
+    "inbox.adult.cat_crisis": "crisis escalation",
+    "inbox.adult.cat_needs_human": "needs human (generic)",
+    "inbox.adult.cat_other": "risk hold",
+    "inbox.adult.pol_human": "hand to human",
+    "inbox.adult.pol_soft_reply": "soft reply",
+    "inbox.adult.pol_mark_only": "mark only",
     "inbox.ctx.rm_tag_t": "Click to remove this tag directly",
     "inbox.dpick.studio": "Deep-edit in Studio",
     "inbox.dpick.studio_t": "Put the ticked lines into the composer and open the Reply Studio on the right for language/tone deep edits",
@@ -5807,6 +5945,13 @@ EN = {
     "inbox.xl.off": "Off",
     "inbox.xl.off_t": "Turn off two-way translation",
     "inbox.xl.out_t": "Translate your message before sending to",
+    # #276 Q-16 (2026-09-11): per-conversation scope wording for "Send→", empty = auto-follow customer, blocking confirm on target ≠ customer language
+    "inbox.xl.out_auto_peer": "Auto · follows customer: {lang}",
+    "inbox.xl.out_auto_peer_unk": "Auto · follows customer’s language",
+    "inbox.xl.out_auto_peer_sub": "No per-conversation target: AI replies follow the customer’s language; manual sends go as typed",
+    "inbox.xl.dir_scope_conv": "This chat",
+    "inbox.xl.dir_scope_t": "Receive→ global default / Send→ this conversation only",
+    "inbox.xl.confirm_mismatch": "This will be translated into {to} and sent to a {cust}-speaking customer. Send anyway?",
     "inbox.xl.pdf_extracting": "Extracting and translating…",
     "inbox.xl.pop_hd": "Conversation translation",
     "inbox.xl.pref_offline_t": "Preferred engine {label} is offline for the current target; auto-fell back — click ✕ to clear the preference",

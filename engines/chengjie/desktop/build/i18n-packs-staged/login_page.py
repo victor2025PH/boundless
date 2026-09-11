@@ -11,6 +11,9 @@ ZH = {
     "lg2_note_setup": "首次部署？先完成初始化，创建管理员账号 →",
     "lg2_token_mode": "管理员令牌登录",
     "lg2_token_hint": "令牌登录仅供系统管理员使用；坐席请用帐号密码登录。",
+    # 实施97 P1：企业微信成员扫码登录
+    "lg2_wecom_btn": "企业微信扫码登录",
+    "lg2_wecom_hint": "用企业微信扫码即可登录，首次登录自动创建坐席账号。",
 }
 
 EN = {
@@ -20,4 +23,6 @@ EN = {
     "lg2_token_mode": "Admin token sign-in",
     "lg2_token_hint": "Token sign-in is for system administrators; "
                       "agents sign in with username & password.",
+    "lg2_wecom_btn": "Sign in with WeCom",
+    "lg2_wecom_hint": "Scan with WeCom to sign in; an agent account is created on first sign-in.",
 }
