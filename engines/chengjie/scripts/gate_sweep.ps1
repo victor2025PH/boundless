@@ -422,7 +422,11 @@ $gates = @(
     # adult_grader / risk_grader / autosend_worker 人工优先闸 / 切档路由 / 回复设置页卡片。
     'tests/test_adult_grader_gate.py',
     'tests/test_risk_grader_gate.py',
-    'tests/test_agent_yield_defer.py'
+    'tests/test_agent_yield_defer.py',
+    # Q-23 #303（2026-09-12）：自动出站单一闸门 + GuardContext 场景维度——报障群被软回应刷屏事故。
+    # 钉：群/非客户不评估不出站；review 档软回应=审核候选；软回应只经 autosend_worker stage=soft_reply；
+    # _inbox_deliver_cb 只剩坐席人工通过一个调用方（静态扫描）。
+    'tests/test_guard_context_gate.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
