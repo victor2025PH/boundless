@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.i18n.lang_catalog import CODES as _LANG_CATALOG_CODES
+
 logger = logging.getLogger(__name__)
 
 # 占位符：CJK 全角方括号 + 序号，普通翻译引擎一般原样保留；restore 时容错匹配。
@@ -465,11 +467,9 @@ class GoogleEngine:
 
 # Hunyuan-MT 官方模型卡覆盖的语种（映射到本项目语种码）。命中集内 supports_target=True，
 # 集外交给下游引擎（ai/deepl/google）——即便置信度切换关着，冷门语种也不会被硬吃。
-_HYMT_LANGS = {
-    "zh", "zh-tw", "yue", "en", "ja", "ko", "fr", "es", "it", "pt", "de", "tr",
-    "ru", "ar", "th", "id", "ms", "vi", "tl", "hi", "pl", "cs", "nl", "km",
-    "my", "fa", "he", "bn", "ta", "te", "mr", "gu", "ur", "uk",
-}
+# Q-21 A（#290，2026-09-12）：码表单点迁到 src/i18n/lang_catalog（34 码含 yue/zh-tw 带能力位），
+# 本处只引用——前端五处 / 路由白名单 / 本引擎再无第二份手写短表。
+_HYMT_LANGS = set(_LANG_CATALOG_CODES)
 # 公开别名：前端语种目录 / agent-lang 白名单必须与模型卡锁死同一份。
 HYMT_TARGET_LANGS = frozenset(_HYMT_LANGS)
 

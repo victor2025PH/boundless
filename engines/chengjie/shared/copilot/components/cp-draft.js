@@ -14,12 +14,42 @@
   const Base = root.CopilotShared && root.CopilotShared.CpPanelBase;
   if (!Base) { console.error("cp-draft: CpPanelBase 未加载"); return; }
 
-  // 语种与后台翻译栏保持同一套（顺序/数量一致）；标签经 i18n 词典按 UI 语言显示
-  const LANGS = [
+  /* Q-21 A（#290，2026-09-12）：回复语言下拉只读语言目录单点 GET /api/lang-catalog
+     （src/i18n/lang_catalog：34 码含粤语 yue / 繁体 zh-tw，显示名按 UI 语言，能力位 draft）。
+     下面这份 10 语短表**只是端点不可达时的兜底**——三单复验「下拉没有粤语」的根因就是
+     四处各写一份短表。条目形状 [code, i18nKey, name]：name 有值（来自目录）优先，否则走 t(key)。
+     首项 "" = 跟随人设/账户（cp.lang.follow）恒在。 */
+  const LANGS_FALLBACK = [
     ["", "cp.lang.follow"], ["zh", "cp.lang.zh"], ["en", "cp.lang.en"], ["th", "cp.lang.th"],
     ["vi", "cp.lang.vi"], ["id", "cp.lang.id"], ["ja", "cp.lang.ja"],
     ["ko", "cp.lang.ko"], ["ru", "cp.lang.ru"], ["es", "cp.lang.es"], ["pt", "cp.lang.pt"],
   ];
+  let LANGS = LANGS_FALLBACK.slice();
+  let _catalogLoaded = "";   // 已加载的 ui_lang（切 UI 语言重新拉一次）
+  let _catalogPromise = null;
+  async function _loadLangCatalog(client, uiLang) {
+    if (_catalogLoaded === uiLang) return LANGS;
+    if (_catalogPromise) return _catalogPromise;
+    _catalogPromise = (async () => {
+      try {
+        let d = null;
+        if (client && typeof client.langCatalog === "function") d = await client.langCatalog({ ui_lang: uiLang });
+        if (!(d && d.ok && Array.isArray(d.langs) && d.langs.length)) {
+          const r = await fetch("/api/lang-catalog?ui_lang=" + encodeURIComponent(uiLang || ""), { credentials: "same-origin" });
+          d = r.ok ? await r.json() : null;
+        }
+        if (d && d.ok && Array.isArray(d.langs) && d.langs.length) {
+          const rows = d.langs.filter((l) => l && l.code && !(l.caps && l.caps.draft === false))
+            .map((l) => [String(l.code), "", String(l.name || l.code) + ((l.endonym && l.endonym !== l.name) ? " · " + l.endonym : "")]);
+          LANGS = [["", "cp.lang.follow"]].concat(rows);
+          _catalogLoaded = uiLang;
+        }
+      } catch (_e) { /* 兜底短表 */ }
+      _catalogPromise = null;
+      return LANGS;
+    })();
+    return _catalogPromise;
+  }
   const TIER = { conv_override: "cp.draft.tier_conv_override", chat_binding: "cp.draft.tier_chat_binding", account_profile: "cp.draft.tier_account_profile", domain: "cp.draft.tier_domain", default: "cp.draft.tier_default" };
 
   class CpDraft extends Base {
@@ -118,8 +148,11 @@
       // 切会话清指令，避免上一条会话的今日拍串到下一条
       this._directive = null;
       const lang = this._loadLang();
-      const opts = LANGS.map(([v, k]) =>
-        `<option value="${v}"${v === lang ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
+      // Q-21 A：先拿目录（缓存命中零等待；首拉失败保留兜底短表）
+      try { await _loadLangCatalog(this._client, String((root.CopilotShared && root.CopilotShared.lang) || "")); } catch (_e) {}
+      const _lbl = (e) => (e[2] ? e[2] : this.t(e[1]));
+      const opts = LANGS.map((e) =>
+        `<option value="${e[0]}"${e[0] === lang ? " selected" : ""}>${this.esc(_lbl(e))}</option>`).join("");
       const wantPersona = this.hasAttribute("persona");
       const wantContrast = this.hasAttribute("contrast");
       let personaRow = "";
@@ -134,7 +167,7 @@
       if (wantContrast) {
         const cl = this._loadContrast();
         const copts = LANGS.filter(([v]) => v !== "")
-          .map(([v, k]) => `<option value="${v}"${v === cl ? " selected" : ""}>${this.esc(this.t(k))}</option>`).join("");
+          .map((e) => `<option value="${e[0]}"${e[0] === cl ? " selected" : ""}>${this.esc(_lbl(e))}</option>`).join("");
         contrastRow = `<select data-role="contrast"><option value="">${this.esc(this.t("cp.draft.no_contrast"))}</option>${copts}</select>`;
       }
       const modeRow =
@@ -176,7 +209,7 @@
     _contrastKey() { return "cp_contrastlang:" + (this._ctx && this._ctx.conversationId || ""); }
     _loadContrast() { try { return localStorage.getItem(this._contrastKey()) || ""; } catch (e) { return ""; } }
     _saveContrast(v) { try { if (v) localStorage.setItem(this._contrastKey(), v); else localStorage.removeItem(this._contrastKey()); } catch (e) {} }
-    _langLabel(code) { const f = LANGS.find(([v]) => v === code); return f ? this.t(f[1]) : code; }
+    _langLabel(code) { const f = LANGS.find(([v]) => v === code); return f ? (f[2] || this.t(f[1])) : code; }
 
     async _loadPersonas() {
       const sel = this.shadowRoot.querySelector('select[data-role="persona"]');

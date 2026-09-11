@@ -2170,6 +2170,14 @@ _ADDITIONS_2026_09_12_CONV_MODEL_ROUTE = """
 """
 _BASELINE += _ADDITIONS_2026_09_12_CONV_MODEL_ROUTE
 
+# Q-21 A #290（2026-09-12）：语言能力矩阵单点 /api/lang-catalog（unified_inbox_translate_routes.py）
+# ——34 码含 yue/zh-tw + 中/英/繁显示名 + 能力位；回复工坊 / 翻译工具 / 人设语言只读它。
+_ADDITIONS_2026_09_12_Q21_LANG_CATALOG = """
+/api/lang-catalog	GET
+/api/unified-inbox/lang-plan	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_12_Q21_LANG_CATALOG
+
 
 def _parse_baseline():
     expected = set()

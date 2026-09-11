@@ -2418,6 +2418,35 @@ var _defaultPersonaFull = null;
 
 function _dpVal(id) { var el = document.getElementById(id); return el ? (el.value || '').trim() : ''; }
 function _dpSet(id, v) { var el = document.getElementById(id); if (el) el.value = (v == null ? '' : v); }
+/* Q-21 A（#290）：人设「回复语言」下拉只读语言目录单点 GET /api/lang-catalog（34 码含粤语 / 繁体，
+   显示名按 UI 语言）。模板里的 4 个静态 option 只是端点不可达时的兜底；「跟随对方语言」空值
+   恒为首项；加载完成后回填当前值（loadDefaultPersonaForm 可能先于本函数返回）。 */
+async function _dpLoadLangCatalog() {
+  var sel = document.getElementById('p-language');
+  if (!sel) return;
+  try {
+    var f = (typeof apiFetch === 'function') ? apiFetch : fetch;
+    var r = await f('/api/lang-catalog');
+    var d = await r.json();
+    if (!d || !d.ok || !Array.isArray(d.langs) || !d.langs.length) return;
+    var cur = sel.value || '';
+    var first = sel.options[0] ? sel.options[0].cloneNode(true) : null;
+    sel.innerHTML = '';
+    if (first) { first.value = ''; sel.appendChild(first); }
+    d.langs.forEach(function (l) {
+      if (!l || !l.code) return;
+      var o = document.createElement('option');
+      o.value = l.code;
+      var nm = String(l.name || l.code);
+      o.textContent = (l.endonym && l.endonym !== nm) ? (nm + ' · ' + l.endonym) : nm;
+      if (l.caps && l.caps.draft === false) o.disabled = true;
+      sel.appendChild(o);
+    });
+    sel.value = cur;
+    sel.dataset.catalog = String(d.version || '');
+  } catch (_e) { /* 兜底保留静态 option */ }
+}
+try { _dpLoadLangCatalog(); } catch (_e) {}
 
 function _personaPayload() {
   // 基于已加载的完整人设做合并，只覆盖表单里的字段

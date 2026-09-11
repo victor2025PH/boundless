@@ -41,9 +41,11 @@
       'aria-hidden="true" style="flex-shrink:0;">' + (IC[name] || "") + "</svg>";
   }
 
-  // 目标语选项（与收件箱翻译常用集同口径；label 本地小映射与 app.html pillT 同模式）
-  const LANGS = ["zh", "en", "ja", "ko", "th", "vi", "id", "ms", "es", "pt", "ru", "ar", "fr", "de", "hi"];
-  const LANG_NAMES = {
+  /* Q-21 A（#290，2026-09-12）：目标语只读语言目录单点 GET /api/lang-catalog（34 码含粤语 yue /
+     繁体 zh-tw，显示名按 UI 语言，能力位 translate）。下面 15 语短表**只是端点不可达时的兜底**
+     ——三单复验「翻译工具没有粤语」的根因就是这份短表与顶栏 34 语目录不同源。 */
+  const LANGS_FALLBACK = ["zh", "en", "ja", "ko", "th", "vi", "id", "ms", "es", "pt", "ru", "ar", "fr", "de", "hi"];
+  const LANG_NAMES_FALLBACK = {
     zh: { zh: "中文", en: "英语", ja: "日语", ko: "韩语", th: "泰语", vi: "越南语", id: "印尼语",
           ms: "马来语", es: "西班牙语", pt: "葡萄牙语", ru: "俄语", ar: "阿拉伯语", fr: "法语",
           de: "德语", hi: "印地语" },
@@ -51,6 +53,35 @@
           id: "Indonesian", ms: "Malay", es: "Spanish", pt: "Portuguese", ru: "Russian",
           ar: "Arabic", fr: "French", de: "German", hi: "Hindi" },
   };
+  let LANGS = LANGS_FALLBACK.slice();
+  let LANG_NAMES = { zh: Object.assign({}, LANG_NAMES_FALLBACK.zh), en: Object.assign({}, LANG_NAMES_FALLBACK.en) };
+  let _catalogLoaded = "";
+  let _catalogPromise = null;
+  async function _loadLangCatalog(client, uiLang) {
+    if (_catalogLoaded === uiLang) return true;
+    if (_catalogPromise) return _catalogPromise;
+    _catalogPromise = (async () => {
+      try {
+        let d = null;
+        if (client && typeof client.langCatalog === "function") d = await client.langCatalog({ ui_lang: uiLang });
+        if (!(d && d.ok && Array.isArray(d.langs) && d.langs.length)) {
+          const r = await fetch("/api/lang-catalog?ui_lang=" + encodeURIComponent(uiLang || ""), { credentials: "same-origin" });
+          d = r.ok ? await r.json() : null;
+        }
+        if (d && d.ok && Array.isArray(d.langs) && d.langs.length) {
+          const rows = d.langs.filter((l) => l && l.code && !(l.caps && l.caps.translate === false));
+          LANGS = rows.map((l) => String(l.code));
+          const names = {};
+          rows.forEach((l) => { names[l.code] = String(l.name || l.code); });
+          LANG_NAMES = { zh: names, en: names };   // name 已按 ui_lang 解析
+          _catalogLoaded = uiLang;
+        }
+      } catch (_e) { /* 兜底短表 */ }
+      _catalogPromise = null;
+      return true;
+    })();
+    return _catalogPromise;
+  }
 
   class CpXlateTools extends Base {
     constructor() {
@@ -167,6 +198,16 @@
       html += '<div class="xt-status" data-role="status"></div><div data-role="out"></div>';
       this._render(html);
       this._wire();
+      this._ensureCatalog();
+    }
+    /* Q-21 A：目录未按当前 UI 语言加载过 → 拉一次，回来后就地重填目标语 select（保留已选）。 */
+    _ensureCatalog() {
+      const ul = this._lang();
+      if (_catalogLoaded === ul) return;
+      _loadLangCatalog(this._cl(), ul).then(() => {
+        const sel = this.shadowRoot && this.shadowRoot.querySelector('[data-role="target"]');
+        if (sel && _catalogLoaded === ul) sel.innerHTML = this._langOptions();
+      }).catch(() => {});
     }
     _topHtml(v) {
       const esc = (s) => this.esc(s);

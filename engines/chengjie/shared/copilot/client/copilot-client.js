@@ -342,6 +342,14 @@
       const q = qs.toString();
       return this._get(`/api/unified-inbox/default-reply-lang${q ? "?" + q : ""}`);
     }
+    // Q-21 A（#290）：语言目录单点（34 码含 yue/zh-tw + 显示名 + 能力位）。cp-draft / cp-xlate-tools 只读它。
+    async langCatalog({ ui_lang, cap } = {}) {
+      const qs = new URLSearchParams();
+      if (ui_lang) qs.set("ui_lang", ui_lang);
+      if (cap) qs.set("cap", cap);
+      const q = qs.toString();
+      return this._get(`/api/lang-catalog${q ? "?" + q : ""}`);
+    }
     // AI 对话分析（风险预判 + 阶梯话术 + 摘要）。两端 iframe 同源直达。
     async analyze({ text, messages, chat }) {
       return this._post(`/api/unified-inbox/analyze`, { text: text || "", messages: messages || [], chat: chat || {} });
@@ -703,6 +711,11 @@
     async defaultReplyLang(args) {
       const s = this._shell();
       return s.defaultReplyLang ? s.defaultReplyLang(args || {}) : { ok: false, error: "shell.defaultReplyLang 未暴露" };
+    }
+    // Q-21 A：桌面壳未暴露 → 组件回落同源 fetch("/api/lang-catalog")（同 iframe 语义），再回落内置短表。
+    async langCatalog(args) {
+      const s = this._shell();
+      return s.langCatalog ? s.langCatalog(args || {}) : { ok: false, error: "shell.langCatalog 未暴露" };
     }
     async analyze(args) {
       const s = this._shell();

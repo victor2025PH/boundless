@@ -778,6 +778,44 @@ def register_translate_routes(app, *, api_auth) -> None:
         svc = _get_translation_service(request)
         return {"ok": True, "matrix": svc.engine_matrix(target_lang)}
 
+    @app.get("/api/lang-catalog")
+    async def api_lang_catalog(
+        request: Request, ui_lang: str = "", cap: str = "", _=Depends(api_auth)
+    ):
+        """Q-21 A（#290）：语言能力矩阵单点——34 码含 yue/zh-tw + 中/英/繁显示名 + 能力位。
+
+        回复工坊（cp-draft）/ 翻译工具（cp-xlate-tools）/ 人设语言只读本端点或同源模板注入，
+        任何一处不得再手写短表。``ui_lang`` 缺省取请求 UI 语言（inject_i18n 中间件）；
+        ``cap=draft|translate|tts_clone`` 可按能力位过滤。
+        """
+        from src.i18n.lang_catalog import catalog_payload, codes_with
+        ul = str(ui_lang or "").strip() or str(
+            getattr(getattr(request, "state", None), "ui_lang", "") or "zh")
+        only = None
+        c = str(cap or "").strip().lower()
+        if c in ("draft", "translate", "tts_clone"):
+            only = codes_with(c)
+        return catalog_payload(ul, only=only)
+
+    @app.get("/api/unified-inbox/lang-plan")
+    async def api_unified_inbox_lang_plan(
+        request: Request, conversation_id: str = "", _=Depends(api_auth)
+    ):
+        """Q-21 B（#302 / Y82GWM）：会话头「对方语言未知 · 按人设语言回」chip 的数据源——
+        起草链最近一次登记的会话语言计划 ``{reply_lang, xlate_target, tts_lang, decided_by,
+        confidence, persona_lang, peer_known, fallback}``；进程注册表 → KV ``conv_lang_plan:<cid>``
+        （重启后仍可读）；两处都无（从未起草过）→ ``plan:null``。
+        """
+        from src.inbox.outbound_translate import peek_conv_lang_plan
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            raise HTTPException(400, "conversation_id required")
+        try:
+            _st = _inbox_store(request)
+        except Exception:
+            _st = None
+        return {"ok": True, "conversation_id": cid, "plan": peek_conv_lang_plan(cid, store=_st)}
+
     @app.post("/api/unified-inbox/translate-compare")
     async def api_unified_inbox_translate_compare(request: Request, _=Depends(api_auth)):
         """多线路对照选译：所有引擎各译一遍，返回候选列表供坐席择优（对标拓译多线路对照）。
