@@ -1907,7 +1907,7 @@ class TTSPipeline:
                         _sys_voice = ""
                 rv.extra["system_voice"] = _sys_voice
                 logger.info(
-                    "[tts] blocked reason=clone_unavailable:%s persona=%s backend=%s "
+                    "[tts] fallback blocked reason=clone_unavailable:%s persona=%s backend=%s "
                     "lang=%s system_voice=%s → 不出系统音，改发文字（二次确认后方可）",
                     _why, self.persona_id or "-", primary_backend,
                     _lang_blocked or "-", _sys_voice or "-")

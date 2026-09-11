@@ -460,7 +460,7 @@
       if (account_id) q.set("account_id", account_id);
       return this._get(`/api/voice/effective-config?${q.toString()}`);
     }
-    async voiceTts({ text, persona_id, chat_key, platform, account_id, target_lang }) {
+    async voiceTts({ text, persona_id, chat_key, platform, account_id, target_lang, confirm_system_voice }) {
       // 会话上下文（可选）：带上后试听与 send-voice 走同一组解析入参
       // （试听=发送 契约；不带=旧行为，服务端按全局回落解析）。
       // P0-V2b 译声：target_lang（'auto'=会话客户语言，服务端解析）→ 先译后念；
@@ -471,6 +471,8 @@
         platform: platform || undefined,
         account_id: account_id || undefined,
         target_lang: target_lang || undefined,
+        // Q-22 #287：系统音二次确认位——只在坐席点了「用系统音发」才带 1；不带=服务端阻断不出系统音
+        confirm_system_voice: confirm_system_voice ? 1 : undefined,
       });
     }
     async sendVoice(body) { return this._post("/api/unified-inbox/send-voice", body || {}); }

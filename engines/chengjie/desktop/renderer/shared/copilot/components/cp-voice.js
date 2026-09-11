@@ -832,6 +832,8 @@
       const act = b.getAttribute("data-act");
       if (act === "tts") return this._genTts();
       if (act === "send") return this._sendVoice();
+      if (act === "send-as-text") { this._sendAsText(); return; }   // Q-22 红条·改发文字
+      if (act === "sys-voice") return this._sysVoiceSend();          // Q-22 红条·二次确认系统音
       if (act === "clear-preview") { this._clearPreview(); return; }
       if (act === "cancel-gen") { this._cancelGen(); return; }
       if (act === "xl-off-regen") { this._xlOffRegen(); return; }
@@ -881,7 +883,79 @@
       } catch (e) { /* */ }
     }
 
+    /* Q-22 #287/#288（2026-09-12）：服务端阻断回包 → 红条 + 两键。
+       blocked + clone_unavailable{why,lang,system_voice_available} ＝ 克隆声不可用
+       （语种超能力 / 额度 / 引擎不可达 / 念错），服务端**没有**替我们换系统音；
+       blocked + reason=lang_mismatch ＝ 文本/音色/计划语种不一致，跳过语音。
+       两种都只给出路不给「重试」：重试只会再撞同一道闸。 */
+    static cloneBlocked(d) {
+      if (!d || !d.blocked) return null;
+      if (d.clone_unavailable && typeof d.clone_unavailable === "object") return d.clone_unavailable;
+      if (/^clone_unavailable:/.test(String(d.reason || ""))) return { why: String(d.reason).slice(18), system_voice_available: false };
+      return null;
+    }
+    static langMismatch(d) {
+      return !!(d && d.blocked && String(d.reason || "") === "lang_mismatch");
+    }
+    _blockedBarHtml(d, blk, lm) {
+      const why = blk ? String(blk.why || "") : "lang_mismatch";
+      const msg = (d && d.message)
+        || (lm ? this._t("cp.voice.blocked_lang_mismatch") : this._t("cp.voice.blocked_generic"));
+      const canSys = !!(blk && blk.system_voice_available);
+      return `<div class="pv-note err" data-role="clone-blocked" data-reason="${this._esc(why)}">`
+        + `<span>❌ ${this._esc(msg)}</span>`
+        + `<div class="row">`
+        + `<button class="primary" data-act="send-as-text">${this._esc(this._t("cp.voice.send_as_text_btn"))}</button>`
+        + (canSys
+          ? `<button data-act="sys-voice" title="${this._esc(this._t("cp.voice.sys_voice_confirm"))}">${this._esc(this._t("cp.voice.sys_voice_btn"))}</button>`
+          : (lm ? "" : `<span class="hint">${this._esc(this._t("cp.voice.sys_voice_none"))}</span>`))
+        + `</div></div>`;
+    }
+    _renderBlocked(box, d) {
+      const blk = CpVoice.cloneBlocked(d);
+      const lm = CpVoice.langMismatch(d);
+      this._previewText = null;
+      this._previewFilename = "";
+      this._previewXl = "";
+      this._previewXlEff = "";
+      this._previewFallback = "";
+      this._previewSysConfirmed = false;
+      box.hidden = false;
+      box.innerHTML = this._blockedBarHtml(d, blk, lm)
+        + `<div class="row pv-foot">`
+        + `<button data-act="clear-preview" title="${this._esc(this._t("cp.voice.clear_t"))}">${this._ic("x", 12)}</button></div>`;
+      this._warnBeacon(blk ? "clone_blocked" : "lang_mismatch");
+    }
+    /* 「改发文字」：把当前文字交给宿主输入框（不自动发，坐席按发送）。宿主经
+       cp-voice-send-as-text 事件或 __cpVoiceSendAsText 钩子接；两者都没有 → 提示复制。 */
+    _sendAsText() {
+      const text = this._text();
+      if (!text) return;
+      let handled = false;
+      try {
+        if (typeof root.__cpVoiceSendAsText === "function") handled = !!root.__cpVoiceSendAsText(text);
+      } catch (_e) { handled = false; }
+      const ev = new CustomEvent("cp-voice-send-as-text", {
+        bubbles: true, composed: true, cancelable: true, detail: { text },
+      });
+      const notCancelled = this.dispatchEvent(ev);
+      handled = handled || !notCancelled;
+      this._hint(this._t(handled ? "cp.voice.as_text_filled" : "cp.voice.as_text_copy"), handled ? true : "warn");
+      try { this._warnBeacon("send_as_text"); } catch (_e) { /* */ }
+    }
+    /* 「用系统音发」：二次确认 → 直接以 confirm_system_voice=1 发送（服务端此时才
+       允许 edge 兜底；对方听到非人设声由坐席担责）。 */
+    _sysVoiceSend() {
+      if (!confirm(this._t("cp.voice.sys_voice_confirm"))) return;
+      this._warnBeacon("sys_voice_confirm");
+      return this._sendVoice({ confirmSystemVoice: true });
+    }
+
     async _genTts() {
+      // Q-22：一次性标志位（调用前置 this._genConfirmSys=true）→ 本次试听带 confirm_system_voice=1；
+      // 缺省 false，服务端对克隆不可用一律阻断不出系统音。签名不改（测试锚点）。
+      const confirmSys = !!this._genConfirmSys;
+      this._genConfirmSys = false;
       const text = this._text();
       if (!text) { this._hint(this._t("cp.voice.need_text"), false); return; }
       if (text.length > this._maxChars) {   // 超限前端先拦（服务端同上限，省一次白跑）
@@ -936,11 +1010,15 @@
           account_id: c.accountId || undefined,
           // 译声：'auto'=会话客户语言（服务端解析，与发送同源）；开关关=不传
           target_lang: xlt || undefined,
+          // Q-22：只有坐席点了「用系统音发」才带 1；缺省服务端阻断不出系统音
+          confirm_system_voice: confirmSys ? 1 : undefined,
         });
       } catch (e) { reqFail = true; }
       this._stopGenTimer();
       if (ep !== this._epoch) return;   // 已切会话：结果作废，不回写新会话 UI
       this._setBusy("");
+      // Q-22 #287：服务端阻断（克隆不可用 / 语种不一致）→ 红条 + 「改发文字」「用系统音发」
+      if (!reqFail && d && d.blocked) { this._renderBlocked(box, d); return; }
       const url = d ? (d.dataUrl || d.audio_url ||
         (d.filename ? `/api/voice/tts-file/${encodeURIComponent(d.filename)}` : "")) : "";
       /* #149 选声金标（2026-09-02）：所选人设必须就是合成路由用的人设。服务端
@@ -989,6 +1067,7 @@
       this._previewText = text;
       this._previewPersona = persona;
       this._previewFilename = String((d && d.filename) || "");
+      this._previewSysConfirmed = confirmSys;   // Q-22：本条试听是二次确认后的系统音
       this._previewXl = xlt;
       // #250（N-4 C）：译声基准 = 服务端**有效目标语**（不论译没译），见 xlBaseline。
       // #121 时只记「voice_translated 才有目标语、未译=空串」，于是中文客户 + 中文
@@ -1295,23 +1374,30 @@
       } catch (e) { /* 纯增益：失败不影响任何主流程 */ }
     }
 
-    async _sendVoice() {
+    async _sendVoice(opts) {
+      opts = opts || {};
       if (this._busy) return;   // 在途互斥：连点=双发客户，必须拦
       const c = this._ctx;
       const text = this._text();
       if (!text || !c) return;
-      if (this._isStale()) {   // 双保险：按钮已禁用，键盘/时序穿透也拦
-        this._hint(this._t("cp.voice.stale_note"), false);
-        return;
-      }
-      if (this._silent) {   // 阻发闸双保险（同上：时序穿透也拦）
-        this._hint(this._t(this._blockTitleKey()), false);
-        return;
+      /* Q-22：红条「用系统音发」直发路径——没有试听产物、也不受 stale/silent 闸管
+         （那两道闸判的是上一条试听，这里是坐席刚二次确认的新决定）。 */
+      const sysConfirm = !!opts.confirmSystemVoice || !!this._previewSysConfirmed;
+      if (!opts.confirmSystemVoice) {
+        if (this._isStale()) {   // 双保险：按钮已禁用，键盘/时序穿透也拦
+          this._hint(this._t("cp.voice.stale_note"), false);
+          return;
+        }
+        if (this._silent) {   // 阻发闸双保险（同上：时序穿透也拦）
+          this._hint(this._t(this._blockTitleKey()), false);
+          return;
+        }
       }
       /* 降级发送确认（P1-3 2026-08-31）：非克隆声不靠黄字自觉——发送前显式
          确认一次「客户会听到与人设不同的声音」；同会话记住选择（换会话/重渲
-         即复位），不重复骚扰。原「回落必须显式」不变量由本确认承接且更强。 */
-      if (this._previewFallback && this._fbConfirmedKey !== this._convKey()) {
+         即复位），不重复骚扰。原「回落必须显式」不变量由本确认承接且更强。
+         Q-22：红条路径已在 _sysVoiceSend 二次确认过，不再问第二遍。 */
+      if (this._previewFallback && !sysConfirm && this._fbConfirmedKey !== this._convKey()) {
         if (!confirm(this._t("cp.voice.fallback_send_confirm"))) return;
         this._fbConfirmedKey = this._convKey();
       }
@@ -1326,6 +1412,9 @@
           chat_key: c.chatKey,
           text,
           persona_id: this._persona || undefined,
+          // Q-22 #287：系统音二次确认位——只有坐席点了「用系统音发」（或本条试听
+          // 就是确认后的系统音）才带 1；服务端缺省拒收「克隆回落的系统音」
+          confirm_system_voice: sysConfirm ? 1 : undefined,
           // 译声（与试听同口径）：'auto'=会话客户语言由服务端解析后先译后念；
           // fail-open 在服务端（翻译失败念原文并如实标记），前端只透传。
           target_lang: this._xlTarget() || undefined,
@@ -1349,10 +1438,13 @@
         // 译声：如实告知「客户听到的是哪种语言」（voice_meta.translated 为真值源）
         const xlNote = (m.translated && m.target_lang)
           ? ` · ${this._t("cp.voice.sent_xl", { lang: this._langName(m.target_lang) })}` : "";
+        // Q-22：二次确认后发出的系统音如实标「非人设声」
+        const sysNote = (sysConfirm && m.fallback_from) ? ` · ${this._t("cp.voice.sent_sys")}` : "";
+        this._previewSysConfirmed = false;
         this._hint(
           this._t("cp.voice.sent")
             + (m.provider ? ` (${this._backendLabel(m.provider)}${m.emotion ? " / " + this._emoLabel(m.emotion) : ""})` : "")
-            + xlNote,
+            + xlNote + sysNote,
           true);
         this._hintResetLater();
         this.dispatchEvent(new CustomEvent("cp-voice-sent", {
@@ -1372,6 +1464,12 @@
         } catch (_e) { /* */ }
         this._hint(this._t("cp.voice.result_unknown"), "warn");
         this.dispatchEvent(new CustomEvent("cp-voice-result-unknown", { bubbles: true, composed: true }));
+      } else if (d && d.blocked && (CpVoice.cloneBlocked(d) || CpVoice.langMismatch(d))) {
+        /* Q-22 #287：服务端阻断（克隆不可用未二次确认 / 语种不一致）→ 语音行红条
+           + 「改发文字」「用系统音发」；不是「发送失败请重试」——重试只会再撞闸。 */
+        const box = this.shadowRoot.querySelector('[data-role="preview"]');
+        if (box) this._renderBlocked(box, d);
+        this._hint(this._t("cp.voice.blocked_hint"), false);
       } else {
         this._hint(this._t("cp.voice.send_fail",
           { msg: (d && (d.message || d.error || d.detail || d.reason)) || this._t("cp.voice.need_online") }), false);
@@ -1557,6 +1655,7 @@
       this._silent = false;
       this._silentKind = "";
       this._previewFallback = "";
+      this._previewSysConfirmed = false;   // Q-22 系统音二次确认位随预览一起清
       this._staleWas = false;
       this._previewSpeech = "";
       this._previewBasis = "";

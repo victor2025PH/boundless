@@ -1099,16 +1099,18 @@ ipcMain.handle("desktop:voice-effective-config", async (_e, args) => {
   } catch (e) { return { ok: false, error: String(e) }; }
 });
 
-ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, platform, account_id, target_lang }) => {
+ipcMain.handle("desktop:voice-tts", async (_e, { text, persona_id, chat_key, platform, account_id, target_lang, confirm_system_voice }) => {
   try {
     // 会话上下文透传（试听=发送 契约；旧渲染层不传=旧行为）
     // P0-V2b 译声：target_lang（'auto'=会话客户语言，服务端解析）先译后念
+    // Q-22 #287：confirm_system_voice 只在坐席点了「用系统音发」才带 1——不带=服务端阻断不出系统音
     const d = await backendPost("/api/voice/tts-test", {
       text, persona_id: persona_id || undefined,
       chat_key: chat_key || undefined,
       platform: platform || undefined,
       account_id: account_id || undefined,
       target_lang: target_lang || undefined,
+      confirm_system_voice: confirm_system_voice ? 1 : undefined,
     });
     if (d.audio_url) return { ...d, ok: d.ok !== false };
     if (!d.filename) return d;

@@ -88,7 +88,7 @@
      此前这里写死 zh:en 三元——繁体坐席会被硬塞英文副驾（zh_hant P3 修复）。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = window.WS_LANG || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260908b"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20260912a"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
 <script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912a"></script>
 {% endif %}
@@ -100,7 +100,7 @@
 <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
 <script src="/copilot/components/cp-chain-exec.js?v=20260905b"></script>
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
-<script src="/copilot/components/cp-voice.js?v=20260908a"></script>
+<script src="/copilot/components/cp-voice.js?v=20260912a"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
 <script src="/copilot/components/cp-goal.js?v=20260912a"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
@@ -18591,6 +18591,19 @@ function initWsCopilot(){
     document.addEventListener('cp-voice-result-unknown', function(){
       try{ _uiBeacon('cpv_result_unknown'); }catch(_){}
       try{ if(typeof selectedChat!=='undefined'&&selectedChat){ loadThread(selectedChat,true); } }catch(_){}
+    });
+    // Q-22 #287/#288：右栏语音红条「改发文字」→ 文字填进主输入框并聚焦（不自动发，
+    // 坐席按发送）；preventDefault 告知组件「宿主已接管」。不走 cp-fill：那条会弹
+    // 「已填入」绿 toast，这里由组件自己出提示，避免双提示。
+    document.addEventListener('cp-voice-send-as-text', function(ev){
+      var text=ev&&ev.detail&&ev.detail.text;
+      if(!text) return;
+      var ta=document.getElementById('reply-ta');
+      if(!ta) return;
+      ta.value=text; ta.focus();
+      try{ ta.dispatchEvent(new Event('input',{bubbles:true})); }catch(_){}
+      try{ ev.preventDefault(); }catch(_){}
+      try{ _uiBeacon('cpv_send_as_text'); }catch(_){}
     });
   }
   if(!document.__cpVoiceXlBound){
