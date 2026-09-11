@@ -176,6 +176,60 @@ def neutralize_cum(text: str) -> str:
     return _CUM_CONJ_RE.sub(_cum_conj_sub, s)
 
 
+# Q-27 D（#301）：通用短语白名单——代码内置（不可由配置删）+ 配置**只加白**（`risk_grader.phrase_whitelist`
+# / `adult_grader.phrase_whitelist`，列表，每项 ≥2 个词的短语；黑名单只在代码，配置无入口）。
+# 内置叙述短语：「phone number」「your address」——只提到电话 / 地址不是索要（索要句式由
+# commitment_guard.detect_request 在**原文**上判，白名单不影响它），词表层按 L0 处理。
+_NARRATIVE_WHITELIST: Tuple[Tuple["re.Pattern[str]", str], ...] = (
+    (re.compile(r"(?<![A-Za-z])phone\s+number(?![A-Za-z])", re.IGNORECASE), "phone"),
+    (re.compile(r"(?<![A-Za-z])your\s+(?:home\s+|shipping\s+|mailing\s+)?address(?![A-Za-z])", re.IGNORECASE), "your place"),
+)
+_WL_CFG_KEYS = (("risk_grader", "phrase_whitelist"), ("adult_grader", "phrase_whitelist"))
+_WL_MAX_ENTRIES = 64
+
+
+def config_phrase_whitelist(cfg: Any) -> List[str]:
+    """配置里的加白短语（去重、只收 ≥2 个词且 ≤60 字符的短语；单词不收——不给「nudes」这类
+    单词开口子，硬拦词表不因配置放松）。任何形态不对 → 忽略该项。绝不抛。"""
+    out: List[str] = []
+    if not isinstance(cfg, dict):
+        return out
+    for sec, key in _WL_CFG_KEYS:
+        try:
+            raw = ((cfg.get(sec) or {}) if isinstance(cfg.get(sec), dict) else {}).get(key)
+        except Exception:
+            raw = None
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for item in raw:
+            s = re.sub(r"\s+", " ", str(item or "")).strip().lower()
+            if not s or len(s) > 60 or len(s.split(" ")) < 2 or s in out:
+                continue
+            out.append(s)
+            if len(out) >= _WL_MAX_ENTRIES:
+                return out
+    return out
+
+
+def phrase_whitelist(text: str, cfg: Any = None, *, include_config: bool = True) -> str:
+    """Q-27 D：把白名单短语改写成中性词后再进词表匹配（``neutralize_cum`` 的通用化）。
+
+    顺序：cum 消歧（Q-18 A）→ 内置叙述短语（phone number / your address）→ 配置加白短语
+    （``include_config=False`` 时跳过——explicit / pressure 硬拦词表只认代码白名单）。绝不抛。
+    """
+    s = neutralize_cum(str(text or ""))
+    try:
+        for pat, rep in _NARRATIVE_WHITELIST:
+            s = pat.sub(rep, s)
+        if include_config:
+            for ph in config_phrase_whitelist(cfg):
+                s = re.sub(r"(?<![A-Za-z0-9])" + re.escape(ph).replace(r"\ ", r"\s+") + r"(?![A-Za-z0-9])",
+                           " … ", s, flags=re.IGNORECASE)
+    except Exception:
+        logger.debug("[adult] phrase_whitelist 异常（按 cum 消歧结果放行）", exc_info=True)
+    return s
+
+
 def is_ambiguous_hit(hit: str) -> bool:
     return str(hit or "").strip().lower() in _AMBIGUOUS_EXPLICIT
 
@@ -203,7 +257,7 @@ def _hits(pats: Sequence["re.Pattern[str]"], text: str, limit: int = 6) -> List[
     return [h for h in out if not any(h != o and h.lower() in o.lower() for o in out)]
 
 
-def grade(text: str, lang: Optional[str] = None) -> Dict[str, Any]:
+def grade(text: str, lang: Optional[str] = None, *, cfg: Any = None) -> Dict[str, Any]:
     """返回 ``{level, hits, pressure_hits, category, lang}``；无命中 → ``level=""``。
 
     分级（只看这一条入站，不看历史）：
@@ -212,15 +266,19 @@ def grade(text: str, lang: Optional[str] = None) -> Dict[str, Any]:
     Q-18 A：``cum`` 先过 :func:`neutralize_cum`（印式「X cum Y」/ cum laude 豁免）；命中的露骨词
       **全是**歧义词（:data:`_AMBIGUOUS_EXPLICIT`）且总信号 <2 且无施压词 → 不判 explicit，
       降为 flirt（有调侃口吻）/ mention，``ambiguous=True``。
+    Q-27 D：白名单通用化 :func:`phrase_whitelist`——explicit / pressure 词表只认**代码**白名单
+      （cum 消歧 + 内置叙述短语），mention 词表另加配置加白短语（配置只能放松「提及」层，
+      碰不到硬拦）。
     """
     t = str(text or "").strip()
     out: Dict[str, Any] = {"level": "", "hits": [], "pressure_hits": [], "category": CATEGORY,
                            "lang": sniff_lang(t, lang)}
     if not t:
         return out
-    low = neutralize_cum(t.lower())
+    low = phrase_whitelist(t.lower(), None, include_config=False)
+    low_men = phrase_whitelist(low, cfg, include_config=True) if cfg is not None else low
     exp = _hits(_EXPLICIT, low)
-    men = [h for h in _hits(_MENTION, low) if h.lower() not in [e.lower() for e in exp]]
+    men = [h for h in _hits(_MENTION, low_men) if h.lower() not in [e.lower() for e in exp]]
     pres = _hits(_PRESSURE, low)
     if exp:
         out["hits"] = exp + men
@@ -839,13 +897,13 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                     "level": "", "hits": [], "pressure_hits": [], "policy": "", "policy_source": "",
                     "category": CATEGORY, "soft_reply": "", "needs_human": False, "skipped": _skip,
                 }
-        g = grade(text, lang)
+        if cfg is None:
+            cfg = getattr(svc, "_cfg", None)
+        g = grade(text, lang, cfg=cfg)
         level = str(g.get("level") or "")
         if not level:
             return risk_level, reasons, None
         store = getattr(svc, "_store", None)
-        if cfg is None:
-            cfg = getattr(svc, "_cfg", None)
         if blocks_adult_outbound(conv, cfg):
             hits = [str(h) for h in (g.get("hits") or [])]
             logger.info("[adult] grade conv=%s level=%s hits=%s action=skip_public_chat",
@@ -987,7 +1045,8 @@ def card_label_parts(reason: Any) -> Dict[str, str]:
 __all__ = [
     "CATEGORY", "LEVELS", "POLICIES", "FOLLOWUP_SEC", "KV_PREFIX", "REASON_PREFIX",
     "FLIRT_REASON", "MARK_REASON", "SOFT_REASON",
-    "grade", "neutralize_cum", "is_ambiguous_hit", "is_blocking_level", "normalize_policy",
+    "grade", "neutralize_cum", "phrase_whitelist", "config_phrase_whitelist", "is_ambiguous_hit",
+    "is_blocking_level", "normalize_policy",
     "blocks_adult_outbound",
     "default_policy", "adult_policy_of",
     "resolve_persona", "prompt_block", "soft_reply_candidates", "pick_soft_reply", "soft_reply_for",

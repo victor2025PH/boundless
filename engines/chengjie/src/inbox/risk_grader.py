@@ -243,6 +243,7 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
     ``detect_commitment_claim`` 答应语 + 词表。无命中 → ``level=low, category=""``。绝不抛。
     """
     t = str(text or "").strip()
+    wl = t          # Q-27 D：白名单改写后的文本（入站分支赋值；出站分支 = 原文）
     found: List[Dict[str, str]] = []
 
     def _add(cat: str, hit: str, level: Optional[str] = None) -> None:
@@ -275,6 +276,14 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
         else:
             rs = [str(r) for r in (reasons or [])]
             in_hits = [str(h) for h in (hits or [])]
+            # Q-27 D：通用短语白名单（cum 消歧 + phone number / your address 叙述 + 配置加白短语）——
+            # 只作用于**词表层**（支付 / 投诉 / 叙述词表、privacy 单词）；句式层（detect_request /
+            # _CRED_REQUEST / threat / minor / scam / 承诺兜底 money）仍看原文，配置碰不到硬拦。
+            try:
+                from src.inbox.adult_grader import phrase_whitelist as _pwl
+                wl = _pwl(t, cfg)
+            except Exception:
+                wl = t
             if "self_harm" in rs:
                 _add("self_harm", next((h for h in in_hits if h), "self_harm"))
             if "stop_contact" in rs:
@@ -311,10 +320,10 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
             if rk:
                 _add("money_request" if rk == "money" else "request_" + rk, "request:" + rk)
             if _SP:
-                if _hits([_SP[0][0]], t):
-                    _add("payment_keyword", _hits([_SP[0][0]], t)[0])
-                if len(_SP) > 1 and _hits([_SP[1][0]], t):
-                    _add("complaint", _hits([_SP[1][0]], t)[0])
+                if _hits([_SP[0][0]], wl):
+                    _add("payment_keyword", _hits([_SP[0][0]], wl)[0])
+                if len(_SP) > 1 and _hits([_SP[1][0]], wl):
+                    _add("complaint", _hits([_SP[1][0]], wl)[0])
                 if len(_SP) > 2:
                     hs = _hits([_SP[2][0]], t)
                     if hs:
@@ -323,17 +332,21 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
                             _add("money_request", hs[0])
                         else:
                             _add("request_" + guess, hs[0])
-                if len(_SP) > 3 and _hits([_SP[3][0]], t):
-                    _add("narrative", _hits([_SP[3][0]], t)[0])
+                if len(_SP) > 3 and _hits([_SP[3][0]], wl):
+                    _add("narrative", _hits([_SP[3][0]], wl)[0])
             if "privacy" in rs and not rk:
-                _add("privacy", next((h for h in in_hits if h), "privacy"))
+                _ph = next((h for h in in_hits if h), "privacy")
+                # 白名单短语（your address 叙述…）被改写后原文里的 privacy 命中词消失 → 视为 L0 不记类别
+                if _ph == "privacy" or _ph.lower() in wl.lower():
+                    _add("privacy", _ph)
         # 人设覆写（只对可覆写类别）
         ov = risk_overrides_of(persona)
         for f in found:
             if f["category"] in ov:
                 f["level"] = ov[f["category"]]
         if not found:
-            return {"level": "low", "category": "", "hits": [], "action": "", "found": [], "direction": direction}
+            return {"level": "low", "category": "", "hits": [], "action": "", "found": [], "direction": direction,
+                    "whitelisted": bool(str(direction or "in") != "out" and wl != t)}
         found.sort(key=lambda f: (-_RANK.get(f["level"], 0), _CAT_ORDER.get(f["category"], 99)))
         top = found[0]
         cdef = _CAT_BY_ID.get(top["category"], {})

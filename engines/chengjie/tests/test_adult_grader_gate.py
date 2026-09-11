@@ -460,6 +460,34 @@ def test_q18_neutralize_cum_keeps_strong_context():
     assert ag.grade("cum", "en")["level"] == ""                           # 孤立一个 cum 永不露骨
 
 
+def test_q27_phrase_whitelist_generic_and_config_only_adds(store, bg_loop, monkeypatch):
+    """Q-27 #301 D：neutralize_cum 扩为通用 phrase_whitelist——内置 cum 消歧 + 叙述短语；配置只加白（≥2 词短语），
+    且只作用于 mention 层：explicit / pressure 硬拦词表不因配置放松。"""
+    assert ag.phrase_whitelist("finally got your loving message cum reply") == "finally got your loving message and reply"
+    assert ag.phrase_whitelist("summa cum laude") == "with honours"
+    assert ag.phrase_whitelist("they asked for my phone number") == "they asked for my phone"
+    assert ag.phrase_whitelist("is this your address?") == "is this your place?"
+    assert ag.phrase_whitelist("make me cum now") == "make me cum now"            # 强上下文不豁免
+    # 配置加白：≥2 词短语收，单词 / 空 / 非列表不收
+    cfg = {"risk_grader": {"phrase_whitelist": ["hot body", "nudes", "", 42, "in  bed"]},
+           "adult_grader": {"phrase_whitelist": "not-a-list"}}
+    assert ag.config_phrase_whitelist(cfg) == ["hot body", "in bed"]
+    assert ag.config_phrase_whitelist({"risk_grader": {"phrase_blacklist": ["x y"]}}) == []   # 黑名单无入口
+    # mention 层吃配置：hot body 被加白 → 无命中
+    assert ag.grade("your hot body haha", "en")["level"] == "flirt"
+    assert ag.grade("your hot body haha", "en", cfg=cfg)["level"] == ""
+    # explicit / pressure 层不吃配置：把 nudes 写进白名单（单词本就不收）/ 两词短语 send nudes 也拦不住硬拦
+    cfg2 = {"risk_grader": {"phrase_whitelist": ["send nudes", "your nudes"]}}
+    assert ag.config_phrase_whitelist(cfg2) == ["send nudes", "your nudes"]
+    assert ag.grade("send nudes now", "en", cfg=cfg2)["level"] == "pressure"
+    assert ag.grade("send me your nudes right now", "en", cfg=cfg2)["level"] == "pressure"
+    # regrade 入口透传 cfg：加白后不评估（None）
+    _use_persona(monkeypatch)
+    svc = _Svc(store, {"business_domain": "companion", **cfg}, bg_loop)
+    conv = _conv("q27_wl1")
+    assert _regrade(svc, conv, "your hot body haha", "en", risk_level="low", reasons=(), hits=()) == ("low", [], None)
+
+
 def test_q18_isolated_ambiguous_word_never_explicit():
     # 单个歧义词：≤ flirt
     g = ag.grade("my pussy cat is sleeping", "en")

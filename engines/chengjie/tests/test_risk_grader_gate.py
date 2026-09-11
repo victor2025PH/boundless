@@ -315,6 +315,66 @@ def test_q27_low_inbound_releases_old_hold_and_next_draft_is_l2(svc, store, capl
     assert did2 and store.get_draft(did2)["autopilot_level"] == "L1" and HANDOFF_TAG in store.get_conv_tags(cid)
 
 
+def test_q27_replay_jeeo_message_cum_reply_is_l0_and_auto_replies(svc, store, caplog):
+    """Q-27 #301 E 回放①（Mizuki × Jeeo）：「finally got your loving message cum reply」→ L0：无成人命中、
+    无风险类别、不打标不持有，全自动 L2 正常拟稿。"""
+    import logging
+    from src.inbox import adult_grader as ag
+    text = "finally got your loving message cum reply, thank you dear"
+    assert ag.grade(text, "en")["level"] == ""
+    g = rg.grade(text, "in")
+    assert g["level"] == "low" and g["category"] == "" and g["whitelisted"] is True, g
+    conv = _conv("q27_jeeo")
+    cid = conv["conversation_id"]
+    with caplog.at_level(logging.INFO):
+        did = svc.auto_generate_draft(conv, text, automation_mode="auto_ai")
+    assert did
+    row = store.get_draft(did)
+    assert row["autopilot_level"] == "L2" and row["risk_level"] == "low", row
+    assert not any(str(r).startswith(("adult", "risk:")) for r in row["risk_reasons"]), row["risk_reasons"]
+    assert HANDOFF_TAG not in list(store.get_conv_tags(cid) or []) and rg.MEDIUM_TAG not in list(store.get_conv_tags(cid) or [])
+    assert risk_hold.active(store, cid) is None
+    assert not any("[adult]" in r.getMessage() or "[needs_human]" in r.getMessage() for r in caplog.records)
+
+
+def test_q27_replay_bank_card_request_still_l1_needs_human_2h_hold(svc, store):
+    """Q-27 #301 E 回放③：「send me your bank card number」→ 仍 L1 + needs_human（category=money_request level=high）
+    + risk_hold 活跃且 TTL=2h（五类硬拦一字不放松）。"""
+    conv = _conv("q27_bank")
+    cid = conv["conversation_id"]
+    did = svc.auto_generate_draft(conv, "send me your bank card number", automation_mode="auto_ai")
+    assert did
+    row = store.get_draft(did)
+    assert row["autopilot_level"] == "L1" and row["risk_level"] == "high", row
+    assert HANDOFF_TAG in store.get_conv_tags(cid)
+    hm = store.get_handoff_meta(cid)
+    assert hm["category"] == "money_request" and hm["level"] == "high" and hm["hits"], hm
+    rec = risk_hold.active_record(store, cid)
+    assert rec and float(rec["ttl_h"]) == 2.0
+    import time as _time
+    assert risk_hold.active(store, cid, now=_time.time() + 1.9 * 3600) is not None
+    assert risk_hold.active(store, cid, now=_time.time() + 2.1 * 3600) is None
+    assert risk_hold.record(store, cid)["cleared_by"] == "ttl"
+
+
+def test_q27_narrative_whitelist_phone_number_your_address_l0(svc, store):
+    """Q-27 #301 D：「phone number」「your address」叙述 → 词表层 L0（无类别、不记 [risk] low 类别）；
+    真索要（what's your phone number / send me your address）仍由句式层判 request_contact。"""
+    g = rg.grade("they asked for my phone number but I refused", "in", reasons=["privacy"], hits=["phone number"])
+    assert g["level"] == "low" and g["category"] == "" and g["whitelisted"] is True, g
+    g = rg.grade("your address book must be full of travelers", "in", reasons=["privacy"], hits=["your address"])
+    assert g["level"] == "low" and g["category"] == "", g
+    assert rg.grade("what is your phone number?", "in")["category"] == "request_contact"
+    assert rg.grade("send me your address", "in")["category"] == "request_contact"
+    # 配置加白只作用词表层：支付裸词短语可加白（中级），索钱句式 / 凭据索要句式配置碰不到
+    cfg = {"risk_grader": {"phrase_whitelist": ["refund policy", "send me money"]}}
+    assert rg.grade("what is your refund policy?", "in", cfg=cfg)["category"] == ""
+    assert rg.grade("what is your refund policy?", "in")["category"] == "payment_keyword"
+    assert rg.grade("send me money please", "in", cfg=cfg)["category"] == "money_request"
+    assert rg.grade("send me your bank card number", "in", reasons=["credential_or_payment_request", "money"],
+                    hits=["send me your bank card"], cfg=cfg)["level"] == "high"
+
+
 def test_q27_fresh_hold_not_released_by_same_inbound_low_grade(svc, store):
     """持有是本条链刚设的（<60s）→ 低分级不清它（防 commitment_guard 刚 set 就被清）；stop_contact 也不清。"""
     conv = _conv("q27_hold2")
