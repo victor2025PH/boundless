@@ -58,6 +58,8 @@ _NEW_KEYS = [
     "inbox.xl.mylang", "inbox.xl.mylang_follow", "inbox.xl.mylang_saved",
     "inbox.xl.pick_search", "inbox.xl.pick_back",
     "inbox.xl.pick_title_lb", "inbox.xl.pick_cust",
+    # 2026-09-11 自适应 + 信息架构
+    "inbox.xl.tools_more", "inbox.xl.tools_more_t",
 ]
 
 
@@ -151,12 +153,37 @@ def check_source_wiring(ck: Checker) -> None:
     ck.check("统一保存入口（_saveDefaultLangFor）", "function _saveDefaultLangFor" in src)
     ck.check("生效链胶囊（_dlmEffLine）", "function _dlmEffLine" in src)
     ck.check("旧 _saveReplyLangDefault 已收编", "_saveReplyLangDefault(" not in src)
+    # 2026-09-11 自适应修复：wrap 退 static + composer 包含块 + JS 几何兜底
+    ck.check("翻译 wrap 带 xl-wrap（弹层以 composer 为包含块）",
+             'class="rt-pop-wrap xl-wrap"' in src and 'id="xlate-toggle-btn"' in src)
+    ck.check("rt-pop 几何兜底 _placeRtPop 接进开/关/选语",
+             "function _placeRtPop" in src and src.count("_placeRtPop(") >= 5
+             and "xlt_pop_clipped" in src and "window._rtPopClipRect=" in src)
+    ck.check("弹层 a11y：dialog 语义 + ✕ + aria-expanded",
+             'id="xlate-pop" role="dialog" aria-labelledby="xl-pop-title"' in src
+             and 'id="xl-pop-x"' in src and 'aria-controls="xlate-pop"' in src)
+    ck.check("主屏信息架构：出站选项组 + 反译校验子行 + 工具「更多 →」",
+             'id="xl-out-opts"' in src and 'id="xl-backchk-row"' in src
+             and 'class="xl-tools-more"' in src and "_cpGuideTryXlate()" in src)
+    ck.check("选语屏：two-line 副文案 + 常用/更多分节",
+             "'two-line'" in src and "_XL_PICK_MORE_FROM" in src
+             and "inbox.xl.grp_common" in src and "inbox.xl.grp_more" in src)
     if INBOX_CSS.exists():
         css = INBOX_CSS.read_text(encoding="utf-8")
+        ck.check("CSS：.rt-pop-wrap.xl-wrap{position:static}",
+                 ".rt-pop-wrap.xl-wrap{position:static;}" in css)
+        ck.check("CSS：#xlate-pop 左对齐 composer + min() 自适应宽",
+                 "#xlate-pop{left:16px;right:auto;" in css and "width:min(440px,calc(100% - 32px))" in css)
+        ck.check("CSS：主屏/选语屏统一 max-height + 内滚",
+                 "#xlate-pop.show{display:flex;flex-direction:column;overflow:hidden;max-height:" in css
+                 and "#xl-pop-home{overflow:auto;min-height:0;" in css
+                 and "max-height:min(72vh,560px)" not in css)
         for cls in (".xl-quick.on", ".rt-xl-status.flash", ".xl-conv-hint", ".xl-hint-btn",
                     ".xl-dir-card", ".xl-seg-btn", "details.xl-adv",
                     ".dlm-editor", ".dlm-eff", ".xl-lang-chip", "#xl-pop-picker",
-                    "#lb-xl-picker", ".xl-pick-row.cust"):
+                    "#lb-xl-picker", ".xl-pick-row.cust",
+                    ".xl-tools-more", ".xl-pick-row.two-line", ".xl-out-opts.dim",
+                    ".xl-pop-hd .xl-pop-x", ".rt-pop-wrap.xl-wrap"):
             ck.check(f"CSS 规则存在（{cls}）", cls in css)
         # 戳只增不减：字面量匹配会被后续批次正常 bump 误红（2026-08-17 实锤：
         # Account Dock 批 bump 到 20260817a 后本检查假红）——改「>= 20260816b」序比较。
@@ -180,6 +207,166 @@ def _swallow_beacons(ctx: Any) -> None:
     context 级拦掉 ui-event 上报，真实点击照跑、埋点不落库。"""
     ctx.route("**/api/telemetry/ui-event",
               lambda r: r.fulfill(status=204, body=""))
+
+
+_GEO_JS = """() => {
+  const row = document.querySelector('#conv-items .conv-item');
+  if (!row) return {no_conv: true};
+  row.click();
+  return {clicked: true};
+}"""
+
+_GEO_MEASURE_JS = """(want_right) => {
+  const panel = document.querySelector('.chat-panel');
+  const btn = document.getElementById('xlate-toggle-btn');
+  if (!panel || !btn) return {absent: true};
+  try {
+    if (want_right && typeof _cpSetPanelMode === 'function') _cpSetPanelMode('expanded');
+  } catch (_) {}
+  const pop = document.getElementById('xlate-pop');
+  if (!pop) return {absent: true};
+  const rect = (el) => { const r = el.getBoundingClientRect();
+    return {l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height}; };
+  // 真实裁切盒（overflow 祖先交集；window 契约 _rtPopClipRect）——比 .chat-panel 严：
+  // 消息列 <div overflow:hidden> 从 chat-header 下缘开始，弹层顶越过它就被 header 盖住。
+  const clipBox = () => {
+    if (typeof window._rtPopClipRect === 'function') {
+      const b = window._rtPopClipRect(pop);
+      if (b) return {l: b.l, r: b.r, t: b.t, b: b.b, w: b.r - b.l, h: b.b - b.t};
+    }
+    return rect(panel);
+  };
+  const shot = (name) => {
+    const p = rect(pop), c = clipBox();
+    const hd = pop.classList.contains('is-pick')
+      ? pop.querySelector('#xl-pop-picker .xl-pick-back')
+      : pop.querySelector('#xl-pop-home .xl-pop-hd');
+    return {name, pop: p, panel: c, hd: hd ? rect(hd) : null,
+            fixed: getComputedStyle(pop).position === 'fixed',
+            overflow_x: pop.scrollWidth > pop.clientWidth + 1,
+            shown: pop.classList.contains('show')};
+  };
+  const res = {absent: false, vw: window.innerWidth, vh: window.innerHeight,
+               panel: clipBox()};
+  // 用 setTimeout 而非 rAF 串步：headless 后台页 rAF 可能不派发 → evaluate 永不返回
+  //（2026-09-11 首跑挂死 20min 实锤）；整体再兜一个 4s 硬超时。
+  return new Promise((resolve) => {
+    const done = (r) => resolve(r);
+    const guard = setTimeout(() => done(Object.assign(res, {timeout: true})), 4000);
+    try {
+      if (!pop.classList.contains('show') && typeof toggleXlatePop === 'function') toggleXlatePop();
+      setTimeout(() => {
+        try {
+          res.home = shot('home');
+          res.focus_in_pop = pop.contains(document.activeElement);
+          res.aria_expanded = btn.getAttribute('aria-expanded');
+          if (typeof _xlPickOpen === 'function') _xlPickOpen('out');
+        } catch (e) { res.err = String(e); }
+        setTimeout(() => {
+          try { res.pick = shot('pick'); } catch (e) { res.err = String(e); }
+          // 键盘：选语屏 Esc → 回主屏；主屏 Esc → 关闭 + 焦点回「翻译」入口
+          const esc = () => pop.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}));
+          try {
+            esc(); res.esc_back = !pop.classList.contains('is-pick') && pop.classList.contains('show');
+            esc(); res.esc_closed = !pop.classList.contains('show');
+            res.focus_back = document.activeElement === btn;
+            res.aria_collapsed = btn.getAttribute('aria-expanded');
+          } catch (e) { res.err = String(e); }
+          try { if (typeof toggleXlatePop === 'function' && pop.classList.contains('show')) toggleXlatePop(); } catch (_) {}
+          clearTimeout(guard); done(res);
+        }, 120);
+      }, 120);
+    } catch (e) { res.err = String(e); clearTimeout(guard); done(res); }
+  });
+}"""
+
+
+def _run_geo_cases(browser: Any, base: str, token: str, ck: Checker) -> None:
+    """3. 多档视口几何：弹层必须整体落在聊天面板可视区内。
+    2026-09-11 实锤：1024×650 桌面壳 + 右栏展开 → 聊天面板 ≈480px，弹层右锚小 wrap
+    + min-width 300 向左溢出 ~55px 被 .chat-panel overflow:hidden 裁掉（选语屏只剩右列
+    原文名）。旧门禁只量 405 手机档 + 只对视口断言，对这一档零鉴别力。现在三档都量：
+    主屏 + 选语屏两屏的 rect 都要 ⊂ .chat-panel rect（±2px）。只需有会话（未读也行）。"""
+    print("== 3. 多档视口几何（405x844 / 1024x640+右栏 / 1280x720）==")
+    for vw_, vh_, want_right, label in (
+            (405, 844, False, "405x844 手机档"),
+            (1024, 640, True, "1024x640 桌面壳+右栏"),
+            (1280, 720, False, "1280x720 笔记本档")):
+        _geo_case(browser, base, token, ck, vw_, vh_, want_right, label)
+
+
+def _geo_case(browser: Any, base: str, token: str, ck: Checker,
+              vw: int, vh: int, want_right: bool, label: str) -> None:
+    """一个视口档：开会话 →（可选展开右栏）→ 开弹层量主屏 → 进选语屏再量 → 断言两屏都
+    落在 .chat-panel 内（±2px）、顶部不被裁、首行/返回键左缘不越面板左缘、无横向溢出。
+    ≤480 抽屉模式（position:fixed）按视口断言（与旧口径一致）。"""
+    ctx = None
+    try:
+        ctx = browser.new_context(viewport={"width": vw, "height": vh}, locale="en-US")
+        _swallow_beacons(ctx)
+        ctx.request.post(base + "/login", form={"auth_token": token})
+        pg = ctx.new_page()
+        pg.goto(base + "/workspace", wait_until="domcontentloaded")
+        pg.wait_for_function(
+            "() => typeof window.setPlatFilter === 'function'", timeout=20000)
+        pg.wait_for_timeout(2500)
+        # 窄屏移动布局：聊天面板要先开会话才可见——不开直接量会得到全 0 的 rect。
+        opened = pg.evaluate(_GEO_JS)
+        if opened.get("no_conv"):
+            ck.skip(f"{label} 弹层几何", "无会话可开")
+            return
+        try:
+            pg.wait_for_selector("#reply-ta", state="visible", timeout=8000)
+        except Exception:  # noqa: BLE001
+            pass
+        pg.wait_for_timeout(800)
+        geo = pg.evaluate(_GEO_MEASURE_JS, want_right)
+        if geo.get("absent") or not geo.get("home") or not geo["home"].get("shown") \
+                or not geo.get("pick"):
+            ck.skip(f"{label} 弹层几何", f"弹层未显 geo={str(geo)[:160]}")
+            return
+        for scr in (geo["home"], geo["pick"]):
+            p, name = scr["pop"], scr["name"]
+            panel = scr["panel"]      # 该屏时刻的裁切盒（右栏开合会变）
+            pshow = {k: round(v) for k, v in panel.items()}
+            pw = {k: round(v) for k, v in p.items()}
+            tag = f"{label} {name}屏"
+            if scr["fixed"]:
+                ck.check(f"{tag}：抽屉水平不出视口",
+                         p["w"] >= 280 and p["l"] >= -1 and p["r"] <= geo["vw"] + 1,
+                         f"pop={pw} vw={geo['vw']}")
+                ck.check(f"{tag}：抽屉顶部可视", p["t"] >= 0, f"top={pw['t']}")
+            else:
+                ck.check(f"{tag}：弹层 ⊂ 裁切盒（水平）",
+                         p["l"] >= panel["l"] - 2 and p["r"] <= panel["r"] + 2 and p["w"] >= 260,
+                         f"pop={pw} clip={pshow}")
+                ck.check(f"{tag}：弹层顶部不被裁切盒上缘（chat-header 下缘）裁切",
+                         p["t"] >= panel["t"] - 2, f"pop.top={pw['t']} clip.top={pshow['t']}")
+            hd = scr.get("hd")
+            ck.check(f"{tag}：标题/返回键左缘可见",
+                     bool(hd) and hd["l"] >= max(panel["l"], 0) - 1 and hd["w"] > 0,
+                     f"hd={ {k: round(v) for k, v in hd.items()} if hd else None}")
+            ck.check(f"{tag}：内容无横向溢出", not scr["overflow_x"])
+        # 键盘 / a11y（2026-09-11 P1-8）：只在第一档量一次即可，三档口径相同
+        if vw == 405:
+            return
+        ck.check(f"{label}：打开后焦点进弹层 + aria-expanded=true",
+                 geo.get("focus_in_pop") and geo.get("aria_expanded") == "true",
+                 f"focus_in_pop={geo.get('focus_in_pop')} aria={geo.get('aria_expanded')}")
+        ck.check(f"{label}：Esc 选语屏→主屏→关闭",
+                 geo.get("esc_back") and geo.get("esc_closed"),
+                 f"esc_back={geo.get('esc_back')} esc_closed={geo.get('esc_closed')}")
+        ck.check(f"{label}：关闭后焦点回「翻译」入口 + aria-expanded=false",
+                 geo.get("focus_back") and geo.get("aria_collapsed") == "false",
+                 f"focus_back={geo.get('focus_back')} aria={geo.get('aria_collapsed')}")
+    except Exception as e:  # noqa: BLE001
+        ck.skip(f"{label} 几何", str(e)[:100])
+    finally:
+        try:
+            if ctx is not None:
+                ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _login_workspace(p: Any, base: str, token: str, *, headed: bool,
@@ -302,12 +489,14 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
             }""")
         if not opened:
             ck.skip("行为段", "实例无已读会话可点")
+            _run_geo_cases(browser, base, token, ck)   # 几何段不依赖已读会话，照跑
             browser.close()
             return ck.summary()
         try:
             page.wait_for_selector("#reply-ta", state="visible", timeout=8000)
         except Exception:
             ck.skip("行为段", "composer 未就绪")
+            _run_geo_cases(browser, base, token, ck)
             browser.close()
             return ck.summary()
         page.wait_for_timeout(1200)   # 等 _loadXlateForConv/_loadServerDefaultLang 落定
@@ -459,63 +648,7 @@ def run(base: str, token: str, *, headed: bool = False) -> int:
 
         page.unroute("**/api/unified-inbox/chats*")
 
-        # ── 3. 405px 桌面壳窄屏：弹层不溢出（P2 视觉收尾专项）─────────────
-        print("== 3. 窄屏 405x844（桌面壳档位）==")
-        try:
-            ctx_n = browser.new_context(viewport={"width": 405, "height": 844},
-                                        locale="en-US")
-            _swallow_beacons(ctx_n)
-            ctx_n.request.post(base + "/login", form={"auth_token": token})
-            pg = ctx_n.new_page()
-            pg.goto(base + "/workspace", wait_until="domcontentloaded")
-            pg.wait_for_function(
-                "() => typeof window.setPlatFilter === 'function'", timeout=20000)
-            pg.wait_for_timeout(2500)
-            # 窄屏移动布局：聊天面板（含翻译弹层的 composer）要先开会话才可见——
-            # 不开直接量会得到全 0 的 rect（祖先 display:none），断言空转（首跑实锤）。
-            opened_n = pg.evaluate(
-                """() => {
-                  const row = document.querySelector('#conv-items .conv-item');
-                  if (!row) return false;
-                  row.click();
-                  return true;
-                }""")
-            geo = {"no_conv": True}
-            if opened_n:
-                try:
-                    pg.wait_for_selector("#reply-ta", state="visible", timeout=8000)
-                except Exception:
-                    pass
-                pg.wait_for_timeout(800)
-                geo = pg.evaluate(
-                    """() => {
-                      const btn = document.getElementById('xlate-toggle-btn');
-                      if (!btn) return {absent: true};
-                      if (typeof toggleXlatePop === 'function') toggleXlatePop();
-                      const pop = document.getElementById('xlate-pop');
-                      if (!pop || !pop.classList.contains('show')) return {no_pop: true};
-                      const r = pop.getBoundingClientRect();
-                      return {
-                        absent: false, no_pop: false,
-                        left: r.left, right: r.right, top: r.top, bottom: r.bottom,
-                        w: r.width, h: r.height,
-                        vw: window.innerWidth, vh: window.innerHeight,
-                        overflow_x: pop.scrollWidth > pop.clientWidth + 1,
-                      };
-                    }""")
-            if geo.get("no_conv") or geo.get("absent") or geo.get("no_pop") or not geo.get("w"):
-                ck.skip("窄屏弹层几何", f"不可量（无会话/弹层未显）geo={geo}")
-            else:
-                gshow = {k: (round(v) if isinstance(v, float) else v) for k, v in geo.items()}
-                ck.check("窄屏：弹层真实渲染且水平不出界",
-                         geo["w"] >= 280 and geo["left"] >= -1 and geo["right"] <= geo["vw"] + 1,
-                         f"geo={gshow}")
-                ck.check("窄屏：弹层顶部不被裁切（垂直可视）", geo["top"] >= 0, f"top={gshow['top']}")
-                ck.check("窄屏：弹层内容无横向溢出", not geo["overflow_x"])
-            ctx_n.close()
-        except Exception as e:  # noqa: BLE001
-            ck.skip("窄屏 405px", str(e)[:80])
-
+        _run_geo_cases(browser, base, token, ck)
         browser.close()
 
     return ck.summary()

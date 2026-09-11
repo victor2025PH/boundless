@@ -1094,13 +1094,14 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               <!-- .xl-wrap（2026-09-11）：wrap 退 static，#xlate-pop 改以 .reply-bar-wrap 为包含块
                    （左对齐 composer、宽随聊天面板）；此前右锚小 wrap 在窄聊天面板向左溢出被裁。 -->
               <div class="rt-pop-wrap xl-wrap">
-                <button class="tiny-btn" id="xlate-toggle-btn" onclick="_uiBeacon('cbtn_xlate');toggleXlatePop()" title="双向翻译 / 图片翻译 / 语音翻译" data-i18n-title="inbox.rt.xlate_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.rt.xlate">翻译 ▾</span></button>
+                <button class="tiny-btn" id="xlate-toggle-btn" onclick="_uiBeacon('cbtn_xlate');toggleXlatePop()" title="双向翻译 / 图片翻译 / 语音翻译" data-i18n-title="inbox.rt.xlate_t" aria-haspopup="dialog" aria-expanded="false" aria-controls="xlate-pop"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.rt.xlate">翻译 ▾</span></button>
                 <span class="rt-xl-status" id="rt-xl-status" onclick="_uiBeacon('cbtn_xlate_chip');toggleXlatePop()" style="cursor:pointer;" title="点击设置对话翻译" data-i18n="inbox.rt.xl_status_off" data-i18n-title="inbox.rt.xl_status_t">未开启</span>
-                <div class="rt-pop rt-pop-right" id="xlate-pop">
+                <div class="rt-pop rt-pop-right" id="xlate-pop" role="dialog" aria-labelledby="xl-pop-title" tabindex="-1">
                   <!-- 0830 断电重建：主屏包进 #xl-pop-home，与选语第二屏 #xl-pop-picker 互斥
                        （#xlate-pop.is-pick 切换，CSS 既有规则）。 -->
                   <div id="xl-pop-home">
-                  <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.xl.pop_hd">对话翻译</span></div>
+                  <!-- 2026-09-11：标题行补 ✕（CSS .xl-pop-x 早已备好、HTML 一直没接）；Esc 关闭 / 焦点回归见 toggleXlatePop -->
+                  <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span id="xl-pop-title" data-i18n="inbox.xl.pop_hd">对话翻译</span><button type="button" class="xl-pop-x" id="xl-pop-x" onclick="toggleXlatePop()" title="关闭" data-i18n-title="inbox.xl.close">✕</button></div>
                   <!-- 一键开关（P0 2026-08-16）：真两态 toggle——开=对方消息→坐席语言 + 我的消息→自动；
                        再点=双向关。两态文本/tooltip 由 _syncQuickBtn 按 (_xlateIn||_xlateOut) 同步。 -->
                   <div class="xl-quick-row">
@@ -1130,6 +1131,10 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                       <button type="button" class="xl-lang-chip" id="xl-chip-out" onclick="_xlPickOpen('out')" title="发送前把你的消息翻译成" data-i18n-title="inbox.xl.out_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
                     </div>
                   </div>
+                  <!-- 2026-09-11 信息架构：发送方式 / 反译校验 / 语气 / 语音 都只在「我的消息 →」
+                       开了出站翻译时才有意义 → 收进 .xl-out-opts（左侧竖线挂在方向卡片下），
+                       _xlateOut 为空时整组 .dim 调灰（仍可点，不隐藏——坐席能先选语气再开）。 -->
+                  <div class="xl-out-opts" id="xl-out-opts">
                   <!-- P1 发送方式分段（一击直发 / 先预览再发）：状态载体仍是隐藏 checkbox
                        #xlate-out-preview（_loadXlateForConv 直写 checked 的旧契约不动），分段仅是外壳。 -->
                   <div class="xl-sendmode-row">
@@ -1139,8 +1144,11 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                       <button type="button" class="xl-seg-btn" id="xl-seg-preview" onclick="_setOutPreviewMode(true)" title="开启后发送需两步：先看译文预览，再确认发送" data-i18n-title="inbox.xl.preview_t" data-i18n="inbox.xl.mode_preview">先预览再发</button>
                     </div>
                     <input type="checkbox" id="xlate-out-preview" style="display:none;" onchange="_onXlatePreviewToggle()">
-                    <!-- P0-XL3：预览时反译回显开关（默认开；仅「先预览再发」路径生效） -->
-                    <label id="xl-backchk-wrap" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:11px;cursor:pointer;opacity:.85;" title="先预览再发时，把译文再译回你的语言对照确认（优先走本地引擎，零成本）" data-i18n-title="inbox.xl.back_chk_t"><input type="checkbox" id="xl-back-chk" checked onchange="_onXlateChange()"><span data-i18n="inbox.xl.back_chk">反译校验</span></label>
+                  </div>
+                  <!-- P0-XL3：预览时反译回显开关（默认开；仅「先预览再发」路径生效）——
+                       2026-09-11 从分段同行挪成子行，且只在「先预览再发」选中时显示（_syncSendModeSeg 控） -->
+                  <div class="xl-sub-row" id="xl-backchk-row">
+                    <label class="xl-chk-lbl" id="xl-backchk-wrap" title="先预览再发时，把译文再译回你的语言对照确认（优先走本地引擎，零成本）" data-i18n-title="inbox.xl.back_chk_t"><input type="checkbox" id="xl-back-chk" checked onchange="_onXlateChange()"><span data-i18n="inbox.xl.back_chk">反译校验</span></label>
                   </div>
                   <!-- P1-XT：出站语气分段（仅大模型/DeepL 线生效；本地/NMT 线忽略语气档） -->
                   <div class="xlate-dir" id="xl-tone-row" title="我方消息译文的语气（仅大模型与 DeepL 线生效；本地/NMT 线忽略）" data-i18n-title="inbox.xl.tone_t">
@@ -1157,8 +1165,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                        试听产物复用带语言维度（服务端 sidecar 硬校验）。 -->
                   <div class="xl-sendmode-row" id="xl-voice-row">
                     <span class="xl-sendmode-lbl" data-i18n="inbox.voice.xl_lbl">语音消息</span>
-                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;opacity:.85;" title="开启后：发语音前先按「我的消息 →」翻译成客户语言，再用克隆声念译文（试听可见译稿）；关闭=按你打的原文发声" data-i18n-title="inbox.voice.xl_follow_t"><input type="checkbox" id="xl-voice-follow" checked onchange="_onVoiceXlToggle()"><span data-i18n="inbox.voice.xl_follow">跟随翻译发声</span></label>
-                    <span id="xl-voice-row-hint" style="font-size:10px;color:var(--text-sub);"></span>
+                    <label class="xl-chk-lbl" title="开启后：发语音前先按「我的消息 →」翻译成客户语言，再用克隆声念译文（试听可见译稿）；关闭=按你打的原文发声" data-i18n-title="inbox.voice.xl_follow_t"><input type="checkbox" id="xl-voice-follow" checked onchange="_onVoiceXlToggle()"><span data-i18n="inbox.voice.xl_follow">跟随翻译发声</span></label>
+                    <span class="xl-row-hint" id="xl-voice-row-hint"></span>
+                  </div>
                   </div>
                   <!-- P1 高级折叠：引擎（2026-08-09 显式选择语义不变）/ 我的语言（服务端偏好，旧后端自动隐藏）/ 运营默认 -->
                   <details class="xl-adv" id="xl-adv">
@@ -1202,8 +1211,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                   </details>
                   <!-- 单次翻译工具：与上方「实时双向翻译」分区。之前 4 个按钮挤在同一行里，
                        主次不分、换行错乱；拆出带小标题的独立组后层级清晰，按钮也能整齐成网格。 -->
+                  <!-- 2026-09-11：4 个工具压成一行「图标在上、短标签在下」的紧凑格（原 2×2 大按钮
+                       占主屏 1/4 高）；「更多 →」跳右栏翻译工具箱（_cpGuideTryXlate，全功能面在那）。 -->
                   <div class="xl-tools">
-                    <span class="xl-tools-lbl" data-i18n="inbox.xl.tools_lbl">单次翻译工具</span>
+                    <div class="xl-tools-hd">
+                      <span class="xl-tools-lbl" data-i18n="inbox.xl.tools_lbl">单次翻译工具</span>
+                      <button type="button" class="xl-tools-more" onclick="_uiBeacon('xlt_tools_more');_cpGuideTryXlate()" title="打开右栏翻译工具箱（文档 / 字幕 / 多线路对照全功能面）" data-i18n="inbox.xl.tools_more" data-i18n-title="inbox.xl.tools_more_t">更多 →</button>
+                    </div>
                     <div class="xl-tools-row">
                       <button type="button" class="imgxl-btn" id="imgxl-btn" onclick="document.getElementById('imgxl-file').click()" title="上传客户图片/截图，OCR 识别并翻译" data-i18n-title="inbox.xl.img_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="8.5" cy="9" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg><span data-i18n="inbox.xl.img">图片翻译</span></button>
                       <input type="file" id="imgxl-file" accept="image/*" style="display:none;" onchange="_onImgXlatePick(this)">
@@ -6605,6 +6619,39 @@ function _rkHoldChipHtml(c){
   return '<span class="hdr-tag-chip rk-hold-chip" style="background:color-mix(in srgb, #dc2626 14%, transparent);color:var(--text-main)" title="'
     +esc(window.Tf('inbox.risk.hold_chip_t',{cat:cat,level:lvl}))+'">'+esc(window.Tf('inbox.risk.hold_chip',{cat:cat}))+'</span>';
 }
+/* Q-18 #292（ay-）：「AI 让位中 · 坐席 60s 内发过 · 23s 后接回」chip。状态源 = GET automation 的 agent_yield
+   （ay- 真值在 worker 内存，45s 周期 + 手发成功后立即刷）；倒计时本地按 remaining 走，到点自消并回拉一次真值（_ayRemain）；
+   点 chip = POST agent-yield/resume 立即接回（worker 落 [autosend] resume by=chip）。_ayNoteLocal 是
+   坐席自己打字 / 发送时的乐观本地态（ay- 多坐席场景以服务端真值为准）。每行带 ay- 前缀＝stage_hunks --mine 可切分。 */
+var _ayState=null, _ayUntilLocal=0, _ayTimer=null, _AY_BY_KEYS={agent_sent:'inbox.ay.by_sent',agent_typing:'inbox.ay.by_typing'};
+function _aySet(st){ _ayState=(st&&st.active)?st:null; _ayUntilLocal=_ayState?(Date.now()+Math.max(0,Number(_ayState.remaining||0))*1000):0; _renderAyChip(); }
+function _ayNoteLocal(by){ if(!selectedChat) return; if(_ayState&&_ayState.by==='agent_sent'&&by==='agent_typing') return; _aySet({active:true,by:by,remaining:60,conversation_id:selectedChat.conversation_id,local:true}); }
+function _ayRemain(){ return Math.max(0,Math.ceil((_ayUntilLocal-Date.now())/1000)); }
+function _ayByLabel(){ return window.T(_AY_BY_KEYS[String(_ayState&&_ayState.by||'')]||'inbox.ay.by_sent'); }
+function _ayChipHtml(c){
+  if(!_ayState||!c||!selectedChat||c.conversation_id!==selectedChat.conversation_id||_ayRemain()<=0) return '';
+  return '<span class="hdr-tag-chip ay-chip" id="ay-chip" role="button" tabindex="0" style="background:color-mix(in srgb, #2563eb 14%, transparent);color:var(--text-main);cursor:pointer" onclick="_ayResume()" title="'
+    +esc(window.Tf('inbox.ay.chip_t',{by:_ayByLabel()}))+'">'+esc(window.Tf('inbox.ay.chip',{by:_ayByLabel(),n:_ayRemain()}))+'</span>'; }
+function _renderAyChip(){
+  var _ayRow=document.getElementById('hdr-tags-row'); if(!_ayRow) return;
+  var _ayOld=document.getElementById('ay-chip'); if(_ayOld) _ayOld.remove();
+  if(_ayTimer){ clearInterval(_ayTimer); _ayTimer=null; }
+  var _ayHtml=_ayChipHtml(selectedChat); if(!_ayHtml) return;
+  var _ayAnchor=_ayRow.querySelector('.tag-input-wrap'); if(_ayAnchor) _ayAnchor.insertAdjacentHTML('beforebegin',_ayHtml); else _ayRow.insertAdjacentHTML('beforeend',_ayHtml);
+  _ayTimer=setInterval(function(){ var _ayEl=document.getElementById('ay-chip'); if(!_ayEl){ clearInterval(_ayTimer); _ayTimer=null; return; }
+    if(_ayRemain()<=0){ clearInterval(_ayTimer); _ayTimer=null; _ayEl.remove(); _ayState=null; try{ if(selectedChat) _refreshConvStatus(selectedChat); }catch(_){} return; }
+    _ayEl.textContent=window.Tf('inbox.ay.chip',{by:_ayByLabel(),n:_ayRemain()}); },1000); }
+async function _ayResume(){
+  if(!selectedChat) return; var _ayCid=selectedChat.conversation_id;
+  try{ _uiBeacon('ay_chip_resume'); }catch(_){}
+  var _ayBody={platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key,by:'chip'};
+  try{ var _ayR=await apiFetch('/api/unified-inbox/agent-yield/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_ayBody)},{timeoutMs:15000});
+    var _ayD={}; try{ _ayD=await _ayR.json(); }catch(_){ _ayD={}; }
+    if(!_ayR.ok||_ayD.ok===false) throw new Error('ay-resume failed');
+    if(selectedChat&&selectedChat.conversation_id===_ayCid) _aySet(_ayD.agent_yield||null);
+    _toast(window.T('inbox.ay.resumed'),'#2563eb');
+  }catch(_ayE){ try{ _toast(window.T('inbox.ay.resume_fail'),'#b91c1c'); }catch(_){} } }
+window._ayResume=_ayResume;
 function _handoffTip(c){
   var hm=(c&&c.handoff_meta)||null;
   if(!hm||!hm.ts) return window.T('inbox.handoff.tip_generic');
@@ -11228,6 +11275,7 @@ function _renderHdrTags(c){
   });
   // Q-17 #277②（rk-）：「风险保持 · <类别>」chip——带「需人工」标且 handoff_meta 有类别时出现，摘标即消
   try{ const _rkHtml=_rkHoldChipHtml(c); if(_rkHtml) row.insertAdjacentHTML('beforeend',_rkHtml); }catch(_e){}
+  try{ if(selectedChat&&c&&c.conversation_id===selectedChat.conversation_id) _renderAyChip(); }catch(_e){}   // Q-18 #292（ay-）：「AI 让位中 · N 秒后接回」chip + 倒计时
   // 添加标签按钮
   const addWrap=document.createElement('div');
   addWrap.className='tag-input-wrap';
@@ -21335,6 +21383,8 @@ function _xlOutAutoLabel(){
    不生成内联 handler——动态 innerHTML 的 onclick 是哑按钮门禁盲区）。 */
 let _xlPickMode='';
 const _XL_RECENT_KEY='aitr.xl.recent_langs';
+/* 选语屏分组分界：目录里从这个码起进「更多语言」节（目录顺序即频次序，不另建清单） */
+const _XL_PICK_MORE_FROM='fr';
 function _xlRecent(){
   try{
     const a=JSON.parse(localStorage.getItem(_XL_RECENT_KEY)||'[]');
@@ -21426,7 +21476,9 @@ function _xlPickRender(q){
   };
   let h='';
   if(!qq){
-    if(mode==='out') h+=row('',_xlOutAutoLabel(),window.T('inbox.xl.out_auto_peer_sub'))+row('auto',window.T('inbox.xl.auto_cust'),'');   // #276：空档=自动跟对方
+    /* 2026-09-11：「自动 · 跟对方」行副文案是整句说明，单行右列 42% 会被省略成「…」看不懂——
+       加 two-line 让副文案换到第二行整宽显示（其余行仍是「语言名 | 原文名」单行）。 */
+    if(mode==='out') h+=row('',_xlOutAutoLabel(),window.T('inbox.xl.out_auto_peer_sub'),'two-line')+row('auto',window.T('inbox.xl.auto_cust'),'');   // #276：空档=自动跟对方
     else if(mode==='agent') h+=row('',window.T('inbox.xl.mylang_follow'),'');
     else if(mode==='lb') h+=row('',window.T('inbox.xl.lb_lang_auto'),'');
     else h+=row('',window.T('inbox.xl.none'),'');
@@ -21446,9 +21498,17 @@ function _xlPickRender(q){
       h+='</div>';
     }
   }
+  /* 分组标题（2026-09-11）：目录本身已按跨境客服频次排（zh…pt 高频 14 语在前，fr 起为长尾），
+     34 行平铺没有视觉锚点——只在无搜索词时插两个节标题「常用 / 更多语言」（复用既有
+     grp_* 键，不复制行、不改目录顺序、不改 data-xl-pick 契约）。 */
   let n=0;
   for(const it of _XL_CATALOG){
-    if(match(it.code)){ n++; h+=row(it.code,_xlLangName(it.code),it.e||''); }
+    if(!match(it.code)) continue;
+    if(!qq){
+      if(n===0) h+='<div class="xl-pick-sec">'+esc(window.T('inbox.xl.grp_common'))+'</div>';
+      else if(it.code===_XL_PICK_MORE_FROM) h+='<div class="xl-pick-sec">'+esc(window.T('inbox.xl.grp_more'))+'</div>';
+    }
+    n++; h+=row(it.code,_xlLangName(it.code),it.e||'');
   }
   if(!n&&qq) h+='<div class="xl-pick-empty">'+esc(window.T('inbox.xl.pick_empty'))+'</div>';
   host.querySelector('.xl-pick-list').innerHTML=h;
@@ -21567,6 +21627,10 @@ function _syncSendModeSeg(){
   if(!d||!p) return;
   d.classList.toggle('on',!_outPreview);
   p.classList.toggle('on',_outPreview);
+  /* 2026-09-11：反译校验只对「先预览再发」路径有意义 → 子行随分段显隐；
+     出站选项组（发送方式/语气/语音）在「我的消息 →」为空时整组调灰。 */
+  const bk=document.getElementById('xl-backchk-row'); if(bk) bk.style.display=_outPreview?'':'none';
+  const grp=document.getElementById('xl-out-opts'); if(grp) grp.classList.toggle('dim',!_xlateOut);
 }
 /* P1-XT：出站语气分段（自然/正式/亲切/促单）。只影响我方消息的出站翻译
    （预览/一击/对照同走 style 参数）；仅 LLM 与 DeepL 线消费，NMT 线忽略。
@@ -21682,7 +21746,10 @@ function _xlateOff(){
 /* ===== 底部工具栏：分组弹层 + 状态徽标（收敛重复按钮） ===== */
 function _closeRtPops(except){
   document.querySelectorAll('.rt-pop.show').forEach(function(el){
-    if(el!==except){ el.classList.remove('show'); _placeRtPopReset(el); }
+    if(el!==except){
+      el.classList.remove('show'); _placeRtPopReset(el);
+      try{ var tb=el.id?document.querySelector('[aria-controls="'+el.id+'"]'):null; if(tb) tb.setAttribute('aria-expanded','false'); }catch(_){}
+    }
   });
 }
 /* rt-pop 几何兜底（2026-09-11）：弹层是 .chat-panel（overflow:hidden）里的 absolute。CSS 已让
@@ -21695,14 +21762,38 @@ function _closeRtPops(except){
    ≤480 抽屉模式（position:fixed）由 CSS 全管，这里直接放行。 */
 var _rtPopClipBeaconed={};
 function _placeRtPopReset(pop){ if(!pop) return; pop.style.maxHeight=''; pop.style.transform=''; }
+/* 弹层真实可视裁切盒 = 从 pop 往上到 .chat-panel 所有 overflow≠visible 祖先 rect 的交集
+   （实锤：#chat-content 里消息列 <div style="overflow:hidden"> 从 chat-header 下缘开始，
+   量 .chat-panel 会把 header 那 70px 也算成可用空间 → 弹层顶被 header 盖住）。
+   window 契约：verify_xlate_ui 用同一把尺量。 */
+function _rtPopClipRect(pop){
+  var panel=pop.closest('.chat-panel'); if(!panel) return null;
+  var box=null, el=pop.parentElement;
+  var clipish=function(v){ return v&&v!=='visible'; };
+  while(el){
+    var cs=null; try{ cs=getComputedStyle(el); }catch(_){}
+    if(cs&&(clipish(cs.overflowX)||clipish(cs.overflowY))){
+      var r=el.getBoundingClientRect();
+      box=box?{l:Math.max(box.l,r.left),t:Math.max(box.t,r.top),r:Math.min(box.r,r.right),b:Math.min(box.b,r.bottom)}
+             :{l:r.left,t:r.top,r:r.right,b:r.bottom};
+    }
+    if(el===panel) break;
+    el=el.parentElement;
+  }
+  if(!box){ var pr=panel.getBoundingClientRect(); box={l:pr.left,t:pr.top,r:pr.right,b:pr.bottom}; }
+  return box;
+}
+window._rtPopClipRect=_rtPopClipRect;
 function _placeRtPop(pop){
   if(!pop||!pop.classList.contains('show')) return;
-  var panel=pop.closest('.chat-panel'); if(!panel) return;
-  _placeRtPopReset(pop);
+  if(!pop.closest('.chat-panel')) return;
   var run=function(){
     if(!pop.classList.contains('show')) return;
+    _placeRtPopReset(pop);   // 同一帧内 复位→量→设，不会画出中间态
     try{ if(getComputedStyle(pop).position==='fixed') return; }catch(_){}
-    var pr=panel.getBoundingClientRect(), r=pop.getBoundingClientRect(), touched=false;
+    var box=_rtPopClipRect(pop); if(!box) return;
+    var pr={top:box.t,left:box.l,right:box.r,bottom:box.b};
+    var r=pop.getBoundingClientRect(), touched=false;
     var avail=Math.floor(r.bottom-pr.top-8);
     if(avail>120 && r.height>avail){ pop.style.maxHeight=avail+'px'; touched=true; }
     var dx=0;
@@ -21711,14 +21802,28 @@ function _placeRtPop(pop){
     if(Math.abs(dx)>=1){ pop.style.transform='translateX('+Math.round(dx)+'px)'; touched=true; }
     if(touched && !_rtPopClipBeaconed[pop.id||'?']){ _rtPopClipBeaconed[pop.id||'?']=1; try{ _uiBeacon('xlt_pop_clipped'); }catch(_){} }
   };
+  try{ if(window._rtPopObserve) window._rtPopObserve(pop); }catch(_){}
   try{ requestAnimationFrame(run); }catch(_){ run(); }
 }
 (function(){
-  var t=null;
-  window.addEventListener('resize',function(){
+  var t=null, ro=null;
+  var replaceAll=function(){
     if(t) clearTimeout(t);
-    t=setTimeout(function(){ document.querySelectorAll('.rt-pop.show').forEach(_placeRtPop); },120);
-  });
+    t=setTimeout(function(){ document.querySelectorAll('.rt-pop.show').forEach(_placeRtPop); },80);
+  };
+  window.addEventListener('resize',replaceAll);
+  /* 弹层开着时 chat-header 长出副行（会话详情异步到）/ composer 随输入长高 / 右栏开合，
+     都会改裁切盒——ResizeObserver 盯这几块，变了就重量（实锤：开弹层 0.8s 后 header 才
+     长出 #hdr-sub 21px，首帧算的 max-height 偏大 → 顶被 header 盖住）。 */
+  window._rtPopObserve=function(pop){
+    if(ro||typeof ResizeObserver!=='function') return;
+    try{
+      ro=new ResizeObserver(replaceAll);
+      var panel=pop.closest('.chat-panel');
+      ['.chat-header','.reply-bar-wrap'].forEach(function(s){ var el=panel&&panel.querySelector(s); if(el) ro.observe(el); });
+      var col=pop.closest('#chat-content > div > div'); if(col) ro.observe(col);
+    }catch(_){ ro=null; }
+  };
 })();
 function toggleVoiceCfg(){
   var p=document.getElementById('voice-cfg-pop');
@@ -22182,9 +22287,30 @@ function toggleXlatePop(){
   /* 0830 重建：开/关都退出选语第二屏（下次打开回主屏，不残留 is-pick） */
   p.classList.remove('is-pick');
   /* P0-V2：开弹层时同步「语音消息」行状态（跟随 _xlateOut 与开关持久值） */
-  if(show){ try{ _syncVoiceXlRow(); }catch(_){} try{ _syncXlChips(); }catch(_){} _placeRtPop(p); }
-  else _placeRtPopReset(p);
+  var tb=document.getElementById('xlate-toggle-btn');
+  if(tb) tb.setAttribute('aria-expanded',show?'true':'false');
+  if(show){
+    try{ _syncVoiceXlRow(); }catch(_){} try{ _syncXlChips(); }catch(_){} _placeRtPop(p);
+    /* 2026-09-11 键盘：弹层本体接焦点（tabindex=-1）→ Esc 立即可用；✕ 的 aria-label 随 UI 语言在此写
+       （模板里不写静态中文 aria-label——EN 视图 CJK 泄漏门禁会红；title 已带 data-i18n-title） */
+    var x=document.getElementById('xl-pop-x'); if(x) x.setAttribute('aria-label',window.T('inbox.xl.close'));
+    try{ p.focus({preventScroll:true}); }catch(_){}
+  }else{
+    _placeRtPopReset(p);
+    /* 关闭时焦点若还在弹层里（Esc / ✕ / 键盘触发）→ 回到「翻译」入口，不落到 body */
+    try{ if(tb&&p.contains(document.activeElement)) tb.focus({preventScroll:true}); }catch(_){}
+  }
 }
+/* Esc：选语屏 → 退回主屏；主屏 → 关闭。搜索框自己的 Esc（已 preventDefault → 退回主屏）不再重复处理。 */
+(function(){
+  var p=document.getElementById('xlate-pop'); if(!p) return;
+  p.addEventListener('keydown',function(ev){
+    if(ev.key!=='Escape'||ev.defaultPrevented) return;
+    ev.preventDefault(); ev.stopPropagation();
+    if(p.classList.contains('is-pick')){ _xlPickBack(); try{ p.focus({preventScroll:true}); }catch(_){} }
+    else toggleXlatePop();
+  });
+})();
 /* composer P2：键盘快捷键速查浮层（复用 rt-pop 家族；把 Tab 采草稿/斜杠指令/Ctrl+V
    贴图这些隐藏能力集中一处可见——textarea title 悬浮提示的可点击升级版）。 */
 function toggleKbdHelp(){

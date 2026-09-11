@@ -552,7 +552,7 @@
 .xl-topbar .xl-lang-chip{min-width:108px;padding:2px 8px;font-size:11px;background:var(--bg-panel);}
 .xl-sel-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 .xlate-dir{position:relative;}
-#xlate-pop.show.is-pick{display:flex;flex-direction:column;overflow:hidden;max-height:min(72vh,560px);}
+/* 主屏/选语屏高度策略统一在下方 #xlate-pop.show（2026-09-11）；这里只留互斥切换 */
 #xl-pop-picker{display:none;flex-direction:column;min-height:240px;flex:1;min-height:0;}
 #xlate-pop.is-pick #xl-pop-home{display:none;}
 #xlate-pop.is-pick #xl-pop-picker{display:flex;}
@@ -576,8 +576,15 @@
   padding:6px 8px;cursor:pointer;text-align:left;}
 .xl-pick-row:hover{background:var(--bg-hover);}
 .xl-pick-row.on{background:var(--xl-accent-bg);color:var(--xl-accent-strong);font-weight:700;}
+/* 选中行 ✓（2026-09-11）：此前只靠底色区分，暗色下 --xl-accent-bg 与 hover 底色接近，肉眼分不出「当前值」 */
+.xl-pick-row.on .xl-pick-row-main::before{content:'\2713';display:inline-block;width:14px;margin-right:2px;font-weight:700;}
+.xl-pick-row:not(.on) .xl-pick-row-main::before{content:'';display:inline-block;width:16px;}
 .xl-pick-row-main{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.xl-pick-row-sub{flex:none;font-size:11px;color:var(--text-tiny);max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xl-pick-row-sub{flex:none;font-size:11px;color:var(--text-tiny);max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* 说明型副文案整句换行（「自动 · 跟对方」行）：单行右列省略成「…」等于没说 */
+.xl-pick-row.two-line{flex-wrap:wrap;align-items:flex-start;row-gap:2px;}
+.xl-pick-row.two-line .xl-pick-row-main{flex:1 0 100%;}
+.xl-pick-row.two-line .xl-pick-row-sub{flex:1 0 100%;max-width:none;white-space:normal;line-height:1.4;font-weight:400;padding-left:16px;}
 .xl-pick-empty{font-size:12px;color:var(--text-tiny);padding:16px 8px;text-align:center;}
 .xl-pick-row.kb{outline:2px solid var(--xl-accent);outline-offset:-2px;}
 .xl-pick-row.cust{box-shadow:inset 3px 0 0 var(--xl-accent);}
@@ -594,8 +601,15 @@
 #xl-tone-seg .xl-seg-btn+.xl-seg-btn{border-left:0;}
 #xl-tone-seg .xl-seg-btn:nth-child(odd){border-right:1px solid var(--btn-border);}
 #xl-tone-seg .xl-seg-btn:nth-child(-n+2){border-bottom:1px solid var(--btn-border);}
-@media (max-width:480px){
-  #xlate-pop.show.is-pick{max-height:calc(100vh - 140px);}
+/* 弹层宽 ≥400（1280 档 440px / 1024+右栏 348px 不触发）：语气四档一行，主屏省一行高。
+   容器查询挂在 #xlate-pop 自身：弹层内无 fixed 子元素，layout containment 无副作用
+   （挂 .chat-panel 会把灯箱/菜单等 32 处 fixed 全部困进面板——故不用）。 */
+#xlate-pop{container-type:inline-size;}
+@container (min-width:400px){
+  #xl-tone-seg{grid-template-columns:repeat(4,1fr);}
+  #xl-tone-seg .xl-seg-btn:nth-child(odd){border-right:0;}
+  #xl-tone-seg .xl-seg-btn:nth-child(-n+2){border-bottom:0;}
+  #xl-tone-seg .xl-seg-btn+.xl-seg-btn{border-left:1px solid var(--btn-border);}
 }
 .xl-quick-row{display:flex;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);}
 .xl-quick{flex:1;font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:7px 10px;border:1px solid transparent;border-radius:8px;background:var(--tk-emerald,#0f9d75);color:#fff;transition:background .15s,color .15s,border-color .15s,filter .15s;}
@@ -608,11 +622,33 @@
 .rt-pop{position:absolute;bottom:calc(100% + 8px);left:0;z-index:60;min-width:300px;background:var(--bg-elev);border:1px solid var(--border);border-radius:10px;box-shadow:0 -6px 24px rgba(15,23,42,.14);padding:10px;display:none;}
 .rt-pop.show{display:block;}
 .rt-pop.rt-pop-right{left:auto;right:0;}
+/* 暗色下 rt-pop 家族的层级感（2026-09-11）：亮色阴影 rgba(15,23,42,.14) 在 #1b1c22 底上等于没有，
+   弹层与消息区糊成一片；加深外阴影 + 1px 内高光 + 边框略提亮（color-mix 提 border，不写裸 hex） */
+:root[data-cp-theme="dark"] .rt-pop{box-shadow:0 -10px 32px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.05);border-color:color-mix(in srgb,var(--border) 70%,#fff 30%);}
+/* 弹层入场（P2）：.14s 淡入；只动 opacity——transform 会和 _placeRtPop 的内联 translateX 修正打架且干扰首帧测量。
+   xlStatusPop 那种 keyframes 名已被占用，这里独立命名 */
+@keyframes rtPopIn{from{opacity:0;}to{opacity:1;}}
+.rt-pop.show{animation:rtPopIn .14s ease-out;}
+@media (prefers-reduced-motion:reduce){.rt-pop.show{animation:none;}}
+/* 翻译弹层（2026-09-11 自适应修复）：wrap 退成 static，让 #xlate-pop 以整个 composer
+   （.reply-bar-wrap，position:relative）为包含块——左对齐 composer、宽度随聊天面板伸缩、
+   上缘之外只有消息区。此前右锚在「翻译 ▾ + 状态胶囊」小 wrap 上 + min-width 300，在
+   ~480px 聊天面板（1024 桌面壳 + 右栏展开）向左溢出 ~55px 被 .chat-panel overflow:hidden
+   裁掉，选语屏只剩右列原文名。高度：主屏/选语屏同一套 max-height + 内滚，_placeRtPop
+   打开时按聊天面板可用高度再收紧（CSS 值只是无 JS 时的兜底）。 */
+.rt-pop-wrap.xl-wrap{position:static;}
+#xlate-pop{left:16px;right:auto;bottom:calc(100% + 6px);width:min(440px,calc(100% - 32px));min-width:0;box-sizing:border-box;}
+#xlate-pop.show{display:flex;flex-direction:column;overflow:hidden;max-height:min(calc(100dvh - 230px),640px);}
+#xlate-pop:focus{outline:none;}   /* 弹层本体只是 Esc 的焦点宿主，不画焦点环（内部控件各有 focus-visible） */
+#xl-pop-home{overflow:auto;min-height:0;-webkit-overflow-scrolling:touch;}
 .rt-pop-row{display:flex;align-items:center;gap:6px;}
 .rt-pop-lbl{font-size:11px;color:var(--text-sub);flex-shrink:0;}
 .rt-xl-status{font-size:11px;font-weight:600;color:var(--text-tiny);white-space:nowrap;padding:2px 9px;border-radius:999px;border:1px solid var(--btn-border);background:var(--bg-soft);transition:background .12s,border-color .12s,color .12s;}
 .rt-xl-status:hover{border-color:var(--xl-accent);}
 .rt-xl-status.on{color:var(--xl-accent-strong);background:var(--xl-accent-bg);border-color:var(--xl-accent-border);}
+/* 2026-09-11：开启态胶囊前加色点（一眼分「开/关」，不靠底色微差）；入口按钮在弹层打开期间保持亮态 */
+.rt-xl-status.on::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--xl-accent);margin-right:5px;vertical-align:1px;}
+#xlate-toggle-btn[aria-expanded="true"]{border-color:var(--xl-accent);color:var(--xl-accent-strong);background:var(--xl-accent-bg);}
 /* P0（2026-08-16）：设置变更即时反馈——状态胶囊 pop 一下（reduced-motion 豁免） */
 .rt-xl-status.flash{animation:xlStatusPop .55s ease;}
 @keyframes xlStatusPop{0%{transform:scale(1);}35%{transform:scale(1.18);box-shadow:0 0 0 5px color-mix(in srgb,var(--accent,#2563eb) 20%,transparent);}100%{transform:scale(1);box-shadow:none;}}
@@ -700,20 +736,35 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
    右锚 min-width 300 在 405px 视口向左溢出 153px（真浏览器门禁实锤半屏被裁，
    存量缺陷）；bottom:64px 让开 56px 移动平台条 + 8px 间隙（与筛选抽屉同约定）。 */
 @media (max-width:480px){
-  #xlate-pop{position:fixed;left:8px;right:8px;bottom:64px;min-width:0;max-height:calc(100vh - 140px);overflow:auto;}
+  #xlate-pop.show{position:fixed;left:8px;right:8px;bottom:64px;width:auto;min-width:0;max-height:calc(100dvh - 140px);}
 }
-/* 单次翻译工具分区：小标题 + 2×2 网格，主次清晰、不再挤成乱行 */
-.xl-tools{margin-top:10px;padding-top:10px;border-top:1px solid var(--border);}
-.xl-tools-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;margin-bottom:6px;}
-/* 「我的消息」子设置组（2026-08-30 UX 批）：发送方式/语气/语音三行本是出向翻译的
-   子设置，左侧 accent 竖线 + 缩进表达从属；出向=不译时整组降权（视觉上"这些先不用管"）。 */
-.xl-out-opts{margin:8px 0 0 4px;padding-left:9px;border-left:2px solid var(--xl-accent-border);transition:opacity .15s;}
-.xl-out-opts-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;margin-bottom:2px;}
-.xl-out-opts.dim{opacity:.45;}
+/* 单次翻译工具分区（2026-09-11 压成一行）：小标题 + 「更多 →」同行；4 个工具 图标在上、
+   短标签在下 的紧凑格（原 2×2 大按钮占主屏约 1/4 高，短窗直接把工具区顶出可视区）。 */
+.xl-tools{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+.xl-tools-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;}
+.xl-tools-lbl{display:block;font-size:11px;font-weight:700;color:var(--text-tiny);letter-spacing:.3px;}
+.xl-tools-more{border:0;background:transparent;font:inherit;font-size:11px;font-weight:600;color:var(--xl-accent);cursor:pointer;padding:2px 4px;border-radius:6px;white-space:nowrap;}
+.xl-tools-more:hover{background:var(--xl-accent-bg);color:var(--xl-accent-strong);}
+.xl-tools-more:focus-visible{outline:2px solid var(--xl-accent);outline-offset:1px;}
+/* 「我的消息」子设置组（2026-08-30 设计、2026-09-11 接线）：发送方式/反译校验/语气/语音
+   都是出向翻译的子设置，左侧 accent 竖线 + 缩进表达从属；出向=不译时整组 .dim 降权——
+   用语义 ink 色而非 opacity（主题纪律：opacity 调灰在暗色下会掉出对比度地板）。 */
+.xl-out-opts{margin:8px 0 0 4px;padding-left:9px;border-left:2px solid var(--xl-accent-border);transition:border-color .15s;}
+.xl-out-opts.dim{border-left-color:var(--border);}
+.xl-out-opts.dim .xl-sendmode-row,.xl-out-opts.dim .xlate-dir,.xl-out-opts.dim .xl-seg-btn,
+.xl-out-opts.dim .xl-chk-lbl,.xl-out-opts.dim .xl-row-hint,.xl-out-opts.dim .arrow{color:var(--text-tiny);}
+.xl-out-opts.dim .xl-seg-btn.on{background:var(--bg-hover);color:var(--text-sub);}
 .xl-out-opts .xl-sendmode-row{margin-top:6px;}
 .xl-out-opts .xlate-dir{margin-top:6px;}
-.xl-tools-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
-.xl-tools-row .imgxl-btn{width:100%;text-align:center;}
+.xl-sub-row{display:flex;align-items:center;gap:8px;margin:4px 0 0 0;padding-left:0;font-size:11px;color:var(--text-sub);}
+.xl-chk-lbl{display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;color:var(--text-sub);}
+.xl-chk-lbl input{margin:0;}
+.xl-row-hint{font-size:10px;color:var(--text-tiny);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xl-tools-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;}
+.xl-tools-row .imgxl-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:100%;min-width:0;
+  padding:6px 2px;border-radius:8px;font-size:11px;line-height:1.2;text-align:center;}
+.xl-tools-row .imgxl-btn .rt-ic{width:16px;height:16px;}
+.xl-tools-row .imgxl-btn span{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* 入站自动译气泡 */
 .msg-translation.auto{border-top-color:rgba(99,102,241,.35);color:var(--xl-trans-text);}
 .msg-row.out .msg-translation.auto{border-top-color:color-mix(in srgb,var(--ofg) 40%,transparent);color:color-mix(in srgb,var(--ofg) 95%,transparent);}
