@@ -30,7 +30,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -267,6 +267,60 @@ def _spawn_voice_quality_probe(persona_id: str) -> bool:
     except Exception as ex:  # noqa: BLE001
         logger.warning("[voice/enroll] 体检子进程拉起失败: %s", ex)
         return False
+
+
+def clone_supported_langs(raw_cfg: Dict[str, Any], backend: str,
+                          persona_id: str = "") -> List[str]:
+    """Q-22 B（#288）：某克隆后端对某人设**会念**的语种前缀（并集口径，与
+    effective-config 的 ``voice_langs`` 同源）：主路 ``clone_voice_langs`` ∪
+    按语种改派的克隆节点 ``clone_route_langs``。空列表＝能力未知（前端不判不冤枉）。
+    纯函数、绝不抛——人设卡 / 登记结果面板 / profiles 三处都靠它，不各自算一套。"""
+    try:
+        from src.ai.lang_voice_route import clone_route_langs, clone_voice_langs
+        av = (raw_cfg or {}).get("avatar_voice") or {}
+        out = [str(x).lower() for x in clone_voice_langs(av, str(backend or ""), str(persona_id or ""))]
+        if out:
+            for p in clone_route_langs(raw_cfg or {}):
+                if p not in out:
+                    out.append(str(p).lower())
+        return out
+    except Exception:
+        return []
+
+
+def enroll_result_extras(raw_cfg: Dict[str, Any], persona_id: str,
+                         vp: Optional[Dict[str, Any]], backend: str) -> Dict[str, Any]:
+    """Q-22 E（#239）：登记成功响应的可停留结果面板数据（纯 additive，旧前端忽略）。
+
+    - ``supported_langs``：该克隆声会念的语种（同 clone_supported_langs）；
+    - ``preview``：面板「▶ 试听」用的描述符——**不在登记请求里同步合成**（克隆首句
+      10s+，登记接口已经够慢），前端按 ``tts_test`` 入参调 /api/voice/tts-test，
+      ``reference`` 报参考音文件名 + 逐字稿有无，让坐席知道听的是谁的哪段；
+    - ``health``：即时体检是否已拉起（``probe_spawned``）+ 上次体检行（若有）——
+      面板据此显示「体检进行中，几分钟后回填」而不是永远空着。
+    """
+    vp = vp if isinstance(vp, dict) else {}
+    ref = str(vp.get("reference_audio_path") or "")
+    ref_name = os.path.basename(ref) if ref else ""
+    has_text = False
+    try:
+        has_text = bool(vp.get("reference_text")) or (bool(ref) and Path(ref).with_suffix(".txt").is_file())
+    except Exception:
+        has_text = bool(vp.get("reference_text"))
+    q = {}
+    try:
+        q = _voice_quality_latest().get(str(persona_id)) or {}
+    except Exception:
+        q = {}
+    return {
+        "supported_langs": clone_supported_langs(raw_cfg, backend, persona_id),
+        "preview": {
+            "kind": "tts_test",
+            "tts_test": {"persona_id": str(persona_id), "format": "mp3"},
+            "reference": {"file": ref_name, "has_text": has_text},
+        },
+        "health": {"probe_spawned": False, "last": q},
+    }
 
 
 def _spawn_prerender_render() -> bool:
@@ -1398,6 +1452,10 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     "persona_id": pid, "name": s.get("name") or pid, **desc,
                     "quality": str(q.get("label") or ""),
                     "quality_score": q.get("score"),
+                    # Q-22 B（#288）：克隆声会念的语种（人设语音卡「克隆声支持语种」；
+                    # 空=能力未知不显示）。预置声行不算——edge 全集无信息量。
+                    "voice_langs": (clone_supported_langs(raw_cfg, desc["backend"], str(pid))
+                                    if desc["is_clone"] else []),
                 })
         except Exception as ex:  # noqa: BLE001
             logger.warning("[voice/profiles] persona enumerate failed: %s", ex)
@@ -1796,13 +1854,17 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         exc_info=True)
                 # 录入即体检（P3）：合成探针句 → 声纹比对 → jsonl → 下拉徽标
                 # 几分钟内点亮；体检结果缓存失效让 profiles 尽快看到新行
-                if _spawn_voice_quality_probe(persona_id):
+                _probe_up = _spawn_voice_quality_probe(persona_id)
+                if _probe_up:
                     _VQ_CACHE["until"] = 0.0
+                # Q-22 E（#239）：结果面板数据（支持语种 / 试听描述符 / 体检状态）
+                _extras = enroll_result_extras(raw_full_cfg, persona_id, vp_av, "avatar_clone")
+                _extras["health"]["probe_spawned"] = bool(_probe_up)
                 return {"ok": True, "mode": "avatar_clone", "persona_id": persona_id,
                         "reference_audio_path": str(audio_path),
                         "reference_text": av_ref_text,
                         "avatar_base_url": av_client.base_url,
-                        "quality": quality}
+                        "quality": quality, **_extras}
             logger.info("[voice/enroll] avatar_voice(7852) 不可用 → 回落 LAN/云端登记")
 
         # ── 局域网次优先：LAN 克隆主机在线则零样本登记（不烧云端配额）──
@@ -1840,7 +1902,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
                        f" level={quality.get('level')}")
                 return {"ok": True, "mode": "lan_zeroshot", "persona_id": persona_id,
                         "reference_audio_path": str(audio_path), "lan_base_url": lan.base_url,
-                        "quality": quality}
+                        "quality": quality,
+                        **enroll_result_extras(raw_full_cfg, persona_id, vp_lan, "voice_clone_lan")}
             logger.info("[voice/enroll] voice_clone_lan 不可用 → 回落云端 Qwen 登记")
 
         from src.ai.voice_enroll import (
@@ -1892,7 +1955,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
                f" src={source_ref.get('kind')} consent={owner_consent}"
                f" level={quality.get('level')}")
         return {"ok": True, "voice": voice, "persona_id": persona_id,
-                "reference_audio_path": str(audio_path), "quality": quality}
+                "reference_audio_path": str(audio_path), "quality": quality,
+                **enroll_result_extras(raw_full_cfg, persona_id, vp,
+                                       str(vp.get("backend") or "voice_clone_command"))}
 
     @app.delete("/api/voice/profiles/{persona_id}")
     async def api_voice_unbind(persona_id: str, request: Request,

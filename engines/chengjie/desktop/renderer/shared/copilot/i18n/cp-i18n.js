@@ -299,6 +299,9 @@
     "cp.voice.as_text_filled": "文字已填入输入框，请按发送以文字发出",
     "cp.voice.as_text_copy": "宿主未接管：请手动复制文字到输入框发送",
     "cp.voice.sent_sys": "已用系统音发送（非人设声）",
+    // Q-22 B（#288）：克隆声能力边界前置可见
+    "cp.voice.eff_langs": "会念 {langs}",
+    "cp.voice.gen_lang_blocked_t": "克隆声不支持 {lang}（会念 {langs}）——改发文字，或关掉「跟随翻译发声」按原文发声",
       "cp.voice.need_online": "需协议多开在线账号",
       "cp.voice.send_req_fail": "发送请求失败",
       "cp.voice.result_unknown": "⚠ 发送结果未知（没收到后台响应）：已刷新消息流，先确认这条语音有没有出现，再决定要不要重发",
@@ -474,6 +477,9 @@
     "cp.voice.as_text_filled": "Text placed in the composer — press Send to deliver as text",
     "cp.voice.as_text_copy": "Host did not take over: copy the text into the composer manually",
     "cp.voice.sent_sys": "Sent with system voice (non-persona)",
+    // Q-22 B (#288): clone voice capability visible up front
+    "cp.voice.eff_langs": "speaks {langs}",
+    "cp.voice.gen_lang_blocked_t": "Clone voice can't speak {lang} (speaks {langs}) — send as text, or turn off \"speak the translation\" to voice the original",
       "cp.voice.need_online": "Requires an online protocol multi-login account",
       "cp.voice.send_req_fail": "Send request failed",
       "cp.voice.result_unknown": "⚠ Result unknown (no response from backend): thread refreshed — check whether the voice appears before deciding to resend",

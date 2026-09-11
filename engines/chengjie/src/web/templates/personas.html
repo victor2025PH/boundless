@@ -1381,6 +1381,12 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
           <button type="button" class="btn btn-sm" id="pe-vc-unbind" onclick="peVcUnbind()" style="display:none;font-size:.72rem;">{{ (i18n or {}).get('psn_vc_unbind_btn','解绑克隆音色') }}</button>
         </div>
         <div id="pe-vc-player" style="display:none;margin-top:.35rem;font-size:.72rem;color:var(--t2);"></div>
+        {# Q-22 B（#288）：克隆声会念的语种常驻可见——目标语不在表里，收件箱右栏语音按钮会置灰带原因，
+           坐席在人设页就该看到能力边界，而不是发送时才撞闸。空=能力未知不显示。 #}
+        <div id="pe-vc-langs" data-role="vc-langs" style="display:none;font-size:.7rem;color:var(--t2);margin-top:.25rem;"></div>
+        {# Q-22 E（#239）：登记结果**可停留面板**（替代一闪而过的 toast）——成功/失败 + 原因、▶ 试听、
+           支持语种、体检回填；只在坐席点 × 才关，失败保留原始错误文本供拿包。 #}
+        <div id="pe-vc-result" data-role="vc-result" hidden style="margin-top:.4rem;padding:.45rem .55rem;border:1px solid var(--bd);border-radius:6px;font-size:.72rem;line-height:1.55;"></div>
         <div style="font-size:.7rem;color:var(--t2);margin:.3rem 0 .35rem;line-height:1.5">{{ (i18n or {}).get('psn_vc_sub','上传参考音频完成登记，音色跟随本人设生效；「生成语音 / 发送」在收件箱右栏业务助手。') }} {{ (i18n or {}).get('psn_vc_persist_note','登记成功即写入人设并立即生效，不需要再点底部「保存」。') }}</div>
         <cp-voice mode="enroll" id="pe-vc-enroll"></cp-voice>
       </div>
@@ -9204,6 +9210,8 @@ async function peVcSync(pid){
   _peVcFile = '';
   if (ub) ub.style.display = 'none';
   if (pv) pv.style.display = 'none';
+  peVcRenderLangs([]);
+  if (String(pid || '') !== _peVcResultPid) peVcResultHide();   /* Q-22 E: result panel is per persona */
   if (!c || !_peVcPid || !c.voiceProfiles) return;
   try {
     var d = await c.voiceProfiles();
@@ -9215,6 +9223,9 @@ async function peVcSync(pid){
     /* L-2 #205: label by what is actually there (recording file), never by voice-id text --
        Mizuki (avatar_clone + ja-JP-NanamiNeural, no recording) used to read "bound: ja-JP-NanamiNeural". */
     var _refName = (typeof _vmRefName === 'function' && _vmLoaded && _vmLoaded.vp) ? _vmRefName(_vmLoaded.vp) : '';
+    /* Q-22 B (#288): clone voice capability line -- which languages this clone will actually speak
+       (same source as effective-config.voice_langs). Empty = unknown -> line hidden, never guessed. */
+    peVcRenderLangs(row && row.is_clone ? (row.voice_langs || []) : []);
     if (row && row.is_clone && row.ready) {
       _peVcFile = _refName || row.speaker_id || row.voice || '';
       st.textContent = window.Tf('psn_vc_bound', {voice: _peVcFile});
@@ -9333,7 +9344,101 @@ if (typeof _fillDrawerFields === 'function') {
    snapshot would push backend:"" over the fresh clone profile (server guards it,
    but the form/status line must not lie either). Re-fetch and refill voice
    fields + rev so a later save carries the real clone backend. */
-async function peVcAfterEnrolled(pid, announce){
+/* Q-22 B (#288): "clone voice speaks: zh / en" line under the card status. */
+function _peVcLangName(code){
+  var c = String(code || '').toLowerCase();
+  try {
+    if (window.CopilotShared && typeof window.CopilotShared.langName === 'function') {
+      var n = window.CopilotShared.langName(c); if (n) return n;
+    }
+  } catch (_e) {}
+  var k = 'lang_' + c;
+  var v = window.T(k);
+  return (v && v !== k) ? v : c;
+}
+function peVcRenderLangs(langs){
+  var el = document.getElementById('pe-vc-langs');
+  if (!el) return;
+  var arr = Array.isArray(langs) ? langs.filter(Boolean) : [];
+  if (!arr.length) { el.style.display = 'none'; el.textContent = ''; el.removeAttribute('data-langs'); return; }
+  el.textContent = window.Tf('psn_vc_langs', {langs: arr.map(_peVcLangName).join(' / ')});
+  el.setAttribute('data-langs', arr.join(','));
+  el.style.display = '';
+}
+/* Q-22 E (#239): persistent enrollment result panel (replaces the 8s toast that flashed by).
+   Closes only on ×; success = outcome + recording + ▶ audition + supported languages + health
+   (probe running → "filling in within minutes", verdict lands via 'persona-voice-audition');
+   failure = reason + raw server message kept verbatim so support can be given the exact text. */
+var _peVcResultPid = '';
+function peVcResultHide(){
+  var el = document.getElementById('pe-vc-result');
+  if (el) { el.hidden = true; el.innerHTML = ''; el.removeAttribute('data-outcome'); }
+  _peVcResultPid = '';
+}
+function peVcRenderResult(pid, ok, det){
+  var el = document.getElementById('pe-vc-result');
+  if (!el) return;
+  det = det || {};
+  _peVcResultPid = String(pid || '');
+  var head = ok
+    ? '<b style="color:var(--th-ink-green7,#15803d)">✓ ' + _escHtml(window.Tf('psn_vc_res_ok', {file: (det.reference && det.reference.file) || _peVcFile || pid})) + '</b>'
+    : '<b style="color:var(--th-ink-red7,#b91c1c)">❌ ' + _escHtml(window.T('psn_vc_res_fail')) + '</b>';
+  var rows = [];
+  if (ok) {
+    var langs = Array.isArray(det.supported_langs) ? det.supported_langs.filter(Boolean) : [];
+    rows.push(_escHtml(langs.length
+      ? window.Tf('psn_vc_langs', {langs: langs.map(_peVcLangName).join(' / ')})
+      : window.T('psn_vc_langs_unknown')));
+    var hz = det.health || {};
+    var last = hz.last || {};
+    if (last.label) rows.push(_escHtml(window.Tf('psn_vc_res_health_last', {label: String(last.label), score: (last.score == null ? '-' : String(last.score))})));
+    else rows.push(_escHtml(window.T(hz.probe_spawned ? 'psn_vc_res_health_running' : 'psn_vc_res_health_pending')));
+    var qz = det.quality || {};
+    if (qz.curated) rows.push(_escHtml(window.T('psn_vc_res_q_curated')));
+    if (qz.level === 'warn' && Array.isArray(qz.issues) && qz.issues.length) rows.push(_escHtml(qz.issues.join(' / ')));
+    rows.push('<span id="pe-vc-res-verdict" data-role="vc-res-verdict"></span>');
+  } else {
+    var why = String(det.reason || '') || 'unknown';
+    rows.push(_escHtml(window.Tf('psn_vc_res_reason', {reason: why})));
+    if (det.message) rows.push('<code style="white-space:pre-wrap;word-break:break-all;font-size:.68rem">' + _escHtml(String(det.message)) + '</code>');
+    var qf = det.quality || {};
+    if (Array.isArray(qf.tips) && qf.tips.length) rows.push(_escHtml(qf.tips.join(' ')));
+  }
+  el.innerHTML = '<div style="display:flex;align-items:flex-start;gap:.5rem;">'
+    + '<div style="flex:1;min-width:0;">' + head
+    + (ok ? ' <button type="button" class="btn btn-xs" onclick="peVcPreview()">▶ ' + _escHtml(window.T('psn_vm_preview')) + '</button>' : '')
+    + '<div style="margin-top:.25rem;color:var(--t2);">' + rows.join('<br>') + '</div></div>'
+    + '<button type="button" class="btn btn-xs" data-act="vc-res-close" onclick="peVcResultHide()" title="' + _escAttr(window.T('psn_vc_toast_close')) + '" aria-label="' + _escAttr(window.T('psn_vc_toast_close')) + '">×</button>'
+    + '</div>';
+  el.setAttribute('data-outcome', ok ? 'ok' : 'fail');
+  el.style.borderColor = ok ? 'var(--th-ink-green7,#15803d)' : 'var(--th-ink-red7,#b91c1c)';
+  el.hidden = false;
+  try { peVcResultVerdict(pid); } catch (_e) {}
+}
+/* audition verdict back-fill into the result panel (same record the voice-check row reads) */
+function peVcResultVerdict(pid){
+  var slot = document.getElementById('pe-vc-res-verdict');
+  if (!slot || String(pid || '') !== _peVcResultPid) return;
+  var rec = (window.__PSN_VOICE_AUDITION || {})[String(pid || '')];
+  if (!rec) { slot.textContent = ''; return; }
+  var key = _peVqVerdictKey(rec.voice_meta || {});
+  var d = new Date(Number(rec.ts) || Date.now());
+  var hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
+  slot.textContent = window.Tf(key, {time: hh + ':' + mm, basis: String((rec.voice_meta || {}).speech_basis || (rec.voice_meta || {}).energy || '-')});
+  slot.style.color = key === 'psn_vq_aud_ok' ? 'var(--th-ink-green7,#15803d)'
+    : (key === 'psn_vq_aud_unverified' ? 'var(--t2)' : 'var(--th-ink-red7,#b91c1c)');
+}
+document.addEventListener('persona-voice-audition', function (ev) {
+  var rec = (ev && ev.detail) || {};
+  try { peVcResultVerdict(rec.persona_id); } catch (_e) {}
+});
+document.addEventListener('cp-voice-enroll-failed', function(ev){
+  var det = (ev && ev.detail) || {};
+  var pid = String(det.persona_id || _peVcPid || '');
+  if (!pid || pid !== String(_editingProfileId || '')) return;
+  peVcRenderResult(pid, false, det);
+});
+async function peVcAfterEnrolled(pid, announce, det){
   pid = String(pid || '');
   if (!pid || pid !== String(_editingProfileId || '')) return;
   try {
@@ -9354,19 +9459,32 @@ async function peVcAfterEnrolled(pid, announce){
     if (typeof _refreshAdvPanel === 'function') { try { _refreshAdvPanel(); } catch (_e) {} }
     if (announce && vp.backend) {
       /* #239: the enrollment itself is already persisted server-side (voice_profile written) --
-         say so, name the recording (not the backend id), keep it >= 8s and closable. */
+         say so, name the recording (not the backend id). Q-22 E: the announcement is now the
+         persistent result panel (closes on × only); the old toast stays as fallback when the
+         panel element is absent (older template builds). */
       var _file = (typeof _vmRefName === 'function') ? _vmRefName(vp) : '';
-      _peVcToast(_escHtml(window.Tf('psn_vc_enrolled_ok', {file: _file || pid})), 9000);
+      _peVcFile = _file || _peVcFile;
+      if (document.getElementById('pe-vc-result')) {
+        var _det = det || {};
+        if (!_det.reference || !_det.reference.file) _det.reference = {file: _file || pid};
+        peVcRenderResult(pid, true, _det);
+      } else {
+        _peVcToast(_escHtml(window.Tf('psn_vc_enrolled_ok', {file: _file || pid})), 9000);
+      }
     }
   } catch (_e) { /* best-effort: server-side guard still protects the clone profile */ }
   try { peVcSync(pid); } catch (_e) {}
 }
 document.addEventListener('cp-voice-enrolled', function(ev){
   var det = (ev && ev.detail) || {};
-  peVcAfterEnrolled(det.persona_id || '', true);
+  // Q-22 E: hand the whole detail (supported_langs / preview / health / quality) to the result panel
+  peVcAfterEnrolled(det.persona_id || '', true, det);
 });
 window.peVcSync = peVcSync;
 window.peVcUnbind = peVcUnbind;
 window.peVcAfterEnrolled = peVcAfterEnrolled;
+window.peVcResultHide = peVcResultHide;        /* Q-22 E: inline onclick on the panel × */
+window.peVcRenderResult = peVcRenderResult;
+window.peVcRenderLangs = peVcRenderLangs;      /* Q-22 B */
 </script>
 {% endblock %}

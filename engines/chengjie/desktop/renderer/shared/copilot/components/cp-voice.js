@@ -464,17 +464,18 @@
           account_id: c.accountId || undefined,
         });
         if (epoch !== this._epoch) return;   // 会话已切换：陈旧回写作废
-        if (!d || d.ok === false) { this._hideEffStatus(); this._effVoiceLangs = null; return; }
+        if (!d || d.ok === false) { this._hideEffStatus(); this._effVoiceLangs = null; this._effIsClone = false; this._syncGenGate(""); return; }
         // 老后端护栏：响应缺新字段（hub_strict 等）＝服务端还没装载本批解析
         // （不认 chat_key 入参）——此时渲染的是「无会话上下文」的错误解析，
         // 与真实发送不同源。宁可不显示，不显示错的。
-        if (!("hub_strict" in d)) { this._hideEffStatus(); this._effVoiceLangs = null; return; }
+        if (!("hub_strict" in d)) { this._hideEffStatus(); this._effVoiceLangs = null; this._effIsClone = false; this._syncGenGate(""); return; }
         // 译声预告数据源：会话客户语言（与发送侧 'auto' 解析同源）。旧后端缺
         // conv_lang 键 → null=不预告（特性探测，不显示错的）。
         this._effConvLang = ("conv_lang" in d) ? String(d.conv_lang || "").toLowerCase() : null;
         // 语言能力守卫数据源（特性探测：旧后端缺键/空列表 → null=不判不冤枉）
         this._effVoiceLangs = (Array.isArray(d.voice_langs) && d.voice_langs.length)
           ? d.voice_langs.map((x) => String(x || "").toLowerCase()) : null;
+        this._effIsClone = !!d.is_clone;   // Q-22 B：只对克隆声做「目标语超能力 → 按钮置灰」
         this._syncXlHint();
         const pid = d.persona_id || "";
         let name;
@@ -489,6 +490,11 @@
         const bits = [this._t("cp.voice.eff_line",
           { name, backend: this._backendLabel(d.backend) })];
         if (d.is_clone) bits.push(d.ready ? "🎤" : this._t("cp.voice.eff_not_ready"));
+        // Q-22 B（#288）：克隆声会念的语种常驻状态行（能力边界先于发送可见；空=未知不显示）
+        if (d.is_clone && this._effVoiceLangs) {
+          bits.push(this._t("cp.voice.eff_langs",
+            { langs: this._effVoiceLangs.map((x) => this._langName(x)).join(" / ") }));
+        }
         /* P1 降噪（2026-08-31）：状态行只留 健康点+名字·后端+短风险牌，整句
            风险/来源/体检分收进「详情」折叠区——截图实录里琥珀长句常驻面板
            前三行，重要的（会拒发）与次要的（曾失败）没有层级。短牌+点色
@@ -800,6 +806,8 @@
       // 顶部预告让位——同一件事两处黄牌是 0831 提示风暴的成因之一。
       const langNote = this.shadowRoot.querySelector(
         '[data-role="fallback-note"][data-reason="lang"]');
+      // Q-22 B：语种闸缺省松开，只有下面「目标语超出克隆声能力」一条路径收紧
+      this._syncGenGate("");
       if (langNote && !langNote.hidden) { paint("", false); return; }
       if (!this._xlOn) { paint(this._t("cp.voice.xl_off"), false); return; }
       const tgt = this._xlTarget();   // 'auto' | 显式语种码
@@ -808,13 +816,37 @@
       if (lang === null) { paint("", false); return; }   // 特性探测：不显示错的
       if (!lang) { paint(this._t("cp.voice.xl_unknown"), false); return; }
       const code = String(lang).toLowerCase();
-      if (code === "yue") { paint(this._t("cp.voice.xl_yue_warn"), true); return; }
+      // 粤语音系警示照旧；Q-22：克隆声且能力表无 yue → 走下面置灰（服务端语种闸同口径会阻断）
+      if (code === "yue" && !(this._effIsClone && this._langUnsupported("yue"))) { paint(this._t("cp.voice.xl_yue_warn"), true); return; }
       if (this._langUnsupported(code)) {
         paint(this._t("cp.voice.xl_engine_unsupported",
           { lang: this._langName(code) }), true);
+        // Q-22 B（#288）：克隆声念不了目标语 → 生成按钮置灰带原因（服务端本就会阻断，
+        // 与其让坐席点了再撞红条，不如按钮上就写明「不支持 ja · 会念 zh / en」）。
+        // 预置声（edge）不置灰：voice_langs 是全集，超出＝真没这语种的系统音，仍由服务端判。
+        if (this._effIsClone) this._syncGenGate(code);
         return;
       }
       paint(this._t("cp.voice.xl_to", { lang: this._langName(code) }), false);
+    }
+    /* Q-22 B：生成按钮的语种闸。code 非空＝置灰 + title 写原因 + data-lang-blocked；
+       空＝松开（其余禁用条件 busy/超限照旧）。_setBusy/_syncCounter 也读 _langBlockedCode。 */
+    _syncGenGate(code) {
+      this._langBlockedCode = String(code || "");
+      const main = this.shadowRoot.querySelector('[data-role="gen-main"]');
+      if (!main) return;
+      if (this._langBlockedCode) {
+        main.disabled = true;
+        main.setAttribute("data-lang-blocked", this._langBlockedCode);
+        main.title = this._t("cp.voice.gen_lang_blocked_t", {
+          lang: this._langName(this._langBlockedCode),
+          langs: (this._effVoiceLangs || []).map((x) => this._langName(x)).join(" / ") || "-",
+        });
+      } else {
+        main.removeAttribute("data-lang-blocked");
+        main.title = "";
+        main.disabled = !!this._busy || this._text().length > this._maxChars;
+      }
     }
     /* 目标语是否超出当前音色主路的可念语种（voice_langs 缺席/空=不判不冤枉）。
        前缀比较（zh-tw→zh）：变体归母语种，避免对繁体中文这类同引擎可念的
@@ -958,6 +990,14 @@
       this._genConfirmSys = false;
       const text = this._text();
       if (!text) { this._hint(this._t("cp.voice.need_text"), false); return; }
+      // Q-22 B：语种闸双保险（按钮已置灰；键盘/时序穿透也拦，原因同 title）
+      if (this._langBlockedCode) {
+        this._hint(this._t("cp.voice.gen_lang_blocked_t", {
+          lang: this._langName(this._langBlockedCode),
+          langs: (this._effVoiceLangs || []).map((x) => this._langName(x)).join(" / ") || "-",
+        }), false);
+        return;
+      }
       if (text.length > this._maxChars) {   // 超限前端先拦（服务端同上限，省一次白跑）
         this._hint(this._t("cp.voice.too_long", { max: this._maxChars }), false);
         return;
@@ -1561,13 +1601,24 @@
           this.dispatchEvent(new CustomEvent("cp-voice-enrolled", {
             bubbles: true, composed: true,
             detail: { persona_id: persona, mode: String(d.mode || ""),
-                      reference_audio_path: String(d.reference_audio_path || "") },
+                      reference_audio_path: String(d.reference_audio_path || ""),
+                      // Q-22 E（#239）：结果面板数据——支持语种 / 试听描述符 / 体检状态 / 质检
+                      supported_langs: Array.isArray(d.supported_langs) ? d.supported_langs : [],
+                      preview: d.preview || null, health: d.health || null, quality: qz },
           }));
           await this._audition(persona);
         } else {
           const qz = (d && d.quality) || {};
           const tips = (Array.isArray(qz.tips) && qz.tips.length) ? " " + qz.tips.join(" ") : "";
           hint.textContent = "❌ " + ((d && (d.message || d.reason)) || this._t("cp.voice.enroll_failed")) + tips;
+          /* Q-22 E（#239）：失败也广播给宿主——人设页结果面板保留原始错误文本（不只一行
+             会被下一次提示顶掉的 hint），坐席拿包/报障有据。 */
+          this.dispatchEvent(new CustomEvent("cp-voice-enroll-failed", {
+            bubbles: true, composed: true,
+            detail: { persona_id: persona, reason: String((d && d.reason) || ""),
+                      message: String((d && (d.message || d.error || d.detail)) || ""),
+                      quality: qz, raw: d || null },
+          }));
           if (d && /^ref_/.test(String(d.reason || ""))) {
             // 质检拒绝 → 主管逃生门：同素材带 force 重新提交
             hint.insertAdjacentHTML(
@@ -1575,7 +1626,13 @@
               ` <button data-act="enroll-force" title="${this._esc(this._t("cp.voice.force_t"))}">${this._esc(this._t("cp.voice.force_btn"))}</button>`);
           }
         }
-      } catch (e) { hint.textContent = "❌ " + this._t("cp.voice.req_fail"); }
+      } catch (e) {
+        hint.textContent = "❌ " + this._t("cp.voice.req_fail");
+        this.dispatchEvent(new CustomEvent("cp-voice-enroll-failed", {
+          bubbles: true, composed: true,
+          detail: { persona_id: persona, reason: "network", message: String((e && e.message) || e || ""), quality: {}, raw: null },
+        }));
+      }
     }
 
     async _audition(persona_id) {
@@ -1685,7 +1742,7 @@
       el.textContent = `${n}/${this._maxChars}`;
       el.classList.toggle("err", n > this._maxChars);
       const main = this.shadowRoot.querySelector('[data-role="gen-main"]');
-      if (main) main.disabled = !!this._busy || n > this._maxChars;
+      if (main) main.disabled = !!this._busy || n > this._maxChars || !!this._langBlockedCode;
     }
 
     /* 预览过期判定：文字、音色或译声设置与生成基准不一致（发送是服务端按**当前**
@@ -1827,7 +1884,7 @@
       const main = this.shadowRoot.querySelector('[data-role="gen-main"]');
       if (main) {
         // 解除 busy 时超限禁用要保留（否则清 busy 会把超限文本的生成按钮重新点亮）
-        main.disabled = !!this._busy || this._text().length > this._maxChars;
+        main.disabled = !!this._busy || this._text().length > this._maxChars || !!this._langBlockedCode;
         if (this._busy === "tts") main.textContent = this._t("cp.voice.gen_busy_btn");
         else main.innerHTML = this._genLabelHtml();   // 恢复图标+动词标签（textContent 会抹掉 SVG）
       }
