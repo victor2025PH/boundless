@@ -21,6 +21,47 @@ def test_logout_lands_on_manual_login(auth_client):
     r = auth_client.get("/logout", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/login?manual=1"
+    # 服务端兜底信号：短命 cookie（老壳不认 manual=1，靠它拒掉令牌代登）
+    sc = r.headers.get("set-cookie", "")
+    assert "manual_logout=1" in sc and "Max-Age=120" in sc and "HttpOnly" in sc
+
+
+def test_silent_token_relogin_rejected_right_after_logout(client, config_dir):
+    """老版桌面壳：退出 → 落 /login → 页内 fetch POST auth_token（不带 manual）→ 必须拒建会话。
+    人在 manual 态登录页按令牌登录（带 manual=1）→ 照常放行；成功后 cookie 清掉。"""
+    from src.utils.web_user_store import ROLE_MASTER, WebUserStore
+    store = WebUserStore(config_dir / "web_users.db")
+    if store.user_count() == 0:
+        store.create_user("admin", "test-token-123", ROLE_MASTER)
+    client.post("/login", data={"auth_token": "test-token-123"}, follow_redirects=False)
+    assert client.get("/users", follow_redirects=False).status_code == 200
+    client.get("/logout", follow_redirects=False)
+    assert client.cookies.get("manual_logout") == "1"
+    # ① 壳的静默代登：令牌正确，但退出后 120s 内且无 manual=1 → 回手动态登录页，不建会话
+    r = client.post("/login", data={"auth_token": "test-token-123"}, follow_redirects=False)
+    assert r.status_code == 200 and 'id="manual-note"' in r.text
+    r2 = client.get("/users", follow_redirects=False)
+    assert r2.status_code in (302, 303) and "/login" in r2.headers.get("location", "")
+    # ② 人在登录页按令牌登录（表单带 manual=1）→ 放行，cookie 清掉
+    r3 = client.post("/login", data={"auth_token": "test-token-123", "manual": "1"},
+                     follow_redirects=False)
+    assert r3.status_code == 303
+    assert client.get("/users", follow_redirects=False).status_code == 200
+    assert not client.cookies.get("manual_logout")
+
+
+def test_password_login_after_logout_unaffected(client, config_dir):
+    """账号密码路径不设关卡（壳的密码回退极少配置；改密后测试/脚本常见「退出→立刻登录」）。"""
+    from src.utils.web_user_store import ROLE_MASTER, WebUserStore
+    store = WebUserStore(config_dir / "web_users.db")
+    if store.user_count() == 0:
+        store.create_user("admin", "test-token-123", ROLE_MASTER)
+    store.create_user("agent_relogin", "pass123456", "agent", "")
+    client.get("/logout", follow_redirects=False)
+    r = client.post("/login", data={"username": "agent_relogin", "password": "pass123456"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/workspace"
+    assert not client.cookies.get("manual_logout")
 
 
 def test_login_page_manual_mode_renders_note_and_passthrough(client, config_dir):

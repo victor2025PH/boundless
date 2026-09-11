@@ -49,6 +49,11 @@ from src.web.i18n_packs import UI_LANGS
 from src.web.login_redirect import resolve_post_login_dest, safe_next_path
 from src.web.web_i18n import tr
 
+# 用户管理 P0-1 服务端兜底：/logout 下发的「刚主动退出」短命 cookie。窗口只需盖住桌面壳
+# 落地 /login 后的静默代登（主 webview 即刻一次；后台弹窗最多 3 次、间隔 8s），故 120s。
+_MANUAL_LOGOUT_COOKIE = "manual_logout"
+_MANUAL_LOGOUT_TTL = 120
+
 
 def register_auth_user_routes(
     app,
@@ -157,6 +162,12 @@ def register_auth_user_routes(
                            username: str = Form(None), password: str = Form(None),
                            next: str = Form(""), manual: str = Form("")):
         _manual = manual == "1"
+        # 用户管理 P0-1 服务端兜底（2026-09-11）：刚主动退出（/logout 下发的短命 cookie 还在）
+        # 且本次提交不带 manual=1 ＝ 桌面壳的静默代登（renderer.js / main.js 都是页内
+        # fetch('/login') 自动 POST，不经登录页表单）→ 不建会话、回登录页手动态。
+        # 让**老版桌面包不升级**也能真正退出：老壳凭据用尽后露出登录页人工登录。
+        # 人在登录页按的按钮（manual 态表单带 manual=1）不受影响。
+        _just_logged_out = request.cookies.get(_MANUAL_LOGOUT_COOKIE) == "1"
         ip = request.client.host if request.client else ""
         ua = request.headers.get("user-agent", "")[:200]
         # multi-user login
@@ -178,12 +189,20 @@ def register_auth_user_routes(
                 _lang = (user.get("lang") or "").strip().lower()
                 if _lang in UI_LANGS:
                     resp.set_cookie("ui_lang", _lang, max_age=365 * 86400)
+                if _just_logged_out:
+                    resp.delete_cookie(_MANUAL_LOGOUT_COOKIE)
                 return resp
             return templates.TemplateResponse(request, "login.html", _login_ctx(
                 request, error=tr(request, "err.auth.bad_credentials"), next_raw=next,
                 manual=_manual))
         # legacy token login（S6：恒定时间比较，防时序侧信道）
         if auth_token and token and hmac.compare_digest(str(auth_token), str(token)):
+            if _just_logged_out and not _manual:
+                # 令牌对但这是退出后 120 秒内的静默代登 → 拒建会话（不报「令牌错误」，
+                # 只回手动态登录页；壳随后 location.replace 目标页会被 require_auth 打回
+                # /login，老壳凭据用尽即露出登录页）
+                return templates.TemplateResponse(request, "login.html", _login_ctx(
+                    request, next_raw=next, manual=True))
             # #186：桌面壳每次启动都走这里 → 同设备旧会话随新登录作废（只留最近一条），
             # 并给主帐号记 last_login（此前令牌直登不经 verify()，用户卡永远「登录：从未」）。
             jti = user_store.create_session("admin", ROLE_MASTER, ip, ua,
@@ -198,7 +217,10 @@ def register_auth_user_routes(
             request.session["jti"] = jti
             # 令牌直登：默认仍 `/`；若显式带合法 next（交付深链）则尊重
             _dest = resolve_post_login_dest(next_raw=next, role_default="/")
-            return RedirectResponse(_dest, status_code=303)
+            resp = RedirectResponse(_dest, status_code=303)
+            if _just_logged_out:
+                resp.delete_cookie(_MANUAL_LOGOUT_COOKIE)
+            return resp
         return templates.TemplateResponse(request, "login.html", _login_ctx(
             request, error=tr(request, "token_error"), next_raw=next, manual=_manual))
 
@@ -208,8 +230,12 @@ def register_auth_user_routes(
         if jti:
             user_store.revoke_session(jti)
         request.session.clear()
-        # manual=1：告诉桌面壳「这是人主动退出」，别再拿 backend.token 秒级重登（见 _login_ctx）
-        return RedirectResponse("/login?manual=1", status_code=303)
+        # manual=1：告诉桌面壳「这是人主动退出」，别再拿 backend.token 秒级重登（见 _login_ctx）；
+        # 短命 cookie 是同一信号的服务端兜底（老壳不认 manual=1，令牌代登在 login_submit 被拒）。
+        resp = RedirectResponse("/login?manual=1", status_code=303)
+        resp.set_cookie(_MANUAL_LOGOUT_COOKIE, "1", max_age=_MANUAL_LOGOUT_TTL,
+                        httponly=True, samesite="lax")
+        return resp
 
     # ── 首次使用配置向导 ──────────────────────────────────────
     @app.get("/setup", response_class=HTMLResponse)
