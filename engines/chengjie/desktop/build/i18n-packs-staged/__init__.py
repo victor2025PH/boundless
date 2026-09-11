@@ -67,6 +67,13 @@ UI_LOCALES: Dict[str, str] = {
     "zh": "zh-CN", "en": "en-US", "vi": "vi-VN", "th": "th-TH", "id": "id-ID",
     "zh_hant": "zh-Hant",
 }
+# 语言母语自称（endonym，2026-09-12）：切换入口显示「当前语言」用。选择器惯例是不随
+# UI 语言翻译，故不进词包。与 _i18n_bootstrap.html 的 WS_UI_LANGS 同序同名——
+# base/login/setup 页此前各自写死 'EN'/'ZH' 二元标签，与六语菜单对不上。
+UI_LANG_NATIVE: Dict[str, str] = {
+    "zh": "中文", "zh_hant": "繁體中文", "en": "English",
+    "vi": "Tiếng Việt", "th": "ไทย", "id": "Bahasa Indonesia",
+}
 # 扩展语缺键回落底（zh_hant P2，2026-08-27）：默认英文底；繁体缺键回落**简体**
 # ——繁体坐席看简体可读，看英文才是断崖。消费方 web_i18n._merge_views。
 # 注：zh_hant 由 scripts/i18n_hant.py 从简体全量转换生成（zh_hant_auto.py，

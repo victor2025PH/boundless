@@ -90,7 +90,7 @@
         },
         "machine_fingerprint": {
           "type": ["string", "null"],
-          "description": "机器指纹（avatarhub：XXXX-XXXX-XXXX-XXXX 展示指纹，'*' 为站点授权）；chengjie 不绑机，恒 null"
+          "description": "机器指纹。avatarhub：XXXX-XXXX-XXXX-XXXX 展示指纹，'*' 为站点授权。chengjie：payload.machine（2026-08 起试用授权 build_trial_payload 绑机、license_tool --machine 换机重签写入，'*' 为站点授权）；payload 无 machine 字段 = 不绑机 → null"
         },
         "issued_at": {
           "type": ["string", "null"],
