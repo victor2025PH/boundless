@@ -11,6 +11,11 @@
   写入，线上新写口已强制 evidence；有 evidence 的存量视为可锚定，不去翻会话历史——画像行没有
   账号维度，跨账号反查代价与误删风险都不值）。昵称来源不要求 evidence（evidence 就是昵称）。
 
+Q-25（#295 #300）二期：``--memory`` 同门扫 **记忆链**（episodic_memory）——只判 ``source=ai_inferred`` 的
+LLM 事实（``user_stated`` 客户原话正则一字不动），判据 = ``src.companion.fact_gate.check(kind=fact)``：
+无 ``source_quote`` → ``no_evidence``；事实含合体主语（一起 / 我们 / together…）而引文没有 → ``subject``；
+事实里的名字 / 数字不在引文里 → ``unanchored``。``--apply`` 硬删命中行（``DELETE … WHERE id``）。
+
 用法（引擎目录下）::
 
     python tools/profile_purge_unanchored.py                 # = --dry-run：只列出，不动库
@@ -18,9 +23,13 @@
     python tools/profile_purge_unanchored.py --apply         # 真删（先看一遍 dry-run 输出）
     python tools/profile_purge_unanchored.py --db D:\\path\\marketing_goals.db --apply
     python tools/profile_purge_unanchored.py --platform telegram --chat-key 7340576921
+    python tools/profile_purge_unanchored.py --memory --dry-run             # Q-25：扫记忆链
+    python tools/profile_purge_unanchored.py --memory --user-id telegram:7543790794 --dry-run
+    python tools/profile_purge_unanchored.py --memory --memory-db D:\\path\\bot.db --apply
 
 库路径：``--db`` 显式 > ``companion.goals.db_path``（config.yaml / config.local.yaml）>
 ``<数据根>/config/marketing_goals.db``（``AITR_DATA_ROOT`` / 实例根发现，与 goal_sprint_drill 同口径）。
+记忆库：``--memory-db`` 显式 > ``memory.db_path`` > ``<数据根>/config/bot.db``（与 skill_manager 同口径）。
 
 回访说明（发版对账 v1.0.82 Q-19）：
 1. 先 ``--dry-run`` 看清单：每行 ``platform:chat_key slot=… source=… reason=… value=…``；
@@ -125,6 +134,145 @@ def purge(store: Any, rows: List[Dict[str, Any]], *, apply: bool) -> int:
     return n
 
 
+# ── Q-25（#295 #300）：记忆链同门 ────────────────────────────────────────────────
+
+_MEMORY_AUTO_SOURCES = ("ai_inferred",)
+
+
+def judge_memory_row(content: Any, source: Any, source_quote: Any) -> str:
+    """episodic 一行 → 原因（空串＝保留）。只判 ``source=ai_inferred``；``user_stated`` 恒保留。
+    判据 = ``fact_gate.check(kind=fact, evidence=source_quote, inbound_texts=[source_quote])``：
+    引文在不在客户入站里这一步在存量上无从核（库里只有引文），退化为 no_evidence / subject /
+    名字数字锚定三条。"""
+    src = str(source or "").strip().lower()
+    c = str(content or "").strip()
+    if not c or src not in _MEMORY_AUTO_SOURCES:
+        return ""
+    q = str(source_quote or "").strip()
+    try:
+        from src.companion.fact_gate import check as _gate_check
+        ok, why = _gate_check(c, slot_or_kind="fact", evidence=q, inbound_texts=[q] if q else [])
+    except Exception:
+        return "gate_error"
+    return "" if ok else (why or "unanchored")
+
+
+def _memory_conn(db: Path, *, readonly: bool) -> sqlite3.Connection:
+    if readonly:
+        conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def scan_memory(conn: sqlite3.Connection, *, user_id: str = "") -> List[Dict[str, Any]]:
+    """遍历 episodic_memory 的 ``source=ai_inferred`` 行 → 命中清单。"""
+    out: List[Dict[str, Any]] = []
+    sql = ("SELECT id, user_id, content, COALESCE(source, 'user_stated') AS source,"
+           " COALESCE(source_quote, '') AS source_quote, COALESCE(status, 'active') AS status"
+           " FROM episodic_memory WHERE COALESCE(source, 'user_stated') = 'ai_inferred'")
+    args: List[Any] = []
+    if user_id:
+        sql += " AND user_id LIKE ?"
+        args.append(f"%{user_id}%")
+    try:
+        rows = conn.execute(sql, args).fetchall()
+    except sqlite3.Error as exc:
+        print(f"! 读取 episodic_memory 失败: {exc}", file=sys.stderr)
+        return out
+    for r in rows:
+        why = judge_memory_row(r["content"], r["source"], r["source_quote"])
+        if not why:
+            continue
+        out.append({"id": int(r["id"]), "user_id": str(r["user_id"] or ""), "fact": str(r["content"] or ""),
+                    "source": str(r["source"] or ""), "quote": str(r["source_quote"] or ""),
+                    "status": str(r["status"] or ""), "reason": why})
+    return out
+
+
+def purge_memory(conn: sqlite3.Connection, rows: List[Dict[str, Any]], *, apply: bool) -> int:
+    """按扫描结果硬删（``DELETE FROM episodic_memory WHERE id=?``）。dry-run → 0。删前二次判定。"""
+    if not apply or not rows:
+        return 0
+    n = 0
+    for r in rows:
+        try:
+            cur = conn.execute(
+                "SELECT content, COALESCE(source, 'user_stated'), COALESCE(source_quote, '')"
+                " FROM episodic_memory WHERE id = ?", (int(r["id"]),)).fetchone()
+            if not cur or not judge_memory_row(cur[0], cur[1], cur[2]):
+                continue
+            n += int(conn.execute("DELETE FROM episodic_memory WHERE id = ?", (int(r["id"]),)).rowcount or 0)
+        except sqlite3.Error as exc:
+            print(f"! 删除 id={r.get('id')} 失败: {exc}", file=sys.stderr)
+    conn.commit()
+    return n
+
+
+def _resolve_memory_db(cli_db: str, data_root: str) -> Optional[Path]:
+    if cli_db:
+        return Path(cli_db)
+    try:
+        from scripts._data_root import load_merged_config, resolve_data_roots
+        for root in resolve_data_roots(data_root):
+            cfg = load_merged_config(Path(root)) or {}
+            mdb = ((cfg.get("memory") or {}).get("db_path") or "")
+            p = Path(str(mdb)) if mdb else Path(root) / "config" / "bot.db"
+            if not p.is_absolute() and mdb:
+                p = Path(root) / p
+            if p.is_file():
+                return p
+    except Exception as exc:  # noqa: BLE001
+        print(f"! 解析记忆库路径失败: {exc}", file=sys.stderr)
+    fallback = _ENGINE_ROOT / "config" / "bot.db"
+    return fallback if fallback.is_file() else None
+
+
+def _fmt_memory(r: Dict[str, Any]) -> str:
+    f = str(r["fact"]).replace("\n", " ")
+    f = f if len(f) <= 60 else f[:59] + "…"
+    q = str(r.get("quote") or "").replace("\n", " ")
+    q = f" quote={q[:40]!r}" if q else ""
+    return (f"memory id={r['id']} key={r['user_id']} source={r['source']} "
+            f"reason={r['reason']} fact={f!r}{q}")
+
+
+def run_memory(args: Any) -> int:
+    """``--memory`` 分支：扫 / 删 episodic_memory 的不可锚定 ai_inferred 事实。"""
+    db = _resolve_memory_db(args.memory_db, args.data_root)
+    if db is None or not Path(db).is_file():
+        print("! 找不到记忆库（--memory-db 指定或检查 memory.db_path）", file=sys.stderr)
+        return 2
+    apply = bool(args.apply) and not args.dry_run
+    try:
+        conn = _memory_conn(Path(db), readonly=not apply)
+    except sqlite3.Error as exc:
+        print(f"! 打开记忆库失败 {db}: {exc}", file=sys.stderr)
+        return 2
+    rows = scan_memory(conn, user_id=args.user_id)
+    if args.json:
+        print(json.dumps({"db": str(db), "kind": "memory", "apply": apply, "count": len(rows), "rows": rows},
+                         ensure_ascii=False, indent=1))
+    else:
+        print(f"# memory db={db} mode={'APPLY' if apply else 'dry-run'} hits={len(rows)}")
+        for r in rows:
+            print(_fmt_memory(r))
+        dist: Dict[str, int] = {}
+        for r in rows:
+            dist[r["reason"]] = dist.get(r["reason"], 0) + 1
+        if dist:
+            print("# reasons: " + ", ".join(f"{k}={v}" for k, v in sorted(dist.items())))
+    if apply:
+        n = purge_memory(conn, rows, apply=True)
+        print(json.dumps({"deleted": n}, ensure_ascii=False) if args.json
+              else f"# deleted {n} memory row(s); rerun --memory --dry-run to verify 0")
+    elif rows and not args.json:
+        print("# dry-run：未改库。确认后加 --apply")
+    conn.close()
+    return 0
+
+
 def _resolve_db(cli_db: str, data_root: str) -> Optional[Path]:
     if cli_db:
         return Path(cli_db)
@@ -165,7 +313,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="只列出（默认行为）")
     ap.add_argument("--apply", action="store_true", help="真删（不带 = dry-run）")
     ap.add_argument("--json", action="store_true", help="JSON 输出")
+    ap.add_argument("--memory", action="store_true",
+                    help="Q-25：改扫记忆链 episodic_memory（只判 source=ai_inferred）")
+    ap.add_argument("--memory-db", default="", help="记忆库路径（缺省按 memory.db_path / 数据根 config/bot.db）")
+    ap.add_argument("--user-id", default="", help="--memory 时只扫 user_id 含此串的行（如 telegram:7543790794）")
     args = ap.parse_args(argv)
+    if args.memory:
+        return run_memory(args)
     db = _resolve_db(args.db, args.data_root)
     if db is None or not Path(db).is_file():
         print("! 找不到 goals 库（--db 指定或检查 companion.goals.db_path）", file=sys.stderr)
