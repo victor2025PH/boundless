@@ -1086,6 +1086,22 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     translation_info = res.to_dict()
                 elif not res.ok:
                     _xlate_failed = True
+                # #276 Q-16（2026-09-11）：手发直发的出站翻译在这里发生——落一行
+                # [manual_xlate]（预览路径在 /translate purpose=manual_out 落同名行），
+                # 与 AI 链 [xlate] outbound 同粒度可对账。decided_by：conv=会话级钉死
+                # 的具体语种 / auto='auto' 由 _resolve_conv_language 解析；confirmed=1
+                # 表示前端「目标语≠客户语言」阻断式确认已由坐席点过。
+                try:
+                    _cid_log = _conv_id(platform, account_id, chat_key) or "-"
+                except Exception:
+                    _cid_log = "-"
+                logger.info(
+                    "[manual_xlate] conv=%s from=%s to=%s decided_by=%s path=send ok=%s confirmed=%s",
+                    _cid_log,
+                    normalize_lang(getattr(res, "source_lang", "") or source_lang or "") or "unknown",
+                    target_lang, "auto" if _is_auto else "conv", int(bool(res.ok)),
+                    1 if str(body.get("xl_confirmed") or "").strip() in ("1", "true", "True") else 0,
+                )
             except Exception:
                 _xlate_failed = True
                 logger.debug("[send] 发送前翻译失败，按原文发送", exc_info=True)

@@ -374,6 +374,16 @@ def register_translate_routes(app, *, api_auth) -> None:
         # record_license_chars 同口径；开关默认关 / 未登录 / 异常均零副作用。
         if result.ok:
             record_request_chars(request, "translation", len(text))
+        # #276 Q-16（2026-09-11）：手发「先预览再发」的出站翻译在这里发生（直发在 /send）——
+        # 落一行 [manual_xlate]，与 AI 链 [xlate] outbound 同粒度可对账。
+        # decided_by：conv = 会话级钉死的具体语种；auto = 'auto' 由 _resolve_conv_language 解析。
+        if str(body.get("purpose") or "").strip() == "manual_out":
+            _raw_tl = str(body.get("target_lang") or "").strip().lower()
+            logger.info("[manual_xlate] conv=%s from=%s to=%s decided_by=%s path=preview ok=%s",
+                        _conv_id(platform, account_id, chat_key) or "-",
+                        normalize_lang(getattr(result, "source_lang", "") or source_lang or "") or "unknown",
+                        target_lang, "auto" if _raw_tl == "auto" else "conv",
+                        int(bool(result.ok)))
         # P4-B：入站显示翻译（客户→坐席）按日聚合，供经理看板量化「常驻双语」成本/语言分布。
         # 仅计 purpose=inbound_display；命中翻译记忆缓存的不计（非新增 API 成本，与 record 语义一致）。
         if str(body.get("purpose") or "").strip() == "inbound_display":
@@ -752,6 +762,12 @@ def register_translate_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("set_outbound_lang failed", exc_info=True)
             return {"ok": False, "error": "store_failed"}
+        # #276 Q-16（2026-09-11）：会话级「发→X」每次落库都留一行 INFO——
+        # 事故排查时能回答「这个会话的 ja 是谁/哪条路径什么时候钉上的」
+        # （事故形态：前端 __default__ 漂移把 A 会话的 ja 带进 B 会话）。
+        # scope=conv 恒定：本端点只写会话级，没有账号级/全局级的「发→」。
+        logger.info("[lang_pref] conv=%s scope=conv send=%s by=%s",
+                    cid, lang or "clear", source)
         return {"ok": True, "conversation_id": cid, "lang": lang}
 
     @app.get("/api/unified-inbox/translation-engines")

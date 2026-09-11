@@ -1111,7 +1111,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                        控件 id（xlate-in/xlate-out/xlate-engine-sel/xlate-engine/xlate-out-preview）是跨函数契约，勿改。 -->
                   <div class="xl-dir-card" id="xlate-bar">
                     <div class="xlate-dir">
-                      <span data-i18n="inbox.xl.recv">对方消息</span><span class="arrow">→</span>
+                      <span data-i18n="inbox.xl.recv" title="收→ 全局默认 / 发→ 仅本会话" data-i18n-title="inbox.xl.dir_scope_t">对方消息</span><span class="arrow">→</span>
                       <!-- 0830 重建：<select> 退居隐藏状态载体（id 契约 + 34 项由目录动态灌），
                            可视入口是语种芯片 → 选语第二屏（34 项原生下拉会盖住「发送选项」）。 -->
                       <select id="xlate-in" class="xlate-sel xl-sel-sr" onchange="_onXlateChange()" title="对方消息自动翻译成" data-i18n-title="inbox.xl.in_t">
@@ -1120,7 +1120,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                       <button type="button" class="xl-lang-chip" id="xl-chip-in" onclick="_xlPickOpen('in')" title="对方消息自动翻译成" data-i18n-title="inbox.xl.in_t"><span class="xl-chip-txt"></span><span class="xl-chip-caret">▾</span></button>
                     </div>
                     <div class="xlate-dir">
-                      <span data-i18n="inbox.xl.send_lbl">我的消息</span><span class="arrow">→</span>
+                      <span data-i18n="inbox.xl.send_lbl" title="收→ 全局默认 / 发→ 仅本会话" data-i18n-title="inbox.xl.dir_scope_t">我的消息</span><span class="arrow">→</span><span class="xl-scope-tag" id="xl-out-scope" title="收→ 全局默认 / 发→ 仅本会话" data-i18n="inbox.xl.dir_scope_conv" data-i18n-title="inbox.xl.dir_scope_t">本会话</span>
                       <select id="xlate-out" class="xlate-sel xl-sel-sr" onchange="_onXlateChange()" title="发送前把你的消息翻译成" data-i18n-title="inbox.xl.out_t">
                         <option value="" data-i18n="inbox.xl.none">不译</option>
                         <option value="auto" data-i18n="inbox.xl.auto_cust">自动（客户语言）</option>
@@ -14967,7 +14967,15 @@ async function sendMsg(){
   let _serverXlate=false;          // 是否让后端在 /send 内翻译
   let _origText=text;              // 坐席输入的原文（用于出向副行回显）
   let _previewMeta=null;           // 预览模式确认时携带的译文质量元数据
+  let _xlConfirmed=0;              // #276 Q-16：目标语≠客户语言 的阻断式确认已通过
   if(_outLang){
+    /* #276 Q-16：手发目标语 ≠ 客户语言 → 阻断式确认（直发在发送前弹；预览模式在
+       「确认发送」那一步弹，译出预览不弹）。取消 = 保留输入不发（_xlConfirmMismatch）。 */
+    if(!_outPreview || (_outXlPending && _outXlPending.orig===text)){   // xl confirm 时机
+      const xlc=_xlConfirmMismatch(_outLang);
+      if(!xlc.ok) return;   // xl：坐席取消
+      _xlConfirmed=xlc.confirmed;
+    }   // xl
     if(_outPreview){
       // 预览模式：'auto' 交服务端解析（与一击直发同一 _resolve_conv_language），
       // 前端不再本地推断客户语言，预览与实发走同一翻译真相源。
@@ -14979,7 +14987,7 @@ async function sendMsg(){
       } else {
         btn.disabled=true; btn.textContent=window.T('inbox.msg.translating');
         try{
-          const res=await _doTranslate(text,_outLang,undefined,{back:_xlBack,style:_xlTone});
+          const res=await _doTranslate(text,_outLang,'manual_out',{back:_xlBack,style:_xlTone});   // #276：purpose=manual_out → [manual_xlate] 日志
           btn.disabled=false;
           if(res){
             _outXlPending={orig:text, translated:res.text, meta:res};
@@ -15050,6 +15058,7 @@ async function sendMsg(){
     };
     if(_cdraft.adoptedId) body.draft_id=_cdraft.adoptedId;   // Q-10 A（#267）：采用的草稿随发送 → 服务端同步置 consumed
     if(_serverXlate) body.target_lang=_outLang;   // P0：一击直发让后端翻译（含 'auto'）
+    if(_xlConfirmed) body.xl_confirmed=1;         // #276 Q-16：目标语≠客户语言 已人工确认 → 服务端 [manual_xlate] confirmed=1
     // P4-5B 引用回复：携带被引用消息上下文（发送后清除引用条）
     if(_replyTarget && _replyTarget.id){ body.reply_to=_replyTarget; _cancelReply(); }
     // P4-11 群 @提及：透传本次已选成员完整 jid（兼容 @lid 群；Node 亦会从正文 @号码 兜底解析）
@@ -20244,6 +20253,9 @@ async function _sendDraftParts(parts){
   var c=selectedChat;
   var btn=document.getElementById('send-btn');
   var _sameConv=function(){ return selectedChat && convKey(selectedChat)===convKey(c); };
+  // #276 Q-16：整批沿用会话「发→X」→ 目标语≠客户语言 的阻断式确认整批只弹一次
+  var _xlBatchConfirmed=0;   // xl
+  if(_xlateOut){ var xlc=_xlConfirmMismatch(_xlateOut); if(!xlc.ok) return; _xlBatchConfirmed=xlc.confirmed; }
   _sendInFlight=true;
   if(btn) btn.disabled=true;
   showHint(window.Tf('inbox.dpick.sending',{n:parts.length}));
@@ -20261,6 +20273,7 @@ async function _sendDraftParts(parts){
         text:text, client_msg_id:_newClientMsgId(), bubbles:0,   // 已经是短句，禁二次拆
       };
       if(_xlateOut) body.target_lang=_xlateOut;   // 出向翻译沿用会话设置（直发口径，逐条预览会把人逼疯）
+      if(_xlBatchConfirmed) body.xl_confirmed=1;  // #276 Q-16：已人工确认 → 服务端 [manual_xlate] confirmed=1
       // C3（#148）：整批沿用的 force 标志是「链路自带」不是本条人点——服务端日志按 src 区分
       if(forceLang){ body.force_lang=1; body.force_src='batch_confirm'; body._force_used=true; }
       if(forceDup){ body.force_dup=1; body.force_src='batch_confirm'; body._force_used=true; }
@@ -20715,7 +20728,18 @@ const _xlCache=new Map();                  // text+lang -> 译文（会话内去
 const _outOrigMap=new Map();
 
 function _xlatePrefs(){
-  try{ return JSON.parse(localStorage.getItem(_XL_KEY)||'{}'); }catch(_){ return {}; }
+  try{   // xl prefs
+    const prefs=JSON.parse(localStorage.getItem(_XL_KEY)||'{}')||{};
+    /* #276 Q-16：「发→X」是会话级事实，浏览器 __default__ 里不许再有 out——
+       存量 localStorage 的 __default__.out 在此一次性迁移丢弃（读到即删并回写），
+       否则老浏览器切会话仍会把上一次的「发→ja」带进无设置的会话。 */
+    const xlDef=prefs.__default__;
+    if(xlDef&&typeof xlDef==='object'&&Object.prototype.hasOwnProperty.call(xlDef,'out')){
+      delete xlDef.out;                                            // #276：只删 out，in/preview/back/tone 保留
+      try{ localStorage.setItem(_XL_KEY,JSON.stringify(prefs)); }catch(_){}   // xl 迁移回写
+    }   // xl
+    return prefs;   // xl prefs
+  }catch(_){ return {}; }   // xl prefs 解析失败 → 空
 }
 /* P0-3/B7：同语判定（canon 归一：zh-cn≍zh）。任一侧空/unknown → false（未知不抑制）。
    0830 重建补回变体豁免：zh-tw/yue 是一等目标语（≠zh），否则「简体会话→繁体/粤语」
@@ -20774,12 +20798,12 @@ function _loadXlateForConv(c){
     // #139-3 粤语豁免：粤语会话的 language 列是 zh，同语抑制会把「收→中」默认关掉
     _xlateIn=(_def && c && _sameLang(_def,c.language) && !_convLooksYue(c))?'':_def;
   }
-  /* #154：bd.out（浏览器全局默认「发→X」）只作本机 UI 初值，**绝不**被同步成
-     另一个会话的服务端铆定——旧链路 _persistXlatePrefs→_syncConvXlateOutSrv 在
-     任何翻译偏好变动时把当时内存里的 _xlateOut 打上去，换会话未 hydrate 时它是
-     空的，一次「收→」改动就把 A 会话铆死的 en 删了。服务端值随后由
-     _hydrateConvXlateOut 异步覆盖（非空优先）。 */
-  _xlateOut=(convEntry&&convEntry.out)||bd.out||'';
+  /* #276 Q-16（2026-09-11）：「发→X」是**会话级**事实，切会话初值只取本会话条目
+     convEntry.out，**不再**继承浏览器 __default__.out（#154 曾把 bd.out 当本机 UI
+     初值——结果 A 会话「发→ja」后切到 B 会话，手发中文也被译成日语发给英文客户）。
+     「发→X」任何跨会话继承（浏览器默认 / 上次选择 / 账号级）都不许有。服务端值随后由
+     _hydrateConvXlateOut 异步覆盖（非空优先）；'' = 自动跟对方语言（AI 链），手发原样。 */
+  _xlateOut=(convEntry&&convEntry.out)||'';   // #276：无 bd.out
   _outPreview=!!((convEntry&&convEntry.preview!==undefined)?convEntry.preview:bd.preview);
   _xlBack=!!((convEntry&&convEntry.back!==undefined)?convEntry.back
             :(bd.back!==undefined?bd.back:true));   // P0-XL3：缺省开
@@ -20989,7 +21013,9 @@ function _persistXlatePrefs(){
   const entry={in:_xlateIn,out:_xlateOut,preview:_outPreview,back:_xlBack,tone:_xlTone};
   if(selectedChat) prefs[convKey(selectedChat)]=entry;
   // 同步全局默认：用户的最新选择成为新会话的默认（开了到处开、关了到处关）
-  prefs.__default__=entry;
+  // #276 Q-16：全局默认只承载「收→/预览/反译/语气」，__default__ **不再写 out**——
+  // 「发→X」只在会话级条目里，严禁跨会话继承（浏览器默认 / 上次选择 / 账号级都不行）。
+  prefs.__default__={in:_xlateIn,preview:_outPreview,back:_xlBack,tone:_xlTone};   // #276：无 out
   try{ localStorage.setItem(_XL_KEY,JSON.stringify(prefs)); }catch(_){}
   /* #154：这里**不再**同步服务端。持久化会被语气/预览/反译等一切偏好变动调用，
      而 _xlateOut 此刻可能只是「还没 hydrate 的空值」——一次无关改动就把会话
@@ -21079,6 +21105,40 @@ function _langWarnCheck(text, convLang, xlateOut){
   return total>0 && (han/total)>=0.4;
 }
 window._langWarnCheck=_langWarnCheck;   // 浏览器门禁直测真值表用
+/* ── #276 Q-16（2026-09-11）：手发目标语 ≠ 客户语言 → **阻断式**确认 ──
+   事故：A 会话「发→ja」经 __default__ 漂到 B（English 客户），中文手发被译成日语发出。
+   客户语言判定与 D 批 _langWarnCheck 同口径（c.language canon；缺则取最近入站消息的检测语），
+   不新做文本检测。target_lang 为 ''（不译）/ 'auto'（=客户语言）恒不弹；客户语言未知不弹；
+   仅 target ≠ 客户语言 才弹。确认后请求体带 xl_confirmed=1 → 服务端 [manual_xlate] … confirmed=1。 */
+function _xlConvCustLang(c){
+  let cl=_canonXlLang(c&&c.language);
+  if(!cl||cl==='unknown'){   // xl：会话语言缺 → 最近入站检测语
+    cl='';   // xl
+    const xlMsgs=(typeof threadMsgs!=='undefined'&&Array.isArray(threadMsgs))?threadMsgs:[];
+    for(let i=xlMsgs.length-1;i>=0&&!cl;i--){   // xl
+      const m=xlMsgs[i]; if(!m||m.direction!=='in') continue;   // xl
+      const dl=_canonXlLang((m.translation&&m.translation.source_lang)||m.source_lang||m.lang||m.language||'');
+      if(dl&&dl!=='unknown'&&dl!=='auto') cl=dl;   // xl
+    }   // xl
+  }   // xl
+  return (cl&&cl!=='unknown')?cl:'';   // xl
+}   // xl
+/* xl 纯函数（门禁直测）：返回需要确认时的客户语言码，不需要确认返回 ''。 */
+function _xlMismatchCheck(target, custLang){
+  const t=_canonXlLang(target);
+  if(!t||t==='auto'||t==='unknown') return '';   // xl：不译/自动 恒不弹
+  const cl=_canonXlLang(custLang);
+  if(!cl||cl==='unknown'||_sameLang(t,cl)) return '';   // xl：客户语言未知/同语 不弹
+  return cl;   // xl
+}   // xl
+window._xlMismatchCheck=_xlMismatchCheck;   // 浏览器门禁直测真值表用（#276）
+function _xlConfirmMismatch(target){
+  const cl=_xlMismatchCheck(target,_xlConvCustLang(selectedChat));
+  if(!cl) return {ok:true,confirmed:0};   // xl：无需确认
+  const ok=window.confirm(window.Tf('inbox.xl.confirm_mismatch',{to:_xlLangName(_canonXlLang(target)),cust:_xlLangName(cl)}));
+  try{ _uiBeacon(ok?'xlt_mismatch_confirm':'xlt_mismatch_cancel'); }catch(_){}
+  return {ok:ok,confirmed:ok?1:0};   // xl
+}   // xl
 const _LANGWARN_NAME_KEYS={zh:'dash.lang.zh',en:'dash.lang.en',th:'dash.lang.th',vi:'dash.lang.vi',id:'dash.lang.id',ja:'dash.lang.ja',ko:'dash.lang.ko',ru:'dash.lang.ru',es:'dash.lang.es',pt:'dash.lang.pt'};
 function _langWarnLabel(lang){
   const k=_LANGWARN_NAME_KEYS[lang];
@@ -21225,10 +21285,18 @@ function _syncXlChips(){
     if(!chip||!sel) continue;
     const v=sel.value;
     const txt=chip.querySelector('.xl-chip-txt');
-    if(txt) txt.textContent=(!v&&p[2]==='follow')?window.T('inbox.xl.mylang_follow'):_xlLangName(v);
+    if(txt) txt.textContent=(!v&&p[2]==='follow')?window.T('inbox.xl.mylang_follow')
+      :(!v&&p[0]==='xl-chip-out')?_xlOutAutoLabel():_xlLangName(v);   // #276：发→ 空档显示「自动 · 跟对方：X」
     chip.classList.toggle('on',!!v);
   }
 }
+/* #276 Q-16：「发→X」空档的可视文案——服务端为空 = 自动（AI 链跟对方语言），不是空白：
+   客户语言已知 →「自动 · 跟对方：English」；未知 →「自动 · 跟对方语言」（xl 仅显示，不改发送体：
+   _xlateOut==='' 时手发请求体无 target_lang，与门禁 F 口径一致）。 */
+function _xlOutAutoLabel(){
+  const cl=_xlCustLang();
+  return cl?window.Tf('inbox.xl.out_auto_peer',{lang:_xlLangName(cl)}):window.T('inbox.xl.out_auto_peer_unk');
+}   // xl
 /* ── 选语第二屏（0830 断电丢失面最大的一块，按 CSS 骨架/i18n 键复原）──
    宿主两处：弹层 #xl-pop-picker（in/out/top/agent 四模式）与灯箱 #lb-xl-picker（lb）；
    .is-pick 类切换主屏/选语屏（CSS 已备）。行点击走宿主事件委托（data-xl-pick 属性，
@@ -21326,7 +21394,7 @@ function _xlPickRender(q){
   };
   let h='';
   if(!qq){
-    if(mode==='out') h+=row('',window.T('inbox.xl.none'),'')+row('auto',window.T('inbox.xl.auto_cust'),'');
+    if(mode==='out') h+=row('',_xlOutAutoLabel(),window.T('inbox.xl.out_auto_peer_sub'))+row('auto',window.T('inbox.xl.auto_cust'),'');   // #276：空档=自动跟对方
     else if(mode==='agent') h+=row('',window.T('inbox.xl.mylang_follow'),'');
     else if(mode==='lb') h+=row('',window.T('inbox.xl.lb_lang_auto'),'');
     else h+=row('',window.T('inbox.xl.none'),'');
@@ -22110,6 +22178,7 @@ function _updateXlStatus(){
   var s=[inv,outv].filter(Boolean).join(' · ');
   el.textContent=s||window.T('inbox.rt.xl_status_off');
   el.classList.toggle('on',!!s);          // 强语义胶囊（暗底达标），替代写死蓝字
+  el.title=window.T('inbox.rt.xl_status_t')+(s?'\n'+window.T('inbox.xl.dir_scope_t'):'');   // #276：收→ 全局默认 / 发→ 仅本会话
   try{ _syncXlChips(); }catch(_){}        // 语种芯片随状态汇聚点同步（所有改语言路径都过这里）
   var btn=document.getElementById('xlate-toggle-btn');
   if(btn) btn.classList.toggle('rt-primary',!!s);

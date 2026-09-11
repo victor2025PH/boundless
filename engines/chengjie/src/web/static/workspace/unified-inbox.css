@@ -681,6 +681,8 @@
 .xl-dir-card{display:flex;flex-direction:column;gap:8px;padding:9px 10px;background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;}
 .xl-dir-card .xlate-dir{justify-content:space-between;}
 .xl-dir-card .xlate-dir .xlate-sel{min-width:132px;}
+/* #276 Q-16：「发→X」旁常驻作用域小字「本会话」（收→ 是全局默认，发→ 仅本会话；tooltip 同源 inbox.xl.scope_t） */
+.xl-scope-tag{font-size:10px;line-height:1;padding:2px 5px;border-radius:999px;border:1px solid var(--xl-accent-border);color:var(--xl-accent-strong);background:var(--xl-accent-bg);white-space:nowrap;margin-right:auto;cursor:help;}
 .xl-sendmode-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--text-sub);}
 .xl-sendmode-lbl{font-weight:700;color:var(--text-tiny);white-space:nowrap;}
 .xl-seg{display:inline-flex;border:1px solid var(--btn-border);border-radius:8px;overflow:hidden;background:var(--bg-soft);}
