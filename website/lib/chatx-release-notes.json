@@ -1,5 +1,44 @@
 [
   {
+    "version": "1.0.82",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "全自动让位不丢稿、今日拦截卡、画像只写可锚定事实、退出登录真退出",
+      "en": "Yield defers instead of dropping, Blocked-today card, anchored profile facts, real logout"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "全自动会话里坐席手发后 AI「让位」改为延后不丢稿：坐席手发或打字后 60 秒内客户来消息，AI 稿留队等待，会话头出蓝色胶囊「AI 让位中 · 坐席 60s 内发过 · N s 后接回」倒数，窗过自动发出；点胶囊或顶栏重选「全自动」即刻接回。此前这 60 秒内客户的消息会被直接丢掉不回。",
+        "新增「🚧 今日拦截 · AI 为什么没回」卡：自动回复设置 → 「风控分级」卡下方，按原因（成人内容 / 风险保持 / 需人工 / 让位 / 档位切换 / 班表休息）统计最近 24 小时自动回复被拦次数，并列出最近 5 条（会话 · 时间 · 原因 · 命中词）；体检面板在让位期间出黄行并带「立即让 AI 接回」按钮。",
+        "成人词表消歧：印式英语「message cum reply」（cum = and）、「summa cum laude」不再判成人内容；孤立的歧义词（cock / pussy / nude 等）在没有施压语境时只记提及，不再把全自动会话掐成「需人工」。",
+        "客户画像 AI 推断只写可锚定事实：年龄只收 16–99 数字或年龄段（30s / 三十多 / 90后），职业 / 坐标 / 居住地只收 24 字以内短语、整句不写；候选必须带客户原话且能在最近 30 条入站里逐字查到；我方回复、译文、关怀稿不再进抽取；值语种与客户主语种不符的丢弃。",
+        "画像进度 N/10 只数坐席已确认的槽，AI 推断另显「待确认 M」；年龄输入框改数字键盘，填错先提示不发请求；过长的值按 24 字省略显示，悬停看全文；AI 推断卡保留 ✓ 确认 / ✕ 拒绝。",
+        "退出登录真退出：头像 → 退出登录后停在登录页，桌面端自动登录暂停，可换子帐号登录，重开应用恢复自动登录；坐席机可在配置里设 backend.auto_login=false 彻底关闭自动登录。",
+        "用户管理页：卡上「🔑 重置密码」（至少 6 位）→ 弹一次性「登录信息」卡可复制；创建子帐号后同样弹一次；删除改为逐字输入帐号名确认（红键，输对才可点）；页头显示「帐号所在后端」，坐席机连错后端时一眼可见。",
+        "对话翻译弹层自适应：1024 宽桌面壳展开右栏时弹层不再被裁掉；发送方式 / 反译校验 / 语气 / 语音收进出站选项区；选语屏「自动 · 跟对方」整句显示、常用 / 更多语言分节 + 搜索；Esc 逐级关闭。",
+        "修复目标面板槽位「确认（无现值）」与「✎ 改」两枚按钮在桌面端点了没反应（1.0.79–1.0.81 受影响）。",
+        "老板页新增「AI 花了多少钱」卡：今天（内部估算）/ 本月累计 / 昨日与厂商账单核对 / 余额还能撑几天，点「看去向 / 导账单 →」进成本明细页。"
+      ],
+      "en": [
+        "Yield now defers instead of dropping: in a full-auto thread, when a customer writes within 60s after the agent sent or typed, the AI draft waits in queue and the header shows a blue chip AI yielding · agent sent within 60s · resumes in Ns counting down; it auto-sends once the window passes. Click the chip or re-pick Full auto in the header to resume at once. Previously those messages were dropped with no reply.",
+        "New Blocked today · why the AI didn't reply card: Reply settings, below the Risk grading card. Counts auto-replies held back in the last 24h by reason (adult content / risk hold / needs human / yield / mode switched / off-hours schedule) and lists the last 5 (thread · time · reason · matched words); the diagnosis panel shows a yellow row with Let AI resume now while yielding.",
+        "Adult word list disambiguation: Indian English message cum reply (cum = and) and summa cum laude are no longer graded as adult content; isolated ambiguous words (cock / pussy / nude ...) without pressure context are logged as mentions only and no longer flip a full-auto thread to Needs human.",
+        "Profile AI inference writes only anchored facts: age accepts a number 16–99 or an age band (30s / late twenties) only; occupation / location / residence must be a phrase of 24 characters or fewer, never a full sentence; every candidate needs the customer's own words, verifiable in the last 30 inbound messages; our replies, translations and care drafts no longer feed extraction; values whose language differs from the customer's main language are dropped.",
+        "Profile progress N/10 counts only slots confirmed by the agent; AI-inferred ones show as N unconfirmed; the age field uses a numeric keypad and validates before sending; long values are clipped to 24 characters with the full text on hover; AI-inferred cards keep the ✓ confirm / ✕ reject buttons.",
+        "Logout really logs out: avatar → Log out stays on the login page, desktop auto-login pauses so you can sign in with a sub-account, and resumes when the app is reopened; seat machines can set backend.auto_login=false to disable auto-login entirely.",
+        "Users page: Reset password on a card (6 characters minimum) shows a one-time Login details card you can copy; creating a sub-account shows it once too; delete now requires typing the account name exactly (red button, enabled only on a match); the header shows Account backend so a seat connected to the wrong backend is visible at a glance.",
+        "Translation popover adapts: no longer clipped when the right pane is open in a 1024-wide desktop window; send mode / back-translation check / tone / voice are grouped into outbound options; the language screen shows Auto · follow peer as a full line, splits common / more languages and adds search; Esc closes step by step.",
+        "Fixed the goal panel slot buttons Confirm (no current value) and ✎ Edit doing nothing on desktop (affected 1.0.79–1.0.81).",
+        "New What the AI cost card on the Boss page: today (internal estimate) / this month / yesterday vs vendor bill / how many days the balance lasts, with Breakdown / import bill → opening the cost detail page."
+      ]
+    }
+  },
+  {
     "version": "1.0.81",
     "date": "2026-09-11",
     "title": {

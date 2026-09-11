@@ -1271,6 +1271,65 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "全自动 放行 不拦 台账 高风险 扣稿 影子 shadow autosend",
         "/workspace",
     ),
+    # ── R82 / Q-18 #292 #291（2026-09-11）：让位 = 延后不丢稿 + 明示接回 ──
+    (
+        "agent-yield-resume",
+        "我手发一句后 AI 为什么不回客户了 / 会话头「AI 让位中」胶囊是什么",
+        "Why the AI stops replying after I send manually / what the AI yielding chip means",
+        "全自动会话里你手发或打字后 60 秒内，AI 会先让位：这段时间客户来的消息，AI 稿留队等着不发，"
+        "会话头出蓝色胶囊「AI 让位中 · 坐席 60s 内发过 · N s 后接回」倒数，倒数到 0 稿自动发出，不丢。"
+        "要 AI 马上接回：点这个胶囊，或顶栏重选一次「全自动」，待发稿立即放行；你再手发一句 AI 会再让位一次。"
+        "体检面板在让位期间也会出一行黄字并带「立即让 AI 接回」按钮。"
+        "1.0.81 及之前这 60 秒内的客户消息会被直接取消不回，本版起只是延后。",
+        "In a full-auto thread, for 60 seconds after you send or type, the AI yields: drafts for customer messages in that "
+        "window wait in queue and the header shows a blue chip AI yielding · agent sent within 60s · resumes in Ns. "
+        "When the countdown hits zero the draft goes out; nothing is dropped. To resume at once, click the chip or re-pick "
+        "Full auto in the header; sending manually again yields again. The diagnosis panel shows a yellow row with "
+        "Let AI resume now while yielding. Up to 1.0.81 those messages were cancelled with no reply; now they are only deferred.",
+        "让位 接回 不回了 手发后 60秒 全自动 不发 胶囊 倒数 立即让AI接回 agent yield resume defer chip",
+        "/workspace",
+    ),
+    # ── R82 / Q-18 #293 #285（2026-09-11）：拦截台账可见 ──
+    (
+        "blocked-today-card",
+        "怎么看今天 AI 为什么没回 / 「今日拦截」卡在哪",
+        "How to see why the AI didn't reply today / where the Blocked today card is",
+        "打开「自动回复设置」，滚到「🧯 风控分级」卡下面的「🚧 今日拦截 · AI 为什么没回」卡：右上「24h 共 N 次」，"
+        "下面按原因码计数——成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息，"
+        "再往下是最近 5 条（会话显示名 · 时间 · 原因 · 命中词 + 阶段）。台账从本次启动起记、滚动保留 200 条，历史不回填。"
+        "让位两项只是延后不是丢稿，窗过自动发；真正没回的看成人 / 风险保持 / 需人工三项，点进对应会话核命中词。"
+        "单个会话的原因也可以在会话体检面板里看。",
+        "Open Reply settings and scroll below the Risk grading card to Blocked today · why the AI didn't reply: the chip "
+        "shows the 24h total, then counts by reason — adult content / risk hold / needs human / agent just sent (yield) / "
+        "agent typing (yield) / mode switched / off-hours schedule — and the last 5 rows (thread name · time · reason · "
+        "matched words + stage). The ledger starts at this launch, keeps 200 rows rolling and does not backfill. The two "
+        "yield reasons only defer and auto-send after the window; for real misses check adult / risk hold / needs human "
+        "and open the thread to see the matched words. Per-thread reasons are also in the diagnosis panel.",
+        "今日拦截 为什么没回 没回复 拦截 原因 成人 风险保持 需人工 台账 24小时 blocked today abort ledger why no reply",
+        "/reply-settings",
+    ),
+    # ── R82 / Q-19 #294（2026-09-11）：画像 AI 推断只写可锚定事实 ──
+    (
+        "profile-anchored-facts",
+        "画像里的年龄 / 职业为什么是一句话或乱填 / 进度 N/10 怎么算",
+        "Why a profile slot shows a whole sentence or a wrong age / how the N/10 progress is counted",
+        "本版起 AI 推断只写能在客户原话里逐字找到的事实：年龄只收 16–99 的数字或年龄段（30s / 三十多 / 90后），"
+        "职业 / 坐标 / 居住地只收 24 字以内的短语、整句不写；候选必须带客户原句且能在最近 30 条入站里查到，"
+        "我方回复、译文、关怀稿不再进抽取，值的语种和客户主语种不符也不写。"
+        "目标面板的进度 N/10 只数你点过 ✓ 确认（或手录）的槽，AI 推断另显「待确认 M」，点卡上 ✓ 确认 / ✕ 拒绝处理；"
+        "年龄输入框只收数字或年龄段，填错先提示不保存；过长的值按 24 字省略，悬停看全文。"
+        "旧版留下的乱值：拒绝掉即可，也可让值守跑清洗脚本按会话清理。",
+        "AI inference now writes only facts found verbatim in the customer's own messages: age accepts a number 16–99 or "
+        "an age band; occupation / location / residence must be a phrase of 24 characters or fewer, never a sentence; a "
+        "candidate needs the customer's quote, verifiable in the last 30 inbound messages; our replies, translations and "
+        "care drafts no longer feed extraction, and a value in a language other than the customer's main one is dropped. "
+        "The goal panel's N/10 counts only slots you confirmed with ✓ (or typed in); AI-inferred ones show as N unconfirmed "
+        "— use ✓ confirm / ✕ reject on the card. The age field accepts a number or band only and warns before saving; long "
+        "values are clipped to 24 characters with the full text on hover. Reject leftover bad values from older versions, "
+        "or ask ops to run the purge script per thread.",
+        "画像 年龄 职业 居住地 乱填 整句 AI推断 待确认 进度 N/10 确认 拒绝 锚定 原话 profile age occupation unconfirmed anchored",
+        "/workspace",
+    ),
     # ── J-9 #184（2026-09-05）：厂商产品说明从「知识库对客条目」迁到这里 ──
     # 背景：首装曾把生产机 110 条厂商话术（智聊/通译/幻声…价格与卖点）播进
     # 用户 KB → 用户的 AI 对着**用户的客户**推销厂商产品。产品说明属于「用户问

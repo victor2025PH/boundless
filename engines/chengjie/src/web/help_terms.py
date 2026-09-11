@@ -1308,6 +1308,38 @@ HELP_TERMS: dict = {
         "desc_en": "Full-auto stays full-auto: drafts are not held for high risk; triggers are ledger-only, and agent-typed send is not blocked",
         "usage": "保持会话为全自动即可；风险记录只在运营总览/影子台账，坐席侧零拦截",
         "usage_en": "Leave the conversation on full-auto; risk hits land in the ops ledger only"
+    },
+    "agent_yield": {
+        "zh": "AI 让位",
+        "en": "AI yield",
+        "desc": "全自动会话里坐席手发或打字后 60 秒内，AI 稿留队等待而不是取消：会话头蓝色胶囊「AI 让位中 · 坐席 60s 内发过 · N s 后接回」倒数，到 0 自动发出，客户消息不丢；坐席再手发就再让位一次。让位期间坐席真发了一句，等待中的那稿才取消（客户那句已由人接）。1.0.81 及之前这 60 秒内的客户消息被直接取消不回。",
+        "desc_en": "In a full-auto thread, for 60 seconds after the agent sends or types, the AI draft waits in queue instead of being cancelled: the header chip AI yielding · agent sent within 60s · resumes in Ns counts down and the draft auto-sends at zero, so no customer message is dropped; sending manually again yields again. Only if the agent actually sends during the window is the waiting draft cancelled (a human answered). Up to 1.0.81 those messages were cancelled with no reply.",
+        "usage": "点会话头的让位胶囊，或顶栏重选「全自动」→ AI 立即接回、待发稿放行；体检面板让位期间有「立即让 AI 接回」按钮。",
+        "usage_en": "Click the yield chip in the thread header, or re-pick Full auto in the header → the AI resumes and the queued draft is released; the diagnosis panel offers Let AI resume now while yielding."
+    },
+    "abort_ledger": {
+        "zh": "今日拦截",
+        "en": "Blocked today",
+        "desc": "自动回复设置里「🚧 今日拦截 · AI 为什么没回」卡：最近 24 小时自动回复被拦下的次数按原因码计——成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息——并列最近 5 条（会话 · 时间 · 原因 · 命中词 + 阶段）。台账从本次启动起记、滚动 200 条、不回填；让位两项只是延后，窗过自动发。",
+        "desc_en": "The Blocked today · why the AI didn't reply card in Reply settings: auto-replies held back in the last 24h counted by reason code — adult content / risk hold / needs human / agent just sent (yield) / agent typing (yield) / mode switched / off-hours schedule — plus the last 5 rows (thread · time · reason · matched words + stage). The ledger starts at this launch, keeps 200 rows rolling and does not backfill; the two yield reasons only defer and auto-send after the window.",
+        "usage": "自动回复设置 → 滚到「风控分级」卡下方 → 看「24h 共 N 次」与各原因计数 → 最近 5 条里找会话名，点进会话核命中词。",
+        "usage_en": "Reply settings → scroll below the Risk grading card → read the 24h total and per-reason counts → find the thread in the last 5 rows and open it to check the matched words."
+    },
+    "adult_cum_disambig": {
+        "zh": "成人词消歧",
+        "en": "Adult word disambiguation",
+        "desc": "成人内容判定不再被孤立歧义词掐停：印式英语「message cum reply」（cum = and）、「summa cum laude」不判成人；cock / pussy / anal / nude 等歧义词在没有第二个露骨信号、没有施压词时只记提及或调侃，不打「需人工」、不进成人让位。「make me cum」「cumshot」「nudes」「blow job」等强词仍照旧判露骨。",
+        "desc_en": "Adult grading is no longer tripped by an isolated ambiguous word: Indian English message cum reply (cum = and) and summa cum laude are not adult; cock / pussy / anal / nude with no second explicit signal and no pressure words are logged as mention or flirt only, with no Needs human tag and no adult hold. Strong terms such as make me cum, cumshot, nudes or blow job are still explicit.",
+        "usage": "不用设置。若全自动会话仍被误判成人内容，把原句连同「今日拦截」卡里的命中词发到报障群。",
+        "usage_en": "No setting needed. If a full-auto thread is still misjudged as adult content, send the original sentence and the matched words from the Blocked today card to the support group."
+    },
+    "profile_anchored": {
+        "zh": "画像只写可锚定事实",
+        "en": "Anchored profile facts",
+        "desc": "客户画像的 AI 推断只写能在客户原话里逐字找到的事实：年龄只收 16–99 数字或年龄段（30s / 三十多 / 90后）；职业 / 坐标 / 居住地只收 24 字以内短语、整句不写；候选必须带客户原句且能在最近 30 条入站里查到；我方回复、译文、关怀稿不进抽取；值语种与客户主语种不符的丢弃。坐席确认或手录的值一字不动。目标面板进度 N/10 只数已确认的槽，AI 推断另显「待确认 M」；年龄输入只收数字或年龄段；过长值按 24 字省略、悬停看全文。",
+        "desc_en": "Profile AI inference writes only facts found verbatim in the customer's own messages: age accepts a number 16–99 or an age band; occupation / location / residence must be a phrase of 24 characters or fewer, never a sentence; a candidate needs the customer's quote, verifiable in the last 30 inbound messages; our replies, translations and care drafts never feed extraction; a value in a different language from the customer's main one is dropped. Confirmed or hand-typed values are never touched. The goal panel's N/10 counts only confirmed slots and shows AI-inferred ones as N unconfirmed; the age field accepts a number or band only; long values are clipped to 24 characters with the full text on hover.",
+        "usage": "目标面板 → 画像卡：AI 推断的槽点 ✓ 确认 / ✕ 拒绝；进度只随确认走。旧版留下的乱值直接拒绝，或让值守按会话跑清洗脚本。",
+        "usage_en": "Goal panel → profile card: ✓ confirm or ✕ reject AI-inferred slots; progress follows confirmations only. Reject leftover bad values from older versions, or have ops run the purge script per thread."
     }
 }
 
