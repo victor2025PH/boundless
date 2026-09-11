@@ -280,6 +280,80 @@ def test_hold_active_second_hit_only_touches(store):
     assert risk_hold.active(store, cid, now=t0 + 120) == "needs_human"
 
 
+def _legacy_adult_hold(store, ck: str, *, age_sec: float = 3600.0):
+    """1.0.82 遗留形态：adult 持有（24h、非泛因、set 于 age_sec 前）+ 需人工标（adult:explicit）。"""
+    import time as _time
+    cid = conv_id(_PLAT, _ACCT, ck)
+    t0 = _time.time() - age_sec
+    risk_hold.set(store, cid, "adult", ["nudes"], ttl_h=24.0, by="adult_grader", now=t0)
+    assert tag_needs_human(store, _payload(ck), reason="adult:explicit:nudes", source="adult_grader", now=t0,
+                           level="medium", category="adult", hits=["adult:nudes"])
+    assert risk_hold.active(store, cid) == "adult" and HANDOFF_TAG in store.get_conv_tags(cid)
+    return cid
+
+
+def test_q27_low_inbound_releases_old_hold_and_next_draft_is_l2(svc, store, caplog):
+    """Q-27 #301 C / E 回放②（华哥全自动会话）：旧 adult hold 后下一条 benign 入站 → hold clear（by=low_inbound）
+    + 摘标 → 本条稿 L2（不 forced=L1、不继承旧 shadow）。"""
+    import logging
+    conv = _conv("q27_hold1")
+    cid = _legacy_adult_hold(store, "q27_hold1")
+    with caplog.at_level(logging.INFO):
+        did = svc.auto_generate_draft(conv, "good morning dear, slept well?", automation_mode="auto_ai")
+    assert did
+    row = store.get_draft(did)
+    assert row["autopilot_level"] == "L2", (row["autopilot_level"], row["risk_reasons"])
+    assert risk_hold.active(store, cid) is None and risk_hold.record(store, cid)["cleared_by"] == "low_inbound"
+    assert HANDOFF_TAG not in store.get_conv_tags(cid) and not store.get_handoff_meta(cid)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("[risk_hold] clear" in m and "by=low_inbound" in m for m in msgs), msgs
+    assert any("[risk_hold] release" in m and "hold=adult" in m and "trigger=low_inbound" in m for m in msgs), msgs
+    assert not any("forced=L1" in m for m in msgs), msgs
+    # 系统释放不登记冷却：随后真高风险仍可打标
+    assert risk_hold.cooldown_record(store, cid) is None
+    did2 = svc.auto_generate_draft(conv, "I know where you live, I will find you", automation_mode="auto_ai")
+    assert did2 and store.get_draft(did2)["autopilot_level"] == "L1" and HANDOFF_TAG in store.get_conv_tags(cid)
+
+
+def test_q27_fresh_hold_not_released_by_same_inbound_low_grade(svc, store):
+    """持有是本条链刚设的（<60s）→ 低分级不清它（防 commitment_guard 刚 set 就被清）；stop_contact 也不清。"""
+    conv = _conv("q27_hold2")
+    cid = conv["conversation_id"]
+    risk_hold.set(store, cid, "commitment", ["meet"], by="commitment_guard")
+    assert rg.release_hold_on_low(store, cid) == "" and risk_hold.active(store, cid) == "commitment"
+    import time as _time
+    risk_hold.set(store, cid, "stop_contact", ["stop"], by="stop_contact", now=_time.time() - 600)
+    assert rg.release_hold_on_low(store, cid) == "" and risk_hold.active(store, cid) == "stop_contact"
+    # 旧的普通持有 → 释放
+    risk_hold.set(store, cid, "privacy", ["phone"], by="system", now=_time.time() - 600)
+    assert rg.release_hold_on_low(store, cid, category="narrative", hits=["narrative:phone number"]) == "privacy"
+    assert risk_hold.active(store, cid) is None
+
+
+def test_q27_keep_path_low_clears_medium_keeps_with_hold_category(store, caplog):
+    """Q-27 #301 C：tag_needs_human 保持路径——level=low → 不保持直接 clear（持有 + 标）；level=medium →
+    保持，且日志行带本条 level/category/hits 与持有自身 hold_level/hold_category/hold_hits（不再 `category=- hits=-`）。"""
+    import logging
+    ck = "q27_keep1"
+    cid = _legacy_adult_hold(store, ck)
+    with caplog.at_level(logging.INFO):
+        assert tag_needs_human(store, _payload(ck), reason="high_risk", source="system",
+                               level="medium", category="request_media", hits=["request:media"]) is False
+    m = next(r.getMessage() for r in caplog.records if "[needs_human] 保持 " in r.getMessage())
+    assert "level=medium" in m and "category=request_media" in m and "hits=request:media" in m
+    assert "hold=adult" in m and "hold_category=adult" in m and "hold_hits=adult:nudes" in m and "category=-" not in m
+    assert risk_hold.active(store, cid) == "adult" and HANDOFF_TAG in store.get_conv_tags(cid)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert tag_needs_human(store, _payload(ck), reason="high_risk", source="system",
+                               level="low", category="", hits=[]) is False
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("[needs_human] 保持→clear" in m and "level=low" in m and "hold=adult" in m for m in msgs), msgs
+    assert any("[risk_hold] clear" in m and "by=low_inbound" in m for m in msgs), msgs
+    assert risk_hold.active(store, cid) is None and HANDOFF_TAG not in store.get_conv_tags(cid)
+    assert risk_hold.cooldown_record(store, cid) is None          # 系统动作不登记冷却
+
+
 # ── ⑤ keyword_risk_hits 方向：旧签名逐字 / in 只认索要 / out 答应语 ──────────────
 
 def test_keyword_risk_hits_legacy_signature_verbatim():

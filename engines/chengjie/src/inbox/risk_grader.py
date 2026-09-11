@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -389,6 +390,46 @@ def _downgradable(reasons: Sequence[str], text: str) -> bool:
     return True
 
 
+#: Q-27 C：本条入站刚设的持有（commitment_guard / adult_grader 同一条链里 set）不算「旧 hold」，低级分级不清它
+_FRESH_HOLD_SEC = 60.0
+
+
+def release_hold_on_low(store: Any, cid: str, *, category: str = "", hits: Any = (),
+                        now: Optional[float] = None) -> str:
+    """Q-27 C（#301）：本条入站分级为**低**（叙述 / 单点提及 / 无类别）而会话上还挂着一个旧 risk_hold
+    → 低级不能续命一个 hold：解除持有 + 摘「需人工」标（系统动作，不登记冷却），新入站按本条重评、
+    不继承旧 shadow。返回被释放的持有原因码（空＝没释放）。绝不抛。
+
+    不释放：stop_contact（O-1 A 冻结，另有解冻入口）；持有 set_ts 距今 < 60s（本条链自己刚设的）。
+    """
+    cid = str(cid or "").strip()
+    if store is None or not cid:
+        return ""
+    try:
+        from src.inbox import risk_hold as _rh
+        ts = float(now if now is not None else time.time())
+        reason = str(_rh.active(store, cid, now=ts) or "")
+        if not reason or reason == "stop_contact":
+            return ""
+        rec = _rh.record(store, cid) or {}
+        age = ts - float(rec.get("set_ts") or ts)
+        if age < _FRESH_HOLD_SEC:
+            return ""
+        try:
+            from src.integrations.protocol_autoreply import clear_needs_human
+            clear_needs_human(store, cid, actor="system:low_inbound")
+        except Exception:
+            logger.debug("[risk] release_hold_on_low 摘标失败（忽略）", exc_info=True)
+        _rh.clear(store, cid, by="low_inbound", now=ts)
+        hs = [str(h) for h in (hits or [])][:4]
+        logger.info("[risk_hold] release conv=%s hold=%s trigger=low_inbound level=low category=%s hits=%s held_min=%.1f"
+                    "（低级不能续命 hold；本条按重评档位走）", cid, reason, category or "-", "|".join(hs) or "-", age / 60.0)
+        return reason
+    except Exception:
+        logger.debug("[risk] release_hold_on_low 异常（忽略）", exc_info=True)
+        return ""
+
+
 def _tag_medium(store: Any, cid: str) -> bool:
     try:
         if store is None or not cid or not hasattr(store, "get_conv_tags"):
@@ -457,7 +498,11 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                            for r in reasons]
                 logger.info("[risk] low conv=%s category=- hits=%s risk=low from=high（无类别·keyword-only 不停自动）",
                             cid or "-", "|".join(str(h) for h in list(risk_hits or [])[:4]) or "-")
-                return "low", reasons, info
+                cur = "low"
+                risk_level = "low"
+            if cur == "low":
+                # Q-27 C：本条无风险而会话挂着旧 hold → 释放（policy_decide 在本钩子之后，本条即按 L2 走）
+                info["hold_released"] = release_hold_on_low(store, cid, category="", hits=list(risk_hits or []), now=now)
             return risk_level, reasons, info
         if level == "high":
             new = _max_level(cur, "high")
@@ -485,6 +530,9 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         else:
             logger.info("[risk] low conv=%s category=%s hits=%s risk=%s from=%s",
                         cid or "-", cat, "|".join(ghits[:4]) or "-", new, cur)
+            if new == "low":
+                # Q-27 C：低级（叙述 / 单点提及）不能续命一个旧 hold
+                info["hold_released"] = release_hold_on_low(store, cid, category=cat, hits=ghits, now=now)
         return new, reasons, info
     except Exception:
         logger.debug("[risk] regrade 异常（原判定放行）", exc_info=True)
@@ -496,4 +544,5 @@ __all__ = [
     "TRUE_HIGH_REASONS", "ADULT_PRESSURE_REASON",
     "CATEGORIES", "OVERRIDABLE", "category_def", "public_table", "normalize_level",
     "risk_overrides_of", "resolve_persona", "grade", "classify_reason", "regrade_inbound",
+    "release_hold_on_low",
 ]

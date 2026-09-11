@@ -1233,10 +1233,39 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
     try:
         from src.inbox import risk_hold as _rh
         if HANDOFF_TAG in tags and _rh.active(store, cid, now=now):
+            _hold_rec = _rh.record(store, cid) or {}
+            _hold_reason = str(_hold_rec.get("reason") or "")
+            # Q-27 C（#301）：低级入站不能续命一个 hold——本条 level=low（叙述 / 单点提及 / 无类别）
+            # 且持有不是本条入站刚设的（≥60s，防同一条里 commitment_guard 刚 set 就被 low 分级清掉）
+            # → 不保持、直接 clear（持有 + 标 + meta），系统动作不登记冷却；stop_contact 冻结不在此列。
+            _hold_age = _ts - float(_hold_rec.get("set_ts") or _ts)
+            if _lvl == "low" and _hold_reason and _hold_reason != "stop_contact" and _hold_age >= 60.0:
+                _meta0: Dict[str, Any] = {}
+                try:
+                    if hasattr(store, "get_handoff_meta"):
+                        _meta0 = dict(store.get_handoff_meta(cid) or {})
+                except Exception:
+                    _meta0 = {}
+                clear_needs_human(store, cid, actor="system:low_inbound")
+                _rh.clear(store, cid, by="low_inbound", now=now)
+                logger.info("[needs_human] 保持→clear conv=%s reason=%s level=low category=%s hits=%s hold=%s held_min=%.1f "
+                            "hold_category=%s（低级不能续命 hold；新入站重评不继承）",
+                            cid, reason or "-", _cat or "-", "|".join(_hits) or "-", _hold_reason,
+                            _hold_age / 60.0, _meta0.get("category") or "-")
+                return False
             _rh.touch(store, cid, _hits or str(reason or ""), now=now)
             __import__("src.inbox.adult_grader", fromlist=["on_needs_human_tagged"]).on_needs_human_tagged(store, cid, reason, payload, now=now) if str(reason or "").startswith("adult:") else None  # Q-15 二次露骨重新计时（标在场也走）
-            logger.info("[needs_human] 保持 conv=%s reason=%s level=%s category=%s hits=%s（已打标，只更新 last_hit）",
-                        cid, reason or "-", _lvl or "-", _cat or "-", "|".join(_hits) or "-")
+            # Q-27 C：保持行必带 level / category / hits——本条命中没有类别时回落到持有自身（handoff_meta）
+            _mcat, _mhits, _mlvl = "", [], ""
+            try:
+                _m = dict(store.get_handoff_meta(cid) or {}) if hasattr(store, "get_handoff_meta") else {}
+                _mcat, _mlvl = str(_m.get("category") or ""), str(_m.get("level") or "")
+                _mhits = [str(h) for h in (_m.get("hits") or [])][:4]
+            except Exception:
+                pass
+            logger.info("[needs_human] 保持 conv=%s reason=%s level=%s category=%s hits=%s hold=%s hold_level=%s hold_category=%s hold_hits=%s（已打标，只更新 last_hit）",
+                        cid, reason or "-", _lvl or "-", _cat or _mcat or "-", "|".join(_hits or _mhits) or "-",
+                        _hold_reason or "-", _mlvl or "-", _mcat or "-", "|".join(_mhits) or "-")
             return False
         # Q-17 ②：人工摘标冷却——同类且级别不高于冷却记录 → 不打标、不登记持有
         if HANDOFF_TAG not in tags:
