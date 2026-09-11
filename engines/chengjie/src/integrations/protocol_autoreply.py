@@ -86,7 +86,9 @@ def _risk_policy_decide(reply: str, platform: str = ""):
     hits: list = []
     try:
         from src.inbox.drafts import keyword_risk_hits
-        _lvl, hits = keyword_risk_hits(reply, direction="out")  # Q-17 #277②：AI 稿＝出站口径
+        # Q-17 #277②：AI 稿＝出站口径。Q-23 #303：ctx=None 刻意——这里扫的是**我们自己的**出站稿，
+        # 场景/发送方维度已在 run_autoreply 入口（never_auto_reply + 群 opt-in）判过，出站扫描不许跳。
+        _lvl, hits = keyword_risk_hits(reply, direction="out", ctx=None)
     except Exception:
         hits = []
     return _decide(
@@ -399,9 +401,9 @@ async def run_autoreply(
     # 同源（is_group_conversation：chat_type 集合 + TG 负 id 启发），chat_type
     # 同时看顶层与 source（TG 协议 worker 放 source.chat_type）。telegram 群经
     # 本链同样受闸——resolve 的 TG 豁免只属 pyrogram A 线自己的群闸。
+    _src0 = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     try:
         from src.inbox.ingest import is_group_conversation
-        _src0 = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         _is_group_msg = bool(is_group_conversation({
             "chat_type": str(payload.get("chat_type")
                              or (_src0 or {}).get("chat_type") or ""),
@@ -410,6 +412,19 @@ async def run_autoreply(
         }))
     except Exception:
         _is_group_msg = False
+    # Q-23 #303：同事账号 / 报障群 / 运维群硬名单——先于群 opt-in 与档位，任何直发链一律不回
+    #（协议直发链是「无人值守」，事故群里的同事测试消息此前只靠群 opt-in 一道闸）。
+    try:
+        from src.inbox.peer_bot_guard import never_auto_reply_reason as _never_fn
+        _never = _never_fn(
+            cfg, platform=platform, account_id=account_id, chat_key=chat_key,
+            sender_id=str(payload.get("sender_id") or (_src0 or {}).get("sender_id") or ""))
+    except Exception:
+        _never = ""
+    if _never:
+        logger.info("[peer-guard] skip reason=%s cid=%s:%s:%s line=protocol",
+                    _never, platform, account_id, chat_key)
+        return _result("never_auto_reply", inbound=text, never_auto_reply=_never)
     if _is_group_msg:
         _gmode = ""
         if inbox_mode_fn is not None:

@@ -150,6 +150,106 @@ def _webhook_bot_ids() -> "frozenset[str]":
     return _OWN_BOT_CACHE["ids"]
 
 
+# ── Q-23（#303，2026-09-12）never_auto_reply：同事账号 + 报障群 / 运维群 ─────────
+# 事故：报障群 -1004345824259 被成人守卫软回应刷屏（mid 1445/1454/1459/1461）——群里说话的是
+# 同事账号（bug_intake.support_accounts）而不是客户，聊的是「给我看你的日志」而不是越界。
+# 这层是**身份/场景**闸（谁 / 在哪），与上面 Tier0「对端是不是 bot」判定分层，且**不看 enabled**
+# ——它不是启发式，是硬名单：同事账号与运维场景永远不该收到任何自动出站。
+# 名单来源（全部零配置推导 + 可选显式补充 ``inbox.peer_bot_guard.never_auto_reply.{accounts,groups}``）：
+#   accounts = bug_intake.support_accounts ∪ own_bot_ids ∪ webhook 通知 bot ∪ 本租户全部平台账号
+#   groups   = bug_intake.groups ∪ notify webhooks 的 telegram target（运维群 / 报障群）
+_NEVER_AUTO_CACHE: Dict[str, Any] = {"ts": 0.0, "key": None, "ids": None}
+_NEVER_AUTO_TTL_SEC = 120.0
+
+
+def _never_auto_extra(node: Any, key: str) -> "set[str]":
+    raw = (node or {}).get(key) if isinstance(node, dict) else None
+    if isinstance(raw, (list, tuple, set)):
+        return {str(x or "").strip().lstrip("@").lower() for x in raw if str(x or "").strip()}
+    if isinstance(raw, str) and raw.strip():
+        return {t.strip().lstrip("@").lower() for t in raw.split(",") if t.strip()}
+    return set()
+
+
+def never_auto_reply_ids(config: Optional[Dict[str, Any]]) -> Dict[str, "frozenset[str]"]:
+    """``{"accounts": frozenset, "groups": frozenset}``（120s 缓存；任一来源异常按空集，不抛）。"""
+    now = time.time()
+    try:
+        _key = (id(config), repr((config or {}).get("bug_intake")),
+                repr((((config or {}).get("inbox") or {}).get("peer_bot_guard") or {})))
+    except Exception:
+        _key = (id(config), "", "")
+    if (_NEVER_AUTO_CACHE["ids"] is not None and _NEVER_AUTO_CACHE["key"] == _key
+            and now - float(_NEVER_AUTO_CACHE["ts"]) < _NEVER_AUTO_TTL_SEC):
+        return _NEVER_AUTO_CACHE["ids"]
+    accounts: set = set()
+    groups: set = set()
+    try:
+        from src.ops.bug_intake import parse_cfg as _bug_cfg
+        _bc = _bug_cfg(config)
+        accounts |= {str(a).strip() for a in (_bc.get("support_accounts") or set()) if str(a).strip()}
+        groups |= {str(g).strip() for g in (_bc.get("groups") or set()) if str(g).strip()}
+    except Exception:
+        pass
+    try:
+        cfg = parse_cfg(config)
+        accounts |= set(cfg.get("own_bot_ids") or [])
+        accounts |= set(_webhook_bot_ids())
+    except Exception:
+        pass
+    try:
+        from src.integrations.notify_webhooks_store import load as _load_webhooks
+        for ch in _load_webhooks() or []:
+            if str(ch.get("format") or "").lower() != "telegram":
+                continue
+            tgt = str(ch.get("target") or ch.get("chat_id") or "").strip()
+            if tgt:
+                groups.add(tgt)
+    except Exception:
+        pass
+    try:
+        # 只读已初始化的单例（纯单测 / 无编排器部署时绝不隐式建库——与 business_line 缓存同纪律）
+        from src.integrations import account_registry as _ar
+        _reg = getattr(_ar, "_registry", None)
+        for row in (_reg.list() if _reg is not None else []) or []:
+            aid = str((row or {}).get("account_id") or "").strip()
+            if aid and aid != "default":
+                accounts.add(aid)
+    except Exception:
+        pass
+    node = (((config or {}).get("inbox") or {}).get("peer_bot_guard") or {}).get("never_auto_reply")
+    accounts |= _never_auto_extra(node, "accounts")
+    groups |= _never_auto_extra(node, "groups")
+    out = {"accounts": frozenset(a.lower() for a in accounts), "groups": frozenset(groups)}
+    _NEVER_AUTO_CACHE.update({"ts": now, "key": _key, "ids": out})
+    return out
+
+
+def _invalidate_never_auto_cache() -> None:
+    _NEVER_AUTO_CACHE.update({"ts": 0.0, "key": None, "ids": None})
+
+
+def never_auto_reply_reason(config: Optional[Dict[str, Any]], *, platform: str = "",
+                            account_id: str = "", chat_key: Any = "", sender_id: Any = "") -> str:
+    """硬名单判定。返回 ``""`` 放行 / ``colleague:<id>``（对端或发送方是同事 / 本租户账号 / 自家 bot）
+    / ``ops_group:<id>``（报障群 / 运维群 / 通知目标群）。
+
+    ``chat_key`` 与 ``sender_id`` 任一命中即拦；私聊里对端 chat_key 就是发送方。``account_id``
+    本身（自己）不算同事——自己给自己发不经这里。
+    """
+    ids = never_auto_reply_ids(config)
+    ck = str(chat_key or "").strip()
+    sid = str(sender_id or "").strip()
+    me = str(account_id or "").strip()
+    if ck and ck in ids["groups"]:
+        return f"ops_group:{ck}"
+    for cand in (sid, ck):
+        c = cand.lstrip("@").lower()
+        if c and c != me.lower() and c in ids["accounts"]:
+            return f"colleague:{cand}"
+    return ""
+
+
 def is_own_bot(cfg: Dict[str, Any], *, chat_key: Any = "", username: Any = "",
                extra_ids: Optional["frozenset[str]"] = None) -> bool:
     """对端是否是自家 bot（配置 own_bot_ids ∪ webhook token 推导 ∪ extra_ids）。"""
@@ -685,6 +785,7 @@ def _reset_for_tests() -> None:
             _STATS[k] = 0
         _ALERTED.clear()
         _SWEPT = False
+    _invalidate_never_auto_cache()
 
 
 # ── 落库/告警副作用（best-effort，绝不阻塞回复链） ──────────────────────
@@ -1046,6 +1147,17 @@ def guard_a_line_should_skip(
     运营有查询价值），只拦「继续走 LLM 回复」这一段。``current_text`` =
     正在处理的这条入站正文（镜像异步落库时靠它补齐复读计数的最后一条）。
     """
+    # Q-23 #303 硬名单先于 enabled：同事账号 / 报障群 / 运维群永远不自动回
+    _sid = ""
+    if message is not None:
+        _sid = str(getattr(getattr(message, "from_user", None), "id", "") or "")
+    _never = never_auto_reply_reason(config, platform="telegram", account_id=str(account_id or ""),
+                                     chat_key=chat_id, sender_id=_sid)
+    if _never:
+        _bump("suppressed", "never_auto_reply")
+        logger.info("[peer-guard] skip reason=%s cid=telegram:%s:%s line=a",
+                    _never, account_id or "default", chat_id)
+        return _never
     cfg = parse_cfg(config)
     if not cfg.get("enabled"):
         return ""
@@ -1168,10 +1280,18 @@ def guard_auto_draft_action(
     全平台生效：Telegram 走行级 Tier0（username/chat_type，来自会话表），
     其余平台只有内容信号（复读/秒回/预算）。
     """
+    conversation_id = str(conv.get("conversation_id") or "")
+    # Q-23 #303 硬名单先于 enabled：同事账号 / 报障群 / 运维群永远不拟稿不自动回
+    _never = never_auto_reply_reason(
+        config, platform=str(conv.get("platform") or ""), account_id=str(conv.get("account_id") or ""),
+        chat_key=conv.get("chat_key") or "", sender_id=conv.get("sender_id") or "")
+    if _never:
+        _bump("suppressed", "never_auto_reply")
+        logger.info("[peer-guard] skip reason=%s cid=%s line=b", _never, conversation_id or "-")
+        return _never, False
     cfg = parse_cfg(config)
     if not cfg.get("enabled"):
         return "", False
-    conversation_id = str(conv.get("conversation_id") or "")
     if not conversation_id or store is None:
         return "", False
     _ensure_sweep(store, cfg)
@@ -1301,6 +1421,8 @@ __all__ = [
     "evaluate",
     "Verdict",
     "is_own_bot",
+    "never_auto_reply_ids",
+    "never_auto_reply_reason",
     "budget_flags",
     "budget_state",
     "today_key",
