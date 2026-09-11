@@ -201,32 +201,52 @@ def _join_text_items(v: Any) -> str:
 def resolve_address_names_for_conv(
     persona: Dict[str, Any], conversation_id: str = "",
 ) -> Dict[str, str]:
-    """本次出话该用的双向称呼：**联系人级 > 人设级**（#155，2026-09-03）。
+    """本次出话该用的双向称呼（#155 → Q-20 #178 层级修正，2026-09-11）。
 
     这两个值描述的是「这段客户关系」不是「这个人设」：同一人设服务一百个
     客户，不可能对每个人都叫 babe。#155 把它们挪到联系人级
-    （``src.inbox.contact_names``），人设级保留为存量兼容读（升级即生效，
-    不必等运营逐个重填）。inbox store 不可用/无会话 id → 纯人设级=旧行为。
+    （``src.inbox.contact_names``）。Q-20 收紧回落：
+
+      · 有会话 id → **只认联系人级**；``call_peer`` 空 → 会话显示名（平台昵称）
+        或不称呼，**不再回落人设级爱称**；``peer_calls_you`` 空 → 空（对方叫你
+        就是叫人设名）。
+      · 无会话 id（纯人设预览 / 工具型调用）→ 人设级 ``names.*``＝旧行为。
+      · inbox store 不可用 → 有会话 id 也**不**回落人设级（宁可不称呼，不串味）。
+
+    返回含来源键（``call_peer_source`` ∈ contact/display/persona/""，
+    ``peer_calls_you_source`` ∈ contact/persona/""）与 ``self_name`` /
+    ``peer_display_name``，供 ``_build_address_pin`` 分情况措辞。
     """
     p_names = persona.get("names") if isinstance(persona, dict) else {}
     if not isinstance(p_names, dict):
         p_names = {}
-    fallback = {
-        "call_peer": str(p_names.get("call_peer") or "").strip(),
-        "peer_calls_you": str(p_names.get("peer_calls_you") or "").strip(),
-    }
+    self_name = str(persona.get("name") or "").strip() if isinstance(persona, dict) else ""
     cid = str(conversation_id or "").strip()
     if not cid:
-        return fallback
+        cp = str(p_names.get("call_peer") or "").strip()
+        py = str(p_names.get("peer_calls_you") or "").strip()
+        return {
+            "call_peer": cp, "call_peer_source": "persona" if cp else "",
+            "peer_calls_you": py, "peer_calls_you_source": "persona" if py else "",
+            "peer_display_name": "", "self_name": self_name,
+        }
+    empty = {
+        "call_peer": "", "call_peer_source": "",
+        "peer_calls_you": "", "peer_calls_you_source": "",
+        "peer_display_name": "", "self_name": self_name,
+    }
     try:
-        from src.inbox.contact_names import resolve_address_names
+        from src.inbox.contact_names import resolve_address_context
         from src.integrations.protocol_bridge import get_inbox_store
         store = get_inbox_store()
         if store is None:
-            return fallback
-        return resolve_address_names(store, cid, persona)
+            return empty
+        out = resolve_address_context(store, cid, persona)
+        if not out.get("self_name"):
+            out["self_name"] = self_name
+        return out
     except Exception:
-        return fallback
+        return empty
 
 
 def _build_address_pin(
@@ -238,25 +258,74 @@ def _build_address_pin(
     ``resolve_address_names_for_conv``）。实锤：档案明写「称呼对方为 babe」
     仍被客户满屏「baba」带跑，且记忆库的 AI 推断（「用户不喜欢被叫 babe」）
     在反向教唆——故钉子必须显式声明「绝不互换 + 档案压过记忆推断」。
+
+    Q-20（#178）：``call_peer`` 来源为会话显示名时措辞改为「用名字或不称呼、
+    不用爱称」（不再把人设级 babe 当本会话爱称）；联系人级 ``peer_calls_you``
+    ≠ 人设名时补「那是你在 TA 那里的名字，绝不纠正、自我介绍就用它」硬约束
+    （#178 追加 Q9GDEH/2PKKM6：AI 出站「It's Mizuki, not Alicia」当场穿帮）。
     """
     resolved = resolve_address_names_for_conv(persona, conversation_id)
     call_peer = resolved.get("call_peer") or ""
+    cp_src = resolved.get("call_peer_source") or ""
     peer_calls = resolved.get("peer_calls_you") or ""
+    self_name = resolved.get("self_name") or ""
     if not (call_peer or peer_calls):
         return ""
     parts = []
-    if call_peer:
+    if call_peer and cp_src == "display":
+        parts.append(
+            f"对方的名字（显示名）：「{call_peer}」——需要称呼 TA 时用这个名字，或者"
+            "不加称呼；本会话**没有设置爱称**，不要用任何爱称（人设档里的爱称也不用）"
+        )
+    elif call_peer:
         parts.append(f"你对对方的称呼（爱称/昵称）：「{call_peer}」——要用爱称时只用它")
     if peer_calls:
         parts.append(
             f"对方对你的称呼：「{peer_calls}」——那是对方叫**你**的叫法，"
             "绝不能拿它去称呼对方"
         )
+        if _client_side_name_differs(peer_calls, self_name):
+            parts.append(client_side_name_pin(peer_calls, self_name))
     return (
         "【称呼·硬约束】" + "；".join(parts)
         + "。两个方向绝不互换：即使对方满屏都在用某个叫法，你对 TA 的称呼"
         "也不变。这条来自人设档案（运营明示），优先级高于任何「记忆/推断」"
         "（如记忆里有「对方不喜欢某称呼」这类 AI 推断，也不得推翻本条）。"
+    )
+
+
+def _client_side_name_differs(peer_calls_you: str, self_name: str) -> bool:
+    """联系人级「对方怎么叫我」是否是一个**与人设名不同**的名字（Q-20 B）。
+
+    同名/包含（「Mizu」↔「Mizuki」、「Mizuki 🌸」）按一致处理，不加硬约束；
+    人设名未知时只要 peer_calls_you 非空即视为「不同」（宁多钉一句）。
+    """
+    py = str(peer_calls_you or "").strip()
+    if not py:
+        return False
+    sn = str(self_name or "").strip()
+    if not sn:
+        return True
+    try:
+        from src.utils.account_name_check import names_consistent
+        ok = names_consistent(py, sn)
+    except Exception:
+        ok = None
+    return ok is False
+
+
+def client_side_name_pin(peer_calls_you: str, self_name: str = "") -> str:
+    """「对方一直叫你 X」硬约束句（Q-20 B，#178 Q9GDEH/2PKKM6 实锤）。
+
+    与 ``prompt_addenda.identity_addendum(conversation_id=)`` 的 zh 句同源措辞；
+    这里进 ``_build_address_pin``（full/compact 两种 prompt 格式都吃）。
+    """
+    x = str(peer_calls_you or "").strip()
+    y = str(self_name or "").strip()
+    deny = f"绝不说『我是 {y} 不是 {x}』" if y else f"绝不说『我不是 {x}』"
+    return (
+        f"对方一直叫你「{x}」，这是你在 TA 那里的名字：绝不纠正、{deny}、"
+        f"不解释；自我介绍 / 被问名字时就用「{x}」"
     )
 
 

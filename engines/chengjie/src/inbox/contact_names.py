@@ -15,8 +15,16 @@
 展示/注入决定，独立表更好回滚，且 ``store.delete_conversation_data`` 按
 「含 conversation_id 列的表」结构发现式清理，删会话时本表自动跟着清。
 
-注入优先级（``resolve_address_names``）：联系人级 > 人设级（存量兼容）。
-人设级值在迁移后仍读得到——存量部署升级即生效，不必等运营逐个重填。
+注入优先级（``resolve_address_names`` / ``resolve_address_context``）：
+
+  · **有会话 id** → 只认联系人级。联系人级 ``call_peer`` 为空 → **不回落人设级
+    爱称**，改用会话显示名（平台昵称 / 通讯录名）或不称呼；``peer_calls_you``
+    为空 → 不回落，对方叫你什么就是你的人设名（无附加称呼）。
+    （Q-20 #178，2026-09-11：#155 的「逐字段回落人设级」让一百个客户共用一个
+    babe——客户面板占位「未填则沿用人设称呼」把运营带进了坑；本层级修正后，
+    人设级 ``names.call_peer`` / ``names.peer_calls_you`` 只在**没有会话 id**
+    的纯人设预览里生效。）
+  · **无会话 id**（预览 / 工具型调用）→ 纯人设级＝旧行为。
 
 全部 best-effort：任何异常按「没有配置」处理，绝不成为出话链故障点。
 """
@@ -129,31 +137,102 @@ def set_contact_names(
     return True
 
 
-def resolve_address_names(
+#: 显示名可当称呼用的长度上限（超过多半是签名/状态文本，不是名字）
+_DISPLAY_NAME_MAX = 40
+
+
+def usable_display_name(display_name: Any, chat_key: Any = "") -> str:
+    """会话显示名能否拿来称呼对方：非空、≠ chat_key（裸号码/裸 id）、≤ 40 字、
+    至少含一个字母（任何文字系统），且不是以 + / 数字开头的号码形态。不合格
+    → ""（＝不称呼）。纯函数。"""
+    s = str(display_name or "").strip()
+    if not s or len(s) > _DISPLAY_NAME_MAX:
+        return ""
+    ck = str(chat_key or "").strip()
+    if ck and s == ck:
+        return ""
+    if s[0] == "+" or s[0].isdigit():
+        return ""
+    if not any(ch.isalpha() for ch in s):
+        return ""
+    return s
+
+
+def conversation_display_name(store: Any, conversation_id: str) -> str:
+    """会话的对方显示名（``conversations.display_name``，经 ``usable_display_name``
+    过滤）。store 不可用 / 无行 / 不合格 → ""。绝不抛。"""
+    cid = str(conversation_id or "").strip()
+    if store is None or not cid or not hasattr(store, "get_conversation"):
+        return ""
+    try:
+        row = store.get_conversation(cid) or {}
+    except Exception:
+        return ""
+    if not isinstance(row, dict):
+        return ""
+    return usable_display_name(row.get("display_name"), row.get("chat_key"))
+
+
+def resolve_address_context(
     store: Any, conversation_id: str, persona: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
-    """本次出话该用的称呼：联系人级 > 人设级（存量兼容）。
+    """本次出话的双向称呼**及其来源**（Q-20 A，#178）。
 
-    #155：这两个值本质是客户关系属性，联系人级才是它们的家；人设级是迁移前
-    的存量位置，仍然读——存量部署升级即生效，不必等运营逐个重填。逐字段回落
-    （联系人只配了 call_peer 时，peer_calls_you 仍可用人设级的值）。
-    异常 → 全空（守卫与注入块自然不出，等于本功能未配置）。
+    返回::
+
+        {"call_peer": str,        # 我怎么叫对方：联系人级 > 会话显示名 > ""（不称呼）
+         "call_peer_source": "contact" | "display" | "",
+         "peer_calls_you": str,   # 对方怎么叫我：联系人级 > ""（＝就叫人设名）
+         "peer_calls_you_source": "contact" | "",
+         "peer_display_name": str, # 会话显示名（合格的），供注入块说「对方叫 X」
+         "self_name": str}         # 人设名（persona.name）
+
+    有会话 id 时**绝不**读人设级 ``names.call_peer`` / ``names.peer_calls_you``——
+    那是「没有会话」时才生效的预览值（见模块 docstring）。异常 → 全空。
     """
-    out = {"call_peer": "", "peer_calls_you": ""}
+    empty = {
+        "call_peer": "", "call_peer_source": "",
+        "peer_calls_you": "", "peer_calls_you_source": "",
+        "peer_display_name": "", "self_name": "",
+    }
+    out = dict(empty)
     try:
-        p_names = (persona or {}).get("names") if isinstance(persona, dict) else {}
-        if not isinstance(p_names, dict):
-            p_names = {}
-        contact = get_contact_names(store, conversation_id)
-        out["call_peer"] = (contact.get("call_peer")
-                            or _clean(p_names.get("call_peer")))
-        out["peer_calls_you"] = (contact.get("peer_calls_you")
-                                 or _clean(p_names.get("peer_calls_you")))
+        cid = str(conversation_id or "").strip()
+        if isinstance(persona, dict):
+            out["self_name"] = str(persona.get("name") or "").strip()
+        contact = get_contact_names(store, cid) if cid else {
+            "call_peer": "", "peer_calls_you": ""}
+        disp = conversation_display_name(store, cid) if cid else ""
+        out["peer_display_name"] = disp
+        if contact.get("call_peer"):
+            out["call_peer"] = contact["call_peer"]
+            out["call_peer_source"] = "contact"
+        elif disp:
+            out["call_peer"] = disp
+            out["call_peer_source"] = "display"
+        if contact.get("peer_calls_you"):
+            out["peer_calls_you"] = contact["peer_calls_you"]
+            out["peer_calls_you_source"] = "contact"
     except Exception:
         logger.debug("[contact_names] 称呼解析失败 cid=%s", conversation_id,
                      exc_info=True)
-        return {"call_peer": "", "peer_calls_you": ""}
+        return dict(empty)
     return out
+
+
+def resolve_address_names(
+    store: Any, conversation_id: str, persona: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """本次出话该用的称呼（只有值的两键形态，供守卫叠加等旧调用点）。
+
+    Q-20（#178）：有会话 id → 只认联系人级；``call_peer`` 空 → 会话显示名或空
+    （不称呼），**不再回落人设级爱称**；``peer_calls_you`` 空 → 空（对方叫你
+    就是叫人设名）。完整来源见 :func:`resolve_address_context`。
+    异常 → 全空（守卫与注入块自然不出，等于本功能未配置）。
+    """
+    ctx = resolve_address_context(store, conversation_id, persona)
+    return {"call_peer": ctx.get("call_peer") or "",
+            "peer_calls_you": ctx.get("peer_calls_you") or ""}
 
 
 def overlay_sendpoint_names(
@@ -164,7 +243,11 @@ def overlay_sendpoint_names(
     守卫（``sendpoint_guard.resolve_sendpoint_names``）读的是人设级值；prompt
     注入已按联系人级走。两处不一致就会互相打架——守卫会按人设的 babe 去「纠正」
     本该是联系人 honey 的正确文本。本函数在调用点叠一层，让两侧同源。
-    ``self_names`` 等其余键原样保留。store 不可用/无配置 → 原样返回。
+    ``self_names`` 等其余键原样保留。store 不可用/缺会话段 → 原样返回。
+
+    Q-20（#178）：会话已知时**替换**而非「非空才覆盖」——人设级 babe 不再经守卫
+    漏进有会话的出站（与 prompt 注入同一层级规则：联系人级 > 显示名 > 不称呼）。
+    同时附 ``conversation_id`` / ``peer_display_name``（name_denial 守卫日志用）。
     """
     out = dict(names or {})
     try:
@@ -177,10 +260,12 @@ def overlay_sendpoint_names(
         store = get_inbox_store()
         if store is None:
             return out
-        contact = get_contact_names(store, f"{plat}:{acct}:{ck}")
-        for key in ("call_peer", "peer_calls_you"):
-            if contact.get(key):
-                out[key] = contact[key]
+        cid = f"{plat}:{acct}:{ck}"
+        ctx = resolve_address_context(store, cid, None)
+        out["call_peer"] = ctx.get("call_peer") or ""
+        out["peer_calls_you"] = ctx.get("peer_calls_you") or ""
+        out["conversation_id"] = cid
+        out["peer_display_name"] = ctx.get("peer_display_name") or ""
     except Exception:
         logger.debug("[contact_names] 守卫名字包叠加失败（保留人设级）",
                      exc_info=True)
@@ -298,10 +383,13 @@ def _reset_for_tests() -> None:
 
 __all__ = [
     "MAX_LEN",
+    "conversation_display_name",
     "get_contact_names",
     "migrate_all_personas",
     "migrate_persona_names_to_contacts",
     "overlay_sendpoint_names",
+    "resolve_address_context",
     "resolve_address_names",
     "set_contact_names",
+    "usable_display_name",
 ]

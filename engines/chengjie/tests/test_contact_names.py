@@ -6,10 +6,12 @@
 babe；改人设档会连带改掉另外九十九个。运营要么不敢填，要么填了全员共用。
 
 本文件钉住的不变量：
-  · 联系人级 > 人设级，逐字段回落（存量部署升级即生效，不必逐个重填）；
+  · 有会话 id → **只认联系人级**（Q-20 #178，2026-09-11：#155 的「逐字段回落
+    人设级」让一百个客户共用一个 babe）；``call_peer`` 空 → 会话显示名或不称呼，
+    ``peer_calls_you`` 空 → 空（对方叫你就是叫人设名）；人设级只在无会话 id 生效；
   · prompt 硬钉子与出站呼格守卫**同源**——两处不一致，守卫会拿人设的 babe 去
     「纠正」本该是联系人 honey 的正确文本；
-  · 迁移幂等且不覆盖新层已有决定；迁移前后生效爱称逐字节一致；
+  · 迁移幂等且不覆盖新层已有决定；迁移后生效爱称逐字节一致；
   · 方向永不反转（AI 用 babe 称客户，绝不把客户叫它的 baba 反过来用）。
 """
 from __future__ import annotations
@@ -41,12 +43,33 @@ def store(tmp_path):
 # ══ 1. 读写与回落 ═══════════════════════════════════════════════════════════
 
 def test_contact_level_overrides_persona_level(store):
+    # Q-20：未设置 → **不**回落人设级 babe/baba；call_peer 用会话显示名、peer_calls_you 空
     assert cn.resolve_address_names(store, _CID, _PERSONA) == {
-        "call_peer": "babe", "peer_calls_you": "baba"}   # 未设置 → 人设级
+        "call_peer": "客户1", "peer_calls_you": ""}
+    ctx = cn.resolve_address_context(store, _CID, _PERSONA)
+    assert ctx["call_peer_source"] == "display" and ctx["peer_calls_you_source"] == ""
+    assert ctx["self_name"] == "小美" and ctx["peer_display_name"] == "客户1"
     cn.set_contact_names(store, _CID, call_peer="honey")
     got = cn.resolve_address_names(store, _CID, _PERSONA)
-    # 逐字段回落：只覆写了 call_peer，另一格仍用人设级
-    assert got == {"call_peer": "honey", "peer_calls_you": "baba"}
+    # 只覆写了 call_peer，另一格仍为空（不是人设级 baba）
+    assert got == {"call_peer": "honey", "peer_calls_you": ""}
+    assert cn.resolve_address_context(store, _CID, _PERSONA)["call_peer_source"] == "contact"
+
+
+def test_display_name_fallback_is_filtered(store):
+    """显示名是裸号码 / 等于 chat_key / 无字母 → 不称呼（call_peer 空）。"""
+    assert cn.usable_display_name("David", "c1") == "David"
+    assert cn.usable_display_name("c1", "c1") == ""
+    assert cn.usable_display_name("+15551234567", "x") == ""
+    assert cn.usable_display_name("8613800000000", "x") == ""
+    assert cn.usable_display_name("🔥🔥", "x") == ""
+    assert cn.usable_display_name("x" * 41, "y") == ""
+    bare = "telegram:acc:c9"
+    store.upsert_conversation(InboxConversation(
+        conversation_id=bare, platform="telegram", account_id="acc",
+        chat_key="c9", display_name="c9", last_text="hi", last_ts=90.0))
+    assert cn.resolve_address_names(store, bare, _PERSONA) == {
+        "call_peer": "", "peer_calls_you": ""}
 
 
 def test_per_contact_isolation(store):
@@ -63,13 +86,14 @@ def test_per_contact_isolation(store):
     assert _PERSONA["names"]["call_peer"] == "babe"
 
 
-def test_explicit_clear_falls_back_to_persona(store):
+def test_explicit_clear_drops_pet_name(store):
     """传空串＝显式清除（运营改主意「这个客户不用爱称」必须做得到）。"""
     cn.set_contact_names(store, _CID, call_peer="honey")
     cn.set_contact_names(store, _CID, call_peer="")
     assert cn.get_contact_names(store, _CID)["call_peer"] == ""
-    # 清掉之后回落人设级，不是变成没有称呼
-    assert cn.resolve_address_names(store, _CID, _PERSONA)["call_peer"] == "babe"
+    # Q-20：清掉之后就是没有爱称（显示名兜底），绝不回落人设级 babe
+    got = cn.resolve_address_names(store, _CID, _PERSONA)["call_peer"]
+    assert got == "客户1" and got != "babe"
 
 
 def test_partial_update_keeps_other_field(store):
@@ -110,11 +134,27 @@ def test_prompt_pin_uses_contact_level(store, monkeypatch):
     blk = pm._format_persona_instructions(dict(_PERSONA), conversation_id=_CID)
     assert "honey" in blk and "称呼·硬约束" in blk
     assert "babe" not in blk          # 人设级值不得再出现（否则两个爱称打架）
+    assert "baba" not in blk          # Q-20：peer_calls_you 未设 → 不回落人设级
     # compact 是生产主用格式，同样按联系人级
     cblk = pm._format_persona_compact(dict(_PERSONA), conversation_id=_CID)
-    assert "honey" in cblk and "babe" not in cblk
+    assert "honey" in cblk and "babe" not in cblk and "baba" not in cblk
     # 不传会话 id（预览/工具型调用）→ 纯人设级＝旧行为
     assert "babe" in pm._format_persona_instructions(dict(_PERSONA))
+
+
+def test_prompt_pin_blank_contact_uses_display_name_not_persona_pet(store, monkeypatch):
+    """Q-20 A（#178 VDUJX6/PQE9ZF 根因）：联系人级空 + 人设级 babe → 提示词里
+    不得出现 babe；改为「对方的名字（显示名）」+ 明令不用爱称。"""
+    from src.utils.persona_manager import PersonaManager
+
+    monkeypatch.setattr(
+        "src.integrations.protocol_bridge.get_inbox_store", lambda: store)
+    pm = PersonaManager.get_instance()
+    for fmt in (pm._format_persona_instructions, pm._format_persona_compact):
+        blk = fmt(dict(_PERSONA), conversation_id=_CID)
+        assert "babe" not in blk and "baba" not in blk
+        assert "对方的名字（显示名）：「客户1」" in blk
+        assert "没有设置爱称" in blk
 
 
 def test_prompt_pin_direction_never_reversed(store, monkeypatch):
@@ -136,9 +176,14 @@ def test_prompt_pin_absent_when_nothing_configured(store, monkeypatch):
 
     monkeypatch.setattr(
         "src.integrations.protocol_bridge.get_inbox_store", lambda: store)
+    # 会话显示名不合格（裸 chat_key）且联系人级未配 → 整段钉子不出现
+    noname = "telegram:acc:c7"
+    store.upsert_conversation(InboxConversation(
+        conversation_id=noname, platform="telegram", account_id="acc",
+        chat_key="c7", display_name="c7", last_text="hi", last_ts=90.0))
     bare = {"id": "p2", "name": "A", "role": "r", "names": {"nickname": "小A"}}
     blk = PersonaManager.get_instance()._format_persona_instructions(
-        bare, conversation_id=_CID)
+        bare, conversation_id=noname)
     assert "称呼·硬约束" not in blk
 
 
@@ -151,8 +196,9 @@ def test_sendpoint_overlay_matches_prompt(store, monkeypatch):
     base = {"call_peer": "babe", "peer_calls_you": "baba", "self_names": ["小美"]}
     out = cn.overlay_sendpoint_names(base, "telegram", "acc", "c1")
     assert out["call_peer"] == "honey"          # 与 prompt 注入同源
-    assert out["peer_calls_you"] == "baba"      # 未覆写 → 人设级
+    assert out["peer_calls_you"] == ""          # Q-20：未配 → 空，人设级 baba 不进守卫
     assert out["self_names"] == ["小美"]        # 其余键原样保留
+    assert out["conversation_id"] == _CID and out["peer_display_name"] == "客户1"
     # 缺任一段（无会话上下文）→ 原样返回
     assert cn.overlay_sendpoint_names(base, "telegram", "acc", "")["call_peer"] \
         == "babe"
