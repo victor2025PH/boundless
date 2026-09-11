@@ -9,16 +9,17 @@
 2. 逐行分类：**良性噪声**（已知、有兜底、不用管）vs **真问题**（会影响收发/崩溃/
    会话失效）。良性清单与真问题规则见 ``BENIGN`` / ``REAL``。
 3. 去重：状态文件按「问题指纹」记已报过的项（默认 24h 窗），只对**新出现**的真问题告警。
-4. 投递：把「本轮新真问题 + 健康摘要」发到 **@Sousaun 的 Telegram**——经本机智聊实例
-   ``POST /api/unified-inbox/send``，account_id=8244899900（@Sousaun 本人），
-   chat_key='me'（发到该账号自己的「收藏消息」，无需对方 /start、不打扰任何陌生人）。
+4. 投递：把「本轮新真问题 + 健康摘要」经 ``@tgzkw_bot`` 发到**运维群**（tg-ywqz）；
+   bot 不可用时回落本机智聊实例 ``POST /api/unified-inbox/send``，account_id=8244899900
+   （@Sousaun 本人）chat_key='me'（发到该账号自己的「收藏消息」）。
 5. 落档：每轮结果追加 ``SEAT_LOG_MONITOR_LOG.md`` 台账。
 
 为什么这样投递
 --------------
-@Sousaun = 我们自管的 Telegram 账号 8244899900（人设 su_wan / Katie），在本机智聊实例
-在线。通知 bot ``@tgzkw_bot`` 无法主动私聊未 /start 过它的用户，故不走 bot；改用实例把
-消息投进 @Sousaun 自己的收藏消息——运营登录 @Sousaun 即可见，零副作用。
+2026-09-10 前主通道是 bot 私聊 @Sousaun（8244899900）。@Sousaun 是智聊**生产在线账号**
+（人设 su_wan / Katie），bot 私聊它＝生产收件箱里出现一个 bot 对端 → peer_bot_guard
+弹 bot_peer_alert 进运维群——监控每发一次报告就自造一条告警。改投运维群后生产链零感知，
+且运维群本就是这类信息该去的地方。
 
 用法
 ----
@@ -58,13 +59,18 @@ SEATS: Dict[str, str] = {
 }
 LOG_REL = r"AppData\Roaming\telegram-ai-desktop\logs\backend.log"
 
-# ── @Sousaun 投递参数 ──────────────────────────────────────────────────────────
-# 主通道：@tgzkw_bot 私聊 @Sousaun（chat_id=8244899900）。bot token 从实例的
-# notify_webhooks.json 读（不硬编密钥）；@Sousaun 已对该 bot /start 过，可直达。
-# 备用通道：本机智聊实例把消息投进 @Sousaun 自己的「收藏消息」（chat_key='me'）。
+# ── 投递参数 ──────────────────────────────────────────────────────────────────
+# 主通道：@tgzkw_bot 投**运维群**（notify_webhooks.json 里名为 OPS_GROUP_CHANNEL 的
+# 渠道的 target）。bot token 同样从该文件读（不硬编密钥）。
+# 2026-09-10 改：此前主通道是 bot 私聊 @Sousaun（8244899900）——那是智聊**生产在线
+# 账号**，bot 消息进它的收件箱会被 peer_bot_guard 判「对端是 bot」→ 运维群弹
+# bot_peer_alert，等于监控自己制造告警。改投运维群后生产账号零感知。
+# 备用通道：本机智聊实例把消息投进 @Sousaun 自己的「收藏消息」（chat_key='me'，
+# 自己发给自己不是对端 bot，不触发 peer_bot_guard）。
 INSTANCE_BASE = "http://127.0.0.1:18799"
 INSTANCE_DATA_ROOT = r"D:\chengjie-instances\zhiliao\data"
-SOUSAUN_TG_ID = "8244899900"     # @Sousaun 的 Telegram user id（bot DM 目标）
+OPS_GROUP_CHANNEL = "tg-ywqz"    # 运维群在 notify_webhooks.json 里的渠道名
+SOUSAUN_TG_ID = "8244899900"     # @Sousaun 的 Telegram user id（仅作历史参考，不再 DM）
 SOUSAUN_PLATFORM = "telegram"
 SOUSAUN_ACCOUNT = "8244899900"   # 备用：@Sousaun 本人账号（su_wan / Katie）
 SOUSAUN_CHATKEY = "me"           # 备用：发到该账号自己的收藏消息
@@ -381,12 +387,31 @@ def _bot_token() -> str:
     return ""
 
 
-def deliver_bot(text: str, chat_id: str = SOUSAUN_TG_ID) -> Tuple[bool, str]:
-    """主通道：@tgzkw_bot 私聊（缺省 @Sousaun；实施81 起 duty 工具族经
-    ``chat_id`` 参数改投 @ai_zkw——本脚本自身行为不变）。"""
+def _ops_group_chat_id() -> str:
+    """运维群 chat_id：取 notify_webhooks.json 中名为 OPS_GROUP_CHANNEL 的渠道 target。"""
+    try:
+        arr = json.loads(NOTIFY_WEBHOOKS.read_text(encoding="utf-8"))
+        for ch in arr if isinstance(arr, list) else []:
+            if str(ch.get("name")) == OPS_GROUP_CHANNEL and ch.get("target"):
+                return str(ch["target"])
+    except Exception:
+        pass
+    return ""
+
+
+def deliver_bot(text: str, chat_id: str = "") -> Tuple[bool, str]:
+    """主通道：@tgzkw_bot 投运维群（缺省取 notify_webhooks.json 的 tg-ywqz target；
+    实施81 起 duty 工具族经 ``chat_id`` 参数改投 @ai_zkw）。
+
+    禁止把 chat_id 指回任何智聊在线的生产账号（见文件头 2026-09-10 注）。"""
     tok = _bot_token()
     if not tok:
         return False, "notify_webhooks.json 无 bot token"
+    chat_id = str(chat_id or "").strip() or _ops_group_chat_id()
+    if not chat_id:
+        return False, f"notify_webhooks.json 无 {OPS_GROUP_CHANNEL} 渠道 target"
+    if chat_id == SOUSAUN_TG_ID:
+        return False, "拒绝：不得用 bot 私聊生产账号 @Sousaun（会触发 bot_peer_alert）"
     api = f"https://api.telegram.org/bot{tok}/sendMessage"
     chunks = _chunk(text, 3800)
     for i, ch in enumerate(chunks):
@@ -460,7 +485,7 @@ def _append_ledger(report: Dict[str, Any], sent: Optional[str]) -> None:
         LEDGER_PATH.write_text(
             "# 坐席机工作日志监控台账\n\n"
             "> 监控对象：198 智拓 / 104 幻颜 的 ChatX 后端 `backend.log`\n"
-            "> 工具：`monitor_seat_logs.py`（本机每 15 分钟巡检，真问题投递 @Sousaun）\n",
+            "> 工具：`monitor_seat_logs.py`（本机每 15 分钟巡检，真问题投递运维群 tg-ywqz）\n",
             encoding="utf-8")
     parts = [f"\n### {now}", f"- 巡检：{seats_line}"]
     if report["new_real"]:
@@ -470,7 +495,7 @@ def _append_ledger(report: Dict[str, Any], sent: Optional[str]) -> None:
     else:
         parts.append("- 新真问题：0（健康）")
     if sent is not None:
-        parts.append(f"- 投递 @Sousaun：{sent}")
+        parts.append(f"- 投递：{sent}")
     with LEDGER_PATH.open("a", encoding="utf-8") as f:
         f.write("\n".join(parts) + "\n")
 

@@ -166,9 +166,16 @@ def test_reminder_throttled_then_repeats(monkeypatch):
     w._check_unanswered_inbound(now=t0)
     w._check_unanswered_inbound(now=t0 + 3600)          # 1h：不重提
     assert len(bus.events) == 1
-    w._check_unanswered_inbound(now=t0 + 4 * 3600 + 10)  # 过 4h：重提
+    w._check_unanswered_inbound(now=t0 + 4 * 3600 + 10)  # 过 4h 但还是同一个会话：不重提
+    assert len(bus.events) == 1
+    w._check_unanswered_inbound(now=t0 + 24 * 3600 + 10)  # 满 24h：重提（标情况未变）
     assert len(bus.events) == 2
-    assert bus.events[1][1]["reminder"] is True
+    assert bus.events[1][1]["reminder"] is True and bus.events[1][1]["unchanged"] is True
+    # 新会话掉球 → 内容变了 → 过常规间隔即重提
+    w._app.inbox_store.rows.append(_conv("c2", 5.0))
+    w._app.inbox_store.dirs["c2"] = {"direction": "in"}
+    w._check_unanswered_inbound(now=t0 + 28 * 3600 + 20)
+    assert len(bus.events) == 3 and bus.events[2][1]["count"] == 2
 
 
 def test_recovery_notice_when_cleared(monkeypatch):

@@ -97,11 +97,21 @@ def sanitize_webhook(item: Dict[str, Any]) -> Dict[str, Any]:
         "events": events,
         "enabled": item.get("enabled", True) is not False,
     }
+    # 2026-09-09：链接根地址（把卡片里的 /workspace/... 拼成公网可点的绝对地址）。
+    # 此前这里把它丢了 → 面板保存过的渠道永远只剩「查看 AI 花费」几个字没有链接。
+    base = str(item.get("base_url") or "").strip()[:300]
+    if base.startswith(("http://", "https://")):
+        out["base_url"] = base.rstrip("/")
     # Q-14 #262 E（2026-09-10）：链接形态 login（默认）/ magic / off。键缺席 → 不落键（＝login，
     # 且让 merge_preserve_secrets 能区分「面板没这个字段」与「显式选了 login」）；非法值 → 不落键。
     links = str(item.get("links") or "").strip().lower()
     if links in ("login", "magic", "off"):
         out["links"] = links
+    # 2026-09-10 运维群降噪 P1.1：渠道最低严重度 info（默认＝全收）/ warning / critical。
+    # 老板私聊配 critical → 只收 🔴 与日报/业务类，慢性积压与算力黄灯不再打扰。
+    sev = str(item.get("min_severity") or "").strip().lower()
+    if sev in ("warning", "critical"):
+        out["min_severity"] = sev
     return out
 
 
@@ -196,6 +206,8 @@ def merge_preserve_secrets(
         # 把手工配好的 magic 抹回 login。显式带 links（含 login）则以回传为准。
         if "links" not in w and old.get("links") in ("magic", "off"):
             w["links"] = old["links"]
+        if "min_severity" not in w and old.get("min_severity") in ("warning", "critical"):
+            w["min_severity"] = old["min_severity"]
     return incoming
 
 

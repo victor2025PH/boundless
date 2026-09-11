@@ -356,6 +356,11 @@ def build_probe_specs(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 # 服务端悄悄丢图 / 路由到纯文本模型时，旧判据一路绿灯。
                 "expect_any": list(_VISION_EXPECT),
                 "timeout": _vision_endpoint_timeout(vi, _url),
+                # LAN Ollama 端点：探针成功后顺手核永久钉（见 ensure_ollama_pinned）。
+                # ``vision.lan_keep_alive_pin: false`` 可关；云端端点不带此标记。
+                **({"pin_keep_alive": True}
+                   if _is_private_url(_url)
+                   and vi.get("lan_keep_alive_pin", True) else {}),
                 # 备胎**只观测不弹窗**：它坏了不影响当下出话（主路还在），半夜弹窗
                 # 是纯噪音；但必须进状态文件/metrics，好在切主之前就看见。
                 **({} if _idx == 0 else {"alert": False}),
@@ -559,6 +564,95 @@ def _http_json(url: str, payload: Dict[str, Any], timeout: float,
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
+def _ollama_root(chat_url: str) -> str:
+    """``http://host:11434/v1/chat/completions`` → ``http://host:11434``；非 OpenAI
+    兼容路径返回空串（不是 Ollama 形态的端点就不去碰）。"""
+    u = str(chat_url or "").strip()
+    marker = "/v1/chat/completions"
+    if not u.endswith(marker):
+        return ""
+    return u[: -len(marker)].rstrip("/")
+
+
+def _is_private_url(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return (host in ("localhost", "127.0.0.1") or host.startswith("192.168.")
+            or host.startswith("10.")
+            or bool(re.match(r"^172\.(1[6-9]|2\d|3[01])\.", host)))
+
+
+# 永久钉判据：Ollama 的 keep_alive=-1 会把 expires_at 写成几百年后；任何不到一天的
+# 到期时间都说明钉已经丢了（主机重启 / 有人手动改过 keep_alive）。
+_PIN_MIN_REMAIN_SEC = 24 * 3600.0
+
+
+def ollama_pin_needed(ps_payload: Dict[str, Any], model: str,
+                      now_ts: Optional[float] = None) -> bool:
+    """纯函数：``/api/ps`` 返回里该模型是否**在驻留但没打永久钉**。
+
+    未驻留（不在 ps 里）返回 False——冷载由探针请求本身触发，这里只管「钉」，
+    不替代加载；解析失败一律 False（宁可不钉，也不无脑每 10 分钟发一次 generate）。
+    """
+    try:
+        models = ps_payload.get("models") or []
+    except AttributeError:
+        return False
+    want = str(model or "").strip()
+    if not want:
+        return False
+    now = float(now_ts if now_ts is not None else time.time())
+    for m in models:
+        if not isinstance(m, dict):
+            continue
+        name = str(m.get("name") or m.get("model") or "")
+        if name != want and name.split(":")[0] != want:
+            continue
+        exp = str(m.get("expires_at") or "").strip()
+        if not exp:
+            return True
+        try:
+            from datetime import datetime
+            # Go 的 RFC3339 带纳秒（9 位小数），Python fromisoformat 只吃到 6 位。
+            core = re.sub(r"(\.\d{6})\d+", r"\1", exp).replace("Z", "+00:00")
+            remain = datetime.fromisoformat(core).timestamp() - now
+        except Exception:
+            return False
+        return remain < _PIN_MIN_REMAIN_SEC
+    return False
+
+
+def ensure_ollama_pinned(chat_url: str, model: str, *, timeout: float = 5.0) -> str:
+    """LAN Ollama 端点探针成功后顺手核一次永久钉；丢了就补（``keep_alive=-1``）。
+
+    背景（2026-09-10 实锤）：176 上 qwen3-vl 的永久钉在 8-28 整机崩溃重启后没补回，
+    实际 keep_alive≈10 分钟，而真活探针周期 10m+漂移 ⇒ 每轮都撞上冷载 ⇒ 3s 端点超时
+    ⇒ 两连败弹 host_alert，10 分钟后又「恢复」——31 小时里 6 组共 12 条纯噪音告警。
+    探针既然每 10 分钟就路过一次，就让它顺手把钉核一遍：一次 GET ``/api/ps``，
+    只在真丢钉时才多发一个 ``/api/generate``。只对私网端点做（云端无此契约）。
+    返回一个短字串供探针 detail 拼接（"" = 无事发生）。绝不抛。
+    """
+    root = _ollama_root(chat_url)
+    if not root or not _is_private_url(root) or not str(model or "").strip():
+        return ""
+    try:
+        with urllib.request.urlopen(root + "/api/ps", timeout=timeout) as resp:
+            ps = json.loads(resp.read().decode("utf-8", "replace"))
+        if not ollama_pin_needed(ps, model):
+            return ""
+        _http_json(root + "/api/generate",
+                   {"model": model, "keep_alive": -1}, max(timeout, 30.0))
+        logger.warning("[true_probe] %s 上 %s 永久钉丢失，已重新钉住(keep_alive=-1)",
+                       root, model)
+        return "repinned"
+    except Exception as e:
+        logger.info("[true_probe] 永久钉核查跳过 %s %s: %s", root, model, str(e)[:80])
+        return ""
+
+
 def _chat_content(data: Dict[str, Any]) -> str:
     try:
         return str(((data.get("choices") or [{}])[0].get("message") or {})
@@ -596,11 +690,27 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
         if kind == "openai_chat":
             data = _http_json(url, spec.get("json") or {}, timeout,
                               headers=spec.get("headers"))
+            # 成本记账（2026-09-08）：云端识图探针每 10 分钟真打一次硅基 Qwen3-VL，
+            # 金额虽小也要进账本——对账时「探针」是独立一桶，不该混进客户回复。
+            try:
+                from src.ai.llm_cost import provider_from_base_url, record_usage_from_response
+                record_usage_from_response(
+                    data, model=str((spec.get("json") or {}).get("model") or ""),
+                    purpose="probe", tier="probe",
+                    provider=provider_from_base_url(url) or "lan")
+            except Exception:
+                pass
             content = _chat_content(data)
             verdict_ok, why = content_verdict(content, spec)
             if not verdict_ok:
                 return False, why
-            return True, f"{time.time() - t0:.1f}s {content[:24]!r}"
+            detail = f"{time.time() - t0:.1f}s {content[:24]!r}"
+            if spec.get("pin_keep_alive"):
+                tag = ensure_ollama_pinned(
+                    url, str((spec.get("json") or {}).get("model") or ""))
+                if tag:
+                    detail += f" {tag}"
+            return True, detail
         if kind == "ser_emotion":
             wav = ASR_FIXTURE.read_bytes()
             boundary = f"----probe{uuid.uuid4().hex}"
@@ -786,6 +896,8 @@ def restore_strike_state(
                 "alerted": bool(row.get("alerted")),
                 "last_ok": float(row.get("last_ok") or 0.0),
                 "last_run": float(row.get("last_run") or 0.0),
+                "first_fail": float(row.get("first_fail") or 0.0),
+                "oks": int(row.get("oks") or 0),
             }
         except (TypeError, ValueError):
             continue
@@ -876,23 +988,46 @@ def next_strike_state(
     *,
     fail_strikes: int = 2,
     now: Optional[float] = None,
+    min_fail_sec: float = 0.0,
+    recover_oks: int = 1,
 ) -> Tuple[Dict[str, Dict[str, Any]], str]:
     """连败状态机（纯函数）。返回 (新 state, action)。
 
     action ∈ ""（无事）| "alert"（达连败阈值，首报）| "recovered"（曾报过警后恢复）。
     重复失败不重复出 action（弹窗去抖由 notify_host 冷却兜第二层）。
+
+    滞回（2026-09-10 运维群降噪 P0.4）：09-09～09-10 视觉探针 6 组「失败→10 分钟后恢复」
+    成对刷屏——176 模型冷加载超 3s 超时、下一轮就好，形态是抖动不是故障。两道闸：
+      - ``min_fail_sec``：连败达阈值还不够，失败还要**持续**这么久（从首败 ``first_fail``
+        起算）才首报——默认 0（旧行为）；watchdog 默认给 15min，10 分钟一轮的抖动吸掉；
+      - ``recover_oks``：报过警后要**连续** N 次成功才补绿窗——默认 1（旧行为）；watchdog
+        默认 2，防「好一轮又坏」把恢复/再失败对着刷。
     """
     ts = float(now if now is not None else time.time())
     st = dict(state or {})
     d = dict(st.get(domain) or {"fails": 0, "alerted": False, "last_ok": 0.0})
     action = ""
     if ok:
+        d["oks"] = int(d.get("oks", 0)) + 1
         if d.get("alerted"):
-            action = "recovered"
-        d.update({"fails": 0, "alerted": False, "last_ok": ts})
+            if d["oks"] >= max(1, int(recover_oks)):
+                action = "recovered"
+                d.update({"fails": 0, "alerted": False, "first_fail": 0.0})
+            # 未凑够连续成功：保持 alerted，fails 归零但不清 first_fail（再失败续算）
+            else:
+                d["fails"] = 0
+        else:
+            d.update({"fails": 0, "first_fail": 0.0})
+        d["last_ok"] = ts
     else:
+        d["oks"] = 0
         d["fails"] = int(d.get("fails", 0)) + 1
-        if d["fails"] >= max(1, int(fail_strikes)) and not d.get("alerted"):
+        if not float(d.get("first_fail") or 0.0):
+            d["first_fail"] = ts
+        lasted = ts - float(d.get("first_fail") or ts)
+        if (d["fails"] >= max(1, int(fail_strikes))
+                and lasted >= max(0.0, float(min_fail_sec))
+                and not d.get("alerted")):
             d["alerted"] = True
             action = "alert"
     d["last_run"] = ts

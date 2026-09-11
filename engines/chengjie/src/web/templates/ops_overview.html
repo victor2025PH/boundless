@@ -405,8 +405,11 @@
     <!-- 对话球 orb 遥测行（实施59 P3a）：读 ui-event-trend?prefix=asb_orb_（14 天，
          beacon 按日落库重启无损）；趋势库未开/窗口零事件 → 整行静默不占版面 -->
     <div id="assistOrbRow" style="margin-top:6px;"></div>
+    <!-- 语音对话行（实施95 P2）：会话/回合/打断（手动·语音）/说完→第一声与说完→转写
+         回来的时延分桶，读 ui-event-trend?prefix=asb_voice_（14 天）；零事件整行静默 -->
+    <div id="assistVoiceRow" style="margin-top:4px;"></div>
     <!-- 助教用量行（实施58 P6 观察期）：教学/代办/登录流/手机配对四段漏斗，
-         读 ui-event-trend?prefix=asb_（剔除 asb_orb_ 归 orb 行）；零事件整行静默 -->
+         读 ui-event-trend?prefix=asb_（剔除 asb_orb_/asb_voice_ 归各自行）；零事件整行静默 -->
     <div id="assistXzRow" style="margin-top:4px;"></div>
   </section>
 
@@ -1446,8 +1449,43 @@ async function _assistOrbRow(){
   }catch(e){ el.innerHTML=''; }
 }
 
+// 语音对话行（实施95 P2）：会话数/回合数/打断（手动+语音）/说完→第一声 与
+// 说完→转写回来 的时延分桶（14 天累计）。这是「像 ChatGPT 语音」的硬指标：
+// 首声 ≥7s 占比高亮琥珀（对话感崩塌线）。趋势库未开或窗口零事件 → 整行静默。
+async function _assistVoiceRow(){
+  var el = document.getElementById('assistVoiceRow');
+  if(!el) return;
+  try{
+    const r = await apiFetch('/api/admin/ui-event-trend?days=14&prefix=asb_voice_', {credentials:'same-origin'});
+    if(!r.ok){ el.innerHTML=''; return; }
+    const d = await r.json();
+    if(!d || d.enabled===false){ el.innerHTML=''; return; }
+    var agg = {};
+    (d.days||[]).forEach(function(row){
+      var by = (row && row.by_action) || {};
+      Object.keys(by).forEach(function(a){ agg[a] = (agg[a]||0) + (Number(by[a])||0); });
+    });
+    var n = function(k){ return Number(agg['asb_voice_'+k])||0; };
+    var sessions = n('start'), turns = n('turn');
+    if(!(sessions||turns)){ el.innerHTML=''; return; }
+    var ttfs = [n('ttfs_lt2'), n('ttfs_2_4'), n('ttfs_4_7'), n('ttfs_gt7')];
+    var asr = [n('asr_lt1'), n('asr_1_2'), n('asr_2_4'), n('asr_gt4')];
+    var tSum = ttfs[0]+ttfs[1]+ttfs[2]+ttfs[3];
+    var slow = tSum ? Math.round(ttfs[3]*100/tSum) : 0;
+    var parts = [];
+    parts.push(esc(window.T('ov2_as_voice_sess')) + ' ' + fmt(sessions) + ' · ' + esc(window.T('ov2_as_voice_turns')) + ' ' + fmt(turns));
+    parts.push(esc(window.T('ov2_as_voice_int')) + ' ' + fmt(n('interrupt')) + '/' + fmt(n('barge')));
+    if(tSum){
+      parts.push((slow>=20?'<span style="color:var(--amber)">':'') + esc(window.T('ov2_as_voice_ttfs'))
+        + ' ' + ttfs.join('/') + (slow>=20?'</span>':''));
+    }
+    if(asr[0]+asr[1]+asr[2]+asr[3]) parts.push(esc(window.T('ov2_as_voice_asr')) + ' ' + asr.join('/'));
+    el.innerHTML = '<div class="muted" style="font-size:12px;">🎙 ' + esc(window.T('ov2_as_voice_hd')) + ': ' + parts.join(' ｜ ') + '</div>';
+  }catch(e){ el.innerHTML=''; }
+}
+
 // 助教用量行（实施58 P6 观察期）：小智卡内一行——教学模式/代办任务/登录流程/
-// 手机配对四段 14 天累计（prefix=asb_，剔 asb_orb_ 归 orb 行）。趋势库未开或
+// 手机配对四段 14 天累计（prefix=asb_，剔 asb_orb_/asb_voice_ 归各自行）。趋势库未开或
 // 窗口零事件 → 整行静默；流程有失败亮琥珀（登录流翻车要人看一眼）。
 async function _assistXzRow(){
   var el = document.getElementById('assistXzRow');
@@ -1461,7 +1499,7 @@ async function _assistXzRow(){
     (d.days||[]).forEach(function(row){
       var by = (row && row.by_action) || {};
       Object.keys(by).forEach(function(a){
-        if(a.indexOf('asb_orb_')===0) return;  // orb 行自有归属
+        if(a.indexOf('asb_orb_')===0 || a.indexOf('asb_voice_')===0) return;  // orb/语音行自有归属
         agg[a] = (agg[a]||0) + (Number(by[a])||0);
       });
     });
@@ -1502,6 +1540,7 @@ async function loadAssistant(){
     var pr = d.process || {};
     opsSetCardLight('assist', (kb === 0 || !d.llm_wired) ? 'yellow' : '');
     _assistOrbRow();  // orb 遥测行：独立取数、自吞异常，绝不拖累主卡
+    _assistVoiceRow(); // 语音对话行（实施95 P2）：同款独立取数模式
     _assistXzRow();   // 助教用量行（实施58）：同款独立取数模式
     var rate = (Number(qa.n)||0) ? Math.round((Number(qa.rate)||0)*100)+'%' : '—';
     var kpis = [

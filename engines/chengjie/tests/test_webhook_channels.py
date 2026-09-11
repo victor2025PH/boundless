@@ -53,6 +53,26 @@ def test_feishu_absolute_link_survives():
     assert "https://x.cc/ops" in body["content"]["text"]
 
 
+def test_base_url_survives_sanitize_and_reaches_telegram_card():
+    """2026-09-09：渠道 base_url 此前在 sanitize 与 matcher 两处都被丢 → Telegram 卡片
+    里的 /workspace/... 链接永远只剩文字（运维群实锤「底部链接打不开」）。"""
+    from src.integrations import notify_webhooks_store as ws
+    from src.inbox.webhook_notifier import _build_card
+
+    clean = ws.sanitize_webhook({
+        "name": "g", "format": "telegram", "token": "1:A", "target": "-100",
+        "events": ["billing_alert"], "base_url": "https://katie.example.cc/",
+    })
+    assert clean["base_url"] == "https://katie.example.cc"
+    assert "base_url" not in ws.sanitize_webhook({"name": "x", "base_url": "javascript:alert(1)"})
+
+    n = WebhookNotifier([clean])
+    assert n._matchers and n._matchers[0]["base_url"] == "https://katie.example.cc"
+    card = _build_card("billing_alert", {"anomalies": [{"message": "m"}], "provider": "p"},
+                       "t", "[💴 查看 AI 花费](/workspace/cost)", n._matchers[0]["base_url"])
+    assert "https://katie.example.cc/workspace/cost" in card
+
+
 def test_resolve_endpoint_telegram_from_token():
     url = _resolve_chat_endpoint("telegram", "", "123:ABC")
     assert url == "https://api.telegram.org/bot123:ABC/sendMessage"
@@ -112,6 +132,67 @@ def test_notifier_reload_rebuilds_matchers():
     n.reload([{"name": "x", "format": "telegram", "enabled": False,
                "events": ["all"]}])
     assert len(n._matchers) == 0
+
+
+def test_min_severity_survives_sanitize_and_panel_resave():
+    """P1.1（2026-09-10）：渠道 min_severity 与 base_url 同病——sanitize 漏键就等于没配。"""
+    from src.integrations import notify_webhooks_store as ws
+
+    clean = ws.sanitize_webhook({"name": "boss", "format": "telegram", "token": "1:A",
+                                 "target": "7", "events": ["all"], "min_severity": "Critical"})
+    assert clean["min_severity"] == "critical"
+    assert "min_severity" not in ws.sanitize_webhook({"name": "g", "min_severity": "info"})
+    assert "min_severity" not in ws.sanitize_webhook({"name": "g", "min_severity": "loud"})
+    # 面板表单没有这个字段 → 回传缺键时沿用旧值
+    merged = ws.merge_preserve_secrets([{"name": "boss", "token": "", "secret": ""}],
+                                       {"boss": {"token": "1:A", "min_severity": "critical"}})
+    assert merged[0]["min_severity"] == "critical"
+
+
+def test_event_severity_taxonomy():
+    from src.inbox.webhook_notifier import event_severity, severity_allows
+
+    assert event_severity("host_alert") == "critical"
+    assert event_severity("lan_gpu_alert") == "warning"
+    # 慢性积压三连统一 🔵：走每日摘要，不该在 warning 门槛的渠道实时刷屏
+    for et in ("draft_backlog_alert", "case_backlog_alert", "unanswered_inbound_alert"):
+        assert event_severity(et) == "info", et
+    assert event_severity("ai_cost_report") == "report"
+    assert event_severity("never_registered_event") == "info"
+    assert severity_allows("info", "info") and severity_allows("critical", "critical")
+    assert not severity_allows("warning", "info") and not severity_allows("critical", "warning")
+    # 日报 / 业务不受门槛影响（靠订阅选择）
+    assert severity_allows("critical", "report") and severity_allows("critical", "business")
+
+
+async def test_dispatch_respects_channel_min_severity():
+    n = WebhookNotifier(config=[
+        {"name": "ops", "format": "telegram", "token": "t", "target": "-100", "events": ["all"]},
+        {"name": "boss", "format": "telegram", "token": "t", "target": "7", "events": ["all"],
+         "min_severity": "critical"},
+        {"name": "warn", "format": "telegram", "token": "t", "target": "8", "events": ["all"],
+         "min_severity": "warning"},
+    ])
+    sent = []
+
+    async def _fake_send(m, etype, data):
+        sent.append((m["name"], etype))
+    n._send = _fake_send  # type: ignore[assignment]
+
+    await n._dispatch({"type": "draft_backlog_alert", "data": {"rate_key": "a"}})
+    await n._dispatch({"type": "lan_gpu_alert", "data": {"rate_key": "b"}})
+    await n._dispatch({"type": "host_alert", "data": {"rate_key": "c"}})
+    # 恢复通知沿用原事件等级：老板收不到 lan_gpu 告警，也不该收到它的恢复
+    await n._dispatch({"type": "lan_gpu_alert", "data": {"rate_key": "d", "recovered": True}})
+    await n._dispatch({"type": "ai_cost_report", "data": {"rate_key": "e"}})
+
+    by = {}
+    for name, et in sent:
+        by.setdefault(name, []).append(et)
+    assert by["ops"] == ["draft_backlog_alert", "lan_gpu_alert", "host_alert",
+                         "lan_gpu_alert", "ai_cost_report"]
+    assert by["warn"] == ["lan_gpu_alert", "host_alert", "lan_gpu_alert", "ai_cost_report"]
+    assert by["boss"] == ["host_alert", "ai_cost_report"]
 
 
 async def test_send_test_missing_target_returns_error():

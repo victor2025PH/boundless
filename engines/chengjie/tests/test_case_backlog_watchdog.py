@@ -111,11 +111,17 @@ def test_reminder_interval_and_recovery(monkeypatch):
     w._check_case_backlog(now=now)
     w._check_case_backlog(now=now + 60)          # 间隔内不重提
     assert len(_backlog_events(bus)) == 1
-    w._check_case_backlog(now=now + 5 * 3600)    # 超间隔重提
+    w._check_case_backlog(now=now + 5 * 3600)    # 超间隔但同一个案例没变 → 不重提（一天一次）
+    assert len(_backlog_events(bus)) == 1
+    # 又来一个新危机案例 → 内容变了 → 立刻按常规间隔重提
+    store._cache["u2"] = _case("u2", "crisis", age_h=1.0, now=now + 5 * 3600)
+    w._check_case_backlog(now=now + 5 * 3600 + 60)
     assert len(_backlog_events(bus)) == 2
     assert _backlog_events(bus)[-1][1]["reminder"] is True
+    assert _backlog_events(bus)[-1][1]["urgent_count"] == 2
     # 处理掉（认领即视为有人在跟）→ 恢复通知
     claim_case(store._cache["u1"], "alice", now=now)
+    claim_case(store._cache["u2"], "alice", now=now)
     w._check_case_backlog(now=now + 6 * 3600)
     evts = _backlog_events(bus)
     assert evts[-1][1].get("recovered") is True

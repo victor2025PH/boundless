@@ -72,6 +72,10 @@ _DEFAULTS: Dict[str, Any] = {
     "heuristics": True,
     # 疑似分 ≥ 此值 → 拦本条 + 降 review（0 = 只算分/落库，不动作）
     "suspect_threshold": 0.6,
+    # 自家通知 bot（Telegram user id 或 @username）：命中仍照常拦自动链+降 manual
+    # （AI 没有理由回自家 bot），但**不发 bot_peer_alert**——它是我们自己派来的。
+    # 未配置时自动从 notify webhooks 的 telegram bot token 前缀推导（见 own_bot_ids）。
+    "own_bot_ids": [],
 }
 
 
@@ -105,7 +109,57 @@ def parse_cfg(root_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             node.get("suspect_threshold", out["suspect_threshold"]))))
     except (TypeError, ValueError):
         pass
+    raw_ids = node.get("own_bot_ids")
+    if isinstance(raw_ids, (list, tuple)):
+        out["own_bot_ids"] = [
+            s for s in (str(x or "").strip().lstrip("@").lower() for x in raw_ids) if s]
+    elif isinstance(raw_ids, str) and raw_ids.strip():
+        out["own_bot_ids"] = [
+            s for s in (t.strip().lstrip("@").lower() for t in raw_ids.split(",")) if s]
     return out
+
+
+# ── 自家 bot 识别（2026-09-10）────────────────────────────────────────────
+# 实锤：坐席日志监控经 @tgzkw_bot 私聊生产账号 @Sousaun → 生产收件箱出现 bot 对端
+# → Tier0 tg_is_bot 命中 → 运维群弹 bot_peer_alert。判定本身没错（它确实是 bot，
+# AI 不该回它），错的是把自己人当告警对象。webhook 通知 bot 的 user id 就是 bot
+# token 冒号前那段，可零配置推导；显式 own_bot_ids 用于覆盖/补充。
+_OWN_BOT_CACHE: Dict[str, Any] = {"ts": 0.0, "ids": frozenset()}
+_OWN_BOT_TTL_SEC = 600.0
+
+
+def _webhook_bot_ids() -> "frozenset[str]":
+    """notify webhooks 里所有 telegram 渠道的 bot user id（token 前缀）。软依赖：
+    store 缺席/异常 → 空集（只影响「不告警」这一层，判定与降档不受影响）。"""
+    now = time.time()
+    if now - float(_OWN_BOT_CACHE["ts"]) < _OWN_BOT_TTL_SEC:
+        return _OWN_BOT_CACHE["ids"]
+    ids: set = set()
+    try:
+        from src.integrations.notify_webhooks_store import load as _load_webhooks
+        for ch in _load_webhooks() or []:
+            if str(ch.get("format") or "").lower() != "telegram":
+                continue
+            tok = str(ch.get("token") or ch.get("url") or "")
+            head = tok.split(":", 1)[0].strip()
+            if head.isdigit():
+                ids.add(head)
+    except Exception:
+        pass
+    _OWN_BOT_CACHE.update({"ts": now, "ids": frozenset(ids)})
+    return _OWN_BOT_CACHE["ids"]
+
+
+def is_own_bot(cfg: Dict[str, Any], *, chat_key: Any = "", username: Any = "",
+               extra_ids: Optional["frozenset[str]"] = None) -> bool:
+    """对端是否是自家 bot（配置 own_bot_ids ∪ webhook token 推导 ∪ extra_ids）。"""
+    ck = str(chat_key or "").strip().lstrip("-").lower()
+    un = str(username or "").strip().lstrip("@").lower()
+    if not ck and not un:
+        return False
+    known = set(cfg.get("own_bot_ids") or [])
+    known |= set(extra_ids if extra_ids is not None else _webhook_bot_ids())
+    return bool(known) and (ck in known or (un != "" and un in known))
 
 
 # ── 纯函数：文本与信号 ──────────────────────────────────────────────────
@@ -1087,6 +1141,11 @@ def guard_a_line_should_skip(
     if v.downgrade_to and store is not None:
         _apply_downgrade(store, conversation_id, v.downgrade_to,
                          reason=v.reason)
+    if is_own_bot(cfg, chat_key=chat_id, username=username):
+        _bump("suppressed", "own_bot")
+        logger.info("[peer_bot_guard] 自家 bot 对端 cid=%s @%s：拦自动链不告警",
+                    conversation_id, str(username or "").lstrip("@"))
+        return v.reason
     _maybe_alert(conversation_id, v, platform="telegram",
                  display_name=display_name, username=username,
                  account_id=str(account_id or "default"),
@@ -1149,6 +1208,10 @@ def guard_auto_draft_action(
     if v.downgrade_to:
         _apply_downgrade(store, conversation_id, v.downgrade_to,
                          reason=v.reason)
+    if is_own_bot(cfg, chat_key=row.get("chat_key"), username=row.get("username")):
+        _bump("suppressed", "own_bot")
+        logger.info("[peer_bot_guard] 自家 bot 对端 cid=%s：拦拟稿不告警", conversation_id)
+        return v.reason, bool(v.budget_soft)
     _maybe_alert(conversation_id, v,
                  platform=str(row.get("platform") or ""),
                  display_name=str(row.get("display_name") or ""),
@@ -1237,6 +1300,7 @@ __all__ = [
     "daily_out_count",
     "evaluate",
     "Verdict",
+    "is_own_bot",
     "budget_flags",
     "budget_state",
     "today_key",

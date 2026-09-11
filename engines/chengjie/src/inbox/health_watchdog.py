@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +253,27 @@ _AVATAR_PROBE_CACHE: Dict[str, Any] = {"ts": 0.0, "url": "", "result": None}
 _AVATAR_PROBE_TTL_SEC = 60.0
 
 
+def health_payload_ready(data: Any) -> bool:
+    """语音服务 ``/health`` 返回体 → 「可用且模型已加载」（纯函数）。
+
+    两套契约并存，探针必须都认：
+      AvatarHub 7852：``{"ok": true, "models_loaded": true}``
+      IndexTTS-2 节点 104:7865（fish_speech 契约）：``{"status": "ok", "model_loaded": true}``
+    2026-09-10 实锤：探针只认前者 → 104 全程健康却被判 ``models_loaded=False`` →
+    每 4h 一条假「智聊语音掉线」告警，连发 10 条（tts 真活探针同期全绿）。
+    未声明加载字段视为已加载（老服务没有该字段）；显式 false 才算未就绪。
+    """
+    if not isinstance(data, dict):
+        return False
+    ok = data.get("ok") is True or str(data.get("status") or "").lower() in ("ok", "healthy", "ready")
+    if not ok:
+        return False
+    for key in ("models_loaded", "model_loaded"):
+        if key in data:
+            return bool(data.get(key))
+    return True
+
+
 def probe_avatar_voice(config: Dict[str, Any], *, force: bool = False) -> Optional[Dict[str, Any]]:
     """探测 AvatarHub 7852 /health（带 TTL 缓存）。返回 None = 未启用。"""
     url = avatar_probe_target(config)
@@ -273,9 +294,7 @@ def probe_avatar_voice(config: Dict[str, Any], *, force: bool = False) -> Option
         result.update({
             "reachable": True,
             "latency_ms": int((time.time() - t0) * 1000),
-            "models_loaded": bool(
-                isinstance(data, dict) and data.get("ok") is True
-                and data.get("models_loaded", True)),
+            "models_loaded": health_payload_ready(data),
         })
     except Exception as e:
         result["error"] = str(e)[:120]
@@ -369,18 +388,41 @@ def lan_gpu_remind_enabled(config: Dict[str, Any]) -> bool:
     return not is_desktop_client(config)
 
 
+# LAN GPU 主机探活路径，按契约逐个试，任一 2xx 即算可达：
+#   /api/version  Ollama 专有（零模型加载、毫秒级）
+#   /v1/models    OpenAI 兼容通用——vLLM / llama.cpp server / Ollama 都有
+#   /health       vLLM 与多数自建推理服务
+# 2026-09-10 实锤：173:8001 是 vLLM，只打 /api/version 必 404 → 「不可达」累到 1002 分钟、
+# 每 4h 一条假告警，而该主机全程在线（/v1/models 正常返回 chatx）。
+_LAN_GPU_PROBE_PATHS: Tuple[str, ...] = ("/api/version", "/v1/models", "/health")
+
+
 def probe_lan_gpu_host(root: str, *, timeout: float = 3.0) -> Dict[str, Any]:
-    """探一台 LAN GPU 主机的 Ollama ``/api/version``（无缓存，调用方自控频率）。"""
+    """探一台 LAN GPU 主机是否在线（无缓存，调用方自控频率）。
+
+    依次打 ``_LAN_GPU_PROBE_PATHS``：连接层失败（拒连/超时/DNS）立即判不可达——主机
+    真挂了不必再试别的路径白等；只有 HTTP 层非 2xx（404/405 等＝服务在、契约不同）
+    才换下一条路径。返回 ``probe`` 字段记录命中的路径，方便日志分辨主机类型。
+    """
     result: Dict[str, Any] = {"url": root, "reachable": False}
-    try:
-        import urllib.request
+    import urllib.error
+    import urllib.request
+    last_err = ""
+    for path in _LAN_GPU_PROBE_PATHS:
         t0 = time.time()
-        with urllib.request.urlopen(root + "/api/version", timeout=timeout) as resp:
-            resp.read()
-        result.update({"reachable": True,
-                       "latency_ms": int((time.time() - t0) * 1000)})
-    except Exception as e:
-        result["error"] = str(e)[:120]
+        try:
+            with urllib.request.urlopen(root + path, timeout=timeout) as resp:
+                resp.read()
+            result.update({"reachable": True, "probe": path,
+                           "latency_ms": int((time.time() - t0) * 1000)})
+            return result
+        except urllib.error.HTTPError as e:
+            last_err = f"{path}: HTTP {e.code}"
+            continue
+        except Exception as e:
+            last_err = f"{path}: {str(e)[:100]}"
+            break
+    result["error"] = last_err[:120]
     return result
 
 
@@ -528,6 +570,11 @@ class HealthWatchdog:
     ) -> None:
         self._app = app
         self._config_manager = config_manager
+        # 跨重启的提醒状态账本（2026-09-10 运维群降噪）：草稿积压 / 案例积压 / 入站漏球 /
+        # 语音掉线 / LAN GPU 五个高频巡检的 alerted / first_seen / last_remind / 内容指纹
+        # 都从这里读写——此前是实例属性，每次重启整轮重发且「已 X 分钟」从零重算。
+        # 其余巡检仍是内存态（沿用旧属性），迁移时把 _db_* 那组属性当模板。
+        self.__dict__["_remind_ledger"] = self._build_remind_ledger()
         self._interval = max(30.0, float(interval_sec))
         self._pending_threshold = int(pending_threshold)
         # 计费巡检比健康巡检稀疏（默认 1h）：对账单是月窗聚合，无需每个健康周期都算。
@@ -590,10 +637,8 @@ class HealthWatchdog:
         self._fb_duty_last_calls: Optional[int] = None
         self._fb_duty_since_ts: float = 0.0
         self._fb_duty_idle_ticks: int = 0
-        # AvatarHub 7852 持续掉线升级提醒：首次探测到掉线的时刻 + 已首提标记 + 上次重提时刻
-        self._avatar_down_since: float = 0.0
-        self._avatar_alerted: bool = False
-        self._avatar_last_remind: float = 0.0
+        # AvatarHub 7852 持续掉线升级提醒：_avatar_down_since / _avatar_alerted /
+        # _avatar_last_remind / _avatar_alert_kind 是账本属性（键 avatar_voice），见类尾。
         # 语音出站断档巡检（2026-08-02）：hub 音色档 404 → strict 全拒发 5 天零告警
         # ——avatar hang 检测（探针绿+streak 新鲜度）对「低流量下零星请求全失败」
         # 不敏感。判据换成 voice_outage 滚动窗「尝试 ≥N 且 0 成功」。
@@ -613,7 +658,6 @@ class HealthWatchdog:
         self._fulfiller_kind: str = ""
         # 告警种类：down=不可达/未载入（health 探测红）；hang=半死（health 绿但合成连败，
         # 2026-07-14 事故形态）。恢复语义不同：hang 需要「失败后真的又成过一次」的正面证据。
-        self._avatar_alert_kind: str = ""
         # hub 引擎目录离线巡检（2026-08-22「fish 冒充 IndexTTS-2」事故）：与上面
         # 三个 _avatar_* 状态**刻意分开**——那组盯的是本机 7852，这组盯的是 hub
         # （另一台机、另一套失败域）；共用计时器会让两边的首提/重提互相顶掉。
@@ -623,7 +667,8 @@ class HealthWatchdog:
         self.total_hub_engine_reminders: int = 0
         # LAN GPU 主机宕机升级提醒（2026-08-01 176 整机静默下线两小时事故）：
         # 每主机独立状态 {down_since, alerted, last_remind}——故障转移网兜住了业务，
-        # 但运维必须知道冗余已经归零。
+        # 但运维必须知道冗余已经归零。内存字典是账本（键 lan_gpu:<root>）的工作副本：
+        # 首次取用从账本回灌、每次改动直写账本（见 _lan_gpu_host_state / _lan_gpu_persist）。
         self._lan_gpu_state: Dict[str, Dict[str, float]] = {}
         self.total_lan_gpu_reminders: int = 0
         # 口语化 LLM 持续连败升级提醒（2026-07-15 九连败静默事故）：状态镜像 avatar hang
@@ -673,8 +718,7 @@ class HealthWatchdog:
         self.total_persona_retired_alerts: int = 0
         # 草稿积压无人处理巡检（2026-07-29）：SLA watcher 只盯 L3/L4，**L1 是盲区**
         # （见 _check_draft_backlog），而 L1 恰恰是「必须人来处理」的那一档。
-        self._db_alerted: bool = False
-        self._db_last_remind: float = 0.0
+        # _db_alerted / _db_last_remind 是账本属性（键 draft_backlog）。
         self.total_draft_backlog_alerts: int = 0
         # 账号真相真幽灵巡检（2026-08-17 P4b）：会话库有、注册表没有、且不是
         # web 工作台。desktop 镜像号在册，不算泄漏；已登出未读被 summary 清零，
@@ -684,8 +728,7 @@ class HealthWatchdog:
         self.total_accounts_truth_alerts: int = 0
         # 入站漏球巡检（P0 2026-08-05）：客户最后一句无回复且**无草稿** → 拟稿链
         # 丢球（draft_backlog 只看「有稿没人处理」，这里补「压根没稿」的盲区）。
-        self._ui_alerted: bool = False
-        self._ui_last_remind: float = 0.0
+        # _ui_alerted / _ui_last_remind 是账本属性（键 unanswered_inbound）。
         self.total_unanswered_inbound_alerts: int = 0
         # 回复额度触顶聚合巡检（P1 2026-08-12）：逐会话 bot_peer_alert 只在首次
         # 拦截各响一次，「多个会话同日触顶」这个**面**级信号（预算配小/撞 bot 波）
@@ -712,8 +755,7 @@ class HealthWatchdog:
         self.total_phantom_unread_alerts: int = 0
         # 案例积压巡检（2026-08-03 案例中心 P4）：AI 立了案没人认领/处理 →
         # 案例中心就退化回「永远 0 的看板」老病。聚合告警 + 危机级单独点名。
-        self._cb_alerted: bool = False
-        self._cb_last_remind: float = 0.0
+        # _cb_alerted / _cb_last_remind 是账本属性（键 case_backlog）。
         self.total_case_backlog_alerts: int = 0
         # 账号接入漏斗停摆巡检（2026-08-02）：ops 卡已能显示 stalled，但**看板要有人开
         # 才有用**——2026-07-25 的 LINE 扫码 100% 失败正是烂了多日无人知。这里把它升级
@@ -813,6 +855,175 @@ class HealthWatchdog:
 
     def stop(self) -> None:
         self._stop_evt.set()
+
+    # ── 跨重启提醒状态账本（2026-09-10 运维群降噪 P0.2/P0.3）───────────────────
+    @property
+    def _remind(self):
+        """提醒账本（懒建：单测常用 ``__new__`` 绕过 ``__init__`` 直接调巡检方法）。"""
+        led = self.__dict__.get("_remind_ledger")
+        if led is None:
+            led = self._build_remind_ledger()
+            self.__dict__["_remind_ledger"] = led
+        return led
+
+    def _build_remind_ledger(self):
+        from src.inbox.remind_ledger import RemindLedger, state_path
+        cm = getattr(self, "_config_manager", None)
+        cfg_path = str(getattr(cm, "config_path", "") or "").strip()
+        path = None
+        if cfg_path:
+            try:
+                from pathlib import Path as _RLPath
+                path = state_path(_RLPath(cfg_path).parent)
+            except Exception:
+                path = None
+        try:
+            return RemindLedger(path)
+        except Exception:
+            logger.debug("提醒状态账本初始化失败，退化为内存态", exc_info=True)
+            return RemindLedger(None)
+
+    @staticmethod
+    def _unchanged_interval_sec(block: Dict[str, Any], interval_sec: float,
+                                default_min: Optional[float] = None) -> float:
+        """内容指纹未变时的重提间隔：配置 ``unchanged_interval_min``；未配时取 ``default_min``
+        （积压类巡检传 1440＝「同样那几条稿 / 案例」一天提一次足够），``default_min`` 为 None
+        则与常规间隔相同（硬件掉线类：还没恢复就照常提）。结果不短于常规间隔。"""
+        raw = (block or {}).get("unchanged_interval_min")
+        if raw in (None, ""):
+            if default_min is None:
+                return float(interval_sec)
+            mins = float(default_min)
+        else:
+            try:
+                mins = float(raw)
+            except (TypeError, ValueError):
+                mins = float(default_min or 0.0)
+        return max(float(interval_sec), mins * 60.0)
+
+    # 旧属性名保留为账本视图（巡检代码 / 单测沿用 `_db_alerted` 等写法零改动）
+    _RK_DRAFT = "draft_backlog"
+    _RK_CASE = "case_backlog"
+    _RK_UNANSWERED = "unanswered_inbound"
+    _RK_AVATAR = "avatar_voice"
+    _RK_LAN_GPU = "lan_gpu:"
+
+    @property
+    def _db_alerted(self) -> bool:
+        return self._remind.alerted(self._RK_DRAFT)
+
+    @_db_alerted.setter
+    def _db_alerted(self, v: bool) -> None:
+        self._remind.set_alerted(self._RK_DRAFT, bool(v))
+
+    @property
+    def _db_last_remind(self) -> float:
+        return self._remind.last_remind(self._RK_DRAFT)
+
+    @_db_last_remind.setter
+    def _db_last_remind(self, v: float) -> None:
+        self._remind.set_last_remind(self._RK_DRAFT, float(v or 0.0))
+
+    @property
+    def _cb_alerted(self) -> bool:
+        return self._remind.alerted(self._RK_CASE)
+
+    @_cb_alerted.setter
+    def _cb_alerted(self, v: bool) -> None:
+        self._remind.set_alerted(self._RK_CASE, bool(v))
+
+    @property
+    def _cb_last_remind(self) -> float:
+        return self._remind.last_remind(self._RK_CASE)
+
+    @_cb_last_remind.setter
+    def _cb_last_remind(self, v: float) -> None:
+        self._remind.set_last_remind(self._RK_CASE, float(v or 0.0))
+
+    @property
+    def _ui_alerted(self) -> bool:
+        return self._remind.alerted(self._RK_UNANSWERED)
+
+    @_ui_alerted.setter
+    def _ui_alerted(self, v: bool) -> None:
+        self._remind.set_alerted(self._RK_UNANSWERED, bool(v))
+
+    @property
+    def _ui_last_remind(self) -> float:
+        return self._remind.last_remind(self._RK_UNANSWERED)
+
+    @_ui_last_remind.setter
+    def _ui_last_remind(self, v: float) -> None:
+        self._remind.set_last_remind(self._RK_UNANSWERED, float(v or 0.0))
+
+    @property
+    def _avatar_alerted(self) -> bool:
+        return self._remind.alerted(self._RK_AVATAR)
+
+    @_avatar_alerted.setter
+    def _avatar_alerted(self, v: bool) -> None:
+        self._remind.set_alerted(self._RK_AVATAR, bool(v))
+
+    @property
+    def _avatar_last_remind(self) -> float:
+        return self._remind.last_remind(self._RK_AVATAR)
+
+    @_avatar_last_remind.setter
+    def _avatar_last_remind(self, v: float) -> None:
+        self._remind.set_last_remind(self._RK_AVATAR, float(v or 0.0))
+
+    @property
+    def _avatar_down_since(self) -> float:
+        return self._remind.first_seen(self._RK_AVATAR)
+
+    @_avatar_down_since.setter
+    def _avatar_down_since(self, v: float) -> None:
+        self._remind.set_first_seen(self._RK_AVATAR, float(v or 0.0))
+
+    @property
+    def _avatar_alert_kind(self) -> str:
+        return str(self._remind.meta(self._RK_AVATAR, "kind", "") or "")
+
+    @_avatar_alert_kind.setter
+    def _avatar_alert_kind(self, v: str) -> None:
+        self._remind.set_meta(self._RK_AVATAR, "kind", str(v or ""))
+
+    def _lan_gpu_host_state(self, root: str) -> Dict[str, float]:
+        """某 LAN GPU 主机的提醒状态：内存副本缺席时从账本回灌（重启后接着算时长/间隔）。"""
+        st = self._lan_gpu_state.get(root)
+        if st is None:
+            rec = self._remind.get(self._RK_LAN_GPU + root)
+            st = {
+                "down_since": float(rec.get("first_seen") or 0.0),
+                "alerted": 1.0 if rec.get("alerted") else 0.0,
+                "last_remind": float(rec.get("last_remind") or 0.0),
+            }
+            self._lan_gpu_state[root] = st
+        return st
+
+    def _lan_gpu_persist(self, root: str, st: Dict[str, float], *, fp: Optional[str] = None,
+                         summary: Optional[str] = None) -> None:
+        key = self._RK_LAN_GPU + root
+        if not st.get("down_since") and not st.get("alerted"):
+            self._remind.resolve(key)
+            return
+        self._remind.set_first_seen(key, float(st.get("down_since") or 0.0))
+        self._remind.set_alerted(key, bool(st.get("alerted")))
+        self._remind.set_last_remind(key, float(st.get("last_remind") or 0.0))
+        if fp is not None:
+            self._remind.set_meta(key, "fp", fp)
+        if summary is not None:
+            self._remind.set_meta(key, "summary", summary[:200])
+
+    @staticmethod
+    def _fmt_hours(hours: float) -> str:
+        h = max(0.0, float(hours or 0.0))
+        if h < 1:
+            return f"{int(round(h * 60))} 分钟"
+        if h < 48:
+            return f"{h:.0f} 小时"
+        d = h / 24.0
+        return f"{d:.1f} 天" if d < 10 else f"{d:.0f} 天"
 
     def _evaluate_health(self) -> Dict[str, Any]:
         """采集健康并按签名变化 emit 告警/恢复（_tick 与 recheck 共用）。返回 health。"""
@@ -1314,6 +1525,18 @@ class HealthWatchdog:
             self._maybe_daily_report()
         except Exception:
             logger.debug("运营日报生成异常（已忽略）", exc_info=True)
+
+        # P2.2（2026-09-10）：公网入口可达性——只驱动卡片链接回落内网，不另发告警。
+        try:
+            self._check_public_link()
+        except Exception:
+            logger.debug("公网入口探测异常（已忽略）", exc_info=True)
+
+        # P1.2（2026-09-10）：每日运维摘要（固定钟点一张卡：未处理项/探针/昨日花费；默认关）。
+        try:
+            self._maybe_daily_digest()
+        except Exception:
+            logger.debug("每日运维摘要异常（已忽略）", exc_info=True)
 
     def _license_quota(self) -> Dict[str, Any]:
         try:
@@ -2749,7 +2972,7 @@ class HealthWatchdog:
         if len(stale) < min_count:
             # 恢复通知的诚实前提：队列真清空。仅因休息期扣留而「暂时看不见」
             # 不算处理完（off_hours_held>0 时不发恢复，复班后见真章）。
-            if self._db_alerted and not stale and not off_hours_held:
+            if not stale and not off_hours_held and self._remind.resolve(self._RK_DRAFT):
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
                     get_event_bus().publish("draft_backlog_alert", {
@@ -2759,13 +2982,26 @@ class HealthWatchdog:
                     logger.info("HealthWatchdog 发出草稿积压恢复通知")
                 except Exception:
                     logger.debug("draft_backlog recovery 发布失败（忽略）", exc_info=True)
-                self._db_alerted = False
-                self._db_last_remind = 0.0
             return
 
         interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
-        if self._db_alerted and ts - self._db_last_remind < interval_sec:
+        # 内容指纹 = 还在等的那批稿的 id 集合：同样那几条 → 一天最多提一次；
+        # 有新稿加入 / 老稿被处置 → 按常规间隔重提（账本跨重启，见 remind_ledger）。
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp
+        fp = _rl_fp(sorted(str(d.get("draft_id") or d.get("source_id") or d.get("created_ts") or "")
+                           for d in stale))
+        prev_fp = str(self._remind.get(self._RK_DRAFT).get("fingerprint") or "")
+        # 条件真实成立时刻 = 第 min_count 老的那条稿满 min_age_h 的那一刻（账本「已开 X」口径，
+        # 不再从账本首见起算——账本 09-10 才上线，积压是 8 月的）
+        _created = sorted((float(d.get("created_ts") or 0.0) for d in stale
+                           if float(d.get("created_ts") or 0.0) > 0), reverse=False)
+        since = (_created[min_count - 1] + min_age_h * 3600.0) if len(_created) >= min_count else None
+        verdict = self._remind.decide(
+            self._RK_DRAFT, now=ts, interval_sec=interval_sec, fp=fp, since=since,
+            unchanged_interval_sec=self._unchanged_interval_sec(br, interval_sec, 1440))
+        if verdict == _RL_HOLD:
             return
+        is_reminder = verdict == _RL_REMIND
 
         by_level: Dict[str, int] = {}
         for d in stale:
@@ -2782,6 +3018,7 @@ class HealthWatchdog:
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("draft_backlog_alert", {
+                "remind_key": self._RK_DRAFT,
                 "stale_count": len(stale),
                 "min_age_hours": min_age_h,
                 "oldest_hours": round(oldest_h, 1),
@@ -2791,14 +3028,18 @@ class HealthWatchdog:
                 "already_replied": already_replied,
                 # 班表扣留/复班宽限中的条数（刻意延后，不算无人处理）
                 "off_hours_held": off_hours_held,
-                "reminder": bool(self._db_alerted),
+                "reminder": is_reminder,
+                # 与上一次外发相比内容没变（同样那批稿）——formatter 可据此标「情况未变」
+                "unchanged": bool(is_reminder and prev_fp and prev_fp == fp),
+                "since_ts": self._remind.first_seen(self._RK_DRAFT),
                 "rate_key": "draft_backlog:remind",
             })
         except Exception:
             logger.debug("draft_backlog alert 发布失败（忽略）", exc_info=True)
             return
-        self._db_alerted = True
-        self._db_last_remind = ts
+        self._remind.mark_sent(
+            self._RK_DRAFT, now=ts, fp=fp,
+            summary=f"待审草稿 {len(stale)} 条无人处理（最久 {self._fmt_hours(oldest_h)}）")
         self.total_draft_backlog_alerts += 1
         logger.warning(
             "待审草稿积压：%d 条超过 %.0fh 客户仍在等（最老 %.0fh，分级 %s；"
@@ -3559,7 +3800,8 @@ class HealthWatchdog:
 
         media_hit = len(media_stale) >= media_min_count
         if not urgent and not media_hit and len(stale) < min_count:
-            if self._cb_alerted and not urgent and not stale and not media_stale:
+            if (not urgent and not stale and not media_stale
+                    and self._remind.resolve(self._RK_CASE)):
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
                     get_event_bus().publish("case_backlog_alert", {
@@ -3569,13 +3811,33 @@ class HealthWatchdog:
                     logger.info("HealthWatchdog 发出案例积压恢复通知")
                 except Exception:
                     logger.debug("case_backlog recovery 发布失败（忽略）", exc_info=True)
-                self._cb_alerted = False
-                self._cb_last_remind = 0.0
             return
 
         interval_sec = max(600.0, float(br.get("interval_min", 240) or 240) * 60.0)
-        if self._cb_alerted and ts - self._cb_last_remind < interval_sec:
+        # 内容指纹 = 三档里还挂着的案例 id 集合（危机档单独进指纹：新增危机必须立刻响）
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp
+        fp = _rl_fp(sorted(str(r.get("case_id") or r.get("created_at") or "") for r in urgent),
+                    sorted(str(r.get("case_id") or r.get("created_at") or "")
+                           for r in stale + media_stale))
+        prev_fp = str(self._remind.get(self._RK_CASE).get("fingerprint") or "")
+        # 条件真实成立时刻：三档各自算「第 N 老的那条满龄」的时刻，取最早成立的那档
+        since_cands: List[float] = []
+        _u = sorted(float(r.get("created_at") or 0.0) for r in urgent if float(r.get("created_at") or 0.0) > 0)
+        if _u:
+            since_cands.append(_u[0])
+        _m = sorted(float(r.get("created_at") or 0.0) for r in media_stale if float(r.get("created_at") or 0.0) > 0)
+        if media_hit and len(_m) >= media_min_count:
+            since_cands.append(_m[media_min_count - 1] + media_stale_h * 3600.0)
+        _s = sorted(float(r.get("created_at") or 0.0) for r in stale if float(r.get("created_at") or 0.0) > 0)
+        if len(_s) >= min_count:
+            since_cands.append(_s[min_count - 1] + min_age_h * 3600.0)
+        since = min(since_cands) if since_cands else None
+        verdict = self._remind.decide(
+            self._RK_CASE, now=ts, interval_sec=interval_sec, fp=fp, since=since,
+            unchanged_interval_sec=self._unchanged_interval_sec(br, interval_sec, 1440))
+        if verdict == _RL_HOLD:
             return
+        is_reminder = verdict == _RL_REMIND
 
         by_source: Dict[str, int] = {}
         oldest_h = 0.0
@@ -3593,6 +3855,7 @@ class HealthWatchdog:
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("case_backlog_alert", {
+                "remind_key": self._RK_CASE,
                 "urgent_count": len(urgent),
                 "stale_count": len(stale),
                 "oldest_hours": round(oldest_h, 1),
@@ -3602,14 +3865,19 @@ class HealthWatchdog:
                 "media_stale_count": len(media_stale),
                 "media_stale_hours": media_stale_h,
                 "media_oldest_hours": round(media_oldest_h, 1),
-                "reminder": bool(self._cb_alerted),
+                "reminder": is_reminder,
+                "unchanged": bool(is_reminder and prev_fp and prev_fp == fp),
+                "since_ts": self._remind.first_seen(self._RK_CASE),
                 "rate_key": "case_backlog:remind",
             })
         except Exception:
             logger.debug("case_backlog alert 发布失败（忽略）", exc_info=True)
             return
-        self._cb_alerted = True
-        self._cb_last_remind = ts
+        self._remind.mark_sent(
+            self._RK_CASE, now=ts, fp=fp,
+            summary=(f"案例待跟进：危机级 {len(urgent)} 条、超龄 {len(stale)} 条"
+                     + (f"、媒体质疑 {len(media_stale)} 条" if media_stale else "")
+                     + f"（最久 {self._fmt_hours(oldest_h)}）"))
         self.total_case_backlog_alerts += 1
         logger.warning(
             "案例积压：危机级无人认领 %d 条、媒体质疑超龄 %d 条、常规超龄未认领 %d 条"
@@ -4274,12 +4542,15 @@ class HealthWatchdog:
         else:
             after_sec = max(60.0, float(ar.get("after_min", 30) or 30) * 60.0)
         interval_sec = max(600.0, float(ar.get("interval_min", 240) or 240) * 60.0)
-        due = (
-            (not self._avatar_alerted and down_sec >= after_sec)
-            or (self._avatar_alerted
-                and ts - self._avatar_last_remind >= interval_sec)
-        )
-        if not due:
+        # 账本判定（跨重启：down_since / alerted / last_remind 都是持久态）；指纹 = 故障形态，
+        # 形态没变默认仍按 interval 重提（硬件掉线不该因「没变化」而沉默），可配 unchanged_interval_min 放宽
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, fingerprint as _rl_fp
+        fp = _rl_fp(kind, bool(probe.get("reachable")), bool(probe.get("models_loaded")),
+                    str(probe.get("error") or "")[:80])
+        verdict = self._remind.decide(
+            self._RK_AVATAR, now=ts, after_sec=after_sec, interval_sec=interval_sec, fp=fp,
+            unchanged_interval_sec=self._unchanged_interval_sec(ar, interval_sec))
+        if verdict == _RL_HOLD:
             return
         # ── 救援链活性（2026-08-14 事故：7852 掉线 9h 无自愈——Boot/Watchdog
         # 两个计划任务都 Disabled，而告警只说「掉线」，运维默认看门狗会拉）。
@@ -4306,6 +4577,7 @@ class HealthWatchdog:
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("avatar_voice_alert", {
+                "remind_key": self._RK_AVATAR,
                 "reachable": bool(probe.get("reachable")),
                 "models_loaded": bool(probe.get("models_loaded")),
                 "url": str(probe.get("url") or ""),
@@ -4323,8 +4595,10 @@ class HealthWatchdog:
         except Exception:
             logger.debug("avatar_voice alert 发布失败（已忽略）", exc_info=True)
             return
-        self._avatar_alerted = True
-        self._avatar_last_remind = ts
+        self._remind.mark_sent(
+            self._RK_AVATAR, now=ts, fp=fp,
+            summary=("语音合成服务 7852 " + ("卡死无响应" if kind == "hang" else "不可达")
+                     + (f"（{str(probe.get('error') or '')[:60]}）" if probe.get("error") else "")))
         self.total_avatar_voice_reminders += 1
 
     def _check_hub_engine(self, *, now: Optional[float] = None) -> None:
@@ -4856,7 +5130,7 @@ class HealthWatchdog:
         count = len(stale)
         if count < min_count:
             # 只有**清零**才算恢复（部分消化不发恢复，防谎报「已处理完」）
-            if self._ui_alerted and count == 0:
+            if count == 0 and self._remind.resolve(self._RK_UNANSWERED):
                 try:
                     from src.integrations.shared.event_bus import get_event_bus
                     get_event_bus().publish("unanswered_inbound_alert", {
@@ -4868,32 +5142,43 @@ class HealthWatchdog:
                     logger.debug(
                         "unanswered_inbound recovery 发布失败（已忽略）",
                         exc_info=True)
-                self._ui_alerted = False
-                self._ui_last_remind = 0.0
             return
-        due = ((not self._ui_alerted)
-               or (ts - self._ui_last_remind >= interval_sec))
-        if not due:
+        # 内容指纹 = 还在等的会话 id 集合：同样那几个会话 → 一天最多提一次；新会话掉球立刻提
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp
+        fp = _rl_fp(sorted(str(s.get("conversation_id") or "") for s in stale))
+        prev_fp = str(self._remind.get(self._RK_UNANSWERED).get("fingerprint") or "")
+        # 条件真实成立时刻 = 第 min_count 老的那个会话满 min_age_h 的那一刻
+        _ages = sorted((float(s.get("age_hours") or 0.0) for s in stale), reverse=True)
+        since = (ts - (_ages[min_count - 1] - min_age_h) * 3600.0) if len(_ages) >= min_count else None
+        verdict = self._remind.decide(
+            self._RK_UNANSWERED, now=ts, interval_sec=interval_sec, fp=fp, since=since,
+            unchanged_interval_sec=self._unchanged_interval_sec(ur, interval_sec, 1440))
+        if verdict == _RL_HOLD:
             return
+        is_reminder = verdict == _RL_REMIND
         stale.sort(key=lambda s: -float(s.get("age_hours") or 0.0))
         oldest = float(stale[0].get("age_hours") or 0.0)
         samples = stale[:5]
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("unanswered_inbound_alert", {
+                "remind_key": self._RK_UNANSWERED,
                 "count": count,
                 "min_age_hours": min_age_h,
                 "oldest_hours": round(oldest, 1),
                 "samples": samples,
-                "reminder": bool(self._ui_alerted),
+                "reminder": is_reminder,
+                "unchanged": bool(is_reminder and prev_fp and prev_fp == fp),
+                "since_ts": self._remind.first_seen(self._RK_UNANSWERED),
                 # 独立限流键：首提/重提不与其他事件挤 1h 窗
                 "rate_key": "unanswered_inbound:remind",
             })
         except Exception:
             logger.debug("unanswered_inbound alert 发布失败（已忽略）", exc_info=True)
             return
-        self._ui_alerted = True
-        self._ui_last_remind = ts
+        self._remind.mark_sent(
+            self._RK_UNANSWERED, now=ts, fp=fp,
+            summary=f"客户消息 {count} 条超 {min_age_h:.0f}h 没人回（最久 {self._fmt_hours(oldest)}）")
         self.total_unanswered_inbound_alerts += 1
         # 日志=本机唯一保证在的持久告警通道（webhook 可能 0 通道），与
         # draft_backlog/lan_gpu 同款落一行供实弹验证与事后追溯。
@@ -4962,8 +5247,7 @@ class HealthWatchdog:
         after_sec = max(60.0, float(lr.get("after_min", 30) or 30) * 60.0)
         interval_sec = max(600.0, float(lr.get("interval_min", 240) or 240) * 60.0)
         for root in targets:
-            st = self._lan_gpu_state.setdefault(
-                root, {"down_since": 0.0, "alerted": 0.0, "last_remind": 0.0})
+            st = self._lan_gpu_host_state(root)
             probe = probe_lan_gpu_host(root)
             host = root.split("://", 1)[1]
             if probe.get("reachable"):
@@ -4981,23 +5265,39 @@ class HealthWatchdog:
                 st["down_since"] = 0.0
                 st["alerted"] = 0.0
                 st["last_remind"] = 0.0
+                self._lan_gpu_persist(root, st)
                 continue
             if not st["down_since"]:
                 st["down_since"] = ts    # 首见不可达：只记时点，给抖动一个窗口
+                self._lan_gpu_persist(root, st)
                 continue
             down_sec = ts - st["down_since"]
+            # 指纹 = 错误形态：默认形态不变仍按 interval 重提（可配 unchanged_interval_min 放宽）
+            from src.inbox.remind_ledger import fingerprint as _rl_fp
+            fp = _rl_fp(str(probe.get("error") or "")[:80])
+            prev_fp = str(self._remind.meta(self._RK_LAN_GPU + root, "fp", "") or "")
+            eff_interval = interval_sec
+            if st["alerted"] and prev_fp and prev_fp == fp:
+                eff_interval = self._unchanged_interval_sec(lr, interval_sec)
             due = ((not st["alerted"] and down_sec >= after_sec)
-                   or (st["alerted"] and ts - st["last_remind"] >= interval_sec))
+                   or (st["alerted"] and ts - st["last_remind"] >= eff_interval))
+            # 人工闭嘴（P1.3）：静音期内 / 已认领且错误形态未变 → 不外发（恢复通知不受影响）
+            _rk = self._RK_LAN_GPU + root
+            if due and (self._remind.is_muted(_rk, now=ts)
+                        or str(self._remind.meta(_rk, "acked_fp", "") or "") == fp):
+                due = False
             if not due:
                 continue
             was_reminder = bool(st["alerted"])
             try:
                 from src.integrations.shared.event_bus import get_event_bus
                 get_event_bus().publish("lan_gpu_alert", {
+                    "remind_key": self._RK_LAN_GPU + root,
                     "host": host, "url": root,
                     "error": str(probe.get("error") or ""),
                     "down_minutes": int(down_sec // 60),
                     "reminder": was_reminder,
+                    "unchanged": bool(was_reminder and prev_fp and prev_fp == fp),
                     # 每主机独立限流键：176 与 140 同时出事要各自能报
                     "rate_key": f"lan_gpu:{host}",
                 })
@@ -5006,6 +5306,8 @@ class HealthWatchdog:
                 continue
             st["alerted"] = 1.0
             st["last_remind"] = ts
+            self._lan_gpu_persist(root, st, fp=fp,
+                                  summary=f"LAN GPU 主机 {host} 推理服务不可达")
             self.total_lan_gpu_reminders += 1
             # 日志=本机唯一保证在的持久告警通道（webhook 可能 0 通道、SSE 有白名单
             # 且只对在线页面直播）——与 draft_backlog 同款落一行，实弹验证/事后
@@ -5306,6 +5608,16 @@ class HealthWatchdog:
             return
         self._tp_last_run = ts
         fail_strikes = max(1, int(tp.get("fail_strikes", 2) or 2))
+        # 滞回（2026-09-10）：连败还要持续 min_fail_min（默认 15min）才首报；恢复要连续
+        # recover_oks（默认 2）次成功才补绿窗——吸掉「冷加载超时一轮、下一轮就好」的抖动对。
+        try:
+            min_fail_sec = max(0.0, float(tp.get("min_fail_min", 15) or 0) * 60.0)
+        except (TypeError, ValueError):
+            min_fail_sec = 900.0
+        try:
+            recover_oks = max(1, int(tp.get("recover_oks", 2) or 1))
+        except (TypeError, ValueError):
+            recover_oks = 2
         try:
             from src.ops.true_probe import (
                 build_probe_specs,
@@ -5339,7 +5651,8 @@ class HealthWatchdog:
                             "url": str(spec.get("url") or ""),
                             "alerting": bool(spec.get("alert", True))}
             state, action = next_strike_state(
-                state, domain, ok, fail_strikes=fail_strikes, now=ts)
+                state, domain, ok, fail_strikes=fail_strikes, now=ts,
+                min_fail_sec=min_fail_sec, recover_oks=recover_oks)
             # 备胎类规格（vision_backup*）只观测不弹窗：它坏了不影响当下出话，
             # 半夜弹窗是纯噪音；连败仍记进状态文件，切主之前看板上就能看见。
             if not spec.get("alert", True):
@@ -5353,9 +5666,12 @@ class HealthWatchdog:
             if action == "alert":
                 try:
                     from src.utils.host_alert import notify_host
+                    _d = state.get(domain) or {}
+                    _lasted_min = int(max(0.0, ts - float(_d.get("first_fail") or ts)) // 60)
                     notify_host(
                         f"真活探针失败｜{domain}",
-                        (f"{domain} 连续 {fail_strikes} 次真活探针失败"
+                        (f"{domain} 连续 {int(_d.get('fails') or fail_strikes)} 次、"
+                         f"持续 {_lasted_min} 分钟真活探针失败"
                          f"（{detail}）。该域链路按无兜底纪律将拒发并弹窗，"
                          f"请立即检查对应引擎。"),
                         key=f"probe:{domain}", cooldown_sec=600.0)
@@ -7011,6 +7327,170 @@ class HealthWatchdog:
             logger.info("HealthWatchdog 发出运营日报")
         except Exception:
             logger.debug("ops_report(daily) 发布失败（已忽略）", exc_info=True)
+        return report
+
+    # ── 每日运维摘要（2026-09-10 运维群降噪 P1.2）──────────────────────────────
+    # 慢性积压（待审草稿 / 客户在等 / 案例跟进）与算力黄灯一天重提一遍已经够；
+    # 本摘要把「此刻仍未处理的事、开了多久」+ 真活探针 + 昨日花费收成**一张卡**，
+    # 固定钟点发，运维早上一眼看完。数据面直接取提醒账本 open_items（各巡检外发时
+    # 已登记一行人话），不重跑巡检。配置 ``health_watchdog.daily_digest.{enabled,hour,minute}``
+    # （遵循新子系统默认关）；「今天发过没」记在账本里，重启不重发。
+
+    _RK_DIGEST = "_daily_digest"
+    _DIGEST_LABELS = (
+        ("draft_backlog", "待审草稿"),
+        ("case_backlog", "案例跟进"),
+        ("unanswered_inbound", "客户在等"),
+        ("avatar_voice", "语音服务"),
+        ("lan_gpu:", "LAN GPU"),
+    )
+
+    def _digest_cfg(self) -> Dict[str, Any]:
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return {}
+        blk = (cfg.get("health_watchdog") or {}).get("daily_digest")
+        return dict(blk) if isinstance(blk, dict) else {}
+
+    # ── 公网入口可达性（2026-09-10 运维群降噪 P2.2）────────────────────────────
+    # 卡片链接拼在渠道 base_url（katie.bd2026.cc）上，那条链（VPS nginx → SSH 隧道 → 本机）
+    # 一断，卡照发、链接全 502。**告警**归 deploy/instances/prod_edge_watchdog.ps1（两击 +
+    # 自愈拉隧道 + 通知），这里不重复报；只探一下、把状态交给 src.ops.public_link，
+    # 让 webhook_notifier 铸链接时换成内网地址并在卡上说明。配置
+    # ``health_watchdog.public_link_probe.{enabled,interval_min,strikes}``（默认开——没配
+    # base_url 的部署天然零开销）；内网地址 ``web_admin.lan_base_url``，缺省按 web_admin.port 推导。
+
+    def _check_public_link(self, *, now: Optional[float] = None) -> None:
+        cfg = getattr(self._config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        blk = (cfg.get("health_watchdog") or {}).get("public_link_probe")
+        blk = dict(blk) if isinstance(blk, dict) else {}
+        if blk.get("enabled", True) is False:
+            return
+        ts = float(now if now is not None else time.time())
+        try:
+            interval_sec = max(60.0, float(blk.get("interval_min", 5) or 5) * 60.0)
+        except (TypeError, ValueError):
+            interval_sec = 300.0
+        if ts - float(getattr(self, "_pl_last_run", 0.0) or 0.0) < interval_sec:
+            return
+        self._pl_last_run = ts
+        from src.integrations.notify_webhooks_store import effective_webhooks
+        from src.ops import public_link
+        wa = cfg.get("web_admin") or {}
+        lan = str(wa.get("lan_base_url") or "").strip()
+        if not lan:
+            try:
+                lan = public_link.lan_base(int(wa.get("port") or 0))
+            except (TypeError, ValueError):
+                lan = ""
+        public_link.set_lan_base(lan)
+        bases: List[str] = []
+        for wh in effective_webhooks(cfg) or []:
+            if not isinstance(wh, dict) or wh.get("enabled", True) is False:
+                continue
+            if str(wh.get("format") or "") not in ("telegram", "whatsapp", "messenger"):
+                continue
+            if str(wh.get("links") or "login").strip().lower() == "off":
+                continue
+            base = str(wh.get("base_url") or "").strip().rstrip("/")
+            if base.startswith("http") and base not in bases:
+                bases.append(base)
+        try:
+            strikes = max(1, int(blk.get("strikes", public_link.DEFAULT_STRIKES) or 1))
+        except (TypeError, ValueError):
+            strikes = public_link.DEFAULT_STRIKES
+        for base in bases:
+            ok, detail = public_link.probe(base)
+            flip = public_link.record(base, ok, detail, now=ts, strikes=strikes)
+            if flip is True:
+                logger.warning("公网入口不可达：%s（%s）——运维群卡片链接改用内网地址 %s 直到恢复",
+                               base, detail, lan or "（推不出内网地址，仅在卡上说明）")
+            elif flip is False:
+                logger.info("公网入口已恢复：%s（%s），卡片链接换回公网地址", base, detail)
+
+    def _build_daily_digest(self, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """摘要数据面（纯装配、绝不抛）：未处理项 / 真活探针 / 昨日花费。"""
+        ts = float(now if now is not None else time.time())
+        open_items: List[Dict[str, Any]] = []
+        for it in self._remind.open_items(now=ts):
+            key = str(it.get("key") or "")
+            if key.startswith("_"):
+                continue
+            label = next((lbl for pre, lbl in self._DIGEST_LABELS if key.startswith(pre)), key)
+            since = float(it.get("first_seen") or 0.0)
+            open_items.append({
+                "key": key, "label": label,
+                "summary": str(it.get("summary") or ""),
+                "since_ts": since,
+                "hours": round(max(0.0, ts - since) / 3600.0, 1) if since > 0 else 0.0,
+            })
+        probes: Optional[Dict[str, Any]] = None
+        tp = getattr(self, "_tp_state", None)
+        if isinstance(tp, dict) and tp:
+            bad = sorted(d for d, st in tp.items() if isinstance(st, dict) and st.get("alerted"))
+            probes = {"total": len(tp), "ok": len(tp) - len(bad), "bad": bad}
+        cost: Optional[Dict[str, Any]] = None
+        try:
+            from src.ai.cost_ledger import get_cost_ledger
+            from src.web.routes.cost_routes import build_summary
+            cfg = getattr(self._config_manager, "config", None) or {}
+            s = build_summary(get_cost_ledger(), cfg if isinstance(cfg, dict) else {}, now=ts)
+            if s.get("available"):
+                y = s.get("yesterday") or {}
+                cost = {
+                    "provider": s.get("provider"), "currency": s.get("currency") or "CNY",
+                    "yesterday_cost": y.get("cost"), "yesterday_calls": y.get("calls"),
+                    "yesterday_truth": y.get("truth"),
+                    "month_total": s.get("month_total"),
+                    "budget_daily": (s.get("budget") or {}).get("daily"),
+                    "balance": s.get("balance"), "runway_days": s.get("runway_days"),
+                    "recon_verdict": str((s.get("last_recon") or {}).get("verdict") or ""),
+                }
+        except Exception:
+            logger.debug("每日摘要成本段装配失败（已忽略）", exc_info=True)
+        public: Optional[Dict[str, Any]] = None
+        try:
+            from src.ops import public_link
+            snap = public_link.snapshot()
+            if snap:
+                public = {base: {"down": bool(st.get("down")),
+                                 "down_hours": (round(max(0.0, ts - float(st.get("since") or 0.0)) / 3600.0, 1)
+                                                if st.get("down") and st.get("since") else 0.0),
+                                 "detail": str(st.get("detail") or "")}
+                          for base, st in snap.items()}
+        except Exception:
+            public = None
+        day = time.strftime("%Y-%m-%d", time.localtime(ts))
+        return {"day": day, "open": open_items, "probes": probes, "cost": cost,
+                "public_link": public, "rate_key": f"ops_digest:{day}"}
+
+    def _maybe_daily_digest(self, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        dc = self._digest_cfg()
+        if not dc.get("enabled", False):
+            return None
+        ts = float(now if now is not None else time.time())
+        lt = time.localtime(ts)
+        try:
+            hour = int(dc.get("hour", 9))
+            minute = int(dc.get("minute", 0))
+        except (TypeError, ValueError):
+            hour, minute = 9, 0
+        if (lt.tm_hour, lt.tm_min) < (hour, minute):
+            return None
+        day = time.strftime("%Y-%m-%d", lt)
+        if str(self._remind.meta(self._RK_DIGEST, "last_day", "") or "") == day:
+            return None
+        # 先记「今天已发」再装配（与老板日报同理：装配失败等明天，不值得每 tick 重试）
+        self._remind.set_meta(self._RK_DIGEST, "last_day", day)
+        report = self._build_daily_digest(now=ts)
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("ops_digest_report", report)
+            logger.info("HealthWatchdog 发出每日运维摘要（未处理 %d 项）", len(report["open"]))
+        except Exception:
+            logger.debug("ops_digest_report 发布失败（已忽略）", exc_info=True)
         return report
 
     def _inbox(self):

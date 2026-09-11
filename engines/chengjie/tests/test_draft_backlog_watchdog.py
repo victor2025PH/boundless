@@ -97,16 +97,60 @@ def test_quiet_when_all_fresh(monkeypatch):
 
 
 def test_reminder_throttled_then_repeats(monkeypatch):
-    """首提后按 interval_min 重提，不到点不吵。"""
-    drafts = [_draft("L1", 99.0) for _ in range(4)]
+    """首提后：内容**没变**（同样那批稿）一天最多重提一次；有新稿加入按 interval_min 重提。
+
+    2026-09-10 运维群降噪：此前同一批 5 条稿每 4h 一张卡连发一个月，收信人直接静音群。
+    """
+    drafts = [_draft("L1", 99.0 + i) for i in range(4)]
     w, bus = _wd(monkeypatch, drafts, {"interval_min": 240})
     t0 = time.time()
     w._check_draft_backlog(now=t0)
     w._check_draft_backlog(now=t0 + 60 * 60)          # 1h 后：不到 4h 不重提
     assert len(bus.events) == 1
-    w._check_draft_backlog(now=t0 + 4 * 3600 + 10)    # 过 4h：重提
+    w._check_draft_backlog(now=t0 + 4 * 3600 + 10)    # 过 4h 但内容未变：不重提
+    assert len(bus.events) == 1
+    w._check_draft_backlog(now=t0 + 24 * 3600 + 10)   # 满 24h：重提，并标「情况未变」
     assert len(bus.events) == 2
     assert bus.events[1][1]["reminder"] is True
+    assert bus.events[1][1]["unchanged"] is True
+    # 有新稿掉进队列 → 内容变了 → 过常规间隔即重提
+    drafts.append(_draft("L3", 30.0))
+    w._check_draft_backlog(now=t0 + 28 * 3600 + 20)
+    assert len(bus.events) == 3
+    assert bus.events[2][1]["unchanged"] is False
+    assert bus.events[2][1]["stale_count"] == 5
+
+
+def test_first_seen_is_when_condition_became_true_not_ledger_first_sight(monkeypatch):
+    """「已开 X」口径：第 min_count（默认 3）老的那条稿满 24h 的那一刻，而不是账本首次看到的时刻。
+    账本 09-10 才上线、积压 8 月就有——否则摘要里 30 天的积压显示「已开 2 分钟」。"""
+    drafts = [_draft("L1", 240.0), _draft("L1", 120.0), _draft("L1", 72.0), _draft("L1", 30.0)]
+    w, bus = _wd(monkeypatch, drafts)
+    t0 = time.time()
+    w._check_draft_backlog(now=t0)
+    assert len(bus.events) == 1
+    since = w._remind.first_seen("draft_backlog")
+    # 第 3 老 = 72h 前创建，满 24h 于 48h 前
+    assert abs((t0 - since) / 3600.0 - 48.0) < 0.05
+
+
+def test_reminder_state_survives_restart(monkeypatch, tmp_path):
+    """账本落盘：新进程（新实例）接着上一轮的 alerted / last_remind 算，不整轮重发。"""
+    drafts = [_draft("L1", 99.0 + i) for i in range(4)]
+    w, bus = _wd(monkeypatch, drafts, {"interval_min": 240})
+    w._config_manager.config_path = str(tmp_path / "config.yaml")
+    del w.__dict__["_remind_ledger"]       # _wd 里 _db_alerted=False 已触发内存账本，换成文件账本
+    t0 = time.time()
+    w._check_draft_backlog(now=t0)
+    assert len(bus.events) == 1
+    assert (tmp_path / "health_remind_state.json").exists()
+    # 「重启」：同一配置目录起新实例，账本从文件回灌
+    w2, bus2 = _wd(monkeypatch, drafts, {"interval_min": 240})
+    w2._config_manager.config_path = str(tmp_path / "config.yaml")
+    del w2.__dict__["_remind_ledger"]
+    w2._check_draft_backlog(now=t0 + 600)
+    assert bus2.events == []               # 重启后 10 分钟：不重发
+    assert w2._db_alerted is True
 
 
 def test_recovery_notice_when_queue_cleared(monkeypatch):

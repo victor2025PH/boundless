@@ -88,7 +88,13 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "autosend_gate": {"types": {"autosend_gate_alert"}, "levels": None},
     "health_alert":  {"types": {"health_alert"}, "levels": None},    # D3 运行时健康告警
     "billing_alert": {"types": {"billing_alert"}, "levels": None},   # E3 计费异常（超席位/超额）
+    # AI 花费日报（2026-09-08 成本对账 P1）：每天一条「昨日花了多少·去向·对账结论·余额跑道」，
+    # 不论好坏都发——成本这件事以前只有出事才有人看，日常水位从来没人知道
+    "ai_cost_report": {"types": {"ai_cost_report"}, "levels": None},
     "ops_report":    {"types": {"ops_report"}, "levels": None},       # H1 运营周报自动外发
+    # 每日运维摘要（2026-09-10 运维群降噪 P1.2）：固定钟点一张卡——此刻仍未处理的积压
+    # （开了多久）+ 真活探针 + 昨日花费。慢性积压从此只在这里露面，实时卡只留「有变化」。
+    "ops_digest":    {"types": {"ops_digest_report"}, "levels": None},
     # 统一草稿引擎质量告警（记忆命中率/p95 延迟/风险分类回检）
     "draft_quality": {"types": {"draft_quality_alert"}, "levels": None},
     # AI 回复质量退化告警（草稿采纳/弃用率 + 高危量环比，基于处置结果口径）
@@ -231,6 +237,11 @@ _BUSINESS_ALERTS: Dict[str, str] = {
     "csat_alert":       "cp.alert.csat_alert",          # 客户满意度跌破
     "reply_risk":       "cp.alert.reply_risk",          # 高危回复预警
     "billing_alert":    "cp.alert.billing_alert",       # 席位/用量异常
+    "ai_cost_report":   "cp.alert.ai_cost_report",      # AI 花费日报（花了多少/去向/对账/余额）
+    "ops_digest":       "cp.alert.ops_digest",          # 每日运维摘要（未处理积压/探针/昨日花费）
+    # #142 真发总闸自动恢复：全自动会话重新开始真发，运营要知道并决定是否再关——运营动作。
+    # （0908 补登：别名 8 月已进 _EVENT_ALIASES 却没归类，门禁 test_every_alert_alias_is_classified 红）
+    "autosend_gate":    "cp.alert.autosend_gate",
     "persona_retired":  "cp.alert.persona_retired",     # 已删的人设设定被写回（运营在人设工作室可自行处置）
     # 2026-08-08：客户说了最后一句、系统既没回也没拟稿。此前它在 _EVENT_ALIASES 里
     # 存在（技术上可订阅），却**不在任何受众目录**→ alert_audience 归 other → 告警渠道
@@ -295,6 +306,9 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     # 本地主链保险单向热切 cloud（2026-08-21 完备性棘轮补登）：vLLM 探测连败 →
     # 自动切云端保服务——「起本地端点再切回」是基建动作，终端运营无从处置。
     "ai_primary_guard":    "cp.alert.ai_primary_guard",
+    # #159 幽灵未读：徽标口径差额是可量化的卫生指标，修法在数据层（技术支持动作）。
+    # （0908 补登：与 autosend_gate 同批，别名进了 _EVENT_ALIASES 却没归类）
+    "phantom_unread":      "cp.alert.phantom_unread",
 }
 
 
@@ -484,9 +498,47 @@ CHAT_FORMATS = {"telegram", "whatsapp", "messenger"}
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_MD_CODE = re.compile(r"`([^`\n]+)`")
+# 「**详情**: 」之类只剩标签没内容的行（formatter 的 error 字段为空时产生）——直接删行
+_EMPTY_FIELD_LINE = re.compile(r"^\s*[^\n:：]{1,12}[:：]\s*$", re.M)
 
 
 _LINK_MODES = ("login", "magic", "off")
+
+
+def _hours_txt(hours: float) -> str:
+    """时长人话：<1h 按分钟，<48h 按小时，≥48h 按天（884.2 小时 → 36.8 天）。"""
+    try:
+        h = float(hours or 0.0)
+    except (TypeError, ValueError):
+        return "?"
+    if h < 1.0:
+        return f"{int(round(h * 60))} 分钟"
+    if h < 48.0:
+        return f"{h:.0f} 小时" if h >= 10 else f"{h:.1f} 小时"
+    d = h / 24.0
+    return f"{d:.1f} 天" if d < 10 else f"{d:.0f} 天"
+
+
+_DURATION_MARK = re.compile(r"(最久|最老|已等|已 ?\d|\d+(\.\d+)? ?(分钟|小时|天)\b)")
+
+
+def _has_duration(text: str) -> bool:
+    """摘要行是否已自带时长口径（有则外层不再追加「已开 X」，避免两套时长打架）。"""
+    return bool(_DURATION_MARK.search(str(text or "")))
+
+
+def _minutes_txt(minutes: int) -> str:
+    """分钟数人话：≥48h 按天，≥60min 按「N 小时 M 分钟」，否则按分钟。"""
+    try:
+        m = int(minutes or 0)
+    except (TypeError, ValueError):
+        return "?"
+    if m >= 48 * 60:
+        return _hours_txt(m / 60.0)
+    if m >= 60:
+        return f"{m // 60} 小时 {m % 60} 分钟" if m % 60 else f"{m // 60} 小时"
+    return f"{m} 分钟"
 
 
 def _plainify(text: str, base_url: str = "", links: str = "login") -> str:
@@ -518,7 +570,12 @@ def _plainify(text: str, base_url: str = "", links: str = "login") -> str:
         return label
     s = _MD_LINK.sub(_link, text or "")
     s = _MD_BOLD.sub(r"\1", s)
+    # 反引号在 Telegram 纯文本里原样露出（`inbox.sla_watcher.auto_expire_hours`）——去掉
+    s = _MD_CODE.sub(r"\1", s)
     s = s.replace("### ", "")
+    # 「详情: 」空字段行整行删掉（2026-09-10 实测：语音 / LAN GPU 卡各带一行空「详情」）
+    s = _EMPTY_FIELD_LINE.sub("", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
 
@@ -840,11 +897,105 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
         else:
             lines = [f"- {a.get('message','')}" for a in anomalies[:8]]
             title = "💸 计费异常告警"
+            _link = ("[💴 查看 AI 花费](/workspace/cost)" if data.get("provider")
+                     else "[💸 查看运营总览](/admin/ops)")
             text = (
                 f"**异常**: {len(anomalies)} 项\n"
                 + "\n".join(lines) + "\n"
-                "[💸 查看运营总览](/admin/ops)"
+                + _link
             )
+
+    elif event_type == "ai_cost_report":
+        # AI 花费日报（成本对账 P1）：面向老板/运营的 5 行以内摘要——今天花了多少、
+        # 花在哪、和账单对得上吗、余额还能撑几天、有没有要处理的事。
+        _light = str(data.get("light") or "⚪")
+        _prov = str(data.get("provider") or "云端")
+        _internal = data.get("internal")
+        _truth = data.get("truth")
+        _bp = data.get("by_purpose") or {}
+        try:
+            from src.ai.cost_recon import PURPOSE_LABELS as _PL
+        except Exception:  # pragma: no cover - 纯兜底
+            _PL = {}
+        _top = sorted(((k, float(v)) for k, v in _bp.items() if float(v) > 0),
+                      key=lambda kv: -kv[1])[:4]
+        _where = "、".join(f"{_PL.get(k, k)} ¥{v:.2f}" for k, v in _top) or "无消耗"
+        if _truth is None:
+            _recon = "⚪ 没有账单真值（请导入费用明细 CSV 或手填当日金额）"
+        elif str(data.get("verdict")) == "no_data":
+            _recon = f"⚪ 账本无当日记录，账单 ¥{float(_truth):.2f}（账本装载前的消耗没得比）"
+        else:
+            _dp = data.get("diff_pct")
+            _recon = (f"{'✅ 一致' if str(data.get('verdict')) == 'ok' else '❌ 不一致'}"
+                      f"（内部 ¥{float(_internal or 0):.2f} vs 账单 ¥{float(_truth):.2f}"
+                      f"{f'，差 {abs(float(_dp)):.0f}%' if _dp is not None else ''}）")
+        _bal = data.get("balance")
+        _rw = data.get("runway_days")
+        _bal_txt = (f"约 ¥{float(_bal):.2f}，够用 {_rw} 天" if _bal is not None and _rw is not None
+                    else "未知（在成本页填一次余额即可推算）")
+        _issues = [str(x) for x in (data.get("reasons") or [])][:4]
+        title = f"{_light} AI 花费日报 · {data.get('day', '')} · {_prov}"
+        text = (
+            f"**花了多少**: ¥{float(_internal or 0):.2f}\n"
+            f"**花在哪**: {_where}\n"
+            f"**对账**: {_recon}\n"
+            f"**余额**: {_bal_txt}\n"
+            + (("**要处理**:\n" + "\n".join(f"- {x}" for x in _issues) + "\n") if _issues
+               else "**要处理**: 无\n")
+            + "[💴 查看 AI 花费](/workspace/cost)"
+        )
+
+    elif event_type == "ops_digest_report":
+        # 每日运维摘要（运维群降噪 P1.2）：≤ 8 行——未处理了什么、开了多久、探针有没有红、
+        # 昨天花了多少。数据面是提醒账本 open_items（各巡检外发时登记的一行人话），
+        # 这里只排版不判断。空摘要也发：「今天没有未处理事项」本身就是运维想看的一行。
+        _open = [x for x in (data.get("open") or []) if isinstance(x, dict)]
+        _lines: List[str] = []
+        if _open:
+            _oldest = max(float(x.get("hours") or 0.0) for x in _open)
+            _lines.append(f"**未处理**: {len(_open)} 项（最久 {_hours_txt(_oldest)}）")
+            for x in _open[:6]:
+                _s = str(x.get("summary") or "").strip() or "详见运营总览"
+                _lbl = str(x.get("label") or x.get("key") or "?")
+                # 摘要行已以标签开头（「待审草稿 5 条…」）就不再重复前缀；摘要自带时长
+                # （「最久 30 天」）时不再追加「已开」——账本首见时刻不等于积压开始时刻
+                _head = _s if _s.startswith(_lbl) else f"{_lbl}：{_s}"
+                _dur = "" if _has_duration(_s) else f"（已开 {_hours_txt(float(x.get('hours') or 0.0))}）"
+                _lines.append(f"- {_head}{_dur}")
+            if len(_open) > 6:
+                _lines.append(f"- …另 {len(_open) - 6} 项见运营总览")
+        else:
+            _lines.append("**未处理**: 无 ✅")
+        _pr = data.get("probes")
+        if isinstance(_pr, dict) and _pr.get("total"):
+            _bad = [str(b) for b in (_pr.get("bad") or [])]
+            _lines.append(f"**探针**: {_pr['total']} 项全部正常" if not _bad
+                          else f"**探针**: {len(_bad)} 项异常（{'、'.join(_bad)}）"
+                               f"，其余 {int(_pr.get('ok') or 0)} 项正常")
+        _c = data.get("cost")
+        if isinstance(_c, dict):
+            _yc = _c.get("yesterday_cost")
+            _yt = _c.get("yesterday_truth")
+            _cost_txt = f"¥{float(_yc or 0):.2f}"
+            if _c.get("yesterday_calls"):
+                _cost_txt += f"（{int(_c['yesterday_calls'])} 次调用）"
+            _cost_txt += (f"，账单 ¥{float(_yt):.2f}" if _yt is not None else "，账单未导入")
+            _b, _rw = _c.get("balance"), _c.get("runway_days")
+            if _b is not None and _rw is not None:
+                _cost_txt += f"；余额约 ¥{float(_b):.2f}，够用 {_rw} 天"
+            _lines.append(f"**昨日花费**: {_cost_txt}")
+        _pub = data.get("public_link")
+        if isinstance(_pub, dict) and _pub:
+            _down = [(b, st) for b, st in _pub.items() if isinstance(st, dict) and st.get("down")]
+            if _down:
+                _b, _st = _down[0]
+                _host = re.sub(r"^https?://", "", str(_b)).rstrip("/")
+                _lines.append(f"**公网入口**: ❌ {_host} 不可达（已 {_hours_txt(float(_st.get('down_hours') or 0.0))}"
+                              f"，卡片链接暂用内网地址）")
+            else:
+                _lines.append("**公网入口**: 正常")
+        title = f"🗒️ 每日运维摘要 · {data.get('day', '')}"
+        text = "\n".join(_lines) + "\n[📊 查看运营总览](/admin/ops)"
 
     elif event_type == "ops_report":
         days = data.get("days", 7)
@@ -973,18 +1124,21 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
         else:
             cnt = data.get("count", "?")
-            oldest = data.get("oldest_hours", "?")
+            oldest = float(data.get("oldest_hours") or 0)
             samples = data.get("samples") or []
-            lines = [
-                f"- {s.get('platform','?')}:"
-                f"{str(s.get('conversation_id') or '?')[-12:]}"
-                f"（已等 {s.get('age_hours','?')}h）"
-                for s in samples[:5]
-            ]
+            # 会话 id 不截断（此前 [-12:] 把 messenger 会话砍成认不出的尾巴）；账号一并给出
+            lines = []
+            for s in samples[:5]:
+                _acct = str(s.get("account_id") or "").strip()
+                _acct_txt = f"（账号 {_acct}）" if _acct and _acct != "default" else ""
+                lines.append(
+                    f"- {s.get('platform', '?')} · {str(s.get('conversation_id') or '?')}"
+                    f"{_acct_txt}，已等 {_hours_txt(float(s.get('age_hours') or 0))}")
+            _same = "，与上次相同" if data.get("unchanged") else ""
             title = f"📭 客户在等：{cnt} 个会话没人回、也没有草稿"
             text = (
-                f"**数量**: {cnt} 个（最老 {oldest}h）"
-                + ("（重提）" if data.get("reminder") else "") + "\n"
+                f"**数量**: {cnt} 个（最老 {_hours_txt(oldest)}）"
+                + (f"（重提{_same}）" if data.get("reminder") else "") + "\n"
                 + ("\n".join(lines) + "\n" if lines else "")
                 + "**含义**: 最后一条是客户消息，超时无任何回复且无待审稿——"
                 "拟稿链可能丢球（风控静默拦下/生成失败/触发漏了）\n"
@@ -1092,8 +1246,7 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
         else:
             down_min = int(data.get("down_minutes") or 0)
-            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
-                        if down_min >= 60 else f"{down_min} 分钟")
+            down_txt = _minutes_txt(down_min)
             hang = bool(data.get("hang"))
             if hang:
                 state = (f"半死（health 正常但真实合成连败 "
@@ -1108,22 +1261,23 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             if rescue_broken:
                 # 救援链本身已死：默认指引「等看门狗/手动拉任务」会误导——
                 # 任务是 Disabled/缺失，拉不起来，必须先恢复任务本体
-                fix = ("⚠️ 救援链已停用：计划任务 "
+                fix = ("**处置**: ⚠️ 自动救援已停用——计划任务 "
                        + "、".join(rescue_broken)
-                       + " 处于禁用/缺失，自动拉起**不会发生**——"
-                         "请先 `schtasks /Change /TN <任务名> /ENABLE` "
-                         "恢复后再拉起服务（若集群仍在代码模式，先与占用方确认）")
+                       + " 处于禁用/缺失，服务不会被自动拉起。请先在任务计划程序里"
+                         "重新启用这些任务，再拉起服务（若集群仍在代码模式，先与占用方确认）")
             elif hang:
-                fix = ("EmotionTTSWatchdog 自动重启未能救回，请上机检查 "
-                       "logs\\emotion_tts.out.log / GPU 状态")
+                fix = ("**处置**: 自动重启（EmotionTTSWatchdog）未能救回，请上机查看 "
+                       "emotion_tts 输出日志与 GPU 状态")
             else:
-                fix = "请检查 emotion_tts 服务或手动拉起计划任务 EmotionTTS_Boot"
+                fix = ("**处置**: 先等自动拉起（计划任务 EmotionTTS_Boot）；"
+                       "若下一轮仍掉线，上机检查 emotion_tts 服务")
+            _err = str(data.get("error") or "").strip()[:150]
             text = (
                 f"**状态**: {state}（{str(data.get('url') or '')}）\n"
                 f"**影响**: 在线语音已降级 edge 通用声——聊天不中断，"
                 "但克隆音色/情感语气不可用\n"
-                f"**详情**: {str(data.get('error') or '')[:150]}\n"
-                f"{fix}\n"
+                + (f"**详情**: {_err}\n" if _err else "")
+                + f"{fix}\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
 
@@ -1270,16 +1424,20 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             )
         else:
             down_min = int(data.get("down_minutes") or 0)
-            down_txt = (f"{down_min // 60} 小时 {down_min % 60} 分钟"
-                        if down_min >= 60 else f"{down_min} 分钟")
+            down_txt = _minutes_txt(down_min)
             prefix = "⏰" if data.get("reminder") else "🖥️"
             title = f"{prefix} LAN GPU 主机不可达（{host}，已 {down_txt}）"
+            # 探针依次打 /api/version（Ollama）与 /v1/models（vLLM / OpenAI 兼容），
+            # 主机跑的是哪种服务探针并不知道——此前硬写「Ollama」把 176 的 vLLM 说成 Ollama。
+            _err = str(data.get("error") or "").strip()[:150]
             text = (
-                f"**状态**: Ollama /api/version 探测失败（{str(data.get('url') or '')}）\n"
+                f"**状态**: 推理服务探测失败（{str(data.get('url') or '')}，"
+                "/api/version 与 /v1/models 都不通）\n"
                 "**影响**: 各链路已静默转移备点，业务不中断——但本地算力冗余归零，"
                 "云端再出问题将没有第二道防线\n"
-                f"**详情**: {str(data.get('error') or '')[:150]}\n"
-                "请到现场检查主机电源/系统/Ollama 服务\n"
+                + (f"**详情**: {_err}\n" if _err else "")
+                + "**处置**: 先确认主机是否在线（ping / 远程桌面），再看推理服务进程是否在跑；"
+                "业务已由备点顶上，不必连夜处理\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
 
@@ -1309,13 +1467,15 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"（最老 {float(data.get('media_oldest_hours') or 0):.1f}h；"
                 "穿帮风险，客户在等解释）\n" if _media else "")
             _media_title = f" / 媒体 {_media} 条" if _media else ""
+            _same = "（重提，与上次相同）" if data.get("unchanged") else (
+                "（重提）" if data.get("reminder") else "")
             title = (f"{_prefix} 案例无人跟进：危机 {_urgent} 条"
-                     f"{_media_title} / 超龄 {_stale} 条")
+                     f"{_media_title} / 超龄 {_stale} 条{_same}")
             text = (
                 f"{_urgent_txt}"
                 f"{_media_txt}"
                 f"**超龄未认领**: {_stale} 条（超过 {float(data.get('min_age_hours') or 4):.0f}h）\n"
-                f"**最老**: {_oldest:.1f} 小时\n"
+                f"**最老**: {_hours_txt(_oldest)}\n"
                 f"**来源**: {_src_txt}\n"
                 "[🗂 立即处理](/cases)"
             )
@@ -1401,12 +1561,15 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
             lv = data.get("by_level") or {}
             lv_txt = "、".join(f"{k}×{v}" for k, v in sorted(lv.items())) or "—"
             prefix = "⏰" if data.get("reminder") else "🚨"
-            oldest_txt = (f"{oldest / 24:.1f} 天" if oldest >= 48 else f"{oldest:.0f} 小时")
+            oldest_txt = _hours_txt(oldest)
             orphan = int(data.get("already_replied") or 0)
             orphan_txt = (
                 f"**账目残留**: 另有 {orphan} 条已由人工回过、仅草稿行没人处置"
                 "（不算客户在等，清掉即可）\n" if orphan else "")
-            title = f"{prefix} {n} 条待审草稿超过 {min_age:.0f}h 客户仍在等（最老 {oldest_txt}）"
+            _same = "（重提，与上次相同）" if data.get("unchanged") else (
+                "（重提）" if data.get("reminder") else "")
+            title = (f"{prefix} {n} 条待审草稿超过 {min_age:.0f}h 客户仍在等"
+                     f"（最老 {oldest_txt}）{_same}")
             text = (
                 f"**分级**: {lv_txt}\n"
                 f"**盲区**: 其中 {uncovered} 条**不在** SLA 逐条告警覆盖内"
@@ -1414,8 +1577,8 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 f"{orphan_txt}"
                 "**影响**: 客户的消息一直没被回复；老稿子即便再点「通过」也会被陈旧"
                 "护栏拦下（原样发出会与当下情境脱节）\n"
-                "**处置**: 工作台逐条「改写后发送」或「拒绝」清队列；长期缺人看队列"
-                "考虑开 `inbox.sla_watcher.auto_expire_hours` 自动作废\n"
+                "**处置**: 工作台逐条「改写后发送」或「拒绝」清队列；长期缺人看队列，"
+                "可开启「超龄草稿自动作废」（设置项 inbox.sla_watcher.auto_expire_hours）\n"
                 "[📊 查看运营总览](/admin/ops)"
             )
 
@@ -2214,7 +2377,9 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "inject_health_alert": ("🟠 警告", "链路"),
     "login_funnel_alert": ("🟠 警告", "链路"),
     "ai_mutual_chat_alert": ("🔵 提示", "链路"),
-    "draft_backlog_alert": ("🟠 警告", "运营"),
+    # 2026-09-10 降噪：慢性积压是「要有人清账」的卫生项，不是系统退化——与案例积压 /
+    # 入站漏球同档 🔵，走每日摘要；🟠 留给「现在有东西坏了但业务没停」。
+    "draft_backlog_alert": ("🔵 提示", "运营"),
     "accounts_truth_alert": ("🟠 警告", "运营"),
     "draft_backlog_summary": ("🟠 警告", "运营"),
     "takeover_alert": ("🟠 警告", "运营"),
@@ -2237,6 +2402,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "report": ("📊 日报", "运营"),
     "ops_report": ("📊 日报", "运营"),
     "billing_alert": ("🟠 警告", "成本"),
+    "ai_cost_report": ("📊 日报", "成本"),
+    "ops_digest_report": ("📊 日报", "运维"),
     "human_reply_risk": ("🟠 警告", "安全"),
     "csrf_reject_alert": ("🟠 警告", "安全"),
     "audit_danger_alert": ("🟠 警告", "安全"),
@@ -2254,33 +2421,106 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "proxy_managed_alert": ("🟠 警告", "运营"),
 }
 
-_CARD_RULE = "━━━━━━━━━━━━━━"
+# 严重度分级（2026-09-10 运维群降噪 P1.1）：级别标签 → 机器可比的等级。
+# 日报 / 业务类不参与 min_severity 过滤（它们靠事件订阅显式选择，不该被「只收严重」误杀）。
+_SEV_LEVEL: Dict[str, str] = {
+    "🔴 严重": "critical", "🟠 警告": "warning", "🔵 提示": "info",
+    "📊 日报": "report", "💰 业务": "business",
+}
+_SEV_RANK: Dict[str, int] = {"info": 0, "warning": 1, "critical": 2}
+SEVERITY_LEVELS = ("info", "warning", "critical")
+
+
+def event_severity(event_type: str) -> str:
+    """事件的严重度等级：critical / warning / info / report / business（未登记的事件按 info）。
+    恢复通知沿用原事件等级——某渠道收不到那条告警，也不该收到它的恢复。"""
+    sev, _cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
+    return _SEV_LEVEL.get(sev, "info")
+
+
+def severity_allows(min_severity: str, level: str) -> bool:
+    """渠道 ``min_severity`` 是否放行该等级。report / business 永远放行。"""
+    if level not in _SEV_RANK:
+        return True
+    floor = _SEV_RANK.get(str(min_severity or "info").strip().lower(), 0)
+    return _SEV_RANK[level] >= floor
+
+
+_CARD_SOURCE = "智聊"
+
+
+def _action_line(data: Dict[str, Any], base_url: str, links: str) -> str:
+    """巡检提醒卡的「处置」链接（运维群降噪 P1.3）：带 ``remind_key`` 的事件给一条到本机
+    ``/ops/act`` 的链接——24h 一次性令牌进页，页里再点「已处理 / 静音」。恢复通知不带；
+    渠道 ``links=off`` 或没配 ``base_url`` 不带（没有可点的地址就不放半截话）。
+    secret 未配铸不出令牌 → 普通登录链接（页面接受工作台 session）。"""
+    key = str(data.get("remind_key") or "").strip()
+    if not key or data.get("recovered") or links == "off" or not base_url:
+        return ""
+    url = None
+    try:
+        from src.web.routes.ops_act_routes import act_url, link_target
+        url = act_url(base_url, key) or f"{base_url.rstrip('/')}{link_target(key)}"
+    except Exception:
+        return ""
+    return f"🛠 处置（已处理 / 静音）: {url}"
 
 
 def _build_card(event_type: str, data: Dict[str, Any], title: str, text: str,
                 base_url: str = "", links: str = "login") -> str:
-    """把已有中文标题+正文套成统一「表单式」卡片（仅 Telegram 等 IM 渠道用）。
+    """把已有中文标题+正文套成统一卡片（仅 Telegram 等 IM 渠道用）。v2（2026-09-10 降噪 P2.1）：
 
-    顶部：级别 · 类别（自解释、可扫读）；正文：事件既有中文说明；
-    表尾：来源系统 + 时间 + 原始事件名（排查锚点）。不改各事件正文语义。
-    ``links`` 透传 ``_plainify``（login / magic / off，见其说明）。
+        🔵 提示 · 运营                      ← 级别 · 类别（恢复通知级别动态改 ✅ 恢复）
+        📌 <标题>
+        <正文：事件既有中文说明，空行压掉>
+        🛠 处置（已处理 / 静音）: <链接>      ← 仅巡检提醒卡（带 remind_key）
+        智聊 · 09-10 18:41 · #event_type    ← 来源 · 时间 · 排查锚点
+
+    比 v1 少三行装饰（两条 ━━━ 分隔线 + 「原始事件（仅排查用）」整行），手机上一屏能多看一张卡。
+    不改各事件正文语义。``links`` 透传 ``_plainify``（login / magic / off，见其说明）。
     """
     sev, cat = _CARD_META.get(event_type, ("🔵 提示", "其它"))
     if data.get("recovered"):
         sev = "✅ 恢复"
+    base_url, link_note = _effective_base(base_url, links)
     body_title = _plainify(title, base_url, links)
-    body = _plainify(text, base_url, links)
+    body = re.sub(r"\n{2,}", "\n", _plainify(text, base_url, links))
     ts = time.strftime("%m-%d %H:%M", time.localtime())
     parts = [
         f"{sev} · {cat}",
-        _CARD_RULE,
         f"📌 {body_title}" if body_title else "",
         body,
-        _CARD_RULE,
-        f"🏷️ 来源：承接引擎(智聊)　🕒 {ts}",
-        f"🏳️ 原始事件：{event_type}（仅排查用）",
+        link_note,
+        _action_line(data, base_url, links),
+        f"{_CARD_SOURCE} · {ts} · #{event_type}",
     ]
     return "\n".join(p for p in parts if p).strip()
+
+
+def _effective_base(base_url: str, links: str) -> Tuple[str, str]:
+    """公网入口断了就把卡片链接根换成内网地址（运维群降噪 P2.2）。
+
+    返回 ``(实际用的 base_url, 说明行)``：入口正常 → 原样、空说明；断了且推得出内网地址 →
+    内网地址 + 「已换内网」说明；断了但推不出 → 原样 + 「可能打不开」说明（至少别让人白点三张）。
+    ``links=off`` 或没配 base_url 不参与（卡上本就没链接）。探测与状态见 ``src.ops.public_link``。"""
+    if not base_url or links == "off":
+        return base_url, ""
+    try:
+        from src.ops import public_link
+        if not public_link.is_down(base_url):
+            return base_url, ""
+        lan = public_link.lan_base()
+    except Exception:
+        return base_url, ""
+    if lan and lan.rstrip("/") != base_url.rstrip("/"):
+        return lan, "⚠️ 公网入口暂不可达，链接已换为内网地址（公司网络内打开）"
+    return base_url, "⚠️ 公网入口暂不可达，链接可能暂时打不开"
+
+
+def card_body_lines(card: str) -> List[str]:
+    """卡片正文行（去掉首行「级别 · 类别」与末行「来源 · 时间 · #事件」）——契约测试用。"""
+    lines = [ln for ln in str(card or "").splitlines() if ln.strip()]
+    return lines[1:-1] if len(lines) >= 2 else lines
 
 
 # ─── 主类 ────────────────────────────────────────────────────────────────────
@@ -2330,6 +2570,13 @@ class WebhookNotifier:
                     "links": (str(wh.get("links") or "login").strip().lower()
                               if str(wh.get("links") or "login").strip().lower() in _LINK_MODES
                               else "login"),
+                    # 2026-09-09：链接根地址此前没搬进 matcher → _build_card 永远拿到空串，
+                    # Telegram 卡片里所有 /workspace/... 链接都只剩文字。
+                    "base_url": str(wh.get("base_url") or "").rstrip("/"),
+                    # 2026-09-10 P1.1：渠道最低严重度（info＝全收 / warning / critical）
+                    "min_severity": (str(wh.get("min_severity") or "info").strip().lower()
+                                     if str(wh.get("min_severity") or "info").strip().lower()
+                                     in SEVERITY_LEVELS else "info"),
                     "types": rule["types"],          # None → 全部
                     "levels": rule.get("levels"),    # None → 全部
                 })
@@ -2386,12 +2633,18 @@ class WebhookNotifier:
             for x in (data.get("extra_chat_ids") or [])
             if str(x or "").strip()][:5]
 
+        sev_level = event_severity(etype)
         for m in self._matchers:
             # 匹配 event type
             if m["types"] is not None and etype not in m["types"]:
                 continue
             # 匹配 autopilot_level
             if m["levels"] is not None and level not in m["levels"]:
+                continue
+            # 渠道严重度门槛（P1.1）：老板私聊只收 🔴 + 日报，🟠/🔵 留给运维群 / 每日摘要
+            if not severity_allows(m.get("min_severity", "info"), sev_level):
+                logger.debug("Webhook 严重度门槛跳过 [%s] %s (%s < %s)",
+                             m["name"], etype, sev_level, m.get("min_severity"))
                 continue
             # 速率限制 key = (name, event_type, 判别符)。判别符默认 draft_id；无 draft
             # 语义的事件可显式带 rate_key（如 platform_session_alert 按 platform:account
