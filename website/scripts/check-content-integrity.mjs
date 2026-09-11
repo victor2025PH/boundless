@@ -108,6 +108,7 @@ function collectSourceFiles(dir, acc) {
  *  E5 候选路径以 /_next/ 开头 → next 构建产物运行时路径，不落在 public/
  *  E6 候选路径前一个字符是路径字符（字母/数字/._~%@-）→ 说明它是相对路径的中段
  *     （如 "../public/x.png" 里的 "/public/x.png"），不是「以 / 开头」的 public 根路径
+ *  E8 运行时覆盖式产物（teaser-war-latest.png）→ weekly-report 写出，不进仓库
  *  存在性判定前先剥 ?query/#hash 并做 decodeURIComponent（失败则用原文）。
  */
 const PATHISH_CHAR_RE = /[A-Za-z0-9_.~%@-]/;
@@ -146,6 +147,9 @@ function checkAssets() {
           // E7：/media/* 由服务器 nginx 直出（/var/www/media，部署不覆盖的运行时媒体区），
           // 按架构设计不进仓库 public/（先例：日更 feed 视频；2026-08-07 品牌片同通道）。
           if (candidate.startsWith("/media/")) continue;
+          // E8：运行时覆盖式产物，weekly-report / war-card 写出；缺文件时调用方
+          // 降级纯文字，不是页面静态资源，不进仓库（2026-09-11 FromHead 部署实锤）。
+          if (candidate === "/brand/campaign/teaser-war-latest.png") continue;
           refCount++;
           const bare = candidate.split(/[?#]/)[0];
           let decoded = bare;

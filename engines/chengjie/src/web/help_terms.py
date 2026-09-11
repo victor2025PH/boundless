@@ -459,6 +459,22 @@ HELP_TERMS: dict = {
         "usage": "通常 3-5 轮即可。复杂业务场景可增至 8-10 轮",
         "usage_en": "3-5 rounds is usually enough; raise to 8-10 for complex scenarios"
     },
+    "context_depth": {
+        "zh": "上下文与记忆深度",
+        "en": "Context & memory depth",
+        "desc": "一档同时改提示预算、最近历史条数和注入的长期记忆条数。标准约 12k / 最近 10 条 / 8 条记忆；深度 32k / 40 条 / 16 条；最大 128k / 160 条 / 30 条；超大约 900k，与 DeepSeek 1M 窗口平齐。越深越记得住，峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，不用重启。",
+        "desc_en": "One control for prompt budget, recent history and long-term memories. Standard ≈12k / last 10 / 8 memories; Deep 32k / 40 / 16; Max 128k / 160 / 30; Ultra ≈900k, on par with DeepSeek's 1M window. Deeper remembers more. Peak per-turn ceiling ≈ ¥0.02 / ¥0.06 / ¥0.26 / ¥1.8. Takes effect immediately, no restart.",
+        "usage": "自动回复设置 →「上下文与记忆深度」下拉选档 → 保存。日常用标准或深度；超大档很贵，只给必须盯很长对话的会话。",
+        "usage_en": "Reply settings → Context & memory depth → pick a tier → save. Use Standard or Deep day-to-day; Ultra is expensive, only for threads that must keep a very long window."
+    },
+    "usage_mode": {
+        "zh": "用量模式",
+        "en": "Usage mode",
+        "desc": "和「深度」是两套旋钮：深度决定记得多少，用量模式是省钱压帽。完整＝按上面的深度档；经济＝只留最近 4 条、压缩人设、少做记忆抽取。钱包用尽时即使选「完整」也会自动进经济档（本地模型顶班 + 短上下文），避免断线。改完即生效。",
+        "desc_en": "Separate from depth: depth is how much to remember; usage mode is a spend cap. Full follows the depth tier; Economy keeps the last 4 messages, a compact persona and fewer memory extracts. When the token wallet is empty, Full still drops into Economy (local model + short context) so chat does not go dark. Takes effect immediately.",
+        "usage": "自动回复设置 →「用量模式」选完整或经济 → 保存。要省量选经济；要按深度档完整记忆选完整。",
+        "usage_en": "Reply settings → Usage mode → Full or Economy → save. Pick Economy to spend less; pick Full to use the depth tier as-is."
+    },
     "split_send": {
         "zh": "分条发送",
         "en": "Split Send",

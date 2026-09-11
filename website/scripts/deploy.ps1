@@ -12,6 +12,9 @@
     pwsh ./scripts/deploy.ps1                     # 推荐（PowerShell 7+）
     ./scripts/deploy.ps1                          # Windows PS5 会自动改用 pwsh（若已安装）
     $env:VPS_PASS = '...'; ./scripts/deploy.ps1
+    ./scripts/deploy.ps1 -FromHead            # 只发已提交 website/，不带工作树半成品
+    ./scripts/deploy.ps1 -AllowDirty          # 明确允许脏树（默认拒绝）
+    ./scripts/deploy.ps1 -FromHead -SkipAssets
 #>
 param(
   [string]$VpsHost      = $(if ($env:VPS_HOST) { $env:VPS_HOST } else { '165.154.233.121' }),
@@ -19,7 +22,9 @@ param(
   [string]$RemoteDir    = '/home/ubuntu',
   [string]$SiteUrl      = $(if ($env:SITE_URL) { $env:SITE_URL } else { 'https://bd2026.cc' }),
   [string]$KeyFile      = $(if ($env:VPS_KEY) { $env:VPS_KEY } else { Join-Path $HOME '.ssh/hualing_deploy' }),
-  [switch]$SkipAssets   # 只发源码，跳过 public/downloads、public/releases 发布物同步
+  [switch]$SkipAssets,  # 只发源码，跳过 public/downloads、public/releases 发布物同步
+  [switch]$FromHead,    # 只打 git HEAD 里的 website/，不带工作树未提交改动
+  [switch]$AllowDirty   # 明确允许把脏树打上生产（默认拒绝）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +37,8 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
       '-VpsHost', $VpsHost, '-User', $User, '-RemoteDir', $RemoteDir, '-SiteUrl', $SiteUrl, '-KeyFile', $KeyFile)
     if ($SkipAssets) { $argList += '-SkipAssets' }
+    if ($FromHead) { $argList += '-FromHead' }
+    if ($AllowDirty) { $argList += '-AllowDirty' }
     & $pwshCmd.Source @argList
     exit $LASTEXITCODE
   }
@@ -90,6 +97,7 @@ function Get-PublishVersion([string]$Text) {
   return $null
 }
 
+$headStage = $null
 Push-Location $WebRoot
 try {
   Write-Host '[0/4] sync:brand（vendored 品牌 preset，缺则服务器 next build 必挂）...'
@@ -107,22 +115,57 @@ try {
   if (-not $gitHead -or -not $gitTsRaw) { throw '读 git 元数据失败，拒绝打包' }
   $gitTs = [int]$gitTsRaw
   $gitDirty = -not [string]::IsNullOrWhiteSpace((git -C $WebRoot status --porcelain -- . 2>$null | Out-String).Trim())
-  @{ commit = $gitHead; commit_ts = $gitTs; dirty = $gitDirty
+  if ($gitDirty -and -not $FromHead -and -not $AllowDirty) {
+    $dirtyN = @(git -C $WebRoot status --porcelain -- .).Count
+    throw ("拒绝部署：website/ 工作树有 {0} 个未提交改动，打上去会把半成品带上生产。请用 -FromHead 只发已提交内容，或 -AllowDirty 明确带上工作树。" -f $dirtyN)
+  }
+  $packedFromHead = [bool]$FromHead
+  @{ commit = $gitHead; commit_ts = $gitTs; dirty = ($(if ($packedFromHead) { $false } else { $gitDirty }))
+     from_head = $packedFromHead
      packed_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
      host = $env:COMPUTERNAME; user = $env:USERNAME } |
     ConvertTo-Json -Compress | Set-Content -Path (Join-Path $WebRoot '.deploy-meta.json') -Encoding ascii
-  Write-Host ("    website HEAD {0} @ {1}{2}" -f $gitHead.Substring(0,8), $gitTs, $(if ($gitDirty) { ' (dirty tree)' } else { '' }))
+  Write-Host ("    website HEAD {0} @ {1}{2}" -f $gitHead.Substring(0,8), $gitTs, $(if ($packedFromHead) { ' (from HEAD, dirty tree ignored)' } elseif ($gitDirty) { ' (dirty tree)' } else { '' }))
 
   Write-Host '[1/4] 打包 website/ (排除 node_modules/.next/.git/.env.local/临时文件) ...'
   if (Test-Path $tar) { Remove-Item $tar -Force }
   # public/downloads、public/releases（安装包等大文件）不进源码包：服务器侧 rsync 已 exclude
   # 令其常驻，由下方 [3.5/4] 差量上传，避免每次部署重传数百 MB。
-  tar -czf $tar --exclude=node_modules "--exclude=.next*" --exclude=.git --exclude=.env.local `
-      --exclude=.hand-shots --exclude=.robot-shots `
-      "--exclude=*.tsbuildinfo" "--exclude=*.log" --exclude=og-test.png --exclude=test-fill.png `
-      --exclude=ops-overlay.tgz "--exclude=scripts/_*" `
-      --exclude=public/downloads --exclude=public/releases .
-  if ($LASTEXITCODE -ne 0) { throw '打包失败' }
+  $packRoot = $WebRoot
+  if ($FromHead) {
+    $repoRoot = Split-Path -Parent $WebRoot
+    $headStage = Join-Path $env:TEMP ("website-head-{0}" -f $PID)
+    if (Test-Path $headStage) { Remove-Item $headStage -Recurse -Force }
+    New-Item -ItemType Directory -Path $headStage | Out-Null
+    Write-Host '    -FromHead: git archive HEAD -- website （不带工作树半成品）'
+    $archiveTar = Join-Path $env:TEMP ("website-head-src-{0}.tar" -f $PID)
+    git -C $repoRoot archive --format=tar --output=$archiveTar HEAD -- website
+    if ($LASTEXITCODE -ne 0) { throw 'git archive HEAD -- website 失败' }
+    tar -xf $archiveTar -C $headStage
+    Remove-Item $archiveTar -Force -ErrorAction SilentlyContinue
+    $packRoot = Join-Path $headStage 'website'
+    if (-not (Test-Path (Join-Path $packRoot 'app\pricing\page.tsx'))) {
+      throw "FromHead 解包后缺少 app/pricing/page.tsx（$packRoot）"
+    }
+    Copy-Item (Join-Path $WebRoot '.deploy-meta.json') (Join-Path $packRoot '.deploy-meta.json') -Force
+    $vendorSrc = Join-Path $WebRoot 'vendor\brand'
+    $vendorDst = Join-Path $packRoot 'vendor\brand'
+    if (Test-Path $vendorSrc) {
+      New-Item -ItemType Directory -Path $vendorDst -Force | Out-Null
+      Copy-Item (Join-Path $vendorSrc '*') $vendorDst -Force
+    }
+  }
+  Push-Location $packRoot
+  try {
+    tar -czf $tar --exclude=node_modules "--exclude=.next*" --exclude=.git --exclude=.env.local `
+        --exclude=.hand-shots --exclude=.robot-shots `
+        "--exclude=*.tsbuildinfo" "--exclude=*.log" --exclude=og-test.png --exclude=test-fill.png `
+        --exclude=ops-overlay.tgz "--exclude=scripts/_*" `
+        --exclude=public/downloads --exclude=public/releases .
+    if ($LASTEXITCODE -ne 0) { throw '打包失败' }
+  } finally {
+    Pop-Location
+  }
   Write-Host ("    包大小 {0:N1} MB" -f ((Get-Item $tar).Length / 1MB))
 
   $script:keyPath = $null
@@ -304,4 +347,7 @@ try {
 finally {
   Pop-Location
   if (Test-Path $tar) { Remove-Item $tar -Force -ErrorAction SilentlyContinue }
+  if ($headStage -and (Test-Path $headStage)) {
+    Remove-Item $headStage -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
