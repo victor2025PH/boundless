@@ -25,6 +25,12 @@ C. :func:`regrade_inbound`（drafts.py 唯一钩子）——
      3 分钟补发。
    软回应**不是**缓冲句、不做全局兜底：只在 explicit / pressure × (soft_reply | human 超时) 出。
 
+Q-27（#301 追加 AFD2CD / #296，2026-09-12）**成人硬拦只剩 pressure**：
+   · explicit × (human | soft_reply) → ``risk=medium``、首位主因 ``adult_soft``、**不 risk_hold、不 needs_human**；
+     soft_reply × auto_ai 仍走 Q-23 闸门短生成软回应（``soft_reply_status=scheduled`` → drafts 不另拟稿，
+     软回应即本轮回复）；human 政策 = 人设「接住」（正常拟稿，不转人工，无 3 分钟补发）；
+   · pressure 打标一律带 ``level=high category=adult hits=``（C 段）；:func:`is_blocking_level` 只认 pressure。
+
 Q-23（#303，2026-09-12，事故：报障群被软回应刷屏 mid 1445/1454/1459/1461）：
    · 入口先看 :class:`src.inbox.guard_context.GuardContext`：群 / 非客户发送方 → **不评估、不打标、
      不出站**（``info.skipped``）；
@@ -61,6 +67,9 @@ KV_PREFIX = "adult_soft:"          # 每会话账本 {ts, level, policy, mode, t
 REASON_PREFIX = "adult:"           # 打标 / risk_reasons 标签：adult:<level>[:<hit>]
 FLIRT_REASON = "adult_flirt"
 MARK_REASON = "adult_mark"
+# Q-27（#301 追加 AFD2CD）：explicit × (human | soft_reply) 不再 high / 不持有 / 不打标——
+# 首位主因换成 adult_soft（risk_grader 映射为 adult 中级），人设接住（正常拟稿）或 Q-23 软回应。
+SOFT_REASON = "adult_soft"
 # Q-23（#303）：manual / review 档下「本该软回应」不再自动出站，改标成审核候选
 # adult_soft_alt:<mode>（同 Q-2 commitment_alt: 模式）——坐席在稿上看到即可自己挑句（adult_routes.pick）。
 SOFT_ALT_PREFIX = "adult_soft_alt:"
@@ -237,7 +246,9 @@ def grade(text: str, lang: Optional[str] = None) -> Dict[str, Any]:
 
 
 def is_blocking_level(level: str) -> bool:
-    return str(level or "") in ("explicit", "pressure")
+    """会转人工 / 持有的级别。Q-27（#301）：只剩 ``pressure``（露骨 + 施压）；``explicit`` 降为中级
+    （人设接住 / 软回应，不持有不打标），human 政策 3 分钟补发钩子也随之只认 pressure。"""
+    return str(level or "") == "pressure"
 
 
 # ── 人设政策 ────────────────────────────────────────────────────────────────
@@ -868,7 +879,37 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
             logger.info("[adult] grade conv=%s level=%s hits=%s policy=%s action=mark_only risk=%s",
                         cid, level, "|".join(hits[:4]) or "-", policy, new_risk)
             return new_risk, out, info
-        # explicit × (human | soft_reply) / pressure × 任何政策：high + needs_human
+        _mode = str(getattr(ctx, "mode", "") or automation_mode or "").strip().lower()
+        if level == "explicit":
+            # Q-27（#301 追加 AFD2CD）：露骨**无施压** → 中级。不 risk_hold、不 needs_human（全自动不掐停）：
+            #   · soft_reply 政策 × auto_ai → Q-23 单一闸门人设口吻短生成软回应（失败不发、无固定句）；
+            #     调用方 drafts 见 soft_reply_status=scheduled 即不另拟稿（软回应就是本轮回复，避免两连发）；
+            #   · soft_reply × manual/review/multi_choice → 审核稿候选 adult_soft_alt:<mode>（Q-23 口径不变）；
+            #   · human 政策 → 「接住」：不转人工，正常拟稿由人设 prompt（adult_policy 块）带过。
+            new_risk = _max(_downgrade_from_adult(risk_level, reasons), "medium")
+            out = [SOFT_REASON] + base + [f"{REASON_PREFIX}{level}"]
+            if hit0:
+                out.append(f"adult_hit:{hit0[:40]}")
+            ts = float(now if now is not None else time.time())
+            action = "persona_catch"
+            if policy == "soft_reply" and send and _mode and _mode != "auto_ai":
+                out.append(f"{SOFT_ALT_PREFIX}{_mode}")
+                info["soft_reply_status"] = "review_candidate"
+                action = "soft_reply_candidate"
+                logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=immediate status=review_candidate "
+                            "automation_mode=%s", cid, level, policy, _mode)
+            elif policy == "soft_reply" and send:
+                res = send_soft_reply(store, conv, level=level, policy=policy, mode="immediate",
+                                      persona=persona, lang=lang, cfg=cfg, svc=svc, now=ts, tag_ts=ts,
+                                      peer_text=text, ctx=ctx, automation_mode=_mode or automation_mode)
+                info["soft_reply"] = str(res.get("text") or "")
+                info["soft_reply_status"] = str(res.get("status") or "")
+                action = "soft_reply"
+            logger.info("[adult] grade conv=%s level=%s hits=%s policy=%s(%s) action=%s risk=%s mode=%s "
+                        "hold=none needs_human=false", cid, level, "|".join(hits[:4]) or "-", policy, src,
+                        action, new_risk, automation_mode)
+            return new_risk, out, info
+        # pressure（露骨 + 施压）× 任何政策：high + needs_human + risk_hold（安全地板，Q-27 唯一保留的成人硬拦）
         new_risk = _max(risk_level, "high")
         out = [CATEGORY] + base + [f"{REASON_PREFIX}{level}"]
         if hit0:
@@ -884,13 +925,15 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                 logger.debug("[adult] risk_hold.set 失败（忽略）", exc_info=True)
             try:
                 from src.integrations.protocol_autoreply import tag_needs_human
+                # Q-27 C：打标行必带 level / category / hits（chip / 横幅 / 摘标冷却同源）
                 tag_needs_human(store, {"platform": conv.get("platform"), "account_id": conv.get("account_id"),
                                         "chat_key": conv.get("chat_key"), "lang": lang},
-                                reason=tag_reason, source="adult_grader", now=ts)
+                                reason=tag_reason, source="adult_grader", now=ts,
+                                level="high", category=CATEGORY,
+                                hits=[f"{CATEGORY}:{h[:40]}" for h in hits[:3]] or [f"{CATEGORY}:{level}"])
             except Exception:
                 logger.debug("[adult] tag_needs_human 失败（忽略）", exc_info=True)
         action = "handoff"
-        _mode = str(getattr(ctx, "mode", "") or automation_mode or "").strip().lower()
         if policy == "soft_reply" and send and _mode and _mode != "auto_ai":
             # Q-23 #303：人在环档位（manual / review / multi_choice）任何自动出站只能是审核稿候选——
             # 软回应不发，候选写进 reasons（drafts 落进草稿 risk_reasons，坐席卡片可见）。
@@ -943,7 +986,7 @@ def card_label_parts(reason: Any) -> Dict[str, str]:
 
 __all__ = [
     "CATEGORY", "LEVELS", "POLICIES", "FOLLOWUP_SEC", "KV_PREFIX", "REASON_PREFIX",
-    "FLIRT_REASON", "MARK_REASON",
+    "FLIRT_REASON", "MARK_REASON", "SOFT_REASON",
     "grade", "neutralize_cum", "is_ambiguous_hit", "is_blocking_level", "normalize_policy",
     "blocks_adult_outbound",
     "default_policy", "adult_policy_of",

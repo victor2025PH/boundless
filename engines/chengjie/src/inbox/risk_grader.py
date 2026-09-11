@@ -21,6 +21,16 @@ pictures they have sent me…」→ ``keyword_risk_hits`` 对客户入站也跑 
 （self_harm / stop_contact / credential_or_payment_request / money / adult / 支付词表）在场一律不动。
 人设级覆写 ``boundaries.risk_overrides: {category: level}`` 只对中 / 低类别生效（高类别有地板，
 adult 沿用 Q-15 ``adult_policy``，stop_contact 沿用 O-1 A）。任何异常 → 原判定放行。
+
+Q-27（#301 追加 AFD2CD / #296，2026-09-12）**最小硬拦集**——高级只留 ``self_harm / minor / threat /
+money_request（含验证码 / 凭据索要句式）/ scam``（+ ``stop_contact`` 硬停由 O-1 A 冻结，不在 L1 集合）：
+  · ``payment_keyword``（refund / password / OTP 裸词）→ 中级「只标记 + 人审候选」，不再强制 L1；
+  · ``adult``：``pressure``（露骨 + 施压）才高；``explicit`` → 中级（人设政策接住 / Q-23 软回应，
+    不 risk_hold、不 needs_human）；``mention / flirt`` 单点成人词 → 只落 ``[risk] low`` 日志；
+  · quick_analyze 的 ``money`` 单词（bank card / paypal / 转账 提及）无索要句式 → 低（``money_mention``）；
+  · **任何 keyword-only 命中不得单独把全自动改 L1**：高级必须是「类别 + 句式 / 施压第二信号」，
+    ``TRUE_HIGH_REASONS`` 只剩 self_harm / stop_contact / credential_or_payment_request（句式）+
+    Q-15 ``adult:pressure`` 标记；原 high 若无这些因子撑着一律降到分级结论。
 """
 from __future__ import annotations
 
@@ -35,9 +45,13 @@ _RANK = {"low": 1, "medium": 2, "high": 3}
 MEDIUM_TAG = "risk:medium"           #: 中级命中只打这一枚会话标签（不进 needs_human）
 REASON_PREFIX = "risk:"              #: 本模块补进 peer_reasons 的细因前缀（risk:<category>）
 PRIVACY_MENTION_REASON = "privacy_mention"   #: 被降为叙述的 quick_analyze ``privacy`` 主因改名，防下游按 privacy 处置
+MONEY_MENTION_REASON = "money_mention"       #: Q-27：quick_analyze ``money`` 单词（无索要句式）降为叙述后的改名，同上
 
-#: 真高风险因子（quick_analyze / Q-15 已判）——在场一律不降
-TRUE_HIGH_REASONS = frozenset({"self_harm", "stop_contact", "credential_or_payment_request", "money", "adult"})
+#: 真高风险因子（quick_analyze / Q-15 已判）——在场一律不降。
+#: Q-27（#301）：``money`` / ``adult`` 单词不再在列——它们是 keyword-only；索要句式走
+#: ``credential_or_payment_request`` / ``detect_request(money)``，露骨施压走 ``adult:pressure``（见 ``_downgradable``）。
+TRUE_HIGH_REASONS = frozenset({"self_harm", "stop_contact", "credential_or_payment_request"})
+ADULT_PRESSURE_REASON = "adult:pressure"     #: Q-15 施压标记（adult_grader 出）——唯一让 adult 撑起 high 的因子
 
 _LB = r"(?<![A-Za-z0-9_])"
 _RB = r"(?![A-Za-z0-9_])"
@@ -106,11 +120,11 @@ CATEGORIES: List[Dict[str, Any]] = [
     {"id": "scam", "level": "high", "floor": "high", "overridable": False, "action": "needs_human",
      "source": "risk_grader._SCAM",
      "words": {"en": ["guaranteed returns", "double your money", "invest with me", "gift card code"], "zh": ["稳赚", "带你赚", "刷单返利", "礼品卡卡密"]}},
-    {"id": "payment_keyword", "level": "high", "floor": "high", "overridable": False, "action": "needs_human",
-     "source": "drafts._SENSITIVE_PATTERNS[0]",
+    {"id": "payment_keyword", "level": "medium", "floor": "medium", "overridable": False, "action": "mark_review",
+     "source": "drafts._SENSITIVE_PATTERNS[0]（Q-27：裸词只标记 + 人审候选，不强制 L1；索要句式走 money_request）",
      "words": {"en": ["refund", "payment", "wire transfer", "password", "OTP", "deposit"], "zh": ["退款", "付款", "转账", "银行卡", "密码", "验证码"]}},
     {"id": "adult", "level": "medium", "floor": "medium", "overridable": False, "action": "adult_policy",
-     "source": "adult_grader（Q-15：pressure→high；explicit→人设 adult_policy；mention/flirt→放行）",
+     "source": "adult_grader（Q-27：pressure→high；explicit→中级·人设接住 / Q-23 软回应，不持有不打标；mention/flirt→只记日志）",
      "words": {"en": ["nudes", "sex", "naked", "porn"], "zh": ["裸照", "成人视频", "约炮"]}},
     {"id": "stop_contact", "level": "medium", "floor": "medium", "overridable": False, "action": "freeze",
      "source": "quick_analyze 停联意图 → O-1 A（一条告别 + 冻结）",
@@ -264,23 +278,35 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
                 _add("self_harm", next((h for h in in_hits if h), "self_harm"))
             if "stop_contact" in rs:
                 _add("stop_contact", "stop_contact")
-            if "credential_or_payment_request" in rs or "money" in rs:
-                _add("money_request", next((h for h in in_hits if h), "money"))
-            if "adult" in rs:
-                # Q-15 已判 explicit×(human|soft_reply) / pressure → high，本模块只记类别不改判
-                _add("adult", next((h for h in in_hits if h.startswith("adult") or h), "adult"), "high")
-            elif "adult_mark" in rs:
-                _add("adult", "adult", "medium")      # explicit × mark_only：中，只标
-            # adult_flirt（mention / flirt）＝Q-15 放行档，不进本模块类别（不打 risk:medium）
-            for pats, cat in ((_THREAT, "threat"), (_MINOR, "minor"), (_SCAM, "scam")):
-                hs = _hits(pats, t)
-                if hs:
-                    _add(cat, hs[0])
             try:
                 from src.inbox.commitment_guard import detect_request
                 rk = detect_request(t, lang)
             except Exception:
                 rk = None
+            _money_guess = bool(_SP) and len(_SP) > 2 and bool(_hits([_SP[2][0]], t)) \
+                and next((k for k, p in _GUESS_KIND if p.search(t)), "") == "money"
+            if "credential_or_payment_request" in rs:
+                # 索要凭据 / 付款信息**句式**（give me your password / 把验证码发我）→ 高
+                _add("money_request", next((h for h in in_hits if h), "money"))
+            elif "money" in rs and (rk == "money" or _money_guess):
+                _add("money_request", next((h for h in in_hits if h), "money"))
+            elif "money" in rs:
+                # Q-27：钱相关单词（bank card / paypal / 转账 …）无索要句式 = 叙述性提及 → 低
+                _add("narrative", "money:" + next((h for h in in_hits if h), "money"), "low")
+            _adult_hit = next((r.split(":", 1)[1] for r in rs if r.startswith("adult_hit:")), "")
+            if "adult" in rs and ADULT_PRESSURE_REASON in rs:
+                # Q-15 pressure（露骨 + 施压）→ 高，本模块只记类别不改判
+                _add("adult", _adult_hit or next((h for h in in_hits if h.startswith("adult") or h), "adult"), "high")
+            elif "adult" in rs or "adult_mark" in rs or "adult_soft" in rs:
+                # Q-27：explicit（任何政策）→ 中；adult_grader 缺席 / 异常留下的裸 adult 主因也最多到中
+                _add("adult", _adult_hit or "adult", "medium")
+            elif "adult_flirt" in rs:
+                # Q-27 D：单点成人词 / 玩笑（mention / flirt）无第二信号 → 只落 [risk] low 日志
+                _add("adult", _adult_hit or next((r.split(":", 1)[1] for r in rs if r.startswith("adult:")), "adult"), "low")
+            for pats, cat in ((_THREAT, "threat"), (_MINOR, "minor"), (_SCAM, "scam")):
+                hs = _hits(pats, t)
+                if hs:
+                    _add(cat, hs[0])
             if rk:
                 _add("money_request" if rk == "money" else "request_" + rk, "request:" + rk)
             if _SP:
@@ -351,16 +377,15 @@ def classify_reason(reason: Any) -> Tuple[str, str]:
 
 
 def _downgradable(reasons: Sequence[str], text: str) -> bool:
-    """原 high 是否**只**由可降因子撑起：无真高风险主因、且支付词表未中。"""
+    """原 high 是否**只**由可降因子撑起：无真高风险主因（``TRUE_HIGH_REASONS``）、无 Q-15 施压标记。
+
+    Q-27（#301）：支付词表（refund / password / OTP 裸词）不再是「不可降」——那是 keyword-only；
+    索要句式由 ``credential_or_payment_request`` / ``detect_request(money)`` 在 :func:`grade` 里判高。
+    """
     for r in reasons:
-        if str(r) in TRUE_HIGH_REASONS:
+        s = str(r)
+        if s in TRUE_HIGH_REASONS or s.startswith(ADULT_PRESSURE_REASON):
             return False
-    try:
-        from src.inbox.drafts import _SENSITIVE_PATTERNS as _SP
-        if _SP and _SP[0][0].search(str(text or "")):
-            return False
-    except Exception:
-        return False
     return True
 
 
@@ -425,6 +450,14 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
                     risk_hits.append(h)
         cur = str(risk_level or "low").lower()
         if not cat:
+            if cur == "high" and _downgradable(reasons, text):
+                # Q-27：原 high 却没有任何类别撑着（keyword-only / 未知主因）→ 不得单独把全自动改 L1
+                info["downgraded"] = True
+                reasons = [PRIVACY_MENTION_REASON if r == "privacy" else (MONEY_MENTION_REASON if r == "money" else r)
+                           for r in reasons]
+                logger.info("[risk] low conv=%s category=- hits=%s risk=low from=high（无类别·keyword-only 不停自动）",
+                            cid or "-", "|".join(str(h) for h in list(risk_hits or [])[:4]) or "-")
+                return "low", reasons, info
             return risk_level, reasons, info
         if level == "high":
             new = _max_level(cur, "high")
@@ -438,7 +471,8 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         if cur == "high" and _downgradable(reasons, text):
             new = level
             info["downgraded"] = True
-            reasons = [PRIVACY_MENTION_REASON if r == "privacy" else r for r in reasons]
+            reasons = [PRIVACY_MENTION_REASON if r == "privacy" else (MONEY_MENTION_REASON if r == "money" else r)
+                       for r in reasons]
         elif level == "medium":
             new = _max_level(cur, "medium")
         if level == "medium":
@@ -458,7 +492,8 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
 
 
 __all__ = [
-    "LEVELS", "MEDIUM_TAG", "REASON_PREFIX", "PRIVACY_MENTION_REASON", "TRUE_HIGH_REASONS",
+    "LEVELS", "MEDIUM_TAG", "REASON_PREFIX", "PRIVACY_MENTION_REASON", "MONEY_MENTION_REASON",
+    "TRUE_HIGH_REASONS", "ADULT_PRESSURE_REASON",
     "CATEGORIES", "OVERRIDABLE", "category_def", "public_table", "normalize_level",
     "risk_overrides_of", "resolve_persona", "grade", "classify_reason", "regrade_inbound",
 ]

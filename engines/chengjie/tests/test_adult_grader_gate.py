@@ -236,6 +236,52 @@ def test_mark_only_explicit_marks_but_pressure_still_hands_off(store, bg_loop, m
     assert info2["soft_reply"] == "" and not svc.delivered
 
 
+def test_q27_explicit_soft_reply_is_medium_no_hold_no_tag_and_soft_replies(store, bg_loop, monkeypatch):
+    """Q-27 #301 A：露骨**无施压** × soft_reply（陪聊缺省）× 全自动 → 中级；不 risk_hold、不 needs_human；
+    软回应仍经 Q-23 闸门排出（正文人设短生成，无预置句），drafts 见 scheduled 即不另拟稿。"""
+    _use_persona(monkeypatch)
+    svc = _Svc(store, {"business_domain": "companion"}, bg_loop)
+    conv = _conv("q27_exp1")
+    cid = conv["conversation_id"]
+    text = "I love your naked photos"
+    assert ag.grade(text, "en")["level"] == "explicit"
+    risk, reasons, info = _regrade(svc, conv, text, "en", now=1_800_000_000.0)
+    assert risk == "medium" and reasons[0] == ag.SOFT_REASON and "adult:explicit" in reasons, (risk, reasons)
+    assert "adult" not in reasons and any(r.startswith("adult_hit:") for r in reasons)
+    assert info["needs_human"] is False and info["policy"] == "soft_reply"
+    assert info["soft_reply_status"] == "scheduled" and info["soft_reply"] == ""
+    assert HANDOFF_TAG not in store.get_conv_tags(cid)
+    assert risk_hold.active(store, cid) is None
+    assert svc.got.wait(3.0), "soft reply not dispatched via _soft_reply_cb"
+    row = svc.delivered[0]
+    assert row["kind"] == "soft_reply" and row["level"] == "explicit" and row["final_text"] == ""
+    # 档位口径：medium × auto_ai 不进 review_required
+    from src.inbox.autosend_policy import decide
+    d = decide(risk, reasons, "low", [], ["naked"], automation_mode="auto_ai", platform=_PLAT,
+               conversation_id=cid, store=store)
+    assert not d.review_required and d.level == "L2", d
+    # review 档：软回应不发，改审核候选（Q-23 口径不变）；同样不持有不打标
+    conv2 = _conv("q27_exp2")
+    risk2, reasons2, info2 = _regrade(svc, conv2, text, "en", automation_mode="review")
+    assert risk2 == "medium" and info2["soft_reply_status"] == "review_candidate"
+    assert f"{ag.SOFT_ALT_PREFIX}review" in reasons2 and len(svc.delivered) == 1
+    assert HANDOFF_TAG not in store.get_conv_tags(conv2["conversation_id"])
+    assert risk_hold.active(store, conv2["conversation_id"]) is None
+
+
+def test_q27_explicit_human_policy_is_caught_by_persona_not_handed_off(store, bg_loop, monkeypatch):
+    """Q-27 #301 A：露骨无施压 × human 政策 → 中级「接住」（正常拟稿），不转人工、不持有、不软回应。"""
+    _use_persona(monkeypatch, "human")
+    svc = _Svc(store, {"business_domain": "sales"}, bg_loop)
+    conv = _conv("q27_exp3")
+    risk, reasons, info = _regrade(svc, conv, "I love your naked photos", "en")
+    assert risk == "medium" and reasons[0] == ag.SOFT_REASON and info["needs_human"] is False
+    assert "soft_reply_status" not in info and not svc.delivered
+    assert HANDOFF_TAG not in store.get_conv_tags(conv["conversation_id"])
+    assert risk_hold.active(store, conv["conversation_id"]) is None
+    assert ag.pending_followups() == []
+
+
 def test_human_policy_hands_off_without_immediate_soft_reply(store, bg_loop, monkeypatch):
     _use_persona(monkeypatch, "human")
     svc = _Svc(store, {"business_domain": "companion"}, bg_loop)
@@ -265,13 +311,16 @@ def test_on_needs_human_tagged_schedules_only_for_adult_blocking_human(store, bg
     cid = conv["conversation_id"]
     assert ag.on_needs_human_tagged(store, cid, "dup_guard_blocked", conv) == "not_adult"
     assert ag.on_needs_human_tagged(store, cid, "adult:flirt", conv) == "not_adult"
-    assert ag.on_needs_human_tagged(None, cid, "adult:explicit:x", conv) == "no_store"
+    # Q-27：explicit 不再是转人工级别（is_blocking_level 只认 pressure）→ 钩子按 not_adult 放过
+    assert ag.on_needs_human_tagged(store, cid, "adult:explicit:x", conv) == "not_adult"
+    assert not ag.is_blocking_level("explicit") and ag.is_blocking_level("pressure")
+    assert ag.on_needs_human_tagged(None, cid, "adult:pressure:x", conv) == "no_store"
     r = ag.on_needs_human_tagged(store, cid, "adult:pressure:nudes", conv, now=1000.0)
     assert r == "scheduled" and cid in ag.pending_followups()
     ag.cancel_followup(cid)
     # soft_reply 政策 → 钩子不补（即时已发过）
     _use_persona(monkeypatch, "soft_reply")
-    assert ag.on_needs_human_tagged(store, cid, "adult:explicit:x", conv) == "policy_soft_reply"
+    assert ag.on_needs_human_tagged(store, cid, "adult:pressure:x", conv) == "policy_soft_reply"
     assert cid not in ag.pending_followups()
 
 

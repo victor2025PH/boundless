@@ -367,17 +367,44 @@ def test_classify_reason_table():
 
 
 def test_regrade_never_lowers_true_high(svc):
-    """真高风险因子在场（stop_contact / self_harm / money / adult / 支付词表）→ 一字不降。"""
+    """真高风险因子在场（stop_contact / self_harm / 索要凭据句式 / 索钱句式 / adult:pressure）→ 一字不降。
+    Q-27（#301）：``money`` / ``adult`` 单词与支付词表不再在「不可降」之列（见 test_q27_keyword_only_never_high）。"""
     conv = _conv("th1")
     for text, reasons in (("please stop messaging me", ["stop_contact"]),
                           ("I want to kill myself", ["self_harm"]),
                           ("send me your bank card number", ["credential_or_payment_request", "money"]),
-                          ("send nudes", ["adult"]),
-                          ("I want a refund now", ["keyword"])):
+                          ("can you send me money on cash app?", ["money"]),
+                          ("send me your nudes right now", ["adult", "adult:pressure", "adult_hit:nudes"])):
         risk, out, info = rg.regrade_inbound(svc, conv, text, "en", "high", reasons, [])
         assert risk == "high", (text, risk, out)
         for r in reasons:
             assert r in out, (text, out)
+
+
+def test_q27_keyword_only_never_high(svc):
+    """Q-27 #301 A：keyword-only 命中不得单独把全自动改 L1——高级必须是「类别 + 句式 / 施压第二信号」。"""
+    conv = _conv("kw1")
+    # 支付裸词（refund / password / OTP）→ payment_keyword 中级「只标记 + 人审候选」
+    risk, out, info = rg.regrade_inbound(svc, conv, "I want a refund now", "en", "high", ["keyword"], ["refund"])
+    assert risk == "medium" and info["category"] == "payment_keyword" and info["downgraded"] is True, (risk, out, info)
+    assert rg.category_def("payment_keyword")["level"] == "medium" and rg.category_def("payment_keyword")["action"] == "mark_review"
+    # 成人单词无施压（adult_grader 缺席时的裸 adult 主因）→ 最多中
+    risk, out, info = rg.regrade_inbound(svc, conv, "send nudes", "en", "high", ["adult"], ["nudes"])
+    assert risk == "medium" and info["category"] == "adult", (risk, out, info)
+    # 钱相关单词无索要句式（bitcoin / paypal 提及）→ 低，主因改名 money_mention
+    risk, out, info = rg.regrade_inbound(svc, conv, "bitcoin dropped again today lol", "en", "high",
+                                         ["money"], ["bitcoin"])
+    assert risk == "low" and "money" not in out and rg.MONEY_MENTION_REASON in out, (risk, out, info)
+    # 「bank card」裸词 = 支付词表 → 中级只标记（不是索要句式，不进 L1）
+    risk, out, info = rg.regrade_inbound(svc, conv, "I lost my bank card yesterday, such a hassle", "en", "high",
+                                         ["money"], ["bank card"])
+    assert risk == "medium" and info["category"] == "payment_keyword" and "money" not in out, (risk, out, info)
+    # 原 high 却没有任何类别撑着（未知主因）→ 降 low，不进 L1
+    risk, out, info = rg.regrade_inbound(svc, conv, "hello there", "en", "high", ["mystery"], [])
+    assert risk == "low" and info["downgraded"] is True, (risk, out, info)
+    # 高级表逐字：五类 + stop_contact 硬停 —— 一字不放松
+    assert {c["id"] for c in rg.CATEGORIES if c["level"] == "high"} == {"self_harm", "minor", "threat", "money_request", "scam"}
+    assert rg.TRUE_HIGH_REASONS == {"self_harm", "stop_contact", "credential_or_payment_request"}
 
 
 # ── ⑦ D 段：回复设置页「风控分级」卡 路由 + i18n 包 ─────────────────────────────
