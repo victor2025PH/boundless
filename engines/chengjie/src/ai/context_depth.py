@@ -204,8 +204,17 @@ def history_fetch_limit(config: Any, legacy: int = 30) -> int:
 
 
 def describe(config: Any = None) -> Dict[str, Any]:
-    """给 UI / prompt-inspect 用的档位说明（含四档全表与成本提示）。"""
+    """给 UI / prompt-inspect 用的档位说明（含四档全表、成本提示、经济档 overlay）。
+
+    ``economy`` **不是**第五档：TIER_KEYS 仍只有 standard/deep/max/ultra。
+    overlay 单独挂 ``economy`` 字段，开了才压 history/budget，档位键不变。
+    """
     cur = resolve(config)
+    try:
+        from src.ai.usage_economy import describe as _econ_describe
+        econ = _econ_describe(config)
+    except Exception:
+        econ = {"on": False, "reason": ""}
     return {
         "current": cur.key,
         "label_zh": cur.label_zh,
@@ -215,4 +224,5 @@ def describe(config: Any = None) -> Dict[str, Any]:
             "history_msgs": cur.history_msgs,
             "memory_items": cur.memory_items,
         },
+        "economy": econ,
     }

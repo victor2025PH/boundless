@@ -85,6 +85,15 @@ def test_usage_mode_i18n_and_template_wired():
     assert 'el: "rps-usage-mode"' in html
 
 
+def test_describe_overlay_and_not_a_fifth_tier():
+    assert "economy" not in cd.TIER_KEYS
+    off = ue.describe({"ai": {}})
+    assert off["on"] is False and not off["reason"]
+    on = ue.describe({"ai": {"usage_mode": "economy"}})
+    assert on["on"] is True and on["reason"] == "explicit"
+    assert on["history_cap"] == 4 and on["skip_deep_persona"] is True
+
+
 def test_extract_daily_respects_economy():
     cfg = {"companion": {"goals": {"profile_llm": {"per_conv_daily": 12}}},
            "ai": {"usage_mode": "economy"}}

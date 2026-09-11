@@ -146,9 +146,27 @@ def skip_deep_persona(config: Any = None) -> bool:
     return bool(e.on and e.skip_deep_persona)
 
 
+def describe(config: Any = None) -> dict:
+    """给 prompt-inspect / 运维只读口：压帽是否开、为什么开。绝不抛。"""
+    try:
+        e = resolve(config)
+        explicit = _explicit_on(config)
+        return {
+            "on": bool(e.on),
+            "reason": ("explicit" if explicit else ("degrade" if e.on else "")),
+            "history_cap": e.history_cap if e.on else None,
+            "prompt_budget": e.prompt_budget if e.on else None,
+            "skip_deep_persona": bool(e.on and e.skip_deep_persona),
+            "persona_detail": e.persona_detail if e.on else None,
+            "extract_daily": e.per_conv_extract if e.on else None,
+        }
+    except Exception:
+        return {"on": False, "reason": ""}
+
+
 __all__ = [
     "DEFAULT_HISTORY_CAP", "DEFAULT_VERBATIM_ROUNDS", "Economy", "OFF",
     "cap_extract_daily", "cap_history", "cap_memory", "cap_prompt_budget",
-    "cap_verbatim_msgs", "cap_verbatim_rounds", "persona_detail", "resolve",
-    "skip_deep_persona",
+    "cap_verbatim_msgs", "cap_verbatim_rounds", "describe", "persona_detail",
+    "resolve", "skip_deep_persona",
 ]

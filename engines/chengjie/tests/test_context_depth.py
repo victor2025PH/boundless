@@ -110,7 +110,13 @@ def test_describe_has_all_tiers_and_cost_hint():
     d = cd.describe({"ai": {"context_depth": "deep"}})
     assert d["current"] == "deep" and d["label_zh"] == "深度"
     assert [t["key"] for t in d["tiers"]] == list(cd.TIER_KEYS)
+    assert "economy" not in cd.TIER_KEYS
     assert all(t["cost_hint_cny_per_turn_max"] > 0 for t in d["tiers"])
+    assert d["economy"]["on"] is False
+    d2 = cd.describe({"ai": {"context_depth": "deep", "usage_mode": "economy"}})
+    assert d2["current"] == "deep"          # 档位键不被经济档改写
+    assert d2["economy"]["on"] is True and d2["economy"]["reason"] == "explicit"
+    assert d2["economy"]["history_cap"] == 4 and d2["economy"]["skip_deep_persona"] is True
 
 
 # ── 消费点联动 ───────────────────────────────────────────────────────────

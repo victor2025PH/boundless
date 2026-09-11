@@ -147,13 +147,15 @@ def test_inspect_routes_json():
 
     app = FastAPI()
     register_ai_inspect_routes(app, api_auth=lambda: None,
-                               config_manager=types.SimpleNamespace(config={"ai": {"context_depth": "deep"}}))
+                               config_manager=types.SimpleNamespace(config={
+                                   "ai": {"context_depth": "deep", "usage_mode": "economy"}}))
     prompt_trace.record(messages=[{"role": "system", "content": "【后台人设定位】p"},
                                   {"role": "user", "content": "q"}],
                         model="deepseek-flash", conv="tg:1:77", usage=_usage())
     cl = TestClient(app)
     r = cl.get("/api/ai/prompt-inspect?conv=77").json()
     assert r["ok"] and r["count"] == 1 and r["depth"]["current"] == "deep"
+    assert r["depth"]["economy"]["on"] is True and r["depth"]["economy"]["history_cap"] == 4
     assert r["cache"]["hit_ratio"] == 0.8 and "system" not in r["items"][0]
     one = cl.get("/api/ai/prompt-inspect/1").json()
     assert one["ok"] and one["item"]["system"].startswith("【后台人设定位】")
