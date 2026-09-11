@@ -253,6 +253,30 @@ def test_confirmed_values_never_touched_by_ai_candidates():
     assert cell_view(f["age"]) == ("45", "confirmed", "confirmed")
 
 
+# ── D：进度只数 confirmed + 控件 ───────────────────────────────────────────────────
+
+def test_goal_routes_add_readonly_fields_only_and_frontend_wired():
+    gr = (_ROOT / "src" / "web" / "routes" / "goal_routes.py").read_text(encoding="utf-8")
+    assert '"confirmed": str((_states.get(k) or ("", ""))[0] or "") == "confirmed"' in gr
+    assert 'view["slots_counts"] = {"total": len(sel), "confirmed": _n_conf, "mentioned": _n_ment}' in gr
+    assert "slot_input_kind" in gr
+    js = (_ROOT / "shared" / "copilot" / "components" / "cp-goal.js").read_text(encoding="utf-8")
+    mirror = (_ROOT / "desktop" / "renderer" / "shared" / "copilot" / "components" / "cp-goal.js").read_bytes()
+    assert (_ROOT / "shared" / "copilot" / "components" / "cp-goal.js").read_bytes() == mirror, "双树必须字节一致"
+    assert "rows.filter((s) => s && s.confirmed).length" in js, "N/10 只数 confirmed"
+    assert "inbox.goal.slots.pending_n" in js and "_clipVal(" in js and "_ageValueOk(" in js
+    assert 'data-prof-kind="age"' in js and 'inputmode="numeric"' in js
+    assert 'data-act="slot_reject"' in js and 'data-act="slot_confirm"' in js, "ai_inferred 卡必须有 ✓ / ✕"
+    from src.web.i18n_packs import goals as gp
+    for k in ("inbox.goal.slots.pending_n", "inbox.goal.slots.pending_t",
+              "inbox.goal.profile.age_hint", "inbox.goal.profile.age_invalid"):
+        assert k in gp.ZH and k in gp.EN, k
+    assert "{n}" in gp.ZH["inbox.goal.slots.pending_n"] and "{n}" in gp.EN["inbox.goal.slots.pending_n"]
+    for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
+                 "src/web/templates/unified_inbox.html"):
+        assert "cp-goal.js?v=20260911f" in (_ROOT / host).read_text(encoding="utf-8"), host
+
+
 # ── E：清洗脚本 ───────────────────────────────────────────────────────────────────
 
 def _load_purge():

@@ -583,6 +583,11 @@ ZH = {
     "inbox.goal.slots.edit_t": "改成客户实际说的值（记为已核实）",
     "inbox.goal.slots.reject_t": "不对——清掉这条推断（已确认的值不会被动）",
     "inbox.goal.slots.rejected_toast": "「{label}」推断值已清掉",
+    # Q-19 D（#294）：进度只数已确认；待确认另显；年龄控件只收数字 / 年龄段
+    "inbox.goal.slots.pending_n": "待确认 {n}",
+    "inbox.goal.slots.pending_t": "AI 推断 / 昵称解析 / 聊到过但未经人核实的项——不计入已采集，✓ 确认后才算",
+    "inbox.goal.profile.age_hint": "填 16–99 的数字，或年龄段（如 30s / 三十多 / 90后）",
+    "inbox.goal.profile.age_invalid": "年龄只能填 16–99 的数字或年龄段（如 30s / 三十多 / 90后）",
     "inbox.goal.profile.conflict_notice": "画像冲突：{label} 已确认「{confirmed}」，AI 推断「{candidate}」——已保留已确认值，请在画像卡核对",
     "inbox.goal.profile.conflict_notice_nick": "画像冲突：{label} 已确认「{confirmed}」，昵称里写的是「{candidate}」——已保留已确认值",
     # Q-5 D（#263）：连续 50 次抽取 facts=0 slots=0 → 黄条多一行
@@ -1371,6 +1376,10 @@ EN = {
     "inbox.goal.slots.edit_t": "Change to what the customer actually said (marks it verified)",
     "inbox.goal.slots.reject_t": "Wrong — clear this inference (confirmed values are never touched)",
     "inbox.goal.slots.rejected_toast": "Cleared the inferred \"{label}\"",
+    "inbox.goal.slots.pending_n": "{n} unconfirmed",
+    "inbox.goal.slots.pending_t": "AI-inferred / nickname-parsed / mentioned but not verified by a person — not counted as learned until you ✓ confirm",
+    "inbox.goal.profile.age_hint": "A number 16–99, or an age band (e.g. 30s / 90后)",
+    "inbox.goal.profile.age_invalid": "Age must be a number 16–99 or an age band (e.g. 30s / 90后)",
     "inbox.goal.profile.conflict_notice": "Profile conflict: {label} confirmed as \"{confirmed}\", AI inferred \"{candidate}\" — kept the confirmed value, please check the profile card",
     "inbox.goal.profile.conflict_notice_nick": "Profile conflict: {label} confirmed as \"{confirmed}\", nickname says \"{candidate}\" — kept the confirmed value",
     "inbox.goal.capture.extract_stall": "Extraction may not be working: {n} consecutive turns with 0 memories and 0 profile fields — check the \"AI extraction\" switch and that the model is reachable",

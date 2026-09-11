@@ -247,9 +247,18 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                     "stale": slot_is_stale(fields, k),
                     "state": str((_states.get(k) or ("", ""))[0] or "unknown"),
                     "source": str(_sources.get(k) or ""),
+                    # Q-19 D（#294）：只读——「已采集 N/10」只数 confirmed；mentioned 另计待确认
+                    "confirmed": str((_states.get(k) or ("", ""))[0] or "") == "confirmed",
                 }
                 for k in sel
             ]
+            try:
+                _n_conf = sum(1 for r in view["slots_progress"] if r.get("confirmed"))
+                _n_ment = sum(1 for r in view["slots_progress"]
+                              if r.get("state") == "mentioned" and not r.get("confirmed"))
+                view["slots_counts"] = {"total": len(sel), "confirmed": _n_conf, "mentioned": _n_ment}
+            except Exception:
+                pass
             # O-3 D（#236）：采集链能不能自动填槽——不能就黄条明示（画像 AI 抽取未开 /
             # 记忆抽取白名单空），不再让 0/4 静默像「客户没说」
             try:
@@ -1305,6 +1314,16 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 row["custom"] = True
             if extra:
                 row["extra"] = True
+            # Q-19 D（#294）：只读控件提示——age 数字 / 年龄段控件；枚举槽给选项
+            try:
+                from src.companion.goals.profile_slots import slot_input_kind
+                _kind, _opts = slot_input_kind(key)
+                if _kind:
+                    row["kind"] = _kind
+                if _opts:
+                    row["options"] = list(_opts)
+            except Exception:
+                pass
             return row
 
         domain_slots = slots_for_domain(bd)

@@ -749,6 +749,9 @@
       .gl-slot-reject { border-color:var(--cp-danger,#dc2626); color:var(--cp-danger,#dc2626); }
       .gl-slot-reject:hover { background:var(--cp-danger,#dc2626); color:#fff; }
       .gl-chip.pending { border-style:dashed; }
+      /* Q-19 D（#294）：进度头「待确认 M」小字（幻觉不计入 N/M）；槽位值一律 ≤24 字单行省略 */
+      .gl-slots-pending { font-weight:400; color:var(--cp-warn,#b45309); }
+      .gl-slotchk { max-width:100%; overflow:hidden; white-space:nowrap; }
       /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关条 */
       .gl-dpause { display:flex; align-items:center; justify-content:space-between; gap:8px;
                    margin:0 0 var(--cp-gap-xs,4px); padding:4px 8px; border-radius:8px;
@@ -1319,6 +1322,11 @@
       const cur = el.getAttribute("data-value") || "";
       const value = String((await window.uiPrompt(this.t("inbox.goal.slots.confirm_prompt", { label }), cur)) || "").trim();
       if (!value) return;
+      // Q-19 D（#294）：年龄槽 ✎ 也走数字 / 年龄段预检
+      if (String(el.getAttribute("data-slot") || "") === "age" && !this._ageValueOk(value)) {
+        this._flashToast(this.t("inbox.goal.profile.age_invalid"));
+        return;
+      }
       el.setAttribute("data-value", value);
       await this._slotConfirm(el);
     }
@@ -1697,9 +1705,17 @@
           `${alarm ? "\u26A0 " : ""}${esc(sentTxt)}</span>`);
         const spc = Array.isArray(g.slots_progress) ? g.slots_progress : [];
         if (spc.length) {
-          const filledC = spc.filter((s) => s && s.filled).length;
+          // Q-19 D（#294）：只数 confirmed；待确认另加一截（旧后端缺键回落 filled）
+          const q19c = spc.some((s) => s && typeof s.confirmed === "boolean");
+          const filledC = q19c ? spc.filter((s) => s && s.confirmed).length
+            : spc.filter((s) => s && s.filled).length;
+          const pendC = q19c ? spc.filter((s) => s && !s.confirmed && String(s.state || "") === "mentioned").length : 0;
           parts.push(`<span title="${esc(this.t("inbox.goal.counts.captured_t"))}">` +
             `${esc(this.t("inbox.goal.counts.captured", { n: filledC, m: spc.length }))}</span>`);
+          if (pendC) {
+            parts.push(`<span title="${esc(this.t("inbox.goal.slots.pending_t"))}">` +
+              `${esc(this.t("inbox.goal.slots.pending_n", { n: pendC }))}</span>`);
+          }
         }
         const pa = parseInt(cnt.probe_asked, 10) || 0;
         const pm = parseInt(cnt.probe_missed, 10) || 0;
@@ -1828,7 +1844,13 @@
       const rows = (g && Array.isArray(g.slots_progress)) ? g.slots_progress : [];
       if (!rows.length) return "";
       const esc = (s) => this.esc(s);
-      const filled = rows.filter((s) => s && s.filled).length;
+      // Q-19 D（#294）：「已采集 N/M」只数 confirmed（后端 slots_progress[].confirmed）；
+      // mentioned（AI 推断 / 昵称 / 聊到过）另显「待确认 P」——幻觉不再计入 1/N。
+      // 旧后端缺 confirmed 键 → 回落 filled 口径。
+      const q19 = rows.some((s) => s && typeof s.confirmed === "boolean");
+      const filled = q19 ? rows.filter((s) => s && s.confirmed).length
+        : rows.filter((s) => s && s.filled).length;
+      const pendingN = q19 ? rows.filter((s) => s && !s.confirmed && String(s.state || "") === "mentioned").length : 0;
       const chips = rows.map((s) => {
         const on = !!s.filled;
         // Q-1 E（#264）：三态 state=mentioned → 「职业：已提及（未确认）」+ 行内「确认」；
@@ -1841,11 +1863,12 @@
           const isNick = srcQ === "nickname";
           const isAI = srcQ === "ai_inferred" || /^llm/.test(String(s.src || ""));
           const badgeKey = isNick ? "nick_badge" : (isAI ? "ai_badge" : "");
+          const shown = this._clipVal(s.value);
           const tipM = lab + (s.value ? ": " + s.value : "") + " \u00b7 " +
             (badgeKey ? this.t("inbox.goal.slots." + badgeKey + "_t") : this.t("inbox.goal.slots.mentioned_t"));
           const dataA = ` data-slot="${esc(String(s.key || ""))}" data-value="${esc(String(s.value || ""))}" data-label="${esc(lab)}"`;
           const head = (badgeKey && s.value)
-            ? `${esc(lab)}\u00b7${esc(String(s.value))} <em class="gl-slot-badge${isNick ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>`
+            ? `${esc(lab)}\u00b7${esc(shown)} <em class="gl-slot-badge${isNick ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>`
             : esc(this.t("inbox.goal.slots.mentioned", { label: lab }));
           const editBtn = badgeKey
             ? `<button type="button" class="gl-slot-confirm" data-act="slot_edit_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.edit_t"))}">\u270E</button>` +
@@ -1869,9 +1892,12 @@
           : this.t("inbox.goal.slots.miss_t", { label: s.label || s.key });
         return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}${stale ? " stale" : ""}" title="${esc(tip)}">` +
           `${on ? "\u2713" : "\u25CB"} ${esc(s.label || s.key)}` +
-          (on && s.value ? `\u00b7${esc(s.value)}` : "") +
+          (on && s.value ? `\u00b7${esc(this._clipVal(s.value))}` : "") +
           (stale ? "\u23F3" : "") + `</span>`;
       }).join("");
+      const pendingTxt = pendingN
+        ? ` \u00b7 <span class="gl-slots-pending" title="${esc(this.t("inbox.goal.slots.pending_t"))}">${esc(this.t("inbox.goal.slots.pending_n", { n: pendingN }))}</span>`
+        : "";
       // O-3 D（#236）：采集链不可用 → 黄条把原因说全（画像 AI 抽取未开 / 记忆抽取白名单空），
       // 不再让 0/4 静默得像「客户没说」。后端缺 capture 键（旧后端）＝不渲染。
       let captureWarn = "";
@@ -1909,7 +1935,7 @@
         }
       }
       return `<div class="gl-sec gl-slots"><div class="gl-slots-hd">` +
-        `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}</div>` +
+        `${esc(this.t("inbox.goal.slots.title"))} · ${filled}/${rows.length}${pendingTxt}</div>` +
         `<div class="gl-slots-row">${chips}</div>${captureWarn}${probeUi}</div>`;
     }
 
@@ -2663,6 +2689,24 @@
       return (v && String(v).indexOf("inbox.goal.") !== 0) ? String(v) : "";
     }
 
+    /* Q-19 D（#294）：任何槽位值上卡 ≤24 字，超出省略（整句撑爆年龄行 / 竖排乱码的止血）。 */
+    _clipVal(v, n) {
+      const s = String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+      const max = n || 24;
+      const arr = Array.from(s);
+      return arr.length > max ? arr.slice(0, max - 1).join("") + "\u2026" : s;
+    }
+
+    /* Q-19 D：年龄控件只收 16–99 的数字或年龄段（30s / 三十多 / 90后）——与后端
+       profile_slots.slot_validate 同口径的前端预检；空值＝清除，放行。 */
+    _ageValueOk(v) {
+      const s = String(v == null ? "" : v).trim();
+      if (!s) return true;
+      const m = s.match(/^(?:大概|大約|大约|约|約|around|about|~)?\s*(\d{2})\s*(?:岁|歲|多岁|多歲|左右|出头|出頭|y\/?o|yrs?|years?\s*old)?$/i);
+      if (m) { const n = parseInt(m[1], 10); return n >= 16 && n <= 99; }
+      return /^(?:(?:[5-9]0|00)[後后]?|[1-9]0s|(?:early|mid|late)[ -]?(?:teens|twenties|thirties|forties|fifties|sixties|seventies)|(?:teens|twenties|thirties|forties|fifties|sixties|seventies)|(?:[一二三四五六七八九十])?十(?:多|幾|几|來|来|出头|出頭)?(?:岁|歲)?|\d{2}\s*(?:多|幾|几|來|来|出头|出頭)(?:岁|歲)?|[2-6]0\+)$/i.test(s);
+    }
+
     _renderProfile() {
       const p = this._d && this._d.__profile;
       if (!p) return "";
@@ -2699,13 +2743,33 @@
         // 按轨分组 + 建议问法当 placeholder（空输入框不再让人猜「该填什么」）；
         // lifecycle 槽（流失原因）随第二组尾，不为一个槽位单开分组；自定义标签自成一组；
         // 不在当前域表但有值的存量槽（extra）归「其他已记录」——不丢、可改、可清。
+        // Q-19 D（#294）：按槽位类型渲染控件——age 数字 / 年龄段（datalist 给档位，只收
+        // 16–99 或年龄段，保存前预检）；枚举槽（婚恋 / 家庭）给标签选项；其余文本。
+        // 后端 kind/options 缺键（旧后端）→ age 仍按 key 兜底数字化。
+        const listHtml = (s) => {
+          const opts = Array.isArray(s.options) ? s.options : [];
+          if (!opts.length) return "";
+          return `<datalist id="gl-dl-${esc(s.key)}">${opts.map((o) => `<option value="${esc(String(o))}"></option>`).join("")}</datalist>`;
+        };
+        const inputAttrs = (s) => {
+          const kind = String(s.kind || (s.key === "age" ? "age" : ""));
+          if (kind === "age") {
+            return ` inputmode="numeric" maxlength="12" data-prof-kind="age"` +
+              (Array.isArray(s.options) && s.options.length ? ` list="gl-dl-${esc(s.key)}"` : "") +
+              ` title="${esc(this.t("inbox.goal.profile.age_hint"))}"`;
+          }
+          if (kind === "enum" && Array.isArray(s.options) && s.options.length) {
+            return ` list="gl-dl-${esc(s.key)}" data-prof-kind="enum"`;
+          }
+          return ` maxlength="80"`;
+        };
         const grp = (label, slots) => {
           if (!slots.length) return "";
           return `<div class="gl-pf-group">${esc(label)}</div>` + slots.map((s) =>
             `<div><label class="gl-fl">${esc(s.label)}${s.sensitive ? " \uD83D\uDD12" : ""}</label>` +
             `<input data-prof-key="${esc(s.key)}" value="${esc(s.value || "")}"` +
-            ` placeholder="${esc(this._slotAskText(s.key))}"` +
-            `${s.sensitive ? ` title="${esc(this.t("inbox.goal.profile.sensitive_t"))}"` : ""}></div>`).join("");
+            ` placeholder="${esc(this._slotAskText(s.key))}"${inputAttrs(s)}` +
+            `${s.sensitive ? ` title="${esc(this.t("inbox.goal.profile.sensitive_t"))}"` : ""}>${listHtml(s)}</div>`).join("");
         };
         const all = p.slots || [];
         const rel = all.filter((s) => !s.extra && s.track === tracks[0]);
@@ -2743,7 +2807,7 @@
             : (s.src ? this.t("inbox.goal.profile.src." + (s.src === "agent" ? "agent" : "auto")) : "");
           const tip = s.label + ": " + s.value + (src ? " \u00b7 " + src : "") + " \u00b7 " + editT;
           return `<button type="button" class="gl-chip${pend ? " pending" : ""}" data-act="slot_edit"` +
-            ` data-slot="${esc(s.key)}" title="${esc(tip)}">${esc(s.label)}\u00b7${esc(s.value)}` +
+            ` data-slot="${esc(s.key)}" title="${esc(tip)}">${esc(s.label)}\u00b7${esc(this._clipVal(s.value))}` +
             (badgeKey ? `<em class="gl-slot-badge${srcQ === "nickname" ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>` : "") +
             `</button>`;
         }).join("");
@@ -2813,7 +2877,7 @@
         return `<div class="gl-wc-row${ok ? " ok" : ""}">` +
           `<span class="gl-wc-mark">${ok ? "\u2713" : "\u25CB"}</span>` +
           `<span class="gl-wc-lab">${esc(s.label || s.key)}</span>` +
-          (ok ? `<span class="gl-wc-val">${esc(String(s.value || ""))}</span>`
+          (ok ? `<span class="gl-wc-val">${esc(this._clipVal(s.value))}</span>`
             : `<button type="button" class="gl-link" data-act="slot_edit" data-slot="${esc(s.key)}">${esc(this.t("inbox.goal.profile.fill_btn"))}</button>`) +
           `</div>`;
       }).join("");
@@ -4933,10 +4997,21 @@
       const ctx = this._ctx || {};
       if (!ctx.conversationId) return;
       const fields = {};
+      let ageBad = null;
       this.shadowRoot.querySelectorAll("[data-prof-key]").forEach((inp) => {
         const k = inp.getAttribute("data-prof-key");
-        if (k) fields[k] = String(inp.value == null ? "" : inp.value).trim();
+        if (!k) return;
+        const v = String(inp.value == null ? "" : inp.value).trim();
+        fields[k] = v;
+        // Q-19 D（#294）：年龄控件预检——非 16–99 数字 / 年龄段不提交（坐席自己改，不静默吞）
+        if (inp.getAttribute("data-prof-kind") === "age" && !this._ageValueOk(v)) ageBad = inp;
       });
+      if (ageBad) {
+        const pe0 = this._ref("perr");
+        if (pe0) { pe0.textContent = this.t("inbox.goal.profile.age_invalid"); pe0.hidden = false; }
+        try { ageBad.focus(); } catch (_e) { /* soft */ }
+        return;
+      }
       if (btn) btn.disabled = true;
       let res = null;
       try {
