@@ -274,7 +274,7 @@ def test_goal_routes_add_readonly_fields_only_and_frontend_wired():
     assert "{n}" in gp.ZH["inbox.goal.slots.pending_n"] and "{n}" in gp.EN["inbox.goal.slots.pending_n"]
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        assert "cp-goal.js?v=20260911f" in (_ROOT / host).read_text(encoding="utf-8"), host
+        assert "cp-goal.js?v=20260912a" in (_ROOT / host).read_text(encoding="utf-8"), host
 
 
 # ── E：清洗脚本 ───────────────────────────────────────────────────────────────────

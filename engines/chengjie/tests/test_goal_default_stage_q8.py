@@ -484,4 +484,4 @@ def test_frontend_wiring_i18n_and_version_bump():
         assert k in gp.ZH and k in gp.EN, k
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        assert "cp-goal.js?v=20260911f" in (_ROOT / host).read_text(encoding="utf-8"), host
+        assert "cp-goal.js?v=20260912a" in (_ROOT / host).read_text(encoding="utf-8"), host

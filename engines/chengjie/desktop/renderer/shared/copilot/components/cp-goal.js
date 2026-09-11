@@ -748,6 +748,12 @@
       .gl-slot-badge.nick { background:rgba(99,102,241,.14); color:var(--cp-accent,#6366f1); }
       .gl-slot-reject { border-color:var(--cp-danger,#dc2626); color:var(--cp-danger,#dc2626); }
       .gl-slot-reject:hover { background:var(--cp-danger,#dc2626); color:#fff; }
+      /* Q-25 D（#295）：「AI 有线索，待补值」= 更淡的虚边 + 禁用确认钮；行内失败红字 */
+      .gl-slotchk.mention.clue { border-color:rgba(180,83,9,.3); background:transparent; }
+      .gl-slot-confirm:disabled { opacity:.45; cursor:not-allowed; }
+      .gl-slot-confirm:disabled:hover { background:transparent; color:var(--cp-warn,#b45309); }
+      .gl-slot-err { font-style:normal; font-size:10px; line-height:1.2; margin-left:4px;
+                     color:var(--cp-danger,#dc2626); white-space:normal; }
       .gl-chip.pending { border-style:dashed; }
       /* Q-19 D（#294）：进度头「待确认 M」小字（幻觉不计入 N/M）；槽位值一律 ≤24 字单行省略 */
       .gl-slots-pending { font-weight:400; color:var(--cp-warn,#b45309); }
@@ -1009,17 +1015,26 @@
       }
       const url = "/api/goals/for-conversation?conversation_id=" + encodeURIComponent(cid);
       let res = null;
-      try {
-        res = await this._api(url);
-      } catch (_e) {
-        await new Promise((rs) => setTimeout(rs, 600));
-        try { res = await this._api(url); } catch (_e2) { return { __error: true }; }
+      // Q-25 D（#295）：取数网络层失败（Failed to fetch / 服务重启窗）→ 600ms、1500ms 各重试
+      // 一次；仍失败把错误原文带给错误行（「加载失败（Failed to fetch）」）并 5s 后自动再拉一拍。
+      let loadErr = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          res = await this._api(url);
+          loadErr = "";
+          break;
+        } catch (e) {
+          loadErr = String((e && e.message) || e || "");
+          res = null;
+          if (attempt < 2) await new Promise((rs) => setTimeout(rs, attempt === 0 ? 600 : 1500));
+        }
       }
+      if (!res) return { __error: true, __errMsg: loadErr };
       if (res.status === 403) {
         try { console.debug("[cp-goal] hidden: feature disabled (403)", cid); } catch (_e) {}
         return { __forbidden: true };
       }
-      if (!res.ok || !res.data) return { __error: true };
+      if (!res.ok || !res.data) return { __error: true, __errMsg: "HTTP " + res.status };
       const d = res.data;
       const g = d.goal;
       if (g && g.profile_slots && !TERMINAL[g.status]) {
@@ -1051,7 +1066,19 @@
       if (d.__error) {
         // 取数瞬时失败不打断编辑：表单开着就保表单（旧行为＝错误行顶掉表单，输入全丢）
         if (this._formOpen) return this._renderForm() + this._toastHtml();
-        return `<div class="gl-errline" data-act="retry">${this.esc(this.t("inbox.goal.err_retry"))}</div>`;
+        // Q-25 D（#295）：带错误原文 + 5s 后自动重试一拍（只挂一个定时器；点击仍可立即重试）
+        try {
+          if (!this._autoRetryTimer) {
+            this._autoRetryTimer = setTimeout(() => {
+              this._autoRetryTimer = null;
+              if (this._d && this._d.__error) this.refresh();
+            }, 5000);
+          }
+        } catch (_e) { /* soft */ }
+        const errTxt = d.__errMsg
+          ? this.t("inbox.goal.err_retry_detail", { err: String(d.__errMsg).slice(0, 60), s: 5 })
+          : this.t("inbox.goal.err_retry");
+        return `<div class="gl-errline" data-act="retry">${this.esc(errTxt)}</div>`;
       }
       const g = d.goal || null;
       if (g && !TERMINAL[g.status]) {
@@ -1281,30 +1308,63 @@
       this._flashToast(this.t("inbox.goal.err_retry"));
     }
 
-    /* Q-1 E（#264）：槽位「确认」——mentioned → confirmed（无现值时先问一下值） */
+    /* Q-25 D（#295）：槽位行内红字（确认 / 否失败原因就地显示，不只靠 2.2s 的 toast） */
+    _slotInlineErr(el, msg) {
+      try {
+        const host = el && el.closest ? el.closest(".gl-slotchk") : null;
+        if (!host) return;
+        let em = host.querySelector(".gl-slot-err");
+        if (!msg) { if (em) em.remove(); return; }
+        if (!em) { em = document.createElement("em"); em.className = "gl-slot-err"; host.appendChild(em); }
+        em.textContent = String(msg).slice(0, 80);
+      } catch (_e) { /* soft */ }
+    }
+
+    /* Q-1 E（#264）：槽位「确认」——mentioned → confirmed。
+       Q-25 D（#295）：**有值才可确认**——空值不再弹窗问值、也不静默 return：按钮禁用 + title
+       说明（要录值走 ✎）；有值必发 POST /api/goals/profile/confirm，成功 toast + 行内即刻转
+       confirmed（再 refresh 对账），失败红字就地显示原因；网络层 Failed to fetch 自动重试一次。 */
     async _slotConfirm(el) {
       const ctx = this._ctx || {};
       const slot = (el && el.getAttribute("data-slot")) || "";
       if (!ctx.conversationId || !slot) return;
-      let value = (el && el.getAttribute("data-value")) || "";
+      const value = String((el && el.getAttribute("data-value")) || "").trim();
       const label = (el && el.getAttribute("data-label")) || slot;
       if (!value) {
-        // #173：原生 prompt 在 Electron 渲染进程会抛（typeof 仍是 function），
-        // 统一走页内弹层 window.uiPrompt；宿主未装载弹层＝视同取消。
-        if (typeof window.uiPrompt !== "function") return;
-        value = String((await window.uiPrompt(this.t("inbox.goal.slots.confirm_prompt", { label }), "")) || "").trim();
-        if (!value) return;
+        if (el) {
+          el.disabled = true;
+          el.title = this.t("inbox.goal.slots.clue_only_confirm_t");
+        }
+        this._slotInlineErr(el, this.t("inbox.goal.slots.clue_only_confirm_t"));
+        return;
       }
       if (el) el.disabled = true;
+      this._slotInlineErr(el, "");
+      const doPost = () => this._api("/api/goals/profile/confirm", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_id: ctx.conversationId, slot, value }),
+      });
       let res = null;
+      let errMsg = "";
       try {
-        res = await this._api("/api/goals/profile/confirm", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conversation_id: ctx.conversationId, slot, value }),
-        });
-      } catch (_e) { res = null; }
+        res = await doPost();
+      } catch (e1) {
+        // 网络层失败（Failed to fetch / 超时）：等 800ms 重试一次再报
+        errMsg = String((e1 && e1.message) || e1 || "");
+        await new Promise((rs) => setTimeout(rs, 800));
+        try { res = await doPost(); errMsg = ""; } catch (e2) { res = null; errMsg = String((e2 && e2.message) || e2 || errMsg); }
+      }
       if (res && res.status === 403) { this._hideCard(!_showDisabledHint()); return; }
       if (res && res.ok && res.data && res.data.ok) {
+        // 行内即刻转 confirmed（✓ label·value 实心），不等下一拍 refresh
+        try {
+          const host = el && el.closest ? el.closest(".gl-slotchk") : null;
+          if (host) {
+            host.className = "gl-slotchk on src-agent";
+            host.title = label + ": " + value;
+            host.textContent = "\u2713 " + label + "\u00b7" + this._clipVal(value);
+          }
+        } catch (_e) { /* soft */ }
         this._flashToast(this.t("inbox.goal.slots.confirmed_toast", { label }));
         _beacon("goal_slot_confirm");
         this.emit("cp-goal-changed", { action: "profile", conversationId: ctx.conversationId });
@@ -1312,7 +1372,12 @@
         return;
       }
       if (el) el.disabled = false;
-      this._flashToast(this.t("inbox.goal.err_retry"));
+      const detail = (res && res.data && (res.data.detail || res.data.error))
+        ? String(res.data.detail || res.data.error)
+        : (errMsg || (res ? ("HTTP " + res.status) : ""));
+      const shown = this.t("inbox.goal.slots.confirm_failed", { err: detail || "-" });
+      this._slotInlineErr(el, shown);
+      this._flashToast(shown);
     }
 
     /* Q-5 C（#263）：✎ 改——先问客户实际说的值，再走确认（status=confirmed source=confirmed） */
@@ -1867,6 +1932,16 @@
           const tipM = lab + (s.value ? ": " + s.value : "") + " \u00b7 " +
             (badgeKey ? this.t("inbox.goal.slots." + badgeKey + "_t") : this.t("inbox.goal.slots.mentioned_t"));
           const dataA = ` data-slot="${esc(String(s.key || ""))}" data-value="${esc(String(s.value || ""))}" data-label="${esc(lab)}"`;
+          // Q-25 D（#295 Y39D8U）：mentioned 但**没有具体值**（我方问过 + 客户接了话 / 聊到过，
+          // 但没有任何抽出来的值）→ 不再显「已提及（未确认）」+ 可点确认——那会被读成
+          // 「已提取未确认」；改显「AI 有线索，待补值」，确认钮禁用（title 说明），只留 ✎ 让
+          // 坐席把客户实际说的值录进去（录了才有可确认的东西）。
+          if (!s.value) {
+            const tipC = lab + " \u00b7 " + this.t("inbox.goal.slots.clue_only_t");
+            return `<span class="gl-slotchk mention clue" title="${esc(tipC)}">\u25D0 ${esc(this.t("inbox.goal.slots.clue_only", { label: lab }))}` +
+              `<button type="button" class="gl-slot-confirm" data-act="slot_confirm" disabled${dataA} title="${esc(this.t("inbox.goal.slots.clue_only_confirm_t"))}">${esc(this.t("inbox.goal.slots.confirm"))}</button>` +
+              `<button type="button" class="gl-slot-confirm" data-act="slot_edit_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.edit_t"))}">\u270E</button></span>`;
+          }
           const head = (badgeKey && s.value)
             ? `${esc(lab)}\u00b7${esc(shown)} <em class="gl-slot-badge${isNick ? " nick" : " ai"}">${esc(this.t("inbox.goal.slots." + badgeKey))}</em>`
             : esc(this.t("inbox.goal.slots.mentioned", { label: lab }));
