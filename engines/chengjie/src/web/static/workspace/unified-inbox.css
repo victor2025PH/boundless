@@ -463,11 +463,21 @@
 .msg-bubble-revoked{background:var(--bubble-in,#f1f5f9)!important;color:var(--text-tiny)!important;border:1px dashed var(--border)!important;box-shadow:none!important;}
 .msg-revoked{font-style:italic;opacity:.75;}
 .msg-edited{font-size:11px;color:var(--text-tiny);margin-left:4px;opacity:.8;}
-.msg-translation{margin-top:6px;padding-top:6px;border-top:1px dashed rgba(100,116,139,.3);color:var(--text-sub);font-size:calc(var(--bbl-fs,13px) - 1px);line-height:1.55;}
+/* Q-21 D（#286，2026-09-12）：译文行字号恒为原文 0.9×（旧 -1px 在坐席把气泡字号调大后
+   ≈0.94×，拉丁译文视觉上比原文 CJK 还大、三行压一行「遮住原文」）；行高与原文一致；
+   position/float/display 钉死为普通块流（任何后来者都不得把译文行做成浮层盖住正文）。 */
+.msg-translation{margin-top:6px;padding-top:6px;border-top:1px dashed rgba(100,116,139,.3);color:var(--text-sub);font-size:calc(var(--bbl-fs,13px) * .9);line-height:1.55;font-weight:400;position:static;display:block;float:none;clear:both;}
+.msg-bubble .msg-translation{font-size:calc(var(--bbl-fs,13px) * .9);}
 .msg-translation::before{content:'';display:inline-block;width:11px;height:11px;margin-right:4px;vertical-align:-1px;background:currentColor;opacity:.6;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z'/%3E%3C/svg%3E") center/contain no-repeat;}
 /* 发出气泡(蓝底)内的译文/分隔线改用白系，保证文字与气泡有足够对比 */
 .msg-row.out .msg-translation{border-top-color:color-mix(in srgb,var(--ofg) 40%,transparent);color:color-mix(in srgb,var(--ofg) 95%,transparent);}
 .msg-row.out .msg-translation::before{opacity:.85;}
+/* Q-21 D（#286）：收到气泡的译文色跟气泡前景色走，而不是跟页面主题走——坐席在浅色主题把
+   收到气泡调成深底（外观面板 --bbl-in-bg），译文仍按浅色主题用靛蓝 #3730a3 → 深底靛蓝字
+   对比 <2:1 等于隐身（2026-09-12 复验实录）。--ifg 是随气泡底色一起选的前景，与任何底色都有
+   对比；auto 译文再掺 28% 的 --xl-trans-text 保留「这是译文」的色相提示。 */
+.msg-row.in .msg-translation{border-top-color:color-mix(in srgb,var(--ifg) 32%,transparent);color:color-mix(in srgb,var(--ifg) 82%,transparent);}
+.msg-row.in .msg-translation.auto{border-top-color:color-mix(in srgb,var(--ifg) 32%,transparent);color:color-mix(in srgb,var(--ifg) 72%,var(--xl-trans-text));}
 /* P+: 连续同向消息成组——收紧组内间距 + 隐藏中间条时间戳（读起来像一段，末条保留时间） */
 .msg-row.out + .msg-row.out,.msg-row.in + .msg-row.in{margin-top:-4px;}
 .msg-row.out:has(+ .msg-row.out) .msg-ts,.msg-row.in:has(+ .msg-row.in) .msg-ts{display:none;}
