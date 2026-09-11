@@ -344,7 +344,10 @@ async def test_agent_send_during_pacing_abandons_draft():
 
 @pytest.mark.asyncio
 async def test_agent_typed_recently_blocks_new_batch_within_window():
-    """坐席 60s 内打过字：下一批捞到的该会话 L2 也不发（agent_typing 窗口）。"""
+    """坐席 60s 内打过字：下一批捞到的该会话 L2 也不发（agent_typing 窗口）。
+
+    Q-18 B（#292）：窗内不发但**不丢稿**——稿留 pending、登记让位（defer），窗过自动复检发出；
+    此前这里断言 cancelled 是华哥 7340576921「全自动再无回复」的根因。"""
     st = _KVStore()
     cid = "telegram:a1:u1"
     sent = []
@@ -360,7 +363,8 @@ async def test_agent_typed_recently_blocks_new_batch_within_window():
     w.note_agent_typing(cid)
     await w._tick()
     assert sent == [] and svc.resolved == []
-    assert st.status["d1"] == ("cancelled", "abort:agent_typing")
+    assert "d1" not in st.status and w.total_yield_deferred == 1
+    assert w.agent_yield_state(cid)["by"] == "agent_typing"
 
 
 @pytest.mark.asyncio

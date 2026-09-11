@@ -64,6 +64,14 @@ _UNSET = object()
 AGENT_ACTIVITY_WINDOW_SEC = 60.0
 # 人工优先复检的放弃原因码（日志 `[autosend] abort=<code>`）
 ABORT_REASONS = ("mode_changed", "agent_typing", "agent_sent", "risk_hold", "needs_human")
+# Q-18 B（#292）：其中 agent_sent / agent_typing 两码 = **让位（defer）不是放弃**——单一来源
+# 在 autosend_policy（诊断 / chip / 路由同口径）。日志 `[autosend] defer=<code> … until=` /
+# `[autosend] resume=agent_window_passed` / `[autosend] resume by=mode_select`。
+from src.inbox.autosend_policy import (
+    AGENT_YIELD_MAX_DEFERRALS as _YIELD_MAX_DEFERRALS,
+    YIELD_DEFER_REASONS as _YIELD_DEFER_REASONS,
+    agent_yield_state as _agent_yield_state,
+)
 
 class UndeliveredError(RuntimeError):
     """投递结果为「数据形态失败」（{delivered:False,...}）时的异常载体。
@@ -384,6 +392,14 @@ class AutosendWorker:
         self.total_skipped_risk_hold: int = 0      # 捞稿期因会话级风险持有 / 需人工取消的 L2 数
         self.total_risk_hold_regen: int = 0        # 取消后按 L1 重拟派发数
         self._risk_hold_regen_done: Dict[str, float] = {}   # conv → 已重拟过的 hold set_ts
+        # Q-18 B（#292）：让位登记表 conv → {by, until, since, draft_id, stage, deferrals}——
+        # batch 期稿留 pending（下一 tick 自然复检）、presend 期已 resolve 的载荷进 _retry_queue
+        # 按 until 改期（item 带 _yield_defer）；窗过复检放行时 pop 并落 resume 日志。
+        self._yield_defer: Dict[str, Dict[str, Any]] = {}
+        self._yield_wake_handles: Dict[str, Any] = {}    # conv → loop.call_later 句柄（窗过唤醒）
+        self.total_yield_deferred: int = 0         # defer 次数（同稿同窗只计一次）
+        self.total_yield_resumed: int = 0          # 窗过 / 切全自动后放行次数
+        self.total_yield_exhausted: int = 0        # 连续让位超上限按放弃处理的条数
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -926,6 +942,9 @@ class AutosendWorker:
         仅真实字符串生效，None / mock 不干预）；③ 坐席 60s 内发送 → agent_sent；
         ④ 坐席 60s 内打字 → agent_typing；⑤ 会话级风险持有 → risk_hold；⑥ 「需人工」标在场
         → needs_human。告别稿（停联「最多一条」）豁免全部；判定只读，任何异常按放行。
+
+        Q-18 B（#292）：③④ 两码在两处调用方都按 **defer**（让位不丢稿，见 ``_yield_mark_defer``），
+        其余原因码仍是放弃——本函数只判不处置，语义不变。
         """
         if not conv or is_farewell:
             return ""
@@ -1032,6 +1051,45 @@ class AutosendWorker:
                 n += int(store.cancel_pending_l2_drafts(cid, decided_by=f"abort:{by}"[:40]) or 0)
             except Exception:
                 logger.debug("[AutosendWorker] 排队 L2 取消失败 conv=%s", cid, exc_info=True)
+        # Q-18 B：presend 期让位、正在 _retry_queue 里等窗过的载荷（行已 approved，不在 pending
+        # 也不在 _inflight）——坐席此刻真发 / 切档 = 客户那句已被人接，同范围一并取消，
+        # 与排队稿同口径（否则窗过后 AI 再答一遍 = 同问双答）。
+        _yq: List[Dict[str, Any]] = []
+        for r in list(self._retry_queue):
+            _it = r.get("item") or {}
+            if not _it.get("_yield_defer"):
+                continue
+            _ic = str(_it.get("conversation_id") or "")
+            if cid and _ic != cid:
+                continue
+            if not cid and plat and (
+                    str(_it.get("platform") or "").lower() != plat
+                    or (acct and str(_it.get("account_id") or "") != acct)):
+                continue
+            _yq.append(r)
+        for r in _yq:
+            try:
+                self._retry_queue.remove(r)
+            except ValueError:
+                continue
+            _did = str((r.get("item") or {}).get("draft_id") or "")
+            _ic = str((r.get("item") or {}).get("conversation_id") or "")
+            self._yield_defer.pop(_ic, None)
+            n += 1
+            try:
+                if store is not None and hasattr(store, "update_draft_status") and _did:
+                    try:
+                        store.update_draft_status(
+                            _did, status="cancelled", decided_by=f"abort:{by}"[:40],
+                            expected_statuses=("approved", "pending"))
+                    except TypeError:
+                        store.update_draft_status(
+                            _did, status="cancelled", decided_by=f"abort:{by}"[:40])
+            except Exception:
+                logger.debug("[AutosendWorker] 让位改期稿改 cancelled 失败 draft_id=%s", _did,
+                             exc_info=True)
+            logger.info("[autosend] abort=%s stage=deferred draft=%s conv=%s（让位等待中被人接）",
+                        by, _did, _ic)
         self.total_inflight_cancelled += n
         if n or hit_ids:
             logger.info("[inflight] cancel scope=%s n=%d by=%s conv=%s account=%s inflight=%d",
@@ -1054,6 +1112,125 @@ class AutosendWorker:
             return 0
         self._agent_sent_ts[cid] = time.time()
         return self.cancel_inflight(conversation_id=cid, by="agent_send")
+
+    # ── Q-18 B/C（#292）让位 = 延后不是丢弃 ─────────────────────────────
+
+    def agent_yield_state(self, conversation_id: str) -> Dict[str, Any]:
+        """会话当前「AI 让位」状态（诊断 finding ``agent_yield`` / 会话头 ``ay-`` chip 同源）：
+        :func:`autosend_policy.agent_yield_state` 的结果 + 登记表里的 ``draft_id / stage /
+        deferrals``（有稿在等时）。只读、绝不抛。"""
+        cid = str(conversation_id or "")
+        st = _agent_yield_state(self._agent_sent_ts.get(cid, 0.0),
+                                self._agent_typing_ts.get(cid, 0.0))
+        ent = self._yield_defer.get(cid)
+        if ent:
+            st["draft_id"] = str(ent.get("draft_id") or "")
+            st["stage"] = str(ent.get("stage") or "")
+            st["deferrals"] = int(ent.get("deferrals") or 0)
+        return st
+
+    def _yield_schedule_wake(self, conv: str, until: float) -> None:
+        """窗过（until）后唤醒主循环复检——否则要等 min_interval 兜底。loop 未起（测试 /
+        未 run）→ 跳过，靠下一 tick。"""
+        loop = self._loop
+        if loop is None or self._l2_event is None:
+            return
+        delay = max(0.5, float(until) - time.time() + 0.5)
+
+        def _arm() -> None:
+            self._yield_cancel_wake(conv)
+            try:
+                self._yield_wake_handles[conv] = loop.call_later(delay, self._l2_event.set)
+            except Exception:
+                logger.debug("[autosend] yield wake 定时失败 conv=%s（靠下一 tick）", conv,
+                             exc_info=True)
+        try:
+            loop.call_soon_threadsafe(_arm)
+        except RuntimeError:
+            logger.debug("[autosend] yield wake 投递失败（loop 已停）conv=%s", conv)
+
+    def _yield_cancel_wake(self, conv: str) -> None:
+        h = self._yield_wake_handles.pop(conv, None)
+        if h is None:
+            return
+        try:
+            h.cancel()
+        except Exception:
+            logger.debug("[autosend] yield wake 取消失败 conv=%s", conv, exc_info=True)
+
+    def _yield_mark_defer(self, conv: str, code: str, draft_id: str, *,
+                          stage: str) -> "tuple[float, bool]":
+        """登记一次让位。返回 ``(until, exhausted)``：``exhausted=True`` = 同稿连续让位已超
+        :data:`AGENT_YIELD_MAX_DEFERRALS`，调用方按放弃处理（老路）。同稿同窗（until 未变）
+        只计一次、只落一行 ``[autosend] defer=`` 日志——batch 期 pending 稿每 tick 都会再过闸。"""
+        now = time.time()
+        st = _agent_yield_state(self._agent_sent_ts.get(conv, 0.0),
+                                self._agent_typing_ts.get(conv, 0.0), now=now)
+        until = float(st.get("until") or (now + AGENT_ACTIVITY_WINDOW_SEC))
+        ent = self._yield_defer.get(conv)
+        same_draft = bool(ent) and str(ent.get("draft_id") or "") == str(draft_id)
+        new_window = (not same_draft) or abs(float(ent.get("until") or 0.0) - until) > 0.5
+        deferrals = (int(ent.get("deferrals") or 0) if same_draft else 0) + (1 if new_window else 0)
+        if deferrals > _YIELD_MAX_DEFERRALS:
+            self._yield_defer.pop(conv, None)
+            self.total_yield_exhausted += 1
+            logger.warning("[autosend] yield_exhausted=%s stage=%s draft=%s conv=%s deferrals=%d"
+                           "（坐席持续活动，本稿按放弃处理）", code, stage, draft_id, conv,
+                           deferrals - 1)
+            return until, True
+        self._yield_defer[conv] = {
+            "by": code, "until": until, "since": float(st.get("since") or now),
+            "draft_id": str(draft_id), "stage": stage, "deferrals": deferrals,
+            "first_ts": float(ent.get("first_ts") or now) if same_draft else now,
+        }
+        if new_window:
+            self.total_yield_deferred += 1
+            logger.info("[autosend] defer=%s stage=%s draft=%s conv=%s until=%.0f "
+                        "(in %.0fs, deferral %d/%d)（让位不丢稿，窗过自动复检）",
+                        code, stage, draft_id, conv, until, max(0.0, until - now),
+                        deferrals, _YIELD_MAX_DEFERRALS)
+            self._yield_schedule_wake(conv, until)
+        return until, False
+
+    def _yield_resume_if_deferred(self, conv: str, draft_id: str, *, stage: str) -> bool:
+        """闸放行且该会话有让位登记 → 摘登记 + ``[autosend] resume=agent_window_passed``。"""
+        ent = self._yield_defer.pop(conv, None)
+        if not ent:
+            return False
+        self._yield_cancel_wake(conv)
+        self.total_yield_resumed += 1
+        logger.info("[autosend] resume=agent_window_passed stage=%s draft=%s conv=%s by=%s "
+                    "waited=%.0fs deferrals=%d", stage, draft_id, conv, ent.get("by", ""),
+                    max(0.0, time.time() - float(ent.get("first_ts") or time.time())),
+                    int(ent.get("deferrals") or 0))
+        return True
+
+    def resume_agent_yield(self, conversation_id: str, *, by: str = "mode_select") -> Dict[str, Any]:
+        """Q-18 C：切到 / 重选「全自动」= 明示接回——清该会话 ``_agent_sent_ts / _agent_typing_ts``、
+        摘让位登记、把 presend 期改期的载荷改为立即到期并唤醒主循环。返回
+        ``{had_yield, released, by}``（前端 toast 用）。日志 ``[autosend] resume by=mode_select``。
+        绝不抛。"""
+        cid = str(conversation_id or "")
+        if not cid:
+            return {"had_yield": False, "released": 0, "by": by}
+        had = bool(cid in self._agent_sent_ts or cid in self._agent_typing_ts
+                   or cid in self._yield_defer)
+        self._agent_sent_ts.pop(cid, None)
+        self._agent_typing_ts.pop(cid, None)
+        ent = self._yield_defer.pop(cid, None)
+        self._yield_cancel_wake(cid)
+        released = 0
+        for r in self._retry_queue:
+            _it = r.get("item") or {}
+            if _it.get("_yield_defer") and str(_it.get("conversation_id") or "") == cid:
+                r["next_ts"] = 0.0
+                released += 1
+        if had or released:
+            self.total_yield_resumed += 1
+            logger.info("[autosend] resume by=%s conv=%s released=%d draft=%s（清让位窗，立即放行）",
+                        by, cid, released, (ent or {}).get("draft_id", "-"))
+            self.notify_new_l2()
+        return {"had_yield": had, "released": released, "by": by}
 
     def _risk_hold_regen_once(self, d: Dict[str, Any], conv: str, reason: str) -> bool:
         """捞稿期取消了被风险持有 / 需人工闸住的 L2 稿 → 按 L1 重拟一次（同一次持有只重拟一次，
@@ -1714,8 +1891,38 @@ class AutosendWorker:
                 # 撤出站登记、行 approved→cancelled（decided_by=abort:<code>）、不喂熔断。
                 _hp_abort = self._human_priority_gate(
                     _conv_id_g, draft_id=_do_did, is_farewell=bool(item.get("_farewell")))
+                # Q-18 B：点名取消信号（cancel_inflight 已把行改 cancelled）来的原因码不能 defer——
+                # 只有「状态判定」出的 agent_sent / agent_typing 才让位
+                with self._hp_lock:
+                    _hp_signalled = _do_did in self._inflight_cancel
             finally:
                 self._inflight_unregister(_do_did)
+            # Q-18 B（#292）：拟人等待期间坐席发了 / 在打字 → **让位不丢稿**：撤出站登记、
+            # 行保持 approved，载荷带 _yield_defer 进 _retry_queue 按 until 改期；到点重走本函数
+            # （再过闸 + fresh_guard：坐席又活动 → 再让位；期间客户又说了 → 新稿覆盖；
+            # 切手动 → mode_changed 老路取消）。连续让位超上限 → 按放弃走下方老路。
+            if _hp_abort in _YIELD_DEFER_REASONS and not _hp_signalled:
+                _y_until, _y_exhausted = self._yield_mark_defer(
+                    _conv_id_g, _hp_abort, _do_did, stage="presend")
+                if not _y_exhausted:
+                    if _dup_token:
+                        try:
+                            from src.inbox.outbound_dup_guard import (
+                                outbound_registry as _dup_reg_y,
+                            )
+                            _dup_reg_y.unregister(_conv_id_g, _dup_token)
+                        except Exception:
+                            logger.warning(
+                                "[AutosendWorker] 出站去重撤登记失败 conv=%s（≤600s 内可能误判重复）",
+                                _conv_id_g, exc_info=True)
+                    _yitem = dict(item)
+                    _yitem["_yield_defer"] = True
+                    _yitem["_yield_by"] = _hp_abort
+                    _yitem["_yield_deferrals"] = int(item.get("_yield_deferrals", 0)) + 1
+                    self._retry_queue.append({"item": _yitem, "next_ts": _y_until + 0.5})
+                    return
+            elif not _hp_abort and _conv_id_g in self._yield_defer:
+                self._yield_resume_if_deferred(_conv_id_g, _do_did, stage="presend")
             if _hp_abort:
                 self.total_abort_recheck += 1
                 if _dup_token:
@@ -2151,6 +2358,17 @@ class AutosendWorker:
             _store_rt = getattr(self._svc, "_store", None)
             _hp_abort = self._human_priority_gate(
                 _conv, draft_id=str(draft_id), is_farewell=_is_farewell)
+            # Q-18 B（#292）：agent_sent / agent_typing = **让位不丢稿**——稿留 pending（不
+            # resolve 不取消），登记 until=坐席最后活动+60s，窗过下一 tick 自然再过闸即发
+            # （期间有更新入站 → 下方 fresh_guard 让新稿覆盖）。连续让位超上限才按放弃走老路。
+            # mode_changed / risk_hold / needs_human 仍是放弃，下方逻辑一字不变。
+            if _hp_abort in _YIELD_DEFER_REASONS:
+                _y_until, _y_exhausted = self._yield_mark_defer(
+                    _conv, _hp_abort, str(draft_id), stage="batch")
+                if not _y_exhausted:
+                    continue
+            elif not _hp_abort and _conv in self._yield_defer:
+                self._yield_resume_if_deferred(_conv, str(draft_id), stage="batch")
             if _hp_abort:
                 _decided_by = ("mode_downgraded" if _hp_abort == "mode_changed"
                                else f"abort:{_hp_abort}")
@@ -2616,6 +2834,11 @@ class AutosendWorker:
             "total_skipped_risk_hold": self.total_skipped_risk_hold,
             "total_risk_hold_regen": self.total_risk_hold_regen,
             "inflight_now": len(self._inflight),
+            # Q-18 B（#292）：让位 = 延后不是丢弃
+            "total_yield_deferred": self.total_yield_deferred,
+            "total_yield_resumed": self.total_yield_resumed,
+            "total_yield_exhausted": self.total_yield_exhausted,
+            "yield_now": len(self._yield_defer),
             # 驾驶权互斥锁（surface_fusion）：owner=native 让位取消的 L2 数
             "total_skipped_pilot": self.total_skipped_pilot,
             "pilot_guard_wired": self._pilot_guard is not None,

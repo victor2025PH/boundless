@@ -48,6 +48,10 @@ ai_last_fail            warn   最近一次 AI 起草失败未被后续成功覆
 high_risk               block  会话挂着风险持有 / 「需人工」标（Q-3 闸；Q-15 #271：params
                                reason / category（adult|privacy|…）/ level（成人四级）/ hit /
                                policy（adult 时 human|soft_reply|mark_only）/ held_min）
+agent_yield             warn   AI 让位中（Q-18 #292：坐席 60s 内发过 / 打过字 → worker 把稿
+                               defer 到窗过再发，**不是丢弃**；params: by=agent_sent|agent_typing /
+                               until / remaining_sec / since / draft_id / stage / deferrals；
+                               切全自动或点会话头 chip = 立即接回）
 looks_alive             ok     未发现拦截
 ======================  =====  ==========================================
 """
@@ -73,8 +77,12 @@ def diagnose_conversation(
     account_id: str,
     chat_key: str,
     now: Optional[float] = None,
+    worker: Any = None,
 ) -> Dict[str, Any]:
-    """单会话自动回复链路诊断（只读）。返回机读结构，findings 见模块码表。"""
+    """单会话自动回复链路诊断（只读）。返回机读结构，findings 见模块码表。
+
+    ``worker``（可选）= 进程内 AutosendWorker——Q-18 让位状态只在它手里（内存），给了才出
+    ``agent_yield``；缺省 / 旧版无 ``agent_yield_state`` → 跳过（fail-open）。"""
     ts_now = float(now or time.time())
     platform = str(platform or "").lower()
     account_id = str(account_id or "default")
@@ -475,6 +483,25 @@ def diagnose_conversation(
                 findings.append({"level": "block", "code": "high_risk", "params": _p})
     except Exception:
         logger.debug("[reply_diag] risk_hold / needs_human 读取失败（忽略）", exc_info=True)
+
+    # ── Q-18 C（#292）：AI 让位中 → agent_yield（warn：会回，只是在等坐席窗过）────────
+    # 华哥 7340576921：绿灯全自动、草稿躺回复工坊、没有任何「让位中」提示——体检必须能说出
+    # 「坐席 16:49 手发过，AI 让位到 16:50:xx 自动接回；切全自动 / 点 chip 可立即接回」。
+    try:
+        if worker is not None and hasattr(worker, "agent_yield_state"):
+            _ay = dict(worker.agent_yield_state(cid) or {})
+            if _ay.get("active"):
+                out["agent_yield"] = _ay
+                _finding(findings, "warn", "agent_yield",
+                         by=str(_ay.get("by") or ""),
+                         until=float(_ay.get("until") or 0.0),
+                         remaining_sec=round(float(_ay.get("remaining") or 0.0), 0),
+                         since=float(_ay.get("since") or 0.0),
+                         draft_id=str(_ay.get("draft_id") or ""),
+                         stage=str(_ay.get("stage") or ""),
+                         deferrals=int(_ay.get("deferrals") or 0))
+    except Exception:
+        logger.debug("[reply_diag] agent_yield 读取失败（忽略）", exc_info=True)
 
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",

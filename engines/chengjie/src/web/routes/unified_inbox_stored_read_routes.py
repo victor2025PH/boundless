@@ -26,8 +26,10 @@ from fastapi import Depends, HTTPException, Request
 
 from src.inbox.normalizer import conv_id as _conv_id
 from src.web.routes.unified_inbox_aggregate import (
+    _agent_yield_state_q18,
     _cancel_inflight_q3,
     _read_automation_mode,
+    _resume_agent_yield_q18,
     _write_automation_mode,
 )
 from src.web.routes.unified_inbox_helpers import AUTOMATION_MODES
@@ -277,7 +279,10 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 "mode_source": mode_source, "rearm": rearm,
                 "snooze_hold": snooze_hold,
                 "send_gate": send_gate, "snooze_until": snooze_until,
-                "deliver_paused": deliver_paused}
+                "deliver_paused": deliver_paused,
+                # Q-18 C（#292）：「AI 让位中」状态（坐席 60s 内发过 / 打过字 → worker defer 中）
+                # → 会话头 ay- chip 倒计时；None＝worker 缺席 / 旧后端，前端不渲染
+                "agent_yield": _agent_yield_state_q18(request, cid)}
 
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):
@@ -325,6 +330,11 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             except Exception:
                 _prev_explicit = None
         cancelled = _write_automation_mode(request, cid, mode)
+        # Q-18 C（#292）：切到 / 重选「全自动」= 明示接回——清让位窗 + 取消 defer 立即放行
+        # （worker 落 `[autosend] resume by=mode_select`）。非 auto_ai 档不碰让位状态。
+        agent_yield_resumed = None
+        if mode == "auto_ai":
+            agent_yield_resumed = _resume_agent_yield_q18(request, cid, by="mode_select")
         rearm_source = ""
         if mode == "manual" and _rearm in ("30m", "rearm30"):
             try:
@@ -343,7 +353,35 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             # Q-3（#264 D）：含在途（拟人等待中）稿——前端 toast「已取消 N 条待发 AI 消息」
             "cancelled_l2": int(cancelled or 0),
             "rearm_source": rearm_source,
+            # Q-18 C：切全自动时的接回结果 {had_yield, released, by}（非 auto_ai → None）
+            "agent_yield_resumed": agent_yield_resumed,
         }
+
+    @app.post("/api/unified-inbox/agent-yield/resume")
+    async def api_unified_inbox_agent_yield_resume(request: Request, _=Depends(api_auth)):
+        """Q-18 C（#292）会话头「AI 让位中 · N 秒后接回」chip 点击 = **立即接回**：清该会话坐席
+        发送 / 打字时刻 + 取消 defer 立即放行（worker 日志 `[autosend] resume by=chip`）。
+
+        Body ``{platform, account_id, chat_key}`` 或 ``{conversation_id}``，可选 ``by``（缺省 chip）。
+        返回 ``{ok, conversation_id, had_yield, released, by, agent_yield}``；worker 缺席 →
+        ``had_yield=False``（不报错）。
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cid = str(body.get("conversation_id") or "").strip()
+        if not cid:
+            platform = str(body.get("platform") or "").strip().lower()
+            account_id = str(body.get("account_id") or "default").strip() or "default"
+            chat_key = str(body.get("chat_key") or "").strip()
+            if not platform or not chat_key:
+                raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+            cid = _conv_id(platform, account_id, chat_key)
+        by = str(body.get("by") or "chip").strip()[:24] or "chip"
+        res = _resume_agent_yield_q18(request, cid, by=by)
+        return {"ok": True, "conversation_id": cid, **res,
+                "agent_yield": _agent_yield_state_q18(request, cid)}
 
     @app.post("/api/unified-inbox/agent-typing")
     async def api_unified_inbox_agent_typing(request: Request, _=Depends(api_auth)):
@@ -397,7 +435,9 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             _inbox_store(request), cfg,
             platform=str(platform or "").lower(),
             account_id=str(account_id or "default"),
-            chat_key=str(chat_key or ""))
+            chat_key=str(chat_key or ""),
+            # Q-18 C（#292）：worker 在手的让位状态 → finding agent_yield（until / by）
+            worker=getattr(request.app.state, "autosend_worker", None))
         data["ok"] = True
         return data
 

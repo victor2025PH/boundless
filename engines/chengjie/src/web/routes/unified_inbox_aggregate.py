@@ -107,6 +107,45 @@ def _cancel_inflight_q3(request: Request, *, conversation_id: str = "",
         return 0
 
 
+def _agent_yield_state_q18(request: Request, conversation_id: str) -> Optional[Dict[str, Any]]:
+    """Q-18 C（#292）：会话「AI 让位」状态（``worker.agent_yield_state``）——GET automation /
+    reply_diagnosis / 会话头 ``ay-`` chip 同源。worker 缺席 / 旧版无方法 → None（前端不渲染）。绝不抛。"""
+    try:
+        worker = getattr(request.app.state, "autosend_worker", None)
+        if worker is None or not hasattr(worker, "agent_yield_state"):
+            return None
+        st = dict(worker.agent_yield_state(str(conversation_id or "")) or {})
+        try:
+            from src.inbox.autosend_policy import AGENT_YIELD_WINDOW_SEC as _w
+            st["window_sec"] = float(_w)
+        except Exception:
+            st["window_sec"] = 60.0
+        return st
+    except Exception:
+        logger.debug("[autosend] agent_yield_state 读取失败（忽略）", exc_info=True)
+        return None
+
+
+def _resume_agent_yield_q18(request: Request, conversation_id: str, *,
+                            by: str = "mode_select") -> Dict[str, Any]:
+    """Q-18 C（#292）：切到 / 重选「全自动」或点会话头 chip = 明示接回——经
+    ``worker.resume_agent_yield`` 清该会话 ``_agent_sent_ts / _agent_typing_ts`` + 取消 defer 立即放行
+    （worker 落 ``[autosend] resume by=<by>``）。返回 ``{had_yield, released, by}``；worker 缺席 →
+    ``had_yield=False``。绝不抛。"""
+    out: Dict[str, Any] = {"had_yield": False, "released": 0, "by": str(by or "mode_select")}
+    try:
+        worker = getattr(request.app.state, "autosend_worker", None)
+        if worker is None or not hasattr(worker, "resume_agent_yield"):
+            return out
+        r = worker.resume_agent_yield(str(conversation_id or ""), by=str(by or "mode_select"))
+        if isinstance(r, dict):
+            out.update(r)
+        return out
+    except Exception:
+        logger.debug("[autosend] resume_agent_yield 调用失败（忽略）", exc_info=True)
+        return out
+
+
 def _ingest_best_effort(request: Request, chats: List[Dict[str, Any]]) -> None:
     """旁路写入持久层，并在首轮冷启动后开启实时 SSE 事件发布。
 

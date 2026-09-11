@@ -71,6 +71,41 @@ HARD_STOP_REASONS = ("stop_contact", "self_harm")
 # risk=high（非停联）在全自动下转人工审的 hold_reason（L1，草稿进人审队列）
 REVIEW_HOLD_REASON = "risk_high_review"
 
+# Q-18 B（#292，2026-09-11）：**让位 = 延后不是丢弃**。人工优先复检（worker
+# ``_human_priority_gate``）返回这两个原因码时，batch / presend 两处一律 defer——稿留队、
+# ``deferred_until = 坐席最后活动 + AGENT_YIELD_WINDOW_SEC``，窗过自动复检再发（仍是最新
+# 入站且档位仍 auto → 发；期间有更新入站 → fresh_guard 让新稿覆盖）。其余原因码
+# （mode_changed / risk_hold / needs_human）仍是放弃，语义一字不变。
+YIELD_DEFER_REASONS = ("agent_sent", "agent_typing")
+AGENT_YIELD_WINDOW_SEC = 60.0
+# 连续让位上限（坐席一直在发 / 一直在打字 → 稿最多顺延这么多次，再多按放弃处理防无限滞留）
+AGENT_YIELD_MAX_DEFERRALS = 10
+
+
+def agent_yield_state(sent_ts: float, typing_ts: float, *, now: Optional[float] = None,
+                      window: float = AGENT_YIELD_WINDOW_SEC) -> Dict[str, Any]:
+    """纯函数：由坐席最后发送 / 打字时刻算「AI 让位」状态——worker 复检、诊断 finding
+    ``agent_yield`` 与会话头 ``ay-`` chip 三处同一口径。
+
+    返回 ``{active, by, since, until, remaining}``：``by`` ∈ agent_sent | agent_typing | ""
+    （发送优先于打字，与复检顺序一致）；``until`` = 最后活动 + window；``remaining`` 秒
+    （非负）。两个时刻都为 0 / 窗已过 → ``active=False``。
+    """
+    import time as _t
+    _now = float(now if now is not None else _t.time())
+    _sent = float(sent_ts or 0.0)
+    _typ = float(typing_ts or 0.0)
+    by, since = "", 0.0
+    if _sent > 0 and _now - _sent <= window:
+        by, since = "agent_sent", _sent
+    elif _typ > 0 and _now - _typ <= window:
+        by, since = "agent_typing", _typ
+    if not by:
+        return {"active": False, "by": "", "since": 0.0, "until": 0.0, "remaining": 0.0}
+    until = since + float(window)
+    return {"active": True, "by": by, "since": since, "until": until,
+            "remaining": max(0.0, until - _now)}
+
 
 @dataclass(frozen=True)
 class ShadowRecord:
@@ -423,4 +458,6 @@ __all__ = [
     "decide", "legacy_level", "mode_level", "max_risk", "hold_reason_for",
     "current_policy_mode", "resolve_policy_mode", "normalize_policy_mode",
     "normalize_automation_mode",
+    "YIELD_DEFER_REASONS", "AGENT_YIELD_WINDOW_SEC", "AGENT_YIELD_MAX_DEFERRALS",
+    "agent_yield_state",
 ]

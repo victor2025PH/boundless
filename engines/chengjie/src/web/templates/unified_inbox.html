@@ -15442,6 +15442,7 @@ async function _publishTyping(){
   if(!selectedChat) return;
   // Q-3（#264 D）：坐席在打字＝插话 → 通知 worker 放弃该会话在途 AI 稿（人工优先 ≥ 客户）。
   // 与多坐席 typing 广播同一节流（3s），fire-and-forget，失败静默。
+  try{ _ayNoteLocal('agent_typing'); }catch(_){}   // Q-18 #292（ay-）：自己打字 → 本地先亮「AI 让位中」chip（服务端真值 45s 内校正）
   try{
     apiFetch('/api/unified-inbox/agent-typing',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({platform:selectedChat.platform,account_id:selectedChat.account_id||'default',chat_key:selectedChat.chat_key})}, {timeoutMs: 10000})
@@ -16292,12 +16293,13 @@ function _diagFindingText(f){
   var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
     explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
     deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
-    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1};
+    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1,agent_yield:1};
   if(known[code]){
     var fmt={};
     Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
     // Q-14 #262：AI 失败原因码译人话（与会话头灰标同一组词条）
     if(code==='ai_last_fail'){ try{ fmt.reason=_aifReasonLabel(fmt.reason); }catch(_){} }
+    if(code==='agent_yield'){ try{ fmt.by_label=window.T(_AY_BY_KEYS[fmt.by]||'inbox.ay.by_sent'); fmt.until_hhmm=fmtTs(Number(p.until||0)); fmt.n=String(Math.max(0,Math.round(Number(p.remaining_sec||0)))); }catch(_){} }   // Q-18 #292（ay-）
     // Q-15 #271（ad-）：high_risk 的类别 / 级别 / 政策先译人话（成人内容 → 「成人内容（sex）· 露骨」）
     if(code==='high_risk'){
       try{
@@ -16359,6 +16361,7 @@ function _diagFixHtml(f){
   if(code==='high_risk'&&String(p.category||'')==='adult'&&selectedChat&&selectedChat.conversation_id){
     return btn(window.T('inbox.handoff.ad_soft'),"closeAiDiag();_adSoftReply('"+esc(String(selectedChat.conversation_id))+"',null);");
   }
+  if(code==='agent_yield') return btn(window.T('inbox.ay.fix_resume'),'_ayResume();setTimeout(openAiDiag,900);');   // Q-18 #292（ay-）：体检面板一键接回
   return '';
 }
 async function diagUncapPlatform(plat){
@@ -16581,6 +16584,7 @@ async function _refreshConvStatus(c){
     _holdState=(d&&d.snooze_hold)||null;
     _gateState=(d&&d.send_gate)||null;
     _dpConvState=(d&&d.deliver_paused)||null;   // #142 会话级拦截提示
+    try{ if(d&&('agent_yield' in d)) _aySet(d.agent_yield||null); }catch(_){}   // Q-18 #292（ay-）：让位真值 → chip 倒计时（旧后端无字段不动本地态）
     // 档位真值同步（接管/自动接回都发生在服务端，周期刷新是唯一感知口）：
     // 下拉未被用户操作（无焦点）时才动，操作中只更新内存值供横幅判断。
     if(d&&typeof d.mode==='string'&&d.mode){
@@ -16609,6 +16613,7 @@ setInterval(function(){
 },45000);
 async function loadModeState(c){
   // 切会话先清横幅（防上一会话的预算/账号/封顶状态串显；fetch 回来按新会话重渲）
+  try{ _aySet(null); }catch(_){}   // Q-18 #292（ay-）：让位 chip 不跨会话串显
   _budgetState=null; _renderBudgetBanner();
   _acctState=null; _renderAcctBanner();
   _effState=null; _renderEffChip();
@@ -16747,6 +16752,7 @@ async function setMode(mode, opts){
       // Q-3（#264 D）：计数含排队中 + 拟人等待中（在途）的 AI 稿——「切手动了还发」的口子已堵
       tip+=' · '+window.Tf('inbox.mode.cancelled_ai',{n:d.cancelled_l2});
     }
+    if(d.agent_yield_resumed&&d.agent_yield_resumed.had_yield){ tip+=' · '+window.T('inbox.ay.resumed'); try{ _aySet(null); }catch(_){} }   // Q-18 #292（ay-）：切全自动 = 明示接回
     try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){}
     // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」
     if((mode==='review'||mode==='multi_choice') && typeof toggleAiDraft==='function'){
