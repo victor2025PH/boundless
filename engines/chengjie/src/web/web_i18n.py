@@ -1638,18 +1638,47 @@ def _merge_views(base: dict, pzh: dict, pen: dict, extras: dict,
     return out
 
 
+# 扩展语覆盖率（2026-09-12）：{lang: 0..1}，= override 命中 zh 键集的比例。语言菜单据此
+# 自动挂 β / 「部分页面仍是英文」说明，不再手写（此前 th/id 标 β、vi 不标，三者其实一样 ~17%）。
+# 只在两条生产合并路径上更新（_build_merged / 热重载），_merge_views 保持纯函数供单测。
+_COVERAGE: dict = {}
+
+
+def _update_coverage(merged: dict, extras: dict) -> None:
+    try:
+        zh_keys = set(merged.get("zh") or {})
+        total = max(1, len(zh_keys))
+        cov = {"zh": 1.0, "en": 1.0}
+        for lg, ov in (extras or {}).items():
+            cov[lg] = round(min(1.0, sum(1 for k in (ov or {}) if k in zh_keys) / total), 3)
+        _COVERAGE.clear()
+        _COVERAGE.update(cov)
+    except Exception:  # noqa: BLE001 —— 观测数据，绝不干扰词典构建
+        pass
+
+
+def get_ui_lang_coverage() -> dict:
+    """各 UI 语言词条覆盖率快照（zh/en 恒 1.0；扩展语按 override 命中比）。"""
+    _maybe_reload()
+    return dict(_COVERAGE)
+
+
 def _build_merged(base: dict) -> dict:
     """单体 + packs → 合并字典。packs 失败时 fail-safe（单体 + 空覆盖的扩展语）。"""
     try:
         from src.web.i18n_packs import EXTRA_LANG_BASE, EXTRA_LANGS, collect_all
         pzh, pen, extras = collect_all()
-        return _merge_views(base, pzh, pen, extras, EXTRA_LANGS, EXTRA_LANG_BASE)
+        merged = _merge_views(base, pzh, pen, extras, EXTRA_LANGS, EXTRA_LANG_BASE)
+        _update_coverage(merged, extras)
+        return merged
     except Exception as exc:
         _logger.warning("i18n packs 合并失败（仅用单体字典）: %s", exc)
         # 表本身取不到时用字面量兜底——扩展语言键必须存在（消费方按 UI_LANGS 取）
-        return _merge_views(
+        merged = _merge_views(
             {"zh": base.get("zh") or {}, "en": base.get("en") or {}},
             {}, {}, {}, ("vi", "th", "id", "zh_hant"), {"zh_hant": "zh"})
+        _update_coverage(merged, {lg: {} for lg in ("vi", "th", "id", "zh_hant")})
+        return merged
 
 
 _MERGED = _build_merged(_TRANSLATIONS)
@@ -1706,6 +1735,7 @@ def _maybe_reload() -> None:
                     pzh, pen, extras = collect_all(force_reload=True)
                     _MERGED = _merge_views(_TRANSLATIONS, pzh, pen, extras,
                                            EXTRA_LANGS, EXTRA_LANG_BASE)
+                    _update_coverage(_MERGED, extras)
                     _packs_loaded_mtime = pm
                     _logger.info("i18n packs 热重载完成（+%d/+%d 键，扩展语 %s）",
                                  len(pzh), len(pen),

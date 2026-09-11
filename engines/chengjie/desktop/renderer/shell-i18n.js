@@ -865,6 +865,46 @@
      data-sh-i18n 替换，并派发 shell-lang-changed 让动态文案的持有方（rail 标题等）自取。
      与 resolveLang 的关系：?lang= 是「开机时的权威源」，运行时切换后它就过期了——故
      写进 localStorage，下一次没带 ?lang= 的装载也能对上。返回是否真的换了。 */
+  /* 运行时补装扩展语 overlay（2026-09-12）：i18n-ext-loader 只在页面装载时按 ?lang= 装一次，
+     开机是 zh 的坐席运行中切到 vi，DICT.vi 为空 → 全部回落 en。这里按需注入
+     shell-i18n-ext.<lang>.js（以及副驾 cp-i18n-ext.<lang>.js，若 CopilotShared 在），
+     装完重跑 applyI18n 并再派发 shell-lang-changed。路径以本脚本所在目录为基准（不依赖
+     宿主页面位置）；每语只试一次，文件缺失＝维持回落，绝不重复注入。 */
+  var _SELF_DIR = '';
+  try {
+    var _cs = typeof document !== 'undefined' ? document.currentScript : null;
+    if (_cs && _cs.src) _SELF_DIR = String(_cs.src).replace(/[^\/]*$/, '');
+  } catch (e) { _SELF_DIR = ''; }
+  var _extTried = {};
+  function _extLoaded(lg) {
+    var d = DICT[lg];
+    return !!(d && Object.keys(d).length);
+  }
+  function _injectScript(src, onload) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    if (onload) s.onload = onload;
+    s.onerror = function () { /* 文件缺失＝该语维持既有回落 */ };
+    (document.head || document.documentElement).appendChild(s);
+  }
+  function ensureExt(lg) {
+    if (typeof document === 'undefined' || !EXT_LANGS[lg] || _extLoaded(lg) || _extTried[lg]) return false;
+    _extTried[lg] = true;
+    _injectScript(_SELF_DIR + 'shell-i18n-ext.' + lg + '.js', function () {
+      if (LANG !== lg) return;
+      _syncDocLang();
+      try { applyI18n(document); } catch (e) { /* ignore */ }
+      try { document.dispatchEvent(new CustomEvent('shell-lang-changed', { detail: { lang: LANG, ext: true } })); } catch (e) { /* ignore */ }
+    });
+    try {
+      if (root.CopilotShared && typeof root.CopilotShared.regExt === 'function') {
+        _injectScript(_SELF_DIR + 'shared/copilot/i18n/cp-i18n-ext.' + lg + '.js', null);
+      }
+    } catch (e) { /* 副驾 overlay 可选 */ }
+    return true;
+  }
+
   function setLang(raw) {
     if (!isExplicit(raw)) return false;
     var next = normalizeLang(raw);
@@ -877,6 +917,7 @@
     if (typeof document !== 'undefined') {
       try { applyI18n(document); } catch (e) { /* ignore */ }
       try { document.dispatchEvent(new CustomEvent('shell-lang-changed', { detail: { lang: LANG } })); } catch (e) { /* ignore */ }
+      try { ensureExt(LANG); } catch (e) { /* 补装失败不影响已完成的换词 */ }
     }
     return true;
   }
@@ -890,6 +931,7 @@
     isExplicit: isExplicit,
     registerExt: registerExt,
     setLang: setLang,
+    ensureExt: ensureExt,
     _dict: DICT,
     _lsKey: LS_KEY,
   };

@@ -919,7 +919,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     from src.web.web_i18n import get_translations
     # UI 语言白名单/locale/系统语言协商——单一事实源（xlate P3 / 自动跟随 2026-08-27）
     from src.web.i18n_packs import (
-        UI_LANGS, UI_LOCALES, negotiate_ui_lang, primary_lang_tag,
+        UI_LANGS, UI_LOCALES, UI_LANG_NATIVE, negotiate_ui_lang, primary_lang_tag,
     )
 
     from src.web.ui_lang_stats import get_ui_lang_stats
@@ -949,9 +949,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                 # 「想要却没有」：推断落空但浏览器确实声明了语言 → 记需求分布
                 if _src == "default" and _al:
                     _ui_lang_stats.record_unsupported(primary_lang_tag(_al))
+                # URL 钉住 ≠ 用户选择：本次切语言事故最直接的暴露信号
+                # （/set_lang?lang=X 自身天然 query≠旧 cookie，不算冲突）
+                if (_src == "query" and _c in UI_LANGS and _c != lang
+                        and request.url.path.rstrip("/") != "/set_lang"):
+                    _ui_lang_stats.record_conflict(lang, _c)
         except Exception:
             pass  # 观测绝不干扰请求
         request.state.ui_lang = lang
+        # 语言来源随上下文下发（2026-09-12）：语言菜单的 ✓/「跟随系统」状态据此画，
+        # 不再各自猜（此前 ✓ 看 query 派生的 WS_LANG、跟随态看 cookie 有无，可同真同假）。
+        request.state.ui_lang_src = _src
         request.state.i18n = get_translations(lang)
         # 配置热重载检查点：check_and_hot_reload 原本只挂在 Telegram 消息循环——
         # 没进站消息的静默期改 config/overlay 永不生效。此处补 web 侧触发；
@@ -1027,9 +1035,19 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             ui_lang = getattr(request.state, "ui_lang", ui_lang)
         context.setdefault("i18n", i18n)
         context.setdefault("ui_lang", ui_lang)
+        # query / cookie / negotiated / default（语言菜单状态单源；老进程缺省空串 → 模板回落旧判定）
+        context.setdefault("ui_lang_src", getattr(getattr(request, "state", None), "ui_lang_src", "") or "")
         # BCP-47 locale（<html lang>/日期本地化用；消费 UI_LOCALES 单一事实源，
         # 此前 login.html 等页写死 zh-CN/en-US 二元——扩展语拿错 locale）
         context.setdefault("ui_locale", UI_LOCALES.get(ui_lang, "zh-CN"))
+        # 当前语言母语自称（切换入口的「(中文)」尾注；base/login/setup 统一用它替代二元 EN/ZH）
+        context.setdefault("ui_lang_native", UI_LANG_NATIVE.get(ui_lang, ui_lang))
+        # 各语种词条覆盖率 {lang: 0..1}：语言菜单据此自动挂 β / 覆盖说明，不再手写
+        try:
+            from src.web.web_i18n import get_ui_lang_coverage
+            context.setdefault("ui_lang_coverage", get_ui_lang_coverage())
+        except Exception:
+            context.setdefault("ui_lang_coverage", {})
         # 词典指纹 → _i18n_bootstrap.html 走外链词典包（/i18n/ws-i18n.js?v=fp，
         # immutable 缓存；P2 传输减重）。异常时不注入 → 模板自动回落内联词典。
         try:
@@ -1218,8 +1236,31 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             return None
 
     @app.get("/set_lang")
-    async def set_lang(request: Request, lang: str = "zh"):
-        resp = RedirectResponse(request.headers.get("referer", "/"), status_code=303)
+    async def set_lang(request: Request, lang: str = "zh", next: str = ""):
+        # 回跳地址剥掉 ?lang=（2026-09-12）：中间件 ?lang= > cookie，桌面壳首帧又把
+        # ?lang= 钉在 /workspace 上——原样回 Referer 等于让旧 query 再压一次刚写的
+        # cookie，「切了不生效」。剥掉后 cookie 生效，其余参数（theme/next…）保留。
+        # 页面可显式传 next=path?query#hash（wsToggleLang 传当前地址）保住 hash 路由位。
+        from src.web.login_redirect import set_lang_redirect_target
+        resp = RedirectResponse(
+            set_lang_redirect_target(request.headers.get("referer", ""), next or None),
+            status_code=303)
+        # 切换遥测：切到哪 + 5 分钟内切回（语种放弃信号）。会话键取用户名/会话 cookie 的短哈希，不存原值。
+        try:
+            if lang == "auto" or lang in UI_LANGS:
+                import hashlib
+                _sid_src = ""
+                try:
+                    _sid_src = request.session.get("username", "") or ""
+                except Exception:
+                    _sid_src = ""
+                _sid_src = _sid_src or request.cookies.get("session", "") or ""
+                _sid = hashlib.sha1(_sid_src.encode("utf-8", "ignore")).hexdigest()[:12] if _sid_src else ""
+                # 「切换前」语言只能信 cookie（本请求 ?lang= 就是目标语，state.ui_lang 已被它占）
+                _from = request.cookies.get("ui_lang", "") or "auto"
+                _ui_lang_stats.record_switch(_sid, _from, lang)
+        except Exception:
+            pass  # 观测绝不干扰切换
         # auto = 回到「跟随系统」（2026-08-27）：删 cookie + 清落库偏好 →
         # 中间件按 Accept-Language 推断，坐席换系统语言界面即跟走。
         if lang == "auto":

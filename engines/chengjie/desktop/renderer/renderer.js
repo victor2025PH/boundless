@@ -362,11 +362,25 @@ initTitlebar();
     const base = (backend.base_url || "http://127.0.0.1:18799").replace(/\/+$/, "");
     // navPath=用于路由判定的纯路径；navTarget=实际加载/登录回跳的相对地址（含 ?lang= 语言对齐）
     const navPath = ui.path || "/workspace";
-    const lang = ui.lang || "";
-    let navTarget = navPath + (lang ? (navPath.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(lang) : "");
-    // 桌面壳是深色专属 → 给嵌入的 /workspace 强制 ?theme=dark，避免独立 webview 分区 auto→跟随系统出现「深色壳里白聊天」。
-    navTarget += (navTarget.includes("?") ? "&" : "?") + "theme=dark";
-    const fullUrl = base + navTarget;
+    // ?lang= 只镜像壳配置 unified_inbox.lang（首帧对齐；空=跟随系统不带）。工作台里切语言
+    // 时主进程同步配置并回推（onShellLang 第二参），这里随之重算——否则 homeUrl/登录回跳
+    // 一直带着启动那一刻的 ?lang=，中间件 ?lang= > cookie，切完语言一回「家」就被钉回旧语。
+    function inboxTargets(langCfg) {
+      const lang = String(langCfg || "");
+      let t = navPath + (lang ? (navPath.includes("?") ? "&" : "?") + "lang=" + encodeURIComponent(lang) : "");
+      // 桌面壳是深色专属 → 给嵌入的 /workspace 强制 ?theme=dark，避免独立 webview 分区 auto→跟随系统出现「深色壳里白聊天」。
+      t += (t.includes("?") ? "&" : "?") + "theme=dark";
+      return { navTarget: t, fullUrl: base + t };
+    }
+    let { navTarget, fullUrl } = inboxTargets(ui.lang);
+    Inbox.setLangConfig = function (langCfg) {
+      const next = String(langCfg == null ? "" : langCfg);
+      if (next === String(ui.lang || "")) return false;
+      ui.lang = next;                       // cfg 快照同步（后续读 cfg.unified_inbox.lang 的都跟上）
+      ({ navTarget, fullUrl } = inboxTargets(next));
+      Inbox.homeUrl = fullUrl;
+      return true;
+    };
     // 凭据链：优先 token，回退用户名/密码（token 为空或失效时自动接力）
     // 用户管理 P0-2：backend.auto_login=false（坐席机开关）→ 不自动登录，每次启动露出登录页
     // 让操作员用自己的子帐号登录；backend.token 仍供 sidecar/API 使用，两者解耦。
@@ -438,7 +452,8 @@ initTitlebar();
     Inbox.overlay = overlay;
     Inbox.phase = "loading";
     // #158：收件箱「家」地址（含 ?lang=/&theme=）——onOpenWorkspace 判 webview 是否漂去了
-    // 子页（/workspace/drafts 等）并据此导航回来；单源在此，别在承接处再拼一份。
+    // 子页（/workspace/drafts 等）并据此导航回来；单源在此（切语言经 Inbox.setLangConfig 重算），
+    // 别在承接处再拼一份。
     Inbox.homeUrl = fullUrl;
 
     function setPhase(phase, msg) {
@@ -1369,7 +1384,13 @@ try {
 // 动态拼出的文案（rail 标题/chip）在下一次重建时自然跟上；这里补最显眼的收件箱标签。
 try {
   if (window.shell && typeof window.shell.onShellLang === "function") {
-    window.shell.onShellLang((lang) => {
+    window.shell.onShellLang((lang, cfgLang) => {
+      // 第二参=壳配置原值（""=跟随系统）：先让收件箱 homeUrl/登录回跳的 ?lang= 跟上配置
+      // （老主进程不传 → undefined → 不动），再换壳自身静态词。两步独立：配置同步不依赖
+      // 壳词典是否真的换成功（vi/th/id 壳词典回落 en，setLang 可能返回 false）。
+      try {
+        if (cfgLang !== undefined && typeof Inbox.setLangConfig === "function") Inbox.setLangConfig(cfgLang);
+      } catch (e) { /* homeUrl 重算失败：下次启动按配置对齐 */ }
       try {
         if (!(window.shellI18n && window.shellI18n.setLang(lang))) return;
         const item = document.querySelector('.rail-item[data-id="' + INBOX_ID + '"]');

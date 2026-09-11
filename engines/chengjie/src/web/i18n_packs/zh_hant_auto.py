@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-11 18:40:11 · OpenCC s2twp + 術語釘 · 17510 鍵（源 zh 全量 17742）
+生成: 2026-09-12 04:33:26 · OpenCC s2twp + 術語釘 · 17518 鍵（源 zh 全量 17776）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1867,8 +1867,11 @@ ZH_HANT = {
     'base.gs.total': '共 {n} 條結果',
     'base.l4.toast_new': '新增 {n} 條 AI 回覆等人確認後才會發出',
     'base.l4.toast_sla': '有 {n} 條 AI 回覆等你確認已超過 4 小時',
+    'base.lang.follow_now': '跟隨系統 · 當前 {lang}',
     'base.lang.follow_sys': '跟隨系統語言',
     'base.lang.follow_sys_t': '清除手動選擇，介面語言自動跟隨系統/瀏覽器語言',
+    'base.lang.pinned_hint': '當前語言由連結引數指定，選擇後按你的選擇顯示',
+    'base.lang.switched_to': '介面語言已切換為 {lang}',
     'base.license.expired': '授權已失效，系統處於只讀模式，請聯絡廠商續費。',
     'base.login.pill': '登入',
     'base.login.pill_t': '尚未登入或登入已過期 · 點選前往登入頁',
@@ -9542,6 +9545,7 @@ ZH_HANT = {
     'inbox.goal.engine.card_off': '「自動推進」未生效（{why}）：AI 不會主動發訊息，只在對方來訊息時順勢推進',
     'inbox.goal.err': '工作目標載入失敗',
     'inbox.goal.err_retry': '載入失敗，點選重試',
+    'inbox.goal.err_retry_detail': '載入失敗（{err}），點選重試；{s} 秒後自動重試',
     'inbox.goal.extend_2h': '+2 小時',
     'inbox.goal.extend_30m': '+30 分鐘',
     'inbox.goal.filter.hold': '讓路中',
@@ -9851,7 +9855,11 @@ ZH_HANT = {
     'inbox.goal.skip.unknown': '未知',
     'inbox.goal.slots.ai_badge': 'AI 推斷 · 待確認',
     'inbox.goal.slots.ai_badge_t': 'AI 從聊天裡推斷出來的，未經人核實——✓ 記為已核實；✎ 改成客戶說的；✕ 不對，清掉',
+    'inbox.goal.slots.clue_only': '{label}：AI 有線索，待補值',
+    'inbox.goal.slots.clue_only_confirm_t': '沒有具體值，不能確認——先點 ✎ 錄入客戶說的值',
+    'inbox.goal.slots.clue_only_t': '我方問過 / 聊到過，但沒有抽出可核實的具體值——不算已提取；點 ✎ 把客戶實際說的錄進去',
     'inbox.goal.slots.confirm': '確認',
+    'inbox.goal.slots.confirm_failed': '確認失敗（{err}），請重試',
     'inbox.goal.slots.confirm_prompt': '「{label}」客戶說的是什麼？（記為已核實）',
     'inbox.goal.slots.confirm_t': '記為已核實（AI 此後不再問這一項）',
     'inbox.goal.slots.confirmed_toast': '「{label}」已確認',

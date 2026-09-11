@@ -2130,16 +2130,24 @@ try {
   const _extStr = JSON.parse(
     fs.readFileSync(path.join(__dirname, "shell-str-ext.json"), "utf-8"));
   for (const _lg of Object.keys(_extStr || {})) {
-    if (_extStr[_lg] && typeof _extStr[_lg] === "object") SHELL_STR[_lg] = _extStr[_lg];
+    // 空表不装（2026-09-12）：vi/th/id 机翻从未产出，文件里是 {}——装进去后 {} 为真值，
+    // 旧 SS() 的 `SHELL_STR[l] || SHELL_STR[EXT[l]]` 就跳过了 en 底，越南文坐席菜单落成简中。
+    if (_extStr[_lg] && typeof _extStr[_lg] === "object" && Object.keys(_extStr[_lg]).length) {
+      SHELL_STR[_lg] = _extStr[_lg];
+    }
   }
 } catch (e) { /* overlay 可选 */ }
 // vars 走 {name} 占位替换（与渲染层 SH() 同约定）：错误回执要带 status 之类的
 // 动态量，拼字符串会把语序烙死（英文 "Audio fetch failed (404)" 括号在后）。
-// 词典回落：扩展语走 SHELL_EXT_LANGS 表定底（vi/th/id→en，zh_hant→zh）；其余未知语维持 zh。
+// 词典回落三级（与渲染层 shell-i18n tIn 同序）：本语 overlay（可能只有部分键）→
+// SHELL_EXT_LANGS 表定底（vi/th/id→en，zh_hant→zh）→ zh → 键名。此前 overlay 只要存在
+// 就整表替代回落底，zh_hant 缺的键落 zh 恰好对，vi 缺的键却落成 zh 而非 en。
 function SS(key, vars) {
   const l = shellLang();
-  const d = SHELL_STR[l] || SHELL_STR[SHELL_EXT_LANGS[l]] || SHELL_STR.zh;
-  let s = d[key] != null ? d[key] : (SHELL_STR.zh[key] != null ? SHELL_STR.zh[key] : key);
+  const d = SHELL_STR[l] || {};
+  const b = SHELL_STR[SHELL_EXT_LANGS[l]] || SHELL_STR.zh;
+  let s = d[key] != null ? d[key]
+    : (b[key] != null ? b[key] : (SHELL_STR.zh[key] != null ? SHELL_STR.zh[key] : key));
   if (vars) {
     s = String(s).replace(/\{(\w+)\}/g, (m, k) =>
       (vars[k] === undefined || vars[k] === null ? m : String(vars[k])));
@@ -2489,8 +2497,10 @@ function applyShellLangFromNavigation(rawUrl) {
   const after = shellLang();
   console.log(`[i18n] shell lang synced from workspace: ${JSON.stringify(patch.lang)} (${before} -> ${after})`);
   if (after !== before) rebuildAppMenu();
+  // 第二参=配置原值（""=跟随系统）：renderer 据此重算收件箱 homeUrl/登录回跳的 ?lang=
+  // （2026-09-12：此前只回推壳语言码，homeUrl 停在启动那一刻，回「家」被钉回旧语）。
   for (const w of BrowserWindow.getAllWindows()) {
-    try { if (!w.isDestroyed()) w.webContents.send("cx-shell-lang", after); } catch (e) { /* 窗已亡 */ }
+    try { if (!w.isDestroyed()) w.webContents.send("cx-shell-lang", after, patch.lang); } catch (e) { /* 窗已亡 */ }
   }
   return true;
 }

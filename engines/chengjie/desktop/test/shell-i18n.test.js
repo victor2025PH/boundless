@@ -456,6 +456,50 @@ console.log(`  ..  主进程待迁中文串合计 ${mainTotal} 条`);
     ok(seg.length > 0 && !/label:\s*["'`]/.test(seg), "buildAppMenu/appMenuSpec 零字面量 label（词条单源 SHELL_STR）");
   }
 
+  // SS() 三级回落（2026-09-12 越南文坐席菜单落成简中事故）：把 SS 函数源码切出来，在
+  // 假 shellLang/SHELL_STR 下直跑——vi 只有部分键（或整表为空）时缺键必须落 en 而非 zh；
+  // zh_hant 缺键落 zh；空 overlay 表不得装进 SHELL_STR。
+  {
+    function extractFn(src, marker) {
+      const i = src.indexOf(marker);
+      if (i < 0) return null;
+      let j = src.indexOf("{", i), depth = 0;
+      for (let k = j; k < src.length; k++) {
+        if (src[k] === "{") depth++;
+        else if (src[k] === "}") { depth--; if (depth === 0) return src.slice(i, k + 1); }
+      }
+      return null;
+    }
+    const ssSrc = extractFn(mainSrc, "function SS(key, vars)");
+    const ctx = {
+      SHELL_EXT_LANGS: { vi: "en", th: "en", id: "en", zh_hant: "zh" },
+      SHELL_STR: {
+        zh: { "menu.file": "文件", "menu.edit": "编辑", "x.n": "共 {n} 个" },
+        en: { "menu.file": "File", "menu.edit": "Edit", "x.n": "{n} total" },
+        vi: { "menu.file": "Tệp" },
+        zh_hant: { "menu.file": "檔案" },
+      },
+      _lang: "zh",
+      shellLang: function () { return ctx._lang; },
+    };
+    let SS = null;
+    try { SS = vm.runInNewContext("(" + ssSrc + ")", ctx); } catch (e) { SS = null; }
+    ok(typeof SS === "function", "main.js::SS 可切出直跑");
+    if (SS) {
+      ctx._lang = "vi";
+      ok(SS("menu.file") === "Tệp", "SS(vi)：overlay 有键取 overlay");
+      ok(SS("menu.edit") === "Edit", "SS(vi)：overlay 缺键落 en（而非 zh）");
+      ok(SS("x.n", { n: 3 }) === "3 total", "SS(vi)：vars 替换走 en 底");
+      ctx._lang = "th";   // 无 overlay 表
+      ok(SS("menu.file") === "File", "SS(th)：无 overlay → 直接 en");
+      ctx._lang = "zh_hant";
+      ok(SS("menu.file") === "檔案" && SS("menu.edit") === "编辑", "SS(zh_hant)：有键取繁、缺键落 zh");
+      ctx._lang = "ja";   // 未知语
+      ok(SS("menu.file") === "文件" && SS("no.such") === "no.such", "SS(未知语)：落 zh；无词条回键名");
+    }
+    ok(/Object\.keys\(_extStr\[_lg\]\)\.length/.test(mainSrc), "shell-str-ext.json 空表不装进 SHELL_STR（防 {} 吞掉 en 底）");
+  }
+
   // 切语言 → 菜单重建链（机制门禁）：纯函数模块 + 主进程接线 + preload/renderer 回推
   const sync = require(path.join(DESKTOP, "shell-lang-sync.js"));
   ok(sync.langFromSetLangUrl("http://127.0.0.1:18799/set_lang?lang=en") === "en", "shell-lang-sync：/set_lang?lang=en → en");
@@ -479,8 +523,13 @@ console.log(`  ..  主进程待迁中文串合计 ${mainTotal} 条`);
   ok(/function applyShellLangFromNavigation\(/.test(mainSrc)
     && /saveConfigPatch\(\{ unified_inbox: \{ lang: patch\.lang \} \}\)/.test(mainSrc)
     && /if \(after !== before\) rebuildAppMenu\(\);/.test(mainSrc)
-    && /send\("cx-shell-lang", after\)/.test(mainSrc),
-    "applyShellLangFromNavigation：写配置 + 语种变了才重建菜单 + 回推 cx-shell-lang");
+    && /send\("cx-shell-lang", after, patch\.lang\)/.test(mainSrc),
+    "applyShellLangFromNavigation：写配置 + 语种变了才重建菜单 + 回推 cx-shell-lang（带配置原值）");
+  // 2026-09-12：切语言后收件箱 homeUrl/登录回跳的 ?lang= 必须跟配置走（否则回「家」被钉回旧语）
+  ok(/Inbox\.setLangConfig = function \(langCfg\)/.test(rendererJs)
+    && /onShellLang\(\(lang, cfgLang\) =>/.test(rendererJs)
+    && /Inbox\.setLangConfig\(cfgLang\)/.test(rendererJs),
+    "renderer.js：onShellLang 第二参 → Inbox.setLangConfig 重算 homeUrl/navTarget");
   const attachSeg = mainSrc.slice(mainSrc.indexOf('on("did-attach-webview"'), mainSrc.indexOf('on("did-attach-webview"') + 900);
   ok(/watchWebLangSwitch\(wc\)/.test(attachSeg), "did-attach-webview 挂 watchWebLangSwitch（工作台 webview 切语言）");
   const popupSeg = mainSrc.slice(mainSrc.indexOf("function openBackendPopup"), mainSrc.indexOf("function makeBackendPopupHandler"));
@@ -489,6 +538,8 @@ console.log(`  ..  主进程待迁中文串合计 ${mainTotal} 条`);
     "watchWebLangSwitch 同时听 will-navigate 与 did-start-navigation");
   const preloadSrc = fs.readFileSync(path.join(DESKTOP, "shell-preload.js"), "utf8");
   ok(/onShellLang: \(cb\) => ipcRenderer\.on\("cx-shell-lang"/.test(preloadSrc), "shell-preload 暴露 onShellLang（cx-shell-lang）");
+  ok(/onShellLang: \(cb\) => ipcRenderer\.on\("cx-shell-lang", \(_e, lang, cfgLang\)/.test(preloadSrc),
+    "shell-preload：onShellLang 透传配置原值（undefined 保留＝老主进程）");
   ok(/window\.shell\.onShellLang\(/.test(rendererJs) && /shellI18n\.setLang\(lang\)/.test(rendererJs),
     "renderer.js 消费 onShellLang → shellI18n.setLang");
   ok(typeof shellI18n.setLang === "function", "shell-i18n.js 导出 setLang（运行时换词）");
@@ -502,7 +553,48 @@ console.log(`  ..  主进程待迁中文串合计 ${mainTotal} 条`);
     ok(shellI18n.setLang(other) === false, "setLang 同值返回 false");
     shellI18n.setLang(cur);
   }
+  // 2026-09-12：运行时补装扩展语 overlay（开机 zh、运行中切 vi 时 DICT.vi 为空 → 按需注入）
+  ok(typeof shellI18n.ensureExt === "function", "shell-i18n.js 导出 ensureExt（运行时补装 overlay）");
+  ok(shellI18n.ensureExt("vi") === false && shellI18n.ensureExt("zh") === false,
+    "Node 侧无 document：ensureExt 不注入、返回 false（不抛）");
+  const shellI18nSrc = fs.readFileSync(path.join(RENDERER, "shell-i18n.js"), "utf8");
+  ok(/try \{ ensureExt\(LANG\); \}/.test(shellI18nSrc), "setLang 切换后触发 ensureExt");
+  ok(/_SELF_DIR \+ 'shell-i18n-ext\.' \+ lg \+ '\.js'/.test(shellI18nSrc)
+    && /_SELF_DIR \+ 'shared\/copilot\/i18n\/cp-i18n-ext\.' \+ lg \+ '\.js'/.test(shellI18nSrc),
+    "ensureExt 以本脚本目录为基准注入 shell/cp 两份 overlay");
+  ok(/_extTried\[lg\] = true/.test(shellI18nSrc), "ensureExt 每语只试一次（文件缺失不重复注入）");
 }
+
+// ── 机翻扩展语 overlay（vi/th/id）：不再允许 0 键空壳静默过关（2026-09-12）─────────
+// 生成器走 HY-MT（局域网 GPU），这里不做 100% 覆盖硬门禁，但要求：文件存在、导出协议
+// 正确、规模不低于地板、键 ⊆ zh 词典、占位符守恒、值不含 CJK（机翻泄漏）。
+const SHELL_STR_ZH_KEYS = (() => {
+  try {
+    const src = fs.readFileSync(path.join(DESKTOP, "main.js"), "utf8");
+    const i = src.indexOf("const SHELL_STR =");
+    let j = src.indexOf("{", i), depth = 0, lit = null;
+    for (let k = j; k < src.length; k++) {
+      if (src[k] === "{") depth++;
+      else if (src[k] === "}") { depth--; if (depth === 0) { lit = src.slice(j, k + 1); break; } }
+    }
+    return require("vm").runInNewContext("(" + lit + ")").zh || {};
+  } catch (e) { return {}; }
+})();
+["vi", "th", "id"].forEach((lg) => {
+  const p = path.join(RENDERER, `shell-i18n-ext.${lg}.js`);
+  ok(fs.existsSync(p), `shell-i18n-ext.${lg}.js 存在`);
+  if (!fs.existsSync(p)) return;
+  const ext = require(p);
+  ok(ext && ext.lang === lg, `shell-i18n-ext.${lg}.js 导出 ${lg} overlay`);
+  const keys = Object.keys(ext.dict || {});
+  ok(keys.length >= 200, `${lg} shell overlay 规模不低于地板（${keys.length} 键 ≥ 200；0 键空壳＝生成器静默降级）`);
+  ok(keys.every((k) => k in DICT.zh), `${lg} shell overlay 键 ⊆ 词典 zh（无孤儿）`);
+  ok(keys.every((k) => setEq(phSet(ext.dict[k]), phSet(DICT.zh[k]))), `${lg} shell overlay 占位符逐键守恒`);
+  ok(keys.every((k) => !/[\u4e00-\u9fff]/.test(String(ext.dict[k]))), `${lg} shell overlay 值不含 CJK（机翻泄漏）`);
+  const sk = Object.keys(strExt[lg] || {});
+  ok(sk.length >= 30, `shell-str-ext.json ${lg} 规模不低于地板（${sk.length} 键 ≥ 30）`);
+  ok(sk.every((k) => k in SHELL_STR_ZH_KEYS), `shell-str-ext.json ${lg} 键 ⊆ SHELL_STR.zh`);
+});
 
 if (failed) { console.error(`\nshell-i18n.test.js: ${failed} 项失败`); process.exit(1); }
 console.log("\nshell-i18n.test.js: all pass");

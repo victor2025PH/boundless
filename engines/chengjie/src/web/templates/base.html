@@ -766,9 +766,13 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             {{ (i18n or {}).get('change_pwd','修改密码') }}
           </button>
-          <a class="ud-item" href="/set_lang?lang={{ 'en' if ui_lang == 'zh' else 'zh' }}">
+          {#- 语言切换统一走 _i18n_bootstrap 的六语选择器（2026-09-12）：此前这里是 zh⇄en 二元
+              硬编码，与工作台六语菜单不一致（越南/泰/印尼坐席在管理后台切不到母语）。
+              href 保留为无 JS / 老进程回落。 -#}
+          <a class="ud-item" href="/set_lang?lang={{ 'en' if ui_lang == 'zh' else 'zh' }}"
+             onclick="if(window.wsToggleLang){event.preventDefault();window.wsToggleLang(event);}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
-            {{ (i18n or {}).get('lang_switch_label','切换语言') }} ({{ i18n.lang_switch if i18n else 'EN' }})
+            {{ (i18n or {}).get('lang_switch_label','切换语言') }} ({{ ui_lang_native|default(ui_lang|default('zh')) }})
           </a>
           <div class="ud-sep"></div>
           <a class="ud-item danger" href="#" onclick="doLogout(event)">

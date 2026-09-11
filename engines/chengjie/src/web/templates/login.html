@@ -20,6 +20,8 @@
 :root{
   --bg:#eef1f8;--card:#fff;--t:#111827;--t2:#6b7280;--bd:rgba(0,0,0,.09);
   --input:#f4f6fc;--red:#ef4444;--rs:rgba(239,68,68,.1);
+  /* 语言选择器（_i18n_bootstrap.wsToggleLang）吃工作台令牌名；映射到本页表面变量，深浅色同步 */
+  --tk-surface:var(--card);--tk-text:var(--t);--tk-border:var(--bd);
 }
 [data-theme="dark"]{
   --bg:#080c14;--card:rgba(15,21,36,.9);--t:#e2e8f0;--t2:#94a3b8;--bd:rgba(255,255,255,.07);
@@ -152,10 +154,15 @@ body{background:var(--bg);color:var(--t);min-height:100vh;display:flex;align-ite
   {% endif %}
   <div class="login-foot">
     <button class="th-link" onclick="toggleTheme()">🌓 {{ (i18n or {}).get('lg_s005', "切换深色 / 浅色") }}</button>
-    <a class="th-link" style="text-decoration:none" href="/set_lang?lang={{ 'en' if (ui_lang|default('zh'))=='zh' else 'zh' }}">🌐 {{ (i18n or {}).get('lang_switch_label', '切换语言') }} ({{ 'EN' if (ui_lang|default('zh'))=='zh' else 'ZH' }})</a>
+    {#- 与工作台同一个六语选择器（_i18n_bootstrap.wsToggleLang）；href 为无 JS 回落 -#}
+    <a class="th-link" style="text-decoration:none" href="/set_lang?lang={{ 'en' if (ui_lang|default('zh'))=='zh' else 'zh' }}"
+       onclick="if(window.wsToggleLang){event.preventDefault();window.wsToggleLang(event);}">🌐 {{ (i18n or {}).get('lang_switch_label', '切换语言') }} ({{ ui_lang_native|default(ui_lang|default('zh')) }})</a>
   </div>
 </div>
 
+{#- 共享 i18n 引导（T()/wsToggleLang 六语选择器）：登录页此前没 include，语言入口只能 zh⇄en
+    二元跳转；词典走外链指纹包（i18n_fp），一年 immutable 缓存，不拖慢首屏。 -#}
+{% include "_i18n_bootstrap.html" %}
 <script>
 /* 主题偏好与工作台同源：工作台读 localStorage('cp_theme')（auto|light|dark），
    而本页原先只认另一把键 'theme' —— 于是「坐席在工作台设了暗色，登录页仍刷成白的」。

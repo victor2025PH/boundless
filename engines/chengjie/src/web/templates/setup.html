@@ -23,6 +23,8 @@
   --input:#f4f6fc;--red:#ef4444;--rs:rgba(239,68,68,.1);
   --green:#10b981;--gs:rgba(16,185,129,.1);--amber:#f59e0b;
   --r:12px;
+  /* 语言选择器（_i18n_bootstrap.wsToggleLang）吃工作台令牌名；映射到本页表面变量，深浅色同步 */
+  --tk-surface:var(--card);--tk-text:var(--t);--tk-border:var(--bd);
 }
 [data-theme="dark"]{
   --bg:#080c14;--card:rgba(15,21,36,.9);--t:#e2e8f0;--t2:#94a3b8;--bd:rgba(255,255,255,.07);
@@ -222,7 +224,9 @@ body{background:var(--bg);color:var(--t);min-height:100vh;
 
   <div class="setup-foot">
     <button class="th-link" onclick="toggleTheme()">🌓 {{ (i18n or {}).get('su_s011', "深色 / 浅色") }}</button>
-    <a class="th-link" style="text-decoration:none" href="/set_lang?lang={{ 'en' if (ui_lang|default('zh'))=='zh' else 'zh' }}">🌐 {{ (i18n or {}).get('lang_switch_label', '切换语言') }} ({{ 'EN' if (ui_lang|default('zh'))=='zh' else 'ZH' }})</a>
+    {#- 与工作台同一个六语选择器（_i18n_bootstrap.wsToggleLang）；href 为无 JS 回落 -#}
+    <a class="th-link" style="text-decoration:none" href="/set_lang?lang={{ 'en' if (ui_lang|default('zh'))=='zh' else 'zh' }}"
+       onclick="if(window.wsToggleLang){event.preventDefault();window.wsToggleLang(event);}">🌐 {{ (i18n or {}).get('lang_switch_label', '切换语言') }} ({{ ui_lang_native|default(ui_lang|default('zh')) }})</a>
   </div>
 </div>
 

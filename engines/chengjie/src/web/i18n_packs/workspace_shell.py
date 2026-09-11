@@ -5,6 +5,11 @@ ZH = {
     # 语言菜单「跟随系统」项（自动跟随 2026-08-27；/set_lang?lang=auto 清显式选择）
     "base.lang.follow_sys": "跟随系统语言",
     "base.lang.follow_sys_t": "清除手动选择，界面语言自动跟随系统/浏览器语言",
+    # 语言菜单状态提示（2026-09-12）：当前语言来自 URL 参数（桌面壳首帧/分享链接）时说明
+    "base.lang.pinned_hint": "当前语言由链接参数指定，选择后按你的选择显示",
+    # 跟随态副标写出解析结果；切换后一次性确认 toast（2026-09-12）
+    "base.lang.follow_now": "跟随系统 · 当前 {lang}",
+    "base.lang.switched_to": "界面语言已切换为 {lang}",
     "base.brand_sub": " · 坐席工作台",
     "base.cfm.cancel": "取消",
     "base.cfm.ok": "确定",
@@ -265,6 +270,9 @@ ZH = {
 EN = {
     "base.lang.follow_sys": "Follow system language",
     "base.lang.follow_sys_t": "Clear manual choice; UI language follows your system/browser",
+    "base.lang.pinned_hint": "Current language comes from a URL parameter; pick one below to switch",
+    "base.lang.follow_now": "Following system · now {lang}",
+    "base.lang.switched_to": "Interface language switched to {lang}",
     "base.brand_sub": " · Agent Workspace",
     "base.cfm.cancel": "Cancel",
     "base.cfm.ok": "OK",

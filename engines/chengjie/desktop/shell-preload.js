@@ -162,5 +162,8 @@ contextBridge.exposeInMainWorld("shell", {
   onLanAccess: (cb) => ipcRenderer.on("cx-lan-access", (_e, st) => { try { cb(st || {}); } catch (err) { /* 渲染回调异常不断桥 */ } }),
   // #151：工作台里切了语言（/set_lang）→ 主进程同步壳配置 + 重建菜单后回推新壳语言码，
   // renderer 让 shell-i18n 就地换词（静态 data-sh-i18n 文案 + <html lang>/title），不整窗重载。
-  onShellLang: (cb) => ipcRenderer.on("cx-shell-lang", (_e, lang) => { try { cb(String(lang || "")); } catch (err) { /* 渲染回调异常不断桥 */ } }),
+  // 第二参=壳配置原值（""=跟随系统；老主进程不带 → undefined 透传），renderer 据此重算收件箱 ?lang=。
+  onShellLang: (cb) => ipcRenderer.on("cx-shell-lang", (_e, lang, cfgLang) => {
+    try { cb(String(lang || ""), cfgLang === undefined ? undefined : String(cfgLang == null ? "" : cfgLang)); } catch (err) { /* 渲染回调异常不断桥 */ }
+  }),
 });

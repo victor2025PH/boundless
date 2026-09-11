@@ -67,9 +67,10 @@ def _unescape(raw: str) -> str:
     return json.loads(f'"{raw}"')
 
 
-def extract_cp_zh() -> dict:
-    """cp-i18n.js 全部 reg({zh},{en}) 块的 zh 列（解码为真实字符串）。"""
+def extract_cp() -> tuple:
+    """cp-i18n.js 全部 reg({zh},{en}) 块 → ({key: zh}, {key: en})（解码为真实字符串）。"""
     zh: dict = {}
+    en: dict = {}
     state = "out"
     for raw in _CP_SRC.read_text(encoding="utf-8").splitlines():
         s = raw.strip()
@@ -89,14 +90,30 @@ def extract_cp_zh() -> dict:
             if s.startswith("{"):
                 state = "en"
         elif state == "en":
-            if s.startswith("}"):
+            m = _ENTRY.match(raw)
+            if m:
+                en[_unescape(m.group(1))] = _unescape(m.group(2))
+            elif s.startswith("}"):
                 state = "tail"
         elif state == "tail":
             if s.startswith(")"):
                 state = "out"
     if len(zh) < 500:
         raise SystemExit(f"cp-i18n.js zh 列提取仅 {len(zh)} 键——格式漂移？拒绝生成")
-    return zh
+    return zh, en
+
+
+def extract_cp_zh() -> dict:
+    return extract_cp()[0]
+
+
+def _mt_source(zh: dict, en: dict) -> dict:
+    """机翻语种的源文本：**优先英文**，缺英文的键回落简体（2026-09-12）。
+
+    简体菜单词极短且多义（「文件」→ HY-MT 给 tài liệu=文档；英文 File → Tệp 正确），
+    而 zh/en 双列本就齐平，英文源歧义更少、与扩展语「英文底」回落也同源。
+    """
+    return {k: (en[k] if str(en.get(k, "")).strip() else v) for k, v in zh.items()}
 
 
 def _node_json(expr_js: str) -> dict:
@@ -108,14 +125,19 @@ def _node_json(expr_js: str) -> dict:
     return json.loads(p.stdout.decode("utf-8"))
 
 
-def extract_shell_zh() -> dict:
-    return _node_json(
+def extract_shell() -> tuple:
+    d = _node_json(
         "const s=require('./renderer/shell-i18n.js');"
-        "process.stdout.write(JSON.stringify(s._dict.zh))")
+        "process.stdout.write(JSON.stringify({zh:s._dict.zh,en:s._dict.en||{}}))")
+    return d["zh"], d["en"]
 
 
-def extract_shell_str_zh() -> dict:
-    """main.js 的 SHELL_STR 块（含注释的 JS 对象字面量）→ node 求值取 zh。"""
+def extract_shell_zh() -> dict:
+    return extract_shell()[0]
+
+
+def extract_shell_str() -> tuple:
+    """main.js 的 SHELL_STR 块（含注释的 JS 对象字面量）→ node 求值取 zh/en。"""
     text = _MAIN_SRC.read_text(encoding="utf-8")
     m = re.search(r"const SHELL_STR = \{", text)
     if not m:
@@ -135,12 +157,17 @@ def extract_shell_str_zh() -> dict:
     tmp = _ROOT / "tmp" / "_shell_str_dump.js"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text("const SHELL_STR = " + block +
-                   ";\nprocess.stdout.write(JSON.stringify(SHELL_STR.zh));\n",
+                   ";\nprocess.stdout.write(JSON.stringify({zh:SHELL_STR.zh,en:SHELL_STR.en||{}}));\n",
                    encoding="utf-8")
     try:
-        return _node_json(f"require({json.dumps(str(tmp))})")
+        d = _node_json(f"require({json.dumps(str(tmp))})")
     finally:
         tmp.unlink(missing_ok=True)
+    return d["zh"], d["en"]
+
+
+def extract_shell_str_zh() -> dict:
+    return extract_shell_str()[0]
 
 
 def convert_map(zh: dict) -> tuple:
@@ -159,22 +186,32 @@ def convert_map(zh: dict) -> tuple:
     return out, rejected
 
 
-def mt_map(zh: dict, lang: str, api_base: str, model: str,
-           sleep_s: float = 0.05) -> tuple:
-    """{key: 简体} → ({key: 目标语}, 拒绝清单)。HY-MT 单条 + i18n_mt 全量校验。"""
+def mt_map(src_map: dict, lang: str, api_base: str, model: str,
+           sleep_s: float = 0.05, max_error_streak: int = 20) -> tuple:
+    """{key: 源文本} → ({key: 目标语}, 拒绝清单)。HY-MT 单条 + i18n_mt 全量校验。
+
+    源文本由 _mt_source 决定（英文优先）。连续 max_error_streak 条请求异常＝端点
+    掉线，直接中止而不是把整表静默判成拒绝（08-27 那次 0 键「成功」就是这么来的）。
+    """
     from scripts.i18n_mt import translate_one_ollama_mt, validate_entry
     out: dict = {}
     rejected: list = []
-    keys = list(zh)
+    keys = list(src_map)
     t0 = time.time()
+    streak = 0
     for n, k in enumerate(keys, 1):
-        src = str(zh[k])
+        src = str(src_map[k])
         try:
             tr = translate_one_ollama_mt(api_base, model, lang, src)
-        except Exception:  # noqa: BLE001 —— 单条失败留给重跑
+            streak = 0
+        except Exception as e:  # noqa: BLE001 —— 单条失败留给重跑
             rejected.append(k)
+            streak += 1
+            if streak >= max_error_streak:
+                raise SystemExit(f"[desktop_ext] {lang} 连续 {streak} 条请求失败，"
+                                 f"端点疑似离线，中止：{e}")
             continue
-        if validate_entry(k, src, tr):
+        if validate_entry(k, src, tr, en=src):
             rejected.append(k)
             continue
         out[k] = tr
@@ -216,7 +253,7 @@ def _emit_js(path: Path, what: str, lang: str, how: str, host: str, hook: str,
 
 def _emit_lang(lang: str, cp: dict, shell: dict, sstr: dict) -> None:
     """三个 overlay 落盘（cp 双树同步；shell-str 合并进多语 JSON）。"""
-    how = "OpenCC s2twp+术语钉" if lang == "zh_hant" else "HY-MT 机翻(占位符掩码)"
+    how = "OpenCC s2twp+术语钉" if lang == "zh_hant" else "HY-MT 机翻(英文源·占位符掩码)"
     cp_out = _CP_DIR / f"cp-i18n-ext.{lang}.js"
     _emit_js(cp_out, "副驾组件", lang, how, "cp-i18n.js", "CopilotShared.regExt",
              "if (root.CopilotShared && typeof root.CopilotShared.regExt === 'function')"
@@ -244,11 +281,16 @@ def _emit_lang(lang: str, cp: dict, shell: dict, sstr: dict) -> None:
                         encoding="utf-8")
 
 
+# 机翻产物落盘的通过率地板：低于它＝端点/校验链出了问题，拒绝覆盖现有文件
+# （此前 0 键也「成功」落盘，三语坐席吃了两周空壳还没红灯）。--force 可越过。
+_MT_MIN_RATIO = 0.6
+
+
 def run_generate(langs: tuple = ("zh_hant",), *, api_base: str = "",
-                 model: str = "", dry_run: bool = False) -> dict:
-    cp_zh = extract_cp_zh()
-    shell_zh = extract_shell_zh()
-    str_zh = extract_shell_str_zh()
+                 model: str = "", dry_run: bool = False, force: bool = False) -> dict:
+    cp_zh, cp_en = extract_cp()
+    shell_zh, shell_en = extract_shell()
+    str_zh, str_en = extract_shell_str()
     report: dict = {}
     for lang in langs:
         if lang == "zh_hant":
@@ -258,18 +300,27 @@ def run_generate(langs: tuple = ("zh_hant",), *, api_base: str = "",
         elif lang in _MT_LANGS:
             if not api_base or not model:
                 raise SystemExit(f"{lang} 是机翻语种：--api-base/--model 必填")
-            cp, r1 = mt_map(cp_zh, lang, api_base, model)
-            shell, r2 = mt_map(shell_zh, lang, api_base, model)
-            sstr, r3 = mt_map(str_zh, lang, api_base, model)
+            cp, r1 = mt_map(_mt_source(cp_zh, cp_en), lang, api_base, model)
+            shell, r2 = mt_map(_mt_source(shell_zh, shell_en), lang, api_base, model)
+            sstr, r3 = mt_map(_mt_source(str_zh, str_en), lang, api_base, model)
         else:
             raise SystemExit(f"未知语种: {lang}")
+        total_src = len(cp_zh) + len(shell_zh) + len(str_zh)
+        got = len(cp) + len(shell) + len(sstr)
         stats = {"cp": len(cp), "shell": len(shell), "shell_str": len(sstr),
-                 "rejected": len(r1) + len(r2) + len(r3)}
+                 "rejected": len(r1) + len(r2) + len(r3),
+                 "ratio": round(got / max(1, total_src), 3)}
         report[lang] = stats
         if dry_run:
             print(f"[desktop_ext] dry-run {lang}: {json.dumps(stats, ensure_ascii=False)}")
             continue
+        if lang in _MT_LANGS and stats["ratio"] < _MT_MIN_RATIO and not force:
+            print(f"[desktop_ext] {lang} 通过率 {stats['ratio']:.0%} < {_MT_MIN_RATIO:.0%}，"
+                  f"拒绝落盘（--force 可越过）：{json.dumps(stats, ensure_ascii=False)}")
+            stats["written"] = False
+            continue
         _emit_lang(lang, cp, shell, sstr)
+        stats["written"] = True
         print(f"[desktop_ext] {lang} 已生成: {json.dumps(stats, ensure_ascii=False)}")
     return report
 
@@ -282,11 +333,14 @@ def main() -> int:
     g.add_argument("--api-base", default="", help="机翻语种的 ollama 端点")
     g.add_argument("--model", default="", help="机翻语种的模型名")
     g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--force", action="store_true",
+                   help="机翻通过率低于地板也落盘（默认拒绝，防空壳覆盖）")
     a = ap.parse_args()
     if a.cmd == "generate":
-        run_generate(tuple(x.strip() for x in a.langs.split(",") if x.strip()),
-                     api_base=a.api_base, model=a.model, dry_run=a.dry_run)
-        return 0
+        rep = run_generate(tuple(x.strip() for x in a.langs.split(",") if x.strip()),
+                           api_base=a.api_base, model=a.model, dry_run=a.dry_run,
+                           force=a.force)
+        return 0 if all(s.get("written", True) for s in rep.values()) else 2
     return 1
 
 

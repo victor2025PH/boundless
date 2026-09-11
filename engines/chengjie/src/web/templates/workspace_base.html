@@ -1027,7 +1027,9 @@
   <a class="ws-lang-pill" id="ws-lang-pill" onclick="window.wsToggleLang&&window.wsToggleLang()"
      data-i18n-title="base.um.lang_t" title="切换语言 / Switch language"
      style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px;border-radius:13px;">
-    <span data-ui-icon="globe" data-size="13"></span><span data-i18n="lang_toggle">English</span>
+    {#- pill 文字＝当前语言母语自称（2026-09-12；此前是「语言/English」这种不带状态的标签，
+        用户不知道自己现在处于哪一语；title 仍是「切换语言」） -#}
+    <span data-ui-icon="globe" data-size="13"></span><span>{{ ui_lang_native|default((i18n or {}).get('lang_toggle', '语言')) }}</span>
   </a>
   {#- 档位徽章（融合实例 P4b）：feature_gate 开启才渲染（plan_badge 由 admin._enrich_context
       全局注入,gate 关=None=零变化）。主管可点进会员中心；坐席不可点（/membership 不在
@@ -1098,7 +1100,7 @@
          data-i18n-title="base.um.appearance_all_t" title="壁纸 / 气泡色 / 夜间定时 / 字号 / 圆角 / 动画（在管理后台窗口打开）" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="spark" data-size="14"></span><span data-i18n="ap.all_settings">全部外观设置</span></a>
       <a class="ws-um-item" id="ws-prefs-btn" data-i18n="base.um.prefs" data-i18n-title="base.um.prefs_t" title="告警阈值 / 免打扰 / 消息提示音 / 弹窗"
          onclick="document.getElementById('ws-user-menu').classList.remove('show')" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="gear" data-size="14"></span><span data-i18n="base.um.prefs">告警 / 通知设置</span></a>
-      <a class="ws-um-item" id="ws-lang-toggle" onclick="window.wsToggleLang&&window.wsToggleLang()" data-i18n-title="base.um.lang_t" title="切换语言 / Switch language" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="globe" data-size="14"></span><span data-i18n="lang_toggle">English</span></a>
+      <a class="ws-um-item" id="ws-lang-toggle" onclick="window.wsToggleLang&&window.wsToggleLang()" data-i18n-title="base.um.lang_t" title="切换语言 / Switch language" style="display:flex;align-items:center;gap:6px;"><span data-ui-icon="globe" data-size="14"></span><span data-i18n="lang_toggle">{{ (i18n or {}).get('lang_toggle', '语言') }}</span><span style="opacity:.6;font-size:12px;">· {{ ui_lang_native|default('') }}</span></a>
       <a class="ws-um-item" id="ws-admin-link" href="/" data-winname="admin" onclick="return __openUnique(event,this)" style="display:none;" data-i18n-title="base.um.admin_t" title="渠道 / 系统 / 配置（系统管理）"><span data-ui-icon="wrench" data-size="14"></span> <span data-i18n="base.um.admin">管理后台</span></a>
       {#- 报障入口（实施49 P1-9；实施51 起顶栏另有常驻「求助」药丸，本项保留=菜单
           习惯用户的第二入口）。面板见 _support.html：一键打包直传，官网收包自动推送
