@@ -1750,6 +1750,27 @@ ai:
   #   assistant_qa:      qa_cheap
   #   computer_use:      cu_vlm
 
+  # ── 会话级模型路由 / 「无限制」档（2026-09-12，composer 键盘图标左侧「模型 ▾」）─────
+  # 坐席按**会话**挑：标准（实例主链，规则全开）或 无限制（LAN 私有去审查模型直答，
+  # **只走该端点、不回落云端**；本会话人设规则 / 出站改写守卫 / 风控分级 / 手发 409 护栏
+  # 全部让路）。再带 Cursor 式旋钮：上下文档（复用 ai.context_depth 四档，按端点硬上限封顶）
+  # / 力度（低/中/高 ≈ 答复长度与温度，UI 明示非推理力度）/ 思考开关。
+  # 无限制档端点：``ai.models.<profile>`` 显式档优先；缺席时自动绑到 ``ai.fallback``
+  # （现网 zhiliao 即 173:8001/chatx＝Qwen3.6-27B-abliterated，64k）；两者皆无＝该档不可用
+  # （UI 探活如实报离线，绝不静默换成云端）。存储：app_settings KV ``conv_model_route:<cid>``。
+  # 五条「账号与人身保险丝」（Kill-Switch/ban_signal、账号冷启动 send_gate、stop_contact 冻结、
+  # 危机自伤兜底、授权/token 硬拒）默认仍生效；连它们也关有两把钥匙、任一为真即全关：
+  # 会话级 bypass_safety（弹层里逐会话、有审计）或下面的全局 bypass_safety_brakes。
+  # 授权：licensing.feature_gate 登记 unrestricted_model=flagship（闸门总开关默认关＝全放行）。
+  # unrestricted:
+  #   enabled: true                 # false = composer 不出「无限制」项（已选的会话按标准档跑）
+  #   profile: unrestricted         # 指向 ai.models 里的档名（缺席 → ai.fallback）
+  #   max_ctx: 65536                # 端点上下文硬上限（封顶「上下文」档；ai.models 档内 max_ctx 优先）
+  #   bypass_safety_brakes: false   # 全局钥匙：true = 无限制会话连五条安全刹车也不拦（慎）
+  # models:
+  #   unrestricted: { base_url: http://192.168.0.173:8001/v1, model: chatx, api_key: vllm,
+  #                   max_ctx: 65536, supports_thinking: true }
+
   # 系统提示词
   system_prompt: |
     你是智能助手小灵，为用户提供友好、专业的客服服务。

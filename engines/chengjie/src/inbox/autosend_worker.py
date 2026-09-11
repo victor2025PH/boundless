@@ -976,16 +976,25 @@ class AutosendWorker:
         if now - float(self._agent_typing_ts.get(conv, 0.0)) <= AGENT_ACTIVITY_WINDOW_SEC:
             return "agent_typing"
         if store is not None:
+            # 会话级「无限制」（conv_route，2026-09-12）：⑤ 风险持有 / ⑥ 需人工标 属风控层，
+            # 本会话让路（①–④ 坐席在环信号是人工优先，不是拦截，照常）。异常 → 照常判。
+            _unr_hold = _unr_tag = False
+            try:
+                from src.ai.conv_route import skip_for_conv as _cr_skip_w
+                _unr_hold = bool(_cr_skip_w(store, conv, "risk_hold"))
+                _unr_tag = bool(_cr_skip_w(store, conv, "needs_human_tag"))
+            except Exception:
+                _unr_hold = _unr_tag = False
             try:
                 from src.inbox import risk_hold as _rh
-                _hold = _rh.active(store, conv)
+                _hold = "" if _unr_hold else _rh.active(store, conv)
                 if _hold:
                     # 泛因 needs_human（打标派生）按 needs_human 报，其余（privacy / commitment /
                     # stop_contact…）按 risk_hold 报——日志能直接看出是哪一类闸
                     return "needs_human" if _hold == _rh.GENERIC_REASON else "risk_hold"
             except Exception:
                 logger.debug("[AutosendWorker] risk_hold 判定异常（放行）", exc_info=True)
-            if hasattr(store, "get_conv_tags"):
+            if hasattr(store, "get_conv_tags") and not _unr_tag:
                 try:
                     from src.integrations.protocol_autoreply import HANDOFF_TAG as _hp_tag
                     if _hp_tag in list(store.get_conv_tags(conv) or []):

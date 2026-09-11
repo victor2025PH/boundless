@@ -67,6 +67,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     # white_label 的真正强制在 branding（gate.feature_allowed，需 licensing.enforce）；
     # 这里登记仅供会员中心矩阵展示，不重复强制（防双源口径漂移）。
     "white_label": "flagship",
+    # 会话级「无限制模型」（conv_route，2026-09-12）：LAN 私有去审查模型直答 + 规则层让路。
+    # 强制点在 conv-model-route POST（conv_route.feature_allowed），非前缀表；这里登记供
+    # 档位判定与会员中心矩阵展示。闸门总开关默认关＝全放行（launch day 不锁坐席）。
+    "unrestricted_model": "flagship",
 }
 
 # API 前缀 → 功能名（最长前缀优先匹配；路由均直挂 @app 无 APIRouter prefix，

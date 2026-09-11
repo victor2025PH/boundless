@@ -1143,12 +1143,25 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 _ff["agent"], _ff["sess"], _ff["entry"], _ff["src"],
                 _ff["ip"], _ff["cmid"])
 
+        # 会话级「无限制」（conv_route，2026-09-12）：语言错配 / 近重复两道 409 护栏属
+        # 质量层，本会话让路（等价于坐席已勾强发；store 缺席 / 异常 → 照拦）。
+        _unr_lang = _unr_dup = False
+        try:
+            from src.ai.conv_route import skip_for_conv as _cr_skip_send
+            _ibx_unr = _inbox_store(request)
+            _cid_unr = _conv_id(platform, account_id, chat_key)
+            if _ibx_unr is not None and _cid_unr:
+                _unr_lang = bool(_cr_skip_send(_ibx_unr, _cid_unr, "lang_mismatch"))
+                _unr_dup = bool(_cr_skip_send(_ibx_unr, _cid_unr, "outbound_dup"))
+        except Exception:
+            _unr_lang = _unr_dup = False
+
         # ── P0-198 语言错配护栏（后半，通用兜底）：无论翻译是否被请求/是否成功，
         #    只要**即将发出的文本**仍含 CJK 而客户会话语言是非 CJK → 409 交坐席确认
         #    （body.force_lang=1 显式强发）。覆盖三条泄漏路径：identity 跳过、引擎
         #    失败回落原文、坐席把中文草稿直接填入发送。发中文给外语客户=人设当场
         #    穿帮，宁可多一次确认。
-        if contains_cjk(text) and not bool(body.get("force_lang")):
+        if contains_cjk(text) and not bool(body.get("force_lang")) and not _unr_lang:
             _guard_lang = normalize_lang(
                 target_lang
                 or _resolve_conv_language(request, platform, account_id, chat_key)
@@ -1170,7 +1183,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         #    交坐席确认（body.force_dup=1 强发）。实锤：「生成草稿→填入并发送」对同一
         #    条入站连点三次，三条同义改写全部发出；以及把客户已答过的问题隔分钟再问。
         #    幂等键只防「同一请求重放」，防不了「每次重生都是新请求」——这道守卫补位。
-        if not bool(body.get("force_dup")):
+        if not bool(body.get("force_dup")) and not _unr_dup:
             try:
                 from src.inbox.outbound_dup_guard import (
                     near_duplicate_of_recent,

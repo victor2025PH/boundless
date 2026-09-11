@@ -2159,6 +2159,17 @@ _ADDITIONS_2026_09_11_Q18_AGENT_YIELD = """
 """
 _BASELINE += _ADDITIONS_2026_09_11_Q18_AGENT_YIELD
 
+# 会话级模型路由（conv_model_route_routes.py，2026-09-12）：composer 键盘图标左侧「模型 ▾」
+# ——按会话选 标准 / 无限制（LAN 173 去审查模型直答，规则层让路）+ 上下文档 / 力度 / 思考；
+# 端点探活（1-token chat ping）与观测快照。SSOT src/ai/conv_route.py。
+_ADDITIONS_2026_09_12_CONV_MODEL_ROUTE = """
+/api/unified-inbox/conv-model-route	GET
+/api/unified-inbox/conv-model-route	POST
+/api/ai/model-route/health	GET
+/api/ai/model-route/stats	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_12_CONV_MODEL_ROUTE
+
 
 def _parse_baseline():
     expected = set()

@@ -322,6 +322,10 @@ def decide(
     if str(kind or "draft") == SOFT_REPLY_KIND:
         return _decide_soft_reply(automation_mode, ctx, policy_mode, platform, conversation_frozen,
                                   conversation_id, store, risk_hold_reason)
+    unr = _decide_unrestricted(peer_reasons, automation_mode, policy_mode, platform,
+                               conversation_id, store)
+    if unr is not None:
+        return unr
     base = _decide_base(
         peer_risk, peer_reasons, reply_risk, reply_reasons, risk_hits,
         automation_mode, policy_mode, platform, conversation_frozen)
@@ -349,6 +353,50 @@ def decide(
     return Decision(level="L1", hold_reason=f"risk_hold:{hold}", shadow=shadow,
                     policy_mode=base.policy_mode, automation_mode=base.automation_mode,
                     review_required=True, risk_hold=hold)
+
+
+def _decide_unrestricted(peer_reasons: Iterable[str], automation_mode: str,
+                         policy_mode: Optional[str], platform: str,
+                         conversation_id: str, store: Any) -> Optional[Decision]:
+    """会话级「无限制」（conv_route，2026-09-12）：风控分级层整段让路。
+
+    - 非无限制会话 / 无 store / 无会话 id → None（逐字节走原判定）；
+    - 硬停（stop_contact / self_harm）属安全刹车：未开 ``bypass_safety`` → None，让原判定
+      按硬停语义处理（告别一条 + 冻结）；开了 → 与其他风险原因一样忽略；
+    - 其余：peer/reply 风险、关键词命中、policy_mode、risk_hold 全不参与——
+      ``auto_ai`` → L2 直发；review/manual/multi_choice 是坐席自己选的「谁来答」，
+      不是拦截，保留档位（``mode:<mode>``），不进影子台账。
+    """
+    cid = str(conversation_id or "").strip()
+    if not cid or store is None:
+        return None
+    try:
+        from src.ai.conv_route import skip_for_conv
+        if not skip_for_conv(store, cid, "risk_level"):
+            return None
+        bypass_hard = bool(skip_for_conv(store, cid, "hard_stop"))
+    except Exception:
+        return None
+    hard = hard_stop_reason([str(r) for r in (peer_reasons or [])])
+    if hard and not bypass_hard:
+        return None
+    mode = normalize_automation_mode(automation_mode)
+    if not policy_mode and platform:
+        try:
+            from src.inbox.channel_policy import risk_policy_mode as _cp_risk_mode
+            policy_mode = _cp_risk_mode(platform) or None
+        except Exception:
+            policy_mode = None
+    pm = normalize_policy_mode(policy_mode) if policy_mode else current_policy_mode()
+    if mode == "auto_ai":
+        dec = Decision(level="L2", hold_reason="", shadow=None, policy_mode=pm,
+                       automation_mode=mode)
+    else:
+        dec = Decision(level=mode_level(mode), hold_reason=f"mode:{mode}", shadow=None,
+                       policy_mode=pm, automation_mode=mode)
+    logger.info("[policy] conv=%s unrestricted → level=%s mode=%s (risk layer bypassed%s)",
+                cid, dec.level, mode, ", hard_stop ignored" if hard else "")
+    return dec
 
 
 def _decide_soft_reply(automation_mode: str, ctx: Any, policy_mode: Optional[str], platform: str,

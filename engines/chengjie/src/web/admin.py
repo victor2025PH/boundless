@@ -4136,6 +4136,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_aii.getLogger("admin").warning("AI 提示词调试口注册失败", exc_info=True)
 
+    # 会话级模型路由（2026-09-12，composer「模型 ▾」/ 无限制档 173 直答）：
+    # conv-model-route 读写 + 端点探活 + 观测。SSOT src/ai/conv_route.py。
+    # 基线登记：tests/test_admin_route_inventory.py `_ADDITIONS_2026_09_12_CONV_MODEL_ROUTE`。
+    try:
+        from src.web.routes.conv_model_route_routes import register_conv_model_route_routes
+
+        register_conv_model_route_routes(app, api_auth=_api_auth, config_manager=config_manager)
+    except Exception:
+        import logging as _log_cmr
+
+        _log_cmr.getLogger("admin").warning("会话级模型路由注册失败", exc_info=True)
+
     # ── 账号资产中心（账号资产保全 P1，2026-08-19）：/workspace/assets ──
     # 独立注册块（同 boss_routes 例：不与草稿链装配连坐；须留在
     # _unified_inbox_page_auth 定义之后，挪前会 NameError 被 try 静默吞掉）。

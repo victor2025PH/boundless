@@ -375,6 +375,21 @@ class DraftService:
         self._stale_approve_hours = float(stale_approve_hours or 0)
         self._soft_reply_cb = soft_reply_cb
 
+    def _unrestricted_skip(self, conversation_id: str, layer: str) -> bool:
+        """会话级「无限制」（conv_route，2026-09-12）：本会话是否跳过某一层护栏。
+
+        只认 conv_route 登记的层名（``stale_approve`` / ``risk_level`` …），未登记恒 False；
+        store 缺席 / 任何异常 → False（照常拦，安全默认）。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid or self._store is None:
+            return False
+        try:
+            from src.ai.conv_route import skip_for_conv
+            return bool(skip_for_conv(self._store, cid, layer))
+        except Exception:
+            return False
+
     def _stale_check(
         self,
         draft: Dict[str, Any],
@@ -781,12 +796,18 @@ class DraftService:
         if draft is None:
             return {"ok": False, "error": "草稿不存在", "code": 404}
 
+        # 会话级「无限制」（conv_route，2026-09-12）：稿龄 / 已回过 / 关键词升级 / L4 强拦
+        # 全是质量护栏，本会话让路；account_offline（通过了也发不出去）不是规则，照拦。
+        _unr_cid = str(draft.get("conversation_id") or "")
+        _unr_stale = self._unrestricted_skip(_unr_cid, "stale_approve")
+        _unr_risk = self._unrestricted_skip(_unr_cid, "risk_level")
+
         stale = self._stale_check(draft, action, force_override=force_override)
-        if stale is not None:
+        if stale is not None and not (_unr_stale and stale.get("too_stale")):
             return stale
 
         # 关键词强制升级 risk（peer_text 或 draft_text 命中则升 risk + autopilot）
-        kw_risk = keyword_risk_level(
+        kw_risk = "" if _unr_risk else keyword_risk_level(
             str(draft.get("peer_text") or "") + " " + str(draft.get("draft_text") or "")
         )
         base_risk = str(draft.get("risk_level") or "unknown")
@@ -819,7 +840,7 @@ class DraftService:
 
         # ── L4 强制拦截 ──
         if autopilot == "L4" and action in {"approve", "edit_send", "autosend"}:
-            if not force_override:
+            if not force_override and not _unr_risk:
                 self._write_audit(
                     draft_id, autopilot, "blocked", by,
                     reason="L4 high-risk blocked (no force_override)",
@@ -833,10 +854,11 @@ class DraftService:
                     "autopilot_level": "L4",
                     "blocked": True,
                 }
-            # force_override 路径
+            # force_override 路径（无限制会话：风控分级层让路＝视同放行，但审计留痕写明缘由）
             self._write_audit(
                 draft_id, autopilot, "force_override", by,
-                reason="supervisor forced override of L4 block",
+                reason=("supervisor forced override of L4 block" if force_override
+                        else "unrestricted conversation: risk layer bypassed (L4 block skipped)"),
                 risk_level=effective_risk,
                 conversation_id=conv_id,
             )
