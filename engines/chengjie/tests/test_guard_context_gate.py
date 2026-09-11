@@ -188,6 +188,36 @@ def test_review_mode_soft_reply_becomes_review_candidate(store):
     assert d.level == "L1" and d.hold_reason == "mode:review" and d.review_required
 
 
+def test_q27_explicit_without_pressure_under_ctx_is_medium_no_tag_no_hold(store):
+    """Q-27 #301：新级别表下 ctx 路径——露骨**无施压**（explicit）× review 档 → 中级、审核候选、
+    **不打标不持有**（与上一例 pressure 转人工形成对照）；auto_ai 私聊 → 软回应经闸门排出、同样不打标不持有。"""
+    svc = _Svc(store, _CFG)
+    text = "I love your naked photos"
+    assert ag.grade(text, "en")["level"] == "explicit"
+    conv = _conv("555000333", chat_type="private")
+    cid = conv["conversation_id"]
+    ctx = gc.build(conv, automation_mode="review", lang="en", cfg=_CFG, store=store)
+    risk, reasons, info = ag.regrade_inbound(svc, conv, text, "en", "high", ["adult"], ["naked"],
+                                             automation_mode="review", cfg=_CFG, ctx=ctx)
+    assert risk == "medium" and reasons[0] == ag.SOFT_REASON and info["needs_human"] is False
+    assert f"{ag.SOFT_ALT_PREFIX}review" in reasons and info["soft_reply_status"] == "review_candidate"
+    _assert_untouched(store, svc, cid)
+    # risk_grader 同一条：adult 中级 → risk:medium 标（不是 needs_human）
+    r_risk, r_reasons, r_info = rg.regrade_inbound(svc, conv, text, "en", risk, list(reasons), ["naked"],
+                                                   automation_mode="review", cfg=_CFG, ctx=ctx)
+    assert r_risk == "medium" and r_info["category"] == "adult" and "risk:adult" in r_reasons
+    assert rg.MEDIUM_TAG in store.get_conv_tags(cid) and HANDOFF_TAG not in store.get_conv_tags(cid)
+    # auto_ai 私聊：软回应排出（_Svc 只记录），仍不打标不持有
+    conv2 = _conv("555000444", chat_type="private")
+    ctx2 = gc.build(conv2, automation_mode="auto_ai", lang="en", cfg=_CFG, store=store)
+    risk2, reasons2, info2 = ag.regrade_inbound(svc, conv2, text, "en", "high", ["adult"], ["naked"],
+                                                automation_mode="auto_ai", cfg=_CFG, ctx=ctx2)
+    assert risk2 == "medium" and info2["needs_human"] is False
+    assert info2["soft_reply_status"] in ("scheduled", "no_loop")   # 桩无事件循环时 dispatch 报 no_loop
+    assert HANDOFF_TAG not in store.get_conv_tags(conv2["conversation_id"])
+    assert risk_hold.active(store, conv2["conversation_id"]) is None
+
+
 def test_worker_gate_review_row_aborts_and_auto_ai_row_sends_generated_only(store, monkeypatch):
     sent: List[tuple] = []
     conv = _conv("555000222", chat_type="private")

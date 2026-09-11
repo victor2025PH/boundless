@@ -1205,6 +1205,10 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
     chip / 横幅 / 体检）。两条幂等纪律：① 标已在场且 risk_hold 活跃 → 只 ``risk_hold.touch``
     更新 last_hit，不重打不重弹；② 人工摘标后同类 30 分钟冷却期内（``risk_hold.cooldown_blocks``）
     不高于冷却级别的新命中 → 不打标（日志 ``cooldown_skipped=true``）。
+
+    Q-27（#301 追加 AFD2CD）：③ 保持路径若本条 ``level=low`` 且持有是旧的（≥60s）→ **不保持、直接 clear**
+    （持有 + 标 + meta，系统动作不冷却）——低级不能续命一个 hold；④ 保持行一律带 ``level= category= hits=``，
+    本条无类别时回落持有自身（``hold_level / hold_category / hold_hits`` 取 handoff_meta，chip / 横幅同源）。
     """
     if store is None:
         return False
@@ -1262,7 +1266,7 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
                 _mcat, _mlvl = str(_m.get("category") or ""), str(_m.get("level") or "")
                 _mhits = [str(h) for h in (_m.get("hits") or [])][:4]
             except Exception:
-                pass
+                logger.debug("[needs_human] 保持行读 handoff_meta 失败（回落 -）conv=%s", cid, exc_info=True)
             logger.info("[needs_human] 保持 conv=%s reason=%s level=%s category=%s hits=%s hold=%s hold_level=%s hold_category=%s hold_hits=%s（已打标，只更新 last_hit）",
                         cid, reason or "-", _lvl or "-", _cat or _mcat or "-", "|".join(_hits or _mhits) or "-",
                         _hold_reason or "-", _mlvl or "-", _mcat or "-", "|".join(_mhits) or "-")

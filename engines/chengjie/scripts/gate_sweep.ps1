@@ -426,7 +426,12 @@ $gates = @(
     # Q-23 #303（2026-09-12）：自动出站单一闸门 + GuardContext 场景维度——报障群被软回应刷屏事故。
     # 钉：群/非客户不评估不出站；review 档软回应=审核候选；软回应只经 autosend_worker stage=soft_reply；
     # _inbox_deliver_cb 只剩坐席人工通过一个调用方（静态扫描）。
-    'tests/test_guard_context_gate.py'
+    'tests/test_guard_context_gate.py',
+    # Q-27 #301 追加 AFD2CD（2026-09-12）：风控最小硬拦集 + risk_hold 生命周期——五类硬拦一字不放松，
+    # keyword-only 永不单独 L1、adult explicit 中级不持有不打标、TTL 2h、摘标/手发/切全自动/低级入站/到期
+    # 任一即 clear by=、保持行必带类别。三条回放（Jeeo cum reply L0 / 华哥旧 hold 后下一条发出 /
+    # bank card number 仍 L1+needs_human+2h）分布在 test_risk_grader_gate；risk_hold API + 切档路由释放钉在此。
+    'tests/test_risk_hold_q3.py'
 )
 
 $missing = @($gates | Where-Object { -not (Test-Path (Join-Path $engineRoot $_)) })
