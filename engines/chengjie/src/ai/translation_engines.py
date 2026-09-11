@@ -1396,6 +1396,18 @@ class EngineRouter:
             if not getattr(eng, "available", False):
                 last_err = f"{eng.name}:unavailable"
                 continue
+            # Q-21 C（#290）：目标语该引擎不支持（DeepL/有道无 yue，OpenCC 只 zh-tw；真支持 yue 的是
+            # Hunyuan-MT / LLM(ai) / Google / Microsoft / Baidu）→ 直接让路，
+            # 不再「试一下失败再切」——那会把粤语请求记成一次引擎失败 + fallback，还白付一次往返。
+            # 与 compare() 同口径；引擎未声明 supports_target 视为全支持。
+            try:
+                if hasattr(eng, "supports_target") and not eng.supports_target(target_lang):
+                    last_err = f"{getattr(eng, 'name', '?')}:unsupported_target:{target_lang}"
+                    logger.debug("[xlate] skip engine=%s unsupported_target=%s",
+                                 getattr(eng, "name", "?"), target_lang)
+                    continue
+            except Exception:
+                pass
             t0 = _t.monotonic()
             try:
                 res = await eng.translate(

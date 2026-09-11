@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -480,6 +482,182 @@ def resolve_outbound_lang(
     if persona:
         return persona, "persona"
     return "", ""
+
+
+# ---------------------------------------------------------------------------
+# Q-21 B（#302 / Y82GWM，2026-09-12）：起草前「会话语言计划」——单点、可追、可见
+# ---------------------------------------------------------------------------
+# Y82GWM：Messenger 客户发英文「Hi」，全自动起草了中文——生成侧 resolve_reply_language 的
+# default 落到 lang_prior/zh，而出站侧 resolve_outbound_lang 早就能按拉丁文字系统判 en；两条
+# 链各判各的，日志里没有任何一行说「这条稿为什么用这个语言」。本段把决策收成一份
+# ``ConvLangPlan``：复用上面的六级（**顺序不改**）+ 客户明确语言请求 + 账号先验兜底，
+# 一行 ``[lang-plan]`` 日志，人设产线的 reply_lang **只读它**；进程级注册表供 /api/drafts、
+# 会话头「对方语言未知 · 按人设语言回」chip 读取（#302：lang_unknown 不再静默 L1）。
+_PLAN_CONFIDENCE = {
+    "manual": 1.0, "request": 0.95, "profile": 0.9, "message": 0.85, "message_script": 0.6,
+    "outbound_history": 0.5, "persona": 0.4, "account_prior": 0.3, "unknown": 0.0,
+}
+#: 这些 decided_by 代表「对方语言有证据」；其余（persona / account_prior / unknown）＝对方语言未知
+PLAN_PEER_EVIDENCE = frozenset({"manual", "request", "profile", "message", "message_script"})
+_PLAN_REG: Dict[str, Tuple[Dict[str, Any], float]] = {}
+_PLAN_REG_MAX = 2000
+_PLAN_REG_TTL = 6 * 3600.0
+
+
+@dataclass
+class ConvLangPlan:
+    conversation_id: str
+    reply_lang: str          # 人设产线起草语言（"" = 判不出，产线按旧 default 起草）
+    xlate_target: str        # 出站翻译目标（与 reply_lang 同源；出站链仍自行 resolve，此处只记录）
+    tts_lang: str            # 语音合成语言（Q-22 消费；本批只透传）
+    decided_by: str          # manual/request/profile/message/outbound_history/persona/account_prior/unknown
+    confidence: float
+    persona_lang: str = ""   # 人设对外语言（chip 文案「按人设语言（English）回」用）
+    peer_known: bool = False  # 对方语言是否有证据
+    via: str = ""            # 六级原始来源（message_script 等细分；decided_by 把 message_script 归并为 message）
+
+    @property
+    def fallback(self) -> bool:
+        """对方语言未知、按人设/账号默认语言起草（会话头 + 稿头需标注）。"""
+        return bool(self.reply_lang) and not self.peer_known
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "conversation_id": self.conversation_id, "reply_lang": self.reply_lang,
+            "xlate_target": self.xlate_target, "tts_lang": self.tts_lang,
+            "decided_by": self.decided_by, "confidence": round(float(self.confidence), 2),
+            "persona_lang": self.persona_lang, "peer_known": bool(self.peer_known),
+            "fallback": self.fallback, "via": self.via,
+            # Q-26 conv_state._src_lang 读的键名（会话头状态带「对方语言未知 · 按人设语言回」）
+            "peer_lang_unknown": self.fallback,
+            "ts": int(time.time()),
+        }
+
+
+#: 落库键（Q-26 ``conv_state._LANG_PLAN_KEYS`` 第一候选；重启后会话头 / 稿头 chip 仍可读）
+_PLAN_KV_KEY = "conv_lang_plan:{cid}"
+
+
+def _plan_note(cid: str, plan: "ConvLangPlan", store: Any = None) -> None:
+    if not cid:
+        return
+    now = time.time()
+    d = plan.as_dict()
+    _PLAN_REG[cid] = (d, now)
+    if len(_PLAN_REG) > _PLAN_REG_MAX:
+        cutoff = now - _PLAN_REG_TTL
+        for k in [x for x, (_, ts) in _PLAN_REG.items() if ts < cutoff]:
+            _PLAN_REG.pop(k, None)
+        if len(_PLAN_REG) > _PLAN_REG_MAX:
+            for k in sorted(_PLAN_REG, key=lambda x: _PLAN_REG[x][1])[: len(_PLAN_REG) - _PLAN_REG_MAX]:
+                _PLAN_REG.pop(k, None)
+    # 写穿到 app_settings KV：Q-26 状态带只认 KV；进程重启后 /api/drafts、会话头 chip 也还能读。
+    # 只在有决策（reply_lang 非空）时落库——「unknown」计划落库会让状态带读到空语种。
+    if store is not None and plan.reply_lang and hasattr(store, "set_app_setting"):
+        try:
+            import json as _json
+            store.set_app_setting(_PLAN_KV_KEY.format(cid=cid), _json.dumps(d, ensure_ascii=False), "lang_plan")
+        except Exception:
+            logger.debug("[lang-plan] KV 落库失败（忽略）conv=%s", cid, exc_info=True)
+
+
+def peek_conv_lang_plan(conversation_id: str, store: Any = None) -> Optional[Dict[str, Any]]:
+    """读最近一次为该会话算出的语言计划（进程注册表 → 给了 store 再回落 KV；无 → None，绝不抛）。"""
+    cid = str(conversation_id or "")
+    try:
+        rec = _PLAN_REG.get(cid)
+        if rec:
+            return dict(rec[0])
+    except Exception:
+        return None
+    if store is None or not cid or not hasattr(store, "get_app_setting"):
+        return None
+    try:
+        import json as _json
+        raw = store.get_app_setting(_PLAN_KV_KEY.format(cid=cid), "")
+        if isinstance(raw, str) and raw.strip().startswith("{"):
+            d = _json.loads(raw)
+            return dict(d) if isinstance(d, dict) and d else None
+    except Exception:
+        pass
+    return None
+
+
+def _reset_plan_registry_for_tests() -> None:
+    _PLAN_REG.clear()
+
+
+def build_conv_lang_plan(
+    conversation_id: str,
+    *,
+    store: Any = None,
+    cfg_root: Any = None,
+    platform: str = "",
+    account_id: str = "",
+    chat_key: str = "",
+    detect: Any = None,
+    contacts_store: Any = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    log: bool = True,
+) -> ConvLangPlan:
+    """起草前算一次「这条会话该用什么语言回」，登记 + 一行 ``[lang-plan]`` 日志。
+
+    决策：``resolve_outbound_lang`` 六级原样（① manual 最高，不改顺序）→ 若六级结果**不是**
+    manual 且历史里有客户**明确语言请求**（「用日语聊吧」/ please speak japanese，
+    ``lang_policy.latest_explicit_request``）→ 以请求为准（``request``）→ 六级全空时才补一级
+    账号先验（``lang_prior``，``account_prior``）；仍空 → ``unknown``（reply_lang=""，产线按旧
+    default 起草，chip 标「对方语言未知」）。任何异常 → unknown 计划，绝不阻断拟稿。
+    """
+    cid = str(conversation_id or "")
+    if (platform == "" or chat_key == "") and cid.count(":") >= 2:
+        parts = cid.split(":", 2)
+        platform = platform or parts[0]
+        account_id = account_id or parts[1]
+        chat_key = chat_key or parts[2]
+    lang, by = "", ""
+    try:
+        lang, by = resolve_outbound_lang(
+            cid, store=store, detect=detect, contacts_store=contacts_store,
+            cfg_root=cfg_root, platform=platform, account_id=account_id, chat_key=chat_key)
+    except Exception:
+        logger.debug("[lang-plan] resolve_outbound_lang 异常 conv=%s", cid, exc_info=True)
+    persona = ""
+    try:
+        persona = persona_default_lang(cfg_root, platform, account_id, chat_key)
+    except Exception:
+        persona = ""
+    if by != "manual" and history:
+        try:
+            from src.ai.lang_policy import latest_explicit_request
+            req = normalize_target(latest_explicit_request(history) or "")
+            if req:
+                lang, by = req, "request"
+        except Exception:
+            pass
+    if not lang:
+        try:
+            from src.ai.lang_prior import initial_lang_hint
+            prior = normalize_target(initial_lang_hint(
+                platform=platform, account_id=account_id, chat_key=chat_key,
+                config=cfg_root if isinstance(cfg_root, dict) else {}) or "")
+            if prior:
+                lang, by = prior, "account_prior"
+        except Exception:
+            pass
+    via = by or "unknown"
+    by = "message" if via == "message_script" else via   # 文字系统兜底仍是「客户消息证据」
+    plan = ConvLangPlan(
+        conversation_id=cid, reply_lang=lang, xlate_target=lang, tts_lang=lang,
+        decided_by=by, confidence=_PLAN_CONFIDENCE.get(via, 0.0),
+        persona_lang=persona, peer_known=(by in PLAN_PEER_EVIDENCE), via=via,
+    )
+    _plan_note(cid, plan, store=store)
+    if log:
+        logger.info(
+            "[lang-plan] conv=%s reply=%s xlate=%s tts=%s by=%s via=%s conf=%.2f persona=%s fallback=%d",
+            cid, plan.reply_lang or "-", plan.xlate_target or "-", plan.tts_lang or "-",
+            plan.decided_by, via, plan.confidence, persona or "-", 1 if plan.fallback else 0)
+    return plan
 
 
 def _outbound_history_language(store: Any, conversation_id: str, detect: Any) -> str:

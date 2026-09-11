@@ -551,8 +551,9 @@ class TranslationService:
         零翻译日志）。**不记原文/译文**，只记命中层/引擎/长度/成败/错误码。"""
         try:
             logger.info(
-                "[xlate] hit=%s provider=%s src_len=%d ok=%s%s%s",
-                hit, result.provider or "-", len(result.source_text or ""),
+                "[xlate] hit=%s provider=%s tgt=%s src_len=%d ok=%s%s%s",
+                hit, result.provider or "-", getattr(result, "target_lang", "") or "-",
+                len(result.source_text or ""),
                 "1" if result.ok else "0",
                 (" err=" + str(result.error)) if result.error else "",
                 (" conf=%.2f" % result.confidence)

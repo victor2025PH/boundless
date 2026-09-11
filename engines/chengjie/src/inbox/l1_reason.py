@@ -87,7 +87,17 @@ def _text_weak(text: str) -> bool:
     return len(t) < _WEAK_MIN_CHARS
 
 
-def _lang_unknown(text: str, conv: Optional[Dict[str, Any]]) -> bool:
+def _lang_unknown(text: str, conv: Optional[Dict[str, Any]], store: Any = None) -> bool:
+    # Q-21 B（#302 / Y82GWM）：先问会话语言计划（outbound_translate.build_conv_lang_plan，
+    # 起草链在本判定前已登记）——计划说「对方语言有证据」（英文「Hi」按文字系统判 en）就不是
+    # lang_unknown；计划说「按人设/账号默认回」才是。无计划 → 旧口径（conv.language + 证据）。
+    try:
+        from src.inbox.outbound_translate import peek_conv_lang_plan
+        plan = peek_conv_lang_plan(str((conv or {}).get("conversation_id") or ""), store=store)
+        if plan:
+            return not bool(plan.get("peer_known"))
+    except Exception:
+        pass
     lang = str((conv or {}).get("language") or "").strip().lower()
     if lang and lang != "unknown":
         return False
@@ -147,7 +157,7 @@ def derive_l1_reason(
             if layer in _CAP_LAYER_REASON:
                 return _CAP_LAYER_REASON[layer]
         # ⑤ 账号/全局默认半自动：给坐席最可操作的证据码（语言未定 > 首条 > 证据不足）
-        if _lang_unknown(peer_text, conv):
+        if _lang_unknown(peer_text, conv, store):
             return "lang_unknown"
         if _first_contact(store, cid):
             return "first_contact"

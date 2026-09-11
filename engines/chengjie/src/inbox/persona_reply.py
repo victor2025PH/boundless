@@ -832,6 +832,10 @@ async def _generate_persona_reply_impl(
             _time_hint = f"{_time_hint}\n{_add}" if _time_hint else _add
     except Exception:
         logger.debug("[persona_reply] _prompt_addenda 跳过", exc_info=True)
+    # Q-21 C（#290）：粤语生成链——reply_lang=yue 时注入口语粤语指令 + 3 few-shot（唯一注入口）
+    _yh = yue_style_directive(resolved_lang)
+    if _yh:
+        _time_hint = f"{_time_hint}\n{_yh}" if _time_hint else _yh
 
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
@@ -1054,6 +1058,7 @@ async def _generate_persona_reply_impl(
             f"必须完全使用客户的语言（{resolved_lang}）回复，不要夹杂其它语言。"
             if resolved_lang and resolved_lang != "zh" else ""
         )
+        _lang_hint = f"{_lang_hint}{yue_style_directive(resolved_lang)}"   # Q-21 C：粤语口语指令
         _ainst = str(agent_instruction or "").strip()[:400]
         _inst_block = (
             f"\n【坐席指令——本条必须完成】\n{_ainst}\n"
@@ -1246,6 +1251,27 @@ async def _attach_gloss(
 # proactive 子系统的轮换词表（同一套「防模板壳」纪律），生成后走同一 persona 徽标
 # 与译文护栏。**不写记忆**（没有新的客户事实）。
 
+def yue_style_directive(reply_lang: str) -> str:
+    """Q-21 C（#290，2026-09-12）：``reply_lang == "yue"`` 时的粤语口语生成指令（纯函数）。
+
+    此前选粤语 = 只在 LANGUAGE RULE 里写一个 ``yue`` 码，LLM 十有八九给的是「书面中文 / 普通话
+    白话」——粤语用户一眼看穿。指令 + 3 条 few-shot 钉死：**口语粤语（廣東話）、繁体字、
+    粤语专有虚词/语气词**（嘅/咗/啲/唔/係/喺/嘅話/啦/囉/呀），禁普通话词（的/了/是/在/没有/
+    什么/怎么）。其它语种返回 ""（零影响）。
+    """
+    if str(reply_lang or "").strip().lower() not in ("yue", "zh-yue", "yue-hk"):
+        return ""
+    return (
+        "【輸出語言：口語粵語（廣東話）】正文必須用香港人日常打字聊天的口語粵語寫，用繁體字；"
+        "自然用粵語虛詞同語氣詞（嘅／咗／啲／唔／係／喺／嗰／咩／點／啦／囉／呀／喎），"
+        "唔准用普通話書面詞（的／了／是／在／沒有／什麼／怎麼／不／很）。語氣同人設一致，短句、貼地。\n"
+        "示範（只學口吻，唔要照抄）：\n"
+        "客：你食咗飯未呀？ → 我：食咗啦，今日落雨懶得出街，叫咗外賣頂住先，你呢？\n"
+        "客：What are you doing → 我：喺屋企煲劇呀，悶到爆，你有冇好劇介紹吖？\n"
+        "客：明天有空吗 → 我：聽日下晝得閒呀，你想約幾點？我哋去邊度好？"
+    )
+
+
 def build_opener_directive(
     *,
     angle: str,
@@ -1277,6 +1303,9 @@ def build_opener_directive(
         f"必须完全用客户的语言（{reply_lang}）来写正文。"
         if reply_lang and reply_lang != "zh" else "用中文来写正文。"
     )
+    _yl = yue_style_directive(reply_lang)
+    if _yl:
+        lang_line = f"{lang_line}\n{_yl}"
     avoid = ""
     rec = [str(t or "").strip() for t in (recent_out or []) if str(t or "").strip()]
     if rec:

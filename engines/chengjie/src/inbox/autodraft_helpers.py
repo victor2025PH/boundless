@@ -715,13 +715,25 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
             _risk_level = str(_drow.get("risk_level") or "")
         except Exception:
             _risk_level = ""
-        # 语言决策收敛到 generate_persona_reply（单一事实源，
-        # 含短消息防误切）；这里不再各自重复检测，直接采信其
-        # 返回的 reply_lang 落库 draft_lang。
+        # Q-21 B（Y82GWM / #302，2026-09-12）：起草前先算一份会话语言计划
+        # （outbound_translate.build_conv_lang_plan：D-M3 六级原序 + 客户明确请求 + 账号先验；
+        # 一行 [lang-plan] 日志），reply_lang **只读它**——此前生成侧 resolve_reply_language
+        # 与出站侧 resolve_outbound_lang 各判各的，英文「Hi」全自动起草出中文且日志无从归因。
+        # 计划判不出（unknown）→ reply_lang="" 交回产线旧 default（不阻断拟稿）。
+        _plan_lang = ""
+        try:
+            from src.inbox.outbound_translate import build_conv_lang_plan
+            _plan_lang = str(build_conv_lang_plan(
+                cid, store=_ad_store, cfg_root=assistant.config.config or {},
+                platform=platform, account_id=account_id, chat_key=chat_key,
+                history=history).reply_lang or "")
+        except Exception:
+            assistant.logger.debug("[AutoDraft] lang-plan 失败（产线按旧 default）", exc_info=True)
         out = await generate_persona_reply(
             app=_ad_app, platform=platform, chat_key=chat_key,
             last_inbound=last, history=history,
             persona_id=_persona_id,
+            reply_lang=_plan_lang,
             risk_level=_risk_level,
             media_type=_peer_media_type,
             media_ref=_peer_media_ref,
@@ -746,6 +758,7 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     app=_ad_app, platform=platform, chat_key=chat_key,
                     last_inbound=last, history=history,
                     persona_id=_persona_id,
+                    reply_lang=_plan_lang,
                     risk_level=_risk_level,
                     media_type=_peer_media_type,
                     media_ref=_peer_media_ref,
@@ -1309,6 +1322,18 @@ def make_auto_draft_cb(
         # 算成原因码登记到进程注册表——drafts.py 的 L1 日志行（D-M10 唯一许可的一行）
         # 从这里 peek；草稿落库后再写审计行 + 按 draft_id 登记（重启后 /api/drafts 仍可读）。
         _l1_reason = ""
+        # Q-21 B（#302）：先登记一份会话语言计划（不带历史、不打日志——enrich 侧带历史的那次
+        # 才是权威并打 [lang-plan]），让 derive_l1_reason 的 lang_unknown 与起草语言同一口径：
+        # 英文「Hi」按文字系统判 en ＝ 对方语言有证据，不再报 lang_unknown。
+        try:
+            from src.inbox.outbound_translate import build_conv_lang_plan
+            build_conv_lang_plan(
+                str(conv.get("conversation_id") or ""), store=store, cfg_root=app_config or {},
+                platform=str(conv.get("platform") or ""),
+                account_id=str(conv.get("account_id") or "default"),
+                chat_key=str(conv.get("chat_key") or ""), log=False)
+        except Exception:
+            logger.debug("[AutoDraft] lang-plan（预判）失败（忽略）", exc_info=True)
         try:
             from src.inbox.l1_reason import derive_l1_reason, note as _l1_note
             _l1_reason = derive_l1_reason(

@@ -2003,6 +2003,10 @@ ZH = {
     "inbox.l1r.global_default": "全局默认半自动",
     "inbox.l1r.other": "需确认：{code}",
     "inbox.l1r.generic": "需要你确认",
+    # Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）——对方语言判不出时按人设 / 账号默认语言起草，明说
+    "inbox.lp.fallback_persona": "对方语言未知 · 按人设语言（{lang}）回",
+    "inbox.lp.fallback_default": "对方语言未知 · 按账号默认语言（{lang}）回",
+    "inbox.lp.chip_t": "对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言",
     # M-2 E（#223）：档位下拉作用域文案 + 「半自动（待确认 N）」+ 手动粘性三选
     "inbox.mode.pending_n": "（待确认 {n}）",
     "inbox.mode.scope_manual": "🙋 本会话：手动",
@@ -5104,6 +5108,10 @@ EN = {
     "inbox.l1r.global_default": "Global default: semi-auto",
     "inbox.l1r.other": "Needs confirmation: {code}",
     "inbox.l1r.generic": "Needs your confirmation",
+    # Q-21 B (#302 / Y82GWM): conversation language-plan chip (lp-)
+    "inbox.lp.fallback_persona": "Peer language unknown · replying in persona language ({lang})",
+    "inbox.lp.fallback_default": "Peer language unknown · replying in account default ({lang})",
+    "inbox.lp.chip_t": "No language evidence in the peer's messages yet (first greeting / emoji / image); this round drafts in the persona's default language and follows the peer as soon as they write something",
     "inbox.mode.pending_n": " (pending {n})",
     "inbox.mode.scope_manual": "🙋 This chat: manual",
     "inbox.mode.scope_review": "📝 This chat: semi-auto",

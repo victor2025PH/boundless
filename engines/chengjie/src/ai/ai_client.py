@@ -4490,6 +4490,8 @@ class AIClient(LoggerMixin):
         # LANGUAGE RULE 整段不注入——空 _lang_name 短路）
         "ar": "Arabic", "km": "ភាសាខ្មែរ (Khmer)", "he": "עברית (Hebrew)",
         "el": "Ελληνικά (Greek)", "tl": "Tagalog",
+        # Q-21 C（#290）：粤语 / 繁体是一等 reply_lang——缺条目 LANGUAGE RULE 整段短路，选了粤语等于没选
+        "yue": "口語粵語（廣東話，繁體字）", "zh-tw": "繁體中文",
     }
 
     _SHORT_EN_WORDS = frozenset({

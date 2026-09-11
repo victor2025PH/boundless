@@ -994,6 +994,14 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .ac-pick-row .apr-sub{font-size:11px;color:var(--text-tiny);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* M-2 E（#235）：发前确认（L1）原因 chip——composer 草稿条 + 会话内待审草稿卡同款 */
 .cdraft-reason,.draft-l1r-chip{font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,#f59e0b 16%,transparent);color:var(--th-ink-amber7,#b45309);white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}
+/* Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）——「对方语言未知 · 按人设语言（English）回」。
+   会话头 #lp-bar 紧贴译文控制条之下；稿头 #lp-cdraft 复用 .cdraft-reason 形态但走中性令牌
+   （信息性提示，不是告警——琥珀会被读成「有问题」，与 observe 档纠偏同一教训）。只用 --tk-* 令牌。 */
+.lp-bar{display:flex;align-items:center;gap:6px;padding:4px 18px;font-size:11px;line-height:1.4;color:var(--tk-text-muted,var(--text-sub));background:var(--tk-surface-2,var(--tk-surface,var(--bg-soft)));border-bottom:1px solid var(--tk-border,var(--border));flex-shrink:0;}
+.lp-bar .lp-ic{display:inline-flex;color:var(--tk-text-muted,var(--text-sub));opacity:.8;}
+.lp-bar .lp-ic .rt-ic{width:12px;height:12px;}
+.lp-bar .lp-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cdraft-reason.lp-cdraft{background:color-mix(in srgb,var(--tk-text-muted,#64748b) 14%,transparent);color:var(--tk-text-muted,var(--text-sub));max-width:260px;}
 /* M-2 B（D-M1 ②）：账号菜单行内「此账号全部会话 → 手动 / 半自动 / 全自动」+ 门禁提示 */
 .ac-pick-row .apr-modes{display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap;}
 .ac-pick-row .apr-modes-lbl{font-size:10px;color:var(--text-tiny);white-space:nowrap;}

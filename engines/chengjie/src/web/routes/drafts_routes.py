@@ -161,6 +161,17 @@ def register_drafts_routes(app, *, api_auth):
                 d["l1_reason"] = _r
         except Exception:
             logger.debug("[drafts] L1 原因富集失败（忽略）", exc_info=True)
+        # Q-21 B（#302 / Y82GWM）：稿头「对方语言未知 · 按人设语言（English）回」——起草链登记的
+        # 会话语言计划（outbound_translate.build_conv_lang_plan，进程注册表 → KV conv_lang_plan:<cid>）。
+        try:
+            from src.inbox.outbound_translate import peek_conv_lang_plan
+            _lp_store = getattr(svc, "_store", None)
+            for d in drafts:
+                _lp = peek_conv_lang_plan(str(d.get("conversation_id") or ""), store=_lp_store)
+                if _lp:
+                    d["lang_plan"] = _lp
+        except Exception:
+            logger.debug("[drafts] lang-plan 富集失败（忽略）", exc_info=True)
         return {"ok": True, "count": len(drafts), "drafts": drafts}
 
     @app.get("/api/drafts/stats")

@@ -958,6 +958,12 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
             </label>
             <span class="xl-top-engine" id="xl-top-engine"></span>
           </div>
+          <!-- Q-21 B（#302 / Y82GWM）：会话语言计划 chip——对方语言判不出时按人设语言起草，
+               在会话头明说（不再静默 L1）；数据源 GET /api/unified-inbox/lang-plan，无计划不占位 -->
+          <div class="lp-bar" id="lp-bar" style="display:none;" role="status" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t">
+            <span class="lp-ic" aria-hidden="true"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg></span>
+            <span class="lp-txt" id="lp-txt"></span>
+          </div>
           <!-- 案例条（案例页深链 &case= 时出现：这单为什么需要人 + 就地结案闭环） -->
           <div id="case-bar" style="display:none;align-items:center;gap:8px;padding:7px 14px;background:color-mix(in srgb, var(--th-bg-amber5,#f59e0b) 9%, var(--tk-surface,#fff));border-bottom:1px solid color-mix(in srgb, var(--th-bg-amber5,#f59e0b) 30%, transparent);font-size:12.5px;line-height:1.45;flex-wrap:wrap;">
             <span data-ui-icon="clipboard" data-size="14" style="flex-shrink:0;color:var(--th-ink-amber7,#b45309)"></span>
@@ -1012,6 +1018,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 <span data-i18n="inbox.cdraft.ready">AI 草稿已就绪</span>
                 <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
                 <span class="cdraft-reason" id="cdraft-reason" style="display:none;" title="为什么这条要你确认" data-i18n-title="inbox.l1r.chip_t"></span>
+                <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
                 <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
                 <span class="cdraft-acts">
                   <button type="button" class="cdraft-btn primary" onclick="acceptComposerDraft()" title="填入输入框，可编辑后发送" data-i18n-title="inbox.cdraft.accept_t"><span data-i18n="inbox.cdraft.accept">采用</span><kbd>Tab</kbd></button>
@@ -17445,6 +17452,48 @@ function _l1ReasonText(d){
   return k?window.T(k):(code?window.Tf('inbox.l1r.other',{code:code}):window.T('inbox.l1r.generic'));
 }
 window._l1ReasonText=_l1ReasonText;
+/* Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）。起草链每稿登记一份
+   {reply_lang, decided_by, persona_lang, peer_known, fallback}；fallback=对方语言判不出、按人设 /
+   账号默认语言起草 → 会话头 #lp-bar + 稿头 #lp-cdraft 同文案；对方语言有证据 → 两处都不显。
+   数据源：会话头 GET /api/unified-inbox/lang-plan；稿头用 /api/drafts 行内 lang_plan。 */
+var _lpPlan=null;
+function _lpText(p){
+  if(!p||!p.fallback||!p.reply_lang) return '';
+  const nm=(typeof _xlLangName==='function')?(_xlLangName(p.reply_lang)||p.reply_lang):String(p.reply_lang);
+  return window.Tf(p.decided_by==='persona'?'inbox.lp.fallback_persona':'inbox.lp.fallback_default',{lang:nm});
+}
+function _lpCsBandCovers(){
+  // Q-26 状态带（cs-band，读同一份 conv_lang_plan KV）已在会话头说了「对方语言未知 · 按人设语言回」
+  // → 本条不再重复占一行；状态带缺席 / 显示别的状态时才由 lp-bar 兜底。
+  const b=document.getElementById('cs-band');
+  return !!(b&&!b.hidden&&b.classList.contains('cs-s-lang_unknown'));
+}
+function _lpRender(){
+  const bar=document.getElementById('lp-bar'), txt=document.getElementById('lp-txt');
+  if(!bar||!txt) return;
+  const s=_lpCsBandCovers()?'':_lpText(_lpPlan);
+  if(s){ txt.textContent=s; bar.style.display=''; } else { txt.textContent=''; bar.style.display='none'; }
+}
+try{
+  const _lpCs=document.getElementById('cs-band');
+  if(_lpCs&&window.MutationObserver){ new MutationObserver(function(){ try{ _lpRender(); }catch(_){} }).observe(_lpCs,{attributes:true,attributeFilter:['class','hidden']}); }
+}catch(_){}
+function _lpCdraftRender(d){
+  const el=document.getElementById('lp-cdraft'); if(!el) return;
+  const s=_lpText(d&&d.lang_plan);
+  if(s){ el.textContent=s; el.style.display=''; } else { el.textContent=''; el.style.display='none'; }
+}
+async function _lpRefresh(c){
+  _lpPlan=null; _lpRender();
+  if(!c||!c.chat_key) return;
+  const cid=c.conversation_id||convKey(c);
+  try{
+    const r=await apiFetch('/api/unified-inbox/lang-plan?conversation_id='+encodeURIComponent(cid));
+    const d=await r.json();
+    if(!selectedChat||(selectedChat.conversation_id||convKey(selectedChat))!==cid) return;
+    _lpPlan=(d&&d.ok&&d.plan)?d.plan:null; _lpRender();
+  }catch(_){ /* 增强层，失败不打扰 */ }
+}
 function _cdraftDismissedSet(cid){
   if(!_cdraft.dismissed[cid]) _cdraft.dismissed[cid]=new Set();
   return _cdraft.dismissed[cid];
@@ -17476,6 +17525,7 @@ function _cdraftRender(){
     const txt=_l1ReasonText(d);
     if(txt){ rs.style.display=''; rs.textContent=txt; } else rs.style.display='none';
   }
+  try{ _lpCdraftRender(d); }catch(_){}   // Q-21 B：稿头「对方语言未知 · 按人设语言回」（lp-）
   const n=document.getElementById('cdraft-n');
   if(n){
     if(_cdraft.count>1){ n.style.display=''; n.textContent=window.Tf('inbox.cdraft.n',{n:_cdraft.count}); }
@@ -17485,6 +17535,7 @@ function _cdraftRender(){
   try{ _memChipsAttach(document.getElementById('cdraft-mem'), d, selectedChat); }catch(_){}
 }
 async function _refreshComposerDraft(c){
+  try{ _lpRefresh(c); }catch(_){}   // Q-21 B：会话头语言计划 chip（lp-）与草稿条同拍刷新
   if(!c || !c.chat_key){ _cdraft.draft=null; _cdraftRender(); return; }
   const reqKey=convKey(c);
   try{
