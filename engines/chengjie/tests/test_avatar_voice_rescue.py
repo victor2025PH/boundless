@@ -206,11 +206,15 @@ def test_webhook_message_rescue_broken_overrides_fix_line():
         "url": "http://127.0.0.1:7852/health", "error": "conn refused",
         "rescue_broken": ["EmotionTTS_Boot", "EmotionTTSWatchdog"]})
     assert "掉线" in t
-    assert "救援链已停用" in x
+    # 告警卡 v2 文案（c26afdc6 运维群降噪线）：「救援链已停用 … /ENABLE」改为
+    # 「自动救援已停用 … 重新启用这些任务」；断言跟文案走，语义不变——
+    # 救援链死时必须点名任务并指引恢复任务本体
+    assert "自动救援已停用" in x
     assert "EmotionTTS_Boot" in x and "EmotionTTSWatchdog" in x
-    assert "/ENABLE" in x
-    # 默认「手动拉起计划任务」指引必须被替换（它此时是误导）
+    assert "重新启用" in x
+    # 默认「先等自动拉起 / 手动拉起计划任务」指引必须被替换（它此时是误导）
     assert "请检查 emotion_tts 服务或手动拉起计划任务" not in x
+    assert "先等自动拉起" not in x
 
     # 救援链正常（空列表）→ 旧指引原样保留
     t2, x2 = _build_message("avatar_voice_alert", {

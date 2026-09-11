@@ -344,9 +344,13 @@ def test_frontend_dr_wiring_static():
         "if(mode==='auto_ai' && plan.split){", "scope:'all'", "action:'ack'",
         "data-act=\"draft\"", "data-act=\"manual\"", "data-act=\"ignore\"",
         "/api/unified-inbox/dormant-review?limit=200",
-        "unified-inbox.css?v=20260908dr",
+        "unified-inbox.css?v=",
     ):
         assert needle in html, needle
+    # CSS 戳只钉「不早于 dr 批」：戳随后续批次（7c4aae3b xlate-pop 20260911a…）前移属正常
+    import re as _re
+    m = _re.search(r"unified-inbox\.css\?v=(\w+)", html)
+    assert m and m.group(1) >= "20260908dr", m.group(1) if m else None
     css = (root / "src" / "web" / "static" / "workspace" / "unified-inbox.css").read_text(encoding="utf-8")
     for cls in (".dr-card", ".dr-cols", ".dr-banner", ".dr-self-tag", ".dr-row-draft"):
         assert cls in css, cls

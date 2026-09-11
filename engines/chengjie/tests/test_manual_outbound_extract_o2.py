@@ -187,6 +187,9 @@ class _LogSM:
     logger = logging.getLogger("test.o2b.schedule_log")
     _episodic_store = object()
     _memory_cfg = {"enabled": True, "extract": {"enabled": True, "intents": ["direct_chat"]}}
+    # 成本门禁（d0e5303b 抽取二期闸门）：_schedule 先问 skip_reason；用真函数（staticmethod）
+    # 让 u1 / 非演练号照旧放行，日志行断言不变
+    _episodic_extract_skip_reason = staticmethod(SkillManager._episodic_extract_skip_reason)
 
     async def _episodic_memory_extract_async(self, *a, **k):   # 无事件循环时不会被调到
         return None

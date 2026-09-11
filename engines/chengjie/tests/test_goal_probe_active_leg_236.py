@@ -832,7 +832,9 @@ def test_card_counts_frontend_and_i18n_and_hosts():
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
         # Q-1 E a → Q-5 C b（unified_inbox.html 别线整文件在途，b 戳随宿主线前移，两戳皆认）
-        assert _re.search(r"cp-goal\.js\?v=20260910[abcd]", (REPO / host).read_text(encoding="utf-8")), host
+        # R82：闭集改下界（1e93486c → 20260911e、6563c3c9 → 20260911f 合法前移），钉 ≥ 20260910a
+        m = _re.search(r"cp-goal\.js\?v=(\w+)", (REPO / host).read_text(encoding="utf-8"))
+        assert m and m.group(1) >= "20260910a", (host, m.group(1) if m else None)
 
 
 # ══ E 「现在就问一个」：预览 → 点发即发（care send_now 三闸 + 冻结检查）→ 计入主动出手 ═══
