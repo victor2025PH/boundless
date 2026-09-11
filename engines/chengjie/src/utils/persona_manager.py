@@ -109,6 +109,9 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 非人设台词
     "boundaries.escalation_phrases",  # 转人工触发词（退款/投诉/威胁/诈骗）——是匹配
                                       # 信号不是话术；注入反而诱导 AI 主动说这些词
+    # Q-17 #277②：风控分级人设覆写 {category: high|medium|low}（只对中 / 低类别生效，
+    # 消费方 src/inbox/risk_grader.risk_overrides_of）——是判定配置不是台词，不进 prompt。
+    "boundaries.risk_overrides",
     # 脾气/骂战档（temper 主线 2026-08-22；实施74 代登记清存量红——字段随
     # profiles_runtime 落地时漏了表态）：由 src/companion/temper.py 在**骂战轮**
     # 按状态机动态注入专用块（含出站否决守卫），常驻人设块注入＝每轮都带

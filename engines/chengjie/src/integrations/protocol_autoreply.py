@@ -86,7 +86,7 @@ def _risk_policy_decide(reply: str, platform: str = ""):
     hits: list = []
     try:
         from src.inbox.drafts import keyword_risk_hits
-        _lvl, hits = keyword_risk_hits(reply)
+        _lvl, hits = keyword_risk_hits(reply, direction="out")  # Q-17 #277②：AI 稿＝出站口径
     except Exception:
         hits = []
     return _decide(
@@ -1005,10 +1005,29 @@ def clear_needs_human(store: Any, conversation_id: str, *,
         _rh.clear(store, conversation_id, by=str(actor or "agent"))
     except Exception:
         logger.debug("[protocol-autoreply] risk_hold.clear 失败（忽略）", exc_info=True)
+    # Q-17（#277②）：**人工**摘标（坐席手发 / 「我知道了」）→ 同类 30 分钟冷却：同类别不高于
+    # 该级别的新命中不再打标、不再弹横幅（Cameron 04:39 摘标 → 04:50 同类叙述第三次打标）。
+    # 系统自动摘标（startup_sweep / auto_clear）不登记——那不是「人看过了」。
+    _cd_cat, _cd_min = "", 0
+    try:
+        if not str(actor or "").lower().startswith("system"):
+            from src.inbox import risk_grader as _rg
+            from src.inbox import risk_hold as _rh2
+            _cd_cat = str(meta.get("category") or "")
+            _cd_lvl = str(meta.get("level") or "")
+            if not _cd_cat or not _cd_lvl:
+                _c2, _l2 = _rg.classify_reason(meta.get("reason"))
+                _cd_cat = _cd_cat or _c2
+                _cd_lvl = _cd_lvl or _l2 or "high"
+            if _cd_cat and _rh2.cooldown(store, conversation_id, _cd_cat, level=_cd_lvl or "high",
+                                         by=str(actor or "agent"), reason=str(meta.get("reason") or "")):
+                _cd_min = int(_rh2.DEFAULT_COOLDOWN_MIN)
+    except Exception:
+        logger.debug("[protocol-autoreply] risk_hold.cooldown 失败（忽略）", exc_info=True)
     logger.info(
-        "[needs_human] 摘标 conv=%s by=%s（原因=%s 打标于=%s 打标方=%s）",
+        "[needs_human] 摘标 conv=%s by=%s（原因=%s 打标于=%s 打标方=%s）category=%s cooldown_min=%s",
         conversation_id, actor or "?", meta.get("reason") or "-",
-        _fmt_meta_ts(meta.get("ts")), meta.get("source") or "-")
+        _fmt_meta_ts(meta.get("ts")), meta.get("source") or "-", _cd_cat or "-", _cd_min)
     return True
 
 
@@ -1157,12 +1176,20 @@ def needs_human_by_reason(store: Any, *, limit: int = 300) -> Dict[str, int]:
 
 def tag_needs_human(store: Any, payload: Dict[str, Any], *,
                     reason: str = "", source: str = "system",
-                    now: Optional[float] = None) -> bool:
+                    now: Optional[float] = None,
+                    level: str = "", category: str = "",
+                    hits: Optional[List[str]] = None) -> bool:
     """给会话打 HANDOFF_TAG（已存在则跳过）。store 需提供 get/set_conv_tags。
 
     实施74（实施69 P1-1）：打标同存 ``{reason, ts, source}`` 元数据
     （``store.set_handoff_meta``，旧 store 缺方法自动跳过）——「需人工」从
     裸结论变成可解释（何时/为何/谁打的），前端 chip 悬停直读。
+
+    Q-17（#277②）：``level / category / hits`` 由 drafts 钩子（risk_grader）传入，缺省按
+    ``risk_grader.classify_reason(reason)`` 推；三者一并进 handoff_meta（会话头「风险保持 · 类别」
+    chip / 横幅 / 体检）。两条幂等纪律：① 标已在场且 risk_hold 活跃 → 只 ``risk_hold.touch``
+    更新 last_hit，不重打不重弹；② 人工摘标后同类 30 分钟冷却期内（``risk_hold.cooldown_blocks``）
+    不高于冷却级别的新命中 → 不打标（日志 ``cooldown_skipped=true``）。
     """
     if store is None:
         return False
@@ -1176,6 +1203,36 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
         tags = list(store.get_conv_tags(cid) or [])
     except Exception:
         tags = []
+    _lvl, _cat = str(level or ""), str(category or "")
+    if not _lvl or not _cat:
+        try:
+            from src.inbox.risk_grader import classify_reason as _classify
+            _c2, _l2 = _classify(reason)
+            _cat = _cat or _c2
+            _lvl = _lvl or _l2
+        except Exception:
+            pass
+    _hits = [str(h)[:40] for h in (hits or []) if str(h)][:4]
+    _ts = float(now if now is not None else time.time())
+    # Q-17 ①：保持期间（标在场 + 持有活跃）→ 只更新 last_hit；不重打标、不重写 meta（横幅不重弹）
+    try:
+        from src.inbox import risk_hold as _rh
+        if HANDOFF_TAG in tags and _rh.active(store, cid, now=now):
+            _rh.touch(store, cid, _hits or str(reason or ""), now=now)
+            __import__("src.inbox.adult_grader", fromlist=["on_needs_human_tagged"]).on_needs_human_tagged(store, cid, reason, payload, now=now) if str(reason or "").startswith("adult:") else None  # Q-15 二次露骨重新计时（标在场也走）
+            logger.info("[needs_human] 保持 conv=%s reason=%s level=%s category=%s hits=%s（已打标，只更新 last_hit）",
+                        cid, reason or "-", _lvl or "-", _cat or "-", "|".join(_hits) or "-")
+            return False
+        # Q-17 ②：人工摘标冷却——同类且级别不高于冷却记录 → 不打标、不登记持有
+        if HANDOFF_TAG not in tags:
+            _cd = _rh.cooldown_blocks(store, cid, _cat, _lvl or "high", now=now)
+            if _cd:
+                logger.info("[needs_human] 打标 conv=%s reason=%s source=%s level=%s category=%s cooldown_skipped=true until=%s by=%s",
+                            cid, reason or "-", source or "system", _lvl or "-", _cat or "-",
+                            _fmt_meta_ts(_cd.get("until")), _cd.get("by") or "-")
+                return False
+    except Exception:
+        logger.debug("[protocol-autoreply] Q-17 幂等 / 冷却判定失败（忽略，走旧路）", exc_info=True)
     # Q-3（#264 B）：「需人工」从标签升级为闸——同时登记会话级风险持有（泛因 needs_human，
     # hit=打标原因；会话上已有更具体的活跃持有则由 risk_hold.set 保留不覆盖）。标已在场
     # 也登记（老标补闸，幂等）；best-effort。
@@ -1195,17 +1252,23 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
         return False
     try:
         if hasattr(store, "set_handoff_meta"):
-            store.set_handoff_meta(cid, {
+            _meta: Dict[str, Any] = {
                 "reason": str(reason or ""),
-                "ts": float(now if now is not None else time.time()),
+                "ts": _ts,
                 "source": str(source or "system"),
-            })
+            }
+            if _lvl or _cat or _hits:
+                # Q-17 #277②：级别 / 类别 / 命中词随标落库（chip / 横幅 / 体检 / 冷却同类判据）；
+                # 非风控原因（empty_reply / send_error…）不带这三键，旧契约原样
+                _meta.update({"level": _lvl, "category": _cat, "hits": _hits})
+            store.set_handoff_meta(cid, _meta)
     except Exception:
         logger.debug("[protocol-autoreply] handoff_meta 写入失败（忽略）",
                      exc_info=True)
-    logger.info("[needs_human] 打标 conv=%s reason=%s source=%s auto_clearable=%s",
+    logger.info("[needs_human] 打标 conv=%s reason=%s source=%s auto_clearable=%s level=%s category=%s hits=%s cooldown_skipped=false",
                 cid, reason or "-", source or "system",
-                handoff_auto_clearable({"reason": reason, "source": source}))
+                handoff_auto_clearable({"reason": reason, "source": source}),
+                _lvl or "-", _cat or "-", "|".join(_hits) or "-")
     return True
 
 

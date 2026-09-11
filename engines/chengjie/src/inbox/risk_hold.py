@@ -196,5 +196,105 @@ def all_active(store: Any, *, now: Optional[float] = None) -> Dict[str, Dict[str
     return out
 
 
+def touch(store: Any, cid: str, hit: Any = "", *, now: Optional[float] = None) -> bool:
+    """Q-17 #277②：持有活跃期间再次命中 → 只更新 ``last_hit / last_hit_ts / hit_count``，
+    **不**刷新 set_ts（TTL 不重计）、不重打标、不重弹横幅。非活跃 → False。绝不抛。"""
+    cid = str(cid or "").strip()
+    if not cid or store is None:
+        return False
+    ts = float(now if now is not None else time.time())
+    rec = record(store, cid)
+    if not rec or not _is_live(rec, ts):
+        return False
+    if isinstance(hit, (list, tuple, frozenset)):
+        hit_s = "|".join(str(h)[:40] for h in list(hit)[:6] if str(h))
+    else:
+        hit_s = str(hit or "")[:120]
+    rec["last_hit"] = hit_s
+    rec["last_hit_ts"] = ts
+    rec["hit_count"] = int(rec.get("hit_count") or 1) + 1
+    ok = _write(store, cid, rec)
+    if ok:
+        logger.info("[risk_hold] touch conv=%s reason=%s last_hit=%s n=%d",
+                    cid, rec.get("reason"), hit_s or "-", rec["hit_count"])
+    return ok
+
+
+# ── Q-17 #277②：摘标冷却（同类 30 分钟不重打）────────────────────────────────
+# 事故（Cameron 15635715247）：04:39:45 人工摘标 → 04:50:12 客户一句叙述再中同类 → 第三次打标。
+# 人工「我知道了 / 手发一条」＝已看过这类风险，同类别 30 分钟内不再打标、不再弹横幅；
+# 仅**更高级别**的新命中可重打（low < medium < high）。存储同 risk_hold：``app_settings``
+# KV ``risk_cooldown:<cid>`` = ``{category, level, until, set_ts, by, reason}``，不动 store.py。
+COOLDOWN_PREFIX = "risk_cooldown:"
+DEFAULT_COOLDOWN_MIN = 30.0
+_LEVEL_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def _ckey(cid: str) -> str:
+    return COOLDOWN_PREFIX + str(cid or "").strip()
+
+
+def cooldown(store: Any, cid: str, category: str, *, minutes: float = DEFAULT_COOLDOWN_MIN,
+             level: str = "high", by: str = "agent", reason: str = "",
+             now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """登记摘标冷却：``category`` 同类 ``minutes`` 分钟内不重打标。返回记录；缺参 → None。绝不抛。
+
+    ``level``：被摘掉那次的级别（缺省 high——「需人工」只由 high 打出）；冷却期内只有
+    级别 **>** 它的新命中才可重打。``category`` 空 → 不登记（无法判「同类」）。
+    """
+    cid = str(cid or "").strip()
+    cat = str(category or "").strip().lower()
+    if not cid or not cat or store is None or not hasattr(store, "set_app_setting"):
+        return None
+    ts = float(now if now is not None else time.time())
+    mins = float(minutes if minutes and minutes > 0 else DEFAULT_COOLDOWN_MIN)
+    rec = {
+        "category": cat, "level": str(level or "high").lower(), "until": ts + mins * 60.0,
+        "set_ts": ts, "by": str(by or "agent"), "reason": str(reason or "")[:80],
+    }
+    try:
+        store.set_app_setting(_ckey(cid), json.dumps(rec, ensure_ascii=False), updated_by="risk_hold")
+    except Exception:
+        logger.debug("[risk_hold] cooldown 写入失败（忽略）conv=%s", cid, exc_info=True)
+        return None
+    logger.info("[risk_hold] cooldown conv=%s category=%s level=%s minutes=%.0f by=%s",
+                cid, cat, rec["level"], mins, rec["by"])
+    return rec
+
+
+def cooldown_record(store: Any, cid: str, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """活跃中的冷却记录（``until`` 未到）；无 / 过期 / 脏 → None。绝不抛。"""
+    cid = str(cid or "").strip()
+    if not cid or store is None or not hasattr(store, "get_app_setting"):
+        return None
+    ts = float(now if now is not None else time.time())
+    try:
+        got = json.loads(str(store.get_app_setting(_ckey(cid), "") or "") or "{}")
+    except Exception:
+        return None
+    if not isinstance(got, dict) or not got.get("category"):
+        return None
+    if float(got.get("until") or 0) <= ts:
+        return None
+    return got
+
+
+def cooldown_blocks(store: Any, cid: str, category: str, level: str = "high", *,
+                    now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """本次 ``(category, level)`` 命中是否被冷却挡住：同类且级别 **不高于** 冷却记录 → 返回记录；
+    否则 None（不同类 / 更高级别 / 无冷却 → 放行打标）。``category`` 空 → 不挡。绝不抛。"""
+    cat = str(category or "").strip().lower()
+    if not cat:
+        return None
+    rec = cooldown_record(store, cid, now=now)
+    if not rec or str(rec.get("category") or "") != cat:
+        return None
+    if _LEVEL_RANK.get(str(level or "high").lower(), 3) > _LEVEL_RANK.get(str(rec.get("level") or "high").lower(), 3):
+        return None
+    return rec
+
+
 __all__ = ["KEY_PREFIX", "DEFAULT_TTL_H", "GENERIC_REASON", "KNOWN_REASONS",
-           "set", "active", "active_record", "record", "clear", "all_active"]
+           "set", "active", "active_record", "record", "clear", "all_active", "touch",
+           "COOLDOWN_PREFIX", "DEFAULT_COOLDOWN_MIN",
+           "cooldown", "cooldown_record", "cooldown_blocks"]

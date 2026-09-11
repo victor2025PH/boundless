@@ -439,11 +439,28 @@ def diagnose_conversation(
                     _hold_reason if _hold_reason and _hold_reason != "needs_human" else "")
                 if not _category and _hm_reason:
                     _category = _hm_reason.split(":", 1)[0]
+                # Q-17 #277②：打标元数据自带 category / level / hits（risk_grader 三级）→ 优先；
+                # 缺则按原因码 classify_reason 推（high_risk 泛因也能落到 threat / minor / privacy…）
+                _rk_level = ""
+                _rk_hits: List[str] = []
+                try:
+                    from src.inbox.risk_grader import classify_reason as _rk_classify
+                    _rk_hits = [str(h) for h in (_hm.get("hits") or []) if str(h)]
+                    if _hm.get("category"):
+                        _category = str(_hm.get("category") or "") or _category
+                        _rk_level = str(_hm.get("level") or "")
+                    elif _category in ("", "high_risk", "needs_human"):
+                        _c3, _l3 = _rk_classify(_hm_reason or _hold_reason)
+                        _category = _c3 or _category
+                        _rk_level = _l3
+                except Exception:
+                    pass
                 _p: Dict[str, Any] = {
                     "reason": _hold_reason or (_hm_reason or "needs_human"),
                     "category": _category,
-                    "level": _parts["level"],
-                    "hit": _parts["hit"] or str(_hold.get("hit") or ""),
+                    "level": _parts["level"] or _rk_level,
+                    "hit": _parts["hit"] or str(_hold.get("hit") or "") or (_rk_hits[0] if _rk_hits else ""),
+                    "hits": _rk_hits,
                     "tagged_ts": float(_hm.get("ts") or _hold.get("set_ts") or 0.0),
                     "source": str(_hm.get("source") or _hold.get("by") or ""),
                     "held_min": round(max(0.0, ts_now - float(_hold.get("set_ts") or _hm.get("ts") or ts_now)) / 60.0, 1),

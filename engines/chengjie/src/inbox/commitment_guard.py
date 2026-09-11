@@ -250,6 +250,84 @@ def detect_commitment_claim(outbound_text: str) -> Optional[str]:
     return None
 
 
+# ── Q-17 #277②：客户侧「索要句式」（比 detect_commitment 严：只认对**我们**开口要）──
+# detect_commitment 的强短语（your address / phone number / sent me pictures）把客户的**叙述**
+# （「they asked for my phone number」「pictures they have sent me」）也当邀约 → 全部 high →
+# 「需人工」。本表只收「发我 / 给我 / can I have / what's your / show me yours / 你的电话 / 你住哪」
+# 这类**指向对方**的索要框架 + 对象词；过去时（sent / asked）不收。返回 kind 与 detect_commitment 同域。
+_REQ_CONTACT = [_rx(p) for p in (
+    _LB + r"(?:send|give|text|tell|share|drop|shoot)\s+me\s+(?:your\s+)?(?:address|number|phone|cell|mobile|whatsapp|wechat|line|insta(?:gram)?|snap(?:chat)?|telegram|contact)" + _RB,
+    _LB + r"what(?:'s|s|\s+is)\s+your\s+(?:address|number|phone|cell|mobile|whatsapp|wechat|line|insta(?:gram)?|snap(?:chat)?)" + _RB,
+    _LB + r"(?:can|could|may)\s+i\s+(?:have|get)\s+your\s+(?:address|number|phone|cell|whatsapp|wechat|line|insta(?:gram)?)" + _RB,
+    _LB + r"where\s+do\s+you\s+live" + _RB,
+    _LB + r"(?:just\s+)?need\s+your\s+(?:address|number|phone)" + _RB,
+    _LB + r"(?:add|follow)\s+(?:me\s+on\s+)?(?:your\s+)?(?:whatsapp|wechat|line|insta(?:gram)?|snap(?:chat)?|telegram)" + _RB,
+    r"你住哪|你住在哪|你家在哪|你(的)?(电话|手机号|微信|地址|住址|微信号|line)(是)?(多少|发我|給我|给我|告诉我|是啥|是什么)",
+    r"(发|給|给|告诉)我你的(地址|电话|手机号|微信|住址)|加(个|個)?微信|把你(的)?(地址|电话|手机号|微信)(发|给)我",
+    r"住所教えて|電話番号(教えて|くれる)|ライン(教えて|交換)|どこに住んで",
+)]
+_REQ_MEDIA = [_rx(p) for p in (
+    _LB + r"(?:send|show|give|shoot|drop)\s+me\s+(?:a\s+|some\s+|another\s+|more\s+|your\s+|ur\s+)?(?:pic|pics|photo|photos|picture|pictures|selfie|selfies|video|videos|face)s?" + _RB,
+    _LB + r"show\s+me\s+yours" + _RB,
+    _LB + r"(?:can|could|may)\s+i\s+(?:see|have|get)\s+(?:a\s+|some\s+|your\s+|ur\s+)?(?:pic|pics|photo|photos|picture|pictures|selfie|face|video)s?" + _RB,
+    _LB + r"(?:can\s+we|let'?s|wanna|want\s+to)\s+(?:video\s+call|facetime|face\s*time|voice\s+call|zoom)" + _RB,
+    r"发(我|张|個|个|几张)(照片|自拍|视频|照)|给我(看|发)(张|个|你的|几张)?(照片|自拍|视频)|看看你的(照片|脸|视频)|来张自拍|來張自拍",
+    r"打(个|個)?(视频|視頻|语音|語音)|开视频|開視頻|视频(一下|聊|通话)",
+    r"写真(を)?送って|自撮り送って|ビデオ通話(しよう|しない)",
+)]
+_REQ_MEET = [_rx(p) for p in (
+    _LB + r"(?:can|could|shall|should)\s+we\s+.{0,24}?(?:meet|meet\s+up|hang\s+out|get\s+together|grab\s+(?:a\s+)?(?:coffee|drink|dinner|lunch|bite))" + _RB,
+    _LB + r"(?:let'?s|wanna|want\s+to|do\s+you\s+want\s+to|would\s+you\s+like\s+to)\s+.{0,16}?(?:meet|meet\s+up|hang\s+out|come\s+over|grab\s+(?:a\s+)?(?:coffee|drink|dinner|lunch))" + _RB,
+    _LB + r"(?:come\s+over|come\s+to\s+my\s+place|meet\s+me)" + _RB,
+    r"要不要(出来)?见(个|一)?面|出来见(个)?面|见个面|约(你|个)?(吃饭|见面|出来)|来我家|去你家|上门|见一面",
+    r"会いたい|会おう|会える\?|会いましょう",
+)]
+_REQ_GIFT = [_rx(p) for p in (
+    _LB + r"(?:can|could|let\s+me|want\s+to|wanna|i'?d\s+like\s+to)\s+.{0,10}?(?:send|mail|ship)\s+you\s+(?:a\s+|the\s+)?(?:gift|present|package|parcel)" + _RB,
+    _LB + r"(?:send|mail|ship)\s+you\s+(?:a\s+)?(?:gift|present|package).{0,20}?address" + _RB,
+    r"寄(给|給)你(个|一个|份)?(礼物|禮物|东西)|送你(个)?礼物|给你寄",
+    r"プレゼント(を)?送りたい|贈り物を送って",
+)]
+_REQ_MONEY = [_rx(p) for p in (
+    _LB + r"(?:send|wire|transfer|lend|loan|give|spare)\s+me\s+(?:some\s+|a\s+little\s+|the\s+)?(?:money|cash|\$\s*\d+|\d+\s*(?:dollars|bucks|usd|euros?))" + _RB,
+    _LB + r"(?:cash\s*app|venmo|zelle|paypal)\s+me" + _RB + r"|" + _LB + r"(?:your\s+)?(?:cash\s*app|venmo|zelle)\s*(?:\?|tag|handle|name)",
+    _LB + r"(?:can|could)\s+you\s+(?:send|lend|loan|spare|wire|transfer)\s+me\s+(?:some\s+)?(?:money|cash|\$)",
+    _LB + r"(?:help\s+me\s+(?:out\s+)?with\s+(?:some\s+)?(?:money|cash|rent|bills?))" + _RB,
+    r"转账给我|轉賬給我|打钱给我|打錢給我|借(我|点|點)钱|借(我|点|點)錢|给(点|點)钱|給(點|点)錢|发(个|個)红包|發(個|个)紅包|汇(点|點)钱给我",
+    r"送金して|お金貸して|お金送って",
+)]
+
+
+def detect_request(inbound_text: str, lang: Optional[str] = None) -> Optional[str]:
+    """Q-17 #277②：客户是否在**向我们索要** meet / contact / media / gift / money（只认索要句式）。
+
+    与 ``detect_commitment`` 的差别：后者把「your address / phone number / sent me pictures」这类
+    强短语也当邀约（客户叙述「they asked for my phone number」「pictures they have sent me」也 high）；
+    本函数只认「send me / give me / can I have / what's your / show me yours / 发我 / 给我 / 你的电话 /
+    你住哪」等**指向对方**的索要框架。过去时叙述 / 第三人称叙述不算。返回 kind（同 ``KINDS``）或 None；
+    多类并中按 ``KIND_PRIORITY``（钱 > 礼物 > 地址电话 > 媒体 > 见面）。
+    """
+    t = str(inbound_text or "").strip()
+    if not t:
+        return None
+    _ = sniff_lang(t, lang)
+    hits: List[str] = []
+    if _any(_REQ_MONEY, t):
+        hits.append("money")
+    if _any(_REQ_GIFT, t):
+        hits.append("gift")
+    if _any(_REQ_CONTACT, t) and not _any(_CONTACT_EXCLUDE, t):
+        hits.append("contact")
+    if _any(_REQ_MEDIA, t):
+        hits.append("media")
+    if _any(_REQ_MEET, t) and not _any(_MEET_EXCLUDE, t):
+        hits.append("meet")
+    for k in KIND_PRIORITY:
+        if k in hits:
+            return k
+    return None
+
+
 def detect_self_blame_repromise(outbound_text: str) -> bool:
     """被质问后「you're right / 我忘了 / 下次一定」——承认失误并再承诺。
 
@@ -891,7 +969,7 @@ def evaluate_inbound(store: Any, conv: Dict[str, Any], text: str, *, kind: str,
 
 __all__ = [
     "KINDS", "CLAIM_KINDS", "DEFAULT_POLICY",
-    "detect_commitment", "detect_commitment_claim", "detect_self_blame_repromise",
+    "detect_commitment", "detect_commitment_claim", "detect_request", "detect_self_blame_repromise",
     "meeting_policy_of", "commitment_style_of", "effective_policy",
     "pick_refuse_line", "refuse_candidates", "retract_line",
     "apply_claim_rewrites", "handle_inbound", "evaluate_inbound", "set_risk_hold",

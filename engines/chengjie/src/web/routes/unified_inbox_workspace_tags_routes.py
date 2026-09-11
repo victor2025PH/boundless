@@ -189,12 +189,16 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
-        # 实施74（实施69 P1-1）：摘掉「需人工」时元数据同清（防陈旧 tooltip 复活）
+        # 实施74（实施69 P1-1）：摘掉「需人工」时元数据同清（防陈旧 tooltip 复活）。
+        # Q-17（#277②）：会话头「我知道了（摘标）」/ 手摘标签走的就是本口——改为经
+        # ``clear_needs_human(actor=agent_ack)``：元数据同清 + risk_hold 同步解除（Q-3 口径，此前
+        # 本口漏了）+ 登记同类 30 分钟冷却 + 落 ``[needs_human] 摘标`` 日志。标签数组仍按 body 覆写。
         try:
-            from src.integrations.protocol_autoreply import HANDOFF_TAG
-            if HANDOFF_TAG not in tags and hasattr(store, "set_handoff_meta") \
-                    and HANDOFF_TAG in (store.get_conv_tags(conversation_id) or []):
-                store.set_handoff_meta(conversation_id, None)
+            from src.integrations.protocol_autoreply import HANDOFF_TAG, clear_needs_human
+            if HANDOFF_TAG not in tags and HANDOFF_TAG in (store.get_conv_tags(conversation_id) or []):
+                if not clear_needs_human(store, conversation_id, actor="agent_ack") \
+                        and hasattr(store, "set_handoff_meta"):
+                    store.set_handoff_meta(conversation_id, None)
         except Exception:
             logger.debug("handoff_meta 清除失败（忽略）", exc_info=True)
         ok = store.set_conv_tags(conversation_id, tags)

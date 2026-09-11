@@ -58,52 +58,86 @@ _SENSITIVE_PATTERNS: List[Tuple[re.Pattern, str]] = [
     # ``commitment:<kind>`` 由 keyword_risk_hits 调 detect_* 补上；本正则兜底升 high。
     # 刻意不收裸「见面/address/weekend」：误伤「我今天见了老板」「email address」
     # 「hotpot this weekend」。
+    # Q-17 #277②：客户入站（``keyword_risk_hits(direction="in")``）本条兜底只到 medium——
+    # 客户邀约是「中」（Q-2 政策委婉延后），AI 稿答应才是 high；三条叙述短语挪到下一条 low。
     (re.compile(
         _LB + r"(?:come\s+over|meet\s+up|meet\s+me|sounds?\s+lovely"
         r"|see\s+you\s+(?:on\s+)?(?:sat|sun|saturday|sunday|tonight|tomorrow|this\s+weekend)"
         r"|i'?ll\s+(?:text\s+you\s+my\s+address|be\s+waiting|make\s+sure\s+to\s+have)"
-        r"|my\s+address\s+is|your\s+(?:home\s+|shipping\s+|mailing\s+)?address"
-        r"|phone\s+number|send\s+(?:me\s+)?money|cash\s*app)" + _RB
+        r"|send\s+(?:me\s+)?money|cash\s*app)" + _RB
         + r"|上门|见个面|见一面|出来见面|来找你|来找我|到时见|到時候見|我地址是"
         r"|收货地址|打钱给你|寄给你|视频通话",
         re.IGNORECASE,
     ), "high"),
+    # low（Q-17 #277②）：叙述性提及——「they asked for my phone number」「my address is on the form」
+    # 「your address」。此前在上一条 high 里，客户一句叙述就打「需人工」（Cameron 第三次打标）。
+    # 真索要（what's your address / send me your number）由 commitment_guard.detect_request 认，
+    # AI 稿答应（my address is …）由 detect_commitment_claim 认，两者都不靠本条。
+    (re.compile(
+        _LB + r"(?:my\s+address\s+is|your\s+(?:home\s+|shipping\s+|mailing\s+)?address"
+        r"|phone\s+number)" + _RB,
+        re.IGNORECASE,
+    ), "low"),
 ]
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
 
 
-def keyword_risk_hits(text: str) -> Tuple[Optional[str], List[str]]:
+def keyword_risk_hits(text: str, direction: Optional[str] = None) -> Tuple[Optional[str], List[str]]:
     """(强制 risk_level 或 None, 命中词组列表)。
 
     与 ``keyword_risk_level`` 同表同口径，但把**全部**命中词收齐（不首中即止）——
     影子台账要的就是「到底哪个正则在响」；level 取最高档。
+
+    ``direction``（Q-17 #277②）：
+      - ``None``（旧签名，兼容全部老调用方）/ ``"out"``（AI 稿 / 出站）：逐字旧口径——
+        ``detect_commitment(t) or detect_commitment_claim(t)`` → ``commitment:<kind>`` high；
+      - ``"in"``（客户入站）：**不跑** detect_commitment / detect_commitment_claim（客户叙述
+        「pictures they have sent me」不是承诺）；只认索要句式 ``detect_request`` →
+        ``request:<kind>``（money → high，其余 medium）；承诺兜底正则（表第 3 条）只到 medium。
+        级别与类别的最终裁决在 ``src.inbox.risk_grader.regrade_inbound``（drafts 钩子）。
     """
     t = str(text or "")
+    inbound = str(direction or "").lower() == "in"
     best: Optional[str] = None
     hits: List[str] = []
-    for pattern, level in _SENSITIVE_PATTERNS:
+    for idx, (pattern, level) in enumerate(_SENSITIVE_PATTERNS):
         matched = False
         for m in pattern.finditer(t):
             matched = True
             h = re.sub(r"\s+", " ", m.group(0)).strip().lower()
             if h and h not in hits:
                 hits.append(h)
+        if matched and inbound and idx == 2:
+            level = "medium"
         if matched and (best is None
                         or _RISK_RANK.get(level, 0) > _RISK_RANK.get(best, 0)):
             best = level
-    # Q-2：细类标签 commitment:<kind>（入站邀约 ∪ 出站答应）。失败不影响旧表。
     try:
-        from src.inbox.commitment_guard import (
-            detect_commitment, detect_commitment_claim,
-        )
-        kind = detect_commitment(t) or detect_commitment_claim(t)
-        if kind:
-            tag = "commitment:" + str(kind)
-            if tag not in hits:
-                hits.append(tag)
-            if best is None or _RISK_RANK.get("high", 0) > _RISK_RANK.get(best, 0):
-                best = "high"
+        if inbound:
+            # Q-17：客户侧只认索要句式（request:<kind>）；detect_commitment 的 Q-2 处置仍由
+            # auto_generate_draft 另行调用 evaluate_inbound，与本函数无关。
+            from src.inbox.commitment_guard import detect_request
+            rk = detect_request(t)
+            if rk:
+                tag = "request:" + str(rk)
+                if tag not in hits:
+                    hits.append(tag)
+                lvl = "high" if rk == "money" else "medium"
+                if best is None or _RISK_RANK.get(lvl, 0) > _RISK_RANK.get(best, 0):
+                    best = lvl
+        else:
+            # Q-2：细类标签 commitment:<kind>（入站邀约 ∪ 出站答应）。失败不影响旧表。
+            from src.inbox.commitment_guard import (
+                detect_commitment, detect_commitment_claim,
+            )
+            kind = detect_commitment(t) or detect_commitment_claim(t)
+            if kind:
+                tag = "commitment:" + str(kind)
+                if tag not in hits:
+                    hits.append(tag)
+                if best is None or _RISK_RANK.get("high", 0) > _RISK_RANK.get(best, 0):
+                    best = "high"
     except Exception:
         pass
     return best, hits
@@ -1160,7 +1194,7 @@ class DraftService:
         try:
             from src.ai.chat_assistant_service import quick_analyze, _suggestions, detect_language
             analysis = quick_analyze(t)
-            _kw_level, _kw_hits = keyword_risk_hits(t)
+            _kw_level, _kw_hits = keyword_risk_hits(t, direction="in")  # Q-17 #277②：客户入站不跑 commitment_claim，只认索要句式 request:<kind>
             risk_level = _max_risk(analysis.get("risk_level", "low"), _kw_level)
             _peer_reasons = list(analysis.get("risk_reasons") or [])
             if _kw_level and "keyword" not in _peer_reasons:
@@ -1189,6 +1223,7 @@ class DraftService:
                 logger.debug("auto_generate_draft commitment_guard 失败（忽略）", exc_info=True)
                 _cmt = None
             risk_level, _peer_reasons, _adult = __import__("src.inbox.adult_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, {"conversation_id": conv_id, "platform": platform, "account_id": account_id, "chat_key": chat_key}, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None)  # Q-15 #271：成人内容四级——mention/flirt 不转人工（medium shadow=adult_flirt）；explicit/pressure 按人设 adult_policy 软回应 / 打标 adult:<level>（钩子内自吞异常，原判定放行）
+            risk_level, _peer_reasons, _rk = __import__("src.inbox.risk_grader", fromlist=["regrade_inbound"]).regrade_inbound(self, {"conversation_id": conv_id, "platform": platform, "account_id": account_id, "chat_key": chat_key}, t, lang, risk_level, _peer_reasons, _risk_hits, automation_mode=automation_mode, cfg=self._cfg or None)  # Q-17 #277②：三级分级——高（诈骗/索钱/威胁/自伤/未成年/露骨施压）现状不动；中（索要句式/露骨提及/停联）只打 risk:medium 标不进 needs_human；低（隐私词/叙述提及）只落 [risk] low 日志。原 high 仅由 privacy 叙述 / 承诺兜底撑起时才降（钩子内自吞异常，原判定放行）
             # 档位**只认** autosend_policy.decide（#160 v2：shadow 下风险不降档，
             # 「本会被扣」进影子台账；review/manual 档由会话档位自身决定，与风险无关）
             _decision = policy_decide(
@@ -1315,7 +1350,10 @@ class DraftService:
                     tag_needs_human(
                         self._store,
                         {"platform": platform, "account_id": account_id, "chat_key": chat_key},
-                        reason="high_risk", source="system")
+                        reason="high_risk", source="system",
+                        level=str((_rk or {}).get("level") or "high"),       # Q-17 #277②：打标带级别 / 类别
+                        category=str((_rk or {}).get("category") or ""),     # （日志 level= category= + 摘标冷却「同类」判据）
+                        hits=list((_rk or {}).get("hits") or _risk_hits or [])[:4])
                     logger.info(
                         "[stop-contact] conv=%s action=review reason=risk_high draft=%s hits=%s",
                         conv_id, draft_id, "|".join(_risk_hits[:4]) or "-")
@@ -1427,7 +1465,7 @@ class DraftService:
             logger.debug("withdrawn_cite enrich skip", exc_info=True)
         base_risk = str(draft.get("risk_level") or "low")
         _peer_reasons = _as_list(draft.get("risk_reasons"))
-        reply_risk, _reply_hits = keyword_risk_hits(reply)
+        reply_risk, _reply_hits = keyword_risk_hits(reply, direction="out")  # Q-17：AI 稿＝出站口径（commitment_claim 只评出站）
         _reply_reasons = ["keyword"] if reply_risk else []
         # O-1 C（#253 · D-O3）陪伴域客服腔守卫：AI 稿命中「I hear you / Take care / 如有需要 /
         # 您…」→ 按人设口吻确定性改写一次（剥句 + 您→你）；剥完为空（整段客服腔）→ 以
