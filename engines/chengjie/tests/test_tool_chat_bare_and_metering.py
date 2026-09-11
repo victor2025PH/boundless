@@ -116,6 +116,21 @@ def test_purpose_for_reply_priority_and_drill():
     assert not lc.is_drill_id("5433982810")
 
 
+def test_known_purposes_match_website_gateway():
+    """引擎白名单必须与官网网关 sanitizePurpose 同表，否则 X-ChatX-Purpose 会被丢掉。"""
+    import re
+    from pathlib import Path
+
+    ts = Path(__file__).resolve().parents[3] / "website" / "lib" / "ai-gateway.ts"
+    if not ts.is_file():
+        pytest.skip("website tree not alongside engine")
+    text = ts.read_text(encoding="utf-8")
+    m = re.search(r"export const KNOWN_PURPOSES = new Set\(\[([\s\S]*?)\]\)", text)
+    assert m, "website KNOWN_PURPOSES 块找不到"
+    site = set(re.findall(r'"([a-z_]+)"', m.group(1)))
+    assert site == set(lc.KNOWN_PURPOSES)
+
+
 # ── B1：裸 system ─────────────────────────────────────────────────────────────
 
 async def test_chat_uses_bare_tool_system_and_is_not_billed(billed):
