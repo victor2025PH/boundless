@@ -299,9 +299,10 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
     - ``source`` = user / confirmed（坐席动作）：覆盖一切，status 强制 confirmed。
     - Q-19（#294）自动来源三闸，不过即 ``skipped[k]`` + ``[profile] drop … reason=``：
       ① ``profile_slots.slot_validate`` 槽类型校验（``invalid:<why>``；nickname / ai 都过）；
-      ② ``recent_inbound`` 给了（抽取链恒给）时 ai_inferred 候选须带 evidence 且能在其中逐字
-      找到、值在 evidence 里（``unanchored``）；③ 值语种 ≠ 客户主语种（``lang_mismatch``）。
-      坐席手录（user / confirmed）不校验、一字不动。
+      ② ``recent_inbound`` 给了（抽取链恒给）时 ai_inferred 候选须带 evidence 且能在其中**同一条**
+      逐字找到、值的每个核心 token 整词在 evidence 里（``unanchored``）；③ 值语种 ≠ 客户主语种
+      （``lang_mismatch``）。②③ 自 Q-25（#295）起由共享事实门 ``src.companion.fact_gate.check``
+      统一判（画像 / 目标回填 / 记忆同门）。坐席手录（user / confirmed）不校验、一字不动。
     绝不抛（写失败按 skipped 记 write_failed）。"""
     out: Dict[str, Any] = {"written": [], "skipped": {}, "conflicts": []}
     pf, ck = str(platform or "").strip(), str(chat_key or "").strip()
@@ -343,10 +344,17 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
                 continue
             val = val or raw_val
             if src == SRC_AI and recent_inbound is not None:
-                why = anchor_reason(k, val, ev, recent_inbound, raw_value=raw_val)
-                if not why:
-                    why = lang_mismatch_reason(raw_val, recent_inbound, ev)
-                if why:
+                # Q-25（#295）：原话锚定 + 语种守卫收进共享事实门 fact_gate.check——画像 /
+                # 目标回填 / 记忆三链同一把尺子（值核心 token 全在 evidence、evidence 逐字在
+                # 同一条客户入站、禁部分匹配）。reason 口径不变：unanchored / lang_mismatch。
+                try:
+                    from src.companion.fact_gate import check as _gate_check
+                    _ok, why = _gate_check(val, slot_or_kind=k, evidence=ev,
+                                           inbound_texts=recent_inbound, raw_value=raw_val)
+                except Exception:
+                    _ok, why = False, "gate_error"
+                if not _ok:
+                    why = why or "unanchored"
                     out["skipped"][k] = why
                     _log_drop(conv, k, raw_val, src, why)
                     continue
@@ -732,13 +740,15 @@ def anchor_reason(slot: str, value: Any, evidence: Any, recent_inbound: Any, *,
                   raw_value: Any = None) -> str:
     """原话锚定：``""`` 通过 / ``"unanchored"``。
 
-    evidence 必填；须为最近入站某条的（归一后）子串；值（归一前或归一后）须在 evidence 里——
-    枚举槽（婚恋 / 家庭）改验 evidence 含该标签的触发词（``profile_slots.enum_evidence_ok``）。"""
-    ev = _lit(evidence)
-    if not ev:
+    evidence 必填；须为最近入站**同一条**的（归一后）子串；值的每个核心 token（归一前或归一后）
+    须整词在 evidence 里（Q-25 #295：禁部分匹配——``AI work`` × ``inspection work`` 丢）——
+    枚举槽（婚恋 / 家庭）改验 evidence 含该标签的触发词（``profile_slots.enum_evidence_ok``）。
+    判据实现在共享事实门 ``src.companion.fact_gate``，这里只是画像口径的薄封装。"""
+    try:
+        from src.companion.fact_gate import evidence_in_inbound, value_anchored_in_evidence
+    except Exception:
         return "unanchored"
-    texts = [_lit(t) for t in list(recent_inbound or []) if str(t or "").strip()]
-    if not texts or not any(ev in t for t in texts):
+    if not _lit(evidence) or not evidence_in_inbound(evidence, list(recent_inbound or [])):
         return "unanchored"
     try:
         from src.companion.goals.profile_slots import enum_evidence_ok, is_enum_slot
@@ -746,11 +756,11 @@ def anchor_reason(slot: str, value: Any, evidence: Any, recent_inbound: Any, *,
             return "" if enum_evidence_ok(slot, value, evidence) else "unanchored"
     except Exception:
         pass
-    cores = [_lit(value)]
+    cores = [value]
     if raw_value is not None:
-        cores.append(_lit(raw_value))
-    cores = [c for c in cores if c]
-    if not cores or not any(c in ev for c in cores):
+        cores.append(raw_value)
+    cores = [c for c in cores if str(c or "").strip()]
+    if not cores or not any(value_anchored_in_evidence(c, evidence) for c in cores):
         return "unanchored"
     return ""
 
