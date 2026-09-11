@@ -10,6 +10,7 @@ import {
   getChannelAccountStats,
   listChannelAccounts,
 } from "@/lib/channels";
+import { CHANNEL_PLATFORM_LABEL, CHANNEL_STATUS_LABEL } from "../labels";
 import { EditChannelAccountControl, NewChannelAccountForm } from "./ui";
 import {
   Card,
@@ -32,20 +33,8 @@ export const dynamic = "force-dynamic";
 
 const LIMIT = 50;
 
-const PLATFORM_LABEL: Record<string, string> = {
-  telegram: "Telegram",
-  whatsapp: "WhatsApp",
-  messenger: "Messenger",
-  line: "LINE",
-  web: "web 客服",
-  other: "其他",
-};
-const STATUS_LABEL: Record<string, string> = {
-  active: "在用",
-  pending: "待启用",
-  paused: "已暂停",
-  revoked: "已弃用",
-};
+const PLATFORM_LABEL = CHANNEL_PLATFORM_LABEL;
+const STATUS_LABEL = CHANNEL_STATUS_LABEL;
 /** 状态展示顺序（在用优先，弃用沉底）。 */
 const STATUS_ORDER = ["active", "pending", "paused", "revoked"] as const;
 
@@ -163,7 +152,7 @@ export default function ChannelsPage({
                   </span>,
                   canWrite
                     ? "点右上角「登记账号」录入；纪律：新号先登记、一号一实例、不存任何密钥。"
-                    : "登记需要 admin 及以上角色 —— 请联系管理员录入。",
+                    : "登记需要运营或主账号 —— 请联系管理员录入。",
                   "web 官网客服 widget 无账号概念，也建议登记一条（platform=web），保持台账全貌。",
                 ]
           }

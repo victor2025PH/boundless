@@ -51,6 +51,34 @@ try:
 except Exception:
     pass
 
+# 签发即台账（集团账本 licenses 表的数据源，scripts/ledger_outbox.py）。按文件路径
+# 懒加载一次，不污染 sys.path；模块缺席 → 钩子静默 no-op。只记授权（license），
+# 充值 / 加量凭证不入此账（授权 = 许可证、额度 = 钱包，2026-09-10 决议）。
+_LEDGER_HOOK = None
+_LEDGER_HOOK_TRIED = False
+
+
+def _ledger_record(payload: dict, token: str, kind: str = "order_fulfill") -> bool:
+    """成功回填官网后追加一条归一化授权记录到本地 outbox；任何异常吞掉返回 False。"""
+    global _LEDGER_HOOK, _LEDGER_HOOK_TRIED
+    try:
+        if not _LEDGER_HOOK_TRIED:
+            _LEDGER_HOOK_TRIED = True
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "_chengjie_ledger_outbox", Path(__file__).resolve().parent / "ledger_outbox.py")
+            if spec is not None and spec.loader is not None:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _LEDGER_HOOK = mod
+        if _LEDGER_HOOK is None:
+            return False
+        return bool(_LEDGER_HOOK.record_payload(
+            payload, token, kind=kind, origin="scripts/fulfill_chatx_watch.py"))
+    except Exception:  # noqa: BLE001
+        return False
+
 
 def load_conf(cli_site: str, cli_priv: str) -> dict:
     site = cli_site or os.environ.get("CHATX_SITE") or os.environ.get("BD_SITE") \
@@ -236,6 +264,7 @@ def run_once(conf: dict, dry: bool) -> int:
                 save_state(st)
                 handled += 1
                 print(f"[开通] {oid} ✓ website 已回填 code，客户可在设置页粘贴激活")
+                _ledger_record(payload, token)
             else:
                 print(f"[错误] {oid} 回填失败：{r}", file=sys.stderr)
         except Exception as e:  # noqa: BLE001

@@ -54,6 +54,19 @@ def main(argv=None) -> int:
         print(f"OK: license 已写入 {args.out}")
     else:
         print(token)
+    # 签发即台账（集团账本 licenses 表数据源；fail-silent，不改变本工具任何输出）
+    try:
+        import importlib.util
+
+        _spec = importlib.util.spec_from_file_location(
+            "_chengjie_ledger_outbox", Path(__file__).resolve().parent / "ledger_outbox.py")
+        if _spec is not None and _spec.loader is not None:
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _mod.record_payload(payload, token, kind="order_fulfill",
+                                origin="scripts/fulfill_chatx.py")
+    except Exception:
+        pass
     # 台账摘要（stderr，不污染 stdout token）
     print(
         f"issued sku={args.sku} plan={payload['plan']} seats={payload['seats']} "

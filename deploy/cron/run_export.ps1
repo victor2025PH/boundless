@@ -5,6 +5,8 @@
 #             license：avatarhub → python tools\license_ledger\export_avatarhub.py --out <staging>
 #                      chengjie  → python engines\chengjie\scripts\ledger_outbox.py --export <staging> --input <实例outbox>
 #                                  （签发即台账 outbox；未接线/无签发记录时跳过，不算失败）
+#                                  + 厂商机 CLI 缺省 outbox engines\chengjie\config\ledger_outbox.jsonl
+#                                  （license_tool / fulfill_trial / fulfill_chatx* 落此；存在才导出）
 #                      huoke     → 无授权数据源，自动跳过
 #   2) 校验   persona：python tools\persona_bus\validate_personas.py <file>
 #             license：python tools\license_ledger\validate_export.py <file>   —— 不过不许传输（本壳强制）
@@ -177,6 +179,14 @@ if ('license' -in $Kinds) {
                     Join-Path $staging 'chengjie_licenses.json'
                 }
                 if (-not (Export-Validate @($cjOutboxExporter, '--export', $outFile, '--input', $src) $licenseValidator $outFile 'license')) { $failed++ }
+            }
+            # 厂商机 CLI 签发的缺省 outbox（license_tool issue / fulfill_trial / fulfill_chatx*
+            # 在无 CHENGJIE_LEDGER_OUTBOX / AITR_DATA_DIR 时落仓内 config/，gitignore）：
+            # 与实例 outbox 不是同一份文件，单独出一份；不存在时静默（本机不是厂商机）。
+            $cliOutbox = Join-Path $RepoRoot 'engines\chengjie\config\ledger_outbox.jsonl'
+            if (Test-Path -LiteralPath $cliOutbox -PathType Leaf) {
+                $outFile = Join-Path $staging 'chengjie_licenses_vendor_cli.json'
+                if (-not (Export-Validate @($cjOutboxExporter, '--export', $outFile, '--input', $cliOutbox) $licenseValidator $outFile 'license')) { $failed++ }
             }
         }
         'huoke' {

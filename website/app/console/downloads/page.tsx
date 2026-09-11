@@ -39,7 +39,7 @@ const FLAG_LABEL: Record<string, string> = {
   range: "续传",
   office: "办公室",
 };
-const VIA_LABEL: Record<string, string> = { r2: "R2 镜像", local: "本站", blocked: "拦截" };
+const VIA_LABEL: Record<string, string> = { r2: "云端镜像", local: "本站", blocked: "拦截" };
 
 function shortUa(ua: string): string {
   if (!ua) return "—";
@@ -81,7 +81,7 @@ export default async function DownloadsPage({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="下载台账"
+        title="安装包下载"
         desc={
           <>
             <Download className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />

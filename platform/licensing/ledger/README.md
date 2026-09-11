@@ -11,7 +11,7 @@
 |---|---|---|
 | 代码位置 | `engines/avatarhub/license*.py`、`license_server.py`、`fulfill_orders.py`、`sign_worker.py` | `engines/chengjie/src/licensing/`、`scripts/license_tool.py` |
 | 授权载体 | `license.key`：`{"payload":{...},"sig":"<hex>","alg":"Ed25519"}` | 授权码 token：`<payload_b64url>.<sig_b64url>` |
-| 绑定维度 | **机器指纹** + edition（trial/standard/pro） | **客户** + plan/seats/included_chars/channels（不绑机） |
+| 绑定维度 | **机器指纹** + edition（trial/standard/pro） | **客户** + plan/seats/included_chars/channels；试用授权与换机重签另绑 `machine`（2026-08 起，见 §5.2） |
 | 服务的产品 | huansheng 幻声 / huanying 幻影 / huanyan 幻颜 / tongchuan 通传 | zhiliao 智聊 / tongyi 通译 |
 
 P1 阶段**不动两套签发实现**，只做一件事：把两边的"发放记录"以只读方式导出成同一种归一化 JSON，导入集团账本（website 侧 SQLite），先让集团层面"发了多少授权、给谁、什么时候到期"有一本总账。统一签发（P2+）在总账数据跑顺之后再议。
@@ -43,7 +43,7 @@ engines/chengjie（config/license.key 等，只读）→ export_chengjie.py → 
 | `seats` | int 或 `null` | 席位。**注意 chengjie 的 `0` 表示"不限"，原样保留不转 null** |
 | `customer_name` | string 或 `null` | 客户名 |
 | `customer_contact` | string 或 `null` | 联系方式（两套引擎侧台账均无独立联系方式字段，目前恒 null，见 §7 已知局限） |
-| `machine_fingerprint` | string 或 `null` | avatarhub 机器指纹（`XXXX-XXXX-XXXX-XXXX`；`*`=站点授权）；chengjie 不绑机，恒 null |
+| `machine_fingerprint` | string 或 `null` | 机器指纹。avatarhub：`XXXX-XXXX-XXXX-XXXX`，`*`=站点授权。chengjie：`payload.machine`（2026-08 起试用授权绑机、`license_tool --machine` 换机重签写入，`*`=站点授权）；无该字段 = 不绑机 → null |
 | `issued_at` | ISO8601 或 `null` | 签发时间；原值转不了 ISO8601 → null，原值留在 `raw` |
 | `expires_at` | ISO8601 或 `null` | 到期时间；`null` = 永久（原值 0/缺省）**或**未知（如未激活兑换码尚未起算），由 `raw` 区分 |
 | `status` | `active/expired/revoked/trial/unknown` | 导出时刻状态，判定口径见 §4 |
@@ -119,8 +119,12 @@ engines/chengjie（config/license.key 等，只读）→ export_chengjie.py → 
 | `customer_name` | `payload.sub` |
 | `issued_at` / `expires_at` | `payload.iat` / `payload.exp`（unix 秒→ISO；0/缺省→null=永久） |
 | `status` | §4 口径（`trial=true` → trial；过期→expired） |
-| `edition` / `machine_fingerprint` / `customer_contact` / `product_id` / `sku_id` | 均 null（chengjie 无这些概念，见 §6/§7） |
-| `raw` | `{kind, origin(来源文件), token_sha256, payload}`——**不含 token 原文**（见 §8） |
+| `machine_fingerprint` | `payload.machine`（试用授权 `build_trial_payload` 与 `license_tool --machine` 写入；`*`=站点授权）；无该字段=不绑机 → null |
+| `product_id` / `sku_id` | `payload.product_id` / `payload.sku_id`（2026-08 起履约 payload 自带；旧存量 token 无 → null） |
+| `edition` / `customer_contact` | 均 null（chengjie 无这些概念，见 §6/§7） |
+| `raw` | `{kind, origin(来源文件), token_sha256, payload}`——**不含 token 原文**（见 §8）。`kind`：`cli_issue`（license_tool）/ `trial_fulfill`、`trial_upgrade`（fulfill_trial）/ `order_fulfill`（fulfill_chatx_watch / fulfill_chatx） |
+
+**签发即台账接线（2026-09-10）**：除 `license_tool.py issue` 外，厂商机的 `scripts/fulfill_trial.py`（官网试用领取签发 + 存量升级重签）与 `scripts/fulfill_chatx_watch.py` / `fulfill_chatx.py`（订单授权签发）在**回填官网成功后**也追加 outbox 记录。充值 / 加量**凭证**（topup voucher）不是授权，刻意不入 outbox——授权 = 许可证、额度 = 钱包分账。厂商机上这些 CLI 的缺省 outbox 是 `engines/chengjie/config/ledger_outbox.jsonl`（无 `CHENGJIE_LEDGER_OUTBOX` / `AITR_DATA_DIR` 时），`deploy/cron/run_export.ps1` 会一并导出。
 
 `channels` / `features` / `included_chars` / `grace_days` 不设归一化字段，保留在 `raw.payload`。
 

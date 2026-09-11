@@ -7,6 +7,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, X } from "lucide-react";
+import {
+  CHANNEL_INSTANCE_LABEL,
+  CHANNEL_INSTANCE_ORDER,
+  CHANNEL_PLATFORM_FORM_LABEL,
+  CHANNEL_PLATFORM_ORDER,
+  CHANNEL_STATUS_LABEL,
+  CHANNEL_STATUS_ORDER,
+  toOptions,
+} from "../labels";
 
 function emitToast(msg: string, ok = true) {
   if (typeof window !== "undefined") {
@@ -37,32 +46,12 @@ const btnPrimary =
   "rounded-lg bg-crown-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-crown-400 disabled:opacity-50";
 
 // 枚举选项（值与 lib/channels.ts 的 CHECK 约束一致）
-const PLATFORM_OPTIONS = [
-  { value: "telegram", label: "Telegram（MTProto 协议号）" },
-  { value: "whatsapp", label: "WhatsApp（baileys 侧车）" },
-  { value: "messenger", label: "Messenger（网页会话侧车）" },
-  { value: "line", label: "LINE（RPA 桌面登录）" },
-  { value: "web", label: "web 官网客服 widget" },
-  { value: "other", label: "其他平台" },
-] as const;
-
-const INSTANCE_OPTIONS = [
-  { value: "zhiliao", label: "zhiliao 智聊实例" },
-  { value: "tongyi", label: "tongyi 通译实例" },
-  { value: "avatarhub", label: "avatarhub 幻境系引擎" },
-  { value: "huoke", label: "huoke 获客引擎" },
-  { value: "website", label: "website 官网" },
-  { value: "none", label: "none 暂未挂载" },
-] as const;
+const PLATFORM_OPTIONS = toOptions(CHANNEL_PLATFORM_FORM_LABEL, CHANNEL_PLATFORM_ORDER);
+const INSTANCE_OPTIONS = toOptions(CHANNEL_INSTANCE_LABEL, CHANNEL_INSTANCE_ORDER);
 
 const PURPOSE_OPTIONS = ["总机接待", "交付服务", "测试", "投放专号", "其他"] as const;
 
-const STATUS_OPTIONS = [
-  { value: "active", label: "active 在用" },
-  { value: "pending", label: "pending 待启用" },
-  { value: "paused", label: "paused 已暂停" },
-  { value: "revoked", label: "revoked 已弃用" },
-] as const;
+const STATUS_OPTIONS = toOptions(CHANNEL_STATUS_LABEL, CHANNEL_STATUS_ORDER);
 
 interface ChannelFormValue {
   platform: string;

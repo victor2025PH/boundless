@@ -17,9 +17,9 @@ export default function UsersPage() {
       <div className="mx-auto max-w-md py-16">
         <div className="rounded-xl border border-rose-500/30 bg-rose-950/20 p-5 text-center">
           <ShieldAlert className="mx-auto mb-2 h-8 w-8 text-rose-400" />
-          <p className="text-sm font-semibold text-rose-300">仅 master 可管理用户</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
-            当前账号 {me.username}（{me.role}）无权访问本页。如需开通账号或调整角色，请联系主账号。
+          <p className="text-sm font-semibold text-rose-300">仅主账号可管理用户</p>
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
+            当前账号 {me.username}无权访问本页。如需开通账号或调整角色，请联系主账号。
           </p>
         </div>
       </div>
@@ -33,7 +33,7 @@ export default function UsersPage() {
     <div>
       <PageHeader
         title="用户"
-        desc="控制台实名账号（users 表）：viewer 只读 / admin 可做客户与归属写操作 / master 额外管用户。禁用与重置密码会立即撤销该用户全部会话；最后一个启用的 master 不可禁用或降级。"
+        desc="只读只能看；运营可做客户归属、建档、核销；主账号额外管理本页账号。禁用或重置密码会立刻退出该用户全部登录；最后一个启用的主账号不可禁用或降级。"
         actions={<NewUserForm />}
       />
 
@@ -84,10 +84,10 @@ export default function UsersPage() {
         </Card>
       )}
 
-      <p className="mt-4 text-[11px] leading-relaxed text-slate-600">
-        脚本/巡检可继续用 <code className="rounded bg-ink-700 px-1 py-0.5 font-mono text-amber-300/80">x-console-key</code>{" "}
-        头（CONSOLE_KEY）调 /api/console/**，视为内置 master，不占用户表。所有账号与会话变更均写入审计流水。
-      </p>
+      <details className="mt-4 text-[11px] leading-relaxed text-slate-500">
+        <summary className="cursor-pointer select-none text-slate-400 hover:text-slate-300">技术说明</summary>
+        <p className="mt-1.5">脚本巡检可用服务端口令调用接口，视为内置主账号，不占用户表。账号与会话变更都会写入审计流水。</p>
+      </details>
     </div>
   );
 }

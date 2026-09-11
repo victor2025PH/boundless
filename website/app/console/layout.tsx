@@ -5,7 +5,7 @@
 // crown 皇冠资产强调色（tokens.json crown 组；与 /admin 青色系区分是实施09 既定决策）；
 // 页头用 ∞ 品牌标（与登录页同源资产），文字冷灰仍走 slate 文字阶（允许项）。
 import type { Metadata } from "next";
-import { ShieldAlert, UserRound } from "lucide-react";
+import { UserRound } from "lucide-react";
 import { consoleConfigured, consoleUsersEmpty, getConsoleSessionUser } from "@/lib/console-auth";
 import { RoleBadge } from "./parts";
 import { ConsoleNav, ConsoleToaster, LoginCard, LogoutButton } from "./ui";
@@ -39,14 +39,13 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
                     draggable={false}
                   />
                   <div className="min-w-0 leading-tight">
-                    <span className="block truncate text-sm font-bold text-white">无界 · 集团控制台</span>
-                    <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-crown-500/80">
-                      Boundless Console
+                    <span className="block truncate text-sm font-bold text-white" title="Boundless Console">
+                      无界 · 集团控制台
                     </span>
+                    <span className="block text-[10px] text-crown-500/80">内部运营台</span>
                   </div>
-                  <span className="ml-1 hidden shrink-0 items-center gap-1 rounded-full border border-crown-500/30 bg-crown-500/10 px-2.5 py-1 text-[11px] font-medium text-crown-300 sm:inline-flex">
-                    <ShieldAlert className="h-3.5 w-3.5" />
-                    皇冠资产 · 最小暴露
+                  <span className="ml-1 hidden shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300 sm:inline-flex">
+                    生产环境
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-2.5">
@@ -64,9 +63,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
             </div>
           </header>
           <main className="mx-auto max-w-6xl px-5 py-6">{children}</main>
-          <footer className="mx-auto max-w-6xl px-5 pb-8 pt-2 text-[11px] leading-relaxed text-slate-600">
-            账本为影子镜像（JSON 主真相源 + 双写/回填）；本台管客户-订单-授权归属与台账，营销与获客内容仍在 /admin。
-            实名账号 + RBAC（viewer 只读 / admin 运营 / master 主账号）；生产请独立设置 CONSOLE_KEY（仅剩脚本头通道与初始化用途）并配 IP 白名单。
+          <footer className="mx-auto max-w-6xl px-5 pb-8 pt-2 text-[11px] leading-relaxed text-slate-500">
+            本台管理客户、订单、授权与归属。营销内容在官网后台。
           </footer>
         </>
       )}

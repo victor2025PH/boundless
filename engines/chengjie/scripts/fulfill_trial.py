@@ -72,6 +72,38 @@ AUDIT_PATH = Path(__file__).resolve().parent.parent / "logs" / "fulfill_trial.js
 
 _FP_CHARS = set("0123456789ABCDEF-")
 
+# 签发即台账（集团账本 licenses 表的数据源，scripts/ledger_outbox.py）。按文件路径
+# 懒加载一次，不污染 sys.path；模块缺席 → 钩子静默 no-op。
+_LEDGER_HOOK: Any = None
+_LEDGER_HOOK_TRIED = False
+
+
+def _ledger_record(payload: Dict[str, Any], token: str, kind: str) -> bool:
+    """把一次**成功回填官网**的授权签发追加到本地 outbox（fail-silent）。
+
+    只记授权（license），不记加量凭证（topup voucher）——授权 = 许可证、额度 = 钱包，
+    两本账分开（2026-09-10 决议）。任何异常吞掉返回 False：台账少一行绝不能阻断履约。
+    """
+    global _LEDGER_HOOK, _LEDGER_HOOK_TRIED
+    try:
+        if not _LEDGER_HOOK_TRIED:
+            _LEDGER_HOOK_TRIED = True
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "_chengjie_ledger_outbox",
+                Path(__file__).resolve().parent / "ledger_outbox.py")
+            if spec is not None and spec.loader is not None:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _LEDGER_HOOK = mod
+        if _LEDGER_HOOK is None:
+            return False
+        return bool(_LEDGER_HOOK.record_payload(
+            payload, token, kind=kind, origin="scripts/fulfill_trial.py"))
+    except Exception:
+        return False
+
 
 # ── 纯逻辑（可单测，不碰网络/私钥）─────────────────────────────────────────────
 
@@ -257,6 +289,7 @@ def run_once(site: str, key: str, priv_hex: str, *, days: Optional[int] = None,
                 _audit("issue", claim=c["id"], lic_id=payload["lic_id"],
                        fp=c["fingerprint"], chars=payload["included_chars"],
                        exp=payload.get("exp", 0))
+                _ledger_record(payload, token, "trial_fulfill")
             stat["issued"] += 1
         except Exception as e:
             log(f"  ! {c['id']} 签发失败: {e}")
@@ -302,6 +335,8 @@ def run_once(site: str, key: str, priv_hex: str, *, days: Optional[int] = None,
                     _audit("upgrade", claim=c["id"], lic_id=payload["lic_id"],
                            fp=c["fingerprint"], chars=payload["included_chars"],
                            prev_chars=c.get("license_chars"))
+                    # 同 lic_id 重签 → 同 source_key，账本 upsert 覆盖为新额度
+                    _ledger_record(payload, token, "trial_upgrade")
                 stat["upgraded"] += 1
             except Exception as e:
                 log(f"  ! {c['id']} 升级重签失败: {e}")

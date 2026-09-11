@@ -90,7 +90,7 @@ export function GrantToggle({
         frozen
           ? "清除中/已清除的人设授权冻结"
           : !canWrite
-            ? "viewer 只读：切换授权需 admin 及以上角色"
+            ? "当前账号只读：切换可用产品需要运营或主账号"
             : item.granted
               ? `撤销 ${item.label} 的授权`
               : `授权给 ${item.label}`

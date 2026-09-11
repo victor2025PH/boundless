@@ -155,7 +155,7 @@ export default async function TrialPage({
         desc={
           <>
             <Gift className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
-            用户在客户端「注册领免费额度」（100 万字符 · 无期限）建单，厂商机离线签发后
+            用户在客户端「注册领免费额度」（100 万字符 / 约 10,000 Token · 无期限）建单，厂商机离线签发后
             自动激活。客服在这里
             <span className="font-medium text-amber-300/90"> 核销绑定码</span>
             为用户追加赠送字符（数额可调）——凭证由厂商机签，客服不接触任何密钥。
@@ -333,7 +333,7 @@ export default async function TrialPage({
                         {(r.inviteeUsed || 0).toLocaleString()}
                       </td>
                       <td className="py-1.5">
-                        {canRedeem ? <ReferralApproveButton id={r.id} /> : <span className="text-slate-600">需 admin</span>}
+                        {canRedeem ? <ReferralApproveButton id={r.id} /> : <span className="text-slate-400">需运营权限</span>}
                       </td>
                     </tr>
                   ))}
@@ -352,7 +352,7 @@ export default async function TrialPage({
         <TrialRedeemPanel defaultChars={DEFAULT_GIFT} />
       ) : (
         <p className="mb-5 rounded-xl border border-ink-700 bg-ink-900/40 p-3 text-[11px] text-slate-500">
-          viewer 只读：核销绑定码需 admin 及以上角色。
+          当前账号只读：核销绑定码需要运营或主账号。
         </p>
       )}
 

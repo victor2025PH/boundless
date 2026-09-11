@@ -6,7 +6,6 @@ import { getPersonaStats, getPurgeQueueStats, listPersonas } from "@/lib/persona
 import { getCustomerById } from "../data";
 import {
   Card,
-  Code,
   CustomerLink,
   DataTable,
   EmptyState,
@@ -28,10 +27,10 @@ export const dynamic = "force-dynamic";
 const LIMIT = 50;
 const STATUS_CHOICES = [
   { value: "", label: "全部状态" },
-  { value: "active", label: "在用 active" },
-  { value: "archived", label: "已归档 archived" },
-  { value: "purge_pending", label: "清除中 purge_pending" },
-  { value: "purged", label: "已清除 purged" },
+  { value: "active", label: "在用" },
+  { value: "archived", label: "已归档" },
+  { value: "purge_pending", label: "清除中" },
+  { value: "purged", label: "已清除" },
 ] as const;
 
 export default function PersonasPage({
@@ -126,26 +125,17 @@ export default function PersonasPage({
             hasFilter
               ? ["调整搜索或状态筛选试试。"]
               : [
-                  <span key="export">
-                    先在引擎侧生成人设导出 JSON（
-                    <Code>{`{"version":1,"source_system":"avatarhub","personas":[{source_key, slots:{face:{present:true,fingerprint:"…"},…}}]}`}</Code>
-                    ）；
-                  </span>,
-                  <span key="import">
-                    再运行 <Code>node scripts/ledger-import-personas.mjs &lt;导出json&gt;</Code>{" "}
-                    导入（幂等，可重复执行；同格式 .jsonl 逐行也支持）。
-                  </span>,
-                  "导入不建客户档案：归属客户在本页详情里人工操作。",
+                  "尚无人设记录。请联系技术负责人完成首次导入；导入后在详情页归属客户。",
                 ]
           }
         />
       ) : (
         <Card className="p-0">
-          <DataTable head={["人设", "来源", "槽位", "状态", "归属客户", "授权产品", "创建时间", ""]}>
+          <DataTable head={["人设", "来源", "槽位", "状态", "归属客户", "可用产品", "创建时间", ""]}>
             {rows.map((p) => (
               <tr key={p.id} className="hover:bg-ink-700/40">
                 <Td>
-                  <Link href={`/console/personas/${p.id}`} className="font-medium text-amber-300 hover:underline">
+                  <Link href={`/console/personas/${p.id}`} className="font-medium text-crown-300 hover:underline">
                     {p.display_name || "（未命名）"}
                   </Link>
                   <div className="mt-0.5">

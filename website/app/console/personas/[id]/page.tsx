@@ -193,7 +193,7 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <SectionTitle count={activeGrantIds.size}>授权矩阵</SectionTitle>
+          <SectionTitle count={activeGrantIds.size}>可用产品</SectionTitle>
           <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
             人设授权给哪些产品使用（授权只是使用许可的登记；资产分发仍走各引擎自己的通道）。
             {frozen && <b className="text-amber-300">当前状态下授权已冻结。</b>}
@@ -246,7 +246,7 @@ export default function PersonaDetailPage({ params }: { params: { id: string } }
                 <AssignPersonaCustomerControl personaId={persona.id} />
               </div>
             ) : (
-              <p className="mt-3 text-[11px] text-slate-600">viewer 只读：归属操作需 admin 及以上角色。</p>
+              <p className="mt-3 text-[11px] text-slate-400">当前账号只读：归属需要运营或主账号。</p>
             )}
           </Card>
 

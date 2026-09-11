@@ -19,6 +19,7 @@ import {
   probeLocalEndpoints,
   type LocalProbeResult,
 } from "@/lib/machine-mesh";
+import { MACHINE_ROLE_LABEL } from "../labels";
 import {
   Card,
   Code,
@@ -134,43 +135,23 @@ export default async function KpiPage({
   return (
     <div className="space-y-5">
       <nav className="text-xs text-slate-500">
-        <Link href="/console" className="text-amber-300/90 underline-offset-2 hover:underline">
+        <Link href="/console" className="text-crown-300 underline-offset-2 hover:underline">
           ← 返回总览
         </Link>
         <span className="mx-2 text-slate-700">/</span>
-        <span>事件流</span>
+        <span>运营事件</span>
       </nav>
 
       <PageHeader
-        title="事件流 · 全域遥测"
-        desc="八产品 + 官网 + 平台层的运营事件统一入库（group-events.db，独立于账本）。这里看吞吐与活跃度；经营口径（本月成交 / 今日待办）在总览。上报链路：产品 spool → uploader 补传 → /api/collect 幂等入库。"
+        title="运营事件"
+        desc="各产品与官网的运营事件统一入库。这里看吞吐与活跃度；经营口径在总览。"
+        techNote="上报链路：产品本地缓存 → 补传器 → 收集接口幂等入库。空库时请联系技术负责人接通上报密钥与补传器。"
       />
 
       {empty && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs leading-relaxed text-amber-200/90">
-          <p className="mb-1.5 font-semibold text-amber-300">事件库还是空的，三步接通上报链路：</p>
-          <ol className="list-decimal space-y-1.5 pl-5">
-            <li>
-              在官网部署环境设置 <Code>EVENT_INGEST_KEY</Code>（机器上报密钥，独立于 CONSOLE_KEY；见{" "}
-              <Code>website/.env.example</Code>），未配置时 /api/collect 返回 503；
-            </li>
-            <li>
-              在产品机器跑补传器（建议 cron 每 5 分钟）：
-              <pre className="mt-1.5 overflow-x-auto rounded-lg bg-ink-950 p-2.5 font-mono text-[11px] leading-relaxed text-slate-300">
-                {"python platform/observability/uploader.py --endpoint https://bd2026.cc/api/collect --key <EVENT_INGEST_KEY>"}
-              </pre>
-              spool 目录、断点游标等参数见 <Code>uploader.py --help</Code> 与 EVENT_CONTRACT.md 传输层一节；
-            </li>
-            <li>
-              或用 curl 手工验证收集器：
-              <pre className="mt-1.5 overflow-x-auto rounded-lg bg-ink-950 p-2.5 font-mono text-[11px] leading-relaxed text-slate-300">
-                {`curl -X POST https://bd2026.cc/api/collect \\
-  -H "Authorization: Bearer <EVENT_INGEST_KEY>" \\
-  -H "Content-Type: application/json" -H "X-Event-Source: manual-test" \\
-  -d '{"events":[{"event_id":"evt_01KXS8BM00008J4CT4ANK7F24S","ts":"2026-07-18T04:00:00.123Z","product_id":"website","name":"website.lead.submitted","props":{"lead_id":"ld_demo"}}]}'`}
-              </pre>
-            </li>
-          </ol>
+        <div className="rounded-xl border-l-[3px] border-l-amber-400 border border-ink-700 bg-ink-900/60 p-4 text-xs leading-relaxed text-slate-300">
+          <p className="mb-1.5 font-semibold text-amber-300">事件库还是空的</p>
+          <p>尚无运营事件入库。请联系技术负责人接通上报密钥与补传器；接通后各产品会自动上报。</p>
         </div>
       )}
 
@@ -449,8 +430,3 @@ export default async function KpiPage({
     </div>
   );
 }
-
-const MACHINE_ROLE_LABEL: Record<string, string> = {
-  dev: "开发机",
-  compute: "算力节点",
-};

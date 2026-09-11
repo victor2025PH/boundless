@@ -6,16 +6,26 @@
 钩子：签发成功后把 payload 归一化为集团台账 v1 记录
 （platform/licensing/ledger/ledger_import.schema.json），append 一行到本地 outbox JSONL。
 
-- 默认 outbox：``engines/chengjie/config/ledger_outbox.jsonl``（相对本文件定位，与 cwd
-  无关）；环境变量 ``CHENGJIE_LEDGER_OUTBOX`` 可覆盖。env/参数指向**已存在目录**时
-  （部署侧按目录注入：start_*.ps1 设 ``<数据根>\\ledger_outbox``，实例骨架预建该目录，
+- 默认 outbox 解析顺序：环境变量 ``CHENGJIE_LEDGER_OUTBOX`` → ``AITR_DATA_DIR``（实例/
+  测试数据根，落 ``<数据根>/ledger_outbox/ledger_outbox.jsonl``，与 start_*.ps1 注入
+  的目录同址）→ ``engines/chengjie/config/ledger_outbox.jsonl``（相对本文件定位，与 cwd
+  无关；厂商机跑 CLI 签发时通常落这里）。env/参数指向**已存在目录**时（部署侧按目录
+  注入：start_*.ps1 设 ``<数据根>\\ledger_outbox``，实例骨架预建该目录，
   deploy/instances/README §7）自动在目录内落标准文件名 ``ledger_outbox.jsonl``——
   与 deploy/cron/run_export.ps1 license 段首选候选一致。含客户名等经营数据，已 gitignore。
+  pytest 的 conftest 把 AITR_DATA_DIR 指向进程级 tmp，故测试里触发的签发钩子绝不写仓库 config/。
 - 安全：记录绝不含 token 原文 / 签名 / 私钥；仅保留 payload 非敏感字段 + token 的
   sha256 摘要（与 tools/license_ledger/export_chengjie.py 同口径）。
 - source_key 对齐 export_chengjie：``payload.lic_id`` 优先；缺失时
   ``token:<sha256 前 16 位>``；连 token 也没有时 ``payload:<规范化 payload sha256 前 16 位>``。
   故同一授权经「outbox 实时记录」与「回收客户 key 补录」两条路进集团账本会 upsert 合并。
+- 绑机：``payload.machine``（试用授权 build_trial_payload / license_tool --machine 写入，
+  ``*`` = 站点授权）透传为 ``machine_fingerprint``；无该字段 = 不绑机 → null。
+- 接线点（2026-09-10）：``scripts/license_tool.py issue``（手工 CLI）、
+  ``scripts/fulfill_trial.py``（官网试用领取签发 / 存量升级重签）、
+  ``scripts/fulfill_chatx_watch.py`` 与 ``scripts/fulfill_chatx.py``（订单授权签发）。
+  充值 / 加量 **凭证**（topup voucher）不是授权，刻意不入本 outbox——授权 = 许可证，
+  额度 = 钱包，两本账分开。
 - ``record_issue`` 全程 fail-silent（只返回 bool，绝不抛异常、绝不打印）——台账钩子
   不得影响签发主流程与其 stdout。
 
@@ -49,7 +59,14 @@ if __name__ == "__main__":  # CLI 直跑才重配控制台；被 license_tool �
 
 SOURCE_SYSTEM = "chengjie"
 ENV_OUTBOX = "CHENGJIE_LEDGER_OUTBOX"
+ENV_DATA_DIR = "AITR_DATA_DIR"
 OUTBOX_FILENAME = "ledger_outbox.jsonl"
+OUTBOX_DIRNAME = "ledger_outbox"
+# 记录来源标签（raw.kind）：CLI 签发 / 试用签发 / 试用升级重签 / 订单履约（守护 / CLI）
+KIND_CLI_ISSUE = "cli_issue"
+KIND_TRIAL_ISSUE = "trial_fulfill"
+KIND_TRIAL_UPGRADE = "trial_upgrade"
+KIND_ORDER_FULFILL = "order_fulfill"
 # 七产品矩阵（与 export_chengjie.PRODUCT_IDS 一致）：payload 带 product_id 时才透传
 PRODUCT_IDS = {"huansheng", "huanyan", "huanying", "tongchuan",
                "tongyi", "zhiliao", "zhituo"}
@@ -78,6 +95,10 @@ def _default_outbox_path() -> Path:
     env = os.environ.get(ENV_OUTBOX, "").strip()
     if env:
         return _as_outbox_file(Path(env))
+    data_dir = os.environ.get(ENV_DATA_DIR, "").strip()
+    if data_dir:
+        # 实例数据根 / 测试 tmp：与 start_*.ps1 注入的 <数据根>\ledger_outbox 同址
+        return Path(data_dir) / OUTBOX_DIRNAME / OUTBOX_FILENAME
     return Path(__file__).resolve().parent.parent / "config" / OUTBOX_FILENAME
 
 
@@ -112,12 +133,16 @@ def _decide_status(payload: dict, status: "str | None" = None) -> str:
 
 
 def normalize_issue(payload: dict, token: "str | None" = None, *,
-                    status: "str | None" = None) -> dict:
+                    status: "str | None" = None,
+                    kind: str = KIND_CLI_ISSUE,
+                    origin: str = "scripts/license_tool.py") -> dict:
     """签发 payload → 集团台账 v1 归一化记录（14 字段全出现，无值用 null）。
 
     ``token`` 仅用于两件事：sha256 摘要（进 raw.token_sha256 / source_key 兜底）、
     解出**实际签名的 payload**（issue_license 会补齐 grace_days 等缺省，以 token 内
     为准可与 export_chengjie 对同一授权的产出完全一致）。token 原文绝不写入记录。
+    ``kind`` / ``origin`` 标注记录来源（raw.kind / raw.origin），供台账区分
+    手工 CLI 签发、试用签发、订单履约；不影响 source_key 与 upsert 合并。
     """
     p = {k: v for k, v in dict(payload or {}).items() if k not in _SENSITIVE_KEYS}
     if token and "." in token:
@@ -129,7 +154,8 @@ def normalize_issue(payload: dict, token: "str | None" = None, *,
                 p = {k: v for k, v in dec.items() if k not in _SENSITIVE_KEYS}
         except Exception:
             pass
-    raw: dict = {"kind": "cli_issue", "origin": "scripts/license_tool.py",
+    raw: dict = {"kind": str(kind or KIND_CLI_ISSUE),
+                 "origin": str(origin or "scripts/license_tool.py"),
                  "payload": p}
     if token:
         raw["token_sha256"] = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -145,6 +171,7 @@ def normalize_issue(payload: dict, token: "str | None" = None, *,
     product = p.get("product_id") or p.get("product")
     sku = p.get("sku_id") or p.get("sku") or None
     seats = p.get("seats")
+    machine = str(p.get("machine") or "").strip()   # ``*`` = 站点授权，原样保留
     return {
         "source_system": SOURCE_SYSTEM,
         "source_key": key,
@@ -156,7 +183,7 @@ def normalize_issue(payload: dict, token: "str | None" = None, *,
                   and not isinstance(seats, bool) else None),  # 0=不限，原样保留
         "customer_name": (p.get("sub") or p.get("customer_name") or None),
         "customer_contact": (p.get("customer_contact") or None),
-        "machine_fingerprint": None,        # chengjie 不绑机
+        "machine_fingerprint": machine or None,   # 试用授权/换机重签绑机；无字段 = 不绑机
         "issued_at": _to_iso(p.get("iat")),
         "expires_at": _to_iso(p.get("exp")),
         "status": _decide_status(p, status),
@@ -177,6 +204,22 @@ def record_issue(record: dict, outbox_path=None) -> bool:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line + "\n")
         return True
+    except Exception:
+        return False
+
+
+def record_payload(payload: dict, token: "str | None", *, kind: str, origin: str,
+                   status: "str | None" = None, outbox_path=None) -> bool:
+    """``normalize_issue`` + ``record_issue`` 二合一——签发脚本的唯一钩子入口。
+
+    全程 fail-silent（normalize 阶段的任何异常同样吞掉返回 False）：履约脚本在
+    「签发 → 回填官网」成功之后调用，台账少一行绝不能反过来阻断履约或污染其 stdout。
+    """
+    try:
+        if not isinstance(payload, dict) or not payload:
+            return False  # 空/非法 payload 不产 payload:<sha16> 垃圾行
+        rec = normalize_issue(payload, token, status=status, kind=kind, origin=origin)
+        return record_issue(rec, outbox_path)
     except Exception:
         return False
 
@@ -268,6 +311,28 @@ def _selftest() -> int:
               r3["source_key"].startswith("token:"))
         check("显式 status 透传（revoke/renew 挂钩用）",
               normalize_issue(p1, status="revoked")["status"] == "revoked")
+        check("无 machine 字段 → machine_fingerprint = null（不绑机）",
+              r1["machine_fingerprint"] is None)
+
+        # 试用授权形态（build_trial_payload 同构）：绑机 + 额度 + product_id 透传
+        p4 = {"sub": "tg:123456", "plan": "pro", "iat": now, "seats": 2,
+              "channels": ["telegram", "web"], "features": {},
+              "product_id": "zhiliao", "included_chars": 1_000_000,
+              "trial": True, "machine": "ABCD-EF01-2345-6789", "grace_days": 0,
+              "lic_id": "trial-ABCDEF01", "claim_id": "clm_x"}
+        r4 = normalize_issue(p4, fake_token, kind=KIND_TRIAL_ISSUE,
+                             origin="scripts/fulfill_trial.py")
+        check("payload.machine 透传为 machine_fingerprint",
+              r4["machine_fingerprint"] == "ABCD-EF01-2345-6789")
+        check("product_id 透传", r4["product_id"] == "zhiliao")
+        check("trial + 无 exp → status=trial / expires_at=null",
+              r4["status"] == "trial" and r4["expires_at"] is None)
+        check("kind/origin 进 raw", r4["raw"]["kind"] == KIND_TRIAL_ISSUE
+              and r4["raw"]["origin"] == "scripts/fulfill_trial.py")
+        check("站点授权 machine='*' 原样保留",
+              normalize_issue(dict(p4, machine="*"))["machine_fingerprint"] == "*")
+        check("缺省 kind 仍为 cli_issue（license_tool 兼容）",
+              r1["raw"]["kind"] == KIND_CLI_ISSUE)
 
         ob = tmp / "outbox" / "ledger_outbox.jsonl"
         check("record_issue 显式路径写入", record_issue(r1, ob) is True)
@@ -282,6 +347,18 @@ def _selftest() -> int:
         check("env CHENGJIE_LEDGER_OUTBOX 覆盖默认路径",
               record_issue(r3) is True and ob_env.exists())
         os.environ.pop(ENV_OUTBOX, None)
+
+        # AITR_DATA_DIR 次优先：无 CHENGJIE_LEDGER_OUTBOX 时落 <数据根>/ledger_outbox/
+        data_backup = os.environ.get(ENV_DATA_DIR)
+        os.environ[ENV_DATA_DIR] = str(tmp / "data_root")
+        check("AITR_DATA_DIR → <数据根>/ledger_outbox/ledger_outbox.jsonl",
+              _default_outbox_path() == tmp / "data_root" / OUTBOX_DIRNAME / OUTBOX_FILENAME
+              and record_issue(r4) is True
+              and (tmp / "data_root" / OUTBOX_DIRNAME / OUTBOX_FILENAME).is_file())
+        if data_backup is None:
+            os.environ.pop(ENV_DATA_DIR, None)
+        else:
+            os.environ[ENV_DATA_DIR] = data_backup
 
         # 部署形态回归：env 指向**已存在目录**（start_*.ps1 注入 <数据根>\ledger_outbox，
         # 实例骨架预建目录）→ 必须写目录内标准文件名，而非 open(dir,'a') 静默失败

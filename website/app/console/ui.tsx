@@ -23,7 +23,6 @@ import {
   Radio,
   ReceiptText,
   ScrollText,
-  ShieldAlert,
   Sparkles,
   UserCog,
   UserRound,
@@ -31,6 +30,15 @@ import {
   VenetianMask,
   X,
 } from "lucide-react";
+import {
+  IDENTITY_KIND_ORDER,
+  IDENTITY_KIND_LABEL,
+  OPP_STATUS_LABEL,
+  ROLE_LABEL,
+  ROLE_ORDER,
+  lbl,
+  toOptions,
+} from "./labels";
 
 // ── toast（模块级事件总线，ConsoleToaster 挂在 layout）─────────────
 type ToastMsg = { msg: string; ok: boolean };
@@ -124,7 +132,7 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
       const msg = e instanceof Error ? e.message : String(e);
       setErr(
         msg.includes("invalid key")
-          ? "CONSOLE_KEY 不正确"
+          ? "初始化口令不正确"
           : msg.includes("invalid credentials")
             ? "用户名或密码错误"
             : msg.includes("account disabled")
@@ -157,15 +165,13 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
             draggable={false}
           />
           <div className="leading-tight">
-            <span className="block text-lg font-bold text-white">无界 · 集团控制台</span>
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400/90">
-              Boundless Console
-            </span>
+            <span className="block text-lg font-bold text-white" title="Boundless Console">无界 · 集团控制台</span>
+            <span className="block text-[11px] text-cyan-400/80">内部运营台 · 请勿外传</span>
           </div>
         </div>
-        <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1 text-[11px] font-medium text-cyan-300">
-          <ShieldAlert className="h-3.5 w-3.5" />
-          皇冠资产 · 最小暴露
+        <div className="mt-1 space-y-1 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-2.5 py-2 text-[11px] leading-relaxed text-slate-400">
+          <p><span className="font-medium text-cyan-300">第 1 步</span> 浏览器弹出网关口令时输入（由技术提供）</p>
+          <p><span className="font-medium text-cyan-300">第 2 步</span> 再用下面的控制台账号登录</p>
         </div>
         {usersEmpty ? (
           <>
@@ -182,7 +188,7 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
                     type="password"
                     value={key}
                     onChange={(e) => setKey(e.target.value)}
-                    placeholder="CONSOLE_KEY（服务端口令）"
+                    placeholder="初始化口令（由技术负责人提供）"
                     className={`${inputCls} py-2.5 pl-9`}
                     onKeyDown={onEnter}
                     autoFocus
@@ -211,15 +217,14 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
               </div>
             ) : (
               <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs leading-relaxed text-rose-300">
-                服务端未配置口令：请在 .env.local 设置 CONSOLE_KEY（生产必须独立设置，勿与
-                ADMIN_KEY 共用），重启后再来初始化主账号。
+                服务端尚未配置初始化口令，请联系技术负责人完成配置后再来创建主账号。
               </p>
             )}
           </>
         ) : (
           <>
-            <p className="mb-4 mt-4 text-xs leading-relaxed text-slate-500">
-              管理集团客户、订单与授权台账。请用控制台账号登录。
+            <p className="mb-4 mt-4 text-xs leading-relaxed text-slate-400">
+              管理集团客户、订单与授权台账。网关口令通过后再用控制台账号登录。
             </p>
             <div className="space-y-2.5">
               <div className="relative">
@@ -255,7 +260,7 @@ export function LoginCard({ configured, usersEmpty }: { configured: boolean; use
         {err && <p className="mt-3 text-center text-sm text-rose-400">{err}</p>}
       </div>
       <p className="mt-4 text-center text-[11px] text-slate-600">
-        实名账号 + RBAC（viewer / admin / master）；生产请配合 IP 白名单使用。
+        实名账号 · 三级权限（只读 / 运营 / 主账号）
       </p>
     </div>
   );
@@ -309,7 +314,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { href: "/console/leads", label: "留资", Icon: Inbox },
       { href: "/console/trial", label: "试用", Icon: Gift },
       { href: "/console/funnel", label: "激活漏斗", Icon: Filter },
-      { href: "/console/downloads", label: "下载台账", Icon: Download },
+      { href: "/console/downloads", label: "安装包下载", Icon: Download },
       { href: "/console/channels", label: "渠道", Icon: Radio },
     ],
   },
@@ -317,14 +322,14 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "平台",
     items: [
       { href: "/console/personas", label: "人设", Icon: VenetianMask },
-      { href: "/console/kpi", label: "事件流", Icon: BarChart3 },
+      { href: "/console/kpi", label: "运营事件", Icon: BarChart3 },
     ],
   },
   {
     label: "系统",
     items: [
       { href: "/console/audit", label: "审计", Icon: ScrollText },
-      { href: "/console/errors", label: "错误", Icon: Bug },
+      { href: "/console/errors", label: "客户端错误", Icon: Bug },
     ],
   },
 ];
@@ -341,7 +346,7 @@ export function ConsoleNav({ showUsers = false }: { showUsers?: boolean }) {
       {groups.map((g, gi) => (
         <div key={g.label} className="flex shrink-0 items-center gap-0.5">
           {gi > 0 && <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-ink-700" />}
-          <span className="hidden shrink-0 select-none pr-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600 lg:inline">
+          <span className="hidden shrink-0 select-none pr-1 text-[10px] font-medium text-slate-500 lg:inline">
             {g.label}
           </span>
           {g.items.map(({ href, label, Icon }) => {
@@ -386,13 +391,7 @@ async function createCustomerReq(input: {
   return data.customer;
 }
 
-const IDENTITY_KIND_OPTIONS = [
-  { value: "contact", label: "contact 通用联系" },
-  { value: "tg", label: "tg Telegram" },
-  { value: "email", label: "email 邮箱" },
-  { value: "phone", label: "phone 电话" },
-  { value: "fingerprint", label: "fingerprint 设备指纹" },
-] as const;
+const IDENTITY_KIND_OPTIONS = toOptions(IDENTITY_KIND_LABEL, IDENTITY_KIND_ORDER);
 
 export function NewCustomerForm() {
   const router = useRouter();
@@ -446,7 +445,7 @@ export function NewCustomerForm() {
       </div>
       <div className="space-y-2.5">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="显示名 *（如：张总 / ACME Ltd.）" className={inputCls} />
-        <input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="主联系方式（微信 / TG / 邮箱，可空）" className={inputCls} />
+        <input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="主联系方式（微信 / Telegram / 邮箱，可空）" className={inputCls} />
         <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="备注（可空）" className={inputCls} />
         <div className="flex gap-2">
           <select value={identKind} onChange={(e) => setIdentKind(e.target.value)} className={`${inputCls} w-40`}>
@@ -525,7 +524,7 @@ export function CustomerPicker({
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="搜索客户名 / 联系方式 / TG ID"
+        placeholder="搜索客户名 / 联系方式 / Telegram ID"
         className={`${inputCls} px-2 py-1.5 text-xs`}
         autoFocus
         disabled={disabled}
@@ -820,11 +819,7 @@ export interface ConsoleUserItem {
   last_login: string | null;
 }
 
-const ROLE_OPTIONS = [
-  { value: "viewer", label: "viewer 只读" },
-  { value: "admin", label: "admin 运营" },
-  { value: "master", label: "master 主账号" },
-] as const;
+const ROLE_OPTIONS = toOptions(ROLE_LABEL, ROLE_ORDER);
 
 export function NewUserForm() {
   const router = useRouter();
@@ -942,12 +937,12 @@ export function UserActions({ user, isLastEnabledMaster }: { user: ConsoleUserIt
       <select
         value={user.role}
         disabled={busy || isLastEnabledMaster}
-        onChange={(e) => patch({ action: "set_role", role: e.target.value }, `已把 ${user.username} 改为 ${e.target.value}`)}
+        onChange={(e) => patch({ action: "set_role", role: e.target.value }, `已把 ${user.username} 改为 ${lbl(ROLE_LABEL, e.target.value)}`)}
         className={`${inputCls} w-auto px-2 py-1 text-xs`}
-        title={isLastEnabledMaster ? "最后一个启用的 master 不能降级" : "改角色"}
+        title={isLastEnabledMaster ? "最后一个启用的主账号不能降级" : "改角色"}
       >
         {ROLE_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>{o.value}</option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
       <button
@@ -960,7 +955,7 @@ export function UserActions({ user, isLastEnabledMaster }: { user: ConsoleUserIt
             ? "border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
             : "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
         }`}
-        title={user.enabled && isLastEnabledMaster ? "最后一个启用的 master 不能禁用" : undefined}
+        title={user.enabled && isLastEnabledMaster ? "最后一个启用的主账号不能禁用" : undefined}
       >
         {user.enabled ? "禁用" : "启用"}
       </button>
@@ -1033,10 +1028,10 @@ const OPP_LOG_STATUS_STYLE: Record<OppLogStatus, string> = {
   dismissed: "bg-slate-500/15 text-slate-400 border-slate-500/30",
 };
 const OPP_LOG_STATUS_LABEL: Record<OppLogStatus, string> = {
-  open: "待跟进",
-  contacted: "已联系",
-  won: "已赢单",
-  dismissed: "已忽略",
+  open: OPP_STATUS_LABEL.open,
+  contacted: OPP_STATUS_LABEL.contacted,
+  won: OPP_STATUS_LABEL.won,
+  dismissed: OPP_STATUS_LABEL.dismissed,
 };
 
 /** 商机行的跟进状态徽章：未标记（log=null）不占位；title 带经手人/时间/备注。 */
@@ -1071,7 +1066,7 @@ const OPP_ACTIONS: OppAction[] = [
     status: "contacted",
     label: "跟进",
     cls: "border-sky-500/40 text-sky-300 hover:bg-sky-500/10",
-    confirmLabel: "标记为「已联系」（保留在清单，信号值 −20）",
+    confirmLabel: "标记为「已联系」（保留在清单，优先级下调）",
   },
   {
     status: "won",
@@ -1091,7 +1086,7 @@ const OPP_REOPEN: OppAction = {
   status: "open",
   label: "重开",
   cls: "border-crown-500/40 text-crown-300 hover:bg-crown-500/10",
-  confirmLabel: "重新打开（回到「待跟进」清单，信号值恢复）",
+  confirmLabel: "重新打开（回到「待跟进」清单，优先级恢复）",
 };
 
 export function OpportunityActions({
@@ -1338,7 +1333,7 @@ export function UnquarantineButton({ apiId, name }: { apiId: string; name: strin
     if (busy) return;
     if (!armed) {
       setArmed(true);
-      emitToast(`再点一次确认解除 ${name} 的隔离（请先用 tg_cred_probe 核实为误报）`, true);
+      emitToast(`再点一次确认解除 ${name} 的隔离（请先用凭据探针核实为误报）`, true);
       setTimeout(() => setArmed(false), 4000);
       return;
     }
@@ -1359,7 +1354,7 @@ export function UnquarantineButton({ apiId, name }: { apiId: string; name: strin
       onClick={go}
       disabled={busy}
       className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
-      title="先用 tg_cred_probe 核实为误报再解除"
+      title="请先用凭据探针核实为误报再解除（技术操作）"
     >
       {busy ? "解除中…" : armed ? "确认解除?" : "解除隔离"}
     </button>

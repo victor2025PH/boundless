@@ -66,11 +66,11 @@ export default function LeadsPage({
         title="留资"
         desc={
           <>
-            日常跟进仍在{" "}
-            <a href="/admin" className="text-amber-300 underline-offset-2 hover:underline">
-              /admin
+            本页只做客户归并：把留资挂到客户档案。日常跟进仍在{" "}
+            <a href="/admin" className="text-crown-300 underline-offset-2 hover:underline">
+              官网后台
             </a>
-            ，本页只做客户归并：把留资挂到客户主档，让客户 360 看到完整旅程。账本为只读镜像，状态以 /admin 为准。
+            ，状态以官网后台为准。
           </>
         }
       />

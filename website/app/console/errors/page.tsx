@@ -4,6 +4,7 @@
 import { AlertTriangle, Bug, MonitorSmartphone, Skull } from "lucide-react";
 import { hasConsoleSession } from "@/lib/console-auth";
 import { summarizeClientLogs } from "@/lib/client-logs";
+import { LOG_LEVEL_LABEL, lbl } from "../labels";
 import { Card, DataTable, EmptyState, PageHeader, SectionTitle, Td, fmtDateTime } from "../parts";
 
 export const runtime = "nodejs";
@@ -31,7 +32,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
         desc={
           <>
             <Bug className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
-            公网/内网测试者的桌面端 <span className="font-medium text-amber-300/90">ERROR 摘要 + 崩溃</span>
+            公网/内网测试者的桌面端 <span className="font-medium text-amber-300/90">错误摘要 + 崩溃</span>
             自动回传归集（消毒后：无聊天内容、无密钥）。近 {h} 小时；
             <a className="ml-1 text-amber-300 hover:underline" href="?h=6">6h</a> ·
             <a className="ml-1 text-amber-300 hover:underline" href="?h=24">24h</a> ·
@@ -44,7 +45,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
         <EmptyState
           title="窗口内还没有回传"
           hints={[
-            <>桌面端 0.2.6+ 装好并联网后，ERROR 级日志与崩溃会自动回传到这里。</>,
+            <>桌面端装好并联网后，错误日志与崩溃会自动回传到这里。</>,
             <>没有回传通常是好事（没人报错）；也可能是还没人在该窗口内启动。</>,
           ]}
         />
@@ -95,7 +96,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
               <AlertTriangle className="mr-1 inline h-4 w-4 align-text-bottom text-amber-400" />错误 Top（合并计数）
             </SectionTitle>
             {s.top_errors.length === 0 ? (
-              <p className="px-1 py-3 text-xs text-slate-500">窗口内只有启动心跳，无 ERROR/WARNING。</p>
+              <p className="px-1 py-3 text-xs text-slate-400">窗口内只有启动心跳，无错误或警告。</p>
             ) : (
               <DataTable head={["次数", "机器", "来源", "消息", "最近"]}>
                 {s.top_errors.map((e, i) => (
@@ -134,7 +135,7 @@ export default async function ErrorsPage({ searchParams }: { searchParams: { h?:
                                 : "bg-ink-700 text-slate-400"
                         }`}
                       >
-                        {r.logger === "exit_sentinel" ? "崩溃哨兵" : r.level || "?"}
+                        {r.logger === "exit_sentinel" ? "崩溃哨兵" : lbl(LOG_LEVEL_LABEL, r.level || null)}
                       </span>
                     </Td>
                     <Td><span className="font-mono text-[11px]">{r.fp || "?"}</span></Td>

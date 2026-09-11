@@ -50,7 +50,7 @@ export default function CustomersPage({ searchParams }: { searchParams: { q?: st
           type="search"
           name="q"
           defaultValue={q ?? ""}
-          placeholder="搜索显示名 / 联系方式 / TG ID"
+          placeholder="搜索显示名 / 联系方式 / Telegram ID"
           className={`${filterInputCls} w-64`}
         />
         {showTest && <input type="hidden" name="test" value="1" />}

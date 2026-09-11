@@ -4,7 +4,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ScrollText, Sparkles } from "lucide-react";
 import { listLeads, listLicenses, listOrders } from "@/lib/ledger";
-import { listOpportunities, productLabel } from "@/lib/opportunities";
+import { listOpportunities } from "@/lib/opportunities";
+import { IDENTITY_KIND_LABEL, PRODUCT_LABEL, lbl, opportunityPriority, seatsLabel } from "../../labels";
+import { productDisplay, tierLabel } from "../../sku-names";
 import { listPersonas } from "@/lib/personas";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
@@ -22,6 +24,7 @@ import {
   EmptyState,
   ExpiryCell,
   LeadStatusBadge,
+  LicenseStatusBadge,
   OpportunityKindBadge,
   OrderStatusBadge,
   PersonaSlotCells,
@@ -79,7 +82,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
     ["客户 ID", <span key="id" className="font-mono text-xs text-slate-300">{customer.id}</span>],
     ["显示名", customer.display_name || "（未命名）"],
     ["主联系方式", customer.primary_contact || "—"],
-    ["TG 用户", customer.tg_user_id || "—"],
+    ["Telegram 用户", customer.tg_user_id || "—"],
     ["来源", customer.source || "—"],
     ["创建 / 更新", `${fmtDateTime(customer.created_at)} / ${fmtDateTime(customer.updated_at)}`],
   ];
@@ -151,18 +154,19 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         <Card>
           <SectionTitle count={identities.length}>身份标识</SectionTitle>
           <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
-            身份是自动归属的钥匙：挂上 contact / tg / fingerprint 后，新订单与留资会按标识自动归到本客户。
+            身份是自动归属的钥匙：挂上联系方式 / Telegram / 设备指纹后，新订单与留资会按标识自动归到本客户。
           </p>
           {identities.length > 0 && (
             <ul className="mb-4 space-y-1.5">
               {identities.map((it) => (
                 <li key={it.id} className="flex items-center gap-2 text-sm">
                   <span
-                    className={`inline-block w-24 shrink-0 rounded-full border px-2 py-0.5 text-center font-mono text-[11px] ${
+                    className={`inline-block w-24 shrink-0 rounded-full border px-2 py-0.5 text-center text-[11px] ${
                       KIND_STYLE[it.kind] ?? KIND_STYLE.fingerprint
                     }`}
+                    title={it.kind}
                   >
-                    {it.kind}
+                    {lbl(IDENTITY_KIND_LABEL, it.kind)}
                   </span>
                   <span className="break-all font-mono text-xs text-slate-200">{it.value}</span>
                   <span className="ml-auto shrink-0 text-[11px] text-slate-600">{fmtDateTime(it.created_at)}</span>
@@ -178,7 +182,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           {canWrite ? (
             <AttachIdentityForm customerId={customer.id} />
           ) : (
-            <p className="text-[11px] text-slate-600">viewer 只读：挂身份操作需 admin 及以上角色。</p>
+            <p className="text-[11px] text-slate-400">当前账号只读：挂身份需要运营或主账号。</p>
           )}
         </Card>
       </div>
@@ -187,20 +191,22 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         <SectionTitle count={orders.length}>名下订单</SectionTitle>
         {orders.length === 0 ? (
           <p className="text-xs text-slate-500">
-            暂无归属订单 —— 到 <Link href="/console/orders" className="text-amber-300 hover:underline">订单台账</Link>
+            暂无归属订单 —— 到 <Link href="/console/orders" className="text-crown-300 hover:underline">订单台账</Link>
             对未归属的行点「归属客户」。
           </p>
         ) : (
-          <DataTable head={["来源单号", "产品 / 方案", "金额", "状态", "联系方式", "创建时间"]}>
-            {orders.map((o) => (
-              <tr key={o.id} className="hover:bg-ink-700/40">
+          <DataTable head={["来源单号", "产品", "档位", "金额", "状态", "联系方式", "创建时间"]}>
+            {orders.map((o) => {
+              const product = productDisplay({ product_id: o.product_id, sku_id: o.sku_id }, "—");
+              const tier = tierLabel({ sku_id: o.sku_id, plan: o.plan, edition: o.edition, period: o.period });
+              return (
+              <tr key={o.id}>
                 <Td className="font-mono text-xs text-slate-300">
                   {o.source_key}
                   {o.is_test === 1 && <TestBadge className="ml-1.5" />}
                 </Td>
-                <Td className="text-xs text-slate-300">
-                  {[o.product_id, o.plan, o.edition, o.period].filter(Boolean).join(" / ") || "—"}
-                </Td>
+                <Td className="text-xs text-slate-200" title={product.title}>{product.text}</Td>
+                <Td className="text-xs text-slate-300" title={tier.title}>{tier.text}</Td>
                 <Td className="text-xs text-slate-200">{fmtAmount(o.amount, o.pay_amount, o.currency)}</Td>
                 <Td>
                   <OrderStatusBadge status={o.status} />
@@ -208,7 +214,8 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                 <Td className="text-xs text-slate-400">{o.contact || "—"}</Td>
                 <Td className="text-xs text-slate-500">{fmtDateTime(o.created_at)}</Td>
               </tr>
-            ))}
+              );
+            })}
           </DataTable>
         )}
       </Card>
@@ -217,30 +224,35 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         <SectionTitle count={licenses.length}>名下授权</SectionTitle>
         {licenses.length === 0 ? (
           <p className="text-xs text-slate-500">
-            暂无归属授权 —— 到 <Link href="/console/licenses" className="text-amber-300 hover:underline">授权台账</Link>
-            归属，或先用 scripts/ledger-import-licenses.mjs 导入。
+            暂无归属授权 —— 到 <Link href="/console/licenses" className="text-crown-300 hover:underline">授权台账</Link>
+            归属。
           </p>
         ) : (
-          <DataTable head={["系统", "授权号", "产品 / 方案", "席位", "到期", "状态"]}>
-            {licenses.map((l) => (
-              <tr key={l.id} className="hover:bg-ink-700/40">
+          <DataTable head={["产品", "授权号", "档位", "席位", "到期", "状态"]}>
+            {licenses.map((l) => {
+              const product = productDisplay(
+                { product_id: l.product_id, sku_id: l.sku_id },
+                l.source_system
+              );
+              const tier = tierLabel({ sku_id: l.sku_id, plan: l.plan, edition: l.edition });
+              return (
+              <tr key={l.id}>
                 <Td>
-                  <SystemBadge system={l.source_system} />
-                </Td>
-                <Td className="font-mono text-xs text-slate-300">
-                  {l.source_key}
+                  <span title={product.title} className="text-xs text-slate-200">{product.text}</span>
                   {l.is_test === 1 && <TestBadge className="ml-1.5" />}
                 </Td>
-                <Td className="text-xs text-slate-300">
-                  {[l.product_id, l.plan, l.edition].filter(Boolean).join(" / ") || "—"}
-                </Td>
-                <Td className="text-xs text-slate-400">{l.seats ?? "—"}</Td>
+                <Td className="font-mono text-xs text-slate-300">{l.source_key}</Td>
+                <Td className="text-xs text-slate-300" title={tier.title}>{tier.text}</Td>
+                <Td className="text-xs tabular-nums text-slate-400">{seatsLabel(l.seats, l.source_system)}</Td>
                 <Td className="text-xs">
                   <ExpiryCell expiresAt={l.expires_at} />
                 </Td>
-                <Td className="text-xs text-slate-400">{l.status || "—"}</Td>
+                <Td>
+                  <LicenseStatusBadge status={l.status} />
+                </Td>
               </tr>
-            ))}
+              );
+            })}
           </DataTable>
         )}
       </Card>
@@ -300,21 +312,27 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
           </p>
         ) : (
           <>
-            <DataTable head={["类型", "从 → 到", "理由", "信号值", "跟进"]}>
-              {opportunities.map((o) => (
-                <tr key={o.oppKey} className="hover:bg-ink-700/40">
+            <DataTable head={["类型", "从 → 到", "理由", "优先级", "跟进"]}>
+              {opportunities.map((o) => {
+                const pri = opportunityPriority(o.signalValue);
+                return (
+                <tr key={o.oppKey}>
                   <Td>
                     <OpportunityKindBadge kind={o.kind} />
                   </Td>
                   <Td className="text-xs text-slate-300">
-                    <span className="font-mono">{productLabel(o.fromProduct)}</span>
-                    <span className="mx-1.5 text-slate-600">→</span>
-                    <span className="font-mono text-amber-300">{productLabel(o.toProduct)}</span>
+                    <span>{lbl(PRODUCT_LABEL, o.fromProduct)}</span>
+                    <span className="mx-1.5 text-slate-500">→</span>
+                    <span className="text-crown-300">{lbl(PRODUCT_LABEL, o.toProduct)}</span>
                   </Td>
                   <Td className="max-w-[360px] text-xs text-slate-400">
                     <span className="block truncate" title={o.reason}>{o.reason}</span>
                   </Td>
-                  <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+                  <Td>
+                    <span title={`信号值 ${o.signalValue}`} className={`text-xs font-semibold ${pri.tone === "danger" ? "text-rose-300" : pri.tone === "warning" ? "text-amber-300" : "text-slate-300"}`}>
+                      {pri.label}
+                    </span>
+                  </Td>
                   <Td>
                     <span className="inline-flex items-center gap-1.5">
                       <OpportunityLogBadge log={o.log} />
@@ -330,11 +348,12 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
                     </span>
                   </Td>
                 </tr>
-              ))}
+                );
+              })}
             </DataTable>
             <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
-              商机由三类规则只读推导（lib/opportunities.ts）；跟进动作落 opportunities_log（schema v4）——
-              「跟进」保留并降权 −20，「赢单/忽略」默认隐藏。{!canWrite && "viewer 只读：标记操作需 admin 及以上角色。"}
+              商机由客户档案、订单和授权自动算出。「跟进」会下调优先级，「赢单 / 忽略」默认隐藏。
+              {!canWrite && " 当前账号只读：标记需要运营或主账号。"}
             </p>
           </>
         )}
@@ -345,7 +364,7 @@ export default function Customer360Page({ params }: { params: { id: string } }) 
         {leads.length === 0 ? (
           <p className="text-xs text-slate-500">
             暂无归属留资 —— 到 <Link href="/console/leads" className="text-amber-300 hover:underline">留资列表</Link>
-            做客户归并（日常跟进仍在 /admin）。
+            做客户归并（日常跟进仍在官网后台）。
           </p>
         ) : (
           <DataTable head={["来源键", "称呼", "联系方式", "意向", "状态", "最近活跃"]}>

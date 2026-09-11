@@ -10,9 +10,9 @@ import {
   isOpportunityKind,
   isOpportunityLogStatus,
   listOpportunities,
-  productLabel,
   type OpportunityLogStatus,
 } from "@/lib/opportunities";
+import { OPP_KIND_LABEL, OPP_STATUS_LABEL, PRODUCT_LABEL, lbl, opportunityPriority } from "../labels";
 import { getConsoleSessionUser } from "@/lib/console-auth";
 import { roleAtLeast } from "@/lib/console-users";
 import {
@@ -35,16 +35,16 @@ export const dynamic = "force-dynamic";
 const LIMIT = 50;
 
 const KIND_OPTIONS = [
-  { value: "persona_cross_sell", label: "人设跨售" },
-  { value: "product_gap_cross_sell", label: "互补缺口" },
-  { value: "expiring_renewal", label: "续费在即" },
+  { value: "persona_cross_sell", label: OPP_KIND_LABEL.persona_cross_sell },
+  { value: "product_gap_cross_sell", label: OPP_KIND_LABEL.product_gap_cross_sell },
+  { value: "expiring_renewal", label: OPP_KIND_LABEL.expiring_renewal },
 ] as const;
 
 const STATUS_OPTIONS = [
-  { value: "open", label: "待跟进（含未标记）" },
-  { value: "contacted", label: "已联系" },
-  { value: "won", label: "已赢单" },
-  { value: "dismissed", label: "已忽略" },
+  { value: "open", label: `${OPP_STATUS_LABEL.open}（含未标记）` },
+  { value: "contacted", label: OPP_STATUS_LABEL.contacted },
+  { value: "won", label: OPP_STATUS_LABEL.won },
+  { value: "dismissed", label: OPP_STATUS_LABEL.dismissed },
 ] as const;
 
 export default function OpportunitiesPage({
@@ -78,7 +78,7 @@ export default function OpportunitiesPage({
     // 商机是内存推导（无表可查），关键词在输出侧匹配：客户名 / 理由 / 起止产品
     const needle = q.toLowerCase();
     rows = rows.filter((o) =>
-      [o.customerName ?? "", o.reason, o.fromProduct, o.toProduct, productLabel(o.fromProduct), productLabel(o.toProduct)]
+      [o.customerName ?? "", o.reason, o.fromProduct, o.toProduct, lbl(PRODUCT_LABEL, o.fromProduct), lbl(PRODUCT_LABEL, o.toProduct)]
         .join("\n")
         .toLowerCase()
         .includes(needle)
@@ -166,9 +166,11 @@ export default function OpportunitiesPage({
           ]}
         />
       ) : (
-        <DataTable head={["类型", "客户", "从 → 到", "理由", "信号值", "跟进"]}>
-          {pageRows.map((o) => (
-            <tr key={o.oppKey} className="hover:bg-ink-700/40">
+        <DataTable head={["类型", "客户", "从 → 到", "理由", "优先级", "跟进"]}>
+          {pageRows.map((o) => {
+            const pri = opportunityPriority(o.signalValue);
+            return (
+            <tr key={o.oppKey}>
               <Td>
                 <OpportunityKindBadge kind={o.kind} />
               </Td>
@@ -176,16 +178,20 @@ export default function OpportunitiesPage({
                 <CustomerLink customerId={o.customerId} label={o.customerName} />
               </Td>
               <Td className="text-xs text-slate-300">
-                <span className="font-mono">{productLabel(o.fromProduct)}</span>
-                <span className="mx-1.5 text-slate-600">→</span>
-                <span className="font-mono text-amber-300">{productLabel(o.toProduct)}</span>
+                <span>{lbl(PRODUCT_LABEL, o.fromProduct)}</span>
+                <span className="mx-1.5 text-slate-500">→</span>
+                <span className="text-crown-300">{lbl(PRODUCT_LABEL, o.toProduct)}</span>
               </Td>
               <Td className="max-w-[360px] text-xs text-slate-400">
                 <span className="block truncate" title={o.reason}>
                   {o.reason}
                 </span>
               </Td>
-              <Td className="text-xs font-semibold tabular-nums text-slate-200">{o.signalValue}</Td>
+              <Td>
+                <span title={`信号值 ${o.signalValue}`} className={`text-xs font-semibold ${pri.tone === "danger" ? "text-rose-300" : pri.tone === "warning" ? "text-amber-300" : "text-slate-300"}`}>
+                  {pri.label}
+                </span>
+              </Td>
               <Td>
                 <span className="inline-flex items-center gap-1.5">
                   <OpportunityLogBadge log={o.log} />
@@ -201,7 +207,8 @@ export default function OpportunitiesPage({
                 </span>
               </Td>
             </tr>
-          ))}
+            );
+          })}
         </DataTable>
       )}
 

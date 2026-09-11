@@ -18,11 +18,11 @@ export const dynamic = "force-dynamic";
 const STAGES: Array<{ key: keyof Pick<FunnelWindow,
   "installed" | "claimed" | "dispatched" | "account_online" | "first_reply">;
   label: string; hint: string }> = [
-  { key: "installed", label: "开机（装了在跑）", hint: "beacon boot 心跳，按机器指纹去重" },
-  { key: "claimed", label: "领了试用", hint: "trial-claims 台账（留了联系方式）" },
-  { key: "dispatched", label: "派发了 TG 凭据", hint: "tg_cred_assign 粘定表" },
-  { key: "account_online", label: "首个账号接入", hint: "客户端 milestone 回传（0.2.7+ / 1.0.20+）" },
-  { key: "first_reply", label: "发出首条消息", hint: "客户端 milestone 回传（10 分钟新鲜闸防历史导入）" },
+  { key: "installed", label: "开机（装了在跑）", hint: "开机心跳，按机器指纹去重" },
+  { key: "claimed", label: "领了试用", hint: "试用领取台账（留了联系方式）" },
+  { key: "dispatched", label: "派发了 Telegram 凭据", hint: "凭据池粘定表" },
+  { key: "account_online", label: "首个账号接入", hint: "客户端里程碑回传" },
+  { key: "first_reply", label: "发出首条消息", hint: "客户端里程碑回传（10 分钟新鲜闸防历史导入）" },
 ];
 
 function FunnelBlock({ w }: { w: FunnelWindow }) {
@@ -78,8 +78,7 @@ export default async function FunnelPage() {
           <>
             <Filter className="mr-1 inline h-3.5 w-3.5 align-text-bottom" />
             装机 → 领试用 → 派发凭据 → <span className="font-medium text-amber-300/90">首账号接入 → 首条出站</span>。
-            活跃口径（窗口内发生即计入）；后两段依赖 1.0.20+ 客户端回传，
-            旧版机器只出现在前三段。
+            活跃口径（窗口内发生即计入）。当前发布客户端会回传后两段；更早版本只出现在前三段。
           </>
         }
       />
@@ -87,8 +86,8 @@ export default async function FunnelPage() {
         <EmptyState
           title="还没有客户端回传数据"
           hints={[
-            <>client-logs.jsonl 尚不存在——还没有桌面端联网启动过，或 beacon 链未通。</>,
-            <>装机后启动一次即产生 boot 心跳；接入账号 / 发消息里程碑需 1.0.20+ 客户端。</>,
+            <>还没有桌面端联网启动过，或回传链路未通。</>,
+            <>装机后启动一次即产生开机心跳；接入账号与发消息由当前发布客户端回传。</>,
           ]}
         />
       ) : (
@@ -172,7 +171,7 @@ export default async function FunnelPage() {
               </div>
             ) : (
               <div className="mt-2 text-[12px] text-slate-500">
-                暂无可判样本（需要 1.0.20+ 客户端领试用且满 48h 观察期）。
+                暂无可判样本（需要当前发布客户端领试用且满 48 小时观察期）。
               </div>
             )}
           </Card>
