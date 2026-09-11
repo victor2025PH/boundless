@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.0.83",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "语言切换根修 + 自动出站单一闸门 + Messenger 代发止血 + 事实门二期",
+      "en": "Language switching fixed, single auto-outbound gate, Messenger relay hardening, fact gate v2"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "界面语言切换修复：切换后整页按所选语言显示，不再被旧链接参数钉回；桌面版菜单与页面同步，越南语 / 泰语 / 印尼语菜单不再落成中文",
+        "语言菜单升级：顶栏 / 用户菜单 / 登录页 / 初始化页统一为六语选择器（含「跟随系统语言」），当前项与跟随状态按真实来源显示，覆盖不足的语种自动标 β 并注明未翻译部分显示英文",
+        "桌面版新增越南语 / 泰语 / 印尼语界面词典（壳与副驾），切换语言后运行时即时补装",
+        "自动出站单一闸门：所有 AI 自动出站（含成人软回应）统一过守卫；群 / 频道 / 报障群、人审手动档、同事账号永不自动回复",
+        "Messenger 网页代发链止血：发送失败在工作台显示具体原因并可一键重试；e2ee PIN 待输入时黄条提示；手机端发出的消息带角标；边车 composer 重绑不再静默 40 秒",
+        "客户画像 / 记忆 / 目标回填共用一道事实门：只写能在客户原话里逐字核到的事实，AI 自己问出来的答案不再回填；目标面板对无值线索显示「AI 有线索，待补值」而非「已提取未确认」"
+      ],
+      "en": [
+        "Interface language switching fixed: the page now shows the language you pick instead of being pinned back by a stale URL parameter; desktop menus follow the page, and Vietnamese / Thai / Indonesian menus no longer fall back to Chinese",
+        "Language menu upgraded: top bar, user menu, login and setup pages share one six-language picker (with Follow system language); the current item and follow state reflect the real source, and low-coverage languages are marked β with a note that untranslated parts show in English",
+        "Desktop app gains Vietnamese / Thai / Indonesian dictionaries for the shell and copilot, loaded on the fly after switching",
+        "Single gate for automatic outbound: every AI-initiated send (including adult soft replies) passes the guard; groups / channels / support groups, manual-review mode and colleague accounts are never auto-replied",
+        "Messenger web relay send chain hardened: failed sends show a concrete reason in the workspace with one-click retry; a yellow bar flags a pending e2ee PIN; phone-sent messages carry a badge; composer rebinding no longer stalls silently for 40 seconds",
+        "Profile / memory / goal backfill share one fact gate: only facts verifiable verbatim in the customer's own messages are written, answers elicited by the AI's own questions are no longer backfilled; the goal panel shows \"AI has a clue, value pending\" instead of \"extracted, unconfirmed\" for value-less hints"
+      ]
+    }
+  },
+  {
     "version": "1.0.82",
     "date": "2026-09-11",
     "title": {

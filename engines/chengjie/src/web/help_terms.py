@@ -1340,6 +1340,14 @@ HELP_TERMS: dict = {
         "desc_en": "Profile AI inference writes only facts found verbatim in the customer's own messages: age accepts a number 16–99 or an age band; occupation / location / residence must be a phrase of 24 characters or fewer, never a sentence; a candidate needs the customer's quote, verifiable in the last 30 inbound messages; our replies, translations and care drafts never feed extraction; a value in a different language from the customer's main one is dropped. Confirmed or hand-typed values are never touched. The goal panel's N/10 counts only confirmed slots and shows AI-inferred ones as N unconfirmed; the age field accepts a number or band only; long values are clipped to 24 characters with the full text on hover.",
         "usage": "目标面板 → 画像卡：AI 推断的槽点 ✓ 确认 / ✕ 拒绝；进度只随确认走。旧版留下的乱值直接拒绝，或让值守按会话跑清洗脚本。",
         "usage_en": "Goal panel → profile card: ✓ confirm or ✕ reject AI-inferred slots; progress follows confirmations only. Reject leftover bad values from older versions, or have ops run the purge script per thread."
+    },
+    "ui_lang_switch": {
+        "zh": "界面语言切换",
+        "en": "Interface language",
+        "desc": "界面语言在顶栏地球按钮或用户菜单「语言」里选：简体中文 / 繁體中文 / English / Tiếng Việt / ไทย / Bahasa Indonesia，另有「跟随系统语言」。选完整页刷新一次即按所选显示，桌面版的文件 / 编辑 / 视图 / 窗口 / 帮助菜单同步跟随，登录页与初始化页用同一个菜单。越南语 / 泰语 / 印尼语仍在补词，未翻译的部分显示英文，菜单里标 β 并写明覆盖范围。菜单顶部若提示「当前语言由链接参数指定」，选一项即可覆盖。",
+        "desc_en": "Pick the interface language from the globe button in the top bar or the user menu → Language: Simplified Chinese / Traditional Chinese / English / Vietnamese / Thai / Indonesian, plus Follow system language. The page reloads once and shows your choice; the desktop app's File / Edit / View / Window / Help menus follow, and the login and setup pages use the same menu. Vietnamese / Thai / Indonesian are still being filled in: untranslated parts show in English, marked β with a coverage note. If the menu says the current language is set by a URL parameter, choosing any item overrides it.",
+        "usage": "顶栏地球按钮（或右上用户菜单 → 语言）→ 点目标语言 → 页面刷新后生效。想跟随系统语言就选第一项「跟随系统语言」。",
+        "usage_en": "Top bar globe button (or user menu → Language) → pick a language → it applies after the page reloads. Choose Follow system language to track your OS / browser language."
     }
 }
 

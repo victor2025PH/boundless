@@ -281,6 +281,21 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "/workspace/inbox",
     ),
     (
+        "ui-lang-switch",
+        "界面语言怎么切换 / 为什么切了语言没反应",
+        "How to change the interface language / why switching did nothing",
+        "点顶栏的地球按钮，或右上用户菜单里的「语言」，在菜单里选：简体中文 / 繁體中文 / English / Tiếng Việt / ไทย / Bahasa Indonesia，第一项「跟随系统语言」是跟着系统走。"
+        "选完页面刷新一次即生效；桌面版的文件 / 编辑 / 视图 / 窗口 / 帮助菜单一起变，登录页、初始化页也是同一个菜单。"
+        "越南语 / 泰语 / 印尼语标 β：没翻到的地方显示英文。"
+        "如果菜单顶部写着「当前语言由链接参数指定」，直接选一项就会覆盖；旧版桌面端有「切了不变」的问题，升级到 1.0.83 及以上即修复。",
+        "Click the globe button in the top bar, or Language in the user menu, then pick Simplified Chinese / Traditional Chinese / English / Vietnamese / Thai / Indonesian; the first item, Follow system language, tracks your OS. "
+        "The page reloads once and the choice applies; the desktop app's File / Edit / View / Window / Help menus follow, and the login and setup pages share the same menu. "
+        "Vietnamese / Thai / Indonesian are marked β: untranslated parts show in English. "
+        "If the menu says the current language is set by a URL parameter, picking any item overrides it; older desktop builds had a switch-does-nothing bug, fixed in 1.0.83 and later.",
+        "界面语言 切换语言 中文 英文 繁体 越南语 泰语 印尼语 跟随系统 切了没反应 language switch interface language locale",
+        "/workspace",
+    ),
+    (
         "kb-add",
         "知识库怎么添加条目",
         "How to add a knowledge base entry",

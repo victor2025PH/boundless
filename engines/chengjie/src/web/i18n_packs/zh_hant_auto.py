@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-12 04:33:26 · OpenCC s2twp + 術語釘 · 17518 鍵（源 zh 全量 17776）
+生成: 2026-09-12 05:01:18 · OpenCC s2twp + 術語釘 · 17519 鍵（源 zh 全量 17777）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -12869,6 +12869,8 @@ ZH_HANT = {
     'mb_feat_rpa': '真機矩陣',
     # ── mb_feat_translation_suite ──
     'mb_feat_translation_suite': '翻譯套件',
+    # ── mb_feat_unrestricted_model ──
+    'mb_feat_unrestricted_model': '無限制模型（本地直答）',
     # ── mb_feat_voice_clone ──
     'mb_feat_voice_clone': '語音克隆',
     # ── mb_feat_white_label ──
