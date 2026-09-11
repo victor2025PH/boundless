@@ -1286,8 +1286,10 @@
       let value = (el && el.getAttribute("data-value")) || "";
       const label = (el && el.getAttribute("data-label")) || slot;
       if (!value) {
-        if (typeof prompt !== "function") return;
-        value = String(prompt(this.t("inbox.goal.slots.confirm_prompt", { label }), "") || "").trim();
+        // #173：原生 prompt 在 Electron 渲染进程会抛（typeof 仍是 function），
+        // 统一走页内弹层 window.uiPrompt；宿主未装载弹层＝视同取消。
+        if (typeof window.uiPrompt !== "function") return;
+        value = String((await window.uiPrompt(this.t("inbox.goal.slots.confirm_prompt", { label }), "")) || "").trim();
         if (!value) return;
       }
       if (el) el.disabled = true;
@@ -1312,10 +1314,10 @@
 
     /* Q-5 C（#263）：✎ 改——先问客户实际说的值，再走确认（status=confirmed source=confirmed） */
     async _slotEditConfirm(el) {
-      if (!el || typeof prompt !== "function") return;
+      if (!el || typeof window.uiPrompt !== "function") return;
       const label = el.getAttribute("data-label") || el.getAttribute("data-slot") || "";
       const cur = el.getAttribute("data-value") || "";
-      const value = String(prompt(this.t("inbox.goal.slots.confirm_prompt", { label }), cur) || "").trim();
+      const value = String((await window.uiPrompt(this.t("inbox.goal.slots.confirm_prompt", { label }), cur)) || "").trim();
       if (!value) return;
       el.setAttribute("data-value", value);
       await this._slotConfirm(el);

@@ -102,7 +102,7 @@
 <script src="/copilot/components/cp-draft.js?v=20260813a"></script>
 <script src="/copilot/components/cp-voice.js?v=20260908a"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260817rz1"></script>
-<script src="/copilot/components/cp-goal.js?v=20260910d"></script>
+<script src="/copilot/components/cp-goal.js?v=20260911e"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
 <script src="/copilot/components/cp-image.js?v=20260908b"></script>
 <script src="/copilot/components/cp-nurture.js?v=20260828b"></script>
@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260908dr">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260911a">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -1091,7 +1091,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               </div>
               <span class="rt-divider"></span>
               <!-- 翻译组：双向翻译 / 图片翻译 / 语音翻译 聚合到一个弹层 -->
-              <div class="rt-pop-wrap">
+              <!-- .xl-wrap（2026-09-11）：wrap 退 static，#xlate-pop 改以 .reply-bar-wrap 为包含块
+                   （左对齐 composer、宽随聊天面板）；此前右锚小 wrap 在窄聊天面板向左溢出被裁。 -->
+              <div class="rt-pop-wrap xl-wrap">
                 <button class="tiny-btn" id="xlate-toggle-btn" onclick="_uiBeacon('cbtn_xlate');toggleXlatePop()" title="双向翻译 / 图片翻译 / 语音翻译" data-i18n-title="inbox.rt.xlate_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg><span data-i18n="inbox.rt.xlate">翻译 ▾</span></button>
                 <span class="rt-xl-status" id="rt-xl-status" onclick="_uiBeacon('cbtn_xlate_chip');toggleXlatePop()" style="cursor:pointer;" title="点击设置对话翻译" data-i18n="inbox.rt.xl_status_off" data-i18n-title="inbox.rt.xl_status_t">未开启</span>
                 <div class="rt-pop rt-pop-right" id="xlate-pop">
@@ -21468,10 +21470,12 @@ function _xlPickOpen(mode){
   _xlPickRender('');
   const q=host.querySelector('.xl-pick-q');
   if(q){ q.value=''; try{ q.focus(); }catch(_){} }
+  if(_xlPickMode!=='lb'){ try{ _placeRtPop(document.getElementById('xlate-pop')); }catch(_){} }
   try{ _uiBeacon('xlt_pick_open'); }catch(_){}
 }
 function _xlPickBack(){
-  const pop=document.getElementById('xlate-pop'); if(pop) pop.classList.remove('is-pick');
+  const pop=document.getElementById('xlate-pop');
+  if(pop){ pop.classList.remove('is-pick'); try{ _placeRtPop(pop); }catch(_){} }
   const lb=document.getElementById('lightbox-xl'); if(lb) lb.classList.remove('is-pick');
   _xlPickMode='';
 }
@@ -21678,15 +21682,51 @@ function _xlateOff(){
 /* ===== 底部工具栏：分组弹层 + 状态徽标（收敛重复按钮） ===== */
 function _closeRtPops(except){
   document.querySelectorAll('.rt-pop.show').forEach(function(el){
-    if(el!==except) el.classList.remove('show');
+    if(el!==except){ el.classList.remove('show'); _placeRtPopReset(el); }
   });
 }
+/* rt-pop 几何兜底（2026-09-11）：弹层是 .chat-panel（overflow:hidden）里的 absolute。CSS 已让
+   #xlate-pop 以 composer 为包含块 + min() 宽度（横向不再溢出）；这里在打开后一帧按聊天面板
+   实测再收一次：
+   1) 竖向：max-height = 弹层底 - 面板顶 - 8（短窗 / 草稿栏撑高 composer 时不被上缘裁掉，改内滚）；
+   2) 横向：左右越出面板边缘 → translateX 拉回（kbd-help / voice-cfg 等右锚弹层共用）；
+   3) 任一修正真的发生 → xlt_pop_clipped 埋点（每次会话每弹层只记一次）——用来验证 CSS 修复
+      在真机上是否已覆盖：趋势归零 = 兜底可退役。
+   ≤480 抽屉模式（position:fixed）由 CSS 全管，这里直接放行。 */
+var _rtPopClipBeaconed={};
+function _placeRtPopReset(pop){ if(!pop) return; pop.style.maxHeight=''; pop.style.transform=''; }
+function _placeRtPop(pop){
+  if(!pop||!pop.classList.contains('show')) return;
+  var panel=pop.closest('.chat-panel'); if(!panel) return;
+  _placeRtPopReset(pop);
+  var run=function(){
+    if(!pop.classList.contains('show')) return;
+    try{ if(getComputedStyle(pop).position==='fixed') return; }catch(_){}
+    var pr=panel.getBoundingClientRect(), r=pop.getBoundingClientRect(), touched=false;
+    var avail=Math.floor(r.bottom-pr.top-8);
+    if(avail>120 && r.height>avail){ pop.style.maxHeight=avail+'px'; touched=true; }
+    var dx=0;
+    if(r.left<pr.left+4) dx=(pr.left+4)-r.left;
+    else if(r.right>pr.right-4) dx=(pr.right-4)-r.right;
+    if(Math.abs(dx)>=1){ pop.style.transform='translateX('+Math.round(dx)+'px)'; touched=true; }
+    if(touched && !_rtPopClipBeaconed[pop.id||'?']){ _rtPopClipBeaconed[pop.id||'?']=1; try{ _uiBeacon('xlt_pop_clipped'); }catch(_){} }
+  };
+  try{ requestAnimationFrame(run); }catch(_){ run(); }
+}
+(function(){
+  var t=null;
+  window.addEventListener('resize',function(){
+    if(t) clearTimeout(t);
+    t=setTimeout(function(){ document.querySelectorAll('.rt-pop.show').forEach(_placeRtPop); },120);
+  });
+})();
 function toggleVoiceCfg(){
   var p=document.getElementById('voice-cfg-pop');
   if(!p) return;
   var show=!p.classList.contains('show');
   _closeRtPops(p);
   p.classList.toggle('show',show);
+  if(show) _placeRtPop(p); else _placeRtPopReset(p);
 }
 /* 语音深度管理（登记/改绑/对账）已统一到右栏 cp-voice：打开业务助手→回复页→聚焦语音组件 */
 function _focusRightVoice(){
@@ -22142,7 +22182,8 @@ function toggleXlatePop(){
   /* 0830 重建：开/关都退出选语第二屏（下次打开回主屏，不残留 is-pick） */
   p.classList.remove('is-pick');
   /* P0-V2：开弹层时同步「语音消息」行状态（跟随 _xlateOut 与开关持久值） */
-  if(show){ try{ _syncVoiceXlRow(); }catch(_){} try{ _syncXlChips(); }catch(_){} }
+  if(show){ try{ _syncVoiceXlRow(); }catch(_){} try{ _syncXlChips(); }catch(_){} _placeRtPop(p); }
+  else _placeRtPopReset(p);
 }
 /* composer P2：键盘快捷键速查浮层（复用 rt-pop 家族；把 Tab 采草稿/斜杠指令/Ctrl+V
    贴图这些隐藏能力集中一处可见——textarea title 悬浮提示的可点击升级版）。 */
@@ -22152,7 +22193,8 @@ function toggleKbdHelp(){
   var show=!p.classList.contains('show');
   _closeRtPops(p);
   p.classList.toggle('show',show);
-  if(show){ try{ _uiBeacon('cmpz_keys_open'); }catch(_){} }
+  if(show){ try{ _uiBeacon('cmpz_keys_open'); }catch(_){} _placeRtPop(p); }
+  else _placeRtPopReset(p);
 }
 /* 点弹层外区域自动收起（toggle 按钮自身的点击由 toggle 处理，避免重复开关） */
 document.addEventListener('click',function(e){
