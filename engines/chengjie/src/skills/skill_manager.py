@@ -5901,6 +5901,31 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("[episodic] merged extract skipped", exc_info=True)
 
+            # Q-25 C（#295 #300）：记忆链与画像 / 目标回填**同一道门**——add_fact 前过共享事实门
+            # fact_gate.check(kind=fact)：必须带客户原句 evidence 且逐字在客户入站里（无原句不写）；
+            # 主体守卫：事实主体只能是客户或客户明确提到的人（「我出差去越南」绝不能写成「一起去
+            # 越南」）；事实里的名字 / 数字须在原句里。不过 → 不写 + `[memory] drop reason=` 一行
+            # + 计入 grounding_dropped 记账；门缺席 / 异常 → 不写（宁可漏记）。
+            _gated_llm: List[Tuple[str, str, Optional[float]]] = []
+            for f, _ev, _conf in facts_llm:
+                try:
+                    from src.companion.fact_gate import check as _fg_check
+                    _fg_ok, _fg_why = _fg_check(
+                        f, slot_or_kind="fact", evidence=_ev,
+                        inbound_texts=[mu_facts or mu])
+                except Exception:
+                    _fg_ok, _fg_why = False, "gate_error"
+                if not _fg_ok:
+                    self.logger.info(
+                        "[memory] drop conv=%s fact=%s evidence=%s reason=%s",
+                        key, str(f)[:60].replace("\n", " "),
+                        str(_ev or "")[:40].replace("\n", " "), _fg_why or "unanchored")
+                    grounding_dropped.append(
+                        {"fact": str(f), "evidence": str(_ev or ""), "reason": _fg_why or "unanchored"})
+                    continue
+                _gated_llm.append((f, _ev, _conf))
+            facts_llm = _gated_llm
+
             for f, _ev, _conf in facts_llm:
                 # R12：LLM 抽取是对话推断/概括 → ai_inferred（晋升/推翻 stable 需更高置信）
                 rid = self._episodic_store.add_fact(
