@@ -9,7 +9,14 @@
 之后该会话的每一次判定（``autosend_policy.decide(conversation_id=…)`` / worker 捞稿 / 真发前
 二次复检）都先问 ``active(conv)`` → 有 → 强制 L1（人审）并继承 shadow（重新起草不得归零）。
 只有**人工动作**（摘标 / 解冻 / 我来回 / 坐席发送）才 ``clear(by=agent)``；系统自动摘标只清
-``needs_human`` 这一类泛因（隐私 / 承诺等更具体原因留给人）。TTL 24h 到期自动失效（落一行日志）。
+``needs_human`` 这一类泛因（隐私 / 承诺等更具体原因留给人）。TTL 到期自动失效（落一行日志）。
+
+Q-27（#301 追加 AFD2CD / #296，2026-09-12）**生命周期收口**：
+  · 只有**高级**命中才 ``set``（adult explicit / payment 裸词等中级不再登记）；TTL 24h → **2h**；
+  · 释放任一即 ``clear`` 并落 ``[risk_hold] clear conv= reason= by=<agent_ack|agent_send|mode_select|
+    low_inbound|ttl> held_min=``：坐席摘标（我知道了）/ 坐席人工发送 / 顶栏切到或重选「全自动」
+    （切档路由）/ 低级入站（``risk_grader`` 低级不能续命一个 hold）/ TTL 到期（``active()`` 内）；
+  · 已 clear 后新入站重新评估，不继承旧 shadow——``autosend_policy._resolve_risk_hold`` 只认 ``active()``。
 
 存储：复用 ``InboxStore`` 通用 KV ``app_settings``（键 ``risk_hold:<cid>``，值 JSON
 ``{reason, hit, set_ts, ttl_h, by, cleared_ts, cleared_by}``），**不动 store.py / 不建表**
@@ -28,7 +35,7 @@ from typing import Any, Dict, Iterable, Optional
 logger = logging.getLogger(__name__)
 
 KEY_PREFIX = "risk_hold:"
-DEFAULT_TTL_H = 24.0
+DEFAULT_TTL_H = 2.0          #: Q-27（#301）：24h → 2h（高级命中的会话级持有最长两小时，到期即 clear by=ttl）
 #: 泛因：由「需人工」标签派生，系统自动摘标时可一并清；其余原因只认人工 clear
 GENERIC_REASON = "needs_human"
 #: 建议的原因码（不强制——Q-2 / 其它线可传自己的码，只要非空）
@@ -128,12 +135,13 @@ def active(store: Any, cid: str, *, now: Optional[float] = None) -> Optional[str
         return None
     if _is_live(rec, ts):
         return str(rec.get("reason") or "") or None
-    age_h = (ts - float(rec.get("set_ts") or 0)) / 3600.0
-    logger.info("[risk_hold] expired conv=%s reason=%s age_h=%.1f ttl_h=%.0f",
-                cid, rec.get("reason"), age_h, float(rec.get("ttl_h") or DEFAULT_TTL_H))
+    held_min = (ts - float(rec.get("set_ts") or 0)) / 60.0
     rec["cleared_ts"] = ts
     rec["cleared_by"] = "ttl"
     _write(store, str(cid or "").strip(), rec)
+    # Q-27：到期与人工 / 切档释放同一口径 `[risk_hold] clear … by=ttl`（grep 一个词看全部释放）
+    logger.info("[risk_hold] clear conv=%s reason=%s by=ttl held_min=%.1f ttl_h=%.1f（到期）",
+                cid, rec.get("reason"), held_min, float(rec.get("ttl_h") or DEFAULT_TTL_H))
     return None
 
 
@@ -171,10 +179,44 @@ def clear(store: Any, cid: str, by: str = "agent", *,
     rec["cleared_by"] = str(by or "agent")
     ok = _write(store, cid, rec)
     if ok:
-        logger.info("[risk_hold] clear conv=%s reason=%s by=%s held_min=%.1f",
+        logger.info("[risk_hold] clear conv=%s reason=%s by=%s held_min=%.1f hit=%s",
                     cid, rec.get("reason"), rec["cleared_by"],
-                    (ts - float(rec.get("set_ts") or ts)) / 60.0)
+                    (ts - float(rec.get("set_ts") or ts)) / 60.0, rec.get("hit") or "-")
     return ok
+
+
+def release_on_auto(store: Any, cid: str, *, by: str = "mode_select",
+                    now: Optional[float] = None) -> Dict[str, Any]:
+    """Q-27（#301）顶栏切到 / 重选「全自动」= 坐席明示「这会话我看过了，交回 AI」：摘「需人工」标
+    （含 handoff_meta）+ 解除**任何原因**的会话级持有，各落一行 ``by=mode_select``。
+
+    返回 ``{had_hold, hold_cleared, tag_cleared}``；store 缺席 → 三者皆 False/空。绝不抛。
+    先走 :func:`protocol_autoreply.clear_needs_human`（标 + 冷却 + 泛因持有），再补一刀 ``clear(by=)``
+    兜住「有持有无标」（1.0.82 遗留的 adult 持有）。
+    """
+    out: Dict[str, Any] = {"had_hold": "", "hold_cleared": False, "tag_cleared": False}
+    cid = str(cid or "").strip()
+    if not cid or store is None:
+        return out
+    ts = float(now if now is not None else time.time())
+    try:
+        out["had_hold"] = str(active(store, cid, now=ts) or "")
+    except Exception:
+        out["had_hold"] = ""
+    try:
+        from src.integrations.protocol_autoreply import clear_needs_human
+        out["tag_cleared"] = bool(clear_needs_human(store, cid, actor=str(by or "mode_select")))
+    except Exception:
+        logger.debug("[risk_hold] release_on_auto 摘标失败（忽略）conv=%s", cid, exc_info=True)
+    try:
+        out["hold_cleared"] = bool(clear(store, cid, by=str(by or "mode_select"), now=ts)) or \
+            (bool(out["had_hold"]) and active(store, cid, now=ts) is None)
+    except Exception:
+        logger.debug("[risk_hold] release_on_auto 解除持有失败（忽略）conv=%s", cid, exc_info=True)
+    if out["had_hold"] or out["tag_cleared"]:
+        logger.info("[risk_hold] release conv=%s by=%s had_hold=%s hold_cleared=%s tag_cleared=%s",
+                    cid, by, out["had_hold"] or "-", out["hold_cleared"], out["tag_cleared"])
+    return out
 
 
 def all_active(store: Any, *, now: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
@@ -295,6 +337,6 @@ def cooldown_blocks(store: Any, cid: str, category: str, level: str = "high", *,
 
 
 __all__ = ["KEY_PREFIX", "DEFAULT_TTL_H", "GENERIC_REASON", "KNOWN_REASONS",
-           "set", "active", "active_record", "record", "clear", "all_active", "touch",
+           "set", "active", "active_record", "record", "clear", "release_on_auto", "all_active", "touch",
            "COOLDOWN_PREFIX", "DEFAULT_COOLDOWN_MIN",
            "cooldown", "cooldown_record", "cooldown_blocks"]

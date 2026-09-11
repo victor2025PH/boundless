@@ -333,8 +333,20 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         # Q-18 C（#292）：切到 / 重选「全自动」= 明示接回——清让位窗 + 取消 defer 立即放行
         # （worker 落 `[autosend] resume by=mode_select`）。非 auto_ai 档不碰让位状态。
         agent_yield_resumed = None
+        risk_hold_released = None
         if mode == "auto_ai":
             agent_yield_resumed = _resume_agent_yield_q18(request, cid, by="mode_select")
+            # Q-27 B（#301 追加 AFD2CD）：切到 / 重选「全自动」= 坐席明示「这会话我看过了，交回 AI」→
+            # 摘「需人工」标 + 解除任何原因的会话级 risk_hold（`[risk_hold] clear … by=mode_select`），
+            # 之后新入站重新评估、不继承旧 shadow / 不再 forced=L1。非 auto_ai 档不碰。best-effort。
+            try:
+                from src.inbox import risk_hold as _rh_q27
+                _st_q27 = _inbox_store(request)
+                if _st_q27 is not None:
+                    risk_hold_released = _rh_q27.release_on_auto(_st_q27, cid, by="mode_select")
+            except Exception:
+                logger.debug("[automation] Q-27 risk_hold release_on_auto 失败（忽略）", exc_info=True)
+                risk_hold_released = None
         rearm_source = ""
         if mode == "manual" and _rearm in ("30m", "rearm30"):
             try:
@@ -355,6 +367,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "rearm_source": rearm_source,
             # Q-18 C：切全自动时的接回结果 {had_yield, released, by}（非 auto_ai → None）
             "agent_yield_resumed": agent_yield_resumed,
+            # Q-27 B：切全自动时的风险持有释放结果 {had_hold, hold_cleared, tag_cleared}（非 auto_ai → None）
+            "risk_hold_released": risk_hold_released,
         }
 
     @app.post("/api/unified-inbox/agent-yield/resume")

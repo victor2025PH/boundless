@@ -1592,7 +1592,54 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
         }
         if gap_probe.get("state") not in (None, "", "idle"):
             resp["gap_probe"] = gap_probe
+        # Q-26（#301 #302）：会话「AI 会不会回」单一状态顺带——会话头状态带首屏零额外请求
+        _cs = _conv_state_q26(request, cid, platform, account_id)
+        if _cs is not None:
+            resp["conv_state"] = _cs
         return resp
+
+    def _conv_state_q26(request: Request, cid: str, platform: str,
+                        account_id: str) -> Optional[Dict[str, Any]]:
+        """Q-26：``src.inbox.conv_state.compute`` 六源只读聚合（档位 / 需人工·风控持有 / 边车 /
+        作息外 / 让位 / 语言 / 起草失败）→ ``{will_send, state, tone, reason_code, reason_text_key,
+        until_ts, action, params}``。只读、绝不抛（失败 → None，前端不渲染状态带）。"""
+        try:
+            from src.inbox.conv_state import compute as _cs_compute
+            _store = _inbox_store(request)
+            _cm = config_manager or getattr(request.app.state, "config_manager", None)
+            _cfg = (getattr(_cm, "config", None) or {}) if _cm is not None else {}
+            return _cs_compute(
+                _store, str(cid or ""), platform=str(platform or "").lower(),
+                account_id=str(account_id or "default"),
+                worker=getattr(request.app.state, "autosend_worker", None),
+                config=_cfg)
+        except Exception:
+            logger.debug("[conv_state] compute 失败（忽略）", exc_info=True)
+            return None
+
+    @app.get("/api/unified-inbox/conv-state")
+    async def api_unified_inbox_conv_state(
+        request: Request, cid: str = "", platform: str = "",
+        account_id: str = "default", chat_key: str = "",
+    ):
+        """Q-26（#301 #302）：会话「AI 会不会回」单一状态（状态带 45s 轮询 / 动作后即刷）。
+        ``cid`` 与 ``platform+chat_key`` 二选一；platform / account_id 缺省时从 cid 反推。"""
+        api_auth(request)
+        cid = str(cid or "").strip()
+        platform = str(platform or "").lower()
+        account_id = str(account_id or "default")
+        if not cid:
+            if not platform or not chat_key:
+                raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+            cid = conv_id(platform, account_id, str(chat_key or ""))
+        elif not platform:
+            _parts = cid.split(":", 2)
+            if len(_parts) >= 2:
+                platform, account_id = _parts[0].lower(), _parts[1]
+        st = _conv_state_q26(request, cid, platform, account_id)
+        if st is None:
+            raise HTTPException(503, "conv_state unavailable")
+        return {"ok": True, "cid": cid, "conv_state": st}
 
     @app.get("/api/unified-inbox/conv-probe")
     async def api_unified_inbox_conv_probe(request: Request, cid: str = ""):

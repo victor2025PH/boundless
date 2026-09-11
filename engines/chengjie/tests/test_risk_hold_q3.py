@@ -117,9 +117,11 @@ def test_risk_hold_set_active_clear_and_ttl():
     assert rh.active(st, "c1") is None
     rec = rh.set(st, "c1", "privacy", ["phone"], now=1000.0)
     assert rec["reason"] == "privacy" and rec["hit"] == "phone"
-    assert rh.active(st, "c1", now=1000.0 + 23 * 3600) == "privacy"
-    # TTL 24h 到期 → None，并写 cleared_by=ttl（日志一行）
-    assert rh.active(st, "c1", now=1000.0 + 25 * 3600) is None
+    # Q-27（#301）：TTL 24h → 2h
+    assert rh.DEFAULT_TTL_H == 2.0 and rec["ttl_h"] == 2.0
+    assert rh.active(st, "c1", now=1000.0 + 1.9 * 3600) == "privacy"
+    # TTL 2h 到期 → None，并写 cleared_by=ttl（日志一行 `[risk_hold] clear … by=ttl`）
+    assert rh.active(st, "c1", now=1000.0 + 2.1 * 3600) is None
     assert rh.record(st, "c1")["cleared_by"] == "ttl"
     # 再 set → 重新生效；人工 clear → 解除
     rh.set(st, "c1", "commitment", "I promise", now=2000.0)
@@ -561,6 +563,46 @@ def test_mode_switch_route_cancels_inflight_and_reports_count(tmp_path):
                     json={"platform": "telegram", "account_id": "a1", "chat_key": "u1",
                           "mode": "auto_ai"})
     assert r.status_code == 200 and r.json()["cancelled_l2"] == 0 and fw.calls == []
+    store.close()
+
+
+def test_q27_mode_select_auto_releases_risk_hold_and_tag(tmp_path, caplog):
+    """Q-27 #301 B：顶栏切到 / 重选「全自动」→ 任何原因的 risk_hold 都 clear（by=mode_select）+ 摘「需人工」；
+    之后 decide 不再 forced=L1、不继承旧 shadow。非 auto_ai 档不碰。"""
+    from src.integrations.protocol_autoreply import HANDOFF_TAG, tag_needs_human
+    app, store, client = _route_app(tmp_path)
+    app.state.autosend_worker = None
+    cid = "telegram:a1:u9"
+    payload = {"platform": "telegram", "account_id": "a1", "chat_key": "u9"}
+    # 1.0.82 遗留形态：adult 持有（非泛因）+ 需人工标
+    rh.set(store, cid, "adult", ["nudes"], by="adult_grader")
+    assert tag_needs_human(store, payload, reason="adult:pressure:nudes", source="adult_grader",
+                           level="high", category="adult", hits=["adult:nudes"])
+    assert rh.active(store, cid) == "adult" and HANDOFF_TAG in store.get_conv_tags(cid)
+    d0 = decide("low", [], "low", [], [], automation_mode="auto_ai", platform="telegram",
+                conversation_id=cid, store=store)
+    assert d0.level == "L1" and d0.risk_hold == "adult"
+    # 切手动：不碰持有
+    r = client.post("/api/unified-inbox/automation", json={**payload, "mode": "manual"})
+    assert r.status_code == 200 and r.json()["risk_hold_released"] is None
+    assert rh.active(store, cid) == "adult"
+    # 切全自动：持有 + 标一并释放，日志 by=mode_select
+    with caplog.at_level(logging.INFO):
+        r = client.post("/api/unified-inbox/automation", json={**payload, "mode": "auto_ai"})
+    assert r.status_code == 200, r.text
+    rel = r.json()["risk_hold_released"]
+    assert rel["had_hold"] == "adult" and rel["hold_cleared"] is True and rel["tag_cleared"] is True, rel
+    assert rh.active(store, cid) is None and rh.record(store, cid)["cleared_by"] == "mode_select"
+    assert HANDOFF_TAG not in store.get_conv_tags(cid) and not store.get_handoff_meta(cid)
+    assert any("[risk_hold] clear" in m and "by=mode_select" in m for m in
+               (rec.getMessage() for rec in caplog.records)), [rec.getMessage() for rec in caplog.records]
+    # 新入站重新评估：不继承旧 shadow、不 forced=L1
+    d1 = decide("low", [], "low", [], [], automation_mode="auto_ai", platform="telegram",
+                conversation_id=cid, store=store)
+    assert d1.level == "L2" and d1.shadow is None and not d1.risk_hold
+    # 重选全自动（已是 auto_ai）幂等：无持有 → 三者皆空 / False，不报错
+    r = client.post("/api/unified-inbox/automation", json={**payload, "mode": "auto_ai"})
+    assert r.status_code == 200 and r.json()["risk_hold_released"] == {"had_hold": "", "hold_cleared": False, "tag_cleared": False}
     store.close()
 
 

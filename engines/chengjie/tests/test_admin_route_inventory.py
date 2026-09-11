@@ -2142,6 +2142,14 @@ _ADDITIONS_2026_09_11_Q17_RISK_GRADER = """
 """
 _BASELINE += _ADDITIONS_2026_09_11_Q17_RISK_GRADER
 
+# Q-26 #301 #302（2026-09-12，A）：会话「AI 会不会回」单一状态（src/inbox/conv_state.compute 六源
+# 只读聚合：档位 / 需人工·风控持有 / 边车 / 作息外 / 让位 / 语言 / 起草失败）——会话头状态带
+# 45s 轮询 + 动作后即刷；/thread 响应顺带 conv_state。unified_inbox_read_routes.py。
+_ADDITIONS_2026_09_12_Q26_CONV_STATE = """
+/api/unified-inbox/conv-state	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_12_Q26_CONV_STATE
+
 # Q-18 #292（2026-09-11，C/D）：会话头「AI 让位中 · N 秒后接回」chip 点击 = 立即接回
 # （unified_inbox_stored_read_routes.py，worker.resume_agent_yield by=chip）+ 回复设置页「今日拦截」
 # 台账卡（reply_settings_routes.py，abort_ledger：24h 按原因码计数 + 最近 5 条）。
