@@ -79,9 +79,15 @@ _MENTION = [
           "下着", "水着", "ヤリたい", "寝たい", "一夜"]),
 ]
 # explicit：器官 / 性行为 / 裸照 / 色情内容——单词即露骨
+# Q-18 A（#278 追加 RKEJYF / N5N6QB，2026-09-11）：``cum`` 一词**不再**单独算露骨——印式 /
+# 拉丁英语里 ``cum`` = and（「message cum reply」「summa cum laude」），Mizuki × Jeeo 事故就是
+# 「finally got your loving message cum reply」被判 explicit → 软回应 + 24h 持有 + 需人工。
+# 只认 ``cumming / cumshot / make (me|you) cum / wanna cum / cum (on|in|inside) me``。
 _EXPLICIT = [
     _en(["nudes?", "naked", "nude pics?", "porn(?:o|ography)?", "onlyfans", "dick(?: pic)?", "cock",
-         "pussy", "boobs?", "tits", "titties", "nipples?", "blow ?job", "hand ?job", "cum(?:ming|shot)?",
+         "pussy", "boobs?", "tits", "titties", "nipples?", "blow ?job", "hand ?job",
+         "cumming", "cum ?shot", "make (?:me|you|her|him) cum", "wanna cum", "want to cum",
+         "cum (?:on|in|inside|for) (?:me|you|my|your)",
          "jerk(?:ing)? off", "masturbat(?:e|ing|ion)", "fuck(?:ing)? (?:you|me)", "fuck me",
          "suck (?:my|your|it)", "anal", "orgasm", "wet pussy", "hard on", "boner", "send (?:me )?(?:a )?pic of your (?:body|chest|ass)",
          "show me your (?:body|boobs?|tits|ass|pussy|dick)", "cam ?sex", "video ?sex", "phone sex",
@@ -116,6 +122,40 @@ _FLIRT_TONE = re.compile(
 )
 
 
+# Q-18 A：印式 / 拉丁英语 ``cum`` = and 的豁免——「名词 cum 名词」与「(summa|magna) cum laude」
+# 在匹配前改写成中性词，任何词表都碰不到；「make me cum X」「cum on me」这类强信号左右词不豁免。
+_CUM_LAUDE_RE = re.compile(r"(?<![A-Za-z])(?:(?:summa|magna) )?cum laude(?![A-Za-z])", re.IGNORECASE)
+_CUM_CONJ_RE = re.compile(r"(?<![A-Za-z])([A-Za-z][\w'-]*) cum ([A-Za-z][\w'-]*)(?![A-Za-z])", re.IGNORECASE)
+_CUM_STRONG_LEFT = frozenset({"me", "you", "her", "him", "us", "them", "to", "wanna", "gonna", "gotta",
+                              "i", "i'm", "im", "i'll", "ill", "u", "ur", "lemme"})
+_CUM_STRONG_RIGHT = frozenset({"on", "in", "inside", "for", "all", "over", "hard", "now", "again",
+                               "twice", "together", "with", "into"})
+# Q-18 A：单独出现时语义两可的露骨词（公鸡 / 猫 / 肛肠科 / 裸色…）——孤立一个永不判 explicit，
+# 需 ≥2 个成人信号（另一个露骨 / 提及词）或 + 施压词才升；否则 ≤ flirt。强词（nudes / porn /
+# blow job / make me cum…）不在此列，单词仍露骨——不放松真高风险。
+_AMBIGUOUS_EXPLICIT = frozenset({"cock", "pussy", "anal", "hard on", "boner", "nude"})
+
+
+def _cum_conj_sub(m: "re.Match[str]") -> str:
+    left, right = m.group(1).lower(), m.group(2).lower()
+    if left in _CUM_STRONG_LEFT or right in _CUM_STRONG_RIGHT:
+        return m.group(0)
+    return f"{m.group(1)} and {m.group(2)}"
+
+
+def neutralize_cum(text: str) -> str:
+    """把「X cum Y」（= X and Y）与「cum laude」改写为中性词；强信号上下文原样返回。"""
+    s = str(text or "")
+    if "cum" not in s.lower():
+        return s
+    s = _CUM_LAUDE_RE.sub("with honours", s)
+    return _CUM_CONJ_RE.sub(_cum_conj_sub, s)
+
+
+def is_ambiguous_hit(hit: str) -> bool:
+    return str(hit or "").strip().lower() in _AMBIGUOUS_EXPLICIT
+
+
 def sniff_lang(text: str, lang: Optional[str] = None) -> str:
     try:
         from src.inbox.commitment_guard import sniff_lang as _sl
@@ -145,19 +185,27 @@ def grade(text: str, lang: Optional[str] = None) -> Dict[str, Any]:
     分级（只看这一条入站，不看历史）：
       explicit 词 + pressure 词 → pressure；explicit 词 → explicit；
       仅 mention 词：一个 + 调侃口吻 / ≥2 个 → flirt，否则 mention；≥3 个 mention 词 → explicit。
+    Q-18 A：``cum`` 先过 :func:`neutralize_cum`（印式「X cum Y」/ cum laude 豁免）；命中的露骨词
+      **全是**歧义词（:data:`_AMBIGUOUS_EXPLICIT`）且总信号 <2 且无施压词 → 不判 explicit，
+      降为 flirt（有调侃口吻）/ mention，``ambiguous=True``。
     """
     t = str(text or "").strip()
     out: Dict[str, Any] = {"level": "", "hits": [], "pressure_hits": [], "category": CATEGORY,
                            "lang": sniff_lang(t, lang)}
     if not t:
         return out
-    low = t.lower()
+    low = neutralize_cum(t.lower())
     exp = _hits(_EXPLICIT, low)
     men = [h for h in _hits(_MENTION, low) if h.lower() not in [e.lower() for e in exp]]
     pres = _hits(_PRESSURE, low)
     if exp:
         out["hits"] = exp + men
         out["pressure_hits"] = pres
+        strong = [h for h in exp if not is_ambiguous_hit(h)]
+        if not strong and (len(exp) + len(men)) < 2 and not pres:
+            out["ambiguous"] = True
+            out["level"] = "flirt" if _FLIRT_TONE.search(t) else "mention"
+            return out
         out["level"] = "pressure" if pres else "explicit"
         return out
     if not men:
@@ -744,7 +792,8 @@ def card_label_parts(reason: Any) -> Dict[str, str]:
 __all__ = [
     "CATEGORY", "LEVELS", "POLICIES", "FOLLOWUP_SEC", "KV_PREFIX", "REASON_PREFIX",
     "FLIRT_REASON", "MARK_REASON",
-    "grade", "is_blocking_level", "normalize_policy", "default_policy", "adult_policy_of",
+    "grade", "neutralize_cum", "is_ambiguous_hit", "is_blocking_level", "normalize_policy",
+    "default_policy", "adult_policy_of",
     "resolve_persona", "prompt_block", "soft_reply_candidates", "pick_soft_reply", "soft_reply_for",
     "last_soft_reply", "bind_service", "dispatch_soft_reply", "send_soft_reply",
     "run_followup", "schedule_followup", "pending_followups", "cancel_followup",

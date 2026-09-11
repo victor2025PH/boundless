@@ -360,6 +360,59 @@ def test_grade_levels_and_dedup():
     assert ag.parse_reason("adult:bogus") == ("", "") and ag.parse_reason("high_risk") == ("", "")
 
 
+# ── Q-18 A（#278 追加 RKEJYF / N5N6QB）：cum 消歧 + 孤立歧义词永不判 explicit ─────────────
+
+_Q18_CUM_CASES = [
+    # 印式英语 cum = and（Mizuki × Jeeo 15:45 原句）→ 不命中
+    ("finally got your loving message cum reply, thank you dear", "en", ("",)),
+    ("summa cum laude from Delhi University", "en", ("",)),
+    ("he is my colleague cum friend", "en", ("",)),
+    # 真露骨：只认 cumming / cumshot / make me cum
+    ("make me cum tonight", "en", ("explicit", "pressure")),
+    ("i'm cumming", "en", ("explicit",)),
+    ("send a cumshot vid", "en", ("explicit", "pressure")),
+]
+
+
+@pytest.mark.parametrize("text,lang,levels", _Q18_CUM_CASES)
+def test_q18_cum_disambiguation(store, bg_loop, monkeypatch, text, lang, levels):
+    g = ag.grade(text, lang)
+    assert g["level"] in levels, g
+    if levels == ("",):
+        # 不命中 → regrade 原样放行（不打标 / 不持有 / 不软回应），全自动不被机制掐停
+        _use_persona(monkeypatch)
+        svc = _Svc(store, {"business_domain": "companion"}, bg_loop)
+        conv = _conv("cum_" + str(abs(hash(text)) % 10000))
+        risk, reasons, info = _regrade(svc, conv, text, lang, risk_level="low", reasons=(), hits=())
+        assert (risk, reasons, info) == ("low", [], None)
+        assert HANDOFF_TAG not in store.get_conv_tags(conv["conversation_id"])
+        assert risk_hold.active(store, conv["conversation_id"]) is None
+        assert not svc.delivered
+
+
+def test_q18_neutralize_cum_keeps_strong_context():
+    assert ag.neutralize_cum("message cum reply") == "message and reply"
+    assert ag.neutralize_cum("summa cum laude") == "with honours"
+    assert ag.neutralize_cum("make me cum now") == "make me cum now"      # 左词 me 不豁免
+    assert ag.neutralize_cum("cum on me") == "cum on me"                  # 右词 on 不豁免
+    assert ag.grade("cum", "en")["level"] == ""                           # 孤立一个 cum 永不露骨
+
+
+def test_q18_isolated_ambiguous_word_never_explicit():
+    # 单个歧义词：≤ flirt
+    g = ag.grade("my pussy cat is sleeping", "en")
+    assert g["level"] == "mention" and g.get("ambiguous") is True, g
+    assert ag.grade("the cock crowed at dawn", "en")["level"] == "mention"
+    assert ag.grade("you got a boner? lol", "en")["level"] == "flirt"
+    # ≥2 信号 或 歧义词 + 施压词 → 仍 explicit / pressure（不放松真高风险）
+    assert ag.grade("show me your pussy", "en")["level"] in ("explicit", "pressure")
+    assert ag.grade("pussy, send it now", "en")["level"] == "pressure"
+    assert ag.grade("your pussy and boobs", "en")["level"] == "explicit"
+    # 强词单词仍露骨（nudes / porn / blow job）
+    assert ag.grade("nudes", "en")["level"] == "explicit"
+    assert ag.grade("blow job", "en")["level"] == "explicit"
+
+
 def test_regrade_is_fail_open(store, bg_loop, monkeypatch):
     monkeypatch.setattr(ag, "grade", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     svc = _Svc(store, {}, bg_loop)
