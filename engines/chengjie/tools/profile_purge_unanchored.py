@@ -1,0 +1,205 @@
+# -*- coding: utf-8 -*-
+"""Q-19（#294 / #272 追加）：清洗画像里「不可锚定」的 AI 推断 / 昵称槽位（一次性 + 回访可复跑）。
+
+只处理 ``source=ai_inferred / nickname``（含旧形 ``src=llm / llm_pending``）的单元；
+**confirmed（坐席确认 / 手录 / 客户原话正则 auto）一字不动**。判据与线上写口同一把尺子：
+
+- A 槽类型校验 ``profile_slots.slot_validate``：age 16–99 / 年龄段；occupation·location·residence
+  ≤24 字短语禁整句（「我住在去嵐山散步」「織り機の前に座って、新しい帯の色合わせ」）；
+  name ≤12；婚恋 / 家庭闭集 → 不过 ``invalid:<why>``；
+- B 原话锚定：``ai_inferred`` 单元无 ``evidence`` → ``unanchored``（存量多是 Q-5 之前 / 无引文的
+  写入，线上新写口已强制 evidence；有 evidence 的存量视为可锚定，不去翻会话历史——画像行没有
+  账号维度，跨账号反查代价与误删风险都不值）。昵称来源不要求 evidence（evidence 就是昵称）。
+
+用法（引擎目录下）::
+
+    python tools/profile_purge_unanchored.py                 # = --dry-run：只列出，不动库
+    python tools/profile_purge_unanchored.py --dry-run --json
+    python tools/profile_purge_unanchored.py --apply         # 真删（先看一遍 dry-run 输出）
+    python tools/profile_purge_unanchored.py --db D:\\path\\marketing_goals.db --apply
+    python tools/profile_purge_unanchored.py --platform telegram --chat-key 7340576921
+
+库路径：``--db`` 显式 > ``companion.goals.db_path``（config.yaml / config.local.yaml）>
+``<数据根>/config/marketing_goals.db``（``AITR_DATA_ROOT`` / 实例根发现，与 goal_sprint_drill 同口径）。
+
+回访说明（发版对账 v1.0.82 Q-19）：
+1. 先 ``--dry-run`` 看清单：每行 ``platform:chat_key slot=… source=… reason=… value=…``；
+   reason 分布应集中在 ``invalid:sentence / invalid:not_place / invalid:age_format / unanchored``；
+2. 抽 3–5 条对照会话原文确认确是幻觉 / 整句，再 ``--apply``；
+3. 复跑 ``--dry-run`` 应为 0 行；线上新写入不再产生这类单元（``[profile] drop … reason=`` 日志可查）；
+4. 该脚本可反复跑，幂等。删除只影响 mentioned 单元；目标卡「已采集 N/10」只数 confirmed，不受影响。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+_ENGINE_ROOT = Path(__file__).resolve().parents[1]
+if str(_ENGINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ENGINE_ROOT))
+
+_AUTO_SOURCES = ("ai_inferred", "nickname", "llm", "llm_pending")
+
+
+def _cell_parts(cell: Any):
+    """→ (value, source, status, evidence)；三种形状都认。"""
+    from src.companion.goals.profile_slots import cell_view
+    val, src, st = cell_view(cell)
+    ev = ""
+    if isinstance(cell, dict):
+        ev = str(cell.get("evidence") or "").strip()
+    return val, str(src or "").strip().lower(), st, ev
+
+
+def judge_cell(slot: str, cell: Any) -> str:
+    """单元判定 → 原因（空串＝保留）。只对自动来源判；confirmed / 手录恒保留。"""
+    val, src, st, ev = _cell_parts(cell)
+    if not val or st == "confirmed" or src not in _AUTO_SOURCES:
+        return ""
+    from src.companion.goals.profile_slots import slot_validate
+    _nv, why = slot_validate(slot, val)
+    if why:
+        return f"invalid:{why}"
+    if src in ("ai_inferred", "llm", "llm_pending") and not ev:
+        return "unanchored"
+    return ""
+
+
+def scan_fields(platform: str, chat_key: str, fields: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for slot, cell in (fields or {}).items():
+        why = judge_cell(str(slot), cell)
+        if not why:
+            continue
+        val, src, st, ev = _cell_parts(cell)
+        out.append({"platform": platform, "chat_key": chat_key, "slot": str(slot), "value": val,
+                    "source": src, "status": st, "evidence": ev, "reason": why})
+    return out
+
+
+def iter_profiles(store: Any):
+    """遍历 customer_profiles → (platform, chat_key, fields)。"""
+    rows = store._conn.execute(
+        "SELECT platform, chat_key, fields FROM customer_profiles").fetchall()
+    for r in rows:
+        try:
+            fields = json.loads(r["fields"] or "{}")
+        except Exception:
+            continue
+        if isinstance(fields, dict):
+            yield str(r["platform"]), str(r["chat_key"]), fields
+
+
+def scan_store(store: Any, *, platform: str = "", chat_key: str = "") -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for pf, ck, fields in iter_profiles(store):
+        if platform and pf != platform:
+            continue
+        if chat_key and ck != chat_key:
+            continue
+        out.extend(scan_fields(pf, ck, fields))
+    return out
+
+
+def purge(store: Any, rows: List[Dict[str, Any]], *, apply: bool) -> int:
+    """按扫描结果删槽（``upsert_profile_cells(cells={slot: None})``）。dry-run → 0。"""
+    if not apply or not rows:
+        return 0
+    by_conv: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        by_conv.setdefault((r["platform"], r["chat_key"]), {})[r["slot"]] = None
+    n = 0
+    for (pf, ck), cells in by_conv.items():
+        before = dict((store.get_customer_profile(pf, ck) or {}).get("fields") or {})
+        # 二次防线：只删仍是自动来源 + 非 confirmed 的槽（扫描到删除之间坐席可能已确认）
+        cells = {k: None for k in cells if judge_cell(k, before.get(k))}
+        if not cells:
+            continue
+        store.upsert_profile_cells(pf, ck, cells)
+        after = dict((store.get_customer_profile(pf, ck) or {}).get("fields") or {})
+        n += sum(1 for k in cells if k not in after)
+    return n
+
+
+def _resolve_db(cli_db: str, data_root: str) -> Optional[Path]:
+    if cli_db:
+        return Path(cli_db)
+    try:
+        from scripts._data_root import load_merged_config, resolve_data_roots
+        from src.companion.goals.service import resolve_db_path
+        for root in resolve_data_roots(data_root):
+            cfg = load_merged_config(Path(root)) or {}
+            p = Path(resolve_db_path(cfg, Path(root) / "config" / "config.yaml"))
+            if p.is_file():
+                return p
+    except Exception as exc:  # noqa: BLE001
+        print(f"! 解析库路径失败: {exc}", file=sys.stderr)
+    fallback = _ENGINE_ROOT / "config" / "marketing_goals.db"
+    return fallback if fallback.is_file() else None
+
+
+def _fmt(r: Dict[str, Any]) -> str:
+    v = str(r["value"]).replace("\n", " ")
+    v = v if len(v) <= 40 else v[:39] + "…"
+    ev = f" evidence={r['evidence'][:30]!r}" if r.get("evidence") else ""
+    return (f"{r['platform']}:{r['chat_key']} slot={r['slot']} source={r['source']} "
+            f"reason={r['reason']} value={v!r}{ev}")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    # Windows 控制台默认 GBK：画像值含泰文 / 假名会让 print 直接炸，改 utf-8 + replace
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[attr-defined]
+        except Exception:
+            pass
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--db", default="", help="goals 库路径（缺省按配置 / 数据根解析）")
+    ap.add_argument("--data-root", default="", help="实例数据根（缺省 AITR_DATA_ROOT / 自动发现）")
+    ap.add_argument("--platform", default="", help="只扫该平台")
+    ap.add_argument("--chat-key", default="", help="只扫该 chat_key")
+    ap.add_argument("--dry-run", action="store_true", help="只列出（默认行为）")
+    ap.add_argument("--apply", action="store_true", help="真删（不带 = dry-run）")
+    ap.add_argument("--json", action="store_true", help="JSON 输出")
+    args = ap.parse_args(argv)
+    db = _resolve_db(args.db, args.data_root)
+    if db is None or not Path(db).is_file():
+        print("! 找不到 goals 库（--db 指定或检查 companion.goals.db_path）", file=sys.stderr)
+        return 2
+    from src.companion.goals.store import GoalStore
+    apply = bool(args.apply) and not args.dry_run     # 两个都给 → dry-run 赢
+    try:
+        store = GoalStore(db) if apply else GoalStore.open_readonly(db)
+    except sqlite3.Error as exc:
+        print(f"! 打开库失败 {db}: {exc}", file=sys.stderr)
+        return 2
+    rows = scan_store(store, platform=args.platform, chat_key=args.chat_key)
+    if args.json:
+        print(json.dumps({"db": str(db), "apply": apply, "count": len(rows), "rows": rows},
+                         ensure_ascii=False, indent=1))
+    else:
+        print(f"# db={db} mode={'APPLY' if apply else 'dry-run'} hits={len(rows)}")
+        for r in rows:
+            print(_fmt(r))
+        dist: Dict[str, int] = {}
+        for r in rows:
+            dist[r["reason"]] = dist.get(r["reason"], 0) + 1
+        if dist:
+            print("# reasons: " + ", ".join(f"{k}={v}" for k, v in sorted(dist.items())))
+    if apply:
+        n = purge(store, rows, apply=True)
+        if args.json:
+            print(json.dumps({"deleted": n}, ensure_ascii=False))
+        else:
+            print(f"# deleted {n} slot(s); rerun --dry-run to verify 0")
+    elif rows and not args.json:
+        print("# dry-run：未改库。确认后加 --apply")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

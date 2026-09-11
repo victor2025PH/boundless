@@ -484,6 +484,18 @@ _SKIP_INBOUND_RE = re.compile(
 _HERE_TRAIL_RE = re.compile(r"(?:这边|那边|这里|那里|呢|啊|哈|呀|的)$")
 
 
+def _place_ok(value: Any) -> bool:
+    """Q-19（#294）：居住地候选必须像个地名——与画像槽 location 校验同一单点
+    （``profile_slots.slot_validate``）。0911 实锤 ``memory_slots`` 的裸「住」正则把
+    「我住在去嵐山散步 / 我住在得慣呀 / 我住在河邊行」整句写成 user_stated 事实。
+    单点不可用时放行（不因校验器缺失把整条居住地链打死）。"""
+    try:
+        from src.companion.goals.profile_slots import place_value_ok
+        return bool(place_value_ok(value))
+    except Exception:
+        return True
+
+
 def stated_place_from_inbound_text(text: Any) -> str:
     """从一条**入站原文**抽可当 replace 时钟的地点；抽不出 / 出行 / 老家 → ""。
 
@@ -498,10 +510,12 @@ def stated_place_from_inbound_text(text: Any) -> str:
             return ""
         slot = extract_slot(raw)
         if slot and slot[0] == SLOT_RESIDENCE and slot[1]:
-            return str(slot[1])
+            if _place_ok(slot[1]):
+                return str(slot[1])
+            return ""
         hint = _place_hint_from_text(raw)
         if hint:
-            return hint
+            return hint if _place_ok(hint) else ""
         match = _HERE_RE.search(raw)
         if not match:
             return ""

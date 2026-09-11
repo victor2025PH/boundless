@@ -1336,6 +1336,169 @@ def slot_value_suspect(key: str, value: str) -> str:
         return ""
 
 
+
+# ── Q-19（#294 / #272 追加）：逐槽类型校验——「判不准就不写」的单点 ──────────
+# 0911 实锤：occupation='織り機の前に座って、新しい帯の色合わせ'（整句 + 日语 ×
+# 粤语客户）、residence='我住在去嵐山散步'（整句进地名槽）。接地护栏只验「出处」，
+# 语义体检（上面 slot_value_suspect）只拦语言名——两道都拦不住「形态不对」的值。
+# 这里按槽位类型定**形态**：年龄只许 16–99 数字或年龄档；职业 / 坐标 / 居住地
+# ≤24 字短语、禁整句（句中标点、第一人称起头、动词短句）；称呼 ≤12 字；婚恋 / 家庭
+# 闭集标签（含少量英文别名 → 归一到中文标签）。返回 ``(归一后的值, 不合格原因)``；
+# 原因空串＝通过。只对 ai_inferred / nickname 自动来源生效（调用方判），坐席手录不校验。
+VALID_PHRASE_MAX = 24
+VALID_NAME_MAX = 12
+AGE_MIN, AGE_MAX = 16, 99
+_V_SENTENCE_PUNCT_RE = re.compile(r"[。！？!?；;、，,：:…\n]")
+_V_FIRST_PERSON_RE = re.compile(
+    r"^(?:我|俺|咱|本人|人家|I\b|I'm\b|I am\b|my\b|we\b)", re.IGNORECASE)
+_V_PLACE_BAD_LEAD_RE = re.compile(
+    r"^(?:去|用|得|做|食|吃|睇|看|想|要|會|会|係|是|有|冇|唔|不|没|沒|在|喺|住|返|嚟|玩|買|买)")
+_V_PLACE_BAD_TAIL_RE = re.compile(
+    r"(?:呀|啦|嘅|呢|吧|哈|啊|嗎|吗|嘛|咩|囉|喇|咋|啩|哦|喔|呗|唄|了|的|散步|行街|返工|收工|食飯|吃饭|逛街|旅行|旅游|出差|度假|行|走|玩)$")
+_V_CJK_FUNC_RE = re.compile(r"[嘅咁啲唔係喺嗰咗哋冇]")
+_V_AGE_NUM_RE = re.compile(
+    r"^(?:大概|大約|大约|约|約|around|about|~)?\s*(\d{2})\s*"
+    r"(?:岁|歲|多岁|多歲|左右|出头|出頭|y/?o|yrs?|years?\s*old)?$", re.IGNORECASE)
+_V_AGE_BAND_RE = re.compile(
+    r"^(?:(?:[5-9]0|00)後?后?|(?:[1-9]0)s|(?:early|mid|late)[ -]?(?:teens|twenties|thirties|forties|fifties|sixties|seventies)|"
+    r"(?:teens|twenties|thirties|forties|fifties|sixties|seventies)|"
+    r"(?:一|二|三|四|五|六|七|八|九|十)?十(?:多|幾|几|來|来|出头|出頭|岁|歲)?(?:岁|歲)?|"
+    r"(?:二|三|四|五|六|七|八|九)十(?:多|幾|几|來|来|出头|出頭)?(?:岁|歲)?|"
+    r"(?:大概|大約|大约|约|約)?\d{2}\s*(?:多|幾|几|來|来|出头|出頭)(?:岁|歲)?|(?:[2-6]0)\+)$",
+    re.IGNORECASE)
+_V_MARITAL_ALIASES = {
+    "已婚": "已婚", "结婚": "已婚", "結婚": "已婚", "结了婚": "已婚", "married": "已婚",
+    "离异": "离异", "離異": "离异", "离婚": "离异", "離婚": "离异", "divorced": "离异",
+    "恋爱中": "恋爱中", "戀愛中": "恋爱中", "有对象": "恋爱中", "有男朋友": "恋爱中",
+    "有女朋友": "恋爱中", "in a relationship": "恋爱中", "taken": "恋爱中",
+    "单身": "单身", "單身": "单身", "未婚": "单身", "single": "单身",
+}
+_V_FAMILY_ALIASES = {
+    "有孩子": "有孩子", "有小孩": "有孩子", "有娃": "有孩子", "有儿子": "有孩子", "有女儿": "有孩子",
+    "有兒子": "有孩子", "有女兒": "有孩子", "has kids": "有孩子", "has children": "有孩子",
+    "kids": "有孩子", "children": "有孩子",
+    "独居": "独居", "獨居": "独居", "一个人住": "独居", "一個人住": "独居", "lives alone": "独居",
+    "alone": "独居", "live alone": "独居",
+    "和父母住": "和父母住", "跟父母住": "和父母住", "和爸妈住": "和父母住", "與父母同住": "和父母住",
+    "与父母同住": "和父母住", "lives with parents": "和父母住", "with parents": "和父母住",
+}
+_V_ENUM_SLOTS = {"marital_status": _V_MARITAL_ALIASES, "family_status": _V_FAMILY_ALIASES}
+# 枚举标签的原话触发词（原话锚定用：标签是分类结果，不会逐字出现在客户原话里，
+# 改验 evidence 里有没有该类的自述触发词）
+_V_ENUM_EVIDENCE: Dict[str, Tuple[str, ...]] = {
+    "已婚": ("结婚", "結婚", "已婚", "老公", "老婆", "丈夫", "妻子", "太太", "先生", "married", "wife", "husband"),
+    "离异": ("离婚", "離婚", "离异", "離異", "divorce"),
+    "恋爱中": ("男朋友", "女朋友", "对象", "對象", "男友", "女友", "恋爱", "戀愛", "boyfriend", "girlfriend", "relationship", "拖"),
+    "单身": ("单身", "單身", "未婚", "没对象", "沒對象", "冇對象", "冇拖", "single"),
+    "有孩子": ("孩子", "小孩", "儿子", "女儿", "兒子", "女兒", "娃", "宝宝", "寶寶", "囝", "囡", "kid", "child", "son", "daughter"),
+    "独居": ("一个人住", "一個人住", "自己住", "独居", "獨居", "alone", "by myself"),
+    "和父母住": ("父母", "爸妈", "爸媽", "家人", "阿妈", "阿媽", "parents", "mom", "dad", "family"),
+}
+
+
+def is_enum_slot(key: str) -> bool:
+    return str(key or "").strip().lower() in _V_ENUM_SLOTS
+
+
+def enum_evidence_ok(key: str, label: Any, evidence: Any) -> bool:
+    """枚举槽：evidence（客户原话片段）里须含该标签的自述触发词。非枚举槽 → True。"""
+    try:
+        k = str(key or "").strip().lower()
+        if k not in _V_ENUM_SLOTS:
+            return True
+        lab = _V_ENUM_SLOTS[k].get(str(label or "").casefold().strip(), str(label or "").strip())
+        ev = str(evidence or "").casefold()
+        return any(w.casefold() in ev for w in _V_ENUM_EVIDENCE.get(lab, ()))
+    except Exception:
+        return False
+_V_PHRASE_SLOTS = ("occupation", "location", "residence")
+_V_PLACE_SLOTS = ("location", "residence")
+
+
+def _v_phrase_reason(v: str, *, max_len: int) -> str:
+    """短语形态：长度 / 句中标点 / 第一人称整句。"""
+    if len(v) > max_len:
+        return "too_long"
+    if _V_SENTENCE_PUNCT_RE.search(v):
+        return "sentence"
+    if _V_FIRST_PERSON_RE.search(v):
+        return "sentence"
+    return ""
+
+
+def slot_validate(key: str, value: Any) -> Tuple[str, str]:
+    """按槽位类型校验自动来源的候选值 → ``(归一值, 原因)``；原因空串＝通过。纯函数绝不抛。
+
+    未列入类型表的槽（need / budget / interests …）只做 ``VALID_PHRASE_MAX`` 之外的
+    「整句」拦截（句中标点 + 第一人称起头同时命中才算整句——兴趣「喜欢爬山、游泳」合法）。
+    """
+    try:
+        k = str(key or "").strip().lower()
+        v = re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
+        if not v:
+            return "", "empty"
+        if k == "age":
+            m = _V_AGE_NUM_RE.match(v)
+            if m:
+                n = int(m.group(1))
+                if AGE_MIN <= n <= AGE_MAX:
+                    return str(n), ""
+                return v, "age_range"
+            if _V_AGE_BAND_RE.match(v):
+                return v, ""
+            return v, "age_format"
+        if k in _V_ENUM_SLOTS:
+            table = _V_ENUM_SLOTS[k]
+            vn = v.casefold().strip(" .。!！~～")
+            if vn in table:
+                return table[vn], ""
+            for alias, label in table.items():
+                if alias.casefold() == vn:
+                    return label, ""
+            return v, "enum"
+        if k == "name":
+            why = _v_phrase_reason(v, max_len=VALID_NAME_MAX)
+            return v, (why or "")
+        if k in _V_PHRASE_SLOTS:
+            why = _v_phrase_reason(v, max_len=VALID_PHRASE_MAX)
+            if why:
+                return v, why
+            if k in _V_PLACE_SLOTS:
+                if _V_PLACE_BAD_LEAD_RE.match(v) or _V_PLACE_BAD_TAIL_RE.search(v) or _V_CJK_FUNC_RE.search(v):
+                    return v, "not_place"
+            return v, ""
+        # 其他槽：只拦「明显整句」
+        if len(v) > VALID_PHRASE_MAX and _V_SENTENCE_PUNCT_RE.search(v) and _V_FIRST_PERSON_RE.search(v):
+            return v, "sentence"
+        return v, ""
+    except Exception:
+        return str(value or ""), ""
+
+
+AGE_BAND_OPTIONS: Tuple[str, ...] = ("20s", "30s", "40s", "50s", "60s", "00后", "90后", "80后", "70后")
+
+
+def slot_input_kind(key: str) -> Tuple[str, Tuple[str, ...]]:
+    """槽位的输入控件类型 → ``(kind, options)``：``age`` → ``("age", 年龄段选项)``；
+    枚举槽 → ``("enum", 标签)``；其他 → ``("", ())``。前端据此渲染（只读提示，不改写值）。"""
+    k = str(key or "").strip().lower()
+    if k == "age":
+        return "age", AGE_BAND_OPTIONS
+    if k in _V_ENUM_SLOTS:
+        seen: List[str] = []
+        for lab in _V_ENUM_SLOTS[k].values():
+            if lab not in seen:
+                seen.append(lab)
+        return "enum", tuple(seen)
+    return "", ()
+
+
+def place_value_ok(value: Any) -> bool:
+    """居住地 / 坐标值是否像个地名（``slot_validate('location')`` 的布尔壳，供
+    user_clock_resolver 等非画像写口复用同一单点）。"""
+    return not slot_validate("location", value)[1]
+
+
 def capture_from_text(text: str) -> List[Tuple[str, str]]:
     """从一条入站消息确定性抽画像槽位。返回 ``[(slot_key, value), ...]``。
 

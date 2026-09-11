@@ -280,13 +280,25 @@ async def run_llm_capture(
         # #108（实施91）：语义体检——接地只验出处不验语义，「坐标=English」
         # 这类「原文里确实有这个词但塞错槽」的值在此拦下（单点在 profile_slots，
         # 正则/LLM 两轨同吃）。
+        # Q-19（#294）：同一单点再过槽类型校验（年龄 16–99 / 短语 ≤24 字禁整句 / 枚举）——
+        # 这条旧 LLM 轨写 llm_pending（读作 ai_inferred），与合并抽取链同一把尺子。
         try:
-            from src.companion.goals.profile_slots import slot_value_suspect
+            from src.companion.goals.profile_slots import slot_validate, slot_value_suspect
             _bad = {k: slot_value_suspect(k, v) for k, v in grounded.items()}
+            for k, v in list(grounded.items()):
+                if _bad.get(k):
+                    continue
+                _nv, _why = slot_validate(k, v)
+                if _why:
+                    _bad[k] = f"invalid:{_why}"
+                elif _nv:
+                    grounded[k] = _nv
             for k, why in _bad.items():
                 if why:
                     logger.info("[goal-profile-llm] 槽位值语义不合格丢弃 "
                                 "%s=%r（%s）", k, grounded[k][:20], why)
+                    logger.info("[profile] drop conv=%s:%s slot=%s value=%s source=ai_inferred reason=%s",
+                                platform, chat_key, k, str(grounded[k])[:60], why)
             grounded = {k: v for k, v in grounded.items() if not _bad.get(k)}
         except Exception:
             pass

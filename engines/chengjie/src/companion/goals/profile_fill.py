@@ -31,7 +31,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.companion.goals.profile_slots import cell_view, get_slot, slot_label
 
@@ -280,9 +280,15 @@ def _cand_pair(cand: Any) -> Tuple[str, str]:
     return _norm_val(cand), ""
 
 
+def _log_drop(conv: str, slot: str, value: str, source: str, reason: str) -> None:
+    logger.info("[profile] drop conv=%s slot=%s value=%s source=%s reason=%s",
+                conv, slot, str(value or "")[:60].replace("\n", " "), source, reason)
+
+
 def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
           source: str, status: str = ST_MENTIONED, conversation_id: str = "",
-          now: Optional[float] = None, lang: str = "zh", notify: bool = True) -> Dict[str, Any]:
+          now: Optional[float] = None, lang: str = "zh", notify: bool = True,
+          recent_inbound: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """候选 ``{slot: value | {"value", "evidence"}}`` → 画像。返回
     ``{"written": [slot], "skipped": {slot: reason}, "conflicts": [{slot, confirmed, candidate}]}``。
 
@@ -291,6 +297,11 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
       （昵称 < AI 推断 < 已确认）；同来源值变了则刷新（昵称改了 / 新证据）；已确认槽
       **永不覆盖**，值不同 → conflicts + 通知中心一条；
     - ``source`` = user / confirmed（坐席动作）：覆盖一切，status 强制 confirmed。
+    - Q-19（#294）自动来源三闸，不过即 ``skipped[k]`` + ``[profile] drop … reason=``：
+      ① ``profile_slots.slot_validate`` 槽类型校验（``invalid:<why>``；nickname / ai 都过）；
+      ② ``recent_inbound`` 给了（抽取链恒给）时 ai_inferred 候选须带 evidence 且能在其中逐字
+      找到、值在 evidence 里（``unanchored``）；③ 值语种 ≠ 客户主语种（``lang_mismatch``）。
+      坐席手录（user / confirmed）不校验、一字不动。
     绝不抛（写失败按 skipped 记 write_failed）。"""
     out: Dict[str, Any] = {"written": [], "skipped": {}, "conflicts": []}
     pf, ck = str(platform or "").strip(), str(chat_key or "").strip()
@@ -319,6 +330,26 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
             out["skipped"][k] = "empty"
             continue
         val = val[:_MAX_SLOT_VALUE] if not manual else val
+        if not manual:
+            raw_val = val
+            try:
+                from src.companion.goals.profile_slots import slot_validate
+                val, why = slot_validate(k, val)
+            except Exception:
+                why = ""
+            if why:
+                out["skipped"][k] = f"invalid:{why}"
+                _log_drop(conv, k, raw_val, src, f"invalid:{why}")
+                continue
+            val = val or raw_val
+            if src == SRC_AI and recent_inbound is not None:
+                why = anchor_reason(k, val, ev, recent_inbound, raw_value=raw_val)
+                if not why:
+                    why = lang_mismatch_reason(raw_val, recent_inbound, ev)
+                if why:
+                    out["skipped"][k] = why
+                    _log_drop(conv, k, raw_val, src, why)
+                    continue
         old_v, old_src, old_st = cell_view(fields.get(k))
         old_src_new = _UPGRADE_SRC.get(old_src, old_src) if old_src not in SOURCES else old_src
         if not manual:
@@ -498,8 +529,17 @@ def build_merged_prompt(user_msg: str, reply: str, slots: List[Dict[str, Any]]) 
     （摘录式、禁推断、原语言、≤30 字、带引文）。"""
     slot_lines = "\n".join(
         f"- {s['key']}: {s.get('label_zh') or s['key']}（{s.get('ask_zh') or ''}）" for s in slots[:12])
+    a = str(reply or "")
+    # Q-19 C（#294）：抽取链只喂客户入站——run_extraction 恒传 reply=""；ASSISTANT 段只在
+    # 旧调用方显式给 reply 时保留（语境），并明说它不是事实来源。
+    head = ("你是对话记忆与客户画像抽取器。根据本轮 USER（客户）消息与 ASSISTANT 回复，一次输出两部分：\n"
+            if a else
+            "你是对话记忆与客户画像抽取器。**只根据 USER（客户）自己发的消息**一次输出两部分"
+            "（我方回复 / 翻译稿 / 关怀稿都不在输入里，也绝不是事实来源）：\n")
+    tail = (f"USER:\n{str(user_msg or '')[:2000]}\n\nASSISTANT:\n{a[:1500]}" if a
+            else f"USER:\n{str(user_msg or '')[:2000]}")
     return (
-        "你是对话记忆与客户画像抽取器。根据本轮 USER（客户）消息与 ASSISTANT 回复，一次输出两部分：\n"
+        head +
         "【一、facts 记忆事实】抽取 0～4 条值得后续聊天记住的客观信息（客户自称的名字、偏好、"
         "刚透露的重要事实、简单约定）。\n"
         "- 接地铁律：事实只能来自 USER 消息里客户明确说出的内容；ASSISTANT 里的猜测/提议/问句"
@@ -513,14 +553,16 @@ def build_merged_prompt(user_msg: str, reply: str, slots: List[Dict[str, Any]]) 
         "- 主语：每条事实主语显式写「客户」（如「客户自称Michael」），禁止「用户称呼自己为X」式歧义句。\n"
         "- confidence（0～1）：原话直接陈述 ≥0.85；结合语境推断 0.5～0.7；更低不输出。fact 用中文短句。\n"
         "【二、slots 画像槽位】从 USER 消息里**摘录**下列字段（只许原文片段或原文数字，禁止推断、"
-        "翻译、补全、编造；消息里没提到的字段不要输出）。每个值 ≤30 字、保持原语言，并附 evidence"
-        "（USER 原话逐字片段）。「毕业于2000年」不能推出年龄；「hi Michael」不是客户的 name。\n"
+        "翻译、补全、编造；消息里没提到的字段不要输出）。每个值 ≤24 字、保持客户原语言、必须是"
+        "短语不是整句，并**必须**附 evidence（USER 原话逐字片段，含该值）——没有 evidence 的槽位不要输出。"
+        "age 只许数字（16–99）或年龄段（30s / 三十多 / 90后）；occupation / location 是职业名 / 地名短语，"
+        "「我住在…」「…散步」这类句子不是值。「毕业于2000年」不能推出年龄；「hi Michael」不是客户的 name。\n"
         f"候选字段（key: 含义）：\n{slot_lines}\n"
         "【输出】严格一行 JSON，不要 markdown：\n"
         '{"facts":[{"fact":"客户有一个女儿","evidence":"I have a daughter","confidence":0.95}],'
         '"slots":{"occupation":{"value":"union carpenter","evidence":"I\'m a union carpenter"}}}\n'
         "facts 无则 []，slots 无则 {}。\n\n"
-        f"USER:\n{str(user_msg or '')[:2000]}\n\nASSISTANT:\n{str(reply or '')[:1500]}"
+        + tail
     )
 
 
@@ -579,6 +621,171 @@ _NORM_STRIP_RE = re.compile(r"[\s，。,.!！?？、;；:：'\"“”‘’()（
 
 def _lit(s: str) -> str:
     return _NORM_STRIP_RE.sub("", str(s or "")).casefold()
+
+
+# ── Q-19（#294 / #272 追加）：原话锚定 + 语种守卫 ────────────────────────────────
+# 0911 实锤：粤语客户全程聊岚山散步，画像被写进 occupation='織り機の前に座って、新しい帯の
+# 色合わせ'（日语整句，来自己方日语咖啡馆稿的串台幻觉）。三道闸（宁可 0/10 也不写脏）：
+# ① 候选必须带 evidence，且 evidence 能在**最近 30 条客户入站**里逐字（空白/标点/大小写
+#    归一后）找到；② 值的核心 token 必须在 evidence 里；③ 值的语种 ≠ 客户主语种 → 丢。
+ANCHOR_WINDOW = 30
+_LANG_SHARE_MIN = 0.25     # 值语种的入站条数占比 ≥ 此值即视为客户也用这门语言（港式中英夹杂）
+
+
+def _char_class(ch: str) -> str:
+    o = ord(ch)
+    if 0x3040 <= o <= 0x30FF or 0x31F0 <= o <= 0x31FF or 0xFF66 <= o <= 0xFF9F:
+        return "ja"
+    if 0xAC00 <= o <= 0xD7AF or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F:
+        return "ko"
+    if 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF or 0x20000 <= o <= 0x2FFFF:
+        return "han"
+    if ch.isascii() and ch.isalpha() or 0x00C0 <= o <= 0x024F:
+        return "latin"
+    if 0x0400 <= o <= 0x04FF:
+        return "cyrillic"
+    if 0x0E00 <= o <= 0x0E7F:
+        return "thai"
+    if 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F:
+        return "arabic"
+    return ""
+
+
+def script_counts(text: Any) -> Dict[str, int]:
+    """文本各书写系统字符计数（``ja/ko/han/latin/cyrillic/thai/arabic``；标点数字不计）。"""
+    out: Dict[str, int] = {}
+    for ch in str(text or ""):
+        c = _char_class(ch)
+        if c:
+            out[c] = out.get(c, 0) + 1
+    return out
+
+
+def text_lang(text: Any) -> str:
+    """单段文本的语种：有假名即 ``ja``；否则按最多的书写系统（``han``→``zh``）；无字母 → ``neutral``。"""
+    cnt = script_counts(text)
+    if not cnt:
+        return "neutral"
+    if cnt.get("ja"):
+        return "ja"
+    top = max(cnt.items(), key=lambda kv: kv[1])[0]
+    return "zh" if top == "han" else top
+
+
+def lang_votes(texts: Any) -> Dict[str, int]:
+    """逐条入站投票 ``{lang: 条数}``（``text_lang`` 口径；纯数字/表情条不投）。按条不按字——
+    一条夹引用的日文不该把粤语客户整体判成日文客户。"""
+    votes: Dict[str, int] = {}
+    for t in list(texts or []):
+        l = text_lang(t)
+        if l != "neutral":
+            votes[l] = votes.get(l, 0) + 1
+    return votes
+
+
+def dominant_lang(texts: Any) -> str:
+    """客户主语种（最近入站逐条投票，票数最多者；同票按字符数）；空 → ``neutral``。"""
+    votes = lang_votes(texts)
+    if not votes:
+        return "neutral"
+    best = max(votes.values())
+    tied = [k for k, v in votes.items() if v == best]
+    if len(tied) == 1:
+        return tied[0]
+    tot: Dict[str, int] = {}
+    for t in list(texts or []):
+        for k, v in script_counts(t).items():
+            kk = "zh" if k == "han" else k
+            tot[kk] = tot.get(kk, 0) + v
+    return max(tied, key=lambda k: tot.get(k, 0))
+
+
+def _lang_compatible(vl: str, dom: str) -> bool:
+    return dom == "neutral" or vl == "neutral" or vl == dom or (vl == "zh" and dom == "ja")
+
+
+def lang_mismatch_reason(value: Any, recent_inbound: Any, evidence: Any = None) -> str:
+    """值语种 vs 客户主语种 → ``"lang_mismatch"`` / 空串（通过）。
+
+    通过条件（任一）：值无字母（纯数字 / 年龄）；值语种 == 主语种；值是汉字而客户写日文
+    （日文汉字）；evidence 本身是客户主语种写的句子（「我在HSBC返工」里的英文 token 是客户
+    自己写的，不是译文串台）；值语种在客户入站里占比 ≥ :data:`_LANG_SHARE_MIN`（中英夹杂）。"""
+    vl = text_lang(value)
+    if vl == "neutral":
+        return ""
+    texts = [str(t or "") for t in list(recent_inbound or []) if str(t or "").strip()]
+    if not texts:
+        return ""
+    dom = dominant_lang(texts)
+    if _lang_compatible(vl, dom):
+        return ""
+    if evidence is not None and str(evidence or "").strip():
+        el = text_lang(evidence)
+        if el != vl and _lang_compatible(el, dom):
+            return ""
+    votes = lang_votes(texts)
+    n = sum(votes.values()) or 1
+    return "" if votes.get(vl, 0) / n >= _LANG_SHARE_MIN else "lang_mismatch"
+
+
+def anchor_reason(slot: str, value: Any, evidence: Any, recent_inbound: Any, *,
+                  raw_value: Any = None) -> str:
+    """原话锚定：``""`` 通过 / ``"unanchored"``。
+
+    evidence 必填；须为最近入站某条的（归一后）子串；值（归一前或归一后）须在 evidence 里——
+    枚举槽（婚恋 / 家庭）改验 evidence 含该标签的触发词（``profile_slots.enum_evidence_ok``）。"""
+    ev = _lit(evidence)
+    if not ev:
+        return "unanchored"
+    texts = [_lit(t) for t in list(recent_inbound or []) if str(t or "").strip()]
+    if not texts or not any(ev in t for t in texts):
+        return "unanchored"
+    try:
+        from src.companion.goals.profile_slots import enum_evidence_ok, is_enum_slot
+        if is_enum_slot(slot):
+            return "" if enum_evidence_ok(slot, value, evidence) else "unanchored"
+    except Exception:
+        pass
+    cores = [_lit(value)]
+    if raw_value is not None:
+        cores.append(_lit(raw_value))
+    cores = [c for c in cores if c]
+    if not cores or not any(c in ev for c in cores):
+        return "unanchored"
+    return ""
+
+
+def recent_inbound_texts(inbox_store: Any, conversation_id: str, *, limit: int = ANCHOR_WINDOW) -> List[str]:
+    """最近 ``limit`` 条 **客户入站** 文本（时间正序；剥媒体识别描述）。拿不到 → []，绝不抛。"""
+    conv = str(conversation_id or "").strip()
+    if inbox_store is None or not conv or not callable(getattr(inbox_store, "list_recent_messages", None)):
+        return []
+    try:
+        try:
+            rows = inbox_store.list_recent_messages(conv, limit=max(int(limit) * 3, 60))
+        except TypeError:
+            rows = inbox_store.list_recent_messages(conv, max(int(limit) * 3, 60))
+    except Exception:
+        return []
+    try:
+        from src.inbox.media_enrich import strip_media_desc as _smd
+    except Exception:
+        _smd = None   # type: ignore[assignment]
+    out: List[str] = []
+    for r in list(rows or []):
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("direction") or "").strip().lower() not in ("in", "inbound"):
+            continue
+        t = str(r.get("text") or "").strip()
+        if t and _smd is not None:
+            try:
+                t = str(_smd(t) or "").strip()
+            except Exception:
+                pass
+        if t:
+            out.append(t)
+    return out[-int(limit):] if limit else out
 
 
 def ground_slots(user_msg: str, slots: Dict[str, Dict[str, str]]) -> Tuple[Dict[str, Dict[str, str]], Dict[str, str]]:
@@ -920,14 +1127,19 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
                          memory_cfg: Any = None, inbox_store: Any = None, nickname: str = "",
                          goal_store: Any = None, lang: str = "zh", now: Optional[float] = None,
                          slots: Optional[List[Dict[str, Any]]] = None,
-                         heuristic_facts: int = 0) -> Dict[str, Any]:
+                         heuristic_facts: int = 0,
+                         recent_inbound: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """skill_manager 抽取链调用的**唯一**入口：一次 LLM（任一开关开）→ 事实回传 + 槽位分发。
 
     返回 ``{"facts": [(fact, evidence, confidence|None)], "dropped": [...], "slots_written": n,
-    "slots": {…}, "llm": 0|1, "enabled_by": ""|"profile_llm"|"memory_use_llm", "nickname": {...}}``。
-    事实的 ``add_fact`` 由调用方按既有路径做（本函数不碰 episodic store）。绝不抛。"""
-    res: Dict[str, Any] = {"facts": [], "dropped": [], "slots_written": 0, "slots": {}, "llm": 0,
-                           "enabled_by": "", "nickname": None, "conflicts": []}
+    "slots": {…}, "slots_dropped": {slot: reason}, "llm": 0|1, "enabled_by": ""|"profile_llm"|"memory_use_llm",
+    "nickname": {...}}``。事实的 ``add_fact`` 由调用方按既有路径做（本函数不碰 episodic store）。绝不抛。
+
+    Q-19（#294）：LLM **只吃客户入站**——``reply``（我方出站 / 译文 / 关怀稿）不进 prompt；槽位候选
+    经 ``apply(recent_inbound=…)`` 做原话锚定 + 语种守卫，锚定语料 = ``recent_inbound``（调用方给）
+    或 ``inbox_store`` 最近 :data:`ANCHOR_WINDOW` 条 direction=in 文本，恒含本条 ``user_msg``。"""
+    res: Dict[str, Any] = {"facts": [], "dropped": [], "slots_written": 0, "slots": {}, "slots_dropped": {},
+                           "llm": 0, "enabled_by": "", "nickname": None, "conflicts": []}
     pf = str(platform or "").strip()
     ck = str(chat_key or "").strip()
     conv = str(conversation_id or "").strip() or (f"{pf}:{account_id or ''}:{ck}" if pf and ck else "")
@@ -957,8 +1169,9 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
                 logger.debug("[extract] skipped: %s conv=%s", _rep, conv or "-")
                 res["skipped"] = _rep
             else:
+                # Q-19 C：reply（我方出站）不进抽取 prompt——只喂客户自己的话
                 ext = await extract_facts_and_slots(
-                    ai_client, user_msg, reply,
+                    ai_client, user_msg, "",
                     slots=slots if slots is not None else slot_table(cfg_root))
                 res["llm"] = int(ext.get("llm") or 0)
                 res["facts"] = [(str(it.get("fact") or ""), str(it.get("evidence") or ""),
@@ -966,11 +1179,22 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
                                 for it in (ext.get("facts") or []) if it.get("fact")]
                 res["dropped"] = list(ext.get("dropped") or [])
                 res["slots"] = dict(ext.get("slots") or {})
+                res["slots_dropped"] = dict(ext.get("slots_dropped") or {})
                 if res["slots"] and store is not None and pf and ck:
+                    # Q-19 B：锚定语料 = 最近 30 条客户入站 + 本条（inbox_store 拿不到时至少本条）
+                    corpus: List[str] = list(recent_inbound) if recent_inbound is not None else \
+                        recent_inbound_texts(inbox_store, conv)
+                    _cur = str(user_msg or "").strip()
+                    if _cur and _cur not in corpus:
+                        corpus.append(_cur)
                     ap = apply(store, pf, ck, res["slots"], source=SRC_AI, status=ST_MENTIONED,
-                               conversation_id=conv, now=now, lang=lang)
+                               conversation_id=conv, now=now, lang=lang, recent_inbound=corpus)
                     res["slots_written"] = len(ap.get("written") or [])
                     res["conflicts"] = list(ap.get("conflicts") or [])
+                    for _k, _r in (ap.get("skipped") or {}).items():
+                        if _r.startswith("invalid:") or _r in ("unanchored", "lang_mismatch"):
+                            res["slots_dropped"][_k] = _r
+                            res["slots"].pop(_k, None)
                 remember_extract(conv, user_msg, llm=res["llm"], now=now)
     except Exception:
         logger.debug("[extract] run_extraction failed", exc_info=True)
@@ -983,7 +1207,8 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
 
 
 __all__ = [
-    "SCHEMA_VERSION", "SOURCES", "STATUSES", "STALL_THRESHOLD",
+    "SCHEMA_VERSION", "SOURCES", "STATUSES", "STALL_THRESHOLD", "ANCHOR_WINDOW",
+    "anchor_reason", "dominant_lang", "lang_mismatch_reason", "recent_inbound_texts", "text_lang",
     "apply", "bind_app", "build_merged_prompt", "confirm", "conversation_nickname",
     "export_profile", "extract_facts_and_slots", "ground_slots", "import_profile",
     "is_new_schema", "llm_extract_enabled", "low_information_message",
