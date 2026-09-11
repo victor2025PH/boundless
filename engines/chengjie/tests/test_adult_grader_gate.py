@@ -418,3 +418,73 @@ def test_regrade_is_fail_open(store, bg_loop, monkeypatch):
     svc = _Svc(store, {}, bg_loop)
     risk, reasons, info = _regrade(svc, _conv("fo"), "send nudes now", "en", reasons=("adult", "keyword"))
     assert (risk, reasons, info) == ("high", ["adult", "keyword"], None)
+
+
+# ── 群 / 频道不发成人罐头 + 「给我看你的」误伤收口 ─────────────────────────────
+
+def _group_conv(ck: str = "-1004345824259", chat_type: str = "supergroup") -> Dict[str, Any]:
+    c = _conv(ck)
+    c["chat_type"] = chat_type
+    return c
+
+
+_OPS_SHOW_ME = [
+    "给我看你的日志",
+    "给我看你的截图",
+    "给我看你的配置",
+    "你给我看你的报错信息",
+]
+
+
+@pytest.mark.parametrize("text", _OPS_SHOW_ME)
+def test_give_me_yours_ops_phrase_is_not_explicit(text):
+    g = ag.grade(text, "zh")
+    assert g["level"] not in ("explicit", "pressure"), g
+
+
+def test_give_me_yours_body_still_explicit():
+    assert ag.grade("给我看你的胸", "zh")["level"] in ("explicit", "pressure")
+    assert ag.grade("给我看你的身体", "zh")["level"] in ("explicit", "pressure")
+    assert ag.grade("摸你的胸", "zh")["level"] in ("explicit", "pressure")
+    assert ag.grade("摸你的手行吗", "zh")["level"] not in ("explicit", "pressure")
+
+
+def test_blocks_adult_outbound_group_and_channel():
+    assert ag.blocks_adult_outbound(_group_conv())
+    assert ag.blocks_adult_outbound(_group_conv("-1004290740529", "channel"))
+    # Telegram 负 peer、没有 chat_type 也算群
+    assert ag.blocks_adult_outbound(_conv("-1004345824259"))
+    assert not ag.blocks_adult_outbound(_conv("7331682688"))
+    bug_cfg = {"bug_intake": {"enabled": True, "groups": ["bugroom"]}}
+    bug = _conv("bugroom")
+    assert ag.blocks_adult_outbound(bug, bug_cfg)
+    assert not ag.blocks_adult_outbound(bug, {"bug_intake": {"enabled": False}})
+
+
+def test_public_chat_never_soft_replies(store, bg_loop, monkeypatch):
+    _use_persona(monkeypatch)
+    svc = _Svc(store, {"business_domain": "companion"}, bg_loop)
+    for conv in (_group_conv(), _group_conv("-1001", "channel"), _conv("-1004290740529")):
+        cid = conv["conversation_id"]
+        risk, reasons, info = _regrade(svc, conv, "现在马上发你的裸照给我", "zh")
+        assert info and info.get("skipped") == "public_chat"
+        assert info["needs_human"] is False and info["soft_reply"] == ""
+        assert risk == "high" and list(reasons) == ["adult"]   # 原判定不改
+        assert HANDOFF_TAG not in store.get_conv_tags(cid)
+        assert risk_hold.active(store, cid) is None
+        assert not svc.delivered
+    assert ag.dispatch_soft_reply(_group_conv(), "我脸都热了。先聊点别的呗", svc=svc) == "skip_public_chat"
+    assert not svc.delivered
+
+
+def test_telegram_negative_peer_dispatch_is_skip_public_chat(store, bg_loop, monkeypatch):
+    """Q-23 #303 门禁：Telegram 负 peer（无 chat_type，仅 chat_key 为负）会话 → 软回应
+    dispatch 一律 ``skip_public_chat``，followup 亦然（事故群 -1004345824259 mid 1445…）。"""
+    _use_persona(monkeypatch)
+    svc = _Svc(store, {"business_domain": "companion"}, bg_loop)
+    conv = _conv("-1004345824259")
+    assert "chat_type" not in conv
+    for mode in ("immediate", "followup"):
+        assert ag.dispatch_soft_reply(conv, "你让我脸红了…", svc=svc, mode=mode) == "skip_public_chat"
+    assert ag.dispatch_soft_reply(_conv("7331682688"), "", svc=svc) == "empty"   # 私聊只被空文本挡
+    assert not svc.delivered

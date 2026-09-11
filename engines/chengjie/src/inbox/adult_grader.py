@@ -26,6 +26,7 @@ C. :func:`regrade_inbound`（drafts.py 唯一钩子）——
    软回应经 DraftService 的人工通过投递回调（``AutosendWorker.deliver_human_approved``：不过
    人工优先闸 / 不进 pacing——needs_human 在场时 L2 稿会被 Q-3 闸取消，故不能当 L2 稿发）。
    软回应**不是**缓冲句、不做全局兜底：只在 explicit / pressure × (soft_reply | human 超时) 出。
+   群 / 频道 / 报障群一律不发软回应、不打标、不持有（一对一口吻罐头与群内容无关）。
 
 日志：``[adult] grade conv= level= hits= policy=`` / ``[adult] soft_reply conv= level= policy= mode=``。
 """
@@ -95,7 +96,11 @@ _EXPLICIT = [
     _cjk(["裸照", "裸体", "全裸", "脱光", "脱衣", "裸聊", "视频裸", "做爱", "性交", "口交", "肛交",
           "自慰", "打飞机", "射精", "高潮", "阴茎", "阴道", "鸡巴", "鸡鸡", "奶子", "胸照", "下面湿",
           "小穴", "阴部", "成人视频", "色情", "黄片", "毛片", "A片", "av片", "看你的胸", "看看你的身体",
-          "给我看你的", "内裤照", "脱了", "操你", "干你", "插你", "舔你", "摸你的", "摸摸胸", "揉胸", "肉体"]),
+          "内裤照", "脱了", "操你", "干你", "插你", "舔你", "摸摸胸", "揉胸", "肉体"]),
+    # 「给我看你的」裸前缀会误伤报障群「给我看你的日志/截图/配置」。跟英文
+    # show me your body/boobs 一样，必须接到身体部位才算露骨。
+    re.compile(r"给我看你的(?:身体|身子|胸|奶子?|下面|裸体|裸照|穴|屁股|逼|鸡巴|鸡鸡|内裤|内衣|私处)"),
+    re.compile(r"摸你的(?:胸|奶|下面|身体|屁股|穴|私处)"),
     _cjk(["セックス", "ヌード", "裸写真", "全裸", "裸", "おっぱい", "乳首", "ちんこ", "ちんちん",
           "まんこ", "アダルト", "エロ動画", "エロ画像", "オナニー", "自慰", "射精", "イク", "フェラ",
           "手コキ", "性行為", "挿入", "ビデオ通話で脱", "脱いで", "見せて.*(?:胸|体|下着|裸)", "パンツ見せ",
@@ -418,6 +423,40 @@ def _bound_service() -> Any:
         return None
 
 
+def _conv_chat_id(conv: Optional[Dict[str, Any]]) -> str:
+    conv = conv or {}
+    ck = str(conv.get("chat_key") or "").strip()
+    if ck:
+        return ck.split(":")[-1].strip()
+    cid = str(conv.get("conversation_id") or "")
+    return cid.split(":")[-1].strip() if cid else ""
+
+
+def blocks_adult_outbound(conv: Optional[Dict[str, Any]], cfg: Any = None) -> bool:
+    """群 / 频道 / 报障群禁止成人软回应、打标、持有。
+
+    罐头软回应是一对一口吻（「我脸都热了」），发进群或频道会答非所问。
+    Telegram 负 peer 即使没有 ``chat_type`` 也视为群。
+    """
+    conv = conv or {}
+    try:
+        from src.inbox.ingest import is_group_conversation
+        if is_group_conversation(conv):
+            return True
+    except Exception:
+        pass
+    chat_id = _conv_chat_id(conv)
+    if not chat_id:
+        return False
+    try:
+        from src.ops.bug_intake import is_bug_group
+        if is_bug_group(cfg, chat_id):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _deliver_cb(svc: Any) -> Any:
     return getattr(svc, "_inbox_deliver_cb", None) if svc is not None else None
 
@@ -439,7 +478,7 @@ def _find_loop(cb: Any) -> Any:
 
 def dispatch_soft_reply(conv: Dict[str, Any], text: str, *, svc: Any = None,
                         level: str = "", policy: str = "", mode: str = "immediate",
-                        now: Optional[float] = None) -> str:
+                        now: Optional[float] = None, cfg: Any = None) -> str:
     """把软回应排进人工通过投递链。返回 ``scheduled`` / ``no_deliver_cb`` / ``no_loop`` / ``empty``。
 
     只排队不等结果——投递回调自吞异常并负责失败审计 + 坐席铃铛。
@@ -449,6 +488,12 @@ def dispatch_soft_reply(conv: Dict[str, Any], text: str, *, svc: Any = None,
     if not text or not cid:
         return "empty"
     svc = svc if svc is not None else _bound_service()
+    if cfg is None:
+        cfg = getattr(svc, "_cfg", None) if svc is not None else None
+    if blocks_adult_outbound(conv, cfg):
+        logger.info("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=skip_public_chat",
+                    cid, level or "-", policy or "-", mode)
+        return "skip_public_chat"
     cb = _deliver_cb(svc)
     if cb is None:
         logger.warning("[adult] soft_reply conv=%s level=%s policy=%s mode=%s status=no_deliver_cb",
@@ -494,10 +539,14 @@ def send_soft_reply(store: Any, conv: Dict[str, Any], *, level: str, policy: str
     """挑句 + 排队 + 记账。返回 ``{status, text}``。语言：显式 lang → 入站文本嗅探 → en。"""
     cid = str((conv or {}).get("conversation_id") or "")
     ts = float(now if now is not None else time.time())
+    if blocks_adult_outbound(conv, cfg):
+        logger.info("[adult] soft_reply conv=%s status=skip_public_chat", cid)
+        return {"status": "skip_public_chat", "text": ""}
     if persona is None:
         persona = resolve_persona(conv, cfg)
     text = soft_reply_for(persona, sniff_lang(peer_text, lang), cid=cid, now=ts)
-    status = dispatch_soft_reply(conv, text, svc=svc, level=level, policy=policy, mode=mode, now=ts)
+    status = dispatch_soft_reply(conv, text, svc=svc, level=level, policy=policy, mode=mode,
+                                 now=ts, cfg=cfg)
     if status == "scheduled":
         _kv_set(store, cid, {"ts": ts, "level": level, "policy": policy, "mode": mode,
                              "tag_ts": float(tag_ts or ts), "text": text[:120]})
@@ -702,6 +751,16 @@ def regrade_inbound(svc: Any, conv: Dict[str, Any], text: str, lang: str, risk_l
         store = getattr(svc, "_store", None)
         if cfg is None:
             cfg = getattr(svc, "_cfg", None)
+        if blocks_adult_outbound(conv, cfg):
+            hits = [str(h) for h in (g.get("hits") or [])]
+            logger.info("[adult] grade conv=%s level=%s hits=%s action=skip_public_chat",
+                        cid, level, "|".join(hits[:4]) or "-")
+            return risk_level, reasons, {
+                "level": level, "hits": hits,
+                "pressure_hits": list(g.get("pressure_hits") or []),
+                "policy": "", "policy_source": "", "category": CATEGORY,
+                "soft_reply": "", "needs_human": False, "skipped": "public_chat",
+            }
         if persona is None:
             persona = resolve_persona(conv, cfg)
         policy, src = adult_policy_of(persona, cfg)
@@ -793,6 +852,7 @@ __all__ = [
     "CATEGORY", "LEVELS", "POLICIES", "FOLLOWUP_SEC", "KV_PREFIX", "REASON_PREFIX",
     "FLIRT_REASON", "MARK_REASON",
     "grade", "neutralize_cum", "is_ambiguous_hit", "is_blocking_level", "normalize_policy",
+    "blocks_adult_outbound",
     "default_policy", "adult_policy_of",
     "resolve_persona", "prompt_block", "soft_reply_candidates", "pick_soft_reply", "soft_reply_for",
     "last_soft_reply", "bind_service", "dispatch_soft_reply", "send_soft_reply",
