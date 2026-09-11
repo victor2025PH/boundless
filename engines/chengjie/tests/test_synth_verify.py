@@ -55,6 +55,27 @@ def test_cer_empty_hyp_is_total_loss():
     assert _cer_cjk("", "你好世界") == 1.0
 
 
+def test_cer_traditional_transcript_vs_simplified_ref_is_zero():
+    """GWJ2RZ（2026-09-12 钧机）：ASR 吐繁体、送稿简体 → 旧算法 CER≈0.45 假阳性。
+
+    字形差异不是发音错误；两侧繁简归一后必须为 0。
+    """
+    ref = "温哥华这边是真的贵，特别是市区。一平方尺动不动就上千加币"
+    hyp = "溫哥華這邊是真的貴，特別是市區。一平方尺動不動就上千加幣"
+    assert _cer_cjk(hyp, ref) == 0.0
+    # 反向（简体转写 vs 繁体送稿）同样为 0
+    assert _cer_cjk(ref, hyp) == 0.0
+
+
+def test_cer_traditional_transcript_real_errors_still_counted():
+    # 归一后只剩真错字：「冷清」→「零星」两字错 / 26 字
+    # （避开 著/着：opencc t2s 保留「著」为合法简体，属已知一字之差）
+    ref = "那也太安静了吧一个人守住三个房间晚上不觉得有点冷清吗"
+    hyp = "那也太安靜了吧一個人守住三個房間晚上不覺得有點零星嗎"
+    n = len(ref)
+    assert abs(_cer_cjk(hyp, ref) - 2 / n) < 1e-9
+
+
 # ── 门编排 ────────────────────────────────────────────────────────────────────
 def _run_gate(tmp_path, stt_texts, resynth_payloads, cfg=None, text=GOOD):
     av = tmp_path / "o.wav"

@@ -75,6 +75,13 @@ class VoiceTranscriber:
         # 与客户所说无关，当真回复必错。默认开；置 false 退回旧行为（不拦）。
         self.hallucination_guard = bool(config.get('hallucination_guard', True))
 
+        # 中文转写字形归一（2026-09-12 GWJ2RZ 钧机）：Whisper 系 ASR 对普通话音频
+        # 吐简吐繁不受控（同一客户整晚全繁体：幾乎/煮飯/廚房），繁体转写进 LLM 会把
+        # 回复往港台腔带（粤语误切诱因之一）、进 synth_verify 与简体送稿逐字对不上。
+        # 默认开：zh 主体且非粤文的转写统一 t2s（粤文/日文汉字豁免同
+        # ``to_simplified_for_tts``；opencc 缺失恒等）。置 false 退回原样透传。
+        self.zh_simplified_output = bool(config.get('zh_simplified_output', True))
+
         # 观测：是否为级联链中的子转录器。子级不记「顶层成败」（由 FallbackTranscriber 统一
         # 记，避免重复计数）；独立使用时（无级联）由基类自记。幻觉丢弃则不论层级都记。
         self._asr_chained_child = False
@@ -125,6 +132,7 @@ class VoiceTranscriber:
                     self._record_asr(hallucination=True)
                     self.last_error = "no_speech: hallucination_guard"
                     return None
+                text = self._normalize_zh_script(text)
                 self.logger.info(f"语音转录成功: {text[:100]}...")
                 if not self._asr_chained_child:
                     self._record_asr(ok=True, level=0)
@@ -141,6 +149,25 @@ class VoiceTranscriber:
             self.logger.error(f"语音转录失败: {e}")
             self.last_error = f"{type(e).__name__}: {e}"
             return None
+
+    def _normalize_zh_script(self, text: str) -> str:
+        """中文转写繁→简归一（``zh_simplified_output``，默认开）。
+
+        复用 ``lang_voice_route.to_simplified_for_tts``：非中文主体（日文汉字同形）
+        与粤文原样返回，opencc 缺失恒等；任何异常原样返回，绝不影响转写主链。
+        """
+        if not self.zh_simplified_output or not text:
+            return text
+        try:
+            from src.ai.lang_voice_route import to_simplified_for_tts
+            out = to_simplified_for_tts(text)
+            if out and out != text:
+                self.logger.info(
+                    "[asr] 转写繁→简归一: %s → %s", text[:40], out[:40])
+                return out
+        except Exception:
+            pass
+        return text
 
     def _record_asr(self, *, ok: bool = False, level: int = 0,
                     hallucination: bool = False) -> None:

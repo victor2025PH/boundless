@@ -186,9 +186,15 @@ def _cer_cjk(hyp: str, ref: str) -> float:
 
     只留汉字再比：标点/省略号/副语言标记（[sigh] 等）/拉丁字符天然剥离，
     专抓「错别字/含混/幻觉插句」这类内容级劣化，不被格式差异干扰。
+
+    繁简归一（2026-09-12 GWJ2RZ）：两侧先 t2s 再比。ASR 对同一段普通话音频吐
+    简吐繁不受控（Whisper zh 不钉字形），送稿简体 vs 转写繁体逐字全错＝
+    CER 0.3–0.5 假阳性——钧机整晚 5/6 条克隆被判「念错」作废改兜底，实际字字
+    念对。字形不是发音错误，不该计错。opencc 缺失时归一为恒等（旧行为）。
     """
-    h = _NON_CJK_RE.sub("", str(hyp or ""))
-    r = _NON_CJK_RE.sub("", str(ref or ""))
+    from src.ai.lang_voice_route import to_simplified_plain
+    h = _NON_CJK_RE.sub("", to_simplified_plain(str(hyp or "")))
+    r = _NON_CJK_RE.sub("", to_simplified_plain(str(ref or "")))
     if not r:
         return -1.0
     return _edit_cer(h, r)
@@ -277,13 +283,22 @@ async def verify_and_retry_synth(
             metric = _cer_cjk
             stt_lang = "zh"
 
+        # 墙钟分账（2026-09-12 GWJ2RZ）：钧机每轮「合成超 40s 预算」只有一条总超时日志，
+        # 分不清慢在合成、远端 STT 回验还是误判重合成。这里把回验 STT 与重合成各自的
+        # 耗时记下来；只在「重合成过 / 回验慢」时以 INFO 落一行，正常路径 DEBUG。
+        _t_stt = [0.0]
+        _t_resynth = [0.0]
+
         async def _stt() -> Optional[str]:
+            _t0 = time.monotonic()
             try:
                 return await asyncio.wait_for(
                     transcriber.transcribe_voice_message(str(av_out), stt_lang),
                     timeout=stt_timeout)
             except Exception:
                 return None
+            finally:
+                _t_stt[0] += time.monotonic() - _t0
 
         hyp = await _stt()
         if hyp is None:
@@ -302,15 +317,18 @@ async def verify_and_retry_synth(
             logger.warning(
                 "[tts] synth_verify CER=%.3f > %.2f → 重合成(第%d次) text=%s",
                 best_cer, threshold, attempt, synth_text[:40])
+            _tr0 = time.monotonic()
             try:
                 await asyncio.wait_for(asyncio.to_thread(resynth), timeout=budget)
             except Exception:
+                _t_resynth[0] += time.monotonic() - _tr0
                 if best_bytes is not None:
                     try:
                         av_out.write_bytes(best_bytes)
                     except Exception:
                         pass
                 break                       # 重合成失败 → 保留上一版
+            _t_resynth[0] += time.monotonic() - _tr0
             hyp2 = await _stt()
             c2 = metric(hyp2, synth_text) if hyp2 is not None else -1.0
             if 0 <= c2 < best_cer:
@@ -333,6 +351,12 @@ async def verify_and_retry_synth(
         if foreign:
             # 仅外语轨携带语种（zh 路径其余键形状与旧契约一致）
             out["lang"] = lang
+        _stt_ms = int(_t_stt[0] * 1000)
+        _rs_ms = int(_t_resynth[0] * 1000)
+        (logger.info if (attempt or _stt_ms >= 3000) else logger.debug)(
+            "[tts] synth_verify 分账 cer=%.3f retried=%d stt_ms=%d resynth_ms=%d "
+            "lang=%s text=%s", best_cer, attempt, _stt_ms, _rs_ms, lang,
+            str(synth_text or "")[:24])
         return out
     except Exception:
         return None

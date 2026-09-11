@@ -192,6 +192,8 @@ voice_recognition:
   max_file_size: 16777216      # 16 MB
   warmup_on_boot: true         # 启动即后台预载 ASR 模型（消重启后首条语音 ~20-30s 冷启动；
                                # 只预热级联主级，回落级仍懒加载省显存）
+  zh_simplified_output: true   # 中文转写统一简体（Whisper 系对普通话吐简吐繁不受控；
+                               # 粤文/日文汉字豁免；opencc 缺失恒等）。false=原样透传
   # 专有名词热词（faster_whisper 生效，作 initial_prompt 引导；治"智聊"→"治療"同音误转）
   # hotwords: 智聊ChatX、通译LingoX、无界科技
   # 主转录挂了/返空自动回落下一级（级联，绝不断链）；示例：SenseVoice 主 + whisper 兜底

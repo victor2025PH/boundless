@@ -166,3 +166,45 @@ async def test_sensevoice_warmup_delegates_to_ensure_model(monkeypatch):
     monkeypatch.setattr(t, "_ensure_model", fake_ensure)
     await t.warmup()
     assert calls == [1]
+
+
+# ── 中文转写繁→简归一（2026-09-12 GWJ2RZ）───────────────────────────────────
+class _ImplFake(VoiceTranscriber):
+    """走基类公有 transcribe_voice_message（含幻觉守卫 + 字形归一）的假实现。"""
+
+    def __init__(self, result, **cfg):
+        super().__init__({"temp_dir": "./temp/test_voice_fb", **cfg})
+        self._result = result
+
+    async def _transcribe_impl(self, voice_file_path, language):
+        return self._result
+
+
+def _voice_file(tmp_path):
+    p = tmp_path / "v.ogg"
+    p.write_bytes(b"OggS" + b"\x00" * 64)
+    return str(p)
+
+
+async def test_zh_transcript_normalized_to_simplified(tmp_path):
+    pytest.importorskip("opencc")
+    t = _ImplFake("平時在家學做AI短劇啊自己煮飯下廚房")
+    out = await t.transcribe_voice_message(_voice_file(tmp_path), "auto")
+    assert out == "平时在家学做AI短剧啊自己煮饭下厨房"
+
+
+async def test_zh_normalize_keeps_cantonese_and_non_zh(tmp_path):
+    # 粤文豁免（粤语用字不属繁简映射，且有专线路由）
+    yue = "我哋啲客都係香港嘅，咁講粵語好啲"
+    assert await _ImplFake(yue).transcribe_voice_message(
+        _voice_file(tmp_path), "auto") == yue
+    # 非中文主体原样
+    en = "Hello, how are you today?"
+    assert await _ImplFake(en).transcribe_voice_message(
+        _voice_file(tmp_path), "auto") == en
+
+
+async def test_zh_normalize_opt_out(tmp_path):
+    trad = "你平時在家都做些什麼"
+    t = _ImplFake(trad, zh_simplified_output=False)
+    assert await t.transcribe_voice_message(_voice_file(tmp_path), "zh") == trad

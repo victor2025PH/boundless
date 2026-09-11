@@ -42,6 +42,31 @@ def test_marker_scoring():
     assert count_cantonese_markers("普通话文本") == 0
 
 
+def test_mandarin_colloquial_particles_never_trigger():
+    """GWJ2RZ（2026-09-12 钧机）：普通话回复凑两个共用字被整段切 zh-HK 声。
+
+    啵/嘞/喇/咩/咯/噶/埋 是普通话口语字，靚/曬/囉 只是繁体；没有独占信号时
+    再多也不算粤语。
+    """
+    assert not is_cantonese_text("好咯，那你先去忙，晚点再聊嘞。")
+    assert not is_cantonese_text("你说咩呢，我哪会说广东话呀，别埋汰我啵。")
+    assert not is_cantonese_text("一個人在家曬曬太陽、看看書，挺好的囉。")
+    assert not is_cantonese_text("周末去宜家逛逛，得闲再约。")
+    assert not is_cantonese_text("喇叭坏了，回头去修一下咯。")
+    assert count_cantonese_markers("好咯嘞啵喇咩噶埋靚曬囉") == 0
+
+
+def test_weak_markers_count_only_with_strong_signal():
+    # 有独占字在场，弱字才计分：唔(1)+噶(1)=2 → 仍判粤语（既有正例不退化）
+    assert is_cantonese_text("你识唔识讲粤语噶？")
+    assert count_cantonese_markers("你识唔识讲粤语噶？") == 2
+    # 同一句去掉独占字 → 0
+    assert count_cantonese_markers("你识不识讲粤语噶？") == 0
+    # 弱双字词也一样：有 唔 才算
+    assert count_cantonese_markers("唔得闲") == 2
+    assert count_cantonese_markers("得闲") == 0
+
+
 def test_route_disabled_by_default():
     vc = {"backend": "avatar_clone", "voice": "x"}
     out, tag = route_voice_cfg_for_text(vc, "我哋讲粤语嘅", {})

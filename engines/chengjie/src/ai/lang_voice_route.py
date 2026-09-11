@@ -45,14 +45,24 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# 粤语专用/高频特征字（书面普通话几乎不用）。一个字算一个 marker。
-_CANTO_CHARS = "嘅咁咗唔哋喺嚟氹嗰乜嘢佢睇畀冇諗攞嗌埋啱噉嚿餸靚嗮曬啵嘞喇喎咩囉噶嗌咯嘞"
+# 粤语**独占**字形（简/繁普通话几乎不用）。一个字算一个 marker，单独即成信号。
+_CANTO_CHARS_STRONG = "嘅咁咗唔哋喺嚟氹嗰乜嘢佢睇畀冇諗攞嗌啱噉嚿餸嗮喎"
+# 与普通话共用的字（2026-09-12 GWJ2RZ 事故拆出）：啵/嘞/喇/咩/咯/噶 是普通话
+# 口语句尾词（「好咯」「得嘞」「走啵」「说咩」），埋（埋头/埋怨），靚/曬/囉 只是
+# 繁体的 靓/晒/啰——客户 ASR 转出繁体、人设带港味，普通话回复凑两个就被整段切
+# 成 zh-HK 声念粤语腔。这些字**只在已有独占信号时才计分**，绝不单独触发。
+_CANTO_CHARS_WEAK = "埋靚曬啵嘞喇咩囉噶咯"
+# 兼容：仍导出合集（外部只读引用）
+_CANTO_CHARS = _CANTO_CHARS_STRONG + _CANTO_CHARS_WEAK
 # 粤语双字组合（比单字更强的信号）
 _CANTO_BIGRAMS = (
-    "点解", "而家", "咁样", "系咪", "唔系", "唔好", "唔使", "唔通", "几好",
-    "好耐", "琴日", "听日", "宜家", "得闲", "冇问题", "麻麻地", "咪住",
+    "点解", "而家", "咁样", "系咪", "唔系", "唔好", "唔使", "唔通",
+    "好耐", "琴日", "听日", "冇问题", "麻麻地", "咪住",
     "識聽", "识听", "講嘢", "讲嘢", "俾我", "畀我", "睇下", "谂住",
 )
+# 与普通话撞形的双字组合：宜家（IKEA）、得闲（南方普通话通用）、几好——同弱字，
+# 只在已有独占信号时 +1
+_CANTO_BIGRAMS_WEAK = ("宜家", "得闲", "几好")
 
 # ── 语种前缀 → Edge 神经声（女声系，与陪伴人设性别一致；可经配置覆写）─────────
 # 单一事实源：proactive_voice_foreign（主动外语开场）与 follow_text 路由共用。
@@ -330,9 +340,26 @@ def to_simplified_for_tts(text: str) -> str:
             return t
         if is_cantonese_text(t):
             return t
-        global _T2S_CC
-        if _T2S_CC is False:
-            return t
+        return to_simplified_plain(t)
+    except Exception:
+        return t
+
+
+def to_simplified_plain(text: str) -> str:
+    """无豁免的繁→简（opencc t2s；缺失/异常原样返回）。
+
+    供**比对归一**用（synth_verify CER 两侧同做）：ASR 对同一段普通话音频吐简吐繁
+    是随机的（Whisper zh 不钉字形；GWJ2RZ 钧机整晚转写全是繁体），送稿简体 vs
+    转写繁体逐字对不上＝CER 0.3–0.5 假阳性 → 无谓重合成、克隆成品被判「念错」。
+    发音输入请用 ``to_simplified_for_tts``（带 ja/粤语豁免）。
+    """
+    t = str(text or "")
+    if not t:
+        return t
+    global _T2S_CC
+    if _T2S_CC is False:
+        return t
+    try:
         if _T2S_CC is None:
             try:
                 import opencc
@@ -359,15 +386,24 @@ _SCRIPT_LANGS = frozenset(
 
 
 def count_cantonese_markers(text: str) -> int:
-    """统计粤语特征信号数（单字 1 分、双字组合 2 分）。"""
+    """统计粤语特征信号数（独占单字 1 分、独占双字组合 2 分）。
+
+    与普通话共用的弱字/弱词（``_CANTO_CHARS_WEAK`` / ``_CANTO_BIGRAMS_WEAK``）
+    只在**至少一个独占信号**在场时各 +1；没有独占信号 → 恒 0。普通话回复
+    「好咯」「得嘞」「去宜家」再多也凑不出粤语判定。
+    """
     t = str(text or "")
     if not t:
         return 0
-    score = sum(1 for ch in t if ch in _CANTO_CHARS)
+    strong = sum(1 for ch in t if ch in _CANTO_CHARS_STRONG)
     for bg in _CANTO_BIGRAMS:
         if bg in t:
-            score += 2
-    return score
+            strong += 2
+    if strong <= 0:
+        return 0
+    weak = sum(1 for ch in t if ch in _CANTO_CHARS_WEAK)
+    weak += sum(1 for bg in _CANTO_BIGRAMS_WEAK if bg in t)
+    return strong + weak
 
 
 def is_cantonese_text(text: str, *, min_markers: int = 2) -> bool:
@@ -862,5 +898,6 @@ __all__ = [
     "is_reject_tag",
     "is_voice_placeholder",
     "to_simplified_for_tts",
+    "to_simplified_plain",
     "route_voice_cfg_for_text",
 ]

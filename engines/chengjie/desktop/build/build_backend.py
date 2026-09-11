@@ -376,7 +376,12 @@ COLLECT_SUBMODULES = ["src", "uvicorn", "pyrogram", "fastapi"]
 # okline（LINE 协议登录）除子模块外还须连 ltsm/*.wasm + *.js（Node 桥资产）一并收进包，
 # 否则冻结后 hmac_signer 找不到 ltsm_bridge.js → LINE 扫码在安装版恒失败（--collect-all
 # 会把 collect_data_files 抓到的非 .py 数据一起打进 <_MEIPASS>/okline/ltsm/）。
-COLLECT_ALL = ["uvicorn", "okline"]
+# opencc（opencc-python-reimplemented）：词典/配置是包内 dictionary/*.txt +
+# config/*.json 数据文件，静态分析只带 .py → 冻结后 OpenCC("t2s") 找不到词典即抛，
+# 软依赖处静默降级成恒等 → 桌面端繁简归一（synth_verify CER / 克隆发音输入 t2s /
+# zh-tw 出向翻译 OpenCCEngine）在坐席机上全部失效（2026-09-12 GWJ2RZ 钧机
+# 整晚克隆被繁体转写误判「念错」）。--collect-all 连数据一并收进包。
+COLLECT_ALL = ["uvicorn", "okline", "opencc"]
 
 # 重量级可选软依赖：默认排除以控包体（缺失时后端对应能力软降级）。
 #
