@@ -179,8 +179,34 @@ window.fetch = async function (url, opts) {
         title: '语音按钮点了没反应', status: 'fixed', severity: 'P2',
         report_count: 2, notify_ts: 0, notify_note: '已修复请更新后验证' }] });
   }
+  /* 语音回合链（P1 2026-09-06）：转写固定回一句可答的问题；TTS 默认 404（O9b 靶：
+     无后端=诚实失败），voice 场景把 ttsMode 拨到 ok 才回一段 0.25s 静音 WAV。 */
+  if (url.indexOf('/api/assistant/transcribe') === 0) {
+    window.__api.asr.push(JSON.parse(opts.body).audio_b64.length);
+    return J({ ok: true, text: window.__api.asrText || '怎么发语音' });
+  }
+  if (url.indexOf('/api/voice/tts-test') === 0) {
+    window.__api.tts.push(JSON.parse(opts.body).text);
+    if (window.__api.ttsMode === 'ok') return J({ ok: true, audio_url: window.__silentWav });
+    if (window.__api.ttsMode === 'oklong') return J({ ok: true, audio_url: window.__silentWavLong });
+    return J({ ok: false }, 404);
+  }
   return J({ ok: false }, 404);
 };
+window.__api.asr = []; window.__api.tts = []; window.__api.ttsMode = '';
+window.__mkWav = function (n) {
+  var sr = 8000, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  function w(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  var u = new Uint8Array(buf), b = '';
+  for (var i = 0; i < u.length; i++) b += String.fromCharCode(u[i]);
+  return 'data:audio/wav;base64,' + btoa(b);
+};
+window.__silentWav = window.__mkWav(2000);       /* 0.25s：正常回合 */
+window.__silentWavLong = window.__mkWav(24000);  /* 3s：给语音打断留出窗口 */
 </script>
 <script src="@@BALL_JS@@"></script>
 <script>
@@ -229,7 +255,7 @@ class Checker:
         return 1 if fails else 0
 
 
-def build_page(td: Path, shell: str) -> Path:
+def build_page(td: Path, shell: str, voice: bool = False) -> Path:
     sh = ENGINE / "shared" / "assistant"
     ball = (sh / "assistant-ball.js").resolve()
     teach = (sh / "assistant-teach.js").resolve()
@@ -241,7 +267,11 @@ def build_page(td: Path, shell: str) -> Path:
             .replace("@@SHELL@@", shell)
             .replace("@@ADMIN_GLOBALS@@",
                      _ADMIN_GLOBALS if shell == "admin" else ""))
-    fp = td / f"probe_{shell}.html"
+    if voice:
+        # 语音场景（P1）：boot.voice=true 才渲染麦克风键/长按手势；配合 chromium
+        # 假麦克风启动参数，getUserMedia 免授权直接给流。
+        html = html.replace("voice: false", "voice: true", 1)
+    fp = td / f"probe_{shell}{'_voice' if voice else ''}.html"
     fp.write_text(html, encoding="utf-8")
     return fp
 
@@ -743,6 +773,12 @@ def _run_admin_tail(page, ck: Checker) -> None:
     ck.check("O9b 无 TTS 后端 → 诚实失败红气泡 + 按钮复位",
              ev("() => document.body.textContent.indexOf('播报失败') > -1 && "
                 "!document.querySelector('[data-act=\"say\"]').disabled"))
+    # v3：请求类失败（播报/转写/问答）让球亮 2.6s 玫红 error 瞬态（与琥珀「页面
+    # 异常」分开）。它压过黏性模式态，所以等它退场再测 O10-O12。
+    ck.check("O9c 播报失败 → 球进 error 瞬态（玫红，与 alert 分开）",
+             ev("() => AssistantBall._orbState() === 'error' && "
+                "document.querySelector('.asb-ball').classList.contains('st-error')"))
+    page.wait_for_timeout(2500)
 
     # O10 字形库（P3）：bang/mic 一次性爆闪走同一画布通路
     ev("() => AssistantBall._orbBurst('bang')")
@@ -787,6 +823,66 @@ def _run_admin_tail(page, ck: Checker) -> None:
              ev("() => !document.querySelector('.asb-ball')"
                 ".classList.contains('st-agent') && "
                 "document.querySelector('.asb-fx').style.display === 'none'"))
+
+    # O13-O17 v3「内光核」（2026-09-06 实施95 P0）：待机形态与状态词汇。
+    # 断言的是**行为**（内光在场、待机档类、环的可见性随状态、两态新词汇、
+    # 标签片），不是环的数量——v2 的 V2c 曾把实现细节钉成契约，重构先要改测试。
+    ck.check("O13 内光三团在核内 + 默认待机档 flow 挂在容器与面板",
+             ev("() => document.querySelectorAll('.asb-ball .asb-orb .asb-lc').length === 3 && "
+                "AssistantBall._orbIdle() === 'flow' && "
+                "document.querySelector('.asb-wrap').classList.contains('asb-idle-flow') && "
+                "document.querySelector('.asb-panel').classList.contains('asb-idle-flow')"))
+    # 指针可能还停在球上（A2 点过球）、首次提示可能正亮着——两者都会让图标浮现，
+    # 先挪走指针并摘掉提示类，等过渡（.25s）走完再读计算样式。
+    page.mouse.move(5, 5)
+    ev("() => document.querySelector('.asb-wrap').classList.remove('asb-tipon')")
+    page.wait_for_timeout(450)
+    ck.check("O13b 待机时光环隐没（opacity 0）、图标不占球身（opacity 0）",
+             ev("() => { var r = getComputedStyle(document.querySelector('.asb-ball .asb-ring.front')); "
+                "var i = getComputedStyle(document.querySelector('.asb-ball .asb-ic')); "
+                "return AssistantBall._orbState() === 'idle' && "
+                "parseFloat(r.opacity) === 0 && parseFloat(i.opacity) === 0; }"))
+    ev("() => AssistantBall._orbForce('listening')")
+    page.wait_for_timeout(650)
+    ck.check("O13c listening → 光环从核里聚出（opacity 1）",
+             ev("() => parseFloat(getComputedStyle(document.querySelector("
+                "'.asb-ball .asb-ring.front')).opacity) > 0.9"))
+    ev("() => AssistantBall._orbForce(null)")
+    page.wait_for_timeout(120)
+    ev("() => AssistantBall.orbFx('calm')")
+    page.wait_for_timeout(120)
+    ck.check("O14 orbFx('calm') → lv1 + 待机 calm + 段控高亮同步 + 落盘",
+             ev("() => AssistantBall._orbLevel() === 1 && AssistantBall._orbIdle() === 'calm' && "
+                "document.querySelector('.asb-wrap').classList.contains('asb-idle-calm') && "
+                "localStorage.getItem('asb_orb_idle') === 'calm' && "
+                "localStorage.getItem('asb_orb_lvl') === '1'"))
+    ev("() => AssistantBall.orbFx('flow')")
+    page.wait_for_timeout(120)
+    ck.check("O14b orbFx('flow') → 回到 lv2 + flow（用户选择覆盖本会话降档）",
+             ev("() => AssistantBall._orbLevel() === 2 && AssistantBall._orbIdle() === 'flow'"))
+    ev("() => AssistantBall._orbForce('connecting')")
+    page.wait_for_timeout(120)
+    ck.check("O15 connecting：st 类上球+面板，画布不点亮（还没在听）",
+             ev("() => document.querySelector('.asb-ball').classList.contains('st-connecting') && "
+                "document.querySelector('.asb-panel').classList.contains('st-connecting') && "
+                "document.querySelector('.asb-fx').style.display === 'none'"))
+    ev("() => AssistantBall._orbForce('error')")
+    page.wait_for_timeout(120)
+    ck.check("O15b error：st 类互斥 + 标题栏状态句非空",
+             ev("() => document.querySelector('.asb-ball').classList.contains('st-error') && "
+                "!document.querySelector('.asb-ball').classList.contains('st-connecting') && "
+                "document.querySelector('.asb-hd-st').textContent.trim().length > 0"))
+    ev("() => AssistantBall._orbForce(null)")
+    page.wait_for_timeout(120)
+    ck.check("O16 悬停标签片在容器内且贴边侧类已定（l/r 二选一）",
+             ev("() => { var w = document.querySelector('.asb-wrap'); "
+                "return !!w.querySelector('.asb-tip') && "
+                "w.querySelector('.asb-tip').textContent.trim().length > 0 && "
+                "(w.classList.contains('asb-side-r') !== w.classList.contains('asb-side-l')); }"))
+    ck.check("O17 待机 0 JS 帧仍成立（画布熄灭）且核背景可被代办线取样",
+             ev("() => document.querySelector('.asb-fx').style.display === 'none' && "
+                "getComputedStyle(document.querySelector('.asb-orb')).backgroundImage"
+                ".indexOf('radial-gradient') === 0"))
 
     # A16 教学模式投问（2026-08-23）：球开合走 pointerup，click() 打不开面板。
     # AssistantBall.ask 必须同步开面板并真的把问题送进 /api/assistant/query。
@@ -1174,11 +1270,175 @@ def run_ws(page, ck: Checker) -> None:
 
     page.click('.asb-sub[data-tab="set"]')
     page.wait_for_timeout(150)
-    ck.check("W1b ⚙ 偏好=仅动效档（workspace 壳无 admin 全局工具）",
+    # v3（2026-09-06）：动效档由单按钮升为三档段控（安静/呼吸/流动）+ 诊断行；
+    # workspace 壳仍不得出现 admin 全局工具（tour/cmd/tips/support）。
+    ck.check("W1b ⚙ 偏好=仅动效三档段控 + 诊断行（workspace 壳无 admin 全局工具）",
              ev("() => document.querySelectorAll('.asb-tools .asb-tool')"
-                ".length === 1 && !!document.querySelector("
-                "'.asb-tools [data-act=\"orb-fx\"]') && "
+                ".length === 0 && document.querySelectorAll("
+                "'.asb-tools [data-act=\"orb-fx\"][data-fx]').length === 3 && "
+                "!!document.querySelector('.asb-tools .asb-fxdiag') && "
                 "!document.querySelector('.asb-tools [data-act=\"tour\"]')"))
+
+
+def run_voice(page, ck: Checker) -> None:
+    """语音对话回合链（P1 2026-09-06 实施95）——假麦克风 + stub 转写/TTS。
+
+    V1  voice.start() → 语音块取代输入区（大球画布 + 状态行 + 打断/自动播报/结束）
+    V2  麦克风到手 → 进入 listening（REC.voice 在场、球+面板 st-listening、44px 波形条退场）
+    V3  _voiceSim(一句话) → 用户气泡 + 问答请求 + 回答落地 → TTS 逐句请求（首句先发）
+        → speaking → 播完自动回到 listening（免手动回合闭环）
+    V4  句级切分纯函数：完整句才出、短句并入下一句、final 收尾
+    V5  自动播报开关：aria-pressed 与内部状态同步
+    V6  结束语音 → 块移除、输入区回来、REC 清空、球回待机
+    V7  长按球 ≥420ms → 语音对话开始；Esc 关面板 → 语音随之结束
+    V8  demo('loop') 不依赖麦克风：块在场（data-demo=1）且状态被驱动；demo(false) 收场
+    V0  全程零未捕获 JS 异常
+    """
+    ev = page.evaluate
+    page.wait_for_timeout(300)
+    ck.check("V1 voice.start() 返回 true 且语音块取代输入区",
+             ev("() => AssistantBall.voice.start() === true && "
+                "!!document.querySelector('.asb-ftwrap .asb-voice') && "
+                "!!document.querySelector('.asb-voice canvas.asb-vorb') && "
+                "!!document.querySelector('[data-act=\"v-interrupt\"]') && "
+                "!!document.querySelector('[data-act=\"v-mute\"]') && "
+                "!!document.querySelector('[data-act=\"v-end\"]') && "
+                "!document.querySelector('.asb-in')"))
+    page.wait_for_timeout(1500)
+    ck.check("V2 麦克风到手 → listening（REC.voice + st 类 + 波形条退场）",
+             ev("() => { var s = AssistantBall._voiceState(); return s.on && s.rec && "
+                "AssistantBall._orbState() === 'listening' && "
+                "document.querySelector('.asb-ball').classList.contains('st-listening') && "
+                "document.querySelector('.asb-panel').classList.contains('st-listening') && "
+                "!document.querySelector('.asb-hero').classList.contains('on'); }"))
+    # P2：采集是 PCM 环形缓冲而不是 MediaRecorder；缓冲在涨。file:// 夹具是不透明
+    # 源，Blob URL 的 worklet 模块被 Chromium 拒载（AbortError）→ 这里跑的是
+    # ScriptProcessor 回落；http 生产页 worklet 正常（voice_call.html 同款已上线）。
+    # 断言口径＝「任一路在采」，worklet 与否只作信息输出。
+    st_cap = ev("() => AssistantBall._voiceState()")
+    ck.check("V2c PCM 采集在跑（环形缓冲有写入；本夹具走 %s）"
+             % ("worklet" if st_cap.get("worklet") else "ScriptProcessor 回落"),
+             bool(st_cap.get("cap")) and int(st_cap.get("w") or 0) > 0)
+    ck.check("V2b 状态行与标题栏短句同文（同一句话的大字版）",
+             ev("() => { var a = document.querySelector('.asb-v-st').textContent.trim(); "
+                "var b = document.querySelector('.asb-hd-st').textContent.trim(); "
+                "return a.length > 0 && a === b; }"))
+    # V3 回合闭环：模拟「听到一句」→ 问答 → 逐句 TTS → 说 → 回到听
+    ev("() => { window.__api.ttsMode = 'ok'; window.__api.queryMode = 'ok'; "
+       "window.__n0 = window.__api.queries.length; "
+       "return AssistantBall._voiceSim('怎么发语音'); }")
+    page.wait_for_timeout(700)
+    ck.check("V3 识别文本成为一问（用户气泡 + 问答请求）",
+             ev("() => { var us = document.querySelectorAll('.asb-body .asb-msg.user'); "
+                "return window.__api.queries.length === window.__n0 + 1 && "
+                "String(window.__api.queries[window.__api.queries.length - 1].q) === '怎么发语音' && "
+                "us.length > 0 && us[us.length - 1].textContent.indexOf('怎么发语音') > -1; }"))
+    ck.check("V3b 回答按句送合成（TTS 至少一次请求，文本已剥标记）",
+             ev("() => window.__api.tts.length >= 1 && "
+                "window.__api.tts[0].indexOf('[S') === -1 && window.__api.tts[0].length > 0"))
+    # 静音 WAV 0.25s 播完 → 队列空 + 回答已落 → 回到听
+    page.wait_for_timeout(2200)
+    ck.check("V3c 播完自动回到 listening（免手动回合闭环）",
+             ev("() => { var s = AssistantBall._voiceState(); return s.on && s.rec && "
+                "!s.playing && s.queued === 0 && s.answerDone && "
+                "AssistantBall._orbState() === 'listening'; }"))
+    ck.check("V4 句级切分：完整句才出、短句并入下一句、final 收尾",
+             ev("() => { var f = AssistantBall._voiceSplit; "
+                "var a = f('第一句说完了。第二句很长很长的内容！第三', 0, false); "
+                "var b = f('好。这是第二句话。', 0, false); "
+                "var c = f('第一句说完了。第二句很长很长的内容！第三', 0, true); "
+                "var d = f('第一句说完了。第二句很长很长的内容！第三', a.spoken, true); "
+                "return a.sentences.length === 2 && a.sentences[0] === '第一句说完了。' && "
+                "a.spoken === '第一句说完了。第二句很长很长的内容！'.length && "
+                "b.sentences.length === 1 && b.sentences[0] === '好。这是第二句话。' && "
+                "c.sentences.length === 3 && c.sentences[2] === '第三' && "
+                "d.sentences.length === 1 && d.sentences[0] === '第三'; }"))
+    # V9 VAD 驱动的真实回合（P2）：按真实节拍注入 PCM——0.5s 有声 → 开口已判、
+    # spStart 指在开口前（含 300ms 预卷）；再 1s 静音 → 判停 → 只把说话段送转写
+    #（stub 记下 base64 长度）→ 转写文本成为一问 → 播报 → 回到听。
+    ev("() => { window.__api.ttsMode = 'ok'; window.__n1 = window.__api.queries.length; "
+       "window.__a1 = window.__api.asr.length; window.__w0 = AssistantBall._voiceState().w; }")
+    ev("() => AssistantBall._voiceInjectPcm(0.3, 500)")
+    ck.check("V9 注入 0.5s 有声 → 开口已判（speechSeen）且 spStart 落在开口前的预卷位",
+             ev("() => { var s = AssistantBall._voiceState(); return s.rec && s.speechSeen && "
+                "s.spStart >= 0 && s.spStart < window.__w0 + 16000; }"))
+    ev("() => AssistantBall._voiceInjectPcm(0, 1000)")
+    page.wait_for_timeout(600)
+    ck.check("V9b 静音 1s → 判停 → 说话段（WAV）已送转写 → 转写文本成为一问",
+             ev("() => window.__api.asr.length === window.__a1 + 1 && "
+                "window.__api.asr[window.__api.asr.length - 1] > 1000 && "
+                "window.__api.queries.length === window.__n1 + 1"))
+    page.wait_for_timeout(2400)
+    ck.check("V9c 一轮结束自动回到 listening（VAD 版闭环）",
+             ev("() => { var s = AssistantBall._voiceState(); return s.on && s.rec && !s.playing && "
+                "AssistantBall._orbState() === 'listening'; }"))
+    # V10 语音打断：3s 的播报播着 → 注入 0.5s 有声 → 播报停、开口位置带进新一轮
+    #（speechSeen 已为真，无需再等 220ms）→ 静音 → 说话段送转写
+    ev("() => { window.__api.ttsMode = 'oklong'; window.__a2 = window.__api.asr.length; "
+       "return AssistantBall._voiceSim('怎么发语音'); }")
+    page.wait_for_timeout(900)
+    ck.check("V10 长播报在播（speaking）",
+             ev("() => AssistantBall._voiceState().playing && AssistantBall._orbState() === 'speaking'"))
+    ev("() => AssistantBall._voiceInjectPcm(0.35, 500)")
+    page.wait_for_timeout(150)
+    ck.check("V10b 说话即打断：播报停、回到听且开口位置已带入（speechSeen + spStart）",
+             ev("() => { var s = AssistantBall._voiceState(); return !s.playing && s.rec && "
+                "s.speechSeen && s.spStart >= 0 && AssistantBall._orbState() === 'listening'; }"))
+    ev("() => { window.__api.ttsMode = 'ok'; return AssistantBall._voiceInjectPcm(0, 1000); }")
+    page.wait_for_timeout(600)
+    ck.check("V10c 打断后的那句话被送去转写（不丢开口）",
+             ev("() => window.__api.asr.length === window.__a2 + 1"))
+    page.wait_for_timeout(2400)
+    ck.check("V11 纯函数：首句提前开口取首分句（≥8 字到逗号）、短句不取；WAV 头 44 字节",
+             ev("() => AssistantBall._voiceEager('在收件箱右侧的输入框里，点击麦克风图标就可以发语音') === '在收件箱右侧的输入框里，' && "
+                "AssistantBall._voiceEager('好的，这样。') === '' && "
+                "AssistantBall._voiceEager('好的。然后再说') === '' && "
+                "AssistantBall._voiceWavBytes(1600) === 44 + 3200"))
+    page.click('[data-act="v-mute"]')
+    ck.check("V5 自动播报开关：aria-pressed 与内部状态同步",
+             ev("() => document.querySelector('[data-act=\"v-mute\"]')"
+                ".getAttribute('aria-pressed') === 'true' && "
+                "AssistantBall._voiceState().autoSay === false"))
+    page.click('[data-act="v-mute"]')
+    page.click('[data-act="v-end"]')
+    page.wait_for_timeout(300)
+    # 夹具的工单 stub 带 fixed 单 → 启动 2.5s 后角标亮起，待机态是 hint 而非 idle
+    ck.check("V6 结束语音 → 块移除、输入区回来、REC 清空、球回待机",
+             ev("() => !document.querySelector('.asb-voice') && !!document.querySelector('.asb-in') && "
+                "!AssistantBall._voiceState().on && !AssistantBall._voiceState().rec && "
+                "/^(idle|hint)$/.test(AssistantBall._orbState())"))
+    # V7 长按球（≥420ms 不动）→ 语音开始；Esc → 关面板并结束语音
+    ev("() => { var x = document.querySelector('.asb-x'); if (x) x.click(); }")
+    page.wait_for_timeout(250)
+    b = page.query_selector(".asb-ball").bounding_box()
+    page.mouse.move(b["x"] + b["width"] / 2, b["y"] + b["height"] / 2)
+    page.mouse.down()
+    page.wait_for_timeout(650)
+    page.mouse.up()
+    page.wait_for_timeout(400)
+    ck.check("V7 长按球 → 语音对话开始（面板开 + 语音块在场）",
+             ev("() => AssistantBall._voiceState().on && "
+                "!!document.querySelector('.asb-panel.open') && "
+                "!!document.querySelector('.asb-voice')"))
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    ck.check("V7b Esc 关面板 → 语音随之结束、麦克风释放",
+             ev("() => !AssistantBall._voiceState().on && !AssistantBall._voiceState().rec && "
+                "!document.querySelector('.asb-panel.open')"))
+    # V8 演示模式（无麦克风依赖）
+    ev("() => AssistantBall.demo('loop')")
+    page.wait_for_timeout(400)
+    ck.check("V8 demo('loop')：语音块 data-demo=1 且状态被驱动为 listening",
+             ev("() => { var v = document.querySelector('.asb-voice'); return !!v && "
+                "v.getAttribute('data-demo') === '1' && AssistantBall._voiceState().demo && "
+                "AssistantBall._orbState() === 'listening' && "
+                "document.querySelector('.asb-fx').style.display !== 'none'; }"))
+    ev("() => AssistantBall.demo(false)")
+    page.wait_for_timeout(300)
+    ck.check("V8b demo(false) 收场：块移除、强制态释放、画布熄灭",
+             ev("() => !document.querySelector('.asb-voice') && "
+                "!AssistantBall._voiceState().on && /^(idle|hint)$/.test(AssistantBall._orbState()) && "
+                "document.querySelector('.asb-fx').style.display === 'none'"))
 
 
 def main() -> int:
@@ -1200,7 +1460,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=not args.headed)
+            # 假麦克风（免授权、有信号）+ 免手势自动播放：只为 V 组；A/W 组的
+            # 夹具 boot.voice=false，不会碰到麦克风。
+            browser = p.chromium.launch(headless=not args.headed, args=[
+                "--use-fake-device-for-media-stream",
+                "--use-fake-ui-for-media-stream",
+                "--autoplay-policy=no-user-gesture-required"])
 
             page = browser.new_page(viewport={"width": 900, "height": 800})
             errors: List[str] = []
@@ -1219,6 +1484,16 @@ def main() -> int:
             run_ws(page2, ck)
             ck.check("W0 workspace 壳零未捕获异常", not errors2,
                      "; ".join(errors2[:3]))
+            page2.close()
+
+            # V 组（P1 语音对话）：boot.voice=true 的 admin 壳 + 假麦克风
+            page3 = browser.new_page(viewport={"width": 900, "height": 800})
+            errors3: List[str] = []
+            page3.on("pageerror", lambda e: errors3.append(str(e)))
+            page3.goto(build_page(tdp, "admin", voice=True).as_uri())
+            page3.wait_for_timeout(200)
+            run_voice(page3, ck)
+            ck.check("V0 语音场景零未捕获异常", not errors3, "; ".join(errors3[:3]))
             browser.close()
     return ck.summary()
 

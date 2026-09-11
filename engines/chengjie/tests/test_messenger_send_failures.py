@@ -231,6 +231,10 @@ def test_autosend_deferred_item_retried_when_due_without_recoverable():
     # 让改期项立即到期（余量固定 5s，直接改 next_ts 而不是睡等）
     w._retry_queue[0]["next_ts"] = 0.0
     svc.list_drafts.return_value = []
+    # M-2 C（#233）：账号级退避水位（≥5s）未过时到点项不重投——这里模拟水位已过
+    # （真实成功 / 登录成功 / 健康探测通过会 reset），再排空才该重投
+    from src.inbox.account_channel_gate import reset_backoff
+    reset_backoff("messenger", "a")
     asyncio.run(w._tick())
     assert attempts["n"] == 2, "到期改期项应被重投"
     assert len(w._retry_queue) == 0
@@ -253,11 +257,13 @@ def test_autosend_defer_cap_then_terminal():
     w = AutosendWorker(draft_service=svc, config={}, send_callback=_cb,
                        sleep=lambda s: asyncio.sleep(0))
     asyncio.run(w._tick())          # 第 1 次失败 → 改期#1
+    from src.inbox.account_channel_gate import reset_backoff
     for _ in range(3):              # 到期重投 → 继续失败 → 改期#2/#3 → 终局
         if not w._retry_queue:
             break
         w._retry_queue[0]["next_ts"] = 0.0
         svc.list_drafts.return_value = []
+        reset_backoff("messenger", "a")   # M-2 C（#233）：每轮模拟账号退避水位已过
         asyncio.run(w._tick())
     assert w.total_deferred == 3
     assert len(w._retry_queue) == 0

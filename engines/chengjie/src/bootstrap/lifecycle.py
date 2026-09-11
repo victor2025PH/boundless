@@ -171,6 +171,23 @@ async def start_assistant(assistant):
             # ★ P4-B：TTS 成本按日落库（供 ops 看板画近 N 天花费曲线；默认关）
             assistant._maybe_init_tts_cost_log()
 
+            # ★ 2026-09-08 成本对账：每日 09:40 核对昨日 LLM 花费 vs 厂商账单真值，
+            #   不对账/尖峰/超预算/余额不足 → 分级推管理员；预算闸配置回调同批注入。
+            #   常开（ai.cost_guard.enabled=false 可关）；账本缺席则静默跳过。
+            try:
+                from src.ai.cost_ledger import get_cost_ledger
+                from src.ai.cost_recon import CostReconLoop, configure_cost_guard
+
+                configure_cost_guard(lambda: assistant.config.config or {})
+                _recon = CostReconLoop(
+                    lambda: assistant.config.config or {}, get_cost_ledger,
+                    logger_=assistant.logger)
+                await _recon.start()
+                assistant._cost_recon_loop = _recon
+                assistant.logger.info("✅ 成本日对账已常备（ai.cost_guard，默认 09:40 核对昨日）")
+            except Exception:
+                assistant.logger.debug("成本日对账启动跳过", exc_info=True)
+
             # ★ 小智帮助语料首启自动播种（assistant.enabled 才动；幂等 upsert，
             #   新装机首启即有语料——1.0.51 全功能开箱配套）
             assistant._maybe_seed_assistant_help()

@@ -91,6 +91,14 @@ ZH = {
     "ov2_as_orb_listen": "语音聆听",
     "ov2_as_orb_deg": "性能降档",
     "ov2_as_orb_calm": "切安静档",
+    # 语音对话行（实施95 P2，2026-09-07）：分桶顺序 首声 <2s/2-4s/4-7s/≥7s，
+    # 转写 <1s/1-2s/2-4s/≥4s；打断计数=手动/语音
+    "ov2_as_voice_hd": "语音对话（14 天）",
+    "ov2_as_voice_sess": "会话",
+    "ov2_as_voice_turns": "回合",
+    "ov2_as_voice_int": "打断 手动/语音",
+    "ov2_as_voice_ttfs": "说完→第一声 <2s/2-4/4-7/≥7s",
+    "ov2_as_voice_asr": "说完→转写回来 <1s/1-2/2-4/≥4s",
     # 助教用量行（实施58 P6 观察期，2026-08-23）
     "ov2_as_xz_t": "助教用量（14天）",
     "ov2_as_xz_teach": "教学 开/点/问",
@@ -203,6 +211,13 @@ EN = {
     "ov2_as_orb_listen": "Voice listens",
     "ov2_as_orb_deg": "Perf downgrades",
     "ov2_as_orb_calm": "Calm switches",
+    # voice chat row (impl95 P2, 2026-09-07)
+    "ov2_as_voice_hd": "Voice chat (14d)",
+    "ov2_as_voice_sess": "sessions",
+    "ov2_as_voice_turns": "turns",
+    "ov2_as_voice_int": "interrupts tap/voice",
+    "ov2_as_voice_ttfs": "end-of-speech→first sound <2s/2-4/4-7/≥7s",
+    "ov2_as_voice_asr": "end-of-speech→transcript <1s/1-2/2-4/≥4s",
     # assistant usage row (impl58 P6 observation, 2026-08-23)
     "ov2_as_xz_t": "Copilot usage (14d)",
     "ov2_as_xz_teach": "Teach on/click/ask",

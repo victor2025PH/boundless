@@ -25,6 +25,16 @@
  * v2.1（同日）：状态色走 @property --xz-core 色变量（hue-rotate 退场，画布粒子
  * 与之同源 orbStateRgb）；光谱两端由品牌色 OKLCH 相对推导（白标换主色整条光带
  * 跟转，@supports 回落令牌）；registerMode 收 iconName；默认摆放避让宿主浮球。
+ * v3「内光核」（2026-09-06 实施95 P0）：待机也看得出活着——硬体球面与两条常驻
+ * 刚性光环退场（46px 上读成「带环的行星图标」），改成软边半透明核 + 球内三团
+ * 光谱色沿互质周期漂移 + 轮廓微呼吸（全部 transform/opacity，待机 0 JS 帧）；
+ * 光环只在活跃态从核里「聚成环」。待机三档 calm/breathe/flow（默认 flow）由
+ * 偏好页段控切换；球内图标改为悬停标签片；新增 connecting/error 两态；安静档与
+ * reduced-motion 保留状态脉冲（去运动不去信息）。改球体前先读「Orb 引擎」段。
+ * P1/P2「语音对话」（同日）：长按球进入免手动回合——PCM 环形缓冲采集（worklet）
+ * → VAD 判停 → 只传说话段（WAV）转写 → 问答 → 首分句提前开口、按句 TTS →
+ * 说话即打断（开口位置带入下一轮）→ 再听；时延分桶埋点 asb_voice_ttfs_… 与
+ * asb_voice_asr_…。详见文内「语音对话」段。
  *
  * 线协议（与 assistant_routes.py 钉死）：
  *   POST /api/assistant/query  → ndjson: {ev:meta,sources,report_hint} →
@@ -38,7 +48,7 @@
   'use strict';
   if (window.AssistantBall) { return; }
 
-  var VER = '20260905b';
+  var VER = '20260907a';
   var I18N = {
     zh: {
       name: '小智 · AI 助手', open_aria: '打开 AI 助手', close: '关闭',
@@ -99,7 +109,24 @@
       tools_tips_on: '术语提示：开', tools_tips_off: '术语提示：关',
       tools_tour: '重看引导', tools_keys: '快捷键', tools_cmd: '命令面板',
       tools_support: '上传诊断',
-      orb_fx_full: '动效：饱满', orb_fx_calm: '动效：安静',
+      /* 动效三档段控（v3 2026-09-06）：一个控件同时管待机样式与画质档——
+         安静=lv1+calm、呼吸=lv2+breathe、流动=lv2+flow。诊断行说清「现在是
+         哪一档、为什么」：远程桌面会话常关掉系统动画 → reduced-motion → 球全静，
+         用户以为坏了；此前这个原因在界面上无处可查。 */
+      fx_t: '动效', fx_calm: '安静', fx_breathe: '呼吸', fx_flow: '流动',
+      fx_now: '当前', fx_r_default: '默认', fx_r_user: '你的选择',
+      fx_r_admin: '管理员默认',
+      fx_r_rm: '系统已开启「减少动态效果」，动效自动关闭',
+      fx_r_deg1: '本机性能自动降档（粒子减半）',
+      fx_r_deg2: '本机性能不足，本次会话已自动转安静',
+      /* 球的悬停标签片（v3）：图标退出球身后，可发现性由它接住 */
+      tip_ask: '问小智', tip_ask_voice: '问小智 · 长按开始语音对话',
+      /* 语音对话（P1 2026-09-06）：免手动回合——说完自动答、答完自动念、念完接着听 */
+      v_interrupt: '打断', v_end: '结束语音',
+      v_autosay_on: '自动播报：开（点击关闭）', v_autosay_off: '自动播报：关（点击开启）',
+      v_idle_end: '一直没听到声音，语音对话已结束',
+      v_started: '语音对话已开始：直接说，说完我自动回答；我在说时你开口就能打断',
+      v_barge_hint: '说话即可打断',
       say_t: '播报这条回答（系统音色）', say_fail: '播报失败，请稍后重试',
       /* 首屏第一句（P1-1）：一句话讲清三个模式各能干什么，让用户不必先给
          自己分类。**此前这个键根本不存在** → t() 缺键回落裸键名，面板首屏
@@ -130,6 +157,7 @@
       hd_idle: '随时可问', hd_hint: '有新进展', hd_listening: '在听…',
       hd_thinking: '思考中', hd_live: '回答中', hd_speaking: '播报中',
       hd_teach: '教学中', hd_agent: '执行中', hd_alert: '页面有异常',
+      hd_connecting: '正在连接麦克风…', hd_error: '出错了，可以重试',
     },
     en: {
       name: 'AI Assistant', open_aria: 'Open AI assistant', close: 'Close',
@@ -184,7 +212,19 @@
       tools_tips_on: 'Term tips: on', tools_tips_off: 'Term tips: off',
       tools_tour: 'Tour', tools_keys: 'Shortcuts', tools_cmd: 'Cmd palette',
       tools_support: 'Upload diagnostics',
-      orb_fx_full: 'Motion: rich', orb_fx_calm: 'Motion: calm',
+      fx_t: 'Motion', fx_calm: 'Calm', fx_breathe: 'Breathe', fx_flow: 'Flow',
+      fx_now: 'Now', fx_r_default: 'default', fx_r_user: 'your choice',
+      fx_r_admin: 'admin default',
+      fx_r_rm: 'System "reduce motion" is on — motion disabled automatically',
+      fx_r_deg1: 'Auto-reduced for performance (half particles)',
+      fx_r_deg2: 'This machine struggled — switched to Calm for this session',
+      tip_ask: 'Ask the assistant', tip_ask_voice: 'Ask · hold to start voice chat',
+      v_interrupt: 'Interrupt', v_end: 'End voice',
+      v_autosay_on: 'Auto read-aloud: on (click to turn off)',
+      v_autosay_off: 'Auto read-aloud: off (click to turn on)',
+      v_idle_end: 'Heard nothing for a while — voice chat ended',
+      v_started: 'Voice chat started: just talk, I answer when you pause; speak over me to interrupt',
+      v_barge_hint: 'speak to interrupt',
       say_t: 'Read this answer aloud (system voice)',
       say_fail: 'Read-aloud failed, please retry',
       hello: 'Three things I can do: **answer how-to**, **walk you through**, '
@@ -205,6 +245,7 @@
       hd_idle: 'Ready', hd_hint: 'Something new', hd_listening: 'Listening…',
       hd_thinking: 'Thinking', hd_live: 'Answering', hd_speaking: 'Speaking',
       hd_teach: 'Teaching', hd_agent: 'Working', hd_alert: 'Page issue detected',
+      hd_connecting: 'Connecting microphone…', hd_error: 'Something went wrong — retry',
     },
   };
 
@@ -321,10 +362,14 @@
 'transition:transform .18s;position:relative;padding:0;z-index:2;' +
 '--xz-core:var(--xz-accent,#4f6ef7)}' +
 '.asb-ball:hover{transform:scale(1.07)}' +
-'.asb-ball svg{width:24px;height:24px;pointer-events:none}' +
+'.asb-ball svg{width:20px;height:20px;pointer-events:none}' +
 /* 状态 → 核心色（球与面板同一张表；面板上的 .asb-hd-core / 状态短句跟着走）：
    听=青(rb-1)、想=紫(rb-3)、说=靛(蓝紫各半)、做=蓝紫(偏蓝)、教=青蓝、
-   警=琥珀(语义警示色)、成=翠绿(语义成功色)。 */
+   警=琥珀(语义警示色)、成=翠绿(语义成功色)、连接中=灰蓝(压饱和：还没在录，
+   不能长得像在听)、出错=玫红(语义错误色，与「页面异常」的琥珀分开)。 */
+'.asb-ball.st-connecting,.asb-panel.st-connecting{' +
+'--xz-core:color-mix(in srgb,var(--xz-accent,#4f6ef7) 55%,#94a3b8)}' +
+'.asb-ball.st-error,.asb-panel.st-error{--xz-core:var(--tk-rose,#ef4444)}' +
 '.asb-ball.st-listening,.asb-panel.st-listening{--xz-core:var(--xz-rb-1,#22d3ee)}' +
 '.asb-ball.st-thinking,.asb-panel.st-thinking{--xz-core:var(--xz-rb-3,#8b5cf6)}' +
 '.asb-ball.st-speaking,.asb-panel.st-speaking{' +
@@ -335,56 +380,127 @@
 '--xz-core:color-mix(in srgb,var(--xz-rb-1,#22d3ee) 60%,var(--xz-rb-2,#4f6ef7))}' +
 '.asb-ball.st-alert,.asb-panel.st-alert{--xz-core:var(--tk-amber,#f59e0b)}' +
 '.asb-ball.okflash{--xz-core:var(--tk-emerald,#10b981)}' +
-/* 活体能量核 v2（2026-09-05 立体化）：球面 = 核心色径向底 + 左上镜面高光 +
-   右下明暗交界（inset 阴影）+ 1px 边缘光 + 带核心色的接触阴影；内层极光铺智连
-   光谱（v1 的紫/靛/粉字面量退场——那是市面通用「AI 紫」，与面板的智连蓝同屏
-   两套色板）。极光/白鞘沿用 transform 旋转（blur 层只能转不能重画，合成器零帧）。 */
-'.asb-orb{position:absolute;inset:0;border-radius:50%;overflow:hidden;' +
-'background:radial-gradient(circle at 31% 25%,rgba(255,255,255,.9) 0,rgba(255,255,255,.28) 11%,' +
-'rgba(255,255,255,0) 30%),' +
-'radial-gradient(circle at 42% 38%,color-mix(in srgb,var(--xz-core) 70%,#fff) 0%,' +
-'var(--xz-core) 44%,color-mix(in srgb,var(--xz-core) 40%,#0b1020) 100%);' +
-'box-shadow:inset -7px -9px 16px rgba(0,0,0,.38),inset 0 0 0 1px rgba(255,255,255,.2),' +
-'0 10px 22px -6px color-mix(in srgb,var(--xz-core) 55%,transparent);' +
-'transition:--xz-core .5s ease,box-shadow .4s ease,transform .18s ease-out}' +
-'.asb-orb::before{content:"";position:absolute;inset:-38%;border-radius:50%;' +
-'background:conic-gradient(from 10deg,transparent 0deg,var(--xz-rb-1,#22d3ee) 70deg,' +
-'transparent 150deg,var(--xz-rb-3,#8b5cf6) 230deg,transparent 320deg);' +
-'opacity:.75;filter:blur(7px);animation:asbSpin 9s linear infinite}' +
-'.asb-orb::after{content:"";position:absolute;inset:-22%;border-radius:50%;' +
-'background:conic-gradient(from 200deg,rgba(255,255,255,0) 0deg,rgba(255,255,255,.5) 42deg,' +
-'rgba(255,255,255,0) 92deg);filter:blur(5px);animation:asbSpin 5.5s linear infinite reverse}' +
+/* 活体能量核 v3「内光核」（2026-09-06 实施95 P0）：待机也看得出活着。
+   v2 的硬体球面（inset 明暗交界 + 镜面高光）与两条常驻刚性光环在 46px 上读成
+   「带环的行星图标」——刚体慢转不是生命信号；极光层被 blur+裁切在 46px 上退化
+   成一层几乎看不见的色调漂移（为看不见的动效持续付费）。v3 = 软边半透明核 +
+   球内三团光谱色沿互质周期漂移（7.3s/11s/13.7s，整体永不重复）+ 轮廓微呼吸；
+   全部只动 transform/opacity（合成器，待机 0 JS 帧）。人眼对「内部在流动、
+   轮廓在变」远比对「对称环慢转」敏感，这是 ChatGPT/AI Pin 那类软体球的核心手法。
+   radial/mask 一律 closest-side：默认 farthest-corner 半径 = 23√2，76% 处早在
+   盒外，边缘根本不会变软（首版即踩）。背景仍留在 .asb-orb 本体上——代办线的
+   流星头取样 getComputedStyle(.asb-orb).backgroundImage（DOM 协作契约）。 */
+'.asb-orb{position:absolute;inset:0;border-radius:50%;overflow:hidden;isolation:isolate;' +
+'background:radial-gradient(circle closest-side at 50% 50%,' +
+'color-mix(in srgb,var(--xz-core) 58%,#fff) 0%,var(--xz-core) 46%,' +
+'color-mix(in srgb,var(--xz-core) 84%,#fff) 80%,' +
+'color-mix(in srgb,var(--xz-core) 72%,transparent) 100%);' +
+'-webkit-mask-image:radial-gradient(circle closest-side,#000 0 87%,transparent 100%);' +
+'mask-image:radial-gradient(circle closest-side,#000 0 87%,transparent 100%);' +
+'transform:perspective(90px) rotateX(var(--xz-tx,0deg)) rotateY(var(--xz-ty,0deg));' +
+'transition:--xz-core .5s ease,transform .18s ease-out}' +
+/* 内光三团：青(rb-1)/紫(rb-3)/白。白团＝会移动的高光，液体感的来源（固定
+   高光=固体弹珠）。各自一层只动 transform；亮底普通叠加，暗底 screen 发光。 */
+'.asb-lc{position:absolute;width:70%;height:70%;border-radius:50%;pointer-events:none;' +
+'background:radial-gradient(circle closest-side,var(--lc) 0%,' +
+'color-mix(in srgb,var(--lc) 55%,transparent) 42%,transparent 100%);' +
+'filter:blur(2px);opacity:.85;will-change:transform;transition:opacity .5s ease}' +
+'.asb-lc.lc1{--lc:var(--xz-rb-1,#22d3ee);left:-16%;top:-10%;' +
+'animation:asbDrift1 7.3s ease-in-out infinite}' +
+'.asb-lc.lc2{--lc:var(--xz-rb-3,#8b5cf6);left:44%;top:30%;' +
+'animation:asbDrift2 11s ease-in-out infinite}' +
+'.asb-lc.lc3{--lc:#fff;width:46%;height:46%;left:18%;top:4%;opacity:.55;' +
+'animation:asbDrift3 13.7s ease-in-out infinite}' +
+'.asb-dark .asb-lc{mix-blend-mode:screen}' +
+'.asb-dark .asb-lc.lc3{opacity:.4}' +
+'@keyframes asbDrift1{0%,100%{transform:translate(0,0) scale(1)}' +
+'30%{transform:translate(28%,20%) scale(1.14)}60%{transform:translate(6%,42%) scale(.9)}}' +
+'@keyframes asbDrift2{0%,100%{transform:translate(0,0) scale(1)}' +
+'35%{transform:translate(-32%,-16%) scale(1.1)}70%{transform:translate(-12%,20%) scale(.92)}}' +
+'@keyframes asbDrift3{0%,100%{transform:translate(0,0) scale(1)}' +
+'40%{transform:translate(30%,34%) scale(1.18)}75%{transform:translate(-8%,48%) scale(.86)}}' +
+/* 待机三档（2026-09-06 拍板）：calm=只留辉光慢呼吸；breathe=内光漂移+呼吸；
+   flow（默认）=再加轮廓微呼吸——椭圆挤压 ±3.5% 随慢转换向（不用 border-radius：
+   角部形变全在 mask 渐隐区里，肉眼看不到）。悬停微倾走 --xz-tx/--xz-ty 变量
+   写进同一条 transform，动画与悬停互不覆盖。只作用于待机/提示两态。 */
+'.asb-idle-flow .asb-ball.st-idle .asb-orb,.asb-idle-flow .asb-ball.st-hint .asb-orb{' +
+'animation:asbMorph 9.7s ease-in-out infinite}' +
+'@keyframes asbMorph{0%,100%{transform:perspective(90px) rotateX(var(--xz-tx,0deg)) ' +
+'rotateY(var(--xz-ty,0deg)) rotate(0deg) scale(1.035,.965)}' +
+'33%{transform:perspective(90px) rotateX(var(--xz-tx,0deg)) rotateY(var(--xz-ty,0deg)) ' +
+'rotate(120deg) scale(.972,1.028)}' +
+'66%{transform:perspective(90px) rotateX(var(--xz-tx,0deg)) rotateY(var(--xz-ty,0deg)) ' +
+'rotate(240deg) scale(1.02,.98)}}' +
+'.asb-idle-calm .asb-lc{animation:none}' +
+'.asb-idle-calm .asb-glow{animation-duration:9s}' +
+/* 琥珀/玫红/翠绿是语义色，青紫内光叠上去会混成橄榄——这几态把内光压到几乎不见；
+   连接中（还没在录）内光半隐，与「在听」拉开距离 */
+'.asb-ball.st-alert .asb-lc,.asb-ball.st-error .asb-lc,.asb-ball.okflash .asb-lc{opacity:.12}' +
+'.asb-ball.st-connecting .asb-lc{opacity:.3}' +
 '@keyframes asbSpin{to{transform:rotate(360deg)}}' +
-/* 立体光环（Siri 线圈的 3D 版）：一条倾斜的光带环绕球体，拆成前后两半——
-   上半在球后、下半在球前（rotateX 正角把下缘转向观者），DOM 顺序 + clip-path
-   各取一半即成真实遮挡；环带本身在环平面内自转（transform，合成器）。
-   第二条更细、反向倾斜的环只在 lv2 出现＝「多彩线圈交织」。状态只改转速、
-   环宽与亮度；空闲 12s 慢转。 */
+/* 光环（Siri 线圈的 3D 版）：一条倾斜的光带环绕球体，拆成前后两半——上半在
+   球后、下半在球前（rotateX 正角把下缘转向观者），DOM 顺序 + clip-path 各取
+   一半即成真实遮挡；环带在环平面内自转（transform，合成器）。v3 起**不再常驻**：
+   待机 opacity 0 + scale .8 + 转动 paused（零合成开销），活跃态从核里聚出来
+   （淡入 + 放大到位）再开始转——「状态 = 形态变化」的签名。第二条更细、反向
+   倾斜的环只在 lv2 出现。 */
 '.asb-ring{position:absolute;inset:-7px;border-radius:50%;pointer-events:none;' +
-'transform:rotateX(68deg) rotateZ(-22deg);opacity:.78;' +
-'transition:opacity .5s ease,inset .4s ease}' +
+'transform:rotateX(68deg) rotateZ(-22deg) scale(.8);opacity:0;' +
+'transition:opacity .5s ease,transform .5s var(--xz-ease,ease),inset .4s ease}' +
 '.asb-ring.back{clip-path:inset(0 0 50% 0)}' +
 '.asb-ring.front{clip-path:inset(50% 0 0 0);z-index:3}' +
 '.asb-ring::before{content:"";position:absolute;inset:0;border-radius:50%;padding:2.4px;' +
 'background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
 '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
-'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 12s linear infinite}' +
-'.asb-ring.r2{transform:rotateX(64deg) rotateZ(38deg);inset:-4px;opacity:.55;display:none}' +
+'-webkit-mask-composite:xor;mask-composite:exclude;' +
+'animation:asbSpin 12s linear infinite paused}' +
+'.asb-ring.r2{transform:rotateX(64deg) rotateZ(38deg) scale(.8);inset:-4px;display:none}' +
 '.asb-ring.r2::before{padding:1.6px;animation-duration:17s;animation-direction:reverse}' +
 '.asb-lv2 .asb-ring.r2{display:block}' +
 '.asb-ball.st-listening .asb-ring,.asb-ball.st-thinking .asb-ring,.asb-ball.st-speaking .asb-ring,' +
-'.asb-ball.st-agent .asb-ring,.asb-ball.st-teach .asb-ring{opacity:1}' +
+'.asb-ball.st-agent .asb-ring,.asb-ball.st-teach .asb-ring{opacity:1;' +
+'transform:rotateX(68deg) rotateZ(-22deg) scale(1)}' +
+'.asb-ball.st-listening .asb-ring.r2,.asb-ball.st-thinking .asb-ring.r2,' +
+'.asb-ball.st-speaking .asb-ring.r2,.asb-ball.st-agent .asb-ring.r2,' +
+'.asb-ball.st-teach .asb-ring.r2{opacity:.6;transform:rotateX(64deg) rotateZ(38deg) scale(1)}' +
+'.asb-ball.st-listening .asb-ring::before,.asb-ball.st-thinking .asb-ring::before,' +
+'.asb-ball.st-speaking .asb-ring::before,.asb-ball.st-agent .asb-ring::before,' +
+'.asb-ball.st-teach .asb-ring::before{animation-play-state:running}' +
 '.asb-ball.st-listening .asb-ring{inset:-9px}' +
 '.asb-ball.st-listening .asb-ring::before{padding:3.2px;animation-duration:4.5s}' +
 '.asb-ball.st-thinking .asb-ring::before,.asb-ball.st-agent .asb-ring::before{animation-duration:2.6s}' +
 '.asb-ball.st-speaking .asb-ring::before,.asb-ball.st-teach .asb-ring::before{animation-duration:4s}' +
-'.asb-ball.st-alert .asb-ring{opacity:.35}' +
-'.asb-glow{position:absolute;inset:-7px;border-radius:50%;pointer-events:none;' +
-'background:radial-gradient(circle,color-mix(in srgb,var(--xz-core) 55%,transparent) 0%,transparent 70%);' +
-'filter:blur(4px);animation:asbBreath 7s ease-in-out infinite;transition:--xz-core .5s ease}' +
-'@keyframes asbBreath{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.05);opacity:.9}}' +
+/* 辉光 = 环境光 + 带色接触阴影，呼吸 6.5s ±5%/透明度 .45→.9（亮度变化比缩放
+   可感知得多）；connecting 快而浅（在等授权）、error 不动（静态 + 文字解释失败） */
+'.asb-glow{position:absolute;inset:-8px;border-radius:50%;pointer-events:none;' +
+'background:radial-gradient(circle closest-side,color-mix(in srgb,var(--xz-core) 60%,transparent) 0%,' +
+'color-mix(in srgb,var(--xz-core) 30%,transparent) 55%,transparent 100%);' +
+'filter:blur(4px);animation:asbBreath 6.5s ease-in-out infinite;transition:--xz-core .5s ease}' +
+'@keyframes asbBreath{0%,100%{transform:scale(.98);opacity:.45}50%{transform:scale(1.08);opacity:.9}}' +
+'.asb-ball.st-connecting .asb-glow{animation:asbBreath 1.4s ease-in-out infinite;opacity:.5}' +
+'.asb-ball.st-error .asb-glow{animation:none;opacity:.7}' +
+/* 球内图标退场（v3）：白色 glyph 把心智钉在「按钮」上；悬停/聚焦/首次提示时
+   才浮现，常态下球身是空的（Siri/ChatGPT 同款）。可发现性由悬停标签片接住。 */
 '.asb-ic{position:relative;z-index:3;display:flex;align-items:center;justify-content:center;' +
-'text-shadow:0 1px 4px rgba(0,0,0,.35)}' +
+'opacity:0;transform:scale(.8);transition:opacity .25s ease,transform .25s var(--xz-ease,ease);' +
+'filter:drop-shadow(0 1px 3px rgba(0,0,0,.35))}' +
+'.asb-ball:hover .asb-ic,.asb-ball:focus-visible .asb-ic,.asb-wrap.asb-tipon .asb-ic{' +
+'opacity:1;transform:none}' +
+/* 悬停标签片：贴球的一侧（球吸左边→片在右，吸右边→片在左），延迟 .25s 出现
+   防扫过闪烁；面板开着时不出（面板本身就是答案）。首次启动展示 4s 一次。 */
+'.asb-tip{position:absolute;top:50%;--tip-dx:6px;' +
+'transform:translateY(-50%) translateX(var(--tip-dx));white-space:nowrap;' +
+'font-size:.76rem;font-weight:600;line-height:1;padding:.44rem .66rem;border-radius:999px;' +
+'color:var(--xz-txt,#111);background:var(--xz-glass,var(--xz-bg,#fff));' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
+'box-shadow:var(--xz-sh-amb,0 2px 8px rgba(15,27,45,.08));pointer-events:none;opacity:0;' +
+'-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);z-index:1;' +
+'transition:opacity .2s ease .25s,transform .25s var(--xz-ease,ease) .25s}' +
+'.asb-wrap.asb-side-r .asb-tip{right:calc(100% + 10px)}' +
+'.asb-wrap.asb-side-l .asb-tip{left:calc(100% + 10px);--tip-dx:-6px}' +
+'.asb-wrap:hover .asb-tip,.asb-wrap.asb-tipon .asb-tip,.asb-wrap.asb-holding .asb-tip{' +
+'opacity:1;transform:translateY(-50%) translateX(0);transition-delay:0s}' +
+'.asb-wrap.asb-open .asb-tip{display:none}' +
 '.asb-ping{position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--xz-accent,#4f6ef7);' +
 'opacity:0;pointer-events:none}' +
 '.asb-ball.st-hint .asb-ping{animation:asbPing 30s cubic-bezier(0,0,.2,1) 3}' +
@@ -393,40 +509,65 @@
 'background:radial-gradient(circle,rgba(251,191,36,.28) 20%,rgba(245,158,11,.62) 100%)}' +
 '.asb-ball.st-alert .asb-alertfx{animation:asbAmber 2.1s ease-in-out infinite}' +
 '@keyframes asbAmber{0%,100%{opacity:0}18%,42%{opacity:1}30%{opacity:.35}}' +
-/* 各状态的动效节奏（颜色已由上面的 --xz-core 表接管） */
-'.asb-ball.st-listening .asb-orb{box-shadow:inset -7px -9px 16px rgba(0,0,0,.38),' +
-'inset 0 0 0 1px rgba(255,255,255,.2),0 6px 22px -4px color-mix(in srgb,var(--xz-core) 60%,transparent)}' +
-'.asb-ball.st-listening .asb-orb::before{animation-duration:3.6s}' +
-'.asb-ball.st-thinking .asb-orb::before{animation-duration:1.7s}' +
+/* 各状态的动效节奏（颜色已由上面的 --xz-core 表接管；活跃态的能量由画布粒子承担） */
+'.asb-ball.st-listening .asb-glow{animation:asbBreath 3.2s ease-in-out infinite}' +
 '.asb-ball.st-thinking .asb-glow{animation:asbBreath 1.7s ease-in-out infinite}' +
 '.asb-ball.st-speaking .asb-glow{animation:asbBreath 2.2s ease-in-out infinite}' +
 '.asb-ball.okflash .asb-orb{filter:brightness(1.12) saturate(1.2)}' +
-/* 琥珀/翠绿是语义色，青紫极光叠上去会混成橄榄——这两态把极光压到几乎不见 */
-'.asb-ball.st-alert .asb-orb::before,.asb-ball.okflash .asb-orb::before{opacity:.12}' +
-'.asb-orb::before{transition:opacity .5s ease}' +
 '.asb-sweep{position:absolute;inset:-5px;border-radius:50%;pointer-events:none;opacity:0;' +
 'background:conic-gradient(from 0deg,transparent 0deg,color-mix(in srgb,var(--xz-rb-1,#22d3ee) 55%,transparent) 40deg,' +
 'transparent 80deg);filter:blur(1px)}' +
 '.asb-ball.st-teach .asb-sweep{opacity:1;animation:asbSpin 3s linear infinite}' +
-'@keyframes asbPulse{0%,100%{box-shadow:0 4px 16px rgba(0,0,0,.22)}' +
-'50%{box-shadow:0 4px 26px rgba(99,102,241,.55)}}' +
 '.asb-fx{position:absolute;left:50%;top:50%;width:168px;height:168px;' +
 'margin:-84px 0 0 -84px;pointer-events:none;z-index:1;display:none}' +
-/* 画质档/减动效：lv0=静态+透明度脉冲；系统 reduced-motion 同语义（旋转必杀，
-   opacity 脉冲保留=Apple 同款状态灯降级） */
-'.asb-lv0 .asb-orb::before,.asb-lv0 .asb-orb::after,.asb-lv0 .asb-glow,' +
+/* 画质档/减动效（v3 修正）：lv0 与系统 reduced-motion 同语义——**去运动、留状态
+   脉冲**（Apple 同款状态灯降级）。v2 只给 thinking 留了脉冲，听/说/做在 lv0 下
+   完全无反馈，等于把状态信息连同装饰一起删了。 */
+'.asb-lv0 .asb-lc,.asb-lv0 .asb-orb,.asb-lv0 .asb-glow,' +
 '.asb-lv0 .asb-sweep,.asb-lv0 .asb-ring::before{animation:none}' +
 '.asb-lv0 .asb-ball.st-hint .asb-ping{animation:none}' +
 '.asb-lv0 .asb-ball.st-alert .asb-alertfx{animation:asbFade 2.2s ease-in-out infinite}' +
 '.asb-lv0 .asb-ball.st-thinking .asb-orb{animation:asbFade 1.8s ease-in-out infinite}' +
+'.asb-lv0 .asb-ball.st-listening .asb-orb{animation:asbFade 1.1s ease-in-out infinite}' +
+'.asb-lv0 .asb-ball.st-speaking .asb-orb{animation:asbFade 1.5s ease-in-out infinite}' +
+'.asb-lv0 .asb-ball.st-connecting .asb-orb{animation:asbFade 1.4s ease-in-out infinite}' +
+'.asb-lv0 .asb-ball.st-agent .asb-orb,.asb-lv0 .asb-ball.st-teach .asb-orb{' +
+'animation:asbFade 2.4s ease-in-out infinite}' +
 '@keyframes asbFade{0%,100%{opacity:1}50%{opacity:.62}}' +
 '@media (prefers-reduced-motion:reduce){' +
-'.asb-orb::before,.asb-orb::after,.asb-glow,.asb-ping,.asb-sweep,.asb-ring::before{animation:none!important}' +
-'.asb-ball.st-thinking .asb-orb{animation:asbFade 1.8s ease-in-out infinite}' +
+'.asb-lc,.asb-orb,.asb-glow,.asb-ping,.asb-sweep,.asb-ring::before{animation:none!important}' +
+'.asb-ball.st-thinking .asb-orb{animation:asbFade 1.8s ease-in-out infinite!important}' +
+'.asb-ball.st-listening .asb-orb{animation:asbFade 1.1s ease-in-out infinite!important}' +
+'.asb-ball.st-speaking .asb-orb{animation:asbFade 1.5s ease-in-out infinite!important}' +
+'.asb-ball.st-connecting .asb-orb{animation:asbFade 1.4s ease-in-out infinite!important}' +
 '}' +
 '.asb-hero{display:none;padding:.25rem .8rem 0;flex-shrink:0}' +
 '.asb-hero.on{display:block}' +
 '.asb-hero canvas{width:100%;height:44px;display:block}' +
+/* ── 语音对话块（P1 2026-09-06）：取代输入区——「语音替代打字」。大球是同一状态
+   机的大尺寸渲染（Canvas 2D，只在本块存在时跑 rAF）；对话内容仍在上方消息流里
+   流动（识别文本=用户气泡、回答=AI 气泡，即实时字幕），不另开屏——ChatGPT 自
+   2025-11 也把语音并回对话线程。点大球=打断（与「打断」按钮同义）。 */
+'.asb-voice{display:flex;flex-direction:column;align-items:center;gap:.3rem;' +
+'padding:.3rem .8rem .7rem;border-top:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 70%,transparent);' +
+'flex-shrink:0;position:relative}' +
+'.asb-vorb{display:block;width:168px;height:168px;border-radius:50%;cursor:pointer}' +
+'.asb-vorb:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:4px}' +
+'.asb-v-st{font-size:.8rem;font-weight:500;color:var(--xz-muted,#888);min-height:1.2em;' +
+'text-align:center;transition:color .3s ease}' +
+'.asb-panel.st-listening .asb-v-st,.asb-panel.st-thinking .asb-v-st,' +
+'.asb-panel.st-speaking .asb-v-st{color:color-mix(in srgb,var(--xz-core) 72%,var(--xz-txt,#111))}' +
+'.asb-v-acts{display:flex;gap:.45rem;align-items:center;margin-top:.15rem}' +
+'.asb-v-b{border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);background:none;' +
+'color:var(--xz-txt,#111);cursor:pointer;display:inline-flex;align-items:center;gap:.3em;' +
+'font-size:.78rem;font-family:inherit;padding:.36rem .7rem;border-radius:999px;min-height:30px;' +
+'transition:border-color .15s ease,background .15s ease,color .15s ease}' +
+'.asb-v-b:hover{background:var(--xz-hover,rgba(0,0,0,.04));border-color:var(--xz-accent,#4f6ef7)}' +
+'.asb-v-b.primary{background:var(--xz-accent,#4f6ef7);color:#fff;border-color:transparent}' +
+'.asb-v-b.primary:hover{filter:brightness(1.06)}' +
+'.asb-v-b[aria-pressed="true"]{color:var(--xz-muted,#888)}' +
+'.asb-v-b svg{width:15px;height:15px}' +
+'@media (max-width:480px){.asb-vorb{width:132px;height:132px}}' +
 '.asb-fbq{display:flex;gap:.35rem;align-items:center}' +
 '.asb-fb .asb-say.on{background:var(--xz-accent,#4f6ef7);color:#fff;' +
 'border-color:var(--xz-accent,#4f6ef7)}' +
@@ -454,7 +595,9 @@
    常驻时每次拖拽的 .asb-moving{animation:none} 一撤，动画就从头重播；且带
    scale 的入场期内 getBoundingClientRect 读到的是缩放中的尺寸，若此时开始
    拖动会把 378.6×557.9 固化成自定义几何（探针 G2b 实锤）。 */
-'.asb-panel.asb-in{animation:asbUp .26s var(--xz-ease,ease)}' +
+/* 入场类叫 asb-enter（2026-09-06 修）：此前叫 asb-in，与输入框同名——面板在
+   300ms 入场期间吃到 textarea 的 max-height:132px/圆角/底色，先矮后跳。 */
+'.asb-panel.asb-enter{animation:asbUp .26s var(--xz-ease,ease)}' +
 '.asb-panel::after{content:"";position:absolute;inset:0;border-radius:inherit;z-index:-1;' +
 'pointer-events:none;box-sizing:border-box;background:var(--xz-glass,var(--xz-bg,#fff));' +
 'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
@@ -513,18 +656,28 @@
 '.asb-hd-ic{position:relative;width:26px;height:26px;border-radius:50%;flex-shrink:0;' +
 'display:flex;align-items:center;justify-content:center;color:#fff;isolation:isolate}' +
 '.asb-hd-core{position:absolute;inset:0;border-radius:50%;z-index:-1;' +
-'background:radial-gradient(circle at 31% 25%,rgba(255,255,255,.9) 0,rgba(255,255,255,.28) 11%,' +
-'rgba(255,255,255,0) 30%),' +
-'radial-gradient(circle at 42% 38%,color-mix(in srgb,var(--xz-core) 70%,#fff) 0%,' +
-'var(--xz-core) 44%,color-mix(in srgb,var(--xz-core) 40%,#0b1020) 100%);' +
-'box-shadow:inset -4px -5px 9px rgba(0,0,0,.36),inset 0 0 0 1px rgba(255,255,255,.2),' +
-'0 4px 10px -3px color-mix(in srgb,var(--xz-core) 55%,transparent);transition:--xz-core .5s ease}' +
+'background:radial-gradient(circle closest-side at 50% 50%,' +
+'color-mix(in srgb,var(--xz-core) 58%,#fff) 0%,var(--xz-core) 46%,' +
+'color-mix(in srgb,var(--xz-core) 84%,#fff) 80%,' +
+'color-mix(in srgb,var(--xz-core) 72%,transparent) 100%);' +
+'-webkit-mask-image:radial-gradient(circle closest-side,#000 0 74%,transparent 100%);' +
+'mask-image:radial-gradient(circle closest-side,#000 0 74%,transparent 100%);' +
+'box-shadow:0 4px 10px -3px color-mix(in srgb,var(--xz-core) 55%,transparent);' +
+'transition:--xz-core .5s ease}' +
+/* 迷你光环与球同律：待机隐没、活跃聚成环并转动 */
 '.asb-hd-ring{position:absolute;inset:-4px;border-radius:50%;pointer-events:none;' +
-'transform:rotateX(68deg) rotateZ(-22deg);opacity:.8;z-index:1}' +
+'transform:rotateX(68deg) rotateZ(-22deg) scale(.8);opacity:0;z-index:1;' +
+'transition:opacity .5s ease,transform .5s var(--xz-ease,ease)}' +
 '.asb-hd-ring::before{content:"";position:absolute;inset:0;border-radius:50%;padding:1.5px;' +
 'background:conic-gradient(from 0deg,var(--xz-rb-stops));' +
 '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);' +
-'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 12s linear infinite}' +
+'-webkit-mask-composite:xor;mask-composite:exclude;animation:asbSpin 12s linear infinite paused}' +
+'.asb-panel.st-listening .asb-hd-ring,.asb-panel.st-thinking .asb-hd-ring,' +
+'.asb-panel.st-speaking .asb-hd-ring,.asb-panel.st-agent .asb-hd-ring,' +
+'.asb-panel.st-teach .asb-hd-ring{opacity:.85;transform:rotateX(68deg) rotateZ(-22deg) scale(1)}' +
+'.asb-panel.st-listening .asb-hd-ring::before,.asb-panel.st-thinking .asb-hd-ring::before,' +
+'.asb-panel.st-speaking .asb-hd-ring::before,.asb-panel.st-agent .asb-hd-ring::before,' +
+'.asb-panel.st-teach .asb-hd-ring::before{animation-play-state:running}' +
 '.asb-hd-ic svg{width:14px;height:14px;position:relative;z-index:2;' +
 'filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}' +
 '.asb-panel.st-listening .asb-hd-ring::before{animation-duration:4.5s}' +
@@ -543,6 +696,7 @@
 '.asb-panel.st-speaking .asb-hd-st,.asb-panel.st-agent .asb-hd-st,' +
 '.asb-panel.st-teach .asb-hd-st{color:color-mix(in srgb,var(--xz-core) 72%,var(--xz-txt,#111))}' +
 '.asb-panel.st-alert .asb-hd-st{color:var(--tk-warn-ink,#b45309)}' +
+'.asb-panel.st-error .asb-hd-st{color:var(--tk-rose,#dc2626)}' +
 '.asb-x{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
 'font-size:1.05rem;width:30px;height:30px;padding:0;border-radius:50%;line-height:1;' +
 'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;' +
@@ -951,6 +1105,20 @@
 'transition:border-color .15s ease,color .15s ease,background .15s ease}' +
 '.asb-tool:hover{background:var(--xz-hover,rgba(0,0,0,.04));color:var(--xz-txt,#111);' +
 'border-color:var(--xz-accent,#4f6ef7)}' +
+/* 动效三档段控（偏好页整行独占）+ 诊断行 */
+'.asb-fxrow{flex-basis:100%;display:flex;align-items:center;gap:.6rem;margin-top:.35rem}' +
+'.asb-fx-t{font-size:.76rem;color:var(--xz-muted,#888);flex-shrink:0}' +
+'.asb-seg{display:inline-flex;padding:2px;border-radius:999px;' +
+'background:var(--xz-input,rgba(0,0,0,.05));' +
+'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent)}' +
+'.asb-seg-b{border:none;background:none;color:var(--xz-muted,#888);cursor:pointer;' +
+'font-size:.76rem;font-family:inherit;padding:.28rem .7rem;border-radius:999px;' +
+'transition:background .15s ease,color .15s ease}' +
+'.asb-seg-b:hover{color:var(--xz-txt,#111)}' +
+'.asb-seg-b.on{background:var(--xz-bg,#fff);color:var(--xz-txt,#111);font-weight:600;' +
+'box-shadow:var(--xz-sh-amb,0 1px 4px rgba(15,27,45,.12))}' +
+'.asb-seg-b:focus-visible{outline:2px solid var(--xz-accent,#4f6ef7);outline-offset:1px}' +
+'.asb-fxdiag{flex-basis:100%;font-size:.72rem;color:var(--xz-muted,#888);margin-top:-.1rem}' +
 '.asb-rp{display:flex;flex-direction:column;gap:.6rem}' +
 '.asb-rp textarea{width:100%;min-height:88px;resize:vertical;' +
 'border:1px solid color-mix(in srgb,var(--xz-bd,#ddd) 85%,transparent);' +
@@ -1038,6 +1206,7 @@
     stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
     speaker: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>' +
       '<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+    speakerOff: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m23 9-6 6"/><path d="m17 9 6 6"/>',
     copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>' +
       '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
     up: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8' +
@@ -1127,10 +1296,15 @@
        点亮的黏性模式（本组件零依赖它们的内部实现）。 */
     modes: { teach: false, agent: false }, agentP: -1,
     speaking: false, speakEl: null,
+    /* v3（2026-09-06）：connecting=麦克风授权/预热中（还没在录，不能长得像在听）；
+       errorUntil=「我的请求失败了」瞬态（玫红，静态），与 alert「页面有异常」
+       （琥珀）分开——两者是不同的人该做不同的事。idle=待机样式 calm|breathe|flow。 */
+    connecting: false, errorUntil: 0, idle: 'flow',
   };
   var ORB_SIZE = 168, ORB_N = 128;
   var ORB_STATES = ['idle', 'hint', 'listening', 'speaking', 'thinking',
-    'agent', 'teach', 'alert'];
+    'agent', 'teach', 'alert', 'connecting', 'error'];
+  var ORB_IDLE_STYLES = ['calm', 'breathe', 'flow'];
 
   function orbBeacon(action) {
     try {
@@ -1169,11 +1343,51 @@
     return Math.max(0, Math.min(2, lv));
   }
 
+  /* 待机样式解析（v3）：URL ?orbidle=（只读不落盘，供并排截图比稿）→ 本地偏好
+     asb_orb_idle → boot.orb_idle（后端旋钮预留）→ 默认 flow。安静档/减动效
+     （lvl<2）一律 calm：「动效：安静」这个词必须真的安静。 */
+  function orbIdleStyle() {
+    var v = 'flow';
+    try {
+      var b = S.boot || {};
+      if (ORB_IDLE_STYLES.indexOf(String(b.orb_idle || '')) >= 0) { v = b.orb_idle; }
+      var saved = localStorage.getItem('asb_orb_idle');
+      if (saved && ORB_IDLE_STYLES.indexOf(saved) >= 0) { v = saved; }
+      var m = String(location.search || '').match(/[?&]orbidle=(calm|breathe|flow)\b/);
+      if (m) { v = m[1]; }
+    } catch (e) { /* ignore */ }
+    if (ORB.lvl < 2) { v = 'calm'; }
+    return v;
+  }
+
+  /* 为什么是这一档（偏好页诊断行的数据源）：reduced-motion > 调速器降档 >
+     本地偏好 > 管理员旋钮 > 默认。 */
+  function orbLevelReason() {
+    try {
+      if (window.matchMedia &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return 'rm';
+      }
+    } catch (e) { /* ignore */ }
+    if (ORB.degStep > 1) { return 'deg2'; }
+    if (ORB.degStep === 1) { return 'deg1'; }
+    try {
+      var s = localStorage.getItem('asb_orb_lvl');
+      if (s === '0' || s === '1' || s === '2') { return 'user'; }
+      if (localStorage.getItem('asb_orb_idle')) { return 'user'; }
+    } catch (e2) { /* ignore */ }
+    var b = S.boot || {};
+    if (typeof b.orb_level === 'number' || b.orb_idle) { return 'admin'; }
+    return 'default';
+  }
+
   function orbCompute() {
     if (ORB.force) { return ORB.force; }
     if (REC) { return 'listening'; }
+    if (ORB.connecting) { return 'connecting'; }
     if (ORB.speaking) { return 'speaking'; }
     if (S.busy) { return 'thinking'; }
+    if (ORB.errorUntil > Date.now()) { return 'error'; }
     if (ORB.modes.agent) { return 'agent'; }
     if (ORB.modes.teach) { return 'teach'; }
     if (ORB.nudgeOn || ORB.alertUntil > Date.now()) { return 'alert'; }
@@ -1197,10 +1411,17 @@
   /* 标题栏状态短句：状态机每次跃迁写一次；流式首 token 到达时由 readNdjson
      直接改成「回答中」（busy 未变、状态机不跃迁，所以不会被这里覆写）。 */
   function setHdStatus(key) {
-    var el = $panel ? $panel.querySelector('.asb-hd-st') : null;
-    if (!el) { return; }
+    if (!$panel) { return; }
     var txt = t(key);
-    if (el.textContent !== txt) { el.textContent = txt; }
+    var el = $panel.querySelector('.asb-hd-st');
+    if (el && el.textContent !== txt) { el.textContent = txt; }
+    /* 语音对话块的状态行是同一句话的大字版（P1）；播报期附「说话即可打断」（P2） */
+    var vs = $panel.querySelector('.asb-v-st');
+    if (vs) {
+      var vt = (key === 'hd_speaking' && VOICE && VOICE.on && !VOICE.demo && VOICE.bargeOn)
+        ? txt + ' · ' + t('v_barge_hint') : txt;
+      if (vs.textContent !== vt) { vs.textContent = vt; }
+    }
   }
 
   function syncOrb() {
@@ -1309,11 +1530,13 @@
      降级，若它也关掉光雾/外发光/边缘光，一次 1.6s 的页面卡顿（切标签、大页加载）
      就会让面板效果整个会话消失——无头截图实测就是这么触发的。 */
   function applyLevelClass() {
+    ORB.idle = orbIdleStyle();
     var els = [$wrap, $panel];
     for (var i = 0; i < els.length; i++) {
       if (!els[i]) { continue; }
-      els[i].classList.remove('asb-lv0', 'asb-lv1', 'asb-lv2');
-      els[i].classList.add('asb-lv' + ORB.lvl);
+      els[i].classList.remove('asb-lv0', 'asb-lv1', 'asb-lv2',
+        'asb-idle-calm', 'asb-idle-breathe', 'asb-idle-flow');
+      els[i].classList.add('asb-lv' + ORB.lvl, 'asb-idle-' + ORB.idle);
       els[i].classList.toggle('asb-lite', ORB.degStep > 1);
     }
   }
@@ -1333,7 +1556,7 @@
   }
 
   /* ── 音频电平（仅 listening 期挂载；停录即拆，AudioContext suspend 复用） */
-  function orbAudioStart(stream) {
+  function orbAudioStart(stream, quiet) {
     try {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { return; }
@@ -1348,7 +1571,9 @@
       ORB.floor = 0.05; ORB.peak = 0.25; ORB.level = 0;
       ORB.micEl = $panel ? $panel.querySelector('[data-act="mic"]') : null;
     } catch (e) { ORB.an = null; ORB.src = null; }
-    orbBurst('mic');  /* 聆听入场：粒子先聚成话筒再散入声波环 */
+    /* 聆听入场：粒子先聚成话筒再散入声波环。语音对话的后续回合静默（quiet）——
+       每 10 秒一次的入场秀会把签名变成噪音 */
+    if (!quiet) { orbBurst('mic'); }
   }
   function orbAudioStop() {
     try { if (ORB.src) { ORB.src.disconnect(); } } catch (e) { /* ignore */ }
@@ -1358,8 +1583,12 @@
       try { ORB.micEl.style.boxShadow = ''; } catch (e2) { /* ignore */ }
     }
     ORB.micEl = null;
+    /* 语音对话会话期（PCM 采集 worklet 挂在同一 AudioContext 上）不许挂起：
+       挂了缓冲就停，打断判定与开口预卷一起失明 */
     try {
-      if (ORB.actx && ORB.actx.state === 'running') { ORB.actx.suspend(); }
+      if (ORB.actx && ORB.actx.state === 'running' && !(VOICE && VOICE.cap)) {
+        ORB.actx.suspend();
+      }
     } catch (e3) { /* ignore */ }
     ORB.level = 0; ORB.bass = 0; ORB.mid = 0; ORB.treb = 0;
   }
@@ -1459,7 +1688,7 @@
     ORB.an = null;
     ORB.speakEl = null;
     try {
-      if (ORB.actx && ORB.actx.state === 'running' && !REC) {
+      if (ORB.actx && ORB.actx.state === 'running' && !REC && !(VOICE && VOICE.cap)) {
         ORB.actx.suspend();
       }
     } catch (e3) { /* ignore */ }
@@ -1597,7 +1826,9 @@
   }
 
   /* ── hover 磁性微倾（活物质感）：指针在球面上时核轻微朝向指针。
-     拖拽（e.buttons）/安静档/reduced-motion（lvl<1）一律不动。 */
+     拖拽（e.buttons）/安静档/reduced-motion（lvl<1）一律不动。
+     v3 起写 --xz-tx/--xz-ty 变量而不是 inline transform：轮廓呼吸动画（asbMorph）
+     占着 transform 属性，inline 值会被动画整个覆盖；变量写进关键帧里则两者共存。 */
   function orbWireTilt() {
     $ball.addEventListener('pointermove', function (e) {
       if (ORB.lvl < 1 || e.buttons) { return; }
@@ -1607,19 +1838,51 @@
       var dy = (e.clientY - r.top) / r.height - 0.5;
       var orb = $ball.querySelector('.asb-orb');
       if (orb) {
-        orb.style.transform = 'perspective(90px) rotateX(' +
-          (-dy * 7).toFixed(1) + 'deg) rotateY(' +
-          (dx * 7).toFixed(1) + 'deg)';
+        orb.style.setProperty('--xz-tx', (-dy * 7).toFixed(1) + 'deg');
+        orb.style.setProperty('--xz-ty', (dx * 7).toFixed(1) + 'deg');
       }
     });
     $ball.addEventListener('pointerleave', function () {
       var orb = $ball.querySelector('.asb-orb');
-      if (orb) { orb.style.transform = ''; }
+      if (orb) {
+        orb.style.removeProperty('--xz-tx');
+        orb.style.removeProperty('--xz-ty');
+      }
     });
+  }
+
+  /* 悬停标签片文案：常态「问小智（· 长按说话）」，长按录音期「在听…松开结束」 */
+  function setTip(key) {
+    var el = $wrap ? $wrap.querySelector('.asb-tip') : null;
+    if (!el) { return; }
+    var k = key || (voiceOn() ? 'tip_ask_voice' : 'tip_ask');
+    var txt = t(k);
+    if (el.textContent !== txt) { el.textContent = txt; }
+  }
+
+  /* 首次启动提示（每用户一次）：图标退出球身后，第一次见到它的人需要一个
+     「这是什么」的答案——1.5s 后标签片 + 图标浮现 4s，随后交给悬停。 */
+  function firstRunTip() {
+    try {
+      if (localStorage.getItem('asb_tip_seen')) { return; }
+    } catch (e) { return; }
+    setTimeout(function () {
+      if (!$wrap || S.open) { return; }
+      $wrap.classList.add('asb-tipon');
+      try { localStorage.setItem('asb_tip_seen', '1'); } catch (e2) { /* ignore */ }
+      setTimeout(function () { $wrap.classList.remove('asb-tipon'); }, 4000);
+    }, 1500);
   }
 
   function orbFlash(ms) {
     ORB.alertUntil = Date.now() + (ms || 2600);
+    syncOrb();
+    setTimeout(syncOrb, (ms || 2600) + 80);
+  }
+  /* 「我的请求失败了」瞬态（问答/转写/播报失败）：玫红静态 2.6s。与 orbFlash
+     的琥珀「页面有异常」分开——前者用户该重试，后者该报障。 */
+  function orbError(ms) {
+    ORB.errorUntil = Date.now() + (ms || 2600);
     syncOrb();
     setTimeout(syncOrb, (ms || 2600) + 80);
   }
@@ -1664,7 +1927,8 @@
   function orbHero(st) {
     var box = $panel ? $panel.querySelector('.asb-hero') : null;
     if (!box) { return; }
-    var want = S.open && (st === 'listening' || st === 'speaking');
+    /* 语音对话块在场时大球就是主视觉，44px 波形条退场（两个都动=抢注意力） */
+    var want = S.open && !VOICE.on && (st === 'listening' || st === 'speaking');
     if (!want) {
       if (box.classList.contains('on')) { box.classList.remove('on'); }
       return;
@@ -1973,6 +2237,10 @@
     $wrap.style.top = y + 'px';
     $wrap.style.right = 'auto';
     $wrap.style.bottom = 'auto';
+    /* 标签片长在离屏幕边缘远的那一侧 */
+    var right = x + w / 2 > window.innerWidth / 2;
+    $wrap.classList.toggle('asb-side-r', right);
+    $wrap.classList.toggle('asb-side-l', !right);
   }
   function defaultPos() {
     /* 默认右下角；工作台窄屏让开 56px 底部平台条 */
@@ -2027,7 +2295,7 @@
   function currentBox() {
     /* 先掐掉入场动画再量：动画期内 rect 带着 scale/translate，量出来是假几何 */
     if (_inT) { clearTimeout(_inT); _inT = 0; }
-    $panel.classList.remove('asb-in');
+    $panel.classList.remove('asb-enter');
     var r = $panel.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
   }
@@ -2296,19 +2564,26 @@
     $ball.setAttribute('aria-label', t('open_aria'));
     $ball.setAttribute('aria-haspopup', 'dialog');
     $ball.setAttribute('aria-expanded', 'false');
-    /* 层序即遮挡：后半环 → 球面 → 状态层 → 前半环（z3）→ 图标（z3，靠树序
-       压在环上）→ 角标。r2 是 lv2 才显示的第二条细环。 */
+    /* 层序即遮挡：辉光 → 后半环 → 核（内含三团内光）→ 状态层 → 前半环（z3）→
+       图标（z3，悬停才现）→ 角标。r2 是 lv2 才显示的第二条细环。 */
     $ball.innerHTML = '<span class="asb-glow"></span>' +
       '<span class="asb-ring back" aria-hidden="true"></span>' +
       '<span class="asb-ring back r2" aria-hidden="true"></span>' +
-      '<span class="asb-orb"></span><span class="asb-alertfx"></span>' +
+      '<span class="asb-orb"><i class="asb-lc lc1"></i><i class="asb-lc lc2"></i>' +
+      '<i class="asb-lc lc3"></i></span><span class="asb-alertfx"></span>' +
       '<span class="asb-sweep"></span><span class="asb-ping"></span>' +
       '<span class="asb-ring front" aria-hidden="true"></span>' +
       '<span class="asb-ring front r2" aria-hidden="true"></span>' +
       '<span class="asb-ic">' + ICON_SPARK + '</span>' +
       '<span class="asb-dot"></span>';
     $wrap.appendChild($ball);
+    /* 悬停标签片挂在容器上（不进按钮：按钮 overflow 与 aria 都不该被它污染） */
+    var tip = document.createElement('span');
+    tip.className = 'asb-tip';
+    tip.setAttribute('aria-hidden', 'true');
+    $wrap.appendChild(tip);
     document.body.appendChild($wrap);
+    setTip();
 
     $panel = document.createElement('div');
     $panel.className = 'asb-panel';
@@ -2337,22 +2612,51 @@
       (String(b.brand || '').trim() ? b.brand + ' · ' + t('name') : t('name'));
   }
 
+  /* 球的三个手势：单击=开合面板、拖动(>6px)=搬位置、长按(≥420ms 不动)=开始
+     语音对话（P1；仅麦克风可用时，否则长按等同单击）。长按触发后的那次 pointerup
+     不再切面板。 */
+  var HOLD_MS = 420;
   function wireDrag() {
     var sx = 0, sy = 0, ox = 0, oy = 0, moved = false, dragging = false;
+    var holdT = 0, held = false;
+    function clearHold() {
+      if (holdT) { clearTimeout(holdT); holdT = 0; }
+      $wrap.classList.remove('asb-holding');
+    }
     $ball.addEventListener('pointerdown', function (e) {
-      dragging = true; moved = false;
+      dragging = true; moved = false; held = false;
       sx = e.clientX; sy = e.clientY;
       var r = $wrap.getBoundingClientRect();
       ox = r.left; oy = r.top;
       $ball.setPointerCapture(e.pointerId);
+      clearHold();
+      if (voiceOn()) {
+        $wrap.classList.add('asb-holding');
+        holdT = setTimeout(function () {
+          holdT = 0;
+          if (!dragging || moved) { return; }
+          held = true;
+          dragging = false;
+          $wrap.classList.remove('asb-holding');
+          try { $ball.releasePointerCapture(e.pointerId); } catch (e2) { /* ignore */ }
+          beacon('asb_hold_voice');
+          voiceStart();
+        }, HOLD_MS);
+      }
     });
     $ball.addEventListener('pointermove', function (e) {
       if (!dragging) { return; }
       var dx = e.clientX - sx, dy = e.clientY - sy;
-      if (Math.abs(dx) + Math.abs(dy) > 6) { moved = true; }
+      if (Math.abs(dx) + Math.abs(dy) > 6) { moved = true; clearHold(); }
       if (moved) { applyPos({ x: ox + dx, y: oy + dy }); }
     });
+    $ball.addEventListener('pointercancel', function () {
+      dragging = false;
+      clearHold();
+    });
     $ball.addEventListener('pointerup', function () {
+      clearHold();
+      if (held) { held = false; return; }
       if (!dragging) { return; }
       dragging = false;
       if (moved) {
@@ -2375,6 +2679,7 @@
   function togglePanel(force, src) {
     var wasOpen = S.open;
     S.open = force != null ? !!force : !S.open;
+    if (!S.open && VOICE.on) { voiceStop(); }
     if (!S.open && REC) { stopRec(true); }
     /* open 类同步切（门禁与外部都按它判「面板是否开着」）；关闭的 160ms 淡出
        由 .closing 单独承担：它只负责把 display 撑住到动画结束，安静档跳过。 */
@@ -2384,12 +2689,12 @@
       $panel.classList.remove('closing');
     }
     $panel.classList.toggle('open', S.open);
-    if (_inT) { clearTimeout(_inT); _inT = 0; $panel.classList.remove('asb-in'); }
+    if (_inT) { clearTimeout(_inT); _inT = 0; $panel.classList.remove('asb-enter'); }
     if (S.open && !wasOpen && ORB.lvl > 0) {
-      $panel.classList.add('asb-in');
+      $panel.classList.add('asb-enter');
       _inT = setTimeout(function () {
         _inT = 0;
-        $panel.classList.remove('asb-in');
+        $panel.classList.remove('asb-enter');
       }, 300);
     }
     if (!S.open && wasOpen && ORB.lvl > 0) {
@@ -2400,6 +2705,7 @@
       }, 170);
     }
     $ball.setAttribute('aria-expanded', S.open ? 'true' : 'false');
+    $wrap.classList.toggle('asb-open', S.open);
     if (S.open && !wasOpen) {
       beacon(src === 'ext' ? 'asb_open_ext' : 'asb_open');
     }
@@ -2568,6 +2874,12 @@
       }
       if (e.target && e.target.classList.contains('asb-mode')) {
         onModeKey(e);
+      }
+      /* 大球可聚焦（role=button）：回车/空格=打断 */
+      if ((e.key === 'Enter' || e.key === ' ') && e.target &&
+          e.target.classList.contains('asb-vorb')) {
+        e.preventDefault();
+        voiceInterrupt();
       }
     });
     $panel.addEventListener('input', function (e) {
@@ -2760,15 +3072,33 @@
     return true;
   }
 
+  /* 动效三档段控 + 诊断行（v3 2026-09-06）。段控值 = 待机样式；安静档同时把
+     画质压到 lv1（无粒子）。诊断行回答「现在是哪档、为什么」——远程桌面/系统
+     减动效把球压成全静时，此前用户无从知道原因。 */
+  function fxHtml() {
+    var cur = ORB.lvl < 2 ? 'calm' : ORB.idle;
+    var html = '<div class="asb-fxrow"><span class="asb-fx-t">' + esc(t('fx_t')) +
+      '</span><div class="asb-seg" role="radiogroup" aria-label="' + esc(t('fx_t')) + '">';
+    var opts = ['calm', 'breathe', 'flow'];
+    for (var i = 0; i < opts.length; i++) {
+      var on = opts[i] === cur;
+      html += '<button type="button" class="asb-seg-b' + (on ? ' on' : '') +
+        '" role="radio" aria-checked="' + (on ? 'true' : 'false') +
+        '" data-act="orb-fx" data-fx="' + opts[i] + '">' +
+        esc(t('fx_' + opts[i])) + '</button>';
+    }
+    html += '</div></div><div class="asb-fxdiag">' + esc(t('fx_now')) + '：' +
+      esc(t('fx_' + cur)) + ' · ' + esc(t('fx_r_' + orbLevelReason())) + '</div>';
+    return html;
+  }
+
   function renderTools() {
     var box = $panel.querySelector('.asb-tools');
     if (!box) { return; }
     if (S.shell !== 'admin') {
       /* workspace 壳没有 admin 全局工具，但「动效」档是坐席自己的注意力权：
          8 小时班盯屏的人必须能就地调安静（P2 起不再整行隐藏） */
-      box.innerHTML =
-        '<button type="button" class="asb-tool" data-act="orb-fx">' +
-        esc(ORB.lvl < 2 ? t('orb_fx_calm') : t('orb_fx_full')) + '</button>';
+      box.innerHTML = fxHtml();
       return;
     }
     var html = '';
@@ -2798,10 +3128,25 @@
       html += '<button type="button" class="asb-tool" data-act="support">' + ic('wrench') +
         '<span>' + esc(t('tools_support')) + '</span></button>';
     }
-    /* orb 动效档切换（安静模式）：写 localStorage，reduced-motion 恒压到 lv0 */
-    html += '<button type="button" class="asb-tool" data-act="orb-fx">' +
-      esc(ORB.lvl < 2 ? t('orb_fx_calm') : t('orb_fx_full')) + '</button>';
+    /* orb 动效三档（写 localStorage；reduced-motion 恒压到 lv0，诊断行会说明） */
+    html += fxHtml();
     box.innerHTML = html;
+  }
+
+  /* 动效档落盘 + 立即生效：calm → lv1（无粒子）+ 待机 calm；breathe/flow → lv2。
+     调速器降档状态一并清零（用户主动选择应覆盖本会话的自动降档）。 */
+  function setOrbFx(fx) {
+    if (ORB_IDLE_STYLES.indexOf(fx) < 0) { return; }
+    try {
+      localStorage.setItem('asb_orb_lvl', fx === 'calm' ? '1' : '2');
+      localStorage.setItem('asb_orb_idle', fx);
+    } catch (e) { /* ignore */ }
+    ORB.degStep = 0;
+    ORB.lvl = orbLevel();
+    applyLevelClass();
+    orbBeacon(fx === 'calm' ? 'asb_orb_calm_on' : 'asb_orb_calm_off');
+    orbBeacon('asb_orb_idle_' + fx);
+    syncOrb();
   }
 
   /* silent=true＝程序化切换（renderPanel 初始化 / 外部投问），不计埋点：
@@ -2821,6 +3166,7 @@
     syncSubtabs();
     var body = $panel.querySelector('.asb-body');
     var ft = $panel.querySelector('.asb-ftwrap');
+    if (VOICE.on) { voiceStop(); }
     if (REC) { stopRec(true); }
     ft.innerHTML = '';
     body.innerHTML = '';
@@ -2860,6 +3206,8 @@
   function renderComposer(ft, mode) {
     var isChat = mode.id === 'chat';
     if (!isChat && !mode.composer) { return; }
+    /* 语音对话进行中：大球块取代输入区（语音替代打字） */
+    if (isChat && VOICE.on) { voiceRender(ft); return; }
     var ph = isChat ? t('input_ph') : composerPh(mode);
     /* 2026-08-21 老板拍板：不设字数限制（maxlength 移除） */
     ft.innerHTML = '<div class="asb-ft">' +
@@ -3261,7 +3609,8 @@
       replaceThinking(thinkId,
         '<div class="asb-msg err">' + esc(e && e.message || t('err_net')) +
         '</div>' + errActionsHtml(q));
-      orbFlash();
+      orbError();
+      if (VOICE.on) { voiceAnswerDone(false); }
     }).then(function () {
       clearInterval(tick);
       S.abortCtl = null;
@@ -3367,7 +3716,8 @@
       replaceThinking(thinkId,
         '<div class="asb-msg err">' + esc(emsg) + '</div>' +
         errActionsHtml(q));
-      orbFlash();
+      orbError();
+      if (VOICE.on) { voiceAnswerDone(false); }
       return;
     }
     /* 拒答（零命中 或 NO_BASIS 哨兵）判据——**必须在渲染来源之前算**：
@@ -3439,6 +3789,11 @@
       if (turns.length > 6) { turns.shift(); }
       saveChatStore();
     }
+    /* 语音对话：余下半句一并送合成（拒答文案也念——那是诚实的回答），随后回到听 */
+    if (VOICE.on) {
+      voiceFeed(answer, true);
+      voiceAnswerDone(true);
+    }
   }
 
   /* 流读取器（SSE `data: {...}` 帧 / 裸 ndjson 行双兼容，2026-08-21 P2）：
@@ -3466,6 +3821,8 @@
       if (ev.ev === 'delta' && ev.text) {
         live += String(ev.text);
         ORB.pulse = 1;  /* 思考旋涡随 token 到达加速：把流本身可视化 */
+        /* 语音对话：句子一完整就送去合成——首句在余下内容还在生成时已经开口 */
+        if (VOICE.on) { voiceFeed(live, false); }
         var el = document.getElementById(thinkId);
         if (el) {
           if (el.getAttribute('data-live') !== '1') {
@@ -3524,9 +3881,12 @@
   }
   function micErr(msg) {
     pushChat('<div class="asb-msg err">' + esc(msg) + '</div>');
+    orbError();
   }
   function stopRec(cancel) {
     if (!REC) { return; }
+    /* 语音对话的一轮（无 MediaRecorder，音频在 PCM 环形缓冲）走回合链 */
+    if (REC.voice) { voiceTurnStop(!!cancel); return; }
     REC.cancelled = !!cancel;
     try { REC.mr.stop(); } catch (e) {
       try {
@@ -3540,8 +3900,14 @@
   }
   function toggleRec() {
     if (REC) { stopRec(false); return; }
+    if (ORB.connecting) { return; }
     sayStop();  /* 录音前停播报：防扬声器进麦（回声）+ 状态灯语义唯一 */
+    /* connecting（v3）：首次用麦会弹授权框、慢机器上 getUserMedia 也要几百毫秒，
+       这段时间球必须诚实地说「在连」而不是装作「在听」 */
+    ORB.connecting = true;
+    syncOrb();
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (st) {
+      ORB.connecting = false;
       var mime = '';
       try {
         if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
@@ -3579,37 +3945,51 @@
       syncMicUi(true);
       orbAudioStart(st);
       syncOrb();
-    }).catch(function () { micErr(t('mic_denied')); });
+    }).catch(function () {
+      ORB.connecting = false;
+      micErr(t('mic_denied'));
+    });
+  }
+  /* 音频块 → 文本（Promise）：手动麦克风键与语音对话回合共用同一条转写链 */
+  function transcribeBlob(blob) {
+    return new Promise(function (res, rej) {
+      var rd = new FileReader();
+      rd.onerror = function () { rej(new Error(t('mic_fail'))); };
+      rd.onload = function () {
+        fetch('/api/assistant/transcribe', {
+          method: 'POST',
+          headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ audio_b64: String(rd.result || '') }),
+        }).then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (j) {
+            if (!r.ok || !j.ok) {
+              var err = new Error(String(j.detail || t('mic_fail')));
+              err.status = r.status;   /* 429 让语音回合退避而不是硬撞 */
+              throw err;
+            }
+            res(String(j.text || ''));
+          });
+        }).catch(rej);
+      };
+      rd.readAsDataURL(blob);
+    });
   }
   function uploadRec(blob) {
-    var rd = new FileReader();
-    rd.onload = function () {
-      setBusy(true);
-      var inp0 = $panel.querySelector('.asb-in');
-      if (inp0) { inp0.placeholder = t('mic_busy'); }
-      fetch('/api/assistant/transcribe', {
-        method: 'POST',
-        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ audio_b64: String(rd.result || '') }),
-      }).then(function (r) {
-        return r.json().catch(function () { return {}; }).then(function (j) {
-          if (!r.ok || !j.ok) {
-            throw new Error(String(j.detail || t('mic_fail')));
-          }
-          var inp = $panel.querySelector('.asb-in');
-          if (inp) {
-            inp.value = String(j.text || '');
-            inp.focus();
-          }
-        });
-      }).catch(function (e) {
-        micErr(e && e.message || t('mic_fail'));
-      }).then(function () {
-        setBusy(false);
-        syncMicUi(false);
-      });
-    };
-    rd.readAsDataURL(blob);
+    setBusy(true);
+    var inp0 = $panel.querySelector('.asb-in');
+    if (inp0) { inp0.placeholder = t('mic_busy'); }
+    transcribeBlob(blob).then(function (text) {
+      var inp = $panel.querySelector('.asb-in');
+      if (inp) {
+        inp.value = text;
+        inp.focus();
+      }
+    }).catch(function (e) {
+      micErr(e && e.message || t('mic_fail'));
+    }).then(function () {
+      setBusy(false);
+      syncMicUi(false);
+    });
   }
 
   function copyAnswer(btn) {
@@ -3666,12 +4046,33 @@
      小智是产品助手不是人设，绝不该用人设克隆声说话）+ fast=true（常热 edge
      引擎，零 GPU 占用）。逐条点击 opt-in，绝无自动播报。 */
   var SAY = { el: null, busy: false };
-  function sayPrep(s) {
+  function sayPrep(s, max) {
     var x = String(s || '');
     x = x.replace(/\[S\d\]/g, ' ');
     x = x.replace(/[*`#>_~]/g, '');
     x = x.replace(/\s+/g, ' ').trim();
-    return x.slice(0, 360);
+    return x.slice(0, max || 360);
+  }
+  /* 文本 → 可播放 URL（Promise）：手动播报键与语音对话的句级队列共用 */
+  function ttsFetch(text) {
+    return fetch('/api/voice/tts-test', {
+      method: 'POST',
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ text: text, persona_id: '__system__',
+                             fast: true, format: 'mp3' }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok || !j.ok) {
+          throw new Error(String(j.message || j.error || t('say_fail')));
+        }
+        var url = String(j.audio_url || j.url || '');
+        if (!url && j.filename) {
+          url = '/api/voice/tts-test/' + encodeURIComponent(j.filename);
+        }
+        if (!url) { throw new Error(t('say_fail')); }
+        return url;
+      });
+    });
   }
   function sayReset() {
     var b = $panel ? $panel.querySelector('[data-act="say"].on') : null;
@@ -3691,35 +4092,21 @@
     SAY.busy = true;
     btn.disabled = true;
     btn.innerHTML = ic('refresh', 'asb-spin');
-    fetch('/api/voice/tts-test', {
-      method: 'POST',
-      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ text: text, persona_id: '__system__',
-                             fast: true, format: 'mp3' }),
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok || !j.ok) {
-          throw new Error(String(j.message || j.error || t('say_fail')));
-        }
-        var url = String(j.audio_url || j.url || '');
-        if (!url && j.filename) {
-          url = '/api/voice/tts-test/' + encodeURIComponent(j.filename);
-        }
-        if (!url) { throw new Error(t('say_fail')); }
-        if (!SAY.el) {
-          SAY.el = new Audio();
-          SAY.el.addEventListener('ended', sayStop);
-          SAY.el.addEventListener('error', function () { sayStop(); });
-        }
-        SAY.el.src = url;
-        orbSpeakStart(SAY.el);
-        btn.classList.add('on');
-        btn.innerHTML = ic('stop');
-        orbBeacon('asb_orb_say');
-        return SAY.el.play();
-      });
+    ttsFetch(text).then(function (url) {
+      if (!SAY.el) {
+        SAY.el = new Audio();
+        SAY.el.addEventListener('ended', sayStop);
+        SAY.el.addEventListener('error', function () { sayStop(); });
+      }
+      SAY.el.src = url;
+      orbSpeakStart(SAY.el);
+      btn.classList.add('on');
+      btn.innerHTML = ic('stop');
+      orbBeacon('asb_orb_say');
+      return SAY.el.play();
     }).catch(function (e) {
       sayStop();
+      orbError();
       pushChat('<div class="asb-msg err">' +
         esc((e && e.message) || t('say_fail')) + '</div>');
     }).then(function () {
@@ -3727,6 +4114,763 @@
       btn.disabled = false;
       if (!btn.classList.contains('on')) { btn.innerHTML = ic('speaker'); }
     });
+  }
+
+  /* ─────────────────────── 语音对话（P1 2026-09-06 实施95）：免手动回合 ──────
+     ChatGPT 语音模式让人觉得「活」的不是那颗球，而是球背后的回合循环：
+       听（VAD 判停）→ 想（转写 + 检索 + 生成）→ 说（按句自动播报，首句先响）→ 再听。
+     此前小智的语音是「点录音→再点停→转写填输入框→再点发送→再点播报」五步，最有
+     表现力的听/说两态几乎没机会出现。本模块**全部复用既有端点**（transcribe /
+     query / tts-test），零新后端；大球是同一状态机（ORB.state）的大尺寸 Canvas 2D
+     渲染，只在语音块存在时跑 rAF。对话内容仍在消息流里流动（识别文本=用户气泡、
+     回答=AI 气泡，即实时字幕）。
+     P2（同日）：采集改 PCM 环形缓冲（AudioWorklet 音频线程重采样到 16k，失败回落
+     ScriptProcessor）——① 只上传「说话段」（前留 300ms 预卷，掐掉开口前的静默：
+     whisper 对长静默会幻觉出字、且时长即时延）；② 缓冲全程在录，**语音打断**
+     （说话即停播报/掐生成）触发时开口那几百毫秒已经在缓冲里，不丢字；③ VAD 直接
+     在 PCM 帧上算，与可视化用的分析器解耦（安静档不跑画布时 VAD 照常）。
+     铁律沿用：每个动效映射真实状态；电平低通平滑；隐藏即停。 */
+  var VOICE = {
+    on: false, demo: false, demoT: 0, stream: null, turns: 0,
+    floor: 0.01, speechSeen: false, speechT0: 0, quietT0: 0, silentT0: 0,
+    spStart: -1, carry: null, bargeOn: true, bargeT0: 0, bargeStart: 0, lastLoud: 0,
+    loudT0: 0,
+    cap: null, ring: null, w: 0, rate: 16000,
+    autoSay: true, q: [], playing: false, au: null, spoken: 0, answerDone: true,
+    ttsFail: 0, tEnd: 0, tPlay: 0, eager: false,
+    cv: null, ctx: null, dpr: 1, raf: 0, last: 0, lv: 0, prevLv: 0,
+    ph2: 0, ph3: 1.3, ph5: 2.1, rings: [], lastRip: 0,
+  };
+  var VOICE_SIL_MS = 800;          /* 说完后静默多久判「这一轮说完了」 */
+  var VOICE_MIN_SPEECH_MS = 220;   /* 短于此的响动不算说话（咳嗽/键盘） */
+  var VOICE_BARGE_MS = 350;        /* 播报/生成期打断门：更长、更响才算（AEC 残余回声很短） */
+  var VOICE_MAX_TURN_MS = 15000;   /* 单轮硬上限 */
+  var VOICE_IDLE_END_MS = 25000;   /* 开着但一直没人说话 → 自动结束会话 */
+  var VOICE_PREROLL = 4800;        /* 300ms @16k：开口前的预卷，防首字被吃 */
+  var VOICE_RING_SEC = 40;
+
+  function voiceStart(opts) {
+    opts = opts || {};
+    if (VOICE.on) { return true; }
+    if (!opts.demo && !voiceOn()) { return false; }
+    sayStop();
+    if (REC) { stopRec(true); }
+    if (!S.open) { togglePanel(true, opts.demo ? 'ext' : undefined); }
+    if (S.tab !== 'chat') { switchTab('chat', true); }
+    VOICE.on = true;
+    VOICE.demo = !!opts.demo;
+    VOICE.autoSay = true;
+    VOICE.q = []; VOICE.spoken = 0; VOICE.answerDone = true; VOICE.playing = false;
+    VOICE.turns = 0; VOICE.ttsFail = 0; VOICE.rings = []; VOICE.lv = 0;
+    VOICE.silentT0 = 0; VOICE.floor = 0.01; VOICE.carry = null; VOICE.spStart = -1;
+    VOICE.tEnd = 0; VOICE.tPlay = 0; VOICE.eager = false; VOICE.bargeT0 = 0;
+    beacon(VOICE.demo ? 'asb_voice_demo' : 'asb_voice_start');
+    var ft = $panel.querySelector('.asb-ftwrap');
+    if (ft) { voiceRender(ft); }
+    voiceLoopStart();
+    /* 会话提示只进 DOM 不进历史：切页签/刷新后不该留下一排「语音对话已开始」 */
+    pushChatDom('<div class="asb-msg ai asb-msg--sys">' + ic('mic') + ' ' +
+      esc(t('v_started')) + '</div>');
+    if (VOICE.demo) { voiceDemoStep(0); return true; }
+    ORB.connecting = true;
+    syncOrb();
+    navigator.mediaDevices.getUserMedia({ audio: {
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .then(function (st) {
+        if (!VOICE.on) {
+          try { st.getTracks().forEach(function (tk) { tk.stop(); }); } catch (e) { /* */ }
+          return;
+        }
+        VOICE.stream = st;
+        return voiceCapStart(st).then(function () {
+          if (!VOICE.on) { return; }
+          ORB.connecting = false;
+          voiceListen();
+        });
+      }).catch(function () {
+        ORB.connecting = false;
+        micErr(t('mic_denied'));
+        voiceStop();
+      });
+    return true;
+  }
+
+  /* ── PCM 采集（会话级常开）────────────────────────────────────────────────
+     Worklet 源码以 Blob URL 装载（单文件纪律，不另起静态文件）：音频线程里线性
+     插值重采样到 16k、量化 Int16，每 320 采样（20ms）postMessage 一帧。主线程只
+     写环形缓冲 + 算一次 RMS 喂 VAD。addModule 失败/无 AudioWorklet → 同一套
+     重采样在 ScriptProcessor 里跑（主线程，抗卡顿差一点但语义相同）。 */
+  var VOICE_WORKLET_SRC =
+    'class XzCap extends AudioWorkletProcessor{' +
+    'constructor(){super();this.r=sampleRate/16000;this.p=0;this.tail=0;' +
+    'this.buf=new Int16Array(320);this.n=0}' +
+    'process(inputs){var x=inputs[0]&&inputs[0][0];if(!x||!x.length)return true;' +
+    'var p=this.p,r=this.r,b=this.buf,n=this.n,L=x.length,s,i,f;' +
+    'while(p+1<L){i=Math.floor(p);f=p-i;' +
+    's=i<0?this.tail+(x[0]-this.tail)*(p+1):x[i]+(x[i+1]-x[i])*f;' +
+    's=s<-1?-1:(s>1?1:s);b[n++]=(s*32767)|0;' +
+    'if(n===320){this.port.postMessage(b.buffer,[b.buffer]);b=this.buf=new Int16Array(320);n=0}' +
+    'p+=r}' +
+    'this.p=p-L;this.tail=x[L-1];this.n=n;return true}}' +
+    'registerProcessor("xz-cap",XzCap);';
+
+  function voiceCapStart(stream) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { return Promise.reject(new Error('no-audiocontext')); }
+    if (!ORB.actx) { ORB.actx = new AC(); }
+    var ctx = ORB.actx;
+    try { if (ctx.state === 'suspended') { ctx.resume(); } } catch (e0) { /* ignore */ }
+    VOICE.ring = new Int16Array(VOICE.rate * VOICE_RING_SEC);
+    VOICE.w = 0;
+    var src = ctx.createMediaStreamSource(stream);
+    var cap = { src: src, node: null, worklet: false, url: '' };
+    VOICE.cap = cap;
+    function wireScriptProcessor() {
+      var sp = ctx.createScriptProcessor(2048, 1, 1);
+      var st = { p: 0, tail: 0, r: ctx.sampleRate / VOICE.rate };
+      sp.onaudioprocess = function (ev) {
+        var x = ev.inputBuffer.getChannelData(0);
+        voicePcmPush(voiceResample(x, st));
+      };
+      src.connect(sp);
+      /* ScriptProcessor 不接 destination 在部分浏览器不会触发回调；接一个
+         零增益节点保活，不外放 */
+      var g = ctx.createGain();
+      g.gain.value = 0;
+      sp.connect(g);
+      g.connect(ctx.destination);
+      cap.node = sp;
+      cap.gain = g;
+      cap.worklet = false;
+    }
+    if (!ctx.audioWorklet || typeof URL === 'undefined' || !window.Blob) {
+      wireScriptProcessor();
+      return Promise.resolve();
+    }
+    var url = '';
+    try {
+      url = URL.createObjectURL(new Blob([VOICE_WORKLET_SRC], { type: 'text/javascript' }));
+    } catch (e1) { wireScriptProcessor(); return Promise.resolve(); }
+    cap.url = url;
+    return ctx.audioWorklet.addModule(url).then(function () {
+      if (VOICE.cap !== cap) { return; }
+      var node = new AudioWorkletNode(ctx, 'xz-cap', {
+        numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 });
+      node.port.onmessage = function (ev) { voicePcmPush(new Int16Array(ev.data)); };
+      src.connect(node);
+      cap.node = node;
+      cap.worklet = true;
+    }).catch(function () {
+      if (VOICE.cap === cap) { wireScriptProcessor(); }
+    });
+  }
+  function voiceCapStop() {
+    var cap = VOICE.cap;
+    VOICE.cap = null;
+    if (!cap) { return; }
+    try { if (cap.node && cap.node.port) { cap.node.port.onmessage = null; } } catch (e) { /* */ }
+    try { if (cap.node) { cap.node.disconnect(); } } catch (e1) { /* ignore */ }
+    try { if (cap.gain) { cap.gain.disconnect(); } } catch (e2) { /* ignore */ }
+    try { if (cap.src) { cap.src.disconnect(); } } catch (e3) { /* ignore */ }
+    try { if (cap.url) { URL.revokeObjectURL(cap.url); } } catch (e4) { /* ignore */ }
+    VOICE.ring = null;
+  }
+  /* 主线程重采样（ScriptProcessor 回落用；与 worklet 同一算法） */
+  function voiceResample(x, st) {
+    var out = [];
+    var p = st.p, r = st.r, L = x.length, s, i, f;
+    while (p + 1 < L) {
+      i = Math.floor(p);
+      f = p - i;
+      s = i < 0 ? st.tail + (x[0] - st.tail) * (p + 1) : x[i] + (x[i + 1] - x[i]) * f;
+      s = s < -1 ? -1 : (s > 1 ? 1 : s);
+      out.push((s * 32767) | 0);
+      p += r;
+    }
+    st.p = p - L;
+    st.tail = x[L - 1];
+    return Int16Array.from(out);
+  }
+  /* 写环形缓冲 + 帧 RMS → VAD。w 是自会话起的绝对采样序号（单调），切片按它算。 */
+  function voicePcmPush(pcm) {
+    if (!VOICE.on || !VOICE.ring || !pcm || !pcm.length) { return; }
+    var ring = VOICE.ring, N = ring.length, w = VOICE.w;
+    var s = 0;
+    for (var i = 0; i < pcm.length; i++) {
+      ring[(w + i) % N] = pcm[i];
+      var v = pcm[i] / 32768;
+      s += v * v;
+    }
+    VOICE.w = w + pcm.length;
+    voiceVad(Math.sqrt(s / pcm.length), VOICE.w);
+  }
+  /* 取 [a, b) 的绝对采样区间成 Int16Array（超出缓冲长度的部分已被覆盖，按可得截取） */
+  function voicePcmSlice(a, b) {
+    var ring = VOICE.ring;
+    if (!ring) { return new Int16Array(0); }
+    var N = ring.length;
+    a = Math.max(a, b - N, 0);
+    var out = new Int16Array(Math.max(0, b - a));
+    for (var i = 0; i < out.length; i++) { out[i] = ring[(a + i) % N]; }
+    return out;
+  }
+  /* PCM16 → WAV Blob（纯函数，门禁可测：44 字节头 + 数据） */
+  function pcmToWav(pcm, rate) {
+    var n = pcm.length;
+    var buf = new ArrayBuffer(44 + n * 2);
+    var v = new DataView(buf);
+    function w4(o, str) { for (var i = 0; i < 4; i++) { v.setUint8(o + i, str.charCodeAt(i)); } }
+    w4(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w4(8, 'WAVE'); w4(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true); w4(36, 'data'); v.setUint32(40, n * 2, true);
+    var o = 44;
+    for (var i = 0; i < n; i++, o += 2) { v.setInt16(o, pcm[i], true); }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  /* 一轮「听」：只是打开 VAD 的「听」语义 + 视觉分析器；音频本身一直在环形缓冲里。
+     REC 标记与手动录音同形（orbCompute 据 REC 判 listening；stopRec 能收它），
+     voice=true 让 stopRec 走回合链。carry＝语音打断带过来的开口位置。 */
+  function voiceListen() {
+    if (!VOICE.on || VOICE.demo || !VOICE.stream || !VOICE.cap || REC) { return; }
+    if (S.busy) { voiceResume(200); return; }
+    var carry = VOICE.carry;
+    VOICE.carry = null;
+    VOICE.speechSeen = !!carry;
+    VOICE.speechT0 = carry ? carry.speechT0 : 0;
+    VOICE.spStart = carry ? carry.spStart : -1;
+    VOICE.quietT0 = 0;
+    VOICE.loudT0 = 0;
+    VOICE.lastLoud = carry ? Date.now() : 0;
+    /* 「一直没人说话」计时跨轮累计：单轮 15s 硬上限到点后接着听时不重置，
+       否则 25s 会话超时永远等不到（每 15s 被归零一次） */
+    if (!VOICE.silentT0 && !carry) { VOICE.silentT0 = Date.now(); }
+    REC = { stream: VOICE.stream, cancelled: false, voice: true,
+            cap: setTimeout(voiceEndTurn, VOICE_MAX_TURN_MS) };
+    orbAudioStart(VOICE.stream, VOICE.turns > 0);
+    VOICE.turns++;
+    syncOrb();
+  }
+
+  /* 收一轮（cancel=true 为收场：不转写）。REC 无 mr——stopRec 对 voice 标记走这里。 */
+  function voiceTurnStop(cancel) {
+    var rec = REC;
+    REC = null;
+    if (rec && rec.cap) { clearTimeout(rec.cap); }
+    orbAudioStop();
+    syncOrb();
+    if (cancel || !rec || !VOICE.on) { return; }
+    if (!VOICE.speechSeen || VOICE.spStart < 0) {
+      voiceListen();   /* 这一轮其实没人说话（硬上限到点/误触发）：接着听 */
+      return;
+    }
+    VOICE.tEnd = Date.now();
+    var pcm = voicePcmSlice(VOICE.spStart, VOICE.w);
+    VOICE.spStart = -1;
+    if (pcm.length < VOICE.rate * 0.3) { voiceListen(); return; }
+    voiceTranscribe(pcmToWav(pcm, VOICE.rate));
+  }
+  function voiceEndTurn() {
+    if (REC && REC.voice) { voiceTurnStop(false); }
+  }
+
+  /* ── VAD（能量门，20ms 帧 RMS + 自适应底噪）。两种门：
+       听态：≥220ms 连续过门＝开口，随后静默 800ms＝说完；
+       说/想态（语音打断）：门更高（×1.6 + 随播报电平上浮）且要 ≥350ms——AEC 之后
+       残余回声短而弱，这两条足以不被自己的播报打断。打断触发时 spStart 已指在
+       开口前 300ms，随后的新一轮直接带着它继续听。 */
+  function voiceVad(lv, w) {
+    if (!VOICE.on || VOICE.demo) { return; }
+    var now = Date.now();
+    if (lv < VOICE.floor + 0.01) { VOICE.floor = VOICE.floor * 0.95 + lv * 0.05; }
+    var listening = !!(REC && REC.voice);
+    if (listening) {
+      var th = Math.max(0.035, VOICE.floor * 2.2 + 0.02);
+      if (lv > th) {
+        if (!VOICE.speechT0) {
+          VOICE.speechT0 = now;
+          VOICE.spStart = Math.max(0, w - 320 - VOICE_PREROLL);
+        } else if (!VOICE.speechSeen && now - VOICE.speechT0 > VOICE_MIN_SPEECH_MS) {
+          VOICE.speechSeen = true;
+          VOICE.silentT0 = 0;   /* 有人说话了：会话超时计时归零，下轮重新起算 */
+          beacon('asb_voice_turn');
+        }
+        VOICE.lastLoud = now;
+        /* 说完后的 800ms 静默窗只被**持续 ≥120ms** 的响动打断（人接着说），
+           键盘/关门这类 1-2 帧的脉冲不该把「说完了」往后拖 */
+        if (!VOICE.loudT0) { VOICE.loudT0 = now; }
+        if (now - VOICE.loudT0 >= 120) { VOICE.quietT0 = 0; }
+      } else if (!VOICE.speechSeen) {
+        VOICE.loudT0 = 0;
+        /* 开口候选要连续 220ms 过门，但单帧（20ms）跌门不算断——辅音/两源交错
+           的帧都会短暂低于门；120ms 以上的安静才放弃候选 */
+        if (VOICE.speechT0 && now - VOICE.lastLoud > 120) {
+          VOICE.speechT0 = 0;
+          VOICE.spStart = -1;
+        }
+      } else {
+        VOICE.loudT0 = 0;
+        if (!VOICE.quietT0) {
+          VOICE.quietT0 = now;
+        } else if (now - VOICE.quietT0 > VOICE_SIL_MS) {
+          voiceEndTurn();
+          return;
+        }
+      }
+      if (!VOICE.speechSeen && VOICE.silentT0 && now - VOICE.silentT0 > VOICE_IDLE_END_MS) {
+        pushChatDom('<div class="asb-msg ai asb-msg--sys">' + esc(t('v_idle_end')) + '</div>');
+        voiceStop();
+      }
+      return;
+    }
+    /* 语音打断：只在「在说」或「在生成」（可掐）时看；转写期不看（没法掐，且只
+       有零点几秒） */
+    var canBarge = VOICE.bargeOn &&
+      (VOICE.playing || ORB.speaking || (S.busy && S.abortCtl && !VOICE.answerDone));
+    if (!canBarge) { VOICE.bargeT0 = 0; return; }
+    var out = (VOICE.playing || ORB.speaking) ? Math.max(0, Math.min(1, ORB.level || 0)) : 0;
+    var thB = Math.max(0.06, VOICE.floor * 3 + 0.03) + out * 0.05;
+    if (lv > thB) {
+      if (!VOICE.bargeT0) {
+        VOICE.bargeT0 = now;
+        VOICE.bargeStart = Math.max(0, w - 320 - VOICE_PREROLL);
+      } else if (now - VOICE.bargeT0 > VOICE_BARGE_MS) {
+        /* 确认是人在说话：carry 只在此刻成立（短噪音到不了这里，不会污染下一轮） */
+        VOICE.carry = { speechT0: VOICE.bargeT0, spStart: VOICE.bargeStart };
+        VOICE.bargeT0 = 0;
+        beacon('asb_voice_barge');
+        voiceInterrupt(true);
+      }
+      VOICE.lastLoud = now;
+    } else if (VOICE.bargeT0 && now - VOICE.lastLoud > 120) {
+      VOICE.bargeT0 = 0;
+    }
+  }
+
+  /* 时延分桶埋点（数据裁决用）：asr=说完→转写回来；ttfs=说完→第一声 */
+  function voiceLatBeacon(kind, ms) {
+    var b;
+    if (kind === 'asr') {
+      b = ms < 1000 ? 'lt1' : (ms < 2000 ? '1_2' : (ms < 4000 ? '2_4' : 'gt4'));
+    } else {
+      b = ms < 2000 ? 'lt2' : (ms < 4000 ? '2_4' : (ms < 7000 ? '4_7' : 'gt7'));
+    }
+    beacon('asb_voice_' + kind + '_' + b);
+  }
+
+  function voiceTranscribe(blob) {
+    setBusy(true);   /* 转写期球=思考（对用户而言「在处理我说的话」） */
+    setHdStatus('mic_busy');
+    var t0 = Date.now();
+    transcribeBlob(blob).then(function (text) {
+      setBusy(false);
+      if (!VOICE.on) { return; }
+      voiceLatBeacon('asr', Date.now() - t0);
+      text = String(text || '').trim();
+      if (!text) { voiceListen(); return; }
+      voiceAsk(text);
+    }).catch(function (e) {
+      setBusy(false);
+      micErr((e && e.message) || t('mic_fail'));
+      /* 429（限频）别硬撞：停 20s 再听；其余错误 0.9s 后接着听 */
+      voiceResume(e && e.status === 429 ? 20000 : 900);
+    });
+  }
+
+  /* 转写文本直接成为一问：用户气泡 + 问答链（SSE 的 delta 经 voiceFeed 逐句送合成） */
+  function voiceAsk(text) {
+    VOICE.spoken = 0;
+    VOICE.q = [];
+    VOICE.answerDone = false;
+    VOICE.eager = false;
+    VOICE.tPlay = 0;
+    sendQuery(text);
+    if (!S.busy) { VOICE.answerDone = true; voiceResume(300); }
+  }
+
+  /* 句级切分（纯函数，门禁可测）：从 spoken 之后取**完整句**（中英句末标点/换行），
+     短于 6 字的句并入下一句（TTS 逐句请求，太碎会一顿一顿）；final=true 时余下
+     全部作为最后一句。返回 {sentences, spoken}。 */
+  function voiceSplit(text, spoken, final) {
+    var rest = String(text || '').slice(spoken);
+    var out = [];
+    var buf = '';
+    var consumed = 0;
+    var re = /[^。！？!?；;\n]+[。！？!?；;\n]+|[^。！？!?；;\n]+$/g;
+    var m;
+    while ((m = re.exec(rest)) !== null) {
+      var seg = m[0];
+      var complete = /[。！？!?；;\n]$/.test(seg);
+      if (!complete && !final) { break; }
+      buf += seg;
+      consumed += seg.length;
+      if (sayPrep(buf).length >= 6) { out.push(buf); buf = ''; }
+    }
+    if (buf) {
+      if (final) { out.push(buf); }
+      else { consumed -= buf.length; }   /* 短句留到下一轮与后文合并 */
+    }
+    return { sentences: out, spoken: spoken + consumed };
+  }
+
+  /* 首句提前开口（P2）：整句还没生成完、但已到一个分句（，、：）且 ≥8 字 → 先把这
+     一分句送合成。首声时延 = LLM 把首句写完的时间 + 首句 TTS 时长，两项都随首段
+     长度涨；只对答案的**第一段**这么做（后续按整句，韵律更顺）。纯函数 voiceEager。 */
+  function voiceEager(text) {
+    var m = /^([^。！？!?；;\n]{8,60}?[，、：,])/.exec(String(text || ''));
+    return m ? m[1] : '';
+  }
+  function voiceFeed(text, final) {
+    if (!VOICE.on || !VOICE.autoSay) { return; }
+    if (!final && VOICE.spoken === 0 && !VOICE.eager) {
+      var head = voiceEager(text);
+      if (head && !/[。！？!?；;\n]/.test(String(text || ''))) {
+        VOICE.eager = true;
+        VOICE.spoken = head.length;
+        var s0 = sayPrep(head, 240);
+        if (s0) { voiceEnqueue(s0); }
+        return;
+      }
+    }
+    var r = voiceSplit(text, VOICE.spoken, !!final);
+    VOICE.spoken = r.spoken;
+    for (var i = 0; i < r.sentences.length; i++) {
+      var s = sayPrep(r.sentences[i], 240);
+      if (s) { voiceEnqueue(s); }
+    }
+  }
+  /* 入队即预取合成（短句并发，播放按序）：第 k 句在播时第 k+1 句已在合成，
+     句间不留空白 */
+  function voiceEnqueue(text) {
+    var item = { text: text, url: '', err: false, p: null };
+    item.p = ttsFetch(text).then(function (url) { item.url = url; },
+                                 function () { item.err = true; });
+    VOICE.q.push(item);
+    voicePump();
+  }
+  function voicePump() {
+    if (!VOICE.on || VOICE.playing) { return; }
+    var item = VOICE.q.shift();
+    if (!item) {
+      if (VOICE.answerDone) { voiceSpeakEnd(); }
+      return;
+    }
+    VOICE.playing = true;
+    item.p.then(function () {
+      if (!VOICE.on) { VOICE.playing = false; return; }
+      if (item.err || !item.url) {
+        /* 合成失败：第一次诚实说一声，之后本会话静默跳过（文字回答还在） */
+        VOICE.ttsFail++;
+        if (VOICE.ttsFail === 1) {
+          pushChat('<div class="asb-msg err">' + esc(t('say_fail')) + '</div>');
+          orbError();
+        }
+        VOICE.playing = false;
+        voicePump();
+        return;
+      }
+      if (!VOICE.au) {
+        VOICE.au = new Audio();
+        VOICE.au.addEventListener('ended', voiceNext);
+        VOICE.au.addEventListener('error', voiceNext);
+      }
+      VOICE.au.src = item.url;
+      if (!ORB.speaking) { orbSpeakStart(VOICE.au); }
+      syncOrb();
+      if (!VOICE.tPlay && VOICE.tEnd) {
+        VOICE.tPlay = Date.now();
+        voiceLatBeacon('ttfs', VOICE.tPlay - VOICE.tEnd);   /* 说完→第一声 */
+      }
+      var pr = VOICE.au.play();
+      if (pr && pr.catch) { pr.catch(function () { voiceNext(); }); }
+    });
+  }
+  function voiceNext() {
+    VOICE.playing = false;
+    if (!VOICE.on) { return; }
+    if (VOICE.q.length) { voicePump(); return; }
+    if (VOICE.answerDone) { voiceSpeakEnd(); }
+    /* 否则：流还在生成，下一句到了 voiceEnqueue 会接着 pump；球保持「说」 */
+  }
+  function voiceSpeakEnd() {
+    orbSpeakStop();
+    voiceResume(250);
+  }
+  function voiceAnswerDone(ok) {
+    if (!VOICE.on) { return; }
+    VOICE.answerDone = true;
+    if (!VOICE.autoSay || !ok) {
+      voiceResume(ok ? 300 : 1200);   /* 失败先让玫红态停一下再回到听 */
+      return;
+    }
+    if (!VOICE.playing && !VOICE.q.length) { voiceSpeakEnd(); }
+  }
+  /* 回到听：延迟一拍等 setBusy(false) 落地；仍忙则再等 */
+  function voiceResume(delay) {
+    setTimeout(function () {
+      if (!VOICE.on || VOICE.demo || REC || VOICE.playing) { return; }
+      if (S.busy) { voiceResume(200); return; }
+      voiceListen();
+    }, delay || 0);
+  }
+
+  /* 打断（点大球 /「打断」键 / 语音打断）：停播报、清队列、掐生成，回到听。
+     fromVoice=true 时 VOICE.carry 已带着开口位置，新一轮立刻接着听不等 250ms。 */
+  function voiceInterrupt(fromVoice) {
+    if (!VOICE.on) { return; }
+    if (!fromVoice) { beacon('asb_voice_interrupt'); VOICE.carry = null; }
+    VOICE.q = [];
+    VOICE.answerDone = true;
+    if (VOICE.au) { try { VOICE.au.pause(); } catch (e) { /* ignore */ } }
+    VOICE.playing = false;
+    orbSpeakStop();
+    if (S.busy && S.abortCtl) {
+      S.aborted = true;
+      try { S.abortCtl.abort(); } catch (e2) { /* ignore */ }
+    }
+    if (VOICE.demo) { return; }
+    voiceResume(fromVoice ? 0 : 250);
+  }
+  function voiceToggleSay() {
+    VOICE.autoSay = !VOICE.autoSay;
+    var b = $panel ? $panel.querySelector('[data-act="v-mute"]') : null;
+    if (b) {
+      b.setAttribute('aria-pressed', VOICE.autoSay ? 'false' : 'true');
+      b.title = t(VOICE.autoSay ? 'v_autosay_on' : 'v_autosay_off');
+      b.setAttribute('aria-label', b.title);
+      b.innerHTML = ic(VOICE.autoSay ? 'speaker' : 'speakerOff');
+    }
+    if (!VOICE.autoSay && (VOICE.playing || VOICE.q.length)) {
+      VOICE.q = [];
+      if (VOICE.au) { try { VOICE.au.pause(); } catch (e) { /* ignore */ } }
+      VOICE.playing = false;
+      orbSpeakStop();
+      if (VOICE.answerDone) { voiceResume(250); }
+    }
+  }
+
+  function voiceStop() {
+    if (!VOICE.on) { return; }
+    VOICE.on = false;
+    if (VOICE.demoT) { clearTimeout(VOICE.demoT); VOICE.demoT = 0; }
+    if (VOICE.demo) { ORB.force = ''; }
+    VOICE.demo = false;
+    if (REC && REC.voice) {
+      if (REC.cap) { clearTimeout(REC.cap); }
+      REC = null;
+    }
+    VOICE.carry = null;
+    VOICE.spStart = -1;
+    VOICE.q = [];
+    if (VOICE.au) { try { VOICE.au.pause(); } catch (e1) { /* ignore */ } }
+    VOICE.playing = false;
+    orbSpeakStop();
+    orbAudioStop();
+    voiceCapStop();
+    /* 会话结束才让 AudioContext 休眠（会话期两处 stop 都被 cap 守卫放行了） */
+    try {
+      if (ORB.actx && ORB.actx.state === 'running' && !REC) { ORB.actx.suspend(); }
+    } catch (e0) { /* ignore */ }
+    if (VOICE.stream) {
+      try { VOICE.stream.getTracks().forEach(function (tk) { tk.stop(); }); }
+      catch (e2) { /* ignore */ }
+    }
+    VOICE.stream = null;
+    ORB.connecting = false;
+    voiceLoopStop();
+    var ft = $panel ? $panel.querySelector('.asb-ftwrap') : null;
+    if (ft && MODES[S.tab]) { renderComposer(ft, MODES[S.tab]); }
+    syncOrb();
+    beacon('asb_voice_end');
+  }
+
+  /* 语音块 DOM（取代输入区） */
+  function voiceRender(ft) {
+    ft.innerHTML = '<div class="asb-voice" data-demo="' + (VOICE.demo ? '1' : '0') + '">' +
+      '<canvas class="asb-vorb" data-act="v-interrupt" tabindex="0" role="button" ' +
+      'aria-label="' + esc(t('v_interrupt')) + '"></canvas>' +
+      '<div class="asb-v-st" aria-live="polite">' + esc(t('hd_' + ORB.state)) + '</div>' +
+      '<div class="asb-v-acts">' +
+      '<button type="button" class="asb-v-b" data-act="v-interrupt">' + ic('stop') +
+      '<span>' + esc(t('v_interrupt')) + '</span></button>' +
+      '<button type="button" class="asb-v-b" data-act="v-mute" aria-pressed="' +
+      (VOICE.autoSay ? 'false' : 'true') + '" title="' +
+      esc(t(VOICE.autoSay ? 'v_autosay_on' : 'v_autosay_off')) + '" aria-label="' +
+      esc(t(VOICE.autoSay ? 'v_autosay_on' : 'v_autosay_off')) + '">' +
+      ic(VOICE.autoSay ? 'speaker' : 'speakerOff') + '</button>' +
+      '<button type="button" class="asb-v-b primary" data-act="v-end">' + ic('x') +
+      '<span>' + esc(t('v_end')) + '</span></button>' +
+      '</div></div>';
+    var cv = ft.querySelector('.asb-vorb');
+    VOICE.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var css = window.innerWidth <= 480 ? 132 : 168;
+    cv.width = Math.round(css * VOICE.dpr);
+    cv.height = cv.width;
+    VOICE.cv = cv;
+    VOICE.ctx = cv.getContext('2d');
+  }
+
+  /* ── 大球渲染（Canvas 2D）：软体 = 基圆 + 2/3/5 次谐波的轮廓调制，振幅随电平
+     （听=麦克风、说=TTS、想=流式 token 到达）；内部三团光谱色沿李萨如轨迹漂移
+     并裁进球体；外圈辉光随电平；听时攻击音起涟漪。与角标球同一光谱/同一状态色。 */
+  function voiceLoopStart() {
+    if (VOICE.raf) { return; }
+    VOICE.last = 0;
+    VOICE.raf = requestAnimationFrame(voiceFrame);
+  }
+  function voiceLoopStop() {
+    if (VOICE.raf) { cancelAnimationFrame(VOICE.raf); VOICE.raf = 0; }
+    if (VOICE.ctx && VOICE.cv) {
+      try { VOICE.ctx.clearRect(0, 0, VOICE.cv.width, VOICE.cv.height); } catch (e) { /* */ }
+    }
+    VOICE.cv = null;
+    VOICE.ctx = null;
+  }
+  function rgbMix(a, b, tt) {
+    var pa = a.split(','), pb = b.split(',');
+    var o = [];
+    for (var i = 0; i < 3; i++) {
+      o.push(Math.round(+pa[i] + (+pb[i] - +pa[i]) * tt));
+    }
+    return o.join(',');
+  }
+  function voiceColor(st) {
+    var rb = orbRibbonRgb();
+    if (st === 'listening') { return rb[0]; }
+    if (st === 'thinking') { return rb[2]; }
+    if (st === 'speaking') { return rgbMix(rb[1], rb[2], 0.55); }
+    if (st === 'connecting') { return rgbMix(rb[1], '148,163,184', 0.5); }
+    if (st === 'error') { return '239,68,68'; }
+    if (st === 'alert') { return '245,158,11'; }
+    return rb[1];
+  }
+  function voiceFrame(ts) {
+    if (!VOICE.on) { VOICE.raf = 0; return; }
+    VOICE.raf = requestAnimationFrame(voiceFrame);
+    var ctx = VOICE.ctx, cv = VOICE.cv;
+    if (!ctx || !cv || !cv.isConnected) { return; }
+    var dt = VOICE.last ? (ts - VOICE.last) : 16.7;
+    VOICE.last = ts;
+    if (dt <= 0 || dt > 200) { dt = 16.7; }
+    var d = dt / 16.7;
+    var st = ORB.state;
+    var live = st === 'listening' || st === 'speaking';
+    /* 角标球的画布在 lv2 活跃态自己读电平、衰减 token 脉冲；它不跑时（安静档/
+       reduced-motion）这里代做，电平与脉冲仍然新鲜 */
+    if (!ORB.on) {
+      if (live) { orbAudioRead(ts); }
+      ORB.pulse *= Math.pow(0.94, d);
+    }
+    var target = live ? Math.max(0, Math.min(1, ORB.level || 0)) : 0;
+    VOICE.prevLv = VOICE.lv;
+    VOICE.lv += (target - VOICE.lv) * Math.min(1, 0.22 * d);
+    var W = cv.width, k = VOICE.dpr, cx = W / 2, cy = W / 2;
+    var R = W * 0.32;
+    var still = ORB.lvl === 0;
+    var spd = still ? 0 : 1;
+    VOICE.ph2 += (0.006 + (st === 'thinking' ? 0.018 : 0) + ORB.pulse * 0.02) * d * spd;
+    VOICE.ph3 -= (0.009 + VOICE.lv * 0.03) * d * spd;
+    VOICE.ph5 += (0.013 + VOICE.lv * 0.05) * d * spd;
+    var amp = still ? 0.012
+      : ((st === 'thinking' ? 0.045 : 0.022) + VOICE.lv * 0.11 + ORB.pulse * 0.03);
+    var br = 1 + (still ? 0 : 0.022 * Math.sin(ts / 1400)) + VOICE.lv * 0.06;
+    var col = voiceColor(st);
+    var rb = orbRibbonRgb();
+    ctx.clearRect(0, 0, W, W);
+    /* 辉光 */
+    var g = ctx.createRadialGradient(cx, cy, R * 0.55, cx, cy, R * 1.75);
+    g.addColorStop(0, 'rgba(' + col + ',' + (0.22 + VOICE.lv * 0.3).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + col + ',0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, W);
+    /* 涟漪（听：攻击音起一圈） */
+    if (st === 'listening' && !still && VOICE.lv > 0.3 &&
+        VOICE.lv - VOICE.prevLv > 0.06 && ts - VOICE.lastRip > 260) {
+      VOICE.lastRip = ts;
+      if (VOICE.rings.length < 5) { VOICE.rings.push({ r: R * 1.02, a: 0.35 }); }
+    }
+    for (var ri = VOICE.rings.length - 1; ri >= 0; ri--) {
+      var rg = VOICE.rings[ri];
+      rg.r += 1.4 * k * d;
+      rg.a *= Math.pow(0.955, d);
+      if (rg.a < 0.01) { VOICE.rings.splice(ri, 1); continue; }
+      ctx.strokeStyle = 'rgba(' + col + ',' + rg.a.toFixed(3) + ')';
+      ctx.lineWidth = 1.5 * k;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rg.r, 0, 6.2832);
+      ctx.stroke();
+    }
+    /* 软体轮廓 */
+    var N = 72;
+    ctx.beginPath();
+    for (var i = 0; i <= N; i++) {
+      var th = (i / N) * 6.2832;
+      var r = R * br * (1 + amp * (0.55 * Math.sin(2 * th + VOICE.ph2) +
+        0.3 * Math.sin(3 * th + VOICE.ph3) + 0.2 * Math.sin(5 * th + VOICE.ph5)));
+      var x = cx + Math.cos(th) * r, y = cy + Math.sin(th) * r;
+      if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
+    }
+    ctx.closePath();
+    var fg = ctx.createRadialGradient(cx - R * 0.12, cy - R * 0.16, R * 0.05, cx, cy, R * 1.06);
+    fg.addColorStop(0, 'rgb(' + rgbMix(col, '255,255,255', 0.5) + ')');
+    fg.addColorStop(0.5, 'rgb(' + col + ')');
+    fg.addColorStop(0.86, 'rgb(' + rgbMix(col, '255,255,255', 0.14) + ')');
+    fg.addColorStop(1, 'rgba(' + col + ',0.6)');
+    ctx.fillStyle = fg;
+    ctx.shadowColor = 'rgba(' + col + ',.5)';
+    ctx.shadowBlur = 16 * k;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    /* 内光三团（裁进球体） */
+    ctx.save();
+    ctx.clip();
+    ctx.globalCompositeOperation = ORB.dark ? 'lighter' : 'source-over';
+    var cells = [
+      { c: rb[0], a: 0.55, f1: 0.00031, f2: 0.00023, p: 0.0, s: 0.62 },
+      { c: rb[2], a: 0.5, f1: 0.00027, f2: 0.00037, p: 2.1, s: 0.58 },
+      { c: '255,255,255', a: ORB.dark ? 0.28 : 0.42, f1: 0.00041, f2: 0.00029, p: 4.2, s: 0.42 },
+    ];
+    var tms = still ? 0 : ts;
+    for (var ci = 0; ci < cells.length; ci++) {
+      var c = cells[ci];
+      var px = cx + Math.sin(tms * c.f1 + c.p) * R * 0.42;
+      var py = cy + Math.cos(tms * c.f2 + c.p * 1.7) * R * 0.42;
+      var cr = R * c.s * (1 + VOICE.lv * 0.25);
+      var cg = ctx.createRadialGradient(px, py, 0, px, py, cr);
+      cg.addColorStop(0, 'rgba(' + c.c + ',' + c.a.toFixed(3) + ')');
+      cg.addColorStop(1, 'rgba(' + c.c + ',0)');
+      ctx.fillStyle = cg;
+      ctx.fillRect(0, 0, W, W);
+    }
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* 演示循环（不依赖麦克风）：听 → 想 → 说 各几秒，电平走合成波（无分析器分支）。
+     供录演示、官网、老板验收。 */
+  function voiceDemoStep(i) {
+    if (!VOICE.on || !VOICE.demo) { return; }
+    var seq = ['listening', 'thinking', 'speaking'];
+    ORB.force = seq[i % 3];
+    syncOrb();
+    VOICE.demoT = setTimeout(function () { voiceDemoStep(i + 1); },
+      seq[i % 3] === 'thinking' ? 2400 : 3400);
+  }
+  function demo(mode) {
+    if (mode === false || mode === 'off') {
+      if (VOICE.demo) { voiceStop(); } else { ORB.force = ''; syncOrb(); }
+      return true;
+    }
+    if (mode == null || mode === true || mode === 'loop') {
+      return voiceStart({ demo: true });
+    }
+    if (ORB_STATES.indexOf(String(mode)) >= 0) {
+      ORB.force = String(mode);
+      syncOrb();
+      return true;
+    }
+    return false;
   }
 
   /* ────────────────────────────────────────────── 报障 tab */
@@ -4149,6 +5293,10 @@
     if (act === 'go-mine') { e.preventDefault(); switchTab('mine'); return; }
     if (act === 'mine-refresh') { loadTickets(); return; }
     if (act === 'mic') { toggleRec(); return; }
+    /* 语音对话块（P1）：点大球=打断 */
+    if (act === 'v-interrupt') { voiceInterrupt(); return; }
+    if (act === 'v-mute') { voiceToggleSay(); return; }
+    if (act === 'v-end') { voiceStop(); return; }
     if (act === 'shot-page') { capturePage(); return; }
     if (act === 'tips') {
       if (typeof window.toggleTermTips === 'function') {
@@ -4184,16 +5332,10 @@
       return;
     }
     if (act === 'orb-fx') {
-      var calmNext = ORB.lvl >= 2;
-      try {
-        localStorage.setItem('asb_orb_lvl', calmNext ? '1' : '2');
-      } catch (e5) { /* ignore */ }
-      ORB.degStep = 0;
-      ORB.lvl = orbLevel();
-      applyLevelClass();
-      orbBeacon(ORB.lvl < 2 ? 'asb_orb_calm_on' : 'asb_orb_calm_off');
+      /* 无 data-fx 的旧按钮（缓存的老面板）退化为 安静↔流动 切换 */
+      var fx = el.getAttribute('data-fx') || (ORB.lvl >= 2 ? 'calm' : 'flow');
+      setOrbFx(fx);
       renderTools();
-      syncOrb();
       return;
     }
   }
@@ -4337,6 +5479,7 @@
     }
     if (S.shell === 'admin') { document.body.classList.add('asb-live'); }
     orbInit();
+    firstRunTip();
     /* P3：带我去聚光灯交接 + 主动援助错误监听（2026-08-21） */
     setTimeout(trySpotlight, 600);
     wireErrWatch();
@@ -4367,6 +5510,52 @@
     _orbForce: function (st) { ORB.force = st || ''; syncOrb(); },
     _orbState: function () { return ORB.state; },
     _orbLevel: function () { return ORB.lvl; },
+    /* v3：待机样式读/写（偏好页段控同一条通路；门禁/演示页用） */
+    _orbIdle: function () { return ORB.idle; },
+    orbFx: setOrbFx,
+    /* P1：语音对话（免手动回合）。voice.start() 需要麦克风可用（boot.voice +
+       安全上下文），否则返回 false；demo('loop') 不依赖麦克风，走合成电平循环
+       听→想→说，供录演示/官网/验收；demo(false) 收场。 */
+    voice: { start: function () { return voiceStart(); }, stop: voiceStop,
+             interrupt: voiceInterrupt, on: function () { return VOICE.on; } },
+    demo: demo,
+    /* 门禁钩子：句级切分纯函数；_voiceSim(text) 跳过麦克风把一句「听到的话」
+       直接送进回合链（转写→问答→按句播报→回到听），验证回合状态机。 */
+    _voiceSplit: voiceSplit,
+    _voiceEager: voiceEager,
+    _voiceSim: function (text) {
+      if (!VOICE.on) { return false; }
+      /* 与真实链同序：一轮「听」先收（真实流程里转写发生在收轮之后） */
+      if (REC && REC.voice) { voiceTurnStop(true); }
+      VOICE.tEnd = Date.now();
+      voiceAsk(String(text || ''));
+      return true;
+    },
+    /* 门禁钩子（P2）：按真实节拍（20ms 一帧）注入给定 RMS 电平的合成 PCM，驱动
+       VAD/打断判定；返回 Promise。不经麦克风，测试可完全确定。 */
+    _voiceInjectPcm: function (level, ms) {
+      return new Promise(function (res) {
+        var frames = Math.max(1, Math.round((Number(ms) || 0) / 20));
+        var amp = Math.max(0, Math.min(1, Number(level) || 0)) * 32767 * 1.41421;
+        var k = 0;
+        var tm = setInterval(function () {
+          var f = new Int16Array(320);
+          for (var i = 0; i < 320; i++) { f[i] = Math.round(Math.sin(i * 0.3) * amp); }
+          voicePcmPush(f);
+          if (++k >= frames) { clearInterval(tm); res(true); }
+        }, 20);
+      });
+    },
+    _voiceWavBytes: function (n) { return pcmToWav(new Int16Array(n), 16000).size; },
+    _voiceState: function () {
+      return { on: VOICE.on, demo: VOICE.demo, playing: VOICE.playing,
+               queued: VOICE.q.length, turns: VOICE.turns, autoSay: VOICE.autoSay,
+               answerDone: VOICE.answerDone, rec: !!(REC && REC.voice),
+               speechSeen: VOICE.speechSeen, spStart: VOICE.spStart,
+               carry: !!VOICE.carry, cap: !!VOICE.cap,
+               worklet: !!(VOICE.cap && VOICE.cap.worklet), w: VOICE.w,
+               eager: VOICE.eager, tEnd: VOICE.tEnd, tPlay: VOICE.tPlay };
+    },
     _orbBurst: orbBurst,
     /* 光谱三色的 rgb（画布同源）：白标推导是否真的到了画布，门禁/演示页读这里 */
     _ribbonRgb: orbRibbonRgb };
