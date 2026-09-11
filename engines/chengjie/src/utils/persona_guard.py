@@ -53,6 +53,24 @@ _CAPABILITY_LEAK_PATTERNS = [
     re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+have\s+(?:the\s+)?(?:ability|capability|"
                r"function|feature)\s+to\s+(?:send|share)\s+(?:photos?|pictures?|images?|"
                r"voice|audio|videos?)\b", re.I),
+    # Q-20 D（#178 VDUJX6 / PQE9ZF 实录）：客户问「这是你吗」→ AI「我没这个功能 / 不支持发图 /
+    # I can't send photos」。「功能 / 支持 / 不能发照片」全是把自己当程序说——同族同开关。
+    re.compile(r"(我|我这边|我这|这边|我目前|目前|系统|系統)?\s*(没有|没|沒有|沒|无|無|不支持|不支援)\s*"
+               r"(这个|這個|这种|這種|这样的|這樣的|发图|發圖|发照片|發照片|发送图片|發送圖片|"
+               r"发送照片|發送照片|发图片|發圖片|传图|傳圖|发视频|發視頻|发语音|發語音)?\s*"
+               r"(功能|的功能|功能哦|功能呢|功能啦|功能的)"),
+    re.compile(r"(我|我这边|我这|这边|目前|系统|系統)\s*(不支持|不支援|支持不了|支援不了)\s*"
+               r"(发|發|传|傳|发送|發送)?\s*(图|圖|图片|圖片|照片|相片|视频|視頻|语音|語音)"),
+    # 「我现在/暂时不能发照片，在开会」是临时不便（真人也会说）——时间词打断即不命中
+    re.compile(r"(我|我这边|我这|这边)\s*(不能|没法|沒法|无法|無法|没办法|沒辦法|发不了|發不了|发不出|發不出)\s*"
+               r"(发|發|传|傳|发送|發送|给你发|給你發|给你|給你)?\s*(照片|图片|圖片|图|圖|相片|自拍)"
+               r"(?![^。！？!?\n]{0,8}(?:现在|這會|这会|此刻|手头|手頭|这边不方便|這邊不方便|等会|等會|待会|待會|晚点|晚點|一会|一會))"),
+    re.compile(r"\bi\s+(?:can'?t|cannot|can\s+not|am\s+(?:not\s+able|unable)|(?:'m|am)\s+not\s+able)\s+"
+               r"(?:to\s+)?(?:send|share|upload|attach)\s+(?:you\s+)?(?:any\s+)?(?:photos?|pictures?|pics?|images?|"
+               r"selfies?|videos?|voice\s+(?:notes?|messages?)|audio)\b"
+               r"(?![^.!?\n]{0,12}(?:right\s+now|at\s+the\s+moment|now|today|tonight|later|atm)\b)", re.I),
+    re.compile(r"\b(?:there(?:'s| is)\s+)?no\s+such\s+(?:feature|function|option)\b", re.I),
+    re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+have\s+(?:that|this|such\s+a|the)\s+(?:feature|function|option|capability)\b", re.I),
 ]
 
 
@@ -1353,6 +1371,131 @@ def strip_late_reply_excuses(text: str, lang: str = "") -> Tuple[str, Dict[str, 
         return src, rep
 
 
+# ── Q-20 C（#178 Q9GDEH/2PKKM6 · 2026-09-11）：否认客户侧名字 ────────────────────
+# 实录 15:56 AI 出站「It's Mizuki, not Alicia」→ 客户「Mizuki who are u? I know only
+# Alicia」。联系人级 peer_calls_you（对方一直叫我的名字）是**客户那里的事实**，出站
+# 里任何「我不是 Alicia / 不是 Alicia / 我是 Mizuki 不是 Alicia / 不认识 Alicia」都是
+# 当场穿帮。以 peer_calls_you 实值构造句形（不认泛化的「not」），命中即整句剥除；
+# 剥空 → 换一句认领「It's me, Alicia」。纯函数绝不抛；名字为空 / 与人设名一致不判。
+
+_NAME_DENIAL_FALLBACK = {
+    "zh": "是我呀，{x}～", "en": "It's me, {x} 😊", "ja": "私だよ、{x}。",
+}
+
+
+def _name_denial_patterns(client_name: str, self_names: Optional[List[str]] = None) -> List[re.Pattern]:
+    x = re.escape(str(client_name or "").strip())
+    if not x:
+        return []
+    latin = bool(re.fullmatch(r"[A-Za-z][A-Za-z .'\-]*", str(client_name).strip()))
+    xb = (r"\b" + x + r"\b(?!'s\b)") if latin else x   # 「not Alicia's style」所有格不算否认
+    ys = [re.escape(str(s or "").strip()) for s in (self_names or []) if str(s or "").strip()]
+    y_alt = "(?:" + "|".join(ys) + ")" if ys else None
+    pats = [
+        # EN：not X / I'm not X / I am not X / it's Y, not X / my name is Y not X
+        re.compile(r"\b(?:i(?:'m| am)|it(?:'s| is)|this is|that(?:'s| is)|my name(?:'s| is))?"
+                   r"\s*,?\s*(?:not|isn'?t|is not|ain'?t)\s+" + xb, re.I),
+        re.compile(r"\bnot\s+" + xb, re.I),
+        re.compile(r"\b(?:don'?t|do not|dont)\s+know\s+(?:any|an?y?one\s+(?:called|named)|who)\s+" + xb, re.I),
+        re.compile(r"\bwho(?:'s| is)\s+" + xb + r"\s*\?", re.I),
+        re.compile(r"\b(?:i(?:'m| am)|call me)\s+(?!" + xb + r")[A-Za-z][\w'\-]*\s*,?\s*(?:not|never)\s+" + xb, re.I),
+        # ZH：不是 X / 我不是 X / 我是 Y 不是 X / 我不叫 X / 不认识 X / 没有 X 这个人 / X 是谁
+        re.compile(r"(?:我|这里|这边)?\s*(?:才)?\s*不是\s*" + x),
+        re.compile(r"我\s*(?:不叫|不是叫|没叫)\s*" + x),
+        re.compile(r"(?:我)?\s*(?:不认识|不認識|没听说过|沒聽說過|没有认识|不知道)\s*(?:什么|甚麼|谁是|誰是)?\s*" + x),
+        re.compile(r"(?:没有|沒有)\s*" + x + r"\s*(?:这个人|這個人|这人|這人)"),
+        re.compile(x + r"\s*(?:是谁|是誰|是哪位|是哪个|是哪個)"),
+        re.compile(r"(?:叫错|叫錯|认错|認錯|搞错|搞錯)\s*(?:了|人了)?[^。！？!?\n]{0,6}" + x),
+        # JA：X じゃない / X ではありません / X って誰
+        re.compile(x + r"\s*(?:じゃ|では|ちゃう)\s*(?:ない|ありません|ないよ|ないです)"),
+        re.compile(x + r"\s*(?:って|とは)\s*(?:誰|だれ|どなた)"),
+    ]
+    if y_alt:
+        pats.append(re.compile(r"我\s*(?:是|叫)\s*" + y_alt + r"\s*[,，、]?\s*(?:不是|不叫)\s*" + x))
+        pats.append(re.compile(r"\b(?:i(?:'m| am)|it(?:'s| is)|my name(?:'s| is))\s+" + y_alt
+                               + r"\s*,?\s*(?:not|and not|never)\s+" + xb, re.I))
+    return pats
+
+
+def _name_denial_exempt(sentence: str, client_name: str) -> bool:
+    """元语句放行：「you can call me X」「叫我 X 就好」——那是在**接受**这个名字。"""
+    s = str(sentence or "")
+    x = re.escape(str(client_name or "").strip())
+    if not x:
+        return True
+    if re.search(r"\b(?:call|calling)\s+me\s+" + x, s, re.I) and not re.search(
+            r"\b(?:don'?t|do not|stop|never)\s+call(?:ing)?\s+me\s+" + x, s, re.I):
+        return True
+    if re.search(r"(?:叫我|喊我)\s*" + x, s) and not re.search(r"(?:别|不要|不用|别再|不許|不许)\s*(?:叫我|喊我)\s*" + x, s):
+        return True
+    return False
+
+
+def find_name_denial(text: str, client_name: str, self_names: Optional[List[str]] = None) -> List[str]:
+    """出站文本里「否认客户侧名字」命中片段（Q-20 C）。``client_name`` 空 / 与
+    ``self_names`` 任一一致（Mizu↔Mizuki）→ []（不是两个名字就没有「否认」可言）。纯函数绝不抛。"""
+    out: List[str] = []
+    try:
+        s = str(text or "")
+        x = str(client_name or "").strip()
+        if not s.strip() or not x:
+            return []
+        try:
+            from src.utils.account_name_check import names_consistent
+            for y in (self_names or []):
+                if str(y or "").strip() and names_consistent(x, y):
+                    return []
+        except Exception:
+            pass
+        for sent in _split_sentences_sn(s):
+            if _name_denial_exempt(sent, x):
+                continue
+            for pat in _name_denial_patterns(x, self_names):
+                m = pat.search(sent)
+                if m:
+                    out.append(m.group(0).strip())
+                    break
+    except Exception:
+        return []
+    return out
+
+
+def strip_name_denial(
+    text: str, client_name: str, self_names: Optional[List[str]] = None, *, lang: str = "",
+) -> Tuple[str, Dict[str, Any]]:
+    """剥掉含「否认客户侧名字」的**句子**；剥空 → 换一句认领「It's me, X」。返回 ``(文本, report)``，
+    ``report["action"] ∈ {"clean", "strip", "replace"}``、``hits`` 命中片段、``name``。绝不抛、绝不返回空。"""
+    src = str(text or "")
+    x = str(client_name or "").strip()
+    rep: Dict[str, Any] = {"hits": [], "action": "clean", "name": x}
+    if not src.strip() or not x:
+        return src, rep
+    try:
+        hits = find_name_denial(src, x, self_names)
+        if not hits:
+            return src, rep
+        rep["hits"] = hits[:6]
+        kept: List[str] = []
+        for sent in _split_sentences_sn(src):
+            if find_name_denial(sent, x, self_names):
+                continue
+            kept.append(sent)
+        out = "".join(kept).strip()
+        out = re.sub(r"^(?:and|but|so|anyway|also|well)\b\s*[,，]?\s*|^[,，、]\s*", "", out, flags=re.I).strip()
+        if not out or not re.sub(r"[\s。！？!?,，、；;：:\.～~]+", "", out):
+            lg = str(lang or "").lower()[:2]
+            if not lg:
+                lg = "ja" if re.search(r"[\u3040-\u30ff]", src) else ("zh" if _CJK_RE.search(src) else "en")
+            out = (_NAME_DENIAL_FALLBACK.get(lg) or _NAME_DENIAL_FALLBACK["en"]).format(x=x)
+            rep["action"] = "replace"
+            return out, rep
+        rep["action"] = "strip"
+        return out, rep
+    except Exception:
+        rep["action"] = "clean"
+        return src, rep
+
+
 __all__ = [
     "collect_forbidden", "find_violations", "matches_ai_self_identity", "sanitize",
     "matches_multi_peer_leak",
@@ -1361,4 +1504,5 @@ __all__ = [
     "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
     "find_vocative_self_name", "strip_vocative_self_name",
     "swap_vocative_peer_call",
+    "find_name_denial", "strip_name_denial",
 ]

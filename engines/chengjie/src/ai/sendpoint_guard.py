@@ -43,6 +43,7 @@ _STATS: Dict[str, int] = {
     "lang_pin_passthru": 0,    # 冲突但翻译器缺席/失败 → 原样放行
     "voice_vocative": 0,       # 语音合成前呼格纠正（#105 主指标）
     "voice_lang_mix": 0,       # 语音合成前混语剥除
+    "name_denial": 0,          # Q-20 C（#178）：否认客户侧名字（not Alicia / 我不是 Alicia）剥除/改写
 }
 _STATS_LOCK = threading.Lock()
 
@@ -187,15 +188,23 @@ def near_call_peer_fix(
 def sendpoint_vocative_pass(
     text: str, names: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any]]:
-    """收口点呼格三连（确定性、零 LLM、绝不抛）：
+    """收口点呼格三连 + 客户侧名字否认（确定性、零 LLM、绝不抛）：
 
     ① peer_calls_you → call_peer 互换（#24 同函数）；
     ② call_peer 近形变体纠正（baba→babe，#105 补强）；
-    ③ 人设名当客户呼格剥除（#96-A 同函数，peer 名未知照判）。
-    meta = {"swap_hits", "near_hits", "self_voc_hits"}（空列表=未命中）。
+    ③ 人设名当客户呼格剥除（#96-A 同函数，peer 名未知照判）；
+    ④ **否认客户侧名字**剥除 / 改写（Q-20 C · #178 Q9GDEH/2PKKM6）：联系人级
+      ``peer_calls_you``（对方一直叫我的名字）≠ 人设名时，出站里的
+      「not Alicia / I'm not Alicia / 我是 Mizuki 不是 Alicia」整句剥掉，剥空换
+      「It's me, Alicia」；日志 ``[persona-guard] name_denial conv= name=``。
+      联系人级值经 ``contact_names.overlay_sendpoint_names`` 进 names（同时带
+      ``conversation_id``）；人设级 peer_calls_you 在有会话时已不进 names（A 段）。
+    meta = {"swap_hits", "near_hits", "self_voc_hits", "name_denial_hits",
+    "name_denial_action"}（空列表 / "" = 未命中）。
     """
     meta: Dict[str, Any] = {"swap_hits": [], "near_hits": [],
-                            "self_voc_hits": []}
+                            "self_voc_hits": [], "name_denial_hits": [],
+                            "name_denial_action": ""}
     src = str(text or "")
     if not src.strip() or not isinstance(names, dict) or not names:
         return src, meta
@@ -224,6 +233,18 @@ def sendpoint_vocative_pass(
                 meta["self_voc_hits"] = voc
                 _bump("vocative_self")
                 out = out4 or out
+        if py:
+            from src.utils.persona_guard import strip_name_denial
+            out5, rep = strip_name_denial(out, py, self_names)
+            if rep.get("hits"):
+                meta["name_denial_hits"] = list(rep.get("hits") or [])
+                meta["name_denial_action"] = str(rep.get("action") or "")
+                _bump("name_denial")
+                logger.warning(
+                    "[persona-guard] name_denial conv=%s name=%s action=%s hits=%r: %r -> %r",
+                    str(names.get("conversation_id") or "-"), py, rep.get("action"),
+                    meta["name_denial_hits"][:3], out[:60], out5[:60])
+                out = out5 or out
         if not (out or "").strip():
             return src, meta
         return out, meta
