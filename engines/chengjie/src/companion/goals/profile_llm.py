@@ -282,26 +282,34 @@ async def run_llm_capture(
         # 正则/LLM 两轨同吃）。
         # Q-19（#294）：同一单点再过槽类型校验（年龄 16–99 / 短语 ≤24 字禁整句 / 枚举）——
         # 这条旧 LLM 轨写 llm_pending（读作 ai_inferred），与合并抽取链同一把尺子。
+        # Q-25（#295 Y39D8U）：类型校验并入共享事实门 fact_gate.check——evidence = **客户这条
+        # 原句**（本轨只吃客户消息，AI 问句从不在输入里），值每个核心 token 须整词在原句里：
+        # `AI work` × 「Not so long dear been a couple months.」丢（unanchored），旧接地的
+        # 「任一 token 重叠即过」（work 撞 inspection work）不再是放行条件。门异常同丢。
         try:
+            from src.companion.fact_gate import check as _gate_check
             from src.companion.goals.profile_slots import slot_validate, slot_value_suspect
             _bad = {k: slot_value_suspect(k, v) for k, v in grounded.items()}
             for k, v in list(grounded.items()):
                 if _bad.get(k):
                     continue
-                _nv, _why = slot_validate(k, v)
-                if _why:
-                    _bad[k] = f"invalid:{_why}"
-                elif _nv:
+                _ok, _why = _gate_check(v, slot_or_kind=k, evidence=text, inbound_texts=[text])
+                if not _ok:
+                    _bad[k] = _why or "unanchored"
+                    continue
+                _nv, _vw = slot_validate(k, v)
+                if _nv and not _vw:
                     grounded[k] = _nv
             for k, why in _bad.items():
                 if why:
-                    logger.info("[goal-profile-llm] 槽位值语义不合格丢弃 "
+                    logger.info("[goal-profile-llm] 槽位值不过事实门丢弃 "
                                 "%s=%r（%s）", k, grounded[k][:20], why)
                     logger.info("[profile] drop conv=%s:%s slot=%s value=%s source=ai_inferred reason=%s",
                                 platform, chat_key, k, str(grounded[k])[:60], why)
             grounded = {k: v for k, v in grounded.items() if not _bad.get(k)}
         except Exception:
-            pass
+            logger.debug("profile llm fact gate failed; dropping all", exc_info=True)
+            grounded = {}
         if not grounded:
             return 0
         store.upsert_customer_profile(

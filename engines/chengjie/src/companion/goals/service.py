@@ -1974,17 +1974,29 @@ def build_block_for_chat(
                     from src.companion.goals.profile_llm import (
                         schedule_llm_capture,
                     )
-                    prof0 = store.get_customer_profile(
-                        platform, str(chat_key or ""))
-                    schedule_llm_capture(
-                        ai_client, store, cfg_root,
-                        platform=platform, chat_key=str(chat_key or ""),
-                        text=inbound_text,
-                        fields=dict((prof0 or {}).get("fields") or {}),
-                        # P27：摸底目标只问坐席勾选的缺口——全 11 槽提示词
-                        # 又长又散，抽取面越大误摘面越大
-                        include=(sel_slots or None),
-                        now=now)
+                    # Q-25 B（#295 Y39D8U）：「AI 问 → 客户只答时长 / 是 / 数字」不是回填原料——
+                    # 「couple months」里没有任何实体，LLM 只会把 AI 问句里的 inspection / AI
+                    # 补成职业。命中即不调 LLM 回填，只留 slot_state 的 mentioned:answered 线索
+                    # （无值）；`[profile] drop … reason=answer_only:<kind>` 记一行。
+                    from src.companion.goals.profile_slots import answer_only_kind
+                    _ans_kind = answer_only_kind(inbound_text)
+                    if _ans_kind:
+                        logger.info(
+                            "[profile] drop conv=%s slot=* value=%s source=ai_inferred "
+                            "reason=answer_only:%s", _conv_label(),
+                            str(inbound_text or "")[:40].replace("\n", " "), _ans_kind)
+                    else:
+                        prof0 = store.get_customer_profile(
+                            platform, str(chat_key or ""))
+                        schedule_llm_capture(
+                            ai_client, store, cfg_root,
+                            platform=platform, chat_key=str(chat_key or ""),
+                            text=inbound_text,
+                            fields=dict((prof0 or {}).get("fields") or {}),
+                            # P27：摸底目标只问坐席勾选的缺口——全 11 槽提示词
+                            # 又长又散，抽取面越大误摘面越大
+                            include=(sel_slots or None),
+                            now=now)
                 except Exception:
                     logger.debug("profile llm schedule skipped", exc_info=True)
 

@@ -102,8 +102,27 @@ def _whole_word_in(tok: str, text_low: str) -> bool:
                      text_low) is not None
 
 
+def _cjk_run_anchored(run: str, ev_lit: str) -> bool:
+    """汉字 / 假名 / 谚文段：整段子串直接过；否则要求**每个字**都在 evidence 里且相邻字对
+    至少一半也在（「客服回不过来」← 「客服都回不过来」这类摘录省字放行；「老师」←
+    「老板和师傅」这类拆字重组不放）。"""
+    r = _lit(run)
+    if not r:
+        return True
+    if r in ev_lit:
+        return True
+    if any(ch not in ev_lit for ch in r):
+        return False
+    if len(r) < 2:
+        return True
+    pairs = [r[i:i + 2] for i in range(len(r) - 1)]
+    hit = sum(1 for p in pairs if p in ev_lit)
+    return hit * 2 >= len(pairs)
+
+
 def value_anchored_in_evidence(value: Any, evidence: Any) -> bool:
-    """值的**每个**核心 token 都在 evidence 里（禁部分匹配）。"""
+    """值的**每个**核心 token 都在 evidence 里（禁部分匹配）：拉丁词 / 数字整词；
+    汉字 / 假名 / 谚文段见 :func:`_cjk_run_anchored`。"""
     latin, cjk = value_tokens(value)
     if not latin and not cjk:
         # 取不出 token（纯符号 / 表情）→ 退回归一子串
@@ -115,7 +134,7 @@ def value_anchored_in_evidence(value: Any, evidence: Any) -> bool:
             return False
     ev_lit = _lit(evidence)
     for run in cjk:
-        if _lit(run) not in ev_lit:
+        if not _cjk_run_anchored(run, ev_lit):
             return False
     return True
 

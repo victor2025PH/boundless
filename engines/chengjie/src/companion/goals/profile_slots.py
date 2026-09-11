@@ -1499,6 +1499,93 @@ def place_value_ok(value: Any) -> bool:
     return not slot_validate("location", value)[1]
 
 
+# ── Q-25（#295 Y39D8U）：「AI 问 → 客户只答时长 / 是 / 数字」不是实体回填的原料 ──────────
+# AI 问「inspection work 做多久」，客户答「Not so long dear been a couple months.」——这句只有
+# 时长，没有任何实体（职业 / 地名 / 名字）；LLM 回填轨拿它做提示词只会把 AI 问句里的实体
+# （AI / inspection）「补」成值。这里判「这条消息是否只是应答（时长 / 是否 / 数字 / 填充词）」，
+# 命中 → 目标引擎不调 LLM 回填，只留 ``slot_state`` 的 mentioned:answered 线索（无值）。
+_ANS_LATIN_FILLER = frozenset({
+    "not", "so", "long", "dear", "honey", "sweetheart", "sweetie", "babe", "baby", "love", "hun",
+    "been", "its", "it's", "is", "was", "are", "am", "im", "i'm", "ive", "i've", "i", "me", "my",
+    "have", "had", "has", "about", "around", "almost", "nearly", "just", "only", "like", "for",
+    "a", "an", "the", "since", "now", "already", "still", "maybe", "ago", "past", "last", "this",
+    "that", "and", "or", "well", "oh", "ohh", "hmm", "hm", "haha", "hahaha", "lol", "yes", "yeah",
+    "yep", "yup", "ya", "no", "nope", "nah", "ok", "okay", "kk", "sure", "fine", "right", "correct",
+    "exactly", "indeed", "true", "of", "course", "too", "very", "quite", "pretty", "really", "than",
+    "more", "less", "over", "under", "roughly", "approximately", "to", "in", "on", "at", "here",
+    "there", "then", "yet", "till", "until", "till", "ever", "never", "always", "sometimes", "often",
+    "do", "did", "does", "dont", "don't", "didnt", "didn't", "not", "u", "you", "know", "think",
+    "guess", "say", "said", "mean", "actually", "basically", "kinda", "sorta", "bit", "little",
+    "lot", "lots", "much", "many", "some", "any", "all", "while", "time", "times", "moment",
+    "please", "pls", "thanks", "thank", "thx", "ty", "hi", "hello", "hey", "hehe", "aww", "awww",
+    "po", "opo", "oo", "hindi", "sige", "ha", "ay", "na", "pa", "lang", "din", "rin", "ba",
+    "hai", "iie", "ne", "un", "ee",
+})
+_ANS_LATIN_DURATION = frozenset({
+    "year", "years", "yr", "yrs", "month", "months", "mo", "mos", "week", "weeks", "wk", "wks",
+    "day", "days", "hour", "hours", "hr", "hrs", "minute", "minutes", "min", "mins", "decade",
+    "decades", "couple", "few", "several", "half", "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "thirty", "forty", "fifty",
+    "hundred", "first", "second", "third", "recently", "lately", "forever", "ages", "awhile",
+    "taon", "buwan", "linggo", "araw", "oras", "isang", "dalawang", "tatlong",
+})
+_ANS_LATIN_ACK = frozenset({
+    "yes", "yeah", "yep", "yup", "ya", "no", "nope", "nah", "ok", "okay", "kk", "sure", "fine",
+    "right", "correct", "exactly", "indeed", "true", "oo", "opo", "hindi", "sige", "hai", "iie",
+})
+_ANS_CJK_ACK_RE = re.compile(
+    r"是的|不是|是啊|是呀|是嘅|係呀|係啊|唔係|冇|没有|没|嗯嗯|嗯|对的|对啊|对呀|對|对|好的|好啊|好呀|好|"
+    r"行|可以|OK|ok|是|係|有|沒有|不|唔|はい|いいえ|そう|うん|네|아니요|아니|응")
+_ANS_CJK_DURATION_RE = re.compile(
+    r"个多月|個多月|个月|個月|多年|几年|幾年|几个|幾個|半年|一年|两年|兩年|三年|四年|五年|六年|七年|八年|九年|十年|"
+    r"年多|年|月|周|週|星期|礫拜|禮拜|礼拜|天|日|小时|小時|钟|鐘|分钟|分鐘|年前|以前|之前|最近|刚|剛|才|"
+    r"大概|大約|大约|差不多|左右|将近|將近|不到|快|已经|已經|还|還|也|就|了|的|呢|啊|呀|哦|噢|吧|哈|啦|嘅|咗|"
+    r"亲|親|宝贝|寶貝|亲爱的|親愛的|老公|老婆|多|几|幾|半|两|兩|一|二|三|四|五|六|七|八|九|十|百|千|零|"
+    r"数|數|个|個|位|号|號|岁|歲|点|點")
+_ANS_MAX_LEN = 120
+_ANS_WORD_RE = re.compile(r"[A-Za-z][A-Za-z']*")
+_ANS_DIGIT_RE = re.compile(r"\d+")
+_ANS_OTHER_LETTER_RE = re.compile(r"[^\W\d_]")
+
+
+def answer_only_kind(text: Any) -> str:
+    """客户这条消息是否**只是应答**（无实体）→ ``"duration" | "yes_no" | "number" | "filler" | ""``。
+
+    判法：剥掉数字、拉丁填充词 / 时长词 / 是否词、CJK 应答 / 时长 / 语气 / 称呼片段后，
+    **一个内容字都不剩** → 命中（返回最能描述它的类别）；剩下任何实义 token（nurse / 曼谷 /
+    Manila）→ ``""``（不是纯应答，正常走抽取）。空文本 / 超 120 字 → ``""``。纯函数绝不抛。"""
+    try:
+        t = str(text or "").strip()
+        if not t or len(t) > _ANS_MAX_LEN:
+            return ""
+        low = t.casefold()
+        words = [w.strip("'") for w in _ANS_WORD_RE.findall(low)]
+        words = [w for w in words if w]
+        has_digit = bool(_ANS_DIGIT_RE.search(low))
+        has_ack = any(w in _ANS_LATIN_ACK for w in words) or bool(_ANS_CJK_ACK_RE.search(t))
+        has_dur = any(w in _ANS_LATIN_DURATION for w in words) or bool(
+            re.search(r"年|月|周|週|星期|天|小时|小時|分钟|分鐘|礼拜|禮拜|個多月|个多月", t))
+        for w in words:
+            if w in _ANS_LATIN_FILLER or w in _ANS_LATIN_DURATION or w in _ANS_LATIN_ACK:
+                continue
+            return ""
+        rest = _ANS_WORD_RE.sub(" ", t)
+        rest = _ANS_DIGIT_RE.sub(" ", rest)
+        rest = _ANS_CJK_ACK_RE.sub(" ", rest)
+        rest = _ANS_CJK_DURATION_RE.sub(" ", rest)
+        if _ANS_OTHER_LETTER_RE.search(rest):
+            return ""
+        if has_dur:
+            return "duration"
+        if has_ack:
+            return "yes_no"
+        if has_digit:
+            return "number"
+        return "filler" if (words or _ANS_CJK_ACK_RE.search(t) or _ANS_CJK_DURATION_RE.search(t)) else ""
+    except Exception:
+        return ""
+
+
 def capture_from_text(text: str) -> List[Tuple[str, str]]:
     """从一条入站消息确定性抽画像槽位。返回 ``[(slot_key, value), ...]``。
 
