@@ -21,6 +21,8 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import pytest
+from fastapi import FastAPI, Request   # 顶层导入：__future__ annotations 下 FastAPI 需在模块 globals 解析 Request
+from fastapi.testclient import TestClient
 
 from src.ai.chat_assistant_service import quick_analyze, quick_risk
 from src.inbox import autosend_policy as pol
@@ -376,3 +378,93 @@ def test_regrade_never_lowers_true_high(svc):
         assert risk == "high", (text, risk, out)
         for r in reasons:
             assert r in out, (text, out)
+
+
+# ── ⑦ D 段：回复设置页「风控分级」卡 路由 + i18n 包 ─────────────────────────────
+
+class _FakeCM:
+    def __init__(self, tmp_path):
+        self.config_path = str(tmp_path / "config" / "config.yaml")
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        self.config = {"persona_persistence": {"enabled": True}}
+
+
+@pytest.fixture
+def rk_client(tmp_path):
+    from src.utils.persona_manager import PersonaManager
+    from src.web.routes.reply_settings_routes import register_reply_settings_routes
+
+    PersonaManager.reset()
+    pm = PersonaManager.get_instance()
+    pm.upsert_profile("p_rk", {"name": "Mia", "boundaries": {"meeting_policy": "soft"}})
+    app = FastAPI()
+
+    async def _noop(request: Request):
+        return None
+
+    cm = _FakeCM(tmp_path)
+    app.state.config_manager = cm
+    register_reply_settings_routes(app, page_auth=_noop, api_auth=_noop, templates=None, config_manager=cm)
+    try:
+        yield TestClient(app), pm
+    finally:
+        PersonaManager.reset()
+
+
+def test_rk_route_table_and_overrides_roundtrip(rk_client):
+    client, pm = rk_client
+    r = client.get("/api/reply-settings/risk-grader")
+    assert r.status_code == 200, r.text[:400]
+    d = r.json()
+    assert d.get("ok") is True and d["enabled"] is True and d["persona_id"] == "", d
+    ids = [r["id"] for r in d["categories"]]
+    assert ids == [c["id"] for c in rg.CATEGORIES]
+    assert set(d["overridable"]) == set(rg.OVERRIDABLE) and d["cooldown_min"] == 30
+    assert [p["id"] for p in d["personas"]] == ["p_rk"] and d["personas"][0]["overrides"] == {}
+    for r in d["categories"]:
+        assert r["words"]["zh"] and r["words"]["en"] and r["action"] and r["level"] in rg.LEVELS
+
+    # 保存：合法覆写 + 空串＝删；地板以下裁到地板由 risk_overrides_of 负责
+    out = client.post("/api/reply-settings/risk-grader/overrides",
+                      json={"persona_id": "p_rk", "overrides": {"request_media": "low", "complaint": "", "privacy": "high"}}).json()
+    assert out["ok"] is True and out["overrides"] == {"request_media": "low", "privacy": "high"}
+    assert out["persisted"] is True
+    assert pm.get_persona_by_id("p_rk")["boundaries"]["risk_overrides"] == {"request_media": "low", "privacy": "high"}
+    assert pm.get_persona_by_id("p_rk")["boundaries"]["meeting_policy"] == "soft"     # 深合并不吞邻键
+    row = next(r for r in out["categories"] if r["id"] == "request_media")
+    assert row["effective_level"] == "low" and row["override"] == "low"
+
+    d2 = client.get("/api/reply-settings/risk-grader", params={"persona": "p_rk"}).json()
+    assert d2["persona_id"] == "p_rk"
+    assert d2["personas"][0]["overrides"] == {"request_media": "low", "privacy": "high"}
+
+    # 清空 → 键整段移除
+    out2 = client.post("/api/reply-settings/risk-grader/overrides", json={"persona_id": "p_rk", "overrides": {}}).json()
+    assert out2["ok"] is True and out2["overrides"] == {}
+    assert "risk_overrides" not in pm.get_persona_by_id("p_rk")["boundaries"]
+
+
+def test_rk_route_rejects_high_category_and_bad_level(rk_client):
+    client, pm = rk_client
+    for bad in ({"threat": "low"}, {"money_request": "medium"}, {"adult": "low"}, {"request_meet": "banana"}):
+        out = client.post("/api/reply-settings/risk-grader/overrides", json={"persona_id": "p_rk", "overrides": bad}).json()
+        assert out["ok"] is False and out["errors"][0]["code"] == "bad_enum", bad
+    assert "risk_overrides" not in (pm.get_persona_by_id("p_rk").get("boundaries") or {})
+    out = client.post("/api/reply-settings/risk-grader/overrides", json={"persona_id": "nope", "overrides": {}}).json()
+    assert out["ok"] is False and out["errors"][0]["code"] == "not_found"
+    out = client.post("/api/reply-settings/risk-grader/overrides", json={"persona_id": "", "overrides": {}}).json()
+    assert out["ok"] is False
+
+
+def test_rk_i18n_pack_covers_every_category_level_action():
+    from src.web.i18n_packs import risk_grader as pack
+    for cat in (c["id"] for c in rg.CATEGORIES):
+        k = f"inbox.risk.cat_{cat}"
+        assert k in pack.ZH and k in pack.EN and k in pack.ZH_HANT, k
+    for lv in rg.LEVELS:
+        assert f"inbox.risk.lv_{lv}" in pack.ZH and f"rps_rk_lv_{lv}" in pack.ZH
+    for act in {c["action"] for c in rg.CATEGORIES}:
+        assert f"rps_rk_act_{act}" in pack.ZH and f"rps_rk_act_{act}" in pack.EN and f"rps_rk_act_{act}" in pack.ZH_HANT, act
+    assert set(pack.ZH) == set(pack.EN) == set(pack.ZH_HANT)
+    for k in ("inbox.risk.tag_medium", "inbox.risk.hold_chip", "inbox.handoff.r_risk", "inbox.handoff.r_risk_hit", "rps_rk_title"):
+        assert k in pack.ZH

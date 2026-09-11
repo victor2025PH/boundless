@@ -457,6 +457,32 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     </details>
   </div>
 
+  <!-- Q-17 #277②（rk-，2026-09-11）「风控分级」：数据源 GET /api/reply-settings/risk-grader
+       （类别 / 词表摘要 / 默认级别 / 动作 只读，事实源 src/inbox/risk_grader.CATEGORIES）；
+       人设级覆写 boundaries.risk_overrides 走 POST .../risk-grader/overrides（PersonaManager 同一落盘口）。
+       高风险类别不可调低（地板）；成人类别沿用 Q-15 人设工坊「成人内容政策」。旧后端 404 → 整卡隐藏。 -->
+  <div class="rps-card" id="rps-sec-risk" style="display:none">
+    <h3>{{ (i18n or {}).get('rps_rk_title', "🧯 风控分级 · 什么话会拦、拦到什么程度") }}
+      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:rgba(245,158,11,.14);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的覆写") }}</span></h3>
+    <p class="rps-hint" id="rps-rk-hint">{{ (i18n or {}).get('rps_rk_hint', "客户来话先过三级分级：高风险 → 停自动回复、转人工并保持（现状不变）；中风险 → 按人设政策软拒或冻结，只打「风险·中」标签不转人工；低风险 → 只记日志。摘掉「需人工」后同类别 {n} 分钟内不再重打。") }}</p>
+    <div class="rps-row">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_rk_persona', "人设覆写") }}</span>
+      <select id="rps-rk-persona" onchange="rpsRkLoad(this.value)"></select>
+      <button type="button" class="rps-btn rps-btn-save" id="rps-rk-save" onclick="rpsRkSave()" style="display:none">{{ (i18n or {}).get('rps_rk_save', "保存人设覆写") }}</button>
+      <span class="rps-row-hint">{{ (i18n or {}).get('rps_rk_note', "高风险类别（自杀 / 未成年 / 威胁 / 要钱 / 诈骗 / 支付词）不可调低；「成人」走人设工坊的成人内容政策。") }}</span>
+    </div>
+    <table class="rps-po-table" id="rps-rk-table">
+      <thead><tr>
+        <th>{{ (i18n or {}).get('rps_rk_col_cat', "类别") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_words', "大概会中的词") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_level', "默认级别") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_action', "动作") }}</th>
+        <th>{{ (i18n or {}).get('rps_rk_col_override', "这个人设") }}</th>
+      </tr></thead>
+      <tbody id="rps-rk-tbody"></tbody>
+    </table>
+  </div>
+
   <div class="rps-grp" id="rps-grp-quota">
   <!-- 回复额度守卫（P0-guard，2026-08-12）：peer_bot_guard 的 配置 / 今日状态 /
        豁免 三合一收口（此前配置只能改 YAML、豁免只在收件箱触顶横幅出现）。
@@ -1493,6 +1519,49 @@ var RPS_I18N = {
     "inbox.reply_style.bubbles.enabled": {{ (i18n or {}).get('rps_bub_enabled', "启用分条发送")|tojson }},
     "inbox.reply_style.bubbles.per_sentence": {{ (i18n or {}).get('rps_bub_per_sent', "逐句拆条")|tojson }},
     "inbox.reply_style.bubbles.explicit_newline_only": {{ (i18n or {}).get('rps_bub_nl_only', "仅显式换行才拆")|tojson }}
+  }
+};
+/* Q-17 #277②（rk-）「风控分级」卡词条：类别 / 级别 / 动作 查表（与 inbox.risk.* 同一 i18n 包 risk_grader.py） */
+var RPS_RK_I18N = {
+  personaNone: {{ (i18n or {}).get('rps_rk_persona_none', "（只看默认级别）")|tojson }},
+  ovDefault: {{ (i18n or {}).get('rps_rk_ov_default', "跟默认")|tojson }},
+  ovLocked: {{ (i18n or {}).get('rps_rk_ov_locked', "不可调")|tojson }},
+  ovAdult: {{ (i18n or {}).get('rps_rk_ov_adult', "在人设工坊「成人内容政策」调")|tojson }},
+  floor: {{ (i18n or {}).get('rps_rk_floor', "最低 {lv}")|tojson }},
+  saved: {{ (i18n or {}).get('rps_rk_saved', "✅ 已保存：{name} 的风控覆写（{n} 项）")|tojson }},
+  saveFail: {{ (i18n or {}).get('rps_rk_save_fail', "保存失败：")|tojson }},
+  unpersisted: {{ (i18n or {}).get('rps_rk_unpersisted', "（内存已更新，磁盘未写，重启会回退）")|tojson }},
+  loadFail: {{ (i18n or {}).get('rps_rk_load_fail', "风控分级读取失败")|tojson }},
+  levels: {
+    high: {{ (i18n or {}).get('rps_rk_lv_high', "高")|tojson }},
+    medium: {{ (i18n or {}).get('rps_rk_lv_medium', "中")|tojson }},
+    low: {{ (i18n or {}).get('rps_rk_lv_low', "低")|tojson }}
+  },
+  actions: {
+    hard_stop: {{ (i18n or {}).get('rps_rk_act_hard_stop', "一条告别 + 冻结会话")|tojson }},
+    needs_human: {{ (i18n or {}).get('rps_rk_act_needs_human', "停自动回复 → 需人工 + 风险保持")|tojson }},
+    adult_policy: {{ (i18n or {}).get('rps_rk_act_adult_policy', "按人设「成人内容政策」（Q-15）")|tojson }},
+    freeze: {{ (i18n or {}).get('rps_rk_act_freeze', "冻结会话，不再主动发")|tojson }},
+    persona_policy: {{ (i18n or {}).get('rps_rk_act_persona_policy', "按人设边界软拒 / 软延迟（Q-2）")|tojson }},
+    shadow_log: {{ (i18n or {}).get('rps_rk_act_shadow_log', "记日志 + 标「风险·中」，正常拟稿")|tojson }},
+    log_only: {{ (i18n or {}).get('rps_rk_act_log_only', "只记日志")|tojson }}
+  },
+  cats: {
+    self_harm: {{ (i18n or {}).get('inbox.risk.cat_self_harm', "自伤 / 自杀")|tojson }},
+    minor: {{ (i18n or {}).get('inbox.risk.cat_minor', "未成年")|tojson }},
+    threat: {{ (i18n or {}).get('inbox.risk.cat_threat', "威胁 / 恐吓")|tojson }},
+    money_request: {{ (i18n or {}).get('inbox.risk.cat_money_request', "要钱 / 要凭据")|tojson }},
+    scam: {{ (i18n or {}).get('inbox.risk.cat_scam', "诈骗话术")|tojson }},
+    payment_keyword: {{ (i18n or {}).get('inbox.risk.cat_payment_keyword', "支付 / 凭据敏感词")|tojson }},
+    adult: {{ (i18n or {}).get('inbox.risk.cat_adult', "成人内容")|tojson }},
+    stop_contact: {{ (i18n or {}).get('inbox.risk.cat_stop_contact', "要求停联")|tojson }},
+    request_contact: {{ (i18n or {}).get('inbox.risk.cat_request_contact', "索要联系方式 / 地址")|tojson }},
+    request_media: {{ (i18n or {}).get('inbox.risk.cat_request_media', "索要照片 / 视频")|tojson }},
+    request_meet: {{ (i18n or {}).get('inbox.risk.cat_request_meet', "邀约见面")|tojson }},
+    request_gift: {{ (i18n or {}).get('inbox.risk.cat_request_gift', "要寄礼物")|tojson }},
+    complaint: {{ (i18n or {}).get('inbox.risk.cat_complaint', "投诉 / 优惠 / 法律")|tojson }},
+    privacy: {{ (i18n or {}).get('inbox.risk.cat_privacy', "隐私词（叙述）")|tojson }},
+    narrative: {{ (i18n or {}).get('inbox.risk.cat_narrative', "叙述提及")|tojson }}
   }
 };
 
@@ -3924,6 +3993,122 @@ async function rpsAmLoad(){
   });
 })();
 
+/* ── Q-17 #277②（rk-）「风控分级」卡 ──────────────────────────────────────
+   GET /api/reply-settings/risk-grader[?persona=id] → 类别表（含 effective_level / override）+ 人设清单；
+   覆写只对 overridable 类别放下拉（""=跟默认），POST .../risk-grader/overrides 整表保存。
+   旧后端无端点 → 整卡隐藏（与 rpsAmLoad 同款）。 */
+var rpsRkState = {personaId: '', rows: [], overrides: {}, baseline: {}, saving: false};
+function rpsRkLevelLabel(lv){ return RPS_RK_I18N.levels[lv] || lv || ''; }
+function rpsRkDirty(){
+  var a = rpsRkState.overrides, b = rpsRkState.baseline;
+  var keys = {}; Object.keys(a).forEach(function(k){ keys[k] = 1; }); Object.keys(b).forEach(function(k){ keys[k] = 1; });
+  return Object.keys(keys).some(function(k){ return (a[k] || '') !== (b[k] || ''); });
+}
+function rpsRkPaintDirty(){
+  var d = !!rpsRkState.personaId && rpsRkDirty();
+  var chip = document.getElementById('rps-rk-dirty'); if (chip) chip.style.display = d ? '' : 'none';
+  var btn = document.getElementById('rps-rk-save'); if (btn) btn.style.display = d ? '' : 'none';
+}
+function rpsRkOnChange(sel){
+  var cid = sel.getAttribute('data-rk-cat'); if (!cid) return;
+  var v = String(sel.value || '');
+  if (v) rpsRkState.overrides[cid] = v; else delete rpsRkState.overrides[cid];
+  rpsRkPaintDirty();
+}
+function rpsRkRender(d){
+  var tb = document.getElementById('rps-rk-tbody'); if (!tb) return;
+  var rows = d.categories || [];
+  var hasPersona = !!rpsRkState.personaId;
+  var levelOrder = ['high', 'medium', 'low'];
+  tb.innerHTML = rows.map(function(c){
+    var words = ((c.words || {}).zh || []).concat((c.words || {}).en || []).slice(0, 6).join(' · ');
+    var eff = c.effective_level || c.level;
+    var lvCls = eff === 'high' ? 'var(--red, #dc2626)' : (eff === 'medium' ? 'var(--amber)' : 'var(--t2)');
+    var ov;
+    if (c.id === 'adult'){
+      ov = '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.ovAdult) + '</span>';
+    } else if (!c.overridable){
+      ov = '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.ovLocked) + '</span>';
+    } else if (!hasPersona){
+      ov = '<span class="rps-row-hint" style="margin:0">' + rpsEsc(RPS_RK_I18N.personaNone) + '</span>';
+    } else {
+      var cur = rpsRkState.overrides[c.id] || '';
+      var floorIdx = levelOrder.indexOf(c.floor || 'low');
+      var opts = '<option value=""' + (cur ? '' : ' selected') + '>' + rpsEsc(RPS_RK_I18N.ovDefault + '（' + rpsRkLevelLabel(c.level) + '）') + '</option>';
+      levelOrder.forEach(function(lv, i){
+        if (i > floorIdx) return;   // 地板以下不给选
+        opts += '<option value="' + lv + '"' + (cur === lv ? ' selected' : '') + '>' + rpsEsc(rpsRkLevelLabel(lv)) + '</option>';
+      });
+      ov = '<select data-rk-cat="' + rpsEsc(c.id) + '" onchange="rpsRkOnChange(this)">' + opts + '</select>'
+        + (c.floor && c.floor !== 'low' ? ' <span class="rps-row-hint" style="margin:0">' + rpsEsc(String(RPS_RK_I18N.floor).replace('{lv}', rpsRkLevelLabel(c.floor))) + '</span>' : '');
+    }
+    return '<tr>'
+      + '<td><b>' + rpsEsc(RPS_RK_I18N.cats[c.id] || c.id) + '</b></td>'
+      + '<td style="color:var(--t2)">' + rpsEsc(words) + '</td>'
+      + '<td><span class="rps-chip" style="background:color-mix(in srgb, ' + lvCls + ' 14%, transparent);color:' + lvCls + '">' + rpsEsc(rpsRkLevelLabel(eff)) + '</span>'
+      + (c.override ? ' <span class="rps-row-hint" style="margin:0">(' + rpsEsc(rpsRkLevelLabel(c.level)) + ')</span>' : '') + '</td>'
+      + '<td>' + rpsEsc(RPS_RK_I18N.actions[c.action] || c.action || '') + '</td>'
+      + '<td>' + ov + '</td>'
+      + '</tr>';
+  }).join('');
+  rpsRkPaintDirty();
+}
+async function rpsRkLoad(personaId){
+  var card = document.getElementById('rps-sec-risk');
+  if (!card) return;
+  try {
+    var pid = String(personaId || '');
+    var r = await apiFetch('/api/reply-settings/risk-grader' + (pid ? ('?persona=' + encodeURIComponent(pid)) : ''));
+    if (!r.ok){ card.style.display = 'none'; return; }   // 旧后端无端点 → 整卡隐藏
+    var d = await r.json();
+    if (!d || !d.ok || !d.enabled){ card.style.display = 'none'; return; }
+    rpsRkState.personaId = String(d.persona_id || '');
+    rpsRkState.rows = d.categories || [];
+    var ov = {};
+    (d.categories || []).forEach(function(c){ if (c.overridable && c.override) ov[c.id] = c.override; });
+    rpsRkState.overrides = ov; rpsRkState.baseline = JSON.parse(JSON.stringify(ov));
+    var hint = document.getElementById('rps-rk-hint');
+    if (hint && d.cooldown_min !== undefined) hint.textContent = String(hint.textContent).replace('{n}', d.cooldown_min);
+    var sel = document.getElementById('rps-rk-persona');
+    if (sel){
+      var html = '<option value=""' + (rpsRkState.personaId ? '' : ' selected') + '>' + rpsEsc(RPS_RK_I18N.personaNone) + '</option>';
+      (d.personas || []).forEach(function(p){
+        var n = Object.keys(p.overrides || {}).length;
+        html += '<option value="' + rpsEsc(p.id) + '"' + (p.id === rpsRkState.personaId ? ' selected' : '') + '>' + rpsEsc(p.name || p.id) + (n ? ' · ' + n : '') + '</option>';
+      });
+      sel.innerHTML = html;
+    }
+    rpsRkRender(d);
+    card.style.display = '';
+  } catch (_e){ card.style.display = 'none'; }
+}
+async function rpsRkSave(){
+  if (rpsRkState.saving || !rpsRkState.personaId) return;
+  rpsRkState.saving = true;
+  var btn = document.getElementById('rps-rk-save'); if (btn) btn.disabled = true;
+  try {
+    var r = await apiFetch('/api/reply-settings/risk-grader/overrides', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({persona_id: rpsRkState.personaId, overrides: rpsRkState.overrides})
+    });
+    var d = await r.json();
+    if (!r.ok || !d || !d.ok){
+      throw new Error((d && d.errors && d.errors[0] && d.errors[0].message) || ('HTTP ' + r.status));
+    }
+    var sel = document.getElementById('rps-rk-persona');
+    var name = sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : rpsRkState.personaId;
+    var msg = String(RPS_RK_I18N.saved).replace('{name}', name).replace('{n}', Object.keys(d.overrides || {}).length);
+    if (d.persisted === false) msg += RPS_RK_I18N.unpersisted;
+    rpsToast(rpsEsc(msg), d.persisted === false ? 'err' : undefined);
+    await rpsRkLoad(rpsRkState.personaId);
+  } catch (e) {
+    rpsToast(rpsEsc(RPS_RK_I18N.saveFail + ((e && e.message) || '')), 'err');
+  } finally {
+    rpsRkState.saving = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function rpsLoad(){
   try {
     var r = await apiFetch('/api/reply-settings');
@@ -3986,6 +4171,8 @@ async function rpsLoad(){
     if (quoteRow) quoteRow.style.display = rpsQuoteEnabled ? '' : 'none';
     // 新账号接管确认（P0 2026-08-30）：独立端点异步装载，缺席/关闭整卡隐藏
     rpsAmLoad();
+    // Q-17 #277②（rk-）风控分级：独立端点异步装载，旧后端 404 整卡隐藏
+    rpsRkLoad(rpsRkState.personaId);
     rpsFill(rpsBaseline);
   } catch (e) {
     rpsToast(rpsEsc(RPS_I18N.loadFailed), 'err');

@@ -2107,6 +2107,14 @@ _ADDITIONS_2026_09_11_AI_INSPECT = """
 """
 _BASELINE += _ADDITIONS_2026_09_11_AI_INSPECT
 
+# Q-17 #277②（2026-09-11，D）：回复设置页「风控分级」卡——类别 / 词表摘要 / 级别 / 动作只读表
+# （事实源 risk_grader.CATEGORIES）+ 人设级 boundaries.risk_overrides 读写。reply_settings_routes.py。
+_ADDITIONS_2026_09_11_Q17_RISK_GRADER = """
+/api/reply-settings/risk-grader	GET
+/api/reply-settings/risk-grader/overrides	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_11_Q17_RISK_GRADER
+
 
 def _parse_baseline():
     expected = set()

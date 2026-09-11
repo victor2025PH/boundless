@@ -6546,6 +6546,7 @@ function _sysTagLabel(t){
   var s=String(t||'');
   if(s==='\u9700\u4eba\u5de5') return window.T('tko.tag.needs_human');
   if(s==='\u4eba\u5de5\u63a5\u7ba1\u4e2d') return window.T('tko.tag.takeover');
+  if(s===_RK_MEDIUM_TAG) return window.T('inbox.risk.tag_medium');   // Q-17 #277②（rk-）中风险标签
   return s;
 }
 function _tagChipHtml(t, conv){
@@ -6575,11 +6576,38 @@ function _adWhyText(raw){
   var lk=_AD_LEVEL_KEYS[ad.level]; var lvl=lk?window.T(lk):ad.level;
   return window.Tf('inbox.handoff.r_adult',{hit:(ad.hit||'-'),level:lvl});
 }
+/* Q-17 #277②（rk-）：三级风控。handoff_meta 带 level / category / hits → 「命中：索要联系方式 · 高风险，
+   命中词「…」」；类别 / 级别词条查表（勿拼键名）。成人类别沿用 Q-15 _adWhyText，本函数让位。
+   会话头「风险保持 · <类别>」chip 只在带「需人工」标且元数据有类别时出现（摘标即消）。 */
+var _RK_MEDIUM_TAG='risk:medium';
+var _RK_CAT_KEYS={self_harm:'inbox.risk.cat_self_harm',minor:'inbox.risk.cat_minor',threat:'inbox.risk.cat_threat',
+  money_request:'inbox.risk.cat_money_request',scam:'inbox.risk.cat_scam',payment_keyword:'inbox.risk.cat_payment_keyword',
+  adult:'inbox.risk.cat_adult',stop_contact:'inbox.risk.cat_stop_contact',request_contact:'inbox.risk.cat_request_contact',
+  request_media:'inbox.risk.cat_request_media',request_meet:'inbox.risk.cat_request_meet',request_gift:'inbox.risk.cat_request_gift',
+  complaint:'inbox.risk.cat_complaint',privacy:'inbox.risk.cat_privacy',narrative:'inbox.risk.cat_narrative',high_risk:'inbox.risk.cat_high_risk'};
+var _RK_LEVEL_KEYS={high:'inbox.risk.lv_high',medium:'inbox.risk.lv_medium',low:'inbox.risk.lv_low'};
+function _rkCatLabel(cat){ cat=String(cat||''); var k=_RK_CAT_KEYS[cat]; return k?window.T(k):cat; }
+function _rkLvLabel(lv){ lv=String(lv||''); var k=_RK_LEVEL_KEYS[lv]; return k?window.T(k):lv; }
+function _rkWhyText(hm){
+  if(!hm||!hm.category) return '';
+  if(_adParseReason(hm.reason)) return '';
+  var hit=(hm.hits&&hm.hits.length)?String(hm.hits[0]||''):'';
+  var p={cat:_rkCatLabel(hm.category),level:_rkLvLabel(hm.level||'high')};
+  if(hit){ p.hit=hit; return window.Tf('inbox.handoff.r_risk_hit',p); }
+  return window.Tf('inbox.handoff.r_risk',p);
+}
+function _rkHoldChipHtml(c){
+  var hm=(c&&c.handoff_meta)||null;
+  if(!c||!hm||!hm.category||!_convNeedsHuman(c)) return '';
+  var cat=_rkCatLabel(hm.category), lvl=_rkLvLabel(hm.level||'high');
+  return '<span class="hdr-tag-chip rk-hold-chip" style="background:color-mix(in srgb, #dc2626 14%, transparent);color:var(--text-main)" title="'
+    +esc(window.Tf('inbox.risk.hold_chip_t',{cat:cat,level:lvl}))+'">'+esc(window.Tf('inbox.risk.hold_chip',{cat:cat}))+'</span>';
+}
 function _handoffTip(c){
   var hm=(c&&c.handoff_meta)||null;
   if(!hm||!hm.ts) return window.T('inbox.handoff.tip_generic');
   var rk=_HANDOFF_REASON_KEYS[String(hm.reason||'')];
-  var why=_adWhyText(hm.reason)||(rk?window.T(rk):(String(hm.reason||'')||'-'));
+  var why=_adWhyText(hm.reason)||_rkWhyText(hm)||(rk?window.T(rk):(String(hm.reason||'')||'-'));
   var src=window.T(String(hm.source||'system')==='system'?'inbox.handoff.src_system':'inbox.handoff.src_manual');
   return window.Tf('inbox.handoff.tip',{when:fmtTs(hm.ts),src:src,why:why});
 }
@@ -8400,7 +8428,7 @@ function _handoffBarText(c){
   if(!hm||!hm.ts) return window.T('inbox.handoff.bar_generic');
   const raw=String(hm.reason||'');
   const rk=_HANDOFF_REASON_KEYS[raw]||(raw.indexOf('crisis')===0?'inbox.handoff.r_crisis':'');
-  const why=_adWhyText(raw)||(rk?window.T(rk):(raw||'-'));
+  const why=_adWhyText(raw)||_rkWhyText(hm)||(rk?window.T(rk):(raw||'-'));   // Q-17 #277②（rk-）类别 / 级别 / 命中词
   const src=window.T(String(hm.source||'system')==='system'?'inbox.handoff.src_system':'inbox.handoff.src_manual');
   return window.Tf('inbox.handoff.bar',{when:fmtTs(hm.ts),src:src,why:why});
 }
@@ -11196,6 +11224,8 @@ function _renderHdrTags(c){
     chip.innerHTML=`${dot}${esc(_sysTagLabel(tag))}<span class="remove-tag" role="button" onclick="_removeConvTag('${esc(tag.replace(/'/g,"\\'"))}')">${uiIcon('x',10)}</span>`;
     row.appendChild(chip);
   });
+  // Q-17 #277②（rk-）：「风险保持 · <类别>」chip——带「需人工」标且 handoff_meta 有类别时出现，摘标即消
+  try{ const _rkHtml=_rkHoldChipHtml(c); if(_rkHtml) row.insertAdjacentHTML('beforeend',_rkHtml); }catch(_e){}
   // 添加标签按钮
   const addWrap=document.createElement('div');
   addWrap.className='tag-input-wrap';

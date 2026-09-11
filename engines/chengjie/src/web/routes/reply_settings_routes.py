@@ -618,3 +618,103 @@ def register_reply_settings_routes(
         snap = build_snapshot(getattr(config_manager, "config", None) or {})
         snap.update({"applied_live": sorted(flat), "needs_restart": []})
         return _snapshot_extras(snap, request)
+
+    # ── Q-17 #277②：「风控分级」卡（公开类别 / 词表摘要 / 级别 / 动作 + 人设级 risk_overrides）──
+    # 类别表事实源 = src/inbox/risk_grader.CATEGORIES（只读）；覆写读写走 PersonaManager
+    # （upsert_profile + persist_profiles，与 /api/personas/profiles/{id} 同一落盘口），
+    # 只允许改 OVERRIDABLE 类别、地板以下裁到地板；adult 沿用 Q-15 adult_policy（人设工坊）。
+    def _rk_pm():
+        from src.utils.persona_manager import PersonaManager
+        return PersonaManager.get_instance()
+
+    def _rk_personas(pm) -> list:
+        out = []
+        try:
+            from src.inbox.risk_grader import risk_overrides_of
+            for pid in (pm.list_profile_ids() or []):
+                p = pm.get_persona_by_id(pid) or {}
+                out.append({"id": str(pid), "name": str(p.get("name") or pid),
+                            "overrides": risk_overrides_of(p)})
+        except Exception:
+            logger.debug("[rk] 人设清单读取失败（忽略）", exc_info=True)
+        return out
+
+    @app.get("/api/reply-settings/risk-grader")
+    async def api_reply_settings_risk_grader(
+        request: Request, persona: str = "", _=Depends(api_auth),
+    ):
+        from src.inbox import risk_grader as rg
+        pm = _rk_pm()
+        pid = str(persona or "").strip()
+        per = pm.get_persona_by_id(pid) if pid else None
+        return {
+            "ok": True, "enabled": True, "persona_id": pid if per else "",
+            "levels": list(rg.LEVELS), "overridable": list(rg.OVERRIDABLE),
+            "cooldown_min": int(__import__("src.inbox.risk_hold", fromlist=["DEFAULT_COOLDOWN_MIN"]).DEFAULT_COOLDOWN_MIN),
+            "categories": rg.public_table(per),
+            "personas": _rk_personas(pm),
+        }
+
+    @app.post("/api/reply-settings/risk-grader/overrides")
+    async def api_reply_settings_risk_grader_overrides(
+        request: Request, _=Depends(api_auth),
+    ):
+        from src.inbox import risk_grader as rg
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        pid = str((body or {}).get("persona_id") or "").strip()
+        raw = (body or {}).get("overrides")
+        if not pid or not isinstance(raw, dict):
+            return {"ok": False, "errors": [{"field": "persona_id", "code": "bad_value",
+                                            "message": tr(request, "rps_err_bad_value", field="persona_id")}]}
+        pm = _rk_pm()
+        per = pm.get_persona_by_id(pid)
+        if not per:
+            return {"ok": False, "errors": [{"field": "persona_id", "code": "not_found",
+                                            "message": tr(request, "rps_err_bad_value", field="persona_id")}]}
+        clean: dict = {}
+        bad: list = []
+        for k, v in raw.items():
+            cid = str(k or "").strip().lower()
+            lv = rg.normalize_level(v) if str(v or "").strip() else ""
+            if cid not in rg.OVERRIDABLE or (str(v or "").strip() and not lv):
+                bad.append(cid or "?")
+                continue
+            if lv:
+                clean[cid] = lv
+        if bad:
+            return {"ok": False, "errors": [{"field": "overrides", "code": "bad_enum",
+                                            "message": tr(request, "rps_err_bad_value", field=",".join(bad))}]}
+        import copy as _copy
+        nxt = _copy.deepcopy(per)
+        b = nxt.get("boundaries")
+        if not isinstance(b, dict):
+            b = {}
+            nxt["boundaries"] = b
+        old = dict(b.get("risk_overrides") or {}) if isinstance(b.get("risk_overrides"), dict) else {}
+        if clean:
+            b["risk_overrides"] = clean
+        else:
+            b.pop("risk_overrides", None)
+        if nxt.get("_mrpa_source"):
+            nxt.pop("_mrpa_source", None)     # 运营显式编辑＝接管（与 /api/personas PUT 同语义）
+        pm.upsert_profile(pid, nxt)
+        persisted = False
+        try:
+            cm = getattr(request.app.state, "config_manager", None) or config_manager
+            persisted = bool(pm.persist_profiles(cm))
+        except Exception:
+            logger.warning("[rk] persist_profiles 异常（内存态已更新、磁盘未写）", exc_info=True)
+        try:
+            actor = str(request.session.get("username") or "web")
+        except Exception:
+            actor = "web"
+        logger.info("[risk] overrides persona=%s by=%s old=%s new=%s persisted=%s",
+                    pid, actor, old, clean, persisted)
+        _append_audit(config_manager, actor=actor,
+                      changes={f"persona.{pid}.boundaries.risk_overrides": clean},
+                      old_values={f"persona.{pid}.boundaries.risk_overrides": old})
+        return {"ok": True, "persona_id": pid, "overrides": clean, "persisted": persisted,
+                "categories": rg.public_table(pm.get_persona_by_id(pid))}
