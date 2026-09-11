@@ -655,6 +655,46 @@ def register_reply_settings_routes(
             "personas": _rk_personas(pm),
         }
 
+    @app.get("/api/reply-settings/abort-ledger")
+    async def api_reply_settings_abort_ledger(
+        request: Request, hours: float = 24.0, last: int = 5, _=Depends(api_auth),
+    ):
+        """Q-18 D（#293）回复设置页「今日拦截」卡：24h 按原因码计数（adult / risk_hold / needs_human /
+        agent_sent / agent_typing / mode_changed / work_schedule）+ 最近 N 条（会话 / 时间 / 原因 /
+        命中词）。数据源 = ``src/inbox/abort_ledger``（app_settings KV 滚动 200 条，来自既有
+        ``[autosend] abort`` + ``[needs_human] 打标`` 两处日志点）。store 缺席 → 全零不报错。"""
+        from src.inbox import abort_ledger as al
+        try:
+            from src.web.routes.unified_inbox_services import _inbox_store
+            store = _inbox_store(request)
+        except Exception:
+            store = None
+        try:
+            hours_f = max(1.0, min(float(hours or 24.0), 24.0 * 14))
+        except Exception:
+            hours_f = 24.0
+        try:
+            last_n = max(1, min(int(last or 5), 50))
+        except Exception:
+            last_n = 5
+        s = al.summary(store, window_h=hours_f, last_n=last_n)
+        # 会话显示名（有 store 才补；缺则前端显示 conversation_id）
+        names = {}
+        if store is not None and hasattr(store, "get_conversation"):
+            for r in s.get("recent") or []:
+                cid = str(r.get("conv") or "")
+                if not cid or cid in names:
+                    continue
+                try:
+                    conv = store.get_conversation(cid) or {}
+                    names[cid] = str(conv.get("display_name") or conv.get("name")
+                                     or conv.get("username") or "")
+                except Exception:
+                    names[cid] = ""
+        for r in s.get("recent") or []:
+            r["name"] = names.get(str(r.get("conv") or ""), "")
+        return {"ok": True, "enabled": store is not None, "reasons": list(al.REASONS), **s}
+
     @app.post("/api/reply-settings/risk-grader/overrides")
     async def api_reply_settings_risk_grader_overrides(
         request: Request, _=Depends(api_auth),

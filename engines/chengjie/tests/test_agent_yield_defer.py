@@ -466,6 +466,156 @@ def test_template_ay_wiring_static():
         assert needle in html, needle
 
 
+# ── D（#293）拦截台账：abort_ledger + worker/打标钩子 + 回复设置页端点 + why_no_reply ─────
+
+def test_abort_ledger_record_normalize_rolling_and_summary():
+    from src.inbox import abort_ledger as al
+    st = _KVStore()
+    assert al.normalize_code("abort:agent_send") == "agent_sent"
+    assert al.normalize_code("mode_switch") == "mode_changed" == al.normalize_code("mode_downgraded")
+    assert al.normalize_code("adult:pressure") == "adult" == al.normalize_code("high_risk", category="adult")
+    assert al.normalize_code("risk:threat") == "risk_hold" and al.normalize_code("privacy", category="privacy") == "needs_human"
+    assert al.normalize_code("work_schedule") == "work_schedule"
+    assert al.record(None, conversation_id="x", code="adult") is False
+    now = time.time()
+    for i in range(al.MAX_ROWS + 30):
+        assert al.record(st, conversation_id=f"c{i % 7}", code="agent_send", stage="batch", ts=now - 1000 + i)
+    rows = al.rows(st)
+    assert len(rows) == al.MAX_ROWS and rows[0]["conv"] == f"c{30 % 7}"     # 滚动：最早 30 条被挤掉
+    al.record(st, conversation_id="old", code="risk_hold", ts=now - 25 * 3600)   # 窗外
+    al.record(st, conversation_id="a", code="adult:explicit", hit=["nudes", "boobs"], stage="tag", ts=now - 5)
+    s = al.summary(st, now=now, last_n=5)
+    # 再写 2 行又挤掉 2 条最早的 agent_sent；窗外的 old 不计入 24h
+    assert s["counts"]["agent_sent"] == al.MAX_ROWS - 2 and s["counts"]["adult"] == 1 and s["counts"]["risk_hold"] == 0
+    assert set(al.REASONS) <= set(s["counts"]) and s["total"] == al.MAX_ROWS - 1 and s["stored"] == al.MAX_ROWS
+    assert len(s["recent"]) == 5 and s["recent"][0]["conv"] == "a" and s["recent"][0]["hit"] == "nudes, boobs"
+    mine = al.rows_for_conv(al.parse_rows(st.kv[al.KEY]), "a", now=now)
+    assert len(mine) == 1 and mine[0]["code"] == "adult"
+    assert al.parse_rows("not json") == [] and al.parse_rows('{"a":1}') == []
+
+
+@pytest.mark.asyncio
+async def test_worker_abort_points_write_ledger_and_defer_does_not():
+    from src.inbox import abort_ledger as al
+    from src.integrations.protocol_autoreply import HANDOFF_TAG
+    st = _KVStore()
+    c_mode, c_hold, c_tag = "telegram:a1:m", "telegram:a1:h", "telegram:a1:t"
+    st.set_automation_mode(c_mode, "manual", source="human")
+    rh.set(st, c_hold, "privacy", "my address is", by="test")
+    st.set_conv_tags(c_tag, [HANDOFF_TAG])
+    w, svc, sent = _worker(st, [_draft(c_mode, "dm"), _draft(c_hold, "dh"), _draft(c_tag, "dt"), _draft()])
+    w.note_agent_send(CID)          # d1 让位 → 不进台账
+    await w._tick()
+    s = al.summary(st)
+    assert s["counts"] == {**{k: 0 for k in al.REASONS}, "mode_changed": 1, "risk_hold": 1, "needs_human": 1}
+    hold_row = [r for r in al.rows(st) if r["conv"] == c_hold][0]
+    assert hold_row["hit"] == "my address is" and hold_row["reason"] == "privacy" and hold_row["stage"] == "batch"
+    assert not [r for r in al.rows(st) if r["conv"] == CID]
+    # 让位等待中坐席真发 → stage=deferred 进台账（agent_sent）
+    w2 = None
+
+    async def _sleep(sec):
+        w2._agent_typing_ts["telegram:a1:p"] = time.time()
+
+    st2 = _KVStore()
+    w2, svc2, sent2 = _worker(st2, [_draft("telegram:a1:p", "dp")], sleep=_sleep, delay=5.0)
+    await w2._tick()
+    w2.note_agent_send("telegram:a1:p")
+    s2 = al.summary(st2)
+    assert s2["counts"]["agent_sent"] == 1 and s2["recent"][0]["stage"] == "deferred"
+
+
+def test_tag_needs_human_writes_ledger_adult_vs_needs_human():
+    from src.inbox import abort_ledger as al
+    from src.integrations.protocol_autoreply import tag_needs_human
+    st = _KVStore()
+    p1 = {"platform": "telegram", "account_id": "a1", "chat_key": "u1"}
+    p2 = {"platform": "telegram", "account_id": "a1", "chat_key": "u2"}
+    assert tag_needs_human(st, p1, reason="adult:pressure", source="system")
+    assert tag_needs_human(st, p2, reason="high_risk", source="system", level="high",
+                           category="money_request", hits=["send me money"])
+    assert tag_needs_human(st, p2, reason="high_risk", source="system") is False   # 标在场 → 保持，不重复计
+    s = al.summary(st)
+    assert s["counts"]["adult"] == 1 and s["counts"]["needs_human"] == 1 and s["total"] == 2
+    row = [r for r in s["recent"] if r["conv"] == "telegram:a1:u2"][0]
+    assert row["hit"] == "send me money" and row["stage"] == "tag" and row["reason"] == "high_risk"
+
+
+def test_reply_settings_abort_ledger_route(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.inbox import abort_ledger as al
+    from src.inbox.store import InboxStore
+    from src.web.routes.reply_settings_routes import register_reply_settings_routes
+    app = FastAPI()
+
+    async def _noop(request=None):
+        return None
+
+    class _CM:
+        config_path = str(tmp_path / "config" / "config.yaml")
+        config = {}
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    app.state.config_manager = _CM()
+    register_reply_settings_routes(app, page_auth=_noop, api_auth=_noop, templates=None,
+                                   config_manager=app.state.config_manager)
+    store = InboxStore(tmp_path / "inbox.db")
+    app.state.inbox_store = store
+    client = TestClient(app)
+    al.record(store, conversation_id="telegram:a1:u1", code="agent_typing", stage="batch")
+    al.record(store, conversation_id="telegram:a1:u1", code="adult:explicit", stage="tag", hit="nudes")
+    r = client.get("/api/reply-settings/abort-ledger")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] and d["enabled"] and d["reasons"] == list(al.REASONS)
+    assert d["counts"]["agent_typing"] == 1 and d["counts"]["adult"] == 1 and d["total"] == 2
+    assert d["recent"][0]["code"] == "adult" and d["recent"][0]["hit"] == "nudes" and "name" in d["recent"][0]
+    r = client.get("/api/reply-settings/abort-ledger", params={"hours": 1, "last": 1})
+    assert r.status_code == 200 and len(r.json()["recent"]) == 1
+    # store 缺席 → 全零、enabled=False
+    app.state.inbox_store = None
+    r = client.get("/api/reply-settings/abort-ledger")
+    assert r.status_code == 200 and r.json()["enabled"] is False and r.json()["total"] == 0
+    store.close()
+
+
+def test_i18n_abort_ledger_pack_three_langs_cover_reasons():
+    from src.inbox import abort_ledger as al
+    from src.web.i18n_packs import abort_ledger as pack
+    for d in (pack.ZH, pack.EN, pack.ZH_HANT):
+        assert set(pack.ZH) == set(d)
+        for code in al.REASONS:
+            assert d[f"rps_al_r_{code}"]
+        assert "{n}" in d["rps_al_total"] and "{stage}" in d["rps_al_stage"]
+
+
+def test_reply_settings_template_al_wiring_static():
+    from pathlib import Path
+    html = Path("src/web/templates/reply_settings.html").read_text(encoding="utf-8")
+    for needle in ('id="rps-al-card"', "async function rpsAlLoad(", "/api/reply-settings/abort-ledger",
+                   "rpsAlLoad();", "var RPS_AL_I18N", 'id="rps-al-tbody"'):
+        assert needle in html, needle
+
+
+def test_why_no_reply_cli_reads_ledger(tmp_path):
+    import json as _json
+    from src.inbox import abort_ledger as al
+    from src.inbox.store import InboxStore
+    import importlib
+    wnr = importlib.import_module("tools.why_no_reply")
+    root = tmp_path
+    (root / "config").mkdir()
+    store = InboxStore(root / "config" / "inbox.db")
+    al.record(store, conversation_id="telegram:a1:u1", code="agent_sent", stage="batch")
+    al.record(store, conversation_id="telegram:a1:u1", code="risk_hold", stage="presend", hit="my address")
+    store.close()
+    out = wnr.diagnose(root, "telegram", "a1", "u1")
+    v = [x for x in out["verdicts"] if x["code"] == "abort_ledger"]
+    assert len(v) == 1 and "24h 内被拦 2 次" in v[0]["msg"] and "my address" in v[0]["msg"]
+    assert len(out["abort_ledger"]) == 2 and out["abort_ledger"][0]["code"] == "risk_hold"
+    assert _json.dumps(out, ensure_ascii=False, default=str)
+
+
 @pytest.mark.asyncio
 async def test_snapshot_exposes_yield_counters():
     st = _KVStore()

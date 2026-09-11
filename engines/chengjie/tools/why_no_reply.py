@@ -348,6 +348,28 @@ def diagnose(root: Path, platform: str, account_id: str,
     except Exception:
         pass
 
+    # ── Q-18 #293：拦截台账（app_settings 键 abort_ledger:v1，滚动 200）里本会话 24h 内的记录 ──
+    # 让位（agent_sent / agent_typing）从 v1.0.82 起只是延后不是丢稿；其余码 = 稿被放弃 / 打标。
+    _AL_ZH = {"adult": "成人内容", "risk_hold": "风险保持", "needs_human": "需人工",
+              "agent_sent": "坐席刚发过（让位，窗过自动发）", "agent_typing": "坐席在打字（让位，窗过自动发）",
+              "mode_changed": "档位切换", "work_schedule": "班表休息"}
+    try:
+        if ib is not None:
+            _alr = _row(ib, "SELECT sval FROM app_settings WHERE skey=?", ("abort_ledger:v1",))
+            if _alr and _alr.get("sval"):
+                from src.inbox.abort_ledger import parse_rows as _al_parse, rows_for_conv as _al_conv
+                _mine = _al_conv(_al_parse(str(_alr["sval"])), cid, now=now, window_h=24.0)
+                if _mine:
+                    out["abort_ledger"] = _mine[:10]
+                    _parts = [f"{_fmt_ts(r.get('ts'))} {_AL_ZH.get(str(r.get('code') or ''), str(r.get('code') or ''))}"
+                              f"[{r.get('stage') or '-'}]" + (f" 命中「{r.get('hit')}」" if r.get("hit") else "")
+                              for r in _mine[:5]]
+                    _v("warn", "abort_ledger",
+                       f"24h 内被拦 {len(_mine)} 次（最近：{'；'.join(_parts)}）——回复设置页「今日拦截」卡"
+                       f"同源；让位类 = 延后不是丢稿，其余请对照上方闸位")
+    except Exception:
+        pass
+
     if not any(v["level"] == "block" for v in verdicts):
         _v("ok", "looks_alive",
            f"未发现拦截：有效档位={eff_mode}"

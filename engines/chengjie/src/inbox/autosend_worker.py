@@ -400,6 +400,8 @@ class AutosendWorker:
         self.total_yield_deferred: int = 0         # defer 次数（同稿同窗只计一次）
         self.total_yield_resumed: int = 0          # 窗过 / 切全自动后放行次数
         self.total_yield_exhausted: int = 0        # 连续让位超上限按放弃处理的条数
+        # Q-18 D（#293）：班表扣留进拦截台账的去重戳 conv → until_ts
+        self._ledger_ws_stamp: Dict[str, float] = {}
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -1090,6 +1092,7 @@ class AutosendWorker:
                              exc_info=True)
             logger.info("[autosend] abort=%s stage=deferred draft=%s conv=%s（让位等待中被人接）",
                         by, _did, _ic)
+            self._ledger_abort(_ic, by, stage="deferred", draft_id=_did)
         self.total_inflight_cancelled += n
         if n or hit_ids:
             logger.info("[inflight] cancel scope=%s n=%d by=%s conv=%s account=%s inflight=%d",
@@ -1112,6 +1115,30 @@ class AutosendWorker:
             return 0
         self._agent_sent_ts[cid] = time.time()
         return self.cancel_inflight(conversation_id=cid, by="agent_send")
+
+    def _ledger_abort(self, conv: str, code: str, *, stage: str, draft_id: str = "") -> None:
+        """Q-18 D（#293）：`[autosend] abort=` 三处日志点同步落拦截台账（app_settings KV 滚动 200，
+        回复设置页「今日拦截」卡 / why_no_reply 消费）。risk_hold / needs_human 顺带取持有记录的
+        reason / hit。best-effort，绝不抛。"""
+        store = getattr(self._svc, "_store", None)
+        if store is None or not conv:
+            return
+        try:
+            from src.inbox import abort_ledger as _al
+            hit, reason = "", str(code or "")
+            if code in ("risk_hold", "needs_human"):
+                try:
+                    from src.inbox import risk_hold as _rh
+                    _rec = _rh.active_record(store, conv) or {}
+                    hit = str(_rec.get("hit") or _rec.get("last_hit") or "")
+                    reason = str(_rec.get("reason") or code)
+                except Exception:
+                    hit = ""
+            _al.record(store, conversation_id=conv, code=code, stage=stage, hit=hit,
+                       source="autosend", draft_id=draft_id, reason=reason)
+        except Exception:
+            logger.debug("[autosend] 拦截台账写入失败 conv=%s code=%s（忽略）", conv, code,
+                         exc_info=True)
 
     # ── Q-18 B/C（#292）让位 = 延后不是丢弃 ─────────────────────────────
 
@@ -1952,6 +1979,7 @@ class AutosendWorker:
                                  _do_did, exc_info=True)
                 logger.info("[autosend] abort=%s stage=presend draft=%s conv=%s（拟人等待后复检，未发）",
                             _hp_abort, _do_did, _conv_id_g)
+                self._ledger_abort(_conv_id_g, _hp_abort, stage="presend", draft_id=_do_did)
                 return
             # 延迟后二次过期复查（fresh_guard 同闸门，2026-08-05）：拟人延迟
             # 现可配 30-60s，而 _process_batch 的过期检查跑在延迟**之前**——
@@ -2390,6 +2418,7 @@ class AutosendWorker:
                     self.total_abort_recheck += 1
                 logger.info("[autosend] abort=%s stage=batch draft=%s conv=%s",
                             _hp_abort, draft_id, _conv)
+                self._ledger_abort(_conv, _hp_abort, stage="batch", draft_id=str(draft_id))
                 continue
             # 会话处于发送封禁冷却 → 不 resolve/投递，直接取消该 pending 草稿（防堆积）。
             # 冷却到期后新草稿会重新尝试（权限恢复即自动回正常）。
@@ -2485,9 +2514,15 @@ class AutosendWorker:
                     # 否则老板只看到「不回」查不到「为什么不回」。日志失败不影响扣留。
                     try:
                         from src.inbox.work_hours_gate import log_off_hours_hold
-                        log_off_hours_hold(
+                        _ws_info = log_off_hours_hold(
                             str(d.get("conversation_id") or ""),
                             _ws_cfg_hold, _ws_plat, _ws_acct)
+                        # Q-18 D（#293）：扣留同步进拦截台账（同会话同一「到点」只记一条）
+                        _ws_stamp = float((_ws_info or {}).get("until_ts") or 0.0)
+                        if _conv and self._ledger_ws_stamp.get(_conv) != _ws_stamp:
+                            self._ledger_ws_stamp[_conv] = _ws_stamp
+                            self._ledger_abort(_conv, "work_schedule", stage="batch",
+                                               draft_id=str(draft_id))
                     except Exception:
                         logger.debug("[work_schedule] hold 日志异常（忽略）",
                                      exc_info=True)

@@ -483,6 +483,20 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
     </table>
   </div>
 
+  <!-- Q-18 #293（rps-al-，2026-09-11）「今日拦截」台账：GET /api/reply-settings/abort-ledger → 24h 按原因码计数 +
+       Q-18 最近 5 条（会话 / 时间 / 原因 / 命中词）。数据源 src/inbox/abort_ledger（app_settings KV 滚动 200，来自既有
+       Q-18 [autosend] abort + [needs_human] 打标 两处日志点）。旧后端 404 → 整卡隐藏（rpsAlLoad）。 -->
+  <div class="rps-card" id="rps-al-card" style="display:none">
+    <h3 id="rps-al-title">{{ (i18n or {}).get('rps_al_title', "🚧 今日拦截 · AI 为什么没回") }} <span class="rps-chip" id="rps-al-total" style="background:rgba(37,99,235,.12);color:var(--tk-brand,#2563eb)"></span></h3>
+    <p class="rps-hint" id="rps-al-hint">{{ (i18n or {}).get('rps_al_hint', "最近 24 小时自动回复被拦下的次数，按原因码计：成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息。让位两项从 v1.0.82 起只是延后不是丢稿，窗过自动发。") }}</p>
+    <div class="rps-row" id="rps-al-counts" style="flex-wrap:wrap;gap:.4rem;border-top:none"></div>
+    <table class="rps-po-table" id="rps-al-table"><thead><tr id="rps-al-thead">
+        <th>{{ (i18n or {}).get('rps_al_col_conv', "会话") }}</th><th>{{ (i18n or {}).get('rps_al_col_time', "时间") }}</th>
+        <th>{{ (i18n or {}).get('rps_al_col_reason', "原因") }}</th><th>{{ (i18n or {}).get('rps_al_col_hit', "命中词 / 阶段") }}</th>
+      </tr></thead><tbody id="rps-al-tbody"></tbody></table>
+    <p class="rps-hint" id="rps-al-empty" style="display:none">{{ (i18n or {}).get('rps_al_empty', "最近 24 小时没有拦截记录。") }}</p>
+  </div>
+
   <div class="rps-grp" id="rps-grp-quota">
   <!-- 回复额度守卫（P0-guard，2026-08-12）：peer_bot_guard 的 配置 / 今日状态 /
        豁免 三合一收口（此前配置只能改 YAML、豁免只在收件箱触顶横幅出现）。
@@ -1519,6 +1533,20 @@ var RPS_I18N = {
     "inbox.reply_style.bubbles.enabled": {{ (i18n or {}).get('rps_bub_enabled', "启用分条发送")|tojson }},
     "inbox.reply_style.bubbles.per_sentence": {{ (i18n or {}).get('rps_bub_per_sent', "逐句拆条")|tojson }},
     "inbox.reply_style.bubbles.explicit_newline_only": {{ (i18n or {}).get('rps_bub_nl_only', "仅显式换行才拆")|tojson }}
+  }
+};
+/* Q-18 #293（rps-al-）「今日拦截」卡词条：原因码 → 人话（i18n 包 abort_ledger.py） */
+var RPS_AL_I18N = {
+  total: {{ (i18n or {}).get('rps_al_total', "24h 共 {n} 次")|tojson }},
+  stage: {{ (i18n or {}).get('rps_al_stage', "阶段 {stage}")|tojson }},
+  reasons: {
+    adult: {{ (i18n or {}).get('rps_al_r_adult', "成人内容")|tojson }},
+    risk_hold: {{ (i18n or {}).get('rps_al_r_risk_hold', "风险保持")|tojson }},
+    needs_human: {{ (i18n or {}).get('rps_al_r_needs_human', "需人工")|tojson }},
+    agent_sent: {{ (i18n or {}).get('rps_al_r_agent_sent', "坐席刚发过（让位）")|tojson }},
+    agent_typing: {{ (i18n or {}).get('rps_al_r_agent_typing', "坐席在打字（让位）")|tojson }},
+    mode_changed: {{ (i18n or {}).get('rps_al_r_mode_changed', "档位切换")|tojson }},
+    work_schedule: {{ (i18n or {}).get('rps_al_r_work_schedule', "班表休息")|tojson }}
   }
 };
 /* Q-17 #277②（rk-）「风控分级」卡词条：类别 / 级别 / 动作 查表（与 inbox.risk.* 同一 i18n 包 risk_grader.py） */
@@ -4082,6 +4110,39 @@ async function rpsRkLoad(personaId){
     card.style.display = '';
   } catch (_e){ card.style.display = 'none'; }
 }
+/* Q-18 #293（rps-al-）「今日拦截」：独立端点异步装载；旧后端 404 / store 缺席 → 整卡隐藏 */
+function rpsAlReason(code){ code = String(code || ''); return (RPS_AL_I18N.reasons && RPS_AL_I18N.reasons[code]) || code || '-'; }
+function rpsAlHhmm(ts){ try { var d = new Date(Number(ts || 0) * 1000); if (isNaN(d.getTime())) return '-'; var p = function(n){ return (n < 10 ? '0' : '') + n; }; return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (_e){ return '-'; } }
+async function rpsAlLoad(){
+  var card = document.getElementById('rps-al-card');
+  if (!card) return;
+  try {
+    var r = await apiFetch('/api/reply-settings/abort-ledger');
+    if (!r.ok){ card.style.display = 'none'; return; }
+    var d = await r.json();
+    if (!d || !d.ok || d.enabled === false){ card.style.display = 'none'; return; }
+    var total = document.getElementById('rps-al-total');
+    if (total) total.textContent = String(RPS_AL_I18N.total).replace('{n}', Number(d.total || 0));
+    var counts = d.counts || {}, order = (d.reasons || []).slice();
+    Object.keys(counts).forEach(function(k){ if (order.indexOf(k) < 0) order.push(k); });
+    var cbox = document.getElementById('rps-al-counts');
+    if (cbox) cbox.innerHTML = order.map(function(k){
+      var n = Number(counts[k] || 0);
+      return '<span class="rps-chip" style="' + (n ? 'background:rgba(220,38,38,.10);color:var(--t)' : 'opacity:.55') + '">' + rpsEsc(rpsAlReason(k)) + ' · ' + n + '</span>';
+    }).join('');
+    var rows = d.recent || [], tb = document.getElementById('rps-al-tbody'), tbl = document.getElementById('rps-al-table'), empty = document.getElementById('rps-al-empty');
+    if (tb) tb.innerHTML = rows.map(function(x){
+      var who = x.name ? (x.name + ' · ' + x.conv) : x.conv;
+      var hit = x.hit ? x.hit : (x.reason && x.reason !== x.code ? x.reason : '');
+      var stg = x.stage ? String(RPS_AL_I18N.stage).replace('{stage}', x.stage) : '';
+      return '<tr><td title="' + rpsEsc(x.conv || '') + '">' + rpsEsc(who || '-') + '</td><td>' + rpsEsc(rpsAlHhmm(x.ts)) + '</td>'
+        + '<td>' + rpsEsc(rpsAlReason(x.code)) + '</td><td>' + rpsEsc(hit || '-') + (stg ? ' <span style="color:var(--t3);font-size:.72rem">' + rpsEsc(stg) + '</span>' : '') + '</td></tr>';
+    }).join('');
+    if (tbl) tbl.style.display = rows.length ? '' : 'none';
+    if (empty) empty.style.display = rows.length ? 'none' : '';
+    card.style.display = '';
+  } catch (_e){ card.style.display = 'none'; }
+}
 async function rpsRkSave(){
   if (rpsRkState.saving || !rpsRkState.personaId) return;
   rpsRkState.saving = true;
@@ -4173,6 +4234,8 @@ async function rpsLoad(){
     rpsAmLoad();
     // Q-17 #277②（rk-）风控分级：独立端点异步装载，旧后端 404 整卡隐藏
     rpsRkLoad(rpsRkState.personaId);
+    // Q-18 #293（rps-al-）今日拦截台账：独立端点异步装载，旧后端 404 整卡隐藏
+    rpsAlLoad();
     rpsFill(rpsBaseline);
   } catch (e) {
     rpsToast(rpsEsc(RPS_I18N.loadFailed), 'err');

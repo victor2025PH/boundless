@@ -1269,6 +1269,17 @@ def tag_needs_human(store: Any, payload: Dict[str, Any], *,
                 cid, reason or "-", source or "system",
                 handoff_auto_clearable({"reason": reason, "source": source}),
                 _lvl or "-", _cat or "-", "|".join(_hits) or "-")
+    # Q-18 D（#293）：打标同步进拦截台账（adult:* / category=adult → adult，其余 → needs_human；
+    # app_settings KV 滚动 200，回复设置页「今日拦截」卡消费）。best-effort，钩子自吞异常。
+    try:
+        from src.inbox import abort_ledger as _al
+        _al.record(store, conversation_id=cid,
+                   code=("adult" if (str(reason or "").startswith("adult") or _cat == "adult")
+                         else "needs_human"),
+                   stage="tag", hit=_hits or "", source=str(source or "system"),
+                   reason=str(reason or ""), category=_cat, ts=now)
+    except Exception:
+        logger.debug("[protocol-autoreply] 拦截台账写入失败（忽略）", exc_info=True)
     return True
 
 

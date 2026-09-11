@@ -2142,6 +2142,15 @@ _ADDITIONS_2026_09_11_Q17_RISK_GRADER = """
 """
 _BASELINE += _ADDITIONS_2026_09_11_Q17_RISK_GRADER
 
+# Q-18 #292（2026-09-11，C/D）：会话头「AI 让位中 · N 秒后接回」chip 点击 = 立即接回
+# （unified_inbox_stored_read_routes.py，worker.resume_agent_yield by=chip）+ 回复设置页「今日拦截」
+# 台账卡（reply_settings_routes.py，abort_ledger：24h 按原因码计数 + 最近 5 条）。
+_ADDITIONS_2026_09_11_Q18_AGENT_YIELD = """
+/api/unified-inbox/agent-yield/resume	POST
+/api/reply-settings/abort-ledger	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_11_Q18_AGENT_YIELD
+
 
 def _parse_baseline():
     expected = set()
