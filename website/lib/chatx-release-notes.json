@@ -1,5 +1,35 @@
 [
   {
+    "version": "1.0.80",
+    "date": "2026-09-11",
+    "title": {
+      "zh": "人设与记忆不再被裁光、主链 Flash、上下文深度四档",
+      "en": "Persona and memory no longer trimmed away, Flash primary, four context-depth tiers"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "聊天不再丢人设和记忆：提示裁剪不再把中文人设/硬规则/长期记忆砍光；默认预算提到 12k，人设段永不裁。",
+        "主链改为 DeepSeek V4.1-Flash（deepseek-flash），备用硅基 DeepSeek-V4-Flash；退役别名自动归一，官方接口默认关思维链。",
+        "自动回复设置新增「上下文与记忆深度」：标准 / 深度 / 最大 / 超大（约 900k，与 DeepSeek 1M 窗口平齐）。入口：自动回复设置 → 风格卡 → 下拉选档 → 保存，不用重启。越深越记得住也越贵。",
+        "同一页「用量模式」：完整按深度档；经济只留最近 4 条、压缩人设、少抽取。钱包用尽时即使选完整也会自动进经济档，避免断线。",
+        "微信 / QQ / TikTok 通道已进包但出厂关闭：工作台没看到入口＝这台还没打开对应开关，不是没装上。",
+        "目标页「现在就问一个」、主题浅色/深色即生效、需人工卡片会写明「命中：成人内容」并可一键软回应。"
+      ],
+      "en": [
+        "Chat no longer drops persona or memory: the prompt trimmer no longer cuts the Chinese persona, hard rules or long-term memory. Default budget is 12k; the persona block is never trimmed.",
+        "Primary model is DeepSeek V4.1-Flash (deepseek-flash), with SiliconFlow DeepSeek-V4-Flash as backup. Retired aliases are normalized; official API thinking is off by default.",
+        "Reply settings gains Context & memory depth: Standard / Deep / Max / Ultra (~900k, on par with DeepSeek's 1M window). Path: Reply settings → style card → pick a tier → save, no restart. Deeper remembers more and costs more.",
+        "Usage mode on the same page: Full follows the depth tier; Economy keeps the last 4 messages, a compact persona and fewer extracts. An empty token wallet still drops Full into Economy so chat does not go dark.",
+        "WeChat / QQ / TikTok are in the package but ship off. No entry in the workbench means that switch is still off, not that the build is missing them.",
+        "Goals page \"Ask one now\", light/dark theme applies immediately, and needs-human cards name \"adult content\" with a one-tap soft reply."
+      ]
+    }
+  },
+  {
     "version": "1.0.79",
     "date": "2026-09-10",
     "title": {
