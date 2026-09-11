@@ -171,6 +171,11 @@ GOLD: Tuple[Tuple[str, str, str], ...] = (
      "原 product 负样本转正：条目如实说 CSV 不含手机号 + 列表导出入口"),
     ("支持抖音吗", "howto:supported-platforms",
      "原 product 负样本转正：如实答四平台清单 + 抖音暂不支持"),
+    # ── 用户管理 P0 实录（2026-09-11「子帐号登不上 / 退出无效」）：随包出货的语料
+    # 必须答得上这三问，否则客户问小智全是「没有找到可靠依据」（发版纪律第 3 条）
+    ("坐席忘记密码了怎么办", "howto:reset-user-password", "口语：忘记密码 → 管理员代重置"),
+    ("刚开的账号登录不进去", "howto:sub-account-cannot-login", "老板实录场景，口语"),
+    ("我想让坐席用自己的号登桌面端", "howto:logout-switch-account", "退出→登录页→子帐号"),
 )
 
 

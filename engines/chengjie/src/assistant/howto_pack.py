@@ -47,11 +47,68 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "怎么修改登录密码",
         "How to change my login password",
         "点右上角头像打开用户菜单 → 「修改密码」，输入旧密码与新密码保存即可。"
-        "忘记密码请联系管理员在用户管理里重置。",
+        "忘记密码请联系管理员：在「用户管理」页你的帐号卡上点「🔑 重置密码」给你设一个新密码。",
         "Open the user menu (top-right avatar) → Change password. If you "
-        "forgot it, ask an admin to reset it in user management.",
-        "改密码 修改密码 密码 password 重置密码 登录",
+        "forgot it, ask an admin to click \"Reset password\" on your card in the Users page.",
+        "改密码 修改密码 密码 password 登录",
         "",
+    ),
+    (
+        "reset-user-password",
+        "怎么给坐席/子帐号重置密码（忘记密码）",
+        "How to reset a team member's password (forgotten password)",
+        "「用户管理」页找到该帐号的卡片 → 点「🔑 重置密码」→ 输入新密码（至少 6 位，"
+        "也可点「🎲 生成」随机生成）→ 「保存」。保存后会弹出一次性的「登录信息」卡"
+        "（登录地址 / 用户名 / 新密码），点「复制全部」发给对方——关闭后密码不再显示。"
+        "旧密码立即失效；对方已登录的设备不会被踢出，需要的话在页面下方「已登录的设备」"
+        "里踢出。主帐号的密码只能由自己在「修改密码」里改，不能在这里重置。",
+        "On the Users page find the account card → click Reset password → enter a new "
+        "password (6+ characters, or click Generate) → Save. A one-time sign-in info card "
+        "(address / username / new password) appears — click Copy all and send it to the "
+        "person; the password is not shown again after closing. The old password stops "
+        "working immediately; devices already signed in are not kicked out (use "
+        "\"Signed-in devices\" below if needed). The master account can only change its "
+        "own password via Change password.",
+        "重置密码 忘记密码 坐席密码 子帐号密码 密码忘了 改坐席密码 重设密码 reset password "
+        "登录信息 复制登录信息",
+        "/users",
+    ),
+    (
+        "logout-switch-account",
+        "怎么退出登录 / 在桌面端换成子帐号登录",
+        "How to sign out / switch to a sub-account in the desktop app",
+        "点右上角头像 → 「退出登录」→ 确认。退出后会停在登录页，用你的帐号密码登录即可"
+        "（系统管理员可切到「管理员令牌登录」）。在智聊桌面端，退出后自动登录会暂停，"
+        "这样坐席才能用自己的子帐号登录；重新打开应用会恢复主帐号自动登录。坐席工作台"
+        "里的退出入口在左上角用户菜单的「退出登录」。",
+        "Click the avatar (top right) → Sign out → confirm. You land on the sign-in page; "
+        "sign in with your username and password (system admins can switch to admin token "
+        "sign-in). In the ChatX desktop app, automatic sign-in is paused after signing out "
+        "so an agent can sign in with their own sub-account; reopening the app restores "
+        "master auto sign-in. In the agent workspace the Sign out item is in the user menu.",
+        "退出登录 退出 登出 注销 换帐号 切换帐号 换账号 子帐号登录 坐席登录 登录页 "
+        "sign out logout switch account 自动登录",
+        "",
+    ),
+    (
+        "sub-account-cannot-login",
+        "新建的子帐号登不上怎么办",
+        "A newly created sub-account cannot sign in — what to check",
+        "按顺序排查：① 桌面端要先退出主帐号（右上角头像 → 退出登录），停在登录页后再用"
+        "子帐号登录；② 「用户管理」页头有「帐号所在后端」——子帐号只存在于创建它的那台"
+        "后端，坐席机若连的是另一台后端要在那台上创建；③ 看帐号卡上是否有「已禁用」，"
+        "有则在「⋯」菜单里点「启用」；④ 密码不确定就点「🔑 重置密码」重新设一个并把"
+        "登录信息复制给对方。卡上「从未登录」表示该帐号还没成功登录过。",
+        "Check in order: 1) in the desktop app sign out of the master account first "
+        "(avatar → Sign out) and sign in with the sub-account from the sign-in page; "
+        "2) the Users page header shows which backend the accounts live on — a sub-account "
+        "exists only on the backend where it was created, so a seat pointing at another "
+        "backend needs it created there; 3) if the card shows Disabled, enable it from the "
+        "⋯ menu; 4) if the password is uncertain, click Reset password and copy the sign-in "
+        "info to the person. \"Never signed in\" on the card means no successful sign-in yet.",
+        "登不上 登录不了 无法登录 登录不进去 进不去 登不进 子帐号登录失败 新账号 新开的号 "
+        "刚开的账号 刚建的账号 密码错误 从未登录 帐号所在后端 已禁用 cannot login sign-in failed",
+        "/users",
     ),
     (
         "rewatch-tour",
@@ -530,15 +587,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "add-agent-user",
         "怎么给团队加一个坐席账号",
         "How to add a team member account",
-        "「用户管理」页点「添加子帐号」→ 填用户名 / 显示名称 / 密码 / 角色 → "
-        "「创建」。主帐号可建管理员、主管、坐席、只读观察员；管理员可建主管、"
-        "坐席、只读观察员。密码至少 6 位，主帐号不可删除或降级。建好后可在每行"
-        "调整角色、额度、权限与启用状态。",
+        "「用户管理」页点「＋ 添加子帐号」→ 填用户名 / 显示名称 / 密码（可点「🎲 生成」）"
+        "/ 角色 → 「创建」。创建成功会弹出一次性的「登录信息」卡（登录地址 / 用户名 / 密码），"
+        "点「复制全部」当场发给对方。主帐号可建管理员、主管、坐席、只读观察员；管理员可建"
+        "主管、坐席、只读观察员。密码至少 6 位，主帐号不可删除或降级。建好后每张帐号卡上可"
+        "改角色（会先确认）、点「🔑 重置密码」，「⋯」菜单里有额度 / 权限 / 通知 / 复制登录信息 "
+        "/ 禁用 / 删除（删除要逐字输入用户名确认）。",
         "On the Users page click Add sub-account, fill in username / display "
-        "name / password / role, then Create. The master account can create "
-        "admin, supervisor, agent and viewer; an admin can create supervisor, "
-        "agent and viewer. Passwords need 6+ characters; the master account "
-        "cannot be deleted or demoted.",
+        "name / password (or click Generate) / role, then Create. A one-time sign-in "
+        "info card (address / username / password) appears — Copy all and send it to the "
+        "person. The master account can create admin, supervisor, agent and viewer; an "
+        "admin can create supervisor, agent and viewer. Passwords need 6+ characters; the "
+        "master account cannot be deleted or demoted. On each card you can change the role "
+        "(with confirmation), Reset password, and use the ⋯ menu for quota / permissions / "
+        "notifications / copy sign-in info / disable / delete (delete requires typing the username).",
         # 「客服人员」必须留在这条：escalation-config 也含「人工客服」，
         # 2026-08-27 评测实测它会把「怎么新增一个客服人员」抢走——补关键词有
         # 交叉影响，改任一条都该复跑 assistant_qa_eval 看有没有误伤别人。
@@ -550,11 +612,15 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "kick-sessions",
         "怎么把其他设备踢下线 / 看谁在登录",
         "How to see active sessions and sign out other devices",
-        "「用户管理」页下方有「活跃会话」区，可看当前登录中的会话并点「刷新」；"
-        "怀疑账号被别人用了就点「踢出所有其他设备」，只保留你当前这台。",
-        "The Users page has an Active sessions section: refresh to see current "
-        "logins, or sign out all other devices to keep only your current one.",
-        "踢下线 活跃会话 登录设备 挤下线 安全 会话",
+        "「用户管理」页下方有「已登录的设备」区：每张卡显示设备（智聊桌面端 / 浏览器）、"
+        "操作员与最后活跃时间，「技术信息」可展开看 IP 等；点「刷新」更新，单张卡点「踢出」，"
+        "怀疑账号被别人用了就点「踢出所有其他设备」，只保留你当前这台。每张帐号卡上的 🖥 数字"
+        "是该帐号当前登录的设备数。",
+        "The Users page has a Signed-in devices section: each card shows the device (ChatX "
+        "desktop / browser), operator and last activity, with technical details on expand. "
+        "Refresh to update, Sign out a single card, or sign out all other devices to keep "
+        "only your current one. The 🖥 number on an account card is its current device count.",
+        "踢下线 已登录的设备 活跃会话 登录设备 挤下线 安全 会话 谁在登录",
         "/users",
     ),
     (

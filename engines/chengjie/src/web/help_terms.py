@@ -138,10 +138,10 @@ HELP_TERMS: dict = {
     "nav_users": {
         "zh": "用户管理",
         "en": "User Management",
-        "desc": "添加/管理后台管理员账户，设置角色权限（主帐号/管理员/观察员）",
-        "desc_en": "Add and manage admin accounts and assign role permissions (Master / Admin / Viewer)",
-        "usage": "点击「创建子帐号」→ 填写信息 → 分配角色。可随时禁用/删除账户",
-        "usage_en": "Click \"Create sub-account\" → fill in details → assign a role. Accounts can be disabled/deleted anytime"
+        "desc": "添加/管理智聊操作员账号（主帐号/管理员/主管/坐席/观察员），重置密码、额度与权限，查看已登录的设备",
+        "desc_en": "Add and manage ChatX operator accounts (Master / Admin / Supervisor / Agent / Viewer), reset passwords, quotas and permissions, and see signed-in devices",
+        "usage": "点「＋ 添加子帐号」→ 填信息 → 分配角色 → 复制弹出的登录信息给对方。帐号卡上可改角色、重置密码；「⋯」菜单里有额度/权限/通知/禁用/删除",
+        "usage_en": "Click \"Add sub-account\" → fill in details → assign a role → copy the sign-in info card to the person. On each card change the role or reset the password; the ⋯ menu holds quota / permissions / notifications / disable / delete"
     },
     "nav_settings": {
         "zh": "系统设置",
