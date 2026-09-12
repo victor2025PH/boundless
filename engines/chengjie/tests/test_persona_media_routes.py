@@ -315,3 +315,97 @@ def test_metrics_exposes_persona_media(monkeypatch):
     assert "ws_persona_media_hits_total 2" in txt
     assert 'ws_persona_media_by_type{type="video"} 1' in txt
     reset_persona_media_store()
+
+
+# ── Q-35 #316（4HK54G）：拒绝分支结构化 {ok:false, reason, detail} + 批量复现 ──────────
+
+def _assert_reject(r, status, reason):
+    assert r.status_code == status, (r.status_code, r.text)
+    body = r.json()
+    assert body["ok"] is False and body["reason"] == reason, body
+    assert isinstance(body.get("detail"), str) and body["detail"], body  # 人话仍在，旧前端可读
+    return body
+
+
+def test_reject_ext_not_allowed_is_structured(client):
+    """iPhone HEIC 是「后端只见两张成功、其余零痕迹」最像的形状——现在有 reason + allowed。"""
+    body = _assert_reject(_upload(client, name="IMG_0001.HEIC", data=b"\x00\x00\x00\x18ftypheic"),
+                          400, "ext_not_allowed")
+    assert body["ext"] == ".heic" and ".jpg" in body["allowed"]
+
+
+def test_reject_too_large_is_structured(client, monkeypatch):
+    monkeypatch.setattr(pmr, "_MAX_PHOTO_BYTES", 10)
+    body = _assert_reject(_upload(client, data=_PNG + b"0123456789ABCDEF"), 413, "too_large")
+    assert body["limit_mb"] == 0 and body["bytes"] == len(_PNG) + 16 and body["media_type"] == "photo"
+
+
+def test_reject_bad_content_is_structured(client):
+    body = _assert_reject(_upload(client, name="broken.jpg", data=b"\x00\x01not-an-image"),
+                          400, "bad_content")
+    assert body["why"]
+
+
+def test_reject_video_too_long_is_structured(client, monkeypatch):
+    monkeypatch.setattr(pmr, "_MAX_VIDEO_DURATION_MS", 1000)
+    monkeypatch.setattr(pmr, "_probe_video",
+                        lambda p: {"duration_ms": 5000, "width": 1, "height": 1})
+    body = _assert_reject(_upload(client, name="long.mp4", data=_MP4 + b"-dummy"), 413, "too_long")
+    assert body["max_sec"] == 1 and body["duration_ms"] == 5000
+
+
+def test_reject_persona_not_found_is_structured(client):
+    r = client.post("/api/personas/ghost/media",
+                    files={"file": ("a.jpg", _PNG + b"x", "application/octet-stream")})
+    _assert_reject(r, 404, "persona_not_found")
+
+
+def test_reject_empty_file_is_structured(client):
+    _assert_reject(_upload(client, data=b""), 400, "empty_file")
+
+
+def test_reject_paths_leave_a_server_log_line(client, caplog):
+    """4HK54G：被拒的上传此前在服务端**零痕迹**（raise 在成功日志之前）。现在每条拒绝一行。"""
+    import logging as _logging
+    with caplog.at_level(_logging.INFO, logger="ai_chat_assistant.persona_media_routes"):
+        _upload(client, name="x.heic", data=b"\x00")
+    lines = [r.getMessage() for r in caplog.records if "上传拒绝" in r.getMessage()]
+    assert lines and "reason=ext_not_allowed" in lines[0] and "name=x.heic" in lines[0]
+
+
+class _FormatErrorTrap(__import__("logging").Handler):
+    """把 logging 内部会吞掉的格式化错误变成断言：任何 record 都必须能 getMessage()。"""
+
+    def __init__(self):
+        super().__init__()
+        self.errors = []
+
+    def emit(self, record):
+        try:
+            record.getMessage()
+        except Exception as ex:  # noqa: BLE001
+            self.errors.append(f"{record.name}:{record.lineno} {record.msg!r} -> {ex}")
+
+
+def test_batch_six_2mb_photos_all_land_without_logging_errors(client):
+    """复现 #316 报障动作：一次选 ≥6 张 ~2MB 图逐个 POST（与 pmaUpload 串行同口径）。
+    期望：6/6 200 + 6 条入库 + 全程零 logging 格式化错误（`--- Logging error ---` 形状）。"""
+    import logging as _logging
+    import os as _os
+    trap = _FormatErrorTrap()
+    root = _logging.getLogger()
+    root.addHandler(trap)
+    try:
+        ok = 0
+        for i in range(6):
+            blob = _PNG + _os.urandom(2 * 1024 * 1024)  # 每张字节不同：sha 不去重
+            r = _upload(client, name=f"IMG_{i:04d}.jpg", data=blob)
+            assert r.status_code == 200, (i, r.status_code, r.text[:200])
+            body = r.json()
+            assert body["ok"] is True and body.get("deduped") is None
+            ok += 1
+    finally:
+        root.removeHandler(trap)
+    assert ok == 6
+    assert client.get("/api/personas/lin/media").json()["stats"]["total"] == 6
+    assert not trap.errors, trap.errors

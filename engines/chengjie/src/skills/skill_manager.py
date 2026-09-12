@@ -2012,11 +2012,13 @@ class SkillManager(LoggerMixin):
                 except Exception:
                     if not user_context.get('_case_id'):
                         user_context['_case_id'] = f"CASE-{user_id_str[-6:]}-{int(time.time()) % 100000}"
+                # Q-35 #316：占位符 4 个 / 实参 3 个（第 4 参曾被乱码注释掉）→ 每次命中都
+                # 抛 `--- Logging error --- not enough arguments for format string`（4HK54G）。
                 self.logger.info(
-                    "%s意图链模�? %s case=%s chain=%s",
+                    "%s意图链模式 %s case=%s chain=%s",
                     log_prefix, _chain_hint["pattern"],
                     user_context.get('_case_id', ''),
-                    # " �?".join(_intent_chain[-5:])
+                    " -> ".join(str(x) for x in _intent_chain[-5:]),
                 )
 
             # K1: 对话历史窗口 + 摘�压缩（保留最�?3 ����?+ 早期摘��?
@@ -3907,13 +3909,15 @@ class SkillManager(LoggerMixin):
                 continue
             self._intent_strategy_map[intent] = to_sid
             switched += 1
+            # Q-35 #316：格式串曾被乱码注释掉——intent 本身当 msg、后面三个实参多余
+            # → `not all arguments converted`；下方 %d 无实参 → `not enough arguments`。
             self.logger.warning(
-                # "[Auto-Pilot] %s: %s �?%s (%s)",
+                "[Auto-Pilot] %s: %s -> %s (%s)",
                 intent, from_sid, to_sid, act["reason"])
 
         if switched > 0:
             self._persist_strategies()
-            self.logger.info("[Auto-Pilot] 已自动切�?%d ���图映�?, switched")
+            self.logger.info("[Auto-Pilot] 已自动切换 %d 个意图映射", switched)
 
         # L3: A/B 测试���评估 �?有结论时���晋级胜�€?
         if self._ab_tests:

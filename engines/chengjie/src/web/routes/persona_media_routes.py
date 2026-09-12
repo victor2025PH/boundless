@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, List
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 import src.companion.media_auto_tag as _auto_tag
 from src.companion.image_phash import (
@@ -65,6 +66,35 @@ _MAX_VIDEO_DURATION_MS = 3 * 60 * 1000  # 视频时长上限（仅 ffprobe 可�
 _ROLE_VIEWER = "viewer"
 
 
+class MediaReject(HTTPException):
+    """相册写操作的**结构化拒绝**（Q-35 #316 4HK54G，2026-09-12）。
+
+    此前每个拒绝分支 ``raise HTTPException(4xx, 文案)`` → 前端只拿到 ``{detail}``，
+    ``pmaUpload`` 逐文件只 ``fail++``，报障时「几张失败、为什么」两边都答不上。现在每个
+    拒绝分支带一个**机器可读** ``reason``（``too_large`` / ``ext_not_allowed`` / ``bad_content`` /
+    ``too_long`` / ``empty_file`` / ``file_required`` / ``save_failed`` / ``readonly`` /
+    ``store_unavailable`` / ``persona_not_found`` / ``not_found``），经 ``_media_reject_handler``
+    回 ``{ok:false, reason, detail, ...extra}``——``detail`` 键**保留**（旧前端 ``r.json().detail``
+    仍可读），``extra`` 放限值等数字（``limit_mb`` / ``ext`` / ``max_sec``）供前端拼人话。
+    """
+
+    def __init__(self, status_code: int, reason: str, detail: str,
+                 *, extra: "dict | None" = None):
+        super().__init__(status_code=int(status_code), detail=str(detail or ""))
+        self.reason = str(reason or "rejected")
+        self.extra = dict(extra or {})
+
+    def body(self) -> dict:
+        out = {"ok": False, "reason": self.reason, "detail": self.detail}
+        for k, v in self.extra.items():
+            out.setdefault(str(k), v)
+        return out
+
+
+async def _media_reject_handler(request: Request, exc: MediaReject) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content=exc.body())
+
+
 def _safe_pid(pid: Any) -> str:
     """人设 id 收敛为安全目录名（防路径穿越）。"""
     s = re.sub(r"[^A-Za-z0-9_-]", "_", str(pid or ""))[:64]
@@ -106,6 +136,27 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         from src.companion.persona_media_store import get_persona_media_store
         return get_persona_media_store()
 
+    # Q-35 #316：结构化拒绝出口（{ok:false, reason, detail}）。子类 handler 按 MRO 先于
+    # 默认 HTTPException handler 命中；其他路由的裸 HTTPException 语义不变。
+    try:
+        app.add_exception_handler(MediaReject, _media_reject_handler)
+    except Exception:
+        logger.debug("[pmedia] MediaReject handler 挂载失败（回落 {detail} 形状）", exc_info=True)
+
+    def _reject(request: Request, status: int, reason: str, key: str, *,
+                pid: str = "", name: str = "", size: int = -1,
+                extra: "dict | None" = None, **fmt: Any) -> MediaReject:
+        """造一个结构化拒绝并**落一行日志**——4HK54G 事故里被拒的上传在服务端零痕迹
+        （raise 发生在成功日志之前），排障只能猜。日志只带文件名 / 体积 / reason，不带正文。"""
+        detail = tr(request, key, **fmt)
+        try:
+            logger.info("[pmedia] 上传拒绝 pid=%s name=%s bytes=%s status=%d reason=%s",
+                        pid or "-", (str(name or "-").replace("\n", " ")[:80]),
+                        (size if size >= 0 else "-"), int(status), reason)
+        except Exception:
+            pass
+        return MediaReject(status, reason, detail, extra=extra)
+
     # #67-① 存量迁移（幂等 best-effort）：旧引擎树/安装目录相册 → 数据根，
     # 并把 DB file_path 改指新位置（发送链读 DB 绝对路径，不改写=白复制）。
     try:
@@ -131,7 +182,8 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
     def _require_store(request: Request):
         st = _store()
         if st is None:
-            raise HTTPException(503, tr(request, "err.pmedia.store_unavailable"))
+            raise MediaReject(503, "store_unavailable",
+                              tr(request, "err.pmedia.store_unavailable"))
         return st
 
     def _require_write(request: Request):
@@ -140,19 +192,21 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         except Exception:
             role = ""
         if role == _ROLE_VIEWER:
-            raise HTTPException(403, tr(request, "err.persona.readonly_no_edit"))
+            raise MediaReject(403, "readonly", tr(request, "err.persona.readonly_no_edit"))
 
     def _require_persona(request: Request, pid: str):
         from src.utils.persona_manager import PersonaManager
         p = PersonaManager.get_instance().get_persona_by_id(str(pid))
         if p is None:
-            raise HTTPException(404, tr(request, "err.pmedia.persona_not_found", name=pid))
+            raise MediaReject(404, "persona_not_found",
+                              tr(request, "err.pmedia.persona_not_found", name=pid),
+                              extra={"pid": str(pid)})
         return p
 
     def _owned_row(request: Request, st, pid: str, mid: str):
         row = st.get(str(mid))
         if row is None or str(row.get("persona_id")) != str(pid):
-            raise HTTPException(404, tr(request, "err.pmedia.not_found"))
+            raise MediaReject(404, "not_found", tr(request, "err.pmedia.not_found"))
         return row
 
     def _vision_cfg() -> dict:
@@ -279,25 +333,34 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         form = await request.form()
         upload = form.get("file")
         if upload is None or not getattr(upload, "filename", ""):
-            raise HTTPException(400, tr(request, "err.pmedia.file_required"))
-        ext = os.path.splitext(str(upload.filename))[1].lower()
+            raise _reject(request, 400, "file_required", "err.pmedia.file_required", pid=pid)
+        fname = str(upload.filename or "")
+        ext = os.path.splitext(fname)[1].lower()
         mtype = _media_type_for_ext(ext)
         if not mtype:
-            raise HTTPException(400, tr(request, "err.pmedia.ext_not_allowed", ext=ext or "?"))
+            # 手机相册常见：iPhone HEIC / 截图 .PNG 之外的 .heif / .avif / .mkv——
+            # 此前 400 无日志无原因，「后端只见两张成功之后无上传行」正是这种形状。
+            raise _reject(request, 400, "ext_not_allowed", "err.pmedia.ext_not_allowed",
+                          pid=pid, name=fname, ext=ext or "?",
+                          extra={"ext": ext or "", "allowed": sorted(_IMAGE_EXT | _VIDEO_EXT)})
         data = await upload.read()
         if not data:
-            raise HTTPException(400, tr(request, "err.inbox.empty_file"))
+            raise _reject(request, 400, "empty_file", "err.inbox.empty_file",
+                          pid=pid, name=fname, size=0)
         limit = _MAX_VIDEO_BYTES if mtype == "video" else _MAX_PHOTO_BYTES
         if len(data) > limit:
-            raise HTTPException(
-                413, tr(request, "err.pmedia.too_large", mb=limit // (1024 * 1024)))
+            raise _reject(request, 413, "too_large", "err.pmedia.too_large",
+                          pid=pid, name=fname, size=len(data), mb=limit // (1024 * 1024),
+                          extra={"limit_mb": limit // (1024 * 1024), "bytes": len(data),
+                                 "media_type": mtype})
         # #67-②（0830 两机实锤）+ 媒体产物验证纪律：内容级校验——此前上传
         # 成功只看扩展名+体积，损坏文件原样落盘，到 AI 发图才在 pyrogram 处
         # 爆 decode 失败。magic bytes 不过=当场 400（诚实拒收），绝不静默存坏。
         _bad = _sniff_media(data, ext)
         if _bad:
-            raise HTTPException(400, tr(
-                request, "err.pmedia.bad_content", why=_bad))
+            raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
+                          pid=pid, name=fname, size=len(data), why=_bad,
+                          extra={"why": str(_bad)})
         sha = hashlib.sha256(data).hexdigest()
         dup = st.find_by_sha(str(pid), sha)
         if dup is not None:
@@ -331,13 +394,16 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                     fpath.unlink()
                 except Exception:
                     pass
-                raise HTTPException(500, tr(
-                    request, "err.pmedia.save_failed", err="write verify failed"))
+                raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
+                              pid=pid, name=fname, size=len(data), err="write verify failed",
+                              extra={"err": "write verify failed"})
         except HTTPException:
             raise
         except Exception as ex:  # noqa: BLE001
             logger.warning("[pmedia] 保存文件失败: %s", ex, exc_info=True)
-            raise HTTPException(500, tr(request, "err.pmedia.save_failed", err=str(ex)[:200]))
+            raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
+                          pid=pid, name=fname, size=len(data), err=str(ex)[:200],
+                          extra={"err": str(ex)[:200]})
         url = f"/static/persona_albums/{safe}/{name}"
         # 元数据探测 + 视频护栏/封面（全部软失败，缺 ffmpeg/ffprobe/PIL 不阻塞上传）。
         width = height = duration_ms = 0
@@ -352,9 +418,11 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
                     fpath.unlink()
                 except Exception:
                     pass
-                raise HTTPException(413, tr(
-                    request, "err.pmedia.too_long",
-                    sec=_MAX_VIDEO_DURATION_MS // 1000))
+                raise _reject(request, 413, "too_long", "err.pmedia.too_long",
+                              pid=pid, name=fname, size=len(data),
+                              sec=_MAX_VIDEO_DURATION_MS // 1000,
+                              extra={"max_sec": _MAX_VIDEO_DURATION_MS // 1000,
+                                     "duration_ms": duration_ms})
             thumb_name = f"{name}.thumb.jpg"
             at_sec = min(1.0, (duration_ms / 1000.0) / 2.0) if duration_ms > 0 else 0.0
             if _make_video_thumbnail(str(fpath), str(d / thumb_name), at_sec=at_sec):
@@ -405,9 +473,9 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         if will_tag:
             _auto_tag.schedule_tag(st, mid, _vision_cfg(),
                                    face_ref=_face_ref_for_tagging(pid, aicfg))
-        logger.info("[pmedia] 上传 pid=%s type=%s id=%s bytes=%d dur=%dms "
+        logger.info("[pmedia] 上传 pid=%s type=%s id=%s name=%s bytes=%d dur=%dms "
                     "phash=%s neardup=%s autotag=%s vision=%s",
-                    pid, mtype, mid, len(data), duration_ms,
+                    pid, mtype, mid, fname.replace("\n", " ")[:80], len(data), duration_ms,
                     "y" if phash else "n",
                     (near_dup or {}).get("id", "-"), will_tag,
                     "ready" if probe.get("ready") else (probe.get("reason") or ("off" if not want_tag else "-")))
@@ -782,16 +850,23 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         form = await request.form()
         upload = form.get("file")
         if upload is None or not getattr(upload, "filename", ""):
-            raise HTTPException(400, tr(request, "err.pmedia.file_required"))
-        ext = os.path.splitext(str(upload.filename))[1].lower()
+            raise _reject(request, 400, "file_required", "err.pmedia.file_required", pid=pid)
+        fname = str(upload.filename or "")
+        ext = os.path.splitext(fname)[1].lower()
         if ext not in _IMAGE_EXT or ext == ".gif":
-            raise HTTPException(400, tr(request, "err.pmedia.ext_not_allowed", ext=ext or "?"))
+            raise _reject(request, 400, "ext_not_allowed", "err.pmedia.ext_not_allowed",
+                          pid=pid, name=fname, ext=ext or "?",
+                          extra={"ext": ext or "", "allowed": sorted(_IMAGE_EXT - {".gif"})})
         data = await upload.read()
         if not data:
-            raise HTTPException(400, tr(request, "err.inbox.empty_file"))
+            raise _reject(request, 400, "empty_file", "err.inbox.empty_file",
+                          pid=pid, name=fname, size=0)
         if len(data) > _MAX_PHOTO_BYTES:
-            raise HTTPException(413, tr(
-                request, "err.pmedia.too_large", mb=_MAX_PHOTO_BYTES // (1024 * 1024)))
+            raise _reject(request, 413, "too_large", "err.pmedia.too_large",
+                          pid=pid, name=fname, size=len(data),
+                          mb=_MAX_PHOTO_BYTES // (1024 * 1024),
+                          extra={"limit_mb": _MAX_PHOTO_BYTES // (1024 * 1024),
+                                 "bytes": len(data), "media_type": "photo"})
         d = _face_album_dir(pid)
         try:
             d.mkdir(parents=True, exist_ok=True)
@@ -804,7 +879,9 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             fpath.write_bytes(data)
         except Exception as ex:  # noqa: BLE001
             logger.warning("[pmedia] face_ref 保存失败: %s", ex, exc_info=True)
-            raise HTTPException(500, tr(request, "err.pmedia.save_failed", err=str(ex)[:200]))
+            raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
+                          pid=pid, name=fname, size=len(data), err=str(ex)[:200],
+                          extra={"err": str(ex)[:200]})
         _audit(request, "pmedia_face_ref_set", f"pid={pid}", f"bytes={len(data)}")
         logger.info("[pmedia] face_ref 已更新 pid=%s bytes=%d", pid, len(data))
         try:
