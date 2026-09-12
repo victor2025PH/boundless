@@ -199,8 +199,11 @@ def test_reply_settings_template_wires_seat_card():
     # 收集 / 回填都按 feat 探测（旧后端白名单缺键 → 不参与，防假脏 / 保存被拒）
     assert html.count('def.feat === "seat"') >= 2
     assert "rpsSeatDetect(d)" in html and "window.rpsMsChanged = rpsMsChanged;" in html
-    # 卡片在「自动化与风控」分组内（Q-26 C 的 rps-grp-auto 之后、额度守卫组之前）
-    assert html.index('id="rps-grp-auto"') < html.index('id="rps-sec-seat"') < html.index('id="rps-grp-quota"')
+    # 卡片在额度守卫组之前。Q-26 C 的 rps-grp-auto 未进包时不要求该 id；
+    # 工作树若已有该分组，则坐席卡须落在分组内。
+    assert html.index('id="rps-sec-seat"') < html.index('id="rps-grp-quota"')
+    if 'id="rps-grp-auto"' in html:
+        assert html.index('id="rps-grp-auto"') < html.index('id="rps-sec-seat"')
 
 
 def test_i18n_pack_covers_seat_card_keys():
