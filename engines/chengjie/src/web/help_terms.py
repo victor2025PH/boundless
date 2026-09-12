@@ -1412,6 +1412,86 @@ HELP_TERMS: dict = {
         "desc_en": "The first line of every thread header is one status band: whether the AI will reply, why, and what to tap next (clear tag / resume now / retry draft / confirm PIN). Full-auto with no hold says AI will reply automatically; a hold, yield, off-hours, unknown language, sidecar PIN or draft failure all use that same band instead of several unrelated chips.",
         "usage": "打开任意会话看头部第一条色带。被拦时点带子上的动作（「我知道了」或「立即接回」）；想知道今天拦了多少，到 自动回复设置 → 今日拦截。",
         "usage_en": "Open any thread and read the first coloured band. When held, tap the action on the band (Got it or Resume now). For today's totals, Reply settings → Blocked today."
+    },
+    "peer_local_time": {
+        "zh": "客户当地时间",
+        "en": "Customer local time",
+        "desc": "画像里已确认城市（且能唯一对应一个时区）后，AI 按客户当地钟，不再问「现在几点 / 白天还是晚上」。客户自己说「我这边四点了」会记 12 小时。主动触达也读这只钟：客户当地深夜、或人设当地 23–8 且对方半小时没说话，不主动发。认不出的同名城 / 多时区国名不会瞎猜。",
+        "desc_en": "After a city is confirmed on the profile (and maps to exactly one timezone), the AI uses the customer's local clock and does not ask what time it is or whether it is day or night. If they say it is 4 here, that is kept for 12 hours. Proactive outreach uses the same clock: no outreach in the customer's late night, or in the persona's 23:00–08:00 quiet hours when they have been silent for 30 minutes. Ambiguous cities and multi-timezone country names are not guessed.",
+        "usage": "打开会话 → 右栏画像 → 确认城市或居住地。之后看 AI 还问不问几点；深夜也不该再主动发「现在凌晨三点」。",
+        "usage_en": "Open the thread → profile in the right pane → confirm city or residence. The AI should stop asking the time, and should not proactively text in the customer's late night."
+    },
+    "handoff_memory": {
+        "zh": "人工发的图进记忆",
+        "en": "Hand-sent media enters memory",
+        "desc": "你在工作台手发的图 / 语音 / 视频会标「人工」并写入本会话的 AI 记忆。切回全自动后，AI 能认刚发过的媒体，不会装没看见或再发一张。入站图说明只记观察、不夸大张数。",
+        "desc_en": "Photos, voice and video you send by hand in the workspace are marked Sent by you and written into this thread's AI memory. After you switch back to Full auto, the AI can claim media just sent — it does not pretend it never saw them or send another. Inbound photo captions are stored as observations and are not inflated.",
+        "usage": "工作台手发一张图 → 气泡带「人工」角标 → 顶栏切回「全自动」。下一句应能认这张图。",
+        "usage_en": "Send a photo by hand → the bubble shows a Sent by you badge → switch the header back to Full auto. The next reply should acknowledge that photo."
+    },
+    "seat_single": {
+        "zh": "单人端不认领",
+        "en": "Single-seat: no claim UI",
+        "desc": "只有一台坐席在用时，点开会话不再出现「处理中 · 释放认领」，全自动也不会因为误判多坐席而卡住。近 30 分钟真有两名坐席同时在线，或到 自动回复设置 打开「多坐席协作」，认领 / 处理中 / 「我的」才会出现。",
+        "desc_en": "With one seat in use, opening a thread no longer shows In progress · release claim, and full-auto is not blocked by a false multi-seat lock. Claim / In progress / Mine appear only when two seats have been online in the last 30 minutes, or when Multi-seat collaboration is switched on in Reply settings.",
+        "usage": "单人使用不用设置。点开会话看头部：不应再有「释放认领」。团队要认领：自动回复设置 → 多坐席协作 → 打开 → 保存，收件箱大约 1 分钟后刷新。",
+        "usage_en": "No setting needed for a single seat. Open a thread: there should be no Release claim. For a team, Reply settings → Multi-seat collaboration → on → save; the inbox refreshes within about a minute."
+    },
+    "yield_no_dup": {
+        "zh": "切档同句只发一次",
+        "en": "Mode switch sends a line once",
+        "desc": "坐席正在打字或刚发过时 AI 会让位；你再把档位切回全自动，同一句只发出一次，不会瞬间双发。切到全自动也会作废本会话里还没点的陈旧「发前确认」稿。会话头状态带会写清「首回故意慢一点」等真原因。",
+        "desc_en": "The AI yields while you type or just after you send. Switching back to Full auto sends that deferred line once — never twice in the same instant. Switching to Full auto also cancels stale pending approval drafts in that thread. The header status band names the real reason, such as a deliberate slow first reply.",
+        "usage": "会话头从人审 / 让位切回「全自动」，看对方是否只收到一句。顶栏「发前确认」数字应随陈旧稿作废下降。",
+        "usage_en": "Switch the header from Review / yield back to Full auto and check the customer gets only one copy. The Pending approval count in the top bar should drop when stale drafts are cancelled."
+    },
+    "panel_sys_tags": {
+        "zh": "系统标签折叠",
+        "en": "System tags folded",
+        "desc": "收件箱筛选里，休眠 / 风控 / 停联等系统标签收进「系统标签 ▸ N」（单人端默认收起，多坐席默认展开）。点筹码后面的 × 或按 Esc 只清筛选，不删标签。对方再发来一条真消息时，休眠「已忽略」会自动摘掉。",
+        "desc_en": "In the inbox filter, dormant / risk / stop-contact system tags sit under System tags ▸ N (collapsed on a single seat, open when multi-seat). The × on a chip or Esc clears the filter only — it does not delete tags. A real inbound message automatically clears dormant: ignored.",
+        "usage": "收件箱左侧筛选 → 「系统标签 ▸ N」展开或收起。筛完点筹码上的 ×，或按 Esc，列表应恢复、标签还在。",
+        "usage_en": "Inbox left filter → expand or collapse System tags ▸ N. After filtering, tap × on the chip or press Esc: the list clears the filter and the tags remain."
+    },
+    "l4_actionable": {
+        "zh": "发前确认只计新稿",
+        "en": "Pending approval counts actionable drafts",
+        "desc": "顶栏「发前确认」药丸只数现在还能点通过的稿（过期、已作废、不可行动的不算）。出厂超过 48 小时的稿视为超龄；审批台可「清空超龄稿」。",
+        "desc_en": "The Pending approval pill in the top bar counts only drafts you can still approve. Expired, cancelled or non-actionable drafts are excluded. Drafts older than 48 hours (factory default) are stale; the approval desk can Clear stale drafts.",
+        "usage": "看顶栏药丸数字，点进去应都能处理。要清旧稿：打开审批台 → 「清空超龄稿」。",
+        "usage_en": "The top-bar number should match drafts you can still act on. To drop old ones: open the approval desk → Clear stale drafts."
+    },
+    "album_upload_visible": {
+        "zh": "相册上传失败可见",
+        "en": "Album upload failures are visible",
+        "desc": "人设相册批量上传会逐张回报成功 / 已存在 / 失败；失败可展开原因（格式不支持、超大小等）并只重试失败项。会话头若提示「相册没有匹配 · AI 已改口 · 去补标签」，点进去给人设图补标签即可。",
+        "desc_en": "Persona album batch upload reports each file as ok / already there / failed. Failures expand with a reason (unsupported type, over size, …) and Retry sends only the failed files. If the header says the album had no match and the AI rephrased, open the album and add tags.",
+        "usage": "人设 → 相册 → 选多张上传 → 看结果条。有失败就展开明细，点重试。会话头出现「去相册补标签」则点过去补。",
+        "usage_en": "Persona → Album → upload several files → read the result bar. Expand failures and tap Retry. If the header offers Add album tags, follow that link."
+    },
+    "offer_media": {
+        "zh": "客户要发自己的图",
+        "en": "Customer offers their own photo",
+        "desc": "客户说「我发张图给你 / I'll send you a pic」是对方要发，不是向你索图；全自动不再按「要你的照片」拒绝。你自己提议发图、对方答应，仍走原来的发图桥。入站图说明只记观察，回复里不把一张说成好几张。",
+        "desc_en": "I'll send you a pic means they will send, not that they want your photo; full-auto no longer refuses that as a media request. If you offered a photo and they accepted, the existing send-photo bridge still runs. Inbound captions are observations only — replies do not inflate one photo into several.",
+        "usage": "不用设置。客户说要发自己的图时，看 AI 是不是在等图而不是回「不能发 / 没有照片」。",
+        "usage_en": "No setting needed. When they offer to send their own photo, the AI should wait for it — not reply that it cannot send or has no photos."
+    },
+    "own_name_gate": {
+        "zh": "画像不写人设名",
+        "en": "Profile never stores the persona name",
+        "desc": "客户打招呼喊人设名（Hi Mizuki）不会把这个名字写成「客户叫什么」。画像 name 只收人自己的名字；人设自称和「对方怎么叫我」都进黑名单。摸底进度卡上的确认 / 拒绝钮不再被裁掉，随时能点。",
+        "desc_en": "If the customer greets you with the persona name (Hi Mizuki), that name is not written as their name. The profile name slot only accepts their own name; persona self-names and What they call me are reserved. Confirm / reject on the discovery progress card are no longer clipped and stay tappable.",
+        "usage": "目标面板 → 画像卡：客户只喊了人设名时，name 槽不应出现待确认。有值的槽点 ✓ / ✕，钮应完整可见。",
+        "usage_en": "Goal panel → profile card: if they only used the persona name, the name slot should not show a pending value. Confirm / reject on a valued slot should be fully visible."
+    },
+    "composer_model_mode": {
+        "zh": "会话模型与模式",
+        "en": "Per-thread model and mode",
+        "desc": "输入框上方两个等宽按钮：「模型」选本会话用谁答（实例主链 / 已配置的各厂商档 / 本机私有），只换端点、规则照常；「模式」选按什么规矩答（标准 / 无限制，以及上下文深度、力度、思考）。无限制要本机私有模型在线才可用。",
+        "desc_en": "Above the composer are two equal buttons. Model picks who answers this thread (instance default / configured vendor profiles / local private) and only changes the endpoint. Mode picks the rules (Standard / Unrestricted, plus context depth, effort, thinking). Unrestricted needs the local private model online.",
+        "usage": "打开会话 → 输入框上方点「模型」选端点，点「模式」选标准或无限制、再调上下文深度。保存后应有提示。",
+        "usage_en": "Open a thread → above the composer, Model picks the endpoint and Mode picks Standard or Unrestricted plus context depth. A toast confirms the save."
     }
 }
 

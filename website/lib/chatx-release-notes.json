@@ -1,5 +1,42 @@
 [
   {
+    "version": "1.0.85",
+    "date": "2026-09-13",
+    "title": {
+      "zh": "客户当地时间、接力记忆、单人端不再误认领、切档不双发",
+      "en": "Peer local time, handoff memory, single-seat default, no double-send on yield"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "客户当地时间：打开会话 → 右栏画像确认城市后，AI 按客户当地钟，不再问几点 / 白天还是晚上；深夜主动触达也读这只钟，不按服务器钟半夜发。",
+        "人工发出的图 / 语音进入本会话记忆：工作台手发后气泡带「人工」角标，顶栏切回全自动即可接着认，不会装没看见。",
+        "单人端点开会话不再误出「处理中 · 释放认领」。团队要认领：自动回复设置 → 打开「多坐席协作」→ 保存，约 1 分钟后生效。",
+        "切档同一句只发一次；切到全自动会作废陈旧待确认稿。会话头状态带会写清「首回故意慢一点」等真原因。",
+        "筛选面板把休眠 / 风控 / 停联收进「系统标签 ▸ N」（单人端默认收起）；顶栏「发前确认」只计还能点通过的稿，审批台可清空超龄稿。",
+        "人设 → 相册批量上传逐张显示成功 / 失败，失败可展开原因并重试；会话头提示「相册没有匹配」时可点进去补标签。",
+        "客户说「我发张图给你」不再被当成向你索图而拒绝；入站图说明不夸大张数。",
+        "画像不把人设自称（客户喊的 Mizuki）写成客户名；目标面板摸底进度卡上的确认 / 拒绝钮不再被裁，能点。",
+        "输入框上方「模型 / 模式」两个入口：模型选谁答，模式选规矩（标准 / 无限制 + 上下文深度）。无限制需本机私有模型在线。"
+      ],
+      "en": [
+        "Customer local time: open a thread → confirm city on the right-hand profile. The AI then uses their clock and stops asking what time it is; proactive outreach uses the same clock and will not text in their late night.",
+        "Photos and voice you send by hand enter this thread's memory (Sent by you badge). Switch the header back to Full auto and the AI can claim them instead of pretending it never saw them.",
+        "A single seat no longer shows In progress · release claim. For a team: Reply settings → turn on Multi-seat collaboration → save; it applies within about a minute.",
+        "Switching back to Full auto sends a yielded line once (never twice) and cancels stale pending-approval drafts. The header band names the real reason, such as a deliberate slow first reply.",
+        "Inbox filters fold dormant / risk / stop-contact under System tags ▸ N (collapsed on one seat). The Pending approval pill counts only drafts you can still act on; the approval desk can clear stale ones.",
+        "Persona → Album batch upload reports each file; failures expand with a reason and Retry. A header note Album had no match opens the album so you can add tags.",
+        "If the customer offers to send their own photo, full-auto no longer treats that as a request for yours. Inbound captions are not inflated.",
+        "The profile never stores the persona name as the customer's name. Confirm / reject on the discovery progress card stay visible and tappable.",
+        "Above the composer, Model picks who answers and Mode picks the rules (Standard / Unrestricted + context depth). Unrestricted needs the local private model online."
+      ]
+    }
+  },
+  {
     "version": "1.0.84",
     "date": "2026-09-12",
     "title": {

@@ -73,3 +73,32 @@ questions:
   - tag: autosend_shadow
     q: "全自动就是全自动吗？高风险稿还会被扣住不发吗？"
     must_any: ["放行", "台账", "不拦", "全自动"]
+  # ── v1.0.85 发版批（R85：客户当地时间 / 接力记忆 / 单人端 / 切档 /
+  # 系统标签 / 相册 / 客户发自己的图 / 人设名 / 模型·模式）──
+  - tag: peer_local_time
+    q: "客户说过当地时间为什么还问几点？深夜为什么还主动发？"
+    must_any: ["城市", "当地", "时区", "深夜"]
+  - tag: handoff_memory
+    q: "我手发的图 AI 接回去还认吗？"
+    must_any: ["人工", "记忆", "全自动"]
+  - tag: seat_single
+    q: "为什么点开会话要释放认领？单人端怎么关掉处理中？"
+    must_any: ["认领", "单人", "多坐席"]
+  - tag: yield_no_dup
+    q: "切全自动为什么同一句发了两次？"
+    must_any: ["一次", "切", "让位"]
+  - tag: panel_sys_tags
+    q: "筛选里一堆休眠标签怎么收起来？发前确认数字为什么这么大？"
+    must_any: ["系统标签", "发前确认", "超龄"]
+  - tag: album_upload
+    q: "相册上传失败了怎么看原因？"
+    must_any: ["相册", "失败", "重试"]
+  - tag: offer_media
+    q: "客户说我发张图给你为什么被拒？"
+    must_any: ["自己", "索图", "等图"]
+  - tag: own_name
+    q: "画像为什么把人设名写成客户名？"
+    must_any: ["人设", "画像", "客户"]
+  - tag: composer_model_mode
+    q: "会话里模型和模式有什么区别？"
+    must_any: ["模型", "模式", "上下文"]

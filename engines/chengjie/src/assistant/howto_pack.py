@@ -1530,6 +1530,135 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "会话头 状态带 AI会不会回 为什么 色带 接回 摘标 conv state band will send",
         "/workspace",
     ),
+    # ── R85 / 1.0.85：客户当地时间 / 接力记忆 / 单人端不认领 / 切档不双发 /
+    # 系统标签折叠 / 发前确认只计新稿 / 相册上传可见 / 客户发自己的图 / 画像不写人设名 /
+    # 模型·模式双面板 ──
+    (
+        "peer-local-time",
+        "客户说过当地时间为什么还问几点 / 深夜为什么还主动发",
+        "Why ask the time after they said the local time / why proactive texts at 3am",
+        "打开会话 → 右栏画像 → 确认城市或居住地（须能唯一对应一个时区）。确认后 AI 按客户当地钟，"
+        "不再问「现在几点 / 白天还是晚上」；客户自己说「我这边四点了」会记 12 小时。"
+        "主动触达也读这只钟：客户当地深夜、或人设当地 23 点到早上 8 点且对方半小时没说话，不主动发。"
+        "认不出的同名城、多时区国名不会瞎猜，这时仍可能问一次。",
+        "Open the thread → profile in the right pane → confirm city or residence (it must map to one timezone). "
+        "The AI then uses the customer's local clock and does not ask what time it is or whether it is day or night; "
+        "if they say it is 4 here, that is kept for 12 hours. Proactive outreach uses the same clock: no outreach in "
+        "the customer's late night, or in the persona's 23:00–08:00 quiet hours when they have been silent 30 minutes. "
+        "Ambiguous cities and multi-timezone country names are not guessed — then it may still ask once.",
+        "当地时间 几点 白天还是晚上 时区 城市 深夜 凌晨 主动 3am peer time quiet hours timezone",
+        "/workspace",
+    ),
+    (
+        "handoff-memory",
+        "我手发的图 AI 接回去还认吗 / 人工发的图进记忆吗",
+        "Does the AI remember a photo I sent by hand / does hand-sent media enter memory",
+        "会。工作台手发的图 / 语音 / 视频会打「人工」角标并写入本会话记忆。"
+        "顶栏切回「全自动」后，AI 能认刚发过的媒体，不会装没看见或再发一张。"
+        "入站图说明只记观察，回复里不把一张说成好几张。",
+        "Yes. Photos, voice and video you send by hand get a Sent by you badge and are written into this thread's memory. "
+        "After you switch the header back to Full auto, the AI can claim media just sent — it does not pretend it never "
+        "saw them or send another. Inbound captions are observations only and are not inflated.",
+        "人工 手发 接力 记忆 角标 切回全自动 刚发的图 handoff memory sent by you",
+        "/workspace",
+    ),
+    (
+        "seat-single-no-claim",
+        "为什么点开会话要释放认领 / 单人端怎么关掉处理中",
+        "Why does opening a thread ask to release a claim / how to hide In progress on one seat",
+        "单人使用不用设置：点开会话不应再出现「处理中 · 释放认领」，全自动也不会因此卡住。"
+        "近 30 分钟真有两名坐席同时在线，认领才会自动出现。"
+        "团队要一直显示认领：自动回复设置 → 「多坐席协作」打开 → 保存，收件箱大约 1 分钟后刷新。",
+        "No setting needed on a single seat: opening a thread should not show In progress · release claim, and full-auto "
+        "is not blocked by that lock. Claim UI appears automatically only when two seats have been online in 30 minutes. "
+        "For a team that always wants claims: Reply settings → Multi-seat collaboration → on → save; the inbox refreshes "
+        "within about a minute.",
+        "认领 处理中 释放 单人 多坐席协作 我的 claim release single seat multi",
+        "/reply-settings",
+    ),
+    (
+        "yield-no-dup",
+        "切全自动为什么同一句发了两次 / 旧的发前确认稿还在",
+        "Why did switching to full-auto send the same line twice / why are old approval drafts still there",
+        "坐席打字或刚发过时 AI 会让位；你再把会话头切回「全自动」，同一句只发出一次，不会瞬间双发。"
+        "切到全自动也会作废本会话里还没点的陈旧「发前确认」稿，顶栏数字应下降。"
+        "若还没发、状态带写「首回故意慢一点」，那是沉寂很久后的拟人首回延迟，等倒计时结束即可。",
+        "The AI yields while you type or just after you send. Switching the header back to Full auto sends that deferred "
+        "line once — never twice in the same instant. Switching to Full auto also cancels stale pending approval drafts "
+        "in that thread, so the top-bar count should drop. If nothing has sent yet and the band says the first reply is "
+        "deliberately slow, that is a paced first reply after a long silence — wait for the countdown.",
+        "切档 双发 同一句 让位 发前确认 作废 首回 倒计时 yield duplicate first reply hold",
+        "/workspace",
+    ),
+    (
+        "panel-sys-tags",
+        "筛选里一堆休眠标签怎么收起来 / 发前确认数字为什么这么大",
+        "How to fold the dormant tags in the filter / why is the pending-approval number so large",
+        "收件箱左侧筛选：休眠 / 风控 / 停联收在「系统标签 ▸ N」里，单人端默认收起。"
+        "点筹码后面的 × 或按 Esc 只清筛选，不删标签。对方再发来一条，休眠「已忽略」会自动摘掉。"
+        "顶栏「发前确认」药丸只数现在还能点通过的稿；出厂超过 48 小时视为超龄，审批台可「清空超龄稿」。",
+        "Inbox left filter: dormant / risk / stop-contact sit under System tags ▸ N, collapsed on a single seat. "
+        "× on a chip or Esc clears the filter only — tags stay. A real inbound clears dormant: ignored. "
+        "The Pending approval pill counts only drafts you can still approve; drafts older than 48 hours (factory) "
+        "are stale — open the approval desk → Clear stale drafts.",
+        "系统标签 休眠 停联 筛选 发前确认 药丸 超龄 清空 panel tags pending approval stale",
+        "/workspace",
+    ),
+    (
+        "album-upload-visible",
+        "相册上传失败了怎么看原因 / 提示去补标签是什么",
+        "How to see why an album upload failed / what Add album tags means",
+        "人设 → 相册 → 一次选多张上传。结果条写成功 / 已存在 / 失败数；失败可展开原因（格式不支持、超大小等），"
+        "点重试只重发失败项。iPhone 的 HEIC 若被拒，换 JPG / PNG 再传。"
+        "会话头提示「相册没有匹配 · AI 已改口 · 去补标签」：点进去给人设图补上对方要的标签（如自拍）。",
+        "Persona → Album → upload several files. The result bar shows ok / already there / failed; expand a failure "
+        "for the reason (unsupported type, over size, …) and Retry sends only those files. If iPhone HEIC is rejected, "
+        "re-export as JPG or PNG. A header note Album had no match · add tags opens the album so you can tag photos "
+        "(e.g. selfie) the customer asked for.",
+        "相册 上传 失败 重试 HEIC 补标签 自拍 没有匹配 album upload retry miss tag",
+        "/personas",
+    ),
+    (
+        "offer-media",
+        "客户说我发张图给你为什么被拒 / 对方要发图怎么回",
+        "Why refuse I'll send you a pic / how to handle a customer offering their own photo",
+        "不用设置。客户说「我发张图给你 / I'll send you a pic」是对方要发，不是向你索图；"
+        "全自动应等图，不应回「不能发 / 没有照片」。你自己提议发图、对方答应，仍按原来的发图桥发。"
+        "入站图说明只记观察，回复不把一张说成好几张。",
+        "No setting needed. I'll send you a pic means they will send, not that they want your photo; full-auto should "
+        "wait for it and not reply that it cannot send or has no photos. If you offered a photo and they accepted, "
+        "the existing send-photo bridge still runs. Inbound captions are observations — replies do not inflate one photo.",
+        "发张图给你 索图 拒绝 自己的图 offer media send you a pic 不能发",
+        "/workspace",
+    ),
+    (
+        "own-name-gate",
+        "画像为什么把人设名写成客户名 / 摸底确认按钮点不到",
+        "Why did the profile store the persona name as the customer / confirm on discovery is clipped",
+        "客户打招呼喊人设名（Hi Mizuki）不会写入画像「客户叫什么」；name 只收人自己的名字。"
+        "目标面板 → 画像卡：只有客户原话里的真名才出待确认。乱值点 ✕。"
+        "摸底进度卡右侧确认 / 拒绝钮应完整能点；若仍被裁，刷新页面一次（本版已修裁切）。",
+        "A greeting that uses the persona name (Hi Mizuki) is not written as their name; the name slot only accepts "
+        "their own name. Goal panel → profile card: a pending value appears only for a name in their own words. "
+        "Reject leftovers with ✕. Confirm / reject on the discovery progress card should be fully visible; if a button "
+        "is still clipped, reload once (this version fixed the clip).",
+        "画像 人设名 Mizuki 客户名 摸底 确认 裁切 own name vocative discovery confirm",
+        "/workspace",
+    ),
+    (
+        "composer-model-mode",
+        "会话里模型和模式有什么区别 / 怎么选上下文深度",
+        "What is the difference between Model and Mode / how to set context depth",
+        "打开会话，输入框上方两个等宽按钮。「模型」选本会话用谁答（实例主链 / 已配置的 ChatGPT · Gemini · Grok · DeepSeek 等 / 本机私有），"
+        "只换端点，人设与风控规则照常。「模式」选按什么规矩答：标准（规则全开）或无限制（本机私有模型直答，规则让路），"
+        "并可调上下文深度、力度、思考。无限制要本机私有模型在线；选完应有保存提示。",
+        "Open a thread: two equal buttons sit above the composer. Model picks who answers (instance default / configured "
+        "ChatGPT · Gemini · Grok · DeepSeek / local private) and only changes the endpoint. Mode picks the rules: "
+        "Standard (all persona and risk rules) or Unrestricted (local private model, rules stand down), plus context "
+        "depth, effort and thinking. Unrestricted needs the local private model online; a toast confirms the save.",
+        "模型 模式 上下文深度 无限制 本机 私有 composer model mode unrestricted depth",
+        "/workspace",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请

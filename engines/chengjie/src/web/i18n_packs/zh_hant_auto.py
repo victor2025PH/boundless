@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-12 22:48:15 · OpenCC s2twp + 術語釘 · 17662 鍵（源 zh 全量 18023）
+生成: 2026-09-13 01:56:44 · OpenCC s2twp + 術語釘 · 17699 鍵（源 zh 全量 18045）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -5977,8 +5977,11 @@ ZH_HANT = {
     'err.acct.tg_client_cooling': '該賬號連線剛出過錯，正在冷卻，請一兩分鐘後再試',
     'err.acct.tg_client_unavailable': '該賬號客戶端未就緒（離線或未登入），無法同步聊天記錄',
     'err.asr.format': '音訊格式無法識別，請換成 mp3 / m4a / ogg / wav 後重試',
+    'err.asr.message_not_found': '訊息不存在或不屬於該會話',
     'err.asr.no_speech': '未識別到語音內容',
+    'err.asr.not_voice': '該訊息不是客戶發來的語音訊息',
     'err.asr.rejected': '轉錄服務拒絕了本次請求（授權或配額問題），請聯絡客服',
+    'err.asr.text_too_long': '改正文字過長（上限 2000 字）',
     'err.asr.timeout': '轉錄超時（服務響應太慢），請稍後重試；音訊較長可先剪短',
     'err.asr.unavailable': '轉錄服務暫不可用，稍後重試',
     'err.asr.unknown': '轉錄失敗，請重試；連續失敗請聯絡客服',
@@ -9298,6 +9301,7 @@ ZH_HANT = {
     'inbox.filter.attn': '需人工',
     'inbox.filter.attn_t': '轉人工或超時告急的會話（與左側賬號欄紅色角標一致）；處理完自動隱藏。',
     'inbox.filter.buried_t': '歸檔裡有 {n} 個會話還有未讀訊息（客戶在等，預設檢視看不到）',
+    'inbox.filter.chip_clear': '清除該篩選（不刪標籤；按 Esc 同效）',
     'inbox.filter.claimed': '我的',
     'inbox.filter.more': '更多',
     'inbox.filter.panel_btn': '篩選',
@@ -9309,6 +9313,8 @@ ZH_HANT = {
     'inbox.filter.sec_scope': '範圍',
     'inbox.filter.sec_sort': '排序',
     'inbox.filter.sec_status': '狀態',
+    'inbox.filter.sec_sys_tags': '系統標籤',
+    'inbox.filter.sec_sys_tags_t': '系統自動打的狀態標籤（沉睡 / 風險 / 停聯 / 接管），處理完自動摘；點開只為篩選，不是待辦',
     'inbox.filter.sec_tags': '標籤',
     'inbox.filter.sla': '超時',
     'inbox.filter.snoozed': '擱置中',
@@ -10015,6 +10021,8 @@ ZH_HANT = {
     'inbox.handoff.bar_ack': '我知道了（摘標）',
     'inbox.handoff.bar_ack_fail': '摘標失敗，請稍後重試',
     'inbox.handoff.bar_ack_ok': '已摘掉「需人工」標',
+    'inbox.handoff.bar_ack_stop': '已處理 · 歸檔並移除',
+    'inbox.handoff.bar_ack_stop_t': '歸檔並從篩選移除 · 不再自動回覆（停聯事實保留在會話檔案，歷史可查）',
     'inbox.handoff.bar_ack_t': '只摘掉「需人工」標，不改會話其它狀態',
     'inbox.handoff.bar_generic': '需人工：此會話被標記需人工處理（未記錄原因）',
     'inbox.handoff.bar_go': '去回覆台處理',
@@ -10032,6 +10040,12 @@ ZH_HANT = {
     'inbox.handoff.r_send_error': 'AI 回覆傳送失敗',
     'inbox.handoff.src_manual': '人工',
     'inbox.handoff.src_system': '系統自動',
+    'inbox.handoff.stop_bar': '客戶要求停聯：會話已凍結，AI 不再自動回覆——處理完點右側「歸檔並移除」',
+    'inbox.handoff.stop_confirm_done': '已歸檔並從篩選移除；AI 不再自動回覆這位客戶',
+    'inbox.handoff.stop_confirm_fail': '處理失敗，請稍後重試',
+    'inbox.handoff.stop_confirm_msg': '歸檔並從篩選移除 · 不再自動回覆。\n停聯事實會從標籤移入會話檔案（歷史可查），AI 對這位客戶繼續保持沉默；客戶日後再來訊息會自動回到列表。',
+    'inbox.handoff.stop_confirm_ok': '歸檔並移除',
+    'inbox.handoff.stop_confirm_title': '確認已處理「客戶要求停聯」',
     'inbox.handoff.tip': '{when} {src}轉人工：{why}。人工回覆一條會自動清除；右鍵會話可直接摘標籤',
     'inbox.handoff.tip_generic': '此會話被標記需人工處理。人工回覆一條會自動清除；右鍵會話可直接摘標籤',
     'inbox.hdr.loggedout': '🚪 已退出·僅歷史',
@@ -17262,16 +17276,24 @@ ZH_HANT = {
     'ov2_js_ash_werr': '台賬落盤失敗（資料在丟，查 logs/autosend_shadow 目錄可寫性）',
     # ── ov2_js_asr_attempts ──
     'ov2_js_asr_attempts': '轉錄請求數',
+    # ── ov2_js_asr_cache ──
+    'ov2_js_asr_cache': '快取命中（免重轉）',
     # ── ov2_js_asr_empty ──
     'ov2_js_asr_empty': '暫無語音轉錄資料（收到語音訊息後累計）',
     # ── ov2_js_asr_failed ──
     'ov2_js_asr_failed': '全鏈失敗',
     # ── ov2_js_asr_fallback ──
     'ov2_js_asr_fallback': '回落轉錄',
+    # ── ov2_js_asr_gate ──
+    'ov2_js_asr_gate': '無人聲/回聲丟棄',
     # ── ov2_js_asr_hallu ──
     'ov2_js_asr_hallu': '幻覺丟棄',
     # ── ov2_js_asr_hint ──
     'ov2_js_asr_hint': '回落率越高說明越多轉錄走了弱一檔兜底（主 ASR 掉線會拉高它，轉錄錯字隨之增多）。',
+    # ── ov2_js_asr_langretry ──
+    'ov2_js_asr_langretry': '先驗重轉（採用）',
+    # ── ov2_js_asr_lowconf ──
+    'ov2_js_asr_lowconf': '低置信轉寫',
     # ── ov2_js_asr_primary ──
     'ov2_js_asr_primary': '主 ASR 直轉',
     # ── ov2_js_asr_prov ──
