@@ -238,6 +238,15 @@ def detect_selfie_request(text: str) -> bool:
             "你的", "妳的", "你嘅", "妳嘅", "你个", "你個", "your",
         )):
             return False
+    # Q-36（#313 2JK95C）：客户**提议发自己的图**（「一会我拍照片给你看」「I sent a photo, did you
+    # see it?」六语）不是索图——上面的子串护栏只收固定词，「我拍照片」「我发张我的」都漏；
+    # 共享判定在 commitment_guard.detect_offer_media（带「你的 / your」混合句它自己返回空，索要照旧）。
+    try:
+        from src.inbox.commitment_guard import detect_offer_media
+        if detect_offer_media(text):
+            return False
+    except Exception:
+        pass
     if any(m in t for m in _REQUEST_MARKERS):
         return True
     return any(p.search(t) for p in _REQUEST_PATTERNS)

@@ -424,6 +424,15 @@ def wants_media(peer_text: str) -> str:
         return ""
     if _OWN_ACTION_RE.match(s):
         return ""
+    # Q-36（#313 2JK95C）：「一会我拍照片给你看呢」——时间副词在前，_OWN_ACTION_RE 的句首「我…拍」
+    # 锚不到，_WANTS_IMG「拍照片」却命中 → media_context 误开、AI 的「发来看看」被当已发断言剥。
+    # 客户提议发**自己的**图（六语，commitment_guard.detect_offer_media）一律不是索要。
+    try:
+        from src.inbox.commitment_guard import detect_offer_media
+        if detect_offer_media(s):
+            return ""
+    except Exception:
+        pass
     for rx in _WANTS_IMG:
         if rx.search(s):
             return KIND_IMAGE

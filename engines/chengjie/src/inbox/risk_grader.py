@@ -145,6 +145,13 @@ CATEGORIES: List[Dict[str, Any]] = [
     {"id": "complaint", "level": "medium", "floor": "low", "overridable": True, "action": "shadow_log",
      "source": "drafts._SENSITIVE_PATTERNS[1]",
      "words": {"en": ["discount", "complaint", "lawyer", "scam (mention)", "police"], "zh": ["优惠", "投诉", "律师", "骗子（提及）", "报警"]}},
+    # Q-36（#313 2JK95C）：客户**提议发自己的图** / 已发图问看到没 / 要不要看我的——request_media 的兄弟意图。
+    # 处置 = 接受 + 期待（「发来看看」），**不走** 拒发模板 / media_promise / claim_guard；只落 [risk] low 日志。
+    # 带「你的照片 / your pic / 发我」领属的混合句仍按 request_media（commitment_guard._OFFER_EXCLUDE 先判）。
+    {"id": "offer_media", "level": "low", "floor": "low", "overridable": False, "action": "accept_expect",
+     "source": "commitment_guard.detect_offer_media（客户领属：我的 / 我拍 / my / 私の / 내 / mía / minha）→ inbound_enrich.build_offer_media_hint",
+     "words": {"en": ["I'll send you a pic", "wanna see my dinner?", "I sent a photo, did you see it?", "can I send you a picture of me"],
+               "zh": ["一会我拍照片给你看", "我发张我的给你看", "看到我发的照片了吗", "要不要看我做的菜"]}},
     {"id": "privacy", "level": "low", "floor": "low", "overridable": True, "action": "log_only",
      "source": "quick_analyze._RISK_TERMS.privacy（叙述；索要走 money_request / request_contact）",
      "words": {"en": ["password", "passport", "my address", "ID number"], "zh": ["密码", "护照", "住址", "身份证"]}},
@@ -293,6 +300,13 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
                 rk = detect_request(t, lang)
             except Exception:
                 rk = None
+            # Q-36（#313）：客户提议发自己的图 → 低级兄弟意图 offer_media（detect_request 内已对 media 排除）
+            try:
+                from src.inbox.commitment_guard import detect_offer_media
+                if detect_offer_media(t, lang):
+                    _add("offer_media", "offer:media", "low")
+            except Exception:
+                pass
             _money_guess = bool(_SP) and len(_SP) > 2 and bool(_hits([_SP[2][0]], t)) \
                 and next((k for k, p in _GUESS_KIND if p.search(t)), "") == "money"
             if "credential_or_payment_request" in rs:
@@ -352,7 +366,7 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
         cdef = _CAT_BY_ID.get(top["category"], {})
         out_hits: List[str] = []
         for f in found:
-            tag = f["hit"] if f["hit"].startswith(("request:", "commitment:")) else f"{f['category']}:{f['hit']}"
+            tag = f["hit"] if f["hit"].startswith(("request:", "commitment:", "offer:")) else f"{f['category']}:{f['hit']}"
             if tag not in out_hits:
                 out_hits.append(tag)
         return {"level": top["level"], "category": top["category"], "hits": out_hits[:6],

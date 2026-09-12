@@ -288,6 +288,15 @@ def own_questions_for(store: Any, conversation_id: str, *, now: Optional[float] 
     return out[-_MAX_OWN:]
 
 
+def _is_media_accept(sentence: str) -> bool:
+    """Q-36：处置句「发来看看 / send it over / 見せて」→ True（共享词表 commitment_guard.is_media_accept_prompt；缺席 → False）。"""
+    try:
+        from src.inbox.commitment_guard import is_media_accept_prompt
+        return bool(is_media_accept_prompt(sentence))
+    except Exception:
+        return False
+
+
 def check_repeat_questions(
     text: str, *, conversation_id: str = "", lang: str = "",
     own_questions: Optional[Iterable[Any]] = None, store: Any = None,
@@ -348,6 +357,11 @@ def check_repeat_questions(
         keep: List[str] = []
         for s in sents:
             if not is_question(s):
+                keep.append(s)
+                continue
+            # Q-36（#313）：「发来看看？/ send it over? / 見せて？」是对客户提议发图的**处置句**
+            # （接受 + 期待），不是画像追问——24h 内说过「发来看看」也不算重复，原样保留。
+            if _is_media_accept(s):
                 keep.append(s)
                 continue
             best: Optional[Dict[str, Any]] = None

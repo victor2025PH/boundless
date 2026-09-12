@@ -74,6 +74,20 @@ NO_PHOTO_PERSONA_LINE = (
     "你没有发照片/图片的功能：绝不说「我找找/翻翻相册/拍一张发你/回头发你」"
     "这类承诺发图的话，也绝不假装图已发出（「这张是…」「你看看这张」）；"
     "被要照片时轻巧带过、继续聊天，不答应稍后补图。"
+    # Q-36（#313 2JK95C）：对方**自己**要发图不是在要你的图——别用拒发话回应
+    "对方说要拍 / 发**自己的**照片给你看（「我拍张给你看」「我发张我的」「看到我发的图了吗」）"
+    "不是在要你的照片：接受并表示期待（「好呀发来看看」），绝不回「照片就先不发啦」。"
+)
+
+# Q-36（#313 2JK95C）：客户「一会我拍照片给你看呢」被按下面示例回成「照片就先不发啦，先陪我聊会儿」。
+# 这一段是 A/B 线人设能力关时的注入文案，也是 inbound_enrich.build_offer_media_hint 的同源措辞。
+OFFER_MEDIA_RULE = (
+    "**注意区分方向**：对方说的是 TA **自己**要拍 / 要发 / 已经发了照片给你看"
+    "（「一会我拍照片给你看」「我发张我的给你看」「看到我发的图了吗」「要不要看我做的菜」）"
+    "——这不是在要你的照片，是在给你看 TA 的。这时要接受并表示期待"
+    "（「好呀，发来看看」「等着看～」），或对 TA 已发的图接着聊；"
+    "绝不用「照片就先不发啦 / 我这边发不了图 / 先陪我聊会儿」这类拒发话回应，"
+    "也不要反过来承诺发你自己的图。"
 )
 
 # ── 陪聊域详细约束（ai_client 注入；能力关闭时替代旧的「什么都不注入」）──────
@@ -85,13 +99,19 @@ _NO_PHOTO_CONSTRAINT = (
     "② 假装正在发图或已发图——不说「这张是…」「你看这张」「发过去了」；\n"
     "③ 长篇解释自己为什么发不了图（一句自然带过即可）。\n"
     "对方要照片时：轻巧地把话题聊下去（如「照片就先不发啦，先陪你聊会儿」），"
-    "绝不答应稍后补图，也不要编造「手机坏了」之类的具体借口。"
+    "绝不答应稍后补图，也不要编造「手机坏了」之类的具体借口。\n"
+    + OFFER_MEDIA_RULE
 )
 
 
 def no_photo_constraint() -> str:
     """能力关闭时注入 system prompt 的硬约束（详细版，陪聊域用）。"""
     return _NO_PHOTO_CONSTRAINT
+
+
+def offer_media_rule() -> str:
+    """Q-36：「对方提议发自己的图 ≠ 要你的图」措辞（inbound_enrich 提示与能力关约束同源）。"""
+    return OFFER_MEDIA_RULE
 
 
 def persona_photos_enabled(persona: Optional[Dict[str, Any]]) -> bool:
@@ -233,7 +253,9 @@ def prompt_photos_allowed(user_context: Optional[Dict[str, Any]]) -> bool:
 
 __all__ = [
     "NO_PHOTO_PERSONA_LINE",
+    "OFFER_MEDIA_RULE",
     "no_photo_constraint",
+    "offer_media_rule",
     "persona_photos_enabled",
     "selfie_globally_enabled",
     "photos_effective",

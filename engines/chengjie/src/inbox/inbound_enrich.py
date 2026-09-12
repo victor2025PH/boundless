@@ -590,6 +590,23 @@ def _catalog_fact_text() -> str:
     return "\n".join(p for p in parts if p)
 
 
+def build_offer_media_hint(text: str) -> str:
+    """Q-36（#313 2JK95C）：客户**提议发自己的图**（「一会我拍照片给你看」「I sent a photo, did you
+    see it?」六语，``commitment_guard.detect_offer_media``）→ 处置提示 = 接受 + 期待。
+
+    事故：能力关的人设把这句当索图，照 no_photo 约束示例回「照片就先不发啦，先陪我聊会儿」。
+    措辞与 ``photo_capability.OFFER_MEDIA_RULE`` 同源；非 offer / 判定缺席 → ""。纯函数。
+    """
+    try:
+        from src.inbox.commitment_guard import detect_offer_media
+        if not detect_offer_media(text):
+            return ""
+        from src.companion.photo_capability import offer_media_rule
+        return "【对方在提议发 TA 自己的照片 / 视频给你看】" + offer_media_rule()
+    except Exception:
+        return ""
+
+
 def build_short_inbound_hint(text: str) -> str:
     """极短 / 纯语气 / 纯 emoji 入站 → Companion 短回提示（补充 natural_dialogue）。"""
     t = (text or "").strip()
@@ -759,6 +776,13 @@ def apply_inbound_enrichments(
             hints.append(rq_hint)
     except Exception:
         pass
+    # Q-36（#313）：客户提议发自己的图 → 接受 + 期待，不走拒发 / 承诺 / 认领任何一套（A/B 两线同经）。
+    try:
+        _om_hint = build_offer_media_hint(t)
+        if _om_hint:
+            hints.append(_om_hint)
+    except Exception:
+        pass
     # AI 质疑应对（2026-08-03，AI 味周报闭环）：客户质疑「你是AI/机器人」或吐槽
     # 「机器味」→ 注入应对要点（别否认三连/别自证/别突然热情），并进程计数供观测。
     # 词表保守（宁漏勿误，正常聊 AI 工具不命中），与周报离线口径同源
@@ -811,6 +835,7 @@ __all__ = [
     "build_time_gap_hint",
     "build_false_premise_hint",
     "claim_support_ratio",
+    "build_offer_media_hint",
     "build_short_inbound_hint",
     "peer_media_context",
     "media_placeholder",

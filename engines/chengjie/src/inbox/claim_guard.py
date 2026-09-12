@@ -238,6 +238,15 @@ def _in_quotes(sentence: str, phrase_span: Tuple[int, int]) -> bool:
     return False
 
 
+def _is_media_accept(sentence: str) -> bool:
+    """Q-36：处置句「发来看看 / send it over」（共享词表 commitment_guard.is_media_accept_prompt；缺席 → False）。"""
+    try:
+        from src.inbox.commitment_guard import is_media_accept_prompt
+        return bool(is_media_accept_prompt(sentence))
+    except Exception:
+        return False
+
+
 def neutral_line(lang: str, seed: str = "") -> str:
     pool = _NEUTRAL.get(lang) or _NEUTRAL["en"]
     if not seed:
@@ -295,6 +304,12 @@ def check_claims(
             # 误伤保护 ②：整句是历史里某条的逐字复述
             s_norm = re.sub(r"\s+", " ", s.strip().lower())
             if s_norm and hist and s_norm in hist:
+                out.append(s)
+                any_pass = True
+                continue
+            # 误伤保护 ③（Q-36 #313）：对客户「提议发图」的处置句（「你刚说的那几个菜，发来看看」
+            # / "like you said, send it over"）——接受 + 期待不是编造共同回忆，无锚点也不改写。
+            if _is_media_accept(s):
                 out.append(s)
                 any_pass = True
                 continue

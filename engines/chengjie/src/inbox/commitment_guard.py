@@ -221,7 +221,9 @@ def detect_commitment(inbound_text: str, lang: Optional[str] = None) -> Optional
         hits.append("gift")
     if _any(_CONTACT_STRONG, t) and not _any(_CONTACT_EXCLUDE, t):
         hits.append("contact")
-    if _any(_MEDIA_STRONG, t):
+    # Q-36（#313）：「I sent a photo, did you see it? / 一会我拍照片给你看」是客户提议发**自己的**图，
+    # 不是向我们索要——不进 media（否则 B 线 handle_inbound 会给出「不发照片」拒发模板）。
+    if _any(_MEDIA_STRONG, t) and not detect_offer_media(t):
         hits.append("media")
     if not meet_blocked and (
             _any(_MEET_STRONG, t) or (_any(_MEET_WEAK, t) and _framed(t))):
@@ -274,6 +276,10 @@ _REQ_MEDIA = [_rx(p) for p in (
     r"发(我|张|個|个|几张)(照片|自拍|视频|照)|给我(看|发)(张|个|你的|几张)?(照片|自拍|视频)|看看你的(照片|脸|视频)|来张自拍|來張自拍",
     r"打(个|個)?(视频|視頻|语音|語音)|开视频|開視頻|视频(一下|聊|通话)",
     r"写真(を)?送って|自撮り送って|ビデオ通話(しよう|しない)",
+    # Q-36（#313）：「有你的照片吗 / got any pics of you」——问有没有**我方**的照片＝索要（领属在我方）
+    r"(?:有|有没有|有沒有|有冇|有無)(?:你|妳|您)(?:的|嘅|个|個)?(?:照片|相片|自拍|图|圖|近照|相)",
+    _LB + r"(?:do\s+you\s+have|you\s+have|u\s+have|got|you\s+got|u\s+got)\s+(?:any\s+|more\s+|other\s+)(?:pics?|photos?|pictures?|selfies?)" + _RB
+    + r"|" + _LB + r"(?:got|have)\s+(?:a\s+|any\s+)?(?:pics?|photos?|pictures?|selfies?)\s+of\s+(?:you|u|yourself)" + _RB,
 )]
 _REQ_MEET = [_rx(p) for p in (
     _LB + r"(?:can|could|shall|should)\s+we\s+.{0,24}?(?:meet|meet\s+up|hang\s+out|get\s+together|grab\s+(?:a\s+)?(?:coffee|drink|dinner|lunch|bite))" + _RB,
@@ -298,6 +304,173 @@ _REQ_MONEY = [_rx(p) for p in (
 )]
 
 
+# ── Q-36 #313（2JK95C）：客户**提议发自己的图**（offer_media）——request_media 的兄弟意图 ──
+# 事故：客户「一会我拍照片给你看呢」被 detect_selfie_request / wants_media 当成索图，能力关的人设按
+# 「对方要照片时…照片就先不发啦」示例拒发；B 线 detect_commitment 的 _MEDIA_STRONG「sent a photo」
+# 同样把「I sent a photo, did you see it?」当邀约走拒发模板。本意图只认**领属是客户自己**的句子
+# （我的 / 我拍 / 我发 / my / mine / 私の / 내 / mía / minha…），处置＝接受 + 期待（「发来看看」），
+# 不走 claim_guard / media_promise / 拒发模板。带「你的照片 / your pic / 发我 / send me」的混合句仍算
+# 索要（_OFFER_EXCLUDE 先判；风控语义不弱化）。六语词干各 ≥6。
+OFFER_MEDIA_KIND = "offer_media"
+OFFER_KINDS = (OFFER_MEDIA_KIND,)
+_PHOTO_N_ZH = r"(?:照片|相片|图片|圖片|图|圖|自拍|视频|視頻|影片|美照|近照)"
+_MINE_ZH = r"(?:我的|我家的|我家|我做的|我拍的|我煮的|我买的|我買的|自己的|我这边|我這邊|我们家|我們家)"
+_ADV_ZH = r"(?:这就|這就|马上|馬上|一会儿?|一會兒?|等会儿?|等會兒?|待会儿?|待會兒?|晚点|晚點|回头|回頭|稍后|稍後|现在|現在|刚|剛|刚刚|剛剛|已经|已經|先|去|来|來|再)*"
+_OFFER_MEDIA_ZH = [_rx(p) for p in (
+    # ① 我(一会/这就)拍(几张)(照片)…给你看 / 我发张我的给你看
+    r"我" + _ADV_ZH + r"(?:拍|发|發|传|傳|录|錄)(?:一?[张張个個几幾条條段]|点|點|些)?" + _MINE_ZH + r"?" + _PHOTO_N_ZH + r"?[^，。！？!?\n]{0,8}?(?:给|給)你(?:看|瞧|瞅)",
+    # ② 发/传/拍 (张) 我的(照片)：领属紧跟动词
+    r"(?:发|發|传|傳|拍|录|錄)(?:一?[张張个個几幾条條段]|点|點|些)?" + _MINE_ZH + _PHOTO_N_ZH + r"?",
+    # ③ 给你看(看)我的 / 我做的…
+    r"(?:给|給)你看(?:看|下|一下)?" + _MINE_ZH,
+    # ④ 要不要看(看)我的 / 想看我做的…
+    r"(?:要不要|想不想|想|要)看(?:看|下|一下)?" + _MINE_ZH,
+    # ⑤ 我发了张照片(你)看到了吗 / 我发的图收到没
+    r"我" + _ADV_ZH + r"(?:发|發|传|傳)(?:了|的|过|過)(?:一?[张張个個几幾])?" + _PHOTO_N_ZH + r"[^，。！？!?\n]{0,10}?(?:看到|看见|看見|收到|看没|看沒)",
+    # ⑥ 看到我(刚)发的照片了吗
+    r"(?:看到|看见|看見|收到)我" + _ADV_ZH + r"(?:发|發|传|傳)(?:的|给你的|給你的|你的)" + _PHOTO_N_ZH,
+    # ⑦ 这是我拍的照片 / 这张是我做的
+    r"(?:这|這)(?:是|张|張|几张|幾張|个|個)(?:是)?" + _MINE_ZH + r"[^，。！？!?\n]{0,6}" + _PHOTO_N_ZH + r"?",
+    # ⑧ 我的照片发给你(看) / 我照片发你了
+    r"我(?:的)?" + _PHOTO_N_ZH + r"(?:发|發|传|傳)(?:给|給)?你(?:看|了|啦)?",
+    # ⑨ 我拍了几张(照片)发给你
+    r"我" + _ADV_ZH + r"(?:拍|照)(?:了|好)(?:一?[张張个個几幾])?" + _PHOTO_N_ZH + r"?[^，。！？!?\n]{0,8}?(?:发|發|传|傳)(?:给|給)?你",
+    # ⑩ 粤语：我影张相畀你睇 / 我发我嘅相畀你
+    r"我" + _ADV_ZH + r"(?:影|拍|发|發)(?:张|張|返)?(?:我嘅)?(?:相|相片|自拍)?[^，。！？!?\n]{0,6}?(?:畀|俾)你(?:睇|看)?",
+)]
+_PHOTO_N_EN = r"(?:pic|pics|photo|photos|picture|pictures|selfie|selfies|video|videos|shot|shots|snap|snaps)"
+_OFFER_MEDIA_EN = [_rx(p) for p in (
+    # ① I'll / let me / I can / I'm gonna  send|show|share|shoot|take|snap (you) (a|my) pic
+    _LB + r"(?:i(?:'|’)?ll|i\s+will|i\s+can|i\s+could|let\s+me|lemme|i(?:'|’)?m\s+(?:gonna|going\s+to)|i\s+am\s+(?:gonna|going\s+to)|wanna|want\s+to|gonna)\s+(?:go\s+)?(?:send|show|share|shoot|take|snap|text)\s+(?:you\s+|u\s+)?(?:a\s+|an\s+|one\s+|some\s+|my\s+|the\s+|another\s+)?" + _PHOTO_N_EN + _RB,
+    # ② wanna see my dinner / want to see mine / a pic of me
+    _LB + r"(?:wanna|want\s+to|like\s+to|do\s+you\s+want\s+to|would\s+you\s+like\s+to)\s+see\s+(?:mine|my\s+\w+|(?:a\s+|some\s+)?" + _PHOTO_N_EN + r"\s+of\s+(?:me|myself|mine|my\b|us|our))",
+    # ③ I (just) sent (you) a photo
+    _LB + r"i\s+(?:just\s+|already\s+)?(?:sent|shared|posted|uploaded|dropped)\s+(?:you\s+|u\s+)?(?:a|an|one|some|the|my|two|three|\d+)\s+" + _PHOTO_N_EN + _RB,
+    # ④ did you see / get the photo I sent
+    _LB + r"(?:did|didn(?:'|’)?t|have|haven(?:'|’)?t|do)\s+(?:you|u)\s+(?:see|get|receive|check|like)\s+(?:the|my|that|those|these)\s+" + _PHOTO_N_EN + r"(?:\s+i\s+(?:just\s+)?(?:sent|took|shared))?" + _RB,
+    _LB + r"(?:see|get|got|check)\s+(?:the|my|that)\s+" + _PHOTO_N_EN + r"\s+i\s+(?:just\s+)?(?:sent|took|shared)" + _RB,
+    # ⑤ here's a pic of me / here are the photos of my place
+    _LB + r"here(?:'|’)?s?\s+(?:is\s+|are\s+)?(?:a\s+|the\s+|some\s+|my\s+)?" + _PHOTO_N_EN + r"\s+(?:of\s+(?:me|myself|mine|my\b|us|our|what|the)|i\s+(?:took|made|shot))",
+    # ⑥ can I send you a picture (of me)
+    _LB + r"(?:can|could|may)\s+i\s+(?:send|show|share)\s+(?:you\s+|u\s+)?(?:a\s+|some\s+|my\s+)?" + _PHOTO_N_EN + _RB,
+    # ⑦ I'll take a pic (of it) and send / for you
+    _LB + r"i(?:'|’)?ll\s+(?:take|snap|shoot)\s+(?:a\s+|some\s+)?" + _PHOTO_N_EN + r"\s+(?:of\s+\w+\s+)?(?:and\s+(?:send|show)|for\s+you|to\s+show\s+you|later)",
+    # ⑧ check out the pic I sent / this is me in the photo
+    _LB + r"this\s+is\s+(?:me|us|my\s+\w+)\s+(?:in\s+the\s+" + _PHOTO_N_EN + r"|at\b|from\b)",
+)]
+_OFFER_MEDIA_JA = [_rx(p) for p in (
+    r"(?:私|わたし|僕|ぼく|俺|おれ|自分)の(?:写真|しゃしん|自撮り|画像|動画|ビデオ)(?:を|も|、)?\s*(?:送|おく|見せ|みせ)",
+    r"(?:写真|画像|自撮り|動画)(?:を|も)?\s*(?:送|おく)(?:る(?:ね|よ|から|わ|ー)?|ります|ろうか|ってあげる|ってもいい|っていい|るね)",
+    r"(?:私|わたし|僕|俺|自分)の(?:写真|画像|自撮り|動画)(?:、|を)?\s*(?:見|み)(?:たい|る|ない)[？?]?",
+    r"(?:写真|画像|自撮り|動画)(?:を)?\s*(?:送った|送りました|おくった)[^。！？!?\n]{0,10}?(?:見た|みた|届いた|とどいた|見て|みて)",
+    r"(?:撮|と)って(?:から)?\s*(?:送|おく|見せ|みせ)(?:る|り|ってあげる|るね|るよ|ようか)",
+    r"(?:これ|この写真|この画像|これ、)(?:は|が)?\s*(?:私|わたし|僕|俺|自分)(?:の|が撮った|が作った|がとった)",
+    r"見せ(?:てあげる|ようか|るね|るよ|たい|てあげよう)",
+    r"(?:私|わたし|僕|俺)(?:が|の)(?:作った|撮った|とった|つくった)[^。！？!?\n]{0,10}(?:写真|画像|見せ|送)",
+)]
+_OFFER_MEDIA_KO = [_rx(p) for p in (
+    r"(?:내|제|나의|저의)\s*(?:사진|셀카|영상|동영상)(?:을|를|도)?\s*(?:보내|보여)",
+    r"(?:사진|셀카|영상|동영상)(?:을|를|도)?\s*(?:찍어서\s*)?(?:보내|보여)\s*(?:줄게|줄까|드릴게|드릴까|줄께|드릴께|도\s*돼|도\s*될까|도\s*되)",
+    r"(?:내|제)\s*(?:사진|셀카|영상)\s*(?:볼래|볼까|보고\s*싶|보여\s*줄)",
+    r"(?:사진|셀카|영상|동영상)(?:을|를)?\s*보냈(?:어|는데|다|음|어요)[^。！？!?\n]{0,10}?(?:봤|받았|확인)",
+    r"찍어서\s*(?:보내|보여)",
+    r"(?:이거|이건|이\s*사진)\s*(?:내가|제가)\s*(?:찍은|만든|찍었|찍은\s*거)",
+    r"(?:보여|보내)\s*줄게|보여\s*줄까|보내\s*줄까",
+)]
+_PHOTO_N_ES = r"(?:foto|fotos|selfie|selfies|imagen|imágenes|imagenes|video|vídeo|videos|vídeos)"
+_OFFER_MEDIA_ES = [_rx(p) for p in (
+    _LB + r"te\s+(?:mando|env[ií]o|paso|muestro|enseño|comparto)\s+(?:una?|otra|unas|mis?|la|las|el|los)?\s*" + _PHOTO_N_ES + _RB,
+    _LB + r"(?:quieres|quer[ée]s|deseas|te\s+gustar[ií]a)\s+ver\s+(?:mi|mis|la\s+m[ií]a|una\s+foto\s+m[ií]a|c[oó]mo\s+(?:qued[oó]|me\s+veo|soy|estoy))",
+    _LB + r"te\s+(?:mand[ée]|envi[ée]|pas[ée])\s+(?:una?|la|las|unas|mis?)\s*" + _PHOTO_N_ES + _RB,
+    _LB + r"(?:viste|has\s+visto|recibiste)\s+(?:la|las|mi|mis)\s+" + _PHOTO_N_ES + _RB,
+    _LB + r"puedo\s+(?:mandarte|enviarte|mostrarte|pasarte|ense[ñn]arte)\s+(?:una?|unas|mis?)\s*" + _PHOTO_N_ES + _RB,
+    _LB + r"(?:aqu[ií]|ac[aá])\s+(?:est[aá]|va|tienes|te\s+dejo|te\s+va)\s+(?:una?|la|mi)\s*" + _PHOTO_N_ES + _RB,
+    _LB + r"voy\s+a\s+(?:mandarte|enviarte|pasarte|tomar(?:me)?|sacar(?:me)?)\s+(?:una?|otra)\s*" + _PHOTO_N_ES + _RB,
+)]
+_PHOTO_N_PT = r"(?:foto|fotos|selfie|selfies|imagem|imagens|v[ií]deo|v[ií]deos)"
+_OFFER_MEDIA_PT = [_rx(p) for p in (
+    _LB + r"te\s+(?:mando|envio|passo|mostro)\s+(?:uma?|outra|umas|minha|minhas|a|as|o)?\s*" + _PHOTO_N_PT + _RB,
+    _LB + r"(?:quer|queres|queria|quer(?:ia)?\s+voc[eê])\s+ver\s+(?:minha|minhas|a\s+minha|uma\s+foto\s+minha|como\s+(?:eu\s+)?(?:fiquei|estou|sou|t[oô]))",
+    _LB + r"te\s+(?:mandei|enviei|passei)\s+(?:uma?|a|as|umas|minha|minhas)\s*" + _PHOTO_N_PT + _RB,
+    _LB + r"posso\s+(?:te\s+)?(?:mandar|enviar|mostrar)\s+(?:uma?|umas|minha|minhas)\s*" + _PHOTO_N_PT + _RB,
+    _LB + r"vou\s+(?:te\s+)?(?:mandar|enviar|tirar|bater)\s+(?:uma?|outra|umas)\s*" + _PHOTO_N_PT + _RB,
+    _LB + r"(?:olha|olhe|aqui\s+(?:est[aá]|vai|t[aá]))\s+(?:a|uma|minha|as|minhas)\s*" + _PHOTO_N_PT + _RB,
+    _LB + r"(?:viu|recebeu|chegou)\s+(?:a|as|minha|minhas)\s+" + _PHOTO_N_PT + r"|" + _PHOTO_N_PT + r"\s+que\s+(?:eu\s+)?(?:mandei|enviei|tirei)" + _RB,
+)]
+_OFFER_MEDIA_ALL = (_OFFER_MEDIA_ZH + _OFFER_MEDIA_EN + _OFFER_MEDIA_JA + _OFFER_MEDIA_KO
+                    + _OFFER_MEDIA_ES + _OFFER_MEDIA_PT)
+# 领属指向**我方**（你的照片 / your pic / 发我 / send me…）→ 不是 offer，索要判定照旧（风控不弱化）
+_OFFER_EXCLUDE = [_rx(p) for p in (
+    r"(?:你|妳|您)(?:的|嘅|个|個)?(?:照片|相片|图片|圖片|自拍|视频|視頻|脸|臉|样子|樣子|近照|写真|寫真|相)",
+    # 「你也发张你的」「发张你的」——混合句里向我方索要（领属在我方）
+    r"(?:你|妳|您)也(?:发|發|拍|传|傳|来|來)|(?:发|發|传|傳|来|來)(?:一?[张張个個])?(?:你的|妳的|你嘅|妳嘅)",
+    r"(?:看看|想看|要看|睇下|睇睇)(?:你|妳|您)(?![们們])|(?:发|發|传|傳|给|給|俾|畀)我(?:看|发|發|一张|一張|个|個|张|張)?(?:照片|相片|图|圖|自拍|视频|視頻|相|看)",
+    _LB + r"(?:send|show|give|shoot|drop|text)\s+(?:me|us)" + _RB + r"|" + _LB + r"(?:your|ur|yours?)\s+(?:pic|pics|photo|photos|picture|pictures|selfie|selfies|face|video|videos)" + _RB + r"|" + _LB + r"show\s+me\s+yours" + _RB
+    + r"|" + _LB + r"(?:can|could|may)\s+i\s+(?:see|have|get)\s+(?:a\s+|some\s+|your\s+|ur\s+)?(?:pic|photo|picture|selfie|face|video)s?" + _RB,
+    r"(?:あなた|君|きみ|お前|おまえ|そっち)の(?:写真|画像|自撮り|顔)|(?:写真|画像|自撮り)(?:を)?(?:送って|見せて|みせて)(?!あげ|もいい|いい)(?:ください|くれ|よ|ね|欲しい|ほしい)?|顔見せ",
+    r"(?:네|너|당신|니|오빠|언니|그쪽)\s*(?:사진|셀카|얼굴)|(?:보내|보여)\s*(?:줘|주세요|주라|주면|줄래)",
+    _LB + r"(?:m[aá]ndame|env[ií]ame|mu[eé]strame|p[aá]same|ens[eé][ñn]ame)" + _RB + r"|" + _LB + r"(?:tu|tus|su|sus)\s+(?:foto|fotos|selfie|cara)" + _RB + r"|" + _LB + r"foto\s+tuya" + _RB,
+    _LB + r"me\s+(?:manda|mande|envia|envie|mostra|mostre)" + _RB + r"|" + _LB + r"manda\s+(?:pra|para)\s+mim" + _RB + r"|" + _LB + r"(?:sua|suas|tua|tuas)\s+(?:foto|fotos|selfie|cara)" + _RB,
+)]
+# 否定（不发 / won't send / 送らない…）→ 不是提议
+_OFFER_NEG = [_rx(p) for p in (
+    r"不(?:想|会|會|能|要|准|許|许)?(?:发|發|拍|传|傳|录|錄|给你看|給你看)|没法(?:发|發|拍)|沒法(?:發|拍)",
+    _LB + r"(?:not\s+(?:gonna|going\s+to)|won(?:'|’)?t|can(?:'|’)?t|cannot|don(?:'|’)?t\s+want\s+to|never)\s+(?:send|show|share|take)" + _RB,
+    r"送らない|送れない|見せない|見せられない",
+    r"안\s*(?:보내|보여)|못\s*(?:보내|보여)",
+    _LB + r"no\s+(?:te\s+)?(?:mando|env[ií]o|puedo\s+mandar)" + _RB,
+    _LB + r"n[ãa]o\s+(?:vou\s+)?(?:te\s+)?(?:mand|envi|mostr)" ,
+)]
+
+
+def detect_offer_media(inbound_text: str, lang: Optional[str] = None) -> str:
+    """Q-36（#313）：客户是否在**提议发自己的图 / 已发图问看到没 / 要不要看我的**。
+    返回 :data:`OFFER_MEDIA_KIND` 或 ``""``。
+
+    只认领属是客户自己（我的 / 我拍 / my / mine / 私の / 내 / mía / minha…）的句式；句中同时出现
+    我方领属索要（你的照片 / your pic / 发我 / send me…）→ ``""``（索要优先，风控语义不弱化）；
+    否定（不发 / won't send）→ ``""``。绝不抛。"""
+    t = str(inbound_text or "").strip()
+    if not t or len(t) > 300:
+        return ""
+    try:
+        _ = sniff_lang(t, lang)
+        if _any(_OFFER_EXCLUDE, t) or _any(_OFFER_NEG, t):
+            return ""
+        return OFFER_MEDIA_KIND if _any(_OFFER_MEDIA_ALL, t) else ""
+    except Exception:
+        return ""
+
+
+# 处置句（我方接受 + 期待：「发来看看 / send it over / 見せて」）——repeat_question_guard 不当重复问句、
+# claim_guard 不当引用句改写、media_promise 不当承诺。六语。
+_ACCEPT_PROMPT = [_rx(p) for p in (
+    r"发来看看|發來看看|发过来看看|發過來看看|发来我看看|發來我看看|发给我看看|發給我看看|发我看看|發我看看|"
+    r"拍好(?:了)?(?:就)?发(?:我|过来|給我|给我)|拍了发我|等你的(?:照片|图|圖|美照)|等着看|等著看|等着瞧|快发来|快發來|"
+    r"发来呀|發來呀|发来吧|發來吧|给我看看|給我看看|来看看|來看看|发来瞧瞧|發來瞧瞧|发我瞅瞅|發我瞅瞅|等你发|等你發|"
+    r"俾我睇|畀我睇|发嚟睇|發嚟睇",
+    _LB + r"send\s+(?:it|them|those|that|one|'?em)\s*(?:over|through|my\s+way|to\s+me|here|along)?" + _RB
+    + r"|" + _LB + r"(?:show\s+me|let\s+me\s+see|lemme\s+see|can(?:'|’)?t\s+wait\s+to\s+see|i(?:'|’)?d\s+love\s+to\s+see|"
+    r"go\s+ahead\s+and\s+send|waiting\s+for\s+(?:the|your)\s+(?:pic|photo|picture)s?|send\s+away|fire\s+away|hit\s+me\s+with\s+it)" + _RB,
+    r"見せて|みせて|送って(?:ね|ください|よ|〜|～)?|楽しみ(?:に)?(?:してる|待ってる)?|待ってる(?:ね|よ)?|見たい(?:な|！|!)?|みたい(?:な)?|早く送って",
+    r"보여\s*줘|보여\s*주세요|보내\s*줘|보내\s*주세요|기대(?:된다|돼|할게)|기다릴게|보고\s*싶(?:어|다|네)|빨리\s*보내",
+    _LB + r"(?:m[aá]ndamela|m[aá]ndala|m[aá]ndalas|env[ií]amela|mu[eé]strame|p[aá]samela|quiero\s+ver(?:la|las|lo|los)?|a\s+ver|la\s+espero|d[eé]jame\s+ver)" + _RB,
+    _LB + r"(?:manda\s+a[ií]|manda\s+(?:pra|para)\s+mim|me\s+mostra|quero\s+ver|mostra\s+a[ií]|deixa\s+eu\s+ver|t[oô]\s+esperando|manda\s+ver|bora\s+ver)" + _RB,
+)]
+
+
+def is_media_accept_prompt(sentence: str) -> bool:
+    """句子是否为「接受 + 期待对方发图」的处置句（「发来看看 / send it over / 見せて」…，≤80 字）。
+    Q-36：这类句子不是画像追问也不是承诺——repeat_question_guard / claim_guard / media_promise 都放行。纯函数。"""
+    s = str(sentence or "").strip()
+    if not s or len(s) > 80:
+        return False
+    try:
+        return _any(_ACCEPT_PROMPT, s)
+    except Exception:
+        return False
+
+
 def detect_request(inbound_text: str, lang: Optional[str] = None) -> Optional[str]:
     """Q-17 #277②：客户是否在**向我们索要** meet / contact / media / gift / money（只认索要句式）。
 
@@ -306,6 +479,10 @@ def detect_request(inbound_text: str, lang: Optional[str] = None) -> Optional[st
     本函数只认「send me / give me / can I have / what's your / show me yours / 发我 / 给我 / 你的电话 /
     你住哪」等**指向对方**的索要框架。过去时叙述 / 第三人称叙述不算。返回 kind（同 ``KINDS``）或 None；
     多类并中按 ``KIND_PRIORITY``（钱 > 礼物 > 地址电话 > 媒体 > 见面）。
+
+    Q-36（#313）：``media`` 加一条排除——句子是客户**提议发自己的图**（:func:`detect_offer_media`，
+    领属是客户自己：我的 / my / 私の…）时不算索图；带「你的照片 / your pic」领属的混合句仍按索要。
+    其余四类零改动（风控语义不弱化）。
     """
     t = str(inbound_text or "").strip()
     if not t:
@@ -318,7 +495,7 @@ def detect_request(inbound_text: str, lang: Optional[str] = None) -> Optional[st
         hits.append("gift")
     if _any(_REQ_CONTACT, t) and not _any(_CONTACT_EXCLUDE, t):
         hits.append("contact")
-    if _any(_REQ_MEDIA, t):
+    if _any(_REQ_MEDIA, t) and not detect_offer_media(t):
         hits.append("media")
     if _any(_REQ_MEET, t) and not _any(_MEET_EXCLUDE, t):
         hits.append("meet")
@@ -968,8 +1145,9 @@ def evaluate_inbound(store: Any, conv: Dict[str, Any], text: str, *, kind: str,
 
 
 __all__ = [
-    "KINDS", "CLAIM_KINDS", "DEFAULT_POLICY",
+    "KINDS", "CLAIM_KINDS", "DEFAULT_POLICY", "OFFER_MEDIA_KIND", "OFFER_KINDS",
     "detect_commitment", "detect_commitment_claim", "detect_request", "detect_self_blame_repromise",
+    "detect_offer_media", "is_media_accept_prompt",
     "meeting_policy_of", "commitment_style_of", "effective_policy",
     "pick_refuse_line", "refuse_candidates", "retract_line",
     "apply_claim_rewrites", "handle_inbound", "evaluate_inbound", "set_risk_hold",
