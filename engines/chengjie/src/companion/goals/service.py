@@ -1957,9 +1957,18 @@ def build_block_for_chat(
         # P1 顺手采集：对方本条消息里的高置信画像信号 → 只填空槽（坐席手录优先）。
         # 采在结算**前**——「预算两千美金」这类信号当轮就计入 bant_fill 推里程碑。
         if has_slots and str(inbound_text or "").strip():
+            reserved = set()
+            try:
+                from src.companion.goals.profile_fill import resolve_reserved_self_names
+                reserved = resolve_reserved_self_names(
+                    cfg_root=cfg_root, platform=platform, account_id=account_id,
+                    chat_key=str(chat_key or ""), conversation_id=conversation_id,
+                    inbox_store=inbox_store)
+            except Exception:
+                reserved = set()
             try:
                 from src.companion.goals.profile_slots import capture_from_text
-                captured = capture_from_text(inbound_text)
+                captured = capture_from_text(inbound_text, reserved_self_names=reserved)
                 if captured:
                     store.upsert_customer_profile(
                         platform, str(chat_key or ""), dict(captured),
@@ -1996,7 +2005,8 @@ def build_block_for_chat(
                             # P27：摸底目标只问坐席勾选的缺口——全 11 槽提示词
                             # 又长又散，抽取面越大误摘面越大
                             include=(sel_slots or None),
-                            now=now)
+                            now=now,
+                            reserved_self_names=reserved)
                 except Exception:
                     logger.debug("profile llm schedule skipped", exc_info=True)
 

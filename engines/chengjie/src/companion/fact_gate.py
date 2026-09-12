@@ -11,6 +11,9 @@
 
 1. **类型尺子**（``slot_or_kind`` 是注册槽位时）：复用 Q-19 ``profile_slots.slot_validate``
    （age 16–99 / 短语 ≤24 字禁整句 / 枚举闭集）→ ``invalid:<why>``。
+1b. **人设名硬闸**（仅 ``slot=name``，Q-38 #272）：值 ∈ ``reserved_self_names`` → ``own_name``；
+   evidence 只是呼格（hi/hey/hello/你好/嗨/哈喽 X，或整句就是 X）且 X ∈ reserved → ``vocative``。
+   放在类型尺子之后、锚定之前；``reserved`` 空则跳过（缺人设不误伤）。非 name 槽零新判据。
 2. **来源守卫**：``inbound_texts`` 只认客户入站——传 ``{direction, text}`` 行时剔掉
    ``direction`` 不是 ``in / inbound`` 的；出站 / 译文 / 关怀稿永不成为锚定语料。
 3. **原句锚定**：``evidence`` 必填（无 → ``no_evidence`` 记忆 / ``unanchored`` 画像），且
@@ -53,6 +56,20 @@ REASON_UNANCHORED = "unanchored"
 REASON_LANG = "lang_mismatch"
 REASON_SUBJECT = "subject"
 REASON_GATE_ERROR = "gate_error"
+#: Q-38（#272 HPS7C3 / E2GXEP）：画像 name 槽写了人设自称 / 呼格
+REASON_OWN_NAME = "own_name"
+REASON_VOCATIVE = "vocative"
+
+# hi / 你好 X —— 只认「整句就是招呼 + 名字」，带自称从句（Hi X, I'm Y）不算
+_VOCATIVE_LEAD_RE = re.compile(
+    r"^(?:hi+|hey+|hello+|hola+|yo+|howdy+|你好呀?|嗨+|哈[喽囉啰]|您好)\s*[,:，：]?\s*",
+    re.IGNORECASE)
+_VOCATIVE_CLAUSE_RE = re.compile(
+    r"[,，;；]|i['’]?m\b|i am\b|my name\b|call me\b|我叫|我是|叫我",
+    re.IGNORECASE)
+_SELF_INTRO_RE = re.compile(
+    r"\b(?:my|name|is|am|the|a|an)\b|我叫|我是|叫我|我的名字",
+    re.IGNORECASE)
 
 # 与 profile_fill._lit 同口径（空白 / 中英标点剥掉 + casefold）——两处必须一致，否则边界分叉
 _NORM_STRIP_RE = re.compile(r"[\s，。,.!！?？、;；:：'\"“”‘’()（）]+")
@@ -197,6 +214,66 @@ def _lang_reason(value: str, inbound: Sequence[str], evidence: str, customer_lan
     return lang_mismatch_reason(value, inbound, evidence)
 
 
+def _name_norm(s: Any) -> str:
+    try:
+        from src.utils.persona_guard import _reserved_norm
+        return _reserved_norm(s)
+    except Exception:
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(s or ""))).casefold()
+
+
+def _reserved_bag(reserved: Any) -> set:
+    bag: set = set()
+    for x in (reserved or []):
+        nv = _name_norm(x)
+        if nv:
+            bag.add(nv)
+    return bag
+
+
+def name_in_reserved(value: Any, reserved: Any) -> bool:
+    nv = _name_norm(value)
+    return bool(nv) and nv in _reserved_bag(reserved)
+
+
+def vocative_target(evidence: Any) -> str:
+    """evidence 只是呼格时返回被称呼的 X，否则空串。
+
+    「Hi Mizuki」/「hey Alicia」/「你好小语」/ 整句「Mizuki」→ X；
+    「Hi Mizuki, I'm Jeo」/「My name is Jeo」→ 空（不是只是呼格）。"""
+    s = re.sub(r"\s+", " ", str(evidence or "")).strip()
+    s = re.sub(r"[!！.。~～…]+$", "", s).strip()
+    if not s:
+        return ""
+    m = _VOCATIVE_LEAD_RE.match(s)
+    if m:
+        rest = s[m.end():].strip()
+        rest = re.sub(r"[!！.。~～…]+$", "", rest).strip()
+        rest = re.sub(r"[\s\W]+$", "", rest, flags=re.UNICODE).strip() if rest else rest
+        if not rest or len(rest) > 24 or _VOCATIVE_CLAUSE_RE.search(rest):
+            return ""
+        return rest
+    if len(s) <= 24 and not re.search(r"[,，.。!！?？;；:：]", s):
+        if _SELF_INTRO_RE.search(s):
+            return ""
+        if len(s.split()) <= 3:
+            return s
+    return ""
+
+
+def name_reserved_reason(value: Any, reserved: Any, evidence: Any = "") -> str:
+    """画像 ``name`` 槽人设名硬闸 → ``own_name`` / ``vocative`` / 空。reserved 空不判。"""
+    bag = _reserved_bag(reserved)
+    if not bag:
+        return ""
+    if name_in_reserved(value, bag):
+        return REASON_OWN_NAME
+    xt = vocative_target(evidence)
+    if xt and name_in_reserved(xt, bag):
+        return REASON_VOCATIVE
+    return ""
+
+
 def subject_reason(fact: Any, evidence: Any) -> str:
     """kind=fact 主体守卫 → ``""`` / ``"subject"``。"""
     body = _FACT_PREFIX_RE.sub("", str(fact or "").strip())
@@ -213,13 +290,16 @@ def _invariant_tokens(text: str) -> set:
 
 
 def check(value: Any, *, slot_or_kind: str, evidence: Any, inbound_texts: Any,
-          customer_lang: str = "", raw_value: Any = None) -> Tuple[bool, str]:
+          customer_lang: str = "", raw_value: Any = None,
+          reserved_self_names: Any = None) -> Tuple[bool, str]:
     """事实门总入口 → ``(通过, 原因)``；通过时原因为空串。见模块 docstring。
 
     ``slot_or_kind``：注册槽位键（画像 / 目标回填）或 :data:`KIND_FACT`（记忆事实）。
     ``inbound_texts``：最近 ≤30 条客户入站（``str`` 或 ``{direction, text}`` 行）。
     ``raw_value``：校验前的原值（``slot_validate`` 可能把 ``32岁`` 规范成 ``32``；两者任一
-    能锚定即算锚定）。"""
+    能锚定即算锚定）。
+    ``reserved_self_names``：Q-38 人设自称 ∪ ``peer_calls_you``（仅 ``name`` 槽；默认空
+    = 不判，Q-19 / Q-25 既有调用零行为变化）。"""
     try:
         kind = str(slot_or_kind or "").strip().lower()
         val = re.sub(r"\s+", " ", str(value or "")).strip()
@@ -256,6 +336,10 @@ def check(value: Any, *, slot_or_kind: str, evidence: Any, inbound_texts: Any,
             norm, why = _validate_slot(kind, val)
             if why:
                 return False, f"invalid:{why}"
+        if kind == "name":
+            why = name_reserved_reason(norm or val, reserved_self_names, ev)
+            if why:
+                return False, why
         if not ev:
             return False, REASON_UNANCHORED
         if not evidence_in_inbound(ev, inbound):
@@ -276,12 +360,13 @@ def check(value: Any, *, slot_or_kind: str, evidence: Any, inbound_texts: Any,
 
 
 def check_many(items: Iterable[Tuple[str, Any, Any]], *, inbound_texts: Any,
-               customer_lang: str = "") -> List[Tuple[str, Any, bool, str]]:
+               customer_lang: str = "", reserved_self_names: Any = None
+               ) -> List[Tuple[str, Any, bool, str]]:
     """批量：``[(slot_or_kind, value, evidence)]`` → ``[(slot_or_kind, value, ok, reason)]``。"""
     out: List[Tuple[str, Any, bool, str]] = []
     for k, v, e in items or []:
         ok, why = check(v, slot_or_kind=k, evidence=e, inbound_texts=inbound_texts,
-                        customer_lang=customer_lang)
+                        customer_lang=customer_lang, reserved_self_names=reserved_self_names)
         out.append((k, v, ok, why))
     return out
 
@@ -289,7 +374,8 @@ def check_many(items: Iterable[Tuple[str, Any, Any]], *, inbound_texts: Any,
 __all__ = [
     "KIND_FACT", "KIND_TRANSIENT", "TRANSIENT_TTL_SEC", "KIND_OBSERVATION", "OBSERVATION_TTL_SEC",
     "REASON_EMPTY", "REASON_NO_EVIDENCE", "REASON_UNANCHORED", "REASON_LANG",
-    "REASON_SUBJECT", "REASON_GATE_ERROR",
+    "REASON_SUBJECT", "REASON_GATE_ERROR", "REASON_OWN_NAME", "REASON_VOCATIVE",
     "check", "check_many", "evidence_in_inbound", "inbound_only", "subject_reason",
+    "name_reserved_reason", "vocative_target", "name_in_reserved",
     "value_anchored_in_evidence", "value_tokens",
 ]

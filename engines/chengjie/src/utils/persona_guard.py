@@ -16,6 +16,7 @@ LLM 不总是遵守 prompt 里"禁止使用 X"的指令；一旦回复漏出客�
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 # #145③：整段都是他人设产品名、剥空时的中性兜底——绝不回退原文（回退＝串味出站）。
@@ -866,6 +867,36 @@ def build_self_name_allowlist(
     return out
 
 
+def _reserved_norm(s: str) -> str:
+    """Q-38：reserved 比对用归一（NFKC + casefold + 去空白）。与出站 _norm 分开，不改守卫。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(s or ""))).casefold()
+
+
+def reserved_self_names(persona: Any, *, peer_calls_you: str = "") -> set:
+    """人设自称 ∪ 会话 ``peer_calls_you`` → 归一后的 reserved 集。缺人设 = 空集不误伤。
+
+    Q-38（#272 HPS7C3 / E2GXEP）：客户画像 ``name`` 槽禁止写入我方人设名 / 对方对我的叫法。
+    只收集，**不改**出站自称 / 呼格守卫。"""
+    out: set = set()
+    try:
+        extra: List[str] = []
+        py = str(peer_calls_you or "").strip()
+        if py:
+            extra.append(py)
+        p = persona if isinstance(persona, dict) else {}
+        for v in build_self_name_allowlist(p, extra_names=extra or None):
+            nv = _reserved_norm(v)
+            if nv:
+                out.add(nv)
+        if py:
+            nv = _reserved_norm(py)
+            if nv:
+                out.add(nv)
+    except Exception:
+        return set()
+    return out
+
+
 def _peer_norm_tokens(peer_names: List[str] | None) -> Tuple[List[str], List[str]]:
     """对方名 → (拉丁 token 集, CJK 归一串集)。@username / first+last 都拆词。"""
     latin: List[str] = []
@@ -1505,7 +1536,8 @@ __all__ = [
     "matches_multi_peer_leak",
     "LATE_REPLY_SILENCE_HOURS", "detect_late_reply_excuses", "strip_late_reply_excuses",
     "matches_service_frame",
-    "build_self_name_allowlist", "find_wrong_self_name", "sanitize_self_name",
+    "build_self_name_allowlist", "reserved_self_names",
+    "find_wrong_self_name", "sanitize_self_name",
     "find_vocative_self_name", "strip_vocative_self_name",
     "swap_vocative_peer_call",
     "find_name_denial", "strip_name_denial",

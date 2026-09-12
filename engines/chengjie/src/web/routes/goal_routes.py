@@ -209,9 +209,11 @@ def register_goal_routes(app, auth_dep, config_manager=None):
                 from src.companion.goals import profile_fill as _pf
                 _nick = _pf.conversation_nickname(_inbox_store(), str(view.get("conversation_id") or ""))
                 if _nick:
+                    _cid = str(view.get("conversation_id") or "")
                     _pf.nickname_prefill(
                         store, str(view.get("platform") or ""), str(view.get("chat_key") or ""),
-                        _nick, conversation_id=str(view.get("conversation_id") or ""), lang=lang)
+                        _nick, conversation_id=_cid, lang=lang,
+                        cfg_root=_cfg_root(), inbox_store=_inbox_store())
             except Exception:
                 logger.debug("nickname prefill on read skipped", exc_info=True)
             prof = store.get_customer_profile(

@@ -266,6 +266,7 @@ async def run_llm_capture(
     text: str,
     missing: List[Dict[str, Any]],
     now: Optional[float] = None,
+    reserved_self_names: Any = None,
 ) -> int:
     """一次 LLM 摘录 → 接地 → 只填空槽入库。返回实际写入槽位数；绝不抛。"""
     try:
@@ -287,13 +288,17 @@ async def run_llm_capture(
         # `AI work` × 「Not so long dear been a couple months.」丢（unanchored），旧接地的
         # 「任一 token 重叠即过」（work 撞 inspection work）不再是放行条件。门异常同丢。
         try:
-            from src.companion.fact_gate import check as _gate_check
+            from src.companion.fact_gate import check as _gate_check, name_reserved_reason
             from src.companion.goals.profile_slots import slot_validate, slot_value_suspect
             _bad = {k: slot_value_suspect(k, v) for k, v in grounded.items()}
             for k, v in list(grounded.items()):
                 if _bad.get(k):
                     continue
                 _ok, _why = _gate_check(v, slot_or_kind=k, evidence=text, inbound_texts=[text])
+                if _ok and str(k) == "name":
+                    _nr = name_reserved_reason(v, reserved_self_names, text)
+                    if _nr:
+                        _ok, _why = False, _nr
                 if not _ok:
                     _bad[k] = _why or "unanchored"
                     continue
@@ -340,6 +345,7 @@ def schedule_llm_capture(
     fields: Optional[Dict[str, Any]] = None,
     include: Optional[List[str]] = None,
     now: Optional[float] = None,
+    reserved_self_names: Any = None,
 ) -> bool:
     """门控通过 → 在当前事件循环 fire-and-forget 一次 LLM 摘录。
     返回是否已调度。无运行 loop / 未启用 / 无缺口 / 冷却预算不过 → False。
@@ -372,7 +378,7 @@ def schedule_llm_capture(
         return False
     coro = run_llm_capture(
         ai_client, store, platform=platform, chat_key=chat_key,
-        text=t, missing=miss, now=now)
+        text=t, missing=miss, now=now, reserved_self_names=reserved_self_names)
     try:
         loop.create_task(coro)
         return True

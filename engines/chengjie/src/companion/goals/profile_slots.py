@@ -1595,10 +1595,12 @@ def answer_only_kind(text: Any) -> str:
         return ""
 
 
-def capture_from_text(text: str) -> List[Tuple[str, str]]:
+def capture_from_text(text: str, *, reserved_self_names: Any = None) -> List[Tuple[str, str]]:
     """从一条入站消息确定性抽画像槽位。返回 ``[(slot_key, value), ...]``。
 
     只认高置信表达；每槽位最多一条；value 已消毒截断（≤40 字）。
+    ``reserved_self_names``：Q-38 人设名硬闸——``_NAME_RE`` 抽到的 name 过 ``own_name`` /
+    ``vocative``，不另开写口；默认空＝不判（既有调用零行为变化）。
     """
     t = str(text or "").strip()
     if not t or len(t) > 2000:
@@ -1649,7 +1651,20 @@ def capture_from_text(text: str) -> List[Tuple[str, str]]:
     if m and not _NAME_STOP.match(m.group(1)):
         nm = _NAME_TRAIL_RE.sub("", m.group(1).strip()).strip()
         if nm:
-            _add("name", nm)
+            _drop = ""
+            if reserved_self_names:
+                try:
+                    from src.companion.fact_gate import name_reserved_reason
+                    _drop = name_reserved_reason(nm, reserved_self_names, t)
+                except Exception:
+                    _drop = ""
+            if _drop:
+                import logging
+                logging.getLogger("src.companion.goals.profile_slots").info(
+                    "[profile] drop conv=- slot=name value=%s source=auto reason=%s",
+                    str(nm)[:60].replace("\n", " "), _drop)
+            else:
+                _add("name", nm)
 
     m = _LOCATION_RE.search(t)
     if m:

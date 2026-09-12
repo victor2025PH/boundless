@@ -288,7 +288,8 @@ def _log_drop(conv: str, slot: str, value: str, source: str, reason: str) -> Non
 def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
           source: str, status: str = ST_MENTIONED, conversation_id: str = "",
           now: Optional[float] = None, lang: str = "zh", notify: bool = True,
-          recent_inbound: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+          recent_inbound: Optional[Sequence[str]] = None,
+          reserved_self_names: Any = None) -> Dict[str, Any]:
     """候选 ``{slot: value | {"value", "evidence"}}`` → 画像。返回
     ``{"written": [slot], "skipped": {slot: reason}, "conflicts": [{slot, confirmed, candidate}]}``。
 
@@ -303,6 +304,8 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
       逐字找到、值的每个核心 token 整词在 evidence 里（``unanchored``）；③ 值语种 ≠ 客户主语种
       （``lang_mismatch``）。②③ 自 Q-25（#295）起由共享事实门 ``src.companion.fact_gate.check``
       统一判（画像 / 目标回填 / 记忆同门）。坐席手录（user / confirmed）不校验、一字不动。
+      Q-38（#272）：自动来源 ``name`` 槽再过 ``reserved_self_names``（人设自称 ∪ peer_calls_you）
+      → ``own_name`` / ``vocative``；nickname 无 inbound 也过 own_name（不走整门锚定）。
     绝不抛（写失败按 skipped 记 write_failed）。"""
     out: Dict[str, Any] = {"written": [], "skipped": {}, "conflicts": []}
     pf, ck = str(platform or "").strip(), str(chat_key or "").strip()
@@ -343,6 +346,16 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
                 _log_drop(conv, k, raw_val, src, f"invalid:{why}")
                 continue
             val = val or raw_val
+            if k == "name":
+                try:
+                    from src.companion.fact_gate import name_reserved_reason
+                    why = name_reserved_reason(val, reserved_self_names, ev)
+                except Exception:
+                    why = ""
+                if why:
+                    out["skipped"][k] = why
+                    _log_drop(conv, k, raw_val, src, why)
+                    continue
             if src == SRC_AI and recent_inbound is not None:
                 # Q-25（#295）：原话锚定 + 语种守卫收进共享事实门 fact_gate.check——画像 /
                 # 目标回填 / 记忆三链同一把尺子（值核心 token 全在 evidence、evidence 逐字在
@@ -350,7 +363,8 @@ def apply(store: Any, platform: str, chat_key: str, candidates: Any, *,
                 try:
                     from src.companion.fact_gate import check as _gate_check
                     _ok, why = _gate_check(val, slot_or_kind=k, evidence=ev,
-                                           inbound_texts=recent_inbound, raw_value=raw_val)
+                                           inbound_texts=recent_inbound, raw_value=raw_val,
+                                           reserved_self_names=reserved_self_names)
                 except Exception:
                     _ok, why = False, "gate_error"
                 if not _ok:
@@ -452,9 +466,55 @@ def reject(store: Any, platform: str, chat_key: str, slot: str, *,
 
 # ── B：昵称预填 ────────────────────────────────────────────────────────────────
 
+def resolve_reserved_self_names(
+    *,
+    persona: Any = None,
+    peer_calls_you: str = "",
+    cfg_root: Any = None,
+    platform: str = "",
+    account_id: str = "",
+    chat_key: str = "",
+    conversation_id: str = "",
+    inbox_store: Any = None,
+) -> set:
+    """解析本会话 reserved 人设名。缺人设 / 任何异常 → 空集（不误伤普通名）。"""
+    try:
+        from src.utils.persona_guard import reserved_self_names as _rsn
+        p = persona if isinstance(persona, dict) else None
+        py = str(peer_calls_you or "").strip()
+        cid = str(conversation_id or "").strip()
+        pf, acct, ck = str(platform or ""), str(account_id or ""), str(chat_key or "")
+        if cid and (not pf or not ck or not acct):
+            parts = cid.split(":", 2)
+            if len(parts) == 3:
+                pf = pf or parts[0]
+                acct = acct or parts[1]
+                ck = ck or parts[2]
+        if not py and inbox_store is not None and cid:
+            try:
+                from src.inbox.contact_names import get_contact_names
+                py = str(get_contact_names(inbox_store, cid).get("peer_calls_you") or "")
+            except Exception:
+                pass
+        if p is None and cfg_root is not None:
+            try:
+                from src.ai.persona_voice import resolve_effective_persona
+                from src.utils.persona_manager import PersonaManager
+                pid, _tier = resolve_effective_persona(cfg_root, pf, acct, ck)
+                if pid:
+                    p = PersonaManager.get_instance().get_persona_by_id(pid)
+            except Exception:
+                p = None
+        return _rsn(p, peer_calls_you=py)
+    except Exception:
+        return set()
+
+
 def nickname_prefill(store: Any, platform: str, chat_key: str, nickname: Any, *,
                      conversation_id: str = "", now: Optional[float] = None,
-                     force: bool = False, lang: str = "zh") -> Dict[str, Any]:
+                     force: bool = False, lang: str = "zh",
+                     reserved_self_names: Any = None, cfg_root: Any = None,
+                     account_id: str = "", inbox_store: Any = None) -> Dict[str, Any]:
     """昵称 → 槽位候选 → ``apply(source=nickname, status=mentioned)``（「来自昵称 · 待确认」）。
     同会话同昵称进程内只跑一次（昵称变了再跑；``force`` 忽略记忆）。无候选 → 空结果。"""
     nick = re.sub(r"\s+", " ", str(nickname or "")).strip()
@@ -473,8 +533,14 @@ def nickname_prefill(store: Any, platform: str, chat_key: str, nickname: Any, *,
     _NICK_MEMO[key] = nick
     if not cands:
         return {"written": [], "skipped": {}, "conflicts": [], "nickname": nick}
+    reserved = reserved_self_names
+    if reserved is None:
+        reserved = resolve_reserved_self_names(
+            cfg_root=cfg_root, platform=platform, account_id=account_id,
+            chat_key=chat_key, conversation_id=conversation_id, inbox_store=inbox_store)
     res = apply(store, platform, chat_key, cands, source=SRC_NICKNAME, status=ST_MENTIONED,
-                conversation_id=conversation_id, now=now, lang=lang)
+                conversation_id=conversation_id, now=now, lang=lang,
+                reserved_self_names=reserved)
     res["nickname"] = nick
     res["candidates"] = {k: v["value"] for k, v in cands.items()}
     return res
@@ -1165,11 +1231,17 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
             except Exception:
                 store = None
         # B：昵称预填（会话首条入站即触发；昵称变更再触发）
+        reserved = resolve_reserved_self_names(
+            cfg_root=cfg_root, platform=pf, account_id=account_id,
+            chat_key=ck, conversation_id=conv, inbox_store=inbox_store)
         if store is not None and pf and ck:
             nick = str(nickname or "").strip() or conversation_nickname(inbox_store, conv)
             if nick:
                 try:
-                    res["nickname"] = nickname_prefill(store, pf, ck, nick, conversation_id=conv, now=now, lang=lang)
+                    res["nickname"] = nickname_prefill(
+                        store, pf, ck, nick, conversation_id=conv, now=now, lang=lang,
+                        reserved_self_names=reserved, cfg_root=cfg_root,
+                        account_id=account_id, inbox_store=inbox_store)
                 except Exception:
                     logger.debug("nickname prefill failed", exc_info=True)
         if on and ai_client is not None:
@@ -1198,11 +1270,13 @@ async def run_extraction(ai_client: Any, cfg_root: Any, config_path: Any, *, use
                     if _cur and _cur not in corpus:
                         corpus.append(_cur)
                     ap = apply(store, pf, ck, res["slots"], source=SRC_AI, status=ST_MENTIONED,
-                               conversation_id=conv, now=now, lang=lang, recent_inbound=corpus)
+                               conversation_id=conv, now=now, lang=lang, recent_inbound=corpus,
+                               reserved_self_names=reserved)
                     res["slots_written"] = len(ap.get("written") or [])
                     res["conflicts"] = list(ap.get("conflicts") or [])
                     for _k, _r in (ap.get("skipped") or {}).items():
-                        if _r.startswith("invalid:") or _r in ("unanchored", "lang_mismatch"):
+                        if _r.startswith("invalid:") or _r in (
+                                "unanchored", "lang_mismatch", "own_name", "vocative"):
                             res["slots_dropped"][_k] = _r
                             res["slots"].pop(_k, None)
                 remember_extract(conv, user_msg, llm=res["llm"], now=now)
@@ -1223,7 +1297,7 @@ __all__ = [
     "export_profile", "extract_facts_and_slots", "ground_slots", "import_profile",
     "is_new_schema", "llm_extract_enabled", "low_information_message",
     "extract_repeat_skip", "informative_tokens", "remember_extract", "reset_extract_memo",
-    "make_cell", "nickname_prefill", "normalize_cell",
+    "make_cell", "nickname_prefill", "normalize_cell", "resolve_reserved_self_names",
     "notify_conflict", "parse_merged", "record_extract_result", "reject", "reset_stall",
     "run_extraction", "slot_table", "stall_status", "upgrade_fields",
 ]
