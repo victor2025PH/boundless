@@ -17213,6 +17213,7 @@ async function setMode(mode, opts){
       // Q-3（#264 D）：计数含排队中 + 拟人等待中（在途）的 AI 稿——「切手动了还发」的口子已堵
       tip+=' · '+window.Tf('inbox.mode.cancelled_ai',{n:d.cancelled_l2});
     }
+    if(Number(d.cancelled_l1||0)>0){ tip+=' · '+window.Tf('inbox.mode.cancelled_l1_stale',{n:Number(d.cancelled_l1)}); }   // Q-30 D #308：切全自动作废切档前的 L1 旧稿（草稿条「全局默认半自动」与顶栏「本会话全自动」打架的来源）
     if(d.agent_yield_resumed&&d.agent_yield_resumed.had_yield){ tip+=' · '+window.T('inbox.ay.resumed'); try{ _aySet(null); }catch(_){} }   // Q-18 #292（ay-）：切全自动 = 明示接回
     // 接力记忆 P0-3：manual → AI 时服务端归纳了接管窗口 → 告诉坐席 AI 接过了多少条（含图/语音）
     var _hfNote='';
@@ -17702,6 +17703,7 @@ var _L1R_KEYS={cooldown:'inbox.l1r.cooldown',no_persona:'inbox.l1r.no_persona',l
   channel_degraded:'inbox.l1r.channel_degraded',deliver_paused:'inbox.l1r.deliver_paused',warmup:'inbox.l1r.warmup',
   platform_cap:'inbox.l1r.platform_cap',manual_review:'inbox.l1r.manual_review',account_default:'inbox.l1r.account_default',
   global_default:'inbox.l1r.global_default'};
+_L1R_KEYS.peer_budget='inbox.l1r.peer_budget';   // Q-30 D #308：预算软停封顶的 L1 不再误标「全局默认半自动」
 function _l1ReasonText(d){
   if(!d||String(d.autopilot_level||'')!=='L1') return '';
   const code=String(d.l1_reason||'');

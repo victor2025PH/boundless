@@ -5158,6 +5158,34 @@ class InboxStore:
             self._conn.commit()
         return int(cur.rowcount or 0)
 
+    def cancel_pending_l1_drafts(
+        self, conversation_id: str, *, decided_by: str = "mode_upgraded",
+    ) -> int:
+        """会话**升到全自动**时作废尚未处置的 L1（人审）旧稿（Q-30 D #308）。
+
+        AutosendWorker 只捞 L2，切档前生成的 L1 稿既不会被自动发、也不会被重拟——
+        它挂在草稿条上写着「全局默认半自动」，顶栏却是「本会话全自动」（R6S584 实录）。
+        切档＝坐席明示「交回 AI」，旧稿按 ``decided_by=mode_upgraded`` 作废；新入站
+        按 auto_ai 重新拟 L2。返回作废条数；不动 L2 / 已处置行。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0
+        now = self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                UPDATE reply_drafts
+                   SET status='cancelled', decided_by=?, decided_at=?, updated_at=?
+                 WHERE conversation_id=?
+                   AND autopilot_level='L1'
+                   AND status IN ('pending', 'enriching')
+                """,
+                (str(decided_by or "mode_upgraded"), now, now, cid),
+            )
+            self._conn.commit()
+        return int(cur.rowcount or 0)
+
     def cancel_drafts_for_account(
         self, platform: str, account_id: str, *,
         decided_by: str = "account_removed",

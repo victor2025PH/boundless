@@ -1523,6 +1523,10 @@ def make_auto_draft_cb(
                 _l1_reason = "risk_hold"     # Q-3：封顶原因就是会话级风险持有，不再猜证据
             elif _asr_sus_cap and mode != "auto_ai":
                 _l1_reason = "asr_suspect"   # ASR P1：语音转写可疑封顶（原因码进审计行/草稿卡）
+            elif _pbg_soft and mode != "auto_ai" and _l1_reason in ("global_default", "account_default", ""):
+                # Q-30 D（#308 复核）：预算软停把 auto_ai 压成 review 不经 caps 层，derive_l1_reason
+                # 兜底成「全局默认半自动」——顶栏「本会话全自动」旁边写着「全局默认」就是这么来的。
+                _l1_reason = "peer_budget"
             if _l1_reason:
                 _l1_note(str(conv.get("conversation_id") or ""), _l1_reason)
         except Exception:

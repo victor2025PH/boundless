@@ -392,8 +392,23 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         # （worker 落 `[autosend] resume by=mode_select`）。非 auto_ai 档不碰让位状态。
         agent_yield_resumed = None
         risk_hold_released = None
+        cancelled_l1 = 0
         if mode == "auto_ai":
             agent_yield_resumed = _resume_agent_yield_q18(request, cid, by="mode_select")
+            # Q-30 D（#308 R6S584）：切到「全自动」= 切档前生成的 L1（人审）旧稿作废——AutosendWorker
+            # 只捞 L2，那条稿既不会被自动发也不会被重拟，只会挂在草稿条上写着「全局默认半自动」，
+            # 与顶栏「本会话全自动」两个真相打架。新入站按 auto_ai 重新拟。best-effort。
+            try:
+                _st_q30 = _inbox_store(request)
+                if _st_q30 is not None and hasattr(_st_q30, "cancel_pending_l1_drafts"):
+                    cancelled_l1 = int(_st_q30.cancel_pending_l1_drafts(
+                        cid, decided_by="mode_upgraded") or 0)
+                    if cancelled_l1:
+                        logger.info("[automation] mode_upgraded conv=%s cancelled_l1=%d"
+                                    "（切全自动，作废切档前待审旧稿）", cid, cancelled_l1)
+            except Exception:
+                logger.debug("[automation] Q-30 作废 L1 旧稿失败（忽略）", exc_info=True)
+                cancelled_l1 = 0
             # Q-27 B（#301 追加 AFD2CD）：切到 / 重选「全自动」= 坐席明示「这会话我看过了，交回 AI」→
             # 摘「需人工」标 + 解除任何原因的会话级 risk_hold（`[risk_hold] clear … by=mode_select`），
             # 之后新入站重新评估、不继承旧 shadow / 不再 forced=L1。非 auto_ai 档不碰。best-effort。
@@ -422,6 +437,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "mode": mode,
             # Q-3（#264 D）：含在途（拟人等待中）稿——前端 toast「已取消 N 条待发 AI 消息」
             "cancelled_l2": int(cancelled or 0),
+            # Q-30 D（#308）：切全自动时作废的切档前 L1 旧稿数（非 auto_ai → 0）
+            "cancelled_l1": int(cancelled_l1 or 0),
             "rearm_source": rearm_source,
             # Q-18 C：切全自动时的接回结果 {had_yield, released, by}（非 auto_ai → None）
             "agent_yield_resumed": agent_yield_resumed,
