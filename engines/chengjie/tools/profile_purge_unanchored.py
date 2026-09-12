@@ -26,6 +26,9 @@ LLM 事实（``user_stated`` 客户原话正则一字不动），判据 = ``src.
     python tools/profile_purge_unanchored.py --memory --dry-run             # Q-25：扫记忆链
     python tools/profile_purge_unanchored.py --memory --user-id telegram:7543790794 --dry-run
     python tools/profile_purge_unanchored.py --memory --memory-db D:\\path\\bot.db --apply
+    python tools/profile_purge_unanchored.py --own-name --dry-run           # Q-38：人设自称 name 槽
+    python tools/profile_purge_unanchored.py --own-name --account-id 12084403608 --dry-run
+    python tools/profile_purge_unanchored.py --own-name --apply             # 真删（先看 dry-run；confirmed 不动）
 
 库路径：``--db`` 显式 > ``companion.goals.db_path``（config.yaml / config.local.yaml）>
 ``<数据根>/config/marketing_goals.db``（``AITR_DATA_ROOT`` / 实例根发现，与 goal_sprint_drill 同口径）。
@@ -78,15 +81,35 @@ def judge_cell(slot: str, cell: Any) -> str:
     return ""
 
 
-def scan_fields(platform: str, chat_key: str, fields: Dict[str, Any]) -> List[Dict[str, Any]]:
+def judge_own_name(slot: str, cell: Any, reserved: Any) -> str:
+    """Q-38：``name`` 槽值 ∈ 该会话人设 reserved → ``own_name`` / ``vocative``。confirmed 恒空。"""
+    if str(slot or "").strip().lower() != "name":
+        return ""
+    val, src, st, ev = _cell_parts(cell)
+    if not val or st == "confirmed" or src not in _AUTO_SOURCES:
+        return ""
+    try:
+        from src.companion.fact_gate import name_reserved_reason
+        return name_reserved_reason(val, reserved, ev)
+    except Exception:
+        return ""
+
+
+def scan_fields(platform: str, chat_key: str, fields: Dict[str, Any],
+                *, own_name_reserved: Any = None, own_name_only: bool = False
+                ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    bag = list(own_name_reserved or [])
     for slot, cell in (fields or {}).items():
-        why = judge_cell(str(slot), cell)
+        why = "" if own_name_only else judge_cell(str(slot), cell)
+        if not why and own_name_reserved is not None:
+            why = judge_own_name(str(slot), cell, own_name_reserved)
         if not why:
             continue
         val, src, st, ev = _cell_parts(cell)
         out.append({"platform": platform, "chat_key": chat_key, "slot": str(slot), "value": val,
-                    "source": src, "status": st, "evidence": ev, "reason": why})
+                    "source": src, "status": st, "evidence": ev, "reason": why,
+                    "reserved": bag})
     return out
 
 
@@ -103,14 +126,22 @@ def iter_profiles(store: Any):
             yield str(r["platform"]), str(r["chat_key"]), fields
 
 
-def scan_store(store: Any, *, platform: str = "", chat_key: str = "") -> List[Dict[str, Any]]:
+def scan_store(store: Any, *, platform: str = "", chat_key: str = "",
+               own_name: bool = False, reserved_resolver: Any = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for pf, ck, fields in iter_profiles(store):
         if platform and pf != platform:
             continue
         if chat_key and ck != chat_key:
             continue
-        out.extend(scan_fields(pf, ck, fields))
+        reserved = None
+        if own_name:
+            try:
+                reserved = set(reserved_resolver(pf, ck) if reserved_resolver else [])
+            except Exception:
+                reserved = set()
+        out.extend(scan_fields(pf, ck, fields, own_name_reserved=reserved,
+                               own_name_only=bool(own_name)))
     return out
 
 
@@ -125,7 +156,16 @@ def purge(store: Any, rows: List[Dict[str, Any]], *, apply: bool) -> int:
     for (pf, ck), cells in by_conv.items():
         before = dict((store.get_customer_profile(pf, ck) or {}).get("fields") or {})
         # 二次防线：只删仍是自动来源 + 非 confirmed 的槽（扫描到删除之间坐席可能已确认）
-        cells = {k: None for k in cells if judge_cell(k, before.get(k))}
+        keep: Dict[str, Any] = {}
+        for k in cells:
+            meta = next((r for r in rows if r["platform"] == pf and r["chat_key"] == ck
+                         and r["slot"] == k), None) or {}
+            if str(meta.get("reason") or "") in ("own_name", "vocative"):
+                if judge_own_name(k, before.get(k), meta.get("reserved") or []):
+                    keep[k] = None
+            elif judge_cell(k, before.get(k)):
+                keep[k] = None
+        cells = keep
         if not cells:
             continue
         store.upsert_profile_cells(pf, ck, cells)
@@ -273,6 +313,34 @@ def run_memory(args: Any) -> int:
     return 0
 
 
+def _own_name_resolver(args: Any):
+    """--own-name：按 --persona-name 覆盖，否则 resolve_reserved_self_names（缺人设=空集）。"""
+    pname = str(getattr(args, "persona_name", "") or "").strip()
+    acct = str(getattr(args, "account_id", "") or "").strip()
+    data_root = str(getattr(args, "data_root", "") or "").strip()
+
+    def _res(pf: str, ck: str):
+        if pname:
+            from src.utils.persona_guard import reserved_self_names
+            return reserved_self_names({"name": pname})
+        cfg = {}
+        try:
+            from scripts._data_root import load_merged_config, resolve_data_roots
+            for root in resolve_data_roots(data_root):
+                cfg = load_merged_config(Path(root)) or {}
+                if cfg:
+                    break
+        except Exception:
+            cfg = {}
+        from src.companion.goals.profile_fill import resolve_reserved_self_names
+        cid = f"{pf}:{acct}:{ck}" if acct else ""
+        return resolve_reserved_self_names(
+            cfg_root=cfg, platform=pf, account_id=acct, chat_key=ck,
+            conversation_id=cid)
+
+    return _res
+
+
 def _resolve_db(cli_db: str, data_root: str) -> Optional[Path]:
     if cli_db:
         return Path(cli_db)
@@ -317,6 +385,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Q-25：改扫记忆链 episodic_memory（只判 source=ai_inferred）")
     ap.add_argument("--memory-db", default="", help="记忆库路径（缺省按 memory.db_path / 数据根 config/bot.db）")
     ap.add_argument("--user-id", default="", help="--memory 时只扫 user_id 含此串的行（如 telegram:7543790794）")
+    ap.add_argument("--own-name", action="store_true",
+                    help="Q-38：只列出 name 槽值 ∈ 该会话人设 reserved 的自动来源（默认 dry-run）")
+    ap.add_argument("--account-id", default="", help="--own-name 时用于解析人设的账号 id")
+    ap.add_argument("--persona-name", default="", help="--own-name 测试/覆盖：按此人设名建 reserved（不读配置）")
     args = ap.parse_args(argv)
     if args.memory:
         return run_memory(args)
@@ -331,7 +403,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     except sqlite3.Error as exc:
         print(f"! 打开库失败 {db}: {exc}", file=sys.stderr)
         return 2
-    rows = scan_store(store, platform=args.platform, chat_key=args.chat_key)
+    resolver = None
+    if args.own_name:
+        resolver = _own_name_resolver(args)
+    rows = scan_store(store, platform=args.platform, chat_key=args.chat_key,
+                      own_name=bool(args.own_name), reserved_resolver=resolver)
     if args.json:
         print(json.dumps({"db": str(db), "apply": apply, "count": len(rows), "rows": rows},
                          ensure_ascii=False, indent=1))
