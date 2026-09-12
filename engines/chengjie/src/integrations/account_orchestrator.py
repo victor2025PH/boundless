@@ -38,6 +38,12 @@ _mirror_fail_last_warn: Dict[str, float] = {}
 _mirror_fail_total = 0
 
 
+def _sent_by_for_origin(origin: Any) -> str:
+    """出站 origin → messages.sent_by：manual（坐席工作台）=agent；其余（自动回复/主动触达/
+    自动语音/群演等自动链）=ai。接力记忆四期：镜像行落库即带发送方。"""
+    return "agent" if str(origin or "auto") == "manual" else "ai"
+
+
 def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: str) -> None:
     """出站消息回写收件箱失败 → WARNING（同 platform 10 分钟节流）+ 进程计数。
 
@@ -842,12 +848,16 @@ class AccountOrchestrator:
         try:
             from src.integrations.protocol_bridge import emit_incoming, make_message
             _itext = inbox_text if inbox_text is not None else caption
+            # 接力记忆四期：镜像行自带发送方（origin=manual → agent / 其余 → ai），
+            # 气泡「人工/AI」三态与首响归属不再靠推断
+            _msrc: Dict[str, Any] = {"sent_by": _sent_by_for_origin(origin)}
+            if sender_name:
+                _msrc["sender_name"] = str(sender_name)
             emit_incoming(make_message(
                 platform=platform, account_id=account_id, chat_key=chat_key,
                 text=_itext, direction="out", msg_id=_mid,
                 media_type=(mirror_media_type or media_type), media_ref=media_url,
-                source=({"sender_name": str(sender_name)}
-                        if sender_name else None),
+                source=_msrc,
             ))
         except Exception:
             _warn_mirror_fail(platform, account_id, chat_key, kind=str(media_type or "media"))
@@ -1030,13 +1040,14 @@ class AccountOrchestrator:
         if _delivered:
             try:
                 from src.integrations.protocol_bridge import emit_incoming, make_message
-                _src = None
+                # 接力记忆四期：镜像行自带发送方（origin=manual → agent / 其余 → ai）
+                _src: Dict[str, Any] = {"sent_by": _sent_by_for_origin(origin)}
                 if should_mirror_quote(reply_to, res):
-                    _src = {"reply_to": {
+                    _src["reply_to"] = {
                         "id": str(reply_to.get("id") or ""),
                         "text": str(reply_to.get("text") or ""),
                         "sender": str(reply_to.get("sender") or ""),
-                    }}
+                    }
                 emit_incoming(make_message(
                     platform=platform, account_id=account_id, chat_key=chat_key,
                     text=text, direction="out", msg_id=_mid, source=_src,

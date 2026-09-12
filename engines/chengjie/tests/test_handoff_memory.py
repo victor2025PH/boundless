@@ -293,6 +293,26 @@ def test_record_handoff_end_to_end_with_manual_send_window(tmp_path):
     assert sm._context_store.peek("17345893506:nobody") is None                  # 没有凭空建 ctx
     assert hf.peek_handoff_note(st, cid, now=t + 60 + hf.TTL_SEC + 1) is None    # 过期即无
     assert hf.peek_handoff_note(SimpleNamespace(), cid, now=t + 60) is None      # 无 skill_manager
+    # 四期：坐席删一条接力事实——只删指定条目、不改 used/ts；段落删空去标题；删光整份撤下
+    d1 = hf.drop_handoff_line(st, cid, "- 我有个女儿", by="a1", now=t + 70)
+    assert d1["ok"] and d1["active"] and d1["removed"]
+    assert "我有个女儿" not in d1["note"] and "- 发了图片：刚拍的" in d1["note"] and "- 好看！" in d1["note"]
+    assert ctx[hf.NOTE_KEY]["used"] == 0 and ctx[hf.NOTE_KEY]["ts"] == t + 60 and ctx[hf.NOTE_KEY]["edited_by"] == "a1"
+    d_nf = hf.drop_handoff_line(st, cid, "不存在的一条", now=t + 71)
+    assert d_nf["ok"] and d_nf["active"] and not d_nf["removed"] and d_nf["reason"] == "not_found"
+    d2 = hf.drop_handoff_line(st, cid, "发了图片：刚拍的", now=t + 72)       # 裸文本也认
+    assert d2["active"] and "你说过/发过：" not in d2["note"] and "对方说过/发过：" in d2["note"]
+    d3 = hf.drop_handoff_line(st, cid, "- 好看！", now=t + 73)
+    assert d3["ok"] and not d3["active"] and d3["note"] == "" and hf.NOTE_KEY not in ctx
+    assert hf.peek_handoff_note(st, cid, now=t + 74) is None
+    assert not hf.drop_handoff_line(st, cid, "- 好看！", now=t + 75)["ok"]     # 已无笔记
+    assert not hf.drop_handoff_line(st, cid, "", now=t + 75)["ok"]
+    # 重建一份供下面「持久 + 注入」断言
+    hom.on_human_outbound("whatsapp", "17345893506", "13308422244", "再说一句",
+                          conversation_id=cid, skill_manager=sm, now=t + 80)
+    _ing("h3", "out", "再说一句", t + 80)
+    assert hf.record_handoff(st, store, cid, new_mode="auto_ai", by="mode_select", now=t + 90)["ok"]
+    rec = ctx[hf.NOTE_KEY]
     # 持久：重开仍在，且注入一次计一次
     sm._context_store.close()
     sm2 = _FakeSM(tmp_path / "bot.db")
@@ -413,6 +433,15 @@ def test_wiring_inject_self_state_and_watchdog_and_route():
     assert "_handoffToast(window.T('inbox.mode.handoff_title'), h.note, false, true)" in tpl
     css = (root / "web" / "static" / "workspace" / "unified-inbox.css").read_text(encoding="utf-8", errors="ignore")
     assert ".tko-pill.handoff{" in css and ".tko-pill.handoff .tko-resume.tko-x{" in css
+    # 四期：预览条逐行 × → POST /handoff-note/drop（只删不增）
+    assert '@app.post("/api/unified-inbox/handoff-note/drop")' in rt and "drop_handoff_line(request.app.state, cid, line" in rt
+    assert "function _hfRenderNote(pre, note)" in tpl and "_hfRenderNote(pre, String(note||''));" in tpl
+    assert "/api/unified-inbox/handoff-note/drop" in tpl and "hf-line-x" in tpl and "hf-line-x" in css
+    from src.web.i18n_packs import inbox_workspace as iw
+    for d in (iw.ZH, iw.EN):
+        for k in ("inbox.mode.handoff_drop_t", "inbox.mode.handoff_dropped",
+                  "inbox.mode.handoff_dropped_all", "inbox.mode.handoff_drop_fail"):
+            assert k in d, k
     assert "unified-inbox.css?v=20260912hf3" not in tpl
     from src.web.i18n_packs import inbox_takeover_diag as pk
     for lang, d in (("zh", pk.ZH), ("en", pk.EN)):

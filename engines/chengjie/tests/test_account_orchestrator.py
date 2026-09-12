@@ -230,7 +230,8 @@ async def test_send_does_not_mirror_quote_without_receipt(registry, monkeypatch)
 
 
 async def test_send_without_reply_to_no_source(registry, monkeypatch):
-    """普通发送（无 reply_to）→ 出站回写不带 source（向后兼容）。"""
+    """普通发送（无 reply_to）→ 出站回写 source 里只有发送方标记（接力记忆四期 sent_by=ai），
+    不带引用（向后兼容）。"""
     orch._WORKER_FACTORIES.pop("telegram:protocol", None)
     orch.register_worker("telegram", "protocol",
                          lambda a, c: FakeSendWorker(a, c))
@@ -243,7 +244,10 @@ async def test_send_without_reply_to_no_source(registry, monkeypatch):
     monkeypatch.setattr(pb, "emit_incoming", lambda msg: captured.update(msg))
     await o.send("telegram", "1", "639111", "普通消息")
     assert w.sent[-1]["reply_to"] is None
-    assert "source" not in captured or not captured.get("source")
+    assert captured.get("source") == {"sent_by": "ai"}
+    # origin=manual（坐席工作台）→ agent
+    await o.send("telegram", "1", "639111", "人工消息", origin="manual")
+    assert captured.get("source") == {"sent_by": "agent"}
     orch._WORKER_FACTORIES.pop("telegram:protocol", None)
 
 

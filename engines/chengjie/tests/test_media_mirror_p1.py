@@ -148,7 +148,7 @@ def test_voice_send_paths_carry_sender_name():
     i = seg.index("async def send_media(")
     body = seg[i:seg.index("async def ", i + 10)]   # 到下一个方法为止＝整个函数体
     assert 'sender_name: str = ""' in body
-    assert '"sender_name": str(sender_name)' in body
+    assert '_msrc["sender_name"] = str(sender_name)' in body   # 四期：与 sent_by 同一 source dict
     for rel, needle in [
         ("src/web/routes/unified_inbox_send_routes.py", "sender_name=_voice_sender_name"),
         ("src/inbox/autosend_helpers.py", "sender_name=_v_sender"),

@@ -1142,6 +1142,17 @@ _MIGRATIONS = [
 AGENT_SEND_CLAIM_WINDOW_SEC = 180.0
 
 
+SENT_BY_VALUES = ("agent", "ai")
+
+
+def _sent_by_of(msg: Any) -> str:
+    """出站行随消息自带的发送方（编排器镜像 origin → ai/agent）；入站永远空；非法值归空。"""
+    if str(getattr(msg, "direction", "") or "") != "out":
+        return ""
+    v = str(getattr(msg, "sent_by", "") or "").strip().lower()
+    return v if v in SENT_BY_VALUES else ""
+
+
 def agent_send_text_hash(text: str) -> str:
     """坐席发送文本 → 与镜像出站行比对用的短 hash（空白归一化；空文本 → ''）。"""
     t = " ".join(str(text or "").split())
@@ -1601,8 +1612,8 @@ class InboxStore:
                      original_text, translated_text, source_lang, target_lang,
                      media_type, media_ref, ts, ingested_at,
                      reply_to_id, reply_to_text, reply_to_sender, mentions_json,
-                     sender_id, sender_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sender_id, sender_name, sent_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mid, msg.conversation_id, str(msg.platform_msg_id or ""), msg.direction,
@@ -1615,6 +1626,7 @@ class InboxStore:
                     str(getattr(msg, "mentions_json", "") or "[]"),
                     str(getattr(msg, "sender_id", "") or ""),
                     str(getattr(msg, "sender_name", "") or ""),
+                    _sent_by_of(msg),
                 ),
             )
             inserted = cur.rowcount > 0
@@ -1771,8 +1783,8 @@ class InboxStore:
                          original_text, translated_text, source_lang, target_lang,
                          media_type, media_ref, ts, ingested_at,
                          reply_to_id, reply_to_text, reply_to_sender, mentions_json,
-                         sender_id, sender_name, approx_ts)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         sender_id, sender_name, approx_ts, sent_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mid, msg.conversation_id, str(msg.platform_msg_id or ""), msg.direction,
@@ -1783,6 +1795,7 @@ class InboxStore:
                         str(msg.reply_to_sender or ""), str(msg.mentions_json or "[]"),
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
                         int(getattr(msg, "approx_ts", 0) or 0),
+                        _sent_by_of(msg),
                     ),
                 )
                 if cur.rowcount > 0:
@@ -4085,6 +4098,10 @@ class InboxStore:
         """出站行落库 → 找同会话、同 text_hash / media_ref、时间窗内、尚未认领的坐席打点；
         命中 → ``sent_by='agent'`` + 打点记 ``claimed_mid``。锁内调用、绝不抛。"""
         try:
+            # 四期：镜像行自带发送方（编排器 origin → ai/agent）时列已在 INSERT 写好；
+            # ai 行不碰打点；agent 行仍把对应打点记 claimed（免得同文本的下一条被它误认）
+            if _sent_by_of(msg) == "ai":
+                return
             cid = str(getattr(msg, "conversation_id", "") or "")
             th = agent_send_text_hash(getattr(msg, "text", "") or "")
             ref = str(getattr(msg, "media_ref", "") or "").strip()
@@ -4109,8 +4126,12 @@ class InboxStore:
             if not send_rowid:
                 return
             # 归一化 hash 需逐行算：只取窗口内最近 20 条未标出站行（打点晚于镜像是罕见路径）
+            # sent_by IN ('', 'agent')：四期编排器镜像行已带 agent，也要与打点连上（记 claimed）；
+            # 已被别的打点认领的行排除；ai 行永不认
             q = ("SELECT message_id, text, media_ref FROM messages WHERE conversation_id=? AND direction='out' "
-                 "AND sent_by='' AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 20")
+                 "AND sent_by IN ('', 'agent') "
+                 "AND message_id NOT IN (SELECT claimed_mid FROM agent_sends WHERE claimed_mid<>'') "
+                 "AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 20")
             rows = self._conn.execute(q, (cid, ts, AGENT_SEND_CLAIM_WINDOW_SEC, ts)).fetchall()
             for r in rows:
                 mid, text, mref = str(r[0]), str(r[1] or ""), str(r[2] or "")

@@ -10285,7 +10285,16 @@ class SkillManager(LoggerMixin):
             if isinstance(log, list) and log:
                 lines = []
                 _has_video = False
-                for row in log[-3:]:
+                # 四期口径统一：最近 3 条 + 更早 10 条内坐席替发的（author=human）——selfie 链
+                # 开着时本块替代 human_media_note 注入，坐席发过的图/视频不该因 AI 又发了
+                # 三张自拍就掉出记忆；总数封顶 6、按时间序。
+                _recent = list(log[-3:])
+                _human_extra = [r for r in log[-10:-3]
+                                if isinstance(r, dict) and str(r.get("author") or "") == "human"]
+                _rows_show = (_human_extra + _recent)[-6:]
+                for row in _rows_show:
+                    if not isinstance(row, dict):
+                        continue
                     try:
                         _t = time.strftime(
                             "%m-%d %H:%M", time.localtime(float(row.get("ts") or 0)))

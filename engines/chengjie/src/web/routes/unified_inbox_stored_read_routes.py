@@ -295,6 +295,30 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 # → 会话头 ay- chip 倒计时；None＝worker 缺席 / 旧后端，前端不渲染
                 "agent_yield": _agent_yield_state_q18(request, cid)}
 
+    @app.post("/api/unified-inbox/handoff-note/drop")
+    async def api_unified_inbox_handoff_note_drop(request: Request, _=Depends(api_auth)):
+        """接力记忆四期：坐席在「看记忆」里删掉一条 AI 将带走的事实（写口只删不增，
+        不改使用次数）。body={platform, account_id, chat_key, line}；返回 {ok, active, note}。"""
+        body = await request.json()
+        platform = str(body.get("platform") or "").lower()
+        account_id = str(body.get("account_id") or "default")
+        chat_key = str(body.get("chat_key") or "")
+        line = str(body.get("line") or "")
+        if not platform or not chat_key:
+            raise HTTPException(400, tr(request, "err.ws.platform_chatkey_required"))
+        if not line.strip():
+            raise HTTPException(400, "line required")
+        cid = _conv_id(platform, account_id, chat_key)
+        try:
+            _by = str(request.session.get("agent_id") or request.session.get("user") or "agent")
+        except Exception:
+            _by = "agent"
+        from src.inbox.handoff_memory import drop_handoff_line
+        res = drop_handoff_line(request.app.state, cid, line, by=_by)
+        return {"ok": bool(res.get("ok")), "conversation_id": cid,
+                "active": bool(res.get("active")), "note": str(res.get("note") or ""),
+                "removed": bool(res.get("removed")), "reason": str(res.get("reason") or "")}
+
     @app.post("/api/unified-inbox/automation")
     async def api_unified_inbox_automation_set(request: Request, _=Depends(api_auth)):
         body = await request.json()

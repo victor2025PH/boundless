@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf4">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf5">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -13170,6 +13170,48 @@ function _toast(msg, color){
    record_handoff 返回的 note，就是将注入 prompt 的那段），坐席能当场核对 AI 将带着什么接手。
    收起态 6s 自动消失；展开后不自动消失，点 × 或再点按钮收起。单实例。 */
 var _hfToastEl=null, _hfToastTimer=null;
+/* 四期：预览条内逐行渲染——条目行（"- xxx"）尾部带 ×「不让 AI 带走这条」→ POST
+   /handoff-note/drop（服务端只删不增、不改使用次数），回包 note 重渲；删空则整份撤下、
+   预览条与 pill 一起收掉。非条目行（标题/提要）原样只读。 */
+function _hfRenderNote(pre, note){
+  pre.innerHTML='';
+  var c=selectedChat, editable=!!(c&&c.platform&&c.chat_key);
+  String(note||'').split('\n').forEach(function(ln){
+    var row=document.createElement('div'); row.className='hf-line';
+    var isItem=/^\s*- /.test(ln);
+    var txt=document.createElement('span'); txt.textContent=ln; row.appendChild(txt);
+    if(isItem&&editable){
+      var x=document.createElement('button'); x.type='button'; x.className='hf-line-x'; x.textContent='×';
+      x.title=window.T('inbox.mode.handoff_drop_t');
+      x.onclick=function(){ _hfDropLine(ln, pre, x); };
+      row.appendChild(x);
+    }
+    pre.appendChild(row);
+  });
+}
+async function _hfDropLine(line, pre, btn){
+  var c=selectedChat; if(!c) return;
+  try{ btn.disabled=true; }catch(_){}
+  try{
+    var r=await apiFetch('/api/unified-inbox/handoff-note/drop',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform:c.platform,account_id:c.account_id||'default',chat_key:c.chat_key,line:line})});
+    var d=await r.json();
+    if(!r.ok||!d||d.ok===false) throw new Error((d&&(d.message||d.reason))||('HTTP '+r.status));
+    try{ _uiBeacon('handoff_line_drop'); }catch(_){}
+    if(!d.active){
+      _handoffState=null; try{ _renderTakeoverBanner(); }catch(_){}
+      try{ if(_hfToastEl){ _hfToastEl.style.opacity='0'; setTimeout(function(){ try{ _hfToastEl.remove(); }catch(_){} _hfToastEl=null; },300); } }catch(_){}
+      try{ _toast(window.T('inbox.mode.handoff_dropped_all'),'#64748b'); }catch(_){}
+      return;
+    }
+    if(_handoffState) _handoffState.note=String(d.note||'');
+    _hfRenderNote(pre, String(d.note||''));
+    try{ _toast(window.T('inbox.mode.handoff_dropped'),'#0f9d75'); }catch(_){}
+  }catch(e){
+    try{ btn.disabled=false; }catch(_){}
+    try{ _toast(window.Tf('inbox.mode.handoff_drop_fail',{msg:String((e&&e.message)||'')}),'#b91c1c'); }catch(_){}
+  }
+}
 function _handoffToast(msg, note, condensing, openNow){
   try{ if(_hfToastEl && _hfToastEl.parentNode) _hfToastEl.remove(); }catch(_){}
   if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; }
@@ -13180,7 +13222,8 @@ function _handoffToast(msg, note, condensing, openNow){
   const x=document.createElement('button'); x.type='button'; x.className='hf-btn'; x.textContent='×'; x.setAttribute('aria-label','close');
   row.appendChild(btn); row.appendChild(x); el.appendChild(row);
   const title=document.createElement('div'); title.className='hf-title'; title.textContent=window.T('inbox.mode.handoff_title')+(condensing?(' · '+window.T('inbox.mode.handoff_condensing')):'');
-  const pre=document.createElement('div'); pre.className='hf-note'; pre.textContent=String(note||'');
+  const pre=document.createElement('div'); pre.className='hf-note';
+  _hfRenderNote(pre, String(note||''));
   el.appendChild(title); el.appendChild(pre);
   function _close(){ if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; } el.style.opacity='0'; setTimeout(()=>{ try{ el.remove(); }catch(_){} if(_hfToastEl===el) _hfToastEl=null; },300); }
   function _arm(){ if(_hfToastTimer) clearTimeout(_hfToastTimer); _hfToastTimer=setTimeout(_close, 6000); }
@@ -14661,8 +14704,12 @@ function renderMessages(c, msgs, opts={}){
     const _extChip=(isOut&&String(m.sender_id||'')==='external'&&!m._optimistic&&!m._failed)
       ?`<span class="ms-ext-chip" title="${esc(window.T('inbox.ms.external_out_t'))}">${esc(window.T('inbox.ms.external_out'))}</span>`:'';
     // 接力记忆二期：坐席手动发出的出站行（服务端按 agent_sends 打点就近匹配 sent_by=agent）→ 小标「人工」
-    const _agentChip=(isOut&&String(m.sent_by||'')==='agent'&&!m._optimistic&&!m._failed&&!_extChip)
-      ?`<span class="ms-ext-chip agent-chip" title="${esc(m.agent_name?window.Tf('inbox.msg.agent_sent_by_t',{name:m.agent_name}):window.T('inbox.msg.agent_sent_t'))}">${esc(window.T('inbox.msg.agent_sent'))}</span>`:'';
+    // 四期：sent_by 三态——agent「人工」/ ai「AI」（编排器自动链镜像行自带）/ 空＝不标（手机端/老行）
+    const _sentBy=(isOut&&!m._optimistic&&!m._failed&&!_extChip)?String(m.sent_by||''):'';
+    const _agentChip=_sentBy==='agent'
+      ?`<span class="ms-ext-chip agent-chip" title="${esc(m.agent_name?window.Tf('inbox.msg.agent_sent_by_t',{name:m.agent_name}):window.T('inbox.msg.agent_sent_t'))}">${esc(window.T('inbox.msg.agent_sent'))}</span>`
+      :(_sentBy==='ai'
+        ?`<span class="ms-ext-chip ai-chip" title="${esc(window.T('inbox.msg.ai_sent_t'))}">${esc(window.T('inbox.msg.ai_sent'))}</span>`:'');
     const _failTail=_msTri
       ?`<span class="ms-fail-tri" style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;" title="${esc(String(m._msFail.sidecar_detail||''))}">${esc(_msTri.text)}</span>${m._retryBody?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendFailed('${esc(m.message_id||'')}')">${window.T('inbox.ms.fail.retry_btn')}</button>`:''}`
       :m._failed

@@ -67,6 +67,10 @@ class InboxMessage:
     # 补收/历史回填时 DOM 拿不到真实发送时刻，按序回推所得）——只保序不保真。
     # 消费方：前端「约·补收」样式（下阶段）、reply_latency SLO 剔除、AI 新鲜度判定。
     approx_ts: int = 0
+    # 接力记忆四期（2026-09-12）出站发送方：'agent'=坐席工作台手动；'ai'=编排器自动链
+    # （origin=auto：自动回复/主动触达/自动语音）；''=未知（RPA 手机端/老行）。落 messages.sent_by；
+    # 空时由 store 按 agent_sends 打点认领（见 InboxStore._claim_agent_send_locked）。
+    sent_by: str = ""
 
 
 @dataclass

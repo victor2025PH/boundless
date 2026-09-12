@@ -123,6 +123,8 @@ def _msg_from_obj(
         sender_name=str(src.get("sender_name") or ""),
         # 实施72 P2：合成时间戳标记透传（回填/拉更早路径置 1；实时路径缺省 0）
         approx_ts=int(m.get("approx_ts") or 0),
+        # 接力记忆四期：出站发送方（编排器镜像 source.sent_by=ai/agent；入站/未知为空）
+        sent_by=str(src.get("sent_by") or m.get("sent_by") or "")[:16],
     )
 
 

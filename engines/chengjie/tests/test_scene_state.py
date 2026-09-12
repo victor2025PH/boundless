@@ -181,6 +181,36 @@ def test_inject_scene_state_gating_and_content():
     assert "_current_scene_note" not in ctx3
 
 
+def test_inject_scene_state_keeps_human_sent_media_and_video_wording():
+    """接力记忆四期：最近 3 条 + 更早 10 条内坐席替发的条目一起进块（封顶 6、时间序）；
+    有视频时标题跟上；坐席替发标注来源。"""
+    sm = _SM(selfie_cfg={"enabled": True, "scene_rotation": ["in a cozy cafe"]})
+    ctx = {"_media_sent_log": []}
+    log = ctx["_media_sent_log"]
+    log.append({"ts": 0.0, "note": "[图片] 太早的人工图", "author": "human"})          # 10 条外 → 掉
+    log.append({"ts": 1.0, "note": "[图片] 太早的人工图2", "author": "human"})         # 10 条外 → 掉
+    log.append({"ts": 2.0, "note": "[视频] 坐席发的视频", "author": "human", "desc": "海边跑步"})
+    for i in range(3, 8):
+        log.append({"ts": float(i), "note": f"[图片] AI 自拍{i}", "scene": "cafe"})
+    log.append({"ts": 8.0, "note": "[图片] 坐席发的图", "author": "human"})
+    for i in range(9, 12):
+        log.append({"ts": float(i), "note": f"[图片] AI 自拍{i}", "scene": "cafe"})   # 最近 3 条
+    assert len(log) == 12
+    sm._inject_scene_state(ctx)
+    note = ctx["_media_sent_note"]
+    assert "【你最近发过的照片/视频（事实）】" in note and "那个视频" in note
+    assert "坐席发的视频" in note and "海边跑步" in note and "坐席替你发的" in note
+    assert "坐席发的图" in note and "AI 自拍11" in note and "AI 自拍9" in note
+    assert "太早的人工图" not in note and "AI 自拍7" not in note
+    assert note.count("\n- ") == 5                                       # 2 人工 + 3 最近
+    assert note.index("坐席发的视频") < note.index("坐席发的图") < note.index("AI 自拍9")
+    # 无视频、无人工 → 老措辞、只最近 3 条
+    ctx2 = {"_media_sent_log": [{"ts": float(i), "note": f"[图片] p{i}", "scene": "cafe"} for i in range(5)]}
+    sm._inject_scene_state(ctx2)
+    n2 = ctx2["_media_sent_note"]
+    assert "【你最近发过的照片（事实）】" in n2 and "视频" not in n2 and n2.count("\n- ") == 3
+
+
 # ── ②b 显式场景进生图链（A 线 Stage A / B 线 plan+caption）──────────────────
 
 def test_plan_autosend_image_carries_requested_scene():

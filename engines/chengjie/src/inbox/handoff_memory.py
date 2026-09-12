@@ -485,6 +485,84 @@ def peek_handoff_note(
         return None
 
 
+_SECTION_HEADS = ("你说过/发过：", "对方说过/发过：")
+
+
+def drop_handoff_line(
+    app_state: Any, conversation_id: str, line: str, *, by: str = "",
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """坐席在「看记忆」里删掉一条接力事实（四期）：从 ``_handoff_note`` 的 note 里移除**第一条**
+    与 ``line`` 相同的条目行（"- xxx" 或裸 "xxx" 都认）。段落删空则连标题一起去掉；没有任何
+    条目/提要剩下 → 整份笔记撤下。返回 ``{ok, active, note, removed}``；绝不抛。
+
+    只动 note 文本，不改 used/ts（不重置使用次数——删一条不该让笔记多活几轮）。
+    """
+    res: Dict[str, Any] = {"ok": False, "active": False, "note": "", "removed": False}
+    try:
+        cid = str(conversation_id or "").strip()
+        want = str(line or "").strip()
+        if want.startswith("- "):
+            want = want[2:].strip()
+        if not cid or not want:
+            res["reason"] = "bad_args"
+            return res
+        from src.inbox.human_outbound_memory import (
+            _effective_account_id, resolve_skill_manager,
+        )
+        sm = resolve_skill_manager(app_state)
+        cstore = getattr(sm, "_context_store", None) if sm is not None else None
+        platform, acct_raw, chat_key = _split_cid(cid)
+        if not chat_key or cstore is None:
+            res["reason"] = "no_skill_manager"
+            return res
+        from src.utils.context_store import make_context_key
+        key = make_context_key(chat_key, _effective_account_id(acct_raw, cid))
+        peek = getattr(cstore, "peek", None)
+        ctx = peek(key) if callable(peek) else None
+        rec = ctx.get(NOTE_KEY) if isinstance(ctx, dict) else None
+        if not isinstance(rec, dict) or not str(rec.get("note") or "").strip():
+            res["reason"] = "no_note"
+            return res
+        lines = str(rec["note"]).split("\n")
+        idx = next((i for i, ln in enumerate(lines)
+                    if ln.strip() == f"- {want}" or ln.strip() == want), -1)
+        if idx < 0:
+            res.update({"ok": True, "active": True, "note": rec["note"], "reason": "not_found"})
+            return res
+        del lines[idx]
+        # 段落删空 → 去标题（标题后面紧跟另一个标题 / 文末 / 非条目行）
+        cleaned: List[str] = []
+        for i, ln in enumerate(lines):
+            if ln.strip() in _SECTION_HEADS:
+                nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                if not nxt.startswith("- "):
+                    continue
+            cleaned.append(ln)
+        has_body = any(ln.strip().startswith("- ") or ln.startswith(_OVERFLOW_PREFIX) for ln in cleaned)
+        ts_now = float(now if now is not None else time.time())
+        if not has_body:
+            ctx.pop(NOTE_KEY, None)
+            res.update({"ok": True, "active": False, "note": "", "removed": True})
+        else:
+            rec["note"] = "\n".join(cleaned)
+            rec["edited_by"] = str(by or "")[:24]
+            rec["edited_ts"] = ts_now
+            res.update({"ok": True, "active": True, "note": rec["note"], "removed": True})
+        try:
+            cstore.mark_dirty(key)
+            cstore.flush(key)
+        except Exception:
+            logger.debug("[handoff] 删行持久化失败（忽略）", exc_info=True)
+        logger.info("[handoff] line dropped conv=%s by=%s left_active=%s line=%r",
+                    cid, by or "-", res["active"], want[:60])
+        return res
+    except Exception:
+        logger.debug("[handoff] drop_handoff_line 异常（已忽略）", exc_info=True)
+        res["reason"] = "error"
+        return res
+
+
 def _split_cid(conversation_id: str) -> tuple:
     parts = str(conversation_id or "").split(":", 2)
     if len(parts) == 3:
@@ -603,7 +681,7 @@ def record_handoff(
 __all__ = [
     "NOTE_KEY", "TAKEOVER_TS_KEY", "MAX_USES", "TTL_SEC", "HANDOFF_FETCH_MIN",
     "HANDOFF_VERBATIM_CAP",
-    "active_window_since", "build_handoff_note", "condense_overflow", "handoff_note",
-    "note_human_outbound_started", "peek_handoff_note", "record_handoff",
+    "active_window_since", "build_handoff_note", "condense_overflow", "drop_handoff_line",
+    "handoff_note", "note_human_outbound_started", "peek_handoff_note", "record_handoff",
     "verbatim_keep_for_handoff",
 ]

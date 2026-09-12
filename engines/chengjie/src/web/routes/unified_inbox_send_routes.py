@@ -23,7 +23,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, HTTPException, Request
 
@@ -1258,17 +1258,22 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _send_agent = _session_agent(request)
         _consumed_drafts: list = []   # Q-10 A：本次发送置 consumed 的草稿 id（回给前端免二次 cancel）
 
-        def _mark_send(cid: str, sent_text: str = "") -> None:
+        def _mark_send(cid: str, sent_text: str = "",
+                       parts: Optional[List[str]] = None) -> None:
             """发送成功后打坐席首响归属点（best-effort，失败不影响发送）。
-            ``sent_text``＝实际发出的文本（三期：镜像出站行按其 hash 认领 sent_by=agent）。"""
+            ``sent_text``＝实际发出的文本（三期：镜像出站行按其 hash 认领 sent_by=agent）；
+            ``parts``＝分条发送时**实际发出的各段**（四期：逐段打点，每段镜像行都能精确认领，
+            此前只有首段 hash 命中、其余段靠时间匹配）。"""
             ibx = _inbox_store(request)
             if ibx is None or not cid:
                 return
             try:
+                _texts = [p for p in (parts or []) if str(p or "").strip()] or [sent_text]
                 try:
-                    ibx.record_agent_send(
-                        cid, _send_agent["agent_id"],
-                        agent_name=_send_agent.get("display_name", ""), text=sent_text)
+                    for _pt in _texts:
+                        ibx.record_agent_send(
+                            cid, _send_agent["agent_id"],
+                            agent_name=_send_agent.get("display_name", ""), text=_pt)
                 except TypeError:   # 旧 store 签名（测试假 store）
                     ibx.record_agent_send(
                         cid, _send_agent["agent_id"],
@@ -1464,7 +1469,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             raise HTTPException(502, _msg)
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
-        _mark_send(cid, text)
+        _mark_send(cid, text,
+                   parts=(list(_bubble_parts[:_bub_sent]) if _bubble_parts else None))
         # #177（J-1 交 J-3 接线）：人工替人设说的自述事实进 AI 记忆——best-effort，
         # 模块内吞异常、零阻断发送；original_text=坐席原文（抽事实），text=实际发出
         # （出站翻译后）的文本（更新 last_reply 防复读，按客户看到的那份）。
