@@ -5289,14 +5289,28 @@ class SkillManager(LoggerMixin):
                     turns, has_mem = None, False
                     _user_texts, _mem_text, _asst_texts = [], "", []
             _rel_stage = ""
+            _q36_cid = ""
             if isinstance(user_context, dict):
                 _rel_stage = str(
                     user_context.get("relationship_stage") or "")
+                # Q-36 #313：量词软改按会话取 24h 内入站图 caption（KV；缺席回落 _user_texts 解析）
+                _q36_cid = str(
+                    user_context.get("conversation_id")
+                    or user_context.get("chat_id") or "")
             cleaned, meta = apply_outbound_text_guard(
                 reply, cfg, user_turns=turns, has_memory=has_mem,
                 user_texts=_user_texts, memory_text=_mem_text,
                 recent_assistant_texts=_asst_texts,
-                relationship_stage=_rel_stage)
+                relationship_stage=_rel_stage,
+                conversation_id=_q36_cid)
+            if meta.get("caption_quantifier_hits"):
+                # Q-36 #313（2JK95C「几个菜 → 一桌菜」）：可观测行——改了什么、依据哪条 caption
+                self.logger.info(
+                    "%s[caption-guard] conv=%s soft_rewrite=%s caption=%r（Q-36 量词改回识图原词）",
+                    log_prefix, _q36_cid or "-",
+                    "|".join(f"{h.get('from')}->{h.get('to')}" for h in meta["caption_quantifier_hits"][:3]),
+                    str((meta["caption_quantifier_hits"][0] or {}).get("caption") or "")[:40],
+                )
             # #152 F1：LLM 退化循环。整条都是循环（截空）→ 绝不回落原文照发——
             # 「越来越多×300」直达客户就是这条 `cleaned or reply` 回落造成的；
             # 返回空串让 A/B 线走各自的「空稿」路径（不发+进待处理）。截后有残文
@@ -6029,6 +6043,15 @@ class SkillManager(LoggerMixin):
             # 越南」）；事实里的名字 / 数字须在原句里。不过 → 不写 + `[memory] drop reason=` 一行
             # + 计入 grounding_dropped 记账；门缺席 / 异常 → 不写（宁可漏记）。
             _gated_llm: List[Tuple[str, str, Optional[float]]] = []
+            # Q-36 #318（VV7BRY「Marina」）：本条入站若带识图描述，evidence 落在 caption 而非客户原话的事实
+            # 不当客户事实——改按 kind=observation 过门，写成固定措辞「TA 发过一张照片（识图所见：…）」
+            # （画面所见 ≠ 客户自述；LLM 推断本身不写）。注：抽取 LLM 的输入已剥 caption（P1 08-19），
+            # 这里是上游一旦不剥时的安全网；正常路径 caption 事实只经 image_observation KV。
+            try:
+                from src.inbox.image_observation import caption_from_inbound as _obs_cap_of
+                _obs_caption = _obs_cap_of(mu)[0] if mu != (mu_facts or "") else ""
+            except Exception:
+                _obs_caption = ""
             for f, _ev, _conf in facts_llm:
                 try:
                     from src.companion.fact_gate import check as _fg_check
@@ -6037,6 +6060,25 @@ class SkillManager(LoggerMixin):
                         inbound_texts=[mu_facts or mu])
                 except Exception:
                     _fg_ok, _fg_why = False, "gate_error"
+                if not _fg_ok and _obs_caption and _fg_why in ("unanchored", "no_evidence"):
+                    try:
+                        from src.companion.fact_gate import KIND_OBSERVATION as _K_OBS, check as _fg_check2
+                        from src.inbox.image_observation import observation_line as _obs_line
+                        _ev_in_cap = bool(str(_ev or "").strip()) and str(_ev).strip() in _obs_caption
+                        _ob_ok, _ = _fg_check2(_obs_caption, slot_or_kind=_K_OBS, evidence=_obs_caption,
+                                              inbound_texts=[mu]) if _ev_in_cap else (False, "")
+                    except Exception:
+                        _ob_ok = False
+                    if _ob_ok:
+                        _obs_fact = _obs_line(_obs_caption)
+                        rid = self._episodic_store.add_fact(
+                            key, _obs_fact, "observation", source="ai_inferred",
+                            source_quote=_obs_caption[:200], source_ts=_prov_ts, confidence=_conf)
+                        await self._episodic_patch_embedding(rid, _obs_fact)
+                        self.logger.info(
+                            "[memory] observation conv=%s fact=%s dropped_inference=%s（evidence 来自识图 caption，标 observation）",
+                            key, _obs_fact[:60], str(f)[:40].replace("\n", " "))
+                        continue
                 if not _fg_ok:
                     self.logger.info(
                         "[memory] drop conv=%s fact=%s evidence=%s reason=%s",

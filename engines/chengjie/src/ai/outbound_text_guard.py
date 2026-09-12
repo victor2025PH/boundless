@@ -778,6 +778,8 @@ _STATS: Dict[str, int] = {"monologue": 0, "lang_mix_hard": 0, "lang_mix_soft": 0
 _DEGEN_MIN_REPEAT = 5          # 连续重复次数阈值（正常口语强调最多 2-3 次）
 _DEGEN_MAX_GRAM = 12           # 最长循环单元（字符）
 _DEGEN_MIN_SPAN = 20           # 循环总跨度下限（字符），短循环如「哈哈哈哈哈」不算
+# Q-36 #313：量词软改计数（「一桌菜」→ caption 原词「几个菜」）；零流量也出 0，供 metrics 消费
+_STATS.setdefault("caption_quantifier", 0)
 
 
 def detect_degenerate_loop(
@@ -829,9 +831,24 @@ def guard_stats() -> Dict[str, int]:
 
 
 def resolve_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
-    """读 ``companion.outbound_text_guard``；暴露风险守卫族默认开。
+    """读 ``companion.outbound_text_guard``；暴露风险守卫族默认开（键面见 :func:`_resolve_cfg_base`）。
 
-    ``vocative``/``lang_pin``（实施91 #105/#106）＝收口点呼格纠正与铆定语言
+    Q-36 #313：``caption_quantifier``（出站夸大量词软改回入站图 caption 原词）默认开，**只在显式配置时
+    进键**——缺省键集不变（``test_resolve_cfg_defaults`` 钉住），``apply_outbound_text_guard`` 端
+    ``c.get("caption_quantifier", True)``。
+    """
+    out = _resolve_cfg_base(config)
+    try:
+        raw = (((config or {}).get("companion") or {}).get("outbound_text_guard") or {})
+        if isinstance(raw, dict) and "caption_quantifier" in raw:
+            out["caption_quantifier"] = bool(raw.get("caption_quantifier", True))
+    except Exception:
+        pass
+    return out
+
+
+def _resolve_cfg_base(config: Optional[Dict[str, Any]]) -> Dict[str, bool]:
+    """``vocative``/``lang_pin``（实施91 #105/#106）＝收口点呼格纠正与铆定语言
     兜底的子开关（消费方在 ``sendpoint_guard``，与本模块共用同一配置段——
     收口点守卫是一个家族，开关不散落两处）。
     """
@@ -866,6 +883,7 @@ def apply_outbound_text_guard(
     user_texts: Optional[List[str]] = None, memory_text: str = "",
     recent_assistant_texts: Optional[List[str]] = None,
     relationship_stage: str = "",
+    conversation_id: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     """出稿口统一入口：旁白 → 无出处引用 → 回忆接地 → 共同经历 → 认错去重 → 混语。
 
@@ -943,6 +961,20 @@ def apply_outbound_text_guard(
         if ghits2:
             meta["goal_meta_hits"] = ghits2
             _STATS["goal_meta"] += 1
+    # Q-36 #313（2JK95C「几个菜 → 一桌菜」）：出站夸大量词 vs 入站图 caption 原词——**软改**回原词
+    # （「一桌菜」→「几个菜」），caption 无该名词的小数量原词则不动；不是硬拦。caption 来源：24h KV
+    # （inbound_enrich 落的 observation）→ 回落近史用户文本里的「[图片内容] …」。
+    if c.get("caption_quantifier", True):
+        try:
+            from src.inbox.image_observation import observation_captions, soften_quantifiers
+            _caps = observation_captions(conversation_id, user_texts=user_texts)
+            if _caps:
+                out, qhits = soften_quantifiers(out, _caps)
+                if qhits:
+                    meta["caption_quantifier_hits"] = qhits
+                    _STATS["caption_quantifier"] += 1
+        except Exception:
+            pass
     if c.get("lang_mix", True):
         verdict = detect_lang_mix(out)
         if verdict["action"] == "hard":
