@@ -81,12 +81,17 @@ simple=True 的既有哲学一致）：
 同时回同一个客户）；单人部署里它没有任何对手方，只是每行都杵着的一枚按钮 + 一个
 永远等于「全部」的「我的」筛选（B13 原话：功能导向不明，建议非必须则删）。故：
 
-- ``resolve_seat_mode(config, users)`` → ``"multi"`` | ``"single"``；
-- 判定序＝显式配置 ``ui_visibility.seat_mode``（single/multi，运维可写死）→
-  **可进工作台的启用账号数**（``PAGE_PERMISSIONS["workspace"]`` 的角色集＝
-  master/admin/supervisor/agent；viewer 只读不接管故不算坐席）≥2 → multi；
-- 回落 **multi＝显示**：藏错方向的代价不对称——真团队被藏掉认领会退回「两个人
-  同时回同一个客户」，而单人多看一枚按钮只是噪音。读不到用户表/异常一律 multi。
+- ``resolve_seat_mode(config, users=None, presence=None)`` → ``"multi"`` | ``"single"``；
+- 判定序（Q-30 A #309 #310，2026-09-12 改）＝显式配置 ``ui_visibility.seat_mode``
+  （single/multi，运维可写死；设置页「多坐席协作」开关写的就是它）→ **近 30 分钟内
+  有 ≥2 个不同坐席在线**（``agent_coordinator`` presence 行，``last_seen_at`` 落在
+  :data:`SEAT_PRESENCE_WINDOW_SEC` 内）→ multi；否则 **single**。
+- 旧判据「启用坐席账号数 ≥2 即 multi」已废：客户机通常 admin + 坐席两个账号，
+  一律被判成 multi → B13 的全部单坐席守卫形同虚设，回到「点开即认领 · 处理中 ·
+  释放认领」（#309 #310）。用户表参数 ``users`` 保留只为兼容旧调用方，**不再参与判定**
+  （``count_seat_accounts`` 仍可单独使用）。
+- 回落 **single＝隐藏**：取不到 presence / 异常 / 无数据一律 single。真团队若 presence
+  暂时读不到，只需在 自动回复设置 → 自动化与风控 打开「多坐席协作」一次（显式 multi）。
 - 消费方＝收件箱模板（``ws_multi_seat``：行内快捷认领键 / 「我的」筛选 / 会话卡
   认领按钮 / 认领轮询与自动续租全部随之熄灭）。**藏而不废**：
   ``/api/workspace/claim*`` 一律不封，加个第二账号刷新即恢复。
@@ -108,7 +113,8 @@ simple=True 的既有哲学一致）：
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+import time
+from typing import Any, Dict, Optional
 
 # 键名 → 中文说明（开发者页与审计日志共用；顺序即 UI 渲染顺序）
 UI_VISIBILITY_KEYS = (
@@ -270,20 +276,95 @@ def count_seat_accounts(users: Any) -> int:
     return n
 
 
-def resolve_seat_mode(config: Any = None, users: Any = None) -> str:
-    """坐席规模 → ``multi`` | ``single``。异常/取不到用户表一律 multi（不误藏）。"""
+#: presence 判「近期在线」的窗口（Q-30 A）：30 分钟——比 presence_stale_sec（120s）宽得多，
+#: 一个坐席去开会、另一个刚登录，团队仍算团队；比「用户表行数」窄得多，只数真在线的人。
+SEAT_PRESENCE_WINDOW_SEC = 30 * 60.0
+
+
+def count_recent_agents(presence: Any, *, now: Optional[float] = None,
+                        window_sec: float = SEAT_PRESENCE_WINDOW_SEC) -> int:
+    """近 ``window_sec`` 内出现过的**不同** agent 数。纯函数；坏行跳过而非整体放弃。
+
+    ``presence`` ＝ ``InboxStore.list_agent_presence()`` / ``AgentCoordinator.list_presence()``
+    那样的 dict 序列（``agent_id`` / ``last_seen_at``）。不看 ``status``——手选「离开」的
+    同事 5 分钟前还在线，说明这是多人部署；看的是「有几个人」不是「几个人此刻空闲」。
+    ``last_seen_at`` 缺失 / 非数 → 该行不算（宁少算＝single，显式开关一键可救）。
+    """
+    try:
+        ts_now = float(now) if now is not None else time.time()
+    except Exception:
+        ts_now = time.time()
+    try:
+        cutoff = ts_now - max(0.0, float(window_sec or 0.0))
+    except Exception:
+        cutoff = ts_now - SEAT_PRESENCE_WINDOW_SEC
+    seen: set = set()
+    try:
+        for row in (presence or []):
+            if not isinstance(row, dict):
+                continue
+            aid = str(row.get("agent_id") or "").strip()
+            if not aid:
+                continue
+            try:
+                last = float(row.get("last_seen_at") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if last >= cutoff:
+                seen.add(aid)
+    except Exception:
+        return 0
+    return len(seen)
+
+
+def resolve_seat_mode(config: Any = None, users: Any = None, presence: Any = None, *,
+                      now: Optional[float] = None) -> str:
+    """坐席规模 → ``multi`` | ``single``（Q-30 A）。
+
+    显式 ``ui_visibility.seat_mode`` 一字不改地生效；无显式配置时 **缺省 single**，只有
+    ``presence`` 里近 30 分钟 ≥2 个不同坐席在线才 multi。``users``（用户表）不参与判定，
+    仅为兼容旧签名保留。异常 / 取不到 presence → single。
+    """
     try:
         section = (config or {}).get(CONFIG_SECTION) if isinstance(config, dict) else None
         if isinstance(section, dict):
             raw = str(section.get(SEAT_MODE_KEY) or "").strip().lower()
             if raw in (SEAT_MULTI, SEAT_SINGLE):
                 return raw
-        if users is None:
-            return SEAT_MULTI
-        return SEAT_SINGLE if count_seat_accounts(users) < 2 else SEAT_MULTI
+        if presence is None:
+            return SEAT_SINGLE
+        return SEAT_MULTI if count_recent_agents(presence, now=now) >= 2 else SEAT_SINGLE
     except Exception:
-        return SEAT_MULTI
+        return SEAT_SINGLE
 
 
-def is_multi_seat(config: Any = None, users: Any = None) -> bool:
-    return resolve_seat_mode(config, users) != SEAT_SINGLE
+def is_multi_seat(config: Any = None, users: Any = None, presence: Any = None, *,
+                  now: Optional[float] = None) -> bool:
+    return resolve_seat_mode(config, users, presence, now=now) != SEAT_SINGLE
+
+
+def seat_mode_verdict(config: Any = None, presence: Any = None, *,
+                      now: Optional[float] = None) -> Dict[str, Any]:
+    """设置页 / 诊断用的带来源判定：``{mode, source, agents_recent, window_min}``。
+
+    ``source`` ∈ ``explicit``（显式配置）/ ``presence``（近 30 分钟 ≥2 人在线）/
+    ``default``（无数据或不足 2 人 → single）。只读、绝不抛。
+    """
+    out: Dict[str, Any] = {"mode": SEAT_SINGLE, "source": "default", "agents_recent": 0,
+                           "window_min": int(SEAT_PRESENCE_WINDOW_SEC // 60)}
+    try:
+        section = (config or {}).get(CONFIG_SECTION) if isinstance(config, dict) else None
+        raw = ""
+        if isinstance(section, dict):
+            raw = str(section.get(SEAT_MODE_KEY) or "").strip().lower()
+        n = count_recent_agents(presence, now=now) if presence is not None else 0
+        out["agents_recent"] = int(n)
+        if raw in (SEAT_MULTI, SEAT_SINGLE):
+            out["mode"] = raw
+            out["source"] = "explicit"
+        elif n >= 2:
+            out["mode"] = SEAT_MULTI
+            out["source"] = "presence"
+    except Exception:
+        pass
+    return out

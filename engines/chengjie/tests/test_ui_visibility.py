@@ -363,6 +363,12 @@ def _users(*roles, enabled=True):
             for i, r in enumerate(roles)]
 
 
+def _presence(*agent_ids, ago_sec=60.0, now=None):
+    import time as _t
+    base = float(now) if now is not None else _t.time()
+    return [{"agent_id": a, "last_seen_at": base - ago_sec, "status": "online"} for a in agent_ids]
+
+
 def test_seat_mode_single_when_only_one_workspace_account():
     from src.web.ui_visibility import is_multi_seat, resolve_seat_mode
 
@@ -370,40 +376,49 @@ def test_seat_mode_single_when_only_one_workspace_account():
     assert is_multi_seat({}, _users("master")) is False
 
 
-def test_seat_mode_multi_with_two_workspace_accounts():
+def test_seat_mode_account_count_no_longer_decides():
+    """Q-30 A（#309 #310）：两个启用账号（客户机 admin + 坐席的常态）**不再**算多坐席——
+    旧判据把单人客户机一律判 multi，B13 的全部单坐席守卫被绕过。只有 presence 说话。"""
     from src.web.ui_visibility import is_multi_seat
 
-    assert is_multi_seat({}, _users("master", "agent")) is True
+    assert is_multi_seat({}, _users("master", "agent")) is False
+    assert is_multi_seat({}, _users("master", "agent"), _presence("u0")) is False
+    assert is_multi_seat({}, _users("master", "agent"), _presence("u0", "u1")) is True
 
 
 def test_seat_mode_viewer_and_disabled_are_not_seats():
-    """viewer 只读不接管、停用账号不是坐席——两者都不该把单人部署算成团队。"""
+    """count_seat_accounts 仍如实数坐席账号（viewer 只读不接管、停用账号不是坐席），
+    只是不再参与 seat_mode 判定。"""
     from src.web.ui_visibility import count_seat_accounts, is_multi_seat
 
     assert is_multi_seat({}, _users("master") + _users("viewer")) is False
     disabled = [{"username": "x", "role": "agent", "enabled": 0}]
     assert is_multi_seat({}, _users("master") + disabled) is False
     assert count_seat_accounts(_users("master", "admin", "supervisor", "agent")) == 4
+    assert count_seat_accounts(_users("master") + _users("viewer")) == 1
 
 
-def test_seat_mode_fails_open_to_multi():
-    """取不到用户表/坏数据一律 multi：藏错方向＝真团队退回「两人回同一个客户」。"""
+def test_seat_mode_fails_closed_to_single():
+    """Q-30 A：取不到 presence / 坏数据一律 single——误判 multi 的代价（单人端满屏认领 /
+    处理中 / 释放，#309）远大于真团队少看一枚按钮（显式开关一键可救）。"""
     from src.web.ui_visibility import is_multi_seat, resolve_seat_mode
 
-    assert is_multi_seat({}, None) is True          # 用户表不可用
-    assert is_multi_seat(None, None) is True
-    assert resolve_seat_mode({}, ["not-a-dict"]) == "single"  # 坏行跳过，仍如实判定
-    assert is_multi_seat({}, [{"role": "agent"}, {"role": "agent"}]) is True  # 缺 enabled 列按启用
+    assert is_multi_seat({}, None) is False          # 用户表不可用
+    assert is_multi_seat(None, None) is False
+    assert resolve_seat_mode({}, None, None) == "single"
+    assert resolve_seat_mode({}, None, ["not-a-dict"]) == "single"  # 坏行跳过，仍如实判定
+    assert is_multi_seat({}, [{"role": "agent"}, {"role": "agent"}]) is False  # 用户表不再决定
 
 
-def test_seat_mode_explicit_config_overrides_account_count():
+def test_seat_mode_explicit_config_overrides_presence():
     from src.web.ui_visibility import is_multi_seat
 
-    many = _users("master", "agent", "agent")
-    assert is_multi_seat({"ui_visibility": {"seat_mode": "single"}}, many) is False
-    assert is_multi_seat({"ui_visibility": {"seat_mode": "multi"}}, _users("master")) is True
-    # 无法识别的值＝按数据判（不因写错一个字符把协作功能藏了）
-    assert is_multi_seat({"ui_visibility": {"seat_mode": "solo"}}, many) is True
+    two_online = _presence("u0", "u1")
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "single"}}, None, two_online) is False
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "multi"}}, _users("master"), None) is True
+    # 无法识别的值＝按数据判（写错一个字符不改变缺省语义）
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "solo"}}, None, two_online) is True
+    assert is_multi_seat({"ui_visibility": {"seat_mode": "solo"}}, None, _presence("u0")) is False
 
 
 def test_seat_mode_roles_track_workspace_page_permission():

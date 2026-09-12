@@ -1010,21 +1010,32 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
     old_render = templates.TemplateResponse
 
-    # 坐席规模快照（实施49 P1-6/B13）：每次渲染都查一遍用户表没必要，60s TTL 足够
-    # ——加了第二个坐席账号后最迟下一分钟刷新页面即出现「认领」。
-    _seat_snap = {"ts": 0.0, "multi": True}
+    # 坐席规模快照（实施49 P1-6/B13 · Q-30 A #309 #310 改判据）：60s TTL——第二个坐席登录
+    # 后最迟下一分钟刷新页面即出现「认领」。判据＝显式 ui_visibility.seat_mode（设置页
+    # 「多坐席协作」开关）→ agent_coordinator presence 近 30 分钟 ≥2 个不同坐席在线 → 否则
+    # single。**不再看用户表行数**（客户机 admin + 坐席两个账号一律被判 multi，B13 的单坐席
+    # 守卫全被绕过＝「点开即认领 · 处理中 · 释放认领」的根因）。
+    _seat_snap = {"ts": 0.0, "multi": False}
 
     def _multi_seat_now() -> bool:
         import time as _t
         try:
-            from src.web.ui_visibility import is_multi_seat
+            from src.web.ui_visibility import SEAT_PRESENCE_WINDOW_SEC, is_multi_seat
             if _t.time() - _seat_snap["ts"] > 60:
+                _presence = None
+                try:
+                    _store = getattr(app.state, "inbox_store", None)
+                    if _store is not None and hasattr(_store, "list_agent_presence"):
+                        _presence = _store.list_agent_presence(
+                            active_within_sec=SEAT_PRESENCE_WINDOW_SEC)
+                except Exception:
+                    _presence = None
                 _seat_snap["multi"] = is_multi_seat(
-                    getattr(config_manager, "config", None), user_store.list_users())
+                    getattr(config_manager, "config", None), None, _presence)
                 _seat_snap["ts"] = _t.time()
             return bool(_seat_snap["multi"])
         except Exception:
-            return True   # 取不到一律显示：藏错方向会让真团队退回「两人回同一个客户」
+            return False   # 取不到数据一律 single：显式开关（多坐席协作）一键可救，误判 multi 才是 #309
 
     def _enrich_context(request: Request, context: dict) -> dict:
         """向模板上下文注入 i18n / 用户身份 / active 导航 / ui_mode 等公共字段"""

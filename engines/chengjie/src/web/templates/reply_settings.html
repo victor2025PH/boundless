@@ -496,6 +496,21 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       </tr></thead><tbody id="rps-al-tbody"></tbody></table>
     <p class="rps-hint" id="rps-al-empty" style="display:none">{{ (i18n or {}).get('rps_al_empty', "最近 24 小时没有拦截记录。") }}</p>
   </div>
+  <!-- Q-30 A（rps-ms-，#309 #310，2026-09-12）「多坐席协作」：ui_visibility.seat_mode 开关（开＝multi 显式多坐席；
+       关＝按 presence 自动判：近 30 分钟 ≥2 个坐席在线才 multi，否则 single＝收件箱不显示认领 / 处理中 / 我的筛选 / 认领轮询）。
+       旧后端（白名单未装载）整卡隐藏（feat:"seat" 同款特性探测，防假脏 / 保存被拒）；读数行来自 GET /api/reply-settings.seat_mode_effective。 -->
+  <div class="rps-card" id="rps-sec-seat" style="display:none">
+    <h3>{{ (i18n or {}).get('rps_ms_title', "👥 多坐席协作 · 认领 / 处理中 / 「我的」筛选") }}
+      <span class="rps-chip" id="rps-ms-eff" style="display:none;background:var(--input);color:var(--t2)"></span></h3>
+    <p class="rps-hint">{{ (i18n or {}).get('rps_ms_hint', "多人同守一批客户时才需要「认领」：点开会话＝我来跟，列表标「处理中」，别人不抢。单人使用这些全是噪音——默认关；近 30 分钟内有 2 个及以上坐席登录过工作台会自动按多坐席显示，不必手动开。") }}</p>
+    <div class="rps-row" style="border-top:none">
+      <span class="rps-row-label">{{ (i18n or {}).get('rps_ms_row', "多坐席协作（认领 / 处理中）") }}
+        <span class="rps-chip" data-hot-chip="ui_visibility.seat_mode"></span></span>
+      <label class="rps-switch"><input type="checkbox" id="rps-ms-toggle" onchange="rpsMsChanged()"><span class="rps-slider"></span></label>
+      <span class="rps-row-hint" id="rps-ms-row-hint">{{ (i18n or {}).get('rps_ms_row_hint', "开＝一直按多坐席显示（团队固定多人）。关＝自动判：单人时收起认领 / 处理中 / 「我的」，多人同时在线时自动出现。保存后收件箱最迟 1 分钟刷新即生效。") }}</span>
+    </div>
+    <p class="rps-hint" id="rps-ms-eff-line" style="display:none"></p>
+  </div>
 
   <div class="rps-grp" id="rps-grp-quota">
   <!-- 回复额度守卫（P0-guard，2026-08-12）：peer_bot_guard 的 配置 / 今日状态 /
@@ -1493,6 +1508,7 @@ var RPS_I18N = {
     "companion_send_gate.block_on_red": {{ (i18n or {}).get('rps_sg_red', "健康红灯拒发")|tojson }},
     "companion_send_gate.reserve_for_manual": {{ (i18n or {}).get('rps_sg_reserve', "人工预留额度（条）")|tojson }},
     "companion_send_gate.exempt_peers": {{ (i18n or {}).get('rps_sg_exempt', "限额白名单（每行一个）")|tojson }},
+    "ui_visibility.seat_mode": {{ (i18n or {}).get('rps_ms_row', "多坐席协作（认领 / 处理中）")|tojson }},
     "inbox.auto_draft.automation_mode": {{ (i18n or {}).get('rps_mode_title', "默认自动化档位")|tojson }},
     "inbox.auto_draft.bootstrap_automation_mode": {{ (i18n or {}).get('rps_bootstrap_label', "新会话自动沿用此档位")|tojson }},
     "inbox.auto_draft.min_text_len": {{ (i18n or {}).get('rps_minlen_label', "触发拟稿的最短消息长度")|tojson }},
@@ -1534,6 +1550,16 @@ var RPS_I18N = {
     "inbox.reply_style.bubbles.per_sentence": {{ (i18n or {}).get('rps_bub_per_sent', "逐句拆条")|tojson }},
     "inbox.reply_style.bubbles.explicit_newline_only": {{ (i18n or {}).get('rps_bub_nl_only', "仅显式换行才拆")|tojson }}
   }
+};
+/* Q-30 A（rps-ms-）「多坐席协作」卡词条：生效模式 + 来源（i18n 包 seat_reason_q30.py） */
+var RPS_MS_I18N = {
+  modeMulti: {{ (i18n or {}).get('rps_ms_mode_multi', "多坐席")|tojson }},
+  modeSingle: {{ (i18n or {}).get('rps_ms_mode_single', "单坐席")|tojson }},
+  srcExplicit: {{ (i18n or {}).get('rps_ms_src_explicit', "本页开关 / 配置显式指定")|tojson }},
+  srcPresence: {{ (i18n or {}).get('rps_ms_src_presence', "近 {m} 分钟有 {n} 个坐席登录过工作台，自动判为多坐席")|tojson }},
+  srcDefault: {{ (i18n or {}).get('rps_ms_src_default', "近 {m} 分钟只有 {n} 个坐席在线，按单坐席显示")|tojson }},
+  effLine: {{ (i18n or {}).get('rps_ms_eff_line', "收件箱当前按「{mode}」显示 · {src}")|tojson }},
+  pendingSave: {{ (i18n or {}).get('rps_ms_pending_save', "开关已改，保存后生效")|tojson }}
 };
 /* Q-18 #293（rps-al-）「今日拦截」卡词条：原因码 → 人话（i18n 包 abort_ledger.py） */
 var RPS_AL_I18N = {
@@ -1610,6 +1636,9 @@ var rpsGuardAdvEnabled = false; // 高级参数键是否已装载（P1；未装�
 var rpsGuardBusy = false;     // 豁免/撤销请求在途互斥（防连点双写）
 var rpsSgEnabled = false;     // 后端是否已装载发送额度闸门白名单（2026-08-29；旧进程卡可见但表单 pending）
 var rpsQuoteEnabled = false;  // 后端是否已装载引用回复开关白名单（O-4 #254；旧进程隐藏该行）
+var rpsSeatEnabled = false;   // Q-30 A（rps-ms-）：后端是否已装载 ui_visibility.seat_mode 白名单（旧进程隐藏整卡）
+var rpsMsBase = "";           // Q-30 A（rps-ms-）：seat_mode 基线原值（"" / single / multi），开关关着时按它回写
+var rpsMsEff = null;          // Q-30 A（rps-ms-）：GET /api/reply-settings.seat_mode_effective 读数
 
 /* ── 字段注册表（P0-R，2026-08-03）：控件绑定的单一事实源 ──
    收集 / 回填 / 预设应用 / 改动明细全部由此驱动。此前同一份「字段→控件」映射在
@@ -1988,6 +2017,52 @@ RPS_FIELD_DEFS.push(
   // O-4 引用回复开关（#254，1.0.78）：feat:"quote" 同款特性探测
   {path: "inbox.l2_autosend.quote_reply.enabled", kind: "check", el: "rps-quote", feat: "quote"}
 );
+// Q-30 A（rps-ms-，#309 #310）多坐席协作：开关 ↔ ui_visibility.seat_mode（开＝"multi"；关＝回基线
+// ——基线 "single"（YAML 手写）保持 "single"，否则 ""＝按 presence 自动判）。feat:"seat" 同款特性探测。
+RPS_FIELD_DEFS.push(
+  {path: "ui_visibility.seat_mode", kind: "virtual", feat: "seat",
+   vget: function(){ return rpsMsGet(); },
+   vset: function(v){ rpsMsSet(v); }}
+);
+function rpsMsGet(){
+  var cb = document.getElementById('rps-ms-toggle');
+  if (!cb) return null;
+  if (cb.checked) return "multi";
+  return rpsMsBase === "single" ? "single" : "";
+}
+function rpsMsSet(v){
+  rpsMsBase = String(v || "");
+  var cb = document.getElementById('rps-ms-toggle');
+  if (cb) cb.checked = (rpsMsBase === "multi");
+  rpsMsEffRender();
+}
+function rpsMsChanged(){ rpsMarkDirty(); rpsMsEffRender(); }
+window.rpsMsChanged = rpsMsChanged;
+function rpsMsEffRender(){
+  // 读数行：生效模式 + 来源（本页开关 / 近 30 分钟 N 人在线 / 缺省单坐席）；开关刚拨动未保存时提示「保存后生效」
+  var line = document.getElementById('rps-ms-eff-line'), chip = document.getElementById('rps-ms-eff');
+  if (!line || !chip) return;
+  var e = rpsMsEff;
+  if (!e || !e.mode){ line.style.display = 'none'; chip.style.display = 'none'; return; }
+  var cb = document.getElementById('rps-ms-toggle');
+  var dirty = !!(cb && rpsMsGet() !== rpsMsBase);
+  var modeTxt = (e.mode === 'multi') ? RPS_MS_I18N.modeMulti : RPS_MS_I18N.modeSingle;
+  var src = (e.source === 'explicit') ? RPS_MS_I18N.srcExplicit
+    : (e.source === 'presence' ? RPS_MS_I18N.srcPresence : RPS_MS_I18N.srcDefault);
+  src = src.replace('{n}', String(e.agents_recent || 0)).replace('{m}', String(e.window_min || 30));
+  chip.textContent = modeTxt; chip.style.display = '';
+  line.textContent = RPS_MS_I18N.effLine.replace('{mode}', modeTxt).replace('{src}', src)
+    + (dirty ? (' · ' + RPS_MS_I18N.pendingSave) : '');
+  line.style.display = '';
+}
+function rpsSeatDetect(d){
+  // 旧后端白名单缺 ui_visibility.seat_mode → 整卡隐藏、不参与收集/回填（防假脏 / 保存被拒）
+  rpsSeatEnabled = !!(((d || {}).meta || {})["ui_visibility.seat_mode"]);
+  var seatCard = document.getElementById('rps-sec-seat');
+  if (seatCard) seatCard.style.display = rpsSeatEnabled ? '' : 'none';
+  rpsMsEff = (d && d.seat_mode_effective && typeof d.seat_mode_effective === 'object') ? d.seat_mode_effective : null;
+  rpsMsEffRender();
+}
 RPS_DEFS_BY_PATH = {};
 RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
 
@@ -2003,6 +2078,7 @@ function rpsCollect(){
     else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }  // 错位期：仅显式换行键不参与
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }   // 旧后端：发送闸门字段不参与
     else if (def.feat === "quote"){ if (!rpsQuoteEnabled) return; }   // 旧后端：引用开关不参与
+    else if (def.feat === "seat"){ if (!rpsSeatEnabled) return; }     // Q-30 A（rps-ms-）：旧后端多坐席开关不参与
     else if (def.kind === "virtual" && !rpsPlatEnabled) return; // 旧后端：平台字段不参与
     out[def.path] = rpsFieldGet(def);
   });
@@ -2021,6 +2097,7 @@ function rpsFill(values){
     else if (def.feat === "bub_nl"){ if (!rpsBubNlEnabled) return; }
     else if (def.feat === "sendgate"){ if (!rpsSgEnabled) return; }
     else if (def.feat === "quote"){ if (!rpsQuoteEnabled) return; }
+    else if (def.feat === "seat"){ if (!rpsSeatEnabled) return; }     // Q-30 A（rps-ms-）
     else if (def.kind === "virtual" && !rpsPlatEnabled) return;
     rpsFieldSet(def, values[def.path]);
   });
@@ -4244,6 +4321,8 @@ async function rpsLoad(){
     var guardCard = document.getElementById('rps-sec-guard');
     if (guardCard) guardCard.style.display = rpsGuardEnabled ? '' : 'none';
     if (rpsGuardEnabled) rpsGuardRefresh();
+    // Q-30 A（rps-ms-）多坐席协作：同款特性探测（旧后端整卡隐藏）+ 生效读数行
+    try { rpsSeatDetect(d); } catch (_e){}
     // 账号发送额度闸门：卡始终可见；未装载白名单时只露 pending，表单等 feat
     rpsSgEnabled = !!((d.meta || {})["companion_send_gate.enabled"]);
     var sgCard = document.getElementById('rps-sec-sendgate');
@@ -4320,6 +4399,7 @@ async function rpsSave(){
       rpsRenderCaps(d.platform_caps);
       if (rpsGuardEnabled) rpsGuardRefresh();   // 开关/额度变了 → 状态表重算
       if (rpsSgEnabled) rpsSgRefresh();
+      try { rpsSeatDetect(d); } catch (_e){}      // Q-30 A（rps-ms-）：读数行随保存后的快照刷新
       var pending = d.needs_restart || [];
       if (pending.length){
         var items = pending.map(function(p){

@@ -205,6 +205,22 @@ def register_reply_settings_routes(
         except Exception:
             logger.debug("读链路节奏自检失败（忽略）", exc_info=True)
             snap["chain_coverage"] = None
+        # Q-30 A（#309 #310）「多坐席协作」卡的生效读数：{mode, source, agents_recent,
+        # window_min}——source=explicit（本页开关 / YAML）| presence（近 30 分钟 ≥2 人在线）|
+        # default（single）。与 admin.py _multi_seat_now 同一判定函数，只是不走 60s 快照。
+        # 异常 → None（前端整卡仍显示开关，只隐去读数行）。
+        try:
+            from src.web.ui_visibility import SEAT_PRESENCE_WINDOW_SEC, seat_mode_verdict
+            _seat_store = getattr(getattr(request.app, "state", None), "inbox_store", None)
+            _presence = None
+            if _seat_store is not None and hasattr(_seat_store, "list_agent_presence"):
+                _presence = _seat_store.list_agent_presence(
+                    active_within_sec=SEAT_PRESENCE_WINDOW_SEC)
+            snap["seat_mode_effective"] = seat_mode_verdict(
+                getattr(config_manager, "config", None) or {}, _presence)
+        except Exception:
+            logger.debug("读坐席规模判定失败（忽略）", exc_info=True)
+            snap["seat_mode_effective"] = None
         return snap
 
     @app.get("/reply-settings", response_class=HTMLResponse)

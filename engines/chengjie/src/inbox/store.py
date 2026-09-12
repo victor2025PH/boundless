@@ -1124,6 +1124,12 @@ _MIGRATIONS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_cta_links_conv ON cta_links(conversation_id, created_ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_cta_links_target ON cta_links(target_id, created_ts DESC)",
+    # ── Q-30 A（#309 #310，2026-09-12）一次性清空认领租约 ──────────────────────
+    # seat_mode 缺省从「≥2 账号即 multi」改为「presence 近 30 分钟 ≥2 人在线才 multi、否则
+    # single」——此前单人客户机被判成多坐席，前端「点开即认领」写了一堆租约行（表无 source
+    # 列分不出人写 / 误写，全清；租约本来 15 分钟过期，清空只是让升级当刻不再显示「处理中」）。
+    # SQL 内注释让内容哈希唯一（与 purge_expired_claims 的 DELETE 不撞键）；重跑无害。
+    "DELETE FROM conversation_claims /* q30_seat_mode_default_single */",
     # ── 接力记忆三期（2026-09-12）出站发送方 ─────────────────────────────────
     # messages.sent_by：'agent'=坐席在工作台手动发出（含图/语音）；''=未知/AI/自动链/手机端。
     # 此前气泡「人工」角标只能靠 agent_sends 打点与出站行 ±30s 时间就近匹配（边车镜像慢

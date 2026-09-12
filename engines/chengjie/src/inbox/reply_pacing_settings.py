@@ -47,6 +47,9 @@ CONTEXT_DEPTH_CHOICES = ("standard", "deep", "max", "ultra")
 # economy = usage_economy overlay（历史 4 / compact 人设 / 少抽）。钱包用尽时
 # 即使选 full 也会自动压（ai.economy_on_degrade 默认开）。
 USAGE_MODE_CHOICES = ("full", "economy")
+# 坐席规模（Q-30 A）：""＝按 presence 自动判 / single / multi。刻意本地定义（本模块零依赖
+# 纯函数），与 ui_visibility.SEAT_MULTI / SEAT_SINGLE 一致性由门禁钉住（test_seat_mode_q30）。
+SEAT_MODE_CHOICES = ("", "single", "multi")
 
 # 平台专家覆写（P1，2026-08-03）：键域=编排器 worker 的平台集合。
 # 刻意本地定义而非 import platform_capabilities（本模块保持零依赖纯函数）；
@@ -389,6 +392,15 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "companion_send_gate.exempt_peers": {
         "type": "str_list", "default": [], "hot": True,
         "item_maxlen": 64, "max_items": 500,
+    },
+    # ── 多坐席协作（Q-30 A #309 #310，2026-09-12）──────────────────────────────
+    # ui_visibility.seat_mode：""＝按 presence 自动判（近 30 分钟 ≥2 个坐席在线才 multi，
+    # 否则 single）/ "multi"＝显式多坐席（认领 / 处理中 / 我的筛选 / 8s 认领轮询全开）/
+    # "single"＝显式单坐席。设置页「多坐席协作」开关：开＝multi、关＝""（回到自动判）。
+    # 消费方 ui_visibility.resolve_seat_mode 每次渲染现读 config（admin.py 60s 快照）→ hot。
+    # 显式 multi 的行为一字不改（红线）。
+    "ui_visibility.seat_mode": {
+        "type": "enum", "choices": SEAT_MODE_CHOICES, "default": "", "hot": True,
     },
 }
 
