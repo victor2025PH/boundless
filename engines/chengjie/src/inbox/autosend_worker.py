@@ -412,6 +412,7 @@ class AutosendWorker:
         self.total_yield_deferred: int = 0         # defer 次数（同稿同窗只计一次）
         self.total_yield_resumed: int = 0          # 窗过 / 切全自动后放行次数
         self.total_yield_exhausted: int = 0        # 连续让位超上限按放弃处理的条数
+        self.total_dup_suppressed: int = 0         # Q-30 E：切档放行时同会话多余稿拦截数
         # Q-18 D（#293）：班表扣留进拦截台账的去重戳 conv → until_ts
         self._ledger_ws_stamp: Dict[str, float] = {}
 
@@ -1298,11 +1299,63 @@ class AutosendWorker:
                     int(ent.get("deferrals") or 0))
         return True
 
+    def _consume_sibling_pending(self, cid: str, kept: set, *, by: str = "") -> int:
+        """Q-30 E（#319）：放行让位载荷前，把同会话其余 pending / enriching 稿标
+        ``consumed``（``decided_by=yield_resumed_dup``）。不调用 ``cancel_inflight``——
+        那会把正要放行的 ``_yield_defer`` 队列项一并撤掉。返回作废条数。"""
+        dropped = 0
+        if not cid:
+            return 0
+        svc = self._svc
+        store = getattr(svc, "_store", None)
+        drafts: List[Dict[str, Any]] = []
+        for st in ("pending", "enriching"):
+            try:
+                try:
+                    drafts.extend(svc.list_drafts(
+                        status=st, limit=200, conversation_id=cid) or [])
+                except TypeError:
+                    drafts.extend(svc.list_drafts(status=st, limit=200) or [])
+            except Exception:
+                logger.debug("[AutosendWorker] 列举 %s 稿失败 conv=%s", st, cid,
+                             exc_info=True)
+        seen: set = set()
+        for d in drafts:
+            if not isinstance(d, dict):
+                d = {
+                    "draft_id": getattr(d, "draft_id", ""),
+                    "conversation_id": getattr(d, "conversation_id", ""),
+                }
+            did = str(d.get("draft_id") or "")
+            if not did or did in seen or did in kept:
+                continue
+            if str(d.get("conversation_id") or "") != cid:
+                continue
+            seen.add(did)
+            if store is None or not hasattr(store, "update_draft_status"):
+                continue
+            try:
+                try:
+                    store.update_draft_status(
+                        did, status="consumed",
+                        decided_by="yield_resumed_dup"[:40],
+                        expected_statuses=("pending", "enriching"))
+                except TypeError:
+                    store.update_draft_status(
+                        did, status="consumed",
+                        decided_by="yield_resumed_dup"[:40])
+                dropped += 1
+            except Exception:
+                logger.debug("[AutosendWorker] 切档互斥作废稿失败 draft_id=%s", did,
+                             exc_info=True)
+        return dropped
+
     def resume_agent_yield(self, conversation_id: str, *, by: str = "mode_select") -> Dict[str, Any]:
         """Q-18 C：切到 / 重选「全自动」= 明示接回——清该会话 ``_agent_sent_ts / _agent_typing_ts``、
         摘让位登记、把 presend 期改期的载荷改为立即到期并唤醒主循环。返回
         ``{had_yield, released, by}``（前端 toast 用）。日志 ``[autosend] resume by=mode_select``。
-        绝不抛。"""
+        Q-30 E：放行 ``_yield_defer`` 载荷前，同会话其余 pending / enriching 稿标 consumed
+        （``[autosend] dup_suppressed … by=yield_resume``），同会话在途只许一条。绝不抛。"""
         cid = str(conversation_id or "")
         if not cid:
             return {"had_yield": False, "released": 0, "by": by}
@@ -1312,6 +1365,25 @@ class AutosendWorker:
         self._agent_typing_ts.pop(cid, None)
         ent = self._yield_defer.pop(cid, None)
         self._yield_cancel_wake(cid)
+        kept: set = set()
+        if ent and ent.get("draft_id"):
+            kept.add(str(ent.get("draft_id") or ""))
+        kept.discard("")
+        for r in self._retry_queue:
+            _it = r.get("item") or {}
+            if _it.get("_yield_defer") and str(_it.get("conversation_id") or "") == cid:
+                did = str(_it.get("draft_id") or "")
+                if did:
+                    kept.add(did)
+        dropped = 0
+        if kept:
+            dropped = self._consume_sibling_pending(cid, kept, by=by)
+            if dropped:
+                self.total_dup_suppressed += dropped
+                logger.info("[autosend] dup_suppressed conv=%s kept=%s dropped=%d by=yield_resume",
+                            cid, ",".join(sorted(kept)) or "-", dropped)
+                self._ledger_abort(cid, "dup_suppressed", stage="resume",
+                                   draft_id=next(iter(sorted(kept))))
         released = 0
         for r in self._retry_queue:
             _it = r.get("item") or {}
@@ -1323,7 +1395,7 @@ class AutosendWorker:
             logger.info("[autosend] resume by=%s conv=%s released=%d draft=%s（清让位窗，立即放行）",
                         by, cid, released, (ent or {}).get("draft_id", "-"))
             self.notify_new_l2()
-        return {"had_yield": had, "released": released, "by": by}
+        return {"had_yield": had, "released": released, "by": by, "dropped": dropped}
 
     def _risk_hold_regen_once(self, d: Dict[str, Any], conv: str, reason: str) -> bool:
         """捞稿期取消了被风险持有 / 需人工闸住的 L2 稿 → 按 L1 重拟一次（同一次持有只重拟一次，
@@ -2027,13 +2099,17 @@ class AutosendWorker:
         """
         # B41 投递幂等钉：同 (会话,草稿) 同文只许成功出门一次。拿不到投递权＝
         # 另一条链在途 / 同稿已投过（复活行 revive 双触发）→ 静默跳过，不算错误。
-        # 重试项 (_attempt>0) 豁免——与 dup_guard/fresh_guard 同口径：重试项只在
-        # 上一轮**失败**（未登记指纹）后存在，重发同文本是 recoverable 既定语义。
+        # Q-30 E：真失败重试才豁免 claim / 近重复 / fresh_guard——``_attempt>0`` 且
+        # 不是让位改期（``_yield_defer``）且登记表无成功指纹。让位回队载荷照常过闸。
         _do_conv = str(item.get("conversation_id") or "")
         _do_did = str(item.get("draft_id") or "")
         _do_text = str(item.get("text", ""))
-        _do_retry = int(item.get("_attempt", 0)) > 0
-        if not _do_retry:
+        _true_retry = (
+            int(item.get("_attempt", 0)) > 0
+            and not item.get("_yield_defer")
+            and not self._deliver_once.has_delivered(_do_conv, _do_did, _do_text)
+        )
+        if not _true_retry:
             _claim_err = self._deliver_once.claim(_do_conv, _do_did, _do_text)
             if _claim_err:
                 self.total_skipped_already_sent += 1
@@ -2075,7 +2151,7 @@ class AutosendWorker:
             # humanize 延迟窗），让并行在途的下一条立即可见；失败即撤销。
             _conv_id_g = str(item.get("conversation_id") or "")
             if (self._dup_guard_cfg.get("enabled")
-                    and int(item.get("_attempt", 0)) == 0):
+                    and not _true_retry):
                 from src.inbox.outbound_dup_guard import (
                     outbound_registry as _dup_reg,
                     record_dup_check as _dup_rec,
@@ -2234,7 +2310,7 @@ class AutosendWorker:
             # 只跳过投递不回滚状态——与「resolve-先于-deliver」既定语义一致，
             # 计 total_superseded 不计 error（竞态非故障，不喂熔断器）。
             if (self._fresh_guard_cfg.get("enabled") and _conv_id_g
-                    and int(item.get("_attempt", 0)) == 0):
+                    and not _true_retry):
                 try:
                     from src.inbox.draft_fresh_guard import (
                         find_superseding_inbound as _fsi_ph,
@@ -3116,6 +3192,7 @@ class AutosendWorker:
             "total_yield_deferred": self.total_yield_deferred,
             "total_yield_resumed": self.total_yield_resumed,
             "total_yield_exhausted": self.total_yield_exhausted,
+            "total_dup_suppressed": self.total_dup_suppressed,
             "yield_now": len(self._yield_defer),
             # 驾驶权互斥锁（surface_fusion）：owner=native 让位取消的 L2 数
             "total_skipped_pilot": self.total_skipped_pilot,

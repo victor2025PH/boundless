@@ -1572,7 +1572,8 @@ var RPS_AL_I18N = {
     agent_sent: {{ (i18n or {}).get('rps_al_r_agent_sent', "坐席刚发过（让位）")|tojson }},
     agent_typing: {{ (i18n or {}).get('rps_al_r_agent_typing', "坐席在打字（让位）")|tojson }},
     mode_changed: {{ (i18n or {}).get('rps_al_r_mode_changed', "档位切换")|tojson }},
-    work_schedule: {{ (i18n or {}).get('rps_al_r_work_schedule', "班表休息")|tojson }}
+    work_schedule: {{ (i18n or {}).get('rps_al_r_work_schedule', "班表休息")|tojson }},
+    dup_suppressed: {{ (i18n or {}).get('rps_al_r_dup_suppressed', "同一句只发一次 · 已拦第二条")|tojson }}
   }
 };
 /* Q-17 #277②（rk-）「风控分级」卡词条：类别 / 级别 / 动作 查表（与 inbox.risk.* 同一 i18n 包 risk_grader.py） */

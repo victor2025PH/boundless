@@ -4,9 +4,10 @@
 锁定：
   - 守卫开启时，同会话 3 分钟内的同义改写第二条被静默跳过（不送、不计投递错误）；
   - 命中拦截走 total_dup_blocked，不喂熔断（_consecutive_errors 不涨）；
-  - 重试项 (_attempt>0) 免检——重发同文本是 recoverable 的既定语义；
+  - 真失败重试（上一轮未登记指纹）免检近重复——重发同文本是 recoverable；
+    成功出门后再塞 ``_attempt>0`` 不再豁免（Q-30 E：让位改期不冒充重试）；
   - 投递失败撤销在途登记（防登记幽灵把后续重试拦住）；
-  - 守卫关闭（默认）= 零行为变更；
+  - 近重复守卫关闭 = 近重复零行为；同会话同文仍由 ``deliver_once`` 文本键拦；
   - A 线（telegram_client）与 bootstrap 注入的静态接线不被回退。
 """
 
@@ -116,33 +117,56 @@ async def test_guard_disabled_is_noop():
     w = _worker(svc, sent, enabled=False)
     svc.queue = [_draft(conv, FIRST, "d1")]
     await w._tick()
-    svc.queue = [_draft(conv, FIRST, "d2")]      # 逐字重复也放行（守卫关）
+    other = "明天早上九点方便给你打电话吗？"
+    svc.queue = [_draft(conv, other, "d2")]      # 守卫关：不同句照发
     await w._tick()
-    assert len(sent) == 2 and w.total_dup_blocked == 0
-    # 关闭时也不产生在途登记
+    assert sent == [FIRST, other] and w.total_dup_blocked == 0
+    # 关闭时也不产生近重复在途登记
     assert outbound_registry.recent_rows(conv) == []
+    # Q-30 E：近重复关着，同会话同文仍由 deliver_once 文本键拦
+    svc.queue = [_draft(conv, FIRST, "d3")]
+    await w._tick()
+    assert sent == [FIRST, other]
+    assert w.total_skipped_already_sent == 1
 
 
 @pytest.mark.asyncio
 async def test_retry_items_skip_guard():
-    """重试项 _attempt>0 免检：重发同文本是 recoverable 的既定语义。"""
+    """真失败重试免检近重复；成功出门后再塞 _attempt>0 不再豁免（Q-30 E）。"""
     conv = _conv_id()
     svc = _FakeSvc()
     sent = []
-    w = _worker(svc, sent)
-    w._recoverable = True
+    calls = {"n": 0}
+
+    async def _send_cb(platform, account_id, chat_key, text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient boom")
+        sent.append(text)
+        return {"ok": True}
+
+    async def _sleep(d):
+        return None
+
+    w = AutosendWorker(
+        draft_service=svc, send_callback=_send_cb, sleep=_sleep,
+        dup_guard_cfg={"enabled": True, "window_sec": 180.0, "block_similar": True},
+        config={"recoverable": {"enabled": True, "max_attempts": 3,
+                                "backoff_base_sec": 0, "backoff_max_sec": 0}},
+    )
     svc.queue = [_draft(conv, FIRST, "d1")]
     await w._tick()
-    assert sent == [FIRST]
-    # 模拟一条到期重试：同文本、_attempt=1 → 不过守卫直接发
-    # （投递项与草稿行形状不同：_process_batch 产出的 to_deliver 用 "text" 键）
+    assert sent == [] and w.total_retry_scheduled == 1
+    await w._tick()
+    assert sent == [FIRST] and w.total_dup_blocked == 0
+    # 成功后再冒充重试：claim 有指纹，不再当真失败
     item = _draft(conv, FIRST, "d1")
     item["text"] = FIRST
     item["_attempt"] = 1
     w._retry_queue.append({"item": item, "next_ts": 0})
     await w._tick()
-    assert sent == [FIRST, FIRST]
-    assert w.total_dup_blocked == 0
+    assert sent == [FIRST]
+    assert w.total_skipped_already_sent == 1
 
 
 @pytest.mark.asyncio
