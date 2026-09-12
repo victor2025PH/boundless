@@ -3100,6 +3100,7 @@ async function pmaLoad() {
       if (gr.ok) gate = await gr.json();
     } catch (e) { /* 不渲染总闸行 */ }
     _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, counts: d.counts || _alCountsFrom(d.items || []), photosOn: photosOn, gate: gate };
+    if (_pmaPendingFilter) { _pmaFilter = _pmaPendingFilter; _pmaPendingFilter = ''; _pmaShown = 0; }   // Q-35 #306（pma-deeplink）
     _pmaRender(body, _pmaState.items, _pmaState.stats, photosOn, gate);
     pmaFaceLoad();
     const badge = document.getElementById('pe-album-badge');
@@ -3347,6 +3348,7 @@ var _pmaEdits = {};        // mid → 未保存字段 {triggers, caption, captio
 var _pmaShown = 0;
 var _PMA_PAGE = 60;
 var _pmaFilter = 'all';
+var _pmaPendingFilter = '';   // Q-35 #306（pma-deeplink）：?pma=1&filter=notrg 预置筛选，pmaLoad 首次渲染时消费一次
 var _pmaQuery = '';
 var _pmaPollTimer = null;
 var _pmaPollLeft = 0;
@@ -8581,6 +8583,16 @@ document.addEventListener('DOMContentLoaded', function() {
   // #250 (N-4 D): #profile=<id>&tab=voice — the inbox voice panel's "fix on the Voice tab" link
   var _hashM = window.location.hash.match(/^#profile=([^&]+)(?:&tab=(\w+))?$/);
   if (_hashM) { _pendingHashProfile = decodeURIComponent(_hashM[1]); _pendingHashTab = _hashM[2] || ''; }
+  // Q-35 #306（pma-deeplink）：/personas?pid=<id>&pma=1&filter=notrg —— 收件箱状态带「去相册补标签」落点：
+  // 打开该人设 → 相册页签 → 预置「缺触发词」筛选（filter 只认相册筛选枚举，其余按 all）。
+  try {
+    var _qs = new URLSearchParams(window.location.search || '');
+    if (_qs.get('pma') === '1' && _qs.get('pid')) {
+      _pendingHashProfile = String(_qs.get('pid') || ''); _pendingHashTab = 'album';
+      var _pf = String(_qs.get('filter') || '');
+      _pmaPendingFilter = (['notrg', 'nohit', 'off', 'untagged', 'photo', 'video'].indexOf(_pf) >= 0) ? _pf : '';
+    }
+  } catch (e) { /* 老浏览器无 URLSearchParams：忽略深链参数 */ }
   _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）
   _initDocImport();                  // C 线：文档导入功能开关探测（旧后端 404 = 保持隐藏）
   _initQuizStatus();                 // C2 线：一致性考题开关探测（false/404 = 整块隐藏）

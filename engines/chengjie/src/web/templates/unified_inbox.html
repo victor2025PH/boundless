@@ -823,6 +823,9 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
            旧 ay- / rk- / aif- / ms- chip 改为本带子渲染（#hdr-tags-row 已随 #206 撤除，它们此前是死渲染）。
            _csRender 控显；旧后端无 conv_state 字段 → 永久隐藏零噪音。「详情」= 既有 AI 体检面板。 -->
       <div id="cs-band" class="cs-band" hidden role="status" aria-live="polite"><span class="cs-dot" id="cs-dot" aria-hidden="true"></span><span class="cs-txt" id="cs-txt"></span><button type="button" class="cs-act" id="cs-act" onclick="_csAction(this)" hidden></button><button type="button" class="cs-more" id="cs-more" onclick="openAiDiag()" title="AI 回复链路体检：完整原因与每条出路" data-i18n-title="inbox.cs.more_t" data-i18n="inbox.cs.more">详情</button></div>
+      <!-- Q-35 #306（cs-note）：状态带下一行**旁注**——不改状态（AI 已改口照常回），只让坐席看见「相册没有匹配『自拍』的图」+ 深链去相册补标签。
+           源 = conv_state.notes[kind=album_no_match]（album_miss_marker，命中即清 / 24h 陈旧不显）；复用 .cs-band 样式零新 CSS。 -->
+      <div id="cs-note" class="cs-band cs-warn cs-s-note" hidden role="status" aria-live="polite"><span class="cs-dot" aria-hidden="true"></span><span class="cs-txt" id="cs-note-txt"></span><button type="button" class="cs-act" id="cs-note-act" onclick="_csNoteAction(this)" hidden></button></div>
       <!-- P1 2026-08-20：群/频道只读资料条（成员盘 + 档位提示）。不进 info-sidebar——
            右栏已被 sibling 认领且 405px 坐席常收起助手；顶栏永远可见。默认一行，
            点开才展开名单（密度不抬列表 header ratchet）。 -->
@@ -6800,7 +6803,7 @@ function _csRender(){
   if(!band||!txt) return;
   if(_csTimer){ clearInterval(_csTimer); _csTimer=null; }
   var st=_csState;
-  if(!st||!st.state||!selectedChat||_csCid!==String(selectedChat.conversation_id||'')){ band.hidden=true; band.className='cs-band'; txt.textContent=''; if(act){ act.hidden=true; act.textContent=''; } _csSyncLegacy(false); return; }
+  if(!st||!st.state||!selectedChat||_csCid!==String(selectedChat.conversation_id||'')){ band.hidden=true; band.className='cs-band'; txt.textContent=''; if(act){ act.hidden=true; act.textContent=''; } _csSyncLegacy(false); _csRenderNotes(null); return; }
   band.className='cs-band cs-'+String(st.tone||'muted')+' cs-s-'+String(st.state);
   band.dataset.state=String(st.state); band.dataset.action=String(st.action||'none'); band.dataset.willSend=st.will_send?'1':'0';
   txt.textContent=_csSentence(st); band.title=_csTitle(st);
@@ -6808,6 +6811,7 @@ function _csRender(){
   if(act){ act.hidden=!lbl; act.textContent=lbl; act.disabled=false; act.title=_csKeyOr('inbox.cs.act.'+(st.action==='retry'?(st.state==='ai_fail'?'retry_draft':'retry_send'):st.action)+'_t',''); }
   band.hidden=false;
   _csSyncLegacy(true);
+  _csRenderNotes(st);
   if(st.state==='deferred'&&st.until_ts){
     _csTimer=setInterval(function(){
       if(!_csState||_csState!==st){ clearInterval(_csTimer); _csTimer=null; return; }
@@ -6816,6 +6820,36 @@ function _csRender(){
     },1000);
   }
 }
+/* Q-35 #306（cs-note）：状态带旁注——conv_state.notes 里 kind=album_no_match 那条渲染成第二行琥珀带：
+   「相册没有匹配『自拍』的图 · AI 已改口 · 21:03」+「去相册补标签」（深链 /personas?pid=&pma=1&filter=notrg）。
+   不参与状态判定（AI 已按 album_miss_addendum 改口照常回）；旧后端无 notes 字段 → 永久隐藏零噪音。 */
+var _csNote=null;
+function _csNoteQ(n){
+  var q=String((n&&n.query)||'').replace(/\s+/g,' ').trim();
+  if(!q) return window.T('inbox.cs.note.album_q_generic');
+  var chars=Array.from(q); return chars.length>12?(chars.slice(0,12).join('')+'…'):q;
+}
+function _csRenderNotes(st){
+  var box=document.getElementById('cs-note'), txt=document.getElementById('cs-note-txt'), act=document.getElementById('cs-note-act');
+  if(!box||!txt) return;
+  var notes=(st&&Array.isArray(st.notes))?st.notes:[];
+  var n=null; for(var i=0;i<notes.length;i++){ if(notes[i]&&String(notes[i].kind||'')==='album_no_match'){ n=notes[i]; break; } }
+  _csNote=n;
+  if(!n){ box.hidden=true; txt.textContent=''; if(act){ act.hidden=true; act.textContent=''; } return; }
+  var cnt=Number(n.n||1), k=cnt>1?'inbox.cs.note.album_no_match_n':(String(n.text_key||'')||'inbox.cs.note.album_no_match');
+  txt.textContent=window.Tf(k,{q:_csNoteQ(n),n:String(cnt),hhmm:String(n.hhmm||'--:--')});
+  box.title=_csKeyOr('inbox.cs.note.album_no_match_t',''); box.dataset.kind='album_no_match'; box.dataset.pid=String(n.persona_id||'');
+  if(act){ act.hidden=false; act.textContent=window.T('inbox.cs.note.album_go'); act.title=_csKeyOr('inbox.cs.note.album_go_t',''); act.disabled=false; }
+  box.hidden=false;
+}
+function _csNoteAction(btn){
+  var n=_csNote; if(!n) return;
+  try{ _uiBeacon('cs_note_album_go'); }catch(_){}
+  var link=String(n.link||'')||('/personas?pid='+enc(String(n.persona_id||''))+'&pma=1&filter=notrg');
+  if(link.charAt(0)!=='/') return;   // 只认站内相对路径（服务端给的深链）
+  try{ window.open(link,'_blank','noopener'); }catch(_){ location.href=link; }
+}
+window._csNoteAction=_csNoteAction;
 /* 子渲染收口：带在场时旧 aif- chip 不再单独发声（它此前因 /thread 从不带 ai_last_fail 而永不出现），
    但 _aifCur 由带喂给 aifRetryDraft 复用。 */
 function _csSyncLegacy(on){

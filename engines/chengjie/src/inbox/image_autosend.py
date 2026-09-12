@@ -1130,6 +1130,24 @@ def pick_registered_media(
     if row is None and _ask:
         note_album_miss(str(conv_key or ""), str(peer_text or ""),
                         _scene_kind or _scene_cls or "")
+        # Q-35 #306（BPMEWX）：坐席侧可见——AI 侧已改口（上面那条 + album_miss_addendum），
+        # 但状态带一字不见，用户只会问「后台传了很多图为什么不发」。旁路记一条持久 note
+        # （conv_state 第七只读源 → 琥珀「相册没有匹配『自拍』的图 · AI 已改口 · 去相册补标签」）。
+        if conv_key:
+            try:
+                from src.inbox.album_miss_marker import mark as _album_miss_mark
+                _album_miss_mark(str(conv_key), query=str(peer_text or ""),
+                                 scene=_scene_kind or _scene_cls or "",
+                                 persona_id=str(persona_id or ""))
+            except Exception:
+                logger.debug("[album_match] album_miss_marker.mark 失败（忽略）", exc_info=True)
+    elif row is not None and conv_key:
+        # 命中即清：相册补了标签 / 换了问法命中 → 状态带那行自动消失（无 note 时零写）
+        try:
+            from src.inbox.album_miss_marker import clear as _album_miss_clear
+            _album_miss_clear(str(conv_key))
+        except Exception:
+            logger.debug("[album_match] album_miss_marker.clear 失败（忽略）", exc_info=True)
     return row
 
 
