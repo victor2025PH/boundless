@@ -54,6 +54,13 @@ ZH = {
     "inbox.cs.by_typing": "坐席刚打过字",
     "inbox.cs.retry_no_msg": "失败消息不在当前页，往上翻到红色气泡点「重试」",
     "inbox.cs.stale": "状态已过期，正在刷新…",
+    # ── Q-35 #306：旁注（不改状态）——相册无命中 ──────────────────────
+    "inbox.cs.note.album_no_match": "相册没有匹配『{q}』的图 · AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_n": "相册没有匹配『{q}』的图（今天 {n} 次）· AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_t": "客户要图，但这个人设的相册里没有触发词 / AI 建议词能对上这句话——AI 已按「暂时没有合适的照片」口径改口，没有空头承诺。去相册给图补触发词（或采纳 AI 建议词），下一次同样的话就能发出去；补完自动消失",
+    "inbox.cs.note.album_go": "去相册补标签",
+    "inbox.cs.note.album_go_t": "打开该人设相册的「缺触发词」筛选",
+    "inbox.cs.note.album_q_generic": "自拍",
     # ── 小智 / 帮助 ────────────────────────────────────────────
     "inbox.cs.help.why_no_reply": "AI 为什么没回？看会话头状态带：绿=会回；琥珀=稍后回（让位 / 作息外 / 语言未知）；红=不发（需人工 / 边车故障 / 起草失败）；灰=人工模式。按钮就是出路。",
 }
@@ -99,6 +106,12 @@ EN = {
     "inbox.cs.by_typing": "agent just typed",
     "inbox.cs.retry_no_msg": "The failed message isn't on this page; scroll up to the red bubble and click “Retry”",
     "inbox.cs.stale": "State expired, refreshing…",
+    "inbox.cs.note.album_no_match": "No album photo matches “{q}” · AI rephrased · {hhmm}",
+    "inbox.cs.note.album_no_match_n": "No album photo matches “{q}” ({n}× today) · AI rephrased · {hhmm}",
+    "inbox.cs.note.album_no_match_t": "The customer asked for a photo, but nothing in this persona's album has a trigger word / AI suggestion matching that request — the AI already rephrased (“no suitable photo right now”) instead of promising one. Add trigger words in the album (or adopt the AI suggestions) and the same request will send next time; this note clears on the next match",
+    "inbox.cs.note.album_go": "Tag album photos",
+    "inbox.cs.note.album_go_t": "Open this persona's album filtered to “missing triggers”",
+    "inbox.cs.note.album_q_generic": "selfie",
     "inbox.cs.help.why_no_reply": "Why didn't the AI reply? Read the status band in the chat header: green = will reply; amber = later (yielding / off hours / language unknown); red = won't send (needs human / sidecar down / draft failed); grey = manual mode. The button is the way out.",
 }
 
@@ -143,5 +156,11 @@ ZH_HANT = {
     "inbox.cs.by_typing": "坐席剛打過字",
     "inbox.cs.retry_no_msg": "失敗訊息不在當前頁，往上翻到紅色氣泡點「重試」",
     "inbox.cs.stale": "狀態已過期，正在刷新…",
+    "inbox.cs.note.album_no_match": "相簿沒有匹配『{q}』的圖 · AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_n": "相簿沒有匹配『{q}』的圖（今天 {n} 次）· AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_t": "客戶要圖，但這個人設的相簿裡沒有觸發詞 / AI 建議詞能對上這句話——AI 已按「暫時沒有合適的照片」口徑改口，沒有空頭承諾。去相簿給圖補觸發詞（或採納 AI 建議詞），下一次同樣的話就能發出去；補完自動消失",
+    "inbox.cs.note.album_go": "去相簿補標籤",
+    "inbox.cs.note.album_go_t": "開啟該人設相簿的「缺觸發詞」篩選",
+    "inbox.cs.note.album_q_generic": "自拍",
     "inbox.cs.help.why_no_reply": "AI 為什麼沒回？看會話頭狀態帶：綠=會回；琥珀=稍後回（讓位 / 作息外 / 語言未知）；紅=不發（需人工 / 邊車故障 / 起草失敗）；灰=人工模式。按鈕就是出路。",
 }

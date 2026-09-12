@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-12 08:51:29 · OpenCC s2twp + 術語釘 · 17593 鍵（源 zh 全量 17896）
+生成: 2026-09-13 01:56:44 · OpenCC s2twp + 術語釘 · 17699 鍵（源 zh 全量 18045）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -5047,24 +5047,54 @@ ZH_HANT = {
     'dv_mr_f_model': '模型',
     # ── dv_mr_f_name ──
     'dv_mr_f_name': '檔名',
+    # ── dv_mr_f_preset ──
+    'dv_mr_f_preset': '從預設新增',
     # ── dv_mr_js_dup ──
     'dv_mr_js_dup': '檔名重複：{name}',
+    # ── dv_mr_js_list_fail ──
+    'dv_mr_js_list_fail': '拉取失敗 {status} {msg}（檢查 Base URL / API Key）',
+    # ── dv_mr_js_list_ok ──
+    'dv_mr_js_list_ok': '拉到 {n} 個模型 id，在「模型」框裡下拉選擇',
+    # ── dv_mr_js_listing ──
+    'dv_mr_js_listing': '正在向端點拉取模型清單…',
     # ── dv_mr_js_loaded ──
     'dv_mr_js_loaded': '已裝載',
+    # ── dv_mr_js_need_base ──
+    'dv_mr_js_need_base': '先填 Base URL',
     # ── dv_mr_js_need_fields ──
     'dv_mr_js_need_fields': '檔名 / Base URL / 模型 都要填',
     # ── dv_mr_js_none ──
     'dv_mr_js_none': '還沒有模型檔：所有任務都用預設 ai.model。',
+    # ── dv_mr_js_preset_need_model ──
+    'dv_mr_js_preset_need_model': '已填好端點：填 API Key → 點「拉取模型列表」選一個現役模型 → 新增模型檔',
+    # ── dv_mr_js_preset_ready ──
+    'dv_mr_js_preset_ready': '已填好端點與模型，填 API Key 後點「新增模型檔」',
     # ── dv_mr_js_summary ──
     'dv_mr_js_summary': '已配置 {n} 個模型檔，{r} 條任務路由',
     # ── dv_mr_js_task_default ──
     'dv_mr_js_task_default': '預設模型（不路由）',
+    # ── dv_mr_list_btn ──
+    'dv_mr_list_btn': '拉取模型列表',
+    # ── dv_mr_list_t ──
+    'dv_mr_list_t': '從該端點 /v1/models 拉現役模型 id 作候選（只讀，不耗 token）',
     # ── dv_mr_loading ──
     'dv_mr_loading': '載入中…',
+    # ── dv_mr_preset_anthropic ──
+    'dv_mr_preset_anthropic': 'Claude · Anthropic（OpenAI 相容層）',
+    # ── dv_mr_preset_local ──
+    'dv_mr_preset_local': '本機 vLLM（173 chatx）',
+    # ── dv_mr_preset_pick ──
+    'dv_mr_preset_pick': '選擇廠商…（僅 OpenAI 相容協議）',
+    # ── dv_mr_preset_qwen ──
+    'dv_mr_preset_qwen': '通義千問 · DashScope',
+    # ── dv_mr_preset_siliconflow ──
+    'dv_mr_preset_siliconflow': '矽基流動 SiliconFlow',
     # ── dv_mr_routes_title ──
     'dv_mr_routes_title': '任務 → 模型檔',
     # ── dv_mr_sub ──
     'dv_mr_sub': '像 Cursor 那樣按任務挑模型/端點：規劃用強模型、問答用便宜的、電腦操控用 VLM。儲存即熱生效。',
+    # ── dv_mr_sub_conv ──
+    'dv_mr_sub_conv': '這裡的每一檔也會出現在聊天工作台 composer「模型」面板裡，坐席可按會話切換（ChatGPT / Gemini / Grok / DeepSeek…）。',
     # ── dv_mr_title ──
     'dv_mr_title': '多模型路由（按任務挑模型）',
     # ── dv_s001 ──
@@ -5947,8 +5977,11 @@ ZH_HANT = {
     'err.acct.tg_client_cooling': '該賬號連線剛出過錯，正在冷卻，請一兩分鐘後再試',
     'err.acct.tg_client_unavailable': '該賬號客戶端未就緒（離線或未登入），無法同步聊天記錄',
     'err.asr.format': '音訊格式無法識別，請換成 mp3 / m4a / ogg / wav 後重試',
+    'err.asr.message_not_found': '訊息不存在或不屬於該會話',
     'err.asr.no_speech': '未識別到語音內容',
+    'err.asr.not_voice': '該訊息不是客戶發來的語音訊息',
     'err.asr.rejected': '轉錄服務拒絕了本次請求（授權或配額問題），請聯絡客服',
+    'err.asr.text_too_long': '改正文字過長（上限 2000 字）',
     'err.asr.timeout': '轉錄超時（服務響應太慢），請稍後重試；音訊較長可先剪短',
     'err.asr.unavailable': '轉錄服務暫不可用，稍後重試',
     'err.asr.unknown': '轉錄失敗，請重試；連續失敗請聯絡客服',
@@ -9268,6 +9301,7 @@ ZH_HANT = {
     'inbox.filter.attn': '需人工',
     'inbox.filter.attn_t': '轉人工或超時告急的會話（與左側賬號欄紅色角標一致）；處理完自動隱藏。',
     'inbox.filter.buried_t': '歸檔裡有 {n} 個會話還有未讀訊息（客戶在等，預設檢視看不到）',
+    'inbox.filter.chip_clear': '清除該篩選（不刪標籤；按 Esc 同效）',
     'inbox.filter.claimed': '我的',
     'inbox.filter.more': '更多',
     'inbox.filter.panel_btn': '篩選',
@@ -9279,6 +9313,8 @@ ZH_HANT = {
     'inbox.filter.sec_scope': '範圍',
     'inbox.filter.sec_sort': '排序',
     'inbox.filter.sec_status': '狀態',
+    'inbox.filter.sec_sys_tags': '系統標籤',
+    'inbox.filter.sec_sys_tags_t': '系統自動打的狀態標籤（沉睡 / 風險 / 停聯 / 接管），處理完自動摘；點開只為篩選，不是待辦',
     'inbox.filter.sec_tags': '標籤',
     'inbox.filter.sla': '超時',
     'inbox.filter.snoozed': '擱置中',
@@ -9985,6 +10021,8 @@ ZH_HANT = {
     'inbox.handoff.bar_ack': '我知道了（摘標）',
     'inbox.handoff.bar_ack_fail': '摘標失敗，請稍後重試',
     'inbox.handoff.bar_ack_ok': '已摘掉「需人工」標',
+    'inbox.handoff.bar_ack_stop': '已處理 · 歸檔並移除',
+    'inbox.handoff.bar_ack_stop_t': '歸檔並從篩選移除 · 不再自動回覆（停聯事實保留在會話檔案，歷史可查）',
     'inbox.handoff.bar_ack_t': '只摘掉「需人工」標，不改會話其它狀態',
     'inbox.handoff.bar_generic': '需人工：此會話被標記需人工處理（未記錄原因）',
     'inbox.handoff.bar_go': '去回覆台處理',
@@ -10002,6 +10040,12 @@ ZH_HANT = {
     'inbox.handoff.r_send_error': 'AI 回覆傳送失敗',
     'inbox.handoff.src_manual': '人工',
     'inbox.handoff.src_system': '系統自動',
+    'inbox.handoff.stop_bar': '客戶要求停聯：會話已凍結，AI 不再自動回覆——處理完點右側「歸檔並移除」',
+    'inbox.handoff.stop_confirm_done': '已歸檔並從篩選移除；AI 不再自動回覆這位客戶',
+    'inbox.handoff.stop_confirm_fail': '處理失敗，請稍後重試',
+    'inbox.handoff.stop_confirm_msg': '歸檔並從篩選移除 · 不再自動回覆。\n停聯事實會從標籤移入會話檔案（歷史可查），AI 對這位客戶繼續保持沉默；客戶日後再來訊息會自動回到列表。',
+    'inbox.handoff.stop_confirm_ok': '歸檔並移除',
+    'inbox.handoff.stop_confirm_title': '確認已處理「客戶要求停聯」',
     'inbox.handoff.tip': '{when} {src}轉人工：{why}。人工回覆一條會自動清除；右鍵會話可直接摘標籤',
     'inbox.handoff.tip_generic': '此會話被標記需人工處理。人工回覆一條會自動清除；右鍵會話可直接摘標籤',
     'inbox.hdr.loggedout': '🚪 已退出·僅歷史',
@@ -10134,6 +10178,9 @@ ZH_HANT = {
     'inbox.masterauto.p2': '單個會話隨時可切回人審或手動，你的顯式設定永遠優先',
     'inbox.masterauto.p3': '之後可在「AI 值守」膠囊或自動回覆設定頁隨時調整',
     'inbox.masterauto.title': '新版支援一鍵全自動',
+    'inbox.md.btn': '模式',
+    'inbox.md.btn_t': '本會話按什麼規矩答：標準（人設規則 / 風控 / 稽核全開）或 無限制（本機私有模型直答 · 規則讓路）；再調上下文 / 力度 / 思考',
+    'inbox.md.hd': '模式 · 本會話',
     'inbox.media.ai_desc_less': '收起',
     'inbox.media.ai_desc_more': '展開全文',
     'inbox.media.ai_desc_t': 'AI 自動識別的內容摘要（供你快速瞭解對方發來的媒體）',
@@ -10141,6 +10188,7 @@ ZH_HANT = {
     'inbox.media.ai_video': 'AI 識影片',
     'inbox.media.ai_voice': 'AI 轉寫',
     'inbox.media.cancel': '取消傳送媒體',
+    'inbox.media.caption_ph': '配文（可選）· 會隨圖一起進 AI 記憶',
     'inbox.media.clear_failed_n': '清除 {n} 個失敗附件',
     'inbox.media.err_format': '格式不支援',
     'inbox.media.err_format_hint': '格式不支援 · 轉成 MP4 後重新選擇（點 ✕ 移除）',
@@ -10222,6 +10270,15 @@ ZH_HANT = {
     'inbox.mode.group_hint_auto': '本群已確認 AI 自動發言',
     'inbox.mode.group_hint_manual': '本群為手動回覆',
     'inbox.mode.group_hint_review': '本群預設人審，選全自動需確認',
+    'inbox.mode.handoff_condensing': '更早的部分正在後台壓成要點…',
+    'inbox.mode.handoff_drop_fail': '刪除失敗：{msg}',
+    'inbox.mode.handoff_drop_t': '不讓 AI 帶走這條（從接力記憶裡刪掉）',
+    'inbox.mode.handoff_dropped': '已從 AI 的接力記憶裡刪掉這條',
+    'inbox.mode.handoff_dropped_all': '接力記憶已清空：AI 不再帶著這段人工聊天接手',
+    'inbox.mode.handoff_ok': 'AI 已接過接管期間的 {n} 條訊息',
+    'inbox.mode.handoff_ok_media': '（含 {m} 條圖片/語音）',
+    'inbox.mode.handoff_title': 'AI 接力記憶（接下來約 10 輪會帶著這些內容接著聊）',
+    'inbox.mode.handoff_view': '看 AI 記住了什麼',
     'inbox.mode.manual': '🙋 手動',
     'inbox.mode.multi': '🔀 AI多選·我挑',
     'inbox.mode.multi_choice': 'AI多選·我挑',
@@ -10249,21 +10306,23 @@ ZH_HANT = {
     'inbox.mode.sticky_title': '切到手動後，AI 什麼時候接回？',
     'inbox.mp.back': '返回',
     'inbox.mp.back_std': '改回標準',
-    'inbox.mp.btn': '模型 ▾',
-    'inbox.mp.btn_t': '本會話用哪個模型回覆：標準（雲端主鏈 · 規則全開）/ 無限制（區域網私有模型直答 · 規則讓路）；再調上下文 / 力度 / 思考',
+    'inbox.mp.btn': '模型',
+    'inbox.mp.btn_t': '本會話用哪個模型回覆：例項主鏈 / 已配置的各廠商模型（ChatGPT · Gemini · Grok · DeepSeek…）/ 本機私有模型；只換端點，規則照常',
     'inbox.mp.checking': '探測中…',
-    'inbox.mp.confirm_safety': '連五條安全剎車（急停 / 封號訊號 / 賬號預熱上限 / 停聯凍結 / 危機兜底）也一起關閉？僅本會話，操作會記審計。',
-    'inbox.mp.confirm_unr': '切到「無限制」：本會話改走區域網私有模型 {model}（不經雲端）。本會話的人設規則、出站改寫、風控分級、稽核攔截全部關閉。確定？',
+    'inbox.mp.confirm_safety': '連五條賬號與人身保險絲（急停 / 封號訊號、賬號冷啟動上限、停聯凍結、危機自傷兜底、授權額度）也一起關閉。僅本會話，操作會記審計。',
+    'inbox.mp.confirm_unr': '本會話改走區域網私有模型 {model}（不經雲端）。本會話的人設規則、出站改寫、風控分級、稽核攔截全部關閉。',
     'inbox.mp.depth_deep': '深度',
-    'inbox.mp.depth_deep_sub': '≈32K tokens · 近 40 條 · 記憶 16 條',
+    'inbox.mp.depth_deep_sub': '約 32k',
+    'inbox.mp.depth_fill_sub': '約 {k}k · 本機上限',
     'inbox.mp.depth_follow': '跟隨全域性',
     'inbox.mp.depth_follow_sub': '回覆設定頁「上下文與記憶深度」當前檔',
+    'inbox.mp.depth_follow_sub_lan': '仍受本機 {k}k 上限',
     'inbox.mp.depth_max': '最大',
-    'inbox.mp.depth_max_sub': '≈128K tokens · 近 160 條（LAN 端點按 64K 封頂）',
+    'inbox.mp.depth_max_sub': '約 128k',
     'inbox.mp.depth_standard': '標準',
-    'inbox.mp.depth_standard_sub': '≈12K tokens · 近 20 輪',
+    'inbox.mp.depth_standard_sub': '約 12k',
     'inbox.mp.depth_ultra': '超大',
-    'inbox.mp.depth_ultra_sub': '≈900K tokens · 近 1000 條 · 成本約 75×',
+    'inbox.mp.depth_ultra_sub': '約 900k',
     'inbox.mp.disabled': '「無限制模型」已被運營關閉',
     'inbox.mp.effort_follow': '跟隨策略',
     'inbox.mp.effort_follow_sub': '按回復策略給的長度 / 溫度',
@@ -10274,18 +10333,35 @@ ZH_HANT = {
     'inbox.mp.effort_medium': '中',
     'inbox.mp.effort_medium_sub': '1024 tokens · 溫度 0.7',
     'inbox.mp.effort_note': '力度 ≈ 答覆長度與溫度，不是推理力度',
+    'inbox.mp.empty': '還沒有可切換的廠商模型——在開發者頁「多模型路由」新增 ChatGPT / Gemini / Grok / DeepSeek 等端點後，這裡就能按會話切換。',
+    'inbox.mp.empty_agent': '還沒有可切換的廠商模型，請聯絡管理員在開發者頁新增。',
+    'inbox.mp.err_auth': '金鑰無效',
+    'inbox.mp.err_model': '模型名不存在',
+    'inbox.mp.err_quota': '限流 / 額度',
     'inbox.mp.fail': '儲存失敗：{msg}',
+    'inbox.mp.flow_cloud': '本會話內容發往雲端 {host}',
+    'inbox.mp.flow_private': '資料不出內網（{host}）',
+    'inbox.mp.h_not_listed': '線上 · 列表裡沒有這個模型名',
+    'inbox.mp.h_online': '線上',
     'inbox.mp.hd': '模型 · 本會話',
+    'inbox.mp.last_reply': '上一條回覆：{model} @ {host} · {sec}s',
+    'inbox.mp.left_unr': '已改回標準模式（雲廠商模型不跑無限制）',
     'inbox.mp.locked': '「無限制模型」需旗艦版授權',
+    'inbox.mp.manage': '管理模型與金鑰 →',
+    'inbox.mp.manage_t': '開發者頁 · 多模型路由：新增 / 修改各廠商端點與金鑰',
+    'inbox.mp.model_follow': '跟隨主鏈',
+    'inbox.mp.model_gone': '該模型檔已不存在，已重新整理目錄，請重選',
+    'inbox.mp.model_missing': '原先選的模型檔「{name}」已被刪除，本會話現按主鏈回覆；請重新選擇。',
     'inbox.mp.no_conv': '先選一個會話',
     'inbox.mp.off': '關',
     'inbox.mp.offline': '離線（{err}）',
     'inbox.mp.offline_hint': '端點離線時無限制會話不會回落雲端：AI 回覆報錯、自動草稿轉人審',
+    'inbox.mp.offline_short': '離線',
     'inbox.mp.on': '開',
     'inbox.mp.online': '線上 · {ms} ms',
     'inbox.mp.pick_depth': '選擇上下文',
     'inbox.mp.pick_effort': '選擇力度',
-    'inbox.mp.pick_model': '選擇模型',
+    'inbox.mp.pick_model': '選擇模式',
     'inbox.mp.prof_standard': '標準',
     'inbox.mp.prof_standard_sub': '雲端主鏈 + 備用池；人設規則 / 風控分級 / 稽核攔截照常',
     'inbox.mp.prof_unrestricted': '無限制（本地直答）',
@@ -10294,22 +10370,36 @@ ZH_HANT = {
     'inbox.mp.retry': '重試',
     'inbox.mp.row_depth': '上下文',
     'inbox.mp.row_effort': '力度',
-    'inbox.mp.row_model': '模型',
+    'inbox.mp.row_model': '模式',
     'inbox.mp.row_safety': '安全剎車',
     'inbox.mp.row_thinking': '思考',
     'inbox.mp.safety_keep': '保留',
     'inbox.mp.safety_off': '全關',
     'inbox.mp.safety_t': '五條賬號與人身保險絲：急停 / 封號訊號、賬號冷啟動上限、停聯凍結、危機自傷兜底、授權額度。保留＝無限制也不碰它們；全關＝連它們也不攔（僅本會話，有審計）',
     'inbox.mp.saved': '已切換：{label}',
+    'inbox.mp.saved_model': '已切換模型：{label}',
     'inbox.mp.scope': '本會話',
     'inbox.mp.status_std': '標準',
-    'inbox.mp.status_t': '點選設定本會話的模型 / 上下文 / 力度 / 思考',
     'inbox.mp.status_unr': '無限制',
-    'inbox.mp.think_t': '思維鏈（vLLM enable_thinking）：開＝答得更周全但每輪多幾秒；僅對無限制檔生效',
+    'inbox.mp.tag_locked': '升級解鎖',
+    'inbox.mp.tag_main': '主鏈',
+    'inbox.mp.tag_private': '內網',
+    'inbox.mp.tag_used': '本會話 {n} 條',
+    'inbox.mp.think_follow': '跟隨全域性',
+    'inbox.mp.think_follow_hint': '跟隨主鏈時思考由全域性 ai.reasoning 決定；點名一個模型或切到無限制後可按會話開關',
+    'inbox.mp.think_t': '思維鏈：開＝答得更周全但每輪多幾秒。對無限制檔和點名的廠商模型檔生效；跟隨主鏈時由全域性 ai.reasoning 決定',
+    'inbox.mp.unr_notice': '本會話正走「無限制」模式的本機私有模型；選下面任一模型會改回標準模式（規則全開）。',
+    'inbox.mp.vendor_local': '本機私有',
+    'inbox.mp.vendor_locked': '按會話切換廠商模型需要專業版及以上套餐；主鏈仍可用',
     'inbox.msearch.fail': '搜尋失敗，請重試',
     'inbox.msearch.found': '找到 {n} 條含 "{q}" 的訊息',
     'inbox.msearch.none': '未找到包含 "{q}" 的訊息',
     'inbox.msearch.searching': '搜尋訊息中…',
+    'inbox.msg.agent_sent': '人工',
+    'inbox.msg.agent_sent_by_t': '{name} 手動發出（切回全自動後 AI 會把它當自己說過的話）',
+    'inbox.msg.agent_sent_t': '這條是坐席手動發出的（切回全自動後 AI 會把它當自己說過的話）',
+    'inbox.msg.ai_sent': 'AI',
+    'inbox.msg.ai_sent_t': 'AI 自動發出（自動回覆 / 主動觸達 / 自動語音）',
     'inbox.msg.approx_ts_t': '補收訊息：顯示時間為補收入庫時刻（斷線期間的訊息），非對方實際傳送時間',
     'inbox.msg.ask_img': '問圖',
     'inbox.msg.ask_img_t': '對這張圖提問，AI 按畫面作答（識別不了會直說）',
@@ -10800,10 +10890,17 @@ ZH_HANT = {
     'inbox.takeover.banner': '🙋 AI 已讓位：{time} 坐席手動傳送後，本會話轉人工（後續訊息 AI 不再自動回）',
     'inbox.takeover.banner_rearm': '，{min} 分鐘無人工操作將自動接回',
     'inbox.takeover.fail': '接管失敗：{reason}',
+    'inbox.takeover.hf_dismiss_t': '隱藏這條提示（僅本次開啟）',
+    'inbox.takeover.hf_how_manual': '手動交回',
+    'inbox.takeover.hf_how_rearm': '超時自動接回',
+    'inbox.takeover.hf_pill': 'AI 已接力（{time} {how}），記著人工階段 {n} 條',
+    'inbox.takeover.hf_pill_t': '接下來約 {left} 輪迴復 AI 都會帶著這段人工聊天的記憶接著聊；點「看記憶」檢視它記住了什麼。',
+    'inbox.takeover.hf_view': '看記憶',
     'inbox.takeover.net_fail': '網路錯誤，接管失敗',
     'inbox.takeover.pill': '🙋 AI 已讓位（{time} 起轉人工）',
     'inbox.takeover.pill_cause': '，因本會話有人工傳送',
     'inbox.takeover.pill_eta': '，約 {min} 分鐘後自動接回',
+    'inbox.takeover.pill_handoff_t': '接管期間你發的話/圖（含配文與識圖結果）和對方的訊息，在交回 AI 時會一併交接：AI 會接著聊，不會重新打招呼或否認你說過的話。給圖配一句話，AI 記得更準。',
     'inbox.takeover.resume_btn': '讓 AI 接回',
     'inbox.takeover.resumed': 'AI 已接回本會話（{mode}）',
     'inbox.takeover.retry': '請重試',
@@ -12928,6 +13025,8 @@ ZH_HANT = {
     'mb_feat_kb': '知識庫',
     # ── mb_feat_monetization ──
     'mb_feat_monetization': '變現營收',
+    # ── mb_feat_multi_vendor_model ──
+    'mb_feat_multi_vendor_model': '多廠商模型按會話切換',
     # ── mb_feat_personas ──
     'mb_feat_personas': '人設工作室',
     # ── mb_feat_rpa ──
@@ -17177,16 +17276,24 @@ ZH_HANT = {
     'ov2_js_ash_werr': '台賬落盤失敗（資料在丟，查 logs/autosend_shadow 目錄可寫性）',
     # ── ov2_js_asr_attempts ──
     'ov2_js_asr_attempts': '轉錄請求數',
+    # ── ov2_js_asr_cache ──
+    'ov2_js_asr_cache': '快取命中（免重轉）',
     # ── ov2_js_asr_empty ──
     'ov2_js_asr_empty': '暫無語音轉錄資料（收到語音訊息後累計）',
     # ── ov2_js_asr_failed ──
     'ov2_js_asr_failed': '全鏈失敗',
     # ── ov2_js_asr_fallback ──
     'ov2_js_asr_fallback': '回落轉錄',
+    # ── ov2_js_asr_gate ──
+    'ov2_js_asr_gate': '無人聲/回聲丟棄',
     # ── ov2_js_asr_hallu ──
     'ov2_js_asr_hallu': '幻覺丟棄',
     # ── ov2_js_asr_hint ──
     'ov2_js_asr_hint': '回落率越高說明越多轉錄走了弱一檔兜底（主 ASR 掉線會拉高它，轉錄錯字隨之增多）。',
+    # ── ov2_js_asr_langretry ──
+    'ov2_js_asr_langretry': '先驗重轉（採用）',
+    # ── ov2_js_asr_lowconf ──
+    'ov2_js_asr_lowconf': '低置信轉寫',
     # ── ov2_js_asr_primary ──
     'ov2_js_asr_primary': '主 ASR 直轉',
     # ── ov2_js_asr_prov ──
@@ -20485,6 +20592,28 @@ ZH_HANT = {
     'pma_faceref_title': '鎖臉基準照',
     # ── pma_faceref_upload ──
     'pma_faceref_upload': '上傳基準照',
+    # ── pma_fr_auth ──
+    'pma_fr_auth': '登入已過期，請重新登入',
+    # ── pma_fr_bad_content ──
+    'pma_fr_bad_content': '檔案內容不是有效圖片 / 影片（可能已損壞）',
+    # ── pma_fr_empty ──
+    'pma_fr_empty': '空檔案',
+    # ── pma_fr_ext ──
+    'pma_fr_ext': '型別不支援（{ext}）——手機 HEIC 請先轉 JPG',
+    # ── pma_fr_forbidden ──
+    'pma_fr_forbidden': '只讀賬號不能上傳',
+    # ── pma_fr_network ──
+    'pma_fr_network': '網路中斷（可重試）',
+    # ── pma_fr_server ──
+    'pma_fr_server': '服務端錯誤（HTTP {status}），可重試；連續失敗請截圖報障',
+    # ── pma_fr_timeout ──
+    'pma_fr_timeout': '超時（網路慢或檔案太大，可重試）',
+    # ── pma_fr_too_large ──
+    'pma_fr_too_large': '太大（上限 {mb}MB）',
+    # ── pma_fr_too_long ──
+    'pma_fr_too_long': '影片太長（上限 {sec} 秒）',
+    # ── pma_fr_unknown ──
+    'pma_fr_unknown': '未知原因',
     # ── pma_gate_enable ──
     'pma_gate_enable': '一鍵開啟全域性總閘',
     # ── pma_gate_fail ──
@@ -20627,8 +20756,24 @@ ZH_HANT = {
     'pma_up_done_ai': '已上傳 {ok} 張，AI 識別已排隊 {n} 張（進度見下方）',
     # ── pma_up_done_novision ──
     'pma_up_done_novision': '已上傳 {ok} 張；識圖服務暫不可用（{why}），沒有自動識別——服務恢復後點「AI 補標」',
+    # ── pma_up_fail_hint ──
+    'pma_up_fail_hint': '太大 / 型別不支援的請壓縮或轉 JPG 後再傳；服務端錯誤 / 超時可直接點重試',
+    # ── pma_up_fail_toggle ──
+    'pma_up_fail_toggle': '展開失敗明細',
+    # ── pma_up_fail_toggle_hide ──
+    'pma_up_fail_toggle_hide': '收起',
     # ── pma_up_first_face_toast ──
     'pma_up_first_face_toast': '第一批照片已上傳。建議先設定「錨臉基準照」，AI 識別會據此核對每張是否本人。',
+    # ── pma_up_retry_btn ──
+    'pma_up_retry_btn': '重試失敗項（{n}）',
+    # ── pma_up_retry_gone ──
+    'pma_up_retry_gone': '失敗項已不在本頁（切過人設或重新整理過），請重新選擇檔案上傳',
+    # ── pma_up_sum ──
+    'pma_up_sum': '成功 {ok} 張',
+    # ── pma_up_sum_existed ──
+    'pma_up_sum_existed': '已存在 {n} 張（相簿裡已有同圖，不重複入庫）',
+    # ── pma_up_sum_fail ──
+    'pma_up_sum_fail': '失敗 {n} 張',
     # ── pma_upload_fail ──
     'pma_upload_fail': '失敗',
     # ── pma_upload_label ──
@@ -23739,15 +23884,15 @@ ZH_HANT = {
     # ── rps_ctx_depth ──
     'rps_ctx_depth': '上下文與記憶深度',
     # ── rps_ctx_depth_deep ──
-    'rps_ctx_depth_deep': '深度（約 32k · 最近 40 條 · 16 條記憶）',
+    'rps_ctx_depth_deep': '深度（約 32k）',
     # ── rps_ctx_depth_hint ──
-    'rps_ctx_depth_hint': '越深越記得住、也越貴：每輪把更多歷史與記憶餵給模型（人設/規則部分穩定不變，可吃快取價）。峰時單輪上限約：標準 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，無需重啟。',
+    'rps_ctx_depth_hint': '雲端主鏈可用四檔。本機「無限制」會話吃不下的會在傳送時壓到本機視窗（現役約 24k）。越深越記得住，也越貴。改完即生效，無需重啟。',
     # ── rps_ctx_depth_max ──
-    'rps_ctx_depth_max': '最大（約 128k · 最近 160 條 · 30 條記憶）',
+    'rps_ctx_depth_max': '最大（約 128k）',
     # ── rps_ctx_depth_standard ──
-    'rps_ctx_depth_standard': '標準（約 12k · 最近 10 條 · 8 條記憶）',
+    'rps_ctx_depth_standard': '標準（約 12k）',
     # ── rps_ctx_depth_ultra ──
-    'rps_ctx_depth_ultra': '超大（約 900k · 與 DeepSeek 1M 視窗平齊）',
+    'rps_ctx_depth_ultra': '超大（約 900k）',
     # ── rps_diff_btn ──
     'rps_diff_btn': '改動明細',
     # ── rps_diff_empty ──
