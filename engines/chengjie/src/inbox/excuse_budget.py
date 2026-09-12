@@ -182,25 +182,39 @@ def today_itinerary(persona: Any, config: Any, *, local_now: Any = None) -> List
 
 def build_time_schedule_addendum(persona: Any, conversation_id: str, config: Any, *, lang: str = "zh",
                                  now: Optional[float] = None, inbox_store: Any = None) -> str:
-    """生成前一段（persona_reply ④ 接线点唯一调用）。关 / 无素材 → ""。绝不抛。"""
+    """生成前一段（persona_reply ④ 接线点唯一调用）。关 / 无素材 → ""。绝不抛。
+
+    两块独立拼接（各自开关、各自 try）：
+    - 人设当地时间 + 行程（Q-8 F，``companion.time_schedule``）；
+    - **对方**当地时间（Q-29 #305，``companion.peer_time``）——客户城市 / 时间自述 → 「不要问几点 / 白天还是晚上」，
+      未知则「顺口问一次，24h 内不再问」。经此函数接线，``persona_reply.py`` 零改动。
+    """
+    parts: List[str] = []
     try:
-        if not is_enabled(config):
-            return ""
-        import datetime as _dt
-        now_dt = _dt.datetime.fromtimestamp(float(now)) if now is not None else None
-        label, local_now, bucket = local_time_label(persona, lang, now=now_dt)
-        itin = today_itinerary(persona, config, local_now=local_now)
-        used = count_today(inbox_store, str(conversation_id or ""), now) if conversation_id else 0
-        from src.inbox.prompt_addenda import time_schedule_addendum
-        block = time_schedule_addendum(label, itin, lang=lang, current_bucket=bucket,
-                                       work_excuse_used=used, work_excuse_cap=work_excuse_cap(config))
-        if block:
-            logger.debug("[excuse] addendum conv=%s local=%r itinerary=%d used=%d", conversation_id or "-",
-                         label, len(itin), used)
-        return block
+        if is_enabled(config):
+            import datetime as _dt
+            now_dt = _dt.datetime.fromtimestamp(float(now)) if now is not None else None
+            label, local_now, bucket = local_time_label(persona, lang, now=now_dt)
+            itin = today_itinerary(persona, config, local_now=local_now)
+            used = count_today(inbox_store, str(conversation_id or ""), now) if conversation_id else 0
+            from src.inbox.prompt_addenda import time_schedule_addendum
+            block = time_schedule_addendum(label, itin, lang=lang, current_bucket=bucket,
+                                           work_excuse_used=used, work_excuse_cap=work_excuse_cap(config))
+            if block:
+                logger.debug("[excuse] addendum conv=%s local=%r itinerary=%d used=%d", conversation_id or "-",
+                             label, len(itin), used)
+                parts.append(block)
     except Exception:
         logger.debug("[excuse] build_time_schedule_addendum failed", exc_info=True)
-        return ""
+    try:
+        from src.companion.peer_time import build_peer_time_addendum
+        peer = build_peer_time_addendum(str(conversation_id or ""), config, lang=lang, now=now,
+                                        inbox_store=inbox_store)
+        if peer:
+            parts.append(peer)
+    except Exception:
+        logger.debug("[peer-time] addendum failed", exc_info=True)
+    return "\n".join(p for p in parts if p)
 
 
 def _strip_excuse(text: str) -> Tuple[str, List[str]]:

@@ -1816,6 +1816,14 @@ companion:
   # time_schedule:
   #   enabled: true
   #   work_excuse_cap: 1
+  # 对方（客户）当地时间感知（Q-29 #305，与 time_schedule 同一接线点，persona_reply 零改动）：
+  # 客户画像 location / residence（已确认 > 提及）查内置 ~290 城市表 → IANA 时区；客户说过
+  # 「我这边四点了 / 现在是晚上 / it's 4am here」经 FactGate kind=transient（原句锚定）记
+  # peer_time_hint（12h），优先于城市推断且反推时区（与城市冲突以客户原话为准）。已知 →
+  # prompt「对方当地 周三 22:40 夜里——不要问几点 / 白天还是晚上」+ 出站砍时间问句；未知 →
+  # 「顺口问一次，24h 内不再问」。城市表命中不到 / 撞多时区 → 不猜。enabled 缺席：陪伴开 / 销售关。
+  # peer_time:
+  #   enabled: true
   weather:
     enabled: true
     ttl_sec: 1800            # 新鲜缓存（秒）

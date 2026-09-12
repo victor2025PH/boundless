@@ -860,17 +860,23 @@ def _hour_24(h: Optional[int], mod_word: str, ap: str, sentence: str, lang: str)
 def detect_time_statement(text: Any) -> Optional[Dict[str, Any]]:
     """客户说了自己这边的时间 / 时段 → ``{kind: clock|period, hour, minute, period, match, sentence}``；
     没说 / 说的是我方那边 / 是问句 → None。纯函数。"""
-    raw = _norm(text).strip()
+    orig = str(text or "").strip()
+    raw = _norm(orig)
     if not raw or len(raw) > 2000:
         return None
     lang = _lang_of(raw)
-    sents = [s for s in re.split(r"(?<=[。！？!?；;\n])\s*", raw) if s and s.strip()]
+    splitter = r"(?<=[。！？!?；;\n])\s*"
+    # 匹配用 NFKC 归一（全角数字 / 标点），evidence 保留客户原句（FactGate 逐字锚定 + prompt 引用都用原文）
+    sents_orig = [s for s in re.split(splitter, orig) if s and s.strip()]
+    sents = [s for s in re.split(splitter, raw) if s and s.strip()]
+    if len(sents_orig) != len(sents):
+        sents_orig = sents
     best: Optional[Dict[str, Any]] = None
-    for sent in sents:
+    for sent, sent_o in zip(sents, sents_orig):
         got = _detect_zh(sent) if lang == "zh" else _detect_en(sent)
         if got is None:
             continue
-        got["sentence"] = sent.strip()[:120]
+        got["sentence"] = sent_o.strip()[:120]
         if best is None or (got.get("hour") is not None and best.get("hour") is None):
             best = got
     return best
