@@ -664,6 +664,16 @@ def apply_inbound_enrichments(
         t, media_type=media_type, media_ref=media_ref, media_desc=media_desc,
     )
     user_context.update(media_patch)
+    # Q-36（#313 / #318）：入站图 / 视频的识图描述经 FactGate kind=observation 落 KV（TTL 24h，含原
+    # caption）——出稿口量词软改（「一桌菜」→「几个菜」）与 proactive / 接力摘要「TA 发过一张…的照片」
+    # 措辞的事实锚。贴纸 / GIF 是表情符号不算观察。store 缺席 / 异常一律静默。
+    try:
+        if str(media_patch.get("_media_kind") or "") in ("image", "video") and media_patch.get("_media_desc"):
+            from src.inbox.image_observation import note_inbound as _obs_note
+            _obs_note(t, str(user_context.get("conversation_id") or user_context.get("chat_id") or ""),
+                      media_desc=str(media_patch.get("_media_desc") or ""))
+    except Exception:
+        pass
 
     # 四类语境提示汇入 _topic_switch_hint（ai_client 同一消费口）：
     # 工作语言说明（草稿语言≠客户语言，P0-198）/ 语言切换承接 / 语言事实钉子

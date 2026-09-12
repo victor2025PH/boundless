@@ -40,6 +40,12 @@ KIND_FACT = "fact"
 #: 主体守卫；调用方（``companion.peer_time``）附 ``ttl_sec`` 落 KV，过期即视为不存在。
 KIND_TRANSIENT = "transient"
 TRANSIENT_TTL_SEC = 12 * 3600
+#: Q-36（#313 2JK95C / #318 VV7BRY）：**观察**事实——入站图 / 视频的识图描述（caption）。画面所见 ≠ 客户自述：
+#: 「几个菜」不能变「一桌菜」，「水边的房子 / 码头」不能变成客户住处或专名「Marina」。判据 = evidence（caption）
+#: 必填且逐字在同一条入站里 + 值锚定在 caption 里；不做类型尺子 / 语种 / 主体守卫；调用方
+#: （``inbox.image_observation``）附 ``ttl_sec`` 落 KV，过期即视为不存在；注入措辞固定「TA 发过一张…的照片」。
+KIND_OBSERVATION = "observation"
+OBSERVATION_TTL_SEC = 24 * 3600
 
 REASON_EMPTY = "empty"
 REASON_NO_EVIDENCE = "no_evidence"
@@ -233,8 +239,10 @@ def check(value: Any, *, slot_or_kind: str, evidence: Any, inbound_texts: Any,
             if inv and not inv <= _invariant_tokens(ev):
                 return False, REASON_UNANCHORED
             return True, ""
-        if kind == KIND_TRANSIENT:
-            # Q-29：瞬态叙述——只要原句锚定 + 值在原句里；TTL 由调用方带
+        if kind in (KIND_TRANSIENT, KIND_OBSERVATION):
+            # Q-29：瞬态叙述——只要原句锚定 + 值在原句里；TTL 由调用方带。
+            # Q-36：观察（识图 caption）同判据——caption 本身就在入站行里（「[图片内容] …」），值须锚在 caption 里；
+            # 与 fact 的差别只在「它是画面所见，不是客户说的」，这层语义由调用方按 kind 决定怎么措辞 / 怎么存。
             if not ev:
                 return False, REASON_NO_EVIDENCE
             if not evidence_in_inbound(ev, inbound):
@@ -279,7 +287,8 @@ def check_many(items: Iterable[Tuple[str, Any, Any]], *, inbound_texts: Any,
 
 
 __all__ = [
-    "KIND_FACT", "KIND_TRANSIENT", "TRANSIENT_TTL_SEC", "REASON_EMPTY", "REASON_NO_EVIDENCE", "REASON_UNANCHORED", "REASON_LANG",
+    "KIND_FACT", "KIND_TRANSIENT", "TRANSIENT_TTL_SEC", "KIND_OBSERVATION", "OBSERVATION_TTL_SEC",
+    "REASON_EMPTY", "REASON_NO_EVIDENCE", "REASON_UNANCHORED", "REASON_LANG",
     "REASON_SUBJECT", "REASON_GATE_ERROR",
     "check", "check_many", "evidence_in_inbound", "inbound_only", "subject_reason",
     "value_anchored_in_evidence", "value_tokens",

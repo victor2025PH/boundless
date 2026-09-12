@@ -159,12 +159,21 @@ def format_recent_context(
     for m in (messages or [])[-max(1, int(max_lines)):]:
         if not isinstance(m, dict):
             continue
-        t = str(m.get("text") or "").strip().replace("\n", " ")
+        t = str(m.get("text") or "").strip()
+        who = "你" if str(m.get("direction") or "") == "out" else "TA"
+        if who == "TA" and t:
+            # Q-36 #318（VV7BRY「Marina」）：对方发的图在这里曾按原文「[图片内容] 水边的房子…」进 prompt，
+            # LLM 把画面地物当成 TA 的住处 / 专名开场。改成固定措辞「TA 发过一张照片（识图所见：…）」。
+            try:
+                from src.inbox.image_observation import format_inbound_media_line
+                t = format_inbound_media_line(t, max_chars=max(20, int(max_line_chars) - 18))
+            except Exception:
+                pass
+        t = t.replace("\n", " ")
         if not t:
             continue
         if len(t) > max_line_chars:
             t = t[: max_line_chars - 1] + "…"
-        who = "你" if str(m.get("direction") or "") == "out" else "TA"
         try:
             age = rel_age_label(float(now) - float(m.get("ts") or 0.0))
         except (TypeError, ValueError):

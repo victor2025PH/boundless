@@ -97,9 +97,20 @@ def _fmt_row(r: Dict[str, Any]) -> str:
         if cap:
             parts.append(f"：{_one_line(cap, 50)}")
         if desc:
+            # Q-36 #318：「画面」= 识图所见 ≠ TA 自述——规则句由 build_handoff_note 在「对方说过/发过」段尾附
             parts.append(f"（画面：{_one_line(desc, 60)}）")
         return "".join(parts)
     return _one_line(cap) if cap else ""
+
+
+def _has_peer_media_desc(rows: List[Dict[str, Any]]) -> bool:
+    """窗口内对方是否发过带识图描述的图 / 视频（决定要不要附 Q-36 规则句）。"""
+    for r in rows or []:
+        if not isinstance(r, dict) or str(r.get("direction") or "in") == "out":
+            continue
+        if _split_caption_desc(str(r.get("text") or ""))[1]:
+            return True
+    return False
 
 
 def _fmt_clock(ts: float) -> str:
@@ -212,6 +223,13 @@ def build_handoff_note(
     if in_lines:
         parts.append("对方说过/发过：")
         parts += [f"- {x}" for x in in_lines[-MAX_IN_LINES:]]
+        if _has_peer_media_desc(rows):
+            # Q-36 #318（VV7BRY「Marina」）：接力摘要里对方图的识图描述是画面所见，不是 TA 说的话
+            try:
+                from src.inbox.image_observation import OBSERVATION_RULE as _obs_rule
+            except Exception:
+                _obs_rule = "画面描述是识图所见，不是 TA 说的话：不加量词夸大，画面里的地物 / 地名不当作 TA 的住处或专名。"
+            parts.append(f"（{_obs_rule}）")
     note = "\n".join(parts)
     if len(note) > NOTE_MAX_CHARS:
         note = note[: NOTE_MAX_CHARS - 1] + "…"

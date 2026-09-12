@@ -3767,11 +3767,19 @@ class AIClient(LoggerMixin):
                     "【输出语言】/LANGUAGE RULE 执行。"
                 )
             elif _mdesc:
+                # Q-36 #313（2JK95C「几个菜 → 一桌菜」/ #318 VV7BRY「Marina」）：识图描述进 prompt 时
+                # 同步钉「只说看到的、不加量词、地物不当住处 / 专名」——出稿口 outbound_text_guard 的
+                # 量词软改是兜底，这里在源头消掉。措辞单源 image_observation.CAPTION_RULE。
+                try:
+                    from src.inbox.image_observation import CAPTION_RULE as _cap_rule
+                except Exception:
+                    _cap_rule = ""
                 prompt_parts.append(
                     f"【{_plat_label} 媒体消息·{_kind_hint}】系统已识别对方发来的媒体内容如下：\n"
                     f"{_mdesc}\n"
                     "回复要求：像真人一样自然回应这条媒体消息，不要说「我无法查看图片」；"
                     "若识别内容不清楚可温和追问；视频仅基于缩略图内容回应，不要假装看完整个视频。"
+                    + (f"\n{_cap_rule}" if _cap_rule else "")
                 )
             else:
                 prompt_parts.append(
