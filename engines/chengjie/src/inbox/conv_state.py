@@ -15,6 +15,9 @@ chip（ay- 让位 / rk- 风控 / aif- 起草失败 / ms- 边车 / lp- 语言）�
         action:     resume | ack | retry | confirm_pin | none
         params:     dict                       # 文案插值 + 动作参数（draft_id / message_id …）
         sources:    dict                       # 六源原始快照（详情面板 / 门禁断言用）
+        notes:      list                       # Q-35 #306：不改状态的旁注（album_no_match：相册无命中
+                                               #   {query, persona_id, n, hhmm, link, text_key}），带下一行琥珀；
+                                               #   源 = album_miss_marker.get（写侧在 image_autosend，本模块零写）
     }
 
 六源（全部**只读**，任一源异常 → 视为该源无信号，绝不抛、绝不写 KV）：
@@ -25,10 +28,16 @@ chip（ay- 让位 / rk- 风控 / aif- 起草失败 / ms- 边车 / lp- 语言）�
     agent_yield   worker.agent_yield_state（Q-18 坐席刚发过 → AI 让位 60s）
     lang_plan     Q-21 conv_lang_plan KV（若已落地）∨ l1_reason.peek == lang_unknown
     ai_last_fail  ai_fail_marker.get（Q-14 B 最近一次起草失败）
+    peer_guard    peer_guard_marker.get（Q-30 C：peer_bot_guard 硬拦拟稿——同事 / 报障群 /
+                  机器人对端；autodraft 跳过处写、放行处清）→ held，reason_code 原码
+                  ``colleague:<id>`` / ``ops_group:<id>``，文案键按前缀（无 ack 动作）
+    pacing_hold   worker.first_reply_hold_state（Q-30 B #311：沉寂 >6h / 首次来信的首稿留
+                  pending 1–5 分钟的拟人首回延迟）→ deferred，reason_code ``first_reply_hold``
 
-优先级（指令原文）：manual > held(needs_human) > sidecar_down > off_hours > deferred >
-lang_unknown > ai_fail > auto。``human``（人审 / 多选档：AI 拟稿人工发）排在 ai_fail 之后、
-auto 之前——它只是「没有更要紧的事」时对非全自动档的收口描述。
+优先级（指令原文）：manual > held(needs_human) > held(peer_guard) > sidecar_down > off_hours >
+deferred(agent_yield) > deferred(first_reply_hold) > lang_unknown > ai_fail > auto。
+``human``（人审 / 多选档：AI 拟稿人工发）排在 ai_fail 之后、auto 之前——它只是「没有更要紧的事」
+时对非全自动档的收口描述。
 
 只在全自动档才有意义的源（让位 / 作息外 / 语言未知）在人审档不参与判定：人审档 AI 本来
 就不自动发，再说「让位 23 秒」是噪音。held / sidecar_down / ai_fail 与档位无关（人审档也要
@@ -249,6 +258,47 @@ def _src_agent_yield(worker: Any, cid: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _src_pacing_hold(worker: Any, cid: str) -> Optional[Dict[str, Any]]:
+    """Q-30 B（#311 W2CSGA）：worker 的拟人首回延迟（O-1 D first_reply hold）——沉寂 >6h /
+    首次来信后的首稿留 pending 1–5 分钟。此前带上不可见（仍绿「AI 会自动回」），坐席看草稿
+    两分钟不动就报「全自动全线不发」。"""
+    try:
+        if worker is None or not hasattr(worker, "first_reply_hold_state"):
+            return None
+        st = dict(worker.first_reply_hold_state(cid) or {})
+        if not st.get("active"):
+            return None
+        sil = st.get("silence_sec")
+        return {"until": float(st.get("until") or 0.0),
+                "remaining": max(0.0, float(st.get("remaining") or 0.0)),
+                "draft_id": str(st.get("draft_id") or ""),
+                "first_contact": bool(st.get("first_contact")),
+                "silence_h": (None if sil is None else round(float(sil) / 3600.0, 1)),
+                "hold_sec": float(st.get("hold_sec") or 0.0)}
+    except Exception:
+        return None
+
+
+def _src_peer_guard(store: Any, cid: str) -> Optional[Dict[str, Any]]:
+    """Q-30 C（#312 #314）：peer_bot_guard 硬拦拟稿的会话标（``peer_guard_marker``，autodraft
+    跳过处写、放行处清）。reason_code 原样透出（``colleague:<id>`` / ``ops_group:<id>`` / 守卫码），
+    文案键按前缀选。软停（soft）不算——稿照拟、进人审。"""
+    try:
+        if store is None:
+            return None
+        from src.inbox import peer_guard_marker as _pg
+        rec = _pg.get(store, cid)
+        if not rec or rec.get("soft"):
+            return None
+        reason = str(rec.get("reason") or "")
+        head, ident = _pg.split_reason(reason)
+        return {"reason": reason, "kind": head, "id": ident,
+                "text_key": _pg.text_key_for(reason),
+                "since_ts": float(rec.get("ts") or 0.0)}
+    except Exception:
+        return None
+
+
 _LANG_PLAN_KEYS = ("conv_lang_plan:{cid}", "lang_plan:{cid}")
 
 
@@ -291,6 +341,25 @@ def _src_lang(store: Any, cid: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _src_album_miss(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
+    """Q-35 #306：相册无命中 note（``album_miss_marker``，24h 内有效）。**不是状态**——AI 已按
+    ``album_miss_addendum`` 改口照常回，这里只让坐席看见「相册里没有能匹配的图」+ 补标签入口。"""
+    try:
+        from src.inbox.album_miss_marker import DEFAULT_TTL_SEC, deep_link, get as _get, hhmm as _hhmm
+        rec = _get(cid, store=store, now=now, ttl_sec=DEFAULT_TTL_SEC) if store is not None else None
+        if not rec:
+            return None
+        ts = float(rec.get("ts") or 0.0)
+        pid = str(rec.get("persona_id") or "")
+        return {"kind": "album_no_match", "query": str(rec.get("query") or ""),
+                "scene": str(rec.get("scene") or ""), "persona_id": pid,
+                "n": int(rec.get("n") or 1), "ts": ts, "hhmm": _hhmm(ts),
+                "ago_sec": round(max(0.0, now - ts), 0), "link": deep_link(pid),
+                "text_key": "inbox.cs.note.album_no_match"}
+    except Exception:
+        return None
+
+
 def _src_ai_fail(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
     try:
         from src.inbox.ai_fail_marker import get as _get, hhmm as _hhmm
@@ -322,9 +391,13 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     src: Dict[str, Any] = {
         "mode": mode,
         "handoff": _src_handoff(store, cid, ts_now),
+        # Q-30 C：peer_bot_guard 硬拦拟稿——与 held 同级（AI 既不拟也不发），人审档也要知道
+        "peer_guard": _src_peer_guard(store, cid),
         "sidecar": _src_sidecar(store, cid, platform, account_id, health, ts_now),
         "off_hours": _src_off_hours(platform, account_id, cfg, ts_now) if is_auto else None,
         "agent_yield": _src_agent_yield(worker, cid) if is_auto else None,
+        # Q-30 B：拟人首回延迟——只在全自动档有意义（人审档本就不自动发）
+        "pacing_hold": _src_pacing_hold(worker, cid) if is_auto else None,
         "lang_plan": _src_lang(store, cid) if is_auto else None,
         "ai_last_fail": _src_ai_fail(store, cid, ts_now),
     }
@@ -333,6 +406,9 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         "reason_code": "", "reason_text_key": "inbox.cs.human", "until_ts": None,
         "action": "none", "params": {}, "sources": src, "ts": ts_now,
     }
+    # Q-35 #306：旁注源＝相册无命中 note。**不参与状态判定**（AI 已改口照常回）、不进 sources
+    # （六源契约不动），只进 out["notes"]；_set() 只更新状态键，notes 随任一分支原样带出。
+    out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),) if n]
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",
              until_ts: Optional[float] = None, action: str = "none",
@@ -356,6 +432,13 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
                     action="ack", category=h["category"], level=h["level"],
                     hit=h["hit"], hits=h["hits"], since_ts=h["since_ts"],
                     source=h["source"], tagged=h["tagged"])
+    pg = src["peer_guard"]
+    if pg:
+        # 无「我知道了」动作：出路是改名单（设置 › 自动化与风控），不是摘标
+        return _set("held", will_send=False, reason_code=str(pg["reason"]),
+                    text_key=str(pg["text_key"]), action="none",
+                    kind=pg["kind"], id=pg["id"] or None, code=pg["reason"],
+                    since_ts=pg["since_ts"], settings_url="/reply-settings#rps-sec-guard")
     sc = src["sidecar"]
     if sc:
         kind = str(sc.get("kind") or "")
@@ -375,6 +458,16 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
                     until_ts=ay["until"], action="resume", by=ay["by"],
                     remaining_sec=int(round(ay["remaining"])), since=ay["since"],
                     draft_id=ay["draft_id"] or None)
+    ph = src["pacing_hold"]
+    if ph:
+        # 同为 deferred（琥珀、会发、倒计时），但无「立即接回」动作：这是刻意的节奏不是让位
+        return _set("deferred", will_send=True, reason_code="first_reply_hold",
+                    text_key=("inbox.cs.deferred.first_contact" if ph["first_contact"]
+                              else "inbox.cs.deferred.first_reply"),
+                    until_ts=ph["until"], action="none",
+                    remaining_sec=int(round(ph["remaining"])), silence_h=ph["silence_h"],
+                    first_contact=ph["first_contact"], hold_sec=int(round(ph["hold_sec"])),
+                    draft_id=ph["draft_id"] or None)
     lp = src["lang_plan"]
     if lp:
         fb = bool(lp.get("fallback"))

@@ -94,8 +94,10 @@ def test_contract_shape_and_enums():
     assert st["state"] in STATES and st["action"] in ACTIONS
     assert set(PRIORITY) == set(STATES)
     assert set(TONE) == set(STATES) and set(TONE.values()) == {"ok", "warn", "danger", "muted"}
+    # Q-30 B/C（2026-09-12）加两源：peer_guard（守卫硬拦拟稿）/ pacing_hold（拟人首回延迟）
     assert set(st["sources"]) == {"mode", "handoff", "sidecar", "off_hours",
-                                  "agent_yield", "lang_plan", "ai_last_fail"}
+                                  "agent_yield", "lang_plan", "ai_last_fail",
+                                  "peer_guard", "pacing_hold"}
 
 
 def test_auto_default_green():

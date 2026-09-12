@@ -1295,12 +1295,26 @@ def make_auto_draft_cb(
                 logger.info(
                     "[AutoDraft] peer_bot_guard 跳过拟稿 cid=%s reason=%s",
                     conv.get("conversation_id"), _pbg_reason)
+                # Q-30 C（#312 #314 可见化）：跳过不再只打日志——写会话标，状态带读成
+                # 「AI 不拟稿不发 · 对方在『永不自动回复』名单 / 判定为机器人」。判定不动。
+                try:
+                    from src.inbox.peer_guard_marker import mark as _pg_mark
+                    _pg_mark(store, str(conv.get("conversation_id") or ""),
+                             reason=str(_pbg_reason), soft=False)
+                except Exception:
+                    logger.debug("[AutoDraft] peer_guard 会话标写入失败（忽略）", exc_info=True)
                 return
             if _pbg_soft:
                 logger.info(
                     "[AutoDraft] peer_bot_guard 预算软停：本轮转人审拟稿 "
                     "cid=%s reason=%s",
                     conv.get("conversation_id"), _pbg_reason)
+            # 守卫放行（含软停：稿照拟）→ 摘旧的硬拦标（只在标在场时落盘）
+            try:
+                from src.inbox.peer_guard_marker import clear as _pg_clear
+                _pg_clear(store, str(conv.get("conversation_id") or ""))
+            except Exception:
+                logger.debug("[AutoDraft] peer_guard 会话标清除失败（忽略）", exc_info=True)
         except Exception:
             _pbg_soft = False
             logger.debug(

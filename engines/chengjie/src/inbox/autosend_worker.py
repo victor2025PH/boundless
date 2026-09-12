@@ -330,6 +330,11 @@ class AutosendWorker:
         # （按 draft_id 去重，与 off_hours 的「活动信号」计数口径不同）
         self.total_first_reply_held: int = 0
         self._first_reply_held_ids: set = set()
+        # Q-30 B（#311 W2CSGA）：首回延迟「到点时刻」登记表 conv → {until, draft_id, silence_sec,
+        # first_contact}——状态带（conv_state.pacing_hold）据此说「AI N 秒后发出 · 沉寂后首条刻意
+        # 慢一点」。此前这段等待对坐席**完全不可见**（带仍是绿色「AI 会自动回」），草稿两分钟不动
+        # 就报「全自动全线不发」。remain 归零 / 判不延时 pop；过期条目读侧按 until 判 active。
+        self._first_reply_until: Dict[str, Dict[str, Any]] = {}
         self.total_catchup_regenerated: int = 0  # 复班补觉：作废陈稿并重拟的条数
         self.total_skipped_pilot: int = 0  # 驾驶权在原生面板而取消的 L2 数（surface_fusion）
         # B41（2026-08-22）：投递幂等钉拒绝的重复投递数（同稿在途/已投过）
@@ -900,6 +905,7 @@ class AutosendWorker:
         cfg = resolve_first_reply_cfg(
             self._deliver_delay_block, platform=_plat, persona_id=_pid)
         if not cfg.get("enabled"):
+            self._first_reply_until.pop(conversation_id, None)
             return 0.0
         store = getattr(self._svc, "_store", None)
         if store is None or not hasattr(store, "list_recent_messages"):
@@ -912,6 +918,7 @@ class AutosendWorker:
         hold = first_reply_hold_sec(
             cfg, silence_sec=silence, key=f"{conversation_id}#{int(burst_start)}")
         if hold <= 0:
+            self._first_reply_until.pop(conversation_id, None)
             return 0.0
         peer_text = str(d.get("peer_text") or "")
         if peer_text.strip():
@@ -919,13 +926,26 @@ class AutosendWorker:
                 from src.utils.wellbeing_guard import detect_crisis
                 lvl = str((detect_crisis(peer_text) or {}).get("level") or "none")
                 if lvl in ("severe", "elevated"):
+                    self._first_reply_until.pop(conversation_id, None)
                     return 0.0
             except Exception:
                 return 0.0
         remain = (burst_start + hold) - time.time()
-        if remain <= 0:
-            return 0.0
         did = str(d.get("draft_id") or d.get("id") or "")
+        if remain <= 0:
+            self._first_reply_until.pop(conversation_id, None)
+            return 0.0
+        # Q-30 B：登记到点时刻（状态带读）；同会话覆盖即可（一稿一会话）
+        self._first_reply_until[conversation_id] = {
+            "until": float(burst_start + hold), "draft_id": did,
+            "silence_sec": (None if silence is None else float(silence)),
+            "first_contact": silence is None, "hold_sec": float(hold),
+        }
+        if len(self._first_reply_until) > 2048:
+            _now_fr = time.time()
+            for _k in [k for k, v in self._first_reply_until.items()
+                       if float(v.get("until") or 0.0) < _now_fr]:
+                self._first_reply_until.pop(_k, None)
         if did and did not in self._first_reply_held_ids:
             self._first_reply_held_ids.add(did)
             if len(self._first_reply_held_ids) > 2048:
@@ -1172,6 +1192,35 @@ class AutosendWorker:
             st["stage"] = str(ent.get("stage") or "")
             st["deferrals"] = int(ent.get("deferrals") or 0)
         return st
+
+    def first_reply_hold_state(self, conversation_id: str) -> Dict[str, Any]:
+        """Q-30 B（#311）：会话当前「拟人首回延迟」状态（状态带 ``conv_state.pacing_hold`` 源）。
+
+        ``{active, until, remaining, draft_id, silence_sec, first_contact, hold_sec}``；
+        ``active`` ＝ 登记在场且 ``until`` 未到（到点条目视为已放行，不再报「等待中」）。
+        只读、绝不抛。W2CSGA 实录：12:11:20 沉寂 9.9h 后首稿 hold=115s，此前状态带全程绿色。"""
+        cid = str(conversation_id or "")
+        out: Dict[str, Any] = {"active": False, "until": 0.0, "remaining": 0.0,
+                               "draft_id": "", "silence_sec": None,
+                               "first_contact": False, "hold_sec": 0.0}
+        try:
+            ent = self._first_reply_until.get(cid)
+            if not ent:
+                return out
+            until = float(ent.get("until") or 0.0)
+            remaining = until - time.time()
+            if remaining <= 0:
+                return out
+            out.update({
+                "active": True, "until": until, "remaining": remaining,
+                "draft_id": str(ent.get("draft_id") or ""),
+                "silence_sec": ent.get("silence_sec"),
+                "first_contact": bool(ent.get("first_contact")),
+                "hold_sec": float(ent.get("hold_sec") or 0.0),
+            })
+        except Exception:
+            pass
+        return out
 
     def _yield_schedule_wake(self, conv: str, until: float) -> None:
         """窗过（until）后唤醒主循环复检——否则要等 min_interval 兜底。loop 未起（测试 /
