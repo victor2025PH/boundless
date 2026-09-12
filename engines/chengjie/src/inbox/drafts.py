@@ -773,6 +773,7 @@ class DraftService:
         by: str = "",
         force_override: bool = False,
         deliver: Optional[bool] = None,
+        reason: str = "",
     ) -> Dict[str, Any]:
         """带 L4 强制拦截 + 审计的统一处置入口（替代裸 resolve）。
 
@@ -869,6 +870,15 @@ class DraftService:
             audit_action = "autosend" if action == "autosend" else action
             self._write_audit(
                 draft_id, autopilot, audit_action, by,
+                reason=reason,
+                risk_level=effective_risk,
+                conversation_id=conv_id,
+            )
+        elif reason:
+            # L1 等平时不写审计的档位：批量超龄清空（reason=bulk_stale）必须留痕
+            self._write_audit(
+                draft_id, autopilot, action, by,
+                reason=reason,
                 risk_level=effective_risk,
                 conversation_id=conv_id,
             )
@@ -1090,9 +1100,29 @@ class DraftService:
             if lvl not in counts:
                 lvl = "unknown"
             counts[lvl] += 1
+        # Q-31 D（#317 PUUWJB）：顶栏「发前确认」只计可行动稿。判定复用
+        # approve_block_reason 单一入口（与护栏 / 列表徽标同口径），不另算一套。
+        actionable: Dict[str, int] = {
+            "L0": 0, "L1": 0, "L2": 0, "L3": 0, "L4": 0, "unknown": 0,
+        }
+        stale_n = 0
+        for d in all_pending:
+            lvl = str(d.get("autopilot_level") or "unknown")
+            if lvl not in actionable:
+                lvl = "unknown"
+            try:
+                block = self.approve_block_reason(d) or ""
+            except Exception:
+                block = ""
+            if block == "":
+                actionable[lvl] += 1
+            elif block == "age":
+                stale_n += 1
         return {
             "total_pending": len(all_pending),
             "by_level": counts,
+            "actionable": actionable,
+            "stale_count": stale_n,
         }
 
     # ── E2：入站消息 → 自动草稿生成 ──────────────────────────────

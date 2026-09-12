@@ -32,8 +32,8 @@ K2 — 无人应答自动再分配：
   realert_backoff: 2.0      # 再告警间隔的指数倍率（每告警一次翻倍，直到封顶）
   realert_max_sec: 86400    # 再告警间隔封顶（默认每天最多一次）
   stale_hours: 0            # >0 时：草稿超此年龄首告警后静默（默认 0=关，不静默）
-  auto_expire_hours: 0      # >0 时：把搁置超此年龄的 pending 草稿自动作废（默认 0=关）
-  auto_expire_levels: []    # 自动作废仅限这些等级（如 ['L3','L4']）；空=全部等级
+  auto_expire_hours: 48     # >0 时：把搁置超此年龄的 pending 草稿自动作废（Q-31 D 出厂 48；0=关）
+  auto_expire_levels: [L1]  # 自动作废仅限这些等级；空=全部等级。出厂只作废 L1 未发稿
   backlog_summary: false    # true 时：发布聚合的 draft_backlog_summary 事件（默认关=旧行为）
   backlog_summary_min: 1    # 越线草稿数达此值才发汇总（默认 1）
   backlog_summary_interval_sec: 3600  # 数量不变时的最小重发间隔（默认每小时一次）
@@ -55,6 +55,8 @@ _DEDUP_CLEAR_SEC: float = 3600.0    # 再分配去重集每小时清空（仅 K2
 _DEFAULT_REALERT_BASE_SEC: float = 3600.0   # 首次再告警间隔
 _DEFAULT_REALERT_BACKOFF: float = 2.0       # 指数退避倍率
 _DEFAULT_REALERT_MAX_SEC: float = 86400.0   # 再告警间隔封顶（每日一次）
+_DEFAULT_AUTO_EXPIRE_HOURS: float = 48.0    # Q-31 D：出厂 48h 作废未发 L1
+_DEFAULT_AUTO_EXPIRE_LEVELS: List[str] = ["L1"]
 
 
 class SLAWatcher:
@@ -91,11 +93,17 @@ class SLAWatcher:
             cfg.get("realert_max_sec", _DEFAULT_REALERT_MAX_SEC))
         self._stale_hours: float = float(cfg.get("stale_hours", 0.0))
 
-        # 治理化开关：pending 草稿自动作废（默认关）
-        self._auto_expire_hours: float = float(cfg.get("auto_expire_hours", 0.0))
-        self._auto_expire_levels: List[str] = [
-            str(x) for x in (cfg.get("auto_expire_levels") or []) if str(x)
-        ]
+        # 治理化开关：pending 草稿自动作废（Q-31 D 出厂 48h / L1；overlay 显式键优先生效）
+        if "auto_expire_hours" in cfg:
+            self._auto_expire_hours = float(cfg.get("auto_expire_hours") or 0.0)
+        else:
+            self._auto_expire_hours = _DEFAULT_AUTO_EXPIRE_HOURS
+        if "auto_expire_levels" in cfg:
+            self._auto_expire_levels = [
+                str(x) for x in (cfg.get("auto_expire_levels") or []) if str(x)
+            ]
+        else:
+            self._auto_expire_levels = list(_DEFAULT_AUTO_EXPIRE_LEVELS)
 
         # 二级升级阈值（默认 0=关）：草稿越线超过此更高阈值 → 发 draft_sla_escalated
         # 事件（比 breach 更高优先级），**并特别标记无主草稿**——K2 只再分配「已认领+

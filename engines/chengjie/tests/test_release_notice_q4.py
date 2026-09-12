@@ -101,7 +101,12 @@ def test_data_file_registers_1079_with_expected_rows():
         **rows["inbox.work_schedule.off_hours.catch_up_regenerate_hours"],
         "kind": "value", "old": 2, "new": 0, "show_if": "missing"}
     assert rows["companion.goals.profile_llm.enabled"]["show_if"] == "always"
-    assert rd.latest_registered_version(d) == V
+    assert "1.0.85" in d["releases"]
+    rows85 = {c["key"]: c for c in rd.release_changes("1.0.85", d)}
+    assert rows85["inbox.sla_watcher.auto_expire_hours"]["old"] == 0
+    assert rows85["inbox.sla_watcher.auto_expire_hours"]["new"] == 48
+    assert rows85["inbox.sla_watcher.auto_expire_hours"]["show_if"] == "missing"
+    assert rd.latest_registered_version(d) == "1.0.85"
     # 与 feature_registry 回滚表同源：marker 一致
     from src.utils.feature_registry import ROLLED_BACK_BASELINES
     for k, spec in ROLLED_BACK_BASELINES.items():
@@ -121,11 +126,13 @@ def test_i18n_three_langs_cover_every_row():
     from src.web.i18n_packs.release_notice import EN, ZH, ZH_HANT
     import re
     cjk = re.compile(r"[\u4e00-\u9fff]")
-    for c in rd.release_changes(V):
-        for suffix in ("_title", "_desc"):
-            k = c["i18n"] + suffix
-            assert k in ZH and k in EN and k in ZH_HANT, k
-            assert not cjk.search(EN[k]), k
+    data = rd.load_release_defaults()
+    for ver in data.get("releases") or {}:
+        for c in rd.release_changes(ver, data):
+            for suffix in ("_title", "_desc"):
+                k = c["i18n"] + suffix
+                assert k in ZH and k in EN and k in ZH_HANT, k
+                assert not cjk.search(EN[k]), k
     for k in ("rn_title", "rn_sub", "rn_keep_off", "rn_turn_on", "rn_tz_label", "rn_tz_required",
               "rn_apply", "rn_later", "rn_done", "rn_fail"):
         assert k in ZH and k in EN and k in ZH_HANT, k

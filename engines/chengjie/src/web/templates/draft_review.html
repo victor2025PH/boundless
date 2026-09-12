@@ -132,6 +132,7 @@
     </div>
     <div style="display:flex;gap:10px;align-items:center;">
       <button onclick="triggerBulkAutosend()" id="btn-bulk" style="padding:5px 12px;border:1px solid var(--th-bd-green6,#16a34a);border-radius:6px;background:var(--th-bg-surface,#fff);color:var(--th-ink-green6,#15803d);font-size:13px;cursor:pointer;display:inline-flex;align-items:center;"><span data-ui-icon="zap" data-size="13" style="margin-right:5px;"></span><span data-i18n="draft.bulk_l2">一键发所有 L2</span></button>
+      <button type="button" onclick="clearStale()" id="btn-clear-stale" style="padding:5px 12px;border:1px solid var(--th-bd,#cbd5e1);border-radius:6px;background:var(--th-bg-surface,#fff);color:var(--th-ink-sub,#64748b);font-size:13px;cursor:pointer;display:none;align-items:center;" data-i18n-title="draft.bulk.clear_stale_t" title=""><span data-ui-icon="trash" data-size="13" style="margin-right:5px;"></span><span data-i18n="draft.bulk.clear_stale">清空 {n} 条超龄稿</span></button>
       <a href="/workspace/draft-audit" id="audit-link" style="font-size:13px;color:var(--th-ink-blue6,#1d4ed8);text-decoration:none;display:none;" data-i18n="draft.audit_link">查看审计日志 →</a>
     </div>
   </div>
@@ -207,6 +208,7 @@ function _drToast(msg, style, dur, icon){
 function fmtTs(ts){ if(!ts) return ''; return window.wsFmtDate(ts,{month:'2-digit',day:'2-digit'})+' '+window.wsFmtTime(ts,{hour:'2-digit',minute:'2-digit'}); }
 
 function load(){
+  refreshStaleBtn();
   var url='/api/drafts?status='+encodeURIComponent(_status)+'&limit=100';
   if(_platform) url+='&platform='+encodeURIComponent(_platform);
   document.getElementById('dr-list').innerHTML='<div class="dr-loading">'+window.T('dash.loading')+'</div>';
@@ -572,6 +574,34 @@ function fillDraft(editBoxId, text){
   box.setSelectionRange(box.value.length, box.value.length);
 }
 
+function refreshStaleBtn(){
+  var btn=document.getElementById('btn-clear-stale');
+  if(!btn) return;
+  apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
+    var n=Number(d&&d.stale_count)||0;
+    if(n<=0){ btn.style.display='none'; return; }
+    btn.style.display='inline-flex';
+    var lb=btn.querySelector('[data-i18n="draft.bulk.clear_stale"]');
+    if(lb) lb.textContent=window.Tf('draft.bulk.clear_stale',{n:n});
+    try{ btn.title=window.Tf('draft.bulk.clear_stale_t',{n:n}); }catch(_){}
+    btn.setAttribute('data-stale-n', String(n));
+  }).catch(function(){});
+}
+function clearStale(){
+  var btn=document.getElementById('btn-clear-stale');
+  var n=Number(btn&&btn.getAttribute('data-stale-n'))||0;
+  if(n<=0) return;
+  if(!confirm(window.Tf('draft.bulk.clear_stale_confirm',{n:n}))) return;
+  apiFetch('/api/drafts/bulk-resolve',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'reject',reason:'bulk_stale'})
+  }, {timeoutMs: 60000}).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok){
+      AITRNotify.alert(window.Tf('draft.bulk.done2',{label:window.Tf('draft.bulk.clear_stale',{n:d.succeeded}),ok:d.succeeded,fail:d.failed}), 'info');
+      load();
+    } else { AITRNotify.alert((d&&d.detail)||(d&&d.error)||window.Tf('draft.bulk.fail2',{label:window.T('draft.bulk.clear_stale')})); }
+  }).catch(function(){ AITRNotify.alert(window.T('draft.net_err')); });
+}
 function triggerBulkAutosend(){
   var btn=document.getElementById('btn-bulk');
   if(btn){ btn.disabled=true; btn.textContent='…'; }
@@ -1088,7 +1118,8 @@ window.kbArchive = function(draftId, btn){
 Object.assign(window, {
   setFilter, toggleEdit, resolve, resolveWithTranslation, bulkAct, clearSel,
   forceOverride, applyTpl, tplSearch, tplLang, toggleTpl, toggleCtx, toggleTrans,
-  toggleCopilot, toggleProfile, triggerBulkAutosend, _confirmFact, _trackKbClick,
+  toggleCopilot, toggleProfile, triggerBulkAutosend, clearStale, refreshStaleBtn,
+  _confirmFact, _trackKbClick,
 });
 })();
 </script>

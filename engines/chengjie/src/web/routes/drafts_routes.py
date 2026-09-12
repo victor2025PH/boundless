@@ -3,7 +3,7 @@
 API 端点（register_drafts_routes — main.py 调用）：
   GET  /api/drafts                          ?status=pending&platform=&limit=50
   GET  /api/drafts/stats                    — 按平台×状态计数
-  GET  /api/drafts/risk-summary             — 待处理草稿按 autopilot_level 分布（B2）
+  GET  /api/drafts/risk-summary             — 待处理草稿按 autopilot_level 分布 + actionable / stale_count（B2 / Q-31 D）
   GET  /api/drafts/audit                    — 草稿处置审计日志（B2；主管专属）
   GET  /api/drafts/autosend-status          — AutosendWorker 运行指标（Phase A）
   GET  /api/drafts/{draft_id}               — 单条草稿
@@ -183,7 +183,7 @@ def register_drafts_routes(app, *, api_auth):
     async def api_drafts_risk_summary(
         request: Request, sla_hours: int = 4, _=Depends(api_auth),
     ):
-        """L0–L4 分布统计（供仪表盘风险看板轮询）。含 sla_overdue 字段（D1）。"""
+        """L0–L4 分布统计（供仪表盘风险看板轮询）。含 sla_overdue（D1）与 actionable / stale_count（Q-31 D）。"""
         svc = _get_draft_service(request)
         summary = svc.risk_summary()
         # D1：追加 SLA 过期数量（主管可见；非主管返回 -1 表示无权限）
@@ -665,13 +665,14 @@ def register_drafts_routes(app, *, api_auth):
 
     @app.post("/api/drafts/bulk-resolve")
     async def api_drafts_bulk_resolve(request: Request, _=Depends(api_auth)):
-        """H2：批量处置草稿（主管专属）。
+        """H2：批量处置草稿。
 
-        Body: {action: "approve"|"reject", draft_ids: [...], by?}
+        Body: {action: "approve"|"reject", draft_ids: [...], by?, reason?}
+        ``reason=bulk_stale``（Q-31 D）：只拒绝 ``approve_block_reason==age`` 的 pending，
+        任意已登录坐席可点（超龄稿本就不能原样发）；未给 draft_ids 时服务端自选。
+        其它批量动作仍主管专属。
         返回：{ok, total, succeeded, failed, errors: [...]}
         """
-        if not _is_supervisor(request):
-            raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
         svc = _get_draft_service(request)
         body = {}
         try:
@@ -681,17 +682,45 @@ def register_drafts_routes(app, *, api_auth):
         action = str(body.get("action") or "").strip().lower()
         if action not in {"approve", "reject"}:
             raise HTTPException(400, tr(request, "err.draft.bad_action"))
+        reason = str(body.get("reason") or "").strip()
         draft_ids = list(body.get("draft_ids") or [])
-        if not draft_ids:
-            return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "errors": []}
+        if reason == "bulk_stale":
+            if action != "reject":
+                raise HTTPException(400, tr(request, "err.draft.bad_action"))
+            pending = svc.list_drafts(status="pending", limit=500)
+            stale_ids = [
+                str(d.get("draft_id") or "")
+                for d in pending
+                if d.get("draft_id")
+                and hasattr(svc, "approve_block_reason")
+                and (svc.approve_block_reason(d) or "") == "age"
+            ]
+            if draft_ids:
+                want = {str(x) for x in draft_ids}
+                draft_ids = [i for i in stale_ids if i in want]
+            else:
+                draft_ids = stale_ids
+            cap = 200
+        else:
+            if not _is_supervisor(request):
+                raise HTTPException(403, tr(request, "err.perm.supervisor_required"))
+            if not draft_ids:
+                return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "errors": []}
+            cap = 50
         by = str(body.get("by") or _session_agent_id(request))
         agent_id = _session_agent_id(request)
         succeeded, failed, errors = 0, 0, []
-        for did in draft_ids[:50]:  # 单次最多 50 条
+        for did in draft_ids[:cap]:
             try:
-                result = svc.resolve_with_audit(
-                    str(did), action, by=by or agent_id or "bulk"
-                )
+                _kw = {"by": by or agent_id or "bulk"}
+                if reason:
+                    _kw["reason"] = reason
+                try:
+                    result = svc.resolve_with_audit(str(did), action, **_kw)
+                except TypeError:
+                    result = svc.resolve_with_audit(
+                        str(did), action, by=by or agent_id or "bulk"
+                    )
                 if result.get("ok"):
                     succeeded += 1
                 else:

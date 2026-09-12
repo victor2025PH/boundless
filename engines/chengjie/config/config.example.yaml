@@ -3578,6 +3578,11 @@ inbox:
     # business_line_modes:
     #   translation: review
 
+  # Q-31 D（#317 PUUWJB）：超龄未发稿自动作废——只动 pending，不碰 approved / 在途。
+  sla_watcher:
+    auto_expire_hours: 48     # 出厂 48h；0=关。已在 overlay 显式写过的不受本默认影响
+    auto_expire_levels: [L1]  # 只作废半自动未发稿；空=全部等级
+
   # AI 回复质量退化告警（F1）：HealthWatchdog 周期性据 draft_audit_log 处置结果口径
   # （草稿采纳/弃用率 + 高危量环比）评估「AI 发得靠不靠谱」，退化即落 ops_incidents
   # (kind=ai_quality)，在 ops 总览与 health/billing/草稿质量事件同一条闭环（可 ack/指派/自动恢复）。

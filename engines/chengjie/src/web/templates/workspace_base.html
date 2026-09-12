@@ -3432,7 +3432,7 @@ window._pillChainFail=window._pillChainFail||function(fn){
         if(body&&body.parentNode){ body.parentNode.insertBefore(bar, body); }
       }
     }
-    refreshL4();   // 全员：顶栏「发前确认」药丸（L1+L3+L4 等人处理的草稿；toast 仍在函数内按主管过滤）
+    refreshL4();   // 全员：顶栏「发前确认」药丸（Q-31 D：只计 actionable＝approve_block_reason 空；toast 仍按主管过滤）
     if(MY_IS_SUP){
       // 「更多」菜单已删（2026-08-14）：主管看板入口收口到后台管理（侧栏 + Ctrl+K
       // 命令面板，见 nav_schema.CMD_EXTRA_ITEMS）；此处只剩「回管理后台」链接显隐。
@@ -3474,15 +3474,21 @@ window._pillChainFail=window._pillChainFail||function(fn){
   function refreshL4(){
     apiFetch('/api/drafts/risk-summary').then(function(r){return r.json();}).then(function(d){
       if(!d||!d.ok) return;
-      var bl=d.by_level||{};
-      var l1=Number(bl['L1'])||0, l3=Number(bl['L3'])||0, l4=Number(bl['L4'])||0;
+      // Q-31 D：药丸读 actionable（稿龄未超且此后无出站）；旧后端无该字段时回落 by_level
+      var src=(d.actionable&&typeof d.actionable==='object')?d.actionable:(d.by_level||{});
+      var l1=Number(src['L1'])||0, l3=Number(src['L3'])||0, l4=Number(src['L4'])||0;
       var pend=l1+l3+l4;
+      var stale=Number(d.stale_count)||0;
       var sla=(d.sla_overdue&&d.sla_overdue>0)?d.sla_overdue:0;
       if(_l4Badge){
-        if(!pend){ _l4Badge.style.display='none'; }
+        if(!pend){ _setPill(_l4Badge, ''); }
         else{
           _setPill(_l4Badge, _pillIc('shield')+'<span class="ws-pill-lb">'+window.T('base.pill.l4')+'</span><span class="ws-pill-n">'+pend+'</span>');
-          try{ _l4Badge.title=window.Tf('base.pill.l4_dyn',{n:pend,l1:l1,l3:l3,l4:l4}); }catch(_){}
+          try{
+            var title=window.Tf('base.pill.l4_dyn',{n:pend,l1:l1,l3:l3,l4:l4});
+            if(stale>0) title+=' · '+window.Tf('base.pill.l4_clear_stale',{n:stale});
+            _l4Badge.title=title;
+          }catch(_){}
           if(pend>_l4PulsePrev && _l4Badge.style.display!=='none'){
             _l4Badge.classList.remove('pulse'); void _l4Badge.offsetWidth; _l4Badge.classList.add('pulse');
           }

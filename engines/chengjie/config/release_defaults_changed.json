@@ -55,6 +55,22 @@
           "show_if": "always"
         }
       ]
+    },
+    "1.0.85": {
+      "date": "2026-09-13",
+      "decisions": [
+        "Q-31-D"
+      ],
+      "changes": [
+        {
+          "key": "inbox.sla_watcher.auto_expire_hours",
+          "kind": "value",
+          "old": 0,
+          "new": 48,
+          "i18n": "rn_auto_expire",
+          "show_if": "missing"
+        }
+      ]
     }
   }
 }

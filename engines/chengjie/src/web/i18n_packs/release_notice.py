@@ -37,6 +37,9 @@ ZH = {
     "rn_regen_desc": "原来只重拟超过 2 小时的陈稿；现在默认 0 ＝ 班次开始前拟的稿全部作废、按早上的上下文重写。",
     "rn_profile_llm_title": "客户画像 AI 抽取",
     "rn_profile_llm_desc": "现在默认开启：从对话里多学客户信息（只多学、不多发一条消息）。不想让 AI 做这件事可以关掉。",
+    # ── 1.0.85 各行 ──
+    "rn_auto_expire_title": "超龄未发稿自动作废",
+    "rn_auto_expire_desc": "出厂从关闭改为 48 小时后自动作废半自动（L1）未发稿，审计留痕，不改任何发送行为。已经自己设过这个值的不受影响。",
 }
 
 EN = {
@@ -70,6 +73,8 @@ EN = {
     "rn_regen_desc": "Previously only drafts older than 2 hours were redrafted; the default is now 0 = every draft written before the shift started is discarded and rewritten with the morning context.",
     "rn_profile_llm_title": "AI customer-profile extraction",
     "rn_profile_llm_desc": "Now on by default: learn more about customers from conversations (learns more, never sends more). Turn it off if you do not want the AI doing this.",
+    "rn_auto_expire_title": "Auto-void stale unsent drafts",
+    "rn_auto_expire_desc": "Factory default changes from off to voiding unsent semi-auto (L1) drafts after 48 hours. Audited; sending behaviour is unchanged. Machines that already set this value are not touched.",
 }
 
 ZH_HANT = {
@@ -103,4 +108,6 @@ ZH_HANT = {
     "rn_regen_desc": "原來只重擬超過 2 小時的陳稿；現在預設 0 ＝ 班次開始前擬的稿全部作廢、按早上的上下文重寫。",
     "rn_profile_llm_title": "客戶畫像 AI 抽取",
     "rn_profile_llm_desc": "現在預設開啟：從對話裡多學客戶資訊（只多學、不多發一條訊息）。不想讓 AI 做這件事可以關掉。",
+    "rn_auto_expire_title": "超齡未發稿自動作廢",
+    "rn_auto_expire_desc": "出廠從關閉改為 48 小時後自動作廢半自動（L1）未發稿，審計留痕，不改任何發送行為。已經自己設過這個值的不受影響。",
 }

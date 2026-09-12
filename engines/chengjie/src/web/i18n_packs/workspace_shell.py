@@ -144,6 +144,7 @@ ZH = {
     "base.pill.l4": "发前确认",
     "base.pill.l4_dyn": "等人确认的 AI 回复 {n} 条（待审 {l1} · 需审批 {l3} · 需主管放行 {l4}）— 点击进入草稿审批台",
     "base.pill.l4_t": "AI 写好的回复，发出前需要人确认（L4 需主管放行）· 点击进入草稿审批台",
+    "base.pill.l4_clear_stale": "另有 {n} 条超龄稿，进审批台可一键清空",
     "base.pill.sla_normal": "待处理",
     "base.pill.sla_t": "需要处理的会话（超时未回复 / 还没人接）",
     "base.pill.sla_urgent": "急需处理",
@@ -405,6 +406,7 @@ EN = {
     "base.pill.l4": "Pre-send check",
     "base.pill.l4_dyn": "{n} AI replies await confirmation (review {l1} · approve {l3} · supervisor release {l4}) — click to open the approval queue",
     "base.pill.l4_t": "AI-written replies awaiting human confirmation before sending (L4 needs supervisor release) · click to open the approval queue",
+    "base.pill.l4_clear_stale": "{n} stale draft(s) can be cleared in one click on the approval queue",
     "base.pill.sla_normal": "To handle",
     "base.pill.sla_t": "Conversations that need action (overdue / unclaimed)",
     "base.pill.sla_urgent": "Urgent",
@@ -525,4 +527,8 @@ EN = {
     "base.um.theme_t": "Cycle day / night / follow-system",
     "base.um.today": "Today’s overview",
     "base.workspace_label": "Agent Workspace",
+}
+
+ZH_HANT = {
+    "base.pill.l4_clear_stale": "另有 {n} 條超齡稿，進審批台可一鍵清空",
 }

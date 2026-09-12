@@ -678,6 +678,9 @@ async function backfillStep(entry) {
       name: String(item.name || ""),
       avatar_url: String(item.avatar || ""),
       ts: nowSec,
+      // Q-31 D（#317 PUUWJB）：只加字段。走既有 backfill 不起草 / dormant_review。
+      backfill: true,
+      backfill_source: "msg_backfill",
       messages: tail
         .filter((m) => m && !isUnsentTombstone(m.text))
         .map((m) => {

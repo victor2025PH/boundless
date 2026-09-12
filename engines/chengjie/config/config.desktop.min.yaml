@@ -120,6 +120,10 @@ inbox:
   # 同义双发静默跳过——B41「同稿双投」防线里唯一跨重启的一层（DB 消息镜像口径）。
   outbound_dup_guard:
     enabled: true
+  # Q-31 D：出厂 48h 作废未发 L1 稿（只动 pending，不改发送）。
+  sla_watcher:
+    auto_expire_hours: 48
+    auto_expire_levels: [L1]
   # 账号作息班表——2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：**出厂关**。
   # 1.0.78 曾 enabled:true + 「timezone 空＝本机钟」：桌面机在上海、客户在纽约，客户的下午
   # ＝我们的凌晨 → 自动回被整段静默扣留。班表会改变发送时间（基线红线②）、时区不得默认本机
