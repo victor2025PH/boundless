@@ -5,11 +5,13 @@
 import os
 import re
 import asyncio
+import hashlib
 import tempfile
 import threading
-from collections import Counter
+import time
+from collections import Counter, OrderedDict
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, Callable, Awaitable
 import logging
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,332 @@ def looks_like_asr_hallucination(text: str) -> bool:
         return False
 
 
+# ── 2026-09-12 ASR P0：转写缓存 / 动态超时 / 热词 prompt / 语种先验复核 ──────────
+# 日志实锤（zhiliao 09-12 20:34:57 与 20:35:09 同一 ``3A5A99EF…ogg`` 各转一次）：协议
+# 入站落库前转一遍、AutoDraft 再转一遍，38 次主 ASR 调用只对应 ~19 条语音；失败件连
+# 备路一起 4 次。服务端是单把推理锁的串行 GPU，重复请求直接放大排队 → 3s 超时 →
+# 静默降档。下面这组纯函数 + 缓存是几个消费口共用的地基，均不触网、可单测。
+
+_TC_MISS = object()
+
+
+class TranscriptCache:
+    """进程级转写结果缓存：键＝音频内容 sha1 + 语言参数。
+
+    - 命中直接返回，零 GPU；成功结果 TTL 1h（同字节同转写）；
+    - **负缓存**只收 ``no_speech`` / ``empty_result``（内容决定、重跑同样为空），TTL 10min
+      ——超时/被拒/不可达这类环境性失败绝不缓存（下一次可能就好了）；
+    - 有界 LRU；线程安全；``stats()`` 供 asr_stats 观测。
+    """
+
+    def __init__(self, max_entries: int = 512, ttl_ok_sec: float = 3600.0,
+                 ttl_empty_sec: float = 600.0) -> None:
+        self._lock = threading.RLock()
+        self._d: "OrderedDict[str, Tuple[Optional[str], Dict[str, Any], str, float]]" = OrderedDict()
+        self._max = max(8, int(max_entries))
+        self.ttl_ok = float(ttl_ok_sec)
+        self.ttl_empty = float(ttl_empty_sec)
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: str) -> Any:
+        """返回 ``(text, meta, last_error)`` 或哨兵 ``_TC_MISS``。"""
+        if not key:
+            return _TC_MISS
+        with self._lock:
+            item = self._d.get(key)
+            if item is None:
+                self.misses += 1
+                return _TC_MISS
+            text, meta, err, expires = item
+            if time.time() >= expires:
+                self._d.pop(key, None)
+                self.misses += 1
+                return _TC_MISS
+            self._d.move_to_end(key)
+            self.hits += 1
+            return text, dict(meta or {}), err
+
+    def put(self, key: str, text: Optional[str], meta: Optional[Dict[str, Any]] = None,
+            last_error: str = "") -> bool:
+        """成功→按 ttl_ok 存；空结果→仅 no_speech/empty_result 负缓存；其余不存。"""
+        if not key:
+            return False
+        if text:
+            ttl = self.ttl_ok
+        elif str(last_error or "").startswith("no_speech") or last_error == "empty_result":
+            ttl = self.ttl_empty
+        else:
+            return False
+        with self._lock:
+            self._d[key] = (text or None, dict(meta or {}), str(last_error or ""),
+                            time.time() + ttl)
+            self._d.move_to_end(key)
+            while len(self._d) > self._max:
+                self._d.popitem(last=False)
+        return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._d.clear()
+            self.hits = 0
+            self.misses = 0
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            total = self.hits + self.misses
+            return {"hits": self.hits, "misses": self.misses, "size": len(self._d),
+                    "max": self._max,
+                    "hit_rate": round(self.hits / total, 4) if total else 0.0}
+
+
+_TRANSCRIPT_CACHE: Optional[TranscriptCache] = None
+_TRANSCRIPT_CACHE_LOCK = threading.Lock()
+
+
+def get_transcript_cache() -> TranscriptCache:
+    global _TRANSCRIPT_CACHE
+    if _TRANSCRIPT_CACHE is None:
+        with _TRANSCRIPT_CACHE_LOCK:
+            if _TRANSCRIPT_CACHE is None:
+                _TRANSCRIPT_CACHE = TranscriptCache()
+    return _TRANSCRIPT_CACHE
+
+
+def transcript_cache_key(path: str, language: str = "auto") -> str:
+    """音频内容 sha1 + 语言 → 缓存键；文件读不到 → ""（调用方跳过缓存）。"""
+    try:
+        h = hashlib.sha1()
+        with open(str(path), "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return f"{h.hexdigest()}:{str(language or 'auto').strip().lower() or 'auto'}"
+    except Exception:
+        return ""
+
+
+def estimate_audio_duration(path: str) -> Optional[float]:
+    """读容器头估时长（WAV 头 / OGG 末页 granule，纯 Python，不起 ffprobe 子进程）。
+
+    热路只需要一个「大概多长」来定超时；估不出 → None（调用方用基础超时，行为同旧）。
+    """
+    try:
+        from src.ai.audio_pipeline_intake import probe_audio_file
+        d = probe_audio_file(str(path), use_ffprobe=False).get("duration_sec")
+        return float(d) if isinstance(d, (int, float)) and d > 0 else None
+    except Exception:
+        return None
+
+
+def effective_timeout(base_sec: float, duration_sec: Optional[float], *,
+                      per_audio_sec: float = 0.25, overhead_sec: float = 1.5,
+                      cap_sec: float = 10.0) -> float:
+    """按音频时长定单次转写超时：``clamp(base, dur×per_audio + overhead, cap)``。
+
+    背景：``timeout: 3`` 是 08-28 按 176（5090，探针 0.4~0.5s）定的；08-29 主 ASR 迁到
+    198（4070，与 Lite Hub 共卡）后同一夹具要 0.7~0.9s/4.25s 却没重校——长语音主路
+    必超时切备路（贪心 beam），而服务端并不取消已在跑的请求。09-12 实测 198 热态
+    11s 片段 0.65s（RTF≈0.06，固定开销为主）：缺省 per_audio 0.25 已是 ~4 倍余量，
+    留给排队（入站闸 3 路 × 单把推理锁）；cap 10s 与入站 25s 墙钟 + 备路 18s 联动
+    （极端同时超时会越过 25s → 占位符落库、AutoDraft 稍后重试，属既有退化路径）。
+    时长未知 → 原样用 base（行为不变）。
+    """
+    try:
+        base = float(base_sec or 0) or 30.0
+    except (TypeError, ValueError):
+        base = 30.0
+    if duration_sec is None or not isinstance(duration_sec, (int, float)) or duration_sec <= 0:
+        return base
+    try:
+        cap = max(float(cap_sec), base)
+        want = float(duration_sec) * float(per_audio_sec) + float(overhead_sec)
+    except (TypeError, ValueError):
+        return base
+    return round(min(cap, max(base, want)), 2)
+
+
+def hotwords_prompt(config: Optional[Dict[str, Any]]) -> str:
+    """``voice_recognition.hotwords``（或 whisper.hotwords）→ 一条 prompt 串（「、」连接）。
+
+    此前只有进程内 FasterWhisper 消费它；生产主路 OpenAI 兼容端点从没收到过——
+    一长串产品名一直是死配置。现在 OpenAI 兼容路走标准 ``prompt`` 字段送出。
+    """
+    cfg = config if isinstance(config, dict) else {}
+    hw = cfg.get("hotwords") or (cfg.get("whisper", {}) or {}).get("hotwords")
+    if isinstance(hw, (list, tuple, set)):
+        hw = "、".join(str(w).strip() for w in hw if str(w or "").strip())
+    s = str(hw or "").strip()
+    return s[:400]
+
+
+_ECHO_STRIP_RE = re.compile(r"[\s，,、。.!！?？~～:：;；\-—_]+")
+
+
+def looks_like_prompt_echo(text: str, prompt: str,
+                           no_speech_prob: Optional[float] = None, *,
+                           duration: Optional[float] = None,
+                           language_probability: Optional[float] = None) -> bool:
+    """Whisper 在静音/噪声/极短音频上会把 initial_prompt 原样吐回来（「智聊ChatX…」）。
+
+    判定：转写去标点后**只由热词拼成**——命中 ≥2 个热词即认；只命中 1 个热词时须有
+    「不像真说了这个词」的旁证之一：no_speech_prob ≥ 0.5 / 音频 < 2s（09-12 实锤：
+    1.47s 片段带 prompt 直吐「智聊ChatX」）/ 语种概率 < 0.6。客户真说一句「无界科技」
+    （几秒、语种清楚）不被误杀。纯函数不抛。
+    """
+    try:
+        compact = _ECHO_STRIP_RE.sub("", str(text or ""))
+        words = [w for w in re.split(r"[、,，\s]+", str(prompt or "")) if w.strip()]
+        if not compact or not words:
+            return False
+        rest, matched = compact, 0
+        for w in sorted(set(words), key=len, reverse=True):
+            wc = _ECHO_STRIP_RE.sub("", w)
+            if wc and wc in rest:
+                matched += rest.count(wc)
+                rest = rest.replace(wc, "")
+        if rest or matched == 0:
+            return False
+        if matched >= 2:
+            return True
+        if no_speech_prob is not None and float(no_speech_prob) >= 0.5:
+            return True
+        if isinstance(duration, (int, float)) and 0 < float(duration) < 2.0:
+            return True
+        if isinstance(language_probability, (int, float)) and float(language_probability) < 0.6:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+# OpenAI 官方 verbose_json 的 language 是英文全名（"english"）；自建服务回 ISO 码。
+_LANG_NAME_TO_CODE = {
+    "chinese": "zh", "mandarin": "zh", "cantonese": "yue", "english": "en",
+    "japanese": "ja", "korean": "ko", "thai": "th", "vietnamese": "vi",
+    "indonesian": "id", "malay": "ms", "tagalog": "tl", "filipino": "tl",
+    "spanish": "es", "portuguese": "pt", "french": "fr", "german": "de",
+    "russian": "ru", "arabic": "ar", "hindi": "hi", "italian": "it", "turkish": "tr",
+}
+_META_FLOAT_KEYS = ("duration", "language_probability", "avg_logprob",
+                    "no_speech_prob", "compression_ratio")
+
+
+def extract_transcription_meta(resp: Any) -> Dict[str, Any]:
+    """OpenAI 兼容转写响应（SDK 对象 / dict / 纯文本）→ ``{text, language, …置信度}``。
+
+    SDK 的 pydantic 模型 ``extra=allow``：自建服务多回的 avg_logprob 等在
+    ``model_extra`` 里；官方 verbose_json 的 segments 里也有逐段置信度，这里取聚合
+    （avg_logprob 均值 / no_speech_prob 最大 / compression_ratio 最大）。缺什么就不给
+    什么，绝不猜。
+    """
+    out: Dict[str, Any] = {}
+    if resp is None:
+        return out
+    if isinstance(resp, str):
+        out["text"] = resp
+        return out
+    if isinstance(resp, dict):
+        d: Dict[str, Any] = dict(resp)
+    else:
+        d = {}
+        try:
+            extra = getattr(resp, "model_extra", None)
+            if isinstance(extra, dict):
+                d.update(extra)
+        except Exception:
+            pass
+        for k in ("text", "language", "segments") + _META_FLOAT_KEYS:
+            try:
+                v = getattr(resp, k, None)
+            except Exception:
+                v = None
+            if v is not None and k not in d:
+                d[k] = v
+    out["text"] = str(d.get("text") or "")
+    lang = str(d.get("language") or "").strip().lower()
+    if lang:
+        out["language"] = _LANG_NAME_TO_CODE.get(lang, lang.split("-")[0] if len(lang) <= 6 else lang)
+    for k in _META_FLOAT_KEYS:
+        v = d.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = float(v)
+    # 顶层没给、但 segments 里有逐段置信度 → 聚合（官方 whisper-1 verbose_json 形态）
+    segs = d.get("segments")
+    if isinstance(segs, (list, tuple)) and segs:
+        lp, nsp, cr = [], [], []
+        for s in segs:
+            g = (lambda k: (s.get(k) if isinstance(s, dict) else getattr(s, k, None)))
+            for arr, key in ((lp, "avg_logprob"), (nsp, "no_speech_prob"), (cr, "compression_ratio")):
+                v = g(key)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    arr.append(float(v))
+        if lp and "avg_logprob" not in out:
+            out["avg_logprob"] = sum(lp) / len(lp)
+        if nsp and "no_speech_prob" not in out:
+            out["no_speech_prob"] = max(nsp)
+        if cr and "compression_ratio" not in out:
+            out["compression_ratio"] = max(cr)
+    return out
+
+
+def _lang_family(code: str) -> str:
+    """zh/zh-tw/zh-hk/yue → zh；其余取主码。只用于「先验 vs 检出」冲突判定。"""
+    c = str(code or "").strip().lower().replace("_", "-")
+    if not c or c in ("auto", "none", "null"):
+        return ""
+    try:
+        from src.ai.lang_policy import normalize_lang_code
+        c = normalize_lang_code(c)
+    except Exception:
+        pass
+    return "zh" if (c.startswith("zh") or c == "yue") else c.split("-")[0]
+
+
+def lang_family_of_text(text: str) -> str:
+    """文本文字系统 → 语种家族（只认强证据；判不出 → ""）。"""
+    try:
+        from src.ai.lang_policy import EvidenceStrength, classify_evidence
+        code, strength = classify_evidence(str(text or ""))
+        if strength != EvidenceStrength.STRONG:
+            return ""
+        return _lang_family(code)
+    except Exception:
+        return ""
+
+
+def should_retry_with_lang_hint(meta: Optional[Dict[str, Any]], text: str,
+                                lang_hint: str, *, min_prob: float = 0.6) -> bool:
+    """会话语种先验 vs 本条转写检出语种：值不值得按先验**重转一次**。
+
+    原则（WA RPA 线 ``_asr_language_hint`` 同契约，0830「中文客户语音被转成韩语乱码」
+    实锤）：先验不直接钉死 language（Whisper 对不匹配语言会翻译而非转写），而是
+    先 auto 转、检出语种与先验冲突且置信不足时再按先验重转。判定：
+      - 无先验 / 检不出语种 / 同家族 → 不重转；
+      - 检出语种 ≠ 先验：服务端给了 language_probability → < min_prob 才重转；
+        没给（老服务 / 只有文本）→ 按文字系统与先验冲突即重转。
+    """
+    hint_fam = _lang_family(lang_hint)
+    if not hint_fam or not str(text or "").strip():
+        return False
+    m = meta if isinstance(meta, dict) else {}
+    detected = str(m.get("language") or "").strip()
+    det_fam = _lang_family(detected) if detected else lang_family_of_text(text)
+    if not det_fam or det_fam == hint_fam:
+        return False
+    prob = m.get("language_probability")
+    if isinstance(prob, (int, float)):
+        return float(prob) < float(min_prob)
+    return True
+
+
+def _record_asr_event(kind: str) -> None:
+    try:
+        from src.ai.asr_stats import get_asr_stats
+        get_asr_stats().record_event(kind)
+    except Exception:
+        pass
+
+
 class VoiceTranscriber:
     """语音转录服务基类"""
 
@@ -92,20 +420,151 @@ class VoiceTranscriber:
         # 失败分支写入；级联转录器把各级的串拼起来。纯观测字段，不改任何判定。
         self.last_error: str = ""
 
+        # ASR P0（2026-09-12）：最近一次转写的元数据（检出语种 / 语种概率 / avg_logprob /
+        # no_speech_prob / 时长 / 是否命中缓存 / 是否按先验重转…），随 last_error 同为
+        # 纯观测字段——上层据此做低置信标记（P1 三态），本模块不据此改判。
+        self.last_meta: Dict[str, Any] = {}
+        _tc = config.get('transcript_cache') if isinstance(
+            config.get('transcript_cache'), dict) else {}
+        # 转写缓存（同一音频再来一遍直接命中；负缓存只收 no_speech/empty）。默认开。
+        self.transcript_cache_enabled = bool(_tc.get('enabled', True))
+        # 语种先验复核：检出语种≠先验且置信 < 此值 → 按先验重转一次
+        try:
+            self.lang_hint_min_prob = float(config.get('lang_hint_min_prob', 0.6) or 0.6)
+        except (TypeError, ValueError):
+            self.lang_hint_min_prob = 0.6
+
         self.logger.info(f"语音转录服务初始化，临时目录: {self.temp_dir}")
 
-    async def transcribe_voice_message(self, voice_file_path: str, language: str = "zh") -> Optional[str]:
+    # ── 顶层入口：缓存 → 守卫转写 → 语种先验复核（级联子级不走这层，由父级统一）──
+    async def transcribe_voice_message(
+        self, voice_file_path: str, language: str = "zh", *,
+        lang_hint: Optional[str] = None,
+    ) -> Optional[str]:
         """
         转录语音文件为文本
 
         Args:
             voice_file_path: 语音文件路径
             language: 语言代码（zh=中文，auto=自动检测）
+            lang_hint: 会话语种先验（可选）。**不**直接钉死 language——先按 language
+                转，检出语种与先验冲突且置信不足时再按先验重转一次
+                （见 should_retry_with_lang_hint）。
 
         Returns:
             转录的文本，如果失败返回None
         """
+        if self._asr_chained_child:
+            # 级联子级：缓存/先验复核由 FallbackTranscriber 统一做，这里只做守卫转写
+            return await self._transcribe_guarded(voice_file_path, language)
         self.last_error = ""
+        self.last_meta = {}
+        key = self._cache_lookup_key(voice_file_path, language)
+        found, hit = self._cache_get(key)
+        if found:
+            return hit
+        text = await self._transcribe_guarded(voice_file_path, language)
+        meta = dict(self.last_meta or {})
+        if text and lang_hint:
+            async def _retry(lang: str) -> Tuple[Optional[str], Dict[str, Any]]:
+                out = await self._transcribe_guarded(voice_file_path, lang, record=False)
+                return out, dict(self.last_meta or {})
+            text, meta = await self._apply_lang_hint(text, meta, lang_hint, _retry)
+        meta.setdefault("provider", self.__class__.__name__)
+        self.last_meta = meta
+        self._cache_put(key, text, meta, self.last_error)
+        return text
+
+    def _cache_scope(self) -> str:
+        """缓存作用域：转录器类型 + 端点/模型——同配置的不同实例（TelegramClient 常驻的
+        与 lazy_voice_transcriber 懒建的）共享，不同后端各存各的。"""
+        parts = [self.__class__.__name__]
+        for attr in ("base_url", "model", "model_size", "model_dir"):
+            v = getattr(self, attr, None)
+            if isinstance(v, str) and v:
+                parts.append(v)
+        return "|".join(parts)
+
+    def _cache_lookup_key(self, voice_file_path: str, language: str) -> str:
+        if not self.transcript_cache_enabled:
+            return ""
+        base = transcript_cache_key(voice_file_path, language)
+        return f"{base}|{self._cache_scope()}" if base else ""
+
+    def _cache_get(self, key: str) -> Tuple[bool, Optional[str]]:
+        """→ ``(found, text)``。命中时回填 last_meta（带 ``cache_hit``）与 last_error
+        （负缓存带 ``cache:`` 前缀说明来源）；未命中 → ``(False, None)`` 且不动状态。"""
+        if not key:
+            return False, None
+        got = get_transcript_cache().get(key)
+        if got is _TC_MISS:
+            return False, None
+        text, meta, err = got
+        meta = dict(meta or {})
+        meta["cache_hit"] = True
+        self.last_meta = meta
+        self.last_error = (f"cache:{err}" if err else "")
+        _record_asr_event("cache_hit")
+        self.logger.info("[asr] 转写缓存命中（免重转） text=%s err=%s",
+                         (text or "")[:40], err or "-")
+        return True, (text or None)
+
+    def _cache_put(self, key: str, text: Optional[str], meta: Dict[str, Any],
+                   last_error: str) -> None:
+        if not key:
+            return
+        try:
+            m = {k: v for k, v in (meta or {}).items() if k != "cache_hit"}
+            get_transcript_cache().put(key, text, m, last_error)
+        except Exception:
+            pass
+
+    async def _apply_lang_hint(
+        self, text: str, meta: Dict[str, Any], lang_hint: str,
+        retry: Callable[[str], Awaitable[Tuple[Optional[str], Dict[str, Any]]]],
+    ) -> Tuple[Optional[str], Dict[str, Any]]:
+        """检出语种 vs 会话先验冲突且置信不足 → 按先验重转一次；重转结果的文字系统
+        必须与先验同家族才采用（防强制语言让 Whisper 变成翻译器），否则保留原转写并
+        置 ``lang_suspect`` 标记（上层可走「听不清请确认」话术）。
+
+        ``retry(lang)`` → ``(text, meta)``：由调用方决定在哪一级重转（单转录器＝自身
+        守卫转写；级联＝胜出的那一级）。"""
+        hint = str(lang_hint or "").strip().lower()
+        if not hint or not text:
+            return text, meta
+        if not should_retry_with_lang_hint(meta, text, hint, min_prob=self.lang_hint_min_prob):
+            return text, meta
+        _record_asr_event("lang_retry")
+        self.logger.info(
+            "[asr] 检出语种 %s(p=%s) 与会话先验 %s 冲突 → 按先验重转一次",
+            meta.get("language") or "?", meta.get("language_probability", "-"), hint)
+        retry_text: Optional[str] = None
+        retry_meta: Dict[str, Any] = {}
+        try:
+            retry_text, retry_meta = await retry(hint)
+        except Exception as e:  # noqa: BLE001 - 复核失败不影响原转写
+            self.logger.debug("[asr] 先验重转异常（保留原转写）: %s", e)
+        if retry_text and str(retry_text).strip():
+            fam_ok = lang_family_of_text(retry_text) in ("", _lang_family(hint))
+            if fam_ok:
+                out = dict(retry_meta or {})
+                out.update({"lang_retry": True, "lang_retry_from": meta.get("language"),
+                            "language": _lang_family(hint)})
+                _record_asr_event("lang_retry_changed")
+                self.logger.info("[asr] 先验重转采用: %s → %s",
+                                 str(text)[:40], str(retry_text)[:40])
+                return str(retry_text).strip(), out
+        out = dict(meta)
+        out.update({"lang_retry": True, "lang_suspect": True})
+        return text, out
+
+    async def _transcribe_guarded(
+        self, voice_file_path: str, language: str = "zh", *, record: bool = True,
+    ) -> Optional[str]:
+        """守卫转写（原公有方法主体）：存在性/大小检查 → 具体实现 → 幻觉守卫 →
+        繁简归一 → 观测计数。``record=False`` 用于先验重转（不重复计顶层成败）。"""
+        self.last_error = ""
+        self.last_meta = {}
         try:
             # 检查文件是否存在
             if not os.path.exists(voice_file_path):
@@ -134,12 +593,12 @@ class VoiceTranscriber:
                     return None
                 text = self._normalize_zh_script(text)
                 self.logger.info(f"语音转录成功: {text[:100]}...")
-                if not self._asr_chained_child:
+                if record and not self._asr_chained_child:
                     self._record_asr(ok=True, level=0)
                 return text
             else:
                 self.logger.warning("语音转录返回空结果")
-                if not self._asr_chained_child:
+                if record and not self._asr_chained_child:
                     self._record_asr(ok=False)
                 if not self.last_error:
                     self.last_error = "empty_result"
@@ -292,13 +751,11 @@ class FasterWhisperTranscriber(VoiceTranscriber):
             self.logger.info(f"开始转录: {voice_file_path}")
             # 热词/专有名词引导（治同音误转："智聊"→"治療"、"回复"→"恢复"）：
             # initial_prompt 把产品名/业务词喂给 whisper 当上文，显著提升专名命中。
-            _hotwords = self.config.get('hotwords') or (
-                self.config.get('whisper', {}) or {}).get('hotwords')
-            if isinstance(_hotwords, (list, tuple)):
-                _hotwords = "、".join(str(w) for w in _hotwords if w)
+            # 解析口径与 OpenAI 兼容路同源（hotwords_prompt）。
+            _hotwords = hotwords_prompt(self.config)
             _kw = {}
-            if _hotwords and str(_hotwords).strip():
-                _kw['initial_prompt'] = str(_hotwords).strip()
+            if _hotwords:
+                _kw['initial_prompt'] = _hotwords
             segments, info = self.model.transcribe(
                 audio=voice_file_path,
                 language=language if language != "auto" else None,
@@ -308,8 +765,29 @@ class FasterWhisperTranscriber(VoiceTranscriber):
                 **_kw,
             )
 
-            # 合并所有片段
-            text = " ".join([segment.text for segment in segments])
+            # 合并所有片段（顺带聚合置信度进 last_meta，与 OpenAI 兼容路同形）
+            texts, lps, nsps = [], [], []
+            for segment in segments:
+                texts.append(str(getattr(segment, "text", "") or ""))
+                lp = getattr(segment, "avg_logprob", None)
+                if isinstance(lp, (int, float)):
+                    lps.append(float(lp))
+                ns = getattr(segment, "no_speech_prob", None)
+                if isinstance(ns, (int, float)):
+                    nsps.append(float(ns))
+            meta: Dict[str, Any] = {"provider": self.__class__.__name__}
+            _lang = getattr(info, "language", None)
+            if _lang:
+                meta["language"] = str(_lang)
+            _lp = getattr(info, "language_probability", None)
+            if isinstance(_lp, (int, float)):
+                meta["language_probability"] = float(_lp)
+            if lps:
+                meta["avg_logprob"] = sum(lps) / len(lps)
+            if nsps:
+                meta["no_speech_prob"] = max(nsps)
+            self.last_meta = meta
+            text = " ".join(texts)
             return text.strip()
 
         except ImportError:
@@ -347,6 +825,36 @@ class OpenAITranscriber(VoiceTranscriber):
             )
         except (TypeError, ValueError):
             self.max_retries = 0
+
+        # ASR P0（2026-09-12）：按音频时长的动态超时（见 effective_timeout）。
+        # timeout 仍是短/未知时长音频的基础超时（行为不变），长音频按时长放宽到 timeout_max。
+        def _f(key: str, default: float) -> float:
+            try:
+                v = openai_config.get(key, config.get(key, default))
+                return float(default if v is None else v)
+            except (TypeError, ValueError):
+                return float(default)
+        self.timeout_per_audio_sec = _f('timeout_per_audio_sec', 0.25)
+        self.timeout_overhead_sec = _f('timeout_overhead_sec', 1.5)
+        self.timeout_max_sec = _f('timeout_max', 10.0)
+        # 服务端 no_speech_prob（verbose_json 才有）≥ 此值 → 按无人声丢弃（与备路
+        # AvatarWhisper 的 max_no_speech_prob 同口径 0.85）
+        self.max_no_speech_prob = _f('max_no_speech_prob', 0.85)
+        # 热词经标准 prompt 字段送出。**默认关**——2026-09-12 在 198 同模型 A/B：任何
+        # 形式的 prompt（顿号列表 / 自然句 / 原生 hotwords）都让边缘音频（4.25s 探针夹具）
+        # 从稳定正确变成「M-M-M-M」「Lingo、Lingo」「声音 音乐 声音」类乱码，而在干净的
+        # 11s / 3s 片段上只多了标点、正文零变化。管路保留（服务端认 prompt），等评测集
+        # 有含产品名的真实样本再 A/B；开启时只对 ≥ hotwords_min_duration_sec 的音频送
+        # （短片段是 prompt 回声高发区：1.47s 片段直接吐回「智聊ChatX」）。
+        self.send_hotwords = bool(openai_config.get(
+            'send_hotwords', config.get('send_hotwords', False)))
+        self.hotwords_min_duration_sec = _f('hotwords_min_duration_sec', 3.0)
+        # 响应格式：verbose_json 拿检出语种/时长（自建服务另附置信度）；端点若不认
+        # （400）→ 粘性降级回 json，本进程内不再尝试。
+        self.response_format = str(openai_config.get(
+            'response_format', config.get('response_format', 'verbose_json'))
+            or 'verbose_json').strip().lower()
+        self._verbose_json_ok = True
 
         if not self.api_key:
             self.logger.warning("OpenAI API密钥未配置")
@@ -413,22 +921,104 @@ class OpenAITranscriber(VoiceTranscriber):
             # max_retries=0 + timeout：主转录不可达/慢时快速失败回落，不重试、不阻塞理解链。
             client = self._get_client(api_key)
 
+            # 动态超时：按容器头估时长（不起子进程），长音频放宽、短音频按基础超时。
+            duration = estimate_audio_duration(voice_file_path)
+            eff_timeout = effective_timeout(
+                self.timeout_sec, duration,
+                per_audio_sec=self.timeout_per_audio_sec,
+                overhead_sec=self.timeout_overhead_sec,
+                cap_sec=self.timeout_max_sec,
+            )
+            # 热词经标准 prompt 字段：只在中文/自动检测时送（外语强制语种时送中文
+            # 热词毫无意义）；服务端（asr_server.py）当 initial_prompt 用，网关透传。
+            lang_param = language if language and language != "auto" else None
+            prompt = ""
+            if (self.send_hotwords
+                    and (lang_param is None or _lang_family(lang_param) == "zh")
+                    and (duration is None or duration >= self.hotwords_min_duration_sec)):
+                prompt = hotwords_prompt(self.config)
+            fmt = self.response_format if (
+                self.response_format != "verbose_json" or self._verbose_json_ok) else "json"
+
             # SDK 的 transcriptions.create 是**同步阻塞**调用：直接在事件循环上跑会把
             # 整个 web 进程按住整个 ASR 时长（实录单条 25s 墙钟）——期间边车重投、坐席
             # 轮询全部堆在待处理连接上，越过 Windows ``select()`` 512 上限即整体崩。
             # 故挪进线程池；并发上限由入站侧的转录闸控制（见
             # ``unified_inbox_account_routes._ingest_asr_sem``）。
-            def _call() -> Any:
+            def _call(response_format: str) -> Any:
+                kwargs: Dict[str, Any] = {
+                    "model": self.model,
+                    "language": lang_param,
+                    "response_format": response_format,
+                    # 请求级超时（SDK 原生支持），客户端与连接池仍复用
+                    "timeout": eff_timeout,
+                }
+                if prompt:
+                    kwargs["prompt"] = prompt
                 with open(voice_file_path, 'rb') as audio_file:
-                    return client.audio.transcriptions.create(
-                        model=self.model,
-                        file=audio_file,
-                        language=language if language != "auto" else None,
-                        response_format="text"
-                    )
+                    return client.audio.transcriptions.create(file=audio_file, **kwargs)
 
-            self.logger.info(f"调用OpenAI Whisper API: {voice_file_path}")
-            return await asyncio.to_thread(_call)
+            self.logger.info(
+                "调用OpenAI Whisper API: %s (dur=%s timeout=%.1fs fmt=%s prompt=%s)",
+                voice_file_path, f"{duration:.1f}s" if duration else "?",
+                eff_timeout, fmt, "yes" if prompt else "no")
+            t0 = time.monotonic()
+            try:
+                resp = await asyncio.to_thread(_call, fmt)
+            except openai.BadRequestError as e:
+                if fmt == "verbose_json":
+                    # 端点不认 verbose_json（部分网关/云模型）→ 本进程内粘性降级为 json
+                    self._verbose_json_ok = False
+                    self.logger.warning(
+                        "OpenAI 兼容端点拒绝 verbose_json（%s），降级为 json 重试一次", e)
+                    resp = await asyncio.to_thread(_call, "json")
+                else:
+                    raise
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+            meta = extract_transcription_meta(resp)
+            text = str(meta.pop("text", "") or "").strip()
+            if duration and "duration" not in meta:
+                meta["duration"] = float(duration)
+            meta["timeout_sec"] = eff_timeout
+            meta["elapsed_ms"] = elapsed_ms
+            meta["provider"] = self.__class__.__name__
+            self.last_meta = meta
+
+            nsp = meta.get("no_speech_prob")
+            if text and isinstance(nsp, (int, float)) and float(nsp) >= self.max_no_speech_prob:
+                # 服务端逐段 no_speech 极高＝很可能是静音上的幻觉；与备路 AvatarWhisper
+                # 的 max_no_speech_prob 闸同口径，丢弃交回落/上层 ack
+                self.logger.warning(
+                    "[asr] no_speech_prob=%.2f ≥ %.2f，按无人声丢弃: %s",
+                    float(nsp), self.max_no_speech_prob, text[:40])
+                self.last_error = f"no_speech: no_speech_prob={float(nsp):.2f}"
+                _record_asr_event("no_speech_gate")
+                return None
+            if text and prompt and looks_like_prompt_echo(
+                    text, prompt, nsp,
+                    duration=meta.get("duration"),
+                    language_probability=meta.get("language_probability")):
+                self.logger.warning("[asr] 转写疑为 prompt 回声（热词原样吐回），丢弃: %s", text[:40])
+                self.last_error = "no_speech: prompt_echo"
+                _record_asr_event("prompt_echo_dropped")
+                return None
+            lp = meta.get("avg_logprob")
+            lprob = meta.get("language_probability")
+            low = (isinstance(lp, (int, float)) and float(lp) < -1.0) or (
+                isinstance(lprob, (int, float)) and lang_param is None and float(lprob) < 0.6)
+            if text and low:
+                meta["low_confidence"] = True
+                _record_asr_event("low_confidence")
+            self.logger.info(
+                "[asr] openai ok=%s lang=%s p=%s logprob=%s nsp=%s dur=%s elapsed=%dms",
+                bool(text), meta.get("language", "?"),
+                f"{lprob:.2f}" if isinstance(lprob, (int, float)) else "-",
+                f"{lp:.2f}" if isinstance(lp, (int, float)) else "-",
+                f"{nsp:.2f}" if isinstance(nsp, (int, float)) else "-",
+                f"{meta.get('duration'):.1f}s" if isinstance(meta.get("duration"), (int, float)) else "?",
+                elapsed_ms)
+            return text or None
 
         except ImportError:
             self.logger.error("OpenAI库未安装，请运行: pip install openai")
@@ -671,6 +1261,10 @@ class FallbackTranscriber(VoiceTranscriber):
         _names = " → ".join(t.__class__.__name__ for t in self._chain) or "(空)"
         self.logger.info(f"级联转录服务初始化: {_names}")
 
+    def _cache_scope(self) -> str:
+        # 级联按主级作用域缓存（回落级转出的文本也是「这段音频的转写」，同键复用）
+        return ("Fallback>" + self._chain[0]._cache_scope()) if self._chain else "Fallback"
+
     async def warmup(self) -> None:
         """只预热主转录器（chain[0]）：回落级是小概率路径，启动即加载
         会白占显存/内存（本机 GPU 显存紧张纪律）；主级挂了再懒加载兜底。"""
@@ -678,10 +1272,18 @@ class FallbackTranscriber(VoiceTranscriber):
             await self._chain[0].warmup()
 
     async def transcribe_voice_message(
-        self, voice_file_path: str, language: str = "zh"
+        self, voice_file_path: str, language: str = "zh", *,
+        lang_hint: Optional[str] = None,
     ) -> Optional[str]:
         last_err: Optional[Exception] = None
         self.last_error = ""
+        self.last_meta = {}
+        # 转写缓存（ASR P0）：同一音频（协议入站落库前 + AutoDraft 两条路各转一遍）
+        # 第二次直接命中；负缓存只收「内容决定的空结果」。
+        key = self._cache_lookup_key(voice_file_path, language)
+        found, hit = self._cache_get(key)
+        if found:
+            return hit
         errs = []   # M-5 D：各级失败原因（工具箱链据此分类「超时/被拒/不可达」）
         for idx, t in enumerate(self._chain):
             try:
@@ -705,6 +1307,16 @@ class FallbackTranscriber(VoiceTranscriber):
                         ok=True, level=idx, provider=t.__class__.__name__)
                 except Exception:
                     pass
+                meta = dict(getattr(t, "last_meta", {}) or {})
+                if lang_hint:
+                    async def _retry(lang: str, _t: Any = t) -> Tuple[Optional[str], Dict[str, Any]]:
+                        out = await _t.transcribe_voice_message(voice_file_path, lang)
+                        return out, dict(getattr(_t, "last_meta", {}) or {})
+                    text, meta = await self._apply_lang_hint(text, meta, lang_hint, _retry)
+                meta["provider"] = t.__class__.__name__
+                meta["level"] = idx
+                self.last_meta = meta
+                self._cache_put(key, text, meta, "")
                 return text
             self.logger.warning(
                 f"转录器 {t.__class__.__name__} 返空，尝试回落下一级"
@@ -717,6 +1329,11 @@ class FallbackTranscriber(VoiceTranscriber):
             get_asr_stats().record(ok=False)
         except Exception:
             pass
+        # 全链返空且每级都是「内容决定」的空（no_speech/empty_result）→ 负缓存，
+        # AutoDraft 十几秒后再来不必让 GPU 再白跑两遍；任一级是超时/被拒/异常则不缓存。
+        if key and errs and last_err is None and all(
+                (": no_speech" in e or e.endswith(": empty_result")) for e in errs):
+            self._cache_put(key, None, {"provider": self.__class__.__name__}, "no_speech: all_levels")
         return None
 
     async def _transcribe_impl(

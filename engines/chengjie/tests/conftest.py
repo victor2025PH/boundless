@@ -447,6 +447,15 @@ def _reset_process_singletons_now():
         get_media_enrich_stats().reset()
     except Exception:
         pass
+    try:
+        # ASR 转写缓存（2026-09-12 ASR P0）：键＝音频**内容** sha1——测试夹具普遍
+        # 写同一串假字节，不清则上一个用例的转写/负缓存会「命中」到下一个用例。
+        import sys as _sys
+        _vt = _sys.modules.get("src.voice_transcriber")
+        if _vt is not None and getattr(_vt, "_TRANSCRIPT_CACHE", None) is not None:
+            _vt._TRANSCRIPT_CACHE.reset()
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)

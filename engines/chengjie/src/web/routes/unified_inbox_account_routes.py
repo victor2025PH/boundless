@@ -70,9 +70,19 @@ def _ingest_asr_sem(cfg: Optional[Dict[str, Any]] = None) -> asyncio.Semaphore:
 
 
 async def _transcribe_ingest_guarded(vtr: Any, path: str, lang: str,
-                                     cfg: Optional[Dict[str, Any]] = None) -> Any:
-    """过并发闸再转录（调用方负责把本协程包进 wait_for 限总时长）。"""
+                                     cfg: Optional[Dict[str, Any]] = None,
+                                     lang_hint: Optional[str] = None) -> Any:
+    """过并发闸再转录（调用方负责把本协程包进 wait_for 限总时长）。
+
+    ``lang_hint``（ASR P0）：会话语种先验，只用于「检出语种冲突且置信不足时按先验
+    重转一次」；转录器不认该参数（旧签名/替身）→ 退回两参调用。
+    """
     async with _ingest_asr_sem(cfg):
+        if lang_hint:
+            try:
+                return await vtr.transcribe_voice_message(path, lang, lang_hint=lang_hint)
+            except TypeError:
+                pass
         return await vtr.transcribe_voice_message(path, lang)
 
 # 各平台「边车 worker」的登录 mode——即会主动 POST /session-status 的那些服务所对应的
@@ -1567,16 +1577,40 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                     if _vpath and _vtr is not None:
                         _vlang = str((_cfg0.get("voice_recognition") or {}).get(
                             "language", "auto")) or "auto"
+                        # ASR P0：会话语种先验（显式「发→X」→ 历史文字多数语种），
+                        # 只做冲突复核不钉死 language；算不出 → None 保持 auto。
+                        _vhint = None
+                        try:
+                            from src.inbox.asr_lang_hint import conversation_asr_lang_hint
+                            from src.inbox.normalizer import conv_id as _mk_cid_v
+                            _vhint = conversation_asr_lang_hint(
+                                store, _mk_cid_v(_plat, _acct, _ck))
+                        except Exception:
+                            _vhint = None
                         _vtxt = await asyncio.wait_for(
                             _transcribe_ingest_guarded(
-                                _vtr, str(_vpath), _vlang, _cfg0),
+                                _vtr, str(_vpath), _vlang, _cfg0, lang_hint=_vhint),
                             timeout=_INGEST_ASR_TIMEOUT_SEC,
                         )
+                        _vmeta = getattr(_vtr, "last_meta", None) or {}
                         if _vtxt and str(_vtxt).strip():
                             _text = str(_vtxt).strip()
                             logger.info(
-                                "[protocol] 入站语音落库前转录 %s:%s:%s → %s",
-                                _plat, _acct, _ck, _text[:80])
+                                "[protocol] 入站语音落库前转录 %s:%s:%s → %s "
+                                "(lang=%s p=%s logprob=%s cache=%s retry=%s hint=%s)",
+                                _plat, _acct, _ck, _text[:80],
+                                _vmeta.get("language", "?"),
+                                _vmeta.get("language_probability", "-"),
+                                _vmeta.get("avg_logprob", "-"),
+                                "hit" if _vmeta.get("cache_hit") else "-",
+                                "yes" if _vmeta.get("lang_retry") else "-",
+                                _vhint or "-")
+                        else:
+                            logger.info(
+                                "[protocol] 入站语音转录返空 %s:%s:%s err=%s cache=%s",
+                                _plat, _acct, _ck,
+                                str(getattr(_vtr, "last_error", "") or "-")[:120],
+                                "hit" if _vmeta.get("cache_hit") else "-")
             except asyncio.TimeoutError:
                 logger.warning(
                     "[protocol] 入站语音转录超时 %ss，按占位符落库 %s:%s:%s",

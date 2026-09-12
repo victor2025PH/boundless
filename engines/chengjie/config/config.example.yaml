@@ -194,8 +194,20 @@ voice_recognition:
                                # 只预热级联主级，回落级仍懒加载省显存）
   zh_simplified_output: true   # 中文转写统一简体（Whisper 系对普通话吐简吐繁不受控；
                                # 粤文/日文汉字豁免；opencc 缺失恒等）。false=原样透传
-  # 专有名词热词（faster_whisper 生效，作 initial_prompt 引导；治"智聊"→"治療"同音误转）
+  # 专有名词热词（进程内 faster_whisper 恒作 initial_prompt；OpenAI 兼容主路须另开
+  # send_hotwords 才经标准 prompt 字段送出——2026-09-12 同模型 A/B：prompt 让边缘音频
+  # 乱码、干净音频只多标点，故默认不送，等评测集有含产品名的真实样本再开）
   # hotwords: 智聊ChatX、通译LingoX、无界科技
+  # send_hotwords: false            # OpenAI 兼容主路是否送热词 prompt（默认关）
+  # hotwords_min_duration_sec: 3.0  # 开了也只对 ≥3s 音频送（短片段是 prompt 回声高发区）
+  # ── ASR P0（2026-09-12）：以下均有缺省，按需覆写 ──
+  # timeout: 3                      # 短/未知时长音频的基础超时（OpenAI 兼容路）
+  # timeout_per_audio_sec: 0.25     # 长音频按时长放宽：clamp(timeout, dur×0.25+1.5, timeout_max)
+  # timeout_max: 10
+  # response_format: verbose_json   # 拿检出语种/置信度（端点不认 → 自动粘性降级 json）
+  # max_no_speech_prob: 0.85        # 服务端 no_speech_prob ≥ 此值按无人声丢弃
+  # lang_hint_min_prob: 0.6         # 检出语种≠会话先验且语种概率 < 此值 → 按先验重转一次
+  # transcript_cache: {enabled: true}  # 同一音频（协议入站 + AutoDraft 两条路）只转一次
   # 主转录挂了/返空自动回落下一级（级联，绝不断链）；示例：SenseVoice 主 + whisper 兜底
   # fallback:
   #   provider: faster_whisper

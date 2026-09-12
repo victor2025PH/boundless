@@ -47,7 +47,9 @@ _ACCEPTED_SLOW: Dict[str, Tuple[int, str]] = {
            "（云端瞬时抖动重试有价值，不阻塞坐席），故整档留在台账而非 REQUIRED"),
     "voice_transcriber.py": (
         1, "参数化构造：max_retries 默认 0、timeout 默认 30s 标量（单次尝试、"
-           "connect ≤ min(30, OS~21)s 有界）；转录链自有 176→140→本机 CPU 多级回落"),
+           "connect ≤ min(30, OS~21)s 有界；生产 overlay 3s，2026-09-12 起按音频时长"
+           "在请求级动态放宽到 timeout_max=10s，客户端/连接池仍复用）；"
+           "转录链自有 198→140→本机 CPU 多级回落"),
     "web/routes/assistant_routes.py": (
         1, "小智 docless 直连流式（2026-08-27）：max_retries=0 已关 SDK 重试；未拆 connect= → "
            "SDK 默认 connect=5s 有界；端点由 assistant.query.llm 配（inherit 主链，云端为主），"

@@ -180,9 +180,11 @@ class _ImplFake(VoiceTranscriber):
         return self._result
 
 
-def _voice_file(tmp_path):
-    p = tmp_path / "v.ogg"
-    p.write_bytes(b"OggS" + b"\x00" * 64)
+def _voice_file(tmp_path, seed: bytes = b"\x00"):
+    # seed：同一用例里喂**不同**假转录器时给不同字节——转写缓存按音频内容 sha1 命中
+    # （ASR P0），同字节＝同一段音频＝理应同一转写，两个假实现互相「命中」不是 bug。
+    p = tmp_path / f"v_{seed.hex()}.ogg"
+    p.write_bytes(b"OggS" + seed * 64)
     return str(p)
 
 
@@ -197,11 +199,11 @@ async def test_zh_normalize_keeps_cantonese_and_non_zh(tmp_path):
     # 粤文豁免（粤语用字不属繁简映射，且有专线路由）
     yue = "我哋啲客都係香港嘅，咁講粵語好啲"
     assert await _ImplFake(yue).transcribe_voice_message(
-        _voice_file(tmp_path), "auto") == yue
+        _voice_file(tmp_path, b"\x01"), "auto") == yue
     # 非中文主体原样
     en = "Hello, how are you today?"
     assert await _ImplFake(en).transcribe_voice_message(
-        _voice_file(tmp_path), "auto") == en
+        _voice_file(tmp_path, b"\x02"), "auto") == en
 
 
 async def test_zh_normalize_opt_out(tmp_path):

@@ -345,15 +345,50 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     from src.inbox.media_enrich import lazy_voice_transcriber
                     _vtr = lazy_voice_transcriber(
                         assistant.config.config or {})
-                if _voice_path and _vtr is not None:
+                # ASR P0（2026-09-12）：协议入站已在落库前转过一次并把转写写进了
+                # 消息**文本**（unified_inbox_account_routes「入站语音落库前转录」），
+                # 本分支只看 _peer_media_desc（按 [语音…] 前缀解析、裸转写解析不出）
+                # → 同一文件再转一遍（日志实锤 38 次调用 ↔ 19 条语音）。消息文本已是
+                # 非占位正文 → 直接复用为转写，零 GPU；仍是占位才真转。
+                _reuse_txt = ""
+                try:
+                    from src.inbox.media_enrich import is_placeholder_only as _ipo_v
+                    _lt_voice = str(last or "").strip()
+                    if (_lt_voice and not _ipo_v(_lt_voice)
+                            and not _lt_voice.startswith("[")):
+                        _reuse_txt = _lt_voice
+                except Exception:
+                    _reuse_txt = ""
+                _vtxt = None
+                if _reuse_txt:
+                    _vtxt = _reuse_txt
+                    assistant.logger.info(
+                        "[AutoDraft] 语音转写复用消息行（免重转）: %s",
+                        _reuse_txt[:80])
+                elif _voice_path and _vtr is not None:
                     _vlang = str(
                         (assistant.config.get(
                             "voice_recognition", {},
                         ) or {}).get("language", "auto")
                     ) or "auto"
-                    _vtxt = await _vtr.transcribe_voice_message(
-                        str(_voice_path), _vlang,
-                    )
+                    # 会话语种先验：只用于「检出语种冲突且置信不足时按先验重转一次」
+                    # （不直接钉死 language）；算不出 → None 走旧 auto 行为。
+                    _vhint = None
+                    try:
+                        from src.inbox.asr_lang_hint import hint_from_history
+                        _vhint = hint_from_history(msgs)
+                    except Exception:
+                        _vhint = None
+                    try:
+                        _vtxt = await _vtr.transcribe_voice_message(
+                            str(_voice_path), _vlang, lang_hint=_vhint,
+                        )
+                    except TypeError:
+                        # 旧签名/替身转录器不认 lang_hint → 退回两参调用
+                        _vtxt = await _vtr.transcribe_voice_message(
+                            str(_voice_path), _vlang,
+                        )
+                if _voice_path or _reuse_txt:
                     if _vtxt and str(_vtxt).strip():
                         _peer_media_desc = str(_vtxt).strip()
                         # 转录文本即「对方说的话」→ 直接作为待回复

@@ -34,6 +34,22 @@ ONSTART 任务只保开机,白天崩了没人管会静默降级 CPU 兜底,看�
 → **不要依赖 176 的 hub 下载**。在 117 用 `huggingface_hub.snapshot_download`(直连可用,~11MB/s)下到
 `D:\tmp\emotion2vec_plus_large`(已留存),`scp -r` 过去(LAN ~2.5min),`AITR_SER_MODEL` 指本地目录。
 
+## 2026-08-29 起服务在 198（`asr198`），2026-09-12 ASR P0 解码纪律
+
+- 服务本体已迁 `192.168.0.198:8765`（计划任务 `AITR_ASR_198`；176 的 `AITR_ASR_176` 已 Disabled）。
+  部署：`scp scripts\asr176\asr_server.py asr198:C:/aitr_asr/asr_server.py` →
+  `ssh asr198 powershell -NoProfile -ExecutionPolicy Bypass -File C:\aitr_asr\restart_asr_198.ps1`
+  （本目录 `restart_asr_198.ps1` 即该脚本）→ `/health` 出 `asr_loaded=true`（~15s）。
+- `asr_server.py` 09-12 变更：`condition_on_previous_text=False`；whisper 自带三阈值显式钉住；
+  接 OpenAI 标准 `prompt` 字段作 initial_prompt；`verbose_json` 多回
+  `language_probability / avg_logprob / no_speech_prob / compression_ratio / vad / rescue`
+  （默认 `json` 仍只回 `{text}`）；**短片段二次解码**：<2s 且 VAD 判无人声 → 关 VAD 再解一次，
+  只在 `avg_logprob ≥ -0.6 且 language_probability ≥ 0.7 且 compression_ratio ≤ 2.0` 时采信。
+- **同机同模型 A/B 结论（勿再踩）**：VAD 放宽（threshold 0.35 / min_speech 100）与钉
+  `min_speech_duration_ms=250`（旧版库默认，1.2.1 是 0）都让探针夹具从稳定正确变成乱码/错句；
+  任何形式的热词 prompt 在边缘音频上乱码、干净音频只多标点 → 客户端默认不送热词。
+  VAD 参数只传旧服务传过的 `min_silence_duration_ms=300`，其余交库默认。
+
 ## 常用命令(从 117,ssh 别名 gpu176)
 
 ```powershell
