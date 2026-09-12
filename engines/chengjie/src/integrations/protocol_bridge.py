@@ -1043,6 +1043,14 @@ def ingest_incoming(
                     name=str(name or ""), ts=float(ts or 0), direction=direction, text=text)
             except Exception:
                 logger.debug("[protocol_bridge] note_backfill 失败", exc_info=True)
+        elif direction == "in" and not _quiet and _n > 0:
+            # Q-31 #317（note_backfill 的反向，全平台入站唯一挂点）：客户**真**开口了 → 沉寂清单
+            # 撤下 + 摘 dormant:ignored（只摘忽略决定之后到达的入站，防历史重放）
+            try:
+                from src.inbox.dormant_review import note_real_inbound
+                note_real_inbound(store, str(chat["conversation_id"]), inbound_ts=float(ts or 0))
+            except Exception:
+                logger.debug("[protocol_bridge] note_real_inbound 失败", exc_info=True)
         # P2-2（2026-07-23）：出站镜像也发 SSE 事件（独立类型 outbound_message，不复用
         # inbox_message——前端对后者会给非选中会话 unread+1，出站消息不该点未读）。
         # 条件 _n>0 =「真的新插入」：编排器镜像与 worker fromMe 回显同 msg_id 落同键，

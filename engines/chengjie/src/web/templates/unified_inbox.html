@@ -8690,16 +8690,37 @@ function _paintAcctBanner(c){
     const _adCta=_adParseReason(c.handoff_meta&&c.handoff_meta.reason)
       ?`<button type="button" class="aob-btn ad-soft-btn" onclick="_adSoftReply('${cid}',this)" title="${esc(window.T('inbox.handoff.ad_soft_t'))}">${esc(window.T('inbox.handoff.ad_soft'))}</button>`
       :'';
+    // Q-31 #317：停联会话的「我知道了」＝归档并移除（标签移入会话档案，不再自动回复）——按钮先把后果说清
+    const _isStop=_convIsStopContact(c);
+    const _ackLbl=_isStop?window.T('inbox.handoff.bar_ack_stop'):window.T('inbox.handoff.bar_ack');
+    const _ackTip=_isStop?window.T('inbox.handoff.bar_ack_stop_t'):window.T('inbox.handoff.bar_ack_t');
     const cta=_adCta
       +`<button type="button" class="aob-btn primary" onclick="_handoffBarGo()" title="${esc(window.T('inbox.handoff.bar_go_t'))}">${esc(window.T('inbox.handoff.bar_go'))}</button>`
-      +`<button type="button" class="aob-btn" onclick="_handoffBarAck('${cid}',this)" title="${esc(window.T('inbox.handoff.bar_ack_t'))}">${esc(window.T('inbox.handoff.bar_ack'))}</button>`;
+      +`<button type="button" class="aob-btn" onclick="_handoffBarAck('${cid}',this)" title="${esc(_ackTip)}">${esc(_ackLbl)}</button>`;
     banner.className='acct-out-banner handoff';
     banner.innerHTML=`<span class="aob-txt">${esc(_handoffBarText(c))}</span>${cta}`;
     banner.style.display='flex';
     return;
   }
+  // Q-31 #317：只剩「客户要求停联」标（需人工早已摘）的冻结会话——此前点进会话什么出口都没有，
+  // 筹码在筛选面板挂到天荒地老。给同一枚「已处理 · 归档并移除」。
+  if(c && c.conversation_id && _convIsStopContact(c)){
+    const cid=esc(c.conversation_id);
+    banner.className='acct-out-banner handoff';
+    banner.innerHTML=`<span class="aob-txt">${esc(window.T('inbox.handoff.stop_bar'))}</span>`
+      +`<button type="button" class="aob-btn" onclick="_handoffBarAck('${cid}',this)" title="${esc(window.T('inbox.handoff.bar_ack_stop_t'))}">${esc(window.T('inbox.handoff.bar_ack_stop'))}</button>`;
+    banner.style.display='flex';
+    return;
+  }
   banner.style.display='none';
   banner.innerHTML='';
+}
+/* Q-31 #317：会话是否「客户要求停联」冻结态——列表标签在场，或「需人工」元数据 reason=stop_contact。
+   （确认处理后两者都不在了：事实住进 conv_meta.stop_contact_at，服务端 frozen_reason 照样判冻结。） */
+function _convIsStopContact(c){
+  if(!c) return false;
+  try{ if(((c.conv_tags)||[]).indexOf(_STOP_CONTACT_TAG)>=0) return true; }catch(_){}
+  return String((c.handoff_meta&&c.handoff_meta.reason)||'')==='stop_contact';
 }
 /* #207 原因条文案：查表取原因（crisis:* 归并 crisis），无元数据走 generic。 */
 function _handoffBarText(c){
@@ -8743,6 +8764,10 @@ function _handoffBarGo(){
 /* 「我知道了（摘标）」：走既有 PUT /tags（服务端同清 handoff_meta），本地即时对账并重绘。 */
 async function _handoffBarAck(cid,btn){
   if(!cid) return;
+  // Q-31 #317：停联会话分流——「我知道了」＝归档 + 标签移入会话档案（不再自动回复），先弹确认框写清后果
+  const _row0=(selectedChat&&String(selectedChat.conversation_id||'')===String(cid))?selectedChat
+    :((allChats||[]).find(x=>String(x.conversation_id||'')===String(cid))||null);
+  if(_row0&&_convIsStopContact(_row0)){ await _handoffBarAckStop(cid,btn); return; }
   try{ _uiBeacon('handoff_bar_ack'); }catch(_){}
   if(btn){ btn.disabled=true; }
   try{
@@ -8764,6 +8789,38 @@ async function _handoffBarAck(cid,btn){
     try{ loadChats(); }catch(_){}
   }catch(_){
     _toast(window.T('inbox.handoff.bar_ack_fail'),'#dc2626');
+    if(btn){ btn.disabled=false; }
+  }
+}
+/* Q-31 #317：停联会话「已处理 · 归档并移除」——确认框把后果写清（归档并从筛选移除 · 不再自动回复），
+   确认后 POST /stop-contact/confirm：服务端摘「需人工」+「客户要求停联」移入 conv_meta.stop_contact_at
+   （frozen_reason 改读它，告别「最多一条」守卫不弱化）+ 归档。本地即时对账：两标清、archived=true，
+   会话随 applyFilters 离开默认视图；客户再来消息由服务端 _unarchive_on_inbound 自动回列表。 */
+async function _handoffBarAckStop(cid,btn){
+  const ok=await _appConfirm(window.T('inbox.handoff.stop_confirm_msg'),{
+    title:window.T('inbox.handoff.stop_confirm_title'), iconName:'archive', tone:'warn',
+    okText:window.T('inbox.handoff.stop_confirm_ok')});
+  if(!ok) return;
+  try{ _uiBeacon('handoff_bar_ack_stop'); }catch(_){}
+  if(btn){ btn.disabled=true; }
+  try{
+    const r=await apiFetch('/api/workspace/conv/'+encodeURIComponent(cid)+'/stop-contact/confirm',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const out=r.ok?await r.json():null;
+    if(!out||!out.ok) throw new Error('stop_confirm_failed');
+    const next=Array.isArray(out.tags)?out.tags:[];
+    if(selectedChat&&String(selectedChat.conversation_id||'')===String(cid)){
+      selectedChat.conv_tags=next; delete selectedChat.handoff_meta; selectedChat.archived=true;
+      _paintAcctBanner(selectedChat);
+      try{ if(typeof _csRefresh==='function') _csRefresh(selectedChat); }catch(_){}
+    }
+    const row=(allChats||[]).find(x=>String(x.conversation_id||'')===String(cid));
+    if(row){ row.conv_tags=next; delete row.handoff_meta; row.archived=true; }
+    _toast(window.T('inbox.handoff.stop_confirm_done'),'#16a34a');
+    try{ applyFilters(); }catch(_){}
+    try{ loadChats(); }catch(_){}
+  }catch(_){
+    _toast(window.T('inbox.handoff.stop_confirm_fail'),'#dc2626');
     if(btn){ btn.disabled=false; }
   }
 }

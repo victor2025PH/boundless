@@ -216,6 +216,46 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                 pass
         return {"ok": ok, "tags": tags}
 
+    @app.post("/api/workspace/conv/{conversation_id}/stop-contact/confirm")
+    async def api_conv_stop_contact_confirm(
+        conversation_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """Q-31 #317：会话头「已处理 · 归档并移除」——停联会话的「我知道了」。
+
+        ＝``stop_contact.confirm_stop_contact``：摘「需人工」+「客户要求停联」从 conv_tags 移到
+        conv_meta.stop_contact_at（历史可查、``frozen_reason`` 改读它，告别「最多一条」守卫不弱化）
+        + 归档。与 PUT /tags 摘标同一 actor 口径（agent_ack）；广播 conv_tagged / conv_archived。
+        """
+        store = _inbox_store(request)
+        if store is None:
+            return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
+        try:
+            _user = str(request.session.get("username") or "")
+        except Exception:
+            _user = ""
+        actor = f"agent_ack:{_user}".rstrip(":")
+        try:
+            from src.inbox.stop_contact import confirm_stop_contact
+            out = confirm_stop_contact(store, conversation_id, actor=actor)
+        except Exception:
+            logger.debug("stop-contact confirm 失败", exc_info=True)
+            return {"ok": False, "error": "confirm_failed"}
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            import time as _t
+            bus = get_event_bus()
+            bus.publish("conv_tagged", {"conversation_id": conversation_id,
+                                        "tags": store.get_conv_tags(conversation_id), "ts": _t.time()})
+            if out.get("archived"):
+                bus.publish("conv_archived", {"conversation_id": conversation_id,
+                                              "archived": True, "ts": _t.time()})
+        except Exception:
+            pass
+        return {"ok": bool(out.get("ok")), "error": out.get("error", ""),
+                "tags": store.get_conv_tags(conversation_id), "archived": bool(out.get("archived")),
+                "stop_contact_at": float(out.get("stop_contact_at") or 0),
+                "frozen": bool(out.get("stop_contact_at") or 0)}
+
     @app.patch("/api/workspace/conv/{conversation_id}/archive")
     async def api_conv_archive(
         conversation_id: str, request: Request, _=Depends(api_auth),

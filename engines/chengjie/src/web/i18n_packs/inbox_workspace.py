@@ -2417,6 +2417,7 @@ ZH = {
     # Q-31 #317：停联会话的「处理」＝归档 + 标签移入会话档案（stop_contact_at）；确认框写清后果
     "inbox.handoff.bar_ack_stop": "已处理 · 归档并移除",
     "inbox.handoff.bar_ack_stop_t": "归档并从筛选移除 · 不再自动回复（停联事实保留在会话档案，历史可查）",
+    "inbox.handoff.stop_bar": "客户要求停联：会话已冻结，AI 不再自动回复——处理完点右侧「归档并移除」",
     "inbox.handoff.stop_confirm_title": "确认已处理「客户要求停联」",
     "inbox.handoff.stop_confirm_msg": "归档并从筛选移除 · 不再自动回复。\n停联事实会从标签移入会话档案（历史可查），AI 对这位客户继续保持沉默；客户日后再来消息会自动回到列表。",
     "inbox.handoff.stop_confirm_ok": "归档并移除",
@@ -5580,6 +5581,7 @@ EN = {
     # Q-31 #317: handling a stop-contact conversation = archive + move the tag into the conversation record (stop_contact_at); the dialog spells out the consequences
     "inbox.handoff.bar_ack_stop": "Handled · archive & remove",
     "inbox.handoff.bar_ack_stop_t": "Archive and remove from filters · no more automatic replies (the stop-contact fact stays in the conversation record)",
+    "inbox.handoff.stop_bar": "Customer asked to stop contact: conversation frozen, the AI will not auto-reply — once handled, use \"Archive & remove\" on the right",
     "inbox.handoff.stop_confirm_title": "Confirm the stop-contact request is handled",
     "inbox.handoff.stop_confirm_msg": "Archive and remove from filters · no more automatic replies.\nThe stop-contact fact moves from the tag into the conversation record (still auditable); the AI keeps silent with this customer, and the conversation comes back to the list automatically if they message again.",
     "inbox.handoff.stop_confirm_ok": "Archive & remove",

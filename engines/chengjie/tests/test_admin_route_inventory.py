@@ -859,6 +859,7 @@ _BASELINE = """
 /api/workspace/sla/create-task	POST
 /api/workspace/stream	GET
 /api/workspace/conv/{conversation_id}/archive	PATCH
+/api/workspace/conv/{conversation_id}/stop-contact/confirm	POST
 /api/workspace/conv/{conversation_id}/summarize	POST
 /api/workspace/conv/{conversation_id}/tags	GET
 /api/workspace/conv/{conversation_id}/tags	PUT

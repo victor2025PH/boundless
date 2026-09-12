@@ -9,8 +9,14 @@ stop writing to me → Never write me again），系统在 ``shadow=stop_contact
 本模块＝硬停的**状态与文案**（决策本身在 ``autosend_policy.decide``，那是唯一入口）：
 
 - ``frozen_reason(store, cid)``：会话是否已冻结（``stop_contact`` / ``self_harm`` / 空）。
-  冻结＝列表标签「客户要求停联」在场，或「需人工」标的 ``handoff_meta.reason`` 属
-  :data:`FREEZE_REASONS`。**只读**，绝不抛。
+  冻结＝列表标签「客户要求停联」在场，**或** ``conversation_meta.stop_contact_at > 0``（Q-31
+  #317：坐席确认处理后标签移入会话档案，判据不弱化），或「需人工」标的 ``handoff_meta.reason``
+  属 :data:`FREEZE_REASONS`。**只读**，绝不抛。
+- ``confirm_stop_contact(store, cid, actor=)``（Q-31 #317）：坐席在会话头确认「客户要求停联」
+  已处理＝① 摘「需人工」（``clear_needs_human``）② 「客户要求停联」从 ``conv_tags`` 移到
+  ``conv_meta.stop_contact_at``（历史可查，筛选面板筹码随之消失）③ 归档（``set_conv_archived``；
+  客户日后再来消息经 ``_unarchive_on_inbound`` 自动回列表，冻结不变）。档位 / 名单 / 告别
+  「最多一条」守卫全不动。
 - ``freeze_conversation(...)``：一次冻结＝① ``tag_needs_human``（与 R8 危机桥同一入口，
   reason=stop_contact/self_harm，非自动摘除类）② 列表标签「客户要求停联」③ 会话档位
   按 ``manual``（source ``guard:<reason>_from:<原档>``——B 线拟稿 / A 线直发 / 主动触达 /
@@ -150,12 +156,26 @@ def _handoff_meta(store: Any, cid: str) -> Dict[str, Any]:
         return {}
 
 
+def stop_contact_at(store: Any, conversation_id: str) -> float:
+    """Q-31 #317：会话档案里的停联确认时刻（``conversation_meta.stop_contact_at``）；无 / 旧 store → 0.0。"""
+    cid = str(conversation_id or "").strip()
+    if store is None or not cid or not hasattr(store, "get_stop_contact_at"):
+        return 0.0
+    try:
+        v = store.get_stop_contact_at(cid)
+        return float(v or 0.0) if isinstance(v, (int, float)) else 0.0
+    except Exception:
+        return 0.0
+
+
 def frozen_reason(store: Any, conversation_id: str) -> str:
     """会话冻结原因：``stop_contact`` / ``self_harm`` / ``""``（未冻结）。只读，绝不抛。
 
-    判据：列表标签「客户要求停联」在场 → stop_contact；否则「需人工」标在场且其
-    ``handoff_meta.reason`` ∈ FREEZE_REASONS → 该 reason。坐席摘掉标签＝解冻（见
-    :func:`unfreeze_conversation`），AI 恢复与否另看档位（冻结时已按 manual）。
+    判据：列表标签「客户要求停联」在场 **或** 会话档案 ``stop_contact_at > 0``（Q-31 #317：
+    坐席确认处理后标签移入档案，守卫不弱化）→ stop_contact；否则「需人工」标在场且其
+    ``handoff_meta.reason`` ∈ FREEZE_REASONS → 该 reason。人工解冻走
+    :func:`unfreeze_conversation`（摘标 + 清 ``stop_contact_at``），AI 恢复与否另看档位
+    （冻结时已按 manual）。
     """
     cid = str(conversation_id or "").strip()
     if store is None or not cid:
@@ -163,6 +183,8 @@ def frozen_reason(store: Any, conversation_id: str) -> str:
     try:
         tags = _tags_of(store, cid)
         if STOP_CONTACT_TAG in tags:
+            return "stop_contact"
+        if stop_contact_at(store, cid) > 0:
             return "stop_contact"
         from src.integrations.protocol_autoreply import HANDOFF_TAG
         if HANDOFF_TAG in tags:
@@ -393,6 +415,13 @@ def unfreeze_conversation(
             out["unlabelled"] = True
     except Exception:
         logger.debug("[stop-contact] 摘标签失败", exc_info=True)
+    # Q-31 #317：确认处理后停联事实住在会话档案（stop_contact_at）——人工解冻是唯一清零口
+    out["meta_cleared"] = False
+    try:
+        if stop_contact_at(store, cid) > 0 and hasattr(store, "set_stop_contact_at"):
+            out["meta_cleared"] = bool(store.set_stop_contact_at(cid, 0.0))
+    except Exception:
+        logger.debug("[stop-contact] stop_contact_at 清零失败", exc_info=True)
     try:
         if str(_handoff_meta(store, cid).get("reason") or "") in FREEZE_REASONS:
             from src.integrations.protocol_autoreply import clear_needs_human
@@ -439,7 +468,79 @@ def unfreeze_conversation(
         logger.debug("[stop-contact] 名单解冻标记失败", exc_info=True)
     log_action("unfrozen", conversation_id=cid, reason=out["was"],
                extra=f"by={actor} mode_restored={out['mode_restored'] or '-'} "
-                     f"listed={out['unfrozen_listed']}")
+                     f"listed={out['unfrozen_listed']} meta_cleared={out['meta_cleared']}")
+    return out
+
+
+def confirm_stop_contact(
+    store: Any, conversation_id: str, *, actor: str = "human",
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Q-31 #317：坐席确认「客户要求停联」已处理——归档并从筛选移除，**不再自动回复**。
+
+    与 :func:`unfreeze_conversation` 是两个方向：解冻＝「客户可以再联系了」（摘标 + 档位还原 +
+    清 meta）；确认＝「知道了，事实记档，别再占我筹码位」——会话继续冻结：
+    ① 摘「需人工」（``clear_needs_human(actor)``，元数据 / risk_hold 同清，与会话头「我知道了」同口）
+    ② 「客户要求停联」从 ``conv_tags`` 摘掉、时刻写进 ``conv_meta.stop_contact_at``（已有值不覆盖——
+       首次确认时刻是历史事实；``frozen_reason`` 读它，守卫一分不弱）
+    ③ 归档（``set_conv_archived(source="stop_contact_confirm")``）——客户日后再来消息由
+       ``_unarchive_on_inbound`` 自动回到列表，冻结不变、AI 仍沉默。
+    档位（冻结时已 manual）/ 账号级停联名单 / 告别「最多一条」守卫全部不动。幂等、绝不抛。
+    """
+    cid = str(conversation_id or "").strip()
+    ts = float(now if now is not None else time.time())
+    out: Dict[str, Any] = {"conversation_id": cid, "ok": False, "was": "", "untagged": False,
+                           "unlabelled": False, "meta_set": False, "archived": False,
+                           "stop_contact_at": 0.0}
+    if store is None or not cid:
+        out["error"] = "no_store_or_cid"
+        return out
+    out["was"] = frozen_reason(store, cid)
+    # ① 需人工 → 摘（不论其 reason：坐席点的就是这个会话的「我知道了」）
+    try:
+        from src.integrations.protocol_autoreply import clear_needs_human
+        out["untagged"] = bool(clear_needs_human(store, cid, actor=actor))
+    except Exception:
+        logger.debug("[stop-contact] confirm: clear_needs_human 失败", exc_info=True)
+    # ② 标签 → 会话档案（先写 meta 再摘标：两步之间任何读者看到的都仍是「冻结」）
+    try:
+        prev = stop_contact_at(store, cid)
+        if prev > 0:
+            out["stop_contact_at"] = prev
+        elif hasattr(store, "set_stop_contact_at"):
+            out["meta_set"] = bool(store.set_stop_contact_at(cid, ts))
+            out["stop_contact_at"] = ts if out["meta_set"] else 0.0
+    except Exception:
+        logger.debug("[stop-contact] confirm: stop_contact_at 写入失败", exc_info=True)
+    try:
+        tags = _tags_of(store, cid)
+        if STOP_CONTACT_TAG in tags:
+            if out["stop_contact_at"] <= 0:
+                # 旧 store 没有 meta 列：标签是唯一冻结判据，不能摘（否则＝解冻）
+                logger.warning("[stop-contact] confirm conv=%s store 无 stop_contact_at 列，标签保留", cid)
+            else:
+                store.set_conv_tags(cid, [t for t in tags if t != STOP_CONTACT_TAG])
+                out["unlabelled"] = True
+    except Exception:
+        logger.debug("[stop-contact] confirm: 摘标签失败", exc_info=True)
+    # ③ 归档
+    try:
+        if hasattr(store, "set_conv_archived"):
+            try:
+                out["archived"] = bool(store.set_conv_archived(
+                    cid, True, source="stop_contact_confirm", actor=str(actor or "")))
+            except TypeError:
+                out["archived"] = bool(store.set_conv_archived(cid, True))
+    except Exception:
+        logger.debug("[stop-contact] confirm: 归档失败", exc_info=True)
+    # ok＝事实已落档案（旧 store 无列 → 标签保留、只归档摘需人工，如实报 False 让前端提示）
+    out["ok"] = out["stop_contact_at"] > 0
+    if not out["ok"]:
+        out["error"] = "no_stop_contact_meta"
+    log_action("confirmed", conversation_id=cid, reason=out["was"] or "stop_contact",
+               extra=f"by={actor} untagged={out['untagged']} unlabelled={out['unlabelled']} "
+                     f"meta_set={out['meta_set']} archived={out['archived']} "
+                     f"still_frozen={frozen_reason(store, cid) or '-'}")
     return out
 
 
@@ -541,7 +642,7 @@ def login_scan_backfill(
 __all__ = [
     "FREEZE_REASONS", "STOP_CONTACT_TAG", "FAREWELL_MARK", "HARD_STOP_PASS_MARK",
     "farewell_text", "farewell_languages", "is_farewell_draft", "is_hard_stop_pass_draft",
-    "frozen_reason", "freeze_conversation", "unfreeze_conversation",
-    "is_freeze_mode_source", "freeze_prev_mode", "log_action",
+    "frozen_reason", "stop_contact_at", "freeze_conversation", "unfreeze_conversation",
+    "confirm_stop_contact", "is_freeze_mode_source", "freeze_prev_mode", "log_action",
     "stop_contact_hits", "login_scan_backfill",
 ]

@@ -374,12 +374,49 @@ def record_dormant(store: Any, conv: Dict[str, Any], *, text: str, inbound_ts: f
         return False
 
 
-def note_real_inbound(store: Any, conversation_id: str) -> None:
-    """客户又开口了 → 从清单撤下（由起草链在年龄闸放行时顺手调）。"""
+def note_real_inbound(store: Any, conversation_id: str, *,
+                      inbound_ts: Optional[float] = None,
+                      now: Optional[float] = None) -> Dict[str, Any]:
+    """客户又开口了（**真入站**，非回填 / 非自聊）→ ① 清单 pending 行撤下 ② Q-31 #317：摘
+    ``dormant:ignored`` 标——「忽略」是对**那条旧消息**的决定，客户再来消息它就过期了，
+    再挂着＝筛选面板里永远消不掉的筹码（BS7E5Q）。沉睡复盘再判沉睡会重新打，语义不变。
+
+    唯一调用点＝``protocol_bridge.ingest_incoming``（所有平台入站汇流处，与 ``note_backfill``
+    互为正反向）。只摘「忽略决定之后」到达的入站（``inbound_ts > decided_ts``）——与
+    ``_unarchive_on_inbound`` 的 ``archived_at`` 判据同一纪律，防历史重放 / thread 回灌把刚
+    忽略的会话顶回来；判不出 ts（≤0）按「现在」算。返回 ``{dropped, untagged}``，绝不抛。
+    """
+    out: Dict[str, Any] = {"conversation_id": str(conversation_id or ""), "dropped": False,
+                           "untagged": False}
+    cid = out["conversation_id"].strip()
+    if store is None or not cid:
+        return out
     try:
-        get_dormant_store(store).drop(conversation_id)
+        ds = get_dormant_store(store)
+        try:
+            ds.drop(cid)
+            out["dropped"] = True
+        except Exception:
+            pass
+        tags = [str(t) for t in (store.get_conv_tags(cid) or [])]
+        if IGNORED_TAG not in tags:
+            return out
+        ts_in = float(inbound_ts or 0)
+        if ts_in <= 0:
+            ts_in = float(now if now is not None else time.time())
+        rec = ds.get(cid) or {}
+        decided = float(rec.get("decided_ts") or 0) if str(rec.get("status") or "") == "ignored" else 0.0
+        if decided > 0 and ts_in <= decided:
+            logger.debug("[dormant] keep_ignored conv=%s inbound_ts=%.0f <= decided_ts=%.0f（历史重放）",
+                         cid, ts_in, decided)
+            return out
+        store.set_conv_tags(cid, [t for t in tags if t != IGNORED_TAG])
+        out["untagged"] = True
+        logger.info("[dormant] action=unignored conv=%s inbound_ts=%.0f decided_ts=%.0f",
+                    cid, ts_in, decided)
     except Exception:
-        pass
+        logger.debug("[dormant] note_real_inbound 失败", exc_info=True)
+    return out
 
 
 # ── 回填结算观察者 ─────────────────────────────────────────────────────────

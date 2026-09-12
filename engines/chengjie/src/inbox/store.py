@@ -1134,6 +1134,14 @@ _MIGRATIONS = [
     "ALTER TABLE agent_sends ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN claimed_mid TEXT NOT NULL DEFAULT ''",
+    # ── Q-31 #317（2026-09-12）停联事实从标签移入会话档案 ──────────────────────
+    # conversation_meta.stop_contact_at：坐席在会话头确认「客户要求停联」已处理的时刻
+    # （>0 = 事实在场）。此前停联只靠列表标签「客户要求停联」承载：标签既是**冻结判据**
+    # （stop_contact.frozen_reason）又是筛选面板的筹码——处理完不能摘（摘＝解冻），不摘
+    # 筹码永远在。现在确认＝归档 + 摘标 + 写本列；frozen_reason 标签 / 本列二者任一在场
+    # 即冻结（守卫不弱化），人工解冻（unfreeze_conversation）才清零。写口只有
+    # stop_contact.confirm_stop_contact / unfreeze_conversation 两处。
+    "ALTER TABLE conversation_meta ADD COLUMN stop_contact_at REAL NOT NULL DEFAULT 0",
 ]
 
 
@@ -8765,6 +8773,47 @@ class InboxStore:
             return got if isinstance(got, dict) else {}
         except Exception:
             return {}
+
+    def set_stop_contact_at(self, conversation_id: str, ts: float) -> bool:
+        """Q-31 #317：写「客户要求停联 · 已确认处理」时刻（0 = 清除）。行不存在则插入。
+
+        只由 ``stop_contact.confirm_stop_contact``（写 now）/ ``unfreeze_conversation``（写 0）
+        调用；``frozen_reason`` 读它判冻结——别在别处直写。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        now = self._now()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO conversation_meta (conversation_id, stop_contact_at, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    stop_contact_at = excluded.stop_contact_at,
+                    updated_at      = excluded.updated_at
+                """,
+                (cid, float(ts or 0.0), now),
+            )
+            self._conn.commit()
+        return True
+
+    def get_stop_contact_at(self, conversation_id: str) -> float:
+        """Q-31 #317：读停联确认时刻；无行 / 未确认 → 0.0。"""
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return 0.0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT stop_contact_at FROM conversation_meta WHERE conversation_id = ?",
+                (cid,),
+            ).fetchone()
+        if row is None:
+            return 0.0
+        try:
+            return float(row["stop_contact_at"] or 0.0)
+        except Exception:
+            return 0.0
 
     def archived_conversation_ids(self) -> List[str]:
         """全部已归档会话 id（驾驶舱等待队列的排除集；走 idx_conv_meta_archived）。"""
