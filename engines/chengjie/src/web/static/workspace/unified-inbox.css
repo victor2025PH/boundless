@@ -3348,6 +3348,17 @@ html.ws-wall-on .msg-area .msg-ts{
 .fp-chip:hover{background:var(--bg-soft);}
 .fp-chip.active{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;}
 .fp-chip .t-cnt{background:rgba(148,163,184,.22);border-radius:8px;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums;}
+/* Q-31 #317：面板「系统标签 ▸ N」折叠块——dormant: / risk: / 停联 / 接管 这些系统写入的状态标签与
+   用户标签分行；单坐席默认收起、多坐席默认展开（_renderPanelTags）。头是真按钮（键盘可达），
+   宽度占满 .fp-chips 一整行；chip 尾部 × 只在激活 chip 上出现＝清该筛选（不删标签）。
+   只复用既有令牌（--border / --text-tiny / --text-sub / currentColor），不新增颜色。 */
+.fp-sys-hd{flex:0 0 100%;display:flex;align-items:center;gap:5px;font:inherit;font-size:10px;color:var(--text-tiny);background:none;border:none;border-top:1px dashed var(--border);padding:6px 0 2px;margin-top:2px;cursor:pointer;text-align:left;font-family:inherit;}
+.fp-sys-hd:hover{color:var(--text-sub);}
+.fp-sys-hd .fp-sys-arr{display:inline-block;width:10px;font-size:10px;line-height:1;}
+.fp-sys-body{flex:0 0 100%;display:flex;flex-wrap:wrap;gap:4px;}
+.fp-sys-body[hidden]{display:none;}
+.fp-chip .fp-x{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin:0 -4px 0 1px;border-radius:50%;font-size:12px;line-height:1;color:inherit;}
+.fp-chip .fp-x:hover{background:color-mix(in srgb,currentColor 18%,transparent);}
 /* sticky：窄屏抽屉内容可滚，底栏钉在抽屉底缘（「完成/清空」不许沉到折叠线以下） */
 .fp-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px 8px;border-top:1px solid var(--border);margin-top:4px;background:var(--bg-elev);border-radius:0 0 10px 10px;position:sticky;bottom:0;}
 .fp-foot .fp-clear{font-size:11px;color:var(--accent);cursor:pointer;background:none;border:none;padding:2px 4px;font-family:inherit;}
@@ -3388,7 +3399,7 @@ html.ws-wall-on .msg-area .msg-ts{
 .ftab,.goal-af-chip,.fp-chip,.tag-strip-chip,.sv-chip,.fs-chip{box-sizing:border-box;min-height:24px;padding:3px 10px;border-radius:999px;font-size:11.5px;line-height:1.4;display:inline-flex;align-items:center;gap:4px;}
 .ftab.active,.goal-af-chip.on,.fp-chip.active,.tag-strip-chip.active,.sv-chip.active{background:color-mix(in srgb,var(--accent,#1e8cf2) 14%,transparent);color:var(--accent);border-color:color-mix(in srgb,var(--accent,#1e8cf2) 35%,transparent);font-weight:600;}
 /* 计数徽标同规格（.ftab-n 为准）：tag-strip / 面板内联标签的 .t-cnt 对齐 */
-.tag-strip-chip .t-cnt,.fp-chip .t-cnt{background:rgba(148,163,184,.22);border-radius:999px;padding:0 4px;font-size:10px;min-width:15px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;font-weight:700;}
+.tag-strip-chip .t-cnt,.fp-chip .t-cnt,.fp-sys-hd .t-cnt{background:rgba(148,163,184,.22);border-radius:999px;padding:0 4px;font-size:10px;min-width:15px;text-align:center;line-height:15px;font-variant-numeric:tabular-nums;font-weight:700;}
 /* 窄屏触控：chip 视觉高 24→30px；主行 chips 另加透明热区（±5px，纯纵向——横向相邻仅 4px 间隙
    会互抢），30+10=40px 有效触控高。面板/strip 的 chips 会换行，纵向有邻居故不加热区。 */
 @media(max-width:768px){

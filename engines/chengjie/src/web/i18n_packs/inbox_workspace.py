@@ -1620,6 +1620,10 @@ ZH = {
     "inbox.filter.sec_scope": "范围",
     "inbox.filter.sec_status": "状态",
     "inbox.filter.sec_tags": "标签",
+    # Q-31 #317：面板系统标签（dormant: / risk: / 停联 / 接管 系统族）折叠块 + chip 尾部 × 清筛选
+    "inbox.filter.sec_sys_tags": "系统标签",
+    "inbox.filter.sec_sys_tags_t": "系统自动打的状态标签（沉睡 / 风险 / 停联 / 接管），处理完自动摘；点开只为筛选，不是待办",
+    "inbox.filter.chip_clear": "清除该筛选（不删标签；按 Esc 同效）",
     "inbox.filter.sec_sort": "排序",
     "inbox.filter.sec_bulk": "批量操作",
     "inbox.bulk.sop_btn": "📤 给当前筛选结果挂跟进 SOP",
@@ -2410,6 +2414,14 @@ ZH = {
     "inbox.handoff.bar_ack_t": "只摘掉「需人工」标，不改会话其它状态",
     "inbox.handoff.bar_ack_ok": "已摘掉「需人工」标",
     "inbox.handoff.bar_ack_fail": "摘标失败，请稍后重试",
+    # Q-31 #317：停联会话的「处理」＝归档 + 标签移入会话档案（stop_contact_at）；确认框写清后果
+    "inbox.handoff.bar_ack_stop": "已处理 · 归档并移除",
+    "inbox.handoff.bar_ack_stop_t": "归档并从筛选移除 · 不再自动回复（停联事实保留在会话档案，历史可查）",
+    "inbox.handoff.stop_confirm_title": "确认已处理「客户要求停联」",
+    "inbox.handoff.stop_confirm_msg": "归档并从筛选移除 · 不再自动回复。\n停联事实会从标签移入会话档案（历史可查），AI 对这位客户继续保持沉默；客户日后再来消息会自动回到列表。",
+    "inbox.handoff.stop_confirm_ok": "归档并移除",
+    "inbox.handoff.stop_confirm_done": "已归档并从筛选移除；AI 不再自动回复这位客户",
+    "inbox.handoff.stop_confirm_fail": "处理失败，请稍后重试",
     "inbox.handoff.ai_muted_t": "此会话挂着「需人工」标，AI 徽标暂降灰——处理完摘标后恢复",
     # Q-15 #271（ad-）：成人内容分级——卡片写明类别·级别·命中词 + 「一键人设口吻软回应」
     "inbox.handoff.r_adult": "命中：成人内容（sex）· {level}，命中词「{hit}」",
@@ -4787,6 +4799,10 @@ EN = {
     "inbox.filter.panel_done": "Done",
     "inbox.filter.sec_status": "Status",
     "inbox.filter.sec_tags": "Tags",
+    # Q-31 #317: filter-panel system tags (dormant: / risk: / stop-contact / takeover family) fold + chip × clears the filter
+    "inbox.filter.sec_sys_tags": "System tags",
+    "inbox.filter.sec_sys_tags_t": "Status tags the system sets by itself (dormant / risk / stop-contact / takeover); they clear once handled. Opening this only filters, it is not a to-do list",
+    "inbox.filter.chip_clear": "Clear this filter (does not delete the tag; Esc does the same)",
     "inbox.filter.sec_sort": "Sort",
     "inbox.filter.sec_scope": "Scope",
     "inbox.filter.sec_bulk": "Bulk actions",
@@ -5561,6 +5577,14 @@ EN = {
     "inbox.handoff.bar_ack_t": "Only removes the needs-human tag; nothing else about the conversation changes",
     "inbox.handoff.bar_ack_ok": "Needs-human tag cleared",
     "inbox.handoff.bar_ack_fail": "Failed to clear the tag, please retry",
+    # Q-31 #317: handling a stop-contact conversation = archive + move the tag into the conversation record (stop_contact_at); the dialog spells out the consequences
+    "inbox.handoff.bar_ack_stop": "Handled · archive & remove",
+    "inbox.handoff.bar_ack_stop_t": "Archive and remove from filters · no more automatic replies (the stop-contact fact stays in the conversation record)",
+    "inbox.handoff.stop_confirm_title": "Confirm the stop-contact request is handled",
+    "inbox.handoff.stop_confirm_msg": "Archive and remove from filters · no more automatic replies.\nThe stop-contact fact moves from the tag into the conversation record (still auditable); the AI keeps silent with this customer, and the conversation comes back to the list automatically if they message again.",
+    "inbox.handoff.stop_confirm_ok": "Archive & remove",
+    "inbox.handoff.stop_confirm_done": "Archived and removed from filters; the AI will not auto-reply to this customer",
+    "inbox.handoff.stop_confirm_fail": "Could not complete, please retry",
     "inbox.handoff.ai_muted_t": "This conversation carries a needs-human tag, so the AI badge is dimmed until the tag is cleared",
     # Q-15 #271 (ad-): adult-content grading — card shows category · level · hit + one-click persona-voice soft reply
     "inbox.handoff.r_adult": "hit: adult content (sex) · {level}, keyword \"{hit}\"",

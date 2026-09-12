@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf5">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912q31">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -5649,25 +5649,76 @@ function _syncPanelUi(base){
 /* P1：常用标签内联进面板（在用标签 Top8 带计数；「需人工」已是一等公民 chip 故剔除，与 tag-strip 同口径）。
    渲染时机＝_renderTagStrip（标签统计重算 / setTagFilter 都会经过它）；点击走容器级事件委托——
    标签名是任意用户字符，拼 inline onclick 属引号地狱（_rpa_shared initSearch 的历史教训，见动态点属性门禁）。 */
+/* Q-31 #317（fp-sys）：系统族标签判定——dormant:… / risk:… / 「客户要求停联」/ 「人工接管中」/ 「需人工」这些
+   **系统写入**的状态标签（数据值；显示层走 _sysTagLabel），与用户手打标签分家：面板里归到第二行
+   「系统标签 ▸ N」折叠块，单坐席默认收起、多坐席默认展开（BS7E5Q：「dormant:ignored 6 / risk:medium 3 /
+   停联 1」与用户标签同列，处理完点确定筹码仍在——它们是统计不是待办）。判定只读 _tagKind 的 tko / attn
+   精确态 + 三族前缀 / 精确值，不改 _TK_RE（列表 chip 配色零变化，不新增颜色）。 */
+var _STOP_CONTACT_TAG='\u5ba2\u6237\u8981\u6c42\u505c\u8054';   // 「客户要求停联」＝ stop_contact.STOP_CONTACT_TAG 数据值
+function _isSysTag(t){
+  var s=String(t||''); if(!s) return false;
+  var k=_tagKind(s); if(k==='tko'||k==='attn') return true;
+  return /^(dormant|risk):/i.test(s) || s===_STOP_CONTACT_TAG;
+}
+/* 折叠态：坐席手动开合记 localStorage（ws_fp_sys_open），没记过按坐席模式缺省（!MULTI_SEAT → 收起）。 */
+function _fpSysOpen(){
+  try{ var v=localStorage.getItem('ws_fp_sys_open'); if(v==='1') return true; if(v==='0') return false; }catch(_){}
+  return !!MULTI_SEAT;
+}
+function _fpSysToggle(){
+  var open=!_fpSysOpen();
+  try{ localStorage.setItem('ws_fp_sys_open', open?'1':'0'); }catch(_){}
+  _uiBeacon(open?'iflt_systags_open':'iflt_systags_close');
+  _renderPanelTags();
+}
 function _renderPanelTags(){
   const box=document.getElementById('fp-tags'), sec=document.getElementById('fp-sec-tags');
   if(!box||!sec) return;
-  const stats=(_tagStatsCache||[]).filter(s=>s.tag!==_NEEDS_HUMAN_TAG).slice(0,8);
-  const has=stats.length>0;
+  const all=(_tagStatsCache||[]).filter(s=>s.tag!==_NEEDS_HUMAN_TAG);
+  const user=all.filter(s=>!_isSysTag(s.tag)).slice(0,8);   // 用户标签照旧 Top8
+  const sys=all.filter(s=>_isSysTag(s.tag));                 // Q-31 #317：系统族单列折叠块
+  const has=user.length>0||sys.length>0;
   sec.hidden=!has; box.hidden=!has;
   if(!has){ box.innerHTML=''; return; }
-  box.innerHTML=stats.map(s=>`<button type="button" class="fp-chip ${tagFilter===s.tag?'active':''}" data-ptag="${esc(s.tag)}">${esc(s.tag)}<span class="t-cnt">${s.count}</span></button>`).join('');
+  // × 只长在**激活** chip 尾部＝清该筛选（setTagFilter('')），不是删标签（未激活的 chip 没有可清的筛选，×＝死按钮）
+  const xT=esc(window.T('inbox.filter.chip_clear'));
+  const chip=s=>{
+    const on=tagFilter===s.tag;
+    return `<button type="button" class="fp-chip ${on?'active':''}" data-ptag="${esc(s.tag)}">${esc(_sysTagLabel(s.tag))}<span class="t-cnt">${s.count}</span>${on?`<span class="fp-x" role="button" data-ptag-x="1" title="${xT}" aria-label="${xT}">\u00d7</span>`:''}</button>`;
+  };
+  let html=user.map(chip).join('');
+  if(sys.length){
+    const open=_fpSysOpen()||sys.some(s=>s.tag===tagFilter);   // 正按某个系统标签筛 → 强制展开，别把激活 chip 藏起来
+    html+=`<button type="button" class="fp-sys-hd" data-sys-toggle="1" aria-expanded="${open?'true':'false'}" title="${esc(window.T('inbox.filter.sec_sys_tags_t'))}"><span class="fp-sys-arr">${open?'\u25be':'\u25b8'}</span>${esc(window.T('inbox.filter.sec_sys_tags'))}<span class="t-cnt">${sys.length}</span></button>`
+      +`<div class="fp-sys-body"${open?'':' hidden'}>${sys.map(chip).join('')}</div>`;
+  }
+  box.innerHTML=html;
 }
 (function(){
   function wire(){
     const box=document.getElementById('fp-tags'); if(!box||box.__ptagBound) return;
     box.__ptagBound=1;
     box.addEventListener('click', function(e){
+      // Q-31 #317：× ＝ 清筛选（不删标签）；折叠头 ＝ 开合系统标签块；其余照旧点 chip 切筛选
+      if(e.target.closest('[data-ptag-x]')){ _uiBeacon('iflt_ptag_x'); setTagFilter('', null); return; }
+      if(e.target.closest('[data-sys-toggle]')){ _fpSysToggle(); return; }
       const b=e.target.closest('[data-ptag]'); if(!b) return;
       const t=b.getAttribute('data-ptag')||'';
       _uiBeacon('iflt_ptag');
       setTagFilter(tagFilter===t?'':t, null);
     });
+    // Q-31 #317：筛选面板开着时按 Esc ＝ 与 × 同效清标签筛选；没在筛标签则关面板
+    if(!document.__fpEscBound){
+      document.__fpEscBound=1;
+      document.addEventListener('keydown', function(e){
+        if(e.key!=='Escape'||e.defaultPrevented) return;
+        const m=document.getElementById('ftab-more-menu');
+        if(!m||!m.classList.contains('show')) return;
+        e.preventDefault();
+        if(tagFilter){ _uiBeacon('iflt_ptag_esc'); setTagFilter('', null); }
+        else _closeFtabMore();
+      });
+    }
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire); else wire();
 })();
