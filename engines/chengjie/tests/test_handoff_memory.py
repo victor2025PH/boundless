@@ -82,6 +82,36 @@ def test_build_handoff_note_empty_and_caps():
     assert b["overflow_line"] and b["overflow_line"] in b["note"]
 
 
+def test_build_handoff_note_merges_adjacent_fragments_not_media():
+    """三期：同向连发碎片合并成一行（配额不被碎片吃光），媒体行独立，计数按原始条数。"""
+    t = 1_757_000_000.0
+    rows = [
+        {"direction": "out", "text": "好的", "ts": t + 1},
+        {"direction": "out", "text": "我看看", "ts": t + 2},
+        {"direction": "out", "text": "晚点回你", "ts": t + 3},
+        {"direction": "out", "text": "看这张", "media_type": "image", "media_ref": "/a.jpg", "ts": t + 4},
+        {"direction": "out", "text": "刚拍的", "ts": t + 5},
+        {"direction": "in", "text": "哈哈", "ts": t + 6},
+        {"direction": "in", "text": "好看", "ts": t + 7},
+        {"direction": "out", "text": "谢谢", "ts": t + 8},
+    ]
+    b = hf.build_handoff_note(rows, since_ts=t, now=t + 100)
+    note = b["note"]
+    assert b["out_n"] == 6 and b["in_n"] == 2 and b["media_n"] == 1
+    assert "- 好的 / 我看看 / 晚点回你\n" in note            # 三条碎片 → 一行
+    assert "- 发了图片：看这张\n" in note                     # 媒体行不与前后合并
+    assert "- 刚拍的\n" in note and "- 哈哈 / 好看" in note and "- 谢谢" in note
+    assert note.count("\n- ") == 5
+    # 拼起来超一行的不合并；合并后配额释放：12 条短碎片 + 1 条长话 → 长话仍在逐字区、无溢出
+    long_rows = [{"direction": "out", "text": "嗯", "ts": t + i} for i in range(12)]
+    long_rows.insert(0, {"direction": "out", "text": "我明天上午十点飞上海，到了给你发消息", "ts": t - 1})
+    b2 = hf.build_handoff_note(long_rows, since_ts=t - 10, now=t + 100)
+    assert "- 我明天上午十点飞上海，到了给你发消息 / 嗯" in b2["note"] and b2["overflow"] == []
+    # 纯函数边界
+    assert hf._merge_runs([]) == []
+    assert hf._merge_runs([("out", "a"), ("in", "b"), ("out", "c")]) == [("out", "a"), ("in", "b"), ("out", "c")]
+
+
 def test_build_handoff_note_overflow_mixed_roles_chronological():
     t = 1_757_000_000.0
     rows = []
@@ -254,12 +284,22 @@ def test_record_handoff_end_to_end_with_manual_send_window(tmp_path):
     assert "AI 老早说的" not in rec["note"]
     assert "- 我有个女儿" in rec["note"] and "- 发了图片：刚拍的" in rec["note"] and "- 好看！" in rec["note"]
     assert hf.TAKEOVER_TS_KEY not in ctx                              # 起点用完即清
+    # 三期：只读窥视——不计使用次数、不建 ctx；未知会话 → None
+    pk = hf.peek_handoff_note(st, cid, now=t + 60)
+    assert pk and pk["active"] and pk["used"] == 0 and pk["remaining"] == hf.MAX_USES
+    assert pk["by"] == "mode_select" and pk["out_n"] == 2 and pk["in_n"] == 1 and pk["media_n"] == 1
+    assert pk["note"] == rec["note"] and ctx[hf.NOTE_KEY]["used"] == 0
+    assert hf.peek_handoff_note(st, "whatsapp:17345893506:nobody", now=t + 60) is None
+    assert sm._context_store.peek("17345893506:nobody") is None                  # 没有凭空建 ctx
+    assert hf.peek_handoff_note(st, cid, now=t + 60 + hf.TTL_SEC + 1) is None    # 过期即无
+    assert hf.peek_handoff_note(SimpleNamespace(), cid, now=t + 60) is None      # 无 skill_manager
     # 持久：重开仍在，且注入一次计一次
     sm._context_store.close()
     sm2 = _FakeSM(tmp_path / "bot.db")
     ctx2 = sm2._get_user_context("13308422244", account_id="17345893506")
     assert hf.handoff_note(ctx2, now=t + 61).startswith("【刚结束的一段人工接管")
     assert ctx2[hf.NOTE_KEY]["used"] == 1
+    assert hf.peek_handoff_note(SimpleNamespace(skill_manager=sm2), cid, now=t + 62)["remaining"] == hf.MAX_USES - 1
     sm2._context_store.close()
     store.close()
 
@@ -362,3 +402,21 @@ def test_wiring_inject_self_state_and_watchdog_and_route():
     assert "record_handoff(" in rt and '"handoff": handoff' in rt
     hm = (root / "inbox" / "human_outbound_memory.py").read_text(encoding="utf-8", errors="ignore")
     assert "note_human_outbound_started" in hm
+    # 三期：GET /automation 带只读 handoff_note 段；前端同 pill 位渲染「AI 已接力」+「看记忆」
+    assert "peek_handoff_note(request.app.state, cid)" in rt and '"handoff_note": handoff_note' in rt
+    tpl = (root / "web" / "templates" / "unified_inbox.html").read_text(encoding="utf-8", errors="ignore")
+    assert "_handoffState=(d&&d.handoff_note)||null;" in tpl
+    assert tpl.count("_handoffState=(d&&d.handoff_note)||null;") == 2          # 轮询 + 开会话两处
+    assert "function _renderHandoffPill(el)" in tpl and "if(_renderHandoffPill(el)) return;" in tpl
+    assert 'class="tko-pill handoff"' in tpl and "onclick=\"handoffPillView()\"" in tpl
+    assert "window.handoffPillView=handoffPillView" in tpl
+    assert "_handoffToast(window.T('inbox.mode.handoff_title'), h.note, false, true)" in tpl
+    css = (root / "web" / "static" / "workspace" / "unified-inbox.css").read_text(encoding="utf-8", errors="ignore")
+    assert ".tko-pill.handoff{" in css and ".tko-pill.handoff .tko-resume.tko-x{" in css
+    assert "unified-inbox.css?v=20260912hf3" not in tpl
+    from src.web.i18n_packs import inbox_takeover_diag as pk
+    for lang, d in (("zh", pk.ZH), ("en", pk.EN)):
+        for k in ("inbox.takeover.hf_pill", "inbox.takeover.hf_how_rearm", "inbox.takeover.hf_how_manual",
+                  "inbox.takeover.hf_view", "inbox.takeover.hf_pill_t", "inbox.takeover.hf_dismiss_t"):
+            assert k in d, (lang, k)
+        assert "{time}" in d["inbox.takeover.hf_pill"] and "{how}" in d["inbox.takeover.hf_pill"] and "{n}" in d["inbox.takeover.hf_pill"]

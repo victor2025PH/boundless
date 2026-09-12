@@ -667,30 +667,42 @@ def _mark_agent_sent(
     （+ ``agent_name``），前端在气泡时间戳旁标「人工」——坐席一眼分清「这条是我发的还是
     AI 发的」，切回全自动时也看得出 AI 将接过哪几条。
 
-    messages 表没有发送方字段；``agent_sends`` 打点（发送路由成功即记）与出站行按时间
-    就近一对一匹配（每个打点至多标一行、先到先配、窗口 ``window_sec``）。纯装饰、
-    best-effort、原地修改；打点缺失（RPA 手机端发出 / 老数据）就不标。返回标记条数。
+    三期起 ``messages.sent_by`` 列是事实源（发送路由打点 + 镜像落库时按 text_hash/media_ref
+    精确认领，见 store._claim_agent_send_locked）——已标的行原样透传、已认领的打点不再参与。
+    老行 / 认领失败的行回落到本函数的时间就近匹配（每个未认领打点至多标一行、先到先配、
+    窗口 ``window_sec``）。纯装饰、best-effort、原地修改；打点缺失（RPA 手机端发出 / 老数据）
+    就不标。返回本次新标记条数（不含列上已有的）。
     """
     ibx = _inbox_store(request)
     if ibx is None or not conversation_id or not msgs:
         return 0
-    outs = [m for m in msgs if isinstance(m, dict) and str(m.get("direction") or "") == "out"
-            and float(m.get("ts") or 0) > 0]
-    if not outs:
+    all_outs = [m for m in msgs if isinstance(m, dict) and str(m.get("direction") or "") == "out"
+                and float(m.get("ts") or 0) > 0]
+    if not all_outs:
         return 0
     try:
-        lo = min(float(m.get("ts") or 0) for m in outs) - window_sec
-        hi = max(float(m.get("ts") or 0) for m in outs) + window_sec
-        sends = ibx.list_agent_sends(conversation_id, since_ts=lo, until_ts=hi)
+        lo = min(float(m.get("ts") or 0) for m in all_outs) - window_sec
+        hi = max(float(m.get("ts") or 0) for m in all_outs) + window_sec
+        all_sends = ibx.list_agent_sends(conversation_id, since_ts=lo, until_ts=hi)
     except Exception:
         logger.debug("读取 agent_sends 失败（忽略）", exc_info=True)
         return 0
-    if not sends:
+    # 列上已标的行：把认领它的打点的坐席名带上（悬停「XX 手动发出」）
+    by_mid = {str(s.get("claimed_mid") or ""): s for s in all_sends if s.get("claimed_mid")}
+    for m in all_outs:
+        if str(m.get("sent_by") or "") == "agent" and not m.get("agent_name"):
+            s = by_mid.get(str(m.get("message_id") or ""))
+            if s and s.get("agent_name"):
+                m["agent_name"] = str(s["agent_name"])[:40]
+    sends = [s for s in all_sends if not str(s.get("claimed_mid") or "")]
+    # 回落池＝除「列上精确认领」以外的全部出站行（同一列表重复调用结果一致＝幂等）
+    outs = [m for m in all_outs if str(m.get("message_id") or "") not in by_mid]
+    if not sends or not outs:
         return 0
     outs.sort(key=lambda m: float(m.get("ts") or 0))
     used = set()
     marked = 0
-    for s in sends:                       # 时间升序；每个打点配最近的一条未标出站行
+    for s in sends:                       # 时间升序；每个未认领打点配最近的一条未配出站行
         st = float(s.get("ts") or 0)
         best, best_d = None, None
         for i, m in enumerate(outs):

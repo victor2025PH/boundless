@@ -2106,6 +2106,14 @@ button.fleet-cell:disabled{cursor:default;}
   background:color-mix(in srgb,var(--th-bg-teal100,#ccfbf1) 60%,transparent);
   border-color:var(--th-bd-teal30,rgba(20,184,166,.35));}
 .tko-pill.hold .tko-resume{background:#0f766e;}
+/* 接力记忆三期「AI 已接力」态：绿色系＝AI 已回来、并记着人工阶段（与蓝＝AI 停着、
+   青＝搁置着 三态互斥同位）。× 是轻按钮：只隐藏提示，不动服务端。 */
+.tko-pill.handoff{color:var(--th-ink-green8,#166534);
+  background:color-mix(in srgb,var(--th-bg-green100,#dcfce7) 60%,transparent);
+  border-color:var(--th-bd-green30,rgba(34,197,94,.35));}
+.tko-pill.handoff .tko-resume{background:#15803d;}
+.tko-pill.handoff .tko-resume.tko-x{background:transparent;color:inherit;opacity:.6;padding:2px 6px;font-weight:400;}
+.tko-pill.handoff .tko-resume.tko-x:hover{opacity:1;}
 /* 出站气泡（深底）里的 AI 摘要行：提亮描述文字，保证深底可读 */
 .msg-row.out .msg-ai-desc{background:color-mix(in srgb,var(--ofg) 12%,transparent);border-left-color:color-mix(in srgb,var(--ofg) 50%,transparent);color:color-mix(in srgb,var(--ofg) 94%,transparent);}
 .msg-row.out .msg-ai-desc .mad-badge{color:color-mix(in srgb,var(--ofg) 88%,transparent);}

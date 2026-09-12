@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf3">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf4">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -13170,7 +13170,7 @@ function _toast(msg, color){
    record_handoff 返回的 note，就是将注入 prompt 的那段），坐席能当场核对 AI 将带着什么接手。
    收起态 6s 自动消失；展开后不自动消失，点 × 或再点按钮收起。单实例。 */
 var _hfToastEl=null, _hfToastTimer=null;
-function _handoffToast(msg, note, condensing){
+function _handoffToast(msg, note, condensing, openNow){
   try{ if(_hfToastEl && _hfToastEl.parentNode) _hfToastEl.remove(); }catch(_){}
   if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; }
   const el=document.createElement('div'); el.className='hf-toast';
@@ -13188,7 +13188,8 @@ function _handoffToast(msg, note, condensing){
   x.onclick=_close;
   document.body.appendChild(el); _hfToastEl=el;
   setTimeout(()=>{ el.style.opacity='1'; }, 10);
-  _arm();
+  // 三期：从 pill「看记忆」进来直接展开（不自动消失，× 关闭）
+  if(openNow){ el.classList.add('open'); try{ _uiBeacon('handoff_note_view'); }catch(_){} } else _arm();
 }
 
 var _undoToastEl=null, _undoToastTimer=null;
@@ -16387,6 +16388,36 @@ window.deliverGateResume=deliverGateResume;   // 内联 onclick 可达性（哑�
 var _takeoverState=null;   // {source, updated_at}
 var _rearmState=null;      // {enabled, after_minutes, restore_mode, eta_ts, ...}
 var _holdState=null;       // P1-12 搁置静音 {held_at, restore_mode}（服务端 snooze_hold 段）
+/* 接力记忆三期：接力笔记只读快照（/automation 的 handoff_note 段；旧后端无＝不渲染）。
+   watchdog 超时自动接回此前零 UI 信号——非 manual 且笔记在用时 pill 亮「AI 已接力 ·
+   记着 N 条」+「看记忆」。× 只在本页会话内隐藏（不动服务端，不消耗使用次数）。 */
+var _handoffState=null;    // {active, ts, by, used, remaining, out_n, in_n, media_n, note}
+var _hfPillHidden={};      // cid → note ts（隐藏过的那份；新笔记再亮）
+function _renderHandoffPill(el){
+  var h=_handoffState, cid=selectedChat&&selectedChat.conversation_id;
+  if(!h||!h.active||!cid||_lastAutomationMode==='manual') return false;
+  if(Math.abs((_hfPillHidden[cid]||0)-(Number(h.ts)||0))<120) return false;   // 同一份笔记（本地/服务端 ts 略有差）
+  var t='';
+  try{ var ts=Number(h.ts)||0; if(ts>0) t=window.wsFmtTime(ts,{hour:'2-digit',minute:'2-digit'}); }catch(_){ t=''; }
+  var how=window.T(String(h.by||'')==='rearm'?'inbox.takeover.hf_how_rearm':'inbox.takeover.hf_how_manual');
+  var n=(Number(h.out_n)||0)+(Number(h.in_n)||0);
+  var txt=window.Tf('inbox.takeover.hf_pill',{time:t||'--:--',how:how,n:String(n)});
+  el.innerHTML='<span class="tko-pill handoff" title="'+esc(window.Tf('inbox.takeover.hf_pill_t',{left:String(Number(h.remaining)||0)}))+'"><span class="tko-txt">'+esc(txt)+'</span>'
+    +'<button type="button" class="tko-resume" onclick="handoffPillView()">'+esc(window.T('inbox.takeover.hf_view'))+'</button>'
+    +'<button type="button" class="tko-resume tko-x" onclick="handoffPillHide()" title="'+esc(window.T('inbox.takeover.hf_dismiss_t'))+'" aria-label="close">×</button></span>';
+  el.style.display='flex';
+  return true;
+}
+function handoffPillView(){
+  var h=_handoffState; if(!h||!h.note) return;
+  try{ _uiBeacon('handoff_pill_view'); }catch(_){}
+  try{ _handoffToast(window.T('inbox.mode.handoff_title'), h.note, false, true); }catch(_){}
+}
+function handoffPillHide(){
+  var cid=selectedChat&&selectedChat.conversation_id; if(cid&&_handoffState) _hfPillHidden[cid]=Number(_handoffState.ts||0);
+  _renderTakeoverBanner();
+}
+window.handoffPillView=handoffPillView; window.handoffPillHide=handoffPillHide;   // 内联 onclick 可达性
 function _isTakeoverSource(s){ s=String(s||''); return s==='takeover'||s.indexOf('takeover_from:')===0; }
 function _isSnoozeHoldSource(s){ s=String(s||''); return s==='snooze_hold'||s.indexOf('snooze_hold_from:')===0; }
 // 当前会话是否处于「搁置静音」——搁置面板拿它决定勾选框默认值（反映现状，
@@ -16411,7 +16442,12 @@ function _renderTakeoverBanner(){
     return;
   }
   var show=!!(ms&&_lastAutomationMode==='manual'&&_isTakeoverSource(ms.source));
-  if(!show){ el.style.display='none'; el.innerHTML=''; return; }
+  if(!show){
+    // 三期：AI 已接回且带着接力记忆 → 同一 pill 位亮「AI 已接力」（与接管 pill 互斥：一个是
+    // 「AI 现在不说话」，一个是「AI 已回来且记得」，永不同时出现）
+    if(_renderHandoffPill(el)) return;
+    el.style.display='none'; el.innerHTML=''; return;
+  }
   var t='';
   try{
     var ts=Number(ms.updated_at)||0;
@@ -16831,6 +16867,7 @@ async function _refreshConvStatus(c){
     _takeoverState=(d&&d.mode_source)||null;
     _rearmState=(d&&d.rearm)||null;
     _holdState=(d&&d.snooze_hold)||null;
+    _handoffState=(d&&d.handoff_note)||null;
     _gateState=(d&&d.send_gate)||null;
     _dpConvState=(d&&d.deliver_paused)||null;   // #142 会话级拦截提示
     try{ if(d&&('agent_yield' in d)) _aySet(d.agent_yield||null); }catch(_){}   // Q-18 #292（ay-）：让位真值 → chip 倒计时（旧后端无字段不动本地态）
@@ -16868,7 +16905,7 @@ async function loadModeState(c){
   _budgetState=null; _renderBudgetBanner();
   _acctState=null; _renderAcctBanner();
   _effState=null; _renderEffChip();
-  _takeoverState=null; _rearmState=null; _holdState=null; _renderTakeoverBanner();
+  _takeoverState=null; _rearmState=null; _holdState=null; _handoffState=null; _renderTakeoverBanner();
   _gateState=null; _renderGateBanner();
   _dpConvState=null; _renderDpConvBanner();
   try{
@@ -16891,6 +16928,7 @@ async function loadModeState(c){
       _takeoverState=(d&&d.mode_source)||null;
       _rearmState=(d&&d.rearm)||null;
       _holdState=(d&&d.snooze_hold)||null;
+      _handoffState=(d&&d.handoff_note)||null;
       _renderTakeoverBanner();
       _dpConvState=(d&&d.deliver_paused)||null;   // #142 会话级拦截提示
       _renderDpConvBanner();
@@ -17010,6 +17048,8 @@ async function setMode(mode, opts){
       var _hn=(d.handoff.out_n|0)+(d.handoff.in_n|0);
       if(_hn>0){ tip+=' · '+window.Tf('inbox.mode.handoff_ok',{n:_hn})+((d.handoff.media_n|0)>0?window.Tf('inbox.mode.handoff_ok_media',{m:d.handoff.media_n|0}):''); }
       _hfNote=String(d.handoff.note||'');
+      // 三期：手动交回也立刻亮「AI 已接力」pill（不等 45s 轮询）；ts 用本地时刻，轮询回真值后覆盖
+      if(_hfNote){ _handoffState={active:true,ts:Date.now()/1000,by:'manual',used:0,remaining:10,out_n:d.handoff.out_n|0,in_n:d.handoff.in_n|0,media_n:d.handoff.media_n|0,note:_hfNote}; try{ _renderTakeoverBanner(); }catch(_){} }
     }
     // 二期：有接力摘要 → 带「看 AI 记住了什么」按钮的预览条（展开即见原文，坐席能核对 AI 将带着什么接手）
     if(_hfNote){ try{ _handoffToast(tip, _hfNote, !!d.handoff.condense_scheduled); }catch(_){ try{ _toast(tip, '#2563eb'); }catch(__){} } }

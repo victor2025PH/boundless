@@ -274,10 +274,21 @@ def register_stored_read_routes(app, *, api_auth) -> None:
         except Exception:
             logger.debug("[automation] snooze_until 读取失败（忽略）", exc_info=True)
             snooze_until = 0.0
+        # 接力记忆三期（2026-09-12）：接力笔记只读窥视——watchdog 自动接回（by=rearm）
+        # 此前零 UI 信号；非 manual 且笔记在用 → 前端 pill 亮「AI 已接力 · 记着 N 条」
+        # + 「看记忆」。peek 不计使用次数、不建 ctx。None＝无笔记/旧后端，前端不渲染。
+        handoff_note = None
+        try:
+            if mode != "manual":
+                from src.inbox.handoff_memory import peek_handoff_note
+                handoff_note = peek_handoff_note(request.app.state, cid)
+        except Exception:
+            logger.debug("[automation] handoff_note 窥视失败（忽略）", exc_info=True)
+            handoff_note = None
         return {"ok": True, "conversation_id": cid, "mode": mode,
                 "budget": budget, "account": account, "effective": effective,
                 "mode_source": mode_source, "rearm": rearm,
-                "snooze_hold": snooze_hold,
+                "snooze_hold": snooze_hold, "handoff_note": handoff_note,
                 "send_gate": send_gate, "snooze_until": snooze_until,
                 "deliver_paused": deliver_paused,
                 # Q-18 C（#292）：「AI 让位中」状态（坐席 60s 内发过 / 打过字 → worker defer 中）

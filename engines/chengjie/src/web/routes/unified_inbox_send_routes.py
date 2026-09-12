@@ -928,9 +928,16 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
     try:
         ibx = _inbox_store(request)
         if ibx is not None:
-            ibx.record_agent_send(
-                cid, _send_agent["agent_id"],
-                agent_name=_send_agent.get("display_name", ""))
+            try:
+                # 三期：带 media_ref → 镜像出站行精确认领 sent_by=agent（气泡「人工」角标）
+                ibx.record_agent_send(
+                    cid, _send_agent["agent_id"],
+                    agent_name=_send_agent.get("display_name", ""),
+                    text=caption, media_ref=url)
+            except TypeError:   # 旧 store 签名（测试假 store）
+                ibx.record_agent_send(
+                    cid, _send_agent["agent_id"],
+                    agent_name=_send_agent.get("display_name", ""))
             # Sprint1 接管即静音：媒体发送同属坐席接管，切 manual 停 AI
             # （source=takeover，供横幅/自动接回识别）。
             from src.inbox.takeover_rearm import record_agent_takeover
@@ -1251,15 +1258,21 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         _send_agent = _session_agent(request)
         _consumed_drafts: list = []   # Q-10 A：本次发送置 consumed 的草稿 id（回给前端免二次 cancel）
 
-        def _mark_send(cid: str) -> None:
-            """发送成功后打坐席首响归属点（best-effort，失败不影响发送）。"""
+        def _mark_send(cid: str, sent_text: str = "") -> None:
+            """发送成功后打坐席首响归属点（best-effort，失败不影响发送）。
+            ``sent_text``＝实际发出的文本（三期：镜像出站行按其 hash 认领 sent_by=agent）。"""
             ibx = _inbox_store(request)
             if ibx is None or not cid:
                 return
             try:
-                ibx.record_agent_send(
-                    cid, _send_agent["agent_id"],
-                    agent_name=_send_agent.get("display_name", ""))
+                try:
+                    ibx.record_agent_send(
+                        cid, _send_agent["agent_id"],
+                        agent_name=_send_agent.get("display_name", ""), text=sent_text)
+                except TypeError:   # 旧 store 签名（测试假 store）
+                    ibx.record_agent_send(
+                        cid, _send_agent["agent_id"],
+                        agent_name=_send_agent.get("display_name", ""))
             except Exception:
                 logger.debug("record_agent_send 失败（已忽略）", exc_info=True)
             # Phase 6：坐席接管发出消息 → 清除自动回复打的「需人工」标签（闭环收口）
@@ -1451,7 +1464,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             raise HTTPException(502, _msg)
         cid = (result.get("conversation_id") if isinstance(result, dict) else None) \
             or _conv_id(platform, account_id, chat_key)
-        _mark_send(cid)
+        _mark_send(cid, text)
         # #177（J-1 交 J-3 接线）：人工替人设说的自述事实进 AI 记忆——best-effort，
         # 模块内吞异常、零阻断发送；original_text=坐席原文（抽事实），text=实际发出
         # （出站翻译后）的文本（更新 last_reply 防复读，按客户看到的那份）。
@@ -2275,9 +2288,16 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         try:
             ibx = _inbox_store(request)
             if ibx is not None:
-                ibx.record_agent_send(
-                    cid, _send_agent["agent_id"],
-                    agent_name=_send_agent.get("display_name", ""))
+                try:
+                    # 三期：带镜像文本 + media_ref → 出站行精确认领 sent_by=agent
+                    ibx.record_agent_send(
+                        cid, _send_agent["agent_id"],
+                        agent_name=_send_agent.get("display_name", ""),
+                        text=spoken_text, media_ref=url)
+                except TypeError:   # 旧 store 签名（测试假 store）
+                    ibx.record_agent_send(
+                        cid, _send_agent["agent_id"],
+                        agent_name=_send_agent.get("display_name", ""))
                 # Sprint1 接管即静音：语音发送同属坐席接管，切 manual 停 AI
                 # （source=takeover，供横幅/自动接回识别）。
                 from src.inbox.takeover_rearm import record_agent_takeover

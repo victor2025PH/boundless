@@ -109,6 +109,27 @@ def _fmt_clock(ts: float) -> str:
         return ""
 
 
+MERGE_JOIN = " / "
+
+
+def _is_media_line(line: str) -> bool:
+    """_fmt_row 产出的媒体行：「发了图片/视频/贴纸…」「（语音）…」「发了一条语音（未转写）」。"""
+    return line.startswith("发了") or line.startswith("（语音）")
+
+
+def _merge_runs(seq: List[tuple]) -> List[tuple]:
+    """相邻同向文本碎片合并成一行（总长 ≤ LINE_MAX），媒体行原样独立。纯函数。"""
+    out: List[tuple] = []
+    for d, line in seq:
+        if out and out[-1][0] == d and not _is_media_line(line) and not _is_media_line(out[-1][1]):
+            merged = out[-1][1] + MERGE_JOIN + line
+            if len(merged) <= LINE_MAX:
+                out[-1] = (d, merged)
+                continue
+        out.append((d, line))
+    return out
+
+
 def build_handoff_note(
     rows: List[Dict[str, Any]], *, since_ts: float, now: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -146,6 +167,12 @@ def build_handoff_note(
             in_n += 1
             in_lines.append(line)
         seq.append((d, line))
+    # 三期：同向连发合并——坐席常把一句话拆三四条发（"好的" / "我看看" / "晚点回你"），
+    # 逐字区 8+6 条配额被碎片吃光、真正有信息的话被挤进前半段。相邻同向、拼起来不超一行
+    # 的碎片合成一条（媒体行不合并，保持一图一行）。计数 out_n/in_n 仍按原始条数。
+    seq = _merge_runs(seq)
+    out_lines = [line for d, line in seq if d == "out"]
+    in_lines = [line for d, line in seq if d != "out"]
     # 被挤出逐字区的前半段（按各自方向的截断位切）→ LLM 压缩用的 role/content 序列
     overflow_msgs: List[Dict[str, str]] = []
     _o_cut = max(0, len(out_lines) - MAX_OUT_LINES)
@@ -410,6 +437,54 @@ def _schedule_condense(
     return False
 
 
+def peek_handoff_note(
+    app_state: Any, conversation_id: str, *, now: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """只读窥视会话的接力笔记（**不计使用次数、不改任何状态**）——供 GET /automation
+    的 ``handoff_note`` 段：watchdog 自动接回（by=rearm）没有任何 UI 信号，坐席回到会话
+    应看到「AI 已接力 · 记着 N 条」。None＝无 skill_manager / 无笔记 / 已过期用尽。
+    """
+    try:
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return None
+        from src.inbox.human_outbound_memory import (
+            _effective_account_id, resolve_skill_manager,
+        )
+        sm = resolve_skill_manager(app_state)
+        cstore = getattr(sm, "_context_store", None) if sm is not None else None
+        platform, acct_raw, chat_key = _split_cid(cid)
+        if not chat_key or cstore is None:
+            return None
+        acct = _effective_account_id(acct_raw, cid)
+        # ContextStore.peek：不凭空建 ctx（GET 只读，不能给每次打开会话都造一条空上下文）
+        from src.utils.context_store import make_context_key
+        peek = getattr(cstore, "peek", None)
+        key = make_context_key(chat_key, acct)
+        ctx = peek(key) if callable(peek) else None
+        if not isinstance(ctx, dict):
+            return None
+        rec = ctx.get(NOTE_KEY)
+        if not isinstance(rec, dict):
+            return None
+        note = str(rec.get("note") or "").strip()
+        ts = float(rec.get("ts") or 0.0)
+        used = int(rec.get("used") or 0)
+        ts_now = float(now if now is not None else time.time())
+        if not note or used >= MAX_USES or (ts and ts_now - ts > TTL_SEC):
+            return None
+        return {
+            "active": True, "ts": ts, "by": str(rec.get("by") or ""),
+            "used": used, "remaining": max(0, MAX_USES - used),
+            "out_n": int(rec.get("out_n") or 0), "in_n": int(rec.get("in_n") or 0),
+            "media_n": int(rec.get("media_n") or 0),
+            "condensed": bool(rec.get("condensed")), "note": note,
+        }
+    except Exception:
+        logger.debug("[handoff] peek 失败（忽略）", exc_info=True)
+        return None
+
+
 def _split_cid(conversation_id: str) -> tuple:
     parts = str(conversation_id or "").split(":", 2)
     if len(parts) == 3:
@@ -529,5 +604,6 @@ __all__ = [
     "NOTE_KEY", "TAKEOVER_TS_KEY", "MAX_USES", "TTL_SEC", "HANDOFF_FETCH_MIN",
     "HANDOFF_VERBATIM_CAP",
     "active_window_since", "build_handoff_note", "condense_overflow", "handoff_note",
-    "note_human_outbound_started", "record_handoff", "verbatim_keep_for_handoff",
+    "note_human_outbound_started", "peek_handoff_note", "record_handoff",
+    "verbatim_keep_for_handoff",
 ]

@@ -226,6 +226,28 @@ def test_human_media_note_ignores_ai_rows_and_empty():
     assert hom.human_media_note(ctx) == ""      # AI 发的由 selfie 链的块负责
 
 
+def test_human_media_note_wording_follows_media_kind():
+    """三期：只发过视频 → 「视频/那个视频」；只图 → 「图片/那张图」；混合 → 两者都提。"""
+    v = {"ts": 1.0, "note": "[视频] 看看", "author": "human", "desc": "海边跑步"}
+    i = {"ts": 2.0, "note": "[图片] 刚拍的", "author": "human"}
+    nv = hom.human_media_note({"_media_sent_log": [v]})
+    assert "发过的视频（事实）" in nv and "那个视频" in nv and "那张图" not in nv
+    ni = hom.human_media_note({"_media_sent_log": [i]})
+    assert "发过的图片（事实）" in ni and "那张图" in ni and "视频" not in ni
+    nm = hom.human_media_note({"_media_sent_log": [v, i]})
+    assert "发过的图片/视频（事实）" in nm and "那张图" in nm and "那个视频" in nm
+    assert hom._media_kind_words(0, 0) == ("图片/视频", "你发的照片/那张图/那个视频")
+
+
+def test_scene_state_media_note_mentions_video_and_human_author():
+    sm_src = (Path(__file__).resolve().parents[1] / "src" / "skills" / "skill_manager.py").read_text(
+        encoding="utf-8", errors="ignore")
+    seg = sm_src[sm_src.index("def _inject_scene_state"):]
+    seg = seg[:seg.index("async def _apply_photo_directive")]
+    assert 'startswith("[视频]")' in seg and '"照片/视频" if _has_video' in seg
+    assert '== "human"' in seg and "坐席替你发的" in seg
+
+
 def _ingest(store, cid, *, direction, text, media_ref, ts, mid):
     from src.inbox.models import InboxMessage
     store.ingest_message(InboxMessage(

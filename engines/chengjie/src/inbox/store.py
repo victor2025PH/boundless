@@ -1124,7 +1124,31 @@ _MIGRATIONS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_cta_links_conv ON cta_links(conversation_id, created_ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_cta_links_target ON cta_links(target_id, created_ts DESC)",
+    # ── 接力记忆三期（2026-09-12）出站发送方 ─────────────────────────────────
+    # messages.sent_by：'agent'=坐席在工作台手动发出（含图/语音）；''=未知/AI/自动链/手机端。
+    # 此前气泡「人工」角标只能靠 agent_sends 打点与出站行 ±30s 时间就近匹配（边车镜像慢
+    # 时漏标、AI 与人几乎同时发时错标）。现在发送路由打点时带 text_hash / media_ref，
+    # 出站行 ingest 那一刻按同会话 + 同 hash/ref + 时间窗精确认领 → 直接写列；线程读取
+    # 先信本列，老行才回落时间匹配。agent_sends 两列同为此服务。
+    "ALTER TABLE messages ADD COLUMN sent_by TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agent_sends ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agent_sends ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agent_sends ADD COLUMN claimed_mid TEXT NOT NULL DEFAULT ''",
 ]
+
+
+#: 出站行认领坐席打点的时间窗（秒）：打点在发送路由成功那一刻，镜像行 ts 是平台回执/
+#: 边车抓取时刻——正常几秒内，边车慢时几十秒；同 hash/ref 才认，窗口可以放宽。
+AGENT_SEND_CLAIM_WINDOW_SEC = 180.0
+
+
+def agent_send_text_hash(text: str) -> str:
+    """坐席发送文本 → 与镜像出站行比对用的短 hash（空白归一化；空文本 → ''）。"""
+    t = " ".join(str(text or "").split())
+    if not t:
+        return ""
+    import hashlib as _hl
+    return _hl.sha256(t.encode("utf-8")).hexdigest()[:16]
 
 
 def _message_pk(conversation_id: str, platform_msg_id: str, text: str, ts: Any) -> str:
@@ -1609,6 +1633,7 @@ class InboxStore:
                     "UPDATE conversations SET is_request=0, request_category=''"
                     " WHERE conversation_id=? AND is_request=1",
                     (msg.conversation_id,))
+                self._claim_agent_send_locked(mid, msg)
             self._conn.commit()
         # 激活里程碑（锁外，热路径稳态＝一次布尔判断）：只认真实新插入的新鲜出站
         if inserted and msg.direction == "out" and not _FIRST_REPLY_NOTED:
@@ -1764,6 +1789,8 @@ class InboxStore:
                     inserted += 1
                     if msg.direction == "in":
                         _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
+                    else:
+                        self._claim_agent_send_locked(mid, msg)
             if _new_inbound_ts > 0:
                 # P0 未读可信化 v2：本批新入站的最晚 ts 精确收口 last_in_ts
                 # （conv upsert 的「未读增长近似推进」之上的权威值，同一事务内落定）。
@@ -4028,23 +4055,71 @@ class InboxStore:
     def record_agent_send(
         self, conversation_id: str, agent_id: str, *,
         agent_name: str = "", ts: Optional[float] = None,
+        text: str = "", media_ref: str = "",
     ) -> None:
-        """记录一次坐席人工发送（用于历史首响坐席归属）。
+        """记录一次坐席人工发送（用于历史首响坐席归属 + 出站行「人工」认领）。
 
         与消息 ingest 解耦：发送瞬间打点，不依赖 RPA 出站消息何时被旁路 ingest。
+        ``text``（实际发出的文本）/ ``media_ref``（落盘 URL）三期起随打点保存——镜像出站行
+        落库时按 hash/ref 精确认领 → ``messages.sent_by='agent'``；打点晚于镜像行（极少）
+        则在此处反向补认领一次。
         """
         cid = str(conversation_id or "").strip()
         aid = str(agent_id or "").strip()
         if not cid:
             return
         t = float(ts) if ts is not None else self._now()
+        th = agent_send_text_hash(text)
+        ref = str(media_ref or "").strip()
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO agent_sends (conversation_id, agent_id, agent_name, ts) "
-                "VALUES (?,?,?,?)",
-                (cid, aid, str(agent_name or ""), t),
+            cur = self._conn.execute(
+                "INSERT INTO agent_sends (conversation_id, agent_id, agent_name, ts, text_hash, media_ref) "
+                "VALUES (?,?,?,?,?,?)",
+                (cid, aid, str(agent_name or ""), t, th, ref),
             )
+            if th or ref:
+                self._claim_row_for_send_locked(int(cur.lastrowid or 0), cid, t, th, ref)
             self._conn.commit()
+
+    def _claim_agent_send_locked(self, mid: str, msg: Any) -> None:
+        """出站行落库 → 找同会话、同 text_hash / media_ref、时间窗内、尚未认领的坐席打点；
+        命中 → ``sent_by='agent'`` + 打点记 ``claimed_mid``。锁内调用、绝不抛。"""
+        try:
+            cid = str(getattr(msg, "conversation_id", "") or "")
+            th = agent_send_text_hash(getattr(msg, "text", "") or "")
+            ref = str(getattr(msg, "media_ref", "") or "").strip()
+            if not cid or not (th or ref):
+                return
+            ts = float(getattr(msg, "ts", 0) or 0) or self._now()
+            row = self._conn.execute(
+                "SELECT rowid FROM agent_sends WHERE conversation_id=? AND claimed_mid='' "
+                "AND ((text_hash<>'' AND text_hash=?) OR (media_ref<>'' AND media_ref=?)) "
+                "AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 1",
+                (cid, th, ref, ts, AGENT_SEND_CLAIM_WINDOW_SEC, ts)).fetchone()
+            if row is None:
+                return
+            self._conn.execute("UPDATE messages SET sent_by='agent' WHERE message_id=?", (mid,))
+            self._conn.execute("UPDATE agent_sends SET claimed_mid=? WHERE rowid=?", (mid, int(row[0])))
+        except Exception:
+            logger.debug("[agent_sends] 出站行认领失败（忽略）", exc_info=True)
+
+    def _claim_row_for_send_locked(self, send_rowid: int, cid: str, ts: float, th: str, ref: str) -> None:
+        """打点晚于镜像行（镜像先到）→ 反向找一条同 hash/ref、窗口内、未标的出站行认领。"""
+        try:
+            if not send_rowid:
+                return
+            # 归一化 hash 需逐行算：只取窗口内最近 20 条未标出站行（打点晚于镜像是罕见路径）
+            q = ("SELECT message_id, text, media_ref FROM messages WHERE conversation_id=? AND direction='out' "
+                 "AND sent_by='' AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 20")
+            rows = self._conn.execute(q, (cid, ts, AGENT_SEND_CLAIM_WINDOW_SEC, ts)).fetchall()
+            for r in rows:
+                mid, text, mref = str(r[0]), str(r[1] or ""), str(r[2] or "")
+                if (th and agent_send_text_hash(text) == th) or (ref and mref == ref):
+                    self._conn.execute("UPDATE messages SET sent_by='agent' WHERE message_id=?", (mid,))
+                    self._conn.execute("UPDATE agent_sends SET claimed_mid=? WHERE rowid=?", (mid, send_rowid))
+                    return
+        except Exception:
+            logger.debug("[agent_sends] 反向认领失败（忽略）", exc_info=True)
 
     def list_agent_sends(
         self, conversation_id: str, *, since_ts: float = 0.0, until_ts: float = 0.0,
@@ -4059,7 +4134,8 @@ class InboxStore:
         cid = str(conversation_id or "").strip()
         if not cid:
             return []
-        sql = "SELECT agent_id, agent_name, ts FROM agent_sends WHERE conversation_id=?"
+        sql = ("SELECT agent_id, agent_name, ts, claimed_mid, text_hash, media_ref "
+               "FROM agent_sends WHERE conversation_id=?")
         args: List[Any] = [cid]
         if since_ts:
             sql += " AND ts>=?"
@@ -4071,7 +4147,9 @@ class InboxStore:
         args.append(int(max(1, limit)))
         with self._lock:
             rows = self._conn.execute(sql, args).fetchall()
-        return [{"agent_id": str(r[0] or ""), "agent_name": str(r[1] or ""), "ts": float(r[2] or 0)}
+        return [{"agent_id": str(r[0] or ""), "agent_name": str(r[1] or ""), "ts": float(r[2] or 0),
+                 "claimed_mid": str(r[3] or ""), "text_hash": str(r[4] or ""),
+                 "media_ref": str(r[5] or "")}
                 for r in rows]
 
     def agent_first_responses(

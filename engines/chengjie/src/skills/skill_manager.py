@@ -10284,12 +10284,15 @@ class SkillManager(LoggerMixin):
             log = user_context.get("_media_sent_log")
             if isinstance(log, list) and log:
                 lines = []
+                _has_video = False
                 for row in log[-3:]:
                     try:
                         _t = time.strftime(
                             "%m-%d %H:%M", time.localtime(float(row.get("ts") or 0)))
                     except Exception:
                         _t = ""
+                    if str(row.get("note") or "").lstrip().startswith("[视频]"):
+                        _has_video = True
                     _sc = str(row.get("scene") or "").strip()
                     # series slug（如 white-hat-red-jacket / black-and-white）＝相册图
                     # 的画面 ground truth——scene 常空串（"不误标"），但 series 携带
@@ -10302,12 +10305,17 @@ class SkillManager(LoggerMixin):
                         x for x in (f"场景：{_sc}" if _sc else "",
                                     f"画面：{_sr}" if _sr else "",
                                     f"画面：{_dsc}" if _dsc and not _sr else "") if x)
+                    if str(row.get("author") or "") == "human":
+                        _facts = "；".join(x for x in (_facts, "坐席替你发的") if x)
                     lines.append(
                         f"- {_t} {_n}" + (f"（{_facts}）" if _facts else ""))
                 if lines:
+                    # 接力记忆三期：发过视频时措辞跟上（不再满口「照片/那张」）
+                    _kind = "照片/视频" if _has_video else "照片"
+                    _mention = "你发的照片/上次那张/那个视频" if _has_video else "你发的照片/上次那张"
                     user_context["_media_sent_note"] = (
-                        "【你最近发过的照片（事实）】\n" + "\n".join(lines) + "\n"
-                        "对方提到「你发的照片/上次那张」时按此回应，不要否认发过。"
+                        f"【你最近发过的{_kind}（事实）】\n" + "\n".join(lines) + "\n"
+                        f"对方提到「{_mention}」时按此回应，不要否认发过。"
                         "**图文一致铁律**：只能说标注的『场景』里真实有的东西；"
                         "没标注场景=你也不知道画面细节，就含糊说（『那张呀～』），"
                         "**绝对不要编造照片里没有的具体物件、地点或动作**"

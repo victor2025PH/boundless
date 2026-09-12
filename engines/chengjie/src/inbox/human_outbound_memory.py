@@ -41,7 +41,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +334,15 @@ def _record_media_sent_human(
     ctx["_photo_promise_streak"] = 0
 
 
+def _media_kind_words(n_image: int, n_video: int) -> Tuple[str, str]:
+    """(种类词, 对方可能的指代) —— 图/视频/混合三种措辞。"""
+    if n_video and not n_image:
+        return "视频", "你发的视频/那个视频"
+    if n_image and not n_video:
+        return "图片", "你发的照片/那张图"
+    return "图片/视频", "你发的照片/那张图/那个视频"
+
+
 def human_media_note(user_context: Dict[str, Any]) -> str:
     """坐席替人设发过的图片（``_media_sent_log`` 里 author=human 的条目）→ prompt 块。
 
@@ -345,6 +354,7 @@ def human_media_note(user_context: Dict[str, Any]) -> str:
         if not isinstance(log, list) or not log:
             return ""
         lines: List[str] = []
+        n_video = n_image = 0
         for e in log:
             if not isinstance(e, dict) or str(e.get("author") or "") != "human":
                 continue
@@ -358,12 +368,18 @@ def human_media_note(user_context: Dict[str, Any]) -> str:
             if desc:
                 line += f"（画面：{desc}）"
             lines.append(line)
+            if note.startswith("[视频]"):
+                n_video += 1
+            else:
+                n_image += 1
         if not lines:
             return ""
+        # 三期：按实际发的媒体种类措辞——只发过视频时不再满口「照片/那张图」
+        kind, mention = _media_kind_words(n_image, n_video)
         return (
-            "【你（由坐席以你的身份）给 TA 发过的图片/视频（事实）】\n"
+            f"【你（由坐席以你的身份）给 TA 发过的{kind}（事实）】\n"
             + "\n".join(lines[-_MEDIA_NOTE_MAX:]) + "\n"
-            "对方提到「你发的照片/那张图」时按此回应，不要否认发过；只能说『画面』里"
+            f"对方提到「{mention}」时按此回应，不要否认发过；只能说『画面』里"
             "标注有的东西，没标注就含糊带过，绝不编造画面细节。"
         )
     except Exception:

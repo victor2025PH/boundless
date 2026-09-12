@@ -591,6 +591,8 @@ def store_message_to_obj(row: Dict[str, Any]) -> Dict[str, Any]:
         "approx_ts": int(row.get("approx_ts") or 0),
         # 实施72 P3：投递失败原因码（status=failed 留痕行专属）——气泡自解释
         "fail_reason": str(row.get("fail_reason") or ""),
+        # 接力记忆三期：出站发送方（'agent'=坐席工作台手动发；''=AI/自动链/手机端/老行）
+        "sent_by": str(row.get("sent_by") or ""),
         "source": {},
         "from_store": True,
     }
