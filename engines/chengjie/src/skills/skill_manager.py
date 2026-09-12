@@ -3086,6 +3086,17 @@ class SkillManager(LoggerMixin):
             _COMPRESS_AT = _cd.compress_threshold(_KEEP_VERBATIM, _COMPRESS_AT)
         except Exception:
             pass
+        # 接力记忆 P1-1：刚从人工接管交回（_handoff_note 在用）→ 逐字保留抬到接管起点，
+        # 人工那几轮原话直接在窗口里，而不是刚切回就被 LLM 摘要改写掉。封顶 40 条。
+        try:
+            from src.inbox.handoff_memory import verbatim_keep_for_handoff
+            _kv2 = verbatim_keep_for_handoff(history or [], user_context, _KEEP_VERBATIM)
+            if _kv2 > _KEEP_VERBATIM:
+                _KEEP_VERBATIM = _kv2
+                _COMPRESS_AT = max(_COMPRESS_AT, _KEEP_VERBATIM + 3)
+                _metric("handoff_verbatim_lift")
+        except Exception:
+            pass
         if len(_hist) > _COMPRESS_AT:
             _old = _hist[:-_KEEP_VERBATIM]
             _cached = (user_context.get("_conversation_summary") or "").strip()
@@ -8611,8 +8622,17 @@ class SkillManager(LoggerMixin):
             # ``human_outbound_memory`` 于手动发送成功后写入）——与短期自述状态
             # 同一注入口，A/B 两线同经此处，ai_client 零改动。
             try:
-                from src.inbox.human_outbound_memory import human_said_note
+                from src.inbox.human_outbound_memory import (
+                    human_media_note, human_said_note,
+                )
                 _hn = human_said_note(user_context)
+                # 接力记忆 P0-1：坐席替人设发过的图。selfie 链的「你最近发过的照片」块
+                # （_media_sent_note，_inject_scene_state 先于本方法跑）已含全部条目时
+                # 不重复；selfie 关着（客服场景）→ 这里是唯一注入口。
+                if not str(user_context.get("_media_sent_note") or "").strip():
+                    _hm = human_media_note(user_context)
+                    if _hm:
+                        _hn = "\n".join(x for x in (_hn, _hm) if x)
             except Exception:
                 _hn = ""
             # J-10 三期（#177/#171）：未兑现承诺块——memory.promises.inject 出厂关；
@@ -8628,7 +8648,13 @@ class SkillManager(LoggerMixin):
                         max_age_days=float(_pc.get("max_age_days", 14)))
             except Exception:
                 _pn = ""
-            note = "\n".join(x for x in (note, _hn, _pn) if x)
+            # 接力记忆 P0-3：刚从人工接管交回 AI → 接管窗口的接力摘要（有限轮次/TTL 自撤）
+            try:
+                from src.inbox.handoff_memory import handoff_note
+                _hf = handoff_note(user_context)
+            except Exception:
+                _hf = ""
+            note = "\n".join(x for x in (_hf, note, _hn, _pn) if x)
             if note:
                 user_context["_self_state_block"] = note
         except Exception:
@@ -10006,7 +10032,7 @@ class SkillManager(LoggerMixin):
 
     def _record_media_sent(
         self, user_context: Dict[str, Any], *, note: str, scene: str = "",
-        series: str = "", ts: float = 0.0,
+        series: str = "", ts: float = 0.0, desc: str = "", author: str = "",
     ) -> None:
         """已发媒体日志（Phase18，bounded=5，随 ContextStore 持久化）。
 
@@ -10015,17 +10041,26 @@ class SkillManager(LoggerMixin):
         （防"我没发过照片"失忆抵赖）③衣着连续窗（``_last_sent_media_series``，
         P1）。刻意**不**写 episodic memory：那是"用户事实"存储，
         系统行为混进去会污染记忆语义（Phase8 治理过的教训）。
+
+        ``desc`` / ``author``（接力记忆 P0-1，2026-09-12）：坐席手动发的图由
+        ``human_outbound_memory`` 写进同一账本（author=human，desc=VLM 画面描述），
+        prompt 块把 desc 当「画面」事实 surface——AI 切回全自动后知道自己"发过什么"。
         """
         try:
             log = user_context.get("_media_sent_log")
             if not isinstance(log, list):
                 log = []
-            log.append({
+            row: Dict[str, Any] = {
                 "ts": float(ts or time.time()),
                 "note": str(note or "")[:160],
                 "scene": str(scene or "")[:120],
                 "series": str(series or "")[:80],
-            })
+            }
+            if desc:
+                row["desc"] = str(desc)[:160]
+            if author:
+                row["author"] = str(author)[:16]
+            log.append(row)
             user_context["_media_sent_log"] = log[-self._MEDIA_SENT_LOG_MAX:]
             # 真发出媒体 → 清「连续空头承诺」计数（P1 承诺循环熔断，2026-07-29）。
             user_context["_photo_promise_streak"] = 0
@@ -10260,10 +10295,13 @@ class SkillManager(LoggerMixin):
                     # 的画面 ground truth——scene 常空串（"不误标"），但 series 携带
                     # 服装/风格事实，surface 出来防 LLM 现编画面（T3「手冲壶」根因）。
                     _sr = str(row.get("series") or "").strip().replace("-", " ")
+                    # 坐席手动发图的 VLM 描述（接力记忆 P0-1）：与 series 同为画面事实
+                    _dsc = str(row.get("desc") or "").strip()
                     _n = str(row.get("note") or "").strip()
                     _facts = "；".join(
                         x for x in (f"场景：{_sc}" if _sc else "",
-                                    f"画面：{_sr}" if _sr else "") if x)
+                                    f"画面：{_sr}" if _sr else "",
+                                    f"画面：{_dsc}" if _dsc and not _sr else "") if x)
                     lines.append(
                         f"- {_t} {_n}" + (f"（{_facts}）" if _facts else ""))
                 if lines:

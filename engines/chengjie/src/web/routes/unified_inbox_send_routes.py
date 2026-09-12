@@ -25,7 +25,7 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, HTTPException, Request
 
 from src.ai.translation_service import normalize_lang
 from src.inbox.channel_adapters import ChannelSendError, send_via_adapters
@@ -697,12 +697,14 @@ def _too_large_exc(request: Request, size_bytes: int, cap_mb: int) -> HTTPExcept
 
 
 async def _send_media_streamed(request: Request, meta: Dict[str, str], filename: str,
-                               chunks: Any, *, declared: int, t0: float, mode: str):
+                               chunks: Any, *, declared: int, t0: float, mode: str,
+                               background: Optional[BackgroundTasks] = None):
     """把一个异步字节流当作出站媒体：校验 → 流式落盘（线程池写）→ 可选换封装 → 投递。
 
     ``chunks`` 是 ``bytes`` 的异步迭代器（裸流＝request.stream()；multipart＝UploadFile
     分块读）。每条退出路径都落一行 ``[send-media] ...`` 带 reason / 大小 / 耗时——8YNDKE
     的「后端零记录」以后不会再发生在路由这一层。
+    ``background``：响应后跑的出站识图任务（接力记忆 P0-1）；None＝不识图。
     """
     from src.integrations.protocol_bridge import (
         OUT_VIDEO_TRANSCODE_EXT, media_paths, media_type_from_ext,
@@ -935,6 +937,28 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
             record_agent_takeover(ibx, cid)
     except Exception:
         logger.debug("record_agent_send(media) 失败", exc_info=True)
+    # 接力记忆 P0-1（2026-09-12）：坐席手动发的图/视频进人设记忆链（last_reply 环 +
+    # 配文抽自述事实 + _media_sent_log author=human）——此前只有文本路由挂钩，切回
+    # 全自动后 AI 不知道自己"发过图"。零阻断：模块内吞异常。
+    try:
+        from src.inbox.human_outbound_memory import record_human_outbound
+        record_human_outbound(
+            request.app.state, platform, account_id, chat_key, caption,
+            conversation_id=cid, media_type=mtype, media_ref=url)
+    except Exception:
+        logger.debug("[send-media] record_human_outbound 跳过", exc_info=True)
+    # 图片 → 后台 VLM 识别我方发出的画面：回写出站行「[图片内容] …」+ 记忆账本 desc。
+    # 响应先回给坐席，识图在响应之后跑（BackgroundTasks），不占发送时延。
+    if mtype in ("image", "photo") and background is not None:
+        try:
+            from src.inbox.human_outbound_memory import describe_and_attach_outbound_media
+            background.add_task(
+                describe_and_attach_outbound_media,
+                request.app.state, platform, account_id, chat_key,
+                conversation_id=cid, media_type=mtype, media_ref=url,
+                local_path=local, config=_config)
+        except Exception:
+            logger.debug("[send-media] 出站识图任务未调度", exc_info=True)
     # #88：媒体送达成功=可达铁证 → 清 dead-peer 陈旧标（与文本路由同口径）
     try:
         from src.ops.dead_peer_registry import clear_on_delivery
@@ -1584,7 +1608,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         return {"ok": True, "count": len(peers)}
 
     @app.post("/api/unified-inbox/send-media")
-    async def api_unified_inbox_send_media(request: Request, _=Depends(page_auth)):
+    async def api_unified_inbox_send_media(
+            request: Request, background: BackgroundTasks, _=Depends(page_auth)):
         """M6⑥：坐席从收件箱发送媒体（图片/语音/视频/文件）。
 
         两种请求体（M-3 A #227，2026-09-06）：
@@ -1617,7 +1642,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
 
             # multipart 整体长度含表单包裹，不拿来做精确预检；超限由流式闸兜底
             return await _send_media_streamed(
-                request, meta, filename, _form_chunks(), declared=0, t0=_t0, mode="multipart")
+                request, meta, filename, _form_chunks(), declared=0, t0=_t0, mode="multipart",
+                background=background)
         q = request.query_params
         meta = {k: str(q.get(k) or "") for k in _meta_keys}
         filename = str(q.get("name") or "")
@@ -1628,7 +1654,8 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
         except (TypeError, ValueError):
             _declared = 0
         return await _send_media_streamed(
-            request, meta, filename, request.stream(), declared=_declared, t0=_t0, mode="stream")
+            request, meta, filename, request.stream(), declared=_declared, t0=_t0, mode="stream",
+            background=background)
 
     @app.get("/api/unified-inbox/media-download")
     async def api_unified_inbox_media_download(
@@ -2256,6 +2283,17 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 record_agent_takeover(ibx, cid)
         except Exception:
             logger.debug("record_agent_send(voice) 失败", exc_info=True)
+        # 接力记忆 P0-4（2026-09-12）：语音念出的就是以人设身份说的话——与文本路由同钩子
+        # （last_reply 环 / 自述状态 / 承诺 / 自述事实），text=坐席原文，sent_text=实际念出的
+        # 译稿（客户听到的那句）。零阻断：模块内吞异常。
+        try:
+            from src.inbox.human_outbound_memory import record_human_outbound
+            record_human_outbound(
+                request.app.state, platform, account_id, chat_key, text,
+                conversation_id=cid, media_type="voice",
+                sent_text=(spoken_text if spoken_text != text else ""))
+        except Exception:
+            logger.debug("[send-voice] record_human_outbound 跳过", exc_info=True)
         _emotion = voice_ctx.get("emotion")
         _extra = getattr(result, "extra", {}) or {}
         # 回落原因归纳（P0 2026-08-31）：与 tts-test 同源（lang_voice_route 单一

@@ -329,7 +329,30 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                     _prev_explicit = _st0.get_automation_mode_if_set(cid)
             except Exception:
                 _prev_explicit = None
+        # 接力记忆 P0-3：切换**前**的档位全貌（manual → 非 manual 时据此归纳接管窗口）
+        _prev_meta = None
+        if mode != "manual":
+            try:
+                _st_hf = _inbox_store(request)
+                if _st_hf is not None and hasattr(_st_hf, "get_automation_mode_meta"):
+                    _prev_meta = _st_hf.get_automation_mode_meta(cid)
+            except Exception:
+                _prev_meta = None
         cancelled = _write_automation_mode(request, cid, mode)
+        handoff = None
+        if mode != "manual":
+            # 从 manual 交回 AI（含 review/multi_choice：AI 重新开始拟稿）→ 接力摘要进人设记忆。
+            # 不知道前档（无显式行）也尝试：ctx 里若有人工出站起点同样能归纳。best-effort。
+            try:
+                from src.inbox.handoff_memory import record_handoff
+                _st_hf2 = _inbox_store(request)
+                if _st_hf2 is not None:
+                    handoff = record_handoff(
+                        request.app.state, _st_hf2, cid, prev_meta=_prev_meta,
+                        new_mode=mode, by="mode_select")
+            except Exception:
+                logger.debug("[automation] 接力摘要构建失败（忽略）", exc_info=True)
+                handoff = None
         # Q-18 C（#292）：切到 / 重选「全自动」= 明示接回——清让位窗 + 取消 defer 立即放行
         # （worker 落 `[autosend] resume by=mode_select`）。非 auto_ai 档不碰让位状态。
         agent_yield_resumed = None
@@ -369,6 +392,9 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             "agent_yield_resumed": agent_yield_resumed,
             # Q-27 B：切全自动时的风险持有释放结果 {had_hold, hold_cleared, tag_cleared}（非 auto_ai → None）
             "risk_hold_released": risk_hold_released,
+            # 接力记忆 P0-3：manual → AI 时的接力摘要结果 {ok, reason, out_n, in_n, media_n, chars}
+            # （切到 manual → None；前端据此 toast「AI 已接过 N 条人工消息」）
+            "handoff": handoff,
         }
 
     @app.post("/api/unified-inbox/agent-yield/resume")

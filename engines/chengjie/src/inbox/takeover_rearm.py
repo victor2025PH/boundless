@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.inbox.store import AUTOMATION_MODES
 
@@ -205,11 +205,14 @@ def sweep_takeover_rearm(
     config: Optional[Dict[str, Any]],
     *,
     now: Optional[float] = None,
+    on_restored: Optional[Callable[[str, Dict[str, Any], str], None]] = None,
 ) -> Dict[str, Any]:
     """把静默超时的接管会话恢复档位（watchdog 每 tick 调，幂等）。
 
     返回 ``{enabled, scanned, restored, restored_cids}``。任何一行失败跳过
     继续；store 缺查询口（旧版本）→ scanned=0 静默（观测口径如实为零）。
+    ``on_restored(cid, prev_row, target)``（接力记忆 P0-3）：每个真恢复的会话回调一次
+    （watchdog 用它构建接力摘要）；回调异常吞掉，不影响其余行。
     """
     cfg = takeover_rearm_cfg(config)
     out: Dict[str, Any] = {
@@ -252,6 +255,12 @@ def sweep_takeover_rearm(
         logger.info(
             "[takeover_rearm] 坐席静默超 %.0f 分钟，AI 自动接回 cid=%s → %s",
             cfg["after_minutes"], cid, target)
+        if on_restored is not None:
+            try:
+                on_restored(cid, dict(row or {}), target)
+            except Exception:
+                logger.debug("[takeover_rearm] on_restored 回调失败 cid=%s（忽略）", cid,
+                             exc_info=True)
     if out["restored"]:
         try:
             from src.inbox.automation_mode_stats import record_rearm

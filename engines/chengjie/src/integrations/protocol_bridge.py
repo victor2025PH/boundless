@@ -596,15 +596,46 @@ def get_inbox_store() -> Any:
         return None
 
 
+_SINK_FAIL_WARN_GAP_SEC = 600.0
+_sink_fail_last_warn = 0.0
+_sink_fail_total = 0
+
+
 def emit_incoming(msg: Dict[str, Any]) -> None:
-    """worker 调用：把一条消息送入收件箱（sink 未注册则静默丢弃）。"""
+    """worker 调用：把一条消息送入收件箱（sink 未注册则静默丢弃）。
+
+    接力记忆 P1-3：落库失败不再只 debug——出站镜像丢一条＝AI 历史里少一句我方说的话；
+    入站丢一条＝客户的话没进库。WARNING 每 10 分钟最多一次（方向 / 平台带在行里），其余记
+    debug；累计计数 :func:`sink_fail_total`。
+    """
+    global _sink_fail_last_warn, _sink_fail_total
     fn = _sink
     if fn is None:
         return
     try:
         fn(msg)
     except Exception:
-        logger.debug("[protocol_bridge] sink 落库失败", exc_info=True)
+        _sink_fail_total += 1
+        now = time.monotonic()
+        if now - _sink_fail_last_warn >= _SINK_FAIL_WARN_GAP_SEC:
+            _sink_fail_last_warn = now
+            try:
+                m = msg if isinstance(msg, dict) else {}
+                logger.warning(
+                    "[protocol_bridge] sink 落库失败 platform=%s acct=%s dir=%s media=%s total=%d"
+                    "（这条消息不会进收件箱/AI 历史；10 分钟内后续失败只记 debug）",
+                    m.get("platform"), m.get("account_id"), m.get("direction") or "in",
+                    m.get("media_type") or "-", _sink_fail_total, exc_info=True)
+            except Exception:
+                logger.warning("[protocol_bridge] sink 落库失败 total=%d", _sink_fail_total,
+                               exc_info=True)
+        else:
+            logger.debug("[protocol_bridge] sink 落库失败（节流）", exc_info=True)
+
+
+def sink_fail_total() -> int:
+    """收件箱 sink 落库失败累计（进程内），供观测/测试。"""
+    return _sink_fail_total
 
 
 # ── P4-4 已读回执（协议号在本进程内直接回写 messages.status，无需 HTTP） ──────────

@@ -159,20 +159,159 @@ def test_sent_text_fills_last_reply_but_facts_come_from_original(tmp_path):
     sm._context_store.close()
 
 
-def test_media_outbound_records_placeholder_no_facts(tmp_path):
+def test_media_outbound_enters_memory_chain(tmp_path):
+    """接力记忆 P0-1：手动发图 → last_reply「[图片] 配文」+ 配文抽事实 + 媒体账本 author=human。"""
     sm = _FakeSM(tmp_path / "bot.db")
     res = hom.on_human_outbound(
         "whatsapp", "17345893506", "13308422244", "我有个女儿（配文）",
-        media_type="image", skill_manager=sm)
-    assert res["ok"] is True and res["facts"] == []
+        media_type="image", media_ref="/static/protocol_media/whatsapp/out_a.jpg",
+        skill_manager=sm, now=1_757_000_000.0)
+    assert res["ok"] is True
+    assert any("我有个女儿" in f for f in res["facts"])       # 配文也是以人设身份说的话
     ctx = sm._get_user_context("13308422244", account_id="17345893506")
-    assert ctx["last_reply"] == "[图片]"
+    assert ctx["last_reply"] == "[图片] 我有个女儿（配文）"
+    log = ctx["_media_sent_log"]
+    assert len(log) == 1 and log[0]["author"] == "human"
+    assert log[0]["media_ref"].endswith("out_a.jpg") and log[0]["note"].startswith("[图片]")
+    assert ctx.get("_photo_promise_streak") == 0
+    # 无 desc 时注入块只列 note，不编画面
+    note = hom.human_media_note(ctx)
+    assert "发过的图片" in note and "[图片] 我有个女儿" in note and "画面" not in note.split("\n")[1]
+    # 空配文 → 只记占位，不抽事实
+    res2 = hom.on_human_outbound(
+        "whatsapp", "17345893506", "13308422244", "", media_type="image",
+        media_ref="/static/protocol_media/whatsapp/out_b.jpg", skill_manager=sm)
+    assert res2["ok"] and res2["facts"] == [] and ctx["last_reply"] == "[图片]"
+    assert len(ctx["_media_sent_log"]) == 2
+    # 语音：念的字＝说的话；无字只记占位
     res_v = hom.on_human_outbound(
         "whatsapp", "17345893506", "13308422244", "", media_type="voice",
         skill_manager=sm)
     assert res_v["ok"] and ctx["last_reply"] == "[语音]"
-    assert hom.LOG_KEY not in ctx
+    res_v2 = hom.on_human_outbound(
+        "whatsapp", "17345893506", "13308422244", "我住在深圳", media_type="voice",
+        sent_text="I live in Shenzhen", skill_manager=sm)
+    assert res_v2["facts"] == ["我住在深圳"]
+    assert ctx["last_reply"] == "[语音] I live in Shenzhen"
+    assert len(ctx["_media_sent_log"]) == 2   # 语音不进图片账本
     sm._context_store.close()
+
+
+def test_attach_human_media_desc_backfills_and_persists(tmp_path):
+    sm = _FakeSM(tmp_path / "bot.db")
+    ref = "/static/protocol_media/whatsapp/out_c.jpg"
+    hom.on_human_outbound(
+        "whatsapp", "17345893506", "13308422244", "刚拍的", media_type="image",
+        media_ref=ref, skill_manager=sm)
+    assert hom.attach_human_media_desc(
+        sm, "whatsapp", "17345893506", "13308422244", media_ref=ref,
+        desc="一位女性在海边微笑，身穿白色连衣裙") is True
+    ctx = sm._get_user_context("13308422244", account_id="17345893506")
+    assert ctx["_media_sent_log"][-1]["desc"].startswith("一位女性在海边")
+    note = hom.human_media_note(ctx)
+    assert "画面：一位女性在海边" in note and "[图片] 刚拍的" in note
+    # 未知 media_ref → False；持久：重开仍在
+    assert hom.attach_human_media_desc(
+        sm, "whatsapp", "17345893506", "13308422244", media_ref="/nope.jpg", desc="x") is False
+    sm._context_store.close()
+    sm2 = _FakeSM(tmp_path / "bot.db")
+    ctx2 = sm2._get_user_context("13308422244", account_id="17345893506")
+    assert ctx2["_media_sent_log"][-1]["desc"].startswith("一位女性在海边")
+    sm2._context_store.close()
+
+
+def test_human_media_note_ignores_ai_rows_and_empty():
+    assert hom.human_media_note({}) == ""
+    ctx = {"_media_sent_log": [{"ts": 1.0, "note": "[图片] AI 自拍", "scene": "cafe"}]}
+    assert hom.human_media_note(ctx) == ""      # AI 发的由 selfie 链的块负责
+
+
+def _ingest(store, cid, *, direction, text, media_ref, ts, mid):
+    from src.inbox.models import InboxMessage
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, platform_msg_id=mid, direction=direction, text=text,
+        media_type="image", media_ref=media_ref, ts=ts))
+
+
+def test_store_append_outbound_media_desc_only_out_rows_idempotent(tmp_path):
+    from src.inbox.store import InboxStore
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "whatsapp:acct:peer"
+    ref_out, ref_in = "/static/x/out.jpg", "/static/x/in.jpg"
+    _ingest(store, cid, direction="out", text="刚拍的", media_ref=ref_out, ts=100.0, mid="o1")
+    _ingest(store, cid, direction="in", text="", media_ref=ref_in, ts=101.0, mid="i1")
+    assert store.append_outbound_media_desc(cid, media_ref=ref_out, desc="海边微笑") is True
+    assert store.append_outbound_media_desc(cid, media_ref=ref_out, desc="海边微笑") is False
+    assert store.append_outbound_media_desc(cid, media_ref=ref_in, desc="不该写入站") is False
+    assert store.append_outbound_media_desc(cid, media_ref=ref_out, desc="") is False
+    rows = {r["media_ref"]: r["text"] for r in store.list_recent_messages(cid, limit=10)}
+    assert rows[ref_out] == "刚拍的\n[图片内容] 海边微笑"
+    assert rows[ref_in] == ""
+    # 空配文行：直接成为描述行
+    _ingest(store, cid, direction="out", text="", media_ref="/static/x/out2.jpg", ts=102.0, mid="o2")
+    assert store.append_outbound_media_desc(cid, media_ref="/static/x/out2.jpg", desc="猫") is True
+    rows = {r["media_ref"]: r["text"] for r in store.list_recent_messages(cid, limit=10)}
+    assert rows["/static/x/out2.jpg"] == "[图片内容] 猫"
+    store.close()
+
+
+def test_normalize_history_labels_outbound_media_with_caption_and_desc():
+    from src.inbox.persona_reply import normalize_history
+    hist, last_in = normalize_history([
+        {"direction": "in", "text": "在干嘛"},
+        {"direction": "out", "text": "刚拍的\n[图片内容] 海边微笑", "media_type": "image",
+         "media_ref": "/o.jpg"},
+        {"direction": "out", "text": "晚安呀", "media_type": "voice", "media_ref": "/v.ogg"},
+        {"direction": "out", "text": "[我方发出的图片] 已标", "media_type": "image"},
+        {"direction": "in", "text": "好看", "media_type": "image", "media_ref": "/i.jpg"},
+    ])
+    assert hist[1] == {"role": "assistant", "content": "[我方发出的图片] 刚拍的\n[图片内容] 海边微笑"}
+    assert hist[2]["content"] == "[我方发出的语音] 晚安呀"
+    assert hist[3]["content"] == "[我方发出的图片] 已标"        # 不重复加标签
+    assert hist[4]["role"] == "user" and hist[4]["content"] == "好看"   # 入站 caption 原样
+    assert last_in == "好看"
+
+
+@pytest.mark.asyncio
+async def test_describe_and_attach_outbound_media_end_to_end(tmp_path, monkeypatch):
+    from src.inbox import media_enrich
+    from src.inbox.store import InboxStore
+
+    async def _fake_desc(**kw):
+        assert kw["media_type"] == "image" and kw["local_path"] == "/tmp/out.jpg"
+        return "一只橘猫趴在沙发上"
+
+    monkeypatch.setattr(media_enrich, "describe_outbound_media", _fake_desc)
+    store = InboxStore(tmp_path / "inbox.db")
+    sm = _FakeSM(tmp_path / "bot.db")
+    cid, ref = "whatsapp:17345893506:13308422244", "/static/x/out.jpg"
+    _ingest(store, cid, direction="out", text="", media_ref=ref, ts=1.0, mid="o1")
+    hom.on_human_outbound("whatsapp", "17345893506", "13308422244", "", media_type="image",
+                          media_ref=ref, skill_manager=sm)
+    st = SimpleNamespace(skill_manager=sm, inbox_store=store,
+                         config_manager=SimpleNamespace(config={"vision": {"enabled": True}}))
+    desc = await hom.describe_and_attach_outbound_media(
+        st, "whatsapp", "17345893506", "13308422244", conversation_id=cid,
+        media_type="image", media_ref=ref, local_path="/tmp/out.jpg", retry_delay_sec=0)
+    assert desc == "一只橘猫趴在沙发上"
+    row = store.list_recent_messages(cid, limit=5)[-1]
+    assert row["text"] == "[图片内容] 一只橘猫趴在沙发上"
+    ctx = sm._get_user_context("13308422244", account_id="17345893506")
+    assert ctx["_media_sent_log"][-1]["desc"] == "一只橘猫趴在沙发上"
+    store.close()
+    sm._context_store.close()
+
+
+@pytest.mark.asyncio
+async def test_describe_outbound_media_skips_non_image_and_disabled(tmp_path):
+    from src.inbox.media_enrich import describe_outbound_media
+    assert await describe_outbound_media(media_type="voice", media_ref="/x.ogg") == ""
+    assert await describe_outbound_media(media_type="sticker", media_ref="/x.webp") == ""
+    p = tmp_path / "a.jpg"
+    p.write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 16)
+    # vision.enabled 缺省关 → 不调 VLM、返回空串
+    assert await describe_outbound_media(
+        media_type="image", media_ref=str(p), local_path=str(p), config={}) == ""
 
 
 def test_default_account_id_resolved_from_conversation_id(tmp_path):

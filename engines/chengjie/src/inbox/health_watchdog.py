@@ -2562,7 +2562,19 @@ class HealthWatchdog:
         if store is None:
             return
         from src.inbox.takeover_rearm import sweep_takeover_rearm
-        res = sweep_takeover_rearm(store, cfg, now=now)
+        _app_state = getattr(self._app, "state", self._app)
+
+        def _on_restored(cid: str, row: Dict[str, Any], target: str) -> None:
+            # 接力记忆 P0-3：自动接回也是一次 manual → AI 交接，同样归纳接力摘要。
+            # row.updated_at＝最后一次人工出站时刻（接管态每次出站刷新），当 prev_meta 传入。
+            from src.inbox.handoff_memory import record_handoff
+            record_handoff(
+                _app_state, store, cid,
+                prev_meta={"mode": "manual", "source": row.get("source"),
+                           "updated_at": row.get("updated_at")},
+                new_mode=target, by="rearm", now=now)
+
+        res = sweep_takeover_rearm(store, cfg, now=now, on_restored=_on_restored)
         if int(res.get("restored") or 0) > 0:
             logger.info("[takeover_rearm] 本轮自动接回 %s 个会话：%s",
                         res.get("restored"),

@@ -4180,6 +4180,38 @@ class InboxStore:
             self._conn.commit()
             return int(cur.rowcount or 0) > 0
 
+    def append_outbound_media_desc(
+        self, conversation_id: str, *, media_ref: str, desc: str,
+        marker: str = "[图片内容]",
+    ) -> bool:
+        """给**我方发出**的媒体行追加识别描述（接力记忆 P0-1，2026-09-12）。
+
+        ``update_message_text`` 刻意只回写入站行（Q-24 F）；坐席手动发的图切回全自动后
+        AI 只看到「[我方发出的图片]」——不知道发了什么。这里把 VLM 描述以
+        ``[图片内容] …`` 追加到出站行 text 末尾（有配文 → 换行接在配文后），前缀与
+        入站同字面，所有既有剥离口径（翻译源文 / 语言投票 / 记忆抽取）自动生效。
+        幂等：已含 marker 的行不再追加。返回是否真的更新。
+        """
+        d = str(desc or "").strip()
+        cid = str(conversation_id or "").strip()
+        ref = str(media_ref or "").strip()
+        if not (d and cid and ref):
+            return False
+        line = f"{marker} {d}"
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                UPDATE messages SET
+                    text = CASE WHEN COALESCE(TRIM(text), '') = '' THEN ?
+                           ELSE text || char(10) || ? END
+                WHERE conversation_id = ? AND media_ref = ? AND direction = 'out'
+                  AND instr(text, ?) = 0
+                """,
+                (line, line, cid, ref, marker),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0) > 0
+
     def correct_approx_ts(self, message_id: str, ts: float) -> bool:
         """把**合成时间戳**行校正为真实时间并清 approx 标（实施72 P5 自愈校正）。
 

@@ -33,6 +33,38 @@ from src.integrations.shared.send_guard import send_blocked
 logger = logging.getLogger(__name__)
 
 
+_MIRROR_FAIL_WARN_GAP_SEC = 600.0
+_mirror_fail_last_warn: Dict[str, float] = {}
+_mirror_fail_total = 0
+
+
+def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: str) -> None:
+    """出站消息回写收件箱失败 → WARNING（同 platform 10 分钟节流）+ 进程计数。
+
+    接力记忆 P1-3：出站行缺失＝AI 历史里没有这句/这张——切回全自动后 AI 不知道我方说过。
+    此前只 debug，事故只能靠客户投诉发现。计数由 :func:`mirror_fail_total` 暴露给观测。
+    """
+    global _mirror_fail_total
+    _mirror_fail_total += 1
+    now = time.monotonic()
+    key = str(platform or "?")
+    last = _mirror_fail_last_warn.get(key, 0.0)
+    if now - last < _MIRROR_FAIL_WARN_GAP_SEC:
+        logger.debug("[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s（节流）",
+                     platform, account_id, chat_key, kind, exc_info=True)
+        return
+    _mirror_fail_last_warn[key] = now
+    logger.warning(
+        "[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s total=%d "
+        "（该消息不会出现在 AI 历史里；同平台 10 分钟内后续失败只记 debug）",
+        platform, account_id, chat_key, kind, _mirror_fail_total, exc_info=True)
+
+
+def mirror_fail_total() -> int:
+    """出站回写失败累计（进程内），供观测/测试。"""
+    return _mirror_fail_total
+
+
 def _record_line_identity(outcome: str) -> None:
     """记 LINE 私聊发送者显示名解析结果到 peer_identity 观测（best-effort，绝不影响主流程）。"""
     try:
@@ -818,7 +850,7 @@ class AccountOrchestrator:
                         if sender_name else None),
             ))
         except Exception:
-            logger.debug("[orchestrator] 出站媒体回写收件箱失败", exc_info=True)
+            _warn_mirror_fail(platform, account_id, chat_key, kind=str(media_type or "media"))
         return res if isinstance(res, dict) else {"delivered": True}
 
     async def send(
@@ -1015,7 +1047,9 @@ class AccountOrchestrator:
                     from src.integrations.protocol_bridge import report_message_status
                     report_message_status(platform, account_id, chat_key, _mid, "sent")
             except Exception:
-                logger.debug("[orchestrator] 出站回写收件箱失败", exc_info=True)
+                # 接力记忆 P1-3：回写失败＝这条我方消息在 AI 的历史里**不存在**（切回全自动后
+                # AI 不知道说过）——不该只 debug。同 platform 每 10 分钟最多告警一次防刷屏。
+                _warn_mirror_fail(platform, account_id, chat_key, kind="text")
         return res if isinstance(res, dict) else {"delivered": True}
 
     async def invite_to_group(self, platform: str, inviter_id: str,

@@ -610,6 +610,44 @@ async def enrich_inbound_media_text(
                 pass
 
 
+#: 我方（坐席手动 / 手机端）发出的图片在上下文里的标签——与 ``persona_reply.normalize_history``
+#: / i18n ``inbox.ms.media_out_label`` 同字面；后接配文与 ``[图片内容] 描述``。
+OUT_IMAGE_LABEL = "[我方发出的图片]"
+
+
+async def describe_outbound_media(
+    *, media_type: str, media_ref: str, config: Optional[Dict[str, Any]] = None,
+    local_path: str = "",
+) -> str:
+    """识别**我方发出**的图片（坐席手动发图 → 切回全自动后 AI 得知道自己"发过什么"）。
+
+    复用入站识图链（同 VLM / 同缓存 / 同碎片文字闸），只做图片类（视频/语音出站
+    不识别：成本高且手动发视频极少）。返回单行描述；关/无后端/失败 → ""。
+    全程软失败，绝不抛。``local_path`` 非空时直接用（发送路由手里就有落盘路径），
+    否则按 ``media_ref`` 解析。
+    """
+    cfg = config or {}
+    mt = str(media_type or "").strip().lower()
+    if mt not in _IMAGE_KINDS or mt == "sticker":
+        return ""
+    try:
+        local = str(local_path or "").strip()
+        if not (local and os.path.isfile(local)):
+            local = _resolve_local_path(media_ref) or ""
+        if not local:
+            return ""
+        desc = (await _describe_image(local, cfg) or "").strip()
+        if not desc:
+            return ""
+        desc = flatten_desc_line(desc)
+        if desc_looks_garbled(desc):
+            return ""
+        return desc[:600]
+    except Exception:
+        logger.debug("[media_enrich] 出站识图失败 ref=%s", media_ref, exc_info=True)
+        return ""
+
+
 async def _maybe_fetch_remote(
     media_ref: str, media_type: str, cfg: Dict[str, Any],
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -640,8 +678,10 @@ async def _maybe_fetch_remote(
 
 
 __all__ = [
+    "OUT_IMAGE_LABEL",
     "blind_image_assertion",
     "clear_desc_inflight",
+    "describe_outbound_media",
     "enrich_inbound_media_text",
     "honest_image_ask",
     "is_placeholder_only",

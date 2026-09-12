@@ -82,8 +82,16 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
         _peer_msg_id = ""  # 语音转录回写目标行
         try:
             from src.ai.context_depth import history_fetch_limit as _hfl
-            for r in _ad_store.list_recent_messages(
-                    cid, limit=_hfl(assistant.config.config or {}, 30)):
+            _fetch_n = _hfl(assistant.config.config or {}, 30)
+            # 接力记忆 P1-1：刚从人工接管交回 → 多取几行，让接管期间的人工消息进窗口
+            try:
+                from src.inbox.handoff_memory import fetch_limit_for_handoff
+                _fetch_n = fetch_limit_for_handoff(
+                    getattr(_ad_app, "state", None), _fetch_n,
+                    account_id=account_id, chat_key=chat_key, conversation_id=cid)
+            except Exception:
+                pass
+            for r in _ad_store.list_recent_messages(cid, limit=_fetch_n):
                 msgs.append({
                     "direction": r.get("direction") or "in",
                     "text": r.get("text") or "",
@@ -985,6 +993,86 @@ def consume_drafts_on_agent_send(
     return consumed
 
 
+#: manual 档入站媒体补识：每次入站最多识别几条「还没识别过」的媒体行（控成本）。
+_MANUAL_ENRICH_MAX_ROWS = 2
+_mod_logger = logging.getLogger(__name__)
+
+
+async def enrich_manual_inbound_media(
+    store, conv: dict, app_config, *, max_rows: int = _MANUAL_ENRICH_MAX_ROWS,
+) -> int:
+    """manual（人工接管）期间入站图片/语音/视频**照常识别并回写消息行**（接力记忆 P0-2）。
+
+    此前识别只发生在 AI 拟稿链里：坐席接管中客户发的图/语音在库里永远停在 ``[图片]``
+    占位，切回全自动后 AI 拿到的历史里那几张图全是盲区（回扫 ``media_backscan`` 只覆盖
+    最近 5 条，接管稍长就出窗）。本函数与拟稿链的回扫同一识别层、同一回写口径
+    （``update_message_text(only_if_empty=True)``），不拟稿、不发消息，只让消息行长出
+    ``[图片内容] …`` / 转写正文——坐席台当下就能看见，AI 接手时历史里也是完整的。
+
+    开关：``inbox.auto_draft.manual_media_enrich``（默认开）。回扫窗口复用
+    ``media_backscan``（至少看最新 3 条）。同一媒体行有 in-flight 标记就跳过（与拟稿链
+    并发时不重复烧 VLM）。返回补识条数；全程软失败绝不抛。
+    """
+    try:
+        cid = str((conv or {}).get("conversation_id") or "")
+        if not cid or store is None or not hasattr(store, "list_recent_messages"):
+            return 0
+        cfg = app_config if isinstance(app_config, dict) else {}
+        ad = ((cfg.get("inbox") or {}).get("auto_draft") or {})
+        if not bool(ad.get("manual_media_enrich", True)):
+            return 0
+        try:
+            n = int(ad.get("media_backscan", _MEDIA_BACKSCAN_DEFAULT))
+        except Exception:
+            n = _MEDIA_BACKSCAN_DEFAULT
+        n = max(3, n)
+        from src.inbox.media_enrich import (
+            clear_desc_inflight,
+            enrich_inbound_media_text,
+            is_placeholder_only,
+            media_wait_sec_from_cfg,
+            try_mark_desc_inflight,
+        )
+        kinds = {"image", "photo", "sticker", "voice", "audio",
+                 "video", "video_note", "animation", "gif"}
+        rows = store.list_recent_messages(cid, limit=n) or []
+        done = 0
+        for r in reversed(rows):
+            if done >= max(1, int(max_rows)):
+                break
+            if str(r.get("direction") or "") != "in":
+                continue
+            mt = str(r.get("media_type") or "").lower()
+            ref = str(r.get("media_ref") or "")
+            if mt not in kinds or not ref:
+                continue
+            txt = str(r.get("text") or "")
+            if txt.strip() and not is_placeholder_only(txt):
+                continue
+            key = f"manual|{cid}|{ref}"
+            if not try_mark_desc_inflight(key):
+                continue
+            try:
+                new_text, desc = await enrich_inbound_media_text(
+                    media_type=mt, media_ref=ref, caption="", config=cfg,
+                    wait_file_sec=media_wait_sec_from_cfg(cfg))
+                if desc:
+                    ok = store.update_message_text(
+                        cid, message_id=str(r.get("message_id") or ""),
+                        media_ref=ref, text=new_text, only_if_empty=True)
+                    if ok:
+                        done += 1
+                        _mod_logger.info(
+                            "[AutoDraft] manual 档媒体补识 conv=%s kind=%s desc=%r",
+                            cid, mt, str(desc)[:60])
+            finally:
+                clear_desc_inflight(key)
+        return done
+    except Exception:
+        _mod_logger.debug("[AutoDraft] manual 档媒体补识失败（忽略）", exc_info=True)
+        return 0
+
+
 def _a_line_on_duty(app_config, conv: dict, text: str) -> bool:
     """A 线此刻是否会直发本条消息（与 telegram_client 的班表闸同一判定）。
 
@@ -1278,6 +1366,12 @@ def make_auto_draft_cb(
         except Exception:
             logger.debug("[AutoDraft] companion 双轨互斥判定失败（忽略）", exc_info=True)
         if mode == "manual":
+            # 接力记忆 P0-2：不拟稿，但入站媒体照常识别回写（坐席当下可见、AI 接手不盲）
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    enrich_manual_inbound_media(store, conv, app_config), loop)
+            except Exception:
+                logger.debug("[AutoDraft] manual 档媒体补识调度失败（忽略）", exc_info=True)
             return
         # Q-3（#264 A/B/E，调用侧）：① 触发源 reason——worker 侧经 draft_trigger.note 登记的
         # catchup_regen / risk_hold_regen，缺省 new_inbound；② 会话级风险持有 / 「需人工」标在场

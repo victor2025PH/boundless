@@ -14861,6 +14861,12 @@ function _mediaItemHtml(it){
 function _renderMediaBar(){
   const bar=document.getElementById('media-preview-bar');
   if(!bar) return;
+  // 接力记忆 P2-3：有待发媒体时输入框提示「配文会随图进 AI 记忆」——引导坐席写一句，切回全自动
+  // 后 AI 才知道这张图是什么；队列清空复位（只读态由 _applyReadOnly 掌管，不碰）。
+  try{
+    const _ta=document.getElementById('reply-ta');
+    if(_ta&&!_ta.disabled) _ta.placeholder=window.T(_mediaQueue.length?'inbox.media.caption_ph':'inbox.reply.ph');
+  }catch(_){}
   if(!_mediaQueue.length){
     bar.style.display='none'; bar.classList.remove('failed','sending'); bar.innerHTML='';
     const fi=document.getElementById('send-media-file'); if(fi) fi.value='';
@@ -16400,7 +16406,8 @@ function _renderTakeoverBanner(){
     if(!_min) _min=Math.round(Number(r.after_minutes)||30);
     txt+=window.Tf('inbox.takeover.pill_eta',{min:String(_min)});
   }
-  el.innerHTML='<span class="tko-pill"><span class="tko-txt">'+esc(txt)+'</span>'
+  // 接力记忆 P2-2：悬停说明接管期间的内容会交接给 AI（消除「切回去 AI 会失忆」的顾虑）
+  el.innerHTML='<span class="tko-pill" title="'+esc(window.T('inbox.takeover.pill_handoff_t'))+'"><span class="tko-txt">'+esc(txt)+'</span>'
     +'<button type="button" class="tko-resume" onclick="takeoverResume()">'
     +esc(window.T('inbox.takeover.resume_btn'))+'</button></span>';
   el.style.display='flex';
@@ -16968,6 +16975,11 @@ async function setMode(mode, opts){
       tip+=' · '+window.Tf('inbox.mode.cancelled_ai',{n:d.cancelled_l2});
     }
     if(d.agent_yield_resumed&&d.agent_yield_resumed.had_yield){ tip+=' · '+window.T('inbox.ay.resumed'); try{ _aySet(null); }catch(_){} }   // Q-18 #292（ay-）：切全自动 = 明示接回
+    // 接力记忆 P0-3：manual → AI 时服务端归纳了接管窗口 → 告诉坐席 AI 接过了多少条（含图/语音）
+    if(d.handoff&&d.handoff.ok){
+      var _hn=(d.handoff.out_n|0)+(d.handoff.in_n|0);
+      if(_hn>0){ tip+=' · '+window.Tf('inbox.mode.handoff_ok',{n:_hn})+((d.handoff.media_n|0)>0?window.Tf('inbox.mode.handoff_ok_media',{m:d.handoff.media_n|0}):''); }
+    }
     try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){}
     // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」
     if((mode==='review'||mode==='multi_choice') && typeof toggleAiDraft==='function'){

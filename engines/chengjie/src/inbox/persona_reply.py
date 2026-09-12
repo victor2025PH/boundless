@@ -270,6 +270,13 @@ def trim_stale_history(
     return out
 
 
+#: 出站非图片媒体的中文名（标签「[我方发出的X]」）；未列出的 media_type 原样带出。
+_OUT_MEDIA_WORD = {
+    "voice": "语音", "audio": "语音", "video": "视频", "video_note": "视频",
+    "animation": "动图", "gif": "动图", "document": "文件", "file": "文件",
+}
+
+
 def normalize_history(
     messages: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], str]:
@@ -291,20 +298,25 @@ def normalize_history(
         t = str(m.get("text") or "").strip()
         is_in = m.get("direction") in ("in", "inbound")
         _has_media = bool(m.get("media_type") or m.get("media_ref"))
-        if not t and _has_media:
+        if _has_media and not is_in:
             # Q-24 F（#298）：出站媒体（我们/坐席/手机端发的图）在上下文里必须标成
             # 「我方发出的图片」——占位 [图片] 会让 LLM 把它当客户发的图去接话。
+            # 接力记忆 P0-1（2026-09-12）：**有配文 / 已回写识图描述**的出站图同样带
+            # 标签——此前配文裸当 assistant 文本，LLM 不知道那句话是随一张图发出的，
+            # 切回全自动后「你发的那张」接不上。标签后接配文与 ``[图片内容] 描述``。
             _mt = str(m.get("media_type") or "").lower()
-            if not is_in and _mt in ("image", "photo", "picture", "sticker"):
-                t = "[我方发出的图片]"
-            elif not is_in:
-                t = f"[我方发出的{_mt or '媒体'}]"
-            else:
-                try:
-                    from src.integrations.protocol_bridge import media_placeholder
-                    t = media_placeholder(str(m.get("media_type") or ""))
-                except Exception:
-                    t = "[媒体]"
+            _lbl = ("[我方发出的图片]" if _mt in ("image", "photo", "picture", "sticker")
+                    else f"[我方发出的{_OUT_MEDIA_WORD.get(_mt, _mt or '媒体')}]")
+            if not t:
+                t = _lbl
+            elif not t.startswith("[我方发出的"):
+                t = f"{_lbl} {t}"
+        elif not t and _has_media:
+            try:
+                from src.integrations.protocol_bridge import media_placeholder
+                t = media_placeholder(str(m.get("media_type") or ""))
+            except Exception:
+                t = "[媒体]"
         if not t:
             continue
         row: Dict[str, Any] = {"role": "user" if is_in else "assistant", "content": t}

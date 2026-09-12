@@ -30,7 +30,11 @@
 ``author=human`` 标记落在 ``_human_said_log`` 条目上（``author`` 字段），与 AI 侧
 ``_self_state_log``（author 隐含 ai）并列成两路人设自述来源。
 
-语音/媒体人工出站只记「[语音]/[图片]」占位进 ``last_reply``，不抽事实。
+媒体人工出站（接力记忆 P0-1，2026-09-12）：图片/语音**同样进记忆链**——
+``last_reply`` 记「[图片] 配文」；配文 / 语音念的文本照常抽自述事实 + 自述状态 +
+承诺（那都是以人设身份说出去的话）；图片另落 ``_media_sent_log``（author=human、
+带 VLM ``desc``），供 :func:`human_media_note` 注入「你（由坐席）发过的照片」，与
+A 线 ``_record_media_sent`` 同一账本 → 「上次那张」指涉 / 发图承诺自动结清一并复用。
 """
 from __future__ import annotations
 
@@ -234,11 +238,145 @@ def resolve_skill_manager(app_state: Any) -> Any:
         return None
 
 
+_IMAGE_KINDS = frozenset({"image", "photo", "picture"})
+_VOICE_KINDS = frozenset({"voice", "audio"})
+_MEDIA_LOG_KEY = "_media_sent_log"
+_MEDIA_LOG_CAP = 5          # 与 SkillManager._MEDIA_SENT_LOG_MAX 同值（无 sm 方法时的兜底）
+_MEDIA_NOTE_MAX = 3
+_DESC_MAX = 160
+
+
+def _media_label(media_type: str) -> str:
+    mt = str(media_type or "").strip().lower()
+    if mt in _VOICE_KINDS:
+        return "[语音]"
+    if mt in _IMAGE_KINDS:
+        return "[图片]"
+    if mt in ("video", "video_note", "animation", "gif"):
+        return "[视频]"
+    if mt == "sticker":
+        return "[贴纸]"
+    return "[文件]" if mt in ("document", "file") else "[媒体]"
+
+
+def _record_media_sent_human(
+    sm: Any, ctx: Dict[str, Any], *, note: str, desc: str, media_ref: str, ts: float,
+) -> None:
+    """图片出站 → ``_media_sent_log``（A 线 ``_record_media_sent`` 同账本，author=human）。
+
+    优先走 SkillManager 方法（bounded / 清空头承诺计数等副作用一致），拿不到就直写。
+    条目额外带 ``author`` / ``desc`` / ``media_ref``：desc 可能晚到（VLM 异步），
+    :func:`attach_human_media_desc` 按 media_ref 回填。
+    """
+    rec = getattr(sm, "_record_media_sent", None)
+    if callable(rec):
+        try:
+            rec(ctx, note=note, ts=ts, desc=desc, author="human")
+        except TypeError:   # 旧签名（未重启 / 测试假 sm）
+            rec(ctx, note=note, ts=ts)
+        log = ctx.get(_MEDIA_LOG_KEY)
+        if isinstance(log, list) and log:
+            last = log[-1]
+            if isinstance(last, dict) and str(last.get("note") or "") == note[:160]:
+                last["author"] = "human"
+                last["media_ref"] = str(media_ref or "")[:200]
+                if desc:
+                    last["desc"] = str(desc)[:_DESC_MAX]
+                return
+    log = ctx.get(_MEDIA_LOG_KEY)
+    if not isinstance(log, list):
+        log = []
+    log.append({
+        "ts": ts, "note": note[:160], "scene": "", "series": "",
+        "author": "human", "media_ref": str(media_ref or "")[:200],
+        **({"desc": str(desc)[:_DESC_MAX]} if desc else {}),
+    })
+    ctx[_MEDIA_LOG_KEY] = log[-_MEDIA_LOG_CAP:]
+    ctx["_photo_promise_streak"] = 0
+
+
+def human_media_note(user_context: Dict[str, Any]) -> str:
+    """坐席替人设发过的图片（``_media_sent_log`` 里 author=human 的条目）→ prompt 块。
+
+    只在 ``_media_sent_note``（selfie 链「你最近发过的照片」块，含全部条目）**缺席**时由
+    ``_inject_self_state`` 拼入——selfie 关着的客服场景此前这本账根本不进 prompt。
+    """
+    try:
+        log = user_context.get(_MEDIA_LOG_KEY) if isinstance(user_context, dict) else None
+        if not isinstance(log, list) or not log:
+            return ""
+        lines: List[str] = []
+        for e in log:
+            if not isinstance(e, dict) or str(e.get("author") or "") != "human":
+                continue
+            note = str(e.get("note") or "").strip()
+            desc = str(e.get("desc") or "").strip()
+            if not note and not desc:
+                continue
+            ts = float(e.get("ts") or 0)
+            stamp = time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts > 0 else ""
+            line = f"- {stamp + ' ' if stamp else ''}{note or '[图片]'}"
+            if desc:
+                line += f"（画面：{desc}）"
+            lines.append(line)
+        if not lines:
+            return ""
+        return (
+            "【你（由坐席以你的身份）给 TA 发过的图片（事实）】\n"
+            + "\n".join(lines[-_MEDIA_NOTE_MAX:]) + "\n"
+            "对方提到「你发的照片/那张图」时按此回应，不要否认发过；只能说『画面』里"
+            "标注有的东西，没标注就含糊带过，绝不编造画面细节。"
+        )
+    except Exception:
+        return ""
+
+
+def attach_human_media_desc(
+    skill_manager: Any, platform: str, account_id: str, chat_key: str, *,
+    media_ref: str, desc: str, conversation_id: str = "",
+) -> bool:
+    """VLM 描述晚到 → 按 media_ref 回填 ``_media_sent_log`` 条目的 ``desc`` 并落盘。绝不抛。"""
+    try:
+        d = str(desc or "").strip()
+        sm = skill_manager
+        if not d or sm is None:
+            return False
+        get_ctx = getattr(sm, "_get_user_context", None)
+        store = getattr(sm, "_context_store", None)
+        if not callable(get_ctx) or store is None:
+            return False
+        acct = _effective_account_id(account_id, conversation_id)
+        ctx = get_ctx(str(chat_key or "").strip(), account_id=acct)
+        if not isinstance(ctx, dict):
+            return False
+        log = ctx.get(_MEDIA_LOG_KEY)
+        if not isinstance(log, list):
+            return False
+        ref = str(media_ref or "")[:200]
+        hit = False
+        for e in reversed(log):
+            if isinstance(e, dict) and ref and str(e.get("media_ref") or "") == ref:
+                e["desc"] = d[:_DESC_MAX]
+                hit = True
+                break
+        if not hit:
+            return False
+        key = str(ctx.get("_context_store_key") or "")
+        if key:
+            store.mark_dirty(key)
+            store.flush(key)
+        return True
+    except Exception:
+        logger.debug("[human_memory] attach_human_media_desc 异常（已忽略）", exc_info=True)
+        return False
+
+
 def on_human_outbound(
     platform: str, account_id: str, chat_key: str, text: str, *,
     conversation_id: str = "", persona_id: str = "", channel: str = "inbox",
     media_type: str = "", skill_manager: Any = None, now: Optional[float] = None,
-    sent_text: str = "", inbox_store: Any = None,
+    sent_text: str = "", inbox_store: Any = None, media_ref: str = "",
+    media_desc: str = "",
 ) -> Dict[str, Any]:
     """手动发送成功后调用（``record_agent_send`` 之后一行）。绝不抛、零阻断发送。
 
@@ -251,6 +389,10 @@ def on_human_outbound(
     人工说的话**送进 ``SkillManager.schedule_manual_outbound_extract``——本模块自己
     刻意不抽坐席的话进客户事实库（见模块头），客户的话则与 AI 回复后同一条链、同一个
     记忆桶；缺 store（老调用方 / 测试）＝旧行为。
+
+    媒体（``media_type`` 非空）：``text``＝配文（图片）/ 念出的文本（语音），
+    ``last_reply`` 记「[图片] 配文」；配文 / 语音文本照常抽事实；图片再落
+    ``_media_sent_log``（author=human，``media_ref`` / ``media_desc`` 随带）。
     """
     res: Dict[str, Any] = {"ok": False, "facts": [], "reason": "", "customer_extract": {}}
     try:
@@ -273,26 +415,43 @@ def on_human_outbound(
             res["reason"] = "bad_context"
             return res
         ts = float(now if now is not None else time.time())
-        is_text = str(channel or "inbox") == "inbox" and not media_type
-        body = str(text or "").strip()
-        if not is_text:
-            body = "[语音]" if str(media_type or "") in ("voice", "audio") else "[图片]"
-        if not body:
-            res["reason"] = "empty"
-            return res
-        shown = (str(sent_text or "").strip() or body) if is_text else body
+        mt = str(media_type or "").strip().lower()
+        is_text = str(channel or "inbox") == "inbox" and not mt
+        body = str(text or "").strip()          # 坐席敲的话：文本正文 / 图片配文 / 语音念的字
+        if is_text:
+            if not body:
+                res["reason"] = "empty"
+                return res
+            shown = str(sent_text or "").strip() or body
+        else:
+            label = _media_label(mt)
+            shown = f"{label} {str(sent_text or '').strip() or body}".strip() if body else label
         # 1) last_reply 环（与 _update_after_reply 同键；记客户实际看到的那句）
         ctx["last_reply"] = shown[:500]
         ctx["last_reply_time"] = ts
         ctx["_last_human_outbound_ts"] = ts
+        # 接力记忆 P0-3：首条人工出站＝接管窗口起点（切回 AI 时据此归纳接力摘要）
+        try:
+            from src.inbox.handoff_memory import note_human_outbound_started
+            note_human_outbound_started(ctx, now=ts)
+        except Exception:
+            pass
         try:
             push = getattr(sm, "_push_recent_reply", None)
             if callable(push):
                 push(ctx, shown)
         except Exception:
             pass
+        # 1b) 图片出站 → 已发媒体账本（A 线同账本；desc 可能由 attach_human_media_desc 晚到）
+        if mt in _IMAGE_KINDS:
+            try:
+                _record_media_sent_human(
+                    sm, ctx, note=shown, desc=str(media_desc or ""),
+                    media_ref=media_ref, ts=ts)
+            except Exception:
+                logger.debug("[human_memory] 媒体账本写入失败（已忽略）", exc_info=True)
         facts: List[str] = []
-        if is_text:
+        if body:
             # 2) 短期自述状态（要睡了/去健身…）
             try:
                 from src.companion.self_state import record_self_state
@@ -311,7 +470,7 @@ def on_human_outbound(
                 record_human_said(ctx, facts, quote=body, now=ts)
             # 4) O-2 B（#201 / DY534Y）：客户对人工说的话同走抽取（user=客户号，
             #    source=manual_out）。去重 / 意图门 / 白名单 / 冷却在 SkillManager 内。
-            if inbox_store is not None:
+            if is_text and inbox_store is not None:
                 try:
                     _sched = getattr(sm, "schedule_manual_outbound_extract", None)
                     if callable(_sched):
@@ -344,7 +503,7 @@ def on_human_outbound(
 def record_human_outbound(
     app_state: Any, platform: str, account_id: str, chat_key: str, text: str, *,
     conversation_id: str = "", channel: str = "inbox", media_type: str = "",
-    sent_text: str = "",
+    sent_text: str = "", media_ref: str = "", media_desc: str = "",
 ) -> Dict[str, Any]:
     """路由侧一行调用：自己从 ``app.state`` 解析 SkillManager 与收件箱 store，其余同
     :func:`on_human_outbound`。绝不抛。"""
@@ -353,12 +512,67 @@ def record_human_outbound(
             platform, account_id, chat_key, text,
             conversation_id=conversation_id, channel=channel, media_type=media_type,
             sent_text=sent_text, skill_manager=resolve_skill_manager(app_state),
-            inbox_store=getattr(app_state, "inbox_store", None))
+            inbox_store=getattr(app_state, "inbox_store", None),
+            media_ref=media_ref, media_desc=media_desc)
     except Exception:
         return {"ok": False, "facts": [], "reason": "error", "customer_extract": {}}
 
 
+async def describe_and_attach_outbound_media(
+    app_state: Any, platform: str, account_id: str, chat_key: str, *,
+    conversation_id: str, media_type: str, media_ref: str, local_path: str = "",
+    config: Optional[Dict[str, Any]] = None, retry_delay_sec: float = 1.5,
+) -> str:
+    """发送成功后台任务：VLM 识别我方发出的图 → ①回写出站行 text（``[图片内容] …``，
+    历史窗口内 AI 直接看见）②回填 ``_media_sent_log.desc``（出窗后靠记忆）。
+
+    绝不抛、绝不阻断响应（路由用 BackgroundTasks 调度）。返回描述（空＝没识别出）。
+    出站行由编排器 ``emit_incoming`` 同步落库，正常早于 VLM 返回；万一晚到重试一次。
+    """
+    try:
+        from src.inbox.media_enrich import describe_outbound_media
+        cfg = config
+        if cfg is None:
+            try:
+                cfg = getattr(getattr(app_state, "config_manager", None), "config", None)
+                if not isinstance(cfg, dict):
+                    cfg = {}
+            except Exception:
+                cfg = {}
+        desc = await describe_outbound_media(
+            media_type=media_type, media_ref=media_ref, config=cfg or {},
+            local_path=local_path)
+        if not desc:
+            return ""
+        store = getattr(app_state, "inbox_store", None)
+        if store is not None and hasattr(store, "append_outbound_media_desc"):
+            ok = False
+            try:
+                ok = bool(store.append_outbound_media_desc(
+                    conversation_id, media_ref=media_ref, desc=desc))
+                if not ok and retry_delay_sec > 0:
+                    import asyncio
+                    await asyncio.sleep(retry_delay_sec)
+                    ok = bool(store.append_outbound_media_desc(
+                        conversation_id, media_ref=media_ref, desc=desc))
+            except Exception:
+                logger.debug("[human_memory] 出站描述回写失败", exc_info=True)
+            if not ok:
+                logger.info("[human_memory] 出站图描述未落到消息行（行缺失/已含描述）conv=%s ref=%s",
+                            conversation_id, str(media_ref)[-40:])
+        attach_human_media_desc(
+            resolve_skill_manager(app_state), platform, account_id, chat_key,
+            media_ref=media_ref, desc=desc, conversation_id=conversation_id)
+        logger.info("[human_memory] 出站图已识别 conv=%s desc=%r", conversation_id, desc[:60])
+        return desc
+    except Exception:
+        logger.debug("[human_memory] describe_and_attach_outbound_media 异常（已忽略）",
+                     exc_info=True)
+        return ""
+
+
 __all__ = [
     "LOG_KEY", "extract_self_facts", "record_human_said", "human_said_note",
+    "human_media_note", "attach_human_media_desc", "describe_and_attach_outbound_media",
     "on_human_outbound", "record_human_outbound", "resolve_skill_manager",
 ]

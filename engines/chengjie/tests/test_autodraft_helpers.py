@@ -181,6 +181,65 @@ def test_companion_review_allows_system_z_draft():
     assert kw["automation_mode"] == "review"
 
 
+def test_manual_mode_schedules_media_enrich_but_no_draft():
+    """接力记忆 P0-2：manual 档不拟稿，但调度入站媒体补识（切回全自动时历史不盲）。"""
+    ds = MagicMock()
+    store = MagicMock()
+    store.get_automation_mode_if_set.return_value = "manual"
+    cb = _make(_cfg(mode="auto_ai"), draft_svc=ds, store=store)
+    with patch(
+        "src.inbox.autodraft_helpers.asyncio.run_coroutine_threadsafe"
+    ) as rct:
+        cb({"platform": "tg", "conversation_id": "c1"}, "[图片]")
+    ds.auto_generate_draft.assert_not_called()
+    rct.assert_called_once()
+    coro = rct.call_args[0][0]
+    assert coro.__name__ == "enrich_manual_inbound_media"
+    coro.close()
+
+
+async def test_enrich_manual_inbound_media_writes_back_only_placeholder_inbound(monkeypatch):
+    from src.inbox import autodraft_helpers as H
+
+    store = MagicMock()
+    store.list_recent_messages.return_value = [
+        {"message_id": "m1", "direction": "in", "text": "[图片]", "media_type": "image",
+         "media_ref": "/static/protocol_media/a.jpg"},
+        {"message_id": "m2", "direction": "out", "text": "", "media_type": "image",
+         "media_ref": "/static/protocol_media/o.jpg"},                      # 出站不识别
+        {"message_id": "m3", "direction": "in", "text": "看这个", "media_type": "image",
+         "media_ref": "/static/protocol_media/b.jpg"},                      # 有 caption 不重复识别
+        {"message_id": "m4", "direction": "in", "text": "", "media_type": "voice",
+         "media_ref": "/static/protocol_media/v.ogg"},
+        {"message_id": "m5", "direction": "in", "text": "hello"},
+    ]
+    store.update_message_text.return_value = True
+    calls = []
+
+    async def _fake_enrich(**kw):
+        calls.append(kw["media_ref"])
+        return f"[图片内容] 描述{len(calls)}", f"描述{len(calls)}"
+
+    monkeypatch.setattr("src.inbox.media_enrich.enrich_inbound_media_text", _fake_enrich)
+    cfg = {"inbox": {"auto_draft": {"media_backscan": 5, "media_wait_sec": 0}}}
+    n = await H.enrich_manual_inbound_media(store, {"conversation_id": "c1"}, cfg)
+    assert n == 2
+    # 最新优先：语音 v.ogg 先、图片 a.jpg 后；出站 / 有 caption 的都没碰
+    assert calls == ["/static/protocol_media/v.ogg", "/static/protocol_media/a.jpg"]
+    kws = [c.kwargs for c in store.update_message_text.call_args_list]
+    assert [k["message_id"] for k in kws] == ["m4", "m1"]
+    assert all(k["only_if_empty"] is True for k in kws)
+    # 开关关 → 零动作
+    calls.clear()
+    store.update_message_text.reset_mock()
+    cfg_off = {"inbox": {"auto_draft": {"manual_media_enrich": False}}}
+    assert await H.enrich_manual_inbound_media(store, {"conversation_id": "c1"}, cfg_off) == 0
+    assert calls == [] and not store.update_message_text.called
+    # 无 store / 无 cid 软失败
+    assert await H.enrich_manual_inbound_media(None, {"conversation_id": "c1"}, cfg) == 0
+    assert await H.enrich_manual_inbound_media(store, {}, cfg) == 0
+
+
 def test_companion_manual_still_silent():
     """companion 持号 + 手动 → 不拟稿不直发。"""
     ds = MagicMock()

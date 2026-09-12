@@ -288,7 +288,8 @@ def test_normalize_history_labels_outbound_media():
     ])
     assert hist[0]["role"] == "user" and "我方" not in hist[0]["content"]
     assert hist[1] == {"role": "assistant", "content": "[我方发出的图片]"}
-    assert hist[2]["role"] == "assistant" and hist[2]["content"] == "[我方发出的video]"
+    # 接力记忆 P0-1：非图片媒体标签用中文名（video → 视频），未知类型仍原样带出
+    assert hist[2]["role"] == "assistant" and hist[2]["content"] == "[我方发出的视频]"
     assert last_in == "好看吗"
 
 
