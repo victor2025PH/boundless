@@ -1348,6 +1348,70 @@ HELP_TERMS: dict = {
         "desc_en": "Pick the interface language from the globe button in the top bar or the user menu → Language: Simplified Chinese / Traditional Chinese / English / Vietnamese / Thai / Indonesian, plus Follow system language. The page reloads once and shows your choice; the desktop app's File / Edit / View / Window / Help menus follow, and the login and setup pages use the same menu. Vietnamese / Thai / Indonesian are still being filled in: untranslated parts show in English, marked β with a coverage note. If the menu says the current language is set by a URL parameter, choosing any item overrides it.",
         "usage": "顶栏地球按钮（或右上用户菜单 → 语言）→ 点目标语言 → 页面刷新后生效。想跟随系统语言就选第一项「跟随系统语言」。",
         "usage_en": "Top bar globe button (or user menu → Language) → pick a language → it applies after the page reloads. Choose Follow system language to track your OS / browser language."
+    },
+    "group_never_auto": {
+        "zh": "群聊永不自动回",
+        "en": "Groups never auto-reply",
+        "desc": "群聊、频道、报障群、人审 / 手动档、同事账号，AI 都不会自动发（含成人软回应）。软回应只在「全自动 + 私聊客户」才会经同一道出站闸发出，失败就不发，不会用固定套话顶替。",
+        "desc_en": "Groups, channels, the support group, review / manual mode and colleague accounts never get an automatic send — including adult soft replies. Soft replies only go out in a full-auto private customer thread through the same outbound gate; if generation fails, nothing is sent and no canned line is used.",
+        "usage": "不用设置。群会话顶栏保持「人审」即可；要 AI 自己回客户，只把那个私聊会话顶栏切成「全自动」。",
+        "usage_en": "No setting needed. Leave group threads on Review; to let the AI reply to a customer, switch only that private thread's header to Full auto."
+    },
+    "risk_hard_stop": {
+        "zh": "风控五类硬拦",
+        "en": "Five hard risk stops",
+        "desc": "只有五类会把全自动掐停转人工：未成年、自伤、人身威胁、明确要钱 / 要验证码凭据、确认诈骗。其余（含成人露骨无施压、孤立「cum」印式英语）不停全自动。硬拦持有 2 小时；点「需人工」摘标、或顶栏切回「全自动」，旧持有立刻释放，下一条按全自动走。",
+        "desc_en": "Only five kinds pause full-auto for a human: minors, self-harm, a personal threat, an explicit ask for money / OTP credentials, and confirmed scam. Everything else (including explicit adult without pressure, and Indian-English cum) keeps full-auto running. A hard hold lasts 2 hours; clearing the Needs human tag or switching the header back to Full auto releases it at once, and the next message follows full-auto.",
+        "usage": "被拦时会话头状态带会写「AI 不发 · 需人工」并给出命中类别；看完点「我知道了」摘标，或顶栏重选「全自动」。今日拦截卡在 自动回复设置。",
+        "usage_en": "When blocked, the header status band says AI will not send · needs human and names the category; click Got it to clear the tag, or re-pick Full auto in the header. The Blocked today card is in Reply settings."
+    },
+    "messenger_send_visible": {
+        "zh": "Messenger 发送失败可见",
+        "en": "Messenger send failures are visible",
+        "desc": "Messenger 网页代发失败会在工作台写明原因（composer 断开 / 找不到会话 / PIN 待确认 / 来电遮挡 / 退避中 / 登录过期 / 上传失败），并自动按原文重试；连败后出铃铛。需要在手机确认 PIN 时会话头出黄条；手机发出的消息带回抄并打「手机发出」角标，不触发 AI 让位。",
+        "desc_en": "A failed Messenger web send shows a concrete reason in the workspace (composer detached / thread not found / PIN pending / call overlay / backoff / login expired / upload failed) and retries the same text automatically; a bell appears after consecutive failures. A yellow header bar flags a phone PIN; messages you send on the phone are copied back with a Sent from phone badge and do not trigger AI yield.",
+        "usage": "失败红字旁点「重试」会按同一句再发。看到 PIN 黄条：打开手机 Messenger 确认，或点「托管 PIN」。手机已发出的那句不用在工作台再发一遍。",
+        "usage_en": "Click Retry next to the red reason to resend the same text. On a PIN yellow bar, confirm in Messenger on the phone or tap Hosted PIN. Do not resend a line already sent from the phone."
+    },
+    "fact_gate_confirm": {
+        "zh": "画像确认必有反应",
+        "en": "Profile confirm always reacts",
+        "desc": "画像 / 记忆 / 目标回填只写能在客户原话里逐字核到的事实；AI 自己问出来的答案（例如客户回 couple months）不会写成职业。无值的「已提及」只显示「AI 有线索，待补值」，确认钮禁用；有值点 ✓ 必发确认请求，成功行内打勾，失败出红字，不会点了没反应。",
+        "desc_en": "Profile / memory / goal backfill writes only facts verifiable verbatim in the customer's own words; an answer the AI elicited (e.g. couple months) is never written as a job. A mention with no value shows AI has a clue, value pending and disables Confirm; with a value, ✓ always sends the confirm request, ticks the row on success and shows red text on failure — the button never silently no-ops.",
+        "usage": "目标面板 → 画像卡：有值的槽点 ✓ 确认 / ✕ 拒绝；确认后应立刻看到 ✓ 或红字。无值线索用 ✎ 手补再确认。",
+        "usage_en": "Goal panel → profile card: ✓ confirm or ✕ reject a slot that has a value; you should see a tick or red text at once. For a valueless clue, type a value with ✎ then confirm."
+    },
+    "recent_image_claim": {
+        "zh": "刚发的图必认领",
+        "en": "Claim a photo just sent",
+        "desc": "客户叫你的名字时，用「对方怎么叫我」里的名字，绝不纠正成人设名。客户问「是你吗 / is that you」且本会话 30 分钟内刚发过图（含你手发的），AI 认领那张、不说没发过、不发第二张。空的「我怎么叫对方」不再套用人设爱称，改用对方显示名或不称呼。",
+        "desc_en": "When the customer calls you by name, that name is what they entered in What they call me — the AI never corrects it to the persona name. If they ask is that you and a photo was sent in this thread within 30 minutes (including one you sent by hand), the AI claims that photo, never says it was not sent, and does not send a second one. A blank What I call them no longer inherits the persona pet name; it uses their display name or no address.",
+        "usage": "打开会话 → 右栏客户关系：填「对方怎么叫我」「我怎么叫对方」。刚发过自拍后对方追问「是你吗」，看 AI 是否认领、有没有再发一张。",
+        "usage_en": "Open the thread → Customer tab: fill in What they call me and What I call them. After you send a selfie, if they ask is that you, check that the AI claims it and does not send another."
+    },
+    "lang_plan_yue": {
+        "zh": "发送语言按会话（含粤语）",
+        "en": "Send language per thread (incl. Cantonese)",
+        "desc": "「发→」语言只跟本会话，不再写进全局默认。语言目录 34 种含粤语 / 繁中。对方语言未知时按人设语言回，会话头标注「对方语言未知 · 按人设语言（X）回」，不会静默当成没选人设。",
+        "desc_en": "The Send → language is per thread and is no longer written to the global default. The language catalog has 34 codes including Cantonese and Traditional Chinese. If the peer's language is unknown the AI replies in the persona language and the header notes Peer language unknown · replying in persona language (X) — it is not treated as a missing persona.",
+        "usage": "会话工具条「发→」选本会话语言（粤语在目录里）。换一个会话再看，应仍是那个会话自己的选择。语言未知时看会话头那句标注。",
+        "usage_en": "On the thread toolbar, Send → picks the language for this thread only (Cantonese is in the list). Switch threads: each keeps its own choice. When language is unknown, read the header note."
+    },
+    "clone_no_silent_fallback": {
+        "zh": "克隆声不静默换系统音",
+        "en": "Clone voice never silently falls back",
+        "desc": "克隆声不支持的语种（如日语 × 只登记了中英的音色）不再偷偷换成微软系统音发出；自动链改发文字。工作台红条可「改发文字」，或点「用系统音发」并二次确认。语音语种必须与文本一致，否则跳过语音。人设语音卡列出支持语种；登记成功后结果面板可停留（试听 / 语种 / 体检），不会一闪而过。",
+        "desc_en": "If the clone voice does not support the language (e.g. Japanese × a voice enrolled for zh/en only), it no longer silently sends a Microsoft system voice; the auto chain sends text instead. The workspace red bar offers Send as text, or Use system voice with a second confirm. Voice language must match the text or the voice is skipped. The persona voice card lists supported languages; after enrollment a result panel stays open (preview / langs / health) instead of a toast that vanishes.",
+        "usage": "人设 → 语音卡看「克隆声支持语种」。给不支持的语种发语音：应出红条而不是发出别人的声音。登记音色后看结果面板，点 × 才关。",
+        "usage_en": "Persona → Voice tab: read Clone voice supports. Sending voice in an unsupported language should show the red bar, not someone else's voice. After enrollment, the result panel stays until you click ×."
+    },
+    "conv_state_band": {
+        "zh": "会话头「AI 会不会回」",
+        "en": "Header: will the AI reply",
+        "desc": "每个会话头第一条是一条状态带：AI 会不会回、为什么、下一步点什么（摘标 / 立即接回 / 重试起草 / 确认 PIN）。全自动无拦截时写「AI 会自动回」；被拦、让位、作息外、语言未知、边车 PIN、起草失败都用同一条带子说清楚，不再靠好几枚互不相关的胶囊。",
+        "desc_en": "The first line of every thread header is one status band: whether the AI will reply, why, and what to tap next (clear tag / resume now / retry draft / confirm PIN). Full-auto with no hold says AI will reply automatically; a hold, yield, off-hours, unknown language, sidecar PIN or draft failure all use that same band instead of several unrelated chips.",
+        "usage": "打开任意会话看头部第一条色带。被拦时点带子上的动作（「我知道了」或「立即接回」）；想知道今天拦了多少，到 自动回复设置 → 今日拦截。",
+        "usage_en": "Open any thread and read the first coloured band. When held, tap the action on the band (Got it or Resume now). For today's totals, Reply settings → Blocked today."
     }
 }
 

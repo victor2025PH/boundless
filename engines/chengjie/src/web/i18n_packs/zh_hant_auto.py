@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-12 05:01:18 · OpenCC s2twp + 術語釘 · 17519 鍵（源 zh 全量 17777）
+生成: 2026-09-12 08:51:29 · OpenCC s2twp + 術語釘 · 17593 鍵（源 zh 全量 17896）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -2367,7 +2367,7 @@ ZH_HANT = {
     # ── bt_tpl_ack ──
     'bt_tpl_ack': '收到，正在排查，有結論第一時間在群裡同步。',
     # ── bt_tpl_fixed ──
-    'bt_tpl_fixed': '問題：（一句話核心）\n修復：（改了什麼、怎麼拿到）\n已修復上線。方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
+    'bt_tpl_fixed': '你反饋的問題已修復上線，方便的話幫忙驗證一下；確認沒問題我們就關單，謝謝反饋！',
     # ── bt_tpl_label ──
     'bt_tpl_label': '快捷模板',
     # ── bt_tpl_logged ──
@@ -6502,12 +6502,18 @@ ZH_HANT = {
     'err.vision.no_text': '圖中未識別到文字',
     'err.vision.unconfigured': '識圖服務未配置',
     'err.voice.clone_engine_offline': '語音引擎離線，本條未出聲、已按文書處理。為保人設聲音一致，不會改用其他音色；引擎恢復後自動恢復克隆聲',
+    'err.voice.clone_unavailable': '克隆聲暫不可用（{why}），本條未發。可改發文字；或點「用系統音發」——對方會聽到非人設的系統聲',
+    'err.voice.clone_unavailable_garbled': '克隆聲念「{lang}」被判唸錯，本條未發。可改發文字；或點「用系統音發」——對方會聽到非人設的系統聲',
+    'err.voice.clone_unavailable_lang': '該人設的克隆聲不支援「{lang}」，本條未發。可改發文字；或點「用系統音發」——對方會聽到非人設的系統聲',
+    'err.voice.clone_unavailable_offline': '克隆語音引擎暫不可達，本條未發。可改發文字，稍後引擎恢復自動回到克隆聲；或點「用系統音發」——對方會聽到非人設的系統聲',
+    'err.voice.clone_unavailable_quota': '克隆聲額度已用盡，本條未發。可改發文字；或點「用系統音發」——對方會聽到非人設的系統聲',
     'err.voice.consent_required': '請先確認已獲得聲音所有者授權（勾選授權確認後再登記）',
     'err.voice.dst_persona_not_found': '目標人設 {dst_id} 不存在',
     'err.voice.engine_missing': '語音引擎未接入：請聯絡官方開通託管語音，或檢查語音引擎配置',
     'err.voice.from_to_persona_required': 'from_persona_id 與 to_persona_id 均必填',
     'err.voice.hosted_unavailable': '託管語音服務暫時未響應，請稍後重試；持續失敗請用「一鍵報障」反饋',
     'err.voice.hub_source_down': '該音色的聲源（hub 音色檔）暫不可用；為保音色一致已拒絕用替代聲線頂包。可改選「系統通用音色」或其他 🎤 就緒音色，或稍後重試',
+    'err.voice.lang_mismatch_skip': '文字語種（{text_lang}）與將念出的語種（{tts_lang}）不一致，已跳過語音。請改發文字，或修正會話語言/音色後重試',
     'err.voice.media_ref_invalid': 'media_ref 不是有效的會話媒體引用',
     'err.voice.media_ref_not_found': '該語音訊息的音訊存檔不存在（可能已被清理），請下載後改用檔案上傳',
     'err.voice.no_matching_voice': '沒有與該人設同語種、同性別的預置聲可用，本條未出聲、已按文書處理。請到人設「語音」頁為它挑一把預置聲',
@@ -10241,6 +10247,65 @@ ZH_HANT = {
     'inbox.mode.sticky_msg': '預設一直手動：AI 不再自動回覆這個會話，直到你自己改回來。也可以選 30 分鐘後自動接回，或你離開這個會話時接回。',
     'inbox.mode.sticky_on_leave': '離開會話時接回',
     'inbox.mode.sticky_title': '切到手動後，AI 什麼時候接回？',
+    'inbox.mp.back': '返回',
+    'inbox.mp.back_std': '改回標準',
+    'inbox.mp.btn': '模型 ▾',
+    'inbox.mp.btn_t': '本會話用哪個模型回覆：標準（雲端主鏈 · 規則全開）/ 無限制（區域網私有模型直答 · 規則讓路）；再調上下文 / 力度 / 思考',
+    'inbox.mp.checking': '探測中…',
+    'inbox.mp.confirm_safety': '連五條安全剎車（急停 / 封號訊號 / 賬號預熱上限 / 停聯凍結 / 危機兜底）也一起關閉？僅本會話，操作會記審計。',
+    'inbox.mp.confirm_unr': '切到「無限制」：本會話改走區域網私有模型 {model}（不經雲端）。本會話的人設規則、出站改寫、風控分級、稽核攔截全部關閉。確定？',
+    'inbox.mp.depth_deep': '深度',
+    'inbox.mp.depth_deep_sub': '≈32K tokens · 近 40 條 · 記憶 16 條',
+    'inbox.mp.depth_follow': '跟隨全域性',
+    'inbox.mp.depth_follow_sub': '回覆設定頁「上下文與記憶深度」當前檔',
+    'inbox.mp.depth_max': '最大',
+    'inbox.mp.depth_max_sub': '≈128K tokens · 近 160 條（LAN 端點按 64K 封頂）',
+    'inbox.mp.depth_standard': '標準',
+    'inbox.mp.depth_standard_sub': '≈12K tokens · 近 20 輪',
+    'inbox.mp.depth_ultra': '超大',
+    'inbox.mp.depth_ultra_sub': '≈900K tokens · 近 1000 條 · 成本約 75×',
+    'inbox.mp.disabled': '「無限制模型」已被運營關閉',
+    'inbox.mp.effort_follow': '跟隨策略',
+    'inbox.mp.effort_follow_sub': '按回復策略給的長度 / 溫度',
+    'inbox.mp.effort_high': '高',
+    'inbox.mp.effort_high_sub': '長答 · 2048 tokens · 溫度 0.8',
+    'inbox.mp.effort_low': '低',
+    'inbox.mp.effort_low_sub': '短答 · 512 tokens · 溫度 0.6',
+    'inbox.mp.effort_medium': '中',
+    'inbox.mp.effort_medium_sub': '1024 tokens · 溫度 0.7',
+    'inbox.mp.effort_note': '力度 ≈ 答覆長度與溫度，不是推理力度',
+    'inbox.mp.fail': '儲存失敗：{msg}',
+    'inbox.mp.hd': '模型 · 本會話',
+    'inbox.mp.locked': '「無限制模型」需旗艦版授權',
+    'inbox.mp.no_conv': '先選一個會話',
+    'inbox.mp.off': '關',
+    'inbox.mp.offline': '離線（{err}）',
+    'inbox.mp.offline_hint': '端點離線時無限制會話不會回落雲端：AI 回覆報錯、自動草稿轉人審',
+    'inbox.mp.on': '開',
+    'inbox.mp.online': '線上 · {ms} ms',
+    'inbox.mp.pick_depth': '選擇上下文',
+    'inbox.mp.pick_effort': '選擇力度',
+    'inbox.mp.pick_model': '選擇模型',
+    'inbox.mp.prof_standard': '標準',
+    'inbox.mp.prof_standard_sub': '雲端主鏈 + 備用池；人設規則 / 風控分級 / 稽核攔截照常',
+    'inbox.mp.prof_unrestricted': '無限制（本地直答）',
+    'inbox.mp.prof_unrestricted_noep': '未配置區域網端點（ai.models.unrestricted / ai.fallback）',
+    'inbox.mp.prof_unrestricted_sub': '區域網私有模型 {model} @ {host}，只走該端點、不回落雲端；本會話人設規則 / 出站改寫 / 風控分級 / 手發護欄全部讓路',
+    'inbox.mp.retry': '重試',
+    'inbox.mp.row_depth': '上下文',
+    'inbox.mp.row_effort': '力度',
+    'inbox.mp.row_model': '模型',
+    'inbox.mp.row_safety': '安全剎車',
+    'inbox.mp.row_thinking': '思考',
+    'inbox.mp.safety_keep': '保留',
+    'inbox.mp.safety_off': '全關',
+    'inbox.mp.safety_t': '五條賬號與人身保險絲：急停 / 封號訊號、賬號冷啟動上限、停聯凍結、危機自傷兜底、授權額度。保留＝無限制也不碰它們；全關＝連它們也不攔（僅本會話，有審計）',
+    'inbox.mp.saved': '已切換：{label}',
+    'inbox.mp.scope': '本會話',
+    'inbox.mp.status_std': '標準',
+    'inbox.mp.status_t': '點選設定本會話的模型 / 上下文 / 力度 / 思考',
+    'inbox.mp.status_unr': '無限制',
+    'inbox.mp.think_t': '思維鏈（vLLM enable_thinking）：開＝答得更周全但每輪多幾秒；僅對無限制檔生效',
     'inbox.msearch.fail': '搜尋失敗，請重試',
     'inbox.msearch.found': '找到 {n} 條含 "{q}" 的訊息',
     'inbox.msearch.none': '未找到包含 "{q}" 的訊息',
@@ -22739,6 +22804,10 @@ ZH_HANT = {
     'psn_vc_enrolled_synced': '克隆音色已登記並掛載到本人設：{backend}',
     # ── psn_vc_h ──
     'psn_vc_h': '克隆音色（跟隨人設）',
+    # ── psn_vc_langs ──
+    'psn_vc_langs': '克隆聲支援語種：{langs}（其它語種發語音會被阻斷，改發文字或二次確認用系統音）',
+    # ── psn_vc_langs_unknown ──
+    'psn_vc_langs_unknown': '克隆聲支援語種：未知（引擎未宣告，傳送前以右欄預告為準）',
     # ── psn_vc_none ──
     'psn_vc_none': '尚未上傳錄音——在下方登記即可',
     # ── psn_vc_not_ready ──
@@ -22751,6 +22820,20 @@ ZH_HANT = {
     'psn_vc_purge_q': '是否連雲端聲紋一併永久刪除（不可恢復）？\n「確定」＝一併刪除；「取消」＝僅解綁（聲紋保留，可改綁其他人設）。',
     # ── psn_vc_req_fail ──
     'psn_vc_req_fail': '請求失敗，請稍後重試',
+    # ── psn_vc_res_fail ──
+    'psn_vc_res_fail': '登記失敗——錄音未寫入人設，語音仍按登記前配置',
+    # ── psn_vc_res_health_last ──
+    'psn_vc_res_health_last': '音色體檢：{label}（相似度 {score}）',
+    # ── psn_vc_res_health_pending ──
+    'psn_vc_res_health_pending': '音色體檢：待夜間探針（本機未拉起即時體檢）',
+    # ── psn_vc_res_health_running ──
+    'psn_vc_res_health_running': '音色體檢：進行中，幾分鐘內回填到「音色體檢」行',
+    # ── psn_vc_res_ok ──
+    'psn_vc_res_ok': '登記成功：{file}——本人設的語音將用這把聲音（已寫入人設並生效，無需再點底部「儲存」）',
+    # ── psn_vc_res_q_curated ──
+    'psn_vc_res_q_curated': '參考音已自動裁剪至最佳片段',
+    # ── psn_vc_res_reason ──
+    'psn_vc_res_reason': '原因：{reason}',
     # ── psn_vc_sub ──
     'psn_vc_sub': '上傳參考音訊完成登記，音色跟隨本人設生效；「生成語音 / 傳送」在收件箱右欄業務助手。',
     # ── psn_vc_toast_close ──

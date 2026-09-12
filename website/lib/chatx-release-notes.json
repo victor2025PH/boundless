@@ -1,5 +1,42 @@
 [
   {
+    "version": "1.0.84",
+    "date": "2026-09-12",
+    "title": {
+      "zh": "群聊永不自动软回、五类硬拦、Messenger 失败可见、语言与克隆声诚实",
+      "en": "Groups never auto-soft-reply, five hard stops, visible Messenger failures, honest language and clone voice"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "群聊、报障群、人审 / 手动档永不自动发（含成人软回应）；软回应只在全自动私聊经出站闸发出，失败不发、不用套话顶替。",
+        "风控只拦五类：未成年、自伤、威胁、要钱 / 要凭据、确认诈骗；其余不停全自动。点「需人工」摘标或顶栏切回全自动，旧持有立刻释放，下一条按全自动走（TTL 2 小时）。",
+        "Messenger 发送失败在工作台写明原因并按原文自动重试；连败出铃铛。PIN 待确认出黄条；手机发出的消息带回抄并打「手机发出」角标。",
+        "画像 / 记忆只写客户原话里能核到的事实（couple months 不会写成职业）。无值「已提及」确认钮禁用；有值点 ✓ 必有打勾或红字。",
+        "客户叫我的名字用「对方怎么叫我」，不纠正成人设名。本会话 30 分钟内刚发过图，对方问「是你吗」必认领、不发第二张。",
+        "「发→」语言只跟本会话；目录 34 种含粤语。对方语言未知按人设语言回，会话头标注「对方语言未知 · 按人设语言回」。",
+        "克隆声不支持的语种不再偷偷换系统音，自动链改发文字；红条可「改发文字」或二次确认「用系统音发」。语音语种必须与文本一致。登记成功后结果面板可停留。",
+        "会话头第一条状态带写清「AI 会不会回、为什么」和下一步动作（摘标 / 立即接回 / 重试起草 / 确认 PIN）。",
+        "界面语言在顶栏地球按钮切换（简/繁/英/越/泰/印 + 跟随系统），整页刷新一次即生效。"
+      ],
+      "en": [
+        "Groups, the support group, and review / manual mode never auto-send (including adult soft replies). A soft reply only goes out in a full-auto private thread through the outbound gate; if generation fails, nothing is sent and no canned line is used.",
+        "Risk control only hard-stops five categories: minors, self-harm, threats, asking for money / credentials, confirmed scam. Everything else stays full-auto. Clearing the Needs-human tag or switching the header back to Full auto releases the old hold at once; the next message follows full-auto (TTL 2h).",
+        "A failed Messenger send shows the reason in the workspace and retries the same text automatically; a bell appears after consecutive failures. A yellow bar flags a pending PIN; messages sent from the phone are copied back with a Sent-from-phone badge.",
+        "Profile / memory only writes facts found in the customer's own words (couple months is never stored as a job). Confirm is disabled on a mention with no value; with a value, tapping Confirm always shows a tick or red text.",
+        "When the customer calls you by name, that name is What they call me — never corrected to the persona name. If they ask is that you after a photo sent in this thread within 30 minutes, the AI claims that photo and does not send a second one.",
+        "Send language is per thread; the catalog has 34 languages including Cantonese. If the peer language is unknown the AI replies in the persona language and the header notes Peer language unknown, replying in persona language.",
+        "Clone voice no longer silently falls back to a system voice for unsupported languages; the auto chain sends text. The red bar offers Send as text, or Use system voice with a second confirm. Voice language must match the text. After enrollment a result panel stays on the page.",
+        "The first line of the thread header is a status band: whether the AI will reply, why, and the next action (clear tag / resume now / retry draft / confirm PIN).",
+        "Switch the interface language from the top-bar globe (Simplified / Traditional / English / Vietnamese / Thai / Indonesian + follow system); it applies after one page reload."
+      ]
+    }
+  },
+  {
     "version": "1.0.83",
     "date": "2026-09-11",
     "title": {

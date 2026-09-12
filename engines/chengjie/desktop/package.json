@@ -1,7 +1,7 @@
 {
   "name": "telegram-ai-desktop",
-  "version": "1.0.83",
-  "displayVersion": "1.083",
+  "version": "1.0.84",
+  "displayVersion": "1.084",
   "private": true,
   "description": "智聊 ChatX · 多平台 AI 聊天与成交桌面端 · 无界科技 BOUNDLESS",
   "main": "main.js",

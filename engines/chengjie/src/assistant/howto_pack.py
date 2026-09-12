@@ -1405,6 +1405,132 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "清理 一键清空 来源筛选",
         "/knowledge",
     ),
+    # ── R84 / 1.0.84：群聊闸 / 五类硬拦 / Messenger 可见失败 / 确认必反应 /
+    # 刚发图认领 / 会话语言含粤语 / 克隆声不换系统音 / 会话头状态带 ──
+    (
+        "group-never-auto",
+        "群聊或人审档会不会自动发软回应",
+        "Will a group or review-mode thread auto-send a soft reply",
+        "不会。群聊、频道、报障群、人审 / 手动档、同事账号，AI 都不会自动发，"
+        "成人软回应也走同一道闸。软回应只在「这个私聊是全自动」时才会生成一句发出；"
+        "生成失败就不发，不会用固定套话顶上。要 AI 回客户：只把那个私聊会话顶栏切成「全自动」。",
+        "No. Groups, channels, the support group, review / manual mode and colleague accounts "
+        "never get an automatic send — adult soft replies use the same gate. A soft reply is generated "
+        "only in a full-auto private customer thread; if generation fails, nothing is sent and no canned "
+        "line is used. To let the AI reply, switch only that private thread's header to Full auto.",
+        "群聊 报障群 软回应 人审 手动 自动发 套话 group never auto soft reply review",
+        "/workspace",
+    ),
+    (
+        "risk-hard-stop-five",
+        "哪些内容会把全自动掐停 / 摘标或切全自动后还会拦吗",
+        "What still pauses full-auto / does clearing the tag or switching to full-auto release it",
+        "只有五类硬拦：未成年、自伤、人身威胁、明确要钱或要验证码凭据、确认诈骗。"
+        "其余（含成人露骨但没有施压、「message cum reply」这种印式英语）不停全自动。"
+        "硬拦最多挂 2 小时。点会话头「我知道了」摘掉需人工标，或顶栏重选「全自动」，"
+        "旧持有立刻释放，下一条按全自动走。今日拦了多少看 自动回复设置 → 今日拦截。",
+        "Only five hard stops pause full-auto: minors, self-harm, a personal threat, an explicit ask "
+        "for money or OTP credentials, and confirmed scam. Everything else (including explicit adult "
+        "without pressure, and Indian-English message cum reply) keeps full-auto. A hold lasts at most "
+        "2 hours. Click Got it on the header to clear Needs human, or re-pick Full auto — the old hold "
+        "releases at once and the next message follows full-auto. Today's totals: Reply settings → Blocked today.",
+        "风控 硬拦 五类 摘标 切全自动 需人工 2小时 cum 诈骗 要钱 risk hold hard stop",
+        "/reply-settings",
+    ),
+    (
+        "messenger-send-visible",
+        "Messenger 发送失败了怎么办 / PIN 黄条是什么",
+        "What to do when Messenger send fails / what the PIN yellow bar means",
+        "失败时工作台红字写原因（composer 断开 / 找不到会话 / PIN / 来电遮挡 / 退避 / 登录过期 / 上传失败），"
+        "并按同一句自动重试；连败后出铃铛。点「重试」仍发这一句，不换文案。"
+        "会话头黄条「需在手机确认 PIN」：打开手机 Messenger 确认，或点「托管 PIN」。"
+        "手机发出的消息会回抄到工作台并打「手机发出」角标，不必再从工作台发一遍。",
+        "A failed send shows a concrete reason (composer detached / thread not found / PIN / call overlay / "
+        "backoff / login expired / upload failed) and retries the same text; a bell appears after consecutive "
+        "failures. Retry resends that same line. A yellow header bar means confirm the PIN in Messenger on "
+        "the phone, or tap Hosted PIN. Phone-sent messages are copied back with a Sent from phone badge — "
+        "do not resend them from the workspace.",
+        "Messenger 发送失败 PIN 黄条 重试 手机发出 composer 边车 sidecar send fail e2ee",
+        "/workspace",
+    ),
+    (
+        "fact-gate-confirm",
+        "画像确认按钮点了没反应 / couple months 为什么写成了职业",
+        "Confirm on a profile slot did nothing / why couple months became a job",
+        "确认钮对「有值」的槽才会发请求：成功行内打勾，失败出红字，不会再点了没反应。"
+        "只有「AI 有线索、待补值」、没有具体值时确认钮是灰的，用 ✎ 手补再确认。"
+        "AI 问出来的答案（客户回 couple months / 是 / 一个数字）不会写进职业或其它槽；"
+        "记忆也只收客户原话里能逐字核到的事实。乱值点 ✕ 拒绝即可。",
+        "Confirm only fires when the slot has a value: a tick on success, red text on failure — it no longer "
+        "silently no-ops. If it says AI has a clue, value pending, Confirm is disabled; type a value with ✎ first. "
+        "Answers the AI elicited (couple months / yes / a number) are not written as occupation or any other slot; "
+        "memory also keeps only facts found verbatim in the customer's own words. Reject leftover bad values with ✕.",
+        "画像 确认 没反应 职业 couple months 待补值 记忆 原话 fact gate confirm",
+        "/workspace",
+    ),
+    (
+        "recent-image-claim",
+        "客户叫我的名字 AI 却否认 / 刚发的图对方问是你吗怎么办",
+        "The AI denied the name the customer uses / they asked is that you after a photo",
+        "右栏「对方怎么叫我」填客户喊你的那个名字（例如 Alicia），AI 被问名字时用它，"
+        "不会改口成人设名。空着的「我怎么叫对方」不再套用人设爱称，只用对方显示名或不称呼。"
+        "本会话 30 分钟内刚发过图（含你手发的），对方问「是你吗 / is that you」，"
+        "AI 认领那张、不说没发过 / 不能发图，也不会再发第二张。",
+        "On the Customer tab, What they call me is the name they use for you (e.g. Alicia); when asked "
+        "the AI uses that name and never corrects it to the persona name. A blank What I call them no longer "
+        "inherits the persona pet name. If a photo was sent in this thread within 30 minutes (including one "
+        "you sent by hand) and they ask is that you, the AI claims that photo, never says it was not sent or "
+        "cannot send photos, and does not send a second one.",
+        "称呼 对方怎么叫我 Alicia 是你吗 刚发的图 认领 爱称 babe claim photo name",
+        "/workspace",
+    ),
+    (
+        "lang-plan-yue",
+        "发送语言怎么按会话选 / 有没有粤语 / 对方语言未知会怎样",
+        "How to set send language per thread / is Cantonese in the list / unknown peer language",
+        "会话工具条「发→」只改本会话，不会写进全局默认；换会话各用各的。"
+        "语言目录 34 种，含粤语、繁体中文。对方语言未知（消息太短或全是表情）时，"
+        "AI 按人设语言回，会话头标注「对方语言未知 · 按人设语言（X）回」，"
+        "这不是「人设没选」。译文在气泡里字号比原文小一号、不遮原文。",
+        "Send → on the thread toolbar is per thread and is not written to the global default; each thread keeps "
+        "its own choice. The catalog has 34 languages including Cantonese and Traditional Chinese. If the peer "
+        "language is unknown (too short / all emoji), the AI replies in the persona language and the header notes "
+        "Peer language unknown · replying in persona language (X) — it is not a missing persona. Translations in "
+        "the bubble are smaller than the original and do not cover it.",
+        "发送语言 粤语 繁体 按会话 对方语言未知 人设语言 翻译 目录 yue lang plan catalog",
+        "/workspace",
+    ),
+    (
+        "clone-no-silent-fallback",
+        "克隆声不支持的语种还会换成系统音吗 / 登记完结果去哪了",
+        "Does clone voice still fall back to a system voice / where is the enrollment result",
+        "不会再偷偷换。克隆声不支持该语种（例如日语 × 只登记了中英）时自动链改发文字；"
+        "工作台红条「改发文字」，或点「用系统音发」并在确认框里二次确认才会出系统音。"
+        "语音语种必须和文本一致，否则跳过语音。人设语音卡列出「克隆声支持语种」；"
+        "登记成功后结果面板留在页面上（录音名 / 试听 / 语种 / 体检），点 × 才关。",
+        "It no longer falls back silently. If the clone voice does not support the language (e.g. Japanese × "
+        "a voice enrolled for zh/en), the auto chain sends text. The red bar offers Send as text, or Use system "
+        "voice with a second confirm. Voice language must match the text or the voice is skipped. The persona "
+        "Voice card lists supported languages; after enrollment a result panel stays (clip name / preview / langs / "
+        "health) until you click ×.",
+        "克隆声 系统音 日语 改发文字 二次确认 登记 结果面板 ja STEVEN clone fallback enroll",
+        "/personas",
+    ),
+    (
+        "conv-state-band",
+        "怎么看这个会话 AI 会不会回 / 会话头那条色带是什么",
+        "How to see whether the AI will reply in this thread / what the header status band is",
+        "打开会话，头部第一条色带就是答案：会不会回、为什么、下一步点什么。"
+        "全自动无拦截写「AI 会自动回」；被风控、让位倒计时、作息外、语言未知、"
+        "Messenger PIN、起草失败都写在这一条上，并带一个动作（我知道了 / 立即接回 / 重试起草 / 确认 PIN）。"
+        "今天拦了多少次：自动回复设置 → 今日拦截。",
+        "Open the thread: the first coloured band in the header is the answer — whether the AI will reply, why, "
+        "and what to tap next. Full-auto with no hold says AI will reply automatically; a risk hold, yield countdown, "
+        "off-hours, unknown language, Messenger PIN or draft failure all use that same band, with one action "
+        "(Got it / Resume now / Retry draft / Confirm PIN). Today's totals: Reply settings → Blocked today.",
+        "会话头 状态带 AI会不会回 为什么 色带 接回 摘标 conv state band will send",
+        "/workspace",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请
