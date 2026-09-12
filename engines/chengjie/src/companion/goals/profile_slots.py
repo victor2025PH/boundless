@@ -858,6 +858,15 @@ def _hist_items(history: Any) -> List[Tuple[str, str]]:
             t = str(m.get("text") or m.get("content") or "").strip()
         else:
             d, t = "in", str(m or "").strip()
+        if t and "[" in t:
+            # Q-36 #318（VV7BRY「Marina」）：客户行里的识图描述「[图片内容] 水边的房子…」是画面所见不是
+            # TA 说的话——槽位线索只扫客户自己的文字（与 profile_fill / 记忆抽取 P1 同口径 strip_media_desc），
+            # 否则 residence / location 会因一张照片变成 mentioned:said 并驱动 goal 追问。
+            try:
+                from src.inbox.media_enrich import strip_media_desc
+                t = strip_media_desc(t).strip()
+            except Exception:
+                pass
         if t:
             out.append(("out" if d in ("out", "outbound", "ai", "assistant") else "in", t))
     return out
