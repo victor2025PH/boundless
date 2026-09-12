@@ -8,21 +8,32 @@
   · DeepSeek V4.1-Flash 缓存命中 ¥0.04/M vs 未命中 ¥2/M（50 倍差）。不量命中率就没法谈
     「稳定前缀布局」值不值——usage.prompt_cache_hit_tokens 每次响应都带，只是没人记。
 
-纯进程内、绝不抛、绝不落盘：留痕里有客户原话与人设全文，只给 admin 口读，重启即清。
+正文绝不落盘：留痕里有客户原话与人设全文，只给 admin 口读，重启即清。
+**摘要**（模型/host/耗时/usage/路由快照，不含任何文本）另存一份环形 JSON 到
+``$AITR_DATA_DIR/config/prompt_trace_summary.json``（2026-09-12），让 composer「模型」面板的
+「上一条回复用了谁」跨重启仍能回答；没设 AITR_DATA_DIR（测试 / 裸跑）就纯内存。
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
 MAX_ENTRIES = 200
 MAX_TEXT_CHARS = 64_000      # 单条留痕存文本上限（超长系统提示也只留头）
+SUMMARY_FILE = os.path.join("config", "prompt_trace_summary.json")
+_SUMMARY_FLUSH_DELAY_SEC = 3.0
+# 摘要不带的键（正文 / 可还原正文的东西）
+_TEXT_KEYS = ("system", "messages", "system_sections")
 
 _lock = threading.Lock()
 _entries: Deque[Dict[str, Any]] = deque(maxlen=MAX_ENTRIES)
 _seq = 0
+_flush_timer: Optional[threading.Timer] = None
 # 滚动缓存统计（进程生命周期）
 _stats: Dict[str, Any] = {
     "calls": 0, "prompt_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0,
@@ -119,9 +130,104 @@ def record(*, messages: List[Dict[str, Any]], model: str, host: str = "",
                 for k in ("prompt_tokens", "cache_hit_tokens", "cache_miss_tokens",
                           "completion_tokens", "reasoning_tokens"):
                     _stats[k] += uf[k]
-            return _seq
+            seq = _seq
+        try:  # 按模型档分桶（conv_route stats「谁在花哪家的钱」）
+            from src.ai import conv_route as _cr
+            _cr.record_reply(entry.get("route"), ok=bool(ok), latency_ms=int(latency_ms or 0))
+        except Exception:
+            pass
+        _schedule_flush()
+        return seq
     except Exception:
         return 0
+
+
+# ── 摘要环落盘（无正文）───────────────────────────────────────────────────────
+
+def summary_path() -> Optional[Path]:
+    """``$AITR_DATA_DIR/config/prompt_trace_summary.json``；未设数据根 → None（纯内存）。"""
+    root = os.environ.get("AITR_DATA_DIR", "").strip()
+    if not root:
+        return None
+    return Path(root) / SUMMARY_FILE
+
+
+def _summary_of(e: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in e.items() if k not in _TEXT_KEYS}
+
+
+def _schedule_flush() -> None:
+    global _flush_timer
+    if summary_path() is None:
+        return
+    with _lock:
+        if _flush_timer is not None:
+            return
+        t = threading.Timer(_SUMMARY_FLUSH_DELAY_SEC, flush_summaries)
+        t.daemon = True
+        _flush_timer = t
+    t.start()
+
+
+def flush_summaries() -> bool:
+    """把当前环的摘要写盘（原子替换）。绝不抛；返回是否写成功。"""
+    global _flush_timer
+    p = summary_path()
+    with _lock:
+        if _flush_timer is not None and _flush_timer is not threading.current_thread():
+            try:
+                _flush_timer.cancel()
+            except Exception:
+                pass
+        _flush_timer = None
+        items = [_summary_of(e) for e in _entries]
+        seq = _seq
+    if p is None:
+        return False
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"v": 1, "seq": seq, "items": items},
+                                  ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
+        return True
+    except Exception:
+        return False
+
+
+def load_summaries() -> int:
+    """启动时把上次的摘要环装回来（标 ``restored``，正文为空）。返回装回条数。绝不抛。"""
+    global _seq
+    p = summary_path()
+    if p is None or not p.exists():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return 0
+        n = 0
+        with _lock:
+            if _entries:
+                return 0  # 进程内已有新留痕，不覆盖
+            for it in items[-MAX_ENTRIES:]:
+                if not isinstance(it, dict) or not it.get("model"):
+                    continue
+                e = dict(it)
+                e["restored"] = True
+                e.setdefault("system", "")
+                e.setdefault("messages", [])
+                e.setdefault("system_sections", [])
+                _entries.append(e)
+                n += 1
+            _seq = max(_seq, int(data.get("seq") or 0),
+                       max((int(e.get("seq") or 0) for e in _entries), default=0))
+        return n
+    except Exception:
+        return 0
+
+
+load_summaries()
 
 
 def cache_stats() -> Dict[str, Any]:
@@ -156,8 +262,14 @@ def get_entry(seq: int) -> Optional[Dict[str, Any]]:
 
 def reset() -> None:
     """测试用。"""
-    global _seq
+    global _seq, _flush_timer
     with _lock:
+        if _flush_timer is not None:
+            try:
+                _flush_timer.cancel()
+            except Exception:
+                pass
+            _flush_timer = None
         _entries.clear()
         _seq = 0
         for k in ("calls", "prompt_tokens", "cache_hit_tokens", "cache_miss_tokens",

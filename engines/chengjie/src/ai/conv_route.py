@@ -529,6 +529,18 @@ def feature_allowed(config: Any = None) -> bool:
         return True
 
 
+VENDOR_FEATURE_NAME = "multi_vendor_model"
+
+
+def vendor_allowed(config: Any = None) -> bool:
+    """``licensing.feature_gate`` 是否放行 ``multi_vendor_model``（按会话点名厂商档；主链恒可选）。"""
+    try:
+        from src.licensing.feature_gate import feature_enabled
+        return bool(feature_enabled(VENDOR_FEATURE_NAME, _root(config) or None))
+    except Exception:
+        return True
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 存储（app_settings KV）
 # ─────────────────────────────────────────────────────────────────────────────
@@ -701,7 +713,30 @@ def attach(user_context: Dict[str, Any], cid: str, *, store: Any = None,
 
 _LOCK = threading.Lock()
 _STATS: Dict[str, Any] = {"skipped_total": 0, "by_layer": {}, "offline_holds": 0,
-                          "safety_bypassed": 0}
+                          "safety_bypassed": 0, "by_model": {}}
+
+
+def record_reply(route: Optional[Mapping[str, Any]], *, ok: bool = True,
+                 latency_ms: int = 0) -> None:
+    """一次主链调用按「模型档」分桶计数（prompt_trace.record 回调；进程内、绝不抛）。
+
+    桶键：无限制 → ``unrestricted``；点名厂商档 → 档名；否则 ``main``（主链）。
+    stats 面板据此回答「今天哪几个会话在花哪家的钱 / 走了几条本机」。"""
+    try:
+        r = route or {}
+        if r.get("unrestricted") or r.get("profile") == PROFILE_UNRESTRICTED:
+            key = PROFILE_UNRESTRICTED
+        else:
+            key = str(r.get("model") or "").strip() or "main"
+        with _LOCK:
+            bm = _STATS["by_model"]
+            b = bm.get(key) or {"calls": 0, "ok": 0, "fail": 0, "latency_ms_total": 0}
+            b["calls"] += 1
+            b["ok" if ok else "fail"] += 1
+            b["latency_ms_total"] += max(0, int(latency_ms or 0))
+            bm[key] = b
+    except Exception:
+        pass
 
 
 def _bump(layer: str, safety: bool) -> None:
@@ -758,10 +793,19 @@ def stats_snapshot(store: Any = None) -> Dict[str, Any]:
             "safety_bypassed": int(_STATS["safety_bypassed"]),
             "offline_holds": int(_STATS["offline_holds"]),
             "by_layer": dict(_STATS["by_layer"]),
+            "by_model": {k: dict(v) for k, v in _STATS["by_model"].items()},
         }
+    for b in snap["by_model"].values():
+        b["avg_latency_ms"] = int(b["latency_ms_total"] / b["calls"]) if b.get("calls") else 0
     routes = all_routes(store) if store is not None else {}
     snap["unrestricted_convs"] = sum(1 for r in routes.values() if r.unrestricted)
     snap["bypass_safety_convs"] = sum(1 for r in routes.values() if r.bypass_safety)
+    # 每个厂商档当前被几个会话点名（谁在花哪家的钱）
+    vm: Dict[str, int] = {}
+    for r in routes.values():
+        if r.model and not r.unrestricted:
+            vm[r.model] = vm.get(r.model, 0) + 1
+    snap["model_convs"] = vm
     snap["global_bypass_safety"] = global_bypass_safety()
     return snap
 
@@ -772,6 +816,7 @@ def reset_for_tests() -> None:
         _STATS["safety_bypassed"] = 0
         _STATS["offline_holds"] = 0
         _STATS["by_layer"].clear()
+        _STATS["by_model"].clear()
     with _HEALTH_LOCK:
         _HEALTH.clear()
 
@@ -809,27 +854,53 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
         "profile": profile if profile is not None else profile_name(config),
     }
     api_key = _api_key_for(config, spec)
+    headers = {"Authorization": f"Bearer {api_key or 'vllm'}"}
     try:
         import httpx
-        body: Dict[str, Any] = {
-            "model": spec["model"], "max_tokens": 1, "temperature": 0,
-            "messages": [{"role": "user", "content": "ping"}],
-        }
-        # 关思维链字段按厂商给（云厂商对未知顶层字段会 400，不能一律送 chat_template_kwargs）
+        private = True
         try:
-            from src.ai.vendor_params import thinking_off_extra_body as _toff
-            body.update(_toff(spec["base_url"], spec["model"]) or {})
+            from src.ai.vendor_params import vendor_of as _vof
+            private = bool(_vof(spec["base_url"]).get("private"))
         except Exception:
-            body["chat_template_kwargs"] = {"enable_thinking": False}
-        headers = {"Authorization": f"Bearer {api_key or 'vllm'}"}
-        t0 = time.monotonic()
+            private = True
         async with httpx.AsyncClient(timeout=timeout) as cli:
-            resp = await cli.post(spec["base_url"] + "/chat/completions", json=body,
-                                  headers=headers)
-        out["latency_ms"] = int((time.monotonic() - t0) * 1000)
-        sc = int(resp.status_code)
+            listed: Optional[bool] = None
+            sc = -1
+            if not private:
+                # 云厂商：只读 GET /models 探活（零 token、零账单；401/403 同样在这里暴露）。
+                # 404/405＝该厂商不支持列表 → 回落 1-token ping。
+                out["probe"] = "models"
+                t0 = time.monotonic()
+                resp = await cli.get(spec["base_url"] + "/models", headers=headers)
+                out["latency_ms"] = int((time.monotonic() - t0) * 1000)
+                sc = int(resp.status_code)
+                if sc == 200:
+                    listed = _model_listed(resp, spec["model"])
+                elif sc in (404, 405):
+                    sc = -1  # 回落 ping
+            if sc == -1:
+                # 本机私有（173 vLLM）/ 不支持列表的厂商：1-token ping，顺带量真实首字延迟
+                out["probe"] = "chat"
+                body: Dict[str, Any] = {
+                    "model": spec["model"], "max_tokens": 1, "temperature": 0,
+                    "messages": [{"role": "user", "content": "ping"}],
+                }
+                # 关思维链字段按厂商给（云厂商对未知顶层字段会 400，不能一律送 chat_template_kwargs）
+                try:
+                    from src.ai.vendor_params import thinking_off_extra_body as _toff
+                    body.update(_toff(spec["base_url"], spec["model"]) or {})
+                except Exception:
+                    body["chat_template_kwargs"] = {"enable_thinking": False}
+                t0 = time.monotonic()
+                resp = await cli.post(spec["base_url"] + "/chat/completions", json=body,
+                                      headers=headers)
+                out["latency_ms"] = int((time.monotonic() - t0) * 1000)
+                sc = int(resp.status_code)
         if sc < 500 and sc not in (401, 403, 404, 429):
             out["online"] = True
+            if listed is False:
+                # 列表里没这个模型名：能连、密钥对，但 chat 时大概率 404 —— 在线但给告警
+                out["warn"] = "model_not_listed"
         else:
             # 401/403＝密钥不对、404＝模型名不存在、429＝额度/限流：能连上但不能用，如实报离线
             out["error"] = f"http_{sc}"
@@ -838,6 +909,24 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
     with _HEALTH_LOCK:
         _HEALTH[ck] = dict(out)
     return out
+
+
+def _model_listed(resp: Any, model: str) -> Optional[bool]:
+    """``GET /models`` 响应里有没有该模型名（``id`` 等于 / 以 ``/<model>`` 结尾，Gemini 兼容层
+    是 ``models/gemini-…``）。列表为空 / 解析失败 → None（不据此判定）。"""
+    try:
+        data = resp.json()
+        rows = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(rows, list) or not rows:
+            return None
+        ids = {str((r or {}).get("id") or "") for r in rows if isinstance(r, dict)}
+        ids.discard("")
+        if not ids:
+            return None
+        m = str(model or "")
+        return any(i == m or i.endswith("/" + m) for i in ids)
+    except Exception:
+        return None
 
 
 async def probe_catalog(config: Any = None, *, force: bool = False,
@@ -948,6 +1037,7 @@ def describe(store: Any, cid: str, config: Any = None) -> Dict[str, Any]:
         },
         "enabled": enabled(config),
         "allowed": feature_allowed(config),
+        "vendor_allowed": vendor_allowed(config),
         "global_bypass_safety": global_bypass_safety(config),
     }
 
@@ -960,6 +1050,7 @@ __all__ = [
     "endpoint_spec", "main_chain_spec", "model_catalog", "model_spec", "active_endpoint",
     "probe_catalog",
     "endpoint_prompt_cap", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
+    "VENDOR_FEATURE_NAME", "vendor_allowed", "record_reply",
     "conv_id", "get", "set", "clear", "all_routes", "is_unrestricted",
     "bypass_safety_active", "resolve_for", "default_store", "conv_id_from_context", "attach",
     "skip_guard", "skip_for_conv", "record_offline_hold", "stats_snapshot", "reset_for_tests",

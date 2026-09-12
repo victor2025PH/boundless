@@ -708,9 +708,15 @@
 .mv-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mv-tag{flex:none;font-size:10px;line-height:1;padding:2px 5px;border-radius:999px;border:1px solid var(--border);color:var(--text-tiny);background:var(--bg-soft);}
 .mv-tag.priv{border-color:color-mix(in srgb,var(--tk-ok-ink) 40%,transparent);color:var(--tk-ok-ink);}
+.mv-tag.lock{border-color:color-mix(in srgb,var(--tk-amber) 50%,transparent);color:var(--tk-warn-ink);background:color-mix(in srgb,var(--tk-amber) 12%,transparent);}
+.mv-tag.cnt{color:var(--xl-accent-strong);border-color:var(--xl-accent-border);background:var(--xl-accent-bg);}
+/* 授权闸锁住的档：整行降透明、光标改禁止，但仍可聚焦（读得到它是什么 / 点了给升级提示） */
+.mv-row.locked{opacity:.62;cursor:not-allowed;}
+.mv-row.locked:hover{background:transparent;}
 .mv-health{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--text-tiny);white-space:nowrap;}
 .mv-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--btn-border);}
 .mv-dot.ok{background:var(--tk-ok-ink);}
+.mv-dot.warn{background:var(--tk-amber);}
 .mv-dot.off{background:var(--tk-danger);}
 .mv-sub{grid-column:2 / span 2;font-size:10.5px;color:var(--text-tiny);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mv-empty{padding:8px;font-size:11.5px;line-height:1.5;color:var(--text-sub);}

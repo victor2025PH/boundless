@@ -33,6 +33,15 @@ from src.web.routes.unified_inbox_services import _inbox_store
 logger = logging.getLogger(__name__)
 
 
+def _lock_hit(feature: str) -> None:
+    """授权闸拦截计数（E6 定价信号；与 workflows / drafts 守卫同口径）。绝不抛。"""
+    try:
+        from src.web.feature_lock_stats import get_feature_lock_stats
+        get_feature_lock_stats().record(feature, "api")
+    except Exception:
+        pass
+
+
 def register_conv_model_route_routes(app, *, api_auth: Callable,
                                      config_manager: Any = None) -> None:
 
@@ -117,6 +126,11 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
             if want and not conv_route.model_spec(cfg, want):
                 raise HTTPException(400, "unknown model profile",
                                     headers={"X-Deny-Reason": "unknown_model"})
+            # 授权闸 multi_vendor_model（pro 起）：主链 "" 恒可选，点名任何一档才过闸
+            if want and not conv_route.vendor_allowed(cfg):
+                _lock_hit(conv_route.VENDOR_FEATURE_NAME)
+                raise HTTPException(403, "per-chat vendor model requires a higher plan",
+                                    headers={"X-Deny-Reason": "vendor_locked"})
 
         wants_unrestricted = (
             str(patch.get("profile") or "").strip().lower() == conv_route.PROFILE_UNRESTRICTED
@@ -127,6 +141,7 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
                 raise HTTPException(403, "unrestricted model disabled",
                                     headers={"X-Deny-Reason": "disabled"})
             if not conv_route.feature_allowed(cfg):
+                _lock_hit(conv_route.FEATURE_NAME)
                 raise HTTPException(403, "unrestricted model requires a higher plan",
                                     headers={"X-Deny-Reason": "feature_locked"})
 

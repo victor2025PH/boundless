@@ -22763,7 +22763,7 @@ document.addEventListener('click',function(e){
      「标签 · 当前值 ›」信息架构；选项第二屏 #mp-pick 复用翻译弹层 .xl-pick-* 骨架，is-pick 互斥）。
    两个入口按钮（.cmp-sel）自带当前值，尺寸同款；无限制＝紫（--tk-violet，全站唯一用紫的功能）
    只染「模式」按钮，不再两处同时变色；首次切无限制 confirm 一次（本机记忆）。 */
-var _mp={cid:'',data:null,health:null,healthAll:{},busy:false,pick:'',last:null,sup:null};
+var _mp={cid:'',data:null,health:null,healthAll:{},busy:false,pick:'',last:null,counts:{},sup:null};
 var _MP_CONFIRM_KEY='ws_mp_unr_confirmed_v1';
 function _mpRoute(){ return (_mp.data&&_mp.data.route)||{profile:'standard',depth:'',effort:'',thinking:false,bypass_safety:false,model:'',unrestricted:false}; }
 function _mpConvOk(c){ return !!(c&&c.platform&&c.chat_key); }
@@ -22864,17 +22864,24 @@ function _mvRender(){
     else if(d.model_missing){ notice.textContent=window.Tf('inbox.mp.model_missing',{name:r.model||''}); notice.className='mv-notice warn'; notice.style.display=''; }
     else notice.style.display='none';
   }
+  var vendorLocked=(d.vendor_allowed===false);   // 授权闸 multi_vendor_model：主链恒可选，其余档锁
+  var counts=_mp.counts||{};
   ms.forEach(function(m){
     var name=m.name||'', on=!unr&&(r.model||'')===name, h=_mpHealthFor(name);
+    var locked=vendorLocked&&!!name;
     var tags='';
     if(!name) tags+='<span class="mv-tag">'+esc(window.T('inbox.mp.tag_main'))+'</span>';
     if(m.private) tags+='<span class="mv-tag priv">'+esc(window.T('inbox.mp.tag_private'))+'</span>';
     if(m.cost_hint) tags+='<span class="mv-tag">'+esc(m.cost_hint)+'</span>';
+    if(locked) tags+='<span class="mv-tag lock">'+esc(window.T('inbox.mp.tag_locked'))+'</span>';
+    var n=counts[(m.model||'')+'@'+(m.host||'')]||0;
+    if(n) tags+='<span class="mv-tag cnt">'+esc(window.Tf('inbox.mp.tag_used',{n:n}))+'</span>';
     var hh;
     if(!h) hh='<i class="mv-dot" aria-hidden="true"></i>';
+    else if(h.online&&h.warn==='model_not_listed') hh='<i class="mv-dot warn" aria-hidden="true"></i>'+esc(window.T('inbox.mp.h_not_listed'));
     else if(h.online) hh='<i class="mv-dot ok" aria-hidden="true"></i>'+esc(h.latency_ms?(h.latency_ms+' ms'):window.T('inbox.mp.h_online'));
     else hh='<i class="mv-dot off" aria-hidden="true"></i>'+esc(_mvErr(h));
-    html+='<button type="button" role="option" aria-selected="'+(on?'true':'false')+'" class="mv-row'+(on?' on':'')+'" data-v="'+esc(name)+'" title="'+esc(m.model+' @ '+m.host)+'">'
+    html+='<button type="button" role="option" aria-selected="'+(on?'true':'false')+'" class="mv-row'+(on?' on':'')+(locked?' locked':'')+'" data-v="'+esc(name)+'" data-locked="'+(locked?'1':'0')+'" title="'+esc(m.model+' @ '+m.host)+'">'
         +'<span class="mv-av" data-vendor="'+esc(m.vendor||'other')+'" aria-hidden="true">'+esc(_mvInitial(m))+'</span>'
         +'<span class="mv-main"><span class="mv-name">'+esc(_mvLabel(m))+'</span>'+tags+'</span>'
         +'<span class="mv-health">'+hh+'</span>'
@@ -22886,6 +22893,11 @@ function _mvRender(){
   host.querySelectorAll('.mv-row').forEach(function(b){
     b.addEventListener('click',function(){
       var v=b.getAttribute('data-v')||'';
+      if(b.getAttribute('data-locked')==='1'){   // 档位不够：不发请求，直接引导升级
+        _toast(window.T('inbox.mp.vendor_locked'),'#b45309');
+        try{ _uiBeacon('cmpz_vendor_locked'); }catch(_){}
+        return;
+      }
       if(!unr&&(r.model||'')===v) return;   // 点当前档＝无操作
       _mpSet({model:v});
     });
@@ -22909,18 +22921,21 @@ function _mvRenderLast(){
   el.classList.toggle('bad',L.ok===false);
   el.style.display='';
 }
-/* 上一条回复用了谁（进程内 prompt 环，重启即清；拿不到就不显示） */
+/* 上一条回复用了谁 + 本会话最近 50 条各档用了几条（prompt 摘要环跨重启落盘；拿不到就不显示） */
 async function _mvLoadLast(){
   var c=selectedChat; if(!_mpConvOk(c)) return;
   var cid=_mp.cid;
   try{
-    var resp=await apiFetch('/api/ai/prompt-inspect?conv='+enc(c.chat_key)+'&limit=1',{},{timeoutMs:8000});
+    var resp=await apiFetch('/api/ai/prompt-inspect?conv='+enc(c.chat_key)+'&limit=50',{},{timeoutMs:8000});
     var d=resp.ok?await resp.json():null;
     if(_mp.cid!==cid) return;
-    var it=d&&d.items&&d.items[0];
+    var items=(d&&d.items)||[], it=items[0];
     _mp.last=it?{model:it.model,host:it.host,latency_ms:it.latency_ms,ok:it.ok}:null;
-  }catch(_){ _mp.last=null; }
-  _mvRenderLast();
+    var cnt={};
+    items.forEach(function(e){ if(e&&e.ok!==false&&e.model){ var k=(e.model||'')+'@'+(e.host||''); cnt[k]=(cnt[k]||0)+1; } });
+    _mp.counts=cnt;
+  }catch(_){ _mp.last=null; _mp.counts={}; }
+  _mvRender();
 }
 async function _mpHealth(force){
   var r=_mpRoute(); if(!r.unrestricted) return;
@@ -22956,7 +22971,7 @@ async function _mpHealthOne(name){
 }
 /* 切会话即拉服务端路由（缺席＝标准档，零请求以外的副作用） */
 async function _hydrateConvModelRoute(c){
-  _mp.cid=''; _mp.data=null; _mp.health=null; _mp.healthAll={}; _mp.pick=''; _mp.last=null;
+  _mp.cid=''; _mp.data=null; _mp.health=null; _mp.healthAll={}; _mp.pick=''; _mp.last=null; _mp.counts={};
   var pop=document.getElementById('mode-pop'); if(pop) pop.classList.remove('is-pick');
   _mpRender();
   if(!_mpConvOk(c)) return;
@@ -23091,8 +23106,9 @@ async function _mpSet(patch){
     var d=null; try{ d=await resp.json(); }catch(_){ d=null; }
     if(resp.status===403){
       var why=resp.headers.get('X-Deny-Reason')||'';
-      _toast(window.T(why==='disabled'?'inbox.mp.disabled':'inbox.mp.locked'),'#b45309');
-      try{ _uiBeacon('cmpz_model_denied'); }catch(_){}
+      _toast(window.T(why==='disabled'?'inbox.mp.disabled':(why==='vendor_locked'?'inbox.mp.vendor_locked':'inbox.mp.locked')),'#b45309');
+      try{ _uiBeacon(why==='vendor_locked'?'cmpz_vendor_locked':'cmpz_model_denied'); }catch(_){}
+      if(why==='vendor_locked') _hydrateConvModelRoute(c);   // 服务端刚锁上：重画成锁态
       return;
     }
     if(resp.status===400&&(resp.headers.get('X-Deny-Reason')||'')==='unknown_model'){

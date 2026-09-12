@@ -640,30 +640,150 @@ def test_http_health_per_profile_and_all(monkeypatch):
     assert h["health"]["profile"] is None                    # 不带 profile＝历史语义（无限制端点）
 
 
-def test_probe_endpoint_treats_auth_and_missing_model_as_offline(monkeypatch):
-    import asyncio
+class _FakeHttpx:
+    """httpx.AsyncClient 假件：云厂商走 GET /models（零 token），私网 / 不支持列表走 POST ping。"""
+    get_sc = 200
+    get_ids: list = ["gpt-x", "deepseek-flash"]
+    post_sc = 200
+    calls: list = []
 
     class _Resp:
-        def __init__(self, sc): self.status_code = sc
+        def __init__(self, sc, ids=None):
+            self.status_code = sc
+            self._ids = ids
 
-    class _Cli:
-        def __init__(self, *a, **k): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def post(self, url, json=None, headers=None):
-            _Cli.last = (url, json, headers)
-            return _Resp(_Cli.sc)
+        def json(self):
+            return {"data": [{"id": i} for i in (self._ids or [])]}
 
+    def __init__(self, *a, **k): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+
+    async def get(self, url, headers=None):
+        _FakeHttpx.calls.append(("GET", url, None, headers))
+        return self._Resp(_FakeHttpx.get_sc, _FakeHttpx.get_ids)
+
+    async def post(self, url, json=None, headers=None):
+        _FakeHttpx.calls.append(("POST", url, json, headers))
+        return self._Resp(_FakeHttpx.post_sc)
+
+
+def test_probe_endpoint_cloud_uses_models_list_private_uses_ping(monkeypatch):
+    import asyncio
     import httpx
-    monkeypatch.setattr(httpx, "AsyncClient", _Cli)
-    _Cli.sc = 401
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeHttpx)
+    _FakeHttpx.calls = []
+    # 云厂商密钥错 → GET /models 401 → 离线；不发 POST（零 token）
+    _FakeHttpx.get_sc = 401
     h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile="gpt"))
-    assert h["online"] is False and h["error"] == "http_401"
-    assert _Cli.last[2]["Authorization"] == "Bearer sk-oa"
-    assert "chat_template_kwargs" not in _Cli.last[1]        # 云厂商不送 vLLM 私有字段
-    _Cli.sc = 200
+    assert h["online"] is False and h["error"] == "http_401" and h["probe"] == "models"
+    assert [c[0] for c in _FakeHttpx.calls] == ["GET"]
+    assert _FakeHttpx.calls[-1][1].endswith("/models") and _FakeHttpx.calls[-1][3]["Authorization"] == "Bearer sk-oa"
+    # 云厂商在线且模型名在列表里
+    _FakeHttpx.calls = []
+    _FakeHttpx.get_sc = 200
     h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile=""))
-    assert h["online"] is True and _Cli.last[2]["Authorization"] == "Bearer sk-main"
-    assert _Cli.last[1].get("thinking") == {"type": "disabled"}   # DeepSeek 官方关思考字段
-    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True))   # 历史语义＝无限制端点
-    assert _Cli.last[1].get("chat_template_kwargs") == {"enable_thinking": False}
+    assert h["online"] is True and h["probe"] == "models" and "warn" not in h
+    assert _FakeHttpx.calls[-1][3]["Authorization"] == "Bearer sk-main"
+    # 列表里没有这个模型名：仍在线但带 warn（chat 时大概率 404）
+    _FakeHttpx.get_ids = ["models/gemini-other"]
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile="gem"))
+    assert h["online"] is True and h["warn"] == "model_not_listed"
+    _FakeHttpx.get_ids = ["models/gemini-x"]          # Gemini 兼容层的 models/ 前缀也能对上
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile="gem"))
+    assert h["online"] is True and "warn" not in h
+    # 厂商不支持 /models（404）→ 回落 1-token ping，且按厂商送关思考字段
+    _FakeHttpx.calls = []
+    _FakeHttpx.get_sc = 404
+    _FakeHttpx.post_sc = 200
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile=""))
+    assert h["online"] is True and h["probe"] == "chat"
+    assert [c[0] for c in _FakeHttpx.calls] == ["GET", "POST"]
+    assert _FakeHttpx.calls[-1][2].get("thinking") == {"type": "disabled"}   # DeepSeek 官方关思考字段
+    assert "chat_template_kwargs" not in _FakeHttpx.calls[-1][2]           # 云厂商不送 vLLM 私有字段
+    # 私网端点（历史语义＝无限制端点）：直接 POST ping，不碰 /models
+    _FakeHttpx.calls = []
+    _FakeHttpx.get_sc = 200
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True))
+    assert h["online"] is True and h["probe"] == "chat"
+    assert [c[0] for c in _FakeHttpx.calls] == ["POST"]
+    assert _FakeHttpx.calls[-1][2].get("chat_template_kwargs") == {"enable_thinking": False}
+    # ping 404（模型名不存在）→ 离线
+    _FakeHttpx.post_sc = 404
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True))
+    assert h["online"] is False and h["error"] == "http_404"
+
+
+# ── 授权闸 multi_vendor_model + 按模型档分桶统计（2026-09-12 P3）─────────────
+
+def test_vendor_gate_registration_and_labels():
+    from src.licensing.feature_gate import FEATURE_MIN_PLAN, feature_enabled
+    from src.web.i18n_packs import membership
+    assert FEATURE_MIN_PLAN["multi_vendor_model"] == "pro"
+    assert conv_route.vendor_allowed({}) is True                            # 闸关＝放行
+    assert feature_enabled("multi_vendor_model",
+                           {"licensing": {"feature_gate": {"enabled": True,
+                                                           "plan_override": "basic"}}}) is False
+    assert membership.ZH["mb_feat_multi_vendor_model"] and membership.EN["mb_feat_multi_vendor_model"]
+
+
+def test_http_vendor_gate_locks_named_model_but_not_main_chain():
+    cfg = {**_CFG_VENDORS, "licensing": {"feature_gate": {"enabled": True, "plan_override": "basic"}}}
+    cli, st = _app(cfg)
+    g = cli.get("/api/unified-inbox/conv-model-route", params=_Q).json()
+    assert g["vendor_allowed"] is False and g["allowed"] is False
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gpt"})
+    assert r.status_code == 403 and r.headers.get("X-Deny-Reason") == "vendor_locked"
+    assert conv_route.get(st, CID).is_default
+    # 主链 "" 恒可选（回到主链不是「点名厂商」）
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": ""}).json()
+    assert r["ok"] and r["route"]["model"] == ""
+    # pro 放行
+    cli2, _ = _app({**_CFG_VENDORS, "licensing": {"feature_gate": {"enabled": True, "plan_override": "pro"}}})
+    r2 = cli2.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gpt"}).json()
+    assert r2["ok"] and r2["route"]["model"] == "gpt" and r2["vendor_allowed"] is True
+
+
+def test_stats_by_model_buckets_and_model_convs():
+    st = _KV()
+    conv_route.record_reply(None, ok=True, latency_ms=100)                       # 主链
+    conv_route.record_reply({"profile": "standard", "model": "gpt"}, ok=True, latency_ms=300)
+    conv_route.record_reply({"profile": "standard", "model": "gpt"}, ok=False, latency_ms=0)
+    conv_route.record_reply({"profile": "unrestricted", "unrestricted": True}, ok=True, latency_ms=900)
+    conv_route.set(st, CID, {"model": "gpt"})
+    conv_route.set(st, "telegram:acct1:other", {"model": "gpt"})
+    conv_route.set(st, "telegram:acct1:third", {"profile": "unrestricted"})
+    s = conv_route.stats_snapshot(st)
+    bm = s["by_model"]
+    assert bm["main"]["calls"] == 1 and bm["main"]["avg_latency_ms"] == 100
+    assert bm["gpt"] == {"calls": 2, "ok": 1, "fail": 1, "latency_ms_total": 300, "avg_latency_ms": 150}
+    assert bm["unrestricted"]["calls"] == 1
+    assert s["model_convs"] == {"gpt": 2}                       # 无限制会话不算「点名厂商」
+    conv_route.reset_for_tests()
+    assert conv_route.stats_snapshot(st)["by_model"] == {}
+
+
+def test_prompt_trace_record_feeds_by_model_and_persists_summary(tmp_path, monkeypatch):
+    from src.ai import prompt_trace
+    prompt_trace.reset()
+    monkeypatch.setenv("AITR_DATA_DIR", str(tmp_path))
+    prompt_trace.record(messages=[{"role": "system", "content": "SECRET PERSONA"},
+                                  {"role": "user", "content": "客户原话"}],
+                        model="gpt-x", host="api.openai.com", conv="telegram:12345",
+                        latency_ms=420, ok=True, route={"profile": "standard", "model": "gpt"})
+    assert conv_route.stats_snapshot(None)["by_model"]["gpt"]["calls"] == 1
+    assert prompt_trace.flush_summaries() is True
+    p = prompt_trace.summary_path()
+    raw = p.read_text(encoding="utf-8")
+    assert "SECRET PERSONA" not in raw and "客户原话" not in raw          # 正文绝不落盘
+    assert '"model": "gpt-x"' in raw and '"host": "api.openai.com"' in raw
+    # 模拟重启：清环 → 装回 → 「上一条回复」仍能回答
+    prompt_trace.reset()
+    assert prompt_trace.list_entries(conv="12345", limit=1) == []
+    assert prompt_trace.load_summaries() == 1
+    items = prompt_trace.list_entries(conv="12345", limit=1)
+    assert items and items[0]["model"] == "gpt-x" and items[0]["restored"] is True
+    assert items[0]["route"]["model"] == "gpt"
+    # 进程内已有新留痕时不覆盖
+    assert prompt_trace.load_summaries() == 0
+    prompt_trace.reset()

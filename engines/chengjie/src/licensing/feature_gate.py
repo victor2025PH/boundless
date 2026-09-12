@@ -71,6 +71,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
     # 强制点在 conv-model-route POST（conv_route.feature_allowed），非前缀表；这里登记供
     # 档位判定与会员中心矩阵展示。闸门总开关默认关＝全放行（launch day 不锁坐席）。
     "unrestricted_model": "flagship",
+    # 会话级「多厂商模型切换」（composer「模型」面板，2026-09-12）：坐席按会话点名 ai.models
+    # 里的云厂商档（ChatGPT / Gemini / Grok…）。强制点同在 conv-model-route POST
+    # （patch.model 非空且非主链）；主链 "" 恒可选。pro 起（与 AI 拟稿同档：会花钱的 AI 能力）。
+    "multi_vendor_model": "pro",
 }
 
 # API 前缀 → 功能名（最长前缀优先匹配；路由均直挂 @app 无 APIRouter prefix，

@@ -146,7 +146,36 @@ def test_model_panel_wiring_uses_catalog_and_all_health():
     assert "/api/ai/prompt-inspect?conv=" in html
     # 400 unknown_model → 重拉目录而不是装成功
     k = html.index("async function _mpSet(patch)")
-    assert "unknown_model" in html[k:html.index("window._mpSet=_mpSet", k)]
+    setblk = html[k:html.index("window._mpSet=_mpSet", k)]
+    assert "unknown_model" in setblk
+
+
+def test_model_panel_vendor_lock_counts_and_not_listed_warn():
+    """P3 授权闸：vendor_allowed=false 时非主链行锁住（不发请求、给升级提示）；
+    列表带「本会话 N 条」；GET /models 在线但模型名不在列表 → 琥珀点。"""
+    html = _html()
+    i = html.index("function _mvRender(")
+    j = html.index("function _mvRenderLast(", i)
+    block = html[i:j]
+    assert "vendor_allowed===false" in block and "data-locked" in block
+    assert "inbox.mp.tag_locked" in block and "inbox.mp.vendor_locked" in block
+    assert "inbox.mp.tag_used" in block and "model_not_listed" in block and "inbox.mp.h_not_listed" in block
+    assert "cmpz_vendor_locked" in block
+    # 服务端 403 vendor_locked 也走同一文案 + 重画锁态
+    k = html.index("async function _mpSet(patch)")
+    setblk = html[k:html.index("window._mpSet=_mpSet", k)]
+    assert "vendor_locked" in setblk and "inbox.mp.vendor_locked" in setblk
+    # 「上一条回复」改拉 50 条并按 model@host 计数
+    m = html.index("async function _mvLoadLast(")
+    lastblk = html[m:html.index("async function _mpHealth(", m)]
+    assert "&limit=50" in lastblk and "_mp.counts=" in lastblk
+    css = CSS.read_text(encoding="utf-8")
+    for sel in (".mv-row.locked{", ".mv-tag.lock{", ".mv-tag.cnt{", ".mv-dot.warn{"):
+        assert sel in css, sel
+    import importlib
+    pack = importlib.import_module("src.web.i18n_packs.inbox_workspace")
+    for key in ("inbox.mp.tag_locked", "inbox.mp.tag_used", "inbox.mp.h_not_listed", "inbox.mp.vendor_locked"):
+        assert pack.ZH[key] and pack.EN[key], key
 
 
 def test_md_i18n_keys_present_in_both_langs():
