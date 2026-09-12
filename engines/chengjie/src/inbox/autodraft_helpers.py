@@ -388,6 +388,16 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                         _vtxt = await _vtr.transcribe_voice_message(
                             str(_voice_path), _vlang,
                         )
+                    # ASR P1：本路真转出来的 → 按元数据登记「可疑」（协议入站已转过的
+                    # 走上面的复用分支，登记在入站侧完成）；产线起草时按会话+文本核对。
+                    if _vtxt and str(_vtxt).strip():
+                        try:
+                            from src.inbox.asr_suspect import note_from_meta as _asr_sus_note
+                            _asr_sus_note(
+                                cid, getattr(_vtr, "last_meta", {}) or {},
+                                str(_vtxt).strip(), assistant.config.config or {})
+                        except Exception:
+                            pass
                 if _voice_path or _reuse_txt:
                     if _vtxt and str(_vtxt).strip():
                         _peer_media_desc = str(_vtxt).strip()
@@ -1433,6 +1443,22 @@ def make_auto_draft_cb(
             mode = "review"
             logger.info("[policy] conv=%s risk_hold=%s forced=L1 stage=autodraft trigger=%s",
                         _cid_q3, _rh_cap, _trigger_q3)
+        # ASR P1（opt-in ``voice_recognition.suspect_hold_review``）：本条是语音且转写被判
+        # 「可疑」（入站侧按 last_meta 登记，按会话 + 本条文本核对）→ 这一稿封顶 review，
+        # 人过一眼再发；默认关只走 prompt 澄清块。任何异常按原档放行。
+        _asr_sus_cap = ""
+        try:
+            if mode == "auto_ai":
+                from src.inbox.asr_suspect import hold_review_enabled as _asr_hold_on
+                from src.inbox.asr_suspect import peek as _asr_sus_peek
+                if _asr_hold_on(app_config or {}):
+                    _asr_sus_cap = str(_asr_sus_peek(_cid_q3, str(text or "")) or "")
+                    if _asr_sus_cap:
+                        mode = "review"
+                        logger.info("[policy] conv=%s asr_suspect=%s forced=L1 stage=autodraft trigger=%s",
+                                    _cid_q3, _asr_sus_cap, _trigger_q3)
+        except Exception:
+            _asr_sus_cap = ""
         logger.info("[draft] trigger conv=%s reason=%s mode=%s", _cid_q3, _trigger_q3, mode)
         # 预算分子（peer_bot_guard P2）：只数「将自动投递」的拟稿轮次——
         # auto_ai 档 L2 会被 AutosendWorker 真发；review/multi_choice 是
@@ -1471,6 +1497,8 @@ def make_auto_draft_cb(
                 account_layer=_l1_account_layer)
             if _rh_cap and mode != "auto_ai":
                 _l1_reason = "risk_hold"     # Q-3：封顶原因就是会话级风险持有，不再猜证据
+            elif _asr_sus_cap and mode != "auto_ai":
+                _l1_reason = "asr_suspect"   # ASR P1：语音转写可疑封顶（原因码进审计行/草稿卡）
             if _l1_reason:
                 _l1_note(str(conv.get("conversation_id") or ""), _l1_reason)
         except Exception:

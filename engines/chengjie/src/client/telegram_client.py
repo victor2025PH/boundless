@@ -2258,6 +2258,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
 
             # 处理语音消息
             _peer_audio_emotion = None      # 声学情绪（SER），供出站情感声 + 情绪落库融合
+            _voice_asr_suspect = ""         # ASR P1：转写可疑原因码（空=正常）
             if not text and (message.voice or message.audio):
                 if self.voice_transcriber:
                     try:
@@ -2289,13 +2290,54 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                             try:
                                 # 2. 调用转录服务
                                 language = self.config.get('voice_recognition', {}).get('language', 'zh')
-                                transcribed_text = await self.voice_transcriber.transcribe_voice_message(
-                                    str(voice_file), language
-                                )
+                                # ASR P0/P1：会话语种先验（镜像收件箱的最近入站文字多数语种）
+                                # 只做「检出语种冲突且置信不足 → 按先验重转一次」，算不出 → None。
+                                _vhint = None
+                                try:
+                                    if getattr(self, "_mirror_inbox", False):
+                                        from src.inbox.asr_lang_hint import conversation_asr_lang_hint
+                                        from src.inbox.normalizer import conv_id as _vh_conv_id
+                                        from src.integrations.protocol_bridge import get_inbox_store as _vh_store
+                                        _vh_ibx = _vh_store()
+                                        if _vh_ibx is not None:
+                                            _vhint = conversation_asr_lang_hint(
+                                                _vh_ibx, _vh_conv_id(
+                                                    "telegram",
+                                                    str(getattr(self, "account_id", "default") or "default"),
+                                                    str(message.chat.id)))
+                                except Exception:
+                                    _vhint = None
+                                try:
+                                    transcribed_text = await self.voice_transcriber.transcribe_voice_message(
+                                        str(voice_file), language, lang_hint=_vhint
+                                    )
+                                except TypeError:
+                                    transcribed_text = await self.voice_transcriber.transcribe_voice_message(
+                                        str(voice_file), language
+                                    )
 
                                 if transcribed_text:
                                     text = f"[语音转录] {transcribed_text}"
                                     self.logger.info(f"语音转录成功: {transcribed_text[:100]}...")
+                                    # ASR P1：按转写元数据判「可疑」→ 原因码随 context 进
+                                    # skill_manager（_voice_asr_suspect），prompt 走「先确认」块。
+                                    try:
+                                        from src.inbox.asr_suspect import (
+                                            hint_enabled as _asr_hint_on,
+                                            transcript_suspect as _asr_suspect,
+                                        )
+                                        _cfg_root_v = (self.config.config
+                                                       if hasattr(self.config, "config") else {})
+                                        if _asr_hint_on(_cfg_root_v):
+                                            _voice_asr_suspect = _asr_suspect(
+                                                getattr(self.voice_transcriber, "last_meta", {}) or {},
+                                                transcribed_text)
+                                            if _voice_asr_suspect:
+                                                self.logger.info(
+                                                    "[asr] 转写可疑 reason=%s → 回复先确认",
+                                                    _voice_asr_suspect)
+                                    except Exception:
+                                        _voice_asr_suspect = ""
                                 else:
                                     text = "[语音消息 - 转录失败或无内容]"
                                     self.logger.warning("语音转录返回空结果")
@@ -2537,6 +2579,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     '_trigger_path': getattr(message, '_trigger_path', None),
                     '_is_voice_msg': bool(message.voice or message.audio),
                     '_peer_audio_emotion': _peer_audio_emotion,
+                    '_voice_asr_suspect': _voice_asr_suspect,
                     'quoted': _quoted,
                     # P1-2：入站语音归档 URL（转录前已发布），异步段透传进镜像媒体行
                     'voice_media_ref': voice_media_ref,
@@ -2634,6 +2677,10 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                                 if _ij_next.get('_peer_audio_emotion'):
                                     message_data['_peer_audio_emotion'] = (
                                         _ij_next.get('_peer_audio_emotion'))
+                                # ASR P1：合并进来的任一条语音转写可疑 → 整批按可疑（先确认）
+                                if _ij_next.get('_voice_asr_suspect'):
+                                    message_data['_voice_asr_suspect'] = (
+                                        _ij_next.get('_voice_asr_suspect'))
                             if len(_ij_texts) > 1:
                                 message_data['text'] = _ij_merge(_ij_texts)
                                 self.logger.info(
@@ -3196,6 +3243,8 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 'media_desc': image_ocr_text or "",
                 '_current_user_message_for_lang': ai_text,
                 '_peer_audio_emotion': message_data.get('_peer_audio_emotion'),
+                # ASR P1：转写可疑原因码（skill_manager _line_merge_keys 透传 → ai_client 先确认块）
+                '_voice_asr_suspect': message_data.get('_voice_asr_suspect') or None,
                 # N 线 核心1：复用共享 companion_context.route_persona_id（A/B 同一套
                 # 3-tier 路由）；会话覆写命中时已在上方改写为覆写人设。
                 'account_persona_id': _eff_persona_id,

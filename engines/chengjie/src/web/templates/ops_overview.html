@@ -2594,6 +2594,19 @@ async function loadASRDegradation(){
       {label:window.T('ov2_js_asr_failed'), value:fmt(Number(a.all_failed)||0)+' ('+failPct+'%)'},
       {label:window.T('ov2_js_asr_hallu'), value:fmt(Number(a.hallucination_dropped)||0)},
     ];
+    // ASR P0/P1（2026-09-12）：缓存命中（同一条语音不再转两遍）/ 语种先验重转（括号=真改了结果的）/
+    // 低置信转写（走「先确认」话术）/ 服务端无人声闸 + 热词回声丢弃。旧后端无 events 字段则不出这四格。
+    var ev = a.events || null;
+    if(ev){
+      var tc = a.transcript_cache || {};
+      var hitPct = ((Number(tc.hit_rate)||0)*100).toFixed(0);
+      kpis.push({label:window.T('ov2_js_asr_cache'), value:fmt(Number(tc.hits)||0)+' ('+hitPct+'%)'});
+      kpis.push({label:window.T('ov2_js_asr_langretry'),
+                 value:fmt(Number(ev.lang_retry)||0)+' ('+fmt(Number(ev.lang_retry_changed)||0)+')'});
+      kpis.push({label:window.T('ov2_js_asr_lowconf'), value:fmt(Number(ev.low_confidence)||0)});
+      kpis.push({label:window.T('ov2_js_asr_gate'),
+                 value:fmt((Number(ev.no_speech_gate)||0)+(Number(ev.prompt_echo_dropped)||0))});
+    }
     kp.innerHTML = kpis.map(function(c){
       return '<div class="kpi"><div class="muted" style="font-size:12px;">'+c.label+
         '</div><div style="font-size:20px;font-weight:600;margin-top:4px;">'+c.value+'</div></div>';

@@ -21,6 +21,8 @@
 - ``account_default``     账号层默认半自动（登录后未按账号开全自动 / onboarding 未确认）
 - ``global_default``      全局默认半自动
 - ``risk_hold``           风险层扣稿（enforce 档 L3/L4，非本模块判定，仅透传）
+- ``asr_suspect``         语音转写可疑封顶（ASR P1，``voice_recognition.suspect_hold_review``
+                          开启时由 autodraft 触发侧按 asr_suspect 登记表判定，仅透传）
 
 纯函数 + 进程级小注册表（{key: (reason, ts)}，上限 2000、TTL 6h），任何异常返回 ``""``。
 """

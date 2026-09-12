@@ -444,6 +444,7 @@ def _guard_camp_disparagement(
 _TURN_SIGNAL_KEYS = (
     "_is_repeated_message", "_prev_reply_for_repeat",
     "_peer_message_is_voice", "_voice_duration", "_voice_lang_suspect",
+    "_voice_asr_suspect",   # ASR P1：本条语音转写可疑原因码（asr_suspect）
     "_spoken_variant_request",
     "_peer_message_is_media", "_media_kind", "_media_desc", "_media_ref",
     "_inbox_peer_kind", "_inbound_short_hint", "_topic_switch_hint",
@@ -1125,6 +1126,8 @@ class SkillManager(LoggerMixin):
                 "_peer_message_is_voice", "_voice_duration",
                 # 可疑语音转写（ASR 语种与会话语言冲突）→ 澄清话术提示
                 "_voice_lang_suspect",
+                # ASR P1：转写置信度可疑原因码（A 线由 telegram_client 按 last_meta 算好带入）
+                "_voice_asr_suspect",
                 # 生成层口语分叉（Phase G）：本条回复可能发语音 → prompt 多要
                 # 一个 [口语版] 段（ai_client 消费+剥离，spoken_variant 暂存）
                 "_spoken_variant_request",
@@ -3098,6 +3101,14 @@ class SkillManager(LoggerMixin):
             user_context["user_msg_id"] = _inbound_mid
         if peer_audio_emotion:
             user_context["_peer_audio_emotion"] = peer_audio_emotion
+        # ASR P1：本条若是语音且转写被判「可疑」（协议入站 / AutoDraft 转写时按 last_meta
+        # 登记到 asr_suspect 注册表，按会话 + 本条文本核对）→ prompt 走「可能听错 · 先确认」
+        # 块；不可疑则清键（防跨稿驻留）。任何异常按不可疑处理。
+        try:
+            from src.inbox.asr_suspect import apply_to_user_context as _asr_sus_apply
+            _asr_sus_apply(user_context, conversation_id=conversation_id, text=text)
+        except Exception:
+            user_context.pop("_voice_asr_suspect", None)
         if reply_lang:
             # 收件箱已是语言决策单一事实源 → 锁定，避免引擎二次猜测
             user_context["reply_lang"] = reply_lang

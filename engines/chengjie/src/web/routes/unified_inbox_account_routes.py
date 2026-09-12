@@ -1595,16 +1595,27 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                         _vmeta = getattr(_vtr, "last_meta", None) or {}
                         if _vtxt and str(_vtxt).strip():
                             _text = str(_vtxt).strip()
+                            # ASR P1：按元数据判「可疑」并登记（skill_manager 起草时按会话 +
+                            # 本条文本核对 → prompt 走「可能听错 · 先确认」；autodraft 触发侧
+                            # 可选封顶 review）。不可疑则清旧登记。
+                            _asr_sus = ""
+                            try:
+                                from src.inbox.asr_suspect import note_from_meta as _asr_sus_note
+                                from src.inbox.normalizer import conv_id as _mk_cid_s
+                                _asr_sus = _asr_sus_note(
+                                    _mk_cid_s(_plat, _acct, _ck), _vmeta, _text, _cfg0)
+                            except Exception:
+                                _asr_sus = ""
                             logger.info(
                                 "[protocol] 入站语音落库前转录 %s:%s:%s → %s "
-                                "(lang=%s p=%s logprob=%s cache=%s retry=%s hint=%s)",
+                                "(lang=%s p=%s logprob=%s cache=%s retry=%s hint=%s suspect=%s)",
                                 _plat, _acct, _ck, _text[:80],
                                 _vmeta.get("language", "?"),
                                 _vmeta.get("language_probability", "-"),
                                 _vmeta.get("avg_logprob", "-"),
                                 "hit" if _vmeta.get("cache_hit") else "-",
                                 "yes" if _vmeta.get("lang_retry") else "-",
-                                _vhint or "-")
+                                _vhint or "-", _asr_sus or "-")
                         else:
                             logger.info(
                                 "[protocol] 入站语音转录返空 %s:%s:%s err=%s cache=%s",

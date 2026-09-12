@@ -208,6 +208,11 @@ voice_recognition:
   # max_no_speech_prob: 0.85        # 服务端 no_speech_prob ≥ 此值按无人声丢弃
   # lang_hint_min_prob: 0.6         # 检出语种≠会话先验且语种概率 < 此值 → 按先验重转一次
   # transcript_cache: {enabled: true}  # 同一音频（协议入站 + AutoDraft 两条路）只转一次
+  # ── ASR P1：转写三态（好 / 可疑 / 无）──
+  # suspect_hint: true              # 转写可疑（低置信 / 语种冲突 / no_speech 灰区 / 极短不确定）
+  #                                 # → 回复 prompt 走「语音可能听错 · 先确认」块（默认开）
+  # suspect_hold_review: false      # 可疑转写的这一稿封顶 review（L1 原因码 asr_suspect），
+  #                                 # 人过一眼再发；默认关只走 prompt 澄清
   # 主转录挂了/返空自动回落下一级（级联，绝不断链）；示例：SenseVoice 主 + whisper 兜底
   # fallback:
   #   provider: faster_whisper
