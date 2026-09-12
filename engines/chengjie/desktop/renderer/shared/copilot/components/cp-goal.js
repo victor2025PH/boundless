@@ -725,7 +725,7 @@
       .gl-slots { margin-top:6px; }
       .gl-slots-hd { font-size:var(--cp-fs-tiny,11px); font-weight:600;
                      color:var(--cp-text-dim,#64748b); margin-bottom:4px; }
-      .gl-slots-row { display:flex; flex-wrap:wrap; gap:4px; }
+      .gl-slots-row { display:flex; flex-wrap:wrap; gap:4px; max-height:7.5rem; overflow-y:auto; }
       .gl-slotchk { display:inline-flex; align-items:center; gap:3px;
                     font-size:10px; padding:1px 7px; border-radius:99px;
                     border:1px solid var(--cp-border,#e2e8f0);
@@ -740,7 +740,7 @@
                             border-style:dashed; background:rgba(180,83,9,.06); }
       .gl-slot-confirm { font-size:10px; line-height:1; padding:0 5px; margin-left:2px; border-radius:99px;
                          border:1px solid var(--cp-warn,#b45309); background:transparent;
-                         color:var(--cp-warn,#b45309); cursor:pointer; }
+                         color:var(--cp-warn,#b45309); cursor:pointer; flex-shrink:0; }
       .gl-slot-confirm:hover { background:var(--cp-warn,#b45309); color:#fff; }
       /* Q-5 C（#263）：「AI 推断 · 待确认」/「来自昵称 · 待确认」徽标 + ✕ 否钮（红边） */
       .gl-slot-badge { font-style:normal; font-size:9px; line-height:1; padding:1px 4px; margin-left:3px;
@@ -757,7 +757,8 @@
       .gl-chip.pending { border-style:dashed; }
       /* Q-19 D（#294）：进度头「待确认 M」小字（幻觉不计入 N/M）；槽位值一律 ≤24 字单行省略 */
       .gl-slots-pending { font-weight:400; color:var(--cp-warn,#b45309); }
-      .gl-slotchk { max-width:100%; overflow:hidden; white-space:nowrap; }
+      .gl-slotchk { max-width:100%; overflow:visible; white-space:nowrap; }
+      .gl-slot-val { overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; }
       /* Q-1 E（#264）：目标页顶部「暂停全部摸底目标」总开关条 */
       .gl-dpause { display:flex; align-items:center; justify-content:space-between; gap:8px;
                    margin:0 0 var(--cp-gap-xs,4px); padding:4px 8px; border-radius:8px;
@@ -1938,7 +1939,7 @@
           // 坐席把客户实际说的值录进去（录了才有可确认的东西）。
           if (!s.value) {
             const tipC = lab + " \u00b7 " + this.t("inbox.goal.slots.clue_only_t");
-            return `<span class="gl-slotchk mention clue" title="${esc(tipC)}">\u25D0 ${esc(this.t("inbox.goal.slots.clue_only", { label: lab }))}` +
+            return `<span class="gl-slotchk mention clue" title="${esc(tipC)}"><span class="gl-slot-val">\u25D0 ${esc(this.t("inbox.goal.slots.clue_only", { label: lab }))}</span>` +
               `<button type="button" class="gl-slot-confirm" data-act="slot_confirm" disabled${dataA} title="${esc(this.t("inbox.goal.slots.clue_only_confirm_t"))}">${esc(this.t("inbox.goal.slots.confirm"))}</button>` +
               `<button type="button" class="gl-slot-confirm" data-act="slot_edit_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.edit_t"))}">\u270E</button></span>`;
           }
@@ -1949,7 +1950,7 @@
             ? `<button type="button" class="gl-slot-confirm" data-act="slot_edit_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.edit_t"))}">\u270E</button>` +
               `<button type="button" class="gl-slot-confirm gl-slot-reject" data-act="slot_reject"${dataA} title="${esc(this.t("inbox.goal.slots.reject_t"))}">\u2715</button>`
             : "";
-          return `<span class="gl-slotchk mention${badgeKey ? " inferred" : ""}" title="${esc(tipM)}">\u25D0 ${head}` +
+          return `<span class="gl-slotchk mention${badgeKey ? " inferred" : ""}" title="${esc(tipM)}"><span class="gl-slot-val">\u25D0 ${head}</span>` +
             `<button type="button" class="gl-slot-confirm" data-act="slot_confirm"${dataA} title="${esc(this.t("inbox.goal.slots.confirm_t"))}">` +
             `${badgeKey ? "\u2713" : esc(this.t("inbox.goal.slots.confirm"))}</button>${editBtn}</span>`;
         }
@@ -1965,10 +1966,10 @@
              + (srcLab ? " \u00b7 " + srcLab : "")
              + (stale ? " \u00b7 " + this.t("inbox.goal.slots.stale_t") : ""))
           : this.t("inbox.goal.slots.miss_t", { label: s.label || s.key });
-        return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}${stale ? " stale" : ""}" title="${esc(tip)}">` +
+        return `<span class="gl-slotchk${on ? " on" : ""}${src ? " src-" + src : ""}${stale ? " stale" : ""}" title="${esc(tip)}"><span class="gl-slot-val">` +
           `${on ? "\u2713" : "\u25CB"} ${esc(s.label || s.key)}` +
           (on && s.value ? `\u00b7${esc(this._clipVal(s.value))}` : "") +
-          (stale ? "\u23F3" : "") + `</span>`;
+          (stale ? "\u23F3" : "") + `</span></span>`;
       }).join("");
       const pendingTxt = pendingN
         ? ` \u00b7 <span class="gl-slots-pending" title="${esc(this.t("inbox.goal.slots.pending_t"))}">${esc(this.t("inbox.goal.slots.pending_n", { n: pendingN }))}</span>`
