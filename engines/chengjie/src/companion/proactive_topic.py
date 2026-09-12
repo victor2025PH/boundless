@@ -1428,6 +1428,58 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 pass
             return clock
 
+        def _persona_for_conv(conv: dict):
+            """会话快照 → 人设 dict；解析失败 → {}。Q-37 调度钟 / 人设夜间共用。"""
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.utils.persona_manager import PersonaManager
+                pid = resolve_effective_persona_id(
+                    assistant.config.config or {},
+                    str((conv or {}).get("platform") or ""),
+                    str((conv or {}).get("account_id") or ""),
+                    str((conv or {}).get("chat_key") or ""))
+                if not pid:
+                    return {}
+                return PersonaManager.get_instance().get_persona_by_id(pid) or {}
+            except Exception:
+                return {}
+
+        def _schedule_clock_for_plan(cid):
+            """Q-37：``(hour, source)``，proactive 安静闸只读这一口。"""
+            try:
+                from src.companion.user_clock_resolver import resolve_schedule_clock
+                conv = _conv_index.get(cid) or {}
+                _epi = getattr(assistant, "_episodic_store", None)
+                if _epi is None:
+                    _epi = getattr(
+                        assistant.skill_manager, "_episodic_store", None)
+                return resolve_schedule_clock(
+                    cid,
+                    inbox_store=assistant.inbox_store,
+                    episodic_store=_epi,
+                    memory_key=str(conv.get("memory_key") or ""),
+                    cfg=_uc_cfg,
+                    last_inbound_ts=float(conv.get("last_in_ts") or 0),
+                    persona=_persona_for_conv(conv),
+                )
+            except Exception:
+                return int(time.localtime().tm_hour), "server"
+
+        def _persona_hour_for_plan(cid):
+            """人设当地小时；无人设居住地 → None（B 段不拦）。"""
+            try:
+                from src.companion.persona_location import (
+                    persona_local_hour,
+                    resolve_place_with_fallback,
+                )
+                conv = _conv_index.get(cid) or {}
+                place = resolve_place_with_fallback(_persona_for_conv(conv))
+                if place is None:
+                    return None
+                return int(persona_local_hour(place))
+            except Exception:
+                return None
+
         def _locale_holiday(cid):
             """该会话所在地区今天适合问候的节日 ``(key, 名称)``；无 → None。绝不抛。
 
@@ -1814,7 +1866,9 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 response_pacing_cfg=_response_live,
                 diagnostics=_skips,
                 # 预览与真发同口径：安静时段按用户钟判，预览才不骗人
-                user_clock_provider=_user_clock if _uc_enabled else None)
+                user_clock_provider=_user_clock if _uc_enabled else None,
+                schedule_clock_provider=_schedule_clock_for_plan,
+                persona_hour_provider=_persona_hour_for_plan)
             for i, p in enumerate(plans):
                 p["would_send_this_tick"] = i < _max_tick_live
             _skip_counts: dict = {}
@@ -2827,19 +2881,36 @@ async def maybe_start_companion_proactive(assistant) -> None:
             # / 任何未来排程回归 / 显式时区配错）→ 重写一次，仍矛盾放弃本轮。
             # 小时用 plan.local_hour（规划时按修复后语义算出：服务器钟或经显式
             # 信号核实的用户钟），缺失回落服务器当前小时。
+            # Q-37 C：同一分支加第二把尺——人设自述时刻按人设钟核，客户时段词
+            # 按调度钟核（``detect_daypart_conflict(..., persona_hour=)``）。
             try:
                 from src.companion.seasonal_guard import greeting_time_conflict
+                from src.companion.world_clock_guard import detect_daypart_conflict
                 _g_hour = plan.get("local_hour")
                 if not isinstance(_g_hour, int) or not (0 <= _g_hour <= 23):
                     _g_hour = time.localtime().tm_hour
-                _greet_kw = greeting_time_conflict(text, _g_hour)
+                _p_hour = plan.get("persona_hour")
+                try:
+                    _p_hour = int(_p_hour) if _p_hour is not None else None
+                    if _p_hour is not None and not (0 <= _p_hour <= 23):
+                        _p_hour = None
+                except (TypeError, ValueError):
+                    _p_hour = None
+
+                def _clock_text_hit(blob: str) -> str:
+                    return (greeting_time_conflict(blob, _g_hour)
+                            or detect_daypart_conflict(
+                                blob, _g_hour, persona_hour=_p_hour)
+                            or "")
+
+                _greet_kw = _clock_text_hit(text)
                 if _greet_kw:
                     _retry_g = await _gen_text(
                         plan, scene_note=_scene,
                         avoid_texts=(_avoid or []) + [text])
                     _gkw2 = _greet_kw
                     if _retry_g:
-                        _gkw2 = greeting_time_conflict(_retry_g, _g_hour)
+                        _gkw2 = _clock_text_hit(_retry_g)
                     if _retry_g and not _gkw2:
                         text = _retry_g
                     else:
@@ -3280,6 +3351,8 @@ async def maybe_start_companion_proactive(assistant) -> None:
             pacing_cfg=_pacing_cfg,
             priority_fn=_goal_priority,
             user_clock_provider=_user_clock if _uc_enabled else None,
+            schedule_clock_provider=_schedule_clock_for_plan,
+            persona_hour_provider=_persona_hour_for_plan,
             backoff_cfg=_backoff_cfg,
             response_pacing_cfg=_response_cfg,
             read_aware_cfg=_read_aware_cfg,

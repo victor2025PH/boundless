@@ -19,6 +19,7 @@ from src.companion.persona_location import (
 
 __all__ = [
     "detect_daypart_conflict",
+    "detect_persona_self_time_conflict",
     "strip_daypart_conflicts",
     "detect_venue_conflict",
     "strip_venue_conflicts",
@@ -66,8 +67,79 @@ _DAYPART_CLAIMS: Tuple[Tuple[re.Pattern[str], int, int, str], ...] = tuple(
 )
 
 
-def detect_daypart_conflict(text: str, local_hour: int) -> Optional[str]:
-    """出站是否含与当地小时冲突的时段断言；返回冲突 tag 或 None。"""
+# 人设自述时刻（「3am here / 半夜了 / 刚起床」）——按人设钟核，不按调度钟。
+_PERSONA_SELF_AMPM_RE = re.compile(
+    r"(?:it['’]?s|it\s+is)\s+(\d{1,2})(?:\s*[:.]\s*\d{2})?\s*(a\.?m\.?|p\.?m\.?)\s+here",
+    re.IGNORECASE,
+)
+_PERSONA_SELF_AM_RE = re.compile(
+    r"(\d{1,2})\s*a\.?m\.?\s+here", re.IGNORECASE)
+_PERSONA_LATE_RE = re.compile(r"半夜了|都半夜|凌晨[了啦啊]|深夜了")
+_PERSONA_WOKE_RE = re.compile(r"刚\s*起床|剛\s*起床|刚\s*睡醒|剛\s*睡醒")
+
+
+def _persona_claimed_hour(text: str) -> Optional[Tuple[int, int, str]]:
+    """人设自述时刻 → ``(lo, hi, tag)`` 合法窗口；无自述 → None。"""
+    blob = str(text or "")
+    if not blob.strip():
+        return None
+    m = _PERSONA_SELF_AMPM_RE.search(blob) or _PERSONA_SELF_AM_RE.search(blob)
+    if m:
+        try:
+            hour = int(m.group(1)) % 12
+        except Exception:
+            hour = -1
+        ap = ""
+        if m.lastindex and m.lastindex >= 2:
+            ap = str(m.group(2) or "").lower()
+        if hour >= 0:
+            if ap.startswith("p"):
+                hour = hour + 12 if hour != 12 else 12
+            elif ap.startswith("a") or not ap:
+                hour = 0 if hour == 12 else hour
+            if hour <= 5:
+                return (0, 6, "persona_late")
+            if 5 <= hour < 11:
+                return (5, 11, "persona_woke")
+            return (hour, hour + 1, "persona_clock")
+    if _PERSONA_LATE_RE.search(blob):
+        return (0, 6, "persona_late")
+    if _PERSONA_WOKE_RE.search(blob):
+        return (5, 11, "persona_woke")
+    return None
+
+
+def detect_persona_self_time_conflict(
+    text: str, persona_hour: Optional[int],
+) -> Optional[str]:
+    """人设自述时刻与人设钟矛盾 → tag；无人设钟或无自述 → None。"""
+    try:
+        if persona_hour is None:
+            return None
+        claimed = _persona_claimed_hour(text)
+        if claimed is None:
+            return None
+        lo, hi, tag = claimed
+        h = int(persona_hour) % 24
+        if lo <= h < hi:
+            return None
+        return tag
+    except Exception:
+        return None
+
+
+def detect_daypart_conflict(
+    text: str,
+    local_hour: int,
+    persona_hour: Optional[int] = None,
+) -> Optional[str]:
+    """出站是否含与当地小时冲突的时段断言；返回冲突 tag 或 None。
+
+    客户时段词（早安/下午好/good morning…）按 ``local_hour``（调度钟）核；
+    人设自述时刻（3am here / 半夜了 / 刚起床）按 ``persona_hour`` 核。
+    深夜自述出现在调度钟白天（8–22）也算矛盾——VV7BRY「下午三点主动说
+    it's 3am here」正是这种形状。
+    """
     try:
         h = int(local_hour) % 24
         blob = str(text or "")
@@ -82,6 +154,12 @@ def detect_daypart_conflict(text: str, local_hour: int) -> Optional[str]:
             if tag == "evening" and h < 2:
                 continue
             return tag
+        self_hit = detect_persona_self_time_conflict(blob, persona_hour)
+        if self_hit:
+            return self_hit
+        claimed = _persona_claimed_hour(blob)
+        if claimed is not None and claimed[2] == "persona_late" and 8 <= h < 23:
+            return "persona_late"
     except Exception:
         return None
     return None

@@ -63,6 +63,46 @@ def _resolve_user_clock(
         return None
 
 
+# 人设夜间不主动：客户近这么久无入站才拦（接话不是深夜骚扰）。
+_PERSONA_QUIET_INBOUND_SEC = 1800.0
+
+
+def _resolve_schedule_clock(
+    provider: Optional[Callable[[str], Any]], cid: str,
+) -> Optional[tuple]:
+    """``(hour, source)``；无 provider / 异常 → None。"""
+    if provider is None:
+        return None
+    try:
+        got = provider(cid)
+        if not got:
+            return None
+        return int(got[0]), str(got[1] or "server")
+    except Exception:
+        logger.debug("[proactive] schedule_clock_provider 失败 cid=%s", cid,
+                     exc_info=True)
+        return None
+
+
+def _resolve_persona_hour(
+    provider: Optional[Callable[[str], Any]], cid: str,
+) -> Optional[int]:
+    if provider is None:
+        return None
+    try:
+        raw = provider(cid)
+        if raw is None or raw == "":
+            return None
+        hour = int(raw)
+        if 0 <= hour <= 23:
+            return hour
+        return None
+    except Exception:
+        logger.debug("[proactive] persona_hour_provider 失败 cid=%s", cid,
+                     exc_info=True)
+        return None
+
+
 def should_skip_recent_active(
     last_ts: float, *, now: float, min_silent_hours: float,
 ) -> bool:
@@ -142,6 +182,8 @@ def plan_proactive_sends(
     pacing_cfg: Optional[Dict[str, Any]] = None,
     priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
     user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
+    schedule_clock_provider: Optional[Callable[[str], Any]] = None,
+    persona_hour_provider: Optional[Callable[[str], Any]] = None,
     backoff_cfg: Optional[Dict[str, Any]] = None,
     response_pacing_cfg: Optional[Dict[str, Any]] = None,
     read_aware_cfg: Optional[Dict[str, Any]] = None,
@@ -182,6 +224,12 @@ def plan_proactive_sends(
             安静」只收窄绝不新开窗口、弱信号（advisory）完全不参与调度。解析排在
             沉默/冷却等便宜过滤**之后**；provider 异常按无时钟处理。
             ``silent_hours`` / pacing / 冷却均为纯时长差，与时区无关，故一律不动。
+        schedule_clock_provider: 可选 ``(cid) -> (hour, source)``（Q-37
+            ``resolve_schedule_clock``）。给了则安静时段与 ``clock_source`` **只读它**
+            （``source ∈ peer_tz|persona_tz|server|explicit``）；旧
+            ``user_clock_provider`` 路径保留给未接线的调用方 / 既有门禁。
+        persona_hour_provider: 可选 ``(cid) -> hour|None``。人设当地 23–8 且客户
+            近 30 min 无入站 → 本轮不发（diag ``persona_quiet_hours``）。
         backoff_cfg: 可选，``parse_no_reply_backoff_cfg`` 产出。**未回退避**（P0
             2026-07-29）：上一条主动开场后对方没回过话（按快照 ``last_in_ts`` 与
             冷却条目 streak 判定）→ 冷却按 multiplier^streak 拉长、封顶
@@ -242,12 +290,13 @@ def plan_proactive_sends(
 
     local_hour = time.localtime(now).tm_hour
     if (user_clock_provider is None
+            and schedule_clock_provider is None
             and _in_quiet_hours(local_hour, int(quiet_start_hour),
                                 int(quiet_end_hour))):
         _diag("", "quiet_hours_global",
               f"服务器时间 {local_hour} 点在安静时段 "
               f"{int(quiet_start_hour)}-{int(quiet_end_hour)}，本轮整体不发")
-        return []  # 安静时段不打扰（有用户时钟时下沉到每会话判定，见循环内）
+        return []  # 安静时段不打扰（有用户/调度钟时下沉到每会话判定，见循环内）
 
     plans: List[Dict[str, Any]] = []
     for c in conversations or []:
@@ -358,7 +407,18 @@ def plan_proactive_sends(
         # opener_fn（读记忆，本循环最贵的一步）之前——半夜的人连开场都不必生成。
         clock: Optional[Any] = None
         conv_hour = local_hour
-        if user_clock_provider is not None:
+        sched_src = ""
+        persona_hour: Optional[int] = None
+        sched = _resolve_schedule_clock(schedule_clock_provider, cid)
+        if sched is not None:
+            conv_hour, sched_src = sched
+            if _in_quiet_hours(conv_hour, int(quiet_start_hour),
+                               int(quiet_end_hour)):
+                _diag(cid, "user_quiet_hours",
+                      f"调度钟 {conv_hour} 点在安静时段（{sched_src}）",
+                      silent_hours)
+                continue
+        elif user_clock_provider is not None:
             clock = _resolve_user_clock(user_clock_provider, cid)
             if _user_in_quiet_hours(
                     clock, now, quiet_start=int(quiet_start_hour),
@@ -367,6 +427,19 @@ def plan_proactive_sends(
                       "对方当地时间在安静时段", silent_hours)
                 continue
             conv_hour = _schedule_clock(clock, now)[0]
+        persona_hour = _resolve_persona_hour(persona_hour_provider, cid)
+        if (persona_hour is not None
+                and _in_quiet_hours(persona_hour, int(quiet_start_hour),
+                                    int(quiet_end_hour))):
+            inbound_age = (now - _last_in) if _last_in > 0 else 1e18
+            if inbound_age > _PERSONA_QUIET_INBOUND_SEC:
+                _diag(cid, "persona_quiet_hours",
+                      f"人设当地 {persona_hour} 点在安静时段且客户近 30min 无入站",
+                      silent_hours)
+                logger.info(
+                    "[proactive] skip=persona_quiet conv=%s persona_hour=%s",
+                    cid, persona_hour)
+                continue
         try:
             opener = opener_fn(
                 memory_key=str(c.get("memory_key") or ""),
@@ -433,9 +506,10 @@ def plan_proactive_sends(
             "intimacy": round(_intim, 1),
             "stage": _stage,
             # 观测/排障：安静时段按谁的钟判的（server=服务器钟）、时钟偏移、本地小时
-            "clock_source": str(getattr(clock, "source", "") or "server"),
+            "clock_source": (sched_src or str(getattr(clock, "source", "") or "server")),
             "clock_offset": round(float(getattr(clock, "offset_hours", 0.0) or 0.0), 1),
             "local_hour": conv_hour,
+            "persona_hour": persona_hour,
         })
 
     if priority_fn is not None:
@@ -609,6 +683,8 @@ class CompanionProactiveLoop:
         pacing_cfg: Optional[Dict[str, Any]] = None,
         priority_fn: Optional[Callable[[Dict[str, Any]], float]] = None,
         user_clock_provider: Optional[Callable[[str], Optional[Any]]] = None,
+        schedule_clock_provider: Optional[Callable[[str], Any]] = None,
+        persona_hour_provider: Optional[Callable[[str], Any]] = None,
         backoff_cfg: Optional[Dict[str, Any]] = None,
         response_pacing_cfg: Optional[Dict[str, Any]] = None,
         read_aware_cfg: Optional[Dict[str, Any]] = None,
@@ -638,6 +714,9 @@ class CompanionProactiveLoop:
         self._read_aware_cfg = read_aware_cfg
         # 用户时钟（None=服务器钟旧行为）：安静时段逐会话判，别把「对方的凌晨」当白天
         self._user_clock_provider = user_clock_provider
+        # Q-37：调度钟三源 / 人设夜间（None＝不接线，plan 走旧 user_clock 路径）
+        self._schedule_clock_provider = schedule_clock_provider
+        self._persona_hour_provider = persona_hour_provider
         self._cooldown = cooldown_store
         self._ritual_fn = ritual_fn
         self._ritual_cooldown = ritual_cooldown
@@ -719,6 +798,8 @@ class CompanionProactiveLoop:
             pacing_cfg=eff_pacing,
             priority_fn=self._priority_fn,
             user_clock_provider=self._user_clock_provider,
+            schedule_clock_provider=self._schedule_clock_provider,
+            persona_hour_provider=self._persona_hour_provider,
             backoff_cfg=eff_backoff,
             response_pacing_cfg=eff_response,
             read_aware_cfg=eff_read_aware,

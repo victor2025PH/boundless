@@ -220,6 +220,49 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             except Exception:
                 return None
 
+        def _care_schedule_clock(item: dict):
+            """Q-37：关怀安静窗与 proactive 同源读 ``resolve_schedule_clock``。
+            返回 ``(UserClock|None, source)``；异常 → ``(None, "server")``。"""
+            try:
+                from src.companion.user_clock_resolver import (
+                    resolve_schedule_user_clock,
+                )
+                sm = assistant.skill_manager
+                epi = getattr(assistant, "_episodic_store", None)
+                if epi is None and sm is not None:
+                    epi = getattr(sm, "_episodic_store", None)
+                mkey = ""
+                try:
+                    if sm is not None:
+                        mkey = sm._episodic_storage_key(
+                            str(item.get("chat_key") or ""), "",
+                            str(item.get("platform") or ""),
+                            str(item.get("account_id") or ""))
+                except Exception:
+                    mkey = ""
+                persona = None
+                try:
+                    from src.ai.persona_voice import resolve_effective_persona_id
+                    from src.utils.persona_manager import PersonaManager
+                    pid = resolve_effective_persona_id(
+                        assistant.config.config or {},
+                        str(item.get("platform") or ""),
+                        str(item.get("account_id") or "default"),
+                        str(item.get("chat_key") or ""))
+                    if pid:
+                        persona = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+                except Exception:
+                    persona = None
+                comp2 = (assistant.config.config.get("companion") or {})
+                uc = dict(comp2.get("user_clock") or {})
+                return resolve_schedule_user_clock(
+                    str(item.get("contact_key") or ""),
+                    inbox_store=assistant.inbox_store,
+                    episodic_store=epi, memory_key=mkey, cfg=uc,
+                    persona=persona)
+            except Exception:
+                return None, "server"
+
         ai_name = "她"
         try:
             ai_name = str((assistant.config.get_ai_config() or {}).get("ai_name") or "她")
@@ -474,6 +517,7 @@ async def maybe_start_proactive_care(assistant, web_app=None) -> None:
             peer_filter=_care_peer_filter,
             prompt_extras_provider=_care_prompt_extras,
             user_clock_provider=_care_user_clock,
+            schedule_clock_provider=_care_schedule_clock,
             goal_row_policy=_goal_row_policy,
             profile_provider=_care_profile,
             deliver_now=_care_deliver_now,

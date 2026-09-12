@@ -77,6 +77,7 @@ __all__ = [
     "in_quiet_hours",
     "schedule_clock",
     "shift_hours_to_clock",
+    "clock_from_tz_name",
     "city_ask_eligible",
     "dump_stats",
     "reset_stats_for_tests",
@@ -106,7 +107,7 @@ class UserClock:
     - ``offset_hours``：**创建时刻**的 UTC 偏移快照。DST 会漂，故所有消费函数一律优先
       按 ``tz_name`` 实时换算，本字段只用于固定偏移伪时区与观测展示。
     - ``source``：``stated_city`` | ``phone_cc`` | ``behavior`` | ``behavior_corroborated``
-      | ``lang_default``。
+      | ``lang_default`` | ``peer_tz`` | ``persona_tz`` | ``explicit``。
     - ``trust``：调度使用权限，见模块 docstring 的三档语义。
     """
 
@@ -433,6 +434,41 @@ def _clock_from_slug(slug: str, now: Any = None) -> Optional[UserClock]:
         city_slug=str(slug),
         trust=TRUST_REPLACE,
     )
+
+
+def clock_from_tz_name(
+    tz_name: str,
+    *,
+    source: str,
+    now: Any = None,
+    trust: str = TRUST_REPLACE,
+    confidence: float = 1.0,
+    country: str = "",
+    city_slug: str = "",
+) -> Optional[UserClock]:
+    """IANA / 固定偏移名 → ``UserClock``；无效时区 → None。绝不 raise。
+
+    Q-37 调度钟三源（``peer_tz`` / ``persona_tz``）与显式核实钟共用：调用方负责
+    只在已核实源上要 ``trust=replace``，本函数不放宽、不降档。
+    """
+    try:
+        name = str(tz_name or "").strip()
+        if not name:
+            return None
+        off = _tz_offset_hours(name, now)
+        if off is None:
+            return None
+        return UserClock(
+            tz_name=name,
+            offset_hours=float(off),
+            source=str(source or "").strip() or "explicit",
+            confidence=float(confidence),
+            country=str(country or ""),
+            city_slug=str(city_slug or ""),
+            trust=str(trust or TRUST_REPLACE),
+        )
+    except Exception:
+        return None
 
 
 def _country_tz(country: str) -> str:

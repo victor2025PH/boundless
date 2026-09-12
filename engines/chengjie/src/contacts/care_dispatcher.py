@@ -64,6 +64,10 @@ PromptExtrasProvider = Callable[[dict], dict]
 # 当地时间顺延——「事件日 20:00 服务器时间」对跨时区客户可能是凌晨三点）。
 # None/解析不出 → 服务器本地钟（旧行为）。
 UserClockProvider = Callable[[dict], Any]
+# Q-37：``(item) -> (UserClock|None, source)``，source ∈ peer_tz|explicit|persona_tz|server。
+# 给了则安静窗只读它（与 proactive ``resolve_schedule_clock`` 同源）；未给走旧
+# user_clock + tz_fallback 路径（既有门禁零改动）。
+ScheduleClockProvider = Callable[[dict], Any]
 # goal_row_policy：(item dict) -> {"exempt_budget","ignore_quiet","jitter","live"}
 # （P0 2026-08-30 冲刺推进器）：**只对 goal:* 行**征询的豁免策略——限时冲刺是用户
 # 显式拍板的全力决定，联系人预算/安静时段顺延/慢抖动这些「骚扰型」闸门按
@@ -432,6 +436,7 @@ class CareDispatcher:
         peer_filter: Optional[PeerFilter] = None,
         prompt_extras_provider: Optional[PromptExtrasProvider] = None,
         user_clock_provider: Optional[UserClockProvider] = None,
+        schedule_clock_provider: Optional[ScheduleClockProvider] = None,
         dry_resample_hours: float = 24.0,
         goal_row_policy: Optional[GoalRowPolicy] = None,
         profile_provider: Optional[ProfileProvider] = None,
@@ -473,6 +478,7 @@ class CareDispatcher:
         # 当地时间）。均可选，None=旧行为。
         self._prompt_extras_provider = prompt_extras_provider
         self._user_clock_provider = user_clock_provider
+        self._schedule_clock_provider = schedule_clock_provider
         # P0 2026-08-30 冲刺推进器：goal:* 行豁免策略（None=旧行为）
         self._goal_row_policy = goal_row_policy
         # M-1 A #218：客户档案 provider（LLM 档注入 + 事实校验）；None=空档案。
@@ -733,9 +739,40 @@ class CareDispatcher:
             return empty_profile()
 
     def _resolve_clock(self, item: dict) -> "tuple[Any, str]":
-        """安静窗按谁的钟判（Q-4 #267 D）：客户（user_clock 解析成功）→ 人设所在地 →
-        账号班表时区 → 服务器本地。返回 ``(clock|None, basis)``，basis ∈
-        {"customer","persona","account",""}；clock None＝服务器钟（旧行为）。绝不抛。"""
+        """安静窗按谁的钟判（Q-4 #267 D / Q-37）：有 ``schedule_clock_provider`` 时
+        只读它（``source ∈ peer_tz|explicit|persona_tz|server``），账号班表仍作
+        server 之后的最后回落。未接线则旧路径：客户（user_clock）→ 人设/账号
+        fallback → 服务器。返回 ``(clock|None, basis)``。绝不抛。"""
+        if self._schedule_clock_provider is not None:
+            source = "server"
+            clock = None
+            try:
+                got = self._schedule_clock_provider(dict(item))
+                if got is not None:
+                    clock = got[0] if not isinstance(got, dict) else None
+                    if isinstance(got, (tuple, list)) and len(got) >= 2:
+                        clock, source = got[0], str(got[1] or "server")
+            except Exception:
+                clock, source = None, "server"
+            if clock is not None:
+                return clock, source or "explicit"
+            if self._tz_fallback_provider is not None:
+                try:
+                    fb = self._tz_fallback_provider(dict(item)) or {}
+                    if str(fb.get("basis") or "") == "account":
+                        tz_name = str(fb.get("tz_name") or "").strip()
+                        if tz_name:
+                            from src.companion.user_clock import UserClock, _tz_offset_hours
+                            off = _tz_offset_hours(tz_name)
+                            if off is not None:
+                                return UserClock(
+                                    tz_name=tz_name, offset_hours=float(off),
+                                    source="account", confidence=1.0,
+                                    country="", city_slug="", trust="replace",
+                                ), "account"
+                except Exception:
+                    logger.debug("care tz_fallback_provider 异常（回落服务器钟）", exc_info=True)
+            return None, source or "server"
         clock = None
         if self._user_clock_provider is not None:
             try:

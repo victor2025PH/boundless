@@ -41,8 +41,10 @@ from src.companion.user_clock import (
     TRUST_NARROW,
     TRUST_REPLACE,
     UserClock,
+    clock_from_tz_name,
     infer_from_stated_place,
     resolve_user_clock,
+    schedule_clock,
 )
 from src.utils.memory_slots import SLOT_RESIDENCE, extract_slot
 
@@ -51,6 +53,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "resolve_for_conversation",
     "resolve_peer_locale",
+    "resolve_schedule_clock",
+    "resolve_schedule_user_clock",
     "utc_hours_for_conversation",
     "utc_hours_from_rows",
     "stated_place_from_inbound_text",
@@ -86,9 +90,19 @@ _TRUST_BY_SOURCE: Dict[str, str] = {
     "stated_city": TRUST_REPLACE,
     "phone_cc": TRUST_REPLACE,
     "behavior_corroborated": TRUST_REPLACE,
+    "peer_tz": TRUST_REPLACE,
+    "persona_tz": TRUST_REPLACE,
+    "explicit": TRUST_REPLACE,
     "behavior": TRUST_NARROW,
     "lang_default": TRUST_ADVISORY,
 }
+
+# resolve_schedule_clock 的四元 source。narrow/advisory 一律不当 explicit
+# （08-19 事故后 schedule_clock trust=replace-only，本函数不放宽）。
+_EXPLICIT_SOURCES = frozenset({
+    "stated_city", "phone_cc", "behavior_corroborated", "explicit",
+})
+_SCHEDULE_SOURCES = frozenset({"peer_tz", "persona_tz", "server", "explicit"})
 
 # 进程缓存：{conversation_id: (resolved_at, UserClock | None)}。None = 已缓存的负结果。
 _CACHE: Dict[str, Tuple[float, Optional[UserClock]]] = {}
@@ -856,3 +870,147 @@ def resolve_peer_locale(
         logger.debug(
             "[user_clock] resolve_peer_locale 失败 key=%s", cache_key, exc_info=True)
         return None
+
+
+def resolve_schedule_user_clock(
+    conversation_id: str = "",
+    *,
+    now: Optional[float] = None,
+    inbox_store: Any = None,
+    episodic_store: Any = None,
+    memory_key: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+    goal_store: Any = None,
+    profile: Any = None,
+    persona: Any = None,
+    last_inbound_ts: float = 0.0,
+) -> Tuple[Optional[UserClock], str]:
+    """主动触达 / 关怀共用的调度钟：客户核实钟 → 人设钟 → 服务器钟。
+
+    返回 ``(clock, source)``，``source ∈ peer_tz|explicit|persona_tz|server``。
+    ``clock`` 仅在非 server 时非空，且 ``trust=replace``（不放宽 08-19 语义）。
+
+    1. Q-29 ``resolve_peer_tz(profile)``（confirmed > mentioned，location >
+       residence）命中 → ``peer_tz``；
+    2. 现有 ``resolve_for_conversation`` 若 ``trust==replace``（自述城 / 国码 /
+       行为佐证）→ ``explicit``；narrow / advisory **不升档**；
+    3. 人设 ``resolve_place_with_fallback`` → ``persona_tz``；
+    4. 否则 ``(None, "server")``。
+
+    人设钟**不**写入 ``conversation_meta.tz_*``（那是客户钟缓存，串味会把
+    人设美东当成客户钟）。本函数绝不 raise。
+    """
+    try:
+        try:
+            now_ts = float(now) if now is not None else time.time()
+        except Exception:
+            now_ts = time.time()
+        cid = str(conversation_id or "").strip()
+
+        prof = profile
+        if prof is None and cid:
+            try:
+                from src.companion.peer_time import load_profile
+                prof = load_profile(cid, goal_store)
+            except Exception:
+                prof = None
+        if prof:
+            try:
+                from src.companion.peer_time import resolve_peer_tz
+                tz_name = resolve_peer_tz(prof)
+            except Exception:
+                tz_name = None
+            if tz_name:
+                clock = clock_from_tz_name(
+                    tz_name, source="peer_tz", now=now_ts, trust=TRUST_REPLACE)
+                if clock is not None:
+                    return clock, "peer_tz"
+
+        if inbox_store is not None and cid:
+            try:
+                existing = resolve_for_conversation(
+                    cid,
+                    inbox_store=inbox_store,
+                    episodic_store=episodic_store,
+                    memory_key=memory_key,
+                    cfg=cfg,
+                    now=now_ts,
+                    last_inbound_ts=last_inbound_ts,
+                )
+            except Exception:
+                existing = None
+            if (existing is not None
+                    and str(getattr(existing, "trust", "") or "") == TRUST_REPLACE):
+                src = str(getattr(existing, "source", "") or "")
+                if src in ("peer_tz", "persona_tz"):
+                    return existing, src
+                if src in _EXPLICIT_SOURCES or src:
+                    # 未知 replace 源也按 explicit（已核实），narrow 走不到这里
+                    return existing, "explicit"
+
+        if persona is not None:
+            try:
+                from src.companion.persona_location import resolve_place_with_fallback
+                place = resolve_place_with_fallback(persona)
+            except Exception:
+                place = None
+            tz_name = str(getattr(place, "tz_name", "") or "").strip() if place else ""
+            if tz_name:
+                clock = clock_from_tz_name(
+                    tz_name, source="persona_tz", now=now_ts, trust=TRUST_REPLACE)
+                if clock is not None:
+                    return clock, "persona_tz"
+        return None, "server"
+    except Exception:
+        logger.debug(
+            "[user_clock] resolve_schedule_user_clock 失败 cid=%s",
+            conversation_id, exc_info=True)
+        return None, "server"
+
+
+def resolve_schedule_clock(
+    conversation_id: str = "",
+    *,
+    now: Optional[float] = None,
+    inbox_store: Any = None,
+    episodic_store: Any = None,
+    memory_key: str = "",
+    cfg: Optional[Dict[str, Any]] = None,
+    goal_store: Any = None,
+    profile: Any = None,
+    persona: Any = None,
+    last_inbound_ts: float = 0.0,
+) -> Tuple[int, str]:
+    """``resolve_schedule_user_clock`` 的小时视图：``(hour, source)``。
+
+    ``source ∈ peer_tz|persona_tz|server|explicit``。小时经 ``schedule_clock``
+    （replace-only）算出；server 源 = 服务器本地小时。绝不 raise。
+    """
+    try:
+        try:
+            now_ts = float(now) if now is not None else time.time()
+        except Exception:
+            now_ts = time.time()
+        clock, source = resolve_schedule_user_clock(
+            conversation_id,
+            now=now_ts,
+            inbox_store=inbox_store,
+            episodic_store=episodic_store,
+            memory_key=memory_key,
+            cfg=cfg,
+            goal_store=goal_store,
+            profile=profile,
+            persona=persona,
+            last_inbound_ts=last_inbound_ts,
+        )
+        hour = int(schedule_clock(clock, now_ts)[0])
+        src = source if source in _SCHEDULE_SOURCES else (
+            "server" if clock is None else "explicit")
+        return hour, src
+    except Exception:
+        try:
+            fallback = int(time.localtime(
+                float(now) if now is not None else time.time()).tm_hour)
+        except Exception:
+            fallback = int(datetime.now().hour)
+        return fallback, "server"
