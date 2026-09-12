@@ -857,6 +857,11 @@ def _hour_24(h: Optional[int], mod_word: str, ap: str, sentence: str, lang: str)
     return None, False
 
 
+_QUOTE_RE = re.compile(
+    r"(?:我(?:都|刚|剛|不是|已经|已經|明明|之前|才)?(?:说|說|讲|講)(?:了|过|過|的是)?|跟你(?:说|說)过|"
+    r"i (?:just |already |literally )?(?:said|told you)|like i said|as i said|i mentioned)\s*[，,:：]?\s*$")
+
+
 def detect_time_statement(text: Any) -> Optional[Dict[str, Any]]:
     """客户说了自己这边的时间 / 时段 → ``{kind: clock|period, hour, minute, period, match, sentence}``；
     没说 / 说的是我方那边 / 是问句 → None。纯函数。"""
@@ -877,6 +882,10 @@ def detect_time_statement(text: Any) -> Optional[Dict[str, Any]]:
         if got is None:
             continue
         got["sentence"] = sent_o.strip()[:120]
+        # 复述（「我说我这边四点了」「like I said it's 4am here」）：钟点是先前读的，说话时刻不是读钟时刻
+        idx = sent.lower().find(str(got.get("match") or "").lower())
+        prefix = sent[max(0, idx - 16):idx] if idx > 0 else ""
+        got["quoted"] = bool(_QUOTE_RE.search(prefix.lower()))
         if best is None or (got.get("hour") is not None and best.get("hour") is None):
             best = got
     return best
@@ -1076,6 +1085,9 @@ def note_inbound(text: Any, conversation_id: str, *, inbox_store: Any = None, ts
             old = read_hint(inbox_store, cid, now=t)
             if old and float(old.get("ts") or 0) > t:
                 return None
+            if old and got.get("quoted") and old.get("hour_raw") == got.get("hour_raw"):
+                # 复述同一钟点（「我说我这边四点了」）：原述的 ts 才是读钟时刻，不覆盖
+                return None
             _write_hint(inbox_store, cid, hint)
         logger.info("[peer-time] hint conv=%s kind=%s hour=%s period=%s tz_guess=%s ttl=12h evidence=%r",
                     cid or "-", hint["kind"], hint["hour"] if hint["hour"] is not None else "-",
@@ -1119,8 +1131,10 @@ def _row_text(row: Dict[str, Any]) -> str:
 
 def scan_inbound_for_statement(rows: Iterable[Dict[str, Any]], *, now: Optional[float] = None,
                                ttl_sec: float = HINT_TTL_SEC) -> Optional[Tuple[str, float]]:
-    """最近 ``ttl_sec`` 内**最新**一条含时间叙述的客户入站 → ``(text, ts)``；无 → None。"""
+    """最近 ``ttl_sec`` 内**最新**一条含时间叙述的客户入站 → ``(text, ts)``；无 → None。
+    复述（``quoted``，「你又记忆不行了我说我这边四点了」）不算新读钟：有更早的原述就取原述。"""
     n = float(now if now is not None else time.time())
+    quoted_fallback: Optional[Tuple[str, float]] = None
     for r in sorted((r for r in rows if isinstance(r, dict)), key=_row_ts, reverse=True):
         if not _is_in(r):
             continue
@@ -1128,9 +1142,14 @@ def scan_inbound_for_statement(rows: Iterable[Dict[str, Any]], *, now: Optional[
         if ts <= 0 or n - ts > float(ttl_sec) or ts > n + 5:
             continue
         t = _row_text(r)
-        if t and detect_time_statement(t) is not None:
-            return t, ts
-    return None
+        got = detect_time_statement(t) if t else None
+        if got is None:
+            continue
+        if got.get("quoted"):
+            quoted_fallback = quoted_fallback or (t, ts)
+            continue
+        return t, ts
+    return quoted_fallback
 
 
 def resolve_hint(inbox_store: Any, conversation_id: str, *, now: Optional[float] = None, rows: Any = None,
