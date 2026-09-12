@@ -8,10 +8,9 @@
 
 本文件钉住：
   · 正常产物零成本零影响（CER≈0 的绝大多数流量连文件都不读）；
-  · 判乱码 → **作废这版成品**（清 ok/audio_path + 删文件）后才走兜底——只往下
-    走而不清的话，兜底再失败时末尾 return rv 会把 ok=True + 乱音路径原样交出去，
-    比不修更糟（实现时正是先写错成这样）；
-  · 兜底音色按语种对齐、extra 让前端归因成「语种不支持」而非「通道中断」；
+  · 判乱码 → **作废这版成品**（清 ok/audio_path + 删文件）；Q-22 起自动链
+    **不再静默换系统音**，ok=False + clone_unavailable，调用方改发文字；
+  · extra 让前端归因成「语种不支持」；坐席二次确认才走同语种 edge；
   · 判定本身绝不成为故障点（能量判不了/文件没了/异常 → 放行）。
 """
 from __future__ import annotations
@@ -205,16 +204,15 @@ def _synth_with(monkeypatch, tmp_path, sv, *, edge_ok=True):
 
 
 def test_autosend_garbled_falls_back_to_edge(tmp_path, monkeypatch):
+    """Q-22：自动链判乱码 → 阻断、零 edge，调用方改发文字（不再静默换系统音）。"""
     rv, calls = _synth_with(monkeypatch, tmp_path, _GARBLED_SV)
-    assert rv.ok is True
-    assert rv.provider == "edge_tts"
-    # 兜底音色按**文本语种**对齐（配置默认 zh 声念日文与乱音同罪）
-    assert calls == [("clone", None), ("edge_tts", "ja-JP-NanamiNeural")]
-    # 前端归因：语种不支持（保护性改道），不是「通道中断→重试/报障」
-    from src.ai.lang_voice_route import fallback_reason_from_extra
-    assert fallback_reason_from_extra(rv.extra) == ("lang_unsupported", "ja")
-    assert rv.extra["fallback_from"] == "avatar_clone"
-    assert rv.extra["primary_error"] == "clone_lang_garbled:ja"
+    assert rv.ok is False
+    assert rv.audio_path == ""
+    assert "clone_unavailable" in (rv.error or "")
+    assert "clone_lang_garbled:ja" in (rv.error or "")
+    assert rv.extra.get("degrade_to_text") is True
+    assert calls == [("clone", None)]
+    assert rv.extra.get("primary_error") == "clone_lang_garbled:ja"
 
 
 def test_autosend_clean_take_unaffected(tmp_path, monkeypatch):

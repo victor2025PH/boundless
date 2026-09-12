@@ -5,8 +5,8 @@ UI 的 voice_langs 警示只护坐席手动面板；A 线自动语音回复 / B 
 
 - 超能力语种（日文 × hub IndexTTS-2 仅中英）绝不进克隆后端（省一次注定
   怪声的 GPU 往返）；
-- fallback 开 → edge 按语种对齐音色出标准声（extra.fallback_from 供前端亮
-  「非克隆声」黄字，兜底音色绝不能用中文声念外文）；
+- fallback 开但未二次确认 → Q-22 阻断（clone_unavailable，零系统音）；
+  confirm_system_voice=True 才 edge 按语种对齐音色（绝不能用中文声念外文）；
 - fallback 关（no_edge 部署）→ 如实失败 ``clone_lang_unsupported:<lang>``，
   调用方回落文字；
 - 中文/英文/短文本/能力未知 → 行为与闸前完全一致（宁可漏拦不误拦）；
@@ -73,7 +73,7 @@ async def test_gate_blocks_ja_and_fails_honestly_without_fallback(
 
 
 async def test_gate_falls_back_to_lang_aligned_edge_voice(tmp_path, monkeypatch):
-    """兜底开 → edge 出声且音色按语种对齐（ja→ja 声，绝不用 zh 兜底声念日文）。"""
+    """Q-22：兜底开但未确认 → 阻断不出系统音；confirm 后 edge 按语种对齐（ja→ja 声）。"""
     called: dict = {}
     _deny_clone(monkeypatch, called)
     seen: dict = {}
@@ -92,16 +92,21 @@ async def test_gate_falls_back_to_lang_aligned_edge_voice(tmp_path, monkeypatch)
     monkeypatch.setattr(TTSPipeline, "_run_backend", fake_run_backend)
     tts = TTSPipeline(_cfg(tmp_path, fallback_on_error=True))
     rv = await tts.synthesize(_JA)
-    assert rv.ok
-    assert rv.provider == "edge_tts"
+    assert not rv.ok
+    assert "clone_unavailable" in (rv.error or "")
+    assert "clone_lang_unsupported:ja" in (rv.error or "")
+    assert rv.extra.get("degrade_to_text") is True
+    assert not seen, f"未二次确认不得调用 edge：{seen}"
+    assert not called, "克隆后端不应被调用"
+
+    rv2 = await tts.synthesize(_JA, confirm_system_voice=True)
+    assert rv2.ok
+    assert rv2.provider == "edge_tts"
     assert seen["backend"] == "edge_tts"
     assert seen["voice"] == "ja-JP-NanamiNeural"     # EDGE_VOICE_BY_LANG[ja]
-    # rv.voice 必须回写**实际使用**的对齐音色（2026-08-31 线上实测：实参已对齐
-    # 而回写行写死 self.fallback_voice → 日语声念的被标成中文声=报告失真）
-    assert rv.voice == "ja-JP-NanamiNeural"
-    assert rv.extra.get("fallback_from") == "avatar_clone"
-    assert rv.extra.get("clone_lang_blocked") == "ja"
-    assert not called, "克隆后端不应被调用"
+    assert rv2.voice == "ja-JP-NanamiNeural"
+    assert rv2.extra.get("fallback_from") == "avatar_clone"
+    assert rv2.extra.get("system_voice_confirmed") is True
 
 
 async def test_gate_passes_chinese_to_clone_unchanged(tmp_path, monkeypatch):

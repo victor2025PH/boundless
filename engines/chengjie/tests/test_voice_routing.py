@@ -207,7 +207,7 @@ def test_stage_voice_file_routes_by_tier(tmp_path, monkeypatch):
             captured["backend"] = cfg.get("backend")
 
         async def synthesize(self, text, timeout_sec=45.0, emotion=None,
-                             pre_colloquialized=False):
+                             pre_colloquialized=False, **_kw):
             with open(audio, "wb") as f:   # 每次重建（stage 读后会删）
                 f.write(_ptt)
 

@@ -6,11 +6,10 @@
 两档 —— 字节有能量即判 voiced 放行，坐席只能靠耳朵事后发现，还被标成「疑似
 无声」（归因也是错的：明明有声，是念错）。
 
-本文件钉住修复后的三段行为：
-  ① 判乱码 → 就地改派 Edge 同语种标准声重合成，响应里 speech 回到 voiced，
-     并带上 fallback_from / fallback_reason=lang_unsupported（前端照常亮
-     「非克隆声」+「本条使用标准声」）；
-  ② 改派不可行/仍失败 → 如实回 speech=garbled（前端禁发），绝不放行；
+本文件钉住修复后的三段行为（Q-22 改了 ①）：
+  ① 判乱码 → **阻断**（ok=False / blocked / clone_unavailable:clone_lang_garbled），
+     不改派 Edge；前端红条二选一（改发文字 / 确认系统音）；
+  ② 无系统音可确认 / 坐席未确认 → 同样阻断，绝不放行乱音；
   ③ 正常产物（CER≈0）零影响 —— 这是 99% 的流量。
 
 Hermetic：假 TTSPipeline（按 backend 决定给什么 synth_verify，不碰真 GPU）、
@@ -148,53 +147,48 @@ def _preview(client, text=_JA_TEXT):
     return r.json()
 
 
-# ══ ① 判乱码 → 改派 Edge，且改派这件事对坐席可见 ═══════════════════════════
+# ══ ① 判乱码 → 阻断（Q-22 不再静默改派 Edge）════════════════════════════════
+
+def _assert_garbled_blocked(d, *, sys_voice_expected=None):
+    assert d["ok"] is False
+    assert d.get("blocked") is True
+    assert "clone_lang_garbled" in (d.get("error") or "")
+    assert str(d.get("reason") or "").startswith("clone_unavailable:")
+    cu = d.get("clone_unavailable") or {}
+    assert "clone_lang_garbled" in str(cu.get("why") or "")
+    if sys_voice_expected is False:
+        assert not cu.get("system_voice")
+        assert cu.get("system_voice_available") is False
+    assert [c["backend"] for c in _FakePipeline.calls] == ["avatar_clone"]
+
 
 def test_garbled_clone_redispatched_to_edge(client):
     d = _preview(client)
-    assert d["ok"] is True
-    vm = d["voice_meta"]
-    # 事故形态下**绝不**放行乱音：终审回到 voiced 是因为换了会念日语的音色
-    assert vm["speech"] == "voiced", vm
-    assert d["provider"] == "edge_tts"
-    # 改派必须留痕：前端据此亮「非克隆声」+「本条使用标准声（日语暂不支持克隆）」
-    assert vm["fallback_from"] == "avatar_clone"
-    assert vm["fallback_reason"] == "lang_unsupported"
-    assert vm["fallback_lang"] == "ja"
-    # 第二发确实打的是 edge，且音色按语种取（不是中文兜底声念日语）
-    backends = [c["backend"] for c in _FakePipeline.calls]
-    assert backends == ["avatar_clone", "edge_tts"], backends
-    assert _FakePipeline.calls[1]["voice"] == "ja-JP-NanamiNeural"
+    _assert_garbled_blocked(d)
 
 
 def test_redispatched_preview_file_is_the_edge_take(client):
-    """响应里的 url/bytes 必须指向改派后的产物——指着旧乱音文件＝坐席点播放
-    听到的还是「ゾオパパパ」，而元数据说一切正常，比不修更糟。"""
+    """阻断响应不得带乱音预览文件（坐席点播放会听到「ゾオパパパ」）。"""
     d = _preview(client)
-    assert d["filename"].endswith(".mp3"), d["filename"]
-    assert d["url"].endswith(d["filename"])
-    assert d["bytes"] > 0
-    assert d["format"] == "mp3"
+    _assert_garbled_blocked(d)
+    assert "filename" not in d
+    assert "url" not in d
 
 
-# ══ ② 改派不可行/失败 → 如实 garbled（禁发），绝不谎报 ═════════════════════
+# ══ ② 无系统音 / 未确认 → 同样阻断，绝不放行乱音 ═══════════════════════════
 
 def test_edge_redispatch_failure_keeps_garbled(client):
     _FakePipeline.edge_ok = False
     d = _preview(client)
-    assert d["ok"] is True
-    assert d["voice_meta"]["speech"] == "garbled", d["voice_meta"]
-    # 保留原克隆产物（有东西可听、可报障），但前端按 garbled 禁发
-    assert d["provider"] == "avatar_clone"
+    _assert_garbled_blocked(d)
 
 
 def test_unmappable_language_keeps_garbled(client, monkeypatch):
-    """连 Edge 都没有该语种音色 → 没有可改派的目标，如实 garbled 不硬改。"""
+    """连 Edge 都没有该语种音色 → 阻断且 system_voice 空。"""
     monkeypatch.setattr("src.ai.lang_voice_route.default_edge_voice_for_lang",
                         lambda *a, **k: "")
     d = _preview(client)
-    assert d["voice_meta"]["speech"] == "garbled"
-    assert [c["backend"] for c in _FakePipeline.calls] == ["avatar_clone"]
+    _assert_garbled_blocked(d)
 
 
 # ══ ③ 正常产物零影响（99% 流量的回归护栏）═══════════════════════════════════

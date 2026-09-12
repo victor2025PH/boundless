@@ -250,7 +250,9 @@ def test_remote_cdn_ref_does_not_wait():
         [[r0]], cfg=_wait_cfg(5), path_map={},   # 解析不到本地路径
         gen_reply="收到！")
     assert kw["last_inbound"] == "[图片]"
-    assert store.reads == 1                      # 没进等待重读（零 sleep 轮）
+    # 没进等待重读（5s 预算 × 0.01 tick 会是几百次）。Q-21 起草前 lang-plan 也会读 store，
+    # 所以不再钉死 1；只要不是等待环即可。
+    assert 1 <= store.reads < 20
 
 
 def test_inflight_lock_second_round_polls_not_describes():

@@ -318,12 +318,12 @@ async def test_tts_blocked_and_metered(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipe, "_synthesize_uncached", _fake_uncached)
 
-    r1 = await pipe.synthesize("hello")          # 5 字符 → 记账
+    r1 = await pipe.synthesize("一二三四五")      # 5 字符、语种对齐默认中文声（Q-22 不再用英文稿撞 lang_mismatch）
     assert r1.ok is True
     assert qs.get_license_quota_store().used_chars("L-TTS") == 5
 
     record_license_chars("tts", 95)              # 合计 100 = 耗尽
-    r2 = await pipe.synthesize("more text")
+    r2 = await pipe.synthesize("还有一些字")
     assert r2.ok is False
     assert r2.error == QUOTA_EXCEEDED_ERROR
 

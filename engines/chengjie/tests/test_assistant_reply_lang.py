@@ -28,8 +28,9 @@ def test_follows_ui_lang_all_languages():
 def test_region_suffix_stripped():
     assert _reply_lang_and_name(_Req("en-US"), {})[0] == "en"
     assert _reply_lang_and_name(_Req("pt_BR"), {})[0] == "pt"
-    # 中文变体归简体 zh（scaffold 简体；繁/粤由 translation 子系统另管）
-    assert _reply_lang_and_name(_Req("zh-TW"), {})[0] == "zh"
+    # Q-21：zh-tw / yue 是 _LANG_NAMES 一等码（LANGUAGE RULE 否则短路）；
+    # 未入表的中文变体（zh-hk）仍归简体 zh。
+    assert _reply_lang_and_name(_Req("zh-TW"), {})[0] == "zh-tw"
     assert _reply_lang_and_name(_Req("zh-hk"), {})[0] == "zh"
 
 
