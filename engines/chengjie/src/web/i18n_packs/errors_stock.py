@@ -2,6 +2,9 @@
 """errors_stock 域词条(由 tools/i18n_migrate_domain.py 从单体迁移)。结构见包 docstring。"""
 
 ZH = {
+    "err.asr.message_not_found": "消息不存在或不属于该会话",
+    "err.asr.not_voice": "该消息不是客户发来的语音消息",
+    "err.asr.text_too_long": "改正文本过长（上限 2000 字）",
     "err.auth.already_initialized": "系统已初始化，请通过用户管理页面操作",
     "err.auth.api_key_required": "API Key 不能为空",
     "err.auth.bad_credentials": "用户名或密码错误",
@@ -412,6 +415,9 @@ ZH = {
 }
 
 EN = {
+    "err.asr.message_not_found": "Message not found in this conversation",
+    "err.asr.not_voice": "That message is not an inbound voice message",
+    "err.asr.text_too_long": "Corrected text is too long (max 2000 characters)",
     "err.auth.already_initialized": "System already initialized; please use the User Management page",
     "err.auth.api_key_required": "API Key is required",
     "err.auth.bad_credentials": "Incorrect username or password",

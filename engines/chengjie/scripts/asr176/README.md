@@ -50,6 +50,10 @@ ONSTART 任务只保开机,白天崩了没人管会静默降级 CPU 兜底,看�
   任何形式的热词 prompt 在边缘音频上乱码、干净音频只多标点 → 客户端默认不送热词。
   VAD 参数只传旧服务传过的 `min_silence_duration_ms=300`，其余交库默认。
 
+- **换模型先有尺子**（ASR P1/P2）：`python -m scripts.run_eval --asr [--asr-base-url 候选端点]` 用生产同款
+  转写链算 CER；金标用 `python tools/asr_gold_curate.py export/import/status` 从归档语音 + 坐席改正积攒
+  （≥5 条核对过才裁决）。Qwen3-ASR A/B 步骤见 `docs/指令_ASR_P2_工作台接线契约与QwenASR_AB_runbook_2026-09-12.md`。
+
 ## 常用命令(从 117,ssh 别名 gpu176)
 
 ```powershell

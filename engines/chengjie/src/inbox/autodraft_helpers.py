@@ -391,11 +391,21 @@ async def enrich_auto_draft(assistant, draft_svc, _ad_app, _ad_store, conv: dict
                     # ASR P1：本路真转出来的 → 按元数据登记「可疑」（协议入站已转过的
                     # 走上面的复用分支，登记在入站侧完成）；产线起草时按会话+文本核对。
                     if _vtxt and str(_vtxt).strip():
+                        _asr_sus_v = ""
                         try:
                             from src.inbox.asr_suspect import note_from_meta as _asr_sus_note
-                            _asr_sus_note(
+                            _asr_sus_v = _asr_sus_note(
                                 cid, getattr(_vtr, "last_meta", {}) or {},
                                 str(_vtxt).strip(), assistant.config.config or {})
+                        except Exception:
+                            _asr_sus_v = ""
+                        # ASR P2：逐条元数据落 KV（协议入站已转过的走复用分支，元数据在入站侧落）
+                        try:
+                            from src.inbox.asr_meta import save as _asr_meta_save
+                            _asr_meta_save(
+                                _ad_store, cid, _peer_msg_id,
+                                getattr(_vtr, "last_meta", {}) or {},
+                                suspect=_asr_sus_v or "", machine_text=str(_vtxt).strip())
                         except Exception:
                             pass
                 if _voice_path or _reuse_txt:

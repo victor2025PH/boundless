@@ -2193,6 +2193,14 @@ _ADDITIONS_2026_09_12_MODEL_ROUTES_LIST = """
 """
 _BASELINE += _ADDITIONS_2026_09_12_MODEL_ROUTES_LIST
 
+# ASR P2（2026-09-12，asr_correction_routes.py）：坐席改正语音转写（台账 + 正文 + 逐条元数据 +
+# 转写缓存四处同步）+ 改正台账/热词候选读口（ops）。thread 响应语音行新增 ``asr`` 字段不是新端点。
+_ADDITIONS_2026_09_12_ASR_CORRECTION = """
+/api/unified-inbox/asr-correction	POST
+/api/admin/asr-corrections	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_12_ASR_CORRECTION
+
 
 def _parse_baseline():
     expected = set()

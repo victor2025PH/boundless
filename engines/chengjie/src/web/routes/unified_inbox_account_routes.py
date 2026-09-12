@@ -1606,6 +1606,16 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
                                     _mk_cid_s(_plat, _acct, _ck), _vmeta, _text, _cfg0)
                             except Exception:
                                 _asr_sus = ""
+                            # ASR P2：逐条元数据落 KV（thread 响应 asr 字段 → 坐席台徽标/改正入口）
+                            try:
+                                from src.inbox.asr_meta import save as _asr_meta_save
+                                from src.inbox.normalizer import conv_id as _mk_cid_m
+                                _asr_meta_save(
+                                    store, _mk_cid_m(_plat, _acct, _ck),
+                                    str((body or {}).get("msg_id") or ""), _vmeta,
+                                    suspect=_asr_sus, machine_text=_text)
+                            except Exception:
+                                logger.debug("[protocol] asr 元数据落库失败（忽略）", exc_info=True)
                             logger.info(
                                 "[protocol] 入站语音落库前转录 %s:%s:%s → %s "
                                 "(lang=%s p=%s logprob=%s cache=%s retry=%s hint=%s suspect=%s)",

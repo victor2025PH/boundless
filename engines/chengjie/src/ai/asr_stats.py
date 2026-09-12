@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 ASR_EVENT_KINDS = (
     "cache_hit", "lang_retry", "lang_retry_changed", "low_confidence",
     "no_speech_gate", "prompt_echo_dropped",
+    "correction",   # ASR P2：坐席改正转写（POST /api/unified-inbox/asr-correction）
 )
 
 

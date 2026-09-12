@@ -1555,6 +1555,13 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("入站自动翻译失败（已忽略）", exc_info=True)
 
         _enrich_outbound_originals(request, cid, out_msgs)
+        # ASR P2：给入站语音行挂 ``asr`` 元数据（可疑原因 / 置信三档 / 语种概率 / 是否已改正…），
+        # 供媒体行徽标与「改正」入口；无语音行零开销，KV 读失败静默。
+        try:
+            from src.inbox.asr_meta import attach as _asr_attach
+            _asr_attach(_inbox_store(request), cid, out_msgs)
+        except Exception:
+            logger.debug("asr 元数据挂载失败（已忽略）", exc_info=True)
         # 接力记忆二期：坐席人工发出的出站行标 sent_by=agent（气泡「人工」小标）
         try:
             _mark_agent_sent(request, cid, out_msgs)
