@@ -4046,6 +4046,34 @@ class InboxStore:
             )
             self._conn.commit()
 
+    def list_agent_sends(
+        self, conversation_id: str, *, since_ts: float = 0.0, until_ts: float = 0.0,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """某会话的坐席人工发送打点（``agent_sends``，时间升序）。
+
+        接力记忆二期（2026-09-12）：线程读取用它给出站气泡标「人工」——messages 表没有
+        发送方字段，只能按发送打点与出站行时间就近匹配（见 aggregate._mark_agent_sent）。
+        ``since_ts`` / ``until_ts`` 为 0 时不限。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return []
+        sql = "SELECT agent_id, agent_name, ts FROM agent_sends WHERE conversation_id=?"
+        args: List[Any] = [cid]
+        if since_ts:
+            sql += " AND ts>=?"
+            args.append(float(since_ts))
+        if until_ts:
+            sql += " AND ts<=?"
+            args.append(float(until_ts))
+        sql += " ORDER BY ts ASC LIMIT ?"
+        args.append(int(max(1, limit)))
+        with self._lock:
+            rows = self._conn.execute(sql, args).fetchall()
+        return [{"agent_id": str(r[0] or ""), "agent_name": str(r[1] or ""), "ts": float(r[2] or 0)}
+                for r in rows]
+
     def agent_first_responses(
         self, since_ts: float = 0.0,
     ) -> List[Dict[str, Any]]:

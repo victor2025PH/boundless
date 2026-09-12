@@ -46,7 +46,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 LOG_KEY = "_human_said_log"
-_LOG_CAP = 8
+_LOG_CAP = 16              # 二期：8 → 16（一次接管能说出十来条稳定事实；注入只取最近 _NOTE_MAX_LINES）
+_NOTE_MAX_LINES = 10
 _QUOTE_MAX = 120
 _TEXT_MAX = 2000
 
@@ -69,6 +70,28 @@ _ZH_FACT_PATTERNS = [
                r"结婚了|結婚了|已婚|未婚|离异|離異|丧偶|喪偶|一个人住|一個人住)"),
     # 职业（只认「工作/职业是」定式）
     re.compile(r"我(?:的)?(?:工作|职业|職業)是\s*[\u4e00-\u9fff]{2,12}"),
+    # 职业·二期（2026-09-12）：我是做X的 / 我在X上班（工作）/ 我开了一家X / 我是一名X
+    re.compile(r"我是做\s*(?!什么|什麼|啥|梦|夢)[\u4e00-\u9fff]{1,10}的"),
+    re.compile(r"我(?:现在|現在|目前)?在\s*[\u4e00-\u9fff]{2,12}(?:上班|工作|做事|打工)"),
+    re.compile(r"我(?:自己)?(?:开|開)了?(?:一)?(?:家|间|間)\s*[\u4e00-\u9fff]{1,10}"),
+    re.compile(r"我是(?:一名|一位|一个|一個|个|個)\s*(?:医生|醫生|护士|護士|老师|老師|律师|律師|"
+               r"工程师|工程師|设计师|設計師|会计|會計|程序员|程序員|司机|司機|厨师|廚師|"
+               r"销售|銷售|模特|演员|演員|主播|军人|軍人|警察|消防员|消防員|飞行员|飛行員|"
+               r"空姐|导游|導遊|摄影师|攝影師|自由职业者|自由職業者|学生|學生|老板|老闆)"),
+    # 名字·二期：我叫X / 叫我X（对方以后就这么称呼你——最不该忘的事实）
+    re.compile(r"我叫\s*(?!你|妳|您|他|她|它|人|了|不|的|过|過|醒|上|来|來|出|去|住|停|好|错|錯|外卖|外賣|车|車)"
+               r"[\u4e00-\u9fffA-Za-z·]{1,8}"),
+    re.compile(r"(?:(?:可以|就|直接)\s*叫我\s*[\u4e00-\u9fffA-Za-z·]{1,8}"
+               r"|叫我\s*[\u4e00-\u9fffA-Za-z·]{1,8}\s*(?:就行|就好|就可以|吧))"),
+    # 生日·二期：我(的)生日(是)X月X(日|号) / 我X月X号生日
+    re.compile(r"我(?:的)?生日(?:是|在)?\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})月"
+               r"\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*(?:日|号|號)?"),
+    re.compile(r"我\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})月\s*(?:\d{1,2}|[一二三四五六七八九十]{1,3})"
+               r"\s*(?:日|号|號)\s*(?:的)?生日"),
+    # 星座 / 属相·二期（聊天里高频、稳定）
+    re.compile(r"我是\s*(?:白羊|金牛|双子|雙子|巨蟹|狮子|獅子|处女|處女|天秤|天蝎|天蠍|射手|"
+               r"摩羯|水瓶|双鱼|雙魚)座"),
+    re.compile(r"我(?:是)?属\s*(?:鼠|牛|虎|兔|龙|龍|蛇|马|馬|羊|猴|鸡|雞|狗|猪|豬)的?"),
     # 同住/未来邀约（实录：邀请未来同住）
     re.compile(r"(?:以后|以後|将来|將來|等|到时候|到時候|有机会|有機會|下次)[^，。！？!?\n]{0,14}"
                r"(?:一起住|一起生活|搬(?:过|過)?来(?:和|跟)我住|住到一起|住在一起|同居|"
@@ -95,6 +118,21 @@ _EN_FACT_PATTERNS = [
     re.compile(r"\bI(?:'m|’m| am)\s+\d{2}(?:\s+years?\s+old)?\b"),
     re.compile(r"\bI(?:'m|’m| am)\s+(?:single|divorced|married|widowed|separated)\b", re.I),
     re.compile(r"\bI\s+work\s+as\s+(?:a|an)\s+[a-z][\w -]{2,24}", re.I),
+    # 二期：I work at/for X · I'm a nurse/teacher… · my name is X / call me X · my birthday is …
+    re.compile(r"\bI\s+work\s+(?:at|for)\s+(?:a|an|the)?\s*[A-Za-z][\w&'. -]{2,30}", re.I),
+    re.compile(r"\bI\s+work\s+in\s+[A-Z][\w&'. -]{2,30}"),          # 大写开头（机构/行业名），排除 in the morning
+    re.compile(r"\bI(?:'m|’m| am)\s+(?:a|an)\s+(?:nurse|doctor|teacher|lawyer|engineer|designer|"
+               r"accountant|developer|programmer|driver|chef|cook|model|actor|actress|streamer|"
+               r"soldier|police\s+officer|firefighter|pilot|flight\s+attendant|photographer|"
+               r"freelancer|student|realtor|dentist|therapist|consultant|manager|"
+               r"business\s+owner|small\s+business\s+owner)\b", re.I),
+    re.compile(r"\b[Mm]y\s+name(?:'s|’s|\s+is)\s+[A-Z][\w'-]{1,20}"),
+    re.compile(r"\b(?:you\s+can\s+|just\s+)?call\s+me\s+[A-Z][\w'-]{1,20}"),
+    re.compile(r"\bmy\s+birthday(?:'s|’s|\s+is)\s+(?:on\s+)?(?:the\s+)?"
+               r"(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?)?"
+               r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b", re.I),
+    re.compile(r"\bI(?:'m|’m| am)\s+(?:a|an)\s+(?:aries|taurus|gemini|cancer|leo|virgo|libra|"
+               r"scorpio|sagittarius|capricorn|aquarius|pisces)\b", re.I),
     re.compile(r"\b(?:move\s+in\s+with\s+me|come\s+live\s+with\s+me|live\s+together|"
                r"live\s+with\s+me|you\s+(?:could|can|should)\s+move\s+in|"
                r"we\s+(?:could|can|should|will|'ll)\s+live\s+together)\b", re.I),
@@ -197,7 +235,7 @@ def human_said_note(user_context: Dict[str, Any]) -> str:
         if not isinstance(log, list) or not log:
             return ""
         lines: List[str] = []
-        for e in log[-_LOG_CAP:]:
+        for e in log[-_NOTE_MAX_LINES:]:
             f = str((e or {}).get("fact") or "").strip()
             if not f:
                 continue
@@ -240,6 +278,7 @@ def resolve_skill_manager(app_state: Any) -> Any:
 
 _IMAGE_KINDS = frozenset({"image", "photo", "picture"})
 _VOICE_KINDS = frozenset({"voice", "audio"})
+_VIDEO_KINDS = frozenset({"video", "video_note", "animation", "gif"})
 _MEDIA_LOG_KEY = "_media_sent_log"
 _MEDIA_LOG_CAP = 5          # 与 SkillManager._MEDIA_SENT_LOG_MAX 同值（无 sm 方法时的兜底）
 _MEDIA_NOTE_MAX = 3
@@ -252,7 +291,7 @@ def _media_label(media_type: str) -> str:
         return "[语音]"
     if mt in _IMAGE_KINDS:
         return "[图片]"
-    if mt in ("video", "video_note", "animation", "gif"):
+    if mt in _VIDEO_KINDS:
         return "[视频]"
     if mt == "sticker":
         return "[贴纸]"
@@ -322,7 +361,7 @@ def human_media_note(user_context: Dict[str, Any]) -> str:
         if not lines:
             return ""
         return (
-            "【你（由坐席以你的身份）给 TA 发过的图片（事实）】\n"
+            "【你（由坐席以你的身份）给 TA 发过的图片/视频（事实）】\n"
             + "\n".join(lines[-_MEDIA_NOTE_MAX:]) + "\n"
             "对方提到「你发的照片/那张图」时按此回应，不要否认发过；只能说『画面』里"
             "标注有的东西，没标注就含糊带过，绝不编造画面细节。"
@@ -442,8 +481,8 @@ def on_human_outbound(
                 push(ctx, shown)
         except Exception:
             pass
-        # 1b) 图片出站 → 已发媒体账本（A 线同账本；desc 可能由 attach_human_media_desc 晚到）
-        if mt in _IMAGE_KINDS:
+        # 1b) 图片 / 视频出站 → 已发媒体账本（A 线同账本；desc 可能由 attach_human_media_desc 晚到）
+        if mt in _IMAGE_KINDS or mt in _VIDEO_KINDS:
             try:
                 _record_media_sent_human(
                     sm, ctx, note=shown, desc=str(media_desc or ""),
@@ -523,14 +562,17 @@ async def describe_and_attach_outbound_media(
     conversation_id: str, media_type: str, media_ref: str, local_path: str = "",
     config: Optional[Dict[str, Any]] = None, retry_delay_sec: float = 1.5,
 ) -> str:
-    """发送成功后台任务：VLM 识别我方发出的图 → ①回写出站行 text（``[图片内容] …``，
-    历史窗口内 AI 直接看见）②回填 ``_media_sent_log.desc``（出窗后靠记忆）。
+    """发送成功后台任务：识别我方发出的图 / 视频 → ①回写出站行 text（``[图片内容] …`` /
+    ``[视频内容] …``，历史窗口内 AI 直接看见）②回填 ``_media_sent_log.desc``（出窗后靠记忆）。
 
     绝不抛、绝不阻断响应（路由用 BackgroundTasks 调度）。返回描述（空＝没识别出）。
-    出站行由编排器 ``emit_incoming`` 同步落库，正常早于 VLM 返回；万一晚到重试一次。
+    出站行由编排器 ``emit_incoming`` 同步落库，正常早于识别返回；万一晚到重试一次。
     """
     try:
-        from src.inbox.media_enrich import describe_outbound_media
+        from src.inbox.media_enrich import describe_outbound_media, outbound_desc_marker
+        marker = outbound_desc_marker(media_type)
+        if not marker:
+            return ""
         cfg = config
         if cfg is None:
             try:
@@ -549,21 +591,22 @@ async def describe_and_attach_outbound_media(
             ok = False
             try:
                 ok = bool(store.append_outbound_media_desc(
-                    conversation_id, media_ref=media_ref, desc=desc))
+                    conversation_id, media_ref=media_ref, desc=desc, marker=marker))
                 if not ok and retry_delay_sec > 0:
                     import asyncio
                     await asyncio.sleep(retry_delay_sec)
                     ok = bool(store.append_outbound_media_desc(
-                        conversation_id, media_ref=media_ref, desc=desc))
+                        conversation_id, media_ref=media_ref, desc=desc, marker=marker))
             except Exception:
                 logger.debug("[human_memory] 出站描述回写失败", exc_info=True)
             if not ok:
-                logger.info("[human_memory] 出站图描述未落到消息行（行缺失/已含描述）conv=%s ref=%s",
+                logger.info("[human_memory] 出站媒体描述未落到消息行（行缺失/已含描述）conv=%s ref=%s",
                             conversation_id, str(media_ref)[-40:])
         attach_human_media_desc(
             resolve_skill_manager(app_state), platform, account_id, chat_key,
             media_ref=media_ref, desc=desc, conversation_id=conversation_id)
-        logger.info("[human_memory] 出站图已识别 conv=%s desc=%r", conversation_id, desc[:60])
+        logger.info("[human_memory] 出站媒体已识别 conv=%s kind=%s desc=%r",
+                    conversation_id, media_type, desc[:60])
         return desc
     except Exception:
         logger.debug("[human_memory] describe_and_attach_outbound_media 异常（已忽略）",

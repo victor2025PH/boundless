@@ -314,6 +314,75 @@ async def test_describe_outbound_media_skips_non_image_and_disabled(tmp_path):
         media_type="image", media_ref=str(p), local_path=str(p), config={}) == ""
 
 
+@pytest.mark.asyncio
+async def test_describe_outbound_media_video_uses_video_chain_and_gate(tmp_path, monkeypatch):
+    """二期：出站视频复用入站视频识别层（抽帧 + 音轨）；可用配置关掉。"""
+    from src.inbox import media_enrich
+    from src.inbox.media_enrich import describe_outbound_media, outbound_desc_marker
+    calls = []
+
+    async def _fake_video(path, cfg, vtr):
+        calls.append(path)
+        return "一段海边散步的视频，\n背景有海浪声"
+
+    monkeypatch.setattr(media_enrich, "_understand_video", _fake_video)
+    monkeypatch.setattr(media_enrich, "lazy_voice_transcriber", lambda cfg: None)
+    p = tmp_path / "a.mp4"
+    p.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 16)
+    desc = await describe_outbound_media(
+        media_type="video", media_ref=str(p), local_path=str(p), config={"vision": {"enabled": True}})
+    assert desc.startswith("一段海边散步的视频") and "\n" not in desc and calls == [str(p)]
+    # 开关关 → 不识别
+    assert await describe_outbound_media(
+        media_type="video", media_ref=str(p), local_path=str(p),
+        config={"inbox": {"handoff_memory": {"outbound_video_desc": False}}}) == ""
+    assert len(calls) == 1
+    assert outbound_desc_marker("video") == "[视频内容]" and outbound_desc_marker("image") == "[图片内容]"
+    assert outbound_desc_marker("voice") == "" and outbound_desc_marker("sticker") == ""
+
+
+@pytest.mark.asyncio
+async def test_describe_and_attach_outbound_video_writes_video_marker(tmp_path, monkeypatch):
+    from src.inbox import media_enrich
+    from src.inbox.models import InboxMessage
+    from src.inbox.store import InboxStore
+
+    async def _fake_desc(**kw):
+        assert kw["media_type"] == "video"
+        return "海边散步"
+
+    monkeypatch.setattr(media_enrich, "describe_outbound_media", _fake_desc)
+    store = InboxStore(tmp_path / "inbox.db")
+    sm = _FakeSM(tmp_path / "bot.db")
+    cid, ref = "whatsapp:17345893506:13308422244", "/static/x/out.mp4"
+    store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="v1", direction="out",
+                                      text="看看这个", media_type="video", media_ref=ref, ts=1.0))
+    hom.on_human_outbound("whatsapp", "17345893506", "13308422244", "看看这个", media_type="video",
+                          media_ref=ref, skill_manager=sm)
+    ctx = sm._get_user_context("13308422244", account_id="17345893506")
+    assert ctx["last_reply"] == "[视频] 看看这个"
+    assert ctx["_media_sent_log"][-1]["author"] == "human" and ctx["_media_sent_log"][-1]["note"] == "[视频] 看看这个"
+    st = SimpleNamespace(skill_manager=sm, inbox_store=store)
+    desc = await hom.describe_and_attach_outbound_media(
+        st, "whatsapp", "17345893506", "13308422244", conversation_id=cid,
+        media_type="video", media_ref=ref, local_path="/tmp/out.mp4", retry_delay_sec=0)
+    assert desc == "海边散步"
+    row = store.list_recent_messages(cid, limit=5)[-1]
+    assert row["text"] == "看看这个\n[视频内容] 海边散步"
+    assert ctx["_media_sent_log"][-1]["desc"] == "海边散步"
+    assert "画面：海边散步" in hom.human_media_note(ctx)
+    # 历史标签：出站视频带内容
+    from src.inbox.persona_reply import normalize_history
+    hist, _ = normalize_history([dict(row)])
+    assert hist[0]["content"] == "[我方发出的视频] 看看这个\n[视频内容] 海边散步"
+    # 语音：无描述标记 → 不回写
+    assert await hom.describe_and_attach_outbound_media(
+        st, "whatsapp", "17345893506", "13308422244", conversation_id=cid,
+        media_type="voice", media_ref="/v.ogg", retry_delay_sec=0) == ""
+    store.close()
+    sm._context_store.close()
+
+
 def test_default_account_id_resolved_from_conversation_id(tmp_path):
     """记忆键必须与 B 线 generate_inbox_draft 同桶（account:chat_key）。"""
     sm = _FakeSM(tmp_path / "bot.db")
@@ -358,10 +427,58 @@ def test_record_human_outbound_resolves_skill_manager_from_app_state(tmp_path):
 
 def test_record_human_said_caps_and_dedups():
     ctx = {}
-    for i in range(12):
+    for i in range(hom._LOG_CAP + 4):
         hom.record_human_said(ctx, [f"我住在城市{i}"], now=float(i))
     assert len(ctx[hom.LOG_KEY]) == hom._LOG_CAP
-    assert hom.record_human_said(ctx, ["我住在城市11", "我住在 城市11"]) == 0
+    assert ctx[hom.LOG_KEY][0]["fact"] == "我住在城市4"                 # 挤掉最老的
+    last = f"我住在城市{hom._LOG_CAP + 3}"
+    assert hom.record_human_said(ctx, [last, last.replace("城市", " 城市")]) == 0
+    # 注入块只列最近 _NOTE_MAX_LINES 条
+    note = hom.human_said_note(ctx)
+    assert note.count("\n- ") == hom._NOTE_MAX_LINES and last in note and "我住在城市4" not in note
+
+
+@pytest.mark.parametrize("text", [
+    "我是做外贸的",
+    "我在一家医院上班",
+    "我开了一家咖啡店",
+    "我是一名护士",
+    "我叫林晓",
+    "你可以叫我小雨",
+    "叫我阿杰就行",
+    "我生日是3月8号",
+    "我的生日在十月十二日",
+    "我是天蝎座",
+    "我属马的",
+    "I work at a small clinic downtown",
+    "I work for Amazon",
+    "I work in Marketing",
+    "I'm a nurse",
+    "My name is Olivia",
+    "You can call me Liv",
+    "My birthday is on the 8th of March",
+    "I'm a Scorpio",
+])
+def test_extract_phase2_identity_job_birthday(text):
+    facts = hom.extract_self_facts(text)
+    assert facts, text
+    assert all(f in text for f in facts)
+
+
+@pytest.mark.parametrize("text", [
+    "你叫我干嘛",                       # 不是取名
+    "我叫你起床你不起",                 # 我叫你…
+    "我叫了外卖",
+    "我是做什么的你猜",
+    "我开了个玩笑",
+    "我在忙上班的事",                    # 「在」后接的不是单位
+    "I work in the morning",
+    "call me later",
+    "My name is not important",         # 否定
+    "Is your name Olivia?",
+])
+def test_extract_phase2_rejects_lookalikes(text):
+    assert hom.extract_self_facts(text) == [], text
 
 
 # ── 接线：注入口挂在 skill_manager._inject_self_state（A/B 两线同经此处） ────

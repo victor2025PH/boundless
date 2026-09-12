@@ -40,6 +40,7 @@ from src.web.routes.unified_inbox_aggregate import (
     _enrich_outbound_originals,
     _ingest_thread_best_effort,
     _is_protocol_account,
+    _mark_agent_sent,
     _overlay_store_identity,
     _read_from_store_enabled,
     _registry_active_map,
@@ -1554,6 +1555,11 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             logger.debug("入站自动翻译失败（已忽略）", exc_info=True)
 
         _enrich_outbound_originals(request, cid, out_msgs)
+        # 接力记忆二期：坐席人工发出的出站行标 sent_by=agent（气泡「人工」小标）
+        try:
+            _mark_agent_sent(request, cid, out_msgs)
+        except Exception:
+            logger.debug("[thread] 人工发送标记失败（忽略）", exc_info=True)
 
         # F4：live 模式下 target 来自实时聚合（身份常为空），用 store 已持久身份「仅补空」富集，
         # 使 d.chat 携带最新昵称/头像 → 与前端 _mergePeerIdentity（F3）在 live 模式下也能合成。

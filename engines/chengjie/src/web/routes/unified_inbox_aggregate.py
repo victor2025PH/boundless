@@ -652,3 +652,58 @@ def _enrich_outbound_originals(
                 "provider": row.get("provider") or "",
                 "error": row.get("error") or "",
             }
+
+
+#: 出站行与坐席发送打点的时间就近匹配窗口（秒）。打点在发送路由成功那一刻，出站行 ts 是
+#: 平台回执/镜像时刻，通常差零到几秒；边车镜像慢时可到十几秒。
+AGENT_SENT_MATCH_SEC = 30.0
+
+
+def _mark_agent_sent(
+    request: Request, conversation_id: str, msgs: List[Dict[str, Any]],
+    *, window_sec: float = AGENT_SENT_MATCH_SEC,
+) -> int:
+    """接力记忆二期（2026-09-12）：给**坐席人工发出**的出站行挂 ``sent_by="agent"``
+    （+ ``agent_name``），前端在气泡时间戳旁标「人工」——坐席一眼分清「这条是我发的还是
+    AI 发的」，切回全自动时也看得出 AI 将接过哪几条。
+
+    messages 表没有发送方字段；``agent_sends`` 打点（发送路由成功即记）与出站行按时间
+    就近一对一匹配（每个打点至多标一行、先到先配、窗口 ``window_sec``）。纯装饰、
+    best-effort、原地修改；打点缺失（RPA 手机端发出 / 老数据）就不标。返回标记条数。
+    """
+    ibx = _inbox_store(request)
+    if ibx is None or not conversation_id or not msgs:
+        return 0
+    outs = [m for m in msgs if isinstance(m, dict) and str(m.get("direction") or "") == "out"
+            and float(m.get("ts") or 0) > 0]
+    if not outs:
+        return 0
+    try:
+        lo = min(float(m.get("ts") or 0) for m in outs) - window_sec
+        hi = max(float(m.get("ts") or 0) for m in outs) + window_sec
+        sends = ibx.list_agent_sends(conversation_id, since_ts=lo, until_ts=hi)
+    except Exception:
+        logger.debug("读取 agent_sends 失败（忽略）", exc_info=True)
+        return 0
+    if not sends:
+        return 0
+    outs.sort(key=lambda m: float(m.get("ts") or 0))
+    used = set()
+    marked = 0
+    for s in sends:                       # 时间升序；每个打点配最近的一条未标出站行
+        st = float(s.get("ts") or 0)
+        best, best_d = None, None
+        for i, m in enumerate(outs):
+            if i in used:
+                continue
+            d = abs(float(m.get("ts") or 0) - st)
+            if d <= window_sec and (best_d is None or d < best_d):
+                best, best_d = i, d
+        if best is None:
+            continue
+        used.add(best)
+        outs[best]["sent_by"] = "agent"
+        if s.get("agent_name"):
+            outs[best]["agent_name"] = str(s["agent_name"])[:40]
+        marked += 1
+    return marked

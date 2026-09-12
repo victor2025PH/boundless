@@ -394,7 +394,7 @@
 #wf-mgr-x:hover{border-color:var(--accent);color:var(--accent);}
 #wf-mgr-frame{flex:1;border:0;width:100%;background:var(--bg-elev);}
 </style>
-<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912q21b">
+<link rel="stylesheet" href="/static/workspace/unified-inbox.css?v=20260912hf3">
 <link rel="stylesheet" href="/static/workspace/appearance.css?v=20260804a">
 <!-- 表情包面板 + 文件卡片/媒体队列样式（2026-08-17 主线；组件逻辑在 sticker-panel.js，
      文末引入——flag 关闭时组件不注入任何 UI，模板零回归面） -->
@@ -13165,6 +13165,32 @@ function _toast(msg, color){
    「危险且可逆」的操作。
    单实例（新的挤掉旧的，连续归档多条不叠成一墙）；撤销回调抛错只记 console，
    不影响自动消失；窗口 6s（比普通 toast 2.8s 长——人得先反应过来「刚才那条没了」）。 */
+/* 接力记忆二期：切回全自动后的「AI 记住了什么」预览条。与 _undoToast 同一套路（自带元素、
+   不改 _toast）：一行提示 + 「看 AI 记住了什么」按钮；点开在条内展开接力摘要原文（服务端
+   record_handoff 返回的 note，就是将注入 prompt 的那段），坐席能当场核对 AI 将带着什么接手。
+   收起态 6s 自动消失；展开后不自动消失，点 × 或再点按钮收起。单实例。 */
+var _hfToastEl=null, _hfToastTimer=null;
+function _handoffToast(msg, note, condensing){
+  try{ if(_hfToastEl && _hfToastEl.parentNode) _hfToastEl.remove(); }catch(_){}
+  if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; }
+  const el=document.createElement('div'); el.className='hf-toast';
+  const row=document.createElement('div'); row.className='hf-row';
+  const txt=document.createElement('span'); txt.textContent=msg; row.appendChild(txt);
+  const btn=document.createElement('button'); btn.type='button'; btn.className='hf-btn'; btn.textContent=window.T('inbox.mode.handoff_view');
+  const x=document.createElement('button'); x.type='button'; x.className='hf-btn'; x.textContent='×'; x.setAttribute('aria-label','close');
+  row.appendChild(btn); row.appendChild(x); el.appendChild(row);
+  const title=document.createElement('div'); title.className='hf-title'; title.textContent=window.T('inbox.mode.handoff_title')+(condensing?(' · '+window.T('inbox.mode.handoff_condensing')):'');
+  const pre=document.createElement('div'); pre.className='hf-note'; pre.textContent=String(note||'');
+  el.appendChild(title); el.appendChild(pre);
+  function _close(){ if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; } el.style.opacity='0'; setTimeout(()=>{ try{ el.remove(); }catch(_){} if(_hfToastEl===el) _hfToastEl=null; },300); }
+  function _arm(){ if(_hfToastTimer) clearTimeout(_hfToastTimer); _hfToastTimer=setTimeout(_close, 6000); }
+  btn.onclick=function(){ const open=!el.classList.contains('open'); el.classList.toggle('open', open); if(open){ if(_hfToastTimer){ clearTimeout(_hfToastTimer); _hfToastTimer=null; } try{ _uiBeacon('handoff_note_view'); }catch(_){} } else _arm(); };
+  x.onclick=_close;
+  document.body.appendChild(el); _hfToastEl=el;
+  setTimeout(()=>{ el.style.opacity='1'; }, 10);
+  _arm();
+}
+
 var _undoToastEl=null, _undoToastTimer=null;
 function _undoToast(msg, onUndo, ms){
   try{ if(_undoToastEl && _undoToastEl.parentNode) _undoToastEl.remove(); }catch(_){}
@@ -14633,6 +14659,9 @@ function renderMessages(c, msgs, opts={}){
     // Q-24 C：手机端 Messenger 发出的消息回抄（sender_id=external）→ 小标「手机发出」
     const _extChip=(isOut&&String(m.sender_id||'')==='external'&&!m._optimistic&&!m._failed)
       ?`<span class="ms-ext-chip" title="${esc(window.T('inbox.ms.external_out_t'))}">${esc(window.T('inbox.ms.external_out'))}</span>`:'';
+    // 接力记忆二期：坐席手动发出的出站行（服务端按 agent_sends 打点就近匹配 sent_by=agent）→ 小标「人工」
+    const _agentChip=(isOut&&String(m.sent_by||'')==='agent'&&!m._optimistic&&!m._failed&&!_extChip)
+      ?`<span class="ms-ext-chip agent-chip" title="${esc(m.agent_name?window.Tf('inbox.msg.agent_sent_by_t',{name:m.agent_name}):window.T('inbox.msg.agent_sent_t'))}">${esc(window.T('inbox.msg.agent_sent'))}</span>`:'';
     const _failTail=_msTri
       ?`<span class="ms-fail-tri" style="color:var(--th-ink-red5,#b91c1c);margin-left:4px;" title="${esc(String(m._msFail.sidecar_detail||''))}">${esc(_msTri.text)}</span>${m._retryBody?`<button class="tiny-btn" style="margin-left:6px;padding:0 6px;height:18px;line-height:16px;" onclick="resendFailed('${esc(m.message_id||'')}')">${window.T('inbox.ms.fail.retry_btn')}</button>`:''}`
       :m._failed
@@ -14642,7 +14671,7 @@ function renderMessages(c, msgs, opts={}){
         :(_storeResent?`<span style="color:var(--tk-text-muted);margin-left:4px;">${window.T('inbox.msg.resent')}</span>`:''));
     pushUnit('m_'+_ukey,`<div class="msg-row ${isOut?'out':'in'}" id="msg-${esc(m.message_id||m._optimistic||'')}" data-mid="${esc(m.message_id||'')}" data-pmid="${esc(_pmid)}" data-ts="${esc(m.ts||'')}">
       <div class="msg-bubble${_revoked?' msg-bubble-revoked':''}${(!_revoked&&_isChannel&&!isOut)?' msg-channel-card':''}"${optClass}${failClass}>${_bubbleInner}</div>${_reactOut}
-      <div class="msg-ts">${ts}${_extChip}${_editedMark}${_tick}${_failTail}</div>
+      <div class="msg-ts">${ts}${_extChip}${_agentChip}${_editedMark}${_tick}${_failTail}</div>
       ${_revoked?'':tools}${waActions}
     </div>`);
   });
@@ -16976,11 +17005,15 @@ async function setMode(mode, opts){
     }
     if(d.agent_yield_resumed&&d.agent_yield_resumed.had_yield){ tip+=' · '+window.T('inbox.ay.resumed'); try{ _aySet(null); }catch(_){} }   // Q-18 #292（ay-）：切全自动 = 明示接回
     // 接力记忆 P0-3：manual → AI 时服务端归纳了接管窗口 → 告诉坐席 AI 接过了多少条（含图/语音）
+    var _hfNote='';
     if(d.handoff&&d.handoff.ok){
       var _hn=(d.handoff.out_n|0)+(d.handoff.in_n|0);
       if(_hn>0){ tip+=' · '+window.Tf('inbox.mode.handoff_ok',{n:_hn})+((d.handoff.media_n|0)>0?window.Tf('inbox.mode.handoff_ok_media',{m:d.handoff.media_n|0}):''); }
+      _hfNote=String(d.handoff.note||'');
     }
-    try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){}
+    // 二期：有接力摘要 → 带「看 AI 记住了什么」按钮的预览条（展开即见原文，坐席能核对 AI 将带着什么接手）
+    if(_hfNote){ try{ _handoffToast(tip, _hfNote, !!d.handoff.condense_scheduled); }catch(_){ try{ _toast(tip, '#2563eb'); }catch(__){} } }
+    else { try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){} }
     // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」
     if((mode==='review'||mode==='multi_choice') && typeof toggleAiDraft==='function'){
       try{

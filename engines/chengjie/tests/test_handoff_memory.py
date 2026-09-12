@@ -73,7 +73,139 @@ def test_build_handoff_note_empty_and_caps():
     assert b["since"] >= t + 100 - hf.MAX_WINDOW_SEC
     assert b["note"].count("\n- ") == hf.MAX_OUT_LINES
     assert len(b["note"]) <= hf.NOTE_MAX_CHARS
-    assert "第29句话" in b["note"] and "第0句话" not in b["note"]         # 留最近的
+    assert "- 第29句话" in b["note"] and "- 第0句话" not in b["note"]     # 逐字区留最近的
+    # 二期：被挤出的前半段不再静默丢——一行确定性提要（条数 + 首尾原话片段）
+    assert f"还有 {30 - hf.MAX_OUT_LINES} 条未逐字列出" in b["note"]
+    assert "第0句话" in b["note"] and f"第{30 - hf.MAX_OUT_LINES - 1}句话" in b["note"]
+    assert len(b["overflow"]) == 30 - hf.MAX_OUT_LINES
+    assert all(m["role"] == "assistant" for m in b["overflow"])
+    assert b["overflow_line"] and b["overflow_line"] in b["note"]
+
+
+def test_build_handoff_note_overflow_mixed_roles_chronological():
+    t = 1_757_000_000.0
+    rows = []
+    for i in range(12):
+        rows.append({"direction": "out", "text": f"我方{i}", "ts": t + i * 2})
+        rows.append({"direction": "in", "text": f"对方{i}", "ts": t + i * 2 + 1})
+    b = hf.build_handoff_note(rows, since_ts=t, now=t + 100)
+    # out 挤出 12-8=4 条、in 挤出 12-6=6 条；时序保持
+    ov = b["overflow"]
+    assert len(ov) == 10
+    assert [m["content"] for m in ov if m["role"] == "assistant"] == ["我方0", "我方1", "我方2", "我方3"]
+    assert [m["content"] for m in ov if m["role"] == "user"] == [f"对方{i}" for i in range(6)]
+    assert ov[0]["content"] == "我方0" and ov[1]["content"] == "对方0"
+    assert "还有 10 条未逐字列出" in b["note"]
+    assert "你提到：我方0；我方3" in b["note"] and "对方提到：对方0；对方5" in b["note"]
+    # 不溢出 → 无提要行、无 overflow
+    b2 = hf.build_handoff_note(rows[:6], since_ts=t, now=t + 100)
+    assert b2["overflow"] == [] and b2["overflow_line"] == "" and "未逐字列出" not in b2["note"]
+
+
+class _FakeAI:
+    def __init__(self, reply="", raise_exc=False):
+        self.reply, self.raise_exc, self.calls = reply, raise_exc, []
+
+    async def summarize_conversation(self, history, *, max_chars=200, timeout_sec=14.0):
+        self.calls.append((list(history), max_chars, timeout_sec))
+        if self.raise_exc:
+            raise RuntimeError("llm down")
+        return self.reply
+
+
+class _FakeCS:
+    def __init__(self):
+        self.flushed = []
+
+    def mark_dirty(self, key):
+        pass
+
+    def flush(self, key):
+        self.flushed.append(key)
+
+
+def test_condense_overflow_replaces_digest_line_only_when_note_current():
+    import asyncio
+    ov = [{"role": "assistant", "content": "我方0"}, {"role": "user", "content": "对方0"}]
+    line = "更早（本段人工接管前半段）还有 2 条未逐字列出，其中你提到：我方0。"
+    note = "【头】\n" + line + "\n你说过/发过：\n- 我方9"
+    sm = SimpleNamespace(ai_client=_FakeAI("坐席先聊了工作与周末计划"))
+    cs = _FakeCS()
+    ctx = {hf.NOTE_KEY: {"ts": 5.0, "note": note, "used": 0}, "_context_store_key": "k1"}
+    s = asyncio.run(hf.condense_overflow(sm, ctx, cs, note_ts=5.0, overflow=ov, overflow_line=line))
+    assert s == "坐席先聊了工作与周末计划"
+    rec = ctx[hf.NOTE_KEY]
+    assert line not in rec["note"] and "更早（本段人工接管前半段）要点：坐席先聊了工作与周末计划" in rec["note"]
+    assert rec["condensed"] is True and cs.flushed == ["k1"] and "- 我方9" in rec["note"]
+    assert sm.ai_client.calls[0][1] == hf.OVERFLOW_SUMMARY_CHARS
+    # note 已被新一轮接力换掉（ts 不符）→ 不动
+    ctx2 = {hf.NOTE_KEY: {"ts": 6.0, "note": note, "used": 0}}
+    assert asyncio.run(hf.condense_overflow(sm, ctx2, cs, note_ts=5.0, overflow=ov, overflow_line=line)) == ""
+    assert ctx2[hf.NOTE_KEY]["note"] == note
+    # LLM 空返 / 抛异常 → 保留确定性提要，绝不抛
+    for ai in (_FakeAI(""), _FakeAI("x", raise_exc=True)):
+        ctx3 = {hf.NOTE_KEY: {"ts": 5.0, "note": note, "used": 0}}
+        assert asyncio.run(hf.condense_overflow(
+            SimpleNamespace(ai_client=ai), ctx3, cs, note_ts=5.0, overflow=ov, overflow_line=line)) == ""
+        assert ctx3[hf.NOTE_KEY]["note"] == note
+    # 无 ai_client → 空
+    assert asyncio.run(hf.condense_overflow(SimpleNamespace(), ctx, cs, note_ts=5.0,
+                                            overflow=ov, overflow_line=line)) == ""
+
+
+def test_record_handoff_long_window_schedules_condense(tmp_path):
+    import asyncio
+    from src.inbox.models import InboxMessage
+    from src.inbox.store import InboxStore
+
+    store = InboxStore(tmp_path / "inbox.db")
+    sm = _FakeSM(tmp_path / "bot.db")
+    sm.ai_client = _FakeAI("前半段：坐席聊了女儿上学和周末去海边的计划")
+    st = SimpleNamespace(skill_manager=sm, inbox_store=store)
+    cid = "whatsapp:17345893506:13308422244"
+    t = 1_757_000_000.0
+    for i in range(20):
+        store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id=f"o{i}", direction="out",
+                                          text=f"人工第{i}句", ts=t + i * 2))
+        store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id=f"i{i}", direction="in",
+                                          text=f"客户第{i}句", ts=t + i * 2 + 1))
+
+    async def _drive():
+        res = hf.record_handoff(st, store, cid, prev_meta={"mode": "manual", "updated_at": t},
+                                new_mode="auto_ai", by="mode_select", now=t + 100)
+        # 后台 condense 任务已在本 loop 上排队
+        pending = [x for x in asyncio.all_tasks() if x is not asyncio.current_task()]
+        await asyncio.gather(*pending)
+        return res
+
+    res = asyncio.run(_drive())
+    assert res["ok"] and res["overflow_n"] == (20 - hf.MAX_OUT_LINES) + (20 - hf.MAX_IN_LINES)
+    assert res["condense_scheduled"] is True and res["note"]
+    ctx = sm._get_user_context("13308422244", account_id="17345893506")
+    rec = ctx[hf.NOTE_KEY]
+    assert rec.get("condensed") is True
+    assert "要点：前半段：坐席聊了女儿上学和周末去海边的计划" in rec["note"]
+    assert "未逐字列出" not in rec["note"]
+    assert "- 人工第19句" in rec["note"] and "- 客户第19句" in rec["note"]
+    # 送 LLM 的是被挤出的前半段（含双方），不是全部
+    sent = sm.ai_client.calls[0][0]
+    assert len(sent) == res["overflow_n"]
+    assert sent[0] == {"role": "assistant", "content": "人工第0句"}
+    # 短窗口 → 不调度
+    store2 = InboxStore(tmp_path / "inbox2.db")
+    sm2 = _FakeSM(tmp_path / "bot2.db")
+    sm2.ai_client = _FakeAI("不该被调")
+    store2.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="x", direction="out",
+                                       text="短", ts=t + 1))
+    r2 = hf.record_handoff(SimpleNamespace(skill_manager=sm2), store2, cid,
+                           prev_meta={"mode": "manual", "updated_at": t}, new_mode="auto_ai", now=t + 5)
+    assert r2["ok"] and r2["overflow_n"] == 0 and "condense_scheduled" not in r2
+    assert sm2.ai_client.calls == []
+    # 配置关 → 不调度
+    sm.config = SimpleNamespace(config={"inbox": {"handoff_memory": {"condense_with_llm": False}}})
+    assert hf._schedule_condense(sm, {}, None, note_ts=1.0, overflow=[{"role": "user", "content": "a"}],
+                                 overflow_line="L") is False
+    sm._context_store.close(); sm2._context_store.close(); store.close(); store2.close()
 
 
 def test_handoff_note_consumption_uses_and_ttl():

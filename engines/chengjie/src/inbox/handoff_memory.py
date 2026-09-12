@@ -119,6 +119,7 @@ def build_handoff_note(
         since = ts_now - MAX_WINDOW_SEC
     out_lines: List[str] = []
     in_lines: List[str] = []
+    seq: List[tuple] = []            # (direction, line) 时序，用于切出被挤出的前半段
     out_n = in_n = media_n = 0
     first_ts = last_ts = 0.0
     for r in rows or []:
@@ -144,8 +145,24 @@ def build_handoff_note(
         else:
             in_n += 1
             in_lines.append(line)
+        seq.append((d, line))
+    # 被挤出逐字区的前半段（按各自方向的截断位切）→ LLM 压缩用的 role/content 序列
+    overflow_msgs: List[Dict[str, str]] = []
+    _o_cut = max(0, len(out_lines) - MAX_OUT_LINES)
+    _i_cut = max(0, len(in_lines) - MAX_IN_LINES)
+    _oi = _ii = 0
+    for d, line in seq:
+        if d == "out":
+            if _oi < _o_cut:
+                overflow_msgs.append({"role": "assistant", "content": line})
+            _oi += 1
+        else:
+            if _ii < _i_cut:
+                overflow_msgs.append({"role": "user", "content": line})
+            _ii += 1
     if not out_lines and not in_lines:
-        return {"note": "", "out_n": 0, "in_n": 0, "media_n": 0, "since": since, "until": ts_now}
+        return {"note": "", "out_n": 0, "in_n": 0, "media_n": 0, "since": since, "until": ts_now,
+                "overflow": [], "overflow_line": ""}
     span = ""
     if first_ts:
         span = f"{_fmt_clock(first_ts)}–{time.strftime('%H:%M', time.localtime(last_ts or ts_now))}"
@@ -154,7 +171,14 @@ def build_handoff_note(
         "以你的身份发出的，是你们之间的既定事实：接着聊，不要重新打招呼、不要再问已答过的、"
         "不要否认或忘记这些】"
     )
+    # 长接管窗口（二期）：尾部逐字保留，被挤出的前半段不再静默丢弃——先给一行确定性
+    # 提要（首尾各一句原话，诚实标注条数），record_handoff 再调 LLM 把这段压成要点版替换。
+    out_over = out_lines[:-MAX_OUT_LINES] if len(out_lines) > MAX_OUT_LINES else []
+    in_over = in_lines[:-MAX_IN_LINES] if len(in_lines) > MAX_IN_LINES else []
+    overflow_line = _overflow_digest(out_over, in_over)
     parts = [head]
+    if overflow_line:
+        parts.append(overflow_line)
     if out_lines:
         parts.append("你说过/发过：")
         parts += [f"- {x}" for x in out_lines[-MAX_OUT_LINES:]]
@@ -165,7 +189,28 @@ def build_handoff_note(
     if len(note) > NOTE_MAX_CHARS:
         note = note[: NOTE_MAX_CHARS - 1] + "…"
     return {"note": note, "out_n": out_n, "in_n": in_n, "media_n": media_n,
-            "since": since, "until": ts_now}
+            "since": since, "until": ts_now,
+            "overflow": overflow_msgs[:OVERFLOW_MAX_MSGS] if overflow_line else [],
+            "overflow_line": overflow_line}
+
+
+#: 前半段被挤出行数上限（送 LLM 压缩的条数；summarize_conversation 自身只看最近 40 条）
+OVERFLOW_MAX_MSGS = 40
+OVERFLOW_SUMMARY_CHARS = 260
+_OVERFLOW_PREFIX = "更早（本段人工接管前半段）"
+
+
+def _overflow_digest(out_over: List[str], in_over: List[str]) -> str:
+    """被逐字区挤出的前半段 → 一行确定性提要（LLM 要点版到位前的兜底；绝不空手丢弃）。"""
+    n = len(out_over) + len(in_over)
+    if n <= 0:
+        return ""
+    bits: List[str] = []
+    if out_over:
+        bits.append("你提到：" + "；".join(_one_line(x, 36) for x in (out_over[0], out_over[-1])[: (2 if len(out_over) > 1 else 1)]))
+    if in_over:
+        bits.append("对方提到：" + "；".join(_one_line(x, 36) for x in (in_over[0], in_over[-1])[: (2 if len(in_over) > 1 else 1)]))
+    return f"{_OVERFLOW_PREFIX}还有 {n} 条未逐字列出，其中" + "，".join(bits) + "。"
 
 
 def handoff_note(user_context: Dict[str, Any], *, now: Optional[float] = None) -> str:
@@ -274,6 +319,97 @@ def note_human_outbound_started(user_context: Dict[str, Any], *, now: Optional[f
         pass
 
 
+def _condense_enabled(sm: Any) -> bool:
+    """``inbox.handoff_memory.condense_with_llm``（默认开）且 ``ai.summarize_with_llm`` 未关。"""
+    try:
+        cfg = getattr(getattr(sm, "config", None), "config", None) or {}
+        if not isinstance(cfg, dict):
+            return True
+        hm = ((cfg.get("inbox") or {}).get("handoff_memory") or {})
+        if not bool(hm.get("condense_with_llm", True)):
+            return False
+        return bool((cfg.get("ai") or {}).get("summarize_with_llm", True))
+    except Exception:
+        return True
+
+
+async def condense_overflow(
+    sm: Any, ctx: Dict[str, Any], cstore: Any, *, note_ts: float,
+    overflow: List[Dict[str, str]], overflow_line: str,
+    timeout_sec: float = 12.0,
+) -> str:
+    """把接力摘要里被挤出的前半段压成一句要点（``ai_client.summarize_conversation``），
+    替换 note 中的确定性提要行并落盘。note 已被换掉/撤下（ts 不符）→ 不动。返回要点（空＝未替换）。"""
+    try:
+        ai = getattr(sm, "ai_client", None)
+        summ = getattr(ai, "summarize_conversation", None) if ai is not None else None
+        if not callable(summ) or not overflow or not overflow_line:
+            return ""
+        s = await summ(overflow, max_chars=OVERFLOW_SUMMARY_CHARS, timeout_sec=timeout_sec)
+        s = " ".join(str(s or "").split())
+        if not s:
+            return ""
+        rec = ctx.get(NOTE_KEY)
+        if not isinstance(rec, dict) or float(rec.get("ts") or 0.0) != float(note_ts):
+            return ""
+        note = str(rec.get("note") or "")
+        if overflow_line not in note:
+            return ""
+        new_line = f"{_OVERFLOW_PREFIX}要点：{s[:OVERFLOW_SUMMARY_CHARS]}"
+        note = note.replace(overflow_line, new_line, 1)
+        if len(note) > NOTE_MAX_CHARS:
+            note = note[: NOTE_MAX_CHARS - 1] + "…"
+        rec["note"] = note
+        rec["condensed"] = True
+        key = str(ctx.get("_context_store_key") or "")
+        if key and cstore is not None:
+            try:
+                cstore.mark_dirty(key)
+                cstore.flush(key)
+            except Exception:
+                pass
+        logger.info("[handoff] overflow condensed msgs=%d chars=%d", len(overflow), len(s))
+        return s
+    except Exception:
+        logger.debug("[handoff] condense_overflow 失败（保留确定性提要）", exc_info=True)
+        return ""
+
+
+def _schedule_condense(
+    sm: Any, ctx: Dict[str, Any], cstore: Any, *, note_ts: float,
+    overflow: List[Dict[str, str]], overflow_line: str, app_state: Any = None,
+) -> bool:
+    """在运行中的事件循环上调度 :func:`condense_overflow`（路由内直接 create_task；
+    守卫线程走 ``assistant._web_loop`` 的 run_coroutine_threadsafe）。调度不成＝留提要行。"""
+    if not _condense_enabled(sm):
+        return False
+    import asyncio
+    coro_factory = lambda: condense_overflow(  # noqa: E731
+        sm, ctx, cstore, note_ts=note_ts, overflow=overflow, overflow_line=overflow_line)
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro_factory())
+        return True
+    except RuntimeError:
+        pass
+    except Exception:
+        logger.debug("[handoff] condense 调度失败", exc_info=True)
+        return False
+    try:
+        web_loop = None
+        for owner in (sm, getattr(app_state, "telegram_client", None),
+                      getattr(app_state, "assistant", None)):
+            web_loop = getattr(owner, "_web_loop", None) if owner is not None else None
+            if web_loop is not None:
+                break
+        if web_loop is not None and getattr(web_loop, "is_running", lambda: False)():
+            asyncio.run_coroutine_threadsafe(coro_factory(), web_loop)
+            return True
+    except Exception:
+        logger.debug("[handoff] condense 跨线程调度失败", exc_info=True)
+    return False
+
+
 def _split_cid(conversation_id: str) -> tuple:
     parts = str(conversation_id or "").split(":", 2)
     if len(parts) == 3:
@@ -353,7 +489,15 @@ def record_handoff(
                 "media_n": built["media_n"],
             }
             res.update({"ok": True, "out_n": built["out_n"], "in_n": built["in_n"],
-                        "media_n": built["media_n"], "chars": len(built["note"])})
+                        "media_n": built["media_n"], "chars": len(built["note"]),
+                        "note": built["note"], "overflow_n": len(built.get("overflow") or [])})
+            if built.get("overflow"):
+                # 长窗口：前半段交给 LLM 压成要点版（后台、限时；失败留确定性提要）
+                res["condense_scheduled"] = _schedule_condense(
+                    sm, ctx, cstore, note_ts=ts_now,
+                    overflow=list(built["overflow"]),
+                    overflow_line=str(built.get("overflow_line") or ""),
+                    app_state=app_state)
         key = str(ctx.get("_context_store_key") or "")
         if key:
             try:
@@ -384,6 +528,6 @@ def record_handoff(
 __all__ = [
     "NOTE_KEY", "TAKEOVER_TS_KEY", "MAX_USES", "TTL_SEC", "HANDOFF_FETCH_MIN",
     "HANDOFF_VERBATIM_CAP",
-    "active_window_since", "build_handoff_note", "handoff_note", "note_human_outbound_started",
-    "record_handoff", "verbatim_keep_for_handoff",
+    "active_window_since", "build_handoff_note", "condense_overflow", "handoff_note",
+    "note_human_outbound_started", "record_handoff", "verbatim_keep_for_handoff",
 ]

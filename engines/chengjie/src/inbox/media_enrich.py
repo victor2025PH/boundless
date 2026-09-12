@@ -615,20 +615,44 @@ async def enrich_inbound_media_text(
 OUT_IMAGE_LABEL = "[我方发出的图片]"
 
 
+def outbound_desc_marker(media_type: str) -> str:
+    """我方发出媒体的描述标记：图片 ``[图片内容]`` / 视频 ``[视频内容]``（与入站行同字面，
+    下游剥离器 / 历史重解析同一口径）。其它类型 → ""（不回写）。"""
+    mt = str(media_type or "").strip().lower()
+    if mt in _VIDEO_KINDS:
+        return "[视频内容]"
+    if mt in _IMAGE_KINDS and mt != "sticker":
+        return "[图片内容]"
+    return ""
+
+
+def _outbound_video_desc_enabled(cfg: Dict[str, Any]) -> bool:
+    """``inbox.handoff_memory.outbound_video_desc``（默认开）：出站视频抽帧+音轨识别成本
+    高于图片，手动发视频又极少——给个能关的口子。"""
+    try:
+        hm = ((cfg.get("inbox") or {}).get("handoff_memory") or {})
+        return bool(hm.get("outbound_video_desc", True))
+    except Exception:
+        return True
+
+
 async def describe_outbound_media(
     *, media_type: str, media_ref: str, config: Optional[Dict[str, Any]] = None,
     local_path: str = "",
 ) -> str:
-    """识别**我方发出**的图片（坐席手动发图 → 切回全自动后 AI 得知道自己"发过什么"）。
+    """识别**我方发出**的图片 / 视频（坐席手动发图 → 切回全自动后 AI 得知道自己"发过什么"）。
 
-    复用入站识图链（同 VLM / 同缓存 / 同碎片文字闸），只做图片类（视频/语音出站
-    不识别：成本高且手动发视频极少）。返回单行描述；关/无后端/失败 → ""。
-    全程软失败，绝不抛。``local_path`` 非空时直接用（发送路由手里就有落盘路径），
-    否则按 ``media_ref`` 解析。
+    复用入站识别链（同 VLM / 同缓存 / 同碎片文字闸；视频走 ``understand_video_file``
+    抽关键帧 + 音轨 ASR）。贴纸 / 语音出站不识别（语音正文就是念的字）。返回单行描述；
+    关/无后端/失败 → ""。全程软失败，绝不抛。``local_path`` 非空时直接用（发送路由手里
+    就有落盘路径），否则按 ``media_ref`` 解析。
     """
     cfg = config or {}
     mt = str(media_type or "").strip().lower()
-    if mt not in _IMAGE_KINDS or mt == "sticker":
+    is_video = mt in _VIDEO_KINDS
+    if not is_video and (mt not in _IMAGE_KINDS or mt == "sticker"):
+        return ""
+    if is_video and not _outbound_video_desc_enabled(cfg):
         return ""
     try:
         local = str(local_path or "").strip()
@@ -636,7 +660,10 @@ async def describe_outbound_media(
             local = _resolve_local_path(media_ref) or ""
         if not local:
             return ""
-        desc = (await _describe_image(local, cfg) or "").strip()
+        if is_video:
+            desc = (await _understand_video(local, cfg, lazy_voice_transcriber(cfg)) or "").strip()
+        else:
+            desc = (await _describe_image(local, cfg) or "").strip()
         if not desc:
             return ""
         desc = flatten_desc_line(desc)
@@ -644,7 +671,7 @@ async def describe_outbound_media(
             return ""
         return desc[:600]
     except Exception:
-        logger.debug("[media_enrich] 出站识图失败 ref=%s", media_ref, exc_info=True)
+        logger.debug("[media_enrich] 出站识别失败 kind=%s ref=%s", mt, media_ref, exc_info=True)
         return ""
 
 

@@ -947,9 +947,10 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
             conversation_id=cid, media_type=mtype, media_ref=url)
     except Exception:
         logger.debug("[send-media] record_human_outbound 跳过", exc_info=True)
-    # 图片 → 后台 VLM 识别我方发出的画面：回写出站行「[图片内容] …」+ 记忆账本 desc。
-    # 响应先回给坐席，识图在响应之后跑（BackgroundTasks），不占发送时延。
-    if mtype in ("image", "photo") and background is not None:
+    # 图片 / 视频 → 后台识别我方发出的画面：回写出站行「[图片内容] / [视频内容] …」+ 记忆
+    # 账本 desc。响应先回给坐席，识别在响应之后跑（BackgroundTasks），不占发送时延。
+    # （视频走抽帧 + 音轨链，可用 inbox.handoff_memory.outbound_video_desc 关掉。）
+    if mtype in ("image", "photo", "video") and background is not None:
         try:
             from src.inbox.human_outbound_memory import describe_and_attach_outbound_media
             background.add_task(
