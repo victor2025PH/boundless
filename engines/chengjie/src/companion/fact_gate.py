@@ -35,6 +35,11 @@ import unicodedata
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 KIND_FACT = "fact"
+#: Q-29（#305）：瞬态事实——客户「我这边现在是晚上 / 四点了」这类**只在一段时间内成立**的叙述。
+#: 判据 = 原句锚定（evidence 必填且逐字在同一条入站）+ 值锚定在 evidence 里；不做类型尺子 / 语种 /
+#: 主体守卫；调用方（``companion.peer_time``）附 ``ttl_sec`` 落 KV，过期即视为不存在。
+KIND_TRANSIENT = "transient"
+TRANSIENT_TTL_SEC = 12 * 3600
 
 REASON_EMPTY = "empty"
 REASON_NO_EVIDENCE = "no_evidence"
@@ -228,6 +233,15 @@ def check(value: Any, *, slot_or_kind: str, evidence: Any, inbound_texts: Any,
             if inv and not inv <= _invariant_tokens(ev):
                 return False, REASON_UNANCHORED
             return True, ""
+        if kind == KIND_TRANSIENT:
+            # Q-29：瞬态叙述——只要原句锚定 + 值在原句里；TTL 由调用方带
+            if not ev:
+                return False, REASON_NO_EVIDENCE
+            if not evidence_in_inbound(ev, inbound):
+                return False, REASON_UNANCHORED
+            if not value_anchored_in_evidence(val, ev):
+                return False, REASON_UNANCHORED
+            return True, ""
         # ── 画像槽 / 目标回填 ──
         norm = val
         if _is_registered_slot(kind):
@@ -265,7 +279,7 @@ def check_many(items: Iterable[Tuple[str, Any, Any]], *, inbound_texts: Any,
 
 
 __all__ = [
-    "KIND_FACT", "REASON_EMPTY", "REASON_NO_EVIDENCE", "REASON_UNANCHORED", "REASON_LANG",
+    "KIND_FACT", "KIND_TRANSIENT", "TRANSIENT_TTL_SEC", "REASON_EMPTY", "REASON_NO_EVIDENCE", "REASON_UNANCHORED", "REASON_LANG",
     "REASON_SUBJECT", "REASON_GATE_ERROR",
     "check", "check_many", "evidence_in_inbound", "inbound_only", "subject_reason",
     "value_anchored_in_evidence", "value_tokens",

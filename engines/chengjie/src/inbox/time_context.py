@@ -18,6 +18,9 @@
 - ``build_late_reply_hint``：stale_unanswered → 迟回复要带时间感。
 - ``build_now_anchor_hint``：当前时刻锚点（日期/星期/时段），治「晚上生成
   早安体」——所有 B 线拟稿注入。
+- ``build_peer_time_hint``（Q-29 #305）：**对方**当地时间段——已知（城市 → 时区 /
+  客户原话）则「不要问对方几点 / 白天还是晚上」，未知则「顺口问一次，24h 内不再问」；
+  纯格式化，装配在 ``companion.peer_time``，经 Q-8 F 的 addenda ④ 接线。
 - ``resolve_time_context_cfg``：``inbox.time_context`` 配置解析。**默认开**
   （这是出站正确性守卫，与 media_promise_guard / consistency 同族），
   ``enabled: false`` 一键回旧行为。
@@ -271,6 +274,77 @@ def build_now_anchor_hint(
     )
 
 
+def build_peer_time_hint(info: Optional[Dict[str, Any]], *, lang: str = "zh") -> str:
+    """Q-29（#305 2RKH3H）：**对方**当地时间一段（纯格式化，零 I/O）。
+
+    ``info`` 由 ``companion.peer_time.peer_time_status`` 装配::
+
+        {known, hh_mm, weekday, weekday_en, period, period_en, basis, basis_en,
+         approx, conflict, asked_hhmm}
+
+    - ``known`` 且有钟面 → 「对方当地：周三 22:40，夜里（依据 …）——**不要问对方几点 / 白天还是
+      晚上**，按此时段自然问候」；只有时段（客户只说了「晚上」）→ 同句但不带钟面；
+    - ``known=False`` → 「对方时区未知：若需要就顺口问一次，问过 24h 内不再问」；24h 内已问过 →
+      追加「你 HH:MM 已问过一次，本轮不要再问」。
+    ``info`` 为空 / 非 dict → ""。
+    """
+    if not isinstance(info, dict):
+        return ""
+    en = str(lang or "zh").lower().startswith("en")
+    known = bool(info.get("known"))
+    if known:
+        hh = str(info.get("hh_mm") or "").strip()
+        wd = str((info.get("weekday_en") if en else info.get("weekday")) or "").strip()
+        period = str((info.get("period_en") if en else info.get("period")) or "").strip()
+        basis = str((info.get("basis_en") if en else info.get("basis")) or "").strip()
+        approx = bool(info.get("approx"))
+        if en:
+            if hh:
+                clock = f"{'about ' if approx else ''}{wd + ' ' if wd else ''}{hh}"
+                clock += f" ({period})" if period else ""
+                head = f"Where they are it's {clock}{' — ' + basis if basis else ''}."
+            elif period:
+                head = f"Where they are it's {period} (no exact clock){' — ' + basis if basis else ''}."
+            else:
+                head = f"They already told you their local time{' — ' + basis if basis else ''} (am/pm unclear)."
+            return (
+                f"【peer local time】{head} "
+                "Do NOT ask what time it is there, whether it's day or night, or if they should be asleep — "
+                "you already know. Greet and pace to that time of day (no 'good morning' at night, no "
+                "'go to bed' in daytime), and don't announce the time unless it's natural."
+            )
+        if hh:
+            clock = f"{'约 ' if approx else ''}{wd + ' ' if wd else ''}{hh}"
+            clock += f"，{period}" if period else ""
+            head = f"对方那边现在{clock}{'（' + basis + '）' if basis else ''}。"
+        elif period:
+            head = f"对方那边现在是{period}（没有精确钟点{'；' + basis if basis else ''}）。"
+        else:
+            head = f"对方已经告诉过你那边的时间{'（' + basis + '，上下午未明）' if basis else ''}。"
+        return (
+            f"【对方当地时间】{head}"
+            "**不要问对方几点、白天还是晚上、是不是该睡了**——你已经知道；"
+            "按这个时段自然问候和接话（夜里别说早安，白天别催睡），不必刻意报时。"
+        )
+    asked = str(info.get("asked_hhmm") or "").strip()
+    if en:
+        s = (
+            "【peer local time】Their time zone is unknown (no city and no clock mentioned). "
+            "If it matters for the conversation, you may casually ask ONCE what time it is over there; "
+            "once asked, don't ask again within 24 hours."
+        )
+        if asked:
+            s += f" You already asked at {asked} — do not ask again this turn."
+        return s
+    s = (
+        "【对方当地时间】对方时区未知（没说过城市，也没提过几点）。"
+        "若聊到需要，可以顺口问一次对方那边几点 / 白天还是晚上；问过之后 24 小时内不要再问。"
+    )
+    if asked:
+        s += f"你 {asked} 已经问过一次，本轮不要再问。"
+    return s
+
+
 def build_repeat_rewrite_hint(dup_text: str) -> str:
     """复读守卫触发 → 重写指令（追加进 extra_hint 再生成一次）。"""
     d = str(dup_text or "").strip().replace("\n", " ")
@@ -293,5 +367,6 @@ __all__ = [
     "build_followup_note",
     "build_late_reply_hint",
     "build_now_anchor_hint",
+    "build_peer_time_hint",
     "build_repeat_rewrite_hint",
 ]
