@@ -1475,6 +1475,16 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-up,.pma-test{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
     .pma-in{flex:1;min-width:120px;padding:.3rem .45rem;border:1px solid var(--bd);border-radius:6px;background:var(--input);color:var(--t);font-size:.72rem}
     .pma-status{font-size:.68rem;color:var(--t2)}
+    /* Q-35 #316（pma-up-result）：批量上传逐文件结果条——成功 / 已存在 / 失败数 + 可展开失败明细 + 重试失败项 */
+    .pma-up-result{font-size:.7rem;color:var(--t2);margin:.1rem 0 .45rem;padding:.35rem .55rem;border:1px solid var(--bd);border-radius:8px;background:var(--bg2,transparent);line-height:1.5}
+    .pma-up-result .pma-upr-head{display:flex;gap:.55rem;flex-wrap:wrap;align-items:center}
+    .pma-up-result .pma-upr-ok{color:var(--th-ink-emerald6,#047857);font-weight:600}
+    .pma-up-result .pma-upr-fail{color:var(--th-ink-red7,#b91c1c);font-weight:600}
+    .pma-up-result.pma-upr-hasfail{border-color:var(--th-ink-amber7,#b45309)}
+    .pma-up-result ul.pma-upr-list{margin:.3rem 0 .1rem;padding-left:1.1rem;max-height:9.5rem;overflow:auto}
+    .pma-up-result ul.pma-upr-list li{margin:.1rem 0;word-break:break-all}
+    .pma-up-result ul.pma-upr-list li b{color:var(--t);font-weight:600}
+    .pma-up-result .pma-upr-hint{font-size:.64rem;color:var(--t3,var(--t2));margin-top:.2rem}
     .pma-summary{font-size:.68rem;color:var(--t2);margin:.2rem 0;display:flex;gap:.5rem;flex-wrap:wrap}
     .al-counts{font-size:.68rem;color:var(--t2);margin:.15rem 0 .35rem;display:flex;gap:.55rem;flex-wrap:wrap;align-items:center}
     .al-counts b{color:var(--t1);font-weight:600}
@@ -3469,6 +3479,8 @@ function _pmaRender(body, items, stats, photosOn, gate) {
     + aiBtn
     + '<span id="pma-up-status" class="pma-status"></span>'
     + '</div>'
+    // Q-35 #316（pma-up-result）：批量上传逐文件结果——成功数 / 已存在 / 可展开失败列表 / 重试失败项，_pmaRenderUploadResult 填
+    + '<div id="pma-up-result" class="pma-up-result" style="display:none" role="status" aria-live="polite"></div>'
     // #238：五态引导条（进度 / 识图不可达 / 未识别 / 缺触发词 / 锚脸），_pmaRenderGuide 按状态填
     + '<div id="pma-guide" style="display:none;padding:.35rem .6rem;margin:.1rem 0 .55rem;border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
   // 试触发 + 搜索筛选：吸顶（.dpane 是滚动容器），命中时滚到并高亮命中卡
@@ -3517,6 +3529,7 @@ function _pmaRender(body, items, stats, photosOn, gate) {
     + '<div id="pma-grid-wrap" style="' + dim + '"></div>'
     + '<div id="pma-savebar"></div>';
   _pmaRenderGuide();
+  _pmaRenderUploadResult();   // Q-35 #316（pma-up-result）：整页重绘后逐文件结果条不丢（此前上传状态文字被 pmaLoad 重绘抹掉）
   _pmaRenderGrid();
   _pmaRenderSaveBar();
 }
@@ -3806,40 +3819,135 @@ function _pmaPick() {
   if (f) f.click();
 }
 
-async function pmaUpload() {
+/* Q-35 #316（4HK54G，pma-up-result）：批量上传**逐文件**记 {name, size, ok, existed, status, reason, detail}。
+   此前失败只 fail++（不记文件名 / HTTP 状态 / 响应体），结尾一句「成功 2 / 失败 5」还会被紧接着的
+   pmaLoad() 整页重绘抹掉——报障时前后端都答不上「哪几张、为什么」。现在：
+   · 服务端拒绝分支回 {ok:false, reason, detail, limit_mb/ext/max_sec…}（B 段），前端按 reason 出人话；
+   · 200 且 deduped / 409 = 「已存在」（相册里已有同图），**不算失败**；
+   · 网络异常 reason=network:<msg>、超时 reason=timeout；
+   · 结果条随 _pmaRender 重绘持久（_pmaUpLast 按 pid 记），失败项保留 File 对象供「重试失败项」
+     （DataTransfer 重建 FileList 交回 pmaUpload，不用重新翻相册）。 */
+var _pmaUpLast = null;   // {pid, ts, results:[rec], ok, fail, existed, open}
+function _pmaFailReasonText(rec) {
+  rec = rec || {};
+  const r = String(rec.reason || '');
+  const stc = Number(rec.status || 0);
+  if (r === 'too_large') return window.Tf('pma_fr_too_large', { mb: String(rec.limit_mb || '?') });
+  if (r === 'ext_not_allowed') return window.Tf('pma_fr_ext', { ext: String(rec.ext || (rec.name || '').replace(/^.*(\.[^.]+)$/, '$1') || '?') });
+  if (r === 'bad_content') return window.T('pma_fr_bad_content');
+  if (r === 'too_long') return window.Tf('pma_fr_too_long', { sec: String(rec.max_sec || '?') });
+  if (r === 'empty_file') return window.T('pma_fr_empty');
+  if (r === 'timeout') return window.T('pma_fr_timeout');
+  if (r.indexOf('network') === 0) return window.T('pma_fr_network');
+  if (r === 'readonly' || stc === 403) return window.T('pma_fr_forbidden');
+  if (stc === 401) return window.T('pma_fr_auth');
+  if (stc === 413) return window.Tf('pma_fr_too_large', { mb: String(rec.limit_mb || '?') });   // 路由前裸 413（反代 / 网关）
+  if (stc >= 500) return window.Tf('pma_fr_server', { status: String(stc) });
+  if (rec.detail) return String(rec.detail);
+  return r || (stc ? ('HTTP ' + stc) : window.T('pma_fr_unknown'));
+}
+function _pmaRenderUploadResult() {
+  const box = document.getElementById('pma-up-result');
+  if (!box) return;
+  const L = _pmaUpLast;
+  if (!L || !L.results || !L.results.length || String(L.pid) !== String(_pmaPid() || '')) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const fails = L.results.filter(function (x) { return !x.ok; });
+  let head = '<span class="pma-upr-ok">✓ ' + _pmaEsc(window.Tf('pma_up_sum', { ok: String(L.ok) })) + '</span>';
+  if (L.existed) head += '<span>' + _pmaEsc(window.Tf('pma_up_sum_existed', { n: String(L.existed) })) + '</span>';
+  if (fails.length) {
+    head += '<span class="pma-upr-fail">✗ ' + _pmaEsc(window.Tf('pma_up_sum_fail', { n: String(fails.length) })) + '</span>'
+      + '<button type="button" class="btn btn-xs" onclick="_pmaUpToggleFails()">' + _pmaEsc(window.T(L.open ? 'pma_up_fail_toggle_hide' : 'pma_up_fail_toggle')) + '</button>'
+      + '<button type="button" class="btn btn-xs btn-primary" onclick="_pmaUpRetryFails()">' + _pmaEsc(window.Tf('pma_up_retry_btn', { n: String(fails.length) })) + '</button>';
+  }
+  let html = '<div class="pma-upr-head">' + head + '</div>';
+  if (fails.length && L.open) {
+    html += '<ul class="pma-upr-list">' + fails.map(function (x) {
+      const kb = x.size ? ' · ' + (x.size >= 1048576 ? (x.size / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(x.size / 1024)) + 'KB') : '';
+      const code = (x.status ? 'HTTP ' + x.status : '') + (x.reason ? (x.status ? ' ' : '') + x.reason : '');
+      return '<li><b>' + _pmaEsc(x.name || '?') + '</b>' + _pmaEsc(kb) + ' — ' + _pmaEsc(_pmaFailReasonText(x))
+        + (code ? ' <span class="pma-status" title="' + _pmaEsc(x.detail || '') + '">(' + _pmaEsc(code) + ')</span>' : '') + '</li>';
+    }).join('') + '</ul>'
+      + '<div class="pma-upr-hint">' + _pmaEsc(window.T('pma_up_fail_hint')) + '</div>';
+  }
+  box.innerHTML = html;
+  box.className = 'pma-up-result' + (fails.length ? ' pma-upr-hasfail' : '');
+  box.style.display = '';
+}
+function _pmaUpToggleFails() { if (!_pmaUpLast) return; _pmaUpLast.open = !_pmaUpLast.open; _pmaRenderUploadResult(); }
+async function _pmaUpRetryFails() {
+  const L = _pmaUpLast;
+  if (!L || String(L.pid) !== String(_pmaPid() || '')) { _toast(window.T('pma_up_retry_gone'), 'err'); return; }
+  const files = L.results.filter(function (x) { return !x.ok && x.file; }).map(function (x) { return x.file; });
+  if (!files.length) { _toast(window.T('pma_up_retry_gone'), 'err'); return; }
+  try { console.info('[pma] retry failed uploads n=' + files.length); } catch (e) {}
+  await pmaUpload(files);
+}
+window._pmaUpToggleFails = _pmaUpToggleFails;
+window._pmaUpRetryFails = _pmaUpRetryFails;
+
+async function pmaUpload(retryFiles) {
   const pid = _pmaPid();
   const inp = document.getElementById('pma-file');
   const st = document.getElementById('pma-up-status');
-  if (!pid || !inp || !inp.files || !inp.files.length) return;
+  // 重试路径给 File[]；普通路径读 <input>.files（DataTransfer 重建 FileList 在 Electron/Chrome 都可，这里直接传数组更稳）
+  const files = (retryFiles && retryFiles.length) ? Array.prototype.slice.call(retryFiles)
+    : ((inp && inp.files) ? Array.prototype.slice.call(inp.files) : []);
+  if (!pid || !files.length) return;
   const trgEl = document.getElementById('pma-up-trg');
   const trg = trgEl ? trgEl.value : '';
   const wasEmpty = !(((_pmaState || {}).items || []).length);   // #238：首次上传 → 引导设锚脸
   const before = new Set(((_pmaState || {}).items || []).map(function (x) { return String(x.id); }));
-  let ok = 0, fail = 0, tagQueued = 0, visionDown = '';
-  const total = inp.files.length;
+  let ok = 0, fail = 0, existed = 0, tagQueued = 0, visionDown = '';
+  const results = [];
+  const total = files.length;
   let i = 0;
-  for (const f of inp.files) {
+  for (const f of files) {
     i++;
     if (st) st.textContent = window.T('pma_uploading') + ' ' + i + '/' + total + ' ' + f.name;
     const fd = new FormData();
     fd.append('file', f);
     if (trg && trg.trim()) fd.append('triggers', trg.trim());
+    const rec = { name: String(f.name || ''), size: Number(f.size || 0), file: f, ok: false, existed: false, status: 0, reason: '', detail: '' };
     try {
       // 单文件可到 50M 视频 + 服务端 ffprobe/封面探针 → 5min 预算
       const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media', { method: 'POST', body: fd }, { timeoutMs: 300000 });
+      rec.status = Number(r.status || 0);
+      let d = null;
+      try { d = await r.json(); } catch (e) { d = null; }
       if (r.ok) {
-        ok++;
+        rec.ok = true;
+        if (d && d.deduped) { rec.existed = true; existed++; } else { ok++; }
         // #238：后端每条回 autotag / vision_ready / vision_reason（旧后端无字段＝按 0 计）
-        try { const d = await r.json(); if (d && d.autotag) tagQueued++; if (d && d.vision_ready === false) visionDown = d.vision_reason || 'unreachable'; } catch (e) {}
-      } else { fail++; }
-    } catch (e) { fail++; }
+        if (d && d.autotag) tagQueued++;
+        if (d && d.vision_ready === false) visionDown = d.vision_reason || 'unreachable';
+      } else if (r.status === 409) {
+        rec.ok = true; rec.existed = true; existed++;   // 近重复 / 已存在：不算失败
+        rec.reason = String((d && (d.reason || d.error)) || 'duplicate');
+      } else {
+        fail++;
+        rec.reason = String((d && (d.reason || d.error)) || ('http_' + r.status));
+        rec.detail = String((d && (typeof d.detail === 'string' ? d.detail : (d.detail && d.detail.message) || d.error || d.message)) || '').slice(0, 200);
+        if (d) { rec.limit_mb = d.limit_mb; rec.ext = d.ext; rec.max_sec = d.max_sec; }
+      }
+    } catch (e) {
+      fail++;
+      const en = String((e && e.name) || '');
+      const em = String((e && e.message) || e || '');
+      rec.reason = (en === 'AbortError' || en === 'TimeoutError' || /timeout/i.test(em)) ? 'timeout' : ('network:' + em.slice(0, 80));
+      rec.detail = em.slice(0, 200);
+    }
+    results.push(rec);
   }
-  inp.value = '';
-  let done = window.T('pma_upload_ok') + ' ' + ok + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
-  if (ok && tagQueued) done = window.Tf('pma_up_done_ai', { ok: String(ok), n: String(tagQueued) }) + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
-  else if (ok && visionDown) done = window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) }) + (fail ? (' / ' + window.T('pma_upload_fail') + fail) : '');
+  if (inp) inp.value = '';
+  _pmaUpLast = { pid: pid, ts: Date.now(), results: results, ok: ok, fail: fail, existed: existed, open: fail > 0 };
+  try { console.info('[pma] upload pid=' + pid + ' ok=' + ok + ' existed=' + existed + ' fail=' + fail + (fail ? ' fails=' + JSON.stringify(results.filter(function (x) { return !x.ok; }).map(function (x) { return { name: x.name, status: x.status, reason: x.reason }; })) : '')); } catch (e) {}
+  let done = window.Tf('pma_up_sum', { ok: String(ok) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
+  if (ok && tagQueued) done = window.Tf('pma_up_done_ai', { ok: String(ok), n: String(tagQueued) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
+  else if (ok && visionDown) done = window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
   if (st) st.textContent = done;
-  await pmaLoad();
+  await pmaLoad();   // 整页重绘；结果条由 _pmaRender → _pmaRenderUploadResult 从 _pmaUpLast 回填
+  const st2 = document.getElementById('pma-up-status');
+  if (st2 && (tagQueued || visionDown)) st2.textContent = done;   // AI 排队 / 识图不可达那句仍值得留在状态位
   if (ok && visionDown) _toast(_pmaEsc(window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) })), 'err', 9000);
   // #190「触发词全空」：上传完引导填触发词——新卡没触发词就切到「缺触发词」筛选、
   // 聚焦第一张的输入框；AI 建议 chips 会在识别完成后（轮询）出现在卡上。
@@ -3932,6 +4040,7 @@ function _resetEditorExtras() {
   // #190：未保存的卡片改动随人设切换作废——不静默，toast 点破
   if (_pmaDirtyCount()) _toast(window.Tf('pma_unsaved_dropped', { n: String(_pmaDirtyCount()) }), 'err', 5000);
   _pmaEdits = {}; _pmaState = null; _pmaShown = 0; _pmaFilter = 'all'; _pmaQuery = '';
+  _pmaUpLast = null;   // Q-35 #316（pma-up-result）：上次批量上传的逐文件结果随人设切换作废（失败项 File 引用一并释放）
   if (_pmaPollTimer) { clearTimeout(_pmaPollTimer); _pmaPollTimer = null; }
   const ab = document.getElementById('pe-album-body'); if (ab) ab.textContent = window.T('psn_expand_to_load');
   const abd = document.getElementById('pe-album-badge'); if (abd) abd.textContent = '';

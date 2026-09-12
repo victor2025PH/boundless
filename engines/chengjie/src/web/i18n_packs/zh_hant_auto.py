@@ -20570,6 +20570,28 @@ ZH_HANT = {
     'pma_faceref_title': '鎖臉基準照',
     # ── pma_faceref_upload ──
     'pma_faceref_upload': '上傳基準照',
+    # ── pma_fr_auth ──
+    'pma_fr_auth': '登入已過期，請重新登入',
+    # ── pma_fr_bad_content ──
+    'pma_fr_bad_content': '檔案內容不是有效圖片 / 影片（可能已損壞）',
+    # ── pma_fr_empty ──
+    'pma_fr_empty': '空檔案',
+    # ── pma_fr_ext ──
+    'pma_fr_ext': '型別不支援（{ext}）——手機 HEIC 請先轉 JPG',
+    # ── pma_fr_forbidden ──
+    'pma_fr_forbidden': '只讀賬號不能上傳',
+    # ── pma_fr_network ──
+    'pma_fr_network': '網路中斷（可重試）',
+    # ── pma_fr_server ──
+    'pma_fr_server': '服務端錯誤（HTTP {status}），可重試；連續失敗請截圖報障',
+    # ── pma_fr_timeout ──
+    'pma_fr_timeout': '超時（網路慢或檔案太大，可重試）',
+    # ── pma_fr_too_large ──
+    'pma_fr_too_large': '太大（上限 {mb}MB）',
+    # ── pma_fr_too_long ──
+    'pma_fr_too_long': '影片太長（上限 {sec} 秒）',
+    # ── pma_fr_unknown ──
+    'pma_fr_unknown': '未知原因',
     # ── pma_gate_enable ──
     'pma_gate_enable': '一鍵開啟全域性總閘',
     # ── pma_gate_fail ──
@@ -20712,8 +20734,24 @@ ZH_HANT = {
     'pma_up_done_ai': '已上傳 {ok} 張，AI 識別已排隊 {n} 張（進度見下方）',
     # ── pma_up_done_novision ──
     'pma_up_done_novision': '已上傳 {ok} 張；識圖服務暫不可用（{why}），沒有自動識別——服務恢復後點「AI 補標」',
+    # ── pma_up_fail_hint ──
+    'pma_up_fail_hint': '太大 / 型別不支援的請壓縮或轉 JPG 後再傳；服務端錯誤 / 超時可直接點重試',
+    # ── pma_up_fail_toggle ──
+    'pma_up_fail_toggle': '展開失敗明細',
+    # ── pma_up_fail_toggle_hide ──
+    'pma_up_fail_toggle_hide': '收起',
     # ── pma_up_first_face_toast ──
     'pma_up_first_face_toast': '第一批照片已上傳。建議先設定「錨臉基準照」，AI 識別會據此核對每張是否本人。',
+    # ── pma_up_retry_btn ──
+    'pma_up_retry_btn': '重試失敗項（{n}）',
+    # ── pma_up_retry_gone ──
+    'pma_up_retry_gone': '失敗項已不在本頁（切過人設或重新整理過），請重新選擇檔案上傳',
+    # ── pma_up_sum ──
+    'pma_up_sum': '成功 {ok} 張',
+    # ── pma_up_sum_existed ──
+    'pma_up_sum_existed': '已存在 {n} 張（相簿裡已有同圖，不重複入庫）',
+    # ── pma_up_sum_fail ──
+    'pma_up_sum_fail': '失敗 {n} 張',
     # ── pma_upload_fail ──
     'pma_upload_fail': '失敗',
     # ── pma_upload_label ──
