@@ -1246,25 +1246,40 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
                 </div>
               </div>
               <span style="flex:1;"></span>
-              <!-- 会话级模型路由（conv_route，2026-09-12）：Cursor 式「模型 ▾」——按会话选 标准 / 无限制
-                   （LAN 私有模型直答，规则让路）+ 上下文 / 力度 / 思考。事实源 GET/POST
-                   /api/unified-inbox/conv-model-route；弹层复用 rt-pop 家族（主屏 #mp-home / 选项第二屏
-                   #mp-pick 互斥，同翻译弹层 is-pick 范式）。状态胶囊与翻译组「按钮 + 胶囊」同构。 -->
+              <!-- 会话级模型路由（conv_route，2026-09-12）：两个等尺寸入口、两个面板、一个事实源
+                   GET/POST /api/unified-inbox/conv-model-route：
+                   · 「模型」＝本会话用谁答（实例主链 / ai.models 各厂商档 / 本机私有），标准模式下换端点不换规则；
+                   · 「模式」＝按什么规矩答（标准 / 无限制 + 上下文 / 力度 / 思考 / 安全刹车）。
+                   入口按钮自带当前值（Cursor 式），不再挂独立状态胶囊；弹层复用 rt-pop 家族。 -->
               <span class="rt-divider"></span>
               <div class="rt-pop-wrap mp-wrap">
-                <button class="tiny-btn" id="model-btn" onclick="_uiBeacon('cbtn_model');toggleModelPop()" title="本会话用哪个模型回复：标准（云端主链 · 规则全开）/ 无限制（局域网私有模型直答 · 规则让路）；再调上下文 / 力度 / 思考" data-i18n-title="inbox.mp.btn_t" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-pop"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><line x1="9" y1="2" x2="9" y2="5"/><line x1="15" y1="2" x2="15" y2="5"/><line x1="9" y1="19" x2="9" y2="22"/><line x1="15" y1="19" x2="15" y2="22"/><line x1="2" y1="9" x2="5" y2="9"/><line x1="2" y1="15" x2="5" y2="15"/><line x1="19" y1="9" x2="22" y2="9"/><line x1="19" y1="15" x2="22" y2="15"/></svg><span data-i18n="inbox.mp.btn">模型 ▾</span></button>
-                <span class="rt-xl-status rt-model-status" id="rt-model-status" onclick="_uiBeacon('cbtn_model_chip');toggleModelPop()" style="cursor:pointer;" title="点击设置本会话的模型 / 上下文 / 力度 / 思考" data-i18n="inbox.mp.status_std" data-i18n-title="inbox.mp.status_t">标准</span>
-                <div class="rt-pop rt-pop-right" id="model-pop" role="dialog" aria-labelledby="mp-title" tabindex="-1" style="min-width:320px;">
+                <button type="button" class="cmp-sel" id="model-btn" onclick="_uiBeacon('cbtn_model');toggleModelPop()" title="本会话用哪个模型回复：实例主链 / 已配置的各厂商模型（ChatGPT · Gemini · Grok · DeepSeek…）/ 本机私有模型；只换端点，规则照常" data-i18n-title="inbox.mp.btn_t" aria-haspopup="dialog" aria-expanded="false" aria-controls="model-pop"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><line x1="9" y1="2" x2="9" y2="5"/><line x1="15" y1="2" x2="15" y2="5"/><line x1="9" y1="19" x2="9" y2="22"/><line x1="15" y1="19" x2="15" y2="22"/><line x1="2" y1="9" x2="5" y2="9"/><line x1="2" y1="15" x2="5" y2="15"/><line x1="19" y1="9" x2="22" y2="9"/><line x1="19" y1="15" x2="22" y2="15"/></svg><span class="cmp-sel-lbl" data-i18n="inbox.mp.btn">模型</span><span class="cmp-sel-val" id="model-btn-val">—</span><span class="cmp-sel-dot" id="model-btn-dot" aria-hidden="true"></span><span class="cmp-sel-caret" aria-hidden="true">▾</span></button>
+                <button type="button" class="cmp-sel" id="mode-btn" onclick="_uiBeacon('cbtn_mode');toggleModePop()" title="本会话按什么规矩答：标准（人设规则 / 风控 / 审核全开）或 无限制（本机私有模型直答 · 规则让路）；再调上下文 / 力度 / 思考" data-i18n-title="inbox.md.btn_t" aria-haspopup="dialog" aria-expanded="false" aria-controls="mode-pop"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--bg-elev)"/><circle cx="15" cy="12" r="2" fill="var(--bg-elev)"/><circle cx="7" cy="18" r="2" fill="var(--bg-elev)"/></svg><span class="cmp-sel-lbl" data-i18n="inbox.md.btn">模式</span><span class="cmp-sel-val" id="mode-btn-val" data-i18n="inbox.mp.status_std">标准</span><span class="cmp-sel-caret" aria-hidden="true">▾</span></button>
+                <!-- 面板 A：模型（用谁答）——单屏列表；行由 _mvRender 按 choices.models 画，在线点由 health?all=1 一次画全 -->
+                <div class="rt-pop rt-pop-right" id="model-pop" role="dialog" aria-labelledby="mv-title" tabindex="-1" style="min-width:340px;">
+                  <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="mv-title" data-i18n="inbox.mp.hd">模型 · 本会话</span><span class="xl-scope-tag" data-i18n="inbox.mp.scope">本会话</span><button type="button" class="xl-pop-x" onclick="toggleModelPop()" title="关闭" data-i18n-title="inbox.xl.close">✕</button></div>
+                  <div class="mv-notice" id="mv-notice" style="display:none;"></div>
+                  <div class="mv-list" id="mv-list" role="listbox"></div>
+                  <div class="mv-foot">
+                    <span class="mv-dataflow" id="mv-dataflow"></span>
+                    <a class="mv-manage" id="mv-manage" href="/developer#dvmr" target="_blank" rel="noopener" data-i18n="inbox.mp.manage" title="开发者页 · 多模型路由：添加 / 修改各厂商端点与密钥" data-i18n-title="inbox.mp.manage_t">管理模型与密钥 →</a>
+                  </div>
+                  <div class="mv-last" id="mv-last"></div>
+                </div>
+                <!-- 面板 B：模式（按什么规矩答）——主屏 #mp-home / 选项第二屏 #mp-pick 互斥（同翻译弹层 is-pick 范式） -->
+                <div class="rt-pop rt-pop-right" id="mode-pop" role="dialog" aria-labelledby="mp-title" tabindex="-1" style="min-width:320px;">
                   <div id="mp-home">
-                    <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="mp-title" data-i18n="inbox.mp.hd">模型 · 本会话</span><span class="xl-scope-tag" data-i18n="inbox.mp.scope">本会话</span><button type="button" class="xl-pop-x" onclick="toggleModelPop()" title="关闭" data-i18n-title="inbox.xl.close">✕</button></div>
-                    <!-- 四行「标签 · 当前值 ›」＝Cursor 面板信息架构；模型行永远第一且加粗 -->
-                    <button type="button" class="mp-row" id="mp-row-model" onclick="_mpPickOpen('profile')"><span class="mp-lbl mp-lbl-strong" data-i18n="inbox.mp.row_model">模型</span><span class="mp-val" id="mp-val-model"></span><span class="mp-caret" aria-hidden="true">›</span></button>
+                    <div class="xl-pop-hd"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><span id="mp-title" data-i18n="inbox.md.hd">模式 · 本会话</span><span class="xl-scope-tag" data-i18n="inbox.mp.scope">本会话</span><button type="button" class="xl-pop-x" onclick="toggleModePop()" title="关闭" data-i18n-title="inbox.xl.close">✕</button></div>
+                    <!-- 三组：模式 | 上下文 · 力度 | 思考 · 安全刹车（Cursor 面板信息架构：标签 · 当前值 ›） -->
+                    <button type="button" class="mp-row" id="mp-row-model" onclick="_mpPickOpen('profile')"><span class="mp-lbl mp-lbl-strong" data-i18n="inbox.mp.row_model">模式</span><span class="mp-val" id="mp-val-model"></span><span class="mp-caret" aria-hidden="true">›</span></button>
+                    <div class="mp-group"></div>
                     <button type="button" class="mp-row" id="mp-row-depth" onclick="_mpPickOpen('depth')"><span class="mp-lbl" data-i18n="inbox.mp.row_depth">上下文</span><span class="mp-val" id="mp-val-depth"></span><span class="mp-caret" aria-hidden="true">›</span></button>
                     <button type="button" class="mp-row" id="mp-row-effort" onclick="_mpPickOpen('effort')"><span class="mp-lbl" data-i18n="inbox.mp.row_effort">力度</span><span class="mp-val" id="mp-val-effort"></span><span class="mp-caret" aria-hidden="true">›</span></button>
-                    <button type="button" class="mp-row" id="mp-row-thinking" onclick="_mpToggleThinking()" title="思维链（vLLM enable_thinking）：开＝答得更周全但每轮多几秒；仅对无限制档生效" data-i18n-title="inbox.mp.think_t"><span class="mp-lbl" data-i18n="inbox.mp.row_thinking">思考</span><span class="mp-val" id="mp-val-thinking"></span><span class="mp-switch" id="mp-sw-thinking" aria-hidden="true"></span></button>
-                    <button type="button" class="mp-row mp-row-safety" id="mp-row-safety" onclick="_mpToggleSafety()" title="五条账号与人身保险丝：急停 / 封号信号、账号冷启动上限、停联冻结、危机自伤兜底、授权额度。保留＝无限制也不碰它们；全关＝连它们也不拦（仅本会话，有审计）" data-i18n-title="inbox.mp.safety_t"><span class="mp-lbl" data-i18n="inbox.mp.row_safety">安全刹车</span><span class="mp-val" id="mp-val-safety"></span><span class="mp-switch" id="mp-sw-safety" aria-hidden="true"></span></button>
                     <div class="mp-note" id="mp-note" data-i18n="inbox.mp.effort_note">力度 ≈ 答复长度与温度，不是推理力度</div>
-                    <!-- 端点在线态行：只在无限制档显示；离线给「重试 / 改回标准」两个出口，不用 toast 一闪而过 -->
+                    <div class="mp-group"></div>
+                    <button type="button" class="mp-row" id="mp-row-thinking" onclick="_mpToggleThinking()" title="思维链：开＝答得更周全但每轮多几秒。对无限制档和点名的厂商模型档生效；跟随主链时由全局 ai.reasoning 决定" data-i18n-title="inbox.mp.think_t"><span class="mp-lbl" data-i18n="inbox.mp.row_thinking">思考</span><span class="mp-val" id="mp-val-thinking"></span><span class="mp-switch" id="mp-sw-thinking" aria-hidden="true"></span></button>
+                    <button type="button" class="mp-row mp-row-safety" id="mp-row-safety" onclick="_mpToggleSafety()" title="五条账号与人身保险丝：急停 / 封号信号、账号冷启动上限、停联冻结、危机自伤兜底、授权额度。保留＝无限制也不碰它们；全关＝连它们也不拦（仅本会话，有审计）" data-i18n-title="inbox.mp.safety_t"><span class="mp-lbl" data-i18n="inbox.mp.row_safety">安全刹车</span><span class="mp-val" id="mp-val-safety"></span><span class="mp-switch" id="mp-sw-safety" aria-hidden="true"></span></button>
+                    <!-- 无限制端点离线：只在此时显示，给「重试 / 改回标准」两个出口（在线态在「模型」面板里看） -->
                     <div class="mp-health" id="mp-health" style="display:none;">
                       <span class="mp-health-dot" id="mp-health-dot" aria-hidden="true"></span>
                       <span class="mp-health-txt" id="mp-health-txt"></span>
@@ -22735,19 +22750,22 @@ function toggleKbdHelp(){
 }
 /* 点弹层外区域自动收起（toggle 按钮自身的点击由 toggle 处理，避免重复开关） */
 document.addEventListener('click',function(e){
-  if(e.target.closest('.rt-pop')||e.target.closest('#voice-cfg-btn')||e.target.closest('#xlate-toggle-btn')||e.target.closest('#kbd-help-btn')||e.target.closest('#model-btn')||e.target.closest('#rt-model-status')) return;
+  if(e.target.closest('.rt-pop')||e.target.closest('#voice-cfg-btn')||e.target.closest('#xlate-toggle-btn')||e.target.closest('#kbd-help-btn')||e.target.closest('#model-btn')||e.target.closest('#mode-btn')) return;
   _closeRtPops();
 });
 
-/* ===== 会话级模型路由（conv_route，2026-09-12）：composer「模型 ▾」弹层（mp-） =====
+/* ===== 会话级模型路由（conv_route，2026-09-12）：composer「模型」「模式」双面板（mv- / mp-） =====
    事实源 GET/POST /api/unified-inbox/conv-model-route（服务端 KV，换机不丢；与「发→X」同一
-   hydrate 范式：selectChat → _hydrateConvModelRoute）。四行「标签 · 当前值 ›」＝Cursor 面板信息
-   架构；选项第二屏 #mp-pick 复用翻译弹层 .xl-pick-* 骨架（is-pick 互斥）。
-   无限制＝紫（--tk-violet，全站唯一用紫的功能，不与蓝主操作 / 红危险撞色）；离线＝红点 +
-   行内「重试 / 改回标准」；首次切无限制 confirm 一次（本机记忆）。 */
-var _mp={cid:'',data:null,health:null,busy:false,pick:''};
+   hydrate 范式：selectChat → _hydrateConvModelRoute，一次请求喂两个面板）。
+   · 模型面板（#model-pop，mv-）：choices.models 目录单屏列表＝「用谁答」；route.model 为档名、
+     ""＝跟随主链；在线点由 health?all=1 一次画全；底部「数据去向」+「上一条回复」+ 管理入口。
+   · 模式面板（#mode-pop，mp-）：标准 / 无限制 + 上下文 / 力度 / 思考 / 安全刹车（Cursor 面板
+     「标签 · 当前值 ›」信息架构；选项第二屏 #mp-pick 复用翻译弹层 .xl-pick-* 骨架，is-pick 互斥）。
+   两个入口按钮（.cmp-sel）自带当前值，尺寸同款；无限制＝紫（--tk-violet，全站唯一用紫的功能）
+   只染「模式」按钮，不再两处同时变色；首次切无限制 confirm 一次（本机记忆）。 */
+var _mp={cid:'',data:null,health:null,healthAll:{},busy:false,pick:'',last:null,sup:null};
 var _MP_CONFIRM_KEY='ws_mp_unr_confirmed_v1';
-function _mpRoute(){ return (_mp.data&&_mp.data.route)||{profile:'standard',depth:'',effort:'',thinking:false,bypass_safety:false,unrestricted:false}; }
+function _mpRoute(){ return (_mp.data&&_mp.data.route)||{profile:'standard',depth:'',effort:'',thinking:false,bypass_safety:false,model:'',unrestricted:false}; }
 function _mpConvOk(c){ return !!(c&&c.platform&&c.chat_key); }
 function _mpParams(c){ return {platform:c.platform,account_id:c.account_id||'default',chat_key:c.chat_key}; }
 /* 键表显式列出（i18n 覆盖门禁按字面量抓 window.T 键，拼接键抓不到） */
@@ -22764,53 +22782,145 @@ function _mpDepthSub(k){
 function _mpEffortLabel(k){ var e=_MP_EFFORT_KEYS[k||'']; return e?window.T(e[0]):String(k||''); }
 function _mpEffortSub(k){ var e=_MP_EFFORT_KEYS[k||'']; return e?window.T(e[1]):''; }
 function _mpProfLabel(p){ return window.T(p==='unrestricted'?'inbox.mp.prof_unrestricted':'inbox.mp.prof_standard'); }
-function _mpEndpoint(){ return (_mp.data&&_mp.data.endpoint)||{}; }
-/* 状态胶囊 + 入口按钮 + 身份条紫签 + 弹层四行 一起重画（所有改动路径都过这里） */
+function _mpEndpoint(){ return (_mp.data&&_mp.data.endpoint)||{}; }          // 无限制端点事实（模式面板）
+function _mpActiveEp(){ return (_mp.data&&_mp.data.active_endpoint)||{}; }   // 本会话实际用谁答
+function _mpModels(){ var d=_mp.data||{}; return (d.choices&&d.choices.models)||[]; }
+function _mpModelRow(name){ var ms=_mpModels(), n=name||''; for(var i=0;i<ms.length;i++){ if((ms[i].name||'')===n) return ms[i]; } return null; }
+/* 厂商名：私网档走词典（可译），云厂商用品牌名原样（不译） */
+function _mvLabel(m){ if(!m) return ''; if(m.vendor==='local'||m.private) return window.T('inbox.mp.vendor_local'); return m.label||m.host||m.model||''; }
+function _mvInitial(m){ var s=_mvLabel(m)||'?'; return s.charAt(0).toUpperCase(); }
+/* 在线态查表：name===null → 无限制端点（_mp.health）；否则按档名查 health?all=1 的结果 */
+function _mpHealthFor(name){ if(name===null) return _mp.health; var h=_mp.healthAll||{}; return h[name||'']||null; }
+function _mvErr(h){
+  var e=String((h&&h.error)||'');
+  if(e==='http_401'||e==='http_403') return window.T('inbox.mp.err_auth');
+  if(e==='http_404') return window.T('inbox.mp.err_model');
+  if(e==='http_429') return window.T('inbox.mp.err_quota');
+  return window.T('inbox.mp.offline_short');
+}
+/* 两个入口按钮 + 身份条紫签 + 两个面板 一起重画（所有改动路径都过这里） */
 function _mpRender(){
-  var r=_mpRoute(), unr=!!r.unrestricted;
-  var chip=document.getElementById('rt-model-status');
-  if(chip){
-    var parts=[window.T(unr?'inbox.mp.status_unr':'inbox.mp.status_std')];
-    if(r.depth) parts.push(_mpDepthLabel(r.depth));
-    if(r.effort) parts.push(_mpEffortLabel(r.effort));
-    if(unr&&r.thinking) parts.push(window.T('inbox.mp.row_thinking'));
-    chip.textContent=parts.join(' · ');
-    chip.classList.toggle('on',unr||!!r.depth||!!r.effort);
-    chip.classList.toggle('vio',unr);
-    chip.classList.toggle('offline',unr&&!!_mp.health&&_mp.health.configured&&!_mp.health.online);
-    chip.title=window.T('inbox.mp.status_t');
+  var r=_mpRoute(), unr=!!r.unrestricted, d=_mp.data||{};
+  /* 「模型」按钮：值＝实际用谁答；点＝该端点在线态；主链或档缺失时给警示色 */
+  var mv=document.getElementById('model-btn-val'), md=document.getElementById('model-btn-dot'), mbtn=document.getElementById('model-btn');
+  var ep=_mpActiveEp(), row=unr?null:_mpModelRow(r.model);
+  var mlabel=unr?(ep.model||'chatx'):(row?_mvLabel(row):(r.model?r.model:(ep.model||window.T('inbox.mp.model_follow'))));
+  if(mv) mv.textContent=mlabel;
+  var h=unr?_mp.health:_mpHealthFor(r.model||'');
+  if(md){ md.className='cmp-sel-dot'+(h&&h.configured!==false?(h.online?' ok':' off'):''); }
+  if(mbtn){ mbtn.classList.toggle('warn',!!d.model_missing); mbtn.classList.toggle('dim',unr); }
+  /* 「模式」按钮：值＝模式 · 上下文 · 力度 · 思考；无限制→紫，端点离线→红 */
+  var modeVal=document.getElementById('mode-btn-val'), modeBtn=document.getElementById('mode-btn');
+  var parts=[window.T(unr?'inbox.mp.status_unr':'inbox.mp.status_std')];
+  if(r.depth) parts.push(_mpDepthLabel(r.depth));
+  if(r.effort) parts.push(_mpEffortLabel(r.effort));
+  if(r.thinking) parts.push(window.T('inbox.mp.row_thinking'));
+  if(modeVal) modeVal.textContent=parts.join(' · ');
+  if(modeBtn){
+    modeBtn.classList.toggle('vio',unr);
+    modeBtn.classList.toggle('offline',unr&&!!_mp.health&&_mp.health.configured&&!_mp.health.online);
   }
-  var btn=document.getElementById('model-btn');
-  if(btn) btn.classList.toggle('vio',unr);
   var bar=document.getElementById('identity-bar');
   if(bar) bar.classList.toggle('unr',unr);
+  /* 模式面板各行 */
   var setv=function(id,txt){ var el=document.getElementById(id); if(el) el.textContent=txt; };
   setv('mp-val-model',_mpProfLabel(r.profile));
   setv('mp-val-depth',_mpDepthLabel(r.depth));
   setv('mp-val-effort',_mpEffortLabel(r.effort));
-  setv('mp-val-thinking',window.T(r.thinking?'inbox.mp.on':'inbox.mp.off'));
+  var thinkable=unr||!!r.model;   // 思考开关只对显式路由档（无限制 / 点名模型）生效
+  setv('mp-val-thinking',thinkable?window.T(r.thinking?'inbox.mp.on':'inbox.mp.off'):window.T('inbox.mp.think_follow'));
   setv('mp-val-safety',window.T(r.bypass_safety?'inbox.mp.safety_off':'inbox.mp.safety_keep'));
-  var sw1=document.getElementById('mp-sw-thinking'); if(sw1) sw1.classList.toggle('on',!!r.thinking);
+  var sw1=document.getElementById('mp-sw-thinking'); if(sw1){ sw1.classList.toggle('on',thinkable&&!!r.thinking); sw1.style.display=thinkable?'':'none'; }
   var sw2=document.getElementById('mp-sw-safety'); if(sw2) sw2.classList.toggle('on',!!r.bypass_safety);
   var rowM=document.getElementById('mp-row-model'); if(rowM) rowM.classList.toggle('vio',unr);
-  var rowT=document.getElementById('mp-row-thinking'); if(rowT) rowT.classList.toggle('dim',!unr);
+  var rowT=document.getElementById('mp-row-thinking'); if(rowT) rowT.classList.toggle('dim',!thinkable);
   var rowS=document.getElementById('mp-row-safety'); if(rowS){ rowS.style.display=unr?'':'none'; rowS.classList.toggle('danger',!!r.bypass_safety); }
-  var hl=document.getElementById('mp-health'); if(hl) hl.style.display=unr?'':'none';
   _mpRenderHealth();
+  _mvRender();
 }
+/* 模式面板里的端点行：只在无限制且「探测中 / 离线」时出现（在线态去「模型」面板看） */
 function _mpRenderHealth(){
-  var dot=document.getElementById('mp-health-dot'), txt=document.getElementById('mp-health-txt');
+  var box=document.getElementById('mp-health'), dot=document.getElementById('mp-health-dot'), txt=document.getElementById('mp-health-txt');
   var retry=document.getElementById('mp-health-retry'), std=document.getElementById('mp-health-std');
-  if(!dot||!txt) return;
-  var h=_mp.health, ep=_mpEndpoint();
+  if(!box||!dot||!txt) return;
+  var r=_mpRoute(), h=_mp.health, ep=_mpEndpoint();
+  if(!r.unrestricted||(h&&h.configured&&h.online)){ box.style.display='none'; return; }
+  box.style.display='';
   dot.className='mp-health-dot';
   if(!h){ txt.textContent=window.T('inbox.mp.checking'); dot.classList.add('unknown'); }
   else if(!h.configured){ txt.textContent=window.T('inbox.mp.prof_unrestricted_noep'); dot.classList.add('off'); }
-  else if(h.online){ txt.textContent=(ep.model||h.model||'')+' @ '+(ep.host||h.host||'')+' · '+window.Tf('inbox.mp.online',{ms:h.latency_ms||0}); dot.classList.add('ok'); }
   else { txt.textContent=(ep.model||h.model||'')+' @ '+(ep.host||h.host||'')+' · '+window.Tf('inbox.mp.offline',{err:h.error||'unreachable'}); dot.classList.add('off'); txt.title=window.T('inbox.mp.offline_hint'); }
   var offline=!!(h&&(!h.configured||!h.online));
   if(retry) retry.style.display=offline?'':'none';
   if(std) std.style.display=offline?'':'none';
+}
+/* 模型面板：目录列表 + 提示条 + 数据去向 + 管理入口 + 上一条回复 */
+function _mvRender(){
+  var host=document.getElementById('mv-list'); if(!host) return;
+  var r=_mpRoute(), unr=!!r.unrestricted, d=_mp.data||{}, ms=_mpModels(), html='';
+  var notice=document.getElementById('mv-notice');
+  if(notice){
+    if(unr){ notice.textContent=window.T('inbox.mp.unr_notice'); notice.className='mv-notice vio'; notice.style.display=''; }
+    else if(d.model_missing){ notice.textContent=window.Tf('inbox.mp.model_missing',{name:r.model||''}); notice.className='mv-notice warn'; notice.style.display=''; }
+    else notice.style.display='none';
+  }
+  ms.forEach(function(m){
+    var name=m.name||'', on=!unr&&(r.model||'')===name, h=_mpHealthFor(name);
+    var tags='';
+    if(!name) tags+='<span class="mv-tag">'+esc(window.T('inbox.mp.tag_main'))+'</span>';
+    if(m.private) tags+='<span class="mv-tag priv">'+esc(window.T('inbox.mp.tag_private'))+'</span>';
+    if(m.cost_hint) tags+='<span class="mv-tag">'+esc(m.cost_hint)+'</span>';
+    var hh;
+    if(!h) hh='<i class="mv-dot" aria-hidden="true"></i>';
+    else if(h.online) hh='<i class="mv-dot ok" aria-hidden="true"></i>'+esc(h.latency_ms?(h.latency_ms+' ms'):window.T('inbox.mp.h_online'));
+    else hh='<i class="mv-dot off" aria-hidden="true"></i>'+esc(_mvErr(h));
+    html+='<button type="button" role="option" aria-selected="'+(on?'true':'false')+'" class="mv-row'+(on?' on':'')+'" data-v="'+esc(name)+'" title="'+esc(m.model+' @ '+m.host)+'">'
+        +'<span class="mv-av" data-vendor="'+esc(m.vendor||'other')+'" aria-hidden="true">'+esc(_mvInitial(m))+'</span>'
+        +'<span class="mv-main"><span class="mv-name">'+esc(_mvLabel(m))+'</span>'+tags+'</span>'
+        +'<span class="mv-health">'+hh+'</span>'
+        +'<span class="mv-sub">'+esc(m.model||'')+' @ '+esc(m.host||'')+'</span>'
+        +'</button>';
+  });
+  if(ms.length<=1) html+='<div class="mv-empty">'+esc(window.T(_mp.sup===false?'inbox.mp.empty_agent':'inbox.mp.empty'))+'</div>';
+  host.innerHTML=html;
+  host.querySelectorAll('.mv-row').forEach(function(b){
+    b.addEventListener('click',function(){
+      var v=b.getAttribute('data-v')||'';
+      if(!unr&&(r.model||'')===v) return;   // 点当前档＝无操作
+      _mpSet({model:v});
+    });
+  });
+  /* 数据去向：私网 vs 出网到哪家 */
+  var flow=document.getElementById('mv-dataflow');
+  if(flow){
+    var ep=_mpActiveEp(), hostTxt=ep.host||'';
+    flow.textContent=hostTxt?window.Tf(ep.private?'inbox.mp.flow_private':'inbox.mp.flow_cloud',{host:hostTxt}):'';
+    flow.classList.toggle('priv',!!ep.private);
+  }
+  var mg=document.getElementById('mv-manage'); if(mg) mg.style.display=(_mp.sup===false)?'none':'';
+  _mvRenderLast();
+}
+function _mvRenderLast(){
+  var el=document.getElementById('mv-last'); if(!el) return;
+  var L=_mp.last;
+  if(!L||!L.model){ el.textContent=''; el.style.display='none'; return; }
+  var sec=Math.round(((L.latency_ms||0)/1000)*10)/10;
+  el.textContent=window.Tf('inbox.mp.last_reply',{model:L.model,host:L.host||'',sec:sec});
+  el.classList.toggle('bad',L.ok===false);
+  el.style.display='';
+}
+/* 上一条回复用了谁（进程内 prompt 环，重启即清；拿不到就不显示） */
+async function _mvLoadLast(){
+  var c=selectedChat; if(!_mpConvOk(c)) return;
+  var cid=_mp.cid;
+  try{
+    var resp=await apiFetch('/api/ai/prompt-inspect?conv='+enc(c.chat_key)+'&limit=1',{},{timeoutMs:8000});
+    var d=resp.ok?await resp.json():null;
+    if(_mp.cid!==cid) return;
+    var it=d&&d.items&&d.items[0];
+    _mp.last=it?{model:it.model,host:it.host,latency_ms:it.latency_ms,ok:it.ok}:null;
+  }catch(_){ _mp.last=null; }
+  _mvRenderLast();
 }
 async function _mpHealth(force){
   var r=_mpRoute(); if(!r.unrestricted) return;
@@ -22822,13 +22932,36 @@ async function _mpHealth(force){
   }catch(_){ _mp.health={configured:true,online:false,error:'network'}; }
   _mpRender();
 }
+/* 目录全档探活（面板打开时一次画全；服务端 60s TTL，不会打爆云厂商） */
+async function _mpHealthAll(force){
+  var cid=_mp.cid;
+  try{
+    var resp=await apiFetch('/api/ai/model-route/health?all=1'+(force?'&force=1':''),{},{timeoutMs:15000});
+    var d=await resp.json();
+    if(_mp.cid!==cid) return;
+    if(d&&d.ok){ _mp.healthAll=d.health_all||{}; if(d.health&&_mpRoute().unrestricted) _mp.health=d.health; }
+  }catch(_){}
+  _mpRender();
+}
+/* 单档探活（切会话时只探本会话实际在用的那一档，给按钮上的点） */
+async function _mpHealthOne(name){
+  var cid=_mp.cid;
+  try{
+    var resp=await apiFetch('/api/ai/model-route/health?profile='+enc(name||''),{},{timeoutMs:12000});
+    var d=await resp.json();
+    if(_mp.cid!==cid) return;
+    if(d&&d.ok&&d.health){ _mp.healthAll=_mp.healthAll||{}; _mp.healthAll[name||'']=d.health; }
+  }catch(_){}
+  _mpRender();
+}
 /* 切会话即拉服务端路由（缺席＝标准档，零请求以外的副作用） */
 async function _hydrateConvModelRoute(c){
-  _mp.cid=''; _mp.data=null; _mp.health=null; _mp.pick='';
-  var pop=document.getElementById('model-pop'); if(pop) pop.classList.remove('is-pick');
+  _mp.cid=''; _mp.data=null; _mp.health=null; _mp.healthAll={}; _mp.pick=''; _mp.last=null;
+  var pop=document.getElementById('mode-pop'); if(pop) pop.classList.remove('is-pick');
   _mpRender();
   if(!_mpConvOk(c)) return;
   var cid=convKey(c); _mp.cid=cid;
+  if(_mp.sup===null){ try{ _wsMeIsSup().then(function(v){ _mp.sup=!!v; _mvRender(); }); }catch(_){ _mp.sup=true; } }
   try{
     var p=_mpParams(c);
     var resp=await apiFetch('/api/unified-inbox/conv-model-route?platform='+enc(p.platform)+'&account_id='+enc(p.account_id)+'&chat_key='+enc(p.chat_key));
@@ -22841,12 +22974,16 @@ async function _hydrateConvModelRoute(c){
     }
     var d=await resp.json();
     if(_mp.cid!==cid) return;              // 期间切走了：不落到别的会话上
-    if(d&&d.ok){ _mp.data=d; _mpRender(); if(d.route&&d.route.unrestricted) _mpHealth(false); }
+    if(d&&d.ok){
+      _mp.data=d; _mpRender();
+      if(d.route&&d.route.unrestricted) _mpHealth(false);
+      else _mpHealthOne((d.route&&d.route.model)||'');
+    }
   }catch(_){ /* 增强层：拉不到按标准档画，不打扰 */ }
 }
 window._hydrateConvModelRoute=_hydrateConvModelRoute;
-function toggleModelPop(){
-  var p=document.getElementById('model-pop'), btn=document.getElementById('model-btn');
+function _mpTogglePop(popId,btnId,onOpen){
+  var p=document.getElementById(popId), btn=document.getElementById(btnId);
   if(!p) return;
   var show=!p.classList.contains('show');
   _closeRtPops(p);
@@ -22854,16 +22991,29 @@ function toggleModelPop(){
   if(btn) btn.setAttribute('aria-expanded',show?'true':'false');
   if(show){
     if(!_mpConvOk(selectedChat)){ _toast(window.T('inbox.mp.no_conv'),'#64748b'); }
-    _mpPickBack(); _mpRender(); _placeRtPop(p);
-    if(_mpRoute().unrestricted) _mpHealth(false);
-    try{ _uiBeacon('cmpz_model_open'); }catch(_){}
+    _mpRender(); _placeRtPop(p);
+    try{ onOpen(); }catch(_){}
     try{ p.focus({preventScroll:true}); }catch(_){}
   } else { _placeRtPopReset(p); if(btn) try{ btn.focus({preventScroll:true}); }catch(_){} }
 }
+function toggleModelPop(){
+  _mpTogglePop('model-pop','model-btn',function(){
+    _mpHealthAll(false); _mvLoadLast();
+    try{ _uiBeacon('cmpz_vendor_open'); }catch(_){}
+  });
+}
 window.toggleModelPop=toggleModelPop;
+function toggleModePop(){
+  _mpTogglePop('mode-pop','mode-btn',function(){
+    _mpPickBack();
+    if(_mpRoute().unrestricted) _mpHealth(false);
+    try{ _uiBeacon('cmpz_model_open'); }catch(_){}
+  });
+}
+window.toggleModePop=toggleModePop;
 /* 选项第二屏：profile / depth / effort 三种单选列表（复用 .xl-pick-* 视觉） */
 function _mpPickOpen(kind){
-  var host=document.getElementById('mp-pick'), pop=document.getElementById('model-pop');
+  var host=document.getElementById('mp-pick'), pop=document.getElementById('mode-pop');
   if(!host||!pop) return;
   var r=_mpRoute(), d=_mp.data||{}, ch=d.choices||{}, ep=_mpEndpoint(), rows=[], title='';
   var allowed=!!(d.allowed!==false), enabled=!!(d.enabled!==false);
@@ -22897,17 +23047,20 @@ function _mpPickOpen(kind){
   });
   pop.classList.add('is-pick');
   _placeRtPop(pop);
+  /* 点过的主屏行已 display:none，焦点会掉到 body → Esc 监听收不到；把焦点接回弹层 */
+  try{ pop.focus({preventScroll:true}); }catch(_){}
 }
 window._mpPickOpen=_mpPickOpen;
 function _mpPickBack(){
-  var pop=document.getElementById('model-pop'), host=document.getElementById('mp-pick');
+  var pop=document.getElementById('mode-pop'), host=document.getElementById('mp-pick');
   if(pop) pop.classList.remove('is-pick');
   if(host) host.innerHTML='';
   _mp.pick='';
-  if(pop&&pop.classList.contains('show')) _placeRtPop(pop);
+  if(pop&&pop.classList.contains('show')){ _placeRtPop(pop); try{ pop.focus({preventScroll:true}); }catch(_){} }
 }
 window._mpPickBack=_mpPickBack;
-/* 写服务端（patch 语义）；403 分型：feature_locked → 旗舰授权提示，disabled → 运营关闭 */
+/* 写服务端（patch 语义）；403 分型：feature_locked → 旗舰授权提示，disabled → 运营关闭；
+   400 unknown_model → 档已被删，重拉目录 */
 async function _mpSet(patch){
   var c=selectedChat;
   if(!_mpConvOk(c)){ _toast(window.T('inbox.mp.no_conv'),'#64748b'); return; }
@@ -22942,34 +23095,59 @@ async function _mpSet(patch){
       try{ _uiBeacon('cmpz_model_denied'); }catch(_){}
       return;
     }
+    if(resp.status===400&&(resp.headers.get('X-Deny-Reason')||'')==='unknown_model'){
+      _toast(window.T('inbox.mp.model_gone'),'#b45309');
+      _hydrateConvModelRoute(c);
+      return;
+    }
     if(!resp.ok||!d||!d.ok){ _toast(window.Tf('inbox.mp.fail',{msg:(d&&(d.error||d.detail))||('HTTP '+resp.status)}),'#dc2626'); return; }
     if(_mp.cid!==cid) return;              // 请求期间切走：不把结果画到别的会话上
     _mp.data=d; _mp.health=null;
     _mpPickBack(); _mpRender();
-    var chip=document.getElementById('rt-model-status');
-    if(chip){ chip.classList.remove('flash'); void chip.offsetWidth; chip.classList.add('flash'); }
     var nr=_mpRoute();
-    _toast(window.Tf('inbox.mp.saved',{label:_mpProfLabel(nr.profile)+(nr.depth?' · '+_mpDepthLabel(nr.depth):'')+(nr.effort?' · '+_mpEffortLabel(nr.effort):'')}),nr.unrestricted?'#7c3aed':'#16a34a');
-    try{ _uiBeacon(nr.unrestricted?'cmpz_model_unr_on':'cmpz_model_set'); }catch(_){}
-    if(nr.unrestricted) _mpHealth(true);
+    var flashId=('model' in patch)?'model-btn':'mode-btn';
+    var fb=document.getElementById(flashId);
+    if(fb){ fb.classList.remove('flash'); void fb.offsetWidth; fb.classList.add('flash'); }
+    if('model' in patch){
+      var row=_mpModelRow(nr.model);
+      _toast(window.Tf('inbox.mp.saved_model',{label:row?_mvLabel(row):window.T('inbox.mp.model_follow')}),'#16a34a');
+      if(r.unrestricted&&!nr.unrestricted) _toast(window.T('inbox.mp.left_unr'),'#7c3aed');
+      try{ _uiBeacon('cmpz_vendor_set'); }catch(_){}
+      _mpHealthOne(nr.model||'');
+    } else {
+      _toast(window.Tf('inbox.mp.saved',{label:_mpProfLabel(nr.profile)+(nr.depth?' · '+_mpDepthLabel(nr.depth):'')+(nr.effort?' · '+_mpEffortLabel(nr.effort):'')}),nr.unrestricted?'#7c3aed':'#16a34a');
+      try{ _uiBeacon(nr.unrestricted?'cmpz_model_unr_on':'cmpz_model_set'); }catch(_){}
+      if(nr.unrestricted) _mpHealth(true); else _mpHealthOne(nr.model||'');
+    }
   }catch(_){ _toast(window.Tf('inbox.mp.fail',{msg:'network'}),'#dc2626'); }
   finally{ _mp.busy=false; }
 }
 window._mpSet=_mpSet;
-function _mpToggleThinking(){ var r=_mpRoute(); if(!r.unrestricted){ _mpPickOpen('profile'); return; } _mpSet({thinking:!r.thinking}); }
+function _mpToggleThinking(){
+  var r=_mpRoute();
+  if(!(r.unrestricted||r.model)){ _toast(window.T('inbox.mp.think_follow_hint'),'#64748b'); return; }
+  _mpSet({thinking:!r.thinking});
+}
 window._mpToggleThinking=_mpToggleThinking;
 function _mpToggleSafety(){ var r=_mpRoute(); if(!r.unrestricted) return; _mpSet({bypass_safety:!r.bypass_safety}); }
 window._mpToggleSafety=_mpToggleSafety;
 function _mpBackToStandard(){ _mpSet({profile:'standard'}); }
 window._mpBackToStandard=_mpBackToStandard;
 window._mpHealth=_mpHealth;
-/* Esc：选项屏 → 主屏 → 关闭（与翻译弹层同手感） */
+window._mpHealthAll=_mpHealthAll;
+/* Esc：模式面板 选项屏 → 主屏 → 关闭；模型面板 直接关闭（与翻译弹层同手感） */
 (function(){
-  var pop=document.getElementById('model-pop'); if(!pop) return;
-  pop.addEventListener('keydown',function(e){
+  var mode=document.getElementById('mode-pop');
+  if(mode) mode.addEventListener('keydown',function(e){
     if(e.key!=='Escape') return;
     e.preventDefault(); e.stopPropagation();
-    if(pop.classList.contains('is-pick')) _mpPickBack(); else toggleModelPop();
+    if(mode.classList.contains('is-pick')) _mpPickBack(); else toggleModePop();
+  });
+  var model=document.getElementById('model-pop');
+  if(model) model.addEventListener('keydown',function(e){
+    if(e.key!=='Escape') return;
+    e.preventDefault(); e.stopPropagation();
+    toggleModelPop();
   });
 })();
 /* P1-XI：图片翻译粘贴/拖拽入口——仅翻译弹层或图译面板打开时接管（不抢

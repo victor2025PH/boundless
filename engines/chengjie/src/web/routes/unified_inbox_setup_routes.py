@@ -1176,6 +1176,52 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
         return {"ok": True, "detail": tr(request, "setup.routes.saved"),
                 "models": len(cleaned), "routes": len(routes), "ai_ready": bool(ai_ready)}
 
+    @app.post("/api/setup/model-routes/list-models")
+    async def api_setup_model_routes_list_models(request: Request):
+        """拉某端点的模型清单（``GET {base}/v1/models``，OpenAI 兼容）——给开发者页「多模型路由」
+        的模型名输入框做候选，运营不必背 gpt-/gemini-/grok- 的现役 id（2026-09-12 厂商预设配套）。
+
+        body ``{base_url, api_key?, name?}``：api_key 为空或掩码 → 同名已存档的真值 → ``ai.api_key``。
+        只读、不耗 token；返回 ``{ok, ids:[...], n, status}``；密钥不回显。
+        """
+        api_auth(request)
+        _require_supervisor_or_shell(request)
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        base = str((body or {}).get("base_url") or "").strip().rstrip("/")[:300]
+        if not base or "://" not in base:
+            return {"ok": False, "detail": tr(request, "err.setup.routes_base_invalid", name="-")}
+        if not base.endswith("/v1"):
+            base = base + "/v1"
+        key = str((body or {}).get("api_key") or "").strip()
+        cfg = getattr(config_manager, "config", None) or {}
+        ai_cfg = cfg.get("ai") or {}
+        if not key or ("…" in key) or key.endswith("***"):
+            nm = str((body or {}).get("name") or "").strip()
+            stored = ((ai_cfg.get("models") or {}).get(nm) or {}) if nm else {}
+            key = str(stored.get("api_key") or "") or str(ai_cfg.get("api_key") or "")
+        ids: list = []
+        status = 0
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as cli:
+                resp = await cli.get(base + "/models",
+                                     headers={"Authorization": "Bearer " + (key or "probe")})
+            status = int(resp.status_code)
+            if status < 400:
+                data = resp.json()
+                rows = data.get("data") if isinstance(data, dict) else data
+                for it in (rows or [])[:500]:
+                    mid = it.get("id") if isinstance(it, dict) else it
+                    if mid:
+                        ids.append(str(mid))
+        except Exception as ex:
+            return {"ok": False, "detail": str(ex)[:120], "status": status}
+        ids = sorted(set(ids))[:200]
+        return {"ok": status < 400, "ids": ids, "n": len(ids), "status": status}
+
     @app.post("/api/setup/channels/{channel}")
     async def api_setup_channel_save(channel: str, request: Request):
         """保存某渠道凭证到 overlay 并即时生效；返回该渠道最新现状 + 自检问题。"""

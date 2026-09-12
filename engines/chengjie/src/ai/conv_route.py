@@ -40,6 +40,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -102,6 +103,12 @@ SAFETY_LAYERS = frozenset({
 # Route
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: ``Route.model``（2026-09-12 拆面板）：标准模式下本会话「用谁答」＝ ``ai.models`` 档名；
+#: 空串＝跟随实例主链。无限制模式的端点由模式自己决定，此字段恒空。
+MODEL_FOLLOW = ""
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,40}$")
+
+
 @dataclass(frozen=True)
 class Route:
     profile: str = PROFILE_STANDARD
@@ -109,6 +116,7 @@ class Route:
     effort: str = EFFORT_FOLLOW
     thinking: bool = False
     bypass_safety: bool = False
+    model: str = MODEL_FOLLOW
     updated_by: str = ""
     updated_at: float = 0.0
 
@@ -123,13 +131,22 @@ class Route:
     @property
     def is_default(self) -> bool:
         return (self.profile == PROFILE_STANDARD and not self.depth and not self.effort
-                and not self.thinking and not self.bypass_safety)
+                and not self.thinking and not self.bypass_safety and not self.model)
+
+    @property
+    def route_key(self) -> str:
+        """ai_client ``_route`` 值：无限制 → 无限制档；标准 + 选了模型 → 该档；否则空。"""
+        if self.unrestricted:
+            return "profile:" + profile_name()
+        if self.model:
+            return "profile:" + self.model
+        return ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "profile": self.profile, "depth": self.depth, "effort": self.effort,
             "thinking": bool(self.thinking), "bypass_safety": bool(self.bypass_safety),
-            "unrestricted": self.unrestricted,
+            "model": self.model, "unrestricted": self.unrestricted,
             "updated_by": self.updated_by, "updated_at": self.updated_at,
         }
 
@@ -157,6 +174,10 @@ class Route:
             ctx["_unrestricted"] = True
             if self.bypass_safety:
                 ctx["_unrestricted_bypass_safety"] = True
+        elif self.model:
+            # 标准模式点名厂商模型：只换「主尝试」的端点，**不**严格——该档离线/失败
+            # 照走 备用池 → 本地兜底 → canned 降级链（规则全开，与主链同一条命）。
+            ctx["_route"] = "profile:" + self.model
 
 
 def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None) -> Route:
@@ -166,6 +187,18 @@ def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None) -> Ro
     prof = str(payload.get("profile", r.profile) or PROFILE_STANDARD).strip().lower()
     if prof not in PROFILES:
         prof = r.profile
+    # 模型字段：非法名回落 base；「无限制会话里点选了云厂商」且没显式给 profile
+    # → 视为改回标准模式（云端不会替你跑去审查内容，两者天然互斥；前端会提示）。
+    model_in = "model" in payload
+    model_v = r.model
+    if model_in:
+        mv = str(payload.get("model") or "").strip()
+        if not mv:
+            model_v = MODEL_FOLLOW
+        elif _MODEL_NAME_RE.match(mv):
+            model_v = mv
+        if model_v and "profile" not in payload and r.unrestricted:
+            prof = PROFILE_STANDARD
     switched_to_unr = prof == PROFILE_UNRESTRICTED and r.profile != PROFILE_UNRESTRICTED
     switched_to_std = prof == PROFILE_STANDARD and r.profile != PROFILE_STANDARD
     if switched_to_unr:
@@ -189,7 +222,12 @@ def normalize(payload: Mapping[str, Any], *, base: Optional[Route] = None) -> Ro
         r = replace(r, thinking=_truthy(payload.get("thinking")))
     if "bypass_safety" in payload:
         r = replace(r, bypass_safety=_truthy(payload.get("bypass_safety")))
-    if not r.unrestricted:
+    if model_in:
+        r = replace(r, model=model_v)
+    if r.unrestricted:
+        # 无限制的端点由模式自己定（ai.unrestricted.profile / ai.fallback），模型字段恒空
+        r = replace(r, model=MODEL_FOLLOW)
+    else:
         # 安全刹车全关只对无限制会话有意义；标准档不许挂这把钥匙
         r = replace(r, bypass_safety=False)
     return r
@@ -285,6 +323,112 @@ def endpoint_spec(config: Any = None) -> Dict[str, Any]:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 模型目录（composer「模型」面板：标准模式下本会话「用谁答」）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _vendor(base_url: str) -> Dict[str, Any]:
+    try:
+        from src.ai.vendor_params import vendor_of
+        return vendor_of(base_url)
+    except Exception:
+        return {"key": "other", "label": "", "private": False, "default_ctx": 128_000}
+
+
+def _spec_row(name: str, spec: Mapping[str, Any], *, source: str, label: str = "") -> Dict[str, Any]:
+    base = str(spec.get("base_url") or "").strip().rstrip("/")
+    model = str(spec.get("model") or "").strip()
+    if not base or not model:
+        return {}
+    v = _vendor(base)
+    try:
+        max_ctx = int(spec.get("max_ctx") or spec.get("num_ctx") or 0)
+    except (TypeError, ValueError):
+        max_ctx = 0
+    if max_ctx <= 0:
+        max_ctx = int(v.get("default_ctx") or 128_000)
+    host = base.split("://", 1)[-1].split("/", 1)[0]
+    return {
+        "name": name, "label": label or str(spec.get("label") or "").strip() or v.get("label") or host,
+        "vendor": v.get("key") or "other", "model": model, "host": host, "base_url": base,
+        "private": bool(v.get("private")), "max_ctx": max_ctx, "source": source,
+        "cost_hint": str(spec.get("cost_hint") or "").strip()[:24],
+        "supports_thinking": bool(spec.get("supports_thinking", True)),
+    }
+
+
+def main_chain_spec(config: Any = None) -> Dict[str, Any]:
+    """实例主链（``ai.base_url`` / ``ai.model``）作为目录首项；缺配置 → ``{}``。"""
+    ai = _root(config).get("ai") or {}
+    if not isinstance(ai, Mapping):
+        return {}
+    row = _spec_row(MODEL_FOLLOW, {"base_url": ai.get("base_url"), "model": ai.get("model"),
+                                   "max_ctx": ai.get("max_ctx")}, source="ai")
+    return row
+
+
+def model_catalog(config: Any = None) -> list:
+    """标准模式可点名的模型档：主链（name=""）+ ``ai.models`` 每档（跳过 ``_`` 前缀内部档）。
+
+    无限制档名（``ai.unrestricted.profile``）若在 ``ai.models`` 里显式配了，也列出——
+    它只是「本机私有模型」的端点事实，标准模式点它＝私有模型 + 规则全开（合法用法）；
+    ``ai.models`` 没配而 ``ai.fallback`` 有 LAN 端点时，ai_client 也会把该名绑到 LAN，
+    这里同样列出（``source=ai.fallback``），前端按 ``private`` 画「数据不出内网」。
+    """
+    root = _root(config)
+    ai = root.get("ai") or {}
+    out: list = []
+    main = main_chain_spec(root)
+    if main:
+        out.append(main)
+    models = ai.get("models") if isinstance(ai, Mapping) else None
+    seen: Dict[str, bool] = {}   # 模块里 set() 是存储函数名，别用内置 set
+    if isinstance(models, Mapping):
+        for name, spec in models.items():
+            n = str(name or "").strip()
+            if not n or n.startswith("_") or not _MODEL_NAME_RE.match(n) or not isinstance(spec, Mapping):
+                continue
+            row = _spec_row(n, spec, source=f"ai.models.{n}")
+            if row:
+                out.append(row)
+                seen[n] = True
+    unr = profile_name(root)
+    if unr not in seen:
+        fb = ai.get("fallback") if isinstance(ai, Mapping) else None
+        if isinstance(fb, Mapping) and fb.get("base_url") and fb.get("enabled", True):
+            row = _spec_row(unr, {"base_url": fb.get("base_url"), "model": fb.get("model"),
+                                  "max_ctx": fb.get("num_ctx") or _section(root).get("max_ctx")},
+                            source="ai.fallback")
+            if row:
+                out.append(row)
+    return out
+
+
+def model_spec(config: Any, name: str) -> Dict[str, Any]:
+    """目录里按档名取一行；``""`` ＝主链；没有 → ``{}``。"""
+    n = str(name or "").strip()
+    for row in model_catalog(config):
+        if row.get("name") == n:
+            return dict(row)
+    return {}
+
+
+def active_endpoint(route: Route, config: Any = None) -> Dict[str, Any]:
+    """本会话实际「用谁答」的端点事实：无限制 → 无限制端点；标准+模型 → 该档；否则主链。"""
+    if route.unrestricted:
+        spec = endpoint_spec(config)
+        if spec:
+            spec = dict(spec)
+            spec.setdefault("name", profile_name(config))
+            spec.setdefault("private", True)
+        return spec
+    if route.model:
+        row = model_spec(config, route.model)
+        if row:
+            return row
+    return main_chain_spec(config)
+
+
 #: 无限制发送时从 ``max_ctx`` 里给补全留的空位（高档力度 2048 + 模板余量）。
 _ENDPOINT_OUTPUT_RESERVE = 2048
 _ENDPOINT_HEADROOM = 128
@@ -322,21 +466,7 @@ def depth_cap(max_ctx: int) -> str:
     return best
 
 
-def allowed_depths(config: Any = None, *, unrestricted: bool = False) -> list:
-    """UI 可选深度档（含空串＝跟随全局）。
-
-    云端：四档全放。本机无限制：只放预算 ≤ 端点窗口的档，并保证有一档
-    ``max``＝满窗（发送时 :func:`endpoint_prompt_cap` 封顶到 ``max_ctx``）。
-    """
-    if not unrestricted:
-        return list(DEPTH_CHOICES)
-    spec = endpoint_spec(config)
-    try:
-        max_ctx = int((spec or {}).get("max_ctx") or 0)
-    except (TypeError, ValueError):
-        max_ctx = 0
-    if max_ctx <= 0:
-        max_ctx = 24_576
+def _depths_fitting(max_ctx: int, *, fill_key: bool) -> list:
     out = [DEPTH_FOLLOW, "standard"]
     try:
         from src.ai.context_depth import TIERS
@@ -347,9 +477,32 @@ def allowed_depths(config: Any = None, *, unrestricted: bool = False) -> list:
         budget = getattr(d, "prompt_budget_tokens", None) if d is not None else None
         if budget and int(budget) <= max_ctx:
             out.append(k)
-    if "max" not in out and max_ctx > 12_000:
+    if fill_key and "max" not in out and max_ctx > 12_000:
         out.append("max")
     return out
+
+
+def allowed_depths(config: Any = None, *, unrestricted: bool = False, model: str = "") -> list:
+    """UI 可选深度档（含空串＝跟随全局）。
+
+    云端主链：四档全放。本机无限制：只放预算 ≤ 端点窗口的档，并保证有一档
+    ``max``＝满窗（发送时 :func:`endpoint_prompt_cap` 封顶到 ``max_ctx``）。
+    标准模式点名了模型档：按该档窗口筛（``ai.models.<n>.max_ctx`` / 厂商缺省），不造满窗键。
+    """
+    if unrestricted:
+        spec = endpoint_spec(config)
+        try:
+            max_ctx = int((spec or {}).get("max_ctx") or 0)
+        except (TypeError, ValueError):
+            max_ctx = 0
+        if max_ctx <= 0:
+            max_ctx = 24_576
+        return _depths_fitting(max_ctx, fill_key=True)
+    if model:
+        row = model_spec(config, model)
+        if row:
+            return _depths_fitting(int(row.get("max_ctx") or 0), fill_key=False)
+    return list(DEPTH_CHOICES)
 
 
 def effective_depth(route: Route, config: Any = None) -> str:
@@ -357,7 +510,7 @@ def effective_depth(route: Route, config: Any = None) -> str:
     if not route.depth:
         return DEPTH_FOLLOW
     d = str(route.depth).strip().lower()
-    allowed = allowed_depths(config, unrestricted=route.unrestricted)
+    allowed = allowed_depths(config, unrestricted=route.unrestricted, model=route.model)
     if d in allowed:
         return d
     return allowed[-1] if len(allowed) > 1 else DEPTH_FOLLOW
@@ -441,10 +594,10 @@ def set(store: Any, cid: str, patch: Mapping[str, Any], *, by: str = "agent",   
         return None
     if prev.as_dict() != nxt.as_dict():
         # 审计：谁在何时给哪个会话开 / 关了无限制、动了哪把安全钥匙（合规与市场都要这条账）
-        logger.info("[conv_route] conv=%s profile=%s->%s depth=%s effort=%s thinking=%d "
-                    "bypass_safety=%d->%d by=%s",
-                    cid, prev.profile, nxt.profile, nxt.depth or "follow",
-                    nxt.effort or "follow", int(nxt.thinking),
+        logger.info("[conv_route] conv=%s profile=%s->%s model=%s->%s depth=%s effort=%s "
+                    "thinking=%d bypass_safety=%d->%d by=%s",
+                    cid, prev.profile, nxt.profile, prev.model or "main", nxt.model or "main",
+                    nxt.depth or "follow", nxt.effort or "follow", int(nxt.thinking),
                     int(prev.bypass_safety), int(nxt.bypass_safety), nxt.updated_by)
     return nxt
 
@@ -633,12 +786,16 @@ HEALTH_TTL_SEC = 60.0
 
 
 async def probe_endpoint(config: Any = None, *, force: bool = False,
-                         timeout: float = 6.0) -> Dict[str, Any]:
-    """无限制端点在线态 ``{configured, online, model, host, source, latency_ms, checked_at, error}``。
-    60s TTL 缓存；``force`` 跳缓存。绝不抛。"""
-    spec = endpoint_spec(config)
+                         timeout: float = 6.0, profile: Optional[str] = None) -> Dict[str, Any]:
+    """端点在线态 ``{configured, online, model, host, source, latency_ms, checked_at, error}``。
+
+    ``profile=None`` → 无限制端点（历史语义）；``""`` → 实例主链；档名 → 该模型档。
+    60s TTL 缓存（按 base|model 分桶）；``force`` 跳缓存。绝不抛。
+    """
+    spec = endpoint_spec(config) if profile is None else model_spec(config, profile)
     if not spec:
-        return {"configured": False, "online": False, "error": "no_endpoint"}
+        return {"configured": False, "online": False, "error": "no_endpoint",
+                "profile": profile if profile is not None else profile_name(config)}
     ck = spec["base_url"] + "|" + spec["model"]
     now = time.time()
     with _HEALTH_LOCK:
@@ -649,25 +806,33 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
         "configured": True, "online": False, "model": spec["model"], "host": spec["host"],
         "source": spec["source"], "max_ctx": spec["max_ctx"], "latency_ms": 0,
         "checked_at": now, "error": "",
+        "profile": profile if profile is not None else profile_name(config),
     }
     api_key = _api_key_for(config, spec)
     try:
         import httpx
-        body = {
+        body: Dict[str, Any] = {
             "model": spec["model"], "max_tokens": 1, "temperature": 0,
             "messages": [{"role": "user", "content": "ping"}],
-            "chat_template_kwargs": {"enable_thinking": False},
         }
+        # 关思维链字段按厂商给（云厂商对未知顶层字段会 400，不能一律送 chat_template_kwargs）
+        try:
+            from src.ai.vendor_params import thinking_off_extra_body as _toff
+            body.update(_toff(spec["base_url"], spec["model"]) or {})
+        except Exception:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         headers = {"Authorization": f"Bearer {api_key or 'vllm'}"}
         t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=timeout) as cli:
             resp = await cli.post(spec["base_url"] + "/chat/completions", json=body,
                                   headers=headers)
         out["latency_ms"] = int((time.monotonic() - t0) * 1000)
-        if resp.status_code < 500:
+        sc = int(resp.status_code)
+        if sc < 500 and sc not in (401, 403, 404, 429):
             out["online"] = True
         else:
-            out["error"] = f"http_{resp.status_code}"
+            # 401/403＝密钥不对、404＝模型名不存在、429＝额度/限流：能连上但不能用，如实报离线
+            out["error"] = f"http_{sc}"
     except Exception as e:  # 连接拒绝 / 超时 / DNS
         out["error"] = type(e).__name__.lower()[:40]
     with _HEALTH_LOCK:
@@ -675,12 +840,33 @@ async def probe_endpoint(config: Any = None, *, force: bool = False,
     return out
 
 
+async def probe_catalog(config: Any = None, *, force: bool = False,
+                        timeout: float = 6.0) -> Dict[str, Dict[str, Any]]:
+    """目录全档并发探活 ``{name: health}``（面板打开一次请求画全所有在线点）。绝不抛。"""
+    import asyncio
+    names = [str(r.get("name") or "") for r in model_catalog(config)]
+    if not names:
+        return {}
+    results = await asyncio.gather(
+        *(probe_endpoint(config, force=force, timeout=timeout, profile=n) for n in names),
+        return_exceptions=True)
+    out: Dict[str, Dict[str, Any]] = {}
+    for n, h in zip(names, results):
+        out[n] = h if isinstance(h, dict) else {"configured": True, "online": False,
+                                                "error": "probe_failed", "profile": n}
+    return out
+
+
 def _api_key_for(config: Any, spec: Mapping[str, Any]) -> str:
     try:
         ai = _root(config).get("ai") or {}
-        if str(spec.get("source") or "").startswith("ai.models."):
-            name = str(spec["source"]).split(".", 2)[-1]
-            return str(((ai.get("models") or {}).get(name) or {}).get("api_key") or "")
+        src = str(spec.get("source") or "")
+        if src.startswith("ai.models."):
+            name = src.split(".", 2)[-1]
+            return (str(((ai.get("models") or {}).get(name) or {}).get("api_key") or "")
+                    or str(ai.get("api_key") or ""))
+        if src == "ai":
+            return str(ai.get("api_key") or "")
         return str(((ai.get("fallback") or {}).get("api_key")) or "")
     except Exception:
         return ""
@@ -743,13 +929,20 @@ def describe(store: Any, cid: str, config: Any = None) -> Dict[str, Any]:
     """给 API / UI 的完整视图：路由 + 端点 + 可选项 + 授权。"""
     r = get(store, cid)
     spec = endpoint_spec(config)
+    catalog = model_catalog(config)
+    names = {str(row.get("name") or "") for row in catalog}
     return {
         "route": r.as_dict(),
         "effective_depth": effective_depth(r, config),
+        # endpoint＝无限制端点事实（历史键，模式面板用）；active_endpoint＝本会话实际用谁答
         "endpoint": {k: v for k, v in spec.items() if k != "api_key"},
+        "active_endpoint": {k: v for k, v in active_endpoint(r, config).items() if k != "api_key"},
+        # 选了的模型档已从 ai.models 删掉 → 运行时静默回主链；UI 要提示而不是装没事
+        "model_missing": bool(r.model and r.model not in names),
         "choices": {
             "profiles": list(PROFILES),
-            "depths": allowed_depths(config, unrestricted=r.unrestricted),
+            "models": catalog,
+            "depths": allowed_depths(config, unrestricted=r.unrestricted, model=r.model),
             "efforts": list(EFFORT_CHOICES),
             "effort_params": {k: dict(v) for k, v in EFFORT_PARAMS.items()},
         },
@@ -761,10 +954,12 @@ def describe(store: Any, cid: str, config: Any = None) -> Dict[str, Any]:
 
 __all__ = [
     "KEY_PREFIX", "PROFILES", "PROFILE_STANDARD", "PROFILE_UNRESTRICTED",
-    "DEPTH_CHOICES", "EFFORT_CHOICES", "EFFORT_PARAMS", "UNRESTRICTED_DEFAULTS",
+    "DEPTH_CHOICES", "EFFORT_CHOICES", "EFFORT_PARAMS", "UNRESTRICTED_DEFAULTS", "MODEL_FOLLOW",
     "FEATURE_NAME", "QUALITY_LAYERS", "SAFETY_LAYERS",
     "Route", "normalize", "enabled", "profile_name", "global_bypass_safety",
-    "endpoint_spec", "endpoint_prompt_cap", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
+    "endpoint_spec", "main_chain_spec", "model_catalog", "model_spec", "active_endpoint",
+    "probe_catalog",
+    "endpoint_prompt_cap", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
     "conv_id", "get", "set", "clear", "all_routes", "is_unrestricted",
     "bypass_safety_active", "resolve_for", "default_store", "conv_id_from_context", "attach",
     "skip_guard", "skip_for_conv", "record_offline_hold", "stats_snapshot", "reset_for_tests",

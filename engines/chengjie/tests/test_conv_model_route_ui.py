@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""会话级模型路由（conv_route）composer「模型 ▾」静态骨架门禁（2026-09-12）。
+"""会话级模型路由（conv_route）composer「模型」「模式」双面板静态骨架门禁（2026-09-12）。
 
-钉住的不是样式而是**接线**：入口在键盘图标之前、弹层复用 rt-pop 家族并进外点关闭白名单、
+钉住的不是样式而是**接线**：两个等尺寸入口在键盘图标之前、两个弹层复用 rt-pop 家族并进外点关闭白名单、
 selectChat 切会话即 hydrate、所有 inline onclick 函数挂在 window、CSS 零裸 Tailwind 蓝、
 i18n 键 zh/en 双全且不以拼接键调用 window.T（覆盖门禁抓不到拼接键）。
 """
@@ -39,7 +39,8 @@ def test_model_pop_is_rt_pop_family_and_in_outside_click_whitelist():
     # 外点关闭白名单：按钮与状态胶囊都得放行，否则点开即被同一 click 关掉
     m = re.search(r"if\(e\.target\.closest\('\.rt-pop'\)[^\n]*\)\s*return;\n\s*_closeRtPops\(\);", html)
     assert m, "找不到 rt-pop 外点关闭处理器"
-    assert "#model-btn" in m.group(0) and "#rt-model-status" in m.group(0)
+    assert "#model-btn" in m.group(0) and "#mode-btn" in m.group(0)
+    assert 'class="rt-pop rt-pop-right" id="mode-pop"' in html
 
 
 def test_select_chat_hydrates_conv_model_route():
@@ -52,7 +53,7 @@ def test_select_chat_hydrates_conv_model_route():
 
 def test_inline_onclick_handlers_are_on_window():
     html = _html()
-    for fn in ("toggleModelPop", "_mpPickOpen", "_mpToggleThinking", "_mpToggleSafety",
+    for fn in ("toggleModelPop", "toggleModePop", "_mpPickOpen", "_mpToggleThinking", "_mpToggleSafety",
                "_mpHealth", "_mpBackToStandard", "_mpPickBack", "_hydrateConvModelRoute"):
         assert re.search(rf"window\.{re.escape(fn)}\s*=", html), f"{fn} 未挂 window（inline onclick 会 ReferenceError）"
 
@@ -108,4 +109,58 @@ def test_css_uses_tokens_only_no_tailwind_blue_hex():
     block = css[i:j]
     assert "--tk-violet" in block and "--tk-vio-ink" in block
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b", block), "mp- 段不许裸 hex（走 --tk-* / --xl-* 令牌）"
-    assert ".rt-model-status.vio" in block and "#model-pop.is-pick #mp-home{display:none;}" in block
+    assert "#mode-btn.vio" in block and "#mode-pop.is-pick #mp-home{display:none;}" in block
+    assert ".cmp-sel{" in block and ".mv-row{" in block
+
+
+# ── 2026-09-12 拆双面板：模型（用谁答）/ 模式（按什么规矩答）──────────────────────
+
+def test_two_equal_entries_and_two_panels():
+    """两个入口同一个组件类（.cmp-sel，像素级等尺寸），各自 aria-controls 自己的面板；
+    独立状态胶囊已退役（值合进按钮本身）。"""
+    html = _html()
+    assert 'class="cmp-sel" id="model-btn"' in html and 'class="cmp-sel" id="mode-btn"' in html
+    assert 'aria-controls="model-pop"' in html and 'aria-controls="mode-pop"' in html
+    assert 'id="rt-model-status"' not in html, "旧状态胶囊必须移除（两个入口一个面板正是被投诉的点）"
+    for i in ("model-btn-val", "mode-btn-val", "model-btn-dot", "mv-list", "mv-notice", "mv-dataflow", "mv-manage", "mv-last"):
+        assert f'id="{i}"' in html, i
+    # 模式面板保留原五行 + 分组线；主行文案改「模式」
+    assert 'data-i18n="inbox.mp.row_model">模式</span>' in html
+    assert html.count('class="mp-group"') == 2
+    css = CSS.read_text(encoding="utf-8")
+    m = re.search(r"\.cmp-sel\{[^}]*height:26px[^}]*\}", css)
+    assert m, ".cmp-sel 必须定高（两个按钮一样大靠它）"
+    assert "#model-btn" not in css or "#model-btn.vio" not in css, "紫色只染「模式」按钮，模型按钮保持中性"
+
+
+def test_model_panel_wiring_uses_catalog_and_all_health():
+    html = _html()
+    i = html.index("function _mvRender(")
+    j = html.index("function _mvRenderLast(", i)
+    block = html[i:j]
+    assert "choices" in html[html.index("function _mpModels("):html.index("function _mpModelRow(")]
+    assert "_mpSet({model:v})" in block
+    assert "inbox.mp.unr_notice" in block and "inbox.mp.model_missing" in block and "inbox.mp.empty" in block
+    assert "/api/ai/model-route/health?all=1" in html
+    assert "/api/ai/model-route/health?profile=" in html
+    assert "/api/ai/prompt-inspect?conv=" in html
+    # 400 unknown_model → 重拉目录而不是装成功
+    k = html.index("async function _mpSet(patch)")
+    assert "unknown_model" in html[k:html.index("window._mpSet=_mpSet", k)]
+
+
+def test_md_i18n_keys_present_in_both_langs():
+    import importlib
+    pack = importlib.import_module("src.web.i18n_packs.inbox_workspace")
+    zh = {k for k in pack.ZH if k.startswith("inbox.md.")}
+    en = {k for k in pack.EN if k.startswith("inbox.md.")}
+    assert zh and zh == en
+    html = _html()
+    used = set(re.findall(r"['\"](inbox\.md\.[a-z0-9_]+)['\"]", html))
+    assert used and not (used - zh)
+    # 拆面板后文案不再自称「模型 ▾」；zh_hant 生成物里对应键已同步（否则繁体坐席看到旧字）
+    assert pack.ZH["inbox.mp.btn"] == "模型" and pack.ZH["inbox.mp.row_model"] == "模式"
+    hant = importlib.import_module("src.web.i18n_packs.zh_hant_auto")
+    hv = getattr(hant, "ZH_HANT", {}) or {}
+    assert hv.get("inbox.mp.btn") == "模型" and hv.get("inbox.mp.row_model") == "模式"
+    assert "inbox.mp.status_t" not in pack.ZH and "inbox.mp.status_t" not in hv

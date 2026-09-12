@@ -183,3 +183,77 @@ def test_get_probe_attaches_health(tmp_path, monkeypatch):
     # 不带 probe → 无 health（快路径，不阻塞加载）
     r2 = client.get("/api/setup/model-routes").json()
     assert "health" not in r2["models"][0]
+
+
+# ── 拉模型列表（2026-09-12 厂商预设配套：/v1/models → 候选 id）───────────────────
+class _HxResp:
+    def __init__(self, status, payload):
+        self.status_code = status
+        self._p = payload
+
+    def json(self):
+        return self._p
+
+
+class _HxClient:
+    calls = []
+    status = 200
+    payload = {"data": [{"id": "gpt-b"}, {"id": "gpt-a"}, {"id": "gpt-a"}]}
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, headers=None):
+        _HxClient.calls.append((url, headers))
+        return _HxResp(_HxClient.status, _HxClient.payload)
+
+
+def test_list_models_uses_stored_or_primary_key_and_dedups(tmp_path, monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _HxClient)
+    client, m = _client_mgr(
+        tmp_path, models={"gpt": {"base_url": "https://api.openai.com", "model": "gpt-a",
+                                  "api_key": "sk-stored"}})
+    _HxClient.calls.clear(); _HxClient.status = 200
+    r = client.post("/api/setup/model-routes/list-models",
+                    json={"base_url": "https://api.openai.com", "api_key": "sk-s…ored", "name": "gpt"}).json()
+    assert r["ok"] and r["ids"] == ["gpt-a", "gpt-b"] and r["n"] == 2
+    url, headers = _HxClient.calls[-1]
+    assert url == "https://api.openai.com/v1/models"            # 自动补 /v1
+    assert headers["Authorization"] == "Bearer sk-stored"       # 掩码回传 → 同名存档真值
+    # 无存档、无显式 key → 主链 key
+    client.post("/api/setup/model-routes/list-models", json={"base_url": "https://api.x.ai/v1"})
+    assert _HxClient.calls[-1][1]["Authorization"] == "Bearer sk-primary"
+    # 401 → ok=False 带 status；坏 URL → ok=False
+    _HxClient.status = 401
+    r = client.post("/api/setup/model-routes/list-models", json={"base_url": "https://api.x.ai/v1"}).json()
+    assert r["ok"] is False and r["status"] == 401 and r["ids"] == []
+    assert client.post("/api/setup/model-routes/list-models", json={"base_url": "nope"}).json()["ok"] is False
+    assert "sk-stored" not in str(r) and "sk-primary" not in str(r)
+
+
+def test_developer_page_presets_and_anchor():
+    """开发者页：多模型路由卡有 #dvmr 锚（composer「管理模型与密钥 →」跳转目标）、厂商预设
+    只填端点不写死模型版本号、「拉取模型列表」接 list-models。"""
+    import pathlib
+    import re
+    html = pathlib.Path("src/web/templates/developer.html").read_text(encoding="utf-8")
+    assert 'class="f-row" id="dvmr"' in html
+    assert "/api/setup/model-routes/list-models" in html
+    assert 'onchange="mrApplyPreset(this.value)"' in html and "function mrApplyPreset(" in html
+    i = html.index("const _DVMR_PRESETS")
+    block = html[i:html.index("};", i)]
+    for base in ("https://api.openai.com/v1", "https://generativelanguage.googleapis.com/v1beta/openai",
+                 "https://api.x.ai/v1", "https://api.deepseek.com/v1"):
+        assert base in block
+    # 云厂商预设不写死会过期的模型版本号（DeepSeek 官方唯一现役 deepseek-flash 例外）
+    assert not re.search(r"model:\s*'(gpt|gemini|grok|claude)-", block)
+    from src.web.i18n_packs import developer_page as dp
+    for k in ("dv_mr_f_preset", "dv_mr_list_btn", "dv_mr_js_list_ok", "dv_mr_js_list_fail", "dv_mr_sub_conv"):
+        assert k in dp.ZH and k in dp.EN, k

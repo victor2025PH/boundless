@@ -1742,8 +1742,14 @@ ai:
   #   已认任务名：assistant_planner（小智「替我做」规划）/ assistant_qa（小智问答）/
   #           computer_use（电脑操控 VLM）/ chat（默认对话；不配=用 ai.model）/
   #           memory_extract（记忆抽取；不配且本地兜底在线 → 自动走 LAN，省云端钱）。
+  #   聊天工作台 composer「模型」面板（2026-09-12）：这里每一档（``_`` 前缀内部档除外）都可由
+  #           坐席**按会话**点选为「用谁答」（标准模式下只换端点、规则照常，非严格：该档失败
+  #           照走降级链）。面板展示可选补：label（行名，缺省按主机识别厂商：ChatGPT/Gemini/
+  #           Grok/DeepSeek…）/ max_ctx（该档窗口，用于筛「上下文」档位，缺省按厂商保守值）/
+  #           cost_hint（成本小签，如 "¥2/M"）。开发者页「多模型路由 → 从预设添加」一键填端点。
   # models:
   #   planner_local: { base_url: http://192.168.0.173:8001, model: chatx }
+  #   chatgpt:       { base_url: https://api.openai.com/v1, model: <从 /v1/models 选>, api_key: sk-..., label: ChatGPT }
   #   qa_cheap:      { base_url: https://api.deepseek.com,   model: deepseek-flash }
   #   cu_vlm:        { base_url: http://192.168.0.176:11434, model: qwen3-vl:8b-instruct }
   # task_routes:

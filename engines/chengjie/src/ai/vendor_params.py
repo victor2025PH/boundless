@@ -123,8 +123,41 @@ def thinking_extra_body(base_url: Any, model: Any, *, enabled: bool) -> Dict[str
     return {}
 
 
+# ── 厂商身份（composer「模型」面板 / 开发者页预设共用，2026-09-12）──────────────
+# (主机后缀, 厂商键, 展示名, 默认上下文窗口 token)。窗口只用于 UI 按档筛「上下文」
+# 档位，取该厂商现役对话模型的**保守**公开值；``ai.models.<n>.max_ctx`` 显式给了永远优先。
+_VENDORS: Tuple[Tuple[str, str, str, int], ...] = (
+    ("api.deepseek.com", "deepseek", "DeepSeek", 1_000_000),
+    ("api.openai.com", "openai", "ChatGPT", 128_000),
+    ("generativelanguage.googleapis.com", "gemini", "Gemini", 1_000_000),
+    ("api.x.ai", "xai", "Grok", 128_000),
+    ("api.anthropic.com", "anthropic", "Claude", 200_000),
+    ("api.siliconflow.cn", "siliconflow", "硅基流动", 128_000),
+    ("dashscope.aliyuncs.com", "qwen", "通义千问", 128_000),
+    ("api.moonshot.cn", "kimi", "Kimi", 128_000),
+    ("open.bigmodel.cn", "zhipu", "智谱", 128_000),
+    ("openrouter.ai", "openrouter", "OpenRouter", 128_000),
+)
+DEFAULT_CLOUD_CTX = 128_000
+DEFAULT_PRIVATE_CTX = 24_576
+
+
+def vendor_of(base_url: Any) -> Dict[str, Any]:
+    """端点 → ``{key, label, private, default_ctx}``。私网 → ``local``；不认识 → ``other``。"""
+    h = host_of(base_url)
+    hostname = h.rsplit(":", 1)[0] if ":" in h else h
+    if is_private_endpoint(base_url):
+        return {"key": "local", "label": "本机私有", "private": True,
+                "default_ctx": DEFAULT_PRIVATE_CTX}
+    for suffix, key, label, ctx in _VENDORS:
+        if hostname == suffix or hostname.endswith("." + suffix):
+            return {"key": key, "label": label, "private": False, "default_ctx": ctx}
+    return {"key": "other", "label": hostname or "custom", "private": False,
+            "default_ctx": DEFAULT_CLOUD_CTX}
+
+
 __all__ = [
-    "DEEPSEEK_CURRENT_MODEL", "RETIRED_DEEPSEEK_ALIASES",
+    "DEEPSEEK_CURRENT_MODEL", "RETIRED_DEEPSEEK_ALIASES", "DEFAULT_CLOUD_CTX", "DEFAULT_PRIVATE_CTX",
     "host_of", "is_deepseek_official", "is_siliconflow", "is_private_endpoint",
-    "normalize_model", "thinking_off_extra_body", "thinking_extra_body",
+    "normalize_model", "thinking_off_extra_body", "thinking_extra_body", "vendor_of",
 ]

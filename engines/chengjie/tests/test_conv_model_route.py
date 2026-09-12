@@ -535,3 +535,135 @@ def test_feature_gate_registration_and_membership_labels():
                            {"licensing": {"feature_gate": {"enabled": True,
                                                            "plan_override": "pro"}}}) is False
     assert membership.ZH["mb_feat_unrestricted_model"] and membership.EN["mb_feat_unrestricted_model"]
+
+
+# ── 「模型 / 模式」拆面板（2026-09-12）：Route.model ＝标准模式下「用谁答」 ─────────
+
+_CFG_VENDORS = {"ai": {
+    "base_url": "https://api.deepseek.com/v1", "model": "deepseek-flash", "api_key": "sk-main",
+    "models": {
+        "gpt": {"base_url": "https://api.openai.com/v1", "model": "gpt-x", "api_key": "sk-oa"},
+        "gem": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "model": "gemini-x", "max_ctx": 200000},
+        "_lan_tool": {"base_url": "http://h:8001/v1", "model": "chatx"},
+    },
+    "fallback": {"enabled": True, "base_url": "http://192.168.0.173:8001/v1", "model": "chatx",
+                 "num_ctx": 24576},
+}}
+
+
+def test_model_field_normalize_and_context_non_strict():
+    r = conv_route.normalize({"model": "gpt"})
+    assert r.model == "gpt" and not r.is_default and r.route_key == "profile:gpt"
+    ctx: Dict[str, Any] = {}
+    r.apply_context(ctx)
+    assert ctx["_route"] == "profile:gpt"
+    assert "_route_strict" not in ctx and "_unrestricted" not in ctx   # 云厂商档不严格、规则全开
+    # 非法名回落；空串＝跟随主链＝默认路由（不落键）
+    assert conv_route.normalize({"model": "bad name!"}).model == ""
+    assert conv_route.normalize({"model": ""}, base=r).is_default
+
+
+def test_model_and_unrestricted_are_mutually_exclusive():
+    unr = conv_route.normalize({"profile": "unrestricted"})
+    # 无限制会话里点选云厂商（未显式给 profile）→ 视为改回标准模式，旋钮清空
+    r = conv_route.normalize({"model": "gpt"}, base=unr)
+    assert r.profile == "standard" and r.model == "gpt" and r.depth == "" and r.thinking is False
+    # 反向：带着模型切无限制 → 模型字段清空（端点由模式决定）
+    r2 = conv_route.normalize({"profile": "unrestricted"}, base=r)
+    assert r2.unrestricted and r2.model == ""
+    assert r2.route_key == "profile:unrestricted"
+
+
+def test_model_catalog_main_first_vendor_labels_and_lan_row():
+    cat = conv_route.model_catalog(_CFG_VENDORS)
+    names = [row["name"] for row in cat]
+    assert names[0] == ""                                   # 主链永远第一
+    assert "gpt" in names and "gem" in names and "_lan_tool" not in names   # 内部档不列
+    assert "unrestricted" in names                          # ai.models 没配 → 绑 ai.fallback 的 LAN 行
+    by = {row["name"]: row for row in cat}
+    assert by[""]["vendor"] == "deepseek" and by[""]["label"] == "DeepSeek"
+    assert by["gpt"]["label"] == "ChatGPT" and by["gpt"]["private"] is False
+    assert by["gem"]["max_ctx"] == 200000                   # 显式 max_ctx 优先于厂商缺省
+    assert by["unrestricted"]["private"] is True and by["unrestricted"]["source"] == "ai.fallback"
+    for row in cat:
+        assert "api_key" not in row
+    # allowed_depths 按档窗口筛：gpt 缺省 128k → 不放 ultra；主链不筛（四档全放）
+    assert conv_route.allowed_depths(_CFG_VENDORS, model="gpt") == ["", "standard", "deep", "max"]
+    assert conv_route.allowed_depths(_CFG_VENDORS) == list(conv_route.DEPTH_CHOICES)
+    assert conv_route.allowed_depths(_CFG_VENDORS, model="unrestricted") == ["", "standard"]
+    # active_endpoint 跟着路由走
+    assert conv_route.active_endpoint(Route.standard(), _CFG_VENDORS)["model"] == "deepseek-flash"
+    assert conv_route.active_endpoint(conv_route.normalize({"model": "gpt"}), _CFG_VENDORS)["model"] == "gpt-x"
+    assert conv_route.active_endpoint(conv_route.normalize({"profile": "unrestricted"}),
+                                      _CFG_VENDORS)["host"] == "192.168.0.173:8001"
+
+
+def test_http_model_roundtrip_unknown_400_and_catalog_shape():
+    cli, st = _app(_CFG_VENDORS)
+    g = cli.get("/api/unified-inbox/conv-model-route", params=_Q).json()
+    assert [m["name"] for m in g["choices"]["models"]][0] == ""
+    assert g["active_endpoint"]["model"] == "deepseek-flash" and g["model_missing"] is False
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gpt"}).json()
+    assert r["ok"] and r["route"]["model"] == "gpt" and r["route"]["profile"] == "standard"
+    assert r["active_endpoint"]["host"] == "api.openai.com"
+    assert r["choices"]["depths"] == ["", "standard", "deep", "max"]
+    assert conv_route.get(st, CID).model == "gpt"
+    bad = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "nope"})
+    assert bad.status_code == 400 and bad.headers.get("X-Deny-Reason") == "unknown_model"
+    assert conv_route.get(st, CID).model == "gpt"           # 400 不改库
+    # 切无限制 → model 清空；再点云厂商 → 回标准
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "profile": "unrestricted"}).json()
+    assert r["route"]["unrestricted"] and r["route"]["model"] == ""
+    r = cli.post("/api/unified-inbox/conv-model-route", json={**_Q, "model": "gem"}).json()
+    assert r["route"]["profile"] == "standard" and r["route"]["model"] == "gem"
+    # 目录里删掉该档 → model_missing 如实报
+    cfg2 = json.loads(json.dumps(_CFG_VENDORS))
+    cfg2["ai"]["models"].pop("gem")
+    cli2, _ = _app(cfg2)
+    cli2.app.state.inbox_store = st
+    g2 = cli2.get("/api/unified-inbox/conv-model-route", params=_Q).json()
+    assert g2["model_missing"] is True
+
+
+def test_http_health_per_profile_and_all(monkeypatch):
+    async def _fake_probe(config, *, force=False, timeout=6.0, profile=None):
+        return {"configured": True, "online": profile != "gpt", "profile": profile,
+                "error": "" if profile != "gpt" else "http_401"}
+    monkeypatch.setattr(conv_route, "probe_endpoint", _fake_probe)
+    cli, _ = _app(_CFG_VENDORS)
+    h = cli.get("/api/ai/model-route/health", params={"profile": "gpt"}).json()
+    assert h["health"]["online"] is False and h["health"]["error"] == "http_401"
+    h = cli.get("/api/ai/model-route/health", params={"all": 1}).json()
+    assert set(h["health_all"]) == {"", "gpt", "gem", "unrestricted"}
+    assert h["health_all"][""]["online"] is True and h["health_all"]["gpt"]["online"] is False
+    assert h["health"]["profile"] is None                    # 不带 profile＝历史语义（无限制端点）
+
+
+def test_probe_endpoint_treats_auth_and_missing_model_as_offline(monkeypatch):
+    import asyncio
+
+    class _Resp:
+        def __init__(self, sc): self.status_code = sc
+
+    class _Cli:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None):
+            _Cli.last = (url, json, headers)
+            return _Resp(_Cli.sc)
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _Cli)
+    _Cli.sc = 401
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile="gpt"))
+    assert h["online"] is False and h["error"] == "http_401"
+    assert _Cli.last[2]["Authorization"] == "Bearer sk-oa"
+    assert "chat_template_kwargs" not in _Cli.last[1]        # 云厂商不送 vLLM 私有字段
+    _Cli.sc = 200
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True, profile=""))
+    assert h["online"] is True and _Cli.last[2]["Authorization"] == "Bearer sk-main"
+    assert _Cli.last[1].get("thinking") == {"type": "disabled"}   # DeepSeek 官方关思考字段
+    h = asyncio.run(conv_route.probe_endpoint(_CFG_VENDORS, force=True))   # 历史语义＝无限制端点
+    assert _Cli.last[1].get("chat_template_kwargs") == {"enable_thinking": False}

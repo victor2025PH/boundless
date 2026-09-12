@@ -5,7 +5,9 @@
         → 本会话路由 + 端点事实 + 可选项 + 授权（conv_route.describe）
   POST /api/unified-inbox/conv-model-route
         body {platform, account_id, chat_key, profile?, depth?, effort?, thinking?,
-              bypass_safety?, clear?}
+              bypass_safety?, model?, clear?}
+        ``model``＝标准模式下「用谁答」（``ai.models`` 档名，""＝主链；2026-09-12 拆
+        「模型 / 模式」双面板后新增；不在目录 → 400 ``X-Deny-Reason: unknown_model``）
         → 归一落库（app_settings KV ``conv_model_route:<cid>``）；切到无限制受
           ``licensing.feature_gate`` ``unrestricted_model`` 闸（闸关＝放行）
   GET  /api/ai/model-route/health?force=0
@@ -20,7 +22,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from fastapi import Depends, HTTPException, Request
 
@@ -100,12 +102,21 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
             out.update({"ok": True, "conversation_id": cid, "cleared": True})
             return out
 
-        patch = {k: body[k] for k in ("profile", "depth", "effort", "thinking", "bypass_safety")
+        patch = {k: body[k] for k in ("profile", "depth", "effort", "thinking", "bypass_safety",
+                                      "model")
                  if k in body}
         if not patch:
             out = conv_route.describe(ibx, cid, cfg)
             out.update({"ok": True, "conversation_id": cid, "noop": True})
             return out
+
+        # 模型档必须在目录里（主链 "" 恒可选）：指向不存在的档＝「路由到空气」，运行时会
+        # 静默回主链，坐席却以为切成了——这里直接 400，比装成功诚实。
+        if "model" in patch:
+            want = str(patch.get("model") or "").strip()
+            if want and not conv_route.model_spec(cfg, want):
+                raise HTTPException(400, "unknown model profile",
+                                    headers={"X-Deny-Reason": "unknown_model"})
 
         wants_unrestricted = (
             str(patch.get("profile") or "").strip().lower() == conv_route.PROFILE_UNRESTRICTED
@@ -127,14 +138,26 @@ def register_conv_model_route_routes(app, *, api_auth: Callable,
         return out
 
     @app.get("/api/ai/model-route/health")
-    async def api_model_route_health(request: Request, force: int = 0, _=Depends(api_auth)):
-        """无限制端点在线态（缓存 60s；``force=1`` 立刻重探）。绝不抛。"""
+    async def api_model_route_health(request: Request, force: int = 0,
+                                     profile: Optional[str] = None, all: int = 0,   # noqa: A002
+                                     _=Depends(api_auth)):
+        """端点在线态（缓存 60s；``force=1`` 立刻重探）。绝不抛。
+
+        - 不带参数：无限制端点（历史语义，模式面板用）；
+        - ``profile=<档名>``（``""``＝主链）：单档；
+        - ``all=1``：目录全档并发，``health_all={name: health}``（模型面板打开一次画全）。
+        """
+        cfg = _cfg()
+        out: Dict[str, Any] = {"ok": True}
         try:
-            health = await conv_route.probe_endpoint(_cfg(), force=bool(force))
+            if all:
+                out["health_all"] = await conv_route.probe_catalog(cfg, force=bool(force))
+            out["health"] = await conv_route.probe_endpoint(cfg, force=bool(force),
+                                                            profile=profile)
         except Exception:
             logger.debug("[conv_model_route] probe failed", exc_info=True)
-            health = {"configured": False, "online": False, "error": "probe_failed"}
-        return {"ok": True, "health": health}
+            out["health"] = {"configured": False, "online": False, "error": "probe_failed"}
+        return out
 
     @app.get("/api/ai/model-route/stats")
     async def api_model_route_stats(request: Request, _=Depends(api_auth)):

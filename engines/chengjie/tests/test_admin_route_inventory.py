@@ -2186,6 +2186,12 @@ _ADDITIONS_2026_09_12_HANDOFF_NOTE_DROP = """
 """
 _BASELINE += _ADDITIONS_2026_09_12_HANDOFF_NOTE_DROP
 
+# 2026-09-12 composer「模型 / 模式」拆面板配套：开发者页多模型路由「拉取模型列表」（端点 /v1/models 候选）
+_ADDITIONS_2026_09_12_MODEL_ROUTES_LIST = """
+/api/setup/model-routes/list-models	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_12_MODEL_ROUTES_LIST
+
 
 def _parse_baseline():
     expected = set()
