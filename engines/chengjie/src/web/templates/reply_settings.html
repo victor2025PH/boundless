@@ -1067,16 +1067,16 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
       <input type="text" class="rps-num" style="width:min(420px,100%)" id="rps-style-tone" maxlength="120" placeholder="{{ (i18n or {}).get('rps_style_tone_ph', '例：多用短句和口语语气词，别用书面腔') }}" oninput="rpsMarkDirty()">
       <span class="rps-row-hint">{{ (i18n or {}).get('rps_style_tone_hint', "对全部人设追加的统一说话要求（与上面两项的「兜底」语义不同：这条对所有人设都生效）。留空 = 无。") }}</span>
     </div>
-    <!-- 上下文/记忆深度四档（2026-09-11）：一档改预算/历史/记忆/取库全部旋钮，单一事实源 src/ai/context_depth.py -->
+    <!-- 上下文/记忆深度四档：全集写在 HTML（i18n）；装载后按 GET meta.choices 藏旧后端不认的档（feat 同款，防保存被拒）。本机无限制在 composer 按窗口重画。 -->
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_ctx_depth', "上下文与记忆深度") }}</span>
       <select class="rps-select" id="rps-ctx-depth" onchange="rpsMarkDirty(); rpsCtxDepthHint(this.value)">
-        <option value="standard">{{ (i18n or {}).get('rps_ctx_depth_standard', "标准（约 12k · 最近 10 条 · 8 条记忆）") }}</option>
-        <option value="deep">{{ (i18n or {}).get('rps_ctx_depth_deep', "深度（约 32k · 最近 40 条 · 16 条记忆）") }}</option>
-        <option value="max">{{ (i18n or {}).get('rps_ctx_depth_max', "最大（约 128k · 最近 160 条 · 30 条记忆）") }}</option>
-        <option value="ultra">{{ (i18n or {}).get('rps_ctx_depth_ultra', "超大（约 900k · 与 DeepSeek 1M 窗口平齐）") }}</option>
+        <option value="standard">{{ (i18n or {}).get('rps_ctx_depth_standard', "标准（约 12k）") }}</option>
+        <option value="deep">{{ (i18n or {}).get('rps_ctx_depth_deep', "深度（约 32k）") }}</option>
+        <option value="max">{{ (i18n or {}).get('rps_ctx_depth_max', "最大（约 128k）") }}</option>
+        <option value="ultra">{{ (i18n or {}).get('rps_ctx_depth_ultra', "超大（约 900k）") }}</option>
       </select>
-      <span class="rps-row-hint" id="rps-ctx-depth-hint">{{ (i18n or {}).get('rps_ctx_depth_hint', "越深越记得住、也越贵：每轮把更多历史与记忆喂给模型（人设/规则部分稳定不变，可吃缓存价）。峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，无需重启。") }}</span>
+      <span class="rps-row-hint" id="rps-ctx-depth-hint">{{ (i18n or {}).get('rps_ctx_depth_hint', "云端主链可用四档。本机「无限制」会话吃不下的会在发送时压到本机窗口（现役约 24k）。越深越记得住，也越贵。改完即生效，无需重启。") }}</span>
     </div>
     <div class="rps-row">
       <span class="rps-row-label">{{ (i18n or {}).get('rps_usage_mode', "用量模式") }}</span>
@@ -1641,13 +1641,41 @@ var RPS_FIELD_DEFS = [
   {path: "ai.usage_mode", kind: "select", el: "rps-usage-mode", dflt: "full"}
 ];
 var RPS_DEFS_BY_PATH = {};
-// 上下文深度档提示：超大档单轮上限接近 ¥2，选中时把提示染成警示色（文案本身在 i18n）
+RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
 function rpsCtxDepthHint(v){
   var el = document.getElementById("rps-ctx-depth-hint");
   if (!el) return;
   el.style.color = (v === "ultra" || v === "max") ? "var(--rps-warn, #b45309)" : "";
 }
-RPS_FIELD_DEFS.forEach(function(d){ RPS_DEFS_BY_PATH[d.path] = d; });
+function rpsCtxDepthCoerce(sel){
+  // 选中项已被 meta.choices 藏掉（旧进程两档）→ 落到第一条可见档，避免 POST 被拒。
+  sel = sel || document.getElementById("rps-ctx-depth");
+  if (!sel || !sel.options || !sel.options.length) return;
+  var opt = sel.options[sel.selectedIndex];
+  if (!opt || !(opt.hidden || opt.disabled)) return;
+  for (var i = 0; i < sel.options.length; i++){
+    if (!sel.options[i].hidden && !sel.options[i].disabled){
+      sel.value = sel.options[i].value;
+      try { rpsCtxDepthHint(sel.value); } catch (_e){}
+      return;
+    }
+  }
+}
+function rpsSyncCtxDepthChoices(meta){
+  var sel = document.getElementById("rps-ctx-depth");
+  if (!sel) return;
+  var spec = (meta || {})["ai.context_depth"] || {};
+  var ch = spec.choices;
+  if (!ch || !ch.length) return; // 极老 payload 不裁，靠 sanitize 挡
+  var allow = {};
+  for (var i = 0; i < ch.length; i++) allow[String(ch[i])] = true;
+  for (var j = 0; j < sel.options.length; j++){
+    var ok = !!allow[sel.options[j].value];
+    sel.options[j].hidden = !ok;
+    sel.options[j].disabled = !ok;
+  }
+  rpsCtxDepthCoerce(sel);
+}
 
 function rpsFieldGet(def){
   if (def.kind === "virtual") return def.vget();
@@ -1661,6 +1689,10 @@ function rpsFieldGet(def){
   if (def.kind === "int") return parseInt(el.value || "0", 10);
   if (def.kind === "float") return parseFloat(el.value || "0");
   if (def.kind === "text") return (el.value || "").trim();
+  if (def.el === "rps-ctx-depth"){
+    var opt = el.options[el.selectedIndex];
+    if (opt && (opt.hidden || opt.disabled)) return def.dflt || "standard";
+  }
   return el.value;
 }
 
@@ -1678,6 +1710,7 @@ function rpsFieldSet(def, v){
   if (def.kind === "check"){ el.checked = !!v; return; }
   if (def.kind === "int" || def.kind === "float"){ el.value = v || 0; return; }
   el.value = v || def.dflt || "";
+  if (def.path === "ai.context_depth") rpsCtxDepthHint(el.value);
 }
 
 function rpsFieldHost(def){
@@ -1999,6 +2032,7 @@ function rpsFill(values){
   rpsBubEst();
   rpsGuardSyncUnlimited();
   rpsSgSyncState();
+  rpsCtxDepthCoerce();
   rpsMarkDirty();
 }
 
@@ -2643,6 +2677,7 @@ function rpsRenderMeta(meta){
     el.textContent = RPS_I18N.chipRestart;
     el.className = 'rps-chip restart';
   });
+  rpsSyncCtxDepthChoices(meta);
 }
 
 /* ── AI 接管主控（P1 2026-08-22）─────────────────────────────────────────────

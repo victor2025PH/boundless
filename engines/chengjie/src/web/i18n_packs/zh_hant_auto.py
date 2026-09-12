@@ -10255,15 +10255,17 @@ ZH_HANT = {
     'inbox.mp.confirm_safety': '連五條安全剎車（急停 / 封號訊號 / 賬號預熱上限 / 停聯凍結 / 危機兜底）也一起關閉？僅本會話，操作會記審計。',
     'inbox.mp.confirm_unr': '切到「無限制」：本會話改走區域網私有模型 {model}（不經雲端）。本會話的人設規則、出站改寫、風控分級、稽核攔截全部關閉。確定？',
     'inbox.mp.depth_deep': '深度',
-    'inbox.mp.depth_deep_sub': '≈32K tokens · 近 40 條 · 記憶 16 條',
+    'inbox.mp.depth_deep_sub': '約 32k',
+    'inbox.mp.depth_fill_sub': '約 {k}k · 本機上限',
     'inbox.mp.depth_follow': '跟隨全域性',
     'inbox.mp.depth_follow_sub': '回覆設定頁「上下文與記憶深度」當前檔',
+    'inbox.mp.depth_follow_sub_lan': '仍受本機 {k}k 上限',
     'inbox.mp.depth_max': '最大',
-    'inbox.mp.depth_max_sub': '≈128K tokens · 近 160 條（LAN 端點按 64K 封頂）',
+    'inbox.mp.depth_max_sub': '約 128k',
     'inbox.mp.depth_standard': '標準',
-    'inbox.mp.depth_standard_sub': '≈12K tokens · 近 20 輪',
+    'inbox.mp.depth_standard_sub': '約 12k',
     'inbox.mp.depth_ultra': '超大',
-    'inbox.mp.depth_ultra_sub': '≈900K tokens · 近 1000 條 · 成本約 75×',
+    'inbox.mp.depth_ultra_sub': '約 900k',
     'inbox.mp.disabled': '「無限制模型」已被運營關閉',
     'inbox.mp.effort_follow': '跟隨策略',
     'inbox.mp.effort_follow_sub': '按回復策略給的長度 / 溫度',
@@ -23739,15 +23741,15 @@ ZH_HANT = {
     # ── rps_ctx_depth ──
     'rps_ctx_depth': '上下文與記憶深度',
     # ── rps_ctx_depth_deep ──
-    'rps_ctx_depth_deep': '深度（約 32k · 最近 40 條 · 16 條記憶）',
+    'rps_ctx_depth_deep': '深度（約 32k）',
     # ── rps_ctx_depth_hint ──
-    'rps_ctx_depth_hint': '越深越記得住、也越貴：每輪把更多歷史與記憶餵給模型（人設/規則部分穩定不變，可吃快取價）。峰時單輪上限約：標準 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，無需重啟。',
+    'rps_ctx_depth_hint': '雲端主鏈可用四檔。本機「無限制」會話吃不下的會在發送時壓到本機視窗（現役約 24k）。越深越記得住，也越貴。改完即生效，無需重啟。',
     # ── rps_ctx_depth_max ──
-    'rps_ctx_depth_max': '最大（約 128k · 最近 160 條 · 30 條記憶）',
+    'rps_ctx_depth_max': '最大（約 128k）',
     # ── rps_ctx_depth_standard ──
-    'rps_ctx_depth_standard': '標準（約 12k · 最近 10 條 · 8 條記憶）',
+    'rps_ctx_depth_standard': '標準（約 12k）',
     # ── rps_ctx_depth_ultra ──
-    'rps_ctx_depth_ultra': '超大（約 900k · 與 DeepSeek 1M 視窗平齊）',
+    'rps_ctx_depth_ultra': '超大（約 900k）',
     # ── rps_diff_btn ──
     'rps_diff_btn': '改動明細',
     # ── rps_diff_empty ──

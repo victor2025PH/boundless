@@ -5,10 +5,11 @@
 ====
 坐席在 composer 底栏（键盘图标左侧）像 Cursor 一样按**会话**挑模型：
 ``标准``（实例主链：云端 + key_pool + LAN 兜底，规则全开）或 ``无限制``（局域网私有
-模型——现网 173:8001 ``chatx``＝Qwen3.6-27B-abliterated，去审查权重——**只走该端点、
+模型——现网 173:8001 ``chatx``＝Qwen3.8-27B-abliterated，去审查权重——**只走该端点、
 不回落云端**，且本会话的人设规则 / 出站改写守卫 / 风控分级 / 手发 409 护栏全部让路）。
-再带三个 Cursor 式旋钮：上下文深度档（复用 :mod:`src.ai.context_depth` 四档，按端点
-硬上限封顶）、力度（低/中/高 —— **答复长度 / 温度的近似**，不是推理力度，UI 明示）、
+再带三个 Cursor 式旋钮：上下文深度档（复用 :mod:`src.ai.context_depth` 四档：
+云端 12k / 32k / 128k / 900k；本机无限制按端点窗口重画，满窗＝现役 ``max_model_len``）、
+力度（低/中/高 —— **答复长度 / 温度的近似**，不是推理力度，UI 明示）、
 思考开关（vLLM ``chat_template_kwargs.enable_thinking``）。
 
 存储
@@ -54,7 +55,7 @@ PROFILE_UNRESTRICTED = "unrestricted"
 PROFILES = (PROFILE_STANDARD, PROFILE_UNRESTRICTED)
 
 #: 上下文档位：空串＝跟随全局 ``ai.context_depth``；其余复用 context_depth 四档键。
-#: ``ultra``（900k）对 LAN 64k 端点无意义，UI 不出，但键合法（云端标准档可用）。
+#: 无限制 UI 按端点窗口筛档；``max`` 在本机上表示满窗（发送时封顶），云端仍是 128k。
 DEPTH_FOLLOW = ""
 DEPTH_CHOICES = (DEPTH_FOLLOW, "standard", "deep", "max", "ultra")
 
@@ -72,7 +73,8 @@ UNRESTRICTED_DEFAULTS = {"depth": "max", "effort": "high", "thinking": False}
 
 FEATURE_NAME = "unrestricted_model"
 
-#: 端点硬上限（token）→ 允许的最高深度档。chatx ``--max-model-len 65536``。
+#: 端点硬上限（token）→ 允许的最高*云端*深度档。本机 24k 吃不下 32k+，
+#: allowed_depths 会额外放出 ``max`` 当满窗键（发送路径再封顶）。
 _DEPTH_ORDER = ("standard", "deep", "max", "ultra")
 _DEPTH_MIN_CTX = {"standard": 0, "deep": 32_000, "max": 64_000, "ultra": 256_000}
 
@@ -273,14 +275,42 @@ def endpoint_spec(config: Any = None) -> Dict[str, Any]:
         return {}
     host = base.split("://", 1)[-1].split("/", 1)[0]
     try:
-        max_ctx = int(spec.get("max_ctx") or _section(root).get("max_ctx") or 65_536)
+        max_ctx = int(spec.get("max_ctx") or _section(root).get("max_ctx") or 24_576)
     except (TypeError, ValueError):
-        max_ctx = 65_536
+        max_ctx = 24_576
     return {
         "base_url": base, "model": model, "source": source, "host": host,
         "max_ctx": max_ctx,
         "supports_thinking": bool(spec.get("supports_thinking", True)),
     }
+
+
+#: 无限制发送时从 ``max_ctx`` 里给补全留的空位（高档力度 2048 + 模板余量）。
+_ENDPOINT_OUTPUT_RESERVE = 2048
+_ENDPOINT_HEADROOM = 128
+
+
+def endpoint_prompt_cap(config: Any = None, *, max_tokens: Optional[int] = None) -> int:
+    """无限制端点的**输入**预算上限。无端点 → 0（不封顶）。
+
+    ``max_ctx - 补全预留 - 128``，避免 prompt+output 超过 vLLM ``max_model_len`` 直接 400。
+    补全预留：显式 ``max_tokens`` > 当前路由力度 > 高档 2048。
+    """
+    spec = endpoint_spec(config)
+    try:
+        max_ctx = int(spec.get("max_ctx") or 0)
+    except (TypeError, ValueError):
+        max_ctx = 0
+    if max_ctx <= 0:
+        return 0
+    mt = int(max_tokens or 0)
+    if mt <= 0:
+        r = active_route()
+        if r is not None:
+            mt = int((EFFORT_PARAMS.get(r.effort) or {}).get("max_tokens") or 0)
+        if mt <= 0:
+            mt = _ENDPOINT_OUTPUT_RESERVE
+    return max(1024, max_ctx - mt - _ENDPOINT_HEADROOM)
 
 
 def depth_cap(max_ctx: int) -> str:
@@ -292,29 +322,44 @@ def depth_cap(max_ctx: int) -> str:
     return best
 
 
-def allowed_depths(config: Any = None, *, unrestricted: bool) -> list:
-    """UI 可选深度档（含空串＝跟随全局）。无限制档按端点上限封顶。"""
+def allowed_depths(config: Any = None, *, unrestricted: bool = False) -> list:
+    """UI 可选深度档（含空串＝跟随全局）。
+
+    云端：四档全放。本机无限制：只放预算 ≤ 端点窗口的档，并保证有一档
+    ``max``＝满窗（发送时 :func:`endpoint_prompt_cap` 封顶到 ``max_ctx``）。
+    """
     if not unrestricted:
         return list(DEPTH_CHOICES)
     spec = endpoint_spec(config)
-    cap = depth_cap(int(spec.get("max_ctx") or 65_536)) if spec else "max"
-    out = [DEPTH_FOLLOW]
-    for k in _DEPTH_ORDER:
-        out.append(k)
-        if k == cap:
-            break
+    try:
+        max_ctx = int((spec or {}).get("max_ctx") or 0)
+    except (TypeError, ValueError):
+        max_ctx = 0
+    if max_ctx <= 0:
+        max_ctx = 24_576
+    out = [DEPTH_FOLLOW, "standard"]
+    try:
+        from src.ai.context_depth import TIERS
+    except Exception:
+        TIERS = {}
+    for k in ("deep", "max", "ultra"):
+        d = TIERS.get(k) if isinstance(TIERS, dict) else None
+        budget = getattr(d, "prompt_budget_tokens", None) if d is not None else None
+        if budget and int(budget) <= max_ctx:
+            out.append(k)
+    if "max" not in out and max_ctx > 12_000:
+        out.append("max")
     return out
 
 
 def effective_depth(route: Route, config: Any = None) -> str:
-    """路由深度档按端点封顶后的实际档；空串＝跟随全局。"""
+    """路由深度档按端点筛过后的实际档；空串＝跟随全局。"""
     if not route.depth:
         return DEPTH_FOLLOW
-    if not route.unrestricted:
-        return route.depth
-    allowed = allowed_depths(config, unrestricted=True)
-    if route.depth in allowed:
-        return route.depth
+    d = str(route.depth).strip().lower()
+    allowed = allowed_depths(config, unrestricted=route.unrestricted)
+    if d in allowed:
+        return d
     return allowed[-1] if len(allowed) > 1 else DEPTH_FOLLOW
 
 
@@ -719,7 +764,7 @@ __all__ = [
     "DEPTH_CHOICES", "EFFORT_CHOICES", "EFFORT_PARAMS", "UNRESTRICTED_DEFAULTS",
     "FEATURE_NAME", "QUALITY_LAYERS", "SAFETY_LAYERS",
     "Route", "normalize", "enabled", "profile_name", "global_bypass_safety",
-    "endpoint_spec", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
+    "endpoint_spec", "endpoint_prompt_cap", "depth_cap", "allowed_depths", "effective_depth", "feature_allowed",
     "conv_id", "get", "set", "clear", "all_routes", "is_unrestricted",
     "bypass_safety_active", "resolve_for", "default_store", "conv_id_from_context", "attach",
     "skip_guard", "skip_for_conv", "record_offline_hold", "stats_snapshot", "reset_for_tests",

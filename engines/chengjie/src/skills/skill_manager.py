@@ -610,6 +610,15 @@ class SkillManager(LoggerMixin):
             self.logger.debug("KB 侧载失败: %s", e)
             return None
 
+    @staticmethod
+    def _cr_skip(user_context: Optional[Dict[str, Any]], layer: str) -> bool:
+        """会话级「无限制」是否跳过某守卫层（conv_route.skip_guard 薄封装；标准会话恒 False）。"""
+        try:
+            from src.ai.conv_route import skip_guard
+            return skip_guard(user_context, layer)
+        except Exception:
+            return False
+
     def _load_strategies_from_config(self) -> None:
         """�?config_manager 加载策略配置（独�?YAML 文件，自动迁�?+ mtime ���新）"""
         if hasattr(self.config, 'get_strategies_config'):
@@ -961,6 +970,7 @@ class SkillManager(LoggerMixin):
         context: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         user_ctx_for_cleanup: Optional[Dict[str, Any]] = None
+        _cr_scope_a = None
         try:
             user_id_str = str(user_id)
             context = context or {}
@@ -984,6 +994,19 @@ class SkillManager(LoggerMixin):
             _ctx_store_key = str(
                 user_context.get("_context_store_key") or user_id_str)
             user_ctx_for_cleanup = user_context
+            # 会话级模型路由（conv_route，2026-09-12）：A 线与 B 线同一读点——协议线 user_id
+            # 即三段式会话 id，原生 TG 按 platform/account/chat_id 拼。标准默认＝只清键。
+            try:
+                from src.ai import conv_route as _cr_a
+                _cr_route_a = _cr_a.attach(
+                    user_context, _cr_a.conv_id_from_context(context, user_id_str),
+                    config=self.config)
+                if not _cr_route_a.is_default:
+                    _cr_scope_a = _cr_a.generation_scope(_cr_route_a, self.config)
+                    _cr_scope_a.__enter__()
+            except Exception:
+                self.logger.debug("%sconv_route 解析跳过", log_prefix, exc_info=True)
+                _cr_scope_a = None
             # 平台/账号软标记（与 B 线 generate_inbox_draft 同口径，写-if-absent）：
             # case 深链（conv_ref）等消费方读 ctx 键——A 线此前不落，RPA 会话的
             # 「打开会话」深链会被误拼成 telegram。同一会话的平台/账号恒定，无覆写面。
@@ -1326,9 +1349,12 @@ class SkillManager(LoggerMixin):
                 return _song_reply or None
 
             # 2. 冷却（按 account_id 分桶，双号互不踩；群聊读群窗同键）
-            _cd_left = self._cooldown_remaining(
-                text, user_id_str, chat_id=_chat_id, account_id=_acct_id,
-                chat_scope=_chat_scope)
+            #    无限制会话（conv_route）：冷却是业务护栏，让路
+            _cd_left = 0.0
+            if not self._cr_skip(user_context, "skill_cooldown"):
+                _cd_left = self._cooldown_remaining(
+                    text, user_id_str, chat_id=_chat_id, account_id=_acct_id,
+                    chat_scope=_chat_scope)
             if _cd_left > 0:
                 # 静默拦截 → 显式信号（2026-08-09）：让上层能区分「刻意不回」
                 # 与「被冷却吃了」，为该 mid 安排冷却结束后的补答重试。
@@ -2909,8 +2935,16 @@ class SkillManager(LoggerMixin):
             self.logger.error(f"处理消息失败: {e}")
             return None
         finally:
+            if _cr_scope_a is not None:
+                try:
+                    _cr_scope_a.__exit__(None, None, None)
+                except Exception:
+                    pass
             if user_ctx_for_cleanup is not None:
                 user_ctx_for_cleanup.pop("_slow_think_outline", None)
+                for _rk in ("_route", "_route_strict", "_thinking", "_unrestricted",
+                            "_unrestricted_bypass_safety", "_conv_route", "_route_offline"):
+                    user_ctx_for_cleanup.pop(_rk, None)
 
     async def generate_inbox_draft(
         self,
@@ -2983,6 +3017,14 @@ class SkillManager(LoggerMixin):
             except Exception:
                 pass
 
+        def _skipg(_layer: str) -> bool:
+            """无限制会话是否跳过某一守卫层（conv_route.skip_guard；标准会话恒 False）。"""
+            try:
+                from src.ai.conv_route import skip_guard as _sg
+                return _sg(user_context, _layer)
+            except Exception:
+                return False
+
         _t0 = time.time()
 
         # 风险分档：低风险（占自动发送大头）走快路省延迟，仅中/高风险吃满全栈。
@@ -3030,6 +3072,25 @@ class SkillManager(LoggerMixin):
             user_context["chat_id"] = str(chat_key)
         if conversation_id:
             user_context["conversation_id"] = str(conversation_id)
+        # 会话级模型路由（conv_route，2026-09-12 composer 模型选择器）：读会话自选的
+        # 模型档 / 深度 / 力度 / 思考开关写进 user_context（_route/_thinking/_unrestricted…），
+        # 并开生成作用域（深度档 contextvar + persona 规则块让路）。标准默认＝只清键，零变化。
+        # 作用域在下方 finally 关闭；这里不能用 with——函数体上千行，重缩进＝热区大改。
+        _cr_scope = None
+        try:
+            from src.ai import conv_route as _cr
+            _cr_route = _cr.attach(
+                user_context, str(conversation_id or "")
+                or _cr.conv_id(platform, _acct_id or "default", chat_key),
+                config=self.config)
+            if not _cr_route.is_default:
+                _cr_scope = _cr.generation_scope(_cr_route, self.config)
+                _cr_scope.__enter__()
+                if _cr_route.unrestricted:
+                    _metric("unrestricted")
+        except Exception:
+            self.logger.debug("%sconv_route 解析跳过", log_prefix, exc_info=True)
+            _cr_scope = None
         # P3：B 线入站 mid → open_case 自吸（与 A 线 process_message 同键 user_msg_id）。
         # 每轮覆盖：本条才是立案触发点；旧值留着会把新案锚到上一轮气泡。
         _inbound_mid = str(inbound_msg_id or "").strip()
@@ -3523,6 +3584,12 @@ class SkillManager(LoggerMixin):
             for _sk in ("temperature", "max_tokens", "context_rounds", "model", "thinking_budget"):
                 if _sk in strategy:
                     _so[_sk] = strategy[_sk]
+            # 会话级力度档（conv_route：低/中/高 ≈ 答复长度 / 温度）覆盖策略值；空档不动
+            try:
+                if _cr_scope is not None:
+                    _so.update(_cr_route.strategy_overrides())
+            except Exception:
+                pass
             reply = await self.ai_client.generate_reply_with_intent(
                 user_message=text,
                 intent=intent,
@@ -3532,6 +3599,12 @@ class SkillManager(LoggerMixin):
             reply = (reply or "").strip()
             if not reply:
                 _metric("empty")
+                _ro = str(user_context.get("_route_offline") or "")
+                if _ro and user_context.get("_unrestricted"):
+                    # 无限制端点离线：不回落云端、不出稿——把原因带回给调用方
+                    # （persona_reply → smart-reply 提示「模型离线」/ 自动链挂起）
+                    _metric("unrestricted_offline")
+                    return {"reply": "", "intent": intent, "route_offline": _ro}
                 return None
 
             # 8b. 相似度重试（与 process_message 5b 同思路）：与「最近 N 条」回复重复
@@ -3587,17 +3660,18 @@ class SkillManager(LoggerMixin):
             # 9. 人设一致性守卫 + 链接纪律守卫 + 危机事后兜底（与 process_message
             #    5c/5c3/5d 同族同序）
             _before_guard = reply
-            reply = self._enforce_persona_consistency(
-                reply, chat_id=str(chat_id or user_id),
-                account_persona_id=str(persona_id or ""), log_prefix=log_prefix,
-                # B74：生成时 prompt 锁定名（ai_client 写回 user_context）同源直传
-                resolved_name=str(
-                    user_context.get("_resolved_persona_name") or ""),
-            )
+            if not _skipg("persona_guard"):
+                reply = self._enforce_persona_consistency(
+                    reply, chat_id=str(chat_id or user_id),
+                    account_persona_id=str(persona_id or ""), log_prefix=log_prefix,
+                    # B74：生成时 prompt 锁定名（ai_client 写回 user_context）同源直传
+                    resolved_name=str(
+                        user_context.get("_resolved_persona_name") or ""),
+                )
             if reply != _before_guard:
                 _metric("persona_guard_intercept")
             # 9a2. 出站文本形态守卫（实施74：B118/B121/B104，与 A 线 5c1b 同口径同序）
-            if reply:
+            if reply and not _skipg("outbound_text_guard"):
                 _before_otg = reply
                 reply = self._apply_outbound_text_guard(
                     reply, log_prefix=log_prefix, user_context=user_context)
@@ -3608,7 +3682,14 @@ class SkillManager(LoggerMixin):
             # 时 LLM 仍写出「翻翻相册/这张是…」，草稿会进待审/自动发队列变成真
             # 空头支票。与试聊 sanitize_no_photo_reply 同口径；能力开时只剥
             # [PHOTO] 协议标记（草稿无执行层，标记直显=穿帮）。
-            if reply:
+            if reply and _skipg("photo_capability_sanitize"):
+                # 无限制会话：不消毒承诺文案，但 [PHOTO] 协议标记仍剥（草稿无执行层，直显＝穿帮）
+                try:
+                    from src.ai.photo_directive import strip_photo_directives as _spd_unr
+                    reply = _spd_unr(reply)
+                except Exception:
+                    pass
+            elif reply:
                 try:
                     from src.companion.photo_capability import (
                         prompt_photos_allowed,
@@ -3645,7 +3726,7 @@ class SkillManager(LoggerMixin):
             # 口径（依据池宽收、有依据只观测、零依据才句级剥离）。B 线更需要它——
             # 草稿经人审/autosend 发出，编造的往事对坐席看来只是「挺自然的寒暄」，
             # 没有任何环节会去核对「他们真一起打过球吗」。
-            if reply:
+            if reply and not _skipg("fabrication_guard"):
                 try:
                     from src.utils.proactive_fabrication_guard import (
                         build_precise_evidence,
@@ -3676,24 +3757,30 @@ class SkillManager(LoggerMixin):
                 # B 线草稿经人审/autosend 发出，「刚散完步这边下着小雨」在坐席眼里只是
                 # 自然寒暄，没人会核对档案里有没有雨（FTK6S7 正是 B 线 autosend）。
                 _before_st = reply
-                reply = self._apply_status_fabrication_guard(
-                    reply, user_context, text, log_prefix=log_prefix, source="b_line")
+                if not _skipg("status_fabrication_guard"):
+                    reply = self._apply_status_fabrication_guard(
+                        reply, user_context, text, log_prefix=log_prefix, source="b_line")
                 if reply != _before_st:
                     _metric("fabrication_status_strip")
 
             # 9c. 时空接轨守卫（2026-08-02 补缺口）：此前只接 A 线——B 线草稿
             # 经人审/autosend 发出的文本没有任何时段/星期/错城剥离，跨时区
             # 人设在收件箱链路穿帮无人拦。与 A 线 5c2 后同一入口同一口径。
-            reply = self._apply_world_clock_guard(
-                reply, user_context, log_prefix=log_prefix)
-            reply = self._apply_goal_link_guard(
-                reply, user_context, log_prefix=log_prefix)
+            if not _skipg("world_clock_guard"):
+                reply = self._apply_world_clock_guard(
+                    reply, user_context, log_prefix=log_prefix)
+            if not _skipg("goal_link_guard"):
+                reply = self._apply_goal_link_guard(
+                    reply, user_context, log_prefix=log_prefix)
             # 骂战/记仇轮出站否决（P1-b，与 A 线 5c4 同口径同序：危机兜底前）
-            reply = self._apply_temper_output_guard(
-                reply, user_context, log_prefix=log_prefix)
-            reply = self._apply_crisis_safety_net(
-                reply, user_context=user_context, log_prefix=log_prefix,
-            )
+            if not _skipg("temper_output_guard"):
+                reply = self._apply_temper_output_guard(
+                    reply, user_context, log_prefix=log_prefix)
+            # 危机自伤兜底是安全刹车：无限制会话仍生效，除非该会话 / 全局把刹车全关
+            if not _skipg("crisis_safety_net"):
+                reply = self._apply_crisis_safety_net(
+                    reply, user_context=user_context, log_prefix=log_prefix,
+                )
             if user_context.get("_wellbeing_safety_override"):
                 _metric("crisis_override")
             # #152 F1：守卫链把稿剥空（退化循环整条截空等）→ 不产出草稿。此前空稿
@@ -3751,6 +3838,15 @@ class SkillManager(LoggerMixin):
             self.logger.warning("%s生成失败，回落上层兜底", log_prefix, exc_info=True)
             return None
         finally:
+            if _cr_scope is not None:
+                try:
+                    _cr_scope.__exit__(None, None, None)
+                except Exception:
+                    pass
+            # 会话路由键是瞬时态（每轮 attach 重算），不随 ContextStore 落库粘到别的链路
+            for _rk in ("_route", "_route_strict", "_thinking", "_unrestricted",
+                        "_unrestricted_bypass_safety", "_conv_route", "_route_offline"):
+                user_context.pop(_rk, None)
             user_context.pop("_slow_think_outline", None)
             user_context.pop("_media_coherence_hint", None)
             user_context.pop("_media_pending_hint", None)

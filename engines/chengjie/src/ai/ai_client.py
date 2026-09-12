@@ -206,7 +206,7 @@ class AIClient(LoggerMixin):
         # prompt token 预算（系统提示 + 注入 + few-shot + 历史合计；0 = 不裁）。
         # 2026-09-11：6000 → 12000。生产实测一轮完整装配（人设 full + 记忆 + 目标 +
         # 场景 + KB + 12 条历史）约 10-12k token，6000 意味着**每一轮**都在裁；
-        # 主链 deepseek-flash 1M 窗、备用硅基 V4-Flash 1M、LAN chatx 64k，12k 只占零头。
+        # 主链 deepseek-flash 1M 窗、备用硅基 V4-Flash 1M、LAN chatx 24k，12k 只占零头。
         self._prompt_budget_tokens = self._DEFAULT_PROMPT_BUDGET
         # 最近一次主链失败（供起草侧「AI 本轮未生成」灰标消费；pop 即清）
         self._last_fail: Optional[Dict[str, Any]] = None
@@ -377,7 +377,7 @@ class AIClient(LoggerMixin):
         if think_flag is False:
             self._oa_extra_body["options"] = {"think": False}
             # vLLM(Qwen3 系)直答档：chat_template_kwargs 由 vLLM OpenAI 服务端消费
-            # （enable_thinking=False=零思考 token，2026-08-15 主链 27B@64k 换代配套）；
+            # （enable_thinking=False=零思考 token，2026-08-15 主链 27B 换代配套）；
             # Ollama /v1 与云端点对未知字段一律忽略，同发无副作用。
             self._oa_extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             # Auto-detect Ollama native endpoint: use /api/chat to properly honor think:false
@@ -909,14 +909,42 @@ class AIClient(LoggerMixin):
         # 主尝试失败仍走下方备用池 → 本地兜底 → canned（绝不因路由丢话）。
         _route = route or (context or {}).get("_route")
         _profile = self.resolve_route(_route)
+        # 会话级严格路由（conv_route「无限制」，2026-09-12）：只许打该档端点——主尝试失败
+        # **不**回落云端备用池 / 不走云端主链（去审查内容送云端会被拒，且违背坐席显式选择）；
+        # 档不存在（LAN 端点没配）同样按离线处理，返回 None＝本轮不回复，由调用方按
+        # ``_route_offline`` 挂起 / 提示，绝不静默换模型。
+        _route_strict = bool((context or {}).get("_route_strict"))
+        if _route_strict and not _profile:
+            if context is not None:
+                context["_route_offline"] = "no_endpoint"
+            try:
+                from src.ai.conv_route import note_offline as _cr_note
+                _cr_note(str((context or {}).get("conversation_id") or ""))
+            except Exception:
+                pass
+            return self._fallback_reply(_fb_lang)
         _primary_client = _profile["client"] if _profile else self._oa_client
         _primary_extra = (_profile.get("extra_body") or None) if _profile else self._oa_extra_body
+        # 会话级思考开关（Cursor 式 Thinking toggle）：只对显式路由档生效——主链的思维链
+        # 策略由 ai.reasoning 全局管，这里不越权改。
+        if _profile and (context or {}).get("_thinking") is not None:
+            try:
+                from src.ai.vendor_params import thinking_extra_body as _teb
+                _tb = _teb(_profile.get("base_url") or "", _profile.get("model") or "",
+                           enabled=bool((context or {}).get("_thinking")))
+                _merged = {k: v for k, v in dict(_primary_extra or {}).items()
+                           if k not in ("chat_template_kwargs", "thinking", "enable_thinking")}
+                _merged.update(_tb)
+                _primary_extra = _merged or None
+            except Exception:
+                pass
         _primary_native = None if _profile else self._ollama_native_base
         # 本地优先模式（P1）：本地端点齐备即可出话——全本地部署常**根本没配云端 key**，
         # 此时 _oa_client 为 None，若照旧早退就会在试本地之前先放弃回复。
         _local_primary = bool(
             self._primary_mode in ("local", "local_only")
             and self._fb_client and self._fb_model
+            and not _route_strict
         )
         if not _primary_client and not _local_primary:
             self.logger.error("AI 客户端未初始化")
@@ -925,7 +953,8 @@ class AIClient(LoggerMixin):
         if context is not None:
             context["_current_user_message_for_lang"] = user_message
         _cb_blocked = False
-        if self._cb_enabled and self._cb_open_until > 0:
+        # 严格路由：熔断器守的是云端主链，与显式 LAN 档无关——不让云端开路挡住本地直答
+        if self._cb_enabled and self._cb_open_until > 0 and not _route_strict:
             now = time.time()
             if now < self._cb_open_until:
                 # 开路：跳过主模型。有本地兜底则由下方兜底出真话，否则本轮不回复。
@@ -947,7 +976,7 @@ class AIClient(LoggerMixin):
         # ——无处可去时照走云端（永不断线 > 计费，本次照常计费）。熔断开路时让位
         # 熔断语义（那条链本就以本地收尾）。
         _token_degraded = False
-        if not _cb_blocked and not _local_primary:
+        if not _cb_blocked and not _local_primary and not _route_strict:
             try:
                 from src.licensing.token_ledger import should_degrade_action
 
@@ -1269,6 +1298,16 @@ class AIClient(LoggerMixin):
         # 生产主路径（openai_compat 运行时）的 key 失效弹窗：余额耗尽/Key 被封多发生在
         # 运行中，若只在启动连接测试挂钩会一直静默到下次重启。备用池/本地兜底即便顶上，
         # 机主也必须立刻知道主 Key 已坏（弹窗与降级并行，互不阻塞）。
+        if _route_strict:
+            # 会话级严格路由：该端点没出话就到此为止——不进云端备用池、不换模型。
+            if context is not None:
+                context["_route_offline"] = _fail_reason if last_error is not None else "empty"
+            try:
+                from src.ai.conv_route import note_offline as _cr_note
+                _cr_note(str((context or {}).get("conversation_id") or ""))
+            except Exception:
+                pass
+            return self._fallback_reply(_fb_lang)
         self._alert_key_failure_if_matches(last_error)
         pool_reply = await self._try_key_pool_chat(
             messages, use_temperature, use_max_tokens, context, request_id,
@@ -2031,6 +2070,8 @@ class AIClient(LoggerMixin):
                 request_id=str(_ctx.get("request_id") or ""),
                 usage=usage, budget_stats=st or None,
                 latency_ms=int(latency_ms or 0), ok=ok,
+                route=(_ctx.get("_conv_route") if isinstance(_ctx.get("_conv_route"), dict)
+                       else None),
             )
             if uf["prompt_tokens"]:
                 self.logger.debug(
@@ -2406,7 +2447,33 @@ class AIClient(LoggerMixin):
                         "model": m_model,
                         "label": f"{m_model} @ {m_host} ({name})",
                         "extra_body": m_extra,
+                        "base_url": m_base,
                     }
+            # 会话级「无限制」档（conv_route，2026-09-12）：``ai.models.<ai.unrestricted.profile>``
+            # 未显式配时绑到 LAN 兜底端点（局域网私有模型＝无限制实体，现网 173:8001/chatx）。
+            # 与下方 memory_extract→_lan_tool 同一招式；LAN 兜底也没有 → 不绑＝该档不可用
+            # （UI 探活会如实报 no_endpoint，绝不静默换成云端）。
+            try:
+                from src.ai.conv_route import profile_name as _unr_profile
+                _unr_name = _unr_profile(ai_config if isinstance(ai_config, dict)
+                                         and "ai" in ai_config else {"ai": ai_config})
+            except Exception:
+                _unr_name = "unrestricted"
+            if (_unr_name not in self._route_clients
+                    and getattr(self, "_fb_client", None)
+                    and str(getattr(self, "_fb_model", "") or "").strip()):
+                _fb_base = ""
+                try:
+                    _fb_base = str(getattr(self._fb_client, "base_url", "") or "").rstrip("/")
+                except Exception:
+                    _fb_base = ""
+                self._route_clients[_unr_name] = {
+                    "client": self._fb_client,
+                    "model": self._fb_model,
+                    "label": f"{self._fb_model} @ lan ({_unr_name})",
+                    "extra_body": dict(getattr(self, "_fb_extra_body", None) or {}),
+                    "base_url": _fb_base,
+                }
             routes = ai_config.get("task_routes") or {}
             if isinstance(routes, dict):
                 for task, prof in routes.items():
@@ -2444,7 +2511,11 @@ class AIClient(LoggerMixin):
         """
         if not task:
             return None
-        name = self._task_routes.get(str(task))
+        t = str(task)
+        if t.startswith("profile:"):
+            # 直接点名模型档（会话级路由 conv_route：``profile:unrestricted``），不经任务映射
+            return self._route_clients.get(t[len("profile:"):].strip())
+        name = self._task_routes.get(t)
         if not name:
             return None
         return self._route_clients.get(name)
@@ -3357,6 +3428,13 @@ class AIClient(LoggerMixin):
 
         # 真人感文本层 L1（platform/spoken_style 桥接，默认关；ai.spoken_style.enabled）
         # role=本会话人设口称名（上方 persona 解析已写进 context）→ 说话指纹按人设分流
+        # 无限制会话（conv_route）：说话指纹属风格规则层，让路（身份 / 语言规则 / 能力一致性保留）
+        try:
+            from src.ai.conv_route import skip_guard as _cr_skip_l1
+            if _cr_skip_l1(context, "spoken_style"):
+                return "\n\n".join(parts)
+        except Exception:
+            pass
         try:
             from src.ai.spoken_style_bridge import system_block as _ss_system_block
             # #40：context 透传 → 地区档（zh-TW/zh-HK）按 人设/居住地/会话「发→」解析；
@@ -5269,6 +5347,11 @@ class AIClient(LoggerMixin):
             user_message, enhanced_context,
             conversation_history=conversation_history,
             strategy_overrides=strategy_overrides)
+        # 会话级严格路由离线信号回传（enhanced_context 是副本，调用方读的是 user_context）
+        if enhanced_context.get("_route_offline"):
+            user_context["_route_offline"] = enhanced_context["_route_offline"]
+        else:
+            user_context.pop("_route_offline", None)
 
         # 生成层口语分叉（Phase G）：请求过口语版就无条件剥标记（书面版绝不带
         # [口语版] 字样，哪怕 LLM 输出畸形）；口语段合格 → 按书面版哈希暂存，
@@ -5289,6 +5372,14 @@ class AIClient(LoggerMixin):
                 reply = written
             except Exception:
                 self.logger.debug("spoken variant split skipped", exc_info=True)
+
+        # 无限制会话：L3 出口清洁 / L4 口语化改写属「质量层」，整段让路（conv_route.skip_guard）
+        try:
+            from src.ai.conv_route import skip_guard as _cr_skip
+            if _cr_skip(enhanced_context, "spoken_style_cleanup"):
+                return reply
+        except Exception:
+            pass
 
         # 真人感文本层 L3：出口清洁（剥情绪/副语言标记；未启用=原样返回，零成本）
         _pre_l34_reply = reply

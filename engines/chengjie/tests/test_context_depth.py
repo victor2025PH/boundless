@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""上下文/记忆深度四档（ai.context_depth）门禁——2026-09-11。
+"""上下文/记忆深度四档（ai.context_depth）门禁。
 
 钉住：standard/缺席 = 零行为变化；深档只抬地板不压手调值；策略 context_rounds=0 仍尊重；
-UI 白名单枚举与模块档位一致；AIClient / skill_manager 消费点真的按档位联动。
+UI 白名单枚举与模块档位一致；本机无限制另按端点封顶（不在本文件）。
 """
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ def test_deep_tiers_lift_floor_but_never_lower():
     assert cd.history_fetch_limit(deep, 30) == 60
 
     ultra = {"ai": {"context_depth": "超大"}}
+    assert cd.resolve(ultra).key == "ultra"
     assert cd.prompt_budget(ultra, 12000) == 900_000
     assert cd.history_limit(ultra, 10) == 1000
     assert cd.history_fetch_limit(ultra, 30) == 1100 >= cd.history_limit(ultra, 10)
@@ -62,8 +63,9 @@ def test_tiers_monotonic():
         assert a.prompt_budget_tokens < b.prompt_budget_tokens
         assert a.history_msgs < b.history_msgs
         assert a.memory_items <= b.memory_items
-        assert a.history_fetch >= a.history_msgs   # 取库行数覆盖喂模型条数
+        assert a.history_fetch >= a.history_msgs
     assert cd.TIERS["ultra"].prompt_budget_tokens <= 1_000_000
+    assert tuple(cd.TIER_KEYS) == ("standard", "deep", "max", "ultra")
 
 
 def test_compress_threshold_leaves_headroom():
@@ -92,12 +94,33 @@ def test_settings_choices_synced():
     assert um["type"] == "enum" and um["default"] == "full" and um["hot"] is True
     assert tuple(USAGE_MODE_CHOICES) == ("full", "economy")
     assert "lite" not in USAGE_MODE_CHOICES          # 不与深度档混成第五档
+    from src.inbox.reply_pacing_settings import field_meta
+    assert field_meta()["ai.context_depth"]["choices"] == list(cd.TIER_KEYS)
+
+
+def test_ui_cloud_four_tiers_and_picker_lan_fill():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    rps = (root / "src/web/templates/reply_settings.html").read_text(encoding="utf-8")
+    inbox = (root / "src/web/templates/unified_inbox.html").read_text(encoding="utf-8")
+    block = rps.split('id="rps-ctx-depth"', 1)[1].split("</select>", 1)[0]
+    assert 'value="standard"' in block and 'value="deep"' in block
+    assert 'value="max"' in block and 'value="ultra"' in block
+    assert "(ch.depths||['','standard','deep','max','ultra'])" in inbox
+    assert "inbox.mp.depth_fill_sub" in inbox and "inbox.mp.depth_follow_sub_lan" in inbox
+    assert "约 128k" in rps and "约 900k" in rps
+    # 旧进程两档白名单：按 GET meta.choices 藏 deep/ultra，防保存被拒
+    assert "function rpsSyncCtxDepthChoices" in rps
+    assert "rpsSyncCtxDepthChoices(meta)" in rps
+    assert "function rpsCtxDepthCoerce" in rps
 
 
 def test_settings_sanitize_accepts_tier_and_rejects_junk():
     from src.inbox.reply_pacing_settings import sanitize_patch
     clean, errors = sanitize_patch({"ai.context_depth": "ultra"})
     assert not errors and clean["ai.context_depth"] == "ultra"
+    clean, errors = sanitize_patch({"ai.context_depth": "max"})
+    assert not errors and clean["ai.context_depth"] == "max"
     _, errors = sanitize_patch({"ai.context_depth": "gigantic"})
     assert errors
     clean, errors = sanitize_patch({"ai.usage_mode": "economy"})

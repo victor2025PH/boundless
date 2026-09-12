@@ -888,6 +888,12 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .app-confirm-btn.warn:hover{filter:brightness(1.08);color:#fff;}
 .app-confirm-btn.danger{background:#dc2626;border-color:#dc2626;color:#fff;font-weight:600;}
 .app-confirm-btn.danger:hover{filter:brightness(1.08);color:#fff;}
+.app-confirm-btn.vio{background:var(--tk-violet);border-color:var(--tk-violet);color:#fff;font-weight:600;box-shadow:0 6px 16px color-mix(in srgb,var(--tk-violet) 35%,transparent);}
+.app-confirm-btn.vio:hover{filter:brightness(1.08);color:#fff;}
+.app-confirm-card.tone-vio{overflow:hidden;border-color:color-mix(in srgb,var(--tk-violet) 40%,var(--border));}
+.app-confirm-card.tone-vio::before{content:'';display:block;height:4px;margin:-20px -20px 16px;background:var(--tk-grad-violet);}
+.app-confirm-card.tone-vio .app-confirm-title svg{color:var(--tk-violet);}
+.app-confirm-card.tone-danger .app-confirm-title svg{color:var(--tk-danger);}
 .app-prompt-input{width:100%;margin-top:6px;font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:9px;background:var(--bg-soft);color:var(--text-main);outline:none;transition:border-color .12s,box-shadow .12s;}
 .app-prompt-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent,#1e8cf2) 18%, transparent);}
 .app-prompt-input::placeholder{color:var(--text-sub);}

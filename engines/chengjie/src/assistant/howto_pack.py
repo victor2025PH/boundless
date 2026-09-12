@@ -233,18 +233,17 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "上下文和记忆深度怎么调 / 怎么让 AI 记得更久",
         "How to change context and memory depth",
         "打开「自动回复设置」，在风格卡里找到「上下文与记忆深度」："
-        "标准（约 12k · 最近 10 条 · 8 条记忆）/ 深度 / 最大 / 超大（约 900k，"
-        "与 DeepSeek 1M 窗口平齐）。选一档保存即可，不用重启。"
-        "越深越记得住人设和长对话，也越贵（峰时单轮上限约 ¥0.02 / ¥0.06 / ¥0.26 / ¥1.8）。"
-        "旁边的「用量模式」是另一套旋钮：完整＝按深度档；经济＝只留最近 4 条、压缩人设、少抽取。"
+        "标准（约 12k）/ 深度（约 32k）/ 最大（约 128k）/ 超大（约 900k）。这是云端主链的全局档。"
+        "本机「无限制」在工作台「模型 ▾」里按窗口重画，满窗约 24k，发送时超窗会压住。"
+        "选一档保存即可，不用重启。旁边的「用量模式」是另一套旋钮：完整＝按深度档；经济＝只留最近 4 条。"
         "钱包用尽时即使选完整也会自动进经济档，避免断线。",
         "Open Reply settings. In the style card, Context & memory depth has "
-        "Standard (~12k / last 10 / 8 memories), Deep, Max, and Ultra (~900k, "
-        "on par with DeepSeek's 1M window). Pick a tier and save — no restart. "
-        "Deeper remembers more and costs more (peak per-turn ≈ ¥0.02 / ¥0.06 / "
-        "¥0.26 / ¥1.8). Usage mode next to it is a separate spend cap: Full "
-        "follows the depth tier; Economy keeps the last 4 messages. An empty "
-        "token wallet still drops Full into Economy so chat does not go dark.",
+        "Standard (~12k), Deep (~32k), Max (~128k), and Ultra (~900k) for the cloud chain. "
+        "Local unrestricted chats are redrawn in the composer Model menu to this machine's "
+        "window (~24k) and clamped on send. Pick a tier and save — no restart. "
+        "Usage mode next to it is a separate spend cap: Full follows the depth tier; "
+        "Economy keeps the last 4 messages. An empty token wallet still drops Full into "
+        "Economy so chat does not go dark.",
         "上下文 记忆深度 深度 超大 标准档 经济档 用量模式 记得更久 人设没了 没有记忆 context depth ultra economy",
         "/reply-settings",
     ),

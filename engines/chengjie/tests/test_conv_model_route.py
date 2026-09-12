@@ -167,15 +167,22 @@ def test_endpoint_spec_prefers_models_profile_then_fallback():
 
 def test_depth_cap_and_allowed_depths():
     assert conv_route.depth_cap(8192) == "standard"
+    assert conv_route.depth_cap(24_576) == "standard"   # 24k 吃不下 32k deep
     assert conv_route.depth_cap(65536) == "max"
     assert conv_route.depth_cap(300_000) == "ultra"
-    cfg = {"ai": {"models": {"unrestricted": {"base_url": "http://x/v1", "model": "m",
-                                              "max_ctx": 65536}}}}
-    assert conv_route.allowed_depths(cfg, unrestricted=True) == ["", "standard", "deep", "max"]
-    assert "ultra" in conv_route.allowed_depths(cfg, unrestricted=False)
+    lan = {"ai": {"models": {"unrestricted": {"base_url": "http://x/v1", "model": "m",
+                                              "max_ctx": 24576}}}}
+    assert conv_route.allowed_depths(lan, unrestricted=True) == ["", "standard", "max"]
+    assert conv_route.allowed_depths(lan, unrestricted=False) == [
+        "", "standard", "deep", "max", "ultra"]
+    wide = {"ai": {"models": {"unrestricted": {"base_url": "http://x/v1", "model": "m",
+                                               "max_ctx": 65536}}}}
+    assert conv_route.allowed_depths(wide, unrestricted=True) == [
+        "", "standard", "deep", "max"]
     r = conv_route.normalize({"profile": "unrestricted", "depth": "ultra"})
-    assert conv_route.effective_depth(r, cfg) == "max"       # 超出端点上限 → 封顶
-    assert conv_route.effective_depth(Route.standard(), cfg) == ""
+    assert r.depth == "ultra"
+    assert conv_route.effective_depth(r, lan) == "max"   # 超窗 → 满窗键
+    assert conv_route.effective_depth(Route.standard(), lan) == ""
 
 
 # ── 守卫读点 ─────────────────────────────────────────────────────────────────
@@ -238,9 +245,12 @@ def _has_thinking_extra_body() -> bool:
 @_NEEDS_OVERRIDE_SCOPE
 def test_generation_scope_overrides_depth_and_restores():
     assert context_depth.resolve({}).key == "standard"
+    wide = {"ai": {"fallback": {"enabled": True, "base_url": "http://x/v1",
+                                "model": "m", "num_ctx": 65536}}}
     r = conv_route.normalize({"profile": "unrestricted", "depth": "deep"})
+    assert r.depth == "deep"
     assert conv_route.active_unrestricted() is False
-    with conv_route.generation_scope(r, {}):
+    with conv_route.generation_scope(r, wide):
         assert conv_route.active_unrestricted() is True
         assert context_depth.resolve({"ai": {"context_depth": "standard"}}).key == "deep"
         assert context_depth.describe({})["override"] == "deep"
@@ -265,6 +275,28 @@ def test_unrestricted_scope_bypasses_economy_cap():
         budget_eco = context_depth.prompt_budget(cfg, 12000)
     assert budget_unr >= budget_eco
     assert budget_unr >= 128_000
+
+
+def test_endpoint_prompt_cap_reserves_completion():
+    assert conv_route.endpoint_prompt_cap({}) == 0
+    cfg = {"ai": {"fallback": {"enabled": True, "base_url": "http://x/v1",
+                               "model": "chatx", "num_ctx": 24576}}}
+    assert conv_route.endpoint_prompt_cap(cfg, max_tokens=2048) == 24576 - 2048 - 128
+    assert conv_route.endpoint_prompt_cap(cfg, max_tokens=512) == 24576 - 512 - 128
+
+
+@_NEEDS_OVERRIDE_SCOPE
+def test_unrestricted_prompt_budget_clamps_to_endpoint():
+    cfg = {"ai": {"fallback": {"enabled": True, "base_url": "http://192.168.0.173:8001/v1",
+                               "model": "chatx", "num_ctx": 24576}}}
+    r = conv_route.normalize({"profile": "unrestricted", "depth": "max", "effort": "high"})
+    cap = conv_route.endpoint_prompt_cap(cfg, max_tokens=2048)
+    assert 20_000 <= cap < 24_576
+    with conv_route.generation_scope(r, cfg):
+        assert context_depth.prompt_budget(cfg, 80_000) == cap
+        assert context_depth.prompt_budget(cfg, 0) == cap          # 不裁也封顶
+        assert context_depth.prompt_budget(cfg, 12_000) == cap     # max 抬到 128k 后再封
+    assert context_depth.prompt_budget(cfg, 80_000) == 80_000     # 作用域外标准档不碰
 
 
 # ── 思考开关 extra_body ──────────────────────────────────────────────────────
@@ -431,12 +463,12 @@ def test_http_get_default_and_post_unrestricted_roundtrip():
     assert r["ok"] and r["conversation_id"] == CID
     assert r["route"]["profile"] == "standard" and r["allowed"] is True and r["enabled"] is True
     assert r["endpoint"]["model"] == "chatx" and "api_key" not in r["endpoint"]
-    assert r["choices"]["depths"][-1] == "ultra"          # 标准档不封顶
+    assert r["choices"]["depths"][-1] == "ultra"          # 云端标准档四档全放
 
     r = cli.post("/api/unified-inbox/conv-model-route",
                  json={**_Q, "profile": "unrestricted"}).json()
     assert r["ok"] and r["route"]["unrestricted"] is True and r["route"]["depth"] == "max"
-    assert r["choices"]["depths"] == ["", "standard", "deep", "max"]   # 64k 端点封顶
+    assert r["choices"]["depths"] == ["", "standard", "deep", "max"]   # 64k 端点：深度进得去，满窗用 max
     assert conv_route.get(st, CID).unrestricted
 
     r = cli.post("/api/unified-inbox/conv-model-route",

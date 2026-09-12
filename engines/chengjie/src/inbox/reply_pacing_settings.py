@@ -39,8 +39,9 @@ PACING_PROFILE_CHOICES = ("custom", "natural", "fast", "slow")
 REPLY_LENGTH_CHOICES = ("", "concise", "moderate", "detailed")
 EMOJI_LEVEL_CHOICES = ("", "none", "minimal", "moderate", "rich")
 TONE_HINT_MAXLEN = 120
-# 上下文/记忆深度四档；刻意本地定义（本模块零依赖纯函数），与 context_depth.TIER_KEYS 的
-# 一致性由门禁钉住（test_context_depth::test_settings_choices_synced）。
+# 上下文/记忆深度四档；与 context_depth.TIER_KEYS 一致性由门禁钉住
+# （test_context_depth::test_settings_choices_synced）。全局档给云端主链；
+# 无限制/本机会话发送时按端点窗口封顶。
 CONTEXT_DEPTH_CHOICES = ("standard", "deep", "max", "ultra")
 # 用量模式（B9，2026-09-11）：与深度四档并列、不混成第五档。full = 不压帽；
 # economy = usage_economy overlay（历史 4 / compact 人设 / 少抽）。钱包用尽时
@@ -169,10 +170,8 @@ FIELDS: Dict[str, Dict[str, Any]] = {
     "ai.reply_defaults.tone_hint": {
         "type": "text", "maxlen": TONE_HINT_MAXLEN, "default": "", "hot": True,
     },
-    # 上下文/记忆深度四档（2026-09-11，老板口径「标准/深度/最大/超大，可到 1M」）：一档改全部
-    # 相关旋钮（预算 / 喂模型历史条数 / 本地逐字保留 / 记忆注入条数 / 取库行数），单一事实源
-    # src/ai/context_depth.py。standard = 零行为变化；深档只抬地板不压手调值。消费方全部
-    # 活读 config → hot=True。
+    # 上下文/记忆深度四档（云端 12k/32k/128k/900k）。无限制会话另外按端点封顶。
+    # 单一事实源 src/ai/context_depth.py。standard = 零行为变化；深档只抬地板。hot=True。
     "ai.context_depth": {
         "type": "enum", "choices": CONTEXT_DEPTH_CHOICES,
         "default": "standard", "hot": True,
@@ -832,6 +831,11 @@ def sanitize_patch(
                 clean[key] = b
         elif t == "enum":
             s = str(raw_val or "").strip().lower()
+            if key == "ai.context_depth":
+                if s == "深度":
+                    s = "deep"
+                elif s == "超大":
+                    s = "ultra"
             if s not in spec["choices"]:
                 errors.append({"field": key, "code": "bad_enum"})
             else:
@@ -1337,6 +1341,14 @@ def effective_values(config: Any) -> Dict[str, Any]:
         if path == _BUB_MAXPARTS_PATH and val is None:
             # 哨兵二次求值：parse_bubbles_cfg 的真实缺省＝逐句模式 5、打包模式 3
             val = 5 if bool(_dig(config, _BUB_PER_SENT_PATH, False)) else 3
+        if path == "ai.context_depth":
+            s = str(val or "").strip().lower()
+            if s == "深度":
+                val = "deep"
+            elif s == "超大":
+                val = "ultra"
+            elif s not in CONTEXT_DEPTH_CHOICES:
+                val = spec["default"]
         out[path] = val
     return out
 

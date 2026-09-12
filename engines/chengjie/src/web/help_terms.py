@@ -462,10 +462,10 @@ HELP_TERMS: dict = {
     "context_depth": {
         "zh": "上下文与记忆深度",
         "en": "Context & memory depth",
-        "desc": "一档同时改提示预算、最近历史条数和注入的长期记忆条数。标准约 12k / 最近 10 条 / 8 条记忆；深度 32k / 40 条 / 16 条；最大 128k / 160 条 / 30 条；超大约 900k，与 DeepSeek 1M 窗口平齐。越深越记得住，峰时单轮上限约：标准 ¥0.02 · 深度 ¥0.06 · 最大 ¥0.26 · 超大 ¥1.8。改完即生效，不用重启。",
-        "desc_en": "One control for prompt budget, recent history and long-term memories. Standard ≈12k / last 10 / 8 memories; Deep 32k / 40 / 16; Max 128k / 160 / 30; Ultra ≈900k, on par with DeepSeek's 1M window. Deeper remembers more. Peak per-turn ceiling ≈ ¥0.02 / ¥0.06 / ¥0.26 / ¥1.8. Takes effect immediately, no restart.",
-        "usage": "自动回复设置 →「上下文与记忆深度」下拉选档 → 保存。日常用标准或深度；超大档很贵，只给必须盯很长对话的会话。",
-        "usage_en": "Reply settings → Context & memory depth → pick a tier → save. Use Standard or Deep day-to-day; Ultra is expensive, only for threads that must keep a very long window."
+        "desc": "云端主链四档：标准约 12k / 深度 32k / 最大 128k / 超大约 900k。本机「无限制」会话在工作台按窗口重画，满窗约 24k，发送时超窗会压住。越深越记得住，也越贵。改完即生效，不用重启。",
+        "desc_en": "Four cloud tiers: Standard ~12k / Deep 32k / Max 128k / Ultra ~900k. Unrestricted local chats are redrawn to this machine's window (~24k today) and clamped on send. Deeper remembers more and costs more. Takes effect immediately, no restart.",
+        "usage": "自动回复设置 →「上下文与记忆深度」下拉选档 → 保存。日常用标准或深度；超大档很贵。本机无限制请在会话「模型 ▾」里选满窗。",
+        "usage_en": "Reply settings → Context & memory depth → pick a tier → save. Use Standard or Deep day-to-day; Ultra is expensive. For local unrestricted, pick fill-window in the composer Model menu.",
     },
     "usage_mode": {
         "zh": "用量模式",

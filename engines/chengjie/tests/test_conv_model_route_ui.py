@@ -87,6 +87,20 @@ def test_mp_i18n_keys_present_in_both_langs():
     assert not missing, f"模板用到但词典没有: {sorted(missing)}"
 
 
+def test_mp_confirms_use_app_confirm_not_native():
+    """桌面壳里原生 confirm 标题是 telegram-ai-desktop，必须走站内 _appConfirm。"""
+    html = _html()
+    i = html.index("async function _mpSet(patch)")
+    j = html.index("window._mpSet=_mpSet", i)
+    block = html[i:j]
+    assert "_appConfirm(" in block
+    assert not re.search(r"(?<![_\w])confirm\(", block)
+    assert "inbox.mp.confirm_unr_hd" in block and "tone:'vio'" in block
+    assert "inbox.mp.confirm_safety_hd" in block and "tone:'danger'" in block
+    css = CSS.read_text(encoding="utf-8")
+    assert ".app-confirm-btn.vio" in css and "--tk-violet" in css
+
+
 def test_css_uses_tokens_only_no_tailwind_blue_hex():
     css = CSS.read_text(encoding="utf-8")
     i = css.index("会话级模型路由（conv_route，2026-09-12）")

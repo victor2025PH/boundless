@@ -99,8 +99,32 @@ def thinking_off_extra_body(base_url: Any, model: Any, *,
     return {}
 
 
+def thinking_extra_body(base_url: Any, model: Any, *, enabled: bool) -> Dict[str, Any]:
+    """按端点给出「思维链开 / 关」的 extra_body（会话级思考开关，2026-09-12）。
+
+    ``enabled=False`` 逐字等于 :func:`thinking_off_extra_body`；``enabled=True`` 对
+    vLLM/私网 Qwen3 系显式 ``enable_thinking: true``（``--reasoning-parser qwen3`` 会把思考
+    拆进 reasoning_content、正文照常回 content），DeepSeek 官方给 ``thinking.type=enabled``；
+    其余端点不加字段（不认识就别乱送）。
+    """
+    if not enabled:
+        return thinking_off_extra_body(base_url, model, reasoning=False)
+    base = str(base_url or "").lower()
+    model_l = str(model or "").lower()
+    if is_deepseek_official(base):
+        return {"thinking": {"type": "enabled"}}
+    if is_siliconflow(base):
+        if any(k in model_l for k in _SF_HYBRID_MARKERS):
+            return {"enable_thinking": True}
+        return {}
+    if (":8001" in base or "vllm" in base or is_private_endpoint(base)
+            or model_l.startswith("chatx") or "qwen3" in model_l):
+        return {"chat_template_kwargs": {"enable_thinking": True}}
+    return {}
+
+
 __all__ = [
     "DEEPSEEK_CURRENT_MODEL", "RETIRED_DEEPSEEK_ALIASES",
     "host_of", "is_deepseek_official", "is_siliconflow", "is_private_endpoint",
-    "normalize_model", "thinking_off_extra_body",
+    "normalize_model", "thinking_off_extra_body", "thinking_extra_body",
 ]

@@ -1,39 +1,76 @@
 # -*- coding: utf-8 -*-
-"""上下文/记忆深度四档（``ai.context_depth``）——单一事实源（2026-09-11）。
+"""上下文/记忆深度四档（``ai.context_depth``）——单一事实源。
 
-老板口径：「上下文与记忆做 标准 / 深度 / 最大 / 超大，也可以调到与 DeepSeek 平齐的 1M」。
+回复设置页是**云端主链**的全局档：标准 12k / 深度 32k / 最大 128k / 超大 900k。
+composer「模型 ▾」按当前模型重画（Cursor 式）：
 
-一档改全部相关旋钮（此前它们散在四处、各有各的缺省，单改任何一个都「失忆」）：
+  · 标准档（云端）→ 四档全放。
+  · 无限制（本机 chatx）→ 只放进得去的档，并永远有一档「满窗」＝端点
+    ``max_model_len``（现役 24576 ≈ 24k）。发送路径再按端点封顶，超窗不会 400。
+
+一档改全部相关旋钮：
 
   · ``prompt_budget_tokens``      发送前预算裁剪上限（ai_client._apply_prompt_budget）
   · ``history_msgs``              喂给模型的历史条数上限（ai_client max_hist；策略 context_rounds
                                   只能往上抬不往下压，0 仍表示「本策略不带历史」）
   · ``verbatim_rounds/msgs``      本地先裁：最近多少轮逐字保留、更早的压成摘要
-                                  （skill_manager 两条路径：TG 直答按轮、收件箱拟稿按条）
   · ``memory_items/chars``        情景记忆注入条数 / 字数（memory.inject_max_*）
   · ``history_fetch``             从 inbox 库取多少行历史（各拟稿入口的 list_recent_messages limit）
 
 语义：
-  · 键缺席 / ``standard`` = **零行为变化**：全部返回调用方传入的 legacy 值（老配置照旧生效）。
-  · deep / max / ultra = 各旋钮取 ``max(legacy, 档位值)``——只抬地板，绝不把用户手调的更大值压回去。
-  · ``ultra`` 预算 900k：对齐 DeepSeek V4.1-Flash / 硅基 V4-Flash 的 1M 窗口，留 10% 给输出与估算误差；
-    LAN chatx（64k）有自己的 num_ctx 硬上限裁剪，不受此影响。
+  · 键缺席 / ``standard`` = **零行为变化**：全部返回调用方传入的 legacy 值。
+  · deep / max / ultra = 各旋钮取 ``max(legacy, 档位值)``——只抬地板，不压手调的更大值。
+  · 无限制会话的预算还要过 :func:`src.ai.conv_route.endpoint_prompt_cap`（本机窗口）。
 
-成本提示（DeepSeek 官方 峰时 ¥2/M 未命中 · ¥0.04/M 缓存命中 · ¥8/M 输出）：
-  standard ≈ 12k → 每轮 ≤ ¥0.024；deep 32k → ≤ ¥0.064；max 128k → ≤ ¥0.26；ultra 900k → ≤ ¥1.8。
-  人设/规则前缀稳定即吃缓存价，实际远低于上限；UI 必须把这条讲给用户。
+消费方全部**活读** config，改完即生效，无需重启。
 
-消费方全部**活读** config（本模块每次从 runtime_config() / 传入 config 取），改完即生效，无需重启。
+会话级覆盖（2026-09-12，composer 模型选择器）：:func:`override_scope` 用 contextvar 把某一次拟稿
+的档位换成会话自选值（``conv_route.depth_scope``），作用域内所有消费方（ai_client 预算 /
+skill_manager 历史与记忆 / history_fetch）自动跟随，无需逐处穿参数；``skip_economy=True``
+时经济档 overlay 不再压帽（本地模型不走钱包）。作用域外逐字节旧行为。
 """
 from __future__ import annotations
 
+import contextvars
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
+
+# (tier_key, skip_economy)；None＝无覆盖
+_OVERRIDE: contextvars.ContextVar[Optional[Tuple[str, bool]]] = contextvars.ContextVar(
+    "context_depth_override", default=None)
+
+
+@contextmanager
+def override_scope(tier: Any, *, skip_economy: bool = False) -> Iterator[None]:
+    """作用域内 :func:`resolve` 返回 ``tier`` 档（非法值 → 不覆盖）。可嵌套，退出即还原。"""
+    key = normalize_tier(tier)
+    if not str(tier or "").strip():
+        yield
+        return
+    token = _OVERRIDE.set((key, bool(skip_economy)))
+    try:
+        yield
+    finally:
+        _OVERRIDE.reset(token)
+
+
+def override_active() -> Optional[str]:
+    """当前作用域覆盖的档位键；无 → None。"""
+    cur = _OVERRIDE.get()
+    return cur[0] if cur else None
+
+
+def _economy_bypassed() -> bool:
+    cur = _OVERRIDE.get()
+    return bool(cur and cur[1])
 
 TIER_KEYS: Tuple[str, ...] = ("standard", "deep", "max", "ultra")
 DEFAULT_TIER = "standard"
+# 173 chatx 现役窗口；无限制「满窗」档的标签与发送封顶对齐这个数，不是档位预算本身。
+LAN_MAX_CTX = 24_000
 
-# 同义写法（UI/老板口述/中文键）→ 规范键
+# 同义写法（UI / 口述 / 中文键）→ 规范键
 _ALIASES = {
     "标准": "standard", "std": "standard", "normal": "standard", "default": "standard",
     "深度": "deep", "deeper": "deep",
@@ -100,7 +137,10 @@ def _root(config: Any) -> Dict[str, Any]:
 
 
 def resolve(config: Any = None) -> Depth:
-    """当前生效档位（读 ``ai.context_depth``；缺席/非法 → standard）。"""
+    """当前生效档位（会话级 :func:`override_scope` > ``ai.context_depth``；缺席/非法 → standard）。"""
+    ov = override_active()
+    if ov:
+        return TIERS.get(ov, TIERS[DEFAULT_TIER])
     try:
         ai = _root(config).get("ai") or {}
         return TIERS[normalize_tier(ai.get("context_depth"))]
@@ -119,17 +159,37 @@ def _lift(legacy: Any, tier_val: Optional[int]) -> int:
 
 
 def prompt_budget(config: Any, legacy: int) -> int:
-    """预算：standard → legacy 原值（含 0=不裁）；深档 → max(legacy, 档位)。legacy=0（不裁）保持 0。"""
+    """预算：standard → legacy 原值（含 0=不裁）；最大档 → max(legacy, 档位)。legacy=0（不裁）保持 0。
+    无限制会话在返回前按端点窗口封顶（手调更大值 / 不裁 也压），避免 vLLM 超窗 400。
+    """
     d = resolve(config)
     if d.is_standard or not legacy:
         n = int(legacy or 0)
     else:
         n = _lift(legacy, d.prompt_budget_tokens)
+    if not _economy_bypassed():
+        try:
+            from src.ai.usage_economy import cap_prompt_budget
+            n = cap_prompt_budget(n, config)
+        except Exception:
+            pass
+    return _clamp_unrestricted_endpoint(n, config)
+
+
+def _clamp_unrestricted_endpoint(n: int, config: Any) -> int:
+    """无限制会话：预算不得超过端点窗口（手调更大值 / 0=不裁 也压）。标准档不碰。"""
     try:
-        from src.ai.usage_economy import cap_prompt_budget
-        return cap_prompt_budget(n, config)
+        from src.ai.conv_route import active_unrestricted, endpoint_prompt_cap
+        if not active_unrestricted():
+            return n
+        cap = int(endpoint_prompt_cap(config) or 0)
+        if cap <= 0:
+            return n
+        if not n or n > cap:
+            return cap
     except Exception:
         return n
+    return n
 
 
 def history_limit(config: Any, legacy: int, *, strategy_rounds: Optional[int] = None) -> int:
@@ -139,6 +199,8 @@ def history_limit(config: Any, legacy: int, *, strategy_rounds: Optional[int] = 
         return 0
     d = resolve(config)
     n = _lift(base, None if d.is_standard else d.history_msgs)
+    if _economy_bypassed():
+        return n
     try:
         from src.ai.usage_economy import cap_history
         return cap_history(n, config)
@@ -150,6 +212,8 @@ def verbatim_rounds(config: Any, legacy_rounds: int) -> int:
     """本地逐字保留的轮数（TG 直答路径按轮计）。"""
     d = resolve(config)
     n = _lift(legacy_rounds, None if d.is_standard else d.verbatim_rounds)
+    if _economy_bypassed():
+        return n
     try:
         from src.ai.usage_economy import cap_verbatim_rounds
         return cap_verbatim_rounds(n, config)
@@ -162,6 +226,8 @@ def verbatim_msgs(config: Any, legacy_msgs: int) -> int:
     d = resolve(config)
     n = _lift(legacy_msgs, None if d.is_standard or d.verbatim_rounds is None
               else d.verbatim_rounds * 2)
+    if _economy_bypassed():
+        return n
     try:
         from src.ai.usage_economy import cap_verbatim_msgs
         return cap_verbatim_msgs(n, config)
@@ -185,6 +251,8 @@ def memory_limits(config: Any, legacy_items: int, legacy_chars: int) -> Tuple[in
         items, chars = int(legacy_items), int(legacy_chars)
     else:
         items, chars = _lift(legacy_items, d.memory_items), _lift(legacy_chars, d.memory_chars)
+    if _economy_bypassed():
+        return items, chars
     try:
         from src.ai.usage_economy import cap_memory
         return cap_memory(items, chars, config)
@@ -196,6 +264,8 @@ def history_fetch_limit(config: Any, legacy: int = 30) -> int:
     """从库里取多少行历史（各拟稿入口 list_recent_messages 的 limit）。"""
     d = resolve(config)
     n = _lift(legacy, None if d.is_standard else d.history_fetch)
+    if _economy_bypassed():
+        return n
     try:
         from src.ai.usage_economy import cap_history
         return cap_history(n, config)
@@ -204,7 +274,7 @@ def history_fetch_limit(config: Any, legacy: int = 30) -> int:
 
 
 def describe(config: Any = None) -> Dict[str, Any]:
-    """给 UI / prompt-inspect 用的档位说明（含四档全表、成本提示、经济档 overlay）。
+    """给 UI / prompt-inspect 用的档位说明（四档全表、经济档 overlay）。
 
     ``economy`` **不是**第五档：TIER_KEYS 仍只有 standard/deep/max/ultra。
     overlay 单独挂 ``economy`` 字段，开了才压 history/budget，档位键不变。
@@ -218,6 +288,7 @@ def describe(config: Any = None) -> Dict[str, Any]:
     return {
         "current": cur.key,
         "label_zh": cur.label_zh,
+        "override": override_active() or "",
         "tiers": [TIERS[k].as_dict() for k in TIER_KEYS],
         "effective": {
             "prompt_budget_tokens": cur.prompt_budget_tokens,

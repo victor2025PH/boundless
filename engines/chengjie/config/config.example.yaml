@@ -1585,10 +1585,11 @@ ai:
   # 永不砍，全丢光仍超则软放行并记 WARNING over=N。别设回 6000：一轮完整装配 10-12k，
   # 6000 = 每轮都在裁（2026-09-11「聊天没有人设、没有记忆」事故根因之一）。
   # prompt_budget_tokens: 12000
-  # 上下文与记忆深度四档（2026-09-11；回复设置页可改，改完即生效）：standard / deep / max / ultra
-  # （标准 / 深度 / 最大 / 超大）。一档联动 预算 · 喂模型历史条数 · 本地逐字保留轮数 · 记忆注入条数 ·
-  # 取库行数（单一事实源 src/ai/context_depth.py）。standard = 零行为变化；深档只抬地板，不压上面
-  # 手调的更大值；ultra 预算 900k 对齐 DeepSeek 1M 窗口（峰时单轮上限约 ¥1.8，前缀命中缓存时远低于此）。
+  # 上下文与记忆深度四档（回复设置页＝云端主链；composer「模型 ▾」按当前模型重画）：
+  # standard 12k / deep 32k / max 128k / ultra 900k。本机无限制满窗对齐 vLLM max_model_len
+  # （现役 24576），发送路径再封顶，超窗不会 400。
+  # 一档联动 预算 · 喂模型历史条数 · 本地逐字保留轮数 · 记忆注入条数 · 取库行数
+  # （单一事实源 src/ai/context_depth.py）。standard = 零行为变化；深档只抬地板。
   # context_depth: standard
   # 启动连接探针的独立上限(秒)：冷启动时若云端限流/抖动，这一次探针会占满 timeout(30s)，
   # 把「进程起来→/login 可服务」窗口拖到分钟级(seat 撞加载超时)。探针结果启动流程并不消费
@@ -1753,10 +1754,10 @@ ai:
   # ── 会话级模型路由 / 「无限制」档（2026-09-12，composer 键盘图标左侧「模型 ▾」）─────
   # 坐席按**会话**挑：标准（实例主链，规则全开）或 无限制（LAN 私有去审查模型直答，
   # **只走该端点、不回落云端**；本会话人设规则 / 出站改写守卫 / 风控分级 / 手发 409 护栏
-  # 全部让路）。再带 Cursor 式旋钮：上下文档（复用 ai.context_depth 四档，按端点硬上限封顶）
+  # 全部让路）。再带 Cursor 式旋钮：上下文档（云端四档；本机无限制按端点窗口重画，满窗 24k）
   # / 力度（低/中/高 ≈ 答复长度与温度，UI 明示非推理力度）/ 思考开关。
   # 无限制档端点：``ai.models.<profile>`` 显式档优先；缺席时自动绑到 ``ai.fallback``
-  # （现网 zhiliao 即 173:8001/chatx＝Qwen3.6-27B-abliterated，64k）；两者皆无＝该档不可用
+  # （现网 zhiliao 即 173:8001/chatx＝Qwen3.8-27B-abliterated，窗口 24k）；两者皆无＝该档不可用
   # （UI 探活如实报离线，绝不静默换成云端）。存储：app_settings KV ``conv_model_route:<cid>``。
   # 五条「账号与人身保险丝」（Kill-Switch/ban_signal、账号冷启动 send_gate、stop_contact 冻结、
   # 危机自伤兜底、授权/token 硬拒）默认仍生效；连它们也关有两把钥匙、任一为真即全关：
@@ -1765,11 +1766,11 @@ ai:
   # unrestricted:
   #   enabled: true                 # false = composer 不出「无限制」项（已选的会话按标准档跑）
   #   profile: unrestricted         # 指向 ai.models 里的档名（缺席 → ai.fallback）
-  #   max_ctx: 65536                # 端点上下文硬上限（封顶「上下文」档；ai.models 档内 max_ctx 优先）
+  #   max_ctx: 24576                # 端点上下文硬上限（与本机 vLLM max_model_len 对齐）
   #   bypass_safety_brakes: false   # 全局钥匙：true = 无限制会话连五条安全刹车也不拦（慎）
   # models:
   #   unrestricted: { base_url: http://192.168.0.173:8001/v1, model: chatx, api_key: vllm,
-  #                   max_ctx: 65536, supports_thinking: true }
+  #                   max_ctx: 24576, supports_thinking: true }
 
   # 系统提示词
   system_prompt: |

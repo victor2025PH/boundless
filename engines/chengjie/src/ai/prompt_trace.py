@@ -18,7 +18,7 @@ from collections import deque
 from typing import Any, Deque, Dict, List, Optional
 
 MAX_ENTRIES = 200
-MAX_TEXT_CHARS = 64_000      # 单条留痕存文本上限（超大档 900k token 的系统提示也只留头）
+MAX_TEXT_CHARS = 64_000      # 单条留痕存文本上限（超长系统提示也只留头）
 
 _lock = threading.Lock()
 _entries: Deque[Dict[str, Any]] = deque(maxlen=MAX_ENTRIES)
@@ -76,8 +76,10 @@ def usage_fields(usage: Any) -> Dict[str, int]:
 def record(*, messages: List[Dict[str, Any]], model: str, host: str = "",
            conv: str = "", request_id: str = "", usage: Any = None,
            budget_stats: Optional[Dict[str, Any]] = None, latency_ms: int = 0,
-           purpose: str = "", ok: bool = True) -> int:
-    """留一条；返回序号。绝不抛。"""
+           purpose: str = "", ok: bool = True,
+           route: Optional[Dict[str, Any]] = None) -> int:
+    """留一条；返回序号。绝不抛。``route``＝会话级模型路由快照（conv_route.Route.as_dict），
+    无限制会话在 inspect 里一眼看出「这条走的是 173、思考开没开、深度几档」。"""
     global _seq
     try:
         uf = usage_fields(usage)
@@ -106,6 +108,8 @@ def record(*, messages: List[Dict[str, Any]], model: str, host: str = "",
             "usage": uf, "budget": dict(budget_stats or {}),
             "system": _clip(sys_txt), "messages": hist,
         }
+        if isinstance(route, dict) and route:
+            entry["route"] = dict(route)
         with _lock:
             _seq += 1
             entry["seq"] = _seq

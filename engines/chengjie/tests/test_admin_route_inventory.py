@@ -2178,6 +2178,14 @@ _ADDITIONS_2026_09_12_Q21_LANG_CATALOG = """
 """
 _BASELINE += _ADDITIONS_2026_09_12_Q21_LANG_CATALOG
 
+# 接力记忆四期（2026-09-12，817c0148，unified_inbox_stored_read_routes.py）：坐席在「看记忆」
+# 里删掉一条 AI 将带走的事实（写口只删不增）。路由随四期已提交，基线当时漏登——
+# 装载线补登（否则 HEAD 装配门禁常红，谁重启谁撞）。
+_ADDITIONS_2026_09_12_HANDOFF_NOTE_DROP = """
+/api/unified-inbox/handoff-note/drop	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_12_HANDOFF_NOTE_DROP
+
 
 def _parse_baseline():
     expected = set()

@@ -13258,13 +13258,14 @@ function _undoToast(msg, onUndo, ms){
 }
 
 /* 通用确认弹窗：替代原生 confirm（同款 token 配色，亮暗双适配，支持 Enter/Esc/点遮罩）。
-   返回 Promise<boolean>。opts:{title,icon,okText,cancelText,tone:'primary'|'warn'|'danger'} */
+   返回 Promise<boolean>。opts:{title,icon,okText,cancelText,tone:'primary'|'warn'|'danger'|'vio'} */
 function _appConfirm(message, opts){
   opts=opts||{};
   return new Promise(function(resolve){
     var mask=document.createElement('div'); mask.className='app-confirm-mask';
     var card=document.createElement('div'); card.className='app-confirm-card';
     var tone=opts.tone||'primary';
+    if(tone==='warn'||tone==='danger'||tone==='vio') card.classList.add('tone-'+tone);
     // iconName 走 uiIcon 单色线性图标（统一图标语言）；icon 字面量仅作后备（如真要 emoji）
     var _cfmIc=(opts.iconName&&typeof uiIcon==='function')?uiIcon(opts.iconName,16):(opts.icon||uiIcon('help',16));
     // 可选勾选项（如「同时删除对方设备上的记录」）：有 checkboxLabel 时
@@ -22752,8 +22753,14 @@ function _mpParams(c){ return {platform:c.platform,account_id:c.account_id||'def
 /* 键表显式列出（i18n 覆盖门禁按字面量抓 window.T 键，拼接键抓不到） */
 var _MP_DEPTH_KEYS={'':['inbox.mp.depth_follow','inbox.mp.depth_follow_sub'],standard:['inbox.mp.depth_standard','inbox.mp.depth_standard_sub'],deep:['inbox.mp.depth_deep','inbox.mp.depth_deep_sub'],max:['inbox.mp.depth_max','inbox.mp.depth_max_sub'],ultra:['inbox.mp.depth_ultra','inbox.mp.depth_ultra_sub']};
 var _MP_EFFORT_KEYS={'':['inbox.mp.effort_follow','inbox.mp.effort_follow_sub'],low:['inbox.mp.effort_low','inbox.mp.effort_low_sub'],medium:['inbox.mp.effort_medium','inbox.mp.effort_medium_sub'],high:['inbox.mp.effort_high','inbox.mp.effort_high_sub']};
+function _mpLanK(){ var n=parseInt((_mpEndpoint().max_ctx)||0,10); return n>0?Math.round(n/1000):24; }
 function _mpDepthLabel(k){ var e=_MP_DEPTH_KEYS[k||'']; return e?window.T(e[0]):String(k||''); }
-function _mpDepthSub(k){ var e=_MP_DEPTH_KEYS[k||'']; return e?window.T(e[1]):''; }
+function _mpDepthSub(k){
+  var unr=!!_mpRoute().unrestricted, kk=_mpLanK();
+  if(unr && !k) return window.Tf('inbox.mp.depth_follow_sub_lan',{k:kk});
+  if(unr && k==='max') return window.Tf('inbox.mp.depth_fill_sub',{k:kk});
+  var e=_MP_DEPTH_KEYS[k||'']; return e?window.T(e[1]):'';
+}
 function _mpEffortLabel(k){ var e=_MP_EFFORT_KEYS[k||'']; return e?window.T(e[0]):String(k||''); }
 function _mpEffortSub(k){ var e=_MP_EFFORT_KEYS[k||'']; return e?window.T(e[1]):''; }
 function _mpProfLabel(p){ return window.T(p==='unrestricted'?'inbox.mp.prof_unrestricted':'inbox.mp.prof_standard'); }
@@ -22906,20 +22913,26 @@ async function _mpSet(patch){
   if(!_mpConvOk(c)){ _toast(window.T('inbox.mp.no_conv'),'#64748b'); return; }
   if(_mp.busy) return;
   var r=_mpRoute();
-  if(patch.profile==='unrestricted'&&r.profile!=='unrestricted'){
-    var remembered=false; try{ remembered=localStorage.getItem(_MP_CONFIRM_KEY)==='1'; }catch(_){}
-    if(!remembered){
-      var ep=_mpEndpoint();
-      if(!confirm(window.Tf('inbox.mp.confirm_unr',{model:ep.model||'chatx'}))) return;
-      try{ localStorage.setItem(_MP_CONFIRM_KEY,'1'); }catch(_){}
-    }
-  }
-  if(patch.bypass_safety===true && !r.bypass_safety){
-    if(!confirm(window.T('inbox.mp.confirm_safety'))) return;
-  }
   _mp.busy=true;
   var cid=convKey(c);
   try{
+    if(patch.profile==='unrestricted'&&r.profile!=='unrestricted'){
+      var remembered=false; try{ remembered=localStorage.getItem(_MP_CONFIRM_KEY)==='1'; }catch(_){}
+      if(!remembered){
+        var ep=_mpEndpoint();
+        var ok=await _appConfirm(window.Tf('inbox.mp.confirm_unr',{model:ep.model||'chatx'}),{
+          title:window.T('inbox.mp.confirm_unr_hd'), iconName:'zap', tone:'vio',
+          okText:window.T('inbox.mp.confirm_unr_ok')});
+        if(!ok) return;
+        try{ localStorage.setItem(_MP_CONFIRM_KEY,'1'); }catch(_){}
+      }
+    }
+    if(patch.bypass_safety===true && !r.bypass_safety){
+      var ok2=await _appConfirm(window.T('inbox.mp.confirm_safety'),{
+        title:window.T('inbox.mp.confirm_safety_hd'), iconName:'alert', tone:'danger',
+        okText:window.T('inbox.mp.confirm_safety_ok')});
+      if(!ok2) return;
+    }
     var body=Object.assign({},_mpParams(c),patch);
     var resp=await apiFetch('/api/unified-inbox/conv-model-route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var d=null; try{ d=await resp.json(); }catch(_){ d=null; }
