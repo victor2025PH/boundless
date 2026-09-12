@@ -20,6 +20,11 @@ history 由本模块自己按 conversation_id 从 InboxStore 取（``direction=o
 
 保守：判不准就不拦（只删「明确重复」）；任何异常原文放行；日志
 ``[repeat-q] conv=… matched_ts=… sim=0.xx action=strip|rewrite q=…``。
+
+Q-29（#305 · 2RKH3H · 2026-09-12）时间问句族：「你那边几点 / 白天还是晚上 / what time is it there /
+morning or night」（:func:`is_time_question`）打 ``slot:peer_time`` 同族标签（换说法 = 同一件事 → 1.0）；
+且对方当地时间**已知**（画像城市 / 12h 内客户自述，``peer_time.peer_time_known``）时**即使我方没问过也删**——
+客户已经答过 / 说过城市，再问就是「记忆不行」。
 """
 from __future__ import annotations
 
@@ -55,7 +60,65 @@ _SYN: Dict[str, str] = {
     "家里": "family", "孩子": "family", "家人": "family", "父母": "family",
     "name": "name", "call": "name", "名字": "name", "称呼": "name",
     "u": "you", "ya": "you", "ur": "your", "wat": "what", "whats": "what", "r": "are",
+    # Q-29 #305 时间问句族（只收无歧义词；「晚上 / morning」等日常词不折叠——同族靠 slot:peer_time 标签 → 1.0）
+    "几点": "peertime", "幾點": "peertime", "时差": "peertime", "時差": "peertime", "时区": "peertime",
+    "時區": "peertime", "timezone": "peertime", "clock": "peertime",
 }
+
+# Q-29 #305 时间问句族（问**对方那边**几点 / 白天还是晚上）。只认「问对方此刻」——约时间
+# （几点见 / 几点下班 / 几点睡）、问作息（一般几点起）、问我方（我这边…）不算。
+_TIME_Q_ZH = [
+    # 几点（排除 约时间 / 作息）
+    re.compile(r"(?<![一般平时通常每天])(?:你|妳|您)?(?:那边|那邊|那儿|那兒|那里|那裡|现在|現在|这会|這會)[^，,。！？!?]{0,6}?"
+               r"(?:几点|幾點|多少点|多少點)(?![见見面下班睡起上开開])"),
+    re.compile(r"(?:几点|幾點)(?:了|钟|鐘)?(?:啦|呀|啊|呢)?[？?]"),
+    # 白天还是晚上 / 早上还是晚上 / 晚上还是白天 / 是白天吗
+    re.compile(r"(?:白天|早上|上午|下午|晚上|夜里|夜裡|半夜|凌晨)[^，,。！？!?]{0,3}?(?:还是|還是|或者|或是)"
+               r"[^，,。！？!?]{0,3}?(?:白天|早上|上午|下午|晚上|夜里|夜裡|半夜|凌晨)"),
+    re.compile(r"(?:你|妳|您)?(?:那边|那邊|那儿|那兒|那里|那裡)[^，,。！？!?]{0,6}?(?:是|到)?(?:白天|早上|晚上|夜里|夜裡|半夜|凌晨|深夜)"
+               r"(?:了)?(?:吗|嗎|么|麼|吧|呢)"),
+    re.compile(r"(?:天亮|天黑)(?:了)?(?:吗|嗎|么|麼|没|沒)"),
+    re.compile(r"(?:该|該|要|不)?睡(?:了|觉|覺)?(?:的时间|的時間|的点|的點)?(?:了)?(?:吗|嗎|么|麼|吧|没|沒)(?![，,]?我)"),
+    re.compile(r"是不是[^，,。！？!?]{0,3}?(?:该|該|要|到)(?:睡|休息|上床)"),
+    re.compile(r"(?:时差|時差|时区|時區)[^，,。！？!?]{0,6}?(?:多少|几|幾|什么|什麼|哪)"),
+]
+_TIME_Q_EN = [
+    re.compile(r"\bwhat(?:'s| is)? (?:the )?time (?:is it |it is )?(?:there|for you|where you are|on your (?:side|end)|over there|by you)\b"),
+    re.compile(r"\bwhat time (?:is it|do you have)(?: (?:there|now|right now|for you|over there))?\s*\??$"),
+    re.compile(r"\b(?:is it|it's|its) (?:already |still |probably |like )?(?:morning|night|nighttime|evening|late|daytime|day|dark|light)"
+               r"(?: there| for you| where you are| over there| on your (?:side|end)| by you)\b"),
+    re.compile(r"\b(?:morning|night|evening|day|daytime|afternoon|late|early) or (?:morning|night|evening|day|daytime|afternoon|late|early)\b"),
+    re.compile(r"\b(?:what|which) (?:time ?zone|timezone)\b"),
+    re.compile(r"\b(?:how many hours|what'?s the time difference)\b"),
+    re.compile(r"\b(?:should you|shouldn't you|you should) be (?:asleep|in bed|sleeping)\b"),
+]
+# 反例：约时间 / 问作息 / 问我方
+_TIME_Q_NOT_ZH = re.compile(
+    r"几点(?:见|見|面|下班|上班|睡|起|开|開|到|出发|出發|吃|回)|(?:一般|平时|平時|通常|每天|习惯|習慣)[^，,。！？!?]{0,4}几点"
+    r"|我这边|我這邊|我那边"
+    # 偏好 / 作息问句：「喜欢白天还是晚上」「白天还是晚上工作」不是问此刻
+    r"|(?:喜欢|喜歡|习惯|習慣|一般|平时|平時|更爱|更愛|偏好|倾向|傾向)[^，,。！？!?]{0,4}(?:白天|早上|上午|下午|晚上|夜里|夜裡)"
+    r"|(?:白天|早上|上午|下午|晚上|夜里|夜裡)[^，,。！？!?]{0,3}(?:工作|上班|干活|幹活|学习|學習|锻炼|鍛煉|跑步|健身)")
+_TIME_Q_NOT_EN = re.compile(
+    r"\bwhat time (?:do you|does|should we|shall we|can you|will you|are you|would you)|\bmeet at\b|\busually\b|\bnormally\b"
+    r"|\bmy side\b|\bhere\b|\bprefer\b|\b(?:morning|night|evening) (?:person|owl|shift|workout|run)s?\b|\bwork (?:days|nights|mornings)\b")
+
+
+def is_time_question(sentence: str) -> bool:
+    """句子是否在问**对方那边**几点 / 白天还是晚上（Q-29 时间问句族）。纯函数。"""
+    s = str(sentence or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if _CJK_RE.search(s):
+        if _TIME_Q_NOT_ZH.search(s):
+            return False
+        if any(rx.search(s) for rx in _TIME_Q_ZH):
+            return True
+        return False
+    if _TIME_Q_NOT_EN.search(low):
+        return False
+    return any(rx.search(low) for rx in _TIME_Q_EN)
 _STOP_EN = frozenset(
     "a an the and or but so to of in on at for with by from as is are am was were be been being do "
     "does did have has had will would can could should may might must shall i me my you your he "
@@ -113,13 +176,16 @@ def _stem_en(w: str) -> str:
 
 
 def _slot_tags(sentence: str) -> List[str]:
-    """句子命中哪些画像槽的问法关键词 → ``slot:<key>``（profile_slots 单一词表；导入失败 → []）。"""
+    """句子命中哪些画像槽的问法关键词 → ``slot:<key>``（profile_slots 单一词表；导入失败 → []）。
+    Q-29：问对方几点 / 白天还是晚上 → 追加 ``slot:peer_time``（非画像槽，只作同族标签）。"""
+    out: List[str] = []
+    if is_time_question(sentence):
+        out.append("slot:peer_time")
     try:
         from src.companion.goals.profile_slots import SLOT_ASK_KEYWORDS, _contains_term
     except Exception:
-        return []
+        return out
     low = str(sentence or "").lower()
-    out: List[str] = []
     for k, kws in SLOT_ASK_KEYWORDS.items():
         if any(_contains_term(low, w) for w in kws):
             out.append(f"slot:{k}")
@@ -225,13 +291,15 @@ def own_questions_for(store: Any, conversation_id: str, *, now: Optional[float] 
 def check_repeat_questions(
     text: str, *, conversation_id: str = "", lang: str = "",
     own_questions: Optional[Iterable[Any]] = None, store: Any = None,
-    now: Optional[float] = None, threshold: float = SIM_THRESHOLD,
+    now: Optional[float] = None, threshold: float = SIM_THRESHOLD, cfg_root: Any = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """本稿问句 × 24h 内我方问句 → 相似 ≥threshold 的句子删；整稿只剩它 → 非问句应答。
 
     返回 ``(text, report)``；``report``: ``action ∈ clean|strip|rewrite``、``matched`` 列表
     ``[{q, matched, matched_ts, sim}]``、``stripped`` 句数。``own_questions`` 缺省时按
-    ``conversation_id`` 从 ``store``（或 protocol_bridge 的 InboxStore）取。绝不抛。"""
+    ``conversation_id`` 从 ``store``（或 protocol_bridge 的 InboxStore）取。
+    Q-29（#305）：时间问句（``is_time_question``）在对方当地时间已知时也删，``matched="peer_time:<source>"``；
+    ``cfg_root`` 只用于 ``companion.peer_time.enabled`` 开关。绝不抛。"""
     rep: Dict[str, Any] = {"action": "clean", "matched": [], "stripped": 0}
     src = str(text or "")
     if not src.strip():
@@ -257,11 +325,26 @@ def check_repeat_questions(
                 except Exception:
                     st = None
             own = own_questions_for(st, conversation_id, now=now)
-        if not own:
-            return src, rep
         sents = split_sentences(src, lg)
         if not sents:
             return src, rep
+        # Q-29 #305：问对方几点 / 白天还是晚上，而对方当地时间**已知**（画像城市 / 12h 内客户自述）→ 即使
+        # 我方没问过也删——客户答过 / 说过城市就等于问过。只在稿里真有时间问句时才去算（懒求值一次）。
+        time_qs = [s for s in sents if is_question(s) and is_time_question(s)]
+        if not own and not time_qs:
+            return src, rep
+        peer_state: Optional[Tuple[bool, str, float]] = None
+
+        def _peer() -> Tuple[bool, str, float]:
+            nonlocal peer_state
+            if peer_state is None:
+                try:
+                    from src.companion.peer_time import peer_time_known
+                    peer_state = peer_time_known(conversation_id, inbox_store=store, now=now, config=cfg_root)
+                except Exception:
+                    peer_state = (False, "", 0.0)
+            return peer_state
+
         keep: List[str] = []
         for s in sents:
             if not is_question(s):
@@ -273,6 +356,11 @@ def check_repeat_questions(
                 if sim >= float(threshold) and (best is None or sim > best["sim"]):
                     best = {"q": s.strip()[:80], "matched": q["text"][:80],
                             "matched_ts": float(q.get("ts") or 0), "sim": sim}
+            if best is None and conversation_id and s in time_qs:
+                known, source, hts = _peer()
+                if known:
+                    best = {"q": s.strip()[:80], "matched": f"peer_time:{source}", "matched_ts": float(hts or 0),
+                            "sim": 1.0}
             if best is None:
                 keep.append(s)
             else:
@@ -299,7 +387,7 @@ def check_repeat_questions(
 
 
 __all__ = [
-    "WINDOW_SEC", "SIM_THRESHOLD", "norm_lang", "split_sentences", "is_question",
+    "WINDOW_SEC", "SIM_THRESHOLD", "norm_lang", "split_sentences", "is_question", "is_time_question",
     "normalize_question", "similarity", "filler_line", "own_questions_for",
     "check_repeat_questions",
 ]

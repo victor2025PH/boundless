@@ -739,7 +739,7 @@ def apply_draft_humanize(
         # 绝不抛、原文放行；meta.repeat_q / repeat_q_stripped。
         try:
             from src.inbox.repeat_question_guard import check_repeat_questions
-            cur, rrep = check_repeat_questions(cur, conversation_id=conversation_id, lang=lg)
+            cur, rrep = check_repeat_questions(cur, conversation_id=conversation_id, lang=lg, cfg_root=cfg_root)
             meta["repeat_q"] = str(rrep.get("action") or "clean")
             meta["repeat_q_stripped"] = int(rrep.get("stripped") or 0)
         except Exception:

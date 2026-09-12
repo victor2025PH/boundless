@@ -1263,6 +1263,7 @@ def peer_time_status(conversation_id: str, *, inbox_store: Any = None, goal_stor
     if hint:
         age_h = max(0.0, (n - float(hint.get("ts") or n)) / 3600.0)
         info["hint_age_h"] = round(age_h, 1)
+        info["hint_ts"] = float(hint.get("ts") or 0)
         said_zh, said_en = _said(hint)
         if hint.get("hour") is not None:
             guess = str(hint.get("tz_guess") or offset_from_statement(int(hint["hour"]), int(hint.get("minute") or 0), float(hint["ts"])))
@@ -1325,14 +1326,14 @@ def _finish(info: Dict[str, Any], cid: str, rows_l: List[Dict[str, Any]], n: flo
 
 
 def peer_time_known(conversation_id: str, *, inbox_store: Any = None, now: Optional[float] = None,
-                    rows: Any = None) -> Tuple[bool, str, float]:
-    """出站守卫用：对方当地时间是否已知 → ``(known, source, hint_ts)``。只读（不写 KV）。绝不抛。"""
+                    rows: Any = None, config: Any = None) -> Tuple[bool, str, float]:
+    """出站守卫用：对方当地时间是否已知 → ``(known, source, hint_ts)``。只读（不写 KV）。
+    功能关（``companion.peer_time.enabled`` / 业务域默认）→ ``(False, "", 0)``。绝不抛。"""
     try:
+        if not is_enabled(config):
+            return False, "", 0.0
         info = peer_time_status(conversation_id, inbox_store=inbox_store, rows=rows, now=now, write=False)
-        ts = 0.0
-        if info.get("source", "").startswith("hint"):
-            h = read_hint(inbox_store, conversation_id, now=now)
-            ts = float((h or {}).get("ts") or 0)
+        ts = float(info.get("hint_ts") or 0) if str(info.get("source") or "").startswith("hint") else 0.0
         return bool(info.get("known")), str(info.get("source") or ""), ts
     except Exception:
         return False, "", 0.0
