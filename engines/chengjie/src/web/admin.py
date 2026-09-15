@@ -206,6 +206,21 @@ class ProtocolMediaStatic(CachedStaticFiles):
         return full, stat_result
 
 
+def is_persona_album_upload_path(path: str) -> bool:
+    """相册 / 锁脸基准照 multipart 上传口（#316 / 09-13 钧 明日香语 25 张 Failed to fetch）。
+
+    路径是 ``/api/personas/{pid}/media`` 或 ``…/face-ref``，pid 不固定，不能写死 prefix。
+    只认恰好 5 段——``/media/test`` ``/media/retag`` 等 JSON 口仍吃 2MB 闸。
+    """
+    parts = str(path or "").split("/")
+    return (
+        len(parts) == 5
+        and parts[1] == "api"
+        and parts[2] == "personas"
+        and parts[4] in ("media", "face-ref")
+    )
+
+
 def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                telegram_client=None, event_tracker=None, log_buffer=None) -> FastAPI:
     # Load domain pack manifest for web integration（支付域在插件关闭时映射为 conversion）
@@ -749,6 +764,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     _BODY_LIMIT_EXEMPT_PREFIXES: tuple = (
         tuple(web_cfg.get("max_body_exempt_prefixes", []))
         + _BODY_LIMIT_CODE_EXEMPT_PREFIXES)
+    # #316 追加（09-13）：相册 POST /api/personas/{pid}/media 与 face-ref 同 M-3
+    # 形状——2.1–2.7MB PNG 被 2MB 闸 413+Connection:close，前端记 Failed to fetch，
+    # 路由级上限其实是图 10MB / 视频 50MB。pid 不固定，走 is_persona_album_upload_path。
     # P25-B / P26-D: 413 攻击信号防抖 — 用通用 AuditThrottle
     from src.utils.audit_throttle import AuditThrottle as _AuditThrottle
     _body_oversize_throttle = _AuditThrottle(window_sec=5.0, max_keys=4096)
@@ -787,7 +805,8 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         if request.method in ("GET", "HEAD", "OPTIONS", "DELETE"):
             return await call_next(request)
         path = request.url.path
-        if any(path.startswith(p) for p in _BODY_LIMIT_EXEMPT_PREFIXES):
+        if (any(path.startswith(p) for p in _BODY_LIMIT_EXEMPT_PREFIXES)
+                or is_persona_album_upload_path(path)):
             return await call_next(request)
         limit = _BODY_LIMIT_OVERRIDES.get(path, _BODY_LIMIT_DEFAULT)
         # 1) Content-Length 预检（快速失败，不读 body）
