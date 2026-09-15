@@ -132,25 +132,36 @@ def _prompt_addenda(
 
     # 无匹配回喂：生成前自探相册（B 线 autosend 在拟稿之后，不探则本轮仍会圆谎）
     try:
-        from src.ai.companion_selfie import detect_selfie_request, extract_requested_scene
-        from src.companion.persona_media import requested_scene_kind
+        from src.ai.companion_selfie import extract_requested_scene
         from src.inbox.prompt_addenda import album_miss_addendum
         from src.inbox.image_autosend import (
             consume_album_miss, pick_registered_media, note_album_miss,
         )
         pending = consume_album_miss(ck) if ck else {}
+        # Q-39 C（#323 XG3UZU）：自探前先过意图闸——「enjoy the view」的 requested_scene_kind
+        # 泛匹配 / 图入站识图行里的「自拍」都不算索图；场景 kind 须与索图词共现
+        # （strict_requested_scene_kind）。无意图 → 不探、不写 miss、不刷红条。
+        from src.inbox.image_send_gate import (
+            TRIGGER_ASK as _Q39_ASK, TRIGGER_OFFER_ACCEPT as _Q39_OFFER,
+            compute_image_intent as _q39_intent,
+            strict_requested_scene_kind as _q39_scene_kind,
+        )
+        _gate = _q39_intent(inbound, None)
+        _words = str(getattr(_gate, "words", "") or "") or inbound
+        _asking = bool(_gate.intent and _gate.trigger in (_Q39_ASK, _Q39_OFFER))
         scene = (
-            requested_scene_kind(inbound)
-            or extract_requested_scene(inbound)
+            _q39_scene_kind(_words)
+            or (extract_requested_scene(_words) if _asking else "")
             or str((pending or {}).get("scene") or "")
         )
-        ask = bool(detect_selfie_request(inbound) or scene or pending)
+        ask = bool(_asking or pending)
         miss = False
         if ask and pid:
             row = None
             try:
                 row = pick_registered_media(
-                    config or {}, pid, inbound, conv_key=ck)
+                    config or {}, pid, inbound, conv_key=ck,
+                    intent_gate=(_gate if _gate.intent else None))
             except Exception:
                 row = None
             if row is None:

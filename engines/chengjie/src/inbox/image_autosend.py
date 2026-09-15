@@ -40,6 +40,8 @@ KIND_OBJECT = "object"
 _METRICS: Dict[str, Any] = {
     "sent": 0, "fallback": 0, "last_reason": "", "last_kind": "", "last_ts": 0.0,
     "caption_llm": 0, "caption_registry": 0, "caption_fixed": 0, "caption_draft": 0,
+    # Q-39 A③（#327）：配文近重复被换掉的次数（源可能是 registry / fixed / 空配文）
+    "caption_dedup": 0,
     "last_caption": "",
     # 失败原因分布（与 voice_autosend.fallback_counts 同口径，供看板读 Top 原因）
     "fallback_reasons": {},
@@ -1014,12 +1016,34 @@ def resolve_consistency_cfg(scfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Q-39（#327 / #323）：最近一次相册匹配的 candidates / picked（供 [album_send] 行回填；进程内）
+_LAST_MATCH: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+
+
+def _note_last_match(conv_key: str, candidates: int, picked: str) -> None:
+    if not conv_key:
+        return
+    with _LAST_SENT_LOCK:
+        _LAST_MATCH[str(conv_key)] = {"candidates": int(candidates), "picked": str(picked or "-")}
+        _LAST_MATCH.move_to_end(str(conv_key))
+        while len(_LAST_MATCH) > _LAST_SENT_CAP:
+            _LAST_MATCH.popitem(last=False)
+
+
+def last_match(conv_key: str) -> Dict[str, Any]:
+    with _LAST_SENT_LOCK:
+        return dict(_LAST_MATCH.get(str(conv_key or ""), {}) or {})
+
+
 def pick_registered_media(
     config: Dict[str, Any], persona_id: str, peer_text: str, *,
     avoid_id: str = "", bond_level: Optional[int] = None,
     force_generic: bool = False, conv_key: str = "",
     required_scene: str = "",
     deny_generic: bool = False,
+    intent_gate: Any = None,
+    inbound_mid: str = "",
+    inbound_media_type: str = "",
 ) -> Optional[Dict[str, Any]]:
     """查该人设注册相册：关键词命中，或（是泛化「要照片/自拍」请求时）通用池。命中返回行 dict。
 
@@ -1035,6 +1059,12 @@ def pick_registered_media(
     （「你煮的燕窝粥」）：通用人像池一律不放开，只有运营给该主体配过触发词的
     条目才算有货——没货就该发诚实文字，绝不拿随机自拍顶包。
     另自动带时段过滤 + 重发冷却 + 服装连续窗（``companion.selfie.consistency``）。
+
+    Q-39（#327 / #323）三个新参：``intent_gate``＝调用方已算好的 :class:`image_send_gate.IntentGate`
+    （缺省在此现算）——``intent`` 为假 → **不跑匹配、不写 miss、不刷红条**，只留一行 DEBUG
+    ``[album_match] skip=no_intent``；``inbound_mid``＝本次入站消息 id，同一 ``conv:mid`` 的匹配只跑
+    一次（拟稿期 persona_reply 自探 + 投递期再跑 ＝ 红条「今天 2 次」的来源）；``inbound_media_type``
+    ＝入站媒体类型（图入站只看客户配文，识图描述里的「自拍」不算索图）。
     """
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
@@ -1048,6 +1078,43 @@ def pick_registered_media(
     store = get_persona_media_store()
     if store is None:
         return None
+    # Q-6 E：建议词默认参与匹配（apply=auto）；confirm 档只等一键采纳。
+    _suggest_ok = True
+    try:
+        from src.companion.media_auto_tag import resolve_album_ai_cfg
+        _apply = str(resolve_album_ai_cfg(config).get("apply") or "auto").lower()
+        _suggest_ok = _apply != "confirm"
+    except Exception:
+        _suggest_ok = True
+    # Q-39 意图闸（在 Q-6 匹配**之前**）：识图描述 / 「enjoy the view」泛匹配都不算索图。
+    from src.inbox import image_send_gate as _isg
+    _gate = intent_gate
+    if _gate is None or not hasattr(_gate, "intent"):
+        try:
+            _gate = _isg.compute_image_intent(
+                str(peer_text or ""), None,
+                inbound_media_type=str(inbound_media_type or ""),
+                assume_intent=("selfie" if force_generic else ""),
+                trigger_terms=_isg.album_trigger_terms(str(persona_id or ""), suggest_ok=_suggest_ok),
+                offer_bridge=bool(scfg.get("offer_accept_bridge", True)))
+        except Exception:
+            logger.debug("[album_match] 意图闸异常（按无意图跳过）", exc_info=True)
+            _gate = _isg.IntentGate(False, _isg.TRIGGER_NONE, _isg.REASON_NO_INTENT)
+    if not bool(getattr(_gate, "intent", False)):
+        logger.debug(
+            "[album_match] conv=%s skip=%s trigger=%s query=%s",
+            conv_key or "-", getattr(_gate, "reason", "") or _isg.REASON_NO_INTENT,
+            getattr(_gate, "trigger", "-"),
+            str(peer_text or "").replace("\n", " ")[:60])
+        return None
+    if inbound_mid and conv_key and _isg.album_match_seen(str(conv_key), str(inbound_mid)):
+        logger.info("[album_match] conv=%s skip=%s mid=%s", conv_key, _isg.REASON_DUP_MID, inbound_mid)
+        return None
+    if inbound_mid and conv_key:
+        _isg.mark_album_match(str(conv_key), str(inbound_mid))
+    # 图入站（带索图配文）只用客户自己敲的字去匹配触发词，识图描述不参与
+    if bool(getattr(_gate, "inbound_image", False)) and str(getattr(_gate, "words", "") or ""):
+        peer_text = str(getattr(_gate, "words"))
     generic_ok = (not deny_generic) and (
         bool(force_generic) or bool(detect_selfie_request(str(peer_text or ""))))
     try:
@@ -1073,16 +1140,13 @@ def pick_registered_media(
         _scene_kind = requested_scene_kind(str(peer_text or ""))
     except Exception:
         _scene_kind = ""
-    # Q-6 E：建议词默认参与匹配（apply=auto）；confirm 档只等一键采纳。
-    _suggest_ok = True
-    try:
-        from src.companion.media_auto_tag import resolve_album_ai_cfg
-        _apply = str(resolve_album_ai_cfg(config).get("apply") or "auto").lower()
-        _suggest_ok = _apply != "confirm"
-    except Exception:
-        _suggest_ok = True
     # Q-6 B：随机兜底默认关——整册完全无词 且 非索图/非点名场景 才 random。
-    _ask = bool(detect_selfie_request(str(peer_text or ""))) or bool(force_generic) or bool(_scene_cls or _scene_kind)
+    # Q-39 C（#323）：scene_class_of / requested_scene_kind 的泛匹配不再单独把 _ask 置真——
+    # 闸已判过「须与索图词共现」（strict_requested_scene_kind）；运营触发词命中（keyword）
+    # 是「客户点名要那条」不是「要自拍」，无命中不记 miss（与旧行为一致）。
+    _ask = bool(detect_selfie_request(str(peer_text or ""))) or bool(force_generic) or bool(
+        str(getattr(_gate, "trigger", "")) == _isg.TRIGGER_ASK
+        and (_scene_cls or _scene_kind or getattr(_gate, "scene_kind", "")))
     _allow_random = False
     try:
         _rows_pre = store.list(str(persona_id or ""), enabled_only=True) if persona_id else []
@@ -1127,6 +1191,7 @@ def pick_registered_media(
         _picked,
         _fb,
     )
+    _note_last_match(str(conv_key or ""), int(_trace.get("start") or 0), _picked)
     if row is None and _ask:
         note_album_miss(str(conv_key or ""), str(peer_text or ""),
                         _scene_kind or _scene_cls or "")
@@ -1333,6 +1398,8 @@ async def run_autosend_image(
     directive_override: Optional[Dict[str, str]] = None,
     requested_scene: str = "",
     on_sent: Optional[Callable[[str, str], None]] = None,
+    inbound_media_type: str = "",
+    inbound_mid: str = "",
 ) -> bool:
     """autosend「按需发图」总编排（可单测）：注册相册优先（关键词/通用池，图/视频秒发），
     否则回落生成（selfie 相册/openai、物体图 text2img）。任一步真发出即返回 True（跳过语音/文本）。
@@ -1354,6 +1421,8 @@ async def run_autosend_image(
     ``on_sent(note, scene, series)``（Phase20，可选同步回调）＝真发出后通知调用方
     「发了什么/什么场景/什么衣着系列」——B 线借此把媒体记进与 A 线共用的
     ``_media_sent_log``（series 供 P1 跨链衣着连续窗）。
+    ``inbound_media_type`` / ``inbound_mid``（Q-39 #327 #323）＝本次入站的媒体类型 / 消息 id：
+    入站是图且客户配文无索图 → 本轮**任何路径**不出相册（承诺交撤回改写）；同 mid 相册匹配只跑一次。
     """
     scfg = resolve_image_autosend_cfg(config)
     if not scfg.get("enabled", False):
@@ -1365,6 +1434,75 @@ async def run_autosend_image(
     if not persona_photos_enabled_by_id(persona_id):
         return False
     ck = conv_key or f"{platform}:{account_id}:{chat_key}"
+
+    # Q-39 A/C（#327 / #323）意图闸——在 0a 指令直通 / offer 桥 / 相册 / 生成**全部之前**：
+    # 「入站是图 ∧ 客户配文无索图」→ 相册、承诺兑现、[PHOTO] 一律不放行（返回 False 让
+    # 调用方 promise 链走撤回改写）；文本入站无索图（「enjoy the view」）→ 不匹配不记 miss。
+    from src.inbox import image_send_gate as _isg
+    _suggest_ok_g = True
+    try:
+        from src.companion.media_auto_tag import resolve_album_ai_cfg as _raic
+        _suggest_ok_g = str(_raic(config).get("apply") or "auto").lower() != "confirm"
+    except Exception:
+        _suggest_ok_g = True
+    try:
+        _gate = _isg.compute_image_intent(
+            peer_text, history, inbound_media_type=str(inbound_media_type or ""),
+            assume_intent=str(assume_intent or ""), directive_override=directive_override,
+            trigger_terms=_isg.album_trigger_terms(str(persona_id or ""), suggest_ok=_suggest_ok_g),
+            offer_bridge=bool(scfg.get("offer_accept_bridge", True)))
+    except Exception:
+        logger.debug("[image_autosend] 意图闸异常（按无意图跳过）", exc_info=True)
+        _gate = _isg.IntentGate(False, _isg.TRIGGER_NONE, _isg.REASON_NO_INTENT)
+    if not _gate.intent:
+        if _gate.reason == _isg.REASON_INBOUND_IMAGE and _gate.trigger in (
+                _isg.TRIGGER_COMMITMENT, _isg.TRIGGER_DIRECTIVE):
+            # 承诺 / 指令撞上「客户刚发了图」：不兑现、不出相册，记原因让看板能数
+            record_image_fallback(_isg.REASON_INBOUND_IMAGE, detail=_gate.trigger)
+            logger.info(
+                "[image_autosend] conv=%s skip=%s trigger=%s：客户刚发了图且没要图 → "
+                "不跟发相册、承诺交撤回改写", ck, _gate.reason, _gate.trigger)
+        else:
+            logger.debug("[album_match] conv=%s skip=%s trigger=%s", ck, _gate.reason, _gate.trigger)
+        return False
+    # Q-39 A②：同会话图片跟随冷却（非显式索图触发）+ 每日上限（全部出图）
+    _fb_reason = _isg.follow_budget_check(ck, config, _gate.trigger)
+    if _fb_reason:
+        _fs = _isg.follow_stats(ck)
+        record_image_fallback(_fb_reason, detail=_gate.trigger)
+        logger.info(
+            "[image_autosend] conv=%s skip=%s trigger=%s today=%d last_age=%.0fs → 只发文字",
+            ck, _fb_reason, _gate.trigger, int(_fs.get("today") or 0),
+            (time.time() - float(_fs.get("last_ts") or 0)) if _fs.get("last_ts") else -1.0)
+        return False
+
+    def _dedup_cap(cap_text: str, cap_src: str, alternatives: List[Tuple[str, str]]) -> Tuple[str, str]:
+        """Q-39 A③：配文与最近 3 张出图配文近重复（≥0.8）→ 换备选 / 空配文。"""
+        try:
+            new_cap, new_src, sim = _isg.dedup_caption(ck, cap_text, cap_src, alternatives)
+        except Exception:
+            return cap_text, cap_src
+        if new_cap != cap_text:
+            logger.info(
+                "[album_send] caption_dedup conv=%s sim=%.2f src=%s->%s",
+                ck, sim, cap_src or "-", new_src or "-")
+            record_caption("dedup", new_cap)
+            return new_cap, new_src
+        return cap_text, cap_src
+
+    def _album_sent(cap_text: str, cap_src: str, *, picked: str, source: str, mid: str) -> None:
+        """Q-39：每次出图落一行 [album_send] + 记跟随预算 / 配文历史（软失败）。"""
+        try:
+            _isg.note_follow_sent(ck)
+            _isg.note_caption_sent(ck, cap_text)
+            _lm = last_match(ck)
+            logger.info(_isg.format_album_send_log(
+                ck, trigger=_gate.trigger, intent=_gate,
+                candidates=(_lm.get("candidates") if _lm else -1),
+                picked=picked or str((_lm or {}).get("picked") or "-"),
+                caption_src=cap_src, mid=mid, source=source))
+        except Exception:
+            logger.debug("[album_send] 记账 / 日志异常（忽略）", exc_info=True)
 
     # Q-20 D（#178 VDUJX6）认领分支：客户在问「这是你吗 / 是你的照片吗 / 像 P 的」而
     # 30 分钟内我方（人工或 AI）刚发过媒体 → 这不是新的索图请求，**不发第二张**、
@@ -1481,6 +1619,8 @@ async def run_autosend_image(
             cap = _fixed_caption(scfg, kind, _fresh, lang, chat_key=ck)
             cap_src = "fixed" if cap else ""
         cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
+        cap, cap_src = _dedup_cap(cap, cap_src, [
+            (_fixed_caption(scfg, kind, _fresh, lang, chat_key=ck), "fixed")])
         _mid = ""
         try:
             ok, _mid = _send_result(await send_fn(
@@ -1496,6 +1636,9 @@ async def run_autosend_image(
                 _note_caption_sent(ck, cap)
             record_image_sent(kind, source=(
                 "llm_directive_album" if _fresh == "old" else "llm_directive"))
+            _album_sent(cap, cap_src, picked=os.path.basename(local or url or ""),
+                        source=("llm_directive_album" if _fresh == "old" else "llm_directive"),
+                        mid=_mid)
             _notify_sent("[图片] " + (cap or ""),
                          str(sinfo.get("scene_class") or (
                              _d["scene"] if kind == KIND_SELFIE else "")),
@@ -1539,7 +1682,9 @@ async def run_autosend_image(
         config, persona_id, peer_text, avoid_id=last_media_sent(ck),
         force_generic=bool(assume_intent), conv_key=ck,
         required_scene=(_need_scene or _wanted_scene),
-        deny_generic=bool(_wanted and not _wanted_scene))
+        deny_generic=bool(_wanted and not _wanted_scene),
+        intent_gate=_gate, inbound_mid=str(inbound_mid or ""),
+        inbound_media_type=str(inbound_media_type or ""))
     # 相册自动扩容：通用池只剩「上次刚发过的那张 auto 照片」且额度未满 → 本次改走
     # 生成（新场景照，发完自动入册），相册有机长到 max 张后回到纯轮换。
     if row and _should_grow_album(scfg, persona_id, row, ck):
@@ -1622,6 +1767,11 @@ async def run_autosend_image(
             cap, cap_src = await _guard_caption(
                 local, cap, cap_src, ("video" if mt == "video" else KIND_SELFIE),
                 "old")
+            # Q-39 A③：与最近 3 张出图配文近重复 → 换运营配文 / 固定池 / 空配文
+            cap, cap_src = _dedup_cap(cap, cap_src, [
+                (media_caption(row, _cap_lang, fallback=""), "registry"),
+                (_fixed_caption(scfg, ("video" if mt == "video" else KIND_SELFIE),
+                                "old", _cap_lang, chat_key=ck), "fixed")])
             # 工单 #143：相册条目的 media_type 是 photo/video（persona_media_store
             # 口径），发送层白名单是 image/…——发出前归一（与 A 线
             # skill_manager._try_send_selfie_media 同口径），"photo" 裸传会让
@@ -1658,6 +1808,8 @@ async def run_autosend_image(
                 except Exception:
                     pass
                 record_image_sent(mt, source="registry")
+                _album_sent(cap, cap_src, picked=str(row.get("id") or "-"),
+                            source="registry", mid=_mid)
                 if _need_scene:
                     record_scene_request(_need_scene, unmet=False)
                 # 相册现成图：场景取条目 scene:* 标签（配文层已算过，见上）
@@ -1766,6 +1918,8 @@ async def run_autosend_image(
         cap = str(ai_text or "")
         cap_src = "draft" if cap else ""
     cap, cap_src = await _guard_caption(local, cap, cap_src, kind, _fresh)
+    cap, cap_src = _dedup_cap(cap, cap_src, [
+        (_fixed_caption(scfg, kind, _fresh, lang, chat_key=ck), "fixed")])
     _mid = ""
     try:
         ok, _mid = _send_result(await send_fn(
@@ -1781,6 +1935,8 @@ async def run_autosend_image(
             _note_caption_sent(ck, cap)
         record_image_sent(kind, source=(
             "keyword_album" if _fresh == "old" else "keyword"))
+        _album_sent(cap, cap_src, picked=os.path.basename(local or url or ""),
+                    source=("keyword_album" if _fresh == "old" else "keyword"), mid=_mid)
         _notify_sent("[图片] " + (cap or ""), _scene,
                      str(sinfo.get("series") or ""))
         logger.info(
@@ -1917,6 +2073,7 @@ __all__ = [
     "last_media_sent", "note_media_sent",
     "note_media_receipt", "last_media_receipt", "resolve_last_sent_media",
     "note_album_miss", "consume_album_miss", "peek_album_miss",
+    "last_match",
     "record_image_sent", "record_image_fallback", "metrics_snapshot",
     "record_promise_event", "record_sent_claim_event",
     "image_gen_inflight",

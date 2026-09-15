@@ -597,8 +597,12 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
     if not _orch.owns_media(platform, account_id):
         return False
     # 客户最近一条入站文本（判要图）+ 近窗口历史（上下文抽主体）。
+    # Q-39 A（#327 / #323）：顺带取该入站的 media_type / message_id——图入站只看客户配文，
+    # 同 mid 相册匹配只跑一次（image_autosend 意图闸消费）。
     _peer_text = ""
     _history: list = []
+    _inbound_mt = ""
+    _inbound_mid = ""
     try:
         from src.inbox.normalizer import conv_id as _cidf
         _st = getattr(assistant, "inbox_store", None)
@@ -619,6 +623,8 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
             if (str(_m.get("direction") or "in") == "in"
                     and str(_m.get("text") or "")):
                 _peer_text = str(_m.get("text"))
+                _inbound_mt = str(_m.get("media_type") or "")   # Q-39 A
+                _inbound_mid = str(_m.get("message_id") or "")  # Q-39 A
                 break
     except Exception:
         return False
@@ -757,7 +763,10 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
         assume_scene=str(assume_scene or ""),
         directive_override=directive_override,
         requested_scene=_req_scene,
-        on_sent=_on_sent)
+        on_sent=_on_sent,
+        # Q-39 A（#327 / #323）：入站形态 + 消息 id 进意图闸 / 同 mid 去重
+        inbound_media_type=_inbound_mt,
+        inbound_mid=_inbound_mid)
 
 async def _depromise_autosend_text(
     assistant, text: str, kind: str, *, media_context: bool = False,
@@ -1732,6 +1741,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             _mctx = False
             _sent_claim = False
             _bind_reason = ""
+            _q39_img_no_ask = False   # Q-39 A①（#327）：客户刚发了图且没要图 → 承诺只撤回不兑现
             _pg = {}
             try:
                 _pg = (((_assistant_ref.config.config or {}).get(
@@ -1760,6 +1770,22 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                             _last_is_img = str(
                                 _last_in.get("media_type") or "") in (
                                 "image", "photo")
+                            # Q-39 A①（#327 9PYWPG）：入站是图（media_type / 识图行 /
+                            # 占位）且客户配文无索图 → 兑现链不放行，LLM 的「分享旧照」
+                            # 承诺交下方 _media_promise_action 撤回改写。
+                            try:
+                                from src.inbox.image_send_gate import (
+                                    compute_image_intent as _q39_gate,
+                                )
+                                _q39_g = _q39_gate(
+                                    str(_last_in.get("text") or ""), None,
+                                    inbound_media_type=str(
+                                        _last_in.get("media_type") or ""),
+                                    assume_intent="selfie")
+                                _q39_img_no_ask = bool(
+                                    _q39_g.inbound_image and not _q39_g.intent)
+                            except Exception:
+                                _q39_img_no_ask = False
                             # 悬置语义（实施69）：窗内**客户要过媒体**或 **AI 自己
                             # 承诺/offer 过发图**（词表已补「给你拍一张X」语序）都算
                             # 语境——AI 先开的空头支票同样让客户进入等待态；但其后
@@ -1883,8 +1909,16 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                     _photos_off = not _ppe_p3(_pid_p3)
                 except Exception:
                     _photos_off = False
+                if _q39_img_no_ask:
+                    # Q-39 A①：客户刚发了图、没要图——不跟发相册去「兑现」，直接走撤回改写
+                    _assistant_ref.logger.info(
+                        "[media_promise] conv=%s:%s:%s claims_send=1 attached=0 "
+                        "action=retract reason=inbound_image_no_intent（客户发图我方不跟发）",
+                        platform, account_id, chat_key)
+                    _bind_reason = _bind_reason or "inbound_image_no_intent"
                 if _pg.get("fulfill", True) \
-                        and _bind_reason != "directive_unfulfilled":
+                        and _bind_reason != "directive_unfulfilled" \
+                        and not _q39_img_no_ask:
                     # P0 一致性：承诺句点名了场景（「拍张海边的发你」）→ 兑现
                     # 必须贴场景（相册场景类硬匹配/生成带场景），随机人像不算兑现。
                     # directive_unfulfilled：图链刚按模型请求试过一次失败，不复烧。
