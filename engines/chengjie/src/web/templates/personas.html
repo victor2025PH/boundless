@@ -1234,6 +1234,16 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <input type="hidden" id="ad-policy" value="">
       <div id="ad-preview" class="pf-hint" style="margin-top:.35rem;font-style:italic"></div>
     </div>
+    <!-- Q-26 #301（psn-ar-）「本人设覆写」收口：域默认与全局规则住在 自动回复设置 → 自动化与风控（互链直达 + 高亮），
+         本页只留三项人设覆写：成人（上 ad-）/ 见面（上 mp-）/ 风控级别（只读摘要 + 深链风控分级卡预选本人设）。
+         反向：回复设置页政策表行尾 → /personas#profile=<id>&tab=profile&focus=ad-row|mp-row 落到这里并高亮。 -->
+    <div class="field-row psn-ar-row" id="psn-ar-row">
+      <label>{{ (i18n or {}).get('psn_ar_title','本人设覆写') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_ar_hint','域默认与全局规则在 自动回复设置 → 自动化与风控；这里只放本人设的三项覆写：成人内容 / 见面 / 风控级别。') }}</span></label>
+      <div class="pf-hint" style="margin-top:.2rem"><a class="psn-ar-goto" href="/reply-settings#rps-sec-policy" data-goto="/reply-settings#rps-sec-policy">{{ (i18n or {}).get('psn_ar_goto_policy','去 自动化与风控 → 成人 / 见面政策（域默认）') }} →</a></div>
+      <div style="margin-top:.55rem;font-size:.8rem;color:var(--t2)">{{ (i18n or {}).get('psn_ar_risk','风控级别覆写') }} <span style="font-size:.7rem">{{ (i18n or {}).get('psn_ar_risk_hint','类别级别（要联系方式 / 要礼物 / 投诉…）按人设调高调低；高风险类别有地板不可调低。') }}</span></div>
+      <div id="psn-ar-risk-sum" class="pf-hint" style="margin-top:.25rem"></div>
+      <div class="pf-hint" style="margin-top:.25rem"><a class="psn-ar-goto" id="psn-ar-risk-go" href="/reply-settings#rps-sec-risk" data-goto="/reply-settings#rps-sec-risk">{{ (i18n or {}).get('psn_ar_risk_go','去 自动化与风控 → 风控分级 调（自动选中本人设）') }} →</a></div>
+    </div>
     <div class="pf-hd">{{ (i18n or {}).get('psn_pf_g_appearance','外观锚点') }}</div>
     <div class="field-row">
       <label>{{ (i18n or {}).get('psn_pf_appearance','外观描述') }}</label>
@@ -1950,6 +1960,37 @@ function _setAdultPolicy(raw){
   var hid = document.getElementById('ad-policy'); if (hid) hid.value = v;
   _setOptCard('ad-cards', v);
   _adPreview();
+}
+// psn-ar- Q-26 #301「本人设覆写」小节：只读摘要 boundaries.risk_overrides（{类别: 级别}）+
+// 深链带本人设 id（回复设置页 rpsGotoFromUrl 认 ?persona= 预选）。新建态（未保存）无 id 可带 →
+// 链接置灰并提示先保存。只渲染不写入，任何异常静默（该小节是锦上添花，不能拖垮主表单）。
+function _psnArRender(p, bnd) {
+  try {
+    var sum = document.getElementById('psn-ar-risk-sum');
+    var go = document.getElementById('psn-ar-risk-go');
+    if (!sum && !go) return;
+    var pid = String((p && p.id) || (document.getElementById('pe-id') || {}).value || _editingProfileId || '').trim();
+    var ov = (bnd && bnd.risk_overrides && typeof bnd.risk_overrides === 'object' && !Array.isArray(bnd.risk_overrides)) ? bnd.risk_overrides : {};
+    var items = Object.keys(ov).filter(function(k){ return k && ov[k]; }).map(function(k){ return k + ' → ' + String(ov[k]); });
+    if (sum) {
+      if (!pid) sum.textContent = window.T('psn_ar_risk_unsaved');
+      else if (!items.length) sum.textContent = window.T('psn_ar_risk_none');
+      else sum.textContent = window.Tf('psn_ar_risk_n', {n: String(items.length), list: items.join('、')});
+    }
+    if (go) {
+      if (pid) {
+        go.href = '/reply-settings?persona=' + encodeURIComponent(pid) + '#rps-sec-risk';
+        go.setAttribute('data-goto', go.href);
+        go.style.pointerEvents = ''; go.style.opacity = '';
+        go.removeAttribute('aria-disabled'); go.removeAttribute('title');
+      } else {
+        go.href = '/reply-settings#rps-sec-risk';
+        go.style.pointerEvents = 'none'; go.style.opacity = '.55';
+        go.setAttribute('aria-disabled', 'true');
+        go.setAttribute('title', window.T('psn_ar_risk_unsaved'));
+      }
+    }
+  } catch (_e) {}
 }
 function _selOpt(el, hiddenId, cardsId) {
   document.getElementById(cardsId).querySelectorAll('.opt-card').forEach(c => c.classList.remove('sel'));
@@ -5644,17 +5685,36 @@ function _fillProfileTabFields(p, persObj) {
   _pfSetLines('pe-pf-dislikes', tst.dislikes);
   _pfSetLines('pe-pf-opinions', tst.opinions);
   _pfSetLines('pe-pf-avoid', bnd.topics_to_avoid);
-  _setMeetingPolicy(bnd.meeting_policy || 'never');  // mp-
-  _setMpStyle(bnd.commitment_style || 'soft');       // mp-
-  _setAdultPolicy(bnd.adult_policy || '');           // ad- Q-15
+  // 政策 / 风控 / 脾气这几块是「档案」页签的附属卡（各有自己的 DOM 与 helper），任一块抛错
+  // 不得拖垮整个抽屉——2026-09-15 `_psnArRender` 半成品让这里整段中断，抽屉打不开、新建 /
+  // 编辑人设全灭 3.5 天。逐块隔离：坏一块只少一块，主表单照常。
+  _pfSafe(function(){ _setMeetingPolicy(bnd.meeting_policy || 'never'); }, 'mp');   // mp-
+  _pfSafe(function(){ _setMpStyle(bnd.commitment_style || 'soft'); }, 'mp_style');   // mp-
+  _pfSafe(function(){ _setAdultPolicy(bnd.adult_policy || ''); }, 'ad');             // ad- Q-15
+  _pfSafe(function(){ _psnArRender(p, bnd); }, 'psn_ar');                             // psn-ar- Q-26 #301
   _pfSetVal('pe-pf-appearance', p.appearance);
   _pfSetLines('pe-pf-scenes', p.selfie_scenes);
   _pfSetVal('pe-pf-quirks', persObj ? persObj.quirks : '');
   _pfSetVal('pe-pf-humor', persObj ? persObj.humor : '');
   _pfSetVal('pe-pf-temperament', persObj ? persObj.temperament : '');
   // 被骂回怼档位：顶层 temper 优先，回落 personality.temper（与后端 persona_temper 同序）
-  _setTemperCard((p && p.temper) || (persObj && persObj.temper) || '');
+  _pfSafe(function(){ _setTemperCard((p && p.temper) || (persObj && persObj.temper) || ''); }, 'temper');
   _pfUpdateCounts();
+}
+// 附属块隔离执行：吞错但**不静默**——console 留一行 + 复用全局守卫的 beacon 口径
+// （page/fn/type 三字段消毒），坏块照样进 ops「前端脚本错误」计数与看门狗告警。
+function _pfSafe(fn, block) {
+  try { fn(); }
+  catch (e) {
+    try { console.error('[personas] profile block "' + block + '" failed:', e); } catch (_e) {}
+    try {
+      var m = String((e && e.message) || '').match(/([A-Za-z_$][\w$]*)\s+is not defined/);
+      var etype = (e instanceof ReferenceError) ? 'ReferenceError' : ((e instanceof SyntaxError) ? 'SyntaxError' : 'Error');
+      navigator.sendBeacon('/api/telemetry/frontend-error', new Blob(
+        [JSON.stringify({page: location.pathname, fn: m ? m[1] : ('pf_' + block), type: etype})],
+        {type: 'application/json'}));
+    } catch (_e2) {}
+  }
 }
 
 // ── C2 线：「档案」页签 —— 收集（包含规则：编辑器非空 或 原路径非空 才出键；
@@ -5871,7 +5931,21 @@ async function editProfile(pid) {
     _checkUndoAvailable(pid);
     _loadCanonicalBanner(pid);
     _checkDraft();
-  } catch(e) { _toast(window.T('psn_js_135') + e, 'err'); }
+    return true;
+  } catch(e) {
+    // 2026-09-15：装载中途抛错（如 _fillDrawerFields 里某块 ReferenceError）时此前只 toast
+    // 一句「加载失败: ReferenceError…」——但 _editingProfileId 已经切成新 pid、_loadedProfile
+    // 还是上一个人设的，若坐席接着点保存，会把**半填的表单**写进新 pid。表单此刻已是两个
+    // 人设的混合体，唯一安全的做法是整个退出编辑态（关抽屉 + 清 id / 快照），
+    // 并给人话（先刷新；反复出现点报障），技术信息只进 console。
+    try { console.error('[personas] editProfile failed:', pid, e); } catch (_e) {}
+    _editingProfileId = null;
+    _loadedProfile = null; _loadedRev = '';
+    try { _closeDrawer(); } catch (_e2) {}
+    if (window.location.hash.startsWith('#profile=')) history.replaceState(null, '', location.pathname + location.search);
+    _toast(window.T('psn_js_135') + window.T('psn_js_load_fail_hint'), 'err');
+    return false;
+  }
 }
 
 function closeProfileEditor() {
@@ -9619,7 +9693,7 @@ function openCreateFlow() {
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
 <script src="/static/js/persona_studio_core.js?v=20260905a"></script>
 <script src="/static/js/persona_apply_modal.js?v=p3"></script>
-<script src="/static/js/persona_create_wizard.js?v=p1"></script>
+<script src="/static/js/persona_create_wizard.js?v=20260916a"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
 <!-- B25-1: clone-voice enrollment on persona page (same cp-voice component as inbox

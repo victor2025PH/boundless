@@ -720,6 +720,7 @@ class HealthWatchdog:
         # （见 _check_draft_backlog），而 L1 恰恰是「必须人来处理」的那一档。
         # _db_alerted / _db_last_remind 是账本属性（键 draft_backlog）。
         self.total_draft_backlog_alerts: int = 0
+        self.total_frontend_error_alerts: int = 0
         # 账号真相真幽灵巡检（2026-08-17 P4b）：会话库有、注册表没有、且不是
         # web 工作台。desktop 镜像号在册，不算泄漏；已登出未读被 summary 清零，
         # 原「历史未读」告警永远不响——改盯这个泄漏面。
@@ -903,6 +904,7 @@ class HealthWatchdog:
 
     # 旧属性名保留为账本视图（巡检代码 / 单测沿用 `_db_alerted` 等写法零改动）
     _RK_DRAFT = "draft_backlog"
+    _RK_FE = "frontend_error"
     _RK_CASE = "case_backlog"
     _RK_UNANSWERED = "unanswered_inbound"
     _RK_AVATAR = "avatar_voice"
@@ -1243,6 +1245,13 @@ class HealthWatchdog:
         except Exception:
             logger.debug("草稿积压巡检异常（已忽略）", exc_info=True)
 
+        # 前端脚本 bug（ReferenceError / SyntaxError beacon）：模板热更新直上生产，坏符号
+        # 一出现全体坐席同时踩；beacon 与 ops 卡早就有，缺的是「有人被叫醒」这一环
+        # （2026-09-15 `_psnArRender` 人设工坊整体不可用 3.5 天零告警）
+        try:
+            self._check_frontend_errors()
+        except Exception:
+            logger.debug("前端脚本错误巡检异常（已忽略）", exc_info=True)
         # 托管代理生命周期（一键代理 P2）：自动续期 / 到期回收 / 低库存预警——
         # 缺这一环＝「代理过期了坐席还在用它登号」（连接莫名失败，排查成本极高）
         try:
@@ -2904,6 +2913,94 @@ class HealthWatchdog:
                 self.total_proxy_managed_alerts += 1
         except Exception:
             logger.debug("proxy_managed 告警发布失败（忽略）", exc_info=True)
+
+    def _check_frontend_errors(self, *, now: Optional[float] = None) -> None:
+        """前端脚本 bug beacon（ReferenceError / SyntaxError）→ 主动告警（2026-09-15 事故沉淀）。
+
+        事故：`personas.html` 一行 `_psnArRender(p, bnd)` 落盘、函数没写，模板热更新直上
+        生产 → 新建 / 编辑人设一律 ReferenceError，人设工坊整体不可用 3.5 天。
+        `_boot_error_guard` 早就把这类错误 beacon 到 `frontend_error_stats`、ops 卡也在展示
+        ——但没有任何东西会把人叫醒。本巡检读同一份计数，按 **(page, type, fn) 三元组**
+        判「有坏符号在被反复踩」：
+
+        - 触发：任一三元组进程内累计 ≥ ``min_count``（默认 2——一次可能是坐席开着旧标签页，
+          两次起就是真的有人在踩）；
+        - 指纹＝达标三元组集合：新坏符号出现 → 指纹变 → 按 ``interval_min`` 重提；同一批
+          → 24h 一次（``unchanged_interval_min``）；
+        - 恢复：最近一次脚本 bug beacon 距今 ≥ ``quiet_hours``（默认 12h）且此前告过警
+          → 发恢复通知（计数是进程级不会回落，「安静」就是修好了的唯一证据）。
+        配置 ``health_watchdog.frontend_error_remind.{enabled,min_count,interval_min,
+        unchanged_interval_min,quiet_hours}``（默认开）。
+        """
+        cfg = getattr(self._config_manager, "config", None) or {}
+        br = (((cfg.get("health_watchdog") or {}).get("frontend_error_remind"))
+              or {}) if isinstance(cfg, dict) else {}
+        if not br.get("enabled", True):
+            return
+        try:
+            from src.web.frontend_error_stats import get_frontend_error_stats
+            snap = get_frontend_error_stats().script_bugs_snapshot()
+        except Exception:
+            logger.debug("前端脚本错误巡检取数失败（忽略）", exc_info=True)
+            return
+        ts = float(now if now is not None else time.time())
+        min_count = max(1, int(br.get("min_count", 2) or 2))
+        quiet_sec = max(3600.0, float(br.get("quiet_hours", 12) or 12) * 3600.0)
+        items = {k: int(v) for k, v in (snap.get("items") or {}).items() if int(v) >= min_count}
+        last_ts = float(snap.get("last_ts") or 0.0)
+        quiet = (not items) or (last_ts and ts - last_ts >= quiet_sec)
+        if quiet:
+            if self._remind.resolve(self._RK_FE):
+                try:
+                    from src.integrations.shared.event_bus import get_event_bus
+                    get_event_bus().publish("frontend_error_alert", {
+                        "recovered": True,
+                        "quiet_hours": quiet_sec / 3600.0,
+                        "rate_key": "frontend_error:recovered",
+                    })
+                    logger.info("HealthWatchdog 发出前端脚本错误恢复通知")
+                except Exception:
+                    logger.debug("frontend_error recovery 发布失败（忽略）", exc_info=True)
+            return
+
+        interval_sec = max(600.0, float(br.get("interval_min", 30) or 30) * 60.0)
+        from src.inbox.remind_ledger import HOLD as _RL_HOLD, REMIND as _RL_REMIND, fingerprint as _rl_fp
+        fp = _rl_fp(sorted(items.keys()))
+        prev_fp = str(self._remind.get(self._RK_FE).get("fingerprint") or "")
+        verdict = self._remind.decide(
+            self._RK_FE, now=ts, interval_sec=interval_sec, fp=fp,
+            unchanged_interval_sec=self._unchanged_interval_sec(br, interval_sec, 1440))
+        if verdict == _RL_HOLD:
+            return
+        is_reminder = verdict == _RL_REMIND
+        top = sorted(items.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
+        pages = sorted({k.split(" ", 1)[0] for k in items})
+        try:
+            from src.integrations.shared.event_bus import get_event_bus
+            get_event_bus().publish("frontend_error_alert", {
+                "remind_key": self._RK_FE,
+                "symbols": int(len(items)),
+                "hits": int(sum(items.values())),
+                "pages": pages,
+                "top": [[k, v] for k, v in top],
+                "last_ts": last_ts,
+                "min_count": min_count,
+                "reminder": is_reminder,
+                "unchanged": bool(is_reminder and prev_fp and prev_fp == fp),
+                "since_ts": self._remind.first_seen(self._RK_FE),
+                "rate_key": "frontend_error:remind",
+            })
+        except Exception:
+            logger.debug("frontend_error alert 发布失败（忽略）", exc_info=True)
+            return
+        self._remind.mark_sent(
+            self._RK_FE, now=ts, fp=fp,
+            summary=f"前端脚本错误 {len(items)} 个符号 / {sum(items.values())} 次（{'、'.join(pages)[:60]}）")
+        self.total_frontend_error_alerts += 1
+        logger.warning(
+            "前端脚本错误巡检：%d 个坏符号被踩 %d 次，Top=%s",
+            len(items), sum(items.values()),
+            "; ".join(f"{k}×{v}" for k, v in top[:3]))
 
     def _check_draft_backlog(self, *, now: Optional[float] = None) -> None:
         """待审草稿长期无人处理 → 主动轰人（补 SLA 告警的 **L1 盲区**）。

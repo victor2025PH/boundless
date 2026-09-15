@@ -78,6 +78,24 @@ def site_url(config_manager) -> str:
 NOTE_MAX_CHARS = 200
 
 
+def diag_meta_header(meta: Dict[str, Any]) -> str:
+    """``x-diag-meta`` 头的**唯一**拼装口（2026-09-15 #psnArRender 报障链事故沉淀）。
+
+    HTTP 头只允许 latin-1；此前 ``json.dumps(..., ensure_ascii=False)`` 把中文 note
+    原样放进头里 → ``http.client.putheader`` 在**一个字节都没发出去之前**就抛
+    ``UnicodeEncodeError`` → 被 ``classify_upload_error`` 折成 ``upstream_unreachable``
+    → 重试 / mini / 暂存 / 自诊整条补救链跟着误诊成「网络掐断」。中文产品的主路径
+    （红条直达报障 / 用户描述框打中文）因此 100% 失败，且日志与文案都在说网络。
+
+    修法＝JSON 默认 ``ensure_ascii=True``（``\\uXXXX`` 转义是纯 ASCII，服务端
+    ``json.loads`` 原样还原）+ 出口断言：任何非 latin-1 字符在这里就炸，而不是在
+    传输层被误归因。note 的全文另在包内 ``meta.json.user_note``，头里那份只是预览。
+    """
+    s = json.dumps(meta, ensure_ascii=True, separators=(",", ":"))
+    s.encode("latin-1")   # ensure_ascii=True 下必过；留这行当契约钉子
+    return s
+
+
 def runtime_log_files() -> Dict[str, Path]:
     """从运行时 logger 树收集真实的文件日志落点（P2-12 B38 批 2026-08-22）。
 
@@ -175,6 +193,8 @@ def error_detail_for(request: Any, err: str) -> str:
         return tr(request, "err.svc.upstream_unreachable")
     if e == "bundle_failed":
         return tr(request, "err.svc.diag_bundle_failed")
+    if e == "local_error":
+        return tr(request, "err.svc.diag_local_error")
     if e.startswith("upload_rejected"):
         status = e.rsplit("_", 1)[-1]
         return tr(request, "err.svc.diag_upload_rejected",
@@ -190,7 +210,11 @@ def classify_upload_error(ex: Exception) -> str:
     - ``upstream_dns_failed``（#17，实施90）：域名解析失败——本机 DNS 污染/
       劫持/断网，与「解析得出但连不上」是两种病（前者换 DNS/网络就好，
       后者多为线路/防火墙），折叠在一起排查方向必偏；
-    - ``upstream_unreachable``：解析正常但连不上/超时/断线。
+    - ``upstream_unreachable``：解析正常但连不上/超时/断线；
+    - ``local_error``（2026-09-15）：请求**还没上网**就在本机炸了——头编码
+      （``UnicodeEncodeError``）/ 非法 URL（``http.client.InvalidURL`` 是 ValueError）
+      / 参数类型错。这类错误是确定性的：重试、mini 降级、暂存补传、连通自诊
+      全部无意义且会误导（此前被折进 unreachable，用户被告知「检查网络」）。
     纯函数可单测。
     """
     import socket
@@ -206,7 +230,16 @@ def classify_upload_error(ex: Exception) -> str:
     reason = getattr(ex, "reason", None)
     if isinstance(reason, socket.gaierror):
         return "upstream_dns_failed"
+    # 本地确定性错误：先于 URLError 判（URLError 本身不是这几类；socket.timeout /
+    # ConnectionError 也不是——它们照旧归 unreachable）
+    if isinstance(ex, (UnicodeError, ValueError, TypeError)) and not isinstance(ex, urllib.error.URLError):
+        return "local_error"
     return "upstream_unreachable"
+
+
+def is_local_error(kind: str) -> bool:
+    """``classify_upload_error`` 的结果是否属「本机确定性错误」（不重试 / 不降级 / 不暂存）。"""
+    return str(kind or "") == "local_error"
 
 
 def probe_site_connectivity(site: str, *, timeout_sec: float = 5.0) -> str:
@@ -353,10 +386,9 @@ def flush_diag_outbox(config_manager, *, max_items: int = 2) -> Dict[str, Any]:
                 req = urllib.request.Request(
                     f"{site}/api/diag-upload", data=blob, method="POST")
                 req.add_header("content-type", "application/zip")
-                req.add_header("x-diag-meta", json.dumps(
+                req.add_header("x-diag-meta", diag_meta_header(
                     {"app": meta.get("app") or "", "fp": meta.get("fp") or "",
-                     "note": meta.get("note") or "", "outbox_delayed": True},
-                    ensure_ascii=False))
+                     "note": meta.get("note") or "", "outbox_delayed": True}))
                 with urllib.request.urlopen(req, timeout=UPLOAD_TIMEOUT_SEC) as resp:
                     out = json.loads(resp.read().decode("utf-8") or "{}")
                 if out.get("ok") and out.get("code"):
@@ -371,14 +403,19 @@ def flush_diag_outbox(config_manager, *, max_items: int = 2) -> Dict[str, Any]:
                 side.unlink(missing_ok=True)
             except Exception as ex:  # noqa: BLE001
                 kind = classify_upload_error(ex)
-                if kind.startswith("upload_rejected"):
+                if kind.startswith("upload_rejected") or is_local_error(kind):
+                    # 拒收＝对端明确不要；local_error＝这份件按现有代码永远发不出去
+                    # （确定性本机错误）。两者都不该 break 堵住队列后面的件，也不该
+                    # 无限重投——弃件并留一行日志（2026-09-15：一份含中文 note 的
+                    # 坏件曾把整个 outbox 卡成「网络还没恢复」直到 7 天龄期轮转）。
                     dropped += 1
                     try:
                         p.unlink(missing_ok=True)
                         side.unlink(missing_ok=True)
                     except Exception:
                         pass
-                    logger.info("[diag] outbox 补传遭拒收（%s）→ 弃件", kind)
+                    logger.info("[diag] outbox 补传%s（%s）→ 弃件 %s",
+                                "本机出错" if is_local_error(kind) else "遭拒收", kind, p.name)
                     continue
                 logger.debug("[diag] outbox 补传仍连不上官网，本轮停止", exc_info=True)
                 break
@@ -525,8 +562,8 @@ async def build_and_upload(config_manager, note: Any = "") -> Dict[str, Any]:
         req = urllib.request.Request(
             f"{site}/api/diag-upload", data=payload, method="POST")
         req.add_header("content-type", "application/zip")
-        req.add_header("x-diag-meta", json.dumps(
-            {"app": ver, "fp": fp, "note": note_s}, ensure_ascii=False))
+        req.add_header("x-diag-meta", diag_meta_header(
+            {"app": ver, "fp": fp, "note": note_s}))
         with urllib.request.urlopen(req, timeout=UPLOAD_TIMEOUT_SEC) as resp:
             return json.loads(resp.read().decode("utf-8") or "{}")
 
@@ -539,6 +576,12 @@ async def build_and_upload(config_manager, note: Any = "") -> Dict[str, Any]:
             last_err = classify_upload_error(ex)
             logger.info("诊断包转投官网失败（attempt=%d, %s, %d bytes）",
                         attempt, last_err, len(blob), exc_info=True)
+            if is_local_error(last_err):
+                # 请求没上网就在本机炸了（头编码 / 非法 URL…）：确定性错误，重试同炸、
+                # mini 同炸、暂存后补传同炸、连通自诊会说「官网可达」——整条补救链
+                # 只会把责任推给用户网络。直接如实返回，文案指路「复制全部信息」。
+                logger.warning("[diag] 诊断包发送前本机出错（%s），不重试不暂存", last_err)
+                return {"ok": False, "error": last_err}
             if attempt == 1:
                 await asyncio.sleep(RETRY_DELAY_SEC)
     else:

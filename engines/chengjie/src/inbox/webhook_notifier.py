@@ -120,6 +120,9 @@ _EVENT_ALIASES: Dict[str, Dict[str, Any]] = {
     "assistant_report": {"types": {"assistant_report_alert"}, "levels": None},
     # 待审草稿长期无人处理（补 SLA 的 L1 盲区：L1 既不自动发也无逐条告警 → 无声烂掉）
     "draft_backlog": {"types": {"draft_backlog_alert"}, "levels": None},
+    # 前端脚本 bug（2026-09-15 `_psnArRender` 人设工坊 3.5 天不可用零告警）：ReferenceError /
+    # SyntaxError beacon 按 (page, type, fn) 三元组聚合，坏符号被反复踩才响
+    "frontend_error": {"types": {"frontend_error_alert"}, "levels": None},
     # 账号真相真幽灵（P4b 2026-08-17）：会话库有、注册表没有（剔除 web / 桌面镜像）
     "accounts_truth": {"types": {"accounts_truth_alert"}, "levels": None},
     # 被埋会话（P0-198 2026-08-04）：会话归档着却有未读入站＝客户在等，而工作台所有
@@ -309,6 +312,7 @@ _TECHNICAL_ALERTS: Dict[str, str] = {
     # #159 幽灵未读：徽标口径差额是可量化的卫生指标，修法在数据层（技术支持动作）。
     # （0908 补登：与 autosend_gate 同批，别名进了 _EVENT_ALIASES 却没归类）
     "phantom_unread":      "cp.alert.phantom_unread",
+    "frontend_error":      "cp.alert.frontend_error",
 }
 
 
@@ -1987,6 +1991,38 @@ def _build_message(event_type: str, data: Dict[str, Any]) -> tuple[str, str]:
                 "[📊 查看运营总览](/admin/ops)"
             )
 
+    elif event_type == "frontend_error_alert":
+        # 2026-09-15 `_psnArRender`：模板半成品热更上生产，人设工坊整体 ReferenceError 3.5 天。
+        if data.get("recovered"):
+            title = "✅ 前端脚本错误已安静"
+            text = (
+                f"**状态**: 近 {float(data.get('quiet_hours') or 12):.0f}h 没有新的 "
+                "ReferenceError / SyntaxError 上报（多半是修复已热更生效）\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+        else:
+            n_sym = int(data.get("symbols") or 0)
+            hits = int(data.get("hits") or 0)
+            pages = "、".join(str(p) for p in (data.get("pages") or [])[:5]) or "—"
+            prefix = "⏰" if data.get("reminder") else "🚨"
+            _same = "（重提，与上次相同）" if data.get("unchanged") else (
+                "（重提）" if data.get("reminder") else "")
+            top_lines = []
+            for kv in (data.get("top") or [])[:6]:
+                if isinstance(kv, (list, tuple)) and len(kv) >= 2:
+                    top_lines.append(f"`{kv[0]}` ×{kv[1]}")
+            title = f"{prefix} 前端脚本错误：{n_sym} 个坏符号被踩 {hits} 次{_same}"
+            text = (
+                f"**页面**: {pages}\n"
+                f"**Top**（页面 类型 符号）:\n" + ("\n".join(top_lines) or "—") + "\n"
+                "**含义**: 坐席正在反复撞同一个 ReferenceError / SyntaxError——多半是模板"
+                "改了一半就热更上了生产（调用落盘、函数没写 / 半保存语法错），该页对应功能"
+                "整体失效；红条只让坐席看见，这条是让开发看见\n"
+                "**排查**: 按符号名 grep 模板；`python -m pytest tests/test_template_undefined_calls.py "
+                "tests/test_template_undefined_identifiers.py -q` 两条门禁会点名；修好热更后本告警 12h 无新上报自动恢复\n"
+                "[📊 查看运营总览](/admin/ops)"
+            )
+
     elif event_type == "tg_call_alert":
         if data.get("recovered"):
             title = "✅ 原生通话主机已恢复"
@@ -2415,6 +2451,8 @@ _CARD_META: Dict[str, Tuple[str, str]] = {
     "draft_quality_alert": ("🟠 警告", "质量"),
     "ai_quality_alert": ("🟠 警告", "质量"),
     "media_promise_alert": ("🟠 警告", "质量"),
+    # 前端脚本 bug：整页功能对全体坐席同时失效，且热更新无部署缓冲
+    "frontend_error_alert": ("🟠 警告", "技术"),
     "voice_burst_alert": ("🟠 警告", "质量"),
     "persona_retired_alert": ("🔵 提示", "质量"),
     "memory_key_drift_alert": ("🔵 提示", "质量"),

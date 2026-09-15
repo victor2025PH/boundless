@@ -23,7 +23,23 @@
     var m = String(msg || '').match(/([A-Za-z_$][\w$]*)\s+is not defined/);
     return m ? m[1] : '';
   }
-  function _banner(txt){
+  function _T(k, d){ try{ return (typeof window.T === 'function') ? window.T(k) : d; }catch(_){ return d; } }
+  function _link(txt, onclick){
+    var a = document.createElement('a');
+    a.href = 'javascript:void 0';
+    a.style.cssText = 'margin-left:9px;color:inherit;text-decoration:underline;font-weight:600;white-space:nowrap;';
+    a.textContent = txt;
+    a.onclick = function(ev){
+      try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){}   /* 防触发外层「点击关闭」 */
+      try{ onclick(); }catch(_){}
+    };
+    return a;
+  }
+  /* 红条：人话文案 + 「↻ 刷新」+「⤴ 报障」。技术标识（类型 + 函数名）**不进人眼文案**，
+     只作为 note 的机器字段随报障走（客服要它定位，用户不需要看它）。
+     2026-09-15 前的写法把 el.textContent 整段当 note，连追加的链接文字「⤴ 报障」也带进了
+     报障描述框，且函数名 `_psnArRender` 直接展示给坐席。 */
+  function _banner(txt, techTag){
     try{
       var el = document.getElementById('fe-boot-guard-bar');
       if(!el){
@@ -37,18 +53,15 @@
         (document.body || document.documentElement).appendChild(el);
       }
       el.textContent = txt;
+      el.setAttribute('data-fe-tech', String(techTag || ''));
+      el.appendChild(_link('\u21bb ' + _T('fe.guard.reload', 'Refresh'), function(){ location.reload(); }));
       /* 「⤴ 报障」直达（_support.html 全局挂载后即可用）：用户看到红条那一刻
-         就是报障意愿最高的一刻。stopPropagation 防触发外层「点击关闭」。 */
+         就是报障意愿最高的一刻。note = 人话文案 + [技术标识]，不含链接文字。 */
       if(typeof window.openSupportPanel === 'function'){
-        var a = document.createElement('a');
-        a.href = 'javascript:void 0';
-        a.style.cssText = 'margin-left:9px;color:inherit;text-decoration:underline;font-weight:600;white-space:nowrap;';
-        a.textContent = '\u2934 ' + ((typeof window.T === 'function') ? window.T('sup.cta.toast') : 'Report');
-        a.onclick = function(ev){
-          try{ ev.preventDefault(); ev.stopPropagation(); }catch(_){}
-          try{ window.openSupportPanel(String(el.textContent || '').slice(0, 160), 'guard_bar'); }catch(_){}
-        };
-        el.appendChild(a);
+        el.appendChild(_link('\u2934 ' + _T('sup.cta.toast', 'Report'), function(){
+          var note = txt + (techTag ? ' [' + techTag + ']' : '');
+          window.openSupportPanel(note.slice(0, 160), 'guard_bar');
+        }));
       }
     }catch(_){}
   }
@@ -56,8 +69,8 @@
     var now = Date.now();
     if(now - _last < 3000 || _sent >= 5) return;
     _last = now; _sent++;
-    var label = (typeof window.T === 'function') ? window.T('fe.guard.page_error') : 'fe.guard.page_error';
-    _banner(label + (fn ? '（' + fn + '）' : ''));
+    var label = _T('fe.guard.page_error', 'fe.guard.page_error');
+    _banner(label, String(etype || '') + (fn ? ' ' + fn : ''));
     try{
       var body = JSON.stringify({page: location.pathname, fn: fn || '', type: etype});
       navigator.sendBeacon('/api/telemetry/frontend-error', new Blob([body], {type: 'application/json'}));

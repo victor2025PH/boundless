@@ -80,12 +80,18 @@ def _san_type(etype: str) -> str:
     return t if t in _KNOWN_TYPES else "Error"
 
 
+#: 「脚本 bug」类型（与 _boot_error_guard 的判定同口径）：ReferenceError＝死代码/作用域
+#: 错位、SyntaxError＝模板半保存热更上生产。网络型/HTTP 型不算——那是环境不是代码。
+SCRIPT_BUG_TYPES = frozenset({"ReferenceError", "SyntaxError"})
+
+
 class FrontendErrorStats:
     """前端运行时错误计数（线程安全，进程级）。"""
 
     __slots__ = (
         "_lock", "_started_at", "_last_ts",
         "total", "overflow", "_by_fn", "_by_page", "_by_type", "_by_endpoint",
+        "_script_bugs", "_script_last_ts",
     )
 
     def __init__(self) -> None:
@@ -101,6 +107,11 @@ class FrontendErrorStats:
         # 教训：单次会话 136 次 apiFetch 错误只有 page/fn/type 三维，坏的是哪个
         # 接口完全无从归因。可选维度：dead-click 守卫（无端点语义）不送即不计。
         self._by_endpoint: Dict[str, int] = {}
+        # 脚本 bug 三元组 "page type fn"（2026-09-15 `_psnArRender` 事故沉淀）：by_page /
+        # by_fn / by_type 三张独立表拼不回「哪页哪函数抛 ReferenceError」——看门狗要按
+        # **三元组**判「新出现的坏符号」并直接把可点开的定位送进告警。只收 SCRIPT_BUG_TYPES。
+        self._script_bugs: Dict[str, int] = {}
+        self._script_last_ts = 0.0
 
     @staticmethod
     def _bump(d: Dict[str, int], key: str) -> bool:
@@ -123,8 +134,20 @@ class FrontendErrorStats:
             if ep:
                 of = self._bump(self._by_endpoint, ep) or of
             self._by_type[t] = self._by_type.get(t, 0) + 1  # type 是小枚举，不设上限
+            if t in SCRIPT_BUG_TYPES:
+                self._script_last_ts = self._last_ts
+                of = self._bump(self._script_bugs, f"{p} {t} {f}") or of
             if of:
                 self.overflow += 1
+
+    def script_bugs_snapshot(self) -> Dict[str, Any]:
+        """看门狗口径：``{"items": {"page type fn": n}, "total": N, "last_ts": ts}``。"""
+        with self._lock:
+            return {
+                "items": dict(sorted(self._script_bugs.items(), key=lambda kv: (-kv[1], kv[0]))),
+                "total": sum(self._script_bugs.values()),
+                "last_ts": self._script_last_ts,
+            }
 
     def dump(self) -> Dict[str, Any]:
         with self._lock:
@@ -133,6 +156,9 @@ class FrontendErrorStats:
                 "last_record_ts": self._last_ts,
                 "total": self.total,
                 "overflow": self.overflow,
+                "script_bugs": dict(sorted(
+                    self._script_bugs.items(), key=lambda kv: (-kv[1], kv[0]))),
+                "script_last_ts": self._script_last_ts,
                 "by_type": dict(sorted(self._by_type.items())),
                 "by_fn": dict(sorted(self._by_fn.items(), key=lambda kv: (-kv[1], kv[0]))),
                 "by_page": dict(sorted(self._by_page.items(), key=lambda kv: (-kv[1], kv[0]))),
@@ -180,6 +206,8 @@ class FrontendErrorStats:
             self._by_page.clear()
             self._by_type.clear()
             self._by_endpoint.clear()
+            self._script_bugs.clear()
+            self._script_last_ts = 0.0
             self._last_ts = 0.0
 
 

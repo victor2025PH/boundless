@@ -298,7 +298,11 @@ async def test_note_travels_into_bundle_meta_and_header(monkeypatch):
     out = await du.build_and_upload(_Cfg(), note="/workspace | 草稿加载失败")
     assert out["ok"] is True
     assert seen["meta"].get("user_note") == "/workspace | 草稿加载失败"
-    assert "草稿加载失败" in seen["hdr"]
+    # 2026-09-15 修正：头必须 latin-1 可编码（HTTP 契约），中文以 JSON \\u 转义携带、
+    # 服务端 json.loads 还原——旧断言「原样中文在头里」恰恰把 UnicodeEncodeError 钉成了规范。
+    seen["hdr"].encode("latin-1")
+    import json as _json
+    assert "草稿加载失败" in _json.loads(seen["hdr"])["note"]
 
 
 # ── 反漂移静态契约 ───────────────────────────────────────────────────────────

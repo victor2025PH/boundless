@@ -6497,6 +6497,7 @@ ZH_HANT = {
     'err.svc.config_manager_not_ready': 'config_manager 不可用',
     'err.svc.context_store_not_ready': '上下文儲存不可用',
     'err.svc.diag_bundle_failed': '診斷包在本機生成失敗，請稍後重試；若持續失敗請截圖聯絡客服。',
+    'err.svc.diag_local_error': '本機傳送報障時出錯（不是網路問題，重試無效）：請點「複製全部資訊」發給客服，並附上這句提示。',
     'err.svc.diag_upload_rejected': '官網收包被拒（{status}）：已自動精簡重傳仍未成功，請稍後重試或聯絡客服。',
     'err.svc.draft_service_disabled': '草稿服務未啟用',
     'err.svc.handoff_store_not_ready': '人工轉接儲存未初始化',
@@ -6751,7 +6752,8 @@ ZH_HANT = {
     'fc_title': '功能總覽',
     # ── fe ──
     'fe.guard.net_retry': '連線中，正在重試…恢復後本提示自動消失',
-    'fe.guard.page_error': '頁面指令碼出錯，部分功能可能失效',
+    'fe.guard.page_error': '這個頁面剛出了點問題，部分操作可能沒反應——先重新整理試試；還不行就點「報障」',
+    'fe.guard.reload': '重新整理',
     # ── fn_cta_title ──
     'fn_cta_title': '🔗 追蹤連結 發→點：',
     # ── fn_export_csv ──
@@ -22110,6 +22112,8 @@ ZH_HANT = {
     'psn_js_362': '確認刪除選中的 {n} 個人設？\n\n{list}\n\n此操作不可撤銷。',
     # ── psn_js_363 ──
     'psn_js_363': '從選中 {n} 個人設中移除標籤\n可用標籤: {tags}',
+    # ── psn_js_load_fail_hint ──
+    'psn_js_load_fail_hint': '先重新整理頁面再試；反覆出現請點右上「求助」報障',
     # ── psn_json_data_lbl ──
     'psn_json_data_lbl': 'JSON 資料（貼上後點匯入，或點匯出後自動填充）',
     # ── psn_json_import_field ──
@@ -23142,6 +23146,8 @@ ZH_HANT = {
     'psn_wiz_create': '建立人設',
     # ── psn_wiz_created ──
     'psn_wiz_created': '已建立「{name}」，接下來補上頭像和聲音吧',
+    # ── psn_wiz_created_editor_failed ──
+    'psn_wiz_created_editor_failed': '「{name}」已建立成功，但編輯器沒能開啟——重新整理頁面後在列表裡點開它即可',
     # ── psn_wiz_creating ──
     'psn_wiz_creating': '建立中…',
     # ── psn_wiz_id ──

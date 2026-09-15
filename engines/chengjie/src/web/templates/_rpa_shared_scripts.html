@@ -331,6 +331,18 @@ rpa.bulk = (function(){
     const cb = c.querySelector('.rpa-bulk-pick[data-pid="' + String(pid).replace(/"/g,'\\"') + '"]');
     if(cb){ cb.checked = !cb.checked; _refreshToolbar(); }
   }
+  // 由 pid 找到该行的容器（供 _runBatch 淡出动画）。2026-09-15 门禁
+  // test_template_undefined_calls 首跑抓出：此前从未定义 → 任何批量操作一进 _runBatch
+  // 就 ReferenceError（async 函数 → unhandledrejection 红条），批量按钮在三个 RPA 页全哑。
+  // 行容器由各平台模板自定（tr / .wa-row / li…），这里只认「checkbox 所在的最近块级祖先」，
+  // 找不到就返回 checkbox 自身——动画是锦上添花，绝不能再成为失败点。
+  function _rowByPid(pid){
+    const c = _container();
+    if(!c || pid == null) return null;
+    const cb = c.querySelector('.rpa-bulk-pick[data-pid="' + String(pid).replace(/"/g,'\\"') + '"]');
+    if(!cb) return null;
+    return cb.closest('tr, li, [data-row], .rpa-row, .wa-row, .lr-row, .mr-row') || cb.parentElement || cb;
+  }
   // 并发执行 + toast 汇总 + P19-B: 淡出动画 + 滚动保持
   async function _runBatch(ids, fn, actionLabel){
     if(!ids.length){ rpa.toast(window.T('rpa_js_none_selected'), 'warn'); return; }

@@ -1379,6 +1379,21 @@ async function waDetailLoadSummary(detail, pane){
   }
 }
 
+// 意图小徽章（对话详情 / 会话摘要 / 检索结果四处调用）。2026-09-15 门禁
+// test_template_undefined_calls 首跑抓出：此前**从未定义**——带 intent_tag 的会话一展开
+// 就 ReferenceError（被 try 吞成「加载失败」）。样式与 _rpa_shared_scripts 的画像条同款，
+// 色表 / 文案表取自那边的顶层 const（同页装载，缺席时回落中性灰 + 原词）。
+function _intentBadge(tag){
+  const t = String(tag || '');
+  if(!t || t === 'general') return '';
+  const colors = (typeof _INTENT_COLORS !== 'undefined') ? _INTENT_COLORS : {};
+  const labels = (typeof _INTENT_LABELS !== 'undefined') ? _INTENT_LABELS : {};
+  const bg = colors[t] || 'var(--th-bg-slate4,#94a3b8)';
+  return '<span class="wa-intent-badge" style="margin-left:6px;font-size:.68rem;padding:1px 7px;border-radius:8px;background:'
+    + bg + ';color:var(--th-ink-slate9,#0f172a);font-weight:600;vertical-align:middle">'
+    + rpa.esc(labels[t] || t) + '</span>';
+}
+
 async function waDetailLoadFull(detail, pane, append){
   const chatKey = detail.dataset.chatKey;
   const offset = append ? parseInt(detail.dataset.offset||'0') : 0;

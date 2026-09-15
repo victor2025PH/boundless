@@ -130,6 +130,10 @@ $gates = @(
     # 模板 JS「无主标识符」门禁（2026-08-22 B39 workflows._TYPE_LABELS 删定义留引用
     # 整页崩事故沉淀；读取形态裸标识符全文件无声明痕迹=必然 ReferenceError）。
     'tests/test_template_undefined_identifiers.py',
+    # 私有前缀函数「调用了但全站无定义」（2026-09-15 personas `_psnArRender` 半成品 hunk 热更
+    # 直上生产、人设工坊整体不可用 3.5 天事故沉淀）：与上一条互补——上一条宽声明会把
+    # `const row = _fn(x)` 的 _fn 当已声明漏判，本条只认 LHS 声明，首跑即抓出两处在库真崩。
+    'tests/test_template_undefined_calls.py',
     'tests/test_template_dynamic_dot_access.py',
     'tests/test_template_free_capture.py',
     'tests/test_template_dead_classes.py',

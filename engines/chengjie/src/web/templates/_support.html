@@ -301,7 +301,12 @@
         var d0 = (descEl0 && descEl0.value ? descEl0.value : (note || '')).trim();
         if (d0) lines.push('Note: ' + d0.slice(0, 200));
         _copy(lines.join('\n')).then(function (ok) {
-          if (ok) { all.textContent = _T('sup.copied', 'Copied'); }
+          if (!ok) return;
+          /* 与行内「复制」按钮同款 1.6s 复位——此前「已复制」永久驻留，第二次点没有
+             任何反馈，用户不确定到底复制上没有（2026-09-15 截图实录）。 */
+          var old0 = all.textContent;
+          all.textContent = _T('sup.copied', 'Copied');
+          setTimeout(function () { try { all.textContent = old0; } catch (_) { } }, 1600);
         });
       });
 
