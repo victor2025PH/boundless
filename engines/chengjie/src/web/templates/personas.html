@@ -1491,6 +1491,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-up-result .pma-upr-live b{color:var(--t);font-weight:600;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     /* Q-40 #322（pma-lightbox）：大图 / 视频页内灯箱——不再 target=_blank 开独立窗口（桌面壳关窗连带退出）；
        Esc / 点遮罩 / ✕ 关，关灯箱不关抽屉。z-index 高于 .drawer(901) 与吸顶条 */
+    .pma-th-link{display:block;cursor:zoom-in}
     .pma-lightbox{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:var(--th-bg-scrim60,rgba(0,0,0,.6));cursor:zoom-out}
     .pma-lightbox img,.pma-lightbox video{max-width:92vw;max-height:86vh;border-radius:8px;background:var(--bg);box-shadow:0 8px 32px var(--th-bg-scrim45,rgba(0,0,0,.45));cursor:default}
     .pma-lightbox .pma-lb-x{position:absolute;right:1rem;top:.8rem;width:2rem;height:2rem;font-size:1.2rem;line-height:1;color:#fff;background:var(--th-bg-scrim45,rgba(0,0,0,.45));border:0;border-radius:999px;cursor:pointer}
@@ -3548,7 +3549,7 @@ function _pmaSummaryHtml(items, stats, dim) {
     + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
     + (typeof ai.tagged === 'number' && items.length ? '<span id="pma-ai-cover">' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
     + '</div>'
-    + '<div class="al-batch" id="al-batch" style="display:' + (nSel ? 'flex' : 'none') + dim + '">'
+    + '<div class="al-batch" id="al-batch" style="display:' + (nSel ? 'flex' : 'none') + ';' + dim + '">'
     + '<span id="al-sel-n">' + _pmaEsc(window.Tf('al_sel_n', { n: String(nSel) })) + '</span>'
     + '<input type="text" id="al-batch-trg" class="pma-in" placeholder="' + _pmaEsc(window.T('al_batch_ph')) + '" style="min-width:140px">'
     + '<button type="button" class="btn btn-xs btn-primary" onclick="_alBatchAdd()">' + _pmaEsc(window.T('al_batch_add')) + '</button>'
@@ -3778,7 +3779,7 @@ function _pmaCard(raw) {
     + '</select>';
   const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><a href="' + url + '" class="pma-th-link" style="display:block" onclick="event.preventDefault();_pmaLightbox(' + midArg + ')">' + thumb + '</a>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips
@@ -4227,7 +4228,7 @@ async function pmaUpload(retryFiles) {
         fail++;
         rec.reason = String((d && (d.reason || d.error)) || ('http_' + r.status));
         rec.detail = String((d && (typeof d.detail === 'string' ? d.detail : (d.detail && d.detail.message) || d.error || d.message)) || '').slice(0, 200);
-        if (d) { rec.limit_mb = d.limit_mb; rec.ext = d.ext; rec.max_sec = d.max_sec; }
+        if (d) { rec.limit_mb = d.limit_mb; rec.ext = d.ext; rec.max_sec = d.max_sec; rec.hint = d.hint; rec.over_mb = d.over_mb; }
       }
     } catch (e) {
       fail++;

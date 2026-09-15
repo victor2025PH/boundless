@@ -84,6 +84,9 @@ zhipuai>=2.0.0
 # Tesseract OCR (需要系统安装Tesseract和语言包)
 pytesseract>=0.3.10
 Pillow>=10.0.0
+# Q-40 B（#316，2026-09-15）：相册接 iPhone HEIC/HEIF——Windows 坐席机 Chromium 解不开 HEIC，
+# 后端用 pillow-heif 转 JPEG 落库；可选依赖，import 失败即回 ext_not_allowed（写明导出 JPEG）
+pillow-heif>=0.16.0
 
 # 可选：EasyOCR (更准确但较重)
 # easyocr>=1.7.1

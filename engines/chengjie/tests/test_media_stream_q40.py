@@ -395,6 +395,9 @@ def test_personas_lightbox_in_page_not_window_open():
     src = _PERSONAS.read_text(encoding="utf-8")
     card = _fn_src(src, "_pmaCard")
     assert 'target="_blank"' not in card and "_pmaLightbox(" in card
+    # 缩略图不再是 a[href]：_loading_overlay 的捕获相位 a[href] 拦截器会先于 onclick 把它当跨页导航
+    #（桌面壳里就是「弹独立窗口」的来源）；换 div[role=button]（Enter / 空格可开）
+    assert '<a href="\' + url' not in card and 'class="pma-th-link" role="button"' in card
     lb = _fn_src(src, "_pmaLightbox")
     assert "window.open" not in lb and "pma-lightbox" in lb
     assert "_pmaLightboxClose" in src and "'Escape'" in src
