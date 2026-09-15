@@ -2394,7 +2394,7 @@ function rpsPoAdd(){
   var body = document.getElementById('rps-po-body');
   if (!body) return;   // L-4 E：表已删，入口迁人设工作室
   body.insertAdjacentHTML('beforeend', rpsPoRow('', {}));
-  document.getElementById('rps-po-empty').style.display = 'none';
+  var _empA = document.getElementById('rps-po-empty'); if (_empA) _empA.style.display = 'none';   // L-4 E 后该 id 已不存在，防御式引用
   var last = body.lastElementChild;
   if (last) last.querySelector('[data-po="pid"]').focus();
   rpsMarkDirty();
@@ -4493,7 +4493,7 @@ window.rpsSgSyncState = rpsSgSyncState;
     var tr = btn.closest('tr');
     if (tr) tr.remove();
     if (!document.querySelectorAll('#rps-po-body tr').length){
-      document.getElementById('rps-po-empty').style.display = '';
+      var _empB = document.getElementById('rps-po-empty'); if (_empB) _empB.style.display = '';
     }
     rpsMarkDirty();
   });

@@ -25,7 +25,12 @@ _ALL = sorted(_TPL_DIR.rglob("*.html"))
 _DYN_DOT = re.compile(r"""[\w$]\.[A-Za-z_$][\w$]*['"]\s*\+""")
 
 # 良性命中允许清单：{文件名: {命中片段, ...}}。命中片段取 _DYN_DOT.group(0)。当前为空。
-_ALLOWLIST: dict[str, set[str]] = {}
+_ALLOWLIST: dict[str, set[str]] = {
+    # 良性：i18n **键名**字串拼接（'inbox.adult.cat_' + category → window.T(键)），不是代码生成；
+    # 拼出来的是查表键而非 JS 标识符，连字符/非法字符只会让 T() 回落裸键，不会被当减法解析
+    # （Q-15 #271 ad- 段；2026-09-16 点名 72h 无人认领后按「字面量以 .xxx 结尾再拼变量」登记）
+    "unified_inbox.html": {"t.cat_'+", "t.pol_'+"},
+}
 
 
 def _violations(html: str) -> set:

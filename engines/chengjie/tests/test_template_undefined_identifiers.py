@@ -24,8 +24,11 @@
       4. 不是 JS/DOM 宿主内建、不是关键字；
     则该行一执行**必然** ReferenceError。
 
-    声明收集刻意**过度包含**（var 语句连 RHS 标识符一起收、解构整段收）：代价是漏报
-    个别真 bug，换来零误报——与孤儿引用门禁「刻意放过防御式引用」同一哲学。
+    声明收集**过度包含**（形参/解构/裸赋值/typeof 守卫都算），但 var/let/const 语句
+    自 2026-09-16 起**只收左值**：旧的「连 RHS 一起收」让 `const row = _rowByPid(pid)` 把
+    `_rowByPid` 算成已声明，两处在库 ReferenceError 漏判数周（`_psnArRender` 事故复盘
+    时回放发现）。收紧后全站仅多 4 个 TypedArray 宿主内建命中，已进 _HOST_GLOBALS。
+    其余仍宁可漏报不误报——与孤儿引用门禁「刻意放过防御式引用」同一哲学。
     Jinja 段（``{{ }}``/``{% %}``/``{# #}``）在扫描前整段抹空，模板语法不进 JS 判定。
 
 维护：
@@ -92,6 +95,11 @@ _HOST_GLOBALS = {
     "HTMLElement", "Element", "Node", "NodeList", "CSS", "queueMicrotask",
     "Event", "InputEvent", "PointerEvent", "TouchEvent", "AudioWorkletNode",
     "OfflineAudioContext", "AnalyserNode", "GainNode",
+    # 二进制 / TypedArray 家族（2026-09-16 var 语句收紧为左值后浮出：users / voice_call
+    # 里 `const buf = new Uint8Array(...)` 的 RHS 此前被当「声明」掩住，现按宿主内建放行）
+    "ArrayBuffer", "DataView", "Int8Array", "Uint8Array", "Uint8ClampedArray",
+    "Int16Array", "Uint16Array", "Int32Array", "Uint32Array", "Float32Array",
+    "Float64Array", "BigInt64Array", "BigUint64Array", "createImageBitmap",
 }
 
 # 良性命中登记（原因必填；防过期由 test_accepted_not_stale 守）。
@@ -211,11 +219,39 @@ def _strip_jinja(text: str) -> str:
     return _JINJA_RE.sub(lambda m: " " * len(m.group(0)), text)
 
 
+def _var_stmt_lhs_names(seg: str) -> set:
+    """var/let/const 语句段里**左值**的标识符：按顶层逗号切段、只取 `=` 左侧（含解构）。
+
+    2026-09-16 收紧：旧实现把整段（含 RHS）都当声明——`const row = _rowByPid(pid)` 让
+    `_rowByPid` 被算作「已声明」，两处在库 ReferenceError（`_rowByPid` / `_intentBadge`）
+    因此漏判数周。全站 dry-run 只多出 4 个命中且全是 TypedArray 宿主内建（已补进
+    _HOST_GLOBALS），零误报代价换回「调用结果被赋值」这一整类形状。
+    """
+    out: set = set()
+    depth = 0
+    cur: list = []
+    parts: list = []
+    for ch in seg:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    for p in parts:
+        out |= set(_IDENT_RE.findall(p.split("=", 1)[0]))
+    return out
+
+
 def _declared_names(masked: str) -> set:
-    """一个 <script> 块（masked 后）里的全部声明痕迹（任意深度，过度包含）。"""
+    """一个 <script> 块（masked 后）里的全部声明痕迹（任意深度；var 语句只收左值，其余过度包含）。"""
     names: set = set()
     for m in _DECL_VARSTMT_RE.finditer(masked):
-        names |= set(_IDENT_RE.findall(m.group(1)))
+        names |= _var_stmt_lhs_names(m.group(1))
     for m in _DECL_FUNC_RE.finditer(masked):
         if m.group(1):
             names.add(m.group(1))
@@ -335,6 +371,35 @@ def test_detector_catches_b39_shape():
     })();
     </script>
     """
+    assert not scan_html(fixed), "补回定义后不应再报——探测器误报"
+
+
+def test_detector_catches_call_result_assigned_shape():
+    """2026-09-16 收紧自证：`const row = _rowByPid(pid)` 的 RHS 调用不得被当成声明。
+
+    旧口径把 var 语句整段收作声明 → 这一形状永远漏；`_rowByPid` / `_intentBadge` 两处
+    在库 ReferenceError 就是这样活了数周。同时 var 左值（含解构、逗号列表）仍必须算声明。
+    """
+    broken = """
+    <script>
+    (function(){
+      async function run(ids){
+        const row = _rowByPid(ids[0]);
+        var a = 1, b = _ghostHelper(a), {c, d} = _ghostPair(b), [e, f] = _ghostArr(c);
+        let badge = a ? _intentBadge('x') : '';
+        return row + badge + b + c + d + e + f;
+      }
+      run([1]);
+    })();
+    </script>
+    """
+    hits = scan_html(broken)
+    for name in ("_rowByPid", "_ghostHelper", "_ghostPair", "_ghostArr", "_intentBadge"):
+        assert name in hits, f"RHS 调用 {name} 未被抓到——var 语句又把右值当声明了"
+    for name in ("row", "a", "b", "c", "d", "e", "f", "badge"):
+        assert name not in hits, f"左值 {name} 被误报——var 左值/解构收集坏了"
+    fixed = broken.replace("(function(){", "(function(){ function _rowByPid(){} function _ghostHelper(){}"
+                           " function _ghostPair(){return {};} function _ghostArr(){return [];} function _intentBadge(){}")
     assert not scan_html(fixed), "补回定义后不应再报——探测器误报"
 
 

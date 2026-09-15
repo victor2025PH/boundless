@@ -16831,7 +16831,9 @@ function _aifReasonLabel(r){
   return (t&&t!==k)?t:r;
 }
 function _aifHHMM(ts){
-  try{ var d=new Date(Number(ts||0)*1000); if(!isNaN(d.getTime())) return d.toTimeString().slice(0,5); }catch(_){}
+  // 走 wsFmtTime（随 ?lang= 取 locale）——旧写法用浏览器 locale 的 toTimeString 切片，
+  // 被 test_sealed_templates_no_legacy_date_formatters 点名 72h 无人认领（2026-09-16 顺手收）
+  try{ var n=Number(ts||0); if(n>0) return window.wsFmtTime(n,{hour:'2-digit',minute:'2-digit'}); }catch(_){}
   return '--:--';
 }
 function _aifRender(c, rec){
