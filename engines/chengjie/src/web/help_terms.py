@@ -1492,6 +1492,46 @@ HELP_TERMS: dict = {
         "desc_en": "Above the composer are two equal buttons. Model picks who answers this thread (instance default / configured vendor profiles / local private) and only changes the endpoint. Mode picks the rules (Standard / Unrestricted, plus context depth, effort, thinking). Unrestricted needs the local private model online.",
         "usage": "打开会话 → 输入框上方点「模型」选端点，点「模式」选标准或无限制、再调上下文深度。保存后应有提示。",
         "usage_en": "Open a thread → above the composer, Model picks the endpoint and Mode picks Standard or Unrestricted plus context depth. A toast confirms the save."
+    },
+    "image_send_gate": {
+        "zh": "跟图与要图意图闸",
+        "en": "Photo follow and ask-intent gate",
+        "desc": "客户发来一张图（系统识图描述里有「自拍」）不会自动再回一张；只有对方话里真的要图、或你已承诺发图时才出相册。同会话跟着发图有冷却和每日上限；配文太像上一张会自动换一句或空着。",
+        "desc_en": "An inbound photo whose system caption says selfie does not trigger another send. The album only fires when they ask for a photo in their own words, or you already promised one. Follow-up sends in the same thread have a cooldown and daily cap; near-duplicate captions are swapped or cleared.",
+        "usage": "不用设置。客户只发图不说话时，AI 应只回文字；对方说「再来一张 / May I see a pic」才出图。",
+        "usage_en": "No setting needed. If they only send a photo with no ask, the AI should reply in text; May I see a pic / send another still pulls from the album."
+    },
+    "xlate_hold_retry": {
+        "zh": "翻译失败可重试",
+        "en": "Retry after translate hold",
+        "desc": "出站自动翻译若引擎空串或超时，会先同引擎再试、换引擎、必要时按目标语重起草；仍失败则本条不发原文，会话头出现「翻译引擎没回话 · 重试翻译」。点「重试翻译」再走翻译链补投。",
+        "desc_en": "If outbound auto-translate returns empty or times out, the app retries the same engine, then another, then may redraft in the target language. Still failing holds the line (never sends Chinese as-is). The header shows Translate engine silent · Retry translate.",
+        "usage": "会话头状态带出现「重试翻译」→ 点一下。成功会补发出站译文；失败仍 HOLD，不发中文原文。",
+        "usage_en": "When the header status band offers Retry translate, tap it. Success delivers the translated line; failure stays on hold and never sends the Chinese original."
+    },
+    "list_sys_chips": {
+        "zh": "全部账号列表顶系统筹码",
+        "en": "All-accounts strip system chips",
+        "desc": "「全部账号」视图列表顶那排标签：单人端默认不显示休眠 / 风控 / 停联等系统筹码；多坐席或筛选里打开「系统标签」才出，文案是人话（长期未回 / 需留意 / 别再联系）。点筹码筛选，点 × 只清筛选。",
+        "desc_en": "On the All accounts list strip, single-seat mode hides dormant / risk / stop-contact system chips by default. Multi-seat or opening System tags in the filter shows plain labels (long silent / needs attention / do not contact). Tap a chip to filter; × clears the filter only.",
+        "usage": "打开全部账号 → 看列表顶。单人端不应出现 dormant:ignored 原码；要筛系统标签：左侧筛选展开「系统标签」。",
+        "usage_en": "Open All accounts → check the top strip. Single-seat should not show raw dormant:ignored. To filter system tags, expand System tags in the left filter."
+    },
+    "album_big_upload": {
+        "zh": "相册大图与 HEIC",
+        "en": "Large album upload and HEIC",
+        "desc": "人设相册可传更大静图（约 25MB）和视频（约 100MB / 5 分钟）；上传有逐文件进度。iPhone HEIC 会尽量转成 JPEG 入库；解不开时提示在手机相册导出为 JPEG。删单张或「删除所选」只摘卡片，不整页跳回顶；点缩略图在页内灯箱看大图。",
+        "desc_en": "Persona albums accept larger stills (~25MB) and videos (~100MB / 5 min) with per-file progress. iPhone HEIC is converted to JPEG when possible; otherwise export JPEG from the phone album. Delete one or Delete selected removes cards without jumping to the top; thumbnails open an in-page lightbox.",
+        "usage": "人设 → 相册 → 选大图或 HEIC 上传，看结果条进度。点缩略图开灯箱；勾选多张 → 「删除所选」。",
+        "usage_en": "Persona → Album → upload a large still or HEIC and watch the result bar. Tap a thumbnail for the lightbox; select several → Delete selected."
+    },
+    "chat_large_media": {
+        "zh": "聊天大图与大视频",
+        "en": "Large chat photos and videos",
+        "desc": "会话里发图 / 视频按各平台上限（如 LINE 视频约 100MB、Telegram 约 200MB；Messenger 仍约 25MB）。超限会提示还差多少；静图过大可点「压后发送」（默认仍发原图）。上传超时随体积加长。",
+        "desc_en": "In-thread photo/video sends follow each platform cap (e.g. LINE video ~100MB, Telegram ~200MB; Messenger stays ~25MB). Over-limit toasts show how much over; large stills can Compress then send (default remains original). Upload timeout scales with size.",
+        "usage": "打开会话 → 附件选大视频或大图。超限看提示；需要缩小静图时点「压后发送」再发。",
+        "usage_en": "Open a thread → attach a large video or photo. Read the over-limit toast; for a still, tap Compress then send if you need a smaller file."
     }
 }
 

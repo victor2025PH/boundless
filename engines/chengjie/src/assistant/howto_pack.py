@@ -1659,6 +1659,62 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "模型 模式 上下文深度 无限制 本机 私有 composer model mode unrestricted depth",
         "/workspace",
     ),
+    (
+        "image-send-gate",
+        "客户发了自拍为什么又回一张图 / 怎么才不出跟图",
+        "Why did a selfie inbound trigger another photo / how to stop follow-up album sends",
+        "不用设置。系统识图描述里的「自拍」不算客户要图；只有对方话里真的要图、或你已承诺发图时才出相册。"
+        "同会话跟着发图有冷却和每日上限。客户说「再来一张 / May I see a pic」仍会出图。",
+        "No setting needed. A system selfie caption on an inbound photo is not an ask; the album fires only when they "
+        "ask in their own words or you already promised a photo. Follow-ups have a cooldown and daily cap. "
+        "May I see a pic / send another still pulls from the album.",
+        "跟图 识图 自拍 要图 相册 冷却 每日上限 image send gate album follow",
+        "/workspace",
+    ),
+    (
+        "xlate-hold-retry",
+        "翻译失败了怎么重试 / 为什么不发中文原文",
+        "How to retry after translate hold / why Chinese original is not sent",
+        "出站自动翻译空串或超时会先重试、换引擎、必要时按目标语重起草；仍失败则本条不发原文。"
+        "会话头出现「翻译引擎没回话 · 重试翻译」→ 点「重试翻译」再走翻译链补投。",
+        "Outbound auto-translate empty or timeout retries, switches engine, then may redraft in the target language. "
+        "Still failing holds the line and never sends Chinese as-is. Tap Retry translate on the header status band.",
+        "翻译失败 重试翻译 空串 HOLD 不发原文 xlate hold retranslate",
+        "/workspace",
+    ),
+    (
+        "list-sys-chips",
+        "全部账号顶上一排 dormant 怎么藏 / 系统筹码人话是什么",
+        "How to hide dormant chips on All accounts / what plain system chip labels mean",
+        "「全部账号」列表顶：单人端默认不显示休眠 / 风控 / 停联系统筹码；多坐席或筛选打开「系统标签」才出。"
+        "文案是「长期未回 / 需留意 / 别再联系」。点筹码筛选，点 × 只清筛选不删标签。",
+        "On All accounts, single-seat hides dormant / risk / stop-contact chips by default; multi-seat or opening "
+        "System tags in the filter shows plain labels. Tap to filter; × clears the filter only.",
+        "全部账号 系统筹码 休眠 长期未回 需留意 别再联系 list strip systag",
+        "/workspace",
+    ),
+    (
+        "album-big-upload",
+        "相册能不能传大图和 HEIC / 删图为什么跳回顶",
+        "Can the album take large photos and HEIC / why did delete jump to the top",
+        "人设 → 相册：静图约 25MB、视频约 100MB / 5 分钟，上传有进度条。iPhone HEIC 会尽量转 JPEG；"
+        "解不开就在手机相册导出 JPEG 再传。删单张或「删除所选」只摘卡片不回顶；点缩略图开页内灯箱。",
+        "Persona → Album: stills ~25MB, videos ~100MB / 5 min, with progress. HEIC converts to JPEG when possible; "
+        "otherwise export JPEG on the phone. Delete one or Delete selected keeps scroll; thumbnails open a lightbox.",
+        "相册 大图 HEIC 25MB 删除所选 灯箱 album big upload lightbox",
+        "/personas",
+    ),
+    (
+        "chat-large-media",
+        "聊天里大视频发不出去 / 超限还差多少怎么看",
+        "Large chat video will not send / how to read how much over the cap",
+        "会话附件按平台上限（LINE 视频约 100MB、Telegram 约 200MB；Messenger 仍约 25MB）。"
+        "超限提示会写还差多少；静图过大可点「压后发送」，默认仍发原图。",
+        "Thread attachments follow platform caps (LINE video ~100MB, Telegram ~200MB; Messenger ~25MB). "
+        "Over-limit toasts show how much over; large stills can Compress then send (default remains original).",
+        "大视频 大图 平台上限 压后发送 LINE Telegram Messenger chat media cap",
+        "/workspace",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请

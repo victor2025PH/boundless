@@ -102,3 +102,19 @@ questions:
   - tag: composer_model_mode
     q: "会话里模型和模式有什么区别？"
     must_any: ["模型", "模式", "上下文"]
+  # ── v1.0.86 发版批（R86：跟图闸 / 翻译重试 / 列表顶系统筹码 / 相册大图 HEIC / 聊天大视频）──
+  - tag: image_send_gate
+    q: "客户发了自拍为什么又回一张图？怎么才不出跟图？"
+    must_any: ["识图", "要图", "相册", "跟图"]
+  - tag: xlate_hold_retry
+    q: "翻译失败了怎么重试？为什么不发中文原文？"
+    must_any: ["重试", "翻译", "原文"]
+  - tag: list_sys_chips
+    q: "全部账号顶上一排 dormant 怎么藏？"
+    must_any: ["系统", "单人", "休眠", "筹码"]
+  - tag: album_big_upload
+    q: "相册能不能传大图和 HEIC？删图为什么跳回顶？"
+    must_any: ["相册", "HEIC", "灯箱", "删除"]
+  - tag: chat_large_media
+    q: "聊天里大视频发不出去怎么办？超限还差多少怎么看？"
+    must_any: ["平台", "上限", "压后", "视频"]

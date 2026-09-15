@@ -1,5 +1,44 @@
 [
   {
+    "version": "1.0.86",
+    "date": "2026-09-16",
+    "title": {
+      "zh": "发送真相四闸与大文件媒体",
+      "en": "Send-truth gates and large media"
+    },
+    "tags": [
+      "fix",
+      "improve",
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "客户只发图不说话时，不再自动跟一张相册图；对方话里真要图或你已承诺才出图",
+        "出站翻译空串会重试、换引擎、必要时重起草；仍失败不发原文，会话头可「重试翻译」",
+        "全部账号列表顶：单人端默认隐藏休眠/风控/停联系统筹码，打开才出人话标签",
+        "人设相册可传更大静图与视频，带上传进度；iPhone HEIC 尽量转 JPEG 入库",
+        "相册删图与「删除所选」不再整页跳回顶；缩略图在页内灯箱打开",
+        "聊天发视频按各平台上限（LINE/TG 更大，Messenger 仍约 25MB）；超限提示还差多少",
+        "静图过大可「压后发送」，默认仍发原图；上传超时随体积加长",
+        "相册上传失败原因与重试仍在结果条；系统识图描述里的「自拍」不再当索图",
+        "报障 outbox 补传纳入看门狗，源码态实例网络恢复后也会自动补传",
+        "人设工坊半成品渲染与报障中文 note 头编码两处根修"
+      ],
+      "en": [
+        "Inbound photos alone no longer auto-follow with an album send; only a real ask or a kept promise fires the album",
+        "Outbound translate empty retries, switches engine, may redraft; still failing holds the line with Retry translate — never sends Chinese as-is",
+        "All-accounts strip hides dormant/risk/stop-contact chips on single-seat until System tags are opened (plain labels)",
+        "Persona album accepts larger stills and videos with upload progress; iPhone HEIC converts to JPEG when possible",
+        "Album delete and Delete selected no longer jump to the top; thumbnails open an in-page lightbox",
+        "Chat videos follow platform caps (higher on LINE/TG; Messenger still ~25MB); over-limit toasts show how much over",
+        "Large stills can Compress then send (default remains original); upload timeout scales with size",
+        "Album upload failures stay visible with retry; system selfie captions are not treated as photo asks",
+        "Diag outbox flush is on the watchdog so source-mode instances also re-upload after network recovery",
+        "Persona studio half-wired render and support-note encoding fixed at the root"
+      ]
+    }
+  },
+  {
     "version": "1.0.85",
     "date": "2026-09-13",
     "title": {
