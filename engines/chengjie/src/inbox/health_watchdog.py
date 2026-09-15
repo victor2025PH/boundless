@@ -1252,6 +1252,15 @@ class HealthWatchdog:
             self._check_frontend_errors()
         except Exception:
             logger.debug("前端脚本错误巡检异常（已忽略）", exc_info=True)
+
+        # 报障 outbox 补传兜底：原只挂在 hosted_gateway 的每小时刷新轮上，而该轮
+        # 只在托管/桌面版启动（_wants_hosted）——源码态 / 自建服实例的「网络恢复后
+        # 自动补传」从未跑过（2026-09-16 zhiliao 实锤：坏件躺 8h 无人补传）
+        try:
+            self._check_diag_outbox()
+        except Exception:
+            logger.debug("报障 outbox 补传巡检异常（已忽略）", exc_info=True)
+
         # 托管代理生命周期（一键代理 P2）：自动续期 / 到期回收 / 低库存预警——
         # 缺这一环＝「代理过期了坐席还在用它登号」（连接莫名失败，排查成本极高）
         try:
@@ -3001,6 +3010,35 @@ class HealthWatchdog:
             "前端脚本错误巡检：%d 个坏符号被踩 %d 次，Top=%s",
             len(items), sum(items.values()),
             "; ".join(f"{k}×{v}" for k, v in top[:3]))
+
+    _DIAG_OUTBOX_INTERVAL_SEC = 3600.0
+
+    def _check_diag_outbox(self, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """报障 outbox 补传（每小时一次，有暂存件才动）——所有版本都跑的兜底。
+
+        `hosted_gateway.refresh_once` 里那条补传只对托管/桌面版生效（刷新守护由
+        `_wants_hosted` 闸住），源码态实例的暂存件只能等「下一次成功上传顺手补传」。
+        这里读同一份 outbox、调同一个 `flush_diag_outbox`（单一实现），只补「谁来触发」。
+        目录为空零开销；任何异常吞掉。返回 flush 结果（测试/观测用）。
+        """
+        ts = float(now if now is not None else time.time())
+        last = float(getattr(self, "_diag_outbox_last_ts", 0.0) or 0.0)
+        if ts - last < self._DIAG_OUTBOX_INTERVAL_SEC:
+            return {}
+        self._diag_outbox_last_ts = ts
+        try:
+            from src.utils.diag_upload import flush_diag_outbox, list_staged, resolve_diag_dirs
+            _, logs_dir = resolve_diag_dirs(self._config_manager)
+            if not list_staged(logs_dir):
+                return {"sent": 0, "dropped": 0, "remaining": 0}
+            out = flush_diag_outbox(self._config_manager)
+        except Exception:
+            logger.debug("报障 outbox 补传失败（忽略）", exc_info=True)
+            return {}
+        if out.get("sent") or out.get("dropped"):
+            logger.info("[diag] 看门狗 outbox 补传：sent=%s dropped=%s remaining=%s",
+                        out.get("sent"), out.get("dropped"), out.get("remaining"))
+        return out
 
     def _check_draft_backlog(self, *, now: Optional[float] = None) -> None:
         """待审草稿长期无人处理 → 主动轰人（补 SLA 告警的 **L1 盲区**）。
