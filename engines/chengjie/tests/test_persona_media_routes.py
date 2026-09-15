@@ -370,9 +370,14 @@ def test_reject_empty_file_is_structured(client):
     _assert_reject(_upload(client, data=b""), 400, "empty_file")
 
 
-def test_reject_paths_leave_a_server_log_line(client, caplog):
-    """4HK54G：被拒的上传此前在服务端**零痕迹**（raise 在成功日志之前）。现在每条拒绝一行。"""
+def test_reject_paths_leave_a_server_log_line(client, caplog, monkeypatch):
+    """4HK54G：被拒的上传此前在服务端**零痕迹**（raise 在成功日志之前）。现在每条拒绝一行。
+
+    Q-40 B：本机有 pillow-heif 时 1 字节 HEIC 会先走解码 → bad_content；本例钉的是
+    「扩展名拒绝也落一行」，故关掉后端兜底，与 test_reject_ext_not_allowed_is_structured 同口径。
+    """
     import logging as _logging
+    monkeypatch.setattr(pmr, "_heif_available", lambda: False)
     with caplog.at_level(_logging.INFO, logger="ai_chat_assistant.persona_media_routes"):
         _upload(client, name="x.heic", data=b"\x00")
     lines = [r.getMessage() for r in caplog.records if "上传拒绝" in r.getMessage()]
