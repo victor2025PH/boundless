@@ -129,6 +129,21 @@ def _translate_hold_message(item: Dict[str, Any]) -> str:
                 "人设默认），已转人工确认，不自动投递（D-M3）")
     if reason:
         tgt = str((hold or {}).get("target") or "-")
+        # Q-39 B（#326）：引擎没回话族（ai:empty / timeout / provider_unavailable）已走
+        # 同引擎重试 + 换引擎 + 目标语重起草三步——文案说人话 + 指路「重试翻译」
+        try:
+            attempts = int((hold or {}).get("attempts") or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        try:
+            from src.inbox.xlate_hold_marker import is_engine_silent as _silent
+            silent = bool(_silent(reason))
+        except Exception:
+            silent = False
+        if silent:
+            return (f"translate_hold:{reason}: 翻译引擎没回话（target={tgt}，已试 "
+                    f"{max(attempts, 1)} 次）· 这条没发 · 会话头点「重试翻译」补投"
+                    "（不发原文）")
         return (f"translate_hold:{reason}: 翻译失败待确认（target={tgt}），"
                 "已拦截不发原文（无兜底纪律）")
     return "translate_hold: 出站翻译不可用，已拦截（无兜底纪律，不发原文）"
@@ -1622,6 +1637,25 @@ class AutosendWorker:
         }
         return await self._deliver_now(item, stage="human")
 
+    async def deliver_retranslate(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """Q-39 B（#326）：坐席点「重试翻译」——把 ``translate_hold`` 扣住的稿**再过一次出站翻译链**
+        后投递（``POST /api/unified-inbox/drafts/{id}/retranslate``）。
+
+        与人工通过链的差别：``origin`` 不标 manual（稿是 AI 的中文原文，**必须**再译，
+        ``translate_outbound_text`` 的重试 / 重起草 / HOLD 纪律原样生效）；成功标 sent_at、
+        失败原样回 ``translate_hold:*`` 文案给前端 toast。不进 recoverable 重试队列。
+        """
+        item = {
+            "draft_id": str(draft.get("draft_id") or ""),
+            "conversation_id": str(draft.get("conversation_id") or ""),
+            "platform": str(draft.get("platform") or ""),
+            "account_id": str(draft.get("account_id") or "default"),
+            "chat_key": str(draft.get("chat_key") or ""),
+            "text": str(draft.get("final_text") or draft.get("draft_text") or "").strip(),
+            "_retranslate": True,
+        }
+        return await self._deliver_now(item, stage="retranslate")
+
     # ── Q-23（#303）stage=soft_reply：守卫触发的自动软回应单一出口 ─────────────
 
     def _soft_reply_own_hold(self, conv: str) -> bool:
@@ -1785,8 +1819,11 @@ class AutosendWorker:
         send_cb = self._human_send_callback or self._send_callback
         if send_cb is None or not item["text"] or not item["chat_key"]:
             return {"ok": False, "error": "no_send_path_or_empty"}
-        _human = stage == "human"
-        _label = "人工通过草稿" if _human else "软回应"
+        # Q-39 B：stage="retranslate"（坐席点「重试翻译」补投 translate_hold 稿）按人工通过口径
+        # 记 sent_at / 失败审计 / 铃铛，只换计数器与日志前缀。
+        _retx = stage == "retranslate"
+        _human = stage == "human" or _retx
+        _label = ("重试翻译补投" if _retx else ("人工通过草稿" if _human else "软回应"))
         # B41 投递幂等钉：人工通过与自动链共用同一登记表——同稿在途/已投过
         # 一律拒（resolve 的状态 CAS 只保「处置一次」，这里保「出门一次」）。
         _claim_err = self._deliver_once.claim(
@@ -1837,7 +1874,10 @@ class AutosendWorker:
                 raise RuntimeError(str(
                     res.get("error") or res.get("blocked") or "send not ok"))
             _delivered_ok = True
-            if _human:
+            if _retx:
+                self.total_retranslate_delivered = int(
+                    getattr(self, "total_retranslate_delivered", 0) or 0) + 1
+            elif _human:
                 self.total_human_delivered += 1
             else:
                 self.total_soft_reply_delivered += 1

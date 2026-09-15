@@ -528,6 +528,128 @@ class TranslationService:
         self._log_xlate("engine", result)
         return result
 
+    # ── Q-39 B（#326 THBSHN，2026-09-15）：空串 / 超时可恢复重试 ─────────────────
+    #: ``translate()`` 返回的 error 属这些族 → 值得原地重试（引擎抖动，不是语种 / 内容问题）
+    RETRYABLE_ERRORS = ("empty", "timeout", "provider_unavailable", "translate_failed",
+                        "unavailable", "TimeoutError", "ReadTimeout", "ConnectTimeout",
+                        "ConnectionError", "ClientConnectorError", "ServerDisconnectedError")
+
+    @classmethod
+    def is_retryable_error(cls, err: str) -> bool:
+        """``ai:empty`` / ``ai:TimeoutError: …`` / ``provider_unavailable`` 这类瓶颈抖动 → True；
+        ``target_lang_mismatch`` / ``engine_refusal`` / ``unsupported_target`` / ``lang_unknown``
+        这类**内容 / 语种**判定 → False（重打同一句只会得到同一个答案）。"""
+        e = str(err or "").strip()
+        if not e:
+            return False
+        tail = e.split(":", 1)[1].strip() if ":" in e else e
+        for tok in cls.RETRYABLE_ERRORS:
+            if tail == tok or tail.startswith(tok) or e == tok:
+                return True
+        return False
+
+    def next_engine_after(self, failed_engine: str, target_lang: str) -> str:
+        """路由表（含 per_lang_order）里 ``failed_engine`` **之后**第一个可用且支持目标语的引擎名；
+        没有 → ""。``failed_engine`` 为空 / 不在表里 → 从头找第一个不同的可用引擎。"""
+        target = normalize_lang(target_lang) or self.default_target_lang
+        try:
+            seq = list(self._router._engines_for(target))
+        except Exception:
+            seq = list(getattr(self._router, "_engines", []) or [])
+        names = [str(getattr(e, "name", "") or "") for e in seq]
+        fe = str(failed_engine or "").strip().lower()
+        start = (names.index(fe) + 1) if fe in names else 0
+        for eng in seq[start:]:
+            name = str(getattr(eng, "name", "") or "")
+            if not name or name == fe or not getattr(eng, "available", False):
+                continue
+            try:
+                if hasattr(eng, "supports_target") and not eng.supports_target(target):
+                    continue
+            except Exception:
+                pass
+            return name
+        return ""
+
+    async def retry_once(
+        self,
+        text: str,
+        *,
+        target_lang: str = "",
+        source_lang: str = "",
+        style: str = "chat",
+        engine: str = "",
+    ) -> TranslationResult:
+        """**绕过 L1 负缓存 / 翻译记忆**，直打一次指定引擎（空 → 路由 failover）。
+
+        ``translate()`` 把失败态写进 60s 负缓存——2s 后原样重打只会命中那条缓存，「重试」
+        等于没试。本口径专给出站链的可恢复重试（Q-39 B）：成功结果照常写 L1 + 翻译记忆 +
+        成本 / 额度记账（与 translate 同口径），失败结果**不写缓存**（下一步换引擎不该被毒化）。
+        """
+        src_text = str(text or "")
+        target = normalize_lang(target_lang) or self.default_target_lang
+        source = normalize_lang(source_lang) or detect_language(src_text)
+        pref_engine = str(engine or "").strip().lower()
+        if not src_text.strip() or source == target:
+            return TranslationResult(src_text, src_text, source, target, True, provider="identity")
+        if not self._router.any_available():
+            return TranslationResult(src_text, src_text, source, target, False,
+                                     provider="none", error="provider_unavailable")
+        from src.ai.translation_engines import apply_glossary_mask, restore_protected
+
+        glossary_hint = self._glossary_hint(src_text)
+        hit_terms = {k: v for k, v in self._glossary_terms.items() if k and k in src_text}
+        masked, mapping = apply_glossary_mask(src_text, hit_terms, self._glossary_protect)
+        res = None
+        if pref_engine:
+            try:
+                res = await self._router.translate_with(
+                    pref_engine, masked, source_lang=source, target_lang=target,
+                    style=style, glossary_hint=glossary_hint)
+            except Exception as exc:  # noqa: BLE001
+                from src.ai.translation_engines import EngineResult
+                res = EngineResult("", pref_engine, False, f"{type(exc).__name__}: {exc}")
+        else:
+            res = await self._router.translate(
+                masked, source_lang=source, target_lang=target,
+                style=style, glossary_hint=glossary_hint)
+        eng_name = str(getattr(res, "engine", "") or pref_engine or "none")
+        if not res or not res.ok or not res.text:
+            err = str(getattr(res, "error", "") or "translate_failed")
+            if pref_engine and ":" not in err:
+                err = f"{eng_name}:{err}"
+            result = TranslationResult(src_text, src_text, source, target, False,
+                                       provider=eng_name, error=err)
+            self._log_xlate("retry", result)
+            return result
+        out = restore_protected(res.text, mapping)
+        try:
+            from src.ai.translation_confidence import looks_like_engine_refusal
+            if looks_like_engine_refusal(src_text, out):
+                result = TranslationResult(src_text, src_text, source, target, False,
+                                           provider=eng_name, error="engine_refusal")
+                self._log_xlate("retry", result)
+                return result
+        except Exception:
+            pass
+        result = TranslationResult(src_text, out or src_text, source, target, bool(out),
+                                   provider=eng_name)
+        try:
+            from src.ai.translation_confidence import translation_confidence
+            result.confidence = translation_confidence(src_text, out, target)
+        except Exception:
+            pass
+        key = self._cache_key(src_text, source, target, style, engine="")
+        self._cache_put(key, result)
+        try:
+            self._memory_put(key, result, style, engine=eng_name)
+            self._record_cost(src_text, out, source, target, engine=eng_name)
+            self._record_license_quota(src_text, tier="", provider=eng_name)
+        except Exception:
+            pass
+        self._log_xlate("retry", result)
+        return result
+
     # #176（2026-09-05 skuio 实录）：「Exactly」→「好的，请发送需要翻译的内容。」——
     # 0831 之前被 LLM 引擎写进翻译记忆的 meta 拒绝话术，每次命中记忆都原样吐出、
     # 永不重验（守卫只挂在引擎新译分支）。命中路径现在先过同一判据：坏条目当场

@@ -811,15 +811,115 @@ def parse_outbound_lang_gate_cfg(config: Any) -> Dict[str, Any]:
 
 
 def _mark_hold(item: Dict[str, Any], reason: str, *, target: str = "",
-               decided_by: str = "") -> None:
+               decided_by: str = "", attempts: int = 0) -> None:
     """把 HOLD 原因挂回 item（M-1 B #234）：worker 据此把失败原因写成
     ``translate_hold:<reason>``（lang_unknown → 客户语言未知转人工；其余 → 翻译失败
-    待确认），面板/审计/铃铛都能看到「为什么没发」。返回值仍是 None（旧调用方零变化）。"""
+    待确认），面板/审计/铃铛都能看到「为什么没发」。返回值仍是 None（旧调用方零变化）。
+    ``attempts``（Q-39 B #326）＝HOLD 前一共打了几次引擎（首发 + 重试），worker 文案「已重试 N 次」。"""
     try:
-        item["_xlate_hold"] = {"reason": str(reason or "hold"), "target": str(target or ""),
-                               "decided_by": str(decided_by or "")}
+        rec = {"reason": str(reason or "hold"), "target": str(target or ""),
+               "decided_by": str(decided_by or "")}
+        if int(attempts or 0) > 1:
+            rec["attempts"] = int(attempts)   # 只在真重试过时带（M-1 B 三键契约不动）
+        item["_xlate_hold"] = rec
     except Exception:
         pass
+
+
+# ── Q-39 B（#326 THBSHN，2026-09-15）：空串 / 超时可恢复重试 + 目标语重起草 ─────────
+# 实录：03:56 草稿中文、[lang-plan] reply=en，[xlate] provider=none err=ai:empty → 直接 HOLD；
+# 03:53 同会话 deepseek timeout 31.6s，05:27 起翻译全好——一次抖动就把这条消息永远扣住。
+# 修法（不动「不发原文」纪律）：① 同引擎重试 1 次（间隔 gap_sec）→ ② 换路由表下一引擎 1 次
+# → ③ 仍空且会话全自动 → 按 lang-plan 目标语重起草一次（``redraft`` 回调由调用方注入）
+# → 三步都不行才 HOLD，并写 xlate_hold_marker 让状态带出人话 + 「重试翻译」。
+# ``lang_unknown`` / ``target_lang_mismatch`` / ``engine_refusal`` / ``cjk_residue`` 不重试
+# （语种 / 内容判定，重打同一句只会得到同一个答案）。
+
+
+def parse_xlate_retry_cfg(config: Any) -> Dict[str, Any]:
+    """``inbox.l2_autosend.translate.retry`` → ``{enabled, gap_sec, redraft}``（默认全开 / 2s）。
+    兼容 ``retry: false`` 布尔简写。"""
+    try:
+        tr = ((((config or {}).get("inbox") or {}).get("l2_autosend") or {})
+              .get("translate") or {}).get("retry", {})
+    except Exception:
+        tr = {}
+    if isinstance(tr, bool):
+        return {"enabled": tr, "gap_sec": 2.0, "redraft": tr}
+    if not isinstance(tr, dict):
+        tr = {}
+    try:
+        gap = float(tr.get("gap_sec", 2.0))
+    except (TypeError, ValueError):
+        gap = 2.0
+    return {"enabled": bool(tr.get("enabled", True)), "gap_sec": max(0.0, gap),
+            "redraft": bool(tr.get("redraft", True))}
+
+
+def is_retryable_xlate_error(err: str) -> bool:
+    """瓶颈抖动族（ai:empty / timeout / provider_unavailable / translate_exception…）→ True。"""
+    e = str(err or "").strip()
+    if not e:
+        return False
+    if e == "translate_exception":
+        return True
+    try:
+        from src.ai.translation_service import TranslationService
+        return bool(TranslationService.is_retryable_error(e))
+    except Exception:
+        tail = e.split(":", 1)[1].strip() if ":" in e else e
+        return any(tail.startswith(t) for t in (
+            "empty", "timeout", "Timeout", "provider_unavailable", "translate_failed",
+            "unavailable", "Connect", "Connection", "ServerDisconnected"))
+
+
+def _hold_marker_write(store: Any, cid: str, *, reason: str, target: str,
+                       draft_id: str, attempts: int, text: str = "") -> None:
+    try:
+        from src.inbox.xlate_hold_marker import mark as _mark
+        _mark(cid, reason=reason, target=target, draft_id=draft_id, attempts=attempts,
+              store=store, text=text)
+    except Exception:
+        logger.debug("[xlate] hold marker 写入失败（忽略）", exc_info=True)
+
+
+def _hold_marker_clear(store: Any, cid: str) -> None:
+    try:
+        from src.inbox.xlate_hold_marker import clear as _clear
+        _clear(cid, store=store)
+    except Exception:
+        logger.debug("[xlate] hold marker 清除失败（忽略）", exc_info=True)
+
+
+def _conv_is_auto(store: Any, cid: str) -> bool:
+    try:
+        if store is not None and cid and hasattr(store, "get_automation_mode"):
+            return str(store.get_automation_mode(cid) or "") == "auto_ai"
+    except Exception:
+        pass
+    return False
+
+
+def redraft_output_ok(new_text: str, target: str, *, detect: Any = None) -> bool:
+    """重起草产物能不能直接发：非空、目标非 CJK 时不得实质含 CJK、检测语种（可检时）须等于目标。"""
+    t = str(new_text or "").strip()
+    if not t:
+        return False
+    tgt = normalize_target(target)
+    if not tgt:
+        return False
+    if not lang_is_cjk(tgt) and cjk_substantial(t):
+        return False
+    if detect is not None:
+        try:
+            det = normalize_target(str(detect(t) or ""))
+        except Exception:
+            det = ""
+        if det and det not in _SKIP_TARGETS and det != tgt:
+            # 中文变体家族互认（zh-tw / yue 检测恒回 zh）
+            if not (det in _ZH_FAMILY_TARGETS and tgt in _ZH_FAMILY_TARGETS):
+                return False
+    return True
 
 
 def _log_decision(cid: str, target: str, decided_by: str, action: str,
@@ -851,9 +951,13 @@ async def translate_outbound_text(
     gate_only: bool = False,
     contacts_store: Any = None,
     cfg_root: Any = None,
+    redraft: Any = None,
 ) -> Optional[str]:
     """出站文本终态口：翻译 / 语言硬闸（``_translate_outbound_core``）→ **确定性去 AI 标点 /
     句式后处理**（O-1 B · #253 #254 · D-O2，``outbound_humanize``）。
+
+    ``redraft``（Q-39 B #326，可选）：``async (item, target_lang) -> str``——翻译三次都空且会话
+    全自动时按目标语重起草一次；缺省 None＝没有这一步（直接 HOLD）。
 
     后处理挂在这里的理由：autosend 自动链 / 人工通过链 / deferred（关怀·唤醒·冲刺）/
     主动触达 / 协议直发 / 收口点铆定修正——**所有 AI 出站都先过本函数**（pass_gate_only /
@@ -866,7 +970,7 @@ async def translate_outbound_text(
     out = await _translate_outbound_core(
         item, translation_service=translation_service, store=store,
         source_lang=source_lang, style=style, gate_only=gate_only,
-        contacts_store=contacts_store, cfg_root=cfg_root)
+        contacts_store=contacts_store, cfg_root=cfg_root, redraft=redraft)
     if out is None or not str(out).strip():
         return out
     try:
@@ -895,6 +999,7 @@ async def _translate_outbound_core(
     gate_only: bool = False,
     contacts_store: Any = None,
     cfg_root: Any = None,
+    redraft: Any = None,
 ) -> Optional[str]:
     """把一条待投递文本译成会话客户语言；记录出向译文映射。**自带「已是客户语言则跳过」护栏**。
 
@@ -998,6 +1103,8 @@ async def _translate_outbound_core(
     else:
         text_masked = text
 
+    _attempts = 1
+    _exc_failed = False
     try:
         res = await translation_service.translate(
             text_masked, target_lang=target, source_lang=eff_source, style=style,
@@ -1005,18 +1112,16 @@ async def _translate_outbound_core(
     except Exception:
         # 无兜底纪律（2026-08-17 老板拍板）：翻译失败一律 HOLD 不发——旧「非 CJK
         # 冲突回落发原文」拆除（发客户看不懂的原文＝静默替代品，掩盖翻译链故障）。
+        # Q-39 B：异常同属「引擎没回话」，先走下方同引擎 / 换引擎重试再 HOLD。
         logger.warning(
-            "[outbound_translate] 翻译调用失败 → HOLD 不发（无兜底纪律）"
+            "[outbound_translate] 翻译调用失败（先重试，仍败则 HOLD 不发）"
             "target=%s conv=%s", target, cid, exc_info=True)
-        _gate_record("held", conversation_id=cid, target=target)
-        _mark_hold(item, "translate_exception", target=target, decided_by=decided_by)
-        _report_block_safe(cid, target, "translate_exception")
-        _log_decision(cid, target, decided_by, "hold", "translate_exception")
-        return None
+        res = None
+        _exc_failed = True
 
     translated = str(getattr(res, "translated_text", "") or "")
     provider = str(getattr(res, "provider", "") or "")
-    err = str(getattr(res, "error", "") or "")
+    err = str(getattr(res, "error", "") or "") or ("translate_exception" if _exc_failed else "")
     ok = bool(getattr(res, "ok", False))
 
     # 失败 / 空 / 与原文相同（provider=identity/none 或未真译）/ 译文仍**实质性**含 CJK
@@ -1031,27 +1136,104 @@ async def _translate_outbound_core(
     _same_text_ok = (translated == text_masked
                      and target in _ZH_FAMILY_TARGETS
                      and (eff_source in _ZH_FAMILY_TARGETS or not eff_source))
-    degraded = (not ok or not translated
-                or (translated == text_masked and not _same_text_ok)
-                or (cjk_conflict and cjk_substantial(translated)))
+    def _usable(_t: str) -> bool:
+        return bool(_t) and not (_t == text_masked and not _same_text_ok) \
+            and not (cjk_conflict and cjk_substantial(_t))
+
+    degraded = (not ok or not translated or not _usable(translated))
+    _decided_action = "translated"
+    if degraded:
+        _why = (err or ("cjk_residue" if (cjk_conflict and cjk_substantial(translated))
+                        else "translate_degraded"))
+        # ── Q-39 B（#326）：可恢复族先重试，不改「不发原文」纪律 ──────────────
+        _rt = parse_xlate_retry_cfg(cfg_root)
+        _retryable = (_rt["enabled"] and (not ok or not translated)
+                      and is_retryable_xlate_error(_why)
+                      and hasattr(translation_service, "retry_once"))
+        if _retryable:
+            import asyncio as _aio
+            _failed_engine = provider if provider not in ("", "none", "identity", "license") else ""
+            _steps = [("same", _failed_engine)]
+            try:
+                _nxt = (translation_service.next_engine_after(_failed_engine, target)
+                        if hasattr(translation_service, "next_engine_after") else "")
+            except Exception:
+                _nxt = ""
+            if _nxt and _nxt != _failed_engine:
+                _steps.append(("next", _nxt))
+            for _step, _eng in _steps:
+                if _rt["gap_sec"] > 0 and _step == "same":
+                    try:
+                        await _aio.sleep(float(_rt["gap_sec"]))
+                    except Exception:
+                        pass
+                _attempts += 1
+                try:
+                    _r = await translation_service.retry_once(
+                        text_masked, target_lang=target, source_lang=eff_source,
+                        style=style, engine=_eng)
+                except Exception as _exc:  # noqa: BLE001
+                    logger.debug("[xlate] retry step=%s engine=%s 异常", _step, _eng, exc_info=True)
+                    err = f"{_eng or 'ai'}:{type(_exc).__name__}"
+                    continue
+                _t2 = str(getattr(_r, "translated_text", "") or "")
+                if bool(getattr(_r, "ok", False)) and _usable(_t2):
+                    translated, provider = _t2, str(getattr(_r, "provider", "") or _eng or "")
+                    ok, err, degraded = True, "", False
+                    logger.info(
+                        "[xlate] retry ok step=%s engine=%s attempt=%d conv=%s target=%s（首发 err=%s）",
+                        _step, provider or "-", _attempts, cid, target, _why)
+                    _decided_action = f"translated_retry_{_step}"
+                    break
+                err = str(getattr(_r, "error", "") or err or "translate_failed")
+                logger.info("[xlate] retry fail step=%s engine=%s attempt=%d err=%s conv=%s",
+                            _step, _eng or "-", _attempts, err, cid)
+            if degraded:
+                _why = err or _why
+        # ── ③ 仍空且全自动 → 按 lang-plan 目标语重起草一次（调用方注入 redraft）──
+        if degraded and _retryable and _rt["redraft"] and redraft is not None \
+                and str(item.get("origin") or "") not in ("manual", "human", "verbatim") \
+                and _conv_is_auto(store, cid):
+            try:
+                _new = str(await redraft(item, target) or "").strip()
+            except Exception:
+                logger.debug("[xlate] redraft 异常", exc_info=True)
+                _new = ""
+            if _new and redraft_output_ok(_new, target, detect=_detect):
+                logger.info("[xlate] redraft lang=%s reason=%s conv=%s attempts=%d",
+                            target, _why, cid, _attempts)
+                _log_decision(cid, target, decided_by, "redraft", _why)
+                _note_target(item, target, "redraft")
+                try:
+                    item["_xlate_redraft"] = {"reason": _why, "target": target}
+                except Exception:
+                    pass
+                _hold_marker_clear(store, cid)
+                return _new
+            if _new:
+                logger.info("[xlate] redraft 产物语种不合目标（target=%s）→ 弃用 conv=%s", target, cid)
     if degraded:
         # D-M3：校验失败（含 target_lang_mismatch / identity 回显 / 引擎拒绝）一律拦下，
         # 原因挂回 item → worker 标「翻译失败待确认」，任何情况不发原文。
-        _why = (err or ("cjk_residue" if (cjk_conflict and cjk_substantial(translated))
-                        else "translate_degraded"))
         logger.warning(
-            "[outbound_translate] 译文不可用(provider=%s err=%s) → HOLD 不发"
+            "[outbound_translate] 译文不可用(provider=%s err=%s attempts=%d) → HOLD 不发"
             "（无兜底纪律）target=%s decided_by=%s conv=%s",
-            provider or "-", err or "-", target, decided_by or "-", cid)
+            provider or "-", err or "-", _attempts, target, decided_by or "-", cid)
         _gate_record("held", conversation_id=cid, target=target)
-        _mark_hold(item, _why, target=target, decided_by=decided_by)
+        _mark_hold(item, _why, target=target, decided_by=decided_by, attempts=_attempts)
         _report_block_safe(cid, target, err or "translate_degraded")
         _log_decision(cid, target, decided_by, "hold", _why)
+        # Q-39 B：状态带人话「翻译引擎没回话 · 这条没发 · 重试翻译」（xlate_hold_marker，
+        # 下一次同会话翻译成功即清）
+        _hold_marker_write(store, cid, reason=_why, target=target,
+                           draft_id=str(item.get("draft_id") or ""), attempts=_attempts,
+                           text=text)
         return None
     if _url_map:
         translated = _restore_urls(translated, _url_map)
-    _log_decision(cid, target, decided_by, "translated")
+    _log_decision(cid, target, decided_by, _decided_action)
     _note_target(item, target, "translated")
+    _hold_marker_clear(store, cid)
 
     if cjk_conflict and gate_only:
         # 硬闸救回（仅 gate_only 计数）：常规翻译模式下 CJK→客户语言是设计内的
@@ -1077,6 +1259,9 @@ __all__ = [
     "lang_is_cjk",
     "parse_outbound_lang_gate_cfg",
     "parse_outbound_translate_cfg",
+    "parse_xlate_retry_cfg",
+    "is_retryable_xlate_error",
+    "redraft_output_ok",
     "normalize_target",
     "peer_language_hint",
     "persona_default_lang",

@@ -2207,6 +2207,13 @@ _ADDITIONS_2026_09_12_ASR_CORRECTION = """
 """
 _BASELINE += _ADDITIONS_2026_09_12_ASR_CORRECTION
 
+# Q-39 B #326（2026-09-15，unified_inbox_send_routes.py）：translate_hold 稿一键「重试翻译」——
+# 状态带 xlate_hold 动作；只对带 xlate_hold_marker note 的会话草稿放行（409 否则），再过一遍出站翻译链后投递。
+_ADDITIONS_2026_09_15_Q39_RETRANSLATE = """
+/api/unified-inbox/drafts/{draft_id}/retranslate	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_15_Q39_RETRANSLATE
+
 
 def _parse_baseline():
     expected = set()

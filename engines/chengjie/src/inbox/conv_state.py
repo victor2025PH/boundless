@@ -59,20 +59,21 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 STATES = ("auto", "deferred", "held", "human", "manual",
-          "off_hours", "sidecar_down", "lang_unknown", "ai_fail")
+          "off_hours", "sidecar_down", "lang_unknown", "ai_fail", "xlate_hold")
 
-#: 判定顺序（前者命中即定案）
+#: 判定顺序（前者命中即定案）。``xlate_hold``（Q-39 B #326：出站翻译三步重试后仍 HOLD，
+#: 这条没发）排在 lang_unknown 之后、ai_fail 之前——稿已生成、卡在翻译，与「没生成」同级红。
 PRIORITY = ("manual", "held", "sidecar_down", "off_hours", "deferred",
-            "lang_unknown", "ai_fail", "human", "auto")
+            "lang_unknown", "xlate_hold", "ai_fail", "human", "auto")
 
 TONE = {
     "auto": "ok",
     "deferred": "warn", "off_hours": "warn", "lang_unknown": "warn",
-    "held": "danger", "sidecar_down": "danger", "ai_fail": "danger",
+    "held": "danger", "sidecar_down": "danger", "ai_fail": "danger", "xlate_hold": "danger",
     "manual": "muted", "human": "muted",
 }
 
-ACTIONS = ("resume", "ack", "retry", "confirm_pin", "none")
+ACTIONS = ("resume", "ack", "retry", "confirm_pin", "retranslate", "none")
 
 _AUTO_MODES = frozenset({"auto_ai"})
 _HUMAN_MODES = frozenset({"review", "multi_choice"})
@@ -360,6 +361,28 @@ def _src_album_miss(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]
         return None
 
 
+def _src_xlate_hold(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
+    """Q-39 B（#326）：出站翻译 HOLD note（``xlate_hold_marker``，24h 内有效）。同引擎重试 +
+    换引擎 + 重起草三步都没救回来才写；同会话下一次翻译成功即清。"""
+    try:
+        from src.inbox.xlate_hold_marker import (
+            DEFAULT_TTL_SEC, get as _get, hhmm as _hhmm, is_engine_silent,
+        )
+        rec = _get(cid, store=store, now=now, ttl_sec=DEFAULT_TTL_SEC) if store is not None else None
+        if not rec:
+            return None
+        ts = float(rec.get("ts") or 0.0)
+        reason = str(rec.get("reason") or "hold")
+        return {"reason": reason, "target": str(rec.get("target") or ""),
+                "draft_id": str(rec.get("draft_id") or ""),
+                "attempts": int(rec.get("attempts") or 0), "n": int(rec.get("n") or 1),
+                "ts": ts, "hhmm": _hhmm(ts), "ago_sec": round(max(0.0, now - ts), 0),
+                "engine_silent": bool(is_engine_silent(reason)),
+                "text": str(rec.get("text") or "")}
+    except Exception:
+        return None
+
+
 def _src_ai_fail(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
     try:
         from src.inbox.ai_fail_marker import get as _get, hhmm as _hhmm
@@ -401,6 +424,9 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         "lang_plan": _src_lang(store, cid) if is_auto else None,
         "ai_last_fail": _src_ai_fail(store, cid, ts_now),
     }
+    # Q-39 B（#326）：出站翻译 HOLD——与档位无关（人审档人工通过的稿同样会卡在翻译）。
+    # 不进 sources（Q-26 六源契约 + Q-30 两源由门禁钉死），单列 out["ext"]。
+    xh = _src_xlate_hold(store, cid, ts_now)
     out: Dict[str, Any] = {
         "cid": cid, "will_send": False, "state": "human", "tone": "muted",
         "reason_code": "", "reason_text_key": "inbox.cs.human", "until_ts": None,
@@ -409,6 +435,7 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     # Q-35 #306：旁注源＝相册无命中 note。**不参与状态判定**（AI 已改口照常回）、不进 sources
     # （六源契约不动），只进 out["notes"]；_set() 只更新状态键，notes 随任一分支原样带出。
     out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),) if n]
+    out["ext"] = {"xlate_hold": xh}
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",
              until_ts: Optional[float] = None, action: str = "none",
@@ -474,6 +501,15 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         return _set("lang_unknown", will_send=fb, reason_code="lang_unknown",
                     text_key="inbox.cs.lang_unknown" if fb else "inbox.cs.lang_unknown_l1",
                     reply_lang=lp.get("reply_lang") or None, via=lp.get("via"))
+    if xh:
+        # 「翻译引擎没回话 · 这条没发 · 重试翻译」——动作打 POST /api/unified-inbox/drafts/{id}/retranslate
+        return _set("xlate_hold", will_send=False, reason_code=str(xh["reason"]),
+                    text_key=("inbox.cs.xlate_hold" if xh["engine_silent"]
+                              else "inbox.cs.xlate_hold.other"),
+                    action="retranslate" if xh["draft_id"] else "none",
+                    reason=xh["reason"], target=xh["target"] or None, hhmm=xh["hhmm"],
+                    ago_sec=xh["ago_sec"], attempts=xh["attempts"], n=xh["n"],
+                    draft_id=xh["draft_id"] or None)
     af = src["ai_last_fail"]
     if af:
         return _set("ai_fail", will_send=False, reason_code=str(af["reason"]),

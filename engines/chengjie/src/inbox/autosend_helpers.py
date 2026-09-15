@@ -1449,6 +1449,36 @@ def build_autosend_translate_cb(assistant, web_app):
         _otx_src = _otx_cfg.get("source_lang") or "zh"
         _otx_style = _otx_cfg.get("style") or "chat"
 
+        async def _redraft_in_lang(item, target):
+            """Q-39 B（#326）：翻译三步都空 → 按 lang-plan 目标语让人设链**重起草一次**
+            （generate_persona_reply(reply_lang=target)，全套人设 / 守卫同门）。任何异常回空串。"""
+            try:
+                from src.inbox.normalizer import conv_id as _cidf_r
+                from src.inbox.persona_reply import (
+                    generate_persona_reply as _gpr, normalize_history as _nh,
+                )
+                _st_r = getattr(assistant, "inbox_store", None)
+                if _st_r is None:
+                    return ""
+                _plat = str(item.get("platform") or "")
+                _acct = str(item.get("account_id") or "default")
+                _ck = str(item.get("chat_key") or "")
+                _cid_r = str(item.get("conversation_id") or "") or _cidf_r(_plat, _acct, _ck)
+                _rows = _st_r.list_recent_messages(_cid_r, limit=20) or []
+                _hist, _last_in = _nh(_rows)
+                if not str(_last_in or "").strip():
+                    return ""
+                _res = await _gpr(
+                    app=web_app, platform=_plat, chat_key=_ck, last_inbound=_last_in,
+                    history=_hist, reply_lang=str(target or ""), conversation_id=_cid_r,
+                    account_id=_acct)
+                if not (isinstance(_res, dict) and _res.get("ok")):
+                    return ""
+                return str(_res.get("reply") or "").strip()
+            except Exception:
+                assistant.logger.debug("[xlate] redraft 失败（忽略）", exc_info=True)
+                return ""
+
         async def _autosend_translate(
             item, _src=_otx_src, _style=_otx_style, _go=_gate_only,
         ):
@@ -1472,7 +1502,8 @@ def build_autosend_translate_cb(assistant, web_app):
                 item, translation_service=_ts,
                 store=assistant.inbox_store,
                 source_lang=_src, style=_style, gate_only=_go,
-                contacts_store=_cstore, cfg_root=_cfg_root)
+                contacts_store=_cstore, cfg_root=_cfg_root,
+                redraft=_redraft_in_lang)   # Q-39 B：三步重试后按目标语重起草
             return _guard_translated_lang_mix(
                 assistant, str(item.get("text", "")), _out)
 

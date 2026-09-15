@@ -2602,3 +2602,58 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             except Exception:
                 logger.debug("send-caps travel-state 探测跳过", exc_info=True)
         return out
+
+    # ── Q-39 B（#326 THBSHN，2026-09-15）：translate_hold 稿一键「重试翻译」 ────────────
+    @app.post("/api/unified-inbox/drafts/{draft_id}/retranslate")
+    async def api_unified_inbox_draft_retranslate(
+        draft_id: str, request: Request, _=Depends(api_auth),
+    ):
+        """状态带「翻译引擎没回话 · 这条没发 · 重试翻译」的动作：把被 ``translate_hold:*`` 扣住的
+        草稿**再过一次出站翻译链**（同引擎重试 / 换引擎 / 目标语重起草纪律原样）后投递。
+
+        **只对 hold 稿**：该会话必须有 ``xlate_hold_marker`` note（且 draft_id 一致或 note 没记
+        draft_id）——不是给任意草稿开的「再发一遍」口子（那是双发入口）。
+        返回 ``{ok, draft_id, conversation_id, delivered, error?, conv_state?}``；
+        翻译仍失败 → ``ok=False`` + ``translate_hold:*`` 原文案（前端 toast），note 保留。
+        """
+        did = str(draft_id or "").strip()
+        if not did:
+            raise HTTPException(400, tr(request, "err.ws.field_required", field="draft_id"))
+        store = _inbox_store(request)
+        if store is None or not hasattr(store, "get_draft"):
+            raise HTTPException(503, tr(request, "err.ws.inbox_persistence_disabled"))
+        draft = store.get_draft(did)
+        if not draft:
+            raise HTTPException(404, tr(request, "err.draft.not_found"))
+        cid = str(draft.get("conversation_id") or "")
+        from src.inbox import xlate_hold_marker as _xhm
+        note = _xhm.get(cid, store=store) if cid else None
+        if not note or (str(note.get("draft_id") or "") and str(note.get("draft_id")) != did):
+            # 409 而不是 404：稿在，只是它不是被翻译扣住的那条（或已经补投成功清了 note）
+            raise HTTPException(409, tr(request, "err.inbox.retranslate_not_on_hold"))
+        worker = getattr(request.app.state, "autosend_worker", None)
+        if worker is None or not hasattr(worker, "deliver_retranslate"):
+            raise HTTPException(503, tr(request, "err.inbox.retranslate_worker_missing"))
+        try:
+            operator = str(request.session.get("username", "web_admin"))
+        except Exception:
+            operator = "web_admin"
+        logger.info("[xlate] retranslate requested draft=%s conv=%s by=%s reason=%s",
+                    did, cid, operator, note.get("reason"))
+        res = await worker.deliver_retranslate(dict(draft))
+        ok = bool(isinstance(res, dict) and res.get("ok"))
+        out: Dict[str, Any] = {"ok": ok, "draft_id": did, "conversation_id": cid,
+                               "delivered": ok}
+        if not ok:
+            out["error"] = str((res or {}).get("error") or "retranslate_failed")
+        try:
+            from src.inbox.conv_state import compute as _cs_compute
+            _parts = cid.split(":", 2)
+            out["conv_state"] = _cs_compute(
+                store, cid, platform=(_parts[0] if len(_parts) > 1 else ""),
+                account_id=(_parts[1] if len(_parts) > 1 else ""), worker=worker,
+                config=(getattr(getattr(request.app.state, "config_manager", None),
+                                "config", None) or {}))
+        except Exception:
+            pass
+        return out

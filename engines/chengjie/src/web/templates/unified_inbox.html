@@ -6769,7 +6769,8 @@ window._ayResume=_ayResume;
    （颜色全在 unified-inbox.css 的 --tk-* 令牌，本块零内联色）。旧 ay-（让位倒计时）/ rk-·ad-（风控原因文案）/ aif-（重试起草）/
    ms-（七码人话 + 重试）改为本带的子渲染：文案函数复用它们的取词，动作复用它们的端点函数。每行带 cs- 前缀＝stage_hunks --mine 可切分。 */
 var _csState=null, _csCid='', _csTimer=null, _csBusy=false;
-var _CS_ACT_KEYS={ack:'inbox.cs.act.ack',resume:'inbox.cs.act.resume',confirm_pin:'inbox.cs.act.confirm_pin'};
+var _CS_ACT_KEYS={ack:'inbox.cs.act.ack',resume:'inbox.cs.act.resume',confirm_pin:'inbox.cs.act.confirm_pin',
+  retranslate:'inbox.cs.act.retranslate'};   // Q-39 B #326（cs-）：xlate_hold → 「重试翻译」
 function _csKeyOr(k,fb){ var t=window.T(k); return (t&&t!==k)?t:(fb||''); }
 function _csHeldWhy(p){
   p=p||{}; var reason=String(p.reason_code||p.reason||'');
@@ -6789,6 +6790,7 @@ function _csParams(st){
   else if(s==='ai_fail'){ try{ p.reason=_aifReasonLabel(p.reason||st.reason_code); }catch(_){ p.reason=String(p.reason||st.reason_code||''); } p.hhmm=String(p.hhmm||'--:--'); }
   else if(s==='sidecar_down'){ var _csCode=String(p.code||st.reason_code||''); p.code=_csCode; try{ p.code_label=_msFailCodeLabel(_csCode)||_csCode; }catch(_){ p.code_label=_csCode; } p.n=Number(p.n||0); }
   else if(s==='lang_unknown'){ p.lang=String(p.reply_lang||'')||'—'; }
+  else if(s==='xlate_hold'){ p.reason=String(p.reason||st.reason_code||''); p.hhmm=String(p.hhmm||'--:--'); p.target=String(p.target||'')||'—'; }   // Q-39 B #326（cs-）
   return p;
 }
 function _csSentence(st){ var k=String(st.reason_text_key||('inbox.cs.'+st.state)); return window.Tf(k,_csParams(st)); }
@@ -6898,6 +6900,16 @@ async function _csAction(btn){
     else if(a==='resume'){ await _ayResume(); }
     else if(a==='confirm_pin'){ await setMessengerPin(String(c.account_id||''),btn); }
     else if(a==='retry'&&st.state==='ai_fail'){ _csSyncLegacy(true); await aifRetryDraft(); }
+    else if(a==='retranslate'){   // Q-39 B #326（cs-）：translate_hold 稿再过一遍翻译链补投
+      var _csDid=String(p.draft_id||''); if(!_csDid){ _toast(window.T('inbox.cs.retranslate_fail'),'#b91c1c'); }
+      else {
+        var _csR=await apiFetch('/api/unified-inbox/drafts/'+enc(_csDid)+'/retranslate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},{timeoutMs:60000});
+        var _csD={}; try{ _csD=await _csR.json(); }catch(_){ _csD={}; }
+        if(_csR.ok&&_csD&&_csD.ok){ _toast(window.T('inbox.cs.retranslate_ok'),'#16a34a'); try{ loadThread(c,true); }catch(_){} }
+        else { _toast(window.T('inbox.cs.retranslate_fail')+((_csD&&(_csD.detail||_csD.error))?(' · '+String(_csD.detail||_csD.error).slice(0,80)):''),'#b91c1c'); }
+        if(_csD&&_csD.conv_state){ _csSet(_csD.conv_state,c); }
+      }
+    }
     else if(a==='retry'&&st.state==='sidecar_down'){
       var mid=String(p.message_id||''); var row=(threadMsgs||[]).find(function(m){ return m&&String(m.message_id||'')===mid&&m._retryBody; });
       if(row){ await resendFailed(mid); }
