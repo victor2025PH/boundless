@@ -15048,11 +15048,17 @@ function _stageMedia(file){
   if(file.size>capMb*1024*1024){
     // 四分类②「超过上限」：文案带实际大小与上限；拦截落 renderer 日志（带 error 字样，
     // zl_collect 的 renderer 过滤词是 error/failed——没这两个词的 console 行值守根本看不到）
+    // Q-40 C：带平台名 + 「还差 Z MB」（与服务端 describe_over_cap 同口径），坐席一眼知道该压多少
     const sizeMb=(file.size/1048576).toFixed(1);
-    _toast(window.Tf('inbox.file.too_large_detail',{size:sizeMb,mb:capMb}),'#dc2626');
-    try{ console.warn('[media] rejected error=too_large name='+(file.name||'')+' size='+sizeMb+'MB cap='+capMb+'MB platform='+(selectedChat.platform||'')); }catch(_){}
+    const overMb=Math.max(0,file.size/1048576-capMb).toFixed(1);
+    const plat=(typeof PN!=='undefined'&&PN[selectedChat.platform])||selectedChat.platform||'';
+    _toast(window.Tf('inbox.media.too_large_over',{size:sizeMb,mb:capMb,over:overMb,plat:plat}),'#dc2626');
+    try{ console.warn('[media] rejected error=too_large name='+(file.name||'')+' size='+sizeMb+'MB cap='+capMb+'MB over='+overMb+'MB platform='+(selectedChat.platform||'')); }catch(_){}
     return;
   }
+  // Q-40 C：静图 >8MB 可选「压后发送」（长边 2560 / JPEG 0.82）——默认仍发原图，按钮在附件条上
+  const _mt=String(file.type||'').toLowerCase();
+  const canShrink=file.size>8*1048576&&(_mt==='image/jpeg'||_mt==='image/png'||_mt==='image/webp');
   if(_mediaQueue.length>=_MEDIA_QUEUE_MAX){ _toast(window.Tf('inbox.file.queued_n',{n:_mediaQueue.length}),'#b45309'); return; }
   const url=(file.type&&file.type.indexOf('image/')===0)?URL.createObjectURL(file):'';
   // cmid 在暂存时生成一次、随件终身（0902 钧机实锤：此前每次提交现造新键，后端重启
@@ -15062,7 +15068,8 @@ function _stageMedia(file){
   const ck=convKey(selectedChat);
   if(!_mediaQueues[ck]) _mediaQueues[ck]=_mediaQueue;
   _mediaQueue.push({file,url,id:'q'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),state:'queued',cmid:_newClientMsgId(),
-    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''},transcode:!!vf.transcode});
+    convKey:ck,target:{platform:selectedChat.platform||'',name:selectedChat.name||selectedChat.chat_key||''},transcode:!!vf.transcode,
+    capMb:capMb,canShrink:canShrink,origSize:file.size});
   _syncPendingMedia();
   _renderMediaBar();
   if(vf.transcode) _toast(window.Tf('inbox.media.will_transcode_toast',{ext:vf.ext.toUpperCase()}),'#0f9d75');
@@ -15077,8 +15084,16 @@ function _mediaItemHtml(it){
   // M-3 D 四分类：格式 / 上限 / 后端明确失败 / 无响应（无响应再按「重试中 · 后台在但没发出去 ·
   // 重启窗 · 结果未知」四态措辞）；串会话拦截（#228）单列。
   let sub;
+  let shrinkBtn='';
   if(it.state!=='failed'){
-    sub=_fmtBytes(it.file.size)+(it.transcode&&it.state!=='sending'?(' · '+window.T('inbox.media.will_transcode')):'');
+    // Q-40 C：第一行写「本会话最多 N MB（LINE）」——数字来自 send-caps.video_max_mb / media_max_mb
+    // （与服务端 413 同一函数），按文件类别；已压过的标「已压缩 X→Y」
+    const capMb=Number(it.capMb||_mediaCapMb(it.file)||0);
+    const plat=(typeof PN!=='undefined'&&PN[(it.target||{}).platform])||(it.target||{}).platform||'';
+    const capTxt=capMb>0?(' · '+window.Tf('inbox.media.cap_hint',{mb:capMb,plat:plat})):'';
+    const shrunk=(it.shrunk&&it.origSize)?(' · '+window.Tf('inbox.media.shrunk',{from:_fmtBytes(it.origSize),to:_fmtBytes(it.file.size)})):'';
+    sub=_fmtBytes(it.file.size)+shrunk+capTxt+(it.transcode&&it.state!=='sending'?(' · '+window.T('inbox.media.will_transcode')):'');
+    if(it.canShrink&&!it.shrunk&&it.state==='queued') shrinkBtn=`<button type="button" class="tiny-btn mpi-shrink" data-mpi-shrink="${it.id}" onclick="_mediaShrinkItem('${it.id}')" title="${esc(window.T('inbox.media.shrink_send_title'))}">${esc(window.T('inbox.media.shrink_send'))}</button>`;
   } else if(it.errClass==='format'){ sub=window.T('inbox.media.err_format_hint');
   } else if(it.errClass==='too_large'){ sub=window.T('inbox.media.err_too_large_hint');
   } else if(it.errClass==='wrong_conv'){ sub=window.Tf('inbox.media.wrong_conv_hint',{target:_mediaTargetLabel(it)});
@@ -15090,10 +15105,40 @@ function _mediaItemHtml(it){
   const cls=(it.state==='sending'?' sending':'')+(it.state==='failed'?(' failed'+(it.netFail?' unknown':'')):'');
   return `<span class="mpb-item${cls}" data-mpi="${it.id}">${img}`
     +`<span class="mpi-meta"><span class="mpi-name" title="${esc(it.file.name||'')}">${esc(it.file.name||window.T('inbox.media.file_default'))}</span>`
-    +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span></span>`
+    +`<span class="mpi-sub" data-mpi-sub="${it.id}">${esc(sub)}</span>${shrinkBtn}</span>`
     +`<button type="button" class="mpi-x" data-mpi-x="${it.id}" title="${window.T('inbox.file.remove')}">\u2715</button>`
     +`<span class="mpi-prog" data-mpi-prog="${it.id}"></span></span>`;
 }
+// Q-40 C（随 _mediaItemHtml）：「压后发送」——静图 >8MB 一键压到长边 2560 / JPEG 0.82 再发（PNG 保 PNG 留透明）。
+// 只换队列里这一件的 File，cmid / 归属不变；解码或编码失败保持原图并提示，绝不吞文件。
+async function _mediaShrinkItem(id){
+  const it=_mediaQueue.find(x=>x.id===id);
+  if(!it||it.state!=='queued'||it.shrunk) return;
+  const f=it.file;
+  try{
+    let bm=null;
+    try{ bm=await createImageBitmap(f); }catch(_){ bm=null; }
+    if(!bm) throw new Error('decode');
+    const w=bm.width,h=bm.height,edge=Math.max(w,h),scale=edge>2560?2560/edge:1;
+    const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(w*scale)); cv.height=Math.max(1,Math.round(h*scale));
+    cv.getContext('2d').drawImage(bm,0,0,cv.width,cv.height);
+    try{ if(bm.close) bm.close(); }catch(_){}
+    const isPng=String(f.type||'').toLowerCase()==='image/png';
+    const mime=isPng?'image/png':'image/jpeg';
+    const blob=await new Promise(res=>{ try{ cv.toBlob(res,mime,0.82); }catch(_){ res(null); } });
+    if(!blob||!blob.size||blob.size>=f.size) throw new Error('nogain');
+    const name=String(f.name||'image').replace(/\.[^.]+$/,'')+(isPng?'.png':'.jpg');
+    it.file=new File([blob],name,{type:mime,lastModified:f.lastModified||Date.now()});
+    it.shrunk=true;
+    if(it.url){ try{ URL.revokeObjectURL(it.url); }catch(_){} it.url=URL.createObjectURL(it.file); }
+    try{ console.info('[media] shrunk name='+(f.name||'')+' from='+f.size+' to='+it.file.size+' scale='+scale.toFixed(3)); }catch(_){}
+  }catch(e){
+    _toast(window.T('inbox.media.shrink_fail'),'#b45309');
+    try{ console.warn('[media] shrink failed error='+((e&&e.message)||e)+' name='+(f.name||'')); }catch(_){}
+  }
+  _renderMediaBar();
+}
+window._mediaShrinkItem=_mediaShrinkItem;
 function _renderMediaBar(){
   const bar=document.getElementById('media-preview-bar');
   if(!bar) return;
@@ -15189,7 +15234,9 @@ function _xhrSendMedia(item,caption,chatArg){
       xhr.open('POST','/api/unified-inbox/send-media');
       body=fd;
     }
-    xhr.timeout=300000;
+    // Q-40 C：超时随体积——max(300s, MB×3s)。视频回平台表后 LINE 100MB / TG 200MB 走慢网 5 分钟不够
+    //（固定 300s 在 200MB 上＝0.67MB/s 以下必超时→「结果未知」），3s/MB 兜住 0.33MB/s 的坐席网络。
+    xhr.timeout=Math.max(300000, Math.ceil(Number((item.file&&item.file.size)||0)/1048576)*3000);
     xhr.upload.onprogress=function(ev){
       if(!ev.lengthComputable) return;
       const pct=Math.round(ev.loaded/ev.total*100);

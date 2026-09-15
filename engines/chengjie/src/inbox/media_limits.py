@@ -48,11 +48,11 @@ PLATFORM_MEDIA_CAP_MB: Dict[str, int] = {
 _CAP_MIN_MB = 1
 _CAP_MAX_MB = 2048
 
-#: D-M5「先压后放」（M-3 A，2026-09-06）：视频在流式上传落地并过 12 次真机矩阵之前，
-#: 临时压到实测可用值 50MB（平台表 LINE 100 / TG 200 保留不动，只对 kind=video 取
-#: min）。运营可用 ``inbox.media.video_limit_mb`` 覆写；写 0 / 负数＝不压（回到平台表）。
-#: 放回时机：M-6 拿到四平台 98MB 真机送达证据后把本默认改回 0。
-DEFAULT_VIDEO_CAP_MB = 50
+#: D-M5「先压后放」（M-3 A，2026-09-06）：视频在流式上传落地之前临时压到 50MB。
+#: **Q-40 C（2026-09-15）撤压顶 → 0**：裸流 + 超时随体积已在库，视频回平台表
+#: （LINE 100 / TG 200 / WA 64；messenger 不在表内仍 25，网页链路未实测不放开）。
+#: 运营仍可用 ``inbox.media.video_limit_mb`` 显式压某个数；0 / 负数＝不压。
+DEFAULT_VIDEO_CAP_MB = 0
 
 
 def video_cap_mb(config: Optional[Dict[str, Any]]) -> int:

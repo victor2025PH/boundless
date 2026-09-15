@@ -35,11 +35,12 @@ def _fake_video_bytes(size: int) -> bytes:
 
 # ─────────────────── 1. 上限同源：视频类临时压顶 ───────────────────
 
-def test_video_cap_pressed_to_50_by_default_only_for_video():
-    assert ML.DEFAULT_VIDEO_CAP_MB == 50
-    assert ML.media_cap_mb_for(None, "telegram", "video") == 50
-    assert ML.media_cap_mb_for(None, "line", "video") == 50
-    # 平台表本身低于 50 的不受影响（取 min）
+def test_video_cap_default_is_platform_table_since_q40():
+    """D-M5 临时压顶 50 → Q-40 C（2026-09-15）撤回 0：视频默认＝平台表；messenger 表外仍 25。"""
+    assert ML.DEFAULT_VIDEO_CAP_MB == 0
+    assert ML.media_cap_mb_for(None, "telegram", "video") == 200
+    assert ML.media_cap_mb_for(None, "line", "video") == 100
+    assert ML.media_cap_mb_for(None, "whatsapp", "video") == 64
     assert ML.media_cap_mb_for(None, "messenger", "video") == 25
     # 非视频类＝平台上限原值
     assert ML.media_cap_mb_for(None, "telegram", "image") == 200
@@ -52,7 +53,8 @@ def test_video_cap_config_override_and_disable():
     assert ML.media_cap_mb_for(cfg, "whatsapp", "video") == 64   # 平台 64 < 80
     off = {"inbox": {"media": {"video_limit_mb": 0}}}
     assert ML.media_cap_mb_for(off, "telegram", "video") == 200  # 0＝不压，回平台表
-    assert ML.media_cap_mb_for({"inbox": {"media": {"video_limit_mb": "x"}}}, "telegram", "video") == 50
+    # 坏值 → 回缺省（Q-40 起缺省 0＝不压）
+    assert ML.media_cap_mb_for({"inbox": {"media": {"video_limit_mb": "x"}}}, "telegram", "video") == 200
 
 
 # ─────────────────── 2. 2MB 全局闸：send-media 代码级豁免 ───────────────────
@@ -155,9 +157,14 @@ def test_multipart_upload_over_2mb_still_works(app_and_orch):
     assert len(fake.sent) == 1 and fake.sent[0]["size"] == len(data)
 
 
-def test_stream_upload_video_over_pressed_cap_is_413_with_real_size(app_and_orch):
-    """98MB 视频：Content-Length 一到手就 413，文案带实际大小与 50MB 上限；不落盘不投递。"""
+def test_stream_upload_video_over_pressed_cap_is_413_with_real_size(app_and_orch, monkeypatch):
+    """98MB 视频超上限：Content-Length 一到手就 413，文案带实际大小与上限；不落盘不投递。
+
+    Q-40 C 撤了 50MB 默认压顶（TG 视频回 200），这里用 ``video_limit_mb: 50`` 显式压回来验同一条路。
+    """
     app, fake = app_and_orch
+    monkeypatch.setitem(app.state.config_manager.config.setdefault("inbox", {}).setdefault("media", {}),
+                        "video_limit_mb", 50)
     size = 98 * 1024 * 1024
     data = _fake_video_bytes(size)
     with TestClient(app, raise_server_exceptions=True) as c:
@@ -223,7 +230,7 @@ def test_send_caps_exposes_same_source_keys(app_and_orch):
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["media_max_mb"] == 200
-    assert d["video_max_mb"] == 50
+    assert d["video_max_mb"] == 200   # Q-40 C：视频回平台表（TG 200）
     assert d["video_exts"] == [".mp4", ".webm"]
     assert d["media_stream_upload"] is True
     # ffmpeg 有无决定 transcode 表是否为空，但键必在
