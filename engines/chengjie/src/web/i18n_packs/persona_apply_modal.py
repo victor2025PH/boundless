@@ -170,6 +170,16 @@ ZH = {
     "pma_fr_auth": "登录已过期，请重新登录",
     "pma_fr_server": "服务端错误（HTTP {status}），可重试；连续失败请截图报障",
     "pma_fr_unknown": "未知原因",
+    # Q-40 #316 / #322：裸流上传进度 + 上限 / HEIC 人话 + 删除所选 + 页内灯箱
+    "pma_fr_too_large_detail": "太大：{size}MB 超过上限 {mb}MB（超出 {over}MB）",
+    "pma_fr_heic": "iPhone HEIC 这台电脑解不开——请在手机相册「分享 → 导出为 JPEG」或相机设置改「兼容性最好」后再传",
+    "pma_up_live_prep": "预处理中…",
+    "pma_up_live_server": "服务端处理中…",
+    "al_del_sel": "删除所选",
+    "al_del_sel_confirm": "删除选中的 {n} 项？文件会一并删除，不可恢复",
+    "al_del_sel_ok": "已删除 {n} 项",
+    "al_del_sel_fail": "已删除 {ok} 项，{fail} 项失败（已重新加载相册）",
+    "pma_lb_close": "关闭（Esc）",
 }
 
 EN = {
@@ -340,4 +350,14 @@ EN = {
     "pma_fr_auth": "session expired — sign in again",
     "pma_fr_server": "server error (HTTP {status}) — retry; if it keeps failing, screenshot and report",
     "pma_fr_unknown": "unknown reason",
+    # Q-40 #316 / #322: streamed upload progress + limit / HEIC wording + delete selected + in-page lightbox
+    "pma_fr_too_large_detail": "too large: {size}MB exceeds the {mb}MB limit (over by {over}MB)",
+    "pma_fr_heic": "iPhone HEIC cannot be decoded on this computer — in Photos use Share → Export as JPEG, or set Camera → Formats → Most Compatible, then upload again",
+    "pma_up_live_prep": "preparing…",
+    "pma_up_live_server": "processing on server…",
+    "al_del_sel": "Delete selected",
+    "al_del_sel_confirm": "Delete the {n} selected items? Files are removed too; this cannot be undone",
+    "al_del_sel_ok": "Deleted {n} items",
+    "al_del_sel_fail": "Deleted {ok}, {fail} failed (album reloaded)",
+    "pma_lb_close": "Close (Esc)",
 }

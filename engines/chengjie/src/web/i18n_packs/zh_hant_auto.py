@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-09-13 01:56:44 · OpenCC s2twp + 術語釘 · 17699 鍵（源 zh 全量 18045）
+生成: 2026-09-15 20:46:46 · OpenCC s2twp + 術語釘 · 17715 鍵（源 zh 全量 18115）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -235,6 +235,14 @@ ZH_HANT = {
     'al_count_confirmed': '已確認',
     # ── al_count_none ──
     'al_count_none': '無建議',
+    # ── al_del_sel ──
+    'al_del_sel': '刪除所選',
+    # ── al_del_sel_confirm ──
+    'al_del_sel_confirm': '刪除選中的 {n} 項？檔案會一併刪除，不可恢復',
+    # ── al_del_sel_fail ──
+    'al_del_sel_fail': '已刪除 {ok} 項，{fail} 項失敗（已重新載入相簿）',
+    # ── al_del_sel_ok ──
+    'al_del_sel_ok': '已刪除 {n} 項',
     # ── al_kind_food ──
     'al_kind_food': '美食',
     # ── al_kind_indoor ──
@@ -6322,6 +6330,7 @@ ZH_HANT = {
     'err.pmedia.ext_not_allowed': '不支援的檔案型別：{ext}（圖片支援 jpg/png/webp/gif，影片支援 mp4/mov/webm/m4v）',
     'err.pmedia.file_required': 'file（媒體檔案）必填',
     'err.pmedia.gate_not_writable': '配置寫入能力不可用，無法切換全域性發圖總閘',
+    'err.pmedia.heic_export_jpeg': '暫不能直接接收 {ext}（iPhone HEIC）：請在手機相簿「分享 → 匯出為 JPEG」或在設定裡改「相容性最好」後重新上傳',
     'err.pmedia.not_found': '媒體條目不存在',
     'err.pmedia.persona_not_found': '人設 {name} 不存在',
     'err.pmedia.save_failed': '媒體儲存失敗：{err}',
@@ -20602,6 +20611,8 @@ ZH_HANT = {
     'pma_fr_ext': '型別不支援（{ext}）——手機 HEIC 請先轉 JPG',
     # ── pma_fr_forbidden ──
     'pma_fr_forbidden': '只讀賬號不能上傳',
+    # ── pma_fr_heic ──
+    'pma_fr_heic': 'iPhone HEIC 這台電腦解不開——請在手機相簿「分享 → 匯出為 JPEG」或相機設定改「相容性最好」後再傳',
     # ── pma_fr_network ──
     'pma_fr_network': '網路中斷（可重試）',
     # ── pma_fr_server ──
@@ -20610,6 +20621,8 @@ ZH_HANT = {
     'pma_fr_timeout': '超時（網路慢或檔案太大，可重試）',
     # ── pma_fr_too_large ──
     'pma_fr_too_large': '太大（上限 {mb}MB）',
+    # ── pma_fr_too_large_detail ──
+    'pma_fr_too_large_detail': '太大：{size}MB 超過上限 {mb}MB（超出 {over}MB）',
     # ── pma_fr_too_long ──
     'pma_fr_too_long': '影片太長（上限 {sec} 秒）',
     # ── pma_fr_unknown ──
@@ -20656,6 +20669,8 @@ ZH_HANT = {
     'pma_guide_vision_retry': '服務恢復後點「AI 補標」即可補識別：',
     # ── pma_hits ──
     'pma_hits': '命中',
+    # ── pma_lb_close ──
+    'pma_lb_close': '關閉（Esc）',
     # ── pma_load_fail ──
     'pma_load_fail': '載入失敗：',
     # ── pma_loading ──
@@ -20764,6 +20779,10 @@ ZH_HANT = {
     'pma_up_fail_toggle_hide': '收起',
     # ── pma_up_first_face_toast ──
     'pma_up_first_face_toast': '第一批照片已上傳。建議先設定「錨臉基準照」，AI 識別會據此核對每張是否本人。',
+    # ── pma_up_live_prep ──
+    'pma_up_live_prep': '預處理中…',
+    # ── pma_up_live_server ──
+    'pma_up_live_server': '服務端處理中…',
     # ── pma_up_retry_btn ──
     'pma_up_retry_btn': '重試失敗項（{n}）',
     # ── pma_up_retry_gone ──

@@ -1485,6 +1485,16 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     .pma-up-result ul.pma-upr-list li{margin:.1rem 0;word-break:break-all}
     .pma-up-result ul.pma-upr-list li b{color:var(--t);font-weight:600}
     .pma-up-result .pma-upr-hint{font-size:.64rem;color:var(--t3,var(--t2));margin-top:.2rem}
+    /* Q-40 #316（pma-up-live）：逐文件上传进度行（XHR upload.onprogress）——挂在结果条顶部，传完即撤 */
+    .pma-up-result .pma-upr-live{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.15rem}
+    .pma-up-result .pma-upr-live progress{width:150px;height:8px;vertical-align:middle}
+    .pma-up-result .pma-upr-live b{color:var(--t);font-weight:600;max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    /* Q-40 #322（pma-lightbox）：大图 / 视频页内灯箱——不再 target=_blank 开独立窗口（桌面壳关窗连带退出）；
+       Esc / 点遮罩 / ✕ 关，关灯箱不关抽屉。z-index 高于 .drawer(901) 与吸顶条 */
+    .pma-lightbox{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:var(--th-bg-scrim60,rgba(0,0,0,.6));cursor:zoom-out}
+    .pma-lightbox img,.pma-lightbox video{max-width:92vw;max-height:86vh;border-radius:8px;background:var(--bg);box-shadow:0 8px 32px var(--th-bg-scrim45,rgba(0,0,0,.45));cursor:default}
+    .pma-lightbox .pma-lb-x{position:absolute;right:1rem;top:.8rem;width:2rem;height:2rem;font-size:1.2rem;line-height:1;color:#fff;background:var(--th-bg-scrim45,rgba(0,0,0,.45));border:0;border-radius:999px;cursor:pointer}
+    .pma-lightbox .pma-lb-cap{position:absolute;left:0;right:0;bottom:.8rem;text-align:center;font-size:.72rem;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none}
     .pma-summary{font-size:.68rem;color:var(--t2);margin:.2rem 0;display:flex;gap:.5rem;flex-wrap:wrap}
     .al-counts{font-size:.68rem;color:var(--t2);margin:.15rem 0 .35rem;display:flex;gap:.55rem;flex-wrap:wrap;align-items:center}
     .al-counts b{color:var(--t1);font-weight:600}
@@ -3080,6 +3090,7 @@ async function pmaLoad() {
   const pid = _pmaPid();
   if (!pid || !body) return;
   body.innerHTML = window.T('pma_loading');
+  _pmaLoadCaps();   // Q-40：上传能力 / 上限预取（不等它；首次上传前 pmaUpload 会 await）
   try {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media');
     if (!r.ok) { body.textContent = window.T('pma_load_fail') + r.status; return; }
@@ -3503,30 +3514,8 @@ function _pmaRender(body, items, stats, photosOn, gate) {
       + '<span id="pma-count"></span>'
       + '</div>') : '')
     + '</div>';
-  let summary = '';
-  if (items.length) {
-    const totalHits = items.reduce((a, it) => a + (it.hits || 0), 0);
-    const counts = (typeof (_pmaState.counts) === 'object' && _pmaState.counts) ? _pmaState.counts : _alCountsFrom(items);
-    const noTrg = Number(counts.ai_suggest || 0) + Number(counts.none || 0);
-    summary = '<div class="pma-summary" style="' + dim + '"><span>🖼 ' + (stats.photo || 0) + '</span>'
-      + '<span>🎬 ' + (stats.video || 0) + '</span>'
-      + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span>'
-      + '</div>'
-      + '<div class="al-counts" id="al-counts" style="' + dim + '">'
-      + '<span>' + _pmaEsc(window.T('al_count_confirmed')) + ' <b>' + String(counts.confirmed || 0) + '</b></span>'
-      + '<span>' + _pmaEsc(window.T('al_count_ai')) + ' <b>' + String(counts.ai_suggest || 0) + '</b></span>'
-      + '<span>' + _pmaEsc(window.T('al_count_none')) + ' <b>' + String(counts.none || 0) + '</b></span>'
-      + (Number(counts.ai_suggest || 0) ? ('<button type="button" class="btn btn-xs btn-primary" id="al-adopt-all" onclick="_alAdoptAll()">'
-        + _pmaEsc(window.Tf('al_adopt_all', { n: String(counts.ai_suggest) })) + '</button>') : '')
-      + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
-      + (typeof ai.tagged === 'number' && items.length ? '<span id="pma-ai-cover">' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
-      + '</div>'
-      + '<div class="al-batch" id="al-batch" style="display:' + (Object.keys(_alSel).length ? 'flex' : 'none') + dim + '">'
-      + '<span id="al-sel-n">' + _pmaEsc(window.Tf('al_sel_n', { n: String(Object.keys(_alSel).length) })) + '</span>'
-      + '<input type="text" id="al-batch-trg" class="pma-in" placeholder="' + _pmaEsc(window.T('al_batch_ph')) + '" style="min-width:140px">'
-      + '<button type="button" class="btn btn-xs btn-primary" onclick="_alBatchAdd()">' + _pmaEsc(window.T('al_batch_add')) + '</button>'
-      + '</div>';
-  }
+  // Q-40 #322（pma-summary-wrap）：摘要 / 计数 / 批量条抽成 _pmaSummaryHtml，删图后只重绘这一块不整页 pmaLoad
+  const summary = '<div id="pma-summary-wrap">' + _pmaSummaryHtml(items, stats, dim) + '</div>';
   body.innerHTML = capbar + faceref + uploader + test + summary
     + '<div id="pma-grid-wrap" style="' + dim + '"></div>'
     + '<div id="pma-savebar"></div>';
@@ -3535,6 +3524,148 @@ function _pmaRender(body, items, stats, photosOn, gate) {
   _pmaRenderGrid();
   _pmaRenderSaveBar();
 }
+
+/* Q-40 #322（pma-summary-wrap）：相册摘要（🖼 🎬 ▶）+ 触发词计数 + 多选批量条（加触发词 / 删除所选）。
+   pmaDeleteItem / _alDeleteSelected 成功后只调 _pmaRefreshSummary() 重绘这一块，不整页 pmaLoad（此前删一张回顶）。 */
+function _pmaSummaryHtml(items, stats, dim) {
+  items = items || []; stats = stats || {}; dim = dim || '';
+  if (!items.length) return '';
+  const ai = (_pmaState && _pmaState.ai) || {};
+  const totalHits = items.reduce((a, it) => a + (it.hits || 0), 0);
+  const counts = (_pmaState && typeof (_pmaState.counts) === 'object' && _pmaState.counts) ? _pmaState.counts : _alCountsFrom(items);
+  const noTrg = Number(counts.ai_suggest || 0) + Number(counts.none || 0);
+  const nSel = Object.keys(_alSel).length;
+  return '<div class="pma-summary" style="' + dim + '"><span>🖼 ' + (stats.photo || 0) + '</span>'
+    + '<span>🎬 ' + (stats.video || 0) + '</span>'
+    + '<span>▶ ' + totalHits + ' ' + window.T('pma_hits') + '</span>'
+    + '</div>'
+    + '<div class="al-counts" id="al-counts" style="' + dim + '">'
+    + '<span>' + _pmaEsc(window.T('al_count_confirmed')) + ' <b>' + String(counts.confirmed || 0) + '</b></span>'
+    + '<span>' + _pmaEsc(window.T('al_count_ai')) + ' <b>' + String(counts.ai_suggest || 0) + '</b></span>'
+    + '<span>' + _pmaEsc(window.T('al_count_none')) + ' <b>' + String(counts.none || 0) + '</b></span>'
+    + (Number(counts.ai_suggest || 0) ? ('<button type="button" class="btn btn-xs btn-primary" id="al-adopt-all" onclick="_alAdoptAll()">'
+      + _pmaEsc(window.Tf('al_adopt_all', { n: String(counts.ai_suggest) })) + '</button>') : '')
+    + (noTrg ? '<span style="color:var(--th-ink-amber7,#b45309);cursor:pointer" onclick="_pmaSetFilter(\'notrg\')">⚠ ' + _pmaEsc(window.Tf('pma_notrg_n', { n: String(noTrg) })) + '</span>' : '')
+    + (typeof ai.tagged === 'number' && items.length ? '<span id="pma-ai-cover">' + _pmaEsc(window.Tf('pma_ai_cover', { done: String(ai.tagged), total: String(items.length) })) + '</span>' : '')
+    + '</div>'
+    + '<div class="al-batch" id="al-batch" style="display:' + (nSel ? 'flex' : 'none') + dim + '">'
+    + '<span id="al-sel-n">' + _pmaEsc(window.Tf('al_sel_n', { n: String(nSel) })) + '</span>'
+    + '<input type="text" id="al-batch-trg" class="pma-in" placeholder="' + _pmaEsc(window.T('al_batch_ph')) + '" style="min-width:140px">'
+    + '<button type="button" class="btn btn-xs btn-primary" onclick="_alBatchAdd()">' + _pmaEsc(window.T('al_batch_add')) + '</button>'
+    + '<button type="button" class="btn btn-xs btn-danger" id="al-del-sel" onclick="_alDeleteSelected()">🗑 ' + _pmaEsc(window.T('al_del_sel')) + '</button>'
+    + '</div>';
+}
+function _pmaRefreshSummary() {
+  const wrap = document.getElementById('pma-summary-wrap');
+  if (!wrap || !_pmaState) return;
+  _pmaState.counts = _alCountsFrom(_pmaState.items || []);
+  const dim = _pmaState.photosOn ? '' : ' opacity:.55';
+  wrap.innerHTML = _pmaSummaryHtml(_pmaState.items || [], _pmaState.stats || {}, dim);
+  const badge = document.getElementById('pe-album-badge');
+  if (badge) { const t = Number((_pmaState.stats || {}).total || 0); badge.textContent = t ? '(' + t + ')' : ''; }
+  const cnt = document.getElementById('pma-count');
+  if (cnt) {
+    const shown = document.querySelectorAll('#pma-grid-wrap .pma-card').length;
+    cnt.textContent = window.Tf('pma_count_shown', { shown: String(shown), total: String((_pmaState.items || []).length) });
+  }
+  _pmaRenderGuide();
+}
+/* 删图成功：只摘卡片 + 改本地状态 + 刷计数，不整页重绘（#322 Q7HJDU「删一张回到顶部」）。
+   全删空 / 当前筛选下没剩卡片 → 只重绘网格（空态文案），滚动位置仍在原容器不回顶。 */
+function _pmaRemoveCards(ids) {
+  if (!_pmaState) return;
+  const gone = new Set((ids || []).map(String));
+  if (!gone.size) return;
+  const removed = (_pmaState.items || []).filter(function (x) { return gone.has(String(x.id)); });
+  _pmaState.items = (_pmaState.items || []).filter(function (x) { return !gone.has(String(x.id)); });
+  const st = _pmaState.stats || (_pmaState.stats = {});
+  removed.forEach(function (x) {
+    st.total = Math.max(0, Number(st.total || 0) - 1);
+    const k = x.media_type === 'video' ? 'video' : 'photo';
+    st[k] = Math.max(0, Number(st[k] || 0) - 1);
+  });
+  gone.forEach(function (mid) {
+    delete _alSel[mid]; delete _pmaEdits[mid];
+    const card = document.querySelector('.pma-card[data-mid="' + mid.replace(/"/g, '\\"') + '"]');
+    if (card) card.remove();
+  });
+  if (!(_pmaState.items || []).length || !document.querySelectorAll('#pma-grid-wrap .pma-card').length) _pmaRenderGrid();
+  _pmaRefreshSummary();
+  _pmaRenderSaveBar();
+}
+function _pmaScrollBox() {
+  const body = document.getElementById('pe-album-body');
+  return (body && body.closest && body.closest('.dpane')) || null;
+}
+/* 失败才整刷，且保住 scrollTop（整刷是为了让本地状态与服务端重新对齐，不是为了回顶） */
+async function _pmaReloadKeepScroll() {
+  const box = _pmaScrollBox();
+  const top = box ? box.scrollTop : 0;
+  await pmaLoad();
+  if (box) { try { box.scrollTop = top; } catch (e) {} }
+}
+async function _alDeleteSelected() {
+  const pid = _pmaPid();
+  const ids = Object.keys(_alSel);
+  if (!pid || !ids.length) return;
+  if (!confirm(window.Tf('al_del_sel_confirm', { n: String(ids.length) }))) return;
+  const okIds = []; let fail = 0;
+  for (const mid of ids) {
+    try {
+      const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid), { method: 'DELETE' }, { timeoutMs: 60000 });
+      if (r.ok || r.status === 404) okIds.push(mid); else fail++;
+    } catch (e) { fail++; }
+  }
+  if (okIds.length) _pmaRemoveCards(okIds);
+  try { console.info('[pma] delete-selected pid=' + pid + ' ok=' + okIds.length + ' fail=' + fail); } catch (e) {}
+  if (fail) { _toast(window.Tf('al_del_sel_fail', { ok: String(okIds.length), fail: String(fail) }), 'err'); await _pmaReloadKeepScroll(); }
+  else _toast(window.Tf('al_del_sel_ok', { n: String(okIds.length) }), 'info');
+}
+window._alDeleteSelected = _alDeleteSelected;
+
+/* Q-40 #322（pma-lightbox）：页内灯箱。此前卡片缩略图是 <a target=_blank>——桌面壳里弹独立窗口，
+   关窗会连带退出（4KV58W）。图片 / 视频都在本页遮罩里看；Esc / 点遮罩 / ✕ 关，只关灯箱不碰抽屉
+  （keydown 捕获相位截住 Esc，不落到 closeProfileEditor 那一层）。 */
+function _pmaLightbox(mid) {
+  const raw = ((_pmaState || {}).items || []).find(function (x) { return String(x.id) === String(mid); });
+  if (!raw || !raw.url) return false;
+  _pmaLightboxClose();
+  const box = document.createElement('div');
+  box.className = 'pma-lightbox'; box.id = 'pma-lightbox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  const isVid = raw.media_type === 'video';
+  const media = isVid ? document.createElement('video') : document.createElement('img');
+  media.src = String(raw.url);
+  if (isVid) { media.controls = true; media.autoplay = true; media.playsInline = true; }
+  else media.alt = String(raw.caption || '');
+  media.addEventListener('click', function (e) { e.stopPropagation(); });
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'pma-lb-x'; x.textContent = '✕'; x.title = window.T('pma_lb_close');
+  x.addEventListener('click', function (e) { e.stopPropagation(); _pmaLightboxClose(); });
+  const cap = document.createElement('div');
+  cap.className = 'pma-lb-cap';
+  const dims = (raw.width && raw.height) ? (raw.width + '×' + raw.height) : '';
+  const mb = raw.bytes ? (raw.bytes >= 1048576 ? (raw.bytes / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(raw.bytes / 1024)) + 'KB') : '';
+  cap.textContent = [(raw.triggers || []).join(', '), dims, mb].filter(Boolean).join(' · ');
+  box.appendChild(media); box.appendChild(x); box.appendChild(cap);
+  box.addEventListener('click', function () { _pmaLightboxClose(); });
+  document.body.appendChild(box);
+  return false;
+}
+function _pmaLightboxClose() {
+  const box = document.getElementById('pma-lightbox');
+  if (!box) return false;
+  try { const v = box.querySelector('video'); if (v) v.pause(); } catch (e) {}
+  box.remove();
+  return true;
+}
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'Escape') return;
+  if (!document.getElementById('pma-lightbox')) return;
+  e.stopPropagation(); e.preventDefault();
+  _pmaLightboxClose();
+}, true);
+window._pmaLightbox = _pmaLightbox;
+window._pmaLightboxClose = _pmaLightboxClose;
 
 function _pmaRenderGrid() {
   const wrap = document.getElementById('pma-grid-wrap');
@@ -3647,7 +3778,7 @@ function _pmaCard(raw) {
     + '</select>';
   const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><a href="' + url + '" target="_blank" rel="noopener" style="display:block">' + thumb + '</a>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><a href="' + url + '" class="pma-th-link" style="display:block" onclick="event.preventDefault();_pmaLightbox(' + midArg + ')">' + thumb + '</a>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips
@@ -3834,8 +3965,15 @@ function _pmaFailReasonText(rec) {
   rec = rec || {};
   const r = String(rec.reason || '');
   const stc = Number(rec.status || 0);
-  if (r === 'too_large') return window.Tf('pma_fr_too_large', { mb: String(rec.limit_mb || '?') });
-  if (r === 'ext_not_allowed') return window.Tf('pma_fr_ext', { ext: String(rec.ext || (rec.name || '').replace(/^.*(\.[^.]+)$/, '$1') || '?') });
+  const ext = String(rec.ext || (rec.name || '').replace(/^.*(\.[^.]+)$/, '$1') || '?');
+  if (r === 'too_large') {
+    // Q-40：知道实际大小就带「X MB 超过 Y MB（超出 Z）」（与聊天 413 同口径）
+    const sz = Number(rec.sent_size || rec.size || 0);
+    if (sz > 0 && rec.limit_mb) return window.Tf('pma_fr_too_large_detail', { size: (sz / 1048576).toFixed(1), mb: String(rec.limit_mb), over: String(rec.over_mb != null ? rec.over_mb : Math.max(0, sz / 1048576 - Number(rec.limit_mb)).toFixed(1)) });
+    return window.Tf('pma_fr_too_large', { mb: String(rec.limit_mb || '?') });
+  }
+  if (r === 'ext_not_allowed' && (rec.hint === 'export_jpeg' || /^\.hei[cf]$/i.test(ext))) return window.T('pma_fr_heic');
+  if (r === 'ext_not_allowed') return window.Tf('pma_fr_ext', { ext: ext });
   if (r === 'bad_content') return window.T('pma_fr_bad_content');
   if (r === 'too_long') return window.Tf('pma_fr_too_long', { sec: String(rec.max_sec || '?') });
   if (r === 'empty_file') return window.T('pma_fr_empty');
@@ -3852,8 +3990,16 @@ function _pmaRenderUploadResult() {
   const box = document.getElementById('pma-up-result');
   if (!box) return;
   const L = _pmaUpLast;
-  if (!L || !L.results || !L.results.length || String(L.pid) !== String(_pmaPid() || '')) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!L || !L.results || String(L.pid) !== String(_pmaPid() || '') || (!L.results.length && !L.live)) { box.style.display = 'none'; box.innerHTML = ''; return; }
   const fails = L.results.filter(function (x) { return !x.ok; });
+  // Q-40 #316（pma-up-live）：在途文件一行进度（XHR upload.onprogress）——「传到哪了」不用再猜
+  let live = '';
+  if (L.live) {
+    const lv = L.live;
+    const phase = lv.phase === 'prep' ? window.T('pma_up_live_prep') : (lv.phase === 'server' ? window.T('pma_up_live_server') : (window.T('pma_uploading') + ' ' + lv.pct + '%'));
+    live = '<div class="pma-upr-live"><span>' + _pmaEsc(lv.i + '/' + lv.total) + '</span><b title="' + _pmaEsc(lv.name) + '">' + _pmaEsc(lv.name) + '</b>'
+      + '<progress max="100" value="' + Number(lv.pct || 0) + '"></progress><span>' + _pmaEsc(phase) + '</span></div>';
+  }
   let head = '<span class="pma-upr-ok">✓ ' + _pmaEsc(window.Tf('pma_up_sum', { ok: String(L.ok) })) + '</span>';
   if (L.existed) head += '<span>' + _pmaEsc(window.Tf('pma_up_sum_existed', { n: String(L.existed) })) + '</span>';
   if (fails.length) {
@@ -3861,10 +4007,10 @@ function _pmaRenderUploadResult() {
       + '<button type="button" class="btn btn-xs" onclick="_pmaUpToggleFails()">' + _pmaEsc(window.T(L.open ? 'pma_up_fail_toggle_hide' : 'pma_up_fail_toggle')) + '</button>'
       + '<button type="button" class="btn btn-xs btn-primary" onclick="_pmaUpRetryFails()">' + _pmaEsc(window.Tf('pma_up_retry_btn', { n: String(fails.length) })) + '</button>';
   }
-  let html = '<div class="pma-upr-head">' + head + '</div>';
+  let html = live + '<div class="pma-upr-head">' + head + '</div>';
   if (fails.length && L.open) {
     html += '<ul class="pma-upr-list">' + fails.map(function (x) {
-      const kb = x.size ? ' · ' + (x.size >= 1048576 ? (x.size / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(x.size / 1024)) + 'KB') : '';
+      const kb = x.size ? ' · ' + _pmaFmtMb(x.size) + (x.sent_size && x.sent_size !== x.size ? ('→' + _pmaFmtMb(x.sent_size)) : '') : '';
       const code = (x.status ? 'HTTP ' + x.status : '') + (x.reason ? (x.status ? ' ' : '') + x.reason : '');
       return '<li><b>' + _pmaEsc(x.name || '?') + '</b>' + _pmaEsc(kb) + ' — ' + _pmaEsc(_pmaFailReasonText(x))
         + (code ? ' <span class="pma-status" title="' + _pmaEsc(x.detail || '') + '">(' + _pmaEsc(code) + ')</span>' : '') + '</li>';
@@ -3887,6 +4033,123 @@ async function _pmaUpRetryFails() {
 window._pmaUpToggleFails = _pmaUpToggleFails;
 window._pmaUpRetryFails = _pmaUpRetryFails;
 
+/* Q-40 #316（pma-caps）：相册上传能力 / 上限——GET /api/personas/media-caps（后端同一数字：photo_max_mb /
+   video_max_mb / video_max_sec / album_stream_upload / heic_backend）。旧后端 404 → {}：仍走 multipart、
+   不做前端体积预检（模板热更先于后端重启的中间态必须自洽）。 */
+var _pmaCaps = null;
+async function _pmaLoadCaps(force) {
+  if (_pmaCaps && !force) return _pmaCaps;
+  try {
+    const r = await apiFetch('/api/personas/media-caps', undefined, { timeoutMs: 8000 });
+    _pmaCaps = r.ok ? ((await r.json()) || {}) : {};
+  } catch (e) { _pmaCaps = {}; }
+  return _pmaCaps;
+}
+function _pmaFileExt(f) { const m = String((f && f.name) || '').match(/\.[a-z0-9]+$/i); return m ? m[0].toLowerCase() : ''; }
+function _pmaIsVideo(f) { return String((f && f.type) || '').indexOf('video/') === 0 || ['.mp4', '.mov', '.webm', '.m4v', '.avi', '.mkv', '.3gp'].indexOf(_pmaFileExt(f)) >= 0; }
+function _pmaIsHeic(f) { const t = String((f && f.type) || '').toLowerCase(); return t === 'image/heic' || t === 'image/heif' || ['.heic', '.heif'].indexOf(_pmaFileExt(f)) >= 0; }
+function _pmaFmtMb(n) { n = Number(n) || 0; return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; }
+// 解码成位图（Chromium 能解 HEIC 时也走这里）；不能解 → null
+async function _pmaDecodeBitmap(f) {
+  try {
+    if (typeof createImageBitmap === 'function') return await createImageBitmap(f);
+  } catch (e) { /* 回落 <img> */ }
+  return await new Promise(function (resolve) {
+    const url = URL.createObjectURL(f);
+    const im = new Image();
+    im.onload = function () { URL.revokeObjectURL(url); resolve(im); };
+    im.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+    im.src = url;
+  });
+}
+function _pmaBitmapSize(bm) { return { w: Number(bm.width || bm.naturalWidth || 0), h: Number(bm.height || bm.naturalHeight || 0) }; }
+// PNG 是否真用了透明：缩到 ≤128px 采样 alpha（不透明的 PNG 截图 >8MB 转 JPEG 才压得下来；有透明才保 PNG）
+function _pmaHasAlpha(bm) {
+  try {
+    const sz = _pmaBitmapSize(bm);
+    const s = Math.max(1, Math.ceil(Math.max(sz.w, sz.h) / 128));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.floor(sz.w / s)); cv.height = Math.max(1, Math.floor(sz.h / s));
+    const ctx = cv.getContext('2d');
+    if (!ctx) return true;
+    ctx.drawImage(bm, 0, 0, cv.width, cv.height);
+    const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    for (let i = 3; i < d.length; i += 4) { if (d[i] < 250) return true; }
+    return false;
+  } catch (e) { return true; }
+}
+async function _pmaCanvasEncode(bm, w, h, mime, q) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w)); cv.height = Math.max(1, Math.round(h));
+  const ctx = cv.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(bm, 0, 0, cv.width, cv.height);
+  const blob = await new Promise(function (resolve) { try { cv.toBlob(resolve, mime, q); } catch (e) { resolve(null); } });
+  try { if (bm.close) bm.close(); } catch (e) {}
+  return blob;
+}
+/* Q-40 B：选文件即预处理——
+   · HEIC/HEIF → canvas 解码转 JPEG 0.9（Chromium 不解 HEIC 时原样上送，后端 pillow-heif 兜底；都不行后端 400 写明导出 JPEG）；
+   · 静图长边 >4096 或体积 >8MB → 压一刀（长边 4096 / JPEG 0.85；PNG 保 PNG 留透明）再传，原图不落库；
+   · 视频 / GIF 不碰。返回 {file, note}；任何一步失败都回原文件（宁可让后端拒，不吞文件）。 */
+var _PMA_IMG_MAX_EDGE = 4096, _PMA_IMG_SHRINK_BYTES = 8 * 1048576;
+async function _pmaPrepareFile(f, caps) {
+  const out = { file: f, note: '' };
+  if (!f || _pmaIsVideo(f)) return out;
+  const ext = _pmaFileExt(f);
+  const heic = _pmaIsHeic(f);
+  if (ext === '.gif' && !heic) return out;
+  const big = Number(f.size || 0) > _PMA_IMG_SHRINK_BYTES;
+  // 静图一律解一次拿长边（createImageBitmap 只解头 + 位图，几十张也就秒级）；解不开的原样上送让后端判
+  let bm = null;
+  try { bm = await _pmaDecodeBitmap(f); } catch (e) { bm = null; }
+  if (!bm) { if (heic) out.note = 'heic_client_undecodable'; return out; }
+  const sz = _pmaBitmapSize(bm);
+  const edge = Math.max(sz.w, sz.h);
+  const needShrink = big || edge > _PMA_IMG_MAX_EDGE;
+  if (!heic && !needShrink) { try { if (bm.close) bm.close(); } catch (e) {} return out; }
+  const scale = edge > _PMA_IMG_MAX_EDGE ? _PMA_IMG_MAX_EDGE / edge : 1;
+  // PNG：真有透明才保 PNG（重编 PNG 体积基本不降）；不透明的 PNG 截图 >8MB → JPEG 0.85 才压得下来
+  const wasPng = !heic && (String(f.type || '').toLowerCase() === 'image/png' || ext === '.png');
+  const isPng = wasPng && _pmaHasAlpha(bm);
+  const mime = isPng ? 'image/png' : 'image/jpeg';
+  const q = heic ? 0.9 : 0.85;
+  let blob = null;
+  try { blob = await _pmaCanvasEncode(bm, sz.w * scale, sz.h * scale, mime, q); } catch (e) { blob = null; }
+  if (!blob || !blob.size) { if (heic) out.note = 'heic_client_undecodable'; return out; }
+  // 压完反而更大（已是高压缩 JPEG / 透明 PNG）且没缩边 → 不换，原图照发（后端上限兜底）
+  if (!heic && scale >= 1 && blob.size >= Number(f.size || 0)) return out;
+  const base = String(f.name || 'image').replace(/\.[^.]+$/, '');
+  const newName = base + (isPng ? '.png' : '.jpg');
+  try { out.file = new File([blob], newName, { type: mime, lastModified: f.lastModified || Date.now() }); }
+  catch (e) { blob.name = newName; out.file = blob; }
+  out.note = heic ? 'heic->jpeg' : ('shrunk ' + sz.w + 'x' + sz.h + '->' + Math.round(sz.w * scale) + 'x' + Math.round(sz.h * scale));
+  out.from = Number(f.size || 0); out.to = Number(blob.size || 0);
+  return out;
+}
+/* XHR 裸流上传：body 就是文件本体，元数据走 query；upload.onprogress 喂结果条；超时随体积 max(300s, MB×3s) */
+function _pmaXhrUpload(pid, file, meta, onprog) {
+  return new Promise(function (resolve, reject) {
+    const q = ['name=' + encodeURIComponent(file.name || 'file.bin')];
+    Object.keys(meta || {}).forEach(function (k) { if (meta[k] != null && meta[k] !== '') q.push(encodeURIComponent(k) + '=' + encodeURIComponent(meta[k])); });
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/personas/' + encodeURIComponent(pid) + '/media?' + q.join('&'));
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.timeout = Math.max(300000, Math.ceil(Number(file.size || 0) / 1048576) * 3000);
+    xhr.upload.onprogress = function (ev) { if (ev.lengthComputable && onprog) onprog(Math.round(ev.loaded / ev.total * 100)); };
+    xhr.onload = function () { let d = null; try { d = JSON.parse(xhr.responseText || 'null'); } catch (e) { d = null; } resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, d: d }); };
+    xhr.onerror = function () { const e = new Error('net'); e.name = 'NetworkError'; reject(e); };
+    xhr.ontimeout = function () { const e = new Error('timeout'); e.name = 'TimeoutError'; reject(e); };
+    xhr.onabort = function () { const e = new Error('abort'); e.name = 'AbortError'; reject(e); };
+    xhr.send(file);
+  });
+}
+function _pmaUpLive(i, total, name, pct, phase) {
+  if (!_pmaUpLast) return;
+  _pmaUpLast.live = { i: i, total: total, name: name, pct: pct, phase: phase };
+  _pmaRenderUploadResult();
+}
+
 async function pmaUpload(retryFiles) {
   const pid = _pmaPid();
   const inp = document.getElementById('pma-file');
@@ -3899,29 +4162,64 @@ async function pmaUpload(retryFiles) {
   const trg = trgEl ? trgEl.value : '';
   const wasEmpty = !(((_pmaState || {}).items || []).length);   // #238：首次上传 → 引导设锚脸
   const before = new Set(((_pmaState || {}).items || []).map(function (x) { return String(x.id); }));
+  const caps = await _pmaLoadCaps();
+  const stream = !!(caps && caps.album_stream_upload);
+  const photoCapMb = Number((caps && caps.photo_max_mb) || 0), videoCapMb = Number((caps && caps.video_max_mb) || 0);
   let ok = 0, fail = 0, existed = 0, tagQueued = 0, visionDown = '';
   const results = [];
   const total = files.length;
+  // 结果条从第一张就开始渲染（live 进度行），传完 live 撤掉只剩汇总
+  _pmaUpLast = { pid: pid, ts: Date.now(), results: results, ok: 0, fail: 0, existed: 0, open: false, live: null };
   let i = 0;
-  for (const f of files) {
+  for (const f0 of files) {
     i++;
-    if (st) st.textContent = window.T('pma_uploading') + ' ' + i + '/' + total + ' ' + f.name;
-    const fd = new FormData();
-    fd.append('file', f);
-    if (trg && trg.trim()) fd.append('triggers', trg.trim());
-    const rec = { name: String(f.name || ''), size: Number(f.size || 0), file: f, ok: false, existed: false, status: 0, reason: '', detail: '' };
+    if (st) st.textContent = window.T('pma_uploading') + ' ' + i + '/' + total + ' ' + f0.name;
+    const rec = { name: String(f0.name || ''), size: Number(f0.size || 0), file: f0, ok: false, existed: false, status: 0, reason: '', detail: '', ms: 0 };
+    const t0 = Date.now();
+    _pmaUpLive(i, total, rec.name, 0, 'prep');
+    let f = f0;
     try {
-      // 单文件可到 50M 视频 + 服务端 ffprobe/封面探针 → 5min 预算
-      const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media', { method: 'POST', body: fd }, { timeoutMs: 300000 });
+      const prep = await _pmaPrepareFile(f0, caps);
+      f = prep.file || f0;
+      if (prep.note) rec.prep = prep.note;
+      if (prep.to) { rec.sent_size = prep.to; }
+    } catch (e) { f = f0; }
+    // 选文件阶段就拦体积（与后端同一数字；旧后端无 caps → 不拦，交后端 413）
+    const capMb = _pmaIsVideo(f) ? videoCapMb : photoCapMb;
+    if (capMb > 0 && Number(f.size || 0) > capMb * 1048576) {
+      fail++;
+      rec.status = 413; rec.reason = 'too_large'; rec.limit_mb = capMb; rec.sent_size = Number(f.size || 0);
+      rec.over_mb = ((Number(f.size || 0) - capMb * 1048576) / 1048576).toFixed(1);
+      rec.ms = Date.now() - t0;
+      results.push(rec);
+      try { console.warn('[pma] upload rejected error=too_large name=' + rec.name + ' size=' + _pmaFmtMb(f.size) + ' cap=' + capMb + 'MB'); } catch (e) {}
+      continue;
+    }
+    const meta = {};
+    if (trg && trg.trim()) meta.triggers = trg.trim();
+    try {
+      let r, d = null;
+      if (stream) {
+        _pmaUpLive(i, total, rec.name, 0, 'upload');
+        r = await _pmaXhrUpload(pid, f, meta, function (pct) { _pmaUpLive(i, total, rec.name, pct, pct >= 100 ? 'server' : 'upload'); });
+        d = r.d;
+      } else {
+        const fd = new FormData();
+        fd.append('file', f, f.name);
+        if (meta.triggers) fd.append('triggers', meta.triggers);
+        // 旧后端 multipart：单文件可到 50M 视频 + 服务端 ffprobe/封面探针 → 5min 预算
+        const resp = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media', { method: 'POST', body: fd }, { timeoutMs: 300000 });
+        r = { status: resp.status, ok: resp.ok };
+        try { d = await resp.json(); } catch (e) { d = null; }
+      }
       rec.status = Number(r.status || 0);
-      let d = null;
-      try { d = await r.json(); } catch (e) { d = null; }
       if (r.ok) {
         rec.ok = true;
         if (d && d.deduped) { rec.existed = true; existed++; } else { ok++; }
         // #238：后端每条回 autotag / vision_ready / vision_reason（旧后端无字段＝按 0 计）
         if (d && d.autotag) tagQueued++;
         if (d && d.vision_ready === false) visionDown = d.vision_reason || 'unreachable';
+        if (d && d.converted) rec.prep = (rec.prep ? rec.prep + '+' : '') + String(d.converted);
       } else if (r.status === 409) {
         rec.ok = true; rec.existed = true; existed++;   // 近重复 / 已存在：不算失败
         rec.reason = String((d && (d.reason || d.error)) || 'duplicate');
@@ -3938,11 +4236,14 @@ async function pmaUpload(retryFiles) {
       rec.reason = (en === 'AbortError' || en === 'TimeoutError' || /timeout/i.test(em)) ? 'timeout' : ('network:' + em.slice(0, 80));
       rec.detail = em.slice(0, 200);
     }
+    rec.ms = Date.now() - t0;
     results.push(rec);
+    _pmaUpLast.ok = ok; _pmaUpLast.fail = fail; _pmaUpLast.existed = existed;
+    try { console.info('[pma] upload file=' + rec.name + ' status=' + rec.status + ' reason=' + (rec.reason || (rec.ok ? 'ok' : '')) + ' size=' + rec.size + (rec.sent_size ? ' sent=' + rec.sent_size : '') + ' ms=' + rec.ms + (rec.prep ? ' prep=' + rec.prep : '') + ' mode=' + (stream ? 'stream' : 'multipart')); } catch (e) {}
   }
   if (inp) inp.value = '';
-  _pmaUpLast = { pid: pid, ts: Date.now(), results: results, ok: ok, fail: fail, existed: existed, open: fail > 0 };
-  try { console.info('[pma] upload pid=' + pid + ' ok=' + ok + ' existed=' + existed + ' fail=' + fail + (fail ? ' fails=' + JSON.stringify(results.filter(function (x) { return !x.ok; }).map(function (x) { return { name: x.name, status: x.status, reason: x.reason }; })) : '')); } catch (e) {}
+  _pmaUpLast = { pid: pid, ts: Date.now(), results: results, ok: ok, fail: fail, existed: existed, open: fail > 0, live: null };
+  try { console.info('[pma] upload pid=' + pid + ' ok=' + ok + ' existed=' + existed + ' fail=' + fail + ' mode=' + (stream ? 'stream' : 'multipart') + (fail ? ' fails=' + JSON.stringify(results.filter(function (x) { return !x.ok; }).map(function (x) { return { name: x.name, status: x.status, reason: x.reason }; })) : '')); } catch (e) {}
   let done = window.Tf('pma_up_sum', { ok: String(ok) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
   if (ok && tagQueued) done = window.Tf('pma_up_done_ai', { ok: String(ok), n: String(tagQueued) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
   else if (ok && visionDown) done = window.Tf('pma_up_done_novision', { ok: String(ok), why: _pmaVisionWhy(visionDown) }) + (fail ? (' / ' + window.Tf('pma_up_sum_fail', { n: String(fail) })) : '');
@@ -3972,10 +4273,14 @@ async function pmaUpload(retryFiles) {
 async function pmaDeleteItem(mid) {
   const pid = _pmaPid();
   if (!pid || !confirm(window.T('pma_del_confirm'))) return;
+  // Q-40 #322（Q7HJDU）：成功只摘这张卡 + 刷计数（_pmaRemoveCards），不 pmaLoad 整页重绘回顶；
+  // 失败 / 异常才整刷对齐服务端，并保住滚动位置。
   try {
     const r = await apiFetch('/api/personas/' + encodeURIComponent(pid) + '/media/' + encodeURIComponent(mid), { method: 'DELETE' }, { timeoutMs: 60000 });
-    if (r.ok) { _toast(window.T('pma_deleted'), 'info'); await pmaLoad(); }
+    if (r.ok || r.status === 404) { _toast(window.T('pma_deleted'), 'info'); _pmaRemoveCards([mid]); return; }
+    _toast(window.T('pma_save_fail') + r.status, 'err');
   } catch (e) { _toast(window.T('pma_save_fail') + e, 'err'); }
+  await _pmaReloadKeepScroll();
 }
 
 async function pmaTest() {
