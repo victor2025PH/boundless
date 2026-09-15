@@ -327,11 +327,17 @@ def _assert_reject(r, status, reason):
     return body
 
 
-def test_reject_ext_not_allowed_is_structured(client):
-    """iPhone HEIC 是「后端只见两张成功、其余零痕迹」最像的形状——现在有 reason + allowed。"""
+def test_reject_ext_not_allowed_is_structured(client, monkeypatch):
+    """iPhone HEIC 是「后端只见两张成功、其余零痕迹」最像的形状——现在有 reason + allowed。
+
+    Q-40 B：后端有 pillow-heif 时 HEIC 会被转 JPEG 放行，这里钉住「不可用」分支
+    （文案带 hint=export_jpeg，前端据此说「请在手机相册导出为 JPEG」）。
+    """
+    monkeypatch.setattr(pmr, "_heif_available", lambda: False)
     body = _assert_reject(_upload(client, name="IMG_0001.HEIC", data=b"\x00\x00\x00\x18ftypheic"),
                           400, "ext_not_allowed")
     assert body["ext"] == ".heic" and ".jpg" in body["allowed"]
+    assert body["hint"] == "export_jpeg" and "JPEG" in body["detail"]
 
 
 def test_reject_too_large_is_structured(client, monkeypatch):

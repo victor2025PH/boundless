@@ -666,25 +666,16 @@ async def _deliver_bubble_parts(
 
 
 # ── send-media 流式实现（M-3 A #227 / B #229 #231，2026-09-06）──────────────────
-#: 超限时最多再吞多少字节让浏览器**读得到** 413——服务端一响应就关连接的话，浏览器还在
-#: 推 body，只会看到连接被重置（onerror，无状态码），坐席看到的就又是「结果未知」。
-#: 前端已按同源上限预检，超限请求本就罕见；256MB 以内顺手吞完（本机回环秒级），更大的
-#: 直接响应，接受它可能表现为网络错误。
-_SEND_MEDIA_DRAIN_MAX = 256 * 1024 * 1024
-_SEND_MEDIA_WRITE_BUF = 1024 * 1024
-
-
-async def _drain_stream(chunks: Any, max_bytes: int) -> int:
-    """读掉并丢弃剩余请求体（上限 max_bytes），返回吞掉的字节数。任何异常吞掉即停。"""
-    n = 0
-    try:
-        async for c in chunks:
-            n += len(c)
-            if n >= max_bytes:
-                break
-    except Exception:  # noqa: BLE001
-        pass
-    return n
+# Q-40 A（2026-09-15）：读流 / 写缓冲 / 超限吞流三段抽到 ``src/web/media_stream.py``，与相册
+# 上传口共用同一份代码（行为零变化；旧名保留为别名，测试 / 他线引用不受影响）。
+from src.web.media_stream import (  # noqa: E402
+    DRAIN_MAX as _SEND_MEDIA_DRAIN_MAX,
+    WRITE_BUF as _SEND_MEDIA_WRITE_BUF,
+    StreamRecvError as _StreamRecvError,
+    drain_stream as _drain_stream,
+    read_head as _read_head,
+    stream_to_file as _stream_to_file,
+)
 
 
 def _too_large_exc(request: Request, size_bytes: int, cap_mb: int) -> HTTPException:
@@ -768,14 +759,8 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
         raise HTTPException(415, tr(request, "err.inbox.video_format_unsupported", ext=_ext))
 
     # 头部 64KB：内容守卫看魔数（前 16 字节），多读一点让空文件/截断件也能判
-    head = b""
     _it = chunks.__aiter__()
-    while len(head) < 64 * 1024:
-        try:
-            c = await _it.__anext__()
-        except StopAsyncIteration:
-            break
-        head += c
+    head = await _read_head(_it)
     if not head:
         _rejected("empty_file")
         raise HTTPException(400, tr(request, "err.inbox.empty_file"))
@@ -817,34 +802,16 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
             logger.warning("[send-media] %s后临时文件未能删除 path=%s", why, path, exc_info=True)
 
     # 流式落盘：收到的块攒到 1MB 再经线程池写盘——磁盘慢/杀软扫描都不占事件循环
+    # （Q-40 A：循环体在 media_stream.stream_to_file，与相册上传口共用）
     _size = 0
     _overflow = False
     _t_recv0 = time.perf_counter()
     try:
-        _fh = await run_in_threadpool(open, local, "wb")
-        try:
-            _buf = bytearray(head)
-            _size = len(head)
-            if _size > _cap_bytes:
-                _overflow = True
-            while not _overflow:
-                if len(_buf) >= _SEND_MEDIA_WRITE_BUF:
-                    await run_in_threadpool(_fh.write, bytes(_buf))
-                    _buf = bytearray()
-                try:
-                    c = await _it.__anext__()
-                except StopAsyncIteration:
-                    break
-                _size += len(c)
-                if _size > _cap_bytes:
-                    _overflow = True
-                    break
-                _buf += c
-            if _buf and not _overflow:
-                await run_in_threadpool(_fh.write, bytes(_buf))
-        finally:
-            await run_in_threadpool(_fh.close)
-    except Exception as ex:  # noqa: BLE001
+        _size, _overflow = await _stream_to_file(
+            _it, local, head=head, cap_bytes=_cap_bytes, write_buf=_SEND_MEDIA_WRITE_BUF)
+    except _StreamRecvError as sex:
+        ex = sex.cause
+        _size = sex.received
         _dedup.release(_dedup_scope, _client_msg_id)
         _cleanup(local, "上传失败")
         _rejected("recv_error", f"received={_size / (1024 * 1024):.1f}MB err={type(ex).__name__}")

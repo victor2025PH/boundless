@@ -2061,6 +2061,12 @@ _ADDITIONS_2026_09_10_Q6_ALBUM = """
 """
 _BASELINE += _ADDITIONS_2026_09_10_Q6_ALBUM
 
+# Q-40 A（2026-09-15，#316 追加）：相册上传能力 / 上限探测（前端预检 + 裸流能力键）。
+_ADDITIONS_2026_09_15_Q40_ALBUM_CAPS = """
+/api/personas/media-caps	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_15_Q40_ALBUM_CAPS
+
 # Q-4 #267（2026-09-10，D）：关怀页安静时段开关 / 区间（写 proactive_care.quiet_*_hour overlay
 # + 派发器即时改窗）。care_routes.py。
 _ADDITIONS_2026_09_10_Q4_CARE_QUIET = """

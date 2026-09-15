@@ -4,19 +4,30 @@
 直服，供网格缩略图与前端预览），元数据（触发词/配文/权重/关系闸门/命中）落 DB
 （``persona_media_store``）。回复链（image_autosend / skill_manager Stage 0）读同一份 store。
 
-护栏：扩展名白名单（图 jpg/png/webp/gif、视频 mp4/mov/webm/m4v）、体积上限（图 10MB / 视频 50MB）、
-视频时长上限（默认 3 分钟，仅当 ffprobe 可探时才拦；软失败不阻塞）、sha256 去重、
-persona_id 目录消毒防穿越、写操作 viewer 只读拦截。文案经 ``tr`` 收口零 CJK。
+护栏：扩展名白名单（图 jpg/png/webp/gif + HEIC/HEIF 后端可转时、视频 mp4/mov/webm/m4v）、
+体积上限（默认图 25MB / 视频 100MB，``inbox.persona_media.limits`` 可配）、视频时长上限
+（默认 5 分钟，仅当 ffprobe 可探时才拦；软失败不阻塞）、sha256 去重、persona_id 目录消毒防穿越、
+写操作 viewer 只读拦截。文案经 ``tr`` 收口零 CJK。
+
+上传口两种请求体（Q-40 A，2026-09-15，#316 追加——与聊天 send-media 同款）：
+- **裸流**（新前端）：``Content-Type`` 非 multipart，body 就是文件本体，元数据走 query
+  （``name / triggers / caption / tags / weight / min_bond_level / enabled / client_msg_id``）。
+  边收边落盘（``src/web/media_stream.py`` 与 send-media 共用），``Content-Length`` 一到手就按上限
+  413（带实际大小），不用等文件传完；超限吞流让浏览器读得到状态码。
+- **multipart**（旧前端 / 脚本 / 测试）：Starlette 先卷进临时文件；保留兼容。
+每条退出路径落一行 ``[pmedia] … reason= size= ms=``。
 
 视频上传附带元数据探测（ffprobe 拿时长/宽高）+ 抽帧生成封面缩略图（ffmpeg，落 ``*.thumb.jpg``）；
 图片探宽高（PIL）。以上全部软失败——缺 ffmpeg/ffprobe/PIL 只是拿不到该项元数据，不影响上传落库。
 """
 
 import hashlib
+import io
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any, List
@@ -60,10 +71,105 @@ def _album_root() -> Path:
 
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
-_MAX_PHOTO_BYTES = 10 * 1024 * 1024
-_MAX_VIDEO_BYTES = 50 * 1024 * 1024
-_MAX_VIDEO_DURATION_MS = 3 * 60 * 1000  # 视频时长上限（仅 ffprobe 可探时才拦）
+#: iPhone 相册原生格式——前端 canvas 先转 JPEG；转不动（非 Chromium / 老壳）才到后端，
+#: 后端有 pillow-heif 就解码转 JPEG 落库（相册里只存 JPEG 一份），没有才 ext_not_allowed。
+_HEIC_EXT = {".heic", ".heif"}
+_MB = 1024 * 1024
+# Q-40 B：默认上限图 25MB / 视频 100MB / 5 分钟（此前 10 / 50 / 3min）。运营可用
+# ``inbox.persona_media.limits: {photo_mb, video_mb, video_max_sec}`` 覆写，夹紧 1–2048MB。
+# 模块常量仍是缺省来源（测试 monkeypatch 契约不变）。
+_MAX_PHOTO_BYTES = 25 * _MB
+_MAX_VIDEO_BYTES = 100 * _MB
+_MAX_VIDEO_DURATION_MS = 5 * 60 * 1000  # 视频时长上限（仅 ffprobe 可探时才拦）
+_LIMIT_MIN_MB = 1
+_LIMIT_MAX_MB = 2048
+_LIMIT_MAX_SEC = 2 * 60 * 60
 _ROLE_VIEWER = "viewer"
+
+
+def _clamp_int(v: Any, lo: int, hi: int) -> "int | None":
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return max(lo, min(hi, n))
+
+
+def resolve_persona_media_limits(config: Any) -> dict:
+    """相册上限（字节 / 毫秒）——``inbox.persona_media.limits`` 覆写，缺省回模块常量。绝不抛。
+
+    返回 ``{"photo_bytes", "video_bytes", "video_ms", "photo_mb", "video_mb", "video_max_sec"}``。
+    """
+    try:
+        lim = (((config or {}).get("inbox") or {}).get("persona_media") or {}).get("limits") or {}
+    except Exception:
+        lim = {}
+    if not isinstance(lim, dict):
+        lim = {}
+    photo_mb = _clamp_int(lim.get("photo_mb"), _LIMIT_MIN_MB, _LIMIT_MAX_MB)
+    video_mb = _clamp_int(lim.get("video_mb"), _LIMIT_MIN_MB, _LIMIT_MAX_MB)
+    video_sec = _clamp_int(lim.get("video_max_sec"), 1, _LIMIT_MAX_SEC)
+    photo_bytes = photo_mb * _MB if photo_mb is not None else int(_MAX_PHOTO_BYTES)
+    video_bytes = video_mb * _MB if video_mb is not None else int(_MAX_VIDEO_BYTES)
+    video_ms = video_sec * 1000 if video_sec is not None else int(_MAX_VIDEO_DURATION_MS)
+    return {
+        "photo_bytes": photo_bytes, "video_bytes": video_bytes, "video_ms": video_ms,
+        "photo_mb": photo_bytes // _MB, "video_mb": video_bytes // _MB,
+        "video_max_sec": video_ms // 1000,
+    }
+
+
+def _heif_available() -> bool:
+    """后端 HEIC 兜底是否可用（``pillow-heif`` 可选依赖，import 失败即不可用）。"""
+    try:
+        import pillow_heif  # type: ignore  # noqa: F401
+        from PIL import Image  # type: ignore  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _heic_to_jpeg(data: bytes, quality: int = 90) -> bytes:
+    """HEIC/HEIF 字节 → JPEG 字节（方向位已应用，EXIF 不带出）。失败回 ``b""``。"""
+    try:
+        import pillow_heif  # type: ignore
+        from PIL import Image, ImageOps  # type: ignore
+        try:
+            pillow_heif.register_heif_opener()
+        except Exception:
+            pass
+        with Image.open(io.BytesIO(data)) as im:
+            im = ImageOps.exif_transpose(im)
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            out = io.BytesIO()
+            im.save(out, format="JPEG", quality=int(quality), optimize=True)
+            return out.getvalue()
+    except Exception:
+        logger.debug("[pmedia] HEIC 解码失败", exc_info=True)
+        return b""
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            c = fh.read(_MB)
+            if not c:
+                break
+            h.update(c)
+    return h.hexdigest()
+
+
+def _unlink_quiet(p: "Path | str | None") -> None:
+    if not p:
+        return
+    try:
+        Path(p).unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        logger.debug("[pmedia] 临时文件未能删除 path=%s", p, exc_info=True)
 
 
 class MediaReject(HTTPException):
@@ -145,17 +251,25 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
 
     def _reject(request: Request, status: int, reason: str, key: str, *,
                 pid: str = "", name: str = "", size: int = -1,
-                extra: "dict | None" = None, **fmt: Any) -> MediaReject:
+                extra: "dict | None" = None, t0: float = 0.0, mode: str = "",
+                **fmt: Any) -> MediaReject:
         """造一个结构化拒绝并**落一行日志**——4HK54G 事故里被拒的上传在服务端零痕迹
-        （raise 发生在成功日志之前），排障只能猜。日志只带文件名 / 体积 / reason，不带正文。"""
+        （raise 发生在成功日志之前），排障只能猜。日志只带文件名 / 体积 / reason / 耗时，不带正文。"""
         detail = tr(request, key, **fmt)
         try:
-            logger.info("[pmedia] 上传拒绝 pid=%s name=%s bytes=%s status=%d reason=%s",
+            logger.info("[pmedia] 上传拒绝 pid=%s name=%s status=%d reason=%s size=%s ms=%d mode=%s",
                         pid or "-", (str(name or "-").replace("\n", " ")[:80]),
-                        (size if size >= 0 else "-"), int(status), reason)
+                        int(status), reason, (size if size >= 0 else "-"),
+                        int((time.perf_counter() - t0) * 1000) if t0 else 0, mode or "-")
         except Exception:
             pass
         return MediaReject(status, reason, detail, extra=extra)
+
+    def _cfg() -> dict:
+        try:
+            return getattr(config_manager, "config", None) or {}
+        except Exception:
+            return {}
 
     # #67-① 存量迁移（幂等 best-effort）：旧引擎树/安装目录相册 → 数据根，
     # 并把 DB file_path 改指新位置（发送链读 DB 绝对路径，不改写=白复制）。
@@ -324,108 +438,234 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         out["ok"] = True
         return out
 
+    @app.get("/api/personas/media-caps")
+    async def persona_media_caps(request: Request, _=Depends(auth_dep)):
+        """相册上传能力 / 上限（Q-40）：前端选文件即按同一数字预检、结果条写上限。
+
+        ``album_stream_upload=True`` ＝ 本后端接受裸流分支（旧后端无此端点 → 前端仍 multipart，
+        模板热更先于后端重启的中间态自洽）。``heic_backend`` ＝ 后端能兜底 HEIC 转 JPEG。
+        """
+        lim = resolve_persona_media_limits(_cfg())
+        return {
+            "ok": True, "album_stream_upload": True,
+            "photo_max_mb": lim["photo_mb"], "video_max_mb": lim["video_mb"],
+            "video_max_sec": lim["video_max_sec"],
+            "image_exts": sorted(_IMAGE_EXT), "video_exts": sorted(_VIDEO_EXT),
+            "heic_backend": bool(_heif_available()),
+        }
+
     @app.post("/api/personas/{pid}/media")
     async def upload_persona_media(pid: str, request: Request, _=Depends(auth_dep)):
-        """上传一张图/一段视频到该人设相册（multipart: file + 可选 triggers/caption/tags/...）。"""
-        _require_write(request)
-        st = _require_store(request)
-        _require_persona(request, pid)
-        form = await request.form()
-        upload = form.get("file")
-        if upload is None or not getattr(upload, "filename", ""):
-            raise _reject(request, 400, "file_required", "err.pmedia.file_required", pid=pid)
-        fname = str(upload.filename or "")
+        """上传一张图/一段视频到该人设相册。
+
+        裸流：``Content-Type`` 非 multipart → body 即文件，元数据走 query（``name`` 必填）。
+        multipart：``file`` + 可选 ``triggers/caption/tags/weight/min_bond_level/enabled``（旧路保留）。
+        """
+        from src.web.media_stream import (
+            DRAIN_MAX, StreamRecvError, declared_length, drain_stream, read_head,
+            stream_to_file, upload_file_chunks,
+        )
+        t0 = time.perf_counter()
+        _ctype = str(request.headers.get("content-type") or "").lower()
+        _multipart = _ctype.startswith("multipart/")
+        mode = "multipart" if _multipart else "stream"
+        declared = 0 if _multipart else declared_length(request)
+
+        async def _drain_req(chunks: Any) -> int:
+            # 裸流被拒时把 body 读掉再回状态码——服务端一响应就关连接，浏览器只见 onerror。
+            if _multipart:
+                return 0
+            return await drain_stream(chunks, min(declared or DRAIN_MAX, DRAIN_MAX))
+
+        try:
+            _require_write(request)
+            st = _require_store(request)
+            _require_persona(request, pid)
+        except MediaReject:
+            await _drain_req(request.stream())
+            raise
+        if _multipart:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None or not getattr(upload, "filename", ""):
+                raise _reject(request, 400, "file_required", "err.pmedia.file_required",
+                              pid=pid, t0=t0, mode=mode)
+            fname = str(upload.filename or "")
+            fields: Any = form
+            chunks: Any = upload_file_chunks(upload)
+        else:
+            fields = request.query_params
+            fname = str(fields.get("name") or "")
+            chunks = request.stream()
+            if not fname:
+                await _drain_req(chunks)
+                raise _reject(request, 400, "file_required", "err.pmedia.file_required",
+                              pid=pid, t0=t0, mode=mode)
         ext = os.path.splitext(fname)[1].lower()
+        is_heic = ext in _HEIC_EXT
         mtype = _media_type_for_ext(ext)
+        if not mtype and is_heic and _heif_available():
+            mtype = "photo"   # 后端兜底：落库前转 JPEG（相册只存 JPEG 一份）
         if not mtype:
             # 手机相册常见：iPhone HEIC / 截图 .PNG 之外的 .heif / .avif / .mkv——
             # 此前 400 无日志无原因，「后端只见两张成功之后无上传行」正是这种形状。
-            raise _reject(request, 400, "ext_not_allowed", "err.pmedia.ext_not_allowed",
-                          pid=pid, name=fname, ext=ext or "?",
-                          extra={"ext": ext or "", "allowed": sorted(_IMAGE_EXT | _VIDEO_EXT)})
-        data = await upload.read()
-        if not data:
-            raise _reject(request, 400, "empty_file", "err.inbox.empty_file",
-                          pid=pid, name=fname, size=0)
-        limit = _MAX_VIDEO_BYTES if mtype == "video" else _MAX_PHOTO_BYTES
-        if len(data) > limit:
+            # HEIC 且前后端都转不动 → 文案明说「请在手机相册导出为 JPEG」。
+            await _drain_req(chunks)
+            _key = "err.pmedia.heic_export_jpeg" if is_heic else "err.pmedia.ext_not_allowed"
+            raise _reject(request, 400, "ext_not_allowed", _key,
+                          pid=pid, name=fname, size=declared if declared else -1, t0=t0, mode=mode,
+                          ext=ext or "?",
+                          extra={"ext": ext or "", "allowed": sorted(_IMAGE_EXT | _VIDEO_EXT),
+                                 "hint": "export_jpeg" if is_heic else ""})
+        lim = resolve_persona_media_limits(_cfg())
+        limit = int(lim["video_bytes"] if mtype == "video" else lim["photo_bytes"])
+        limit_mb = limit // _MB
+        if declared and declared > limit:
+            # 裸流：Content-Length 就是文件大小，传完之前就能给出精确的 413
+            await _drain_req(chunks)
             raise _reject(request, 413, "too_large", "err.pmedia.too_large",
-                          pid=pid, name=fname, size=len(data), mb=limit // (1024 * 1024),
-                          extra={"limit_mb": limit // (1024 * 1024), "bytes": len(data),
-                                 "media_type": mtype})
-        # #67-②（0830 两机实锤）+ 媒体产物验证纪律：内容级校验——此前上传
-        # 成功只看扩展名+体积，损坏文件原样落盘，到 AI 发图才在 pyrogram 处
-        # 爆 decode 失败。magic bytes 不过=当场 400（诚实拒收），绝不静默存坏。
-        _bad = _sniff_media(data, ext)
-        if _bad:
-            raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
-                          pid=pid, name=fname, size=len(data), why=_bad,
-                          extra={"why": str(_bad)})
-        sha = hashlib.sha256(data).hexdigest()
-        dup = st.find_by_sha(str(pid), sha)
-        if dup is not None:
-            return {"ok": True, "item": dup, "deduped": True}
-        # 实施90 照片入库预处理（全软失败）：EXIF 抽提示→剥离（隐私）+ pHash
-        # 近重复预警（sha 只能抓字节级重传；重编码/缩放的"同一张"靠指纹）。
-        near_dup = None
-        exif_hints: dict = {}
-        phash = ""
-        if mtype == "photo":
-            processed = _process_photo(data, ext)
-            data = processed.get("bytes") or data
-            exif_hints = processed.get("hints") or {}
-            phash = _phash_bytes(data)
-            if phash:
-                nid, ndist = _phash_nearest(phash, st.phashes(str(pid)))
-                if nid and ndist <= _NEAR_DUP_MAX:
-                    near_dup = {"id": nid, "distance": ndist}
+                          pid=pid, name=fname, size=declared, t0=t0, mode=mode, mb=limit_mb,
+                          extra={"limit_mb": limit_mb, "bytes": declared, "media_type": mtype,
+                                 "over_mb": round(max(0, declared - limit) / _MB, 1)})
+        _it = chunks.__aiter__()
+        head = await read_head(_it)
+        if not head:
+            raise _reject(request, 400, "empty_file", "err.inbox.empty_file",
+                          pid=pid, name=fname, size=0, t0=t0, mode=mode)
         safe = _safe_pid(pid)
         d = _album_root() / safe
+        from starlette.concurrency import run_in_threadpool
         try:
-            d.mkdir(parents=True, exist_ok=True)
-            name = f"{uuid.uuid4().hex}{ext}"
-            fpath = (d / name).resolve()
-            fpath.write_bytes(data)
+            await run_in_threadpool(d.mkdir, parents=True, exist_ok=True)
+        except Exception as ex:  # noqa: BLE001
+            await _drain_req(_it)
+            raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
+                          pid=pid, name=fname, size=len(head), t0=t0, mode=mode, err=str(ex)[:200],
+                          extra={"err": str(ex)[:200]})
+        # 流式落盘到临时 .part（与 send-media 同一段代码）；超限即停、吞流、413。
+        part = d / f".up_{uuid.uuid4().hex}.part"
+        try:
+            size, overflow = await stream_to_file(_it, str(part), head=head, cap_bytes=limit)
+        except StreamRecvError as sex:
+            _unlink_quiet(part)
+            raise _reject(request, 502, "recv_error", "err.pmedia.save_failed",
+                          pid=pid, name=fname, size=sex.received, t0=t0, mode=mode,
+                          err=f"{type(sex.cause).__name__}: {str(sex.cause)[:120]}",
+                          extra={"err": type(sex.cause).__name__})
+        if overflow:
+            _unlink_quiet(part)
+            drained = await drain_stream(_it, DRAIN_MAX)
+            known = declared if (mode == "stream" and declared) else size
+            raise _reject(request, 413, "too_large", "err.pmedia.too_large",
+                          pid=pid, name=fname, size=known, t0=t0, mode=mode, mb=limit_mb,
+                          extra={"limit_mb": limit_mb, "bytes": known, "media_type": mtype,
+                                 "over_mb": round(max(0, known - limit) / _MB, 1),
+                                 "drained": drained})
+        # ── 内容 / 去重 / 入库 ───────────────────────────────────────────────
+        # #67-②（0830 两机实锤）+ 媒体产物验证纪律：magic bytes 不过=当场 400（诚实拒收），
+        # 绝不静默存坏。照片整读（≤25MB）走原预处理链；视频不进内存，按头判、按文件算 sha。
+        data = b""
+        heic_converted = False
+        exif_hints: dict = {}
+        phash = ""
+        near_dup = None
+        try:
+            if mtype == "photo":
+                data = await run_in_threadpool(part.read_bytes)
+                _unlink_quiet(part)
+                if is_heic:
+                    conv = await run_in_threadpool(_heic_to_jpeg, data)
+                    if not conv:
+                        raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
+                                      pid=pid, name=fname, size=size, t0=t0, mode=mode,
+                                      why="heic decode failed", extra={"why": "heic decode failed"})
+                    data = conv
+                    ext = ".jpg"
+                    heic_converted = True
+                _bad = _sniff_media(data, ext)
+                if _bad:
+                    raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
+                                  pid=pid, name=fname, size=size, t0=t0, mode=mode, why=_bad,
+                                  extra={"why": str(_bad)})
+                sha = hashlib.sha256(data).hexdigest()
+                dup = st.find_by_sha(str(pid), sha)
+                if dup is not None:
+                    logger.info("[pmedia] 上传 pid=%s name=%s reason=deduped size=%d ms=%d mode=%s",
+                                pid, fname.replace("\n", " ")[:80], size,
+                                int((time.perf_counter() - t0) * 1000), mode)
+                    return {"ok": True, "item": dup, "deduped": True}
+                # 实施90 照片入库预处理（全软失败）：EXIF 抽提示→剥离（隐私）+ pHash
+                # 近重复预警（sha 只能抓字节级重传；重编码/缩放的"同一张"靠指纹）。
+                processed = _process_photo(data, ext)
+                data = processed.get("bytes") or data
+                exif_hints = processed.get("hints") or {}
+                phash = _phash_bytes(data)
+                if phash:
+                    nid, ndist = _phash_nearest(phash, st.phashes(str(pid)))
+                    if nid and ndist <= _NEAR_DUP_MAX:
+                        near_dup = {"id": nid, "distance": ndist}
+                name = f"{uuid.uuid4().hex}{ext}"
+                fpath = (d / name).resolve()
+                await run_in_threadpool(fpath.write_bytes, data)
+                size = len(data)
+                verify_head = bytes(data[:16])
+            else:
+                _bad = _sniff_media(head, ext)
+                if _bad:
+                    _unlink_quiet(part)
+                    raise _reject(request, 400, "bad_content", "err.pmedia.bad_content",
+                                  pid=pid, name=fname, size=size, t0=t0, mode=mode, why=_bad,
+                                  extra={"why": str(_bad)})
+                sha = await run_in_threadpool(_sha256_file, str(part))
+                dup = st.find_by_sha(str(pid), sha)
+                if dup is not None:
+                    _unlink_quiet(part)
+                    logger.info("[pmedia] 上传 pid=%s name=%s reason=deduped size=%d ms=%d mode=%s",
+                                pid, fname.replace("\n", " ")[:80], size,
+                                int((time.perf_counter() - t0) * 1000), mode)
+                    return {"ok": True, "item": dup, "deduped": True}
+                name = f"{uuid.uuid4().hex}{ext}"
+                fpath = (d / name).resolve()
+                await run_in_threadpool(os.replace, str(part), str(fpath))
+                verify_head = bytes(head[:16])
             # 落盘后回读验证（纪律：写成功≠内容对）：首段字节与内存不一致
             # =写入层损坏，当场删除报错，绝不让坏文件带着「上传成功」活下来。
-            _head = fpath.read_bytes()[:16] if fpath.stat().st_size else b""
-            if _head != bytes(data[:16]):
-                try:
-                    fpath.unlink()
-                except Exception:
-                    pass
+            with open(fpath, "rb") as _fh:
+                _head = _fh.read(16)
+            if _head != verify_head:
+                _unlink_quiet(fpath)
                 raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
-                              pid=pid, name=fname, size=len(data), err="write verify failed",
-                              extra={"err": "write verify failed"})
+                              pid=pid, name=fname, size=size, t0=t0, mode=mode,
+                              err="write verify failed", extra={"err": "write verify failed"})
         except HTTPException:
+            _unlink_quiet(part)
             raise
         except Exception as ex:  # noqa: BLE001
+            _unlink_quiet(part)
             logger.warning("[pmedia] 保存文件失败: %s", ex, exc_info=True)
             raise _reject(request, 500, "save_failed", "err.pmedia.save_failed",
-                          pid=pid, name=fname, size=len(data), err=str(ex)[:200],
+                          pid=pid, name=fname, size=size, t0=t0, mode=mode, err=str(ex)[:200],
                           extra={"err": str(ex)[:200]})
         url = f"/static/persona_albums/{safe}/{name}"
         # 元数据探测 + 视频护栏/封面（全部软失败，缺 ffmpeg/ffprobe/PIL 不阻塞上传）。
         width = height = duration_ms = 0
         thumb_url = ""
         if mtype == "video":
-            meta = _probe_video(str(fpath)) or {}
+            meta = await run_in_threadpool(_probe_video, str(fpath)) or {}
             width = int(meta.get("width") or 0)
             height = int(meta.get("height") or 0)
             duration_ms = int(meta.get("duration_ms") or 0)
-            if 0 < _MAX_VIDEO_DURATION_MS < duration_ms:
-                try:
-                    fpath.unlink()
-                except Exception:
-                    pass
+            max_ms = int(lim["video_ms"])
+            if 0 < max_ms < duration_ms:
+                _unlink_quiet(fpath)
                 raise _reject(request, 413, "too_long", "err.pmedia.too_long",
-                              pid=pid, name=fname, size=len(data),
-                              sec=_MAX_VIDEO_DURATION_MS // 1000,
-                              extra={"max_sec": _MAX_VIDEO_DURATION_MS // 1000,
-                                     "duration_ms": duration_ms})
+                              pid=pid, name=fname, size=size, t0=t0, mode=mode,
+                              sec=max_ms // 1000,
+                              extra={"max_sec": max_ms // 1000, "duration_ms": duration_ms})
             thumb_name = f"{name}.thumb.jpg"
             at_sec = min(1.0, (duration_ms / 1000.0) / 2.0) if duration_ms > 0 else 0.0
-            if _make_video_thumbnail(str(fpath), str(d / thumb_name), at_sec=at_sec):
+            if await run_in_threadpool(_make_video_thumbnail, str(fpath), str(d / thumb_name),
+                                       at_sec=at_sec):
                 thumb_url = f"/static/persona_albums/{safe}/{thumb_name}"
         else:
             meta = _probe_image(str(fpath)) or {}
@@ -434,17 +674,18 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
             # 照片缩略图（实施90）：网格此前直载原图＝窄壳灰块一片；与视频封面
             # 同款落 <name>.thumb.webp，前端 thumb_url 优先。
             thumb_name = f"{name}.thumb.webp"
-            if _make_photo_thumbnail(str(fpath), str(d / thumb_name)):
+            if await run_in_threadpool(_make_photo_thumbnail, str(fpath), str(d / thumb_name)):
                 thumb_url = f"/static/persona_albums/{safe}/{thumb_name}"
         try:
-            weight = int(form.get("weight") or 1)
+            weight = int(fields.get("weight") or 1)
         except Exception:
             weight = 1
         try:
-            min_bond = int(form.get("min_bond_level") or 0)
+            min_bond = int(fields.get("min_bond_level") or 0)
         except Exception:
             min_bond = 0
-        enabled = str(form.get("enabled", "1")).strip().lower() not in ("0", "false", "no", "")
+        _en_raw = fields.get("enabled")
+        enabled = str("1" if _en_raw is None else _en_raw).strip().lower() not in ("0", "false", "no", "")
         try:
             actor = str(request.session.get("username") or "")
         except Exception:
@@ -457,11 +698,11 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         will_tag = want_tag and bool(probe.get("ready"))
         row = st.add(
             str(pid), mtype, str(fpath), url, thumb_url=thumb_url,
-            triggers=_as_str_list(form.get("triggers")),
-            caption=str(form.get("caption") or "").strip(),
-            tags=_as_str_list(form.get("tags")),
+            triggers=_as_str_list(fields.get("triggers")),
+            caption=str(fields.get("caption") or "").strip(),
+            tags=_as_str_list(fields.get("tags")),
             weight=weight, enabled=enabled, min_bond_level=min_bond,
-            bytes_=len(data), width=width, height=height,
+            bytes_=size, width=width, height=height,
             duration_ms=duration_ms, sha256=sha, created_by=actor,
             phash=phash, tag_status=(_auto_tag.TAG_PENDING if will_tag else ""))
         mid = str(row.get("id") or "")
@@ -473,19 +714,22 @@ def register_persona_media_routes(app, auth_dep, audit_store=None, config_manage
         if will_tag:
             _auto_tag.schedule_tag(st, mid, _vision_cfg(),
                                    face_ref=_face_ref_for_tagging(pid, aicfg))
-        logger.info("[pmedia] 上传 pid=%s type=%s id=%s name=%s bytes=%d dur=%dms "
-                    "phash=%s neardup=%s autotag=%s vision=%s",
-                    pid, mtype, mid, fname.replace("\n", " ")[:80], len(data), duration_ms,
+        logger.info("[pmedia] 上传 pid=%s type=%s id=%s name=%s reason=ok size=%d ms=%d mode=%s "
+                    "declared=%d dur=%dms phash=%s neardup=%s heic=%s autotag=%s vision=%s",
+                    pid, mtype, mid, fname.replace("\n", " ")[:80], size,
+                    int((time.perf_counter() - t0) * 1000), mode, declared, duration_ms,
                     "y" if phash else "n",
-                    (near_dup or {}).get("id", "-"), will_tag,
+                    (near_dup or {}).get("id", "-"), "y" if heic_converted else "n", will_tag,
                     "ready" if probe.get("ready") else (probe.get("reason") or ("off" if not want_tag else "-")))
         _audit(request, "pmedia_upload", f"pid={pid} id={mid}",
-               f"type={mtype} bytes={len(data)}")
+               f"type={mtype} bytes={size}")
         out = {"ok": True, "item": row, "autotag": will_tag,
                "vision_ready": bool(probe.get("ready")) if want_tag else None,
                "vision_reason": str(probe.get("reason") or "") if want_tag else ""}
         if near_dup:
             out["near_dup"] = near_dup
+        if heic_converted:
+            out["converted"] = "heic->jpeg"
         return out
 
     @app.patch("/api/personas/{pid}/media/{mid}")
