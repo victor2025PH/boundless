@@ -5672,7 +5672,8 @@ function _fpSysToggle(){
   var open=!_fpSysOpen();
   try{ localStorage.setItem('ws_fp_sys_open', open?'1':'0'); }catch(_){}
   _uiBeacon(open?'iflt_systags_open':'iflt_systags_close');
-  _renderPanelTags();
+  // Q-39 D #324：面板的「系统标签」开合同时决定列表顶那排系统筹码出不出（_renderTagStrip 内含 _renderPanelTags）
+  if(typeof _renderTagStrip==='function') _renderTagStrip(); else _renderPanelTags();
 }
 function _renderPanelTags(){
   const box=document.getElementById('fp-tags'), sec=document.getElementById('fp-sec-tags');
@@ -6673,7 +6674,19 @@ function _sysTagLabel(t){
   if(s==='\u9700\u4eba\u5de5') return window.T('tko.tag.needs_human');
   if(s==='\u4eba\u5de5\u63a5\u7ba1\u4e2d') return window.T('tko.tag.takeover');
   if(s===_RK_MEDIUM_TAG) return window.T('inbox.risk.tag_medium');   // Q-17 #277②（rk-）中风险标签
+  // Q-39 D #324（YS54YK）：系统族原码不再直出——dormant:ignored → 长期未回 / risk:* → 需留意 /
+  // 「客户要求停联」→ 别再联系（数据值不动，只换显示层；_isSysTag 同一判定面）
+  if(/^dormant:/i.test(s)) return window.T('inbox.systag.dormant');
+  if(/^risk:/i.test(s)) return window.T('inbox.systag.risk');
+  if(typeof _STOP_CONTACT_TAG!=='undefined'&&s===_STOP_CONTACT_TAG) return window.T('inbox.systag.stop_contact');
   return s;
+}
+function _sysTagTip(t){   // Q-39 D：系统族 chip 悬停自解释（人话 + 处理完怎么消）
+  var s=String(t||'');
+  if(/^dormant:/i.test(s)) return window.T('inbox.systag.dormant_t');
+  if(/^risk:/i.test(s)) return window.T('inbox.systag.risk_t');
+  if(typeof _STOP_CONTACT_TAG!=='undefined'&&s===_STOP_CONTACT_TAG) return window.T('inbox.systag.stop_contact_t');
+  return '';
 }
 function _tagChipHtml(t, conv){
   var k=_tagKind(t);
@@ -8834,6 +8847,7 @@ async function _handoffBarAck(cid,btn){
     _toast(window.T('inbox.handoff.bar_ack_ok'));
     try{ applyFilters(); }catch(_){}
     try{ loadChats(); }catch(_){}
+    try{ loadTagStrip(); }catch(_){}   // Q-39 D #324：摘标后重拉统计，列表顶系统筹码随之消
   }catch(_){
     _toast(window.T('inbox.handoff.bar_ack_fail'),'#dc2626');
     if(btn){ btn.disabled=false; }
@@ -8866,6 +8880,7 @@ async function _handoffBarAckStop(cid,btn){
     _toast(window.T('inbox.handoff.stop_confirm_done'),'#16a34a');
     try{ applyFilters(); }catch(_){}
     try{ loadChats(); }catch(_){}
+    try{ loadTagStrip(); }catch(_){}   // Q-39 D #324：停联处理完重拉统计，「别再联系」筹码随之消
   }catch(_){
     _toast(window.T('inbox.handoff.stop_confirm_fail'),'#dc2626');
     if(btn){ btn.disabled=false; }
@@ -13054,26 +13069,52 @@ function _renderTagStrip(){
   _renderPanelTags();   // P1：面板内联标签与 strip 同源同拍（含空态收合；放最前防早退漏刷）
   /* P0 收敛：「需人工」已升格主筛选行一等公民（口径还更全：并上 SLA crit），strip 不再重复展示
      同一信号打架；其余标签照旧。「标签 ▾」下拉仍列全量（含需人工），语义入口不丢。 */
-  const stats=_tagStatsCache.filter(s=>s.tag!==_NEEDS_HUMAN_TAG);
-  if(!stats.length){ el.classList.add('collapsed'); return; }
+  /* Q-39 D #324（YS54YK）：列表顶这排筹码与面板同源同判定——系统族（_isSysTag：dormant: / risk: /
+     停联 / 接管 / 需人工）单人端（seat_mode=single，!MULTI_SEAT）**默认不渲染**；多坐席、或坐席在筛选面板
+     显式打开过「系统标签」（_fpSysOpen）、或正按某个系统标签在筛 → 才出。出时每枚可点＝应用筛选（复用
+     data-ptag 事件委托，不再拼 inline onclick），激活带 × 清筛选；文案走 _sysTagLabel 人话，零新颜色。 */
+  const all=_tagStatsCache.filter(s=>s.tag!==_NEEDS_HUMAN_TAG);
+  const showSys=!!MULTI_SEAT||_fpSysOpen()||all.some(s=>_isSysTag(s.tag)&&s.tag===tagFilter);
+  const stats=all.filter(s=>showSys||!_isSysTag(s.tag));
+  if(!stats.length){ el.classList.add('collapsed'); el.innerHTML=''; return; }
   el.classList.remove('collapsed');
+  const xT=esc(window.T('inbox.filter.chip_clear'));
   el.innerHTML=stats.slice(0,12).map(s=>{
     const k=_tagKind(s.tag);
     const active=tagFilter===s.tag;
+    const sys=_isSysTag(s.tag);
     // 库显式色染底：与 chips 同规则（16% 透明底+主题文字色）；语义命中走 tk 板、active 让位 accent 选中态
-    const c=(!k&&!active&&_tagLibColor[s.tag])||'';
+    const c=(!k&&!active&&!sys&&_tagLibColor[s.tag])||'';
     const st=c?` style="background:color-mix(in srgb, ${c} 16%, transparent);color:var(--text-main)"`:'';
+    const tip=sys?_sysTagTip(s.tag):'';
     return `
-    <span class="tag-strip-chip ${active?'active':''} ${k?'tk-'+k:''}"${st} onclick="_uiBeacon('iflt_striptag');setTagFilter('${esc(s.tag.replace(/'/g,"\\'"))}',null)">
-      ${esc(s.tag)}
+    <span class="tag-strip-chip ${active?'active':''} ${k?'tk-'+k:''}${sys?' tag-strip-sys':''}"${st} role="button" tabindex="0" data-ptag="${esc(s.tag)}"${sys?' data-systag="1"':''}${tip?` title="${esc(tip)}"`:''}>
+      ${esc(sys?_sysTagLabel(s.tag):s.tag)}
       <span class="t-cnt">${s.count}</span>
       ${s.unread?`<span class="t-unread">${s.unread}</span>`:''}
+      ${active?`<span class="fp-x" role="button" data-ptag-x="1" title="${xT}" aria-label="${xT}">\u00d7</span>`:''}
     </span>`;
   }).join('')
   // 标签闭环（2026-08-23）：管理入口显性化——此前唯一入口埋在「标签 ▾」下拉的
   // 「管理」按钮里，测试标签清不掉的报障有一半是「找不到管理在哪」。
   +`<span class="tag-strip-chip tag-strip-gear" role="button" tabindex="0" title="${esc(window.T('inbox.strip.manage_t'))}" onclick="_uiBeacon('tag_lib_open');_openTagLibMgr()">⚙</span>`;
 }
+/* Q-39 D #324：列表顶筹码点击走容器级事件委托（标签名是任意用户字符，不再拼 inline onclick）：
+   × ＝ 清筛选（不删标签）；chip ＝ 切该标签筛选（再点同一枚＝取消）；齿轮保留自己的 onclick。 */
+(function(){
+  function wire(){
+    const el=document.getElementById('tag-strip'); if(!el||el.__ptagBound) return;
+    el.__ptagBound=1;
+    el.addEventListener('click', function(e){
+      if(e.target.closest('[data-ptag-x]')){ e.stopPropagation(); _uiBeacon('iflt_striptag_x'); setTagFilter('', null); return; }
+      const b=e.target.closest('[data-ptag]'); if(!b||!el.contains(b)) return;
+      const t=b.getAttribute('data-ptag')||'';
+      _uiBeacon(b.hasAttribute('data-systag')?'iflt_striptag_sys':'iflt_striptag');
+      setTagFilter(tagFilter===t?'':t, null);
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', wire); else wire();
+})();
 
 
 /* ===== KB 智能推荐（P0 收敛：常驻 chip + 浮层；高置信且输入框为空才自动展开）=====
