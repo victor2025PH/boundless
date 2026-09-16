@@ -340,6 +340,22 @@ def test_identity_block_and_media_block_survive_prompt_budget_trim():
     assert st["inject_chars"] > 0
 
 
+def test_skill_manager_a_line_wiring_static():
+    """A 线（TG 原生 / 协议直发）在 process_message 的 apply_inbound_enrichments 之后接身份层，
+    独立成段进 _topic_switch_hint；B 线 generate_inbox_draft 不重复接（persona_reply 已接）。"""
+    src = (Path(__file__).resolve().parents[1] / "src" / "skills" / "skill_manager.py").read_text(encoding="utf-8")
+    assert src.count("face_identity import annotate_inbound") == 1
+    i_hook = src.index("face_identity import annotate_inbound")
+    i_enrich_a = src.index("入站上下文补全跳过")
+    i_draft = src.index("入站 enrich 跳过")
+    assert i_enrich_a < i_hook < i_draft
+    seg = src[i_hook - 600:i_hook + 2500]
+    assert "【图中人物身份】" in seg and "_topic_switch_hint" in seg and "_group_chat_hint" in seg
+    assert "conv_id_from_context" in seg and "account_persona_id" in seg
+    import importlib
+    importlib.import_module("src.skills.skill_manager")   # 语法/导入自检
+
+
 def test_persona_reply_wiring_static():
     src = (Path(__file__).resolve().parents[1] / "src" / "inbox" / "persona_reply.py").read_text(encoding="utf-8")
     assert "from src.companion.face_identity import annotate_inbound" in src

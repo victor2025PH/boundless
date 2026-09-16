@@ -2092,6 +2092,36 @@ class SkillManager(LoggerMixin):
             except Exception:
                 self.logger.debug("%s入站上下文补全跳过", log_prefix, exc_info=True)
 
+            # #333 视觉身份层（A 线：TG 原生 / 协议直发；B 线在 persona_reply extra_hint 接）：
+            # 客户发的图里是谁 → 一句带外说明独立成段进 _topic_switch_hint（头在 ai_client
+            # 预算保护表里）；文字轮「是我 / 这是我妹妹」同入口升记忆。vision.face_identity
+            # 默认关；HTTP 放线程；任何失败静默，拟稿零阻断。群聊不做（多人脸无归属语义）。
+            try:
+                _fi_cfg = (self.config.config if hasattr(self.config, "config") else {}) or {}
+                if ((((_fi_cfg.get("vision") or {}).get("face_identity") or {}).get("enabled"))
+                        and not user_context.get("_group_chat_hint")):
+                    from src.ai.conv_route import conv_id_from_context as _fi_cid
+                    from src.companion.face_identity import annotate_inbound as _fi_annotate
+                    _fi_note = await _fi_annotate(
+                        config=_fi_cfg,
+                        conversation_id=_fi_cid(context, user_id_str),
+                        persona_id=str(user_context.get("account_persona_id")
+                                       or context.get("account_persona_id") or ""),
+                        media_type=str(context.get("media_type") or context.get("_media_kind") or ""),
+                        media_ref=str(context.get("media_ref") or context.get("_media_ref") or ""),
+                        message_id=str(user_context.get("user_msg_id") or ""),
+                        caption=str(context.get("media_desc") or context.get("_media_desc")
+                                    or context.get("image_ocr_text") or ""),
+                        peer_text=text,
+                        config_path=getattr(self.config, "config_path", None))
+                    if _fi_note:
+                        _fi_prev = str(user_context.get("_topic_switch_hint") or "").strip()
+                        _fi_block = f"【图中人物身份】{_fi_note}"
+                        user_context["_topic_switch_hint"] = (
+                            f"{_fi_prev}\n\n{_fi_block}" if _fi_prev else _fi_block)
+            except Exception:
+                self.logger.debug("%sface_identity 跳过", log_prefix, exc_info=True)
+
             # 追问回填 �?用户新消���达，回溯标�前一条策略事�?
             _chat_id = _safe_int_chat_id(context.get("chat_id", 0))
             try:
