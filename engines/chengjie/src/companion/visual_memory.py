@@ -438,6 +438,72 @@ class VisualMemoryStore:
             pass
 
 
+# ── 主动触达 / goal 消费：一句「TA 的照片记忆」（带外、无方括号标签）────────────
+
+_REL_ZH = {"sister": "妹妹/姐姐", "brother": "哥哥/弟弟", "mother": "妈妈", "father": "爸爸", "son": "儿子",
+           "daughter": "女儿", "child": "孩子", "spouse": "爱人", "partner": "对象", "friend": "朋友",
+           "pet": "宠物", "grandparent": "长辈"}
+
+
+def _age_label(age_sec: float) -> str:
+    s = max(0.0, float(age_sec or 0.0))
+    if s < 3600:
+        return "刚刚"
+    if s < 86400:
+        return f"{int(s // 3600)}小时前"
+    if s < 2 * 86400:
+        return "昨天"
+    return f"{int(s // 86400)}天前"
+
+
+def memory_note(store: Optional["VisualMemoryStore"], conv_key: str, *, who: str = "TA",
+                now: Optional[float] = None, max_chars: int = 220) -> str:
+    """proactive / goal 注入用：「{who} 的照片记忆：本人自拍 N 张（最近 X 前，已确认）；确认过的
+    关系人：妹妹 …；最近一张图：…（X 前）」。无记录 → ''。绝不抛。
+
+    只说**已确认**的关系与「已确认 / 推断」标注清楚的本人；unknown 一律不点名（防「Marina」式
+    把画面猜成事实）。规则句钉住：照片记忆只能用来接话，不能编造照片里没有的细节。"""
+    try:
+        st = store if store is not None else get_visual_memory_store()
+        if st is None:
+            return ""
+        ck = str(conv_key or "").strip()
+        if not ck:
+            return ""
+        n = float(now if now is not None else time.time())
+        obs = st.list_observations(ck, limit=30)
+        if not obs:
+            return ""
+        parts: List[str] = []
+        selfs = [o for o in obs if o.get("label") == "customer_self"]
+        if selfs:
+            confirmed = any(o.get("confirmed") for o in selfs) or st.self_entity(ck) is not None
+            tag = "已确认是本人" if confirmed else "推断是本人、未确认"
+            parts.append(f"本人自拍 {len(selfs)} 张（最近 {_age_label(n - float(selfs[0].get('ts') or 0))}，{tag}）")
+        rels = st.known_relations(ck)
+        if rels:
+            names = []
+            for e in rels[:4]:
+                rel = str(e.get("relation") or "")
+                names.append(_REL_ZH.get(rel, rel))
+            parts.append("确认过的关系人：" + "、".join(names))
+        last = obs[0]
+        summ = str(last.get("summary") or "").strip()
+        if summ and last.get("label") in ("no_face", "unknown", "known", "customer_self", "persona"):
+            lab = last.get("label")
+            head = {"no_face": "最近一张图（无人物）", "unknown": "最近一张图（有人但未确认是谁）",
+                    "persona": "最近一张图（是我方人设自己的照片）"}.get(lab, "最近一张图")
+            parts.append(f"{head}：{summ[:60]}（{_age_label(n - float(last.get('ts') or 0))}）")
+        if not parts:
+            return ""
+        s = f"{who}的照片记忆：" + "；".join(parts) + "。规则：只能拿来自然接话（如「上次那张…」），不编造照片里没有的细节，未确认是谁的人不要点名。"
+        if len(s) > max_chars + 90:
+            s = s[: max_chars + 89] + "…"
+        return s
+    except Exception:
+        return ""
+
+
 # ── 进程单例（config_dir/visual_memory.db）────────────────────────────────────
 _STORE: Optional[VisualMemoryStore] = None
 _STORE_LOCK = threading.Lock()
@@ -464,6 +530,6 @@ def get_visual_memory_store() -> Optional[VisualMemoryStore]:
 
 
 __all__ = [
-    "VisualMemoryStore", "get_visual_memory_store", "cosine", "mean_vector",
+    "VisualMemoryStore", "get_visual_memory_store", "cosine", "mean_vector", "memory_note",
     "detect_self_confirmation", "detect_relation_statement", "SELF_TYPE", "RELATION_TYPE", "MATCH",
 ]

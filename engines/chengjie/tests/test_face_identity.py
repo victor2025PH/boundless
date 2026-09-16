@@ -355,6 +355,36 @@ def test_calibrate_tool_reports_and_suggests(tmp_path):
     assert mod.main(["--db", str(tmp_path / "vm.db"), "--json"]) == 0
 
 
+def test_memory_note_for_proactive_only_names_confirmed():
+    st = vm.VisualMemoryStore(":memory:")
+    ck = "wa:1:2"
+    assert vm.memory_note(st, ck) == ""
+    t0 = time.time()
+    st.record_observation(ck, ts=t0 - 90000, label="customer_self", embedding=CUSTOMER, summary="自拍；室内")
+    st.record_observation(ck, ts=t0 - 3600, label="unknown", embedding=STRANGER, summary="多人；户外合影")
+    note = vm.memory_note(st, ck, now=t0)
+    assert note.startswith("TA的照片记忆：") and "本人自拍 1 张" in note and "推断是本人、未确认" in note
+    assert "有人但未确认是谁" in note and "不编造" in note
+    assert "[" not in note and "【" not in note
+    # 确认后措辞变「已确认」；关系人只列已确认的
+    assert st.confirm_self(ck, observation_id=st.list_observations(ck)[1]["id"])
+    st.record_observation(ck, ts=t0 - 60, label="unknown", embedding=SISTER, summary="单人；咖啡店")
+    assert st.confirm_relation(ck, "sister")
+    note = vm.memory_note(st, ck, now=t0)
+    assert "已确认是本人" in note and "确认过的关系人：妹妹/姐姐" in note
+    assert len(note) <= 320
+    # 无库 / 坏入参不抛
+    assert vm.memory_note(None, "") == ""
+
+
+def test_proactive_topic_consumes_memory_note_static():
+    src = (Path(__file__).resolve().parents[1] / "src" / "companion" / "proactive_topic.py").read_text(encoding="utf-8")
+    i = src.index("visual_memory import memory_note")
+    seg = src[i - 500:i + 600]
+    assert "face_identity" in seg and "ctx = f\"{ctx}\\n{_vm}\"" in seg
+    assert src.index("ctx = format_recent_context(msgs, now=time.time())") < i < src.index("pending_in = trailing_unanswered_inbound")
+
+
 def test_match_threshold_single_source():
     assert vm.MATCH == vi.MATCH_THRESHOLD
 

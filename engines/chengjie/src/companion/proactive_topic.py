@@ -2082,6 +2082,19 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 trailing_unanswered_inbound,
             )
             ctx = format_recent_context(msgs, now=time.time())
+            # #333 视觉记忆（vision.face_identity 开时）：「TA 的照片记忆：本人自拍 N 张（已确认）/
+            # 确认过的关系人 / 最近一张图」带外一句进上下文——主动开场能接「上次那张…」，
+            # 且只说已确认的、未确认的人不点名（替代 24h image_observation 便签的「Marina」病）。
+            try:
+                _fi_cfg = ((getattr(getattr(assistant, "config", None), "config", None) or {})
+                           .get("vision") or {}).get("face_identity") or {}
+                if _fi_cfg.get("enabled"):
+                    from src.companion.visual_memory import memory_note as _vm_note
+                    _vm = _vm_note(None, str(plan.get("conversation_id") or ""))
+                    if _vm:
+                        ctx = f"{ctx}\n{_vm}" if ctx else _vm
+            except Exception:
+                pass
             # 悬空话头（P0 2026-08-05）：最后若是 TA 发的且一直没回——晨安/回访
             # 必须先接住它再问候（实锤：22:27「介绍老公」无人接，07:10 通用晨安）。
             pending_in = trailing_unanswered_inbound(msgs, max_texts=2)
