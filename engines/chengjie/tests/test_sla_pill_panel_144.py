@@ -121,9 +121,12 @@ def test_frontend_pill_and_panel_share_one_item_set():
     html = (REPO / "src/web/templates/workspace_base.html").read_text(encoding="utf-8")
     assert "function _slaPanelItems()" in html
     # 徽标：n 取并集长度，不再 sev?crit:brk
-    pill = html.split("function _renderSlaPill()", 1)[1][:1600]
+    pill = html.split("function _renderSlaPill()", 1)[1][:2400]
     assert "var g=_slaPanelItems();" in pill and "var n=g.all.length;" in pill
     assert "sev?crit:brk" not in pill
+    # R87 #325：「急需处理」只在全部都是严重档时才标；混着提醒线档 → 「待处理」（数字仍＝面板条数）
+    assert "var urgentAll = sev && g.warn.length===0;" in pill
+    assert "urgentAll?window.T('base.pill.sla_urgent'):window.T('base.pill.sla_normal')" in pill
     # 面板：两段标题键 + 同一并集
     panel = html.split("function _renderSlaPanel()", 1)[1][:2600]
     assert "var g=_slaPanelItems();" in panel

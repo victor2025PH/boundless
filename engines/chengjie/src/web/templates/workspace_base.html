@@ -3103,8 +3103,12 @@ window._pillChainFail=window._pillChainFail||function(fn){
     // 单一数字：超时是「待接管」的父集，二者在无人认领时恒等，并排两个数字=同义重复、徒增困惑。
     // 这里只出一个「需要处理」数字（紧急度由橙/黄底色承载），「还没人接」降级进 tooltip。
     // 经 _setPill 落点：先内容后显形，杜绝「显形后拼串抛错 → 空壳圆圈」（2026-08-08 实录）。
+    // R87 #325：数字＝面板条数（#144 不变量），但「急需处理」四个字只在**全部**都是严重超时时才配得上；
+    // 混着「超过提醒线」的会话时标「待处理」（红底仍在，明细看 tooltip / 面板两段）——此前 12 严重 + 39 提醒线
+    // 整颗写「急需处理 51」，坐席去数只数出 29 条严重的就对不上。
+    var urgentAll = sev && g.warn.length===0;
     _setPill(slaBadge, _pillIc('clock')+
-      '<span class="ws-pill-lb">'+(sev?window.T('base.pill.sla_urgent'):window.T('base.pill.sla_normal'))+'</span>'+
+      '<span class="ws-pill-lb">'+(urgentAll?window.T('base.pill.sla_urgent'):window.T('base.pill.sla_normal'))+'</span>'+
       '<span class="ws-pill-n">'+n+'</span>');
     if(n>_slaPulsePrev && slaBadge.style.display!=='none'){
       slaBadge.classList.remove('pulse'); void slaBadge.offsetWidth; slaBadge.classList.add('pulse');
