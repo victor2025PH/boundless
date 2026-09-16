@@ -1015,7 +1015,10 @@ async def _generate_persona_reply_impl(
                 caption=str(media_desc or ""), peer_text=str(last_inbound or ""),
                 config_path=getattr(_cm_fi, "config_path", None))
             if _fi_note:
-                _time_hint = f"{_time_hint}\n{_fi_note}" if _time_hint else _fi_note
+                # 独立成段（空行 + 【图中人物身份】头）：ai_client 按 "\n\n" 分段裁预算，
+                # 该头在 _PROTECTED_SYS_HEADS 里——身份说明不随其它注入尾巴被弹掉。
+                _fi_block = f"【图中人物身份】{_fi_note}"
+                _time_hint = f"{_time_hint}\n\n{_fi_block}" if _time_hint else _fi_block
     except Exception:
         logger.debug("[persona_reply] face_identity 跳过", exc_info=True)
 

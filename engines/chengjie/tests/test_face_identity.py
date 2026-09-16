@@ -307,6 +307,39 @@ def test_match_threshold_single_source():
     assert vm.MATCH == vi.MATCH_THRESHOLD
 
 
+def test_identity_block_and_media_block_survive_prompt_budget_trim():
+    """#333 / #277：身份说明段与「【<平台> 媒体消息·图片】识图块」在 token 压力下不得被弹掉；
+    KB / few-shot / 场景这类注入尾巴照旧先弹。"""
+    from src.ai.ai_client import AIClient
+    sys_parts = [
+        "你是线上陪伴顾问。",
+        "【后台人设定位 · 须遵守】\n你是 Mizuki。" + "设" * 800,
+        "【人称与角色 · 硬规则】对方消息里的「你」指你自己。",
+        "【WhatsApp 媒体消息·图片】系统已识别对方发来的媒体内容如下：\n类型=C 主体：自拍 人物：1 人，男性，红发有胡须。",
+        "【知识库参考】\n" + "识" * 3000,
+        "【参考对话示例】\n客户：在吗\n你：在呀" + "例" * 400,
+        "【场景状态】现在是傍晚。" + "景" * 300,
+        "【话题/语境切换——注意】\n现在是北京时间 21:00。",
+        "【图中人物身份】" + vi.identity_note("customer_self", confirmed=True),
+        "【媒体能力边界】你不能发照片。",
+    ]
+    parts = sys_parts
+    prot = AIClient._protected_sys_parts(parts)
+    assert next(i for i, p in enumerate(parts) if p.startswith("【图中人物身份】")) in prot
+    assert next(i for i, p in enumerate(parts) if p.startswith("【WhatsApp 媒体消息·")) in prot
+    assert next(i for i, p in enumerate(parts) if p.startswith("【知识库参考】")) not in prot
+    assert next(i for i, p in enumerate(parts) if p.startswith("【话题/语境切换")) not in prot
+    # 端到端：预算逼到只够人设+硬规则+两块受保护段，KB/few-shot/场景/话题段被弹，身份与识图块仍在
+    sys_txt = "\n\n".join(parts)
+    msgs = [{"role": "system", "content": sys_txt}, {"role": "user", "content": "看我 😎"}]
+    before = sum(AIClient._estimate_msg_tokens(m["content"]) for m in msgs)
+    out, st = AIClient._trim_prompt_to_budget(msgs, before - 3500)
+    s = out[0]["content"]
+    assert "【图中人物身份】" in s and "媒体消息·图片" in s and "红发有胡须" in s
+    assert "识" * 3000 not in s
+    assert st["inject_chars"] > 0
+
+
 def test_persona_reply_wiring_static():
     src = (Path(__file__).resolve().parents[1] / "src" / "inbox" / "persona_reply.py").read_text(encoding="utf-8")
     assert "from src.companion.face_identity import annotate_inbound" in src
