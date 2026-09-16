@@ -175,6 +175,33 @@ def _content_tokens(text: str) -> set:
     return toks
 
 
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
+_THAI_RE = re.compile(r"[\u0e00-\u0e7f]")
+_ALNUM_RE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def script_mismatch(reply: str, beat: str) -> bool:
+    """R87 #321：素材是中文、回复不是中文（日/韩/泰文字，或几乎没有汉字）→ True。
+
+    此时 token 重叠**无法判定**是否提及（「市集买了小束花」→「市場で小さな花束を買った」
+    零重叠）；此前一律判「没提」→ 素材永不退役 → stride 窗内三天连讲「今天在市集买花」。
+    """
+    b = str(beat or "")
+    r = str(reply or "")
+    b_cjk = len(_CJK_RE.findall(b))
+    b_alnum = len(_ALNUM_RE.findall(b))
+    if not b_alnum or b_cjk * 2 < b_alnum:
+        return False   # 素材本身不是中文主体，交回重叠判定
+    if _KANA_RE.search(r) or _HANGUL_RE.search(r) or _THAI_RE.search(r):
+        return True
+    r_alnum = len(_ALNUM_RE.findall(r))
+    if not r_alnum:
+        return False
+    r_cjk = len(_CJK_RE.findall(r))
+    return r_cjk * 5 < r_alnum   # 汉字不到两成 → 英/越/印尼等拉丁语回复
+
+
 def beat_mentioned(reply: str, beat: str, *, min_ratio: float = 0.20,
                    min_hits: int = 3) -> bool:
     """回复是否**真提及**了这条生活素材（内容 token 重叠判定，纯函数）。
@@ -185,10 +212,15 @@ def beat_mentioned(reply: str, beat: str, *, min_ratio: float = 0.20,
     重叠率落在 0.25-0.35 区间，0.20 地板收得住；min_hits=3 挡「只共享
     今晚/晚上这类通用 bigram」的误标。素材太短（token < min_hits）时要求
     全部命中。
+
+    R87 #321：回复语种与素材不同（:func:`script_mismatch`）→ 无法判定 → 按「已聊过」
+    记账（同一「宁多勿漏」口径：白白退役一条素材，好过对日语客户连讲三天「今天买花」）。
     """
     bt = _content_tokens(beat)
     if not bt:
         return False
+    if script_mismatch(reply, beat):
+        return bool(str(reply or "").strip())
     rt = _content_tokens(reply)
     if not rt:
         return False
@@ -224,6 +256,7 @@ __all__ = [
     "convo_key_from_context",
     "is_beat_used",
     "record_beat_used",
+    "script_mismatch",
     "set_ledger_path",
     "skip_fn_for",
     "used_count",
