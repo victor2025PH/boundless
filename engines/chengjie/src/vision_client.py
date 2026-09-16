@@ -52,6 +52,23 @@ except Exception:  # pragma: no cover - 仅在包路径异常时降级
     _hash_file = None  # type: ignore
 
 
+_LEGACY_INBOUND_PROMPT = (
+    "请简要描述图中与聊天/文字相关的内容；若是聊天截图，说明最后一条对方消息大意。"
+)
+
+
+def default_inbound_image_prompt() -> str:
+    """入站识图默认 prompt（#333 v3 人物导向；单一事实源 ``companion.visual_identity``）。
+
+    软依赖：模块缺席时回落旧 v1 文案——识图链绝不因 prompt 模块导入失败而断。
+    """
+    try:
+        from src.companion.visual_identity import INBOUND_IMAGE_PROMPT
+        return INBOUND_IMAGE_PROMPT
+    except Exception:
+        return _LEGACY_INBOUND_PROMPT
+
+
 def _backend_from_tag(tag: str) -> str:
     """从 fallback 链 debug tag 推断最终答话/最后尝试的后端名（观测用）。
 
@@ -490,10 +507,11 @@ class VisionClient:
         if not data_url:
             self.logger.warning("图片转 base64 失败或文件过大")
             return None
-        default_prompt = (
-            "请简要描述图中与聊天/文字相关的内容；若是聊天截图，说明最后一条对方消息大意。"
-        )
-        text_prompt = (prompt or self.config.get("prompt") or default_prompt).strip()
+        # #333（2026-09-17）：旧默认「描述与聊天/文字相关的内容；若是聊天截图…」面向
+        # 截图/OCR——客户自拍只落一句「并非聊天截图…一位红发男性」，没有主体/人数/
+        # 是否自拍可供下游消费。默认改用 v3 人物导向 prompt（首行「类型=A|B|C」契约不变）；
+        # 单一事实源 src/companion/visual_identity.INBOUND_IMAGE_PROMPT，配置 prompt 仍最高优先。
+        text_prompt = (prompt or self.config.get("prompt") or default_inbound_image_prompt()).strip()
         content = [
             {"type": "image_url", "image_url": {"url": data_url}},
             {"type": "text", "text": text_prompt},
