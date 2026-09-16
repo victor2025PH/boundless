@@ -1970,6 +1970,17 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         import logging as _log_pm
         _log_pm.getLogger("admin").debug("Persona media 路由注册跳过", exc_info=True)
 
+    # ── #333 视觉记忆（客户图里是谁）：查看 / 确认 / 否认 / 退休 / 整会话删 ──
+    try:
+        from src.web.routes.visual_memory_routes import register_visual_memory_routes
+        register_visual_memory_routes(
+            app, auth_dep=_api_auth, audit_store=audit_store,
+            config_manager=config_manager,
+        )
+    except Exception:
+        import logging as _log_vm
+        _log_vm.getLogger("admin").debug("视觉记忆路由注册跳过", exc_info=True)
+
     # ── 表情包（贴纸）：包/条目管理 + 收藏入包 + 官方包播种 + 跨平台发送 ──
     try:
         from src.web.routes.sticker_routes import register_sticker_routes

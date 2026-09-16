@@ -2214,6 +2214,24 @@ _ADDITIONS_2026_09_15_Q39_RETRANSLATE = """
 """
 _BASELINE += _ADDITIONS_2026_09_15_Q39_RETRANSLATE
 
+# 2026-09-16：人设工作室导入补 YAML（磁盘 packs / profiles_runtime 一直是 yaml，
+# UI 原先只走浏览器 JSON.parse）。POST /api/personas/profiles/parse 只解析不写库。
+_ADDITIONS_2026_09_16_PERSONA_YAML_PARSE = """
+/api/personas/profiles/parse	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_16_PERSONA_YAML_PARSE
+
+# #333 视觉记忆（2026-09-17，visual_memory_routes.py）：客户图里是谁——实体 / 观察查看、
+# 人工确认本人 / 关系人（user_confirmed 压过 AI 推断）、否认、退休实体、整会话删；status 探边车。
+_ADDITIONS_2026_09_17_VISUAL_MEMORY = """
+/api/visual-memory/status	GET
+/api/visual-memory/{conversation_id}	GET,DELETE
+/api/visual-memory/{conversation_id}/confirm	POST
+/api/visual-memory/{conversation_id}/deny	POST
+/api/visual-memory/{conversation_id}/entities/{entity_id}/retire	POST
+"""
+_BASELINE += _ADDITIONS_2026_09_17_VISUAL_MEMORY
+
 
 def _parse_baseline():
     expected = set()
