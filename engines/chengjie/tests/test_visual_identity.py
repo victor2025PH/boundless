@@ -79,6 +79,28 @@ def test_parse_empty_and_garbage_never_raise():
     assert vi.parse_caption_fields(12345)["kind"] == ""
 
 
+# ── R7775K 降级话术口径 ───────────────────────────────────────────────────────
+
+def test_honest_ask_pool_acknowledges_and_never_asks_to_redescribe():
+    """识图超时/失败的降级话术：认收 + 自己这边没加载完 + 等下再看；不反问客户「你发的
+    是什么」，不被盲断言闸误拦，也不被 sent-claim（「我发的图还在加载」）误剥。"""
+    import re
+    from src.inbox import media_enrich as me
+    from src.ai.outbound_promise_guard import detect_sent_claim
+    from src.ai.outbound_text_guard import strip_system_labels
+    redescribe = re.compile(
+        r"描述一下|说说拍的|你发的是什么|发的是啥|what did you send|what'?s in it|tell me what|"
+        r"what is it\?", re.I)
+    for lang, pool in me._HONEST_ASK_POOL.items():
+        assert len(pool) >= 3, lang
+        for s in pool:
+            assert not redescribe.search(s), s
+            assert me.blind_image_assertion(s) is False, s          # 诚实标记在
+            assert detect_sent_claim(s) == "", s                       # 不当假声明
+            assert strip_system_labels(s) == (s, []), s                # 无方括号标签
+            assert "显示不出来" not in s and "not showing" not in s.lower(), s
+
+
 # ── 身份判定 ─────────────────────────────────────────────────────────────────
 
 def test_classify_identity_bands():

@@ -323,8 +323,12 @@ def _blind_res():
     _HONESTY_RE = re.compile(
         r"看不清|没看清|看不到|看不了|打不开|加载不出|没加载|加载失败|没显示"
         r"|显示不出|没收到|收不到|没能识别|识别不了|再发一次|重新发一?[张遍次]"
+        # #333 R7775K（2026-09-17）：降级话术改「收到了、还没加载完、等下再看」口径
+        r"|还没(?:完全)?(?:加载|出来)|转圈|加载(?:得|有点)?慢|等它(?:出来|加载)|加载完"
         r"|(?i:didn'?t\s+load|not\s+load|can'?t\s+(?:see|open|view)"
-        r"|won'?t\s+load|not\s+showing|didn'?t\s+come\s+through)")
+        r"|won'?t\s+load|not\s+showing|didn'?t\s+come\s+through"
+        r"|half-?loaded|only\s+half|hasn'?t\s+(?:fully\s+)?loaded|finishes\s+loading"
+        r"|once\s+it\s+(?:loads|comes\s+through|finishes))")
     _BLIND_RES = [
         # 「这/那(张)图/照片…是/有/拍的/看起来/好像/应该是」——断言或猜测画面
         re.compile(r"[这那]\s*[张幅个]?\s*(?:图片?|照片|相片)\s*[里上中]?"
@@ -362,16 +366,22 @@ def blind_image_assertion(text: str) -> bool:
 
 #: 诚实追问话术池（盲断言拦下后的整稿替换）。变体按会话 crc32 确定性轮换：
 #: 同会话稳定（缓存/复读判定友好）、跨会话不千篇一律。
+#: #333 R7775K（2026-09-17 Enrique 实录「I got the photo but it's not showing for me.
+#: What did you send?」）：图片在客户手机上明明发成功了，我方却说「显示不出来」并让
+#: 客户重新描述——既像机器人又把技术故障推给客户。口径改为：**认收 + 说自己这边
+#: 还没加载完 + 等下再看**，不反问、不让客户重复描述，顺手把话题接住。
+#: 措辞刻意避开 sent-claim 词表（it's still loading / on your end 会被当「我发的图
+#: 还在加载」假声明剥掉）；每条都带 _HONESTY_RE 认得的诚实标记。
 _HONEST_ASK_POOL = {
     "zh": [
-        "咦，这张图我这边一直加载不出来，你直接跟我说说拍的是啥呗？",
-        "图好像没加载出来，我这边看不到内容——你发的是什么呀？",
-        "收到图啦，不过我这边显示不出来，你给我描述一下呗？",
+        "图收到啦，我这边信号有点差，还在转圈没加载出来——等它出来我再好好看～",
+        "收到你发的图了，这边网慢，图还没完全加载出来，等下加载完我再看哈。",
+        "看到你发图了，可惜我这边加载得有点慢，等它出来再跟你说～",
     ],
     "en": [
-        "Hmm, the picture won't load on my end — what's in it?",
-        "I got the photo but it's not showing for me. What did you send?",
-        "The image isn't loading here — tell me what it is?",
+        "Got your pic! My connection's crawling so it's only half-loaded on my end — I'll take a proper look once it finishes.",
+        "I can see you sent a photo, but my signal's slow and it hasn't fully loaded yet — give me a bit and I'll check it out.",
+        "Your photo came in, it just hasn't loaded properly here yet — I'll look once it comes through.",
     ],
 }
 

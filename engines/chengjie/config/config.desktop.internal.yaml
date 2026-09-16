@@ -578,6 +578,10 @@ vision:
   - http://192.168.0.140:11434/v1
   - http://192.168.0.176:11434/v1
   timeout: 150
+  # #333 R7775K：LAN 直连保留 150（140 冷载实测 130s）；被网关接管（外网坐席机）时按
+  # 端点分级——网关背后是热态 GPU，45s 足够，超了走降级话术而不是卡 2 分钟。
+  endpoint_timeouts:
+    bd2026.cc: 45
   # #333（2026-09-17）识图 prompt v3：首行「类型=A|B|C」契约不变（前端徽标 / stats 认它），
   # C 类改人物导向（主体 / 人物：人数·性别年龄·外貌·是否自拍 / 场景），钉「不猜姓名身份关系」。
   # 与 src/companion/visual_identity.INBOUND_IMAGE_PROMPT 同文（门禁 test_visual_identity 钉同步）；
