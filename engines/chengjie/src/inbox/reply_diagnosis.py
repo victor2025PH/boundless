@@ -538,6 +538,45 @@ def diagnose_conversation(
     except Exception:
         logger.debug("[reply_diag] sidecar_send_fail 读取失败（忽略）", exc_info=True)
 
+    # ── R87 #330：会话选了「无限制」而本机端点离线 → route_offline（回退开＝warn 已代答 /
+    # 关＝block 没人回）。与 conv_state 同一 note（conv_route.offline_note）。fail-open。
+    try:
+        from src.ai import conv_route as _cr
+        if store is not None and _cr.get(store, cid).unrestricted:
+            _note = _cr.offline_note(cid, store=store, now=ts_now)
+            _still = _cr.recent_offline(cfg, now=ts_now) is not None
+            if _note and (_still or (ts_now - float(_note.get("ts") or 0.0)) <= 15 * 60):
+                _fb = bool(_cr.offline_fallback_enabled(cfg))
+                out["route_offline"] = {**_note, "fallback": _fb, "still_offline": _still}
+                _finding(findings, "warn" if _fb else "block", "route_offline",
+                         reason=str(_note.get("reason") or "offline"),
+                         ts=float(_note.get("ts") or 0.0),
+                         ago_sec=round(max(0.0, ts_now - float(_note.get("ts") or ts_now)), 0),
+                         n=int(_note.get("n") or 1), fallback=_fb, still_offline=_still)
+    except Exception:
+        logger.debug("[reply_diag] route_offline 读取失败（忽略）", exc_info=True)
+
+    # ── R87 #331：「为什么没回」时间线——拦截台账里本会话近 24h 的行（新 → 旧，≤8 条）。
+    # 有行即 warn finding abort_recent（最新一条的原因 / 子原因 / 细节），面板据 recent_aborts 画时间线。
+    try:
+        from src.inbox import abort_ledger as _al
+        if store is not None:
+            _ab = _al.rows_for_conv(_al.rows(store), cid, now=ts_now, window_h=24.0)[:8]
+            if _ab:
+                out["recent_aborts"] = [{
+                    "ts": float(r.get("ts") or 0.0), "code": str(r.get("code") or ""),
+                    "reason": str(r.get("reason") or ""), "stage": str(r.get("stage") or ""),
+                    "hit": str(r.get("hit") or ""), "detail": str(r.get("detail") or ""),
+                    "source": str(r.get("source") or ""),
+                } for r in _ab]
+                _a0 = out["recent_aborts"][0]
+                _finding(findings, "warn", "abort_recent", n=len(_ab), abort_code=_a0["code"],
+                         reason=_a0["reason"], ts=_a0["ts"],
+                         ago_sec=round(max(0.0, ts_now - _a0["ts"]), 0), detail=_a0["detail"],
+                         hit=_a0["hit"])
+    except Exception:
+        logger.debug("[reply_diag] abort_ledger 读取失败（忽略）", exc_info=True)
+
     if not any(f["level"] == "block" for f in findings):
         _finding(findings, "ok", "looks_alive",
                  effective=str(effective.get("effective_mode")

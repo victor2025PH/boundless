@@ -172,6 +172,23 @@ def register_drafts_routes(app, *, api_auth):
                     d["lang_plan"] = _lp
         except Exception:
             logger.debug("[drafts] lang-plan 富集失败（忽略）", exc_info=True)
+        # R87 P1-3（X9B22T 15:30 preview='[PHOTO selfie cozy bedroom…'）：草稿正文里的 [PHOTO …] 发图指令
+        # 是给投递链的协议标记，坐席预览不该看原码——另给 draft_text_display（剥净）+ photo_directive
+        # （kind / scene），draft_text 原样保留（编辑 / 通过仍送原文，投递链照常解析执行）。
+        try:
+            from src.ai.photo_directive import extract_photo_directive as _epd
+            for d in drafts:
+                _raw = str(d.get("draft_text") or d.get("text") or "")
+                if "[PHOTO" not in _raw and "[photo" not in _raw:
+                    continue
+                _clean, _pd = _epd(_raw)
+                if _pd:
+                    d["photo_directive"] = {"kind": str(_pd.get("kind") or ""),
+                                            "scene": str(_pd.get("scene") or "")[:120]}
+                if _clean != _raw:
+                    d["draft_text_display"] = _clean
+        except Exception:
+            logger.debug("[drafts] photo_directive 富集失败（忽略）", exc_info=True)
         return {"ok": True, "count": len(drafts), "drafts": drafts}
 
     @app.get("/api/drafts/stats")

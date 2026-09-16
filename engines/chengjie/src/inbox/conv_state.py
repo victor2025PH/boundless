@@ -15,9 +15,9 @@ chip（ay- 让位 / rk- 风控 / aif- 起草失败 / ms- 边车 / lp- 语言）�
         action:     resume | ack | retry | confirm_pin | none
         params:     dict                       # 文案插值 + 动作参数（draft_id / message_id …）
         sources:    dict                       # 六源原始快照（详情面板 / 门禁断言用）
-        notes:      list                       # Q-35 #306：不改状态的旁注（album_no_match：相册无命中
-                                               #   {query, persona_id, n, hhmm, link, text_key}），带下一行琥珀；
-                                               #   源 = album_miss_marker.get（写侧在 image_autosend，本模块零写）
+        notes:      list                       # Q-35 #306 / R87 P2-2：不改状态的旁注
+                                               #   album_no_match：相册无命中 {query, persona_id, n, hhmm, link, text_key}
+                                               #   voice_clone_lang：克隆声不支持该会话语种 {lang, n, text_key}
     }
 
 六源（全部**只读**，任一源异常 → 视为该源无信号，绝不抛、绝不写 KV）：
@@ -363,6 +363,25 @@ def _src_album_miss(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]
         return None
 
 
+def _src_voice_clone_lang(cid: str, now: float) -> Optional[Dict[str, Any]]:
+    """R87 P2-2：本会话克隆声不支持当前语种（进程内 note，24h）。不改状态——文字照常回，
+    只让坐席看见「本会话语音不可用」。"""
+    try:
+        from src.ai.tts_pipeline import peek_clone_lang_skip
+        rec = peek_clone_lang_skip(cid, now=now)
+        if not rec:
+            return None
+        lang = str(rec.get("lang") or "").strip() or "?"
+        ts = float(rec.get("ts") or 0.0)
+        return {"kind": "voice_clone_lang", "lang": lang,
+                "n": int(rec.get("n") or 1), "ts": ts,
+                "hhmm": time.strftime("%H:%M", time.localtime(ts)) if ts else "--:--",
+                "ago_sec": float(rec.get("age_sec") or 0),
+                "text_key": "inbox.cs.note.voice_clone_lang"}
+    except Exception:
+        return None
+
+
 def _src_xlate_hold(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
     """Q-39 B（#326）：出站翻译 HOLD note（``xlate_hold_marker``，24h 内有效）。同引擎重试 +
     换引擎 + 重起草三步都没救回来才写；同会话下一次翻译成功即清。"""
@@ -460,9 +479,9 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         "reason_code": "", "reason_text_key": "inbox.cs.human", "until_ts": None,
         "action": "none", "params": {}, "sources": src, "ts": ts_now,
     }
-    # Q-35 #306：旁注源＝相册无命中 note。**不参与状态判定**（AI 已改口照常回）、不进 sources
-    # （六源契约不动），只进 out["notes"]；_set() 只更新状态键，notes 随任一分支原样带出。
-    out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),) if n]
+    # Q-35 #306 / R87 P2-2：旁注源＝相册无命中 + 克隆声语种缺口。**不参与状态判定**、不进 sources。
+    out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),
+                                _src_voice_clone_lang(cid, ts_now)) if n]
     out["ext"] = {"xlate_hold": xh, "route_offline": ro}
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",

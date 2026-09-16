@@ -211,7 +211,7 @@ def test_personas_template_consumes_deep_link():
     assert "var _pmaPendingFilter = ''" in s
     load = s[s.index("async function pmaLoad("):s.index("function _pmaRenderGuide(")]
     assert "_pmaFilter = _pmaPendingFilter" in load, "pmaLoad 首次渲染必须消费预置筛选"
-    assert "['notrg', 'nohit', 'off', 'untagged', 'photo', 'video'].indexOf(_pf)" in s, "filter 只认相册筛选枚举"
+    assert "['notrg', 'nohit', 'off', 'untagged', 'photo', 'video', 'aigen'].indexOf(_pf)" in s, "filter 只认相册筛选枚举"
 
 
 # ── ⑤ 词条 ───────────────────────────────────────────────────────────────

@@ -1995,11 +1995,19 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                     sent_claim=_sent_claim, photos_disabled=_photos_off,
                     photo_request_failed=(_bind_reason == "directive_unfulfilled"))
                 (_rsce if _sent_claim else _rpe)("retracted")
+                # R87 P1-3：同会话承诺未兑现跟轮记账——30 分钟内 ≥2 次 → 下一轮拟稿注入
+                # 「绝不再承诺发图」硬提示（skill_manager 拟稿前读 promise_streak_hint）
+                _pstreak = 0
+                try:
+                    from src.inbox.image_send_gate import note_promise_retracted as _npr
+                    _pstreak = _npr(f"{platform}:{account_id}:{chat_key}")
+                except Exception:
+                    _pstreak = 0
                 _assistant_ref.logger.info(
                     "[media_promise] conv=%s:%s:%s claims_send=1 attached=0 action=%s "
-                    "reason=%s photos=%s sent_claim=%s",
+                    "reason=%s photos=%s sent_claim=%s streak=%d",
                     platform, account_id, chat_key, _pact, _bind_reason or "-",
-                    "off" if _photos_off else "on", _sent_claim)
+                    "off" if _photos_off else "on", _sent_claim, _pstreak)
                 if _pact == "review" or not str(_new_text or "").strip():
                     _tag_needs_human(
                         _assistant_ref, platform, account_id, chat_key,

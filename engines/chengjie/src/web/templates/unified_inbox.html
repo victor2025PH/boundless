@@ -823,8 +823,8 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
            旧 ay- / rk- / aif- / ms- chip 改为本带子渲染（#hdr-tags-row 已随 #206 撤除，它们此前是死渲染）。
            _csRender 控显；旧后端无 conv_state 字段 → 永久隐藏零噪音。「详情」= 既有 AI 体检面板。 -->
       <div id="cs-band" class="cs-band" hidden role="status" aria-live="polite"><span class="cs-dot" id="cs-dot" aria-hidden="true"></span><span class="cs-txt" id="cs-txt"></span><button type="button" class="cs-act" id="cs-act" onclick="_csAction(this)" hidden></button><button type="button" class="cs-more" id="cs-more" onclick="openAiDiag()" title="AI 回复链路体检：完整原因与每条出路" data-i18n-title="inbox.cs.more_t" data-i18n="inbox.cs.more">详情</button></div>
-      <!-- Q-35 #306（cs-note）：状态带下一行**旁注**——不改状态（AI 已改口照常回），只让坐席看见「相册没有匹配『自拍』的图」+ 深链去相册补标签。
-           源 = conv_state.notes[kind=album_no_match]（album_miss_marker，命中即清 / 24h 陈旧不显）；复用 .cs-band 样式零新 CSS。 -->
+      <!-- Q-35 #306 / R87 P2-2（cs-note）：状态带下一行旁注——不改状态。album_no_match 优先
+           （相册无命中 + 去补标签）；否则 voice_clone_lang（克隆声不支持该语种，文字照常回）。 -->
       <div id="cs-note" class="cs-band cs-warn cs-s-note" hidden role="status" aria-live="polite"><span class="cs-dot" aria-hidden="true"></span><span class="cs-txt" id="cs-note-txt"></span><button type="button" class="cs-act" id="cs-note-act" onclick="_csNoteAction(this)" hidden></button></div>
       <!-- P1 2026-08-20：群/频道只读资料条（成员盘 + 档位提示）。不进 info-sidebar——
            右栏已被 sibling 认领且 405px 坐席常收起助手；顶栏永远可见。默认一行，
@@ -6850,9 +6850,17 @@ function _csRenderNotes(st){
   var box=document.getElementById('cs-note'), txt=document.getElementById('cs-note-txt'), act=document.getElementById('cs-note-act');
   if(!box||!txt) return;
   var notes=(st&&Array.isArray(st.notes))?st.notes:[];
-  var n=null; for(var i=0;i<notes.length;i++){ if(notes[i]&&String(notes[i].kind||'')==='album_no_match'){ n=notes[i]; break; } }
+  var n=null, kind='';
+  for(var i=0;i<notes.length;i++){ if(notes[i]&&String(notes[i].kind||'')==='album_no_match'){ n=notes[i]; kind='album_no_match'; break; } }
+  if(!n){ for(var j=0;j<notes.length;j++){ if(notes[j]&&String(notes[j].kind||'')==='voice_clone_lang'){ n=notes[j]; kind='voice_clone_lang'; break; } } }
   _csNote=n;
   if(!n){ box.hidden=true; txt.textContent=''; if(act){ act.hidden=true; act.textContent=''; } return; }
+  if(kind==='voice_clone_lang'){
+    txt.textContent=window.Tf(String(n.text_key||'inbox.cs.note.voice_clone_lang'),{lang:String(n.lang||'?')});
+    box.title=_csKeyOr('inbox.cs.note.voice_clone_lang_t',''); box.dataset.kind='voice_clone_lang';
+    if(act){ act.hidden=true; act.textContent=''; }
+    box.hidden=false; return;
+  }
   var cnt=Number(n.n||1), k=cnt>1?'inbox.cs.note.album_no_match_n':(String(n.text_key||'')||'inbox.cs.note.album_no_match');
   txt.textContent=window.Tf(k,{q:_csNoteQ(n),n:String(cnt),hhmm:String(n.hhmm||'--:--')});
   box.title=_csKeyOr('inbox.cs.note.album_no_match_t',''); box.dataset.kind='album_no_match'; box.dataset.pid=String(n.persona_id||'');
@@ -16892,10 +16900,14 @@ function _diagFindingText(f){
   var known={account_status:1,account_missing:1,conv_missing:1,takeover_manual:1,
     explicit_non_auto:1,cap_warmup:1,cap_platform:1,cap_business_line:1,
     deliver_off:1,l2_off:1,work_schedule:1,pending_drafts:1,managed_peer:1,
-    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1,agent_yield:1,sidecar_send_fail:1};
+    peer_bot_flag:1,looks_alive:1,media_block:1,customer_waiting_no_gate:1,ai_last_fail:1,high_risk:1,agent_yield:1,sidecar_send_fail:1,
+    route_offline:1,abort_recent:1};   // R87 P1-2：无限制端点离线 / 拦截时间线
   if(known[code]){
     var fmt={};
     Object.keys(p).forEach(function(k){ fmt[k]=String(p[k]==null?'':p[k]); });
+    // R87 P1-2：route_offline 回退状态句 + 时刻；abort_recent 原因码 → 人话（复用会话头「需人工」词条）
+    if(code==='route_offline'){ try{ fmt.hhmm=fmtTs(Number(p.ts||0)); fmt.fallback_txt=window.T(p.fallback===true||p.fallback==='true'?'inbox.diag.route_offline_fb_on':'inbox.diag.route_offline_fb_off'); }catch(_){} }
+    if(code==='abort_recent'){ try{ fmt.hhmm=fmtTs(Number(p.ts||0)); fmt.reason=_diagAbortReason(p); fmt.detail_txt=p.detail?(' · '+_diagAbortDetail(String(p.detail||''))):''; }catch(_){} }
     // Q-14 #262：AI 失败原因码译人话（与会话头灰标同一组词条）
     if(code==='ai_last_fail'){ try{ fmt.reason=_aifReasonLabel(fmt.reason); }catch(_){} }
     // Q-24 #298（ms-）：边车七码译人话（与发送失败气泡第一段同一组词条）+ 时刻
@@ -16933,6 +16945,20 @@ function _diagFindingText(f){
   }
   return window.Tf('inbox.diag.unknown',{code:code});
 }
+/* R87 P1-2：拦截行原因 → 人话：needs_human 子原因走 _HANDOFF_REASON_KEYS（dup_guard_blocked → 「近重复拦截…」），
+   其余码走 inbox.al.r_* 若有；都没有则原码。细节 sim=… matched_at=… rewrites=… 译成一句。 */
+function _diagAbortReason(r){
+  r=r||{}; var reason=String(r.reason||''), code=String(r.code||'');
+  var k=_HANDOFF_REASON_KEYS[reason]||_HANDOFF_REASON_KEYS[reason.split(':')[0]];
+  if(k) return window.T(k);
+  if(reason.indexOf('crisis')===0) return window.T('inbox.handoff.r_crisis');
+  return reason||code||'-';
+}
+function _diagAbortDetail(d){
+  var m=/sim=([0-9.]+)\s+matched_at=(\S+)\s+rewrites=(\d+)/.exec(String(d||''));
+  if(m) return window.Tf('inbox.cs.dup_detail',{at:m[2],sim:m[1],n:m[3]});
+  return String(d||'');
+}
 function _diagSrcLabel(src){
   src=String(src||'');
   if(src==='human') return window.T('inbox.diag.src_human');
@@ -16956,6 +16982,7 @@ function _diagFixHtml(f){
   if(code==='cap_warmup') return btn(window.T('inbox.diag.fix_warmup'),'diagDisableWarmup();');
   if(code==='cap_platform') return btn(window.T('inbox.diag.fix_uncap'),"diagUncapPlatform('"+esc(String(p.detail||''))+"');");
   if(code==='pending_drafts') return btn(window.T('inbox.diag.fix_drafts'),'closeAiDiag();diagOpenDrafts();');
+  if(code==='route_offline') return btn(window.T('inbox.diag.fix_route_standard'),"_mpSet({profile:'standard'});setTimeout(openAiDiag,900);");   // R87 P1-2
   // 实施56 P1：媒体拦截明细——内容已转待发队列的给「去放行」；没稿的人工回即可
   if(code==='media_block'&&String(p.queued)==='true') return btn(window.T('inbox.diag.fix_drafts'),'closeAiDiag();diagOpenDrafts();');
   // Q-15 #271（ad-）：成人内容持有 → 就地「一键人设口吻软回应」（人工出站同路，发完自动摘标）
@@ -17042,6 +17069,18 @@ function _diagRowHtml(f){
   if(code==='pending_drafts'&&p.stale===true){
     extra+='<div style="margin-top:4px;font-size:12px;color:var(--tk-warn-ink);">'
       +esc(window.Tf('inbox.diag.pending_stale_hint',{stale_h:String(p.stale_h||'')}))+'</div>';
+  }
+  // R87 P1-2：拦截时间线（新 → 旧）：时刻 · 人话原因 · 对照句 / 细节，原码折进「技术细节」
+  if(code==='abort_recent'){
+    var _rows=(__diagLast&&Array.isArray(__diagLast.recent_aborts))?__diagLast.recent_aborts:[];
+    if(_rows.length){
+      extra+='<div style="margin-top:6px;font-size:11px;font-weight:700;color:var(--tk-text-muted);">'+esc(window.T('inbox.diag.abort_timeline'))+'</div>';
+      _rows.forEach(function(r){
+        var line=fmtTs(Number(r.ts||0))+' · '+_diagAbortReason(r);
+        var sub=r.detail?_diagAbortDetail(r.detail):(r.hit?window.Tf('inbox.diag.abort_row_hit',{hit:String(r.hit).slice(0,60)}):'');
+        extra+='<div style="margin-top:3px;font-size:12px;color:var(--tk-text);">'+esc(line)+(sub?'<div style="font-size:11px;color:var(--tk-text-muted);">'+esc(sub)+'</div>':'')+'</div>';
+      });
+    }
   }
   var tech='<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:11px;color:var(--tk-text-muted);">'
     +esc(window.T('inbox.diag.tech_details'))+'</summary>'
@@ -17603,7 +17642,7 @@ async function _loadDraftsBody(c){
           <span style="font-size:11px;color:var(--text-sub);">${esc(dr.peer_name||dr.chat_name||'')}</span>
         </div>
         ${dr.peer_last_text?`<div class="draft-peer-mini">${esc(dr.peer_last_text)}</div>`:''}
-        <div class="draft-text-mini">${esc(dr.draft_text||dr.text||'')}</div>
+        <div class="draft-text-mini">${esc(dr.draft_text_display||dr.draft_text||dr.text||'')}${dr.photo_directive?` <span class="draft-l1r-chip" title="${esc(String(dr.photo_directive.scene||''))}">${esc(window.Tf('inbox.draft_mini.photo_directive',{kind:String(dr.photo_directive.kind||'')}))}</span>`:''}</div>
         ${blocked?`<div class="draft-block-hint">${esc(blockTip)}</div>`:''}
         <div class="mem-chips" data-mem-draft="${esc(dr.draft_id||'')}" data-mem-created="${esc(dr.created_ts||'')}"></div>
         <div class="draft-acts">
@@ -17915,7 +17954,7 @@ function _cdraftRender(){
   bar.classList.add('show');
   bar.classList.toggle('slim', typing);
   const body=document.getElementById('cdraft-body');
-  if(body) body.textContent=d.draft_text||d.text||'';
+  if(body) body.textContent=(d.draft_text_display||d.draft_text||d.text||'')+(d.photo_directive?(' '+window.Tf('inbox.draft_mini.photo_directive',{kind:String(d.photo_directive.kind||'')})):'');   // R87 P1-3：[PHOTO …] 协议标记不进预览
   const risk=document.getElementById('cdraft-risk');
   if(risk){
     const lv=String(d.autopilot_level||'');

@@ -3360,6 +3360,21 @@ class SkillManager(LoggerMixin):
                         "就当这一轮发不了照片，用人设口吻自然回应"
                         "（可以撒娇、岔开话题或改天再说），也不要否认你能拍照。")
                     _metric("media_hint")
+                # R87 P1-3（X9B22T）：同会话 30 分钟内承诺发图已被撤回 ≥2 次 → 硬提示压住
+                # 「Sure, give me a second, I'll take one now」一轮一轮复发（不管本轮是否在要图）
+                try:
+                    from src.ai.conv_route import conv_id as _cidf_ps
+                    from src.inbox.image_send_gate import promise_streak_hint as _psh
+                    _ps_hint = _psh(str(conversation_id or "") or _cidf_ps(
+                        platform, _acct_id or "default", chat_key))
+                except Exception:
+                    _ps_hint = ""
+                if _ps_hint:
+                    user_context["_media_coherence_hint"] = (
+                        (str(user_context.get("_media_coherence_hint") or "") + "\n" + _ps_hint).strip())
+                    _metric("promise_streak_hint")
+                if _wants_img:
+                    pass
                 elif not user_context.get("_media_coherence_hint"):
                     # 收图后质疑信号（P0，与 A 线同口径）：不是在要图 → 查是否在
                     # 质疑刚发的图（重复/不像/假图），命中则计数 + 设纠偏 hint。

@@ -524,10 +524,78 @@ def skip_voice_reason(result: Any) -> str:
     return ""
 
 
+# R87 P2-2：clone_lang_unsupported 同会话只 WARNING 一次，其余 DEBUG；会话头旁注读这本账。
+_CLONE_LANG_LOCK = threading.Lock()
+_CLONE_LANG_NOTES: Dict[str, Dict[str, Any]] = {}
+_CLONE_LANG_LOGGED: Dict[str, float] = {}
+CLONE_LANG_NOTE_TTL_SEC = 24 * 3600.0
+
+
+def note_clone_lang_skip(conv: str, lang: str, *, now: Optional[float] = None
+                         ) -> Optional[Dict[str, Any]]:
+    """语种闸跳过克隆声 → 记会话旁注（进程内）。空 conv 不记。"""
+    cid = str(conv or "").strip()
+    if not cid:
+        return None
+    t = float(now if now is not None else time.time())
+    lg = str(lang or "").strip() or "?"
+    with _CLONE_LANG_LOCK:
+        prev = _CLONE_LANG_NOTES.get(cid) or {}
+        rec = {"ts": t, "first_ts": float(prev.get("first_ts") or t),
+               "n": int(prev.get("n") or 0) + 1, "lang": lg}
+        _CLONE_LANG_NOTES[cid] = rec
+        return dict(rec)
+
+
+def peek_clone_lang_skip(conv: str, *, now: Optional[float] = None,
+                         ttl_sec: float = CLONE_LANG_NOTE_TTL_SEC
+                         ) -> Optional[Dict[str, Any]]:
+    cid = str(conv or "").strip()
+    if not cid:
+        return None
+    t = float(now if now is not None else time.time())
+    with _CLONE_LANG_LOCK:
+        rec = _CLONE_LANG_NOTES.get(cid)
+    if not rec:
+        return None
+    try:
+        ts = float(rec.get("ts") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if ttl_sec and (t - ts) > float(ttl_sec):
+        return None
+    out = dict(rec)
+    out["age_sec"] = round(max(0.0, t - ts), 0)
+    return out
+
+
+def reset_clone_lang_skip_for_tests() -> None:
+    with _CLONE_LANG_LOCK:
+        _CLONE_LANG_NOTES.clear()
+        _CLONE_LANG_LOGGED.clear()
+
+
+def _skip_voice_first(conv: str, detail: str) -> bool:
+    """同会话 + 同原因 24h 内第一次 → True（打 WARNING）；之后 False（DEBUG）。"""
+    key = f"{str(conv or '').strip()}|{str(detail or '').strip()}"
+    if key == "|":
+        return True
+    t = time.time()
+    with _CLONE_LANG_LOCK:
+        last = _CLONE_LANG_LOGGED.get(key)
+        if last is not None and (t - last) < CLONE_LANG_NOTE_TTL_SEC:
+            return False
+        _CLONE_LANG_LOGGED[key] = t
+        return True
+
+
 def log_skip_voice(result: Any, *, conv: str = "", log: Any = None) -> str:
     """Q-22 C：自动链统一落 ``[tts] skip_voice reason=… conv=… lang=…`` 一行。
 
     返回 reason（"" ＝不是阻断，未打日志）。``conv`` 为三段式会话 id（拿不到传空）。
+
+    R87 P2-2（S5NVGQ）：``clone_lang_unsupported`` 是能力缺口不是断档——同会话同原因
+    只 WARNING 一次，其余 DEBUG；并写会话旁注给状态带。
     """
     reason = skip_voice_reason(result)
     if not reason:
@@ -535,13 +603,19 @@ def log_skip_voice(result: Any, *, conv: str = "", log: Any = None) -> str:
     lg = log or logger
     ex = getattr(result, "extra", None) or {}
     if reason == "clone_unavailable":
-        lg.warning(
+        detail = str(ex.get("clone_unavailable") or "?")
+        lang = str(ex.get("clone_lang_blocked") or "")
+        if "clone_lang_unsupported" in detail or lang:
+            note_clone_lang_skip(conv, lang or detail.rsplit(":", 1)[-1])
+        first = _skip_voice_first(conv, detail)
+        (lg.warning if first else lg.debug)(
             "[tts] skip_voice reason=clone_unavailable:%s conv=%s lang=%s "
             "system_voice=%s → 改发文字（自动链不出系统音）",
-            ex.get("clone_unavailable") or "?", conv or "-",
-            ex.get("clone_lang_blocked") or "-", ex.get("system_voice") or "-")
+            detail, conv or "-", lang or "-", ex.get("system_voice") or "-")
     else:
-        lg.warning(
+        detail = "lang_mismatch"
+        first = _skip_voice_first(conv, detail)
+        (lg.warning if first else lg.debug)(
             "[tts] skip_voice reason=lang_mismatch conv=%s text_lang=%s tts_lang=%s "
             "source=%s → 改发文字",
             conv or "-", ex.get("text_lang") or "-", ex.get("tts_lang") or "-",

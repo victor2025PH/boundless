@@ -410,6 +410,58 @@ def note_follow_sent(conv_key: str, *, now: Optional[float] = None) -> None:
             _FOLLOW.popitem(last=False)
 
 
+# ── 承诺发图未兑现的跟轮账（R87 P1-3，X9B22T 15:09–15:50「Sure, give me a second, I'll take one now」×4）──
+# 每次 promise 链把「承诺发图 / 假称已发」撤回改写就记一笔；同会话 30 分钟内 ≥2 次 → 拟稿侧注入
+# 「本轮绝不承诺发图」硬提示（skill_manager._media_coherence_hint 同一消费口），承诺不再一轮一轮复发。
+
+_PROMISE_RETRACTS: "OrderedDict[str, List[float]]" = OrderedDict()
+_PROMISE_CAP = 4000
+_PROMISE_LOCK = threading.Lock()
+PROMISE_STREAK_WINDOW_SEC = 30 * 60.0
+PROMISE_STREAK_HINT_N = 2
+
+
+def note_promise_retracted(conv_key: str, *, now: Optional[float] = None) -> int:
+    """承诺 / 假称已发被撤回改写（或转人审）记一笔；返回窗内累计次数。"""
+    ck = str(conv_key or "").strip()
+    if not ck:
+        return 0
+    t = float(now if now is not None else time.time())
+    with _PROMISE_LOCK:
+        arr = [x for x in (_PROMISE_RETRACTS.get(ck) or []) if t - x < PROMISE_STREAK_WINDOW_SEC]
+        arr.append(t)
+        _PROMISE_RETRACTS[ck] = arr
+        _PROMISE_RETRACTS.move_to_end(ck)
+        while len(_PROMISE_RETRACTS) > _PROMISE_CAP:
+            _PROMISE_RETRACTS.popitem(last=False)
+        return len(arr)
+
+
+def promise_streak(conv_key: str, *, now: Optional[float] = None) -> int:
+    """窗内撤回次数（无记录 = 0）。"""
+    t = float(now if now is not None else time.time())
+    with _PROMISE_LOCK:
+        arr = _PROMISE_RETRACTS.get(str(conv_key or "").strip()) or []
+    return len([x for x in arr if t - x < PROMISE_STREAK_WINDOW_SEC])
+
+
+def promise_streak_hint(conv_key: str, *, now: Optional[float] = None) -> str:
+    """≥ :data:`PROMISE_STREAK_HINT_N` 次 → 给拟稿 LLM 的硬提示；否则空串。"""
+    n = promise_streak(conv_key, now=now)
+    if n < PROMISE_STREAK_HINT_N:
+        return ""
+    return (
+        f"这个会话里你已经 {n} 次「说要发照片 / 说拍好了」但都没能发出去，客户在等。"
+        "本轮**绝不**再承诺发图，不要写「等我去拍」「马上发你」「刚拍好」「照片来了」这类话，"
+        "也不要解释为什么发不了；就当这一轮发不了照片，先回应对方刚说的内容，把话聊下去。"
+    )
+
+
+def reset_promise_streak_for_tests() -> None:
+    with _PROMISE_LOCK:
+        _PROMISE_RETRACTS.clear()
+
+
 # ── 配文近重复 ─────────────────────────────────────────────────────────────
 
 _CAPTIONS: "OrderedDict[str, List[str]]" = OrderedDict()
@@ -518,6 +570,8 @@ __all__ = [
     "strict_requested_scene_kind", "has_ask_verb", "album_trigger_terms", "keyword_hit",
     "album_match_seen", "mark_album_match",
     "follow_cfg", "follow_stats", "follow_budget_check", "note_follow_sent",
+    "note_promise_retracted", "promise_streak", "promise_streak_hint",
+    "reset_promise_streak_for_tests", "PROMISE_STREAK_WINDOW_SEC", "PROMISE_STREAK_HINT_N",
     "dedup_caption", "note_caption_sent", "recent_captions", "caption_similarity",
     "format_album_send_log",
     "TRIGGER_ASK", "TRIGGER_KEYWORD", "TRIGGER_OFFER_ACCEPT", "TRIGGER_COMMITMENT",

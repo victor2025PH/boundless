@@ -138,12 +138,18 @@ class VoiceOutageLedger:
         调用约定：只在语音被触发且真正尝试之后记账——trigger 未命中/策略判文字
         的早退**不记**（那不是断档，是正常决策）。``reason`` 用现场已有的错误
         字符串（synth_failed/edge_rejected/deliver_failed…），截断防撑爆。
+
+        R87 P2-2：``clone_lang_unsupported`` / ``clone_lang_garbled`` 是语种能力缺口
+        （按设计回落文字），不是链路断档——不入台账，避免日语会话 3 条就把看门狗
+        打成「语音出站断档 3/3」。
         """
         try:
             src = str(source or "").strip().lower() or "unknown"
             rsn = str(reason or "").strip()[: self._REASON_LEN]
         except Exception:
             src, rsn = "unknown", ""
+        if not ok and is_capability_skip(rsn):
+            return
         with self._lock:
             ts = time.time()
             self._events.append((ts, bool(ok), src, rsn))
@@ -265,6 +271,12 @@ class VoiceOutageLedger:
         return "\n".join(lines) + "\n"
 
 
+def is_capability_skip(reason: str) -> bool:
+    """语种能力缺口（克隆声不支持 / 成品念错该语种）≠ 语音链路断档。"""
+    r = str(reason or "").lower()
+    return "clone_lang_unsupported" in r or "clone_lang_garbled" in r
+
+
 _SINGLETON: Optional[VoiceOutageLedger] = None
 _LOCK = threading.Lock()
 
@@ -320,5 +332,5 @@ def reset_for_test() -> None:
 
 __all__ = [
     "VoiceOutageLedger", "get_voice_outage", "note_voice_attempt",
-    "reset_for_test",
+    "reset_for_test", "is_capability_skip",
 ]
