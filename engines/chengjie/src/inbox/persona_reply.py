@@ -998,6 +998,27 @@ async def _generate_persona_reply_impl(
     except Exception:
         logger.debug("[persona_reply] media_form_note 跳过", exc_info=True)
 
+    # #333 视觉身份层（vision.face_identity，默认关）：客户发的图里是谁——人脸嵌入比人设原型 /
+    # 客户本人原型 / 已确认关系人 → 一句带外说明（「这是 TA 本人」「不要猜是谁，可以问」），
+    # 同走 extra_hint 单一消费口；文字轮「是我 / 这是我妹妹」在同一入口升记忆。服务不可达 /
+    # 无脸 / 未启用 → 空串零成本，绝不阻断拟稿。
+    try:
+        _cm_fi = getattr(state, "config_manager", None)
+        _cfg_fi = getattr(_cm_fi, "config", None) or {}
+        if ((((_cfg_fi.get("vision") or {}).get("face_identity") or {}).get("enabled"))
+                and str(conversation_id or "").strip()):
+            from src.companion.face_identity import annotate_inbound as _fi_annotate
+            _fi_note = await _fi_annotate(
+                config=_cfg_fi, conversation_id=str(conversation_id or ""),
+                persona_id=str(persona_id or ""), media_type=str(media_type or ""),
+                media_ref=str(media_ref or ""), message_id=str(inbound_msg_id or ""),
+                caption=str(media_desc or ""), peer_text=str(last_inbound or ""),
+                config_path=getattr(_cm_fi, "config_path", None))
+            if _fi_note:
+                _time_hint = f"{_time_hint}\n{_fi_note}" if _time_hint else _fi_note
+    except Exception:
+        logger.debug("[persona_reply] face_identity 跳过", exc_info=True)
+
     # P1-198 续（2026-08-02）：坐席「客户情绪」人工标注 → 拟稿指令。生效判据
     # （TTL/标签在场）与 NBA 卡「生效中」徽标同源（effective_mood 单一仲裁）；
     # 显式坐席指令优先，标注句仅在余量内追加（merge_agent_instruction）。

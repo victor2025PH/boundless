@@ -108,11 +108,14 @@ def test_classify_identity_bands():
     assert vi.classify_identity({"persona": 0.62, "customer_self": 0.12})[0] == "persona"
     lab, key, sc = vi.classify_identity({"persona": 0.1, "customer_self": 0.55})
     assert (lab, key) == ("customer_self", "customer_self") and sc == pytest.approx(0.55)
-    lab, key, _ = vi.classify_identity({"persona": 0.1, "customer_self": 0.2, "妹妹": 0.47})
+    lab, key, _ = vi.classify_identity({"persona": 0.1, "customer_self": 0.2, "妹妹": 0.57})
     assert (lab, key) == ("known", "妹妹")
     # 疑似区：不下结论但带回最接近的键（调用方可据此追问「是不是你？」）
-    lab, key, _ = vi.classify_identity({"customer_self": 0.33})
+    lab, key, _ = vi.classify_identity({"customer_self": 0.42})
     assert lab == "unknown" and key == "customer_self"
+    # 176 实测：不同人设生成脸 impostor 最高 0.455 → 必须落在「疑似/不同人」，绝不判同一人
+    lab, _, _ = vi.classify_identity({"persona": 0.455})
+    assert lab == "unknown"
     # 明显不同人：连键都不给
     lab, key, _ = vi.classify_identity({"customer_self": 0.1, "persona": 0.05})
     assert lab == "unknown" and key == ""

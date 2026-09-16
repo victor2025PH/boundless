@@ -137,9 +137,13 @@ def parse_caption_fields(desc: Any) -> Dict[str, Any]:
 
 
 # ── 身份判定（P1；相似度由人脸嵌入层给，这里只做刻度与措辞）────────────────────
-#: ArcFace 余弦刻度（与 src/ai/face_fidelity.FIDELITY_BANDS 同源思路；真人对真人略高于生成脸）
-MATCH_THRESHOLD = 0.40      #: ≥ 判同一人
-AMBIGUOUS_THRESHOLD = 0.28  #: [0.28, 0.40) 疑似，不下结论
+#: ArcFace（antelopev2 glintr100）余弦刻度——2026-09-17 176 边车实测校准：
+#: 同图增广（翻转/JPEG60/裁 80%/缩 480）0.935~0.971；同人设 PuLID 相册两两 0.51~0.65；
+#: **不同人设生成脸两两最高 0.455**（生成「大众美颜脸」互相偏像，比真人 impostor 高）。
+#: 故判同一人取 0.50（face_fidelity 注「真实同人照对常 ≥0.5」），0.35~0.50 只算疑似。
+#: 刻度 provisional：攒够真实入站样本后用 face_fidelity.calibrate_fidelity_floor 同款纪律收紧。
+MATCH_THRESHOLD = 0.50      #: ≥ 判同一人
+AMBIGUOUS_THRESHOLD = 0.35  #: [0.35, 0.50) 疑似，不下结论（可据此追问「是不是你」）
 LABELS = ("persona", "customer_self", "known", "unknown", "no_face")
 
 
@@ -177,9 +181,11 @@ def identity_note(label: str, *, matched: str = "", confirmed: bool = False,
         return ("图中人物与你（人设）的相貌一致——这是你自己的照片（多半是我方此前发过的），"
                 "不要当成对方发来的自拍去评价。")
     if lab == "customer_self":
-        tag = "已确认" if confirmed else "推断"
-        return (f"图中人物与{who}此前{'确认过' if confirmed else '发过'}的自拍是同一个人（{tag}）"
-                f"——这是{who}本人，可以自然评价，不要问「这是谁」。")
+        if confirmed:
+            return (f"图中人物与{who}此前确认过的自拍是同一个人（已确认）"
+                    f"——这是{who}本人，可以自然评价，不要问「这是谁」。")
+        return (f"图中大概率是{who}本人的自拍（推断，{who}还没亲口确认）——可以按本人自然接话、"
+                f"评价照片，但别把「是你」说成定论；如果拿不准就自然问一句「这是你吗」。")
     if lab == "known":
         rel = relation or matched or "已知关系人"
         return (f"图中人物是{who}此前确认过的「{rel}」（已确认）——按这个关系接话，不要重新猜。")

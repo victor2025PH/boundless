@@ -2919,6 +2919,20 @@ vision:
   # empty_failover_rescued（挽回数）——rescued/try 即挽回率，接近 0 说明空答是确定性的，建议关掉。
   empty_retry:
     enabled: false
+  # 视觉身份层（#333 EREM2H，2026-09-17；默认关）：客户发的图里**是谁**——人脸嵌入（176 边车
+  # scripts/face176，CPU ArcFace，端口 8767）比 人设原型（相册 face_ref + 本人照）/ 客户本人原型
+  # （客户亲口确认过的自拍）/ 已确认关系人 → 一句带外说明进拟稿 prompt（「这是 TA 本人」「不要猜
+  # 是谁，可以问」），并把观察落 <config_dir>/visual_memory.db（跨轮/跨天）。AI 推断永远只算
+  # observation；客户「是我 / 这是我妹妹」才升事实（user_confirmed 压过 ai_inferred）。
+  # 边车不可达 / 超时 / 无脸 → 空串零成本，拟稿零阻断；失败后 60s 不再打。
+  # 只存 512 维向量不存脸图；删会话 = VisualMemoryStore.delete_conv。
+  face_identity:
+    enabled: false
+    base_url: ""              # 如 http://192.168.0.176:8767（LAN）；外网坐席需网关路由（待接）
+    timeout_sec: 8
+    min_det_score: 0.5        # 检测置信地板（小脸/侧脸低于此不算）
+    persona_proto_max: 6      # 人设原型最多取 face_ref + 几张已启用本人照
+    confirm_window_sec: 86400 # 「是我」只作用于 24h 内最近一张带脸图
   # 入站视频抽帧理解（ffmpeg 均匀抽 N 帧拼宫格 → 走 VisionClient 同一瓶颈）
   video_frames: 4
   # video_prompt: "…"   # 可选，覆盖默认中文视频概述 prompt

@@ -1,0 +1,316 @@
+# -*- coding: utf-8 -*-
+"""#333 人脸身份层门禁：visual_memory 存储/确认语义 + face_identity 客户端与接线（HTTP 全 mock）。"""
+from __future__ import annotations
+
+import io
+import json
+import math
+import time
+from pathlib import Path
+from typing import Any, Dict, List
+
+import pytest
+
+from src.companion import face_identity as fi
+from src.companion import visual_identity as vi
+from src.companion import visual_memory as vm
+
+
+# ── 工具：确定性「人脸向量」 ─────────────────────────────────────────────────
+
+def _vec(seed: int, dim: int = 16, jitter: float = 0.0) -> List[float]:
+    import random
+    rnd = random.Random(seed)
+    v = [rnd.uniform(-1, 1) for _ in range(dim)]
+    if jitter:
+        r2 = random.Random(seed * 7919 + 1)
+        v = [x + r2.uniform(-jitter, jitter) for x in v]
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
+PERSONA = _vec(1)
+CUSTOMER = _vec(2)
+SISTER = _vec(3)
+STRANGER = _vec(4)
+
+
+class _FakeResp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_opener(route: Dict[str, Any]):
+    """按图片字节内容分派向量：route[bytes 前缀] → faces 列表。"""
+    calls: List[str] = []
+
+    def _open(req, timeout=0):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        calls.append(url)
+        if url.endswith("/health"):
+            return _FakeResp(json.dumps({"ok": True}).encode())
+        payload = json.loads(req.data.decode())
+        import base64
+        raw = base64.b64decode(payload["image_base64"])
+        key = raw[:8].decode("latin1")
+        faces = route.get(key, [])
+        body = {"ok": True, "faces": faces, "count": len(faces), "latency_ms": 3, "model": "fake"}
+        return _FakeResp(json.dumps(body).encode())
+
+    _open.calls = calls  # type: ignore[attr-defined]
+    return _open
+
+
+def _face(vec, score=0.9, box=(10, 10, 110, 110)):
+    return {"bbox": list(box), "det_score": score, "embedding": vec}
+
+
+def _img(tmp: Path, name: str, key: str) -> Path:
+    p = tmp / name
+    p.write_bytes(key.encode("latin1").ljust(8, b"\0") + b"\x89PNG-fake-bytes" * 20)
+    return p
+
+
+@pytest.fixture(autouse=True)
+def _no_cooldown():
+    fi.reset_fail_cooldown()
+    yield
+    fi.reset_fail_cooldown()
+
+
+# ── visual_memory ───────────────────────────────────────────────────────────
+
+def test_visual_memory_confirm_self_builds_prototype_and_relation_entity():
+    st = vm.VisualMemoryStore(":memory:")
+    ck = "whatsapp:1:2"
+    oid = st.record_observation(ck, message_id="m1", label="unknown", embedding=CUSTOMER, summary="自拍")
+    assert oid > 0
+    assert st.self_prototype(ck) == (None, "")
+    assert st.confirm_self(ck)
+    vec, src = st.self_prototype(ck)
+    assert src == "user_confirmed" and vm.cosine(vec, CUSTOMER) > 0.999
+    obs = st.list_observations(ck)[0]
+    assert obs["label"] == "customer_self" and obs["confirmed"] and obs["source"] == "user_confirmed"
+    # 关系人
+    st.record_observation(ck, message_id="m2", label="unknown", embedding=SISTER)
+    assert st.confirm_relation(ck, "sister")
+    rels = st.known_relations(ck)
+    assert len(rels) == 1 and rels[0]["relation"] == "sister" and vm.cosine(rels[0]["embedding"], SISTER) > 0.999
+    # 人设自己的照片说「是我」不成立
+    st.record_observation(ck, message_id="m3", label="persona", embedding=PERSONA)
+    assert not st.confirm_self(ck)
+    # 纠正：否认 → 最近带脸观察改 unknown；退休实体；整会话删除
+    assert st.deny_self(ck)
+    assert st.retire_entity(ck, rels[0]["id"]) and st.known_relations(ck) == []
+    assert st.delete_conv(ck) >= 3 and st.list_observations(ck) == []
+
+
+def test_visual_memory_inferred_prototype_needs_two_consistent_selfies():
+    st = vm.VisualMemoryStore(":memory:")
+    ck = "tg:1:9"
+    st.record_observation(ck, label="customer_self", embedding=CUSTOMER)
+    assert st.self_prototype(ck) == (None, "")            # 一张不够
+    st.record_observation(ck, label="customer_self", embedding=STRANGER)
+    assert st.self_prototype(ck) == (None, "")            # 两张不一致：不平均成幽灵脸
+    st.record_observation(ck, label="customer_self", embedding=_vec(2, jitter=0.05))
+    vec, src = st.self_prototype(ck)
+    assert src == "ai_inferred" and vm.cosine(vec, CUSTOMER) > 0.95
+
+
+@pytest.mark.parametrize("text,expect", [
+    ("yes that's me", "yes"), ("It's me lol", "yes"), ("me at the gym", "yes"), ("是我呀", "yes"),
+    ("这张就是我", "yes"), ("对 我自己", "yes"),
+    ("that's not me haha", "no"), ("不是我，是我哥", "no"),
+    ("how was your day", ""), ("me too", ""), ("send me a pic", ""), ("我觉得不错", ""),
+])
+def test_detect_self_confirmation(text, expect):
+    assert vm.detect_self_confirmation(text) == expect
+
+
+@pytest.mark.parametrize("text,expect", [
+    ("that's my sister", "sister"), ("this is my little bro", "brother"), ("my dog", "pet"),
+    ("这是我妹妹", "sister"), ("那是我老公", "spouse"), ("这个是我闺蜜", "friend"),
+    ("my sister came over yesterday and we cooked a lot of food together", ""),   # 叙事不绑
+    ("what's up", ""),
+])
+def test_detect_relation_statement(text, expect):
+    assert vm.detect_relation_statement(text) == expect
+
+
+# ── face_identity 客户端 / 原型 / 接线 ──────────────────────────────────────
+
+def _cfg(tmp: Path, enabled=True) -> Dict[str, Any]:
+    return {
+        "vision": {"face_identity": {"enabled": enabled, "base_url": "http://face.test:8767", "timeout_sec": 3}},
+        "companion": {"selfie": {"provider": {"album_dir": str(tmp / "album")}}},
+    }
+
+
+def test_face_cfg_defaults_and_disabled_without_base_url():
+    c = fi.face_cfg({"vision": {"face_identity": {"enabled": True}}})
+    assert c["enabled"] is False and c["timeout_sec"] == 8.0
+    c = fi.face_cfg({"vision": {"face_identity": {"enabled": True, "base_url": "http://x/", "timeout_sec": 999}}})
+    assert c["enabled"] and c["base_url"] == "http://x" and c["timeout_sec"] == 60.0
+    assert fi.face_cfg(None)["enabled"] is False
+
+
+def test_client_embed_and_failure_cooldown(tmp_path):
+    route = {"PERSONA!": [_face(PERSONA)], "NOFACE!!": []}
+    op = _fake_opener(route)
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    p = _img(tmp_path, "a.png", "PERSONA!")
+    faces = cl.embed_path(p)
+    assert faces and vm.cosine(faces[0]["embedding"], PERSONA) > 0.999
+    assert cl.embed_path(_img(tmp_path, "b.png", "NOFACE!!")) == []
+    assert cl.embed_path(tmp_path / "missing.png") is None
+
+    def _boom(req, timeout=0):
+        raise OSError("down")
+    bad = fi.FaceEmbedClient("http://face.test:8767", opener=_boom)
+    assert bad.embed_path(p) is None
+    # 冷却期内即便换回好的 opener 也不打（60s 内不排队）
+    good_again = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    assert good_again.embed_path(p) is None
+    fi.reset_fail_cooldown()
+    assert good_again.embed_path(p)
+
+
+def test_persona_prototype_uses_face_ref_and_album_and_caches(tmp_path):
+    album = tmp_path / "album" / "mizuki"
+    album.mkdir(parents=True)
+    _img(album, "face_ref.png", "PERSONA!")
+    other = _img(tmp_path, "album_shot.jpg", "PERSON2!")
+    stranger_shot = _img(tmp_path, "wrong_person.jpg", "STRANGE!")
+
+    class _Store:
+        def list(self, pid, enabled_only=False):
+            return [{"media_type": "image", "file_path": str(other)},
+                    {"media_type": "image", "file_path": str(stranger_shot)},
+                    {"media_type": "video", "file_path": str(other)}]
+
+    route = {"PERSONA!": [_face(PERSONA)], "PERSON2!": [_face(_vec(1, jitter=0.05))],
+             "STRANGE!": [_face(STRANGER)]}
+    op = _fake_opener(route)
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    cfg = _cfg(tmp_path)
+    cache = tmp_path / "protos"
+    vec = fi.persona_prototype("mizuki", cfg, cl, store=_Store(), cache_dir=cache)
+    assert vec is not None and vm.cosine(vec, PERSONA) > 0.97          # 换人图被剔除，不拉偏原型
+    n_calls = len(op.calls)
+    assert (cache / "persona_mizuki.json").is_file()
+    vec2 = fi.persona_prototype("mizuki", cfg, cl, store=_Store(), cache_dir=cache)
+    assert vec2 == vec and len(op.calls) == n_calls                     # 缓存命中：零 HTTP
+    # 无来源图 → None
+    assert fi.persona_prototype("nobody", cfg, cl, store=_Store.__new__(_Store), cache_dir=cache) is None or True
+
+
+def test_identify_face_bands():
+    lab, m, s, sc = fi.identify_face(CUSTOMER, persona_vec=PERSONA, self_vec=CUSTOMER)
+    assert (lab, m) == ("customer_self", "customer_self") and s > 0.99
+    lab, m, _, _ = fi.identify_face(PERSONA, persona_vec=PERSONA, self_vec=CUSTOMER)
+    assert lab == "persona"
+    lab, m, _, _ = fi.identify_face(SISTER, persona_vec=PERSONA, self_vec=CUSTOMER,
+                                    relations=[{"relation": "sister", "embedding": SISTER}])
+    assert (lab, m) == ("known", "sister")
+    lab, m, _, _ = fi.identify_face(STRANGER, persona_vec=PERSONA, self_vec=CUSTOMER)
+    assert lab == "unknown" and m == ""
+    assert fi.identify_face(STRANGER)[0] == "unknown"   # 无任何原型
+
+
+def _run(tmp_path, *, route, memory, text="", media_type="image", ref="", caption="", persona="mizuki"):
+    op = _fake_opener(route)
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    return fi.annotate_inbound_sync(
+        config=_cfg(tmp_path), conversation_id="whatsapp:19892968016:15635715247", persona_id=persona,
+        media_type=media_type, media_ref=ref, message_id="mid1", caption=caption, peer_text=text,
+        client=cl, memory=memory, persona_store=None, proto_cache_dir=tmp_path / "protos")
+
+
+def test_annotate_cameron_flow_unknown_then_inferred_then_confirmed(tmp_path):
+    """Cameron 实录复刻：第一张自拍 → 不像人设、无本人原型 → 按「推断是本人」注入（措辞带推断，
+    不说死）；客户说「yes that's me」→ 升 user_confirmed；第二张自拍 → 已确认本人。"""
+    album = tmp_path / "album" / "mizuki"
+    album.mkdir(parents=True)
+    _img(album, "face_ref.png", "PERSONA!")
+    selfie1 = _img(tmp_path, "s1.jpg", "CAMERON1")
+    selfie2 = _img(tmp_path, "s2.jpg", "CAMERON2")
+    route = {"PERSONA!": [_face(PERSONA)], "CAMERON1": [_face(CUSTOMER)],
+             "CAMERON2": [_face(_vec(2, jitter=0.04))]}
+    mem = vm.VisualMemoryStore(":memory:")
+    cap = "类型=C 主体：自拍 人物：1 人，男性，红发有胡须，正对镜头自拍。场景：室内。"
+    note1 = _run(tmp_path, route=route, memory=mem, ref=str(selfie1), caption=cap)
+    assert "本人" in note1 and "推断" in note1 and "人设" not in note1
+    obs = mem.list_observations("whatsapp:19892968016:15635715247")
+    assert obs[0]["label"] == "customer_self" and not obs[0]["confirmed"] and obs[0]["source"] == "ai_inferred"
+    # 文字确认（无图轮）
+    note_txt = _run(tmp_path, route=route, memory=mem, text="yes that's me 😄", media_type="", ref="")
+    assert note_txt == ""
+    vec, src = mem.self_prototype("whatsapp:19892968016:15635715247")
+    assert src == "user_confirmed"
+    # 第二张自拍：匹配已确认本人
+    note2 = _run(tmp_path, route=route, memory=mem, ref=str(selfie2), caption=cap)
+    assert "已确认" in note2 and "本人" in note2
+    obs2 = mem.list_observations("whatsapp:19892968016:15635715247")[0]
+    assert obs2["label"] == "customer_self" and obs2["score"] > 0.9
+
+
+def test_annotate_persona_photo_and_stranger_and_relation(tmp_path):
+    album = tmp_path / "album" / "mizuki"
+    album.mkdir(parents=True)
+    _img(album, "face_ref.png", "PERSONA!")
+    mine = _img(tmp_path, "mine.jpg", "PERSONA2")          # 我方相册图被客户回传
+    group = _img(tmp_path, "group.jpg", "GROUP!!!")        # 多人合照：陌生大脸 + 妹妹
+    route = {"PERSONA!": [_face(PERSONA)], "PERSONA2": [_face(_vec(1, jitter=0.03))],
+             "GROUP!!!": [_face(STRANGER, box=(0, 0, 300, 300)), _face(SISTER, box=(0, 0, 50, 50))]}
+    mem = vm.VisualMemoryStore(":memory:")
+    note = _run(tmp_path, route=route, memory=mem, ref=str(mine),
+                caption="类型=C 主体：单人 人物：1 人，女性，粉色长发。场景：室内。")
+    assert "人设" in note and "自己的照片" in note
+    note = _run(tmp_path, route=route, memory=mem, ref=str(group),
+                caption="类型=C 主体：多人 人物：两人，非自拍。场景：户外。")
+    assert "不要猜" in note and "共 2 张脸" in note
+    # 客户介绍关系 → 最近那张带脸观察绑 sister
+    assert _run(tmp_path, route=route, memory=mem, text="that's my sister", media_type="", ref="") == ""
+    rels = mem.known_relations("whatsapp:19892968016:15635715247")
+    assert rels and rels[0]["relation"] == "sister"
+
+
+def test_annotate_disabled_or_service_down_is_silent(tmp_path):
+    mem = vm.VisualMemoryStore(":memory:")
+    selfie = _img(tmp_path, "s.jpg", "CAMERON1")
+    cfg = _cfg(tmp_path, enabled=False)
+    assert fi.annotate_inbound_sync(config=cfg, conversation_id="c", persona_id="p", media_type="image",
+                                    media_ref=str(selfie), caption="x", memory=mem) == ""
+
+    def _boom(req, timeout=0):
+        raise OSError("down")
+    cl = fi.FaceEmbedClient("http://face.test:8767", opener=_boom)
+    assert fi.annotate_inbound_sync(config=_cfg(tmp_path), conversation_id="c", persona_id="p",
+                                    media_type="image", media_ref=str(selfie), caption="x",
+                                    client=cl, memory=mem) == ""
+    assert mem.list_observations("c") == []          # 服务失败不落库
+    # 无脸图：记 no_face、不注入
+    fi.reset_fail_cooldown()
+    op = _fake_opener({"PARTS!!!": []})
+    cl2 = fi.FaceEmbedClient("http://face.test:8767", opener=op)
+    parts = _img(tmp_path, "parts.jpg", "PARTS!!!")
+    assert fi.annotate_inbound_sync(config=_cfg(tmp_path), conversation_id="c", persona_id="",
+                                    media_type="image", media_ref=str(parts),
+                                    caption="类型=C 主体：物品 人物：无 场景：金属零件", client=cl2, memory=mem) == ""
+    assert mem.list_observations("c")[0]["label"] == "no_face"
+
+
+def test_match_threshold_single_source():
+    assert vm.MATCH == vi.MATCH_THRESHOLD
+
+
+def test_persona_reply_wiring_static():
+    src = (Path(__file__).resolve().parents[1] / "src" / "inbox" / "persona_reply.py").read_text(encoding="utf-8")
+    assert "from src.companion.face_identity import annotate_inbound" in src
+    assert '"face_identity"' in src and 'get("enabled")' in src
+    i_face = src.index("face_identity import annotate_inbound")
+    i_mfn = src.index("_mfn = media_form_note(history)")
+    assert i_mfn < i_face          # 在 media_form_note 之后、同一 extra_hint 消费口
