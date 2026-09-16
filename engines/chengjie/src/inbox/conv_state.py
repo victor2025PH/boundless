@@ -363,12 +363,12 @@ def _src_album_miss(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]
         return None
 
 
-def _src_voice_clone_lang(cid: str, now: float) -> Optional[Dict[str, Any]]:
-    """R87 P2-2：本会话克隆声不支持当前语种（进程内 note，24h）。不改状态——文字照常回，
-    只让坐席看见「本会话语音不可用」。"""
+def _src_voice_clone_lang(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
+    """R87 P2-2：本会话克隆声不支持当前语种（KV note ``voice_clone_lang:<cid>``，24h）。不改状态——
+    文字照常回，只让坐席看见「本会话语音不可用」。"""
     try:
         from src.ai.tts_pipeline import peek_clone_lang_skip
-        rec = peek_clone_lang_skip(cid, now=now)
+        rec = peek_clone_lang_skip(cid, now=now, store=store)
         if not rec:
             return None
         lang = str(rec.get("lang") or "").strip() or "?"
@@ -481,7 +481,7 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     }
     # Q-35 #306 / R87 P2-2：旁注源＝相册无命中 + 克隆声语种缺口。**不参与状态判定**、不进 sources。
     out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),
-                                _src_voice_clone_lang(cid, ts_now)) if n]
+                                _src_voice_clone_lang(store, cid, ts_now)) if n]
     out["ext"] = {"xlate_hold": xh, "route_offline": ro}
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",

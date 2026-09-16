@@ -525,37 +525,85 @@ def skip_voice_reason(result: Any) -> str:
 
 
 # R87 P2-2：clone_lang_unsupported 同会话只 WARNING 一次，其余 DEBUG；会话头旁注读这本账。
+# 旁注落 app_settings KV（``voice_clone_lang:<cid>``，与 xlate_hold_marker 同款）跨重启；
+# 拿不到 store 时退化为进程内字典。日志去重表只在进程内（重启后再告一次无妨）。
 _CLONE_LANG_LOCK = threading.Lock()
 _CLONE_LANG_NOTES: Dict[str, Dict[str, Any]] = {}
 _CLONE_LANG_LOGGED: Dict[str, float] = {}
 CLONE_LANG_NOTE_TTL_SEC = 24 * 3600.0
+CLONE_LANG_NOTE_PREFIX = "voice_clone_lang:"
 
 
-def note_clone_lang_skip(conv: str, lang: str, *, now: Optional[float] = None
-                         ) -> Optional[Dict[str, Any]]:
-    """语种闸跳过克隆声 → 记会话旁注（进程内）。空 conv 不记。"""
+def _clone_lang_store(store: Any) -> Any:
+    if store is not None:
+        return store
+    try:
+        from src.integrations.protocol_bridge import get_inbox_store
+        return get_inbox_store()
+    except Exception:
+        return None
+
+
+def _clone_lang_kv_get(cid: str, store: Any) -> Optional[Dict[str, Any]]:
+    st = _clone_lang_store(store)
+    if st is None or not hasattr(st, "get_app_setting"):
+        return None
+    try:
+        import json as _json
+        got = _json.loads(str(st.get_app_setting(CLONE_LANG_NOTE_PREFIX + cid, "") or "") or "{}")
+        return got if isinstance(got, dict) and got.get("ts") else None
+    except Exception:
+        return None
+
+
+def _clone_lang_kv_set(cid: str, rec: Dict[str, Any], store: Any) -> bool:
+    st = _clone_lang_store(store)
+    if st is None or not hasattr(st, "set_app_setting"):
+        return False
+    try:
+        import json as _json
+        st.set_app_setting(CLONE_LANG_NOTE_PREFIX + cid, _json.dumps(rec, ensure_ascii=False),
+                           updated_by="tts_pipeline")
+        return True
+    except Exception:
+        return False
+
+
+def note_clone_lang_skip(conv: str, lang: str, *, now: Optional[float] = None,
+                         store: Any = None) -> Optional[Dict[str, Any]]:
+    """语种闸跳过克隆声 → 记会话旁注（KV 优先，退化进程内）。空 conv 不记。绝不抛。"""
     cid = str(conv or "").strip()
     if not cid:
         return None
     t = float(now if now is not None else time.time())
     lg = str(lang or "").strip() or "?"
-    with _CLONE_LANG_LOCK:
-        prev = _CLONE_LANG_NOTES.get(cid) or {}
-        rec = {"ts": t, "first_ts": float(prev.get("first_ts") or t),
-               "n": int(prev.get("n") or 0) + 1, "lang": lg}
-        _CLONE_LANG_NOTES[cid] = rec
+    try:
+        prev = _clone_lang_kv_get(cid, store)
+        with _CLONE_LANG_LOCK:
+            if prev is None:
+                prev = _CLONE_LANG_NOTES.get(cid) or {}
+            if prev and t - float(prev.get("ts") or 0.0) > CLONE_LANG_NOTE_TTL_SEC:
+                prev = {}
+            rec = {"ts": t, "first_ts": float(prev.get("first_ts") or t),
+                   "n": int(prev.get("n") or 0) + 1, "lang": lg}
+            _CLONE_LANG_NOTES[cid] = rec
+        _clone_lang_kv_set(cid, rec, store)
         return dict(rec)
+    except Exception:
+        return None
 
 
 def peek_clone_lang_skip(conv: str, *, now: Optional[float] = None,
-                         ttl_sec: float = CLONE_LANG_NOTE_TTL_SEC
-                         ) -> Optional[Dict[str, Any]]:
+                         ttl_sec: float = CLONE_LANG_NOTE_TTL_SEC,
+                         store: Any = None) -> Optional[Dict[str, Any]]:
     cid = str(conv or "").strip()
     if not cid:
         return None
     t = float(now if now is not None else time.time())
-    with _CLONE_LANG_LOCK:
-        rec = _CLONE_LANG_NOTES.get(cid)
+    rec = _clone_lang_kv_get(cid, store)
+    if rec is None:
+        with _CLONE_LANG_LOCK:
+            rec = _CLONE_LANG_NOTES.get(cid)
     if not rec:
         return None
     try:

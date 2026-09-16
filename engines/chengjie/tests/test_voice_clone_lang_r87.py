@@ -15,6 +15,9 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from src.ai import tts_pipeline as tp
 from src.ai import voice_outage as vo
 from src.ai.tts_pipeline import (
     log_skip_voice, note_clone_lang_skip, peek_clone_lang_skip,
@@ -26,12 +29,30 @@ _ROOT = Path(__file__).resolve().parents[1]
 CID = "whatsapp:acc:66803566865"
 
 
-def setup_function():
+class _KV:
+    """app_settings 最小桩：旁注落 KV 的唯一依赖面。"""
+
+    def __init__(self):
+        self.kv = {}
+
+    def get_app_setting(self, key, default=""):
+        return self.kv.get(key, default)
+
+    def set_app_setting(self, key, value, updated_by=""):
+        if value == "":
+            self.kv.pop(key, None)
+        else:
+            self.kv[key] = value
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _iso(monkeypatch):
+    kv = _KV()
+    monkeypatch.setattr(tp, "_clone_lang_store", lambda store: store if store is not None else kv)
     reset_clone_lang_skip_for_tests()
     vo.reset_for_test()
-
-
-def teardown_function():
+    yield kv
     reset_clone_lang_skip_for_tests()
     vo.reset_for_test()
 
@@ -77,6 +98,20 @@ def test_note_expires_and_ignores_empty_conv():
     note_clone_lang_skip(CID, "ja", now=t0)
     assert peek_clone_lang_skip(CID, now=t0 + 10)["lang"] == "ja"
     assert peek_clone_lang_skip(CID, now=t0 + 25 * 3600) is None
+    # 窗过再记 → 计数从 1 重来（不把昨天的 n 带进今天）
+    assert note_clone_lang_skip(CID, "ja", now=t0 + 25 * 3600)["n"] == 1
+
+
+def test_note_survives_process_restart(_iso):
+    """KV 里有 → 进程内字典清空（模拟重启）后仍读得到。"""
+    note_clone_lang_skip(CID, "th")
+    assert "voice_clone_lang:" + CID in _iso.kv
+    reset_clone_lang_skip_for_tests()
+    rec = peek_clone_lang_skip(CID)
+    assert rec and rec["lang"] == "th" and rec["n"] == 1
+    # 拿不到 store（None）→ 退化进程内，不抛
+    monkey_none = _KV()
+    assert peek_clone_lang_skip(CID, store=monkey_none) is None
 
 
 # ── C ────────────────────────────────────────────────────────────────────────
@@ -98,9 +133,11 @@ class _Store:
         return default
 
 
-def test_conv_state_note_does_not_change_state():
+def test_conv_state_note_does_not_change_state(_iso):
     note_clone_lang_skip(CID, "ja")
-    out = compute(_Store(), CID, platform="whatsapp", account_id="acc")
+    st = _Store()
+    st.get_app_setting = _iso.get_app_setting   # conv_state 用同一份 KV 读
+    out = compute(st, CID, platform="whatsapp", account_id="acc")
     kinds = [n.get("kind") for n in (out.get("notes") or [])]
     assert "voice_clone_lang" in kinds
     n = next(x for x in out["notes"] if x["kind"] == "voice_clone_lang")
