@@ -15,8 +15,14 @@
   **不同人设生成脸两两最高 0.455**（生成「大众美颜脸」互相偏像）→ 客户端判同人阈 0.50、
   0.35～0.50 疑似（`visual_identity.MATCH_THRESHOLD / AMBIGUOUS_THRESHOLD`，provisional）。
 - 授权：InsightFace 权重**非商用**（代码 MIT）。PoC / 内网自用可以；**进出货包前**换 Apache-2.0
-  的 AuraFace（同目录布局 `models/auraface/{scrfd_10g_bnkps,glintr100}.onnx`，`AITR_FACE_MODEL=auraface`）
-  或 OpenCV YuNet+SFace。
+  的 AuraFace——**已备好**：`D:\ComfyUI\models\insightface\models\auraface\`（fal/AuraFace-v1，含 LICENSE，
+  428MB，2026-09-17 从 117 下载 scp 过去），切换只改 `start_face.ps1` 的 `AITR_FACE_MODEL=auraface`
+  再 `schtasks /Run /TN AITR_FACE_176`。
+  **同机同图 A/B（2026-09-17，11 张人设 face_ref + 5 张同人设相册）**：antelopev2 impostor top 0.455 /
+  同人中位 0.520 / 翻转自一致 0.937；AuraFace impostor top **0.533** / 同人中位 0.468 / 翻转 0.873，
+  单张 55ms 持平。AuraFace 分离度在生成脸上差一档——**内网继续用 antelopev2**；切 AuraFace 前先用
+  `tools/face_identity_calibrate.py` 在真实入站样本上重定阈（预计 MATCH 要抬到 ~0.55）。
+  OpenCV YuNet+SFace（37MB）是坐席机本地兜底候选，精度再低一档，未接。
 - 隐私：服务无状态不落图；客户端只存 512 维向量，`VisualMemoryStore.delete_conv` 整会话删。
 
 ## 176 上的落地物（全部在 C:\aitr_face\）

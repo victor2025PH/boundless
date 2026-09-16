@@ -327,6 +327,34 @@ def test_annotate_disabled_or_service_down_is_silent(tmp_path):
     assert mem.list_observations("c")[0]["label"] == "no_face"
 
 
+def test_calibrate_tool_reports_and_suggests(tmp_path):
+    """校准 CLI：样本不足只报分布；样本够时建议阈落在 [0.40, 0.65] 且异人 P99 之上。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "face_identity_calibrate", Path(__file__).resolve().parents[1] / "tools" / "face_identity_calibrate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)   # type: ignore[union-attr]
+    st = vm.VisualMemoryStore(tmp_path / "vm.db")
+    # 30 个会话，每个会话 2 张已确认自拍（同人对 30）；不同会话不同人（异人对 ≥ 200）
+    for i in range(30):
+        ck = f"c{i}"
+        st.record_observation(ck, label="customer_self", embedding=_vec(100 + i), source="user_confirmed", confirmed=True)
+        st.record_observation(ck, label="customer_self", embedding=_vec(100 + i, jitter=0.15), source="user_confirmed", confirmed=True)
+    st.close()
+    obs = mod.load_observations(tmp_path / "vm.db")
+    rep = mod.analyze(obs, min_pairs=20)
+    assert rep["genuine_pairs"] == 30 and rep["impostor_pairs"] >= 200
+    assert rep["suggest"] is not None
+    assert 0.40 <= rep["suggest"]["MATCH_THRESHOLD"] <= 0.65
+    assert rep["suggest"]["MATCH_THRESHOLD"] > rep["impostor"]["p99"]
+    assert rep["suggest"]["AMBIGUOUS_THRESHOLD"] < rep["suggest"]["MATCH_THRESHOLD"]
+    # 样本不足：不给建议
+    small = mod.analyze(obs[:6], min_pairs=20)
+    assert small["suggest"] is None and "样本不足" in small["note"]
+    # CLI 主入口（只读）跑通
+    assert mod.main(["--db", str(tmp_path / "vm.db"), "--json"]) == 0
+
+
 def test_match_threshold_single_source():
     assert vm.MATCH == vi.MATCH_THRESHOLD
 
