@@ -1854,6 +1854,13 @@ class SkillManager(LoggerMixin):
                     str(user_context.get("platform")
                         or context.get("platform") or "telegram"),
                     str(_acct_id or "default"), str(_chat_id or ""))
+                # R87 #329（3TCW5P）：铆定语一并留给 Stage 短路文案（发图配文 / 搪塞句）——
+                # _stage_lang 此前只看「客户这句什么语」，客户打中文、会话铆「发→日」时配文
+                # 落中文池，日本客户当场问「你是中国人吗」。每轮重写（撤铆即清）。
+                if _b67_pin:
+                    user_context["_b67_pin"] = _b67_pin
+                else:
+                    user_context.pop("_b67_pin", None)
                 if _b67_pin:
                     _b67_gen = {"zh-tw": "zh", "zh-hk": "zh",
                                 "yue": "zh"}.get(_b67_pin, _b67_pin)
@@ -10186,7 +10193,14 @@ class SkillManager(LoggerMixin):
         「[贴纸内容]/[图片内容]/[表情] 中文标注」，直接喂检测会把英文会话的
         媒体轮判成中文 → 配文/搪塞文案全落中文池。剥空（纯媒体轮）→ 回落
         会话级 reply_lang（其证据链早已豁免媒体行）。
+
+        R87 #329（3TCW5P）：会话「发→X」显式铆定（B67，``_b67_pin`` 由 process_message 每轮
+        写入）≻ 客户本句语种——客户打中文、铆「发→日」时配文 / 搪塞句也按日文口径出
+        （池里没有该语种的配文 → 空配文，绝不落中文）。
         """
+        _pin = str(user_context.get("_b67_pin") or "").strip().lower()
+        if _pin:
+            return {"zh-tw": "zh", "zh-hk": "zh", "yue": "zh"}.get(_pin, _pin)
         _lang = ""
         try:
             from src.ai.lang_policy import strip_system_injected as _ssi

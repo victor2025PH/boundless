@@ -1566,6 +1566,11 @@ def selfie_stage_text(key: str, lang: str = "", *, persona_name: str = "",
         return ""
     lg = str(lang or "").strip().lower()
     use_zh = (not lg) or lg.startswith("zh")
+    # R87 #329（3TCW5P，2026-09-17）：**配文池**只有 zh / en 两种口径。会话语言是 ja / ko / th /
+    # vi / id … 时回落英文配文＝日本客户收到一句英文、更早是中文（「你是中国人吗」）；
+    # 图不配字比配错语言安全得多 → 非 zh/en 的配文一律空串（搪塞 / 兜底句仍回落英文）。
+    if str(key or "").startswith("caption") and not use_zh and not lg.startswith("en"):
+        return ""
     tpl = entry["zh"] if use_zh else entry["en"]
     if isinstance(tpl, (list, tuple)):
         if not tpl:

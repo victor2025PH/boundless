@@ -637,10 +637,17 @@ async def autosend_image(assistant, platform, account_id, chat_key, text,
     # 判不出返回空串＝旧行为（中文默认），出口另有 #64 出站语种兜底。
     _conv_lang = ""
     try:
-        from src.inbox.persona_reply import resolve_reply_language
-        _conv_lang = resolve_reply_language(_peer_text, _history, default="")
+        # R87 #329：会话「发→X」显式铆定（B67）≻ 自动判定——客户打中文、铆「发→日」时配文按日文口径
+        from src.ai.sendpoint_guard import outbound_lang_pin as _olp
+        _conv_lang = str(_olp(platform, account_id, chat_key) or "")
     except Exception:
         _conv_lang = ""
+    if not _conv_lang:
+        try:
+            from src.inbox.persona_reply import resolve_reply_language
+            _conv_lang = resolve_reply_language(_peer_text, _history, default="")
+        except Exception:
+            _conv_lang = ""
     # 生效人设（相册分册 / 出图 prompt 来源），与语音同口径解析（含会话覆写）。
     from src.ai.persona_voice import (
         resolve_effective_persona_id as _repi,
