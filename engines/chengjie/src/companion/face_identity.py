@@ -54,6 +54,19 @@ def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     v = ((config or {}).get("vision") or {}) if isinstance(config, dict) else {}
     raw = v.get("face_identity") if isinstance(v.get("face_identity"), dict) else {}
     base = str(raw.get("base_url") or os.environ.get("AITR_FACE_BASE_URL") or "").strip().rstrip("/")
+    api_key = str(raw.get("api_key") or "").strip()
+    # 托管形态（外网坐席机）：识图已被 hosted_gateway 指向官网网关（vision._hosted_vision，
+    # base_url=https://bd2026.cc/api/ai/v1，api_key=cx.* 设备令牌）→ 人脸边车走同一网关
+    # 的 /api/ai/v1/face/embed（网关经 117→VPS 隧道回 176:8767）。base_url 去掉尾部 /v1
+    # （客户端自己拼 /v1/face/embed），令牌同源。运行时按当前 vision.* 现算 → 热重载 /
+    # LAN 回内网还原直连时自动跟随，零 config_manager 改动。显式 base_url 永远优先。
+    if not base and v.get("_hosted_vision"):
+        gw = str(v.get("base_url") or "").strip().rstrip("/")
+        if gw.endswith("/v1"):
+            gw = gw[: -len("/v1")]
+        if gw.startswith(("http://", "https://")):
+            base = gw
+            api_key = api_key or str(v.get("api_key") or "").strip()
     try:
         timeout = float(raw.get("timeout_sec", 8) or 8)
     except (TypeError, ValueError):
@@ -65,6 +78,8 @@ def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "enabled": bool(raw.get("enabled", False)) and bool(base),
         "base_url": base,
+        "api_key": api_key,
+        "hosted": bool(not str(raw.get("base_url") or "").strip() and v.get("_hosted_vision") and base),
         "timeout_sec": max(1.0, min(timeout, 60.0)),
         "min_det_score": max(0.1, min(min_det, 0.95)),
         "persona_proto_max": int(raw.get("persona_proto_max", 6) or 6),
@@ -76,11 +91,18 @@ def face_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 class FaceEmbedClient:
     def __init__(self, base_url: str, *, timeout_sec: float = 8.0, min_det_score: float = 0.5,
-                 opener: Optional[Callable[..., Any]] = None) -> None:
+                 api_key: str = "", opener: Optional[Callable[..., Any]] = None) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.timeout = float(timeout_sec)
         self.min_det_score = float(min_det_score)
+        self.api_key = str(api_key or "").strip()
         self._open = opener or urllib.request.urlopen
+
+    def _headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        h: Dict[str, str] = dict(extra or {})
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"   # 网关形态：cx.* 设备令牌鉴权
+        return h
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         global _last_fail_ts
@@ -90,7 +112,7 @@ class FaceEmbedClient:
             return None   # 边车刚失败过：60s 内不再打（拟稿别为它排队）
         req = urllib.request.Request(
             self.base_url + path, data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=self._headers({"Content-Type": "application/json"}), method="POST")
         try:
             with self._open(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -124,7 +146,8 @@ class FaceEmbedClient:
 
     def health(self) -> bool:
         try:
-            with self._open(urllib.request.Request(self.base_url + "/health"), timeout=min(self.timeout, 4.0)) as resp:
+            with self._open(urllib.request.Request(self.base_url + "/health", headers=self._headers()),
+                            timeout=min(self.timeout, 4.0)) as resp:
                 d = json.loads(resp.read().decode("utf-8"))
             return bool(d.get("ok"))
         except Exception:
@@ -319,7 +342,7 @@ def annotate_inbound_sync(
     if not path:
         return ""
     cl = client or FaceEmbedClient(cfg["base_url"], timeout_sec=cfg["timeout_sec"],
-                                   min_det_score=cfg["min_det_score"])
+                                   min_det_score=cfg["min_det_score"], api_key=cfg["api_key"])
     faces = cl.embed_path(path, max_faces=3)
     if faces is None:
         return ""   # 服务不可达 / 超时：拟稿照旧，不注入

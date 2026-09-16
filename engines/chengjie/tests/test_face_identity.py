@@ -155,6 +155,30 @@ def test_face_cfg_defaults_and_disabled_without_base_url():
     c = fi.face_cfg({"vision": {"face_identity": {"enabled": True, "base_url": "http://x/", "timeout_sec": 999}}})
     assert c["enabled"] and c["base_url"] == "http://x" and c["timeout_sec"] == 60.0
     assert fi.face_cfg(None)["enabled"] is False
+    # 托管形态：识图已指网关（_hosted_vision）→ 人脸走同网关 /api/ai（去尾 /v1），令牌同源
+    hosted = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
+                                     "api_key": "cx.abc", "face_identity": {"enabled": True}}})
+    assert hosted["enabled"] and hosted["hosted"] and hosted["base_url"] == "https://bd2026.cc/api/ai"
+    assert hosted["api_key"] == "cx.abc"
+    # 显式 base_url 永远优先（LAN 直连不被网关覆盖）
+    lan = fi.face_cfg({"vision": {"_hosted_vision": True, "base_url": "https://bd2026.cc/api/ai/v1",
+                                  "api_key": "cx.abc",
+                                  "face_identity": {"enabled": True, "base_url": "http://192.168.0.176:8767"}}})
+    assert lan["base_url"] == "http://192.168.0.176:8767" and not lan["hosted"] and lan["api_key"] == ""
+
+
+def test_client_sends_bearer_when_api_key_set(tmp_path):
+    seen = {}
+
+    def _open(req, timeout=0):
+        seen["auth"] = req.get_header("Authorization")
+        return _FakeResp(json.dumps({"ok": True, "faces": []}).encode())
+    cl = fi.FaceEmbedClient("https://bd2026.cc/api/ai", api_key="cx.tok", opener=_open)
+    assert cl.embed_path(_img(tmp_path, "x.png", "NOFACE!!")) == []
+    assert seen["auth"] == "Bearer cx.tok"
+    cl2 = fi.FaceEmbedClient("http://192.168.0.176:8767", opener=_open)
+    cl2.embed_path(_img(tmp_path, "y.png", "NOFACE!!"))
+    assert seen["auth"] is None
 
 
 def test_client_embed_and_failure_cooldown(tmp_path):

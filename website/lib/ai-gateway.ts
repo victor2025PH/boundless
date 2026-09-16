@@ -255,14 +255,25 @@ const ASR_RELAY_URLS: string[] = (process.env.ASR_RELAY_URLS || "")
   .split(",")
   .map((s) => s.trim().replace(/\/+$/, ""))
   .filter(Boolean);
+// #333 视觉身份层（2026-09-17）：176 CPU 人脸嵌入边车（scripts/face176，:8767）经同一条
+// 117→VPS 隧道暴露（vision_tunnel.ps1 18416）。客户端 face_identity 在托管形态下
+// 打 /api/ai/v1/face/embed（JSON，图 base64）→ 这里按设备令牌鉴权转发。
+//    FACE_RELAY_URLS 逗号列表，**不带** /v1（服务本身路径是 /v1/face/embed）：http://127.0.0.1:18416
+const FACE_RELAY_URLS: string[] = (process.env.FACE_RELAY_URLS || "")
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 const AH_SERVICE_TOKEN = (process.env.AH_SERVICE_TOKEN || "").trim();
 /** TTS 一次合成的最低计额（字符）：短句也占 GPU 一轮串行合成，纯按字符会低估。 */
 export const TTS_CHAR_MIN_COST = Number(process.env.AI_GATEWAY_TTS_MIN_CHARS || 60);
 /** ASR 一次转写的固定计额（字符）：语音时长网关不可靠可知，按次折算。 */
 export const ASR_CHAR_COST = Number(process.env.AI_GATEWAY_ASR_CHARS || 200);
+/** 人脸嵌入一次的固定计额（字符）：CPU 100ms 级、无 token，按次小额折算。 */
+export const FACE_CHAR_COST = Number(process.env.AI_GATEWAY_FACE_CHARS || 50);
 
 const _ttsCooldown = new Map<string, number>();
 const _asrCooldown = new Map<string, number>();
+const _faceCooldown = new Map<string, number>();
 
 function orderedOf(urls: string[], cooldown: Map<string, number>): string[] {
   const now = Date.now();
@@ -279,6 +290,7 @@ function orderedOf(urls: string[], cooldown: Map<string, number>): string[] {
 export const TTS_ATTEMPT_MS = Number(process.env.AI_GATEWAY_TTS_ATTEMPT_MS || 40000);
 export const ASR_ATTEMPT_MS = Number(process.env.AI_GATEWAY_ASR_ATTEMPT_MS || 30000);
 export const EMBED_ATTEMPT_MS = Number(process.env.AI_GATEWAY_EMBED_ATTEMPT_MS || 12000);
+export const FACE_ATTEMPT_MS = Number(process.env.AI_GATEWAY_FACE_ATTEMPT_MS || 8000);
 
 /**
  * 各 AI 路由的**总**预算（毫秒）——超时分层的单一事实源。
@@ -298,6 +310,7 @@ export const ROUTE_BUDGET_MS = {
   embed: 30_000,
   chat: 55_000,
   vision: 120_000,
+  face: 15_000,
   /** nginx `location ^~ /api/ai/` 的 proxy_read_timeout，必须 ≥ 上面所有值。 */
   nginx_read: 180_000,
 } as const;
@@ -340,6 +353,44 @@ export function ttsRelayEnabled(): boolean {
 
 export function asrRelayEnabled(): boolean {
   return ASR_RELAY_URLS.length > 0;
+}
+
+export function faceRelayEnabled(): boolean {
+  return FACE_RELAY_URLS.length > 0;
+}
+
+/** 人脸嵌入转发：JSON 原样透传到 176:8767 边车（/v1/face/embed）；5xx/网络失败冷却降权。 */
+export async function proxyFace(
+  rawJson: string,
+  signal?: AbortSignal
+): Promise<Response> {
+  const relays = orderedOf(FACE_RELAY_URLS, _faceCooldown);
+  if (!relays.length) throw new Error("no_face_relay");
+  let lastErr: unknown = null;
+  for (const base of relays) {
+    const att = attemptSignal(signal, FACE_ATTEMPT_MS);
+    try {
+      const r = await fetch(`${base}/v1/face/embed`, {
+        method: "POST",
+        headers: relayHeaders({ "Content-Type": "application/json" }),
+        body: rawJson,
+        signal: att.signal,
+      });
+      if (r.status >= 500 && relays.length > 1) {
+        _faceCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+        lastErr = new Error(`relay_${r.status}`);
+        continue;
+      }
+      return r;
+    } catch (e) {
+      _faceCooldown.set(base, Date.now() + RELAY_COOLDOWN_MS);
+      lastErr = e;
+      if (signal?.aborted) break;
+    } finally {
+      att.release();
+    }
+  }
+  throw lastErr || new Error("all_face_relays_failed");
 }
 
 /** 中继请求头：代注集群内部令牌（7852@140 等跨机节点要 X-AH-Svc 才放行）。 */

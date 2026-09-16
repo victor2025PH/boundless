@@ -83,12 +83,13 @@ def register_visual_memory_routes(app: Any, *, auth_dep: Any, audit_store: Any =
         if cfg["enabled"]:
             try:
                 import asyncio
-                cl = FaceEmbedClient(cfg["base_url"], timeout_sec=min(cfg["timeout_sec"], 4.0))
+                cl = FaceEmbedClient(cfg["base_url"], timeout_sec=min(cfg["timeout_sec"], 4.0),
+                                     api_key=cfg["api_key"])
                 healthy = await asyncio.to_thread(cl.health)
             except Exception:
                 healthy = False
         return {"ok": True, "enabled": cfg["enabled"], "base_url": cfg["base_url"],
-                "timeout_sec": cfg["timeout_sec"], "service_healthy": healthy}
+                "hosted": cfg["hosted"], "timeout_sec": cfg["timeout_sec"], "service_healthy": healthy}
 
     @app.get("/api/visual-memory/{conversation_id}")
     async def vmem_get(conversation_id: str, request: Request, limit: int = 20, _=Depends(auth_dep)):

@@ -9,9 +9,12 @@
 #   198:8765  -> VPS 127.0.0.1:18415   GPU ASR（ASR_RELAY_URLS，须带 /v1 后缀；
 #                2026-08-30 从 176:8765 改指 198——ASR 单点断电后迁 198（whisper
 #                large-v3-turbo cuda + SER），旧指向=全网转录瘫 7h 的根因，同 TTS 18413 病）
+#   176:8767  -> VPS 127.0.0.1:18416   人脸嵌入边车（FACE_RELAY_URLS，不带 /v1；#333 视觉
+#                身份层 2026-09-17，CPU onnx，客户图里是谁——网关 /api/ai/v1/face/embed）
 # 对应 VPS env：VISION_RELAY_URLS=http://127.0.0.1:18411/v1,http://127.0.0.1:18412/v1
 #              TTS_RELAY_URLS=http://127.0.0.1:18413,http://127.0.0.1:18414
 #              ASR_RELAY_URLS=http://127.0.0.1:18415/v1
+#              FACE_RELAY_URLS=http://127.0.0.1:18416
 # 一条 ssh 承载全部 -R：少常驻进程，断线一起重连，watchdog 杀/拉一次全恢复。
 #
 # 只暴露到 VPS 的 localhost（非公网端口）；访问由网关的设备令牌鉴权把关，GPU 不直接对公网。
@@ -37,7 +40,7 @@ if (-not $mutexOwned) { Log 'duplicate runner detected (mutex busy); exiting'; e
 # 重连全被 "remote port forwarding failed" 拒（8/3、8/7、8/8、8/12 实测卡 10-20
 # 分钟，watchdog 杀本地 ssh 救不了远端）。命中该错误即上 VPS 杀掉陈旧持有者后
 # 快速重连；VPS 侧 sshd ClientAliveInterval 30x3 兜底。
-$tunnelPorts = @('18411','18412','18413','18414','18415')
+$tunnelPorts = @('18411','18412','18413','18414','18415','18416')
 $lastStaleCleanup = [datetime]::MinValue
 function Clear-StaleForwards([string[]]$PortList) {
   $spec = (($PortList | ForEach-Object { "$_/tcp" }) -join ' ')
@@ -59,7 +62,7 @@ while ($true) {
     # ExitOnForwardFailure 任一端口占用即退出重试（僵尸占端口由下方自清收割）
     & ssh -N -R 127.0.0.1:18411:192.168.0.176:11434 -R 127.0.0.1:18412:192.168.0.140:11434 `
       -R 127.0.0.1:18413:192.168.0.104:7865 -R 127.0.0.1:18414:192.168.0.140:7852 `
-      -R 127.0.0.1:18415:192.168.0.198:8765 `
+      -R 127.0.0.1:18415:192.168.0.198:8765 -R 127.0.0.1:18416:192.168.0.176:8767 `
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `
       -i $key $vps 2>&1 | ForEach-Object {
