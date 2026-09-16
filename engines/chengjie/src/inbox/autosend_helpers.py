@@ -10,6 +10,19 @@ import time
 from typing import Any, Dict, List, Optional, Tuple  # noqa: F401
 
 
+def _safe_voice_inbox_text(text: str) -> str:
+    """语音镜像落库前剥系统标签。只动语音念稿，不动「[图片] 配文」这类占位。"""
+    src = str(text or "")
+    if not src.strip() or ("[" not in src and "【" not in src):
+        return src
+    try:
+        from src.ai.outbound_text_guard import strip_system_labels
+        out, hits = strip_system_labels(src)
+        return out if hits else src
+    except Exception:
+        return src
+
+
 async def autosend_voice(assistant, platform, account_id, chat_key, text,
                          *, sent_text=None) -> bool:
     """全自动语音（gated, 默认关）：按策略把本条回复转 TTS
@@ -310,7 +323,8 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
                 _pdur = int(_probe2(_plocal) or 0)
             except Exception:
                 _pdur = 0
-            _ptext = str(_pmeta.get("part_text") or "").strip() or str(text)
+            _ptext = _safe_voice_inbox_text(
+                str(_pmeta.get("part_text") or "").strip() or str(text))
             if _idx:
                 await asyncio.sleep(_pgap(_ptext, _pdur, gap_max_sec=_gap_max))
 
@@ -390,13 +404,13 @@ async def autosend_voice(assistant, platform, account_id, chat_key, text,
     _v_sender = persona_display_name(_real_pid)
 
     async def _vcoro():
-        # caption="" → 客户收纯语音；inbox_text=text →
-        # 坐席台会话里显示「自动语音念了什么」(转写)。
+        # caption="" → 客户收纯语音；inbox_text=剥过标签的念稿 →
+        # 坐席台会话里显示「自动语音念了什么」(转写)，且下一轮历史不再教模型抄标签。
         return await _orch.send_media(
             platform, account_id, chat_key,
             media_path=_local, media_url=_url,
             media_type="voice", caption="",
-            inbox_text=text, sender_name=_v_sender)
+            inbox_text=_safe_voice_inbox_text(text), sender_name=_v_sender)
 
     _wl = getattr(assistant, "_web_loop", None)
     if _wl is not None and _wl.is_running():
@@ -1397,9 +1411,11 @@ def _guard_translated_lang_mix(assistant, src_text: str, out_text):
     整条直发客户。守卫本身认得这个形状（latin≥6 且 ≥3×CJK ⇒ hard），只是从来
     没被喂到译文。
 
-    只跑 ``lang_mix`` 那一半：旁白与无出处引用是**生成端**语义，已在出稿口处置
-    完毕，拿 MT 产物重跑既无意义又会把命中数记重。任何异常/守卫判空一律返回
-    译文原值——翻译链的 HOLD 语义（None）必须原样透传，绝不能被守卫改写成放行。
+    只跑 ``lang_mix`` + ``system_label``：旁白与无出处引用是**生成端**语义，已在
+    出稿口处置完毕，拿 MT 产物重跑既无意义又会把命中数记重。系统标签例外——
+    2026-09-12 事故里 MT 把「[我方语音消息]」译成「[Voice message from our side]」，
+    出稿口剥过中文、译文又把标签加回来。任何异常/守卫判空一律返回译文原值——
+    翻译链的 HOLD 语义（None）必须原样透传，绝不能被守卫改写成放行。
     """
     if not isinstance(out_text, str) or not out_text.strip():
         return out_text
@@ -1409,16 +1425,24 @@ def _guard_translated_lang_mix(assistant, src_text: str, out_text):
             resolve_cfg as _guard_cfg,
         )
         _c = _guard_cfg(assistant.config.config or {})
-        if not (_c.get("enabled", True) and _c.get("lang_mix", True)):
+        _do_mix = bool(_c.get("lang_mix", True))
+        _do_lab = bool(_c.get("system_label", True))
+        if not (_c.get("enabled", True) and (_do_mix or _do_lab)):
             return out_text
         _cleaned, _meta = _guard(
             out_text,
-            {"enabled": True, "monologue": False, "lang_mix": True,
-             "unfounded_recall": False})
+            {"enabled": True, "monologue": False, "lang_mix": _do_mix,
+             "unfounded_recall": False, "system_label": _do_lab})
         if _cleaned != out_text:
-            assistant.logger.warning(
-                "[autosend] 译文混语已剥除（%s）：%r → %r（源文 %r）",
-                _meta.get("lang_mix") or "hard", out_text, _cleaned, src_text)
+            if _meta.get("system_label_hits"):
+                assistant.logger.warning(
+                    "[autosend] 译文系统标签已剥除 %r：%r → %r（源文 %r）",
+                    [h[:40] for h in _meta["system_label_hits"][:3]],
+                    out_text, _cleaned, src_text)
+            else:
+                assistant.logger.warning(
+                    "[autosend] 译文混语已剥除（%s）：%r → %r（源文 %r）",
+                    _meta.get("lang_mix") or "hard", out_text, _cleaned, src_text)
             return _cleaned
         if _meta.get("lang_mix") == "hard_kept":
             # 剥后残句会更糟（守卫的安全阀），如实留痕便于回看 MT 质量
