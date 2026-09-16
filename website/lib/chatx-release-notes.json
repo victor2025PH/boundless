@@ -1,5 +1,43 @@
 [
   {
+    "version": "1.0.87",
+    "date": "2026-09-17",
+    "title": {
+      "zh": "本机模型离线不静默、配文跟语言、生成图归属、拦截人话",
+      "en": "No silence when local model is offline, captions follow language, generated-photo provenance, plain block reasons"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "会话选了「无限制」而本机模型离线时不再静默不回：自动按标准档回复，会话头黄条「切回标准」，模式菜单离线项淡显带原因",
+        "发图配文跟会话语言走：日语、泰语等非中英会话不再冒出中文固定配文",
+        "有真人相册的人设默认不再发 AI 生成的脸；相册页给生成图打「AI 生成」角标，可筛选清理，并新增「允许 AI 生成」开关",
+        "节奏页「最近 24 小时」拦截原因改人话：写清与哪条相近、相似度、已改写几次，行尾直达会话；近重复第二次先换角度改写再转人工",
+        "AI 体检面板「为什么没回」新增「本机模型离线」与最近拦截时间线，不用再翻日志",
+        "承诺发图连续落空时自动收口，不再一轮一轮说「马上拍给你」；草稿预览里不再露出 [PHOTO …] 指令原码",
+        "克隆声不支持会话语种时，会话头一行提示，不再每条告警，也不再误报「语音出站断档」",
+        "人设生活小事在日语、英语等会话里不再跨日重讲成「今天」的新鲜事",
+        "顶栏「急需处理」只在全部都是严重超时时才这么标，混有「超过提醒线」的会话时显示「待处理」",
+        "[图片] / [Image] / [Voice] 等系统占位不再原样外发；「刚拍的」「这张就是我」这类没图却说发了图的话会被撤回改写"
+      ],
+      "en": [
+        "Unrestricted chats no longer go silent when the local model is offline: the AI answers on the standard profile, the header offers Switch back to standard, and the offline option is dimmed in the mode menu with the reason",
+        "Photo captions follow the chat language: Japanese, Thai and other non-Chinese/English chats no longer receive canned Chinese captions",
+        "Personas with a real album no longer send AI-generated faces by default; generated photos carry an AI generated badge in the album, can be filtered for cleanup, and a new Allow AI generation switch controls it",
+        "Block reasons on the pacing page's Last 24 hours now read as plain text with which message it matched, similarity and rewrite count, plus a link into the chat; a second near-duplicate gets an angle-changing rewrite before handoff",
+        "The AI diagnosis panel's Why no reply now lists Local model offline and a recent block timeline, no log digging needed",
+        "Repeated unfulfilled photo promises are reined in automatically instead of another \"I'll take one right now\"; draft previews no longer show raw [PHOTO …] directives",
+        "When the clone voice cannot speak the chat language, the header shows a one-line note; no per-message warnings and no false voice outage alerts",
+        "Persona life snippets are no longer retold as \"today's\" news across days in Japanese, English and other non-Chinese chats",
+        "The top-bar Urgent pill is only labelled Urgent when every item is critically overdue; mixed lists show To handle",
+        "System placeholders like [Image] / [Voice] no longer leak into outgoing messages; lines claiming a photo was sent when none was are retracted and rewritten"
+      ]
+    }
+  },
+  {
     "version": "1.0.86",
     "date": "2026-09-16",
     "title": {

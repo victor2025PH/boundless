@@ -1715,6 +1715,64 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "大视频 大图 平台上限 压后发送 LINE Telegram Messenger chat media cap",
         "/workspace",
     ),
+    # ── 1.0.87（R87：#330 无限制离线 / #329 配文语言·生成图 / #331 拦截人话 / 语音语种旁注）──
+    (
+        "route-offline-fallback",
+        "选了无限制模式全自动为什么不回 / 本机模型离线怎么办",
+        "Unrestricted mode auto-reply is silent / what if the local model is offline",
+        "本机私有模型端点连不上时不再静默：这一轮按标准档代答，会话头黄条「本机模型离线 · 已按标准档回复」，"
+        "点「切回标准」永久切回，不点则端点恢复后自动回无限制。AI 体检面板「为什么没回」会列「本机模型离线」。",
+        "When the local private model endpoint is unreachable the AI no longer goes silent: it answers on the standard "
+        "profile, the header shows Local model offline · answered on standard; tap Switch back to standard to make it "
+        "permanent, otherwise it resumes Unrestricted once the endpoint is back. AI diagnosis lists Local model offline.",
+        "无限制 本机模型 离线 不回 标准档 切回标准 unrestricted offline fallback route",
+        "/workspace",
+    ),
+    (
+        "caption-lang-pin",
+        "日语客户为什么收到中文配文 / 配图文案怎么跟会话语言",
+        "Why did a Japanese customer get a Chinese caption / captions follow the chat language",
+        "配文按会话铆定语（工具条「发→X」）出：非中英会话不再用中文固定配文，没有该语种配文时只发图不配字。"
+        "要改语种在工具条「发→X」铆定。",
+        "Captions follow the pinned chat language (toolbar Send→X): non-zh/en chats no longer get canned Chinese captions; "
+        "with no caption in that language the photo goes without text. Pin the language via Send→X.",
+        "配文 中文 日语 语言 穿帮 你是中国人 caption language pin",
+        "/workspace",
+    ),
+    (
+        "album-ai-gen-gate",
+        "发的图不是相册里的 / 怎么不让 AI 生成图 / AI 生成角标",
+        "The photo sent is not from the album / stop AI-generated photos / AI generated badge",
+        "人设 → 相册 → 顶部「允许 AI 生成」：有真人相册的人设默认关，无匹配时诚实说没有；没有相册的人设默认开。"
+        "生成入册的图带「AI 生成」角标，筛选选「AI 生成」可批量清理。",
+        "Persona → Album → Allow AI generation at the top: off by default for personas with a real album (honest text when "
+        "nothing matches), on for personas without one. Generated photos carry an AI generated badge; filter by it to clean up.",
+        "生成图 不是相册 AI 生成 角标 允许生成 开关 album generate badge",
+        "/personas",
+    ),
+    (
+        "abort-reason-human",
+        "拦截原因 dup_guard_blocked 是什么 / 近重复拦截怎么处理",
+        "What does dup_guard_blocked mean / how to handle a near-duplicate block",
+        "节奏页「最近 24 小时」拦截行现在写人话：近重复拦截 + 与哪条相近 · 相似度 · 已改写几次 + 「去会话处理」。"
+        "近重复会先换角度再改写一次，第二次才转人工。AI 体检「为什么没回」列同一份时间线。",
+        "The Last 24 hours rows now read as plain text: near-duplicate guard + which message it matched, similarity, rewrites, "
+        "and Go to chat. A near-duplicate gets an angle-changing rewrite before handoff. AI diagnosis shows the same timeline.",
+        "拦截 dup_guard_blocked 近重复 原因 人话 去会话 节奏 abort reason duplicate",
+        "/reply-settings",
+    ),
+    (
+        "voice-clone-lang-note",
+        "本会话语音不可用是什么意思 / 为什么日语会话不发语音",
+        "What does Voice off for this chat mean / why no voice in Japanese chats",
+        "克隆声念不了会话语种时按设计改发文字，会话头一行「本会话语音不可用（克隆声不支持 ja）」；不是语音链路坏了，"
+        "同一会话不再每条告警。要出语音需换支持该语种的克隆声或改人设语言。",
+        "When the clone voice cannot speak the chat language, replies go as text by design and the header shows Voice off "
+        "for this chat; it is not an outage and the chat is not warned per message. Switch to a clone voice that supports "
+        "the language to get voice.",
+        "语音不可用 克隆声 不支持 日语 语种 断档 voice clone language unsupported",
+        "/workspace",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请

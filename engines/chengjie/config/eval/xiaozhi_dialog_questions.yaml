@@ -118,3 +118,19 @@ questions:
   - tag: chat_large_media
     q: "聊天里大视频发不出去怎么办？超限还差多少怎么看？"
     must_any: ["平台", "上限", "压后", "视频"]
+  # ── v1.0.87 发版批（R87：无限制离线回退 / 配文语言 / 生成图归属 / 拦截人话 / 语音语种旁注）──
+  - tag: route_offline_fallback
+    q: "选了无限制模式全自动为什么不回？本机模型离线怎么办？"
+    must_any: ["标准", "离线", "切回", "无限制"]
+  - tag: caption_lang_pin
+    q: "日语客户为什么收到中文配文？"
+    must_any: ["语言", "配文", "铆定", "发→"]
+  - tag: album_ai_gen_gate
+    q: "发的图不是相册里的，怎么不让 AI 生成图？"
+    must_any: ["生成", "相册", "开关", "角标"]
+  - tag: abort_reason_human
+    q: "拦截原因 dup_guard_blocked 是什么意思？"
+    must_any: ["重复", "拦截", "去会话", "改写"]
+  - tag: voice_clone_lang_note
+    q: "本会话语音不可用是什么意思？为什么日语会话不发语音？"
+    must_any: ["克隆", "语种", "文字", "不支持"]

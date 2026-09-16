@@ -1532,6 +1532,47 @@ HELP_TERMS: dict = {
         "desc_en": "In-thread photo/video sends follow each platform cap (e.g. LINE video ~100MB, Telegram ~200MB; Messenger stays ~25MB). Over-limit toasts show how much over; large stills can Compress then send (default remains original). Upload timeout scales with size.",
         "usage": "打开会话 → 附件选大视频或大图。超限看提示；需要缩小静图时点「压后发送」再发。",
         "usage_en": "Open a thread → attach a large video or photo. Read the over-limit toast; for a still, tap Compress then send if you need a smaller file."
+    },
+    # ── 1.0.87（R87：无限制离线回退 / 配文语言 / 生成图归属 / 拦截人话 / 语音语种旁注）───
+    "route_offline_fallback": {
+        "zh": "本机模型离线自动回标准档",
+        "en": "Local model offline falls back to standard",
+        "desc": "会话选了「无限制」（本机私有模型）而端点连不上时，不再静默不回：这一轮按标准档（规则全开、走主链）代答，会话头出黄条「本机模型离线 · 已按标准档回复」+「切回标准」；模式菜单里离线项淡显带原因。端点恢复出话即自动回到无限制。",
+        "desc_en": "If a chat is on Unrestricted (local private model) and the endpoint is unreachable, the AI no longer goes silent: it answers on the standard profile (all rules on, main chain), the header shows Local model offline · answered on standard + Switch back to standard, and the offline option is dimmed in the mode menu. It returns to Unrestricted once the endpoint responds again.",
+        "usage": "会话头黄条 → 点「切回标准」永久切回；不点则端点恢复后自动回无限制。全自动不回时先看 AI 体检里的「本机模型离线」。",
+        "usage_en": "Header band → tap Switch back to standard to make it permanent; otherwise it resumes Unrestricted when the endpoint is back. If auto-reply is silent, check Local model offline in AI diagnosis first."
+    },
+    "caption_lang_pin": {
+        "zh": "配图文案跟会话语言",
+        "en": "Photo captions follow the chat language",
+        "desc": "发图配文按会话铆定语（工具条「发→X」）出：日语 / 泰语等非中英会话不再冒出中文固定配文；配文池没有该语种时宁可只发图不配字。B 线 LLM 配文同样先读铆定语。",
+        "desc_en": "Photo captions follow the chat's pinned language (toolbar Send→X): Japanese / Thai and other non-zh/en chats no longer get canned Chinese captions; if no caption exists in that language the photo goes without text. LLM captions on the autosend line read the pin first.",
+        "usage": "不用设置。客户问「你是中国人吗」这类穿帮不该再出现；要改语种在工具条「发→X」铆定。",
+        "usage_en": "No setting needed. Are you Chinese? style slips should stop; pin the language via Send→X on the toolbar."
+    },
+    "album_ai_gen_gate": {
+        "zh": "AI 生成图归属与开关",
+        "en": "AI-generated photos: label and switch",
+        "desc": "相册无匹配时是否允许 AI 生成一张脸：有真人相册的人设默认关（无匹配 → 诚实文字），没有相册的人设默认开。生成入册的图在相册页带「AI 生成」角标，可按「只看 AI 生成」筛选清理。",
+        "desc_en": "Whether the AI may generate a face when the album has no match: off by default for personas with a real album (no match → honest text), on for personas without one. Generated photos carry an AI generated badge in the album and can be filtered for cleanup.",
+        "usage": "人设 → 相册 → 顶部「允许 AI 生成」开关；筛选选「AI 生成」看有哪些是生成的。",
+        "usage_en": "Persona → Album → Allow AI generation toggle at the top; filter by AI generated to see which ones were generated."
+    },
+    "abort_reason_human": {
+        "zh": "今日拦截原因人话",
+        "en": "Plain-language block reasons",
+        "desc": "节奏页「最近 24 小时」拦截行不再直出 dup_guard_blocked 这类原码：原因写成人话（近重复拦截），附「与哪条相近 · 相似度 · 已自动改写几次」和「去会话处理」。近重复第一次换说法仍雷同会先换角度再改写一次，第二次才转人工。",
+        "desc_en": "The Last 24 hours block rows on the pacing page no longer show raw codes like dup_guard_blocked: reasons read as plain text (near-duplicate guard) with which message it matched, similarity, how many rewrites, and Go to chat. A near-duplicate gets a second, angle-changing rewrite before handing off.",
+        "usage": "自动回复设置 → 节奏 → 最近 24 小时 → 点「去会话处理」。AI 体检面板「为什么没回」也列同一份拦截时间线。",
+        "usage_en": "Reply settings → Pacing → Last 24 hours → Go to chat. The AI diagnosis panel lists the same block timeline under Why no reply."
+    },
+    "voice_clone_lang_note": {
+        "zh": "克隆声不支持该语种提示",
+        "en": "Clone voice unsupported language note",
+        "desc": "克隆声念不了会话语种（如日语）时按设计改发文字，不是语音链路坏了：会话头一行「本会话语音不可用（克隆声不支持 ja）」，同一会话不再每条告警，也不再被算进「语音出站断档」。",
+        "desc_en": "When the clone voice cannot speak the chat language (e.g. Japanese), replies go as text by design — not a voice outage: the header shows Voice off for this chat (clone does not support ja), the same chat is not warned per message and it no longer counts toward voice outage alerts.",
+        "usage": "看到该行不用处理；要让这个会话出语音需换支持该语种的克隆声或改人设语言。",
+        "usage_en": "No action needed; to get voice in that chat, switch to a clone voice that supports the language or change the persona language."
     }
 }
 
