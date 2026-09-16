@@ -59,21 +59,23 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 STATES = ("auto", "deferred", "held", "human", "manual",
-          "off_hours", "sidecar_down", "lang_unknown", "ai_fail", "xlate_hold")
+          "off_hours", "sidecar_down", "lang_unknown", "ai_fail", "xlate_hold", "route_offline")
 
 #: 判定顺序（前者命中即定案）。``xlate_hold``（Q-39 B #326：出站翻译三步重试后仍 HOLD，
 #: 这条没发）排在 lang_unknown 之后、ai_fail 之前——稿已生成、卡在翻译，与「没生成」同级红。
+#: ``route_offline``（R87 #330：本会话选了「无限制」但本机私有端点离线）排在 lang_unknown 之后：
+#: 回退开着＝已按标准档代答（琥珀、会发）；回退关着＝本轮没人回（红、不发）。
 PRIORITY = ("manual", "held", "sidecar_down", "off_hours", "deferred",
-            "lang_unknown", "xlate_hold", "ai_fail", "human", "auto")
+            "lang_unknown", "route_offline", "xlate_hold", "ai_fail", "human", "auto")
 
 TONE = {
     "auto": "ok",
-    "deferred": "warn", "off_hours": "warn", "lang_unknown": "warn",
+    "deferred": "warn", "off_hours": "warn", "lang_unknown": "warn", "route_offline": "warn",
     "held": "danger", "sidecar_down": "danger", "ai_fail": "danger", "xlate_hold": "danger",
     "manual": "muted", "human": "muted",
 }
 
-ACTIONS = ("resume", "ack", "retry", "confirm_pin", "retranslate", "none")
+ACTIONS = ("resume", "ack", "retry", "confirm_pin", "retranslate", "route_standard", "none")
 
 _AUTO_MODES = frozenset({"auto_ai"})
 _HUMAN_MODES = frozenset({"review", "multi_choice"})
@@ -383,6 +385,30 @@ def _src_xlate_hold(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]
         return None
 
 
+def _src_route_offline(store: Any, cid: str, now: float, config: Any) -> Optional[Dict[str, Any]]:
+    """R87 #330：本会话仍是「无限制」且端点最近（24h note）被判离线 → 带出 note；会话已切回
+    标准档 / 端点已恢复出话（record_reply 清窗且 note 超时）→ None。"""
+    try:
+        from src.ai import conv_route as _cr
+        if store is None or not _cr.get(store, cid).unrestricted:
+            return None
+        rec = _cr.offline_note(cid, store=store, now=now)
+        if not rec:
+            return None
+        ts = float(rec.get("ts") or 0.0)
+        still = _cr.recent_offline(config, now=now) is not None
+        # 端点窗已关（真端点又出话 / 5 分钟没再撞）且 note 超过 15 分钟 → 视为恢复，不再显示
+        if not still and (now - ts) > 15 * 60:
+            return None
+        fb_on = bool(_cr.offline_fallback_enabled(config))
+        return {"reason": str(rec.get("reason") or "offline"), "ts": ts,
+                "hhmm": time.strftime("%H:%M", time.localtime(ts)) if ts else "--:--",
+                "ago_sec": round(max(0.0, now - ts), 0), "n": int(rec.get("n") or 1),
+                "fallback": fb_on, "still_offline": still}
+    except Exception:
+        return None
+
+
 def _src_ai_fail(store: Any, cid: str, now: float) -> Optional[Dict[str, Any]]:
     try:
         from src.inbox.ai_fail_marker import get as _get, hhmm as _hhmm
@@ -427,6 +453,8 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     # Q-39 B（#326）：出站翻译 HOLD——与档位无关（人审档人工通过的稿同样会卡在翻译）。
     # 不进 sources（Q-26 六源契约 + Q-30 两源由门禁钉死），单列 out["ext"]。
     xh = _src_xlate_hold(store, cid, ts_now)
+    # R87 #330：无限制端点离线 note——与档位无关（smart-reply / 自动链同一端点），单列 out["ext"]
+    ro = _src_route_offline(store, cid, ts_now, cfg)
     out: Dict[str, Any] = {
         "cid": cid, "will_send": False, "state": "human", "tone": "muted",
         "reason_code": "", "reason_text_key": "inbox.cs.human", "until_ts": None,
@@ -435,7 +463,7 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     # Q-35 #306：旁注源＝相册无命中 note。**不参与状态判定**（AI 已改口照常回）、不进 sources
     # （六源契约不动），只进 out["notes"]；_set() 只更新状态键，notes 随任一分支原样带出。
     out["notes"] = [n for n in (_src_album_miss(store, cid, ts_now),) if n]
-    out["ext"] = {"xlate_hold": xh}
+    out["ext"] = {"xlate_hold": xh, "route_offline": ro}
 
     def _set(state: str, *, will_send: bool, reason_code: str = "", text_key: str = "",
              until_ts: Optional[float] = None, action: str = "none",
@@ -501,6 +529,21 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
         return _set("lang_unknown", will_send=fb, reason_code="lang_unknown",
                     text_key="inbox.cs.lang_unknown" if fb else "inbox.cs.lang_unknown_l1",
                     reply_lang=lp.get("reply_lang") or None, via=lp.get("via"))
+    if ro:
+        # 「本机模型离线 · 已按标准档回复 · {hhmm}」+ 「切回标准」（POST conv-model-route profile=standard）；
+        # 回退关着 → 红「本机模型离线 · 这轮没人回」同一动作
+        if ro["fallback"]:
+            return _set("route_offline", will_send=is_auto, reason_code="route_offline",
+                        text_key="inbox.cs.route_offline", action="route_standard",
+                        reason=ro["reason"], hhmm=ro["hhmm"], ago_sec=ro["ago_sec"], n=ro["n"],
+                        still_offline=ro["still_offline"])
+        out["tone"] = "danger"
+        r = _set("route_offline", will_send=False, reason_code="route_offline",
+                 text_key="inbox.cs.route_offline.hold", action="route_standard",
+                 reason=ro["reason"], hhmm=ro["hhmm"], ago_sec=ro["ago_sec"], n=ro["n"],
+                 still_offline=ro["still_offline"])
+        r["tone"] = "danger"
+        return r
     if xh:
         # 「翻译引擎没回话 · 这条没发 · 重试翻译」——动作打 POST /api/unified-inbox/drafts/{id}/retranslate
         return _set("xlate_hold", will_send=False, reason_code=str(xh["reason"]),

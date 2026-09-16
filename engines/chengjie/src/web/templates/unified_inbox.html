@@ -6783,7 +6783,8 @@ window._ayResume=_ayResume;
    ms-（七码人话 + 重试）改为本带的子渲染：文案函数复用它们的取词，动作复用它们的端点函数。每行带 cs- 前缀＝stage_hunks --mine 可切分。 */
 var _csState=null, _csCid='', _csTimer=null, _csBusy=false;
 var _CS_ACT_KEYS={ack:'inbox.cs.act.ack',resume:'inbox.cs.act.resume',confirm_pin:'inbox.cs.act.confirm_pin',
-  retranslate:'inbox.cs.act.retranslate'};   // Q-39 B #326（cs-）：xlate_hold → 「重试翻译」
+  retranslate:'inbox.cs.act.retranslate',   // Q-39 B #326（cs-）：xlate_hold → 「重试翻译」
+  route_standard:'inbox.cs.act.route_standard'};   // R87 #330（cs-）：route_offline → 「切回标准」
 function _csKeyOr(k,fb){ var t=window.T(k); return (t&&t!==k)?t:(fb||''); }
 function _csHeldWhy(p){
   p=p||{}; var reason=String(p.reason_code||p.reason||'');
@@ -6804,6 +6805,7 @@ function _csParams(st){
   else if(s==='sidecar_down'){ var _csCode=String(p.code||st.reason_code||''); p.code=_csCode; try{ p.code_label=_msFailCodeLabel(_csCode)||_csCode; }catch(_){ p.code_label=_csCode; } p.n=Number(p.n||0); }
   else if(s==='lang_unknown'){ p.lang=String(p.reply_lang||'')||'—'; }
   else if(s==='xlate_hold'){ p.reason=String(p.reason||st.reason_code||''); p.hhmm=String(p.hhmm||'--:--'); p.target=String(p.target||'')||'—'; }   // Q-39 B #326（cs-）
+  else if(s==='route_offline'){ p.reason=String(p.reason||''); p.hhmm=String(p.hhmm||'--:--'); }   // R87 #330（cs-）
   return p;
 }
 function _csSentence(st){ var k=String(st.reason_text_key||('inbox.cs.'+st.state)); return window.Tf(k,_csParams(st)); }
@@ -6922,6 +6924,12 @@ async function _csAction(btn){
         else { _toast(window.T('inbox.cs.retranslate_fail')+((_csD&&(_csD.detail||_csD.error))?(' · '+String(_csD.detail||_csD.error).slice(0,80)):''),'#b91c1c'); }
         if(_csD&&_csD.conv_state){ _csSet(_csD.conv_state,c); }
       }
+    }
+    else if(a==='route_standard'){   // R87 #330（cs-）：无限制端点离线 → 本会话改回标准档（复用模式面板同一写口）
+      try{
+        if(typeof _mpSet==='function'){ await _mpSet({profile:'standard'}); _toast(window.T('inbox.cs.route_standard_ok'),'#16a34a'); }
+        else { _toast(window.T('inbox.cs.route_standard_fail'),'#b91c1c'); }
+      }catch(_){ _toast(window.T('inbox.cs.route_standard_fail'),'#b91c1c'); }
     }
     else if(a==='retry'&&st.state==='sidecar_down'){
       var mid=String(p.message_id||''); var row=(threadMsgs||[]).find(function(m){ return m&&String(m.message_id||'')===mid&&m._retryBody; });
@@ -23283,7 +23291,10 @@ function _mpPickOpen(kind){
     title=window.T('inbox.mp.pick_model');
     rows.push({v:'standard',main:window.T('inbox.mp.prof_standard'),sub:window.T('inbox.mp.prof_standard_sub'),on:r.profile!=='unrestricted'});
     var sub=ep.model?window.Tf('inbox.mp.prof_unrestricted_sub',{model:ep.model,host:ep.host||''}):window.T('inbox.mp.prof_unrestricted_noep');
-    rows.push({v:'unrestricted',main:window.T('inbox.mp.prof_unrestricted'),sub:sub,on:r.profile==='unrestricted',locked:!allowed||!enabled,vio:true});
+    /* R87 #330：端点探活离线 → 副标题改成离线原因 + 「选了也按标准档代答」，行淡显但仍可选 */
+    var hUnr=_mp.health, unrOff=!!(hUnr&&hUnr.configured&&!hUnr.online);
+    if(unrOff) sub=window.Tf('inbox.route.unr_offline',{err:String(hUnr.error||'unreachable')});
+    rows.push({v:'unrestricted',main:window.T('inbox.mp.prof_unrestricted'),sub:sub,on:r.profile==='unrestricted',locked:!allowed||!enabled,vio:true,off:unrOff});
   } else if(kind==='depth'){
     title=window.T('inbox.mp.pick_depth');
     (ch.depths||['','standard','deep','max','ultra']).forEach(function(k){ rows.push({v:k,main:_mpDepthLabel(k),sub:_mpDepthSub(k),on:(r.depth||'')===k}); });
@@ -23294,7 +23305,7 @@ function _mpPickOpen(kind){
   _mp.pick=kind;
   var html='<div class="xl-pick-hd"><button type="button" class="xl-pick-back" onclick="_mpPickBack()" title="'+esc(window.T('inbox.mp.back'))+'" aria-label="'+esc(window.T('inbox.mp.back'))+'">‹</button><span class="xl-pick-title">'+esc(title)+'</span></div><div class="xl-pick-list">';
   rows.forEach(function(row){
-    html+='<button type="button" class="xl-pick-row two-line'+(row.on?' on':'')+(row.locked?' locked':'')+(row.vio?' vio':'')+'" data-v="'+esc(row.v)+'"'+(row.locked?' aria-disabled="true"':'')+'>'
+    html+='<button type="button" class="xl-pick-row two-line'+(row.on?' on':'')+(row.locked?' locked':'')+(row.vio?' vio':'')+(row.off?' dim':'')+'" data-v="'+esc(row.v)+'" data-off="'+(row.off?'1':'0')+'"'+(row.locked?' aria-disabled="true"':'')+'>'
         +'<span class="xl-pick-row-main">'+esc(row.main)+(row.locked?' <span class="mp-lock" aria-hidden="true">'+(typeof uiIcon==='function'?uiIcon('lock',11):'')+'</span>':'')+'</span>'
         +'<span class="xl-pick-row-sub">'+esc(row.sub||'')+'</span></button>';
   });
@@ -23304,6 +23315,7 @@ function _mpPickOpen(kind){
     b.addEventListener('click',function(){
       var v=b.getAttribute('data-v')||'';
       if(b.classList.contains('locked')){ _toast(window.T(enabled?'inbox.mp.locked':'inbox.mp.disabled'),'#b45309'); return; }
+      if(b.getAttribute('data-off')==='1'&&v==='unrestricted') _toast(window.T('inbox.route.unr_offline_pick'),'#b45309');   // R87 #330：仍可选，但先说清
       var patch={}; patch[kind]=v; _mpSet(patch);
     });
   });

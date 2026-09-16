@@ -2665,6 +2665,27 @@ class SkillManager(LoggerMixin):
             # 超时兜底（ai.timeout / ai.fallback.timeout + 有限重试），不再加第二道闸。
             _t0 = time.time()
             reply = await skill.execute(text, user_id_str, user_context)
+            # R87 #330（A 线）：无限制端点离线 → 按标准档再执行一次（规则全开、走主链）；
+            # 回退关着（ai.unrestricted.offline_fallback=false）保持旧行为不回复。
+            if not reply and user_context.get("_route_offline") and user_context.get("_unrestricted"):
+                try:
+                    from src.ai import conv_route as _crf_a
+                    _fb_a = _crf_a.begin_fallback(
+                        user_context, _crf_a.conv_id_from_context(context, user_id_str),
+                        reason=str(user_context.get("_route_offline") or ""), config=self.config)
+                except Exception:
+                    _fb_a = None
+                if _fb_a is not None:
+                    if _cr_scope_a is not None:
+                        try:
+                            _cr_scope_a.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        _cr_scope_a = None
+                    reply = await skill.execute(text, user_id_str, user_context)
+                    if reply:
+                        self.logger.info("%s[conv_route] fallback=standard delivered (A) conv=%s reason=%s",
+                                         log_prefix, user_id_str, _fb_a.get("reason"))
             _elapsed_ms = int((time.time() - _t0) * 1000)
 
             # 5b. 相似度�测：如果回�与上条重复度 >65%，强指令重试
@@ -2948,7 +2969,8 @@ class SkillManager(LoggerMixin):
             if user_ctx_for_cleanup is not None:
                 user_ctx_for_cleanup.pop("_slow_think_outline", None)
                 for _rk in ("_route", "_route_strict", "_thinking", "_unrestricted",
-                            "_unrestricted_bypass_safety", "_conv_route", "_route_offline"):
+                            "_unrestricted_bypass_safety", "_conv_route", "_route_offline",
+                            "_route_fallback"):
                     user_ctx_for_cleanup.pop(_rk, None)
 
     async def generate_inbox_draft(
@@ -3614,11 +3636,44 @@ class SkillManager(LoggerMixin):
                 _metric("empty")
                 _ro = str(user_context.get("_route_offline") or "")
                 if _ro and user_context.get("_unrestricted"):
-                    # 无限制端点离线：不回落云端、不出稿——把原因带回给调用方
-                    # （persona_reply → smart-reply 提示「模型离线」/ 自动链挂起）
                     _metric("unrestricted_offline")
-                    return {"reply": "", "intent": intent, "route_offline": _ro}
-                return None
+                    # R87 #330：无限制端点离线 → 默认按**标准档**代答一次（规则全开、走主链），
+                    # 会话 note 让状态带亮「本机模型离线 · 已按标准档回复」；ai.unrestricted.
+                    # offline_fallback=false 才保留旧行为（不回落云端、本轮不出稿）。
+                    _fb_info = None
+                    try:
+                        from src.ai import conv_route as _crf
+                        _fb_info = _crf.begin_fallback(
+                            user_context, str(conversation_id or "") or _crf.conv_id(
+                                platform, _acct_id or "default", chat_key),
+                            reason=_ro, config=self.config)
+                    except Exception:
+                        _fb_info = None
+                    if _fb_info is None:
+                        return {"reply": "", "intent": intent, "route_offline": _ro}
+                    if _cr_scope is not None:
+                        try:
+                            _cr_scope.__exit__(None, None, None)
+                        except Exception:
+                            pass
+                        _cr_scope = None
+                    _so_fb = {k: strategy[k] for k in (
+                        "temperature", "max_tokens", "context_rounds", "model", "thinking_budget")
+                        if k in strategy}
+                    reply = await self.ai_client.generate_reply_with_intent(
+                        user_message=text, intent=intent, user_context=user_context,
+                        strategy_overrides=_so_fb or None,
+                    )
+                    reply = (reply or "").strip()
+                    if not reply:
+                        _metric("unrestricted_fallback_empty")
+                        return {"reply": "", "intent": intent, "route_offline": _ro,
+                                "route_fallback": _fb_info}
+                    _metric("unrestricted_fallback_ok")
+                    self.logger.info("%s[conv_route] fallback=standard delivered conv=%s reason=%s",
+                                     log_prefix, conversation_id or chat_key, _ro)
+                else:
+                    return None
 
             # 8b. 相似度重试（与 process_message 5b 同思路）：与「最近 N 条」回复重复
             #     → 换角度 + 抬温度重生一次；综合评分更低才采纳，否则保留。深度=N（默认 6）
@@ -3846,6 +3901,8 @@ class SkillManager(LoggerMixin):
                 # P25 观测：目标注入结果（injected/reason/push_level/intent）
                 # → persona_reply → smart-reply API 的 goal_applied，坐席可见
                 "goal_applied": user_context.get("_goal_inject_meta"),
+                # R87 #330：本轮是否因无限制端点离线按标准档代答（状态带 / smart-reply 提示）
+                "route_fallback": user_context.get("_route_fallback"),
             }
         except Exception:
             self.logger.warning("%s生成失败，回落上层兜底", log_prefix, exc_info=True)
@@ -3858,7 +3915,8 @@ class SkillManager(LoggerMixin):
                     pass
             # 会话路由键是瞬时态（每轮 attach 重算），不随 ContextStore 落库粘到别的链路
             for _rk in ("_route", "_route_strict", "_thinking", "_unrestricted",
-                        "_unrestricted_bypass_safety", "_conv_route", "_route_offline"):
+                        "_unrestricted_bypass_safety", "_conv_route", "_route_offline",
+                        "_route_fallback"):
                 user_context.pop(_rk, None)
             user_context.pop("_slow_think_outline", None)
             user_context.pop("_media_coherence_hint", None)

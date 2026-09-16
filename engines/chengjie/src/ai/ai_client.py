@@ -919,7 +919,8 @@ class AIClient(LoggerMixin):
                 context["_route_offline"] = "no_endpoint"
             try:
                 from src.ai.conv_route import note_offline as _cr_note
-                _cr_note(str((context or {}).get("conversation_id") or ""))
+                # R87 #330：带原因，conv_route 据此开离线窗 + 会话 note（状态带可见）
+                _cr_note(str((context or {}).get("conversation_id") or ""), "no_endpoint")
             except Exception:
                 pass
             return self._fallback_reply(_fb_lang)
@@ -1300,11 +1301,13 @@ class AIClient(LoggerMixin):
         # 机主也必须立刻知道主 Key 已坏（弹窗与降级并行，互不阻塞）。
         if _route_strict:
             # 会话级严格路由：该端点没出话就到此为止——不进云端备用池、不换模型。
+            _ro_reason = _fail_reason if last_error is not None else "empty"
             if context is not None:
-                context["_route_offline"] = _fail_reason if last_error is not None else "empty"
+                context["_route_offline"] = _ro_reason
             try:
                 from src.ai.conv_route import note_offline as _cr_note
-                _cr_note(str((context or {}).get("conversation_id") or ""))
+                # R87 #330：带原因，conv_route 据此开离线窗 + 会话 note（状态带可见）
+                _cr_note(str((context or {}).get("conversation_id") or ""), str(_ro_reason or ""))
             except Exception:
                 pass
             return self._fallback_reply(_fb_lang)

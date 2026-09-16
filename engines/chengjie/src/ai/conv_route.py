@@ -691,12 +691,31 @@ def conv_id_from_context(context: Mapping[str, Any], user_id: Any = "") -> str:
 def attach(user_context: Dict[str, Any], cid: str, *, store: Any = None,
            config: Any = None) -> Route:
     """读会话路由并写进 ``user_context``；顺带把全局钥匙折进 ``_unrestricted_bypass_safety``。
-    store 缺省取进程默认；任何异常 → 标准档（只清键）。"""
+    store 缺省取进程默认；任何异常 → 标准档（只清键）。
+
+    R87 #330（2026-09-17）：无限制端点**刚刚**被判离线（:data:`OFFLINE_FALLBACK_TTL_SEC` 窗内）
+    且 :func:`offline_fallback_enabled` → 本轮直接按**标准档**装配（规则全开、走主链），
+    ``user_context["_route_fallback"]`` 带原因给状态带 / 日志；不再让每条入站都先撞一次
+    离线端点才发现没人回。窗过后再试一次真端点；成功即 :func:`record_reply` 清窗。
+    """
     try:
+        user_context.pop("_route_fallback", None)
         st = store if store is not None else default_store()
         r = get(st, cid) if cid else Route.standard()
         if r.unrestricted and not r.bypass_safety and global_bypass_safety(config):
             r = replace(r, bypass_safety=True)
+        if r.unrestricted and offline_fallback_enabled(config):
+            last = recent_offline(config)
+            if last:
+                Route.standard().apply_context(user_context)
+                user_context["_route_fallback"] = {
+                    "from": PROFILE_UNRESTRICTED, "reason": str(last.get("reason") or "offline"),
+                    "since": float(last.get("ts") or 0.0), "mode": "preemptive",
+                }
+                logger.info("[conv_route] fallback=standard mode=preemptive conv=%s reason=%s "
+                            "offline_age=%.0fs", cid or "-", last.get("reason") or "offline",
+                            max(0.0, time.time() - float(last.get("ts") or 0.0)))
+                return Route.standard()
         r.apply_context(user_context)
         return r
     except Exception:
@@ -705,6 +724,154 @@ def attach(user_context: Dict[str, Any], cid: str, *, store: Any = None,
         except Exception:
             pass
         return Route.standard()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 离线回退（R87 #330）：端点级「最近离线」窗 + 会话级 note（状态带 / 诊断读）
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: 端点被判离线后多久内所有无限制会话直接按标准档装配（不再逐条撞端点）
+OFFLINE_FALLBACK_TTL_SEC = 300.0
+OFFLINE_NOTE_PREFIX = "route_offline:"
+#: 会话 note 超过这个时长不再显示（端点通常小时级恢复；陈旧不删只是不显）
+OFFLINE_NOTE_TTL_SEC = 24 * 3600
+
+_OFFLINE_LOCK = threading.Lock()
+_LAST_OFFLINE: Dict[str, Dict[str, Any]] = {}
+
+
+def offline_fallback_enabled(config: Any = None) -> bool:
+    """``ai.unrestricted.offline_fallback``（默认 True）：本机私有端点离线时是否按标准档
+    （规则全开、走实例主链）代答并在会话头亮黄条。False＝旧行为：不回落、本轮不回复。"""
+    try:
+        return bool(_section(config).get("offline_fallback", True))
+    except Exception:
+        return True
+
+
+def _offline_key(config: Any = None) -> str:
+    spec = endpoint_spec(config)
+    if not spec:
+        return "no_endpoint"
+    return str(spec.get("base_url") or "") + "|" + str(spec.get("model") or "")
+
+
+def recent_offline(config: Any = None, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """无限制端点在 :data:`OFFLINE_FALLBACK_TTL_SEC` 内被判过离线 → ``{ts, reason}``；否则 None。"""
+    try:
+        with _OFFLINE_LOCK:
+            rec = _LAST_OFFLINE.get(_offline_key(config))
+        if not rec:
+            return None
+        ts = float(rec.get("ts") or 0.0)
+        if (float(now) if now is not None else time.time()) - ts > OFFLINE_FALLBACK_TTL_SEC:
+            return None
+        return dict(rec)
+    except Exception:
+        return None
+
+
+def clear_offline(config: Any = None) -> None:
+    """端点又出话了（无限制真答成功）→ 关窗，下一轮回到真端点。
+    ``config=None``（record_reply 回调没有配置句柄）→ 清全部：无限制端点全实例只有一个。"""
+    try:
+        with _OFFLINE_LOCK:
+            if config is None:
+                _LAST_OFFLINE.clear()
+            else:
+                _LAST_OFFLINE.pop(_offline_key(config), None)
+    except Exception:
+        pass
+
+
+def fallback_active(config: Any = None) -> bool:
+    """守卫链的无 ``user_context`` 读点用：回退开着且端点仍在离线窗 → 本会话按标准档判（规则全开）。"""
+    return offline_fallback_enabled(config) and recent_offline(config) is not None
+
+
+def _note_key(cid: str) -> str:
+    return OFFLINE_NOTE_PREFIX + str(cid or "").strip()
+
+
+def mark_offline_note(cid: str, *, reason: str = "", fallback: bool = False,
+                      store: Any = None, ts: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """会话级 note ``route_offline:<cid>={ts, first_ts, n, reason, fallback}``（app_settings KV，
+    与 xlate_hold_marker 同款）。``fallback=True``＝这轮已按标准档代答。绝不抛。"""
+    cid = str(cid or "").strip()
+    if not cid:
+        return None
+    st = store if store is not None else default_store()
+    if st is None or not hasattr(st, "set_app_setting"):
+        return None
+    now = float(ts or time.time())
+    prev = offline_note(cid, store=st, now=now, ttl_sec=6 * 3600) or {}
+    rec = {"ts": now, "first_ts": float(prev.get("first_ts") or now),
+           "n": int(prev.get("n") or 0) + 1, "reason": str(reason or "offline")[:60],
+           "fallback": bool(fallback)}
+    try:
+        st.set_app_setting(_note_key(cid), json.dumps(rec, ensure_ascii=False),
+                           updated_by="conv_route")
+        return rec
+    except Exception:
+        logger.debug("[conv_route] offline note 写入失败（忽略）", exc_info=True)
+        return None
+
+
+def clear_offline_note(cid: str, *, store: Any = None) -> bool:
+    cid = str(cid or "").strip()
+    st = store if store is not None else default_store()
+    if not cid or st is None or not hasattr(st, "set_app_setting") or not hasattr(st, "get_app_setting"):
+        return False
+    try:
+        if not str(st.get_app_setting(_note_key(cid), "") or ""):
+            return False
+        st.set_app_setting(_note_key(cid), "")
+        return True
+    except Exception:
+        return False
+
+
+def offline_note(cid: str, *, store: Any = None, now: Optional[float] = None,
+                 ttl_sec: float = OFFLINE_NOTE_TTL_SEC) -> Optional[Dict[str, Any]]:
+    """读会话 note；无 / 脏 / 超 ttl → None。"""
+    cid = str(cid or "").strip()
+    st = store if store is not None else default_store()
+    if not cid or st is None or not hasattr(st, "get_app_setting"):
+        return None
+    try:
+        rec = json.loads(str(st.get_app_setting(_note_key(cid), "") or "") or "{}")
+    except Exception:
+        return None
+    if not isinstance(rec, dict) or not rec.get("ts"):
+        return None
+    try:
+        age = (float(now) if now is not None else time.time()) - float(rec.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if ttl_sec and age > float(ttl_sec):
+        return None
+    rec["age_sec"] = round(max(0.0, age), 0)
+    return rec
+
+
+def begin_fallback(user_context: Dict[str, Any], cid: str, *, reason: str = "",
+                   config: Any = None, store: Any = None) -> Optional[Dict[str, Any]]:
+    """无限制端点这一轮真撞离线了（ai_client 置 ``_route_offline``）→ 把 ``user_context`` 改成
+    标准档装配并返回回退信息；回退关着 → None（调用方按旧行为不回复）。绝不抛。"""
+    try:
+        if not offline_fallback_enabled(config):
+            return None
+        Route.standard().apply_context(user_context)
+        user_context.pop("_route_offline", None)
+        info = {"from": PROFILE_UNRESTRICTED, "reason": str(reason or "offline"),
+                "since": time.time(), "mode": "reactive"}
+        user_context["_route_fallback"] = info
+        mark_offline_note(cid, reason=reason, fallback=True, store=store)
+        logger.info("[conv_route] fallback=standard mode=reactive conv=%s reason=%s",
+                    cid or "-", reason or "offline")
+        return info
+    except Exception:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -726,6 +893,8 @@ def record_reply(route: Optional[Mapping[str, Any]], *, ok: bool = True,
         r = route or {}
         if r.get("unrestricted") or r.get("profile") == PROFILE_UNRESTRICTED:
             key = PROFILE_UNRESTRICTED
+            if ok:
+                clear_offline()   # R87 #330：真端点又出话了 → 关离线窗
         else:
             key = str(r.get("model") or "").strip() or "main"
         with _LOCK:
@@ -773,6 +942,10 @@ def skip_for_conv(store: Any, cid: str, layer: str, config: Any = None) -> bool:
         r = get(store, cid)
         if not r.unrestricted:
             return False
+        if fallback_active(config):
+            # R87 #330：端点离线窗内本会话按标准档代答——守卫链同样全开，不许「规则让路
+            # 但答的是云端」这种半吊子状态
+            return False
         ctx = {"_unrestricted": True}
         if r.bypass_safety or global_bypass_safety(config):
             ctx["_unrestricted_bypass_safety"] = True
@@ -819,6 +992,8 @@ def reset_for_tests() -> None:
         _STATS["by_model"].clear()
     with _HEALTH_LOCK:
         _HEALTH.clear()
+    with _OFFLINE_LOCK:
+        _LAST_OFFLINE.clear()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -961,10 +1136,22 @@ def _api_key_for(config: Any, spec: Mapping[str, Any]) -> str:
         return ""
 
 
-def note_offline(cid: str) -> None:
-    """ai_client 严格路由失败时打点（观测 + UI 上一次离线时刻）。"""
+def note_offline(cid: str, reason: str = "", config: Any = None) -> None:
+    """ai_client 严格路由失败时打点（观测 + 端点级离线窗 + 会话 note）。
+
+    R87 #330：除计数外还开 :data:`OFFLINE_FALLBACK_TTL_SEC` 窗——窗内 :func:`attach` 对所有
+    无限制会话直接按标准档装配；会话 note 让状态带能说「本机模型离线 · {hhmm}」。
+    """
     record_offline_hold()
-    logger.warning("[conv_route] unrestricted endpoint offline → 本轮不回落云端 conv=%s", cid or "-")
+    try:
+        with _OFFLINE_LOCK:
+            _LAST_OFFLINE[_offline_key(config)] = {"ts": time.time(),
+                                                   "reason": str(reason or "offline")[:60]}
+    except Exception:
+        pass
+    mark_offline_note(cid, reason=reason, fallback=False)
+    logger.warning("[conv_route] unrestricted endpoint offline → 本轮不回落云端 conv=%s reason=%s "
+                   "fallback=%d", cid or "-", reason or "-", int(offline_fallback_enabled(config)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1055,5 +1242,8 @@ __all__ = [
     "bypass_safety_active", "resolve_for", "default_store", "conv_id_from_context", "attach",
     "skip_guard", "skip_for_conv", "record_offline_hold", "stats_snapshot", "reset_for_tests",
     "probe_endpoint", "note_offline", "depth_scope", "describe",
+    "OFFLINE_FALLBACK_TTL_SEC", "OFFLINE_NOTE_PREFIX", "offline_fallback_enabled",
+    "recent_offline", "clear_offline", "fallback_active", "mark_offline_note",
+    "clear_offline_note", "offline_note", "begin_fallback",
     "active_route", "active_unrestricted", "generation_scope",
 ]
