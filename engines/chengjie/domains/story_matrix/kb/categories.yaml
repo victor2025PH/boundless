@@ -1,0 +1,22 @@
+# story_matrix KB categories（只作分类标签；本域不靠 KB 直答）
+
+categories:
+  - name: "投票"
+    description: "观众对片尾 A / B 走向的投票、追问结果"
+    triggers: ["vote", "boto", "A", "B", "letter", "pili"]
+
+  - name: "投稿"
+    description: "观众想投自己的故事、问怎么投、是否免费"
+    triggers: ["kwento ko", "story ko", "send", "submit", "libre", "free"]
+
+  - name: "下一集"
+    description: "问下一集什么时候出、剧情走向"
+    triggers: ["next episode", "kailan", "susunod", "part 2", "tuloy"]
+
+  - name: "主持人"
+    description: "关于主持本人的闲聊、夸奖、问候"
+    triggers: ["ate", "kuya", "tita", "manang", "salamat", "ganda"]
+
+  - name: "其他"
+    description: "未归类"
+    triggers: ["other", "iba"]

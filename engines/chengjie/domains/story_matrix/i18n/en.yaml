@@ -1,0 +1,4 @@
+greeting: "Kumusta"
+farewell: "Ingat"
+error: "Something went wrong, let's try again later"
+not_found: "No matching information"

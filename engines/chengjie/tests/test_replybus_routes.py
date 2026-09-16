@@ -192,8 +192,61 @@ def test_decide_response_never_contains_sent_semantics_on_silent():
 
 
 def test_decide_action_is_never_send():
-    """当前接线策略：draft-only（见模块 docstring）。回归锁：防止未来无意间改成默认 send。"""
+    """默认接线策略：draft-only（见模块 docstring）。回归锁：防止未来无意间改成默认 send。"""
     client = _client()
     with patch(_PATCH_TARGET, new=AsyncMock(return_value={"ok": True, "reply": "任意回复"})):
         r = client.post("/api/replybus/decide", json={"message": _GOOD_MESSAGE})
     assert r.json()["action"] != "send"
+
+
+# ── ⑤ replybus.send_domains 白名单（2026-09-16，story_matrix 显式直发）──────
+
+def _client_with_cfg(cfg: dict):
+    app = FastAPI()
+
+    def _auth(request: Request):
+        return True
+
+    register_replybus_routes(
+        app, api_auth=_auth, config_manager=SimpleNamespace(config=cfg),
+    )
+    return TestClient(app)
+
+
+def test_decide_send_when_active_domain_whitelisted():
+    client = _client_with_cfg({"domain": "story_matrix",
+                               "replybus": {"send_domains": ["story_matrix"]}})
+    msg = dict(_GOOD_MESSAGE, platform="messenger", external_id="fbm:abc",
+               context_hint={"persona": "ate_liza", "lang": "tl"})
+    fake = {"ok": True, "reply": "Salamat, anak!", "persona": "ate_liza", "intent": "greeting"}
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value=fake)):
+        r = client.post("/api/replybus/decide", json={"message": msg})
+    body = r.json()
+    assert body["action"] == "send"
+    assert body["text"] == "Salamat, anak!"
+    assert body["persona"] == "ate_liza"
+    for key in _FORBIDDEN_KEYS:
+        assert key not in body
+
+
+def test_decide_stays_draft_when_active_domain_not_whitelisted():
+    client = _client_with_cfg({"domain": "conversion",
+                               "replybus": {"send_domains": ["story_matrix"]}})
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value={"ok": True, "reply": "hi"})):
+        r = client.post("/api/replybus/decide", json={"message": _GOOD_MESSAGE})
+    assert r.json()["action"] == "draft"
+
+
+def test_decide_whitelist_does_not_turn_silent_into_send():
+    client = _client_with_cfg({"domain": "story_matrix",
+                               "replybus": {"send_domains": ["story_matrix"]}})
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value={"ok": False, "reply": ""})):
+        r = client.post("/api/replybus/decide", json={"message": _GOOD_MESSAGE})
+    assert r.json()["action"] == "silent"
+
+
+def test_decide_empty_whitelist_keeps_draft_default():
+    client = _client_with_cfg({"domain": "story_matrix", "replybus": {"send_domains": []}})
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value={"ok": True, "reply": "hi"})):
+        r = client.post("/api/replybus/decide", json={"message": _GOOD_MESSAGE})
+    assert r.json()["action"] == "draft"

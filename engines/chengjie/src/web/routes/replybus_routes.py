@@ -41,6 +41,33 @@ logger = logging.getLogger(__name__)
 # 产出，理由见 _build_decision。
 _ACTION_DRAFT = "draft"
 _ACTION_SILENT = "silent"
+# 2026-09-16 起：``replybus.send_domains``（配置列表）里列出的域，有效回复直接判 send。
+# 默认空列表 = 行为与此前完全一致（永远 draft）。见 _build_decision / _send_allowed。
+_ACTION_SEND = "send"
+
+
+def _send_allowed(config_manager: Any) -> bool:
+    """当前激活域是否在 ``replybus.send_domains`` 白名单里（显式、逐域、默认关）。
+
+    这是「把某些场景升级为直发」那次独立产品决策的落点：智拓故事矿阵（story_matrix）
+    的 Messenger 前台在自己一侧还有两道硬闸（无 AI 字样 / persona 与频道一致）且
+    流程性回复全由其状态机处理，只把流程外自由聊天交给本端点——这类调用方拿到
+    draft 等于拿到「不可用」。其余域不受影响。任何读取异常都按不允许处理。
+    """
+    try:
+        cfg = getattr(config_manager, "config", None) or {}
+        if not isinstance(cfg, dict):
+            return False
+        allow = (cfg.get("replybus") or {}).get("send_domains") or []
+        if isinstance(allow, str):
+            allow = [allow]
+        allow = {str(x).strip().lower() for x in allow if str(x).strip()}
+        if not allow:
+            return False
+        from src.utils.domain_policy import effective_domain_name
+        return effective_domain_name(cfg).strip().lower() in allow
+    except Exception:
+        return False
 
 
 def _ai_ready(app: Any) -> bool:
@@ -63,11 +90,13 @@ def _ai_ready(app: Any) -> bool:
         return False
 
 
-def _build_decision(result: Dict[str, Any]) -> Dict[str, Any]:
+def _build_decision(result: Dict[str, Any], *, allow_send: bool = False) -> Dict[str, Any]:
     """把 ``generate_persona_reply`` 的产出映射为 replybus 决策响应（纯函数，可单测）。
 
     决策口径（对齐 CONTRACT.md §5"执行权归智控王"）：
 
+    - ``allow_send`` 为真（激活域在 ``replybus.send_domains`` 白名单）且有效回复 →
+      ``action="send"``；这是 2026-09-16 为 story_matrix 域做的显式产品决策，默认关。
     - ``ok`` 真且 ``reply`` 非空 → ``action="draft"``：**刻意不直接判 send**。通读
       CONTRACT.md/reply_schema.json 全文，没有找到"承接大脑刚接线阶段应默认直发"
       的证据——相反 §0/§5 通篇强调 chengjie 对智控王是"增强项而非必需项"、执行权
@@ -88,7 +117,10 @@ def _build_decision(result: Dict[str, Any]) -> Dict[str, Any]:
         reason = str(result.get("detail") or "").strip() or "no_reply_generated"
         return {"action": _ACTION_SILENT, "reason": reason[:120]}
 
-    decision: Dict[str, Any] = {"action": _ACTION_DRAFT, "text": reply}
+    decision: Dict[str, Any] = {
+        "action": _ACTION_SEND if allow_send else _ACTION_DRAFT,
+        "text": reply,
+    }
     persona = str(result.get("persona") or "").strip()
     if persona:
         decision["persona"] = persona
@@ -180,7 +212,7 @@ def register_replybus_routes(app, *, api_auth, config_manager=None) -> None:
             logger.warning("[replybus] decide 生成异常，兜底 silent", exc_info=True)
             return {"action": _ACTION_SILENT, "reason": "generate_failed"}
 
-        decision = _build_decision(result)
+        decision = _build_decision(result, allow_send=_send_allowed(config_manager))
         logger.debug(
             "[replybus] decide platform=%s persona=%s action=%s",
             platform, persona_id or "-", decision.get("action"),

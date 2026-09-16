@@ -1,0 +1,30 @@
+domain:
+  name: story_matrix
+  display_name: "故事共创矩阵（菲律宾 Taglish）"
+  version: "1.0"
+
+ai:
+  reply_style: concise
+  ai_name: "Ate Liza"
+  # 全域回复默认：短、少 emoji、Taglish（人设块显式值优先）
+  reply_defaults:
+    length: short
+    emoji_level: minimal
+    tone_hint: "Taglish（Tagalog 为主夹英文），像给粉丝回私信；不提 AI，不卖任何东西"
+
+# 不挂任何模板技能：greeting / complaint 等技能会用现成中文模板抢答，
+# 本域全部走人设 + LLM 自由回复（流程性回复已由智拓前台状态机处理）。
+skills:
+  enabled: []
+
+kb:
+  categories:
+    - "投票"
+    - "投稿"
+    - "下一集"
+    - "主持人"
+    - "其他"
+
+emotion_enhancer_skip:
+  phrases: []
+  patterns: []
