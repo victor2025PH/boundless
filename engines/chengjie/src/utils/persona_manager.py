@@ -96,6 +96,8 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 运行时配置 / 内部字段——本就不该出现在给 LLM 的人设文本里
     "id",                    # 内部主键（profile store 的键），说出来就是穿帮
     "_mrpa_source",          # 导入来源标记，纯内部血缘
+    "capabilities.photo_generate",   # R87 #329a：相册无匹配时允不允许 AI 生成——纯执行层开关
+                                     # （SSOT=photo_capability.persona_generate_allowed），不进 prompt
     "tags",                  # 运营分组/路由元数据（Studio 筛选、bulk_bind），非人设事实
     "voice_profile",         # TTS 后端/音色/参考音路径：语音链运行时配置
                              # （例外：dialect_flavor 已挪 CONSUMED——粤语档进 prompt）

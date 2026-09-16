@@ -20,6 +20,7 @@ import logging
 import re
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -516,6 +517,31 @@ async def generate_with_gate(
     gcfg = gate_cfg or {}
     gate_on = bool(gcfg.get("enabled", True))
     backend = str(getattr(provider, "backend", "")).lower()
+    # R87 #329a（3TCW5P）：人设有真人相册且未显式开 capabilities.photo_generate → 不生成人像
+    # （A 线 Stage A / 异步兑现 / B 线三条生成链都经此）。返回 ok=False error=gen_disabled，
+    # 调用方按既有失败路径回落诚实文字 / 承诺撤回；album 后端与物体图不受影响。
+    if backend not in ("", "album", "disabled") and str(kind or "selfie") == "selfie" \
+            and isinstance(persona, dict):
+        try:
+            from src.companion.photo_capability import (
+                persona_generate_allowed, persona_has_real_album,
+            )
+            _pid = str(persona.get("id") or "")
+            _gen_ok = persona_generate_allowed(
+                persona, has_real_album=persona_has_real_album(_pid))
+        except Exception:
+            _gen_ok = True
+        if not _gen_ok:
+            logger.info("[image_gate] gen_disabled persona=%s backend=%s：有真人相册且未开「AI 生成」"
+                        "→ 不出生成人像，交诚实文字", persona.get("id"), backend)
+            _record("gen_disabled")
+            try:
+                from src.ai.companion_selfie import SelfieResult
+                return SelfieResult(ok=False, prompt=str(prompt or ""), provider=backend,
+                                    error="gen_disabled")
+            except Exception:  # pragma: no cover
+                return SimpleNamespace(ok=False, image_path="", provider=backend,
+                                       error="gen_disabled", extra={})
     res = await provider.generate(prompt, seed=seed, **gen_kwargs)
     # album 免体检看的是**结果**来源而非 provider.backend（2026-07-22 真机复盘）：
     # command 生图失败 → album_fallback 挑的相册真图也曾被体检+换种子重试——

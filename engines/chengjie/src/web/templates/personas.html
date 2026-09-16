@@ -3144,6 +3144,7 @@ async function pmaLoad() {
       if (pr.ok) {
         const pd = await pr.json();
         photosOn = !!(((pd.persona || {}).capabilities || {}).photos);
+        _pmaGenExplicit = ((pd.persona || {}).capabilities || {}).photo_generate;   // R87 #329a：undefined=按有无真人相册取默认
       }
     } catch (e) { /* 按关显示，开关操作时如实报错 */ }
     // B119：全局发图总闸真值（旧后端无此端点 → gate=null 整行不渲染，特性探测 fail-soft）
@@ -3152,7 +3153,7 @@ async function pmaLoad() {
       const gr = await apiFetch('/api/personas/selfie-gate');
       if (gr.ok) gate = await gr.json();
     } catch (e) { /* 不渲染总闸行 */ }
-    _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, counts: d.counts || _alCountsFrom(d.items || []), photosOn: photosOn, gate: gate };
+    _pmaState = { items: d.items || [], stats: d.stats || {}, ai: d.ai || {}, counts: d.counts || _alCountsFrom(d.items || []), photosOn: photosOn, gate: gate, genExplicit: _pmaGenExplicit };
     if (_pmaPendingFilter) { _pmaFilter = _pmaPendingFilter; _pmaPendingFilter = ''; _pmaShown = 0; }   // Q-35 #306（pma-deeplink）
     _pmaRender(body, _pmaState.items, _pmaState.stats, photosOn, gate);
     pmaFaceLoad();
@@ -3297,6 +3298,48 @@ async function pmaFaceDelete() {
   } catch (e) { /* 忽略，下次加载自纠 */ }
 }
 
+// ── R87 #329a（3TCW5P）：「相册无匹配时允许 AI 生成」人设级开关（capabilities.photo_generate）──
+// 缺省按有无真人相册定：运营上传过真人图 → 默认关（生成脸 ≠ 相册脸）；没有相册的人设 → 默认开（旧行为）。
+// 服务端同口径：photo_capability.persona_generate_allowed；生成图入册带 auto_generated 标签 → 卡片「AI 生成」角标。
+var _pmaGenExplicit;
+function _pmaHasRealAlbum() {
+  const items = (_pmaState && _pmaState.items) || [];
+  return items.some(function (r) { return r && r.media_type !== 'video' && ((r.tags || []).indexOf('auto_generated') < 0); });
+}
+function _pmaGenOn() {
+  const ex = _pmaState ? _pmaState.genExplicit : _pmaGenExplicit;
+  if (typeof ex === 'boolean') return ex;
+  return !_pmaHasRealAlbum();
+}
+function _pmaGenRow(photosOn) {
+  const ex = _pmaState ? _pmaState.genExplicit : _pmaGenExplicit;
+  const on = _pmaGenOn();
+  const hint = (typeof ex === 'boolean') ? '' : (' <span style="font-size:.68rem;color:var(--t3)">' + _pmaEsc(window.T(on ? 'pma_gen_default_on' : 'pma_gen_default_off')) + '</span>');
+  return '<label style="display:flex;align-items:center;gap:.4rem;font-size:.74rem;cursor:pointer;margin:0' + (photosOn ? '' : ';opacity:.55') + '" title="' + _pmaEsc(window.T('pma_gen_tip')) + '">'
+    + '<input type="checkbox" id="pma-cap-gen"' + (on ? ' checked' : '') + (photosOn ? '' : ' disabled') + ' onchange="pmaToggleGen()">'
+    + _pmaEsc(window.T('pma_gen_label')) + '</label>' + hint;
+}
+async function pmaToggleGen() {
+  const pid = _pmaPid();
+  const cb = document.getElementById('pma-cap-gen');
+  if (!pid || !cb) return;
+  const on = !!cb.checked;
+  cb.disabled = true;
+  try {
+    const r = await apiFetch('/api/personas/profiles/' + encodeURIComponent(pid), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: { capabilities: { photo_generate: on } }, merge: true }),
+    });
+    if (!r.ok) { cb.checked = !on; _toast(window.T('pma_cap_save_fail') + ' ' + r.status, 'err'); return; }
+    _pmaGenExplicit = on; if (_pmaState) _pmaState.genExplicit = on;
+    _toast(window.T(on ? 'pma_gen_saved_on' : 'pma_gen_saved_off'), 'info');
+    try { await pmaLoad(); } catch (e2) { /* 状态已对 */ }
+  } catch (e) { cb.checked = !on; _toast(window.T('pma_cap_save_fail') + ' ' + e, 'err'); }
+  finally { cb.disabled = false; }
+}
+window.pmaToggleGen = pmaToggleGen;
+
 // ── 相册/发图能力总开关（2026-07-31，capabilities.photos 默认关）────────────────
 // 关 = 该人设整条发图能力关闭（注册相册+AI生成），对话中绝不承诺/暗示发照片；
 // 开 = 恢复相册/发图行为（还需全局 companion.selfie.enabled）。存进人设档案，
@@ -3333,6 +3376,7 @@ function _pmaCapBar(photosOn, stockTotal, gate) {
     + _pmaEsc(window.T(photosOn ? 'pma_cap_on' : 'pma_cap_off')) + '</span>'
     + warn
     + gateRow
+    + '<span style="flex-basis:100%;height:0"></span>' + _pmaGenRow(photosOn)   // R87 #329a：第二行「AI 生成」开关
     + '</div>';
 }
 
@@ -3501,6 +3545,7 @@ function _pmaVisibleItems() {
       case 'nohit': if ((raw.hits || 0) > 0) return false; break;
       case 'off': if (it.enabled) return false; break;
       case 'untagged': if (String(raw.tag_status || '') === 'tagged') return false; break;
+      case 'aigen': if ((raw.tags || []).indexOf('auto_generated') < 0) return false; break;   // R87 #329a
       case 'photo': if (raw.media_type === 'video') return false; break;
       case 'video': if (raw.media_type !== 'video') return false; break;
       default: break;
@@ -3540,7 +3585,7 @@ function _pmaRender(body, items, stats, photosOn, gate) {
     + '<div id="pma-guide" style="display:none;padding:.35rem .6rem;margin:.1rem 0 .55rem;border:1px dashed var(--bd);border-radius:10px;background:var(--bg2,transparent)"></div>';
   // 试触发 + 搜索筛选：吸顶（.dpane 是滚动容器），命中时滚到并高亮命中卡
   const filters = [['all', 'pma_f_all'], ['notrg', 'pma_f_notrg'], ['nohit', 'pma_f_nohit'], ['off', 'pma_f_off'],
-    ['untagged', 'pma_f_untagged'], ['photo', 'pma_f_photo'], ['video', 'pma_f_video']];
+    ['untagged', 'pma_f_untagged'], ['photo', 'pma_f_photo'], ['video', 'pma_f_video'], ['aigen', 'pma_f_aigen']];
   const test =
     '<div class="pma-sticky" style="' + dim + '">'
     + '<div class="pma-test" style="margin:0">'
@@ -3796,6 +3841,7 @@ function _pmaCard(raw) {
   else if (tagSt === 'failed') sts.push('<span class="warn">' + window.T('pma_st_failed') + '</span>');
   if (flags.nsfw || flags.explicit || flags.underage) sts.push('<span class="warn">' + window.T('pma_st_flag') + '</span>');
   if (meta.face_match && meta.face_match.same === false) sts.push('<span class="warn">' + window.T('pma_st_facemis') + '</span>');
+  if ((raw.tags || []).indexOf('auto_generated') >= 0) sts.push('<span class="warn" title="' + _pmaEsc(window.T('pma_st_aigen_t')) + '">' + window.T('pma_st_aigen') + '</span>');   // R87 #329a：生成图入册角标
   const trgArr = it.triggers || [];
   const trg = trgArr.join(', ');
   const mid = _pmaEsc(raw.id);
@@ -8970,7 +9016,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (_qs.get('pma') === '1' && _qs.get('pid')) {
       _pendingHashProfile = String(_qs.get('pid') || ''); _pendingHashTab = 'album';
       var _pf = String(_qs.get('filter') || '');
-      _pmaPendingFilter = (['notrg', 'nohit', 'off', 'untagged', 'photo', 'video'].indexOf(_pf) >= 0) ? _pf : '';
+      _pmaPendingFilter = (['notrg', 'nohit', 'off', 'untagged', 'photo', 'video', 'aigen'].indexOf(_pf) >= 0) ? _pf : '';
     }
   } catch (e) { /* 老浏览器无 URLSearchParams：忽略深链参数 */ }
   _installCompletenessDecorator();   // C 线：卡片完整度徽标（core.js 已加载，装饰其渲染器）

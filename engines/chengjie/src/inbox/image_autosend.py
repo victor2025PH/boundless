@@ -383,6 +383,20 @@ async def stage_image_file(
     if not bool(getattr(provider, "enabled", False)) or backend in ("", "disabled"):
         return None
     kind = str((directive or {}).get("kind") or "")
+    # R87 #329a（3TCW5P）：真出图后端 + 人设有真人相册且未显式开 capabilities.photo_generate
+    # → 不生成（相册挑不到就交诚实文字），绝不用一张生成脸冒充相册里的人。
+    # 所有生成路径（0a [PHOTO] 指令 / 2) 回落生成 / 1b 物体图）都经这里，一处即全覆盖。
+    if backend != "album":
+        try:
+            from src.companion.photo_capability import persona_generate_allowed_by_id
+            _gen_ok = persona_generate_allowed_by_id(persona_id)
+        except Exception:
+            _gen_ok = True
+        if not _gen_ok:
+            record_image_fallback("gen_disabled", detail=kind)
+            logger.info("[album_send] skip=gen_disabled persona=%s kind=%s conv=%s：人设有真人相册且"
+                        "未开「AI 生成」→ 不出生成图，交诚实文字", persona_id, kind, conv_key or "-")
+            return None
     album_key = _album_key_for(persona_id)
     # 出图预算护栏（护 API 账单，与 process_message 自拍/上下文共用同一份全局跟踪器）：
     # 仅真出图后端(openai/command)计数——album 挑现成图零成本不计。达上限→回落不发（不烧钱）。

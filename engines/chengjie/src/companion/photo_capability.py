@@ -236,6 +236,60 @@ def persona_photos_enabled_by_id(persona_id: str) -> bool:
         return False
 
 
+#: 自动定妆入册的生成图标签（与 ``image_autosend.AUTO_REG_TAG`` 同值；这里不 import 防循环）
+GENERATED_TAG = "auto_generated"
+
+
+def persona_has_real_album(persona_id: str) -> bool:
+    """注册相册里有没有**运营上传的**照片（不含 ``auto_generated`` 生成图）。查不到 / 异常 → False。"""
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return False
+    try:
+        from src.companion.persona_media_store import get_persona_media_store
+        st = get_persona_media_store()
+        if st is None:
+            return False
+        for r in st.list(pid) or []:
+            if str(r.get("media_type") or "photo") != "photo":
+                continue
+            if GENERATED_TAG in list(r.get("tags") or []):
+                continue
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def persona_generate_allowed(persona: Optional[Dict[str, Any]], *, has_real_album: bool) -> bool:
+    """R87 #329a（3TCW5P）：相册无匹配时允不允许**AI 生成**一张顶上。
+
+    ``capabilities.photo_generate`` 显式真 / 假即定；**缺省**按「有没有真人相册」定：
+    运营上传过真人图 → 默认**关**（生成脸 ≠ 相册脸，客户下一轮拿到真图对不上，运营还不知道
+    生成链存在）；没有相册的人设 → 默认开（旧行为：全靠生成）。发图总闸 ``photos`` 关时本函数无意义。
+    """
+    if not isinstance(persona, dict):
+        return not has_real_album
+    caps = persona.get("capabilities")
+    if isinstance(caps, dict) and "photo_generate" in caps and caps.get("photo_generate") is not None:
+        return bool(caps.get("photo_generate"))
+    return not has_real_album
+
+
+def persona_generate_allowed_by_id(persona_id: str) -> bool:
+    """B 线 / 出图编排口径：按显式 persona_id 判生成许可（查不到人设 → 按有无真人相册定）。"""
+    pid = str(persona_id or "").strip()
+    if not pid:
+        return True
+    persona = None
+    try:
+        from src.utils.persona_manager import PersonaManager
+        persona = PersonaManager.get_instance().get_persona_by_id(pid)
+    except Exception:
+        persona = None
+    return persona_generate_allowed(persona, has_real_album=persona_has_real_album(pid))
+
+
 def prompt_photos_allowed(user_context: Optional[Dict[str, Any]]) -> bool:
     """A 线执行层统一门：当前会话生效人设的发图开关（默认关，异常按关）。
 
@@ -263,6 +317,10 @@ __all__ = [
     "resolve_prompt_persona",
     "persona_photos_enabled_by_id",
     "prompt_photos_allowed",
+    "GENERATED_TAG",
+    "persona_has_real_album",
+    "persona_generate_allowed",
+    "persona_generate_allowed_by_id",
     "record_sanitize",
     "dump_sanitize_stats",
 ]
