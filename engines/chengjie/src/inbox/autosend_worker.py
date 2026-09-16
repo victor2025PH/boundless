@@ -670,6 +670,7 @@ class AutosendWorker:
         hit: Optional[Dict[str, Any]], *,
         since_ts: Optional[float] = None,
         rows: Optional[List[Dict[str, Any]]] = None,
+        attempt: int = 1,   # R87 #331：2＝第二次「换角度」重写（rewrite_fn_alt）
     ) -> Optional[str]:
         """dup 拦截后「换个说法」重试（impl85 阶段3）。返回通过再核的重写稿或 None。
 
@@ -681,12 +682,16 @@ class AutosendWorker:
         try:
             from src.inbox.outbound_dup_guard import attempt_dup_rewrite
             conv = str(item.get("conversation_id") or "")
+            # R87 #331：attempt=2 用「换角度」重写闭包（rewrite_fn_alt，装配层挂；缺席回落同一闭包）
+            _rf = self._dup_guard_cfg.get("rewrite_fn")
+            if int(attempt or 1) >= 2:
+                _rf = self._dup_guard_cfg.get("rewrite_fn_alt") or _rf
             return await attempt_dup_rewrite(
                 text=send_text, hit=hit,
                 rows=list(rows) if rows is not None else self._dup_guard_rows(conv),
                 cfg=self._dup_guard_cfg,
-                rewrite_fn=self._dup_guard_cfg.get("rewrite_fn"),
-                source="autosend",
+                rewrite_fn=_rf,
+                source="autosend" if int(attempt or 1) < 2 else "autosend_retry2",
                 similar_since_ts=since_ts or None,
                 conv_id=conv)
         except Exception:
@@ -733,6 +738,23 @@ class AutosendWorker:
                          exc_info=True)
         if tagged:
             self.total_dup_blocked_flagged += 1
+        # R87 #331：给刚写进拦截台账的那行补人话细节——与哪条相近、相似度、已重写几次；
+        # 「今日拦截」卡据此第二行灰字说清，不再只晒 dup_guard_blocked 原码
+        try:
+            store = getattr(self._svc, "_store", None)
+            if store is not None:
+                from src.inbox import abort_ledger as _al
+                _mts = float((hit or {}).get("matched_ts") or 0.0)
+                _hhmm = time.strftime("%H:%M", time.localtime(_mts)) if _mts > 0 else "--:--"
+                _al.annotate_last(
+                    store, conversation_id=conv, reason="dup_guard_blocked",
+                    hit=str((hit or {}).get("matched_text", ""))[:60],
+                    detail="sim=%.2f matched_at=%s rewrites=%d" % (
+                        float((hit or {}).get("similarity") or 0.0), _hhmm,
+                        2 if self._dup_guard_cfg.get("rewrite_fn") else 0),
+                    draft_id=str(item.get("draft_id") or ""))
+        except Exception:
+            logger.debug("[AutosendWorker] dup 台账补注失败（忽略）", exc_info=True)
         logger.warning(
             "[AutosendWorker] guard=near_duplicate 拦截后未救回且客户有新入站在等 "
             "→ %s conv=%s draft=%s level=%s sim=%.2f matched=%r",
@@ -2237,6 +2259,14 @@ class AutosendWorker:
                     # 结局进 WARNING 日志，客户在等的会话打「需人工」（#144）。
                     _rw = await self._try_dup_rewrite(
                         item, send_text, _hit, since_ts=_since, rows=_rows)
+                    if not _rw and self._dup_guard_cfg.get("rewrite_fn"):
+                        # R87 #331（X9B22T）：第一次换说法仍雷同 → 再换一次**角度**（更硬指令、
+                        # 更高温度）才转人工——此前一次不过即打「需人工」，客户等 20 分钟
+                        _rw = await self._try_dup_rewrite(
+                            item, send_text, _hit, since_ts=_since, rows=_rows, attempt=2)
+                        if _rw:
+                            logger.info("[AutosendWorker] dup 拦截后第二次换角度重写成功 conv=%s",
+                                        _conv_id_g)
                     if not _rw:
                         self.total_dup_blocked += 1
                         if _same_round:

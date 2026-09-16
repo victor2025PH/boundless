@@ -1574,7 +1574,26 @@ var RPS_AL_I18N = {
     mode_changed: {{ (i18n or {}).get('rps_al_r_mode_changed', "档位切换")|tojson }},
     work_schedule: {{ (i18n or {}).get('rps_al_r_work_schedule', "班表休息")|tojson }},
     dup_suppressed: {{ (i18n or {}).get('rps_al_r_dup_suppressed', "同一句只发一次 · 已拦第二条")|tojson }}
-  }
+  },
+  /* R87 #331：needs_human 子原因人话（此前直出 dup_guard_blocked 原码）+ dup 细节行 + 去会话 */
+  sub: {
+    dup_guard_blocked: {{ (i18n or {}).get('rps_al_sub_dup_guard_blocked', "检测到回复与近期内容重复，已暂停发送")|tojson }},
+    empty_reply: {{ (i18n or {}).get('rps_al_sub_empty_reply', "AI 生成了空回复")|tojson }},
+    generate_error: {{ (i18n or {}).get('rps_al_sub_generate_error', "AI 生成出错")|tojson }},
+    send_error: {{ (i18n or {}).get('rps_al_sub_send_error', "发送失败")|tojson }},
+    quota_hour: {{ (i18n or {}).get('rps_al_sub_quota_hour', "本小时自动回复额度已用完")|tojson }},
+    quota_day: {{ (i18n or {}).get('rps_al_sub_quota_day', "今日自动回复额度已用完")|tojson }},
+    circuit_open: {{ (i18n or {}).get('rps_al_sub_circuit_open', "AI 服务熔断保护中")|tojson }},
+    off_hours: {{ (i18n or {}).get('rps_al_sub_off_hours', "非营业时段")|tojson }},
+    service_tone: {{ (i18n or {}).get('rps_al_sub_service_tone', "AI 稿带客服腔，被守卫扣下")|tojson }},
+    media_lie_caught_repeat: {{ (i18n or {}).get('rps_al_sub_media_lie_caught_repeat', "客户连说两次没收到图，转人工")|tojson }},
+    exposure: {{ (i18n or {}).get('rps_al_sub_exposure', "客户疑似识破 AI，转人工")|tojson }},
+    crisis: {{ (i18n or {}).get('rps_al_sub_crisis', "客户消息触发危机升级")|tojson }}
+  },
+  dupDetail: {{ (i18n or {}).get('rps_al_dup_detail', "与 {at} 那条相近（相似度 {sim}）· 已自动改写 {n} 次仍相近")|tojson }},
+  dupDetailNoRw: {{ (i18n or {}).get('rps_al_dup_detail_norw', "与 {at} 那条相近（相似度 {sim}）· 未配置改写链")|tojson }},
+  goConv: {{ (i18n or {}).get('rps_al_go_conv', "去会话处理")|tojson }},
+  goConvT: {{ (i18n or {}).get('rps_al_go_conv_t', "打开该会话：会话头有「需人工」原因与出路（摘标 / 重拟 / 手发）")|tojson }}
 };
 /* Q-17 #277②（rk-）「风控分级」卡词条：类别 / 级别 / 动作 查表（与 inbox.risk.* 同一 i18n 包 risk_grader.py） */
 var RPS_RK_I18N = {
@@ -4225,6 +4244,25 @@ async function rpsRkLoad(personaId){
 }
 /* Q-18 #293（rps-al-）「今日拦截」：独立端点异步装载；旧后端 404 / store 缺席 → 整卡隐藏 */
 function rpsAlReason(code){ code = String(code || ''); return (RPS_AL_I18N.reasons && RPS_AL_I18N.reasons[code]) || code || '-'; }
+/* R87 #331：子原因人话（reason 列原码 → 句子；命中词若不是原因码则原样当命中词）+ dup 细节行 */
+function rpsAlSubText(x){
+  var reason = String((x && x.reason) || ''), code = String((x && x.code) || '');
+  var sub = RPS_AL_I18N.sub || {};
+  var key = reason.split(':')[0];
+  if (sub[key]) return sub[key];
+  if (sub[reason]) return sub[reason];
+  if (reason && reason !== code) return reason;
+  return '';
+}
+function rpsAlDetailText(x){
+  var d = String((x && x.detail) || '');
+  var m = /sim=([0-9.]+)\s+matched_at=(\S+)\s+rewrites=(\d+)/.exec(d);
+  if (m){
+    var tpl = Number(m[3]) > 0 ? RPS_AL_I18N.dupDetail : RPS_AL_I18N.dupDetailNoRw;
+    return String(tpl).replace('{at}', m[2]).replace('{sim}', m[1]).replace('{n}', m[3]);
+  }
+  return d;
+}
 function rpsAlHhmm(ts){ try { var d = new Date(Number(ts || 0) * 1000); if (isNaN(d.getTime())) return '-'; var p = function(n){ return (n < 10 ? '0' : '') + n; }; return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); } catch (_e){ return '-'; } }
 async function rpsAlLoad(){
   var card = document.getElementById('rps-al-card');
@@ -4246,10 +4284,17 @@ async function rpsAlLoad(){
     var rows = d.recent || [], tb = document.getElementById('rps-al-tbody'), tbl = document.getElementById('rps-al-table'), empty = document.getElementById('rps-al-empty');
     if (tb) tb.innerHTML = rows.map(function(x){
       var who = x.name ? (x.name + ' · ' + x.conv) : x.conv;
-      var hit = x.hit ? x.hit : (x.reason && x.reason !== x.code ? x.reason : '');
+      /* R87 #331：原因列＝主码人话 + 子原因人话（原码只留 title）；命中词列＝对照句 / 命中词 + 细节灰字 + 去会话 */
+      var subTxt = rpsAlSubText(x);
+      var isCode = subTxt && subTxt === String(x.reason || '') && !(RPS_AL_I18N.sub || {})[String(x.reason || '').split(':')[0]];
+      var reasonCell = rpsEsc(rpsAlReason(x.code)) + (subTxt && !isCode ? '<div style="color:var(--t2);font-size:.74rem;margin-top:.1rem">' + rpsEsc(subTxt) + '</div>' : '');
+      var hit = x.hit ? x.hit : (isCode ? subTxt : '');
       var stg = x.stage ? String(RPS_AL_I18N.stage).replace('{stage}', x.stage) : '';
+      var det = rpsAlDetailText(x);
+      var go = x.conv ? ' <a class="rps-goto" href="/workspace?conv=' + encodeURIComponent(String(x.conv)) + '" target="_blank" rel="noopener" title="' + rpsEsc(RPS_AL_I18N.goConvT) + '">' + rpsEsc(RPS_AL_I18N.goConv) + '</a>' : '';
       return '<tr><td title="' + rpsEsc(x.conv || '') + '">' + rpsEsc(who || '-') + '</td><td>' + rpsEsc(rpsAlHhmm(x.ts)) + '</td>'
-        + '<td>' + rpsEsc(rpsAlReason(x.code)) + '</td><td>' + rpsEsc(hit || '-') + (stg ? ' <span style="color:var(--t3);font-size:.72rem">' + rpsEsc(stg) + '</span>' : '') + '</td></tr>';
+        + '<td title="' + rpsEsc(String(x.reason || x.code || '')) + '">' + reasonCell + '</td><td>' + rpsEsc(hit || '-') + (stg ? ' <span style="color:var(--t3);font-size:.72rem">' + rpsEsc(stg) + '</span>' : '')
+        + (det ? '<div style="color:var(--t3);font-size:.72rem;margin-top:.1rem">' + rpsEsc(det) + '</div>' : '') + go + '</td></tr>';
     }).join('');
     if (tbl) tbl.style.display = rows.length ? '' : 'none';
     if (empty) empty.style.display = rows.length ? 'none' : '';

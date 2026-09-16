@@ -81,8 +81,12 @@ def parse_rows(raw: Any) -> List[Dict[str, Any]]:
 
 def record(store: Any, *, conversation_id: str, code: str, stage: str = "",
            hit: Any = "", source: str = "autosend", draft_id: str = "",
-           reason: str = "", category: str = "", ts: Optional[float] = None) -> bool:
-    """追加一行（滚动 200）。store 缺席 / 无 KV 能力 → False。绝不抛。"""
+           reason: str = "", category: str = "", ts: Optional[float] = None,
+           detail: str = "") -> bool:
+    """追加一行（滚动 200）。store 缺席 / 无 KV 能力 → False。绝不抛。
+
+    ``detail``（R87 #331）：给人看的一行补充（如「与 07:39 那条相近 · 相似度 0.87 · 已重写 2 次」），
+    「今日拦截」卡第二行灰字；原码只在 title。"""
     if store is None or not hasattr(store, "get_app_setting") or not hasattr(store, "set_app_setting"):
         return False
     cid = str(conversation_id or "")
@@ -100,6 +104,8 @@ def record(store: Any, *, conversation_id: str, code: str, stage: str = "",
         "draft_id": str(draft_id or "")[:40],
         "reason": str(reason or code or "")[:48],
     }
+    if detail:   # R87 #331
+        row["detail"] = str(detail).replace("\n", " ")[:120]
     try:
         with _lock:
             rows = _load(store)
@@ -110,6 +116,40 @@ def record(store: Any, *, conversation_id: str, code: str, stage: str = "",
         return True
     except Exception:
         logger.debug("[abort_ledger] 写入失败 conv=%s code=%s（忽略）", cid, code, exc_info=True)
+        return False
+
+
+def annotate_last(store: Any, *, conversation_id: str, reason: str, hit: str = "",
+                  detail: str = "", draft_id: str = "", within_sec: float = 900.0,
+                  now: Optional[float] = None) -> bool:
+    """R87 #331：给某会话**最近一条**同 ``reason`` 的行补 ``hit`` / ``detail``（打标钩子写行时
+    拿不到相似度 / 对照句，dup 拦截处事后补）。找不到（或超 ``within_sec``）→ False。绝不抛。"""
+    if store is None or not hasattr(store, "get_app_setting") or not hasattr(store, "set_app_setting"):
+        return False
+    cid = str(conversation_id or "")
+    want = str(reason or "")
+    if not cid or not want:
+        return False
+    _now = float(now if now is not None else time.time())
+    try:
+        with _lock:
+            rows = _load(store)
+            for r in reversed(rows):
+                if str(r.get("conv") or "") != cid or str(r.get("reason") or "") != want:
+                    continue
+                if _now - float(r.get("ts") or 0.0) > float(within_sec):
+                    return False
+                if hit:
+                    r["hit"] = str(hit)[:80]
+                if detail:
+                    r["detail"] = str(detail).replace("\n", " ")[:120]
+                if draft_id and not r.get("draft_id"):
+                    r["draft_id"] = str(draft_id)[:40]
+                store.set_app_setting(KEY, json.dumps(rows, ensure_ascii=False), updated_by="abort_ledger")
+                return True
+        return False
+    except Exception:
+        logger.debug("[abort_ledger] annotate 失败 conv=%s（忽略）", cid, exc_info=True)
         return False
 
 
@@ -152,10 +192,13 @@ def summary(store: Any, *, now: Optional[float] = None, window_h: float = 24.0,
         "hit": str(r.get("hit") or ""),
         "reason": str(r.get("reason") or ""),
         "source": str(r.get("source") or ""),
+        "detail": str(r.get("detail") or ""),        # R87 #331：人话细节（卡片第二行）
+        "draft_id": str(r.get("draft_id") or ""),    # R87 #331
     } for r in win[:max(0, int(last_n))]]
     return {"window_h": float(window_h), "since": lo, "total": len(win),
             "counts": counts, "recent": recent, "capacity": MAX_ROWS, "stored": len(all_rows)}
 
 
-__all__ = ["KEY", "MAX_ROWS", "REASONS", "normalize_code", "parse_rows", "record", "rows",
-           "rows_for_conv", "summary"]
+__all__ = ["KEY", "MAX_ROWS", "REASONS", "normalize_code", "parse_rows", "record",
+           "annotate_last",   # R87 #331
+           "rows", "rows_for_conv", "summary"]

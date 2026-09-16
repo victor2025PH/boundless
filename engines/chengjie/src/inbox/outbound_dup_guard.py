@@ -395,16 +395,25 @@ def resolve_guard_cfg(root_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 # 一次同一守卫**——仍命中就维持静默跳过（绝不硬发），重写链任何异常也维持跳过
 # （守卫语义只可能更严不可能更松）。
 
-def build_dup_rewrite_prompt(matched_text: str) -> str:
-    """重写指令（system prompt）：负样本=刚发过的内容；保语言/保意图/换表达。"""
+def build_dup_rewrite_prompt(matched_text: str, *, attempt: int = 1) -> str:
+    """重写指令（system prompt）：负样本=刚发过的内容；保语言/保意图/换表达。
+
+    ``attempt=2``（R87 #331）：第一次重写仍雷同后的**换角度**指令——换开头、换句式、
+    先接对方的话再说自己的，绝不复用上一稿的任何短语。
+    """
     matched = str(matched_text or "").strip()[:280]
-    return (
+    base = (
         "你是聊天回复改写器。给你的这句话和刚刚已经发出去的内容几乎一样，"
         "不能原样再发。请换一个说法/角度重写它：保持原意和语气，"
         "**用与原文完全相同的语言**，长度接近原文，绝不解释、绝不加引号、"
         "只输出重写后的那句话。\n"
-        f"刚发过的内容（禁止雷同）：{matched}"
     )
+    if int(attempt or 1) >= 2:
+        base += (
+            "这已经是第二次改写，上一次改写仍然太像。这次必须**彻底换角度**：换开头、换句式、"
+            "先回应对方刚说的话再说自己的，不得复用刚发过内容里的任何短语或口头语。\n"
+        )
+    return base + f"刚发过的内容（禁止雷同）：{matched}"
 
 
 def attach_rewrite_fn(cfg: Optional[Dict[str, Any]], ai_client: Any) -> Optional[Dict[str, Any]]:
@@ -422,8 +431,17 @@ def attach_rewrite_fn(cfg: Optional[Dict[str, Any]], ai_client: Any) -> Optional
     async def _rewrite(text: str, matched: str) -> Optional[str]:
         return await rewrite_local(build_dup_rewrite_prompt(matched), str(text))
 
+    async def _rewrite_alt(text: str, matched: str) -> Optional[str]:
+        # R87 #331：第二次「换角度」重写——指令更硬、温度更高，仍不过才转人工
+        try:
+            return await rewrite_local(build_dup_rewrite_prompt(matched, attempt=2), str(text),
+                                       temperature=0.95)
+        except TypeError:   # 旧签名无 temperature
+            return await rewrite_local(build_dup_rewrite_prompt(matched, attempt=2), str(text))
+
     out = dict(cfg)
     out["rewrite_fn"] = _rewrite
+    out["rewrite_fn_alt"] = _rewrite_alt
     return out
 
 
